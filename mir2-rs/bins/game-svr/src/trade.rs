@@ -892,7 +892,7 @@ pub struct DealWire {
 ///
 /// `clientItem.Item.Shape` 按 `M2Share.StdModeMap` + `Desc[8]` 置 0/130；
 /// `StdMode == 50` 名称加 `" #" + Dura`。`GetUpgradeStdItem` 的 desc 升级差量未建模（同 `T-24`）。
-fn send_add_item_body(
+pub(crate) fn send_add_item_body(
     recipient: i32,
     item: &BagItem,
     catalog: &dyn ItemCatalog,

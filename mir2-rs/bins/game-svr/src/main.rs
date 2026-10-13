@@ -522,6 +522,14 @@ async fn main() -> Result<()> {
                         red_b_color: cfg.red_msg_b_color,
                         ..game_svr::trade::DealConfig::default()
                     },
+                    // 元宝寄售（`M3⑩-实现 1`）：`DecUserGameGold` 无配置键（`GameSvrConf.cs:1217` 硬编码
+                    // 10000）；`MaxBagItem` = `Grobal2.MaxBagItem`；蓝色提示色从 `[Setup]` 读（现网 251/252）。
+                    sell_off: game_svr::selloff::SellOffConfig {
+                        dec_user_game_gold: 10_000,
+                        max_bag_item: game_svr::bag::MAX_BAG_ITEM,
+                        blue_f_color: cfg.blue_msg_f_color,
+                        blue_b_color: cfg.blue_msg_b_color,
+                    },
                 },
                 notice,
                 colors,
@@ -1676,6 +1684,192 @@ fn repair_target_index(
 ) -> Option<usize> {
     find_bag_item_by_make_index(item_list, catalog, make_index, wanted_name)
         .or_else(|| item_list.len().checked_sub(1))
+}
+
+/// `CM_SELLOFFADDITEM`/`CM_SELLOFFDELITEM`/`CM_SELLOFFCANCEL`/`CM_SELLOFFEND`/
+/// `CM_CANCELSELLOFFITEMING`/`CM_SELLOFFBUYCANCEL`/`CM_SELLOFFBUY` 的派发（M3⑩-实现 1）。
+///
+/// oracle 收包 → 回帧映射在 `PlayObject.Message.cs:2057-2077`，判定/状态迁移在
+/// `PlayObject.Sale.cs`（纯函数在 [`game_svr::selloff`]）。本函数只做：找会话 →
+/// 解析目标（`CM_SELLOFFBUY` 的卖方 = 尾里的名字，`GetPlayObject` 口径）→ 调纯函数 →
+/// 按 `[GateIdx, Socket]` 回帧。
+///
+/// **入帧映射**（`WorldServer.cs:820` 的 `nParam1 = defMsg.Recog`）：`CM_SELLOFFADDITEM/DELITEM`
+/// 取 `recog = MakeIndex`、`Msg`/`tail` = 物品名；`CM_SELLOFFEND` 取
+/// `(Msg=sBuyChrName, nParam1=nSellGold, nParam2=nGameDiamond, nParam3=nCode)`；
+/// `CM_SELLOFFBUYCANCEL/BUY` 取 `Msg = sDealChrName`。
+///
+/// `M2Share.SellOffItemList`（进程级）由调用方持有的 [`game_svr::selloff::SellOffBook`] 承载；
+/// 每个在线角色的 `SaleDeal`/`SellOffConfirm`/`SellOffItemList` 存 `sell_off_sessions`。
+#[allow(clippy::too_many_arguments)]
+fn handle_selloff_cmd(
+    ident: u16,
+    recog: i32,
+    param: u16,
+    tag: u16,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    world: &mir2_world::World,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    book: &mut game_svr::selloff::SellOffBook,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    cfg: &game_svr::selloff::SellOffConfig,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) {
+    use mir2_protocol::messages;
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "元宝寄售命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
+        );
+        return;
+    };
+    let actor_id = entry.actor_id;
+    if ground_sessions.get(chr_name).is_none() {
+        glog!(
+            "WRN",
+            "元宝寄售命令：ChrName={chr_name} 无会话态（未进世界/已断线）⇒ 丢弃 ident={ident}"
+        );
+        return;
+    }
+    let now = world.clock_ms;
+    let tail = tail.unwrap_or("");
+
+    // 卖方（`CM_SELLOFFBUY` 用 `GetPlayObject(sDealChrName)`；`OrdinalIgnoreCase`）。
+    let seller_chr: Option<String> = if ident == messages::CM_SELLOFFBUY {
+        online
+            .iter()
+            .find(|e| e.chr_name.eq_ignore_ascii_case(tail))
+            .map(|e| e.chr_name.clone())
+    } else {
+        None
+    };
+
+    let mut me_sg = ground_sessions.remove(chr_name).expect("上面已确认存在");
+    let mut me_so = sell_off_sessions.remove(chr_name).unwrap_or_default();
+    let mut seller_sg = seller_chr.as_ref().and_then(|c| ground_sessions.remove(c));
+    let mut seller_so = seller_chr
+        .as_ref()
+        .and_then(|c| sell_off_sessions.remove(c));
+
+    let events = {
+        // 先取出只读快照，避免与 `items`/`gold` 的可变借用冲突。
+        let me_weight = me_sg.state.wabil.weight;
+        let me_wear_weight = me_sg.state.wabil.wear_weight;
+        let me_hand_weight = me_sg.state.wabil.hand_weight;
+        let me_max_weight = me_sg.state.wabil.max_weight;
+        let me_game_point = me_sg.game_point;
+        let me_send_gold = me_sg.soft_version_date != 0;
+        let mut me = game_svr::selloff::SellOffSide {
+            id: actor_id,
+            name: chr_name.to_string(),
+            // 在线会话（`PlayObject.OffLineFlag` 未建模 ⇒ 恒 false，登记）。
+            offline: false,
+            items: &mut me_sg.state.item_list,
+            gold: &mut me_sg.state.gold,
+            game_gold: &mut me_sg.game_gold,
+            game_point: me_game_point,
+            weight: me_weight,
+            wear_weight: me_wear_weight,
+            hand_weight: me_hand_weight,
+            max_weight: me_max_weight,
+            send_game_gold_info: me_send_gold,
+            state: &mut me_so,
+        };
+        let mut seller = match (seller_sg.as_mut(), seller_so.as_mut()) {
+            (Some(sg), Some(so)) => {
+                let s_weight = sg.state.wabil.weight;
+                let s_wear_weight = sg.state.wabil.wear_weight;
+                let s_hand_weight = sg.state.wabil.hand_weight;
+                let s_max_weight = sg.state.wabil.max_weight;
+                let s_game_point = sg.game_point;
+                let s_send_gold = sg.soft_version_date != 0;
+                Some(game_svr::selloff::SellOffSide {
+                    id: sg.actor_id,
+                    name: seller_chr.clone().unwrap_or_default(),
+                    offline: false,
+                    items: &mut sg.state.item_list,
+                    gold: &mut sg.state.gold,
+                    game_gold: &mut sg.game_gold,
+                    game_point: s_game_point,
+                    weight: s_weight,
+                    wear_weight: s_wear_weight,
+                    hand_weight: s_hand_weight,
+                    max_weight: s_max_weight,
+                    send_game_gold_info: s_send_gold,
+                    state: so,
+                })
+            }
+            _ => None,
+        };
+        match ident {
+            messages::CM_SELLOFFADDITEM => {
+                game_svr::selloff::client_add_sell_off_item(&mut me, catalog, recog, tail)
+            }
+            messages::CM_SELLOFFDELITEM => {
+                game_svr::selloff::client_del_sell_off_item(&mut me, catalog, recog, tail)
+            }
+            messages::CM_SELLOFFCANCEL => game_svr::selloff::client_cancel_sell_off(&mut me),
+            messages::CM_SELLOFFEND => game_svr::selloff::client_sell_off_end(
+                &mut me,
+                book,
+                catalog,
+                cfg,
+                now,
+                tail,
+                recog,
+                i32::from(param),
+                i32::from(tag),
+            ),
+            messages::CM_CANCELSELLOFFITEMING => {
+                game_svr::selloff::client_cancel_sell_off_ing(&mut me, book, catalog, cfg)
+            }
+            messages::CM_SELLOFFBUYCANCEL => {
+                game_svr::selloff::client_buy_cancel_sell_off(&mut me, book, tail)
+            }
+            messages::CM_SELLOFFBUY => game_svr::selloff::client_buy_sell_off_item(
+                &mut me,
+                seller.as_mut(),
+                book,
+                catalog,
+                cfg,
+                tail,
+            ),
+            _ => Vec::new(),
+        }
+    };
+
+    // 回写（卖方缺席时 `seller_sg`/`seller_so` 为 `None` ⇒ 不写）。
+    ground_sessions.insert(chr_name.to_string(), me_sg);
+    sell_off_sessions.insert(chr_name.to_string(), me_so);
+    if let (Some(c), Some(sg)) = (seller_chr.clone(), seller_sg) {
+        ground_sessions.insert(c, sg);
+    }
+    if let (Some(c), Some(so)) = (seller_chr, seller_so) {
+        sell_off_sessions.insert(c, so);
+    }
+
+    for ev in &events {
+        let Some((target, body)) = game_svr::selloff::selloff_event_body(ev, catalog) else {
+            continue;
+        };
+        let Some(t) = online.iter().find(|e| e.actor_id == target) else {
+            glog!(
+                "DBG",
+                "元宝寄售回帧：目标 ActorId={target} 不在在线登记表 ⇒ 丢弃"
+            );
+            continue;
+        };
+        if let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "元宝寄售回帧") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: t.socket,
+                body,
+            });
+        }
+    }
 }
 
 /// `CM_MERCHANTDLGSELECT`/`CM_MERCHANTQUERYSELLPRICE`/`CM_USERSELLITEM`/`CM_USERBUYITEM`/
@@ -4105,6 +4299,12 @@ struct SessionGround {
     actor_id: i32,
     /// `BaseObject.GameGold`（`SM_GOLDCHANGED` 的 LoWord/HiWord）。
     game_gold: i32,
+    /// `PlayObject.SoftVersionDateEx`（= `LoadDBInfo.SoftVersionDate`）：
+    /// `SendGoldInfo` 的 `== 0 ⇒ 不发` 门（`PlayObject.Base.cs:930`）——元宝寄售的
+    /// `SM_GAMEGOLDNAME` 与登录帧 5008 走同一条门。
+    soft_version_date: i32,
+    /// `BaseObject.GamePoint`（`SM_GAMEGOLDNAME` 的 LoWord/HiWord）。
+    game_point: i32,
     /// `MessageSettings.CanotPickUpItem` 的 GBK 原文（缺则 `RM_SYSMESSAGE` 不产出）。
     sys_msg: Option<Vec<u8>>,
     /// `PlayObject.UseItems`（13 槽；`CM_TAKEONITEM`/`CM_TAKEOFFITEM` 迁移用）。
@@ -4225,6 +4425,8 @@ struct EnterConfig {
     /// **M3⑦-实现 3**：交易状态机的 `[Setup]` 配置（`TryDealTime`/`DealOKTime`/
     /// `CanNotGetBackDeal`/`DisableDeal` + `HumanMaxGold` + 颜色）。
     trade: game_svr::trade::DealConfig,
+    /// **M3⑩-实现 1**：元宝寄售状态机的配置（`DecUserGameGold` + `MaxBagItem` + 蓝色提示色）。
+    sell_off: game_svr::selloff::SellOffConfig,
 }
 
 /// MonGen 刷怪启动输入（[`game_svr::mongen`]）。
@@ -4524,6 +4726,11 @@ fn sim_loop(
     // 交易栏 `DealItemList`/`DealGolds` 从这里读写；掉线/每 tick 取消见 [`deal_cancel_between`]。
     let mut trade_sessions: std::collections::HashMap<String, game_svr::trade::DealState> =
         std::collections::HashMap::new();
+    // `M3⑩-实现 1`：元宝寄售——`M2Share.SellOffItemList`（进程级全局列表，所有会话共享）
+    // + 每个在线角色的 `SaleDeal`/`SellOffConfirm`/`SellOffItemList`（后二者又随断线一并移除）。
+    let mut sell_off_book = game_svr::selloff::SellOffBook::default();
+    let mut sell_off_sessions: std::collections::HashMap<String, game_svr::selloff::SellOffState> =
+        std::collections::HashMap::new();
     // 存档用：登入时留下的原始记录 + 进图逻辑名（断线/`MakeGhost` 时合成存档请求）。
     let mut saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
     glog!(
@@ -4624,6 +4831,35 @@ fn sim_loop(
                             &mut trade_sessions,
                             &gates,
                             &enter_cfg.trade,
+                            &enter_cfg.catalog,
+                        );
+                    } else if matches!(
+                        cmd.ident,
+                        mir2_protocol::messages::CM_SELLOFFADDITEM
+                            | mir2_protocol::messages::CM_SELLOFFDELITEM
+                            | mir2_protocol::messages::CM_SELLOFFCANCEL
+                            | mir2_protocol::messages::CM_SELLOFFEND
+                            | mir2_protocol::messages::CM_CANCELSELLOFFITEMING
+                            | mir2_protocol::messages::CM_SELLOFFBUYCANCEL
+                            | mir2_protocol::messages::CM_SELLOFFBUY
+                    ) {
+                        // `openmir2-m3-selloff-consignment-world`：7 条元宝寄售 `CM_*` 派发
+                        // （oracle `PlayObject.Message.cs:2057-2077`）。
+                        handle_selloff_cmd(
+                            cmd.ident,
+                            cmd.recog,
+                            cmd.param,
+                            cmd.tag,
+                            tail.as_deref(),
+                            &chr_name,
+                            socket,
+                            &online,
+                            &world,
+                            &mut ground_sessions,
+                            &mut sell_off_sessions,
+                            &mut sell_off_book,
+                            &gates,
+                            &enter_cfg.sell_off,
                             &enter_cfg.catalog,
                         );
                     } else if cmd.ident == game_svr::bag::CM_TAKEONITEM
@@ -4839,6 +5075,9 @@ fn sim_loop(
                         ground_sessions.remove(&chr_name);
                         // 商店会话态（`ScriptLable`）随之移除。
                         shop_sessions.remove(&chr_name);
+                        // 元宝寄售会话态（`SellOffConfirm`/`SellOffItemList`）随之移除；
+                        // `M2Share.SellOffItemList`（进程级）保留（oracle 不断线清理）。
+                        sell_off_sessions.remove(&chr_name);
                         // 同屏展示表随实体一并摘除（ActorId 槽位会被内核回收复用，避免旧展示值残留）。
                         if let Some(aid) = world.session(&chr_name).and_then(|s| s.actor_id) {
                             displays.remove(aid);
@@ -5298,6 +5537,11 @@ fn sim_loop(
                                                             ),
                                                             actor_id: id,
                                                             game_gold: d.game_gold,
+                                                            // `PlayObject.SoftVersionDateEx`（= `LoadDBInfo.SoftVersionDate`）：
+                                                            // `SendGoldInfo` 的 `== 0 ⇒ 不发` 门（`PlayObject.Base.cs:930`）。
+                                                            soft_version_date,
+                                                            // `BaseObject.GamePoint`（`SM_GAMEGOLDNAME` 的 LoWord/HiWord）。
+                                                            game_point: data.map_or(0, |d| d.game_point),
                                                             sys_msg: Some(enter::gbk(
                                                                 enter_cfg.string_conf.canot_pick_up_item(),
                                                             )),
@@ -7143,6 +7387,8 @@ mod tests {
             storage: storage::StorageState::new(),
             actor_id,
             game_gold: 0,
+            soft_version_date: 0,
+            game_point: 0,
             sys_msg: None,
             use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
             sub: game_svr::ability::SubAbility::first_call(),
@@ -7292,6 +7538,8 @@ mod tests {
             storage: storage::StorageState::new(),
             actor_id: 1,
             game_gold: 77,
+            soft_version_date: 0,
+            game_point: 0,
             sys_msg: None,
             use_items,
             sub: game_svr::ability::SubAbility::first_call(),
@@ -7948,6 +8196,8 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: p,
                 game_gold: 0,
+                soft_version_date: 0,
+                game_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -8107,6 +8357,8 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: 42,
                 game_gold: 0,
+                soft_version_date: 0,
+                game_point: 0,
                 sys_msg: None,
                 use_items,
                 // 登录时首次 `RecalcAbilitys` 留下的 recover（非 0 ⇒ 可实测「传 prior」）。
@@ -8239,6 +8491,8 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: 42,
                 game_gold: 0,
+                soft_version_date: 0,
+                game_point: 0,
                 sys_msg: None,
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -8361,6 +8615,8 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: hero,
                 game_gold: 0,
+                soft_version_date: 0,
+                game_point: 0,
                 sys_msg: None,
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -9066,6 +9322,8 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: 7,
                 game_gold: 0,
+                soft_version_date: 0,
+                game_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -9207,6 +9465,8 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: hid,
                 game_gold: 0,
+                soft_version_date: 0,
+                game_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -9632,6 +9892,8 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: 7,
                 game_gold: 0,
+                soft_version_date: 0,
+                game_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -10806,5 +11068,513 @@ mod tests {
             )
         );
         assert_eq!(body2.len(), 12, "空尾 ⇒ header-only 不变");
+    }
+
+    /// **`openmir2-m3-selloff-consignment-world` 进程级判据**：走**生产路径** `handle_selloff_cmd`，
+    /// 让卖方 L（gate 0 / socket 5）与买方 T（gate 1 / socket 6）完成
+    /// `CM_SELLOFFADDITEM → CM_SELLOFFEND → CM_SELLOFFBUY`，断言：
+    /// ① 帧按 `[gate_idx, socket]` 路由到正确连接；
+    /// ② 上架扣 `DecUserGameGold=10000`、成交时买方 `-= nSellGold+10000`、卖方 `+= nSellGold`；
+    /// ③ 上架回帧出队序 = `SM_MENU_OK(767) → SM_SELLOFFEND_OK(23016)`（优先级 69 < 233）；
+    /// ④ 买方 = 立即 `SM_ADDITEM(200)` + 排队 `SM_WEIGHTCHANGED(622) → SM_GAMEGOLDNAME(5008)`；
+    /// ⑤ `M2Share.SellOffItemList`（进程级 `SellOffBook`）跨会话共享（成交后 `flag=2`）。
+    ///
+    /// 红检：把 `handle_selloff_cmd` 的 `CM_SELLOFFEND` 支去掉、或把 `client_buy_sell_off_item`
+    /// 的首次空槽中止删掉（让 `SM_SELLOFFBUY_OK` 出现）⇒ 本用例必 FAILED。
+    #[test]
+    fn selloff_cm_dispatch_emits_oracle_frames_on_both_connections() {
+        use mir2_protocol::messages;
+        use std::collections::HashMap;
+
+        fn drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
+            let mut out = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                match ev {
+                    SimToGate::SendFrame { body, .. } => out.push(body),
+                    other => panic!("元宝寄售路径不得发 SendFrame 以外的命令，实得 {other:?}"),
+                }
+            }
+            out
+        }
+        fn ident(body: &[u8]) -> u16 {
+            u16::from_le_bytes([body[4], body[5]])
+        }
+        fn idents(frames: &[Vec<u8>]) -> Vec<u16> {
+            frames.iter().map(|b| ident(b)).collect()
+        }
+
+        // 卖方 gate 0 / socket 5，买方 gate 1 / socket 6（按 `[gate_idx, socket]` 分流可区分）。
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "L".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: 1,
+            },
+            OnlineEntry {
+                account: "b".into(),
+                chr_name: "T".into(),
+                session_id: 2,
+                gate_idx: 1,
+                socket: 6,
+                actor_id: 2,
+            },
+        ];
+
+        let weapon = game_svr::bag::BagItem {
+            make_index: 100,
+            index: 1,
+            dura: 7,
+            dura_max: 20,
+            desc: [0; 14],
+        };
+        let mut seller = test_session_ground(1);
+        seller.state.item_list.push(weapon);
+        seller.state.wabil.weight = 0;
+        seller.state.wabil.max_weight = 1000;
+        seller.game_gold = 100_000;
+        seller.soft_version_date = 1; // `SendGoldInfo` 门开（真客户端）
+        let mut buyer = test_session_ground(2);
+        buyer.state.wabil.weight = 0;
+        buyer.state.wabil.max_weight = 1000;
+        buyer.game_gold = 100_000;
+        buyer.soft_version_date = 1;
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("L".into(), seller);
+        ground_sessions.insert("T".into(), buyer);
+        let mut sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState> =
+            HashMap::new();
+        let mut book = game_svr::selloff::SellOffBook::default();
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 5,
+                shape: 1,
+                weight: 3,
+                dura_max: 20,
+                price: 10,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let cfg = game_svr::selloff::SellOffConfig::default();
+        let world = mir2_world::World::new(32, 32);
+
+        // ① 卖方把一件背包物品加进寄售窗（`CM_SELLOFFADDITEM`，`recog=MakeIndex`、尾=名字）
+        handle_selloff_cmd(
+            messages::CM_SELLOFFADDITEM,
+            100,
+            0,
+            0,
+            Some("木剑"),
+            "L",
+            5,
+            &online,
+            &world,
+            &mut ground_sessions,
+            &mut sell_off_sessions,
+            &mut book,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        assert_eq!(
+            idents(&drain(&mut rx0)),
+            vec![messages::SM_SELLOFFADDITEM_OK]
+        );
+        assert!(drain(&mut rx1).is_empty(), "买方不应收到上架回帧");
+        assert_eq!(
+            sell_off_sessions["L"].sell_off_item_list.len(),
+            1,
+            "物品应移进寄售临时列表"
+        );
+        assert!(
+            ground_sessions["L"].state.item_list.is_empty(),
+            "物品应移出背包"
+        );
+
+        // ② 上架（`CM_SELLOFFEND`，`recog=nSellGold`、尾=买方名）
+        handle_selloff_cmd(
+            messages::CM_SELLOFFEND,
+            1000,
+            0,
+            0,
+            Some("T"),
+            "L",
+            5,
+            &online,
+            &world,
+            &mut ground_sessions,
+            &mut sell_off_sessions,
+            &mut book,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        assert_eq!(
+            idents(&drain(&mut rx0)),
+            vec![messages::SM_MENU_OK, messages::SM_SELLOFFEND_OK],
+            "上架出队序：MENU_OK(69) 先于 SELLOFFEND_OK(233)"
+        );
+        assert!(drain(&mut rx1).is_empty());
+        assert_eq!(book.entries.len(), 1, "进程级 SellOffItemList 追加一条");
+        assert_eq!(book.entries[0].deal_chr_name, "L");
+        assert_eq!(book.entries[0].buy_chr_name, "T");
+        assert_eq!(book.entries[0].sell_gold, 1000);
+        assert_eq!(book.entries[0].flag, 0);
+        assert_eq!(
+            ground_sessions["L"].game_gold, 90_000,
+            "上架扣 DecUserGameGold=10000"
+        );
+
+        // ③ 买方成交（`CM_SELLOFFBUY`，尾=卖方名）
+        handle_selloff_cmd(
+            messages::CM_SELLOFFBUY,
+            0,
+            0,
+            0,
+            Some("L"),
+            "T",
+            6,
+            &online,
+            &world,
+            &mut ground_sessions,
+            &mut sell_off_sessions,
+            &mut book,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        // 买方：立即 SM_ADDITEM(200) + 排队 131(WEIGHT) → 148(GAMEGOLD)。
+        let buyer_frames = idents(&drain(&mut rx1));
+        assert_eq!(
+            buyer_frames,
+            vec![
+                messages::SM_ADDITEM,
+                messages::SM_WEIGHTCHANGED,
+                messages::SM_GAMEGOLDNAME,
+            ]
+        );
+        // 卖方：只收一条元宝变化帧（`GameGoldChanged`）。
+        assert_eq!(idents(&drain(&mut rx0)), vec![messages::SM_GAMEGOLDNAME]);
+        assert_eq!(
+            ground_sessions["T"].game_gold, 89_000,
+            "买方扣 nSellGold(1000)+DecUserGameGold(10000)"
+        );
+        assert_eq!(
+            ground_sessions["L"].game_gold, 91_000,
+            "卖方 += nSellGold(1000)"
+        );
+        assert_eq!(
+            ground_sessions["T"].state.item_list.len(),
+            1,
+            "物品进买方背包"
+        );
+        assert_eq!(book.entries[0].flag, 2, "成交后 flag=2（已售）");
+        // 缺陷照搬①：`for j<=9` 首个空槽中止 ⇒ `SM_SELLOFFBUY_OK` 不可达。
+        assert!(
+            !buyer_frames.contains(&messages::SM_SELLOFFBUY_OK),
+            "oracle 越界缺陷 ⇒ BUY_OK 恒不可达"
+        );
+    }
+
+    /// **元宝寄售取消路径进程级判据**：走生产路径，分别驱动
+    /// ① `CM_SELLOFFADDITEM → CM_SELLOFFEND → CM_SELLOFFBUYCANCEL`（买方取消 ⇒ `flag=3`
+    ///    + `"取消交易成功!"`）；
+    /// ② `CM_SELLOFFADDITEM → CM_SELLOFFEND → CM_CANCELSELLOFFITEMING`（卖方取消 ⇒ 事务条目移除、
+    ///    物品退回背包；出队序 = 立即 `SM_ADDITEM`×2 → `SM_MENU_OK(69)`×2 → `SM_WEIGHTCHANGED(131)`）；
+    ///    注意 oracle **不 break** ⇒ 同一卖方名下所有 `flag∈{0,3}` 的条目**一次全清**（连①的 flag=3 也退）。
+    /// ③ `CM_SELLOFFDELITEM` / `CM_SELLOFFCANCEL` 的派发不 panic 且路由正确。
+    ///
+    /// 红检：把 `handle_selloff_cmd` 的 `CM_SELLOFFBUYCANCEL` 支去掉（`flag` 不变 3）⇒ ①②
+    /// 的 flag 断言必 FAILED。
+    #[test]
+    fn selloff_cancel_paths_dispatch_and_mutate_global_book() {
+        use mir2_protocol::messages;
+        use std::collections::HashMap;
+
+        fn drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<u16> {
+            let mut out = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                match ev {
+                    SimToGate::SendFrame { body, .. } => {
+                        out.push(u16::from_le_bytes([body[4], body[5]]));
+                    }
+                    other => panic!("元宝寄售路径不得发 SendFrame 以外的命令，实得 {other:?}"),
+                }
+            }
+            out
+        }
+
+        let weapon = |mi: i32| game_svr::bag::BagItem {
+            make_index: mi,
+            index: 1,
+            dura: 7,
+            dura_max: 20,
+            desc: [0; 14],
+        };
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 5,
+                shape: 1,
+                weight: 3,
+                dura_max: 20,
+                price: 10,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let cfg = game_svr::selloff::SellOffConfig::default();
+        let world = mir2_world::World::new(32, 32);
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "L".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: 1,
+            },
+            OnlineEntry {
+                account: "b".into(),
+                chr_name: "T".into(),
+                session_id: 2,
+                gate_idx: 1,
+                socket: 6,
+                actor_id: 2,
+            },
+        ];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut l = test_session_ground(1);
+        l.state.wabil.weight = 0;
+        l.state.wabil.max_weight = 1000;
+        l.game_gold = 100_000;
+        l.soft_version_date = 1;
+        ground_sessions.insert("L".into(), l);
+        let mut t = test_session_ground(2);
+        t.game_gold = 100_000;
+        t.soft_version_date = 1;
+        ground_sessions.insert("T".into(), t);
+        let mut sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState> =
+            HashMap::new();
+        let mut book = game_svr::selloff::SellOffBook::default();
+
+        // ① 买方取消：L 上架 → T 调 `CM_SELLOFFBUYCANCEL`（尾=卖方名）
+        let call = |ident,
+                    recog,
+                    param,
+                    tag,
+                    tail: &str,
+                    chr: &str,
+                    socket,
+                    ground: &mut HashMap<String, SessionGround>,
+                    sessions: &mut HashMap<String, game_svr::selloff::SellOffState>,
+                    book: &mut game_svr::selloff::SellOffBook| {
+            handle_selloff_cmd(
+                ident,
+                recog,
+                param,
+                tag,
+                Some(tail),
+                chr,
+                socket,
+                &online,
+                &world,
+                ground,
+                sessions,
+                book,
+                &gates,
+                &cfg,
+                &catalog,
+            );
+        };
+        // 先给 L 背包放一件物品再上架。
+        ground_sessions
+            .get_mut("L")
+            .unwrap()
+            .state
+            .item_list
+            .push(weapon(100));
+        call(
+            messages::CM_SELLOFFADDITEM,
+            100,
+            0,
+            0,
+            "木剑",
+            "L",
+            5,
+            &mut ground_sessions,
+            &mut sell_off_sessions,
+            &mut book,
+        );
+        assert_eq!(drain(&mut rx0), vec![messages::SM_SELLOFFADDITEM_OK]);
+        call(
+            messages::CM_SELLOFFEND,
+            1000,
+            0,
+            0,
+            "T",
+            "L",
+            5,
+            &mut ground_sessions,
+            &mut sell_off_sessions,
+            &mut book,
+        );
+        let _ = drain(&mut rx0);
+        assert_eq!(book.entries.len(), 1);
+        call(
+            messages::CM_SELLOFFBUYCANCEL,
+            0,
+            0,
+            0,
+            "L",
+            "T",
+            6,
+            &mut ground_sessions,
+            &mut sell_off_sessions,
+            &mut book,
+        );
+        assert_eq!(
+            drain(&mut rx1),
+            vec![messages::SM_MENU_OK],
+            "买方收取消回帧"
+        );
+        assert_eq!(book.entries[0].flag, 3, "买方取消 ⇒ Flag=3");
+
+        // ② 卖方取消正在寄售中：重新上架一条 → L 调 `CM_CANCELSELLOFFITEMING`
+        ground_sessions
+            .get_mut("L")
+            .unwrap()
+            .state
+            .item_list
+            .push(weapon(200));
+        call(
+            messages::CM_SELLOFFADDITEM,
+            200,
+            0,
+            0,
+            "木剑",
+            "L",
+            5,
+            &mut ground_sessions,
+            &mut sell_off_sessions,
+            &mut book,
+        );
+        let _ = drain(&mut rx0);
+        call(
+            messages::CM_SELLOFFEND,
+            1000,
+            0,
+            0,
+            "T",
+            "L",
+            5,
+            &mut ground_sessions,
+            &mut sell_off_sessions,
+            &mut book,
+        );
+        let _ = drain(&mut rx0);
+        call(
+            messages::CM_CANCELSELLOFFITEMING,
+            0,
+            0,
+            0,
+            "",
+            "L",
+            5,
+            &mut ground_sessions,
+            &mut sell_off_sessions,
+            &mut book,
+        );
+        assert_eq!(
+            drain(&mut rx0),
+            vec![
+                messages::SM_ADDITEM,
+                messages::SM_ADDITEM,
+                messages::SM_MENU_OK,
+                messages::SM_MENU_OK,
+                messages::SM_WEIGHTCHANGED,
+            ],
+            "取消寄售中：oracle 不 break ⇒ ①的 flag=3 条目也一并退回（2 次 AddItem/MENU_OK），\
+             且 MENU_OK(69) 先于 WEIGHTCHANGED(131)"
+        );
+        assert!(
+            book.entries.is_empty(),
+            "同一卖方名下 flag∈{{0,3}} 的条目全部移除"
+        );
+        assert_eq!(
+            ground_sessions["L"].state.item_list.len(),
+            2,
+            "两条目的物品都退回背包"
+        );
+
+        // ③ `CM_SELLOFFDELITEM` / `CM_SELLOFFCANCEL` 的派发（各回一帧）
+        call(
+            messages::CM_SELLOFFDELITEM,
+            200,
+            0,
+            0,
+            "木剑",
+            "L",
+            5,
+            &mut ground_sessions,
+            &mut sell_off_sessions,
+            &mut book,
+        );
+        assert_eq!(
+            drain(&mut rx0),
+            vec![messages::SM_SELLOFFDELITEM_FAIL],
+            "列表里无此件 ⇒ FAIL"
+        );
+        ground_sessions
+            .get_mut("L")
+            .unwrap()
+            .state
+            .item_list
+            .push(weapon(300));
+        call(
+            messages::CM_SELLOFFADDITEM,
+            300,
+            0,
+            0,
+            "木剑",
+            "L",
+            5,
+            &mut ground_sessions,
+            &mut sell_off_sessions,
+            &mut book,
+        );
+        let _ = drain(&mut rx0);
+        call(
+            messages::CM_SELLOFFCANCEL,
+            0,
+            0,
+            0,
+            "",
+            "L",
+            5,
+            &mut ground_sessions,
+            &mut sell_off_sessions,
+            &mut book,
+        );
+        assert_eq!(drain(&mut rx0), vec![messages::SM_SellOffCANCEL]);
+        assert!(sell_off_sessions["L"].sell_off_item_list.is_empty());
     }
 }
