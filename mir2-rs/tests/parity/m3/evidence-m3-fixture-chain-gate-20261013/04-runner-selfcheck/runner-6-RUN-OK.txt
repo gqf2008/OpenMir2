@@ -1,0 +1,2 @@
+key=6 system=任务 runner_status=RUN-OK rc=0
+GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + 入口/DiffOnly/AssembleOnly/preflight/no-Go fail-closed + LF + 零端口）
