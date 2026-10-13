@@ -20,7 +20,7 @@
 
 | 文件 | 内容 | rc |
 | --- | --- | --- |
-| `00-selfcheck-nostack.txt` | `-SelfCheckNoStack -SelfCheckOut`（脚本自落 **LF** 转录）：比较器 12/12 + 纯度门 + LF + 零端口 + `no-go-realrun-prereq` + `emit-dropexp-passthrough`/`-default-off` + `botsrv-dropexp-config-on`/`-default-off` + BotSrv selftest ⇒ **ok=19/19** | 0 |
+| `00-selfcheck-nostack.txt` | `-SelfCheckNoStack -SelfCheckOut`（脚本自落 **LF** 转录）：比较器 12/12 + 纯度门 + LF + 零端口 + `no-go-realrun-prereq` + `emit-dropexp-passthrough`/`-default-off` + `botsrv-dropexp-config-on`/`-default-off` + `emit-dropexp-pin-args` + BotSrv selftest ⇒ **ok=20/20** | 0 |
 | `01-botsrv-selftest-dropseq.txt` | `dotnet build -c Release` 0 错 + `BotSrv.exe --selftest-dropseq` GREEN（26 断言） | 0 |
 | `02-redcheck-runpair-passthrough.txt` | **改坏必红①**：停用 `run_pair` 的 DropExp 计划分支 ⇒ `emit-dropexp-passthrough` FAIL、ok=18/19 | 1 |
 | `03-redcheck-botsrv-config-passthrough.txt` | **改坏必红②**：写错 `run_bots` 的 DropExp 配置键 ⇒ `botsrv-dropexp-config-on`/`-default-off` 双 FAIL、ok=17/19 | 1 |

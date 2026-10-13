@@ -40,7 +40,7 @@ python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_diff.py selftest
 # 纯度门自检（fail-closed + 改坏必红 + 真表承重）：期望 SELFTEST ok=23/23 rc=0
 python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py selftest
 
-# 无栈自检：比较器 + 纯度门 + LF 写出 + 零端口 + no-Go fail-closed + DoD② run_pair/BotSrv DropExp 透传 + BotSrv 生产函数 selftest；期望 SELFTEST ok=19/19 rc=0
+# 无栈自检：比较器 + 纯度门 + LF 写出 + 零端口 + no-Go fail-closed + DoD② run_pair/BotSrv DropExp 透传 + BotSrv 生产函数 selftest；期望 SELFTEST ok=20/20 rc=0
 powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/drop-exp/run_drop_exp_pair.ps1 -SelfCheckNoStack
 
 # 场景纯度（离线；给该侧全场景抽数流水；认不出/未分类 ⇒ 点名 RED）
@@ -89,7 +89,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/drop
 5. **收工**：`-Stop` + 十端口实拍 + 卡上写「窗口已释放」+ 证据入库（`SHA256SUMS.txt` 按仓库 LF/git-blob 口径，含两侧纯度门的 `--json` 原始件）。
 
 > 现状：BotSrv「掉落/经验序列」驱动 + `--selftest-dropseq` 已实现（卡 `openmir2-m3-drop-exp-fixture-botsrv` DoD①）；
-> DoD② 接线（`run_drop_exp_pair.ps1` real-run → `run_pair.ps1 -DropExpSequence` → `tools/botload/run_bots.ps1` DropExp* 配置透传）已落地，无栈自检 19/19。
+> DoD② 接线（`run_drop_exp_pair.ps1` real-run → `run_pair.ps1 -DropExpSequence` → `tools/botload/run_bots.ps1` DropExp* 配置透传）已落地，无栈自检 20/20。
 > **仍未接线的依赖**：「0137 上运行时 pin 出单只固定怪」（C# 侧 GM/脚本 spawn + Rust 宿主 AI 模式开关），归 shared 承接卡
 > `openmir2-m3-rng-scene-driver`（规格见 [`rng-trace-scene/DRIVER-CONTRACT.md`](../rng-trace-scene/DRIVER-CONTRACT.md) §7，与 ④ 同批窗口）；
 > 单只怪未落地时 `run_pair` 的 DropExp 分支会在「0 杀 < -DropExpKills」处 RED（fail-closed，不符就是不符）。

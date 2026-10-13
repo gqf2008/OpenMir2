@@ -16,19 +16,21 @@ src/BotSrv/Player/RobotPlayer.cs
 src/BotSrv/Program.cs
 src/BotSrv/RobotOptions.cs
 
-=== 净差量（本增量 vs 上一片 head; git diff --stat 9dcfb6f34 d9733342d）
+=== 净差量（本增量 vs 上一片 head; git diff --stat 9dcfb6f34 HEAD）
 mir2-rs/tests/parity/m3/drop-exp/README.md         |  12 +-
  .../00-selfcheck-nostack.txt                       |  90 +++++++++++
  .../01-botsrv-selftest-dropseq.txt                 |  36 +++++
  .../02-redcheck-runpair-passthrough.txt            |  10 ++
  .../03-redcheck-botsrv-config-passthrough.txt      |  10 ++
  .../04-gates.txt                                   |  17 ++
+ .../05-boundary.txt                                |  37 +++++
  .../README.md                                      |  45 ++++++
+ .../SHA256SUMS.txt                                 |   7 +
  .../tests/parity/m3/drop-exp/run_drop_exp_pair.ps1 | 178 +++++++++++++++++++--
  mir2-rs/tests/parity/m3/gate_guards.ps1            |  88 ++++++++++
  mir2-rs/tests/parity/m3/run_pair.ps1               |  73 ++++++++-
  tools/botload/run_bots.ps1                         |  59 ++++++-
- 11 files changed, 590 insertions(+), 28 deletions(-)
+ 13 files changed, 634 insertions(+), 28 deletions(-)
 
 === 恢复证明：两次改坏按字节还原（sha256 前后逐字节相同）
 f16144bd65cadc29cb470ba285f164d688475ffb686018ff3d28aa22f9f23cda *mir2-rs/tests/parity/m3/run_pair.ps1

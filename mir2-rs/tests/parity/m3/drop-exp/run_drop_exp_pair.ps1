@@ -306,6 +306,21 @@ if ($SelfCheckNoStack) {
       Add-Result 'emit-dropexp-default-off' ((-not ($offArgs -contains '-DropExpSequence')) -and (-not ($offArgs -contains '-DisableAutoPlay')) -and ($emitOff.drop_exp_sequence -eq '(off)')) ("scope=" + $emitOff.drop_exp_sequence)
     }
 
+    # ⑮b real-run 的 pin 参数形态（场景固定输入）：-PinStartPose + map/(x,y)/level/dir 必须与 scenario 一致，
+    #     否则 run_pair 缺省会落到 map 0 (289,618) ⇒ 场景件不是单一真源（改坏 PinMapName/PinCX 必红）。
+    $scObj = (Get-Content -LiteralPath $ScenarioFile -Raw | ConvertFrom-Json)
+    $pinArgs = @('-EmitOpsArgs', '-FixedNewChr', '-PinStartPose', '-PinMapName', [string]$scObj.map,
+                 '-PinCX', [int]$scObj.attacker.x, '-PinCY', [int]$scObj.attacker.y,
+                 '-PinLevel', [int]$scObj.attacker.level, '-PinDir', [int]$scObj.attacker.dir, '-DropExpSequence')
+    $pinRaw = & powershell -NoProfile -ExecutionPolicy Bypass -File $RunPair @pinArgs
+    if ($LASTEXITCODE -ne 0) { Add-Result 'emit-dropexp-pin-args' $false 'emit_pin_rc!=0' }
+    else {
+      $pinText = ((@($pinRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER|MAP_HAS_NO_AI_CONSUMERS)' }) -join "`n").Trim()
+      $pinObj = ($pinText | ConvertFrom-Json)
+      $wantPosePrefix = ('map={0} home=0,289,618 pos={1},{2} level={3} dir={4}' -f $scObj.map, $scObj.attacker.x, $scObj.attacker.y, $scObj.attacker.level, $scObj.attacker.dir)
+      Add-Result 'emit-dropexp-pin-args' ([string]$pinObj.start_pose -like ($wantPosePrefix + '*')) ("start_pose=" + $pinObj.start_pose)
+    }
+
     # ⑯ BotSrv 生产函数 selftest（attacker 精确选择 / 击杀窗口归类 / SM_WINEXP 字段抽取 / 行组装）
     #    —— 改坏必红由代码 review + 本断言钉住（片内红检另存证据）。
     $botProj = Join-Path $RepoRoot 'src\BotSrv\BotSrv.csproj'
@@ -418,10 +433,13 @@ if ([int]$sc.kills -ne $Kills) {
   exit 2
 }
 $monsterName = [string]$sc.monster
+$scMap = [string]$sc.map
 $attackDir = [int]$sc.attacker.dir
+$attackX = [int]$sc.attacker.x
+$attackY = [int]$sc.attacker.y
 $attackLevel = [int]$sc.attacker.level
 Write-Output ("DROPEXP_REALRUN side={0} kills={1} seed={2} map={3} monster={4} pose=({5},{6}) dir={7} level={8}" -f `
-  $Side, $Kills, $Seed, $sc.map, $monsterName, $sc.attacker.x, $sc.attacker.y, $attackDir, $attackLevel)
+  $Side, $Kills, $Seed, $scMap, $monsterName, $attackX, $attackY, $attackDir, $attackLevel)
 
 # 前置：MySQL（两侧都要取两相 pin 快照/落库）。
 $mysqlOk = $false
@@ -436,7 +454,7 @@ Write-Output 'PREFLIGHT MySQL 在听'
 
 # 复用 run_pair.ps1 的两相 pin + 固定掉落/经验序列（两侧同开关、同起点）。
 $pairArgs = @('-Side', $Side, '-Bots', $Bots, '-Prefix', $Prefix, '-Address', $Address, '-Port', $Port, '-TimeoutSec', $TimeoutSec,
-              '-FixedNewChr', '-PinStartPose', '-PinLevel', $attackLevel, '-PinDir', $attackDir,
+              '-FixedNewChr', '-PinStartPose', '-PinMapName', $scMap, '-PinCX', $attackX, '-PinCY', $attackY, '-PinLevel', $attackLevel, '-PinDir', $attackDir,
               '-DropExpSequence', '-DropExpKills', $Kills, '-DropExpStepMs', $DropExpStepMs, '-DropExpStartDelayMs', $DropExpStartDelayMs,
               '-DropExpDir', $attackDir, '-DropExpRole', 0, '-DropExpMonster', $monsterName)
 & powershell -ExecutionPolicy Bypass -File $RunPair @pairArgs
