@@ -1,0 +1,25 @@
+# 边界与差异（本片写集外零改动）——以下命令均在本 worktree 根执行
+
+## base = master a443296e；head = worktree-m3-merchant-load
+
+## git diff --stat a443296e -- src sql MirClient
+  (空 = 冻结基线零改动)
+
+## git diff --stat a443296e -- mir2-rs/crates/world mir2-rs/bins mir2-rs/crates/data mir2-rs/crates/script
+  (crates/script 仅在改坏必红时短暂变异并已逐字节还原；此处应为空)
+
+## git diff --stat a443296e（全量，相对 base 的已提交差量；未提交未见）
+ mir2-rs/Cargo.lock                | 1 +
+ mir2-rs/crates/envir/Cargo.toml   | 1 +
+ mir2-rs/crates/envir/src/error.rs | 6 ++++++
+ mir2-rs/crates/envir/src/lib.rs   | 5 +++++
+ 4 files changed, 13 insertions(+)
+
+## git status --short（工作树新增/改动）
+ M mir2-rs/Cargo.lock
+ M mir2-rs/crates/envir/Cargo.toml
+ M mir2-rs/crates/envir/src/error.rs
+ M mir2-rs/crates/envir/src/lib.rs
+?? mir2-rs/crates/envir/src/merchant.rs
+?? mir2-rs/crates/envir/tests/merchant.rs
+?? mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/
