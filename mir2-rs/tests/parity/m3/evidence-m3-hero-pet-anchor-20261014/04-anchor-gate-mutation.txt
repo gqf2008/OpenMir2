@@ -1,0 +1,5 @@
+MUT1 行漂移(:361-371→:360-370): RED（2 项）
+MUT2 消息号冒充行号: RED（2 项）
+MUT3 读侧 token 漂移: RED（1 项）
+MUT4 真身 check: GREEN（0 项）
+MUTATION GREEN (C:\Users\gxh\AppData\Local\Temp\hp-anchor-mut-xmmqflo9)
