@@ -11289,7 +11289,7 @@ mod tests {
 
     /// **元宝寄售取消路径进程级判据**：走生产路径，分别驱动
     /// ① `CM_SELLOFFADDITEM → CM_SELLOFFEND → CM_SELLOFFBUYCANCEL`（买方取消 ⇒ `flag=3`
-    ///    + `"取消交易成功!"`）；
+    ///    以及文案 `"取消交易成功!"`）；
     /// ② `CM_SELLOFFADDITEM → CM_SELLOFFEND → CM_CANCELSELLOFFITEMING`（卖方取消 ⇒ 事务条目移除、
     ///    物品退回背包；出队序 = 立即 `SM_ADDITEM`×2 → `SM_MENU_OK(69)`×2 → `SM_WEIGHTCHANGED(131)`）；
     ///    注意 oracle **不 break** ⇒ 同一卖方名下所有 `flag∈{0,3}` 的条目**一次全清**（连①的 flag=3 也退）。
