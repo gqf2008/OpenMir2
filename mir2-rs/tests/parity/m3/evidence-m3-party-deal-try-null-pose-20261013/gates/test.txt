@@ -1,0 +1,12 @@
+== 四门禁 · ③ test --workspace ==
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test --workspace --offline
+suites=98  passed=1042  failed=0  ignored=21
+rc=0
+
+本片新增 4 条用例（全 ok）：
+test trade::tests::deal_try_absent_pose_still_obeys_guards_first ... ok
+test trade::tests::deal_try_absent_pose_emits_nothing ... ok
+test tests::deal_cm_try_no_front_object_emits_no_frame_on_production_path ... ok
+test tests::deal_try_target_distinguishes_absent_from_non_player ... ok
+
+（基线 master 029d23eae = 98 suites / 1038 passed / 0 failed / 21 ignored ⇒ 本片 +4）

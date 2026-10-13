@@ -1,0 +1,14 @@
+== 20 边界（交付 head 对 base refs/heads/master） ==
+base = 029d23eae94538615e2dd533f902d162dbc05cd3
+
+git diff --name-only origin/master -- src sql MirClient
+（空 = oracle/客户端/表结构零改动）
+
+git diff --name-only origin/master（本片改动面）
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/trade.rs
+
+git merge-base --is-ancestor origin/master HEAD ⇒ YES
+
+git merge-tree origin/master HEAD（rc）
+rc=0
