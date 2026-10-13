@@ -237,3 +237,18 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   的 ③ 改为 `CM_RUN >= --min-run-count`（默认 1）。
 - **未做**：brief 指定的 ClientConf 体编码（客户端不读 11029，做了也不可能满足「改回 17B ⇒ CM_RUN 回归 0」）；
   58B 白名单 / owner_actions ④ 待 owner 签字。
+
+## ⑩ 片⑩：「跑」配对原始件**入库** + 配对判据可离线复跑（收口 reviewer not_verified③）—— `62`
+
+- **为什么**：片⑨的真机配对（52 尾 40↔58 ⇒ `CM_RUN` 0→3、HUD 0/0→19/19）**原始 capture 只在
+  `E:/tmp/m2svr-run4/**`（未入库）**，reviewer-5/6 均记「中央读数无法在检出内独立复算」。本片把两份原始件**逐字节入库**
+  （sha256 与 `61-*` §F 完全相同）：
+  `capture-run-ability-before-oracle40.jsonl`（`8d140852…`）/ `capture-run-ability-after-client58.jsonl`（`753a7566…`）。
+- **判据**：`check_client_run_frames.py` 增 `--pair-before/--pair-after` 配对模式（**不需要起栈**）：
+  A) 两侧 `11029` `raw_hex` 逐字节相同 ⇒ ClientConf 未动（把片⑧ 的口径变成机器可判）；
+  B) BEFORE `52==40` 且 `CM_RUN==0`；C) AFTER `52==58` 且 `CM_RUN>=--min-run-count`（默认 1）。
+  实跑 GREEN；对调 → RED；单件 BEFORE 默认 → RED（= root 判据「改回 ⇒ CM_RUN 归 0」）；`--selftest` 单件 6/6 + 配对 7/7。
+  原文见 `62-run-ability-pair-inrepo.txt`。
+- **零生产代码改动**；边界/门禁见 `63-gates.txt` / `64-boundary.txt`；本片未起栈、未占端口。
+- **仍归 owner/窗口**（不因本片收卡）：58B 默认值的 §6.0-3 签字；`SM_SERVERCONFIG id 20002 + 52B TClientConf`
+  属另案故意偏离且已证与 `CM_RUN` 无关；默认翻 58B 后跨侧 s2c 逐字节对拍需 Rust 显式 `MIR2_CLIENT_ABILITY_LAYOUT=0`。
