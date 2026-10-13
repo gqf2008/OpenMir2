@@ -22,5 +22,6 @@ suites_ok=100
 passed=1160 failed=0 ignored=22
 
 ## 口径
-本片为零 .rs 文档/证据片（F-1 订正后重跑）；树 = 本 branch tip（含 origin/master c127ae9a4 合并）；
-读数与合并车道在 c127ae9a4 的四门禁读数一致（100 suites 1160 passed 0 failed 22 ignored + 604）。
+本片为零 .rs 文档/证据片（F-1 订正后重跑）。树 = 本 branch tip（含 `origin/master f4e8a29f0` 合并；
+该合并仅带入 `.walgit/board.toml` + `tools/collab/evidence-board-blocked-column-20261013/**`，零 `.rs`）。
+读数与合并车道在 c127ae9a4 / f4e8a29f0 的读数一致（100 suites 1160 passed 0 failed 22 ignored + 604）。

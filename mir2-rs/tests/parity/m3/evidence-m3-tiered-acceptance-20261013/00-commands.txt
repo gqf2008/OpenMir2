@@ -2,7 +2,7 @@
 
 卡：`openmir2-tiered-acceptance-policy`（issue `2732dfc96f38`）
 车道：principal `openmir2-worker-5` / worktree `.claude/worktrees/m3cs` / branch `worktree-m3-tiered-acceptance`
-base：`origin/master bdc508ef131b504e7b801204a6b0ec23c413b773`
+base：`origin/master f4e8a29f077d2ddb33af9da9028be4191522b9d8`（本片初版 base=bdc508ef1；F-1 返工前已 `git merge origin/master`）
 写集：`AGENTS.md` + `docs/Rust重写设计文档.md` + `mir2-rs/tests/parity/M3-report.md` + 本证据目录。**零 `.rs` / 零 `src/**` / 零表结构·脚本语法·数据格式改动**。
 
 ## 验收①-⑤ 对应的采集命令

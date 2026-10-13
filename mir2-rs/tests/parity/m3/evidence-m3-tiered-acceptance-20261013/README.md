@@ -2,7 +2,7 @@
 
 - **卡**：`openmir2-tiered-acceptance-policy`（issue `2732dfc96f38`；owner 2026-10-13 经 jev 决策，置信度 1.00）。
 - **车道**：principal `openmir2-worker-5` ／ worktree `.claude/worktrees/m3cs` ／ branch `worktree-m3-tiered-acceptance`。
-- **base**：`origin/master bdc508ef131b504e7b801204a6b0ec23c413b773`。
+- **base**：`origin/master f4e8a29f077d2ddb33af9da9028be4191522b9d8`（初版 `bdc508ef1`；F-1 返工前已 `git merge origin/master`，合并仅带入 `.walgit/board.toml` + `tools/collab/evidence-board-blocked-column-20261013/**`，零 `.rs`）。
 - **本片**：把该卡 `landing.repo_pending` 的三处文本落地，并对 `machine_checkable_acceptance` ①-⑤ 给可复现原始件。
   **零 `.rs` / 零 `src/**` / 零表结构·脚本语法·数据格式改动；零起栈、零端口。**
 
