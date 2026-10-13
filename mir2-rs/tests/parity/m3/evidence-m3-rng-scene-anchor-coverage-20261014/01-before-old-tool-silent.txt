@@ -1,0 +1,11 @@
+### 01 旧工具（a173eba89）对两处同族坏样本：静默 GREEN（漏报）
+# 卡 openmir2-m3-rng-trace-scene-groups；reviewer-5 M-1 / reviewer-6 M-1+M-2 收口
+
+$ python -I <a173eba89:check_anchors.py> check --doc <同名 basename、别的目录（foo/monai.rs:999）>
+GREEN: check_anchors 7/7 锚点保鲜（文档行号 == 当前源码首个匹配行）
+# rc=0（0 = GREEN ⇒ 漏报，旧口径不报这两类）
+
+$ python -I <a173eba89:check_anchors.py> check --doc <同行裸续引用漂移（:53 → :54）>
+GREEN: check_anchors 7/7 锚点保鲜（文档行号 == 当前源码首个匹配行）
+# rc=0（0 = GREEN ⇒ 漏报，旧口径不报这两类）
+

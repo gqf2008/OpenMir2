@@ -1,0 +1,8 @@
+### 08 cargo clippy --workspace --all-targets --offline -- -D warnings
+# cwd=E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag/mir2-rs
+# CARGO_TARGET_DIR=E:/tmp/m3bag-target
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.47s
+
+# rc=0
