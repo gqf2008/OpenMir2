@@ -3,8 +3,8 @@
 - **卡**：`openmir2-m3-final-acceptance`（issue `b0bb3003`）。本文件落地该卡 DoD ③（`tests/parity/M3-report.md`），
   并承载 DoD ① 的十项系统逐项盘点索引；DoD ②（300 假人 24h 长跑）本片**只写方案、不跑**（见 §2）。
 - **车道**：principal `openmir2-worker-5` ／ worktree `.claude/worktrees/m3cs` ／ branch `worktree-m3-final-acceptance`。
-- **base**：`origin/master da94fcb7`。本片**零 `.rs` / 零 `src/**` / 零表结构·脚本语法·数据格式改动**；
-  写集 = `mir2-rs/tests/parity/**`（本报告 + 证据包）。
+- **base**：本报告骨架 = `origin/master da94fcb7`；**2026-10-13 08:30 补实片** = `origin/master 3c5082e5`（落实 owner comment `256cec70774f` 的 todo：十项表逐行补实 + `whitelist.md` 新登记）。本片**零 `.rs` / 零 `src/**` / 零表结构·脚本语法·数据格式改动**；
+  写集 = `mir2-rs/tests/parity/**`（本报告 + `whitelist.md`）。
 - **口径（照 §6.0-1/2/4 与 owner 03:20 指令）**：
   1. **只写本片亲手跑过的读数**；没有亲手跑过的，写 `not_verified`；
   2. **未推进的系统写 `not_covered` + 承接卡**，不许留白当绿、不许自己造绿；
@@ -27,14 +27,14 @@
 | 1 | 背包 / 装备 | 穿戴/脱下/负重/持久/属性面板逐项相同；边界用例齐 | **covered（diff=0）** | 卡 `openmir2-m3-bag-equip-alignment`（closed，merge `bbf63fb0`） |
 | 2 | 战斗 | 固定种子下 100+ 次攻击伤害序列逐项相同；命中/躲闪统计一致 | **covered（逐 k=0）** | 卡 `openmir2-m3-combat-skills-align`（closed，merge `55a29144`） |
 | 3 | 技能 | 每个已实装技能 ≥1 条用例：前置/MP/效果/冷却 | **covered（29 技能各 1 case）** | 同上 |
-| 4 | 掉落 / 经验 | 固定种子 100 次击杀掉落逐项相同；经验曲线（含英雄）逐级相同、无 i32 截断 | **not_covered（M3 系统级）** | **已有卡** `openmir2-m3-drop-exp-align`（owner 已开，见 §4） |
-| 5 | NPC / 商店 | 买/卖/修理/仓库价格与库存变化一致；失败分支一致 | **partial** | 脚本层 7/7 引 M4；服务端派发 not_covered，**已有卡** `openmir2-m3-npc-shop-align` |
-| 6 | 任务 | 接/交/条件判定一致，任务状态落库一致 | **not_covered** | **已有卡** `openmir2-m3-quest-align` |
-| 7 | 组队 / 交易 | 归属/分配/取消/掉线中断结果一致 | **not_covered** | **已有卡** `openmir2-m3-party-trade-align` |
-| 8 | 公会 / 攻城 | 建会/宣战费用时限/城门状态/自动结束逐项一致 | **not_covered** | **已有卡** `openmir2-m3-guild-castle-align` |
-| 9 | 英雄 / 宠物 | 召唤/升级/阵亡/经验分配/上限判定一致 | **not_covered** | **已有卡** `openmir2-m3-hero-pet-align` |
-| 10a | 邮件 | 发送 / 到期 / 退回（§6 原文） | **`oracle_absent`（已登记 T-36）** | oracle 全仓无邮件实现（仅客户端开关 `boShowMail`）⇒ **不开实现卡**；Rust 与 oracle 一致地不实现 |
-| 10b | 拍卖 | 成交 / 退回（按 oracle 实际语义重划为「元宝寄售 SellOff」） | **partial**（oracle 链与判据已盘；世界侧 `CM_SELLOFF*` 派发 / `DealOffInfo` 世界态 / 帧未实现） | **已有卡** `openmir2-m3-mail-auction-align` + 承接卡 `-selloff-consignment-world` / `-selloff-goldsales-load-wire` / `-selloff-fixture-botsrv` |
+| 4 | 掉落 / 经验 | 固定种子 100 次击杀掉落逐项相同；经验曲线（含英雄）逐级相同、无 i32 截断 | **not_covered（M3 系统级）** | 盘点 merge `fa82187a`（[`m3/M3④掉落经验现状盘点与夹具骨架报告-20261013.md`](m3/M3④掉落经验现状盘点与夹具骨架报告-20261013.md)）；卡 `openmir2-m3-drop-exp-align` + 实现卡 `-monitems-attach`/`-mongen-load-spawn`/`-monster-ai-tick`/`-drop-exp-wiring`（④-A/B/C 已合、D 剩掉落落地面，见 §4） |
+| 5 | NPC / 商店 | 买/卖/修理/仓库价格与库存变化一致；失败分支一致 | **partial** | 盘点 merge `dbe287ac`（[`m3/M3⑤NPC商店现状盘点报告-20261013.md`](m3/M3⑤NPC商店现状盘点报告-20261013.md)）；脚本层 7/7 引 M4；服务端卡 `openmir2-m3-npc-shop-align` + 6 张实现卡（⑤-3 商店价格/修理公式已 closed） |
+| 6 | 任务 | 接/交/条件判定一致，任务状态落库一致 | **not_covered** | 盘点 merge `a96ef0e6`（[`m3/M3⑥任务现状盘点报告-20261013.md`](m3/M3⑥任务现状盘点报告-20261013.md)）；卡 `openmir2-m3-quest-align` + 5 张实现卡（⑥-2 位读写/`CHECKOPEN`/`CHECKUNIT` 已交付待审） |
+| 7 | 组队 / 交易 | 归属/分配/取消/掉线中断结果一致 | **not_covered** | 盘点 merge `f2eb43d6`（[`m3/M3⑦组队交易现状盘点报告-20261013.md`](m3/M3⑦组队交易现状盘点报告-20261013.md)）；卡 `openmir2-m3-party-trade-align` + 5 张实现卡（⑦-1 配置项已 closed） |
+| 8 | 公会 / 攻城 | 建会/宣战费用时限/城门状态/自动结束逐项一致 | **not_covered** | 盘点 merge `518a9ad9`（[`m3/M3⑧公会攻城现状盘点报告-20261013.md`](m3/M3⑧公会攻城现状盘点报告-20261013.md)）；卡 `openmir2-m3-guild-castle-align` + 10 张实现卡（⑧-2 配置项已 closed）；**N1/N2/N5 裁决登记 `whitelist.md` T-38/T-39/T-40**（见 §1.8） |
+| 9 | 英雄 / 宠物 | 召唤/升级/阵亡/经验分配/上限判定一致 | **not_covered** | 盘点 merge `670a009b`（[`m3/M3⑨英雄宠物现状盘点报告-20261013.md`](m3/M3⑨英雄宠物现状盘点报告-20261013.md)）；卡 `openmir2-m3-hero-pet-align` + 4 张实现卡（⑨-1 配置项进行中）；英雄经验 = `ExpHitter.Master`（`whitelist.md` T-33） |
+| 10a | 邮件 | 发送 / 到期 / 退回（§6 原文） | **`oracle_absent`（已登记 T-36）** | 盘点 merge `4d276812`（[`m3/M3⑩邮件拍卖现状盘点报告-20261013.md`](m3/M3⑩邮件拍卖现状盘点报告-20261013.md)）；oracle 全仓无邮件实现（仅客户端开关 `boShowMail`）⇒ **不开实现卡**；Rust 与 oracle 一致地不实现 |
+| 10b | 拍卖 | 成交 / 退回（按 oracle 实际语义重划为「元宝寄售 SellOff」） | **partial**（oracle 链与判据已盘；世界侧 `CM_SELLOFF*` 派发 / `DealOffInfo` 世界态 / 帧未实现） | 盘点 merge `4d276812`；卡 `openmir2-m3-mail-auction-align` + 承接卡 `-selloff-consignment-world` / `-selloff-goldsales-load-wire` / `-selloff-fixture-botsrv` |
 
 > 说明：§6 的 M3 判据表把「战斗」与「技能」列为两项；本表的 2/3 与卡 `openmir2-m3-combat-skills-align`
 > 的 ②③ 一一对应。§6「顺序」原文把两者并列写作「战斗/技能」，故十项计数以本表为准。
@@ -173,6 +173,12 @@
 - **判据（§6 原文）**：建会 / 宣战（费用、时限）/ 城门状态 / 自动结束，逐项一致。
 - **状态：`not_covered`**。相关先例：M4 的行会脚本用例（`@requestcastlewar` 缴金条）只到**脚本层**扣金条/说词，
   **不覆盖**攻城费用/时限/城门状态/自动结束的世界逻辑。
+- **盘点锚**：merge `518a9ad9`（[`m3/M3⑧公会攻城现状盘点报告-20261013.md`](m3/M3⑧公会攻城现状盘点报告-20261013.md)）；owner 已据 §3 开齐 **10 张实现卡**。
+- **N1/N2/N5 裁决**（owner comment `a137cc900cfb`；本批**不修**，将来要修另开 `S-*`）：
+  - **N1**：`UserCastle.cs:601/646/672/677/709/913/1042/1047/1052/1057` 那 **10 个 `IUserCastle` 重载体为 `throw new NotImplementedException`**，被外层 `catch` 吞 ⇒ oracle 里是「静默无效果」。Rust 照搬为**可观测 no-op**（不 `panic!`/不返 Err，也**不**实现「本该有」的提取/上缴/归属）。
+  - **N2**：`GuildInfo.cs:1039 AddWarGuild` 的 `if (warGuild.WarTime > 0)` **反逻辑照搬**（未在战中 ⇒ 宣战不生效/`WarTick=0`；已在战中 ⇒ 追加重复条目），四情形向量锁死。
+  - **N5**：`CastleOfficial.cs:229/235` 的 `Substring(start, sLabel.Length)` 越界被 `UserSelect` 的 catch 吞 ⇒ `@hireguardnowN`/`@hirearchernowN` **不可达**；照搬为「雇佣命令静默无效果」+ 向量钉住（**不**在 Rust 里「越界检查后正常雇佣」）。
+  - 三条均已登记 `whitelist.md` **T-38 / T-39 / T-40**。
 - **承接**：**已有卡** `openmir2-m3-guild-castle-align`。
 
 ### 1.9 英雄 / 宠物（not_covered）
