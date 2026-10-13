@@ -1,0 +1,23 @@
+# ⑧-6 第②片（实体挂图）证据包命令（全部在隔离 worktree / 隔离 target，零起栈/零端口）
+
+worktree: E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs
+branch:   worktree-m3-castle-file-load-f2
+base:     origin/master c8a3487b1f6a117065b0105836105b7ed3c0529b
+
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target（本机唯一，未与其它车道争用）
+
+## 门禁（四件）
+cd mir2-rs
+cargo fmt --all -- --check                                   # 01-gate-fmt.txt
+cargo clippy --offline --workspace --all-targets -- -D warnings   # 02-gate-clippy.txt
+cargo test  --offline --workspace --no-fail-fast              # 03-gate-test.txt
+cargo run   --offline -p msgcodegen -- --check                # 04-gate-msgcodegen.txt
+
+## 本片判据（构造级用例）
+cargo test --offline -p mir2-world --lib castle               # 08-castle-lib-test.txt（49 passed）
+
+## 改坏必红
+见 06-redcheck.txt（RC1/RC2/RC3 三个真实变异体 ⇒ 各点名一条用例；还原后回 49/49）。
+
+## oracle 锚
+见 05-oracle-anchors.txt（src/M2Server/Castle/UserCastle.cs:108-226 与 CastleConf.cs:15-94 逐行 grep）。

@@ -1,0 +1,45 @@
+# ⑧-6 第②片 oracle 锚（src/ 实读，行号可在本机复核）
+
+## UserCastle.Initialize（src/M2Server/Castle/UserCastle.cs:108-226）
+108:        public void Initialize()
+111:            LoadConfig();
+112:            LoadAttackSabukWall();
+113:            if (SystemShare.MapMgr.GetMapOfServerIndex(MapName) == M2Share.ServerIndex)
+115:                PalaceEnvir = SystemShare.MapMgr.FindMap(PalaceMap);
+118:                    LogService.Warn($"皇宫地图{PalaceMap}没找到!!!");
+121:                SecretEnvir = SystemShare.MapMgr.FindMap(SecretMap);
+124:                    LogService.Warn($"密道地图{SecretMap}没找到!!!");
+127:                CastleEnvir = SystemShare.MapMgr.FindMap(MapName);
+130:                    MainDoor.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, MainDoor.nX, MainDoor.nY, MainDoor.sName);
+133:                        MainDoor.BaseObject.WAbil.HP = MainDoor.nHP;
+134:                        MainDoor.BaseObject.Castle = this;
+135:                        if (MainDoor.nStatus)
+142:                        LogService.Warn("[Error] UserCastle.Initialize MainDoor.UnitObj = nil");
+144:                    LeftWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, LeftWall.nX, LeftWall.nY, LeftWall.sName);
+152:                        LogService.Warn("[错误信息] 城堡初始化城门失败，检查怪物数据库里有没城门的设置: " + MainDoor.sName);
+154:                    CenterWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, CenterWall.nX, CenterWall.nY, CenterWall.sName);
+162:                        LogService.Warn("[错误信息] 城堡初始化左城墙失败，检查怪物数据库里有没左城墙的设置: " + LeftWall.sName);
+164:                    RightWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, RightWall.nX, RightWall.nY, RightWall.sName);
+172:                        LogService.Warn("[错误信息] 城堡初始化中城墙失败，检查怪物数据库里有没中城墙的设置: " + CenterWall.sName);
+187:                            ((GuardUnit)ObjUnit.BaseObject).GuardDirection = 3;
+191:                            LogService.Warn("[错误信息] 城堡初始化弓箭手失败，检查怪物数据库里有没弓箭手的设置: " + ObjUnit.sName);
+209:                            LogService.Warn("[错误信息] 城堡初始化守卫失败(检查怪物数据库里有没守卫怪物)");
+223:                    LogService.Warn($"[错误信息] 城堡所在地图不存在(检查地图配置文件里是否有地图{MapName}的设置)");
+
+## CastleConf.LoadConfig 的字段/默认值（src/M2Server/Castle/CastleConf.cs:15-94）
+53:            userCastle.MainDoor.nStatus = ReadWriteBool("Defense", "MainDoorOpen", true);
+54:            userCastle.MainDoor.nHP = ReadWriteUInt16("Defense", "MainDoorHP", 2000);
+80:                objUnit.nHP = ReadWriteUInt16("Defense", $"Archer_{i + 1}_HP", 2000);
+82:                userCastle.Archers[i] = objUnit;
+90:                objUnit.nHP = ReadWriteUInt16("Defense", $"Guard_{i + 1}_HP", 2000);
+92:                userCastle.Guards[i] = objUnit;
+205:                    WriteBool("Defense", "MainDoorOpen", userCastle.MainDoor.nStatus);
+
+## ArcherUnit 定义（src/Modules/SystemModule/Data/ArcherUnit.cs:8-16）
+8:    public class ArcherUnit
+10:        public short nX;
+11:        public short nY;
+12:        public string sName;
+13:        public bool nStatus;
+14:        public ushort nHP;
+15:        public IActor BaseObject;

@@ -589,6 +589,164 @@ pub enum CastleEvent {
     RefreshShowName { x: i16, y: i16, range: i32 },
     /// 门/墙的 `SendRefMsg` 帧或 `Envir.SetMapXyFlag` 通行掩码（⑧-8）。顺序 = oracle 调用序。
     Structure(StructureEvent),
+    /// `UserCastle.Initialize` 里一次成功的 `RegenMonsterByName` + `WAbil.HP=nHP` + `Castle=this`
+    /// + 弓手 `GuardDirection=3`（⑧-6 第②片）。顺序 = oracle 调用序。
+    SpawnDefenseUnit(DefenseSpawn),
+}
+
+/// `SystemModule.Data.ArcherUnit` 的一条配置（`src/Modules/SystemModule/Data/ArcherUnit.cs:8-16`）。
+///
+/// `CastleConf.LoadConfig`（`src/M2Server/Castle/CastleConf.cs:39-93`）填好，`UserCastle.Initialize`
+/// （`src/M2Server/Castle/UserCastle.cs:108-226`）消费。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefenseUnitSpec {
+    /// `sName`（喂 `WorldEngine.RegenMonsterByName`）。
+    pub name: String,
+    /// `nX`。
+    pub x: i16,
+    /// `nY`。
+    pub y: i16,
+    /// `nStatus`——**只有 `MainDoor` 有意义**（= `CastleConf` 的 `[Defense] MainDoorOpen`，
+    /// `CastleConf.cs:53`；三面墙的 `nStatus` 从不赋值 ⇒ 恒 `false`）；`Initialize` 里
+    /// `if (MainDoor.nStatus) ((CastleDoor)MainDoor.BaseObject).Open();`（`UserCastle.cs:134-137`）。
+    pub status: bool,
+    /// `nHP`（`WAbil.HP` 的覆盖值）。弓手/守卫 `nHP <= 0` 时 `Initialize` 直接 `continue`
+    /// （`UserCastle.cs:164/190`）。
+    pub hp: u16,
+}
+
+/// `UserCastle.Initialize` 的输入 = `CastleConf.LoadConfig` 结果里 `Initialize` 用到的子集。
+///
+/// 与 `crates/envir` 的 `SabukWConfig`（⑧-6 第①片读侧）字段一一对应，但**本 crate 不依赖
+/// `mir2-envir`**（依赖方向 `bins -> envir/world`）⇒ 由接线层把 `SabukWConfig` 适配成本结构
+/// （接线属第②片的 `bins/game-svr` 面，等 owner 对 bins 串行序裁决后另片交付）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CastleDefenseSpecs {
+    /// `[Defense] CastleMap`（`CastleConf.cs:36`，缺省 `"3"`）。
+    pub map_name: String,
+    /// `[Defense] CastlePlaceMap`（皇宫地图，`CastleConf.cs:44`）。
+    pub palace_map: String,
+    /// `[Defense] CastleSecretMap`（密道地图，`CastleConf.cs:45`）。
+    pub secret_map: String,
+    /// `MainDoor`（`CastleConf.cs:47-54`）。
+    pub main_door: DefenseUnitSpec,
+    /// `LeftWall`（`CastleConf.cs:55-60`）。
+    pub left_wall: DefenseUnitSpec,
+    /// `CenterWall`（`CastleConf.cs:61-66`）。
+    pub center_wall: DefenseUnitSpec,
+    /// `RightWall`（`CastleConf.cs:67-72`）。
+    pub right_wall: DefenseUnitSpec,
+    /// `Archers[12]`（`CastleConf.cs:73-83`）。
+    pub archers: Vec<DefenseUnitSpec>,
+    /// `Guards[12]`（`CastleConf.cs:84-93`）。
+    pub guards: Vec<DefenseUnitSpec>,
+}
+
+/// `WorldEngine.RegenMonsterByName` 造出的怪物（本模块只取 `WAbil.MaxHP`）。
+///
+/// `UserCastle.Initialize` 只覆盖 `WAbil.HP = nHP`，**不改** `MaxHP`（`UserCastle.cs:131-220`）
+/// ⇒ 门/墙的 `Dir = 3 - Round(HP/MaxHP*3)`（⑧-8）用的 `MaxHP` 来自怪物模板。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DefenseCreature {
+    /// 怪物模板的 `WAbil.MaxHP`。
+    pub max_hp: i32,
+}
+
+/// `Initialize` 里的防御单元角色（枚举顺序 = `RegenMonsterByName` 调用序）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefenseRole {
+    MainDoor,
+    LeftWall,
+    CenterWall,
+    RightWall,
+    /// `Archers[i]`（`i` = 下标）。
+    Archer(usize),
+    /// `Guards[i]`（`i` = 下标）。
+    Guard(usize),
+}
+
+/// `Initialize` 成功造出并完成字段绑定后的一个防御单元（可观测副作用）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefenseSpawn {
+    /// 角色（决定 oracle 的绑定分支）。
+    pub role: DefenseRole,
+    /// `MapName`。
+    pub map_name: String,
+    /// `sName`。
+    pub name: String,
+    /// `CurrX` / `CurrY`（= 配置坐标）。
+    pub x: i16,
+    pub y: i16,
+    /// `WAbil.HP = nHP`。
+    pub hp: u16,
+    /// `BaseObject.Castle = this`——**门/墙/弓手为 `true`；守卫为 `false`**
+    /// （`UserCastle.cs:131/146/154/161/181` 设，`:197` 守卫生成后**不设**）。
+    pub castle_owner: bool,
+    /// 弓手 `((GuardUnit)BaseObject).GuardDirection = 3`（`UserCastle.cs:187`）；其余恒 `None`。
+    pub guard_direction: Option<i8>,
+}
+
+/// `UserCastle.Initialize`（`UserCastle.cs:108-226`）的宿主面：地图存在性 + 按名造怪 + 告警。
+///
+/// **调用序 = oracle**：宿主实现**不得**重排/批量——`regen_monster_by_name` 必须在
+/// 「主门 → 左墙 → 中墙 → 右墙 → 弓手 `i=0..12` → 守卫 `i=0..12`」的遍历里被同步调用，
+/// 因为造怪本身可能消耗全局随机数/实体槽（与本卡的 RNG 账本口径一致）。
+pub trait CastleInitializeEnv {
+    /// `SystemShare.MapMgr.GetMapOfServerIndex(MapName) == M2Share.ServerIndex`（`UserCastle.cs:111`）。
+    fn map_owner_is_self(&self, map_name: &str) -> bool;
+    /// `SystemShare.MapMgr.FindMap(name) != null`（`UserCastle.cs:114/119/125`）。
+    fn find_map(&self, map_name: &str) -> bool;
+    /// `SystemShare.WorldEngine.RegenMonsterByName(map, x, y, name)`：造出怪物则返回其模板
+    /// `MaxHP`，怪物库无此名 ⇒ `None`（oracle 返回 `null`）。
+    fn regen_monster_by_name(
+        &mut self,
+        map_name: &str,
+        x: i16,
+        y: i16,
+        name: &str,
+    ) -> Option<DefenseCreature>;
+    /// `LogService.Warn(text)`。
+    fn warn(&mut self, text: String);
+}
+
+/// `Initialize` 里「造怪 → 写 `WAbil.HP` → 绑定 → 收集事件」的一步（顺序 = oracle）。
+///
+/// 造怪失败（`None`）**不**产生事件，由调用方按角色发对应告警。
+fn regen_and_bind(
+    env: &mut impl CastleInitializeEnv,
+    map_name: &str,
+    role: DefenseRole,
+    spec: &DefenseUnitSpec,
+    castle_owner: bool,
+    guard_direction: Option<i8>,
+    events: &mut Vec<CastleEvent>,
+) -> Option<CastleUnit> {
+    let creature = env.regen_monster_by_name(map_name, spec.x, spec.y, &spec.name)?;
+    let mut unit = CastleUnit {
+        x: spec.x,
+        y: spec.y,
+        hp: i32::from(spec.hp),
+        max_hp: creature.max_hp,
+        ..CastleUnit::default()
+    };
+    events.push(CastleEvent::SpawnDefenseUnit(DefenseSpawn {
+        role,
+        map_name: map_name.to_string(),
+        name: spec.name.clone(),
+        x: spec.x,
+        y: spec.y,
+        hp: spec.hp,
+        castle_owner,
+        guard_direction,
+    }));
+    // `:134-137`：`if (MainDoor.nStatus) ((CastleDoor)BaseObject).Open();`
+    // `Open()` 的 `RM_DIGUP` + `SetMapXyFlag(0)` 在绑定之后产生（⑧-8 [`CastleUnit::door_open`]）。
+    if spec.status {
+        for e in unit.door_open() {
+            events.push(CastleEvent::Structure(e));
+        }
+    }
+    Some(unit)
 }
 
 /// `UserCastle.RepairDoor`/`RepairWall` 的 60s `StruckTick` 门（`UserCastle.cs:920/956`）。
@@ -762,6 +920,174 @@ impl UserCastle {
             home_y: 290,
             config,
         }
+    }
+
+    /// oracle `UserCastle.Initialize()`（`src/M2Server/Castle/UserCastle.cs:108-226`）+ 其
+    /// `LoadConfig()`（`:228-232`）的 `MapName` 部分——**⑧-6 第②片「实体挂图」**。
+    ///
+    /// 顺序逐行照搬：
+    /// 1. `:112` `GetMapOfServerIndex(MapName) == M2Share.ServerIndex` 门；
+    /// 2. `:114-123` 皇宫 / 密道 `FindMap` 失败告警（**不**影响后续）；
+    /// 3. `:125` `CastleEnvir == null` ⇒ 告警「城堡所在地图不存在」并整体跳过；
+    /// 4. `:128-137` 主门 ⇒ `RegenMonsterByName` → `WAbil.HP=nHP` → `Castle=this` →
+    ///    `MainDoor.nStatus && Open()`；
+    /// 5. `:139-158` 左/中/右墙（各写 `HP` + `Castle`）；
+    /// 6. `:161-184` 弓手 `i=0..12`：`nHP <= 0` 跳过；成功 ⇒ `HP` + `Castle` + `GuardDirection=3`；
+    /// 7. `:186-206` 守卫 `i=0..12`：`nHP <= 0` 跳过；成功 ⇒ **只**写 `HP`（oracle 不设 `Castle`）。
+    ///
+    /// 照搬的 oracle 怪行为（不是差异）：
+    /// - **墙的失败告警引用上一单元的名字**（copy-paste 怪癖，`UserCastle.cs:148/156/166`）：
+    ///   左墙失败报 `MainDoor.sName`、中墙失败报 `LeftWall.sName`、右墙失败报 `CenterWall.sName`；
+    /// - 主门造怪失败用英文文案 `[Error] UserCastle.Initialize MainDoor.UnitObj = nil`（`:144`）。
+    ///
+    /// **未接线（如实登记）**：本方法只演世界态 + 产生 [`CastleEvent::SpawnDefenseUnit`]/
+    /// 告警；`bins/game-svr` 启动时把 `crates/envir` 的 `SabukWConfig` 适配成
+    /// [`CastleDefenseSpecs`] 并调用本方法（以及 `SaveGuildList`/`LoadGuildInfo` 同族接线）属
+    /// 第②片的 bins 面，等 owner 对 bins 串行序裁决后另片交付。
+    pub fn initialize(
+        &mut self,
+        specs: &CastleDefenseSpecs,
+        env: &mut impl CastleInitializeEnv,
+    ) -> Vec<CastleEvent> {
+        // `LoadConfig()`：`MapName = ReadWriteString("Defense", "CastleMap", "3")`（`CastleConf.cs:36`）。
+        self.map_name = Some(specs.map_name.clone());
+        let mut events = Vec::new();
+        let map_name = specs.map_name.as_str();
+
+        // `:111`：`if (SystemShare.MapMgr.GetMapOfServerIndex(MapName) == M2Share.ServerIndex)`。
+        if !env.map_owner_is_self(map_name) {
+            return events;
+        }
+
+        // `:114-123`：皇宫 / 密道地图告警（找不到只告警，不阻断）。
+        if !env.find_map(&specs.palace_map) {
+            env.warn(format!("皇宫地图{}没找到!!!", specs.palace_map));
+        }
+        if !env.find_map(&specs.secret_map) {
+            env.warn(format!("密道地图{}没找到!!!", specs.secret_map));
+        }
+
+        // `:125`：`CastleEnvir == null` ⇒ 告警并整体跳过。
+        if !env.find_map(map_name) {
+            env.warn(format!(
+                "[错误信息] 城堡所在地图不存在(检查地图配置文件里是否有地图{map_name}的设置)"
+            ));
+            return events;
+        }
+
+        // `:128-137` 主门（成功后 `MainDoor.nStatus` ⇒ `Open()`）。
+        self.main_door = regen_and_bind(
+            env,
+            map_name,
+            DefenseRole::MainDoor,
+            &specs.main_door,
+            true,
+            None,
+            &mut events,
+        );
+        if self.main_door.is_none() {
+            env.warn("[Error] UserCastle.Initialize MainDoor.UnitObj = nil".to_string());
+        }
+
+        // `:139-149` 左墙（失败告警引用**主门**名）。
+        self.left_wall = regen_and_bind(
+            env,
+            map_name,
+            DefenseRole::LeftWall,
+            &specs.left_wall,
+            true,
+            None,
+            &mut events,
+        );
+        if self.left_wall.is_none() {
+            env.warn(format!(
+                "[错误信息] 城堡初始化城门失败，检查怪物数据库里有没城门的设置: {}",
+                specs.main_door.name
+            ));
+        }
+
+        // `:151-158` 中墙（失败告警引用**左墙**名）。
+        self.center_wall = regen_and_bind(
+            env,
+            map_name,
+            DefenseRole::CenterWall,
+            &specs.center_wall,
+            true,
+            None,
+            &mut events,
+        );
+        if self.center_wall.is_none() {
+            env.warn(format!(
+                "[错误信息] 城堡初始化左城墙失败，检查怪物数据库里有没左城墙的设置: {}",
+                specs.left_wall.name
+            ));
+        }
+
+        // `:160-168` 右墙（失败告警引用**中墙**名）。
+        self.right_wall = regen_and_bind(
+            env,
+            map_name,
+            DefenseRole::RightWall,
+            &specs.right_wall,
+            true,
+            None,
+            &mut events,
+        );
+        if self.right_wall.is_none() {
+            env.warn(format!(
+                "[错误信息] 城堡初始化中城墙失败，检查怪物数据库里有没中城墙的设置: {}",
+                specs.center_wall.name
+            ));
+        }
+
+        // `:170-185` 弓手：`nHP <= 0` 跳过；成功 ⇒ `HP` + `Castle` + `GuardDirection=3`。
+        for (i, spec) in specs.archers.iter().enumerate() {
+            if i >= self.archers.len() {
+                break;
+            }
+            if spec.hp == 0 {
+                continue;
+            }
+            self.archers[i] = regen_and_bind(
+                env,
+                map_name,
+                DefenseRole::Archer(i),
+                spec,
+                true,
+                Some(3),
+                &mut events,
+            );
+            if self.archers[i].is_none() {
+                env.warn(format!(
+                    "[错误信息] 城堡初始化弓箭手失败，检查怪物数据库里有没弓箭手的设置: {}",
+                    spec.name
+                ));
+            }
+        }
+
+        // `:186-207` 守卫：`nHP <= 0` 跳过；成功 ⇒ 只写 `HP`（不设 `Castle`）。
+        for (i, spec) in specs.guards.iter().enumerate() {
+            if i >= self.guards.len() {
+                break;
+            }
+            if spec.hp == 0 {
+                continue;
+            }
+            self.guards[i] = regen_and_bind(
+                env,
+                map_name,
+                DefenseRole::Guard(i),
+                spec,
+                false,
+                None,
+                &mut events,
+            );
+            if self.guards[i].is_none() {
+                env.warn("[错误信息] 城堡初始化守卫失败(检查怪物数据库里有没守卫怪物)".to_string());
+            }
+        }
+
+        events
     }
 
     /// oracle `UserCastle.Run()`（`UserCastle.cs:311-448`）。
@@ -2125,5 +2451,311 @@ mod tests {
             call(self);
             assert_eq!(*self, before, "N1 入口必须可观测 no-op（T-38）");
         }
+    }
+
+    // ---- ⑧-6 第②片：`UserCastle.Initialize`（实体挂图）。----
+
+    fn unit(name: &str, x: i16, y: i16, hp: u16) -> DefenseUnitSpec {
+        DefenseUnitSpec {
+            name: name.to_string(),
+            x,
+            y,
+            status: false,
+            hp,
+        }
+    }
+
+    /// 一份与 `CastleConf` 默认值等价的规格（`CastleConf.cs:39-93`）：弓手/守卫 `nHP=2000`>0。
+    fn defense_specs() -> CastleDefenseSpecs {
+        CastleDefenseSpecs {
+            map_name: "3".to_string(),
+            palace_map: "0150".to_string(),
+            secret_map: "D701".to_string(),
+            main_door: DefenseUnitSpec {
+                name: "MainDoor".to_string(),
+                x: 672,
+                y: 330,
+                status: true,
+                hp: 2000,
+            },
+            left_wall: unit("LeftWall", 624, 278, 2000),
+            center_wall: unit("CenterWall", 627, 278, 2000),
+            right_wall: unit("RightWall", 634, 271, 2000),
+            archers: (0..MAX_CASTLE_ARCHER)
+                .map(|i| unit("弓箭手", i as i16, 100, 2000))
+                .collect(),
+            guards: (0..MAX_CASTLE_GUARD)
+                .map(|i| unit("守卫", i as i16, 200, 2000))
+                .collect(),
+        }
+    }
+
+    /// 记录式宿主：地图/怪物库可控，按调用序记录 `RegenMonsterByName` 与 `Warn`。
+    struct FakeEnv {
+        owner: bool,
+        maps: Vec<String>,
+        /// 怪物数据库里的「名字 ⇒ 模板 MaxHP」。
+        creatures: Vec<(&'static str, i32)>,
+        warns: Vec<String>,
+        regen_calls: Vec<(String, i16, i16, String)>,
+    }
+
+    impl FakeEnv {
+        fn full() -> Self {
+            FakeEnv {
+                owner: true,
+                maps: vec!["3".to_string(), "0150".to_string(), "D701".to_string()],
+                creatures: vec![
+                    ("MainDoor", 5000),
+                    ("LeftWall", 3000),
+                    ("CenterWall", 3000),
+                    ("RightWall", 3000),
+                    ("弓箭手", 900),
+                    ("守卫", 700),
+                ],
+                warns: Vec::new(),
+                regen_calls: Vec::new(),
+            }
+        }
+    }
+
+    impl CastleInitializeEnv for FakeEnv {
+        fn map_owner_is_self(&self, _map_name: &str) -> bool {
+            self.owner
+        }
+        fn find_map(&self, map_name: &str) -> bool {
+            self.maps.iter().any(|m| m == map_name)
+        }
+        fn regen_monster_by_name(
+            &mut self,
+            map_name: &str,
+            x: i16,
+            y: i16,
+            name: &str,
+        ) -> Option<DefenseCreature> {
+            self.regen_calls
+                .push((map_name.to_string(), x, y, name.to_string()));
+            self.creatures
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, hp)| DefenseCreature { max_hp: *hp })
+        }
+        fn warn(&mut self, text: String) {
+            self.warns.push(text);
+        }
+    }
+
+    fn spawns(events: &[CastleEvent]) -> Vec<&DefenseSpawn> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                CastleEvent::SpawnDefenseUnit(s) => Some(s),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn structures(events: &[CastleEvent]) -> Vec<StructureEvent> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                CastleEvent::Structure(s) => Some(*s),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn initialize_spawns_1_door_3_walls_12_archers_12_guards_in_oracle_order() {
+        let specs = defense_specs();
+        let mut env = FakeEnv::full();
+        let mut c = UserCastle::new("沙巴克", config());
+        let events = c.initialize(&specs, &mut env);
+
+        // 调用序 = `UserCastle.cs:128-220`：主门 → 左/中/右墙 → 弓手 0..12 → 守卫 0..12。
+        let names: Vec<&str> = env.regen_calls.iter().map(|r| r.3.as_str()).collect();
+        let mut want: Vec<&str> = vec!["MainDoor", "LeftWall", "CenterWall", "RightWall"];
+        want.extend(std::iter::repeat_n("弓箭手", MAX_CASTLE_ARCHER));
+        want.extend(std::iter::repeat_n("守卫", MAX_CASTLE_GUARD));
+        assert_eq!(names, want);
+        assert_eq!(env.regen_calls.len(), 28);
+
+        let sp = spawns(&events);
+        assert_eq!(sp.len(), 28);
+        assert_eq!(sp[0].role, DefenseRole::MainDoor);
+        assert_eq!(sp[1].role, DefenseRole::LeftWall);
+        assert_eq!(sp[2].role, DefenseRole::CenterWall);
+        assert_eq!(sp[3].role, DefenseRole::RightWall);
+        assert_eq!(sp[4].role, DefenseRole::Archer(0));
+        assert_eq!(sp[16].role, DefenseRole::Guard(0));
+        assert_eq!(sp[27].role, DefenseRole::Guard(11));
+
+        // 门/墙/弓手绑定 `Castle`；守卫不绑（`UserCastle.cs:131/146/154/161/181` vs `:197`）。
+        assert!(
+            sp[0].castle_owner && sp[1].castle_owner && sp[2].castle_owner && sp[3].castle_owner
+        );
+        assert!(sp[4..16].iter().all(|s| s.castle_owner));
+        assert!(sp[16..28].iter().all(|s| !s.castle_owner));
+        // 弓手 `GuardDirection=3`（`UserCastle.cs:187`），其余无。
+        assert!(sp[4..16].iter().all(|s| s.guard_direction == Some(3)));
+        assert!(sp[0..4].iter().all(|s| s.guard_direction.is_none()));
+        assert!(sp[16..28].iter().all(|s| s.guard_direction.is_none()));
+
+        // 世界态：门 `nStatus=true` ⇒ `Open()`（Dir=7/IsOpened/StoneMode/HoldPlace=false）+ 帧/掩码。
+        let door = c.main_door.expect("main door");
+        assert_eq!(
+            (door.x, door.y, door.hp, door.max_hp),
+            (672, 330, 2000, 5000)
+        );
+        assert_eq!(door.dir, 7);
+        assert!(door.opened && door.stone_mode && !door.hold_place);
+        assert!(structures(&events).contains(&StructureEvent::RefDigUp {
+            dir: 7,
+            x: 672,
+            y: 330
+        }));
+        let lw = c.left_wall.expect("left wall");
+        assert_eq!((lw.hp, lw.max_hp), (2000, 3000));
+        assert_eq!(
+            (c.archers[0].unwrap().hp, c.archers[0].unwrap().max_hp),
+            (2000, 900)
+        );
+        assert_eq!(
+            (c.guards[11].unwrap().hp, c.guards[11].unwrap().max_hp),
+            (2000, 700)
+        );
+        assert!(env.warns.is_empty(), "{:?}", env.warns);
+    }
+
+    #[test]
+    fn initialize_door_status_false_does_not_open() {
+        let mut specs = defense_specs();
+        specs.main_door.status = false;
+        let mut env = FakeEnv::full();
+        let mut c = UserCastle::new("沙巴克", config());
+        let events = c.initialize(&specs, &mut env);
+        let door = c.main_door.expect("main door");
+        assert_eq!(door.dir, 0);
+        assert!(!door.opened && !door.stone_mode && !door.hold_place);
+        assert!(structures(&events).is_empty());
+        assert_eq!(spawns(&events).len(), 28);
+    }
+
+    #[test]
+    fn initialize_skips_zero_hp_archers_and_guards() {
+        let mut specs = defense_specs();
+        specs.archers[3].hp = 0;
+        specs.guards[0].hp = 0;
+        specs.guards[11].hp = 0;
+        let mut env = FakeEnv::full();
+        let mut c = UserCastle::new("沙巴克", config());
+        let events = c.initialize(&specs, &mut env);
+
+        assert_eq!(env.regen_calls.len(), 28 - 3);
+        assert!(c.archers[3].is_none());
+        assert!(c.guards[0].is_none() && c.guards[11].is_none());
+        assert!(c.archers[2].is_some() && c.archers[4].is_some());
+        let sp = spawns(&events);
+        assert!(sp
+            .iter()
+            .all(|s| s.role != DefenseRole::Archer(3) && s.role != DefenseRole::Guard(0)));
+        assert!(env.warns.is_empty(), "{:?}", env.warns);
+    }
+
+    #[test]
+    fn initialize_non_owner_map_is_noop() {
+        let specs = defense_specs();
+        let mut env = FakeEnv::full();
+        env.owner = false;
+        let mut c = UserCastle::new("沙巴克", config());
+        let events = c.initialize(&specs, &mut env);
+        assert!(events.is_empty());
+        assert!(env.regen_calls.is_empty());
+        assert!(env.warns.is_empty());
+        assert!(c.main_door.is_none() && c.archers[0].is_none());
+        // `LoadConfig` 部分仍然生效（`MapName` 已写入）。
+        assert_eq!(c.map_name.as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn initialize_missing_castle_map_warns_and_skips_all_spawns() {
+        let specs = defense_specs();
+        let mut env = FakeEnv::full();
+        env.maps.retain(|m| m.as_str() != "3");
+        let mut c = UserCastle::new("沙巴克", config());
+        let events = c.initialize(&specs, &mut env);
+        assert!(events.is_empty());
+        assert!(env.regen_calls.is_empty());
+        assert_eq!(
+            env.warns,
+            vec!["[错误信息] 城堡所在地图不存在(检查地图配置文件里是否有地图3的设置)".to_string()]
+        );
+    }
+
+    #[test]
+    fn initialize_warns_palace_and_secret_map_but_still_spawns() {
+        let specs = defense_specs();
+        let mut env = FakeEnv::full();
+        env.maps = vec!["3".to_string()];
+        let mut c = UserCastle::new("沙巴克", config());
+        let events = c.initialize(&specs, &mut env);
+        assert_eq!(
+            env.warns,
+            vec![
+                "皇宫地图0150没找到!!!".to_string(),
+                "密道地图D701没找到!!!".to_string()
+            ]
+        );
+        assert_eq!(spawns(&events).len(), 28);
+    }
+
+    #[test]
+    fn initialize_wall_failure_warnings_use_previous_unit_name_quirk() {
+        let specs = defense_specs();
+        let mut env = FakeEnv::full();
+        // 只有主门在怪物库里：三面墙 + 弓手 + 守卫全造怪失败。
+        env.creatures.retain(|(n, _)| *n == "MainDoor");
+        let mut c = UserCastle::new("沙巴克", config());
+        let _ = c.initialize(&specs, &mut env);
+        // oracle copy-paste 怪癖（`UserCastle.cs:148/156/166`）：
+        // 左墙失败报 MainDoor.sName；中墙失败报 LeftWall.sName；右墙失败报 CenterWall.sName。
+        assert_eq!(
+            env.warns[0],
+            "[错误信息] 城堡初始化城门失败，检查怪物数据库里有没城门的设置: MainDoor"
+        );
+        assert_eq!(
+            env.warns[1],
+            "[错误信息] 城堡初始化左城墙失败，检查怪物数据库里有没左城墙的设置: LeftWall"
+        );
+        assert_eq!(
+            env.warns[2],
+            "[错误信息] 城堡初始化中城墙失败，检查怪物数据库里有没中城墙的设置: CenterWall"
+        );
+        // 随后 12 条弓手 + 12 条守卫告警。
+        assert_eq!(env.warns.len(), 3 + MAX_CASTLE_ARCHER + MAX_CASTLE_GUARD);
+        assert_eq!(
+            env.warns[3],
+            "[错误信息] 城堡初始化弓箭手失败，检查怪物数据库里有没弓箭手的设置: 弓箭手"
+        );
+        assert_eq!(
+            env.warns[15],
+            "[错误信息] 城堡初始化守卫失败(检查怪物数据库里有没守卫怪物)"
+        );
+        assert!(c.main_door.is_some());
+        assert!(c.left_wall.is_none() && c.center_wall.is_none() && c.right_wall.is_none());
+    }
+
+    #[test]
+    fn initialize_missing_main_door_uses_english_warning() {
+        let specs = defense_specs();
+        let mut env = FakeEnv::full();
+        env.creatures.retain(|(n, _)| *n != "MainDoor");
+        let mut c = UserCastle::new("沙巴克", config());
+        let _ = c.initialize(&specs, &mut env);
+        assert_eq!(
+            env.warns[0],
+            "[Error] UserCastle.Initialize MainDoor.UnitObj = nil"
+        );
+        assert!(c.main_door.is_none());
     }
 }

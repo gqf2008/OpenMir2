@@ -1,0 +1,11 @@
+# 证据包 hash 复核（仓库 LF/git-blob 口径）
+
+$ python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013
+RED   mir2-rs\tests\parity\m3\evidence-m3-castle-file-load-f2-20261013\SHA256SUMS.txt  [repo 口径]  OK 10/10
+       多件: 09-hash-check.txt
+rc=1
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013
+EOLCHECK RED mir2-rs\tests\parity\m3\evidence-m3-castle-file-load-f2-20261013\09-hash-check.txt  (盘上是 CRLF，text attr=set；仓库口径应为 LF)
+EOLCHECK RED 1/12 件与仓库口径（LF）在 EOL 上不一致（修法：生产者用 LF 写出 / `verify_sha256sums.py write` 重记，或对冻结字节目录声明 `.gitattributes * -text`）
+rc=1

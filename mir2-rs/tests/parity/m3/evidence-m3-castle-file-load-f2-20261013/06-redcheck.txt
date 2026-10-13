@@ -1,0 +1,30 @@
+# ⑧-6 第②片 改坏必红（三条真实变异体 ⇒ 各点名一条用例；还原后 49/49 GREEN）
+
+源文件：mir2-rs/crates/world/src/castle.rs
+还原后源 sha256（盘上字节）= f14987d3127cf9bf7f8b4458d06ca7a2f6c0db87fbeaa590b4e93280ae0261a9
+
+命令（隔离 target，零起栈/零端口）：
+  cd mir2-rs
+  CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test --offline -p mir2-world --lib castle
+
+基线（未变异）：
+  test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 152 filtered out
+
+## RC1 —— 弓手不再绑定 `Castle`（`UserCastle.cs:181` 的 `ObjUnit.BaseObject.Castle = this` 去掉）
+变异：`DefenseRole::Archer(i)` 分支的 `castle_owner` 由 `true` 改 `false`。
+读数：`test castle::tests::initialize_spawns_1_door_3_walls_12_archers_12_guards_in_oracle_order ... FAILED`
+      `test result: FAILED. 48 passed; 1 failed; 0 ignored; ...`
+
+## RC2 —— 左墙失败告警不再照搬 copy-paste 怪癖（`UserCastle.cs:152` 引用 `MainDoor.sName`）
+变异：左墙告警的参数由 `specs.main_door.name` 改 `specs.left_wall.name`（“修正”成看似正确的名字）。
+读数：`test castle::tests::initialize_wall_failure_warnings_use_previous_unit_name_quirk ... FAILED`
+      `test result: FAILED. 48 passed; 1 failed; 0 ignored; ...`
+
+## RC3 —— 弓手不再跳过 `nHP <= 0`（`UserCastle.cs:164` 的 `if (ObjUnit.nHP <= 0) continue;` 去掉）
+变异：弓手循环里删掉 `if spec.hp == 0 { continue; }`。
+读数：`test castle::tests::initialize_skips_zero_hp_archers_and_guards ... FAILED`
+      `test result: FAILED. 48 passed; 1 failed; 0 ignored; ...`
+
+## 还原
+三次变异各自跑完后都用最初快照还原；还原后源 sha256 与基线一致、`cargo test ... --lib castle` 回到
+`49 passed; 0 failed`。`git status` 只显示本片两处改动（castle.rs / lib.rs）。
