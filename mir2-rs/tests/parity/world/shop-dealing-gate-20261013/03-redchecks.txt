@@ -1,0 +1,10 @@
+# 红检口径
+
+RC1（`if dealing { return; }` 缺失/短路）：
+  改法 = 把 `handle_shop_cmd` 中 `) && trade_sessions.get(chr_name).is_some_and(|s| s.dealing)`
+         改成 `) && false && trade_sessions...`（等价于删掉该门）
+  读数 = `shop_buy_and_detail_blocked_while_dealing` FAILED rc=101，
+         首条断言红：`Dealing ⇒ 买入不得发任何帧（oracle Operate.cs:196-199）`
+  还原 = `git checkout -- mir2-rs/bins/game-svr/src/main.rs` ⇒ rc=0 GREEN、`git status` 空
+
+* 门是唯一新增行为面 ⇒ 删门即可回退本片（可回滚点）。

@@ -1,0 +1,20 @@
+# 卡 openmir2-m3-shop-dealing-gate（T-47 ⑦ 收口）—— 作用域与写集
+
+base（本 patch entry 的 base） = 7f0befb0fbd595729f2e2018eee452822efde409
+       （= ⑤-4 第②片 **merge** 收口 head：ba72bb81d + merge origin/master 9863d57b0）
+head = 本 patch entry 的 head（**代码与证据在同一 commit**；head oid 见 patch entry）
+
+# 本片净差量（base..head）
+$ git diff --name-only 7f0befb0f HEAD
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/tests/parity/world/shop-dealing-gate-20261013/**
+
+# 写集：只动 bins/game-svr/**（+ 本证据）。crates/world 一行未改（只读复用 merchant 库存/`MerchantView` 面）。
+# 与该卡 owner_hint 一致：⑤-4 文件 owner = openmir2-worker-11，本片与 ⑤-4 收口在**同一车道串行**。
+# 依赖：CM_USERGETDETAILITEM 支由 ⑤-4 第②片引入 ⇒ base 取 ⑤-4 收口 head。
+
+# 证据目录口径说明
+卡 DoD④ 写的是 `tests/parity/m3/evidence-m3-shop-dealing-gate-20261013/`；
+本片改放 `tests/parity/world/shop-dealing-gate-20261013/`，理由 = owner 2026-10-13 10:25 对本车道的
+写集指令「tests/parity/m3/** 归 m3bag/m3cs，别碰」，且本车道 ⑤-4 / enter-gaps 的证据一贯在
+tests/parity/world/**。判据内容不变（命令 + 输出 + 路径 + hash 四件套齐）。

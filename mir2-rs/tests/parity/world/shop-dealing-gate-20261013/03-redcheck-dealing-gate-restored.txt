@@ -1,0 +1,6 @@
+# 还原后（`git checkout -- mir2-rs/bins/game-svr/src/main.rs`）⇒ GREEN；工作树与 index 一致
+
+$ cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr shop_buy_and_detail_blocked_while_dealing
+test tests::shop_buy_and_detail_blocked_while_dealing ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 203 filtered out; finished in 0.01s
+# rc=0
