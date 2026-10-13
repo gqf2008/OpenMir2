@@ -55,7 +55,7 @@ pub use entity::{
 };
 pub use guild::{
     check_guild_name, AddWarGuildOutcome, GuildConfig, GuildManager, GuildRank, GuildState,
-    GuildWarEnded, WarGuild,
+    GuildWarEnded, GuildWarEvent, GuildWarOutcome, GuildWarRequest, WarGuild,
 };
 pub use magic::{
     can_read_book, get_power, get_power13, get_rpow, get_spell_point, magic_attack_interval, mpow,

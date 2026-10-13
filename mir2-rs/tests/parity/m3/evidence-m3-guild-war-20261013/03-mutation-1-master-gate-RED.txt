@@ -1,0 +1,80 @@
+改坏必红 RC1：把 request_guild_war 的掌门人门 req.requester_rank_no != 1 反成 == 1（掌门反被拒）
+命令：CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test -p mir2-world --lib guild::tests::request_ --offline
+
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.30s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 10 tests
+test guild::tests::request_guild_war_no_guild_still_pays_gold ... ok
+test guild::tests::request_guild_war_insufficient_gold ... ok
+test guild::tests::request_guild_war_target_missing ... ok
+test guild::tests::request_then_run_expires_war_n2 ... FAILED
+test guild::tests::request_guild_war_asymmetric_duplicates_and_broadcasts_ss207 ... FAILED
+test guild::tests::request_guild_war_ally_is_skipped_by_add_war_guild ... FAILED
+test guild::tests::request_guild_war_non_master_still_pays_gold ... FAILED
+test guild::tests::request_guild_war_not_at_war_is_n2_noop ... FAILED
+test guild::tests::request_guild_war_non_zero_server_still_pays_gold ... FAILED
+test guild::tests::request_guild_war_both_at_war_duplicates_without_ss207 ... FAILED
+
+failures:
+
+---- guild::tests::request_then_run_expires_war_n2 stdout ----
+
+thread 'guild::tests::request_then_run_expires_war_n2' (16284) panicked at crates\world\src\guild.rs:1838:9:
+assertion failed: out.request_ok
+
+---- guild::tests::request_guild_war_asymmetric_duplicates_and_broadcasts_ss207 stdout ----
+
+thread 'guild::tests::request_guild_war_asymmetric_duplicates_and_broadcasts_ss207' (11008) panicked at crates\world\src\guild.rs:1715:9:
+assertion failed: out.request_ok
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- guild::tests::request_guild_war_ally_is_skipped_by_add_war_guild stdout ----
+
+thread 'guild::tests::request_guild_war_ally_is_skipped_by_add_war_guild' (33424) panicked at crates\world\src\guild.rs:1810:9:
+assertion `left == right` failed
+  left: [SysMsg { text: "只有行会掌门人才能申请!!!" }]
+ right: [RefShowName { guild: "会A", member: "A1" }]
+
+---- guild::tests::request_guild_war_non_master_still_pays_gold stdout ----
+
+thread 'guild::tests::request_guild_war_non_master_still_pays_gold' (23356) panicked at crates\world\src\guild.rs:1606:9:
+assertion `left == right` failed
+  left: [RefShowName { guild: "会A", member: "A1" }]
+ right: [SysMsg { text: "只有行会掌门人才能申请!!!" }]
+
+---- guild::tests::request_guild_war_not_at_war_is_n2_noop stdout ----
+
+thread 'guild::tests::request_guild_war_not_at_war_is_n2_noop' (3000) panicked at crates\world\src\guild.rs:1683:9:
+assertion `left == right` failed
+  left: [SysMsg { text: "只有行会掌门人才能申请!!!" }]
+ right: [RefShowName { guild: "会A", member: "A1" }, RefShowName { guild: "会A", member: "A2" }]
+
+---- guild::tests::request_guild_war_non_zero_server_still_pays_gold stdout ----
+
+thread 'guild::tests::request_guild_war_non_zero_server_still_pays_gold' (22832) panicked at crates\world\src\guild.rs:1647:9:
+assertion `left == right` failed
+  left: [SysMsg { text: "只有行会掌门人才能申请!!!" }]
+ right: [SysMsg { text: "这个命令不能在本服务器上使用!!!" }]
+
+---- guild::tests::request_guild_war_both_at_war_duplicates_without_ss207 stdout ----
+
+thread 'guild::tests::request_guild_war_both_at_war_duplicates_without_ss207' (26952) panicked at crates\world\src\guild.rs:1775:9:
+assertion `left == right` failed
+  left: 1
+ right: 2
+
+
+failures:
+    guild::tests::request_guild_war_ally_is_skipped_by_add_war_guild
+    guild::tests::request_guild_war_asymmetric_duplicates_and_broadcasts_ss207
+    guild::tests::request_guild_war_both_at_war_duplicates_without_ss207
+    guild::tests::request_guild_war_non_master_still_pays_gold
+    guild::tests::request_guild_war_non_zero_server_still_pays_gold
+    guild::tests::request_guild_war_not_at_war_is_n2_noop
+    guild::tests::request_then_run_expires_war_n2
+
+test result: FAILED. 3 passed; 7 failed; 0 ignored; 0 measured; 164 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`

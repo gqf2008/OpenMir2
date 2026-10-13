@@ -1,0 +1,24 @@
+# M3⑧-实现 5 行会战（crates/world 第①片）命令记录
+# 全部在 worktree E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs 内执行；
+# CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target（隔离，不落检出内）；全部 --offline；零起栈、零端口。
+
+## 1. 构造级真身向量
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test -p mir2-world --lib guild:: --offline
+# ⇒ 39 passed / 0 failed（⑧-4 的 28 + 本片新增 11）
+
+## 2. 四门禁
+cargo fmt --all -- --check                      # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo clippy --workspace --all-targets --offline -- -D warnings   # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test --workspace --offline   # 98 suites / 1107 passed / 0 failed / 21 ignored
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo run -q -p msgcodegen --offline -- --check   # 604 OK
+
+## 3. 改坏必红（每次改坏 ⇒ 跑目标用例 ⇒ 还原；还原后源 sha256 一致）
+# RC1 request_guild_war 掌门人门反置  → guild::tests::request_  FAILED rc=101
+# RC2 request_ok 条件反置            → guild::tests::request_  FAILED rc=101
+# RC3 ref_member_name 去 online 过滤 → guild::tests::ref_member_name_only_online FAILED rc=101
+# RC4 gold_spent 恒 0               → guild::tests::request_  FAILED rc=101
+
+## 4. 证据 hash（仓库字节 / LF 口径）
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-guild-war-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-guild-war-20261013
