@@ -47,7 +47,7 @@ selftest` 作为一个子项被调用，其 GREEN 正则只认「分子==分母�
 | 项 | 命令（cwd = `mir2-rs/tests/parity/m3`） | 读数 | 原始件 |
 | --- | --- | --- | --- |
 | 机判自检 | `python -I rng-trace-scene/check_anchors.py selftest` | **13/13 GREEN**（含 12 条改坏必红） | `01-selftest-13.txt` |
-| 三条分支独立构造（不经 selftest） | `python -I E:/tmp/m3bag-teeth-firings.py`（构造见 `02-…` 头部） | 三条分别点名 `BARE_REF_UNGUARDED` / `BARE_REF_FILE_MISSING` / `BARE_REF_OUT_OF_RANGE` | `02-branch-firings.txt` |
+| 三条分支独立构造（不经 selftest） | `cd mir2-rs/tests/parity/m3 && python -I evidence-m3-rng-scene-anchor-teeth-20261014/02-branch-firings.py`（脚本随包入库） | 三条分别点名 `BARE_REF_UNGUARDED` / `BARE_REF_FILE_MISSING` / `BARE_REF_OUT_OF_RANGE` | `02-branch-firings.txt` + `02-branch-firings.py` |
 | 真身 | `python -I rng-trace-scene/check_anchors.py check` | **GREEN 7/7**（文档锚点未变，未削弱） | `03`（旧包） |
 | 无栈自检 | `run_rng_trace_pair.ps1 -SelfCheckNoStack` | **31/31 GREEN**（`anchors-freshness-selftest` 真接线，项数未变） | `05-selfcheck-nostack.txt` |
 | 离线全链 | 9 个 selftest | 全 rc=0 | `06-offline-regression.txt` |

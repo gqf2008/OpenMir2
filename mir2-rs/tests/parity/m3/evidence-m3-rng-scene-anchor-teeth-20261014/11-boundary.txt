@@ -1,4 +1,4 @@
-### 本片净差量：git diff --name-only 1cf88f6ad..HEAD（origin/master=1cf88f6ad；含本文件与 SHA256SUMS.txt 自身；共 29 路径）
+### 本片净差量：git diff --name-only 1cf88f6ad..HEAD（origin/master=1cf88f6ad；含本文件与 SHA256SUMS.txt 自身；共 30 路径）
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/11-boundary.txt
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/SHA256SUMS.txt
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/01-before-old-tool-silent.txt
@@ -15,6 +15,7 @@ mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/11-bounda
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/README.md
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/SHA256SUMS.txt
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/01-selftest-13.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/02-branch-firings.py
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/02-branch-firings.txt
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/05-selfcheck-nostack.txt
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/06-offline-regression.txt
