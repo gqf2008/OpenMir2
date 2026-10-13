@@ -25,6 +25,7 @@ pub mod npc;
 pub mod party;
 pub mod pickwire;
 pub mod recover;
+pub mod selloff;
 pub mod shop;
 pub mod slave;
 pub mod smframe;
