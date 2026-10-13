@@ -1,0 +1,28 @@
+# 部署件 Envir/MapQuest.txt 原始件（E:/MirServer/M2GameSvr/Envir）
+## ls -la
+-rw-r--r-- 1 gxh 197121 87 Oct  9 01:32 /e/MirServer/M2GameSvr/Envir/MapQuest.txt
+
+## iconv GBK->UTF-8 + cat -A（^M = CR，行尾 CRLF）
+Q001     [58]     0      M-iM-*M-7M-iM-+M-^EM-gM-2M->M-gM-^AM-55     *               Q002^M$
+^M$
+^M$
+^M$
+^M$
+^M$
+^M$
+^M$
+^M$
+^M$
+^M$
+^M$
+^M$
+^M$
+
+## 三个隐藏脚本存在性
+-rw-r--r-- 1 gxh 197121 3596 Oct  9 01:32 /e/MirServer/M2GameSvr/Envir/MapQuest_def/QManage.txt
+-rw-r--r-- 1 gxh 197121 7528 Oct  9 01:32 /e/MirServer/M2GameSvr/Envir/Market_Def/QFunction-0.txt
+
+/e/MirServer/M2GameSvr/Envir/Robot_def/:
+total 12
+drwxr-xr-x 1 gxh 197121 0 Oct  9 07:10 .
+drwxr-xr-x 1 gxh 197121 0 Oct  9 07:10 ..

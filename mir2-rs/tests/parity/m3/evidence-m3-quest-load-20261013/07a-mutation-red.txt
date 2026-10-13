@@ -1,0 +1,20 @@
+test mapquest::tests::load_result_is_negative_of_last_failed_index ... ok
+test mapquest::tests::missing_map_quest_file_still_resolves_hidden_npcs ... ok
+
+failures:
+
+---- mapquest::tests::parses_deployed_line stdout ----
+
+thread 'mapquest::tests::parses_deployed_line' (27224) panicked at crates\envir\src\mapquest.rs:486:9:
+assertion `left == right` failed
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    mapquest::tests::parses_deployed_line
+
+test result: FAILED. 14 passed; 1 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-envir --lib`
