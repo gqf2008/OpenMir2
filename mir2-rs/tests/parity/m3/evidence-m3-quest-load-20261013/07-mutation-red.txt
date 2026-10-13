@@ -1,0 +1,25 @@
+# 改坏必红（两次，均在镜像分支工作树上实跑；改后 RED、还原后 GREEN 且 sha256 不变）
+
+## 变异 ①：create_quest 的 nValue 上界钳位由 `> 1` 改为 `>= 0`
+锚点：crates/envir/src/mapquest.rs
+  改前：`if n_value > 1 { n_value = 1; }`
+  改后：`if n_value >= 0 { n_value = 1; }`
+命令：`cargo test --offline -p mir2-envir --lib mapquest`
+读数：RED —— `parses_deployed_line` 断言 `left: 1 / right: 0`（部署行 value=0 被错钳成 1）
+       `test result: FAILED. 14 passed; 1 failed; ...`
+还原：逐字节复原，`sha256sum -c` OK。
+
+（原始输出见 07a-mutation-red.txt）
+
+## 变异 ②：GROUP 前缀比改为精确相等
+锚点：crates/envir/src/mapquest.rs
+  改前：`let bo_grouped = compare_lstr(&s30, "GROUP");`
+  改后：`let bo_grouped = s30 == "GROUP";`
+命令：`cargo test --offline -p mir2-envir --test mapquest synthetic_vectors`
+读数：RED —— 第 71 行 `assert!(info.grouped, "CompareLStr 只比前 5 字符")` 失败
+       （`GROUPX` 按 oracle 应命中，精确相等判否）
+还原：逐字节复原，`sha256sum -c` OK。
+
+## 还原后 GREEN
+命令：`cargo test --offline -p mir2-envir --lib mapquest && cargo test --offline -p mir2-envir --test mapquest`
+读数：lib 18 passed / 0 failed；integration 2 passed / 1 ignored。

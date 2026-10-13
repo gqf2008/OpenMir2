@@ -1,0 +1,10 @@
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\envir)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.44s
+     Running tests\mapquest.rs (E:/tmp/m3cs-questload-target\debug\deps\mapquest-86f4edc6b33fc186.exe)
+
+running 1 test
+MapQuest.txt: result=1 quests=1 quest_npcs=["Q002", "QManage", "RobotManage"] merchants=["QFunction"]
+test deployment_mapquest ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.59s
+
