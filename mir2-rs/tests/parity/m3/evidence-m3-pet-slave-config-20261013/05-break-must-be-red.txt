@@ -1,0 +1,41 @@
+# evidence-m3-pet-slave-config-20261013 / 05-break-must-be-red.txt
+# 改坏必红：三处变异，各自令对应判据 RED；还原后 sha256 逐字节一致。
+# 原始 sha256(pet_slave.rs) = 0a06cc03272d392a52bc62cf2528714370a709352bcb2c77cf604777fa466004
+
+############ 变异 1：默认值 skeleton 改成 变异骷髅X（oracle 初值 GameSvrConf.cs:1755）############
+$ sed -i 's/skeleton: "变异骷髅".to_string(),/skeleton: "变异骷髅X".to_string(),/' crates/data/src/pet_slave.rs
+test defaults_match_oracle_vector ... FAILED
+thread 'defaults_match_oracle_vector' (12744) panicked at crates\data\tests\pet_slave_config.rs:93:9:
+assertion `left == right` failed: 向量第 11 行 `skeleton`（GameSvrConf.cs:1755 / ServerConf.cs:104 [Names] Skeleton）与 oracle 初值不一致
+  left: "变异骷髅X"
+ right: "变异骷髅"
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+TEST_RC(mutation1)=101
+还原后 sha256 = 0a06cc03272d392a52bc62cf2528714370a709352bcb2c77cf604777fa466004
+
+############ 变异 2：去掉 oracle 缺陷（master_die_mutiny_speed 改读 MasterDieMutinySpeed 键）############
+# ServerConf.cs:521 原文错读 MasterDieMutinyPower 键；此处改成「正确」的 MasterDieMutinySpeed 键
+test pet_slave::tests::master_die_mutiny_speed_reads_power_key ... FAILED
+test pet_slave::tests::utf8_bom_deployed_values_are_parsed ... FAILED
+thread 'pet_slave::tests::master_die_mutiny_speed_reads_power_key' (31620) panicked at crates\data\src\pet_slave.rs:338:9:
+assertion `left == right` failed: oracle 错读 MasterDieMutinyPower 键 ⇒ 键 MasterDieMutinySpeed 不生效
+  left: 77
+ right: 0
+thread 'pet_slave::tests::utf8_bom_deployed_values_are_parsed' (29288) panicked at crates\data\src\pet_slave.rs:423:9:
+assertion `left == right` failed: oracle 错读 MasterDieMutinyPower ⇒ 覆盖初值 5
+  left: 5
+ right: 0
+test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+TEST_RC(mutation2)=101
+还原后 sha256 = 0a06cc03272d392a52bc62cf2528714370a709352bcb2c77cf604777fa466004
+
+############ 变异 3：mag_tamming_hp_rate 改读 MagTammingHPRate 键（去掉 oracle 缺陷）############
+$ sed -i 's/"MagTammingTargetHPRate"/"MagTammingHPRate"/' crates/data/src/pet_slave.rs
+test pet_slave::tests::mag_tamming_hp_rate_reads_target_hp_rate_key ... FAILED
+thread 'pet_slave::tests::mag_tamming_hp_rate_reads_target_hp_rate_key' (7920) panicked at crates\data\src\pet_slave.rs:349:9:
+assertion `left == right` failed: 读 MagTammingTargetHPRate 键
+  left: 88
+ right: 7
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+TEST_RC(mutation3)=101
+还原后 sha256 = 0a06cc03272d392a52bc62cf2528714370a709352bcb2c77cf604777fa466004
