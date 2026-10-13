@@ -1,0 +1,42 @@
+# 证据包复算命令：M-1 收口（scenario runner 参数名 doc-vs-code 漂移 + 机判）
+# cwd = mir2-rs/tests/parity/m3
+# 卡 = openmir2-m3-rng-trace-scene-groups；base = master 15510a47
+# 本片零 .rs 改动；改动仅 rng-trace-scene/{rng_trace_scenario.json,run_rng_trace_pair.ps1}
+
+# 01) 无栈自检（脚本自写 LF）：期望 SELFTEST ok=14/14 GREEN
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut <本包>/01-selftest-nostack.txt
+
+# 02) 改坏必红：把 scenario 的 trace.runner 塞一个未声明参数 -NotARealParam，再跑整轮自检
+#     期望 SELFTEST FAIL scenario-runner-params-declared (missing=[NotARealParam]) 且 rc=1
+python -I -c "import json;s=json.load(open('rng-trace-scene/rng_trace_scenario.json',encoding='utf-8-sig'));s['trace']['runner']=s['trace']['runner'].replace('-PinScene','-PinScene -NotARealParam');json.dump(s,open('<tmp>/scenario-drift.json','w',encoding='utf-8',newline='\n'),ensure_ascii=False,indent=2)"
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack -ScenarioFile <tmp>/scenario-drift.json
+
+# 03) real-run 只给 -Go、不给 -PinScene ⇒ fail-closed exit 2
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -Go -Side csharp
+
+# 04) real-run 给全 -Go -PinScene ⇒ 参数门通过；驱动未接线仍 fail-closed exit 2
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -Go -PinScene -Side csharp
+
+# 05) 场景前置门回归：11/11 GREEN
+python -I rng-trace-scene/rng_scene_gate.py selftest
+
+# 06) R-6 folded 账本回归：32/32 GREEN
+python -I rng-trace-probe/rng_ledger_diff.py selftest
+
+# 07) 攻击账本回归：32/32 GREEN
+python -I attack_rng_ledger.py selftest
+
+# 08) 四门禁（cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m3bag-target）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline --no-fail-fast
+cargo run -p msgcodegen --offline -- --check
+
+# 09) 边界
+git diff --name-only 15510a47
+git diff --name-only 15510a47 -- src sql MirClient mir2-rs/crates mir2-rs/bins   # 必须为空
+
+# 证据包复核（仓库 LF/git-blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m1
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m1
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m1

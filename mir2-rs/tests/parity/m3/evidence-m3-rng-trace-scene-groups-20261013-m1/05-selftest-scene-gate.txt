@@ -1,0 +1,5 @@
+命令: python -I rng-trace-scene/rng_scene_gate.py selftest
+---- 原始输出 ----
+SELFTEST ok=11/11
+GREEN: 场景前置门 selftest 全绿（同场景绿 + seed/怪集合/起点/map/MonGen 漂移必红 + 缺件/坏 JSON PREREQ fail-closed）
+RC=0
