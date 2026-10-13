@@ -2025,7 +2025,12 @@ fn handle_selloff_cmd(
 }
 
 /// `CM_MERCHANTDLGSELECT`/`CM_MERCHANTQUERYSELLPRICE`/`CM_USERSELLITEM`/`CM_USERBUYITEM`/
-/// `CM_USERREPAIRITEM`/`CM_MERCHANTQUERYREPAIRCOST` 的派发（⑤-4 第①片）。
+/// `CM_USERGETDETAILITEM`/`CM_USERREPAIRITEM`/`CM_MERCHANTQUERYREPAIRCOST` 的派发（⑤-4 第①/②片）。
+///
+/// **`Dealing` 前置门**（⑦ 落地后的收口）：`CM_USERBUYITEM`/`CM_USERGETDETAILITEM` 在 oracle 里
+/// 共用同一个 `ClientUserBuyItem`（`PlayObject.Operate.cs:192-213`），其**第一段**就是
+/// `if (Dealing) { return; }`（`:196-199`），先于 `FindMerchant`（`:200`）与任何帧/副作用；
+/// 其余五条商店命令（`:114`/`:162`/…）**无**此门 ⇒ 只这两条（`trade_sessions` 传入真 `Dealing`）。
 ///
 /// oracle 收包 → 回帧映射在 `PlayObject.Message.cs:888-942`，判定/状态迁移在
 /// `PlayObject.Operate.cs:114/131/162/192/1558/1585` + `Merchant.cs`（纯函数在
@@ -2048,6 +2053,7 @@ fn handle_shop_cmd(
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     world: &mut mir2_world::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
@@ -2070,6 +2076,21 @@ fn handle_shop_cmd(
         return;
     };
     let actor_id = sg.actor_id;
+    // `ClientUserBuyItem`（`PlayObject.Operate.cs:196-199`）：买入/详情两条命令的
+    // `if (Dealing) { return; }` **前置门**——oracle 在 `FindMerchant`（`:200`）之前、
+    // 任何帧/副作用之前；其余五条商店命令 oracle 无此门（`:114`/`:162` 无）⇒ 只这两条。
+    // ⑦-3/⑦-4 落地后 `Dealing` 不再恒 `false`（`trade_sessions[chr].dealing`），本门因此可达。
+    if matches!(
+        ident,
+        game_svr::shop::CM_USERBUYITEM | game_svr::shop::CM_USERGETDETAILITEM
+    ) && trade_sessions.get(chr_name).is_some_and(|s| s.dealing)
+    {
+        glog!(
+            "DBG",
+            "商店买入/详情：Dealing ⇒ return（oracle Operate.cs:196-199）ChrName={chr_name} ident={ident}"
+        );
+        return;
+    }
     // 玩家当前位置/生死（`FindMerchant` 门与 `IsWithinSight` 用）。
     let Some(pe) = world.entities.get(actor_id) else {
         glog!(
@@ -5738,6 +5759,7 @@ fn sim_loop(
                             &online,
                             &mut ground_sessions,
                             &mut shop_sessions,
+                            &trade_sessions,
                             &gates,
                             &mut world,
                             &enter_cfg.catalog,
@@ -13387,6 +13409,221 @@ mod tests {
             &body[12..],
             &raw[..],
             "直连尾原样下发（不重新 EncodeString）"
+        );
+    }
+
+    /// **M3⑤-4 收口（T-47 ⑦）：`ClientUserBuyItem` 的 `Dealing` 前置门**
+    /// （`PlayObject.Operate.cs:196-199` `if (Dealing) { return; }`，先于 `:200 FindMerchant`、
+    /// 先于任何帧/副作用）。`CM_USERBUYITEM`/`CM_USERGETDETAILITEM` 在 oracle 里共用**同一方法体**
+    /// （`Message.cs:897-902`）⇒ 两条都要过此门；其余五条商店命令 oracle 无此门。
+    ///
+    /// ⑦-3/⑦-4 落地后 `Dealing` 不再恒 `false` ⇒ 交易中买货/拉详情是**可达行为差异**。
+    /// 判据：`trade_sessions[chr].dealing=true` ⇒ 两条命令零帧 + 金币/背包/库存全不变；
+    /// 正对硪 `dealing=false` ⇒ 买入成功（回帧 + 扣金 100 + 加背包 + 库存减）。
+    /// **改坏必红**：删掉 `handle_shop_cmd` 里的 `Dealing` 门 ⇒ 情形 A 出现买入帧且金币 500→400。
+    #[test]
+    fn shop_buy_and_detail_blocked_while_dealing() {
+        use std::collections::HashMap;
+
+        // —— 世界：玩家 (10,10) + 买入商人 (11,10)，在售 1 件 `Index=1` 的货。
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let merchant_id = world
+            .insert_merchant(mir2_world::merchant::MerchantSpawn {
+                name: "商人".to_string(),
+                x: 11,
+                y: 10,
+                map_id: 0,
+                state: mir2_world::merchant::MerchantState::new(
+                    "卫家店".to_string(),
+                    "0".to_string(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    mir2_world::merchant::MerchantFlags {
+                        is_buy: true,
+                        ..Default::default()
+                    },
+                    vec![0, 5],
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("商人入世界");
+        world.merchant_add_item_to_goods_list(
+            merchant_id,
+            mir2_world::merchant::MerchantItem {
+                make_index: 7,
+                index: 1,
+                dura: 10,
+                dura_max: 10,
+                desc: [0; 14],
+            },
+        );
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "金创药(小量)".to_string(),
+                price: 100,
+                weight: 3,
+                std_mode: 0,
+                dura_max: 10,
+                ..mir2_data::StdItem::default()
+            },
+        );
+
+        // —— 玩家会话：金币 500、负重 0/100（够买）。
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.state.gold = 500;
+        sg.state.wabil.weight = 0;
+        sg.state.wabil.max_weight = 100;
+        sessions.insert("hero".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut shop_sessions: HashMap<String, ShopSession> = HashMap::new();
+        let shop_cfg = ShopCfg {
+            castle_member_price_rate: 100,
+            super_repair_price_rate: 100,
+            repair_item_dec_dura: 0,
+            get_all_npc_tax: false,
+            human_max_gold: 10_000_000,
+        };
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+        };
+
+        // —— 情形 A：`Dealing=true` ⇒ 两条命令都零帧、零副作用。
+        let mut trade_dealing: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        trade_dealing.insert(
+            "hero".to_string(),
+            game_svr::trade::DealState {
+                dealing: true,
+                ..Default::default()
+            },
+        );
+        handle_shop_cmd(
+            game_svr::shop::CM_USERBUYITEM,
+            merchant_id,
+            0,
+            0,
+            Some("金创药(小量)"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut shop_sessions,
+            &trade_dealing,
+            &gates,
+            &mut world,
+            &catalog,
+            &shop_cfg,
+            &colors,
+        );
+        assert!(
+            matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "Dealing ⇒ 买入不得发任何帧（oracle Operate.cs:196-199）"
+        );
+        assert_eq!(
+            sessions.get("hero").unwrap().state.gold,
+            500,
+            "Dealing ⇒ 不得扣金"
+        );
+        assert!(
+            sessions.get("hero").unwrap().state.item_list.is_empty(),
+            "Dealing ⇒ 不得加背包"
+        );
+        assert_eq!(
+            world.merchant_goods_groups(merchant_id).unwrap()[0].len(),
+            1,
+            "Dealing ⇒ 库存不动"
+        );
+        handle_shop_cmd(
+            game_svr::shop::CM_USERGETDETAILITEM,
+            merchant_id,
+            1,
+            0,
+            Some("金创药(小量)"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut shop_sessions,
+            &trade_dealing,
+            &gates,
+            &mut world,
+            &catalog,
+            &shop_cfg,
+            &colors,
+        );
+        assert!(
+            matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "Dealing ⇒ 详情列表不得发任何帧"
+        );
+
+        // —— 情形 B（正对照）：`Dealing=false` ⇒ 买入成功。
+        let trade_open: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        handle_shop_cmd(
+            game_svr::shop::CM_USERBUYITEM,
+            merchant_id,
+            0,
+            0,
+            Some("金创药(小量)"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut shop_sessions,
+            &trade_open,
+            &gates,
+            &mut world,
+            &catalog,
+            &shop_cfg,
+            &colors,
+        );
+        let mut emitted = 0usize;
+        while rx0.try_recv().is_ok() {
+            emitted += 1;
+        }
+        assert!(emitted > 0, "非 Dealing ⇒ 应回买入帧");
+        assert_eq!(
+            sessions.get("hero").unwrap().state.gold,
+            400,
+            "非 Dealing ⇒ 扣金（100）"
+        );
+        assert_eq!(
+            sessions.get("hero").unwrap().state.item_list.len(),
+            1,
+            "非 Dealing ⇒ 加背包"
+        );
+        assert!(
+            world.merchant_goods_groups(merchant_id).unwrap().is_empty(),
+            "非 Dealing ⇒ 库存减（空组移除）"
         );
     }
 }

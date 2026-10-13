@@ -1,0 +1,10 @@
+# 改坏必红 RC1：把 `handle_shop_cmd` 的 Dealing 门短路（`) && false && trade_sessions...`）⇒ 用例必红
+
+$ cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr shop_buy_and_detail_blocked_while_dealing
+test tests::shop_buy_and_detail_blocked_while_dealing ... FAILED
+---- tests::shop_buy_and_detail_blocked_while_dealing stdout ----
+thread 'tests::shop_buy_and_detail_blocked_while_dealing' (21040) panicked at bins\game-svr\src\main.rs:13548:9:
+Dealing ⇒ 买入不得发任何帧（oracle Operate.cs:196-199）
+    tests::shop_buy_and_detail_blocked_while_dealing
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 203 filtered out; finished in 0.00s
+# rc=101

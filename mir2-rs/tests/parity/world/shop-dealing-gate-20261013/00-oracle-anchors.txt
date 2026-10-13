@@ -1,0 +1,36 @@
+# oracle 锚（冻结 src/，只读；行号为冻结 checkout 当前值）
+
+[1] `CM_USERBUYITEM` / `CM_USERGETDETAILITEM` → **同一个** `ClientUserBuyItem`
+    `src/M2Server/Player/PlayObject.Message.cs:897-902`
+        case Messages.CM_USERBUYITEM:
+            ClientUserBuyItem(processMsg.wIdent, processMsg.nParam1, HUtil32.MakeLong((ushort)processMsg.nParam2, (ushort)processMsg.nParam3), 0, processMsg.Msg);
+            break;
+        case Messages.CM_USERGETDETAILITEM:
+            ClientUserBuyItem(processMsg.wIdent, processMsg.nParam1, 0, processMsg.nParam2, processMsg.Msg);
+
+[2] `ClientUserBuyItem` 的**第一段** = `if (Dealing) { return; }`，先于 `:200 FindMerchant`、先于任何帧/副作用
+    `src/M2Server/Player/PlayObject.Operate.cs:192-200`
+        private void ClientUserBuyItem(int nIdent, int nParam1, int nInt, int nZz, string sMsg)
+        {
+            try
+            {
+                if (Dealing)
+                {
+                    return;
+                }
+                IMerchant merchant = SystemShare.WorldEngine.FindMerchant(nParam1);
+
+[3] 其余商店命令**无** Dealing 门（对照 ⇒ 「门只属买入两条」，不得扩大）
+    `src/M2Server/Player/PlayObject.Operate.cs:114`  ClientMerchantDlgSelect —— 只 `if (Death || Ghost) return;`
+    `src/M2Server/Player/PlayObject.Operate.cs:162`  ClientUserSellItem    —— 无 Dealing 门
+
+[4] Rust 侧落点
+    `mir2-rs/bins/game-svr/src/main.rs::handle_shop_cmd` —— 门置于 `FindMerchant`（实体查找）**之前**，
+    只对 `CM_USERBUYITEM | CM_USERGETDETAILITEM`；真值源 = `trade_sessions[chr].dealing`
+    （与 `main.rs:1020` 的 `Dealing` 同源）。
+
+# 复跑
+$ sed -n '897,902p' src/M2Server/Player/PlayObject.Message.cs
+$ sed -n '192,200p' src/M2Server/Player/PlayObject.Operate.cs
+$ sed -n '114,118p' src/M2Server/Player/PlayObject.Operate.cs
+$ sed -n '162,166p' src/M2Server/Player/PlayObject.Operate.cs

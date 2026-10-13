@@ -1,0 +1,8 @@
+# 边界：oracle 冻结面零改动（src / sql / MirClient）+ 接口冻结层零改动（crates/protocol / crates/storage）
+
+$ git diff --name-only 9863d57b0 HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+（空 = 通过）
+
+# base = 7f0befb0f（⑤-4 第②片 merge 收口 head）；code head = 本 patch entry 的 head
+# （代码与证据同一 head）。对 origin/master 9863d57b0 全量差量查冻结面亦空。
+# 本片（7f0befb0f..head）写集只有 bins/game-svr/src/main.rs + 本证据目录。
