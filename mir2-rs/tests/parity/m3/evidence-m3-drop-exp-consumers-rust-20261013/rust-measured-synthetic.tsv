@@ -1,0 +1,6 @@
+1	INJECT_OK	42	0
+SEED_PROBE 42
+1	Next(max)	100	7	crates/formula/src/drop.rs:109
+2	Next(max)	100	7	bins/game-svr/src/mongen.rs:289
+3	Next(max)	100	7	crates/world/src/mongen.rs:624
+4	Next(max)	100	7	crates/world/src/combat.rs:831

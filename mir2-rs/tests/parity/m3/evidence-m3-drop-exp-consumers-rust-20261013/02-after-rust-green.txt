@@ -1,0 +1,12 @@
+=== AFTER：新表 side=rust ⇒ GREEN rc=0 ===
+=== 场景纯度（drop_exp_purity_gate）===
+  side=rust stream=evidence-m3-drop-exp-consumers-rust-20261013/rust-measured-synthetic.tsv
+  draws=4 measured=2 setup=2 wallclock=0 other=0 unknown=0 missing_site=0 ambiguous=0
+  NOTE: 2 条 setup 行 max=* ⇒ 未设上限（窗口期按实测收紧；不影响 measured/wallclock/other 判据）
+  --- 逐消费者清单（site 计数，降序）---
+         1  crates/formula/src/drop.rs:109
+         1  bins/game-svr/src/mongen.rs:289
+         1  crates/world/src/mongen.rs:624
+         1  crates/world/src/combat.rs:831
+  GREEN: 除被测量路径外 RNG 消费者 = 0（wallclock=0 / other=0 / unknown=0）
+rc=0
