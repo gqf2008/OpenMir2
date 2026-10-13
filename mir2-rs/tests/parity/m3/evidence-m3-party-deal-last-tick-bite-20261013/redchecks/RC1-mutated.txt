@@ -1,0 +1,31 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.28s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3pt-target\debug\deps\game_svr-675e68013f315636.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 153 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/openmir2-m3pt-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+
+running 1 test
+test tests::drop_blocked_by_fresh_deal_last_tick ... FAILED
+
+failures:
+
+---- tests::drop_blocked_by_fresh_deal_last_tick stdout ----
+
+thread 'tests::drop_blocked_by_fresh_deal_last_tick' (24388) panicked at bins\game-svr\src\main.rs:11228:9:
+assertion `left == right` failed: 3000ms 门内（交易中）⇒ ClientDropItem 体不得执行（oracle Operate.cs:269）
+  left: 3000
+ right: 5000
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::drop_blocked_by_fresh_deal_last_tick
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 183 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+rc=101

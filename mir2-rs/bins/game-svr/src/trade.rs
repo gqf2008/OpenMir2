@@ -432,8 +432,9 @@ fn defn(target: i32, ident: u16, recog: i32, param: u16, tag: u16, series: u16) 
 
 /// `ClientDealTry(sHumName)`（`PlayObject.Operate.cs:911-962`）+ 成功时的 `OpenDealDlg`。
 ///
-/// `target` = 宿主解析出的 `GetPoseCreate()` 结果（`NotPlayer` = 无前排/前排不是玩家）；
-/// 前置守卫（`DisableDeal`/`Dealing`/`TryDealTime`/`IsCanDeal`）**先于**目标判定，与 oracle 同序。
+/// `target` = 宿主解析出的 `GetPoseCreate()` 结果（`Absent` = 无前排/前排为自身；`NotPlayer` = 前排不是玩家）；
+/// 前置守卫（`DisableDeal`/`Dealing`/`TryDealTime`/`IsCanDeal`）**先于**目标判定，与 oracle 同序
+/// （`Operate.cs:913-926` 四条守卫在 `:928` 的 `GetPoseCreate()` 之前）。
 pub fn deal_try(
     me: &mut DealSide<'_>,
     other: &mut DealSide<'_>,
@@ -479,6 +480,12 @@ pub fn deal_try(
         return em.finish();
     }
     match target {
+        // oracle `Operate.cs:929` 的 `poseObject.Race`：
+        // ① `GetPoseCreate() == null` ⇒ 对 null 解引用 ⇒ NRE，被
+        //    `WorldServer.ProcessPlayObjectData` 的 `catch`（`WorldServer.cs:734`）吞掉 ⇒ 一个帧都不发；
+        // ② `poseObject == this` ⇒ `:934` 的内层 `if (targetPlayObject != this)` 无 `else` ⇒ 也不发帧。
+        // 两态在 oracle 里都「静默」，Rust 不得发 `SM_DEALTRY_FAIL`（那不是 oracle 行为）。
+        DealTryTarget::Absent => {}
         DealTryTarget::NotPlayer => em.now(def0(me.id, messages::SM_DEALTRY_FAIL)),
         DealTryTarget::Other { faces_me } => {
             if faces_me && !other.state.dealing {
@@ -505,7 +512,12 @@ pub fn deal_try(
 /// `ClientDealTry` 的 `GetPoseCreate()` 分辨率（宿主用世界/展示表算出后传入 [`deal_try`]）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DealTryTarget {
-    /// 无前排对象 / 前排不是玩家（`Operate.cs:955-958` ⇒ `SM_DEALTRY_FAIL`）。
+    /// 无前排对象（`GetPoseCreate() == null`）或前排为自身（`poseObject == this`）。
+    ///
+    /// oracle 两态都**不发任何帧**：前者在 `Operate.cs:929` 的 `poseObject.Race` 处 NRE
+    /// （被 `WorldServer.cs:734` 的 `catch` 吞），后者走 `:934` 内层 `if` 的无 `else` 静默支。
+    Absent,
+    /// 前排不是玩家（`Operate.cs:955-958` 的 `else` ⇒ `SM_DEALTRY_FAIL`）。
     NotPlayer,
     /// 前排是另一个玩家；`faces_me` = 对方 `GetPoseCreate() == this`。
     Other { faces_me: bool },
@@ -1566,6 +1578,84 @@ mod tests {
         let evs = deal_try(&mut sa, &mut sb, &cfg, 10_000, DealTryTarget::NotPlayer);
         assert_eq!(names(&evs), vec![(1, messages::SM_DEALTRY_FAIL)]);
         assert!(!a.state.dealing && !b.state.dealing);
+    }
+
+    /// `DealTryTarget::Absent`：无前排对象（oracle `GetPoseCreate() == null` ⇒ `Operate.cs:929`
+    /// 对 null 解引用 ⇒ NRE 被 `WorldServer.cs:734` 吞）或前排为自身（`:934` 内层 `if` 无 `else`）
+    /// ⇒ oracle **一个帧都不发**；Rust 不得发 `SM_DEALTRY_FAIL`。
+    #[test]
+    fn deal_try_absent_pose_emits_nothing() {
+        let cfg = DealConfig::default();
+        let mut a = P::new(1, "甲", 1_000);
+        let mut b = P::new(2, "乙", 500);
+        let evs = {
+            let mut sa = side(&mut a);
+            let mut sb = side(&mut b);
+            deal_try(&mut sa, &mut sb, &cfg, 10_000, DealTryTarget::Absent)
+        };
+        assert!(
+            evs.is_empty(),
+            "无前排/前排为自身 ⇒ oracle 静默，实得 {evs:?}"
+        );
+        assert!(!a.state.dealing && !b.state.dealing);
+        // 未开交易对话 ⇒ `DealCreat`/`DealLastTick` 不被改写。
+        assert!(a.state.deal_creature.is_none());
+        assert_eq!(a.state.deal_last_tick, 0);
+    }
+
+    /// 前置守卫**先于**目标判定（oracle `Operate.cs:913-926` 四条守卫在 `:928` 的
+    /// `GetPoseCreate()` 之前）：`Absent` 也要先吃 `DisableDeal`/`Dealing`/`TryDealTime`/`IsCanDeal`。
+    #[test]
+    fn deal_try_absent_pose_still_obeys_guards_first() {
+        // ① `DisableDeal` ⇒ `RM_MENU_OK`（DisableDealItemsMsg），早于 pose 取数。
+        let cfg_disabled = DealConfig {
+            disable_deal: true,
+            ..DealConfig::default()
+        };
+        let mut a = P::new(1, "甲", 1_000);
+        let mut b = P::new(2, "乙", 500);
+        let evs = {
+            let mut sa = side(&mut a);
+            let mut sb = side(&mut b);
+            deal_try(
+                &mut sa,
+                &mut sb,
+                &cfg_disabled,
+                10_000,
+                DealTryTarget::Absent,
+            )
+        };
+        assert_eq!(names(&evs), vec![(1, messages::SM_MENU_OK)]);
+
+        // ② `Dealing` ⇒ 静默返回。
+        let cfg = DealConfig::default();
+        a.state.dealing = true;
+        let evs = {
+            let mut sa = side(&mut a);
+            let mut sb = side(&mut b);
+            deal_try(&mut sa, &mut sb, &cfg, 10_000, DealTryTarget::Absent)
+        };
+        assert!(evs.is_empty(), "Dealing ⇒ 直接返回");
+
+        // ③ `TryDealTime` 未过 ⇒ `RM_MENU_OK`（PleaseTryDealLaterMsg）。
+        a.state.dealing = false;
+        a.state.deal_last_tick = 9_000;
+        let evs = {
+            let mut sa = side(&mut a);
+            let mut sb = side(&mut b);
+            deal_try(&mut sa, &mut sb, &cfg, 10_000, DealTryTarget::Absent)
+        };
+        assert_eq!(names(&evs), vec![(1, messages::SM_MENU_OK)]);
+
+        // ④ `!IsCanDeal` ⇒ `RM_MENU_OK`（CanotTryDealMsg）。
+        a.state.deal_last_tick = 0;
+        a.state.is_can_deal = false;
+        let evs = {
+            let mut sa = side(&mut a);
+            let mut sb = side(&mut b);
+            deal_try(&mut sa, &mut sb, &cfg, 10_000, DealTryTarget::Absent)
+        };
+        assert_eq!(names(&evs), vec![(1, messages::SM_MENU_OK)]);
     }
 
     /// `first_token`（`HUtil32.GetValidStr3(..., ' ')`，信件后缀场景）：含空格取首段。

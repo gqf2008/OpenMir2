@@ -1,0 +1,69 @@
+M3⑦-实现 4 · M-1 收口 —— oracle 锚点（行号为在本仓 src/ 实测）
+
+卡：openmir2-m3-party-deal-last-tick-bite（父卡 openmir2-m3-party-attribution 的非阻塞 Minor M-1）
+oracle 链：拖放时间门 = PlayObject.Operate.cs:246/269；DealLastTick 字段 = PlayObject.cs:122；
+          StdMode40 原地耐久扣减 = BaseObject.cs:541-548。
+
+--------------------------------------------------------------------------------
+[1] src/M2Server/Player/PlayObject.Operate.cs:246  ClientDropItem 入口
+--------------------------------------------------------------------------------
+        private bool ClientDropItem(string sItemName, int nItemIdx)
+        {
+            bool result = false;
+            if (SystemShare.Config.InSafeDisableDrop && InSafeZone())
+            { ... return false; }
+            if (!IsCanDrop || Envir.Flag.NoThrowItem)
+            { ... return false; }
+            if (sItemName.IndexOf(' ') > 0)
+            {
+                // 折分物品名称(信件物品的名称后面加了使用次数)
+                HUtil32.GetValidStr3(sItemName, ref sItemName, ' ');
+            }
+            if ((HUtil32.GetTickCount() - DealLastTick) > 3000)      <-- :269 时间门
+            {
+                for (int i = 0; i < ItemList.Count; i++)
+                {
+
+> 语义：`DealLastTick` 在 3000ms 内 ⇒ **整个 `ItemList` 丢弃查表体被跳过** ⇒
+> 不查表、不扣耐久、不 `DropItemDown`。这正是本片用判据咬住的分支。
+
+--------------------------------------------------------------------------------
+[2] src/M2Server/Player/PlayObject.cs:122  DealLastTick 字段
+--------------------------------------------------------------------------------
+        /// 交易最后操作时间
+        /// </summary>
+        public int DealLastTick { get; set; }
+
+> 写入点（⑦-3/⑦-4 已在 Rust 侧照搬，@PlayObject.Base.cs:745/2372-2373/2399-2400/2415）：
+> `DealLastTick = HUtil32.GetTickCount()` —— Rust 侧 = `world.clock_ms`（虚拟时钟）。
+
+--------------------------------------------------------------------------------
+[3] src/M2Server/Actor/BaseObject.cs:541-548  StdMode40 的耐久扣减（本片的可观测点）
+--------------------------------------------------------------------------------
+                if (stdItem.StdMode == 40)
+                {
+                    ushort idura = userItem.Dura;
+                    idura = (ushort)(idura - 2000);
+                    if (idura <= 0)
+                    {
+                        idura = 0;
+                    }
+                    userItem.Dura = idura;
+
+> 语义：`idura` 是 `ushort`（u16 回绕），`idura <= 0` 对 u16 **恒 false**（死代码）；
+> 该扣减作用在 `ItemList` 的**同一引用**上（失败也留下）。
+> ⇒ 本仓 `drop_item_down` 恒 false（`MapItem.ItemId == 0`，ground.rs 模块头 T-19）时，
+>   「是否进丢弃体」在成功/失败帧上不可分，但可由 `Dura 5000 -> 3000` 观测。
+> Rust 侧既有实现（本片未改）：mir2-rs/bins/game-svr/src/ground.rs:669 门、:700-708 扣减。
+
+--------------------------------------------------------------------------------
+[4] 本片改动点（Rust 生产取数，非 oracle 行为）
+--------------------------------------------------------------------------------
+mir2-rs/bins/game-svr/src/main.rs::handle_ground_cmd
+  before（⑦-4 接线）：调用点各自拼装
+    trade_sessions.get(&chr_name).is_some_and(|s| s.dealing)
+    trade_sessions.get(&chr_name).map_or(0, |s| s.deal_last_tick as i32)
+  after（本片）：整表传入，取值固定在函数内
+    let dealing       = trade_sessions.get(chr_name).is_some_and(|s| s.dealing);
+    let deal_last_tick = trade_sessions.get(chr_name).map_or(0, |s| s.deal_last_tick as i32);
+  ⇒ 生产路径数值逐字节不变；被 drop_blocked_by_fresh_deal_last_tick 直接咬住。

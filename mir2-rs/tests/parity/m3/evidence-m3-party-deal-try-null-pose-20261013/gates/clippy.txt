@@ -1,0 +1,8 @@
+== 四门禁 · ② clippy ==
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\crates\world)
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\game-svr)
+    Checking mir2-parity-tests v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\tests\parity)
+    Checking mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\crates\envir)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.73s
+rc=0（见下：Finished）

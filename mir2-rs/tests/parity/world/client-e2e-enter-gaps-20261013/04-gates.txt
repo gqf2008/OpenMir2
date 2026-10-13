@@ -1,0 +1,16 @@
+# 四门禁（合并 master 后重跑；隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target；cwd=mir2-rs/）
+base(master)=cf3f81c35
+
+## cargo fmt --all -- --check
+rc=0
+
+## cargo clippy --workspace --all-targets --offline -- -D warnings
+rc=0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.61s
+
+## cargo test --workspace --offline --no-fail-fast
+rc=0 （98 suites · 1025 passed · 0 failed · 21 ignored）
+FAILED_LINES=0
+
+## cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。

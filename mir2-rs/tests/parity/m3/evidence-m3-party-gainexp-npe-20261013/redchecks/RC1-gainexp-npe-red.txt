@@ -1,0 +1,27 @@
+$ # RC1：把 GainExp 缺团长态改回 unwrap_or_default()（= 抹掉本卡 fix）
+$ CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test -p mir2-world --test party_attribution group_owner_missing_matches_oracle_npe
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.24s
+     Running tests\party_attribution.rs (E:/tmp/openmir2-m3pt-target\debug\deps\party_attribution-ad10bfbb8b4ad98c.exe)
+
+running 1 test
+test group_owner_missing_matches_oracle_npe ... FAILED
+
+failures:
+
+---- group_owner_missing_matches_oracle_npe stdout ----
+
+thread 'group_owner_missing_matches_oracle_npe' (31216) panicked at crates\world\tests\party_attribution.rs:271:5:
+assertion `left == right` failed: oracle NPE 吞错 ⇒ 获得者本人零经验（不退回单人满经验）
+  left: 600
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    group_owner_missing_matches_oracle_npe
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --test party_attribution`
+rc=101

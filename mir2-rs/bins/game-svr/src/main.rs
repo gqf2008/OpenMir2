@@ -170,6 +170,19 @@ impl CommandMessage {
     }
 }
 
+/// 帧 52 尾的布局开关（`openmir2-client-e2e-enter-gaps` 的 ③）。
+///
+/// `MIR2_CLIENT_ABILITY_LAYOUT` 为真值（`1`/`true`/`TRUE`/`True`）⇒ 用冻结客户端的 58B
+/// `TAbility`（`HIGHHP=True`，[`record::encode_ability_client`]）；未设/其它 ⇒ oracle 的 40B
+/// `EncodeMessage(WAbil)`。**默认关**：未设时生产路径与 oracle 逐字节相同（四门禁/金标准不回归）。
+/// 打开它是 §6.0-3 意义上的「与 oracle 的故意偏离」，需 owner 裁决 + 白名单登记。
+fn mir2_client_ability_layout() -> bool {
+    matches!(
+        std::env::var("MIR2_CLIENT_ABILITY_LAYOUT").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("True")
+    )
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let conf = std::env::args()
@@ -861,8 +874,9 @@ fn handle_ground_cmd(
     tail: Option<&str>,
     chr_name: &str,
     socket: i32,
-    dealing: bool,
-    deal_last_tick: i32,
+    // `PlayObject.Dealing` / `PlayObject.DealLastTick`（M3⑦-实现 3/4）的真值来源。
+    // 传整表而非两个散值：取值固定在 `handle_ground_cmd` 内，调用点无法各自漏接/写死。
+    trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
     world: &mir2_world::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
@@ -903,6 +917,13 @@ fn handle_ground_cmd(
     let mut map =
         game_svr::pickwire::build_ground_map(&view, map_id, grid.width, grid.height, catalog);
     let now_tick = world.clock_ms as i32;
+    // `PlayObject.Dealing`（M3⑦-实现 3）：交易中禁拾取/禁丢弃。
+    // `PlayObject.DealLastTick`（M3⑦-实现 4；`handle_deal_cmd` 用 `world.clock_ms` 写入）：
+    // 新会话为 0 ⇒ 过 3000ms 门；交易中才拦 drop（`Operate.cs:269`）。
+    let dealing = trade_sessions.get(chr_name).is_some_and(|s| s.dealing);
+    let deal_last_tick = trade_sessions
+        .get(chr_name)
+        .map_or(0, |s| s.deal_last_tick as i32);
     let flag = registry.and_then(|r| r.flag_of(map_id));
     // 先跑纯函数（会**原地改** `sg.state`），再按**改后**的会话态组 `WireSession`
     // ——oracle 的 `GoldChanged()`/`WeightChanged()` 都在 `Gold +=`/`AddItemToBag` **之后**发
@@ -1010,6 +1031,36 @@ fn pose_create(
     front_target(world, actor_id, e.map_id, fx, fy)
 }
 
+/// `ClientDealTry` 的 `GetPoseCreate()` 目标判定（`PlayObject.Operate.cs:928-958`）。
+///
+/// oracle 在 `:929` 对 `GetPoseCreate()` 的结果直接取 `poseObject.Race`：
+/// - `null` ⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData` 的
+///   `catch`（`WorldServer.cs:734`）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
+/// - 非玩家 ⇒ `:955-958` 的 `else` ⇒ `SM_DEALTRY_FAIL`；
+/// - 玩家且 `== this` ⇒ `:934` 内层 `if (targetPlayObject != this)` 无 `else` ⇒ **不发帧**；
+/// - 玩家且 `!= this` ⇒ `:933` 取对方 `GetPoseCreate()` 是否回指自己（`faces_me`）。
+fn deal_try_target_of(
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    actor_id: i32,
+    pose_id: Option<i32>,
+) -> (Option<i32>, game_svr::trade::DealTryTarget) {
+    match pose_id {
+        None => (None, game_svr::trade::DealTryTarget::Absent),
+        Some(oid) if oid == actor_id => (None, game_svr::trade::DealTryTarget::Absent),
+        Some(oid) if !is_play_actor(world, oid) => {
+            (None, game_svr::trade::DealTryTarget::NotPlayer)
+        }
+        Some(oid) => {
+            let faces_me = pose_create(world, displays, oid) == Some(actor_id);
+            (
+                Some(oid),
+                game_svr::trade::DealTryTarget::Other { faces_me },
+            )
+        }
+    }
+}
+
 /// `poseObject.Race == ActorRace.Play`（`PlayObject.Operate.cs:933`）。
 fn is_play_actor(world: &mir2_world::World, id: i32) -> bool {
     world
@@ -1063,19 +1114,7 @@ fn handle_deal_cmd(
     // 目标解析：`CM_DEALTRY` 用 `GetPoseCreate()`，其余命令用已建立的 `DealCreat`。
     let pose_id = pose_create(world, displays, actor_id);
     let (other_id, try_target) = if ident == mir2_protocol::messages::CM_DEALTRY {
-        match pose_id
-            .filter(|id| *id != actor_id)
-            .filter(|id| is_play_actor(world, *id))
-        {
-            None => (None, game_svr::trade::DealTryTarget::NotPlayer),
-            Some(oid) => {
-                let faces_me = pose_create(world, displays, oid) == Some(actor_id);
-                (
-                    Some(oid),
-                    game_svr::trade::DealTryTarget::Other { faces_me },
-                )
-            }
-        }
+        deal_try_target_of(world, displays, actor_id, pose_id)
     } else {
         (
             trade_sessions.get(chr_name).and_then(|s| s.deal_creature),
@@ -3101,6 +3140,162 @@ fn send_good_tick(
     });
 }
 
+/// 进图时把本会话写入 52/752 的**输入值**与 52 的 40B 尾打进日志（只读；卡 `openmir2-client-e2e-enter-gaps`）。
+///
+/// 用途：真机上“客户端血/负重为 0”时，先看这行就能区分「服务端没发/值错」与「客户端解析」。
+/// 不参与任何模拟/出帧语义（与 oracle `RecalcAbilitys` 输出同源，不额外取数）。
+fn log_enter_ability(chr_name: &str, out: &game_svr::ability::RecalcOutput) {
+    let w = &out.wabil;
+    // 与生产路径用**同一**布局（`MIR2_CLIENT_ABILITY_LAYOUT`）：默认 oracle 40B，开关打开时
+    // 冻结客户端 58B。日志必须反映**实际写入 52/752 的字节**，否则又会造成“血条为 0”的误读。
+    let layout = if mir2_client_ability_layout() {
+        "client-58"
+    } else {
+        "oracle-40"
+    };
+    let tail_bytes = if layout == "client-58" {
+        record::encode_ability_client(w)
+    } else {
+        record::encode_ability(w)
+    };
+    let tail_len = tail_bytes.len();
+    let tail: String = tail_bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let s = &out.sub;
+    glog!(
+        "DBG",
+        "52/752 入图输入 ChrName={chr_name} layout={layout} tail_len={tail_len} \
+         WAbil[level={} ac={} mac={} dc={} mc={} sc={} hp={} mp={} \
+         max_hp={} max_mp={} exp={} max_exp={} weight={} max_weight={} wear_weight={} \
+         max_wear_weight={} hand_weight={} max_hand_weight={}] SubAbility[anti_magic={} \
+         hit_point={} speed_point={} anti_poison={} poison_recover={} health_recover={} \
+         spell_recover={}] ability_tail_hex={tail}",
+        w.level,
+        w.ac,
+        w.mac,
+        w.dc,
+        w.mc,
+        w.sc,
+        w.hp,
+        w.mp,
+        w.max_hp,
+        w.max_mp,
+        w.exp,
+        w.max_exp,
+        w.weight,
+        w.max_weight,
+        w.wear_weight,
+        w.max_wear_weight,
+        w.hand_weight,
+        w.max_hand_weight,
+        s.anti_magic,
+        s.hit_point,
+        s.speed_point,
+        s.anti_poison,
+        s.poison_recover,
+        s.health_recover,
+        s.spell_recover
+    );
+}
+
+/// 一个在世界内的会话的 AOI 观测读数（只读；卡 `openmir2-client-e2e-enter-gaps`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SessionAoiDiag {
+    chr_name: String,
+    actor_id: i32,
+    map_id: usize,
+    /// `visible_actors` 里 `Show` 的条数（`drain_aoi_downlink` 真正会下发的那批）。
+    vis: usize,
+    /// 同图（除自己）的实体数。
+    same_map: usize,
+    /// 同图（除自己）最近的 Chebyshev 距离；无他者 ⇒ `i32::MAX`。
+    nearest: i32,
+}
+
+/// 周期日志的世界/AOI 观测快照（只读；不改模拟语义）。
+///
+/// 直接回应 `openmir2-client-e2e-enter-gaps` 的误读：`sim: … 处理 N 项` 的 N 是**世界命令队列**
+/// 长度（[[TickRecord::processed]]），不是实体数；实体/怪物/展示表与 AOI 可见数必须另看本快照。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorldDiag {
+    entities: usize,
+    displays: usize,
+    sessions: Vec<SessionAoiDiag>,
+}
+
+impl WorldDiag {
+    fn summary(&self) -> String {
+        format!(
+            "实体内 {} 展示表 {} 在世界会话 {}",
+            self.entities,
+            self.displays,
+            self.sessions.len()
+        )
+    }
+
+    fn session_summary(&self) -> String {
+        let mut out = String::new();
+        for s in &self.sessions {
+            out.push_str(&format!(
+                " [{}({}) map={} vis={} same_map={} nearest={}]",
+                s.chr_name,
+                s.actor_id,
+                s.map_id,
+                s.vis,
+                s.same_map,
+                if s.nearest == i32::MAX { -1 } else { s.nearest }
+            ));
+        }
+        out
+    }
+}
+
+/// 按会话表顺序算出世界/AOI 观测快照（确定性：会话表是 `Vec`，实体遍历按槽位）。
+fn world_aoi_diag(world: &mir2_world::World, displays: &downlink::DisplayTable) -> WorldDiag {
+    let entities: Vec<&mir2_world::Entity> = world.entities.iter().collect();
+    let mut sessions = Vec::new();
+    for sess in world.sessions.iter() {
+        if sess.stage != mir2_world::WorldStage::InWorld {
+            continue;
+        }
+        let Some(actor_id) = sess.actor_id else {
+            continue;
+        };
+        let Some(e) = world.entities.get(actor_id) else {
+            continue;
+        };
+        let vis = e
+            .visible_actors
+            .iter()
+            .filter(|v| v.flag == mir2_world::VisibleFlag::Show)
+            .count();
+        let mut same_map = 0usize;
+        let mut nearest = i32::MAX;
+        for o in &entities {
+            if o.id == actor_id || o.map_id != e.map_id {
+                continue;
+            }
+            same_map += 1;
+            let d = (o.x - e.x).abs().max((o.y - e.y).abs());
+            if d < nearest {
+                nearest = d;
+            }
+        }
+        sessions.push(SessionAoiDiag {
+            chr_name: sess.chr_name.clone(),
+            actor_id,
+            map_id: e.map_id,
+            vis,
+            same_map,
+            nearest,
+        });
+    }
+    WorldDiag {
+        entities: entities.len(),
+        displays: displays.len(),
+        sessions,
+    }
+}
+
 /// **S3 后半段（第一格）**：把世界 tick 的 AOI 结果（观察者实体 `VisibleActors` 里
 /// `VisibleFlag::Show` 的对象）翻成 `SM_TURN` + `SM_FEATURECHANGED` 回帧，
 /// 按该观察者的 `[GateIdx, Socket]` 路由回**它自己那条**网关线。
@@ -4605,12 +4800,9 @@ fn sim_loop(
                             tail.as_deref(),
                             &chr_name,
                             socket,
-                            // `PlayObject.Dealing`（M3⑦-实现 3）：交易中禁拾取/禁丢弃。
-                            trade_sessions.get(&chr_name).is_some_and(|s| s.dealing),
-                            // `PlayObject.DealLastTick`（M3⑦-实现 4）：交易会话真值。
-                            trade_sessions
-                                .get(&chr_name)
-                                .map_or(0, |s| s.deal_last_tick as i32),
+                            // `PlayObject.Dealing`/`DealLastTick`（M3⑦-实现 3/4）：整表传入，
+                            // 取值在 `handle_ground_cmd` 内完成（被 `drop_blocked_by_fresh_deal_last_tick` 咬住）。
+                            &trade_sessions,
                             &world,
                             &mut ground_sessions,
                             &online,
@@ -5258,6 +5450,11 @@ fn sim_loop(
                                                             use_items: d.hum_items.as_deref(),
                                                             bag_items: d.bag_items.as_deref(),
                                                             gold: d.gold,
+                                                            // 帧 52 尾的冻结客户端 58B `TAbility` 布局；
+                                                            // 默认关（未设 = oracle 逐字节，见该字段文档与
+                                                            // `openmir2-client-e2e-enter-gaps` 的 owner 裁决）。
+                                                            client_ability_layout:
+                                                                mir2_client_ability_layout(),
                                                         })
                                                     });
                                                 let wx = enter::WorldFrameInputs {
@@ -5294,6 +5491,12 @@ fn sim_loop(
                                                 // GBK 原文（oracle `MessageSettings.CanotPickUpItem`）。
                                                 if let (Some(d), Some(a)) = (data, ability_inputs.as_ref()) {
                                                     let out = enter::recalc_for_session(a, d.job);
+                                                    // 进图可观测性（`openmir2-client-e2e-enter-gaps`）：把本会话**实际写入
+                                                    // 52/752 帧的输入值**与**实际尾字节**（两种布局之一，见
+                                                    // `MIR2_CLIENT_ABILITY_LAYOUT`）打进日志，便于
+                                                    // “客户端血条/负重为 0 是服务端没发/发错，还是客户端解析”一类的真机定位——
+                                                    // 只读日志，不改任何模拟/出帧语义。
+                                                    log_enter_ability(&head.chr_name, &out);
                                                     // M3②③ k=2 收口：同一份 `RecalcAbilitys` 输出**同时**写进世界实体
                                                     // （此前只喂 52/752 帧，实体属性仍是 `Entity::new` 的空值）。
                                                     if let Some(e) = world.entities.get_mut(id) {
@@ -5773,12 +5976,15 @@ fn sim_loop(
         // S3 后半段（第一格）：世界 tick 的 AOI 结果 → `SM_TURN` + `SM_FEATURECHANGED` 回帧。
         drain_aoi_downlink(&world, &displays, &online, &gates);
         if ticks.is_multiple_of(50) {
+            let diag = world_aoi_diag(&world, &displays);
             glog!(
                 "DBG",
-                "sim: tick #{} clock={}ms 处理 {} 项（本地第 {ticks} 次）",
+                "sim: tick #{} clock={}ms 处理 {} 项（本地第 {ticks} 次）{}{}",
                 rec.tick_seq,
                 rec.clock_ms,
-                rec.processed.len()
+                rec.processed.len(),
+                diag.summary(),
+                diag.session_summary()
             );
         }
         if let Some(d) = next.checked_duration_since(std::time::Instant::now()) {
@@ -6436,6 +6642,184 @@ mod tests {
         // 幽灵（`MakeGhost`）⇒ `!Ghost` 排除
         world.entities.get_mut(vic).unwrap().ghost = true;
         assert_eq!(front_target(&world, atk, 0, 18, 20), None, "!Ghost 过滤");
+    }
+
+    /// **M3⑦-3 · M-1 收口判据**：`ClientDealTry` 的目标判定必须区分「无前排对象」与「前排不是玩家」。
+    ///
+    /// oracle `PlayObject.Operate.cs:928-929` 先取 `GetPoseCreate()` 再直接读 `poseObject.Race`：
+    /// 无前排（`null`）⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData` 的
+    /// `catch`（`WorldServer.cs:734`）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
+    /// 前排非玩家 ⇒ `:955-958` 的 `else` ⇒ `SM_DEALTRY_FAIL`。
+    ///
+    /// 旧实现把两者都归 `DealTryTarget::NotPlayer` ⇒ 空打也回 FAIL（与 oracle 不等）。
+    ///
+    /// 红检：把 `deal_try_target_of` 的 `None` 支改回 `NotPlayer` ⇒ ① 断言必红。
+    #[test]
+    fn deal_try_target_distinguishes_absent_from_non_player() {
+        use mir2_world::{Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+
+        // `front = Some((race, peer_dir))`：在前方格 (11,10) 放一个该 race/朝向的实体。
+        // hero 在 (10,10) 且 dir=2（Right）⇒ 前方格 = (11,10)。
+        let probe = |front: Option<(u8, u8)>| -> (Option<i32>, game_svr::trade::DealTryTarget) {
+            let mut world = mir2_world::World::new(32, 32);
+            let hero = world.add_entity(Entity::new(1, "hero", 10, 10));
+            let mut displays = downlink::DisplayTable::new();
+            displays.set(
+                hero,
+                downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, b"hero".to_vec()),
+            );
+            if let Some((race, peer_dir)) = front {
+                let fid = world.add_entity({
+                    let mut e = Entity::new(2, "front", 11, 10);
+                    e.race = race;
+                    e
+                });
+                displays.set(
+                    fid,
+                    downlink::ActorDisplay::new(peer_dir, 0, 0, 0, 0, 255, b"front".to_vec()),
+                );
+            }
+            let pose = pose_create(&world, &displays, hero);
+            deal_try_target_of(&world, &displays, hero, pose)
+        };
+
+        // ① 前方格为空 ⇒ `GetPoseCreate() == null` ⇒ oracle NRE 吞错 ⇒ 不发任何帧。
+        assert_eq!(
+            probe(None),
+            (None, game_svr::trade::DealTryTarget::Absent),
+            "无前排对象 ⇒ Absent（oracle Operate.cs:929 NRE 被吞），不是 NotPlayer"
+        );
+
+        // ② 前方格是怪（非玩家）⇒ `:955-958` else ⇒ `SM_DEALTRY_FAIL`。
+        assert_eq!(
+            probe(Some((ACTOR_RACE_MONSTER, 6))),
+            (None, game_svr::trade::DealTryTarget::NotPlayer),
+            "前排非玩家 ⇒ NotPlayer（SM_DEALTRY_FAIL）"
+        );
+
+        // ③ 前方格是玩家且 `dir=6`（Left）⇒ 它的前方格 = (10,10) = hero ⇒ `faces_me`。
+        assert_eq!(
+            probe(Some((ACTOR_RACE_PLAY, 6))),
+            (
+                Some(2),
+                game_svr::trade::DealTryTarget::Other { faces_me: true }
+            ),
+            "前排玩家回指 hero ⇒ faces_me=true"
+        );
+
+        // ④ 前方格是玩家但 `dir=2`（Right）⇒ 它的前方格 = (12,10) ≠ hero ⇒ `!faces_me`。
+        assert_eq!(
+            probe(Some((ACTOR_RACE_PLAY, 2))),
+            (
+                Some(2),
+                game_svr::trade::DealTryTarget::Other { faces_me: false }
+            ),
+            "前排玩家未回指 ⇒ faces_me=false"
+        );
+    }
+
+    /// **M3⑦-3 · M-1 收口（进程级）**：走**生产函数** `handle_deal_cmd` 的 `CM_DEALTRY` 支
+    /// （oracle `PlayObject.Message.cs:946` ⇒ `ClientDealTry`）：无前排对象时**一个帧都不发**
+    /// （oracle `Operate.cs:929` 的 NRE 被 `WorldServer.cs:734` 吞掉），前排为怪时发
+    /// `SM_DEALTRY_FAIL`（非空转对照）。
+    ///
+    /// 红检：把 `deal_try_target_of` 的 `None` 支改回 `DealTryTarget::NotPlayer` ⇒ ① 的
+    /// `frames.is_empty()` 必红（实得 1 帧 `SM_DEALTRY_FAIL`）。
+    #[test]
+    fn deal_cm_try_no_front_object_emits_no_frame_on_production_path() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(32, 32);
+        world.clock_ms = 100_000;
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, b"hero".to_vec()),
+        );
+
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("hero".into(), test_session_ground(hero));
+        let mut trade_sessions: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = game_svr::trade::DealConfig::default();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        let drain_idents = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<u16> {
+            let mut out = Vec::new();
+            while let Ok(m) = rx.try_recv() {
+                if let SimToGate::SendFrame { body, .. } = m {
+                    out.push(u16::from_le_bytes([body[4], body[5]]));
+                }
+            }
+            out
+        };
+
+        // ① 前方格 (11,10) 空 ⇒ `GetPoseCreate() == null` ⇒ oracle NRE 吞错 ⇒ 不发任何帧。
+        handle_deal_cmd(
+            mir2_protocol::messages::CM_DEALTRY,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &world,
+            &displays,
+            &mut ground_sessions,
+            &mut trade_sessions,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        assert!(
+            drain_idents(&mut rx0).is_empty(),
+            "无前排对象 ⇒ oracle 静默（不得发 SM_DEALTRY_FAIL）"
+        );
+
+        // ② 非空转对照：前方格放一只怪（非玩家）⇒ `:955-958` else ⇒ `SM_DEALTRY_FAIL`。
+        world.add_entity({
+            let mut e = mir2_world::Entity::new(2, "mon", 11, 10);
+            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            e
+        });
+        handle_deal_cmd(
+            mir2_protocol::messages::CM_DEALTRY,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &world,
+            &displays,
+            &mut ground_sessions,
+            &mut trade_sessions,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        assert_eq!(
+            drain_idents(&mut rx0),
+            vec![mir2_protocol::messages::SM_DEALTRY_FAIL],
+            "前置守卫全过 + 前排非玩家 ⇒ 只发 SM_DEALTRY_FAIL"
+        );
     }
 
     /// F2（reviewer-2）的判据：`ProcessBufferSend` `:58-90` 的四条分支，**含"刚超时清零的那一包也要压住"**。
@@ -7096,6 +7480,45 @@ mod tests {
         );
         assert_eq!(frames[1].0, mon_id, "SM_FEATURECHANGED 的 Recog 同怪物");
         assert_eq!(frames[1].1, mir2_protocol::messages::SM_FEATURECHANGED);
+    }
+
+    /// `openmir2-client-e2e-enter-gaps`：周期观测的快照必须反映「世界有实体」「AOI 真可见」——
+    /// 这正是那张卡把 `sim: … 处理 0 项` 误读成「世界 tick 无实体」的反例。
+    ///
+    /// 红检：把 `same_map`/`nearest` 的 `o.id == actor_id` 自身排除删掉、或把 `map_id` 比较写反 ⇒ 必红。
+    #[test]
+    fn world_aoi_diag_reports_visible_and_nearest() {
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", mir2_world::Entity::new(0, "p", 10, 10), 0)
+            .expect("玩家进图");
+        // 玩家靠 `WantRefMsg=true` 才能把怪物纳入可见集（`BaseObject.ViewRange.cs:112`）。
+        world.entities.get_mut(p).unwrap().want_ref_msg = true;
+        let mut near = mir2_world::Entity::new(0, "near", 12, 10);
+        near.race = mir2_world::ACTOR_RACE_MONSTER;
+        let near_id = world.add_entity(near);
+        let mut far = mir2_world::Entity::new(0, "far", 30, 30);
+        far.race = mir2_world::ACTOR_RACE_MONSTER;
+        let far_id = world.add_entity(far);
+        world.tick();
+
+        let info = mir2_data::models::MonsterInfo::default();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(near_id, downlink::monster_display(0, &info));
+        displays.set(far_id, downlink::monster_display(0, &info));
+
+        let diag = world_aoi_diag(&world, &displays);
+        assert_eq!(diag.entities, 3, "玩家 + 两只怪");
+        assert_eq!(diag.displays, 2, "展示表只登记了怪物");
+        let s = diag
+            .sessions
+            .iter()
+            .find(|s| s.actor_id == p)
+            .expect("玩家会话应在快照里");
+        assert!(s.vis >= 1, "近怪（距离 2 ≤ view_range）必须在可见集：{s:?}");
+        assert_eq!(s.same_map, 2, "同图除自己外 2 只");
+        assert_eq!(s.nearest, 2, "最近 Chebyshev 距离 = 2（近怪）");
     }
 
     /// 测试用的 `WAbil`（金币分支不使用 `wabil`；字段值不影响本例断言）。
@@ -8022,8 +8445,7 @@ mod tests {
             None,
             "hero",
             901,
-            false,
-            0,
+            &std::collections::HashMap::new(),
             &world,
             &mut sessions,
             &online,
@@ -8051,8 +8473,7 @@ mod tests {
             None,
             "hero",
             901,
-            false,
-            0,
+            &std::collections::HashMap::new(),
             &world,
             &mut sessions,
             &online,
@@ -10942,8 +11363,7 @@ mod tests {
             None,
             "hero",
             901,
-            false,
-            0,
+            &std::collections::HashMap::new(),
             &world,
             &mut sessions,
             &online,
@@ -10971,8 +11391,7 @@ mod tests {
             None,
             "hero",
             901,
-            false,
-            0,
+            &std::collections::HashMap::new(),
             &world,
             &mut sessions,
             &online,
@@ -11101,6 +11520,160 @@ mod tests {
         assert!(
             sessions.get("hero").unwrap().use_items[0].is_some(),
             "交易中不得真正卸下装备"
+        );
+    }
+
+    /// **M3⑦-实现 4（M-1 收口）**：`deal_last_tick` 的**生产取数**被用例咬住——
+    /// 交易会话 `DealLastTick` 未过 3000ms 门 ⇒ `CM_DROPITEM` 不得进 `ClientDropItem` 体。
+    ///
+    /// oracle：`PlayObject.Operate.cs:269`（`(HUtil32.GetTickCount() - DealLastTick) > 3000`
+    /// 才进 `ItemList` 丢弃查表）；`DealLastTick` 字段见 `PlayObject.cs:122`。本仓
+    /// `drop_item_down` 恒 false（`MapItem.ItemId == 0`，T-19），
+    /// 故「是否进体」在成功/失败帧上不可分；可分的观测点是丢弃体里 `StdMode == 40` 的
+    /// `Dura = (ushort)(Dura - 2000)` 原地扣减（`BaseObject.cs:541-548`，u16 回绕口径）。
+    ///
+    /// 改坏必红：把 `handle_ground_cmd` 里 `deal_last_tick` 的取数改回恒 `0` ⇒ 第一次调用即
+    /// 过门、`Dura` 从 5000 变 3000 ⇒ `5000` 断言必红。
+    #[test]
+    fn drop_blocked_by_fresh_deal_last_tick() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(32, 32);
+        world.clock_ms = 10_000;
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: vec![game_svr::bag::BagItem {
+                        make_index: 60001,
+                        index: 1,
+                        // `StdMode 40` 分支：`Dura 5000 - 2000 = 3000`。
+                        dura: 5000,
+                        dura_max: 5000,
+                        desc: [0u8; 14],
+                    }],
+                    gold: 0,
+                    wabil: test_ability(),
+                },
+                storage: storage::StorageState::new(),
+                actor_id: hero,
+                game_gold: 0,
+                sys_msg: None,
+                use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+                recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
+                show_hp: false,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
+                save_rcd_tick: 0,
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            drop_item_rage: 3,
+        };
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+        };
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 40,
+                ..Default::default()
+            },
+        );
+
+        // 交易会话：`DealLastTick = now_tick`（`handle_deal_cmd` 写的是 `world.clock_ms`）。
+        let mut trade_sessions: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        trade_sessions.insert(
+            "hero".into(),
+            game_svr::trade::DealState {
+                deal_last_tick: world.clock_ms,
+                ..Default::default()
+            },
+        );
+
+        // ① 新鲜 `DealLastTick` ⇒ `now - DealLastTick > 3000` 不成立 ⇒ 不进丢弃体 ⇒ Dura 不变。
+        handle_ground_cmd(
+            game_svr::ground::CM_DROPITEM,
+            60001,
+            0,
+            Some("木剑"),
+            "hero",
+            901,
+            &trade_sessions,
+            &world,
+            &mut sessions,
+            &online,
+            &gates,
+            &cfg,
+            &colors,
+            &catalog,
+            None,
+        );
+        assert_eq!(
+            sessions.get("hero").unwrap().state.item_list[0].dura,
+            5000,
+            "3000ms 门内（交易中）⇒ ClientDropItem 体不得执行（oracle Operate.cs:269）"
+        );
+
+        // ② 过门（`DealLastTick` 陈旧）⇒ 进体 ⇒ StdMode40 原地扣 2000（u16 口径 5000→3000）。
+        trade_sessions.get_mut("hero").unwrap().deal_last_tick = 1_000;
+        handle_ground_cmd(
+            game_svr::ground::CM_DROPITEM,
+            60001,
+            0,
+            Some("木剑"),
+            "hero",
+            901,
+            &trade_sessions,
+            &world,
+            &mut sessions,
+            &online,
+            &gates,
+            &cfg,
+            &colors,
+            &catalog,
+            None,
+        );
+        assert_eq!(
+            sessions.get("hero").unwrap().state.item_list[0].dura,
+            3000,
+            "过 3000ms 门 ⇒ 进体 ⇒ Dura 5000-2000（BaseObject.cs:541-548）"
         );
     }
 }

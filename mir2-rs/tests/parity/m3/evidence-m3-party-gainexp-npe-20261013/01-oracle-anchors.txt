@@ -1,0 +1,58 @@
+# M3⑦ Minor M-2 收口 —— oracle 锚点（2026-10-13，行号为在本仓 `src/` 实测）
+
+> 卡：`openmir2-m3-party-gainexp-npe`（来源 = ⑦-4 合并检查点携带的非阻塞 Minor M-2）。
+> oracle：C# `src/M2Server/Player/PlayObject.Base.cs` 的 `GainExp(int dwExp)`。
+
+## A. 缺团长态：`ActorMgr.Get(GroupOwner)` 取不到 ⇒ NPE 被 `catch` 吞掉 ⇒ 零经验/零授奖
+
+| 项 | oracle |
+| --- | --- |
+| `GainExp(int dwExp)` 整体（`try` 包住全部授予逻辑） | `src/M2Server/Player/PlayObject.Base.cs:764-821` |
+| `if (GroupOwner != 0)` | `:771` |
+| `(IPlayerActor)SystemShare.ActorMgr.Get(GroupOwner)`（取不到 = `null`） | `:775` |
+| `groupOwnerPlay.GroupMembers.Count`（`null` 解引用 ⇒ NPE） | `:776`（第二处同形 `:792`） |
+| `catch { LogService.Error(sExceptionMsg); }`（**吞错**：不重抛、不退回单人满经验） | `:818-821` |
+| 调用点 `KillTargetTrigger` → `GainExp(monsterExp)`（`this` = 获得者本人） | `src/M2Server/Player/PlayObject.cs:1632-1653`（`:1652`） |
+
+```csharp
+// PlayObject.Base.cs:764-776, 818-821（节选）
+public void GainExp(int dwExp)
+{
+    IPlayerActor playObject;
+    const string sExceptionMsg = "[Exception] PlayObject::GainExp";
+    double[] bonus = { 1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2, 2.1, 2.2 };
+    try
+    {
+        if (GroupOwner != 0)
+        {
+            int sumlv = 0;
+            int n = 0;
+            IPlayerActor groupOwnerPlay = (IPlayerActor)SystemShare.ActorMgr.Get(GroupOwner); // :775
+            for (int i = 0; i < groupOwnerPlay.GroupMembers.Count; i++)                       // :776 NPE
+            ...
+        }
+        else
+        {
+            WinExp(dwExp);
+        }
+    }
+    catch
+    {
+        LogService.Error(sExceptionMsg);   // :820 吞错 ⇒ 本次零授予
+    }
+}
+```
+
+**语义**：`GroupOwner != 0` 且团长对象不在注册表 ⇒ `:776` 空引用抛异常 ⇒ `:818-821` 捕获记录后
+**本次不调用任何 `WinExp`**（既不组队分配，也不退回 `else` 的单人 `WinExp(dwExp)`）。
+
+## B. Rust 侧对应与可达性
+
+| 项 | Rust |
+| --- | --- |
+| 组队分配 / `else` 单人退回 | `mir2-rs/crates/world/src/world.rs:851-960`（`World::gain_exp`） |
+| 缺团长态 fail-closed（本卡 fix） | `mir2-rs/crates/world/src/world.rs:880-890` |
+| 可达性：移除实体不清同组成员的 `group_owner` | `mir2-rs/crates/world/src/world.rs:608-631`（`World::leave_world`，`:629` `entities.remove`） |
+
+⇒ 团长离场（`leave_world`）后，成员实体仍带悬空 `group_owner`；下次击杀走到 `gain_exp` 时
+`self.entities.get(group_owner)` 为 `None`，即 oracle 的缺团长态。

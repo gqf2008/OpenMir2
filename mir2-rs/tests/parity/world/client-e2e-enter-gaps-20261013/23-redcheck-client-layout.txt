@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+
+running 1 test
+test enter::tests::ability_frames_follow_recalc_abilitys ... FAILED
+
+failures:
+
+---- enter::tests::ability_frames_follow_recalc_abilitys stdout ----
+
+thread 'enter::tests::ability_frames_follow_recalc_abilitys' (29424) panicked at bins\game-svr\src\enter.rs:1522:9:
+assertion `left == right` failed: 客户端从 offset 22 读到的 HP 必须等于重算后的 HP
+  left: 19
+ right: 15
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    enter::tests::ability_frames_follow_recalc_abilitys
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 184 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
