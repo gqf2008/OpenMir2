@@ -918,6 +918,42 @@ mod tests {
         assert_eq!(w.rng.random(), exp.random(), "两组取数后两流仍同源");
     }
 
+    /// owner `eb3bf42f` ① 的规模版：**256 条商人**在同一 pass 里各跑一次（不重复 Run），
+    /// 且同一 200ms 窗口的第二趟全部 no-op。
+    #[test]
+    fn merchant_pass_runs_each_of_many_merchants_once() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(21);
+        w.clock_ms = 0;
+        let mut ids = Vec::new();
+        for i in 0..256 {
+            let mut spawn = spawn_at(1 + (i % 30), 1 + (i / 30));
+            spawn.name = format!("m{i}");
+            ids.push(w.spawn_merchant(spawn).expect("挂图成功"));
+        }
+        let make_due = |w: &mut World| {
+            for id in &ids {
+                if let Some(st) = w.entities.get_mut(*id).and_then(|e| e.merchant.as_mut()) {
+                    st.run_tick = -1000;
+                }
+            }
+        };
+        w.clock_ms = 10_000;
+        make_due(&mut w);
+        let out = w.merchant_tick();
+        assert_eq!(out.ran.len(), ids.len(), "256 条全部应 Run");
+        let mut unique = out.ran.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "同一 pass 内不得重复 Run");
+        // 同一 200ms 窗口第二趟：即便把 RunTick 拨旧，节奏门也得挡住全部 256 条。
+        make_due(&mut w);
+        assert!(
+            w.merchant_tick().ran.is_empty(),
+            "同一 200ms 窗口内 256 条都不得重复 Run"
+        );
+    }
+
     /// reviewer-6 **M-2**：`ActorRace.Merchant == Animal == 50` ⇒ `monster_ai_tick` 的
     /// `merchant.is_none()` 过滤（`crates/world/src/monai.rs:549`）是行为关键：商人不得被
     /// `monster_run` 当怪跑（置 `target_x = -1` / 消耗 AI 取数）。删掉该守卫 ⇒ 必红。
