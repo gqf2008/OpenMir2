@@ -1,0 +1,55 @@
+M3⑦-实现 4 · M-1 收口 —— 改动清单
+
+分支：worktree-m3-party-deal-last-tick-bite（worktree m3pt，principal openmir2-worker-21）
+base：refs/heads/master @ 5d499cd9c8bacf9b5119093780b0be4b29166cb1（= origin/master = walgit refs/heads/master）
+head：见 walgit patch 条目（本片代码提交 9dda06f7f + 本证据目录提交）
+净 diff：mir2-rs/bins/game-svr/src/main.rs  +171 / -16（+ 本证据目录）
+
+--------------------------------------------------------------------------------
+动机（父卡 ⑦-4 reviewer-6 的 Minor M-1，原文）
+--------------------------------------------------------------------------------
+「新增的 deal_last_tick 形参在生产路径接真（trade_sessions），但没有任何用例/红检咬住这条
+ 接线：main.rs 内 4 处 handle_ground_cmd(...) 测试调用（8018/8047/10938/10967）全部传 0，
+ 把 4613 换回 0 不会变红。… 建议随卡或下一片补一条『trade_sessions.deal_last_tick>0 ⇒
+ CM_DROP 被 3000ms 门拒绝』的进程级用例，与 RC1/RC2 同形。」
+
+本片按建议收口。
+
+--------------------------------------------------------------------------------
+改动 1：handle_ground_cmd 的 Dealing/DealLastTick 取数内聚
+--------------------------------------------------------------------------------
+before（⑦-3/⑦-4）：
+  fn handle_ground_cmd(..., socket: i32, dealing: bool, deal_last_tick: i32, ...)
+  sim_loop 调用点：trade_sessions.get(&chr_name).is_some_and(|s| s.dealing),
+                   trade_sessions.get(&chr_name).map_or(0, |s| s.deal_last_tick as i32),
+after（本片）：
+  fn handle_ground_cmd(..., socket: i32,
+      trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>, ...)
+  函数体内（`let now_tick = ...` 之后）：
+      let dealing = trade_sessions.get(chr_name).is_some_and(|s| s.dealing);
+      let deal_last_tick = trade_sessions.get(chr_name).map_or(0, |s| s.deal_last_tick as i32);
+  sim_loop 调用点：&trade_sessions,
+
+- 生产数值语义**逐字节不变**（同 map、同 key、同 i64→i32 cast）。
+- 取数从「每个调用点各自拼装」变为「函数内单一取数点」：调用点不再有可写死的 `0`，
+  该取数点被下面判据直接覆盖。
+- `Dealing`（⑦-3 的拾取/丢弃守卫）顺带同口径内聚；既有 4 处测试调用改传空表（等价 `false`/`0`）。
+
+--------------------------------------------------------------------------------
+改动 2：新增进程级判据 drop_blocked_by_fresh_deal_last_tick
+--------------------------------------------------------------------------------
+文件：mir2-rs/bins/game-svr/src/main.rs（tests 模块，新增 1 个 #[test]）
+步骤（同一 `handle_ground_cmd` 生产函数，走 CM_DROPITEM / drop 派发分支）：
+  ① trade_sessions["hero"].deal_last_tick = world.clock_ms (=10_000)，即新鲜交易态
+     ⇒ `now - DealLastTick = 0 > 3000` 不成立 ⇒ 不进丢弃体 ⇒ `ItemList[0].Dura == 5000`
+  ② trade_sessions["hero"].deal_last_tick = 1_000（陈旧）
+     ⇒ `10_000 - 1_000 = 9_000 > 3000` 成立 ⇒ 进体 ⇒ StdMode40 扣 2000 ⇒ `Dura == 3000`
+可观测点选 `Dura` 而非帧：本仓 `drop_item_down` 恒 false（T-19），成功/失败帧两侧同为 FAIL。
+
+--------------------------------------------------------------------------------
+不改的东西
+--------------------------------------------------------------------------------
+- 未改 oracle（src/）、sql/、MirClient（边界见 20-boundary.txt）。
+- 未改 ground.rs / trade.rs 的行为；未新增常量；未起栈、未占端口。
+- 非阻塞遗留（原样保留，不属本片写集）：⑦-4 M-2（gain_exp 缺团长态）由卡
+  openmir2-m3-party-gainexp-npe 处理（head 2475d38c3，待审）。

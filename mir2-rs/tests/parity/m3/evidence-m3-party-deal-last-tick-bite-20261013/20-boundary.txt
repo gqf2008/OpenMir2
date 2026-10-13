@@ -1,0 +1,25 @@
+$ git rev-parse origin/master   # = walgit refs/heads/master（patch base）
+5d499cd9c8bacf9b5119093780b0be4b29166cb1
+
+$ git rev-parse HEAD
+9dda06f7fcc37556fa8ae4b1e446071cdb0b2668
+
+$ git diff --name-only origin/master HEAD -- src sql MirClient
+(空 = oracle/客户端/表结构零改动)
+
+$ git status --porcelain -- src sql MirClient
+(空 = 无新增/删除)
+
+$ git diff --stat origin/master HEAD
+ mir2-rs/bins/game-svr/src/main.rs | 187 ++++++++++++++++++++++++++++++++++----
+ 1 file changed, 171 insertions(+), 16 deletions(-)
+
+$ git diff --name-only origin/master HEAD
+mir2-rs/bins/game-svr/src/main.rs
+
+$ git merge-tree --write-tree origin/master HEAD ; echo rc=$?
+rc=0
+
+$ # 说明：以上为**代码侧 head** 9dda06f7f（证据目录提交前）。最终交付 head 在本片之上
+$ # 仅多出本证据目录 mir2-rs/tests/parity/m3/evidence-m3-party-deal-last-tick-bite-20261013/**；
+$ # src / sql / MirClient 仍为空，代码侧零额外差异。
