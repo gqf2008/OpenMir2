@@ -1,0 +1,67 @@
+# M3⑧-10 夹具「解 10 处冲突重交」片（merge3）—— 命令四件套（命令 + 原始件 + 路径 + hash）
+# 卡：openmir2-m3-guild-castle-fixture-botsrv（T-46）
+# 车道：openmir2-worker-5 / worktree m3cs / branch worktree-m3-guild-castle-fixture-botsrv
+# base = origin/master 8aebbcb850d5b084af56e6cb8dd5e03ecc3c1625（交付时 master）
+# head = a7ebe57caa11f58c38537e19fd7cd8ac44b85393
+# 触发：合并检查点 comment（2026-10-13，skip=merge-conflict）——
+#   git merge-tree --write-tree master(ab60452d0) x 6203b6888 rc=1，10 处 CONFLICT：
+#   mir2-rs/tests/parity/m3/{gate_guards.ps1,run_pair.ps1}、mir2-rs/tests/parity/whitelist.md、
+#   src/BotSrv/{AppService,MShare,Program,RobotOptions,Player/RobotPlayer,Player/RobotPlayer.Operate}.cs、
+#   tools/botload/run_bots.ps1。
+#   required：作者 rebase/merge 到 master 解冲突后重交（head 变化须重新非作者 review）。
+# 硬约束：零起栈、零占端口。
+
+## 0) 解冲突（并集：master 的 ⑨ HeroPet 夹具 + 本片 ⑧ GuildCastle 夹具）
+$ git fetch origin
+$ git checkout worktree-m3-guild-castle-fixture-botsrv       # head 6203b6888
+$ git merge --no-ff origin/master                            # 23436d367：解 10 处冲突 + ⑧/⑨ markers 保前缀
+$ git merge --no-ff origin/master                            # 8b574ac2b：⑧-5 guild-war 落地后跟进（零冲突）
+$ git merge --no-ff origin/master                            # 88ba2ea92：⑥ quest-persist delta-bite（零冲突）
+# 解冲突口径：两侧都是「同一插入位的平行新增」⇒ 全并集，零内容删除：
+#   - gate_guards.ps1：GuildCastle scope 函数族 + HeroPet scope 函数族 两族并存；
+#   - run_pair.ps1：参数/planArgs/session 字段/condition/-or 链/ValidateSet/assemble 块全并集；
+#   - whitelist.md：T-47（⑤）在前、T-46（⑧）与 T-45（⑨）两段并存；
+#   - src/BotSrv/**：MShare/AppService/Program/RobotOptions/RobotPlayer(.Operate) 两族区块并存。
+# 原始件：01-merge-and-boundary.txt
+
+## 0b) ⑧/⑨ markers 写侧对齐「保前缀」口径（reviewer-6 O-2 建议；卡 openmir2-m3-fixture-marker-prefix-bug 同族）
+# run_pair.ps1 的 ⑧ GuildCastle / ⑨ HeroPet 两段原写去前缀裸 JSON，而 guild_castle_diff.py / hero_pet_diff.py
+# 的 _marker_events 按 `line.find('<M3*SEQ> ')` 扫描 ⇒ assemble 恒 PREREQ_RED。
+# 改为保留 bot.log 带前缀原始行 + 接生产 fail-closed 牙 Assert-M3MarkerPrefix（同 shop/quest/pairtrade/selloff）。
+$ python -I mir2-rs/tests/parity/m3/marker_prefix_gate.py check        # -> 04（GREEN；check 前 master 对 ⑨ 恒 RED）
+$ python -I mir2-rs/tests/parity/m3/marker_prefix_gate.py selftest     # -> 05（SELFTEST ok=17/17）
+$ python -I mir2-rs/tests/parity/m3/marker_prefix_gate.py mutation     # -> 06（MUTATION GREEN）
+
+## 1) 比较器 selftest（各 36/36）
+$ python -I mir2-rs/tests/parity/m3/guild_castle_diff.py selftest      # -> 02（SELFTEST ok=36/36）
+$ python -I mir2-rs/tests/parity/m3/hero_pet_diff.py selftest          # -> 03（SELFTEST ok=36/36）
+
+## 2) 入口无栈自检（各 19/19）
+$ powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_guild_castle_pair.ps1 -SelfCheckNoStack -SelfCheckOut <ev>/07-run-guildcastle-pair-selfcheck.txt
+$ powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1 -SelfCheckNoStack
+# -> 07 / 08（SELFTEST ok=19/19 failures=）
+
+## 3) BotSrv 生产函数 selftest（两族都跑）
+$ dotnet build src/BotSrv/BotSrv.csproj -c Release --nologo -v q   # -> 10（0 错误）
+$ ./src/BotSrv/bin/Release/BotSrv.exe --selftest-guildcastle       # -> 11（GUILDCSEQ SELFTEST GREEN）
+$ ./src/BotSrv/bin/Release/BotSrv.exe --selftest-heropet           # -> 12（HEROPETSEQ SELFTEST GREEN）
+
+## 4) run_bots 序列收尾计数离线自检
+$ powershell -NoProfile -ExecutionPolicy Bypass -File tools/botload/run_bots.ps1 -SelfCheckNoStack   # -> 09（rc=0 GREEN）
+
+## 5) 四门禁（在 mir2-rs/ 下 · 隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target · --offline）
+$ cargo fmt --all -- --check                                      # 13-gate-fmt.txt (rc=0)
+$ cargo clippy --workspace --all-targets --offline -- -D warnings # 14-gate-clippy.txt (rc=0)
+$ cargo test --workspace --offline --no-fail-fast                 # 15-gate-test.txt (98 suites 1128 passed 0 failed 21 ignored, rc=0)
+$ cargo run -p msgcodegen --offline -- --check                    # 16-gate-msgcodegen.txt (604, rc=0)
+
+## 6) 边界（对交付时 master 4b4011923）
+$ git diff --name-only origin/master HEAD -- src/sql src/MirClient                          # 空
+$ git diff --name-only origin/master HEAD -- mir2-rs/crates mir2-rs/bins mir2-rs/protocol  # 空
+$ git diff --name-only origin/master HEAD                                                    # 仅本卡文件（⑧-10 夹具族）
+# 原始件：17-boundary.txt
+
+## 7) 证据 hash（仓库 LF/git-blob 口径）
+$ python -I tools/evidence-hash/verify_sha256sums.py write <ev>
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra <ev>   # GREEN
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck <ev>        # GREEN

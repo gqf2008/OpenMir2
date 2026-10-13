@@ -1,0 +1,30 @@
+# M3⑩-实现 2 边界与变更面（rebase 片 r2 2026-10-13）
+# head=6c7560844（本片功能提交；交付 head = 本证据提交）
+# base（本片 rebase 目标）= `ddaca961c`；交付时 origin/master = `78cf74d46`（父链含 ddaca961c）。
+# 顺序依赖 base = ⑩-1 前缀 head `515540139`（= ddaca961c + ⑩-1 世界侧寄售 + ⑩-1 r2 证据）。
+
+## [1] 对 master 冻结面（必须空，实测空）
+$ git diff --name-only origin/master HEAD -- src sql MirClient
+  ⇒ 空
+$ git diff --name-only origin/master HEAD -- mir2-rs/crates/protocol mir2-rs/crates/storage
+  ⇒ 空
+
+## [2] 本片自身 delta（⑩-1 前缀 515540139 .. HEAD，仅代码面）
+ mir2-rs/Cargo.lock                            |   1 +
+ mir2-rs/bins/game-svr/Cargo.toml              |   6 +-
+ mir2-rs/bins/game-svr/src/goldsales.rs        | 280 ++++++++++++++++++++++++++
+ mir2-rs/bins/game-svr/src/main.rs             |  43 +++-
+ mir2-rs/bins/game-svr/tests/goldsales_load.rs |  91 +++++++++
+ 5 files changed, 419 insertions(+), 2 deletions(-)
+
+## [3] 写集边界
+  代码：mir2-rs/bins/game-svr/src/{goldsales,main}.rs、Cargo.toml、tests/goldsales_load.rs、Cargo.lock
+  证据：mir2-rs/tests/parity/m3/evidence-m3-selloff-goldsales-load-wire-20261013/**（含 ⑩-1 证据目录随父链带入）
+  `src/ sql/ MirClient / crates/protocol / crates/storage` = 空
+
+## [4] 交付顺序说明
+  - 本片 head 的父链含 ⑩-1 的同栈重放 commit（前缀 tip `515540139`），故 `origin/master..HEAD` 会同时列出
+    ⑩-1 的 bins/game-svr + tests/parity/world/** 变更；**合并顺序应先 ⑩-1 后 ⑩-2**。
+  - ⑩-1 与 ⑩-2 同栈（同一 ⑩-1 前缀 oid），合并 ⑩-1（`515540139`）后 ⑩-2 是其后代 ⇒ 真机/合并三向干净。
+  - ⑩-1 的 r2 rebase 与冲突解析见 world/selloff-consignment-20261013/README.md §2c-r2。
+  - `git merge-tree --write-tree origin/master(78cf74d46) HEAD` = rc=0。

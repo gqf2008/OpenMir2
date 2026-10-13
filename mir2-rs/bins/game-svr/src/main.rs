@@ -26,6 +26,7 @@ mod cert;
 mod config;
 mod dbclient;
 mod enter;
+mod goldsales;
 mod homemap;
 mod hutil;
 mod ids;
@@ -513,6 +514,36 @@ async fn main() -> Result<()> {
             mir2_data::pet_slave::PetSlaveConfig::default()
         }
     };
+    // **M3⑩-实现 2**：`goldsales` **只读**加载接线（oracle `src/GameSvr/GameApp.cs:30` 建空列表，
+    // `:181-182` 日志 + `GameShare.DataSource.LoadSellOffItemList()`）。承载 = sim 线程里
+    // `M2Share.SellOffItemList` 对应的 [`game_svr::selloff::SellOffBook`]（⑩-1 落）；本块把
+    // 加载结果按 `MySqlDB.cs:279` 的 `Add` 顺序尾追成种子。
+    // 缺陷照搬：加载器读错列名（`DealChrName`/`BuyChrName` vs DDL `DealCharName`/`BuyCharName`，
+    // `sql/mir2_data.sql:26-27`）⇒ **表里有数据也恒 0 行**（`D-5`/`B-5`）；
+    // **不实现 save**（`SaveSellOffItemList` 三个调用点在 oracle 全被注释）。
+    // 失败按 oracle `!Open()` 分支（`MySqlDB.cs:254-258`）降级：记 ERR、列表保持空（登记，不 panic）。
+    let sell_off_seed = {
+        glog!("INF", "加载物品寄售系统...");
+        let conn = cfg
+            .db_conn_string
+            .as_deref()
+            .unwrap_or(items::DEFAULT_CONN_STRING);
+        match goldsales::load_goldsales(conn).await {
+            Ok(rows) => {
+                glog!("INF", "读取物品寄售列表成功...[{}]", rows.len());
+                let mut book = game_svr::selloff::SellOffBook::default();
+                goldsales::seed_book(&mut book, &rows);
+                book.entries
+            }
+            Err(e) => {
+                glog!(
+                    "ERR",
+                    "读取物品寄售列表失败（{e}）；列表保持空（oracle !Open() 分支）"
+                );
+                Vec::new()
+            }
+        }
+    };
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -587,6 +618,9 @@ async fn main() -> Result<()> {
                         blue_f_color: cfg.blue_msg_f_color,
                         blue_b_color: cfg.blue_msg_b_color,
                     },
+                    // `M3⑩-实现 2`：`goldsales` 只读加载的启动种子（oracle `M2Share.SellOffItemList`
+                    // 的内容；因读错列名 ⇒ 生产下恒空，见本文件加载块注释）。
+                    sell_off_seed,
                 },
                 notice,
                 colors,
@@ -5024,6 +5058,11 @@ struct EnterConfig {
     trade: game_svr::trade::DealConfig,
     /// **M3⑩-实现 1**：元宝寄售状态机的配置（`DecUserGameGold` + `MaxBagItem` + 蓝色提示色）。
     sell_off: game_svr::selloff::SellOffConfig,
+    /// **M3⑩-实现 2**：`goldsales` 只读加载的启动种子（`MySqlDB.LoadSellOffItemList`，
+    /// `src/GameSrv/GameApp.cs:181-182` 调用）。因读错列名 ⇒ 恒 0 行（`D-5`/`B-5`），
+    /// 但接线与顺序（`M2Share.SellOffItemList.Add`）照 oracle；sim 线程用它初始化
+    /// [`game_svr::selloff::SellOffBook`]。
+    sell_off_seed: Vec<game_svr::selloff::DealOffInfo>,
 }
 
 /// MonGen 刷怪启动输入（[`game_svr::mongen`]）。
@@ -5325,7 +5364,9 @@ fn sim_loop(
         std::collections::HashMap::new();
     // `M3⑩-实现 1`：元宝寄售——`M2Share.SellOffItemList`（进程级全局列表，所有会话共享）
     // + 每个在线角色的 `SaleDeal`/`SellOffConfirm`/`SellOffItemList`（后二者又随断线一并移除）。
-    let mut sell_off_book = game_svr::selloff::SellOffBook::default();
+    let mut sell_off_book = game_svr::selloff::SellOffBook {
+        entries: std::mem::take(&mut enter_cfg.sell_off_seed),
+    };
     let mut sell_off_sessions: std::collections::HashMap<String, game_svr::selloff::SellOffState> =
         std::collections::HashMap::new();
     // 存档用：登入时留下的原始记录 + 进图逻辑名（断线/`MakeGhost` 时合成存档请求）。
