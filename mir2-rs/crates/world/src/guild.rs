@@ -286,12 +286,17 @@ impl GuildState {
     }
 
     /// 把 `.ini` 五键写回（`GuildConf.LoadConfig(this)`，`GuildInfo.cs:203-205`）。
+    ///
+    /// `GuildConf.LoadConfig`（`GuildConf.cs:16-23`）经 5 个 public property setter 赋值，
+    /// 而 setter 内部置 `BoChanged = true`（`GuildInfo.cs:21-48` + `:1090-1117`）
+    /// ⇒ **加载后 `bo_changed == true`**（`dw_save_tick` 保持构造值 0）。
     pub fn set_conf(&mut self, conf: &GuildConfValues) {
         self.build_point = conf.build_point;
         self.aurae = conf.aurae;
         self.stability = conf.stability;
         self.flourishing = conf.flourishing;
         self.chief_item_count = conf.chief_item_count;
+        self.bo_changed = true;
     }
 
     /// `.ini` 五键的当前值。
@@ -359,7 +364,8 @@ impl GuildState {
 
     /// `GuildInfo.cs:463-484` 的 `SetGuildInfo`：`ranks` 空 ⇒ 建 rank 1 掌门 + 唯一成员。
     ///
-    /// oracle 末尾 `SaveGuildInfoFile()`；本片以 `bo_changed = true` 标记待落盘（IO 在 第②片）。
+    /// oracle 末尾只调 `SaveGuildInfoFile()`（`GuildInfo.cs:366-370`），**不**碰
+    /// `BoChanged`/`DwSaveTick` ⇒ 本片**不**置 `bo_changed`（IO 归 第②片）。
     pub fn set_guild_info(&mut self, chief: &str, cfg: &GuildConfig) {
         if self.ranks.is_empty() {
             self.ranks.push(GuildRank {
@@ -367,7 +373,6 @@ impl GuildState {
                 rank_name: cfg.guild_chief.clone(),
                 members: vec![chief.to_string()],
             });
-            self.bo_changed = true;
         }
     }
 
@@ -457,7 +462,8 @@ impl GuildState {
 
     /// `GuildInfo.cs:591-621` 的 `BackupGuildFile`：清空 members/ranks/notices/wars/allies 后落盘。
     ///
-    /// oracle 的 `.bak` 文件名（`GuildName + '.' + GetTickCount() + ".bak"`）由 第②片 处理。
+    /// oracle 末尾只调 `SaveGuildInfoFile()`、**不**调 `UpdateGuildFile`（`GuildInfo.cs:591-621`）
+    /// ⇒ 本片**不**置 `bo_changed`/`dw_save_tick`（`.bak` 文件名由 第②片 处理）。
     pub fn backup_guild_file(&mut self) {
         for rank in &mut self.ranks {
             rank.members.clear();
@@ -466,10 +472,11 @@ impl GuildState {
         self.notices.clear();
         self.wars.clear();
         self.allies.clear();
-        self.update_guild_file(0);
     }
 
-    /// `GuildInfo.cs:129-135` 的 `DelAllyGuild`（`GuildAllList.RemoveAt` + `SaveGuildInfoFile`）。
+    /// `GuildInfo.cs:129-142` 的 `DelAllyGuild`（`GuildAllList.RemoveAt` + `SaveGuildInfoFile`）。
+    ///
+    /// `SaveGuildInfoFile` 不碰 `BoChanged`/`DwSaveTick` ⇒ 本片**不**置 `bo_changed`。
     pub fn del_ally_guild(&mut self, name: &str) -> bool {
         let mut result = false;
         for i in 0..self.allies.len() {
@@ -479,7 +486,6 @@ impl GuildState {
                 break;
             }
         }
-        self.bo_changed = true;
         result
     }
 
@@ -501,10 +507,9 @@ impl GuildState {
         !self.is_war_guild(name)
     }
 
-    /// `GuildInfo.cs:1007-1019` 的 `AllyGuild`：oracle 的 `GuildAllList.Add` 被注释 ⇒ 只落盘、不登记。
-    pub fn ally_guild(&mut self, _name: &str) {
-        self.bo_changed = true;
-    }
+    /// `GuildInfo.cs:1007-1019` 的 `AllyGuild`：oracle 的 `GuildAllList.Add` 被注释（联盟恒空），
+    /// 末尾只 `SaveGuildInfoFile()`、不碰 `BoChanged`/`DwSaveTick` ⇒ 本片为可观测 no-op（IO 归 第②片）。
+    pub fn ally_guild(&mut self, _name: &str) {}
 
     /// `GuildInfo.cs:1020-1056` 的 `AddWarGuild`（**N2 反逻辑照搬**，见模块头 1）。
     pub fn add_war_guild(
@@ -558,7 +563,9 @@ impl GuildState {
             out.push_str(&rank.rank_name);
             out.push('/');
             for m in &rank.members {
-                if out.chars().count() > 5000 {
+                // oracle `sSendMsg.Length > 5000` 是 **UTF-16 码元**计数（`PlayObject.Operate.cs:1283-1306`）；
+                // 用 `encode_utf16().count()` 而非 `chars().count()`，代理对字符下才与 oracle 一致。
+                if out.encode_utf16().count() > 5000 {
                     break;
                 }
                 out.push_str(m);
@@ -793,11 +800,13 @@ impl GuildManager {
     }
 
     /// `GuildManager.cs:19-32` 的 `AddGuild`：`CheckGuildName && FindGuild == null` ⇒ 建会 + `SetGuildInfo`。
-    pub fn add_guild(&mut self, name: &str, chief: &str, cfg: &GuildConfig, now_tick: i32) -> bool {
+    ///
+    /// oracle 只调 `SetGuildInfo`（`SaveGuildInfoFile`，不碰 `BoChanged`/`DwSaveTick`）
+    /// ⇒ 新建会 `bo_changed == false`、`dw_save_tick == 0`（`UpdateGuildFile` 不在 `AddGuild` 路径上）。
+    pub fn add_guild(&mut self, name: &str, chief: &str, cfg: &GuildConfig) -> bool {
         if check_guild_name(name, cfg.guild_name_len) && self.find_guild(name).is_none() {
             let mut guild = GuildState::new(name);
             guild.set_guild_info(chief, cfg);
-            guild.update_guild_file(now_tick);
             self.guilds.push(guild);
             return true;
         }
@@ -1178,9 +1187,9 @@ mod tests {
     #[test]
     fn manager_add_del_find_and_case_sensitivity() {
         let mut m = GuildManager::new();
-        assert!(m.add_guild("会甲", "A", &cfg(), 0));
-        assert!(!m.add_guild("会甲", "B", &cfg(), 0), "重名（大小写敏感）");
-        assert!(m.add_guild("会丙", "C", &cfg(), 0), "可建第二会");
+        assert!(m.add_guild("会甲", "A", &cfg()));
+        assert!(!m.add_guild("会甲", "B", &cfg()), "重名（大小写敏感）");
+        assert!(m.add_guild("会丙", "C", &cfg()), "可建第二会");
         assert!(m.find_guild("会甲").is_some());
         assert!(m.find_guild("会甲").unwrap().is_member("A"));
         assert_eq!(m.member_of_guild("A"), Some("会甲"));
@@ -1195,7 +1204,7 @@ mod tests {
     #[test]
     fn manager_run_ends_expired_wars() {
         let mut m = GuildManager::new();
-        m.add_guild("会甲", "A", &cfg(), 0);
+        m.add_guild("会甲", "A", &cfg());
         m.find_guild_mut("会甲").unwrap().wars.push(WarGuild {
             guild_name: "敌".into(),
             war_tick: 100,
@@ -1209,6 +1218,68 @@ mod tests {
         assert_eq!(ended[0].enemy, "敌");
         assert_eq!(ended[0].message, "***敌行会战争结束");
         assert!(m.find_guild("会甲").unwrap().wars.is_empty());
+    }
+
+    // ---- F-1：bo_changed / dw_save_tick 与 oracle GuildInfo.BoChanged / DwSaveTick 等价 ----
+
+    #[test]
+    fn f1_load_marks_ini_dirty() {
+        let g = GuildState::from_record(&record("会", Vec::new(), Vec::new()));
+        assert!(
+            g.bo_changed,
+            "LoadGuild → GuildConf.LoadConfig 经 5 个 setter ⇒ BoChanged=true"
+        );
+        assert_eq!(g.dw_save_tick, 0, "加载不推 DwSaveTick");
+    }
+
+    #[test]
+    fn f1_create_guild_is_clean() {
+        let mut m = GuildManager::new();
+        assert!(m.add_guild("会甲", "A", &cfg()));
+        let g = m.find_guild("会甲").unwrap();
+        assert!(!g.bo_changed, "AddGuild 只 SetGuildInfo ⇒ BoChanged=false");
+        assert_eq!(g.dw_save_tick, 0, "AddGuild 不推 DwSaveTick");
+        assert!(g.is_member("A"));
+    }
+
+    #[test]
+    fn f1_set_guild_info_does_not_mark_dirty() {
+        let mut g = GuildState::new("会");
+        g.set_guild_info("A", &cfg());
+        assert!(!g.bo_changed, "SetGuildInfo 只 SaveGuildInfoFile");
+        assert_eq!(g.dw_save_tick, 0);
+    }
+
+    #[test]
+    fn f1_ally_ops_do_not_mark_dirty() {
+        let mut g = GuildState::from_record(&record("会", Vec::new(), Vec::new()));
+        g.bo_changed = false; // 加载后为 true，本用例只验证 ally 路径不置位
+        g.ally_guild("友");
+        assert!(!g.bo_changed, "AllyGuild 只 SaveGuildInfoFile");
+        g.del_ally_guild("友");
+        assert!(!g.bo_changed, "DelAllyGuild 只 SaveGuildInfoFile");
+    }
+
+    #[test]
+    fn f1_backup_does_not_mark_dirty() {
+        let mut g = GuildState::new("会");
+        g.set_guild_info("A", &cfg());
+        g.bo_changed = false;
+        g.dw_save_tick = 0;
+        g.backup_guild_file();
+        assert!(g.ranks.is_empty());
+        assert!(!g.bo_changed, "BackupGuildFile 只 SaveGuildInfoFile");
+        assert_eq!(g.dw_save_tick, 0);
+    }
+
+    #[test]
+    fn f1_check_save_guild_file_throttle() {
+        let mut g = GuildState::from_record(&record("会", Vec::new(), Vec::new()));
+        assert!(g.bo_changed);
+        assert!(!g.check_save_guild_file(30_000), "差值 == 30000 不 > 阈");
+        assert!(g.check_save_guild_file(30_001), "> 30000 ⇒ 落盘 + 清标记");
+        assert!(!g.bo_changed);
+        assert!(!g.check_save_guild_file(60_000), "已清 ⇒ 不再落盘");
     }
 
     // ---- 加载/落盘 往返 ----
