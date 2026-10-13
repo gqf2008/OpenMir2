@@ -1,0 +1,41 @@
+# 28 — 四门禁（本片追补：README 订正 + 26/27 + verify_client_ability_layout.py；零 Rust 生产改动）
+# base = origin/master 510daba5adc6b2332588a1d85b049cbf068439dc  (branch client-e2e-enter-gaps；本片提交前与 master tip 相同)
+# 隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target，cwd=mir2-rs
+
+## cargo fmt --all -- --check
+```
+rc=0
+```
+
+## cargo clippy --workspace --all-targets -- -D warnings
+```
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.72s
+rc=0
+```
+
+## cargo test --workspace --offline
+```
+summary: 98 suites / 1057 passed / 0 failed / 21 ignored (rc=0)
+（逐 target: grep '^test result:' | awk 汇总；详见本文件下方关键尾部）
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+```
+
+## cargo run -p msgcodegen -- --check
+```
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+```
+
+## 结论
+四门禁全绿：fmt rc=0 / clippy rc=0(-D warnings) / test 98 suites 1057 passed 0 failed 21 ignored rc=0 / msgcodegen 604 rc=0。
