@@ -179,6 +179,6 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   Chebyshev 距离，**12 只里 10 只落在 6..12**（窗口 5 只会是 0 只）⇒ 「同屏出现 6..12 的怪」达成；
   **before** 的真机尝试（回缺省 5 重建起栈）**没抓到客户端连接**（代理 dump 空）⇒ 如实登记为 remaining，
   before 侧以窗口模型（`PlayObject.cs:904` / `BaseObject.cs:383` / `ViewRange.cs:57-74`）与已审构造级用例为准。
-- **门禁**（merge tree `5b2f4e7b`）：`fmt 0` / `clippy 0` / `99 suites · 1159 passed · 0 failed · 22 ignored` /
+- **门禁**（merge tree `d8c02fd8`）：`fmt 0` / `clippy 0` / `99 suites · 1159 passed · 0 failed · 22 ignored` /
   `msgcodegen 604`（`54-gates.txt`）。**本片零生产代码改动**（仅 `tools/client/mir_flow.ps1` 驱动段 + 本目录证据/判据）；
   `55-boundary.txt`：冻结面 `src/ sql/ MirClient` + `crates/protocol` + `crates/storage` = 空。

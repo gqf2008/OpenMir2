@@ -1,10 +1,10 @@
 55-boundary.txt — 边界（冻结面）与净差量
-卡 openmir2-client-e2e-enter-gaps 片⑥；交付树 = merge tree 5b2f4e7b09212ebc9c126fbe4045d6cad3b63bf6
+卡 openmir2-client-e2e-enter-gaps 片⑥；交付树 = merge tree d8c02fd86c474ecce010a2c162e0117081c718bb
 
-$ git diff --name-only origin/master 5b2f4e7b -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+$ git diff --name-only origin/master d8c02fd8 -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
 [空 = 冻结面零改动]
 
-$ git diff --name-only origin/master 5b2f4e7b -- tools/client/mir_flow.ps1 mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+$ git diff --name-only origin/master d8c02fd8 -- tools/client/mir_flow.ps1 mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
 
 片⑥ 净新增（本片相对 master 的全部改动）：
   tools/client/mir_flow.ps1                              （驱动：-RunHoldMs 按住拖动跑键段）
