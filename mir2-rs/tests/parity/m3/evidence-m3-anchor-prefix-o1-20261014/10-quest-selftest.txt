@@ -1,0 +1,9 @@
+selftest 表结构: GREEN (14 锚)
+selftest 读侧 token 牙齿: GREEN (good=[] bad=1)
+selftest 覆盖面未登记牙齿: GREEN
+selftest 覆盖面表过期牙齿: GREEN (13 项)
+selftest 越界牙齿: GREEN
+selftest 真身 check: GREEN (0 项)
+selftest token 强度牙齿: GREEN (weak=["读侧 token 强度：锚 PlayObject.cs:3966-4105 整组无有辨识度 token（['}']）——至少一条 token 须含实际内容，不能只靠 `}`/`;` 等纯标点钉位置"]; pure-punct=4/4)
+selftest 工具侧名字锚牙齿: GREEN (bad=["工具侧锚 X.fake：符号 'public void ThisSymbolDoesNotExistXYZ(' 不在 src/OpenMir2/Messages.cs（只锚名字；行号漂移不算）"])
+SELFTEST GREEN

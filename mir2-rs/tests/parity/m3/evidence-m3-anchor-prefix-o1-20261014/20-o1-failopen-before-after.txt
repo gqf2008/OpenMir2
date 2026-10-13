@@ -1,0 +1,33 @@
+redcheck: reviewer-6 d52d4a294 后记 O-1 —— 「纯非字母错误前缀」在改前被整段跳过（fail-open），改后必 RED。
+before = git show HEAD:mir2-rs/tests/parity/m3/<gate>_anchor_gate.py（已合入的 d52d4a294 版本，仍带「目录段必须含字母」旧 guard）
+after  = 本片工作树版本（只剔除紧跟 ':' 的 spec 区间首段）
+
+gate           anchor                             before   after    expect
+--------------------------------------------------------------------------
+quest          src/Evil/Messages.cs:1             1        1        wrong-letter prefix
+quest          1/2/Messages.cs:1                  0        1        pure-non-letter prefix
+quest          :3966-4105/Messages.cs:1           0        0        spec range (no false positive)
+quest          src/OpenMir2/Messages.cs:1         0        0        correct full path
+quest          Messages.cs:1                      0        0        bare basename
+party_trade    src/Evil/PlayObject.cs:1           1        1        wrong-letter prefix
+party_trade    1/2/PlayObject.cs:1                0        1        pure-non-letter prefix
+party_trade    :3966-4105/PlayObject.cs:1         0        0        spec range (no false positive)
+party_trade    src/M2Server/Player/PlayObject.cs:1 0        0        correct full path
+party_trade    PlayObject.cs:1                    0        0        bare basename
+guild_castle   src/Evil/GuildOfficial.cs:1        1        1        wrong-letter prefix
+guild_castle   1/2/GuildOfficial.cs:1             0        1        pure-non-letter prefix
+guild_castle   :3966-4105/GuildOfficial.cs:1      0        0        spec range (no false positive)
+guild_castle   src/GameSrv/Npc/GuildOfficial.cs:1 0        0        correct full path
+guild_castle   GuildOfficial.cs:1                 0        0        bare basename
+hero_pet       src/Evil/MagicManager.cs:1         1        1        wrong-letter prefix
+hero_pet       1/2/MagicManager.cs:1              0        1        pure-non-letter prefix
+hero_pet       :3966-4105/MagicManager.cs:1       0        0        spec range (no false positive)
+hero_pet       src/M2Server/Magic/MagicManager.cs:1 0        0        correct full path
+hero_pet       MagicManager.cs:1                  0        0        bare basename
+selloff        src/Evil/PlayObject.Message.cs:1   1        1        wrong-letter prefix
+selloff        1/2/PlayObject.Message.cs:1        0        1        pure-non-letter prefix
+selloff        :3966-4105/PlayObject.Message.cs:1 0        0        spec range (no false positive)
+selloff        src/M2Server/Player/PlayObject.Message.cs:1 0        0        correct full path
+selloff        PlayObject.Message.cs:1            0        0        bare basename
+
+RESULT: GREEN (fail-open 复现: 改前 '1/2/' case = 0 finding; 改后 = 1 finding；spec 区间/正确路径/裸基名两版一致不误伤)
