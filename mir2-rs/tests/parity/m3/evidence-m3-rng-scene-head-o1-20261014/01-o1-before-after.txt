@@ -1,0 +1,18 @@
+### 01 O-1：证据包「声明 head」字段订正（before = 已合入 master 的 base 30c52f85，after = 本收口 head）
+###   缺陷：旧版把中间 merge commit 2fcebc6cd 当 head；交付/被审 head 实为 2591a7b31。
+
+## evidence-m3-rng-scene-anchor-teeth-20261014/11-boundary.txt
+- before: ### head = 2fcebc6cd9f00ece73b262bf76e432e48d8ce0de（= "Merge remote-tracking branch 'origin/master' into wip/m3bag-anchor-teeth"）
+- after : ### head = 2591a7b316ae7e9c3a31ac38e26248178a75f182（= 交付/review head；reviewer-6 approve 2f19ee0b 覆盖的正是它）
+
+## .../05-selfcheck-nostack.txt（第 2 行）
+- before: ### 本重交 head 2fcebc6cd 已 `git merge origin/master`（base `10f0daa93`）；本片内容与原 head 0778a84e8 逐字节相同
+- after : ### 本片读数在**交付/review head `2591a7b31`** 的树上取得（旧版误写中间 merge commit `2fcebc6cd`；reviewer-6 O-1 订正，机判见 `12-head-consistency.txt`）；本片内容与原 head 0778a84e8 逐字节相同
+
+## .../06-offline-regression.txt（第 1 行）
+- before: ### 06 离线全链回归（9 个 selftest；重交 head 2fcebc6cd 已合并 master 10f0daa93；本片只动 check_anchors.py + 文档/证据，其余不受影响）
+- after : ### 06 离线全链回归（9 个 selftest；读数在交付/review head `2591a7b31`（已含 `git merge origin/master 10f0daa93`，旧版误写 merge commit `2fcebc6cd`）；本片只动 check_anchors.py + 文档/证据，其余不受影响）
+
+## .../README.md（§1 头部）
+- before: head = `2fcebc6cd`（merge commit）
+- after : head = `2591a7b31`（= 交付/review head；reviewer-6 approve 2f19ee0b 覆盖的正是它）
