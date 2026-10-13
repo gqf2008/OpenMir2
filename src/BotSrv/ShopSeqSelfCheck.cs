@@ -83,6 +83,32 @@ namespace BotSrv
             int? pNone = MShare.ExtractShopPrice(new List<string> { "{\"sm\":648,\"a\":9,\"b\":0,\"c\":0,\"d\":0}" });
             Check("price-none-null", !pNone.HasValue, "got=" + (pNone.HasValue ? pNone.Value.ToString() : "null"));
 
+            // ④ reviewer-6 M-1 收口：`sm`/`a` 改**顶层 JSON 键解析**（旧子串口径的误判面）。
+            // 以下 5 条在旧子串实现下必 RED：`a` 前缀（30 命中 3）、`sm` 前缀（6510 命中 651）、
+            // 嵌套同名键（内层 651/3 误命中外层 648）、空白（`"sm": 651` 不含 `"sm":651`）、
+            // 卖价帧空白（`"sm": 647` 不含 `"sm":647`）。
+            Check("branch-field-reordered",
+                MShare.ClassifyShopFrames(new List<string> { "{\"a\":3,\"d\":0,\"c\":0,\"b\":0,\"sm\":651}" }) == "fail_nomoney",
+                "reordered");
+            Check("branch-a-not-prefix",
+                MShare.ClassifyShopFrames(new List<string> { "{\"sm\":651,\"a\":30,\"b\":0,\"c\":0,\"d\":0}" }) == "fail_buy_reject",
+                "a=30-not-nomoney");
+            Check("branch-nested-key-ignored",
+                MShare.ClassifyShopFrames(new List<string> { "{\"sm\":648,\"a\":1,\"x\":{\"a\":3,\"sm\":651}}" }) == "ok",
+                "nested-ignored");
+            Check("branch-sm-prefix-not-match",
+                MShare.ClassifyShopFrames(new List<string> { "{\"sm\":6510,\"a\":3,\"b\":0,\"c\":0,\"d\":0}" }) == "frames_unclassified",
+                "6510-not-651");
+            Check("branch-whitespace",
+                MShare.ClassifyShopFrames(new List<string> { "{ \"sm\" : 651 , \"a\" : 3 }" }) == "fail_nomoney",
+                "whitespace");
+            Check("price-field-reordered",
+                MShare.ExtractShopPrice(new List<string> { "{\"a\":77,\"sm\":671}" }) == 77,
+                "reordered");
+            Check("price-whitespace",
+                MShare.ExtractShopPrice(new List<string> { "{ \"sm\" : 647 , \"a\" : 99 }" }) == 99,
+                "whitespace");
+
             Console.WriteLine(failed == 0
                 ? "SHOPSEQ SELFTEST GREEN"
                 : $"SHOPSEQ SELFTEST RED ({failed} failed)");

@@ -99,6 +99,35 @@ namespace BotSrv
             return outList.ToArray();
         }
 
+        /// <summary>M3⑤ 夹具：从一个帧 JSON 串的**顶层对象**取整数键值。纯函数（不依赖实例）。
+        /// reviewer-6 M-1 收口：旧实现以 `"sm":651` / `"a":` **子串**定位，对字段重排、嵌套
+        /// （嵌套对象里同名键）、前缀（`"sm":6510` 命中 `"sm":651`）与空白（`"sm": 651`）都脆，
+        /// 且 `"a":30` 会被 `"a":3` 误命中。改为 `System.Text.Json` 解析**顶层**键（与
+        /// `DropExpSeqSelfCheck` / `QuestSeqSelfCheck` 同库口径）。非 JSON / 非对象 / 缺键 /
+        /// 键值非整数 ⇒ false；生产路径所发帧恒为扁平整数对象 `{"sm":N,"a":N,...}` ⇒ 逐字节等价。</summary>
+        private static bool TryGetFrameInt(string frame, string key, out int value)
+        {
+            value = 0;
+            if (string.IsNullOrEmpty(frame) || string.IsNullOrEmpty(key))
+            {
+                return false;
+            }
+            try
+            {
+                using (System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(frame))
+                {
+                    return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                        && doc.RootElement.TryGetProperty(key, out System.Text.Json.JsonElement el)
+                        && el.ValueKind == System.Text.Json.JsonValueKind.Number
+                        && el.TryGetInt32(out value);
+                }
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return false;
+            }
+        }
+
         /// <summary>M3⑤ 夹具：把本步收到的帧 JSON 串（`{"sm":..,"a":..,..}`）归类成失败分支。
         /// 纯函数（不依赖实例），供 `--selftest-shopseq` 与 RobotPlayer 共用。
         /// 口径：同一步取**第一个决定性帧**；钱不够/负重满/背包满/仓库满/取回满/无帧不可互相顶替。</summary>
@@ -110,27 +139,26 @@ namespace BotSrv
             }
             foreach (string fr in frames)
             {
-                if (fr == null)
+                if (!TryGetFrameInt(fr, "sm", out int sm))
                 {
                     continue;
                 }
-                if (fr.IndexOf("\"sm\":651", StringComparison.Ordinal) >= 0)
+                if (sm == 651)
                 {
-                    if (fr.IndexOf("\"a\":3", StringComparison.Ordinal) >= 0) { return "fail_nomoney"; }
-                    if (fr.IndexOf("\"a\":2", StringComparison.Ordinal) >= 0) { return "fail_overweight"; }
+                    if (TryGetFrameInt(fr, "a", out int a))
+                    {
+                        if (a == 3) { return "fail_nomoney"; }
+                        if (a == 2) { return "fail_overweight"; }
+                    }
                     return "fail_buy_reject";
                 }
-                if (fr.IndexOf("\"sm\":649", StringComparison.Ordinal) >= 0) { return "fail_sell_reject"; }
-                if (fr.IndexOf("\"sm\":670", StringComparison.Ordinal) >= 0) { return "fail_repair_reject"; }
-                if (fr.IndexOf("\"sm\":702", StringComparison.Ordinal) >= 0) { return "fail_storage_full"; }
-                if (fr.IndexOf("\"sm\":703", StringComparison.Ordinal) >= 0) { return "fail_storage_reject"; }
-                if (fr.IndexOf("\"sm\":707", StringComparison.Ordinal) >= 0) { return "fail_bagfull"; }
-                if (fr.IndexOf("\"sm\":706", StringComparison.Ordinal) >= 0) { return "fail_takeback_reject"; }
-                if (fr.IndexOf("\"sm\":648", StringComparison.Ordinal) >= 0
-                    || fr.IndexOf("\"sm\":650", StringComparison.Ordinal) >= 0
-                    || fr.IndexOf("\"sm\":669", StringComparison.Ordinal) >= 0
-                    || fr.IndexOf("\"sm\":701", StringComparison.Ordinal) >= 0
-                    || fr.IndexOf("\"sm\":705", StringComparison.Ordinal) >= 0)
+                if (sm == 649) { return "fail_sell_reject"; }
+                if (sm == 670) { return "fail_repair_reject"; }
+                if (sm == 702) { return "fail_storage_full"; }
+                if (sm == 703) { return "fail_storage_reject"; }
+                if (sm == 707) { return "fail_bagfull"; }
+                if (sm == 706) { return "fail_takeback_reject"; }
+                if (sm == 648 || sm == 650 || sm == 669 || sm == 701 || sm == 705)
                 {
                     return "ok";
                 }
@@ -138,7 +166,8 @@ namespace BotSrv
             return frames.Count > 0 ? "frames_unclassified" : "fail_no_frame";
         }
 
-        /// <summary>M3⑤ 夹具：从帧 647（卖价）/ 671（修理价）取价格。纯函数（不依赖实例）。</summary>
+        /// <summary>M3⑤ 夹具：从帧 647（卖价）/ 671（修理价）取价格。纯函数（不依赖实例）。
+        /// reviewer-6 M-1 收口：改为顶层 JSON 键解析（同 `TryGetFrameInt`），不再用 `"sm":647` / `"a":` 子串。</summary>
         public static int? ExtractShopPrice(IList<string> frames)
         {
             if (frames == null)
@@ -147,27 +176,15 @@ namespace BotSrv
             }
             foreach (string fr in frames)
             {
-                if (fr == null)
+                if (!TryGetFrameInt(fr, "sm", out int sm))
                 {
                     continue;
                 }
-                if (fr.IndexOf("\"sm\":647", StringComparison.Ordinal) < 0
-                    && fr.IndexOf("\"sm\":671", StringComparison.Ordinal) < 0)
+                if (sm != 647 && sm != 671)
                 {
                     continue;
                 }
-                int idx = fr.IndexOf("\"a\":", StringComparison.Ordinal);
-                if (idx < 0)
-                {
-                    continue;
-                }
-                int start = idx + 4;
-                int end = start;
-                while (end < fr.Length && (char.IsDigit(fr[end]) || fr[end] == '-'))
-                {
-                    end++;
-                }
-                if (end > start && int.TryParse(fr.Substring(start, end - start), out int val))
+                if (TryGetFrameInt(fr, "a", out int val))
                 {
                     return val;
                 }
