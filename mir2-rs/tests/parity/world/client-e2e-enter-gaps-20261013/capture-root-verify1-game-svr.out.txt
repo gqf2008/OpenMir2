@@ -1,0 +1,354 @@
+16:26:22.400 [INF] 游戏服务启动：监听 127.0.0.1:5000（CheckBlock=12288，0 张地图占位，config=E:\MirServer\M2GameSvr\Server.conf）
+16:26:22.405 [INF] 数据库服务器[127.0.0.1:6000]连接成功...
+16:26:23.091 [INF] Envir 真地图注册表：322 张（base=E:\MirServer\M2GameSvr EnvirDir=Envir MapDir=Map，跳过 0 张）
+16:26:23.098 [INF] 配置层已载入：[Names] GameGold=元宝 GamePoint=成长（帧 5008）/ [Setup] BonusAbilofWarr/NakedAbilofWarr 等（帧 811）
+16:26:23.102 [INF] 公告已载入：320 字节（base=E:\MirServer\M2GameSvr NoticeDir=Notice）
+16:26:23.105 [INF] 出生点回落已载入：StartPoint.txt 8 条，StartPointSize=2，Config.HomeMap=3 (839,668)（空 HomeMap 的新角色用它；RNG 抽数照 oracle）
+16:26:23.127 [INF] 物品模板表 stditems：1000 条（直连 MySQL，帧 50/41 的 Shape 输入）
+16:26:23.131 [INF] 魔法模板表 magics：108 条（直连 MySQL，DoSpell 效果体/帧参输入）
+16:26:23.135 [INF] 经验表 Exps.conf 已载入：NeedExps[1..] 非零 598 项
+16:26:23.227 [INF] 怪物模板表 monsters：705 条（MonItems 挂接 182/705，7427 条掉落），刷怪输入就绪
+16:26:23.256 [INF] Envir/MonGen.txt 已载入：2827 条刷怪配置（有文件 ⇒ 末尾哨兵占 thread 0 首槽）
+16:26:23.267 [INF] 加载物品寄售系统...
+16:26:23.269 [INF] 读取物品寄售列表成功...[0]
+16:26:23.269 [INF] 游戏服务[127.0.0.1:5000]已启动...
+16:26:23.270 [INF] 登录服务器[127.0.0.1:5600]连接成功...
+16:26:23.429 [INF] RNG 同种子注入：seed=42 参照序列=SEED_PROBE 1434747710 302596119 269548474 1122627734 361709742 563913476 1555655117 1101493307
+16:26:23.429 [INF] Monster AI 已启用（生产宿主）EnableMonsterAI=true
+16:26:23.429 [INF] 怪物恢复节拍已灌入 HealthFillTime=300 SpellFillTime=800
+16:26:23.429 [INF] 商人 tick 已启用（生产宿主）EnableMerchantTick=true（200ms sim 节奏；whitelist T-42 登记丢 NpcLimit 墙钟预算）
+16:26:23.435 [INF] MonGen 刷怪宿主就绪：2828 条配置，207 个怪名，threads=1，哨兵=true（mon_limit=10 zen_limit=5 user_full=3000 regen_time=200ms gen_rate=10）
+16:26:23.683 [INF] 游戏网关连接：127.0.0.1:61365
+16:26:23.683 [DBG] sim: 网关连接 127.0.0.1:61365 分配线号 0
+16:26:23.686 [INF] 游戏网关连接：127.0.0.1:61371
+16:26:23.687 [DBG] sim: 网关连接 127.0.0.1:61371 分配线号 1
+16:26:23.690 [INF] 游戏网关连接：127.0.0.1:61372
+16:26:23.690 [DBG] sim: 网关连接 127.0.0.1:61372 分配线号 2
+16:26:24.500 [INF] Envir/Merchant.txt 已载入：131 条（FindMap 门丢 0 条，挂图失败 0 条）⇒ 世界内商人 131
+16:26:24.560 [INF] MapQuest 隐藏 NPC 宿主就绪：quest_npcs=3 merchants=1 装载失败=0 ManageNPC=true FunctionNPC=false goto_limit=10000
+16:26:24.560 [INF] sim 线程就绪：tick=200ms，地图 322 张（Envir 真地图）
+16:26:24.561 [DBG] sim: 登记网关线号 0 的命令通道
+16:26:24.561 [DBG] sim: 登记网关线号 1 的命令通道
+16:26:24.561 [DBG] sim: 登记网关线号 2 的命令通道
+16:26:29.053 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:26:29.053 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:26:34.390 [DBG] sim: tick #50 clock=10000ms 处理 0 项（本地第 50 次）实体内 153 展示表 22 在世界会话 0
+16:26:36.055 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:26:44.048 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:26:44.415 [DBG] sim: tick #100 clock=20000ms 处理 0 项（本地第 100 次）实体内 253 展示表 122 在世界会话 0
+16:26:52.042 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:26:54.438 [DBG] sim: tick #150 clock=30000ms 处理 0 项（本地第 150 次）实体内 253 展示表 122 在世界会话 0
+16:27:00.051 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:27:04.463 [DBG] sim: tick #200 clock=40000ms 处理 0 项（本地第 200 次）实体内 263 展示表 132 在世界会话 0
+16:27:08.056 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:27:14.489 [DBG] sim: tick #250 clock=50000ms 处理 0 项（本地第 250 次）实体内 767 展示表 636 在世界会话 0
+16:27:16.049 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:27:24.053 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:27:24.521 [DBG] sim: tick #300 clock=60000ms 处理 0 项（本地第 300 次）实体内 1869 展示表 1738 在世界会话 0
+16:27:32.044 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:27:34.549 [DBG] sim: tick #350 clock=70000ms 处理 0 项（本地第 350 次）实体内 2779 展示表 2648 在世界会话 0
+16:27:40.056 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:27:44.595 [DBG] sim: tick #400 clock=80000ms 处理 0 项（本地第 400 次）实体内 4230 展示表 4099 在世界会话 0
+16:27:48.053 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:27:54.619 [DBG] sim: tick #450 clock=90000ms 处理 0 项（本地第 450 次）实体内 5088 展示表 4957 在世界会话 0
+16:27:56.047 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:28:04.047 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:28:04.653 [DBG] sim: tick #500 clock=100000ms 处理 0 项（本地第 500 次）实体内 5886 展示表 5755 在世界会话 0
+16:28:12.046 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:28:14.703 [DBG] sim: tick #550 clock=110000ms 处理 0 项（本地第 550 次）实体内 7421 展示表 7290 在世界会话 0
+16:28:20.045 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:28:24.718 [DBG] sim: tick #600 clock=120000ms 处理 0 项（本地第 600 次）实体内 7758 展示表 7627 在世界会话 0
+16:28:28.049 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:28:34.742 [DBG] sim: tick #650 clock=130000ms 处理 0 项（本地第 650 次）实体内 8278 展示表 8147 在世界会话 0
+16:28:36.053 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:28:44.043 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:28:44.764 [DBG] sim: tick #700 clock=140000ms 处理 0 项（本地第 700 次）实体内 9000 展示表 8869 在世界会话 0
+16:28:52.047 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:28:54.797 [DBG] sim: tick #750 clock=150000ms 处理 0 项（本地第 750 次）实体内 9524 展示表 9393 在世界会话 0
+16:29:00.048 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:29:04.824 [DBG] sim: tick #800 clock=160000ms 处理 0 项（本地第 800 次）实体内 9881 展示表 9750 在世界会话 0
+16:29:07.054 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:29:14.860 [DBG] sim: tick #850 clock=170000ms 处理 0 项（本地第 850 次）实体内 10554 展示表 10423 在世界会话 0
+16:29:15.049 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:29:23.055 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:29:24.874 [DBG] sim: tick #900 clock=180000ms 处理 0 项（本地第 900 次）实体内 10946 展示表 10815 在世界会话 0
+16:29:31.043 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:29:34.899 [DBG] sim: tick #950 clock=190000ms 处理 0 项（本地第 950 次）实体内 11420 展示表 11289 在世界会话 0
+16:29:39.047 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:29:44.932 [DBG] sim: tick #1000 clock=200000ms 处理 0 项（本地第 1000 次）实体内 12037 展示表 11906 在世界会话 0
+16:29:47.042 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:29:54.964 [DBG] sim: tick #1050 clock=210000ms 处理 0 项（本地第 1050 次）实体内 12229 展示表 12098 在世界会话 0
+16:29:55.049 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:30:02.056 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:30:05.007 [DBG] sim: tick #1100 clock=220000ms 处理 0 项（本地第 1100 次）实体内 12290 展示表 12159 在世界会话 0
+16:30:10.044 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:30:15.011 [DBG] sim: tick #1150 clock=230000ms 处理 0 项（本地第 1150 次）实体内 12521 展示表 12390 在世界会话 0
+16:30:18.054 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:30:25.023 [DBG] sim: tick #1200 clock=240000ms 处理 0 项（本地第 1200 次）实体内 12696 展示表 12565 在世界会话 0
+16:30:26.047 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:30:34.049 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:30:35.050 [DBG] sim: tick #1250 clock=250000ms 处理 0 项（本地第 1250 次）实体内 12866 展示表 12735 在世界会话 0
+16:30:42.045 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:30:45.082 [DBG] sim: tick #1300 clock=260000ms 处理 0 项（本地第 1300 次）实体内 13147 展示表 13016 在世界会话 0
+16:30:50.056 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:30:55.109 [DBG] sim: tick #1350 clock=270000ms 处理 0 项（本地第 1350 次）实体内 13656 展示表 13525 在世界会话 0
+16:30:58.048 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:31:05.126 [DBG] sim: tick #1400 clock=280000ms 处理 0 项（本地第 1400 次）实体内 13781 展示表 13650 在世界会话 0
+16:31:06.044 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:31:13.057 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:31:15.165 [DBG] sim: tick #1450 clock=290000ms 处理 0 项（本地第 1450 次）实体内 13901 展示表 13770 在世界会话 0
+16:31:21.049 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:31:25.180 [DBG] sim: tick #1500 clock=300000ms 处理 0 项（本地第 1500 次）实体内 14081 展示表 13950 在世界会话 0
+16:31:29.054 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:31:35.206 [DBG] sim: tick #1550 clock=310000ms 处理 0 项（本地第 1550 次）实体内 14331 展示表 14200 在世界会话 0
+16:31:37.049 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:31:45.057 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:31:45.215 [DBG] sim: tick #1600 clock=320000ms 处理 0 项（本地第 1600 次）实体内 14761 展示表 14630 在世界会话 0
+16:31:53.056 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:31:55.247 [DBG] sim: tick #1650 clock=330000ms 处理 0 项（本地第 1650 次）实体内 14837 展示表 14706 在世界会话 0
+16:32:01.053 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:32:05.296 [DBG] sim: tick #1700 clock=340000ms 处理 0 项（本地第 1700 次）实体内 14887 展示表 14756 在世界会话 0
+16:32:09.046 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:32:15.286 [DBG] sim: tick #1750 clock=350000ms 处理 0 项（本地第 1750 次）实体内 14951 展示表 14820 在世界会话 0
+16:32:17.049 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:32:25.057 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:32:25.310 [DBG] sim: tick #1800 clock=360000ms 处理 0 项（本地第 1800 次）实体内 15383 展示表 15252 在世界会话 0
+16:32:33.050 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:32:35.338 [DBG] sim: tick #1850 clock=370000ms 处理 0 项（本地第 1850 次）实体内 16407 展示表 16276 在世界会话 0
+16:32:40.056 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:32:45.376 [DBG] sim: tick #1900 clock=380000ms 处理 0 项（本地第 1900 次）实体内 17177 展示表 17046 在世界会话 0
+16:32:48.054 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:32:55.399 [DBG] sim: tick #1950 clock=390000ms 处理 0 项（本地第 1950 次）实体内 17799 展示表 17668 在世界会话 0
+16:32:56.054 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:33:04.049 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:33:05.419 [DBG] sim: tick #2000 clock=400000ms 处理 0 项（本地第 2000 次）实体内 18257 展示表 18126 在世界会话 0
+16:33:11.055 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:33:15.446 [DBG] sim: tick #2050 clock=410000ms 处理 0 项（本地第 2050 次）实体内 18544 展示表 18413 在世界会话 0
+16:33:19.045 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:33:25.473 [DBG] sim: tick #2100 clock=420000ms 处理 0 项（本地第 2100 次）实体内 18732 展示表 18601 在世界会话 0
+16:33:27.050 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:33:35.046 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:33:35.486 [DBG] sim: tick #2150 clock=430000ms 处理 0 项（本地第 2150 次）实体内 19270 展示表 19139 在世界会话 0
+16:33:43.052 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:33:45.518 [DBG] sim: tick #2200 clock=440000ms 处理 0 项（本地第 2200 次）实体内 19297 展示表 19166 在世界会话 0
+16:33:51.046 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:33:55.536 [DBG] sim: tick #2250 clock=450000ms 处理 0 项（本地第 2250 次）实体内 19322 展示表 19191 在世界会话 0
+16:33:59.049 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:34:05.575 [DBG] sim: tick #2300 clock=460000ms 处理 0 项（本地第 2300 次）实体内 19347 展示表 19216 在世界会话 0
+16:34:07.043 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:34:15.048 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:34:15.583 [DBG] sim: tick #2350 clock=470000ms 处理 0 项（本地第 2350 次）实体内 19415 展示表 19284 在世界会话 0
+16:34:22.056 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:34:25.605 [DBG] sim: tick #2400 clock=480000ms 处理 0 项（本地第 2400 次）实体内 19919 展示表 19788 在世界会话 0
+16:34:30.054 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:34:35.632 [DBG] sim: tick #2450 clock=490000ms 处理 0 项（本地第 2450 次）实体内 19944 展示表 19813 在世界会话 0
+16:34:38.046 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:34:45.656 [DBG] sim: tick #2500 clock=500000ms 处理 0 项（本地第 2500 次）实体内 19969 展示表 19838 在世界会话 0
+16:34:46.046 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:34:54.048 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:34:55.678 [DBG] sim: tick #2550 clock=510000ms 处理 0 项（本地第 2550 次）实体内 19994 展示表 19863 在世界会话 0
+16:35:02.045 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:35:05.706 [DBG] sim: tick #2600 clock=520000ms 处理 0 项（本地第 2600 次）实体内 20019 展示表 19888 在世界会话 0
+16:35:10.043 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:35:15.743 [DBG] sim: tick #2650 clock=530000ms 处理 0 项（本地第 2650 次）实体内 20550 展示表 20419 在世界会话 0
+16:35:18.053 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:35:25.745 [DBG] sim: tick #2700 clock=540000ms 处理 0 项（本地第 2700 次）实体内 20575 展示表 20444 在世界会话 0
+16:35:26.041 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:35:33.054 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:35:35.767 [DBG] sim: tick #2750 clock=550000ms 处理 0 项（本地第 2750 次）实体内 20600 展示表 20469 在世界会话 0
+16:35:41.047 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:35:45.790 [DBG] sim: tick #2800 clock=560000ms 处理 0 项（本地第 2800 次）实体内 20625 展示表 20494 在世界会话 0
+16:35:49.046 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:35:55.816 [DBG] sim: tick #2850 clock=570000ms 处理 0 项（本地第 2850 次）实体内 20650 展示表 20519 在世界会话 0
+16:35:57.051 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:36:05.047 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:36:05.834 [DBG] sim: tick #2900 clock=580000ms 处理 0 项（本地第 2900 次）实体内 20867 展示表 20736 在世界会话 0
+16:36:13.053 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:36:15.854 [DBG] sim: tick #2950 clock=590000ms 处理 0 项（本地第 2950 次）实体内 20909 展示表 20778 在世界会话 0
+16:36:20.055 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:36:25.876 [DBG] sim: tick #3000 clock=600000ms 处理 0 项（本地第 3000 次）实体内 20934 展示表 20803 在世界会话 0
+16:36:28.046 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:36:35.896 [DBG] sim: tick #3050 clock=610000ms 处理 0 项（本地第 3050 次）实体内 21101 展示表 20970 在世界会话 0
+16:36:36.044 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:36:44.054 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:36:45.929 [DBG] sim: tick #3100 clock=620000ms 处理 0 项（本地第 3100 次）实体内 21450 展示表 21319 在世界会话 0
+16:36:52.054 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:36:55.945 [DBG] sim: tick #3150 clock=630000ms 处理 0 项（本地第 3150 次）实体内 21613 展示表 21482 在世界会话 0
+16:37:00.049 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:37:05.972 [DBG] sim: tick #3200 clock=640000ms 处理 0 项（本地第 3200 次）实体内 21802 展示表 21671 在世界会话 0
+16:37:08.057 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:37:15.987 [DBG] sim: tick #3250 clock=650000ms 处理 0 项（本地第 3250 次）实体内 21843 展示表 21712 在世界会话 0
+16:37:16.050 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:37:23.057 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:37:26.009 [DBG] sim: tick #3300 clock=660000ms 处理 0 项（本地第 3300 次）实体内 21882 展示表 21751 在世界会话 0
+16:37:31.056 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:37:36.038 [DBG] sim: tick #3350 clock=670000ms 处理 0 项（本地第 3350 次）实体内 21923 展示表 21792 在世界会话 0
+16:37:39.057 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:37:46.053 [DBG] sim: tick #3400 clock=680000ms 处理 0 项（本地第 3400 次）实体内 21963 展示表 21832 在世界会话 0
+16:37:47.044 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:37:49.716 [INF] 会话准入登记 Account:mir2test SessionId:2 PayCost:0 PayMode:0 IP:127.0.0.1:62906
+16:37:49.716 [DBG] IDS: 处理 1 条会话通知
+16:37:55.050 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:37:56.083 [DBG] sim: tick #3450 clock=690000ms 处理 0 项（本地第 3450 次）实体内 22010 展示表 21879 在世界会话 0
+16:37:56.440 [INF] 新用户链接... socket=308 SessionId=8809 index=1 ip=127.0.0.1 在线=1 槽=1
+16:37:56.540 [DBG] sim: 新用户登记 index=1 ip=127.0.0.1（open_session 属 S2b-3）
+16:37:56.799 [INF] 会话验证通过 Account:mir2test ChrName:aaa SessionId:2 PayMent:1 index=1
+16:37:56.941 [INF] sim: 认证通过 ⇒ 取角色进世界 Account:mir2test ChrName:aaa SessionId:2 GateIdx:0 （读档控制流在 load.rs；DB 请求属 S2b-2b）
+16:37:57.092 [DBG] 执行任务Id:1成功
+16:37:57.142 [INF] 收到角色数据 queryId=1 Ident=1100 Recog=1
+16:37:57.143 [INF] 进世界 ChrName:aaa CurMap:0 (291,666) Dir:4 entity=22017
+16:37:57.144 [DBG] 52/752 入图输入 ChrName=aaa layout=client-58 tail_len=58 WAbil[level=1 ac=0 mac=0 dc=257 mc=0 sc=0 hp=19 mp=15 max_hp=19 max_mp=15 exp=0 max_exp=10 weight=0 max_weight=50 wear_weight=0 max_wear_weight=15 hand_weight=0 max_hand_weight=12] SubAbility[anti_magic=1 hit_point=5 speed_point=15 anti_poison=0 poison_recover=0 health_recover=0 spell_recover=0] ability_tail_hex=01000000000000000000010100000000000000000000130000000f000000130000000f000000000000000a0000000000320000000f0000000c00
+16:37:57.144 [INF] IsNewHuman 判定 ChrName=aaa home_empty=false 记录 Abil.Level=1 is_new_human=false bag_items=46
+16:37:57.145 [DBG] 同屏展示表登记：actor=22017 dir=4 light=0 feature=131072
+16:37:57.145 [INF] 进世界帧下发：socket=308 共 15 条（输入齐备的）
+16:37:57.145 [INF] @Login 已执行 ChrName=aaa 说词 0 条（下发 0）
+16:37:57.145 [INF] 进世界标记：socket=308
+16:37:57.343 [DBG] sim: index=1 命令 Recog=786444 Ident=84 Param=0 Tag=0 Series=0 tail="5;Y\u{4}\u{1c}\u{3}U\u{1c}\u{3}\u{4}\u{1c}\u{3}\0\u{10}"
+16:37:57.343 [DBG] sim: index=1 命令 Recog=1310720 Ident=10431 Param=0 Tag=0 Series=0 tail=""
+16:37:57.343 [DBG] sim: index=1 命令 Recog=0 Ident=10433 Param=0 Tag=0 Series=0 tail=""
+16:37:57.343 [DBG] sim: index=1 命令 Recog=22017 Ident=1200 Param=0 Tag=0 Series=0 tail=""
+16:37:57.343 [DBG] sim: index=1 命令 Recog=0 Ident=1018 Param=0 Tag=0 Series=46 tail=""
+16:38:02.054 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:38:06.100 [DBG] sim: tick #3500 clock=700000ms 处理 0 项（本地第 3500 次）实体内 22283 展示表 22152 在世界会话 1 [aaa(22017) map=26 vis=0 same_map=1726 nearest=29]
+16:38:10.051 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:38:16.131 [DBG] sim: tick #3550 clock=710000ms 处理 0 项（本地第 3550 次）实体内 22671 展示表 22540 在世界会话 1 [aaa(22017) map=26 vis=0 same_map=1726 nearest=29]
+16:38:17.055 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:38:20.990 [DBG] sim: index=1 命令 Recog=43516195 Ident=3013 Param=0 Tag=0 Series=0 tail=""
+16:38:21.791 [DBG] sim: index=1 命令 Recog=43385123 Ident=3013 Param=0 Tag=0 Series=0 tail=""
+16:38:22.393 [DBG] sim: index=1 命令 Recog=43254049 Ident=3013 Param=0 Tag=7 Series=0 tail=""
+16:38:25.050 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:38:25.601 [DBG] sim: index=1 命令 Recog=0 Ident=3030 Param=0 Tag=0 Series=0 tail="@AttackMode"
+16:38:25.601 [DBG] CM_SAY：非普通说话（频道/命令），本切片未接 ⇒ 丢弃 ChrName=aaa tail="@AttackMode"
+16:38:26.161 [DBG] sim: tick #3600 clock=720000ms 处理 0 项（本地第 3600 次）实体内 23270 展示表 23139 在世界会话 1 [aaa(22017) map=26 vis=0 same_map=1726 nearest=28]
+16:38:28.006 [DBG] sim: index=1 命令 Recog=0 Ident=3030 Param=0 Tag=0 Series=0 tail="@AttackMode"
+16:38:28.006 [DBG] CM_SAY：非普通说话（频道/命令），本切片未接 ⇒ 丢弃 ChrName=aaa tail="@AttackMode"
+16:38:30.811 [DBG] sim: index=1 命令 Recog=43319586 Ident=3011 Param=0 Tag=3 Series=0 tail=""
+16:38:31.413 [DBG] sim: index=1 命令 Recog=43385123 Ident=3011 Param=0 Tag=3 Series=0 tail=""
+16:38:32.057 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:38:32.215 [DBG] sim: index=1 命令 Recog=43450660 Ident=3011 Param=0 Tag=3 Series=0 tail=""
+16:38:32.817 [DBG] sim: index=1 命令 Recog=43516197 Ident=3011 Param=0 Tag=3 Series=0 tail=""
+16:38:36.183 [DBG] sim: tick #3650 clock=730000ms 处理 0 项（本地第 3650 次）实体内 23795 展示表 23664 在世界会话 1 [aaa(22017) map=26 vis=0 same_map=1726 nearest=32]
+16:38:38.027 [DBG] sim: index=1 命令 Recog=43450661 Ident=3011 Param=0 Tag=0 Series=0 tail=""
+16:38:38.829 [DBG] sim: index=1 命令 Recog=43516197 Ident=3011 Param=0 Tag=4 Series=0 tail=""
+16:38:39.430 [DBG] sim: index=1 命令 Recog=43581732 Ident=3011 Param=0 Tag=5 Series=0 tail=""
+16:38:40.031 [DBG] sim: index=1 命令 Recog=43647267 Ident=3011 Param=0 Tag=5 Series=0 tail=""
+16:38:40.049 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:38:40.833 [DBG] sim: index=1 命令 Recog=43647267 Ident=3010 Param=0 Tag=4 Series=0 tail=""
+16:38:42.237 [DBG] sim: index=1 命令 Recog=43647267 Ident=3010 Param=0 Tag=5 Series=0 tail=""
+16:38:46.217 [DBG] sim: tick #3700 clock=740000ms 处理 0 项（本地第 3700 次）实体内 24048 展示表 23917 在世界会话 1 [aaa(22017) map=26 vis=0 same_map=1726 nearest=31]
+16:38:48.052 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:38:49.853 [DBG] sim: index=1 命令 Recog=43581730 Ident=3011 Param=0 Tag=7 Series=0 tail=""
+16:38:50.655 [DBG] sim: index=1 命令 Recog=43516193 Ident=3011 Param=0 Tag=7 Series=0 tail=""
+16:38:51.257 [DBG] sim: index=1 命令 Recog=43516193 Ident=3010 Param=0 Tag=6 Series=0 tail=""
+16:38:53.662 [DBG] sim: index=1 命令 Recog=43450657 Ident=3011 Param=0 Tag=0 Series=0 tail=""
+16:38:54.464 [DBG] sim: index=1 命令 Recog=43385121 Ident=3011 Param=0 Tag=0 Series=0 tail=""
+16:38:55.266 [DBG] sim: index=1 命令 Recog=43319585 Ident=3011 Param=0 Tag=0 Series=0 tail=""
+16:38:55.867 [DBG] sim: index=1 命令 Recog=43254049 Ident=3011 Param=0 Tag=0 Series=0 tail=""
+16:38:56.052 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:38:56.224 [DBG] sim: tick #3750 clock=750000ms 处理 0 项（本地第 3750 次）实体内 24085 展示表 23954 在世界会话 1 [aaa(22017) map=26 vis=0 same_map=1726 nearest=29]
+16:38:56.669 [DBG] sim: index=1 命令 Recog=43188513 Ident=3011 Param=0 Tag=0 Series=0 tail=""
+16:38:57.672 [DBG] sim: index=1 命令 Recog=43188514 Ident=3011 Param=0 Tag=2 Series=0 tail=""
+16:38:58.474 [DBG] sim: index=1 命令 Recog=43188515 Ident=3011 Param=0 Tag=2 Series=0 tail=""
+16:38:59.074 [DBG] sim: index=1 命令 Recog=43188516 Ident=3011 Param=0 Tag=2 Series=0 tail=""
+16:38:59.675 [DBG] sim: index=1 命令 Recog=43188517 Ident=3011 Param=0 Tag=2 Series=0 tail=""
+16:39:00.477 [DBG] sim: index=1 命令 Recog=43188518 Ident=3011 Param=0 Tag=2 Series=0 tail=""
+16:39:01.480 [DBG] sim: index=1 命令 Recog=43254055 Ident=3011 Param=0 Tag=3 Series=0 tail=""
+16:39:02.281 [DBG] sim: index=1 命令 Recog=43319592 Ident=3011 Param=0 Tag=3 Series=0 tail=""
+16:39:04.047 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:39:06.259 [DBG] sim: tick #3800 clock=760000ms 处理 0 项（本地第 3800 次）实体内 24139 展示表 24008 在世界会话 1 [aaa(22017) map=26 vis=0 same_map=1726 nearest=34]
+16:39:12.046 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:39:12.906 [DBG] sim: index=1 命令 Recog=43385127 Ident=3011 Param=0 Tag=5 Series=0 tail=""
+16:39:13.507 [DBG] sim: index=1 命令 Recog=43450662 Ident=3011 Param=0 Tag=5 Series=0 tail=""
+16:39:14.110 [DBG] sim: index=1 命令 Recog=43516197 Ident=3011 Param=0 Tag=5 Series=0 tail=""
+16:39:14.711 [DBG] sim: index=1 命令 Recog=43581732 Ident=3011 Param=0 Tag=5 Series=0 tail=""
+16:39:15.513 [DBG] sim: index=1 命令 Recog=43647267 Ident=3011 Param=0 Tag=5 Series=0 tail=""
+16:39:16.290 [DBG] sim: tick #3850 clock=770000ms 处理 0 项（本地第 3850 次）实体内 24525 展示表 24394 在世界会话 1 [aaa(22017) map=26 vis=0 same_map=1726 nearest=30]
+16:39:20.057 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:39:20.529 [DBG] sim: index=1 命令 Recog=43581730 Ident=3011 Param=0 Tag=7 Series=0 tail=""
+16:39:21.331 [DBG] sim: index=1 命令 Recog=43516193 Ident=3011 Param=0 Tag=7 Series=0 tail=""
+16:39:22.132 [DBG] sim: index=1 命令 Recog=43450657 Ident=3011 Param=0 Tag=0 Series=0 tail=""
+16:39:22.935 [DBG] sim: index=1 命令 Recog=43385121 Ident=3011 Param=0 Tag=0 Series=0 tail=""
+16:39:23.536 [DBG] sim: index=1 命令 Recog=43319584 Ident=3011 Param=0 Tag=7 Series=0 tail=""
+16:39:24.539 [DBG] sim: index=1 命令 Recog=43254048 Ident=3011 Param=0 Tag=0 Series=0 tail=""
+16:39:25.140 [DBG] sim: index=1 命令 Recog=43188512 Ident=3011 Param=0 Tag=0 Series=0 tail=""
+16:39:25.942 [DBG] sim: index=1 命令 Recog=43122976 Ident=3011 Param=0 Tag=0 Series=0 tail=""
+16:39:26.308 [DBG] sim: tick #3900 clock=780000ms 处理 0 项（本地第 3900 次）实体内 25268 展示表 25137 在世界会话 1 [aaa(22017) map=26 vis=0 same_map=1726 nearest=27]
+16:39:26.744 [DBG] sim: index=1 命令 Recog=43057440 Ident=3011 Param=0 Tag=0 Series=0 tail=""
+16:39:27.346 [DBG] sim: index=1 命令 Recog=42991904 Ident=3011 Param=0 Tag=0 Series=0 tail=""
+16:39:28.052 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:39:28.147 [DBG] sim: index=1 命令 Recog=42926369 Ident=3011 Param=0 Tag=1 Series=0 tail=""
+16:39:28.948 [DBG] sim: index=1 命令 Recog=42860834 Ident=3011 Param=0 Tag=1 Series=0 tail=""
+16:39:29.550 [DBG] sim: index=1 命令 Recog=42795299 Ident=3011 Param=0 Tag=1 Series=0 tail=""
+16:39:30.352 [DBG] sim: index=1 命令 Recog=42729764 Ident=3011 Param=0 Tag=1 Series=0 tail=""
+16:39:35.057 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:39:35.764 [DBG] sim: index=1 命令 Recog=0 Ident=3030 Param=0 Tag=0 Series=0 tail="m2 talk ok"
+16:39:35.767 [INF] 说话 ChrName:aaa ActorId:22017 → 1 个收件人 tail="m2 talk ok"
+16:39:36.353 [DBG] sim: tick #3950 clock=790000ms 处理 0 项（本地第 3950 次）实体内 26003 展示表 25872 在世界会话 1 [aaa(22017) map=26 vis=0 same_map=1726 nearest=28]
+16:39:36.967 [DBG] sim: index=1 命令 Recog=42664227 Ident=3011 Param=0 Tag=7 Series=0 tail=""
+16:39:43.047 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:39:44.581 [DBG] sim: index=1 命令 Recog=0 Ident=1009 Param=0 Tag=0 Series=0 tail=""
+16:39:44.895 [INF] 用户关闭：socket=308 index=1 在线=0 槽=1
+16:39:44.993 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:aaa queryId=2 记录 4826 字节
+16:39:44.993 [INF] 断线清世界 ChrName:aaa socket=308 index=1（FrontEngine.DeleteHuman + WorldEngine 摘除）
+16:39:45.073 [DBG] 执行任务Id:2成功
+16:39:45.188 [INF] 存档应答 queryId=2 ChrName=aaa Ident=1102 Recog=1
+16:39:46.372 [DBG] sim: tick #4000 clock=800000ms 处理 0 项（本地第 4000 次）实体内 26731 展示表 26600 在世界会话 0
+16:39:51.045 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:39:56.393 [DBG] sim: tick #4050 clock=810000ms 处理 0 项（本地第 4050 次）实体内 26904 展示表 26773 在世界会话 0
+16:39:59.056 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:40:01.225 [INF] 新用户链接... socket=308 SessionId=756 index=1 ip=127.0.0.1 在线=1 槽=1
+16:40:01.228 [INF] 会话验证通过 Account:mir2test ChrName:aaa SessionId:2 PayMent:1 index=1
+16:40:01.424 [DBG] sim: 新用户登记 index=1 ip=127.0.0.1（open_session 属 S2b-3）
+16:40:01.424 [INF] sim: 认证通过 ⇒ 取角色进世界 Account:mir2test ChrName:aaa SessionId:2 GateIdx:0 （读档控制流在 load.rs；DB 请求属 S2b-2b）
+16:40:01.494 [DBG] 执行任务Id:3成功
+16:40:01.624 [INF] 收到角色数据 queryId=3 Ident=1100 Recog=1
+16:40:01.624 [INF] 进世界 ChrName:aaa CurMap:0 (291,651) Dir:4 entity=26971
+16:40:01.695 [DBG] 52/752 入图输入 ChrName=aaa layout=client-58 tail_len=58 WAbil[level=1 ac=0 mac=0 dc=257 mc=0 sc=0 hp=19 mp=15 max_hp=19 max_mp=15 exp=0 max_exp=10 weight=0 max_weight=50 wear_weight=0 max_wear_weight=15 hand_weight=0 max_hand_weight=12] SubAbility[anti_magic=1 hit_point=5 speed_point=15 anti_poison=0 poison_recover=0 health_recover=0 spell_recover=0] ability_tail_hex=01000000000000000000010100000000000000000000130000000f000000130000000f000000000000000a0000000000320000000f0000000c00
+16:40:01.696 [INF] IsNewHuman 判定 ChrName=aaa home_empty=false 记录 Abil.Level=1 is_new_human=false bag_items=46
+16:40:01.696 [DBG] 同屏展示表登记：actor=26971 dir=4 light=0 feature=131072
+16:40:01.696 [INF] 进世界帧下发：socket=308 共 15 条（输入齐备的）
+16:40:01.696 [INF] @Login 已执行 ChrName=aaa 说词 0 条（下发 0）
+16:40:01.696 [INF] 进世界标记：socket=308
+16:40:01.888 [DBG] sim: index=1 命令 Recog=786444 Ident=84 Param=0 Tag=0 Series=0 tail="5;Y\u{4}\u{1c}\u{3}U\u{1c}\u{3}\u{4}\u{1c}\u{3}\0\u{10}"
+16:40:01.888 [DBG] sim: index=1 命令 Recog=1310720 Ident=10431 Param=0 Tag=0 Series=0 tail=""
+16:40:01.889 [DBG] sim: index=1 命令 Recog=0 Ident=10433 Param=0 Tag=0 Series=0 tail=""
+16:40:01.959 [DBG] sim: index=1 命令 Recog=26971 Ident=1200 Param=0 Tag=0 Series=0 tail=""
+16:40:04.746 [DBG] sim: index=1 命令 Recog=0 Ident=1018 Param=0 Tag=0 Series=46 tail=""
+16:40:05.749 [DBG] sim: index=1 命令 Recog=42533155 Ident=3013 Param=0 Tag=0 Series=0 tail=""
+16:40:06.351 [DBG] sim: index=1 命令 Recog=42402083 Ident=3013 Param=0 Tag=0 Series=0 tail=""
+16:40:06.532 [DBG] sim: tick #4100 clock=820000ms 处理 0 项（本地第 4100 次）实体内 27030 展示表 26899 在世界会话 1 [aaa(26971) map=26 vis=0 same_map=1726 nearest=23]
+16:40:06.952 [DBG] sim: index=1 命令 Recog=42271009 Ident=3013 Param=0 Tag=7 Series=0 tail=""
+16:40:07.047 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:40:07.553 [DBG] sim: index=1 命令 Recog=42139935 Ident=3013 Param=0 Tag=7 Series=0 tail=""
+16:40:08.355 [DBG] sim: index=1 命令 Recog=42008865 Ident=3013 Param=0 Tag=1 Series=0 tail=""
+16:40:08.956 [DBG] sim: index=1 命令 Recog=42074401 Ident=3011 Param=0 Tag=4 Series=0 tail=""
+16:40:09.759 [DBG] sim: index=1 命令 Recog=42139937 Ident=3011 Param=0 Tag=4 Series=0 tail=""
+16:40:10.361 [DBG] sim: index=1 命令 Recog=42271011 Ident=3013 Param=0 Tag=3 Series=0 tail=""
+16:40:10.963 [DBG] sim: index=1 命令 Recog=42139941 Ident=3013 Param=0 Tag=1 Series=0 tail=""
+16:40:11.563 [DBG] sim: index=1 命令 Recog=42008871 Ident=3013 Param=0 Tag=1 Series=0 tail=""
+16:40:12.365 [DBG] sim: index=1 命令 Recog=41877801 Ident=3013 Param=0 Tag=1 Series=0 tail=""
+16:40:12.966 [DBG] sim: index=1 命令 Recog=41746731 Ident=3013 Param=0 Tag=1 Series=0 tail=""
+16:40:13.568 [DBG] sim: index=1 命令 Recog=41615661 Ident=3013 Param=0 Tag=1 Series=0 tail=""
+16:40:14.369 [DBG] sim: index=1 命令 Recog=41484589 Ident=3013 Param=0 Tag=0 Series=0 tail=""
+16:40:14.970 [DBG] sim: index=1 命令 Recog=41353515 Ident=3013 Param=0 Tag=7 Series=0 tail=""
+16:40:15.054 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:40:15.571 [DBG] sim: index=1 命令 Recog=41222441 Ident=3013 Param=0 Tag=7 Series=0 tail=""
+16:40:16.022 [INF] 用户关闭：socket=308 index=1 在线=0 槽=1
+16:40:16.207 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:aaa queryId=4 记录 4826 字节
+16:40:16.208 [INF] 断线清世界 ChrName:aaa socket=308 index=1（FrontEngine.DeleteHuman + WorldEngine 摘除）
+16:40:16.295 [DBG] 执行任务Id:4成功
+16:40:16.402 [INF] 存档应答 queryId=4 ChrName=aaa Ident=1102 Recog=1
+16:40:16.606 [DBG] sim: tick #4150 clock=830000ms 处理 0 项（本地第 4150 次）实体内 27219 展示表 27088 在世界会话 0
+16:40:23.056 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:40:26.615 [DBG] sim: tick #4200 clock=840000ms 处理 0 项（本地第 4200 次）实体内 27572 展示表 27441 在世界会话 0
+16:40:31.050 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:40:36.653 [DBG] sim: tick #4250 clock=850000ms 处理 0 项（本地第 4250 次）实体内 28093 展示表 27962 在世界会话 0
+16:40:38.057 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:40:46.056 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+16:40:46.708 [DBG] sim: tick #4300 clock=860000ms 处理 0 项（本地第 4300 次）实体内 28152 展示表 28021 在世界会话 0
+16:40:46.840 [ERR] 网关连接断开。
+16:40:46.840 [DBG] sim: 网关线号 0 已释放
+16:40:46.840 [ERR] 网关连接断开。
+16:40:46.840 [ERR] 网关连接断开。
+16:40:46.841 [DBG] sim: 网关线号 2 已释放
+16:40:46.841 [DBG] sim: 网关线号 1 已释放

@@ -1,0 +1,55 @@
+107-boundary.txt —— 片⑲ 写集边界（卡 `openmir2-client-e2e-enter-gaps`）
+（m2-svr / openmir2-worker-11，2026-10-14）
+====================================================================================================
+base（本片 commit 前 merge 的 `origin/master`） = d6443c03f
+本片 commit（证据/清单）                        = 见 `git rev-parse HEAD`（本文件所在提交）
+（本片工作期间 `origin/master` 连续前进 350cb923b→…→c517ce4fc→d6443c03f，均已合并进分支；
+ 本片差量只含卡证据目录内的 8 路径。）
+
+A. 本片差量（base..HEAD）
+----------------------------------------------------------------------------------------------------
+$ git diff --name-status d6443c03f HEAD
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/105-aoi-gap3-closure-root-verify1.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/106-gates.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/107-boundary.txt
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/capture-root-verify1-game-svr.out.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/capture-root-verify1-shots.manifest.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/capture-root-verify1-stages.ndjson.txt
+⇒ 8 路径，全部在卡证据目录 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/` 内。
+
+B. 冻结面（必须空）
+----------------------------------------------------------------------------------------------------
+$ git diff --name-only d6443c03f HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage src/BotSrv mir2-rs/bins
+（无输出） ⇒ oracle 冻结面 / 协议层 / 存储层 / BotSrv / bins 零改动。
+
+C. 本片零代码面（零 Rust/协议）
+----------------------------------------------------------------------------------------------------
+$ git diff --name-only d6443c03f HEAD -- '*.rs' '*.toml'
+（无输出） ⇒ 只有 4 份证据 + 1 份清单/README + 1 份 gates/boundary；无 `.rs`/`.toml`。
+
+D. 原始件入库口径
+----------------------------------------------------------------------------------------------------
+* `capture-root-verify1-game-svr.out.txt` = `E:/tmp/client-e2e/stack/game-svr.out.log` 的**逐字节复制**
+  （源 sha256 `b3ca32eae6b69b127eadf1cac4f4d3fdf53e717a5cd72b79426bc6636b4d5798`），
+  仅改扩展名 `.log`→`.txt`（`.gitignore` 吞 `*.log`），内容未改（LF 保持）。
+* `capture-root-verify1-stages.ndjson.txt` = `E:/tmp/client-e2e/verify1/stages.ndjson` 的复制，
+  盘上 CRLF 已按仓内 `*.txt text eol=lf` 口径归一为 LF（`eolcheck` GREEN）。
+* `capture-root-verify1-shots.manifest.txt` = 34 张 PNG（`E:/tmp/client-e2e/verify1/*.png`，~34MB）的
+  sha256 清单；PNG 本体不入库（超预算），可按 manifest 对原始件逐张复核。
+
+E. 证据 hash 口径
+----------------------------------------------------------------------------------------------------
+`SHA256SUMS.txt` 按**仓库字节（Git blob / LF 归一）**记（`tools/evidence-hash/verify_sha256sums.py` 默认口径）：
+  $ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录>
+  ⇒ GREEN OK 107/107
+  $ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+  ⇒ GREEN OK 107/107（无未列清单的多件）
+  $ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+  ⇒ EOLCHECK GREEN 108/108
+
+F. 纪律
+----------------------------------------------------------------------------------------------------
+本片**未起栈、未占端口**（十端口仅共享 MySQL 3306 UP）；未动共享主检出
+（`git -C E:/Users/gxh/Documents/GitHub/OpenMir2 status --porcelain` 空）；不 merge、未自签 review。

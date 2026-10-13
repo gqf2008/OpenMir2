@@ -1,0 +1,108 @@
+105-aoi-gap3-closure-root-verify1.txt —— 卡 `openmir2-client-e2e-enter-gaps` 缺口③「同屏没怪」判定与闭环
+m2-svr / openmir2-worker-11 / 2026-10-14（回应 brief-m2svr-next 顶部 root 2026-10-14 00:4x）
+本片零起栈、零占端口（仅共享 MySQL 3306）、零生产代码改动；只在自身 worktree 写。
+====================================================================================================
+一句话：**③「该点确实无怪」成立**（root verify1 的 (291,666)/(291,651) 在 map 0
+全部 `MonGen.txt` 生成框之外，最近框 Chebyshev = 30/29 > `ViewRange` 12 ⇒ 窗口内期望出生怪 E=0.000）；
+**④「AOI 可见集未算/未下发」不成立**（同图框内点 (287,620) 客户端实收 13 对出现帧）。
+root 的三个读数 `实体内 27030 / same_map=1726 / nearest=23..34` 与判决自洽。
+唯一剩余 = **root 独占窗口**的「两侧同框」R 级判据（本片只把判据/工具/前置门准备齐，见 §E）。
+
+A. 本片新增：root verify1 **真机原始件入库**（此前只在 `E:/tmp/**`，检出内不可复算）
+====================================================================================================
+root 的 verify1 原始件一直只在检出外，卡 DoD⑤「证据四件套」与 AGENTS「证据要能重放」都要求入库。
+本片按字节复制（改扩展名 `.log` → `.txt`，因 `.gitignore` 吞 `*.log`；内容一字未改）：
+
+| 入库文件 | 来源（检出外） | 字节 | sha256（入库后） |
+|---|---|---|---|
+| `capture-root-verify1-game-svr.out.txt` | `E:/tmp/client-e2e/stack/game-svr.out.log` | 36371 | 见 SHA256SUMS.txt |
+| `capture-root-verify1-stages.ndjson.txt` | `E:/tmp/client-e2e/verify1/stages.ndjson` | 1785 | 见 SHA256SUMS.txt |
+| `capture-root-verify1-shots.manifest.txt` | `E:/tmp/client-e2e/verify1/*.png`（34 张） sha256 清单 | 2797 | 见 SHA256SUMS.txt |
+
+* 34 张 PNG 共 ~34MB，**不入库**（超出证据预算）；以 manifest 记名 + sha256，可对原始件逐张复核。
+* verify1 源件保持不动：`sha256sum E:/tmp/client-e2e/stack/game-svr.out.log` =
+  `b3ca32eae6b69b127eadf1cac4f4d3fdf53e717a5cd72b79426bc6636b4d5798`（复制前实测）。
+
+B. verify1 读数逐条（从入库件复算，不采信散文）
+====================================================================================================
+命令：`grep` 入库件（`capture-root-verify1-game-svr.out.txt`）——
+
+* **① 血已修（与 root 判读一致）**：`52/752 入图输入` 共 **2** 条（两次进世界），
+  `layout=client-58 tail_len=58 WAbil[… hp=19 mp=15 max_hp=19 max_mp=15 …]`：
+  `L200 16:37:57.144`（`Chapmap:0 (291,666)`）、`L306 16:40:01.695`（`(291,651)`）。
+* **② 跑已修（与 root 判读一致）**：`Ident=3013`（CM_RUN）共 **17** 条（L216/217/218、L317/318、
+  L320/322/323/326/327/328/329/330/331/332/333/335）。修复前恒 0（对照件 `50-runkey-five-runs-summary.txt`）。
+* **③ 怪**：`sim: tick` 周期行共 86 条，其中带 `[aaa(...) …]` 玩家读数 **11** 条，全部
+  `map=26 vis=0 same_map=1726 nearest=23..34`（逐值：23/27/28×2/29×3/30/31/32/34）；
+  world 实体数 `实体内 22283 → 27030`（tick #3500→#4100），峰值 `实体内 28152`。
+  ⇒ 世界侧确实有 27030 个实体、map0 上 1726 个怪；`vis=0` 是 **旧诊断字段**（见 §D），
+     `nearest=23..34` 与 §C 的「不在生成框内」自洽（>vr=12）。
+* 无异常退出：日志尾部为正常 tick 行，无 panic/`ERR`。
+
+C. 判定 ③ 成立 / ④ 不成立（离线、可复算；工具见 §E）
+====================================================================================================
+口径（oracle `src/M2Server/Word/WorldServer.MonGen.cs:825-826` 的正方形生成框，Chebyshev）：
+  `python -I -B check_mongen_dense_points.py --mirserver E:/MirServer --view-range 12 …`
+
+| 坐标 | 来源 | 框内/框外 | 到最近生成框 Chebyshev | 期望出生怪 E |
+|---|---|---|---|---|
+| (291,666) | root verify1 进世界 | 框外 | 30（框 211,629 鹿/稻草人 range=50） | 0.000 |
+| (291,651) | root verify1 复进 | 框外 | 29（框 256,572） | 0.000 |
+| (287,620) | 片⑦ vr=12 AFTER | 框内 | 0 | 5.617 |
+| (605,578) | 片⑯ 最密点 | 框内 | 0（5 框重叠） | 12.681 |
+
+* ⇒ **③ 成立**：`ViewRange=12` 的窗口不与任何生成框相交 ⇒ 该点**出生**集为空；真机 `nearest=23..34`
+  是**游走/远处**的怪，>12 ⇒ 同屏看不到怪 = 正确行为。
+* ⇒ **④ 不成立**：同一张图、同一 `view_range=12` 的框内点 `(287,620)`，客户端实收
+  **13 对** `10 SM_TURN + 41 SM_FEATURECHANGED`（`check_client_s2c_frames.py --capture
+  capture-client-viewrange12-seed42.jsonl --min-appearance-pairs 1` ⇒ GREEN）⇒ AOI 可见集**有算有下发**。
+* 夹具位置提醒：`aaa` 停在夹具残留点 `(291,666)`；oracle `StartPoint.txt` 的出生点 `(289,618)`
+  本身在框内（E=6.754）⇒ **新角色默认体验本就该同屏见怪**，窗口请把 `aaa` 置框内点（③b 自动选 `605,578`）。
+
+D. `vis=0` 的语义（是**诊断口径**错，不是 AOI 缺陷）
+====================================================================================================
+* oracle `BaseObject.ViewRange.cs:25/36`：对象已在 `VisibleActors` ⇒ 置 `Invisible`（仍是「可见」），
+  不在 ⇒ 追加 `Show`。旧 `world_aoi_diag` 只数 `Show`（=本轮新增）⇒ 怪停留 >1 tick 后 `vis` 恒 0。
+* 修复 **`d16b5199d`**（已入 master）：`vis` 改 `target != self && != VisibleFlag::Hidden`
+  （=当前可见集，不含自身）+ 新增 `vr=`/`new=`/`af=`（`af`=累计实发出现帧）。**本 verify1 是修复前的旧二进制**
+  （无 `vr/new/af`）⇒ 判据脚本 `check_aoi_visibility_diag.py` 对这份日志按版式门 **fail-closed 判 PREREQ_RED**
+  （预期行为，正是它的牙齿；见 `73-prereq-old-log.txt`）。窗口须用含片⑪ 的构建源（§E）。
+
+E. 窗口就绪 GO（当前 master 实测；root 开窗直接用）
+====================================================================================================
+命令（cwd = 本车道 worktree；`--repo` = 构建源）：
+```
+python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py \
+  --repo <构建源 worktree @ origin/master> --ref HEAD \
+  --check-dir mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+```
+实测（2026-10-14，`origin/master = c517ce4fc`）：`G1 R1..R5 GREEN` + `G2 6/6 SELFTEST OK`
+⇒ **`WINDOW_READY=YES` / `RESULT: GREEN` rc=0**（本片重跑，见 `106-gates.txt` §E）。
+* ⚠ **开窗前必须换构建源**：root 的 `client-e2e-window.sh` 里 `repo=/e/Users/gxh/Documents/GitHub/OpenMir2`
+  = 共享主检出（现为 **rev 车道 worktree**，且可能停在**不含片⑪** 的提交）。用该源构建 ⇒ 无 `vr/new/af`、
+  `check_aoi_visibility_diag.py` 直接 `PREREQ_RED`、白烧窗口。修法：`window_handoff.py --plan` 会附
+  「专用 worktree 从 `origin/master` 构建」的修复块（`git worktree add --detach E:/tmp/<x> origin/master`），
+  只改窗口脚本 `repo=`/`tgt=` 两行，**不动共享主检出**。
+* 选点：③b（有怪）`--best-site` = **`605,578` E=12.681**；③a（无怪反向）= **`291,666`**（E=0.000）。
+  两侧同框命令序列见 `82-two-side-window-runbook.md` + `window_handoff.py --plan --best-site`。
+* 两侧判据：Rust 侧 `check_aoi_visibility_diag.py --expect visible --min-vis 1`（新读数）+ 客户端
+  `check_client_s2c_frames.py --min-appearance-pairs 1`；C# 侧同一客户端同一
+  `check_client_s2c_frames.py` 配对数；两侧合并判 `aoi_visibility_pair.py --expect visible`。
+  起 C# 栈前先跑 `check_csharp_capture_preflight.py`（片⑭；拓扑根因见 `85-…md`）。
+
+F. 唯一剩余 / 登记（不静默）
+====================================================================================================
+* **DoD③ 的「两侧同框真机对照」** = R 级，归 root 独占窗口（本片只把判据/工具/前置门备齐，未起栈）。
+* **DoD③ 的「屏幕上能看到怪并能攻击造成伤害」**（issue 原文）同样需真机窗口。
+* `RM_DISAPPEAR`（oracle `PlayObject.cs:3211-3219`，`VisibleFlag.Hidden` 支）Rust 侧**无编码器**
+  （`downlink.rs:25` 已登记）：怪离屏不发消失帧；**不产生假「无怪」**，不在本片修。
+* 怪物侧 `ViewRange` 子类覆盖（`30-oracle-anchors-viewrange.txt` §D）仍登记未实现，同前片。
+* 本片**零生产代码改动**（仅把 root 原始件入库 + 一份判定书/清单）；未起栈、未占端口、未动共享主检出。
+
+G. 涉及文件
+====================================================================================================
+  新增：本文件 + `capture-root-verify1-game-svr.out.txt` + `capture-root-verify1-stages.ndjson.txt`
+        + `capture-root-verify1-shots.manifest.txt`
+  改动：`README.md`（§⑲）+ `SHA256SUMS.txt`（重生成）
+  只读引用：`70-aoi-visibility-verdict.txt`、`71-mongen-dense-points-map0.txt`、`81/93/97/101`、
+            `82-two-side-window-runbook.md`、`85/86/89`、`d16b5199d`、`window_handoff.py`
