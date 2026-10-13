@@ -1,0 +1,3 @@
+$ python -I rng-trace-scene/check_anchors.py check
+GREEN: check_anchors 7/7 锚点保鲜（文档行号 == 当前源码首个匹配行；闭世界 + 裸续引用）
+rc=0

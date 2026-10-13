@@ -352,6 +352,33 @@ python -I rng-trace-probe/rng_consumer_groups.py selftest   # 15/15 GREEN（含�
 - 已接入 `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`station-table-refs-selftest`）⇒ **自检项数
   由 30 增至 31**（本片之前报告里的 `29/29`、`30/30` 是片时读数，不受影响）。
 
+### 5.4 证据包「声明 head」一致性机判（`check_evidence_head.py`，O-1 收口）
+
+reviewer-6 在 approve head `2591a7b31` 时记了一条 observation（O-1）：`evidence-m3-rng-scene-anchor-teeth-20261014`
+的 `README.md §5` 与 `11-boundary.txt` 把本包的 head 写成**中间 merge commit `2fcebc6cd`**，而**交付/被审 head
+是 `2591a7b31`**（其上再一提交「证据 05–11 在合并树重生成」）⇒ 消费方按证据里的 oid 定位会落到非交付 head
+（实质影响为零——两者净差量路径同集合；但书证与事实不一致）。
+
+`check_evidence_head.py` 把「声明 head 必须可解析、是当前 HEAD 的祖先、且从它到 HEAD **只动证据/夹具侧**
+（缺省 `mir2-rs/tests/parity/m3/`，可用 `--allow-prefix` 显式放行）」收成 **fail-closed 机判**：
+
+```sh
+# 声明 head 合法性 + 其后零生产代码（cwd = mir2-rs/tests/parity/m3）
+python -I rng-trace-scene/check_evidence_head.py check \
+  --dir evidence-m3-rng-scene-anchor-teeth-20261014 --head 2591a7b31
+python -I rng-trace-scene/check_evidence_head.py selftest        # 7/7 GREEN（4 条改坏必红 + 2 条 PREREQ）
+```
+
+- `HEAD_UNRESOLVABLE`（oid 解析不出）/ `HEAD_NOT_ANCESTOR`（非 HEAD 祖先）/ `HEAD_SCOPE_DRIFT`
+  （其后改了非证据侧路径，逐条点名）⇒ rc=1；缺目录/坏输入/非 git 工作树 ⇒ rc=2；
+- **为什么不是「声明 head == 交付 head」**：证据包在交付后还会被下一片追加（如本 O-1 收口），
+  「声明 head 永远落后交付 head 一格」是自指死结。本口径改为「声明**读数所在** head + 机判其后只有
+  证据侧变更」，既诚实又可达（O-1 书证订正后，本包两处 head 字段写 `2591a7b31`）；
+- **局限（如实登记）**：本门咬三类——oid 写错/不可解析、非 HEAD 祖先、声明后夹带生产代码；
+  它**咬不住** O-1 原本那一类（声明的是**真实祖先**但不是读数/交付 head，如 `2fcebc6cd`）——
+  那一类属书证命名，靠人写对 + 评审；本门把其余可机判的相邻失败模式钉死，与文本订正互补；
+- **不改** `run_rng_trace_pair.ps1` 的自检项数（仍 31；本工具是证据包的**自洽牙**，非 DoD 判据本体）。
+
 ## 6. 命令（可复算）
 
 ```sh
@@ -362,6 +389,7 @@ python -I rng-trace-probe/rng_ledger_diff.py selftest          # 37/37 GREEN（�
 python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（含 scenario 声明 vs 代码 + 半给流水 PREREQ）
 python -I rng-trace-scene/check_evidence_counts.py selftest    # 7/7 GREEN（报告证据头行计数 vs 真实包：声明/真实）
 python -I rng-trace-scene/check_anchors.py selftest             # 13/13 GREEN（承接卡规格锚点保鲜；含 12 条改坏必红：行号漂移/缺失/歧义/未登记引用/折叠定义回退/同名目录串台/裸续引用未登记/裸续内容漂移/未识别扩展名/裸续引用归属未登记/裸续引用归属文件缺失/裸续引用登记行越界）
+python -I rng-trace-scene/check_evidence_head.py selftest       # 7/7 GREEN（证据包声明 head：可解析/祖先/其后仅证据侧；含 4 条改坏必红）
 python -I rng-trace-probe/rng_consumer_groups.py selftest       # 15/15 GREEN（站点表 oracle_ref 可解析性；含坏路径/越界行 2 条改坏必红）
 python -I rng-trace-scene/check_window_batch.py selftest        # 13/13 GREEN（本卡 vs ④ 场景件：同图/同种子/同起点）
 

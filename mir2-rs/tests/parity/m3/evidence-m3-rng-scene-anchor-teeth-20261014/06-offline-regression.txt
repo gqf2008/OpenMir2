@@ -1,4 +1,4 @@
-### 06 离线全链回归（9 个 selftest；重交 head 2fcebc6cd 已合并 master 10f0daa93；本片只动 check_anchors.py + 文档/证据，其余不受影响）
+### 06 离线全链回归（9 个 selftest；读数在交付/review head `2591a7b31`（已含 `git merge origin/master 10f0daa93`，旧版误写 merge commit `2fcebc6cd`）；本片只动 check_anchors.py + 文档/证据，其余不受影响）
 
 $ rng-trace-probe/rng_consumer_groups.py selftest
   ok  table-validate
