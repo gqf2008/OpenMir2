@@ -1,0 +1,2 @@
+key=1 system=背包 / 装备 runner_status=RUN-OK rc=0
+SELFTEST_RED GREEN: 无栈自检全过（配置透传有/无两向 + run_pair 关挂机耦合两向 + 固定起点两相 + pin settle+hold 可判红自检（跳过 settle / 早于落库 / 反复覆盖 / 正常收敛）+ 旧挂机 peer/旧起点 peer 必红 + CX/CY 逐字节比断言 + 断线存档 preflight + 入口护栏/DiffOnly fail-clos
