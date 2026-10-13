@@ -1,0 +1,28 @@
+75-boundary.txt — 片⑪ AOI 可见性诊断收口 边界与净差量（base = refs/heads/master @ d4673b16c）
+卡 openmir2-client-e2e-enter-gaps
+================================================================================
+
+[1] 冻结面（必须为空）
+    $ git diff --name-only d4673b16c -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+    （空）
+
+[2] 净差量（生产面 1 个 .rs + 证据目录内判据/证据）
+     M mir2-rs/bins/game-svr/src/main.rs
+    ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/70-aoi-visibility-verdict.txt
+    ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/71-mongen-dense-points-map0.txt
+    ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/72-redcheck-vis-metric.txt
+    ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/73-prereq-old-log.txt
+    ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/74-gates.txt
+    ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/75-boundary.txt
+    ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/76-selftest-aoi-checker.txt
+    ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_aoi_visibility_diag.py
+
+[3] 生产面
+    M  mir2-rs/bins/game-svr/src/main.rs  —— 只读诊断：SessionAoiDiag 加 view_range/new/frames、
+       vis 语义修正（Show|Invisible）、drain_aoi_downlink 返回每会话实发帧数并累加进 af、
+       周期行加 vr=/new=/af=；新增 1 条用例 + 2 处调用点签名同步。
+       **不改**模拟/AOI 判定/RNG 取数/出帧路由/持久化语义（world_aoi_diag 只被周期日志消费）。
+
+[4] 兼容性
+    周期行是 DBG 日志（非协议帧）；新增字段是追尾追加，老式人工读法（看 vis/same_map/nearest）不受影响，
+    但字段语义变了（vis 由『本轮新增』改为『当前可见集』）——正是本片的目的；判据脚本对老日志 fail-closed。

@@ -26,6 +26,15 @@ M3⑨-5 `openmir2-m3-hero-pet-fixture-botsrv` 的**残余 Minor 收口片**证�
 | 夹具无栈自检 | `SELFTEST ok=23/23 failures=`，GREEN | `05-run-heropet-selfcheck.txt` |
 | 四门禁 | fmt0 / clippy0(-D warnings) / 101 suites 1199 passed 0 failed 22 ignored / msgcodegen 604 | `06`–`09` |
 | 外部改坏必红 | `frames` 改回旧稿 ⇒ 锚门 RED 2 项；还原复绿 | `12-external-break-red.txt` |
+| whitelist 计数复核 | ⑧-10 合并片把 T-42/T-43/T-44 误写成 22/22；实测三 runner 均 19/19，本片订正 | `13-whitelist-count-recheck.txt` |
+
+## 顺带订正（本片透明登记，非静默改动）
+
+⑧-10 锚门片（`8d19d4f0`，合并 `f51849a0b`）把 whitelist 里 T-42/T-43/T-44/T-46 的
+`-SelfCheckNoStack` **19/19** 一并改成 **22/22**；但 22/22 只对 `run_guild_castle_pair.ps1`（⑧-10 确实加了 3 条
+锚门）成立。`run_quest_pair.ps1` / `run_party_trade_pair.ps1` / `run_selloff_pair.ps1` 本轮实测均 **19/19**
+（见 `13-whitelist-count-recheck.txt`）⇒ 本片把 T-42/T-43/T-44 订回 19/19，并去掉误加的「本片加 3 条场景锚门」字样；
+T-46 保持 22/22。
 
 ## 边界
 

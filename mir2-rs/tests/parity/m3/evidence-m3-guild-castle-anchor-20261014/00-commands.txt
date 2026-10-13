@@ -1,0 +1,11 @@
+# M3⑧-10 行会/攻城夹具「锚行号」收口片（卡 openmir2-m3-guild-castle-fixture-botsrv）
+# 离线、零起栈、零端口。工作目录 = worktree m3cs；CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target。
+python -I mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py check
+python -I mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py selftest
+python -I mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py mutation
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_guild_castle_pair.ps1 -SelfCheckNoStack
+git diff --name-only origin/master -- .   # boundary
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo run -p msgcodegen -- --check

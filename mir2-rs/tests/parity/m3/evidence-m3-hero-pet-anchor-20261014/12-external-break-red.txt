@@ -8,9 +8,4 @@ rc=1
 GREEN: hero/pet 场景锚门通过（27 锚 / 57 行点全部命中冻结 src/ 且覆盖面闭合）
 rc=0
 
-## 还原后 git status --porcelain（仅本片预期改动）
- M mir2-rs/tests/parity/m3/hero_pet_scenario.json
- M mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1
- M mir2-rs/tests/parity/whitelist.md
-?? mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/
-?? mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py
+## 还原后 git status --porcelain（应干净：本片全部改动已入 91c8aecce）

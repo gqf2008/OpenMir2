@@ -1,81 +1,51 @@
 base = origin/master 1cf88f6ad
+head = worktree-m3-hero-pet-fixture-minors tip（本片交付提交；确切 oid 见 walgit patch body，不在此处固化以免 amend 后自指失效）
 
-## git status --porcelain
- M mir2-rs/tests/parity/m3/hero_pet_scenario.json
- M mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1
- M mir2-rs/tests/parity/whitelist.md
-?? mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/
-?? mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py
+## git diff --name-status origin/master..HEAD
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/00-commands.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/01-scenario-anchor-diff.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/02-anchor-gate-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/03-anchor-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/04-anchor-gate-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/05-run-heropet-selfcheck.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/06-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/07-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/08-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/09-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/11-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/12-external-break-red.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/13-whitelist-count-recheck.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/SHA256SUMS.txt
+A	mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py
+M	mir2-rs/tests/parity/m3/hero_pet_scenario.json
+M	mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1
+M	mir2-rs/tests/parity/whitelist.md
 
-## git diff --stat origin/master
- mir2-rs/bins/game-svr/src/main.rs                  |  190 +-
- .../00-commands.txt                                |   11 -
- .../01-scenario-anchor-diff.txt                    |   68 -
- .../02-anchor-gate-check.txt                       |    1 -
- .../03-anchor-gate-selftest.txt                    |    7 -
- .../04-anchor-gate-mutation.txt                    |    5 -
- .../05-run-guildcastle-selfcheck.txt               |   25 -
+## git diff --stat origin/master..HEAD
+ .../00-commands.txt                                |   36 +
+ .../01-scenario-anchor-diff.txt                    |   36 +
+ .../02-anchor-gate-check.txt                       |    1 +
+ .../03-anchor-gate-selftest.txt                    |    7 +
+ .../04-anchor-gate-mutation.txt                    |    5 +
+ .../05-run-heropet-selfcheck.txt                   |   26 +
  .../06-gate-fmt.txt                                |    0
- .../07-gate-clippy.txt                             |    5 -
- .../08-gate-test.txt                               | 1840 --------------------
- .../09-gate-msgcodegen.txt                         |    1 -
- .../10-boundary.txt                                |   20 -
- .../README.md                                      |   96 -
- .../SHA256SUMS.txt                                 |   12 -
- .../tests/parity/m3/guild_castle_anchor_gate.py    |  463 -----
- mir2-rs/tests/parity/m3/guild_castle_scenario.json |   28 +-
+ .../07-gate-clippy.txt                             |    2 +
+ .../08-gate-test.txt                               | 1838 ++++++++++++++++++++
+ .../09-gate-msgcodegen.txt                         |    1 +
+ .../11-boundary.txt                                |   49 +
+ .../12-external-break-red.txt                      |   11 +
+ .../13-whitelist-count-recheck.txt                 |   12 +
+ .../evidence-m3-hero-pet-anchor-20261014/README.md |   47 +
+ .../SHA256SUMS.txt                                 |   14 +
+ mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py    |  324 ++++
  mir2-rs/tests/parity/m3/hero_pet_scenario.json     |   17 +-
- mir2-rs/tests/parity/m3/run_guild_castle_pair.ps1  |   22 +-
  mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1      |   34 +-
- mir2-rs/tests/parity/whitelist.md                  |   10 +-
- .../70-aoi-visibility-verdict.txt                  |  106 --
- .../71-mongen-dense-points-map0.txt                |   23 -
- .../72-redcheck-vis-metric.txt                     |   38 -
- .../73-prereq-old-log.txt                          |    8 -
- .../client-e2e-enter-gaps-20261013/74-gates.txt    |   22 -
- .../client-e2e-enter-gaps-20261013/75-boundary.txt |   28 -
- .../76-selftest-aoi-checker.txt                    |   30 -
- .../world/client-e2e-enter-gaps-20261013/README.md |   20 -
- .../client-e2e-enter-gaps-20261013/SHA256SUMS.txt  |   10 +-
- .../check_aoi_visibility_diag.py                   |  243 ---
- 30 files changed, 79 insertions(+), 3304 deletions(-)
+ mir2-rs/tests/parity/whitelist.md                  |    8 +-
+ 19 files changed, 2458 insertions(+), 10 deletions(-)
 
 ## frozen surface (must be empty): src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
-mir2-rs/bins/game-svr/src/main.rs
 (end frozen)
 
 ## .rs changes (must be empty)
-mir2-rs/bins/game-svr/src/main.rs
 (end rs)
-
-## non-frozen diff (name-status)
-M	mir2-rs/bins/game-svr/src/main.rs
-D	mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/00-commands.txt
-D	mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/01-scenario-anchor-diff.txt
-D	mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/02-anchor-gate-check.txt
-D	mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/03-anchor-gate-selftest.txt
-D	mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/04-anchor-gate-mutation.txt
-D	mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/05-run-guildcastle-selfcheck.txt
-D	mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/06-gate-fmt.txt
-D	mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/07-gate-clippy.txt
-D	mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/08-gate-test.txt
-D	mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/09-gate-msgcodegen.txt
-D	mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/10-boundary.txt
-D	mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/README.md
-D	mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/SHA256SUMS.txt
-D	mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py
-M	mir2-rs/tests/parity/m3/guild_castle_scenario.json
-M	mir2-rs/tests/parity/m3/hero_pet_scenario.json
-M	mir2-rs/tests/parity/m3/run_guild_castle_pair.ps1
-M	mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1
-M	mir2-rs/tests/parity/whitelist.md
-D	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/70-aoi-visibility-verdict.txt
-D	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/71-mongen-dense-points-map0.txt
-D	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/72-redcheck-vis-metric.txt
-D	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/73-prereq-old-log.txt
-D	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/74-gates.txt
-D	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/75-boundary.txt
-D	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/76-selftest-aoi-checker.txt
-M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
-M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
-D	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_aoi_visibility_diag.py
