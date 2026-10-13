@@ -4,36 +4,22 @@ $ git diff origin/master..HEAD --stat -- src sql MirClient
 
 (空 = 冻结)
 
-# 交付树相对 master 5461c1b1 的全部差异（本片 D② 代码 + 证据）
-$ git diff origin/master..HEAD --name-only
+# 交付树相对 origin/master（a443296e）的全部差异 = 分支 drop-exp-host 上的 D①/D②/掉落侧 + 本片 F-1/F-2
+#   代码：mir2-rs/bins/game-svr/src/{main,smframe}.rs + mir2-rs/crates/world/src/{combat,world}.rs
+#          （其中 main.rs 含本片 F-1/F-2；smframe/combat/world 为 D② 既有）
+#   证据：mir2-rs/tests/parity/world/drop-exp-levelup-20261013/**（本片）
+#         + mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/**（上一片掉落侧锚定，零 .rs）
+
+$ git diff origin/master..HEAD --name-only -- mir2-rs/bins mir2-rs/crates
 mir2-rs/bins/game-svr/src/main.rs
 mir2-rs/bins/game-svr/src/smframe.rs
 mir2-rs/crates/world/src/combat.rs
 mir2-rs/crates/world/src/world.rs
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/01-oracle-anchors.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/02-change-summary.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/03-tests.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/04-redchecks.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/05-gates.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/06-boundary.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/40-redcheck-rc-d2-a-levelup-header-swapped.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/41-redcheck-rc-d2-b-heal-removed.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/42-redcheck-rc-d2-c-recalc-removed.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/43-redcheck-restore-sha256.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/README.md
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/SHA256SUMS.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/commands.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/gates/10-fmt.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/gates/11-clippy.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/gates/12-msgcodegen.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/gates/13-workspace-test.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/gates/14-baseline-master-5461c1b1.txt
-mir2-rs/tests/parity/world/drop-exp-levelup-20261013/gates/14-baseline-master-a547619a.txt
 
-$ git show --stat --oneline HEAD~2   # D② 代码提交（merge 的父）
-adca62f1 feat(m3-drop-exp): D② 升级链——GetExp 升级块语义(leveled) + RecalcLevelAbilitys/Abilitys + SM_LEVELUP(45)/SM_ABILITY(52)/SM_SUBABILITY(752)/SM_HEALTHSPELLCHANGED(53) + 世界实体同步
- mir2-rs/bins/game-svr/src/main.rs    | 278 +++++++++++++++++++++++++++++++----
- mir2-rs/bins/game-svr/src/smframe.rs |  11 ++
- mir2-rs/crates/world/src/combat.rs   |  22 ++-
- mir2-rs/crates/world/src/world.rs    |  44 +++++-
- 4 files changed, 319 insertions(+), 36 deletions(-)
+# 本片（F-1/F-2）代码提交：
+$ git show --stat --oneline 0efd8ddc
+0efd8ddc fix(m3-drop-exp): F-1 升级链帧序按 oracle MsgQueue 出队序（53→44→45→52→752）+ F-2 AddBodyLuck 建模与落库
+ mir2-rs/bins/game-svr/src/main.rs                  | 339 ++++++--
+ ...（证据文件 40..47 / 01..05 / README / commands / gates）
+# 交付前 merge：$ git log --oneline -1 bdc53848
+bdc53848 Merge remote-tracking branch 'origin/master' into drop-exp-host
