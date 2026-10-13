@@ -1,0 +1,43 @@
+# 证据生成/复核命令（cwd = mir2-rs/tests/parity/m3，除注明外）
+# 卡 openmir2-m3-fixture-marker-prefix-bug —— ④ drop-exp 族漏登记收口（tier=L）
+
+# 0) 本片 base
+#    git rev-parse origin/master          -> ea4cd8c65b924e1fa8634c18c8793396bf7094fe
+#    （修前复现在 base 的祖先 266bdbd17 上取；266bdbd17..ea4cd8c65 的差量只在 tests/parity/world/**）
+
+# 1) 修前 RED 复现（把本片两文件回退到 origin/master 版）
+git checkout origin/master -- mir2-rs/tests/parity/m3/marker_prefix_gate.py mir2-rs/tests/parity/m3/fixture_chain_gate.py
+python -I marker_prefix_gate.py check      # GREEN（单向核对看不到漏登记）
+python -I marker_prefix_gate.py selftest   # rc=1, 23/24, FAIL real-guards-wired
+git checkout HEAD -- mir2-rs/tests/parity/m3/marker_prefix_gate.py mir2-rs/tests/parity/m3/fixture_chain_gate.py
+
+# 2) 修后读数
+python -I marker_prefix_gate.py check      # GREEN（7 生产牙，含 1 guard-only 例外）
+python -I marker_prefix_gate.py selftest   # 26/26 GREEN, rc=0
+python -I marker_prefix_gate.py mutation   # MUTATION GREEN（PS 真身牙 + 三条变异体）
+
+# 3) 改坏必红 A：把 "M3DROPEXPSEQ" 从 GUARD_ONLY_MARKERS 删掉（模拟漏登记）
+python -I marker_prefix_gate.py check      # rc=1，点名 M3DROPEXPSEQ 未登记
+python -I marker_prefix_gate.py selftest   # 24/26（real-guards-wired + check-green 红）
+cp /tmp/mpg.bak marker_prefix_gate.py      # 按字节还原（sha256 复核一致）
+
+# 4) 改坏必红 B：给 run_pair.ps1 追加未登记牙 Assert-M3MarkerPrefix -Marker 'M3FUTURESEQ'
+python -I marker_prefix_gate.py check      # rc=1，点名 M3FUTURESEQ
+cp /tmp/rp.bak run_pair.ps1                # 按字节还原（sha256 复核一致）
+
+# 5) 链深检门
+python -I fixture_chain_gate.py selftest                 # 32/32 GREEN
+python -I fixture_chain_gate.py check --require-all      # +本片：FIXTURE_CHAIN GREEN runner_ok=10 red=0（含 marker_prefix 两项）
+# 修前（两文件回退到 origin/master 版）：同样 GREEN runner_ok=10，但输出里没有任何 marker_prefix 条目 ⇒ 盲区
+
+# 6) 四门禁（cwd = mir2-rs，CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --no-fail-fast
+cargo run -p msgcodegen -- --check
+
+# 7) 边界 + 清单
+git diff --name-status origin/master            # 2 路径（两个 .py）+ 证据目录
+git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage   # 空
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck  mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014

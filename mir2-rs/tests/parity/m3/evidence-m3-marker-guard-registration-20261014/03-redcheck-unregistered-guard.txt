@@ -1,0 +1,10 @@
+# 改坏 A：把 ④ 族从 GUARD_ONLY_MARKERS 删掉（模拟新夹具族漏登记）
+$ python -I marker_prefix_gate.py check
+RED: markers 前缀口径门失败（1 项）
+  - run_pair.ps1 生产牙 Marker 'M3DROPEXPSEQ'（$dropExpMarkersPath）未登记：新增夹具族必须加进 COMPARATORS 或 GUARD_ONLY_MARKERS
+rc=1
+
+$ python -I marker_prefix_gate.py selftest
+SELFTEST FAIL real-guards-wired
+SELFTEST FAIL check-green
+SELFTEST ok=24/26
