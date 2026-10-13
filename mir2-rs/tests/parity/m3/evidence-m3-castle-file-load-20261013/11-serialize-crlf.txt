@@ -1,0 +1,25 @@
+M3⑧-实现 6 第①片 —— 返工 F-2：落盘序列化统一为 CRLF（reviewer-6 review 92cc1c49）
+================================================================================
+问题（F-2, Important）: 原片两个落盘序列化函数用 '\n'，而 oracle 走
+  StringList.SaveToFile（src/OpenMir2/Common/StringList.cs:260）⇒ StreamWriter.WriteLine(:266)
+  ⇒ Environment.NewLine（Windows = CRLF "\r\n"）。部署件 Castle/List.txt 实测为 30 0D 0A（"0\r\n"）。
+  若不改，⑧-7/⑧-8 接线后写出的文件与 oracle 逐字节不同（文件格式面）。
+
+改前 / 改后:
+  serialize_castle_list:        out.push('\n')                    ⇒ out.push_str("\r\n")
+  serialize_attack_sabuk_wall:  format!("...\"{}\"\n", ...)       ⇒ format!("...\"{}\"\r\n", ...)
+  单测期望:                     "0\n1\n" / "...\n"                ⇒ "0\r\n1\r\n" / "...\r\n"
+
+同族先例: crates/data/src/guild.rs:635 encode_lines_gbk 显式 extend_from_slice(b"\r\n")。
+
+牙齿（构造级，可复跑）:
+  $ cargo test -p mir2-envir --offline --lib castle          # ⇒ 13 passed / 0 failed
+    - castle_list_parse_and_serialize:
+        assert_eq!(serialize_castle_list(2), "0\r\n1\r\n");
+        assert_eq!(serialize_castle_list(1).as_bytes(), &[0x30, 0x0D, 0x0A]);  // == 部署件 List.txt 逐字节
+    - attack_sabuk_wall_roundtrip:
+        assert_eq!(serialize_attack_sabuk_wall(&[e]), "同盟会       \"2026-10-15\"\r\n");
+
+改坏必红（见 04-redcheck.txt 第 2 段）:
+  把 serialize_castle_list 的 "\r\n" 改回 '\n' ⇒ castle_list_parse_and_serialize FAILED rc=101；
+  还原 ⇒ GREEN 13/13，源码 sha256 = 288eae6dec370322ba75b63e196e4ac00584cb28b8b170bbc1be3597edbf3df1。

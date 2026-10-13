@@ -1,0 +1,34 @@
+M3⑧-实现 6（openmir2-m3-castle-file-load）第①片 —— 向量清单
+================================================================================
+被测实现: mir2-rs/crates/envir/src/castle.rs（+ lib.rs 导出）
+判据: ≥1 条构造级判据 + 改坏必红（04-redcheck.txt）；真数据 = 部署件 0/SabukW.txt（fixtures/SabukW-0.hex）
+
+[测试件] cargo test -p mir2-envir --offline --lib castle  ⇒ 13 passed / 0 failed
+  （过滤器 `castle` 同时命中 `merchant::tests::castle_and_move_flags`——那是 merchant 用例，非本片）
+  castle 模块 12 条:
+  1 parses_deployed_sabuk_w                  部署件 0/SabukW.txt 逐字段（含尾随逗号 MapList、
+                                             MainDoorOpen=0 ⇒ false、门 9999 / 墙 4999 / 弓手 2000、12+12 数组长度）
+  2 guard_array_len_is_twelve_not_hire_cap   **牙齿**：Guards 数组长度 12（UserCastle.cs:49），
+                                             不是 CastleConst.MaxCalsteGuard=4（雇佣上限）
+  3 missing_keys_use_oracle_defaults         全缺键 ⇒ CastleConf.cs 各 ReadWrite* 第三参默认值
+  4 defense_units_order_and_count            defense_units() 顺序 = Initialize 的 RegenMonsterByName 顺序
+  5 empty_string_value_falls_back_to_default `CastleName=` 空值 ⇒ 回默认（Read 空串分支）
+  6 castle_map_list_splitting                CastleMapList 的 GetValidStr3 循环（尾随逗号、连续分隔符、纯分隔符）
+  7 castle_list_parse_and_serialize          Castle/List.txt 读取（Trim/空行）+ SaveCastleList 写下标
+                                             + **落盘 CRLF**（serialize_castle_list(1) 逐字节 == 部署件 List.txt 30 0D 0A）
+  8 attack_sabuk_wall_roundtrip              AttackSabukWall.txt 解析/落盘（7 空格 + 引号日期 + CRLF）
+  9 attack_date_parse_flag                   DateTime.TryParse 轻量判定；非法日期 flag=false
+ 10 gbk_decoding_of_castle_name              非 BOM 字节按 GBK 解（ConfigFile GB2312 口径）
+ 11 attack_sabuk_wall_unclosed_quote_keeps_remainder  畸形行（未闭合引号）：oracle ArrestStringEx 的
+                                             Unchanged 分支保留 remainder；前导空白细微差异已登记（reviewer-6 M-3）
+ 12 loader_reads_files_from_disk             MapLoader 的三条文件加载路径（SabukW/List/AttackSabukWall，含缺文件 None）
+    （helper `real_deployed_sabuk_w` 由 parses_deployed_sabuk_w 使用，不单列）
+
+[原始输出] 03-rust-vectors.txt（dump_castle_files 对部署件的逐字段读数）
+[落盘行尾] 11-serialize-crlf.txt（F-2 返工：oracle CRLF 依据 + 改前/改后 + 牙齿）
+[改坏必红] 04-redcheck.txt（GUARD_ARRAY_LEN 12→4 ⇒ 牙齿测试 RED；serialize CRLF→LF ⇒ 用例 RED；均还原 GREEN 13/13）
+
+未覆盖 / 承接（本片 scope 外，见 README 残留物清单）:
+  - 实体挂图（RegenMonsterByName + WAbil.HP）：第②片，依赖城堡实体类型（crates/world）。
+  - SabukW.txt 落盘（CastleConf.SaveConfig）：属 ⑧-7/⑧-8 状态机（且 oracle 缺键会回写默认 ⇒ 只读不回写已登记）。
+  - AttackSabukWall 的 DateTime 归一（culture）：登记为刻意偏差。

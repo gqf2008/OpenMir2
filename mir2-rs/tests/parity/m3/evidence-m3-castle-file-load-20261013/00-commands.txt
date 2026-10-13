@@ -1,0 +1,46 @@
+M3⑧-实现 6（openmir2-m3-castle-file-load）第①片 —— 命令流水（全部在 worktree m3cs 内执行）
+================================================================================
+工作目录: E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/mir2-rs
+隔离构建: CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target
+分支: worktree-m3-castle-file-load
+base: 本片最终 head 的 merge-base(origin/master, head)；本刻 origin/master = 5d499cd9c
+      （返工片先把 origin/master 合进分支再改；见 09-boundary.txt 的 merge-base 实测）
+
+[0] 取基线与同步
+    git fetch origin && git checkout worktree-m3-castle-file-load
+    git merge origin/master                       # 返工纪律：patch base 跟当时 master
+
+[1] 返工 F-1（oracle 锚行号订正，零行为变更）
+    # 逐条以 rg -n 实测 src/ 后订正 castle.rs（模块头 + 内联 doc）与 01-oracle-anchors.txt；
+    # 同族漂移 grep 全仓一次改干净（见 01-oracle-anchors.txt 文末「订正记录」）
+
+[2] 返工 F-2（落盘序列化 CRLF）+ M-3 边界用例
+    # castle.rs: serialize_castle_list / serialize_attack_sabuk_wall 改 "\r\n"；单测期望同步；
+    # 新增 castle_list_parse_and_serialize 的部署件逐字节断言 + attack_sabuk_wall_unclosed_quote_keeps_remainder
+    cargo test -p mir2-envir --offline --lib castle          # ⇒ 13 passed / 0 failed（12 castle + merchant 1）
+
+[3] 真数据 dump（03-rust-vectors.txt 的原始输出，未改动）
+    cargo run -p mir2-envir --offline --example dump_castle_files -- \
+        "E:/MirServer/M2GameSvr/Castle/0/SabukW.txt" "E:/MirServer/M2GameSvr/Castle/0/AttackSabukWall.txt"
+
+[4] 改坏必红（04-redcheck.txt：两条牙齿）
+    # (1) GUARD_ARRAY_LEN 12 → 4  ⇒ guard_array_len_is_twelve_not_hire_cap FAILED rc=101；还原 ⇒ GREEN 13/13
+    # (2) serialize_castle_list 的 "\r\n" → '\n' ⇒ castle_list_parse_and_serialize FAILED rc=101；还原 ⇒ GREEN 13/13
+    cargo test -p mir2-envir --offline --lib castle
+
+[5] 四门禁（05..08）
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets --offline -- -D warnings
+    cargo test --workspace --offline --no-fail-fast
+    cargo run -p msgcodegen --offline -- --check
+
+[6] 边界（09-boundary.txt）
+    git diff --name-only $(git merge-base origin/master HEAD) HEAD -- src sql MirClient
+    git diff --name-only $(git merge-base origin/master HEAD) HEAD -- \
+        mir2-rs/crates/protocol mir2-rs/crates/storage
+
+[7] 证据 hash（仓库字节 / LF 归一口径）
+    python -I tools/evidence-hash/verify_sha256sums.py --check-extra \
+        mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-20261013    # ⇒ GREEN OK 14/14
+    python -I tools/evidence-hash/verify_sha256sums.py eolcheck \
+        mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-20261013    # ⇒ EOLCHECK GREEN （见 12-hash-check.txt）
