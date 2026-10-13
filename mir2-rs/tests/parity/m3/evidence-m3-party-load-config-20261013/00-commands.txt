@@ -1,0 +1,33 @@
+# 本证据包命令（全部在 worktree .claude/worktrees/m3cs 内执行）
+# 隔离 target：export CARGO_TARGET_DIR=E:/tmp/m3cs-party-target
+
+# --- oracle 锚 ---
+sed -n '225p;308p;309p;310p;311p;571p' src/Modules/SystemModule/Conf/ServerConf.cs
+rg -n "public (byte|int|bool) (GroupMembersMax|TryDealTime|DealOKTime|CanNotGetBackDeal|DisableDeal|LockDealAction);" src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+sed -n '1400,1404p;1488,1492p;1513,1520p' src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+rg -n "StreamReader|GB2312|detectEncodingFromByteOrderMarks" src/OpenMir2/Common/ConfigFile.cs
+
+# --- 单元/集成测试 ---
+cd mir2-rs
+cargo test --offline -p mir2-data
+cargo test --offline -p mir2-data --test party_config
+
+# --- 真读现网 Server.conf ---
+cargo run --offline -q -p mir2-data --example dump_party -- "E:/MirServer/M2GameSvr/Server.conf"
+
+# --- 改坏必红 ---
+sed -i 's/try_deal_time: 3000,/try_deal_time: 2999,/' crates/data/src/party.rs
+cargo test --offline -p mir2-data --test party_config        # 期望 RED
+sed -i 's/try_deal_time: 2999,/try_deal_time: 3000,/' crates/data/src/party.rs
+cargo test --offline -p mir2-data --test party_config        # 期望 GREEN
+
+# --- 四门禁 ---
+cargo fmt --all -- --check
+cargo clippy --offline --workspace --all-targets -- -D warnings
+cargo test --offline --workspace
+cargo run --offline -q -p msgcodegen -- --check
+
+# --- 证据包 EOL / 清单 ---
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-party-load-config-20261013
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-party-load-config-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-party-load-config-20261013

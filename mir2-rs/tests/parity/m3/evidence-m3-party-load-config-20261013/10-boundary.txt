@@ -1,0 +1,18 @@
+# base = origin/master 7f013fe9
+
+$ git diff --stat 7f013fe9 -- src/ sql/ MirClient
+(空 = 冻结基线零改动)
+
+$ git status --porcelain -- src/ sql/ MirClient
+(空 = 干净)
+
+$ git diff --stat 7f013fe9 (完整改动面，仅 tracked；新增文件见 git status)
+ mir2-rs/crates/data/src/lib.rs | 1 +
+ 1 file changed, 1 insertion(+)
+
+$ git status --porcelain mir2-rs/crates/data
+ M mir2-rs/crates/data/src/lib.rs
+?? mir2-rs/crates/data/examples/dump_party.rs
+?? mir2-rs/crates/data/src/party.rs
+?? mir2-rs/crates/data/tests/data/party_defaults.tsv
+?? mir2-rs/crates/data/tests/party_config.rs
