@@ -1,0 +1,27 @@
+# 片㉔ 四门禁（隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-target`，cwd=`mir2-rs/`）—— 2026-10-14
+
+工作树 = 本车道 worktree `.claude/worktrees/m2-svr`；base = `origin/master 4244cb695`（片㉓ 已合入，本分支已 `git merge origin/master` 对齐）。
+本片仅改 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py`（`.py`，零 `.rs`/`.toml`）。
+
+```
+$ cargo fmt --all -- --check
+rc=0
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.57s
+rc=0
+
+$ cargo test --workspace --offline
+101 suites（Running/Doc-tests），test result: ok 汇总 = passed 1200 / failed 0 / ignored 22
+rc=0
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+```
+
+原始件：`E:/tmp/m2svr-burst11/{fmt.txt,clippy.txt,test-full.txt,msgcodegen.txt}`（本机临时，非入库面）。
+汇总复算：`grep '^test result:' test-full.txt | awk '{p+=$4;f+=$6;i+=$8;n++} END{...}'` ⇒ `101 / 1200 / 0 / 22`。
+
+> 说明：本片零 Rust 改动，门读数与片㉓ 合并树读数逐值一致（`101 suites / 1200 passed / 0 failed / 22 ignored` / `msgcodegen 604`）。
+> 证据文件均为 `.txt`（不改编译面），故四门禁读数对交付 head 成立。

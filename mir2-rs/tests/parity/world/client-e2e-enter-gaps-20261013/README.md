@@ -546,3 +546,24 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级「③b/③a 两趟真机同框对照」+「屏幕见怪并
   能攻击造成伤害」。
 - 证据：`119-window-plan-build-step.txt`、`120-redcheck-window-plan-build.txt`、`121-gates.txt`、`122-boundary.txt`。
+
+## ㉔ 片㉔：③ 窗口计划**补抓包拓扑**（影子 game-gate 7600 + 代理占 7200）（2026-10-14）—— `123`
+
+- **背景（源码实读 + 湿测的烧窗路径）**：片㉓ 补了构建步骤后，计划仍把 `mir2_proxy.py --map 7200=…` 直接接在
+  起栈命令后，没有「先让出官方 7200、再起影子 game-gate(7600)」。`start_rust_stack.ps1:323` 起的标准
+  Rust `game-gate` 必然占着 7200，而 `mir2_proxy.py:137-145` 的 `asyncio.start_server` 在端口被占时抛
+  `OSError(10048)`、不写 `ready.flag` ⇒ **无 capture ⇒ ③b 客户端 pairs=0/PREREQ，白烧窗口**。
+- **本片改动（`window_handoff.py`，零起栈/零游戏端口）**：`plan_text()` 在 §2 段内新增 **§2a 抓包拓扑**——
+  Rust 侧照已证步骤（`tools/m2-acceptance/evidence/m2svr-whitelist-rerun-20261012/README.md` §4：停标准
+  game-gate 让出 7200 → 起影子 game-gate(7600，`game-gate.exe <影子 conf>`，conf 最小集 5 键) → 代理占 7200）；
+  C# 侧同口径并指向 `82-two-side-window-runbook.md` §4.1。两块都排在各自 `mir2_proxy.py` 之前。
+- **真读数**：`--selftest` **49/49 → 53/53**（新增 `plan-has-capture-topology` / `plan-topology-before-proxy` /
+  `plan-topology-shadow-conf` / `plan-topology-csharp-pointer`；既有 49 条逐条不动）。
+- **burn-mode 湿测**（非游戏端口 57999/57997，绕开十端口）：代理监听端口被占 ⇒ `rc=1` 且无 `ready.flag`；
+  让出后 ⇒ `LISTEN` + `ready.flag=True`。
+- **改坏必红**（`124`，2 颗牙，变异只在 `E:/tmp/m2svr-burst11/mut/` 复制件、仓内 sha256 前后一致）：
+  ① 删 §2a 4 行 ⇒ `SELFTEST FAILED (50/53)`；② 删 C# 指针 ⇒ `(52/53)`。
+- **零生产代码改动**（仅一个 `.py` + 四份证据 + README/清单）；**未起栈、未占任何游戏端口**，未动共享主检出。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级「③b/③a 两趟真机同框对照」+「屏幕见怪并
+  能攻击造成伤害」；C# 侧世界数据能否经代理下来须窗口实拍（`85-…md` §E）。
+- 证据：`123-window-plan-capture-topology.txt`、`124-redcheck-window-plan-capture-topology.txt`、`125-gates.txt`、`126-boundary.txt`。

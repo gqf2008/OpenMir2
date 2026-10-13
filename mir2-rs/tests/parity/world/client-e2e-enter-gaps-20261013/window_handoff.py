@@ -395,6 +395,17 @@ def plan_text(
     A("#   [③b] Rust：")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 ^")
     A(f"#       -RustBinDir {bin_dir} -Seed {seed} -LogDir {rust}/stack")
+    A("#     # 2a) 【起代理前必做】抓包拓扑：代理占官方 7200 转发到**影子** game-gate(7600)；")
+    A("#     #     不先做 ⇒ mir2_proxy.py 绑不上 7200 ⇒ 无 capture ⇒ ③b 客户端 pairs=0/PREREQ，白烧窗口。")
+    A("#     #     已证步骤：tools/m2-acceptance/evidence/m2svr-whitelist-rerun-20261012/README.md §4。")
+    A(f"#     #   (本计划 <bin_dir> = {bin_dir})")
+    A("#     #   a. 停本栈标准 game-gate 让出 7200/7201/7202（按绝对路径精确停，勿误伤同名进程）：")
+    A("#     #        Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq '<bin_dir>\\game-gate.exe' } |")
+    A("#     #          ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
+    A("#     #   b. 起影子 game-gate 于 7600（Rust 读法 `game-gate.exe <conf>`；conf 最小集 = 下面 5 键）：")
+    A("#     #        [GameGate] Count=1 / ServerAddr1=127.0.0.1 / ServerPort1=5000 / GateAddress1=127.0.0.1 / GatePort1=7600")
+    A("#     #        Start-Process -FilePath '<bin_dir>\\game-gate.exe' -ArgumentList '<影子 conf>' -WorkingDirectory '<conf 目录>'")
+    A("#     #   c. 确认 7200 DOWN、7600 UP（start_rust_stack.ps1 -Status / E:/MirServer/port-status.ps1）后才起代理：")
     A(f"#     python tools/capture/mir2_proxy.py --out {rust}/proxy --map 7200=127.0.0.1:7600")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 ^")
     A(f"#       -Account mir2test -Password mir2pass -OutDir {rust}/shots -WalkClicks 0 -AutoPlaySec 12 ^")
@@ -406,7 +417,9 @@ def plan_text(
     A(f"#     python -I -B {CSHARP_PREFLIGHT} --repo {repo or '<检出>'} --mirserver {mirserver} ^")
     A(f"#       --shadow-config <影子 RunGate/config.conf>        # 必须 GREEN 再起栈")
     A(f"#     powershell -ExecutionPolicy Bypass -File {mirserver}/start-all.ps1")
-    A(f"#     # 影子 game-gate(7600) + 代理占 7200；再到 C# 侧客户端与解码：")
+    A("#     # 2a) 【起代理前必做】抓包拓扑（同 Rust）：停标准 RunGate(7200) → 起影子 game-gate(7600)")
+    A("#     #     （拷 E:/MirServer/RunGate/config.conf、只改 GatePort1=7600、保留 ServerWorkThread=1，")
+    A("#     #      见 82-two-side-window-runbook.md §4.1）→ 确认 7200 DOWN/7600 UP 后再起代理占 7200")
     A(f"#     python tools/capture/mir2_proxy.py --out {csh}/proxy --map 7200=127.0.0.1:7600")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 -Account mir2test ^")
     A(f"#       -Password mir2pass -OutDir {csh}/shots -WalkClicks 0 -AutoPlaySec 12 -SkipReenter -SkipLogout -SkipTalk")
@@ -588,6 +601,18 @@ def selftest() -> int:
         chk("plan-bin-missing-warning",
             "构建产物不存在" in _missing_plan and "PREREQ_MISSING" in _missing_plan
             and "构建产物不存在" not in _build_plan)
+        # 片㉔：计划必须自带 §2a 抓包拓扑（代理占官方 7200 → 影子 game-gate 7600）；不先做 ⇒ 代理绑不上 7200
+        # ⇒ 无 capture ⇒ ③b 客户端 pairs=0/PREREQ，白烧窗口。
+        chk("plan-has-capture-topology",
+            "起影子 game-gate 于 7600" in _build_plan and "让出 7200" in _build_plan
+            and "白烧窗口" in _build_plan)
+        _topo_i = _build_plan.find("起影子 game-gate 于 7600")
+        _proxy_i = _build_plan.find("mir2_proxy.py --out")
+        chk("plan-topology-before-proxy", 0 <= _topo_i < _proxy_i, f"topo={_topo_i} proxy={_proxy_i}")
+        chk("plan-topology-shadow-conf",
+            "GatePort1=7600" in _build_plan and "ServerPort1=5000" in _build_plan)
+        chk("plan-topology-csharp-pointer",
+            "82-two-side-window-runbook.md" in _build_plan and "ServerWorkThread=1" in _build_plan)
 
     with tempfile.TemporaryDirectory(prefix="wh-badtool-") as tmp:
         _write_fake_tools(tmp, "GREEN", bad_selftest="aoi_visibility_pair.py")

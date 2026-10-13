@@ -1,0 +1,114 @@
+123-window-plan-capture-topology.txt —— 卡 openmir2-client-e2e-enter-gaps 片㉔ 判定书
+③ 窗口计划补「抓包拓扑（影子网关 + 代理）」步骤 —— 关闭第二条实测烧窗路径
+m2-svr / openmir2-worker-11 / 2026-10-14（回应 brief-m2svr-next 顶部 root 2026-10-14 00:4x ③「判据/capture 工具你准备」）
+本片零起栈、零占端口（仅共享 MySQL 3306）、零生产代码改动；只在自身 worktree 写。
+被测件：window_handoff.py  sha256 = 6cfd7651720ff7a4a9a0fd23c5e52d217da89bc389fd0ec4ac5412684c6693f8
+base = origin/master 4244cb695（片㉓ 已由 merge 车道合入）
+tier = L（纯计划文本/判据工具；不触 RNG 抽数 / 时序 / 落库 / 战斗数值）
+====================================================================================================
+
+一句话：片㉓ 把「构建步骤」补进计划后，计划**仍然**把 `mir2_proxy.py --map 7200=...` 直接接在起栈命令后，
+却没有「先让出官方 7200、再起影子 game-gate(7600)」这一步 ⇒ 代理 `start_server` 在 7200 上抛
+`OSError 10048`（端口已被本栈标准 game-gate 占用）⇒ 无 capture ⇒ ③b 客户端 pairs 永远 0/PREREQ，白烧窗口。
+本片把 §2a 抓包拓扑（两条侧：Rust / C#）写进计划文本，并补 4 条 selftest + 2 颗改坏必红。
+
+A. 缺陷（before，源码实读 + 湿测；不是散文）
+----------------------------------------------------------------------------------------------------
+[A1] `tools/m2-acceptance/start_rust_stack.ps1:323` 起 **Rust** `game-gate`：
+       `Start-One -Name 'game-gate' -Exe $ggExe -ExeArgs @($ggConf) ... -Ports @(7200, 7201, 7202)`
+     其中 `$ggConf = <MirServer>\RunGate\config.conf`（`:194`），即布局 `GatePort1/2/3 = 7200/7201/7202`。
+     ⇒ 通过 `start_rust_stack.ps1` 起的栈**必然**占着 7200。
+[A2] `tools/capture/mir2_proxy.py:137-145` 对每个 `--map` 调 `asyncio.start_server(handler, bind, listen_port)`，
+     全部成功后才写 `<out>/ready.flag`。端口被占 ⇒ `OSError(10048)` 未捕获 ⇒ 进程非零退出、**无 ready.flag**。
+[A3] 计划（片㉓ 后的 before）里，Rust 段是「起栈 → 直接代理」，中间只有一行 C# 注释
+     `# 影子 game-gate(7600) + 代理占 7200；`——**没有任何「让出 7200 / 起影子 7600」的可执行步骤**。
+     照抄计划 ⇒ 第 2 步代理必在 7200 上失败。已证可跑的步骤在
+     `tools/m2-acceptance/evidence/m2svr-whitelist-rerun-20261012/README.md` §4
+     （「先停标准 game-gate 让出 7200」+ `game-gate.exe <rungate-proxy.conf>` + `mir2_proxy.py --map 7200=127.0.0.1:7600`），
+     但计划本身没引用它。
+
+[A4] burn-mode 湿测（代理监听端口被占 ⇒ 必失败；让出后 ⇒ 起得来）。为不占任何游戏端口，
+     用**环回非游戏端口** 57999（占用方）/ 57997（上游，可不存在）复现同一机制：
+```
+=== phase1: standard gate holds 57999 (proxy must fail) ===
+rc=1 ready.flag=False
+  File ".../asyncio/base_events.py", line 1584, in create_server
+    raise OSError(err.errno, msg) from None
+OSError: [Errno 10048] error while attempting to bind on address ('127.0.0.1', 57999): ... 只允许使用一次。
+=== phase2: port freed (proxy must start) ===
+rc='RUNNING' ready.flag=True
+LISTEN 127.0.0.1:57999 -> 127.0.0.1:57997
+READY
+```
+     ⇒ 「先让出 7200、再起代理」不是可选项；标准 game-gate 还在 ⇒ 代理必死。
+
+B. 改动（after：`plan_text()` 新增 §2a）
+----------------------------------------------------------------------------------------------------
+Rust 段（紧跟 `start_rust_stack.ps1` 之后、代理之前）新增：
+```
+#     # 2a) 【起代理前必做】抓包拓扑：代理占官方 7200 转发到**影子** game-gate(7600)；
+#     #     不先做 ⇒ mir2_proxy.py 绑不上 7200 ⇒ 无 capture ⇒ ③b 客户端 pairs=0/PREREQ，白烧窗口。
+#     #     已证步骤：tools/m2-acceptance/evidence/m2svr-whitelist-rerun-20261012/README.md §4。
+#     #   (本计划 <bin_dir> = E:/tmp/m2svr-window-target/debug)
+#     #   a. 停本栈标准 game-gate 让出 7200/7201/7202（按绝对路径精确停，勿误伤同名进程）：
+#     #        Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq '<bin_dir>\game-gate.exe' } |
+#     #          ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+#     #   b. 起影子 game-gate 于 7600（Rust 读法 `game-gate.exe <conf>`；conf 最小集 = 下面 5 键）：
+#     #        [GameGate] Count=1 / ServerAddr1=127.0.0.1 / ServerPort1=5000 / GateAddress1=127.0.0.1 / GatePort1=7600
+#     #        Start-Process -FilePath '<bin_dir>\game-gate.exe' -ArgumentList '<影子 conf>' -WorkingDirectory '<conf 目录>'
+#     #   c. 确认 7200 DOWN、7600 UP（start_rust_stack.ps1 -Status / E:/MirServer/port-status.ps1）后才起代理：
+```
+C# 段（把原来的裸注释换成同口径「先做」块，并指向 82 手册 §4.1）：
+```
+#     # 2a) 【起代理前必做】抓包拓扑（同 Rust）：停标准 RunGate(7200) → 起影子 game-gate(7600)
+#     #     （拷 E:/MirServer/RunGate/config.conf、只改 GatePort1=7600、保留 ServerWorkThread=1，
+#     #      见 82-two-side-window-runbook.md §4.1）→ 确认 7200 DOWN/7600 UP 后再起代理占 7200
+```
+- 顺序不变（拓扑在起栈之后、代理之前），因此计划按 §0a 构建 → §2 起栈 → §2a 拓扑 → 代理 → 判据可**顺序照抄**。
+- C# 侧世界数据能否经代理下来仍是**窗口实拍项**（`85-csharp-capture-topology-rootcause.md` §E），本片只补步骤，不声称已验证。
+
+C. `--selftest` 49/49 → 53/53（新增 4 条计划口径）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B window_handoff.py --selftest
+[PASS] selftest plan-has-capture-topology
+[PASS] selftest plan-topology-before-proxy
+[PASS] selftest plan-topology-shadow-conf
+[PASS] selftest plan-topology-csharp-pointer
+SELFTEST OK (53/53)
+```
+- `plan-has-capture-topology`：计划含「起影子 game-gate 于 7600」+「让出 7200」+「白烧窗口」。
+- `plan-topology-before-proxy`：拓扑块序号 < 第一条 `mir2_proxy.py --out` 命令序号（防「先代理后拓扑」）。
+- `plan-topology-shadow-conf`：影子 conf 最小集在计划里（`GatePort1=7600` + `ServerPort1=5000`）。
+- `plan-topology-csharp-pointer`：C# 段保留 `82-two-side-window-runbook.md` + `ServerWorkThread=1` 指针。
+- 既有 49 条**逐条不动**（解析 / G1 / G2 / G3 / `--judge` 五条 / §0a 构建 / ③a 独立目录全部保留）。
+
+D. 计划实读（节选，`--plan-only --best-site --repo <本 worktree>`）
+----------------------------------------------------------------------------------------------------
+见 §B；两条侧都出现 §2a，且都排在各自 `mir2_proxy.py` 之前（C 的 4 条断言机判）。
+
+E. 改坏必红（2 颗牙；变异只在 `E:/tmp/m2svr-burst11/mut/` 复制件，仓内 sha256 前后一致）
+----------------------------------------------------------------------------------------------------
+① **MUT-A**：删掉 §2a 的 4 行（白烧窗口说明 / a 让出 7200 / b 起影子 7600 / 影子 conf 集）：
+```
+[FAIL] selftest plan-has-capture-topology
+[FAIL] selftest plan-topology-before-proxy topo=-1 proxy=1678
+[FAIL] selftest plan-topology-shadow-conf
+SELFTEST FAILED (50/53)
+```
+② **MUT-B**：删掉 C# 段的 `见 82-two-side-window-runbook.md §4.1` 指针：
+```
+[FAIL] selftest plan-topology-csharp-pointer
+SELFTEST FAILED (52/53)
+```
+仓内件 sha256 在变异前后一致：`6cfd7651…`（`sha256sum -c base.sha256` = OK）。
+`git diff --stat -- window_handoff.py` = 1 file changed, 26 insertions(+), 1 deletion(-)。
+
+F. 涉及文件 / 边界 / 登记
+----------------------------------------------------------------------------------------------------
+- 代码/工具：`mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py`（唯一 .py 改动）。
+- 证据：本文件 + `124-redcheck-window-plan-capture-topology.txt` + `125-gates.txt` + `126-boundary.txt`。
+- 边界：`src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/ mir2-rs/bins/` = 空；`.rs`/`.toml` = 0。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级「③b/③a 两趟真机同框对照」+「屏幕见怪并能攻击造成伤害」；
+  C# 侧世界数据能否经代理下来须窗口实拍。
+- 本片**未起栈、未占任何游戏端口、未动共享主检出、未 merge、未自签 review**。
