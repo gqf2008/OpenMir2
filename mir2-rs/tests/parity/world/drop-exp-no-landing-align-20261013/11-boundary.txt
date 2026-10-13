@@ -1,83 +1,43 @@
 # 边界：本片相对 origin/master 未动 src/ sql/ MirClient
 
-$ git diff --name-only origin/master -- src sql MirClient
+$ git diff --name-only origin/master..HEAD -- src sql MirClient
 (以上为空)
 
-$ git diff --name-only origin/master  # 全部改动（工作树 vs origin/master，含未提交）
-mir2-rs/Cargo.lock
+$ git log --oneline -1 origin/master
+d778ac30 Merge 94ec0eee (worktree-m3-merchant-load): M3 (5) implementation 1 - Envir/Merchant.txt loading into crates/envir merchant module (10 columns + CastleMerchant/BoCanMove + script-header/%PRICERATE/[goods] reuse from crates/script) -> MerchantRecord; real-machine vector 131 merchants/63 with [goods]/582 entries - approve reviewer-6 @reviewed_head 94ec0eee
+$ git log --oneline -1 HEAD
+d6aae2e0 Merge remote-tracking branch 'origin/master' into drop-exp-host
+
+$ git diff --name-only origin/master..HEAD  # 本片全部改动（committed）
 mir2-rs/bins/game-svr/src/main.rs
-mir2-rs/crates/envir/Cargo.toml
-mir2-rs/crates/envir/src/error.rs
-mir2-rs/crates/envir/src/lib.rs
-mir2-rs/crates/envir/src/merchant.rs
-mir2-rs/crates/envir/tests/merchant.rs
 mir2-rs/crates/world-bevy/tests/bevy_drop_parity.rs
 mir2-rs/crates/world/src/map.rs
 mir2-rs/crates/world/src/world.rs
 mir2-rs/tests/parity/csharp/WorldGolden/Program.cs
-"mir2-rs/tests/parity/m3/M3\342\221\244\345\225\206\344\272\272MerChant\345\212\240\350\275\275\346\212\245\345\221\212-20261013.md"
-mir2-rs/tests/parity/m3/drop-exp/README.md
-mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv
-mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py
-mir2-rs/tests/parity/m3/drop-exp/drop_exp_scenario.json
-mir2-rs/tests/parity/m3/drop-exp/run_drop_exp_pair.ps1
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/00-commands.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/01-purity-gate-selftest.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/02-nostack-selfcheck.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/03-break-must-be-red-wallclock.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/04-break-must-be-red-unknown.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/05-break-must-be-red-table-measured-removed.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/06-purity-clean-green.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/07-purity-clean.json
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/08-rust-pending-prereq.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/09-gate-fmt.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/10-gate-clippy.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/11-gate-test.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/12-gate-msgcodegen.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/13-eolcheck.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/14-boundary.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/15-clean-checkout-repro.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/README.md
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/SHA256SUMS.txt
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/consumers-no-measured.tsv
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-clean.tsv
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-unknown.tsv
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-wallclock.tsv
-mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/raw.jsonl
-mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/00-oracle-chain-lines.txt
-mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/01-rust-status-greps.txt
-mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/02-envir-tests.txt
-mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/03-deployment-run.txt
-mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/04-redcheck-a-pricerate-threshold.txt
-mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/05-redcheck-b-canmove-movetime.txt
-mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/06-gate-fmt.txt
-mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/07-gate-clippy.txt
-mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/08-gate-test.txt
-mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/09-gate-msgcodegen.txt
-mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/10-boundary.txt
-mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/README.md
-mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/SHA256SUMS.txt
 mir2-rs/tests/parity/tests/common/mod.rs
 mir2-rs/tests/parity/tests/world_combat_parity.rs
 mir2-rs/tests/parity/tests/world_session_parity.rs
 mir2-rs/tests/parity/whitelist.md
 "mir2-rs/tests/parity/world/D3\350\257\225\351\252\214\347\224\260\346\212\245\345\221\212.md"
 "mir2-rs/tests/parity/world/M2\351\252\250\346\236\266\346\212\245\345\221\212.md"
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/00-commands.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/01-oracle-anchors.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/02-golden-probe-before-after.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/03-golden-regen.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/04-golden-before-after-diff.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/05-golden-hashes.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/06-redcheck-combat-revert-landing.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/07-redcheck-session-revert-landing.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/08-redcheck-probe-stub-vs-oracle.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/09-redcheck-restore-green.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/10-gates.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/11-boundary.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/12-whitelist-t32-after.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/README.md
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/gates/01-fmt.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/gates/02-clippy.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/gates/03-workspace-test.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/gates/04-msgcodegen.txt
 mir2-rs/tests/parity/world/golden/combat.txt
 mir2-rs/tests/parity/world/golden/session.txt
-
-$ git status --porcelain=v1  # 含未跟踪证据目录
- M mir2-rs/bins/game-svr/src/main.rs
- M mir2-rs/crates/world-bevy/tests/bevy_drop_parity.rs
- M mir2-rs/crates/world/src/map.rs
- M mir2-rs/crates/world/src/world.rs
- M mir2-rs/tests/parity/csharp/WorldGolden/Program.cs
- M mir2-rs/tests/parity/tests/common/mod.rs
- M mir2-rs/tests/parity/tests/world_combat_parity.rs
- M mir2-rs/tests/parity/tests/world_session_parity.rs
- M mir2-rs/tests/parity/whitelist.md
- M "mir2-rs/tests/parity/world/D3\350\257\225\351\252\214\347\224\260\346\212\245\345\221\212.md"
- M "mir2-rs/tests/parity/world/M2\351\252\250\346\236\266\346\212\245\345\221\212.md"
- M mir2-rs/tests/parity/world/golden/combat.txt
- M mir2-rs/tests/parity/world/golden/session.txt
-?? mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/

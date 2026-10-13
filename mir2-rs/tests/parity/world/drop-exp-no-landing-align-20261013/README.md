@@ -4,8 +4,8 @@
 > 本片 = owner `aace16e0` / brief 顶部 09:35 裁决的**方案 A**：把 Rust 死亡掉落从「落地」
 > 改回**冻结 `src/` 的真实行为（恒不落地）**，并修正 C# golden 探针 + 重生成 2 份 golden
 > + 收窄白名单 T-32。
-> 工作目录 `.claude/worktrees/m2-svr`（分支 `drop-exp-host`）；base = `origin/master` **`083dd0e3`**；
-> 无栈、无端口（判据全离线）。
+> 工作目录 `.claude/worktrees/m2-svr`（分支 `drop-exp-host`）；base = `origin/master` **`d778ac30`**
+> （交付前 `git merge origin/master`，merge 提交 `d6aae2e0`）；无栈、无端口（判据全离线）。
 
 ## 0. 一句话
 
@@ -53,9 +53,10 @@ Rust 侧玩家 `CM_DROPITEM` 早已按 T-19 复刻（`bins/game-svr/src/ground.r
 
 ## 4. 门禁与证据
 
-- 四门禁（`CARGO_TARGET_DIR=E:/tmp/m2svr-optionA-target`，`--offline`）：
+- 四门禁（`CARGO_TARGET_DIR=E:/tmp/m2svr-optionA-target`，`--offline`，在 **merge `origin/master` `d778ac30` 后的 head `d6aae2e0`** 上重跑）：
   `fmt` rc=0；`clippy --workspace --all-targets -D warnings` rc=0；`test --workspace --no-fail-fast`
-  **92 suites · 837 passed · 0 failed · 19 ignored** rc=0；`msgcodegen --check` **604** rc=0（见 `10-gates.txt` + `gates/`）。
+  **93 suites · 847 passed · 0 failed · 20 ignored** rc=0；`msgcodegen --check` **604** rc=0（见 `10-gates.txt` + `gates/`）。
+  （merge 前 base `083dd0e3` 树读数为 92/837/0/19；差量 = merge 带入的 master 新代码，0 失败。）
 - 边界：`git diff --name-only origin/master..HEAD -- src sql MirClient` **空**（见 `11-boundary.txt`）。
 - 证据清单（仓库字节 / LF 归一口径）由 `tools/evidence-hash/verify_sha256sums.py` 生成并复核。
 
