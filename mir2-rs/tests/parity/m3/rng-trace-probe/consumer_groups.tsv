@@ -65,3 +65,12 @@ homemap	csharp	GetRandHomeY@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:141
 homemap	rust	bins/game-svr/src/homemap\.rs:	bins/game-svr/src/homemap.rs	落点/Home 计算
 startup	csharp	ServerConf\.LoadConfig@ServerConf\.cs:	src/SystemModule/Conf/ServerConf.cs:114	配置加载期抽数
 startup	rust	bins/game-svr/src/main\.rs:	bins/game-svr/src/main.rs	宿主启动期（seed/main 抽数）
+
+# ---- 窗口前置审计补登记（2026-10-13，本行追加在表末以免移动上方锚行行号）----------------
+# 宿主侧 `bins/game-svr/src/mongen.rs`（`create_monster_oracle` / `draw_monster_construct`）抽
+# **同一批构造期随机数**（BaseObject/AnimalObject/MonsterObject ctor 计时器、MeatQuality 等）
+# ⇒ 同表 `spawn`。固定场景（图 0137，MonGen 0 行）里 `crates/world/src/mongen.rs` 不抽，
+# 唯一的 `spawn` 来源就是这只 pin 怪的**宿主构造抽数**；漏归类会被算成 `other` ⇒
+# `groupdiff --fold --strict` 的 `GROUP_SET_DIFF` + DoD② 的 `MISSING_EXPECTED_GROUPS(spawn)`
+# 双红（会在与 ④ 共用的独占窗口里空转一轮）。机判见 `rng_consumer_groups.py selftest`（含删行必红）。
+spawn	rust	bins/game-svr/src/mongen\.rs:	bins/game-svr/src/mongen.rs	宿主生成期构造抽数（create_monster_oracle/draw_monster_construct）；R-6 折叠后 C# construct → Rust spawn，与 drop_exp_consumers.tsv 的 setup 行同口径

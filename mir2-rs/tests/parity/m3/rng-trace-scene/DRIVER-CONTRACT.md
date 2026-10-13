@@ -93,6 +93,11 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
 - R-6 折叠口径（owner 2026-10-13 裁决）：`rng_consumer_groups.FOLD_RULES = {"construct": "spawn"}`
   （定义 = `rng-trace-probe/rng_consumer_groups.py:52`；说明/站点 = `rng-trace-probe/consumer_groups.tsv:35`（折叠理由）、`:53`（Rust `spawn` 行））；
   折叠后**计数与相对次序必须相等**。
+- **表侧补登记（2026-10-13 窗口前置审计）**：宿主 `bins/game-svr/src/mongen.rs`
+  （`create_monster_oracle` / `draw_monster_construct`）也抽同一批构造期随机数 ⇒ 同归 `spawn`
+  （`consumer_groups.tsv` 表末补一行）。固定场景（图 0137，MonGen 0 行）里它是**唯一**的
+  `spawn` 来源；漏归类会被算成 `other` ⇒ `--strict` 的 `GROUP_SET_DIFF` + DoD② 的
+  `MISSING_EXPECTED_GROUPS(spawn)` 双红（会在共用窗口里空转一轮）。机判 = `python -I rng-trace-probe/rng_consumer_groups.py selftest`（含删行必红）。
 
 ## 7. 当前状态（阻塞）
 
