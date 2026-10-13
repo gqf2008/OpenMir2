@@ -201,3 +201,16 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   （本片配对本身即正反两面；构造级 `31` 复跑）。
 - **零生产代码改动**（BEFORE 二进制是临时本地注释该行、交付前已 `git checkout` 还原并重建）；
   起过真栈做抓包，收工已 `-Stop`，十游戏端口全 DOWN、仅 3306，DB 位置还原 (291,666)。
+
+## ⑧ 片⑧：回应 orchestrator comment 6c7ab2eb（「跑」修复）——**帧号不匹配的只读复核**（`60`）
+
+- **发现（阻断级）**：冻结客户端 `SM_SERVERCONFIG = 20002`（`Grobal2.pas:1300`），而 oracle/Rust 发 **11029**
+  （`Messages.cs:433` / `protocol/messages.rs:393`）；客户端全仓无 `11029` ⇒ `ClientGetServerConfig`
+  **永不执行** ⇒ `g_boCanStartRun` 停在**缺省 True**（`MShare.pas:1998`）⇒ 跑门 `ClMain.pas:2193` 恒真。
+  ⇒ **「ClientConf 长度兼容」不足以（也不能）解释 `CM_RUN=0`**；片⑥「boCanStartRun 读未初始化栈 ⇒ 恒假」不成立。
+- **真正的下游门**（应查这几处）：`ClMain.pas:2190 caRun:` —— `CanRun`（`Actor.pas:2162`，HP≥10）、
+  `GetDistance>=2`（`:2223`）、`IsUnLockAction`（`:2225`）、`g_PlayScene.CanRun`（`PlayScn.pas:3101`，
+  两格路径都被怪占即 False ⇒ 落 `:2241 caWalk` = 只走不跑）；`g_ChrAction:=caRun` 只在点 >1 格时置
+  （`ClMain.pas:5446-5463`）。
+- 结论与最小方案（含「若按 orchestrator 方向修，必须 id 20002 + 52B TClientConf 体同时改，并登记
+  对金标准的故意偏离」）见 `60-client-run-blocker-finding.txt`。本片**未改生产代码、未起栈**。
