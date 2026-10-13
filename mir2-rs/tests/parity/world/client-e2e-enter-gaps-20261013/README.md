@@ -385,3 +385,27 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   每条 rc=1 + 还原后 sha256 逐字节一致。
 - **零 .rs、零生产语义改动**（仅判据工具 + 一份手册引用 + 文档/证据）；本片**未起栈、未占端口**，未动共享主检出。
 - 证据：`93-mongen-dense-rank.txt`、`94-redcheck-mongen-dense-rank.txt`、`95-gates.txt`、`96-boundary.txt`。
+
+## ⑰ 片⑰：③ 收口的**窗口就绪聚合门 + 一键两侧 capture 计划**（2026-10-14）—— `97`/`98`
+
+- **背景**：③ 的离线判决已成立（`70`：`(291,666)` 在 map 0 全部生成框之外 ⇒ `vis=0` 正确；
+  框内点 `(287,620)` 客户端实收 13 对出现帧 ⇒ AOI 有算有下发），**唯一未闭环的 R 级判据 = 两侧同框
+  真机对照**，归 root 独占窗口。窗口是一次性资源；片⑮/⑯ 已分别把「构建源是否含片⑪」「怪密点排行」
+  做成机判，但**没有一个「一条命令的 GO/NO-GO」**——root 开窗前仍要手跑 4 个工具并自行解读。
+- **新工具 `window_handoff.py`**（只读、零起栈、零端口；不复制任何判据，只聚合）：
+  - **G1** = 片⑮ `check_rust_window_preflight.py`（R1..R5）解析 `RESULT:`；R1/R2 点住窗口脚本
+    `repo=` 指向的检出是否含片⑪（2026-10-14 实测共享主检出停在 `ad0592b19` ⇒ RED）。
+  - **G2** = 证据目录 6 件判据脚本的 `--selftest` 必须全过（缺一件 ⇒ PREREQ；某件 FAILED ⇒ RED）。
+  - **G3**（可选 `--with-csharp`）= 片⑭ `check_csharp_capture_preflight.py`。
+  - **INFO** = `check_mongen_dense_points.py --rank`（选点用，见 ⑯）。
+  - `--plan` = ③a/③b 两侧对照的**可粘贴命令序列**（Rust 起栈/代理/客户端/解码 + C# 侧 +
+    三条判据 + 收工），与 `82` 手册同口径；当 G1 RED 时自动附「改用专用 worktree 从 `origin/master`
+    构建」修复块（**不动共享主检出**，只把窗口脚本 `repo=`/`tgt=` 两行指向新树）。
+  - 总判决 `WINDOW_READY=YES|NO`；退出码 `0`/`1`/`2`。`--selftest` **27/27**（含 4 种聚合端到端）。
+- **真机读数**：构建源 = 本车道 worktree（含片⑪）⇒ `WINDOW_READY=YES` rc=0；
+  构建源 = 共享主检出 ⇒ `WINDOW_READY=NO` rc=1（`97` §B/§C 原文）。
+- **3 条改坏必红**（`98`）：吞 G1 RED / 吞某判据脚本 `--selftest` FAILED / 总判决恒 0 ——
+  各自都产出**假绿**（`WINDOW_READY=YES`），且都被工具内建 `--selftest` 判红（24/27、25/27、22/27）；
+  还原后 sha256 逐字节一致。
+- **零生产代码改动**（仅一个 `.py` 判据 + 四份证据 + README/清单）；本片**未起栈、未占端口**，未动共享主检出。
+- 证据：`97-window-handoff-gate.txt`、`98-redcheck-window-handoff.txt`、`99-gates.txt`、`100-boundary.txt`。

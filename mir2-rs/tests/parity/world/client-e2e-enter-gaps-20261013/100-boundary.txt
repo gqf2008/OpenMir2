@@ -1,0 +1,45 @@
+100-boundary.txt —— 片⑰ `window_handoff.py` 写集边界（卡 openmir2-client-e2e-enter-gaps）
+====================================================================================================
+base（片⑯ 被审 head，本片父提交） = ad30f180f4b271f887c54ebb0eec2ed192208b1d
+origin/master（合并基准）           = ea4cd8c65b924e1fa8634c18c8793396bf7094fe
+
+A. 本片差量（base..head，含 commit 2 的证据/清单刷新）
+----------------------------------------------------------------------------------------------------
+$ git diff --name-status ad30f180f <head>
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/97-window-handoff-gate.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/98-redcheck-window-handoff.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/99-gates.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/100-boundary.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+
+B. 累计差量（origin/master..head）—— 含尚未合入的片⑯（base 即片⑯ head）
+----------------------------------------------------------------------------------------------------
+$ git diff --name-status ea4cd8c65 <head>
+M  82-two-side-window-runbook.md            （片⑯）
+A  93-mongen-dense-rank.txt                 （片⑯）
+A  94-redcheck-mongen-dense-rank.txt        （片⑯）
+A  95-gates.txt                             （片⑯）
+A  96-boundary.txt                          （片⑯）
+A  97-window-handoff-gate.txt               （片⑰）
+A  98-redcheck-window-handoff.txt           （片⑰）
+A  99-gates.txt                             （片⑰）
+A  100-boundary.txt                         （片⑰）
+A  window_handoff.py                        （片⑰）
+M  README.md
+M  SHA256SUMS.txt
+M  check_mongen_dense_points.py             （片⑯）
+（路径均省略 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/` 前缀）
+⇒ 全部 13 路径均在本卡证据目录内；**不碰**任何生产代码或协议/存储接口。
+
+C. 冻结面（必须空）
+----------------------------------------------------------------------------------------------------
+$ git diff --name-only ea4cd8c65 <head> -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage src/BotSrv
+（无输出） ⇒ oracle 冻结面 / 协议层 / 存储层 / BotSrv 零改动。
+
+D. 本片零代码面
+----------------------------------------------------------------------------------------------------
+$ git diff --name-only ad30f180f <head> -- '*.rs' '*.toml'
+（无输出） ⇒ 本片**零 `.rs` / 零 `.toml`**；只有 1 个 `.py` 判据 + 4 份证据 + README/SHA256SUMS。
+本片未起栈、未占端口；共享主检出只读（`git -C E:/Users/gxh/Documents/GitHub/OpenMir2 status --porcelain` 空）。

@@ -1,0 +1,19 @@
+99-gates.txt —— 片⑰ `window_handoff.py` 四门禁（cwd=mir2-rs，CARGO_TARGET_DIR=E:/tmp/m2svr-target）
+====================================================================================================
+$ cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo fmt --all -- --check
+rc=0
+
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+rc=0
+
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test --workspace --offline --no-fail-fast
+rc=0
+  test result 汇总（101 个 suite）：passed=1200  failed=0  ignored=22
+
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo run -p msgcodegen --offline -- --check
+rc=0
+  msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+
+说明：本片为**纯离线工具/文档片**（新增一个 `.py` 判据 + 四份证据 + README/清单），
+     无 `.rs` / `.toml` 改动；四门禁为「未劣化」证据（与 master 基线逐项一致：101 suites 1200/0/22、604）。
+     本片未起栈、未占端口；十端口与开工前一致（仅共享 MySQL 3306 UP）。
