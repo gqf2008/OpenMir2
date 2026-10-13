@@ -1,0 +1,29 @@
+# 边界（origin/master vs 本片分支；全部改动 = 工具 + castle.rs 注释 + 证据；head oid 见 walgit patch 条目 --head）
+
+base=origin/master(30c52f85df2b08170537f83a2113f520e364f679)，是本片祖先：YES
+
+$ git diff --name-status origin/master <head>
+M	mir2-rs/crates/world/src/castle.rs
+M	mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/00-commands.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/01-gate-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/02-gate-audit.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/03-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/04-gate-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/05-redcheck.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/06-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/07-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/08-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/09-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/10-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/11-hash-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/SHA256SUMS.txt
+
+$ git diff --name-only origin/master <head> -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+
+(以上为空 ⇒ 冻结面空)
+
+冻结面: src/BotSrv 命中数 = 0
+*.rs 计数 = 1
+castle.rs 语义差异（过滤 // 注释与纯注释行后）= 0 行

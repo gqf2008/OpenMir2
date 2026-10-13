@@ -1,0 +1,42 @@
+## 外部改坏必红（不注入常数，直接改真身，跑完还原）
+
+### RC-1：把 doc 锚 `UserCastle.cs:930` 改成历史漂移值 `:931`（写侧缺锚 + 覆盖面未登记）
+RED: castle oracle 锚门失败（2 项 / 共 159 锚）
+  - 写侧缺锚 UserCastle.cs:930（不在 castle.rs / README.md）
+  - 覆盖面：未登记锚 UserCastle.cs:931（覆盖区间 castle.rs:1-2807）
+RC-1 check rc=1
+覆盖面区间: [(1, 2807)]
+已登记锚（ANCHORS 表）: 159
+区间内锚（去重）: 158
+区间内未登记锚: 1
+  - UserCastle.cs:931
+区间内裸锚: 0
+AUDIT RED
+RC-1 audit rc=1
+
+### RC-2：在文件尾部（旧模块头区间之外）注入裸锚 `// `:7777`（全文覆盖面必红）
+RED: castle oracle 锚门失败（1 项 / 共 159 锚）
+  - 覆盖面：裸锚 `:7777`（覆盖区间 castle.rs:1-2808）须写成 `文件.cs:NNN`
+RC-2 check rc=1
+覆盖面区间: [(1, 2808)]
+已登记锚（ANCHORS 表）: 159
+区间内锚（去重）: 158
+区间内未登记锚: 0
+区间内裸锚: 1
+  - `:7777`
+AUDIT RED
+RC-2 audit rc=1
+
+### 还原后：check/audit 复绿 + castle.rs sha256 与改前一致
+GREEN: castle oracle 锚门通过（159 锚命中冻结 src/ + 写侧在位 + 覆盖区间无未登记/裸锚）
+restored check rc=0
+覆盖面区间: [(1, 2807)]
+已登记锚（ANCHORS 表）: 159
+区间内锚（去重）: 158
+区间内未登记锚: 0
+区间内裸锚: 0
+AUDIT GREEN
+restored audit rc=0
+2210e63878a9bad8f829ab0c01dd7f1f46743bec836c2d5fcadbbed91c54cb48
+before=2210e63878a9bad8f829ab0c01dd7f1f46743bec836c2d5fcadbbed91c54cb48
+ M mir2-rs/crates/world/src/castle.rs

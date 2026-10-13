@@ -21,18 +21,22 @@ doc-comment/README 锚行号是按**另一版本**抄的，与**冻结** `src/` 
    （把 `:113` 改回 `:111` ⇒ 注册的 `UserCastle.cs:113` 消失 ⇒ RED）；
 2. **读侧**：冻结 `src/` 对应 `line` 必须命中 `token`（改表/改行号 ⇒ RED）。
 
-3. **覆盖面**：`COVERED_MARKERS` 括出的区间（当前 = ⑧-7 攻城状态机模块头，castle.rs 顶到
-   ⑧-8 段之前）内，**每个** `文件.cs:NNN` 锚都必须在 `ANCHORS` 表内（新增锚不登记 ⇒ RED），
+3. **覆盖面**：`COVERED_MARKERS` 括出的区间（⑧-6 M-2 收口后 = **整个 castle.rs**，
+   文件首行 → EOF）内，**每个**`文件.cs:NNN` 锚都必须在 `ANCHORS` 表内（新增锚不登记 ⇒ RED），
    且区间内**不得**留裸锚（必须写成 `文件.cs:NNN`，防 `:NNN` 在不同文件间被误读）。
 
-⑧-8 / ⑧-9 / ⑧-6② 的锚**尚未纳入覆盖区间**（历史锚多，逐条核另开片）；它们可以出现在表里
-（写/读侧照检），只是不参与「未登记即红」的覆盖面判定。
+`audit` 子命令与覆盖面同源，用于复算/清点（`check` 是判据面，`audit` 是清单面）。
 
 ## 用法
 
     python -I castle_oracle_anchor_gate.py check [--json out]
+    python -I castle_oracle_anchor_gate.py audit [--json out]
     python -I castle_oracle_anchor_gate.py selftest
     python -I castle_oracle_anchor_gate.py mutation [--out DIR]
+
+`audit` 是 `check` 的**覆盖面清点器**（⑧-6 reviewer-5 M-1：旧证据 `10-anchor-audit.txt` 由
+仓外临时脚本产出、不可独立复算）⇒ 现在同一份逻辑住在本文件内，命令可复跑：打印覆盖区间、
+已登记锚数、区间内**未登记**锚清单、**裸锚**清单。GREEN ⇔ 两张清单都空。
 
 退出码：0 = GREEN；1 = RED。
 """
@@ -255,12 +259,93 @@ ANCHORS = [
         (1442, "StartCastleWarDays = 4;"),
         (1443, "StartCastlewarTime = 20;"),
         (1446, "GetCastleTime = 10 * 60 * 1000;")]),
+    # ---- ⑧-6 M-2 收口：castle.rs 全文件覆盖面（新增登记锚；每条对冻结 src/ 的 (line, token) 机判）----
+    ("CastleDoor.cs:12/57/75", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(12, 'public bool HoldPlace;'), (57, 'HoldPlace = false;'), (75, 'HoldPlace = true;')]),
+    ("WallStructure.cs:7/53-66", "src/M2Server/Monster/Monsters/WallStructure.cs", [(7, 'internal bool SetMapFlaged;'), (53, 'if (SetMapFlaged)'), (65, 'SetMapFlaged = true;')]),
+    ("CastleDoor.cs:66/96/108", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(66, 'Dir = (byte)(3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0));'), (96, 'int n08 = 3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0);'), (108, 'int n08 = 3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0);')]),
+    ("WallStructure.cs:28/70", "src/M2Server/Monster/Monsters/WallStructure.cs", [(28, 'n08 = (byte)(3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0));'), (70, 'n08 = 3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0);')]),
+    ("CastleDoor.cs:46-58", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(46, 'public void Open()'), (57, 'HoldPlace = false;')]),
+    ("CastleDoor.cs:60-76", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(60, 'public void Close()'), (75, 'HoldPlace = true;')]),
+    ("CastleDoor.cs:78-82", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(78, 'public override void Die()'), (81, 'SetMapXyFlag(2);')]),
+    ("CastleDoor.cs:84-104", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(84, 'public override void Run()'), (103, 'base.Run();')]),
+    ("CastleDoor.cs:106-115", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(106, 'public void RefStatus()'), (114, 'SendRefMsg(Messages.RM_ALIVE, Dir, CurrX, CurrY, 0, "");')]),
+    ("WallStructure.cs:17-21", "src/M2Server/Monster/Monsters/WallStructure.cs", [(17, 'public override void Initialize()'), (20, 'base.Initialize();')]),
+    ("WallStructure.cs:23-40", "src/M2Server/Monster/Monsters/WallStructure.cs", [(23, 'public void RefStatus()'), (39, 'this.SendRefMsg(Messages.RM_ALIVE, this.Dir, this.CurrX, this.CurrY, 0, "");')]),
+    ("WallStructure.cs:47-82", "src/M2Server/Monster/Monsters/WallStructure.cs", [(47, 'public override void Run()'), (81, 'base.Run();')]),
+    ("HUtil32.cs:131-134", "src/OpenMir2/HUtil32.cs", [(131, 'public static int Round(double r)'), (133, 'return (int)Math.Round(r, MidpointRounding.AwayFromZero);')]),
+    ("CastleDoor.cs:23-44", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(23, 'private void SetMapXyFlag(int nFlag)'), (42, 'Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);')]),
+    ("CastleDoor.cs:25-27", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(25, 'Envir.SetMapXyFlag(CurrX, CurrY - 2, true);'), (27, 'Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, true);')]),
+    ("CastleDoor.cs:28", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(28, 'bool boFlag = nFlag != 1;')]),
+    ("CastleDoor.cs:29-37", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(29, 'Envir.SetMapXyFlag(CurrX, CurrY, boFlag);'), (37, 'Envir.SetMapXyFlag(CurrX - 1, CurrY + 1, boFlag);')]),
+    ("CastleDoor.cs:38-43", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(38, 'if (nFlag == 0)'), (42, 'Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);')]),
+    ("CastleOfficial.cs:52-67", "src/GameSrv/Npc/CastleOfficial.cs", [(52, 'case "$CASTLEDOORSTATE":'), (67, 'sMsg = ReplaceVariableText(sMsg, "<$CASTLEDOORSTATE>", sText);')]),
+    ("HUtil32.cs:550-576", "src/OpenMir2/HUtil32.cs", [(550, 'public static bool CompareLStr(string src, string targ)'), (575, 'return false;')]),
+    ("CastleOfficial.cs:199-238", "src/GameSrv/Npc/CastleOfficial.cs", [(199, 'else if (string.Compare(sLabel, ScriptFlagConst.sOPENMAINDOOR, StringComparison.OrdinalIgnoreCase) == 0)'), (237, 'PlayObject.SendMsg(this, Messages.RM_MENU_OK, 0, ActorId, 0, 0);')]),
+    ("CastleOfficial.cs:229/235", "src/GameSrv/Npc/CastleOfficial.cs", [(229, 's20 = sLabel.Substring(ScriptFlagConst.sHIREGUARDNOW.Length, sLabel.Length);'), (235, 's20 = sLabel.Substring(ScriptFlagConst.sHIREARCHERNOW.Length, sLabel.Length);')]),
+    ("CastleOfficial.cs:358-381", "src/GameSrv/Npc/CastleOfficial.cs", [(358, 'private void RepairDoor(IPlayerActor PlayObject)'), (379, 'PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);')]),
+    ("CastleOfficial.cs:383-406", "src/GameSrv/Npc/CastleOfficial.cs", [(383, 'private void RepairWallNow(int nWallIndex, IPlayerActor PlayObject)'), (404, 'PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);')]),
+    ("UserCastle.cs:115/121/127", "src/M2Server/Castle/UserCastle.cs", [(115, 'PalaceEnvir = SystemShare.MapMgr.FindMap(PalaceMap);'), (121, 'SecretEnvir = SystemShare.MapMgr.FindMap(SecretMap);'), (127, 'CastleEnvir = SystemShare.MapMgr.FindMap(MapName);')]),
+    ("UserCastle.cs:920/956", "src/M2Server/Castle/UserCastle.cs", [(920, 'public bool RepairDoor()'), (956, 'public bool RepairWall(int nWallIndex)')]),
+    ("ScriptFlagConst.cs:75", "src/Modules/SystemModule/Const/ScriptFlagConst.cs", [(75, 'public const string sOPENMAINDOOR = "@openmaindoor";')]),
+    ("ScriptFlagConst.cs:76", "src/Modules/SystemModule/Const/ScriptFlagConst.cs", [(76, 'public const string sCLOSEMAINDOOR = "@closemaindoor";')]),
+    ("ScriptFlagConst.cs:77", "src/Modules/SystemModule/Const/ScriptFlagConst.cs", [(77, 'public const string sREPAIRDOORNOW = "@repairdoornow";')]),
+    ("ScriptFlagConst.cs:78", "src/Modules/SystemModule/Const/ScriptFlagConst.cs", [(78, 'public const string sREPAIRWALLNOW1 = "@repairwallnow1";')]),
+    ("ScriptFlagConst.cs:79", "src/Modules/SystemModule/Const/ScriptFlagConst.cs", [(79, 'public const string sREPAIRWALLNOW2 = "@repairwallnow2";')]),
+    ("ScriptFlagConst.cs:80", "src/Modules/SystemModule/Const/ScriptFlagConst.cs", [(80, 'public const string sREPAIRWALLNOW3 = "@repairwallnow3";')]),
+    ("ScriptFlagConst.cs:81", "src/Modules/SystemModule/Const/ScriptFlagConst.cs", [(81, 'public const string sHIREARCHERNOW = "@hirearchernow";')]),
+    ("ScriptFlagConst.cs:82", "src/Modules/SystemModule/Const/ScriptFlagConst.cs", [(82, 'public const string sHIREGUARDNOW = "@hireguardnow";')]),
+    ("CastleOfficial.cs:59-61", "src/GameSrv/Npc/CastleOfficial.cs", [(59, 'else if (castleDoor.IsOpened)'), (61, 'sText = "opened";')]),
+    ("CastleOfficial.cs:63-65", "src/GameSrv/Npc/CastleOfficial.cs", [(63, 'else'), (65, 'sText = "closed";')]),
+    ("CastleOfficial.cs:358-406", "src/GameSrv/Npc/CastleOfficial.cs", [(358, 'private void RepairDoor(IPlayerActor PlayObject)'), (404, 'PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);')]),
+    ("CastleOfficial.cs:374/399", "src/GameSrv/Npc/CastleOfficial.cs", [(374, 'PlayObject.SysMsg("城门不需要修理!!!", MsgColor.Green, MsgType.Hint);'), (399, 'PlayObject.SysMsg("城门不需要修理!!!", MsgColor.Green, MsgType.Hint);')]),
+    ("CastleOfficial.cs:379/404", "src/GameSrv/Npc/CastleOfficial.cs", [(379, 'PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);'), (404, 'PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);')]),
+    ("UserCastle.cs:73", "src/M2Server/Castle/UserCastle.cs", [(73, 'public int SaveTick { get; set; }')]),
+    ("UserCastle.cs:23-59", "src/M2Server/Castle/UserCastle.cs", [(23, 'private int _techLevel;'), (58, 'public int TechLevel')]),
+    ("UserCastle.cs:318-321", "src/M2Server/Castle/UserCastle.cs", [(318, 'if (string.IsNullOrEmpty(MapName))'), (320, 'return;')]),
+    ("UserCastle.cs:323-326", "src/M2Server/Castle/UserCastle.cs", [(323, 'if (M2Share.ServerIndex != SystemShare.MapMgr.GetMapOfServerIndex(MapName))'), (325, 'return;')]),
+    ("UserCastle.cs:347-362", "src/M2Server/Castle/UserCastle.cs", [(347, 'for (int i = AttackWarList.Count - 1; i >= 0; i--)'), (360, 'AttackWarList.RemoveAt(i);')]),
+    ("UserCastle.cs:358", "src/M2Server/Castle/UserCastle.cs", [(358, 'StartCastleWarTick = HUtil32.GetTickCount();')]),
+    ("UserCastle.cs:365", "src/M2Server/Castle/UserCastle.cs", [(365, 'AttackGuildList.Add(MasterGuild);')]),
+    ("UserCastle.cs:366", "src/M2Server/Castle/UserCastle.cs", [(366, 'StartWallconquestWar();')]),
+    ("UserCastle.cs:367", "src/M2Server/Castle/UserCastle.cs", [(367, 'SaveAttackSabukWall();')]),
+    ("UserCastle.cs:368", "src/M2Server/Castle/UserCastle.cs", [(368, 'SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_212, M2Share.ServerIndex, "");')]),
+    ("UserCastle.cs:369-371", "src/M2Server/Castle/UserCastle.cs", [(369, 'string s20 = string.Format(sWarStartMsg, sName);'), (371, 'SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_204, M2Share.ServerIndex, s20);')]),
+    ("UserCastle.cs:373", "src/M2Server/Castle/UserCastle.cs", [(373, 'MainDoorControl(true);')]),
+    ("UserCastle.cs:393-406", "src/M2Server/Castle/UserCastle.cs", [(393, 'if (LeftWall.BaseObject != null)'), (405, 'RightWall.BaseObject.StoneMode = false;')]),
+    ("UserCastle.cs:408-418", "src/M2Server/Castle/UserCastle.cs", [(408, 'if (!ShowOverMsg)'), (416, 'LogService.Warn(s20);')]),
+    ("UserCastle.cs:419-422", "src/M2Server/Castle/UserCastle.cs", [(419, 'if ((HUtil32.GetTickCount() - StartCastleWarTick) > SystemShare.Config.CastleWarTime)'), (421, 'StopWallconquestWar();')]),
+    ("UserCastle.cs:424-440", "src/M2Server/Castle/UserCastle.cs", [(424, 'else'), (438, 'RightWall.BaseObject.StoneMode = true;')]),
+    ("UserCastle.cs:584-593", "src/M2Server/Castle/UserCastle.cs", [(584, 'for (int i = 0; i < ListC.Count; i++)'), (593, 'string stopMessage = string.Format(sWallWarStop, sName);')]),
+    ("UserCastle.cs:920-955", "src/M2Server/Castle/UserCastle.cs", [(920, 'public bool RepairDoor()'), (948, 'return result;')]),
+    ("UserCastle.cs:956-997", "src/M2Server/Castle/UserCastle.cs", [(956, 'public bool RepairWall(int nWallIndex)'), (995, 'return result;')]),
+    ("UserCastle.cs:1016-1030", "src/M2Server/Castle/UserCastle.cs", [(1016, 'private bool InAttackerList(GuildInfo Guild)'), (1030, 'private void SetPower(int nPower)')]),
+    ("UserCastle.cs:609-612", "src/M2Server/Castle/UserCastle.cs", [(609, 'public bool IsMember(IPlayerActor member)'), (611, 'return IsMasterGuild(member.MyGuild);')]),
+    ("UserCastle.cs:366-373", "src/M2Server/Castle/UserCastle.cs", [(366, 'StartWallconquestWar();'), (373, 'MainDoorControl(true);')]),
+    ("UserCastle.cs:345", "src/M2Server/Castle/UserCastle.cs", [(345, 'IsStartWar = true;')]),
+    ("UserCastle.cs:391-406", "src/M2Server/Castle/UserCastle.cs", [(391, 'if (UnderWar)'), (405, 'RightWall.BaseObject.StoneMode = false;')]),
+    ("UserCastle.cs:421", "src/M2Server/Castle/UserCastle.cs", [(421, 'StopWallconquestWar();')]),
+    ("CastleDoor.cs:66-70", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(66, 'Dir = (byte)(3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0));'), (69, 'Dir = 0;')]),
+    ("CastleDoor.cs:86-93", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(86, 'if (Death && Castle != null)'), (92, 'HealthTick = 0;')]),
+    ("CastleDoor.cs:94-102", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(94, 'if (!IsOpened)'), (100, 'SendRefMsg(Messages.RM_TURN, Dir, CurrX, CurrY, 0, "");')]),
+    ("Envirnoment.cs:1362-1369", "src/M2Server/Maps/Envirnoment.cs", [(1362, 'public void SetMapXyFlag(int nX, int nY, bool boFlag)'), (1367, 'cellInfo.SetAttribute(boFlag ? CellAttribute.Walk : CellAttribute.LowWall);')]),
+    ("CastleDoor.cs:25-43", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(25, 'Envir.SetMapXyFlag(CurrX, CurrY - 2, true);'), (42, 'Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);')]),
+    ("UserCastle.cs:920-927", "src/M2Server/Castle/UserCastle.cs", [(920, 'public bool RepairDoor()'), (926, 'return false;')]),
+    ("UserCastle.cs:930", "src/M2Server/Castle/UserCastle.cs", [(930, 'if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)')]),
+    ("UserCastle.cs:939", "src/M2Server/Castle/UserCastle.cs", [(939, 'if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)')]),
+    ("UserCastle.cs:924", "src/M2Server/Castle/UserCastle.cs", [(924, 'if (castleDoor.BaseObject == null || UnderWar || castleDoor.BaseObject.WAbil.HP >= castleDoor.BaseObject.WAbil')]),
+    ("UserCastle.cs:958-992", "src/M2Server/Castle/UserCastle.cs", [(958, 'bool result = false;'), (992, 'result = true;')]),
+    ("CastleOfficial.cs:365-380", "src/GameSrv/Npc/CastleOfficial.cs", [(365, 'if (Castle.TotalGold >= SystemShare.Config.RepairDoorPrice)'), (379, 'PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);')]),
+    ("CastleOfficial.cs:365", "src/GameSrv/Npc/CastleOfficial.cs", [(365, 'if (Castle.TotalGold >= SystemShare.Config.RepairDoorPrice)')]),
+    ("UserCastle.cs:128-220", "src/M2Server/Castle/UserCastle.cs", [(128, 'if (CastleEnvir != null)'), (209, 'LogService.Warn("[错误信息] 城堡初始化守卫失败(检查怪物数据库里有没守卫怪物)");')]),
+    # COUNT 76
 ]
 
 # 覆盖面区间（内容标记 → 行区间）。区间内每个 `.cs:NNN` 锚都必须登记，且不得留裸 `:NNN`。
+# ⑧-6 M-2 收口（reviewer-5 `8276f7bb`）：覆盖面从「⑧-7 模块头」扩到**整个 castle.rs**
+# （起标记 = 文件首行；止标记 = `None` ⇒ 到 EOF）。区间内每个 `.cs:NNN` 锚都必须登记，
+# 且不得留裸 `:NNN`（防行号漂移 + 防 `:NNN` 跨文件误读）。
 COVERED_MARKERS = [
-    # ⑧-7 攻城状态机模块头 + 常量 + `CastleSiegeConfig`（castle.rs 顶到 ⑧-8 段之前）。
-    ("//! 攻城状态机（", "`CastleDoor.cs` / `WallStructure.cs`，⑧-8"),
+    ("//! 攻城状态机（", None),
 ]
 
 ANCHOR_RE = re.compile(
@@ -283,8 +368,14 @@ def _covered_spans(castle_lines):
     spans = []
     for start_marker, end_marker in COVERED_MARKERS:
         si = next((i for i, line in enumerate(castle_lines) if start_marker in line), None)
+        if si is None:
+            continue
+        if end_marker is None:
+            # `None` ⇒ 覆盖到 EOF（⑧-6 M-2：整个 castle.rs）。
+            spans.append((si + 1, len(castle_lines)))
+            continue
         ei = next((i for i, line in enumerate(castle_lines) if end_marker in line), None)
-        if si is None or ei is None or ei < si:
+        if ei is None or ei < si:
             continue
         spans.append((si + 1, ei + 1))
     return spans
@@ -313,6 +404,40 @@ def _coverage_findings(anchors, castle_text, castle_lines=None):
             findings.append("覆盖面：裸锚 `:%s`（覆盖区间 castle.rs:%d-%d）须写成 `文件.cs:NNN`"
                             % (m.group(1), start, end))
     return findings
+
+
+def _coverage_inventory(anchors, castle_text, castle_lines=None):
+    """覆盖面清点（`audit` 面）：区间内锚清单 = 已登记 / 未登记 / 裸锚。
+
+    与 `_coverage_findings` 同源（同一 `_covered_spans` + 同一正则），但返回**去重后的清单**
+    供人/机复算（旧 `10-anchor-audit.txt` 的仓外脚本已废）。
+    """
+    if castle_lines is None:
+        castle_lines = castle_text.splitlines()
+    spans = _covered_spans(castle_lines)
+    registered = set(anchor for anchor, _rel, _pts in anchors)
+    present, bare = [], []
+    for start, end in spans:
+        seg = "\n".join(castle_lines[start - 1:end])
+        for m in ANCHOR_RE.finditer(seg):
+            present.append(m.group(0))
+        stripped = ANCHOR_RE.sub("", seg)
+        for m in BARE_ANCHOR_RE.finditer(stripped):
+            bare.append(m.group(1))
+
+    def _dedupe(xs):
+        seen, out = set(), []
+        for x in xs:
+            if x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out
+
+    present = _dedupe(present)
+    bare = _dedupe(bare)
+    uncovered = [a for a in present if a not in registered]
+    return {"covered_spans": spans, "registered": len(registered),
+            "present": present, "uncovered": uncovered, "bare": bare}
 
 
 def _evaluate(anchors=None, castle_text=None, readme_text=None, src_root=None,
@@ -366,6 +491,25 @@ def cmd_check(args):
     sys.stdout.write("GREEN: castle oracle 锚门通过（%d 锚命中冻结 src/ + 写侧在位 + 覆盖区间无未登记/裸锚）\n"
                      % len(ANCHORS))
     return 0
+
+
+def cmd_audit(args):
+    inv = _coverage_inventory(ANCHORS, _read_text(CASTLE_RS))
+    if args.json:
+        with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(inv, fh, ensure_ascii=False, indent=2)
+    sys.stdout.write("覆盖面区间: %s\n" % (inv["covered_spans"],))
+    sys.stdout.write("已登记锚（ANCHORS 表）: %d\n" % inv["registered"])
+    sys.stdout.write("区间内锚（去重）: %d\n" % len(inv["present"]))
+    sys.stdout.write("区间内未登记锚: %d\n" % len(inv["uncovered"]))
+    for a in inv["uncovered"]:
+        sys.stdout.write("  - %s\n" % a)
+    sys.stdout.write("区间内裸锚: %d\n" % len(inv["bare"]))
+    for a in inv["bare"]:
+        sys.stdout.write("  - `:%s`\n" % a)
+    ok = not inv["uncovered"] and not inv["bare"]
+    sys.stdout.write("AUDIT %s\n" % ("GREEN" if ok else "RED"))
+    return 0 if ok else 1
 
 
 def cmd_selftest(args):
@@ -429,6 +573,27 @@ def cmd_selftest(args):
     for f in cov_real:
         sys.stdout.write("  - %s\n" % f)
     ok = ok and t5
+
+    # 7) ⑧-6 M-2 牙齿：覆盖面必须已扩到整个 castle.rs（首行→EOF），防回退到只盖模块头。
+    castle_lines = castle_text.splitlines()
+    spans = _covered_spans(castle_lines)
+    t6 = spans == [(1, len(castle_lines))]
+    sys.stdout.write("selftest 全文件覆盖面: %s (%s，castle.rs %d 行)\n"
+                     % ("GREEN" if t6 else "RED", spans, len(castle_lines)))
+    ok = ok and t6
+
+    # 8) M-1 牙齿：`audit` 清点器与覆盖面同源 ——
+    #    合成文本里未登记锚/裸锚各点名一条，已登记锚不点名；真身 audit 两张清单都空。
+    inv_syn = _coverage_inventory([("A.cs:1", "A.cs", [(1, "a")])], "\n".join(syn), syn)
+    t7a = inv_syn["uncovered"] == ["B.cs:2"] and inv_syn["bare"] == ["9"]
+    inv_real = _coverage_inventory(ANCHORS, castle_text)
+    t7b = inv_real["uncovered"] == [] and inv_real["bare"] == []
+    t7 = t7a and t7b
+    sys.stdout.write("selftest audit 清点器: %s (syn uncovered=%r bare=%r; real uncovered=%d bare=%d)\n"
+                     % ("GREEN" if t7 else "RED", inv_syn["uncovered"], inv_syn["bare"],
+                        len(inv_real["uncovered"]), len(inv_real["bare"])))
+    ok = ok and t7
+
     sys.stdout.write("SELFTEST %s\n" % ("GREEN" if ok else "RED"))
     return 0 if ok else 1
 
@@ -502,6 +667,27 @@ def cmd_mutation(args):
                      % ("RED" if f6 else "GREEN", len(f6)))
     ok = ok and red6
 
+    # MUT7（⑧-6 M-2：覆盖面已扩到全文）：在**文件尾部**（旧「⑧-7 模块头」区间之外）注入
+    # 未登记锚 `Ghost2.cs:1` ⇒ 未登记 = RED。覆盖面若退回只盖模块头，此变异体不会红。
+    tail_anchor = "        // `Ghost2.cs:1`\n        assert!(c.main_door.is_none());"
+    mut7 = castle_text.replace("        assert!(c.main_door.is_none());", tail_anchor, 1)
+    if mut7 == castle_text:
+        sys.stdout.write("BUG: 变异 MUT7 找不到尾部断言\n")
+        ok = False
+    f7 = _evaluate(castle_text=mut7, readme_text=readme_text, coverage=True)
+    red7 = any("未登记锚 Ghost2.cs:1" in f for f in f7)
+    sys.stdout.write("MUT7 全文覆盖面(尾部未登记锚): %s（%d 项）\n"
+                     % ("RED" if f7 else "GREEN", len(f7)))
+    ok = ok and red7
+
+    # MUT8（⑧-6 M-1 audit 清点器）：从表里删 `UserCastle.cs:930` ⇒ audit 未登记 = RED
+    # （证明清点器与 check 覆盖面同源、不是恒绿）。
+    inv8 = _coverage_inventory([a for a in ANCHORS if a[0] != "UserCastle.cs:930"], castle_text)
+    red8 = "UserCastle.cs:930" in inv8["uncovered"]
+    sys.stdout.write("MUT8 audit 清点器(删表项 UserCastle.cs:930): %s（uncovered=%d）\n"
+                     % ("RED" if red8 else "GREEN", len(inv8["uncovered"])))
+    ok = ok and red8
+
     sys.stdout.write("MUTATION %s (%s)\n" % ("GREEN" if ok else "RED", out))
     return 0 if ok else 1
 
@@ -512,6 +698,9 @@ def main(argv=None):
     p = sub.add_parser("check")
     p.add_argument("--json")
     p.set_defaults(func=cmd_check)
+    p = sub.add_parser("audit")
+    p.add_argument("--json")
+    p.set_defaults(func=cmd_audit)
     p = sub.add_parser("selftest")
     p.set_defaults(func=cmd_selftest)
     p = sub.add_parser("mutation")

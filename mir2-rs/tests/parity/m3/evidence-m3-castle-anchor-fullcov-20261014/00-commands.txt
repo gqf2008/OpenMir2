@@ -1,0 +1,12 @@
+# ⑧-6 锚门残余 Minor 收口（M-1 audit 入库 + M-2 全文件覆盖面）
+# cwd = mir2-rs/tests/parity/m3（python -I）
+
+[1] python -I castle_oracle_anchor_gate.py check
+[2] python -I castle_oracle_anchor_gate.py audit
+[3] python -I castle_oracle_anchor_gate.py selftest
+[4] python -I castle_oracle_anchor_gate.py mutation --out <tmp>
+[5] 四门禁：cwd=mir2-rs, CARGO_TARGET_DIR=E:/tmp/m3cs-fullcov-target
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets -- -D warnings
+    cargo test --workspace --no-fail-fast
+    cargo run -p msgcodegen -- --check

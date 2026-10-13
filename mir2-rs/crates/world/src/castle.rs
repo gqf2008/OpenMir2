@@ -1117,18 +1117,18 @@ impl UserCastle {
     pub fn run(&mut self, now: CastleNow) -> Vec<CastleEvent> {
         let mut events = Vec::new();
 
-        // `:318-321`：`string.IsNullOrEmpty(MapName)` ⇒ return。
+        // `UserCastle.cs:318-321`：`string.IsNullOrEmpty(MapName)` ⇒ return。
         match &self.map_name {
             None => return events,
             Some(name) if name.is_empty() => return events,
             Some(_) => {}
         }
-        // `:323-326`：非本服归属 ⇒ return。
+        // `UserCastle.cs:323-326`：非本服归属 ⇒ return。
         if self.server_index != self.map_owner_server_index {
             return events;
         }
 
-        // `:328-339`：跨天重置 `TodayIncome=0; IncomeToday=Now; IsStartWar=false`。
+        // `UserCastle.cs:328-339`：跨天重置 `TodayIncome=0; IncomeToday=Now; IsStartWar=false`。
         let today = now.date;
         if today != self.income_today {
             self.today_income = 0;
@@ -1136,11 +1136,11 @@ impl UserCastle {
             self.is_start_war = false;
         }
 
-        // `:340-376`：每日开战。
+        // `UserCastle.cs:340-376`：每日开战。
         if !self.is_start_war && !self.under_war && now.hour == self.config.start_castlewar_time {
             self.is_start_war = true;
             self.attack_guild_list.clear();
-            // `:347-362`：**倒序**遍历申请表；命中今天者移入攻方列表（`RemoveAt(i)`）。
+            // `UserCastle.cs:347-362`：**倒序**遍历申请表；命中今天者移入攻方列表（`RemoveAt(i)`）。
             let mut i = self.attack_war_list.len() as isize - 1;
             while i >= 0 {
                 let idx = i as usize;
@@ -1150,7 +1150,7 @@ impl UserCastle {
                     self.under_war = true;
                     self.show_over_msg = false;
                     self.war_date = Some(today);
-                    // `:358` `StartCastleWarTick = HUtil32.GetTickCount()`。
+                    // `UserCastle.cs:358` `StartCastleWarTick = HUtil32.GetTickCount()`。
                     self.start_castle_war_tick = now.tick_ms;
                     self.attack_guild_list.push(guild);
                     self.attack_war_list.remove(idx);
@@ -1158,32 +1158,32 @@ impl UserCastle {
                 i -= 1;
             }
             if self.under_war {
-                // `:365`：守方（可能为 `None`，oracle `MasterGuild` 为 null 时 `Add(null)` 是 no-op 效果）。
+                // `UserCastle.cs:365`：守方（可能为 `None`，oracle `MasterGuild` 为 null 时 `Add(null)` 是 no-op 效果）。
                 if let Some(master) = self.master_guild {
                     self.attack_guild_list.push(master);
                 }
-                // `:366` StartWallconquestWar()。
+                // `UserCastle.cs:366` StartWallconquestWar()。
                 events.extend(self.start_wallconquest_war());
-                // `:367` SaveAttackSabukWall()。
+                // `UserCastle.cs:367` SaveAttackSabukWall()。
                 events.push(CastleEvent::SaveAttackSabukWall);
-                // `:368` SS_212。
+                // `UserCastle.cs:368` SS_212。
                 events.push(CastleEvent::ServerGroupMsg {
                     code: SS_212,
                     text: String::new(),
                 });
-                // `:369-371` 开战广播。
+                // `UserCastle.cs:369-371` 开战广播。
                 let msg = format!("[{} 攻城战已经开始]", self.name);
                 events.push(CastleEvent::Broadcast(msg.clone()));
                 events.push(CastleEvent::ServerGroupMsg {
                     code: SS_204,
                     text: msg,
                 });
-                // `:373` MainDoorControl(true)（幂等关闭主门；⑧-8 起带 `CastleDoor.Close` 帧/掩码）。
+                // `UserCastle.cs:373` MainDoorControl(true)（幂等关闭主门；⑧-8 起带 `CastleDoor.Close` 帧/掩码）。
                 events.extend(self.main_door_control(true));
             }
         }
 
-        // `:377-389`：回收 Ghost 的守卫 → 弓手（数组下标升序，`Guards` 在前）。
+        // `UserCastle.cs:377-389`：回收 Ghost 的守卫 → 弓手（数组下标升序，`Guards` 在前）。
         for slot in self.guards.iter_mut() {
             if slot.is_some_and(|u| u.ghost) {
                 *slot = None;
@@ -1196,11 +1196,11 @@ impl UserCastle {
         }
 
         if self.under_war {
-            // `:393-406`：战时三面墙 `StoneMode=false`。
+            // `UserCastle.cs:393-406`：战时三面墙 `StoneMode=false`。
             set_stone_mode(&mut self.left_wall, false);
             set_stone_mode(&mut self.center_wall, false);
             set_stone_mode(&mut self.right_wall, false);
-            // `:408-418`：结束预告（只播一次）。
+            // `UserCastle.cs:408-418`：结束预告（只播一次）。
             if !self.show_over_msg
                 && (now.tick_ms - self.start_castle_war_tick)
                     > i64::from(
@@ -1216,12 +1216,12 @@ impl UserCastle {
                     text: msg,
                 });
             }
-            // `:419-422`：超时停战（**严格大于**）。
+            // `UserCastle.cs:419-422`：超时停战（**严格大于**）。
             if (now.tick_ms - self.start_castle_war_tick) > i64::from(self.config.castle_war_time) {
                 events.extend(self.stop_wallconquest_war());
             }
         } else {
-            // `:424-440`：非战时三面墙 `StoneMode=true`。
+            // `UserCastle.cs:424-440`：非战时三面墙 `StoneMode=true`。
             set_stone_mode(&mut self.left_wall, true);
             set_stone_mode(&mut self.center_wall, true);
             set_stone_mode(&mut self.right_wall, true);
@@ -1244,8 +1244,8 @@ impl UserCastle {
 
     /// oracle `StopWallconquestWar()`（`UserCastle.cs:577-597`）。
     ///
-    /// **照搬 oracle 怪行为**：`:582-584` 的 `GetMapOfRangeHumanCount` **丢弃返回值**，
-    /// `ListC` 恒空 ⇒ `:584-593` 的 `ChangePkStatus(false)` / 非守方 `MapRandomMove` **从不执行**。
+    /// **照搬 oracle 怪行为**：`UserCastle.cs:582-584` 的 `GetMapOfRangeHumanCount` **丢弃返回值**，
+    /// `ListC` 恒空 ⇒ `UserCastle.cs:584-593` 的 `ChangePkStatus(false)` / 非守方 `MapRandomMove` **从不执行**。
     /// 因此本函数只：`UnderWar=false` + 清 `AttackGuildList` + 广播。
     pub fn stop_wallconquest_war(&mut self) -> Vec<CastleEvent> {
         self.under_war = false;
@@ -1379,7 +1379,7 @@ impl UserCastle {
         self.master_guild == Some(guild)
     }
 
-    /// oracle `IsMember(PlayObject)`（`UserCastle.cs:480-483`）/ `IsMember(IPlayerActor)`（`:609-612`）
+    /// oracle `IsMember(PlayObject)`（`UserCastle.cs:480-483`）/ `IsMember(IPlayerActor)`（`UserCastle.cs:609-612`）
     /// ⇒ `IsMasterGuild(member.MyGuild)`。
     #[must_use]
     pub fn is_member(&self, guild: GuildId) -> bool {
@@ -1573,7 +1573,7 @@ mod tests {
         assert_eq!(c.war_date, Some(CastleDate::new(2026, 10, 13)));
         assert_eq!(c.start_castle_war_tick, 2_000);
         assert!(!c.show_over_msg);
-        // 事件顺序 = oracle :366-373（⑧-8 起 `MainDoorControl(true)` 带 `CastleDoor.Close` 帧/掩码）。
+        // 事件顺序 = oracle UserCastle.cs:366-373（⑧-8 起 `MainDoorControl(true)` 带 `CastleDoor.Close` 帧/掩码）。
         assert_eq!(
             ev,
             vec![
@@ -1598,8 +1598,8 @@ mod tests {
                     x: 672,
                     y: 330
                 }),
-                // `SetMapXyFlag(1)`：`nFlag != 1` 为 false ⇒ 三格（`:25-27`）先 true、
-                // 九格（`:29-37`）全 false（9 个不重复格）。
+                // `SetMapXyFlag(1)`：`nFlag != 1` 为 false ⇒ 三格（`CastleDoor.cs:25-27`）先 true、
+                // 九格（`CastleDoor.cs:29-37`）全 false（9 个不重复格）。
                 CastleEvent::Structure(StructureEvent::SetMapXyFlag {
                     x: 672,
                     y: 328,
@@ -1682,7 +1682,7 @@ mod tests {
         let ev = c.run(now(20, 5_000));
         assert!(ev.is_empty());
         assert!(!c.under_war);
-        // IsStartWar 仍置 true（oracle :345，进了钟点分支就置位）。
+        // IsStartWar 仍置 true（oracle UserCastle.cs:345，进了钟点分支就置位）。
         assert!(c.is_start_war);
         assert_eq!(c.attack_war_list.len(), 1);
         assert!(c.attack_guild_list.is_empty());
@@ -1767,7 +1767,7 @@ mod tests {
             ]
         );
         // 照搬 oracle 结构：停战发生在 `if (UnderWar)` 块内 ⇒ **本 tick** 墙仍 `StoneMode=false`
-        // （`:391-406` 先置 false，`:421` 才停战，本 tick 不再走 `else`）。
+        // （`UserCastle.cs:391-406` 先置 false，`UserCastle.cs:421` 才停战，本 tick 不再走 `else`）。
         assert!(!c.left_wall.unwrap().stone_mode);
         // 下一 tick 起 `UnderWar==false` ⇒ `else` 分支恢复 `StoneMode=true`。
         let ev = c.run(now(22, stop_tick + 2));
@@ -2039,7 +2039,7 @@ mod tests {
         assert_eq!(d, before);
         assert!(d.door_close().is_empty());
         assert_eq!(d, before);
-        // `Die()` 本身仍 `SetMapXyFlag(2)`（`:78-82`）。
+        // `Die()` 本身仍 `SetMapXyFlag(2)`（`CastleDoor.cs:78-82`）。
         assert_eq!(d.door_die().len(), 12);
         assert!(d.death);
     }
@@ -2074,7 +2074,7 @@ mod tests {
 
     #[test]
     fn door_run_turns_dir_only_when_closed_and_n08_below_3() {
-        // `:94-102`：未开门且 `n08 < 3` 才刷 `RM_TURN`。
+        // `CastleDoor.cs:94-102`：未开门且 `n08 < 3` 才刷 `RM_TURN`。
         let mut d = door(2_500, 10_000);
         let ev = d.door_run(0, true);
         assert_eq!(d.dir, 2);
@@ -2208,7 +2208,7 @@ mod tests {
         assert_eq!(grid.cell_attribute(672, 330), Some(CellAttribute::Walk));
         assert_eq!(grid.cell_attribute(671, 331), Some(CellAttribute::Walk));
 
-        // 关门：9 个不重复格全 `LowWall`（`:29-37`）。
+        // 关门：9 个不重复格全 `LowWall`（`CastleDoor.cs:29-37`）。
         apply_structure_events(&mut grid, &d.door_close());
         assert_eq!(grid.cell_attribute(672, 330), Some(CellAttribute::LowWall));
         assert_eq!(grid.cell_attribute(671, 329), Some(CellAttribute::LowWall));
@@ -2252,11 +2252,11 @@ mod tests {
             d.hp = 5_000;
             d.struck_tick = 1_000;
         }
-        // `UnderWar` ⇒ 拒（`:920-923`）。
+        // `UnderWar` ⇒ 拒（`UserCastle.cs:920-927`：签名 920、`UnderWar` 守卫 924、返回 926）。
         c.under_war = true;
         assert_eq!(c.repair_door(999_999), (false, Vec::new()));
         c.under_war = false;
-        // 60s 门：`>` 严格大于（`:951`）。
+        // 60s 门：`>` 严格大于（`UserCastle.cs:930` 活门 / `UserCastle.cs:939` 死门）。
         assert_eq!(c.repair_door(1_000 + 60_000), (false, Vec::new()));
         let (ok, ev) = c.repair_door(1_000 + 60_001);
         assert!(ok);
@@ -2269,7 +2269,7 @@ mod tests {
                 y: 330
             }]
         );
-        // 已满 ⇒ 拒（`:923`），不产生帧。
+        // 已满 ⇒ 拒（`UserCastle.cs:924` 的 `HP >= MaxHP` 守卫），不产生帧。
         assert_eq!(c.repair_door(999_999), (false, Vec::new()));
     }
 
@@ -2308,7 +2308,7 @@ mod tests {
             w.max_hp = 2_000;
             w.struck_tick = 0;
         }
-        // `nWallIndex` 1/2/3 ⇒ 左/中/右；其它 ⇒ `Wall = null`（`:958-992`）。
+        // `nWallIndex` 1/2/3 ⇒ 左/中/右；其它 ⇒ `Wall = null`（`UserCastle.cs:958-992`）。
         assert_eq!(c.repair_wall(0, 60_001), (false, Vec::new()));
         assert_eq!(c.repair_wall(4, 60_001), (false, Vec::new()));
         assert!(c.repair_wall(1, 60_001).0);
