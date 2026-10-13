@@ -1,0 +1,36 @@
+# F-1 返工片边界（base=origin/master dcbd60f3d161cbc98861c98b480d34f9e90c7218 / head=d0f90e4012344ca63e87607355cfb8c55a657f0e）
+
+$ git rev-parse HEAD  -> d0f90e4012344ca63e87607355cfb8c55a657f0e
+$ git diff --name-only dcbd60f3d161cbc98861c98b480d34f9e90c7218 d0f90e4012344ca63e87607355cfb8c55a657f0e
+mir2-rs/crates/data/src/guild.rs
+mir2-rs/crates/data/tests/guild_store_vectors.rs
+"mir2-rs/tests/parity/m3/M3\342\221\247\350\241\214\344\274\232\346\226\207\344\273\266\345\212\240\350\275\275\350\220\275\347\233\230\346\212\245\345\221\212-20261013.md"
+mir2-rs/tests/parity/m3/guild-store-probe/Program.cs
+mir2-rs/tests/parity/m3/guild-store-probe/vectors/guild_file_bytes.tsv
+mir2-rs/tests/parity/m3/guild-store-probe/vectors/guild_store_vectors.tsv
+
+$ git diff --stat dcbd60f3d161cbc98861c98b480d34f9e90c7218 d0f90e4012344ca63e87607355cfb8c55a657f0e
+ mir2-rs/crates/data/src/guild.rs                   | 21 ++++++---
+ mir2-rs/crates/data/tests/guild_store_vectors.rs   | 54 +++++++++++++++++++++-
+ ...47\233\230\346\212\245\345\221\212-20261013.md" | 26 +++++++++++
+ .../tests/parity/m3/guild-store-probe/Program.cs   | 49 ++++++++++++++++++++
+ .../guild-store-probe/vectors/guild_file_bytes.tsv |  1 +
+ .../vectors/guild_store_vectors.tsv                |  7 +++
+ 6 files changed, 150 insertions(+), 8 deletions(-)
+
+$ git diff --name-only dcbd60f3d161cbc98861c98b480d34f9e90c7218 d0f90e4012344ca63e87607355cfb8c55a657f0e -- src sql MirClient
+(空=通过)
+
+$ git diff --name-only dcbd60f3d161cbc98861c98b480d34f9e90c7218 d0f90e4012344ca63e87607355cfb8c55a657f0e -- mir2-rs/bins
+(空=通过：未动 bins/game-svr)
+
+$ git diff --name-only dcbd60f3d161cbc98861c98b480d34f9e90c7218 d0f90e4012344ca63e87607355cfb8c55a657f0e -- '*.rs'
+mir2-rs/crates/data/src/guild.rs
+mir2-rs/crates/data/tests/guild_store_vectors.rs
+
+
+# 说明：上面 head=d0f90e40 是**代码/报告提交**（本证据包生成时的 HEAD）。
+# 本片最终的 patch head = 紧随其后的证据提交；base..最终 head 在以上 6 件之外只增加
+# mir2-rs/tests/parity/m3/evidence-m3-guild-file-store-f1-20261013/** 与
+# mir2-rs/tests/parity/m3/guild-store-probe/vectors/**，
+# ⇒ `git diff --name-only <base> <最终 head> -- src sql MirClient` 仍为空。
