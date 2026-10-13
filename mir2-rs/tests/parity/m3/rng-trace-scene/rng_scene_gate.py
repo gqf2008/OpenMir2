@@ -37,7 +37,8 @@ Claim B 基线报告（`M3全服RNG消费者结构一致性基线报告-20261013
 DoD① 要求「两侧 trace 必须来自同场景/同起点/**同种子**」⇒ 门在两份 trace 流水在场时，还要核对
 **流水头**的 `INJECT_OK <seed>`（两侧生产者都写：C# `rng-hook` 与 Rust `crates/shared/src/rng_trace.rs`）：
 缺该行 ⇒ 无法证明种子（fail-closed RED）；`INJECT_OK <seed>` ≠ scenario.seed ⇒ RED。
-未给流水 ⇒ 该组检查不参与（保持既有描述件级门行为，向后兼容）。
+**只给一侧流水** ⇒ 无法证明两侧的种子 ⇒ **PREREQ fail-closed**（半份证据不算证据，`stream-pair-required`）；
+两侧都不给 ⇒ 该组检查不参与（保持既有描述件级门行为，向后兼容）。
 
 ## 用法
 
@@ -328,6 +329,14 @@ def run_gate(scenario_path, a_path, b_path, a_stream=None, b_stream=None):
     # 制品级同种子：描述件自报不算数，核两份 trace 流水头的 `INJECT_OK <seed>`。
     # 任一侧给了流水但缺该行 / 与 scenario.seed 不等 ⇒ fail-closed 点名（DoD① fail-closed 拒比）。
     if a_stream or b_stream:
+        # 只给一侧流水 ⇒ 无法证明**两侧**的制品级种子 ⇒ fail-closed PREREQ（不许把「半份证据」
+        # 当绿）。DoD① 入口 `-SceneGroupDiff` 恒传两侧；本牙只咬住直接 CLI 的半给用法。
+        if bool(a_stream) != bool(b_stream):
+            missing = "b" if a_stream else "a"
+            res.fail_prereq(
+                "stream-pair-required",
+                "制品级同种子门要求两侧流水齐备或都不给；只给了 a=%r b=%r（缺 %s 侧）"
+                % (a_stream, b_stream, missing))
         seeds = {}
         for label, stream in (("a", a_stream), ("b", b_stream)):
             if not stream:
@@ -648,6 +657,12 @@ def cmd_selftest(_args):
         check("stream-absent-backward-compatible",
               rc == 0 and "stream-seed-equal" not in out and "stream-inject-ok" not in out, out[:300])
 
+        # 只给一侧流水 ⇒ PREREQ fail-closed（半份证据不算证据；改坏必红：去掉 stream-pair-required
+        # 守卫 ⇒ 本用例 rc 变 0，selftest 立即点名 FAIL）。
+        rc, out = run(scen, a1, b1, sa)
+        check("stream-pair-prereq-red",
+              rc == 2 and "stream-pair-required" in out and "PREREQ_MISSING" in out, out[:400])
+
         # `scenario` 模式（离线锁住已入库 scenario）：正样本绿 / 缺件 PREREQ。
         rc, out = run_scen(scen)
         check("scenario-mode-green", rc == 0 and "VERDICT GREEN" in out, out[:300])
@@ -698,7 +713,8 @@ def cmd_selftest(_args):
     if failed:
         return 1
     sys.stdout.write("GREEN: 场景前置门 selftest 全绿（同场景绿 + seed/怪集合/起点/map/MonGen 漂移必红 "
-                     "+ 流水头同种子制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 缺件 PREREQ / 未给流水向后兼容） "
+                     "+ 流水头同种子制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 缺件 PREREQ / "
+                     "只给一侧流水 PREREQ / 未给流水向后兼容） "
                      "+ scenario 声明 vs 代码 folded 映射/组清单漂移必红 + 缺件/坏 JSON PREREQ fail-closed）\n")
     return 0
 

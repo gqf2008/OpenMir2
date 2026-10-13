@@ -77,6 +77,7 @@
 | `monsters-equal:scenario-vs-{a,b}` / `a-vs-b` | **Monster 集合同口径**（`(name,x,y,dir)` 多重集 + 计数） |
 | `mongen-equal:{a,b}-vs-fixture` / `a-vs-b` | **MonGen 集合同口径**：两侧 `mongen_rows` 逐行多重集都等于冻结件 `../fixtures/mongen-map<map>.tsv` |
 | `stream-inject-ok:{a,b}` / `stream-seed-equal:{a,b}` / `stream-seed-equal:a-vs-b` | **制品级同种子**（给了 `--a-stream` / `--b-stream` 时）：两份 trace **流水头**的 `INJECT_OK <seed>`（C# `rng-hook` 与 Rust `crates/shared/src/rng_trace.rs` 都写）必须存在且 `== scenario.seed`。描述件里的 `seed` 只是**自报**，不算证据；缺该行 ⇒ 无法证明种子（fail-closed RED） |
+| `stream-pair-required` | **只给一侧流水**（`--a-stream`/`--b-stream` 二缺一）⇒ PREREQ fail-closed：半份证据不能证明**两侧**同种子（两侧都不给才走描述件级向后兼容） |
 
 退出码：`0` = GREEN（同场景，`groupdiff` 次序结论可采信）；`1` = RED（场景漂移**或 scenario 声明与代码真源漂移**，点名哪一项）；
 `2` = PREREQ（缺件 / 坏 JSON，fail-closed）。
@@ -84,7 +85,8 @@
 > **制品级同种子（新增）**：DoD① 要求「两侧 trace 必须来自同场景/同起点/**同种子**」。描述件由各侧自报，
 > 所以门在两份流水在场时（`-SceneGroupDiff` 恒传；`-GateOnly` 给了 `-AStream`/`-BStream` 才核）还要核对
 > **流水头**的 `INJECT_OK <seed>`。这样「描述件写 42、实际流水是别的种子」这种伪造会被拦在**拒比**而非
-> 被误判成实现差异。未给流水时保持既有描述件级行为（向后兼容）。
+> 被误判成实现差异。**只给一侧**流水 ⇒ `stream-pair-required` PREREQ（`exit 2`，半份证据不算证据）；
+> 两侧都不给时才保持既有描述件级行为（向后兼容）。
 
 **DoD① 的判定入口 = `-SceneGroupDiff`（本片收口）**：它把「场景门 → 组账本比较」串成**一条命令**，
 门非 GREEN ⇒ **拒比**（不跑 `groupdiff`、绝不输出 `RNG_CONSUMER_GROUPDIFF` 结论，也不把它当绿），
@@ -170,7 +172,7 @@ powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStac
 powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut <path.txt>
 ```
 
-自检覆盖（27 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（21/21）、
+自检覆盖（27 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（22/22）、
 场景门进程内正/负样本（同场景绿 / 怪集合漂移红）、账本 selftest（含 R-6 folded）、
 folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ、LF 写出、
 `scenario-fold-group-consistency-green`（已入库 scenario 与代码同口径）、
@@ -196,7 +198,7 @@ cd mir2-rs/tests/parity/m3
 
 # 工具自检
 python -I rng-trace-probe/rng_ledger_diff.py selftest          # 32/32 GREEN（含 R-6 folded）
-python -I rng-trace-scene/rng_scene_gate.py selftest           # 16/16 GREEN（含 scenario 声明 vs 代码）
+python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（含 scenario 声明 vs 代码 + 半给流水 PREREQ）
 
 # scenario 件自身（离线；锁住声明与代码真源同口径）
 python -I rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json
