@@ -196,6 +196,18 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 > 承接卡 `openmir2-m3-selloff-consignment-world` / `-selloff-goldsales-load-wire` / `-selloff-fixture-botsrv` 落地前，
 > 不产生可对拍差异；已 1:1 复刻的只读且坏的 `goldsales` 加载（读错列名、无 save）另见 D-5 / B-5。
 
+## M3⑤ 登记（NPC / 商店动作序列夹具；卡片 `openmir2-m3-shop-fixture-botsrv`，2026-10-13）
+
+> 盘点报告：[`m3/M3⑤NPC商店现状盘点报告-20261013.md`](m3/M3⑤NPC商店现状盘点报告-20261013.md)；本卡父卡 `openmir2-m3-npc-shop-align`。
+> 本片交付 = **夹具骨架**（比较器 + 入口 + 无栈自检 + BotSrv 最小驱动）；真机两侧同序列跑等承接卡
+> `openmir2-m3-merchant-entity-tick`（⑤-2）/ `-shop-dialog-wiring`（⑤-4）/ `-storage-persist`（⑤-5）落地 + owner 发窗口。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
+| --- | --- | --- | --- |
+| T-41 | **夹具口径 + BotSrv 工具侧例外（本片交付）**：改动 `src/BotSrv/**`（`RobotOptions`/`MShare`/`AppService`/`Player/RobotPlayer.cs`/`Player/RobotPlayer.Operate.cs`/`Program.cs` + 新 `ShopSeqSelfCheck.cs`）+ `tools/botload/run_bots.ps1` + `mir2-rs/tests/parity/m3/{run_pair.ps1,gate_guards.ps1}` + 新 `mir2-rs/tests/parity/m3/{run_npc_shop_pair.ps1,npc_shop_diff.py,npc_shop_scenario.json}`：① BotSrv 增 `ShopSequence`（默认 false）/`ShopOps`/`ShopStepMs`/`ShopStartDelayMs`/`ShopNpcName`/`ShopItemName`/`ShopItemMake`/`ShopCount`，收到本假人 `SM_LOGON` 后按固定顺序对**本假人视图里的同一个 NPC/商人**发开面板+`CM_USERSELLITEM`/`CM_USERBUYITEM`/`CM_MERCHANTQUERYSELLPRICE`/`CM_MERCHANTQUERYREPAIRCOST`/`CM_USERREPAIRITEM`/`CM_USERSTORAGEITEM`/`CM_USERTAKEBACKSTORAGEITEM`，逐 op 落 `M3SHOPSEQ {json}` 的 send/frame/end/done 事件；`SM_*` 商店帧处理器（645/646/647/648/649/650/651/652/668/669/670/671/700/701/702/703/704/705/706/707）在开关打开时增 `ShopOnFrame` 落事件（**只读不写世界态**）。② `npc_shop_diff.py`（`assemble` 事件流→记录 / `diff` 逐 op 字段级+多重集+fail-closed / `selftest` **27/27**）；③ `run_npc_shop_pair.ps1`（复用 `run_pair.ps1` 两相 pin + `-StopAfterCharCreated` 预热 + 收尾 save-settle 仪器；入口护栏 + `M3SHOPSEQ` 完整性 + 跨侧 `npc_shop_diff` + `scoped_diff`；`-SelfCheckNoStack` **17/17**；未给 `-Go` ⇒ real-run fail-closed）。 | BotSrv **不在 oracle 七进程内**（T-1）。默认（`ShopSequence=false`）⇒ **不新增任何发送、不新增任何日志、原路径逐字节不变**（`run_bots.ps1 -WriteConfigOnly` 两向自检 + `run_pair -EmitOpsArgs` 两向自检钉住：默认 `(off)`、开启时必传 `-DisableAutoPlay`）。打开时只写**本假人自己的 socket**、只读本假人自己的视图（`PlayScene.ActorList`/`MShare.ItemArr`），不读不写跨假人共享世界态（同 T-22/T-29 纪律）；不改 oracle/协议/上线字节语义。这是 T-14「登记 BotSrv 工具侧例外，照 T-5/T-6 之例」/ T-29 的同族扩展。**判据本体（比较器 + 夹具骨架）已完整、离线可复跑**；真机两侧同序列跑要窗口。证据 `m3/evidence-m3-shop-fixture-botsrv-20261013/**`。 | 作者登记（`openmir2-worker-5`）；**待独立 principal 复核** |
+
+> **编号连号**：T-41（M3⑤ NPC/商店夹具；T-22/T-29 的同族扩展）。
+
 ## M1 S4b 登记（DBSrv 6000 `DataService` 面 + 5700 `MarketService` 面 + `TimedService` 缓存回写，2026-10-12）
 
 > 卡 `openmir2-m1-dbsrv-6000-face`；交付说明 `docs/M1-S4b-DBSrv-6000-交付说明.md`。

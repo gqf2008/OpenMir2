@@ -1,0 +1,20 @@
+### (a) 两条相同记录 -> GREEN
+STATS ops=1 frames=1 ok=1 fail=0
+CSHARP=E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/.tmp-shop-ev/cs.jsonl
+RUST=E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/.tmp-shop-ev/rs-ok.jsonl
+DIFF 0
+GREEN: NPC/商店逐项相同（ops=1 帧=1 失败分支=0）
+rc=0
+
+### (b) 改坏失败分支/帧种类（rs 换成 649+fail_sell_reject）-> RED（点名 branch / frames.sm）
+SHOP k=0 RED branch csharp='ok' rust='fail_sell_reject'
+SHOP k=0 RED gold_after csharp=1010 rust=1000
+SHOP k=0 RED frames.sm csharp=[648] rust=[649]
+SHOP k=0 RED frames.scalar[649] csharp={} rust={'649.a': 0}
+SHOP k=0 RED bag_after.multiset csharp={} rust={'木剑#90000003': 1}
+STATS ops=1 frames=1 ok=1 fail=0
+CSHARP=E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/.tmp-shop-ev/cs.jsonl
+RUST=E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/.tmp-shop-ev/rs-branch.jsonl
+DIFF 5
+RED: NPC/商店跨侧差异 5 项（定位见上）
+rc=1
