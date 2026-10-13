@@ -432,15 +432,35 @@ pub fn door_state_text(door: &CastleUnit) -> &'static str {
     }
 }
 
-/// `HUtil32.CompareLStr(src, targ)`（`src/OpenMir2/HUtil32.cs`）：大小写不敏感的前缀匹配。
+/// `HUtil32.CompareLStr(src, targ)`（`src/OpenMir2/HUtil32.cs:550-576`）：大小写不敏感的前缀匹配。
 ///
-/// `targ` 为空 ⇒ `false`；`src` 短于 `targ` ⇒ `false`；否则逐字符 `ToUpper` 比较前 `targ.len()` 个字符。
+/// oracle 语义：`compn = targ.Length`（UTF-16 码元数）；`compn <= 0`（空 `targ`）⇒ `false`；
+/// `src.Length < compn` ⇒ `false`；否则对 `i in 0..compn` 逐码元
+/// `char.ToUpper(src[i]) == char.ToUpper(targ[i])`，全等 ⇒ `true`。本移植按 Rust `char` 逐位比较
+/// （BMP 下与 UTF-16 码元一致；本函数调用面 = `HIRE_GUARD_NOW` / `HIRE_ARCHER_NOW` 等全 ASCII），
+/// ASCII 大小写折叠与既有口径一致。
+///
+/// **不做字节切片**（⑧-8 reviewer-5 O-1）：旧实现 `src[..targ.len()]` 在 `targ.len()` 恰好落在
+/// 某个多字节 `char` 中间时按 Rust 语义 **panic**，而 oracle 的逐码元循环对任意输入都不会抛
+/// （越界前缀只在 UTF-16 码元级比较、不切字节）。逐 `char` 比较对任意 UTF-8 输入都不 panic，
+/// 且对 ASCII `targ` 与 oracle 逐码元结果一致（首位不等 ⇒ `false`）。
 #[must_use]
 pub fn compare_lstr(src: &str, targ: &str) -> bool {
-    if targ.is_empty() || src.len() < targ.len() {
-        return false;
+    let mut s = src.chars();
+    let mut t = targ.chars();
+    loop {
+        match (t.next(), s.next()) {
+            (Some(tc), Some(sc)) => {
+                if !sc.eq_ignore_ascii_case(&tc) {
+                    return false;
+                }
+            }
+            // `compn <= 0`（空 targ）⇒ `false`；targ 全部匹配完 ⇒ `true`。
+            (None, _) => return !targ.is_empty(),
+            // `src.Length < compn`（src 短于 targ）⇒ `false`。
+            (Some(_), None) => return false,
+        }
     }
-    src[..targ.len()].eq_ignore_ascii_case(targ)
 }
 
 /// `CastleOfficial.UserSelect` 的标签派发（`CastleOfficial.cs:199-238`）。
@@ -2432,6 +2452,32 @@ mod tests {
         assert!(!compare_lstr("ab", "abc"));
         assert!(compare_lstr("ABCD", "abc"));
         assert!(compare_lstr("abc", "abc"));
+    }
+
+    /// ⑧-8 reviewer-5 O-1：`compare_lstr` 必须与 oracle `HUtil32.CompareLStr`
+    /// （`src/OpenMir2/HUtil32.cs:550-576`）同语义，**且对任意 UTF-8 输入都不 panic**。
+    ///
+    /// 旧实现 `src[..targ.len()].eq_ignore_ascii_case(targ)` 会对落在多字节 `char` 中间的
+    /// 字节边界切片 ⇒ Rust panic；oracle 逐 UTF-16 码元比较不会抛 ⇒ 这是移植偏差，不是
+    /// oracle 行为。本用例用一段**首个字符边界恰在 `targ.len()` 中间**的输入锁死这一点。
+    #[test]
+    fn compare_lstr_matches_oracle_prefix_semantics_without_panic() {
+        // oracle 前置门与全等的正样本。
+        assert!(!compare_lstr("abc", "")); // compn <= 0
+        assert!(!compare_lstr("", "@hireguardnow")); // src 短于 targ
+        assert!(!compare_lstr("@hireguardno", "@hireguardnow")); // src 短 1
+        assert!(compare_lstr("@hireguardnow", "@hireguardnow"));
+        assert!(compare_lstr("@HireGuardNow", "@hireguardnow")); // ASCII 大小写折叠
+        assert!(compare_lstr("@hireguardnow0", "@hireguardnow")); // 前缀匹配，尾部多余无碍
+        assert!(!compare_lstr("@hirearchernow", "@hireguardnow")); // 位同位不等
+
+        // O-1 牙：`targ.len()` 落在 'é'（2 字节）中间 —— 旧实现 `src[..13]` 必 panic。
+        assert!(!compare_lstr("@hireguardnoé", "@hireguardnow"));
+        assert!(!compare_lstr("@hireguardnoézz", "@hireguardnow"));
+        // 其它多字节位置/长度：不得 panic，且与 oracle 逐位结果一致（首位或中位不等 ⇒ false）。
+        assert!(!compare_lstr("é@hireguardnow", "@hireguardnow"));
+        assert!(!compare_lstr("@hireguardnowé", "@hirearchernow"));
+        assert!(!compare_lstr("城堡@hireguardnow", "@hireguardnow"));
     }
 
     #[test]

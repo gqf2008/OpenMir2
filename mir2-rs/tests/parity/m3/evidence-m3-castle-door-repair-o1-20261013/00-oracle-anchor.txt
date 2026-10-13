@@ -1,0 +1,44 @@
+# ⑧-8 O-1 收口 —— oracle 锚（src/ 实读，行号本机可复核）
+
+## HUtil32.CompareLStr(string src, string targ)（src/OpenMir2/HUtil32.cs:550-576）
+550:         public static bool CompareLStr(string src, string targ)
+551:         {
+552:             int compn = targ.Length;
+553:             if (compn <= 0)
+554:             {
+555:                 return false;
+556:             }
+557: 
+558:             if (src.Length < compn)
+559:             {
+560:                 return false;
+561:             }
+562: 
+563:             if (targ.Length < compn)
+564:             {
+565:                 return false;
+566:             }
+567: 
+568:             for (int i = 0; i < compn; i++)
+569:             {
+570:                 if (char.ToUpper(src[i]) == char.ToUpper(targ[i]))
+571:                 {
+572:                     continue;
+573:                 }
+574: 
+575:                 return false;
+576:             }
+
+## 对照：Rust 旧实现（origin/master ⑧-8 片，本片修前）
+  /// `HUtil32.CompareLStr(src, targ)`（`src/OpenMir2/HUtil32.cs`）：大小写不敏感的前缀匹配。
+  ///
+  /// `targ` 为空 ⇒ `false`；`src` 短于 `targ` ⇒ `false`；否则逐字符 `ToUpper` 比较前 `targ.len()` 个字符。
+  #[must_use]
+  pub fn compare_lstr(src: &str, targ: &str) -> bool {
+      if targ.is_empty() || src.len() < targ.len() {
+          return false;
+
+## 关键点
+- oracle 在 `compn = targ.Length`（UTF-16 码元数）上逐码元 `char.ToUpper` 比较；比较越界只发生在码元级、从不切字节 ⇒ 对任意输入都不抛。
+- 旧 Rust 实现用字节切片 `src[..targ.len()]`：当 `targ.len()` 落在某个多字节 `char` 中间时按 Rust 语义 panic，oracle 不会 ⇒ **移植偏差**（本片收口）。
+- 新实现逐 `char` 比较：对任意 UTF-8 输入不 panic；对 ASCII `targ`（本函数调用面全 ASCII）与 oracle 逐码元结果一致。
