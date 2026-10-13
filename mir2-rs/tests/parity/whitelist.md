@@ -301,6 +301,17 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 
 > ⑨-2/⑨-3 的 4 条复刻缺陷（`DC` 高字节截断 / `MasterDieMutinySpeed` 除零 / `GainSlaveExp` 死代码 / 色表 latent 越界）见 B 段 **B-112..B-115**。
 
+## M3⑦ 扩展面登记（组队脚本/命令；卡片 `openmir2-m3-party-recall-ext`，2026-10-14）
+
+> 盘点报告 `mir2-rs/tests/parity/m3/M3⑦组队交易现状盘点报告-20261013.md` §1.O/§2#18 列的 5 个脚本面
+> （`RECALLGROUPMEMBERS`/`GROUPRECALL`/`CHECKGROUPCOUNT`/`CHECKGROUPCLASS`/`ISGROUPMASTER`）本节登记其中
+> **oracle 缺陷本体**；`@GroupRecall` GameCommand（`GroupRecallCommand.cs:12-66`）因本仓**无命令派发框架**，
+> 不在本卡范围（已在卡上登记待承接）。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
+| --- | --- | --- | --- |
+| T-51 | **M3⑦ 扩展面 4 处 oracle 缺陷 1:1 照搬（`openmir2-worker-21`，`recall-ext`）**：① `ConditionOfCheckGroupCount`（`ConditionProcessingSys.cs:2670-2726`）的 `switch (cMethod)` **整段被注释**（`:2692-2726`）⇒ 该条件**恒假**，`nCount` 参与不了任何判定（仅保留 `GetVarValue(ref nValue)` 的脚本条件错误路径：`sParam2` 解析失败且 `GetVarValue` 未写回 ⇒ 报 `CHECKGROUPCOUNT`）。② `ConditionOfIsGroupMaster`（`:4466-4482`）两个分支**都只写 `success = false`**，从不置 `true` ⇒ 唯一为真的路径是「`GroupOwner != 0` 且 `GroupOwner == ActorId`」时**不写**、`success` 保持 `ConditionScript.Execute` 侧传入的 `true`（= 团长为真、余为假）。③ `ConditionOfCheckGroupClass`（`:262-312`）的 `if (nJob < 0)` 是**死分支**（`PlayerJob.None = 3`，byte 枚举无负值，`src/OpenMir2/Enums/PlayerJob.cs:3-21`）⇒ 未识别的 `sParam1` 不报错、按 `None` 计数（玩家职业 0/1/2 ⇒ 计数 0）。④ `ActionOfRecallGroupMembers`（`ExecutionProcessingSys.cs:3487-3489`）**方法体为空**、`ActionOfGroupRecall`（`:3918-3924`）只剩 `if (GroupOwner != 0) { /* 被注释的 GroupRecall 调用 */ }` ⇒ 两者都是**可观测 no-op**。 | **不是差异，是 oracle 怪行为/死代码 1:1 复刻**（§8.1「行为等价优先于修 bug」）：Rust 侧照搬，**不许**「修好」成真计数/真召回/真报错。落地卡 `openmir2-m3-party-recall-ext`：`crates/script/src/engine/{conditions,actions}.rs` 的五个分支 + `dispatch.rs` 登记名 + 宿主读侧 `ScriptPlayer::group_owner/group_member_jobs`（`bins/game-svr/src/npc.rs`）与 `World::party_script_group_snapshot`（`crates/world/src/party.rs`）。向量锁死：`engine_tests::check_group_count_always_false_like_oracle` / `is_group_master_true_only_for_leader_like_oracle` / `check_group_class_counts_members_by_job` / `group_recall_actions_are_noops_like_oracle` + `party_vectors::script_group_snapshot_reads_owner_and_member_jobs`；**改坏必红**（把任一缺陷改成「正确」行为 ⇒ 对应用例必红，读数见证据 `m3/evidence-m3-party-recall-ext-20261014/`）。将来要修另开 `S-*`。 | 作者登记（`openmir2-worker-21`）；**待独立 principal 复核** |
+
 ## M1 S4b 登记（DBSrv 6000 `DataService` 面 + 5700 `MarketService` 面 + `TimedService` 缓存回写，2026-10-12）
 
 > 卡 `openmir2-m1-dbsrv-6000-face`；交付说明 `docs/M1-S4b-DBSrv-6000-交付说明.md`。

@@ -350,6 +350,10 @@ pub struct NpcPlayer<'r> {
     pub worn: HashMap<String, bool>,
     /// `playerActor.SlaveList.Count`
     pub slaves: i32,
+    /// `playerActor.GroupOwner`（0 = 无组）。§1.O `recall-ext` 读侧，由宿主快照填入。
+    pub group_owner: i32,
+    /// `playerActor.GroupMembers[i].Job`（`PlayerJob` 值：0/1/2）。
+    pub group_member_jobs: Vec<i32>,
     pub mn_val: [i32; 100],
     pub mn_integer: [i32; 100],
     pub mdy_val: HashMap<usize, i32>,
@@ -379,6 +383,8 @@ impl NpcPlayer<'_> {
             items: Vec::new(),
             worn: HashMap::new(),
             slaves: 0,
+            group_owner: 0,
+            group_member_jobs: Vec::new(),
             mn_val: [0; 100],
             mn_integer: [0; 100],
             mdy_val: HashMap::new(),
@@ -432,6 +438,12 @@ impl ScriptPlayer for NpcPlayer<'_> {
     }
     fn actor_id(&self) -> i32 {
         self.actor_id
+    }
+    fn group_owner(&self) -> i32 {
+        self.group_owner
+    }
+    fn group_member_jobs(&self) -> Vec<i32> {
+        self.group_member_jobs.clone()
     }
     fn level(&self) -> i32 {
         self.level

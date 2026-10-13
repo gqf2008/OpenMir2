@@ -1,0 +1,32 @@
+# Rust 侧现状（本 worktree，HEAD=worktree-m3-party-recall-ext，base=083dc1d6d）
+
+## 改前（base 083dc1d6d）：engine 无分支，仅注册名
+  (conditions.rs: 0 命中)
+  (actions.rs: 0 命中)
+  (dispatch.rs IMPLEMENTED_*: 0 命中)
+
+## 改后（工作树）：engine 分支 + dispatch 登记 + 宿主读侧
+97:            "ConditionOfCheckGroupCount" => self.cond_check_group_count(info, result),
+98:            "ConditionOfCheckGroupClass" => self.cond_check_group_class(info, result),
+99:            "ConditionOfIsGroupMaster" => self.cond_is_group_master(info, result),
+247:    /// `ConditionOfCheckGroupCount`（code 73，`ConditionProcessingSys.cs:2670`）。
+273:    /// `ConditionOfCheckGroupClass`（code 194，`ConditionProcessingSys.cs:262`）。
+307:    /// `ConditionOfIsGroupMaster`（code 148，`ConditionProcessingSys.cs:4466`）。
+745:    /// 本仓 `n_in` 即该传入值；`var_info_of` 传 0，`ConditionOfCheckGroupCount` 传 `-1`
+85:            "ActionOfRecallGroupMembers" => {
+86:                // `ExecutionProcessingSys.cs:3487` 的 `ActionOfRecallGroupMembers` **方法体为空**
+90:            "ActionOfGroupRecall" => {
+96:    "ActionOfRecallGroupMembers",
+97:    "ActionOfGroupRecall",
+150:    "ConditionOfCheckGroupCount",
+151:    "ConditionOfCheckGroupClass",
+152:    "ConditionOfIsGroupMaster",
+mir2-rs/crates/script/src/engine/mod.rs:358:    fn group_owner(&self) -> i32 {
+mir2-rs/crates/script/src/engine/mod.rs:365:    fn group_member_jobs(&self) -> Vec<i32> {
+mir2-rs/bins/game-svr/src/npc.rs:442:    fn group_owner(&self) -> i32 {
+mir2-rs/bins/game-svr/src/npc.rs:445:    fn group_member_jobs(&self) -> Vec<i32> {
+604:    pub fn party_script_group_snapshot(&self, actor: i32) -> (i32, Vec<i32>) {
+
+## 覆盖表收敛（未实现清单不再含这 5 名）
+30:pub static IMPLEMENTED_EXECUTIONS: &[&str] = &[
+101:pub static IMPLEMENTED_CONDITIONS: &[&str] = &[

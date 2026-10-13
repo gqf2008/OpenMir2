@@ -1,0 +1,30 @@
+# 边界（冻结面）：base=083dc1d6d706c2841c3d4e1386048528264a0fbf
+
+## git diff --name-only 083dc1d6d HEAD -- src sql MirClient
+(空 = 未触碰 oracle/表结构/客户端)
+
+## 全量改动清单（含未提交工作树）
+ M mir2-rs/bins/game-svr/src/main.rs
+ M mir2-rs/bins/game-svr/src/npc.rs
+ M mir2-rs/crates/script/src/engine/actions.rs
+ M mir2-rs/crates/script/src/engine/conditions.rs
+ M mir2-rs/crates/script/src/engine/dispatch.rs
+ M mir2-rs/crates/script/src/engine/mod.rs
+ M mir2-rs/crates/script/tests/engine_tests.rs
+ M mir2-rs/crates/world/src/party.rs
+ M mir2-rs/crates/world/tests/party_vectors.rs
+ M mir2-rs/tests/parity/whitelist.md
+?? mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014/
+
+## git diff --stat（工作树 vs base，排除证据目录）
+ mir2-rs/bins/game-svr/src/main.rs              |  17 +++
+ mir2-rs/bins/game-svr/src/npc.rs               |  12 ++
+ mir2-rs/crates/script/src/engine/actions.rs    |  11 ++
+ mir2-rs/crates/script/src/engine/conditions.rs |  90 +++++++++++++-
+ mir2-rs/crates/script/src/engine/dispatch.rs   |   7 ++
+ mir2-rs/crates/script/src/engine/mod.rs        |  15 +++
+ mir2-rs/crates/script/tests/engine_tests.rs    | 160 +++++++++++++++++++++++++
+ mir2-rs/crates/world/src/party.rs              |  19 +++
+ mir2-rs/crates/world/tests/party_vectors.rs    |  25 ++++
+ mir2-rs/tests/parity/whitelist.md              |  11 ++
+ 10 files changed, 366 insertions(+), 1 deletion(-)

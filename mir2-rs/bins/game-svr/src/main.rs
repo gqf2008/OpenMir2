@@ -2441,6 +2441,8 @@ fn npc_player_from<'r>(
     bag: Option<&[Option<record::ServerUserItem>]>,
     quest_flag: Option<&[u8]>,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    group_owner: i32,
+    group_member_jobs: &[i32],
 ) -> game_svr::npc::NpcPlayer<'r> {
     let mut p = game_svr::npc::NpcPlayer::empty(rng);
     p.chr_name = chr_name.to_string();
@@ -2448,6 +2450,9 @@ fn npc_player_from<'r>(
     p.map_name = map_name.to_string();
     p.level = level;
     p.gold = gold;
+    // §1.O `recall-ext` 读侧：`GroupOwner` / `GroupMembers[i].Job`（同源自 `World`）。
+    p.group_owner = group_owner;
+    p.group_member_jobs = group_member_jobs.to_vec();
     if let Some(cells) = bag {
         for cell in cells.iter().flatten() {
             if let Some(name) = catalog.name(cell.index) {
@@ -6692,6 +6697,12 @@ fn sim_loop(
                                                                 let level = data
                                                                     .and_then(|d| d.abil.as_ref())
                                                                     .map_or(1, |a| i32::from(a.level));
+                                                                // §1.O `recall-ext` 读侧：同源自 `World` 的组队快照。
+                                                                let (group_owner, group_member_jobs) =
+                                                                    world
+                                                                        .party_script_group_snapshot(
+                                                                            id,
+                                                                        );
                                                                 let mut player = npc_player_from(
                                                                     &mut rngf,
                                                                     &head.chr_name,
@@ -6706,6 +6717,8 @@ fn sim_loop(
                                                                         d.quest_flag.as_deref()
                                                                     }),
                                                                     &enter_cfg.catalog,
+                                                                    group_owner,
+                                                                    &group_member_jobs,
                                                                 );
                                                                 if let Some(says) =
                                                                     host.run_login(&mut player)
@@ -8817,12 +8830,16 @@ mod tests {
             Some(&bag),
             Some(&[7, 8, 9]),
             &catalog,
+            77,
+            &[0, 1, 2],
         );
         assert_eq!(p.chr_name, "hero");
         assert_eq!(p.actor_id, 5);
         assert_eq!(p.map_name, "0");
         assert_eq!(p.level, 3);
         assert_eq!(p.gold, 100);
+        assert_eq!(p.group_owner, 77);
+        assert_eq!(p.group_member_jobs, vec![0, 1, 2]);
         assert_eq!(&p.quest_flag.as_bytes()[..3], &[7, 8, 9]);
         assert!(
             p.items.is_empty(),
