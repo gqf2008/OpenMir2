@@ -1,0 +1,77 @@
+# M3⑨-2/⑨-3 登记行的 oracle 锚（冻结 src/**，只读）
+# 生成：2026-10-13；命令逐条见下方 [cmd]
+
+[cmd] sed -n '345,352p' src/M2Server/Player/PlayObject.Base.cs
+                {
+                    SlaveList[i].Master = null;
+                    SlaveList[i].SlaveExpLevel = (byte)SystemShare.Config.SlaveColor.Length;
+                    SlaveList[i].RecalcAbilitys();
+                    SlaveList[i].WAbil.DC = (ushort)HUtil32.MakeLong((short)(HUtil32.LoByte(SlaveList[i].WAbil.DC) * SystemShare.Config.MasterDieMutinyPower), (short)(HUtil32.HiByte(SlaveList[i].WAbil.DC) * SystemShare.Config.MasterDieMutinyPower));
+                    SlaveList[i].WalkSpeed = SlaveList[i].WalkSpeed / SystemShare.Config.MasterDieMutinySpeed;
+                    SlaveList[i].RefNameColor();
+                    SlaveList[i].RefShowName();
+
+[cmd] sed -n '71,84p' src/M2Server/Monster/MonsterObject.cs
+        private void GainSlaveExp(byte nLevel)
+        {
+            KillMonCount += nLevel;
+            if (GainSlaveUpKillCount() < KillMonCount)
+            {
+                KillMonCount -= GainSlaveUpKillCount();
+                if (SlaveExpLevel < (SlaveMakeLevel * 2 + 1))
+                {
+                    SlaveExpLevel++;
+                    RecalcAbilitys();
+                    RefNameColor();
+                }
+            }
+        }
+
+[cmd] sed -n '869,883p' src/M2Server/Actor/BaseObject.Base.cs
+        protected virtual byte GetChrColor(IActor baseObject)
+        {
+            if (baseObject.Race == ActorRace.NPC) //增加NPC名字颜色单独控制
+            {
+                return SystemShare.Config.NpcNameColor;
+            }
+            if (baseObject.Master != null)
+            {
+                byte slaveExpLevel = ((MonsterObject)baseObject).SlaveExpLevel;
+                if (slaveExpLevel <= Grobal2.SlaveMaxLevel)
+                {
+                    return SystemShare.Config.SlaveColor[slaveExpLevel];
+                }
+            }
+            return baseObject.GetNameColor();
+
+[cmd] sed -n '21,25p' src/OpenMir2/Grobal2.cs   (SlaveMaxLevel)
+        /// 属下最高等级
+        /// </summary>
+        public const byte SlaveMaxLevel = 50;
+        /// <summary>
+        /// 记录游戏金币日志
+
+[cmd] sed -n '519,522p' src/Modules/SystemModule/Conf/ServerConf.cs   (MasterDieMutinySpeed 错键)
+            SystemShare.Config.MasterDieMutinyRate = ReadWriteInteger("Setup", "MasterDieMutinyRate", SystemShare.Config.MasterDieMutinyRate);
+            SystemShare.Config.MasterDieMutinyPower = ReadWriteInteger("Setup", "MasterDieMutinyPower", SystemShare.Config.MasterDieMutinyPower);
+            SystemShare.Config.MasterDieMutinySpeed = ReadWriteInteger("Setup", "MasterDieMutinyPower", SystemShare.Config.MasterDieMutinySpeed);
+            SystemShare.Config.BBMonAutoChangeColor = ReadWriteBool("Setup", "BBMonAutoChangeColor", SystemShare.Config.BBMonAutoChangeColor);
+
+[cmd] sed -n '205,218p' src/M2Server/Actor/BaseObject.Base.cs   (Run 尾倒序清表三条件)
+                    StatusChanged();
+                }
+            }
+            // 清除宝宝列表中已经死亡及叛变的宝宝信息
+            if (SlaveList != null && SlaveList.Any())
+            {
+                for (int i = SlaveList.Count - 1; i >= 0; i--)
+                {
+                    if (SlaveList[i].Death || SlaveList[i].Ghost || (SlaveList[i].Master != this))
+                    {
+                        SlaveList.RemoveAt(i);
+                    }
+                }
+            }
+
+[cmd] grep -rn 'GainSlaveExp' src/ --include=*.cs   (死代码：仅定义处)
+E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3hp/src/M2Server/Monster/MonsterObject.cs:71:        private void GainSlaveExp(byte nLevel)

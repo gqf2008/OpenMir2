@@ -1,0 +1,4 @@
+# [cmd] CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo clippy --workspace --all-targets --offline -- -D warnings
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.90s
+rc=0

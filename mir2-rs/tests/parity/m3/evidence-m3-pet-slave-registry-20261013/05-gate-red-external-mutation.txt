@@ -1,0 +1,33 @@
+# 外部改坏（临时副本 E:/tmp/m3hp-whitelist-mut.txt；本片仓库文件不动）
+# [cmd] python -I m3_pet_slave_registry_gate.py check --whitelist <改坏副本>
+
+=== MUT-1 删除 B-115 登记行 ===
+PET_SLAVE_REGISTRY_GATE whitelist=E:/tmp/m3hp-whitelist-mut.txt required=5 B-unique=checked
+  FINDING OK B-112 @L39：锚点 3/3 齐
+  FINDING OK B-113 @L40：锚点 3/3 齐
+  FINDING OK B-114 @L41：锚点 2/2 齐
+  FINDING OK T-49 @L288：锚点 3/3 齐
+  FINDING NOTE B-112 存在（早前 reviewer 建议用于 811 Job 面，作者判定 1:1 ⇒ 未落行；本片取用）
+PET_SLAVE_REGISTRY_RED 1：MISSING B-115：whitelist 里没有 `| B-115 |` 行
+rc=1
+
+=== MUT-2 把 B-112 的 oracle 锚改成不存在的行号 ===
+PET_SLAVE_REGISTRY_GATE whitelist=E:/tmp/m3hp-whitelist-mut.txt required=5 B-unique=checked
+  FINDING OK B-113 @L40：锚点 3/3 齐
+  FINDING OK B-114 @L41：锚点 2/2 齐
+  FINDING OK B-115 @L42：锚点 3/3 齐
+  FINDING OK T-49 @L289：锚点 3/3 齐
+  FINDING NOTE B-112 存在（早前 reviewer 建议用于 811 Job 面，作者判定 1:1 ⇒ 未落行；本片取用）
+PET_SLAVE_REGISTRY_RED 1：ANCHOR B-112 @L39：缺锚点 PlayObject.Base.cs:349
+rc=1
+
+=== MUT-3 追加重复的 B-114 行 ===
+PET_SLAVE_REGISTRY_GATE whitelist=E:/tmp/m3hp-whitelist-mut.txt required=5 B-unique=checked
+  FINDING OK B-112 @L39：锚点 3/3 齐
+  FINDING OK B-113 @L40：锚点 3/3 齐
+  FINDING OK B-115 @L42：锚点 3/3 齐
+  FINDING OK T-49 @L289：锚点 3/3 齐
+  FINDING NOTE B-112 存在（早前 reviewer 建议用于 811 Job 面，作者判定 1:1 ⇒ 未落行；本片取用）
+PET_SLAVE_REGISTRY_RED 2：DUPLICATE B-114 x 2 @ L41,L314; DUPLICATE B-114 x 2 @ L41,L314
+rc=1
+
