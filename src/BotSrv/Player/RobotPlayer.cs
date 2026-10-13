@@ -560,7 +560,7 @@ namespace BotSrv.Player
         {
             if (_seqTakeOnSlot < 0)
             {
-                MainOutMessage("M3BAGSEQ step=1 op=CM_TAKEONITEM skip=no_equippable_bag_item");
+                MainOutMessage("M3BAGSEQ_SKIP step=1 op=CM_TAKEONITEM skip=no_equippable_bag_item");
                 return;
             }
             // 让 SM_TAKEON_OK 处理器把该物品从背包挪到 UseItems[where]（同一对象引用）。
@@ -578,7 +578,7 @@ namespace BotSrv.Player
         {
             if (_seqTakeOffSlot < 0)
             {
-                MainOutMessage("M3BAGSEQ step=2 op=CM_TAKEOFFITEM skip=no_equipped_item");
+                MainOutMessage("M3BAGSEQ_SKIP step=2 op=CM_TAKEOFFITEM skip=no_equipped_item");
                 return;
             }
             if (MShare.g_WaitingUseItem != null)
@@ -595,7 +595,7 @@ namespace BotSrv.Player
         {
             if (_seqDropSlot < 0)
             {
-                MainOutMessage("M3BAGSEQ step=3 op=CM_DROPITEM skip=no_bag_item");
+                MainOutMessage("M3BAGSEQ_SKIP step=3 op=CM_DROPITEM skip=no_bag_item");
                 return;
             }
             MainOutMessage($"M3BAGSEQ step=3 op=CM_DROPITEM bag={_seqDropSlot} make={_seqDropMake} name={_seqDropName}");
@@ -607,7 +607,7 @@ namespace BotSrv.Player
         {
             if (_seqEatSlot < 0)
             {
-                MainOutMessage("M3BAGSEQ step=4 op=CM_EAT skip=no_drug_in_bag");
+                MainOutMessage("M3BAGSEQ_SKIP step=4 op=CM_EAT skip=no_drug_in_bag");
                 return;
             }
             if (MShare.g_EatingItem != null)
@@ -880,7 +880,7 @@ namespace BotSrv.Player
         {
             if (_shopSeqNpcActor == 0)
             {
-                MainOutMessage("M3SHOPSEQ op=" + op + " skip=no_npc_in_view");
+                MainOutMessage("M3SHOPSEQ_SKIP op=" + op + " skip=no_npc_in_view");
                 return;
             }
             short count = (short)MShare.g_nShopCount;
@@ -1199,7 +1199,7 @@ namespace BotSrv.Player
         {
             if (_questSeqNpcActor == 0)
             {
-                MainOutMessage("M3QUESTSEQ skip=no_npc_in_view step=" + QuestEsc(_questSeqOp + "|" + _questSeqNpcName + "|" + _questSeqLabel));
+                MainOutMessage("M3QUESTSEQ_SKIP skip=no_npc_in_view step=" + QuestEsc(_questSeqOp + "|" + _questSeqNpcName + "|" + _questSeqLabel));
                 return;
             }
             switch (_questSeqOp)
@@ -1211,7 +1211,7 @@ namespace BotSrv.Player
                     SendMerchantDlgSelect(_questSeqNpcActor, _questSeqLabel);
                     break;
                 default:
-                    MainOutMessage("M3QUESTSEQ skip=op_not_implemented step=" + QuestEsc(_questSeqOp));
+                    MainOutMessage("M3QUESTSEQ_SKIP skip=op_not_implemented step=" + QuestEsc(_questSeqOp));
                     break;
             }
         }
@@ -1481,14 +1481,14 @@ namespace BotSrv.Player
                     {
                         ClientItem it = FindPairTradeItem(string.Empty, 0);
                         if (it != null) { SendAddDealItem(it); }
-                        else { MainOutMessage("M3PAIRTRADESEQ skip=no_item_in_bag op=deal_add_item"); }
+                        else { MainOutMessage("M3PAIRTRADESEQ_SKIP skip=no_item_in_bag op=deal_add_item"); }
                     }
                     break;
                 case "deal_del_item":
                     {
                         ClientItem it = FindPairTradeItem(string.Empty, 0);
                         if (it != null) { SendDelDealItem(it); }
-                        else { MainOutMessage("M3PAIRTRADESEQ skip=no_item_in_bag op=deal_del_item"); }
+                        else { MainOutMessage("M3PAIRTRADESEQ_SKIP skip=no_item_in_bag op=deal_del_item"); }
                     }
                     break;
                 case "deal_chg_gold":
@@ -1508,7 +1508,7 @@ namespace BotSrv.Player
                     SendClientMessage(Messages.CM_SOFTCLOSE, 0, 0, 0, 0);
                     break;
                 default:
-                    MainOutMessage("M3PAIRTRADESEQ skip=op_not_implemented step=" + QuestEsc(_ptSeqOp));
+                    MainOutMessage("M3PAIRTRADESEQ_SKIP skip=op_not_implemented step=" + QuestEsc(_ptSeqOp));
                     break;
             }
         }
@@ -1737,7 +1737,7 @@ namespace BotSrv.Player
                         }
                         else
                         {
-                            MainOutMessage("M3SELLOFFSEQ skip=no_item_in_bag op=" + QuestEsc(_soSeqOp));
+                            MainOutMessage("M3SELLOFFSEQ_SKIP skip=no_item_in_bag op=" + QuestEsc(_soSeqOp));
                         }
                     }
                     break;
@@ -1774,7 +1774,7 @@ namespace BotSrv.Player
                     SendClientMessage(Messages.CM_SOFTCLOSE, 0, 0, 0, 0);
                     break;
                 default:
-                    MainOutMessage("M3SELLOFFSEQ skip=op_not_implemented step=" + QuestEsc(_soSeqOp));
+                    MainOutMessage("M3SELLOFFSEQ_SKIP skip=op_not_implemented step=" + QuestEsc(_soSeqOp));
                     break;
             }
         }
@@ -1979,7 +1979,7 @@ namespace BotSrv.Player
                 case "repair_wall":
                     if (_gcSeqNpcActor == 0 || string.IsNullOrEmpty(_gcSeqParam))
                     {
-                        MainOutMessage("M3GUILDCSEQ skip=no_npc_in_view op=" + ShopEsc(_gcSeqOp));
+                        MainOutMessage("M3GUILDCSEQ_SKIP skip=no_npc_in_view op=" + ShopEsc(_gcSeqOp));
                         break;
                     }
                     // 行会 NPC 脚本标签：`@@buildguildnow` / `@@guildwar` / `@requestcastlewarnowN` /
@@ -1993,7 +1993,7 @@ namespace BotSrv.Player
                     SendClientMessage(Messages.CM_SOFTCLOSE, 0, 0, 0, 0);
                     break;
                 default:
-                    MainOutMessage("M3GUILDCSEQ skip=op_not_implemented step=" + ShopEsc(_gcSeqOp));
+                    MainOutMessage("M3GUILDCSEQ_SKIP skip=op_not_implemented step=" + ShopEsc(_gcSeqOp));
                     break;
             }
         }
@@ -2220,7 +2220,7 @@ namespace BotSrv.Player
                     {
                         if (!int.TryParse(_hpSeqParam, out int skill))
                         {
-                            MainOutMessage("M3HEROPETSEQ skip=bad_skill step=" + ShopEsc(_hpSeqParam));
+                            MainOutMessage("M3HEROPETSEQ_SKIP skip=bad_skill step=" + ShopEsc(_hpSeqParam));
                             break;
                         }
                         SendSpellMsg(Messages.CM_SPELL, MShare.MySelf.m_btDir, 0, skill, 0);
@@ -2242,7 +2242,7 @@ namespace BotSrv.Player
                     SendClientMessage(Messages.CM_SOFTCLOSE, 0, 0, 0, 0);
                     break;
                 default:
-                    MainOutMessage("M3HEROPETSEQ skip=op_not_implemented step=" + ShopEsc(_hpSeqOp));
+                    MainOutMessage("M3HEROPETSEQ_SKIP skip=op_not_implemented step=" + ShopEsc(_hpSeqOp));
                     break;
             }
         }
