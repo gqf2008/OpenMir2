@@ -1,0 +1,11 @@
+### post-fix marker_prefix_gate.py (本片) + M3SHOPSEQ guard commented out (同一变异体)
+### [1] check:
+RED: markers 前缀口径门失败（1 项）
+  - run_pair.ps1 缺生产 fail-closed 牙 Assert-M3MarkerPrefix -Marker 'M3SHOPSEQ'
+rc=1
+
+### [2] selftest (期望 real-guards-wired / check-green FAIL):
+SELFTEST FAIL real-guards-wired
+SELFTEST FAIL check-green
+SELFTEST ok=29/31
+rc=1

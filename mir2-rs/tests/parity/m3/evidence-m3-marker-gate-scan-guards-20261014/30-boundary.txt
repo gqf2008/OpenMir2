@@ -1,0 +1,30 @@
+### 边界（base=origin/master .. head=HEAD）— 本片全量改动路径
+### $ git diff --name-status origin/master..HEAD
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/00-real-sha256-before.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/01-prefix-false-negative-before-fix.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/02-post-fix-commented-guard-red.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/03-real-sha256-after.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/10-marker-selftest-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/11-marker-check-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/12-marker-mutation-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/13-chain-gate-selftest-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/14-chain-gate-check-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/31-code-diff.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/README.md
+M	mir2-rs/tests/parity/m3/marker_prefix_gate.py
+### 说明（reviewer-5 `d853bd1a` 的 O-2' 订正，2026-10-14）：
+### 上面的 `git diff --name-status` 输出是在 30-boundary.txt / SHA256SUMS.txt 落盘前捕获的，
+### 故只列 11 个 A；本目录最终共 13 个 A = 上面 11 件 + 下面 2 件（本清单/边界件本身）：
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/30-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/SHA256SUMS.txt
+
+### 冻结面核对（应为空）：
+src/ :!src/BotSrv:           空
+sql/:                        空
+MirClient/:                  空
+mir2-rs/crates/protocol/:    空
+mir2-rs/crates/storage/:     空
+mir2-rs/bins/:               空
+src/BotSrv:                  空
+*.rs:                        空
+*.toml:                      空

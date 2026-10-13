@@ -1,0 +1,47 @@
+### 边界（base=origin/master 7caf97454 .. head=HEAD）— 本片全量改动路径
+### $ git diff --name-status 7caf97454..HEAD   # 含本片前一片（scan-guards）与上片措辞订正，同一 patch 一并交付
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/00-real-sha256-before.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/01-blockcomment-false-negative-before-fix.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/02-post-fix-blockcommented-red.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/03-real-sha256-after.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/10-marker-selftest-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/11-marker-check-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/12-marker-mutation-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/13-chain-gate-selftest-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/14-chain-gate-check-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/20-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/21-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/22-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/23-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/30-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/31-code-diff.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-blockcomment-20261014/SHA256SUMS.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/00-real-sha256-before.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/01-prefix-false-negative-before-fix.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/02-post-fix-commented-guard-red.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/03-real-sha256-after.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/10-marker-selftest-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/11-marker-check-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/12-marker-mutation-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/13-chain-gate-selftest-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/14-chain-gate-check-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/30-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/31-code-diff.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/marker_prefix_gate.py
+
+### 冻结面核对（应为空，计数）：
+src:!src/BotSrv:             0
+sql:                         0
+MirClient:                   0
+mir2-rs/crates/protocol:     0
+mir2-rs/crates/storage:      0
+mir2-rs/bins:                0
+src/BotSrv:                  0
+*.rs:                        0
+*.toml:                      0
+
+### 全部路径是否都在 mir2-rs/tests/parity/m3/** 下：
+是（无越界路径）

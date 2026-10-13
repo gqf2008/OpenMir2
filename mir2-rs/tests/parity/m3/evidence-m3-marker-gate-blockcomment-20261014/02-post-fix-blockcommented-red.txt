@@ -1,0 +1,8 @@
+### 改后：块注释里的生产牙 = 缺牙 ⇒ RED（新 _code_lines 生效）
+
+$ python -I marker_prefix_gate.py mutation   # 摘录 run_pair_guard_blockcommented.ps1 变体
+
+run_pair_guard_blockcommented.ps1: RED rc=1 (C:\Users\gxh\AppData\Local\Temp\marker-prefix-mut-5bp9e4hh\run_pair_guard_blockcommented.ps1)
+  - run_pair.ps1 缺生产 fail-closed 牙 Assert-M3MarkerPrefix -Marker 'M3SHOPSEQ'
+
+对照：被同一变异体（块注释掉 shop 块生产牙）在旧实现下 check 仍 GREEN —— 见 01。

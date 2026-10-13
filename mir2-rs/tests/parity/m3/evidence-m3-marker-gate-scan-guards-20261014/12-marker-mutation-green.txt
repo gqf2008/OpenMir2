@@ -1,0 +1,12 @@
+run_pair_strip.ps1: RED rc=1 (C:\Users\gxh\AppData\Local\Temp\marker-prefix-mut-ljzffko9\run_pair_strip.ps1)
+  - run_pair.ps1:767 仍有去前缀截断: $shopEvents = @($shopSeqMarkers | ForEach-Object { $_.Substring('M3SHOPSEQ '.Length).Trim() })
+run_pair_noguard.ps1: RED rc=1 (C:\Users\gxh\AppData\Local\Temp\marker-prefix-mut-ljzffko9\run_pair_noguard.ps1)
+  - run_pair.ps1 缺生产 fail-closed 牙 Assert-M3MarkerPrefix -Marker 'M3SHOPSEQ'
+run_pair_guard_commented.ps1: RED rc=1 (C:\Users\gxh\AppData\Local\Temp\marker-prefix-mut-ljzffko9\run_pair_guard_commented.ps1)
+  - run_pair.ps1 缺生产 fail-closed 牙 Assert-M3MarkerPrefix -Marker 'M3SHOPSEQ'
+RobotPlayer_bareskip.cs: RED rc=1 (C:\Users\gxh\AppData\Local\Temp\marker-prefix-mut-ljzffko9\RobotPlayer_bareskip.cs)
+  - RobotPlayer_bareskip.cs:883 仍有裸前缀 skip= 诊断行（应改 `M3SHOPSEQ_SKIP`）: MainOutMessage("M3SHOPSEQ op=" + op + " skip=no_npc_in_view");
+ps-assert good: rc=0 GREEN: 带前缀 markers 通过 Assert-M3MarkerPrefix
+ps-assert bad: rc=1 RED: C:\Users\gxh\AppData\Local\Temp\marker-prefix-mut-ljzffko9\helper-bad.jsonl 有 1 行缺前缀 'M3SHOPSEQ '（比较器 assemble 会 PREREQ_RED）——卡 openmir2-m3-fixture-marker-prefix-bug
+MUTATION GREEN (C:\Users\gxh\AppData\Local\Temp\marker-prefix-mut-ljzffko9\ps-assert-teeth.ps1)
+mutation rc=0

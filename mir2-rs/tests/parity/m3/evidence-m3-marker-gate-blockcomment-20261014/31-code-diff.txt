@@ -1,0 +1,174 @@
+diff --git a/mir2-rs/tests/parity/m3/marker_prefix_gate.py b/mir2-rs/tests/parity/m3/marker_prefix_gate.py
+index 933781b89..f3233c038 100644
+--- a/mir2-rs/tests/parity/m3/marker_prefix_gate.py
++++ b/mir2-rs/tests/parity/m3/marker_prefix_gate.py
+@@ -20,6 +20,8 @@ r"""marker_prefix_gate.py — M3 夹具 markers 前缀口径 fail-closed 门。
+    `.Substring('<M3*SEQ> '.Length)`（注释行跳过；同族新块如 ⑧/⑨ 也会被咬住）；
+ 2. `run_pair.ps1` 必须为 `COMPARATORS` 里每个序列都接上生产 fail-closed 牙
+    `Assert-M3MarkerPrefix -Path ... -Marker '<M3*SEQ>'`（缺一个 ⇒ RED）；
++   **牙只按代码行计**：被注释掉的牙 = 缺牙 ⇒ RED —— 整行 `#` 注释（O-1 收口，2026-10-14）
++   与 Windows PowerShell 块注释 `<# ... #>`（**可嵌套**；O-1' 收口，2026-10-14）都算注释；
+    且 `run_pair.ps1` 里出现的**每个**牙 Marker 都必须登记在 `COMPARATORS`
+    **或** `GUARD_ONLY_MARKERS`（新夹具族漏登记 ⇒ `check`/`selftest` 双 RED，而不是只靠自检）；
+    `GUARD_ONLY_MARKERS` 是「有 markers 流牙、但比较器消费 BotSrv 直写原始件」的显式例外清单；
+@@ -109,12 +111,43 @@ SHOP_EVENTS = [
+ 
+ 
+ def _code_lines(text):
+-    """返回 (行号, 原文) —— 跳过纯注释行（防止注释里的字面量造成假阳性）。"""
++    """返回 (行号, 去注释后的代码行) —— 用于 fail-closed 扫描。
++
++    注释判定（两族，均按**代码行**计）：
++      1. 整行 `#` 注释（`lstrip()` 后以 `#` 开头；`#>` 除外，它是块注释闭合符）；
++      2. Windows PowerShell 块注释 `<# ... #>`，**支持嵌套**（`<#` / `#>` 均可能出现在行中段，
++         跨多行）。块注释内容一律抹成空格、保留换行 ⇒ 藏在块注释里的牙 = 缺牙（O-1'，
++         reviewer-5 `d853bd1a` 在 chain-gate 片登记的 Observation：`run_pair.ps1:2-34` 确有
++         头部 `<# ... #>` 块注释，旧实现只跳整行 `#`，块注释里的同名调用会被当真牙 ⇒ fail-open）。
++
++    fail-closed 取向：无法判定是否注释时按「注释」处理（宁可把真牙判成缺牙 ⇒ RED，
++    也不把注释当代码 ⇒ 假绿）。本函数非完整词法分析：**行内 `#` 注释**（代码后跟 `#`）不在
++    处理范围——当前 `run_pair.ps1` 的 7 处生产牙均为整行调用，无活洞；新增写侧一律整行成牙。
++    """
+     out = []
+-    for i, line in enumerate(text.splitlines(), 1):
+-        if line.lstrip().startswith("#"):
+-            continue
+-        out.append((i, line))
++    depth = 0  # 块注释嵌套深度
++    for i, raw in enumerate(text.splitlines(), 1):
++        if depth == 0:
++            s = raw.lstrip()
++            if s.startswith("#") and not s.startswith("#>"):
++                out.append((i, ""))
++                continue
++        res = []
++        j = 0
++        while j < len(raw):
++            if raw.startswith("<#", j):
++                depth += 1
++                res.append("  ")
++                j += 2
++                continue
++            if depth > 0 and raw.startswith("#>", j):
++                depth -= 1
++                res.append("  ")
++                j += 2
++                continue
++            res.append(" " if depth > 0 else raw[j])
++            j += 1
++        out.append((i, "".join(res)))
+     return out
+ 
+ 
+@@ -126,10 +159,21 @@ def scan_strips(path):
+ 
+ 
+ def scan_guards(path):
+-    """scan 生产 fail-closed 牙；返回 [(marker, 变量名)]。"""
++    """scan 生产 fail-closed 牙；返回 [(marker, 变量名)]（按代码行顺序，逐行匹配）。
++
++    O-1 收口（reviewer-6 `49993d1f` 的非阻塞 Observation）：旧写法对**整份文件文本**
++    `GUARD_RE.finditer(text)`，于是**注释行**里的 `Assert-M3MarkerPrefix ... -Marker 'M3*SEQ'`
++    也被当成真实牙 ⇒ 把某族的牙整行注释掉，门仍 GREEN（fail-open，假阴性）。
++    改为逐 `_code_lines(text)` 匹配：整行 `#` 注释与 Windows PowerShell 块注释
++    `<# ... #>`（可嵌套；O-1' 收口）里的牙 = 缺牙 ⇒ RED。
++    """
+     with open(path, "r", encoding="utf-8") as fh:
+         text = fh.read()
+-    return [(m.group(2), m.group(1)) for m in GUARD_RE.finditer(text)]
++    out = []
++    for _i, line in _code_lines(text):
++        for m in GUARD_RE.finditer(line):
++            out.append((m.group(2), m.group(1)))
++    return out
+ 
+ 
+ def _scan_botsrv_text(text):
+@@ -287,6 +331,11 @@ def _mutations(dest_dir):
+ 
+     - `run_pair_strip.ps1`：把 shop 块改回历史「去前缀截断」写法；
+     - `run_pair_noguard.ps1`：删掉 shop 块的 fail-closed 牙（模拟未来新块漏接）；
++    - `run_pair_guard_commented.ps1`：把 shop 块的 fail-closed 牙**整行注释掉**（O-1 根因复现：
++      注释掉的牙必须等价于缺牙 ⇒ RED，而旧 `scan_guards` 扫全文会把它当真牙、保持 GREEN）；
++    - `run_pair_guard_blockcommented.ps1`：把 shop 块的 fail-closed 牙裹进 Windows PowerShell
++      **块注释** `<# ... #>`（O-1' 根因复现：块注释里的牙同样必须等价于缺牙 ⇒ RED；
++      只跳整行 `#` 的旧 `_code_lines` 会把它当真牙、保持 GREEN）；
+     - `RobotPlayer_bareskip.cs`：把一条已迁诊断改回裸事件前缀（模拟 defect_2 回归）。
+     """
+     with open(RUN_PAIR, "rb") as fh:
+@@ -307,6 +356,8 @@ def _mutations(dest_dir):
+     variants = {
+         "run_pair_strip.ps1": (src.replace(ok, strip), "ps"),
+         "run_pair_noguard.ps1": (src.replace(guard, b""), "ps"),
++        "run_pair_guard_commented.ps1": (src.replace(guard, b"#" + guard), "ps"),
++        "run_pair_guard_blockcommented.ps1": (src.replace(guard, b"<#" + eol + guard + eol + b"#>"), "ps"),
+         "RobotPlayer_bareskip.cs": (botsrc.replace(BOTSRV_SKIP_OK, BOTSRV_SKIP_BARE), "cs"),
+     }
+     out = []
+@@ -409,6 +460,15 @@ def _scan_synthetic(source):
+     return [ln for _, ln in _code_lines(source) if STRIP_RE.search(ln)]
+ 
+ 
++def _scan_guards_synthetic(source):
++    """与 `scan_guards` 同口径的纯函数（逐代码行匹配，跳过 `#` 注释行）。"""
++    out = []
++    for _i, line in _code_lines(source):
++        for m in GUARD_RE.finditer(line):
++            out.append((m.group(2), m.group(1)))
++    return out
++
++
+ def cmd_selftest(args):
+     results = []
+ 
+@@ -423,6 +483,38 @@ def cmd_selftest(args):
+     check("scan-catches-strip", len(_scan_synthetic(bad)) == 1)
+     check("scan-ignores-comment", not _scan_synthetic(comment))
+ 
++    # O-1 收口（reviewer-6 `49993d1f` 的非阻塞 Observation）：牙也必须按代码行扫。
++    # 旧写法扫全文 ⇒ 注释掉的 `Assert-M3MarkerPrefix` 仍被当成真牙（fail-open）。
++    g_real = "    Assert-M3MarkerPrefix -Path $shopMarkersPath -Marker 'M3SHOPSEQ'\n"
++    g_cmt = "#    Assert-M3MarkerPrefix -Path $shopMarkersPath -Marker 'M3SHOPSEQ'\n"
++    check("scan-guards-catches-real",
++          _scan_guards_synthetic(g_real) == [("M3SHOPSEQ", "shopMarkersPath")])
++    check("scan-guards-ignores-comment", not _scan_guards_synthetic(g_cmt))
++
++    # O-1' 收口（reviewer-5 `d853bd1a` 的非阻塞 Observation）：`_code_lines()` 只跳整行 `#`
++    # ⇒ `run_pair.ps1:2-34` 的 `<# ... #>` 块注释里的同名牙会被当真牙（fail-open）。
++    # 下面的牙把块注释（含跨行/嵌套/同行段）也纳入「注释」：牙藏于块注释 = 缺牙 ⇒ RED。
++    g_blk = "<# " + g_real.strip() + " #>\n"
++    g_blk_ml = "<#\n" + g_real + "#>\n"
++    g_blk_nested = "<# outer <# " + g_real.strip() + " #> still outer #>\n"
++    g_blk_reopen = "<# c #> " + g_real
++    check("scan-guards-ignores-blockcomment-inline", not _scan_guards_synthetic(g_blk))
++    check("scan-guards-ignores-blockcomment-multiline", not _scan_guards_synthetic(g_blk_ml))
++    check("scan-guards-ignores-blockcomment-nested", not _scan_guards_synthetic(g_blk_nested))
++    check("scan-guards-catches-after-blockclose",
++          _scan_guards_synthetic(g_blk_reopen) == [("M3SHOPSEQ", "shopMarkersPath")])
++    check("scan-ignores-strip-in-blockcomment",
++          not _scan_synthetic("<# " + bad.strip() + " #>\n"))
++    check("code-lines-blanks-blockcomment-body",
++          [ln.strip() for _i, ln in _code_lines("<#\n" + g_real + "#>\n")] == ["", "", ""])
++    check("code-lines-keeps-code-after-blockclose",
++          [ln.strip() for _i, ln in _code_lines(g_blk_reopen)]
++          == ["Assert-M3MarkerPrefix -Path $shopMarkersPath -Marker 'M3SHOPSEQ'"])
++    # 真身复现：`run_pair.ps1:2-34` 确有 `<# ... #>` 头部块注释（订正旧片 README 的「未使用」）。
++    with open(RUN_PAIR, "r", encoding="utf-8") as fh:
++        rp_text = fh.read()
++    check("real-run-pair-has-blockcomment", ("<#" in rp_text) and ("#>" in rp_text))
++
+     findings, info = _evaluate()
+     check("real-run-pair-no-strip", not info["strips"])
+     guard_markers = [m for m, _ in info["guards"]]
+@@ -464,6 +556,11 @@ def cmd_selftest(args):
+     check("mutation-strip-red", any("去前缀截断" in f for f in by_name.get("run_pair_strip.ps1", [])))
+     check("mutation-guard-red", any("缺生产 fail-closed 牙" in f and "M3SHOPSEQ" in f
+                                      for f in by_name.get("run_pair_noguard.ps1", [])))
++    check("mutation-guard-commented-red", any("缺生产 fail-closed 牙" in f and "M3SHOPSEQ" in f
++                                               for f in by_name.get("run_pair_guard_commented.ps1", [])))
++    check("mutation-guard-blockcommented-red",
++          any("缺生产 fail-closed 牙" in f and "M3SHOPSEQ" in f
++              for f in by_name.get("run_pair_guard_blockcommented.ps1", [])))
+     check("mutation-bareskip-red", any("裸前缀 skip=" in f
+                                         for f in by_name.get("RobotPlayer_bareskip.cs", [])))
+ 
