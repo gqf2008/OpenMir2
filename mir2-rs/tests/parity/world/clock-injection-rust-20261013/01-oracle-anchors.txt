@@ -1,0 +1,41 @@
+# 01 · oracle 锚点与注入点（M3 横切前置 `openmir2-m3-clock-injection` · Rust 半）
+
+## A. oracle 侧「时钟」的唯一来源（冻结基线，本片零改动）
+
+- `src/OpenMir2/HUtil32.cs:36-38` —— `public static int GetTickCount() { return Environment.TickCount; }`
+  （i32 毫秒；**不是**可替换的静态字段 ⇒ 现有影子 hook 的「反射换私有字段」手法拦不住，
+  C# 半需 owner 在 (a)/(b)/(c) 间裁决，见卡上 worker-5 的盘点 comment `68bbe41c…`）。
+- `src/OpenMir2/HUtil32.cs:41-43` —— `GetTimestamp() => DateTimeOffset.Now.ToUnixTimeMilliseconds()`。
+- `src/OpenMir2/HUtil32.cs:46-48` —— `GetTimestamp(TimeSpan) => DateTimeOffset.Now.Add(timeSpan)...`。
+
+### 时间门消费者（为何需要可注入时钟；抽样，完整清单见 ⑧/⑦/⑨/⑩ 盘点报告）
+
+- 攻城时限：`src/M2Server/Castle/UserCastle.cs:358`（`StartCastleWarTick = GetTickCount()`）、
+  `:410`（`> CastleWarTime - ShowCastleWarEndMsgTime`）、`:419`（`> CastleWarTime`）、`:519`（`<= GetCastleTime`）。
+- 金库 10min SaveTick：`src/M2Server/Castle/UserCastle.cs:798-800`（`> 10*60*1000`）。
+- 门/墙 60s StruckTick 与怪侧恢复/过期：`src/M2Server/Actor/BaseObject.Base.cs:39-40`（恢复节拍）、
+  `:92/:99`（`MakeGhostTime`）、`:114`（TargetFocus 30s）、`:121`（LastHiter 30s）、`:128`（ExpHitter 6s）。
+- `DateTime.Now` 落盘默认值：`src/M2Server/Castle/CastleConf.cs:19-21`（`ChangeDate`/`WarDate`/`IncomeToday`）。
+
+## B. Rust 侧对应物与本片接线
+
+- `mir2-rs/bins/game-svr/src/clock.rs`（**本片新增**）——`MIR2_CLOCK_MS` 解析/注入源；
+  `now_ms()` 注入启用时 = `origin + 首次取钟起的单调经过`，未启用时 = 墙钟（逐字节同改动前）。
+- `mir2-rs/bins/game-svr/src/main.rs`
+  - `main()`（seed 之后、起监听之前）——`clock::env_clock()?`：未设/空 ⇒ 不启用；**非法值 ⇒ 非零退出**
+    （fail-closed，与 `MIR2_RNG_SEED` 同款纪律）；启用时打 `CLOCK_PROBE origin=<n>`。
+  - `fn now_ms()`（约 `:6920`）——改为 `clock::now_ms()`。
+  - `sim_loop`（世界 `World::with_maps` 之后）——`world.clock_ms = origin;` 并打
+    `CLOCK_PROBE origin=<n> world_clock_ms=<n>` ⇒ 证明 `now_ms()` 与 `world.clock_ms` 接**同一**注入。
+- `mir2-rs/crates/world/src/world.rs:68`（`TickRecord.clock_ms`）、`:216`（`clock_ms: 0`）、
+  `:410-420`（tick 内 +200ms/tick 推进）——**本片未改** `crates/world`：注入只改「起点」，节奏照 oracle。
+
+## C. 注入契约（Rust 半定义；C# 半落地后按同变数/语义对齐）
+
+| 环境变数 | 值 | 未设/空 | 非法 |
+| --- | --- | --- | --- |
+| `MIR2_CLOCK_MS` | 十进制 `i64` 毫秒（起点，允许前后空白/正负号） | 不启用：`now_ms()`=墙钟、`world.clock_ms` 从 0 起 | `ClockError` ⇒ `main` 非零退出 |
+
+- 启用后 `now_ms() = origin + 单调经过`（单调 ⇒ 不受墙钟回拨影响）；
+  `world.clock_ms` 起点 = 同一 `origin`，此后仍 `+200ms/tick`。
+- 自证行：`CLOCK_PROBE origin=<n>`（启动处）与 `CLOCK_PROBE origin=<n> world_clock_ms=<n>`（世界建好后）。

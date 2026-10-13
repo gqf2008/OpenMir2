@@ -1,0 +1,53 @@
+# 判据②：改坏必红（三处变异，各自必红；还原后 GREEN）
+
+口径：变异分别施加在钉住 head 的工作树上，跑对应判据；每处均先记录红、再 git/备份还原并复绿。
+
+## RC1 —— 去掉 world.clock_ms 的注入起点：main.rs 的 `world.clock_ms = origin;` → `world.clock_ms = 0;`
+
+命令：cargo test -p game-svr --test clock_inject -- --test-threads=1 clock_env_injection_logs_probe
+结果：FAILED（rc=101）——进程实得日志里 `world_clock_ms=0`，断言 `world.clock_ms 必须以同一 origin 起` 必红。
+
+```
+8:failures:
+12:thread 'clock_env_injection_logs_probe' (34368) panicked at bins\game-svr\tests\clock_inject.rs:184:5:
+28:13:30:37.846 [INF] CLOCK_PROBE origin=1700000000000 world_clock_ms=0
+37:failures:
+40:test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.62s
+```
+
+## RC2 —— 忽略环境变数（parse_clock 恒不启用）
+
+命令①（构造级）：cargo test -p game-svr --bin game-svr -- clock::
+结果①：FAILED（rc=101，5 passed / 2 failed：parse_clock_accepts_decimal... 与 parse_clock_rejects_non_integer）
+
+```
+12:failures:
+16:thread 'clock::tests::parse_clock_accepts_decimal_with_sign_and_whitespace' (13928) panicked at bins\game-svr\src\clock.rs:159:9:
+23:thread 'clock::tests::parse_clock_rejects_non_integer' (24264) panicked at bins\game-svr\src\clock.rs:170:13:
+28:failures:
+29:    clock::tests::parse_clock_accepts_decimal_with_sign_and_whitespace
+30:    clock::tests::parse_clock_rejects_non_integer
+32:test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 197 filtered out; finished in 0.00s
+```
+
+命令②（进程级）：cargo test -p game-svr --test clock_inject -- --test-threads=1 clock_env_injection_logs_probe
+结果②：FAILED（rc=101）——注入行不再出现，判据 1 到界判红。
+
+```
+8:failures:
+45:failures:
+48:test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 22.02s
+```
+
+## RC3 —— 非法值静默降级为「不启用」（parse 失败不再 Err，fail-open）
+
+命令：cargo test -p game-svr --test clock_inject -- --test-threads=1 invalid_clock_env_exits_nonzero
+结果：FAILED（rc=101）——进程照常起来并进入 tick（不再 ≤10s 非零退出），判据 3 的 fail-closed 断言必红。
+
+```
+8:failures:
+12:thread 'invalid_clock_env_exits_nonzero' (24048) panicked at bins\game-svr\tests\clock_inject.rs:256:9:
+35:13:31:33.383 [DBG] sim: tick #50 clock=10000ms 处理 0 项（本地第 50 次）实体内 0 展示表 0 在世界会话 0
+40:failures:
+43:test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 10.56s
+```
