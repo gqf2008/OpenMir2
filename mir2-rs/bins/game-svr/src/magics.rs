@@ -37,9 +37,9 @@ pub async fn load_magics(conn: &str) -> Result<Vec<MagicInfo>, String> {
 
 /// `M2Share.MagicList` 的查表面：`MagicId → MagicInfo`。
 ///
-/// oracle `GetMagicInfo(int nMagicId)` 线性扫 `UserMagic` 列表比 `Magic.MagicId`；本表以
-/// `MagicId` 为键。`MagicId` 在表内唯一（DDL 主键），重复时**后者覆盖前者**（oracle 也按表序
-/// 后者覆盖内存槽，登记）。
+/// oracle `GetMagicInfo(int nMagicId)` 线性扫 `UserMagic` 列表比 `Magic.MagicId`（`PlayObject.cs:4174-4185`，
+/// 返回**首个**匹配）；本表以 `MagicId` 为键。`MagicId` 在表内唯一（DDL 主键）⇒ 首匹配与键查等价；
+/// 若真要造重复行，oracle 取**首个**、本 HashMap 为后者覆盖 ⇒ 有分歧（不可达，登记）。
 #[derive(Debug, Clone, Default)]
 pub struct MagicTable {
     by_id: HashMap<u16, MagicInfo>,

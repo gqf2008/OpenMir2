@@ -3152,6 +3152,8 @@ fn handle_spell_cmd(
                     // `deleted` 支的 `SendDelItems` 帧面未接（登记）；清槽已由 `apply_amulet_use` 落。
                 }
                 // `boSpellFire` ⇒ `SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType,Effect), MakeLong(tx,ty), targetActorId, "")`（`:648-658`）。
+                // **F-1**：`RM_MAGICFIRE` 处理器无 `ActorId != ActorId` 守卫（`PlayObject.Message.cs:1788-1793`）
+                // ⇒ 广播集合**含施法者自己**（`RM_SPELL` 仍排除自己）。
                 if outcome.magic_fire {
                     let body = smframe::sm_magicfire(
                         actor_id,
@@ -3161,7 +3163,7 @@ fn handle_spell_cmd(
                         magic.effect,
                         target_id.unwrap_or(0),
                     );
-                    broadcast_ref_msg(world, online, gates, actor_id, &[body]);
+                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
                 }
                 // 熟练度尾帧（`:659-669`）：`SendSelfDelayMsg(RM_MAGIC_LVEXP, 0, MagicId, Level, TranPoint, "", 1000)`。
                 if outcome.train.levelup_msg {
@@ -3243,7 +3245,7 @@ fn handle_spell_cmd(
                     rcd.level = train.level;
                     rcd.tran_point = train.tran_point;
                 }
-                // `boSpellFire` ⇒ `RM_MAGICFIRE`（`:648-658`）。
+                // `boSpellFire` ⇒ `RM_MAGICFIRE`（`:648-658`）；**F-1**：含施法者自己（同召唤面）。
                 if outcome.magic_fire {
                     let body = smframe::sm_magicfire(
                         actor_id,
@@ -3253,7 +3255,7 @@ fn handle_spell_cmd(
                         magic.effect,
                         target_id.unwrap_or(0),
                     );
-                    broadcast_ref_msg(world, online, gates, actor_id, &[body]);
+                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
                 }
                 // 熟练度尾帧（`:659-669`）。
                 if outcome.train.levelup_msg {
@@ -3374,6 +3376,10 @@ fn handle_magic_key_cmd(
 ///
 /// 各收件人的 `GetMessage` 对 `RM_TURN`/`RM_WALK`/`RM_RUN`/`RM_HORSERUN` 都带
 /// `if (processMsg.ActorId != ActorId)` ⇒ **广播集合去掉自己**（自己那条连接只收 `+GD` ack）。
+///
+/// **F-1（reviewer-6 `7724b9e441`）**：`RM_SPELL` 保持此口径（`PlayObject.Message.cs:1454-1459`
+/// 有 `ActorId != ActorId` 守卫）；`RM_MAGICFIRE` 的处理器**没有**该守卫
+/// （`PlayObject.Message.cs:1788-1793`）⇒ 施法者自己也收帧，用 [`broadcast_ref_msg_with_self`]。
 fn broadcast_ref_msg(
     world: &mir2_world::World,
     online: &OnlineRegistry,
@@ -3381,8 +3387,32 @@ fn broadcast_ref_msg(
     actor_id: i32,
     bodies: &[Vec<u8>],
 ) {
+    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, false);
+}
+
+/// `RM_MAGICFIRE` 口径（`PlayObject.Message.cs:1788-1793` 无 `ActorId != ActorId` 守卫）：
+/// 广播集合**包含施法者自己**。
+fn broadcast_ref_msg_with_self(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    bodies: &[Vec<u8>],
+) {
+    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, true);
+}
+
+/// [`broadcast_ref_msg`] / [`broadcast_ref_msg_with_self`] 的公共体。
+fn broadcast_ref_msg_opt(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    bodies: &[Vec<u8>],
+    include_self: bool,
+) {
     for target_id in chat::hear_targets(world, actor_id, chat::SEND_REF_MSG_RANGE) {
-        if target_id == actor_id {
+        if !include_self && target_id == actor_id {
             continue;
         }
         let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
@@ -10824,6 +10854,19 @@ mod tests {
             me.iter()
                 .any(|b| ident_of(b) == mir2_protocol::messages::SM_DURACHANGE),
             "施法者自身应收 SM_DURACHANGE；实得 {me:?}"
+        );
+        // **F-1（reviewer-6 `7724b9e441`）**：`RM_MAGICFIRE` 的 oracle 处理器无
+        // `ActorId != ActorId` 守卫（`PlayObject.Message.cs:1788-1793`）⇒ 施法者自己也应收
+        // `SM_MAGICFIRE`；而 `RM_SPELL`（有守卫）不给自己发（这里 `me` 不含 `SM_SPELL`）。
+        assert!(
+            me.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_MAGICFIRE),
+            "F-1：施法者自身应收 SM_MAGICFIRE（RM_MAGICFIRE 无自身守卫）；实得 {me:?}"
+        );
+        assert!(
+            !me.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_SPELL),
+            "RM_SPELL 有 `ActorId != ActorId` 守卫 ⇒ 施法者自身不应收 SM_SPELL；实得 {me:?}"
         );
         assert!(me.iter().any(|b| b.starts_with(b"+GD/")), "成功支仍回 +GD");
         // 护身符扣至 350（450 - 1*100）。
