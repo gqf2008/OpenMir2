@@ -1,0 +1,93 @@
+# 片㉓：③ 窗口计划缺「构建步骤」收口（root ③「判据/capture 工具你准备」）（2026-10-14）
+
+卡 `openmir2-client-e2e-enter-gaps`；本片只动 `window_handoff.py`（判据/计划工具，零起栈、零端口）。
+tier=L（纯工具/计划文本；不触 RNG/时序/落库/战斗数值）。
+
+## 0. 缺陷（before，源码实读，不是散文）
+
+`window_handoff.py --plan` 的窗口计划**只有起栈命令，没有任何构建步骤**，而 §2 的
+`start_rust_stack.ps1 -RustBinDir <target-dir>/debug` 要求该目录里已有 `game-svr.exe` 等六件：
+
+- `tools/m2-acceptance/start_rust_stack.ps1:196-206`：对 `game-svr.exe`/`login-gate.exe`/
+  `sel-gate.exe`/`game-gate.exe` 与配置逐个 `Test-Path`，缺一即
+  `PREREQ_MISSING: 缺以下 exe/配置：…` ⇒ `exit 2`（**fail-closed，未起栈**）。
+- 计划默认 `--target-dir E:/tmp/m2svr-window-target`（`window_handoff.py:660`）——
+  本机实测该目录**不存在**（`ls E:/tmp/m2svr-window-target` = No such file or directory）；
+  root 的 `client-e2e-window.sh` 用的是另一个 `tgt`（`E:\tmp\openmir2-merge-target`）⇒ 计划与窗口脚本脱节。
+
+⇒ 若 root 按计划从 §0 粘到 §5，第 2 步就会 `PREREQ_MISSING exit 2`；即使先手动补构建，
+计划本身也没有「构建源 oid 记证据」这一步。这是「开窗才发现构建产物不在」的烧窗路径。
+
+**burn-mode 实证**（缺 exe ⇒ fail-closed，未起任何进程）：
+
+```
+$ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 \
+    -RustBinDir E:/tmp/no-such-target/debug
+PREREQ_MISSING: 缺以下 exe/配置：
+  E:\tmp\no-such-target\debug\game-svr.exe
+  E:\tmp\no-such-target\debug\login-gate.exe
+  E:\tmp\no-such-target\debug\sel-gate.exe
+  E:\tmp\no-such-target\debug\game-gate.exe
+$ echo $?      # 2
+```
+
+## 1. 改动（after）
+
+`plan_text()` 在 §0 之后、§1 之前**新增 §0a 构建块**（引用与窗口同一个 `repo`/`target-dir`）：
+
+```
+# 0a) 构建 Rust 侧六件到 <target-dir>（必须先做：start_rust_stack.ps1 在 <target-dir>/debug 缺 exe/config 时会
+#     PREREQ_MISSING exit 2 / 或在窗口里空转 —— §2 的 -RustBinDir 指向这里）
+#   git -C <检出> rev-parse HEAD   # 记进证据（构建源 oid）
+#   cd <检出>/mir2-rs && CARGO_TARGET_DIR=E:/tmp/m2svr-window-target cargo build --offline \
+#     -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv
+#   ⚠ 构建产物不存在：E:/tmp/m2svr-window-target/debug/game-svr.exe（本次 --plan 时实测）⇒ 不先跑 §0a 就地起栈必 PREREQ_MISSING
+```
+
+- 命令与 root 的 `client-e2e-window.sh` 第 2 步**逐 package 同集**（`game-svr game-gate login-srv
+  login-gate sel-gate db-srv`），并显式 `git rev-parse HEAD` 记构建源。
+- **bin-missing 提示**：`main()` 实测 `<target-dir>/debug/game-svr.exe` 是否存在，缺则加一行 `⚠ 构建产物不存在：…`；
+  存在（如 `--target-dir E:/tmp/m2svr-target`）则**不打**该行。
+
+真读数（`--plan-only --best-site`，默认 target 不存在）：
+
+```
+# 0a) 构建 Rust 侧六件到 <target-dir>（必须先做：…）
+#   ⚠ 构建产物不存在：E:/tmp/m2svr-window-target/debug/game-svr.exe（本次 --plan 时实测）⇒ 不先跑 §0a 就地起栈必 PREREQ_MISSING
+```
+
+存在时（`--target-dir E:/tmp/m2svr-target`）无该 `⚠` 行（见 `120` §B）。
+
+## 2. selftest 45/45 → 49/49（新增 4 条计划口径）
+
+```
+$ python -I -B window_handoff.py --selftest
+SELFTEST OK (49/49)
+```
+
+新增：`plan-has-build-step`（`cargo build --offline` + `CARGO_TARGET_DIR=<tgt>` + `-p game-svr/-p game-gate/-p db-srv`）/
+`plan-build-step-repo`（`cd <repo>/mir2-rs`）/`plan-build-before-start`（§0a 在 `# 2) ③b` 之前）/
+`plan-bin-missing-warning`（`bin_missing=True` 时有 `⚠ 构建产物不存在` + `PREREQ_MISSING`，缺省无）。
+既有 45 条**逐条不动**（stale 修复块 / ③a 独立目录 / `--judge` 五条聚合口径均保留）。
+
+## 3. 与窗口脚本/前置门一致（实测）
+
+```
+# G1 构建源=本车道 worktree（含片⑪）⇒ GREEN
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+WINDOW_READY=YES
+RESULT: GREEN
+
+# G1 构建源=共享主检出（停在 ad0592b19，无 vr/new/af）⇒ RED + 修复块
+RED G1 Rust 窗口前置门 RED（构建源/读数标记不符；窗口会 PREREQ_RED）—— 见下方修复块
+```
+
+⇒ 计划里**先修构建源（worktree add）→ 再 §0a 构建 → 再 §2 起栈**，三段齐全；缺一都不会静默放行。
+
+## 4. 边界
+
+- 仅 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/{window_handoff.py,119…,120…,121…,122…,README.md,SHA256SUMS.txt}`。
+- `src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/ mir2-rs/bins/` = 空；`.rs`/`.toml` = 0。
+- 本片**未起栈、未占端口、未动共享主检出、未 merge、未自签 review**。
+
+红检见 `120-redcheck-window-plan-build.txt`；四门禁 `121-gates.txt`；边界 `122-boundary.txt`。

@@ -1,0 +1,54 @@
+# 片㉓ 改坏必红（`window_handoff.py` ③ 窗口计划「构建步骤」）—— 2026-10-14
+
+变异只在 `E:/tmp/m2svr-burst10/mut/` 的**复制件**上做；仓内 `window_handoff.py` 在全部变异前后
+sha256 逐字节一致（见 §E）。全部命令 `python -I -B`，零起栈、零端口。
+
+## A. 绿（仓内件）
+
+```
+$ python -I -B window_handoff.py --selftest
+SELFTEST OK (49/49)
+```
+仓内件 sha256 = `430ab0acd52063419e3161398f6656ed0f10b40100e240835793c79b0022a359`。
+
+## B. bin-missing 提示是「实测」的（不是恒打）
+
+```
+# 默认 <target-dir>=E:/tmp/m2svr-window-target（本机不存在）⇒ 打 1 行 ⚠
+$ python -I -B window_handoff.py --plan-only --best-site | grep -c 构建产物不存在
+1
+
+# --target-dir E:/tmp/m2svr-target（已构建，game-svr.exe 在）⇒ 0 行
+$ python -I -B window_handoff.py --plan-only --best-site --target-dir E:/tmp/m2svr-target | grep -c 构建产物不存在
+0
+```
+
+## C. 牙 1（MUT-A）：把 §0a 的两行构建命令删掉 ⇒ 计划无构建步骤
+
+```
+$ python -I -B E:/tmp/m2svr-burst10/mut/window_handoff_mutA.py --selftest
+[FAIL] selftest plan-has-build-step
+[FAIL] selftest plan-build-step-repo
+[FAIL] selftest plan-build-before-start
+SELFTEST FAILED (46/49)
+```
+mutA sha256 = `9390cba2d0518f2c20dcd90c8a6efd456ba79bad8cef792ba5517cc2281c6221`（≠ 仓内件）。
+
+## D. 牙 2（MUT-B）：`bin_missing` 提示被吞（永不告警）⇒ 回到「静默烧窗」
+
+```
+$ python -I -B E:/tmp/m2svr-burst10/mut/window_handoff_mutB.py --selftest
+[FAIL] selftest plan-bin-missing-warning
+SELFTEST FAILED (48/49)
+```
+mutB sha256 = `c4c80604f6701cc4898d43c523f2afe7f98c266c61a1adaf81bef5cacce71393`（≠ 仓内件）。
+
+## E. 还原复核（仓内件未被变异污染）
+
+```
+$ sha256sum window_handoff.py
+430ab0acd52063419e3161398f6656ed0f10b40100e240835793c79b0022a359 *window_handoff.py
+$ git diff --stat -- mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+ .../window_handoff.py | 33 ++++++++++++++++++++++++--
+ 1 file changed, 31 insertions(+), 2 deletions(-)   (仅本片 §0a + bin_missing + selftest 四条)
+```

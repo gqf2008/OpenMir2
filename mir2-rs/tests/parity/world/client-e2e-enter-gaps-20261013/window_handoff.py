@@ -347,6 +347,7 @@ def plan_text(
     stale: bool,
     site_note: str = "",
     pass_a_dir: str = "",
+    bin_missing: bool = False,
 ) -> str:
     w, rust, csh, w_a = pass_roots(work_dir, pass_a_dir)
     rust_a = f"{w_a}/rust"
@@ -376,6 +377,15 @@ def plan_text(
         A("")
     A("# 0) 前置：端口/进程（5000/5100/5500/5600/5700/6000/7000/7100/7200 全 DOWN；仅共享 3306 可 UP）")
     A("#    起栈禁接管道（禁 | tee/tail/head/grep，会把调用挂死）；一律 > <log> 2>&1")
+    A("")
+    A("# 0a) 构建 Rust 侧六件到 <target-dir>（必须先做：start_rust_stack.ps1 在 <target-dir>/debug 缺 exe/config 时会")
+    A("#     PREREQ_MISSING exit 2 / 或在窗口里空转 —— §2 的 -RustBinDir 指向这里）")
+    _build_repo = repo or "<检出>"
+    A(f"#   git -C {_build_repo} rev-parse HEAD   # 记进证据（构建源 oid）")
+    A(f"#   cd {_build_repo}/mir2-rs && CARGO_TARGET_DIR={target_dir} cargo build --offline \\")
+    A("#     -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv")
+    if bin_missing:
+        A(f"#   ⚠ 构建产物不存在：{bin_dir}/game-svr.exe（本次 --plan 时实测）⇒ 不先跑 §0a 就地起栈必 PREREQ_MISSING")
     A("")
     A("# 1) 站位：两侧必须逐字节同坐标（跑完还原并记录 before/after）")
     A(f"#   mysql> UPDATE characters SET x={site.split(',')[0]}, y={site.split(',')[1]} WHERE chrname='aaa';  -- ③b 有怪")
@@ -563,6 +573,21 @@ def selftest() -> int:
         chk("plan-judge-command",
             "--judge" in fresh_plan and "--pass-a-dir E:/tmp/w-a" in fresh_plan)
         chk("plan-pass-a-not-overwritten-note", "覆盖 ③b 读数" in fresh_plan)
+        # 片㉓：计划必须自带 §0a 构建步骤（-RustBinDir 指向 <target-dir>/debug；缺 exe ⇒ PREREQ_MISSING exit 2）
+        _build_plan = plan_text("R", "HEAD", "M", "287,620", "291,666", "E:/tmp/w", "E:/tmp/tgt",
+                                "42", 12, stale=False)
+        chk("plan-has-build-step",
+            all(s in _build_plan for s in ("cargo build --offline", "CARGO_TARGET_DIR=E:/tmp/tgt",
+                                           "-p game-svr", "-p game-gate", "-p db-srv")))
+        chk("plan-build-step-repo", "cd R/mir2-rs" in _build_plan)
+        chk("plan-build-before-start",
+            ("cargo build --offline" in _build_plan and "# 2) ③b" in _build_plan
+             and _build_plan.index("cargo build --offline") < _build_plan.index("# 2) ③b")))
+        _missing_plan = plan_text("R", "HEAD", "M", "287,620", "291,666", "E:/tmp/w", "E:/tmp/tgt",
+                                  "42", 12, stale=False, bin_missing=True)
+        chk("plan-bin-missing-warning",
+            "构建产物不存在" in _missing_plan and "PREREQ_MISSING" in _missing_plan
+            and "构建产物不存在" not in _build_plan)
 
     with tempfile.TemporaryDirectory(prefix="wh-badtool-") as tmp:
         _write_fake_tools(tmp, "GREEN", bad_selftest="aoi_visibility_pair.py")
@@ -700,9 +725,11 @@ def main(argv: list[str] | None = None) -> int:
             site = auto_site
 
     if args.plan_only:
+        bin_missing = not os.path.isfile(os.path.join(args.target_dir, "debug", "game-svr.exe"))
         print(plan_text(args.repo, args.ref, args.mirserver, site, args.site_none,
                         args.work_dir, args.target_dir, args.seed, args.view_range,
-                        stale=False, site_note=site_note, pass_a_dir=args.pass_a_dir))
+                        stale=False, site_note=site_note, pass_a_dir=args.pass_a_dir,
+                        bin_missing=bin_missing))
         return 0
 
     rep = run_checks(args.check_dir, args.repo, args.ref, args.mirserver,
@@ -719,9 +746,11 @@ def main(argv: list[str] | None = None) -> int:
     ready = "YES" if rc == 0 else "NO"
     if args.plan:
         print("")
+        bin_missing = not os.path.isfile(os.path.join(args.target_dir, "debug", "game-svr.exe"))
         print(plan_text(args.repo, args.ref, args.mirserver, site, args.site_none,
                         args.work_dir, args.target_dir, args.seed, args.view_range,
-                        stale=rep.build_source_stale, site_note=site_note, pass_a_dir=args.pass_a_dir))
+                        stale=rep.build_source_stale, site_note=site_note, pass_a_dir=args.pass_a_dir,
+                        bin_missing=bin_missing))
     if args.json:
         print(json.dumps({
             "window_ready": ready,

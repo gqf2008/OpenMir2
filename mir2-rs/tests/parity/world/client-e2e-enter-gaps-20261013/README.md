@@ -518,3 +518,31 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级「③b/③a 两趟真机同框对照」+「屏幕见怪并
   能攻击造成伤害」。
 - 证据：`115-aoi-gap3-window-judge.txt`、`116-redcheck-window-judge.txt`、`117-gates.txt`、`118-boundary.txt`。
+
+## ㉓ 片㉓：③ 窗口计划**补构建步骤** + 构建产物缺失提示（root ③「判据/capture 工具你准备」）（2026-10-14）—— `119`
+
+- **背景（源码实读、真机实证的烧窗路径）**：片⑰/⑱/㉒ 的计划把两条 `start_rust_stack.ps1` 命令与
+  `-RustBinDir <target-dir>/debug` 写成可粘贴文本，但**全计划没有任何构建步骤**；而 `start_rust_stack.ps1:196-206`
+  对 `game-svr.exe`/`login-gate.exe`/`sel-gate.exe`/`game-gate.exe` 逐个 `Test-Path`，缺一即
+  `PREREQ_MISSING … exit 2`。计划默认 `<target-dir>` = `E:/tmp/m2svr-window-target` **本机不存在**
+  （root 的窗口脚本另用 `E:\tmp\openmir2-merge-target`）⇒ 从 §0 粘到 §5 会在第 2 步直接失败。
+- **本片改动（`window_handoff.py`，零起栈/零端口；不新增第二份判据）**：
+  1. **§0a 构建块**：`plan_text` 在 §0 后、§1 前插入与窗口同一个 `repo`/`target-dir` 的构建命令
+     （`git rev-parse HEAD` 记构建源 + `CARGO_TARGET_DIR=<tgt> cargo build --offline -p game-svr -p game-gate
+     -p login-srv -p login-gate -p sel-gate -p db-srv`，与 `client-e2e-window.sh` 第 2 步逐 package 同集）。
+  2. **bin-missing 提示**：`main()` 实测 `<target-dir>/debug/game-svr.exe`，缺则打
+     `⚠ 构建产物不存在：…`（存在则**不打**）——把「构建产物不在」提前到开窗前一眼可见。
+- **真读数**：
+  - `--selftest` **45/45 → 49/49**（新增 `plan-has-build-step` / `plan-build-step-repo` /
+    `plan-build-before-start` / `plan-bin-missing-warning`；既有 45 条逐条不动）。
+  - `--plan-only --best-site`：默认 target 缺件 ⇒ 打出 `⚠ 构建产物不存在：E:/tmp/m2svr-window-target/debug/game-svr.exe`；
+    `--target-dir E:/tmp/m2svr-target`（已构建）⇒ 该行消失。
+  - `start_rust_stack.ps1 -RustBinDir E:/tmp/no-such-target/debug` ⇒ `PREREQ_MISSING …` **rc=2**（burn-mode 实证）。
+  - G1：构建源=本车道 worktree ⇒ `WINDOW_READY=YES`/`GREEN`；构建源=共享主检出（`ad0592b19`）⇒ `RED` + 修复块，
+    修复块 + §0a + §2 构成「换树 → 构建 → 起栈」完整序列。
+- **改坏必红**（`120`，2 颗牙，变异只在 `E:/tmp/m2svr-burst10/mut/` 复制件、仓内 sha256 前后一致）：
+  ① 删 §0a 构建命令 ⇒ `SELFTEST FAILED (46/49)`；② 吞 `bin_missing` 提示 ⇒ `(48/49)`。
+- **零生产代码改动**（仅一个 `.py` + 四份证据 + README/清单）；**未起栈、未占端口**，未动共享主检出。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级「③b/③a 两趟真机同框对照」+「屏幕见怪并
+  能攻击造成伤害」。
+- 证据：`119-window-plan-build-step.txt`、`120-redcheck-window-plan-build.txt`、`121-gates.txt`、`122-boundary.txt`。
