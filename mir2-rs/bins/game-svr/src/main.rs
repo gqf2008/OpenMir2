@@ -3426,7 +3426,7 @@ fn handle_hit_cmd(
 /// `RM_MAGICFIRE` → `boTrain` 熟练度尾 `RM_MAGIC_LVEXP`。**第③片**接 **20（诱惑）**：
 /// `SKILL_TAMMING` 支（`MagicManager.cs:394-397`）的 `IsProperTarget && !Animal` 门 →
 /// `cast_tamming_spell`（`MagTamming` 账本 + `World::tame_adopt` 落尾）。46（分身）登记见
-/// `game_svr::slave` 模块头 + `crates/world::slave::CLONE_DEFERRED`。
+/// `game_svr::slave` 模块头；46 分身已接（[`game_svr::slave::cast_clone_spell`] + 下方 46 支）。
 /// 效果体限速 / `SpellTick -= 450` / MP 消耗仍按 `magicwire` 模块头登记未接。
 #[allow(clippy::too_many_arguments)]
 fn handle_spell_cmd(
@@ -3719,6 +3719,116 @@ fn handle_spell_cmd(
             glog!(
                 "DBG",
                 "CM_SPELL：诱惑魔号 20 无 MagicInfo ⇒ 效果体不接（登记）"
+            );
+        }
+    }
+    // **⑨-2 残余（46 分身）**：`SKILL_46` 效果体
+    // （`MagicManager.cs:589-592` → `MagMakeClone` `:1337-1341` → `PlayCloneObject.cs:5-23`）。
+    // 46 走 `ClientSpellXY` 的 `default` 支（非 `EXPLICIT_CASE_MAG_IDX`）⇒ 上面的
+    // `takes_default_dir` 分支已把主人展示方向转向目标（`PlayObject.Attack.cs:1269`），
+    // 克隆体的 `Dir = GetBackDir(主人.Dir)` 取的是**转向后**的 `Dir`。
+    if req.magic_id == mir2_world::slave::SKILL_46 {
+        if let Some(magic) = magic_table.get(req.magic_id) {
+            // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：
+            // 与召唤/诱惑面同口径，目标在 1×1 邻域内 ⇒ 修正到目标实际坐标并作为 `spellObject`。
+            let (mut tx, mut ty) = (req.target_x, req.target_y);
+            let target_id = match world.entities.get(req.target_actor_id) {
+                Some(t) if !t.ghost && (t.x - tx).abs() <= 1 && (t.y - ty).abs() <= 1 => {
+                    tx = t.x;
+                    ty = t.y;
+                    Some(req.target_actor_id)
+                }
+                _ => None,
+            };
+            // `DoSpell` 的距离门（`MagicManager.cs:152-155`，`SystemShare.Config.MagicAttackRage`）。
+            if magic::spell_in_range(
+                i16::try_from(cur_x).unwrap_or(0),
+                i16::try_from(cur_y).unwrap_or(0),
+                i16::try_from(tx).unwrap_or(0),
+                i16::try_from(ty).unwrap_or(0),
+                magic_attack_rage,
+            ) {
+                // `DoSpell` 顶部 `SendRefMsg(RM_SPELL, Effect, nTargetX, nTargetY, MagicId, "")`（`:159`）。
+                let rm = smframe::sm_spell(
+                    actor_id,
+                    wire_coord(tx),
+                    wire_coord(ty),
+                    magic.effect,
+                    req.magic_id,
+                );
+                broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                // `UserMagic` 的内存态（尾里被 `TrainSkill`/`CheckMagicLevelUp` 改）。
+                let mut train = magic::SkillTrainState {
+                    magic_id: req.magic_id,
+                    level: matched.as_ref().map_or(0, |m| m.level),
+                    tran_point: matched.as_ref().map_or(0, |m| m.tran_point),
+                    train_lv: magic.train_lv,
+                    train_level: magic.train_level,
+                    max_train: magic.max_train,
+                };
+                let caster_dir = displays.get(actor_id).map_or(0, |d| d.dir);
+                let input = game_svr::slave::CloneCastInput {
+                    caster_id: actor_id,
+                    caster_dir,
+                    caster_abil_level,
+                    // `FastTrain` 未装载 ⇒ false（登记，同召唤/诱惑面）。
+                    fast_train: false,
+                };
+                let outcome = game_svr::slave::cast_clone_spell(world, &input, &mut train);
+                // 熟练度回写存档记录（`MakeSaveRcd` 的 `MagicList` 同源，与召唤/诱惑面同口径）。
+                if let Some(rcd) = saves
+                    .get_mut(chr_name)
+                    .and_then(|s| s.record.data.magic.as_mut())
+                    .and_then(|list| {
+                        list.iter_mut()
+                            .flatten()
+                            .find(|m| m.mag_idx == req.magic_id)
+                    })
+                {
+                    rcd.level = train.level;
+                    rcd.tran_point = train.tran_point;
+                }
+                // `PlayCloneObject` 构造器尾 `SendRefMsg(RM_TURN, Dir, CurrX, CurrY, 0, ChrName)`
+                // （`PlayCloneObject.cs:17`）：先登记展示表，再广播出现帧（`SM_TURN` 名尾 + 紧随
+                // `SM_FEATURECHANGED`，`downlink::turn_pair`）。`Msg="Clone"` 非空 ⇒ 名尾
+                // `Encode("Clone/{GetChrColor}")`（= `"Clone/255"`，`PlayObject.Message.cs:1549-1555`）。
+                if let Some(clone) = outcome.clone {
+                    if let Some(caster_display) = displays.get(actor_id).cloned() {
+                        let d = downlink::clone_display(clone.dir, &caster_display);
+                        displays.set(clone.clone_id, d.clone());
+                        let frames = downlink::turn_pair(
+                            clone.clone_id,
+                            wire_coord(clone.x),
+                            wire_coord(clone.y),
+                            &d,
+                        );
+                        // 广播集合排除克隆体自己（`RM_TURN` 处理器有 `ActorId != ActorId` 守卫）。
+                        broadcast_ref_msg(world, online, gates, clone.clone_id, &frames);
+                    }
+                }
+                // `boSpellFire` ⇒ `RM_MAGICFIRE`（`MagicManager.cs:648-658`）；**F-1**：含施法者自己。
+                if outcome.magic_fire {
+                    let body = smframe::sm_magicfire(
+                        actor_id,
+                        wire_coord(tx),
+                        wire_coord(ty),
+                        magic.effect_type,
+                        magic.effect,
+                        target_id.unwrap_or(0),
+                    );
+                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+                }
+                // 熟练度尾帧（`:659-669`）：`SendSelfDelayMsg(RM_MAGIC_LVEXP, …)`。
+                if outcome.train.levelup_msg {
+                    let body = smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
+                    send_self_frame(online, gates, chr_name, body);
+                }
+                let _ = outcome.accepted;
+            }
+        } else {
+            glog!(
+                "DBG",
+                "CM_SPELL：分身魔号 46 无 MagicInfo ⇒ 效果体不接（登记）"
             );
         }
     }
@@ -12169,6 +12279,226 @@ mod tests {
                 .dura,
             350,
             "UseAmulet 扣耐久落 UseItems"
+        );
+    }
+
+    /// **⑨-2 残余（46 分身）**：`CM_SPELL(46)` 效果体接线——造玩家型克隆体（名字 `Clone`、
+    /// 坐标=主人、`Dir = GetBackDir(主人转向后的 Dir)`、格被占、不入 `SlaveList`）+ 展示表登记
+    /// + 主人/观察者收 `SM_TURN`（名尾 `"Clone/255"`）与 `SM_MAGICFIRE`，观察者收 `SM_SPELL`。
+    ///
+    /// 红检：① `dir` 用主人正向（不用 `GetBackDir`）⇒ 展示/帧方向断言必红；
+    /// ② 不发克隆体 `sm_turn` ⇒ `SM_TURN`/名尾断言必红；③ 不造实体 ⇒ 实体/格占用断言必红。
+    #[test]
+    fn spell_cmd_clone_wires_entity_and_frames() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let caster = {
+            let mut e = new_player_entity("caster".to_string(), 10, 10);
+            e.level = 40;
+            world.add_entity(e)
+        };
+        let observer = world.add_entity(new_player_entity("obs".to_string(), 11, 10));
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        // 主人 feature：gender=1、hair=5（dress/weapon 故意非 0，副本应丢掉）。
+        displays.set(
+            caster,
+            downlink::ActorDisplay::new(
+                4,
+                0,
+                game_svr::feature::make_human_feature(0, 3 * 2 + 1, 1 + 2 * 2, 5 * 2 + 1),
+                0,
+                0,
+                downlink::PLAYER_NAME_COLOR,
+                b"caster".to_vec(),
+            ),
+        );
+        displays.set(
+            observer,
+            downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"obs".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uc".into(),
+                chr_name: "caster".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 911,
+                actor_id: caster,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uo".into(),
+                chr_name: "obs".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 912,
+                actor_id: observer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        let mut record = stage6_record();
+        record.data.magic = Some(vec![Some(record::MagicRcd {
+            mag_idx: 46,
+            level: 1,
+            magic_key: u16::from(b'm'),
+            tran_point: 0,
+        })]);
+        saves.insert(
+            "caster".into(),
+            SavedHuman {
+                account: "uc".into(),
+                record,
+                enter_map: "0".into(),
+            },
+        );
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 46,
+            effect: 1,
+            effect_type: 1,
+            train_lv: 3,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let registry: Option<mir2_envir::MapRegistry> = None;
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+
+        handle_spell_cmd(
+            // 目标在右 ⇒ `default` 支把主人 Dir 转向右(2)；克隆体 `Dir = GetBackDir(2) = 6`。
+            game_svr::feature::make_long(12, 10),
+            46,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            registry.as_ref(),
+            &table,
+            &mut displays,
+            &gates,
+        );
+
+        let (clone_id, cx, cy, cray, cslaves) = {
+            let c = world
+                .entities
+                .iter()
+                .find(|e| e.name == mir2_world::CLONE_NAME)
+                .expect("应造出克隆体实体");
+            (c.id, c.x, c.y, c.race, c.slave_list.len())
+        };
+        assert_eq!((cx, cy), (10, 10), "坐标 = 主人坐标");
+        assert_eq!(cray, mir2_world::ACTOR_RACE_PLAY, "玩家型克隆体");
+        assert_eq!(cslaves, 0, "克隆体不入 SlaveList");
+        assert!(
+            world.entities.get(caster).unwrap().slave_list.is_empty(),
+            "主人的 SlaveList 不被触碰"
+        );
+        // 展示：`Dir = GetBackDir(主人转向后的 Dir=2) = 6`；feature 取主人 Gender/Hair（1/5）。
+        let d = displays.get(clone_id).expect("克隆体展示应登记");
+        assert_eq!(d.dir, 6, "Dir = GetBackDir(右=2) = 左=6");
+        assert_eq!(d.show_name, downlink::gbk("Clone"));
+        assert_eq!(d.name_color, downlink::PLAYER_NAME_COLOR);
+        assert_eq!(
+            d.feature,
+            game_svr::feature::make_human_feature(0, 1, 1, 5 * 2 + 1),
+            "Gender/Hair 照抄、Dress/Weapon 归 0"
+        );
+        // 格占用。
+        let (cell, ok) = world.maps[0].get_cell_info(10, 10);
+        assert!(ok);
+        assert!(
+            cell.obj_list
+                .iter()
+                .any(|o| o.cell_obj_id == clone_id && o.actor_object),
+            "克隆体应占主人同格"
+        );
+
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(m) = rx0.try_recv() {
+            match m {
+                SimToGate::SendFrame { socket, body } => frames.push((socket, body)),
+                SimToGate::SendRaw { socket, payload } => frames.push((socket, payload)),
+                other => panic!("意外的下行：{other:?}"),
+            }
+        }
+        let ident_of = |b: &[u8]| {
+            mir2_protocol::frame::CommandMessage::from_bytes(b)
+                .unwrap()
+                .ident
+        };
+        let obs: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|(s, _)| *s == 912)
+            .map(|(_, b)| b)
+            .collect();
+        let me: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|(s, _)| *s == 911)
+            .map(|(_, b)| b)
+            .collect();
+        assert!(
+            obs.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_SPELL),
+            "观察者应收 SM_SPELL(46)；实得 {obs:?}"
+        );
+        assert!(
+            obs.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_MAGICFIRE),
+            "观察者应收 SM_MAGICFIRE"
+        );
+        assert!(
+            me.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_MAGICFIRE),
+            "F-1：主人自己也收 SM_MAGICFIRE；实得 {me:?}"
+        );
+        assert!(
+            !me.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_SPELL),
+            "RM_SPELL 有自身守卫 ⇒ 主人自己不应收 SM_SPELL"
+        );
+        // `SM_TURN`（Recog = 克隆体 id）+ 名尾 `"Clone/255"`；两个在线玩家各一。
+        let turns: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|(_, b)| ident_of(b) == mir2_protocol::messages::SM_TURN)
+            .map(|(_, b)| b)
+            .collect();
+        assert_eq!(turns.len(), 2, "主人与观察者各一（克隆体自己被排除）");
+        for t in &turns {
+            assert_eq!(
+                i32::from_le_bytes([t[0], t[1], t[2], t[3]]),
+                clone_id,
+                "SM_TURN Recog = 克隆体 ActorId"
+            );
+            let msg = mir2_protocol::edcode::decode(&t[23..]);
+            assert!(
+                msg.starts_with(b"Clone/"),
+                "名尾应为 Clone/<color>；实得 {msg:?}"
+            );
+        }
+        assert!(me.iter().any(|b| b.starts_with(b"+GD/")), "成功支回 +GD");
+        // 熟练度尾：`level=1 < 3` 且 `boTrain=true` ⇒ 若升级门过则 `TrainSkill(Random(3)+1)` 已落。
+        assert_eq!(
+            saves["caster"].record.data.magic.as_ref().unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .mag_idx,
+            46
         );
     }
 

@@ -1,0 +1,61 @@
+# M3⑨-2 残余（46 分身）改前/改后（base=083dc1d6d → 代码提交=8c4e0fc49 + 证据提交内锚点刷新 1 处）
+
+$ git diff --stat 083dc1d6d 8c4e0fc49
+ mir2-rs/bins/game-svr/src/downlink.rs |  67 ++++++-
+ mir2-rs/bins/game-svr/src/main.rs     | 332 +++++++++++++++++++++++++++++++++-
+ mir2-rs/bins/game-svr/src/slave.rs    | 133 +++++++++++++-
+ mir2-rs/crates/world/src/lib.rs       |   6 +-
+ mir2-rs/crates/world/src/slave.rs     | 146 ++++++++++++++-
+ mir2-rs/tests/parity/whitelist.md     |   2 +
+ 6 files changed, 672 insertions(+), 14 deletions(-)
+
+## 1. crates/world/src/slave.rs
+- 退役 `CLONE_DEFERRED`（原「本片未实现」登记）⇒ 换成 `CLONE_NAME`（=`"Clone"`，`PlayCloneObject.cs:9`）
+  + `PLAYER_VIEW_RANGE`（=12，`PlayObject.cs:904`）。
+- 新增 `CloneSpawn { clone_id, x, y, dir, created }` + `spawn_clone(world, caster_id, caster_dir)`：
+  `MagMakeClone`（`MagicManager.cs:1337-1341`）`new PlayCloneObject(playObject)`（`PlayCloneObject.cs:5-23`）
+  的骨架等价物 —— 造玩家型实体（`race=Play`、`name="Clone"`、`x/y=主人`、`map_id=主人图`、
+  `view_range=12`、`want_ref_msg=true`、**不入 `SlaveList`**）+ 用 `magic::mag_make_clone`
+  落格占用门（`back_dir` 已在其内）；`add_to_mapped` 跟 `created`。**不抽随机数**。
+- 新增 2 条单测：`spawn_clone_creates_player_clone_and_occupies_cell`（名字/坐标/朝向/格占用/
+  不入表/RNG 不变）、`spawn_clone_absent_caster_returns_none`。
+
+## 2. crates/world/src/lib.rs
+- `pub use slave::{…}`：去 `CLONE_DEFERRED`，加 `spawn_clone` / `CloneSpawn` / `CLONE_NAME` /
+  `PLAYER_VIEW_RANGE`。
+
+## 3. bins/game-svr/src/slave.rs
+- 新增 `CloneCastInput` / `CloneCastOutcome` / `cast_clone_spell`：`case SKILL_46` 的
+  `MagMakeClone` 恒 `true` ⇒ `boTrain=true`，再走 `magic::do_spell_tail(false, true, true, …)`
+  （与召唤/诱惑面同一条 `world.rng`；`Level<3` 时消费 `Random(3)+1`）。
+- 模块头「未接」清单去掉 46（改为已接）。
+- 新增 1 条 host 用例 `cast_clone_spawns_and_runs_train_tail`（克隆体 + 尾部 RNG 账本与
+  `do_spell_tail` 同序列）。
+
+## 4. bins/game-svr/src/downlink.rs
+- 新增 `PLAYER_NAME_COLOR`（=255，bin 模块 `enter` 不在 lib ⇒ 复写常量值）+ `clone_display(dir, caster)`：
+  从主人 `feature` 位域无损反解 `gender = byte1 & 1` / `hair = byte2 >> 1`，按 `PlayCloneObject` 的
+  缺省 `Dress=Weapon=0` 重算 `MakeHumanFeature(0, gender, gender, hair*2+gender)`；`show_name="Clone"`。
+- 新增 1 条用例 `clone_display_copies_gender_and_hair_only`。
+
+## 5. bins/game-svr/src/main.rs
+- `handle_spell_cmd` 增 46 支（在 20 诱惑支之后、`send_good_tick` 之前）：
+  `CretInNearXy` 目标修正 → `MagicAttackRage` 距离门 → `SM_SPELL(46)` 广播 →
+  `cast_clone_spell` → 存档 `MagicRcd` 熟练度回写 → 克隆体展示登记 + `SM_TURN`（名尾
+  `"Clone/255"`）+ `SM_FEATURECHANGED` 广播（排除克隆体自己）→ `SM_MAGICFIRE`（含自己）→
+  `SM_MAGIC_LVEXP`。`default` 支的 `Dir=GetNextDirection` 在此之前已由 `takes_default_dir` 落。
+- 顶注由「46 登记见 CLONE_DEFERRED」改为「46 分身已接」。
+- 新增进程级用例 `spell_cmd_clone_wires_entity_and_frames`（走生产 `handle_spell_cmd`）。
+
+## 6. tests/parity/whitelist.md
+- 新增 **T-51**：46 分身的 tick/AI 生命周期未建模（静态可观测实体），附口径与证据指针。
+
+## 7. tests/parity/m3/rng-trace-scene/DRIVER-CONTRACT.md（证据提交内，1 行锚点刷新）
+- `§4` 的宿主 AI 调用点行号 `main.rs:5488` → **`:5598`**：本片在 `handle_spell_cmd` 内插入 46 支（~110 行，
+  位置在 `enable_production_monster_ai` 调用点之前）⇒ `check_anchors.py check` 从 GREEN 变 RED（`ANCHOR_DRIFT`），
+  按该门自身的口径（文档行号 == 当前源码首个匹配行）刷新。刷新后 `check_anchors.py check` GREEN 7/7、
+  `selftest` GREEN 13/13、`run_rng_trace_pair.ps1 -SelfCheckNoStack` **37/37 GREEN**。
+
+## 8. 未改（务必对照）
+- `crates/world/src/magic.rs` 的 `mag_make_clone`（真身向量 8 向已对拍）**未改**（只被 `spawn_clone` 调用）。
+- `crates/protocol` / `crates/storage` / `src/` / `sql/` / `MirClient` **零改动**。

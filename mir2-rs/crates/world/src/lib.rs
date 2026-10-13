@@ -95,8 +95,8 @@ pub use party::{
 pub use session::{Session, SessionError, WorldStage};
 pub use slave::{
     check_server_make_slave, is_slave, mag_make_angel_slave_plan, mag_make_sinsu_slave_plan,
-    mag_make_slave_plan, make_slave_gate, recall_slave_target, space_move_get_rand_xy,
-    summon_slave, MakeSlavePlan, SlaveSpawner, SummonOutcome, CLONE_DEFERRED, SKILL_46,
-    SKILL_ANGEL, SKILL_SINSU, SKILL_SKELLETON, SKILL_TAMMING,
+    mag_make_slave_plan, make_slave_gate, recall_slave_target, space_move_get_rand_xy, spawn_clone,
+    summon_slave, CloneSpawn, MakeSlavePlan, SlaveSpawner, SummonOutcome, CLONE_NAME,
+    PLAYER_VIEW_RANGE, SKILL_46, SKILL_ANGEL, SKILL_SINSU, SKILL_SKELLETON, SKILL_TAMMING,
 };
 pub use world::{Command, EntitySnapshot, FloorItemView, TickRecord, World, TICK_INTERVAL_MS};
