@@ -1,0 +1,15 @@
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1/00-commands.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1/01-selftest-nostack-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1/02-red-mutation-o1-base-null.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1/03-red-mutation-drift-noop.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1/04-selftest-scene-gate.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1/05-scenario-mode-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1/06-selftest-rng-ledger-diff.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1/07-selftest-attack-rng-ledger.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1/08-gates-four.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1/09-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1/10-diff-source.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+M	mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
