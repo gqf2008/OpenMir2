@@ -1,0 +1,72 @@
+M3⑦-实现 2 F-1/M-1 返工 oracle 锚点 —— 行号均在本仓库 src/ 实测（2026-10-13）
+卡：openmir2-m3-party-group-state（本片 = reviewer-5 review `fc68afca` 的 F-1(Important) + M-1(Minor) 收口）
+旧被审 head = 28c9a8d5c7d541f8b59fed943dcf0546a977c68c
+返工 head  = 4b6c843be11d90124723d44ad97d8a98b9dabcf0（+ 证据提交）
+base（交付时 refs/heads/master）= f28e3d893aca2d29e9bbbb0dff46e78357af9713
+
+（第①片的完整锚点见 ../party-group-state-20261013/01-oracle-anchors.txt；本文件只列 F-1 差量。）
+
+== F-1：oracle `Die()` 的「人物死亡立即退组」==
+
+Die()                src/M2Server/Player/PlayObject.cs:1964-2010
+  :1966-1968         if (SuperMan) return;           // Rust 未建模 SuperMan（本片不动，见「残差登记」）
+  :1969-1971         IncSpell = 0; IncHealth = 0; IncHealing = 0;
+  :1974-1978         if (GroupOwner != 0) {
+                         IPlayerActor groupOwnerPlay = (IPlayerActor)SystemShare.ActorMgr.Get(GroupOwner);
+                         groupOwnerPlay.DelMember(this);// 人物死亡立即退组，以防止组队刷经验
+                     }
+  :1979+             掉落的 LastHiter / DieDropItems 等（本片不动）
+
+关键语义（reviewer F-1 原文）：
+  * 死亡写入点（Rust = `hp == 0` ⇒ `World::tick()` 的 `settle_deaths`）**立即**调团长 `DelMember(死者)`；
+  * 死亡者**仍在线**（与断线 `Disappear` 不同）⇒ 它自己的回帧必须照发，不能复用「已摘 online ⇒ 丢自身帧」口径。
+
+DelMember(死者) 由团长侧执行（`PlayObject.cs:5126-5156`，第①片锚点 §C）：
+  * 非团长自己：从成员表找到死者 ⇒ 死者.LeaveGroup() + RemoveAt；
+  * 团长自己死亡：从尾到头逐成员 LeaveGroup() + RemoveAt（整组散）；
+  * 之后：`if (!CancelGroup()) SendDefMessage(SM_GROUPCANCEL,0,0,0,0); else SendGroupMembers();`
+    - `CancelGroup()`（`PlayObject.Base.cs:1339-1352`）：`Count <= 1` ⇒ SendGroupText("你的小组被解散了.")
+      + Clear() + GroupOwner=0 + return **false**（⇒ 发 `SM_GROUPCANCEL`）；否则 return true（⇒ 发成员表）。
+    - `LeaveGroup()`（`PlayObject.cs:5177-5183`）：SendGroupText("{0} 已经退出了本组.") → 自己 GroupOwner=0
+      → SendMsg(RM_GROUPCANCEL(10140))。
+  ⇒ 2 人组、成员死亡：`Count==1` ⇒ CancelGroup false ⇒ 团长收 `SM_GROUPCANCEL`；死者收 `SM_GROUPCANCEL`（自身 LeaveGroup）
+     + 说词；组散。3 人组、成员死亡：Count>1 ⇒ 组不散、只摘死者，其余成员收成员表 + 死者说词。
+
+与断线的差别（`PlayObject.Message.cs:2138-2142` Disappear 同样调 DelMember）：
+  断线路径宿主已把该连接从 `online` 摘掉（Rust `GateEvent::Closed`，main.rs 原 `Disappear→DelMember`），
+  死亡路径连接**仍在** `online` 中 ⇒ `drain_party_death_events` 对死者自身也投递。
+
+tick 内相对次序：
+  `PlayObject.Run()` 的组队清理段在 `PlayObject.Message.cs:704-719`（消息处理内，`base.Run()` 在 :765）；
+  `Die()` 由伤害结算触发、早于该段。Rust：`settle_deaths`（world.tick 内）→ `drain_party_death_events`
+  → `party_run_tick`（等价于 oracle 组队清理段），次序一致。
+
+== M-1：`WorldEngine.GetPlayObject(name)` 只扫 `PlayObjectList`（仅玩家）==
+
+WorldEngine.GetPlayObject  src/GameSrv/Word/WorldServer.cs:937-955
+  for (i in PlayObjectList)                                   // 只扫 PlayObjectList（玩家）
+    if (string.Compare(ChrName, sName, OrdinalIgnoreCase)==0)  // 不区分大小写
+      if (!Ghost)
+        if (!(IsPasswordLocked && ObMode && AdminMode)) result = playObject;
+      break;                                                   // 命中即停（不继续找下一个同名）
+
+Rust 第①片实现（旧 head `party.rs::party_play_object_by_name`）扫的是 `self.entities`（含怪物/NPC，且都带 `name`）
+⇒ 用怪物/NPC 名当 `CM_CREATEGROUP`/`CM_ADDGROUPMEMBER` 目标时 oracle 判 `playObject==null` 回 `-2`，
+Rust 会误命中并走到 `-3/-4`。本片按 reviewer 建议**至少**加 `Race == Play`（`ACTOR_RACE_PLAY == 0`）过滤。
+
+== Rust 接线点（本片改动）==
+crates/world/src/world.rs  settle_deaths：置 `death=true` 后，`group_owner != 0` ⇒ `party_del_member(group_owner, id, &party_cfg)`
+                           ⇒ 事件落新字段 `TickRecord::party_events`（序 = oracle「立即帧 → MsgQueue 出队序」）。
+crates/world/src/world.rs  新增字段 `World::party_cfg`（宿主灌入与 4 条 CM_* 派发同一份配置）。
+crates/world/src/party.rs  `party_play_object_by_name` 加 `e.race == ACTOR_RACE_PLAY`。
+bins/game-svr/src/main.rs  `sim_loop` 灌 `world.party_cfg`；新增 `drain_party_death_events(rec, online, gates)`，
+                           放在 `world.tick()` 之后、`party_run_tick()` 之前；死亡者仍在线 ⇒ 自身帧照发。
+
+== 残差登记（本片未覆盖，如实登记，不静默）==
+1. `GetPlayObject` 的 `!Ghost` / `!(IsPasswordLocked && ObMode && AdminMode)` / `OrdinalIgnoreCase` / 命中即 break
+   四条：本片只做 reviewer 建议的 `Race == Play`。其中：
+   - `Entity` 有 `ghost`（可判，但本骨架中玩家断线即从实体摘除，死亡者是 `death` 非 `ghost`）⇒ 当前不可达；
+   - `IsPasswordLocked` 在 Rust `Entity` **未建模** ⇒ 无法逐字照搬；`ob_mode`/`admin_mode` 已建模但无锁语义；
+   - `name` 比较为大小写敏感（oracle OrdinalIgnoreCase）⇒ 同名不同大小写场景有差。
+   以上均属「窄触发面、未被本片判据覆盖」，登记于此；如需严格等价，另开小卡。
+2. `DepartedDie()`（`PlayObject.cs:1979+` 的掉落/经验链）与 `SuperMan` 早退：不属 F-1/M-1 面，归 ④ 掉落卡 / ②③ 战斗线。

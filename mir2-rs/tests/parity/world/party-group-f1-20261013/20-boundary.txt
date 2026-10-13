@@ -1,0 +1,41 @@
+本次返工（F-1 + M-1）patch head = 本证据提交（其父 commit = 0affa9441a34e61375dec02e9b8e8f9c44f4fb95）
+返工 commit = 4b6c843be11d90124723d44ad97d8a98b9dabcf0
+被审旧 head（reviewer-5 request_changes fc68afca）= 28c9a8d5c7d541f8b59fed943dcf0546a977c68c
+base（旧审）= d4d5b89c73e77ed995188c2668dc3eda9a926dc0
+base（交付时 refs/heads/master）= 65602bf862b873402fe2281b2b687506f95d6cb8
+交付 head 已 merge origin/master
+
+=== 语义改动（返工 commit 4b6c843be 的 4 个 .rs） ===
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/crates/world/src/party.rs
+mir2-rs/crates/world/src/world.rs
+mir2-rs/crates/world/tests/party_vectors.rs
+
+=== boundary: diff vs origin/master -- src sql MirClient protocol storage（必须为空） ===
+（以上为空 = oracle/客户端/表结构/协议/存储 零改动）
+
+=== 本卡完整写集 vs origin/master（world / game-svr / party 证据） ===
+mir2-rs/bins/game-svr/src/config.rs
+mir2-rs/bins/game-svr/src/lib.rs
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/party.rs
+mir2-rs/bins/game-svr/src/smframe.rs
+mir2-rs/crates/world/src/entity.rs
+mir2-rs/crates/world/src/lib.rs
+mir2-rs/crates/world/src/party.rs
+mir2-rs/crates/world/src/world.rs
+mir2-rs/crates/world/tests/party_vectors.rs
+mir2-rs/tests/parity/world/party-group-state-20261013/01-oracle-anchors.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/02-change-summary.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/03-tests.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/20-boundary.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/README.md
+mir2-rs/tests/parity/world/party-group-state-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/gates/10-fmt.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/gates/11-clippy.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/gates/12-msgcodegen.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/gates/13-workspace-test.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/redchecks/RC1-strict-greater-red.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/redchecks/RC2-queue-priority-red.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/redchecks/RC3-encode-red.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/redchecks/README.md

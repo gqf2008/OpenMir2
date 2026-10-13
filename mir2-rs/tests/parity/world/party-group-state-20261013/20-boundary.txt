@@ -1,0 +1,31 @@
+边界检查：oracle / 客户端 / 表结构 / 脚本语法零改动
+base = d4d5b89c73e77ed995188c2668dc3eda9a926dc0
+
+$ git diff --name-only d4d5b89c73e77ed995188c2668dc3eda9a926dc0 -- src sql MirClient
+(空)
+
+$ git status --porcelain | grep -E ' (src|sql|MirClient)/'
+(空)
+
+本片改动全量（tracked diff + 未跟踪）：
+mir2-rs/bins/game-svr/src/config.rs
+mir2-rs/bins/game-svr/src/lib.rs
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/party.rs
+mir2-rs/bins/game-svr/src/smframe.rs
+mir2-rs/crates/world/src/entity.rs
+mir2-rs/crates/world/src/lib.rs
+mir2-rs/crates/world/src/party.rs
+mir2-rs/crates/world/tests/party_vectors.rs
+mir2-rs/tests/parity/world/party-group-state-20261013/01-oracle-anchors.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/02-change-summary.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/03-tests.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/20-boundary.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/README.md
+mir2-rs/tests/parity/world/party-group-state-20261013/gates/10-fmt.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/gates/11-clippy.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/gates/12-msgcodegen.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/gates/13-workspace-test.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/redchecks/RC1-strict-greater-red.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/redchecks/RC2-queue-priority-red.txt
+mir2-rs/tests/parity/world/party-group-state-20261013/redchecks/RC3-encode-red.txt

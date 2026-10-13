@@ -67,6 +67,13 @@ pub struct GateConfig {
     pub hear_msg_f_color: u8,
     /// `[Setup] HearMsgBColor`（oracle `GameSvrConf.cs:1529` 缺省 `0xFF`）——同上，背景色。现网 `=255`。
     pub hear_msg_b_color: u8,
+    /// `[Setup] GroupMembersMax`（`ServerConf.cs:225` 的 `ReadWriteByte`，`GameSvrConf.cs:1402` 缺省 `10`）。
+    /// M3⑦-实现 2：组队状态机的成员上限门（`PlayObject.Operate.cs:855` 的严格大于）。
+    pub group_members_max: u8,
+    /// `[Setup] GroupMsgFColor`（`ServerConf.cs:337`，`GameSvrConf.cs:1544` 缺省 `0xC4`）。
+    pub group_msg_f_color: u8,
+    /// `[Setup] GroupMsgBColor`（`ServerConf.cs:338`，`GameSvrConf.cs:1545` 缺省 `0xFF`）。
+    pub group_msg_b_color: u8,
     /// `[Server] IDSAddr`：登录服务器地址（oracle 是 TcpClient 主动连它，`AuthenticationService.cs:22-34`）。
     pub ids_addr: String,
     /// `[Server] IDSPort`（现网 5600）。
@@ -216,6 +223,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut disable_deal: Option<bool> = None;
     let mut hear_msg_f_color: Option<u8> = None;
     let mut hear_msg_b_color: Option<u8> = None;
+    let mut group_members_max: Option<u8> = None;
+    let mut group_msg_f_color: Option<u8> = None;
+    let mut group_msg_b_color: Option<u8> = None;
     let mut show_rank_level_name: Option<bool> = None;
     let mut human_max_gold: Option<i32> = None;
     let mut floor_item_can_pick_up_time: Option<i32> = None;
@@ -376,6 +386,25 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                     hear_msg_b_color = Some(
                         v.parse()
                             .with_context(|| format!("HearMsgBColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                // `ServerConf.cs:225/337/338` 的组队配置（M3⑦-实现 2）。
+                "GROUPMEMBERSMAX" => {
+                    group_members_max = Some(
+                        v.parse()
+                            .with_context(|| format!("GroupMembersMax 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "GROUPMSGFCOLOR" => {
+                    group_msg_f_color = Some(
+                        v.parse()
+                            .with_context(|| format!("GroupMsgFColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "GROUPMSGBCOLOR" => {
+                    group_msg_b_color = Some(
+                        v.parse()
+                            .with_context(|| format!("GroupMsgBColor 不是合法字节：{v:?}"))?,
                     );
                 }
                 // `ServerConf.cs:271` 的 `ReadWriteBool("Setup", ...)`：现网 `0/1`。
@@ -565,6 +594,10 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`GameSvrConf.cs:1528-1529`）：`HearMsgFColor=0x00` / `HearMsgBColor=0xFF`。
         hear_msg_f_color: hear_msg_f_color.unwrap_or(0x00),
         hear_msg_b_color: hear_msg_b_color.unwrap_or(0xFF),
+        // oracle 缺省值（`GameSvrConf.cs:1402/1544/1545`）：`[Setup]` 里没写不算错。
+        group_members_max: group_members_max.unwrap_or(10),
+        group_msg_f_color: group_msg_f_color.unwrap_or(0xC4),
+        group_msg_b_color: group_msg_b_color.unwrap_or(0xFF),
         // oracle 缺省值（`GameSvrConf.cs:1464`）：`[Setup]` 里没写不算错。
         show_rank_level_name: show_rank_level_name.unwrap_or(false),
         // oracle 缺省值（`GameSvrConf.cs:1451/1488/1703/1704/1706/1754`）：`[Setup]` 里没写不算错。
