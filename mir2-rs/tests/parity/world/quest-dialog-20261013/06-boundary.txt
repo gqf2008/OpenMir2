@@ -1,0 +1,18 @@
+=== git diff --name-only master..HEAD -- src sql MirClient ===
+(以上为空则边界冻结成立)
+
+=== git diff --stat master..HEAD ===
+ mir2-rs/Cargo.lock                                 |   1 +
+ mir2-rs/bins/game-svr/Cargo.toml                   |   1 +
+ mir2-rs/bins/game-svr/src/lib.rs                   |   1 +
+ mir2-rs/bins/game-svr/src/npc.rs                   | 666 +++++++++++++++++++++
+ .../quest-dialog-20261013/01-oracle-anchors.txt    |  44 ++
+ .../world/quest-dialog-20261013/02-commands.txt    |  25 +
+ .../world/quest-dialog-20261013/03-unit-tests.txt  |  15 +
+ .../world/quest-dialog-20261013/04-redchecks.txt   |  79 +++
+ .../world/quest-dialog-20261013/05-gates.txt       |  15 +
+ .../parity/world/quest-dialog-20261013/README.md   |  61 ++
+ 10 files changed, 908 insertions(+)
+
+=== git status --porcelain（提交后） ===
+?? mir2-rs/tests/parity/world/quest-dialog-20261013/06-boundary.txt

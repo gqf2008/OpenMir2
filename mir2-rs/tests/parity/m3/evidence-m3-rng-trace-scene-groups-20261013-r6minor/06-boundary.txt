@@ -1,0 +1,32 @@
+# 边界（本片相对 base = master 7a654200；排除本证据包自身）
+## 非证据文件的改动（应只有 rng_ledger_diff.py）
+$ git diff --name-only 7a654200 -- . :(exclude)mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-r6minor
+rc=0
+mir2-rs/tests/parity/m3/rng-trace-probe/rng_ledger_diff.py
+
+## 逐文件差量
+$ git diff --stat 7a654200 -- mir2-rs/tests/parity/m3/rng-trace-probe/rng_ledger_diff.py
+rc=0
+ mir2-rs/tests/parity/m3/rng-trace-probe/rng_ledger_diff.py | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+## src/sql/MirClient/crates/bins 必须为空
+$ git diff --name-only 7a654200 -- src sql MirClient mir2-rs/crates mir2-rs/bins
+rc=0
+
+## 本片新文件清单（证据包）
+$ git status --porcelain --untracked-files=all mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-r6minor
+rc=0
+?? mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-r6minor/00-commands.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-r6minor/01-selftest-rng-ledger-diff.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-r6minor/02-mutation-folded-counts-identity-red.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-r6minor/03-selftest-scene-gate.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-r6minor/04-selftest-attack-rng-ledger.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-r6minor/05-nostack-selfcheck.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-r6minor/06-boundary.txt
+
+## git status --porcelain --untracked-files=no（被跟踪面）
+$ git status --porcelain --untracked-files=no
+rc=0
+ M mir2-rs/tests/parity/m3/rng-trace-probe/rng_ledger_diff.py
+

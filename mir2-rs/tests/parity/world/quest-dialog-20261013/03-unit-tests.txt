@@ -1,0 +1,15 @@
+=== 本片用例（cargo test -p game-svr --lib npc::） ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running unittests src\lib.rs (E:/tmp/m2svr-target\debug\deps\game_svr-675e68013f315636.exe)
+
+running 7 tests
+test npc::tests::merchant_say_text_and_wire ... ok
+test npc::tests::send_msg_args_are_recorded_in_order ... ok
+test npc::tests::run_std_mode_func_uses_numeric_label ... ok
+test npc::tests::say_text_must_carry_chrname_prefix ... ok
+test npc::tests::run_login_emits_say_with_chrname_prefix ... ok
+test npc::tests::missing_script_is_not_an_error ... ok
+test npc::tests::loads_from_disk_and_runs_login ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 113 filtered out; finished in 0.00s
+
