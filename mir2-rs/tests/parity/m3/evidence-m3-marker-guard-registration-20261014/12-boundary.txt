@@ -1,0 +1,42 @@
+$ git rev-parse origin/master
+ea4cd8c65b924e1fa8634c18c8793396bf7094fe
+
+$ git diff --name-status origin/master HEAD -- mir2-rs/tests/parity/m3/*.py
+M	mir2-rs/tests/parity/m3/fixture_chain_gate.py
+M	mir2-rs/tests/parity/m3/marker_prefix_gate.py
+
+$ git diff --stat origin/master HEAD -- mir2-rs/tests/parity/m3/*.py
+ mir2-rs/tests/parity/m3/fixture_chain_gate.py | 18 +++++++++++--
+ mir2-rs/tests/parity/m3/marker_prefix_gate.py | 39 ++++++++++++++++++++++++---
+ 2 files changed, 51 insertions(+), 6 deletions(-)
+
+$ git diff --name-only origin/master HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+(空 = 冻结面未动)
+
+$ git diff --name-only origin/master HEAD -- src/BotSrv
+(空 = BotSrv 未动)
+
+$ git diff --name-only origin/master HEAD | grep -c '\.rs$'  (期望 0)
+0
+
+$ git diff --name-only origin/master HEAD（全量路径）
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/01-pre-fix-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/02-post-fix-green.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/03-redcheck-unregistered-guard.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/04-redcheck-unregistered-new-guard.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/05-chain-gate-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/06-chain-gate-check.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/07-chain-gate-check-pre-fix.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/08-gate-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/09-gate-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/10-gate-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/11-gate-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/12-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-guard-registration-20261014/README.md
+mir2-rs/tests/parity/m3/fixture_chain_gate.py
+mir2-rs/tests/parity/m3/marker_prefix_gate.py
+
+改动文件 sha256（LF 仓库口径）:
+9ecacff550a1da8ac66fd32899f9cdb8e1dc79ec95edad725aefb6d61f048a75 *mir2-rs/tests/parity/m3/marker_prefix_gate.py
+1c2759eb74cdd5d9684bfecb68d55175b2de454a1fcd335cfe08aa1fd82cf66f *mir2-rs/tests/parity/m3/fixture_chain_gate.py

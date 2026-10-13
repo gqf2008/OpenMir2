@@ -74,6 +74,15 @@ SHARED_CHECKS = [
     #   不看矩阵状态、独立常跑（在场却坏 ⇒ 恒 RED）。
     ("hero_pet_anchor_selftest", "mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py", ["selftest"]),
     ("hero_pet_anchor_check", "mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py", ["check"]),
+    # 共享管线门（本片新增，与上面三组主机门同形）：markers 前缀口径门。它判的正是
+    #   「多张夹具卡反复扩展 `run_pair.ps1` / BotSrv 后有没有互相踩坏」：run_pair 去前缀截断 +
+    #   每个新夹具族的 `Assert-M3MarkerPrefix` 牙必须登记（COMPARATORS / GUARD_ONLY_MARKERS）+
+    #   比较器按前缀扫描 + BotSrv 无裸 `skip=` 诊断。
+    #   背景：④ 夹具（`M3DROPEXPSEQ` 牙 + `drop-exp/drop_exp_diff.py`）合入后漏登记，
+    #   门只靠手工 `selftest` 才发现 —— 接入共享管线后不看矩阵状态、独立常跑
+    #   （在场却坏 ⇒ 恒 RED，不再静默）。
+    ("marker_prefix_selftest", "mir2-rs/tests/parity/m3/marker_prefix_gate.py", ["selftest"]),
+    ("marker_prefix_check", "mir2-rs/tests/parity/m3/marker_prefix_gate.py", ["check"]),
 ]
 
 RUNNER_PREREQ_RC = 2  # 各驱动约定的「前置未到，fail-closed」退出码
@@ -308,8 +317,13 @@ def cmd_selftest(_args):
     _hp_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("hero_pet_anchor_gate.py")]
     expect("英雄/宠物锚门已接入共享管线（⑨-5 残余 Minor，防回退）",
            ["selftest"] in _hp_gate and ["check"] in _hp_gate)
-    expect("主机门（.py）登记项 ≥6（castle + 行会/攻城 + 英雄/宠物 各 selftest/check）",
-           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 6)
+    # 本片防回退牙：markers 前缀门必须常驻共享管线（selftest + check 两向）。它当前是
+    #   ④/⑤/⑥/⑦/⑧/⑨/⑩ 共享 `run_pair.ps1` 扩展面的唯一机判门，不能只靠手工跑。
+    _mp_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("marker_prefix_gate.py")]
+    expect("markers 前缀门已接入共享管线（防回退）",
+           ["selftest"] in _mp_gate and ["check"] in _mp_gate)
+    expect("主机门（.py）登记项 ≥8（castle + 行会/攻城 + 英雄/宠物 + markers 前缀 各 selftest/check）",
+           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 8)
     expect("共享管线登记名唯一（防重复注册偷懒）",
            len({n for n, _r, _e in SHARED_CHECKS}) == len(SHARED_CHECKS))
     expect("共享管线 (file,args) 登记唯一",
