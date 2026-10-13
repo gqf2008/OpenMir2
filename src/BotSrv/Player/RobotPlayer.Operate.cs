@@ -253,6 +253,8 @@ namespace BotSrv.Player
                 }
                 return;
             }
+            // M3⑨ 英雄/宠物夹具单一收包钩子（T-45 家族扩展）：`g_boHeroPetSequence` 关时是空操作。
+            HeroPetOnServerMessage(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series, body);
             string body2;
             switch (msg.Ident)
             {

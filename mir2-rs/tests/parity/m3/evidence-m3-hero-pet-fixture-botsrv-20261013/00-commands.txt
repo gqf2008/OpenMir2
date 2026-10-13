@@ -1,0 +1,62 @@
+# M3⑨ 英雄/宠物（宝宝/下属 slave）动作序列夹具骨架 —— 证据包命令（2026-10-13）
+
+卡片：openmir2-m3-hero-pet-fixture-botsrv（M3 逐系统对齐 ⑨ 的承接卡 5；父卡 openmir2-m3-hero-pet-align）
+worktree：E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs
+branch：worktree-m3-hero-pet-fixture-botsrv
+编译器/解释器：Rust（CARGO_TARGET_DIR=E:/tmp/m3cs-hp-target，--offline）；Python 3.12（-I）；.NET 8；Windows PowerShell 5
+
+## 0) 交付件（本片新增/改动）
+- 新增：mir2-rs/tests/parity/m3/hero_pet_diff.py（比较器；assemble/diff/selftest）
+- 新增：mir2-rs/tests/parity/m3/hero_pet_scenario.json（场景 + oracle 锚）
+- 新增：mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1（入口；-SelfCheckNoStack 无栈自检）
+- 改动：mir2-rs/tests/parity/m3/{run_pair.ps1,gate_guards.ps1}（-HeroPetSequence 透传 + M3HEROPETSEQ 完整性 + peer scope 护栏）
+- 改动：tools/botload/run_bots.ps1（-HeroPetSequence 透传 + heropet 收尾计数）
+- 新增：src/BotSrv/HeroPetSeqSelfCheck.cs（--selftest-heropet 无栈自检）
+- 改动：src/BotSrv/{RobotOptions.cs,AppService.cs,Program.cs,MShare.cs,Player/RobotPlayer.cs,Player/RobotPlayer.Operate.cs}
+- 改动：mir2-rs/tests/parity/whitelist.md（T-45 登记）
+
+## 1) 比较器 selftest（fail-closed + 改坏必红）
+python -I mir2-rs/tests/parity/m3/hero_pet_diff.py selftest
+# 期望：SELFTEST ok=36/36 rc=0（见 01-heropet-diff-selftest.txt）
+
+## 2) 入口无栈自检（比较器 + 生产函数 + 入口 fail-closed；零端口）
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1 -SelfCheckNoStack -SelfCheckOut <ev>/02-run-heropet-pair-selfcheck.txt
+# 期望：SELFTEST ok=19/19 rc=0（见 02-run-heropet-pair-selfcheck.txt）
+
+## 3) BotSrv 生产函数无栈自检（步骤解析/角色判定/帧 id/分支归类）
+dotnet build src/BotSrv/BotSrv.csproj -c Release --nologo -v q
+./src/BotSrv/bin/Release/BotSrv.exe --selftest-heropet
+# 期望：HEROPETSEQ SELFTEST GREEN rc=0（见 03-botsrv-heropetseq-selftest.txt）
+
+## 4) run_bots 收尾计数离线自检（新增 heropet kind 有牙齿）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/botload/run_bots.ps1 -SelfCheckNoStack
+# 期望：SELFTEST_RED GREEN rc=0（见 04-run-bots-selfcheck.txt）
+
+## 5) 回归（既有夹具自检不退化）
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1 -SelfCheckNoStack   # SUMMARY total=65 failed=0
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_npc_shop_pair.ps1 -SelfCheckNoStack   # 17/17
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -SelfCheckNoStack   # 见 07
+
+## 6) 外部改坏必红（比较器 diff 去掉 branch 比较 ⇒ 必红）
+python -I <tmp>/hero_pet_diff_broken.py selftest
+# 期望：FAIL mutate-branch-red；SELFTEST ok=35/36 rc=1（见 10-external-break-comparator.txt）
+
+## 7) 四门禁（在自己 worktree；隔离 CARGO_TARGET_DIR；--offline）
+cd mir2-rs
+cargo fmt --all -- --check
+cargo clippy --offline --workspace --all-targets -- -D warnings
+cargo test --offline --workspace --no-fail-fast
+cargo run --offline -p msgcodegen -- --check
+
+## 8) 证据 hash（仓库 LF/git-blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py write <ev>
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra <ev>
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <ev>
+
+## 9) 边界
+git diff --name-status origin/master HEAD -- src sql MirClient mir2-rs/crates mir2-rs/bins
+# 期望：仅 src/BotSrv/**（登记例外 T-45）；sql/ MirClient crates/ bins/ 零改动
+
+## 未做（如实登记；要 owner 发窗口 + 前置落地）
+- 真机两侧同序列跑（hero_pet_diff.py diff=0 + scoped_diff --canonical）：等 ⑨-2（宝宝召唤）/⑨-3（生命周期）/
+  ⑨-4（经验给主人）世界侧落地 + openmir2-m3-clock-injection（时间门）+ 独占窗口。片内不起栈、不占端口。

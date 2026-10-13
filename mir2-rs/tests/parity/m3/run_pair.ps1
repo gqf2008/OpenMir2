@@ -61,6 +61,12 @@ param(
   [string]$ShopItemName = '',      # 仅 -ShopSequence 时生效：动作物品名（空 = 背包第一件）
   [int]$ShopItemMake = 0,          # 仅 -ShopSequence 时生效：物品 MakeIndex（0 = 只按名字取）
   [int]$ShopCount = 1,             # 仅 -ShopSequence 时生效：卖/买/存取数量
+  [switch]$HeroPetSequence,        # M3⑨ 夹具：BotSrv 进世界后按固定顺序发召唤/挥击（宝宝/下属；白名单 T-45 家族）
+  [string]$HeroPetSteps = '',      # 仅 -HeroPetSequence 时生效：`role|op|param;...`
+  [int]$HeroPetStepMs = 1000,      # 仅 -HeroPetSequence 时生效：每步间隔
+  [int]$HeroPetStartDelayMs = 3000,# 仅 -HeroPetSequence 时生效：进世界到第一步的额外等待
+  [int]$HeroPetMasterRole = 0,     # 仅 -HeroPetSequence 时生效：主人账号序号
+  [int]$HeroPetPeerRole = 1,       # 仅 -HeroPetSequence 时生效：peer 账号序号
   [switch]$EmitOpsArgs,            # 只打印 run_bots 命令组成（含 -DisableAutoPlay 耦合）后退出；无副作用，供无栈自检
   [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
   [string]$PinMapName = '',   # 攻击变体的 pin 地图（R-1 要求整张零刷怪；空 ⇒ -AttackPinPair 取 $script:M3AttackPinMap，否则 '0'）
@@ -171,6 +177,12 @@ function Get-M3BotOpPlan {
     $runner += " -ShopSequence -ShopOps '$ShopOps' -ShopStepMs $ShopStepMs -ShopStartDelayMs $ShopStartDelayMs -ShopNpcName '$ShopNpcName' -ShopItemName '$ShopItemName' -ShopItemMake $ShopItemMake -ShopCount $ShopCount -DisableAutoPlay"
     $planArgs += @('-ShopSequence', '-ShopOps', $ShopOps, '-ShopStepMs', $ShopStepMs, '-ShopStartDelayMs', $ShopStartDelayMs, '-ShopNpcName', $ShopNpcName, '-ShopItemName', $ShopItemName, '-ShopItemMake', $ShopItemMake, '-ShopCount', $ShopCount, '-DisableAutoPlay')
   }
+  if ($HeroPetSequence -and -not $ForPrewarm) {
+    # M3⑨ 夹具（卡 openmir2-m3-hero-pet-fixture-botsrv）：固定英雄/宠物序列**必须**一并关挂机
+    # （同 T-14/T-29 理由：挂机 = 无种子 RNG 随机走位，会改坐标/视野/宝宝位置 ⇒ 两侧不可比）。
+    $runner += " -HeroPetSequence -HeroPetSteps '$HeroPetSteps' -HeroPetStepMs $HeroPetStepMs -HeroPetStartDelayMs $HeroPetStartDelayMs -HeroPetMasterRole $HeroPetMasterRole -HeroPetPeerRole $HeroPetPeerRole -DisableAutoPlay"
+    $planArgs += @('-HeroPetSequence', '-HeroPetSteps', $HeroPetSteps, '-HeroPetStepMs', $HeroPetStepMs, '-HeroPetStartDelayMs', $HeroPetStartDelayMs, '-HeroPetMasterRole', $HeroPetMasterRole, '-HeroPetPeerRole', $HeroPetPeerRole, '-DisableAutoPlay')
+  }
   return [pscustomobject]@{ runner = $runner; botArgs = $planArgs }
 }
 
@@ -246,12 +258,13 @@ if ($EmitOpsArgs) {
     bag_equip_scope   = Format-M3BagEquipScope -BagEquipSequence ([bool]$BagEquipSequence) -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs -DisableAutoPlay ([bool]$BagEquipSequence)
     attack_sequence   = Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence)
     shop_sequence     = Format-M3ShopScope -ShopSequence ([bool]$ShopSequence) -ShopOps $ShopOps -ShopStepMs $ShopStepMs -ShopStartDelayMs $ShopStartDelayMs -ShopNpcName $ShopNpcName -ShopItemName $ShopItemName -ShopItemMake $ShopItemMake -ShopCount $ShopCount -DisableAutoPlay ([bool]$ShopSequence)
+    hero_pet_sequence = Format-M3HeroPetScope -HeroPetSequence ([bool]$HeroPetSequence) -HeroPetSteps $HeroPetSteps -HeroPetStepMs $HeroPetStepMs -HeroPetStartDelayMs $HeroPetStartDelayMs -HeroPetMasterRole $HeroPetMasterRole -HeroPetPeerRole $HeroPetPeerRole -DisableAutoPlay ([bool]$HeroPetSequence)
     start_pose        = (Get-M3StartPoseLabel)
     attack_pose       = (Get-M3AttackPoseLabel)
   }
   # F-2 竞态修（owner 2026-10-13 04:05）：存档序列的 AFTER 快照前「等断线存档落库」仪器形态，
   # 无栈自检据此机判生产接线未被削弱（mode=save_rcd、timeout/poll>=1、quiet>=2），也据此发现「改回固定 sleep」。
-  if ($BagEquipSequence -or $AttackSequence -or $ShopSequence) {
+  if ($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $HeroPetSequence) {
     $obj['save_settle_instrument'] = (Format-M3SaveSettleInstrument -TimeoutSeconds $SaveSettleTimeoutSeconds -PollMilliseconds $SaveSettlePollMs -QuietPolls $SaveSettleQuietPolls)
   }
   if ($PinStartPose) {
@@ -475,7 +488,7 @@ if ($PinStartPose) {
 # `characters_ablity.ModifyTime` 由存档 `SaveAblity` 置 `now()`；只有**晚于**该参考才说明本段存档已落库。
 # 仅存档序列（-BagEquipSequence/-AttackSequence）需要；其余路径不取参考、不额外等待（行为逐字节不变）。
 $saveSettleRef = ''
-if (($BagEquipSequence -or $AttackSequence -or $ShopSequence) -and -not $SkipBots) {
+if (($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $HeroPetSequence) -and -not $SkipBots) {
   $saveSettleRef = ([string](Invoke-Mysql "SELECT DATE_FORMAT(NOW(),'%Y-%m-%d %H:%i:%s')")).Trim()
   Write-Output ("SAVE_SETTLE_REF {0}" -f $saveSettleRef)
 }
@@ -515,6 +528,9 @@ $shopSeqMarkers = @()
 $attackRawPath = Join-Path $SessionDir 'attack_raw.jsonl'
 $shopMarkersPath = Join-Path $SessionDir 'shop_markers.jsonl'
 $shopRawPath = Join-Path $SessionDir 'npc_shop_raw.jsonl'
+$heroPetSeqMarkers = @()
+$heroPetMarkersPath = Join-Path $SessionDir 'hero_pet_markers.jsonl'
+$heroPetRawPath = Join-Path $SessionDir 'hero_pet_raw.jsonl'
 if (-not $SkipBots) {
   $plan = Get-M3BotOpPlan
   $opsRunner = $plan.runner
@@ -658,6 +674,38 @@ if (-not $SkipBots) {
       exit 1
     }
   }
+  # M3⑨（T-45 家族扩展）：固定英雄/宠物序列的执行证据（逐 step 一条 `M3HEROPETSEQ` 事件，落 bot.log）。
+  # 判据：开了 -HeroPetSequence 就必须看到 `arm` + 每个 step 的 `send`/`end` + **每个假人各自的** `done`；
+  # 缺任一段 ⇒ RED，绝不拿空序列去跨侧 diff（否则恒绿）。原始件落 `hero_pet_markers.jsonl`，
+  # 再用 `hero_pet_diff.py assemble` 合并成记录 `hero_pet_raw.jsonl`（供跨侧比较）。
+  $heroPetSeqMarkers = @([regex]::Matches($botText, 'M3HEROPETSEQ [^\r\n]*') | ForEach-Object { $_.Value })
+  Write-Output ("OPS_HEROPETSEQ_MARKERS count={0}" -f $heroPetSeqMarkers.Count)
+  if ($HeroPetSequence) {
+    if ($heroPetSeqMarkers.Count -eq 0) {
+      Write-Output 'RED: -HeroPetSequence 开了但 bot.log 里一条 M3HEROPETSEQ 标记都没有 —— 固定序列没跑（驱动未生效/假人未进世界）'
+      exit 1
+    }
+    $heroPetEvents = @($heroPetSeqMarkers | ForEach-Object { $_.Substring('M3HEROPETSEQ '.Length).Trim() })
+    Set-Content -Path $heroPetMarkersPath -Value $heroPetEvents -Encoding utf8
+    $heroPetSend = @($heroPetEvents | Where-Object { $_ -match '"phase"\s*:\s*"send"' }).Count
+    $heroPetEnd = @($heroPetEvents | Where-Object { $_ -match '"phase"\s*:\s*"end"' }).Count
+    $heroPetDone = @($heroPetEvents | Where-Object { $_ -match '"phase"\s*:\s*"done"' }).Count
+    $heroPetExpectedSteps = @($HeroPetSteps.Split(';') | Where-Object { $_.Trim() -ne '' }).Count
+    Write-Output ("OPS_HEROPETSEQ send={0} end={1} done={2} expected_steps={3} bots={4}" -f $heroPetSend, $heroPetEnd, $heroPetDone, $heroPetExpectedSteps, $Bots)
+    if ($heroPetDone -lt $Bots) {
+      Write-Output ("RED: -HeroPetSequence 开了但 `M3HEROPETSEQ phase=done` 只有 {0} 条 < 假人数 {1} —— 两个假人没各自跑完整串" -f $heroPetDone, $Bots)
+      exit 1
+    }
+    if ($heroPetSend -lt ($heroPetExpectedSteps * $Bots) -or $heroPetEnd -lt ($heroPetExpectedSteps * $Bots)) {
+      Write-Output ("RED: -HeroPetSequence send={0} end={1} < 期望 {2}（steps={3} × bots={4}）—— 序列不完整，不能当『同一序列』" -f $heroPetSend, $heroPetEnd, ($heroPetExpectedSteps * $Bots), $heroPetExpectedSteps, $Bots)
+      exit 1
+    }
+    & python -I (Join-Path $Here 'hero_pet_diff.py') assemble $heroPetMarkersPath --out $heroPetRawPath --side $Side
+    if ($LASTEXITCODE -ne 0) {
+      Write-Output 'RED: hero_pet_diff.py assemble 失败（事件流缺 send/end 或 done.steps 不一致）—— 原始件不可判'
+      exit 1
+    }
+  }
   # 判据取"可靠段"：账号创建 + 登录成功 = N（实测稳定）。
   # 进世界之后的段位今日不可靠：BotSrv 会在 `TMap.CanMove` 崩溃并带走整个进程
   #（工具侧已知阻塞，见 m3/README.md「已知阻塞」），崩溃点与时序相关（有时停在"确认游戏公告"）。
@@ -681,7 +729,7 @@ if (-not $SkipBots) {
 # 修法 = **等状态变化**（轮询到本前缀角色存档落库），超时 ⇒ fail-closed（点名 RED，绝不静默继续）。
 # 仅 -BagEquipSequence/-AttackSequence（且非 -SkipBots）生效；其余路径逐字节不变（不加任何等待）。
 $saveSettleLabel = '(off)'
-if (($BagEquipSequence -or $AttackSequence -or $ShopSequence) -and -not $SkipBots) {
+if (($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $HeroPetSequence) -and -not $SkipBots) {
   if ([string]::IsNullOrEmpty($saveSettleRef)) { throw 'SAVE_SETTLE_REF 缺失——存档序列必须在 BEFORE 快照前取 DB 参考时刻（F-2）' }
   $saveSettleProbe = {
     $n = Invoke-Mysql (Get-M3SaveSettleProbeSql -ChrNamePrefix $Prefix -ReferenceTime $saveSettleRef)
@@ -695,7 +743,7 @@ if (($BagEquipSequence -or $AttackSequence -or $ShopSequence) -and -not $SkipBot
     throw ("RED: 断线存档未在 {0}s 内落库（{1}，landed={2}/{3}，ref={4}）—— AFTER 快照会漏掉本段改动（F-2 竞态）；绝不静默继续" -f `
       $SaveSettleTimeoutSeconds, $saveSettle.Reason, $saveSettle.LastLanded, $Bots, $saveSettleRef)
   }
-} elseif ($BagEquipSequence -or $AttackSequence -or $ShopSequence) {
+} elseif ($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $HeroPetSequence) {
   $saveSettleLabel = '(off: -SkipBots)'
   Write-Output 'SETTLE_SAVE_RCD SKIPPED (-SkipBots)'
 }
@@ -742,6 +790,9 @@ $baseline = [pscustomobject]@{
   attack_sequence = (Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence))
   shop_sequence = (Format-M3ShopScope -ShopSequence ([bool]$ShopSequence) -ShopOps $ShopOps -ShopStepMs $ShopStepMs -ShopStartDelayMs $ShopStartDelayMs -ShopNpcName $ShopNpcName -ShopItemName $ShopItemName -ShopItemMake $ShopItemMake -ShopCount $ShopCount -DisableAutoPlay ([bool]$ShopSequence))
   shop_markers = $shopSeqMarkers
+  hero_pet_sequence = (Format-M3HeroPetScope -HeroPetSequence ([bool]$HeroPetSequence) -HeroPetSteps $HeroPetSteps -HeroPetStepMs $HeroPetStepMs -HeroPetStartDelayMs $HeroPetStartDelayMs -HeroPetMasterRole $HeroPetMasterRole -HeroPetPeerRole $HeroPetPeerRole -DisableAutoPlay ([bool]$HeroPetSequence))
+  hero_pet_markers = $heroPetSeqMarkers
+  hero_pet_raw = $(if (Test-Path $heroPetRawPath) { (Split-Path $heroPetRawPath -Leaf) } else { '' })
   attack_pose = (Get-M3AttackPoseLabel)
   pin_attempts = $(if ($pinAttempts -ge 1) { Format-M3PinAttempts -Attempts $pinAttempts -Expected $pinAttemptsExpected -SettleRounds $pinSettleRounds -MaxAttempts $PinMaxAttempts } else { '(off)' })
   save_settle = $saveSettleLabel

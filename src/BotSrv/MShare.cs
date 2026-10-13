@@ -173,6 +173,190 @@ namespace BotSrv
             }
             return null;
         }
+
+        // ===== M3⑨ 英雄/宠物（宝宝/下属 slave）夹具（卡 openmir2-m3-hero-pet-fixture-botsrv；白名单 T-45）=====
+        // 口径：收到本假人 SM_LOGON 后按 `g_sHeroPetSteps` 的固定步骤串（`role|op|param;...`）发召唤/攻击，
+        // 逐步落 `M3HEROPETSEQ {json}` 的 send/frame/end/done 事件（供 `hero_pet_diff.py assemble` 合并成记录）。
+        // 只读本假人自己的视图（`MShare.MySelf.SlaveObject` / `PlayScene.ActorList` / `MShare.ItemArr`）、
+        // 只写本假人自己的 socket（同 T-22/T-29/T-44 纪律）；默认关时本区块全部空转、不新增任何发送与日志。
+        public static bool g_boHeroPetSequence = false;
+        public static int g_nHeroPetStepMs = 1000;
+        public static int g_nHeroPetStartDelayMs = 3000;
+        public static string g_sHeroPetSteps = "";
+        /// <summary>主人（召唤者）的账号序号（默认 0）。</summary>
+        public static int g_nHeroPetMasterRole = 0;
+        /// <summary>peer 的账号序号（默认 1）。</summary>
+        public static int g_nHeroPetPeerRole = 1;
+        /// <summary>主人精确 LoginId（= LoginAccount + HeroPetMasterRole）。</summary>
+        public static string g_sHeroPetMasterLoginId = string.Empty;
+        /// <summary>peer 精确 LoginId（= LoginAccount + HeroPetPeerRole）。</summary>
+        public static string g_sHeroPetPeerLoginId = string.Empty;
+
+        private static readonly string[] HeroPetAllowedOps =
+        {
+            // 召唤：param = 技能号 17/20/30/41/46（MagicManager.cs:373/397/455/467/590）
+            "summon",
+            // 主人挥击（CM_HIT 3014）：用于「主人自击 vs 宝宝击杀」两档对照
+            "attack",
+            // 只观测不发送：捕获宝宝列表/名色/主人经验/等级
+            "observe",
+            // 只等时间推进（时间门须可注入时钟）
+            "wait",
+            // 掉线中断（CM_SOFTCLOSE(1009)）
+            "softclose"
+        };
+
+        private static readonly string[] HeroPetAllowedRoles = { "a", "b", "x" };
+
+        /// <summary>M3⑨ 夹具：解析步骤串 `role|op|param;...`（保留顺序）。纯函数。
+        /// 字段数 != 3 / 未知 role / 未知 op / 空角色 ⇒ 一律丢弃（fail-closed：宁可少发，也不发不认识的动作）。</summary>
+        public static string[] ParseHeroPetSteps(string raw)
+        {
+            var outList = new List<string>();
+            if (string.IsNullOrEmpty(raw))
+            {
+                return outList.ToArray();
+            }
+            foreach (string part in raw.Split(';'))
+            {
+                string step = part.Trim();
+                if (step.Length == 0)
+                {
+                    continue;
+                }
+                string[] f = step.Split('|');
+                if (f.Length != 3)
+                {
+                    continue;
+                }
+                string role = f[0].Trim().ToLowerInvariant();
+                string op = f[1].Trim().ToLowerInvariant();
+                string param = f[2].Trim();
+                if (role.Length == 0 || op.Length == 0)
+                {
+                    continue;
+                }
+                if (Array.IndexOf(HeroPetAllowedRoles, role) < 0)
+                {
+                    continue;
+                }
+                if (Array.IndexOf(HeroPetAllowedOps, op) < 0)
+                {
+                    continue;
+                }
+                outList.Add(role + "|" + op + "|" + param);
+            }
+            return outList.ToArray();
+        }
+
+        /// <summary>M3⑨ 夹具：LoginId 是否就是唯一主人。精确相等（非 EndsWith）。纯函数。</summary>
+        public static bool IsHeroPetMaster(string loginId, string masterLoginId)
+        {
+            return !string.IsNullOrEmpty(masterLoginId)
+                && string.Equals(loginId, masterLoginId, StringComparison.Ordinal);
+        }
+
+        /// <summary>M3⑨ 夹具：步骤 role（a/b/x；非法 ⇒ 空串）。纯函数。</summary>
+        public static string HeroPetStepRole(string step)
+        {
+            if (string.IsNullOrEmpty(step)) { return string.Empty; }
+            string[] f = step.Split('|');
+            return f.Length == 3 ? f[0] : string.Empty;
+        }
+
+        /// <summary>M3⑨ 夹具：步骤 op（非法 ⇒ 空串）。纯函数。</summary>
+        public static string HeroPetStepOp(string step)
+        {
+            if (string.IsNullOrEmpty(step)) { return string.Empty; }
+            string[] f = step.Split('|');
+            return f.Length == 3 ? f[1] : string.Empty;
+        }
+
+        /// <summary>M3⑨ 夹具：步骤 param（非法 ⇒ 空串）。纯函数。</summary>
+        public static string HeroPetStepParam(string step)
+        {
+            if (string.IsNullOrEmpty(step)) { return string.Empty; }
+            string[] f = step.Split('|');
+            return f.Length == 3 ? f[2] : string.Empty;
+        }
+
+        /// <summary>M3⑨ 夹具：本步是否由当前角色执行（x=两者 / a=仅主人 / b=仅 peer；非法 role ⇒ false）。纯函数。</summary>
+        public static bool HeroPetRunsForRole(string role, bool isMaster)
+        {
+            if (role == "x") { return true; }
+            if (role == "a") { return isMaster; }
+            if (role == "b") { return !isMaster; }
+            return false;
+        }
+
+        /// <summary>M3⑨ 夹具：从帧 JSON 串取 `sm` 整数（缺/非法 ⇒ null）。纯函数；不用 JSON 子串硬匹配。</summary>
+        public static int? HeroPetFrameSm(string fr)
+        {
+            if (string.IsNullOrEmpty(fr))
+            {
+                return null;
+            }
+            int idx = fr.IndexOf("\"sm\":", StringComparison.Ordinal);
+            if (idx < 0)
+            {
+                return null;
+            }
+            int start = idx + 5;
+            int end = start;
+            while (end < fr.Length && (char.IsDigit(fr[end]) || fr[end] == '-'))
+            {
+                end++;
+            }
+            if (end <= start)
+            {
+                return null;
+            }
+            return int.TryParse(fr.Substring(start, end - start), out int val) ? (int?)val : null;
+        }
+
+        /// <summary>M3⑨ 夹具：把本步收到的帧 JSON 串归类成 branch。纯函数，唯一口径 = 本函数。
+        /// 口径：无帧 ⇒ fail_no_frame；出现任一失败帧（SM_MENU_OK 含 `[错误`）⇒ fail_reject；
+        /// 出现任一召唤/经验/升级/名色/死亡帧 ⇒ ok；其余 ⇒ frames_unclassified。
+        /// 宝宝失败门（nMaxMob/SlaveList.Count）本身不发失败帧 ⇒ 由 slave_count_after 承载，本字段只作粗归类。</summary>
+        public static string ClassifyHeroPetFrames(IList<string> frames)
+        {
+            if (frames == null)
+            {
+                return "fail_no_frame";
+            }
+            bool sawAny = false;
+            bool sawFail = false;
+            bool sawOk = false;
+            foreach (string fr in frames)
+            {
+                if (fr == null) { continue; }
+                int? sm = HeroPetFrameSm(fr);
+                if (sm == null) { continue; }
+                sawAny = true;
+                switch (sm.Value)
+                {
+                    case 767:   // SM_MENU_OK（[成功]/[错误] 文案）
+                        if (fr.IndexOf("[\u9519\u8bef", StringComparison.Ordinal) >= 0) { sawFail = true; }
+                        else { sawOk = true; }
+                        break;
+                    case 17:    // SM_SPELL（施法效果）
+                    case 31:    // SM_STRUCK
+                    case 32:    // SM_DEATH（宝宝/怪阵亡）
+                    case 44:    // SM_WINEXP（经验）
+                    case 45:    // SM_LEVELUP（升级）
+                    case 53:    // SM_HEALTHSPELLCHANGED
+                    case 656:   // SM_CHANGENAMECOLOR（宝宝名色 = SlaveColor）
+                        sawOk = true;
+                        break;
+                    default:
+                        break;
+                }
+            }
+            if (sawFail) { return "fail_reject"; }
+            if (sawOk) { return "ok"; }
+            return sawAny ? "frames_unclassified" : "fail_no_frame";
+        }
+
         /// <summary>
         /// M1③ 退出路径夹具（卡 openmir2-m1-dbsrv-6000-face；白名单 M1-EXIT）：
         /// 收到本假人 SM_LOGON 后等这么久，按客户端 AppLogout 的线上形状发一条

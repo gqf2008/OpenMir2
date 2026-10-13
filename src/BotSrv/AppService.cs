@@ -57,6 +57,15 @@ namespace BotSrv
             MShare.g_sShopItemName = _options.ShopItemName ?? string.Empty;
             MShare.g_nShopItemMake = _options.ShopItemMake;
             MShare.g_nShopCount = _options.ShopCount;
+            // M3⑨ 夹具（白名单 T-45 家族扩展）：固定英雄/宠物动作序列；默认 false = 原行为
+            MShare.g_boHeroPetSequence = _options.HeroPetSequence;
+            MShare.g_nHeroPetStepMs = _options.HeroPetStepMs;
+            MShare.g_nHeroPetStartDelayMs = _options.HeroPetStartDelayMs;
+            MShare.g_sHeroPetSteps = _options.HeroPetSteps ?? string.Empty;
+            MShare.g_nHeroPetMasterRole = _options.HeroPetMasterRole;
+            MShare.g_nHeroPetPeerRole = _options.HeroPetPeerRole;
+            MShare.g_sHeroPetMasterLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.HeroPetMasterRole);
+            MShare.g_sHeroPetPeerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.HeroPetPeerRole);
             // M1③ 退出路径夹具（白名单 M1-EXIT）：进世界后发 CM_SOFTCLOSE；默认 0 = 原行为
             MShare.g_nSoftCloseAfterWorldMs = _options.SoftCloseAfterWorldMs;
             MShare.g_boDisableAutoPlay = _options.DisableAutoPlay;
@@ -96,6 +105,11 @@ namespace BotSrv
             {
                 LogService.Info("固定 NPC/商店序列: 启用 ops={0} 起始等待={1}ms 步间隔={2}ms npc={3} item={4}（开面板/买/卖/修理/存取；见 RobotPlayer.ShopSequenceTick）",
                     _options.ShopOps, _options.ShopStartDelayMs, _options.ShopStepMs, _options.ShopNpcName, _options.ShopItemName);
+            }
+            if (_options.HeroPetSequence)
+            {
+                LogService.Info("固定英雄/宠物序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms 主人序号={3} peer序号={4}（见 RobotPlayer.HeroPetSequenceTick）",
+                    _options.HeroPetSteps, _options.HeroPetStartDelayMs, _options.HeroPetStepMs, _options.HeroPetMasterRole, _options.HeroPetPeerRole);
             }
         }
 

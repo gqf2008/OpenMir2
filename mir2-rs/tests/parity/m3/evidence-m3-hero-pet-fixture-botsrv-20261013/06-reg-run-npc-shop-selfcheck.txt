@@ -1,0 +1,22 @@
+=== run_npc_shop_pair.ps1 -SelfCheckNoStack (regression) ===
+SELFTEST_NO_STACK: 无栈自检——所有路径都必须 fail-closed（缺失绝不静默 GREEN）
+SELFTEST ok scenario-fixed-input (canon/cases/buy_sell_repair/storage)
+SELFTEST ok comparator-selftest (rc=0)
+SELFTEST ok identical-green (rc=0)
+SELFTEST ok mutate-branch-red (rc=1)
+SELFTEST ok missing-file-prereq (rc=2)
+SELFTEST ok emit-on-coupling (scope=on ops=sell,buy step_ms=1000 start_delay_ms=3000 npc=卫家店 item=木剑 make=0 n=1 disable_autoplay=True)
+SELFTEST ok emit-off-default (scope=(off))
+SELFTEST ok peer-scope-red (codes=peer_shop_scope_mismatch)
+SELFTEST ok peer-scope-green (codes=)
+SELFTEST ok no-stack-port-guard (rc=2)
+SELFTEST ok diffonly-missing-prereq (rc=2)
+SELFTEST ok assembleonly-missing-prereq (rc=2)
+SELFTEST ok rust-preflight-teeth (empty=false hit=true)
+SELFTEST ok no-go-realrun-prereq (rc=2)
+SELFTEST ok botsrv-shopseq-selftest (rc=0)
+SELFTEST ok lf-writer-selftest
+SELFTEST ok no-port-touched (offline-only)
+SELFTEST ok=17/17 failures=
+GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + 入口/DiffOnly/AssembleOnly/preflight/no-Go fail-closed + LF + 零端口）
+rc=0

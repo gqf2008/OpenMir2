@@ -51,6 +51,12 @@ param(
   [string]$ShopItemName = '',        # 仅 -ShopSequence 时生效：动作物品名（空 = 背包第一件）
   [int]$ShopItemMake = 0,            # 仅 -ShopSequence 时生效：物品 MakeIndex（0 = 只按名字取）
   [int]$ShopCount = 1,               # 仅 -ShopSequence 时生效：卖/买/存取数量
+  [switch]$HeroPetSequence,          # M3⑨ 夹具：进世界后按固定顺序发召唤/挥击（宝宝/下属；T-45 家族）
+  [string]$HeroPetSteps = '',        # 仅 -HeroPetSequence 时生效：`role|op|param;...`
+  [int]$HeroPetStepMs = 1000,        # 仅 -HeroPetSequence 时生效：每步间隔
+  [int]$HeroPetStartDelayMs = 3000,  # 仅 -HeroPetSequence 时生效：进世界到第一步的额外等待
+  [int]$HeroPetMasterRole = 0,       # 仅 -HeroPetSequence 时生效：主人账号序号
+  [int]$HeroPetPeerRole = 1,         # 仅 -HeroPetSequence 时生效：peer 账号序号
   [int]$SoftCloseAfterWorldMs = 0,   # M1③ 退出路径夹具：进世界后发 CM_SOFTCLOSE(1009)；0=关（默认）
   [switch]$DisableAutoPlay,          # M1③ 退出路径夹具：关掉自动挂机（默认关=原行为）；见 ClientManager.RunAutoPlay
   [switch]$WriteConfigOnly,       # 只写 AppSetting.json 并退出（不构建/不起进程；供无栈自检与红检用）
@@ -73,9 +79,10 @@ $BotExe = Join-Path $BotBinDir "BotSrv.exe"
 #   attack = BotSrv `M3ATTSEQ {"role":"done",...}`（RobotPlayer.cs:674；F-E 收尾证据）
 #   bag    = `M3BAGSEQ done`（T-14）
 function Get-M3SeqDoneCount {
-    param([AllowEmptyString()][string]$Text, [ValidateSet('bag', 'attack', 'shop')][string]$Kind)
+    param([AllowEmptyString()][string]$Text, [ValidateSet('bag', 'attack', 'shop', 'heropet')][string]$Kind)
     if ($Kind -eq 'bag') { return ([regex]::Matches($Text, 'M3BAGSEQ done')).Count }
     if ($Kind -eq 'shop') { return ([regex]::Matches($Text, 'M3SHOPSEQ \{[^\r\n]*"phase":"done"')).Count }
+    if ($Kind -eq 'heropet') { return ([regex]::Matches($Text, 'M3HEROPETSEQ \{[^\r\n]*"phase":"done"')).Count }
     return ([regex]::Matches($Text, 'M3ATTSEQ \{[^\r\n]*"role":"done"')).Count
 }
 
@@ -87,14 +94,14 @@ function Get-M3SeqDoneCount {
 # ⇒ `-Bots 2` 时永远等不到第 2 条 done（实测 `attack_seq_done=1/2` 卡到超时/进程退出再报 RED），
 # 把**已经跑完整**的序列误判成截断。
 function Get-M3SeqExpectedDone {
-    param([ValidateSet('bag', 'attack', 'shop')][string]$Kind, [int]$Bots)
+    param([ValidateSet('bag', 'attack', 'shop', 'heropet')][string]$Kind, [int]$Bots)
     if ($Kind -eq 'attack') { return 1 }
     return $Bots
 }
 
 # 收尾判据唯一口径：done 数达到本序列的预期 done 数。
 function Test-M3SeqComplete {
-    param([ValidateSet('bag', 'attack', 'shop')][string]$Kind, [int]$Done, [int]$Bots)
+    param([ValidateSet('bag', 'attack', 'shop', 'heropet')][string]$Kind, [int]$Done, [int]$Bots)
     return ($Done -ge (Get-M3SeqExpectedDone -Kind $Kind -Bots $Bots))
 }
 
@@ -116,6 +123,12 @@ if ($SelfCheckNoStack) {
     if ((Get-M3SeqDoneCount -Text 'M3SHOPSEQ {"phase":"done","ops":7}' -Kind shop) -ne 1) { $fail += 'shop_done_1' }
     if ((Get-M3SeqDoneCount -Text 'M3SHOPSEQ {"phase":"send","k":0,"op":"sell"}' -Kind shop) -ne 0) { $fail += 'shop_done_0' }
     if ((Get-M3SeqExpectedDone -Kind shop -Bots 1) -ne 1) { $fail += 'shop_expected_not_bots' }
+    # M3⑨：英雄/宠物序列收尾标记（`M3HEROPETSEQ {"phase":"done",...}`；每个假人各自一条）
+    if ((Get-M3SeqDoneCount -Text 'M3HEROPETSEQ {"phase":"done","steps":3}' -Kind heropet) -ne 1) { $fail += 'heropet_done_1' }
+    if ((Get-M3SeqDoneCount -Text 'M3HEROPETSEQ {"phase":"send","k":0,"op":"summon"}' -Kind heropet) -ne 0) { $fail += 'heropet_done_0' }
+    if ((Get-M3SeqExpectedDone -Kind heropet -Bots 2) -ne 2) { $fail += 'heropet_expected_not_bots' }
+    if (-not (Test-M3SeqComplete -Kind heropet -Done 2 -Bots 2)) { $fail += 'heropet_2of2_not_complete' }
+    if (Test-M3SeqComplete -Kind heropet -Done 1 -Bots 2) { $fail += 'heropet_1of2_complete' }
     # 预期 done 数：attack=1（只有 attacker） / bag=$Bots。
     if ((Get-M3SeqExpectedDone -Kind attack -Bots 2) -ne 1) { $fail += 'attack_expected_not_1' }
     if ((Get-M3SeqExpectedDone -Kind attack -Bots 7) -ne 1) { $fail += 'attack_expected_not_1_multibot' }
@@ -198,6 +211,12 @@ $cfg = @{
     ShopItemName        = $ShopItemName
     ShopItemMake        = $ShopItemMake
     ShopCount           = $ShopCount
+    HeroPetSequence     = [bool]$HeroPetSequence
+    HeroPetSteps        = $HeroPetSteps
+    HeroPetStepMs       = $HeroPetStepMs
+    HeroPetStartDelayMs = $HeroPetStartDelayMs
+    HeroPetMasterRole   = $HeroPetMasterRole
+    HeroPetPeerRole     = $HeroPetPeerRole
   }
 } | ConvertTo-Json -Depth 4
 New-Item -ItemType Directory -Force -Path $BotBinDir | Out-Null
@@ -223,6 +242,9 @@ if ($StopAfterCharCreated) {
 }
 if ($ShopSequence) {
     Write-Output "CONFIG_SHOPSHQ ops=$ShopOps step_ms=$ShopStepMs start_delay_ms=$ShopStartDelayMs npc=$ShopNpcName item=$ShopItemName make=$ShopItemMake n=$ShopCount"
+}
+if ($HeroPetSequence) {
+    Write-Output "CONFIG_HEROPETSEQ steps=$HeroPetSteps step_ms=$HeroPetStepMs start_delay_ms=$HeroPetStartDelayMs master=$HeroPetMasterRole peer=$HeroPetPeerRole"
 }
 
 # 无栈自检/红检：只写配置即退（不构建、不起进程）。
@@ -253,6 +275,7 @@ $worldOk = 0
 $bagDone = 0
 $attackDone = 0
 $shopDone = 0
+$heroPetDone = 0
 $attackExpected = Get-M3SeqExpectedDone -Kind attack -Bots $Count
 $charCreated = 0
 function Read-SharedText([string]$Path) {
@@ -296,6 +319,10 @@ while ((Get-Date) -lt $deadline) {
     # M3⑤：商店序列收尾证据 = 每个假人一条 `M3SHOPSEQ {"phase":"done",...}`；不判它就会在 login_ok 处立即 kill。
     $shopDone = Get-M3SeqDoneCount -Text (Read-SharedText $LogFile) -Kind shop
   }
+  if ($HeroPetSequence) {
+    # M3⑨：英雄/宠物序列收尾证据 = 每个假人一条 `M3HEROPETSEQ {"phase":"done",...}`。
+    $heroPetDone = Get-M3SeqDoneCount -Text (Read-SharedText $LogFile) -Kind heropet
+  }
   if ($RequireCharCreated) {
     # 固定起点预热：等「创建角色」标记（BotSrv `SelectChrScene.cs` 的 LogService.Info）
     $charCreated = ([regex]::Matches((Read-SharedText $LogFile), '创建角色')).Count
@@ -303,13 +330,17 @@ while ((Get-Date) -lt $deadline) {
   $bagNote = if ($BagEquipSequence) { " bag_seq_done=" + $bagDone + "/" + $Count } else { "" }
   $atkNote = if ($AttackSequence) { " attack_seq_done=" + $attackDone + "/" + $attackExpected } else { "" }
   $shopNote = if ($ShopSequence) { " shop_seq_done=" + $shopDone + "/" + $Count } else { "" }
-  Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " in_world=" + $worldOk + "/" + $Count + $bagNote + $atkNote + $shopNote + " (src=load_stats.ndjson)")
+  $heroPetNote = if ($HeroPetSequence) { " hero_pet_seq_done=" + $heroPetDone + "/" + $Count } else { "" }
+  Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " in_world=" + $worldOk + "/" + $Count + $bagNote + $atkNote + $shopNote + $heroPetNote + " (src=load_stats.ndjson)")
   if ($BagEquipSequence) {
     # T-14：序列跑完（每个假人一条 done）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
     if ($success -ge $Count -and $bagDone -ge $Count) { break }
   } elseif ($ShopSequence) {
     # M3⑤：商店序列跑完（每个假人一条 done）才算收工。
     if ($success -ge $Count -and (Test-M3SeqComplete -Kind shop -Done $shopDone -Bots $Count)) { break }
+  } elseif ($HeroPetSequence) {
+    # M3⑨：英雄/宠物序列跑完（每个假人各自一条 done）才算收工。
+    if ($success -ge $Count -and (Test-M3SeqComplete -Kind heropet -Done $heroPetDone -Bots $Count)) { break }
   } elseif ($AttackSequence) {
     # F-E：攻击序列跑完（attacker 的 done 到位）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
     if ($success -ge $Count -and (Test-M3SeqComplete -Kind attack -Done $attackDone -Bots $Count)) { break }
@@ -333,6 +364,7 @@ $summary = [pscustomobject]@{
   bag_seq_done = $bagDone; bag_equip_sequence = [bool]$BagEquipSequence
   attack_seq_done = $attackDone; attack_sequence = [bool]$AttackSequence
   shop_seq_done = $shopDone; shop_sequence = [bool]$ShopSequence
+  hero_pet_seq_done = $heroPetDone; hero_pet_sequence = [bool]$HeroPetSequence
   char_created = $charCreated; require_char_created = [bool]$RequireCharCreated
   success_rate_pct = $rate; world_rate_pct = $worldRate; require_world = [bool]$RequireWorld
   timeout_sec = $TimeoutSec; log = $LogFile; stats = $statsPath
@@ -351,9 +383,13 @@ if ($SelfTestRed) {
   exit 1
 }
 
-if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count) -and (-not $BagEquipSequence -or $bagDone -ge $Count) -and (-not $ShopSequence -or (Test-M3SeqComplete -Kind shop -Done $shopDone -Bots $Count)) -and (-not $AttackSequence -or $attackDone -ge $attackExpected) -and (-not $RequireCharCreated -or $charCreated -ge $Count)) {
-  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }) + $(if ($BagEquipSequence) { "；bag_seq_done=" + $bagDone + "/" + $Count } else { "" }) + $(if ($ShopSequence) { "；shop_seq_done=" + $shopDone + "/" + $Count } else { "" }) + $(if ($AttackSequence) { "；attack_seq_done=" + $attackDone + "/" + $attackExpected } else { "" }) + $(if ($RequireCharCreated) { "；char_created=" + $charCreated + "/" + $Count } else { "" }))
+if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count) -and (-not $BagEquipSequence -or $bagDone -ge $Count) -and (-not $ShopSequence -or (Test-M3SeqComplete -Kind shop -Done $shopDone -Bots $Count)) -and (-not $HeroPetSequence -or (Test-M3SeqComplete -Kind heropet -Done $heroPetDone -Bots $Count)) -and (-not $AttackSequence -or $attackDone -ge $attackExpected) -and (-not $RequireCharCreated -or $charCreated -ge $Count)) {
+  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }) + $(if ($BagEquipSequence) { "；bag_seq_done=" + $bagDone + "/" + $Count } else { "" }) + $(if ($ShopSequence) { "；shop_seq_done=" + $shopDone + "/" + $Count } else { "" }) + $(if ($HeroPetSequence) { "；hero_pet_seq_done=" + $heroPetDone + "/" + $Count } else { "" }) + $(if ($AttackSequence) { "；attack_seq_done=" + $attackDone + "/" + $attackExpected } else { "" }) + $(if ($RequireCharCreated) { "；char_created=" + $charCreated + "/" + $Count } else { "" }))
   exit 0
+}
+if ($HeroPetSequence -and -not (Test-M3SeqComplete -Kind heropet -Done $heroPetDone -Bots $Count)) {
+  Write-Output ("RED: " + $Count + " 个假人的英雄/宠物序列只跑完 " + $heroPetDone + "/" + $Count + "（缺 M3HEROPETSEQ phase=done）——序列不完整，不能当『同一序列』")
+  exit 1
 }
 if ($ShopSequence -and -not (Test-M3SeqComplete -Kind shop -Done $shopDone -Bots $Count)) {
   Write-Output ("RED: " + $Count + " 个假人的商店序列只跑完 " + $shopDone + "/" + $Count + "（缺 M3SHOPSEQ phase=done）——序列不完整，不能当『同一序列』")
