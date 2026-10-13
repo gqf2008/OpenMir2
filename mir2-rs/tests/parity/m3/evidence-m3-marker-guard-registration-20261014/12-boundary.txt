@@ -1,0 +1,29 @@
+$ git rev-parse origin/master
+266bdbd1758e5d266c1522c27786f5da50767d46
+
+$ git diff --name-status origin/master -- mir2-rs/tests/parity/m3
+M	mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py
+M	mir2-rs/tests/parity/m3/fixture_chain_gate.py
+M	mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py
+M	mir2-rs/tests/parity/m3/guild_castle_scenario.json
+M	mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py
+M	mir2-rs/tests/parity/m3/marker_prefix_gate.py
+M	mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1
+
+$ git diff --stat origin/master -- mir2-rs/tests/parity/m3/marker_prefix_gate.py mir2-rs/tests/parity/m3/fixture_chain_gate.py
+ mir2-rs/tests/parity/m3/fixture_chain_gate.py | 18 +++++++++++--
+ mir2-rs/tests/parity/m3/marker_prefix_gate.py | 39 ++++++++++++++++++++++++---
+ 2 files changed, 51 insertions(+), 6 deletions(-)
+
+$ git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+(空 = 冻结面未动)
+
+$ git diff --name-only origin/master -- src/BotSrv
+(空 = BotSrv 未动)
+
+$ *.rs 计数
+0
+
+改动文件 sha256（盘上 LF 字节 = 仓库二进制口径）:
+9ecacff550a1da8ac66fd32899f9cdb8e1dc79ec95edad725aefb6d61f048a75 *mir2-rs/tests/parity/m3/marker_prefix_gate.py
+1c2759eb74cdd5d9684bfecb68d55175b2de454a1fcd335cfe08aa1fd82cf66f *mir2-rs/tests/parity/m3/fixture_chain_gate.py

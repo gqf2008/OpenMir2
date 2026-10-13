@@ -20,6 +20,9 @@ r"""marker_prefix_gate.py — M3 夹具 markers 前缀口径 fail-closed 门。
    `.Substring('<M3*SEQ> '.Length)`（注释行跳过；同族新块如 ⑧/⑨ 也会被咬住）；
 2. `run_pair.ps1` 必须为 `COMPARATORS` 里每个序列都接上生产 fail-closed 牙
    `Assert-M3MarkerPrefix -Path ... -Marker '<M3*SEQ>'`（缺一个 ⇒ RED）；
+   且 `run_pair.ps1` 里出现的**每个**牙 Marker 都必须登记在 `COMPARATORS`
+   **或** `GUARD_ONLY_MARKERS`（新夹具族漏登记 ⇒ `check`/`selftest` 双 RED，而不是只靠自检）；
+   `GUARD_ONLY_MARKERS` 是「有 markers 流牙、但比较器消费 BotSrv 直写原始件」的显式例外清单；
 3. `COMPARATORS` 里每个比较器的 `_marker_events` 必须仍按前缀扫描
    （`line.find("<M3*SEQ> ")`；缺一个 ⇒ RED）；
 4. 运行时牙：同一份合法事件流**带前缀** ⇒ `assemble` rc=0；**去前缀（裸 JSON）** ⇒ rc=2；
@@ -65,6 +68,16 @@ COMPARATORS = [
     # ⑧/⑨ 夹具已合入（guild_castle / hero_pet），按同族口径纳入本门。
     ("M3GUILDCSEQ", "guild_castle_diff.py"),
     ("M3HEROPETSEQ", "hero_pet_diff.py"),
+]
+
+# 有 markers 流牙、但比较器**不**按 `line.find("<M3*SEQ> ")` 扫前缀的显式例外。
+# 这类族的比较器消费 BotSrv「直写原始件」（如 ④ 的 `drop_exp_raw.jsonl`），markers 流只用于
+# 断言「序列确实跑过」。例外必须逐条登记：`run_pair.ps1` 里新出现一个未登记的牙 ⇒ 双 RED
+# （`check` 与 `selftest`），防止未来新增夹具族时静默漏登记。
+GUARD_ONLY_MARKERS = [
+    # M3④ 掉落/经验：run_pair.ps1 的 `-DropExpSequence` 块断言 `M3DROPEXPSEQ` 前缀，
+    # 但 `drop-exp/drop_exp_diff.py` 比的是 BotSrv `-DropExpOut` 直写的 `drop_exp_raw.jsonl`。
+    "M3DROPEXPSEQ",
 ]
 
 # 写侧必须已把「同前缀非 JSON 诊断行」（defect_2）改成 `M3*SEQ_SKIP` 独立前缀的序列族。
@@ -137,6 +150,12 @@ def scan_botsrv_bare_skips(path=BOTSRV_ROBOT_PLAYER):
         return _scan_botsrv_text(fh.read())
 
 
+def guards_wired(guard_markers):
+    """生产牙集合必须恰 = `COMPARATORS` ∪ `GUARD_ONLY_MARKERS`（多一个未登记族 ⇒ RED）。"""
+    expected = set(m for m, _ in COMPARATORS) | set(GUARD_ONLY_MARKERS)
+    return set(guard_markers) == expected
+
+
 def comparator_requires_prefix(path, marker):
     with open(path, "r", encoding="utf-8") as fh:
         text = fh.read()
@@ -201,6 +220,12 @@ def _evaluate(run_pair=RUN_PAIR, botsrv=BOTSRV_ROBOT_PLAYER):
 
     guards = scan_guards(run_pair)
     guard_markers = set(m for m, _ in guards)
+    registered = set(m for m, _ in COMPARATORS) | set(GUARD_ONLY_MARKERS)
+    for marker, var in guards:
+        if marker not in registered:
+            findings.append(
+                "run_pair.ps1 生产牙 Marker '%s'（$%s）未登记：新增夹具族必须加进 "
+                "COMPARATORS 或 GUARD_ONLY_MARKERS" % (marker, var))
     for marker, _cmp in COMPARATORS:
         if marker not in guard_markers:
             findings.append("run_pair.ps1 缺生产 fail-closed 牙 Assert-M3MarkerPrefix -Marker '%s'" % marker)
@@ -358,10 +383,11 @@ def cmd_check(args):
             sys.stdout.write("  - %s\n" % f)
         return 1
     sys.stdout.write(
-        "GREEN: markers 前缀口径一致（run_pair 无去前缀截断 + %d 生产牙 + %d 比较器按前缀扫描；"
-        "BotSrv 已迁 %d 族无裸前缀 skip 诊断；"
+        "GREEN: markers 前缀口径一致（run_pair 无去前缀截断 + %d 生产牙（含 %d 个 guard-only 例外）"
+        "+ %d 比较器按前缀扫描；BotSrv 已迁 %d 族无裸前缀 skip 诊断；"
         "teeth bare=%d prefixed=%d empty=%d skip_prefixed=%d skip_bare=%d）\n"
-        % (len(COMPARATORS), len(COMPARATORS), len(SKIP_FAMILIES), info["bare_rc"],
+        % (len(COMPARATORS) + len(GUARD_ONLY_MARKERS), len(GUARD_ONLY_MARKERS),
+           len(COMPARATORS), len(SKIP_FAMILIES), info["bare_rc"],
            info["prefixed_rc"], info["empty_rc"],
            info["skip_prefixed_rc"], info["skip_bare_rc"]))
     return 0
@@ -387,7 +413,12 @@ def cmd_selftest(args):
 
     findings, info = _evaluate()
     check("real-run-pair-no-strip", not info["strips"])
-    check("real-guards-wired", set(m for m, _ in info["guards"]) == set(m for m, _ in COMPARATORS))
+    guard_markers = [m for m, _ in info["guards"]]
+    check("real-guards-wired", guards_wired(guard_markers))
+    check("guards-extra-unregistered-red",
+          not guards_wired(guard_markers + ["M3NEWSEQ"]))
+    check("guards-guard-only-ok",
+          guards_wired([m for m, _ in COMPARATORS] + list(GUARD_ONLY_MARKERS)))
     for marker, cmp in COMPARATORS:
         check("comparator-requires-prefix-%s" % marker,
               comparator_requires_prefix(os.path.join(HERE, cmp), marker))

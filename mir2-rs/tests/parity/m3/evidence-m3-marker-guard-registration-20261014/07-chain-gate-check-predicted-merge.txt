@@ -1,0 +1,9 @@
+# 预判合并树 = 本片 (marker_prefix_gate.py + fixture_chain_gate.py) + 待审片 fixture-family-minors 的 ⑧ 锚门收口
+# （④ 夹具漏登记的红由本片修；⑧ 行会锚门 BotSrv 行号漂移的红由待审片修）
+$ python -I fixture_chain_gate.py check --require-all
+guild_castle_anchor_selftest present    rc=0 :: SELFTEST GREEN
+guild_castle_anchor_check present    rc=0 :: GREEN: guild/castle 场景锚门通过（31 锚 / 92 行点全部命中冻结 src/ 且覆盖面闭合）
+marker_prefix_selftest present    rc=0 :: SELFTEST ok=26/26
+marker_prefix_check present    rc=0 :: GREEN: markers 前缀口径一致（run_pair 无去前缀截断 + 7 生产牙（含 1 个 guard-only 例外）+ 6 比较器按前缀扫描；B
+FIXTURE_CHAIN GREEN: runner_ok=10 prereq_or_skip=0 red=0（--require-all）
+rc=0

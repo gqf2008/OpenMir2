@@ -1,0 +1,9 @@
+# 本片 base = origin/master 4c0762c83（未含待审的 fixture-family-minors 片）
+$ python -I fixture_chain_gate.py check --require-all
+marker_prefix_selftest present    rc=0 :: SELFTEST ok=26/26
+marker_prefix_check present    rc=0 :: GREEN: markers 前缀口径一致（run_pair 无去前缀截断 + 7 生产牙（含 1 个 guard-only 例外）+ 6 比较器按前缀扫描；B
+FIXTURE_CHAIN RED: runner_ok=9 prereq_or_skip=0 red=3
+  RED 8 公会 / 攻城：runner -SelfCheckNoStack rc=1（SELFTEST ok=19/22 failures=anchor-gate-check,anchor-gate-selftest,anchor-gate-mutation-red）
+  RED 共享管线 guild_castle_anchor_selftest：mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py rc=1（SELFTEST RED）
+  RED 共享管线 guild_castle_anchor_check：mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py rc=1（- 读侧不匹配 RobotPlayer.cs:4553:4553 期望含 'private void SendMerchantDlgSelect(int merchant, string rstr)'，实际 'MShare.g_WaitingStallItem.Item.Item.Name = "";'）
+rc=1

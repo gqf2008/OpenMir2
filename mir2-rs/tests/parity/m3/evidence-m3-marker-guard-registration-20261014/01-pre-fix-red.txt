@@ -1,0 +1,31 @@
+$ python -I marker_prefix_gate.py check   # pre-fix (master 4c0762c83)
+GREEN: markers 前缀口径一致（run_pair 无去前缀截断 + 6 生产牙 + 6 比较器按前缀扫描；BotSrv 已迁 7 族无裸前缀 skip 诊断；teeth bare=2 prefixed=0 empty=2 skip_prefixed=0 skip_bare=2）
+rc=0
+
+$ python -I marker_prefix_gate.py selftest   # pre-fix
+SELFTEST ok scan-good-clean
+SELFTEST ok scan-catches-strip
+SELFTEST ok scan-ignores-comment
+SELFTEST ok real-run-pair-no-strip
+SELFTEST FAIL real-guards-wired
+SELFTEST ok comparator-requires-prefix-M3SHOPSEQ
+SELFTEST ok comparator-requires-prefix-M3QUESTSEQ
+SELFTEST ok comparator-requires-prefix-M3PAIRTRADESEQ
+SELFTEST ok comparator-requires-prefix-M3SELLOFFSEQ
+SELFTEST ok comparator-requires-prefix-M3GUILDCSEQ
+SELFTEST ok comparator-requires-prefix-M3HEROPETSEQ
+SELFTEST ok teeth-bare-prereq
+SELFTEST ok teeth-prefixed-ok
+SELFTEST ok teeth-empty-prereq
+SELFTEST ok teeth-skip-prefixed-ok
+SELFTEST ok teeth-skip-bare-prereq
+SELFTEST ok scan-botsrv-catches-bare-skip
+SELFTEST ok scan-botsrv-ignores-skip-prefix
+SELFTEST ok scan-botsrv-ignores-done-marker
+SELFTEST ok real-botsrv-no-bare-skip
+SELFTEST ok check-green
+SELFTEST ok mutation-strip-red
+SELFTEST ok mutation-guard-red
+SELFTEST ok mutation-bareskip-red
+SELFTEST ok=23/24
+rc=1
