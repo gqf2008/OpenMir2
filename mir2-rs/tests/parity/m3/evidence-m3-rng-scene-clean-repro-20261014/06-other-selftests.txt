@@ -1,0 +1,33 @@
+# per-judge selftests (python -I), cwd = mir2-rs/tests/parity/m3 (worktree m3bag @ 7caf97454)
+--- rng-trace-probe/rng_consumer_groups.py selftest
+  ok  table-validate
+  ok  classify bins/game-svr/src/mongen.rs:289 -> spawn（got=spawn）
+  ok  classify bins\game-svr\src\mongen.rs:434 -> spawn（got=spawn）
+  ok  classify crates/world/src/mongen.rs:321 -> spawn（got=spawn）
+  ok  classify crates/world/src/monai.rs:171 -> monster_ai（got=monster_ai）
+  ok  classify crates/formula/src/drop.rs:100 -> drop（got=drop）
+  ok  classify bins/game-svr/src/main.rs:2884 -> startup（got=startup）
+  ok  classify crates/world/src/combat.rs:758 -> attack（got=attack）
+  ok  classify bins/game-svr/src/not_in_table.rs:1 -> other（got=other）
+  ok  mutation-host-row-removed（删掉 1 行）
+  ok  mutation-host-site-becomes-other（got=other）
+  ok  mutation-core-group-validate-red（期望 validate 点名 merchant）
+  ok  oracle-refs-fresh
+  ok  mutation-oracle-ref-path-red（行28(startup/csharp): oracle_ref 指向不存在的源码文件 src\NoSuchModule\Conf\ServerConf.cs（ref=src/NoSuchModule/Conf/ServerConf.cs:114））
+  ok  mutation-oracle-ref-line-red（行28(startup/csharp): oracle_ref 行 999999 越界（src\Modules\SystemModule\Conf\ServerConf.cs 共 682 行））
+SELFTEST GREEN: rng_consumer_groups selftest 15/15
+RC=0
+--- rng-trace-probe/rng_ledger_diff.py selftest
+SELFTEST GREEN: rng_ledger_diff selftest 37/37（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名 + Claim B 站点组：同组序绿 / 多抽·换序·缺组必红且定位 / 组表改坏必红 / 未归类 fail-closed / 行级覆盖 rows_dropped fail-closed（O-1）+ AUX 组改坏必红（O-3）+ R-6 folded：等价绿 / 折叠计数不等·次序不等必红且定位 / 关时仍 GROUP_SET_DIFF + DoD② scenario 声明：三组齐备绿 / 缺组·monster_ai 抽数不足必红且点名 / 缺 scenario PREREQ / 不传向后兼容）
+RC=0
+--- rng-trace-scene/rng_scene_gate.py selftest
+SELFTEST ok=22/22
+GREEN: 场景前置门 selftest 全绿（同场景绿 + seed/怪集合/起点/map/MonGen 漂移必红 + 流水头同种子制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 缺件 PREREQ / 只给一侧流水 PREREQ / 未给流水向后兼容） + scenario 声明 vs 代码 folded 映射/组清单漂移必红 + 缺件/坏 JSON PREREQ fail-closed）
+RC=0
+--- rng-trace-scene/check_window_batch.py check
+VERDICT GREEN: 同窗口批次前提 OK（map/seed/起点 逐项相等）
+OK map='0137' seed=42 x=17 y=20 dir=2
+RC=0
+--- rng-trace-scene/check_anchors.py check
+GREEN: check_anchors 7/7 锚点保鲜（文档行号 == 当前源码首个匹配行；闭世界 + 裸续引用）
+RC=0

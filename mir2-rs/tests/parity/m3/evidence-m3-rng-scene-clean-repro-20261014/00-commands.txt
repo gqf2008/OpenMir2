@@ -1,0 +1,51 @@
+本片：openmir2-m3-rng-trace-scene-groups / DoD⑤「干净检出可复现」显式机判
+worktree : E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag  (branch wip/m3bag-anchor-teeth)
+tag      : m3bag   worker : openmir2-worker-4
+base     : 7caf974547d013813bf89e443d486f407e8ee04e  (origin/master at cut)
+零 .rs、零代码改动、零起栈、零端口、未 merge、未自签 review。
+
+--- 干净检出（新鲜 detached worktree；不碰共享主检出，也不碰作者 worktree） ---
+git worktree add --detach E:/tmp/m3bag-clean 7caf974547d013813bf89e443d486f407e8ee04e
+
+--- 干净树内：本卡 16 个证据包逐个 verify --check-extra（仓库 git-blob/LF 口径） ---
+cd E:/tmp/m3bag-clean
+packs=$(find mir2-rs/tests/parity/m3 -maxdepth 2 -name SHA256SUMS.txt \
+        | grep -E "rng-trace-scene-groups|rng-scene-anchor|rng-scene-obs-closure" | sort)
+for p in $packs; do
+  d=$(dirname "$p")
+  python -I tools/evidence-hash/verify_sha256sums.py verify "$d" --check-extra
+  echo "RC=$?"
+done
+# => 02-packs-verify-check-extra.txt : PACKS_TOTAL=16 PACKS_FAIL=0（全 GREEN）
+
+--- 干净树内：整个 m3 树 EOL trap 判据 ---
+cd E:/tmp/m3bag-clean
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3
+# => 03-eolcheck-m3-tree.txt : EOLCHECK GREEN 3363/3363 rc=0
+
+--- 作者 worktree 内：离线判据全链重跑（master 7caf97454） ---
+cd mir2-rs/tests/parity/m3/rng-trace-scene
+powershell -ExecutionPolicy Bypass -File ./run_rng_trace_pair.ps1 -SelfCheckNoStack
+# => 04-selfcheck-nostack.txt : SELFTEST ok=37/37 failures= rc=0
+
+cd mir2-rs/tests/parity/m3
+python -I fixture_chain_gate.py check
+python -I rng-trace-probe/rng_consumer_groups.py selftest
+python -I rng-trace-probe/rng_ledger_diff.py selftest
+python -I rng-trace-scene/rng_scene_gate.py selftest
+python -I rng-trace-scene/check_window_batch.py check
+python -I rng-trace-scene/check_anchors.py check
+# => 05/06 : FIXTURE_CHAIN GREEN runner_ok=10 red=0；5 个 selftest 全 RC=0
+
+--- 四门禁（隔离 target；cwd = mir2-rs） ---
+export CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target
+cargo fmt --all -- --check                                  # 07 rc=0
+cargo clippy --workspace --all-targets --offline -- -D warnings   # 08 rc=0
+cargo test --workspace --offline --no-fail-fast             # 09 101 suites 1200 passed 0 failed 22 ignored, rc=0
+cargo run -p msgcodegen --offline -- --check                # 10 604 条, rc=0
+
+--- 收尾：清干净检出 ---
+git worktree remove E:/tmp/m3bag-clean
+
+注：所有捕获输出均经 LF 归一（tr -d '\r'）后入库；SHA256SUMS.txt 由
+    python -I tools/evidence-hash/verify_sha256sums.py write <本目录> 按仓库字节口径生成。

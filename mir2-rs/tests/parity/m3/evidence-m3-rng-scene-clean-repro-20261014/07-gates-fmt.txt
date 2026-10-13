@@ -1,0 +1,3 @@
+# cwd = mir2-rs (worktree m3bag), CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target
+# cargo fmt --all -- --check
+RC=0

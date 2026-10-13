@@ -1,0 +1,4 @@
+# cwd = mir2-rs (worktree m3bag), CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target
+# cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.63s
+RC=0
