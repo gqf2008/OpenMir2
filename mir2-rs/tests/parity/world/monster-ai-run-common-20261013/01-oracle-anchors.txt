@@ -15,7 +15,7 @@
 | 恢复段 | `:39-66` | `recoveryTick=(now-AutoRecoveryTick)/20; HealthTick+=recoveryTick; SpellTick+=recoveryTick;` |
 | 恢复·HP | `:47-55` | `HP<MaxHP && HealthTick>=HealthFillTime ⇒ n18=MaxHP/75+1; HP=min(HP+n18, MaxHP); HealthSpellChanged()` |
 | 恢复·MP | `:57-65` | `MP<MaxMP && SpellTick>=SpellFillTime ⇒ n18=MaxMP/18+1; MP=min(MP+n18, MaxMP); HealthSpellChanged()` |
-| `HP==0⇒Die` | `:70-73` | **未在本段实现**：由 `World::settle_deaths` 在同一 tick 的死亡结算等价处理（本段恢复只增 HP，体力点段有 `HP>1` 门 ⇒ `HP==0` 不可达） |
+| `HP==0⇒Die` | `:70-73` | **未在本段实现（非等价登记，O-1）**：oracle 先跑恢复段、**之后**才 `if (WAbil.HP==0) Die()` ⇒ 0 HP 且恢复到点的怪会先回血而存活；Rust 侧 `World::settle_deaths` 在 `monster_ai_tick` **之前**已把 `hp==0` 判死 ⇒ 这段罕见次序**不等价**（已在 `02-change-summary.txt` §未建模登记为「次序差异」） |
 | 死亡分支/`MakeGhost` | `:86-101` | **未建模（登记）**：需 `MonGen.ZenTime`（`WorldEngine.GetMonstersZenTime`）与 `Config.MakeGhostTime` |
 | tick 归零 | `:66-69` | `HealthTick>=HealthFillTime ⇒ HealthTick=0`；`SpellTick>=SpellFillTime ⇒ SpellTick=0` |
 | 体力点段 | `:105-110` | `HealthTick<-HealthFillTime && HP>1 ⇒ HP-=1; HealthTick+=HealthFillTime; HealthSpellChanged()` |
@@ -32,8 +32,9 @@
   `HealthTick=0`/`SpellTick=0` `:448-449`。
 - `SetLastHiter`（`src/M2Server/Actor/BaseObject.cs:1753-1770`）：`LastHiter=hitter; LastHiterTick=now;`
   `if (ExpHitter==null) { ExpHitter=hitter; ExpHitterTick=now; } else if (ExpHitter==hitter) ExpHitterTick=now;`
-- `HealthSpellChanged`（`BaseObject.cs:700-710`）：**只对 `Race==ActorRace.Play` 发 `RM_HEALTHSPELLCHANGED`**；
-  `ShowHp` 才发 `SendRefMsg`。⇒ 怪物的恢复段**不产生任何帧面**。
+- `HealthSpellChanged`（`BaseObject.cs:700-710`）：`Race==ActorRace.Play` 才发 `RM_HEALTHSPELLCHANGED`；
+  此外 `if (ShowHp) SendRefMsg(RM_HEALTHSPELLCHANGED, …)` 也会发帧。`ShowHp` 本片**未建模（登记）**
+  ⇒ 在「`ShowHp=false` 的普通怪」上恢复/体力点段**无帧面**；`ShowHp=true` 的怪的帧面属已登记未建模面，不是本片引入的帧差（订正 reviewer-6 `O-3` 原「只对 Play 发」措辞）。
 - 到点门缺省：`HealthFillTime=300` / `SpellFillTime=800`（`GameSvrConf.cs:1323-1324`；
   `ServerConf.cs:152-153` 读 `[Setup] HealthFillTime/SpellFillTime`）。
 - 怪物能力装载：`ApplyMonsterAbility`（`src/GameSrv/Word/WorldServer.MonGen.cs:880-910`）：

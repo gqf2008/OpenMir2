@@ -259,6 +259,23 @@ pub fn del_target_creature(world: &mut World, actor_id: i32) {
     }
 }
 
+/// `BaseObject.ClearTargetCreat`（`BaseObject.Base.cs:568-585`）：先把目标从 `VisibleActors`
+/// 里删掉（首个匹配，`VisibleActors[i].BaseObject == baseObject` ⇒ Rust 的 `v.target`），
+/// 再 `DelTargetCreat()`。
+///
+/// 与 [`del_target_creature`] 分开：oracle 里 `ClearTargetCreat` 用于 `Run()` 的目标清理段
+/// （`BaseObject.Base.cs:111-118`）、`DelTargetCreat` 用于其它路径，两者不同源。
+pub fn clear_target_creature(world: &mut World, actor_id: i32, target_id: i32) {
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(i) = e.visible_actors.iter().position(|v| v.target == target_id) {
+            e.visible_actors.remove(i);
+        }
+        e.ai.target_creature = None;
+        e.ai.target_x = -1;
+        e.ai.target_y = -1;
+    }
+}
+
 /// `AnimalObject.GotoTargetXY`（`AnimalObject.cs:174-249`）。
 ///
 /// 目标格 ≠ 当前格时：按 Δ 定主方向 → `WalkTo` → **无条件** `Random(3)` → 最多 8 次
@@ -593,14 +610,26 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
     let mut mp = e.mp;
     let (max_hp, max_mp) = (e.max_hp, e.max_mp);
     // `BaseObject.Base.cs:47-55`：`WAbil.MaxHP / 75 + 1`，`(HP + n) < MaxHP` 否则截断到 `MaxHP`。
+    // 加/比在 `int` 上进行（oracle 的 `ushort + ushort` 被提升为 `int`，不会在 65536 处回绕）；
+    // 落回 `u16` 时 `sum < max_hp <= 65535`，强转安全。
     if hp < max_hp && health_tick >= health_fill_time {
-        let n = max_hp / 75 + 1;
-        hp = if hp + n < max_hp { hp + n } else { max_hp };
+        let n = i32::from(max_hp) / 75 + 1;
+        let sum = i32::from(hp) + n;
+        hp = if sum < i32::from(max_hp) {
+            sum as u16
+        } else {
+            max_hp
+        };
     }
-    // `BaseObject.Base.cs:57-65`：`WAbil.MaxMP / 18 + 1`。
+    // `BaseObject.Base.cs:57-65`：`WAbil.MaxMP / 18 + 1`（同 HP 支在 `int` 上计算）。
     if mp < max_mp && spell_tick >= spell_fill_time {
-        let n = max_mp / 18 + 1;
-        mp = if mp + n < max_mp { mp + n } else { max_mp };
+        let n = i32::from(max_mp) / 18 + 1;
+        let sum = i32::from(mp) + n;
+        mp = if sum < i32::from(max_mp) {
+            sum as u16
+        } else {
+            max_mp
+        };
     }
     // `BaseObject.Base.cs:66-69` 的归零两行（照 oracle 次序：先判恢复、再归零）。
     if health_tick >= health_fill_time {
@@ -645,7 +674,7 @@ fn target_cret_cleanup(world: &mut World, actor_id: i32, now: i64) {
         }
     };
     if invalid {
-        del_target_creature(world, actor_id);
+        clear_target_creature(world, actor_id, target_id);
     }
 }
 
@@ -1025,6 +1054,44 @@ mod tests {
         assert_eq!(world.entities.get(id).unwrap().hp, 75, "HP 截断到 MaxHP");
     }
 
+    /// 恢复段在 `u16` 边界上的加法必须按 oracle 的 `int` 语义（`BaseObject.Base.cs:47-55/57-65`：
+    /// C# 的 `ushort + ushort` 提升为 `int` ⇒ 不会在 65536 处回绕/panic）。HP/MP 两支都盖。
+    /// 改坏必红：把本段改回 `hp + n`（u16 加）⇒ 本用例 debug `attempt to add with overflow`
+    /// panic / release 回绕为 0。
+    #[test]
+    fn base_recovery_high_max_hp_does_not_overflow_u16() {
+        let mut world = World::new(32, 32);
+        world.set_recovery_fill_times(300, 800);
+        let mut e = Entity::new(0, "魔龙教主", 10, 10);
+        e.race = ACTOR_RACE_MONSTER;
+        e.max_hp = 65_535;
+        // n = 65535/75 + 1 = 874 ⇒ hp + n = 66374 > u16::MAX（旧 u16 写法在此回绕/panic）。
+        e.hp = 65_500;
+        e.health_tick = 300;
+        e.auto_recovery_tick = 0;
+        let id = world.add_entity(e);
+        base_object_run_monster(&mut world, id);
+        assert_eq!(
+            world.entities.get(id).unwrap().hp,
+            65_535,
+            "溢出带内应截断到 MaxHP 而不是回绕为 0"
+        );
+        // MP 支同理：n = 65535/18 + 1 = 3641 ⇒ mp + n = 69141 > u16::MAX。
+        let mut e = Entity::new(1, "魔龙教主", 10, 10);
+        e.race = ACTOR_RACE_MONSTER;
+        e.max_mp = 65_535;
+        e.mp = 65_500;
+        e.spell_tick = 800;
+        e.auto_recovery_tick = 0;
+        let id2 = world.add_entity(e);
+        base_object_run_monster(&mut world, id2);
+        assert_eq!(
+            world.entities.get(id2).unwrap().mp,
+            65_535,
+            "MP 溢出带内应截断到 MaxMP"
+        );
+    }
+
     /// 恢复段 MP 支（`BaseObject.Base.cs:57-65`）：`MaxMP/18 + 1`。
     #[test]
     fn base_recovery_heals_mp_at_spell_fill_time() {
@@ -1104,5 +1171,39 @@ mod tests {
         assert!(build(0, 11, 10, false, 1).is_none(), "异图 ⇒ 清理");
         assert!(build(0, 26, 10, false, 0).is_none(), "|Δx| > 15 ⇒ 清理");
         assert!(build(0, 11, 26, false, 0).is_none(), "|Δy| > 15 ⇒ 清理");
+    }
+
+    /// M-1：清理段走 oracle 的 `ClearTargetCreat`（`BaseObject.Base.cs:568-585`）——
+    /// 除 `DelTargetCreat` 外还要把目标从 `VisibleActors` 移除。
+    /// 改坏必红：把 `clear_target_creature` 换回 `del_target_creature` ⇒ 第二个断言红。
+    #[test]
+    fn target_cret_cleanup_also_removes_visible_actor() {
+        let mut world = World::new(64, 64);
+        world.clock_ms = 0;
+        let id = monster(&mut world, 10, 10);
+        let tid = player(&mut world, 11, 10);
+        world.entities.get_mut(id).unwrap().visible_actors = vec![
+            VisibleBaseObject {
+                target: tid,
+                flag: VisibleFlag::Show,
+            },
+            VisibleBaseObject {
+                target: 999,
+                flag: VisibleFlag::Show,
+            },
+        ];
+        set_target_creature(&mut world, id, tid);
+        world.clock_ms = 30_001; // 过期 ⇒ 清理
+        base_object_run_monster(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert!(e.ai.target_creature.is_none(), "目标已清理");
+        assert!(
+            !e.visible_actors.iter().any(|v| v.target == tid),
+            "目标应从 VisibleActors 移除（ClearTargetCreat）"
+        );
+        assert!(
+            e.visible_actors.iter().any(|v| v.target == 999),
+            "其它可见体不受影响"
+        );
     }
 }

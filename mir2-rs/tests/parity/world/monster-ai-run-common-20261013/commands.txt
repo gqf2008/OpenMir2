@@ -21,6 +21,11 @@ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p mir2-world --lib --offline ex
 #                                     ==> "if gone.contains(&h) {"
 #   RC-M4: crates/world/src/monai.rs  "    target_cret_cleanup(world, actor_id, now);"
 #                                     ==> "    let _ = now;"
+#   RC-I1 (返工·I-1):  crates/world/src/monai.rs 恢复段
+#                                     "i32::from(hp) + n" (int 语义)  ==>  "hp + n" (u16 加)
+#   RC-M1b(返工·M-1):  crates/world/src/monai.rs 清理段
+#                                     "clear_target_creature(world, actor_id, target_id)"
+#                                     ==> "del_target_creature(world, actor_id)"
 
 # 边界（base = 交付时 master，见 20-boundary.txt）
 git diff --name-only <base> HEAD -- src sql MirClient      # 必须为空
