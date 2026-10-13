@@ -1,0 +1,38 @@
+# EOL 口径核对（同族坑第 5 次；本片证据包自证 LF）。cwd = 仓库根。
+
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3
+mir2-rs\tests\parity\m3\evidence-m3-pet-slave-f1-rework-20261013\redchecks\RC5-magicfire-self-frame-mutated.rc   # 他线（m3hp）已跟踪证据：*.rc 未在 .gitattributes 声明（reviewer-6 已登记 M-3）
+mir2-rs\tests\parity\m3\evidence-m3-pet-slave-f1-rework-20261013\redchecks\RC5-magicfire-self-frame-restored.rc   # 他线（m3hp）已跟踪证据：*.rc 未在 .gitattributes 声明（reviewer-6 已登记 M-3）
+mir2-rs\tests\parity\m3\rng-hook\selftest\bin\Release\net8.0\RngIsolateSelftest.deps.json   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\rng-hook\selftest\bin\Release\net8.0\RngIsolateSelftest.runtimeconfig.json   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\rng-hook\selftest\obj\Release\net8.0\RngIsolateSelftest.AssemblyInfo.cs   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\rng-hook\selftest\obj\Release\net8.0\RngIsolateSelftest.AssemblyInfoInputs.cache   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\rng-hook\selftest\obj\Release\net8.0\RngIsolateSelftest.csproj.CoreCompileInputs.cache   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\rng-hook\selftest\obj\Release\net8.0\RngIsolateSelftest.csproj.FileListAbsolute.txt   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\rng-hook\selftest\obj\Release\net8.0\RngIsolateSelftest.GeneratedMSBuildEditorConfig.editorconfig   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\rng-hook\selftest\obj\Release\net8.0\RngIsolateSelftest.genruntimeconfig.cache   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\bin\Release\net8.0\appsettings.json   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\bin\Release\net8.0\GameSrv.deps.json   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\bin\Release\net8.0\GameSrv.runtimeconfig.json   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\bin\Release\net8.0\shop-price-probe.deps.json   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\bin\Release\net8.0\shop-price-probe.runtimeconfig.json   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\obj\project.assets.json   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\obj\project.nuget.cache   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\obj\Release\net8.0\.NETCoreApp,Version=v8.0.AssemblyAttributes.cs   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\obj\Release\net8.0\shop-price-probe.AssemblyInfo.cs   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\obj\Release\net8.0\shop-price-probe.AssemblyInfoInputs.cache   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\obj\Release\net8.0\shop-price-probe.csproj.CoreCompileInputs.cache   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\obj\Release\net8.0\shop-price-probe.csproj.FileListAbsolute.txt   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\obj\Release\net8.0\shop-price-probe.GeneratedMSBuildEditorConfig.editorconfig   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\obj\Release\net8.0\shop-price-probe.genruntimeconfig.cache   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\obj\shop-price-probe.csproj.nuget.dgspec.json   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\obj\shop-price-probe.csproj.nuget.g.props   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+mir2-rs\tests\parity\m3\shop-price-probe\obj\shop-price-probe.csproj.nuget.g.targets   # 未跟踪 .NET 构建产物（bin/obj），非仓库内容
+EOLCHECK RED 27/3678 件与仓库口径（LF）在 EOL 上不一致（修法：生产者用 LF 写出 / `verify_sha256sums.py write` 重记，或对冻结字节目录声明 `.gitattributes * -text`）
+
+# 归因：RED 全部在**本片证据包之外** —— 已跟踪的为他线（m3hp）证据 `*.rc`（未在
+# mir2-rs/.gitattributes 声明，reviewer-6 已登记为该卡 M-3 Minor）；其余为 `rng-hook/` 与
+# `shop-price-probe/` 下**未跟踪**的 .NET 构建产物（bin/obj）。本片未新增任何路径进该 RED。
+# 定向核对本证据包：python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck \
+#     mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq
+#   ⇒ EOLCHECK GREEN（本包件全为 LF）。

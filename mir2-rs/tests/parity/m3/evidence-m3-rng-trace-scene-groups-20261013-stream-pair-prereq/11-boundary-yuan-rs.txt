@@ -1,0 +1,39 @@
+# base = merge-base(origin/master, HEAD) = 9c776129c30280ddc692d88d7507192dd94f20a0（交付前已 git merge origin/master；其后 master 可能又前进 ⇒
+# 按 merge-base 取 base 以免出现「回退假差量」；合并车道准入也按 merge-base 计算）。在途片 a992a09a9 已合入 master 7dcbd0ada。
+# 本片 head = 源件提交 + 合并 master + 本证据提交；diff 对这几个提交稳定，不钉 head oid 以免自指陈旧。
+
+$ git diff --name-only 9c776129c30280ddc692d88d7507192dd94f20a0 HEAD -- src sql MirClient mir2-rs/crates mir2-rs/bins
+(空 = 零改动)
+
+$ git diff --name-only 9c776129c30280ddc692d88d7507192dd94f20a0 HEAD -- "*.rs"
+(空 = 零改动)
+
+$ git diff --name-only 9c776129c30280ddc692d88d7507192dd94f20a0 HEAD -- mir2-rs/tests/parity/world
+(空 = 零改动)
+
+$ git diff --name-only 9c776129c30280ddc692d88d7507192dd94f20a0 HEAD -- mir2-rs/tests/parity/m3/rng-trace-scene
+mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+mir2-rs/tests/parity/m3/rng-trace-scene/rng_scene_gate.py
+mir2-rs/tests/parity/m3/rng-trace-scene/rng_trace_scenario.json
+
+$ git diff --name-only 9c776129c30280ddc692d88d7507192dd94f20a0 HEAD
+"mir2-rs/tests/parity/m3/M3RNG\345\234\272\346\231\257\345\210\266\345\223\201\347\272\247\345\220\214\347\247\215\345\255\220\351\227\250\345\215\212\347\273\231\346\265\201\346\260\264fail-closed\346\224\266\345\217\243\346\212\245\345\221\212-20261013.md"
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/01-gate-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/02-scenario-green.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/03-half-stream-prereq-a-only.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/04-half-stream-prereq-b-only.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/05-both-streams-green.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/06-neither-backward-compatible.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/07-nostack-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/08-regression.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/09-mutation-remove-guard-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/10-readme-count-drift.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/11-boundary-yuan-rs.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/12-gates-merge-tree.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/13-eolcheck-scope.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/README.md
+mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+mir2-rs/tests/parity/m3/rng-trace-scene/rng_scene_gate.py
+mir2-rs/tests/parity/m3/rng-trace-scene/rng_trace_scenario.json
