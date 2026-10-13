@@ -33,8 +33,11 @@
 //!
 //! ## 未接（登记，别按常识补）
 //!
-//! - **`MakeSlave` 的 `RecalcAbilitys` 派生类速度改写**（`WhiteSkeleton`/`ElfMonster`）与
-//!   `RefNameColor` 色彩：归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）。
+//! - **`MakeSlave` 的 `RecalcAbilitys` 已落**（⑨-2 reviewer-5 `M-1` 收口）：
+//!   `crates/world::slave::make_slave_adopt` 现按 oracle 先跑 `ApplySlaveLevelAbilitys`
+//!   （`WAbil.DC`/`WAbil.MaxHP`，`BaseObject.Abil.cs:133-170`，`Race >= Animal` 门 + 三类支）
+//!   再跑三个派生类的速度覆写（`WhiteSkeleton.cs:21-27` / `ElfMonster.cs:31-41` /
+//!   `ElfWarriorMonster.cs:35-39,105-110`）；`RefNameColor` 色彩仍归帧面接线片。
 //! - **46 分身**（`MagMakeClone`）：见 `crates/world::slave` 的 `CLONE_DEFERRED`。
 //! - **20 的 `RM_MAKEHOLYSEIZEMODE` 帧**（`MagicManager.cs:712/812`）与 **`OpenCrazyMode` 狂暴态/
 //!   时长**（`:797/805`）：前者无编码器、后者本骨架无 `CrazyMode` 字段（对应抽数已在
