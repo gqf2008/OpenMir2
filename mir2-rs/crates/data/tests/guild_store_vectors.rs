@@ -416,6 +416,47 @@ fn vector_load_guild_info_rewrites_list() {
     );
 }
 
+/// J（reviewer-5 M-1 回归）：移除失败行会后的名单回写若失败，oracle
+/// `GuildManager.SaveGuildList`（`GuildManager.cs:135-142`）的 `try{...}catch` **吞掉**该错误
+/// ⇒ 加载继续（只移除那一行会）；Rust 不得用 `?` 中止整个加载。
+///
+/// 触发方式：名单文件先读成功、随即置为**只读**（写失败），名单里含一个缺 `<名>.txt` 的会。
+#[test]
+#[allow(clippy::permissions_set_readonly_false)] // 只清除本测试自己刚置上的只读位
+fn vector_load_guild_info_swallows_list_rewrite_io_error() {
+    let root = tmp_root("swallow");
+    let store = store_for(&root);
+    let sections = GuildFileSections::oracle_defaults();
+    let list: PathBuf = store.guild_file().to_path_buf();
+    fs::write(&list, gbk("甲会\n幽灵会\n")).unwrap();
+    fs::write(
+        store.guild_txt_path("甲会"),
+        gbk(&format!("{}\n", sections.notice)),
+    )
+    .unwrap();
+
+    // 名单在读成功后变为不可写 ⇒ 回写（`std::fs::write`）失败。
+    let mut perm = fs::metadata(&list).unwrap().permissions();
+    perm.set_readonly(true);
+    fs::set_permissions(&list, perm.clone()).unwrap();
+    let result = store.load_guild_info(&sections, 16, 0, 0);
+    // 先还原写权限再做断言（断言 panic 时不留下只读文件污染后续运行）。
+    perm.set_readonly(false);
+    fs::set_permissions(&list, perm).unwrap();
+
+    assert!(
+        result.is_ok(),
+        "oracle SaveGuildList 吞掉写失败、加载继续；Rust 不应 `?` 中止: {result:?}"
+    );
+    let load = result.unwrap();
+    assert_eq!(load.names, vec!["甲会"]);
+    assert_eq!(load.removed, vec!["幽灵会"]);
+    assert_eq!(load.guilds.len(), 1);
+    assert_eq!(load.guilds[0].name, "甲会");
+    // 回写失败 ⇒ 名单文件保持原内容（未被改写）。
+    assert_eq!(fs::read(&list).unwrap(), gbk("甲会\n幽灵会\n"));
+}
+
 /// I（reviewer-6 F-1 回归）：`LoadGuildInfo` 逆序加载时 `FindGuild` 查**当前存活集** ——
 /// 引用「本轮更早被移除的会」的行会战条目**不入表**，引用仍存活会的条目正常入表。
 /// oracle 锚：`GuildManager.cs:67-77`（`FindGuild` 遍历当前 `GuildList`）+ `:85-96`（逆序 `RemoveAt`）。

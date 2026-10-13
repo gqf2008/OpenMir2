@@ -1,0 +1,48 @@
+# oracle 锚（冻结 src/ 原文，行号在本仓库实测）
+# 卡：openmir2-m3-guild-file-store（M3⑧-实现 3） 来源：reviewer-5 approve review（ts 1791880566）M-1
+#
+# 结论：GuildManager.SaveGuildList 把 SaveToFile 包在 try{...}catch{LogService.Error} 里
+#       **吞掉写失败**；加载路径 GuildManager.LoadGuildInfo 在移除失败行会后调用它，
+#       因此写失败**不会**中止 LoadGuildInfo。Rust 侧不得用 `?` 中止整个加载。
+
+## 1) 调用点：GuildManager.LoadGuildInfo（GuildManager.cs:78-110，此处截 93-102）
+$ sed -n '93,102p' src/M2Server/Guild/GuildManager.cs
+                }
+                for (int i = GuildList.Count - 1; i >= 0; i--)
+                {
+                    IGuild guild = GuildList[i];
+                    if (!guild.LoadGuild())
+                    {
+                        LogService.Warn(guild.GuildName + " 读取出错!!!");
+                        GuildList.RemoveAt(i);
+                        SaveGuildList();
+                    }
+
+## 2) 被调方：GuildManager.SaveGuildList（GuildManager.cs:124-143）
+$ sed -n '124,143p' src/M2Server/Guild/GuildManager.cs
+        private void SaveGuildList()
+        {
+            if (M2Share.ServerIndex != 0)
+            {
+                return;
+            }
+            StringList saveList = new StringList();
+            for (int i = 0; i < GuildList.Count; i++)
+            {
+                saveList.Add(GuildList[i].GuildName);
+            }
+            try
+            {
+                saveList.SaveToFile(SystemShare.Config.GuildFile);
+            }
+            catch
+            {
+                LogService.Error("行会信息保存失败!!!");
+            }
+        }
+
+## 3) 判定
+- SaveGuildList 的 `catch`（:139-142）无类型过滤 ⇒ 吞掉 `SaveToFile` 的一切异常（含 IO）。
+- 故 LoadGuildInfo 在 :99-101 的 `RemoveAt(i); SaveGuildList();` 之后继续循环，不受写失败影响。
+- 触发面：仅「名单文件刚读成功后、同一个循环内变为不可写」这类竞态；正常路径下
+  `StringList.SaveToFile` 的目标（`SystemShare.Config.GuildFile`）存在 ⇒ 成功。属**忠实移植**口径。

@@ -321,7 +321,8 @@ impl GuildStore {
     }
 
     /// `GuildManager.LoadGuildInfo`（`:78-110`）：读名单 → 逐个 `new GuildInfo`（建 `.ini`）→
-    /// **逆序**加载，失败者移除并回写名单（非 0 区不回写）。
+    /// **逆序**加载，失败者移除并回写名单（非 0 区不回写；回写失败按 `SaveGuildList` 的
+    /// `try/catch` 口径**吞掉**，见 `GuildManager.cs:135-142`）。
     ///
     /// 逆序加载期间 `guild_exists` 必须查**当前存活集**（不是初始名单快照）：索引 > i 的失败者
     /// 已 `RemoveAt`，故引用了它们的行会战段**不入表**（`GuildManager.cs:67-77` 的 `FindGuild`
@@ -357,7 +358,12 @@ impl GuildStore {
                 Err(GuildStoreError::MissingGuildFile(_)) => {
                     removed.push(name);
                     names.remove(i);
-                    self.save_guild_list(&names, server_index)?;
+                    // oracle `GuildManager.SaveGuildList`（`GuildManager.cs:135-142`）把
+                    // `SaveToFile` 包在 `try{...}catch{LogService.Error(...)}` 里**吞掉写失败**
+                    // ⇒ 移除失败行会后即使名单回写失败，加载也继续。本层无 logger，按同构语义
+                    // 仅忽略返回值、不中止加载（reviewer-5 M-1：正常路径下名单刚读成功 ⇒
+                    // `write_existing` 必成功，只有「加载与回写之间文件变不可写」的竞态才分叉）。
+                    let _ = self.save_guild_list(&names, server_index);
                 }
                 Err(e) => return Err(e),
             }

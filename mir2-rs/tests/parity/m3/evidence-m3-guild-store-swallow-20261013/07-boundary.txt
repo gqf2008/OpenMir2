@@ -1,0 +1,24 @@
+# M3⑧-3 · reviewer-5 M-1 收口 边界（base = origin/master 5964479f3）
+# 相对 base 的完整差量文件清单（提交后 git diff --name-only <base> HEAD）
+$ git diff --name-only 5964479f3 HEAD
+mir2-rs/crates/data/src/guild.rs
+mir2-rs/crates/data/tests/guild_store_vectors.rs
+mir2-rs/tests/parity/m3/evidence-m3-guild-store-swallow-20261013/00-oracle-anchor.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-store-swallow-20261013/01-rust-guild-store-tests.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-store-swallow-20261013/02-mutation-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-store-swallow-20261013/03-gate-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-store-swallow-20261013/04-gate-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-store-swallow-20261013/05-gate-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-store-swallow-20261013/06-gate-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-store-swallow-20261013/07-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-store-swallow-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-guild-store-swallow-20261013/SHA256SUMS.txt
+
+# 冻结面（应空）：src/ sql/ MirClient crates/protocol crates/storage bins/
+$ git diff --name-only 5964479f3 HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+(空 = 零改动)
+
+# .rs 改动
+$ git diff --name-only 5964479f3 HEAD -- '*.rs'
+mir2-rs/crates/data/src/guild.rs
+mir2-rs/crates/data/tests/guild_store_vectors.rs
