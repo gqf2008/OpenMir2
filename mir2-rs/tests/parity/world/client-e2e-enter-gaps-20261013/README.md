@@ -182,3 +182,35 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **门禁**（merge tree `d8c02fd8`）：`fmt 0` / `clippy 0` / `99 suites · 1159 passed · 0 failed · 22 ignored` /
   `msgcodegen 604`（`54-gates.txt`）。**本片零生产代码改动**（仅 `tools/client/mir_flow.ps1` 驱动段 + 本目录证据/判据）；
   `55-boundary.txt`：冻结面 `src/ sql/ MirClient` + `crates/protocol` + `crates/storage` = 空。
+
+## ⑦ 片⑦：缺口② before/after **配对真机** run（收口 §⑥ 的 before remaining）——`56`/`57`
+
+- 配对口径（唯一变量 = `main.rs::new_player_entity` 的 `e.view_range = 12;`；其余全同）：
+  `start_rust_stack.ps1 -Seed 42` → DB `mir2_db.characters.aaa` 置 (287,620) → 影子 `game-gate`(7600)
+  + `mir2_proxy.py` 7200→7600 → `mir_flow.ps1 -WalkClicks 0 -AutoPlaySec 12 -SkipReenter -SkipLogout -SkipTalk`
+  （两次均 `FLOW_OK`，代理均实抓到客户端连接）→ `export_s2c.ps1`。
+- 读数（客户端实收 s2c 解码）：
+  | 运行 | view_range | `10`/`41` 配对 | Chebyshev 6..12 | 最大 |
+  |---|---|---|---|---|
+  | BEFORE | 5  | 2  | **0** | 4 |
+  | AFTER  | 12 | 13 | **10** | 13 |
+- 服务端佐证（before `game-svr.out.log` 的 `world_aoi_diag` 采样）：`nearest` = 1/6/12/23/17
+  ⇒ 6/12/17/23 的怪**确在附近**，但客户端一只都没出现（窗口 11×11 半径 5 之外）。
+- 原始件：`capture-client-viewrange5-seed42.jsonl`（before）、`capture-client-viewrange12-seed42.jsonl`（after）；
+  命令/坐标/hash 见 `56-before-after-viewrange-realrun.txt`。牙齿见 `57-redcheck-viewrange-realrun.txt`
+  （本片配对本身即正反两面；构造级 `31` 复跑）。
+- **零生产代码改动**（BEFORE 二进制是临时本地注释该行、交付前已 `git checkout` 还原并重建）；
+  起过真栈做抓包，收工已 `-Stop`，十游戏端口全 DOWN、仅 3306，DB 位置还原 (291,666)。
+
+## ⑧ 片⑧：回应 orchestrator comment 6c7ab2eb（「跑」修复）——**帧号不匹配的只读复核**（`60`）
+
+- **发现（阻断级）**：冻结客户端 `SM_SERVERCONFIG = 20002`（`Grobal2.pas:1300`），而 oracle/Rust 发 **11029**
+  （`Messages.cs:433` / `protocol/messages.rs:393`）；客户端全仓无 `11029` ⇒ `ClientGetServerConfig`
+  **永不执行** ⇒ `g_boCanStartRun` 停在**缺省 True**（`MShare.pas:1998`）⇒ 跑门 `ClMain.pas:2193` 恒真。
+  ⇒ **「ClientConf 长度兼容」不足以（也不能）解释 `CM_RUN=0`**；片⑥「boCanStartRun 读未初始化栈 ⇒ 恒假」不成立。
+- **真正的下游门**（应查这几处）：`ClMain.pas:2190 caRun:` —— `CanRun`（`Actor.pas:2162`，HP≥10）、
+  `GetDistance>=2`（`:2223`）、`IsUnLockAction`（`:2225`）、`g_PlayScene.CanRun`（`PlayScn.pas:3101`，
+  两格路径都被怪占即 False ⇒ 落 `:2241 caWalk` = 只走不跑）；`g_ChrAction:=caRun` 只在点 >1 格时置
+  （`ClMain.pas:5446-5463`）。
+- 结论与最小方案（含「若按 orchestrator 方向修，必须 id 20002 + 52B TClientConf 体同时改，并登记
+  对金标准的故意偏离」）见 `60-client-run-blocker-finding.txt`。本片**未改生产代码、未起栈**。

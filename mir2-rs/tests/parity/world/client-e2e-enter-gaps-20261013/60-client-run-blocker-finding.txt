@@ -1,0 +1,67 @@
+60-client-run-blocker-finding.txt — 「跑不动」根因复核：**帧号不匹配（20002 vs 11029）**，片⑥「boCanStartRun 读未初始化栈 ⇒ 恒假」不成立
+卡 openmir2-client-e2e-enter-gaps / 回应 orchestrator comment 6c7ab2eb（priority_call：把「跑」的修复插回 m2-svr 队首）
+====================================================================================================
+本片（片⑧）只读复核，未改生产代码。**结论：orchestrator 指定的「ClientConf 长度兼容」修复
+在客户端源码上不可能影响 `CM_RUN`** —— 因为客户端根本不接收这条帧。请 owner 在实现前重新裁决。
+
+A. 帧号不匹配（客户端 vs oracle/Rust）
+====================================================================================================
+  * 冻结客户端：`SM_SERVERCONFIG = 20002`（`MirClient @ c61d912d`，`Source/Common/Grobal2.pas:1300`），
+    处理分支在 `Source/MirClient/ClMain.pas:9621` 的 `case msg.ident of` ⇒ `:9622 ClientGetServerConfig`。
+  * oracle：`src/OpenMir2/Messages.cs:433 SM_SERVERCONFIG = 11029`；发送点
+    `src/M2Server/Player/PlayObject.Base.cs:961-963 SendServerConfig()` → `SendDefMessage(Messages.SM_SERVERCONFIG, …)`。
+  * Rust：`mir2-rs/crates/protocol/src/messages.rs:393 SM_SERVERCONFIG = 11029`；
+    `bins/game-svr/src/smframe.rs:341-348 sm_serverconfig`（尾 = `EncodeString(EncodeMessage(conf))`）。
+  * 客户端全仓 **没有 11029**（`grep -rn 11029 MirClient/Source/` 零命中）；其余帧号一致
+    （SM_TURN=10 / SM_FEATURECHANGED=41 / SM_ABILITY=52 / SM_SUBABILITY=752 两侧相同）。
+  ⇒ 服务端发的 11029 落在客户端 `case msg.ident of` 的**未知分支**（直接忽略），
+    `ClientGetServerConfig`（`ClMain.pas:15003`）**永不执行** ⇒ `:15034 g_boCanStartRun := ClientConf.boCanStartRun`
+    也永不执行。
+
+B. 因此 `g_boCanStartRun` 是**缺省值 True**，不是「读未初始化栈恒假」
+====================================================================================================
+  * `Source/MirClient/MShare.pas:1998 g_boCanStartRun: Boolean = True;`（同类：`:1994-1996`
+    `g_boCanRunHuman/Mon/Npc = True`）。
+  * 跑门 `Source/MirClient/ClMain.pas:2193 if g_boCanStartRun or (g_nRunReadyCount >= 1)` ⇒ 恒真。
+  * 片⑥ 的推论「`boCanStartRun` 读 TClientConf offset>17 的未初始化栈 ⇒ 实测恒假」依赖
+    `ClientGetServerConfig` **被执行**；执行它的前提是帧号 = 20002。两者不能同时成立。
+  ⇒ 「跑不动」不是（至少不只是）该帧的体布局造成的。（片⑥ 的 58B TAbility/HUD 读数仍成立，那是 52 帧。）
+
+C. caRun 分支的真正下游门（若要继续查「跑」，应查这几处）
+====================================================================================================
+  `ClMain.pas:2115 case g_ChrAction of` → `:2190 caRun:`：
+    1) `:2196 crun := g_MySelf.CanRun`；`Actor.pas:2162-2167`：`m_Abil.HP < RUN_MINHEALTH(=10, :22) ⇒ -1`
+       （58B 布局下 HUD 19/19 ⇒ 此处应为 1）；
+    2) `:2223 GetDistance(mx,my,dx,dy) >= 2`（点得太近 ⇒ 落 `else` → `CM_TURN`）；
+    3) `:2225 IsUnLockAction()`（`ClMain.pas:7760`：`ActionFailLock or g_boMapMoving or g_boServerChanging ⇒ False`）；
+    4) `:2227 g_PlayScene.CanRun(currX,currY,mx,my)`（`PlayScn.pas:3101-3119`）：要求
+       **下一格 + 目标格**都 `CanWalkEx`（`Map.CanMove` 且 `not CrashManEx`）——怪物占格会返回 False ⇒ 落
+       `:2241 g_ChrAction := caWalk`（**只走不跑**）。
+    5) `g_ChrAction` 何时变 caRun：地图上左键点 >1 格 ⇒ `ClMain.pas:5446-5463 g_ChrAction := caRun`
+       （点 ≤1 格只发 `CM_TURN`）。⇒ 若驱动点击距离 ≤1 格、或 run 两格路径被怪占，则不产生 `CM_RUN`。
+  ⇒ 下一步应在这四处取真机实测（例如：把角色放在空旷格并点 ≥3 格远；或临时关掉怪物占格），
+    而不是改 11029 的体布局。
+
+D. 若要按 orchestrator 方向修，最小可行方案（待 owner 裁决，不在本片实施）
+====================================================================================================
+  * 客户端要的是 **id=20002** 且体 = `SizeOf(TClientConf)`（Delphi 非 packed：5×Boolean + 5×Integer
+    ⇒ padding 到 `boCanStartRun @28`，总长 52；`ClMain.pas:15022 DecodeBuffer(...,SizeOf(ClientConf))`
+    会 `Move` 整个 52 字节，短体 ⇒ 其余取未初始化栈）。
+  * 所以「长度兼容」必须**同时**改 id（11029→20002，否则体再长也没人读）——这会动入图帧序列与
+    金标准（golden #6 是 11029）⇒ 属 §6.0-3 故意偏离，**必须 owner 签字 + 白名单登记**，并说明
+    与 C# oracle 的偏离。
+  * 本片**不动**：上述两点都带「改谁/偏离 oracle」的裁决，且 B 表明它未必能解决 `CM_RUN`。
+
+E. 复核命令（可复跑）
+====================================================================================================
+  grep -n "SM_SERVERCONFIG" /e/Users/gxh/Documents/GitHub/MirClient/Source/Common/Grobal2.pas
+  grep -rn "11029" /e/Users/gxh/Documents/GitHub/MirClient/Source/            # 零命中
+  grep -n "SM_SERVERCONFIG" /e/Users/gxh/Documents/GitHub/OpenMir2/src/OpenMir2/Messages.cs
+  sed -n '2190,2260p' /e/Users/gxh/Documents/GitHub/MirClient/Source/MirClient/ClMain.pas
+  sed -n '5446,5463p' /e/Users/gxh/Documents/GitHub/MirClient/Source/MirClient/ClMain.pas
+
+F. 诚实登记
+====================================================================================================
+  * 本片零生产代码改动、零起栈（只读源文件与既有 capture）。
+  * 未做：客户端进程内读 `g_boCanStartRun`/`g_ChrAction`/`CanRun`（无符号、无调试器接入）；
+    C 的四处门仍以源码锚 + 片⑥ 既有 capture 的 `3010=15 / 3011=24 / 3013=0` 直方图为准。
