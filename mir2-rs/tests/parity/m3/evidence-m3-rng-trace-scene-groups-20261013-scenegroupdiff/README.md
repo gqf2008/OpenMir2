@@ -36,6 +36,7 @@ DoD① 原文：两侧 trace 必须同场景/同起点/同种子（MonGen 与 Mo
 | `15-gate-clippy.txt` | `cargo clippy --workspace --all-targets --offline -- -D warnings` rc=0 |
 | `16-gate-test.txt` | `cargo test --workspace --offline` ⇒ **98 suites / 1038 passed / 0 failed / 21 ignored** rc=0 |
 | `17-gate-msgcodegen.txt` | `cargo run -q --offline -p msgcodegen -- --check` ⇒ 604 条 rc=0 |
+| `18-post-merge-master-regate.txt` | **交付前 base 跟 master**（合并 `origin/master 636bdce53`，零冲突、无内容改动）① 合并前 `git diff origin/master 989a8c9af` = **63 路径假差量**（他线 bins/证据），合并后 `git diff origin/master HEAD` = **恰好本片 24 路径** ② 合并树四门禁：fmt0 / clippy0 / **98 suites 1044 passed 0 failed 21 ignored** / msgcodegen 604 ③ 离线判据重跑全绿。**合并树的门读数以本文件为准**（`16-gate-test.txt` 记的是未合 master 的 989a8c9af 时读数 1038） |
 
 ## 改坏必红（原始件）
 

@@ -1,0 +1,100 @@
+# 18 — 交付前 base 跟 master（合并 origin/master）+ 合并树上四门禁重跑（2026-10-13）
+
+卡 openmir2-m3-rng-trace-scene-groups / 车道 m3bag / principal openmir2-worker-4
+
+## 背景：base 落后 master ⇒ 回退假差量（本项目登记过的坑）
+
+本片（DoD① 单一入口 -SceneGroupDiff）原 head 989a8c9af 的 base = 029d23eae（交付时=master head）。
+交付待审期间 origin/master 前进（029d23eae → 636bdce53）。若评审直接 `git diff origin/master <旧 head>`，
+会带出本片**未改动**的他线文件（呈回退/删除假差量）。按纪律「先 git fetch && git merge master」处置。
+
+## 现场读数（原始）
+
+$ git rev-parse origin/master HEAD
+636bdce5346c7526e0833a133fe9ae76f044e5de
+bf0c4cdeeac9e59f3aed65305d4889c783df82eb
+
+# 合并前：对 origin/master 的 diff 含假差量（远多于本片真实边界 24 路径）
+$ git diff --name-status origin/master 989a8c9af | wc -l
+63
+$ git diff --name-status origin/master 989a8c9af | grep -E "^(M|D)" | head -6
+M	mir2-rs/bins/game-svr/src/enter.rs
+M	mir2-rs/bins/game-svr/src/main.rs
+M	mir2-rs/bins/game-svr/src/record.rs
+M	mir2-rs/bins/game-svr/src/trade.rs
+D	mir2-rs/tests/parity/m3/evidence-m3-party-deal-try-null-pose-20261013/01-oracle-anchors.txt
+D	mir2-rs/tests/parity/m3/evidence-m3-party-deal-try-null-pose-20261013/02-change-summary.txt
+  # ↑ 均非本片改动：M 是本片 base 之后他线合入的 bins/game-svr 改动，
+  #   D 是他线已合入的证据目录（应保留，非本片删除）。
+
+# 本片真实边界（相对自己的 base）
+$ git diff --name-status 029d23eae 989a8c9af | wc -l
+24
+
+## 处置：git fetch origin && git merge origin/master（零冲突、无内容改动）
+
+$ git merge-base --is-ancestor 029d23eae origin/master && echo BASE_IS_ANCESTOR
+BASE_IS_ANCESTOR
+$ git merge origin/master --no-edit -m "…交付前跟 master（消除 base 落后带来的回退假差量；零冲突、无内容改动）"
+... merge 完成，无冲突
+$ git log --oneline -1 HEAD
+bf0c4cdee Merge origin/master (636bdce53) into worktree-m3-rng-trace-scene-groups: 交付前跟 master（消除 base 落后带来的回退假差量；零冲突、无内容改动）
+
+# 合并后：对 origin/master 的 diff = 恰好本片 24 个路径（假差量清零）
+$ git diff --name-status origin/master HEAD | wc -l
+24
+$ git diff --name-status origin/master HEAD
+A	"mir2-rs/tests/parity/m3/M3RNG\345\234\272\346\231\257DoD\342\221\240\345\215\225\344\270\200\345\205\245\345\217\243SceneGroupDiff\346\224\266\345\217\243\346\212\245\345\221\212-20261013.md"
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/00-commands.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/01-selftest-nostack.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/02-red-mutation-refusal-removed.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/03-red-mutation-always-refuse.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/04-scene-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/05-ledger-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/06-attack-ledger-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/07-scenario.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/08-groupdiff-only-unchanged-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/09-groupdiff-only-unchanged-red.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/10-gate-only-unchanged.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/11-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/12-fixture-matrix.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/13-fixture-chain.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/14-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/15-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/16-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/17-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+M	mir2-rs/tests/parity/m3/rng-trace-scene/rng_trace_scenario.json
+M	mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
+
+## 合并树上四门禁重跑（隔离 CARGO_TARGET_DIR=E:/tmp/m3bag-target，--offline）
+
+- cargo fmt --all -- --check                                       => rc=0
+- cargo clippy --workspace --all-targets --offline -- -D warnings  => rc=0
+- cargo test --workspace --offline --no-fail-fast                  => 98 suites / 1044 passed / 0 failed / 21 ignored  rc=0
+    （较 989a8c9af 片证据的 1038 passed 多 6：来自他线合入用例；本片 3 个源件未改）
+- cargo run -q --offline -p msgcodegen -- --check                  => 604 条 rc=0
+
+## 合并树上离线判据重跑（本片功能证据不变）
+
+- run_rng_trace_pair.ps1 -SelfCheckNoStack  => 23/23 GREEN rc=0
+- rng_ledger_diff.py selftest               => 32/32 GREEN rc=0（含 R-6 folded）
+- rng_scene_gate.py selftest                => 16/16 GREEN rc=0
+- rng_scene_gate.py scenario                => VERDICT GREEN
+- attack_rng_ledger.py selftest             => 32/32 GREEN rc=0
+- fixture_matrix.py check                   => FIXTURE_MATRIX GREEN ready=9 pending=1 red=0
+- fixture_chain_gate.py check               => FIXTURE_CHAIN GREEN runner_ok=9 prereq_or_skip=1 red=0
+
+## 结论
+
+本片唯一内容改动仍是 rng-trace-scene/{run_rng_trace_pair.ps1,README.md,rng_trace_scenario.json}
+（+ 本证据包/报告）；本次处置仅把 base 推进到当前 origin/master 636bdce53，回退假差量清零。
+四门禁与离线判据在合并树全绿；真机两相 trace 仍等 owner 独占窗口 + 两侧驱动承接卡。零起栈、零端口。
+
+> 注：16-gate-test.txt 记的是 989a8c9af（未合 master）时的读数（1038 passed）；
+> 合并树（head bf0c4cdee）的读数以本文件为准（1044 passed）。
+>
+> 边界口径：上述 24 路径是「尚未加入本文件时」的读数（合并只推进 base）；
+> 最终交付头（含本文件）对 origin/master 的 diff = **25 路径** = 1 报告 + 21 证据件（00–18 + README.md + SHA256SUMS.txt）+ 3 源件。

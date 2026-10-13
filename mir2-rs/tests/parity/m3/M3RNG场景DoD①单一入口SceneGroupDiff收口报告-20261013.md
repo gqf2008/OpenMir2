@@ -2,9 +2,9 @@
 
 - 卡：`openmir2-m3-rng-trace-scene-groups`（issue `d9d03f47`）
 - 车道：`m3bag`／principal `openmir2-worker-4`／worktree `m3bag`／分支 `worktree-m3-rng-trace-scene-groups`
-- base = `refs/heads/master` `029d23eae`（开工即头部；零 `.rs`、未起栈、未占端口）
+- base = `refs/heads/master` `029d23eae`（开工即头部；零 `.rs`、未起栈、未占端口）；**最终交付前已跟 master 至 `636bdce53`（见 §6）**
 - 写集：`mir2-rs/tests/parity/m3/**`。**零** `crates/**`、`bins/**`、`src/**`、`tests/parity/world/**`。
-- 证据包：`evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/**`（20 件）
+- 证据包：`evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/**`（21 件）
 
 > 一句话：把卡 DoD① 从「靠操作者记得先跑门」补成**机判的单一入口**——`-SceneGroupDiff` 先跑场景一致性
 > 前置门，**非 GREEN ⇒ 拒比**（不跑 `groupdiff`、绝不输出判据结论），GREEN 才比并原样传播 groupdiff 的
@@ -83,3 +83,25 @@ warnings` rc=0 · `test` **98 suites 1038 passed 0 failed 21 ignored** rc=0 · `
 - worktree 内未跟踪 `mir2-rs/tests/parity/m3/sessions/csharp-20261012-2323..2346/`（8 个，**别车道遗留**，
   未纳入本片、未清）。
 - 十端口（5000/5100/5500/5600/5700/6000/7000/7100/7200）本 burst **全 DOWN**（仅共享 3306）⇒ 未起栈、未占端口。
+
+## 6. 追加：交付前 base 跟 master（2026-10-13，DoD① 片重交）
+
+交付待审期间 `origin/master` 前进（`029d23eae` → `636bdce53`）。若评审直接 `git diff origin/master <旧 head>`，
+会带出本片**未改动**的他线文件（`bins/game-svr/src/{enter,main,record,trade}.rs` 呈回退、他线已合入的
+`evidence-m3-party-deal-try-null-pose-20261013/**` 与 `tests/parity/world/client-e2e-enter-gaps-20261013/**`
+呈删除）——正是本项目登记过的「base 未含 master ⇒ 回退假差量」坑。处置：
+
+- `git fetch origin && git merge origin/master`（**零冲突、无内容改动**；本片 3 个源件逐字节不变）；
+- 假差量读数：合并前 `git diff --name-status origin/master 989a8c9af | wc -l` = **63**；合并后
+  （尚未加入本记录时）`git diff --name-status origin/master HEAD | wc -l` = **24**。**最终交付边界 = 25 路径**
+  （1 报告 + 21 证据件（`00`–`18` + `README.md` + `SHA256SUMS.txt`）+ 3 源件），与 `11-boundary.txt` 同口径；
+- 合并树四门禁重跑（隔离 `CARGO_TARGET_DIR=E:/tmp/m3bag-target`，`--offline`）：fmt rc=0 · clippy rc=0 ·
+  **98 suites / 1044 passed / 0 failed / 21 ignored** rc=0 · msgcodegen 604 条 rc=0；
+- 合并树离线判据重跑：无栈自检 **23/23** · ledger selftest **32/32** · scene gate selftest **16/16** ·
+  scenario **VERDICT GREEN** · attack ledger **32/32** · `FIXTURE_MATRIX GREEN ready=9 pending=1 red=0` ·
+  `FIXTURE_CHAIN GREEN runner_ok=9 prereq_or_skip=1 red=0`；
+- 原始读数入库：证据包 `18-post-merge-master-regate.txt`（`16-gate-test.txt` 记的是未合 master 的
+  `989a8c9af` 时读数 1038，**合并树读数以 18 为准**）。
+
+> 注：合并 `origin/master` 只推进 base，**不**改变本片任何判据或内容；`-SceneGroupDiff` 的行为与
+> 改坏必红牙齿不变。真机两相 trace 仍等 owner 独占窗口。
