@@ -319,7 +319,7 @@ pub fn encode_ability(abil: &Ability) -> Vec<u8> {
     w.out[1..].to_vec()
 }
 
-/// 帧 52 尾的**冻结客户端布局**（备选；默认不启用，见 `MIR2_CLIENT_ABILITY_LAYOUT`）。
+/// 帧 52 尾的**冻结客户端布局**（生产默认；`MIR2_CLIENT_ABILITY_LAYOUT=0` 时改用 [`encode_ability`]）。
 ///
 /// 真机实测（2026-10-13，`D:\MirClient-run\MirClinet.exe`）：`MirClient` 的 `TAbility` 在
 /// `HIGHHP = True`（`Source/Common/Grobal2.pas:39`）下是 **58B** 记录，字段为
@@ -337,9 +337,9 @@ pub fn encode_ability(abil: &Ability) -> Vec<u8> {
 /// `HP@22/MP@26/MaxHP@30/MaxMP@34`(DWORD)、`Exp@38/MaxExp@42`(DWORD)、
 /// `Weight@46/MaxWeight@48/WearWeight@50/MaxWearWeight@52/HandWeight@54/MaxHandWeight@56`(Word)。
 ///
-/// **本函数不改默认行为**：生产路径只有在 `MIR2_CLIENT_ABILITY_LAYOUT` 打开时才用它；默认仍走
-/// [`encode_ability`]（与 oracle 逐字节相同）。要走它属 §6.0-3「与 oracle 的故意偏离」，
-/// 需 owner 裁决 + 白名单登记。
+/// **生产默认走本函数**（客户端冻结 ⇒ 以客户端 58B 为准）：`MIR2_CLIENT_ABILITY_LAYOUT=0|false`
+/// 时才回到 [`encode_ability`] 的 oracle 40B（逐字节对拍/金标准夹具）。这是 §6.0-3「与 oracle 的
+/// 故意偏离」，白名单登记条目待 owner 签字。
 #[must_use]
 #[allow(dead_code)]
 pub fn encode_ability_client(abil: &Ability) -> Vec<u8> {

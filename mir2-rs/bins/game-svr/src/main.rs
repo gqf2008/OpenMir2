@@ -174,16 +174,24 @@ impl CommandMessage {
     }
 }
 
-/// 帧 52 尾的布局开关（`openmir2-client-e2e-enter-gaps` 的 ③）。
+/// 帧 52 尾的布局开关（`openmir2-client-e2e-enter-gaps` 的 ③；真机「跑不动」根因）。
 ///
-/// `MIR2_CLIENT_ABILITY_LAYOUT` 为真值（`1`/`true`/`TRUE`/`True`）⇒ 用冻结客户端的 58B
-/// `TAbility`（`HIGHHP=True`，[`record::encode_ability_client`]）；未设/其它 ⇒ oracle 的 40B
-/// `EncodeMessage(WAbil)`。**默认关**：未设时生产路径与 oracle 逐字节相同（四门禁/金标准不回归）。
-/// 打开它是 §6.0-3 意义上的「与 oracle 的故意偏离」，需 owner 裁决 + 白名单登记。
+/// **默认 `client-58`**：现存冻结客户端（`D:\MirClient-run\MirClinet.exe`，`MirClient@c61d912d`，
+/// `HIGHHP=True`，`Source/Common/Grobal2.pas:39`）的 `TAbility` 是 **58B**；`CanRun`
+/// （`Source/MirClient/Actor.pas:2162`）要求 `HP >= RUN_MINHEALTH(10)`，而 oracle 的 40B
+/// `EncodeMessage(WAbil)` 让客户端从 offset 22 读到的 `HP`(DWORD) = oracle 的 `Exp`（本部署 = 0）
+/// ⇒ 客户端 HUD `0/0`、**跑不动**。改用客户端布局后 `HP@22 = 19` ⇒ HUD `19/19`、可跑。
+///
+/// 真机实测（2026-10-13，本卡；证据 `tests/parity/world/client-e2e-enter-gaps-20261013/61-*`）：
+/// `client-58` ⇒ HUD `19/19` + c2s `CM_RUN(3013)` 出现；`oracle-40` ⇒ HUD `0/0` + `CM_RUN = 0`。
+///
+/// `MIR2_CLIENT_ABILITY_LAYOUT=0|false` ⇒ 回到 oracle 的 40B `EncodeMessage(WAbil)`（逐字节对拍 /
+/// 金标准夹具用）。**这是 §6.0-3 意义上的「与 oracle 的故意偏离」**：oracle 的 40B 与冻结客户端的
+/// 58B 不可同时满足，而客户端冻结（硬约束 #1）⇒ 默认以客户端为准；白名单登记条目待 owner 签字。
 fn mir2_client_ability_layout() -> bool {
-    matches!(
+    !matches!(
         std::env::var("MIR2_CLIENT_ABILITY_LAYOUT").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE") | Ok("True")
+        Ok("0") | Ok("false") | Ok("FALSE") | Ok("False")
     )
 }
 
@@ -3920,14 +3928,14 @@ fn send_good_tick(
     });
 }
 
-/// 进图时把本会话写入 52/752 的**输入值**与 52 的 40B 尾打进日志（只读；卡 `openmir2-client-e2e-enter-gaps`）。
+/// 进图时把本会话写入 52/752 的**输入值**与 52 的**尾字节**打进日志（只读；卡 `openmir2-client-e2e-enter-gaps`）。
 ///
 /// 用途：真机上“客户端血/负重为 0”时，先看这行就能区分「服务端没发/值错」与「客户端解析」。
 /// 不参与任何模拟/出帧语义（与 oracle `RecalcAbilitys` 输出同源，不额外取数）。
 fn log_enter_ability(chr_name: &str, out: &game_svr::ability::RecalcOutput) {
     let w = &out.wabil;
-    // 与生产路径用**同一**布局（`MIR2_CLIENT_ABILITY_LAYOUT`）：默认 oracle 40B，开关打开时
-    // 冻结客户端 58B。日志必须反映**实际写入 52/752 的字节**，否则又会造成“血条为 0”的误读。
+    // 与生产路径用**同一**布局（`MIR2_CLIENT_ABILITY_LAYOUT`）：默认冻结客户端 58B，
+    // `=0` 时回到 oracle 40B。日志必须反映**实际写入 52/752 的字节**，否则又会造成“血条为 0”的误读。
     let layout = if mir2_client_ability_layout() {
         "client-58"
     } else {
