@@ -106,7 +106,8 @@ pub struct AbilityInputs<'a> {
     pub gold: i32,
     /// 帧 52 尾的布局：`true` ⇒ 冻结客户端的 58B `TAbility`（`HIGHHP=True`，
     /// [`crate::record::encode_ability_client`]）；`false` ⇒ oracle 的 40B `EncodeMessage(WAbil)`。
-    /// 由 `MIR2_CLIENT_ABILITY_LAYOUT` 决定（**默认 `false`** = 与 oracle 逐字节相同）。
+    /// 由 `MIR2_CLIENT_ABILITY_LAYOUT` 决定（**默认 `true`** = 冻结客户端可玩；`=0|false` ⇒
+    /// oracle 逐字节，供金标准/对拍夹具）。
     pub client_ability_layout: bool,
 }
 
@@ -619,8 +620,8 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
             let out = recalc_for_session(&a, wx.job);
             // 52：`MakeMessage(SM_ABILITY, Gold, MakeWord((byte)Job, 99), LoWord(GameGold), HiWord(GameGold))`
             // 尾 = `EncodeMessage(WAbil)`（`Message.cs:1732-1734`）。`Job` 在原头的高字节、99 在低字节。
-            // `client_ability_layout`（`MIR2_CLIENT_ABILITY_LAYOUT`）打开时改用冻结客户端的 58B 记录
-            // 布局（默认关 ⇒ oracle 逐字节）。
+            // `client_ability_layout`（`MIR2_CLIENT_ABILITY_LAYOUT`，**默认开** = 冻结客户端 58B）
+            // 为 `false` 时用 oracle 的 40B `EncodeMessage(WAbil)`（逐字节对拍）。
             let wabil_tail = if a.client_ability_layout {
                 crate::record::encode_ability_client(&out.wabil)
             } else {
@@ -1494,7 +1495,7 @@ mod tests {
         );
 
         // `MIR2_CLIENT_ABILITY_LAYOUT`：冻结客户端 58B 布局（`HIGHHP=True`）——同一 `WAbil`、
-        // `HP` 落在客户端读取的 offset 22。默认关（上一个断言）逐字节等于 oracle。
+        // `HP` 落在客户端读取的 offset 22。生产默认即此布局（上一个断言显式传 `false` 时 = oracle）。
         let client_inputs = AbilityInputs {
             client_ability_layout: true,
             ..inputs
