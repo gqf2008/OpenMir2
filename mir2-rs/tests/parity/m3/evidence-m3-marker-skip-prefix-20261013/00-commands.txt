@@ -1,0 +1,24 @@
+# 本片实跑命令（cwd = mir2-rs/tests/parity/m3，除非另注）
+
+## 『改前』对照（pristine origin/master 9c776129c；scratch worktree E:/tmp/m3cs-master-before）
+python -I marker_prefix_gate.py check
+rg -n 'MainOutMessage\("M3[A-Z]*SEQ [^"]*skip=' ../../../../src/BotSrv/Player/RobotPlayer.cs
+
+## 改后（本片）
+python -I -B marker_prefix_gate.py check
+python -I -B marker_prefix_gate.py selftest
+python -I -B marker_prefix_gate.py mutation
+for c in npc_shop_diff quest_diff party_trade_diff selloff_diff hero_pet_diff guild_castle_diff; do python -I -B $c.py selftest; done
+for r in run_bag_equip_pair run_attack_pair run_npc_shop_pair run_quest_pair run_party_trade_pair run_selloff_pair run_hero_pet_pair run_guild_castle_pair; do powershell -NoProfile -ExecutionPolicy Bypass -File $r.ps1 -SelfCheckNoStack; done
+rg -n 'M3[A-Z]*SEQ_SKIP' ../../../../src/BotSrv/Player/RobotPlayer.cs
+rg -n 'MainOutMessage\("M3[A-Z]*SEQ [^"]*skip=' ../../../../src/BotSrv/Player/RobotPlayer.cs   # 期望 no match
+
+## 四门禁（cwd = mir2-rs，CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo run -p msgcodegen -- --check
+
+## 证据口径自检（cwd = 仓库根）
+python -I tools/evidence-hash/verify_sha256sums.py verify mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013

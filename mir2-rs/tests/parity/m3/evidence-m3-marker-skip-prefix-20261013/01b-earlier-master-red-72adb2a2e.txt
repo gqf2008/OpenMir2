@@ -1,0 +1,7 @@
+# 『改前·更早点』：该 master 点上的 marker_prefix_gate.py check（⑨-5 合入时漏跟前缀口径 ⇒ 该点本门 RED）
+# 树/提交 = 72adb2a2e8489f44d7b5ed9181ca430d597effba（更早点；本片最终 base = 9c776129c，该点上本门已 GREEN）
+# 注：⑧-10 合入 9c776129c 时顺带修掉了 ⑨ hero-pet 的去前缀截断，故最终 base 上本门 GREEN；本片补的是 defect_2（见 01-before-pristine-master.txt）。
+$ python -I marker_prefix_gate.py check
+RED: markers 前缀口径门失败（1 项）
+  - run_pair.ps1:758 仍有去前缀截断: $heroPetEvents = @($heroPetSeqMarkers | ForEach-Object { $_.Substring('M3HEROPETSEQ '.Length).Trim() })
+rc=1
