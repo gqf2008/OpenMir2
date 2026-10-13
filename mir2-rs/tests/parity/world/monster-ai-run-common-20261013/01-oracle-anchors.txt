@@ -1,0 +1,40 @@
+# M3④-实现 C 余下支（`BaseObject.Run` 怪侧公共段）：oracle 锚点
+#
+# 行号复核于 2026-10-13；路径 = 仓库根相对。除非另注，行号 = `src/M2Server/Actor/BaseObject.Base.cs`。
+
+## `BaseObject.Run()`（`:24-316`）的怪侧执行入口
+- `MonsterObject.Run`（第 251 行）末尾**总是**调 `base.Run()`：
+  - `Think()` 返回 true 的出口：`MonsterObject.cs:255-258`（`base.Run(); return;`）
+  - 普通出口：`MonsterObject.cs:359`（`base.Run();`）
+  ⇒ `monster_ai_tick` 对每只怪先 `monster_run`（AI）再 `base_object_run_monster`（本片）与 oracle 同序。
+
+## 本片覆盖的段
+| 段 | 行号 | 语义 |
+| --- | --- | --- |
+| `SuperMan` | `:35-38` | `if (SuperMan) { HP=MaxHP; MP=MaxMP; }` —— **未建模（登记）**：怪物无 `SuperMan` 字段/来源 |
+| 恢复段 | `:39-66` | `recoveryTick=(now-AutoRecoveryTick)/20; HealthTick+=recoveryTick; SpellTick+=recoveryTick;` |
+| 恢复·HP | `:47-55` | `HP<MaxHP && HealthTick>=HealthFillTime ⇒ n18=MaxHP/75+1; HP=min(HP+n18, MaxHP); HealthSpellChanged()` |
+| 恢复·MP | `:57-65` | `MP<MaxMP && SpellTick>=SpellFillTime ⇒ n18=MaxMP/18+1; MP=min(MP+n18, MaxMP); HealthSpellChanged()` |
+| `HP==0⇒Die` | `:70-73` | **未在本段实现**：由 `World::settle_deaths` 在同一 tick 的死亡结算等价处理（本段恢复只增 HP，体力点段有 `HP>1` 门 ⇒ `HP==0` 不可达） |
+| 死亡分支/`MakeGhost` | `:86-101` | **未建模（登记）**：需 `MonGen.ZenTime`（`WorldEngine.GetMonstersZenTime`）与 `Config.MakeGhostTime` |
+| tick 归零 | `:66-69` | `HealthTick>=HealthFillTime ⇒ HealthTick=0`；`SpellTick>=SpellFillTime ⇒ SpellTick=0` |
+| 体力点段 | `:105-110` | `HealthTick<-HealthFillTime && HP>1 ⇒ HP-=1; HealthTick+=HealthFillTime; HealthSpellChanged()` |
+| `TargetCret` 清理 | `:111-118` | `(now-TargetFocusTick)>30000 \|\| TargetCret.Death \|\| TargetCret.Ghost \|\| TargetCret.Envir!=Envir \|\| |Δx|>15 \|\| |Δy|>15 ⇒ ClearTargetCreat(TargetCret)` |
+| `LastHiter` 过期 | `:119-125` | `(now-LastHiterTick)>30000 \|\| LastHiter.Death \|\| LastHiter.Ghost ⇒ LastHiter=null` |
+| `ExpHitter` 过期 | `:126-132` | `(now-ExpHitterTick)>6000 \|\| ExpHitter.Death \|\| ExpHitter.Ghost ⇒ ExpHitter=null` |
+| `Master`/`SlaveList` | `:133-215` | **未建模（登记）**：宝宝变色/`SlaveList` 清理，归 ⑨-3 宝宝生命周期 |
+| `ShowHp`/`VerifyTick` | `:217-256` | **未建模（登记）**：`BreakOpenHealth` / `VerifyMapTime` / HP/MP 上限钳位 |
+
+## 相关 oracle 定义/初始化
+- 字段：`HealthTick`/`SpellTick` `BaseObject.cs:287-288`；`LastHiterTick` `:295`；`ExpHitterTick` `:297`；
+  `VerifyTick` `:302`；`AutoRecoveryTick` `:306`。
+- ctor：`VerifyTick = GetTickCount()` `BaseObject.cs:444`；`AutoRecoveryTick = GetTickCount()` `:445`；
+  `HealthTick=0`/`SpellTick=0` `:448-449`。
+- `SetLastHiter`（`src/M2Server/Actor/BaseObject.cs:1753-1770`）：`LastHiter=hitter; LastHiterTick=now;`
+  `if (ExpHitter==null) { ExpHitter=hitter; ExpHitterTick=now; } else if (ExpHitter==hitter) ExpHitterTick=now;`
+- `HealthSpellChanged`（`BaseObject.cs:700-710`）：**只对 `Race==ActorRace.Play` 发 `RM_HEALTHSPELLCHANGED`**；
+  `ShowHp` 才发 `SendRefMsg`。⇒ 怪物的恢复段**不产生任何帧面**。
+- 到点门缺省：`HealthFillTime=300` / `SpellFillTime=800`（`GameSvrConf.cs:1323-1324`；
+  `ServerConf.cs:152-153` 读 `[Setup] HealthFillTime/SpellFillTime`）。
+- 怪物能力装载：`ApplyMonsterAbility`（`src/GameSrv/Word/WorldServer.MonGen.cs:880-910`）：
+  `Abil.HP=MaxHP=monster.HP` `:894-895`；`Abil.MP=0` `:896`；`Abil.MaxMP=monster.MP` `:897`。

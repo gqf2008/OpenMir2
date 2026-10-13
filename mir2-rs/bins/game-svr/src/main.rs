@@ -3498,6 +3498,15 @@ fn sim_loop(
     // 合成 golden 场景不经本函数 ⇒ 仍缺省关闭，逐字节不变。
     game_svr::mongen::enable_production_monster_ai(&mut world);
     glog!("INF", "Monster AI 已启用（生产宿主）EnableMonsterAI=true");
+    // `BaseObject.Run` 恢复段的到点门（`SystemShare.Config.HealthFillTime/SpellFillTime`，
+    // `GameSvrConf.cs:1323-1324` 缺省 300/800；与玩家周期的同名配置同源）。
+    world.set_recovery_fill_times(enter_cfg.health_fill_time, enter_cfg.spell_fill_time);
+    glog!(
+        "INF",
+        "怪物恢复节拍已灌入 HealthFillTime={} SpellFillTime={}",
+        enter_cfg.health_fill_time,
+        enter_cfg.spell_fill_time
+    );
     // **M3④-实现 B 第 ③ 片**：MonGen 刷怪调度宿主（`WorldServer.MonGen.cs:30/192/811`）。
     // `entries=None` ⇒ 无 `Envir/MonGen.txt`，不建宿主；`initialize_monster` 在此消耗一次
     // `world.rng`（oracle `InitializeMonster` 同一时机；RNG 次序 = 怪名分组序 + `MonsterList.Values`）。

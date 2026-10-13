@@ -28,9 +28,15 @@
 //! - **线程模型**：oracle 的 `ProcessMonsters` 跑在独立线程（`WorldServer.MonGen.cs:192`），
 //!   本 crate 单线程 tick 串行（设计文档 §4.2 硬约束①）。本片把「每 tick 对每只怪跑一次
 //!   `Run()`」按**实体槽位顺序**串行执行（顺序来自 `EntityStore` 的显式槽位索引）。
-//! - **`BaseObject.Run` 的公共段**（恢复 `HealthTick/SpellTick`、`HP==0 ⇒ Die()`、`LastHiter/ExpHiter`
-//!   过期、`MakeGhost`）已由 [`crate::world::World`] 的 `expire_hitters`/`settle_deaths` 建模，
-//!   本模块**不重复**；[`monster_run`] 只做 AI（Think/Walk/Attack/Wondering）。
+//! - **`BaseObject.Run` 的公共段已分归两处**（`BaseObject.Base.cs:24-316`）：
+//!   - [`base_object_run_monster`]：恢复 `HealthTick/SpellTick`（`:39-66`）、体力点段（`:105-110`）、
+//!     `TargetCret` 清理（`:111-118`）——每只怪在 [`monster_run`] 之后跑（oracle `MonsterObject.Run`
+//!     末尾的 `base.Run()`，`MonsterObject.cs:255/359`）；
+//!   - [`crate::world::World`]：`HP==0 ⇒ Die()`（`:70-73`，由 `settle_deaths` 死亡结算等价）、
+//!     `LastHiter` 30s / `ExpHiter` 6s 过期（`:119-132`，由 `expire_hitters`）。
+//! - **仍未建模**（登记）：`SuperMan`（`:35-38`）、死亡分支 `MakeGhost`（`:86-101`，需
+//!   `MonGen.ZenTime`/`Config.MakeGhostTime`）、`Master`/`SlaveList`（`:133-215`，归 ⑨-3）、
+//!   `ShowHp`/`VerifyTick`（`:217-256`）。
 //! - **构造期 RNG**：oracle 在 `new MonsterObject()` 时先抽 `BaseObject` 的 `Random(1500)`+
 //!   `Random(2000)`、`AnimalObject` 的 `Random(3000)`×2、`MonsterObject` 的 `Random(2000)`
 //!   （`BaseObject.cs:439/441`、`AnimalObject.cs:76/77`、`MonsterObject.cs:65`），**再**由
@@ -539,9 +545,114 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
     }
 }
 
+/// `BaseObject.Run()`（`BaseObject.Base.cs:24-316`）的**怪侧公共段**：恢复 / 体力点 / `TargetCret` 清理。
+///
+/// oracle 里这三段在 `monster.Run()` 的**末尾**执行：`MonsterObject.Run` 的两个出口
+/// （`Think()` 命中 `MonsterObject.cs:255-258` 与普通出口 `:359`）都调 `base.Run()`；
+/// 因此 [`monster_ai_tick`] 对每只怪先跑 [`monster_run`]（AI）再跑本函数，与 oracle 同序。
+///
+/// 覆盖的段（行号 = `src/M2Server/Actor/BaseObject.Base.cs`）：
+/// - 恢复段 `:39-66`：`(now - AutoRecoveryTick) / 20` 折成 `HealthTick/SpellTick`；
+///   `HP < MaxHP` 且 `HealthTick >= HealthFillTime` ⇒ `HP += MaxHP / 75 + 1`（截断到 `MaxHP`）；
+///   `MP < MaxMP` 且 `SpellTick >= SpellFillTime` ⇒ `MP += MaxMP / 18 + 1`；到点后两个 tick 归零。
+///   怪物的 `HealthSpellChanged()` 只对 `Race == ActorRace.Play` 发帧（`BaseObject.cs:700-703`）
+///   ⇒ **怪侧无帧面**（不产生任何 `SM_*`）。
+/// - 体力点段 `:105-110`：`HealthTick < -HealthFillTime && HP > 1` ⇒ `HP -= 1; HealthTick += HealthFillTime`。
+///   普通怪的 `HealthTick` 只增不减⇒该支对怪物不可达；照抄是为了同一份 `BaseObject.Run` 语义
+///   （将来玩家/消费点接进来时不需要再改）。
+/// - `TargetCret` 清理段 `:111-118`：`now - TargetFocusTick > 30000 || TargetCret.Death ||
+///   TargetCret.Ghost || 异图 || |Δx| > 15 || |Δy| > 15` ⇒ `ClearTargetCreat`。
+///
+/// **本函数不消费随机数**（恢复/体力点/过期都是纯状态演进）。
+///
+/// **未建模（登记，见模块头/证据）**：`SuperMan`（`:35-38`）、`HP == 0 ⇒ Die()`（`:70-73`，
+/// 由 [`crate::world::World`] 的 `settle_deaths` 在同一 tick 的死亡结算里等价处理；本段的恢复
+/// 只增 HP、体力点段有 `HP > 1` 门⇒此处 `HP == 0` 不可达）、`MakeGhost`（`:86-101`，需
+/// `MonGen.ZenTime`/`Config.MakeGhostTime`）、`Master`/`SlaveList`（`:133-215`，归 ⑨-3）、
+/// `ShowHp`/`VerifyTick`（`:217-256`）。
+///
+/// 锚点复核于 2026-10-13。
+/// 改坏必红：把 `HealthFillTime` 门（或 `HP > 1` 门）拆掉⇒`base_recovery_*`/
+/// `health_tick_negative_cost_is_clamped` 必红（见 `tests/parity/world/monster-ai-host-20261013`）。
+pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if e.death {
+        // 死亡分支（`BaseObject.Run` 的 else：`MakeGhost`，`:86-101`）未建模⇒直接返回；
+        // 死亡实体也不再回血（oracle 同行）。
+        return;
+    }
+    let health_fill_time = world.health_fill_time;
+    let spell_fill_time = world.spell_fill_time;
+    let recovery_tick = ((now - e.auto_recovery_tick) / 20) as i32;
+    let mut health_tick = e.health_tick + recovery_tick;
+    let mut spell_tick = e.spell_tick + recovery_tick;
+    let mut hp = e.hp;
+    let mut mp = e.mp;
+    let (max_hp, max_mp) = (e.max_hp, e.max_mp);
+    // `BaseObject.Base.cs:47-55`：`WAbil.MaxHP / 75 + 1`，`(HP + n) < MaxHP` 否则截断到 `MaxHP`。
+    if hp < max_hp && health_tick >= health_fill_time {
+        let n = max_hp / 75 + 1;
+        hp = if hp + n < max_hp { hp + n } else { max_hp };
+    }
+    // `BaseObject.Base.cs:57-65`：`WAbil.MaxMP / 18 + 1`。
+    if mp < max_mp && spell_tick >= spell_fill_time {
+        let n = max_mp / 18 + 1;
+        mp = if mp + n < max_mp { mp + n } else { max_mp };
+    }
+    // `BaseObject.Base.cs:66-69` 的归零两行（照 oracle 次序：先判恢复、再归零）。
+    if health_tick >= health_fill_time {
+        health_tick = 0;
+    }
+    if spell_tick >= spell_fill_time {
+        spell_tick = 0;
+    }
+    // `BaseObject.Base.cs:105-110` 体力点段。
+    if health_tick < -health_fill_time && hp > 1 {
+        hp -= 1;
+        health_tick += health_fill_time;
+    }
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.health_tick = health_tick;
+        e.spell_tick = spell_tick;
+        e.hp = hp;
+        e.mp = mp;
+        e.auto_recovery_tick = now;
+    }
+    target_cret_cleanup(world, actor_id, now);
+}
+
+/// `BaseObject.Run()` 的 `TargetCret` 清理段（`BaseObject.Base.cs:111-118`）。
+fn target_cret_cleanup(world: &mut World, actor_id: i32, now: i64) {
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    let Some(target_id) = e.ai.target_creature else {
+        return;
+    };
+    let (map_id, x, y, focus) = (e.map_id, e.x, e.y, e.ai.target_focus_tick);
+    let invalid = match world.entities.get(target_id) {
+        None => true,
+        Some(t) => {
+            (now - focus) > 30_000
+                || t.death
+                || t.ghost
+                || t.map_id != map_id
+                || (t.x - x).abs() > 15
+                || (t.y - y).abs() > 15
+        }
+    };
+    if invalid {
+        del_target_creature(world, actor_id);
+    }
+}
+
 /// 按**实体槽位顺序**对场上所有怪物跑一次 [`monster_run`]（`ProcessMonsters` 的单线程等价物）。
 ///
 /// 顺序契约：来自 `EntityStore` 的显式槽位索引（`iter`），不迭代 Query。
+/// 每只怪再跑一次 [`base_object_run_monster`]（`MonsterObject.Run` 末尾的 `base.Run()`）。
 pub fn monster_ai_tick(world: &mut World) {
     let ids: Vec<i32> = world
         .entities
@@ -553,6 +664,8 @@ pub fn monster_ai_tick(world: &mut World) {
         .collect();
     for id in ids {
         monster_run(world, id);
+        // `MonsterObject.Run` 的末尾 `base.Run()`（`MonsterObject.cs:255/359`）。
+        base_object_run_monster(world, id);
     }
 }
 
@@ -866,5 +979,130 @@ mod tests {
             "开启 AI 必须消耗/推进随机流（否则 gate 形同虚设）"
         );
         let _ = on_state;
+    }
+
+    /// `BaseObject.Run` 恢复段（`BaseObject.Base.cs:39-66`）：`HealthTick` 到 `HealthFillTime`
+    /// ⇒ `HP += MaxHP / 75 + 1`（截断到 `MaxHP`）并把 `HealthTick` 归零。
+    /// 改坏必红：去掉 `health_tick >= health_fill_time` 门（无条件回血）⇒ 本用例第一个断言红。
+    #[test]
+    fn base_recovery_heals_hp_at_fill_time_and_resets_tick() {
+        let mut world = World::new(32, 32);
+        world.set_recovery_fill_times(300, 800);
+        let mut e = Entity::new(0, "稻草人", 10, 10);
+        e.race = ACTOR_RACE_MONSTER;
+        e.hp = 10;
+        e.max_hp = 75;
+        e.health_tick = 0;
+        e.auto_recovery_tick = 0;
+        let id = world.add_entity(e);
+        // 未到点：`(5980 - 0) / 20 = 299` ⇒ `HealthTick = 299 < 300` ⇒ 不回血。
+        world.clock_ms = 5_980;
+        base_object_run_monster(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert_eq!(e.hp, 10, "未到 HealthFillTime 不得回血");
+        assert_eq!(e.health_tick, 299, "HealthTick 仍按时间累加");
+        // 到点：`(6000 - 5980) / 20 = 1` ⇒ `HealthTick = 300 >= 300` ⇒ `HP += 75/75+1 = 2` 后归零。
+        world.clock_ms = 6_000;
+        base_object_run_monster(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert_eq!(e.hp, 12, "回血量 = MaxHP/75 + 1");
+        assert_eq!(e.health_tick, 0, "到点后 HealthTick 归零");
+    }
+
+    /// 恢复段截断：`(HP + n) < MaxHP` 不成立 ⇒ 跳到 `MaxHP`（`BaseObject.Base.cs:51-54`）。
+    #[test]
+    fn base_recovery_caps_at_max_hp() {
+        let mut world = World::new(32, 32);
+        world.set_recovery_fill_times(300, 800);
+        let mut e = Entity::new(0, "稻草人", 10, 10);
+        e.race = ACTOR_RACE_MONSTER;
+        e.hp = 74;
+        e.max_hp = 75;
+        e.health_tick = 300;
+        e.auto_recovery_tick = 0;
+        let id = world.add_entity(e);
+        base_object_run_monster(&mut world, id);
+        assert_eq!(world.entities.get(id).unwrap().hp, 75, "HP 截断到 MaxHP");
+    }
+
+    /// 恢复段 MP 支（`BaseObject.Base.cs:57-65`）：`MaxMP/18 + 1`。
+    #[test]
+    fn base_recovery_heals_mp_at_spell_fill_time() {
+        let mut world = World::new(32, 32);
+        world.set_recovery_fill_times(300, 800);
+        let mut e = Entity::new(0, "稻草人", 10, 10);
+        e.race = ACTOR_RACE_MONSTER;
+        e.hp = 75;
+        e.max_hp = 75;
+        e.mp = 0;
+        e.max_mp = 18;
+        e.spell_tick = 795;
+        e.auto_recovery_tick = 0;
+        let id = world.add_entity(e);
+        world.clock_ms = 100; // recovery = 5 ⇒ SpellTick = 800 >= 800
+        base_object_run_monster(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert_eq!(e.mp, 2, "回蓝量 = MaxMP/18 + 1");
+        assert_eq!(e.spell_tick, 0, "到点后 SpellTick 归零");
+    }
+
+    /// 体力点段（`BaseObject.Base.cs:105-110`）：`HealthTick < -HealthFillTime && HP > 1`
+    /// ⇒ `HP -= 1` 且 `HealthTick += HealthFillTime`；`HP == 1` 时被 `HP > 1` 门挡住。
+    /// 改坏必红：拆掉 `hp > 1` 门 ⇒ 第二个断言红。
+    #[test]
+    fn health_tick_negative_costs_one_hp_and_is_gated() {
+        let mut world = World::new(32, 32);
+        world.set_recovery_fill_times(300, 800);
+        let mut e = Entity::new(0, "稻草人", 10, 10);
+        e.race = ACTOR_RACE_MONSTER;
+        e.hp = 5;
+        e.max_hp = 60;
+        e.health_tick = -301;
+        let id = world.add_entity(e);
+        base_object_run_monster(&mut world, id); // clock 0 ⇒ recovery 0
+        let e = world.entities.get(id).unwrap();
+        assert_eq!(e.hp, 4, "负体力点扣 1 点 HP");
+        assert_eq!(e.health_tick, -1, "HealthTick 回填 HealthFillTime");
+        // `HP == 1` ⇒ `HP > 1` 门挡住。
+        let mut e = Entity::new(0, "稻草人", 10, 10);
+        e.race = ACTOR_RACE_MONSTER;
+        e.hp = 1;
+        e.max_hp = 60;
+        e.health_tick = -301;
+        let id2 = world.add_entity(e);
+        base_object_run_monster(&mut world, id2);
+        let e = world.entities.get(id2).unwrap();
+        assert_eq!(e.hp, 1, "HP == 1 时不得再扣");
+        assert_eq!(e.health_tick, -301, "被门挡住 ⇒ HealthTick 不回填");
+    }
+
+    /// `BaseObject.Run` 的 `TargetCret` 清理段（`BaseObject.Base.cs:111-118`）四种失效条件。
+    #[test]
+    fn target_cret_cleanup_covers_age_death_map_and_distance() {
+        let build = |clock: i64, tx: i32, ty: i32, kill: bool, tmap: usize| {
+            let mut world = World::new(64, 64);
+            world.clock_ms = 0;
+            let id = monster(&mut world, 10, 10);
+            let tid = player(&mut world, tx, ty);
+            if tmap != 0 {
+                world.entities.get_mut(tid).unwrap().map_id = tmap;
+            }
+            if kill {
+                world.entities.get_mut(tid).unwrap().death = true;
+            }
+            set_target_creature(&mut world, id, tid);
+            world.clock_ms = clock;
+            base_object_run_monster(&mut world, id);
+            world.entities.get(id).unwrap().ai.target_creature
+        };
+        assert!(
+            build(0, 11, 10, false, 0).is_some(),
+            "同图近距且未过期 ⇒ 保留"
+        );
+        assert!(build(30_001, 11, 10, false, 0).is_none(), "30s 过期 ⇒ 清理");
+        assert!(build(0, 11, 10, true, 0).is_none(), "目标死亡 ⇒ 清理");
+        assert!(build(0, 11, 10, false, 1).is_none(), "异图 ⇒ 清理");
+        assert!(build(0, 26, 10, false, 0).is_none(), "|Δx| > 15 ⇒ 清理");
+        assert!(build(0, 11, 26, false, 0).is_none(), "|Δy| > 15 ⇒ 清理");
     }
 }

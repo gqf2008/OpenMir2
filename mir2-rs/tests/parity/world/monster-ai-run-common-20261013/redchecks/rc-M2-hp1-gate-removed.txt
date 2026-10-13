@@ -1,0 +1,6 @@
+=== RC-M2: mutation -> health_tick_negative_costs_one_hp_and_is_gated ===
+mutation: if health_tick < -health_fill_time && hp > 1 {  ==>  if health_tick < -health_fill_time {
+exit=101 verdict=RED (FAILED as expected)
+  thread 'monai::tests::health_tick_negative_costs_one_hp_and_is_gated' (34320) panicked at crates\world\src\monai.rs:1075:9:
+  assertion `left == right` failed: HP == 1 时不得再扣
+  test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 61 filtered out; finished in 0.02s

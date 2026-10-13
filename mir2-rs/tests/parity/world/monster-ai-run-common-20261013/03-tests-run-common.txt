@@ -1,0 +1,35 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.41s
+     Running unittests src\lib.rs (E:/tmp/m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 3 tests
+test monai::tests::base_recovery_heals_hp_at_fill_time_and_resets_tick ... ok
+test monai::tests::base_recovery_caps_at_max_hp ... ok
+test monai::tests::base_recovery_heals_mp_at_spell_fill_time ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 59 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running unittests src\lib.rs (E:/tmp/m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test monai::tests::health_tick_negative_costs_one_hp_and_is_gated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 61 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running unittests src\lib.rs (E:/tmp/m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test monai::tests::target_cret_cleanup_covers_age_death_map_and_distance ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 61 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running unittests src\lib.rs (E:/tmp/m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test world::tests::expire_hitters_uses_wall_clock_last_hiter_30s_exp_hitter_6s ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 61 filtered out; finished in 0.00s
+
