@@ -62,6 +62,16 @@ namespace BotSrv
             MShare.g_nQuestStepMs = _options.QuestStepMs;
             MShare.g_nQuestStartDelayMs = _options.QuestStartDelayMs;
             MShare.g_sQuestSteps = _options.QuestSteps ?? string.Empty;
+            // M3⑦ 夹具（白名单 T-43 家族扩展）：固定组队/交易动作序列；默认 false = 原行为
+            MShare.g_boPairTradeSequence = _options.PairTradeSequence;
+            MShare.g_nPairTradeStepMs = _options.PairTradeStepMs;
+            MShare.g_nPairTradeStartDelayMs = _options.PairTradeStartDelayMs;
+            MShare.g_sPairTradeSteps = _options.PairTradeSteps ?? string.Empty;
+            MShare.g_nPairTradeRole = _options.PairTradeRole;
+            MShare.g_nPairTradePeerRole = _options.PairTradePeerRole;
+            // actor/peer 的精确 LoginId = LoginAccount + 序号（AppService.Run：LoginId = ChrName）。
+            MShare.g_sPairTradeActorLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.PairTradeRole);
+            MShare.g_sPairTradePeerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.PairTradePeerRole);
             // M1③ 退出路径夹具（白名单 M1-EXIT）：进世界后发 CM_SOFTCLOSE；默认 0 = 原行为
             MShare.g_nSoftCloseAfterWorldMs = _options.SoftCloseAfterWorldMs;
             MShare.g_boDisableAutoPlay = _options.DisableAutoPlay;
@@ -106,6 +116,11 @@ namespace BotSrv
             {
                 LogService.Info("固定任务序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms（点任务 NPC/选标签/核对说词；见 RobotPlayer.QuestSequenceTick）",
                     _options.QuestSteps, _options.QuestStartDelayMs, _options.QuestStepMs);
+            }
+            if (_options.PairTradeSequence)
+            {
+                LogService.Info("固定组队/交易序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms actor序号={3} peer序号={4}（见 RobotPlayer.PairTradeSequenceTick）",
+                    _options.PairTradeSteps, _options.PairTradeStartDelayMs, _options.PairTradeStepMs, _options.PairTradeRole, _options.PairTradePeerRole);
             }
         }
 

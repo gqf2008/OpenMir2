@@ -55,6 +55,12 @@ param(
   [string]$QuestSteps = '',          # 仅 -QuestSequence 时生效：步骤串 `op|npc|label;...`
   [int]$QuestStepMs = 1000,          # 仅 -QuestSequence 时生效：每步间隔
   [int]$QuestStartDelayMs = 3000,    # 仅 -QuestSequence 时生效：进世界到第一步的额外等待
+  [switch]$PairTradeSequence,        # M3⑦ 夹具：两个假人按固定步骤串发组队/交易动作（T-43 家族扩展）
+  [string]$PairTradeSteps = '',      # 仅 -PairTradeSequence 时生效：步骤串 `role|op|param;...`
+  [int]$PairTradeStepMs = 1000,      # 仅 -PairTradeSequence 时生效：每步间隔
+  [int]$PairTradeStartDelayMs = 3000,# 仅 -PairTradeSequence 时生效：进世界到第一步的额外等待
+  [int]$PairTradeRole = 0,           # 仅 -PairTradeSequence 时生效：actor 账号序号
+  [int]$PairTradePeerRole = 1,       # 仅 -PairTradeSequence 时生效：peer 账号序号
   [int]$SoftCloseAfterWorldMs = 0,   # M1③ 退出路径夹具：进世界后发 CM_SOFTCLOSE(1009)；0=关（默认）
   [switch]$DisableAutoPlay,          # M1③ 退出路径夹具：关掉自动挂机（默认关=原行为）；见 ClientManager.RunAutoPlay
   [switch]$WriteConfigOnly,       # 只写 AppSetting.json 并退出（不构建/不起进程；供无栈自检与红检用）
@@ -77,10 +83,11 @@ $BotExe = Join-Path $BotBinDir "BotSrv.exe"
 #   attack = BotSrv `M3ATTSEQ {"role":"done",...}`（RobotPlayer.cs:674；F-E 收尾证据）
 #   bag    = `M3BAGSEQ done`（T-14）
 function Get-M3SeqDoneCount {
-    param([AllowEmptyString()][string]$Text, [ValidateSet('bag', 'attack', 'shop', 'quest')][string]$Kind)
+    param([AllowEmptyString()][string]$Text, [ValidateSet('bag', 'attack', 'shop', 'quest', 'pairtrade')][string]$Kind)
     if ($Kind -eq 'bag') { return ([regex]::Matches($Text, 'M3BAGSEQ done')).Count }
     if ($Kind -eq 'shop') { return ([regex]::Matches($Text, 'M3SHOPSEQ \{[^\r\n]*"phase":"done"')).Count }
     if ($Kind -eq 'quest') { return ([regex]::Matches($Text, 'M3QUESTSEQ \{[^\r\n]*"phase":"done"')).Count }
+    if ($Kind -eq 'pairtrade') { return ([regex]::Matches($Text, 'M3PAIRTRADESEQ \{[^\r\n]*"phase":"done"')).Count }
     return ([regex]::Matches($Text, 'M3ATTSEQ \{[^\r\n]*"role":"done"')).Count
 }
 
@@ -92,14 +99,14 @@ function Get-M3SeqDoneCount {
 # ⇒ `-Bots 2` 时永远等不到第 2 条 done（实测 `attack_seq_done=1/2` 卡到超时/进程退出再报 RED），
 # 把**已经跑完整**的序列误判成截断。
 function Get-M3SeqExpectedDone {
-    param([ValidateSet('bag', 'attack', 'shop', 'quest')][string]$Kind, [int]$Bots)
+    param([ValidateSet('bag', 'attack', 'shop', 'quest', 'pairtrade')][string]$Kind, [int]$Bots)
     if ($Kind -eq 'attack') { return 1 }
     return $Bots
 }
 
 # 收尾判据唯一口径：done 数达到本序列的预期 done 数。
 function Test-M3SeqComplete {
-    param([ValidateSet('bag', 'attack', 'shop', 'quest')][string]$Kind, [int]$Done, [int]$Bots)
+    param([ValidateSet('bag', 'attack', 'shop', 'quest', 'pairtrade')][string]$Kind, [int]$Done, [int]$Bots)
     return ($Done -ge (Get-M3SeqExpectedDone -Kind $Kind -Bots $Bots))
 }
 
@@ -127,6 +134,12 @@ if ($SelfCheckNoStack) {
     if ((Get-M3SeqExpectedDone -Kind quest -Bots 2) -ne 2) { $fail += 'quest_expected_not_bots' }
     if (-not (Test-M3SeqComplete -Kind quest -Done 2 -Bots 2)) { $fail += 'quest_2of2_not_complete' }
     if (Test-M3SeqComplete -Kind quest -Done 1 -Bots 2) { $fail += 'quest_1of2_complete' }
+    # M3⑦：组队/交易收尾标记（`M3PAIRTRADESEQ {"phase":"done",...}`；两个假人各一条 ⇒ 预期 = Bots）
+    if ((Get-M3SeqDoneCount -Text 'M3PAIRTRADESEQ {"phase":"done","bot":"m3p0","steps":5}' -Kind pairtrade) -ne 1) { $fail += 'pairtrade_done_1' }
+    if ((Get-M3SeqDoneCount -Text 'M3PAIRTRADESEQ {"phase":"send","bot":"m3p0","k":0,"op":"deal_try"}' -Kind pairtrade) -ne 0) { $fail += 'pairtrade_done_0' }
+    if ((Get-M3SeqExpectedDone -Kind pairtrade -Bots 2) -ne 2) { $fail += 'pairtrade_expected_not_bots' }
+    if (-not (Test-M3SeqComplete -Kind pairtrade -Done 2 -Bots 2)) { $fail += 'pairtrade_2of2_not_complete' }
+    if (Test-M3SeqComplete -Kind pairtrade -Done 1 -Bots 2) { $fail += 'pairtrade_1of2_complete' }
     # 预期 done 数：attack=1（只有 attacker） / bag=$Bots。
     if ((Get-M3SeqExpectedDone -Kind attack -Bots 2) -ne 1) { $fail += 'attack_expected_not_1' }
     if ((Get-M3SeqExpectedDone -Kind attack -Bots 7) -ne 1) { $fail += 'attack_expected_not_1_multibot' }
@@ -213,6 +226,12 @@ $cfg = @{
     QuestSteps          = $QuestSteps
     QuestStepMs         = $QuestStepMs
     QuestStartDelayMs   = $QuestStartDelayMs
+    PairTradeSequence   = [bool]$PairTradeSequence
+    PairTradeSteps      = $PairTradeSteps
+    PairTradeStepMs     = $PairTradeStepMs
+    PairTradeStartDelayMs = $PairTradeStartDelayMs
+    PairTradeRole       = $PairTradeRole
+    PairTradePeerRole   = $PairTradePeerRole
   }
 } | ConvertTo-Json -Depth 4
 New-Item -ItemType Directory -Force -Path $BotBinDir | Out-Null
@@ -241,6 +260,9 @@ if ($ShopSequence) {
 }
 if ($QuestSequence) {
     Write-Output "CONFIG_QUESTSEQ steps=$QuestSteps step_ms=$QuestStepMs start_delay_ms=$QuestStartDelayMs"
+}
+if ($PairTradeSequence) {
+    Write-Output "CONFIG_PAIRTRADESEQ steps=$PairTradeSteps step_ms=$PairTradeStepMs start_delay_ms=$PairTradeStartDelayMs actor=$PairTradeRole peer=$PairTradePeerRole"
 }
 
 # 无栈自检/红检：只写配置即退（不构建、不起进程）。
@@ -272,6 +294,7 @@ $bagDone = 0
 $attackDone = 0
 $shopDone = 0
 $questDone = 0
+$pairTradeDone = 0
 $attackExpected = Get-M3SeqExpectedDone -Kind attack -Bots $Count
 $charCreated = 0
 function Read-SharedText([string]$Path) {
@@ -319,6 +342,10 @@ while ((Get-Date) -lt $deadline) {
     # M3⑥：任务序列收尾证据 = 每个假人一条 `M3QUESTSEQ {"phase":"done",...}`；不判它就会在 login_ok 处立即 kill。
     $questDone = Get-M3SeqDoneCount -Text (Read-SharedText $LogFile) -Kind quest
   }
+  if ($PairTradeSequence) {
+    # M3⑦：组队/交易序列收尾证据 = 每个假人一条 `M3PAIRTRADESEQ {"phase":"done",...}`；不判它就会在 login_ok 处立即 kill。
+    $pairTradeDone = Get-M3SeqDoneCount -Text (Read-SharedText $LogFile) -Kind pairtrade
+  }
   if ($RequireCharCreated) {
     # 固定起点预热：等「创建角色」标记（BotSrv `SelectChrScene.cs` 的 LogService.Info）
     $charCreated = ([regex]::Matches((Read-SharedText $LogFile), '创建角色')).Count
@@ -327,7 +354,8 @@ while ((Get-Date) -lt $deadline) {
   $atkNote = if ($AttackSequence) { " attack_seq_done=" + $attackDone + "/" + $attackExpected } else { "" }
   $shopNote = if ($ShopSequence) { " shop_seq_done=" + $shopDone + "/" + $Count } else { "" }
   $questNote = if ($QuestSequence) { " quest_seq_done=" + $questDone + "/" + $Count } else { "" }
-  Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " in_world=" + $worldOk + "/" + $Count + $bagNote + $atkNote + $shopNote + $questNote + " (src=load_stats.ndjson)")
+  $ptNote = if ($PairTradeSequence) { " pair_trade_seq_done=" + $pairTradeDone + "/" + $Count } else { "" }
+  Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " in_world=" + $worldOk + "/" + $Count + $bagNote + $atkNote + $shopNote + $questNote + $ptNote + " (src=load_stats.ndjson)")
   if ($BagEquipSequence) {
     # T-14：序列跑完（每个假人一条 done）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
     if ($success -ge $Count -and $bagDone -ge $Count) { break }
@@ -337,6 +365,9 @@ while ((Get-Date) -lt $deadline) {
   } elseif ($QuestSequence) {
     # M3⑥：任务序列跑完（每个假人一条 done）才算收工。
     if ($success -ge $Count -and (Test-M3SeqComplete -Kind quest -Done $questDone -Bots $Count)) { break }
+  } elseif ($PairTradeSequence) {
+    # M3⑦：组队/交易序列跑完（每个假人一条 done）才算收工。
+    if ($success -ge $Count -and (Test-M3SeqComplete -Kind pairtrade -Done $pairTradeDone -Bots $Count)) { break }
   } elseif ($AttackSequence) {
     # F-E：攻击序列跑完（attacker 的 done 到位）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
     if ($success -ge $Count -and (Test-M3SeqComplete -Kind attack -Done $attackDone -Bots $Count)) { break }
@@ -361,6 +392,7 @@ $summary = [pscustomobject]@{
   attack_seq_done = $attackDone; attack_sequence = [bool]$AttackSequence
   shop_seq_done = $shopDone; shop_sequence = [bool]$ShopSequence
   quest_seq_done = $questDone; quest_sequence = [bool]$QuestSequence
+  pair_trade_seq_done = $pairTradeDone; pair_trade_sequence = [bool]$PairTradeSequence
   char_created = $charCreated; require_char_created = [bool]$RequireCharCreated
   success_rate_pct = $rate; world_rate_pct = $worldRate; require_world = [bool]$RequireWorld
   timeout_sec = $TimeoutSec; log = $LogFile; stats = $statsPath
@@ -379,9 +411,13 @@ if ($SelfTestRed) {
   exit 1
 }
 
-if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count) -and (-not $BagEquipSequence -or $bagDone -ge $Count) -and (-not $ShopSequence -or (Test-M3SeqComplete -Kind shop -Done $shopDone -Bots $Count)) -and (-not $QuestSequence -or (Test-M3SeqComplete -Kind quest -Done $questDone -Bots $Count)) -and (-not $AttackSequence -or $attackDone -ge $attackExpected) -and (-not $RequireCharCreated -or $charCreated -ge $Count)) {
-  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }) + $(if ($BagEquipSequence) { "；bag_seq_done=" + $bagDone + "/" + $Count } else { "" }) + $(if ($ShopSequence) { "；shop_seq_done=" + $shopDone + "/" + $Count } else { "" }) + $(if ($QuestSequence) { "；quest_seq_done=" + $questDone + "/" + $Count } else { "" }) + $(if ($AttackSequence) { "；attack_seq_done=" + $attackDone + "/" + $attackExpected } else { "" }) + $(if ($RequireCharCreated) { "；char_created=" + $charCreated + "/" + $Count } else { "" }))
+if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count) -and (-not $BagEquipSequence -or $bagDone -ge $Count) -and (-not $ShopSequence -or (Test-M3SeqComplete -Kind shop -Done $shopDone -Bots $Count)) -and (-not $QuestSequence -or (Test-M3SeqComplete -Kind quest -Done $questDone -Bots $Count)) -and (-not $PairTradeSequence -or (Test-M3SeqComplete -Kind pairtrade -Done $pairTradeDone -Bots $Count)) -and (-not $AttackSequence -or $attackDone -ge $attackExpected) -and (-not $RequireCharCreated -or $charCreated -ge $Count)) {
+  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }) + $(if ($BagEquipSequence) { "；bag_seq_done=" + $bagDone + "/" + $Count } else { "" }) + $(if ($ShopSequence) { "；shop_seq_done=" + $shopDone + "/" + $Count } else { "" }) + $(if ($QuestSequence) { "；quest_seq_done=" + $questDone + "/" + $Count } else { "" }) + $(if ($PairTradeSequence) { "；pair_trade_seq_done=" + $pairTradeDone + "/" + $Count } else { "" }) + $(if ($AttackSequence) { "；attack_seq_done=" + $attackDone + "/" + $attackExpected } else { "" }) + $(if ($RequireCharCreated) { "；char_created=" + $charCreated + "/" + $Count } else { "" }))
   exit 0
+}
+if ($PairTradeSequence -and -not (Test-M3SeqComplete -Kind pairtrade -Done $pairTradeDone -Bots $Count)) {
+  Write-Output ("RED: " + $Count + " 个假人的组队/交易序列只跑完 " + $pairTradeDone + "/" + $Count + "（缺 M3PAIRTRADESEQ phase=done）——序列不完整，不能当『同一序列』")
+  exit 1
 }
 if ($QuestSequence -and -not (Test-M3SeqComplete -Kind quest -Done $questDone -Bots $Count)) {
   Write-Output ("RED: " + $Count + " 个假人的任务序列只跑完 " + $questDone + "/" + $Count + "（缺 M3QUESTSEQ phase=done）——序列不完整，不能当『同一序列』")

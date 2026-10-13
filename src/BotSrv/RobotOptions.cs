@@ -156,6 +156,31 @@ namespace BotSrv
         public string QuestSteps { get; set; } = "";
 
         /// <summary>
+        /// M3⑦ 真机对拍夹具（卡 openmir2-m3-party-trade-fixture-botsrv；白名单 T-43 家族扩展）。
+        /// 默认 false = 原行为（不新增任何发送）。置 true 时，**两个**假人按 `PairTradeSteps`
+        /// 给出的固定步骤串（`role|op|param;...`）发组队/交易动作（role=a 只由 actor、b 只由 peer、
+        /// x 由两者）；逐 step 落 `M3PAIRTRADESEQ {json}` 标记（send/frame/end，含 bot 字段）。
+        /// 只作夹具驱动、只写本假人自己的 socket；默认关时 BotSrv 行为逐字节不变。
+        /// </summary>
+        public bool PairTradeSequence { get; set; }
+        /// <summary>仅 PairTradeSequence=true 时生效：每步间隔（ms）。默认 1000。</summary>
+        public int PairTradeStepMs { get; set; } = 1000;
+        /// <summary>仅 PairTradeSequence=true 时生效：进世界到第一步的额外等待（ms）。默认 3000。</summary>
+        public int PairTradeStartDelayMs { get; set; } = 3000;
+        /// <summary>
+        /// 仅 PairTradeSequence=true 时生效：分号分隔的步骤串，每步 = `role|op|param`。
+        /// role：a=actor（本批的 PairTradeRole 序号）/ b=peer（PairTradePeerRole 序号）/ x=两者。
+        /// op：组队 group_mode_on/group_mode_off/create_group/add_member/del_member；
+        ///     交易 deal_try/deal_add_item/deal_del_item/deal_chg_gold/deal_end/deal_cancel；
+        ///     掉线 softclose。param：队友名记号 `peer` / 金币数 / 物品名（可空）。
+        /// </summary>
+        public string PairTradeSteps { get; set; } = "";
+        /// <summary>仅 PairTradeSequence=true 时生效：actor 的账号序号（默认 0）。</summary>
+        public int PairTradeRole { get; set; } = 0;
+        /// <summary>仅 PairTradeSequence=true 时生效：peer 的账号序号（默认 1）。</summary>
+        public int PairTradePeerRole { get; set; } = 1;
+
+        /// <summary>
         /// M1③ 退出路径夹具（卡 openmir2-m1-dbsrv-6000-face；白名单 M1-EXIT）：默认 0 = 关
         /// （不新增任何发送）。&gt;0 时，本假人收到自己的 SM_LOGON（真进世界）后等这么久，
         /// 按 C# 客户端 AppLogout 的线上形状发一条 CM_SOFTCLOSE(1009)（= “小退”，服务端据此
