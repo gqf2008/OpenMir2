@@ -1,0 +1,36 @@
+# M3⑨-5 英雄/宠物夹具「残余 Minor」收口片（卡 openmir2-m3-hero-pet-fixture-botsrv）
+# 覆盖：reviewer-5 M-1（锚行号）/ reviewer-5 M-2（clone46 用例）/ reviewer-6 M-1（peer baseline-invalid 自检）
+# 离线、零起栈、零端口。工作目录 = worktree m3cs；CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target。
+
+# ── 交付物 ────────────────────────────────────────────────────────────────
+# 新 mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py（冻结 oracle 锚覆盖面 + 行点 + selftest + mutation）
+# 改 mir2-rs/tests/parity/m3/hero_pet_scenario.json（M-1 锚订正 + M-2 make_clone 用例 + anchor_gate 指针）
+# 改 mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1（接锚门 3 检 + peer baseline-invalid 1 检；19/19→23/23）
+# 改 mir2-rs/tests/parity/whitelist.md（T-45：23/23 + 本片证据指针）
+
+cd mir2-rs/tests/parity/m3
+python -I hero_pet_anchor_gate.py check                       # 02（GREEN 27 锚 / 57 行点）
+python -I hero_pet_anchor_gate.py selftest                    # 03（SELFTEST GREEN）
+python -I hero_pet_anchor_gate.py mutation                    # 04（MUTATION GREEN；MUT1/2/3 必红、MUT4 真身绿）
+powershell -NoProfile -ExecutionPolicy Bypass -File run_hero_pet_pair.ps1 -SelfCheckNoStack -SelfCheckOut <EV>/05-run-heropet-selfcheck.txt   # 05（23/23 GREEN）
+
+# 外部改坏必红（独立于门内 mutation）：把 frames 锚改回旧稿『消息号当行号』⇒ 锚门 RED；还原后复绿
+#   （见 12-external-break-red.txt）
+
+# ── boundary（必须先于提交记录）────────────────────────────────────────────
+cd <repo>
+git status --porcelain
+git diff --stat origin/master
+git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins   # 冻结面（须空）
+git diff --name-only origin/master -- '*.rs'                                                                        # .rs（须空）
+
+# ── 四门禁（cwd=mir2-rs，CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target，--offline）──
+cargo fmt --all -- --check                                    # 06（rc=0）
+cargo clippy --workspace --all-targets -- -D warnings         # 07（rc=0）
+cargo test --workspace --offline --no-fail-fast               # 08（101 suites 1199 passed 0 failed 22 ignored）
+cargo run -q -p msgcodegen -- --check                         # 09（604 条一致）
+
+# ── 证据 hash（仓库 LF/git-blob 口径）──────────────────────────────────────
+python -I tools/evidence-hash/verify_sha256sums.py write <EV>
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra <EV>
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <EV>

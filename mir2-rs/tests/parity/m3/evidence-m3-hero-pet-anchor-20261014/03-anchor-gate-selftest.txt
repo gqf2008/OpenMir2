@@ -1,0 +1,7 @@
+selftest 表结构: GREEN (27 锚)
+selftest 读侧 token 牙齿: GREEN (good=[] bad=1)
+selftest 覆盖面未登记牙齿: GREEN
+selftest 覆盖面表过期牙齿: GREEN (26 项)
+selftest 越界牙齿: GREEN
+selftest 真身 check: GREEN (0 项)
+SELFTEST GREEN

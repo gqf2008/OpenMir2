@@ -1,0 +1,12 @@
+# whitelist T-42/T-43/T-44 计数复核（顺带订正 ⑧-10 合并片把这三行误写成 22/22）
+# 三个 runner 的 -SelfCheckNoStack 实测均为 19/19；22/22 只对 run_guild_castle_pair.ps1（⑧-10 本片加了 3 条锚门）成立。
+
+## powershell -File mir2-rs/tests/parity/m3/run_quest_pair.ps1 -SelfCheckNoStack
+SELFTEST ok=19/19 failures=
+
+## powershell -File mir2-rs/tests/parity/m3/run_party_trade_pair.ps1 -SelfCheckNoStack
+SELFTEST ok=19/19 failures=
+
+## powershell -File mir2-rs/tests/parity/m3/run_selloff_pair.ps1 -SelfCheckNoStack
+SELFTEST ok=19/19 failures=
+
