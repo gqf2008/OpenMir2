@@ -1,0 +1,63 @@
+# oracle 锚（F-1：LoadGuildInfo 逆序加载期间 FindGuild 查「当前存活集」）
+# 均在本仓库 src/ 实测（只读，未改冻结基线）。
+
+## A) FindGuild 遍历「当前」GuildList（不是初始名单快照）
+src/M2Server/Guild/GuildManager.cs:67-77
+    public IGuild FindGuild(string sGuildName)
+    {
+        for (int i = 0; i < GuildList.Count; i++)
+        {
+            if (GuildList[i].GuildName == sGuildName)
+            {
+                return GuildList[i];
+            }
+        }
+        return null;
+    }
+
+## B) 逆序加载；每个失败会「当场」RemoveAt + SaveGuildList ⇒ 之后的低索引会看到已变小的表
+src/M2Server/Guild/GuildManager.cs:78-110（关键 :94-103）
+    for (int i = GuildList.Count - 1; i >= 0; i--)
+    {
+        IGuild guild = GuildList[i];
+        if (!guild.LoadGuild())
+        {
+            LogService.Warn(guild.GuildName + " 读取出错!!!");
+            GuildList.RemoveAt(i);
+            SaveGuildList();
+        }
+    }
+
+## C) LoadGuildFile 的行会战段（case 2）用 FindGuild 命中才入表
+src/M2Server/Guild/GuildInfo.cs:273-290（关键 :280-289）
+    case 2:
+        while (!string.IsNullOrEmpty(s18))
+        {
+            s18 = HUtil32.GetValidStr3(s18, ref s1C, guildSplit);
+            if (string.IsNullOrEmpty(s1C)) { break; }
+            WarGuild guildWar = new WarGuild
+            {
+                Guild = SystemShare.GuildMgr.FindGuild(s1C)
+            };
+            if (guildWar.Guild != null)
+            {
+                guildWar.WarTick = HUtil32.GetTickCount();
+                guildWar.WarTime = HUtil32.StrToInt(s20.Trim(), 0);
+                GuildWarList.Add(guildWar);
+            }
+        }
+        break;
+
+## D) 名单回写只写「当前 GuildList」（移除后）
+src/M2Server/Guild/GuildManager.cs:124-143（关键 :128-138）
+    for (int i = 0; i < GuildList.Count; i++)
+    {
+        saveList.Add(GuildList[i].GuildName);
+    }
+    saveList.SaveToFile(SystemShare.Config.GuildFile);
+
+## 分叉点（reviewer-6 F-1）
+- Rust 修前：`GuildStore::load_guild_info` 用**回写失败前**的 `known: BTreeSet<String>`
+  做 `guild_exists` ⇒ 引用「本轮更早被移除的会」的行会战条目**误入表**。
+- Rust 修后：闭包查**当前 `names`**（逆序失败者已 `names.remove(i)`，成功者与未处理者仍在）
+  ⇒ 恰为 A/B/D 描述的存活集。
