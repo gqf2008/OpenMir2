@@ -401,9 +401,16 @@ def cmd_groupdiff(args):
     # R-6 folded 映射（owner 2026-10-13）：显式开关；关时逐字节保持既有行为。
     fold = bool(getattr(args, "fold", False))
     if fold:
+        # 折叠后的序列（供相对次序判据）与折叠后的计数都从**共享模块**的同一组规则来：
+        # 计数走 `rcg.folded_counts()`（而不是就地 `Counter(folded(seq))`），让「折叠→计数」只有
+        # 一处实现（reviewer-6 residual Minor：此前 `folded_counts()` 是未被调用的死辅助函数）。
+        raw_a, raw_b = a, b
         a = rcg.folded(a)
         b = rcg.folded(b)
-    ca, cb = collections.Counter(a), collections.Counter(b)
+        ca = rcg.folded_counts(collections.Counter(raw_a))
+        cb = rcg.folded_counts(collections.Counter(raw_b))
+    else:
+        ca, cb = collections.Counter(a), collections.Counter(b)
     only_a = {k: v for k, v in ca.items() if k not in cb}
     only_b = {k: v for k, v in cb.items() if k not in ca}
     shared = set(ca) & set(cb)
