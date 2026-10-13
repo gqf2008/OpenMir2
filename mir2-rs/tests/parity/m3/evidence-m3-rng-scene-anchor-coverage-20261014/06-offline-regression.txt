@@ -46,17 +46,17 @@ SELFTEST GREEN: check_window_batch selftest 13/13（真件绿 + 换图/换种子
 # rc=0
 
 $ python -I rng-trace-scene/check_evidence_counts.py selftest
-EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-13dd68ka\ev-good declared={'files': 5, 'verify': (4, 4), 'eolcheck': (5, 5)} actual_files=5 actual_verify=4
+EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-rb4yj85v\ev-good declared={'files': 5, 'verify': (4, 4), 'eolcheck': (5, 5)} actual_files=5 actual_verify=4
   OK 声明计数与真实证据包一致
-EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-13dd68ka\ev-good declared={'files': 4, 'verify': (4, 4), 'eolcheck': (5, 5)} actual_files=5 actual_verify=4
+EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-rb4yj85v\ev-good declared={'files': 4, 'verify': (4, 4), 'eolcheck': (5, 5)} actual_files=5 actual_verify=4
   RED declared_files=4 != actual_files=5
-EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-13dd68ka\ev-good declared={'files': 5, 'verify': (5, 5), 'eolcheck': (5, 5)} actual_files=5 actual_verify=4
+EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-rb4yj85v\ev-good declared={'files': 5, 'verify': (5, 5), 'eolcheck': (5, 5)} actual_files=5 actual_verify=4
   RED declared_verify=5/5 != actual_verify=4/4 (SHA256SUMS 条目数)
-EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-13dd68ka\ev-good declared={'files': 5, 'verify': (4, 4), 'eolcheck': (6, 6)} actual_files=5 actual_verify=4
+EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-rb4yj85v\ev-good declared={'files': 5, 'verify': (4, 4), 'eolcheck': (6, 6)} actual_files=5 actual_verify=4
   RED declared_eolcheck=6/6 != actual_eolcheck=5/5 (目录文件数)
-EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-13dd68ka\ev-good declared=(none) actual_files=5 actual_verify=4
+EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-rb4yj85v\ev-good declared=(none) actual_files=5 actual_verify=4
   OK 报告未硬编码证据计数（只写计数规则 ⇒ 允许；真源 = SHA256SUMS/目录）
-EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-13dd68ka\ev-good declared={'files': 5, 'verify': (4, 4), 'eolcheck': (5, 5)} actual_files=6 actual_verify=4
+EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-rb4yj85v\ev-good declared={'files': 5, 'verify': (4, 4), 'eolcheck': (5, 5)} actual_files=6 actual_verify=4
   RED declared_files=5 != actual_files=6
   RED declared_eolcheck=5/5 != actual_eolcheck=6/6 (目录文件数)
 SELFTEST GREEN: check_evidence_counts selftest 7/7（一致绿 / 件数·verify·eolcheck 漂移必红且点名 / 只写计数规则绿 / 缺件 PREREQ / 交付后证据包长大必红）
@@ -64,7 +64,7 @@ SELFTEST GREEN: check_evidence_counts selftest 7/7（一致绿 / 件数·verify�
 
 $ python -I rng-trace-scene/check_anchors.py selftest
   ok  real-doc-fresh
-  ok  mutation-line-drift-red（ANCHOR_DRIFT 宿主无条件开怪 AI 调用点（本卡要 AI 开）：文档写 mir2-rs/bins/game-svr/src/main.rs:5229，但 /enable_production_monster_ai\(&mut world\)/ 的首个匹配在 :5440）
+  ok  mutation-line-drift-red（ANCHOR_DRIFT 宿主无条件开怪 AI 调用点（本卡要 AI 开）：文档写 mir2-rs/bins/game-svr/src/main.rs:5229，但 /enable_production_monster_ai\(&mut world\)/ 的首个匹配在 :5488）
   ok  mutation-anchor-removed-red（ANCHOR_MISSING 宿主 AI 开关接缝：文档里找不到 `mongen.rs:<line>`）
   ok  mutation-anchor-ambiguous-red（ANCHOR_AMBIGUOUS Wondering 的 Random(20) 抽数入口：`monai.rs:<line>` 出现 2 次（171,171）⇒ 无法判定）
   ok  mutation-unguarded-anchor-red（UNGUARDED_ANCHOR 文档引用 `crates/world/src/merchant.rs:999` 没有保鲜锚点 —— 新增 `path:line` 必须在 ANCHORS 登记（否则行号会静默漂移））
@@ -78,36 +78,36 @@ SELFTEST GREEN: check_anchors selftest 10/10（含 9 条改坏必红：行号漂
 
 $ python -I attack_rng_ledger.py selftest
 PREREQ_MISSING: 未知 --side 'bogus'（可 csharp/rust）
-RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-0q3zrm5k\a.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
+RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-dzylj7ih\a.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
   SEG k=1 total=2 attack=2 noise=0 first_seq=1
   SEG k=2 total=4 attack=1 noise=3 first_seq=3
   SEG k=3 total=2 attack=2 noise=0 first_seq=7
-RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-0q3zrm5k\b.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
+RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-dzylj7ih\b.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
   SEG k=1 total=2 attack=2 noise=0 first_seq=1
   SEG k=2 total=4 attack=1 noise=3 first_seq=3
   SEG k=3 total=2 attack=2 noise=0 first_seq=7
 GREEN: 跨侧抽数账本逐 k 一致（segments=6；attack=2 noise=0）
-RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-0q3zrm5k\b.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
+RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-dzylj7ih\b.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
   SEG k=1 total=2 attack=2 noise=0 first_seq=1
   SEG k=2 total=5 attack=1 noise=4 first_seq=3
   SEG k=3 total=2 attack=2 noise=0 first_seq=8
-RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-0q3zrm5k\b.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
+RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-dzylj7ih\b.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
   SEG k=1 total=1 attack=1 noise=0 first_seq=1
   SEG k=2 total=4 attack=1 noise=3 first_seq=2
   SEG k=3 total=2 attack=2 noise=0 first_seq=6
-RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-0q3zrm5k\b.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
+RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-dzylj7ih\b.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
   SEG k=1 total=2 attack=2 noise=0 first_seq=1
   SEG k=2 total=4 attack=1 noise=3 first_seq=3
   SEG k=3 total=2 attack=2 noise=0 first_seq=7
-RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-0q3zrm5k\rust_base.seg.jsonl marker=crates\world\src\combat.rs:109 segments=3
+RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-dzylj7ih\rust_base.seg.jsonl marker=crates\world\src\combat.rs:109 segments=3
   SEG k=1 total=3 attack=3 noise=0 first_seq=1
   SEG k=2 total=4 attack=3 noise=1 first_seq=4
   SEG k=3 total=3 attack=3 noise=0 first_seq=8
-RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-0q3zrm5k\rust_norm.seg.jsonl marker=crates/world/src/combat.rs:109 segments=3
+RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-dzylj7ih\rust_norm.seg.jsonl marker=crates/world/src/combat.rs:109 segments=3
   SEG k=1 total=3 attack=0 noise=3 first_seq=1
   SEG k=2 total=4 attack=0 noise=4 first_seq=4
   SEG k=3 total=3 attack=0 noise=3 first_seq=8
-RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-0q3zrm5k\rust.seg.jsonl marker=crates\world\src\combat.rs:109 segments=3
+RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-dzylj7ih\rust.seg.jsonl marker=crates\world\src\combat.rs:109 segments=3
   SEG k=1 total=3 attack=3 noise=0 first_seq=1
   SEG k=2 total=5 attack=3 noise=2 first_seq=4
   SEG k=3 total=3 attack=3 noise=0 first_seq=9
@@ -116,11 +116,11 @@ SELFTEST GREEN: attack_rng_ledger selftest 32/32（C#+Rust 两侧：同账本绿
 
 $ python -I drop-exp/drop_exp_purity_gate.py selftest
 PREREQ_MISSING: consumers 表里 side=rust 没有 `measured` 行 ⇒ 认不出被测量路径，拒跑（不许假绿；实现卡落地后按实测站点补表）
-PREREQ_MISSING: 找不到抽数流水 C:\Users\gxh\AppData\Local\Temp\drop-exp-purity-selftest-bwapsg74\nope.tsv
-RED: PREREQ_RED k 不连续/非 0 起（第 1 条 k=2）(C:\Users\gxh\AppData\Local\Temp\drop-exp-purity-selftest-bwapsg74\badraw.jsonl)
+PREREQ_MISSING: 找不到抽数流水 C:\Users\gxh\AppData\Local\Temp\drop-exp-purity-selftest-5o_npo6j\nope.tsv
+RED: PREREQ_RED k 不连续/非 0 起（第 1 条 k=2）(C:\Users\gxh\AppData\Local\Temp\drop-exp-purity-selftest-5o_npo6j\badraw.jsonl)
 PREREQ_MISSING: consumers 表里 side=csharp 没有 `measured` 行 ⇒ 认不出被测量路径，拒跑（不许假绿；实现卡落地后按实测站点补表）
 === 场景纯度（drop_exp_purity_gate）===
-  side=csharp stream=C:\Users\gxh\AppData\Local\Temp\drop-exp-purity-selftest-bwapsg74\wall.tsv
+  side=csharp stream=C:\Users\gxh\AppData\Local\Temp\drop-exp-purity-selftest-5o_npo6j\wall.tsv
   draws=2 measured=1 setup=0 wallclock=1 other=0 unknown=0 missing_site=0 ambiguous=0
   --- 逐消费者清单（site 计数，降序）---
          1  Measured.Drop@Measured.cs:10
@@ -155,59 +155,59 @@ SELFTEST ok=23/23
 
 $ python -I drop-exp/drop_exp_diff.py selftest
 STATS kills=2 drop_slots=2 gold_total=37 exp_delta_total=24
-CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\rs0.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\rs0.jsonl
 DIFF 0
 GREEN: 掉落列表逐项相同 + 经验逐级相同（kills=2）
 KILL k=0 slot=1 RED 掉落槽 csharp=('木剑', 2, 1, 13, 20) rust=('铁剑', 2, 1, 13, 20)
 KILL k=0 RED 掉落多重集 csharp={"('木剑', 2, 1, 13, 20)": 1} rust={"('铁剑', 2, 1, 13, 20)": 1}
 STATS kills=2 drop_slots=2 gold_total=37 exp_delta_total=24
-CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\rs_name.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\rs_name.jsonl
 DIFF n=2
 RED: 掉落/经验跨侧差异 2 项（定位见上）
 KILL k=0 RED 字段 gold csharp=37 rust=38
 KILL k=0 slot=0 RED 掉落槽 csharp=('金币', None, 37, None, None) rust=('金币', None, 38, None, None)
 KILL k=0 RED 掉落多重集 csharp={"('金币', None, 37, None, None)": 1} rust={"('金币', None, 38, None, None)": 1}
 STATS kills=2 drop_slots=2 gold_total=37 exp_delta_total=24
-CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\rs_gold.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\rs_gold.jsonl
 DIFF n=3
 RED: 掉落/经验跨侧差异 3 项（定位见上）
 KILL k=1 RED 字段 exp_delta csharp=12 rust=13
 STATS kills=2 drop_slots=2 gold_total=37 exp_delta_total=24
-CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\rs_exp.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\rs_exp.jsonl
 DIFF n=1
 RED: 掉落/经验跨侧差异 1 项（定位见上）
 KILL k=0 RED 掉落条数 csharp=2 rust=3
 KILL k=0 RED 掉落多重集 csharp={} rust={"('布衣', 5, 1, None, None)": 1}
 STATS kills=2 drop_slots=2 gold_total=37 exp_delta_total=24
-CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\rs_cnt.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\rs_cnt.jsonl
 DIFF n=2
 RED: 掉落/经验跨侧差异 2 项（定位见上）
 KILL k=- RED 记录条数不同 csharp='csharp=2' rust='rust=1'
 STATS kills=2 drop_slots=0 gold_total=0 exp_delta_total=0
-CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\rs_len.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\rs_len.jsonl
 DIFF n=1
 RED: 掉落/经验跨侧差异 1 项（定位见上）
 KILL k=0 RED 字段 gold csharp=3000000000 rust=7294967296
 STATS kills=2 drop_slots=2 gold_total=3000000000 exp_delta_total=24
-CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\cs_big.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\rs_big.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\cs_big.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\rs_big.jsonl
 DIFF n=1
 RED: 掉落/经验跨侧差异 1 项（定位见上）
 STATS kills=2 drop_slots=2 gold_total=7294967296 exp_delta_total=24
-CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\cs_big2.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\rs_big2.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\cs_big2.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\rs_big2.jsonl
 DIFF 0
 GREEN: 掉落列表逐项相同 + 经验逐级相同（kills=2）
-RED: PREREQ_RED 缺文件: C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\nope.jsonl
-RED: PREREQ_RED rust: k=0 缺字段 exp_delta (C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\rs_missing.jsonl)
-RED: PREREQ_RED 非法 JSON C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\rs_bad.jsonl:1: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
-RED: PREREQ_RED rust: k 不连续/非 0 起（第 1 条 k=5）(C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-083tgubw\rs_gap.jsonl)
+RED: PREREQ_RED 缺文件: C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\nope.jsonl
+RED: PREREQ_RED rust: k=0 缺字段 exp_delta (C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\rs_missing.jsonl)
+RED: PREREQ_RED 非法 JSON C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\rs_bad.jsonl:1: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+RED: PREREQ_RED rust: k 不连续/非 0 起（第 1 条 k=5）(C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-cr94ejg9\rs_gap.jsonl)
 SELFTEST ok identical-green expect=GREEN got=GREEN
 SELFTEST ok mutate-drop-name-red expect=RED got=RED
 SELFTEST ok mutate-gold-red expect=RED got=RED

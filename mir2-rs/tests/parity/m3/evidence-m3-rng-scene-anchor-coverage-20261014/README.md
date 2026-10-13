@@ -29,8 +29,9 @@ fail-closed 机判，但 reviewer 复算后仍点出**两处静默通道**：
   - 新增扩展名白名单 `KNOWN_EXTS`；不在其中 ⇒ `UNKNOWN_REF_EXT` fail-closed。
   - `selftest` 5 条改坏必红 ⇒ **10/10（含 9 条改坏必红）**；新增 4 条：同名目录串台 / 裸续引用未登记 /
     裸续**内容**漂移 / 未识别扩展名。
-- `rng-trace-scene/DRIVER-CONTRACT.md`：§6 增一条「锚点覆盖面收口」说明（**不重复**任何既有 `path:line`
-  引用，故 7 个引用与锚点表一字未动）。
+- `rng-trace-scene/DRIVER-CONTRACT.md`：① §4 的宿主 AI 调用点 `main.rs` 锚随 master 合并（⑧-10 +
+  client-e2e AOI 诊断）从 `:5440` 漂到 `:5488`，在**合并树的** `-SelfCheckNoStack` 里被本工具当场咬住
+  （`ANCHOR_DRIFT`）⇒ 已订正；② §6 增一条「锚点覆盖面收口」说明。改完后 7 个引用与锚点表一致（`03-…`）。
 - `rng-trace-scene/README.md`：§5.2 读数 6/6→10/10 + 新增 §5.2.1（两处漏报的改前/改后对照）；
   §6 命令注释同步。
 - `evidence-m3-rng-scene-anchor-closure-20261014/11-boundary.txt`：修 reviewer-6 M-3（把 in-flight
@@ -48,11 +49,11 @@ fail-closed 机判，但 reviewer 复算后仍点出**两处静默通道**：
 | 改前②：旧工具 + 坏样本（裸 `:53`→`:54`） | 同上 | **GREEN 7/7（漏报）** | `01-…` |
 | 改后①：新机判 + 同名目录坏样本 | `python -I rng-trace-scene/check_anchors.py check --doc <坏样本>` | **RED 1 项**：`UNGUARDED_ANCHOR …foo/monai.rs:999` | `02-…` |
 | 改后②：新机判 + 裸续漂移坏样本 | 同上 | **RED 1 项**：`BARE_REF_UNDECLARED …:54` | `02-…` |
-| 改后真身 | `python -I rng-trace-scene/check_anchors.py check` | **GREEN 7/7** | `03-…` |
+| 改后真身 | `python -I rng-trace-scene/check_anchors.py check` | **GREEN 7/7**（含合并 master 后 `main.rs` 锚 `:5440`→`:5488` 的当场咬住 + 订正） | `03-…` |
 | 机判自检 | `python -I rng-trace-scene/check_anchors.py selftest` | **10/10 GREEN**（含 9 条改坏必红） | `04-…` |
 | 无栈自检 | `run_rng_trace_pair.ps1 -SelfCheckNoStack` | **31/31 GREEN**（`anchors-freshness-selftest` 真接线，项数未变） | `05-…` |
 | 离线全链 | 9 个 selftest | 全 rc=0（`15/15`,`37/37`,`22/22`,`13/13`,`7/7`,`10/10`,`32/32`,`23/23`,`12/12`） | `06-…` |
-| 四门禁（`CARGO_TARGET_DIR=E:/tmp/m3bag-target`） | fmt / clippy `-D warnings` / workspace test / msgcodegen | rc=0 / rc=0 / **101 suites 1199 passed 0 failed 22 ignored** / 604 rc=0 | `07`–`10` |
+| 四门禁（`CARGO_TARGET_DIR=E:/tmp/m3bag-target`） | fmt / clippy `-D warnings` / workspace test / msgcodegen | rc=0 / rc=0 / **101 suites 1200 passed 0 failed 22 ignored** / 604 rc=0 | `07`–`10` |
 | 边界 | `git diff --name-only origin/master..HEAD` | 见 `11-…`；冻结面 `src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins` 空、`*.rs`=0 | `11-…` |
 | 证据 hash / EOL | `verify_sha256sums.py verify <本包> --check-extra` / `eolcheck` | GREEN / GREEN | `SHA256SUMS.txt` |
 

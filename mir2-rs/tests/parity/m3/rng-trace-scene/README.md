@@ -272,7 +272,9 @@ python -I rng-trace-scene/check_evidence_counts.py selftest               # 7/7 
 锚点（宿主 AI 调用点 / 世界层 tick / oracle Wondering）。master 一直在动 ⇒ 行号会**静默漂移**：
 2026-10-13 实测 `bins/game-svr/src/main.rs` 因 ④-D 与 client-e2e 两次合并行长，
 `enable_production_monster_ai(&mut world)` 从 `:5229` 漂到 `:5440`，而文档仍写 `:5229`
-（承接卡按旧行号找代码会找错，且没人拦）。`check_anchors.py` 把「文档写的行号 == 该符号在**当前
+（承接卡按旧行号找代码会找错，且没人拦）；2026-10-14 合 `f51849a0b`/`1cf88f6ad`（⑧-10 + client-e2e
+AOI 诊断）后又漂到 `:5488`，由本片在**合并树的** `-SelfCheckNoStack` 里当场咬住（`ANCHOR_DRIFT`，
+文档已订正 `:5440`→`:5488`）——即“工具最先在用它的人身上生效”的实例。`check_anchors.py` 把「文档写的行号 == 该符号在**当前
 源码**里的**首个**匹配行」钉成 fail-closed 机判：
 
 ```sh
