@@ -1,0 +1,38 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.13s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 11 tests
+test castle::tests::main_door_control_is_idempotent_and_skips_ghost ... ok
+test castle::tests::ghost_units_are_reclaimed_guards_before_archers ... ok
+test castle::tests::empty_or_foreign_map_returns_early ... ok
+test castle::tests::cross_day_resets_income_and_start_flag ... ok
+test castle::tests::predicates_match_oracle ... ok
+test castle::tests::stop_war_does_not_touch_players_like_oracle_bug ... ok
+test castle::tests::add_attacker_info_dedups_and_ignores_days_like_oracle ... ok
+test castle::tests::war_not_started_when_attacker_date_is_another_day ... ok
+test castle::tests::n1_entry_points_are_observable_noops ... ok
+test castle::tests::daily_war_starts_at_configured_hour_with_today_attackers ... FAILED
+test castle::tests::war_end_warning_then_stop ... FAILED
+
+failures:
+
+---- castle::tests::daily_war_starts_at_configured_hour_with_today_attackers stdout ----
+
+thread 'castle::tests::daily_war_starts_at_configured_hour_with_today_attackers' (4848) panicked at crates\world\src\castle.rs:711:9:
+assertion failed: !c.left_wall.unwrap().stone_mode
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- castle::tests::war_end_warning_then_stop stdout ----
+
+thread 'castle::tests::war_end_warning_then_stop' (26632) panicked at crates\world\src\castle.rs:815:9:
+assertion failed: !c.left_wall.unwrap().stone_mode
+
+
+failures:
+    castle::tests::daily_war_starts_at_configured_hour_with_today_attackers
+    castle::tests::war_end_warning_then_stop
+
+test result: FAILED. 9 passed; 2 failed; 0 ignored; 0 measured; 111 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`

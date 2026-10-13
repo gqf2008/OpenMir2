@@ -159,13 +159,14 @@ powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStac
 powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut <path.txt>
 ```
 
-自检覆盖（18 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（16/16）、
+自检覆盖（19 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（16/16）、
 场景门进程内正/负样本（同场景绿 / 怪集合漂移红）、账本 selftest（含 R-6 folded）、
 folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ、LF 写出、
 `scenario-fold-group-consistency-green`（已入库 scenario 与代码同口径）、
 `scenario-fold-drift-red` / `scenario-groups-unknown-red`（改坏必红）、
 `scenario-drift-samples-json-native`（三条 drift 样本由 JSON 字段改写构造、与源不同，
-不再对原始文本做正则替换 —— M-1 sibling 收口）、零端口。
+不再对原始文本做正则替换 —— M-1 sibling 收口；base 值牙内自解析，无跨块 `$sc` 依赖 —— O-1）、
+`scenario-drift-tooth-not-vacuous`（空转样本 ⇒ 同一 fold 谓词为 false，证明上一条牙非恒真）、零端口。
 real-run 分支在 `-Go` 未给时 **fail-closed exit 2**（不静默起栈）。
 
 ## 6. 命令（可复算）

@@ -18,7 +18,7 @@ use mir2_world_bevy::{advance_clock_system, TickClock, TickOwnerThread, TickRunn
 
 use crate::aoi::{search_view_range, search_view_range_death};
 use crate::combat::{
-    attack_dir, award_kill_exp, generate_drops, swing_power, AttackOutcome, AttackPowerMode,
+    attack_dir_grouped, generate_drops, swing_power, win_exp, AttackOutcome, AttackPowerMode,
     CombatConfig,
 };
 use crate::entity::{Entity, EntityStore};
@@ -168,6 +168,13 @@ pub struct World {
     /// `None` = 该图无 `EXPRATE` 行（不加倍）；`Some(rate)` = 杀怪经验 × `rate/100`。
     /// 由接线层按 `MapRegistry::flag_of(map_id)` 逐图灌入（缺省全 `None` ⇒ 行为与改动前逐字节相同）。
     pub map_exp_rate: Vec<Option<i32>>,
+    /// C# `M2Share.SpiritMutinyTick`（`M2Share.cs:185`）：神之祈祷的全服窗口到期时刻。
+    ///
+    /// `ProcessSpiritSuite`（`PlayObject.Base.cs:326`）置 `GetTickCount() + Config.SpiritMutinyTime`；
+    /// `MonsterObject.CheckRoyalty`（`MonsterObject.cs:370-372`）读它：窗口未过期且
+    /// `SlaveExpLevel < 5` ⇒ `MasterRoyaltyTick = 0`（立即叛变）。归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）。
+    /// 缺省 `0`（= 无窗口）⇒ 既有 golden 路径一字不改。
+    pub spirit_mutiny_tick: i64,
     /// 帧内待处理命令（FIFO）
     pending: VecDeque<Command>,
     /// 判据③：tick 必须始终跑在同一个线程上
@@ -224,6 +231,7 @@ impl World {
             spell_fill_time: 800,
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
             map_exp_rate: vec![None; maps_len],
+            spirit_mutiny_tick: 0,
             pending: VecDeque::new(),
             owner_thread: None,
             clock_runner,
@@ -275,6 +283,16 @@ impl World {
     pub fn set_recovery_fill_times(&mut self, health_fill_time: i32, spell_fill_time: i32) {
         self.health_fill_time = health_fill_time;
         self.spell_fill_time = spell_fill_time;
+    }
+
+    /// `ProcessSpiritSuite`（`PlayObject.Base.cs:322-330`）的尾：把全服宝宝叛变窗口
+    /// `M2Share.SpiritMutinyTick` 置为 `now + Config.SpiritMutinyTime`。
+    ///
+    /// oracle 的完整 `ProcessSpiritSuite` 还要校验 `IsSpirit` + 拆卸祈祷套装物品
+    /// （`UseItems` 的 `SpiritItem1..4`）——那部分归 `CM_SPELL`/物品面接线片；本函数只落
+    /// 被 `CheckRoyalty` 消费的那个全局量。
+    pub fn activate_spirit_mutiny(&mut self, duration_ms: i32) {
+        self.spirit_mutiny_tick = self.clock_ms + i64::from(duration_ms);
     }
 
     /// 开启商人 tick 驱动（缺省关闭；见 `merchant_enabled` 字段说明）。
@@ -498,6 +516,11 @@ impl World {
         // 死亡结算（C# 在实体下一次 `Run()` 里发现 `HP == 0` 才 `Die()`；
         // 这里同一 tick 内先跑命令、再统一结算死亡，语义等价且顺序确定）
         self.settle_deaths(&mut record);
+
+        // **M3⑨-实现 3**：`BaseObject.Run` 的宝宝列表清理（`BaseObject.Base.cs:208-217`）。
+        // oracle 里这跑在每个主人（玩家）自己的 `Run()` 里；本骨架玩家无 `Run` ⇒ 在死亡结算后
+        // 按槽位顺序对每个**持有宝宝**的实体跑一次。空表 ⇒ 零动作（golden 逐字节不变）。
+        crate::slave::slave_list_cleanup_all(self);
 
         // M3④-实现 C：怪物 AI 一步（oracle `ProcessMonsters` → 每只 `monster.Run()`）。
         // **缺省关闭**：合成 golden 场景不含 oracle 的怪物线程，开 AI 会把 RNG 序列整体移位；
@@ -808,6 +831,121 @@ impl World {
         }
     }
 
+    /// oracle `PlayObject.GainExp(int dwExp)`（`PlayObject.Base.cs:764-818`）。
+    ///
+    /// 在**经验获得者**（`KillTargetTrigger` 的 `this`）上调用：
+    ///
+    /// - `GroupOwner != 0` ⇒ 遍历**团长** `GroupMembers`，统计「`!Death` + 同图 +
+    ///   `|CurrX - x| <= 12` + `|CurrX - x| <= 12`」的 `sumlv`/`n` —— **两处都比 `CurrX`、
+    ///   都漏了 `CurrY`，是 oracle 的既有缺陷，照搬**（§1 硬约束③），并在判据里带该缺陷向量；
+    /// - `sumlv > 0 && n > 1` ⇒ `dwExp = Round(dwExp * bonus[n])`（`n <= GroupMax` 门），再逐成员
+    ///   `WinExp(Round(dwExp / n))`（`HighLevelKillMonFixExp = true`）或
+    ///   `WinExp(Round(dwExp / sumlv * level))`（`false`）；
+    /// - 否则 ⇒ 对获得者本人 `WinExp(dwExp)`。
+    ///
+    /// 返回**获得者本人**本次获得的经验（= [`TickRecord::deaths`] 5 元组的第 5 项），
+    /// 并把每个进了 `WinExp` 的成员的 `(id, amount, leveled, level)` 按 oracle 的成员遍历序
+    /// 追加进 `record.exp_awards`（宿主据此逐人出 `SM_WINEXP(44)`）。
+    fn gain_exp(&mut self, recipient: i32, mon_exp: i32, record: &mut TickRecord) -> i32 {
+        let cfg = self.combat_config;
+        let need_exps = std::mem::take(&mut self.need_exps);
+        // `KillTargetTrigger`：`monsterExp = CalcGetExp(WAbil.Level, fightExp)`（入参即自己等级）。
+        let (monster_exp, group_owner, rx, rmap) = match self.entities.get(recipient) {
+            Some(e) => (
+                mir2_formula::exp::calc_get_exp(
+                    i32::from(e.level),
+                    i32::from(e.level),
+                    mon_exp,
+                    cfg.high_level_kill_mon_fix_exp,
+                ),
+                e.group_owner,
+                e.x,
+                e.map_id,
+            ),
+            None => {
+                self.need_exps = need_exps;
+                return 0;
+            }
+        };
+        let map_rate = self.map_exp_rate.get(rmap).copied().flatten();
+        let mut my_gain = 0;
+        if group_owner != 0 {
+            let members = self
+                .entities
+                .get(group_owner)
+                .map(|e| e.group_members.clone())
+                .unwrap_or_default();
+            // 条件 = 团长成员表 ∩「同图 + !Death + |CurrX-x|<=12 + |CurrX-x|<=12（漏 CurrY，oracle 照搬）」。
+            let in_range: Vec<i32> = members
+                .iter()
+                .copied()
+                .filter(|&m| {
+                    self.entities.get(m).is_some_and(|me| {
+                        !me.death
+                            && me.map_id == rmap
+                            && (me.x - rx).abs() <= 12
+                            && (me.x - rx).abs() <= 12
+                    })
+                })
+                .collect();
+            let sumlv: i32 = in_range
+                .iter()
+                .filter_map(|&m| self.entities.get(m))
+                .map(|me| i32::from(me.level))
+                .sum();
+            let n = in_range.len();
+            if sumlv > 0 && n > 1 {
+                let mut dw_exp = monster_exp;
+                // oracle：`if (n >= 0 && n <= Grobal2.GroupMax) dwExp = Round(dwExp * bonus[n]);`
+                if n <= crate::party::PARTY_GROUP_MAX {
+                    dw_exp = mir2_shared::hutil::round(
+                        f64::from(dw_exp) * crate::party::PARTY_EXP_BONUS[n],
+                    );
+                }
+                for &m in &in_range {
+                    let level = self.entities.get(m).map_or(0, |me| i32::from(me.level));
+                    let amount = if cfg.high_level_kill_mon_fix_exp {
+                        mir2_shared::hutil::round(f64::from(dw_exp) / n as f64)
+                    } else {
+                        mir2_shared::hutil::round(
+                            f64::from(dw_exp) / f64::from(sumlv) * f64::from(level),
+                        )
+                    };
+                    let Some(k) = self.entities.get_mut(m) else {
+                        continue;
+                    };
+                    let (g, l, lvl) = win_exp(k, amount, &need_exps, &cfg, map_rate);
+                    if m == recipient {
+                        my_gain = g;
+                    }
+                    record.exp_awards.push((m, g, l, lvl));
+                }
+            } else {
+                let (g, l, lvl) = match self.entities.get_mut(recipient) {
+                    Some(k) => win_exp(k, monster_exp, &need_exps, &cfg, map_rate),
+                    None => {
+                        self.need_exps = need_exps;
+                        return 0;
+                    }
+                };
+                my_gain = g;
+                record.exp_awards.push((recipient, g, l, lvl));
+            }
+        } else {
+            let (g, l, lvl) = match self.entities.get_mut(recipient) {
+                Some(k) => win_exp(k, monster_exp, &need_exps, &cfg, map_rate),
+                None => {
+                    self.need_exps = need_exps;
+                    return 0;
+                }
+            };
+            my_gain = g;
+            record.exp_awards.push((recipient, g, l, lvl));
+        }
+        self.need_exps = need_exps;
+        my_gain
+    }
+
     fn settle_deaths(&mut self, record: &mut TickRecord) {
         let dead: Vec<i32> = self
             .entities
@@ -819,7 +957,7 @@ impl World {
             let Some(e) = self.entities.get(id) else {
                 continue;
             };
-            let (map_id, gold, mon_exp, exp_hitter, group_owner) =
+            let (_map_id, gold, mon_exp, exp_hitter, group_owner) =
                 (e.map_id, e.gold, e.mon_exp, e.exp_hitter, e.group_owner);
             // 死亡标记（C# `Die()` 的 `Death = true`）
             if let Some(e) = self.entities.get_mut(id) {
@@ -873,24 +1011,13 @@ impl World {
                     winners.push(hitter_id);
                 }
                 let primary = hitter_master.unwrap_or(hitter_id);
-                let map_rate = self.map_exp_rate.get(map_id).copied().flatten();
                 for winner in winners {
-                    let need_exps = std::mem::take(&mut self.need_exps);
-                    let cfg = self.combat_config;
-                    let mut amount = 0;
-                    let mut leveled = false;
-                    let mut new_level = 0;
-                    if let Some(k) = self.entities.get_mut(winner) {
-                        let (g, l, lvl) = award_kill_exp(k, mon_exp, &need_exps, &cfg, map_rate);
-                        amount = g;
-                        leveled = l;
-                        new_level = lvl;
-                    }
-                    self.need_exps = need_exps;
+                    // oracle `KillTargetTrigger` → `GainExp`：每名 `RM_PLAYERKILLMONSTER`
+                    // 获得者独立跑一次 `CalcGetExp` + `GainExp`（组队分配见 [`World::gain_exp`]）。
+                    let amount = self.gain_exp(winner, mon_exp, record);
                     if winner == primary {
                         gained = amount;
                     }
-                    record.exp_awards.push((winner, amount, leveled, new_level));
                 }
             }
             record.deaths.push((id, placed, gold, exp_hitter, gained));
@@ -926,12 +1053,23 @@ impl World {
         // 玩家攻方还要走完整的 `PlayObject.AttackDir`：`_Attack` 之后 `AttackSuccess` 再抽一次
         // `Random(5)`（`PlayObject.Attack.cs:225`）—— 由 [`crate::combat::attack_dir`] 统一补上；
         // 怪物攻方无这条（`AttackSuccess` 是 `PlayObject` 私有方法）。
-        let outcome = attack_dir(
+        // `HAM_GROUP` 的 `IsGroupMember(target)`（`PlayObject.Attack.cs:671-677`）需要攻方所在
+        // 组团长的成员表；`GroupOwner == 0` ⇒ 空表（`IsGroupMember` 第一步即 `false`）。
+        let attacker_group_members: Vec<i32> = if attacker.group_owner != 0 {
+            self.entities
+                .get(attacker.group_owner)
+                .map(|e| e.group_members.clone())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let outcome = attack_dir_grouped(
             self.attack_rng(),
             &mut attacker,
             &mut target,
             last_hitter,
             &cfg,
+            &attacker_group_members,
         );
         let now = self.clock_ms;
         if let Some(e) = self.entities.get_mut(target_id) {

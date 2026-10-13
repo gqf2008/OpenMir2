@@ -1,0 +1,120 @@
+# M3⑧-实现 7 攻城状态机 —— oracle 锚（本仓库 src/ 实测，rg -n）
+# 生成口径: rg -n '<pattern>' src/M2Server/Castle/UserCastle.cs src/M2Server/M2Share.cs src/M2Server/Player/PlayObject.Message.cs src/M2Server/Player/PlayObject.Operate.cs
+
+## Run（UserCastle.cs:311-448）
+174:                    for (int i = 0; i < Archers.Length; i++)
+194:                    for (int i = 0; i < Guards.Length; i++)
+311:        public void Run()
+313:            const string sWarStartMsg = "[{0} 攻城战已经开始]";
+314:            const string sWarStopTimeMsg = "[{0} 攻城战离结束还有{1}分钟]";
+318:                if (string.IsNullOrEmpty(MapName))
+323:                if (M2Share.ServerIndex != SystemShare.MapMgr.GetMapOfServerIndex(MapName))
+328:                int Year = DateTime.Now.Year;
+331:                int wYear = IncomeToday.Year;
+336:                    TodayIncome = 0;
+340:                if (!IsStartWar && !UnderWar)
+342:                    int hour = DateTime.Now.Hour;
+343:                    if (hour == SystemShare.Config.StartCastlewarTime) // 20
+345:                        IsStartWar = true;
+346:                        AttackGuildList.Clear();
+347:                        for (int i = AttackWarList.Count - 1; i >= 0; i--)
+355:                                UnderWar = true;
+357:                                WarDate = DateTime.Now;
+358:                                StartCastleWarTick = HUtil32.GetTickCount();
+359:                                AttackGuildList.Add(attackerInfo.Guild);
+360:                                AttackWarList.RemoveAt(i);
+365:                            AttackGuildList.Add(MasterGuild);
+366:                            StartWallconquestWar();
+367:                            SaveAttackSabukWall();
+368:                            SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_212, M2Share.ServerIndex, "");
+369:                            string s20 = string.Format(sWarStartMsg, sName);
+371:                            SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_204, M2Share.ServerIndex, s20);
+373:                            MainDoorControl(true);
+377:                for (int i = 0; i < Guards.Length; i++)
+384:                for (int i = 0; i < Archers.Length; i++)
+395:                        LeftWall.BaseObject.StoneMode = false;
+400:                        CenterWall.BaseObject.StoneMode = false;
+405:                        RightWall.BaseObject.StoneMode = false;
+408:                    if (!ShowOverMsg)
+412:                            ShowOverMsg = true;
+413:                            string s20 = string.Format(sWarStopTimeMsg, sName, SystemShare.Config.ShowCastleWarEndMsgTime / (60 * 1000));
+415:                            SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_204, M2Share.ServerIndex, s20);
+428:                        LeftWall.BaseObject.StoneMode = true;
+433:                        CenterWall.BaseObject.StoneMode = true;
+438:                        RightWall.BaseObject.StoneMode = true;
+451:            SaveAttackSabukWall();
+557:            SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_204, M2Share.ServerIndex, castleMessage);
+581:            AttackGuildList.Clear();
+595:            SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_204, M2Share.ServerIndex, stopMessage);
+1010:            SaveAttackSabukWall();
+1011:            SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_212, M2Share.ServerIndex, "");
+
+## Start/StopWallconquestWar（:564-600）
+40:            UnderWar = false;
+346:                        AttackGuildList.Clear();
+371:                            SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_204, M2Share.ServerIndex, s20);
+415:                            SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_204, M2Share.ServerIndex, s20);
+524:            SystemShare.WorldEngine.GetMapRageHuman(PalaceEnvir, 0, 0, 1000, ref playObjectList);
+557:            SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_204, M2Share.ServerIndex, castleMessage);
+564:        public void StartWallconquestWar()
+567:            SystemShare.WorldEngine.GetMapRageHuman(PalaceEnvir, HomeX, HomeY, 100, ref playObjectList);
+570:                playObjectList[i].RefShowName();
+577:        public void StopWallconquestWar()
+579:            const string sWallWarStop = "[{0} 攻城战已经结束]";
+580:            UnderWar = false;
+581:            AttackGuildList.Clear();
+583:            SystemShare.WorldEngine.GetMapOfRangeHumanCount(CastleEnvir, HomeX, HomeY, 100);
+584:            for (int i = 0; i < ListC.Count; i++)
+587:                PlayObject.ChangePkStatus(false);
+590:                    PlayObject.MapRandomMove(PlayObject.HomeMap, 0);
+593:            string stopMessage = string.Format(sWallWarStop, sName);
+594:            SystemShare.WorldEngine.SendBroadCastMsgExt(stopMessage, MsgType.System);
+595:            SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_204, M2Share.ServerIndex, stopMessage);
+
+## 归属判定 + N1 抛出点（:480-709 / :890-1059）
+480:        public bool IsMember(PlayObject member)
+502:        public bool IsAttackGuild(GuildInfo Guild)
+517:        public bool CanGetCastle(GuildInfo guild)
+539:        public void GetCastle(GuildInfo Guild)
+601:            throw new NotImplementedException();
+604:        public int InPalaceGuildCount()
+609:        public bool IsMember(IPlayerActor member)
+614:        public bool IsDefenseAllyGuild(GuildInfo guild)
+629:        public bool IsDefenseGuild(GuildInfo guild)
+639:        public bool IsMasterGuild(IGuild guild)
+646:            throw new NotImplementedException();
+664:        public bool CheckInPalace(int nX, int nY, PlayObject targetObject)
+672:            throw new NotImplementedException();
+677:            throw new NotImplementedException();
+680:        public bool CheckInPalace(int nX, int nY)
+709:            throw new NotImplementedException();
+890:        public void MainDoorControl(bool boClose)
+913:            throw new NotImplementedException();
+998:        public bool AddAttackerInfo(GuildInfo Guild)
+1016:        private bool InAttackerList(GuildInfo Guild)
+1042:            throw new NotImplementedException();
+1047:            throw new NotImplementedException();
+1052:            throw new NotImplementedException();
+1057:            throw new NotImplementedException();
+
+## AddDateTimeOfDay 忽略天数（M2Share.cs:458-493，函数体整段注释）
+239:            return result;
+267:            return result;
+296:            return result;
+455:            return result;
+458:        public static DateTime AddDateTimeOfDay(DateTime DateTime, int nDay)
+460:            DateTime result = DateTime.Now;
+495:            return result;
+517:            return result;
+
+## 自动占领整链（PlayObject.Message.cs:322-334）
+323:                            if (!castle.IsMember(this))
+325:                                if (castle.IsAttackGuild(MyGuild))
+327:                                    if (castle.CanGetCastle(MyGuild))
+329:                                        castle.GetCastle(MyGuild);
+330:                                        SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_211, M2Share.ServerIndex, MyGuild.GuildName);
+331:                                        if (castle.InPalaceGuildCount() <= 1)
+333:                                            castle.StopWallconquestWar();
+
+## 开城门 N1 调用点（PlayObject.Operate.cs:363-373）
+371:            if (castle == null || castle.DoorStatus != door.Status || Race != ActorRace.Play || castle.CheckInPalace(CurrX, CurrY, this))
