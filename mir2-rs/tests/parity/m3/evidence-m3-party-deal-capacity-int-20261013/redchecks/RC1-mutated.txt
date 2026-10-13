@@ -1,0 +1,29 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3pt-target\debug\deps\game_svr-e3b807fec57e6cfc.exe)
+
+running 2 tests
+test trade::tests::deal_end_over_capacity_human_bag_with_empty_my_deal_list ... FAILED
+test trade::tests::deal_end_over_capacity_my_bag_with_empty_opposite_deal_list ... FAILED
+
+failures:
+
+---- trade::tests::deal_end_over_capacity_human_bag_with_empty_my_deal_list stdout ----
+
+thread 'trade::tests::deal_end_over_capacity_human_bag_with_empty_my_deal_list' (13888) panicked at bins\game-svr\src\trade.rs:1592:9:
+负差量（46-47=-1 < 0）⇒ oracle 判对方背包不足
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- trade::tests::deal_end_over_capacity_my_bag_with_empty_opposite_deal_list stdout ----
+
+thread 'trade::tests::deal_end_over_capacity_my_bag_with_empty_opposite_deal_list' (21252) panicked at bins\game-svr\src\trade.rs:1553:9:
+负差量（46-47=-1 < 0）⇒ oracle 判拒、必提示背包不足
+
+
+failures:
+    trade::tests::deal_end_over_capacity_human_bag_with_empty_my_deal_list
+    trade::tests::deal_end_over_capacity_my_bag_with_empty_opposite_deal_list
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 187 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`
+rc=101
