@@ -1,0 +1,12 @@
+# 改坏必红 A：把墙钟消费者（AnimalObject.Wondering）塞进流水 ⇒ 门必须点名 RED（不许静默放行）
+# cmd: python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py gate --side csharp --stream mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-wallclock.tsv --table mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv
+$ python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py gate --side csharp --stream mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-wallclock.tsv --table mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv
+=== 场景纯度（drop_exp_purity_gate）===
+  side=csharp stream=mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-wallclock.tsv
+  draws=2 measured=1 setup=0 wallclock=1 other=0 unknown=0 missing_site=0 ambiguous=0
+  --- 逐消费者清单（site 计数，降序）---
+         1  GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451
+         1  M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+  RED: wallclock_consumer: 1 处墙钟驱动抽数（首个 line=4 site=M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427）⇒ pin 抑制未生效；需 (a) 把怪钉住（不游走/不搜索目标）或 (b) 接专用流（实现卡）
+  结论：场景不纯 / 认不出 ⇒ **拒比**（fail-closed，不放宽判据）
+rc=1

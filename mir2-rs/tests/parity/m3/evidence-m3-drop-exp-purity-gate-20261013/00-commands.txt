@@ -1,0 +1,68 @@
+# 00-commands —— M3④ 场景纯度门（whitelist T-35）证据包
+
+卡：`openmir2-m3-drop-exp-align`（issue `980a2e51`）。
+base = `origin/master` @ `a443296e`（交付前已 `git merge --ff-only origin/master`）。
+零 `.rs`、零 `src/**`/`sql/**`/`MirClient`；未起栈、未占端口（仅共享 3306）。
+
+## 本片做了什么
+
+owner 对 whitelist **T-35**（M3④ 隔离口径）的**有条件批准**（线程 comment `c78bd13f`，2026-10-13）要求：
+
+1. 口径 = 「场景内除被测量路径（1 只 pin 怪 + 击杀→掉落/经验取数）外 **RNG 消费者数 = 0**」+
+   **逐消费者清单 + 计数**（不许拿「离刷怪圈远 / 图里 MonGen 零行 / 只 spawn 一只」单独当充分条件）；
+2. **必须带纯度门**（同族 `attack_stream_gate.py`）：按被测量路径收窄 + fail-closed（认不出/缺字段 ⇒
+   **点名 RED**）+ **改坏必红**；
+3. **必须处理墙钟消费者**（`AnimalObject.Wondering`），二选一 —— 本夹具取 **(a) pin 抑制**
+   （墙钟站点计数必须为 0）。
+
+本片交付**离线部分**：`drop-exp/drop_exp_purity_gate.py`（`gate`/`selftest`）+ 唯一真源
+`drop-exp/drop_exp_consumers.tsv` + `run_drop_exp_pair.ps1` 的 `-PurityOnly` 与无栈自检 ⑧–⑫ +
+`drop_exp_scenario.json`/README/whitelist T-34/T-35 同步。**真机 100 杀读数是窗口期工作**。
+
+## 全部命令
+
+```sh
+# 判据本体（比较器）selftest
+python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_diff.py selftest
+
+# 纯度门 selftest
+python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py selftest
+
+# 无栈自检（比较器 + 纯度门 + LF 写出 + 零端口）
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/drop-exp/run_drop_exp_pair.ps1 -SelfCheckNoStack
+
+# 场景纯度（离线；正/负样本见本目录 repro/）
+python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py gate \
+  --side csharp --stream mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-clean.tsv \
+  --table mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv --expected-kills 100 \
+  --raw mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/raw.jsonl \
+  --json mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/07-purity-clean.json
+
+# 四门禁（cwd = mir2-rs/；隔离 target；--offline）
+cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo test --workspace --offline --no-fail-fast
+CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo run -q --offline -p msgcodegen -- --check
+
+# 证据口径
+python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra --exclude README.md mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013
+```
+
+## 件清单
+
+| 件 | 作用 |
+| --- | --- |
+| `01-purity-gate-selftest.txt` | 门 selftest **16/16 GREEN** |
+| `02-nostack-selfcheck.txt` | 无栈自检 **12/12 GREEN**（原 7/7 + 纯度门 5 项） |
+| `03-break-must-be-red-wallclock.txt` | 改坏必红 A：注入墙钟消费者 ⇒ rc=1 点名 `wallclock_consumer` |
+| `04-break-must-be-red-unknown.txt` | 改坏必红 B：未分类站点 ⇒ rc=1 点名 `unknown_consumer` |
+| `05-break-must-be-red-table-measured-removed.txt` | 改坏必红 C：删表 measured 行 ⇒ PREREQ rc=2（表是承重的） |
+| `06-purity-clean-green.txt` / `07-purity-clean.json` | 正样本 GREEN + 逐消费者清单/计数 |
+| `08-rust-pending-prereq.txt` | Rust 侧表未落地 ⇒ PREREQ 拒跑（fail-closed，不许假绿） |
+| `09`–`12-gate-*.txt` | 四门禁（fmt0 / clippy0 / 92 suites 832 passed 0 failed 19 ignored / msgcodegen 604） |
+| `13-eolcheck.txt` | 仓库 LF 口径 EOL 检查 |
+| `14-boundary.txt` | 写集边界（零 `.rs`/零 `src sql MirClient`） |
+| `15-clean-checkout-repro.txt` | 干净检出（detached worktree @ patch head）上复核 `verify`/`eolcheck`/`--check-extra` 全绿 |
+| `repro/*` | 门正/负样本的可复跑输入（tsv/jsonl） |
