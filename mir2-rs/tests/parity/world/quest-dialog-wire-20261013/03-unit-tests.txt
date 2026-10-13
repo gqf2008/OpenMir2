@@ -1,0 +1,20 @@
+== M3⑥-实现 3（第①片 F-1/F-2 返工 + 第②片接线）：本片新增/相关用例 ==
+
+---- lib：npc（含 F-1 返工用例）/ smframe ----
+  test npc::tests::merchant_say_text_and_gbk_bytes ... ok
+  test npc::tests::missing_script_is_not_an_error ... ok
+  test npc::tests::manage_and_function_npc_gates_require_loaded ... ok
+  test npc::tests::dequeue_order_puts_priority_high_first ... ok
+  test npc::tests::quest_flag_and_unit_use_oracle_bit_semantics ... ok
+  test npc::tests::run_login_emits_say_with_chrname_prefix ... ok
+  test npc::tests::send_msg_args_are_recorded_in_order ... ok
+  test npc::tests::say_text_must_carry_chrname_prefix ... ok
+  test npc::tests::loads_from_disk_and_runs_login ... ok
+  test smframe::tests::sm_merchantsay_header_and_tail ... ok
+  test result: ok. 123 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+---- bin：main（2 条）+ config（1 条）----
+  test config::tests::setup_script_goto_count_limit_and_default ... ok
+  test tests::emit_npc_says_priority_first_and_recog_by_path ... ok
+  test tests::npc_player_snapshot_maps_record_fields ... ok
+  test result: ok. 167 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s

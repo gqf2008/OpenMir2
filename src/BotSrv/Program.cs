@@ -20,6 +20,21 @@ namespace BotSrv
             {
                 System.Environment.Exit(ShopSeqSelfCheck.Run());
             }
+            // M3⑥（T-41 家族扩展）：任务夹具 步解析/分支归类/说词抽取 纯函数的无栈自检（不启动服务/不连端口）。
+            if (args.Length > 0 && args[0] == "--selftest-questseq")
+            {
+                System.Environment.Exit(QuestSeqSelfCheck.Run());
+            }
+            // M3⑦（T-43 家族扩展）：组队/交易夹具 步解析/角色判定/分支归类 纯函数的无栈自检（不启动服务/不连端口）。
+            if (args.Length > 0 && args[0] == "--selftest-pairtrade")
+            {
+                System.Environment.Exit(PairTradeSeqSelfCheck.Run());
+            }
+            // M3⑩（T-44 家族扩展）：元宝寄售夹具 步解析/角色判定/分支归类 纯函数的无栈自检（不启动服务/不连端口）。
+            if (args.Length > 0 && args[0] == "--selftest-selloff")
+            {
+                System.Environment.Exit(SellOffSeqSelfCheck.Run());
+            }
             GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
             GCSettings.LatencyMode = GCSettings.IsServerGC ? GCLatencyMode.Batch : GCLatencyMode.Interactive;
             AppServer serviceRunner = new AppServer();

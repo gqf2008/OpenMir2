@@ -1,0 +1,128 @@
+M3⑤-实现 2 第②片 —— 改坏必红（reviewer-5 0f220cac F-1 返工 head 重跑）
+（工作目录 E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr；隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target）
+
+===================================================================
+改坏必红：去掉 200ms 节奏门（if false && …）
+  test=mir2-world::merchant_pass_cadence
+-------------------------------------------------------------------
+--- [改坏后] 同命令 ---
+test merchant::tests::merchant_pass_cadence_blocks_second_pass_in_same_window ... FAILED
+thread 'merchant::tests::merchant_pass_cadence_blocks_second_pass_in_same_window' (17624) panicked at crates\world\src\merchant.rs:852:9:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+--- [还原后] 同命令 ---
+test merchant::tests::merchant_pass_cadence_blocks_second_pass_in_same_window ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+
+===================================================================
+改坏必红：去掉 200ms 节奏门 ⇒ 256 条同窗口重复 Run（owner ① 规模版）
+  test=mir2-world::merchant_pass_runs_each_of_many
+-------------------------------------------------------------------
+--- [改坏后] 同命令 ---
+test merchant::tests::merchant_pass_runs_each_of_many_merchants_once ... FAILED
+thread 'merchant::tests::merchant_pass_runs_each_of_many_merchants_once' (30548) panicked at crates\world\src\merchant.rs:1006:9:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+--- [还原后] 同命令 ---
+test merchant::tests::merchant_pass_runs_each_of_many_merchants_once ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+
+===================================================================
+改坏必红：去掉 RunTime 门（-> if true）
+  test=mir2-world::merchant_run_time_gate
+-------------------------------------------------------------------
+--- [改坏后] 同命令 ---
+test merchant::tests::merchant_run_time_gate_not_due_then_due ... FAILED
+thread 'merchant::tests::merchant_run_time_gate_not_due_then_due' (10992) panicked at crates\world\src\merchant.rs:868:9:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+--- [还原后] 同命令 ---
+test merchant::tests::merchant_run_time_gate_not_due_then_due ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+
+===================================================================
+改坏必红：Ghost 窗口 60s -> 120s
+  test=mir2-world::merchant_ghost_expires
+-------------------------------------------------------------------
+--- [改坏后] 同命令 ---
+test merchant::tests::merchant_ghost_expires_after_60s_sim_clock ... FAILED
+thread 'merchant::tests::merchant_ghost_expires_after_60s_sim_clock' (13032) panicked at crates\world\src\merchant.rs:889:9:
+assertion `left == right` failed: 满 60s 移除（RemoveAt）
+  left: []
+ right: [1]
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+--- [还原后] 同命令 ---
+test merchant::tests::merchant_ghost_expires_after_60s_sim_clock ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+
+===================================================================
+改坏必红：去掉 Merchant.Run 的首个 RNG 取数（if false）
+  test=mir2-world::merchant_run_rng_stream
+-------------------------------------------------------------------
+--- [改坏后] 同命令 ---
+test merchant::tests::merchant_run_rng_stream_matches_oracle_order ... FAILED
+thread 'merchant::tests::merchant_run_rng_stream_matches_oracle_order' (15212) panicked at crates\world\src\merchant.rs:916:9:
+assertion `left == right` failed: Run 后两流仍同源
+  left: 204289138
+ right: 1814761660
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+--- [还原后] 同命令 ---
+test merchant::tests::merchant_run_rng_stream_matches_oracle_order ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+
+===================================================================
+改坏必红：spawn_merchant 不分配唯一 id（e.id=0）⇒ 多商人 id 碰撞
+  test=mir2-world::merchant_pass_runs_each_of_many
+-------------------------------------------------------------------
+--- [改坏后] 同命令 ---
+test merchant::tests::merchant_pass_runs_each_of_many_merchants_once ... FAILED
+thread 'merchant::tests::merchant_pass_runs_each_of_many_merchants_once' (11724) panicked at crates\world\src\merchant.rs:999:9:
+assertion `left == right` failed: 256 条全部应 Run
+  left: 1
+ right: 256
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.01s
+--- [还原后] 同命令 ---
+test merchant::tests::merchant_pass_runs_each_of_many_merchants_once ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+
+===================================================================
+改坏必红：去掉 monster_ai_tick 的 merchant.is_none() 守卫（M-2）
+  test=mir2-world::monster_ai_tick_skips
+-------------------------------------------------------------------
+--- [改坏后] 同命令 ---
+test merchant::tests::monster_ai_tick_skips_merchants_race_is_animal ... FAILED
+thread 'merchant::tests::monster_ai_tick_skips_merchants_race_is_animal' (664) panicked at crates\world\src\merchant.rs:1032:9:
+assertion `left == right` failed: 商人不得被 monster_run 当怪跑（race 50 == Animal 50）
+  left: -1
+ right: 42
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+--- [还原后] 同命令 ---
+test merchant::tests::monster_ai_tick_skips_merchants_race_is_animal ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+
+===================================================================
+改坏必红：F-1a：spawn 循环整体 rev()（旧合并次序）⇒ tick 序被反
+  test=game-svr::spawn_merchants_decouples
+-------------------------------------------------------------------
+--- [改坏后] 同命令 ---
+test merchant::tests::spawn_merchants_decouples_tick_order_from_obj_list_order ... FAILED
+thread 'merchant::tests::spawn_merchants_decouples_tick_order_from_obj_list_order' (16212) panicked at bins\game-svr\src\merchant.rs:351:9:
+assertion `left == right` failed: MerchantList/tick 序 = LocalDB 文件正序（入实体正序）；把 spawn 循环整体 rev() ⇒ 必红
+  left: ["B", "A"]
+ right: ["A", "B"]
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 113 filtered out; finished in 0.00s
+--- [还原后] 同命令 ---
+test merchant::tests::spawn_merchants_decouples_tick_order_from_obj_list_order ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 113 filtered out; finished in 0.00s
+
+===================================================================
+改坏必红：F-1b：挂图也从 .rev() 改回正序 ⇒ obj_list 序被反
+  test=game-svr::spawn_merchants_decouples
+-------------------------------------------------------------------
+--- [改坏后] 同命令 ---
+test merchant::tests::spawn_merchants_decouples_tick_order_from_obj_list_order ... FAILED
+thread 'merchant::tests::spawn_merchants_decouples_tick_order_from_obj_list_order' (25196) panicked at bins\game-svr\src\merchant.rs:372:9:
+assertion `left == right` failed: 倒序 MerchantInitialize ⇒ 后加载的 B 先 AddToMap（obj_list[0] 是 B）；改回正序 ⇒ 必红
+  left: "A"
+ right: "B"
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 113 filtered out; finished in 0.00s
+--- [还原后] 同命令 ---
+test merchant::tests::spawn_merchants_decouples_tick_order_from_obj_list_order ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 113 filtered out; finished in 0.00s

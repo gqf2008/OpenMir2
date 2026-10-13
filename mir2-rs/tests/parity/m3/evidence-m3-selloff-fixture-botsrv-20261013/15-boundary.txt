@@ -1,0 +1,26 @@
+$ git diff --name-only d29d017b -- src sql MirClient mir2-rs/crates mir2-rs/bins
+src/BotSrv/AppService.cs
+src/BotSrv/MShare.cs
+src/BotSrv/Player/RobotPlayer.Operate.cs
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/Program.cs
+src/BotSrv/RobotOptions.cs
+
+
+$ git status --porcelain (工作树，bin/obj 已 gitignore)
+ M mir2-rs/tests/parity/m3/gate_guards.ps1
+ M mir2-rs/tests/parity/m3/run_pair.ps1
+ M mir2-rs/tests/parity/whitelist.md
+ M src/BotSrv/AppService.cs
+ M src/BotSrv/MShare.cs
+ M src/BotSrv/Player/RobotPlayer.Operate.cs
+ M src/BotSrv/Player/RobotPlayer.cs
+ M src/BotSrv/Program.cs
+ M src/BotSrv/RobotOptions.cs
+ M tools/botload/run_bots.ps1
+?? mir2-rs/tests/parity/m3/evidence-m3-selloff-fixture-botsrv-20261013/
+?? mir2-rs/tests/parity/m3/run_selloff_pair.ps1
+?? mir2-rs/tests/parity/m3/selloff_diff.py
+?? mir2-rs/tests/parity/m3/selloff_scenario.json
+?? src/BotSrv/SellOffSeqSelfCheck.cs
+

@@ -1,0 +1,6 @@
+## 场景前置门自检（回归对照）
+$ C:\Users\gxh\AppData\Local\Programs\Python\Python312\python.exe -I rng-trace-scene/rng_scene_gate.py selftest
+rc=0
+SELFTEST ok=11/11
+GREEN: 场景前置门 selftest 全绿（同场景绿 + seed/怪集合/起点/map/MonGen 漂移必红 + 缺件/坏 JSON PREREQ fail-closed）
+

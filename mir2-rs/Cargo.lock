@@ -633,6 +633,7 @@ dependencies = [
  "mir2-envir",
  "mir2-formula",
  "mir2-protocol",
+ "mir2-script",
  "mir2-shared",
  "mir2-storage",
  "mir2-world",
