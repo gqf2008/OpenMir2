@@ -1,0 +1,52 @@
+132-redcheck-shadow-gate-concrete.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉖ 改坏必红
+（变异只在 `E:/tmp/m2svr-burst13/mut/` 复制件；仓内 `window_handoff.py` sha256 前后一致）
+仓内被测件 sha256 = 39dd6f854a7763da954d7db39ad31cb323aa1b63eb74ef2c2c950b9d62f53668
+====================================================================================================
+
+[T1] G4 命令面占位牙（真计划注入 `<影子 conf>`）—— 只注入这一处，其余不动
+----------------------------------------------------------------------------------------------------
+$ python -I -c "…plan=wh.plan_text(...); mut=plan.replace('--shadow-config E:/tmp/w/shadow/run-gate/config.conf','--shadow-config <影子 conf>'); print(wh.plan_conformance(plan, repo, HERE, 'E:/MirServer')); print(wh.plan_conformance(mut, repo, HERE, 'E:/MirServer'))"
+real plan problems: []
+mutated problems  : ['计划命令面残留未替换占位 <影子 conf>（应代入实际路径/值；勿让 root 现场猜）']
+⇒ 修前 G4 只禁 `<bin_dir>` 一个占位，`<影子 RunGate/config.conf>` / `<影子 conf>` / `<conf 目录>` 三类
+  真命令占位都能混过 GREEN（= 让 root 现场猜）。本牙保证回归即红。
+
+[T2] 前置门牙：把 `--shadow-config` 指到**真实** conf（证明「影子副本 ≠ 真实」是被咬住的）
+----------------------------------------------------------------------------------------------------
+$ python -I -B check_csharp_capture_preflight.py --repo <本 worktree> --mirserver E:/MirServer \
+    --shadow-config E:/MirServer/RunGate/config.conf
+OK  真实 RunGate ServerWorkThread=1（ServiceId 0 ↔ GameSvr 槽位 0，无多网关错配）
+OK  真实 GatePort1=7200 == 代理端口
+…
+OK  影子 RunGate ServerWorkThread=1
+RED 影子 GatePort1=7200 != 影子端口 7600
+RED 1 条前置不符
+RESULT: RED
+rc=1
+
+[M1] MUT-A：删掉 `plan_conformance` 的命令面占位检查（其余不动）⇒ 1 条牙红
+----------------------------------------------------------------------------------------------------
+$ sha256sum window_handoff.py            # 变异前
+39dd6f854a7763da954d7db39ad31cb323aa1b63eb74ef2c2c950b9d62f53668 *window_handoff.py
+$ cp window_handoff.py /tmp/… ; # 删掉 if _CMDLINE_FACE_RE.search(line): … 那段 ⇒ E:/tmp/m2svr-burst13/mut/mut-a.py
+$ python -I -B E:/tmp/m2svr-burst13/mut/mut-a.py --selftest | grep -E 'FAIL|SELFTEST'
+[FAIL] selftest plan-conf-red-cmdline-placeholder
+SELFTEST FAILED (68/69)
+$ sha256sum window_handoff.py            # 变异后（仓内未动）
+39dd6f854a7763da954d7db39ad31cb323aa1b63eb74ef2c2c950b9d62f53668 *window_handoff.py
+
+[M2] MUT-B：C# 影子退回「起原 exe」= 片㉖ 订正前的错法（`Start-Process '{cs_gate_w}'`）⇒ 2 条牙红
+----------------------------------------------------------------------------------------------------
+$ python -I E:/tmp/m2svr-burst13/make-mutb.py      # needle= `Start-Process -FilePath '{cs_shadow_dir_w}\\GameGate.exe'`
+mut-b written
+$ python -I -B E:/tmp/m2svr-burst13/mut/mut-b.py --selftest | grep -E 'FAIL|SELFTEST'
+[FAIL] selftest plan-csharp-shadow-copy-dir
+[FAIL] selftest plan-csharp-shadow-not-real-exe
+SELFTEST FAILED (67/69)
+$ sha256sum mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+39dd6f854a7763da954d7db39ad31cb323aa1b63eb74ef2c2c950b9d62f53668 *…/window_handoff.py
+⇒ `plan-csharp-shadow-not-real-exe` 就是钉「不许退回起 `E:\MirServer\RunGate\GameGate.exe`」的那颗牙
+  （false-green 的根因）；`plan-csharp-shadow-copy-dir` 同时钉整目录拷贝与 `AppContext.BaseDirectory` 锚。
+
+复核口径：三颗牙都**真造真跑**（变异件在 E:/tmp，仓内 sha256 前后一致）；[T1]/[T2] 是「存量真计划 +
+单点注入」的变异，等价于片㉕ reviewer 的 `rev2` 做法。

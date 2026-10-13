@@ -60,13 +60,20 @@
    ```powershell
    python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_csharp_capture_preflight.py `
      --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr `
-     --mirserver E:/MirServer --shadow-config <影子 RunGate/config.conf>
+     --mirserver E:/MirServer --shadow-config E:/tmp/window/cliente2e/shadow/run-gate/config.conf
    ```
+
+   > 片㉖ 订正（2026-10-14，见 `131-shadow-gate-conf-concrete.txt`）：上面这个**具体路径**才是对的；
+   > 影子 RunGate 必须**整目录拷贝**、conf 必须 **cp936 原样**只改 `Count=1`/`GatePort1=7600` ——
+   > oracle 按 `Path.Combine(AppContext.BaseDirectory, "config.conf")` 读 conf（`ConfigManager.cs:5`，
+   > `Main` 不吃 conf 参数）⇒ 只拷 config.conf 仍起 `MirServer/RunGate/GameGate.exe` 会读回 7200，
+   > 且前置门会拿副本误判 GREEN。完整配方：`82` §4.0/§4.1。
 
    退出码 `0/1/2`（GREEN/RED/PREREQ_RED）。判据：部署件含 `607e9b773`；真实与影子 `ServerWorkThread=1`；
    真实 `GatePort1=7200`（代理端口）；`!servertable.txt` GameGate 端口 `=7200`；上游 `127.0.0.1:5000`。
-2. **影子 RunGate 配置**：从 `E:/MirServer/RunGate/config.conf` 拷一份，**只改 `GatePort1=7600`**
-   （绑定地址/上游地址/`ServerWorkThread` 一律不动）；不要引入第 2/3 个活动网关。
+2. **影子 RunGate 配置**（片㉖ 订正：**整目录拷贝** `RunGate/` 到影子目录，再把该目录下 config.conf 换成
+   「cp936 原样、只改 `Count=1`/`GatePort1=7600`」那份，见 `82` §4.0）：绑定地址/上游地址/`ServerWorkThread`
+   一律不动；不要引入第 2/3 个活动网关。
 3. 其余照 `82` §3（代理 `7200 → 127.0.0.1:7600`、真客户端、`export_s2c.ps1`）。
 
 ## E. 仍未证 / 登记（不静默）

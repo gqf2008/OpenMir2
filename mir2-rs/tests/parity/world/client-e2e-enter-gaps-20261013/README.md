@@ -602,3 +602,50 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级「③b/③a 两趟真机同框对照」+「屏幕见怪并
   能攻击造成伤害」。
 - 证据：`127-window-plan-teardown.txt`、`128-redcheck-window-plan-teardown.txt`、`129-gates.txt`、`130-boundary.txt`。
+
+## ㉖ 片㉖：③ 窗口计划：影子 gate 的 conf **造得出、路径具体**（C# 侧必须整目录拷贝）（2026-10-14）—— `131`
+
+- **背景（源码实读，与片㉔/㉕ 同类的烧窗路径）**：片㉕ 收尾后，计划里**影子 gate 怎么起**仍是散文 +
+  未替换占位 —— `--shadow-config <影子 RunGate/config.conf>`、Rust 段
+  `-ArgumentList '<影子 conf>' -WorkingDirectory '<conf 目录>'` ⇒ root 现场猜路径/猜 conf 内容。
+  第二处还会 **false-green**：
+  1. **C# 影子不能只改 conf、仍起原 exe。** oracle 的 conf 路径写死 exe 目录：
+     `src/GameGate/Conf/ConfigManager.cs:5` = `Path.Combine(AppContext.BaseDirectory, "config.conf")`；
+     `src/GameGate/Program.cs:14` 的 `Main(string[] args)` 不解析 conf 参数（`args` 只喂
+     `HostApplicationBuilder`），`appsettings.json` 同样 `SetBasePath(AppContext.BaseDirectory)`（`:31`）。
+     ⇒ 起 `E:\MirServer\RunGate\GameGate.exe` 时读的**是原 config（7200）**：影子仍绑 7200 ⇒ 代理绑不上
+     （无 capture，白烧）；而前置门 `--shadow-config <改好的副本>` 判的是**文件**、不是进程实读路径 ⇒
+     **GREEN 假绿**。正解 = **整目录拷贝 + 只换该目录下的 config.conf**。
+  2. **conf 必须 cp936 原样改。** 部署件 4456 B 含 1523 个非 ASCII 字节（`[MagicInterval]`/`[Strings]`
+     中文技能名）+ 236 处 CRLF；UTF-8 往返会改坏 GBK 字节，直接照抄 `Count=3` 会让 Rust 影子多绑
+     7201/7202 ⇒ 代理仍抢不到 7200。⇒ 用 `[Text.Encoding]::GetEncoding(936)` 读、**零宽断言**只换两个
+     数字（不动 CRLF）、再按 cp936 写回；Rust 侧镜像同一份（`bins/game-gate/src/config.rs:13-19`、
+     `main.rs:81-84` argv[1]）。
+- **本片改动（`window_handoff.py`，只读规划器；不新造第二份判据）**：
+  1. §2a.Rust 新增 **b0**（造影子 conf：`New-Item`/`Copy-Item`/cp936 变换/`Select-String` 复核），
+     `-ArgumentList`/`-WorkingDirectory` 代入**具体路径**；
+  2. §2 C# 新增 **2a.0**（`Remove-Item` 幂等清目录 → `Copy-Item -Recurse` 整目录 → 换 config.conf →
+     `--shadow-config <具体路径>`），§2a 补「停真身 → 起影子目录里的 exe」两条命令；
+  3. §2b(C#)「停影子 gate」改按**影子目录** exe 绝对路径停（原为真身路径）；
+  4. **G4 新增命令面占位牙**：凡含 `*.ps1|*.py|*.sh` 或 `Start-Process|Stop-Process|Copy-Item|Set-Content|
+     New-Item|Select-String|cargo|mysql>` 的行不得残留 `<...>`（原只禁 `<bin_dir>` 一个，三类真命令占位
+     都能混过）；`82-two-side-window-runbook.md` §3.2/§4.0/§4.1 同步订正为整目录拷贝 + 具体路径。
+- **真读数**：
+  - 真计划 G4：`PLAN_CONFORMANCE=GREEN` rc=0；命令面占位 0（唯一 `<log>` 在纯散文「禁接管道…> <log> 2>&1」）。
+  - **照计划文本原样执行**影子 conf 步骤（不是另写一份）：Rust `Count=1` / `GatePort1=7600`；
+    C# `Count=1` / `GatePort1=7600` / `ServerWorkThread=1`。与部署件逐字节比：
+    **len 4456/4456、diff_offsets [18,73]、恰好只差 Count 与 GatePort1 各 1 个数字**（GBK 中文与 CRLF 原样）。
+  - 影子目录件齐：`run-gate/{GameGate.exe, config.conf, appsettings.json, nlog.config}` 全部 True。
+  - 前置门用**计划打印的那个路径**：`RESULT: GREEN` rc=0。
+  - `--selftest` **63/63 → 69/69**（新增 6 条：`plan-shadow-conf-concrete`/`-created`/`-before-start`、
+    `plan-csharp-shadow-copy-dir`、`plan-csharp-shadow-not-real-exe`、`plan-conf-red-cmdline-placeholder`；
+    `plan-topology-shadow-conf` 由「5 键最小 conf 文案」改判「GatePort1=7600 + Count=1 + cp936」）。
+- **改坏必红**（`132`，三颗牙，变异只在 `E:/tmp/m2svr-burst13/mut/`，仓内 sha256 前后一致）：
+  T1 真计划注入 `<影子 conf>` ⇒ G4 点名占位；T2 `--shadow-config` 指真实 conf ⇒ 前置门
+  `RED 影子 GatePort1=7200 != 影子端口 7600`；MUT-A 删占位检查 ⇒ `SELFTEST FAILED (68/69)`；
+  MUT-B 影子退回起原 exe ⇒ `(67/69)`（`plan-csharp-shadow-not-real-exe` + `-copy-dir`）。
+- **零生产代码改动**（仅 1 个 `.py` + 1 个手册 `.md` + 四份证据 + README/清单）；**未起栈、未占任何游戏端口**，
+  未动共享主检出。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级「③b/③a 两趟真机同框对照」+「屏幕见怪并
+  能攻击造成伤害」；C# 世界数据能否经代理下来仍须窗口实拍（见 `82` §4.1）。
+- 证据：`131-shadow-gate-conf-concrete.txt`、`132-redcheck-shadow-gate-concrete.txt`、`133-gates.txt`、`134-boundary.txt`。
