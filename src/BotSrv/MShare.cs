@@ -492,6 +492,161 @@ namespace BotSrv
         }
 
         /// <summary>
+        /// M3⑩ 夹具（卡 openmir2-m3-selloff-fixture-botsrv；白名单 T-44 家族扩展）：
+        /// 两个假人（卖方 / 买方）按固定步骤串发元宝寄售动作。
+        /// 默认 false = 原行为（不新增任何发送/日志）。见 RobotPlayer.SellOffSequenceTick。
+        /// </summary>
+        public static bool g_boSellOffSequence = false;
+        public static int g_nSellOffStepMs = 1000;
+        public static int g_nSellOffStartDelayMs = 3000;
+        public static string g_sSellOffSteps = "";
+        public static int g_nSellOffSellerRole = 0;
+        public static int g_nSellOffBuyerRole = 1;
+        /// <summary>卖方精确 LoginId（= LoginAccount + SellOffSellerRole）。</summary>
+        public static string g_sSellOffSellerLoginId = string.Empty;
+        /// <summary>买方精确 LoginId（= LoginAccount + SellOffBuyerRole），也是其角色名。</summary>
+        public static string g_sSellOffBuyerLoginId = string.Empty;
+
+        private static readonly string[] SellOffAllowedOps =
+        {
+            // 卖方窗内（PlayObject.Sale.cs:60/127/431；CM 23002/23007/23012）
+            "seller_add_item", "seller_del_item", "seller_cancel",
+            // 上架（PlayObject.Sale.cs:516；CM 23015）
+            "seller_end",
+            // 取消正在寄售（出售人）（PlayObject.Sale.cs:185；CM 23024）
+            "seller_cancel_ing",
+            // 买方（PlayObject.Sale.cs:254/281；CM 23025/23026）
+            "buyer_buy_cancel", "buyer_buy",
+            // 掉线中断（CM_SOFTCLOSE(1009)）
+            "softclose"
+        };
+
+        private static readonly string[] SellOffAllowedRoles = { "a", "b", "x" };
+
+        /// <summary>M3⑩ 夹具：解析步骤串 `role|op|param;...`（保留顺序）。纯函数。
+        /// 字段数 != 3 / 未知 role / 未知 op / 空角色 ⇒ 一律丢弃（fail-closed：宁可少发，也不发不认识的动作）。</summary>
+        public static string[] ParseSellOffSteps(string raw)
+        {
+            var outList = new List<string>();
+            if (string.IsNullOrEmpty(raw))
+            {
+                return outList.ToArray();
+            }
+            foreach (string part in raw.Split(';'))
+            {
+                string step = part.Trim();
+                if (step.Length == 0)
+                {
+                    continue;
+                }
+                string[] f = step.Split('|');
+                if (f.Length != 3)
+                {
+                    continue;
+                }
+                string role = f[0].Trim().ToLowerInvariant();
+                string op = f[1].Trim().ToLowerInvariant();
+                string param = f[2].Trim();
+                if (role.Length == 0 || op.Length == 0)
+                {
+                    continue;
+                }
+                if (Array.IndexOf(SellOffAllowedRoles, role) < 0)
+                {
+                    continue;
+                }
+                if (Array.IndexOf(SellOffAllowedOps, op) < 0)
+                {
+                    continue;
+                }
+                outList.Add(role + "|" + op + "|" + param);
+            }
+            return outList.ToArray();
+        }
+
+        /// <summary>M3⑩ 夹具：LoginId 是否就是本批的唯一卖方。精确相等（非 EndsWith）。纯函数。</summary>
+        public static bool IsSellOffSeller(string loginId, string sellerLoginId)
+        {
+            return !string.IsNullOrEmpty(sellerLoginId)
+                && string.Equals(loginId, sellerLoginId, StringComparison.Ordinal);
+        }
+
+        /// <summary>M3⑩ 夹具：步骤 role（a/b/x；非法 ⇒ 空串）。纯函数。</summary>
+        public static string SellOffStepRole(string step)
+        {
+            if (string.IsNullOrEmpty(step)) { return string.Empty; }
+            string[] f = step.Split('|');
+            return f.Length == 3 ? f[0] : string.Empty;
+        }
+
+        /// <summary>M3⑩ 夹具：步骤 op（非法 ⇒ 空串）。纯函数。</summary>
+        public static string SellOffStepOp(string step)
+        {
+            if (string.IsNullOrEmpty(step)) { return string.Empty; }
+            string[] f = step.Split('|');
+            return f.Length == 3 ? f[1] : string.Empty;
+        }
+
+        /// <summary>M3⑩ 夹具：步骤 param（非法 ⇒ 空串）。纯函数。</summary>
+        public static string SellOffStepParam(string step)
+        {
+            if (string.IsNullOrEmpty(step)) { return string.Empty; }
+            string[] f = step.Split('|');
+            return f.Length == 3 ? f[2] : string.Empty;
+        }
+
+        /// <summary>M3⑩ 夹具：本步是否由当前角色执行（x=两者 / a=仅卖方 / b=仅买方；非法 role ⇒ false）。纯函数。</summary>
+        public static bool SellOffRunsForRole(string role, bool isSeller)
+        {
+            if (role == "x") { return true; }
+            if (role == "a") { return isSeller; }
+            if (role == "b") { return !isSeller; }
+            return false;
+        }
+
+        /// <summary>M3⑩ 夹具：把本步收到的帧 JSON 串归类成 branch。纯函数，唯一口径 = 本函数。
+        /// 口径：无帧 ⇒ fail_no_frame；出现任一失败帧 ⇒ fail_reject；出现任一成功/信息帧 ⇒ ok；
+        /// 其余 ⇒ frames_unclassified。失败码由完整帧种类序列（比较器）承载，本字段只作粗归类。</summary>
+        public static string ClassifySellOffFrames(IList<string> frames)
+        {
+            if (frames == null)
+            {
+                return "fail_no_frame";
+            }
+            bool sawAny = false;
+            bool sawFail = false;
+            bool sawOk = false;
+            foreach (string fr in frames)
+            {
+                if (fr == null) { continue; }
+                int? sm = PairTradeFrameSm(fr);
+                if (sm == null) { continue; }
+                sawAny = true;
+                switch (sm.Value)
+                {
+                    case 23003: // SM_SELLOFFADDITEM_OK
+                    case 23008: // SM_SELLOFFDELITEM_OK
+                    case 23014: // SM_SellOffCANCEL
+                    case 23016: // SM_SELLOFFEND_OK
+                    case 23027: // SM_SELLOFFBUY_OK
+                    case 767:   // SM_MENU_OK（[成功]/[错误] 文案）
+                        sawOk = true;
+                        break;
+                    case 23005: // SM_SellOffADDITEM_FAIL
+                    case 23010: // SM_SELLOFFDELITEM_FAIL
+                    case 23018: // SM_SELLOFFEND_FAIL
+                        sawFail = true;
+                        break;
+                    default:
+                        break;
+                }
+            }
+            if (sawFail) { return "fail_reject"; }
+            if (sawOk) { return "ok"; }
+            return sawAny ? "frames_unclassified" : "fail_no_frame";
+        }
+
+        /// <summary>
         /// M1③ 退出路径夹具（卡 openmir2-m1-dbsrv-6000-face；白名单 M1-EXIT）：
         /// 收到本假人 SM_LOGON 后等这么久，按客户端 AppLogout 的线上形状发一条
         /// CM_SOFTCLOSE(1009)（= “小退”）。默认 0 = 关（不新增任何发送）。

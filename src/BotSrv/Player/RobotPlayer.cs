@@ -1547,6 +1547,271 @@ namespace BotSrv.Player
 
         #endregion
 
+        #region M3⑩ 元宝寄售动作序列夹具（默认关；白名单 T-44 家族扩展）
+
+        private string[] _soSeqSteps;
+        private int _soSeqStep = -1;
+        private int _soSeqNextTick;
+        private int _soSeqPendingK = -1;
+        private readonly List<string> _soSeqFrames = new List<string>();
+        private string _soSeqOp = string.Empty;
+        private string _soSeqRole = string.Empty;
+        private string _soSeqParam = string.Empty;
+        private bool _soSeqRan;
+
+        /// <summary>收到本假人 SM_LOGON 后武装固定元宝寄售序列（`g_boSellOffSequence` 关闭时是空操作）。</summary>
+        private void ArmSellOffSequence()
+        {
+            if (!MShare.g_boSellOffSequence)
+            {
+                return;
+            }
+            _soSeqSteps = MShare.ParseSellOffSteps(MShare.g_sSellOffSteps);
+            _soSeqStep = 0;
+            _soSeqPendingK = -1;
+            _soSeqFrames.Clear();
+            _soSeqNextTick = MShare.GetTickCount() + MShare.g_nSellOffStartDelayMs;
+            MainOutMessage("M3SELLOFFSEQ {\"phase\":\"arm\",\"bot\":\"" + QuestEsc(LoginId)
+                + "\",\"role\":\"" + (MShare.IsSellOffSeller(LoginId, MShare.g_sSellOffSellerLoginId) ? "a" : "b")
+                + "\",\"steps\":" + QuestJsonArray(_soSeqSteps)
+                + ",\"step_ms\":" + MShare.g_nSellOffStepMs + "}");
+        }
+
+        /// <summary>M3⑩ 固定元宝寄售序列（步进式）：每 `g_nSellOffStepMs` 处理一步；上一步先收尾
+        /// （`phase=end`，聚合本步收到的帧 + 元宝/金币/背包前后态 + branch），再发下一步；全部发完发 `phase=done`。
+        /// **两个**假人（卖方/买方）都跑同一串步骤；角色不符的步只记 `ran=false` + `skip_other_role`（k 仍前进）。</summary>
+        private void SellOffSequenceTick()
+        {
+            if (!MShare.g_boSellOffSequence || _soSeqSteps == null || _soSeqStep < 0)
+            {
+                return;
+            }
+            if (!_inWorld || ClientSocket == null || !ClientSocket.IsConnected)
+            {
+                return;
+            }
+            int now = MShare.GetTickCount();
+            if (now < _soSeqNextTick)
+            {
+                return;
+            }
+            if (_soSeqPendingK >= 0)
+            {
+                EmitSellOffEnd(_soSeqPendingK);
+                _soSeqPendingK = -1;
+            }
+            if (_soSeqStep >= _soSeqSteps.Length)
+            {
+                _soSeqStep = -1;
+                MainOutMessage("M3SELLOFFSEQ {\"phase\":\"done\",\"bot\":\"" + QuestEsc(LoginId)
+                    + "\",\"steps\":" + _soSeqSteps.Length + "}");
+                return;
+            }
+            int k = _soSeqStep;
+            string step = _soSeqSteps[k];
+            _soSeqStep++;
+            _soSeqFrames.Clear();
+            _soSeqOp = MShare.SellOffStepOp(step);
+            _soSeqRole = MShare.SellOffStepRole(step);
+            _soSeqParam = MShare.SellOffStepParam(step);
+            bool isSeller = MShare.IsSellOffSeller(LoginId, MShare.g_sSellOffSellerLoginId);
+            _soSeqRan = MShare.SellOffRunsForRole(_soSeqRole, isSeller);
+            EmitSellOffSend(k);
+            SendSellOffStep();
+            _soSeqPendingK = k;
+            _soSeqNextTick = now + MShare.g_nSellOffStepMs;
+        }
+
+        private void EmitSellOffSend(int k)
+        {
+            MainOutMessage("M3SELLOFFSEQ {\"phase\":\"send\",\"bot\":\"" + QuestEsc(LoginId)
+                + "\",\"k\":" + k
+                + ",\"role\":\"" + QuestEsc(_soSeqRole)
+                + "\",\"op\":\"" + QuestEsc(_soSeqOp)
+                + "\",\"ran\":" + (_soSeqRan ? "true" : "false")
+                + ",\"param\":\"" + QuestEsc(ResolveSellOffParam()) + "\""
+                + ",\"map\":\"" + QuestEsc(QuestMapName()) + "\""
+                + ",\"gamegold_before\":" + SellOffGameGold()
+                + ",\"gold_before\":" + ShopGold()
+                + ",\"bag_before\":" + ShopBagJson() + "}");
+        }
+
+        private void EmitSellOffEnd(int k)
+        {
+            string branch = _soSeqRan ? MShare.ClassifySellOffFrames(_soSeqFrames) : "skip_other_role";
+            MainOutMessage("M3SELLOFFSEQ {\"phase\":\"end\",\"bot\":\"" + QuestEsc(LoginId)
+                + "\",\"k\":" + k
+                + ",\"gamegold_after\":" + SellOffGameGold()
+                + ",\"gold_after\":" + ShopGold()
+                + ",\"bag_after\":" + ShopBagJson()
+                + ",\"branch\":\"" + branch + "\"}");
+        }
+
+        /// <summary>本假人元宝（GameGold；`SM_GAMEGOLDNAME` 回包写入 `MShare.MySelf.m_nGameGold`）。</summary>
+        private int SellOffGameGold()
+        {
+            return MShare.MySelf != null ? MShare.MySelf.m_nGameGold : 0;
+        }
+
+        /// <summary>M3⑩：把步骤参数里的 `peer` 记号换成**对方**角色名；`seller_end` 接受 `<tok>/<gold>`
+        /// （tok=peer 买方 / self 自己 / 字面名）并返回规范化 `<buyer>/<gold>`。纯函数式（不改状态）。</summary>
+        private string ResolveSellOffParam()
+        {
+            string raw = _soSeqParam ?? string.Empty;
+            bool isSeller = MShare.IsSellOffSeller(LoginId, MShare.g_sSellOffSellerLoginId);
+            if (_soSeqOp == "seller_end")
+            {
+                int gold = 1000;
+                string tok = "peer";
+                int slash = raw.IndexOf('/');
+                if (slash >= 0)
+                {
+                    tok = raw.Substring(0, slash).Trim();
+                    if (!int.TryParse(raw.Substring(slash + 1).Trim(), out gold) || gold <= 0)
+                    {
+                        gold = 1000;
+                    }
+                }
+                else if (!int.TryParse(raw, out gold) || gold <= 0)
+                {
+                    gold = 1000;
+                }
+                string buyer = string.Equals(tok, "self", StringComparison.OrdinalIgnoreCase)
+                    ? LoginId : MShare.g_sSellOffBuyerLoginId;
+                return buyer + "/" + gold;
+            }
+            if (string.Equals(raw, "peer", StringComparison.OrdinalIgnoreCase))
+            {
+                return isSeller ? MShare.g_sSellOffBuyerLoginId : MShare.g_sSellOffSellerLoginId;
+            }
+            return raw;
+        }
+
+        /// <summary>本假人背包里取动作物品（名字/MakeIndex）；名字为空 ⇒ 第一件。找不到 ⇒ null。</summary>
+        private ClientItem FindSellOffItem(string name, int make)
+        {
+            if (MShare.ItemArr == null)
+            {
+                return null;
+            }
+            for (int i = 0; i < BotConst.MaxBagItemcl; i++)
+            {
+                ClientItem it = MShare.ItemArr[i];
+                if (it == null || string.IsNullOrEmpty(it.Item.Name))
+                {
+                    continue;
+                }
+                if (!string.IsNullOrEmpty(name) && !string.Equals(it.Item.Name, name, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                if (make != 0 && it.MakeIndex != make)
+                {
+                    continue;
+                }
+                return it;
+            }
+            return null;
+        }
+
+        /// <summary>发本步的 CM_*（角色不符 ⇒ 不发；op 未知 ⇒ 只记 skip）。</summary>
+        private void SendSellOffStep()
+        {
+            if (!_soSeqRan)
+            {
+                return;
+            }
+            string raw = _soSeqParam ?? string.Empty;
+            switch (_soSeqOp)
+            {
+                case "seller_add_item":
+                case "seller_del_item":
+                    {
+                        ClientItem it = FindSellOffItem(string.Empty, 0);
+                        if (it != null)
+                        {
+                            int cm = _soSeqOp == "seller_add_item"
+                                ? Messages.CM_SELLOFFADDITEM : Messages.CM_SELLOFFDELITEM;
+                            CommandMessage msg = Messages.MakeMessage(cm, it.MakeIndex, 0, 0, it.Dura);
+                            SendSocket(EDCode.EncodeMessage(msg) + EDCode.EncodeString(it.Item.Name));
+                        }
+                        else
+                        {
+                            MainOutMessage("M3SELLOFFSEQ skip=no_item_in_bag op=" + QuestEsc(_soSeqOp));
+                        }
+                    }
+                    break;
+                case "seller_end":
+                    {
+                        string norm = ResolveSellOffParam();
+                        int slash = norm.IndexOf('/');
+                        string buyer = slash >= 0 ? norm.Substring(0, slash) : MShare.g_sSellOffBuyerLoginId;
+                        int gold = 1000;
+                        if (slash >= 0) { int.TryParse(norm.Substring(slash + 1), out gold); }
+                        CommandMessage msg = Messages.MakeMessage(Messages.CM_SELLOFFEND, gold, 0, 0, 0);
+                        SendSocket(EDCode.EncodeMessage(msg) + EDCode.EncodeString(buyer));
+                    }
+                    break;
+                case "seller_cancel":
+                    SendClientMessage(Messages.CM_SELLOFFCANCEL, 0, 0, 0, 0);
+                    break;
+                case "seller_cancel_ing":
+                    SendClientMessage(Messages.CM_CANCELSELLOFFITEMING, 0, 0, 0, 0);
+                    break;
+                case "buyer_buy_cancel":
+                    {
+                        CommandMessage msg = Messages.MakeMessage(Messages.CM_SELLOFFBUYCANCEL, 0, 0, 0, 0);
+                        SendSocket(EDCode.EncodeMessage(msg) + EDCode.EncodeString(MShare.g_sSellOffSellerLoginId));
+                    }
+                    break;
+                case "buyer_buy":
+                    {
+                        CommandMessage msg = Messages.MakeMessage(Messages.CM_SELLOFFBUY, 0, 0, 0, 0);
+                        SendSocket(EDCode.EncodeMessage(msg) + EDCode.EncodeString(MShare.g_sSellOffSellerLoginId));
+                    }
+                    break;
+                case "softclose":
+                    SendClientMessage(Messages.CM_SOFTCLOSE, 0, 0, 0, 0);
+                    break;
+                default:
+                    MainOutMessage("M3SELLOFFSEQ skip=op_not_implemented step=" + QuestEsc(_soSeqOp));
+                    break;
+            }
+        }
+
+        /// <summary>收帧钩子（单一收包点）：元宝寄售相关 SM_* 在 `g_boSellOffSequence` 打开且本步待收尾时
+        /// 落 `phase=frame` 事件。**只读不写世界态**（同 T-29/T-44 纪律）；默认关时空转。</summary>
+        public void SellOffOnServerMessage(int sm, int merchant, int face, int tag, int series, string body)
+        {
+            if (!MShare.g_boSellOffSequence || _soSeqPendingK < 0)
+            {
+                return;
+            }
+            switch (sm)
+            {
+                case 767:     // SM_MENU_OK（[成功]/[错误] 文案）
+                case 23000:   // SM_SENDDEALOFFFORM
+                case 23003: case 23005:   // SM_SELLOFFADDITEM_OK / SM_SellOffADDITEM_FAIL
+                case 23008: case 23010:   // SM_SELLOFFDELITEM_OK / _FAIL
+                case 23014:   // SM_SellOffCANCEL
+                case 23016: case 23018:   // SM_SELLOFFEND_OK / _FAIL
+                case 23021: case 23023:   // SM_QUERYYBSELL / SM_QUERYYBDEAL
+                case 23027:   // SM_SELLOFFBUY_OK
+                    break;
+                default:
+                    return;
+            }
+            string text = sm == 767 && !string.IsNullOrEmpty(body) ? EDCode.DeCodeString(body) : string.Empty;
+            string fr = "{\"sm\":" + sm + ",\"a\":" + merchant + ",\"b\":" + face
+                + ",\"c\":" + tag + ",\"d\":" + series
+                + ",\"text\":\"" + QuestEsc(text) + "\"}";
+            _soSeqFrames.Add(fr);
+            MainOutMessage("M3SELLOFFSEQ {\"phase\":\"frame\",\"bot\":\"" + QuestEsc(LoginId)
+                + "\",\"k\":" + _soSeqPendingK + ",\"frame\":" + fr + "}");
+        }
+
+        #endregion
+
         #region M1③ 退出路径夹具：进世界后发 CM_SOFTCLOSE（小退；默认关；白名单 M1-EXIT）
 
         /// <summary>发送时刻（MShare.GetTickCount），-1=未武装。</summary>
@@ -1607,6 +1872,7 @@ namespace BotSrv.Player
             ArmShopSequence();
             ArmQuestSequence();
             ArmPairTradeSequence();
+            ArmSellOffSequence();
             ArmSoftClose();
             if (LoadMetrics.ShouldSuppressInWorld(LoginId))
             {
@@ -1640,6 +1906,7 @@ namespace BotSrv.Player
                 ShopSequenceTick();
                 QuestSequenceTick();
                 PairTradeSequenceTick();
+                SellOffSequenceTick();
                 SoftCloseTick();
                 if (DScreen.CurrentScene == PlayScene)
                 {

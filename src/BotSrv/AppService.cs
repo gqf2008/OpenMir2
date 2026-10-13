@@ -72,6 +72,15 @@ namespace BotSrv
             // actor/peer 的精确 LoginId = LoginAccount + 序号（AppService.Run：LoginId = ChrName）。
             MShare.g_sPairTradeActorLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.PairTradeRole);
             MShare.g_sPairTradePeerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.PairTradePeerRole);
+            // M3⑩ 夹具（白名单 T-44 家族扩展）：固定元宝寄售动作序列；默认 false = 原行为
+            MShare.g_boSellOffSequence = _options.SellOffSequence;
+            MShare.g_nSellOffStepMs = _options.SellOffStepMs;
+            MShare.g_nSellOffStartDelayMs = _options.SellOffStartDelayMs;
+            MShare.g_sSellOffSteps = _options.SellOffSteps ?? string.Empty;
+            MShare.g_nSellOffSellerRole = _options.SellOffSellerRole;
+            MShare.g_nSellOffBuyerRole = _options.SellOffBuyerRole;
+            MShare.g_sSellOffSellerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.SellOffSellerRole);
+            MShare.g_sSellOffBuyerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.SellOffBuyerRole);
             // M1③ 退出路径夹具（白名单 M1-EXIT）：进世界后发 CM_SOFTCLOSE；默认 0 = 原行为
             MShare.g_nSoftCloseAfterWorldMs = _options.SoftCloseAfterWorldMs;
             MShare.g_boDisableAutoPlay = _options.DisableAutoPlay;
@@ -121,6 +130,11 @@ namespace BotSrv
             {
                 LogService.Info("固定组队/交易序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms actor序号={3} peer序号={4}（见 RobotPlayer.PairTradeSequenceTick）",
                     _options.PairTradeSteps, _options.PairTradeStartDelayMs, _options.PairTradeStepMs, _options.PairTradeRole, _options.PairTradePeerRole);
+            }
+            if (_options.SellOffSequence)
+            {
+                LogService.Info("固定元宝寄售序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms 卖方序号={3} 买方序号={4}（见 RobotPlayer.SellOffSequenceTick）",
+                    _options.SellOffSteps, _options.SellOffStartDelayMs, _options.SellOffStepMs, _options.SellOffSellerRole, _options.SellOffBuyerRole);
             }
         }
 

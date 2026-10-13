@@ -30,6 +30,11 @@ namespace BotSrv
             {
                 System.Environment.Exit(PairTradeSeqSelfCheck.Run());
             }
+            // M3⑩（T-44 家族扩展）：元宝寄售夹具 步解析/角色判定/分支归类 纯函数的无栈自检（不启动服务/不连端口）。
+            if (args.Length > 0 && args[0] == "--selftest-selloff")
+            {
+                System.Environment.Exit(SellOffSeqSelfCheck.Run());
+            }
             GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
             GCSettings.LatencyMode = GCSettings.IsServerGC ? GCLatencyMode.Batch : GCLatencyMode.Interactive;
             AppServer serviceRunner = new AppServer();
