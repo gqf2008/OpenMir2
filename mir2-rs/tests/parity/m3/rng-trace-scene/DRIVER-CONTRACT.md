@@ -104,6 +104,13 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
   漂到 `:5440`）。机判 = `python -I rng-trace-scene/check_anchors.py selftest`：要求「文档写的行号
   == 该符号在当前源码里的**首个**匹配行」，缺失/重复/漂移都 fail-closed 点名；已接入
   `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`anchors-freshness-selftest`）。
+- **锚点覆盖面收口（2026-10-14 reviewer-5 M-1 / reviewer-6 M-1+M-2）**：旧口径有两处静默通道 ——
+  ① 覆盖判定用「结尾 basename 匹配」⇒ **别的目录下的同名文件**会被误判 COVERED（既非
+  `UNGUARDED_ANCHOR` 也不 `ANCHOR_DRIFT`）；② 同行**裸续引用**（同一条引用后面再跟一个冒号行号，
+  本 §6 的 R-6 站点写法即此）完全没有被解析。现机判（`check_anchors.py`）：带目录引用必须与锚点的
+  `literal`/`path` **全等**（裸 basename 仅限显式 `basename_ok`）、未识别扩展名走
+  `UNKNOWN_REF_EXT` fail-closed、裸续引用归到同行前一个引用并按锚点 `also` 校验**行内容**
+  （未登记 / 越界 / 内容不符都判 RED）；`selftest` 10/10（含 9 条改坏必红）。
 
 ## 7. 当前状态（阻塞）
 

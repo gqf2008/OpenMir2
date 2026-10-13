@@ -13,27 +13,40 @@ client-e2e 两次合并而行号增长，`enable_production_monster_ai` 调用�
 而文档仍写 `:5229`（承接卡按旧行号找代码会找错，且没人拦）。
 
 本工具把「文档里写的行号 = 该符号在**当前源码**里的**首个**匹配行」钉成 fail-closed 机判；
-它**不写任何文件**（`selftest` 只用内存文本 + 临时目录）。
+它**不写任何文件**（`selftest` 只用内存文本 + 临时锚点表）。
 
 ## 判据（任一条不成立 ⇒ RED，逐条点名）
 
-1. 文档里 `` `<literal>:<line>` `` **缺失 / 重复 / 行号非数字** ⇒ `ANCHOR_MISSING` / `ANCHOR_AMBIGUOUS`；
+1. 文档里 `` `<literal>:<line>` ``（或该锚点的**仓库根相对路径**形式）**缺失 / 重复 /
+   行号非数字** ⇒ `ANCHOR_MISSING` / `ANCHOR_AMBIGUOUS`；
 2. 解析出的源文件不存在 ⇒ `ANCHOR_FILE_MISSING`；
 3. 期望符号在文件里**不存在** ⇒ `ANCHOR_SYMBOL_MISSING`；
 4. 期望符号的**首个**匹配行 ≠ 文档写的行号 ⇒ `ANCHOR_DRIFT`（点名实际行，即要改成的值）；
 5. **闭世界**：文档里出现的**每个** `<path>.<ext>:<line>` 引用都必须有对应锚点
-   （`ANCHORS` 登记），否则 ⇒ `UNGUARDED_ANCHOR`（新增引用不登记 ⇒ 行号会静默漂移，
-   正是本工具自身在 2026-10-13 踩到的：`rng_consumer_groups.py` 的 `FOLD_RULES` 定义
-   因同片 +5 行从 `:52` 漂到 `:57`，而旧锚点表只硬编码了 5 条、不含它）。
+   （`ANCHORS` 登记），否则 ⇒ `UNGUARDED_ANCHOR`；扩展名不在白名单（`KNOWN_EXTS`）时
+   ⇒ `UNKNOWN_REF_EXT`（旧口径只认 6 个扩展名，别的**静默跳过** ⇒ 可静默漂移）。
+6. **同名 basename 不得串台**：带目录的引用（如 `foo/monai.rs:5`）必须与某锚点的
+   `literal` / `path` **全等**；只有显式 `basename_ok=True` 的锚点才接受裸 basename
+   （`monai.rs` / `mongen.rs`）。旧口径用 `token.endswith("/" + literal)` ⇒
+   **别的目录下的同名文件**会被误判 COVERED，既非 `UNGUARDED_ANCHOR` 也不 `ANCHOR_DRIFT`（静默）。
+7. **同行裸续引用** `:NN`（例：`…consumer_groups.tsv:35`（折叠理由）、`:53`（spawn 行））
+   归到**同一物理行里前一个**完整引用，并按锚点 `also` 逐条校验：
+   未登记 ⇒ `BARE_REF_UNDECLARED`；越界 ⇒ `BARE_REF_OUT_OF_RANGE`；
+   行内容不匹配 ⇒ `BARE_REF_DRIFT`；归属的文件不存在 ⇒ `BARE_REF_FILE_MISSING`。
+   （旧口径完全无视裸 `:NN` ⇒ 它指向的行可静默漂移。）
+
+> 收录自 2026-10-14 reviewer-5 M-1 / reviewer-6 M-1+M-2（均为对
+> `a173eba89`「锚点闭世界」片的同族非阻塞 Minor）的收口。
 
 ## 用法
 
     python -I check_anchors.py check       # 检查本目录 DRIVER-CONTRACT.md（默认）
     python -I check_anchors.py check --doc <path>   # 检查任意副本（用于「改前/改后」对照）
-    python -I check_anchors.py selftest    # check + 改坏必红（把文档行号改回旧值 ⇒ 必红）
+    python -I check_anchors.py selftest    # check + 改坏必红（含同名目录串台 / 裸 :NN / 未知扩展名）
 
 退出码：0 = GREEN，1 = RED。
 """
+import bisect
 import os
 import re
 import sys
@@ -45,13 +58,26 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", "..", "..", "..", ".."))
 
 # ---------------------------------------------------------------------------
+# 可被保鲜的扩展名白名单。文档里出现 `path.<ext>:<line>` 且 ext 不在白名单 ⇒
+# `UNKNOWN_REF_EXT` fail-closed（旧口径 `_DOC_REF_RE` 只认 6 个扩展名，
+# 不在其内的引用**既不算覆盖、也不报错** ⇒ 静默漂移的通道）。
+# ---------------------------------------------------------------------------
+KNOWN_EXTS = frozenset({
+    "rs", "cs", "py", "ps1", "psm1", "json", "jsonl", "tsv", "csv",
+    "txt", "md", "toml", "yaml", "yml", "ini", "cfg", "xml", "sql",
+    "sh", "bat",
+})
+
+# ---------------------------------------------------------------------------
 # 锚点表（唯一真源在这里；文档必须与它同口径）
 #
-#   literal  = 文档里出现的 `path` 字面（用来从文档里取出 `<line>`；带负向环视以免
-#              `monai.rs` 误命中 `crates/world/src/monai.rs` 的尾部）
-#   path     = 仓库根相对路径（用于打开源码）
-#   rx       = 该行必须匹配的**符号正则**；要求「首个匹配行 == 文档行号」
-#   why      = 这个锚点为什么承重（给 RED 输出用）
+#   literal      = 文档里出现的 `path` 字面（或该锚点的仓库根相对路径）
+#   path         = 仓库根相对路径（用于打开源码）
+#   rx           = 该行必须匹配的**符号正则**；要求「首个匹配行 == 文档行号」
+#   why          = 这个锚点为什么承重（给 RED 输出用）
+#   basename_ok  = 允许文档用**裸 basename**（无目录）引用本锚点
+#   also         = 同一 literal 的**同行裸续引用** `:NN` 的登记表：
+#                  {line, rx, why}；未登记 ⇒ BARE_REF_UNDECLARED
 # ---------------------------------------------------------------------------
 ANCHORS = (
     dict(literal="mir2-rs/bins/game-svr/src/main.rs",
@@ -61,7 +87,8 @@ ANCHORS = (
     dict(literal="mongen.rs",
          path="mir2-rs/bins/game-svr/src/mongen.rs",
          rx=r"pub fn enable_production_monster_ai\(",
-         why="宿主 AI 开关接缝"),
+         why="宿主 AI 开关接缝",
+         basename_ok=True),
     dict(literal="crates/world/src/monai.rs",
          path="mir2-rs/crates/world/src/monai.rs",
          rx=r"pub fn monster_ai_tick\(",
@@ -69,7 +96,8 @@ ANCHORS = (
     dict(literal="monai.rs",
          path="mir2-rs/crates/world/src/monai.rs",
          rx=r"pub fn wondering\(",
-         why="Wondering 的 Random(20) 抽数入口"),
+         why="Wondering 的 Random(20) 抽数入口",
+         basename_ok=True),
     dict(literal="src/M2Server/Actor/AnimalObject.cs",
          path="src/M2Server/Actor/AnimalObject.cs",
          rx=r"protected virtual void Wondering",
@@ -81,13 +109,24 @@ ANCHORS = (
     dict(literal="rng-trace-probe/consumer_groups.tsv",
          path="mir2-rs/tests/parity/m3/rng-trace-probe/consumer_groups.tsv",
          rx=r"FOLD_RULES = \{construct: spawn\}",
-         why="站点表的 R-6 折叠理由行"),
+         why="站点表的 R-6 折叠理由行",
+         # 同一 literal 的**同行裸续引用**必须在此登记（旧口径不校验裸 :NN ⇒ 可静默漂移）。
+         also=(dict(line=53,
+                    rx=r"^spawn\trust\tcrates/world/src/mongen",
+                    why="Rust spawn 行（表内唯一 rust spawn 站点；固定场景唯一 spawn 来源）"),)),
 )
 
 
-def _anchor_re(literal):
-    """`` `<literal>:<line>` ``（负向环视防止短 basename 命中长路径的尾部）。"""
-    return re.compile(r"(?<![A-Za-z0-9_./])" + re.escape(literal) + r":(\d+)")
+def _norm(tok):
+    """Windows 反斜杠路径归一成 `/`（文档/表里两种写法都可能出现）。"""
+    return tok.replace("\\", "/")
+
+
+def _anchor_re(a):
+    """`` `<literal|path>:<line>` ``（负向环视防止短 basename 命中长路径的尾部）。"""
+    alts = sorted({_norm(a["literal"]), _norm(a["path"])}, key=len, reverse=True)
+    pat = "|".join(re.escape(x) for x in alts)
+    return re.compile(r"(?<![A-Za-z0-9_./\\-])(?:" + pat + r"):(\d+)")
 
 
 def _read_lines(path):
@@ -95,27 +134,43 @@ def _read_lines(path):
         return fh.read().splitlines()
 
 
-# 闭世界：文档里每个 `<path>.<ext>:<line>` 引用（前缀负向环视防止命中更长路径的尾部）。
-_DOC_REF_RE = re.compile(
-    r"(?<![A-Za-z0-9_./\\-])"
-    r"([A-Za-z0-9_][A-Za-z0-9_./\\-]*\.(?:rs|cs|py|ps1|json|tsv|md)):(\d+)"
-)
+def _resolve_ref(token, anchors):
+    """把文档里的引用 token 解析成**精确**锚点；解析不出 ⇒ None。
 
-
-def _anchor_covers(token, anchors):
-    """该文档引用是否被某个锚点覆盖（literal 全等，或 literal 是路径的 basename 段）。"""
+    带目录的 token 必须与某锚点的 `literal` / `path` **全等**（旧口径用
+    `endswith("/" + literal)` ⇒ `foo/monai.rs` 会误命中 `monai.rs` 锚点）。
+    裸 basename 只接受显式 `basename_ok=True` 的锚点。
+    """
+    tok = _norm(token)
+    has_dir = "/" in tok
     for a in anchors:
-        lit = a["literal"]
-        if token == lit or token.endswith("/" + lit):
-            return True
-    return False
+        lit = _norm(a["literal"])
+        path = _norm(a["path"])
+        if has_dir:
+            if tok == lit or tok == path:
+                return a
+        elif a.get("basename_ok") and (tok == lit or os.path.basename(path) == tok):
+            return a
+    return None
+
+
+# 完整引用 `<path>.<ext>:<line>`（ext 以字母开头，避免把 `127.0.0.1:80` / `v1.2:3`
+# 之类误判成源码引用）。原先只认 6 个扩展名 ⇒ 其余静默跳过。
+_FULL_REF_RE = re.compile(
+    r"(?<![A-Za-z0-9_./\\-])"
+    r"([A-Za-z0-9_][A-Za-z0-9_./\\-]*?\.([A-Za-z][A-Za-z0-9]{0,11})):(\d+)"
+)
+# 同行**裸续引用** `:NN`（`:` 前不是路径字符 ⇒ 不会命中完整引用本身的 `:NN`）。
+_BARE_REF_RE = re.compile(r"(?<![A-Za-z0-9_./\\-]):(\d+)")
 
 
 def check_doc_text(doc_text, root=REPO_ROOT, anchors=ANCHORS):
     """返回问题清单（空 = 全部锚点保鲜）。纯函数，便于 selftest 注入改坏文本。"""
     problems = []
+
+    # ---- ① 主锚点：文档写的行号 == 当前源码首个匹配行 ----
     for a in anchors:
-        rx = _anchor_re(a["literal"])
+        rx = _anchor_re(a)
         hits = rx.findall(doc_text)
         if not hits:
             problems.append("ANCHOR_MISSING %s：文档里找不到 `%s:<line>`"
@@ -142,12 +197,77 @@ def check_doc_text(doc_text, root=REPO_ROOT, anchors=ANCHORS):
         elif first != cited:
             problems.append("ANCHOR_DRIFT %s：文档写 %s:%d，但 /%s/ 的首个匹配在 :%d"
                             % (a["why"], a["path"], cited, a["rx"], first))
-    # 闭世界：未被任何锚点覆盖的 `path:line` 引用 ⇒ 新引用不登记 = 会静默漂移。
-    for m in _DOC_REF_RE.finditer(doc_text):
-        if not _anchor_covers(m.group(1), anchors):
+
+    # ---- ② 闭世界：每个完整 `path.<ext>:<line>` 引用都必须被锚点覆盖 ----
+    full_matches = list(_FULL_REF_RE.finditer(doc_text))
+    for m in full_matches:
+        token, ext, line = m.group(1), m.group(2).lower(), m.group(3)
+        if ext not in KNOWN_EXTS:
+            problems.append("UNKNOWN_REF_EXT 文档引用 `%s:%s` 的扩展名 `.%s` 不在保鲜白名单里 —— "
+                            "未识别扩展名必须显式登记（旧口径会静默跳过 ⇒ 可静默漂移）"
+                            % (token, line, ext))
+            continue
+        if _resolve_ref(token, anchors) is None:
             problems.append("UNGUARDED_ANCHOR 文档引用 `%s:%s` 没有保鲜锚点 —— "
                             "新增 `path:line` 必须在 ANCHORS 登记（否则行号会静默漂移）"
-                            % (m.group(1), m.group(2)))
+                            % (token, line))
+
+    # ---- ③ 同行裸续引用 `:NN`：归到同一物理行里前一个完整引用，按 `also` 校验 ----
+    starts = [0]
+    for i, ch in enumerate(doc_text):
+        if ch == "\n":
+            starts.append(i + 1)
+
+    def line_idx(pos):
+        return bisect.bisect_right(starts, pos) - 1
+
+    full_by_line = {}
+    for m in full_matches:
+        full_by_line.setdefault(line_idx(m.start()), []).append(m)
+
+    cache = {}
+
+    def cached_lines(src):
+        if src not in cache:
+            cache[src] = _read_lines(src)
+        return cache[src]
+
+    for m in _BARE_REF_RE.finditer(doc_text):
+        li = line_idx(m.start())
+        cands = [f for f in full_by_line.get(li, ()) if f.end() <= m.start()]
+        if not cands:
+            # 同行没有前置完整引用 ⇒ 视为散文（文档里历史值 `:5229`/`:5440` 即此）。
+            continue
+        ref = max(cands, key=lambda f: f.end())
+        token, line = ref.group(1), int(m.group(1))
+        a = _resolve_ref(token, anchors)
+        if a is None:
+            problems.append("BARE_REF_UNGUARDED 同行裸续引用 `:%d` 归属 `%s`（未登记锚点）"
+                            % (line, token))
+            continue
+        decl = None
+        for e in a.get("also", ()):
+            if e["line"] == line:
+                decl = e
+                break
+        if decl is None:
+            problems.append("BARE_REF_UNDECLARED %s：同行裸续引用 `:%d`（归属 `%s`）未在锚点 "
+                            "`also` 登记（裸 `:NN` 不登记 ⇒ 行号可静默漂移）"
+                            % (a["why"], line, token))
+            continue
+        src = os.path.join(root, a["path"])
+        if not os.path.isfile(src):
+            problems.append("BARE_REF_FILE_MISSING %s：%s 不存在" % (a["why"], a["path"]))
+            continue
+        lines = cached_lines(src)
+        if line < 1 or line > len(lines):
+            problems.append("BARE_REF_OUT_OF_RANGE %s：`%s:%d` 越界（文件共 %d 行）"
+                            % (a["why"], a["path"], line, len(lines)))
+            continue
+        if not re.search(decl["rx"], lines[line - 1]):
+            problems.append("BARE_REF_DRIFT %s：`%s:%d` 不匹配 /%s/（实际 `%s`）"
+                            % (decl.get("why", a["why"]), a["path"], line, decl["rx"],
+                               lines[line - 1][:80]))
     return problems
 
 
@@ -164,7 +284,7 @@ def _print(problems, prefix):
     if problems:
         print("%s: check_anchors %d 项 RED" % (prefix, len(problems)))
         return 1
-    print("%s: check_anchors %d/%d 锚点保鲜（文档行号 == 当前源码首个匹配行）"
+    print("%s: check_anchors %d/%d 锚点保鲜（文档行号 == 当前源码首个匹配行；闭世界 + 裸续引用）"
           % (prefix, len(ANCHORS), len(ANCHORS)))
     return 0
 
@@ -186,12 +306,8 @@ def selftest():
 
     # ② 改坏必红①：把宿主 AI 行号改回历史漂移值 `:5229` ⇒ 必红且点名实际行。
     #    （2026-10-13 实测：main.rs 合并后该符号在 :5440，文档曾写 :5229。）
-    drifted = text
-    for a in ANCHORS:
-        if a["literal"].endswith("main.rs"):
-            drifted = _anchor_re(a["literal"]).sub(
-                lambda m: "%s:5229" % a["literal"], drifted, count=1)
-            break
+    a_main = next(a for a in ANCHORS if a["literal"].endswith("main.rs"))
+    drifted = _anchor_re(a_main).sub(lambda m: "%s:5229" % a_main["literal"], text, count=1)
     bad = check_doc_text(drifted)
     check_case("mutation-line-drift-red",
                any("ANCHOR_DRIFT" in p and "5229" in p for p in bad),
@@ -219,12 +335,51 @@ def selftest():
                "; ".join(bad4))
 
     # ⑥ 改坏必红⑤：把 R-6 折叠映射定义行号改回历史值 `:52`（本片真身漂移）⇒ `ANCHOR_DRIFT` 必红。
-    fold_drifted = _anchor_re("rng-trace-probe/rng_consumer_groups.py").sub(
+    a_fold = next(a for a in ANCHORS if a["literal"].endswith("rng_consumer_groups.py"))
+    fold_drifted = _anchor_re(a_fold).sub(
         "rng-trace-probe/rng_consumer_groups.py:52", text, count=1)
     bad5 = check_doc_text(fold_drifted)
     check_case("mutation-fold-def-drift-red",
                any("ANCHOR_DRIFT" in p and "FOLD_RULES" in p for p in bad5),
                "; ".join(bad5))
+
+    # ⑦ 改坏必红⑥（reviewer-5 M-1 / reviewer-6 M-2 收口）：**别的目录**下的同名 basename
+    #    引用必须判 `UNGUARDED_ANCHOR`（旧口径 `endswith("/"+literal)` 会误判 COVERED ⇒ 静默）。
+    sibling = text + "\n（另见 `foo/monai.rs:999`）\n"
+    bad6 = check_doc_text(sibling)
+    check_case("mutation-sibling-basename-red",
+               any("UNGUARDED_ANCHOR" in p and "foo/monai.rs" in p for p in bad6),
+               "; ".join(bad6))
+
+    # ⑧ 改坏必红⑦（reviewer-6 M-1 收口）：同行裸续引用 `:53` 改成未登记的 `:54`
+    #    ⇒ `BARE_REF_UNDECLARED` 必红（裸 `:NN` 不登记 = 静默漂移通道）。
+    assert text.count("`:53`") == 1, "文档里应恰有一处裸续引用 `:53`（自检前置被破坏）"
+    bare_drift = text.replace("`:53`", "`:54`")
+    bad7 = check_doc_text(bare_drift)
+    check_case("mutation-bare-ref-undeclared-red",
+               any("BARE_REF_UNDECLARED" in p and ":54" in p for p in bad7),
+               "; ".join(bad7))
+
+    # ⑨ 改坏必红⑧：裸续引用已登记，但**目标行内容**漂移 ⇒ `BARE_REF_DRIFT` 必红
+    #    （证明 `also` 的 `rx` 是真牙，不是只查行号在范围内）。
+    bad_anchors = []
+    for a in ANCHORS:
+        if a["literal"].endswith("consumer_groups.tsv"):
+            a = dict(a, also=(dict(line=53, rx=r"^NOPE_THIS_ROW_IS_NOT_SPAWN",
+                                   why="改坏：内容牙"),))
+        bad_anchors.append(a)
+    bad8 = check_doc_text(text, anchors=tuple(bad_anchors))
+    check_case("mutation-bare-ref-content-drift-red",
+               any("BARE_REF_DRIFT" in p for p in bad8),
+               "; ".join(bad8))
+
+    # ⑩ 改坏必红⑨：未识别扩展名的 `path:line` 引用必须 fail-closed ⇒ `UNKNOWN_REF_EXT`
+    #    （旧口径 `_DOC_REF_RE` 只认 6 个扩展名，其余静默跳过）。
+    unknown_ext = text + "\n（另见 `docs/spec.xyz:12`）\n"
+    bad9 = check_doc_text(unknown_ext)
+    check_case("mutation-unknown-ext-red",
+               any("UNKNOWN_REF_EXT" in p and "spec.xyz" in p for p in bad9),
+               "; ".join(bad9))
 
     total = len(checks)
     badn = [(n, d) for n, ok, d in checks if not ok]
@@ -233,7 +388,9 @@ def selftest():
     if badn:
         print("SELFTEST RED: check_anchors selftest %d/%d" % (total - len(badn), total))
         return 1
-    print("SELFTEST GREEN: check_anchors selftest %d/%d（含 5 条改坏必红）" % (total, total))
+    print("SELFTEST GREEN: check_anchors selftest %d/%d（含 9 条改坏必红：行号漂移 / 锚点缺失 / "
+          "锚点歧义 / 未登记引用 / 折叠定义回退 / 同名目录串台 / 裸续引用未登记 / 裸续内容漂移 / "
+          "未识别扩展名）" % (total, total))
     return 0
 
 
