@@ -1,0 +1,12 @@
+# 边界：oracle 冻结（src / sql / MirClient）零改动
+$ git diff --name-only master..HEAD -- src sql MirClient
+（空 = 通过）
+
+# 全量改动（相对 master 15510a47）
+mir2-rs/bins/game-svr/src/config.rs
+mir2-rs/bins/game-svr/src/lib.rs
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/shop.rs
+mir2-rs/crates/world/src/merchant.rs
+mir2-rs/crates/world/src/world.rs
+mir2-rs/tests/parity/whitelist.md

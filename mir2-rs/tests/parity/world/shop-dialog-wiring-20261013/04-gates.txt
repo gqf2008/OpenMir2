@@ -1,0 +1,16 @@
+# 合并树四门禁（base = master 15510a47，本片 merge 后；隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target）
+
+## 1) cargo fmt --all -- --check
+rc=0
+
+## 2) cargo clippy --offline --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.81s
+rc=0
+
+## 3) cargo run --offline -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+## 4) cargo test --offline --workspace --no-fail-fast
+（聚合；原始件 = 本片 04b-workspace-test.txt）
+suites=94 passed=889 failed=0 ignored=21  rc=0

@@ -1,0 +1,12 @@
+# ⑤-4 第①片 —— 本片写集与范围（base = refs/heads/master @ 15510a47，含 ⑤-2/⑤-3/⑥-3/m3bag Claim B）
+
+## 写集（owner 卡 issue write_set）
+  mir2-rs/bins/game-svr/**   （shop.rs 新增 + main.rs 派发 + config.rs [Setup] 四项 + lib.rs 挂模块）
+  mir2-rs/crates/world/**    （merchant.rs 在售库存 goods_list + world.rs 计数器可见性）
+  mir2-rs/tests/parity/whitelist.md （T-47 登记，1 段）
+
+## 实际改动文件（git diff --name-only --stat）
+
+## 边界（oracle 冻结：src/sql/MirClient 必须空）
+$ git diff --name-only master..HEAD -- src sql MirClient
+（空 = 通过）

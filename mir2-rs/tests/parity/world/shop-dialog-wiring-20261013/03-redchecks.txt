@@ -1,0 +1,16 @@
+# 改坏必红（4 条；逐条 mutation ⇒ 目标用例 FAILED(rc=101) ⇒ git checkout 还原 ⇒ ok/rc=0）
+# 驱动脚本：E:/tmp/m2svr-redcheck-shop.py（未入库）；原始件在 redcheck/ 子目录
+
+| id | 文件 | 改法 | 目标用例 | mutated | restored |
+| --- | --- | --- | --- | --- | --- |
+| RC1 | crates/world/src/merchant.rs | `insert(0,item)` → `push(item)`（组内序反） | merchant_add_item_to_goods_list_inserts_front | FAILED rc=101 | ok rc=0 |
+| RC2 | bins/game-svr/src/shop.rs | 买价门 `gold>=n_price && n_price>0` → `n_price>0`（去掉钱不够门） | buy_failure_codes_two_and_three | FAILED rc=101 | ok rc=0 |
+| RC3 | bins/game-svr/src/shop.rs | 卖 `inc_gold(...)` 门 → `true`（去掉超 HumanMaxGold 门） | sell_fails_when_gold_over_max | FAILED rc=101 | ok rc=0 |
+| RC4 | bins/game-svr/src/shop.rs | 查询售价帧 `recog=nC` → `recog=0`（帧字段口径） | query_sell_price_and_repair_cost_frames | FAILED rc=101 | ok rc=0 |
+
+驱动输出：
+RC1-goods-insert-front: mutated_rc=101 red=True restored_rc=0 green=True
+RC2-buy-money-gate: mutated_rc=101 red=True restored_rc=0 green=True
+RC3-sell-incgold-gate: mutated_rc=101 red=True restored_rc=0 green=True
+RC4-sendbuyprice-recog: mutated_rc=101 red=True restored_rc=0 green=True
+RED-CHECK ALL: PASS（还原后 git status --porcelain 空）

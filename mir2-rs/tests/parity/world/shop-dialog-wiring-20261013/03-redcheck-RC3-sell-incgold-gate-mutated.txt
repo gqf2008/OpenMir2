@@ -1,0 +1,27 @@
+$ cd mir2-rs && cargo test -p game-svr --lib --offline shop::tests::sell_fails_when_gold_over_max
+# --- mutated: bins/game-svr/src/shop.rs
+#     if inc_gold(state.gold, n_price, ctx.human_max_gold) {
+#  -> if true {
+
+
+running 1 test
+test shop::tests::sell_fails_when_gold_over_max ... FAILED
+
+failures:
+
+---- shop::tests::sell_fails_when_gold_over_max stdout ----
+
+thread 'shop::tests::sell_fails_when_gold_over_max' (15640) panicked at bins\game-svr\src\shop.rs:818:9:
+1050 > 1040 ⇒ IncGold 失败
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shop::tests::sell_fails_when_gold_over_max
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 131 filtered out; finished in 0.00s
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.99s
+     Running unittests src\lib.rs (E:/tmp/m2svr-target\debug\deps\game_svr-675e68013f315636.exe)
+error: test failed, to rerun pass `-p game-svr --lib`
