@@ -1,0 +1,394 @@
+# ⑧-6 O-1 收口：77 条补登锚逐条语义级核对（材料 + 裁定）
+#
+# 来源 = 基线 `git show 30c52f85d:.../castle_oracle_anchor_gate.py` 的 ANCHORS（82 条）
+#        对比本 head 的 ANCHORS（159 条）⇒ 净增 77 条（补登 76 + 补 `:939`），删 0 条。
+# 方法 = `worksheet` 子命令渲染每条锚的 (a) castle.rs/README.md 散文落点 (b) 冻结 src/ 实际行；
+#        逐条比对「散文声称的构造 ⇄ 该行内容」。裁定：MATCH = 二者一致；DRIFT = 不一致（须订正）。
+# 结论 = 77/77 MATCH，0 DRIFT。
+
+=== CastleOfficial.cs:199-238  [src/GameSrv/Npc/CastleOfficial.cs]
+    prose castle.rs:466: /// `CastleOfficial.UserSelect` 的标签派发（`CastleOfficial.cs:199-238`）。
+    prose castle.rs:821: /// `CastleOfficial.UserSelect` 的城门/城墙标签动作（`CastleOfficial.cs:199-238`）。
+    src:199 => else if (string.Compare(sLabel, ScriptFlagConst.sOPENMAINDOOR, StringComparison.OrdinalIgnoreCase) == 0)
+    src:237 => PlayObject.SendMsg(this, Messages.RM_MENU_OK, 0, ActorId, 0, 0);
+    VERDICT: MATCH
+=== CastleOfficial.cs:229/235  [src/GameSrv/Npc/CastleOfficial.cs]
+    prose castle.rs:492: /// **N5（白名单 T-40）**：`CastleOfficial.cs:229/235` 的
+    prose castle.rs:2432: // `CastleOfficial.cs:229/235`：length 实参用整串长度 ⇒ `13 + len > len` 恒真。
+    src:229 => s20 = sLabel.Substring(ScriptFlagConst.sHIREGUARDNOW.Length, sLabel.Length);
+    src:235 => s20 = sLabel.Substring(ScriptFlagConst.sHIREARCHERNOW.Length, sLabel.Length);
+    VERDICT: MATCH
+=== CastleOfficial.cs:358-381  [src/GameSrv/Npc/CastleOfficial.cs]
+    prose castle.rs:510: /// `CastleOfficial.RepairDoor(PlayObject)`（`CastleOfficial.cs:358-381`）。
+    src:358 => private void RepairDoor(IPlayerActor PlayObject)
+    src:379 => PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+    VERDICT: MATCH
+=== CastleOfficial.cs:358-406  [src/GameSrv/Npc/CastleOfficial.cs]
+    prose castle.rs:799: /// `CastleOfficial` 修门/修墙的提示文案（`CastleOfficial.cs:358-406`）。
+    prose castle.rs:837: /// `CastleOfficial.RepairDoor`/`RepairWallNow` 的结果（`CastleOfficial.cs:358-406`）。
+    src:358 => private void RepairDoor(IPlayerActor PlayObject)
+    src:404 => PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+    VERDICT: MATCH
+=== CastleOfficial.cs:365  [src/GameSrv/Npc/CastleOfficial.cs]
+    prose castle.rs:2333: // `TotalGold < RepairDoorPrice` ⇒ 只回文案（`CastleOfficial.cs:365-380`）。
+    prose castle.rs:2350: // 注意：oracle 先判 `TotalGold >= RepairDoorPrice`（`CastleOfficial.cs:365`）⇒ 先把钱补回。
+    src:365 => if (Castle.TotalGold >= SystemShare.Config.RepairDoorPrice)
+    VERDICT: MATCH
+=== CastleOfficial.cs:365-380  [src/GameSrv/Npc/CastleOfficial.cs]
+    prose castle.rs:2333: // `TotalGold < RepairDoorPrice` ⇒ 只回文案（`CastleOfficial.cs:365-380`）。
+    src:365 => if (Castle.TotalGold >= SystemShare.Config.RepairDoorPrice)
+    src:379 => PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+    VERDICT: MATCH
+=== CastleOfficial.cs:374/399  [src/GameSrv/Npc/CastleOfficial.cs]
+    prose castle.rs:801: /// `CastleOfficial.cs:374/399`：修理未生效（HP 满 / `UnderWar` / 60s 门未过）。
+    src:374 => PlayObject.SysMsg("城门不需要修理!!!", MsgColor.Green, MsgType.Hint);
+    src:399 => PlayObject.SysMsg("城门不需要修理!!!", MsgColor.Green, MsgType.Hint);
+    VERDICT: MATCH
+=== CastleOfficial.cs:379/404  [src/GameSrv/Npc/CastleOfficial.cs]
+    prose castle.rs:803: /// `CastleOfficial.cs:379/404`：`TotalGold` 不足。
+    src:379 => PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+    src:404 => PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+    VERDICT: MATCH
+=== CastleOfficial.cs:383-406  [src/GameSrv/Npc/CastleOfficial.cs]
+    prose castle.rs:547: /// `CastleOfficial.RepairWallNow(nWallIndex, PlayObject)`（`CastleOfficial.cs:383-406`）。
+    src:383 => private void RepairWallNow(int nWallIndex, IPlayerActor PlayObject)
+    src:404 => PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+    VERDICT: MATCH
+=== CastleOfficial.cs:52-67  [src/GameSrv/Npc/CastleOfficial.cs]
+    prose castle.rs:419: /// `CastleOfficial.cs:52-67` 的 `$CASTLEDOORSTATE` 文本。
+    prose castle.rs:792: /// `CastleOfficial` 的城门文本（`CastleOfficial.cs:52-67` 的 `$CASTLEDOORSTATE`）。
+    prose castle.rs:2485: // `CastleOfficial.cs:52-67`：先 `Death`，再 `IsOpened`。
+    src:52 => case "$CASTLEDOORSTATE":
+    src:67 => sMsg = ReplaceVariableText(sMsg, "<$CASTLEDOORSTATE>", sText);
+    VERDICT: MATCH
+=== CastleOfficial.cs:59-61  [src/GameSrv/Npc/CastleOfficial.cs]
+    prose castle.rs:794: /// `CastleOfficial.cs:59-61`：`IsOpened` ⇒ `"opened"`。
+    src:59 => else if (castleDoor.IsOpened)
+    src:61 => sText = "opened";
+    VERDICT: MATCH
+=== CastleOfficial.cs:63-65  [src/GameSrv/Npc/CastleOfficial.cs]
+    prose castle.rs:796: /// `CastleOfficial.cs:63-65`：否则 `"closed"`。
+    src:63 => else
+    src:65 => sText = "closed";
+    VERDICT: MATCH
+=== UserCastle.cs:1016-1030  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1370: /// oracle `InAttackerList(GuildInfo)`（`UserCastle.cs:1016-1030`）。
+    src:1016 => private bool InAttackerList(GuildInfo Guild)
+    src:1030 => private void SetPower(int nPower)
+    VERDICT: MATCH
+=== UserCastle.cs:115/121/127  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:717: /// `SystemShare.MapMgr.FindMap(name) != null`（`UserCastle.cs:115/121/127`）。
+    src:115 => PalaceEnvir = SystemShare.MapMgr.FindMap(PalaceMap);
+    src:121 => SecretEnvir = SystemShare.MapMgr.FindMap(SecretMap);
+    src:127 => CastleEnvir = SystemShare.MapMgr.FindMap(MapName);
+    VERDICT: MATCH
+=== UserCastle.cs:128-220  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:2621: // 调用序 = `UserCastle.cs:128-220`：主门 → 左/中/右墙 → 弓手 0..12 → 守卫 0..12。
+    src:128 => if (CastleEnvir != null)
+    src:209 => LogService.Warn("[错误信息] 城堡初始化守卫失败(检查怪物数据库里有没守卫怪物)");
+    VERDICT: MATCH
+=== UserCastle.cs:23-59  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:912: /// 按 oracle `UserCastle` 构造函数（`UserCastle.cs:23-59`）+ `CastleConf` 默认建一座空城。
+    src:23 => private int _techLevel;
+    src:58 => public int TechLevel
+    VERDICT: MATCH
+=== UserCastle.cs:318-321  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1120: // `UserCastle.cs:318-321`：`string.IsNullOrEmpty(MapName)` ⇒ return。
+    src:318 => if (string.IsNullOrEmpty(MapName))
+    src:320 => return;
+    VERDICT: MATCH
+=== UserCastle.cs:323-326  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1126: // `UserCastle.cs:323-326`：非本服归属 ⇒ return。
+    src:323 => if (M2Share.ServerIndex != SystemShare.MapMgr.GetMapOfServerIndex(MapName))
+    src:325 => return;
+    VERDICT: MATCH
+=== UserCastle.cs:345  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1685: // IsStartWar 仍置 true（oracle UserCastle.cs:345，进了钟点分支就置位）。
+    src:345 => IsStartWar = true;
+    VERDICT: MATCH
+=== UserCastle.cs:347-362  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1143: // `UserCastle.cs:347-362`：**倒序**遍历申请表；命中今天者移入攻方列表（`RemoveAt(i)`）。
+    src:347 => for (int i = AttackWarList.Count - 1; i >= 0; i--)
+    src:360 => AttackWarList.RemoveAt(i);
+    VERDICT: MATCH
+=== UserCastle.cs:358  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1153: // `UserCastle.cs:358` `StartCastleWarTick = HUtil32.GetTickCount()`。
+    src:358 => StartCastleWarTick = HUtil32.GetTickCount();
+    VERDICT: MATCH
+=== UserCastle.cs:365  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1161: // `UserCastle.cs:365`：守方（可能为 `None`，oracle `MasterGuild` 为 null 时 `Add(null)` 是 no-op 效果）。
+    src:365 => AttackGuildList.Add(MasterGuild);
+    VERDICT: MATCH
+=== UserCastle.cs:366  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1165: // `UserCastle.cs:366` StartWallconquestWar()。
+    prose castle.rs:1576: // 事件顺序 = oracle UserCastle.cs:366-373（⑧-8 起 `MainDoorControl(true)` 带 `CastleDoor.Close` 帧/掩码）。
+    src:366 => StartWallconquestWar();
+    VERDICT: MATCH
+=== UserCastle.cs:366-373  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1576: // 事件顺序 = oracle UserCastle.cs:366-373（⑧-8 起 `MainDoorControl(true)` 带 `CastleDoor.Close` 帧/掩码）。
+    src:366 => StartWallconquestWar();
+    src:373 => MainDoorControl(true);
+    VERDICT: MATCH
+=== UserCastle.cs:367  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1167: // `UserCastle.cs:367` SaveAttackSabukWall()。
+    src:367 => SaveAttackSabukWall();
+    VERDICT: MATCH
+=== UserCastle.cs:368  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1169: // `UserCastle.cs:368` SS_212。
+    src:368 => SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_212, M2Share.ServerIndex, "");
+    VERDICT: MATCH
+=== UserCastle.cs:369-371  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1174: // `UserCastle.cs:369-371` 开战广播。
+    src:369 => string s20 = string.Format(sWarStartMsg, sName);
+    src:371 => SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_204, M2Share.ServerIndex, s20);
+    VERDICT: MATCH
+=== UserCastle.cs:373  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1181: // `UserCastle.cs:373` MainDoorControl(true)（幂等关闭主门；⑧-8 起带 `CastleDoor.Close` 帧/掩码）。
+    src:373 => MainDoorControl(true);
+    VERDICT: MATCH
+=== UserCastle.cs:391-406  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1770: // （`UserCastle.cs:391-406` 先置 false，`UserCastle.cs:421` 才停战，本 tick 不再走 `else`）。
+    src:391 => if (UnderWar)
+    src:405 => RightWall.BaseObject.StoneMode = false;
+    VERDICT: MATCH
+=== UserCastle.cs:393-406  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1199: // `UserCastle.cs:393-406`：战时三面墙 `StoneMode=false`。
+    src:393 => if (LeftWall.BaseObject != null)
+    src:405 => RightWall.BaseObject.StoneMode = false;
+    VERDICT: MATCH
+=== UserCastle.cs:408-418  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1203: // `UserCastle.cs:408-418`：结束预告（只播一次）。
+    src:408 => if (!ShowOverMsg)
+    src:416 => LogService.Warn(s20);
+    VERDICT: MATCH
+=== UserCastle.cs:419-422  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1219: // `UserCastle.cs:419-422`：超时停战（**严格大于**）。
+    src:419 => if ((HUtil32.GetTickCount() - StartCastleWarTick) > SystemShare.Config.CastleWarTime)
+    src:421 => StopWallconquestWar();
+    VERDICT: MATCH
+=== UserCastle.cs:421  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1770: // （`UserCastle.cs:391-406` 先置 false，`UserCastle.cs:421` 才停战，本 tick 不再走 `else`）。
+    src:421 => StopWallconquestWar();
+    VERDICT: MATCH
+=== UserCastle.cs:424-440  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1224: // `UserCastle.cs:424-440`：非战时三面墙 `StoneMode=true`。
+    src:424 => else
+    src:438 => RightWall.BaseObject.StoneMode = true;
+    VERDICT: MATCH
+=== UserCastle.cs:584-593  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1248: /// `ListC` 恒空 ⇒ `UserCastle.cs:584-593` 的 `ChangePkStatus(false)` / 非守方 `MapRandomMove` **从不执行**。
+    src:584 => for (int i = 0; i < ListC.Count; i++)
+    src:593 => string stopMessage = string.Format(sWallWarStop, sName);
+    VERDICT: MATCH
+=== UserCastle.cs:609-612  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1382: /// oracle `IsMember(PlayObject)`（`UserCastle.cs:480-483`）/ `IsMember(IPlayerActor)`（`UserCastle.cs:609-612`）
+    src:609 => public bool IsMember(IPlayerActor member)
+    src:611 => return IsMasterGuild(member.MyGuild);
+    VERDICT: MATCH
+=== UserCastle.cs:73  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:886: /// `SaveTick`（`UserCastle.cs:73`）：`IncRateGold` 的 10 分钟落盘节流口（⑧-9）。
+    src:73 => public int SaveTick { get; set; }
+    VERDICT: MATCH
+=== UserCastle.cs:920-927  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:2255: // `UnderWar` ⇒ 拒（`UserCastle.cs:920-927`：签名 920、`UnderWar` 守卫 924、返回 926）。
+    src:920 => public bool RepairDoor()
+    src:926 => return false;
+    VERDICT: MATCH
+=== UserCastle.cs:920-955  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1289: /// oracle `RepairDoor()`（`UserCastle.cs:920-955`）。
+    src:920 => public bool RepairDoor()
+    src:948 => return result;
+    VERDICT: MATCH
+=== UserCastle.cs:920/956  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:772: /// `UserCastle.RepairDoor`/`RepairWall` 的 60s `StruckTick` 门（`UserCastle.cs:920/956`）。
+    src:920 => public bool RepairDoor()
+    src:956 => public bool RepairWall(int nWallIndex)
+    VERDICT: MATCH
+=== UserCastle.cs:924  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:2272: // 已满 ⇒ 拒（`UserCastle.cs:924` 的 `HP >= MaxHP` 守卫），不产生帧。
+    src:924 => if (castleDoor.BaseObject == null || UnderWar || castleDoor.BaseObject.WAbil.HP >= castleDoor.BaseObject.WAbil.MaxHP)
+    VERDICT: MATCH
+=== UserCastle.cs:930  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:2259: // 60s 门：`>` 严格大于（`UserCastle.cs:930` 活门 / `UserCastle.cs:939` 死门）。
+    src:930 => if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)
+    VERDICT: MATCH
+=== UserCastle.cs:939  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:2259: // 60s 门：`>` 严格大于（`UserCastle.cs:930` 活门 / `UserCastle.cs:939` 死门）。
+    src:939 => if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)
+    VERDICT: MATCH
+=== UserCastle.cs:956-997  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:1314: /// oracle `RepairWall(int nWallIndex)`（`UserCastle.cs:956-997`）。
+    src:956 => public bool RepairWall(int nWallIndex)
+    src:995 => return result;
+    VERDICT: MATCH
+=== UserCastle.cs:958-992  [src/M2Server/Castle/UserCastle.cs]
+    prose castle.rs:2311: // `nWallIndex` 1/2/3 ⇒ 左/中/右；其它 ⇒ `Wall = null`（`UserCastle.cs:958-992`）。
+    src:958 => bool result = false;
+    src:992 => result = true;
+    VERDICT: MATCH
+=== Envirnoment.cs:1362-1369  [src/M2Server/Maps/Envirnoment.cs]
+    prose castle.rs:2199: // `Envir.SetMapXyFlag` 只在格子当前 `Valid` 时才改属性（`Envirnoment.cs:1362-1369`）。
+    src:1362 => public void SetMapXyFlag(int nX, int nY, bool boFlag)
+    src:1367 => cellInfo.SetAttribute(boFlag ? CellAttribute.Walk : CellAttribute.LowWall);
+    VERDICT: MATCH
+=== CastleDoor.cs:106-115  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:303: /// oracle `CastleDoor.RefStatus()`（`CastleDoor.cs:106-115`）：重置 `Dir` 并发 `RM_ALIVE`。
+    prose castle.rs:2105: // `CastleDoor.cs:106-115`。
+    src:106 => public void RefStatus()
+    src:114 => SendRefMsg(Messages.RM_ALIVE, Dir, CurrX, CurrY, 0, "");
+    VERDICT: MATCH
+=== CastleDoor.cs:12/57/75  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:184: /// `CastleDoor.HoldPlace`（`CastleDoor.cs:12/57/75`）。
+    src:12 => public bool HoldPlace;
+    src:57 => HoldPlace = false;
+    src:75 => HoldPlace = true;
+    VERDICT: MATCH
+=== CastleDoor.cs:23-44  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:389: /// `CastleDoor.SetMapXyFlag(int nFlag)`（`CastleDoor.cs:23-44`）的**有序**格子掩码。
+    src:23 => private void SetMapXyFlag(int nFlag)
+    src:42 => Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);
+    VERDICT: MATCH
+=== CastleDoor.cs:25-27  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:396: // `CastleDoor.cs:25-27`：三格先无条件置 `true`。
+    prose castle.rs:1601: // `SetMapXyFlag(1)`：`nFlag != 1` 为 false ⇒ 三格（`CastleDoor.cs:25-27`）先 true、
+    src:25 => Envir.SetMapXyFlag(CurrX, CurrY - 2, true);
+    src:27 => Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, true);
+    VERDICT: MATCH
+=== CastleDoor.cs:25-43  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:2231: // `CastleDoor.cs:25-43` 的调用序（含重复格）。
+    src:25 => Envir.SetMapXyFlag(CurrX, CurrY - 2, true);
+    src:42 => Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);
+    VERDICT: MATCH
+=== CastleDoor.cs:28  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:398: // `CastleDoor.cs:28`：`boFlag = nFlag != 1`。
+    src:28 => bool boFlag = nFlag != 1;
+    VERDICT: MATCH
+=== CastleDoor.cs:29-37  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:400: // `CastleDoor.cs:29-37`：九格置 `boFlag`。
+    prose castle.rs:1602: // 九格（`CastleDoor.cs:29-37`）全 false（9 个不重复格）。
+    prose castle.rs:2211: // 关门：9 个不重复格全 `LowWall`（`CastleDoor.cs:29-37`）。
+    src:29 => Envir.SetMapXyFlag(CurrX, CurrY, boFlag);
+    src:37 => Envir.SetMapXyFlag(CurrX - 1, CurrY + 1, boFlag);
+    VERDICT: MATCH
+=== CastleDoor.cs:38-43  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:410: // `CastleDoor.cs:38-43`：`nFlag == 0` 时再把那三格置 `false`。
+    src:38 => if (nFlag == 0)
+    src:42 => Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);
+    VERDICT: MATCH
+=== CastleDoor.cs:46-58  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:224: /// oracle `CastleDoor.Open()`（`CastleDoor.cs:46-58`）。
+    prose castle.rs:1983: // `CastleDoor.cs:46-58`。
+    src:46 => public void Open()
+    src:57 => HoldPlace = false;
+    VERDICT: MATCH
+=== CastleDoor.cs:60-76  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:245: /// oracle `CastleDoor.Close()`（`CastleDoor.cs:60-76`）。
+    prose castle.rs:1999: // `CastleDoor.cs:60-76`：`Dir = 3 - Round(10000/10000*3) = 0`。
+    src:60 => public void Close()
+    src:75 => HoldPlace = true;
+    VERDICT: MATCH
+=== CastleDoor.cs:66-70  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:2018: // `3 - Round(hp/max*3)`，`Dir-3>=0 ⇒ 0`（`CastleDoor.cs:66-70`）。
+    src:66 => Dir = (byte)(3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0));
+    src:69 => Dir = 0;
+    VERDICT: MATCH
+=== CastleDoor.cs:66/96/108  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:205: /// `3 - Round(HP / MaxHP * 3.0)`（`CastleDoor.cs:66/96/108`、`WallStructure.cs:28/70`）。
+    src:66 => Dir = (byte)(3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0));
+    src:96 => int n08 = 3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0);
+    src:108 => int n08 = 3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0);
+    VERDICT: MATCH
+=== CastleDoor.cs:78-82  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:270: /// oracle `CastleDoor.Die()`（`CastleDoor.cs:78-82`）：`base.Die()` 后 `SetMapXyFlag(2)`。
+    prose castle.rs:2042: // `Die()` 本身仍 `SetMapXyFlag(2)`（`CastleDoor.cs:78-82`）。
+    src:78 => public override void Die()
+    src:81 => SetMapXyFlag(2);
+    VERDICT: MATCH
+=== CastleDoor.cs:84-104  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:278: /// oracle `CastleDoor.Run()`（`CastleDoor.cs:84-104`）。
+    src:84 => public override void Run()
+    src:103 => base.Run();
+    VERDICT: MATCH
+=== CastleDoor.cs:86-93  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:2061: // `CastleDoor.cs:86-93`：`Death && Castle != null` ⇒ `DeathTick`；否则 `HealthTick=0`。
+    src:86 => if (Death && Castle != null)
+    src:92 => HealthTick = 0;
+    VERDICT: MATCH
+=== CastleDoor.cs:94-102  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+    prose castle.rs:2077: // `CastleDoor.cs:94-102`：未开门且 `n08 < 3` 才刷 `RM_TURN`。
+    src:94 => if (!IsOpened)
+    src:100 => SendRefMsg(Messages.RM_TURN, Dir, CurrX, CurrY, 0, "");
+    VERDICT: MATCH
+=== WallStructure.cs:17-21  [src/M2Server/Monster/Monsters/WallStructure.cs]
+    prose castle.rs:317: /// oracle `WallStructure.Initialize()`（`WallStructure.cs:17-21`）：`Dir = 0` 后 `base.Initialize()`。
+    src:17 => public override void Initialize()
+    src:20 => base.Initialize();
+    VERDICT: MATCH
+=== WallStructure.cs:23-40  [src/M2Server/Monster/Monsters/WallStructure.cs]
+    prose castle.rs:322: /// oracle `WallStructure.RefStatus()`（`WallStructure.cs:23-40`）。
+    prose castle.rs:2121: // `WallStructure.cs:23-40`：`HP>0 ⇒ 3-Round(...)`，否则 4。
+    src:23 => public void RefStatus()
+    src:39 => this.SendRefMsg(Messages.RM_ALIVE, this.Dir, this.CurrX, this.CurrY, 0, "");
+    VERDICT: MATCH
+=== WallStructure.cs:28/70  [src/M2Server/Monster/Monsters/WallStructure.cs]
+    prose castle.rs:205: /// `3 - Round(HP / MaxHP * 3.0)`（`CastleDoor.cs:66/96/108`、`WallStructure.cs:28/70`）。
+    src:28 => n08 = (byte)(3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0));
+    src:70 => n08 = 3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0);
+    VERDICT: MATCH
+=== WallStructure.cs:47-82  [src/M2Server/Monster/Monsters/WallStructure.cs]
+    prose castle.rs:338: /// oracle `WallStructure.Run()`（`WallStructure.cs:47-82`）。
+    prose castle.rs:2148: // `WallStructure.cs:47-82`。
+    src:47 => public override void Run()
+    src:81 => base.Run();
+    VERDICT: MATCH
+=== WallStructure.cs:7/53-66  [src/M2Server/Monster/Monsters/WallStructure.cs]
+    prose castle.rs:186: /// `WallStructure.SetMapFlaged`（`WallStructure.cs:7/53-66`）。
+    src:7 => internal bool SetMapFlaged;
+    src:53 => if (SetMapFlaged)
+    src:65 => SetMapFlaged = true;
+    VERDICT: MATCH
+=== ScriptFlagConst.cs:75  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+    prose castle.rs:775: /// `ScriptFlagConst.sOPENMAINDOOR`（`ScriptFlagConst.cs:75`）。
+    src:75 => public const string sOPENMAINDOOR = "@openmaindoor";
+    VERDICT: MATCH
+=== ScriptFlagConst.cs:76  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+    prose castle.rs:777: /// `ScriptFlagConst.sCLOSEMAINDOOR`（`ScriptFlagConst.cs:76`）。
+    src:76 => public const string sCLOSEMAINDOOR = "@closemaindoor";
+    VERDICT: MATCH
+=== ScriptFlagConst.cs:77  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+    prose castle.rs:779: /// `ScriptFlagConst.sREPAIRDOORNOW`（`ScriptFlagConst.cs:77`）。
+    src:77 => public const string sREPAIRDOORNOW = "@repairdoornow";
+    VERDICT: MATCH
+=== ScriptFlagConst.cs:78  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+    prose castle.rs:781: /// `ScriptFlagConst.sREPAIRWALLNOW1`（`ScriptFlagConst.cs:78`）。
+    src:78 => public const string sREPAIRWALLNOW1 = "@repairwallnow1";
+    VERDICT: MATCH
+=== ScriptFlagConst.cs:79  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+    prose castle.rs:783: /// `ScriptFlagConst.sREPAIRWALLNOW2`（`ScriptFlagConst.cs:79`）。
+    src:79 => public const string sREPAIRWALLNOW2 = "@repairwallnow2";
+    VERDICT: MATCH
+=== ScriptFlagConst.cs:80  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+    prose castle.rs:785: /// `ScriptFlagConst.sREPAIRWALLNOW3`（`ScriptFlagConst.cs:80`）。
+    src:80 => public const string sREPAIRWALLNOW3 = "@repairwallnow3";
+    VERDICT: MATCH
+=== ScriptFlagConst.cs:81  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+    prose castle.rs:787: /// `ScriptFlagConst.sHIREARCHERNOW`（`ScriptFlagConst.cs:81`）。
+    src:81 => public const string sHIREARCHERNOW = "@hirearchernow";
+    VERDICT: MATCH
+=== ScriptFlagConst.cs:82  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+    prose castle.rs:789: /// `ScriptFlagConst.sHIREGUARDNOW`（`ScriptFlagConst.cs:82`）。
+    src:82 => public const string sHIREGUARDNOW = "@hireguardnow";
+    VERDICT: MATCH
+=== HUtil32.cs:131-134  [src/OpenMir2/HUtil32.cs]
+    prose castle.rs:379: /// 复刻 `HUtil32.Round`（`src/OpenMir2/HUtil32.cs:131-134`）：
+    src:131 => public static int Round(double r)
+    src:133 => return (int)Math.Round(r, MidpointRounding.AwayFromZero);
+    VERDICT: MATCH
+=== HUtil32.cs:550-576  [src/OpenMir2/HUtil32.cs]
+    prose castle.rs:435: /// `HUtil32.CompareLStr(src, targ)`（`src/OpenMir2/HUtil32.cs:550-576`）：大小写不敏感的前缀匹配。
+    prose castle.rs:2458: /// （`src/OpenMir2/HUtil32.cs:550-576`）同语义，**且对任意 UTF-8 输入都不 panic**。
+    src:550 => public static bool CompareLStr(string src, string targ)
+    src:575 => return false;
+    VERDICT: MATCH
+
+# 合计 MATCH = 77 / 77

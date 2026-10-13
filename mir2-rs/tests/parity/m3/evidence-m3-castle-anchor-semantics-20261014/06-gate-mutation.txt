@@ -1,0 +1,13 @@
+MUT1 写侧漂移(:113→:111): RED（1 项；C:\Users\gxh\AppData\Local\Temp\castle-anchor-mut-ct_scd0b）
+MUT2 读侧漂移(表 39→36): RED（1 项）
+  - 读侧不匹配 src/M2Server/Castle/CastleConf.cs:36 期望含 '"CastleMap"'，实际 'userCastle.EnvirList.Add(sMap);'
+MUT3 真身 check: GREEN（0 项）
+MUT4 覆盖面未登记锚: RED（1 项）
+MUT5 ⑧-7 范围漂移(:311-446→:311-448): RED（3 项）
+MUT6 ⑧-7 裸锚回归(:480-483): RED（3 项）
+MUT7 全文覆盖面(尾部未登记锚): RED（1 项）
+MUT8 audit 清点器(删表项 UserCastle.cs:930): RED（uncovered=1）
+MUT9 token 强度(整组只剩 `}`): RED（1 项）
+MUT10 token 强度(O-1 纯标点 `]);`/`]`/`//{`): RED（1+2 项）
+MUT11 worksheet 散文落点缺失: RED（write_hits=0）
+MUTATION GREEN (C:\Users\gxh\AppData\Local\Temp\castle-anchor-mut-ct_scd0b)

@@ -1,0 +1,11 @@
+selftest 表结构: GREEN (159 锚)
+selftest 读侧 token 牙齿: GREEN (good=[] bad=1)
+selftest 写侧缺锚牙齿: GREEN (['写侧缺锚 UserCastle.cs:9999（不在 castle.rs / README.md）'])
+selftest 覆盖面牙齿: GREEN (cov=['覆盖面：未登记锚 B.cs:2（覆盖区间 castle.rs:1-5）', '覆盖面：裸锚 `:9`（覆盖区间 castle.rs:1-5）须写成 `文件.cs:NNN`'])
+selftest 覆盖区间标记缺失牙齿: GREEN
+selftest 真身覆盖面: GREEN (0 项)
+selftest 全文件覆盖面: GREEN ([(1, 2807)]，castle.rs 2807 行)
+selftest audit 清点器: GREEN (syn uncovered=['B.cs:2'] bare=['9']; real uncovered=0 bare=0)
+selftest token 强度牙齿: GREEN (good=0 weak=["读侧 token 强度：锚 UserCastle.cs:311-446 整组无有辨识度 token（['}']）——至少一条 token 须含实际内容，不能只靠 `}`/`;` 等纯标点钉位置"]; O-1 pure-punct=4/4)
+selftest worksheet 材料牙: GREEN (159 锚 / 散文落点齐=True / point 解析=True / 缺失锚可辨认=True)
+SELFTEST GREEN

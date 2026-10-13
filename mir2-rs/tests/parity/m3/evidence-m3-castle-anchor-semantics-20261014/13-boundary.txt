@@ -1,0 +1,34 @@
+# boundary vs origin/master = a2d8eaf32（提交后复算）
+
+$ git rev-parse origin/master
+a2d8eaf32205c720613ae8817073bf8d2fdaaae2
+
+$ git merge-base origin/master HEAD
+a2d8eaf32205c720613ae8817073bf8d2fdaaae2
+
+$ git diff --name-status origin/master HEAD
+M	mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/00-commands.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/01-worksheet.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/01b-worksheet.json
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/03-semantic-audit.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/04-gate-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/05-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/06-gate-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/07-gate-audit.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/08-redcheck.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/09-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/10-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/11-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/12-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/13-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-semantics-20261014/README.md
+
+$ git diff --name-only origin/master HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins src/BotSrv
+[]
+
+$ git diff --name-only origin/master HEAD -- '*.rs'
+[]
+
+$ git merge-base --is-ancestor HEAD origin/master ; echo $?
+1
