@@ -1,0 +1,19 @@
+=== cargo fmt --all -- --check (cwd=mir2-rs, CARGO_TARGET_DIR=E:/tmp/m2svr-target) ===
+FMT_RC=0
+
+=== cargo clippy --workspace --all-targets --offline -- -D warnings ===
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.57s
+CLIPPY_RC=0
+
+=== cargo test --workspace --offline --no-fail-fast ===
+suites=101 passed=1200 failed=0 ignored=22
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+TEST_RC=0
+
+=== cargo run --offline -p msgcodegen -- --check ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+MSG_RC=0

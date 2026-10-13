@@ -1,0 +1,33 @@
+base = origin/master = 1cf88f6ad1d7d300ab31072bdfa025585c140bd3
+branch = worktree-m3-drop-exp-fixture-botsrv @ 1cf88f6ad1d7d300ab31072bdfa025585c140bd3
+
+=== 冻结面（排除已登记例外 src/BotSrv/**，必须空）
+    cmd: git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage ':!src/BotSrv'
+(空)
+
+=== 冻结面原始（含 src/ —— 非空项应仅 = 已登记 T-4x 例外 src/BotSrv/**）
+src/BotSrv/AppService.cs
+src/BotSrv/MShare.cs
+src/BotSrv/Player/RobotPlayer.Operate.cs
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/Program.cs
+src/BotSrv/RobotOptions.cs
+
+=== 净差量（工作树 vs origin/master，仅 tracked）===
+ mir2-rs/tests/parity/m3/drop-exp/README.md         |   6 +-
+ .../tests/parity/m3/drop-exp/run_drop_exp_pair.ps1 |  35 +++-
+ src/BotSrv/AppService.cs                           |  15 ++
+ src/BotSrv/MShare.cs                               | 203 ++++++++++++++++++++
+ src/BotSrv/Player/RobotPlayer.Operate.cs           |   2 +
+ src/BotSrv/Player/RobotPlayer.cs                   | 208 +++++++++++++++++++++
+ src/BotSrv/Program.cs                              |   5 +
+ src/BotSrv/RobotOptions.cs                         |  26 +++
+ 8 files changed, 495 insertions(+), 5 deletions(-)
+
+=== 新增未跟踪文件 ===
+?? mir2-rs/tests/parity/m3/drop-exp/evidence-drop-exp-fixture-botsrv-20261014/
+?? src/BotSrv/DropExpSeqSelfCheck.cs
+
+=== 恢复证明：MShare.cs 红检前/后 sha256（应逐字节相同）===
+ed39429d2cb62b94bdab3914e067682bf106b01170e6a47eea1a1e759df34fe3 */e/tmp/m2svr-dexp/MShare.cs.bak
+35bcc388486d3cc5aefded807b244ed151426a60e5d94f2fcda092b261203c09 *src/BotSrv/MShare.cs

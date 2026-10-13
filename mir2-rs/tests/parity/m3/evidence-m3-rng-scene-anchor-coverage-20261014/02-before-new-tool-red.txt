@@ -1,12 +1,21 @@
 ### 02 新机判（本片 check_anchors.py）对同一两处坏样本：RED 并点名
+#
+# 复跑（实路径；新工具的 REPO_ROOT 由本检出位置推导 ⇒ 在当前 worktree 里跑）：
+#
+#   cd mir2-rs/tests/parity/m3/rng-trace-scene
+#   cp DRIVER-CONTRACT.md E:/tmp/m3bag-teeth-repro2/bad-sibling-new.md
+#   printf '
+（另见 `foo/monai.rs:999`）
+' >> E:/tmp/m3bag-teeth-repro2/bad-sibling-new.md
+#   cp DRIVER-CONTRACT.md E:/tmp/m3bag-teeth-repro2/bad-bare-new.md
+#   sed -i 's/`:53`/`:54`/' E:/tmp/m3bag-teeth-repro2/bad-bare-new.md
 
-$ python -I rng-trace-scene/check_anchors.py check --doc <同名 basename、别的目录（foo/monai.rs:999）>
+$ python -I check_anchors.py check --doc E:/tmp/m3bag-teeth-repro2/bad-sibling-new.md
   RED UNGUARDED_ANCHOR 文档引用 `foo/monai.rs:999` 没有保鲜锚点 —— 新增 `path:line` 必须在 ANCHORS 登记（否则行号会静默漂移）
 RED: check_anchors 1 项 RED
-# rc=1（1 = RED；期望点名 UNGUARDED_ANCHOR）
+# rc=1（期望点名 UNGUARDED_ANCHOR）
 
-$ python -I rng-trace-scene/check_anchors.py check --doc <同行裸续引用漂移（:53 → :54）>
+$ python -I check_anchors.py check --doc E:/tmp/m3bag-teeth-repro2/bad-bare-new.md
   RED BARE_REF_UNDECLARED 站点表的 R-6 折叠理由行：同行裸续引用 `:54`（归属 `rng-trace-probe/consumer_groups.tsv`）未在锚点 `also` 登记（裸 `:NN` 不登记 ⇒ 行号可静默漂移）
 RED: check_anchors 1 项 RED
-# rc=1（1 = RED；期望点名 BARE_REF_UNDECLARED）
-
+# rc=1（期望点名 BARE_REF_UNDECLARED）

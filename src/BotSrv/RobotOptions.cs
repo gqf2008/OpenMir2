@@ -248,6 +248,32 @@ namespace BotSrv
         public int SellOffBuyerRole { get; set; } = 1;
 
         /// <summary>
+        /// M3④ 真机对拍夹具（卡 openmir2-m3-drop-exp-fixture-botsrv；白名单 T-22/T-29 家族扩展）。
+        /// 默认 false = 原行为（不新增任何发送/日志/文件）。置 true 时，**唯一 attacker 假人**
+        /// （`DropExpRole`，与 LoginAccount 精确拼 LoginId）收到自己的 SM_LOGON 后，按场景固定输入
+        /// （`drop_exp_scenario.json`：map=0137 / 怪=稻草人 / pose (17,20) dir=2 / kills=100 / seed=42）
+        /// 每 `DropExpStepMs` 发一条 CM_HIT，并把服务端回包 `SM_WINEXP(44)`（击杀 = 经验）/ `SM_ITEMSHOW(610)`
+        /// （掉落出现帧）/ `SM_LEVELUP(45)` 聚合为一行 `drop_exp_raw.jsonl`（schema 见 scenario：
+        /// k/gold/drops/exp_delta/exp_total/level，k 从 0 连续）；同时逐击落 `M3DROPEXPSEQ {json}` 标记。
+        /// 只写本假人自己的 socket + 指定输出文件（同 T-22/T-29 纪律，不读写跨假人共享世界态）。
+        /// </summary>
+        public bool DropExpSequence { get; set; }
+        /// <summary>仅 DropExpSequence=true 时生效：攻击步数（= 目标击杀数）。默认 100。</summary>
+        public int DropExpKills { get; set; } = 100;
+        /// <summary>仅 DropExpSequence=true 时生效：每步间隔（ms）。默认 500。</summary>
+        public int DropExpStepMs { get; set; } = 500;
+        /// <summary>仅 DropExpSequence=true 时生效：进世界到第一次攻击的额外等待（ms）。默认 3000。</summary>
+        public int DropExpStartDelayMs { get; set; } = 3000;
+        /// <summary>仅 DropExpSequence=true 时生效：攻击朝向（CM_HIT 的 Tag）。默认 2（RIGHT）。</summary>
+        public int DropExpDir { get; set; } = 2;
+        /// <summary>仅 DropExpSequence=true 时生效：attacker 的账号序号（LoginId = LoginAccount + 该序号）。默认 0。</summary>
+        public int DropExpRole { get; set; } = 0;
+        /// <summary>仅 DropExpSequence=true 时生效：目标怪物名（写入每行 `monster`；仅记账用）。</summary>
+        public string DropExpMonster { get; set; } = "";
+        /// <summary>仅 DropExpSequence=true 时生效：`drop_exp_raw.jsonl` 输出路径（空 ⇒ 只落标记、不写文件）。</summary>
+        public string DropExpOut { get; set; } = "";
+
+        /// <summary>
         /// M1③ 退出路径夹具（卡 openmir2-m1-dbsrv-6000-face；白名单 M1-EXIT）：默认 0 = 关
         /// （不新增任何发送）。&gt;0 时，本假人收到自己的 SM_LOGON（真进世界）后等这么久，
         /// 按 C# 客户端 AppLogout 的线上形状发一条 CM_SOFTCLOSE(1009)（= “小退”，服务端据此

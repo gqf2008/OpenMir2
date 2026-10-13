@@ -1,0 +1,30 @@
+    0 个错误
+BUILD_RC=0
+DROPEXPSEQ PASS attacker-exact-winplay0/winplay0 got=True want=True
+DROPEXPSEQ PASS attacker-exact-winplay1/winplay1 got=True want=True
+DROPEXPSEQ PASS attacker-exact-winplay10/winplay0 got=False want=False
+DROPEXPSEQ PASS attacker-exact-winplay20/winplay0 got=False want=False
+DROPEXPSEQ PASS attacker-exact-winplay1/winplay10 got=False want=False
+DROPEXPSEQ PASS attacker-exact-winplay10/winplay10 got=True want=True
+DROPEXPSEQ PASS attacker-exact-winplay0/ got=False want=False
+DROPEXPSEQ PASS attacker-exact-/winplay0 got=False want=False
+DROPEXPSEQ PASS branch-win-exp sm=44
+DROPEXPSEQ PASS branch-no-frame empty
+DROPEXPSEQ PASS branch-null null
+DROPEXPSEQ PASS branch-only-itemshow only-610
+DROPEXPSEQ PASS branch-44-priority 610-then-44
+DROPEXPSEQ PASS branch-no-sm-prefix-collision 440
+DROPEXPSEQ PASS total-basic got=120
+DROPEXPSEQ PASS delta-basic got=120
+DROPEXPSEQ PASS total-none-null no-44
+DROPEXPSEQ PASS delta-none-null empty
+DROPEXPSEQ PASS total-not-truncated got=2000000000
+DROPEXPSEQ PASS delta-sign-makelong got=-1
+DROPEXPSEQ PASS delta-makelong-hi-lo got=65792
+DROPEXPSEQ PASS drops-empty empty
+DROPEXPSEQ PASS drops-null null
+DROPEXPSEQ PASS drops-no-raw-angle got=[{"name":"木剑","count":1},{"name":"\u003cx\u003e","count":1}]
+DROPEXPSEQ PASS record-json-ok json-ok=True row={"k":3,"monster":"稻草人","x":17,"y":20,"gold":0,"drops":[{"name":"木剑","count":1},{"name":"\u003cx\u003e","count":1}],"exp_delta":2000000000,"exp_total":2000000000,"level":255}
+DROPEXPSEQ PASS record-required-fields total=2000000000 delta=2000000000 level=255 monster=稻草人
+DROPEXPSEQ SELFTEST GREEN
+SELFTEST_RC=0

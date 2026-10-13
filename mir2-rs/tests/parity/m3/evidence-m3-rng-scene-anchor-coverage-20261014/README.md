@@ -1,6 +1,11 @@
 # evidence-m3-rng-scene-anchor-coverage-20261014
 
 卡：`openmir2-m3-rng-trace-scene-groups`（worktree `m3bag`，branch `wip/m3bag-window-batch-premise`）。
+
+> **后续片注（2026-10-14）**：本包的 01/02 已按 reviewer-6 M-2 改写为**实路径**命令；同族 M-1 的
+> 三条未覆盖分支已由后继片补牙 ⇒ `check_anchors.py selftest` 总数从本包记录的 **10/10** 增至
+> **13/13**（含 12 条改坏必红）。后继片的读数见
+> `../evidence-m3-rng-scene-anchor-teeth-20261014/`。本包其余读数（03–11）保持本片拍摄时口径。
 本片：**承接卡规格锚点保鲜机判（`check_anchors.py`）的覆盖面收口** —— 收 reviewer-5 M-1 /
 reviewer-6 M-1+M-2+M-3（均为对 `a173eba89`「锚点闭世界」片记的**同族非阻塞 Minor**）。
 

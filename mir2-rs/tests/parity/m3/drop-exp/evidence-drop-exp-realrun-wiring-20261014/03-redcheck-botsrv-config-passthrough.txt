@@ -1,0 +1,10 @@
+03 —— 改坏必红②：run_bots.ps1 的 DropExp 配置键被写错（AppSetting.json 少了 DropExpSequence）
+命令：python 把 `DropExpSequence     = [bool]$DropExpSequence` 改成 `DropExpSequencX ...`
+      powershell -File run_drop_exp_pair.ps1 -SelfCheckNoStack
+期望：botsrv-dropexp-config-on / -default-off 双 FAIL；整体 rc=1
+REDCHECK2_RC=1
+
+SELFTEST ok=12/12
+SELFTEST FAIL botsrv-dropexp-config-on (DropExpSequence= kills=100)
+SELFTEST FAIL botsrv-dropexp-config-default-off (DropExpSequence=)
+SELFTEST ok=17/19 failures=botsrv-dropexp-config-on,botsrv-dropexp-config-default-off

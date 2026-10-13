@@ -99,6 +99,16 @@ namespace BotSrv
             MShare.g_nSellOffBuyerRole = _options.SellOffBuyerRole;
             MShare.g_sSellOffSellerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.SellOffSellerRole);
             MShare.g_sSellOffBuyerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.SellOffBuyerRole);
+            // M3④ 夹具（白名单 T-22/T-29 家族扩展）：固定图 + 固定怪 + 同种子 100 杀（掉落/经验）；默认 false = 原行为
+            MShare.g_boDropExpSequence = _options.DropExpSequence;
+            MShare.g_nDropExpKills = _options.DropExpKills;
+            MShare.g_nDropExpStepMs = _options.DropExpStepMs;
+            MShare.g_nDropExpStartDelayMs = _options.DropExpStartDelayMs;
+            MShare.g_nDropExpDir = _options.DropExpDir;
+            MShare.g_nDropExpRole = _options.DropExpRole;
+            MShare.g_sDropExpMonster = _options.DropExpMonster ?? string.Empty;
+            MShare.g_sDropExpOut = _options.DropExpOut ?? string.Empty;
+            MShare.g_sDropExpRoleLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.DropExpRole);
             // M1③ 退出路径夹具（白名单 M1-EXIT）：进世界后发 CM_SOFTCLOSE；默认 0 = 原行为
             MShare.g_nSoftCloseAfterWorldMs = _options.SoftCloseAfterWorldMs;
             MShare.g_boDisableAutoPlay = _options.DisableAutoPlay;
@@ -163,6 +173,11 @@ namespace BotSrv
             {
                 LogService.Info("固定元宝寄售序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms 卖方序号={3} 买方序号={4}（见 RobotPlayer.SellOffSequenceTick）",
                     _options.SellOffSteps, _options.SellOffStartDelayMs, _options.SellOffStepMs, _options.SellOffSellerRole, _options.SellOffBuyerRole);
+            }
+            if (_options.DropExpSequence)
+            {
+                LogService.Info("固定掉落/经验序列: 启用 kills={0} 起始等待={1}ms 步间隔={2}ms dir={3} attacker序号={4} 怪={5} out={6}（见 RobotPlayer.DropExpSequenceTick）",
+                    _options.DropExpKills, _options.DropExpStartDelayMs, _options.DropExpStepMs, _options.DropExpDir, _options.DropExpRole, _options.DropExpMonster, _options.DropExpOut);
             }
         }
 

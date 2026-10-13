@@ -79,6 +79,14 @@ param(
   [int]$GuildCastleStartDelayMs = 3000, # 仅 -GuildCastleSequence 时生效：进世界到第一步的额外等待
   [int]$GuildCastleMasterRole = 0,   # 仅 -GuildCastleSequence 时生效：会长账号序号
   [int]$GuildCastlePeerRole = 1,     # 仅 -GuildCastleSequence 时生效：peer 账号序号
+  [switch]$DropExpSequence,          # M3④ 夹具：进世界后按固定序列发 CM_HIT 并聚合掉落/经验（卡 openmir2-m3-drop-exp-fixture-botsrv）
+  [int]$DropExpKills = 100,          # 仅 -DropExpSequence 时生效：攻击步数（= 目标击杀数）
+  [int]$DropExpStepMs = 500,         # 仅 -DropExpSequence 时生效：每步间隔
+  [int]$DropExpStartDelayMs = 3000,  # 仅 -DropExpSequence 时生效：进世界到第一步的额外等待
+  [int]$DropExpDir = 2,              # 仅 -DropExpSequence 时生效：攻击朝向（CM_HIT 的 Tag）
+  [int]$DropExpRole = 0,             # 仅 -DropExpSequence 时生效：attacker 的账号序号（LoginId = LoginAccount + 该序号）
+  [string]$DropExpMonster = '',      # 仅 -DropExpSequence 时生效：目标怪物名（写进每行 `monster`；仅记账用）
+  [string]$DropExpOut = '',          # 仅 -DropExpSequence 时生效：drop_exp_raw.jsonl 输出路径（空 ⇒ 只落标记）
   [int]$SoftCloseAfterWorldMs = 0,   # M1③ 退出路径夹具：进世界后发 CM_SOFTCLOSE(1009)；0=关（默认）
   [switch]$DisableAutoPlay,          # M1③ 退出路径夹具：关掉自动挂机（默认关=原行为）；见 ClientManager.RunAutoPlay
   [switch]$WriteConfigOnly,       # 只写 AppSetting.json 并退出（不构建/不起进程；供无栈自检与红检用）
@@ -101,8 +109,9 @@ $BotExe = Join-Path $BotBinDir "BotSrv.exe"
 #   attack = BotSrv `M3ATTSEQ {"role":"done",...}`（RobotPlayer.cs:674；F-E 收尾证据）
 #   bag    = `M3BAGSEQ done`（T-14）
 function Get-M3SeqDoneCount {
-    param([AllowEmptyString()][string]$Text, [ValidateSet('bag', 'attack', 'shop', 'quest', 'pairtrade', 'selloff', 'guildcastle', 'heropet')][string]$Kind)
+    param([AllowEmptyString()][string]$Text, [ValidateSet('bag', 'attack', 'shop', 'quest', 'pairtrade', 'selloff', 'guildcastle', 'heropet', 'dropexp')][string]$Kind)
     if ($Kind -eq 'bag') { return ([regex]::Matches($Text, 'M3BAGSEQ done')).Count }
+    if ($Kind -eq 'dropexp') { return ([regex]::Matches($Text, 'M3DROPEXPSEQ \{[^\r\n]*"phase":"complete"')).Count }
     if ($Kind -eq 'shop') { return ([regex]::Matches($Text, 'M3SHOPSEQ \{[^
 ]*"phase":"done"')).Count }
     if ($Kind -eq 'quest') { return ([regex]::Matches($Text, 'M3QUESTSEQ \{[^
@@ -126,14 +135,16 @@ function Get-M3SeqDoneCount {
 # ⇒ `-Bots 2` 时永远等不到第 2 条 done（实测 `attack_seq_done=1/2` 卡到超时/进程退出再报 RED），
 # 把**已经跑完整**的序列误判成截断。
 function Get-M3SeqExpectedDone {
-    param([ValidateSet('bag', 'attack', 'shop', 'quest', 'pairtrade', 'selloff', 'guildcastle', 'heropet')][string]$Kind, [int]$Bots)
+    param([ValidateSet('bag', 'attack', 'shop', 'quest', 'pairtrade', 'selloff', 'guildcastle', 'heropet', 'dropexp')][string]$Kind, [int]$Bots)
     if ($Kind -eq 'attack') { return 1 }
+    # dropexp 同 attack：**只有 attacker 一个**假人武装（MShare.IsDropExpAttacker 精确匹 LoginId）⇒ 预期 done = 1。
+    if ($Kind -eq 'dropexp') { return 1 }
     return $Bots
 }
 
 # 收尾判据唯一口径：done 数达到本序列的预期 done 数。
 function Test-M3SeqComplete {
-    param([ValidateSet('bag', 'attack', 'shop', 'quest', 'pairtrade', 'selloff', 'guildcastle', 'heropet')][string]$Kind, [int]$Done, [int]$Bots)
+    param([ValidateSet('bag', 'attack', 'shop', 'quest', 'pairtrade', 'selloff', 'guildcastle', 'heropet', 'dropexp')][string]$Kind, [int]$Done, [int]$Bots)
     return ($Done -ge (Get-M3SeqExpectedDone -Kind $Kind -Bots $Bots))
 }
 
@@ -182,6 +193,13 @@ if ($SelfCheckNoStack) {
     # M3⑩：元宝寄售收尾标记（`M3SELLOFFSEQ {"phase":"done",...}`；两个假人各一条 ⇒ 预期 = Bots）
     if ((Get-M3SeqDoneCount -Text 'M3SELLOFFSEQ {"phase":"done","bot":"m3s0","steps":5}' -Kind selloff) -ne 1) { $fail += 'selloff_done_1' }
     if ((Get-M3SeqDoneCount -Text 'M3SELLOFFSEQ {"phase":"send","bot":"m3s0","k":0,"op":"seller_end"}' -Kind selloff) -ne 0) { $fail += 'selloff_done_0' }
+    # M3④：掉落/经验序列收尾标记（`M3DROPEXPSEQ {"phase":"complete",...}`；只有 attacker 一个假人 ⇒ 预期 = 1）
+    if ((Get-M3SeqDoneCount -Text 'M3DROPEXPSEQ {"phase":"complete","kills":100}' -Kind dropexp) -ne 1) { $fail += 'dropexp_done_1' }
+    if ((Get-M3SeqDoneCount -Text 'M3DROPEXPSEQ {"phase":"kill","k":3,"branch":"player"}' -Kind dropexp) -ne 0) { $fail += 'dropexp_done_0' }
+    if ((Get-M3SeqDoneCount -Text 'M3DROPEXPSEQ {"phase":"sent","attacks":100,"kills":100}' -Kind dropexp) -ne 0) { $fail += 'dropexp_sent_not_done' }
+    if ((Get-M3SeqExpectedDone -Kind dropexp -Bots 2) -ne 1) { $fail += 'dropexp_expected_not_1' }
+    if (-not (Test-M3SeqComplete -Kind dropexp -Done 1 -Bots 2)) { $fail += 'dropexp_1of2_not_complete' }
+    if (Test-M3SeqComplete -Kind dropexp -Done 0 -Bots 2) { $fail += 'dropexp_0of2_complete' }
     if ((Get-M3SeqExpectedDone -Kind selloff -Bots 2) -ne 2) { $fail += 'selloff_expected_not_bots' }
     if (-not (Test-M3SeqComplete -Kind selloff -Done 2 -Bots 2)) { $fail += 'selloff_2of2_not_complete' }
     if (Test-M3SeqComplete -Kind selloff -Done 1 -Bots 2) { $fail += 'selloff_1of2_complete' }
@@ -198,7 +216,7 @@ if ($SelfCheckNoStack) {
         Write-Output ('SELFTEST_RED RED: ' + ($fail -join ', '))
         exit 1
     }
-    Write-Output 'SELFTEST_RED GREEN: M3 序列收尾计数离线自检全过（attack done 2/1/0 + bag done 2/0 + 预期 attack=1/bag=Bots + 完备性两向）'
+    Write-Output 'SELFTEST_RED GREEN: M3 序列收尾计数离线自检全过（attack done 2/1/0 + bag done 2/0 + dropexp done 1/0/complete-only + 预期 attack=1/dropexp=1/bag=Bots + 完备性两向）'
     exit 0
 }
 
@@ -295,6 +313,14 @@ $cfg = @{
     GuildCastleStartDelayMs = $GuildCastleStartDelayMs
     GuildCastleMasterRole = $GuildCastleMasterRole
     GuildCastlePeerRole = $GuildCastlePeerRole
+    DropExpSequence     = [bool]$DropExpSequence
+    DropExpKills        = $DropExpKills
+    DropExpStepMs       = $DropExpStepMs
+    DropExpStartDelayMs = $DropExpStartDelayMs
+    DropExpDir          = $DropExpDir
+    DropExpRole         = $DropExpRole
+    DropExpMonster      = $DropExpMonster
+    DropExpOut          = $DropExpOut
   }
 } | ConvertTo-Json -Depth 4
 New-Item -ItemType Directory -Force -Path $BotBinDir | Out-Null
@@ -336,6 +362,9 @@ if ($SellOffSequence) {
 if ($GuildCastleSequence) {
     Write-Output "CONFIG_GUILDCSEQ steps=$GuildCastleSteps step_ms=$GuildCastleStepMs start_delay_ms=$GuildCastleStartDelayMs master=$GuildCastleMasterRole peer=$GuildCastlePeerRole"
 }
+if ($DropExpSequence) {
+    Write-Output "CONFIG_DROPEXPSEQ kills=$DropExpKills step_ms=$DropExpStepMs start_delay_ms=$DropExpStartDelayMs dir=$DropExpDir role=$DropExpRole monster=$DropExpMonster out=$DropExpOut"
+}
 
 # 无栈自检/红检：只写配置即退（不构建、不起进程）。
 if ($WriteConfigOnly) {
@@ -370,7 +399,9 @@ $questDone = 0
 $pairTradeDone = 0
 $sellOffDone = 0
 $guildCastleDone = 0
+$dropExpDone = 0
 $attackExpected = Get-M3SeqExpectedDone -Kind attack -Bots $Count
+$dropExpExpected = Get-M3SeqExpectedDone -Kind dropexp -Bots $Count
 $charCreated = 0
 function Read-SharedText([string]$Path) {
   # BotSrv 的 StreamWriter 以 FileShare.ReadWrite 持有：读侧也必须放行写，否则打开即抛
@@ -433,6 +464,11 @@ while ((Get-Date) -lt $deadline) {
     # M3⑧：行会/攻城序列收尾证据 = 每个假人一条 `M3GUILDCSEQ {"phase":"done",...}`。
     $guildCastleDone = Get-M3SeqDoneCount -Text (Read-SharedText $LogFile) -Kind guildcastle
   }
+  if ($DropExpSequence) {
+    # M3④：掉落/经验序列收尾证据 = attacker 一条 `M3DROPEXPSEQ {"phase":"complete",...}`；
+    # 不判它就会在 login_ok 处立即 kill，100 杀只到几杀（同 F-E 的 attack 病）。
+    $dropExpDone = Get-M3SeqDoneCount -Text (Read-SharedText $LogFile) -Kind dropexp
+  }
   if ($RequireCharCreated) {
     # 固定起点预热：等「创建角色」标记（BotSrv `SelectChrScene.cs` 的 LogService.Info）
     $charCreated = ([regex]::Matches((Read-SharedText $LogFile), '创建角色')).Count
@@ -445,7 +481,8 @@ while ((Get-Date) -lt $deadline) {
   $ptNote = if ($PairTradeSequence) { " pair_trade_seq_done=" + $pairTradeDone + "/" + $Count } else { "" }
   $soNote = if ($SellOffSequence) { " selloff_seq_done=" + $sellOffDone + "/" + $Count } else { "" }
   $guildCastleNote = if ($GuildCastleSequence) { " guild_castle_seq_done=" + $guildCastleDone + "/" + $Count } else { "" }
-  Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " in_world=" + $worldOk + "/" + $Count + $bagNote + $atkNote + $shopNote + $guildCastleNote + $heroPetNote + $questNote + $ptNote + $soNote + " (src=load_stats.ndjson)")
+  $dropExpNote = if ($DropExpSequence) { " drop_exp_seq_done=" + $dropExpDone + "/" + $dropExpExpected } else { "" }
+  Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " in_world=" + $worldOk + "/" + $Count + $bagNote + $atkNote + $shopNote + $guildCastleNote + $heroPetNote + $questNote + $ptNote + $soNote + $dropExpNote + " (src=load_stats.ndjson)")
   if ($BagEquipSequence) {
     # T-14：序列跑完（每个假人一条 done）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
     if ($success -ge $Count -and $bagDone -ge $Count) { break }
@@ -467,6 +504,9 @@ while ((Get-Date) -lt $deadline) {
   } elseif ($GuildCastleSequence) {
     # M3⑧：行会/攻城序列跑完（每个假人各自一条 done）才算收工。
     if ($success -ge $Count -and (Test-M3SeqComplete -Kind guildcastle -Done $guildCastleDone -Bots $Count)) { break }
+  } elseif ($DropExpSequence) {
+    # M3④：掉落/经验序列跑完（attacker 的 complete 到位）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
+    if ($success -ge $Count -and (Test-M3SeqComplete -Kind dropexp -Done $dropExpDone -Bots $Count)) { break }
   } elseif ($AttackSequence) {
     # F-E：攻击序列跑完（attacker 的 done 到位）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
     if ($success -ge $Count -and (Test-M3SeqComplete -Kind attack -Done $attackDone -Bots $Count)) { break }
@@ -495,6 +535,7 @@ $summary = [pscustomobject]@{
   pair_trade_seq_done = $pairTradeDone; pair_trade_sequence = [bool]$PairTradeSequence
   selloff_seq_done = $sellOffDone; selloff_sequence = [bool]$SellOffSequence
   guild_castle_seq_done = $guildCastleDone; guild_castle_sequence = [bool]$GuildCastleSequence
+  drop_exp_seq_done = $dropExpDone; drop_exp_sequence = [bool]$DropExpSequence
   char_created = $charCreated; require_char_created = [bool]$RequireCharCreated
   success_rate_pct = $rate; world_rate_pct = $worldRate; require_world = [bool]$RequireWorld
   timeout_sec = $TimeoutSec; log = $LogFile; stats = $statsPath
@@ -513,8 +554,8 @@ if ($SelfTestRed) {
   exit 1
 }
 
-if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count) -and (-not $BagEquipSequence -or $bagDone -ge $Count) -and (-not $ShopSequence -or (Test-M3SeqComplete -Kind shop -Done $shopDone -Bots $Count)) -and (-not $GuildCastleSequence -or (Test-M3SeqComplete -Kind guildcastle -Done $guildCastleDone -Bots $Count)) -and (-not $HeroPetSequence -or (Test-M3SeqComplete -Kind heropet -Done $heroPetDone -Bots $Count)) -and (-not $QuestSequence -or (Test-M3SeqComplete -Kind quest -Done $questDone -Bots $Count)) -and (-not $PairTradeSequence -or (Test-M3SeqComplete -Kind pairtrade -Done $pairTradeDone -Bots $Count)) -and (-not $SellOffSequence -or (Test-M3SeqComplete -Kind selloff -Done $sellOffDone -Bots $Count)) -and (-not $AttackSequence -or $attackDone -ge $attackExpected) -and (-not $RequireCharCreated -or $charCreated -ge $Count)) {
-  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }) + $(if ($BagEquipSequence) { "；bag_seq_done=" + $bagDone + "/" + $Count } else { "" }) + $(if ($ShopSequence) { "；shop_seq_done=" + $shopDone + "/" + $Count } else { "" }) + $(if ($GuildCastleSequence) { "；guild_castle_seq_done=" + $guildCastleDone + "/" + $Count } else { "" }) + $(if ($HeroPetSequence) { "；hero_pet_seq_done=" + $heroPetDone + "/" + $Count } else { "" }) + $(if ($QuestSequence) { "；quest_seq_done=" + $questDone + "/" + $Count } else { "" }) + $(if ($PairTradeSequence) { "；pair_trade_seq_done=" + $pairTradeDone + "/" + $Count } else { "" }) + $(if ($SellOffSequence) { "；selloff_seq_done=" + $sellOffDone + "/" + $Count } else { "" }) + $(if ($AttackSequence) { "；attack_seq_done=" + $attackDone + "/" + $attackExpected } else { "" }) + $(if ($RequireCharCreated) { "；char_created=" + $charCreated + "/" + $Count } else { "" }))
+if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count) -and (-not $BagEquipSequence -or $bagDone -ge $Count) -and (-not $ShopSequence -or (Test-M3SeqComplete -Kind shop -Done $shopDone -Bots $Count)) -and (-not $GuildCastleSequence -or (Test-M3SeqComplete -Kind guildcastle -Done $guildCastleDone -Bots $Count)) -and (-not $HeroPetSequence -or (Test-M3SeqComplete -Kind heropet -Done $heroPetDone -Bots $Count)) -and (-not $QuestSequence -or (Test-M3SeqComplete -Kind quest -Done $questDone -Bots $Count)) -and (-not $PairTradeSequence -or (Test-M3SeqComplete -Kind pairtrade -Done $pairTradeDone -Bots $Count)) -and (-not $SellOffSequence -or (Test-M3SeqComplete -Kind selloff -Done $sellOffDone -Bots $Count)) -and (-not $DropExpSequence -or (Test-M3SeqComplete -Kind dropexp -Done $dropExpDone -Bots $Count)) -and (-not $AttackSequence -or $attackDone -ge $attackExpected) -and (-not $RequireCharCreated -or $charCreated -ge $Count)) {
+  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }) + $(if ($BagEquipSequence) { "；bag_seq_done=" + $bagDone + "/" + $Count } else { "" }) + $(if ($ShopSequence) { "；shop_seq_done=" + $shopDone + "/" + $Count } else { "" }) + $(if ($GuildCastleSequence) { "；guild_castle_seq_done=" + $guildCastleDone + "/" + $Count } else { "" }) + $(if ($HeroPetSequence) { "；hero_pet_seq_done=" + $heroPetDone + "/" + $Count } else { "" }) + $(if ($QuestSequence) { "；quest_seq_done=" + $questDone + "/" + $Count } else { "" }) + $(if ($PairTradeSequence) { "；pair_trade_seq_done=" + $pairTradeDone + "/" + $Count } else { "" }) + $(if ($SellOffSequence) { "；selloff_seq_done=" + $sellOffDone + "/" + $Count } else { "" }) + $(if ($DropExpSequence) { "；drop_exp_seq_done=" + $dropExpDone + "/" + $dropExpExpected } else { "" }) + $(if ($AttackSequence) { "；attack_seq_done=" + $attackDone + "/" + $attackExpected } else { "" }) + $(if ($RequireCharCreated) { "；char_created=" + $charCreated + "/" + $Count } else { "" }))
   exit 0
 }
 if ($HeroPetSequence -and -not (Test-M3SeqComplete -Kind heropet -Done $heroPetDone -Bots $Count)) {
@@ -543,6 +584,10 @@ if ($ShopSequence -and -not (Test-M3SeqComplete -Kind shop -Done $shopDone -Bots
 }
 if ($BagEquipSequence -and $bagDone -lt $Count) {
   Write-Output ("RED: " + $Count + " 个假人的背包/装备序列只跑完 " + $bagDone + "/" + $Count + "（缺 M3BAGSEQ done）——序列不完整，不能当『同一序列』")
+  exit 1
+}
+if ($DropExpSequence -and -not (Test-M3SeqComplete -Kind dropexp -Done $dropExpDone -Bots $Count)) {
+  Write-Output ("RED: 掉落/经验序列只跑完 " + $dropExpDone + "/" + $dropExpExpected + "（缺 M3DROPEXPSEQ phase=complete；kills=" + $DropExpKills + "）——序列不完整，不能当『同一序列』（dropexp 预期 done 数 = attacker 数 = 1）")
   exit 1
 }
 if ($AttackSequence -and $attackDone -lt $attackExpected) {

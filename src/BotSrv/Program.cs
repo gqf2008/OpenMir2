@@ -35,6 +35,11 @@ namespace BotSrv
             {
                 System.Environment.Exit(QuestSeqSelfCheck.Run());
             }
+            // M3④（T-22/T-29 家族扩展）：掉落/经验夹具 attacker 选择/击杀归类/字段抽取/行组装 纯函数的无栈自检（不启动服务/不连端口）。
+            if (args.Length > 0 && args[0] == "--selftest-dropseq")
+            {
+                System.Environment.Exit(DropExpSeqSelfCheck.Run());
+            }
             // M3⑦（T-43 家族扩展）：组队/交易夹具 步解析/角色判定/分支归类 纯函数的无栈自检（不启动服务/不连端口）。
             if (args.Length > 0 && args[0] == "--selftest-pairtrade")
             {

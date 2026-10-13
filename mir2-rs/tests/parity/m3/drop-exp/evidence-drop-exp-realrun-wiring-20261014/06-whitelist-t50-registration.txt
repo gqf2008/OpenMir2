@@ -1,0 +1,63 @@
+06 —— whitelist T-50 登记（回应 merge lane 准入③：src/BotSrv/** 例外须有 T-* 登记）
+卡              = openmir2-m3-drop-exp-fixture-botsrv（本卡，openmir2-worker-11）
+base（merge-base(master, head)）= origin/master = 10f0daa93ebeaf220581a3239cce6f7e7a522b85
+上一 head       = 540d312a44e03c6bf2818c4b7ccfc7f6ba7e8b26（reviewer-6 approve 9ec5fac7；merge lane 以准入③不过跳过，comment 2b7a2d877c / 96dec3f985）
+本 head         = 见 walgit patch 条目 --head（提交后冻结，= git rev-parse HEAD）
+本 tree         = 540d312a4 之上「新增 T-50 登记」+ 把 origin/master(10f0daa93) 合并进来（merge-tree 无冲突，已实跑四门禁见 07）
+
+=== 1) 为什么需要本行（merge lane comment 2b7a2d87 / 96dec3f985 的准入③原文） ===
+被审 head 原始 src/ 非空项 = 7 件（全 src/BotSrv/**），但 whitelist.md 无本卡 T-* 登记 ⇒ 按准入③ fail-closed 跳过。
+惯例：每个 M3 夹具卡各自新增 T-* 行登记本卡 src/BotSrv/** 文件清单（T-22/T-29/T-41/T-42/T-43/T-44/T-45/T-46 同）。
+
+=== 2) 本卡相对 base(origin/master) 的 whitelist 增量（= 仅 T-50 段；上下文行较长，只取 + 行与段头） ===
+$ git diff origin/master -- mir2-rs/tests/parity/whitelist.md | grep -E '^[+-]' | grep -vE '^[+-]{3} '
++## M3④ 掉落/经验动作序列夹具（BotSrv）登记（卡片 `openmir2-m3-drop-exp-fixture-botsrv`，2026-10-14）
++
++> 本卡为 M3④ 的夹具承接片，交付 = `drop_exp_diff.py` 的 real-run 驱动器（前一夹具卡 `openmir2-m3-drop-exp-align` 的 T-34 只交了比较器骨架、未建 BotSrv 驱动）。
++> 本片零 `.rs`、零 `sql/**`、零 `MirClient/**`；`src/**` 仅 `src/BotSrv/**`（BotSrv 不在 oracle 七进程内，见 T-1）⇒ 按 T-41..T-46 同族惯例登记 BotSrv 工具侧例外。未起栈。
++
++| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
++| --- | --- | --- | --- |
++| T-50 | **夹具口径 + BotSrv 工具侧例外（本片交付）**：改动 `src/BotSrv/**`（`RobotOptions`/`MShare`/`AppService`/`Program.cs`/`Player/RobotPlayer.cs`/`Player/RobotPlayer.Operate.cs` + 新 `DropExpSeqSelfCheck.cs`）+ `tools/botload/run_bots.ps1` + `mir2-rs/tests/parity/m3/{run_pair.ps1,gate_guards.ps1,drop-exp/run_drop_exp_pair.ps1}`：① BotSrv 增 `DropExpSequence`（默认 false）/`DropExpKills`(100)/`DropExpStepMs`(500)/`DropExpStartDelayMs`(3000)/`DropExpDir`(2)/`DropExpRole`/`DropExpMonster`/`DropExpOut`，收到**本假人自己的** `SM_LOGON` 后由 `ArmDropExpSequence` 精确武装唯一 `DropExpRole`（精确相等、非 `EndsWith`），每 `DropExpStepMs` 按攻击序列线上形状发 `CM_HIT`（`Recog=MakeLong(x,y)`、`Tag=dir`），逐 op 落 `M3DROPEXPSEQ {json}` 的 send/frame/end/done 事件；单一收包钩子 `DropExpOnServerMessage`（挂在既有 `RobotPlayer.Operate.cs` 收包点）在开关打开时**只读地**记 `SM_WINEXP(44)`（击杀 ⇒ 一行）/`SM_ITEMSHOW(610)`（掉落出现帧）/`SM_LEVELUP(45)`，按 LF 写 `DropExpOut` 指定的 `drop_exp_raw.jsonl`（空路径 ⇒ 只落标记）。② `Program.cs` 增 `BotSrv.exe --selftest-dropseq`（不启服务/不连端口），`DropExpSeqSelfCheck.cs` 26 条纯函数断言。③ `run_pair.ps1` 增 `-DropExpSequence`/`-DisableAutoPlay` 透传 + `-EmitOpsArgs.drop_exp_sequence` + real-run 追加 `-DropExpOut <session>/drop_exp_raw.jsonl`；`gate_guards.ps1` 增 `Format/Convert-M3DropExpScope` + peer 起点/开关一致性护栏（fail-closed）；`run_drop_exp_pair.ps1` 增 `-Go` 真机两相 pin（map/pos/level/dir 取自 `drop_exp_scenario.json` 单一真源）；`tools/botload/run_bots.ps1` 增 `DropExp*` 配置透传。 | BotSrv **不在 oracle 七进程内**（T-1）。默认（`DropExpSequence=false`）⇒ **不新增任何发送、不新增任何日志、原路径逐字节不变**（`run_bots.ps1 -WriteConfigOnly` 两向自检 + `run_pair -EmitOpsArgs` 两向自检钉住：默认 `(off)`、开启时必传 `-DisableAutoPlay`）。打开时只写**本假人自己的 socket + 指定输出文件**，单一收包钩子只读本假人自己的视图，不读不写跨假人共享世界态（同 T-22/T-29/T-41 纪律）；不改 oracle/协议/上线字节语义。**口径**：冻结 oracle 死亡掉落恒不落地（`AddItemToMap` 首行 `ItemId==0 ⇒ return false`，owner 2026-10-13「方案 A」）⇒ `SM_ITEMSHOW(610)` 恒不发；跨侧比较实质内容 = `SM_WINEXP(44)` 的 `exp_delta/exp_total/level`（`drops=[]`/`gold=0` 是 1:1 复刻，不是降格）。**判据本体（驱动器 + 两相接线 + 无栈自检 + 改坏必红）已完整、离线可复跑**；真机两侧 100 杀同序列跑要 owner `-Go` 窗口 + shared 承接卡 `openmir2-m3-rng-scene-driver`（单只固定怪驱动）。证据 `m3/drop-exp/evidence-drop-exp-fixture-botsrv-20261014/**`（DoD①④：`-SelfCheckNoStack` 16/16 + 2 条改坏必红 + 边界）与 `m3/drop-exp/evidence-drop-exp-realrun-wiring-20261014/**`（DoD②：`-SelfCheckNoStack` 20/20 + 2 条改坏必红 + 默认关两向 + 边界）。 | 作者登记（`openmir2-worker-11`）；**待独立 principal 复核** |
++
++> **编号连号**：T-49（M3⑨）→ **T-50**（M3④ 掉落/经验夹具，T-41..T-46 同族扩展）；T-48 仍按本文件末段说明留给「T-42 撞号去重」待 owner 路由。
++
+（- 行 = 0；本卡只新增，不删改既有行）
+$ git diff --numstat origin/master -- mir2-rs/tests/parity/whitelist.md
+11	0	mir2-rs/tests/parity/whitelist.md
+
+=== 3) 机判：T-50 唯一（grep 计数 = 1） ===
+$ grep -c '^| T-50 |' mir2-rs/tests/parity/whitelist.md
+1
+
+=== 4) 机判：编号唯一性审计（m3_whitelist_registry_audit.py audit；scope=T-36+） ===
+$ python -I mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit | head -1
+WHITELIST_REGISTRY scope=T-36+ entries=15 duplicates=[42] strict=False tokens=10
+⇒ entries 14→15；duplicates=[42] 为**预存在**（M3⑤ T-42 vs M3⑥ T-42，非本片引入；T-48 已按 whitelist.md:283 预留「T-42 撞号去重」）。
+   T-50 不在 duplicates 里 ⇒ 本增量不新增重号（T-50 仅 1 行，见 §3）。
+
+=== 5) 机判：冻结面（排除已登记例外 src/BotSrv/**，必须空） ===
+$ git diff --name-only origin/master HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage ':!src/BotSrv'
+(以上应空；下方直接给出无排除的原始面)
+(空)
+
+=== 6) 机判：src/ 原始非空项 = 7 件，与 T-50 行登记清单逐件一致 ===
+$ git diff --name-only origin/master HEAD -- src sql MirClient
+src/BotSrv/AppService.cs
+src/BotSrv/DropExpSeqSelfCheck.cs
+src/BotSrv/MShare.cs
+src/BotSrv/Player/RobotPlayer.Operate.cs
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/Program.cs
+src/BotSrv/RobotOptions.cs
+-- T-50 行登记的 src/BotSrv 清单（whitelist.md 原文） --
+src/BotSrv/**（`RobotOptions`/`MShare`/`AppService`/`Program.cs`/`Player/RobotPlayer.cs`/`Player/RobotPlayer.Operate.cs` + 新 `DropExpSeqSelfCheck.cs`）
+
+=== 7) 机判：净差量零 .rs ===
+$ git diff --name-only origin/master HEAD | grep -c '\.rs$'
+0
+⇒ 本卡不触碰任何 Rust 生产路径；src/ 仅 BotSrv（T-1 工具侧，不在 oracle 七进程内）。
+
+=== 结论 ===
+T-50 登记了本卡 src/BotSrv/** 7 件（RobotOptions / MShare / AppService / Program / Player/RobotPlayer.cs / Player/RobotPlayer.Operate.cs + 新 DropExpSeqSelfCheck.cs）+ 默认关口径 + 证据指针；
+编号唯一（T-50 仅 1 行；审计 duplicates 仍 = [42] 预存在）；冻结面排除 BotSrv 后为空。请 merge lane 据此重判准入③。

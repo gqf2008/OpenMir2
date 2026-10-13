@@ -1,0 +1,42 @@
+07 —— 四门禁（本 head：whitelist T-50 登记 + 合并 origin/master；净差量零 .rs）
+cwd = mir2-rs；CARGO_TARGET_DIR = E:/tmp/m2svr-target
+base = origin/master = 10f0daa93ebeaf220581a3239cce6f7e7a522b85（= merge-base(master, head)）
+本 tree = 540d312a4 + T-50 登记 + origin/master 合并（merge-tree rc=0 无冲突）
+
+=== 00) 净差量（本卡相对 base；.rs = 0） ===
+$ git diff --name-only origin/master HEAD | grep -c '\.rs$'
+0
+$ git diff --stat origin/master HEAD -- src tools mir2-rs/tests/parity/whitelist.md | tail -12
+ mir2-rs/tests/parity/whitelist.md        |  19 ++-
+ src/BotSrv/AppService.cs                 |  15 +++
+ src/BotSrv/DropExpSeqSelfCheck.cs        | 133 ++++++++++++++++++++
+ src/BotSrv/MShare.cs                     | 203 ++++++++++++++++++++++++++++++
+ src/BotSrv/Player/RobotPlayer.Operate.cs |   2 +
+ src/BotSrv/Player/RobotPlayer.cs         | 208 +++++++++++++++++++++++++++++++
+ src/BotSrv/Program.cs                    |   5 +
+ src/BotSrv/RobotOptions.cs               |  26 ++++
+ tools/botload/run_bots.ps1               |  59 +++++++--
+ 9 files changed, 659 insertions(+), 11 deletions(-)
+
+=== ① fmt ===
+$ cargo fmt --all -- --check
+fmt rc=0
+
+=== ② clippy ===
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.75s
+clippy rc=0
+
+=== ③ test ===
+$ cargo test --workspace
+test rc=0
+suites = 101 ; passed = 1200 ; failed = 0 ; ignored = 22
+
+=== ④ msgcodegen ===
+$ cargo run -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msg rc=0
+
+=== 结论 ===
+四门禁全绿（合并树上实跑）：fmt rc=0 / clippy rc=0(-D warnings) / 101 suites 1200 passed 0 failed 22 ignored / msgcodegen 604 rc=0。
+转录原件（仓外，可删）：E:/tmp/m2svr-x12/{fmt2,clippy2,test2,msg2}.txt

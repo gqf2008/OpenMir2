@@ -1,0 +1,39 @@
+05 —— 边界 / 恢复证明（卡 openmir2-m3-drop-exp-fixture-botsrv，DoD② 增量）
+base            = origin/master = 1cf88f6ad1d7d300ab31072bdfa025585c140bd3
+上一片（DoD①）head = 9dcfb6f34f5cb42601106427cac91c3bae9d7a0f
+本片（DoD②）head   = 见 walgit patch 条目 --head（提交后冻结，= `git rev-parse HEAD`）
+
+=== 冻结面（排除已登记例外 src/BotSrv/**，必须空）
+    cmd: git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage ':!src/BotSrv'
+(空)
+
+=== 冻结面原始（含 src/ —— 非空项应仅 = 已登记 T-4x 例外 src/BotSrv/**；本片新增差量不含 src/）
+src/BotSrv/AppService.cs
+src/BotSrv/DropExpSeqSelfCheck.cs
+src/BotSrv/MShare.cs
+src/BotSrv/Player/RobotPlayer.Operate.cs
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/Program.cs
+src/BotSrv/RobotOptions.cs
+
+=== 净差量（本增量 vs 上一片 head; git diff --stat 9dcfb6f34 HEAD）
+mir2-rs/tests/parity/m3/drop-exp/README.md         |  12 +-
+ .../00-selfcheck-nostack.txt                       |  90 +++++++++++
+ .../01-botsrv-selftest-dropseq.txt                 |  36 +++++
+ .../02-redcheck-runpair-passthrough.txt            |  10 ++
+ .../03-redcheck-botsrv-config-passthrough.txt      |  10 ++
+ .../04-gates.txt                                   |  17 ++
+ .../05-boundary.txt                                |  37 +++++
+ .../README.md                                      |  45 ++++++
+ .../SHA256SUMS.txt                                 |   7 +
+ .../tests/parity/m3/drop-exp/run_drop_exp_pair.ps1 | 178 +++++++++++++++++++--
+ mir2-rs/tests/parity/m3/gate_guards.ps1            |  88 ++++++++++
+ mir2-rs/tests/parity/m3/run_pair.ps1               |  73 ++++++++-
+ tools/botload/run_bots.ps1                         |  59 ++++++-
+ 13 files changed, 634 insertions(+), 28 deletions(-)
+
+=== 恢复证明：两次改坏按字节还原（sha256 前后逐字节相同）
+f16144bd65cadc29cb470ba285f164d688475ffb686018ff3d28aa22f9f23cda *mir2-rs/tests/parity/m3/run_pair.ps1
+5bd85f5b7f8102ff885903f0a9cbe8c70b7d2d17bc5c73f83e5196ae79f0ad90 *tools/botload/run_bots.ps1
+f16144bd65cadc29cb470ba285f164d688475ffb686018ff3d28aa22f9f23cda *mir2-rs/tests/parity/m3/run_pair.ps1
+5bd85f5b7f8102ff885903f0a9cbe8c70b7d2d17bc5c73f83e5196ae79f0ad90 *tools/botload/run_bots.ps1
