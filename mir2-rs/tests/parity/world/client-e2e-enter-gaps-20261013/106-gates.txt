@@ -1,0 +1,50 @@
+106-gates.txt —— 片⑲ 四门禁 + 离线自检（卡 `openmir2-client-e2e-enter-gaps`）
+（m2-svr / openmir2-worker-11，2026-10-14；cwd = `mir2-rs/`，隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-target`）
+====================================================================================================
+基线：本片 commit 前已 `git fetch origin && git merge origin/master` ⇒ base = `origin/master` = d6443c03f
+      （本片工作期间 master 连续前进 c517ce4fc→d6443c03f，已合并进分支；本片差量只有卡证据目录内的 8 路径）
+      本片 commit（证据/清单）= 见 `git rev-parse HEAD`（本文件所在提交）
+工具链：cargo 1.98.1 (797e8a9bc 2026-08-05) / rustc 1.98.1 (48a229cea 2026-09-01)
+
+[1] cargo fmt --all -- --check
+----------------------------------------------------------------------------------------------------
+$ cargo fmt --all -- --check
+（无输出）
+rc=0
+
+[2] cargo clippy --workspace --all-targets -- -D warnings
+----------------------------------------------------------------------------------------------------
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.52s
+rc=0
+
+[3] cargo test --workspace --no-fail-fast
+----------------------------------------------------------------------------------------------------
+$ cargo test --workspace --no-fail-fast
+  ...（101 个 suite 的 `test result:` 行汇总）...
+  101 suites · 1200 passed · 0 failed · 22 ignored
+rc=0
+
+[4] cargo run -p msgcodegen -- --check
+----------------------------------------------------------------------------------------------------
+$ cargo run -p msgcodegen -- --check
+  msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+[5] 离线自检 / 窗口就绪门（非 cargo 门，判据本体）
+----------------------------------------------------------------------------------------------------
+$ python -I -B window_handoff.py --selftest
+  SELFTEST OK (35/35) rc=0
+$ python -I -B window_handoff.py --repo <本片 worktree @ d6443c03f> --ref HEAD \
+      --check-dir mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+  OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+  OK   G2 6/6 判据脚本 --selftest
+  WINDOW_READY=YES
+  RESULT: GREEN rc=0
+$ python -I tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+  GREEN OK 107/107 rc=0
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+  EOLCHECK GREEN 108/108 rc=0
+
+本片**零生产代码改动**（仅把 root verify1 真机原始件入库 + 一份判定书/清单）；**未起栈、未占端口**
+（十端口仅共享 MySQL 3306 UP）；未动共享主检出；不 merge、未自签 review。

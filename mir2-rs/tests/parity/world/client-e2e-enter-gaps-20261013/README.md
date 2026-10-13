@@ -434,3 +434,25 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   ③ 选点 fail-soft 被吞成假点（缺脚本时返回 `"0,0"`）⇒ `SELFTEST FAILED (34/35)`。
 - **零生产代码改动**（仅一个 `.py` + 四份证据 + README/清单）；本片**未起栈、未占端口**，未动共享主检出。
 - 证据：`101-window-plan-o2-bestsite.txt`、`102-redcheck-window-plan-o2.txt`、`103-gates.txt`、`104-boundary.txt`。
+
+## ⑲ 片⑲：root verify1 **真机原始件入库** + ③ 收口判定书（2026-10-14）—— `105`
+
+- **背景**：③ 的离线判决（`70`：`(291,666)` 在 map 0 全部生成框之外 ⇒ `vis=0` 正确；框内点
+  `(287,620)` 实收 13 对出现帧 ⇒ AOI 有算有下发）**已成立**，但 root verify1 的真机原始件
+  （`E:/tmp/client-e2e/stack/game-svr.out.log` + `verify1/stages.ndjson` + 34 张截图）**一直只在检出外**，
+  卡 DoD⑤「证据四件套」与 AGENTS「证据要能重放」都要求入库。
+- **本片新增（零生产代码改动，只把真机原始件按字节入库 + 一份判定书）**：
+  - `capture-root-verify1-game-svr.out.txt`（36371 B，源 `game-svr.out.log`，`*.log`→`*.txt` 避 gitignore，内容一字未改）；
+  - `capture-root-verify1-stages.ndjson.txt`（1785 B，20 阶段）；
+  - `capture-root-verify1-shots.manifest.txt`（34 张 PNG 的 sha256；PNG ~34MB 不入库）；
+  - `105-aoi-gap3-closure-root-verify1.txt`（判定书：读数逐条 + ③/④ 判定 + 窗口 GO + 剩余项）。
+- **从入库件复算的读数**（不采信散文）：`52/752 入图输入` = 2 条（`hp=19 mp=15`，layout=client-58）；
+  `Ident=3013` = **17** 条；`sim: tick` 周期行 86 条，其中玩家行 **11** 条全 `vis=0 same_map=1726 nearest=23..34`；
+  `实体内` 22283→27030（峰值 28152）。⇒ 与 root 判读逐值吻合。
+- **窗口就绪 GO（当前 master 重跑）**：`origin/master = c517ce4fc`，
+  `window_handoff.py --repo <本 worktree> --ref HEAD --check-dir …` ⇒ `WINDOW_READY=YES` / `RESULT: GREEN` rc=0。
+  ⚠ root 的 `client-e2e-window.sh` `repo=` 指共享主检出（现为 rev 车道 worktree）⇒ 开窗前按 `--plan` 的修复块换
+  专用 worktree（`origin/master`）。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级「两侧同框真机对照」+「屏幕见怪并能攻击造成伤害」。
+- **零生产代码改动**；本片**未起栈、未占端口**，未动共享主检出。
+- 证据：`105-aoi-gap3-closure-root-verify1.txt`、`capture-root-verify1-*.txt`、`106-gates.txt`、`107-boundary.txt`。
