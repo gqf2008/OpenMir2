@@ -1,4 +1,8 @@
-# M3⑩-实现 2 变更清单（base 2869a234b ⇒ working tree）
+# M3⑩-实现 2 变更清单（base（r2）= ⑩-1 前缀 head `515540139`；patch base = `refs/heads/master`，交付时 origin/master = `78cf74d46`）
+
+> rebase 片 2026-10-13（worktree m3hp / principal openmir2-worker-20）：原 base `2869a234b`（⑩-1 F-1）在
+> ⑩-1 rebase 到 master 后已失效；本片 `git rebase --onto 1c0efa7aa 2869a234b` 干净重放（零冲突）。
+> 本片自身 delta 与改动前逐字节一致（见 `20-boundary.txt` §2）。
 
 ## 新增
 - mir2-rs/bins/game-svr/src/goldsales.rs（加载接线 + 行→世界态条目桥接 + 顺序尾追 + 4 条构造级用例）
@@ -18,3 +22,18 @@
 ## 未做 / 登记
 - 真机两侧同序列对拍（run_selloff_pair.ps1 + goldsales 表快照 diff=0）需独占窗口 ⇒ not_verified
 - 本片不新增白名单条目：只读/坏列名/无 save 已由 D-5/B-5/S4B-* 覆盖
+
+## rebase 片（2026-10-13）【已作废：见下方「rebase 片 r2」】
+- ⑩-1 由 worker-20 接管 rebase 到 master `029d23eae`（新 head `1c0efa7aa`，见
+  `world/selloff-consignment-20261013/README.md` §2c）。本片随 `git rebase --onto 1c0efa7aa 2869a234b`
+  重放到新 head `16f931f9`，**零冲突**；`mir2-rs/bins/game-svr/src/goldsales.rs` / `main.rs` 的 ⑩-2 增量不变。
+- 四门禁 + RC-A/RC-B 均在 rebase 后重跑（读数见 `03-tests.txt`）。
+
+## rebase 片 r2（2026-10-13，与 ⑩-1 同栈重放到 master `ddaca961c`）
+- 协调者合并检查点 `613291ca`（master `ab60452d0`）报 `git merge-tree master x ⑩-2` 于 `main.rs`
+  `CONFLICT(content)`（master 新并入 ⑨-2 `pet_cfg` 块）⇒ 要求作者 rebase。
+- 做法：`git rebase origin/master`（`ddaca961c`）重放 ⑩-1 + ⑩-2；`main.rs` 唯一冲突 = ⑨-2 `pet_cfg`
+  块（master 侧）与 ⑩-2 `sell_off_seed` 启动块（本侧）同插入点 ⇒ **两侧并集**，不改被审语义。
+- 本片自身 delta（⑩-1 前缀 `515540139` .. HEAD）= 5 文件 +419/−2，逐字节不变。
+  ⑩-1 前缀与 ⑩-1 卡同 oid ⇒ 合并顺序先 ⑩-1（`515540139`）后 ⑩-2，三向干净。
+- 四门禁 + RC-A/RC-B 均在 r2 rebase 后重跑（读数见 `03-tests.txt`）；`git merge-tree` HEAD x master = rc=0。

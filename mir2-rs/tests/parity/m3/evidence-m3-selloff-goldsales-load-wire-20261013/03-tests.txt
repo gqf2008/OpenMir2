@@ -1,9 +1,13 @@
-# M3⑩-实现 2 判据读数
+# M3⑩-实现 2 判据读数（rebase 片 r2 2026-10-13；worktree m3hp / principal openmir2-worker-20）
 
-## [A] 构造级（cargo test -p game-svr --bin game-svr goldsales）
+> base（本片 rebase 目标）= `ddaca961c`；交付时 origin/master = `78cf74d46`。
+> 顺序依赖 base = ⑩-1 前缀 head `515540139`（与 ⑩-1 同栈）。下列读数均在 r2 rebase 后重跑，
+> 隔离 `CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target`（检出外）。
+
+## [A] 构造级（cargo test -p game-svr --offline --bin game-svr goldsales）
 ```
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.32s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.28s
      Running unittests src\main.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-d40510517c77a420.exe)
 
 running 4 tests
@@ -12,19 +16,14 @@ test goldsales::tests::seed_book_appends_in_row_order ... ok
 test goldsales::tests::malformed_item_json_degrades_to_zero_fields ... ok
 test goldsales::tests::entry_from_loaded_maps_fields_and_keeps_null_slots ... ok
 
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 184 filtered out; finished in 0.00s
-
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 192 filtered out; finished in 0.00s
 ```
 
-## [B] 真身判据（cargo test -p game-svr --test goldsales_load -- --ignored；本机 MySQL mir2_data，会话级 TEMPORARY TABLE 遮蔽真表、零持久写入）
+## [B] 真身判据（cargo test -p game-svr --offline --test goldsales_load -- --ignored --nocapture）
+> 本机 MySQL `mir2_data`，会话级 `TEMPORARY TABLE goldsales` 遮蔽真表、零持久写入（零游戏端口）
 ```
-   Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\data)
-   Compiling mir2-formula v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\formula)
-   Compiling mir2-world-bevy v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world-bevy)
-   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world)
-   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\envir)
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.22s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.89s
      Running tests\goldsales_load.rs (E:/tmp/openmir2-m3hp-target\debug\deps\goldsales_load-ec66d2446415a18f.exe)
 
 running 1 test
@@ -32,10 +31,18 @@ running 1 test
 load_sell_off_item_list 返回行数 = 0
 test table_has_data_but_loader_still_reads_zero_rows ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
-
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 ```
 
 ## [C] 改坏必红
-- RC-A：把 crates/data/src/loaders.rs 的列名改成 DDL 正确名 ⇒ 真身判据 FAILED（见 redchecks/RC-A-*-mutated.txt），还原后 rc=0
-- RC-B：删掉 goldsales::seed_book 的 push（MySqlDB.cs:279 的 Add 等价）⇒ 构造级 seed_book_appends_in_row_order FAILED（left:0/right:2），还原后 4 passed
+- RC-A：把 `crates/data/src/loaders.rs` 的列名改成 DDL 正确名 ⇒ 真身判据 FAILED rc=101（`redchecks/RC-A-fix-column-names-mutated.txt`），还原后 rc=0（`RC-A-restored-ok.txt`）
+- RC-B：删掉 `goldsales::seed_book` 的 push（`MySqlDB.cs:279` 的 Add 等价）⇒ 构造级 `seed_book_appends_in_row_order` FAILED left:0/right:2 rc=101（`RC-B-remove-seed-push-mutated.txt`），还原后 4 passed（`RC-B-restored-ok.txt`）
+
+## [D] 四门禁（本片 r2 rebase 后 head）
+- `cargo fmt --all -- --check` = rc=0
+- `cargo clippy --workspace --all-targets --offline -- -D warnings` = rc=0
+- `cargo test --workspace --offline --no-fail-fast` = **99 suites · 1127 passed · 0 failed · 22 ignored** rc=0
+- `cargo run -p msgcodegen --offline -- --check` = **604 条一致** rc=0
+
+## 未做 / not_verified
+- 真机两侧同序列对拍（`run_selloff_pair.ps1` + `goldsales` 表快照 diff=0）需独占窗口 ⇒ not_verified。

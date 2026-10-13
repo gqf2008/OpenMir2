@@ -1,6 +1,10 @@
-   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.32s
-     Running unittests src\main.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-d40510517c77a420.exe)
+# RC-B 还原后复核：git restore --source=HEAD -- mir2-rs/bins/game-svr/src/goldsales.rs
+# 命令：cargo test -p game-svr --offline --bin game-svr goldsales
+# 期望/实测：4 passed / 0 failed（rc=0）。
+# 注（rebase 片 r2 2026-10-13，worktree m3hp / principal openmir2-worker-20）：本片与 ⑩-1 同栈重放到
+#   master `ddaca961c`（⑩-1 前缀 oid `515540139`；交付时 origin/master = `78cf74d46`；
+#   `git merge-tree --write-tree origin/master HEAD` = rc=0），按同一命令重跑；目标目录在检出外。
+
 
 running 4 tests
 test goldsales::tests::seed_book_with_no_rows_keeps_book_empty ... ok
@@ -8,5 +12,11 @@ test goldsales::tests::seed_book_appends_in_row_order ... ok
 test goldsales::tests::malformed_item_json_degrades_to_zero_fields ... ok
 test goldsales::tests::entry_from_loaded_maps_fields_and_keeps_null_slots ... ok
 
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 184 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 192 filtered out; finished in 0.00s
 
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.21s
+     Running unittests src\main.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-d40510517c77a420.exe)
