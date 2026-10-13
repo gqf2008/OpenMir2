@@ -2,9 +2,9 @@
 
 卡 `openmir2-m3-selloff-goldsales-load-wire`（M3⑩-实现 2）的证据包 —— **`goldsales` 只读加载接线**。
 
-> 分支 `worktree-m3-selloff-goldsales-load-wire`；base = `refs/remotes/walgit/selloff-world-host`
-> `2869a234b`（⑩-1 `openmir2-m3-selloff-consignment-world` 的 F-1 返工 head，提供
-> `game_svr::selloff::SellOffBook`）。**本片与 ⑩-2 的依赖关系见下「串行说明」。**
+> 分支 `worktree-m3-selloff-goldsales-load-wire`；base（rebase 片）= **⑩-1 新 head `1c0efa7aa`**
+> （= master `029d23eae` + ⑩-1 世界侧寄售，提供 `game_svr::selloff::SellOffBook`）；patch 交付 base =
+> `refs/heads/master` `029d23eae`。**本片与 ⑩-1 的依赖关系见下「串行说明」。**
 
 ## 本片做什么
 
@@ -52,12 +52,12 @@ Rust 生产启动路径：
 
 - `cargo fmt --all -- --check` → **rc=0**
 - `cargo clippy --workspace --all-targets -- -D warnings` → **rc=0**
-- `cargo test --workspace --no-fail-fast` → **97 suites / 1002 passed / 0 failed / 22 ignored**，rc=0
+- `cargo test --workspace --no-fail-fast` → **99 suites / 1069 passed / 0 failed / 22 ignored**，rc=0
 - `cargo run -p msgcodegen -- --check` → **604 条常量**，rc=0
-- 边界：`git diff --name-only <base> HEAD -- src sql MirClient` = 空；`protocol`/`storage` = 空
+- 边界：`git diff --name-only origin/master HEAD -- src sql MirClient` = 空；`protocol`/`storage` = 空
 
-（读数偏小是因为 base = ⑩-1 head `2869a234b`（基于 origin/master `67e9f6c3e`），不含 ⑩-1 之后
-并入 master 的其它卡片测试。）
+（rebase 片读数：base = ⑩-1 新 head `1c0efa7aa`（已在 master `029d23eae` 上），本片自身 delta 仅 5 文件
++419/−2；rebase 后四门禁全绿。原 base `2869a234b` 的读数 97/1002 已作废。）
 
 ## 复核命令（干净检出可复现）
 
@@ -71,10 +71,12 @@ python -I tools/evidence-hash/verify_sha256sums.py eolcheck \
 ## 串行说明（⑩-2 依赖 ⑩-1）与 not_verified
 
 - **写集冲突**：⑩-2 的启动种子必须写进 ⑩-1 落的同一 `SellOffBook` + 同一 `main.rs` 启动序列
-  ⇒ 本片以 ⑩-1 的 head `2869a234b` 为 base（**顺序依赖，非重复实现**）。⑩-1 在合并检查点
-  `f8fe05a3`（2026-10-13 18:05）因 `bins/game-svr/src/main.rs` 与 master 的 **CONFLICT(content)**
-  被 `skip: merge-conflict` ⇒ **⑩-1 需先 rebase/merge 到 master 重交**，本片随后 rebase 交付
-  （见卡上 comment）。**本片不代 ⑩-1 解冲突**（合并者/他线内容不在本片写集）。
+  ⇒ 本片以 ⑩-1 的 head 为 base（**顺序依赖，非重复实现**）。
+- **rebase 片 2026-10-13**：⑩-1 已由 worker-20 接管 rebase 到 master `029d23eae`（新 head `1c0efa7aa`，
+  解 `main.rs` CONFLICT，见 `world/selloff-consignment-20261013/README.md` §2c）；本片随
+  `git rebase --onto 1c0efa7aa 2869a234b` 干净重放到 `16f931f9`，**边界对 master 已空**（见 `20-boundary.txt`），
+  可交 patch。⇒ 先前「等 ⑩-1 合入后才能交付」的阻塞已解除；**合并顺序仍应先 ⑩-1 后 ⑩-2**
+  （或由 ⑩-2 的 approve 一并覆盖）。
 - **真机两侧对拍**（`run_selloff_pair.ps1` + `goldsales` 表快照 `diff=0`，同种子）需**独占窗口**
   ⇒ **not_verified**（本片零起栈、零游戏端口占用；仅连本机既有 MySQL 跑 ignored 判据）。
 - `UseItems` 的 `UserItem[]` 解码在 D 线口径里被显式推迟（`crates/data/src/models.rs:141-144`），

@@ -1,1 +1,6 @@
-fmt rc=0
+# 命令（cwd = mir2-rs/，CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target）：
+#   cargo fmt --all -- --check
+# 读数：rc=0（无格式差异）。
+# 注（2026-10-13 rebase 片，worktree m3hp / principal openmir2-worker-20）：本片已 rebase 到
+# ⑩-1 的新 head 1c0efa7aa（= master 029d23eae + ⑩-1）；下列读数均在 rebase 后重跑。
+

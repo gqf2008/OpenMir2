@@ -1,5 +1,11 @@
+# RC-B 还原后复核：git restore --source=HEAD -- mir2-rs/bins/game-svr/src/goldsales.rs
+# 命令：cargo test -p game-svr --offline --bin game-svr goldsales
+# 期望：4 passed / 0 failed（rc=0）。
+# 注（2026-10-13 rebase 片，worktree m3hp / principal openmir2-worker-20）：本片已 rebase 到
+# ⑩-1 的新 head 1c0efa7aa（= master 029d23eae + ⑩-1）；下列读数均在 rebase 后重跑。
+
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.32s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.22s
      Running unittests src\main.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-d40510517c77a420.exe)
 
 running 4 tests
@@ -8,5 +14,5 @@ test goldsales::tests::seed_book_appends_in_row_order ... ok
 test goldsales::tests::malformed_item_json_degrades_to_zero_fields ... ok
 test goldsales::tests::entry_from_loaded_maps_fields_and_keeps_null_slots ... ok
 
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 184 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 187 filtered out; finished in 0.00s
 

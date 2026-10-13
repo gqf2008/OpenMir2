@@ -1,37 +1,28 @@
-# M3⑩-实现 2 边界与变更面
-# code head=41830a75b5c17f4366d6a02877563e1e50606999（代码提交；本证据包由紧随其后的 evidence 提交补齐）
-# base=2869a234bc2f947ed268f61f635e32594468a1a1（⑩-1 head，⑩-2 顺序依赖）
+# M3⑩-实现 2 边界与变更面（rebase 片 2026-10-13）
+# head=16f931f991a783e3b6b028dfa020da8c759816f4（分支 worktree-m3-selloff-goldsales-load-wire）
+# base（patch 交付）= refs/heads/master `029d23eae`（origin/master tip）；父链含它。
+# 顺序依赖 base = ⑩-1 新 head `1c0efa7aa`（= master 029d23eae + ⑩-1 世界侧寄售）。
 
-## [1] 本片 delta（base..HEAD）冻结面（必须空，实测空）
-$ git diff --name-only 2869a234bc2f947ed268f61f635e32594468a1a1 HEAD -- src sql MirClient
+## [1] 对 master 冻结面（必须空，实测空）
+$ git diff --name-only origin/master HEAD -- src sql MirClient
+  ⇒ 空
+$ git diff --name-only origin/master HEAD -- mir2-rs/crates/protocol mir2-rs/crates/storage
   ⇒ 空
 
-$ git diff --name-only 2869a234bc2f947ed268f61f635e32594468a1a1 HEAD -- mir2-rs/crates/protocol mir2-rs/crates/storage
-  ⇒ 空
+## [2] 本片自身 delta（⑩-1 head 1c0efa7aa .. HEAD）
+ mir2-rs/Cargo.lock                            |   1 +
+ mir2-rs/bins/game-svr/Cargo.toml              |   6 +-
+ mir2-rs/bins/game-svr/src/goldsales.rs        | 280 ++++++++++++++++++++++++++
+ mir2-rs/bins/game-svr/src/main.rs             |  43 +++-
+ mir2-rs/bins/game-svr/tests/goldsales_load.rs |  91 +++++++++
+ 5 files changed, 419 insertions(+), 2 deletions(-)
 
-## [2] 本片 delta 的变更面
-   mir2-rs/Cargo.lock                            |   1 +
-   mir2-rs/bins/game-svr/Cargo.toml              |   6 +-
-   mir2-rs/bins/game-svr/src/goldsales.rs        | 280 ++++++++++++++++++++++++++
-   mir2-rs/bins/game-svr/src/main.rs             |  43 +++-
-   mir2-rs/bins/game-svr/tests/goldsales_load.rs |  91 +++++++++
-   5 files changed, 419 insertions(+), 2 deletions(-)
+## [3] 写集边界
+  代码：mir2-rs/bins/game-svr/src/{goldsales,main}.rs、Cargo.toml、tests/goldsales_load.rs、Cargo.lock
+  证据：mir2-rs/tests/parity/m3/evidence-m3-selloff-goldsales-load-wire-20261013/**（含 ⑩-1 证据目录随父链带入）
+  `src/ sql/ MirClient / crates/protocol / crates/storage` = 空
 
-## [3] ⚠ 对 master 的 diff **暂不可交付**（base 落后于 master；⑩-1 未合 + 本片未 rebase）
-$ git diff --name-only refs/remotes/walgit/master HEAD -- src sql MirClient
-  src/BotSrv/AppService.cs
-  src/BotSrv/HeroPetSeqSelfCheck.cs
-  src/BotSrv/MShare.cs
-  src/BotSrv/Player/RobotPlayer.Operate.cs
-  src/BotSrv/Player/RobotPlayer.cs
-  src/BotSrv/Program.cs
-  src/BotSrv/RobotOptions.cs
-  ⇒ 非空：这些 src/BotSrv 文件是 master 侧（⑨-5 夹具等已合卡片）独有，本分支 base 2869a234b
-     基于 origin/master 67e9f6c3e，尚不含它们 ⇒ 对 master 的 diff 会把它们显示成删除。
-
-## [4] 结论 / 交付前提
-  - 本片内容（goldsales.rs + main.rs 接线 + 判据）就绪且 base..HEAD 干净；
-  - 但 **交付必须等 ⑩-1 合入 master 后 rebase 到新 master**，否则 master..HEAD 既含 ⑩-1 未合变更、
-    又缺 master 侧已合文件（src/BotSrv 等）⇒ 边界非空、不可合并；
-  - ⑩-1 当前合并阻塞：合并检查点 f8fe05a3（2026-10-13 18:05）因
-    bins/game-svr/src/main.rs 与 master CONFLICT(content) 而 skip，需作者 rebase 重交（见卡 comment）。
+## [4] 交付顺序说明
+  - 本片 head 的父链含 ⑩-1 的 rebase 后 commit（1c0efa7aa），故 `origin/master..HEAD` 会同时列出 ⑩-1 的
+    bins/game-svr + tests/parity/world/** 变更；**合并顺序应先 ⑩-1 后 ⑩-2**（或由 ⑩-2 的 approve 一并覆盖）。
+  - ⑩-1 的 rebase 与冲突解析见 world/selloff-consignment-20261013/README.md §2c。
