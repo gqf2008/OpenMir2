@@ -1,0 +1,6 @@
+RED: guild/castle 场景锚门失败（4 项 / 共 34 锚）
+  - 读侧不匹配 RobotPlayer.cs:4708-4809:4708 期望含 'public void SendGuildDlg()'，实际 '}'
+  - 读侧不匹配 RobotPlayer.cs:4708-4809:4809 期望含 '}'，实际 'MShare.MySelf.m_nTagY = 0;'
+  - 读侧不匹配 RobotPlayer.Operate.cs:1319-1540:1319 期望含 'case Messages.SM_OPENGUILDDLG:'，实际 'ClientGetGroupMembers(EDCode.DeCodeString(body));'
+  - 读侧不匹配 RobotPlayer.cs:4553:4553 期望含 'private void SendMerchantDlgSelect(int merchant, string rstr)'，实际 'MShare.g_WaitingStallItem.Item.Item.Name = "";'
+rc=1

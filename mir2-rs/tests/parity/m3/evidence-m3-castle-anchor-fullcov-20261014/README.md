@@ -32,8 +32,12 @@ tier：**L**（纯工具 + 注释/证据；`mir2-rs/crates/world/src/castle.rs` 
 | 外部改坏必红 | RC-1 `UserCastle.cs:930`→`:931` ⇒ `check`/`audit` RED 且点名；RC-2 文件尾部注入裸锚 `:7777` ⇒ RED；**还原后复绿且 `castle.rs` sha256 与改前一致**（05） |
 | 四门禁 | `fmt` rc=0 / `clippy -D warnings` rc=0 / `test` 101 suites **1200 passed 0 failed 22 ignored** / `msgcodegen` 604 rc=0（06–09） |
 
-改前锚数 = **83**（原件 158−76 补登+1 补 `:939`）；改后 = **159**。覆盖面区间从 `[(1,175)]`
-变为 `[(1,2807)]`。
+改前锚数（`ANCHORS` 表项，`git show 30c52f85d:mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py` 机判）
+= **82**；改后 = **159**（净增 **77**）。覆盖面区间从 `[(1,175)]` 变为 `[(1,2807)]`。
+
+> **O-2 订正（reviewer-6，收口片）**：原文写的「改前 = **83**（原件 158−76 补登+1 补 `:939`）」
+> 与上一片 reviewer-5/6 在 `2981b5a2f` 上机判的 **82** 冲突；本次复算 base `30c52f85d` 的表项
+> 确实 = 82（159−82 = 净增 77）⇒ 83 为笔误，已订正；`audit`/`check` 仍以 159 为准且自洽。
 
 ## M-2 的补登口径（重要，供复核）
 
@@ -49,6 +53,9 @@ tier：**L**（纯工具 + 注释/证据；`mir2-rs/crates/world/src/castle.rs` 
 
 1. **逐条语义级锚复核**：76 条补登锚的 `(line, token)` 已机判「该行含该串」，但「该行**就是**散文所声称
    的构造」这一层仍是抽样人核；建议后续片用 `audit --json` 的清单逐条做语义核对。
+   **部分收口（O-1，收口片）**：已在 `check`/`selftest`/`mutation` 新增「读侧 token 强度」牙
+   （每条锚整组至少要有一个非纯标点 token，整组只剩 `}`/`;` ⇒ RED；MUT9）—— 防「只钉在
+   空壳行上」的弱锚；「行内容 ⇄ 散文声称构造」的**语义层**仍诚实登记为抽样人核。
 2. `castle.rs` 的既有行号散文仍可能有历史漂移（本片只订正了 3 处机判确证的）。
 3. ⑧-6 卡级剩余 DoD 不变：① `bins/game-svr` 把 `SabukWConfig→CastleDefenseSpecs` 并调 `initialize`
    （等 owner 对 `bins` 串行序裁决）② 真机两侧 `run_guild_castle_pair.ps1` 同序列 `diff=0`

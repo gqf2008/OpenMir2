@@ -27,6 +27,9 @@ reviewer-5 M-2 clone46 用例、reviewer-6 M-1 peer baseline-invalid 自检）�
 2. **写侧**：`REGISTERED` 的 `file:spec` 必须能在场景锚文本里按同形解析出来（覆盖面已覆盖该点）。
 3. **读侧**：每条锚声明的每个 `(line, token)` 必须命中**冻结** `src/` 的对应行
    （改行号 / 改文件 / 越界 ⇒ RED）。token 取自冻结行本体，锁住锚的位置语义。
+4. **读侧 token 强度**（夹具族同形残余 Minor：结束行只有 `}` 的 token 判据较弱）：
+   每条锚**整组**至少要有一个**非纯标点** token；整组只剩 `}`/`;`/`(` 这类无信息量字符
+   ⇒ RED（防行号漂移时「只钉在一段空壳行上」假绿）。
 
 ## 用法
 
@@ -61,6 +64,20 @@ PATHS = {
 # `File.cs:A[-B][/C[-D]...]`；与 guild_castle_anchor_gate.py / castle_oracle_anchor_gate.py 同形。
 FILE_RE = re.compile(r'([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\.cs)')
 SPEC_RE = re.compile(r'/?\s*:(\d+(?:-\d+)?(?:/\d+(?:-\d+)?)*)')
+
+# 读侧 token 强度（判据 4）：整组只剩纯标点/空白 ⇒ 弱锚 ⇒ RED。
+_WEAK_ONLY_TOKEN_RE = re.compile(r'^[{}();,\s]*$')
+
+
+def _token_strength_findings(rows):
+    findings = []
+    for anchor, _rel, points in rows:
+        toks = [t.strip() for _l, t in points]
+        if not any(not _WEAK_ONLY_TOKEN_RE.match(t) for t in toks):
+            findings.append(
+                "读侧 token 强度：锚 %s 整组无有辨识度 token（%r）——"
+                "至少一条 token 须含实际内容，不能只靠 `}`/`;` 等纯标点钉位置" % (anchor, toks))
+    return findings
 
 
 # (anchor_text, src_relpath, [(line, expected_token), ...])
@@ -171,6 +188,7 @@ def _evaluate(rows=None, scenario_text=None, src_root=None):
             if token not in lines[line - 1]:
                 findings.append("读侧不匹配 %s:%d 期望含 %r，实际 %r"
                                 % (anchor, line, token, lines[line - 1].strip()))
+    findings.extend(_token_strength_findings(rows))
     return findings
 
 
@@ -247,6 +265,14 @@ def cmd_selftest(args):
         sys.stdout.write("  - %s\n" % f)
     ok = ok and t5
 
+    # 6) token 强度牙（夹具族同形残余 Minor）：整组只剩结束行 `}` ⇒ RED。
+    stub_weak = "BaseObject.cs:1179-1209 note"
+    weak_only = [("BaseObject.cs:1179-1209", PATHS["BaseObject.cs"], [(1209, "}")])]
+    w = _evaluate(rows=weak_only, scenario_text=stub_weak)
+    t6 = len(w) == 1 and "token 强度" in w[0]
+    sys.stdout.write("selftest token 强度牙齿: %s (weak=%r)\n" % ("GREEN" if t6 else "RED", w))
+    ok = ok and t6
+
     sys.stdout.write("SELFTEST %s\n" % ("GREEN" if ok else "RED"))
     return 0 if ok else 1
 
@@ -300,6 +326,16 @@ def cmd_mutation(args):
     f0 = _evaluate(scenario_text=real)
     sys.stdout.write("MUT4 真身 check: %s（%d 项）\n" % ("GREEN" if not f0 else "RED", len(f0)))
     ok = ok and not f0
+
+    # MUT5（token 强度，夹具族同形残余 Minor）：把 `BaseObject.cs:1179-1209` 整组退化成只看
+    # 结束行 `}`（写侧/读侧仍成立）⇒ 强度牙 RED。
+    weak5 = [("BaseObject.cs:1179-1209", PATHS["BaseObject.cs"], [(1209, "}")])
+             if a[0] == "BaseObject.cs:1179-1209" else a for a in REGISTERED]
+    f5 = _evaluate(rows=weak5, scenario_text=real)
+    red5 = any("token 强度" in f for f in f5)
+    sys.stdout.write("MUT5 token 强度(整组只剩 `}`): %s（%d 项）\n"
+                     % ("RED" if red5 else "GREEN", len(f5)))
+    ok = ok and red5
 
     sys.stdout.write("MUTATION %s (%s)\n" % ("GREEN" if ok else "RED", out))
     return 0 if ok else 1

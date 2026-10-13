@@ -1,0 +1,24 @@
+=== python -I guild_castle_anchor_gate.py check ===
+GREEN: guild/castle 场景锚门通过（31 锚 / 92 行点全部命中冻结 src/ 且覆盖面闭合）
+rc=0
+=== python -I guild_castle_anchor_gate.py selftest ===
+selftest 表结构: GREEN (31 锚)
+selftest 读侧 token 牙齿: GREEN (good=[] bad=1)
+selftest 覆盖面未登记牙齿: GREEN
+selftest 覆盖面表过期牙齿: GREEN (30 项)
+selftest 越界牙齿: GREEN
+selftest 真身 check: GREEN (0 项)
+selftest token 强度牙齿: GREEN (weak=["读侧 token 强度：锚 UserCastle.cs:311-446 整组无有辨识度 token（['}']）——至少一条 token 须含实际内容，不能只靠 `}`/`;` 等纯标点钉位置"])
+selftest 工具侧名字锚牙齿: GREEN (bad=["工具侧锚 X.fake：符号 'public void ThisSymbolDoesNotExistXYZ(' 不在 src/BotSrv/Player/RobotPlayer.cs（只锚名字；行号漂移不算）"])
+SELFTEST GREEN
+rc=0
+=== python -I guild_castle_anchor_gate.py mutation ===
+MUT1 范围漂移(:311-446→:311-448): RED（2 项）
+MUT2 范围漂移(:890-909→:890-910): RED（2 项）
+MUT3 读侧 token 漂移: RED（1 项）
+MUT4 真身 check: GREEN（0 项）
+MUT5 token 强度(整组只剩 `}`): RED（1 项）
+MUT6 工具侧名字锚(改坏符号): RED（1 项）
+MUT7 工具侧真身名字锚: GREEN（0 项）
+MUTATION GREEN (C:\Users\gxh\AppData\Local\Temp\gc-anchor-mut-fmruft7r)
+rc=0

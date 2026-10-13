@@ -24,6 +24,9 @@ doc-comment/README 锚行号是按**另一版本**抄的，与**冻结** `src/` 
 3. **覆盖面**：`COVERED_MARKERS` 括出的区间（⑧-6 M-2 收口后 = **整个 castle.rs**，
    文件首行 → EOF）内，**每个**`文件.cs:NNN` 锚都必须在 `ANCHORS` 表内（新增锚不登记 ⇒ RED），
    且区间内**不得**留裸锚（必须写成 `文件.cs:NNN`，防 `:NNN` 在不同文件间被误读）。
+4. **读侧 token 强度**（⑧-6 reviewer-6 O-1 / ⑧-10 reviewer-6 残余 Minor「结束行只有 `}` 的
+   token 判据较弱」）：每条锚**整组**至少要有一个**非纯标点** token；整组只剩 `}`/`;`/`(`
+   这类无信息量字符 ⇒ RED（防行号漂移时「只钉在一段空壳行上」假绿）。
 
 `audit` 子命令与覆盖面同源，用于复算/清点（`check` 是判据面，`audit` 是清单面）。
 
@@ -352,6 +355,21 @@ ANCHOR_RE = re.compile(
     r'([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\.cs):(\d+(?:-\d+)?(?:/\d+(?:-\d+)?)*)')
 BARE_ANCHOR_RE = re.compile(r'(?<![A-Za-z0-9_.]):(\d+(?:-\d+)?(?:/\d+(?:-\d+)?)*)')
 
+# 读侧 token 强度（判据 4）：整组只剩纯标点/空白 ⇒ 弱锚 ⇒ RED。
+# 逐条语义级核对（行内容与散文「声称构造」一一对应）仍是抽样人核，见证据 README 残留①。
+_WEAK_ONLY_TOKEN_RE = re.compile(r'^[{}();,\s]*$')
+
+
+def _token_strength_findings(anchors):
+    findings = []
+    for anchor, _rel, points in anchors:
+        toks = [t.strip() for _l, t in points]
+        if not any(not _WEAK_ONLY_TOKEN_RE.match(t) for t in toks):
+            findings.append(
+                "读侧 token 强度：锚 %s 整组无有辨识度 token（%r）——"
+                "至少一条 token 须含实际内容，不能只靠 `}`/`;` 等纯标点钉位置" % (anchor, toks))
+    return findings
+
 
 def _read_text(path):
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -470,6 +488,7 @@ def _evaluate(anchors=None, castle_text=None, readme_text=None, src_root=None,
             if token not in actual:
                 findings.append("读侧不匹配 %s:%d 期望含 %r，实际 %r"
                                 % (rel, line, token, actual.strip()))
+    findings.extend(_token_strength_findings(anchors))
     if coverage:
         findings.extend(_coverage_findings(anchors, castle_text))
     return findings
@@ -594,6 +613,15 @@ def cmd_selftest(args):
                         len(inv_real["uncovered"]), len(inv_real["bare"])))
     ok = ok and t7
 
+    # 9) token 强度牙（⑧-6 O-1 / ⑧-10 残余 Minor）：整组只剩结束行 `}` ⇒ RED；
+    #    含一条有辨识度 token 的整组不因该项红。
+    weak_only = [("UserCastle.cs:311-446", UC, [(446, "}")])]
+    w = _evaluate(anchors=weak_only, castle_text=castle_text, readme_text=readme_text)
+    t8 = (not any("token 强度" in f for f in g)) and len(w) == 1 and "token 强度" in w[0]
+    sys.stdout.write("selftest token 强度牙齿: %s (good=%d weak=%r)\n"
+                     % ("GREEN" if t8 else "RED", len(g), w))
+    ok = ok and t8
+
     sys.stdout.write("SELFTEST %s\n" % ("GREEN" if ok else "RED"))
     return 0 if ok else 1
 
@@ -687,6 +715,16 @@ def cmd_mutation(args):
     sys.stdout.write("MUT8 audit 清点器(删表项 UserCastle.cs:930): %s（uncovered=%d）\n"
                      % ("RED" if red8 else "GREEN", len(inv8["uncovered"])))
     ok = ok and red8
+
+    # MUT9（token 强度，⑧-6 O-1 / ⑧-10 残余 Minor）：把 `UserCastle.cs:311-446` 整组退化成
+    # 只看结束行 `}`（写侧/读侧仍成立）⇒ 强度牙 RED。证明该牙不是恒绿。
+    weak9 = [("UserCastle.cs:311-446", UC, [(446, "}")]) if a[0] == "UserCastle.cs:311-446" else a
+             for a in ANCHORS]
+    f9 = _evaluate(anchors=weak9, castle_text=castle_text, readme_text=readme_text)
+    red9 = any("token 强度" in f for f in f9)
+    sys.stdout.write("MUT9 token 强度(整组只剩 `}`): %s（%d 项）\n"
+                     % ("RED" if red9 else "GREEN", len(f9)))
+    ok = ok and red9
 
     sys.stdout.write("MUTATION %s (%s)\n" % ("GREEN" if ok else "RED", out))
     return 0 if ok else 1

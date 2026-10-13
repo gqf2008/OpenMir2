@@ -112,7 +112,7 @@
     "castle_tax": "UserCastle.cs:768-812 IncRateGold + :814-889 WithDrawalGolds/ReceiptGolds（N1）+ Merchant.cs:544/1250/1385/1637 税",
     "region": "UserCastle.cs:454-478 InCastleWarArea + WorldServer.cs:298-334 进图落点改写（GetHomeX/Y 用 Random(9)）",
     "frames": "Messages.cs:364/367/368/369/370/371/372/373/374/375/376/379/380/381/382/383（SM）+ 10303/10304（RM_BUILDGUILD_OK/FAIL）+ 1044/1045（CM_GUILDALLY/BREAKALLY）+ 1035..1041（CM_GUILD* 面板）",
-    "botsrv_primitives": "RobotPlayer.cs:4708-4809（SendGuildDlg/Home/MemberList/AddMem/DelMem/UpdateNotice/UpdateGrade）+ RobotPlayer.Operate.cs:1319-1540（全部 SM_GUILD*/SM_BUILDGUILD* 观测）+ RobotPlayer.cs:4553 SendMerchantDlgSelect（CM_MERCHANTDLGSELECT 1011）",
+    "botsrv_primitives": "src/BotSrv/** RobotPlayer.SendGuildDlg / SendGuildHome / SendGuildMemberList / SendGuildAddMem / SendGuildDelMem / SendGuildUpdateNotice / SendGuildUpdateGrade / SendMerchantDlgSelect（CM_MERCHANTDLGSELECT 1011）+ RobotPlayer.Operate 的 SM_GUILD*/SM_BUILDGUILD* 帧观测（夹具工具侧 ⇒ 只锚函数/字段名，不给行号；行号随 BotSrv 演进合法漂移，口径同 hero_pet_anchor_gate.py + whitelist T-46；机判见 guild_castle_anchor_gate.py 的 TOOL_ANCHORS）",
     "db": "sql/ 无 guild/guildmember/castle 表或列（盘点 §1.J，`rg -ni 'guild|castle' sql/` 唯一命中 characters.AllowGuildReCall）⇒ 两侧都不落库；持久产物 = GuildBase/GuildList.txt + GuildBase/Guilds/<名>.txt + Castle/<N>/SabukW.txt + AttackSabukWall.txt",
     "clock_injection": "openmir2-m3-clock-injection（C# 影子 hook MIR2_CLOCK_* + Rust world.clock_ms/now_ms()）；时间门 = GuildWarTime / StartCastleWarDays / StartCastlewarTime / CastleWarTime / GetCastleTime / ShowCastleWarEndMsgTime / RepairDoor 60s / SaveTick 10min"
   },
