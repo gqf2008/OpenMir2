@@ -1,16 +1,16 @@
 # 02 — 改前 / 改后
 
-卡：`openmir2-m3-selloff-consignment-world`。base（交付时 `refs/heads/master`）= `0f9fe9997a4ed717ee1361bfb2134329fd04472a`。
-交付 head 已 `git merge origin/master`（见末尾）。
+卡：`openmir2-m3-selloff-consignment-world`。base（交付时 `refs/heads/master`）= `029d23eae`（rebase 片；原 0f9fe999 的 head 见末尾 F-1 节）。
+交付 head 的父链已含 `origin/master`（见末尾「rebase 片」）。
 
 ## 写集（`git diff --stat refs/heads/master HEAD`）
 
 ```
- mir2-rs/bins/game-svr/src/config.rs |  46 +++
- mir2-rs/bins/game-svr/src/lib.rs    |   1 +
- mir2-rs/bins/game-svr/src/main.rs   | 770 +++++++++++++++++++++++++++++++++
- mir2-rs/bins/game-svr/src/selloff.rs | 1759 ++++++++++++++++++++++++++++（新文件）
- mir2-rs/bins/game-svr/src/trade.rs  |   2 +-
+ mir2-rs/bins/game-svr/src/config.rs  |   46 +
+ mir2-rs/bins/game-svr/src/lib.rs     |    1 +
+ mir2-rs/bins/game-svr/src/main.rs    |  776 +++++++++++++++
+ mir2-rs/bins/game-svr/src/selloff.rs | 1799 ++++++++++++++++++++++++++++（新文件）
+ mir2-rs/bins/game-svr/src/trade.rs   |    2 +-
 ```
 
 - `crates/world/**` **未改动**：`SellOffItemList`/`SaleDeal`/`SellOffConfirm` 在 oracle 是进程级全局 +
@@ -93,3 +93,27 @@ Some(_) => {
 
 **F-1 交付的 base/head**：base = 交付时 `refs/remotes/origin/master`（`67e9f6c3e097da834ef5769eff1c5415e97bb458`，本仓 `refs/heads/master` 本地快照为 `d4d5b89c7`）；
 head = 本片交付 commit（交付时记录于 patch entry）。
+
+## rebase 片（2026-10-13，接管 + 解合并冲突；worktree `m3hp` / principal `openmir2-worker-20`）
+
+**为什么**：原 head `2869a234b` 已被 reviewer-5 `approve`（`de35194dc6 @2869a234b`），但协调者两次合并检查点
+（`f8fe05a319` @master `cf3f81c35`、`1a01837014` @master `8a476dcaa`）都在 `git merge` 时于
+`mir2-rs/bins/game-svr/src/main.rs` 报 `CONFLICT(content)`；协调者要求**作者 rebase 到 master 后重交**。
+原 owner `openmir2-worker-11` 的车道已按 `brief-m2svr-next`（17:1x）转 `openmir2-client-e2e-enter-gaps`，
+`brief-m3hp`（17:40）把本卡列进 m3hp 队列 ⇒ 由 worker-20 接管做作者侧 rebase。
+
+**怎么做**：`git rebase origin/master`（`029d23eae`）重放 ⑩-1 的三个 commit；唯一冲突 `main.rs`
+（两侧都在 `mod tests` 末尾追加新测试，且 master 侧新增用例构造 `SessionGround` 时缺 ⑩-1 新增字段）。
+解析口径（不改被审语义，只做**两侧并集**）：
+
+1. `mod tests` 末尾：保留 **master 侧新增的 3 条测试**（`pickup_group_attribution_uses_registry` /
+   `bag_takeoff_blocked_while_dealing` / `drop_blocked_by_fresh_deal_last_tick`）**与 ⑩-1 的 2 条
+   进程级用例**（`selloff_cm_dispatch_emits_oracle_frames_on_both_connections` /
+   `selloff_cancel_paths_dispatch_and_mutate_global_book`），逐函数不动；
+2. master 侧 3 条用例的 `SessionGround { ... }` 字面量补上 ⑩-1 新增字段 `soft_version_date: 0` /
+   `game_point: 0`（否则新 struct 字段缺失，编译不过）；
+3. 原 `70c195b86`（clippy 文档续行修复）在 master 已含同形修复 ⇒ rebase 判定 `already upstream` 丢弃。
+
+**保真校验**：`git diff 2869a234b HEAD -- mir2-rs/bins/game-svr/src/{selloff,config,lib,trade}.rs` = **空**
+（⑩-1 的实现/配置文件逐字节不变）；`main.rs` 相对 `2869a234b` 的差异 = master 自 `67e9f6c3e` 起的增量。
+`crates/world/**` 仍零改动。

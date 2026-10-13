@@ -1,3 +1,5 @@
-# 命令（cwd = mir2-rs/，CARGO_TARGET_DIR=E:/tmp/m2svr-target）：
+# 命令（cwd = mir2-rs/，CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target）：
 #   cargo fmt --all -- --check
 # 读数：rc=0；stdout/stderr 为空（无格式差异）。
+# 注（rebase 片 2026-10-13，worktree m3hp / principal openmir2-worker-20）：本片 rebase 到
+#   master `029d23eae` 后按同一命令重跑。
