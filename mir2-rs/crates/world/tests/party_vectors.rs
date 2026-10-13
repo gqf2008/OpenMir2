@@ -375,3 +375,145 @@ fn del_group_member_fail_codes_are_oracle_exact() {
         }]
     );
 }
+
+// ---------------------------------------------------------------------------
+// F-1（reviewer-5 `fc68afca`）：oracle `Die()` → `groupOwnerPlay.DelMember(this)`
+// ---------------------------------------------------------------------------
+
+/// **F-1**：成员死亡 ⇒ oracle `Die()`（`PlayObject.cs:1975-1977`）在死亡写入点调
+/// `groupOwnerPlay.DelMember(this)`。本用例走**真实死亡写入点**（`hp == 0` + `World::tick()`
+/// = `settle_deaths` / oracle `Die()`），不手工调 `DelMember` —— 这样接线若被删，用例必红。
+///
+/// 3 人组 ⇒ `CancelGroup()` 返回 true（`Count > 1`）⇒ 组**不散**、只摘死亡成员，且
+/// `SendGroupMembers` 下发给其余成员；死亡者仍在线 ⇒ 它自己的退出说词 / `SM_GROUPCANCEL` 照发。
+#[test]
+fn die_member_triggers_oracle_del_member_and_group_survives() {
+    let (mut w, l, t, u) = three_players();
+    w.party_create_group(l, "T", &cfg());
+    w.party_add_group_member(l, "U", &cfg());
+    assert_eq!(w.entities.get(l).unwrap().group_members, vec![l, t, u]);
+
+    // 走真实死亡写入点：`hp == 0`（oracle `Struck` → `Die()`；Rust `settle_deaths`）。
+    w.entities.get_mut(t).unwrap().hp = 0;
+    let rec = w.tick();
+
+    assert!(w.entities.get(t).unwrap().death, "Die() 置 Death = true");
+    assert_eq!(
+        w.entities.get(t).unwrap().group_owner,
+        0,
+        "Die→DelMember→LeaveGroup 必须清死亡者 GroupOwner（reviewer 探针的根因）"
+    );
+    assert_eq!(
+        w.entities.get(l).unwrap().group_members,
+        vec![l, u],
+        "团长成员表摘除死者，其余成员保留"
+    );
+    // `Count > 1` ⇒ `CancelGroup()` 返回 true ⇒ 组不散。
+    assert_eq!(w.entities.get(l).unwrap().group_owner, l, "3 人组不散");
+    assert_eq!(w.entities.get(u).unwrap().group_owner, l, "其余成员仍在组");
+
+    // 事件面（立即帧 → 排队帧按 `(byte)wIdent` 升序）：
+    // `SendGroupMembers`（立即，成员表已不含死者）→ `RM_GROUPCANCEL`(156) → `RM_GROUPMESSAGE`(253)。
+    let expected = vec![
+        PartyEvent::GroupMembers {
+            target: l,
+            members_text: "L/U/".into(),
+        },
+        PartyEvent::GroupMembers {
+            target: u,
+            members_text: "L/U/".into(),
+        },
+        PartyEvent::GroupCancel { target: t },
+        // `SendGroupText(sender=T)`：`recog` = 发送者 T，收件人 = 当时组长成员表 [L,T,U]。
+        sys(l, t, "〖组队〗T 已经退出了本组."),
+        sys(t, t, "〖组队〗T 已经退出了本组."),
+        sys(u, t, "〖组队〗T 已经退出了本组."),
+    ];
+    assert_eq!(rec.party_events, expected);
+
+    // 复活后重新入组：`group_owner == 0` 是入组前置（`-3`），证明无残留死组员。
+    w.entities.get_mut(t).unwrap().death = false;
+    w.entities.get_mut(t).unwrap().allow_group = true;
+    assert_eq!(
+        w.party_add_group_member(l, "T", &cfg()),
+        vec![
+            PartyEvent::AddMemberOk { target: l },
+            PartyEvent::GroupMembers {
+                target: l,
+                members_text: "L/U/T/".into(),
+            },
+            PartyEvent::GroupMembers {
+                target: u,
+                members_text: "L/U/T/".into(),
+            },
+            PartyEvent::GroupMembers {
+                target: t,
+                members_text: "L/U/T/".into(),
+            },
+            sys(l, t, "〖组队〗T 已加入小组."),
+            sys(u, t, "〖组队〗T 已加入小组."),
+            sys(t, t, "〖组队〗T 已加入小组."),
+        ]
+    );
+}
+
+/// **F-1**：团长死亡 ⇒ `Die()` 里 `groupOwnerPlay == 自己` ⇒ `DelMember(this)` 的团长支
+/// （`PlayObject.cs:5143-5151`）：从尾到头逐成员 `LeaveGroup()` 后整组散。
+#[test]
+fn die_leader_disbands_group() {
+    let (mut w, l, t, u) = three_players();
+    w.party_create_group(l, "T", &cfg());
+    w.party_add_group_member(l, "U", &cfg());
+
+    w.entities.get_mut(l).unwrap().hp = 0;
+    let rec = w.tick();
+
+    for id in [l, t, u] {
+        assert!(
+            w.entities.get(id).unwrap().group_owner == 0,
+            "团长死亡 ⇒ 全组 GroupOwner 清 0（id={id}）"
+        );
+    }
+    assert!(w.entities.get(l).unwrap().group_members.is_empty());
+    let cancels: Vec<i32> = rec
+        .party_events
+        .iter()
+        .filter_map(|e| match e {
+            PartyEvent::GroupCancel { target } => Some(*target),
+            _ => None,
+        })
+        .collect();
+    for id in [l, t, u] {
+        assert!(
+            cancels.contains(&id),
+            "每个成员都收 SM_GROUPCANCEL（id={id}，实际 {cancels:?}）"
+        );
+    }
+}
+
+/// **M-1**（reviewer-5 `fc68afca` Minor）：oracle `WorldEngine.GetPlayObject(name)` 只扫
+/// `PlayObjectList`（仅玩家）；本仓实体表含怪物/NPC 且都带 `name` ⇒ 必须按 `Race == Play 过滤。
+#[test]
+fn play_object_by_name_ignores_non_player_entities() {
+    // 情形 1：玩家 T(2) 与怪物 T(50) 同名 ⇒ 命中玩家。
+    let (mut w, _l, t, _u) = three_players();
+    let mut mon_same_name = Entity::new(50, "T", 10, 10);
+    mon_same_name.race = 1; // 非 Play
+    w.add_entity(mon_same_name);
+    assert_eq!(w.party_play_object_by_name("T"), Some(t));
+
+    // 情形 2：同名者只有怪物 ⇒ oracle 判 null（`-2`），Rust 也必须 `-2`（不再误命中怪物）。
+    let mut w = World::new(32, 32);
+    let l = player(&mut w, 1, "L");
+    let mut mon = Entity::new(50, "BOSS", 10, 10);
+    mon.race = 1;
+    w.add_entity(mon);
+    assert_eq!(w.party_play_object_by_name("BOSS"), None);
+    assert_eq!(
+        w.party_create_group(l, "BOSS", &cfg()),
+        vec![PartyEvent::CreateGroupFail {
+            target: l,
+            recog: -2
+        }]
+    );
+}

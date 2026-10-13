@@ -791,6 +791,43 @@ fn handle_party_cmd(
     );
 }
 
+/// **M3⑦-实现 2 F-1**：oracle `PlayObject.Die()` 的 `DelMember` 死亡退组帧下发。
+///
+/// `world.tick()` 在 `settle_deaths`（`hp == 0` 的死亡写入点，= oracle `Die()` 的等价处）里按
+/// `PlayObject.cs:1975-1977` 调 `world.party_del_member`，事件落在 `TickRecord::party_events`。
+/// 与断线路径（`Disappear()`，`PlayObject.Message.cs:2138-2142`）的差别：**死亡者仍在线**
+/// ⇒ 它自己的回帧照发（`online` 里找得到它），**不要**复用「已摘 online ⇒ 丢自身帧」口径。
+/// 事件顺序已按 oracle 的「立即帧 / `MsgQueue` 出队序」排好，别重排。
+fn drain_party_death_events(
+    rec: &mir2_world::TickRecord,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    if rec.party_events.is_empty() {
+        return;
+    }
+    let mut delivered = 0usize;
+    for ev in &rec.party_events {
+        let (to, body) = partywire::event_body(ev);
+        let Some(t) = online.iter().find(|e| e.actor_id == to) else {
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "死亡退组回帧") else {
+            continue;
+        };
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: t.socket,
+            body,
+        });
+        delivered += 1;
+    }
+    glog!(
+        "INF",
+        "死亡退组（oracle Die→DelMember）：{} 条事件 → {delivered} 帧",
+        rec.party_events.len()
+    );
+}
+
 /// `CM_PICKUP`(1001) / `CM_DROPITEM`(1000) 的派发（owner §26）。
 ///
 /// 口径：纯判定在 `ground::pick_up`/`drop_item`（m3bag 交付，逐字段对 oracle 向量），
@@ -3992,6 +4029,9 @@ fn sim_loop(
     }
     // `Exps.conf` 的 NeedExps（`BaseObject.GetLevelExp` 的数据源；存档 `MaxExp` 也用它）。
     world.need_exps = enter_cfg.need_exps.clone();
+    // **M3⑦-实现 2 F-1**：把与 4 条 `CM_*` 组队派发同一份配置灌进世界，供 `settle_deaths`
+    // 复刻 oracle `Die()` 的 `groupOwnerPlay.DelMember(this)`（`PlayObject.cs:1975-1977`）。
+    world.party_cfg = party_cfg.clone();
     // `Envir.Flag.boEXPRATE`/`ExpRate`（`PlayObject.Base.cs:143-146`）——地图级杀怪经验倍率。
     // `map_id` = 注册表下标（与 `resolve_map_id` 同源）⇒ 逐图灌进 world；无注册表 ⇒ 全 `None`（行为不变）。
     if let Some(reg) = registry.as_ref() {
@@ -5241,6 +5281,11 @@ fn sim_loop(
             }
         }
         let rec = world.tick();
+        // **M3⑦-实现 2 F-1**：死亡退组（oracle `Die()`→`DelMember`）帧——在本 tick 的
+        // `settle_deaths` 里已按 oracle 序算好事件，这里只负责回帧（死亡者仍在线，自身帧照发）。
+        // 放在 `party_run_tick()` 之前：oracle `Run()` 的组队段（`PlayObject.Message.cs:704-719`）
+        // 晚于 `Die()`，而 `Die()` 已把死亡成员摘出（段内无死成员可清）。
+        drain_party_death_events(&rec, &online, &gates);
         // `openmir2-m3-party-group-state`：`PlayObject.Run()` 的组队段（`PlayObject.Message.cs:704-719`）
         // 在同一 tick 的恢复段之前（`base.Run()` 在 `:765`，晚于组队段）。
         world.party_run_tick();
@@ -6222,6 +6267,159 @@ mod tests {
             mir2_protocol::edcode::decode(&delok[12..]),
             gbk_encode("T"),
             "SM_GROUPDELMEM_OK 尾 = EncodeString(被删者名)"
+        );
+    }
+
+    /// **F-1（reviewer-5 `fc68afca`）进程级判据**：走**生产路径** —— `world.tick()` 在
+    /// `settle_deaths`（`hp == 0` 的死亡写入点 = oracle `Die()`）里按 `PlayObject.cs:1975-1977`
+    /// 调 `party_del_member`，再由 `drain_party_death_events` 回帧。断言：
+    /// ① 死亡成员 `group_owner` 清 0；② 死亡者**仍在线** ⇒ 它自己的 `SM_GROUPCANCEL(666)` 与
+    /// 退出说词 `SM_SYSMESSAGE(100)` 照发（不复用断线路径的「已摘 online ⇒ 丢自身帧」口径）；
+    /// ③ 团长侧 `SM_GROUPCANCEL(666)` + 解散说词照发。
+    ///
+    /// 红检：把 `settle_deaths` 里的 `party_del_member` 调用删掉 ⇒ 本用例必 FAILED（无帧 + owner 不清）。
+    #[test]
+    fn die_triggers_del_member_frames_on_production_path() {
+        use mir2_world::{Entity, PartyConfig};
+        use std::collections::HashMap;
+
+        fn drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, Vec<u8>)> {
+            let mut out = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                match ev {
+                    SimToGate::SendFrame { socket, body } => out.push((socket, body)),
+                    other => panic!("死亡退组路径不得发 SendFrame 以外的命令，实得 {other:?}"),
+                }
+            }
+            out
+        }
+        fn ident(body: &[u8]) -> u16 {
+            u16::from_le_bytes([body[4], body[5]])
+        }
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut world = mir2_world::World::new(32, 32);
+        let l = world.add_entity(Entity::new(1, "L", 10, 10));
+        let t = world.add_entity(Entity::new(2, "T", 11, 10));
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "L".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: l,
+            },
+            OnlineEntry {
+                account: "b".into(),
+                chr_name: "T".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 6,
+                actor_id: t,
+            },
+        ];
+        let cfg = PartyConfig::default();
+        // 生产的 world 由 `sim_loop` 灌入同一份配置；此处照做。
+        world.party_cfg = cfg.clone();
+
+        // 生产建组（T 开组 → L 建组），清空中间帧。
+        handle_party_cmd(
+            mir2_protocol::messages::CM_GROUPMODE,
+            1,
+            None,
+            "T",
+            6,
+            &online,
+            &mut world,
+            &gates,
+            &cfg,
+        );
+        let _ = drain(&mut rx0);
+        handle_party_cmd(
+            mir2_protocol::messages::CM_CREATEGROUP,
+            0,
+            Some("T"),
+            "L",
+            5,
+            &online,
+            &mut world,
+            &gates,
+            &cfg,
+        );
+        let _ = drain(&mut rx0);
+        assert_eq!(
+            world.entities.get(t).unwrap().group_owner,
+            l,
+            "建组后 T 在 L 组"
+        );
+
+        // 死亡写入点（`hp == 0`）→ `tick()` 的 `settle_deaths` 触发 `Die()` 的 `DelMember`。
+        world.entities.get_mut(t).unwrap().hp = 0;
+        let rec = world.tick();
+        assert_eq!(
+            world.entities.get(t).unwrap().group_owner,
+            0,
+            "Die→DelMember 必须在 tick 内清死亡者 GroupOwner"
+        );
+        drain_party_death_events(&rec, &online, &gates);
+
+        // 2 人组：T 死 ⇒ `CancelGroup()`（`Count <= 1`）⇒ 组散。
+        // 全局序：GCANCEL(L,立即) → GCANCEL(T,排队 156) → SYS(T 退出→L/T,253) → SYS(解散→L,253)。
+        let frames = drain(&mut rx0);
+        let idents: Vec<u16> = frames.iter().map(|(_, b)| ident(b)).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_GROUPCANCEL,
+                mir2_protocol::messages::SM_GROUPCANCEL,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+            ],
+            "死亡退组帧序不符（实际 {idents:?}）"
+        );
+        // 死亡者 T（socket 6）仍在线 ⇒ 它自己的 GCANCEL + 退出说词必须照发。
+        let t_frames: Vec<u16> = frames
+            .iter()
+            .filter(|(s, _)| *s == 6)
+            .map(|(_, b)| ident(b))
+            .collect();
+        assert_eq!(
+            t_frames,
+            vec![
+                mir2_protocol::messages::SM_GROUPCANCEL,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+            ],
+            "死亡者自身回帧被吞（应仍在线照发）"
+        );
+        let l_frames: Vec<u16> = frames
+            .iter()
+            .filter(|(s, _)| *s == 5)
+            .map(|(_, b)| ident(b))
+            .collect();
+        assert_eq!(
+            l_frames,
+            vec![
+                mir2_protocol::messages::SM_GROUPCANCEL,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+            ],
+            "团长收到 SM_GROUPCANCEL + 退出/解散说词"
+        );
+        // 退出说词尾 = EncodeString(prefix + "T 已经退出了本组.")。
+        let t_sys = frames
+            .iter()
+            .find(|(s, b)| *s == 6 && ident(b) == mir2_protocol::messages::SM_SYSMESSAGE)
+            .map(|(_, b)| b)
+            .unwrap();
+        assert_eq!(
+            mir2_protocol::edcode::decode(&t_sys[12..]),
+            gbk_encode("〖组队〗T 已经退出了本组."),
+            "SM_SYSMESSAGE 尾 = EncodeString(组队前缀 + 退出说词)"
         );
     }
 

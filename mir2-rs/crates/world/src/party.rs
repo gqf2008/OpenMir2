@@ -36,6 +36,13 @@
 //! `RM_GROUPMESSAGE ⇒ SM_SYSMESSAGE(100)`、`RM_SYSMESSAGE ⇒ SM_SYSMESSAGE(100)`、
 //! `RM_GROUPCANCEL ⇒ SM_GROUPCANCEL(666)`；三者尾均为 `EDCode.EncodeString`（`SendSocket(ClientMsg, ...)`）。
 //!
+//! ## 已接线：`Die()` 的死亡退组（F-1 收口）
+//! oracle `PlayObject.Die()`（`src/M2Server/Player/PlayObject.cs:1964-1978`）在置 `Death` 后判
+//! `if (GroupOwner != 0) groupOwnerPlay.DelMember(this)`（`:1975-1977`）⇒ 死亡者立即退组；
+//! 团长死亡 ⇒ 逐成员 `LeaveGroup()` 后整组散。本仓在 `world.rs::settle_deaths`（`hp==0` 的
+//! 写入点，即 oracle `Die()` 的等价处）调用 [`World::party_del_member`]，事件落
+//! `TickRecord::party_events`，由宿主逐条回帧。
+//!
 //! ## 未建模（登记，随 ⑦ 对齐窗口收口）
 //! - `FunctionNPC.GotoLable(this, "@GroupClose"/"@GroupCreate"/"@GroupAddMember"/"@GroupDelMember")`
 //!   （`Operate.cs:806/843/881/907`）：脚本触发面属 ⑥/⑦ 扩展卡，本片不发事件（`FunctionNPC != null`
@@ -44,7 +51,7 @@
 //!   非 §6 核心，归可选卡。
 //! - `AllowGroupReCall`（`PlayObject.cs:224`）字段已在 [`Entity`] 就位，但本模块无消费点（同上扩展面）。
 
-use crate::entity::Entity;
+use crate::entity::{Entity, ACTOR_RACE_PLAY};
 use crate::world::World;
 
 /// `GameSvrConf.cs:1402` 的 `GroupMembersMax` 初值（部署 `Server.conf:292` 同为 `10`）。
@@ -183,10 +190,17 @@ impl Emitter {
 impl World {
     /// C# `SystemShare.WorldEngine.GetPlayObject(name)`（按 `ChrName` 线性扫 `PlayObjectList`）。
     ///
+    /// oracle 只扫 `PlayObjectList`（**仅玩家**）；本仓实体表含怪物/NPC 且都带 `name`
+    /// （reviewer-5 `fc68afca` 的 M-1：怪物/NPC 名与目标名重名时会误命中 ⇒ 走到 `-3/-4`，
+    /// 而 oracle 判 `playObject==null` 回 `-2`）⇒ 这里按 `Race == Play` 过滤。
+    ///
     /// 本仓玩家名唯一；返回首个匹配的 `ActorId`。遍历顺序 = 实体槽位序（确定性）。
     #[must_use]
     pub fn party_play_object_by_name(&self, name: &str) -> Option<i32> {
-        self.entities.iter().find(|e| e.name == name).map(|e| e.id)
+        self.entities
+            .iter()
+            .find(|e| e.race == ACTOR_RACE_PLAY && e.name == name)
+            .map(|e| e.id)
     }
 
     fn party_group_owner_of(&self, id: i32) -> i32 {
