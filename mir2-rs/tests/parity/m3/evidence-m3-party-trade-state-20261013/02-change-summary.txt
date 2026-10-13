@@ -1,0 +1,31 @@
+M3⑦-实现 3 变更摘要（基线 origin/master d4d5b89c）
+
+新增：
+  mir2-rs/bins/game-svr/src/trade.rs   交易会话状态机 + 帧编码（纯函数，无 I/O）
+     - DealConfig / DealState / DealSide / DealEvent / DealWire
+     - deal_try / deal_add_item / deal_del_item / deal_change_gold / deal_cancel /
+       deal_cancel_a / deal_end / deal_event_body
+     - 立即帧 + 排队帧两桶（Emitter；SendUpdateMsg 同目标同 ident 去重）
+     - 18 条单测（判据本体）
+
+改：
+  mir2-rs/bins/game-svr/src/lib.rs      + pub mod trade;
+  mir2-rs/bins/game-svr/src/ability.rs  Ability 加 #[derive(Default)]（测试构造 DealWire 用；纯加法）
+  mir2-rs/bins/game-svr/src/config.rs   GateConfig 增 8 项：
+       green_msg_f_color/green_msg_b_color（ServerConf.cs:329-330，缺省 0xDB/0xFF）
+       try_deal_time/deal_ok_time（ServerConf.cs:308-309，缺省 3000/1000）
+       can_not_get_back_deal/disable_deal（ServerConf.cs:310-311，缺省 true/false）
+       （+ [Setup] 解析键 GREENMSGFCOLOR/GREENMSGBCOLOR/TRYDEALTIME/DEALOKTIME/
+         CANNOTGETBACKDEAL/DISABLEDEAL）
+  mir2-rs/bins/game-svr/src/main.rs
+       + pose_create（GetPoseCreate）、is_play_actor
+       + handle_deal_cmd（6 条 CM_DEAL* 派发 + 双方会话态取出/回写 + 逐帧路由）
+       + deal_cancel_between（掉线 DealCancelA / 每 tick DealCancel 入口）
+       + drain_deal_tick（Run() 每 tick 自动取消）
+       + EnterConfig.trade: DealConfig（从 GateConfig 装）
+       + sim_loop：trade_sessions 表；CM_DEAL* 派发支；ground pickup 的 dealing 守卫接真值；
+         踢旧/顶号/断线三处跑 deal_cancel_between；每 tick drain_deal_tick
+       + handle_ground_cmd 增 dealing 形参（3 个调用点：生产 1 + 单测 2）
+
+边界：src/ / sql/ / MirClient 零改动（见 20-boundary.txt）。
+未做（留窗口车道）：真机两侧同序列 diff=0（等夹具 + 独占窗口；本片只交 DoD②③ 的构造/进程级判据）。

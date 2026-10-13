@@ -1,0 +1,8 @@
+# 外部改坏（临时副本，不改仓库文件）：把 T-43 行改成 T-44 ⇒ 制造第二个重复号
+# command: sed 's/^| T-43 |/| T-44 |/' whitelist.md > /tmp copy ; python -I m3_whitelist_registry_audit.py audit --strict --whitelist <copy>
+WHITELIST_REGISTRY scope=T-36+ entries=10 duplicates=[42, 44] strict=True tokens=unavailable
+  NOTE fixture_matrix.py 未在本树（其卡未合入）⇒ 只查全局编号唯一性
+  FINDING DUPLICATE T-42 × 2 @ L209,L222（全局唯一编号约定被破坏）
+  FINDING DUPLICATE T-44 × 2 @ L224,L228（全局唯一编号约定被破坏）
+WHITELIST_REGISTRY_RED 2：DUPLICATE T-42 @ L209,L222; DUPLICATE T-44 @ L224,L228
+rc=1

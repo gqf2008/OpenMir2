@@ -22,7 +22,9 @@ pub mod map;
 pub mod merchant;
 pub mod monai;
 pub mod mongen;
+pub mod party;
 pub mod session;
+pub mod slave;
 pub mod world;
 
 pub use aoi::{search_view_range, search_view_range_death, update_visible_gay, visible_snapshot};
@@ -59,5 +61,17 @@ pub use mongen::{
     MonGenConfig, MonGenEntry, MonGenState, MonGenThread, MonsterCreator, TickClockFn,
     MON_GEN_THREAD_MON_LIMIT,
 };
+pub use party::{
+    PartyConfig, PartyEvent, PARTY_CANCEL_GROUP_MSG, PARTY_EXIT_GROUP_MSG,
+    PARTY_GROUP_MEMBERS_MAX_DEFAULT, PARTY_GROUP_MSG_B_COLOR_DEFAULT,
+    PARTY_GROUP_MSG_F_COLOR_DEFAULT, PARTY_GROUP_MSG_PREFIX_DEFAULT, PARTY_JOIN_GROUP_MSG_DEFAULT,
+    PARTY_LEADER_CLOSE_MSG,
+};
 pub use session::{Session, SessionError, WorldStage};
+pub use slave::{
+    check_server_make_slave, is_slave, mag_make_angel_slave_plan, mag_make_sinsu_slave_plan,
+    mag_make_slave_plan, make_slave_gate, recall_slave_target, space_move_get_rand_xy,
+    summon_slave, MakeSlavePlan, SlaveSpawner, SummonOutcome, CLONE_DEFERRED, SKILL_46,
+    SKILL_ANGEL, SKILL_SINSU, SKILL_SKELLETON, SKILL_TAMMING,
+};
 pub use world::{Command, EntitySnapshot, FloorItemView, TickRecord, World, TICK_INTERVAL_MS};

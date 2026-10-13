@@ -1,0 +1,38 @@
+# 边界：oracle 冻结（src / sql / MirClient）零改动
+$ git diff --name-only master..HEAD -- src sql MirClient
+（空 = 通过）
+
+# base = refs/heads/master @ 15510a47d21c5da6b907d475097d9dadf6a7dbe3
+# code head = 32315ccf58723803e87b79dfb45a3f051462d2a0（返工，替代被审 dd375e4e46dd553c1e63c68847909a71b59aa407）
+
+# 全量改动（相对 master）
+mir2-rs/bins/game-svr/src/config.rs
+mir2-rs/bins/game-svr/src/lib.rs
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/shop.rs
+mir2-rs/crates/world/src/merchant.rs
+mir2-rs/crates/world/src/world.rs
+mir2-rs/tests/parity/whitelist.md
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/00-oracle-anchors.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/01-scope-and-writeset.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/02-newtests.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC1-goods-insert-front-mutated.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC1-goods-insert-front-restored.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC2-buy-money-gate-mutated.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC2-buy-money-gate-restored.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC3-sell-incgold-gate-mutated.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC3-sell-incgold-gate-restored.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC4-sendbuyprice-recog-mutated.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC4-sendbuyprice-recog-restored.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC5-f1-merchantsay-reverted-mutated.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC5-f1-merchantsay-reverted-restored.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC6-f2-repair-fallback-removed-mutated.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC6-f2-repair-fallback-removed-restored.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC7-edcode-tail-raw-mutated.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redcheck-RC7-edcode-tail-raw-restored.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/03-redchecks.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/04-gates.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/04b-workspace-test.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/05-boundary.txt
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/README.md
+mir2-rs/tests/parity/world/shop-dialog-wiring-20261013/SHA256SUMS.txt

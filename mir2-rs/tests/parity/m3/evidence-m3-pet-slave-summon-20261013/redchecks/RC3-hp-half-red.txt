@@ -1,0 +1,51 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.91s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 19 tests
+test slave::tests::check_server_make_slave_blocks_only_on_pending ... ok
+test slave::tests::angel_uses_magic_level_for_both ... ok
+test slave::tests::make_slave_gate_is_strictly_less ... ok
+test slave::tests::recall_slave_target_scans_from_tail ... ok
+test slave::tests::redcheck_gate_must_be_strict ... ok
+test slave::tests::sinsu_selection_breaks_on_first_match ... ok
+test slave::tests::skeleton_selection_keeps_last_match_no_break ... ok
+test slave::tests::sinsu_selection_falls_back_to_dragon_name ... ok
+test slave::tests::skeleton_selection_stops_at_zero_hum_level ... ok
+test slave::tests::space_move_steps_by_n18_when_blocked ... ok
+test slave::tests::space_move_returns_start_without_rng_when_walkable ... ok
+test slave::tests::make_slave_adopt_keeps_full_hp ... ok
+test slave::tests::summon_slave_rejected_when_slave_list_full ... ok
+test slave::tests::summon_slave_sinsu_falls_back_to_recall ... ok
+test slave::tests::summon_slave_skeleton_end_to_end ... FAILED
+test slave::tests::make_slave_adopt_writes_oracle_tail ... FAILED
+test slave::tests::summon_slave_ignores_other_skills ... ok
+test slave::tests::recall_slave_moves_tail_match_to_front ... ok
+test slave::tests::recall_slave_no_match_is_noop ... ok
+
+failures:
+
+---- slave::tests::summon_slave_skeleton_end_to_end stdout ----
+
+thread 'slave::tests::summon_slave_skeleton_end_to_end' (19344) panicked at crates\world\src\slave.rs:890:9:
+assertion `left == right` failed: HP 补半
+  left: 60
+ right: 70
+
+---- slave::tests::make_slave_adopt_writes_oracle_tail stdout ----
+
+thread 'slave::tests::make_slave_adopt_writes_oracle_tail' (4980) panicked at crates\world\src\slave.rs:734:9:
+assertion `left == right` failed
+  left: 53
+ right: 65
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    slave::tests::make_slave_adopt_writes_oracle_tail
+    slave::tests::summon_slave_skeleton_end_to_end
+
+test result: FAILED. 17 passed; 2 failed; 0 ignored; 0 measured; 73 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
+rc=101

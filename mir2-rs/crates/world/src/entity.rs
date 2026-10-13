@@ -229,6 +229,21 @@ pub struct Entity {
     pub race: u8,
     /// C# `Master`（宝宝的主人）
     pub master: Option<i32>,
+    /// C# `BaseObject.SlaveList`（`BaseObject.cs:141`，懒建于 `:1183`）——主人的宝宝列表（actor id，保序）。
+    ///
+    /// 归 `openmir2-m3-pet-slave-summon`（⑨-2）建立、`openmir2-m3-pet-slave-lifecycle`（⑨-3）清理。
+    pub slave_list: Vec<i32>,
+    /// C# `AnimalObject.IsSlave`（`AnimalObject.cs:54`）。
+    pub is_slave: bool,
+    /// C# `AnimalObject.SlaveExpLevel`（`AnimalObject.cs:27`）——宝宝等级（召唤时/跨服时设定；
+    /// `MonsterObject.GainSlaveExp` 是死代码，击杀不涨，见盘点报告 §1.C）。
+    pub slave_exp_level: u8,
+    /// C# `MonsterObject.SlaveMakeLevel`（`MonsterObject.cs:21`）——召唤时的技能等级。
+    pub slave_make_level: u8,
+    /// C# `MonsterObject.MasterRoyaltyTick`（`MonsterObject.cs:37`）——叛变时刻。
+    pub master_royalty_tick: i64,
+    /// C# `MonsterObject.MasterTick`（`MonsterObject.cs:41`）——诱惑到期的起算时刻。
+    pub master_tick: i64,
     pub death: bool,
     pub invisible: bool,
     pub ghost: bool,
@@ -291,6 +306,13 @@ pub struct Entity {
     /// `WAbil.HP` / `WAbil.MaxHP`
     pub hp: u16,
     pub max_hp: u16,
+    /// `WAbil.MP` / `WAbil.MaxMP`。
+    ///
+    /// 怪物生成时照 `WorldServer.MonGen.cs:896-897` 的 `ApplyMonsterAbility`：`MP = 0`、
+    /// `MaxMP = MonsterInfo.MP`（注意 `MP` 在怪物表里被复用作 `MonsterWeapon` 的形参，见
+    /// `:903`；`BaseObject.Run` 的恢复段仍按 `WAbil.MaxMP` 回蓝）。
+    pub mp: u16,
+    pub max_mp: u16,
     /// `WAbil.DC`（低字节=下限、高字节=上限，与 C# 一致）
     pub dc: i32,
     /// `WAbil.AC`
@@ -317,6 +339,18 @@ pub struct Entity {
     /// **第一个**命中者粘住不放（`BaseObject.cs:1753` 的 `if (ExpHitter == null)`），
     /// 死亡时 `KillFunc()`（`BaseObject.cs:2429`）把经验发给它，而不是 `LastHiter`。
     pub exp_hitter: Option<i32>,
+    /// `BaseObject.LastHiterTick` / `ExpHitterTick`（`BaseObject.cs:295-297`）。
+    /// 由 [`Entity::set_last_hiter`]（`BaseObject.cs:1753-1770`）刷新；`BaseObject.Run`
+    /// 的过期段（`BaseObject.Base.cs:119-132`）用它们判 30s / 6s 墙钟过期。
+    pub last_hiter_tick: i64,
+    pub exp_hitter_tick: i64,
+    /// `BaseObject.HealthTick` / `SpellTick` / `AutoRecoveryTick`（`BaseObject.cs:287-306`）。
+    ///
+    /// 恢复段（`BaseObject.Base.cs:39-66`）按 `(now - AutoRecoveryTick) / 20` 把时间折成
+    /// `HealthTick/SpellTick`，到 `HealthFillTime`/`SpellFillTime` 才回 HP/MP。
+    pub health_tick: i32,
+    pub spell_tick: i32,
+    pub auto_recovery_tick: i64,
     /// 掉落预算里的金币（`mon.Gold`）
     pub gold: i32,
     /// 掉落预算里的物品（`mon.ItemList`，生成时算好、死亡时落地）
@@ -331,6 +365,17 @@ pub struct Entity {
     /// [`crate::monai::monster_ai_tick`] 显式跳过它（race 50 与 `ActorRace.Animal` 同值，
     /// 靠 race 会误跑 `monster_run`）。
     pub merchant: Option<crate::merchant::MerchantState>,
+    /// C# `PlayObject.AllowGroup`（`PlayObject.cs:106` 声明、`:902` 构造初值 `false`）——
+    /// 是否允许被拉进小组（`ClientCreateGroup`/`ClientAddGroupMember` 的门）。
+    pub allow_group: bool,
+    /// C# `PlayObject.AllowGroupReCall`（`PlayObject.cs:224`）——是否允许被组队传送（`@GroupRecall`）。
+    /// 构造未显式赋值 ⇒ `bool` 缺省 `false`。[`crate::party`] 不消费它；扩展面（⑦-可选）接线用。
+    pub allow_group_re_call: bool,
+    /// C# `PlayObject.GroupOwner`（`PlayObject.cs:583`，构造默认 `0` = 无组）——**团长** `ActorId`。
+    pub group_owner: i32,
+    /// C# `PlayObject.GroupMembers`（`PlayObject.cs:587`，构造 `:1042` `new List`）——
+    /// 组内成员 `ActorId` 列表（**含团长自己**，与 oracle 一致）。顺序 = 加入序（oracle 的 `IList`）。
+    pub group_members: Vec<i32>,
 }
 
 impl Entity {
@@ -343,6 +388,12 @@ impl Entity {
             view_range: 5, // BaseObject.cs:383
             race: ACTOR_RACE_PLAY,
             master: None,
+            slave_list: Vec::new(),
+            is_slave: false,
+            slave_exp_level: 0,
+            slave_make_level: 0,
+            master_royalty_tick: 0,
+            master_tick: 0,
             death: false,
             invisible: false,
             hide_mode: false,
@@ -375,6 +426,8 @@ impl Entity {
             // 会让死亡结算把刚进图的玩家当成死者——实测踩过）
             hp: 100,
             max_hp: 100,
+            mp: 0,
+            max_mp: 0,
             dc: 0,
             ac: 0,
             hit_point: 0,
@@ -388,12 +441,23 @@ impl Entity {
             undead_power: 0,
             last_hiter: None,
             exp_hitter: None,
+            last_hiter_tick: 0,
+            exp_hitter_tick: 0,
+            health_tick: 0,
+            spell_tick: 0,
+            auto_recovery_tick: 0,
             gold: 0,
             drop_items: Vec::new(),
             death_settled: false,
             ctor_draws: MonsterCtorDraws::default(),
             ai: AnimalState::default(),
             merchant: None,
+            // 组队态构造初值：`PlayObject.cs:902` `AllowGroup=false`、`:583` `GroupOwner=0`、
+            // `:1042` `GroupMembers=new List()`、`AllowGroupReCall`（`:224`）bool 缺省 `false`。
+            allow_group: false,
+            allow_group_re_call: false,
+            group_owner: 0,
+            group_members: Vec::new(),
         }
     }
 
@@ -405,12 +469,17 @@ impl Entity {
 
     /// C# `BaseObject.SetLastHiter`（`BaseObject.cs:1753`）。
     ///
-    /// `LastHiter` 每次都刷新；`ExpHitter` **只在为空时**才认领（第一个命中者粘住），
-    /// 之后只有同一个命中者再次命中才会续期（本骨架不做 6 秒过期，见 `world.rs` 说明）。
-    pub fn set_last_hiter(&mut self, hitter: i32) {
+    /// `LastHiter` 每次都刷新并续 `LastHiterTick`；`ExpHitter` **只在为空时**才认领
+    /// （第一个命中者粘住），之后只有同一个命中者再次命中才会续 `ExpHitterTick`
+    /// （`BaseObject.cs:1753-1770` 逐支照抄；30s/6s 过期在 `World::expire_hitters`）。
+    pub fn set_last_hiter(&mut self, hitter: i32, now: i64) {
         self.last_hiter = Some(hitter);
+        self.last_hiter_tick = now;
         if self.exp_hitter.is_none() {
             self.exp_hitter = Some(hitter);
+            self.exp_hitter_tick = now;
+        } else if self.exp_hitter == Some(hitter) {
+            self.exp_hitter_tick = now;
         }
     }
 }

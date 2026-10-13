@@ -1,0 +1,6 @@
+命令: powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -Go -PinScene -Side csharp
+期望: 参数齐备且已声明 ⇒ 越过参数门；驱动仍未接线 ⇒ fail-closed exit 2（诚实拒跑，不静默起栈）。
+---- 原始输出 ----
+PREREQ_MISSING: 两侧「场景描述件 + 全场景抽数流水」驱动尚未接线（承接卡见报告），真机序列无法产生可判原始件
+PLANNED: -Side csharp -Seed 42 -Prefix  -PeerSession 
+RC=2

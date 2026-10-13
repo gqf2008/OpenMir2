@@ -1,0 +1,55 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.18s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 19 tests
+test slave::tests::angel_uses_magic_level_for_both ... ok
+test slave::tests::make_slave_gate_is_strictly_less ... FAILED
+test slave::tests::check_server_make_slave_blocks_only_on_pending ... ok
+test slave::tests::recall_slave_target_scans_from_tail ... ok
+test slave::tests::redcheck_gate_must_be_strict ... FAILED
+test slave::tests::sinsu_selection_breaks_on_first_match ... ok
+test slave::tests::sinsu_selection_falls_back_to_dragon_name ... ok
+test slave::tests::skeleton_selection_keeps_last_match_no_break ... ok
+test slave::tests::skeleton_selection_stops_at_zero_hum_level ... ok
+test slave::tests::space_move_steps_by_n18_when_blocked ... ok
+test slave::tests::space_move_returns_start_without_rng_when_walkable ... ok
+test slave::tests::make_slave_adopt_keeps_full_hp ... ok
+test slave::tests::make_slave_adopt_writes_oracle_tail ... ok
+test slave::tests::summon_slave_ignores_other_skills ... ok
+test slave::tests::summon_slave_skeleton_end_to_end ... ok
+test slave::tests::summon_slave_sinsu_falls_back_to_recall ... ok
+test slave::tests::summon_slave_rejected_when_slave_list_full ... FAILED
+test slave::tests::recall_slave_moves_tail_match_to_front ... ok
+test slave::tests::recall_slave_no_match_is_noop ... ok
+
+failures:
+
+---- slave::tests::make_slave_gate_is_strictly_less stdout ----
+
+thread 'slave::tests::make_slave_gate_is_strictly_less' (24456) panicked at crates\world\src\slave.rs:648:9:
+count == nMaxMob ⇒ 拒绝
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- slave::tests::redcheck_gate_must_be_strict stdout ----
+
+thread 'slave::tests::redcheck_gate_must_be_strict' (29760) panicked at crates\world\src\slave.rs:759:9:
+门必须是严格小于；改成 <= 即红
+
+---- slave::tests::summon_slave_rejected_when_slave_list_full stdout ----
+
+thread 'slave::tests::summon_slave_rejected_when_slave_list_full' (13592) panicked at crates\world\src\slave.rs:921:9:
+assertion `left == right` failed
+  left: Spawned(3)
+ right: Rejected
+
+
+failures:
+    slave::tests::make_slave_gate_is_strictly_less
+    slave::tests::redcheck_gate_must_be_strict
+    slave::tests::summon_slave_rejected_when_slave_list_full
+
+test result: FAILED. 16 passed; 3 failed; 0 ignored; 0 measured; 73 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
+rc=101

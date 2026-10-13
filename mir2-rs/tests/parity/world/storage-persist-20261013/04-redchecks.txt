@@ -1,0 +1,146 @@
+# M3⑤-实现 5 第①片 —— 改坏必红（逐条：改坏 ⇒ 目标用例 FAILED；还原 ⇒ ok）
+
+口径：每条 mutation 只改一处（`sed -i`），跑目标用例，`cp` 备份还原后重跑确认绿。
+mutation 全部只动本片新增/修改的行；还原后 `git status` 只显示本片改动。
+
+==============================================================================
+RC1：`storage_items_for_save` 尾槽填充删掉（`Some(default_server_item())` → `None`）
+==============================================================================
+== RC1-a save_is_fixed_fifty_slots_with_default_filler ==
+running 1 test
+test storage::tests::save_is_fixed_fifty_slots_with_default_filler ... FAILED
+
+failures:
+
+---- storage::tests::save_is_fixed_fifty_slots_with_default_filler stdout ----
+
+thread 'storage::tests::save_is_fixed_fifty_slots_with_default_filler' (33168) panicked at bins\game-svr\src\storage.rs:215:35:
+空槽填 DelfautItem，不许是 None
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    storage::tests::save_is_fixed_fifty_slots_with_default_filler
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 176 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+== RC1-b save_record_persists_storage_items_as_fifty_slots ==
+running 1 test
+test tests::save_record_persists_storage_items_as_fifty_slots ... FAILED
+
+failures:
+
+---- tests::save_record_persists_storage_items_as_fifty_slots stdout ----
+
+thread 'tests::save_record_persists_storage_items_as_fifty_slots' (33992) panicked at bins\game-svr\src\main.rs:6126:30:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::save_record_persists_storage_items_as_fifty_slots
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 176 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+
+
+==============================================================================
+RC2：`storage_items_from_record` 的 `Index > 0` 门删掉（`if true`）
+==============================================================================
+== RC2-a load_skips_null_and_zero_index_keeps_order ==
+
+---- storage::tests::load_skips_null_and_zero_index_keeps_order stdout ----
+
+thread 'storage::tests::load_skips_null_and_zero_index_keeps_order' (31424) panicked at bins\game-svr\src\storage.rs:171:9:
+assertion `left == right` failed: 只收 Index>0 且非 null 的槽，次序不变
+  left: [101, 0, 102]
+ right: [101, 102]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    storage::tests::load_skips_null_and_zero_index_keeps_order
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 176 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+== RC2-b enter_loads_storage_items_from_record ==
+
+---- tests::enter_loads_storage_items_from_record stdout ----
+
+thread 'tests::enter_loads_storage_items_from_record' (33656) panicked at bins\game-svr\src\main.rs:6164:9:
+assertion `left == right` failed: 只收 Index>0 且非 null 的槽，次序不变
+  left: [8101, 0, 8102]
+ right: [8101, 8102]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::enter_loads_storage_items_from_record
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 176 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+== RC2-c round_trip_load_then_save_preserves_items ==
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+
+running 1 test
+test storage::tests::round_trip_load_then_save_preserves_items ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 176 filtered out; finished in 0.00s
+
+
+
+==============================================================================
+RC3：`build_save_record` 不写 `rec.data.storage_items`
+==============================================================================
+== RC3-a save_record_persists_storage_items_as_fifty_slots ==
+
+---- tests::save_record_persists_storage_items_as_fifty_slots stdout ----
+
+thread 'tests::save_record_persists_storage_items_as_fifty_slots' (9224) panicked at bins\game-svr\src\main.rs:6120:9:
+assertion `left == right` failed
+  left: (572662272, 272, 272, 1272)
+ right: (7301, 41, 7, 9)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::save_record_persists_storage_items_as_fifty_slots
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 176 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+== RC3-b save_record_reflects_live_state_and_item_layout（对照，应仍绿） ==
+test tests::save_record_reflects_live_state_and_item_layout ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 176 filtered out; finished in 0.00s
+
+
+
+==============================================================================
+RC4：`StorageState::can_store` 边界 `<` → `<=
+==============================================================================
+running 1 test
+test storage::tests::can_store_boundary_is_thirty_nine ... FAILED
+
+failures:
+
+---- storage::tests::can_store_boundary_is_thirty_nine stdout ----
+
+thread 'storage::tests::can_store_boundary_is_thirty_nine' (34752) panicked at bins\game-svr\src\storage.rs:247:9:
+满 39 不能再存
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    storage::tests::can_store_boundary_is_thirty_nine
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 176 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+
+

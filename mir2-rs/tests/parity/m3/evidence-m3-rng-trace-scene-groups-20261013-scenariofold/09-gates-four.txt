@@ -1,0 +1,26 @@
+# 四门禁（cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m3bag-target；全部 --offline）
+# 本片零 .rs 改动（仅 tests/parity/m3/** 的夹具/证据）⇒ 读数应与 master 9edfe4b72 一致。
+
+## 1) cargo fmt --all -- --check
+RC=0（无输出）
+
+## 2) cargo clippy --workspace --all-targets --offline -- -D warnings
+RC=0
+    Checking mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\envir)
+    Checking mir2-parity-tests v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity)
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.43s
+
+## 3) cargo test --workspace --offline --no-fail-fast
+RC=0
+suites=95 passed=945 failed=0 ignored=21
+--- 非零用例的 suite（若无则为空） ---
+--- 末尾 3 条 test result ---
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+## 4) cargo run -p msgcodegen --offline -- --check
+RC=0
+     Running `E:/tmp/m3bag-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。

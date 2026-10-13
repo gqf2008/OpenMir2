@@ -1,0 +1,22 @@
+$ cd mir2-rs && cargo test -p game-svr --offline emit_shop_frames_edcodes_tail_like_send_def_message
+# --- restored
+
+     Running unittests src\lib.rs (E:/tmp/m2svr-target\debug\deps\game_svr-675e68013f315636.exe)
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 132 filtered out; finished in 0.00s
+     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+running 1 test
+test tests::emit_shop_frames_edcodes_tail_like_send_def_message ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 168 filtered out; finished in 0.01s
+     Running tests\merchant_rng_trace.rs (E:/tmp/m2svr-target\debug\deps\merchant_rng_trace-c7ee184cabfaa763.exe)
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+     Running tests\monitems_attach.rs (E:/tmp/m2svr-target\debug\deps\monitems_attach-391416f62a8abf50.exe)
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+     Running tests\relay.rs (E:/tmp/m2svr-target\debug\deps\relay-b6fbdde433679dde.exe)
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+     Running tests\seed_inject.rs (E:/tmp/m2svr-target\debug\deps\seed_inject-94b766008d42b3d5.exe)
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s

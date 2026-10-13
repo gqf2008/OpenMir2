@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+"""M3 夹具链深检门（fixture_chain_gate.py）——`fixture_matrix.py` 的伴生「runner 级」回归门。
+
+背景：`fixture_matrix.py`（M3 夹具矩阵与就绪度门）刻意只做**轻量**核对（三件套在场 +
+比较器 `selftest`），以便高频跑、不依赖 dotnet。它**不跑各夹具驱动自己的
+`-SelfCheckNoStack`**——而那正是「共享管线（`src/BotSrv/**` + `run_pair.ps1` /
+`gate_guards.ps1` / `run_bots.ps1`）被多张夹具卡反复扩展后有没有互相踩坏」的**唯一可判决面**
+（owner 本日已两次手工解 9 处共享文件冲突）。
+
+本文件就是那个**深检伴生门**：登记表仍单一取自 `fixture_matrix.MATRIX`（不复制第二真源），
+对每个 current-tree 状态下 READY 的系统**额外**跑：
+
+  * 该系统的 `runner -SelfCheckNoStack`（离线、零端口）；rc=0 ⇒ `RUN-OK`，
+    rc=2 ⇒ `PREREQ`（该驱动自己声明的「前置未到」fail-closed），其它 rc ⇒ `RED`；
+  * 共享管线自检：`tools/botload/run_bots.ps1 -SelfCheckNoStack` 与
+    `mir2-rs/tests/parity/m3/selftest_gate.ps1`。
+
+fail-closed 口径：
+  * 三件套缺件（`PENDING`/`INCONSISTENT`）与 runner 的 `PREREQ` **默认只登记**，
+    `--require-all` 时判 `RED`（避免未合卡的正常 PENDING 噪声）；
+  * **在场却坏**（比较器 selftest rc≠0 / runner rc∉{0,2} / 共享管线 rc≠0）⇒ **恒 RED**；
+  * `INCONSISTENT`（半拉子合并）⇒ **恒 RED**；
+  * 绝不对「没跑」判绿。
+
+命令：
+  python -I fixture_chain_gate.py check [--root HERE] [--require-all] [--skip-shared]
+      [--json OUT] [--evidence-dir DIR] [--timeout SEC]
+  python -I fixture_chain_gate.py selftest
+
+口径：**只读**（只读文件 + 跑各件自带的无栈自检，不写任何仓库文件、不起栈、不占端口）；
+`selftest` 在内存/临时目录里用注入式 stub 造合成件，含 fail-closed 与改坏必红。
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+# `python -I` 会连 `-P` 一起开（不把脚本目录放进 sys.path）⇒ 显式补回，才能 import 单一真源。
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+# 仓库根：`mir2-rs/tests/parity/m3` 上溯四级。共享管线（tools/**）的路径相对它解析，
+# 各夹具三件套（runner/comparator/scenario）的路径相对 HERE（= 矩阵 --root）解析。
+REPO_ROOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
+
+import fixture_matrix as fm  # noqa: E402  （单一真源：MATRIX / evaluate / _default_run_comparator）
+
+# 共享管线自检（跨夹具卡反复扩展的接缝；任一红即「链被踩坏」）。
+SHARED_CHECKS = [
+    ("run_bots", "tools/botload/run_bots.ps1", ["-SelfCheckNoStack"]),
+    ("selftest_gate", "mir2-rs/tests/parity/m3/selftest_gate.ps1", []),
+]
+
+RUNNER_PREREQ_RC = 2  # 各驱动约定的「前置未到，fail-closed」退出码
+
+
+def _tail(text, limit=200):
+    for line in (text or "").splitlines()[::-1]:
+        if line.strip():
+            return line.strip()[:limit]
+    return ""
+
+
+def _powershell():
+    return shutil.which("powershell") or shutil.which("pwsh") or "powershell"
+
+
+def _ps_argv(script, extra):
+    return [_powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script] + list(extra)
+
+
+def _run_ps(script, extra, cwd, timeout):
+    """跑一个 PowerShell 件 ⇒ (rc, tail, stdout+stderr)。缺文件 ⇒ (127, ...)。"""
+    if not os.path.isfile(script):
+        return 127, "missing: " + script, ""
+    try:
+        p = subprocess.run(_ps_argv(script, extra), cwd=cwd, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover - 环境异常
+        return 127, "无法运行 {0}: {1}".format(script, exc), ""
+    blob = (p.stdout or "") + (p.stderr or "")
+    return p.returncode, _tail(blob), blob
+
+
+def make_run_runner(timeout):
+    """默认 runner 执行器（可注入：selftest 用 stub 替换）。⇒ (rc, tail, blob)。"""
+    def _run(root, entry):
+        return _run_ps(os.path.join(root, entry["runner"]), ["-SelfCheckNoStack"], root, timeout)
+    return _run
+
+
+def make_run_shared(timeout):
+    """默认共享管线执行器（路径相对 REPO_ROOT，cwd=REPO_ROOT）。⇒ [{name,file,present,rc,tail,blob}]。"""
+    def _run(root):
+        out = []
+        for name, rel, extra in SHARED_CHECKS:
+            path = os.path.join(REPO_ROOT, rel)
+            present = os.path.isfile(path)
+            if present:
+                rc, tail, blob = _run_ps(path, extra, REPO_ROOT, timeout)
+            else:
+                rc, tail, blob = None, "", ""
+            out.append({"name": name, "file": rel, "present": present,
+                        "rc": rc, "tail": tail, "blob": blob})
+        return out
+    return _run
+
+
+# ---------------------------------------------------------------------------
+# 纯分类 + 汇总（可注入，供 selftest）
+# ---------------------------------------------------------------------------
+def classify_runner(rc):
+    """runner rc ⇒ 状态：0 RUN-OK / 2 PREREQ / 其它 RED。纯函数。"""
+    if rc == 0:
+        return "RUN-OK"
+    if rc == RUNNER_PREREQ_RC:
+        return "PREREQ"
+    return "RED"
+
+
+def collect(root, matrix, run_comparator, run_runner, run_shared,
+            require_all=False, check_whitelist_path=None, skip_shared=False):
+    """⇒ (receipts, shared, reds)。比较器面复用 fixture_matrix.evaluate（同一口径）。"""
+    base_receipts, reds = fm.evaluate(
+        root, matrix, run_comparator,
+        require_all=require_all, check_whitelist_path=check_whitelist_path)
+    by_key = {e["key"]: e for e in matrix}
+    receipts = []
+    for base in base_receipts:
+        rec = dict(base)
+        entry = by_key[rec["key"]]
+        rec["runner_rc"] = None
+        rec["runner_tail"] = ""
+        rec["runner_status"] = "SKIP"
+        if rec["status"] == "READY":
+            rc, tail, _blob = run_runner(root, entry)
+            rec["runner_rc"] = rc
+            rec["runner_tail"] = tail
+            status = classify_runner(rc)
+            rec["runner_status"] = status
+            if status == "RED":
+                rec["status"] = "RED"
+                reds.append("{0} {1}：runner -SelfCheckNoStack rc={2}（{3}）".format(
+                    entry["key"], entry["system"], rc, tail))
+            elif status == "PREREQ" and require_all:
+                reds.append("{0} {1}：runner 前置未到 rc=2（{2}）⇒ --require-all 判 RED".format(
+                    entry["key"], entry["system"], tail))
+        receipts.append(rec)
+
+    shared = [] if skip_shared else run_shared(root)
+    for s in shared:
+        if not s["present"]:
+            if require_all:
+                reds.append("共享管线 {0}：缺件 {1} ⇒ --require-all 判 RED".format(s["name"], s["file"]))
+        elif s["rc"] != 0:
+            reds.append("共享管线 {0}：{1} rc={2}（{3}）".format(s["name"], s["file"], s["rc"], s["tail"]))
+    return receipts, shared, reds
+
+
+# ---------------------------------------------------------------------------
+# selftest：注入式 stub + fail-closed + 改坏必红
+# ---------------------------------------------------------------------------
+def cmd_selftest(_args):
+    ok = 0
+    total = 0
+
+    def expect(name, cond):
+        nonlocal ok, total
+        total += 1
+        if cond:
+            ok += 1
+            print("  SELFTEST ok  {0}".format(name))
+        else:
+            print("  SELFTEST FAIL {0}".format(name))
+
+    # 1) 纯分类
+    expect("classify_runner(0) ⇒ RUN-OK", classify_runner(0) == "RUN-OK")
+    expect("classify_runner(2) ⇒ PREREQ", classify_runner(2) == "PREREQ")
+    expect("classify_runner(1) ⇒ RED", classify_runner(1) == "RED")
+    expect("classify_runner(127) ⇒ RED", classify_runner(127) == "RED")
+
+    entries = [
+        {"key": "A", "system": "ok", "card": "card-a", "t": None,
+         "runner": "run_a.ps1", "comparator": "a_diff.py", "scenario": "a.json"},
+        {"key": "B", "system": "pending", "card": "card-b", "t": None,
+         "runner": "run_b.ps1", "comparator": "b_diff.py", "scenario": "b.json"},
+        {"key": "C", "system": "runner-prereq", "card": "card-c", "t": None,
+         "runner": "run_c.ps1", "comparator": "c_diff.py", "scenario": "c.json"},
+        {"key": "D", "system": "runner-red", "card": "card-d", "t": None,
+         "runner": "run_d.ps1", "comparator": "d_diff.py", "scenario": "d.json"},
+        {"key": "E", "system": "comparator-red", "card": "card-e", "t": None,
+         "runner": "run_e.ps1", "comparator": "e_diff.py", "scenario": "e.json"},
+    ]
+    tmp = tempfile.mkdtemp(prefix="fixture-chain-selftest-")
+    for name in ("a", "c", "d", "e"):
+        for rel, body in (("run_{0}.ps1".format(name), name),
+                          ("{0}_diff.py".format(name), name),
+                          ("{0}.json".format(name), "{}")):
+            with open(os.path.join(tmp, rel), "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(body)
+
+    def fake_comparator(root, comparator):
+        return (1, "SYNTHETIC COMPARATOR RED") if comparator == "e_diff.py" else (0, "SYNTHETIC GREEN")
+
+    def fake_runner(root, entry):
+        key = entry["key"]
+        if key == "C":
+            return 2, "SYNTHETIC PREREQ", ""
+        if key == "D":
+            return 1, "SYNTHETIC RUNNER RED", ""
+        return 0, "SYNTHETIC RUNNER GREEN", ""
+
+    def fake_shared(root):
+        return [{"name": "run_bots", "file": "run_bots.ps1", "present": True,
+                 "rc": 0, "tail": "GREEN", "blob": ""},
+                {"name": "selftest_gate", "file": "selftest_gate.ps1", "present": True,
+                 "rc": 0, "tail": "GREEN", "blob": ""}]
+
+    # 2) 默认：A RUN-OK；B PENDING 不红；C PREREQ 不红；D runner 红；E comparator 红
+    receipts, shared, reds = collect(tmp, entries, fake_comparator, fake_runner, fake_shared,
+                                     require_all=False)
+    by = {r["key"]: r for r in receipts}
+    expect("A READY + RUN-OK", by["A"]["status"] == "READY" and by["A"]["runner_status"] == "RUN-OK")
+    expect("B PENDING（runner SKIP）", by["B"]["status"] == "PENDING" and by["B"]["runner_status"] == "SKIP")
+    expect("C READY + PREREQ（默认不红）", by["C"]["status"] == "READY" and by["C"]["runner_status"] == "PREREQ")
+    expect("D runner rc=1 ⇒ RED", by["D"]["status"] == "RED" and by["D"]["runner_status"] == "RED")
+    expect("E comparator rc=1 ⇒ RED", by["E"]["status"] == "RED")
+    expect("默认 RED 仅 2 条（D runner + E comparator）", len(reds) == 2)
+    expect("默认 PENDING / PREREQ 不判红", not any("PENDING" in r or "前置未到" in r for r in reds))
+
+    # 3) --require-all：B（PENDING）+ C（PREREQ）也判红
+    _, _, reds_all = collect(tmp, entries, fake_comparator, fake_runner, fake_shared,
+                             require_all=True)
+    expect("require-all 把 PENDING 判红", any("尚未合并" in r for r in reds_all))
+    expect("require-all 把 runner PREREQ 判红", any("前置未到 rc=2" in r for r in reds_all))
+
+    # 4) 共享管线红 ⇒ 判红
+    def fake_shared_red(root):
+        return [{"name": "selftest_gate", "file": "selftest_gate.ps1", "present": True,
+                 "rc": 3, "tail": "SYNTHETIC SHARED RED", "blob": ""}]
+    _, _, reds_sh = collect(tmp, entries, fake_comparator, fake_runner, fake_shared_red)
+    expect("共享管线 rc=3 ⇒ 判红", any("共享管线 selftest_gate" in r for r in reds_sh))
+
+    # 5) 共享管线缺件：默认只登记，require-all 判红
+    def fake_shared_missing(root):
+        return [{"name": "run_bots", "file": "run_bots.ps1", "present": False,
+                 "rc": None, "tail": "", "blob": ""}]
+    _, _, reds_miss = collect(tmp, entries, fake_comparator, fake_runner, fake_shared_missing)
+    expect("共享管线缺件默认不红", not reds_miss or all("共享管线" not in r for r in reds_miss))
+    _, _, reds_miss_all = collect(tmp, entries, fake_comparator, fake_runner, fake_shared_missing,
+                                  require_all=True)
+    expect("共享管线缺件 require-all 判红", any("共享管线 run_bots" in r for r in reds_miss_all))
+
+    # 6) 改坏必红：删 A 的 runner ⇒ A 由 READY 变 INCONSISTENT（恒红）
+    os.remove(os.path.join(tmp, "run_a.ps1"))
+    receipts_mut, _, reds_mut = collect(tmp, entries, fake_comparator, fake_runner, fake_shared)
+    by_mut = {r["key"]: r for r in receipts_mut}
+    expect("删 runner ⇒ INCONSISTENT（改坏必红）",
+           by_mut["A"]["status"] == "INCONSISTENT" and any("A" == r.split(" ")[0] for r in reds_mut))
+
+    # 7) 真源一致性：MATRIX 的 runner 命名与比较器扩展名（与 fixture_matrix 同口径）
+    expect("MATRIX runner 命名合规", all(
+        e["runner"].startswith("run_") or "/run_" in e["runner"] for e in fm.MATRIX))
+    expect("MATRIX comparator 命名合规", all(e["comparator"].endswith(".py") for e in fm.MATRIX))
+    expect("共享管线登记项 ≥2", len(SHARED_CHECKS) >= 2)
+    expect("共享管线件在本仓库树内可解析（REPO_ROOT 口径）",
+           all(os.path.isfile(os.path.join(REPO_ROOT, rel)) for _n, rel, _e in SHARED_CHECKS))
+
+    print("SELFTEST {0}: fixture_chain_gate selftest {1}/{2}".format(
+        "GREEN" if ok == total else "RED", ok, total))
+    return 0 if ok == total else 1
+
+
+# ---------------------------------------------------------------------------
+# check
+# ---------------------------------------------------------------------------
+def _print_table(receipts, shared):
+    print("== M3 夹具链深检（runner 级）==")
+    print("{0:<5} {1:<22} {2:<12} {3:<10} {4}".format("#", "系统", "矩阵状态", "runner", "卡"))
+    for r in receipts:
+        print("{0:<5} {1:<22} {2:<12} {3:<10} {4}".format(
+            r["key"], r["system"], r["status"], r["runner_status"], r["card"]))
+        if r["runner_status"] in ("RUN-OK", "PREREQ", "RED"):
+            print("       runner -SelfCheckNoStack rc={0} :: {1}".format(
+                r["runner_rc"], (r["runner_tail"] or "")[:96]))
+    print("-- 共享管线 --")
+    for s in shared:
+        print("{0:<16} {1:<10} rc={2} :: {3}".format(
+            s["name"], "present" if s["present"] else "MISSING",
+            s["rc"], (s["tail"] or "")[:80]))
+
+
+def cmd_check(args):
+    root = os.path.abspath(args.root)
+    wl = os.path.abspath(os.path.join(root, os.pardir, "whitelist.md"))
+    wl = wl if os.path.isfile(wl) else None
+    run_runner = make_run_runner(args.timeout)
+    run_shared = make_run_shared(args.timeout)
+    receipts, shared, reds = collect(
+        root, fm.MATRIX, fm._default_run_comparator, run_runner, run_shared,
+        require_all=args.require_all, check_whitelist_path=wl, skip_shared=args.skip_shared)
+
+    if args.evidence_dir:
+        os.makedirs(args.evidence_dir, exist_ok=True)
+        for rec in receipts:
+            if rec["runner_status"] in ("RUN-OK", "PREREQ", "RED"):
+                name = "runner-{0}-{1}.txt".format(rec["key"].replace("/", "_"), rec["runner_status"])
+                with open(os.path.join(args.evidence_dir, name), "w",
+                          encoding="utf-8", newline="\n") as fh:
+                    fh.write("key={0} system={1} runner_status={2} rc={3}\n{4}\n".format(
+                        rec["key"], rec["system"], rec["runner_status"],
+                        rec["runner_rc"], rec["runner_tail"]))
+        for s in shared:
+            name = "shared-{0}.txt".format(s["name"])
+            with open(os.path.join(args.evidence_dir, name), "w",
+                      encoding="utf-8", newline="\n") as fh:
+                fh.write("name={0} file={1} present={2} rc={3}\n{4}\n".format(
+                    s["name"], s["file"], s["present"], s["rc"], s["tail"]))
+
+    payload = {
+        "require_all": bool(args.require_all),
+        "skip_shared": bool(args.skip_shared),
+        "receipts": receipts,
+        "shared": [{"name": s["name"], "file": s["file"], "present": s["present"],
+                    "rc": s["rc"], "tail": s["tail"]} for s in shared],
+        "reds": reds,
+    }
+    if args.json:
+        with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2, sort_keys=True)
+            fh.write("\n")
+
+    _print_table(receipts, shared)
+    run_ok = sum(1 for r in receipts if r["runner_status"] == "RUN-OK")
+    prereq = sum(1 for r in receipts if r["runner_status"] in ("PREREQ", "SKIP"))
+    if reds:
+        print("FIXTURE_CHAIN RED: runner_ok={0} prereq_or_skip={1} red={2}".format(
+            run_ok, prereq, len(reds)))
+        for r in reds:
+            print("  RED " + r)
+        return 1
+    print("FIXTURE_CHAIN GREEN: runner_ok={0} prereq_or_skip={1} red=0{2}".format(
+        run_ok, prereq, "（--require-all）" if args.require_all else ""))
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description="M3 夹具链深检门（runner 级，只读、零端口）")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p_check = sub.add_parser("check", help="矩阵门 + 各 READY runner -SelfCheckNoStack + 共享管线自检")
+    p_check.add_argument("--root", default=HERE)
+    p_check.add_argument("--require-all", action="store_true",
+                         help="PENDING / runner PREREQ / 共享管线缺件 也判 RED")
+    p_check.add_argument("--skip-shared", action="store_true", help="不跑共享管线自检")
+    p_check.add_argument("--json", default=None)
+    p_check.add_argument("--evidence-dir", default=None)
+    p_check.add_argument("--timeout", type=int, default=900, help="单个 runner 的超时秒数")
+    p_check.set_defaults(func=cmd_check)
+    p_self = sub.add_parser("selftest", help="注入式 stub fail-closed + 改坏必红自检")
+    p_self.set_defaults(func=cmd_selftest)
+    args = ap.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

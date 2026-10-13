@@ -1,0 +1,17 @@
+# 四门禁（返工后 2026-10-13；base = master 15510a47；隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target）
+
+## 1) cargo fmt --all -- --check
+rc=0
+
+## 2) cargo clippy --offline --workspace --all-targets -- -D warnings
+    Checking mir2-parity-tests v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity)
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.95s
+rc=0
+
+## 3) cargo run --offline -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+## 4) cargo test --offline --workspace --no-fail-fast（聚合；原始件 = 04b-workspace-test.txt）
+suites=94 passed=891 failed=0 ignored=21  rc=0

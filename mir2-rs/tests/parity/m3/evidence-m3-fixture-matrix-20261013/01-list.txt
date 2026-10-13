@@ -1,0 +1,13 @@
+$ python -I fixture_matrix.py list
+| # | 系统 | 夹具驱动 | 比较器 | 场景 | T | 承接卡 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 背包 / 装备 | `run_bag_equip_pair.ps1` | `scoped_diff.py` | - | - | `openmir2-m3-bag-equip-alignment` |
+| 2/3 | 战斗 / 技能 | `run_attack_pair.ps1` | `attack_diff.py` | - | - | `openmir2-m3-attack-pair-fixture` |
+| 4 | 掉落 / 经验 | `drop-exp/run_drop_exp_pair.ps1` | `drop-exp/drop_exp_diff.py` | `drop-exp/drop_exp_scenario.json` | - | `openmir2-m3-drop-exp-align` |
+| 5 | NPC / 商店 | `run_npc_shop_pair.ps1` | `npc_shop_diff.py` | `npc_shop_scenario.json` | T-41 | `openmir2-m3-shop-fixture-botsrv` |
+| 6 | 任务 | `run_quest_pair.ps1` | `quest_diff.py` | `quest_scenario.json` | T-42 | `openmir2-m3-quest-fixture-botsrv` |
+| 7 | 组队 / 交易 | `run_party_trade_pair.ps1` | `party_trade_diff.py` | `party_trade_scenario.json` | T-43 | `openmir2-m3-party-trade-fixture-botsrv` |
+| 8 | 公会 / 攻城 | `run_guild_castle_pair.ps1` | `guild_castle_diff.py` | `guild_castle_scenario.json` | T-46 | `openmir2-m3-guild-castle-fixture-botsrv` |
+| 9 | 英雄 / 宠物 | `run_hero_pet_pair.ps1` | `hero_pet_diff.py` | `hero_pet_scenario.json` | T-45 | `openmir2-m3-hero-pet-fixture-botsrv` |
+| 10 | 拍卖（元宝寄售 SellOff） | `run_selloff_pair.ps1` | `selloff_diff.py` | `selloff_scenario.json` | T-44 | `openmir2-m3-selloff-fixture-botsrv` |
+| B | 全服 RNG 消费者账本（Claim B） | `rng-trace-scene/run_rng_trace_pair.ps1` | `rng-trace-scene/rng_scene_gate.py` | `rng-trace-scene/rng_trace_scenario.json` | - | `openmir2-m3-rng-trace-scene-groups` |

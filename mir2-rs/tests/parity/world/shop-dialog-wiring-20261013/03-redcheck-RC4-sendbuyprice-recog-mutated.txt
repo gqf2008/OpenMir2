@@ -1,0 +1,38 @@
+$ cd mir2-rs && cargo test -p game-svr --lib --offline shop::tests::query_sell_price_and_repair_cost_frames
+# --- mutated: bins/game-svr/src/shop.rs
+#     let recog = if n_c >= 0 { n_c } else { 0 };
+#  -> let recog = 0;
+
+
+running 1 test
+test shop::tests::query_sell_price_and_repair_cost_frames ... FAILED
+
+failures:
+
+---- shop::tests::query_sell_price_and_repair_cost_frames stdout ----
+
+thread 'shop::tests::query_sell_price_and_repair_cost_frames' (33900) panicked at bins\game-svr\src\shop.rs:874:9:
+assertion `left == right` failed
+  left: 0
+ right: 50
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shop::tests::query_sell_price_and_repair_cost_frames
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 131 filtered out; finished in 0.00s
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+warning: unused variable: `n_c`
+   --> bins\game-svr\src\shop.rs:282:9
+    |
+282 |     let n_c = shop::get_sell_item_price(price);
+    |         ^^^ help: if this is intentional, prefix it with an underscore: `_n_c`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `game-svr` (lib test) generated 1 warning (run `cargo fix --lib -p game-svr --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.78s
+     Running unittests src\lib.rs (E:/tmp/m2svr-target\debug\deps\game_svr-675e68013f315636.exe)
+error: test failed, to rerun pass `-p game-svr --lib`

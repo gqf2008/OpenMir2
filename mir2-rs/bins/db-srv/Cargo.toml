@@ -21,3 +21,5 @@ anyhow = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time", "process"] }
+# tests/quest_no_persist.rs：读 M1 跨读基线（`characters_quest` 两侧 0 行）做任务态不落库门禁。
+serde_json = "1"

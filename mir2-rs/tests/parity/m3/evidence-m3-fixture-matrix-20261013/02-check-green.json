@@ -1,0 +1,155 @@
+{
+  "receipts": [
+    {
+      "card": "openmir2-m3-bag-equip-alignment",
+      "comparator_rc": 0,
+      "comparator_tail": "GREEN: scoped_diff selftest 14/14（含规范化前后 + 固定建角不置占位 + 改坏必红 + 多重集重复行 + fail-closed + 族表 PlayerId 归属 + 真实 13 表快照 + 坐标逐字节比）",
+      "key": "1",
+      "missing": [],
+      "present": [
+        "run_bag_equip_pair.ps1",
+        "scoped_diff.py"
+      ],
+      "status": "READY",
+      "system": "背包 / 装备",
+      "t": null
+    },
+    {
+      "card": "openmir2-m3-attack-pair-fixture",
+      "comparator_rc": 0,
+      "comparator_tail": "SELFTEST GREEN: attack_diff selftest 41/41（align 窗口归属 + 同序列绿 + 改坏 dmg/hit 必红 + 全 0 非平凡门 + 空序列 + 长度不等 + 死亡容忍/死亡时点/HP 逐项比（F-F option ③） + my 口径（残差③：attack 行缺 my ⇒ fail-closed rc=2；外来命中过滤；多视角/重复投递同帧按**按 k 分段**事件键去重） + 服务端权威口径（SERVER_STATE 派生逐 k：异步/双观察者帧跨 k 下旧口径错、权威口径对；HP 回升/行数不符/非攻方不唯一/坏 JSON 全 fail-closed；同目录自动探测） + pin_attempts 复算（informational：干净=绿 / 多一次重试**仍绿** / 缺 PIN_HOLD=PREREQ））",
+      "key": "2/3",
+      "missing": [],
+      "present": [
+        "run_attack_pair.ps1",
+        "attack_diff.py"
+      ],
+      "status": "READY",
+      "system": "战斗 / 技能",
+      "t": null
+    },
+    {
+      "card": "openmir2-m3-drop-exp-align",
+      "comparator_rc": 0,
+      "comparator_tail": "SELFTEST ok=12/12",
+      "key": "4",
+      "missing": [],
+      "present": [
+        "drop-exp/run_drop_exp_pair.ps1",
+        "drop-exp/drop_exp_diff.py",
+        "drop-exp/drop_exp_scenario.json",
+        "drop-exp/drop_exp_purity_gate.py"
+      ],
+      "status": "READY",
+      "system": "掉落 / 经验",
+      "t": null
+    },
+    {
+      "card": "openmir2-m3-shop-fixture-botsrv",
+      "comparator_rc": 0,
+      "comparator_tail": "SELFTEST ok=27/27",
+      "key": "5",
+      "missing": [],
+      "present": [
+        "run_npc_shop_pair.ps1",
+        "npc_shop_diff.py",
+        "npc_shop_scenario.json"
+      ],
+      "status": "READY",
+      "system": "NPC / 商店",
+      "t": "T-41"
+    },
+    {
+      "card": "openmir2-m3-quest-fixture-botsrv",
+      "comparator_rc": 0,
+      "comparator_tail": "SELFTEST ok=36/36",
+      "key": "6",
+      "missing": [],
+      "present": [
+        "run_quest_pair.ps1",
+        "quest_diff.py",
+        "quest_scenario.json"
+      ],
+      "status": "READY",
+      "system": "任务",
+      "t": "T-42"
+    },
+    {
+      "card": "openmir2-m3-party-trade-fixture-botsrv",
+      "comparator_rc": 0,
+      "comparator_tail": "SELFTEST ok=27/27",
+      "key": "7",
+      "missing": [],
+      "present": [
+        "run_party_trade_pair.ps1",
+        "party_trade_diff.py",
+        "party_trade_scenario.json"
+      ],
+      "status": "READY",
+      "system": "组队 / 交易",
+      "t": "T-43"
+    },
+    {
+      "card": "openmir2-m3-guild-castle-fixture-botsrv",
+      "comparator_rc": null,
+      "comparator_tail": "",
+      "key": "8",
+      "missing": [
+        "run_guild_castle_pair.ps1",
+        "guild_castle_diff.py",
+        "guild_castle_scenario.json"
+      ],
+      "present": [],
+      "status": "PENDING",
+      "system": "公会 / 攻城",
+      "t": "T-46"
+    },
+    {
+      "card": "openmir2-m3-hero-pet-fixture-botsrv",
+      "comparator_rc": null,
+      "comparator_tail": "",
+      "key": "9",
+      "missing": [
+        "run_hero_pet_pair.ps1",
+        "hero_pet_diff.py",
+        "hero_pet_scenario.json"
+      ],
+      "present": [],
+      "status": "PENDING",
+      "system": "英雄 / 宠物",
+      "t": "T-45"
+    },
+    {
+      "card": "openmir2-m3-selloff-fixture-botsrv",
+      "comparator_rc": 0,
+      "comparator_tail": "SELFTEST ok=33/33",
+      "key": "10",
+      "missing": [],
+      "present": [
+        "run_selloff_pair.ps1",
+        "selloff_diff.py",
+        "selloff_scenario.json"
+      ],
+      "status": "READY",
+      "system": "拍卖（元宝寄售 SellOff）",
+      "t": "T-44"
+    },
+    {
+      "card": "openmir2-m3-rng-trace-scene-groups",
+      "comparator_rc": 0,
+      "comparator_tail": "GREEN: 场景前置门 selftest 全绿（同场景绿 + seed/怪集合/起点/map/MonGen 漂移必红 + 缺件/坏 JSON PREREQ fail-closed）",
+      "key": "B",
+      "missing": [],
+      "present": [
+        "rng-trace-scene/run_rng_trace_pair.ps1",
+        "rng-trace-scene/rng_scene_gate.py",
+        "rng-trace-scene/rng_trace_scenario.json"
+      ],
+      "status": "READY",
+      "system": "全服 RNG 消费者账本（Claim B）",
+      "t": null
+    }
+  ],
+  "reds": [],
+  "require_all": false
+}

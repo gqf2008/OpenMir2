@@ -1,0 +1,35 @@
+# 本片证据的复现命令（cwd = 仓库根，除非另注）
+
+# 四门禁；cwd = mir2-rs；隔离 target
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test --workspace --no-fail-fast --offline
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo run -p msgcodegen --offline -- --check
+
+# 本片新增用例（cwd = mir2-rs）
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p mir2-world --lib --offline base_recovery
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p mir2-world --lib --offline health_tick_negative
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p mir2-world --lib --offline target_cret_cleanup
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p mir2-world --lib --offline expire_hitters
+
+# 改坏必红（改一处 → 跑对应用例 → 必 FAILED → 还原）
+#   RC-M1: crates/world/src/monai.rs  "if hp < max_hp && health_tick >= health_fill_time {"
+#                                     ==> "if hp < max_hp {"
+#   RC-M2: crates/world/src/monai.rs  "if health_tick < -health_fill_time && hp > 1 {"
+#                                     ==> "if health_tick < -health_fill_time {"
+#   RC-M3: crates/world/src/world.rs  "if (now - e.last_hiter_tick) > 30_000 || gone.contains(&h) {"
+#                                     ==> "if gone.contains(&h) {"
+#   RC-M4: crates/world/src/monai.rs  "    target_cret_cleanup(world, actor_id, now);"
+#                                     ==> "    let _ = now;"
+#   RC-I1 (返工·I-1):  crates/world/src/monai.rs 恢复段
+#                                     "i32::from(hp) + n" (int 语义)  ==>  "hp + n" (u16 加)
+#   RC-M1b(返工·M-1):  crates/world/src/monai.rs 清理段
+#                                     "clear_target_creature(world, actor_id, target_id)"
+#                                     ==> "del_target_creature(world, actor_id)"
+
+# 边界（base = 交付时 master，见 20-boundary.txt）
+git diff --name-only <base> HEAD -- src sql MirClient      # 必须为空
+
+# 证据 hash（仓库 LF/git-blob 口径 + 目录未列文件牙齿 / EOL 自查）
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/world/monster-ai-run-common-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs

@@ -1,0 +1,12 @@
+# command: python -I m3_whitelist_registry_audit.py selftest
+  SELFTEST ok  唯一编号 -> 无 DUPLICATE
+  SELFTEST ok  token T-41 解析 1 行
+  SELFTEST ok  缺 token T-45 默认 info、不判红
+  SELFTEST ok  行号解析（T-42 -> L2）
+  SELFTEST ok  重复 T-42 被点名
+  SELFTEST ok  重复 token -> TOKEN_MULTI
+  SELFTEST ok  --strict 下重复必红（改坏必红）
+  SELFTEST ok  --strict 下 READY 缺 token 判红
+  SELFTEST ok  非 strict 只报告不判红
+SELFTEST GREEN 9/9
+rc=0

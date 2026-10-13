@@ -354,6 +354,7 @@ dependencies = [
  "anyhow",
  "mir2-protocol",
  "mir2-storage",
+ "serde_json",
  "sqlx",
  "tokio",
 ]

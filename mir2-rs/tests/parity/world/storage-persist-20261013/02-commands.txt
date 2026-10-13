@@ -1,0 +1,28 @@
+# M3⑤-实现 5 第①片 —— 命令清单（全部在自身 worktree，隔离 CARGO_TARGET_DIR）
+
+# 工作目录
+#   E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr/mir2-rs
+# 分支 storage-persist-host；base = refs/heads/master（15510a47）
+
+# 1) 本片新用例（10 条：storage 模块 8 + 宿主接线 2）
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr --bin game-svr --offline storage
+
+# 2) 四门禁（隔离 target）
+$ cargo fmt --all -- --check
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test --workspace --no-fail-fast --offline
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo run -p msgcodegen --offline -- --check
+
+# 3) 改坏必红（逐条：改坏 ⇒ 目标用例 FAILED；还原 ⇒ ok；见 04-redchecks.txt）
+#    RC1 storage_items_for_save 尾槽填充删掉（Some(default) -> None）
+#    RC2 storage_items_from_record 的 Index>0 门删掉（if true）
+#    RC3 build_save_record 不写 rec.data.storage_items
+#    RC4 StorageState::can_store 边界 < -> <=
+
+# 4) 边界（oracle/C#/客户端/表结构零改动）
+$ git diff --name-only 15510a47..HEAD -- src sql MirClient
+
+# 5) 证据清单（仓库 LF/git-blob 口径）+ EOL 门
+$ python -I tools/evidence-hash/verify_sha256sums.py write tests/parity/world/storage-persist-20261013
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra tests/parity/world/storage-persist-20261013
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck tests/parity/world/storage-persist-20261013

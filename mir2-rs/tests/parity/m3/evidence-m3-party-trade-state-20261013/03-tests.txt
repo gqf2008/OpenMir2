@@ -1,0 +1,22 @@
+M3⑦-实现 3 判据（构造级，纯函数）
+命令：CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test -p game-svr --lib trade::
+
+test trade::tests::deal_end_first_side_waits ... ok
+test trade::tests::deal_end_settles_gold ... ok
+test trade::tests::deal_end_ok_time_gate_cancels ... ok
+test trade::tests::change_deal_gold_fail_when_insufficient ... ok
+test trade::tests::change_deal_gold_ok_and_fail ... ok
+test trade::tests::deal_try_not_player_fails ... ok
+test trade::tests::deal_try_disabled ... ok
+test trade::tests::deal_cancel_is_recursive ... ok
+test trade::tests::add_deal_item_fail_branches ... ok
+test trade::tests::deal_end_capacity_check_cancels ... ok
+test trade::tests::add_deal_item_moves_and_notifies ... ok
+test trade::tests::deal_end_settles_items ... ok
+test trade::tests::deal_try_respects_try_deal_time_gate ... ok
+test trade::tests::deal_try_opens_both_sides ... ok
+test trade::tests::del_deal_item_denied_by_can_not_get_back ... ok
+test trade::tests::del_deal_item_returns_when_allowed ... ok
+test trade::tests::first_token_matches_get_valid_str3 ... ok
+test trade::tests::event_bodies_match_oracle_shapes ... ok
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 132 filtered out; finished in 0.00s

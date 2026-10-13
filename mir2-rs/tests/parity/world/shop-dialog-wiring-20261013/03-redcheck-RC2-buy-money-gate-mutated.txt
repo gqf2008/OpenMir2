@@ -1,0 +1,31 @@
+$ cd mir2-rs && cargo test -p game-svr --lib --offline shop::tests::buy_failure
+# --- mutated: bins/game-svr/src/shop.rs
+#     if state.gold >= n_price && n_price > 0 {
+#  -> if n_price > 0 {
+
+
+running 1 test
+test shop::tests::buy_failure_codes_two_and_three ... FAILED
+
+failures:
+
+---- shop::tests::buy_failure_codes_two_and_three stdout ----
+
+thread 'shop::tests::buy_failure_codes_two_and_three' (13844) panicked at bins\game-svr\src\shop.rs:850:9:
+assertion `left == right` failed
+  left: 4242
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shop::tests::buy_failure_codes_two_and_three
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 131 filtered out; finished in 0.00s
+
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\envir)
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.83s
+     Running unittests src\lib.rs (E:/tmp/m2svr-target\debug\deps\game_svr-675e68013f315636.exe)
+error: test failed, to rerun pass `-p game-svr --lib`
