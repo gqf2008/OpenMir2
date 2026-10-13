@@ -48,6 +48,14 @@
       ],
       "note": "20 诱惑之光（MagicManager.cs:704-825 MagTamming；Rust 已在 magic.rs:548-819 实现）。判据：SlaveList.Count < MagTammingCount(5) 门 + 多层 Random 取数次序（Claim B 账本输入，不许为『好测』改次序）。"
     },
+    "make_clone": {
+      "steps": [
+        {"role": "a", "op": "observe", "param": ""},
+        {"role": "a", "op": "summon", "param": "46"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "46 召唤分身（MagicManager.cs:1337-1341 MagMakeClone → PlayCloneObject，**不入 SlaveList**）。判据 = slave_count_before/after 不变 + 帧序列（SM_SPELL(46)）两侧相同；覆盖原语面（reviewer-5 M-2：把『46 只留原语』显式落成 case，不再留隐性覆盖缺口）。"
+    },
     "cap_one": {
       "steps": [
         {"role": "a", "op": "summon", "param": "17"},
@@ -85,11 +93,12 @@
     "clone": "MagicManager.cs:1337-1341 MagMakeClone（PlayCloneObject，不入 SlaveList）",
     "slave_level": "MonsterObject.cs:71-84 GainSlaveExp（**死代码**，全仓无调用点 ⇒ 击杀不涨级的语义要点）；:86-97 GainSlaveUpKillCount",
     "slave_color": "BaseObject.Base.cs:869-881 GetChrColor（Master != null ⇒ SlaveColor[SlaveExpLevel]）",
-    "death_mutiny": "MonsterObject.cs:363-397 CheckRoyalty（Run 调用:352）；PlayObject.Base.cs:333-357 ProcessSlaveMutiny；:360-370 ProcessSlaveGhost；BaseObject.Base.cs:208-217 死亡/幽灵/换主清表",
+    "death_mutiny": "MonsterObject.cs:363-397 CheckRoyalty（Run 调用:352）；PlayObject.Base.cs:333-357 ProcessSlaveMutiny；:361-371 ProcessSlaveGhost；BaseObject.Base.cs:208-217 死亡/幽灵/换主清表",
     "exp_owner": "BaseObject.cs:1753-1768 SetLastHiter（ExpHitter 只在 null 时认领）；BaseObject.Base.cs:119-132 ExpHitter 6s 过期；BaseObject.cs:2429-2443 KillFunc（:2434-2437 ExpHitter.Master != null ⇒ 发主人 RM_PLAYERKILLMONSTER）",
-    "frames": "Messages.cs:17/31/32/44/45/53/656（SM_SPELL / SM_STRUCK / SM_DEATH / SM_WINEXP / SM_LEVELUP / SM_HEALTHSPELLCHANGED / SM_CHANGENAMECOLOR）+ SM_MENU_OK(767)",
-    "send_spell": "src/BotSrv/Player/RobotPlayer.cs:3968 SendSpellMsg（发 CM_SPELL(3017)）",
-    "slave_observe": "src/BotSrv/Player/RobotPlayer.Operate.cs:360-380（RM_USERNAME 的 `(主人名)` 收进 MShare.MySelf.SlaveObject）；src/BotSrv/Scenes/Scene/PlayScene.cs:1189 IsMySlaveObject",
+    "frames": "Messages.cs:177/197/198/205/206/211/318/379（SM_SPELL(17) / SM_STRUCK(31) / SM_DEATH(32) / SM_WINEXP(44) / SM_LEVELUP(45) / SM_HEALTHSPELLCHANGED(53) / SM_CHANGENAMECOLOR(656) / SM_MENU_OK(767)；旧稿把消息号当行号，本片订正）",
+    "anchor_gate": "本文件 `oracle_anchors` 的冻结 oracle 行点由 `hero_pet_anchor_gate.py`（check/selftest/mutation）机判；夹具工具侧（src/BotSrv/**）只锚函数/字段名、不给行号（口径见该门文件头）。",
+    "send_spell": "src/BotSrv/** SendSpellMsg（CM_SPELL(3017) 发送包装；夹具 summon op 经 RobotPlayer.SendHeroPetStep 调用，参数 skill=17/20/30/41/46）；本项为夹具工具侧、非冻结 oracle ⇒ 只锚函数名，不给行号（行号随 BotSrv 演进漂移，见 whitelist T-45）",
+    "slave_observe": "src/BotSrv/** RobotPlayer.Operate.cs 的 RM_USERNAME 处理（`(主人名)` 收进 MShare.MySelf.SlaveObject）+ PlayScene.IsMySlaveObject；工具侧 ⇒ 只锚函数/字段名，不给行号",
     "db": "sql/ 无 slave/pet/hero/tamming 表或列（盘点 §1.H，`rg -ni 'slave|hero|pet|tamming' sql/` no match）⇒ 两侧都不落库",
     "clock_injection": "openmir2-m3-clock-injection（C# 影子 hook MIR2_CLOCK_* + Rust world.clock_ms/now_ms()）；时间门 = CheckRoyalty 10s / MasterTick 12h / ExpHitter 6s / SpiritMutinyTime"
   },

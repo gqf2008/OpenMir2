@@ -23,7 +23,9 @@ mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
 --- *.rs 计数（应为 0）
 0
 
---- 工作树 status（未跟踪 sessions/csharp-20261012-23xx 为他卡遗留，未并入）
- M mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/06-offline-regression.txt
- M mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/11-boundary.txt
- M mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/README.md
+--- 工作树 status（提交后实拍；未跟踪 sessions/csharp-20261012-23xx 为他卡遗留，未并入）
+(空 = 本次提交后工作树干净)
+
+> 订正（2026-10-14，reviewer-6 M-3）：本段原记的是**拍摄当时**（提交前）的 in-flight
+> `git status`（含本片自身三件正在写盘的证据），会被误读成「边界里多出三件」。现改为提交后
+> 实拍；边界本身以上方 `git diff --name-only origin/master..HEAD` 为准，与本段无关。

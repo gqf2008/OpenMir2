@@ -56,7 +56,7 @@
 - ④ 要 `monai == 0`：`drop-exp/drop_exp_scenario.json` `purity.wallclock_policy = "pinned"`；
   `drop-exp/drop_exp_consumers.tsv` 的 rust `wallclock` 行 = `crates/world/src/monai\.rs:`，`max=0`
   （「pin 抑制必须使其为 0」）。
-- master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/main.rs:5440`
+- master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/main.rs:5488`
   → `mongen.rs:61 pub fn enable_production_monster_ai` → `world.enable_monster_ai()`
   ⇒ 只要场上有活怪，`World::tick` 就按槽位驱动 `crates/world/src/monai.rs:697 monster_ai_tick`；
   无目标且 walk 到点时 `monai.rs:171 wondering` **至少抽 1 次 `Random(20)`**
@@ -100,10 +100,17 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
   `MISSING_EXPECTED_GROUPS(spawn)` 双红（会在共用窗口里空转一轮）。机判 = `python -I rng-trace-probe/rng_consumer_groups.py selftest`（含删行必红）。
 - **本文档自身的源码锚点保鲜（2026-10-13 第二次窗口前置审计）**：§4 引用的 `path:line` 是
   **承重锚点**（宿主 AI 调用点 / 世界层 tick / oracle Wondering）；master 一直在动 ⇒ 行号会漂
-  （实测 `main.rs` 因 ④-D 与 client-e2e 两次合并行长，`enable_production_monster_ai` 从 `:5229`
-  漂到 `:5440`）。机判 = `python -I rng-trace-scene/check_anchors.py selftest`：要求「文档写的行号
+  （实测 `main.rs` 因 ④-D / client-e2e / ⑧-10 等多次合并行长，`enable_production_monster_ai` 从
+  `:5229` 漂到 `:5440`、再漂到 `:5488`）。机判 = `python -I rng-trace-scene/check_anchors.py selftest`：要求「文档写的行号
   == 该符号在当前源码里的**首个**匹配行」，缺失/重复/漂移都 fail-closed 点名；已接入
   `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`anchors-freshness-selftest`）。
+- **锚点覆盖面收口（2026-10-14 reviewer-5 M-1 / reviewer-6 M-1+M-2）**：旧口径有两处静默通道 ——
+  ① 覆盖判定用「结尾 basename 匹配」⇒ **别的目录下的同名文件**会被误判 COVERED（既非
+  `UNGUARDED_ANCHOR` 也不 `ANCHOR_DRIFT`）；② 同行**裸续引用**（同一条引用后面再跟一个冒号行号，
+  本 §6 的 R-6 站点写法即此）完全没有被解析。现机判（`check_anchors.py`）：带目录引用必须与锚点的
+  `literal`/`path` **全等**（裸 basename 仅限显式 `basename_ok`）、未识别扩展名走
+  `UNKNOWN_REF_EXT` fail-closed、裸续引用归到同行前一个引用并按锚点 `also` 校验**行内容**
+  （未登记 / 越界 / 内容不符都判 RED）；`selftest` 10/10（含 9 条改坏必红）。
 
 ## 7. 当前状态（阻塞）
 
