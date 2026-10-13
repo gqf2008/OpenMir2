@@ -87,20 +87,31 @@ _WEAK_ONLY_TOKEN_RE = re.compile(r'^[^0-9A-Za-z_\u4e00-\u9fff]*$')
 
 # 锚引用的**路径前缀**（reviewer-6 f98f56f3 O-1 收口）：此前 `FILE_RE` 只取文件基名，
 #   带错误目录前缀的锚（如 `src/Evil/Messages.cs:62`）会解析成已登记的 `Messages.cs:62`
-#   而通过覆盖面。本门另外校验：锚文本里若显式写了目录前缀（每个目录段含字母），
+#   而通过覆盖面。本门另外校验：锚文本里若显式写了目录前缀，
 #   该前缀必须命中 `PATHS[基名]` 的**路径后缀**；只写基名仍按既有口径，不误伤。
+#
+#   reviewer-6 d52d4a294 后记 O-1（非阻塞）收口：旧实现要求「每个目录段都含字母」以规避
+#   `:3966-4105/File.cs` 的 spec 区间误报，副作用是「纯数字/点/横线构成的错误前缀」
+#   （如 `1/2/Messages.cs:62`）整段被跳过 ⇒ fail-open。现改为**只剔除紧跟 `:` 且形如
+#   `数字[-数字]` 的 spec 区间首段**，其余段一律按目录前缀判（不再要求含字母）。
 _PATHREF_RE = re.compile(
     r'((?:[A-Za-z0-9_.-]+/)*)([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\.(?:cs|sql))(?=\s*:)')
+
+# spec 区间段（`:3966-4105/File.cs` 里的 `3966-4105`）：仅当该段紧跟在锚文本 `:` 之后时剔除。
+_SPEC_RANGE_COMP_RE = re.compile(r'^\d+(?:-\d+)?$')
 
 
 def _path_prefix_findings(anchor_text, pather=PATHS):
     findings = []
     for m in _PATHREF_RE.finditer(anchor_text):
-        declared = m.group(1).strip("/")
-        comps = [c for c in declared.split("/") if c]
-        # 目录段必须含字母（防把 `:3966-4105/File.cs` 的 spec 区间误当目录前缀）。
-        if not comps or not all(re.search(r'[A-Za-z_]', c) for c in comps):
+        comps = [c for c in m.group(1).strip("/").split("/") if c]
+        # 剔除紧跟 `:` 的 spec 区间首段（如 `:3966-4105/`）；`1/2/Messages.cs` 这类真错前缀不在其列。
+        if (comps and m.start(1) > 0 and anchor_text[m.start(1) - 1] == ":"
+                and _SPEC_RANGE_COMP_RE.match(comps[0])):
+            comps = comps[1:]
+        if not comps:
             continue
+        declared = "/".join(comps)
         fname = m.group(2)
         rel = pather.get(fname)
         if rel is None:
@@ -600,11 +611,15 @@ def cmd_mutation(args):
     #   不再被「只取基名」放过 ⇒ RED；正确前缀 / 只写基名 ⇒ 不产生 finding。
     pf_key = next(k for k, v in PATHS.items() if "/" in v)
     pf_bad = _path_prefix_findings("src/Evil/" + pf_key + ":1")
+    pf_num = _path_prefix_findings("1/2/" + pf_key + ":1")
+    pf_spec = _path_prefix_findings(":3966-4105/" + pf_key + ":1")
     pf_ok = _path_prefix_findings(PATHS[pf_key] + ":1")
     pf_bare = _path_prefix_findings(pf_key + ":1")
-    red_o1 = len(pf_bad) == 1 and "锚路径前缀" in pf_bad[0] and not pf_ok and not pf_bare
-    sys.stdout.write("MUT-O1 路径前缀(错前缀必红/正确·裸基名不误伤): %s（%d 项）\n"
-                     % ("RED" if red_o1 else "GREEN", len(pf_bad)))
+    red_o1 = (len(pf_bad) == 1 and "锚路径前缀" in pf_bad[0]
+              and len(pf_num) == 1 and "锚路径前缀" in pf_num[0]
+              and not pf_spec and not pf_ok and not pf_bare)
+    sys.stdout.write("MUT-O1 路径前缀(错前缀/纯非字母前缀必红；spec 区间·正确·裸基名不误伤): %s（%d+%d 项）\n"
+                     % ("RED" if red_o1 else "GREEN", len(pf_bad), len(pf_num)))
     ok = ok and red_o1
 
     sys.stdout.write("MUTATION %s (%s)\n" % ("GREEN" if ok else "RED", out))
