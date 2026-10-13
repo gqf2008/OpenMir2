@@ -1,0 +1,21 @@
+# 29 — 边界与改动清单（base = origin/master 510daba5adc6b2332588a1d85b049cbf068439dc）
+
+## 冻结边界（必须为空）
+$ git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+(empty)
+
+## 本片改动清单（工作树 vs origin/master）
+$ git status --porcelain
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/26-frozen-client-layout-verify.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/27-redcheck-layout-verify.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/28-gates.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/29-boundary.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/verify_client_ability_layout.py
+
+## 冻结客户端本体（只读复核，未改）
+$ git -C E:/Users/gxh/Documents/GitHub/MirClient status --porcelain
+?? AGENTS.md
+(仅既有未跟踪 AGENTS.md，与本片无关)
+$ git -C E:/Users/gxh/Documents/GitHub/MirClient rev-parse HEAD
+c61d912d35efbe44b10f3abde32e40cbd93fc166
