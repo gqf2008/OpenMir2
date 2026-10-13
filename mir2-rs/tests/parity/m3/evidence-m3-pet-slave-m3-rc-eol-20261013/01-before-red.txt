@@ -1,0 +1,15 @@
+# 01-before-red.txt —— 无修复（8aebbcb85）新鲜检出 eolcheck
+
+$ file <finding 证据目录>/redchecks/RC5-*.rc
+mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013/redchecks/RC5-magicfire-self-frame-mutated.rc:  ASCII text, with CRLF line terminators
+mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013/redchecks/RC5-magicfire-self-frame-restored.rc: ASCII text, with CRLF line terminators
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs            # 全树
+EOLCHECK RED mir2-rs\tests\parity\m3\evidence-m3-pet-slave-f1-rework-20261013\redchecks\RC5-magicfire-self-frame-mutated.rc  (盘上是 CRLF，text attr=unspecified；仓库口径应为 LF)
+EOLCHECK RED mir2-rs\tests\parity\m3\evidence-m3-pet-slave-f1-rework-20261013\redchecks\RC5-magicfire-self-frame-restored.rc  (盘上是 CRLF，text attr=unspecified；仓库口径应为 LF)
+EOLCHECK RED 2/3592 件与仓库口径（LF）在 EOL 上不一致（修法：生产者用 LF 写出 / `verify_sha256sums.py write` 重记，或对冻结字节目录声明 `.gitattributes * -text`）
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck <finding 证据目录>  # 该目录（M-3 口径 2/19）
+EOLCHECK RED mir2-rs\tests\parity\m3\evidence-m3-pet-slave-f1-rework-20261013\redchecks\RC5-magicfire-self-frame-mutated.rc  (盘上是 CRLF，text attr=unspecified；仓库口径应为 LF)
+EOLCHECK RED mir2-rs\tests\parity\m3\evidence-m3-pet-slave-f1-rework-20261013\redchecks\RC5-magicfire-self-frame-restored.rc  (盘上是 CRLF，text attr=unspecified；仓库口径应为 LF)
+EOLCHECK RED 2/19 件与仓库口径（LF）在 EOL 上不一致（修法：生产者用 LF 写出 / `verify_sha256sums.py write` 重记，或对冻结字节目录声明 `.gitattributes * -text`）
