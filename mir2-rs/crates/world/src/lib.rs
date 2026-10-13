@@ -35,13 +35,14 @@ pub use bevy_bridge::{collect_tick_order_system, snapshot_from_world};
 pub use castle::{
     apply_structure_events, castle_official_action, compare_lstr, door_map_xy_flag_ops,
     door_state_text, hire_substring, hutil32_round, official_repair_door, official_repair_wall,
-    AttackerInfo, CastleDate, CastleEvent, CastleNow, CastleOfficialAction, CastleSiegeConfig,
-    CastleUnit, GuildId, HireSubstringError, OfficialRepairResult, StructureEvent, UserCastle,
-    CLOSE_MAIN_DOOR, DOOR_STATE_CLOSED, DOOR_STATE_DESTROYED, DOOR_STATE_OPENED, HIRE_ARCHER_NOW,
-    HIRE_GUARD_NOW, MAX_CASTLE_ARCHER, MAX_CASTLE_GUARD, OFFICIAL_REPAIR_NOT_ENOUGH_GOLD_MSG,
-    OFFICIAL_REPAIR_NOT_NEEDED_MSG, OFFICIAL_REPAIR_OK_MSG, OPEN_MAIN_DOOR, REPAIR_DOOR_NOW,
-    REPAIR_WALL_NOW_1, REPAIR_WALL_NOW_2, REPAIR_WALL_NOW_3, SS_204, SS_212,
-    STRUCTURE_REPAIR_DELAY_MS,
+    AttackerInfo, CastleDate, CastleDefenseSpecs, CastleEvent, CastleInitializeEnv, CastleNow,
+    CastleOfficialAction, CastleSiegeConfig, CastleUnit, DefenseCreature, DefenseRole,
+    DefenseSpawn, DefenseUnitSpec, GuildId, HireSubstringError, OfficialRepairResult,
+    StructureEvent, UserCastle, CLOSE_MAIN_DOOR, DOOR_STATE_CLOSED, DOOR_STATE_DESTROYED,
+    DOOR_STATE_OPENED, HIRE_ARCHER_NOW, HIRE_GUARD_NOW, MAX_CASTLE_ARCHER, MAX_CASTLE_GUARD,
+    OFFICIAL_REPAIR_NOT_ENOUGH_GOLD_MSG, OFFICIAL_REPAIR_NOT_NEEDED_MSG, OFFICIAL_REPAIR_OK_MSG,
+    OPEN_MAIN_DOOR, REPAIR_DOOR_NOW, REPAIR_WALL_NOW_1, REPAIR_WALL_NOW_2, REPAIR_WALL_NOW_3,
+    SS_204, SS_212, STRUCTURE_REPAIR_DELAY_MS,
 };
 pub use castle_tax::{
     merchant_tax_amount, merchant_tax_target, CastleManager, CastleTaxConfig, IncRateGoldOutcome,
