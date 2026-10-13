@@ -1,0 +1,68 @@
+diff --git a/mir2-rs/tests/parity/m3/guild_castle_scenario.json b/mir2-rs/tests/parity/m3/guild_castle_scenario.json
+index b440377e6..d6752437b 100644
+--- a/mir2-rs/tests/parity/m3/guild_castle_scenario.json
++++ b/mir2-rs/tests/parity/m3/guild_castle_scenario.json
+@@ -45,7 +45,7 @@
+         {"role": "a", "op": "del_member", "param": "peer"},
+         {"role": "a", "op": "observe", "param": ""}
+       ],
+-      "note": "成员/封号：加成员仅掌门且对方须在线且 GetPoseCreate()==this（PlayObject.Operate.cs:1307-1368；失败码 1..5）⇒ SM_GUILDADDMEMBER_OK(757)/_FAIL(758)；封号 CM_GUILDUPDATERANKINFO(1041) ⇒ UpdateRank（GuildInfo.cs:708-993；**成功即清空 RankList（N3）**⇒ SM_GUILDRANKUPDATE_FAIL(761) 只在失败时发）；删成员 CM_GUILDDELMEMBER(1039) ⇒ SM_GUILDDELMEMBER_OK(759)/_FAIL(760)。判据 = 帧 Recog 码（帧标量 a）+ 756 文本逐字节 + guild_name。"
++      "note": "成员/封号：加成员仅掌门且对方须在线且 GetPoseCreate()==this（PlayObject.Operate.cs:1307-1367；失败码 1..5）⇒ SM_GUILDADDMEMBER_OK(757)/_FAIL(758)；封号 CM_GUILDUPDATERANKINFO(1041) ⇒ UpdateRank（GuildInfo.cs:708-993；**成功即清空 RankList（N3）**⇒ SM_GUILDRANKUPDATE_FAIL(761) 只在失败时发）；删成员 CM_GUILDDELMEMBER(1039) ⇒ SM_GUILDDELMEMBER_OK(759)/_FAIL(760)。判据 = 帧 Recog 码（帧标量 a）+ 756 文本逐字节 + guild_name。"
+     },
+     "guild_ally_ops": {
+       "steps": [
+@@ -53,7 +53,7 @@
+         {"role": "a", "op": "break_ally", "param": "peerGuild"},
+         {"role": "a", "op": "observe", "param": ""}
+       ],
+-      "note": "联盟：CM_GUILDALLY(1044) ⇒ SM_GUILDMAKEALLY_OK(768)/_FAIL(769)（PlayObject.Operate.cs:1465-1523；GuildInfo.cs:1007-1019 的 `GuildAllList.Add` 被注释 ⇒ 联盟表恒空，登记）；CM_GUILDBREAKALLY(1045) ⇒ SM_GUILDBREAKALLY_OK(770)/_FAIL(771)。判据 = 帧 Recog 码 + 帧序列。"
++      "note": "联盟：CM_GUILDALLY(1044) ⇒ SM_GUILDMAKEALLY_OK(768)/_FAIL(769)（PlayObject.Operate.cs:1465-1523；GuildInfo.cs:1007-1018 的 `GuildAllList.Add` 被注释 ⇒ 联盟表恒空，登记）；CM_GUILDBREAKALLY(1045) ⇒ SM_GUILDBREAKALLY_OK(770)/_FAIL(771)。判据 = 帧 Recog 码 + 帧序列。"
+     },
+     "build_guild_npc": {
+       "steps": [
+@@ -69,7 +69,7 @@
+         {"role": "a", "op": "wait", "param": "1000"},
+         {"role": "a", "op": "observe", "param": ""}
+       ],
+-      "note": "行会战（NPC 触发）：GuildOfficial.cs:74-77 `@@guildwar` → ReQuestGuildWar（:180-201：FindGuild + Gold>=GuildWarPrice(30000)）；PlayObject.Base.cs:3349-3386（IsGuildMaster + ServerIndex!=0 拒绝 + AddWarGuild）；**N2 反逻辑（GuildInfo.cs:1039 `if (warGuild.WarTime>0)` 反置）**⇒ 未在战中宣战不生效、已战追加重复条目。判据 = SS/GuildMsg + 条目 State + 落盘 GuildBase/Guilds/<名>.txt。时间门（GuildWarTime=7200000）⇒ 依赖 openmir2-m3-clock-injection。"
++      "note": "行会战（NPC 触发）：GuildOfficial.cs:74-77 `@@guildwar` → ReQuestGuildWar（:180-199：FindGuild + Gold>=GuildWarPrice(30000)）；PlayObject.Base.cs:3349-3385（IsGuildMaster + ServerIndex!=0 拒绝 + AddWarGuild）；**N2 反逻辑（GuildInfo.cs:1039 `if (warGuild.WarTime>0)` 反置）**⇒ 未在战中宣战不生效、已战追加重复条目。判据 = SS/GuildMsg + 条目 State + 落盘 GuildBase/Guilds/<名>.txt。时间门（GuildWarTime=7200000）⇒ 依赖 openmir2-m3-clock-injection。"
+     },
+     "castle_siege_apply": {
+       "steps": [
+@@ -94,25 +94,25 @@
+         {"role": "a", "op": "repair_door", "param": "@repairdoor"},
+         {"role": "a", "op": "observe", "param": ""}
+       ],
+-      "note": "修门时间门：UserCastle.cs:920-955 RepairDoor（`BaseObject==null || UnderWar || HP>=MaxHP` 拒绝；`(GetTickCount()-StruckTick)>60s` 才回满血）+ 修墙 :956-997；NPC 入口 CastleOfficial.cs:358-406（TotalGold>=RepairDoorPrice(2000000)/RepairWallPrice(500000) 才扣）。wait 的 param = 虚拟毫秒推进量。**依赖 openmir2-m3-clock-injection**（两侧可注入时钟），本片只登记、不实现。"
++      "note": "修门时间门：UserCastle.cs:920-949 RepairDoor（`BaseObject==null || UnderWar || HP>=MaxHP` 拒绝；`(GetTickCount()-StruckTick)>60s` 才回满血）+ 修墙 :956-996；NPC 入口 CastleOfficial.cs:358-406（TotalGold>=RepairDoorPrice(2000000)/RepairWallPrice(500000) 才扣）。wait 的 param = 虚拟毫秒推进量。**依赖 openmir2-m3-clock-injection**（两侧可注入时钟），本片只登记、不实现。"
+     }
+   },
+   "oracle_anchors": {
+-    "build_guild": "GuildOfficial.cs:70-72/112-178/142-161/170-177（@@buildguildnow → ReQuestBuildGuild → AddGuild/扣金币/扣号角/回 RM_BUILDGUILD_OK/FAIL）",
++    "build_guild": "GuildOfficial.cs:70-72/112-172/142-162/163-170（@@buildguildnow → ReQuestBuildGuild → AddGuild/扣金币/扣号角/回 RM_BUILDGUILD_OK/FAIL）",
+     "name_gate": "M2Share.cs:529-545 CheckGuildName（Length>GuildNameLen(15) + 黑名单；**N4：循环 i<Length-1 漏比末位**）",
+     "dup_gate": "GuildManager.cs:19-32 CheckGuildName+FindGuild==null（大小写敏感）",
+-    "guild_panel": "PlayObject.Operate.cs:1229-1277（拼 Notice/KillGuilds/AllyGuilds + SM_OPENGUILDDLG(753)）/ :1283-1306（成员列表 756）",
+-    "member_ops": "PlayObject.Operate.cs:1307-1368（add_member，RankList.Count<400 硬门）/ :1369-1425（del_member/CancelGuld）/ :1426-1443（notice）/ :1444-1463 + GuildInfo.cs:708-993（UpdateRank；**N3 成功即清空 RankList**）",
+-    "ally": "PlayObject.Operate.cs:1465-1560 + GuildInfo.cs:1007-1019/129-159（**GuildAllList.Add 被注释 ⇒ 联盟表恒空**）",
+-    "guild_war": "GuildOfficial.cs:74-77/180-201 + PlayObject.Base.cs:3349-3386 + GuildInfo.cs:1020-1056 AddWarGuild（**N2 条件反置**）+ GuildManager.cs:145-167 Run（超时 EndGuildWar）",
++    "guild_panel": "PlayObject.Operate.cs:1229-1276（拼 Notice/KillGuilds/AllyGuilds + SM_OPENGUILDDLG(753)）/ :1283-1305（成员列表 756）",
++    "member_ops": "PlayObject.Operate.cs:1307-1367（add_member，RankList.Count<400 硬门）/ :1369-1424（del_member/CancelGuld）/ :1426-1442（notice）/ :1444-1463 + GuildInfo.cs:708-993（UpdateRank；**N3 成功即清空 RankList**）",
++    "ally": "PlayObject.Operate.cs:1465-1523 + GuildInfo.cs:1007-1018/129-159（**GuildAllList.Add 被注释 ⇒ 联盟表恒空**）",
++    "guild_war": "GuildOfficial.cs:74-77/180-199 + PlayObject.Base.cs:3349-3385 + GuildInfo.cs:1020-1056 AddWarGuild（**N2 条件反置**）+ GuildManager.cs:145-167 Run（超时 EndGuildWar）",
+     "dispatch": "PlayObject.Message.cs:975-1007（9 个 CM_GUILD* 派发）",
+     "castle_register": "GuildOfficial.cs:206-233（N1 不可达）+ UserCastle.cs:998-1014 AddAttackerInfo(GuildInfo) + :242-309 Load/SaveAttackSabukWall",
+-    "castle_run": "UserCastle.cs:311-448 Run（每日 StartCastlewarTime 开战 + CastleWarTime/ShowCastleWarEndMsgTime 时限 + 墙 StoneMode + 守卫回收）",
+-    "castle_door": "CastleDoor.cs:9-116 + UserCastle.cs:890-910 MainDoorControl + :920-997 RepairDoor/RepairWall + CastleOfficial.cs:52-67/199-226/358-406",
++    "castle_run": "UserCastle.cs:311-446 Run（每日 StartCastlewarTime 开战 + CastleWarTime/ShowCastleWarEndMsgTime 时限 + 墙 StoneMode + 守卫回收）",
++    "castle_door": "CastleDoor.cs:9-116 + UserCastle.cs:890-909 MainDoorControl + :920-996 RepairDoor/RepairWall + CastleOfficial.cs:52-67/199-226/358-406",
+     "castle_tax": "UserCastle.cs:768-812 IncRateGold + :814-889 WithDrawalGolds/ReceiptGolds（N1）+ Merchant.cs:544/1250/1385/1637 税",
+-    "region": "UserCastle.cs:454-479 InCastleWarArea + WorldServer.cs:298-334 进图落点改写（GetHomeX/Y 用 Random(9)）",
+-    "frames": "Messages.cs:750/753/754/756/757/758/759/760/761/762/763/767/768/769/770/771（SM）+ 10303/10304（RM_BUILDGUILD_OK/FAIL）+ 1044/1045（CM_GUILDALLY/BREAKALLY）+ 1035..1041（CM_GUILD* 面板）",
+-    "botsrv_primitives": "RobotPlayer.cs:3687-3790（SendGuildDlg/Home/MemberList/AddMem/DelMem/UpdateNotice/UpdateGrade）+ RobotPlayer.Operate.cs:1305-1520（全部 SM_GUILD*/SM_BUILDGUILD* 观测）+ :3532/3594 SendMerchantDlgSelect（CM_MERCHANTDLGSELECT 1011）",
++    "region": "UserCastle.cs:454-478 InCastleWarArea + WorldServer.cs:298-334 进图落点改写（GetHomeX/Y 用 Random(9)）",
++    "frames": "Messages.cs:364/367/368/369/370/371/372/373/374/375/376/379/380/381/382/383（SM）+ 10303/10304（RM_BUILDGUILD_OK/FAIL）+ 1044/1045（CM_GUILDALLY/BREAKALLY）+ 1035..1041（CM_GUILD* 面板）",
++    "botsrv_primitives": "RobotPlayer.cs:4708-4809（SendGuildDlg/Home/MemberList/AddMem/DelMem/UpdateNotice/UpdateGrade）+ RobotPlayer.Operate.cs:1319-1540（全部 SM_GUILD*/SM_BUILDGUILD* 观测）+ RobotPlayer.cs:4553 SendMerchantDlgSelect（CM_MERCHANTDLGSELECT 1011）",
+     "db": "sql/ 无 guild/guildmember/castle 表或列（盘点 §1.J，`rg -ni 'guild|castle' sql/` 唯一命中 characters.AllowGuildReCall）⇒ 两侧都不落库；持久产物 = GuildBase/GuildList.txt + GuildBase/Guilds/<名>.txt + Castle/<N>/SabukW.txt + AttackSabukWall.txt",
+     "clock_injection": "openmir2-m3-clock-injection（C# 影子 hook MIR2_CLOCK_* + Rust world.clock_ms/now_ms()）；时间门 = GuildWarTime / StartCastleWarDays / StartCastlewarTime / CastleWarTime / GetCastleTime / ShowCastleWarEndMsgTime / RepairDoor 60s / SaveTick 10min"
+   },

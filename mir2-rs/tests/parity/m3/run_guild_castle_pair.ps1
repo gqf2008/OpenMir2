@@ -277,6 +277,26 @@ if ($SelfCheckNoStack) {
     Add-Result 'comparator-selftest' $stOk ("rc=$stRc")
     if (-not $stOk) { Write-Output $stOut }
 
+    # ②′ 场景锚门（guild_castle_anchor_gate.py）：oracle_anchors 覆盖面 + 每条锚的起点/终点行对冻结 src/
+    $AnchorGate = Join-Path $Here 'guild_castle_anchor_gate.py'
+    $ErrorActionPreference = 'Continue'
+    $agOut = (& python -I $AnchorGate check 2>&1 | Out-String)
+    $agRc = $LASTEXITCODE
+    $agOk = ($agRc -eq 0) -and ($agOut -match '(?m)^GREEN:')
+    Add-Result 'anchor-gate-check' $agOk ("rc=$agRc")
+    if (-not $agOk) { Write-Output $agOut }
+    $agsOut = (& python -I $AnchorGate selftest 2>&1 | Out-String)
+    $agsRc = $LASTEXITCODE
+    $agsOk = ($agsRc -eq 0) -and ($agsOut -match '(?m)^SELFTEST GREEN')
+    Add-Result 'anchor-gate-selftest' $agsOk ("rc=$agsRc")
+    if (-not $agsOk) { Write-Output $agsOut }
+    $agmOut = (& python -I $AnchorGate mutation 2>&1 | Out-String)
+    $agmRc = $LASTEXITCODE
+    $agmOk = ($agmRc -eq 0) -and ($agmOut -match '(?m)^MUTATION GREEN')
+    Add-Result 'anchor-gate-mutation-red' $agmOk ("rc=$agmRc")
+    if (-not $agmOk) { Write-Output $agmOut }
+    $ErrorActionPreference = $prevEap
+
     # ③ 逐项相同 ⇒ 绿（进程内集成，走生产 diff 函数）
     $csGood = Join-Path $tmpRoot 'cs-good.jsonl'
     $rsGood = Join-Path $tmpRoot 'rs-good.jsonl'
@@ -407,7 +427,7 @@ if ($SelfCheckNoStack) {
   $total = $script:PtPass + $script:PtFail.Count
   Write-Output ("SELFTEST ok={0}/{1} failures={2}" -f $script:PtPass, $total, ($script:PtFail -join ','))
   if ($script:PtFail.Count -gt 0) { exit 1 }
-  Write-Output 'GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + bot 集合 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + run_bots 计数 + 入口/DiffOnly/AssembleOnly/preflight/no-Go fail-closed + LF + 零端口）'
+  Write-Output 'GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + 场景锚门 check/selftest/mutation + bot 集合 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + run_bots 计数 + 入口/DiffOnly/AssembleOnly/preflight/no-Go fail-closed + LF + 零端口）'
   exit 0
 }
 
