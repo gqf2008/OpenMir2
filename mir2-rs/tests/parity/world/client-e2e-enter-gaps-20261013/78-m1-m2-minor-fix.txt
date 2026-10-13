@@ -1,0 +1,47 @@
+78-m1-m2-minor-fix.txt —— 卡 `openmir2-client-e2e-enter-gaps` 两条随卡 Minor 收口
+（m2-svr / openmir2-worker-11，2026-10-14；merge_result 3133762a 的 carried_minor M-2）
+
+M-1（reviewer-5 f3b3f96f）：`check_aoi_visibility_diag.py` 的 INFO 行**恒**打印「vis==0 与窗口自洽」，
+即使样本 vis=13（visible-green 自检输出）⇒ 措辞误导阅读者。
+改法：按 vis 实际值与窗口内外关系输出——
+  vis==0 且 nearest>vr  ⇒「vis==0 与窗口外自洽」
+  vis==0 且 nearest<=vr ⇒「vis==0 但 nearest<=vr（窗口内却不可见）**需查 AOI**」
+  vis>0  且 nearest<=vr ⇒「vis>0 与窗口内自洽」
+  vis>0  且 nearest>vr  ⇒「vis>0 但 nearest>vr（窗口外却可见）**需查 AOI**」
+（旧文案不再出现；判绿红逻辑一字未动。）
+
+[M-1 after] 可见样本 vis=13 nearest=2：
+$ python -I -B check_aoi_visibility_diag.py --log /tmp/m2svr-vis.txt --expect visible --min-vis 1
+INFO 采样 aaa(7) map=26 vr=12 vis=13 new=13 af=26 same_map=1726 nearest=2 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+OK  ③ --expect visible：max vis=13 >= 1，max af=26 >= 2
+RESULT: GREEN
+rc=0
+
+[M-1 after] 无怪样本 vis=0 nearest=23（= root verify1 位置）：
+$ python -I -B check_aoi_visibility_diag.py --log /tmp/m2svr-none.txt --expect none
+INFO 采样 aaa(7) map=26 vr=12 vis=0 new=0 af=0 same_map=1726 nearest=23 ⇒ nearest>vr（窗口外）；vis==0 与窗口外自洽
+OK  ② --expect none：1 条采样 vis==0 且 af==0（该点窗口内无怪）
+RESULT: GREEN
+rc=0
+
+[M-1 after] 不自洽样本 vis=0 nearest=2（窗口内却不可见 ⇒ 应点名查 AOI）：
+$ python -I -B check_aoi_visibility_diag.py --log /tmp/m2svr-incons.txt --expect none
+INFO 采样 aaa(7) map=26 vr=12 vis=0 new=0 af=0 same_map=1726 nearest=2 ⇒ nearest<=vr（窗口内）；vis==0 但 nearest<=vr（窗口内却不可见）**需查 AOI**
+OK  ② --expect none：1 条采样 vis==0 且 af==0（该点窗口内无怪）
+RESULT: GREEN
+rc=0
+
+[M-1] 自证 9/9 未回归：
+$ python -I -B check_aoi_visibility_diag.py --selftest
+SELFTEST OK (9/9)
+rc=0
+
+M-2（reviewer-5 f3b3f96f / 4e8aef6d）：`SHA256SUMS.txt` 有 8 行用「两空格 + *」分隔 ⇒ GNU
+`sha256sum -c` 报 No such file，仓库权威 `verify_sha256sums.py --check-extra` 静默跳过（GREEN 62/62
+而非 70/70）。reviewer 逐条复算 8 个 blob(LF) 一致 ⇒ 无完整性问题，仅格式。
+改法：本片触碰该目录时，先用 `verify_sha256sums.py write <dir>` 重记既有 70 条，再把全部条目
+统一为单空格格式并补入本片新增 5 件（共 75 条）。8 行 hash 值经复算未变（内容未改）。
+
+[M-2 改前] 两空格 + * 行数 = 8（50..55、capture-client-run5.jsonl、check_client_run_frames.py）
+[M-2 改后] 两空格 + * 行数 = 0；清单 75 条（原 70 + 本片新增 5 件），全部单空格分隔。
+（本目录清单由 `verify_sha256sums.py write`+按单一格式重写：75 条、全部单空格分隔；仓库权威器 `--check-extra` 与 `eolcheck` 的 GREEN 原始输出见 patch/status 线程，避免清单自指。）
