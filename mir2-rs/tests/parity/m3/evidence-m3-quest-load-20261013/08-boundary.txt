@@ -1,0 +1,25 @@
+# 边界（写入集）
+## git diff --name-only origin/master HEAD
+mir2-rs/crates/envir/src/lib.rs
+mir2-rs/crates/envir/src/mapquest.rs
+mir2-rs/crates/envir/tests/mapquest.rs
+"mir2-rs/tests/parity/m3/M3\342\221\245\344\273\273\345\212\241\351\205\215\347\275\256MapQuest\345\212\240\350\275\275\346\212\245\345\221\212-20261013.md"
+mir2-rs/tests/parity/m3/evidence-m3-quest-load-20261013/01-deployment-input.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-load-20261013/02-deployment-readout.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-load-20261013/03-gates-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-load-20261013/04-gates-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-load-20261013/05-gates-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-load-20261013/06-gates-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-load-20261013/07-mutation-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-load-20261013/07a-mutation-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-load-20261013/07b-mutation-red-group.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-load-20261013/07c-restore-green.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-load-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-quest-load-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-load-20261013/window/00-ports.txt
+
+## git diff --stat origin/master HEAD -- src sql MirClient
+(空 = 冻结基线与表结构零改动)
+
+## git diff --stat origin/master HEAD -- mir2-rs/bins mir2-rs/crates/world mir2-rs/crates/data
+(空 = 未碰 m2svr 单线/crates/data)

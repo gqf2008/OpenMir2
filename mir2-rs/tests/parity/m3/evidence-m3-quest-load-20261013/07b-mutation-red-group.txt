@@ -1,0 +1,16 @@
+
+failures:
+
+---- synthetic_vectors stdout ----
+
+thread 'synthetic_vectors' (5748) panicked at crates\envir\tests\mapquest.rs:71:5:
+CompareLStr 只比前 5 字符
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    synthetic_vectors
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-envir --test mapquest`
