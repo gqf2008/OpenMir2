@@ -74,6 +74,13 @@ function Invoke-RngSceneGate {
   return [int]$LASTEXITCODE
 }
 
+function Invoke-RngSceneScenario {
+  param([Parameter(Mandatory = $true)][string]$Scenario, [Parameter(Mandatory = $true)][ref]$Out)
+  $raw = & python -I $SceneGate scenario --scenario $Scenario 2>&1
+  $Out.Value = ($raw | Out-String)
+  return [int]$LASTEXITCODE
+}
+
 function Invoke-RngGroupDiff {
   param([Parameter(Mandatory = $true)][string]$A, [Parameter(Mandatory = $true)][string]$B,
         [Parameter(Mandatory = $true)][ref]$Out)
@@ -113,7 +120,8 @@ function New-RngSceneFiles([string]$Dir, [string]$FixtureName, [string]$Map, [in
     ('  "map": "' + $Map + '",'),
     '  "start_pose": {"x": 17, "y": 20, "dir": 2},',
     ('  "monsters": [' + $mon + '],'),
-    ('  "mongen_fixture": "' + $FixtureName + '"'),
+    ('  "mongen_fixture": "' + $FixtureName + '",'),
+    '  "trace": { "fold": { "construct": "spawn" }, "groups_expected": ["monster_ai", "spawn", "drop"] }',
     '}') -join "`n")
   $descA = Join-Path $Dir 'a-scene.json'
   $descB = Join-Path $Dir 'b-scene.json'
@@ -308,7 +316,26 @@ if ($SelfCheckNoStack) {
     Add-Result 'scenario-runner-param-drift-red' ((-not $rpBad.ok) -and ($rpBad.missing -contains 'NotARealParam')) `
       ("missing=" + ($rpBad.missing -join ','))
 
-    # ⑬ 本脚本从未触碰端口（自检/门/比较全离线）
+    # ⑬ scenario 声明 vs 代码真源：已入库 scenario 的 folded 映射 + 组清单必须与账本实现同口径
+    #    （M-1 的 sibling：同一族 doc-vs-code 漂移）。
+    $scOut = ''
+    $scRc = Invoke-RngSceneScenario -Scenario $ScenarioFile -Out ([ref]$scOut)
+    Add-Result 'scenario-fold-group-consistency-green' (($scRc -eq 0) -and ($scOut -match 'VERDICT GREEN')) ("rc=$scRc")
+    # 改坏必红 A：scenario 声明的 folded 映射与 FOLD_RULES 漂移 ⇒ 必红且点名 scenario-fold-matches-code。
+    $driftScen = Join-Path $tmpRoot 'scenario-fold-drift.json'
+    $rawScen2 = Get-Content -LiteralPath $ScenarioFile -Raw
+    Write-M3LfText -Path $driftScen -Text ($rawScen2 -replace '"construct"\s*:\s*"spawn"', '"construct": "monster_ai"')
+    $scOut2 = ''
+    $scRc2 = Invoke-RngSceneScenario -Scenario $driftScen -Out ([ref]$scOut2)
+    Add-Result 'scenario-fold-drift-red' (($scRc2 -eq 1) -and ($scOut2 -match 'scenario-fold-matches-code')) ("rc=$scRc2")
+    # 改坏必红 B：groups_expected 塞入账本未知组 ⇒ 必红且点名 scenario-groups-known。
+    $grpScen = Join-Path $tmpRoot 'scenario-groups-unknown.json'
+    Write-M3LfText -Path $grpScen -Text ($rawScen2 -replace '("groups_expected"\s*:\s*\[)', '$1"no_such_group", ')
+    $scOut3 = ''
+    $scRc3 = Invoke-RngSceneScenario -Scenario $grpScen -Out ([ref]$scOut3)
+    Add-Result 'scenario-groups-unknown-red' (($scRc3 -eq 1) -and ($scOut3 -match 'scenario-groups-known')) ("rc=$scRc3")
+
+    # ⑯ 本脚本从未触碰端口（自检/门/比较全离线）
     Add-Result 'no-port-touched' (-not $script:RngSceneTouchedPorts) 'offline-only'
   } finally {
     Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
@@ -317,7 +344,7 @@ if ($SelfCheckNoStack) {
   $total = $script:RngPass + $script:RngFail.Count
   Write-Output ("SELFTEST ok={0}/{1} failures={2}" -f $script:RngPass, $total, ($script:RngFail -join ','))
   if ($script:RngFail.Count -gt 0) { exit 1 }
-  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + folded 映射等价绿/计数·次序必红 + LF 写出 + 零端口）'
+  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + LF 写出 + 零端口）'
   exit 0
 }
 

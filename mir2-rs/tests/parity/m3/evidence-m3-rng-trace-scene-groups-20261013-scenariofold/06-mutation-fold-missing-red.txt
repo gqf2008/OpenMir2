@@ -1,0 +1,12 @@
+$ python -I -B rng-trace-scene/rng_scene_gate.py scenario --scenario /e/tmp/m3bag-scenariofold/fold-missing.json
+RNG_SCENE_SCENARIO scenario=E:/tmp/m3bag-scenariofold/fold-missing.json checks=8 failed=2
+  CHECK scenario-canon                     ok
+  CHECK scenario-fields                    ok
+  CHECK scenario-trace-present             ok
+  CHECK scenario-fold-code-valid           ok
+  CHECK scenario-fold-declared             FAIL (scenario.trace.fold=None（必须显式声明折叠映射）)
+  CHECK scenario-fold-matches-code         FAIL (scenario.trace.fold=None code.FOLD_RULES={'construct': 'spawn'})
+  CHECK scenario-groups-declared           ok
+  CHECK scenario-groups-known              ok
+  VERDICT RED: scenario 声明与代码真源不一致（fail-closed）：scenario-fold-declared, scenario-fold-matches-code
+rc=1

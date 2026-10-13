@@ -1,0 +1,45 @@
+# 证据：M3 RNG 站点组 — scenario 声明的 folded 映射 / 组清单 与代码真源同口径（M-1 sibling）
+# 卡：openmir2-m3-rng-trace-scene-groups（issue d9d03f47）
+# 车道 m3bag / principal openmir2-worker-4 / 分支 worktree-m3-rng-trace-scene-groups
+# base = master 9edfe4b72（本片最终 head oid 见线程 patch 条目）
+# 写集 = mir2-rs/tests/parity/m3/**；零 .rs / 零 crates / 零 bins / 零 src / 零 sql / 零 MirClient
+# 环境：Windows / Git Bash；cwd = <worktree>/mir2-rs/tests/parity/m3（除 §四门禁 cwd = <worktree>/mir2-rs）
+# 编译隔离：CARGO_TARGET_DIR=E:/tmp/m3bag-target；全部 --offline；未起栈、未占端口（仅共享 3306 在听）
+
+## 一、工具自检（离线，零端口）
+python -I -B rng-trace-scene/rng_scene_gate.py selftest          # 见 02-selftest-scene-gate.txt
+python -I -B rng-trace-probe/rng_ledger_diff.py selftest         # 见 07-selftest-rng-ledger-diff.txt
+python -I -B attack_rng_ledger.py selftest                       # 见 08-selftest-attack-rng-ledger.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack
+                                                                 # 见 01-selftest-nostack.txt（17/17）
+
+## 二、scenario 件自身（离线；锁住已入库 rng_trace_scenario.json 与代码真源同口径）
+python -I -B rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json
+                                                                 # 见 03-scenario-mode-green.txt（VERDICT GREEN）
+
+## 三、改坏必红（外部复现；副本在 E:/tmp/m3bag-scenariofold/，被审 worktree 未被污染）
+# 由 base scenario 复制并只改被测字段，再跑 scenario 模式：
+python -I -B rng-trace-scene/rng_scene_gate.py scenario --scenario <scratch>/fold-drift.json
+#   ⇒ scenario-fold-matches-code FAIL，rc=1（见 04-mutation-fold-drift-red.txt）
+python -I -B rng-trace-scene/rng_scene_gate.py scenario --scenario <scratch>/groups-unknown.json
+#   ⇒ scenario-groups-known FAIL（未知组 ['no_such_group']），rc=1（见 05-mutation-groups-unknown-red.txt）
+python -I -B rng-trace-scene/rng_scene_gate.py scenario --scenario <scratch>/fold-missing.json
+#   ⇒ scenario-fold-declared FAIL，rc=1（见 06-mutation-fold-missing-red.txt）
+# 复现脚本（生成三份副本）：
+#   python -c "import json;b=json.load(open('rng-trace-scene/rng_trace_scenario.json',encoding='utf-8'));o=json.loads(json.dumps(b));o['trace']['fold']={'construct':'monster_ai'};json.dump(o,open('fold-drift.json','w',encoding='utf-8'),ensure_ascii=False,indent=2)"
+
+## 四、四门禁（cwd = <worktree>/mir2-rs；CARGO_TARGET_DIR=E:/tmp/m3bag-target；--offline）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline --no-fail-fast
+cargo run -p msgcodegen --offline -- --check
+                                                                 # 读数见 09-gates-four.txt
+
+## 五、边界
+git diff --name-only 9edfe4b72
+git diff --name-only 9edfe4b72 -- src sql MirClient mir2-rs/crates mir2-rs/bins
+                                                                 # 见 10-boundary.txt
+
+## 六、未做 / 边界
+# 真机同场景含怪两相 trace + groupdiff --fold --strict 仍需 owner 独占窗口 + 生产者驱动承接卡
+# （real-run 对 -Go/-PinScene 一律 fail-closed exit 2）；本片纯离线、零端口、未起栈。
