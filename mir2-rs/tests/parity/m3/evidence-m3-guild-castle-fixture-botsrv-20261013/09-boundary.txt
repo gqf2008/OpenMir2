@@ -1,0 +1,71 @@
+# base = origin/master 0dde01b7（staged 视图）
+
+## git diff --cached --name-only origin/master -- src sql MirClient
+src/BotSrv/AppService.cs
+src/BotSrv/GuildCastleSeqSelfCheck.cs
+src/BotSrv/MShare.cs
+src/BotSrv/Player/RobotPlayer.Operate.cs
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/Program.cs
+src/BotSrv/RobotOptions.cs
+
+## git diff --cached --name-only origin/master（全部）
+"mir2-rs/tests/parity/m3/M3\342\221\247\345\205\254\344\274\232\346\224\273\345\237\216\345\212\250\344\275\234\345\272\217\345\210\227\345\244\271\345\205\267\351\252\250\346\236\266\346\212\245\345\221\212-20261013.md"
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/01-guildcastle-diff-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/02-run-guildcastle-pair-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/03-botsrv-guildcastleseq-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/04-run-bots-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/05-gate-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/06-gate-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/07-gate-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/08-gate-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/09-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/10-external-break-comparator.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/gate_guards.ps1
+mir2-rs/tests/parity/m3/guild_castle_diff.py
+mir2-rs/tests/parity/m3/guild_castle_scenario.json
+mir2-rs/tests/parity/m3/run_guild_castle_pair.ps1
+mir2-rs/tests/parity/m3/run_pair.ps1
+mir2-rs/tests/parity/whitelist.md
+src/BotSrv/AppService.cs
+src/BotSrv/GuildCastleSeqSelfCheck.cs
+src/BotSrv/MShare.cs
+src/BotSrv/Player/RobotPlayer.Operate.cs
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/Program.cs
+src/BotSrv/RobotOptions.cs
+tools/botload/run_bots.ps1
+
+## git diff --cached --stat origin/master
+ ...46\236\266\346\212\245\345\221\212-20261013.md" |   96 ++
+ .../00-commands.txt                                |   45 +
+ .../01-guildcastle-diff-selftest.txt               |   45 +
+ .../02-run-guildcastle-pair-selfcheck.txt          |   22 +
+ .../03-botsrv-guildcastleseq-selftest.txt          |   42 +
+ .../04-run-bots-selfcheck.txt                      |    1 +
+ .../05-gate-fmt.txt                                |    0
+ .../06-gate-clippy.txt                             |  202 +++
+ .../07-gate-test.txt                               | 1614 ++++++++++++++++++++
+ .../08-gate-msgcodegen.txt                         |    8 +
+ .../09-boundary.txt                                |   20 +
+ .../10-external-break-comparator.txt               |   45 +
+ .../README.md                                      |   43 +
+ .../SHA256SUMS.txt                                 |   12 +
+ mir2-rs/tests/parity/m3/gate_guards.ps1            |  104 ++
+ mir2-rs/tests/parity/m3/guild_castle_diff.py       |  706 +++++++++
+ mir2-rs/tests/parity/m3/guild_castle_scenario.json |  154 ++
+ mir2-rs/tests/parity/m3/run_guild_castle_pair.ps1  |  587 +++++++
+ mir2-rs/tests/parity/m3/run_pair.ps1               |   59 +-
+ mir2-rs/tests/parity/whitelist.md                  |   15 +
+ src/BotSrv/AppService.cs                           |   14 +
+ src/BotSrv/GuildCastleSeqSelfCheck.cs              |  129 ++
+ src/BotSrv/MShare.cs                               |  180 +++
+ src/BotSrv/Player/RobotPlayer.Operate.cs           |    2 +
+ src/BotSrv/Player/RobotPlayer.cs                   |  273 ++++
+ src/BotSrv/Program.cs                              |    5 +
+ src/BotSrv/RobotOptions.cs                         |   24 +
+ tools/botload/run_bots.ps1                         |   48 +-
+ 28 files changed, 4485 insertions(+), 10 deletions(-)

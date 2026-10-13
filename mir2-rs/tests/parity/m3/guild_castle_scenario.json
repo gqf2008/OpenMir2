@@ -1,0 +1,154 @@
+{
+  "canon": "m3-guild-castle-v1",
+  "status": "skeleton-window-pending",
+  "card": "openmir2-m3-guild-castle-fixture-botsrv",
+  "parent_card": "openmir2-m3-guild-castle-align",
+  "bots": 2,
+  "master_role": 0,
+  "peer_role": 1,
+  "default_case": "guild_panel_no_guild",
+  "map": "0137",
+  "home_map": 0,
+  "home_x": 289,
+  "home_y": 618,
+  "player_x": 17,
+  "player_y": 20,
+  "player_dir": 2,
+  "peer_dx": 1,
+  "pin_level": 45,
+  "step_ms": 1000,
+  "start_delay_ms": 3000,
+  "cases": {
+    "guild_panel_no_guild": {
+      "steps": [
+        {"role": "a", "op": "observe", "param": ""},
+        {"role": "a", "op": "open_dlg", "param": ""},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "无行会基线（失败分支）：未入会时 CM_OPENGUILDDLG(1035) ⇒ SM_OPENGUILDDLG_FAIL(754)（PlayObject.Operate.cs:1274）。判据承载：帧种类序列 + SM_MENU_OK(767) 文案 + guild_name 空 + branch。两侧同图零行会种子下必须一致。"
+    },
+    "guild_panel_seeded": {
+      "steps": [
+        {"role": "a", "op": "observe", "param": ""},
+        {"role": "a", "op": "open_dlg", "param": ""},
+        {"role": "a", "op": "memberlist", "param": ""},
+        {"role": "a", "op": "update_notice", "param": "夹具公告"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "已入会（会长）面板：CM_OPENGUILDDLG(1035) ⇒ SM_OPENGUILDDLG(753)（PlayObject.Operate.cs:1266 拼 `<Notice>/<KillGuilds>/<AllyGuilds>` 文本）+ CM_GUILDMEMBERLIST(1037) ⇒ SM_SENDGUILDMEMBERLIST(756)（:1303）+ CM_GUILDUPDATENOTICE(1040) ⇒ SaveGuildInfoFile + 重开面板（:1426-1443）。**前置** = 先由 `build_guild_npc` 建会（或夹具在影子 `GuildBase/` 里写种子并按同目录启动）。判据 = 753/756 文本逐字节 + guild_name/guild_rank_name + 帧序列。"
+    },
+    "guild_member_ops": {
+      "steps": [
+        {"role": "a", "op": "add_member", "param": "peer"},
+        {"role": "a", "op": "memberlist", "param": ""},
+        {"role": "a", "op": "update_rank", "param": "#99 成员"},
+        {"role": "a", "op": "del_member", "param": "peer"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "成员/封号：加成员仅掌门且对方须在线且 GetPoseCreate()==this（PlayObject.Operate.cs:1307-1368；失败码 1..5）⇒ SM_GUILDADDMEMBER_OK(757)/_FAIL(758)；封号 CM_GUILDUPDATERANKINFO(1041) ⇒ UpdateRank（GuildInfo.cs:708-993；**成功即清空 RankList（N3）**⇒ SM_GUILDRANKUPDATE_FAIL(761) 只在失败时发）；删成员 CM_GUILDDELMEMBER(1039) ⇒ SM_GUILDDELMEMBER_OK(759)/_FAIL(760)。判据 = 帧 Recog 码（帧标量 a）+ 756 文本逐字节 + guild_name。"
+    },
+    "guild_ally_ops": {
+      "steps": [
+        {"role": "a", "op": "ally", "param": "peerGuild"},
+        {"role": "a", "op": "break_ally", "param": "peerGuild"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "联盟：CM_GUILDALLY(1044) ⇒ SM_GUILDMAKEALLY_OK(768)/_FAIL(769)（PlayObject.Operate.cs:1465-1523；GuildInfo.cs:1007-1019 的 `GuildAllList.Add` 被注释 ⇒ 联盟表恒空，登记）；CM_GUILDBREAKALLY(1045) ⇒ SM_GUILDBREAKALLY_OK(770)/_FAIL(771)。判据 = 帧 Recog 码 + 帧序列。"
+    },
+    "build_guild_npc": {
+      "steps": [
+        {"role": "a", "op": "build_guild", "param": "@@buildguildnow"},
+        {"role": "a", "op": "open_dlg", "param": ""},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "建会（NPC 触发）：GuildOfficial.cs:70-72 `@@buildguildnow` → ReQuestBuildGuild（:112-178：空名 -4 / 已有会 -1 / Gold<BuildGuildPrice(1000000) -2 / 无沃玛号角 -3 / AddGuild 失败 -4）；回 RM_BUILDGUILD_OK(10303)/_FAIL(10304)（:170-177）。**前置 = ⑥-3 NPC 运行 + 地图内有行会 NPC（比奇国王-0122）**；`-Side rust` preflight 在 guild NPC 派发落地前 fail-closed。判据 = 帧 Recog 码 + 号角/金币扣减 + guild_name。"
+    },
+    "guild_war_npc": {
+      "steps": [
+        {"role": "a", "op": "guild_war", "param": "@@guildwar"},
+        {"role": "a", "op": "wait", "param": "1000"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "行会战（NPC 触发）：GuildOfficial.cs:74-77 `@@guildwar` → ReQuestGuildWar（:180-201：FindGuild + Gold>=GuildWarPrice(30000)）；PlayObject.Base.cs:3349-3386（IsGuildMaster + ServerIndex!=0 拒绝 + AddWarGuild）；**N2 反逻辑（GuildInfo.cs:1039 `if (warGuild.WarTime>0)` 反置）**⇒ 未在战中宣战不生效、已战追加重复条目。判据 = SS/GuildMsg + 条目 State + 落盘 GuildBase/Guilds/<名>.txt。时间门（GuildWarTime=7200000）⇒ 依赖 openmir2-m3-clock-injection。"
+    },
+    "castle_siege_apply": {
+      "steps": [
+        {"role": "a", "op": "castle_apply", "param": "@requestcastlewarnow0"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "攻城申请（NPC）：GuildOfficial.cs:206-233 `ReQuestCastleWar` 命中 N1（`UserCastle.AddAttackerInfo(IGuild)` 抛 NotImplementedException ⇒ NPC 路径不可达）；可达口径 = UserCastle.cs:998-1014 `AddAttackerInfo(GuildInfo)`（AttackDate = AddDateTimeOfDay(Now, StartCastleWarDays)）+ SaveAttackSabukWall（Castle/<N>/AttackSabukWall.txt）。判据 = 落盘文件逐字节 + SS_212 + 时间门（StartCastleWarDays）⇒ 依赖 clock-injection。"
+    },
+    "castle_door_state": {
+      "steps": [
+        {"role": "a", "op": "open_door", "param": "@openmaindoor"},
+        {"role": "a", "op": "observe", "param": ""},
+        {"role": "a", "op": "close_door", "param": "@closemaindoor"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "城门状态：CastleOfficial.cs:199-226 `@openmaindoor` ⇒ MainDoorControl(false)、`@closemaindoor` ⇒ MainDoorControl(true)；CastleDoor.Open/Close（CastleDoor.cs:9-116：Dir 7/3、RM_DIGUP/RM_DIGDOWN、IsOpened/StoneMode/HoldPlace）；状态文本 $CASTLEDOORSTATE（:52-67：destroyed/opened/closed）。前置 = ⑥ 攻城文件加载 + 门实体挂图（承接卡 -castle-file-load/-castle-door-repair）。判据 = 门状态文本 + RM 帧 + 通行掩码。"
+    },
+    "castle_repair_timeout": {
+      "steps": [
+        {"role": "a", "op": "repair_door", "param": "@repairdoor"},
+        {"role": "a", "op": "wait", "param": "61000"},
+        {"role": "a", "op": "repair_door", "param": "@repairdoor"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "修门时间门：UserCastle.cs:920-955 RepairDoor（`BaseObject==null || UnderWar || HP>=MaxHP` 拒绝；`(GetTickCount()-StruckTick)>60s` 才回满血）+ 修墙 :956-997；NPC 入口 CastleOfficial.cs:358-406（TotalGold>=RepairDoorPrice(2000000)/RepairWallPrice(500000) 才扣）。wait 的 param = 虚拟毫秒推进量。**依赖 openmir2-m3-clock-injection**（两侧可注入时钟），本片只登记、不实现。"
+    }
+  },
+  "oracle_anchors": {
+    "build_guild": "GuildOfficial.cs:70-72/112-178/142-161/170-177（@@buildguildnow → ReQuestBuildGuild → AddGuild/扣金币/扣号角/回 RM_BUILDGUILD_OK/FAIL）",
+    "name_gate": "M2Share.cs:529-545 CheckGuildName（Length>GuildNameLen(15) + 黑名单；**N4：循环 i<Length-1 漏比末位**）",
+    "dup_gate": "GuildManager.cs:19-32 CheckGuildName+FindGuild==null（大小写敏感）",
+    "guild_panel": "PlayObject.Operate.cs:1229-1277（拼 Notice/KillGuilds/AllyGuilds + SM_OPENGUILDDLG(753)）/ :1283-1306（成员列表 756）",
+    "member_ops": "PlayObject.Operate.cs:1307-1368（add_member，RankList.Count<400 硬门）/ :1369-1425（del_member/CancelGuld）/ :1426-1443（notice）/ :1444-1463 + GuildInfo.cs:708-993（UpdateRank；**N3 成功即清空 RankList**）",
+    "ally": "PlayObject.Operate.cs:1465-1560 + GuildInfo.cs:1007-1019/129-159（**GuildAllList.Add 被注释 ⇒ 联盟表恒空**）",
+    "guild_war": "GuildOfficial.cs:74-77/180-201 + PlayObject.Base.cs:3349-3386 + GuildInfo.cs:1020-1056 AddWarGuild（**N2 条件反置**）+ GuildManager.cs:145-167 Run（超时 EndGuildWar）",
+    "dispatch": "PlayObject.Message.cs:975-1007（9 个 CM_GUILD* 派发）",
+    "castle_register": "GuildOfficial.cs:206-233（N1 不可达）+ UserCastle.cs:998-1014 AddAttackerInfo(GuildInfo) + :242-309 Load/SaveAttackSabukWall",
+    "castle_run": "UserCastle.cs:311-448 Run（每日 StartCastlewarTime 开战 + CastleWarTime/ShowCastleWarEndMsgTime 时限 + 墙 StoneMode + 守卫回收）",
+    "castle_door": "CastleDoor.cs:9-116 + UserCastle.cs:890-910 MainDoorControl + :920-997 RepairDoor/RepairWall + CastleOfficial.cs:52-67/199-226/358-406",
+    "castle_tax": "UserCastle.cs:768-812 IncRateGold + :814-889 WithDrawalGolds/ReceiptGolds（N1）+ Merchant.cs:544/1250/1385/1637 税",
+    "region": "UserCastle.cs:454-479 InCastleWarArea + WorldServer.cs:298-334 进图落点改写（GetHomeX/Y 用 Random(9)）",
+    "frames": "Messages.cs:750/753/754/756/757/758/759/760/761/762/763/767/768/769/770/771（SM）+ 10303/10304（RM_BUILDGUILD_OK/FAIL）+ 1044/1045（CM_GUILDALLY/BREAKALLY）+ 1035..1041（CM_GUILD* 面板）",
+    "botsrv_primitives": "RobotPlayer.cs:3687-3790（SendGuildDlg/Home/MemberList/AddMem/DelMem/UpdateNotice/UpdateGrade）+ RobotPlayer.Operate.cs:1305-1520（全部 SM_GUILD*/SM_BUILDGUILD* 观测）+ :3532/3594 SendMerchantDlgSelect（CM_MERCHANTDLGSELECT 1011）",
+    "db": "sql/ 无 guild/guildmember/castle 表或列（盘点 §1.J，`rg -ni 'guild|castle' sql/` 唯一命中 characters.AllowGuildReCall）⇒ 两侧都不落库；持久产物 = GuildBase/GuildList.txt + GuildBase/Guilds/<名>.txt + Castle/<N>/SabukW.txt + AttackSabukWall.txt",
+    "clock_injection": "openmir2-m3-clock-injection（C# 影子 hook MIR2_CLOCK_* + Rust world.clock_ms/now_ms()）；时间门 = GuildWarTime / StartCastleWarDays / StartCastlewarTime / CastleWarTime / GetCastleTime / ShowCastleWarEndMsgTime / RepairDoor 60s / SaveTick 10min"
+  },
+  "frame_text_sms": [750, 753, 756, 767],
+  "frame_scalar_fields": {
+    "757": ["a"],
+    "758": ["a"],
+    "759": ["a"],
+    "760": ["a"],
+    "761": ["a"],
+    "762": ["a"],
+    "763": ["a"],
+    "768": ["a"],
+    "769": ["a"],
+    "770": ["a"],
+    "771": ["a"],
+    "10303": ["a"],
+    "10304": ["a"]
+  },
+  "artifact": {
+    "markers": "M3GUILDCSEQ（BotSrv stdout / bot.log 内嵌事件，含 bot 字段）",
+    "raw": "guild_castle_raw.jsonl",
+    "comparator": "python -I guild_castle_diff.py diff <csharp_raw> <rust_raw>",
+    "assembler": "python -I guild_castle_diff.py assemble <markers.jsonl> --out <raw.jsonl>",
+    "runner": "run_guild_castle_pair.ps1"
+  },
+  "record_required_fields": ["bot", "k", "op", "ran", "frames", "branch", "gold_before", "gold_after"],
+  "record_optional_fields": ["role", "param", "map", "guild_name", "guild_rank_name", "members_before", "members_after", "bag_before", "bag_after"],
+  "notes": [
+    "判据 = 逐 (bot,k)：op / role / ran / param / 帧种类序列 / 声明标量帧参数（含全部 Recog 失败码）/ 文本帧(SM_CHANGEGUILDNAME 750 / SM_OPENGUILDDLG 753 / SM_SENDGUILDMEMBERLIST 756 / SM_MENU_OK 767)逐字节 / guild_name / guild_rank_name / members 多重集 / gold_before/after / bag 多重集 / branch 全部相同；两侧必须有同一组 bot、每个 bot 同一串 k。",
+    "动态 id（actor / make index / 帧 a/b/c/d 中的非声明位）不作判据；只在原始件里留审计。",
+    "落库口径 = oracle『行会/攻城不落库』：三库无 guild/guildmember/castle 表或列 ⇒ 两侧都不写；DB 侧由 run_guild_castle_pair.ps1 调 scoped_diff --canonical 承担（增量=0）。行会/攻城的持久产物是**文件**（GuildBase/** 与 Castle/**），窗口期由夹具两侧同目录同种子比。",
+    "N1/N2/N3/N4/N5（盘点 §1.L）为 oracle 断点/缺陷：按硬约束 3 **照搬并向量锁死**，本片只登记不修。",
+    "真机两侧同序列跑等承接卡 -guild-file-store/-guild-state/-guild-war/-castle-file-load/-castle-siege-state/-castle-door-repair/-castle-gold-tax + openmir2-m3-clock-injection + owner 发窗口；本片只交夹具骨架（比较器 selftest + 无栈自检）。",
+    "Rust 侧 game-svr 未接行会/攻城派发与帧（盘点 §2 第 8-18 项）⇒ run_guild_castle_pair -Side rust 会 fail-closed PREREQ（同 T-27 口径），不白占窗口。",
+    "两假人相邻固定起点复用 run_pair.ps1 -PinStartPose -AttackPinPair（会长 (17,20) 朝向 2、peer 右邻 (18,20)）；`add_member` 要求对方 GetPoseCreate()==this（面对面）⇒ peer 在会长的正前方格朝向会长，窗口期按 oracle 钉 pose。",
+    "建会/宣战/攻城申请/开关门/修门墙走 NPC（CM_MERCHANTDLGSELECT 1011），依赖 ⑥-3 NPC 运行与地图内出行会 NPC（如比奇国王-0122）⇒ 这些 case 的 `-Side rust` preflight fail-closed，直到行会 NPC 派发落地。"
+  ]
+}

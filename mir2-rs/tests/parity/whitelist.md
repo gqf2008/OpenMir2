@@ -208,6 +208,21 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 
 > **编号连号**：T-41（M3⑤ NPC/商店夹具；T-22/T-29 的同族扩展）。
 
+## M3⑧ 登记（公会 / 攻城（guild / castle）动作序列夹具；卡片 `openmir2-m3-guild-castle-fixture-botsrv`，2026-10-13）
+
+> 盘点报告：[`m3/M3⑧公会攻城现状盘点报告-20261013.md`](m3/M3⑧公会攻城现状盘点报告-20261013.md)；本卡父卡 `openmir2-m3-guild-castle-align`。
+> 本片交付 = **夹具骨架**（比较器 + 入口 + 无栈自检 + BotSrv 最小驱动）；真机两侧同序列跑等承接卡
+> `openmir2-m3-guild-file-store` / `-guild-state` / `-guild-war` / `-castle-file-load` / `-castle-siege-state` /
+> `-castle-door-repair` / `-castle-gold-tax` 落地 + `openmir2-m3-clock-injection`（时间门）+ owner 发窗口。
+> 落库口径 = oracle「行会/攻城不落库」：三库无 `guild`/`guildmember`/`castle` 表或列（盘点 §1.J）⇒ 两侧都不写，
+> DB 侧由 `scoped_diff --canonical` 承担（增量=0）。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
+| --- | --- | --- | --- |
+| T-46 | **夹具口径 + BotSrv 工具侧例外（本片交付）**：改动 `src/BotSrv/**`（`RobotOptions`/`MShare`/`AppService`/`Player/RobotPlayer.cs`/`Player/RobotPlayer.Operate.cs`/`Program.cs` + 新 `GuildCastleSeqSelfCheck.cs`）+ `tools/botload/run_bots.ps1` + `mir2-rs/tests/parity/m3/{run_pair.ps1,gate_guards.ps1}` + 新 `mir2-rs/tests/parity/m3/{run_guild_castle_pair.ps1,guild_castle_diff.py,guild_castle_scenario.json}`：① BotSrv 增 `GuildCastleSequence`（默认 false）/`GuildCastleSteps`/`GuildCastleStepMs`/`GuildCastleStartDelayMs`/`GuildCastleMasterRole`/`GuildCastlePeerRole`，收到本假人 `SM_LOGON` 后按固定步骤串（`role|op|param;...`：`open_dlg`/`home`/`memberlist`/`add_member`/`del_member`/`update_notice`/`update_rank`/`ally`/`break_ally` = 现成 `CM_GUILD*` 面板原语；`build_guild`/`guild_war`/`castle_apply`/`open_door`/`close_door`/`repair_door`/`repair_wall` = `CM_MERCHANTDLGSELECT(1011)` 行会 NPC 标签；`observe`/`wait`/`softclose`）动作，逐 step 落 `M3GUILDCSEQ {json}` 的 send/frame/end/done 事件；行会面板/成员/封号/建会/联盟/换名/菜单帧（750/753/754/756/757/758/759/760/761/762/763/767/768/769/770/771/10303/10304）在开关打开时增 `GuildCastleOnServerMessage` 落事件（**只读不写世界态**）。新增两个最小发送 `SendGuildAlly`/`SendGuildBreakAlly`（`CM_GUILDALLY(1044)`/`CM_GUILDBREAKALLY(1045)`，同 T-29 纪律）。② `guild_castle_diff.py`（`assemble` 事件流→记录 / `diff` 逐 (bot,k) 帧序列+文本+Recog 标量+guild_name/guild_rank_name+members 多重集+金币/背包多重集+fail-closed / `selftest` **36/36**）。③ `run_guild_castle_pair.ps1`（复用 `run_pair.ps1` 两相 pin + `-StopAfterCharCreated` 预热 + 收尾 save-settle 仪器；入口护栏 + `M3GUILDCSEQ` 完整性（两假人各自 done）+ 跨侧 `guild_castle_diff` + `scoped_diff`；`-SelfCheckNoStack` **19/19**；未给 `-Go` ⇒ real-run fail-closed）。 | BotSrv **不在 oracle 七进程内**（T-1）。默认（`GuildCastleSequence=false`）⇒ **不新增任何发送、不新增任何日志、原路径逐字节不变**（`run_bots.ps1 -SelfCheckNoStack` 两向 + `run_pair -EmitOpsArgs` 两向自检钉住：默认 `(off)`、开启时必传 `-DisableAutoPlay`）。打开时只写**本假人自己的 socket**、只读本假人自己的视图（`MShare.MySelf`/`PlayScene.ActorList`/`MShare.ItemArr`/`MShare.g_sGuildName`/`g_sGuildRankName`），不读不写跨假人共享世界态（同 T-22/T-29/T-41 纪律）；不改 oracle/协议/上线字节语义。oracle 的 N1/N2/N3/N4/N5 断点/缺陷（盘点 §1.L，见 T-38..T-40）按硬约束 3 **照搬并向量锁死**，本片只登记不修。**判据本体（比较器 + 夹具骨架）已完整、离线可复跑**；真机两侧同序列跑要窗口（且要 ⑧ 实现卡 + 时钟注入）。证据 `m3/evidence-m3-guild-castle-fixture-botsrv-20261013/**`。 | 作者登记（`openmir2-worker-5`）；**待独立 principal 复核** |
+
+> **编号连号**：T-46（M3⑧ 公会/攻城夹具；T-22/T-29/T-41 的同族扩展）。
+
 ## M1 S4b 登记（DBSrv 6000 `DataService` 面 + 5700 `MarketService` 面 + `TimedService` 缓存回写，2026-10-12）
 
 > 卡 `openmir2-m1-dbsrv-6000-face`；交付说明 `docs/M1-S4b-DBSrv-6000-交付说明.md`。

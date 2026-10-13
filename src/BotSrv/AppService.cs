@@ -57,6 +57,15 @@ namespace BotSrv
             MShare.g_sShopItemName = _options.ShopItemName ?? string.Empty;
             MShare.g_nShopItemMake = _options.ShopItemMake;
             MShare.g_nShopCount = _options.ShopCount;
+            // M3⑧ 夹具（白名单 T-46 家族扩展）：固定行会/攻城动作序列；默认 false = 原行为
+            MShare.g_boGuildCastleSequence = _options.GuildCastleSequence;
+            MShare.g_nGuildCastleStepMs = _options.GuildCastleStepMs;
+            MShare.g_nGuildCastleStartDelayMs = _options.GuildCastleStartDelayMs;
+            MShare.g_sGuildCastleSteps = _options.GuildCastleSteps ?? string.Empty;
+            MShare.g_nGuildCastleMasterRole = _options.GuildCastleMasterRole;
+            MShare.g_nGuildCastlePeerRole = _options.GuildCastlePeerRole;
+            MShare.g_sGuildCastleMasterLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.GuildCastleMasterRole);
+            MShare.g_sGuildCastlePeerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.GuildCastlePeerRole);
             // M1③ 退出路径夹具（白名单 M1-EXIT）：进世界后发 CM_SOFTCLOSE；默认 0 = 原行为
             MShare.g_nSoftCloseAfterWorldMs = _options.SoftCloseAfterWorldMs;
             MShare.g_boDisableAutoPlay = _options.DisableAutoPlay;
@@ -96,6 +105,11 @@ namespace BotSrv
             {
                 LogService.Info("固定 NPC/商店序列: 启用 ops={0} 起始等待={1}ms 步间隔={2}ms npc={3} item={4}（开面板/买/卖/修理/存取；见 RobotPlayer.ShopSequenceTick）",
                     _options.ShopOps, _options.ShopStartDelayMs, _options.ShopStepMs, _options.ShopNpcName, _options.ShopItemName);
+            }
+            if (_options.GuildCastleSequence)
+            {
+                LogService.Info("固定行会/攻城序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms 会长序号={3} peer序号={4}（见 RobotPlayer.GuildCastleSequenceTick）",
+                    _options.GuildCastleSteps, _options.GuildCastleStartDelayMs, _options.GuildCastleStepMs, _options.GuildCastleMasterRole, _options.GuildCastlePeerRole);
             }
         }
 

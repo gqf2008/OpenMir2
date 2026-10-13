@@ -253,6 +253,8 @@ namespace BotSrv.Player
                 }
                 return;
             }
+            // M3⑧ 行会/攻城夹具单一收包钩子（T-46 家族扩展）：`g_boGuildCastleSequence` 关时是空操作。
+            GuildCastleOnServerMessage(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series, body);
             string body2;
             switch (msg.Ident)
             {
