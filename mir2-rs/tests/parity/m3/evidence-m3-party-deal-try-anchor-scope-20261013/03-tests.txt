@@ -1,0 +1,15 @@
+== 03 判据测试（交付树 HEAD=caa8e9642c30ea54074d5177d742e31fe184aa5b）==
+命令: cargo test -p game-svr --test deal_try_oracle_anchors
+test redcheck_anchor_scope_is_deal_try_only ... ok
+test deal_try_oracle_anchors_match_source ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+== 四门禁汇总 ==
+fmt:        rc=0
+clippy:     rc=0
+test:       100 suites / 1161 passed / 0 failed / 22 ignored
+msgcodegen: msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+
+== 回归：trade:: lib / game-svr bin deal_ ==
+trade::    test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 167 filtered out; finished in 0.00s
+deal_ bin: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 194 filtered out; finished in 0.00s

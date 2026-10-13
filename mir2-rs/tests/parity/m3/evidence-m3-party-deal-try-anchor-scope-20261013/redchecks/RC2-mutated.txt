@@ -1,0 +1,12 @@
+== RC2 正控 mutated: 无 deal_try 标记的无关注释注入 :929/:934（应保持绿 = 已消除假红）==
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.47s
+     Running tests\deal_try_oracle_anchors.rs (E:/tmp/openmir2-m3pt-target\debug\deps\deal_try_oracle_anchors-b25b1e4975fe3cbb.exe)
+
+running 2 tests
+test redcheck_anchor_scope_is_deal_try_only ... ok
+test deal_try_oracle_anchors_match_source ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+rc=0
