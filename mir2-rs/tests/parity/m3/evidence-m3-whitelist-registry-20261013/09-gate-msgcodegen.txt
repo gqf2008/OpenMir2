@@ -1,0 +1,5 @@
+# command (cwd=mir2-rs): cargo run -p msgcodegen --offline -- --check
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running `E:/tmp/m3cs-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
