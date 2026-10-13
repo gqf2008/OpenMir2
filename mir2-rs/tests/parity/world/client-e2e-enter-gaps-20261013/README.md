@@ -272,3 +272,25 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   自检 9/9。原文见 `70-aoi-visibility-verdict.txt`；红检 `72-redcheck-vis-metric.txt`；老日志 fail-closed `73-prereq-old-log.txt`。
 - **仍归 owner/窗口（R 级，不因本片收卡）**：两侧**同位置同 `viewrange`** 对照（Rust 侧 `--expect visible`
   + C# 侧同一 `check_client_s2c_frames.py` 配对数；反向「无怪」用 `--expect none`）。recipe 见 `70-…` §E。
+
+## ⑫ 片⑫：③「两侧对照」判据工具 + 两条随卡 Minor 收口（2026-10-14）—— `77`/`78`
+
+- **背景**：root 00:4x ③ 要求「用两侧对照（同一位置、同一 viewrange）给证据并收口」，并注明
+  「判据/capture 工具你准备」。片⑪ 已给服务端读数判据（`check_aoi_visibility_diag.py`）与客户端帧判据
+  （`check_client_s2c_frames.py`），但**两侧对照**缺一个把两侧 capture 放一起机判的工具。
+- **新工具 `aoi_visibility_pair.py`**：消费两侧 `capture.jsonl`，抽 `SM_TURN(10)+SM_FEATURECHANGED(41)`
+  相邻出现对（**直接 import 复用** `check_client_s2c_frames.py` 的抽取函数，口径不漂移），机判：
+  `--expect none` ⇒ 两侧都为 0 = ③「该点确实无怪」的两侧证据；`--expect visible --min-pairs N` ⇒
+  两侧都 ≥N = ④「AOI 有算有下发」的反证；`--strict-recogs`（默认关）把 `70 §E step3` 的
+  「两侧 ActorId 相同」假设升级为强判据。退出码 0/1/2，`--selftest` 11 条不依赖外部件。
+  真机既有 capture 上的绿/红演示见 `77-two-side-comparator.txt` §C（**真两侧对照**需窗口采 C# 侧后跑，
+  命令写在 `77` 末尾）。
+- **Minor M-1**（reviewer-5）：`check_aoi_visibility_diag.py` 的 INFO 行恒说「vis==0 与窗口自洽」，
+  即使 `vis=13`。改为按 `vis` 实际值与窗口内外关系输出（四个分支：`vis==0/nearest>vr`、
+  `vis==0/nearest<=vr`、`vis>0/nearest<=vr`、`vis>0/nearest>vr`），判绿红逻辑未动；自检仍 9/9。
+- **Minor M-2**（reviewer-5）：本目录 `SHA256SUMS.txt` 8 行用「两空格 + *」⇒ GNU `sha256sum -c`
+  报 No such file、权威复核器静默跳过。本片触碰该目录时用 `verify_sha256sums.py write` 重生成清单，
+  分隔符统一为单空格（8 个 hash 复算未变）。
+- **零生产代码改动**（仅 `.py` 判据工具 + 证据）；本片**未起栈、未占端口**；两侧同框真机读数仍归 owner 窗口。
+- 证据：`77-two-side-comparator.txt`（工具自证 + 真 capture 演示）、`78-m1-m2-minor-fix.txt`
+  （M-1 措辞 before/after + M-2 归一）、`79-gates.txt`、`80-boundary.txt`。

@@ -1,0 +1,14 @@
+80-boundary.txt —— 片⑫ 边界（每路径一行）
+
+冻结面（必须空）：
+$ git diff --name-only origin/master HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+  (空 ⇒ 无改动)
+
+本片改动清单（$ git status --porcelain，工作树相对 origin/master）：
+   M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+   M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_aoi_visibility_diag.py
+  ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/77-two-side-comparator.txt
+  ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/78-m1-m2-minor-fix.txt
+  ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/79-gates.txt
+  ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/80-boundary.txt
+  ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/aoi_visibility_pair.py
