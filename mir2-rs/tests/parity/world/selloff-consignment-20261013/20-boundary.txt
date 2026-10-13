@@ -1,0 +1,25 @@
+# 20 — 边界（冻结面零改动）
+# base（本片 rebase 目标）= `ddaca961c`（与 ⑩-2 同栈；交付时 origin/master = `78cf74d46`）
+# 命令（cwd = 仓库根，非 mir2-rs/）：
+#   git diff --name-only origin/master HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+# 期望/实测：空
+
+--- 实测（无输出 = 无差异） ---
+# src / sql / MirClient / mir2-rs/crates/protocol / mir2-rs/crates/storage 全无改动
+
+# 本片代码写集（git diff --name-only origin/master HEAD -- mir2-rs/bins mir2-rs/crates）：
+mir2-rs/bins/game-svr/src/config.rs
+mir2-rs/bins/game-svr/src/lib.rs
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/selloff.rs
+mir2-rs/bins/game-svr/src/trade.rs
+
+# 其余改动均在证据目录 mir2-rs/tests/parity/world/selloff-consignment-20261013/**。
+
+# 注（rebase 片 r2 2026-10-13，worktree m3hp / principal openmir2-worker-20）：本片（⑩-1）由
+#   worker-20 接管，与 ⑩-2 同栈从 master `029d23eae` 再前进到 `ddaca961c` 重放；r2 重放结果为
+#   `43dc2c95c`，本 r2 证据提交叠其上（= ⑩-1 分支 head；⑩-2 以该 head 为父链）。⑩-1 的实现文件相对其 rebase 前内容逐字节不变：
+#     git diff 029d23eae 1c0efa7aa  与  git diff ddaca961c 43dc2c95c  的 selloff.rs/config.rs/
+#     lib.rs/trade.rs 变更行逐条相同（仅上下文行号因 master 前进而位移）；main.rs 的差异 = ⑨-2 已并
+#     入 master 的 pet_cfg 块与 ⑩-1 的 mod tests 追加的并集（两侧并集，不改被审语义）。
+#   `git merge-tree --write-tree origin/master(78cf74d46) HEAD` = rc=0（与合并车道同口径）。

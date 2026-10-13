@@ -67,6 +67,11 @@ pub struct GateConfig {
     pub hear_msg_f_color: u8,
     /// `[Setup] HearMsgBColor`（oracle `GameSvrConf.cs:1529` 缺省 `0xFF`）——同上，背景色。现网 `=255`。
     pub hear_msg_b_color: u8,
+    /// `[Setup] BlueMsgFColor`（oracle `GameSvrConf.cs:1538` 缺省 `0xFF`；现网 `=251`）——`SysMsg(...,
+    /// Blue, ...)` 的前景色（`PlayObject.Sale.cs` 寄售提示）。落在 `SM_SYSMESSAGE` 的 `Param` 低字节。
+    pub blue_msg_f_color: u8,
+    /// `[Setup] BlueMsgBColor`（oracle `GameSvrConf.cs:1539` 缺省 `0xFC`；现网 `=252`）——同上，背景色。
+    pub blue_msg_b_color: u8,
     /// `[Setup] GroupMembersMax`（`ServerConf.cs:225` 的 `ReadWriteByte`，`GameSvrConf.cs:1402` 缺省 `10`）。
     /// M3⑦-实现 2：组队状态机的成员上限门（`PlayObject.Operate.cs:855` 的严格大于）。
     pub group_members_max: u8,
@@ -227,6 +232,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut disable_deal: Option<bool> = None;
     let mut hear_msg_f_color: Option<u8> = None;
     let mut hear_msg_b_color: Option<u8> = None;
+    let mut blue_msg_f_color: Option<u8> = None;
+    let mut blue_msg_b_color: Option<u8> = None;
     let mut group_members_max: Option<u8> = None;
     let mut group_msg_f_color: Option<u8> = None;
     let mut group_msg_b_color: Option<u8> = None;
@@ -360,6 +367,19 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                     green_msg_b_color = Some(
                         v.parse()
                             .with_context(|| format!("GreenMsgBColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                // 元宝寄售 `SysMsg(..., Blue, ...)` 的颜色（`ServerConf.cs:331-332` 的 `ReadWriteByte`）。
+                "BLUEMSGFCOLOR" => {
+                    blue_msg_f_color = Some(
+                        v.parse()
+                            .with_context(|| format!("BlueMsgFColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "BLUEMSGBCOLOR" => {
+                    blue_msg_b_color = Some(
+                        v.parse()
+                            .with_context(|| format!("BlueMsgBColor 不是合法字节：{v:?}"))?,
                     );
                 }
                 // `ServerConf.cs:308-311` 的四条交易配置（M3⑦-实现 3）。
@@ -599,6 +619,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`GameSvrConf.cs:1536-1537/1515-1518`）：`[Setup]` 里没写不算错。
         green_msg_f_color: green_msg_f_color.unwrap_or(0xDB),
         green_msg_b_color: green_msg_b_color.unwrap_or(0xFF),
+        // oracle 缺省值（`GameSvrConf.cs:1538-1539`）：`[Setup]` 里没写不算错。
+        blue_msg_f_color: blue_msg_f_color.unwrap_or(0xFF),
+        blue_msg_b_color: blue_msg_b_color.unwrap_or(0xFC),
         try_deal_time: try_deal_time.unwrap_or(3_000),
         deal_ok_time: deal_ok_time.unwrap_or(1_000),
         can_not_get_back_deal: can_not_get_back_deal.unwrap_or(true),
@@ -1014,6 +1037,29 @@ mod tests {
         // 写了但越界（300 > u8::MAX）⇒ 错误（不是静默取默认）。
         let p3 = write(&dir, &format!("{base}[Setup]\nRedMsgBColor=300\n"));
         assert!(load(&p3).is_err(), "RedMsgBColor=300 超出 u8 ⇒ 必须报错");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **`openmir2-m3-selloff-consignment-world`**：`[Setup] BlueMsgFColor/BlueMsgBColor` 照
+    /// `ServerConf.cs:331-332` 的 `ReadWriteByte` 读；**缺键用 oracle 缺省**（0xFF/0xFC）不自造。
+    #[test]
+    fn parses_setup_blue_msg_colors_with_oracle_defaults() {
+        let dir = std::env::temp_dir().join(format!("gs-setup-blue-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\n\
+                    IDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        // 不写 `[Setup]` ⇒ oracle 缺省（`GameSvrConf.cs:1538-1539`）。
+        let p = write(&dir, base);
+        let c = load(&p).unwrap();
+        assert_eq!(c.blue_msg_f_color, 0xFF, "GameSvrConf.cs:1538 缺省");
+        assert_eq!(c.blue_msg_b_color, 0xFC, "GameSvrConf.cs:1539 缺省");
+        // 现网 `Server.conf:602-603` 的值（251/252）——带前导空格也要 trim。
+        let p2 = write(
+            &dir,
+            &format!("{base}[Setup]\nBlueMsgFColor= 251\nBlueMsgBColor=252\n"),
+        );
+        let c2 = load(&p2).unwrap();
+        assert_eq!(c2.blue_msg_f_color, 251);
+        assert_eq!(c2.blue_msg_b_color, 252);
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -1,0 +1,139 @@
+# 02 — 改前 / 改后
+
+卡：`openmir2-m3-selloff-consignment-world`。base（本片 rebase 目标）= `ddaca961c`（rebase 片 r2；交付时 origin/master = `78cf74d46`，见末尾「rebase 片 r2」）。
+交付 head 的父链已含 `origin/master` 当时的 tip（`git merge-base --is-ancestor origin/master HEAD` 成立）。
+
+## 写集（`git diff --stat refs/heads/master HEAD`）
+
+```
+ mir2-rs/bins/game-svr/src/config.rs  |   46 +
+ mir2-rs/bins/game-svr/src/lib.rs     |    1 +
+ mir2-rs/bins/game-svr/src/main.rs    |  776 +++++++++++++++
+ mir2-rs/bins/game-svr/src/selloff.rs | 1799 ++++++++++++++++++++++++++++（新文件）
+ mir2-rs/bins/game-svr/src/trade.rs   |    2 +-
+```
+
+- `crates/world/**` **未改动**：`SellOffItemList`/`SaleDeal`/`SellOffConfirm` 在 oracle 是进程级全局 +
+  玩家会话散字段，不属地图/场景 ECS（见 `01-oracle-anchors.txt` §3）。
+
+## 改前（base `0f9fe999`）
+
+- `rg -i 'SELLOFF|goldsales|DealOffInfo|寄售' mir2-rs/bins/game-svr/src mir2-rs/crates/world/src` = **no match**
+  （盘点片 §5 判定 6/7/8 未实现）。
+- `[Setup] BlueMsgFColor/BlueMsgBColor` 未解析（`config.rs` 无键）⇒ 无蓝色提示色来源。
+- `trade.rs::send_add_item_body` 为私有（`fn`），寄售「成交入包」需要的立即 `SM_ADDITEM` body 无法复用。
+
+## 改后（本 head）
+
+1. **`bins/game-svr/src/selloff.rs`（新增，1759 行）**——纯函数 + 事件，零 I/O / 零 `static` / 时钟注入：
+   - `SellOffBook` = `M2Share.SellOffItemList`（进程级，宿主持有一实例，跨会话共享）；
+   - `SellOffState` = `SaleDeal` / `SellOffConfirm` / `SellOffItemList`（会话态）；
+   - 12 个 `PlayObject.Sale.cs` 函数的 1:1 复刻 + `open_deal_off_form`（`RM_SENDDEALOFFFORM` 成功支）；
+   - 帧编码 `selloff_event_body`（`SellOffFrame::Def/MenuOk/SysMsg/GameGoldChanged/WeightChanged`
+     → 12B 头 + GM_DATA body，立即/排队两桶，优先级字节照 oracle）。
+2. **`bins/game-svr/src/main.rs`（+770）**：
+   - `handle_selloff_cmd`：7 个 `CM_SELLOFF*` 生产路径派发（找会话 → 解析卖方/尾 → 调纯函数 →
+     回写会话态与全局 `SellOffBook` → 逐事件 `selloff_event_body` → `route_to_gate` 回帧）；
+   - `sim_loop` 持有 `sell_off_book`（进程级）+ `sell_off_sessions`（会话态），断线移除会话态、
+     保留全局 `SellOffBook`（oracle 不断线清理）；
+   - 2 条进程级用例（见 `03-tests.txt`）。
+3. **`config.rs`（+46）**：解析 `[Setup] BlueMsgFColor/BlueMsgBColor`（`ServerConf.cs:331-332` 的
+   `ReadWriteByte`），缺键用 oracle 缺省 `0xFF`/`0xFC`（`GameSvrConf.cs:1538-1539`），并接线到
+   `SellOffConfig`（现网 `Server.conf:602-603` = 251/252）。1 条键解析用例（带/不带 BOM 无关，走既有 `load`）。
+4. **`trade.rs`（1 行）**：`fn send_add_item_body` → `pub(crate) fn`（复用同一份 `SM_ADDITEM` body 编码，
+   **不复制第二份**）。
+5. **`lib.rs`（1 行）**：`pub mod selloff;`。
+
+## 缺陷照搬（详见 `01` §5）
+
+① `ClientBuySellOffItme` 首个空槽中止（`SM_SELLOFFBUY_OK` 不可达）；② 金刚石标记 65535 写 / 32767 判；
+③ 金刚石扣款帧错位；④ 取消退回的静默丢失分支；⑤ 不实现 `goldsales` 写面。
+
+## 合并与对齐
+
+- 交付 head 已 `git merge origin/master`（`0f9fe999`）⇒ `git merge-base --is-ancestor refs/heads/master HEAD` 成立。
+- 边界（见 `20-boundary.txt`）：`src/ sql/ MirClient / crates/protocol / crates/storage` = **空**。
+
+## F-1 返工（reviewer-5 `request_changes`，Important）
+
+**改前（被审 head `438fbd163`）**：`selloff.rs::client_buy_sell_off_item` 的 `Some(tpl)` 支多了一条 oracle 没有的负重守卫：
+
+```rust
+Some(tpl) => {
+    if is_enough_bag(me.items, cfg.max_bag_item) {
+        if weight_available(me, i32::from(tpl.weight)) {
+            ...add_item_to_bag + em.now(AddItem)...
+        }
+        // 负重不足：静默跳过（物品不入包、无 SM_ADDITEM / RM_WEIGHTCHANGED）
+    } else {
+        drop_item_down(item.clone());
+    }
+}
+```
+
+**改后（本 head）**：删除内层负重守卫，恢复 oracle `PlayObject.Sale.cs:333-361` 形状（锚见 `01-oracle-anchors.txt` §3.1）：
+
+```rust
+Some(_) => {
+    if is_enough_bag(me.items, cfg.max_bag_item) {
+        let item = item.clone();
+        if add_item_to_bag(me, item.clone(), cfg, &mut em) {
+            em.now(SellOffEvent::AddItem { target: me.id, item });
+        }
+    } else {
+        drop_item_down(item.clone());
+    }
+}
+```
+
+- **新增 F-1 回归向量**：`buy_enters_bag_even_when_weight_insufficient`（背包未满 0/46 + `weight=0/max_weight=1` + 元宝够 ⇒ 照扣 `500+10000`、卖方 `+500`、物品仍入包、产立即 `SM_ADDITEM`）。
+- **未改**：`client_cancel_sell_off_ing`（`selloff.rs:685`）的 `weight_available` —— oracle `CancelSellOffIng`（`PlayObject.Sale.cs:217`）确有 `IsAddWeightAvailable`。
+- **判据读数**：lib selloff `24 passed / 0 failed`（旧 23 + F-1 新增 1）；进程级 `2 passed`。
+- **RC-3 改坏必红**：把负重守卫加回去 ⇒ `buy_enters_bag_even_when_weight_insufficient` FAILED（rc=101），还原后 ok（`redchecks/RC3-*.txt` + `redchecks/RC-restored-ok.txt`）。
+
+**F-1 交付的 base/head**：base = 交付时 `refs/remotes/origin/master`（`67e9f6c3e097da834ef5769eff1c5415e97bb458`，本仓 `refs/heads/master` 本地快照为 `d4d5b89c7`）；
+head = 本片交付 commit（交付时记录于 patch entry）。
+
+## rebase 片（2026-10-13，接管 + 解合并冲突；worktree `m3hp` / principal `openmir2-worker-20`）
+
+**为什么**：原 head `2869a234b` 已被 reviewer-5 `approve`（`de35194dc6 @2869a234b`），但协调者两次合并检查点
+（`f8fe05a319` @master `cf3f81c35`、`1a01837014` @master `8a476dcaa`）都在 `git merge` 时于
+`mir2-rs/bins/game-svr/src/main.rs` 报 `CONFLICT(content)`；协调者要求**作者 rebase 到 master 后重交**。
+原 owner `openmir2-worker-11` 的车道已按 `brief-m2svr-next`（17:1x）转 `openmir2-client-e2e-enter-gaps`，
+`brief-m3hp`（17:40）把本卡列进 m3hp 队列 ⇒ 由 worker-20 接管做作者侧 rebase。
+
+**怎么做**：`git rebase origin/master`（`029d23eae`）重放 ⑩-1 的三个 commit；唯一冲突 `main.rs`
+（两侧都在 `mod tests` 末尾追加新测试，且 master 侧新增用例构造 `SessionGround` 时缺 ⑩-1 新增字段）。
+解析口径（不改被审语义，只做**两侧并集**）：
+
+1. `mod tests` 末尾：保留 **master 侧新增的 3 条测试**（`pickup_group_attribution_uses_registry` /
+   `bag_takeoff_blocked_while_dealing` / `drop_blocked_by_fresh_deal_last_tick`）**与 ⑩-1 的 2 条
+   进程级用例**（`selloff_cm_dispatch_emits_oracle_frames_on_both_connections` /
+   `selloff_cancel_paths_dispatch_and_mutate_global_book`），逐函数不动；
+2. master 侧 3 条用例的 `SessionGround { ... }` 字面量补上 ⑩-1 新增字段 `soft_version_date: 0` /
+   `game_point: 0`（否则新 struct 字段缺失，编译不过）；
+3. 原 `70c195b86`（clippy 文档续行修复）在 master 已含同形修复 ⇒ rebase 判定 `already upstream` 丢弃。
+
+**保真校验**：`git diff 2869a234b HEAD -- mir2-rs/bins/game-svr/src/{selloff,config,lib,trade}.rs` = **空**
+（⑩-1 的实现/配置文件逐字节不变）；`main.rs` 相对 `2869a234b` 的差异 = master 自 `67e9f6c3e` 起的增量。
+`crates/world/**` 仍零改动。
+
+
+## rebase 片 r2（2026-10-13，与 ⑩-2 同栈重放到 master `ddaca961c`；worktree `m3hp` / principal `openmir2-worker-20`）
+
+**为什么**：⑩-2（`goldsales` 只读接线）以 ⑩-1 的 head 为父链；协调者合并检查点（`613291ca` @master
+`ab60452d0`）报 `git merge-tree master x ⑩-2` 于 `mir2-rs/bins/game-svr/src/main.rs` `CONFLICT(content)`
+（master 前进到 `ab60452d0` 后 ⑨-2 的 `pet_cfg` 块与 ⑩-1/⑩-2 的 `main.rs` 追加冲突），要求**作者 rebase**。
+为保持 ⑩-1 与 ⑩-2 同栈（⑩-2 的 approve 须覆盖同一 ⑩-1 前缀），⑩-1 一并重放。
+
+**怎么做**：`git rebase origin/master`（`ddaca961c`）重放 ⑩-1 全部 commit；`main.rs` 唯一冲突 = ⑨-2 的
+`pet_cfg` 块（master 侧）与 ⑩-2 的 `sell_off_seed` 启动块（本侧）在同一插入点 ⇒ **两侧并集**（各补自己的
+闭合括号），不改被审语义。r2 重放结果为 `43dc2c95c`，本 r2 证据提交叠其上（= ⑩-1 分支 head；⑩-2 以该 head 为父链）。
+
+**保真校验**：`git diff 029d23eae 1c0efa7aa`（旧 ⑩-1 delta）与 `git diff ddaca961c 43dc2c95c`（新 ⑩-1 delta）
+逐文件比对，`selloff.rs/config.rs/lib.rs/trade.rs` 的**变更行逐条相同**（仅上下文行号位移）；
+`crates/world/**` 仍零改动。
+
+**门禁（本片 r2 树，隔离 `CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target`）**：fmt 0 / clippy 0 /
+workspace **98 suites · 1123 passed · 0 failed · 21 ignored** / msgcodegen 604；RC-1/RC-2/RC-3 + 还原全部重跑
+（见 `redchecks/`）。`git merge-tree --write-tree origin/master(78cf74d46) HEAD` = rc=0。
