@@ -279,7 +279,7 @@ AOI 诊断）后又漂到 `:5488`，由本片在**合并树的** `-SelfCheckNoSt
 
 ```sh
 python -I rng-trace-scene/check_anchors.py check      # GREEN：7/7 锚点保鲜
-python -I rng-trace-scene/check_anchors.py selftest   # 10/10 GREEN（含 9 条改坏必红）
+python -I rng-trace-scene/check_anchors.py selftest   # 13/13 GREEN（含 12 条改坏必红）
 ```
 
 - 锚点缺失 / **重复**（歧义）/ 文件缺失 / 符号缺失 / 行号漂移 ⇒ rc=1 **逐个点名**（漂移还报出正确的
@@ -312,6 +312,26 @@ reviewer-5（M-1）与 reviewer-6（M-1/M-2）就 `a173eba89` 那片各记了一
 - 新增 4 条改坏必红（同名目录串台 / 裸续引用未登记 / 裸续**内容**漂移 / 未识别扩展名），连同原有
   5 条共 **9 条**；`selftest` 总数 10/10。**不改** `run_rng_trace_pair.ps1` 的自检项数（仍 31）。
 
+#### 5.2.2 裸续引用三条分支的活用例补齐（2026-10-14 reviewer-6 M-1 收口）
+
+reviewer-6 在 approve `f11129a84` 时记了一条非阻塞 Minor（M-1）：`check_doc_text` ③ 段的
+`BARE_REF_UNGUARDED` / `BARE_REF_FILE_MISSING` / `BARE_REF_OUT_OF_RANGE` 三条 fail-closed 分支
+**只有代码、没有活 selftest 用例**（fail-closed 方向未受损，但牙没被咬过 ⇒ 无法证明它们真会红）。
+本片补三条改坏样本，把三条分支各咬一次：
+
+| 新牙 | 构造 | 期望 RED |
+| --- | --- | --- |
+| `mutation-bare-ref-unguarded-red` | 文档新增 `` `crates/world/src/merchant.rs:999`、`:12` ``（前一个完整引用本身未登记锚点） | `BARE_REF_UNGUARDED` |
+| `mutation-bare-ref-file-missing-red` | 注入一条 `path` 指向不存在文件的锚点 + 其 `also` 登记行 | `BARE_REF_FILE_MISSING` |
+| `mutation-bare-ref-out-of-range-red` | 已登记的 `also` 行号改成 `99999`（超出文件行数）并把文档裸续引用同步改 `:99999` | `BARE_REF_OUT_OF_RANGE` |
+
+⇒ `selftest` 总数 **10/10 → 13/13**（改坏必红 **9 → 12 条**）。`-SelfCheckNoStack` 的自检项数不变（仍 31：
+`check_anchors.py selftest` 作为一个子项被调用，其内部条数不改变 runner 的项数）。
+
+> 同片收口 reviewer-6 M-2：`evidence-m3-rng-scene-anchor-coverage-20261014/01,02` 的命令原先把
+> doc 路径写成占位 `<...>`（不可直接复制复跑）⇒ 改为**实路径 + 构造命令**（`git show <base>:<file>`
+> 取旧工具、`printf` 造坏样本），见该证据 dir 的 README。
+
 ### 5.3 站点表 `oracle_ref` 可解析性机判（`rng_consumer_groups.py`）
 
 `consumer_groups.tsv` 是 Claim B 的**唯一真源**，其 `oracle_ref` 列是站点归因的唯一溯源
@@ -341,7 +361,7 @@ cd mir2-rs/tests/parity/m3
 python -I rng-trace-probe/rng_ledger_diff.py selftest          # 37/37 GREEN（含 R-6 folded + DoD② scenario 声明）
 python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（含 scenario 声明 vs 代码 + 半给流水 PREREQ）
 python -I rng-trace-scene/check_evidence_counts.py selftest    # 7/7 GREEN（报告证据头行计数 vs 真实包：声明/真实）
-python -I rng-trace-scene/check_anchors.py selftest             # 10/10 GREEN（承接卡规格锚点保鲜；含 9 条改坏必红：行号漂移/缺失/歧义/未登记引用/折叠定义回退/同名目录串台/裸续引用未登记/裸续内容漂移/未识别扩展名）
+python -I rng-trace-scene/check_anchors.py selftest             # 13/13 GREEN（承接卡规格锚点保鲜；含 12 条改坏必红：行号漂移/缺失/歧义/未登记引用/折叠定义回退/同名目录串台/裸续引用未登记/裸续内容漂移/未识别扩展名/裸续引用归属未登记/裸续引用归属文件缺失/裸续引用登记行越界）
 python -I rng-trace-probe/rng_consumer_groups.py selftest       # 15/15 GREEN（站点表 oracle_ref 可解析性；含坏路径/越界行 2 条改坏必红）
 python -I rng-trace-scene/check_window_batch.py selftest        # 13/13 GREEN（本卡 vs ④ 场景件：同图/同种子/同起点）
 
