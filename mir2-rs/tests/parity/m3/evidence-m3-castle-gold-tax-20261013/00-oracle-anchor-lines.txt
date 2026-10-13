@@ -1,0 +1,298 @@
+# M3⑧-实现 9 oracle 锚（行号 = 仓库 src/ 实测；只读共享主检出）
+# 生成：# emit <file> <from> <to>（awk NR 行号）
+
+## src/M2Server/Castle/UserCastle.cs:73/87/89  字段 SaveTick / TodayIncome / TotalGold
+   73|         public int SaveTick { get; set; }
+   86|         public int PalaceDoorX { get; set; }
+   87|         public int PalaceDoorY { get; set; }
+   88|         public int TodayIncome { get; set; }
+   89|         public int TotalGold { get; set; }
+   90|         public int WarRangeX { get; set; }
+
+## src/M2Server/Castle/UserCastle.cs:768-812  IncRateGold（税收：Round(AwayFromZero) + 日上限 + 金库上限 + 10min SaveTick）
+  768|         public void IncRateGold(int nGold)
+  769|         {
+  770|             int nInGold = HUtil32.Round(nGold * (SystemShare.Config.CastleTaxRate / 100.0));
+  771|             if (TodayIncome + nInGold <= SystemShare.Config.CastleOneDayGold)
+  772|             {
+  773|                 TodayIncome += nInGold;
+  774|             }
+  775|             else
+  776|             {
+  777|                 if (TodayIncome >= SystemShare.Config.CastleOneDayGold)
+  778|                 {
+  779|                     nInGold = 0;
+  780|                 }
+  781|                 else
+  782|                 {
+  783|                     nInGold = SystemShare.Config.CastleOneDayGold - TodayIncome;
+  784|                     TodayIncome = SystemShare.Config.CastleOneDayGold;
+  785|                 }
+  786|             }
+  787|             if (nInGold > 0)
+  788|             {
+  789|                 if (TotalGold + nInGold < SystemShare.Config.CastleGoldMax)
+  790|                 {
+  791|                     TotalGold += nInGold;
+  792|                 }
+  793|                 else
+  794|                 {
+  795|                     TotalGold = SystemShare.Config.CastleGoldMax;
+  796|                 }
+  797|             }
+  798|             if ((HUtil32.GetTickCount() - SaveTick) > 10 * 60 * 1000)
+  799|             {
+  800|                 SaveTick = HUtil32.GetTickCount();
+  801|                 if (M2Share.GameLogGold)
+  802|                 {
+  803|                     //  M2Share.EventSource.AddEventLog(GameEventLogType.CastleTodayIncome, '0' + "\t" + '0' + "\t" + '0' + "\t" + "autosave" + "\t" + Grobal2.StringGoldName + "\t" + TotalGold + "\t" + '1' + "\t" + '0');
+  804|                 }
+  805|             }
+  806|         }
+  807| 
+  808|         /// <summary>
+  809|         /// 提取每日收入
+  810|         /// </summary>
+  811|         /// <param name="PlayObject"></param>
+  812|         /// <param name="nGold"></param>
+
+## src/M2Server/Castle/UserCastle.cs:814-889  真身重载 WithDrawalGolds(PlayObject)/ReceiptGolds(PlayObject)（**不可达**）
+  814|         public int WithDrawalGolds(PlayObject PlayObject, int nGold)
+  815|         {
+  816|             int result = -1;
+  817|             if (nGold <= 0)
+  818|             {
+  819|                 result = -4;
+  820|                 return result;
+  821|             }
+  822|             if (MasterGuild == PlayObject.MyGuild && PlayObject.GuildRankNo == 1)
+  823|             {
+  824|                 if (nGold <= TotalGold)
+  825|                 {
+  826|                     if (PlayObject.Gold + nGold <= SystemShare.Config.HumanMaxGold)
+  827|                     {
+  828|                         TotalGold -= nGold;
+  829|                         PlayObject.IncGold(nGold);
+  830|                         if (M2Share.GameLogGold)
+  831|                         {
+  832|                             // M2Share.EventSource.AddEventLog(22, PlayObject.MapName + "\t" + PlayObject.CurrX + "\t" + PlayObject.CurrY + "\t" + PlayObject.ChrName + "\t" + Grobal2.StringGoldName + "\t" + nGold + "\t" + '1' + "\t" + '0');
+  833|                         }
+  834|                         PlayObject.GoldChanged();
+  835|                         result = 1;
+  836|                     }
+  837|                     else
+  838|                     {
+  839|                         result = -3;
+  840|                     }
+  841|                 }
+  842|                 else
+  843|                 {
+  844|                     result = -2;
+  845|                 }
+  846|             }
+  847|             return result;
+  848|         }
+  849| 
+  850|         public int ReceiptGolds(PlayObject PlayObject, int nGold)
+  851|         {
+  852|             int result = -1;
+  853|             if (nGold <= 0)
+  854|             {
+  855|                 result = -4;
+  856|                 return result;
+  857|             }
+  858|             if (MasterGuild == PlayObject.MyGuild && PlayObject.GuildRankNo == 1 && nGold > 0)
+  859|             {
+  860|                 if (nGold <= PlayObject.Gold)
+  861|                 {
+  862|                     if (TotalGold + nGold <= SystemShare.Config.CastleGoldMax)
+  863|                     {
+  864|                         PlayObject.Gold -= nGold;
+  865|                         TotalGold += nGold;
+  866|                         if (M2Share.GameLogGold)
+  867|                         {
+  868|                             // M2Share.EventSource.AddEventLog(GameEventLogType.CastleReceiptGolds, PlayObject.MapName + "\t" + PlayObject.CurrX + "\t" + PlayObject.CurrY + "\t" + PlayObject.ChrName + "\t" + Grobal2.StringGoldName + "\t" + nGold + "\t" + '1' + "\t" + '0');
+  869|                         }
+  870|                         PlayObject.GoldChanged();
+  871|                         result = 1;
+  872|                     }
+  873|                     else
+  874|                     {
+  875|                         result = -3;
+  876|                     }
+  877|                 }
+  878|                 else
+  879|                 {
+  880|                     result = -2;
+  881|                 }
+  882|             }
+  883|             return result;
+  884|         }
+  885| 
+  886|         /// <summary>
+  887|         /// 城门控制
+  888|         /// </summary>
+  889|         /// <param name="boClose"></param>
+
+## src/M2Server/Castle/UserCastle.cs:599-602 / 911-914  N1 接口重载 throw NotImplementedException（**实际被调用**）
+  599|         public int WithDrawalGolds(IPlayerActor PlayObject, int nGold)
+  600|         {
+  601|             throw new NotImplementedException();
+  602|         }
+  911|         public int ReceiptGolds(IPlayerActor PlayObject, int nGold)
+  912|         {
+  913|             throw new NotImplementedException();
+  914|         }
+
+## src/M2Server/Castle/CastleManager.cs:184-192  GetCastle(int)
+  184|             }
+  185|             using StringList loadList = new StringList(CastleList.Count);
+  186|             for (int i = 0; i < CastleList.Count; i++)
+  187|             {
+  188|                 loadList.Add(i.ToString());
+  189|             }
+  190|             string savePath = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleFile);
+  191|             loadList.SaveToFile(savePath);
+  192|         }
+
+## src/M2Server/Castle/CastleManager.cs:209-215  IncRateGold(int)（升序遍历 CastleList）
+  209|         }
+  210| 
+  211|         public void IncRateGold(int nGold)
+  212|         {
+  213|             for (int i = 0; i < CastleList.Count; i++)
+  214|             {
+  215|                 CastleList[i].IncRateGold(nGold);
+
+## src/GameSrv/Npc/Merchant.cs:544-553 / 1250-1259 / 1385-1393 / 1637-1645  四个商人税调用点
+  544|                 if (CastleMerchant || SystemShare.Config.GetAllNpcTax)
+  545|                 {
+  546|                     if (Castle != null)
+  547|                     {
+  548|                         Castle.IncRateGold(SystemShare.Config.UpgradeWeaponPrice);
+  549|                     }
+  550|                     else if (SystemShare.Config.GetAllNpcTax)
+  551|                     {
+  552|                         SystemShare.CastleMgr.IncRateGold(SystemShare.Config.UpgradeWeaponPrice);
+  553|                     }
+  ...
+ 1250|                                             if (CastleMerchant || SystemShare.Config.GetAllNpcTax)
+ 1251|                                             {
+ 1252|                                                 if (Castle != null)
+ 1253|                                                 {
+ 1254|                                                     Castle.IncRateGold(nPrice);
+ 1255|                                                 }
+ 1256|                                                 else if (SystemShare.Config.GetAllNpcTax)
+ 1257|                                                 {
+ 1258|                                                     SystemShare.CastleMgr.IncRateGold(SystemShare.Config.UpgradeWeaponPrice);
+ 1259|                                                 }
+  ...
+ 1385|                     if (CastleMerchant || SystemShare.Config.GetAllNpcTax)
+ 1386|                     {
+ 1387|                         if (Castle != null)
+ 1388|                         {
+ 1389|                             Castle.IncRateGold(nPrice);
+ 1390|                         }
+ 1391|                         else if (SystemShare.Config.GetAllNpcTax)
+ 1392|                         {
+ 1393|                             SystemShare.CastleMgr.IncRateGold(SystemShare.Config.UpgradeWeaponPrice);
+  ...
+ 1637|                         if (CastleMerchant || SystemShare.Config.GetAllNpcTax)
+ 1638|                         {
+ 1639|                             if (Castle != null)
+ 1640|                             {
+ 1641|                                 Castle.IncRateGold(nRepairPrice);
+ 1642|                             }
+ 1643|                             else if (SystemShare.Config.GetAllNpcTax)
+ 1644|                             {
+ 1645|                                 SystemShare.CastleMgr.IncRateGold(SystemShare.Config.UpgradeWeaponPrice);
+
+## src/GameSrv/Npc/Merchant.cs:765-782  GetUserPrice（城堡成员价 max(60, Round(PriceRate*CastleMemberPriceRate/100))）
+  765|         private int GetUserPrice(IPlayerActor playObject, double nPrice)
+  766|         {
+  767|             int result = 0;
+  768|             if (CastleMerchant)
+  769|             {
+  770|                 if (Castle != null && Castle.IsMasterGuild(playObject.MyGuild)) //沙巴克成员修复物品打折
+  771|                 {
+  772|                     int n14 = HUtil32._MAX(60, HUtil32.Round(PriceRate * (SystemShare.Config.CastleMemberPriceRate / 100.0)));//80%
+  773|                     result = HUtil32.Round(nPrice / 100.0 * n14);
+  774|                 }
+  775|                 else
+  776|                 {
+  777|                     result = HUtil32.Round(nPrice / 100.0 * PriceRate);
+  778|                 }
+  779|             }
+  780|             else
+  781|             {
+  782|                 result = HUtil32.Round(nPrice / 100.0 * PriceRate);
+
+## src/GameSrv/Npc/CastleOfficial.cs:155-183  金库提取/上缴的调用点（Castle 静态类型 IUserCastle ⇒ 走 N1）
+  155|                         else if (string.Compare(sLabel, ScriptFlagConst.sWITHDRAWAL, StringComparison.OrdinalIgnoreCase) == 0)
+  156|                         {
+  157|                             switch (Castle.WithDrawalGolds(PlayObject, HUtil32.StrToInt(sMsg, 0)))
+  158|                             {
+  159|                                 case -4:
+  160|                                     s18 = "输入的金币数不正确!!!";
+  161|                                     break;
+  162|                                 case -3:
+  163|                                     s18 = "您无法携带更多的东西了。";
+  164|                                     break;
+  165|                                 case -2:
+  166|                                     s18 = "该城内没有这么多金币.";
+  167|                                     break;
+  168|                                 case -1:
+  169|                                     s18 = "只有行会 " + Castle.OwnGuild + " 的掌门人才能使用!!!";
+  170|                                     break;
+  171|                                 case 1:
+  172|                                     M2Share.ScriptEngine.GotoLable(PlayObject, this.ActorId, ScriptFlagConst.sMAIN);
+  173|                                     break;
+  174|                             }
+  175|                             PlayObject.SendMsg(this, Messages.RM_MENU_OK, 0, ActorId, 0, 0, s18);
+  176|                         }
+  177|                         else if (string.Compare(sLabel, ScriptFlagConst.sRECEIPTS, StringComparison.OrdinalIgnoreCase) == 0)
+  178|                         {
+  179|                             switch (Castle.ReceiptGolds(PlayObject, HUtil32.StrToInt(sMsg, 0)))
+  180|                             {
+  181|                                 case -4:
+  182|                                     s18 = "输入的金币数不正确!!!";
+  183|                                     break;
+
+## src/M2Server/Actor/BaseObject.cs:153  Castle 属性类型 = IUserCastle（N1 重载决议依据）
+  153|         public IUserCastle Castle { get; set; }
+
+## src/OpenMir2/HUtil32.cs:131-134  Round = Math.Round(r, MidpointRounding.AwayFromZero)
+  131|         public static int Round(double r)
+  132|         {
+  133|             return (int)Math.Round(r, MidpointRounding.AwayFromZero);
+  134|         }
+
+## src/Modules/SystemModule/Conf/Model/GameSvrConf.cs  税收默认值
+  960| CastleTaxRate 声明
+  960|         public int CastleTaxRate;
+  964-965| CastleGoldMax / CastleOneDayGold 声明
+  964|         public int CastleGoldMax;
+  965|         public int CastleOneDayGold;
+  966|         public int RepairDoorPrice;
+  967|         public int RepairWallPrice;
+  968|         public int CastleMemberPriceRate;
+  1420| UpgradeWeaponPrice = 10000
+ 1420|             UpgradeWeaponPrice = 10000;
+  1788/1792/1793/1796| CastleTaxRate=5 / CastleGoldMax=10000000 / CastleOneDayGold=2000000 / CastleMemberPriceRate=80
+ 1788|             CastleTaxRate = 5;
+ 1789|             GetAllNpcTax = false;
+ 1790|             HireGuardPrice = 300000;
+ 1791|             HireArcherPrice = 300000;
+ 1792|             CastleGoldMax = 10000000;
+ 1793|             CastleOneDayGold = 2000000;
+ 1794|             RepairDoorPrice = 2000000;
+ 1795|             RepairWallPrice = 500000;
+ 1796|             CastleMemberPriceRate = 80;
+
+## 现网 Server.conf（E:/MirServer/M2GameSvr/Server.conf）覆盖值
+310:CastleGoldMax=5000000
+333:UpgradeWeaponPrice=10000
+337:CastleOneDayGold=2000000
+344:CastleTaxRate=5
+345:CastleGetAllNpcTax=0
+574:CastleMemberPriceRate=80

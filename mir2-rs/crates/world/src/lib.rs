@@ -16,6 +16,7 @@
 pub mod aoi;
 pub mod bevy_bridge;
 pub mod castle;
+pub mod castle_tax;
 pub mod combat;
 pub mod entity;
 pub mod magic;
@@ -33,6 +34,10 @@ pub use bevy_bridge::{collect_tick_order_system, snapshot_from_world};
 pub use castle::{
     AttackerInfo, CastleDate, CastleEvent, CastleNow, CastleSiegeConfig, CastleUnit, GuildId,
     UserCastle, MAX_CASTLE_ARCHER, MAX_CASTLE_GUARD, SS_204, SS_212,
+};
+pub use castle_tax::{
+    merchant_tax_amount, merchant_tax_target, CastleManager, CastleTaxConfig, IncRateGoldOutcome,
+    MerchantTaxTarget, CASTLE_GOLD_SAVE_INTERVAL_MS,
 };
 pub use combat::{
     attack, attack_dir, attack_dir_grouped, attack_success_weapon_damage, attack_with,
