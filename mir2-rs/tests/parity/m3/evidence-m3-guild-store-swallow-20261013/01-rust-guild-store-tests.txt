@@ -1,0 +1,21 @@
+   Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\data)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s
+     Running tests\guild_store_vectors.rs (E:/tmp/openmir2-m3cs-target\debug\deps\guild_store_vectors-0352d403c94f6da9.exe)
+
+running 13 tests
+test vector_config_sections_and_limits ... ok
+test vector_get_valid_str3_tokenizer ... ok
+test vector_save_bytes_exact ... ok
+test vector_parse_save_round_trip_drops_allies ... ok
+test vector_missing_list_file_fails_closed ... ok
+test vector_ini_is_only_ever_created_empty ... ok
+test vector_rank_name_truncates_only_over_30 ... ok
+test vector_save_refuses_to_create_target ... ok
+test vector_load_quattro_sections_and_quirks ... ok
+test vector_load_guild_info_swallows_list_rewrite_io_error ... ok
+test vector_save_guild_list_noop_on_nonzero_server_index ... ok
+test vector_load_guild_info_rewrites_list ... ok
+test vector_load_guild_info_uses_alive_set ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

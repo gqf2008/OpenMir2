@@ -1,0 +1,28 @@
+# 改坏必红（reviewer-5 M-1 回归）：把吞错改回 ? 传播 ⇒ 新用例必须 FAILED
+# 变体：mir2-rs/crates/data/src/guild.rs  load_guild_info 移除分支
+#   -   let _ = self.save_guild_list(&names, server_index);
+#   +   self.save_guild_list(&names, server_index)?;
+$ cargo test -p mir2-data --test guild_store_vectors vector_load_guild_info_swallows_list_rewrite_io_error --offline
+   Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\data)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.26s
+     Running tests\guild_store_vectors.rs (E:/tmp/openmir2-m3cs-target\debug\deps\guild_store_vectors-0352d403c94f6da9.exe)
+
+running 1 test
+test vector_load_guild_info_swallows_list_rewrite_io_error ... FAILED
+
+failures:
+
+---- vector_load_guild_info_swallows_list_rewrite_io_error stdout ----
+
+thread 'vector_load_guild_info_swallows_list_rewrite_io_error' (33908) panicked at crates\data\tests\guild_store_vectors.rs:447:5:
+oracle SaveGuildList 吞掉写失败、加载继续；Rust 不应 `?` 中止: Err(Io("拒绝访问。 (os error 5)"))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    vector_load_guild_info_swallows_list_rewrite_io_error
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p mir2-data --test guild_store_vectors`
+rc=101
