@@ -27,6 +27,7 @@
   python -I -B window_handoff.py --repo <检出> --shadow-config <影子 RunGate/config.conf> --with-csharp
   # 计划（可单独跑；--plan-only 不跑判据）
   python -I -B window_handoff.py --plan --site 287,620 --site-none 291,666
+  python -I -B window_handoff.py --plan --best-site        # ③b 由 MonGen 排行自动选最密点
   python -I -B window_handoff.py --plan-only --json
   python -I -B window_handoff.py --selftest
 
@@ -60,6 +61,10 @@ TOOL_SELFTESTS = (
 
 _RESULT_RE = re.compile(r"^RESULT:\s*(GREEN|RED|PREREQ_RED)\b", re.MULTILINE)
 _SELFTEST_RE = re.compile(r"^SELFTEST\s+(OK|GREEN|FAILED|RED)\b", re.MULTILINE)
+# `BEST (605,578) E=12.681 view_range=12 box=(605,578) range=30 count=10 name=半兽人`
+_BEST_RE = re.compile(
+    r"^BEST\s+\((?P<x>-?\d+),(?P<y>-?\d+)\)\s+E=(?P<e>[0-9]+(?:\.[0-9]+)?)\b", re.MULTILINE
+)
 _PASS_STATES = ("OK", "GREEN")
 _FAIL_STATES = ("FAILED", "RED")
 
@@ -78,6 +83,42 @@ def parse_selftest(text: str) -> str | None:
     """从工具 stdout 抽 `SELFTEST OK|FAILED`。"""
     m = _SELFTEST_RE.search(text or "")
     return m.group(1) if m else None
+
+
+def parse_best_point(text: str) -> dict | None:
+    """从 `check_mongen_dense_points.py --best-point` 的 stdout 抽 `BEST (x,y) E=<e>`。
+
+    返回 `{"x": int, "y": int, "e": str}`；无该行 ⇒ `None`（调用方 fail-soft）。
+    """
+    m = _BEST_RE.search(text or "")
+    if not m:
+        return None
+    return {"x": int(m.group("x")), "y": int(m.group("y")), "e": m.group("e")}
+
+
+def resolve_best_site(
+    check_dir: str, mirserver: str, map_name: str, view_range: int
+) -> tuple[str | None, str]:
+    """用片⑯ MonGen 排行给 ③b 选「窗口内期望出生怪数最大」的点（root ③①「换怪密点」）。
+
+    只读聚合：调 `check_mongen_dense_points.py --best-point`，解析 `BEST (x,y) E=`。
+    缺工具/缺 MonGen/解析不到 ⇒ `(None, 说明)`（fail-soft：计划回落到 `--site` 缺省并打印说明，
+    绝不静默假装选过点）。
+    """
+    tool = os.path.join(check_dir, "check_mongen_dense_points.py")
+    mongen = os.path.join(mirserver, "M2GameSvr", "Envir", "MonGen.txt")
+    if not os.path.isfile(tool):
+        return None, f"选点跳过：缺判据脚本 {tool}"
+    if not os.path.isfile(mongen):
+        return None, f"选点跳过：缺 {mongen}"
+    rc, out = run_tool(tool, ["--mongen", mongen, "--map", map_name,
+                              "--view-range", str(view_range), "--best-point"])
+    best = parse_best_point(out)
+    if rc != 0 or not best:
+        return None, f"选点跳过：check_mongen_dense_points.py --best-point rc={rc}（解析不到 BEST）"
+    site = f"{best['x']},{best['y']}"
+    return site, (f"③b 最密点自动选取 BEST={site} E={best['e']} "
+                  f"（check_mongen_dense_points.py --best-point，root ③①「换怪密点」）")
 
 
 def run_tool(path: str, args: list[str], timeout: int = 180) -> tuple[int, str]:
@@ -225,6 +266,7 @@ def plan_text(
     seed: str,
     view_range: int,
     stale: bool,
+    site_note: str = "",
 ) -> str:
     w = work_dir.rstrip("/\\")
     rust = f"{w}/rust"
@@ -237,6 +279,8 @@ def plan_text(
     A(f"# ③ 两侧同框对照窗口计划（卡 openmir2-client-e2e-enter-gaps）")
     A(f"# 构建源 repo={repo or '<未给>'} ref={ref}")
     A(f"# ③b 有怪点 site={site} / ③a 反向点 site_none={site_none} / view_range={view_range}")
+    if site_note:
+        A(f"# {site_note}")
     A("")
     if stale:
         A("# ==== 修复块：G1 RED（构建源过旧）⇒ 窗口脚本的 repo= 必须换树（勿动共享主检出） ====")
@@ -284,7 +328,12 @@ def plan_text(
     A(f"#     --capture {rust}/s2c/capture.jsonl --min-appearance-pairs 1")
     A(f"#   ③b 两侧：python -I -B aoi_visibility_pair.py --left {rust}/s2c/capture.jsonl \\")
     A(f"#     --right {csh}/s2c/capture.jsonl --expect visible --min-pairs 1")
-    A(f"#   ③a 反向：同上加 --expect none（两侧都必须是 0 对）")
+    A(f"#   ③a 反向（服务端）：python -I -B check_aoi_visibility_diag.py \\")
+    A(f"#     --log {rust}/stack/game-svr.out.log --expect none")
+    A(f"#   ③a 反向（两侧）：python -I -B aoi_visibility_pair.py --left {rust}/s2c/capture.jsonl \\")
+    A(f"#     --right {csh}/s2c/capture.jsonl --expect none")
+    A(f"#   （③a 是第二趟：把 §1 的 aaa 改到 site_none={site_none} 重跑 §2/§3，再跑上面两条 --expect none；")
+    A(f"#    两侧都必须 0 对出现帧 + 服务端 vis==0 且 af==0）")
     A("")
     A("# 5) 收工：start_rust_stack.ps1 -Stop / C# -Stop；还原 aaa；实拍十端口；SHA256SUMS 按 LF/git-blob 口径")
     A("")
@@ -339,6 +388,14 @@ def selftest() -> int:
     chk("parse-selftest-failed", parse_selftest("SELFTEST FAILED (18/19)") == "FAILED")
     chk("parse-selftest-red", parse_selftest("SELFTEST RED") == "RED")
     chk("parse-selftest-missing", parse_selftest("nothing") is None)
+    chk("parse-best-point",
+        parse_best_point("BEST (605,578) E=12.681 view_range=12 box=(605,578) range=30 count=10 name=半兽人")
+        == {"x": 605, "y": 578, "e": "12.681"})
+    chk("parse-best-point-missing", parse_best_point("RANK (605,578) E=12.681") is None)
+    chk("parse-best-point-int-e", parse_best_point("BEST (1,2) E=3") == {"x": 1, "y": 2, "e": "3"})
+    # 选点 fail-soft：缺部署根 ⇒ 不得抛异常，返回 (None, 说明)
+    _none_site, _none_note = resolve_best_site(HERE, "E:/no-such-mirserver-xyz", "0", 12)
+    chk("resolve-best-site-failsoft", _none_site is None and "选点跳过" in _none_note, _none_note)
 
     # --- 端到端聚合（假判据脚本） ---
     with tempfile.TemporaryDirectory(prefix="wh-allgreen-") as tmp:
@@ -366,6 +423,18 @@ def selftest() -> int:
             all(s in fresh_plan for s in ("check_aoi_visibility_diag.py", "check_client_s2c_frames.py",
                                           "aoi_visibility_pair.py", "--expect none", "--expect visible")))
         chk("plan-has-sites", "287,620" in fresh_plan and "291,666" in fresh_plan)
+        # O-2 收口：③a 反向必须是完整可粘贴命令，不能用「同上加 …」这种半句。
+        chk("plan-none-full-commands",
+            "--expect none" in fresh_plan
+            and "check_aoi_visibility_diag.py" in fresh_plan
+            and "aoi_visibility_pair.py" in fresh_plan
+            and "同上加" not in fresh_plan)
+        chk("plan-none-second-pass-note", "第二趟" in fresh_plan and "site_none=291,666" in fresh_plan)
+        _note_plan = plan_text("R", "HEAD", "M", "605,578", "291,666", "E:/tmp/w", "E:/tmp/tgt",
+                               "42", 12, stale=False,
+                               site_note="③b 最密点自动选取 BEST=605,578 E=12.681")
+        chk("plan-site-note", "最密点自动选取" in _note_plan and "605,578" in _note_plan)
+        chk("plan-no-note-when-empty", "最密点自动选取" not in fresh_plan)
         chk("plan-has-pipeline",
             all(s in fresh_plan for s in ("start_rust_stack.ps1", "mir2_proxy.py", "export_s2c.ps1",
                                           "mir_flow.ps1")))
@@ -422,6 +491,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--plan", action="store_true", help="打印 ③ 两侧对照窗口计划")
     ap.add_argument("--plan-only", action="store_true", help="只打印计划，不跑判据")
     ap.add_argument("--site", default="287,620", help="③b 有怪点 x,y（默认 287,620，片⑦已证 13 对）")
+    ap.add_argument("--best-site", action="store_true",
+                    help="③b site 由 MonGen 排行自动选取（--best-point；root ③①「换怪密点」）")
     ap.add_argument("--site-none", default="291,666", help="③a 反向点 x,y（默认 291,666，E=0.000）")
     ap.add_argument("--work-dir", default="E:/tmp/window/cliente2e", help="窗口工作目录")
     ap.add_argument("--target-dir", default="E:/tmp/m2svr-window-target",
@@ -434,9 +505,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.selftest:
         return selftest()
 
+    site = args.site
+    site_note = ""
+    if args.best_site:
+        auto_site, site_note = resolve_best_site(
+            args.check_dir, args.mirserver, args.map_name, args.view_range)
+        if auto_site:
+            site = auto_site
+
     if args.plan_only:
-        print(plan_text(args.repo, args.ref, args.mirserver, args.site, args.site_none,
-                        args.work_dir, args.target_dir, args.seed, args.view_range, stale=False))
+        print(plan_text(args.repo, args.ref, args.mirserver, site, args.site_none,
+                        args.work_dir, args.target_dir, args.seed, args.view_range,
+                        stale=False, site_note=site_note))
         return 0
 
     rep = run_checks(args.check_dir, args.repo, args.ref, args.mirserver,
@@ -453,9 +533,9 @@ def main(argv: list[str] | None = None) -> int:
     ready = "YES" if rc == 0 else "NO"
     if args.plan:
         print("")
-        print(plan_text(args.repo, args.ref, args.mirserver, args.site, args.site_none,
+        print(plan_text(args.repo, args.ref, args.mirserver, site, args.site_none,
                         args.work_dir, args.target_dir, args.seed, args.view_range,
-                        stale=rep.build_source_stale))
+                        stale=rep.build_source_stale, site_note=site_note))
     if args.json:
         print(json.dumps({
             "window_ready": ready,

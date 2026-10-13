@@ -1,0 +1,49 @@
+102-redcheck-window-plan-o2.txt —— 片⑱ 改坏必红（卡 `openmir2-client-e2e-enter-gaps`）
+（m2-svr / openmir2-worker-11，2026-10-14）
+====================================================================================================
+口径：全部在 `/tmp` 复制件上做（`E:/tmp/m2svr-o2-red/`），**仓内文件零改动**；每条改坏后跑
+`--selftest` 取真实读数，做完用 `sha256sum` + 逐字节比对确认仓内文件未动。
+base 复制件 = `cp window_handoff.py E:/tmp/m2svr-o2-red/base.py`。
+
+A. MUT-A（O-2 回归）：把 ③a 退回「同上加」半句 ⇒ selftest 必红
+----------------------------------------------------------------------------------------------------
+改坏 = 把 ③a 的两条完整命令 + 第二趟说明，替换回片⑰ 的半句
+      `A(f"#   ③a 反向：同上加 --expect none（两侧都必须是 0 对）")`。
+
+$ python -I -B E:/tmp/m2svr-o2-red/mutA.py --selftest
+  [FAIL] selftest plan-none-full-commands
+  [FAIL] selftest plan-none-second-pass-note
+  SELFTEST FAILED (33/35)
+  rc=1
+⇒ 半句回归**必红**（0.2 秒内两条断言同时咬住）；说明「完整命令」是有牙判据，不是文案。
+
+B. MUT-B（选点解析被废）：`parse_best_point` 恒 `None` ⇒ selftest 必红
+----------------------------------------------------------------------------------------------------
+改坏 = `parse_best_point` 的正文整段换成 `return None`（`--best-site` 永远选不到点）。
+
+$ python -I -B E:/tmp/m2svr-o2-red/mutB.py --selftest
+  [FAIL] selftest parse-best-point
+  [FAIL] selftest parse-best-point-int-e
+  SELFTEST FAILED (33/35)
+  rc=1
+⇒ 排行输出版式一旦漂移（例如片⑯ 改了 `BEST` 行格式）⇒ 解析断言先红，不会静默回落。
+
+C. MUT-C′（选点 fail-soft 被吞成假点）：缺脚本时返回 `"0,0"` ⇒ selftest 必红
+----------------------------------------------------------------------------------------------------
+改坏 = `resolve_best_site` 缺工具分支由 `return None, "选点跳过：缺判据脚本 …"` 改成
+      `return "0,0", "selected"`（危险失效模式：计划里出现一个**从不存在的点**却不报）。
+
+$ python -I -B E:/tmp/m2svr-o2-red/mutC.py --selftest
+  [FAIL] selftest resolve-best-site-failsoft selected
+  SELFTEST FAILED (34/35)
+  rc=1
+⇒ 「选点失败必须 fail-soft 且写明跳过」，**不许伪造站点**。
+
+D. 还原核对（仓内零改动）
+----------------------------------------------------------------------------------------------------
+$ sha256sum mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+  8678eafbbce634ea6160a5632fbbbc561f55212ff0c99cb175fbc6e6d407bf43 *window_handoff.py
+$ python -c "print(open('E:/tmp/m2svr-o2-red/base.py','rb').read()==open('window_handoff.py','rb').read())"
+  True
+⇒ 复制件与仓内文件逐字节相同（`/tmp` 改动一字未回写）。合法交付件的 `SHA256SUMS.txt` 记的是
+**git blob（LF 归一）口径**的 sha256（见 `104` §D / `verify_sha256sums.py`）。

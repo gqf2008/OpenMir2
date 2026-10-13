@@ -409,3 +409,28 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   还原后 sha256 逐字节一致。
 - **零生产代码改动**（仅一个 `.py` 判据 + 四份证据 + README/清单）；本片**未起栈、未占端口**，未动共享主检出。
 - 证据：`97-window-handoff-gate.txt`、`98-redcheck-window-handoff.txt`、`99-gates.txt`、`100-boundary.txt`。
+
+## ⑱ 片⑱：③ 窗口计划的 **O-2 收口 + 换怪密点自动选点**（2026-10-14）—— `101`/`102`
+
+- **背景①（reviewer-5 O-2，非阻塞已登记）**：`window_handoff.py --plan` 的 ③a 反向段当时写成
+  「同上加 `--expect none`」的半句，不是**完整可粘贴命令** ⇒ root 开窗时要自己补两条命令，易漏。
+- **背景②（root 00:4x ③①「换怪密点」）**：片⑯ 已把「窗口内期望出生怪数 E」做成排行，但片⑰ 计划的
+  ③b `--site` **缺省恒为 `287,620`（E=5.617）**，与「最密点 `(605,578)` E=12.681」脱节 ⇒ 选点仍靠人工记忆。
+- **本片改动（`window_handoff.py`，只读、零起栈、零端口；不新增第二份判据）**：
+  1. **O-2**：③a 反向输出**两条完整命令**（服务端 `check_aoi_visibility_diag.py --expect none` +
+     两侧 `aoi_visibility_pair.py --expect none`），并显式标注「③a 是第二趟：把 aaa 改到 site_none 重跑 §2/§3」；
+     计划文本里**不再出现**「同上加」。
+  2. **`--best-site`**：③b 站点由片⑯ `check_mongen_dense_points.py --best-point` **自动选取**（解析 `BEST (x,y) E=`），
+     计划头部打印 `# ③b 最密点自动选取 BEST=… E=…`。缺工具/缺 `MonGen.txt`/解析不到 ⇒ **fail-soft**
+     （回落 `--site` 缺省 + 打印「选点跳过：…」），**绝不静默假装选过点**（假点必红，见 `102` MUT-C′）。
+- **真读数**：
+  - `--selftest` **27/27 → 35/35**（新增：`parse-best-point` 三条 + `resolve-best-site` fail-soft + O-2 完整命令 +
+    第二趟说明 + `site_note` 必含/必不含）。
+  - `--plan-only --best-site` ⇒ `site=605,578 … # ③b 最密点自动选取 BEST=605,578 E=12.681`（`101` §B）。
+  - 聚合门（构建源 = 本车道 worktree @ `origin/master`）⇒ `WINDOW_READY=YES` rc=0（`101` §D）。
+- **3 条改坏必红**（`102`，均在 `/tmp` 复制件上做，仓内零改动、还原后 sha256 一致）：
+  ① 把 ③a 退回「同上加」半句 ⇒ `SELFTEST FAILED (33/35)`；
+  ② `parse_best_point` 恒 `None` ⇒ `SELFTEST FAILED (33/35)`；
+  ③ 选点 fail-soft 被吞成假点（缺脚本时返回 `"0,0"`）⇒ `SELFTEST FAILED (34/35)`。
+- **零生产代码改动**（仅一个 `.py` + 四份证据 + README/清单）；本片**未起栈、未占端口**，未动共享主检出。
+- 证据：`101-window-plan-o2-bestsite.txt`、`102-redcheck-window-plan-o2.txt`、`103-gates.txt`、`104-boundary.txt`。
