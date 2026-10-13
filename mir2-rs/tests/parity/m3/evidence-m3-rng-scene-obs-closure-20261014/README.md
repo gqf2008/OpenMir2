@@ -2,8 +2,8 @@
 
 - 卡：`openmir2-m3-rng-trace-scene-groups`
 - 片：收口 reviewer-5 `c3fef2fd` O-1 / reviewer-5 `9dce8b2e` M-1 / reviewer-6 `37c322a9` M-1
-- base = origin/master = `6afa376363d3378933d95c26c45cd8eb7c9738f3`
-- head = `d4274cdaf0fa51f2d5fc946e77f371b260b8837a`（= 本片代码/文档提交；其后只追加本证据目录）
+- base = origin/master = `768b2bb6c4b81e774a80a2ad27fda0cccdb1a12c`（**base 前进重交**：原片 base 为 `6afa37636`；2026-10-14 `git merge origin/master` 后重交，零冲突、内容逐字节不变，见 `13-base-advance.txt`）
+- head = `8c38c0fcd3c20fca59fcc0055c86404a95b18e02`（= 合并 master 后的内容头；其后只追加/刷新本证据目录）
 - 写集：`mir2-rs/tests/parity/m3/**`，零 `.rs`；零起栈、零端口
 
 ## 件表
@@ -19,7 +19,8 @@
 | `06-mutation-strength-repro.txt` | 改坏力度复现：弱 **21/22**（1 FAIL）/ 强 **20/22**（2 FAIL）/ 还原 **22/22** |
 | `07-offline-regression.txt` | 离线全链（8 个 selftest + `fixture_chain_gate check` GREEN） |
 | `08..11-gates-*.txt` | 四门禁：fmt rc=0 / clippy rc=0(`-D warnings`) / workspace test **101 suites 1200 passed 0 failed 22 ignored** / msgcodegen 604 rc=0 |
-| `12-boundary.txt` | 净差量 8 路径全在 `mir2-rs/tests/parity/m3/**`；`*.rs`=0；冻结面空；base 是 head 祖先 |
+| `12-boundary.txt` | 净差量 **23 路径**全在 `mir2-rs/tests/parity/m3/**`；`*.rs`=0；冻结面空；base 是 head 祖先；回退假差量 0 |
+| `13-base-advance.txt` | base 前进重交（`6afa37636` → `768b2bb6c`，merge `8c38c0fcd`）：清除 7 条回退假差量；四门禁 + 37/37 自检在新 base 重跑读数 |
 | `SHA256SUMS.txt` | 仓库 LF/git-blob 口径 |
 
 ## 改了哪些件（本片）

@@ -1,0 +1,54 @@
+base 前进重交（2026-10-14，本 burst）
+================================================================
+背景：本片原交付（base `6afa376363d3378933d95c26c45cd8eb7c9738f3`，head `9a9d93e8b0b16c2858b92f00c8d553f4ed1ea650`）
+在交付后 master 前进 9 个提交（`6afa37636..768b2bb6c`）⇒ 直接以旧 base 声明 patch 时，
+`git diff --name-only origin/master HEAD` 会带出 **7 条「回退假差量」**（master 新增的
+`mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**` 被显示成本片删除），
+正是 owner 在 brief 04:35 块点名的「base 未含 master ⇒ 带出回退假差量」坑。
+
+处置（照 owner 04:35 的补法）：`git fetch` → `git merge origin/master` → 重跑四门禁/自检 → 重交 patch（base 用当时 master head）。
+
+命令与读数
+----------------------------------------------------------------
+$ git fetch origin && git fetch walgit
+$ git merge-base --is-ancestor 6afa376363d3378933d95c26c45cd8eb7c9738f3 origin/master
+YES（旧 base 是新 base 的祖先 ⇒ 纯前进）
+$ git rev-list --count 6afa376363d3378933d95c26c45cd8eb7c9738f3..768b2bb6c4b81e774a80a2ad27fda0cccdb1a12c
+9
+$ git merge --no-edit origin/master
+Merge commit `8c38c0fcd3c20fca59fcc0055c86404a95b18e02`
+  parents = `9a9d93e8b0b16c2858b92f00c8d553f4ed1ea650`（原交付头） + `768b2bb6c4b81e774a80a2ad27fda0cccdb1a12c`（master）
+  冲突：0（本片 23 个路径与 master 新增的 m3 文件**无交集**；`git merge-tree` 干净）
+  ⇒ 本片内容（8 条代码/文档路径 + 15 条证据路径）逐字节不变；只是 base 前进。
+
+$ git diff --name-only origin/master HEAD
+净差量 = 23 路径，**全部在 `mir2-rs/tests/parity/m3/**`**；`*.rs` = 0；
+冻结面（`src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins`）= 空；
+无任何 master 侧「回退假差量」。逐路径清单见 `12-boundary.txt`。
+
+四门禁（cwd=mir2-rs，CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target，均 --offline）
+----------------------------------------------------------------
+$ cargo fmt --all -- --check                                   rc=0
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.72s   rc=0
+$ cargo test --workspace --offline
+    101 suites / 1200 passed / 0 failed / 22 ignored                     rc=0
+$ cargo run -q -p msgcodegen --offline -- --check
+    msgcodegen --check OK: 604 条常量                                     rc=0
+
+离线自检（无栈、零端口）
+----------------------------------------------------------------
+$ powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack
+    SELFTEST ok=37/37 failures=   rc=0（与合 master 前逐行相同，见 `02-selfcheck-nostack.txt`）
+$ python -I fixture_chain_gate.py check
+    FIXTURE_CHAIN GREEN: runner_ok=10 prereq_or_skip=0 red=0
+
+窗口/端口
+----------------------------------------------------------------
+十端口实拍：仅共享 3306 在听；本片零起栈、零端口。
+
+结论
+----------------------------------------------------------------
+- 旧 base `6afa37636` 的 7 条回退假差量已清除；重交后 net 差量仍为 23 路径、全在 `mir2-rs/tests/parity/m3/**`。
+- 内容未变，四条门禁与 37/37 无栈自检在新 base 上重跑全绿。
+- 卡级 R 真机 DoD 不变（承接卡 `openmir2-m3-rng-scene-driver` 未开 + owner 独占窗口）⇒ 卡保持 in-progress。

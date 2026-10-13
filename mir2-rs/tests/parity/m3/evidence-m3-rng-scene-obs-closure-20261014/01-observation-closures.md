@@ -3,6 +3,8 @@
 - 卡：`openmir2-m3-rng-trace-scene-groups`。片：收口本卡**仍未收**的三条非阻塞 observation。
 - 基线：上一片（`3f393eef2`，check-pack 接线）已由 reviewer-5 approve 并合入 master `6afa376363d3378933d95c26c45cd8eb7c9738f3`；
   本片 base = `6afa376363d3378933d95c26c45cd8eb7c9738f3`，head = `d4274cdaf0fa51f2d5fc946e77f371b260b8837a`。
+  > 2026-10-14 base 前进重交：master 已前进 9 提交，为清除「回退假差量」把 base 前进到 `768b2bb6c4b81e774a80a2ad27fda0cccdb1a12c`
+  > （merge head `8c38c0fcd3c20fca59fcc0055c86404a95b18e02`）；本片内容逐字节不变，净差量仍全在 `mir2-rs/tests/parity/m3/**`，详见 `13-base-advance.txt`。
 - 写集：`mir2-rs/tests/parity/m3/**`，**零 `.rs`**；未起栈、未占端口、未 merge、未自签 review。
 
 | # | 来源（review 条目 @ reviewed_head） | 问题 | 本片处置 |
