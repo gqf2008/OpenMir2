@@ -1,0 +1,27 @@
+111-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片⑳ 边界（base = origin/master 7caf974547d013813bf89e443d486f407e8ee04e）
+m2-svr / openmir2-worker-11 / 2026-10-14
+命令：`git diff --cached --name-only origin/master | sort`（cwd = 本车道 worktree；含本文件自身）
+====================================================================================================
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/105-aoi-gap3-closure-root-verify1.txt   (M 片⑲ O-1 订正：两列字节口径)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/106-gates.txt                          (M 片⑲ O-2 订正：快照时点注)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/108-window-dense-site-menu.txt         (A ③①「换怪密点」候选菜单)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/109-redcheck-dense-all-maps.txt        (A 改坏必红 2 颗牙)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/110-gates.txt                          (A 四门禁 + 复跑)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/111-boundary.txt                       (A 本文件)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md                              (M §⑳)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt                         (M 重生成)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mongen_dense_points.py           (M +--all-maps / rank_all_maps / all_map_names / 3 条 selftest)
+
+合计 9 路径。
+
+冻结面复核
+----------------------------------------------------------------------------------------------------
+* `git diff --cached --name-only origin/master | grep -E '^(src/|sql/|MirClient/|mir2-rs/crates/protocol/|mir2-rs/crates/storage/|mir2-rs/bins/)'`
+  ⇒ **空**（生产代码/协议/存储/网关未动）。
+* `git diff --cached --name-only origin/master | grep -E '\.(rs|toml)$'` ⇒ **空**（零 Rust/TOML）。
+* 全部 9 路径落在本卡证据目录 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/`（本片为**工具 + 证据**片）。
+* `src/BotSrv` 空；`mir2-rs/tests/parity/m3/**` 未触碰（m3bag/m3cs 写集）。
+
+零起栈 / 零端口
+----------------------------------------------------------------------------------------------------
+本片未起任何栈；十端口仅共享 MySQL 3306 UP。未动共享主检出。

@@ -1,0 +1,108 @@
+112-mapinfo-enterability.txt —— 卡 `openmir2-client-e2e-enter-gaps` 缺口③-①「换怪密点」
+  跨图候选的**可进入性机判**（root 2026-10-14 00:4x：「或 MonGen 里密度高的图」）
+m2-svr / openmir2-worker-11 / 2026-10-14（本 burst 片㉑）
+本片零起栈、零占端口（仅共享 MySQL 3306 未动）、零生产代码改动；只在自身 worktree 写。
+====================================================================================================
+一句话
+====================================================================================================
+片⑳ 的 `check_mongen_dense_points.py --all-maps` 给出的跨图 Top-20（`D10071` E=59.533 等）
+此前只能标「**可进入性未证**」；本片把它变成**机判**：按 oracle `MapMgr.FindMap` 的口径
+（逻辑名 = `|` 前）在 `Envir/MapInfo.txt` 查表，命中即 `enterable=yes`，并可 `--require-enterable`
+fail-closed（候选图不在 MapInfo ⇒ RED）。**真机部署实测：MonGen 的 207 张图全部 `enterable=yes`**
+⇒ 跨图候选在「图存在」这一层**不存在**烧窗风险；换图复测（root ①）可以放心选密度高的图。
+本片**不改**任何既有输出：不给 `--mapinfo` 时，旧命令逐字节不变（见 §E 回归）。
+
+A. 归因与口径（oracle 锚点）
+====================================================================================================
+* oracle `WorldServer.Merchant.cs:8-25` 的 `MerchantInitialize` 门 = `SystemShare.MapMgr.FindMap(MapName) != null`；
+  owner 2026-10-13 10:50 裁决已钉死：`FindMap` 按**逻辑名**（`|` 前）查表
+  （`Envir/MapInfo.txt` 的 `[DB|DM011]`/`[ZM6|D5071]`/`[jiaren|0150]` 都在 ⇒ `131→131` 门不触发）。
+* 本片把同一口径用到 **MonGen 的图字段**上：MonGen 行首字段（本部署无 `|`）取 `|` 前，
+  与 MapInfo 的 `[...]` 首字段 `|` 前集合比对。
+  ⇒ 命中 = oracle 侧该图会被加载（可进入）；未命中 = 该图在 MonGen 里但 MapInfo 不含它
+  ⇒ 进图/刷怪在 oracle 侧就不成立，选它做 ③b 就是「必然无怪」的烧窗。
+
+B. 本片改动（写集 = 本卡证据目录，1 文件）
+====================================================================================================
+`check_mongen_dense_points.py`（唯一改动文件）：
+  1. 新增 `parse_mapinfo(text)`：解析 `Envir/MapInfo.txt` 的 `[...]` 行，取首字段 `|` 前（逻辑名）。
+  2. 新增 `is_enterable(map_name, keys)` / `enterable_suffix(map_name, keys)`：`|` 前口径；
+     `keys is None`（未给 `--mapinfo`）时返回空串 ⇒ **旧输出逐字节不变**。
+  3. 新增 `require_enterable_check(names, keys, require)`：被报告/被选中的候选图有任一未命中 ⇒
+     `RED(1)`；`--require-enterable` 未给 `--mapinfo` ⇒ `PREREQ_RED(2)`；全命中 ⇒ `OK`。
+  4. CLI 新增 `--mapinfo <Envir/MapInfo.txt>` 与 `--require-enterable`；`--all-maps`/`--rank`/
+     `--best-point`/点判定四条路径都接入（只在给了 `--mapinfo` 时追加 `enterable=`）。
+  5. `--selftest` **22 → 30**（新增 8 条：mapinfo 解析、`|` 前口径、缺 `--mapinfo` 不变、
+     require 绿/红/PREREQ/不 require 恒绿、旧输出无 `enterable=`）。
+
+C. 真机部署实测（本片自跑，命令 + 原始输出）
+====================================================================================================
+C-1 跨图 Top-5（片⑳ 的候选菜单，现在带可进入性）
+```
+$ python -I -B check_mongen_dense_points.py --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt \
+    --mapinfo E:/MirServer/M2GameSvr/Envir/MapInfo.txt --all-maps --view-range 12 --rank 5
+INFO all-maps 有生成框的图 207 个；窗口半径 12；候选中心 547 个（按期望出生怪数降序）；MapInfo 逻辑名 322 个
+RANK (D10071) (17,21) E=59.533 box=(17,21) range=0  count=1  name=赤月恶魔 enterable=yes
+RANK (D10071) (20,20) E=59.533 box=(20,20) range=15 count=10 name=天狼蜘蛛 enterable=yes
+RANK (D10061) (15,19) E=57.610 box=(15,19) range=10 count=1  name=双头金刚 enterable=yes
+RANK (D10062) (17,19) E=57.304 box=(17,19) range=12 count=10 name=血巨人   enterable=yes
+RANK (D2002)  (21,23) E=49.992 box=(21,23) range=10 count=5  name=僵尸1    enterable=yes
+RESULT: GREEN (Top-5)
+```
+C-2 **全量**可进入性：MonGen 的每一张图
+```
+$ python -I -B check_mongen_dense_points.py --mongen .../MonGen.txt --mapinfo .../MapInfo.txt \
+    --all-maps --view-range 12 --rank 600 --require-enterable
+... (547 条 RANK，图名去重 207)
+OK  --require-enterable：候选图全部在 MapInfo 逻辑名内（207 个）
+RESULT: GREEN (Top-547)      rc=0
+$ grep -c 'enterable=no' <输出>   => 0
+```
+⇒ **结论（root ①）**：MonGen 的 207 张图全部在 MapInfo 逻辑名内 ⇒ 跨图候选
+（`D10071`/`D10061`/`D10062`/`D2002` …）在「图是否存在」这一层**可直接进入**；
+片⑳ 菜单里「可进入性未证」的注记自此可替换为**本机判**（换图前仍须实拍坐标落点/客户端可达）。
+
+D. 改坏必红（三层牙齿；变异只在 `E:/tmp/m2svr-burst5/` 复制件，仓内 sha256 前后一致）
+====================================================================================================
+D-1 **数据侧**：复制 MapInfo，把 `[D10071 ...]` 注释掉（1 行），其余不动
+```
+$ python -I -B check_mongen_dense_points.py --mongen .../MonGen.txt \
+    --mapinfo E:/tmp/m2svr-burst5/red-mapinfo/MapInfo.txt \
+    --all-maps --view-range 12 --rank 20 --require-enterable
+RED --require-enterable：候选图不在 MapInfo 逻辑名内: ['D10071']
+RESULT: RED      rc=1
+```
+D-2 **代码侧 A**：`is_enterable` 改成恒 `True`
+```
+[FAIL] selftest mapinfo-is-enterable
+[FAIL] selftest mapinfo-suffix-unchanged-when-absent
+[FAIL] selftest require-enterable-red: rc=0 (want 1)
+SELFTEST FAILED (27/30)   rc=1
+```
+D-3 **代码侧 B**：`enterable_suffix` 在未给 `--mapinfo` 时也吐 ` enterable=yes`（会污染旧输出）
+```
+[FAIL] selftest mapinfo-suffix-unchanged-when-absent
+[FAIL] selftest mapinfo-legacy-output-clean
+SELFTEST FAILED (28/30)   rc=1
+```
+D-4 仓内文件未被变异污染：`sha256sum check_mongen_dense_points.py` =
+    `8b1c8a710e60241c88668d281c49cabcc384064ddd41f84851d3c3416666d1f5`（D-1/D-2/D-3 后不变，见 SHA256SUMS）。
+
+E. 回归：不给 `--mapinfo` 时旧输出逐字节不变
+====================================================================================================
+```
+$ python -I -B check_mongen_dense_points.py --mongen .../MonGen.txt --map 0 --view-range 12 --best-point
+BEST (605,578) E=12.681 view_range=12 box=(605,578) range=30 count=10 name=半兽人
+    （= 片⑯/⑳ 记录值，逐字节相同；无 `enterable=`）
+$ python -I -B check_mongen_dense_points.py --selftest
+SELFTEST OK (30/30)      rc=0
+```
+* `selftest mapinfo-legacy-output-clean` 专门咬「无 `--mapinfo` 时渲染里不得出现 `enterable=`」。
+
+F. 边界 / 残留（不静默）
+====================================================================================================
+* 本片只判「图在 MapInfo 里」（= oracle `FindMap != null` 这一层）。**不判**：该图 `MapInfo` 行上的
+  `NORECONNECT`/`NORANDOMMOVE`/`SAFE` 等属性对「坐标落点是否可站」的影响、`x,y` 是否落在
+  阻挡格、Rust 侧该图是否已加载。⇒ 换图窗口仍须实拍（runbook §1 站位 + §4 判据）。
+* 不给 `--mapinfo` 时的既有行为（含 `--all-maps` 菜单）**零变化**；`--require-enterable` 是可选门。
+* `tests/parity/m3/**`（m3bag/driver 写集）与 root 的 `client-e2e-window.sh` **未触碰**。

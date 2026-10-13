@@ -456,3 +456,38 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级「两侧同框真机对照」+「屏幕见怪并能攻击造成伤害」。
 - **零生产代码改动**；本片**未起栈、未占端口**，未动共享主检出。
 - 证据：`105-aoi-gap3-closure-root-verify1.txt`、`capture-root-verify1-*.txt`、`106-gates.txt`、`107-boundary.txt`。
+
+## ⑳ 片⑳：③①「换怪密点」扩到**跨图** + 片⑲ 两条随卡 Minor 收口（2026-10-14）—— `108`/`109`
+
+- **背景（root 00:4x ①）**：root 让「换怪密点（例如比奇省郊外，**或 MonGen 里密度高的图**）复测」；
+  片⑯ 的选点判据此前**只支持单图**（`--map`，窗口用 `--map 0`）⇒ 本片补**跨全部地图**排行。
+- **本片改动**：
+  1. `check_mongen_dense_points.py` 新增 `--all-maps`（`rank_all_maps` + `all_map_names`，确定性序
+     `(-E, 图名, x, y)`）；**既有 `--map`/`--rank`/`--best-point` 输出逐字节不变**（`--map 0 --best-point`
+     仍 `BEST (605,578) E=12.681`）；`--selftest` **新增 3 例**（跨图序、并列图名序、单调性）⇒ **22/22**。
+  2. `108-window-dense-site-menu.txt`：**map 0 推荐点**（`605,578` E=12.681，可进入性有先例）+ map 0 Top-10
+     + **全局 Top-20**（`D10071 (17,21) E=59.533`）候选菜单，并显式标注「跨图候选**可进入性未证**，
+     需窗口实拍；不拿未证点换掉已证 map 0 点」。
+  3. 片⑲ 的 **reviewer-5 两条非阻塞 Minor 收口**：O-1 = `105` §A 表加「源件字节 vs 入库后 LF 归一字节」两列
+     （1785→1749 / 2797→2763；「内容一字未改」限定到语义/字符序列）；O-2 = `106` 的快照时点注（见下）。
+- **红检（`109`，2 颗牙，变异只在 `E:/tmp` 复制件、仓内 sha256 前后一致）**：
+  ① `rank_all_maps` 只看首图 ⇒ `SELFTEST FAILED (21/22)` rc=1；
+  ② 全局排序降序翻升序 ⇒ `SELFTEST FAILED (20/22)` rc=1。
+- **零生产代码改动**（仅一个 `.py` + 两件证据 + `105`/`106`/README/清单）；**未起栈、未占端口**，未动共享主检出。
+- 证据：`108-window-dense-site-menu.txt`、`109-redcheck-dense-all-maps.txt`、`110-gates.txt`、`111-boundary.txt`。
+
+## ㉑ 片㉑：③① 跨图候选的**可进入性机判**（MonGen × MapInfo，root ①「密度高的图」）（2026-10-14）—— `112`
+
+- **背景**：片⑳ 的跨图 Top-20 只能标「可进入性未证」⇒ root 换图时可能选中一张 MapInfo 不加载的图而烧窗。
+  本片把它变成**机判**：按 oracle `MapMgr.FindMap` 口径（逻辑名 = `|` 前）查 `Envir/MapInfo.txt`。
+- **本片改动**（仅 `check_mongen_dense_points.py`）：新增 `parse_mapinfo`/`is_enterable`/`enterable_suffix`/
+  `require_enterable_check`；CLI 新增 `--mapinfo` 与 `--require-enterable`（四条路径都接入）；
+  **不给 `--mapinfo` 时旧输出逐字节不变**；`--selftest` **22 → 30**。
+- **真机部署实测**：MonGen **207** 张图 **全部** `enterable=yes`（MapInfo 逻辑名 322 个）；
+  跨图 Top-5（`D10071`/`D10061`/`D10062`/`D2002`）全 `enterable=yes` ⇒「图是否存在」这一层
+  **不存在**可进入性缺口，换图候选可放心进入窗口实测（坐标落点仍须实拍）。
+- **改坏必红**（三层）：① 数据侧（复制 MapInfo 注释掉 `[D10071`）⇒ `RED --require-enterable … ['D10071']` rc=1；
+  ② `is_enterable` 恒 True ⇒ `SELFTEST FAILED (27/30)`；③ `enterable_suffix` 未给 mapinfo 也吐后缀 ⇒ `(28/30)`。
+- **边界**：只判「图在 MapInfo 里」（= oracle `FindMap != null`），不判 MapInfo 属性（`NORECONNECT`/`SAFE`…）、
+  坐标阻挡、Rust 侧该图是否已加载；换图窗口仍按 runbook §1/§4 实拍。**未起栈、未占端口**，未动共享主检出。
+- 证据：`112-mapinfo-enterability.txt`、`113-gates.txt`、`114-boundary.txt`。

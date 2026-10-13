@@ -46,5 +46,11 @@ $ python -I tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-
 $ python -I tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
   EOLCHECK GREEN 108/108 rc=0
 
+  ⚠ 快照时点注（片⑲ reviewer-5 O-2 收口，片⑳ 订正）：上两行的 `107/107` / `108/108` 是**写入本文件（`106`）
+  与 `107-boundary.txt` 之前的快照**（当时目录里还没有这两件；`SHA256SUMS.txt` 也未把自身计入）。
+  ⇒ 本目录清单的**入库终值（后来含 `106`/`107` 自身 + 片⑳ 的 `108`/`109`/`110`/`111`）** = `verify --check-extra`
+  **113/113** rc=0 + `eolcheck` **114/114** rc=0（终值以这份清单为准；本片重跑见 `110-gates.txt`）。
+  判据取**终值**，上面这段 `107/108` 只作「当时快照」留存。
+
 本片**零生产代码改动**（仅把 root verify1 真机原始件入库 + 一份判定书/清单）；**未起栈、未占端口**
 （十端口仅共享 MySQL 3306 UP）；未动共享主检出；不 merge、未自签 review。

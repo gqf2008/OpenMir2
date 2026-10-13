@@ -13,11 +13,17 @@ A. 本片新增：root verify1 **真机原始件入库**（此前只在 `E:/tmp/
 root 的 verify1 原始件一直只在检出外，卡 DoD⑤「证据四件套」与 AGENTS「证据要能重放」都要求入库。
 本片按字节复制（改扩展名 `.log` → `.txt`，因 `.gitignore` 吞 `*.log`；内容一字未改）：
 
-| 入库文件 | 来源（检出外） | 字节 | sha256（入库后） |
-|---|---|---|---|
-| `capture-root-verify1-game-svr.out.txt` | `E:/tmp/client-e2e/stack/game-svr.out.log` | 36371 | 见 SHA256SUMS.txt |
-| `capture-root-verify1-stages.ndjson.txt` | `E:/tmp/client-e2e/verify1/stages.ndjson` | 1785 | 见 SHA256SUMS.txt |
-| `capture-root-verify1-shots.manifest.txt` | `E:/tmp/client-e2e/verify1/*.png`（34 张） sha256 清单 | 2797 | 见 SHA256SUMS.txt |
+| 入库文件 | 来源（检出外） | 字节（源件） | 字节（入库后·LF 归一） | sha256（入库后） |
+|---|---|---|---|---|
+| `capture-root-verify1-game-svr.out.txt` | `E:/tmp/client-e2e/stack/game-svr.out.log` | 36371 | 36371 | 见 SHA256SUMS.txt |
+| `capture-root-verify1-stages.ndjson.txt` | `E:/tmp/client-e2e/verify1/stages.ndjson` | 1785 | 1749 | 见 SHA256SUMS.txt |
+| `capture-root-verify1-shots.manifest.txt` | `E:/tmp/client-e2e/verify1/*.png`（34 张） sha256 清单 | 2797 | 2763 | 见 SHA256SUMS.txt |
+
+* ⚠ 两列口径（片⑲ reviewer-5 O-1 收口，片⑳ 订正）：`字节（源件）` = 检出外原始件的 `stat` 大小；
+  `字节（入库后·LF 归一）` = 入库件在 **git blob** 口径下的大小（`.gitattributes` 的 `*.txt text eol=lf` 把 CRLF→LF）。
+  `game-svr.out.log` 源件本就是 LF ⇒ 两列相同（36371）；`stages.ndjson`/`shots.manifest` 源件是 CRLF
+  ⇒ 1785→1749 / 2797→2763。⇒ 上句「内容一字未改」只对**语义/字符序列（除行尾 CRLF→LF 归一外）**成立，
+  **不是**「字节数不变」（原表只写源件字节，会被误读成入库字节）。
 
 * 34 张 PNG 共 ~34MB，**不入库**（超出证据预算）；以 manifest 记名 + sha256，可对原始件逐张复核。
 * verify1 源件保持不动：`sha256sum E:/tmp/client-e2e/stack/game-svr.out.log` =

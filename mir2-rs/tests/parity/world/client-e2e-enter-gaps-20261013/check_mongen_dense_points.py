@@ -24,11 +24,21 @@ oracle 锚点（生成框 = 正方形，不是圆/菱形）：
   # 窗口选点（root ③①「换怪密点」）：按生成框中心列出窗口内期望出生怪数 Top-N
   python -I -B check_mongen_dense_points.py --mongen <...> --map 0 --view-range 12 --rank 10
   python -I -B check_mongen_dense_points.py --mongen <...> --map 0 --view-range 12 --best-point
+  # 跨**所有地图**排行（root ③①「MonGen 里密度高的图」）：同口径合并各图候选点
+  python -I -B check_mongen_dense_points.py --mongen <...> --all-maps --view-range 12 --rank 20
+  python -I -B check_mongen_dense_points.py --mongen <...> --all-maps --view-range 12 --best-point
   # 机判：该点窗口内期望出生怪数 >= / <= 阈值（③b「有怪」/ ③a「确实无怪」）
   python -I -B check_mongen_dense_points.py --mongen <...> --map 0 --view-range 12 \
       --point 291,666 --max-expected 0
   python -I -B check_mongen_dense_points.py --mongen <...> --map 0 --view-range 12 \
       --points "289,618;287,620" --min-expected 1
+  # 可进入性（cross-map 候选「可进入性未证」的机判）：按 oracle `FindMap` 口径
+  # （逻辑名 = `|` 前）在 `Envir/MapInfo.txt` 查表；缺 --mapinfo 时输出与旧版逐字节相同。
+  python -I -B check_mongen_dense_points.py --mongen <...> --mapinfo <Envir/MapInfo.txt> \
+      --all-maps --view-range 12 --rank 20
+  # 机判：排行里出现 MapInfo 未加载的图 ⇒ RED（防窗口选到不可进入的图）
+  python -I -B check_mongen_dense_points.py --mongen <...> --mapinfo <...> \
+      --all-maps --view-range 12 --rank 20 --require-enterable
   python -I -B check_mongen_dense_points.py --selftest
 
 退出码：`0` = GREEN / `1` = RED（--expect 或 --min/max-expected 不符）/ `2` = PREREQ_RED（缺输入/解析不到）。
@@ -41,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 
 # MonGen.txt 头（GBK）：`;地图 x y 名称 范围 数量 时间 分钟比率 分钟模式 分钟点X 分钟点Y`
@@ -101,6 +112,37 @@ def parse_start_points(text: str, map_name: str) -> list[tuple[int, int]]:
 
 def cheb(ax: int, ay: int, bx: int, by: int) -> int:
     return max(abs(ax - bx), abs(ay - by))
+
+
+def parse_mapinfo(text: str) -> set[str]:
+    """`Envir/MapInfo.txt` 的**可进入逻辑名**集合：`[...]` 行首字段 `|` 前的部分。
+
+    oracle 口径：`MapMgr.FindMap(MapName)` 按逻辑名（`|` 前）查表
+    （`[DB|DM011]` ⇒ 逻辑名 `DB`；见 `docs/` ⑤-2 裁决）。跨图选点若命中不在本集合的图，
+    oracle 侧不会加载它 ⇒ 窗口里选到就是「该图无怪」，属可离线预防的烧窗。
+    """
+    keys: set[str] = set()
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("["):
+            continue
+        m = re.match(r"\[([^\]\s]+)", line)
+        if not m:
+            continue
+        keys.add(m.group(1).split("|")[0])
+    return keys
+
+
+def is_enterable(map_name: str, mapinfo_keys: set[str]) -> bool:
+    """MonGen 的图字段是否在 MapInfo 逻辑名里（`|` 前口径，与 oracle `FindMap` 同）。"""
+    return map_name.split("|")[0] in mapinfo_keys
+
+
+def enterable_suffix(map_name: str, mapinfo_keys: set[str] | None) -> str:
+    """追加 `enterable=yes/no`；未给 `--mapinfo` 时返回空串（旧输出逐字节不变）。"""
+    if mapinfo_keys is None:
+        return ""
+    return " enterable=" + ("yes" if is_enterable(map_name, mapinfo_keys) else "no")
 
 
 def nearest_box(boxes: list[dict], x: int, y: int) -> tuple[int, dict | None]:
@@ -185,6 +227,67 @@ def rank_points(boxes: list[dict], view_range: int) -> list[tuple[float, int, in
     return ranked
 
 
+def all_map_names(text: str) -> list[str]:
+    """MonGen.txt 里出现过的地图名（`|` 前的原样字段），**字典序**去重。
+
+    与 `parse_mongen` 同口径：跳过注释/空行/字段不足/范围解析失败的行；
+    这样 `--all-maps` 的图集合与逐图 `parse_mongen` 的可行集一致。
+    """
+    names: set[str] = set()
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(";"):
+            continue
+        parts = line.split()
+        if len(parts) < MONGEN_FIELDS:
+            continue
+        try:
+            rng = int(parts[4])
+            int(parts[5])
+        except ValueError:
+            continue
+        if rng < 0:
+            continue
+        names.add(parts[0])
+    return sorted(names)
+
+
+def rank_all_maps(text: str, view_range: int) -> list[tuple[float, str, int, int, dict]]:
+    """跨**所有地图**的窗口内期望出生怪数排行（root ③①「MonGen 里密度高的图」）。
+
+    每图取 `rank_points`（按生成框中心），合并后按 `(-E, map, x, y)` 降序 ——
+    **确定性**：不依赖 set/dict 迭代序、也不依赖 MonGen 行序（图名先字典序、再坐标）。
+    返回 `[(expected, map_name, x, y, box), …]`。
+    """
+    ranked: list[tuple[float, str, int, int, dict]] = []
+    for mp in all_map_names(text):
+        boxes = parse_mongen(text, mp)
+        if not boxes:
+            continue
+        for e, x, y, b in rank_points(boxes, view_range):
+            ranked.append((e, mp, x, y, b))
+    ranked.sort(key=lambda t: (-t[0], t[1], t[2], t[3]))
+    return ranked
+
+
+def require_enterable_check(
+    map_names: list[str], mapinfo_keys: set[str] | None, require: bool
+) -> tuple[int, list[str]]:
+    """`--require-enterable` 机判：任一候选图不在 MapInfo 逻辑名 ⇒ RED(1)；未给 mapinfo ⇒ PREREQ(2)。
+
+    只对**被报告/被选中的**候选图判定（避免把全库 200+ 图都拉进来）。
+    """
+    if not require:
+        return 0, []
+    if mapinfo_keys is None:
+        return 2, ["PREREQ_RED: --require-enterable 需要 --mapinfo <Envir/MapInfo.txt>"]
+    uniq = sorted(set(map_names))
+    missing = [m for m in uniq if not is_enterable(m, mapinfo_keys)]
+    if missing:
+        return 1, [f"RED --require-enterable：候选图不在 MapInfo 逻辑名内: {missing}"]
+    return 0, [f"OK  --require-enterable：候选图全部在 MapInfo 逻辑名内（{len(uniq)} 个）"]
+
+
 def run(
     boxes: list[dict],
     points: list[tuple[int, int]],
@@ -242,6 +345,8 @@ def selftest() -> int:
         "0\t100\t100\t鹿\t20\t50\t1\n"
         "0\t200\t200\t稻草人\t5\t10\t1\n"
         "4\t1\t1\t别图\t9\t1\t1\n"
+        "7\t300\t300\t骷髅\t0\t200\t1\n"
+        "1\t100\t100\t鹿\t20\t50\t1\n"
     )
     startpoint = ";安全区\n0\t110\t110\n1\t999\t999\n"
     boxes = parse_mongen(mongen, "0")
@@ -282,6 +387,34 @@ def selftest() -> int:
     bad += 0 if ok else 1
     print(f"[{'PASS' if ok else 'FAIL'}] selftest no-points-prereq: rc={rc} (want 2)")
 
+    # 跨图排行（root ③①「MonGen 里密度高的图」）：map 7 count=200 比 map 0 更密 ⇒ 全局 Top 属 map 7；
+    # map 0/map 1 在 (100,100) 期望值并列 50 ⇒ 按图名字典序 map 0 先于 map 1（确定性并列口径）。
+    am_bad = 0
+    names = all_map_names(mongen)
+    ok = names == ["0", "1", "4", "7"]
+    am_bad += 0 if ok else 1
+    print(f"[{'PASS' if ok else 'FAIL'}] selftest all-map-names={names} (want 0,1,4,7)")
+    all_rk = rank_all_maps(mongen, 25)
+    order_ok = (
+        len(all_rk) >= 4
+        and all_rk[0][1] == "7"
+        and (all_rk[0][2], all_rk[0][3]) == (300, 300)
+        and abs(all_rk[0][0] - 200.0) < 1e-9
+        and all_rk[1][1] == "0"
+        and all_rk[2][1] == "1"
+    )
+    am_bad += 0 if order_ok else 1
+    print(
+        "[{}] selftest all-maps-rank-order top={} (want map 7>(200), then map 0, then map 1)".format(
+            "PASS" if order_ok else "FAIL",
+            [(round(e, 3), mp, x, y) for e, mp, x, y, _ in all_rk[:4]],
+        )
+    )
+    # 全局序必须非增（确定性降序）。
+    mono_ok = all(all_rk[i][0] >= all_rk[i + 1][0] for i in range(len(all_rk) - 1))
+    am_bad += 0 if mono_ok else 1
+    print(f"[{'PASS' if mono_ok else 'FAIL'}] selftest all-maps-monotonic")
+
     # 最近框选择：距离相同时取 range 最小的框（避免把大框当代表）。
     d, b = nearest_box(boxes, 120, 120)
     assert d == 0 and b["range"] == 20, (d, b)
@@ -321,8 +454,52 @@ def selftest() -> int:
         exp_bad += 0 if ok else 1
         print(f"[{'PASS' if ok else 'FAIL'}] selftest {name}: rc={rc} (want {want_rc})")
 
-    total = len(cases) + 2 + len(exp_cases) + 1 + len(exp_judge)
-    failed = bad + exp_bad
+    # MapInfo 可进入性（逻辑名 = `|` 前，对齐 oracle `FindMap`）。
+    mi_text = (
+        "; comment\n"
+        "[0 比奇省]\n"
+        "[DB|DM011 尸王殿]\n"
+        "[ZM6|D5071 祖玛六层]\n"
+        "[jiaren|0150 家]\n"
+    )
+    mi = parse_mapinfo(mi_text)
+    mi_bad = 0
+    ok = mi == {"0", "DB", "ZM6", "jiaren"}
+    mi_bad += 0 if ok else 1
+    print(f"[{'PASS' if ok else 'FAIL'}] selftest mapinfo-keys={sorted(mi)}")
+    ok = is_enterable("DB", mi) and is_enterable("ZM6|D5071", mi) and not is_enterable("D10071", mi)
+    mi_bad += 0 if ok else 1
+    print(f"[{'PASS' if ok else 'FAIL'}] selftest mapinfo-is-enterable")
+    ok = (enterable_suffix("0", None) == ""
+          and enterable_suffix("0", mi) == " enterable=yes"
+          and enterable_suffix("D10071", mi) == " enterable=no")
+    mi_bad += 0 if ok else 1
+    print(f"[{'PASS' if ok else 'FAIL'}] selftest mapinfo-suffix-unchanged-when-absent")
+    gate_cases = [
+        ("require-enterable-pass", ["0", "DB"], mi, True, 0),
+        ("require-enterable-red", ["0", "D10071"], mi, True, 1),
+        ("require-enterable-no-mapinfo-prereq", ["0"], None, True, 2),
+        ("no-require-always-green", ["D10071"], mi, False, 0),
+    ]
+    for name, names, keys, require, want_rc in gate_cases:
+        rc, _ = require_enterable_check(names, keys, require)
+        ok = rc == want_rc
+        mi_bad += 0 if ok else 1
+        print(f"[{'PASS' if ok else 'FAIL'}] selftest {name}: rc={rc} (want {want_rc})")
+    # 未给 --mapinfo 的旧输出不受影响：`enterable=` 不得出现在 all-maps 渲染里。
+    legacy_lines = [
+        f"RANK ({mp}) ({x},{y}) E={e:.3f} box=({b['x']},{b['y']}) "
+        f"range={b['range']} count={b['count']} name={b['name']}"
+        f"{enterable_suffix(mp, None)}"
+        for e, mp, x, y, b in all_rk[:2]
+    ]
+    ok = all("enterable=" not in ln for ln in legacy_lines)
+    mi_bad += 0 if ok else 1
+    print(f"[{'PASS' if ok else 'FAIL'}] selftest mapinfo-legacy-output-clean")
+
+    total = (len(cases) + 2 + 3 + len(exp_cases) + 1 + len(exp_judge)
+             + 3 + len(gate_cases) + 1)
+    failed = bad + am_bad + exp_bad + mi_bad
     print(f"SELFTEST {'OK' if failed == 0 else 'FAILED'} ({total - failed}/{total})")
     return 0 if failed == 0 else 1
 
@@ -354,6 +531,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="按生成框中心列出窗口内期望出生怪数 Top-N（回 root ③①「换怪密点」选点）")
     ap.add_argument("--best-point", action="store_true",
                     help="只打印期望出生怪数最高的候选点 `x,y`（需 --view-range）")
+    ap.add_argument("--all-maps", action="store_true",
+                    help="跨 MonGen 所有地图排行（root ③①「MonGen 里密度高的图」）；"
+                         "与 --rank/--best-point 同用，忽略 --map")
+    ap.add_argument("--mapinfo", default="",
+                    help="可选：Envir/MapInfo.txt；给定时每条排行/选点追加 `enterable=yes/no`"
+                         "（逻辑名 = `|` 前，对齐 oracle `FindMap`）。不给时旧输出逐字节不变")
+    ap.add_argument("--require-enterable", action="store_true",
+                    help="机判：被报告/选中的候选图必须在 MapInfo 逻辑名内；否则 RED（需 --mapinfo）")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
 
@@ -368,6 +553,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"PREREQ_RED: MonGen 不存在/不可读: {args.mongen}")
         return 2
 
+    mapinfo_keys: set[str] | None = None
+    if args.mapinfo:
+        mi_text = _read(args.mapinfo)
+        if mi_text is None:
+            print(f"PREREQ_RED: MapInfo 不存在/不可读: {args.mapinfo}")
+            return 2
+        mapinfo_keys = parse_mapinfo(mi_text)
+        if not mapinfo_keys:
+            print(f"PREREQ_RED: MapInfo 里解析不到任何地图键: {args.mapinfo}")
+            return 2
+    elif args.require_enterable:
+        print("PREREQ_RED: --require-enterable 需要 --mapinfo <Envir/MapInfo.txt>")
+        return 2
+
     boxes = parse_mongen(text, args.map)
 
     if args.rank and args.best_point:
@@ -376,6 +575,42 @@ def main(argv: list[str] | None = None) -> int:
     if (args.rank or args.best_point) and args.view_range is None:
         print("PREREQ_RED: --rank/--best-point 需要 --view-range")
         return 2
+    if args.all_maps:
+        if args.view_range is None:
+            print("PREREQ_RED: --all-maps 需要 --view-range")
+            return 2
+        rk = rank_all_maps(text, args.view_range)
+        if not rk:
+            print("PREREQ_RED: MonGen 里解析不到任何生成框")
+            return 2
+        if args.best_point:
+            e, mp, x, y, b = rk[0]
+            print(f"BEST ({mp}) ({x},{y}) E={e:.3f} view_range={args.view_range} "
+                  f"box=({b['x']},{b['y']}) range={b['range']} count={b['count']} name={b['name']}"
+                  f"{enterable_suffix(mp, mapinfo_keys)}")
+            rc, msgs = require_enterable_check([mp], mapinfo_keys, args.require_enterable)
+            for m in msgs:
+                print(m)
+            return rc
+        n = max(1, min(args.rank or 10, len(rk)))
+        shown = rk[:n]
+        print(f"INFO all-maps 有生成框的图 {len(all_map_names(text))} 个；窗口半径 {args.view_range}；"
+              f"候选中心 {len(rk)} 个（按期望出生怪数降序）"
+              + (f"；MapInfo 逻辑名 {len(mapinfo_keys)} 个" if mapinfo_keys is not None else ""))
+        for e, mp, x, y, b in shown:
+            print(f"RANK ({mp}) ({x},{y}) E={e:.3f} box=({b['x']},{b['y']}) "
+                  f"range={b['range']} count={b['count']} name={b['name']}"
+                  f"{enterable_suffix(mp, mapinfo_keys)}")
+        rc, msgs = require_enterable_check([mp for _, mp, _, _, _ in shown], mapinfo_keys,
+                                           args.require_enterable)
+        for m in msgs:
+            print(m)
+        if rc:
+            print("RESULT: " + ("PREREQ_RED" if rc == 2 else "RED"))
+            return rc
+        print(f"RESULT: GREEN (Top-{n})")
+        return 0
+
     if args.rank or args.best_point:
         if not boxes:
             print(f"PREREQ_RED: map={args.map} 在 MonGen 里解析不到任何生成框")
@@ -384,14 +619,25 @@ def main(argv: list[str] | None = None) -> int:
         if args.best_point:
             e, x, y, b = rk[0]
             print(f"BEST ({x},{y}) E={e:.3f} view_range={args.view_range} "
-                  f"box=({b['x']},{b['y']}) range={b['range']} count={b['count']} name={b['name']}")
-            return 0
+                  f"box=({b['x']},{b['y']}) range={b['range']} count={b['count']} name={b['name']}"
+                  f"{enterable_suffix(args.map, mapinfo_keys)}")
+            rc, msgs = require_enterable_check([args.map], mapinfo_keys, args.require_enterable)
+            for m in msgs:
+                print(m)
+            return rc
         n = max(1, min(args.rank, len(rk)))
         print(f"INFO map={args.map} 生成框 {len(boxes)} 个；窗口半径 {args.view_range}；"
-              f"候选中心 {len(rk)} 个（按期望出生怪数降序）")
+              f"候选中心 {len(rk)} 个（按期望出生怪数降序）"
+              f"{enterable_suffix(args.map, mapinfo_keys)}")
         for e, x, y, b in rk[:n]:
             print(f"RANK ({x},{y}) E={e:.3f} box=({b['x']},{b['y']}) "
                   f"range={b['range']} count={b['count']} name={b['name']}")
+        rc, msgs = require_enterable_check([args.map], mapinfo_keys, args.require_enterable)
+        for m in msgs:
+            print(m)
+        if rc:
+            print("RESULT: " + ("PREREQ_RED" if rc == 2 else "RED"))
+            return rc
         print(f"RESULT: GREEN (Top-{n})")
         return 0
 
@@ -424,9 +670,15 @@ def main(argv: list[str] | None = None) -> int:
         min_expected=args.min_expected,
         max_expected=args.max_expected,
     )
-    print(f"INFO map={args.map} 生成框 {len(boxes)} 个；待判定坐标 {len(points)} 个")
+    print(f"INFO map={args.map} 生成框 {len(boxes)} 个；待判定坐标 {len(points)} 个"
+          f"{enterable_suffix(args.map, mapinfo_keys)}")
     for m in msgs:
         print(m)
+    g_rc, g_msgs = require_enterable_check([args.map], mapinfo_keys, args.require_enterable)
+    for m in g_msgs:
+        print(m)
+    if rc == 0 and g_rc:
+        rc = g_rc
     print("RESULT: " + ("GREEN" if rc == 0 else ("PREREQ_RED" if rc == 2 else "RED")))
     return rc
 
