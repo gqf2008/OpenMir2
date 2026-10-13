@@ -156,6 +156,18 @@ def guards_wired(guard_markers):
     return set(guard_markers) == expected
 
 
+def _drop_one_guard(guard_markers):
+    """去掉一个真实牙，返回**去重排序后**的其余标记（空表 ⇒ []）。
+
+    O-2 收口（reviewer-6 `4f5d3eeb1` / `a9f045dac3`）：旧写法 `guard_markers[1:]` 只切掉
+    **首个出现**；若同一 marker 在 `run_pair.ps1` 里出现两次（同一族的牙写在两处是合法的），
+    `set(markers[1:])` 仍等于全集 ⇒ 「少一个」向的牙会**假红**，把合法改动打红。
+    本函数先 `set` 去重再排序，切一刀后必为**真子集**（恒少一个标记），
+    不受扫描顺序或重复出现影响。
+    """
+    return sorted(set(guard_markers))[1:]
+
+
 def comparator_requires_prefix(path, marker):
     with open(path, "r", encoding="utf-8") as fh:
         text = fh.read()
@@ -421,8 +433,14 @@ def cmd_selftest(args):
     #   `guards_wired` 的集合恰等于该函数内部算出的 expected，永远 True、无法失败（冗余断言）。
     #   改成**可失败向**：把真实扫描到的牙集合去掉一个 ⇒ 必须判「未接线」，证 `guards_wired`
     #   的等值判据是双向的（`guards-extra-unregistered-red` 从「多」向咬合，本牙从「少」向咬合）。
+    #   O-2 硬化：用 `_drop_one_guard`（`set` 去重后切一刀）而非 `guard_markers[1:]`，
+    #   使牙对「同一 marker 重复出现」不假红（见 `_drop_one_guard` docstring）。
     check("guards-missing-real-guard-red",
-          bool(guard_markers) and not guards_wired(guard_markers[1:]))
+          bool(_drop_one_guard(guard_markers)) and not guards_wired(_drop_one_guard(guard_markers)))
+    check("drop-one-guard-dedup-proper-subset（重复标记下仍恰少一个）",
+          _drop_one_guard(["A", "A", "B", "C"]) == ["B", "C"])
+    check("naive-slice-not-proper-subset-under-dup（O-2 根因复现）",
+          set(["A", "A", "B", "C"][1:]) == set(["A", "A", "B", "C"]))
     for marker, cmp in COMPARATORS:
         check("comparator-requires-prefix-%s" % marker,
               comparator_requires_prefix(os.path.join(HERE, cmp), marker))

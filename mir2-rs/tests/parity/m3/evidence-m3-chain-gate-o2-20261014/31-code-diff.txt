@@ -1,0 +1,95 @@
+# .py 差量（git diff origin/master...HEAD -- mir2-rs/tests/parity/m3/*.py）
+diff --git a/mir2-rs/tests/parity/m3/fixture_chain_gate.py b/mir2-rs/tests/parity/m3/fixture_chain_gate.py
+index a12193cee..cc6084a1c 100644
+--- a/mir2-rs/tests/parity/m3/fixture_chain_gate.py
++++ b/mir2-rs/tests/parity/m3/fixture_chain_gate.py
+@@ -89,6 +89,14 @@ SHARED_CHECKS = [
+     #   不看矩阵状态、独立常跑（在场却坏 ⇒ 恒 RED，绝不判绿）。
+     ("pet_slave_registry_selftest", "mir2-rs/tests/parity/m3/m3_pet_slave_registry_gate.py", ["selftest"]),
+     ("pet_slave_registry_check", "mir2-rs/tests/parity/m3/m3_pet_slave_registry_gate.py", ["check"]),
++    # 白名单登记号审计门（`m3_whitelist_registry_audit.py`，卡 `openmir2-m3-whitelist-registry-integrity`）
++    #   此前**无任何调用方**（reviewer-6 `4f5d3eeb1` O-1：纯审计、非 fail-closed 门仍零调用方）——
++    #   与宝宝登记门同类的「在场却坏无声」隐患。本片接入其 **selftest**（工具自身逻辑 + 改坏必红）。
++    #   ⚠ 未接 `audit --strict`：`whitelist.md` 现存**两行 `| T-42 |`**（⑤-2 商人 tick vs ⑥-5 任务夹具），
++    #   该撞号是 owner 已路由的跨车道登记号重编（⑤-2 证据 README 在 `tests/parity/world/**`，
++    #   非本车道写集）⇒ `--strict` 现为 RED。等 owner 裁决重编后，把 `audit --strict` 补登记为 `check`
++    #   （届时本段注释一并更新）。
++    ("whitelist_registry_selftest", "mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py", ["selftest"]),
+ ]
+ 
+ RUNNER_PREREQ_RC = 2  # 各驱动约定的「前置未到，fail-closed」退出码
+@@ -334,8 +342,12 @@ def cmd_selftest(_args):
+     _pet_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("m3_pet_slave_registry_gate.py")]
+     expect("宝宝登记门已接入共享管线（防回退）",
+            ["selftest"] in _pet_gate and ["check"] in _pet_gate)
+-    expect("主机门（.py）登记项 ≥10（castle + 行会/攻城 + 英雄/宠物 + markers 前缀 + 宝宝登记 各 selftest/check）",
+-           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 10)
++    # 本片防回退牙：白名单登记号审计门（`m3_whitelist_registry_audit.py`）必须常驻共享管线
++    #   （selftest 向）。它此前零调用方（reviewer-6 `4f5d3eeb1` O-1）⇒ 工具自身逻辑回归会静默。
++    _wl_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("m3_whitelist_registry_audit.py")]
++    expect("白名单登记号审计门 selftest 已接入共享管线（防回退）", ["selftest"] in _wl_gate)
++    expect("主机门（.py）登记项 ≥11（castle + 行会/攻城 + 英雄/宠物 + markers 前缀 + 宝宝登记 + 白名单审计 各 selftest[/check]）",
++           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 11)
+     expect("共享管线登记名唯一（防重复注册偷懒）",
+            len({n for n, _r, _e in SHARED_CHECKS}) == len(SHARED_CHECKS))
+     expect("共享管线 (file,args) 登记唯一",
+diff --git a/mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py b/mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py
+index ddd183382..48a001230 100644
+--- a/mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py
++++ b/mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py
+@@ -17,6 +17,16 @@
+ 
+ 口径：**只读**（只读 `whitelist.md` + 对 `fixture_matrix.MATRIX` 的 token 做解析核对，
+ 不写仓库文件、不起栈、不占端口）。`selftest` 用合成文本 + 注入式 classify，含「改坏必红」。
++
++## 接入（2026-10-14，卡 `openmir2-m3-fixture-chain-gate`）
++
++本件交付后**无任何调用方**（只在证据 README 里手工跑）⇒ 与 markers 前缀门 / 宝宝登记门同类的
++「在场却坏无声」隐患（reviewer-6 `4f5d3eeb1` O-1）。现已接入 `fixture_chain_gate.py` 的
++`SHARED_CHECKS`**（仅 `selftest` 向）**，不看矩阵状态、独立常跑；链门 `selftest` 内含防回退牙。
++
++⚠ **未接 `audit --strict`**：`whitelist.md` 现存两行 `| T-42 |`，该撞号的去重是 owner 已路由的
++跨车道登记号重编（⑤-2 那行及其证据 README 同在 `tests/parity/world/**`，非本车道写集）⇒
++`--strict` 现为 RED。等 owner 裁决重编后，把 `audit --strict` 补登记为链门的 `check`。
+ """
+ from __future__ import annotations
+ 
+diff --git a/mir2-rs/tests/parity/m3/marker_prefix_gate.py b/mir2-rs/tests/parity/m3/marker_prefix_gate.py
+index 93e972f0a..933781b89 100644
+--- a/mir2-rs/tests/parity/m3/marker_prefix_gate.py
++++ b/mir2-rs/tests/parity/m3/marker_prefix_gate.py
+@@ -156,6 +156,18 @@ def guards_wired(guard_markers):
+     return set(guard_markers) == expected
+ 
+ 
++def _drop_one_guard(guard_markers):
++    """去掉一个真实牙，返回**去重排序后**的其余标记（空表 ⇒ []）。
++
++    O-2 收口（reviewer-6 `4f5d3eeb1` / `a9f045dac3`）：旧写法 `guard_markers[1:]` 只切掉
++    **首个出现**；若同一 marker 在 `run_pair.ps1` 里出现两次（同一族的牙写在两处是合法的），
++    `set(markers[1:])` 仍等于全集 ⇒ 「少一个」向的牙会**假红**，把合法改动打红。
++    本函数先 `set` 去重再排序，切一刀后必为**真子集**（恒少一个标记），
++    不受扫描顺序或重复出现影响。
++    """
++    return sorted(set(guard_markers))[1:]
++
++
+ def comparator_requires_prefix(path, marker):
+     with open(path, "r", encoding="utf-8") as fh:
+         text = fh.read()
+@@ -421,8 +433,14 @@ def cmd_selftest(args):
+     #   `guards_wired` 的集合恰等于该函数内部算出的 expected，永远 True、无法失败（冗余断言）。
+     #   改成**可失败向**：把真实扫描到的牙集合去掉一个 ⇒ 必须判「未接线」，证 `guards_wired`
+     #   的等值判据是双向的（`guards-extra-unregistered-red` 从「多」向咬合，本牙从「少」向咬合）。
++    #   O-2 硬化：用 `_drop_one_guard`（`set` 去重后切一刀）而非 `guard_markers[1:]`，
++    #   使牙对「同一 marker 重复出现」不假红（见 `_drop_one_guard` docstring）。
+     check("guards-missing-real-guard-red",
+-          bool(guard_markers) and not guards_wired(guard_markers[1:]))
++          bool(_drop_one_guard(guard_markers)) and not guards_wired(_drop_one_guard(guard_markers)))
++    check("drop-one-guard-dedup-proper-subset（重复标记下仍恰少一个）",
++          _drop_one_guard(["A", "A", "B", "C"]) == ["B", "C"])
++    check("naive-slice-not-proper-subset-under-dup（O-2 根因复现）",
++          set(["A", "A", "B", "C"][1:]) == set(["A", "A", "B", "C"]))
+     for marker, cmp in COMPARATORS:
+         check("comparator-requires-prefix-%s" % marker,
+               comparator_requires_prefix(os.path.join(HERE, cmp), marker))

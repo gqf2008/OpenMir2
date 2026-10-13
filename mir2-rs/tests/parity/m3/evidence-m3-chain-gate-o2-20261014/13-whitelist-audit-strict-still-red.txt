@@ -1,0 +1,10 @@
+WHITELIST_REGISTRY scope=T-36+ entries=15 duplicates=[42] strict=True tokens=10
+  token T-41   <- 5 NPC / 商店  rows=[225] fixture=READY
+  token T-42   <- 6 任务  rows=[227, 240] fixture=READY
+  token T-43   <- 7 组队 / 交易  rows=[242] fixture=READY
+  token T-46   <- 8 公会 / 攻城  rows=[272] fixture=READY
+  token T-45   <- 9 英雄 / 宠物  rows=[285] fixture=READY
+  token T-44   <- 10 拍卖（元宝寄售 SellOff）  rows=[246] fixture=READY
+  FINDING DUPLICATE T-42 × 2 @ L227,L240（全局唯一编号约定被破坏）
+  FINDING TOKEN_MULTI 6 任务：token T-42 解析到 2 行（L227,240）
+WHITELIST_REGISTRY_RED 2：DUPLICATE T-42 @ L227,L240; TOKEN_MULTI T-42=2
