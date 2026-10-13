@@ -120,6 +120,10 @@ pub struct GateConfig {
     /// `openmir2-m2-gamesvr-host` 的装备/卸下 `FeatureChanged()`（`SM_FEATURECHANGED`）用它。
     /// 缺键用 oracle 缺省 `12`（`GameSvrConf.cs:1503`）。
     pub send_ref_msg_range: u8,
+    /// `[Setup] MagicAttackRage`（oracle `GameSvrConf.cs:873/1752` 缺省 `8`，`byte`；
+    /// `ServerConf.cs:539` 的 `ReadWriteByte("Setup", "MagicAttackRage", …)`）——
+    /// `DoSpell` 施法距离门（`MagicManager.cs:155`）：`|CurrX-nTargetX| > rage` 或 y 同理 ⇒ 直接失败。
+    pub magic_attack_rage: u8,
     /// `[Setup] SuperRepairPriceRate`（`ServerConf.cs:487`，缺省 `3`）——特殊修理价格倍数
     /// （`Merchant.cs:1573/1619`）。
     pub super_repair_price_rate: i32,
@@ -234,6 +238,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut can_drop_price: Option<i32> = None;
     let mut drop_item_rage: Option<u8> = None;
     let mut send_ref_msg_range: Option<u8> = None;
+    let mut magic_attack_rage: Option<u8> = None;
     let mut super_repair_price_rate: Option<i32> = None;
     let mut repair_item_dec_dura: Option<i32> = None;
     let mut castle_member_price_rate: Option<i32> = None;
@@ -452,6 +457,13 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("SendRefMsgRange 不是合法字节：{v:?}"))?,
                     );
                 }
+                // `GameSvrConf.MagicAttackRage` 是 `byte`（`GameSvrConf.cs:873`）缺省 8。
+                "MAGICATTACKRAGE" => {
+                    magic_attack_rage = Some(
+                        v.parse()
+                            .with_context(|| format!("MagicAttackRage 不是合法字节：{v:?}"))?,
+                    );
+                }
                 // 出生点回落（`WorldServer.cs:250-260` 的 `GetHomeInfo`）：现网 `Server.conf`
                 // 写 `HomeMap=3`/`HomeX=839`/`HomeY=668`/`StartPointSize=2`。
                 "STARTPOINTSIZE" => {
@@ -609,6 +621,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         drop_item_rage: drop_item_rage.unwrap_or(3),
         // oracle 缺省值（`GameSvrConf.cs:1503`）：`[Setup]` 里没写不算错。
         send_ref_msg_range: send_ref_msg_range.unwrap_or(12),
+        // oracle 缺省值（`GameSvrConf.cs:1752`）：`[Setup]` 里没写不算错。
+        magic_attack_rage: magic_attack_rage.unwrap_or(8),
         super_repair_price_rate: super_repair_price_rate.unwrap_or(3),
         repair_item_dec_dura: repair_item_dec_dura.unwrap_or(30),
         castle_member_price_rate: castle_member_price_rate.unwrap_or(80),
