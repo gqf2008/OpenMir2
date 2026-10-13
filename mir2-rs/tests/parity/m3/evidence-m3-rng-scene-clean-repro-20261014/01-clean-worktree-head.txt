@@ -1,0 +1,5 @@
+# clean detached worktree used for reproducibility check
+command: git worktree add --detach E:/tmp/m3bag-clean <head>
+head: 7caf974547d013813bf89e443d486f407e8ee04e
+7caf97454 Merge 61c517d3 (worktree-m3-chain-gate-o2): M3 夹具链深检门（runner 级）——fixture_matrix 伴生门：各 READY 夹具 -SelfCheckNoStack + 共享管线自检 - approve openmir2-reviewer-5 @reviewed_head 61c517d3
+# branch.oid 7caf974547d013813bf89e443d486f407e8ee04e

@@ -1,0 +1,19 @@
+# verify_sha256sums.py verify <pack> --check-extra  (repo/git-blob byte convention)
+# cwd = clean detached worktree E:/tmp/m3bag-clean @ 7caf97454
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014 :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-scene-anchor-closure-20261014\SHA256SUMS.txt  [repo 口径]  OK 12/12
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014 :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-scene-anchor-coverage-20261014\SHA256SUMS.txt  [repo 口径]  OK 12/12
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-freshness-20261013 :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-scene-anchor-freshness-20261013\SHA256SUMS.txt  [repo 口径]  OK 11/11
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014 :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-scene-anchor-teeth-20261014\SHA256SUMS.txt  [repo 口径]  OK 12/12
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-scene-obs-closure-20261014 :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-scene-obs-closure-20261014\SHA256SUMS.txt  [repo 口径]  OK 16/16
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-evidence-counts :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-trace-scene-groups-20261013-evidence-counts\SHA256SUMS.txt  [repo 口径]  OK 12/12
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-groups-expected :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-trace-scene-groups-20261013-groups-expected\SHA256SUMS.txt  [repo 口径]  OK 15/15
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m1 :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-trace-scene-groups-20261013-m1\SHA256SUMS.txt  [repo 口径]  OK 11/11
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-m1json :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-trace-scene-groups-20261013-m3bag-m1json\SHA256SUMS.txt  [repo 口径]  OK 11/11
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1 :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-trace-scene-groups-20261013-m3bag-o1\SHA256SUMS.txt  [repo 口径]  OK 12/12
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-r6minor :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-trace-scene-groups-20261013-r6minor\SHA256SUMS.txt  [repo 口径]  OK 8/8
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-trace-scene-groups-20261013-scenariofold\SHA256SUMS.txt  [repo 口径]  OK 12/12
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff\SHA256SUMS.txt  [repo 口径]  OK 22/22
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq\SHA256SUMS.txt  [repo 口径]  OK 15/15
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-trace-seed-gate :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-trace-scene-groups-20261013-trace-seed-gate\SHA256SUMS.txt  [repo 口径]  OK 14/14
+RC=0  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013 :: GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-trace-scene-groups-20261013\SHA256SUMS.txt  [repo 口径]  OK 17/17
+PACKS_TOTAL=16 PACKS_FAIL=0

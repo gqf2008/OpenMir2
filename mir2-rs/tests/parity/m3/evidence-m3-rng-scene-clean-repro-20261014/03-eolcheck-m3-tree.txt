@@ -1,0 +1,4 @@
+# verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3  (disk bytes vs git blob EOL)
+# cwd = clean detached worktree E:/tmp/m3bag-clean @ 7caf97454
+EOLCHECK GREEN 3363/3363 件文本证据与仓库口径（LF）在 EOL 上一致
+RC=0
