@@ -500,6 +500,7 @@ async fn main() -> Result<()> {
                         config: mon_gen_config,
                     },
                     loader: Some(envir_loader),
+                    script_goto_count_limit: cfg.script_goto_count_limit,
                 },
                 notice,
                 colors,
@@ -1155,6 +1156,70 @@ fn handle_query_bag_cmd(
     } else {
         glog!("WRN", "SM_BAGITEMS：找不到网关线号 {gate_idx}，丢弃");
     }
+}
+
+/// **M3⑥-实现 3 第②片**：`CharacterData` → [`game_svr::npc::NpcPlayer`] 快照。
+///
+/// oracle 的脚本执行者就是 `PlayObject` 本身（`playerActor`）——进世界后它持有 `Gold`/
+/// `ItemList`/`QuestFlag` 等字段；本函数只把**同源**字段映射过去（不猜、不造）。`bag` 按
+/// `ItemList` 的每个非空槽建一条（名称查表口径同 `bins/game-svr/src/items.rs` 的 1-based
+/// `GetStdItem`）。
+#[allow(clippy::too_many_arguments)]
+fn npc_player_from<'r>(
+    rng: &'r mut dyn FnMut(i32) -> i32,
+    chr_name: &str,
+    actor_id: i32,
+    map_name: &str,
+    level: i32,
+    gold: i32,
+    bag: Option<&[Option<record::ServerUserItem>]>,
+    quest_flag: Option<&[u8]>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) -> game_svr::npc::NpcPlayer<'r> {
+    let mut p = game_svr::npc::NpcPlayer::empty(rng);
+    p.chr_name = chr_name.to_string();
+    p.actor_id = actor_id;
+    p.map_name = map_name.to_string();
+    p.level = level;
+    p.gold = gold;
+    if let Some(cells) = bag {
+        for cell in cells.iter().flatten() {
+            if let Some(name) = catalog.name(cell.index) {
+                p.items.push((name.to_string(), 1));
+            }
+        }
+    }
+    if let Some(qf) = quest_flag {
+        // oracle 登录：`playObject.QuestFlag = humData.QuestFlag`（`WorldServer.cs:1160`）——
+        // 记录里的 128 字节**原位**载入（位语义在 `QuestBitmap` 内，不在载入时拆位）。
+        let mut arr = [0u8; mir2_script::engine::quest_state::QUEST_ARRAY_LEN];
+        let n = qf.len().min(arr.len());
+        arr[..n].copy_from_slice(&qf[..n]);
+        p.quest_flag = mir2_script::engine::quest_state::QuestBitmap::from_bytes(arr);
+    }
+    p
+}
+
+/// **M3⑥-实现 3 第②片**：把 NPC 说词按 oracle `MsgQueue` **出队序**落 `SM_MERCHANTSAY(643)`。
+///
+/// `recog` 两条入队路径取值不同（`ScriptEngine.cs:993/997` 与 `BaseObject.Message.cs:30/180`）：
+/// `SendPriorityMsg(High)` 用**玩家** ActorId，`SendMsg(normNpc)` 用**NPC** ActorId（隐藏 NPC 恒 0）。
+/// 返回实际下发帧数。
+fn emit_npc_says(
+    tx: &mpsc::UnboundedSender<SimToGate>,
+    socket: i32,
+    player_actor_id: i32,
+    says: &[game_svr::npc::SayMsg],
+) -> usize {
+    let mut sent = 0usize;
+    for s in game_svr::npc::dequeue_order(says) {
+        let recog = if s.priority { player_actor_id } else { 0 };
+        let wire = game_svr::npc::merchant_say_gbk(&s.npc_name, &s.raw_msg);
+        let body = smframe::sm_merchantsay(recog, 0, 0, &wire);
+        let _ = tx.send(SimToGate::SendFrame { socket, body });
+        sent += 1;
+    }
+    sent
 }
 
 /// `CM_EAT`(1006) 的派发（issue `8d07694d` 的 ②）。
@@ -3362,6 +3427,9 @@ struct EnterConfig {
     /// **M3⑤-实现 2 第①片**：`Envir/Merchant.txt` 的宿主装载器（O-1 FindMap 门 + O-2 `rename_rand`
     /// 要用**世界同一条** `world.rng`，故装载放在 `sim_loop` 起世界之后，而不是主线程侧）。
     loader: Option<mir2_envir::MapLoader>,
+    /// **M3⑥-实现 3 第②片**：`[Setup] ScriptGotoCountLimit`（缺省 30；见 [`config::GateConfig`]）——
+    /// `NpcHost` 装载时注入 `ScriptNpc::script_goto_count_limit`（`ScriptEngine.cs:629`）。
+    script_goto_count_limit: i32,
 }
 
 /// MonGen 刷怪启动输入（[`game_svr::mongen`]）。
@@ -3540,6 +3608,8 @@ fn sim_loop(
     // （`LocalDB.cs:412` / `WorldServer.Merchant.cs:8-25`）。装载在起世界之后 ⇒ `rename_rand`
     // 走**同一条** `world.rng`（oracle `SystemShare.RandomNumber`）。`loader=None`（无 Envir）
     // 或 `registry=None` 时跳过（无逻辑名→map_id 映射 ⇒ 全会被 FindMap 门丢掉，故不载）。
+    // **M3⑥-实现 3 第②片**：隐藏任务 NPC 脚本宿主（`QManage`/`QFunction`/`RobotManage`）。
+    let mut npc_host: Option<game_svr::npc::NpcHost> = None;
     if let (Some(loader), Some(reg)) = (enter_cfg.loader.take(), registry.as_ref()) {
         match game_svr::merchant::load_merchant_spawns(&loader, |n| reg.id_of(n), &mut world.rng) {
             Ok((spawns, report)) => {
@@ -3560,6 +3630,49 @@ fn sim_loop(
                 }
             }
             Err(e) => glog!("WRN", "加载 Envir/Merchant.txt 失败（{e}）⇒ 无商人（登记）"),
+        }
+        // **M3⑥-实现 3 第②片**：隐藏任务 NPC 脚本宿主（`LocalDB.LoadMapQuest` 的宿主侧消费，
+        // `mapquest.rs:403-405` 的 `QMangeNpc()/QFunctionNpc()/RobotNpc()`）。`MapQuest.txt`
+        // 缺文件也算成功（空 `QuestList`，`result=1`）——此时仍会建 `QManage`/`QFunction`/
+        // `RobotManage` 三个隐藏 NPC（目录存在时）。`rename_rand` 走**同一条** `world.rng`
+        // （oracle `ScriptParsers.cs:857` 的 `SystemShare.RandomNumber.GetRandomNumber(1,200)`）。
+        let envir_root = loader.base_path.join(&loader.envir_dir);
+        match loader.load_map_quest(|name| reg.id_of(name).is_some()) {
+            Ok(load) => {
+                let mut rename_rand = |min: i32, max: i32| world.rng.get_random_number(min, max);
+                let host = game_svr::npc::NpcHost::load(
+                    &envir_root,
+                    &load.quest_npcs,
+                    &load.merchants,
+                    enter_cfg.script_goto_count_limit,
+                    &mut rename_rand,
+                );
+                glog!(
+                    "INF",
+                    "MapQuest 隐藏 NPC 宿主就绪：quest_npcs={} merchants={} 装载失败={} ManageNPC={} FunctionNPC={} goto_limit={}",
+                    load.quest_npcs.len(),
+                    load.merchants.len(),
+                    host.failures.len(),
+                    host.has_manage_npc(),
+                    host.has_function_npc(),
+                    enter_cfg.script_goto_count_limit
+                );
+                for f in &host.failures {
+                    glog!(
+                        "WRN",
+                        "NPC 脚本装载失败 ChrName={} file={}/{}.txt：{}",
+                        f.chr_name,
+                        f.file_path,
+                        f.script_name,
+                        f.reason
+                    );
+                }
+                npc_host = Some(host);
+            }
+            Err(e) => glog!(
+                "WRN",
+                "加载 Envir/MapQuest.txt 失败（{e}）⇒ 无 NPC 脚本宿主（登记）"
+            ),
         }
     }
     // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
@@ -4411,6 +4524,84 @@ fn sim_loop(
                                                         });
                                                     }
                                                     let _ = tx.send(SimToGate::MarkInWorld { socket });
+                                                    // **M3⑥-实现 3 第②片**：进世界完成点 oracle
+                                                    // `PlayObject.cs:1440` 的 `if (SystemShare.ManageNPC != null)
+                                                    // SystemShare.ManageNPC.GotoLable(this, "@Login", false)`。
+                                                    // 引擎产出的说词经 oracle `MsgQueue` 出队序落
+                                                    // `SM_MERCHANTSAY(643)`（`PlayObject.Message.cs:1722`）。
+                                                    // 脚本取数走**同一条** `world.rng`（临时移出后归位，
+                                                    // 与 `step_mon_gen` 同法）。
+                                                    if let Some(host) = npc_host.as_ref() {
+                                                        if host.has_manage_npc() {
+                                                            let mut rng = std::mem::replace(
+                                                                &mut world.rng,
+                                                                mir2_shared::rng::RandomNumber::with_seed(0),
+                                                            );
+                                                            {
+                                                                let mut rngf =
+                                                                    |v: i32| rng.random_below(v);
+                                                                let level = data
+                                                                    .and_then(|d| d.abil.as_ref())
+                                                                    .map_or(1, |a| i32::from(a.level));
+                                                                let mut player = npc_player_from(
+                                                                    &mut rngf,
+                                                                    &head.chr_name,
+                                                                    id,
+                                                                    &final_map_name,
+                                                                    level,
+                                                                    data.map_or(0, |d| d.gold),
+                                                                    data.and_then(|d| {
+                                                                        d.bag_items.as_deref()
+                                                                    }),
+                                                                    data.and_then(|d| {
+                                                                        d.quest_flag.as_deref()
+                                                                    }),
+                                                                    &enter_cfg.catalog,
+                                                                );
+                                                                if let Some(says) =
+                                                                    host.run_login(&mut player)
+                                                                {
+                                                                    let sent = emit_npc_says(
+                                                                        tx, socket, id, &says,
+                                                                    );
+                                                                    glog!(
+                                                                        "INF",
+                                                                        "@Login 已执行 ChrName={} 说词 {} 条（下发 {sent}）",
+                                                                        head.chr_name,
+                                                                        says.len()
+                                                                    );
+                                                                }
+                                                                // 回写（本片只回写 `Gold` 与 `QuestFlag`；
+                                                                // `QuestUnit/QuestUnitOpen/ItemList/LastNpc/Script`
+                                                                // 的写回登记为后续分片，见 patch body）。
+                                                                if let Some(s) =
+                                                                    saves.get_mut(&head.chr_name)
+                                                                {
+                                                                    s.record.data.gold = player.gold;
+                                                                    if let Some(qf) = s
+                                                                        .record
+                                                                        .data
+                                                                        .quest_flag
+                                                                        .as_mut()
+                                                                    {
+                                                                        let n = qf
+                                                                            .len()
+                                                                            .min(player.quest_flag.as_bytes().len());
+                                                                        qf[..n].copy_from_slice(
+                                                                            &player.quest_flag.as_bytes()[..n],
+                                                                        );
+                                                                    }
+                                                                }
+                                                                if let Some(sg) =
+                                                                    ground_sessions
+                                                                        .get_mut(&head.chr_name)
+                                                                {
+                                                                    sg.state.gold = player.gold;
+                                                                }
+                                                            }
+                                                            world.rng = rng;
+                                                        }
+                                                    }
                                                 }
                                             }
                                             // oracle `WorldServer.cs:503` 的准入判据：
@@ -5665,6 +5856,91 @@ mod tests {
             query_bag_items_tick: None,
             save_rcd_tick: 0,
         }
+    }
+
+    /// **M3⑥-实现 3 第②片**：`emit_npc_says` 按 oracle `MsgQueue` 出队序（`High` 先）落
+    /// `SM_MERCHANTSAY(643)`，且 `recog` 取「`priority` ⇒ 玩家 ActorId；否则 ⇒ NPC ActorId
+    /// （隐藏 NPC 恒 0）」（`ScriptEngine.cs:993/997` + `BaseObject.Message.cs:30/180`）。
+    ///
+    /// 红检：把 `dequeue_order` 改回入队序、或把 `recog` 恒取玩家 ActorId ⇒ 本用例必红。
+    #[test]
+    fn emit_npc_says_priority_first_and_recog_by_path() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let say = |m: &str, priority| game_svr::npc::SayMsg {
+            npc_name: "QManage".to_string(),
+            raw_msg: m.to_string(),
+            text: format!("QManage/{m}"),
+            priority,
+        };
+        let says = vec![say("a", false), say("b", true)];
+        assert_eq!(emit_npc_says(&tx, 7, 4242, &says), 2);
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            frames.push((socket, body));
+        }
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].0, 7, "回送给该会话自己的 socket");
+        assert_eq!(
+            u16::from_le_bytes([frames[0].1[4], frames[0].1[5]]),
+            mir2_protocol::messages::SM_MERCHANTSAY,
+            "ident"
+        );
+        assert_eq!(
+            i32::from_le_bytes(frames[0].1[0..4].try_into().unwrap()),
+            4242,
+            "priority 路径 ⇒ recog = 玩家 ActorId"
+        );
+        assert_eq!(
+            i32::from_le_bytes(frames[1].1[0..4].try_into().unwrap()),
+            0,
+            "SendMsg(normNpc) 路径 ⇒ recog = NPC ActorId（隐藏 NPC 恒 0）"
+        );
+        assert_eq!(
+            frames[0].1,
+            smframe::sm_merchantsay(4242, 0, 0, b"QManage/b"),
+            "priority 组先出，尾 = EncodeString(ChrName + '/' + sMsg)"
+        );
+    }
+
+    /// **M3⑥-实现 3 第②片**：`npc_player_from` 的字段快照（`Gold`/`QuestFlag`/`ItemList`）。
+    #[test]
+    fn npc_player_snapshot_maps_record_fields() {
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        let mut rngf = |v: i32| rng.random_below(v);
+        let cell = record::ServerUserItem {
+            make_index: 11,
+            index: 22,
+            dura: 0,
+            dura_max: 0,
+            desc: None,
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        };
+        let bag = vec![Some(cell)];
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let p = npc_player_from(
+            &mut rngf,
+            "hero",
+            5,
+            "0",
+            3,
+            100,
+            Some(&bag),
+            Some(&[7, 8, 9]),
+            &catalog,
+        );
+        assert_eq!(p.chr_name, "hero");
+        assert_eq!(p.actor_id, 5);
+        assert_eq!(p.map_name, "0");
+        assert_eq!(p.level, 3);
+        assert_eq!(p.gold, 100);
+        assert_eq!(&p.quest_flag.as_bytes()[..3], &[7, 8, 9]);
+        assert!(
+            p.items.is_empty(),
+            "空目录 ⇒ `GetStdItem == null` 分支：不入包（不造名）"
+        );
     }
 
     /// oracle 全字段角色记录（`stage6` 向量，`tests/fixtures/player_data_full_oracle.txt`）——存档用例的底稿。

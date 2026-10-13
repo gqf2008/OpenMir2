@@ -603,6 +603,28 @@ pub fn sm_hear(actor_id: i32, f_color: u8, b_color: u8, msg: &[u8]) -> Vec<u8> {
     gm_data_body(header, &edcode::encode(msg))
 }
 
+/// `SM_MERCHANTSAY`(643)（`PlayObject.Message.cs:1722-1724` 的 `RM_MERCHANTSAY` 支）：
+/// `MakeMessage(SM_MERCHANTSAY, processMsg.ActorId, MakeWord((ushort)nParam1, (ushort)nParam2), 0, 1)`
+/// + 尾 `EDCode.EncodeString(processMsg.Msg)`（`:1726` 的 `SendSocket(ClientMsg, EncodeString(...))`）。
+///
+/// `recog` = `processMsg.ActorId`，两条入队路径取值不同（`BaseObject.Message.cs`）：
+/// - `SendPriorityMsg(..., High)`（`ScriptEngine.cs:993`）以 `this.ActorId` 入库 ⇒ **玩家** ActorId；
+/// - `SendMsg(normNpc, ...)`（`ScriptEngine.cs:997`）以 `baseObject.ActorId` 入库 ⇒ **NPC** ActorId
+///   （隐藏任务 NPC 不经地图，恒 0；见 `bins/game-svr/src/npc.rs`）。
+///
+/// `msg` = `normNpc.ChrName + '/' + sMsg` 的**原始字节**（GBK；本层不转 UTF-8）。
+#[must_use]
+pub fn sm_merchantsay(recog: i32, n_param1: u8, n_param2: u8, msg: &[u8]) -> Vec<u8> {
+    let header = command_header(
+        recog,
+        messages::SM_MERCHANTSAY,
+        make_word(n_param1, n_param2),
+        0,
+        1,
+    );
+    gm_data_body(header, &edcode::encode(msg))
+}
+
 /// `SM_TURN`(10) 的字段 `(ActorId, X, Y, Dir, Light, CharDesc 序列化原文, msg)`。
 pub type TurnFrame = (i32, u16, u16, u8, u8, Vec<u8>, Vec<u8>);
 
@@ -836,6 +858,34 @@ mod tests {
     fn command_header_layout_is_little_endian() {
         let h = command_header(0x0102_0304, 0x0506, 0x0708, 0x090A, 0x0B0C);
         assert_eq!(h.as_slice(), hex("04030201060508070a090c0b").as_slice());
+    }
+
+    /// **M3⑥-实现 3 第②片**：`SM_MERCHANTSAY`(643) 的字段/尾编码锚点
+    /// （`PlayObject.Message.cs:1722-1726`）：`Recog=processMsg.ActorId`、`Ident=643`、
+    /// `Param=MakeWord(nParam1,nParam2)`、`Tag=0`、`Series=1`，尾 = `EncodeString(Msg)` 的 EDCode。
+    ///
+    /// 红检：把 `series` 从 1 改 0、或把尾从 `edcode::encode` 改成原样追加 ⇒ 本用例必红。
+    #[test]
+    fn sm_merchantsay_header_and_tail() {
+        let msg = encoding_rs::GBK.encode("QManage/欢迎").0.into_owned();
+        let body = sm_merchantsay(0x7c30_3998, 0x12, 0x34, &msg);
+        assert_eq!(i32at(&body, 0), 0x7c30_3998, "Recog = processMsg.ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_MERCHANTSAY);
+        assert_eq!(u16at12(&body, 6), make_word(0x12, 0x34), "Param");
+        assert_eq!(u16at12(&body, 8), 0, "Tag");
+        assert_eq!(u16at12(&body, 10), 1, "Series 恒 1");
+        assert_eq!(&body[12..], edcode::encode(&msg), "尾 = EncodeString(Msg)");
+        // 客户端线缆：`#` + Encode(头 12B) + 尾 + `!`
+        let wire = client_frame(&body);
+        assert_eq!(wire.first(), Some(&b'#'));
+        assert_eq!(wire.last(), Some(&b'!'));
+        let (head, wire_tail) = split_wire(&wire);
+        assert_eq!(u16at(&head, 4), messages::SM_MERCHANTSAY);
+        assert_eq!(edcode::decode(&wire_tail), msg, "尾解码后仍是 GBK 原文");
+    }
+
+    fn u16at12(b: &[u8], o: usize) -> u16 {
+        u16::from_le_bytes([b[o], b[o + 1]])
     }
 
     /// 回读 M0 金标准文件，核对上面 5 个常量确实是其原始字节（防抄错、防漂移）。

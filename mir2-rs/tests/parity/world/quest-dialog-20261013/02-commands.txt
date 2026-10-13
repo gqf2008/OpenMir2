@@ -1,0 +1,25 @@
+工作目录 = E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr（m2svr 车道 worktree）
+隔离目标目录：CARGO_TARGET_DIR=E:/tmp/m2svr-target（workspace 比对本用 --offline）
+
+# 1) 编译 + 本片用例
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo check -p game-svr --offline
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test  -p game-svr --offline --lib npc::
+
+# 2) 四门禁
+cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test --workspace --no-fail-fast --offline
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo run -p msgcodegen --offline -- --check
+
+# 3) 改坏必红（04-redchecks.txt 是原始输出；逐条改坏 → 跑 npc:: 用例 → 还原）
+#    脚本见本提交的 evidence/04-redchecks.txt 顶部「REDCHECK n」分段。
+
+# 4) 边界
+cd ..
+git diff --name-only master..HEAD -- src sql MirClient      # 期望空
+
+# 5) 证据哈希
+python tools/evidence-hash/verify_sha256sums.py write        mir2-rs/tests/parity/world/quest-dialog-20261013
+python tools/evidence-hash/verify_sha256sums.py verify       mir2-rs/tests/parity/world/quest-dialog-20261013 --check-extra
+python tools/evidence-hash/verify_sha256sums.py eolcheck     mir2-rs/tests/parity/world/quest-dialog-20261013
