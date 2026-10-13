@@ -12126,7 +12126,6 @@ mod tests {
         assert_eq!(body2.len(), 12, "空尾 ⇒ header-only 不变");
     }
 
-
     /// **M3⑦-实现 4**：`CM_PICKUP` 的归属组队分支接上真注册表
     /// （oracle `PlayObject.Base.cs:38-54` `ClientPickUpItemIsOfGroup`）：非组员不可拾、
     /// 同组成员可拾。
@@ -12182,6 +12181,8 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: hero,
                 game_gold: 0,
+                soft_version_date: 0,
+                game_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -12325,6 +12326,8 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: 42,
                 game_gold: 0,
+                soft_version_date: 0,
+                game_point: 0,
                 sys_msg: None,
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -12436,6 +12439,8 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: hero,
                 game_gold: 0,
+                soft_version_date: 0,
+                game_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
