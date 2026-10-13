@@ -1,23 +1,22 @@
 # base = origin/master = 78cf74d4620563158a0ac9e25e1e47856cd13006
+# HEAD = cf7c95c2c921efb4b971a15c84f0fe88def3973a
+# merge-base(origin/master, HEAD) = 78cf74d4620563158a0ac9e25e1e47856cd13006
 
-$ git diff --name-only origin/master -- src sql MirClient mir2-rs/crates mir2-rs/bins
-mir2-rs/bins/game-svr/src/main.rs
-(空 = 冻结面零改动)
+$ git diff --name-only origin/master HEAD -- src sql MirClient mir2-rs/crates mir2-rs/bins
+(空 = 冻结面零改动；base 已跟 master，无「回退假差量」)
 
-$ git status --porcelain=v1 -- "*.rs"
+$ git diff --name-only origin/master HEAD -- "*.rs"
 (空 = 零 .rs)
 
-$ git status --porcelain=v1 (本片相关，排除他线 sessions/)
- M mir2-rs/tests/parity/m3/rng-trace-scene/README.md
- M mir2-rs/tests/parity/m3/rng-trace-scene/rng_scene_gate.py
- M mir2-rs/tests/parity/m3/rng-trace-scene/rng_trace_scenario.json
- M mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
-?? "mir2-rs/tests/parity/m3/M3RNG\345\234\272\346\231\257\346\265\201\346\260\264\345\244\264\345\220\214\347\247\215\345\255\220\345\210\266\345\223\201\347\272\247\351\227\250\346\224\266\345\217\243\346\212\245\345\221\212-20261013.md"
-?? mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-trace-seed-gate/
+$ git diff --name-only origin/master HEAD -- mir2-rs/tests/parity/world
+(空 = 未动 tests/parity/world/**)
 
-$ git diff --stat origin/master -- mir2-rs/tests/parity/m3/rng-trace-scene
- mir2-rs/tests/parity/m3/rng-trace-scene/README.md  |  19 +++-
- .../parity/m3/rng-trace-scene/rng_scene_gate.py    | 113 ++++++++++++++++++++-
- .../m3/rng-trace-scene/rng_trace_scenario.json     |   5 +-
- .../m3/rng-trace-scene/run_rng_trace_pair.ps1      |  49 +++++++--
- 4 files changed, 168 insertions(+), 18 deletions(-)
+$ git diff --name-only origin/master HEAD -- mir2-rs/tests/parity/m3/rng-trace-scene
+mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+mir2-rs/tests/parity/m3/rng-trace-scene/rng_scene_gate.py
+mir2-rs/tests/parity/m3/rng-trace-scene/rng_trace_scenario.json
+mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
+
+$ git status --porcelain=v1
+ M mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-trace-seed-gate/12-boundary-yuan-rs.txt
+(仅本片 3+1 源件与证据包；sessions/ 为他线历史未跟踪目录，未纳入)
