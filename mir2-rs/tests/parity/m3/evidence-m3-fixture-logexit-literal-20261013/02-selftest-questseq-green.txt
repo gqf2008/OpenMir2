@@ -1,0 +1,26 @@
+QUESTSEQ PASS parse-order-and-filter got=[click_npc|任务管理|@main,dialog_select|任务管理|@rw06,dialog_select|任务管理|@main]
+QUESTSEQ PASS parse-empty empty
+QUESTSEQ PASS parse-null null
+QUESTSEQ PASS parse-all-six count=6
+QUESTSEQ PASS parse-unknown-dropped unknown-kept?
+QUESTSEQ PASS parse-label-default-main label-default
+QUESTSEQ PASS branch-say 643
+QUESTSEQ PASS branch-messagebox 767
+QUESTSEQ PASS branch-no-frame empty
+QUESTSEQ PASS branch-null null
+QUESTSEQ PASS branch-unclassified 999
+QUESTSEQ PASS branch-messagebox-priority 767-after-643
+QUESTSEQ PASS say-extract got=任务管理/确定开始[神秘洞口]任务吗？
+QUESTSEQ PASS say-extract-escapes got=a"b\c
+QUESTSEQ PASS say-none-null got=null
+QUESTSEQ PASS say-first-643 got=first
+QUESTSEQ PASS esc-angle-quest-no-raw got=任务管理/\u003c任务名称\u003e/@rw01
+QUESTSEQ PASS esc-angle-shop-no-raw got=任务管理/\u003c任务名称\u003e/@rw01
+QUESTSEQ PASS esc-angle-frame-decode json-ok=True decoded=任务管理/<任务名称>/@rw01
+QUESTSEQ PASS serilog-path-payload-intact escaped-payload-via-serilog got={"phase":"frame","k":0,"frame":{"sm":643,"text":"\u003cx\u003e"}}
+QUESTSEQ INFO serilog-raw-path-mangled=True raw={"phase":"frame","k":0,"frame":{"sm":643,"text":"<x>"}
+QUESTSEQ PASS logexit-brace-escape got=a{{b}}c{{}}
+QUESTSEQ PASS logexit-normal-marker-unchanged literal-ok=True raw-ok=True
+QUESTSEQ PASS logexit-payload-intact literal-ok=True raw-mangled=True
+QUESTSEQ INFO logexit raw-bytes=76 literal-bytes=77 payload-bytes=77
+QUESTSEQ SELFTEST GREEN

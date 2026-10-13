@@ -1,0 +1,66 @@
+diff --git a/src/BotSrv/Player/RobotPlayer.cs b/src/BotSrv/Player/RobotPlayer.cs
+index c28357a21..5e8d7d45a 100644
+--- a/src/BotSrv/Player/RobotPlayer.cs
++++ b/src/BotSrv/Player/RobotPlayer.cs
+@@ -7278,9 +7278,20 @@ namespace BotSrv.Player
+             return MShare.MagicArr[magid] != null ? MShare.MagicArr[magid].Level : 0;
+         }
+ 
++        /// <summary>夹具日志出口的**模板字面量化**（reviewer-5 M-1：根因修法应落在日志出口）。
++        /// `LogService.Info(msg)` 把整条消息当 Serilog 消息模板解析；M3*SEQ 事件 JSON 含**嵌套 `{}`
++        /// 且有字面 `<`/`>`** 时，模板分词会丢掉末尾一个 `}`（真机 defect_3，见 QuestSeqSelfCheck）。
++        /// 在出口把 `{`/`}` 双写即按字面渲染（`{{`→`{`、`}}`→`}`），整条消息逐字节不变 ⇒ 各字段
++        /// 无需再自行转义（reviewer-5 M-2「新增 M3*SEQ 字段须同步过 escaper」随之消解）。
++        /// `QuestEsc`/`ShopEsc` 的尖括号转义保留作 defense-in-depth；解码侧 `json.loads` 不受影响。</summary>
++        internal static string SerilogTemplateLiteral(string message)
++        {
++            return message == null ? null : message.Replace("{", "{{").Replace("}", "}}");
++        }
++
+         private void MainOutMessage(string msg)
+         {
+-            LogService.Info($"机器人:[{ChrName}] {msg}");
++            LogService.Info(SerilogTemplateLiteral($"机器人:[{ChrName}] {msg}"));
+         }
+ 
+         private void MainOutErrorMessage(string msg)
+diff --git a/src/BotSrv/QuestSeqSelfCheck.cs b/src/BotSrv/QuestSeqSelfCheck.cs
+index c16a4665d..fc55e5848 100644
+--- a/src/BotSrv/QuestSeqSelfCheck.cs
++++ b/src/BotSrv/QuestSeqSelfCheck.cs
+@@ -137,6 +137,35 @@ namespace BotSrv
+                 + (rawCaptured != "{\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\"<x>\"}}")
+                 + " raw=" + rawCaptured);
+ 
++            // ④c reviewer-5 M-1（根因修法落在**日志出口**，不再只靠逐字段转义）：
++            //     `RobotPlayer.SerilogTemplateLiteral` 把整条消息当字面渲染，`MainOutMessage` 已改走它。
++            //     这样含嵌套 `{}` + 字面 `<`/`>` 的 M3*SEQ 载荷逐字节不变，且**新增字段自动安全**
++            //     （reviewer-5 M-2 随之消解）。改坏必红：把出口的 `SerilogTemplateLiteral` 去掉
++            //     ⇒ 下面的 raw-vs-literal 对照必挂（triggerRaw != triggerPayload）。
++            Check("logexit-brace-escape",
++                BotSrv.Player.RobotPlayer.SerilogTemplateLiteral("a{b}c{}") == "a{{b}}c{{}}",
++                "got=" + BotSrv.Player.RobotPlayer.SerilogTemplateLiteral("a{b}c{}"));
++            // 行为保持：正常标记（无 `<`/`>` 触发词）出口修前/修后渲染逐字节相同（不是顺手指改渲染）。
++            const string normalPayload = "机器人:[bot1] M3QUESTSEQ {\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\"任务管理/确定开始[神秘洞口]任务吗？\"}}";
++            LogService.Info(normalPayload);
++            string normalRaw = captured[captured.Count - 1];
++            LogService.Info(BotSrv.Player.RobotPlayer.SerilogTemplateLiteral(normalPayload));
++            string normalLiteral = captured[captured.Count - 1];
++            Check("logexit-normal-marker-unchanged",
++                normalLiteral == normalPayload && normalRaw == normalPayload,
++                "literal-ok=" + (normalLiteral == normalPayload) + " raw-ok=" + (normalRaw == normalPayload));
++            // 缺陷触发载荷（嵌套 `{}` + 字面 `<>`）：raw 出口被 Serilog 吞末尾 `}`，出口修法逐字节保留。
++            const string triggerPayload = "机器人:[bot1] M3QUESTSEQ {\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\"<x>\"}}";
++            LogService.Info(triggerPayload);
++            string triggerRaw = captured[captured.Count - 1];
++            LogService.Info(BotSrv.Player.RobotPlayer.SerilogTemplateLiteral(triggerPayload));
++            string triggerLiteral = captured[captured.Count - 1];
++            Check("logexit-payload-intact",
++                triggerLiteral == triggerPayload && triggerRaw != triggerPayload,
++                "literal-ok=" + (triggerLiteral == triggerPayload) + " raw-mangled=" + (triggerRaw != triggerPayload));
++            Console.WriteLine("QUESTSEQ INFO logexit raw-bytes=" + triggerRaw.Length
++                + " literal-bytes=" + triggerLiteral.Length + " payload-bytes=" + triggerPayload.Length);
++
+             Console.WriteLine(failed == 0
+                 ? "QUESTSEQ SELFTEST GREEN"
+                 : $"QUESTSEQ SELFTEST RED ({failed} failed)");

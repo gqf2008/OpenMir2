@@ -137,6 +137,35 @@ namespace BotSrv
                 + (rawCaptured != "{\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\"<x>\"}}")
                 + " raw=" + rawCaptured);
 
+            // ④c reviewer-5 M-1（根因修法落在**日志出口**，不再只靠逐字段转义）：
+            //     `RobotPlayer.SerilogTemplateLiteral` 把整条消息当字面渲染，`MainOutMessage` 已改走它。
+            //     这样含嵌套 `{}` + 字面 `<`/`>` 的 M3*SEQ 载荷逐字节不变，且**新增字段自动安全**
+            //     （reviewer-5 M-2 随之消解）。改坏必红：把出口的 `SerilogTemplateLiteral` 去掉
+            //     ⇒ 下面的 raw-vs-literal 对照必挂（triggerRaw != triggerPayload）。
+            Check("logexit-brace-escape",
+                BotSrv.Player.RobotPlayer.SerilogTemplateLiteral("a{b}c{}") == "a{{b}}c{{}}",
+                "got=" + BotSrv.Player.RobotPlayer.SerilogTemplateLiteral("a{b}c{}"));
+            // 行为保持：正常标记（无 `<`/`>` 触发词）出口修前/修后渲染逐字节相同（不是顺手指改渲染）。
+            const string normalPayload = "机器人:[bot1] M3QUESTSEQ {\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\"任务管理/确定开始[神秘洞口]任务吗？\"}}";
+            LogService.Info(normalPayload);
+            string normalRaw = captured[captured.Count - 1];
+            LogService.Info(BotSrv.Player.RobotPlayer.SerilogTemplateLiteral(normalPayload));
+            string normalLiteral = captured[captured.Count - 1];
+            Check("logexit-normal-marker-unchanged",
+                normalLiteral == normalPayload && normalRaw == normalPayload,
+                "literal-ok=" + (normalLiteral == normalPayload) + " raw-ok=" + (normalRaw == normalPayload));
+            // 缺陷触发载荷（嵌套 `{}` + 字面 `<>`）：raw 出口被 Serilog 吞末尾 `}`，出口修法逐字节保留。
+            const string triggerPayload = "机器人:[bot1] M3QUESTSEQ {\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\"<x>\"}}";
+            LogService.Info(triggerPayload);
+            string triggerRaw = captured[captured.Count - 1];
+            LogService.Info(BotSrv.Player.RobotPlayer.SerilogTemplateLiteral(triggerPayload));
+            string triggerLiteral = captured[captured.Count - 1];
+            Check("logexit-payload-intact",
+                triggerLiteral == triggerPayload && triggerRaw != triggerPayload,
+                "literal-ok=" + (triggerLiteral == triggerPayload) + " raw-mangled=" + (triggerRaw != triggerPayload));
+            Console.WriteLine("QUESTSEQ INFO logexit raw-bytes=" + triggerRaw.Length
+                + " literal-bytes=" + triggerLiteral.Length + " payload-bytes=" + triggerPayload.Length);
+
             Console.WriteLine(failed == 0
                 ? "QUESTSEQ SELFTEST GREEN"
                 : $"QUESTSEQ SELFTEST RED ({failed} failed)");
