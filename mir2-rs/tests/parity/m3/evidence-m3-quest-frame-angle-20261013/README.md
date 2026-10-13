@@ -2,7 +2,8 @@
 
 - 卡：`openmir2-m3-fixture-marker-prefix-bug`（该卡剩余 DoD ② 的 defect_3；见窗口车道 comment
   `cf333434`）；上游证据：`.../window/.../evidence-m3-quest-align-window-r2-20261013`。
-- 车道：`m3cs` / `openmir2-worker-5`；分支 `worktree-m3-quest-frame-angle`；base `origin/master ef3160df7`。
+- 车道：`m3cs` / `openmir2-worker-5`；分支 `worktree-m3-quest-frame-angle`；
+  base/合并树：交付前 `git merge origin/master`（合并树 = `8ff8d4de0`），四门禁在**合并树**上重跑。
 - tier 自判 = **L**（纯 C# 夹具工具转义 + 自检；不触 oracle/Rust 行为、RNG、时序、落库、战斗数值；不占窗口、不连端口）。
 
 ## 现象（真机 window r2，master d4d5b89c）
@@ -46,7 +47,7 @@ JSON 语义等价（`json.loads("\u003c") == "<"`），但消息里再无字面�
 | `05-botsrv-all-selftests.txt` | 7 个 BotSrv 生产函数自检（quest/shop/guildcastle/heropet/pairtrade/selloff/attackrole） | 全 **GREEN**，exit 0 |
 | `06-fixture-nostack-quest.txt` | `run_quest_pair.ps1 -SelfCheckNoStack`（含 `botsrv-questseq-selftest rc=0`） | **ok=19/19**，exit 0 |
 | `07-fixture-nostack-others.txt` | 其余 5 个夹具 `-SelfCheckNoStack` | 全 **GREEN**，exit 0 |
-| `08-gates.txt` | 四门禁（隔离 `CARGO_TARGET_DIR`、`--offline`） | fmt 0 / clippy 0(-D warnings) / **test 1185 passed 0 failed 22 ignored** / msgcodegen 604 rc=0 |
+| `08-gates.txt` | 四门禁（合并树；隔离 `CARGO_TARGET_DIR`、`--offline`） | fmt 0 / clippy 0(-D warnings) / **test 1187 passed 0 failed 22 ignored** / msgcodegen 604 rc=0 |
 | `10-real-k0-payload-analysis.txt` | 用窗口 r2 的**真机原始行**复算：未修 `{`=2/`}`=1、`json.loads` 失败；补括号 + 生产转义后 `{`=2/`}`=2、`json.loads` OK、解码 text 逐字符还原 | 见件 |
 
 `serilog-path-payload-intact` 是**根因级**牙齿：它用**生产 escaper** 造载荷，经**真实 Serilog 通路**（内联 sink 取回

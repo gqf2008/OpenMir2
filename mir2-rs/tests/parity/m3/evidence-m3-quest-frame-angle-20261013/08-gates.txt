@@ -1,10 +1,15 @@
+# 四门禁（合并树 = origin/master 8ff8d4de0 合入后；cwd=mir2-rs/；CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target；--offline）
+
 === cargo fmt --all -- --check ===
+rc=0（无输出）
+
 === cargo clippy --workspace --all-targets -- -D warnings ===
-    Checking mir2-parity-tests v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity)
-    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\bins\game-svr)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.78s
+rc=0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.94s
+
 === cargo test --workspace ===
-aggregate: passed=1185 failed=0 ignored=22
-suites-ok=101
-=== msgcodegen --check ===
+rc=0；101 suites；passed=1187 failed=0 ignored=22
+
+=== cargo run -p msgcodegen -- --check ===
+rc=0
 msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
