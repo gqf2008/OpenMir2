@@ -36,7 +36,9 @@ DoD① 原文：两侧 trace 必须同场景/同起点/同种子（MonGen 与 Mo
 | `15-gate-clippy.txt` | `cargo clippy --workspace --all-targets --offline -- -D warnings` rc=0 |
 | `16-gate-test.txt` | `cargo test --workspace --offline` ⇒ **98 suites / 1038 passed / 0 failed / 21 ignored** rc=0 |
 | `17-gate-msgcodegen.txt` | `cargo run -q --offline -p msgcodegen -- --check` ⇒ 604 条 rc=0 |
-| `18-post-merge-master-regate.txt` | **交付前 base 跟 master**（合并 `origin/master 636bdce53`，零冲突、无内容改动）① 合并前 `git diff origin/master 989a8c9af` = **63 路径假差量**（他线 bins/证据），合并后 `git diff origin/master HEAD` = **恰好本片 24 路径** ② 合并树四门禁：fmt0 / clippy0 / **98 suites 1044 passed 0 failed 21 ignored** / msgcodegen 604 ③ 离线判据重跑全绿。**合并树的门读数以本文件为准**（`16-gate-test.txt` 记的是未合 master 的 989a8c9af 时读数 1038） |
+| `18-post-merge-master-regate.txt` | **交付前 base 跟 master**（合并 `origin/master 636bdce53`，零冲突、无内容改动）① 合并前 `git diff origin/master 989a8c9af` = **63 路径假差量**（他线 bins/证据），合并后 `git diff origin/master HEAD` = **本片真实边界**（本证据包全部文件 + 1 报告 + 3 源件；当时逐路径读数 **25** 见 `18-`；计数**不再硬编码**，见 `19-`） ② 合并树四门禁：fmt0 / clippy0 / **98 suites 1044 passed 0 failed 21 ignored** / msgcodegen 604 ③ 离线判据重跑全绿。**合并树的门读数以本文件为准**（`16-gate-test.txt` 记的是未合 master 的 989a8c9af 时读数 1038） |
+| `19-reviewer5-M1-pathcount-correction.txt` | **M-1 收口**（reviewer-5 M-1：交付 README 硬编码「24 路径」而实测 **25**）① 复核 `git diff --name-only 636bdce53 8f30c8e68` 行数 = 25 ② 根因：硬编码计数随证据件增删漂移 ⇒ README 改为只写计数规则 ③ 本订正片改动面 = **5 路径**（报告 + `README.md` + 本文件 + `20-` + `SHA256SUMS.txt`）；计数唯一口径见该文件 §5 |
+| `20-m1-correction-verify.txt` | M-1 订正片验证读数：改动面（5 路径）+ 四门禁（fmt0 / clippy0 / test **98 suites 1057 passed 0 failed 21 ignored** / msgcodegen 604）+ 离线判据（ledger 32/32 · scene gate 16/16 · scenario GREEN · attack ledger 32/32 · FIXTURE_MATRIX ready=9 pending=1 red=0 · FIXTURE_CHAIN runner_ok=9）+ 无栈自检 **23/23** + 清单 `--check-extra`/`eolcheck` 绿 |
 
 ## 改坏必红（原始件）
 
