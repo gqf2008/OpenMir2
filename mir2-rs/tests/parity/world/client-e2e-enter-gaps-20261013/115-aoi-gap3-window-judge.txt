@@ -1,0 +1,209 @@
+115-aoi-gap3-window-judge.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉒ 判定书
+③ 窗口两趟证据不互相覆盖 + `--judge` 五条判据一键聚合（root 2026-10-14 00:4x ③「判据/capture 工具你准备」）
+m2-svr / openmir2-worker-11 / 2026-10-14；零起栈、零端口、零生产代码改动
+被测件：`window_handoff.py`  sha256 = be19760472abd7b459d88a9a8223b0f3ee09f1e52ceaccb171a675b6940429bd
+base = origin/master a2d8eaf32（本片开工时 `git merge origin/master` 的 tip；本片只动本卡证据目录）
+====================================================================================================
+
+A. 本片修的是什么（一个逻辑变更：让 ③ 的窗口两趟「各留各的证据、能一键判」）
+----------------------------------------------------------------------------------------------------
+[A1] 缺陷（源码实读）：`tools/m2-acceptance/start_rust_stack.ps1` 的 `Start-One` 每次起栈先
+     `Remove-Item $out, $err`（`:276-278`）⇒ `game-svr.out.log` **每次起栈被删重建**。片⑰ 的 `--plan`
+     把 ③a 反向第二趟指到**与 ③b 同一批路径**（`{w}/rust/...`、`{w}/csharp/...`）：③a 一开跑，
+     ③b 的服务端读数与两侧 capture 就被覆盖 ⇒ ③b 判据事后无法复核（一次性窗口不可重放）。
+[A2] 修法：`plan_text` 给 ③a 一棵**独立目录树** `w_a = <work-dir>-a`（③b 路径逐字节不变），
+     ③a 的判据命令/一键 `--judge` 都读 `*-a/`；计划里显式写「start_rust_stack.ps1 每次起栈删旧
+     game-svr.out.log ⇒ 不独立就覆盖 ③b 读数」。
+[A3] 新增 `--judge`（J1）：把 ③ 的**五条**判据（③b 服务端 `vis>=1`、③b 客户端 `pairs>=1`、
+     ③b 两侧 `visible`、③a 服务端 `vis==0 && af==0`、③a 两侧 `none`）聚合为一个 rc / 一行 `AOI_GAP3=`。
+     只调既有判据脚本，**不复制任何判据逻辑**（同片⑰「只聚合不复制」原则）。
+     fail-closed：任一必需证据缺失 ⇒ `PREREQ_RED`（rc=2），**绝不静默当绿**。
+
+B. 修后的计划（③a 独立目录；`--plan-only --best-site`）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B window_handoff.py --plan-only --best-site --repo <本 worktree>
+# ③ 两侧同框对照窗口计划（卡 openmir2-client-e2e-enter-gaps）
+# 构建源 repo=E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr ref=HEAD
+# ③b 有怪点 site=605,578 / ③a 反向点 site_none=291,666 / view_range=12
+# ③b 最密点自动选取 BEST=605,578 E=12.681 （check_mongen_dense_points.py --best-point，root ③①「换怪密点」）
+
+# 0) 前置：端口/进程（5000/5100/5500/5600/5700/6000/7000/7100/7200 全 DOWN；仅共享 3306 可 UP）
+#    起栈禁接管道（禁 | tee/tail/head/grep，会把调用挂死）；一律 > <log> 2>&1
+
+# 1) 站位：两侧必须逐字节同坐标（跑完还原并记录 before/after）
+#   mysql> UPDATE characters SET x=605, y=578 WHERE chrname='aaa';  -- ③b 有怪
+#   mysql> UPDATE characters SET x=291, y=666 WHERE chrname='aaa';  -- ③a 反向
+
+# 2) ③b 两侧跑（有怪点；两侧不同时起 —— 端口互斥）
+#   [③b] Rust：
+#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 ^
+#       -RustBinDir E:/tmp/m2svr-window-target/debug -Seed 42 -LogDir E:/tmp/window/cliente2e/rust/stack
+#     python tools/capture/mir2_proxy.py --out E:/tmp/window/cliente2e/rust/proxy --map 7200=127.0.0.1:7600
+#     powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 ^
+#       -Account mir2test -Password mir2pass -OutDir E:/tmp/window/cliente2e/rust/shots -WalkClicks 0 -AutoPlaySec 12 ^
+#       -SkipReenter -SkipLogout -SkipTalk
+#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 ^
+#       -ProxyDir E:/tmp/window/cliente2e/rust/proxy -OutDir E:/tmp/window/cliente2e/rust/s2c
+#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop
+#   [③b] C#（先读 85-csharp-capture-topology-rootcause.md；同一条 capture 管线）：
+#     python -I -B check_csharp_capture_preflight.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr --mirserver E:/MirServer ^
+#       --shadow-config <影子 RunGate/config.conf>        # 必须 GREEN 再起栈
+#     powershell -ExecutionPolicy Bypass -File E:/MirServer/start-all.ps1
+#     # 影子 game-gate(7600) + 代理占 7200；再到 C# 侧客户端与解码：
+#     python tools/capture/mir2_proxy.py --out E:/tmp/window/cliente2e/csharp/proxy --map 7200=127.0.0.1:7600
+#     powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 -Account mir2test ^
+#       -Password mir2pass -OutDir E:/tmp/window/cliente2e/csharp/shots -WalkClicks 0 -AutoPlaySec 12 -SkipReenter -SkipLogout -SkipTalk
+#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 ^
+#       -ProxyDir E:/tmp/window/cliente2e/csharp/proxy -OutDir E:/tmp/window/cliente2e/csharp/s2c
+#     powershell -ExecutionPolicy Bypass -File E:/MirServer/stop-all.ps1   # 收 C# 栈（或等价 -Stop）
+
+# 3) ③b 判据（一键：python -I -B window_handoff.py --judge --work-dir E:/tmp/window/cliente2e）
+#   服务端（Rust，新读数 vr/new/af）：python -I -B check_aoi_visibility_diag.py \
+#     --log E:/tmp/window/cliente2e/rust/stack/game-svr.out.log --expect visible --min-vis 1
+#   客户端（Rust）：python -I -B check_client_s2c_frames.py \
+#     --capture E:/tmp/window/cliente2e/rust/s2c/capture.jsonl --min-appearance-pairs 1
+#   ③b 两侧：python -I -B aoi_visibility_pair.py --left E:/tmp/window/cliente2e/rust/s2c/capture.jsonl \
+#     --right E:/tmp/window/cliente2e/csharp/s2c/capture.jsonl --expect visible --min-pairs 1
+
+# 4) ③a 反向第二趟：把 §1 的 aaa 改到 site_none=291,666 后重跑 §2，**独立目录**
+#    （③a 根 = E:/tmp/window/cliente2e-a；start_rust_stack.ps1 每次起栈删旧 game-svr.out.log ⇒ 不独立就覆盖 ③b 读数）
+#    ③a Rust：§2 的 [③b] Rust 命令，把 -LogDir/--out/-OutDir 的 E:/tmp/window/cliente2e/rust 换成 E:/tmp/window/cliente2e-a/rust
+#    ③a C#  ：§2 的 [③b] C# 命令，把 --out/-OutDir 的 E:/tmp/window/cliente2e/csharp 换成 E:/tmp/window/cliente2e-a/csharp
+#   判据（一键：python -I -B window_handoff.py --judge --work-dir E:/tmp/window/cliente2e --pass-a-dir E:/tmp/window/cliente2e-a）
+#   服务端：python -I -B check_aoi_visibility_diag.py \
+#     --log E:/tmp/window/cliente2e-a/rust/stack/game-svr.out.log --expect none
+#   ③a 两侧：python -I -B aoi_visibility_pair.py --left E:/tmp/window/cliente2e-a/rust/s2c/capture.jsonl \
+#     --right E:/tmp/window/cliente2e-a/csharp/s2c/capture.jsonl --expect none
+#   （③a 两侧都必须 0 对出现帧 + 服务端 vis==0 且 af==0）
+
+# 5) 收工：start_rust_stack.ps1 -Stop / C# -Stop；还原 aaa；实拍十端口；SHA256SUMS 按 LF/git-blob 口径
+```
+
+C. `--judge` 真判据聚合（用本目录**真判据脚本** + 合成产物；绿/红/缺件三相）
+----------------------------------------------------------------------------------------------------
+合成产物布局（③b = `<work-dir>/{rust,csharp}`；③a = `<work-dir>-a/{rust,csharp}`）：
+  ③b Rust capture = 仓内 `capture-client-viewrange12-seed42.jsonl`（13 对出现帧，真机件）；
+  ③b C#  capture = 仓内 `capture-client-viewrange5-seed42.jsonl`（2 对，代 C# 侧）；
+  ③a 两侧 = 仓内 `capture-client-run5.jsonl`（0 对）；
+  ③b/③a 的 `game-svr.out.log` = 合成一条 `vr=/new=/af=` 采样（③b `vis=2 new=2 af=4`；③a `vis=0 new=0 af=0`）。
+
+```
+$ python -I -B window_handoff.py --judge --work-dir E:/tmp/m2svr-judge-demo
+== GREEN demo (real judge tools, synthetic ③b/③a artifacts) ==
+OK   ③b 服务端 vis>=1（RESULT: GREEN）
+OK   ③b 客户端 pairs>=1（RESULT: GREEN）
+OK   ③b 两侧 visible（RESULT: GREEN）
+OK   ③a 服务端 vis==0（RESULT: GREEN）
+OK   ③a 两侧 none（RESULT: GREEN）
+AOI_GAP3=GREEN
+rc=0
+
+$ # 改坏必红：把 ③b 的有怪 capture/log 放进 ③a 目录 ⇒ ③a 两条必红
+$ python -I -B window_handoff.py --judge --work-dir E:/tmp/m2svr-judge-demo
+== RED demo（③a 被污染：把 ③b 有怪 capture/log 放进 ③a 目录）==
+OK   ③b 服务端 vis>=1（RESULT: GREEN）
+OK   ③b 客户端 pairs>=1（RESULT: GREEN）
+OK   ③b 两侧 visible（RESULT: GREEN）
+RED ③a 服务端 vis==0 RED（末行=RESULT: RED）
+RED ③a 两侧 none RED（末行=RESULT: RED）
+AOI_GAP3=RED
+rc=1
+
+$ # fail-closed：证据不存在 ⇒ 五条全 PREREQ，rc=2（绝不静默绿）
+$ python -I -B window_handoff.py --judge --work-dir E:/tmp/no-such-window-xyz
+PREREQ ③b 服务端 vis>=1：缺窗口证据 ['E:/tmp/no-such-window-xyz/rust/stack/game-svr.out.log']
+PREREQ ③b 客户端 pairs>=1：缺窗口证据 ['E:/tmp/no-such-window-xyz/rust/s2c/capture.jsonl']
+PREREQ ③b 两侧 visible：缺窗口证据 ['E:/tmp/no-such-window-xyz/rust/s2c/capture.jsonl', 'E:/tmp/no-such-window-xyz/csharp/s2c/capture.jsonl']
+PREREQ ③a 服务端 vis==0：缺窗口证据 ['E:/tmp/no-such-window-xyz-a/rust/stack/game-svr.out.log']
+PREREQ ③a 两侧 none：缺窗口证据 ['E:/tmp/no-such-window-xyz-a/rust/s2c/capture.jsonl', 'E:/tmp/no-such-window-xyz-a/csharp/s2c/capture.jsonl']
+AOI_GAP3=PREREQ_RED
+```
+
+D. `--selftest` 35/35 → 45/45（新增 10 条）
+----------------------------------------------------------------------------------------------------
+新增：计划 4 条（`plan-pass-a-separate-dirs` / `plan-pass-a-judge-args` / `plan-judge-command` /
+`plan-pass-a-not-overwritten-note`）+ `--judge` 6 条（全绿 rc0 / 五条 / 一条 RED rc1 / 2 红 3 绿 /
+缺证据 PREREQ / 缺件点名 ③b 两侧）。
+```
+$ python -I -B window_handoff.py --selftest | tail -1
+[PASS] selftest parse-result-green
+[PASS] selftest parse-result-red
+[PASS] selftest parse-result-prereq
+[PASS] selftest parse-result-suffix
+[PASS] selftest parse-result-missing
+[PASS] selftest parse-result-last-wins
+[PASS] selftest parse-selftest-ok
+[PASS] selftest parse-selftest-green
+[PASS] selftest parse-selftest-failed
+[PASS] selftest parse-selftest-red
+[PASS] selftest parse-selftest-missing
+[PASS] selftest parse-best-point
+[PASS] selftest parse-best-point-missing
+[PASS] selftest parse-best-point-int-e
+[PASS] selftest resolve-best-site-failsoft 选点跳过：缺 E:/no-such-mirserver-xyz\M2GameSvr\Envir\MonGen.txt
+[PASS] selftest agg-allgreen-rc0 0
+[PASS] selftest agg-allgreen-rust-ok
+[PASS] selftest agg-stale-rc1 1
+[PASS] selftest agg-stale-flag
+[PASS] selftest agg-stale-reason G1 Rust 窗口前置门 RED（构建源/读数标记不符；窗口会 PREREQ_RED）—— 见下方修复块
+[PASS] selftest plan-stale-remediation
+[PASS] selftest plan-fresh-no-remediation
+[PASS] selftest plan-has-comparators
+[PASS] selftest plan-has-sites
+[PASS] selftest plan-none-full-commands
+[PASS] selftest plan-none-second-pass-note
+[PASS] selftest plan-site-note
+[PASS] selftest plan-no-note-when-empty
+[PASS] selftest plan-has-pipeline
+[PASS] selftest plan-pass-a-separate-dirs
+[PASS] selftest plan-pass-a-judge-args
+[PASS] selftest plan-judge-command
+[PASS] selftest plan-pass-a-not-overwritten-note
+[PASS] selftest agg-badtool-rc1 1
+[PASS] selftest agg-badtool-reason G2 aoi_visibility_pair.py --selftest FAILED（rc=1）
+[PASS] selftest agg-missing-prereq-rc2 2
+[PASS] selftest agg-missing-reason G2 缺判据工具 ['check_client_s2c_frames.py']（--check-dir=C:\Users\gxh\AppData\Local\Temp\wh-missing-0_xwvh5f）
+[PASS] selftest agg-rust-prereq-rc2 2
+[PASS] selftest agg-norepo-prereq 2
+[PASS] selftest judge-allgreen-rc0 0
+[PASS] selftest judge-five-items 5
+[PASS] selftest judge-red-rc1 1
+[PASS] selftest judge-red-two 2/3
+[PASS] selftest judge-missing-prereq-rc2 2
+[PASS] selftest judge-missing-names-pair ③b 两侧 visible：缺窗口证据 ['C:\\Users\\gxh\\AppData\\Local\\Temp\\wh-judge-missing-vueixvz3\\work/csharp/s2c/capture.jsonl']
+SELFTEST OK (45/45)
+```
+
+E. 改坏必红（变异只在 E:/tmp 复制件、仓内 sha256 前后一致）
+----------------------------------------------------------------------------------------------------
+```
+$ sha256sum -c base.sha256        # 仓内 window_handoff.py 未被改坏
+window_handoff.py: OK
+$ # MUT-A：去掉 ③a 独立目录（w_a = w）⇒ 3 条计划断言必红
+$ python -I -B /tmp/mut-a.py --selftest
+[FAIL] selftest plan-pass-a-separate-dirs
+[FAIL] selftest plan-pass-a-judge-args
+[FAIL] selftest plan-judge-command
+SELFTEST FAILED (42/45)
+rc=1
+$ # MUT-B：run_window_judges 把 rc=1 当绿 ⇒ 2 条 judge 断言必红
+$ python -I -B /tmp/mut-b.py --selftest
+[FAIL] selftest judge-red-rc1 0
+[FAIL] selftest judge-red-two 0/5
+SELFTEST FAILED (43/45)
+rc=1
+```
+
+F. 未做 / 登记（不静默）
+----------------------------------------------------------------------------------------------------
+* **真机窗口读数（③b/③a 两趟）与「屏幕见怪并能攻击造成伤害」仍是 root 独占窗口的 R 级判据**；
+  本片只让「两趟证据不互相覆盖 + 一键判」就绪，**不据此收卡**。
+* `--judge` 消费约定路径 `<work-dir>/{rust,csharp}` 与 `<work-dir>-a/{rust,csharp}`；
+  root 自定路径时用 `--work-dir/--pass-a-dir` 覆盖。
+* 未改任何模拟/出帧/取数语义；未起栈、未占端口。
+
+G. 涉及文件
+----------------------------------------------------------------------------------------------------
+  代码/工具: `window_handoff.py`
+  证据: 本文件 + `116-redcheck-window-judge.txt` + `117-gates.txt` + `118-boundary.txt`

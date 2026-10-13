@@ -9,12 +9,15 @@
   只能由 root 在独占窗口里跑。窗口是一次性资源，开窗前把「工具/构建源/落点/命令」四件事
   做成**一条机判的 GO/NO-GO**，避免再出现「开了窗口才发现构建源过旧、判据 PREREQ_RED」的烧窗。
 
-本工具**不重新实现任何判据**，只做三件事：
+本工具**不重新实现任何判据**，只做四件事：
   G1 **聚合 Rust 侧窗口前置门**：调片⑮ `check_rust_window_preflight.py`（R1..R5），解析 `RESULT:`。
      其中 R1/R2 直接点住「窗口脚本 `client-e2e-window.sh` 的 `repo=` 指向的检出是否含片⑪」——
      这是 2026-10-14 实测到的真缺陷（共享主检出停在 `ad0592b19`）。
   G2 **聚合判据工具自检**：证据目录 6 件判据脚本的 `--selftest` 必须全 `SELFTEST OK`（缺一件 ⇒ PREREQ）。
   G3（可选）**聚合 C# 侧抓包前置门**：调片⑭ `check_csharp_capture_preflight.py --shadow-config ...`。
+  J1（`--judge`）**聚合 ③b/③a 两趟窗口产物的五条 AOI 判据**（只消费既有 capture/log，不起栈）：
+     ③a 第二趟必须用**独立目录**（默认 `<work-dir>-a`）——`start_rust_stack.ps1` 每次起栈都会删掉
+     旧 `game-svr.out.log`（`Start-One` 的 `Remove-Item $out, $err`），共用一个目录会把 ③b 读数覆盖掉。
   另加一条**只读信息行**：`check_mongen_dense_points.py --rank` 的窗口内期望出生怪数排行（选点用）。
 
 `--plan` 把 ③a/③b 两侧对照的**全部命令**（Rust 起栈/代理/客户端/解码 + C# 侧 + 三条判据 + 收工）
@@ -29,6 +32,9 @@
   python -I -B window_handoff.py --plan --site 287,620 --site-none 291,666
   python -I -B window_handoff.py --plan --best-site        # ③b 由 MonGen 排行自动选最密点
   python -I -B window_handoff.py --plan-only --json
+  # 判据聚合（窗口跑完后；消费两趟产物，不起栈）
+  python -I -B window_handoff.py --judge --work-dir E:/tmp/window/cliente2e
+  python -I -B window_handoff.py --judge --work-dir <b> --pass-a-dir <a>
   python -I -B window_handoff.py --selftest
 
 退出码：`0` = GREEN/GO、`1` = RED/NO-GO（判据或工具不符）、`2` = PREREQ_RED（缺输入/解析不到）。
@@ -58,6 +64,11 @@ TOOL_SELFTESTS = (
     RUST_PREFLIGHT,
     CSHARP_PREFLIGHT,
 )
+
+# `--judge` 消费的三件判据脚本（③b/③a 两趟各跑服务端 / 客户端 / 两侧）。
+AOI_DIAG = "check_aoi_visibility_diag.py"
+CLIENT_FRAMES = "check_client_s2c_frames.py"
+PAIR_TOOL = "aoi_visibility_pair.py"
 
 _RESULT_RE = re.compile(r"^RESULT:\s*(GREEN|RED|PREREQ_RED)\b", re.MULTILINE)
 _SELFTEST_RE = re.compile(r"^SELFTEST\s+(OK|GREEN|FAILED|RED)\b", re.MULTILINE)
@@ -253,6 +264,74 @@ def last_line(text: str) -> str:
     return lines[-1] if lines else "<无输出>"
 
 
+# ---------------------------------------------------------------- J1 窗口判据聚合
+
+def pass_roots(work_dir: str, pass_a_dir: str = "") -> tuple[str, str, str, str]:
+    """返回 (③b 根, ③b/rust, ③b/csharp, ③a 根)；③a 根缺省 = ③b 根 + `-a`。
+
+    ③b 路径保持片⑰ 的 `<work-dir>/{rust,csharp}` 逐字节不变；③a 单独一棵，
+    免得 `start_rust_stack.ps1` 起栈时 `Remove-Item` 把 ③b 的 `game-svr.out.log` 覆盖掉。
+    """
+    w = work_dir.rstrip("/\\")
+    w_a = pass_a_dir.rstrip("/\\") if pass_a_dir else (w + "-a")
+    return w, f"{w}/rust", f"{w}/csharp", w_a
+
+
+def window_judge_items(work_dir: str, pass_a_dir: str = "", check_dir: str = HERE):
+    """五条窗口判据（只聚合既有脚本，不复制判据逻辑）：
+
+      ③b：服务端 `vis>=1` + 客户端 `pairs>=1` + 两侧 `visible`；
+      ③a：服务端 `vis==0 && af==0` + 两侧 `none`。
+    每项 = (名称, 判据脚本, argv, 必需证据件)。
+    """
+    _w, b_rust, b_csh, w_a = pass_roots(work_dir, pass_a_dir)
+    a_rust, a_csh = f"{w_a}/rust", f"{w_a}/csharp"
+    return [
+        ("③b 服务端 vis>=1", AOI_DIAG,
+         ["--log", f"{b_rust}/stack/game-svr.out.log", "--expect", "visible", "--min-vis", "1"],
+         [f"{b_rust}/stack/game-svr.out.log"]),
+        ("③b 客户端 pairs>=1", CLIENT_FRAMES,
+         ["--capture", f"{b_rust}/s2c/capture.jsonl", "--min-appearance-pairs", "1"],
+         [f"{b_rust}/s2c/capture.jsonl"]),
+        ("③b 两侧 visible", PAIR_TOOL,
+         ["--left", f"{b_rust}/s2c/capture.jsonl", "--right", f"{b_csh}/s2c/capture.jsonl",
+          "--expect", "visible", "--min-pairs", "1"],
+         [f"{b_rust}/s2c/capture.jsonl", f"{b_csh}/s2c/capture.jsonl"]),
+        ("③a 服务端 vis==0", AOI_DIAG,
+         ["--log", f"{a_rust}/stack/game-svr.out.log", "--expect", "none"],
+         [f"{a_rust}/stack/game-svr.out.log"]),
+        ("③a 两侧 none", PAIR_TOOL,
+         ["--left", f"{a_rust}/s2c/capture.jsonl", "--right", f"{a_csh}/s2c/capture.jsonl",
+          "--expect", "none"],
+         [f"{a_rust}/s2c/capture.jsonl", f"{a_csh}/s2c/capture.jsonl"]),
+    ]
+
+
+def run_window_judges(work_dir: str, pass_a_dir: str = "", check_dir: str = HERE) -> Report:
+    """跑五条窗口判据并聚合成一个 rc：0 全绿 / 1 有 RED / 2 有 PREREQ（缺证据/判不了）。
+
+    fail-closed：任何必需证据件缺失 ⇒ PREREQ（**绝不静默当绿**）；缺判据脚本同理。
+    """
+    rep = Report()
+    for name, tool, args, arts in window_judge_items(work_dir, pass_a_dir, check_dir):
+        missing = [p for p in arts if not os.path.isfile(p)]
+        if missing:
+            rep.prereq.append(f"{name}：缺窗口证据 {missing}")
+            continue
+        path = os.path.join(check_dir, tool)
+        if not os.path.isfile(path):
+            rep.prereq.append(f"{name}：缺判据脚本 {path}")
+            continue
+        rc, out = run_tool(path, args, timeout=180)
+        if rc == 0:
+            rep.info.append(f"OK   {name}（{last_line(out)}）")
+        elif rc == 2:
+            rep.prereq.append(f"{name} PREREQ：判不了（末行={last_line(out)}）")
+        else:
+            rep.problems.append(f"{name} RED（末行={last_line(out)}）")
+    return rep
+
+
 # ---------------------------------------------------------------- 计划文本
 
 def plan_text(
@@ -267,10 +346,11 @@ def plan_text(
     view_range: int,
     stale: bool,
     site_note: str = "",
+    pass_a_dir: str = "",
 ) -> str:
-    w = work_dir.rstrip("/\\")
-    rust = f"{w}/rust"
-    csh = f"{w}/csharp"
+    w, rust, csh, w_a = pass_roots(work_dir, pass_a_dir)
+    rust_a = f"{w_a}/rust"
+    csh_a = f"{w_a}/csharp"
     bin_dir = f"{target_dir.rstrip('/\\')}/debug"
     tgt_win = target_dir.rstrip("/\\").replace("/", chr(92))
     lines: list[str] = []
@@ -301,39 +381,47 @@ def plan_text(
     A(f"#   mysql> UPDATE characters SET x={site.split(',')[0]}, y={site.split(',')[1]} WHERE chrname='aaa';  -- ③b 有怪")
     A(f"#   mysql> UPDATE characters SET x={site_none.split(',')[0]}, y={site_none.split(',')[1]} WHERE chrname='aaa';  -- ③a 反向")
     A("")
-    A("# 2) Rust 侧")
-    A(f"#   powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 ^")
-    A(f"#     -RustBinDir {bin_dir} -Seed {seed} -LogDir {rust}/stack")
-    A(f"#   python tools/capture/mir2_proxy.py --out {rust}/proxy --map 7200=127.0.0.1:7600")
-    A(f"#   powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 ^")
-    A(f"#     -Account mir2test -Password mir2pass -OutDir {rust}/shots -WalkClicks 0 -AutoPlaySec 12 ^")
-    A(f"#     -SkipReenter -SkipLogout -SkipTalk")
-    A(f"#   powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 ^")
-    A(f"#     -ProxyDir {rust}/proxy -OutDir {rust}/s2c")
+    A("# 2) ③b 两侧跑（有怪点；两侧不同时起 —— 端口互斥）")
+    A("#   [③b] Rust：")
+    A(f"#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 ^")
+    A(f"#       -RustBinDir {bin_dir} -Seed {seed} -LogDir {rust}/stack")
+    A(f"#     python tools/capture/mir2_proxy.py --out {rust}/proxy --map 7200=127.0.0.1:7600")
+    A(f"#     powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 ^")
+    A(f"#       -Account mir2test -Password mir2pass -OutDir {rust}/shots -WalkClicks 0 -AutoPlaySec 12 ^")
+    A(f"#       -SkipReenter -SkipLogout -SkipTalk")
+    A(f"#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 ^")
+    A(f"#       -ProxyDir {rust}/proxy -OutDir {rust}/s2c")
+    A(f"#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop")
+    A("#   [③b] C#（先读 85-csharp-capture-topology-rootcause.md；同一条 capture 管线）：")
+    A(f"#     python -I -B {CSHARP_PREFLIGHT} --repo {repo or '<检出>'} --mirserver {mirserver} ^")
+    A(f"#       --shadow-config <影子 RunGate/config.conf>        # 必须 GREEN 再起栈")
+    A(f"#     powershell -ExecutionPolicy Bypass -File {mirserver}/start-all.ps1")
+    A(f"#     # 影子 game-gate(7600) + 代理占 7200；再到 C# 侧客户端与解码：")
+    A(f"#     python tools/capture/mir2_proxy.py --out {csh}/proxy --map 7200=127.0.0.1:7600")
+    A(f"#     powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 -Account mir2test ^")
+    A(f"#       -Password mir2pass -OutDir {csh}/shots -WalkClicks 0 -AutoPlaySec 12 -SkipReenter -SkipLogout -SkipTalk")
+    A(f"#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 ^")
+    A(f"#       -ProxyDir {csh}/proxy -OutDir {csh}/s2c")
+    A(f"#     powershell -ExecutionPolicy Bypass -File {mirserver}/stop-all.ps1   # 收 C# 栈（或等价 -Stop）")
     A("")
-    A("# 3) C# 侧（先读 85-csharp-capture-topology-rootcause.md；同一条 capture 管线，与阵营无关）")
-    A(f"#   python -I -B {CSHARP_PREFLIGHT} --repo {repo or '<检出>'} --mirserver {mirserver} ^")
-    A(f"#     --shadow-config <影子 RunGate/config.conf>        # 必须 GREEN 再起栈")
-    A(f"#   powershell -ExecutionPolicy Bypass -File {mirserver}/start-all.ps1   # C# 栈")
-    A(f"#   # 影子 game-gate(7600) + 代理占 7200，同 §2；再到 C# 侧客户端与解码：")
-    A(f"#   powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 -Account mir2test ^")
-    A(f"#     -Password mir2pass -OutDir {csh}/shots -WalkClicks 0 -AutoPlaySec 12 -SkipReenter -SkipLogout -SkipTalk")
-    A(f"#   powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 ^")
-    A(f"#     -ProxyDir {csh}/proxy -OutDir {csh}/s2c")
-    A("")
-    A("# 4) 判据（本目录）")
+    A(f"# 3) ③b 判据（一键：python -I -B window_handoff.py --judge --work-dir {w}）")
     A(f"#   服务端（Rust，新读数 vr/new/af）：python -I -B check_aoi_visibility_diag.py \\")
     A(f"#     --log {rust}/stack/game-svr.out.log --expect visible --min-vis 1")
     A(f"#   客户端（Rust）：python -I -B check_client_s2c_frames.py \\")
     A(f"#     --capture {rust}/s2c/capture.jsonl --min-appearance-pairs 1")
     A(f"#   ③b 两侧：python -I -B aoi_visibility_pair.py --left {rust}/s2c/capture.jsonl \\")
     A(f"#     --right {csh}/s2c/capture.jsonl --expect visible --min-pairs 1")
-    A(f"#   ③a 反向（服务端）：python -I -B check_aoi_visibility_diag.py \\")
-    A(f"#     --log {rust}/stack/game-svr.out.log --expect none")
-    A(f"#   ③a 反向（两侧）：python -I -B aoi_visibility_pair.py --left {rust}/s2c/capture.jsonl \\")
-    A(f"#     --right {csh}/s2c/capture.jsonl --expect none")
-    A(f"#   （③a 是第二趟：把 §1 的 aaa 改到 site_none={site_none} 重跑 §2/§3，再跑上面两条 --expect none；")
-    A(f"#    两侧都必须 0 对出现帧 + 服务端 vis==0 且 af==0）")
+    A("")
+    A(f"# 4) ③a 反向第二趟：把 §1 的 aaa 改到 site_none={site_none} 后重跑 §2，**独立目录**")
+    A(f"#    （③a 根 = {w_a}；start_rust_stack.ps1 每次起栈删旧 game-svr.out.log ⇒ 不独立就覆盖 ③b 读数）")
+    A(f"#    ③a Rust：§2 的 [③b] Rust 命令，把 -LogDir/--out/-OutDir 的 {rust} 换成 {rust_a}")
+    A(f"#    ③a C#  ：§2 的 [③b] C# 命令，把 --out/-OutDir 的 {csh} 换成 {csh_a}")
+    A(f"#   判据（一键：python -I -B window_handoff.py --judge --work-dir {w} --pass-a-dir {w_a}）")
+    A(f"#   服务端：python -I -B check_aoi_visibility_diag.py \\")
+    A(f"#     --log {rust_a}/stack/game-svr.out.log --expect none")
+    A(f"#   ③a 两侧：python -I -B aoi_visibility_pair.py --left {rust_a}/s2c/capture.jsonl \\")
+    A(f"#     --right {csh_a}/s2c/capture.jsonl --expect none")
+    A(f"#   （③a 两侧都必须 0 对出现帧 + 服务端 vis==0 且 af==0）")
     A("")
     A("# 5) 收工：start_rust_stack.ps1 -Stop / C# -Stop；还原 aaa；实拍十端口；SHA256SUMS 按 LF/git-blob 口径")
     A("")
@@ -363,6 +451,32 @@ def _write_fake_tools(tmp: str, rust_result: str, bad_selftest: str = "") -> Non
         rc = 1 if state == "FAILED" else 0
         with open(os.path.join(tmp, tool), "w", encoding="utf-8") as fh:
             fh.write(f"import sys\nprint('SELFTEST {state} (1/1)')\nsys.exit({rc})\n")
+
+
+def _write_fake_judges(check_dir: str, rc_map: dict | None = None) -> None:
+    """造三件假判据脚本：按 `_rc/<tool>.rc` 里的 rc 退出（缺文件 ⇒ 0）。"""
+    os.makedirs(check_dir, exist_ok=True)
+    rc_dir = os.path.join(check_dir, "_rc")
+    os.makedirs(rc_dir, exist_ok=True)
+    for tool in (AOI_DIAG, CLIENT_FRAMES, PAIR_TOOL):
+        with open(os.path.join(check_dir, tool), "w", encoding="utf-8") as fh:
+            fh.write(
+                "import os, sys\n"
+                "d = os.path.join(os.path.dirname(os.path.abspath(__file__)), '_rc')\n"
+                f"f = os.path.join(d, {tool!r} + '.rc')\n"
+                "sys.exit(int(open(f).read().strip()) if os.path.isfile(f) else 0)\n"
+            )
+    for tool, rc in (rc_map or {}).items():
+        with open(os.path.join(rc_dir, tool + ".rc"), "w", encoding="utf-8") as fh:
+            fh.write(f"{rc}\n")
+
+
+def _write_fake_artifacts(root: str) -> None:
+    for rel in ("rust/stack/game-svr.out.log", "rust/s2c/capture.jsonl", "csharp/s2c/capture.jsonl"):
+        path = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("x\n")
 
 
 def selftest() -> int:
@@ -438,6 +552,17 @@ def selftest() -> int:
         chk("plan-has-pipeline",
             all(s in fresh_plan for s in ("start_rust_stack.ps1", "mir2_proxy.py", "export_s2c.ps1",
                                           "mir_flow.ps1")))
+        # J1：③a 第二趟必须独立目录（否则 `start_rust_stack.ps1` 删旧 log 会覆盖 ③b 读数）。
+        chk("plan-pass-a-separate-dirs",
+            "E:/tmp/w-a/rust" in fresh_plan and "E:/tmp/w-a/csharp" in fresh_plan
+            and "E:/tmp/w/rust" in fresh_plan and "E:/tmp/w/csharp" in fresh_plan)
+        chk("plan-pass-a-judge-args",
+            "--log E:/tmp/w-a/rust/stack/game-svr.out.log" in fresh_plan
+            and "--right E:/tmp/w-a/csharp/s2c/capture.jsonl" in fresh_plan
+            and "--left E:/tmp/w/rust/s2c/capture.jsonl" in fresh_plan)
+        chk("plan-judge-command",
+            "--judge" in fresh_plan and "--pass-a-dir E:/tmp/w-a" in fresh_plan)
+        chk("plan-pass-a-not-overwritten-note", "覆盖 ③b 读数" in fresh_plan)
 
     with tempfile.TemporaryDirectory(prefix="wh-badtool-") as tmp:
         _write_fake_tools(tmp, "GREEN", bad_selftest="aoi_visibility_pair.py")
@@ -470,6 +595,40 @@ def selftest() -> int:
                          with_csharp=False, rank=0, view_range=12, map_name="0")
         chk("agg-norepo-prereq", rep.rc() == 2 and any("--repo" in p for p in rep.prereq), str(rep.rc()))
 
+    # --- J1 窗口判据聚合（--judge）：五条判据消费 ③b/③a 两趟产物 ---
+    with tempfile.TemporaryDirectory(prefix="wh-judge-") as tmp:
+        cdir = os.path.join(tmp, "check")
+        work = os.path.join(tmp, "work")
+        _write_fake_judges(cdir)
+        _write_fake_artifacts(work)
+        _write_fake_artifacts(work + "-a")  # ③a 缺省根 = <work-dir>-a
+        rep = run_window_judges(work, "", cdir)
+        chk("judge-allgreen-rc0", rep.rc() == 0, str(rep.rc()))
+        chk("judge-five-items", len(rep.info) == 5, str(len(rep.info)))
+
+    with tempfile.TemporaryDirectory(prefix="wh-judge-red-") as tmp:
+        cdir = os.path.join(tmp, "check")
+        work = os.path.join(tmp, "work")
+        _write_fake_judges(cdir, {AOI_DIAG: 1})
+        _write_fake_artifacts(work)
+        _write_fake_artifacts(work + "-a")
+        rep = run_window_judges(work, "", cdir)
+        chk("judge-red-rc1", rep.rc() == 1, str(rep.rc()))
+        chk("judge-red-two", len(rep.problems) == 2 and len(rep.info) == 3,
+            f"{len(rep.problems)}/{len(rep.info)}")
+
+    with tempfile.TemporaryDirectory(prefix="wh-judge-missing-") as tmp:
+        cdir = os.path.join(tmp, "check")
+        work = os.path.join(tmp, "work")
+        _write_fake_judges(cdir)
+        _write_fake_artifacts(work)
+        _write_fake_artifacts(work + "-a")
+        os.remove(os.path.join(work, "csharp", "s2c", "capture.jsonl"))
+        rep = run_window_judges(work, "", cdir)
+        chk("judge-missing-prereq-rc2", rep.rc() == 2, str(rep.rc()))
+        chk("judge-missing-names-pair",
+            any("③b 两侧" in p for p in rep.prereq), "; ".join(rep.prereq))
+
     print(f"SELFTEST {'OK' if ok == total else 'FAILED'} ({ok}/{total})")
     return 0 if ok == total else 1
 
@@ -495,6 +654,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="③b site 由 MonGen 排行自动选取（--best-point；root ③①「换怪密点」）")
     ap.add_argument("--site-none", default="291,666", help="③a 反向点 x,y（默认 291,666，E=0.000）")
     ap.add_argument("--work-dir", default="E:/tmp/window/cliente2e", help="窗口工作目录")
+    ap.add_argument("--pass-a-dir", default="", help="③a 第二趟证据根（默认 = <work-dir>-a）")
+    ap.add_argument("--judge", action="store_true",
+                    help="聚合 ③b/③a 两趟窗口产物的五条 AOI 判据（消费既有 capture/log，不起栈）")
     ap.add_argument("--target-dir", default="E:/tmp/m2svr-window-target",
                     help="CARGO_TARGET_DIR（RustBinDir = <target-dir>/debug）")
     ap.add_argument("--seed", default="42", help="MIR2_RNG_SEED（两侧同种子）")
@@ -504,6 +666,30 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.selftest:
         return selftest()
+
+    if args.judge:
+        rep = run_window_judges(args.work_dir, args.pass_a_dir, args.check_dir)
+        for line in rep.info:
+            print(line)
+        for line in rep.problems:
+            print("RED " + line)
+        for line in rep.prereq:
+            print("PREREQ " + line)
+        rc = rep.rc()
+        label = "GREEN" if rc == 0 else ("PREREQ_RED" if rc == 2 else "RED")
+        if args.json:
+            print(json.dumps({
+                "aoi_gap3": label,
+                "rc": rc,
+                "work_dir": args.work_dir,
+                "pass_a_dir": args.pass_a_dir or (args.work_dir.rstrip("/\\") + "-a"),
+                "problems": rep.problems,
+                "prereq": rep.prereq,
+                "info": rep.info,
+            }, ensure_ascii=False))
+        else:
+            print(f"AOI_GAP3={label}")
+        return rc
 
     site = args.site
     site_note = ""
@@ -516,7 +702,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.plan_only:
         print(plan_text(args.repo, args.ref, args.mirserver, site, args.site_none,
                         args.work_dir, args.target_dir, args.seed, args.view_range,
-                        stale=False, site_note=site_note))
+                        stale=False, site_note=site_note, pass_a_dir=args.pass_a_dir))
         return 0
 
     rep = run_checks(args.check_dir, args.repo, args.ref, args.mirserver,
@@ -535,7 +721,7 @@ def main(argv: list[str] | None = None) -> int:
         print("")
         print(plan_text(args.repo, args.ref, args.mirserver, site, args.site_none,
                         args.work_dir, args.target_dir, args.seed, args.view_range,
-                        stale=rep.build_source_stale, site_note=site_note))
+                        stale=rep.build_source_stale, site_note=site_note, pass_a_dir=args.pass_a_dir))
     if args.json:
         print(json.dumps({
             "window_ready": ready,
