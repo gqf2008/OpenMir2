@@ -136,6 +136,27 @@ namespace BotSrv
         public int ShopCount { get; set; } = 1;
 
         /// <summary>
+        /// M3⑨ 英雄/宠物（宝宝/下属 slave）真机对拍夹具（卡 openmir2-m3-hero-pet-fixture-botsrv；白名单 T-45 家族扩展）。
+        /// 默认 false = 原行为（不新增任何发送）。置 true 时，**两个**假人（主人 / peer）按
+        /// `HeroPetSteps` 给出的固定步骤串（`role|op|param;...`）发召唤/挥击动作（role=a 只由主人、
+        /// b 只由 peer、x 由两者）；逐 step 落 `M3HEROPETSEQ {json}` 标记（send/frame/end，含 bot 字段）。
+        /// 只作夹具驱动、只写本假人自己的 socket；默认关时 BotSrv 行为逐字节不变。
+        /// </summary>
+        public bool HeroPetSequence { get; set; }
+        /// <summary>仅 HeroPetSequence=true 时生效：每步间隔（ms）。默认 1000。</summary>
+        public int HeroPetStepMs { get; set; } = 1000;
+        /// <summary>仅 HeroPetSequence=true 时生效：进世界到第一步的额外等待（ms）。默认 3000。</summary>
+        public int HeroPetStartDelayMs { get; set; } = 3000;
+        /// <summary>
+        /// 仅 HeroPetSequence=true 时生效：分号分隔的步骤串，每步 = `role|op|param`。
+        /// role：a=主人（本批的 HeroPetMasterRole 序号）/ b=peer（HeroPetPeerRole 序号）/ x=两者。
+        /// op：summon（param=技能号 17/20/30/41/46）/ attack（param=方向）/ observe / wait（param=ms）/ softclose。
+        /// </summary>
+        public string HeroPetSteps { get; set; } = "";
+        /// <summary>仅 HeroPetSequence=true 时生效：主人的账号序号（默认 0）。</summary>
+        public int HeroPetMasterRole { get; set; } = 0;
+        /// <summary>仅 HeroPetSequence=true 时生效：peer 的账号序号（默认 1）。</summary>
+        public int HeroPetPeerRole { get; set; } = 1;
         /// M3⑥ 真机对拍夹具（卡 openmir2-m3-quest-fixture-botsrv；白名单 T-41 家族扩展）。
         /// 默认 false = 原行为（不新增任何发送）。置 true 时，本假人在收到自己的 SM_LOGON 后按
         /// `QuestSteps` 给出的固定步骤串「点任务 NPC / 选标签 / 核对说词」，逐 step 落

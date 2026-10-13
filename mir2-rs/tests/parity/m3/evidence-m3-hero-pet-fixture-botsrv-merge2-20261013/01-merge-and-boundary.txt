@@ -1,0 +1,21 @@
+# M3⑨-5 英雄/宠物夹具：解 whitelist.md 冲突重交（merge master 67e9f6c3e）
+# base = 67e9f6c3e097da834ef5769eff1c5415e97bb458
+# head = 7b999382aeeb3145b8e06b717a87e1de360ac3fb
+# branch = worktree-m3-hero-pet-fixture-botsrv（旧 head ca640e32 被本次 merge 提交取代）
+
+## 冲突与解
+git merge origin/master（唯一冲突 = mir2-rs/tests/parity/whitelist.md：master 侧 T-47 段与本片 T-45 段同插入位）
+解 = 并集：T-47 段（master）在前、T-45 段（本片）在后；无手工改内容。
+
+## 边界：git diff --name-only origin/master HEAD -- src sql MirClient
+src/BotSrv/AppService.cs
+src/BotSrv/HeroPetSeqSelfCheck.cs
+src/BotSrv/MShare.cs
+src/BotSrv/Player/RobotPlayer.Operate.cs
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/Program.cs
+src/BotSrv/RobotOptions.cs
+(仅 src/BotSrv/** ⇒ T-45 登记例外；sql/MirClient 空)
+
+## 边界：git diff --name-only origin/master HEAD -- mir2-rs/crates mir2-rs/bins mir2-rs/protocol
+(空)
