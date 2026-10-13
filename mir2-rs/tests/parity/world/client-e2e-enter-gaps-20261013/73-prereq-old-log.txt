@@ -1,0 +1,8 @@
+== 老日志 fail-closed（版式门）==
+命令: python -I mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_aoi_visibility_diag.py --log E:/tmp/m2svr-run3/game-svr-AFTER.log --expect visible --min-vis 1
+INFO 进世界 aaa CurMap=0 (287,620)
+PREREQ_RED ① 没有解析到任何带 `vr=/new=/af=` 的 AOI 采样 —— 多半是老二进制/老日志（老格式没有这三个字段）。请用本片之后的 game-svr 重跑。
+RESULT: PREREQ_RED
+RC=2
+
+（老格式没有 vr=/new=/af= ⇒ 必须 PREREQ_RED，不许被当成 vis=0 的『无怪』结论通过）

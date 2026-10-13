@@ -1,0 +1,38 @@
+== 红检：把 vis 的过滤从『target != self && flag != Hidden（当前可见集）』改回『flag == Show（本轮新增）』 ==
+改点: bins/game-svr/src/main.rs world_aoi_diag 的 vis 过滤
+命令: cargo test -p game-svr --offline --bin game-svr world_aoi_diag
+
+-- 改后（作废的 vis 语义）--
+
+running 2 tests
+test tests::world_aoi_diag_reports_visible_and_nearest ... ok
+test tests::world_aoi_diag_vis_is_current_view_not_new_appearances ... FAILED
+
+failures:
+
+---- tests::world_aoi_diag_vis_is_current_view_not_new_appearances stdout ----
+
+thread 'tests::world_aoi_diag_vis_is_current_view_not_new_appearances' (34992) panicked at bins\game-svr\src\main.rs:8627:9:
+assertion `left == right` failed: 当前可见集 = 只算**其它**对象（排除自身）：SessionAoiDiag { chr_name: "p", actor_id: 1, map_id: 0, view_range: 12, vis: 2, new: 1, frames: 2, same_map: 1, nearest: 2 }
+  left: 2
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::world_aoi_diag_vis_is_current_view_not_new_appearances
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 204 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+
+-- 还原后 --
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.41s
+     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-d40510517c77a420.exe)
+
+running 2 tests
+test tests::world_aoi_diag_reports_visible_and_nearest ... ok
+test tests::world_aoi_diag_vis_is_current_view_not_new_appearances ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 204 filtered out; finished in 0.00s
+

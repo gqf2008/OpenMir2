@@ -1,0 +1,30 @@
+== 命令: python -I mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_aoi_visibility_diag.py --selftest ==
+[PASS] selftest none-green: rc=0 (want 0)
+        INFO 采样 aaa(7) map=26 vr=12 vis=0 new=0 af=0 same_map=1726 nearest=23 ⇒ nearest>vr（窗口外）；vis==0 与窗口自洽
+        OK  ② --expect none：1 条采样 vis==0 且 af==0（该点窗口内无怪）
+[PASS] selftest none-red-seen: rc=1 (want 1)
+        INFO 采样 aaa(7) map=26 vr=12 vis=13 new=13 af=26 same_map=1726 nearest=2 ⇒ nearest<=vr（窗口内）；vis==0 与窗口自洽
+        RED ② --expect none 但有采样 vis != 0（1 条，max=13）
+[PASS] selftest none-red-af: rc=1 (want 1)
+        INFO 采样 aaa(7) map=26 vr=12 vis=0 new=0 af=2 same_map=1726 nearest=23 ⇒ nearest>vr（窗口外）；vis==0 与窗口自洽
+        RED ② --expect none 且所有采样 vis==0，但累计出现帧 af=2>0 ⇒ 该会话曾看见过怪（判据要求「从未看见」）；检查采样窗口/坐标
+[PASS] selftest visible-green: rc=0 (want 0)
+        INFO 采样 aaa(7) map=26 vr=12 vis=13 new=13 af=26 same_map=1726 nearest=2 ⇒ nearest<=vr（窗口内）；vis==0 与窗口自洽
+        OK  ③ --expect visible：max vis=13 >= 1，max af=26 >= 2
+[PASS] selftest visible-red-empty: rc=1 (want 1)
+        INFO 采样 aaa(7) map=26 vr=12 vis=0 new=0 af=0 same_map=1726 nearest=23 ⇒ nearest>vr（窗口外）；vis==0 与窗口自洽
+        RED ③ --expect visible：max vis=0 < --min-vis 1
+[PASS] selftest visible-red-no-frames: rc=1 (want 1)
+        INFO 采样 aaa(7) map=26 vr=12 vis=3 new=0 af=0 same_map=1726 nearest=4 ⇒ nearest<=vr（窗口内）；vis==0 与窗口自洽
+        RED ③ --expect visible：vis 达标但 af=0 < 2 ⇒ 没有实发出现帧对（SM_TURN+SM_FEATURECHANGED）
+[PASS] selftest prereq-old-format: rc=2 (want 2)
+        PREREQ_RED ① 没有解析到任何带 `vr=/new=/af=` 的 AOI 采样 —— 多半是老二进制/老日志（老格式没有这三个字段）。请用本片之后的 game-svr 重跑。
+[PASS] selftest inconsistent-new-gt-vis: rc=1 (want 1)
+        INFO 采样 aaa(7) map=26 vr=12 vis=1 new=3 af=3 same_map=1726 nearest=4 ⇒ nearest<=vr（窗口内）；vis==0 与窗口自洽
+        RED ④ 采样内部不一致（new<=vis、vis<=same_map+1 必须成立）：[{'name': 'aaa', 'actor_id': 7, 'map': 26, 'vr': 12, 'vis': 1, 'new': 3, 'af': 3, 'same_map': 1726, 'nearest': 4}]
+        INFO 仅报告：samples=1 max_vis=1 max_af=3
+[PASS] selftest report-green: rc=0 (want 0)
+        INFO 采样 aaa(7) map=26 vr=12 vis=5 new=0 af=10 same_map=1726 nearest=4 ⇒ nearest<=vr（窗口内）；vis==0 与窗口自洽
+        INFO 仅报告：samples=1 max_vis=5 max_af=10
+SELFTEST OK (9/9)
+RC=0

@@ -1,0 +1,106 @@
+70-aoi-visibility-verdict.txt —— 卡 `openmir2-client-e2e-enter-gaps` 缺口②「同屏没怪」判定与闭环
+（m2-svr / openmir2-worker-11，2026-10-14；回应 brief-m2svr-next 顶部 root 2026-10-14 00:4x）
+====================================================================================================
+一句话结论：**③「该点确实无怪」成立**（真机坐标 (291,666) 在 map 0 的**所有** `MonGen.txt`
+生成框之外，最近框 Chebyshev = 30 > `ViewRange` 12）；**④「AOI 可见集未算/未下发」不成立**。
+root 看到的 `vis=0 11/11 全 0` 是**旧诊断字段的语义错**：`vis` 数的是 `VisibleFlag.Show`
+（＝**本轮新增**），不是「当前可见集」（`Show|Invisible`，且**不含自身**）。本片修该读数 + 增补 `vr=/new=/af=`
+（`af` = 实发出现帧数）⇒ 后续窗口不再会被这条读数误伤。
+
+A. 根因：`vis` 计数的是「Show（新增）」，不是「可见集」（oracle 锚点逐条）
+====================================================================================================
+[A1] `src/M2Server/Actor/BaseObject.ViewRange.cs:12-40` `UpdateVisibleGay`：
+       - `:25` 对象**已在** `VisibleActors` ⇒ `VisibleFlag = VisibleFlag.Invisible; return;`
+       - `:36` 对象**不在** ⇒ `new VisibleBaseObject { VisibleFlag = VisibleFlag.Show, ... }` 追加。
+     ⇒ `Show` = 本轮**首次看见**；`Invisible` = 已存在且**本轮又看见**（仍是「可见」，不是「不可见」）。
+     Rust 同构：`mir2-rs/crates/world/src/aoi.rs:28-49`（`:39-43` 置 `Invisible`、`:45-48` push `Show`），
+     枚举 `mir2-rs/crates/world/src/entity.rs:42-49`（`Hidden=0 / Invisible=1 / Show=2`）。
+[A2] 旧诊断 `world_aoi_diag` 用 `.filter(|v| v.flag == VisibleFlag::Show).count()` 当 `vis`
+     ⇒ **停留 >1 tick 的怪不计入**（它们已被 `:25` 改标 `Invisible`）；采样周期又是 50 tick
+     ⇒ 真机周期行里的 `vis` 几乎恒为「本轮没新怪」= 0，与视野里有没有怪**无关**。
+[A3] 出现帧只对 `Show` 发（oracle `PlayObject.cs:3222-3240` 的 `VisibleFlag.Show` 支
+     ⇒ `SendMsg(RM_TURN, …)`；Rust `drain_aoi_downlink` 同支）⇒ 这条产线本身是对的，
+     错的是**诊断读数**。
+[A4] 对照：本仓 `README.md` 结论② / `56-before-after-viewrange-realrun.txt` 早就用**客户端侧**帧
+     （`SM_TURN(10)+SM_FEATURECHANGED(41)` 配对）否证了「无怪」；本片把**服务端侧**读数对齐到同一语义。
+
+B. 证据①：同一份真机日志，旧 `vis=0` 与客户端实收 13 对出现帧并存（旧读数是伪的）
+====================================================================================================
+来源：`E:/tmp/m2svr-run3/game-svr-AFTER.log`（片⑦ view_range=12 AFTER run，原样未修旧二进制）
+  13:57:44.023 `进世界 ChrName:aaa CurMap:0 (287,620) Dir:4 entity=586`
+  sim: tick #250 clock=50000ms  ... [aaa(586) map=26 vis=0 same_map=456 nearest=2]
+  sim: tick #300 clock=60000ms  ... [aaa(586) map=26 vis=0 same_map=1056 nearest=4]
+  sim: tick #350 clock=70000ms  ... [aaa(586) map=26 vis=0 same_map=1466 nearest=9]
+  sim: tick #400 clock=80000ms  ... [aaa(586) map=26 vis=0 same_map=1726 nearest=9]
+  sim: tick #450 clock=90000ms  ... [aaa(586) map=26 vis=0 same_map=1726 nearest=9]
+  ⇒ `nearest=2..9` **全都 ≤ vr(12)**，而旧 `vis` 全 0。若「可见集」真是 0，同 tick 不可能发出出现帧。
+客户端侧（同一交付件的 s2c 真机抓包，已在检出内）：
+  `python -I check_client_s2c_frames.py --capture capture-client-viewrange12-seed42.jsonl \
+        --expect-52-body-len 40 --min-appearance-pairs 1`
+  ⇒ `appearance_pairs=13`（13 个 actor 的 `10 SM_TURN + 41 SM_FEATURECHANGED` 配对），RESULT: GREEN。
+  ⇒ 结论：AOI **算了也发了**；旧 `vis=0` 是诊断口径错。见 `72-redcheck-vis-metric.txt`（改回旧语义 ⇒ 用例必红）。
+
+C. 证据②：root verify1 的 (291,666) 在 map 0 所有生成框之外（「该点确实无怪」的离线判据）
+====================================================================================================
+来源 `E:/MirServer/M2GameSvr/Envir/MonGen.txt`（GBK，2828 行；map="0" 53 行），命令与输出见
+`71-mongen-dense-points-map0.txt`：
+  坐标                       框内/框外   到最近生成框 Chebyshev
+  (291,666) root verify1      框外        30（gen 211,629 鹿/稻草人 range=50）
+  (291,651) 复进（跑完）       框外        29（gen 256,572 range=50）
+  (287,620) 片⑦ AFTER        框内         0（gen 256,572 range=50）
+  (256,572) README 已证密集点   框内         0
+  (188,439) 最大框中心         框内         0（range=120）
+  ⇒ root verify1 的位置**不在任何生成框内**；生成框是怪的**出生**范围，故该点 `ViewRange=12`
+    窗口内原本无怪可出生；真机读数 `nearest=23..34`（>12）与此自洽（那 23..34 是**游走**过来/远处的怪，
+    `nearest` 由 `world.entities` 实算、与 `visible_actors` 独立）。
+  ⇒ 判定 **③**：客户端在该点同屏无怪 = 正确行为，不是缺陷。
+  ⇒ 反证 **④**：同图 (287,620)（框内、同一 vr=12）客户端收到 13 对出现帧 ⇒ AOI 可见集**有算有下发**。
+
+D. 本片改动（只读诊断；不改任何模拟/出帧/取数语义）
+====================================================================================================
+`mir2-rs/bins/game-svr/src/main.rs`：
+  1. `SessionAoiDiag` 新增 `view_range`/`new`/`frames`，并把 `vis` 改为
+     `target != self && != VisibleFlag.Hidden`（= 当前可见集 `Show|Invisible`，**不含自身**）；
+  2. `drain_aoi_downlink` 返回本调用**每会话实发的帧数** `Vec<(String, usize)>`；
+     `drain_run_downlinks` 透传；sim 循环按 `chr_name` 累加成 `af`（避免实体槽位 LIFO 复用串号）；
+  3. 周期行格式（可机判）：
+     `... [aaa(22017) map=26 vr=12 vis=13 new=0 af=26 same_map=1726 nearest=2]`
+     字段：`vr`=view_range、`vis`=当前可见集（不含自身）、`new`=本轮新增（不含自身）、`af`=累计实发出现帧。
+     例：root verify1 位置若用新读数应为 `vr=12 vis=0 new=0 af=0 ... nearest=23`（自身不计）。
+  4. 新用例 `world_aoi_diag_vis_is_current_view_not_new_appearances`（tick1 `new>=1`/实发 2 帧；
+     tick2 `new==0` 但 `vis>=1` 且不重复发帧）。红检见 `72-redcheck-vis-metric.txt`。
+  判据脚本：`check_aoi_visibility_diag.py`（`--expect none|visible --min-vis N`；老版式 ⇒ `PREREQ_RED`）
+  自检 9/9（`76-selftest-aoi-checker.txt`）；对老日志 fail-closed 见 `73-prereq-old-log.txt`。
+
+E. 两侧对照 recipe（同一位置、同一 `viewrange`）—— 给 root 窗口用
+====================================================================================================
+「两侧同位置同窗口」= 两侧都从同一 `mir2_db.characters.aaa`(map 0, x, y) 进世界，客户端同一 `MirClinet.exe`：
+  1. 站位：数据库把 `aaa` 置到**框内**点（已证可用：`(287,620)` 或 `(256,572)`；也可 `(188,439)`）。
+  2. Rust 侧：`start_rust_stack.ps1`（+ 客户端经 7200 抓包）⇒
+     - 服务端判据（本片新增读数）：`python -I check_aoi_visibility_diag.py --log <game-svr.out.log>
+       --expect visible --min-vis 1` ⇒ 期望 `vis>=1` 且 `af>=2`；
+     - 客户端判据（既有）：`check_client_s2c_frames.py --min-appearance-pairs 1` ⇒ 期望 `appearance_pairs>=1`。
+  3. C# 侧（oracle）：同一坐标起 C# 栈 + 同一客户端 ⇒ 同一 `check_client_s2c_frames.py` 数
+     `10 SM_TURN + 41 SM_FEATURECHANGED` 配对数；**两侧配对数按同 actor 集合逐项比**（同一张图同一起点，
+     怪的 ActorId 相同 ⇒ 可直接对集合）。
+  4. 反向对照（「该点确实无怪」）：把 `aaa` 置回 `(291,666)` 两侧各跑一次 ⇒ 两侧都应为 0 对；
+     Rust 服务端判据用 `--expect none`（要求 `vis==0` **且** `af==0`）。
+  5. 改坏必红：删掉 `e.view_range = 12;`（退回缺省 5）⇒ 框内点 `6..12` 环带的怪不再出现，
+     `--min-vis 1` 仍可能绿（近怪在 5 内）⇒ 需 `56-…` 那份 before/after（2↔13 对）与构造级
+     `player_aoi_window_covers_view_range_12` 一起看；本片红检另钉 `vis` 语义（`72-…`）。
+
+F. 未做 / 登记（不静默）
+====================================================================================================
+  * **真机「after」读数**（新二进制在 (287,620) 的 `vis/af`）+ **C# 两侧同框对照** 需窗口 ⇒ 归 root
+    排期（本片只准备判据/工具，未起栈、未占端口）。
+  * `RM_DISAPPEAR`（`PlayObject.cs:3211-3219`，`VisibleFlag.Hidden` 支）Rust 侧**无编码器**：
+     `mir2-rs/bins/game-svr/src/downlink.rs:25` 已登记（怪离开视野时客户端不会收到消失帧）。
+     与缺口②无因果关系（不产生假「无怪」），不在本片修；登记留给帧面卡。
+  * 怪物侧 `ViewRange` 子类覆盖（`30-oracle-anchors-viewrange.txt` §D）仍未登记实现，同前片。
+
+G. 涉及文件
+====================================================================================================
+  代码: `mir2-rs/bins/game-svr/src/main.rs`
+  工具: `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_aoi_visibility_diag.py`
+  证据: 本文件 + `71-mongen-dense-points-map0.txt` + `72-redcheck-vis-metric.txt` +
+        `73-prereq-old-log.txt` + `76-selftest-aoi-checker.txt` + `74-gates.txt` + `75-boundary.txt`
