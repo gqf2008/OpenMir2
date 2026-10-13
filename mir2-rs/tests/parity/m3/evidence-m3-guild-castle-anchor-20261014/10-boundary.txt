@@ -1,0 +1,20 @@
+base = origin/master d4673b16c
+
+## git status --porcelain
+ M mir2-rs/tests/parity/m3/guild_castle_scenario.json
+ M mir2-rs/tests/parity/m3/run_guild_castle_pair.ps1
+ M mir2-rs/tests/parity/whitelist.md
+?? mir2-rs/tests/parity/m3/evidence-m3-guild-castle-anchor-20261014/
+?? mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py
+
+## git diff --stat origin/master
+ mir2-rs/tests/parity/m3/guild_castle_scenario.json | 28 +++++++++++-----------
+ mir2-rs/tests/parity/m3/run_guild_castle_pair.ps1  | 22 ++++++++++++++++-
+ mir2-rs/tests/parity/whitelist.md                  |  2 +-
+ 3 files changed, 36 insertions(+), 16 deletions(-)
+
+## frozen surface (must be empty): src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+(end frozen)
+
+## .rs changes (must be empty)
+(end rs)
