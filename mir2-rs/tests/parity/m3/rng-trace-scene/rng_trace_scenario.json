@@ -20,7 +20,7 @@
     "min_monster_ai_draws": 1,
     "groups_expected": ["monster_ai", "spawn", "drop"],
     "fold": { "construct": "spawn" },
-    "criterion": "① 场景一致性前置门 GREEN（rng_scene_gate.py gate：map/seed/start_pose + MonGen 冻结件 + Monster 集合两侧同口径 + **制品级同种子**：两份 trace 流水头的 `INJECT_OK <seed>` 必须存在且 == scenario.seed，描述件自报不算证据）② groupdiff --fold --strict VERDICT IDENTICAL（R-6：C# construct 折叠到 Rust spawn 后，组集合 + 折叠计数 + 共享组相对次序全等）",
+    "criterion": "① 场景一致性前置门 GREEN（rng_scene_gate.py gate：map/seed/start_pose + MonGen 冻结件 + Monster 集合两侧同口径 + **制品级同种子**：两份 trace 流水头的 `INJECT_OK <seed>` 必须存在且 == scenario.seed，描述件自报不算证据）② groupdiff --fold --strict --scenario <本文件> VERDICT IDENTICAL（R-6：C# construct 折叠到 Rust spawn 后，组集合 + 折叠计数 + 共享组相对次序全等；**DoD②**：本文件声明的 `groups_expected` 三组必须在**真实账本**里两侧都出现、`min_monster_ai_draws` 必须达标 —— 缺组 / 抽数不足 ⇒ `MISSING_EXPECTED_GROUPS` / `MIN_GROUP_DRAWS` fail-closed，两侧都缺时不再真空 IDENTICAL）",
     "runner": "run_rng_trace_pair.ps1 -Go -Side <csharp|rust> -PinScene -PeerSession <session>（窗口期）"
   },
   "isolation": {
@@ -34,7 +34,7 @@
     "scene_descriptor": "<side>-scene.json",
     "stream": "<side>-rng-stream.tsv",
     "gate": "python -I rng-trace-scene/rng_scene_gate.py gate --scenario rng-trace-scene/rng_trace_scenario.json --a <csharp-scene.json> --b <rust-scene.json> --a-stream <csharp-rng-stream.tsv> --b-stream <rust-rng-stream.tsv>",
-    "groupdiff": "python -I rng-trace-probe/rng_ledger_diff.py groupdiff <csharp-stream.tsv> <rust-stream.tsv> --a-side csharp --b-side rust --fold --strict",
+    "groupdiff": "python -I rng-trace-probe/rng_ledger_diff.py groupdiff <csharp-stream.tsv> <rust-stream.tsv> --a-side csharp --b-side rust --fold --strict --scenario rng-trace-scene/rng_trace_scenario.json",
     "scene_groupdiff": "DoD① 单一入口（推荐）：rng-trace-scene/run_rng_trace_pair.ps1 -SceneGroupDiff -AScene <csharp-scene.json> -BScene <rust-scene.json> -AStream <csharp-rng-stream.tsv> -BStream <rust-rng-stream.tsv>（门非 GREEN ⇒ 拒比，不输出任何 groupdiff 结论）",
     "runner": "rng-trace-scene/run_rng_trace_pair.ps1"
   },
@@ -42,6 +42,7 @@
     "MonGen/Monster 集合同口径由 rng_scene_gate.py 机判：两侧 mongen_rows 必须逐行多重集等于冻结件 fixtures/mongen-map0137.tsv（0 行），monsters 多重集必须两侧相等且等于本 scenario 的声明。任一项不等 ⇒ 门 fail-closed RED，groupdiff 相对次序结论不得采信。",
     "制品级同种子：描述件（*-scene.json）里的 seed 是各侧自报，不算证据。门在两份 trace 流水在场时（-SceneGroupDiff 恒传；-GateOnly 给了 -AStream/-BStream 才核）还要核**流水头**的 `INJECT_OK <seed>`（C# rng-hook 与 Rust crates/shared/src/rng_trace.rs 都写）：缺该行 ⇒ 无法证明种子（fail-closed RED）；!= scenario.seed ⇒ RED；只给一侧流水 ⇒ PREREQ fail-closed（stream-pair-required，半份证据不算证据）。这样「描述件写 42、真实流水是别的种子」会被拦在拒比，不会被误判成实现差异。",
     "R-6 folded 映射：C# construct（BaseObject/AnimalObject/MonsterObject/Monsters.*/PlayObject ..ctor）折叠到 Rust spawn（crates/world/src/mongen.rs 的 AnimalState::from_spawn_draws）；折叠后**计数与相对次序必须相等**（groupdiff --fold：FOLDED_COUNT_DIFF / SHARED_REL_ORDER_DIFF）。",
+    "DoD② 组清单机判：`groups_expected` / `min_monster_ai_draws` 不是注释 —— `groupdiff --scenario <本文件>` 会把它们与**真实账本**对账：声明的组任一侧缺失 ⇒ `MISSING_EXPECTED_GROUPS`（点名缺的组）；`monster_ai` 抽数 < 声明 ⇒ `MIN_GROUP_DRAWS`；缺 scenario 件 ⇒ PREREQ rc=2。不传 `--scenario` ⇒ 旧行为逐字节不变（裸比较口径）。",
     "本场景与 ④「死亡掉落不落地」口径兼容：drop 组比的是**取数账本**（MonGetRandomItems 的逐次取数），④-D 之后 oracle 仍抽 RNG 只是不落地（无地面物 / 无 RM_ITEMSHOW / 无 SM_ITEMSHOW(610)）⇒ 两者同窗口同跑不互相打架（README.md §4）。",
     "真机两相 trace 需要独占窗口（起栈禁接管道）；-Go 未给 ⇒ run_rng_trace_pair.ps1 的 real-run 分支 fail-closed（exit 2），本片只交骨架。",
     "DoD① 判定入口 = run_rng_trace_pair.ps1 -SceneGroupDiff（门 → 比一体）：场景门非 GREEN ⇒ 拒比（不跑 groupdiff、不输出 RNG_CONSUMER_GROUPDIFF 结论）；-GroupDiffOnly 只是跨场景对照的裸比较口径，不构成 DoD① 判据。",
