@@ -1,0 +1,6 @@
+== 订正前（真实 master 报告，经 git show origin/master 取出）==
+EVIDENCE_COUNTS dir=evidence-m3-rng-trace-scene-groups-20261013-groups-expected declared={'files': 12, 'verify': (12, 12), 'eolcheck': (13, 13)} actual_files=16 actual_verify=15
+  RED declared_files=12 != actual_files=16
+  RED declared_verify=12/12 != actual_verify=15/15 (SHA256SUMS 条目数)
+  RED declared_eolcheck=13/13 != actual_eolcheck=16/16 (目录文件数)
+rc=1

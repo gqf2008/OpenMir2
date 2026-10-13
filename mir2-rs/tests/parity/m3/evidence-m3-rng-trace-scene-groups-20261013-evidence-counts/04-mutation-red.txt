@@ -1,0 +1,4 @@
+== 改坏必红：订正后报告副本 '16 件' -> '15 件' ==
+EVIDENCE_COUNTS dir=evidence-m3-rng-trace-scene-groups-20261013-groups-expected declared={'files': 15, 'verify': (15, 15), 'eolcheck': (16, 16)} actual_files=16 actual_verify=15
+  RED declared_files=15 != actual_files=16
+rc=1

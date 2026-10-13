@@ -1,0 +1,16 @@
+== 边界（base = origin/master = ef3160df76a2710c0662bc88e535d543f34c097f；head = 本片交付头，oid 以 walgit patch 为准，不在此硬编码）==
+
+$ git diff --name-only ef3160df76a2710c0662bc88e535d543f34c097f HEAD -- src sql MirClient mir2-rs/crates mir2-rs/bins
+(空 ⇒ 冻结面零改动)
+
+$ git diff --name-only ef3160df76a2710c0662bc88e535d543f34c097f HEAD -- '*.rs' | grep -v tests/parity
+(空 ⇒ 零 .rs)
+
+源件（相对 base 的 3 个非证据改动；用下列命令复核）：
+  $ git diff --name-only ef3160df76a2710c0662bc88e535d543f34c097f HEAD -- mir2-rs/tests/parity/m3 | grep -v evidence-
+  1) mir2-rs/tests/parity/m3/M3RNG场景DoD②组清单机判组必须真出现报告-20261013.md（证据头行计数订正 + §5）
+  2) mir2-rs/tests/parity/m3/rng-trace-scene/README.md（§5.1 + §6 命令）
+  3) mir2-rs/tests/parity/m3/rng-trace-scene/check_evidence_counts.py（新工具，含 selftest）
+
+证据包：mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-evidence-counts
+  件数以 $ git ls-tree -r --name-only HEAD -- <dir> | wc -l 为准（不硬编码）；口径见该包 SHA256SUMS.txt / README.md。
