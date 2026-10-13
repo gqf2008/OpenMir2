@@ -1,0 +1,11 @@
+# 02-after-green.txt —— 含修复（bc2118446）新鲜检出 eolcheck
+
+$ file <finding 证据目录>/redchecks/RC5-*.rc
+/e/tmp/m3hp-eol-after/mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013/redchecks/RC5-magicfire-self-frame-mutated.rc:  ASCII text
+/e/tmp/m3hp-eol-after/mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013/redchecks/RC5-magicfire-self-frame-restored.rc: ASCII text
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs            # 全树
+EOLCHECK GREEN 3592/3592 件文本证据与仓库口径（LF）在 EOL 上一致
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck <finding 证据目录>  # GREEN 19/19
+EOLCHECK GREEN 19/19 件文本证据与仓库口径（LF）在 EOL 上一致
