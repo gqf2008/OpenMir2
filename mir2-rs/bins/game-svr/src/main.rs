@@ -170,6 +170,19 @@ impl CommandMessage {
     }
 }
 
+/// 帧 52 尾的布局开关（`openmir2-client-e2e-enter-gaps` 的 ③）。
+///
+/// `MIR2_CLIENT_ABILITY_LAYOUT` 为真值（`1`/`true`/`TRUE`/`True`）⇒ 用冻结客户端的 58B
+/// `TAbility`（`HIGHHP=True`，[`record::encode_ability_client`]）；未设/其它 ⇒ oracle 的 40B
+/// `EncodeMessage(WAbil)`。**默认关**：未设时生产路径与 oracle 逐字节相同（四门禁/金标准不回归）。
+/// 打开它是 §6.0-3 意义上的「与 oracle 的故意偏离」，需 owner 裁决 + 白名单登记。
+fn mir2_client_ability_layout() -> bool {
+    matches!(
+        std::env::var("MIR2_CLIENT_ABILITY_LAYOUT").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("True")
+    )
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let conf = std::env::args()
@@ -3107,14 +3120,25 @@ fn send_good_tick(
 /// 不参与任何模拟/出帧语义（与 oracle `RecalcAbilitys` 输出同源，不额外取数）。
 fn log_enter_ability(chr_name: &str, out: &game_svr::ability::RecalcOutput) {
     let w = &out.wabil;
-    let tail: String = record::encode_ability(w)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+    // 与生产路径用**同一**布局（`MIR2_CLIENT_ABILITY_LAYOUT`）：默认 oracle 40B，开关打开时
+    // 冻结客户端 58B。日志必须反映**实际写入 52/752 的字节**，否则又会造成“血条为 0”的误读。
+    let layout = if mir2_client_ability_layout() {
+        "client-58"
+    } else {
+        "oracle-40"
+    };
+    let tail_bytes = if layout == "client-58" {
+        record::encode_ability_client(w)
+    } else {
+        record::encode_ability(w)
+    };
+    let tail_len = tail_bytes.len();
+    let tail: String = tail_bytes.iter().map(|b| format!("{b:02x}")).collect();
     let s = &out.sub;
     glog!(
         "DBG",
-        "52/752 入图输入 ChrName={chr_name} WAbil[level={} ac={} mac={} dc={} mc={} sc={} hp={} mp={} \
+        "52/752 入图输入 ChrName={chr_name} layout={layout} tail_len={tail_len} \
+         WAbil[level={} ac={} mac={} dc={} mc={} sc={} hp={} mp={} \
          max_hp={} max_mp={} exp={} max_exp={} weight={} max_weight={} wear_weight={} \
          max_wear_weight={} hand_weight={} max_hand_weight={}] SubAbility[anti_magic={} \
          hit_point={} speed_point={} anti_poison={} poison_recover={} health_recover={} \
@@ -5403,6 +5427,11 @@ fn sim_loop(
                                                             use_items: d.hum_items.as_deref(),
                                                             bag_items: d.bag_items.as_deref(),
                                                             gold: d.gold,
+                                                            // 帧 52 尾的冻结客户端 58B `TAbility` 布局；
+                                                            // 默认关（未设 = oracle 逐字节，见该字段文档与
+                                                            // `openmir2-client-e2e-enter-gaps` 的 owner 裁决）。
+                                                            client_ability_layout:
+                                                                mir2_client_ability_layout(),
                                                         })
                                                     });
                                                 let wx = enter::WorldFrameInputs {
@@ -5440,7 +5469,8 @@ fn sim_loop(
                                                 if let (Some(d), Some(a)) = (data, ability_inputs.as_ref()) {
                                                     let out = enter::recalc_for_session(a, d.job);
                                                     // 进图可观测性（`openmir2-client-e2e-enter-gaps`）：把本会话**实际写入
-                                                    // 52/752 帧的输入值**与 40B 尾（`record::encode_ability`）打进日志，便于
+                                                    // 52/752 帧的输入值**与**实际尾字节**（两种布局之一，见
+                                                    // `MIR2_CLIENT_ABILITY_LAYOUT`）打进日志，便于
                                                     // “客户端血条/负重为 0 是服务端没发/发错，还是客户端解析”一类的真机定位——
                                                     // 只读日志，不改任何模拟/出帧语义。
                                                     log_enter_ability(&head.chr_name, &out);
