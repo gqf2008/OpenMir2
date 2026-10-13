@@ -1,0 +1,12 @@
+# 改坏必红 B：流水里出现消费者表未分类的站点（CreateMonster spawn 抽数）⇒ 门必须点名 RED
+# cmd: python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py gate --side csharp --stream mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-unknown.tsv --table mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv
+$ python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py gate --side csharp --stream mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-unknown.tsv --table mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv
+=== 场景纯度（drop_exp_purity_gate）===
+  side=csharp stream=mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-unknown.tsv
+  draws=2 measured=1 setup=0 wallclock=0 other=0 unknown=1 missing_site=0 ambiguous=0
+  --- 逐消费者清单（site 计数，降序）---
+         1  GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451
+         1  GameSrv.Word.WorldServer.CreateMonster@WorldServer.MonGen.cs:740
+  RED: unknown_consumer: 1 处 site 不在 `drop_exp_consumers.tsv` 里（首个 line=4 site=GameSrv.Word.WorldServer.CreateMonster@WorldServer.MonGen.cs:740）；认不出 ⇒ 拒比，必须在表里显式分类（measured/setup/wallclock/other）
+  结论：场景不纯 / 认不出 ⇒ **拒比**（fail-closed，不放宽判据）
+rc=1

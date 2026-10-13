@@ -1,0 +1,5 @@
+# Rust 侧：消费者表尚无 measured 行（④-D 未落地）⇒ PREREQ 拒跑（fail-closed，不许拿“流水干净”假绿）
+# cmd: python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py gate --side rust --stream mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-clean.tsv --table mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv
+$ python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py gate --side rust --stream mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-clean.tsv --table mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv
+PREREQ_MISSING: consumers 表里 side=rust 没有 `measured` 行 ⇒ 认不出被测量路径，拒跑（不许假绿；实现卡落地后按实测站点补表）
+rc=2

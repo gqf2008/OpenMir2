@@ -1,0 +1,44 @@
+# 写集边界（base = origin/master @ 083dd0e30e2b731add962f4cdb0771187da6cae9；交付前已在本 worktree git merge origin/master，merge 提交见 patch head）
+# 下列 A/M 项 = 本 patch 相对 master 的全部改动（staged 索引 = 提交树；SHA256SUMS.txt 由本目录惯例不入清单）
+$ git merge-base --is-ancestor <base> HEAD && echo BASE_IS_ANCESTOR
+BASE_IS_ANCESTOR
+
+$ git diff --cached --name-status origin/master
+M	mir2-rs/tests/parity/m3/drop-exp/README.md
+A	mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv
+A	mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py
+M	mir2-rs/tests/parity/m3/drop-exp/drop_exp_scenario.json
+M	mir2-rs/tests/parity/m3/drop-exp/run_drop_exp_pair.ps1
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/00-commands.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/01-purity-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/02-nostack-selfcheck.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/03-break-must-be-red-wallclock.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/04-break-must-be-red-unknown.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/05-break-must-be-red-table-measured-removed.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/06-purity-clean-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/07-purity-clean.json
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/08-rust-pending-prereq.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/09-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/10-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/11-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/12-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/13-eolcheck.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/14-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/consumers-no-measured.tsv
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-clean.tsv
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-unknown.tsv
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-wallclock.tsv
+A	mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/raw.jsonl
+M	mir2-rs/tests/parity/whitelist.md
+
+$ git diff --cached --name-only origin/master -- src sql MirClient
+(以上空 = 零 oracle src/、零 sql/、零 MirClient 改动)
+
+$ git diff --cached --name-only origin/master -- '*.rs'
+(以上空 = 零 .rs)
+
+$ git diff --cached --name-only origin/master -- mir2-rs/crates mir2-rs/bins
+(以上空 = 零 crates/bins；本片只动 mir2-rs/tests/parity/**)
+
+# 未跟踪项（未并入本 patch）：mir2-rs/tests/parity/m3/sessions/csharp-20261012-2323..2346 的 8 个目录 —— 别车道遗留会话，owner 可清。
