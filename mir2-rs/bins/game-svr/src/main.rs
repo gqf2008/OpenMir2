@@ -37,6 +37,7 @@ mod notice;
 mod record;
 mod seed;
 mod state_log;
+mod storage;
 mod strings;
 mod users;
 
@@ -1683,6 +1684,9 @@ fn build_save_record(
     });
     rec.data.hum_items = Some(human_items_for_save(&sg.use_items));
     rec.data.bag_items = Some(bag_items_for_save(&sg.state.item_list));
+    // `MakeSaveRcd` 的 `StorageItems`（`WorldServer.cs:1359-1376`）：会话仓库 → 新建 50 槽数组
+    // （尾槽填 `DelfautItem`），DBSvr 侧写 `characters_storageitem`（`PlayDataStorage.Save.cs:360`）。
+    rec.data.storage_items = Some(storage::storage_items_for_save(&sg.storage.items));
     rec
 }
 
@@ -3311,6 +3315,9 @@ struct GroundCfg {
 struct SessionGround {
     /// `ground::GroundState`（`PlayObject.ItemList` + `Gold` + `WAbil`）。
     state: game_svr::ground::GroundState,
+    /// `PlayObject.StorageItemList` + `IsCanGetBackItem`（仓库会话态，[`storage`]；
+    /// 进世界时从 `CharacterData.StorageItems` 读档、存档时由 [`build_save_record`] 写回）。
+    storage: storage::StorageState,
     /// `BaseObject.ActorId`（`SM_SYSMESSAGE` 的 `Recog`）。
     actor_id: i32,
     /// `BaseObject.GameGold`（`SM_GOLDCHANGED` 的 LoWord/HiWord）。
@@ -4372,6 +4379,10 @@ fn sim_loop(
                                                                 gold: d.gold,
                                                                 wabil: out.wabil,
                                                             },
+                                                            // `WorldServer.cs:1213-1227`：读档进仓库会话态。
+                                                            storage: storage::load_from_record(
+                                                                d.storage_items.as_deref(),
+                                                            ),
                                                             actor_id: id,
                                                             game_gold: d.game_gold,
                                                             sys_msg: Some(enter::gbk(
@@ -5851,6 +5862,7 @@ mod tests {
                 gold: 0,
                 wabil: test_ability(),
             },
+            storage: storage::StorageState::new(),
             actor_id,
             game_gold: 0,
             sys_msg: None,
@@ -5999,6 +6011,7 @@ mod tests {
                 gold: 649,
                 wabil: test_ability(),
             },
+            storage: storage::StorageState::new(),
             actor_id: 1,
             game_gold: 77,
             sys_msg: None,
@@ -6066,6 +6079,103 @@ mod tests {
             99,
             "HumItems[Necklace] = UseItems[Helmet]（oracle 交换）"
         );
+    }
+
+    /// `MakeSaveRcd` 的 `StorageItems`（`WorldServer.cs:1359-1376`）：会话仓库 → **新建 50 槽**
+    /// 存档数组（尾槽填 `DelfautItem`），并经生产编码在 DBSvr 侧解回（⇒ 落 `characters_storageitem`
+    /// 的同一字段，`PlayDataStorage.Save.cs:360`）。
+    ///
+    /// 红检：把 [`storage::storage_items_for_save`] 的尾槽填充删掉（留 `None`）⇒ `stor[2]`/`stor[49]`
+    /// 的 `expect("空槽填 DelfautItem")` 必红。
+    #[test]
+    fn save_record_persists_storage_items_as_fifty_slots() {
+        use mir2_storage::MemPack;
+        let saved = SavedHuman {
+            account: "acct".into(),
+            record: stage6_record(),
+            enter_map: "0".into(),
+        };
+        let mut sg = test_session_ground(1);
+        sg.storage.items = vec![
+            game_svr::bag::BagItem {
+                make_index: 7301,
+                index: 41,
+                dura: 7,
+                dura_max: 9,
+                desc: [0; 14],
+            },
+            game_svr::bag::BagItem::new(7302, 42),
+        ];
+        // 锁只影响取回门（⑤-4 第②片），不改存档内容（`IsCanGetBackItem` 不是记录字段）。
+        sg.storage.is_can_get_back_item = false;
+        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        world.open_session("hero");
+        world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 11, 22), 0)
+            .expect("进世界");
+        let rec = build_save_record(&saved, "hero", &world, &sg, None);
+        let parsed = mir2_storage::SaveCharacterData::from_bytes(
+            &record::encode_save_character_data(&saved.account, "hero", &rec),
+        )
+        .expect("DBSvr 侧必须能解存档体");
+        let d = parsed.character_data.unwrap().data.unwrap();
+        let stor = d.storage_items.as_ref().expect("storage_items 非 null");
+        assert_eq!(
+            stor.len(),
+            50,
+            "StorageItems 是 50 槽定长（WorldServer.cs:1362）"
+        );
+        let first = stor[0].as_ref().expect("空槽填 DelfautItem，不许是 None");
+        assert_eq!(
+            (first.make_index, first.index, first.dura, first.dura_max),
+            (7301, 41, 7, 9)
+        );
+        assert_eq!(stor[1].as_ref().unwrap().make_index, 7302);
+        assert_eq!(
+            stor[2].as_ref().unwrap().make_index,
+            0,
+            "尾槽 = 默认物品（Index 0）"
+        );
+        assert_eq!(stor[49].as_ref().unwrap().make_index, 0);
+    }
+
+    /// `WorldServer.cs:1213-1227`：进世界的仓库会话态从记录 `StorageItems` 读出（跳过 `null` 槽与
+    /// `Index == 0` 的空槽、保持次序），锁初生为 true（`PlayObject.cs:956`）。
+    #[test]
+    fn enter_loads_storage_items_from_record() {
+        let record = vec![
+            Some(record::ServerUserItem {
+                make_index: 8101,
+                index: 33,
+                dura: 5,
+                dura_max: 6,
+                desc: Some(vec![0u8; 14]),
+                color_r: 0,
+                color_g: 0,
+                color_b: 0,
+                prefix: None,
+            }),
+            None,
+            Some(default_server_item()),
+            Some(record::ServerUserItem {
+                make_index: 8102,
+                index: 34,
+                dura: 1,
+                dura_max: 2,
+                desc: Some(vec![0u8; 14]),
+                color_r: 0,
+                color_g: 0,
+                color_b: 0,
+                prefix: None,
+            }),
+        ];
+        let st = storage::load_from_record(Some(&record));
+        assert_eq!(
+            st.items.iter().map(|i| i.make_index).collect::<Vec<_>>(),
+            vec![8101, 8102],
+            "只收 Index>0 且非 null 的槽，次序不变"
+        );
+        assert!(st.is_can_get_back_item, "初生锁开");
     }
 
     /// owner-precheck `a8836e1b`：存档 ↔ 进世界守卫的 in-save 账本配对。生产路径发
@@ -6557,6 +6667,7 @@ mod tests {
                     gold: 0,
                     wabil: test_ability(),
                 },
+                storage: storage::StorageState::new(),
                 actor_id: p,
                 game_gold: 0,
                 sys_msg: None,
@@ -6713,6 +6824,7 @@ mod tests {
                     gold: 123,
                     wabil: test_ability(),
                 },
+                storage: storage::StorageState::new(),
                 actor_id: 42,
                 game_gold: 0,
                 sys_msg: None,
@@ -6844,6 +6956,7 @@ mod tests {
                     gold: 0,
                     wabil: test_ability(),
                 },
+                storage: storage::StorageState::new(),
                 actor_id: 42,
                 game_gold: 0,
                 sys_msg: None,
@@ -6965,6 +7078,7 @@ mod tests {
                     gold: 123,
                     wabil: test_ability(),
                 },
+                storage: storage::StorageState::new(),
                 actor_id: hero,
                 game_gold: 0,
                 sys_msg: None,
@@ -7669,6 +7783,7 @@ mod tests {
                         a
                     },
                 },
+                storage: storage::StorageState::new(),
                 actor_id: 7,
                 game_gold: 0,
                 sys_msg: None,
@@ -7809,6 +7924,7 @@ mod tests {
                         a
                     },
                 },
+                storage: storage::StorageState::new(),
                 actor_id: hid,
                 game_gold: 0,
                 sys_msg: None,
@@ -8233,6 +8349,7 @@ mod tests {
                     gold: 0,
                     wabil: test_ability(),
                 },
+                storage: storage::StorageState::new(),
                 actor_id: 7,
                 game_gold: 0,
                 sys_msg: None,

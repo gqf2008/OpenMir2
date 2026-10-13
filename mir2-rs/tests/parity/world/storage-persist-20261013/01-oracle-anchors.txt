@@ -1,0 +1,120 @@
+# M3⑤-实现 5 第①片 —— oracle 锚点（仓库 src/ 行号，逐条实测）
+
+本片 = `openmir2-m3-storage-persist`：仓库会话态（`StorageItemList` + 39 上限 + `IsCanGetBackItem`
+取回锁）+ 存档落库。两条 `CM_*` 收包派发与帧面归 ⑤-4 第②片（`CM_USERSTORAGEITEM(1031)` /
+`CM_USERTAKEBACKSTORAGEITEM(1032)`）。
+
+## 1) 字段与初值（`PlayObject`）
+
+$ grep -n 'public IList<UserItem> StorageItemList\|public bool IsCanGetBackItem\|StorageItemList = new List<UserItem>\|IsCanGetBackItem = true' src/M2Server/Player/PlayObject.cs
+
+```
+src/M2Server/Player/PlayObject.cs:207:        public IList<UserItem> StorageItemList { get; set; }
+src/M2Server/Player/PlayObject.cs:741:        public bool IsCanGetBackItem { get; set; }
+src/M2Server/Player/PlayObject.cs:878:            StorageItemList = new List<UserItem>();
+src/M2Server/Player/PlayObject.cs:956:            IsCanGetBackItem = true;
+```
+
+⇒ Rust `StorageState::new()`：`items: Vec::new()` + `is_can_get_back_item: true`。
+
+## 2) 39 上限与取回锁的门（`PlayObject.Operate.cs`）
+
+$ grep -n 'StorageItemList.Count < 39' src/M2Server/Player/PlayObject.Operate.cs
+```
+1629:                        if (StorageItemList.Count < 39)
+```
+$ grep -n 'if (!IsCanGetBackItem)' src/M2Server/Player/PlayObject.Operate.cs
+```
+1669:            if (!IsCanGetBackItem)
+```
+
+⇒ Rust `STORAGE_MAX_ITEMS = 39` + `StorageState::can_store()`；锁门（`!is_can_get_back_item` ⇒
+直接 return、无帧）由 ⑤-4 第②片的命令层消费。
+
+## 3) 读档（`WorldServer.cs:1213-1227`）
+
+```
+            ServerUserItem[] storageItems = humanRcd.Data.StorageItems;
+            if (storageItems != null)
+            {
+                for (int i = 0; i < storageItems.Length; i++)
+                {
+                    if (storageItems[i] == null)
+                    {
+                        continue;
+                    }
+                    if (storageItems[i].Index > 0)
+                    {
+                        playObject.StorageItemList.Add(storageItems[i].ToClientItem());
+                    }
+                }
+            }
+```
+
+⇒ Rust `storage::storage_items_from_record`：`None` 数组 ⇒ 空；`null` 槽 `continue`；仅
+`index > 0` 收；保持数组次序。`ToClientItem`（`ServerUserItem.cs:39`）搬
+`MakeIndex/Index/Dura/DuraMax/Desc`（Color/Prefix 在本 `BagItem` 子集外）。
+
+## 4) 存档（`WorldServer.cs:1359-1376`）
+
+```
+            ServerUserItem[] StorageItems = humanRcd.Data.StorageItems;
+            if (StorageItems == null)
+            {
+                StorageItems = new ServerUserItem[50];
+            }
+            for (int i = 0; i < playObject.StorageItemList.Count; i++)
+            {
+                if (i >= StorageItems.Length)
+                {
+                    break;
+                }
+                StorageItems[i] = playObject.StorageItemList[i].ToServerItem();
+            }
+            for (int i = 0; i < StorageItems.Length; i++)
+            {
+                if (StorageItems[i] == null)
+                {
+                    StorageItems[i] = HUtil32.DelfautItem.ToServerItem();
+                }
+            }
+```
+
+**关键前提（决定 Rust 侧不从旧记录取长度/内容）**：`MakeSaveRcd` 的载体是**新建**记录 ——
+
+$ grep -n 'CharacterDataInfo humanRcd = new CharacterDataInfo();\|CharacterData playerInfo = humanRcd.Data;' src/GameSrv/Word/WorldServer.cs
+```
+1233:            CharacterDataInfo humanRcd = new CharacterDataInfo();
+1234:            CharacterData playerInfo = humanRcd.Data;
+```
+$ grep -n 'StorageItems = new ServerUserItem\[50\];' src/OpenMir2/Packets/ServerPackets/PlayerDataInfo.cs
+```
+117:            StorageItems = new ServerUserItem[50];
+```
+
+⇒ `humanRcd.Data.StorageItems` 恒是构造期新分配的 50 槽（全 null），**不是**读档记录的数组。
+⇒ 每次存档都从**空槽**开始：`StorageItemList[i]` 写槽 i、余下槽填 `DelfautItem`（非 null）。
+⇒ Rust `storage_items_for_save` 恒产出 `STORAGE_SAVE_SLOTS = 50` 槽（尾槽 `default_server_item()`），
+**不**受记录原长影响（否则「取回后旧物品留在尾槽」会是隐性分叉）。
+
+## 5) 落库（`characters_storageitem`）
+
+$ grep -n 'SaveStorageItem\|ClearStorageItemSql\|UpdateStorageItemSql' src/Storeages/DBSrv.Storage.MySQL/PlayDataStorage.Save.cs | head -3
+```
+62:                SaveStorageItem(context, playerId, humanRcd.Data.StorageItems);
+357:        private const string ClearStorageItemSql = "UPDATE characters_storageitem SET Position = @Position, MakeIndex = 0, ...";
+358:        private const string UpdateStorageItemSql = "UPDATE characters_storageitem SET Position = @Position, MakeIndex =@MakeIndex, ...";
+```
+
+⇒ 存档体里 `Data.StorageItems` 就是 `characters_storageitem` 的源；Rust 侧
+`bins/db-srv/src/playdata.rs:741` 已按同表差量落库，本片把 `build_save_record` 写进
+`rec.data.storage_items` 即接通整条链。
+
+## 6) 未建模（登记，不静默跳过）
+
+- **密码锁降级**：oracle 在 `PasswordLockSystem && IsPasswordLocked` 时按
+  `Config.LockGetBackItemAction` 把 `IsCanGetBackItem` 置 false（`PlayObject.cs:1451-1454`，
+  由 `@SetPassword`/`@Lock`/`@Unlock` 切换，`PlayObject.Chat.cs:264/324`）。本宿主未装载密码锁脚本
+  与配置 ⇒ 会话恒初生 true（= oracle 未加锁态），**锁为 false 的路径不可达**。
+- **`SendSaveItemList` 分页下行**（每页 50，`SM_SAVEITEMLIST`，`PlayObject.Base.cs:1590`）：
+  帧面归 ⑤-4 第②片。

@@ -1,0 +1,12 @@
+# M3⑤-实现 5 第①片 —— 边界
+
+$ git diff --name-only 15510a47..HEAD -- src sql MirClient
+（空 ⇒ oracle/C#/客户端/表结构零改动）
+
+# 本片代码改动（base 15510a47..代码 HEAD）
+  mir2-rs/bins/game-svr/src/main.rs
+  mir2-rs/bins/game-svr/src/storage.rs（新）
+
+# 代码 HEAD = 0b731d1de8a4cec00184ab7ec16c0e6bbd1628d7
+# base(=refs/heads/master) = 15510a47d21c5da6b907d475097d9dadf6a7dbe3
+# 分支 = storage-persist-host

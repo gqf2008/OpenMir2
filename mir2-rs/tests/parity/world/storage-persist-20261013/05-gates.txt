@@ -1,0 +1,20 @@
+# M3⑤-实现 5 第①片 —— 四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target，--offline）
+
+$ cargo fmt --all -- --check
+rc=0
+
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.82s
+rc=0
+
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo run -p msgcodegen --offline -- --check
+     Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test --workspace --no-fail-fast --offline
+汇总（94 suites）：888 passed / 0 failed / 21 ignored  ⇒ rc=0
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
