@@ -1,5 +1,5 @@
 ### 05 run_rng_trace_pair.ps1 -SelfCheckNoStack（离线；anchors-freshness-selftest 仍真接线，项数仍 31）
-### 本重交 head 2fcebc6cd 已 `git merge origin/master`（base `10f0daa93`）；本片内容与原 head 0778a84e8 逐字节相同
+### 本片读数在**交付/review head `2591a7b31`** 的树上取得（旧版误写中间 merge commit `2fcebc6cd`；reviewer-6 O-1 订正，机判见 `12-head-consistency.txt`）；本片内容与原 head 0778a84e8 逐字节相同
 
 $ powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack
 SELFTEST_NO_STACK: 无栈自检——场景门 + 账本 + folded 映射全路径都必须 fail-closed（缺失绝不静默 GREEN）

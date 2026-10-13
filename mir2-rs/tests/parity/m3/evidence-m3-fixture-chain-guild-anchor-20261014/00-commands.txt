@@ -1,0 +1,34 @@
+# ⑧-10 残余 Minor 收口：行会/攻城夹具锚门接入「夹具链深检门」—— 证据包命令
+# 全部在隔离 worktree / 隔离 target 内跑；零起栈、零占端口、共享主检出只读。
+
+worktree: E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs
+branch:   worktree-m3-guild-castle-chain-gate
+base:     origin/master 1cf88f6ad（本 worktree 起始 HEAD；head = 本分支 tip，见 walgit patch entry）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target（检出外；未与其它车道争用）
+
+## 门禁（四件；cwd = mir2-rs）
+cargo fmt --all -- --check                                        # 05-gate-fmt.txt
+cargo clippy --workspace --all-targets -- -D warnings             # 06-gate-clippy.txt
+cargo test  --workspace --offline -- --test-threads=16            # 07-gate-test.txt
+cargo run   -p msgcodegen -- --check                              # 08-gate-msgcodegen.txt
+
+## 本片主题：guild/castle 夹具锚门（guild_castle_anchor_gate.py）
+cd mir2-rs/tests/parity/m3
+python -I guild_castle_anchor_gate.py check                       # 01（GREEN 34 锚 / 97 行点）
+python -I guild_castle_anchor_gate.py selftest                    # 01（SELFTEST GREEN）
+
+## 本片主题：接入夹具链深检门（⑧-10 残余 Minor「锚门未注册进 fixture_chain 链深检门」）
+python -I fixture_chain_gate.py selftest                          # 02（30/30，原 26 + 本片 4 条牙齿）
+python -I fixture_chain_gate.py check                             # 03（含 -- 共享管线 / 主机门 -- 两条新登记 rc=0）
+
+## 改坏必红（guild_castle 场景锚 → 门 RED → 链深检门 RED）
+见 04-redcheck.txt：把 guild_castle_scenario.json 的 castle_run 锚
+`UserCastle.cs:311-446` 改回历史漂移值 `:311-448`
+⇒ ① guild_castle_anchor_gate check rc=1（覆盖面：场景锚未登记 + 表过期）
+⇒ ② fixture_chain_gate check rc=1（共享管线 guild_castle_anchor_check / _selftest 判红；red=4）
+⇒ cp 还原后 git status 干净。
+
+## 证据 hash（仓库 LF/git-blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py write <本目录>                   # 生成 SHA256SUMS
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra <本目录>    # 10-hash-check.txt
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>                # 10-hash-check.txt

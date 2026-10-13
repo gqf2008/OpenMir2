@@ -1,6 +1,9 @@
 ### 本片净差量（重交：已 `git merge origin/master`，消除 base 落后 master 的「回退假差量」）
 ### patch base = origin/master = 10f0daa93ebeaf220581a3239cce6f7e7a522b85
-### head = 2fcebc6cd9f00ece73b262bf76e432e48d8ce0de（= "Merge remote-tracking branch 'origin/master' into wip/m3bag-anchor-teeth"）
+### head = 2591a7b316ae7e9c3a31ac38e26248178a75f182（= 交付/review head；reviewer-6 approve 2f19ee0b 覆盖的正是它）
+### 订正（reviewer-6 O-1）：旧版此处误写中间 merge commit 2fcebc6cd9f00ece73b262bf76e432e48d8ce0de；
+###   本包读数实际在交付 head 2591a7b31 的树上取得（2fcebc6cd 是它的第一父提交的合并点，二者净差量同集合）。
+###   机判见 12-head-consistency.txt。
 ### git diff --name-only origin/master..HEAD（共 19 路径；含本文件与 SHA256SUMS.txt 自身）
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/01-before-old-tool-silent.txt
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/02-before-new-tool-red.txt

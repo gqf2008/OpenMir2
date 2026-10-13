@@ -60,6 +60,20 @@ SHARED_CHECKS = [
     #   selftest = 门自身表结构/牙齿；check = 真身锚 + 覆盖面（未登记/裸锚）。
     ("castle_anchor_selftest", "mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py", ["selftest"]),
     ("castle_anchor_check", "mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py", ["check"]),
+    # 主机门（⑧-10 残余 Minor：「锚门未注册进 fixture_chain 链深检门」）：行会/攻城夹具的
+    #   场景锚门同口径接入常跑，与上面 castle 锚门同形。此前它只挂在
+    #   `run_guild_castle_pair.ps1 -SelfCheckNoStack` 里 ⇒ 系统 8 一旦不在 READY
+    #   （三件套缺件 PENDING/INCONSISTENT），该锚门就只剩手工读数；登记进共享管线后
+    #   不看矩阵状态、独立常跑（在场却坏 ⇒ 恒 RED）。
+    ("guild_castle_anchor_selftest", "mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py", ["selftest"]),
+    ("guild_castle_anchor_check", "mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py", ["check"]),
+    # 主机门（⑨-5 残余 Minor，与上面两族同形 follow-up）：英雄/宠物夹具的场景锚门
+    #   （`hero_pet_anchor_gate.py`，由 ⑨-5 收口片新增、随 master f0b333c96 合入）
+    #   同样只挂在 `run_hero_pet_pair.ps1 -SelfCheckNoStack` 里 ⇒ 系统 9 一旦不在 READY
+    #   （三件套缺件 PENDING/INCONSISTENT），该锚门就只剩手工读数。登记进共享管线后
+    #   不看矩阵状态、独立常跑（在场却坏 ⇒ 恒 RED）。
+    ("hero_pet_anchor_selftest", "mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py", ["selftest"]),
+    ("hero_pet_anchor_check", "mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py", ["check"]),
 ]
 
 RUNNER_PREREQ_RC = 2  # 各驱动约定的「前置未到，fail-closed」退出码
@@ -285,6 +299,21 @@ def cmd_selftest(_args):
            all(os.path.isfile(os.path.join(REPO_ROOT, rel)) for _n, rel, _e in SHARED_CHECKS))
     expect("主机门（.py）登记项 ≥1",
            any(rel.endswith(".py") for _n, rel, _e in SHARED_CHECKS))
+    # ⑧-10 残余 Minor 的防回退牙：行会/攻城锚门必须常驻共享管线（selftest + check 两向），
+    #   不能只作为夹具 runner 内部的一步（那样系统 8 不 READY 时锚门就静默不跑）。
+    _gc_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("guild_castle_anchor_gate.py")]
+    expect("行会/攻城锚门已接入共享管线（⑧-10 残余 Minor，防回退）",
+           ["selftest"] in _gc_gate and ["check"] in _gc_gate)
+    # ⑨-5 残余 Minor 的防回退牙：英雄/宠物锚门必须常驻共享管线（selftest + check 两向）。
+    _hp_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("hero_pet_anchor_gate.py")]
+    expect("英雄/宠物锚门已接入共享管线（⑨-5 残余 Minor，防回退）",
+           ["selftest"] in _hp_gate and ["check"] in _hp_gate)
+    expect("主机门（.py）登记项 ≥6（castle + 行会/攻城 + 英雄/宠物 各 selftest/check）",
+           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 6)
+    expect("共享管线登记名唯一（防重复注册偷懒）",
+           len({n for n, _r, _e in SHARED_CHECKS}) == len(SHARED_CHECKS))
+    expect("共享管线 (file,args) 登记唯一",
+           len({(r, tuple(e)) for _n, r, e in SHARED_CHECKS}) == len(SHARED_CHECKS))
     expect("_tool_argv(.py) ⇒ python -I",
            _tool_argv("x.py", ["selftest"])[:3] == [sys.executable, "-I", "x.py"])
     expect("_tool_argv(.ps1) ⇒ powershell -File",

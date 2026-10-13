@@ -1,0 +1,29 @@
+### 10 边界（base = origin/master 30c52f85df2b08170537f83a2113f520e364f679）
+### git diff --name-only base..HEAD（共 21 路径）
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/05-selfcheck-nostack.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/06-offline-regression.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/11-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/12-head-consistency.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/01-o1-before-after.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/02-gate-selftest-check.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/03-checks-ancillary.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/04-selfcheck-nostack.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/05-offline-regression.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/06-gates-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/07-gates-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/08-gates-workspace-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/09-gates-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/10-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+mir2-rs/tests/parity/m3/rng-trace-scene/check_evidence_head.py
+
+--- 冻结面（src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins；应为空）
+(空 = 冻结面零改动)
+
+--- *.rs 计数（应为 0）
+0
