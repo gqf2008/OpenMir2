@@ -1,0 +1,24 @@
+
+running 1 test
+test tests::emit_shop_frames_keeps_pre_encoded_tail ... FAILED
+
+failures:
+
+---- tests::emit_shop_frames_keeps_pre_encoded_tail stdout ----
+
+thread 'tests::emit_shop_frames_keeps_pre_encoded_tail' (33320) panicked at bins\game-svr\src\main.rs:10121:9:
+assertion `left == right` failed: 直连尾原样下发（不重新 EncodeString）
+  left: [96, 116, 83, 111, 95, 60]
+ right: [60, 64, 123, 47]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::emit_shop_frames_keeps_pre_encoded_tail
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 179 filtered out; finished in 0.00s
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.96s
+     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

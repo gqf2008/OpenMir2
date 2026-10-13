@@ -15,11 +15,21 @@
 //! 取价/修理数值口径复用已合入的 `mir2_formula::shop`（卡 `openmir2-m3-shop-price-formula`，
 //! 含 `BUG-REPLICA`）；本模块只做状态迁移 + 帧面 + 分支（**不**重写公式）。
 //!
-//! # 本片未做（登记，第②片）
-//! - `CM_USERGETDETAILITEM(1015)`（`Merchant.ClientGetDetailGoodsList`，`Merchant.cs:1304`）与
-//!   `SM_SENDDETAILGOODSLIST(652)`：物品详情分页编码（`GetUpgradeStdItem`）归第②片。
-//! - `CM_USERSTORAGEITEM(1031)` / `CM_USERTAKEBACKSTORAGEITEM(1032)`（仓库会话态 + 39 上限 + 锁）
-//!   与 `SM_SENDUSERSTORAGEITEM(700)`/`SM_SAVEITEMLIST(704)` 等归第②片（承接卡 ⑤-5 的存档面）。
+//! # 第②片（本片）
+//! - `CM_USERGETDETAILITEM(1015)`（`Merchant.ClientGetDetailGoodsList`，`Merchant.cs:1304`）+ `SM_SENDDETAILGOODSLIST(652)`
+//!   ⇒ [`detail_goods_list`]（尾 = `EncodeString(每件 EncodeBuffer(ClientItem) + '/')`，与 `msg.Ident` 的 RM→SM 双重编码口径）。
+//! - `CM_USERSTORAGEITEM(1031)` / `CM_USERTAKEBACKSTORAGEITEM(1032)`（`PlayObject.Operate.cs:1607-1713`）
+//!   ⇒ [`storage_item`] / [`take_back_storage_item`]；`@storage`/`@getback` 面板 ⇒ [`back_item_list`] 的
+//!   `SM_SENDUSERSTORAGEITEM(700)` / `SM_SAVEITEMLIST(704)` 分页（每页 50，`PlayObject.Base.cs:1590`）。
+//!
+//! # 本片仍登记（不静默跳过，见 `tests/parity/whitelist.md` T-47）
+//! - `PayMent == 1 && !Config.TryModeUseStorage` 门（`Operate.cs:1615/1664`）：部署 `TestServer=TRUE`
+//!   （`E:\\MirServer\\M2GameSvr\\Server.conf:11`）⇒ oracle `PlayObject.cs:1168-1171` 把 `PayMent` 置 **3**
+//!   ⇒ 该门在本部署**恒假**；本宿主未把 `PayMent` 落到会话（登记，行为暂等价）。
+//! - `SM_WEIGHTCHANGED`（`BaseObject.cs:1771`）未发（T-47 ⑤）；`SM_ADDITEM` 尾（T-24）。
+//! - `CustomItemSystem.GetItemName`/`GetUpgradeStdItem` 的物品展示层（T-47 ⑥/T-24）：详情/仓库列表用模板名。
+//!
+//! # 本片未做（其余，登记）
 //! - `Market_Def` 商人脚本执行 + `GotoLable("~@repair")`（`Merchant.cs:1652/1659`）：本宿主
 //!   尚未装载商人脚本（`Merchant.LoadScriptFile`，`Merchant.cs:1089`）⇒ [`RepairResult::goto_label`]
 //!   只回标签、由宿主登记「脚本未装载 ⇒ 无后续说词/帧」，见 `main.rs` 的 `handle_shop_cmd`。
@@ -45,6 +55,8 @@ use crate::ability::ItemCatalog;
 use crate::bag::{BagItem, MAX_BAG_ITEM};
 use crate::downlink;
 use crate::ground::GroundState;
+use crate::itemwire::{encode_client_item, ClientItem};
+use crate::smframe;
 
 pub const CM_MERCHANTDLGSELECT: u16 = 1011;
 pub const CM_MERCHANTQUERYSELLPRICE: u16 = 1012;
@@ -53,6 +65,8 @@ pub const CM_USERBUYITEM: u16 = 1014;
 pub const CM_USERGETDETAILITEM: u16 = 1015;
 pub const CM_USERREPAIRITEM: u16 = 1023;
 pub const CM_MERCHANTQUERYREPAIRCOST: u16 = 1024;
+pub const CM_USERSTORAGEITEM: u16 = 1031;
+pub const CM_USERTAKEBACKSTORAGEITEM: u16 = 1032;
 
 /// `ScriptFlagConst`（`src/Modules/SystemModule/Const/ScriptFlagConst.cs`）本片用到的子集。
 pub const LABEL_BUY: &str = "@buy";
@@ -62,9 +76,14 @@ pub const LABEL_SUPER_REPAIR: &str = "@s_repair";
 pub const LABEL_SUPER_REPAIR_FAIL: &str = "@fail_s_repair";
 pub const LABEL_REPAIR_OK: &str = "~@repair";
 pub const LABEL_SUPER_REPAIR_OK: &str = "~@s_repair";
+pub const LABEL_STORAGE: &str = "@storage";
+pub const LABEL_GETBACK: &str = "@getback";
 
 /// `MessageSettings.CanotGetItems` / 修理失败文案（`Merchant.cs:1612`）；GBK 由 `downlink::gbk` 编码。
 pub const SUPER_REPAIR_FAIL_MSG: &str = "对不起!我不能帮你修理这个物品。\\ \\ \\<返回/@main>";
+
+/// `MessageSettings.CanotGetItems`（`MessageSettings.cs:217`；`Operate.cs:1704` 的取回负重不足分支）。
+pub const CANOT_GET_ITEMS_MSG: &str = "无法携带更多的东西!!!";
 
 /// 一条出帧（`MakeMessage` 后的 4 个数据字段 + 可选尾）；宿主用 `smframe::command_header` 落 12B 头。
 ///
@@ -78,6 +97,10 @@ pub struct ShopFrame {
     pub tag: u16,
     pub series: u16,
     pub tail: Vec<u8>,
+    /// `true` ⇒ `tail` **已是线上尾**（`SendSocket(ClientMsg, sMsg)` 直连口径：`EncodeBuffer`/
+    /// `SM_SAVEITEMLIST` 分页拼接），`emit_shop_frames` **不再**施加 `EncodeString`；
+    /// `false` ⇒ `tail` 是未编码原文，`emit` 按 `SendDefMessage` 口径施加 `EDCode.EncodeString`。
+    pub tail_encoded: bool,
 }
 
 fn frame(ident: u16, recog: i32, param: u16, tag: u16, series: u16, tail: Vec<u8>) -> ShopFrame {
@@ -88,6 +111,27 @@ fn frame(ident: u16, recog: i32, param: u16, tag: u16, series: u16, tail: Vec<u8
         tag,
         series,
         tail,
+        tail_encoded: false,
+    }
+}
+
+/// 尾**已编码**的出帧（`PlayObject.Socket.cs:104-127` 的 `SendSocket(ClientMsg, sMsg)` 直连口径）。
+fn frame_encoded(
+    ident: u16,
+    recog: i32,
+    param: u16,
+    tag: u16,
+    series: u16,
+    tail: Vec<u8>,
+) -> ShopFrame {
+    ShopFrame {
+        ident,
+        recog,
+        param,
+        tag,
+        series,
+        tail,
+        tail_encoded: true,
     }
 }
 
@@ -116,6 +160,10 @@ pub struct ShopContext<'a> {
     pub human_max_gold: i32,
     /// 玩家 `BaseObject.ActorId`（`SM_ADDITEM`/`SM_SYSMESSAGE` 的 `Recog`）。
     pub player_actor_id: i32,
+    /// `Config.RedMsgFColor`（`SysMsg(..., MsgColor.Red, ...)` 的 `Param` 高字节；`BaseObject.cs:1678`）。
+    pub red_f: u8,
+    /// `Config.RedMsgBColor`。
+    pub red_b: u8,
 }
 
 /// `Merchant` 侧目录适配器：把宿主的 `ability::ItemCatalog`（键 = 1-based `Index`）接到
@@ -206,6 +254,7 @@ pub fn user_select(
     label: &str,
     m: &MerchantView,
     goods: &[Vec<MerchantItem>],
+    storage_items: &[BagItem],
     ctx: &ShopContext<'_>,
 ) -> Vec<ShopFrame> {
     let mut out = Vec::new();
@@ -269,8 +318,306 @@ pub fn user_select(
             0,
             Vec::new(),
         ));
+    } else if eq_label(label, LABEL_STORAGE) && m.flags.is_storage {
+        // `UserSelectStorage`（`Merchant.cs:1024`）→ `RM_USERSTORAGEITEM` →
+        // `SM_SENDUSERSTORAGEITEM(Recog=ActorId, Param=0)`（`PlayObject.Message.cs:1866`）。
+        out.push(frame(
+            mir2_protocol::messages::SM_SENDUSERSTORAGEITEM,
+            m.actor_id,
+            0,
+            0,
+            0,
+            Vec::new(),
+        ));
+    } else if eq_label(label, LABEL_GETBACK) && m.flags.is_getback {
+        // `UserSelectGetBack`（`Merchant.cs:1029`）→ `RM_USERGETBACKITEM` → `SendSaveItemList(ActorId)`。
+        out.extend(back_item_list(m.actor_id, storage_items, ctx));
     }
     out
+}
+
+/// `Merchant.ClientGetDetailGoodsList`（`Merchant.cs:1304`）：物品详情分页（最多 10 件，从组尾往前取）。
+///
+/// 收包侧 `CM_USERGETDETAILITEM` 与 `CM_USERBUYITEM` 共用 `ClientUserBuyItem`（`Operate.cs:192-213`）
+/// ⇒ 同一套 `IsBuy && 同图 && |dx|,|dy| <= 15` 门（由调用方判）；`n_int` = 收包 `Param`（菜单顶行）。
+///
+/// 帧尾口径：`sSendMsg` = 每件 `EDCode.EncodeBuffer(clientItem) + '/'`，再经 RM→SM 的 `SendDefMessage`
+/// 施加 `EDCode.EncodeString`（`PlayObject.Message.cs:1830-1831` + `PlayObject.Socket.cs:26-43`）
+/// ⇒ 本帧 `tail_encoded = false`（原文 = 已编码件的 ASCII 拼接，`edcode::encode` 无损往返）。
+#[must_use]
+pub fn detail_goods_list(
+    m: &MerchantView,
+    goods: &mut [Vec<MerchantItem>],
+    s_item_name: &str,
+    n_int_in: i32,
+    ctx: &ShopContext<'_>,
+) -> ShopFrame {
+    let source = CatalogSource(ctx.catalog);
+    let t = price_tables(&source, &m.item_type_list);
+    let mut n_int = n_int_in;
+    let mut s_send_msg: Vec<u8> = Vec::new();
+    let mut n_item_count: u16 = 0;
+    // `for (i = 0; i < GoodsList.Count; i++)`：第一件模板名 `== sItemName`（**ordinal**，非 IgnoreCase）就进。
+    for group in goods.iter_mut() {
+        if group.is_empty() {
+            continue;
+        }
+        let first_idx = group[0].index;
+        let Some(tpl) = ctx.catalog.get(first_idx) else {
+            continue;
+        };
+        if tpl.name != s_item_name {
+            continue;
+        }
+        let group_len = i32::try_from(group.len()).unwrap_or(i32::MAX);
+        if group_len - 1 < n_int {
+            n_int = i32::max(0, group_len - 10);
+        }
+        // `for (j = list20.Count - 1; j >= 0; j--)` 取到 10 件为止。
+        let mut j = group_len - 1;
+        while j >= 0 {
+            let item = &mut group[j as usize];
+            // `GetUpgradeStdItem`（T-47 ⑥）+ `GetUserPrice(playObject, GetUserItemPrice(userItem))`。
+            let n_price = shop::get_user_price(&ctx.cfg, shop::get_user_item_price(&t, item));
+            let ci = ClientItem {
+                tpl,
+                name: tpl.name.clone(),
+                make_index: item.make_index,
+                dura: item.dura,
+                dura_max: n_price as u16,
+                desc: item.desc,
+            };
+            s_send_msg.extend_from_slice(&mir2_protocol::edcode::encode(&encode_client_item(&ci)));
+            s_send_msg.push(b'/');
+            n_item_count = n_item_count.saturating_add(1);
+            if n_item_count >= 10 {
+                break;
+            }
+            j -= 1;
+        }
+        break;
+    }
+    // `SendMsg(RM_SENDDETAILGOODSLIST, 0, ActorId, nItemCount, nInt, sSendMsg)` →
+    // `SM_SENDDETAILGOODSLIST(Recog=ActorId, Param=nItemCount, Tag=nInt)`。
+    frame(
+        mir2_protocol::messages::SM_SENDDETAILGOODSLIST,
+        m.actor_id,
+        n_item_count,
+        n_int as u16,
+        0,
+        s_send_msg,
+    )
+}
+
+/// `PlayObject.SendSaveItemList`（`PlayObject.Base.cs:1590-1620`）：仓库列表分页（每页 50，末尾页 `Series = page-1`）。
+///
+/// 帧尾是 `SendSocket(ClientMsg, sSendMsg)` **直连**（无 `EncodeString`）⇒ `tail_encoded = true`；
+/// 整页模板全缺 ⇒ `sSendMsg` 为空、`SendSocket` 直接 return（该页不发）。
+#[must_use]
+pub fn back_item_list(actor_id: i32, items: &[BagItem], ctx: &ShopContext<'_>) -> Vec<ShopFrame> {
+    let mut out = Vec::new();
+    let max_count = i32::try_from(items.len()).unwrap_or(i32::MAX);
+    let page = (max_count as f32 / 50.0).ceil() as i32;
+    for p in 0..page {
+        let start = p * 50;
+        let end = i32::min(start + 50, max_count);
+        let mut tail: Vec<u8> = Vec::new();
+        for i in start..end {
+            let it = &items[i as usize];
+            if let Some(tpl) = ctx.catalog.get(it.index) {
+                let ci = ClientItem {
+                    tpl,
+                    name: tpl.name.clone(),
+                    make_index: it.make_index,
+                    dura: it.dura,
+                    dura_max: it.dura_max,
+                    desc: it.desc,
+                };
+                tail.extend_from_slice(&mir2_protocol::edcode::encode(&encode_client_item(&ci)));
+                tail.push(b'/');
+            }
+        }
+        if tail.is_empty() {
+            continue;
+        }
+        let series = if page - 1 < 0 { 0 } else { page - 1 };
+        out.push(frame_encoded(
+            mir2_protocol::messages::SM_SAVEITEMLIST,
+            actor_id,
+            0,
+            p as u16,
+            series as u16,
+            tail,
+        ));
+    }
+    out
+}
+
+/// `ClientStorageItem`（`PlayObject.Operate.cs:1607-1655`）的结果。
+pub struct StorageResult {
+    pub frames: Vec<ShopFrame>,
+    /// `bo19`（命中名/号且商人允许存 ⇒ true）。
+    pub ok: bool,
+}
+
+/// `PlayObject.ClientStorageItem`：把背包件移入仓库（39 上限）。
+///
+/// `storage_items` = `PlayObject.StorageItemList`（调用方持有）；`can_store` = oracle
+/// `StorageItemList.Count < 39`（`Operate.cs:1629`，由调用方用 [`crate::storage`] 的口径算出）。
+/// `merchant_allows` = `merchant != null && merchant.IsStorage && (同图且 IsWithinSight || FunctionNPC)`
+/// （由调用方预算；`FunctionNPC` 未建模 ⇒ 只可能是同图+视距）。
+/// `raw_name` 是收包 `Msg` 原文（函数内先做 `GetValidStr3(sMsg, ref sMsg, ' ')` 取首段）。
+#[must_use]
+pub fn storage_item(
+    state: &mut GroundState,
+    storage_items: &mut Vec<BagItem>,
+    can_store: bool,
+    merchant_allows: bool,
+    make_index: i32,
+    raw_name: &str,
+    ctx: &ShopContext<'_>,
+) -> StorageResult {
+    let mut frames = Vec::new();
+    // `if (sMsg.Contains(' ')) HUtil32.GetValidStr3(sMsg, ref sMsg, ' ');`（取首个空格前的段）。
+    let s_msg = raw_name.split(' ').next().unwrap_or(raw_name);
+    // `PayMent == 1 && !Config.TryModeUseStorage` 门：本部署 `TestServer=TRUE` ⇒ PayMent=3 ⇒ 恒假（登记）。
+    let mut bo19 = false;
+    for i in 0..state.item_list.len() {
+        let it = &state.item_list[i];
+        let name_matches = item_name(ctx.catalog, it.index).is_some_and(|n| eq_label(&n, s_msg));
+        if it.make_index == make_index && name_matches {
+            if merchant_allows {
+                if can_store {
+                    let moved = state.item_list.remove(i);
+                    storage_items.push(moved);
+                    state.wabil.weight = recalc_weight(ctx.catalog, &state.item_list);
+                    frames.push(frame(
+                        mir2_protocol::messages::SM_STORAGE_OK,
+                        0,
+                        0,
+                        0,
+                        0,
+                        Vec::new(),
+                    ));
+                } else {
+                    frames.push(frame(
+                        mir2_protocol::messages::SM_STORAGE_FULL,
+                        0,
+                        0,
+                        0,
+                        0,
+                        Vec::new(),
+                    ));
+                }
+                bo19 = true;
+            }
+            break;
+        }
+    }
+    if !bo19 {
+        frames.push(frame(
+            mir2_protocol::messages::SM_STORAGE_FAIL,
+            0,
+            0,
+            0,
+            0,
+            Vec::new(),
+        ));
+    }
+    StorageResult { frames, ok: bo19 }
+}
+
+/// `ClientTakeBackStorageItem`（`PlayObject.Operate.cs:1656-1713`）的结果。
+pub struct TakeBackResult {
+    pub frames: Vec<ShopFrame>,
+    /// `bo19`（命中名/号、负重够且商人允许取回 ⇒ true）。
+    pub ok: bool,
+}
+
+/// `PlayObject.ClientTakeBackStorageItem`：把仓库件取回背包。
+///
+/// 调用方须先完成 oracle 的前置：`FindMerchant(actorId) != null` 且 `IsCanGetBackItem`（否则**无任何帧**）。
+/// `merchant_allows` = `merchant.IsGetback && (同图+视距 || FunctionNPC)`；`raw_name` 是收包 `Msg`
+/// 原文（本路径**不**做空格截断，`Operate.cs:1656-1659`）。
+#[must_use]
+pub fn take_back_storage_item(
+    state: &mut GroundState,
+    storage_items: &mut Vec<BagItem>,
+    merchant_allows: bool,
+    make_index: i32,
+    raw_name: &str,
+    ctx: &ShopContext<'_>,
+) -> TakeBackResult {
+    let mut frames = Vec::new();
+    let mut bo19 = false;
+    for i in 0..storage_items.len() {
+        let it = &storage_items[i];
+        let name_matches = item_name(ctx.catalog, it.index).is_some_and(|n| eq_label(&n, raw_name));
+        if it.make_index == make_index && name_matches {
+            let std_weight = ctx.catalog.get(it.index).map_or(0, |t| i32::from(t.weight));
+            if is_add_weight_available(&state.wabil, std_weight) {
+                if merchant_allows {
+                    if state.item_list.len() < MAX_BAG_ITEM {
+                        // `AddItemToBag`（`BaseObject.cs:1241`）：先入包（内含 WeightChanged）。
+                        // `SendAddItem`（`BaseObject.cs:225`）：`SM_ADDITEM(ActorId,0,0,1)` 头（尾归 T-24）。
+                        frames.push(frame(
+                            mir2_protocol::messages::SM_ADDITEM,
+                            ctx.player_actor_id,
+                            0,
+                            0,
+                            1,
+                            Vec::new(),
+                        ));
+                        let moved = storage_items.remove(i);
+                        state.item_list.push(moved);
+                        state.wabil.weight = recalc_weight(ctx.catalog, &state.item_list);
+                        // `SM_TAKEBACKSTORAGEITEM_OK(Recog=nItemIdx)`。
+                        frames.push(frame(
+                            mir2_protocol::messages::SM_TAKEBACKSTORAGEITEM_OK,
+                            make_index,
+                            0,
+                            0,
+                            0,
+                            Vec::new(),
+                        ));
+                    } else {
+                        frames.push(frame(
+                            mir2_protocol::messages::SM_TAKEBACKSTORAGEITEM_FULLBAG,
+                            0,
+                            0,
+                            0,
+                            0,
+                            Vec::new(),
+                        ));
+                    }
+                    bo19 = true;
+                }
+            } else {
+                // `SysMsg(MessageSettings.CanotGetItems, Red, Hint)` → `SM_SYSMESSAGE(ActorId,
+                // MakeWord(RedMsgFColor, RedMsgBColor), 0, 1, 原文)`（`BaseObject.cs:1678`）。
+                frames.push(frame(
+                    mir2_protocol::messages::SM_SYSMESSAGE,
+                    ctx.player_actor_id,
+                    smframe::make_word(ctx.red_f, ctx.red_b),
+                    0,
+                    1,
+                    downlink::gbk(CANOT_GET_ITEMS_MSG),
+                ));
+            }
+            break;
+        }
+    }
+    if !bo19 {
+        frames.push(frame(
+            mir2_protocol::messages::SM_TAKEBACKSTORAGEITEM_FAIL,
+            0,
+            0,
+            0,
+            0,
+            Vec::new(),
+        ));
+    }
+    TakeBackResult { frames, ok: bo19 }
 }
 
 /// `Merchant.ClientQuerySellPrice`（`Merchant.cs:1345`）：`nC = GetSellItemPrice(GetUserItemPrice(item))`，
@@ -745,6 +1092,8 @@ mod tests {
             script_lable: "",
             human_max_gold: 1_000_000,
             player_actor_id: 4242,
+            red_f: 0xFF,
+            red_b: 0x38,
         }
     }
 
@@ -760,7 +1109,7 @@ mod tests {
             dura_max: 10,
             desc: [0; 14],
         }]];
-        let out = user_select(LABEL_BUY, &m, &goods, &c);
+        let out = user_select(LABEL_BUY, &m, &goods, &[], &c);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].ident, 645);
         assert_eq!(out[0].recog, 4242);
@@ -773,12 +1122,15 @@ mod tests {
         let cat = catalog();
         let c = ctx(&cat);
         let m = merchant(mflags(false, true));
-        assert_eq!(user_select(LABEL_SELL, &m, &[], &c)[0].ident, 646);
+        assert_eq!(user_select(LABEL_SELL, &m, &[], &[], &c)[0].ident, 646);
         let mut m2 = merchant(MerchantFlags::default());
         m2.flags.is_repair = true;
-        assert_eq!(user_select(LABEL_REPAIR, &m2, &[], &c)[0].ident, 668);
+        assert_eq!(user_select(LABEL_REPAIR, &m2, &[], &[], &c)[0].ident, 668);
         m2.flags.is_sup_repair = true;
-        assert_eq!(user_select(LABEL_SUPER_REPAIR, &m2, &[], &c)[0].ident, 668);
+        assert_eq!(
+            user_select(LABEL_SUPER_REPAIR, &m2, &[], &[], &c)[0].ident,
+            668
+        );
     }
 
     #[test]
@@ -988,5 +1340,254 @@ mod tests {
         };
         let r = repair_item(&m_none, &mut state3, 0, &c);
         assert!(r.frames.is_empty(), "不支持 ⇒ 无帧 return");
+    }
+
+    fn bag(make_index: i32, index: u16) -> BagItem {
+        BagItem {
+            make_index,
+            index,
+            dura: 5,
+            dura_max: 10,
+            desc: [0; 14],
+        }
+    }
+
+    /// `ClientGetDetailGoodsList`（`Merchant.cs:1304`）：从组尾往前取 **最多 10 件**；
+    /// 尾 = 每件 `EncodeBuffer(ClientItem) + '/'`（未编码原文，`tail_encoded=false`）；
+    /// `nInt` 超过 `Count-1` 时夹到 `max(0, Count-10)`（`Merchant.cs:1320-1323`）。
+    /// 改坏（`n_item_count >= 10` → `>= 11` 或去掉取尾循环）⇒ 本用例红。
+    #[test]
+    fn detail_goods_list_encodes_last_ten_items_and_page_offset() {
+        let cat = catalog();
+        let c = ctx(&cat);
+        let m = merchant(mflags(true, false));
+        let goods: Vec<MerchantItem> = (0..12)
+            .map(|k| MerchantItem {
+                make_index: 900 + k,
+                index: 1,
+                dura: 5,
+                dura_max: 10,
+                desc: [0; 14],
+            })
+            .collect();
+        let mut goods = vec![goods];
+        let f = detail_goods_list(&m, &mut goods, "金创药(小量)", 0, &c);
+        assert_eq!(f.ident, mir2_protocol::messages::SM_SENDDETAILGOODSLIST);
+        assert_eq!(f.recog, 4242, "Recog = 商人 ActorId");
+        assert_eq!(f.param, 10, "最多 10 件");
+        assert_eq!(f.tag, 0, "nInt=0 未超界 ⇒ 不夹");
+        assert!(
+            !f.tail_encoded,
+            "详情尾经 SendDefMessage 再施加 EncodeString"
+        );
+        // 尾字节范围 [0x3C,0x7B] ⇒ 内部不含 '/'（0x2F）⇒ 可按 '/' 安全切分。
+        let chunks: Vec<&[u8]> = f.tail.split(|b| *b == b'/').collect();
+        assert_eq!(chunks.len(), 11, "10 件 + 尾部空段");
+        for (k, ch) in chunks[..10].iter().enumerate() {
+            let buf = mir2_protocol::edcode::decode(ch);
+            assert_eq!(buf.len(), 124, "ClientItem 定长 124B");
+            let want = (911 - k as i32).to_le_bytes();
+            assert_eq!(
+                &buf[100..104],
+                &want,
+                "第 {k} 件应取组尾往前（make_index 911..902）"
+            );
+        }
+        // `nInt` 超界 ⇒ 夹到 `max(0, Count-10) = 2`（只改回帧 Tag，不改取的件）。
+        let f2 = detail_goods_list(&m, &mut goods, "金创药(小量)", 100, &c);
+        assert_eq!((f2.param, f2.tag), (10, 2), "nInt 夹到 Count-10");
+        // 模板名不符（ordinal 区分大小写）⇒ 不发件（header-only）。
+        let f3 = detail_goods_list(&m, &mut goods, "金创药", 0, &c);
+        assert_eq!((f3.param, f3.tail.len()), (0, 0));
+    }
+
+    /// `SendSaveItemList`（`PlayObject.Base.cs:1590`）：每页 50、`Tag=p`、`Series=page-1`；
+    /// 尾是 `SendSocket` 直连（`tail_encoded=true`）；空仓库 ⇒ 0 帧（`page=0`）。
+    #[test]
+    fn back_item_list_pages_fifty_and_tags_series() {
+        let cat = catalog();
+        let c = ctx(&cat);
+        let items: Vec<BagItem> = (0..51).map(|k| bag(100 + k, 1)).collect();
+        let out = back_item_list(4242, &items, &c);
+        assert_eq!(out.len(), 2, "51 件 ⇒ ceil(51/50)=2 页");
+        assert_eq!(
+            (
+                out[0].ident,
+                out[0].recog,
+                out[0].param,
+                out[0].tag,
+                out[0].series
+            ),
+            (704, 4242, 0, 0, 1)
+        );
+        assert_eq!((out[1].tag, out[1].series), (1, 1), "Tag=p，Series=page-1");
+        assert!(
+            out.iter().all(|f| f.tail_encoded),
+            "分页尾走 SendSocket 直连"
+        );
+        assert_eq!(out[0].tail.split(|b| *b == b'/').count() - 1, 50);
+        assert_eq!(out[1].tail.split(|b| *b == b'/').count() - 1, 1);
+        assert!(back_item_list(4242, &[], &c).is_empty(), "空仓库 ⇒ 0 帧");
+    }
+
+    /// `ClientStorageItem`（`Operate.cs:1607`）：存入（39 上限）+ 背包移除 + 负重重算；
+    /// 仓满 ⇒ `SM_STORAGE_FULL`；商人无 `IsStorage` ⇒ `SM_STORAGE_FAIL`（件不动）。
+    #[test]
+    fn storage_item_moves_to_storage_and_reports_full_or_fail() {
+        let cat = catalog();
+        let c = ctx(&cat);
+        let mut state = GroundState {
+            item_list: vec![bag(9, 1)],
+            gold: 0,
+            wabil: ability(3, 100),
+        };
+        let mut storage: Vec<BagItem> = Vec::new();
+        let r = storage_item(&mut state, &mut storage, true, true, 9, "金创药(小量)", &c);
+        assert!(r.ok);
+        assert_eq!(r.frames.len(), 1);
+        assert_eq!(r.frames[0].ident, mir2_protocol::messages::SM_STORAGE_OK);
+        assert!(state.item_list.is_empty(), "背包件已移出");
+        assert_eq!(storage.len(), 1);
+        assert_eq!(state.wabil.weight, 0, "WeightChanged 重算");
+        // 仓满。
+        let mut state2 = GroundState {
+            item_list: vec![bag(9, 1)],
+            gold: 0,
+            wabil: ability(3, 100),
+        };
+        let mut full: Vec<BagItem> = (0..39).map(|k| bag(k, 1)).collect();
+        let r2 = storage_item(&mut state2, &mut full, false, true, 9, "金创药(小量)", &c);
+        assert_eq!(r2.frames[0].ident, mir2_protocol::messages::SM_STORAGE_FULL);
+        assert!(r2.ok, "oracle 满支也置 bo19=true（`Operate.cs:1644-1645`）");
+        assert_eq!(state2.item_list.len(), 1, "满 ⇒ 件不动");
+        assert_eq!(full.len(), 39);
+        // 商人无 IsStorage ⇒ FAIL（件不动）。
+        let mut state3 = GroundState {
+            item_list: vec![bag(9, 1)],
+            gold: 0,
+            wabil: ability(3, 100),
+        };
+        let mut storage3: Vec<BagItem> = Vec::new();
+        let r3 = storage_item(
+            &mut state3,
+            &mut storage3,
+            true,
+            false,
+            9,
+            "金创药(小量)",
+            &c,
+        );
+        assert_eq!(r3.frames[0].ident, mir2_protocol::messages::SM_STORAGE_FAIL);
+        assert_eq!(state3.item_list.len(), 1);
+        // 名不符 ⇒ FAIL。
+        let r4 = storage_item(&mut state3, &mut storage3, true, true, 9, "木剑", &c);
+        assert_eq!(r4.frames[0].ident, mir2_protocol::messages::SM_STORAGE_FAIL);
+    }
+
+    /// `ClientTakeBackStorageItem`（`Operate.cs:1656`）：取回 = `SM_ADDITEM` + `SM_TAKEBACKSTORAGEITEM_OK(nItemIdx)`；
+    /// 负重不足 ⇒ `SysMsg(CanotGetItems, Red)` + `SM_TAKEBACKSTORAGEITEM_FAIL`；背包满 ⇒ `_FULLBAG`。
+    /// 改坏（交换 ADDITEM/OK 顺序或删负重门）⇒ 本用例红。
+    #[test]
+    fn take_back_storage_item_adds_to_bag_and_weight_denies() {
+        let cat = catalog();
+        let c = ctx(&cat);
+        let mut state = GroundState {
+            item_list: Vec::new(),
+            gold: 0,
+            wabil: ability(0, 100),
+        };
+        let mut storage = vec![bag(7, 1)];
+        let r = take_back_storage_item(&mut state, &mut storage, true, 7, "金创药(小量)", &c);
+        assert!(r.ok);
+        assert_eq!(r.frames.len(), 2);
+        assert_eq!(r.frames[0].ident, mir2_protocol::messages::SM_ADDITEM);
+        assert_eq!(
+            r.frames[0].recog, 4242,
+            "SendAddItem 的 Recog = 玩家 ActorId"
+        );
+        assert_eq!(
+            r.frames[1].ident,
+            mir2_protocol::messages::SM_TAKEBACKSTORAGEITEM_OK
+        );
+        assert_eq!(r.frames[1].recog, 7, "OK 帧 Recog = nItemIdx");
+        assert_eq!(state.item_list.len(), 1);
+        assert!(storage.is_empty());
+        assert_eq!(state.wabil.weight, 3, "取回后重算负重");
+
+        // 负重不足 ⇒ SysMsg + FAIL（件不动）。
+        let mut state2 = GroundState {
+            item_list: Vec::new(),
+            gold: 0,
+            wabil: ability(2, 2),
+        };
+        let mut storage2 = vec![bag(7, 1)];
+        let r2 = take_back_storage_item(&mut state2, &mut storage2, true, 7, "金创药(小量)", &c);
+        assert!(!r2.ok);
+        assert_eq!(r2.frames.len(), 2);
+        assert_eq!(r2.frames[0].ident, mir2_protocol::messages::SM_SYSMESSAGE);
+        assert_eq!(r2.frames[0].recog, 4242);
+        assert_eq!(r2.frames[0].param, smframe::make_word(0xFF, 0x38));
+        assert_eq!(r2.frames[0].tail, downlink::gbk(CANOT_GET_ITEMS_MSG));
+        assert_eq!(
+            r2.frames[1].ident,
+            mir2_protocol::messages::SM_TAKEBACKSTORAGEITEM_FAIL
+        );
+        assert_eq!(state2.item_list.len(), 0);
+        assert_eq!(storage2.len(), 1);
+
+        // 背包满 ⇒ `_FULLBAG`。
+        let mut state3 = GroundState {
+            item_list: (0..MAX_BAG_ITEM as i32).map(|k| bag(k, 1)).collect(),
+            gold: 0,
+            wabil: ability(0, 100),
+        };
+        let mut storage3 = vec![bag(7, 1)];
+        let r3 = take_back_storage_item(&mut state3, &mut storage3, true, 7, "金创药(小量)", &c);
+        assert_eq!(
+            r3.frames[0].ident,
+            mir2_protocol::messages::SM_TAKEBACKSTORAGEITEM_FULLBAG
+        );
+        assert_eq!(storage3.len(), 1, "满 ⇒ 件仍在仓库");
+
+        // 商人无 IsGetback ⇒ 仅 FAIL（无 SysMsg/ADDITEM）。
+        let mut state4 = GroundState {
+            item_list: Vec::new(),
+            gold: 0,
+            wabil: ability(0, 100),
+        };
+        let mut storage4 = vec![bag(7, 1)];
+        let r4 = take_back_storage_item(&mut state4, &mut storage4, false, 7, "金创药(小量)", &c);
+        assert_eq!(r4.frames.len(), 1);
+        assert_eq!(
+            r4.frames[0].ident,
+            mir2_protocol::messages::SM_TAKEBACKSTORAGEITEM_FAIL
+        );
+    }
+
+    /// `UserSelect` 的 `@storage`/`@getback` 两支（`Merchant.cs:1024/1029`）。
+    #[test]
+    fn user_select_storage_and_getback_panels() {
+        let cat = catalog();
+        let c = ctx(&cat);
+        let mut m = merchant(MerchantFlags::default());
+        m.flags.is_storage = true;
+        let out = user_select(LABEL_STORAGE, &m, &[], &[], &c);
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].ident,
+            mir2_protocol::messages::SM_SENDUSERSTORAGEITEM
+        );
+        assert_eq!(out[0].recog, 4242);
+        m.flags.is_storage = false;
+        m.flags.is_getback = true;
+        let items = vec![bag(5, 1)];
+        let out = user_select(LABEL_GETBACK, &m, &[], &items, &c);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].ident, mir2_protocol::messages::SM_SAVEITEMLIST);
+        assert_eq!(out[0].recog, 4242);
+        // flag 不满足 ⇒ 无帧。
+        let m_none = merchant(MerchantFlags::default());
+        assert!(user_select(LABEL_STORAGE, &m_none, &[], &[], &c).is_empty());
+        assert!(user_select(LABEL_GETBACK, &m_none, &[], &items, &c).is_empty());
     }
 }

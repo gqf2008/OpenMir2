@@ -1,0 +1,12 @@
+# 写集与边界（⑤-4 第②片）
+
+base = refs/heads/master @ 793d3e71e（含 ⑤-4 第①片 ee40c98a / ⑤-5 d4d5b89c）
+本片改动（全部在 bins/game-svr/**）：
+- mir2-rs/bins/game-svr/src/shop.rs
+- mir2-rs/bins/game-svr/src/main.rs
+- mir2-rs/tests/parity/world/shop-storage-detail-20261013/**（本证据目录）
+
+不改：crates/world/**（第①片已落库存；本片只读 merchant_goods_groups*）、crates/protocol/**
+（SM_* 常量已存在）、crates/storage/**、whitelist.md（登记行沿用 T-24/T-47，本片在 README 说明归属）。
+
+边界（oracle 冻结）：git diff --name-only <base> HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage = 空。

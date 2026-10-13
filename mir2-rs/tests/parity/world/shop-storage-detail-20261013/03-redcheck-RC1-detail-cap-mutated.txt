@@ -1,0 +1,24 @@
+
+running 1 test
+test shop::tests::detail_goods_list_encodes_last_ten_items_and_page_offset ... FAILED
+
+failures:
+
+---- shop::tests::detail_goods_list_encodes_last_ten_items_and_page_offset stdout ----
+
+thread 'shop::tests::detail_goods_list_encodes_last_ten_items_and_page_offset' (25712) panicked at bins\game-svr\src\shop.rs:1376:9:
+assertion `left == right` failed: 最多 10 件
+  left: 11
+ right: 10
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shop::tests::detail_goods_list_encodes_last_ten_items_and_page_offset
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.00s
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.64s
+     Running unittests src\lib.rs (E:/tmp/m2svr-target\debug\deps\game_svr-675e68013f315636.exe)
+error: test failed, to rerun pass `-p game-svr --lib`
