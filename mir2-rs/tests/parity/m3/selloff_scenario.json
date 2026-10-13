@@ -69,11 +69,11 @@
     "buy_cancel": "PlayObject.Sale.cs:254 ClientBuyCancelSellOff（Flag=3 + '取消交易成功!'）",
     "buy": "PlayObject.Sale.cs:281 ClientBuySellOffItme（GameGold>=nSellGold+DecUserGameGold；卖方在线 Flag=2 + 卖方 += nSellGold；离线 Flag=1；缺陷照搬 for j<=9 越界）",
     "world_state": "M2Share.cs:79 SellOffItemList（进程级静态）；PlayObject.cs:856 SaleDeal / :864 SellOffItemList",
-    "db_read": "MySqlDB.cs:251-291 LoadSellOffItemList（列名写错 ⇒ 恒加载 0 行）；GameApp.cs:181-182",
-    "db_write": "MySqlDB.cs:293-330 SaveSellOffItemList；调用点 PlayObject.Sale.cs:240/332/577 全部被注释 ⇒ 永不执行",
-    "ddl": "sql/mir2_data.sql:24-36 goldsales(Id, DealCharName, BuyCharName, SellDateTime, State, SellGold, UseItems json)",
+    "db_read": "MySqlDB.cs:251-288 LoadSellOffItemList（列名写错 ⇒ 恒加载 0 行；本片 2026-10-14 行级复核：原写 251-291，291 是函数后空行）；GameApp.cs:181-182",
+    "db_write": "MySqlDB.cs:295-337 SaveSellOffItemList；调用点 PlayObject.Sale.cs:240/332/577 全部被注释 ⇒ 永不执行（本片 2026-10-14 行级复核：原写 293-330，293 是注释、330 是 catch 的 `{`）",
+    "ddl": "sql/mir2_data.sql:24-33 goldsales(Id, DealCharName, BuyCharName, SellDateTime, State, SellGold, UseItems json)（本片 2026-10-14 行级复核：原写 24-36，36 是 `-- Records of goldsales` 注释）",
     "config": "GameSvrConf.cs:1217/1919 DecUserGameGold=10000（硬编码，无配置键）",
-    "frames": "Messages.cs:769-828（CM 23002/23007/23012/23015/23024/23025/23026；SM 23003/23005/23008/23010/23014/23016/23018/23027；RM 23000/23004/23006/23009/23011/23013/23017/23019/23028）+ SM_MENU_OK(767)"
+    "frames": "Messages.cs:765-816（RM_SENDDEALOFFFORM=23000 起、RM_SELLOFFBUY_OK=23028 止；CM 23002/23007/23012/23015/23024/23025/23026；SM 23003/23005/23008/23010/23014/23016/23018/23027；RM 23000/23004/23006/23009/23011/23013/23017/23019/23028）+ SM_MENU_OK(767)（本片 2026-10-14 行级复核：原写 769-828，漏块首 RM_SENDDEALOFFFORM=23000 且 828 是无关的 RM_PLAYERKILLMONSTER=60001）"
   },
   "frame_text_sms": [767],
   "frame_scalar_fields": {},

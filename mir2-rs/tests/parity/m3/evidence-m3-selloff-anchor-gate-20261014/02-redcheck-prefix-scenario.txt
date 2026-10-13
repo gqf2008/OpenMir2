@@ -1,0 +1,11 @@
+### 修前场景（origin/master:a2d8eaf32 的 selloff_scenario.json）对新门 selloff_anchor_gate.py ⇒ 必须 RED
+RED: 修前场景锚门失败（8 项 / 共 19 锚）
+  - 覆盖面：场景锚未登记 Messages.cs:769-828（新增锚必须补进 REGISTERED）
+  - 覆盖面：场景锚未登记 MySqlDB.cs:251-291（新增锚必须补进 REGISTERED）
+  - 覆盖面：场景锚未登记 MySqlDB.cs:293-330（新增锚必须补进 REGISTERED）
+  - 覆盖面：场景锚未登记 mir2_data.sql:24-36（新增锚必须补进 REGISTERED）
+  - 覆盖面：REGISTERED 有而场景锚里没有 Messages.cs:765-816（锚被删/改形 ⇒ 表过期）
+  - 覆盖面：REGISTERED 有而场景锚里没有 MySqlDB.cs:251-288（锚被删/改形 ⇒ 表过期）
+  - 覆盖面：REGISTERED 有而场景锚里没有 MySqlDB.cs:295-337（锚被删/改形 ⇒ 表过期）
+  - 覆盖面：REGISTERED 有而场景锚里没有 mir2_data.sql:24-33（锚被删/改形 ⇒ 表过期）
+rc=1
