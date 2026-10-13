@@ -1,0 +1,24 @@
+== 03 判据本体（受影响 crate 用例，隔离 target，交付 head 实测） ==
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test -p db-srv --test quest_no_persist --offline
+读数: 8 passed / 0 failed / 0 ignored（base 为 7 条；本片 +1 条 = redcheck_quest_delta_subassertion_bites）
+rc=0
+
+== 判据本体 · cargo test -p db-srv --test quest_no_persist ==
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test -p db-srv --test quest_no_persist --offline
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running tests\quest_no_persist.rs (E:/tmp/openmir2-m3pt-target\debug\deps\quest_no_persist-21ddaa74cab9a78d.exe)
+
+running 8 tests
+test redcheck_quest_delta_subassertion_bites ... ok
+test redcheck_scanner_bites_injected_quest_persistence ... ok
+test redcheck_sql_scanner_bites_injected_quest_columns ... ok
+test session_quest_state_model_is_still_present ... ok
+test captured_cross_side_baselines_show_zero_characters_quest_rows ... ok
+test db_srv_save_and_load_sql_have_no_quest_columns ... ok
+test workspace_rust_sources_never_reference_characters_quest ... ok
+test workspace_sql_literals_never_mention_quest_columns ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+rc=0
+
