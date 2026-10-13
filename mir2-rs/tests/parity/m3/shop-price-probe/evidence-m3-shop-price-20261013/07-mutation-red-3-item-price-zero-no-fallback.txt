@@ -1,0 +1,45 @@
+# 改坏(candidate 3)：GetItemPrice 命中 0 也回落（oracle 只在 result < 0 时回落）
+# 命令：先改 mir2-rs/crates/formula/src/shop.rs，再跑：CARGO_TARGET_DIR=E:/tmp/m3bag-shop-target cargo test -p mir2-formula --offline --test shop_price_vectors
+
+$ diff -u shop.rs.orig shop.rs   # 仅展示被改坏的那一处
+--- /e/tmp/m3bag-shop-evidence/shop.rs.orig	2026-10-13 07:32:56.357683000 +0800
++++ mir2-rs/crates/formula/src/shop.rs	2026-10-13 07:33:06.699429300 +0800
+@@ -105,7 +105,7 @@
+             break;
+         }
+     }
+-    if result < 0.0 {
++    if result <= 0.0 { // MUTANT: 0 也回落
+         if let Some(std_item) = tables.source.get_std_item(index) {
+             if check_item_type(tables.item_type_list, i32::from(std_item.std_mode)) {
+                 result = f64::from(std_item.price);
+
+$ CARGO_TARGET_DIR=E:/tmp/m3bag-shop-target cargo test -p mir2-formula --offline --test shop_price_vectors
+   Compiling mir2-formula v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\formula)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.55s
+     Running tests\shop_price_vectors.rs (E:/tmp/m3bag-shop-target\debug\deps\shop_price_vectors-596b04aba6911252.exe)
+
+running 3 tests
+test redcheck_repair_dec_dura_truncation ... ok
+test redcheck_stdmode43_duramax_side_effect ... ok
+test shop_price_vectors_match_oracle ... FAILED
+
+failures:
+
+---- shop_price_vectors_match_oracle stdout ----
+
+thread 'shop_price_vectors_match_oracle' (27728) panicked at crates\formula\tests\shop_price_vectors.rs:81:5:
+item_price list_zero_no_fallback: got 321, expect 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shop_price_vectors_match_oracle
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-formula --test shop_price_vectors`
+TEST_RC=101
+
+$ cp shop.rs.orig shop.rs && sha256sum shop.rs   # 还原（须与原 shop.rs 一致）
+7e9e594826fc43e17ce4ceb14338aeb4c0aa7ed874958847ae99f9816fceb09b *mir2-rs/crates/formula/src/shop.rs

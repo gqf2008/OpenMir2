@@ -4,3 +4,4 @@
 pub mod drop;
 pub mod exp;
 pub mod level_ability;
+pub mod shop;

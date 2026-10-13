@@ -1,0 +1,47 @@
+# 改坏(candidate 2)：普通修理耗久改成四舍五入（oracle 是 C# 整型除法向零截断）
+# 命令：先改 mir2-rs/crates/formula/src/shop.rs，再跑：CARGO_TARGET_DIR=E:/tmp/m3bag-shop-target cargo test -p mir2-formula --offline --test shop_price_vectors
+
+$ diff -u shop.rs.orig shop.rs   # 仅展示被改坏的那一处
+--- /e/tmp/m3bag-shop-evidence/shop.rs.orig	2026-10-13 07:32:56.357683000 +0800
++++ mir2-rs/crates/formula/src/shop.rs	2026-10-13 07:33:02.771642500 +0800
+@@ -351,7 +351,7 @@
+                 user_item.dura = user_item.dura_max;
+             } else {
+                 // C# `(ushort)((DuraMax - Dura) / RepairItemDecDura)`（向零截断）。
+-                let delta = dura_delta_int(user_item) / cfg.repair_item_dec_dura;
++                let delta = hutil::round(f64::from(dura_delta_int(user_item)) / f64::from(cfg.repair_item_dec_dura)) as i32; // MUTANT: 四舍五入
+                 let new_dura_max = i32::from(user_item.dura_max) - i32::from(delta as u16);
+                 user_item.dura_max = new_dura_max as u16;
+                 user_item.dura = user_item.dura_max;
+
+$ CARGO_TARGET_DIR=E:/tmp/m3bag-shop-target cargo test -p mir2-formula --offline --test shop_price_vectors
+   Compiling mir2-formula v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\formula)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.54s
+     Running tests\shop_price_vectors.rs (E:/tmp/m3bag-shop-target\debug\deps\shop_price_vectors-596b04aba6911252.exe)
+
+running 3 tests
+test redcheck_stdmode43_duramax_side_effect ... ok
+test redcheck_repair_dec_dura_truncation ... ok
+test shop_price_vectors_match_oracle ... FAILED
+
+failures:
+
+---- shop_price_vectors_match_oracle stdout ----
+
+thread 'shop_price_vectors_match_oracle' (9280) panicked at crates\formula\tests\shop_price_vectors.rs:281:5:
+assertion `left == right` failed: repair_item trunc_dec: dura
+  left: 967
+ right: 968
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shop_price_vectors_match_oracle
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-formula --test shop_price_vectors`
+TEST_RC=101
+
+$ cp shop.rs.orig shop.rs && sha256sum shop.rs   # 还原（须与原 shop.rs 一致）
+7e9e594826fc43e17ce4ceb14338aeb4c0aa7ed874958847ae99f9816fceb09b *mir2-rs/crates/formula/src/shop.rs

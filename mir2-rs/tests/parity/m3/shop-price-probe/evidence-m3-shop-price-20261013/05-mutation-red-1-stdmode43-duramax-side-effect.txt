@@ -1,0 +1,54 @@
+# 改坏(candidate 1)：去掉 StdMode 43 对 userItem.DuraMax 的写回（oracle Merchant.cs:1158 副作用）
+# 命令：先改 mir2-rs/crates/formula/src/shop.rs，再跑：CARGO_TARGET_DIR=E:/tmp/m3bag-shop-target cargo test -p mir2-formula --offline --test shop_price_vectors
+
+$ diff -u shop.rs.orig shop.rs   # 仅展示被改坏的那一处
+--- /e/tmp/m3bag-shop-evidence/shop.rs.orig	2026-10-13 07:32:56.357683000 +0800
++++ mir2-rs/crates/formula/src/shop.rs	2026-10-13 07:32:56.839304700 +0800
+@@ -149,8 +149,7 @@
+                     }
+                     43 => {
+                         if user_item.dura_max < 10000 {
+-                            // BUG-REPLICA（Merchant.cs:1158）：取价顺带改写实例 DuraMax。
+-                            user_item.dura_max = 10000;
++                            // MUTANT: 去掉 DuraMax 副作用
+                         }
+                         if user_item.dura <= user_item.dura_max {
+                             let n20 = item_price / 2.0 / f64::from(user_item.dura_max)
+
+$ CARGO_TARGET_DIR=E:/tmp/m3bag-shop-target cargo test -p mir2-formula --offline --test shop_price_vectors
+   Compiling mir2-formula v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\formula)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.57s
+     Running tests\shop_price_vectors.rs (E:/tmp/m3bag-shop-target\debug\deps\shop_price_vectors-596b04aba6911252.exe)
+
+running 3 tests
+test redcheck_stdmode43_duramax_side_effect ... FAILED
+test redcheck_repair_dec_dura_truncation ... ok
+test shop_price_vectors_match_oracle ... FAILED
+
+failures:
+
+---- redcheck_stdmode43_duramax_side_effect stdout ----
+
+thread 'redcheck_stdmode43_duramax_side_effect' (11084) panicked at crates\formula\tests\shop_price_vectors.rs:347:5:
+assertion `left == right` failed: oracle 路径必须写回 10000
+  left: 500
+ right: 10000
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- shop_price_vectors_match_oracle stdout ----
+
+thread 'shop_price_vectors_match_oracle' (3036) panicked at crates\formula\tests\shop_price_vectors.rs:124:5:
+user_item_price stdmode43_clamp: got 300, expect 158
+
+
+failures:
+    redcheck_stdmode43_duramax_side_effect
+    shop_price_vectors_match_oracle
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-formula --test shop_price_vectors`
+TEST_RC=101
+
+$ cp shop.rs.orig shop.rs && sha256sum shop.rs   # 还原（须与原 shop.rs 一致）
+7e9e594826fc43e17ce4ceb14338aeb4c0aa7ed874958847ae99f9816fceb09b *mir2-rs/crates/formula/src/shop.rs

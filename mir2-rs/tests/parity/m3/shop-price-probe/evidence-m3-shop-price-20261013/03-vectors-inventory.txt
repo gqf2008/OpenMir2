@@ -1,0 +1,27 @@
+# 向量 / 工作树文件 sha256（仓库 LF 口径；盘上已是 LF）
+# 命令：sha256sum <文件>
+
+965b206afa4930ead1735a67a81eb09e5b3f731a31eae153be47e7806ae49ddb *mir2-rs/tests/parity/m3/shop-price-probe/vectors/shop_price_vectors.tsv
+7cb8ec3940545db99b0ece216b520d0afb8795238122c187799ad5490b707a70 *mir2-rs/tests/parity/m3/shop-price-probe/vectors/shop_price_vectors.json
+ecb226305a158c7498009f746edad4f11b456a521db9c7bf1f8f2532ce9984c3 *mir2-rs/tests/parity/m3/shop-price-probe/Program.cs
+0fa293b4fff4a85cdd7db0c277073eca7c97683608298ea10b186dbc86fabdab *mir2-rs/tests/parity/m3/shop-price-probe/shop-price-probe.csproj
+7e9e594826fc43e17ce4ceb14338aeb4c0aa7ed874958847ae99f9816fceb09b *mir2-rs/crates/formula/src/shop.rs
+7cbaa085354d83fa43b734936abb5061ce04891e1f6dbfb664850c2b7649711c *mir2-rs/crates/formula/tests/shop_price_vectors.rs
+
+# 向量族计数（tag \t 计数）
+item_price	6
+repair_cost	10
+repair_item	11
+sell_price	8
+uip	15
+user_price	8
+
+# 总行数：58
+
+# 盘上 EOL 检查（应全为 LF）
+LF mir2-rs/tests/parity/m3/shop-price-probe/vectors/shop_price_vectors.tsv
+LF mir2-rs/tests/parity/m3/shop-price-probe/vectors/shop_price_vectors.json
+LF mir2-rs/tests/parity/m3/shop-price-probe/Program.cs
+LF mir2-rs/tests/parity/m3/shop-price-probe/shop-price-probe.csproj
+LF mir2-rs/crates/formula/src/shop.rs
+LF mir2-rs/crates/formula/tests/shop_price_vectors.rs

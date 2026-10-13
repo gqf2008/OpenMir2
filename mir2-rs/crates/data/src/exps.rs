@@ -21,6 +21,38 @@ pub struct IniFile {
 }
 
 impl IniFile {
+    /// 从任意编码字节加载：先按 BOM 探测编码（UTF-8 / UTF-16LE / UTF-16BE），无 BOM 则按
+    /// GB2312（GBK）；解码成文本后再喂 [`IniFile::from_gbk_bytes`] 走同一套 ini 解析。
+    ///
+    /// 口径来源：`ConfigFile.Load` 的 `new StreamReader(..., Encoding.GetEncoding("GB2312"))`
+    /// （`src/OpenMir2/Common/ConfigFile.cs:263`）——`StreamReader` 默认 `detectEncodingFromByteOrderMarks: true`，
+    /// 现网 UTF-8+BOM 的 `Server.conf` 实际按 UTF-8 解码。
+    ///
+    /// 无 BOM 时**直接**交给 [`IniFile::from_gbk_bytes`]（不做 GBK 解码/再编码往返），
+    /// 保证与既有入口逐字节同口径。
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+            let (text, _, _) = encoding_rs::UTF_8.decode(&bytes[3..]);
+            return Self::from_decoded_text(&text);
+        }
+        if bytes.starts_with(&[0xFE, 0xFF]) {
+            let (text, _, _) = encoding_rs::UTF_16BE.decode(&bytes[2..]);
+            return Self::from_decoded_text(&text);
+        }
+        // C# 判定：0xFF 0xFE 且第 3 字节 != 0xFF ⇒ Unicode(LE)；0xFF 0xFE 0xFF 落到默认编码。
+        if bytes.starts_with(&[0xFF, 0xFE]) && bytes.get(2) != Some(&0xFF) {
+            let (text, _, _) = encoding_rs::UTF_16LE.decode(&bytes[2..]);
+            return Self::from_decoded_text(&text);
+        }
+        Self::from_gbk_bytes(bytes)
+    }
+
+    /// 把已解码的文本重新编码为 GBK 后走 [`IniFile::from_gbk_bytes`]（共用一套解析）。
+    fn from_decoded_text(text: &str) -> Self {
+        let (gbk, _, _) = encoding_rs::GBK.encode(text);
+        Self::from_gbk_bytes(&gbk)
+    }
+
     /// 从 GBK（GB2312）字节加载。解析规则逐条对应 `ConfigFile.Load`。
     pub fn from_gbk_bytes(bytes: &[u8]) -> Self {
         let (text, _, _) = encoding_rs::GBK.decode(bytes);
@@ -211,6 +243,19 @@ mod tests {
     fn ini_inline_comment() {
         let ini = IniFile::from_gbk_bytes(b"[Exp]\nA=1 ;; note\n");
         assert_eq!(ini.read_integer("Exp", "A", 0), 1);
+    }
+
+    /// `from_bytes`：UTF-8+BOM 按 UTF-8 解码；无 BOM 的 GBK 字节直接走 GBK 入口。
+    #[test]
+    fn from_bytes_detects_bom() {
+        let mut utf8_bom = vec![0xEF, 0xBB, 0xBF];
+        utf8_bom.extend_from_slice("[Exp]\nA=1\n".as_bytes());
+        assert_eq!(
+            IniFile::from_bytes(&utf8_bom).read_integer("Exp", "A", 0),
+            1
+        );
+        // GBK 编码的「是」（0xCA 0xC7）无 BOM ⇒ 走 GBK。
+        assert!(IniFile::from_bytes(b"[Exp]\nA=\xCA\xC7\n").read_bool("Exp", "A", false));
     }
 
     #[test]

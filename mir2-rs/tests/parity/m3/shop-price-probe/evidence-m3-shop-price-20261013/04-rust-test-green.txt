@@ -1,0 +1,36 @@
+$ CARGO_TARGET_DIR=E:/tmp/m3bag-shop-target cargo test -p mir2-formula --offline
+   Compiling mir2-formula v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\formula)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.21s
+     Running unittests src\lib.rs (E:/tmp/m3bag-shop-target\debug\deps\mir2_formula-c455931790fe8bd2.exe)
+
+running 11 tests
+test exp::tests::calc_get_exp_decay ... ok
+test drop::tests::item_number_counter_wraps ... ok
+test exp::tests::calc_get_exp_no_decay_when_fix_on ... ok
+test exp::tests::level_exp_indexes_table ... ok
+test drop::tests::unknown_item_sets_desc8 ... ok
+test drop::tests::item_name_bug_replica ... ok
+test drop::tests::gold_uses_half_plus_random ... ok
+test level_ability::tests::taoist_hand_weight_bug_replica ... ok
+test level_ability::tests::warrior_level1 ... ok
+test level_ability::tests::wizard_level50 ... ok
+test exp::tests::level_exp_above_max_panics_like_csharp - should panic ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\shop_price_vectors.rs (E:/tmp/m3bag-shop-target\debug\deps\shop_price_vectors-596b04aba6911252.exe)
+
+running 3 tests
+test redcheck_repair_dec_dura_truncation ... ok
+test redcheck_stdmode43_duramax_side_effect ... ok
+test shop_price_vectors_match_oracle ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_formula
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+TEST_RC=0

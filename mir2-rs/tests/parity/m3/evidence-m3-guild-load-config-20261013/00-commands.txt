@@ -1,0 +1,33 @@
+# 本证据包命令（全部在 worktree .claude/worktrees/m3cs 内执行）
+# 隔离 target：export CARGO_TARGET_DIR=E:/tmp/m3cs-guild-target
+
+# --- oracle 锚 ---
+rg -n "GuildDir|GuildFile|CastleDir|CastleFile|WomaHorn|ZumaPiece|BuildGuildPrice|GuildWarPrice|GuildWarTime|GuildNameLen|GuildMemberMaxLimit|GuildRankNameLen|CastleNameLen|StartCastleWarDays|StartCastlewarTime|ShowCastleWarEndMsgTime|CastleWarTime|GetCastleTime|HireGuardPrice|HireArcherPrice|RepairDoorPrice|RepairWallPrice|CastleGoldMax|CastleOneDayGold|CastleTaxRate|GetAllNpcTax|CastleMemberPriceRate|CastleName|CastleHomeMap|CastleHomeX|CastleHomeY|CastleWarRangeX|CastleWarRangeY" src/Modules/SystemModule/Conf/ServerConf.cs
+rg -n "GuildDir =|GuildFile =|CastleDir =|CastleFile =|WomaHorn =|ZumaPiece =|BuildGuildPrice =|GuildWarPrice =|GuildWarTime =|GuildNameLen =|GuildMemberMaxLimit =|GuildRankNameLen =|CastleNameLen|StartCastleWarDays =|StartCastlewarTime =|ShowCastleWarEndMsgTime =|CastleWarTime =|GetCastleTime =|HireGuardPrice =|HireArcherPrice =|RepairDoorPrice =|RepairWallPrice =|CastleGoldMax =|CastleOneDayGold =|CastleTaxRate =|GetAllNpcTax =|CastleMemberPriceRate =|CastleName =|CastleHomeMap =|CastleHomeX =|CastleHomeY =|CastleWarRangeX =|CastleWarRangeY =|GuildNotice =|GuildWar =|GuildAll =|GuildMember =|GuildMemberRank =|GuildChief =" src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+rg -n "StreamReader|GB2312" src/OpenMir2/Common/ConfigFile.cs
+
+# --- 单元/集成测试 ---
+cd mir2-rs
+cargo test --offline -p mir2-data
+cargo test --offline -p mir2-data --test guild_castle_config
+
+# --- 真读现网 Server.conf ---
+cargo run --offline -q -p mir2-data --example dump_guild_castle -- "E:/MirServer/M2GameSvr/Server.conf"
+
+# --- 改坏必红 ---
+cp crates/data/src/guild_castle.rs /tmp/guild_castle.rs.bak
+sed -i 's/build_guild_price: 1_000_000,/build_guild_price: 999_999,/' crates/data/src/guild_castle.rs
+cargo test --offline -p mir2-data --test guild_castle_config        # 期望 RED
+cp /tmp/guild_castle.rs.bak crates/data/src/guild_castle.rs
+cargo test --offline -p mir2-data --test guild_castle_config        # 期望 GREEN
+
+# --- 四门禁 ---
+cargo fmt --all -- --check
+cargo clippy --offline --workspace --all-targets -- -D warnings
+cargo test --offline --workspace
+cargo run --offline -q -p msgcodegen -- --check
+
+# --- 证据包 EOL / 清单 ---
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-guild-load-config-20261013
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-guild-load-config-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-guild-load-config-20261013
