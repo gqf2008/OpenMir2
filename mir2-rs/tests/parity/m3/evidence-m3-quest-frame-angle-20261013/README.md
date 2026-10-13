@@ -41,7 +41,7 @@ JSON 语义等价（`json.loads("\u003c") == "<"`），但消息里再无字面�
 
 | 件 | 内容 | 读数 |
 |---|---|---|
-| `02-selftest-questseq-green.txt` | `--selftest-questseq`（+4 条新检查：尖括号转义×2 / frame JSON 解码还原 / Serilog 通路载荷逐字节不变） | **GREEN，21/21，exit 0** |
+| `02-selftest-questseq-green.txt` | `--selftest-questseq`（+4 条新检查：尖括号转义×2 / frame JSON 解码还原 / Serilog 通路载荷逐字节不变） | **GREEN，20/20，exit 0** |
 | `03-selftest-mutation1-questesc-red.txt` | 变异：删掉 `QuestEsc` 的尖括号转义 | **RED，2 failed**（`esc-angle-quest-no-raw`、`serilog-path-payload-intact`），exit 1 |
 | `04-selftest-mutation2-shopesc-red.txt` | 变异：删掉 `ShopEsc` 的尖括号转义 | **RED，1 failed**（`esc-angle-shop-no-raw`），exit 1 |
 | `05-botsrv-all-selftests.txt` | 7 个 BotSrv 生产函数自检（quest/shop/guildcastle/heropet/pairtrade/selloff/attackrole） | 全 **GREEN**，exit 0 |
