@@ -1,0 +1,35 @@
+83-gates.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片⑬ 四门禁（合并树）
+====================================================================================================
+合并树 head = 9662ff325082dcbf1b5b6e5b0d80ba08adfe6dfd
+（= aeb0336a6 片⑬ 交付 + `git merge origin/master`；base = master db7da6f2c9b4ffb07e9b65fbbad26d87856c780e）
+cwd = `mir2-rs`，`CARGO_TARGET_DIR=E:/tmp/m2svr-target`（检出外），`--offline`。
+
+```
+== fmt ==
+$ cargo fmt --all -- --check
+fmt rc=0
+
+== clippy ==
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.35s
+clippy rc=0
+
+== test ==
+$ cargo test --workspace --offline --no-fail-fast
+   rc=0
+   suites=101 passed=1200 failed=0 ignored=22
+   non-ok suites: []   （逐 suite grep `^test .* FAILED` = 0 行）
+
+== msgcodegen ==
+$ cargo run -q -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
+```
+
+原始输出（仓外，可复跑）：
+  `E:/tmp/m2svr-test-merged.txt`（合并树 `cargo test --workspace --no-fail-fast` 全文）
+  `E:/tmp/m2svr-test-out.txt`（片⑬ 分支 tip 上先跑的一次，读数相同 101/1200/0/22）
+
+本片**零 .rs / 零生产代码改动**（仅新增一个 `.py` 判据工具 + 两份文档 + README/清单），
+四门禁读数与合并前 master `8da256711` 的合并树（101 suites / 1200 passed / 0 failed / 22 ignored）**一致**
+⇒ 无回归。
