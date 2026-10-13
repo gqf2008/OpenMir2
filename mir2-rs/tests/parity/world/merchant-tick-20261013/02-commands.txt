@@ -29,7 +29,8 @@ $ python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py groupdiff \
 # 4) 改坏必红（逐条：改坏 ⇒ 目标用例 FAILED；git checkout 还原 ⇒ ok；见 05-redchecks.txt）
 #    - 去掉 200ms 节奏门 / RunTime 门 / Ghost 60s -> 120s / 去掉 Run 的 RNG 取数
 #    - 去掉唯一 id（e.id = 0）/ 去掉 monster_ai_tick 的 merchant.is_none() 守卫
-#    - spawn_merchants 去掉 .rev()（改回正序）
+#    - reviewer-5 0f220cac F-1 两条：F-1a spawn 循环整体 rev() ⇒ tick 序被反（`merchant_ids_sorted` 红）；
+#      F-1b 挂图改回正序 ⇒ obj_list 序被反（`obj_list[0]` 红）
 $ git checkout -- crates/world/src/merchant.rs crates/world/src/monai.rs bins/game-svr/src/merchant.rs
 
 # 5) 四门禁（合并树；见 06-gates.txt / 06b-workspace-test.txt）

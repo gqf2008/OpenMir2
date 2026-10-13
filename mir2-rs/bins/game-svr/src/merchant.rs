@@ -15,8 +15,12 @@
 //! ## 与 oracle 的建模差异（登记）
 //! - `ProcessRefillIndex`（`ScriptParsers.cs:838`，全局 `CurrentMerchantIndex++`）⑤-1 未随记录暴露
 //!   ⇒ 置 0（只影响 `Merchant.Run` 的补货延时门，见 `crates/world::merchant`）。
-//! - 构造抽次序：oracle `LocalDB.LoadMerchant` 正序构造抽 + `MerchantInitialize` 倒序挂图 ⇒ 本层
-//!   先**正序** [`mir2_world::World::merchant_ctor_run_delay`]、再**倒序** [`spawn_merchants`] 挂图。
+//! - 次序：oracle `LocalDB.LoadMerchant` 正序构造抽、`MerchantList` 正序（倒序 `Initialize`
+//!   **不**重排它）、`MerchantInitialize` 只把 `AddToMap` 的 `obj_list` 追加序倒过来。⇒ 本层
+//!   **正序** [`mir2_world::World::merchant_ctor_run_delay`] + **正序**
+//!   [`mir2_world::World::insert_merchant`] 建实体（槽位序 = 文件序 = tick 序），仅
+//!   **倒序** [`mir2_world::World::attach_merchant_to_map`] 落格（`obj_list` 反序）；
+//!   见 [`spawn_merchants`]（reviewer-5 `0f220cac` F-1 返工）。
 //! - `is_hide` 当前恒 `false` 且不可注入；oracle `MerchantInitialize` 在 `LoadMerchantScript` 之前
 //!   ⇒ 此刻确为默认 `false`，1:1 成立（详见 `crates/world::merchant` 模块头）。
 
@@ -130,14 +134,22 @@ pub fn load_merchant_spawns(
     Ok((spawns, report))
 }
 
-/// 把装载好的商人逐条挂图，**按 oracle 的两段次序**（owner `b311a876b1` 裁决 + reviewer-5
-/// residual note）：
+/// 把装载好的商人逐条挂图，**按 oracle 的两个独立次序**（owner `b311a876b1` 裁决 +
+/// reviewer-5 `0f220cac` F-1 返工）：
 ///
 /// 1. `LocalDB.LoadMerchant` 是**正序**逐条 `new Merchant()`（ctor 抽 `RunTick`，
 ///    `BaseObject.cs:439`）⇒ 先正序 [`mir2_world::World::merchant_ctor_run_delay`] 把每条构造抽
 ///    落定（取数次序 = 文件行序）；
-/// 2. `MerchantInitialize`（`WorldServer.Merchant.cs:8`）是 `for (i = Count-1; i >= 0; i--)`
-///    ⇒ `AddToMap` 对 map cell `obj_list` 的**追加次序是反序**，故挂图循环用 `rev()`。
+/// 2. `MerchantList` 由 `AddMerchant` **正序**追加，`MerchantInitialize`
+///    （`WorldServer.Merchant.cs:8`）的 `for (i = Count-1; i >= 0; i--)` **不重排它**，
+///    `ProcessMerchants`（`:68`）又从 `MerchantPosition` 起**正序**遍历 ⇒ **实体槽位序
+///    （[`mir2_world::World::merchant_ids_sorted`] / `merchant_tick` 的 pass 内次序）必须是文件正序**；
+/// 3. 倒序只作用于 `Initialize()` 里 `AddToMap` 对 map cell `obj_list` 的**追加次序**
+///    ⇒ **只有挂图这一步倒序**。
+///
+/// ⇒ 先**正序** [`mir2_world::World::insert_merchant`] 建实体（槽位序 = 文件序）、再**倒序**
+/// [`mir2_world::World::attach_merchant_to_map`] 落格（`obj_list` 追加 = 反序）。两个次序解耦，
+/// **不可**把整个 spawn 循环一起 `rev()`（那会把 tick 次序也反过来；reviewer-5 F-1 自复现过）。
 ///
 /// 返回 `(挂图成功数, 挂图失败被移除的 ChrName)`。
 #[must_use]
@@ -149,15 +161,21 @@ pub fn spawn_merchants(
     for spawn in spawns.iter_mut() {
         spawn.state.run_tick = world.merchant_ctor_run_delay();
     }
-    // ② `MerchantInitialize` 倒序挂图（`AddToMap` 追加 `obj_list` = 倒序）。
+    // ② `MerchantList` 正序建实体：实体槽位序 = 文件序 ⇒ `merchant_ids_sorted`/`merchant_tick` 正序。
+    let pending: Vec<(Option<i32>, String)> = spawns
+        .into_iter()
+        .map(|spawn| {
+            let name = spawn.name.clone();
+            (world.insert_merchant(spawn), name)
+        })
+        .collect();
+    // ③ `MerchantInitialize` 倒序挂图：只有 `AddToMap` 的 `obj_list` 追加序是反序。
     let mut kept = 0;
     let mut failed = Vec::new();
-    for spawn in spawns.into_iter().rev() {
-        let name = spawn.name.clone();
-        if world.spawn_merchant(spawn).is_some() {
-            kept += 1;
-        } else {
-            failed.push(name);
+    for (id, name) in pending.into_iter().rev() {
+        match id {
+            Some(id) if world.attach_merchant_to_map(id) => kept += 1,
+            _ => failed.push(name),
         }
     }
     (kept, failed)
@@ -296,11 +314,17 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
         assert!(report.dropped_unknown_map.is_empty());
     }
 
-    /// `MerchantInitialize` 倒序裁决（owner `b311a876b1` / reviewer-5 residual note）：
-    /// oracle `WorldServer.Merchant.cs:8` 是 `for (i = Count-1; i >= 0; i--)` ⇒ `AddToMap` 对 map
-    /// cell `obj_list` 的**追加次序是反序**（后加载的商人先落格）。改回正序 ⇒ 本用例必红。
+    /// reviewer-5 `0f220cac` F-1 返工 + owner `b311a876b1` 倒序裁决：**两个次序必须解耦**。
+    ///
+    /// oracle `WorldServer.Merchant.cs:8` 的 `for (i = Count-1; i >= 0; i--)` 只让 `AddToMap`
+    /// 对 map cell `obj_list` 的**追加次序是反序**；`MerchantList` 本身仍是 `LocalDB.LoadMerchant`
+    /// 的**正序**（`ProcessMerchants` 从 `MerchantPosition` 起正序 `Run`）⇒ 实体槽位序
+    /// （`merchant_ids_sorted`）必须是文件正序。
+    ///
+    /// 牙齿：把整个 spawn 循环一起 `rev()`（正序抽 + 倒序建实体/挂图）⇒ `merchant_ids_sorted`
+    /// 断言必红；改成全正序 ⇒ `obj_list[0]` 断言必红。
     #[test]
-    fn spawn_merchants_initializes_in_reverse_order_like_oracle() {
+    fn spawn_merchants_decouples_tick_order_from_obj_list_order() {
         fn spawn_named(name: &str) -> MerchantSpawn {
             MerchantSpawn {
                 name: name.to_string(),
@@ -327,13 +351,27 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
         let (kept, failed) = spawn_merchants(&mut world, vec![spawn_named("A"), spawn_named("B")]);
         assert_eq!(kept, 2);
         assert!(failed.is_empty());
+
+        // ① tick 序（实体槽位序 = `MerchantList` 序）必须是文件正序。
+        let tick_names: Vec<String> = world
+            .merchant_ids_sorted()
+            .into_iter()
+            .map(|id| world.entities.get(id).expect("实体在").name.clone())
+            .collect();
+        assert_eq!(
+            tick_names,
+            vec!["A".to_string(), "B".to_string()],
+            "MerchantList/tick 序 = LocalDB 文件正序（入实体正序）；把 spawn 循环整体 rev() ⇒ 必红"
+        );
+
+        // ② `obj_list` 追加序仍是 `MerchantInitialize` 倒序。
         let (cell, ok) = world.map(0).get_cell_info(5, 5);
         assert!(ok);
         let first = cell.obj_list[0].cell_obj_id;
         let first_name = world.entities.get(first).expect("实体在").name.clone();
         assert_eq!(
             first_name, "B",
-            "倒序 MerchantInitialize ⇒ 后加载的 B 先 AddToMap（obj_list[0] 是 B）"
+            "倒序 MerchantInitialize ⇒ 后加载的 B 先 AddToMap（obj_list[0] 是 B）；改回正序 ⇒ 必红"
         );
     }
 }

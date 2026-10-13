@@ -80,14 +80,22 @@ oracle 锚点（逐条在本 worktree 复核行号；与 owner `eb3bf42f` 的口
       NPC.ProcessRefillIndex = SystemShare.CurrentMerchantIndex;
     ⇒ ⑤-1 未随记录暴露该列 ⇒ 本片置 0（只影响 `dwDelayTick`，登记随 ⑤-5）。
 
-[11] 挂图次序（owner `b311a876b1` ruling_reverse_order / reviewer-5 residual note）
-    src/GameSrv/Word/WorldServer.Merchant.cs:8
-      for (int i = MerchantList.Count - 1; i >= 0; i--) { ... merchant.Initialize(); ... }
-    ⇒ `Initialize()` 里 `AddToMap()` 对 map cell `obj_list` 的**追加次序是反序**（后加载的商人
-      先落格）。本片 `spawn_merchants` 分两段：① 正序 `merchant_ctor_run_delay`（构造抽，
-      `LocalDB.LoadMerchant` 口径）；② 倒序 `spawn_merchant`（`MerchantInitialize` 口径）。
-      用例 `spawn_merchants_initializes_in_reverse_order_like_oracle` 钉住 `obj_list[0]` =
-      后加载者（改回正序 ⇒ 必红）。
+[11] 挂图次序（owner `b311a876b1` ruling_reverse_order；reviewer-5 `0f220cac` F-1 返工）
+    ★ 两个**彼此独立**的 oracle 次序（reviewer-5 F-1；本 head 已解耦）：
+      (a) `MerchantList` 序（= tick 的 pass 内 `Run()` 序）：`src/GameSrv/Word/WorldServer.cs:1571-1577`
+          `AddMerchant` **正序**尾追；`LocalDB.cs:412-470` 正序解析；
+          `WorldServer.Merchant.cs:68` `ProcessMerchants` 从 `MerchantPosition` 起**正序**遍历。
+      (b) map cell `obj_list` 追加序：`src/GameSrv/Word/WorldServer.Merchant.cs:8`
+          `for (int i = MerchantList.Count - 1; i >= 0; i--) { ... merchant.Initialize(); ... }`
+          ⇒ `Initialize()` 的 `AddToMap()` 追加**反序**（后加载的商人先落格）。
+      ⇒ 倒序 `Initialize` **不重排 `MerchantList`**：两序不可合并成同一个 `rev()`。
+    实现（`bins/game-svr/src/merchant.rs::spawn_merchants`）：
+      ① 正序 `merchant_ctor_run_delay`（构造抽，`LocalDB.LoadMerchant` 口径）；
+      ② 正序 `World::insert_merchant` 建实体（EntityStore 槽位序 = 插入序 = `MerchantList` 序）；
+      ③ 倒序 `World::attach_merchant_to_map` 落格（`obj_list` 追加 = 反序）。
+      用例 `spawn_merchants_decouples_tick_order_from_obj_list_order` 同时钉住
+      `merchant_ids_sorted()` == 文件正序（②）与 `obj_list[0]` = 后加载者（③）：
+      整体 `rev()`（F-1a）⇒ 前者必红；挂图改回正序（F-1b）⇒ 后者必红。
     ⚠ 附带修复：唯一 id。原 `spawn_merchant` 用 `Entity::new(0,..)` 未分配 id ⇒ 多商人全部
       `id=0`、`EntityStore::insert` 的 `index.insert(0,…)` 互相覆盖、`merchant_ids_sorted` 返回重复 0，
       `merchant_tick` 会反复 Run 同一个实体。本片改用 `EntityStore::alloc_id()`。

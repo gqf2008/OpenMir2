@@ -6,6 +6,7 @@
 //! | --- | --- |
 //! | [`MerchantState`] 字段 | `src/GameSrv/Npc/Merchant.cs:10-70`（`IMerchant`）+ `BaseObject` 的 `RunTick/RunTime`（`BaseObject.cs:439-440`） |
 //! | [`World::spawn_merchant`] 的 `Initialize`/`AddtoMapSuccess` | `src/M2Server/Actor/BaseObject.Base.cs:14-21` |
+//! | 两个**彼此独立**的次序：[`World::insert_merchant`] 的实体槽位序 = 文件正序（`MerchantList`/tick 序）；[`World::attach_merchant_to_map`] 的 `obj_list` 追加序 = 倒序 | `WorldServer.Merchant.cs:8`（倒序 `Initialize` **不**重排 `MerchantList`）+ `:68`（`ProcessMerchants` 正序）|
 //! | 挂图失败移除（`!IsHide` 例外） | `src/GameSvr/Word/WorldServer.Merchant.cs:8-25` |
 //! | `FindMap(MapName) == null ⇒ 丢弃` | `WorldServer.Merchant.cs:24-31`（**门在宿主侧按 `MapRegistry::id_of` 施加**，见 [`crate::merchant`] 模块尾与 `bins/game-svr/src/merchant.rs`） |
 //! | [`World::merchant_tick`] | `WorldServer.Merchant.cs:65-110` + `MerchantProcessor.cs:8`（200ms 定时） |
@@ -65,7 +66,8 @@ pub const MERCHANT_RUN_DELAY_MAX: i32 = 1500;
 
 /// `MerchantState::run_tick` 的「未抽」哨兵：构造抽需按 oracle 次序在**独立一步**落定
 /// （`LocalDB.LoadMerchant` 正序构造抽 → `MerchantInitialize` 倒序挂图），
-/// 故 [`MerchantState::new`] 置该值，[`World::spawn_merchant`] 见它才抽。
+/// 故 [`MerchantState::new`] 置该值，[`World::insert_merchant`]（及一步到位的
+/// [`World::spawn_merchant`]）见它才抽。
 pub const MERCHANT_RUN_TICK_UNSET: i64 = i64::MIN;
 
 /// `Merchant.Run` 的补货间隔基数：`5 * 60 * 1000` ms（`Merchant.cs:119`）。
@@ -225,11 +227,18 @@ pub struct MerchantSpawn {
 }
 
 impl World {
-    /// 把一条商人落到世界并执行 oracle `Initialize()` 的挂图段：
-    /// `AddtoMapSuccess = !(CanWalk(CurrX,CurrY,true) && AddToMap())`
-    /// （`BaseObject.Base.cs:14-21`）；为真且 `!IsHide` ⇒ 从列表移除（`WorldServer.Merchant.cs:16-22`）。
+    /// **两段挂图（①）**：建实体并入 `EntityStore`（**不挂图**）。
     ///
-    /// 返回 `Some(id)` = 商人留在世界；`None` = 挂图失败被移除（oracle `RemoveAt`）。
+    /// oracle 里 `MerchantList` 由 `LocalDB.LoadMerchant` **正序** `AddMerchant` 追加，且
+    /// `MerchantInitialize` 的 `for (i = Count-1; i >= 0; i--)` **并不重排 `MerchantList`**
+    /// （`WorldServer.Merchant.cs:8`，只决定 `AddToMap` 对 map cell `obj_list` 的追加序）；
+    /// `ProcessMerchants`（同文件 `:68`）又从 `MerchantPosition` 起**正序**遍历 `MerchantList`
+    /// 调 `Run()`。⇒ 宿主必须**正序**逐条调用本函数（实体槽位序 = 插入序 = `MerchantList` 序），
+    /// 再**倒序** [`World::attach_merchant_to_map`] 落格；两个次序彼此独立，不可合并成
+    /// 同一个 `rev()`（见 reviewer-5 `0f220cac` F-1）。
+    ///
+    /// 返回 `Some(id)` = 已入世界（槽位已分配）；`None` = `map_id` 越界（oracle 不可达，
+    /// 宿主 `FindMap` 门已保证）。
     ///
     /// **构造抽**：按 oracle `BaseObject` ctor 的 `RunTick = now + Random(1500)`
     /// （`BaseObject.cs:439`）从**共享 `world.rng`** 取一次数（站点归 `merchant` 组）——
@@ -237,7 +246,7 @@ impl World {
     /// [`World::merchant_ctor_run_delay`] 按 `LocalDB.LoadMerchant` 正序预抽时不再重复抽）。
     /// `refill_goods_tick`/`clear_expre_upgrade_tick`/`move_tick` 置为本刻 `clock_ms`（oracle ctor
     /// 的 `GetTickCount()` 同口径；`Goods.RefillTick` 由脚本解析置 0，见 [`MerchantGoods`]）。
-    pub fn spawn_merchant(&mut self, spawn: MerchantSpawn) -> Option<i32> {
+    pub fn insert_merchant(&mut self, spawn: MerchantSpawn) -> Option<i32> {
         if spawn.map_id >= self.maps.len() {
             return None;
         }
@@ -252,7 +261,6 @@ impl World {
         state.clear_expre_upgrade_tick = now;
         state.move_tick = now;
         state.ghost_tick = 0;
-        let is_hide = state.is_hide;
 
         let mut e = Entity::new(0, spawn.name, x, y);
         // `Entity::new(0, …)` 的占位 id 必须换成**唯一** id（照 `World::add_entity` 的口径）：
@@ -262,8 +270,33 @@ impl World {
         e.race = ACTOR_RACE_MERCHANT;
         e.map_id = map_id;
         e.merchant = Some(state);
-        let id = self.entities.insert(e);
+        Some(self.entities.insert(e))
+    }
 
+    /// **两段挂图（②）**：执行 oracle `Initialize()` 的挂图段：
+    /// `AddtoMapSuccess = !(CanWalk(CurrX,CurrY,true) && AddToMap())`
+    /// （`BaseObject.Base.cs:14-21`）；为真且 `!IsHide` ⇒ 从世界移除
+    /// （`WorldServer.Merchant.cs:16-22`）。
+    ///
+    /// 宿主按 `MerchantInitialize` 的**倒序**逐条调用（owner `b311a876b1` 裁决）⇒ map cell
+    /// `obj_list` 的追加序 = 倒序。该序与 [`World::insert_merchant`] 决定的实体槽位序 /
+    /// `MerchantList` 序**互相独立**（reviewer-5 `0f220cac` F-1）。
+    ///
+    /// 返回 `true` = 商人留在世界；`false` = 挂图失败被移除（oracle `RemoveAt`）。
+    pub fn attach_merchant_to_map(&mut self, id: i32) -> bool {
+        let Some(entity) = self.entities.get(id) else {
+            return false;
+        };
+        let (map_id, x, y, is_hide) = (
+            entity.map_id,
+            entity.x,
+            entity.y,
+            entity.merchant.as_ref().is_some_and(|m| m.is_hide),
+        );
+        if map_id >= self.maps.len() {
+            return false;
+        }
+        let now = self.clock_ms;
         // `Envir.CanWalk(CurrX, CurrY, true)`：`true` = 忽略活体阻挡，只看格子是否可走。
         // `MapGrid::cell_valid` 对越界返回 `true`（复刻 C# `CellValid` 方向），故这里必须
         // 先 `cell_match` 判界（越界 ⇒ CanWalk 失败 ⇒ `AddtoMapSuccess`）。
@@ -277,17 +310,38 @@ impl World {
         if add_to_map_success && !is_hide {
             // oracle `LogService.Warn("Merchant Initalize fail...") + RemoveAt(i)`
             self.entities.remove(id);
-            return None;
+            return false;
         }
         if let Some(ent) = self.entities.get_mut(id) {
             ent.add_to_mapped = !add_to_map_success;
         }
-        Some(id)
+        true
+    }
+
+    /// 一步到位：建实体（[`World::insert_merchant`]）+ 挂图（[`World::attach_merchant_to_map`]）。
+    ///
+    /// 生产装载按 oracle 两段次序**分两步**调用（正序 insert、倒序 attach，见宿主
+    /// `spawn_merchants`）；本函数保留给单测 / 无预抽的直接挂图场景。
+    ///
+    /// 返回 `Some(id)` = 商人留在世界；`None` = `map_id` 越界或挂图失败被移除。
+    pub fn spawn_merchant(&mut self, spawn: MerchantSpawn) -> Option<i32> {
+        let id = self.insert_merchant(spawn)?;
+        if self.attach_merchant_to_map(id) {
+            Some(id)
+        } else {
+            None
+        }
     }
 
     /// 按**槽位顺序**列出所有商人实体 id（`MerchantList` 的确定性等价物；供 ⑤-4 取列表）。
     ///
-    /// 返回的 id 由 [`World::spawn_merchant`] 用 `EntityStore::alloc_id` 分配 ⇒ **唯一**
+    /// 槽位序 = [`World::insert_merchant`] 的**插入序**；宿主按 `LocalDB.LoadMerchant` 文件正序
+    /// 插入 ⇒ 本序列 = 文件序（即 `merchant_tick` 的 pass 内次序，见 [`World::merchant_tick`]）。
+    /// ⚠ 与 `MerchantInitialize` 倒序造成的 map cell `obj_list` 追加序**是两回事**（见
+    /// [`World::attach_merchant_to_map`]）；不要用槽位序去推断 `obj_list` 序，反之亦然
+    /// （reviewer-5 `0f220cac` F-1）。
+    ///
+    /// 返回的 id 由 [`World::insert_merchant`] 用 `EntityStore::alloc_id` 分配 ⇒ **唯一**
     /// （`merchant_tick` 直接以它为键；`merchant_ids_sorted` 不再返回重复占位 id）。
     #[must_use]
     pub fn merchant_ids_sorted(&self) -> Vec<i32> {
@@ -350,7 +404,8 @@ impl World {
     /// 4. Ghost 用 sim 时钟的同单位整数（不是墙钟）。
     ///
     /// 跨 pass 交错（NpcLimit 预算决定某个该跑的商人落在哪一 pass）**不在判据内**；
-    /// 同 pass 内次序 = `MerchantList` 顺序 = 实体槽位顺序。
+    /// 同 pass 内次序 = `MerchantList` 顺序 = 实体槽位插入序（[`World::insert_merchant`] 正序）；
+    /// `MerchantInitialize` 的倒序只定 `obj_list` 追加序，**不**改变本次序（reviewer-5 `0f220cac` F-1）。
     pub fn merchant_tick(&mut self) -> MerchantTickOutcome {
         let now = self.clock_ms;
         let mut out = MerchantTickOutcome::default();
