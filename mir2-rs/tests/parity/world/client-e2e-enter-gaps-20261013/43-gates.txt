@@ -1,15 +1,15 @@
 openmir2-client-e2e-enter-gaps —— 片⑤（客户端侧帧可见性：40/41/42 + check_client_s2c_frames.py）门禁
 ==============================================================================
 cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m2svr-target；--offline
-树 = merge commit e5fc0964b0bef6996f5aa99d182d98b03491ddd1（origin/master 4b4011923d5ccd34775d6614e97259171667520d）—— 片⑤只**新增**证据/判据文件，
+树 = merge commit 1fdb1227265ac6a2e56231f1eb1145cc30ca1aca（origin/master 8aebbcb850d5b084af56e6cb8dd5e03ecc3c1625）—— 片⑤只**新增**证据/判据文件，
      不改任何 .rs / 生产语义，故门禁结论对该合并树与交付树一致。
 
 --- cargo fmt --all -- --check ---
 fmt rc=0
 
 --- cargo clippy --workspace --all-targets -- -D warnings ---
-    Checking db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\db-srv)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.09s
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.19s
 clippy rc=0
 
 --- cargo run -p msgcodegen -- --check ---
@@ -18,9 +18,9 @@ msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 1
 msgcodegen rc=0
 
 --- cargo test --workspace --offline --no-fail-fast ---
-   98 suites · passed=1109 · failed=0 · ignored=21
+   98 suites · passed=1128 · failed=0 · ignored=21
 test rc=0
-   （原始件 E:/tmp/m2svr-capture/gates-test-e5fc.txt）
+   （原始件 E:/tmp/m2svr-capture/gates-test-1fdb.txt）
 
 --- 片⑤新增判据自检（不依赖外部帧） ---
 合成 capture 含 52/752 ⇒ GREEN                    OK (rc=0, want 0)
