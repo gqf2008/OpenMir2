@@ -935,3 +935,33 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   ② 起栈后按 `window_handoff.py --plan` 跑 ③b/③a 两趟 + `--judge` 六条判据（③b `--best-site` = `605,578` E=12.681）。
 - 证据：`171-g5-remediation-recheck.txt`、`172-redcheck-g5-remediation-recheck.txt`、
   `173-gates.txt`、`174-boundary.txt`、`window_handoff.py`。
+
+### ㊲ ③ 窗口就绪收口 #2：R6「构建源必须是当前基线」（堵「含修复提交但停在旧 master ⇒ 窗口测旧件」）（2026-10-14）—— `175`
+
+- **缺口（实测、非推断）**：`check_rust_window_preflight.py` 的 R1 是**单向** `--is-ancestor` 门
+  （「源**曾经**含片⑪+片㉜」即可），**不能**发现「源含两片但停在更早 master」。片㉟ 把专用源
+  `E:/tmp/m2svr-window-origin` 刷到**当时**的 `origin/master` `9edfc745d`（10:30）后，`origin/master`
+  前进到 `3db79cae0`，`bins/game-svr` 已有 **3 个生产件/ +335 行**变化（`main.rs`/`slave.rs`/`smframe.rs`），
+  而旧 5 组判据与聚合门**仍判 GREEN** ⇒ root 开窗会跑旧 `game-svr.exe`（③ 判据的唯一宿主）。
+- **本片交付**（`check_rust_window_preflight.py` 新增 **R6**；`window_handoff.py` G1 文案 R1..R5→R1..R6）：
+  `--baseline-ref`（默认 `origin/master`）三态 —— ① `--ref` == 基线 ⇒ OK；② `--ref` 是基线的后继
+  （源**领先**不算旧）⇒ OK；③ 否则 `git diff --name-only <base> <ref> -- <生产路径>` 为空 ⇒ OK、非空 ⇒ **RED**
+  列件数+前 5 件+修法。生产路径与合并门禁同口径（`mir2-rs/bins`/`crates`/`Cargo.*`/`src`/`sql`）。
+  基线解析不到 ⇒ `PREREQ_RED`（fail-closed）；`--baseline-ref ''` 显式跳过（**仅**离线自测，非窗口口径）。
+- **改前/改后（同门同源）**：旧门 @`9edfc745d` = GREEN（**假绿**）；新门 @`9edfc745d` = `RED R6`（3 件）；
+  刷源到 `origin/master=3db79cae0` + 重编译 ⇒ 新门 GREEN。`game-svr.exe` sha256
+  `dcfd0040…` → **`1e088ae7…`**；其余五件逐字节不变。聚合门（替身脚本口径）
+  `WINDOW_READY=YES` / `RESULT: GREEN`。
+- **改坏必红（`175` §D）**：`--ref 9edfc745d` ⇒ `RED R6` rc=1；把 `changed` 掏空（变异只在
+  `E:/tmp/m2svr-r6-mut/` 副本）⇒ 同一陈旧 oid 变**假绿** rc=0（证明 RED 来自 R6 真判据）；
+  仓内件 sha256 `171d5d14…` 变异前后不变。
+- **门自检**：`check_rust_window_preflight.py --selftest` **23/23 → 32/32**；
+  `window_handoff.py --selftest` **98/98 不变**。
+- **边界与纪律**：本片只改证据目录 2 个 `.py`（+ 证据/README/清单）；**零 `.rs`/`.toml`、零生产代码、
+  零起栈、零游戏端口**（3306 UP，其余 DOWN）；刷源/预构建都在 `E:/tmp` 检出外，未动共享主检出；
+  未 merge、未自签 review。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级真机两侧同框对照 + 攻击/伤害可见；
+  root 开窗前两步不变 = ① 换活脚本为入库替身（换完按**替身的**构建源复跑 G5 至 GREEN）
+  ② 起栈后按 `window_handoff.py --plan` 跑 ③b/③a + `--judge`（③b `--best-site` = `605,578` E=12.681）。
+- 证据：`175-r6-build-source-freshness.txt`、`176-boundary.txt`、`check_rust_window_preflight.py`、
+  `window_handoff.py`；只读引用 `167`/`168`（片㉟ 刷源与预构建）、`89`/`90`（片⑮ 前置门与红检）。
