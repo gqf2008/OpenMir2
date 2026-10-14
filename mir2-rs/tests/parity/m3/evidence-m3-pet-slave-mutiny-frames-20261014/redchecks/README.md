@@ -1,18 +1,22 @@
-# redchecks/ —— 改坏必红（RC1–RC3）
+# redchecks/ —— 改坏必红（RC1–RC5）
 
-卡：`openmir2-m3-pet-slave-masterdie-wire`（残余帧面）；作者 `openmir2-worker-20`。
+卡：`openmir2-m3-pet-slave-masterdie-wire`（rework：reviewer-6 F-1）；作者 `openmir2-worker-20`。
 
-口径：**改 → 跑 → 还原**；还原用 `git checkout --` 后以 `git hash-object <f> == git rev-parse HEAD:<f>` 机器核对。
-变异脚本 = [`mutate.py`](mutate.py)（`python -I mutate.py <m1|m2|m3>`，断言 anchor 唯一）。
+口径：**改 → 跑 → 还原**；还原用 `git checkout --` 后以 `git status --porcelain` 实现文件干净 +
+聚焦用例全绿机器核对。变异脚本 = [`mutate.py`](mutate.py)
+（`python -I mutate.py <rc1|rc2|rc3|rc4|rc5>`，断言 anchor 唯一；相对返工提交 `ecd455765`）。
 
-| 编号 | 变异（相对实现提交 c55dff977） | 应红的用例 | 实读 |
+| 编号 | 变异 | 应红的用例 | 实读 |
 | --- | --- | --- | --- |
-| RC1 | `bins/game-svr/src/smframe.rs`：`sm_changenamecolor` 的 `Param` 由 `u16::from(name_color)` 改 `0` | `smframe::tests::sm_changenamecolor_header_only` | **rc=101** · 0 passed 1 FAILED |
-| RC2 | `bins/game-svr/src/main.rs`：`drain_slave_mutiny_downlink` 的「色循环 / 名循环」合并为每宝宝一组 `色,名` | `tests::slave_mutiny_downlink_groups_all_colors_before_names` | **rc=101** · 1 passed 1 FAILED |
-| RC3 | `bins/game-svr/src/main.rs`：删掉名帧循环（只留色帧） | `tests::slave_mutiny_downlink_emits_namecolor_then_username` + `...groups_all_colors_before_names` | **rc=101** · 0 passed 2 FAILED |
+| RC1 | `smframe.rs`：`sm_changenamecolor` 的 `Param` 由 `u16::from(name_color)` 改 `0` | `smframe::tests::sm_changenamecolor_header_only` | **rc=101** · 0 passed 1 FAILED |
+| RC2 | `main.rs`：drain 退回「所有色循环 + 所有名循环」（同优先级=入队序，F-1 前错误） | `tests::slave_mutiny_downlink_follows_msgqueue_heap_order` | **rc=101** · 0 passed 1 FAILED |
+| RC3 | `main.rs`：丢掉名帧（只入队色帧） | 两条 `slave_mutiny_downlink_*` | **rc=101** · 0 passed 2 FAILED |
+| RC4 | `msgqueue.rs`：`LOG2_ARITY` 2→1（4 叉堆改成二叉） | `msgqueue::tests::matches_dotnet_priority_queue_dequeue_order`（n=3 起分叉） | **rc=101** · 1 passed 1 FAILED |
+| RC5 | `main.rs`：色帧优先级抬到 `255`（> 名 165） | 两条 `slave_mutiny_downlink_*` | **rc=101** · 0 passed 2 FAILED |
 
-还原后重跑（[`restored-green.txt`](restored-green.txt)）：3/3 **ok** rc=0；
-实现文件 `git hash-object` 与 `HEAD:` 相等（`da04add7…`、`248bcb7e…`），`git status --porcelain` 实现文件干净。
+还原后重跑（[`restored-green.txt`](restored-green.txt)）：全绿 rc=0；`git status --porcelain` 实现文件干净。
 
-> RC2 只会打红「多宝宝出队序」那条；单宝宝的 `...emits_namecolor_then_username` 在 RC2 下仍绿
-> —— 这正是该用例**分工**的意义（前者钉优先级出队序，后者钉「色→名」与载荷/AOI 距离门）。
+> **RC2 是本轮 F-1 的针对性牙**：它把「堆出队序」换回「按优先级稳定排序（入队序）」，正好打红
+> `...follows_msgqueue_heap_order`（名帧 `名(s2),名(s1)` vs oracle `名(s1),名(s2)`），
+> 而单宝宝的 `...emits_namecolor_then_username` 在 RC2 下仍绿 —— 两条用例分工明确。
+> **RC4** 证明「.NET 不是二叉堆而是 4 叉堆」这一细节可观测（n=3 出队序分叉）。

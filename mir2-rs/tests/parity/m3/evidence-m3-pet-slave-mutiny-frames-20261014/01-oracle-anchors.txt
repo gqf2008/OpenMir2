@@ -99,3 +99,33 @@ src/M2Server/Player/PlayObject.Message.cs:2118:                     break;
 src/M2Server/Player/PlayObject.Message.cs:2119:                 case Messages.RM_MASTERDIEGHOST:
 src/M2Server/Player/PlayObject.Message.cs:2120:                     ProcessSlaveGhost();
 src/M2Server/Player/PlayObject.Message.cs:2121:                     break;
+
+## I) 观察者 MsgQueue 的**同优先级出队序**（.NET 8 = 4 叉最小堆；reviewer-6 F-1 收口）
+
+    #### 仓内 oracle（入队点 / 队列类型 / 出队点）
+src/M2Server/Actor/ActorEntity.cs:16:         protected readonly PriorityQueue<SendMessage, byte> MsgQueue;
+src/M2Server/Actor/BaseObject.Message.cs:181:                 MsgQueue.Enqueue(sendMessage, (byte)wIdent);
+src/M2Server/Actor/BaseObject.Message.cs:334:         internal bool GetMessage(ref ProcessMessage msg)
+src/M2Server/Actor/BaseObject.Message.cs:336:             if (MsgQueue.TryDequeue(out SendMessage sendMessage, out _))
+src/M2Server/Player/PlayObject.Message.cs:360:                 while (((HUtil32.GetTickCount() - GetMessageTick) < SystemShare.Config.HumanGetMsgTime) && GetMessage(GetMessageTick, ref processMsg))
+
+    #### BCL 真身（不在本仓；oracle 目标框架 net8.0，运行时 net8.0.26）
+    dotnet/runtime release/8.0 : src/libraries/System.Collections/src/System/Collections/Generic/PriorityQueue.cs
+      :52  private const int Arity = 4;                 // 4 叉（quaternary）最小堆
+      :57  private const int Log2Arity = 2;
+      :615 private static int GetParentIndex(int index) => (index - 1) >> Log2Arity;      // (i-1)>>2
+      :620 private static int GetFirstChildIndex(int index) => (index << Log2Arity) + 1;  // (i<<2)+1
+      :193 public void Enqueue(...)                 -> MoveUpDefaultComparer（严格小于父才上浮）
+      :588 private void RemoveRootNode()            -> MoveDownDefaultComparer（末元素回填根后下沉）
+      :719 MoveDownDefaultComparer: 4 个孩子里取**首个**最小者；末元素 <= 选中子时停
+
+    #### 结论（本片据此复刻）
+    * 优先级字节：`(byte)RM_CHANGENAMECOLOR`=154 < `(byte)RM_USERNAME`=165
+      ⇒ 同一观察者上**所有色帧先于所有名帧**。
+    * **同优先级不是入队序**：入队 `色(s2),名(s2),色(s1),名(s1)`
+      ⇒ oracle 实出队 `色(s2),色(s1),名(s1),名(s2)`（名组与入队序**相反**）。
+    * 实跑证据（net8.0.26，n=1..12）：`msgqueue-dotnet-ref.txt`；
+      源摘：`dotnet-pq8-source-excerpt.txt`；Rust 逐位对照：`03-tests.txt` 的
+      `msgqueue::tests::matches_dotnet_priority_queue_dequeue_order`。
+    * 边界：本片只复刻**堆算法**；oracle 真实出队序还受「入队前队列里已有其它消息」影响
+      （跨 tick、其它下行），本项目不建模整条观察者队列 ⇒ 混合队列场景 not_verified（R 级）。

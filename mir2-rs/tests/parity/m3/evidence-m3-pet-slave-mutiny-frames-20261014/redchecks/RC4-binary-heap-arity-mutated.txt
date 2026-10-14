@@ -1,0 +1,25 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.71s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-e3b807fec57e6cfc.exe)
+
+running 2 tests
+test msgqueue::tests::ties_are_not_insertion_order ... ok
+test msgqueue::tests::matches_dotnet_priority_queue_dequeue_order ... FAILED
+
+failures:
+
+---- msgqueue::tests::matches_dotnet_priority_queue_dequeue_order stdout ----
+
+thread 'msgqueue::tests::matches_dotnet_priority_queue_dequeue_order' (36072) panicked at bins\game-svr\src\msgqueue.rs:207:13:
+assertion `left == right` failed: n=3：与 dotnet 实出队序不符
+  left: ["c3", "c1", "c2", "n2", "n3", "n1"]
+ right: ["c3", "c2", "c1", "n2", "n1", "n3"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    msgqueue::tests::matches_dotnet_priority_queue_dequeue_order
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 199 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`

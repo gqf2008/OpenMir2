@@ -1,9 +1,21 @@
-### restored-green: 还原 pristine 后重跑 3 条判据（期望全绿）
+### restored-green: 还原 pristine 后重跑 5 条判据（期望全绿）
+$ git status --porcelain   # 实现文件为空：0 项
+
+$ cargo test -p game-svr --lib msgqueue
+test msgqueue::tests::ties_are_not_insertion_order ... ok
+test msgqueue::tests::matches_dotnet_priority_queue_dequeue_order ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 199 filtered out; finished in 0.00s
+
 $ cargo test -p game-svr --lib sm_changenamecolor
 test smframe::tests::sm_changenamecolor_header_only ... ok
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 198 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 200 filtered out; finished in 0.00s
 
 $ cargo test -p game-svr --bin game-svr slave_mutiny
-test tests::slave_mutiny_downlink_groups_all_colors_before_names ... ok
+test tests::slave_mutiny_downlink_follows_msgqueue_heap_order ... ok
 test tests::slave_mutiny_downlink_emits_namecolor_then_username ... ok
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 211 filtered out; finished in 0.00s
+
+$ git hash-object bins/game-svr/src/main.rs bins/game-svr/src/smframe.rs bins/game-svr/src/msgqueue.rs
+673e784b4c36d1d42b38e8dbd8c126347e0ebcdd
+248bcb7e972c166d5a24b0d8fff9c8a7e6b26096
+3a601437d4486b028be153d6c2fd2abed1495a65

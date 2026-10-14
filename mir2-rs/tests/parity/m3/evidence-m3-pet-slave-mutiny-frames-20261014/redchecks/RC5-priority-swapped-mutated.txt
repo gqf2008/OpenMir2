@@ -1,0 +1,33 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.79s
+     Running unittests src\main.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-d40510517c77a420.exe)
+
+running 2 tests
+test tests::slave_mutiny_downlink_emits_namecolor_then_username ... FAILED
+test tests::slave_mutiny_downlink_follows_msgqueue_heap_order ... FAILED
+
+failures:
+
+---- tests::slave_mutiny_downlink_emits_namecolor_then_username stdout ----
+
+thread 'tests::slave_mutiny_downlink_emits_namecolor_then_username' (34496) panicked at bins\game-svr\src\main.rs:13507:9:
+assertion `left == right` failed
+  left: 42
+ right: 656
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::slave_mutiny_downlink_follows_msgqueue_heap_order stdout ----
+
+thread 'tests::slave_mutiny_downlink_follows_msgqueue_heap_order' (24564) panicked at bins\game-svr\src\main.rs:13594:9:
+assertion `left == right` failed: 入队序 色(s2),名(s2),色(s1),名(s1) ⇒ oracle 4 叉堆出队 色(s2),色(s1),名(s1),名(s2)
+  left: [(42, 3), (42, 2), (656, 2), (656, 3)]
+ right: [(656, 3), (656, 2), (42, 2), (42, 3)]
+
+
+failures:
+    tests::slave_mutiny_downlink_emits_namecolor_then_username
+    tests::slave_mutiny_downlink_follows_msgqueue_heap_order
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 211 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
