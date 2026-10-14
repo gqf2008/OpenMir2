@@ -1,0 +1,27 @@
+## 变更摘要（base = origin/master f0a9ab911ddc84846b69f0a3541390e81dba977a）
+
+### 判据工具（语义牙 + O-1）
+| 文件 | 变更 |
+| --- | --- |
+| `rng-trace-probe/rng_consumer_groups.py` | 新增 `_pattern_symbol`（正则族→字面前缀）/`_code_only`/`_looks_like_declaration`/`_method_body_ranges`/`check_oracle_ref_methods`/`check_oracle_refs`；selftest 15→20 |
+| `drop-exp/drop_exp_purity_gate.py` | `_pattern_symbol` 返回族标记；`_method_body_ranges` 只认真声明；`check_oracle_ref_methods` 传 `prefix`；selftest 28→32 |
+| `rng-trace-probe/consumer_groups.tsv` / `drop-exp/drop_exp_consumers.tsv` | **无内容改动**（表是唯一真源；本片只加校验牙） |
+
+### 场景锚门静默漂移 + 接入链深检
+| 文件 | 变更 |
+| --- | --- |
+| `rng-trace-scene/DRIVER-CONTRACT.md` | `main.rs:5598` → `:5665`（真身漂移订正） |
+| `fixture_chain_gate.py` | `SHARED_CHECKS` 新增 `rng_scene_anchor_selftest` / `rng_scene_anchor_check`；selftest 加防回退牙 + `.py` 计数 ≥21（与 master 行会战登记门并集） |
+
+### 文档
+| 文件 | 变更 |
+| --- | --- |
+| `rng-trace-scene/README.md` | §5.2.3（锚门接入链深检 + `:5598` 漂移实例）；§5.3 补方法体归属语义牙 + O-1；计数字典 15→20 |
+| `drop-exp/README.md` | §7 补 O-1 + 正则族；命令/现状计数 28→32 |
+
+### 证据
+| 路径 | 说明 |
+| --- | --- |
+| `evidence-m3-rng-oracle-ref-semantic-tooth-20261014/**` | 13 件（本包） |
+
+**零 `.rs`**；冻结面 `src/` / `sql/` / `MirClient/` / `mir2-rs/crates/protocol` / `mir2-rs/crates/storage` 零改动。

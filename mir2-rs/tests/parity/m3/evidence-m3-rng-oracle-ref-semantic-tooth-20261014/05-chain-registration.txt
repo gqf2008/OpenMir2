@@ -1,0 +1,32 @@
+## 场景锚门漂移实例 + 接入 fixture_chain（本片）
+
+### (a) 漂移是**真身**：把当前文档的 `main.rs:5665` 还原成旧值 `:5598` ⇒ check RED
+命令：python -I rng-trace-scene/check_anchors.py check --doc <drift-copy>
+rc=1
+RED ANCHOR_DRIFT 宿主无条件开怪 AI 调用点（本卡要 AI 开）：文档写 mir2-rs/bins/game-svr/src/main.rs:5598，但 /enable_production_monster_ai\(&mut world\)/ 的首个匹配在 :5665
+RED: check_anchors 1 项 RED
+
+### (b) 文档订正后 ⇒ GREEN
+命令：python -I rng-trace-scene/check_anchors.py check
+rc=0
+GREEN: check_anchors 7/7 锚点保鲜（文档行号 == 当前源码首个匹配行；闭世界 + 裸续引用）
+
+### (c) check_anchors selftest
+rc=0
+  ok  mutation-bare-ref-out-of-range-red（BARE_REF_OUT_OF_RANGE 站点表的 R-6 折叠理由行：`mir2-rs/tests/parity/m3/rng-trace-probe/consumer_groups.tsv:99999` 越界（文件共 76 行））
+SELFTEST GREEN: check_anchors selftest 13/13（含 12 条改坏必红：行号漂移 / 锚点缺失 / 锚点歧义 / 未登记引用 / 折叠定义回退 / 同名目录串台 / 裸续引用未登记 / 裸续内容漂移 / 未识别扩展名 / 裸续引用归属未登记 / 裸续引用归属文件缺失 / 裸续引用登记行越界）
+
+### (d) fixture_chain_gate selftest（含新增防回退牙：RNG 场景锚门必须两向常在）
+rc=0
+  SELFTEST ok  共享管线 (file,args) 登记唯一
+  SELFTEST ok  _tool_argv(.py) ⇒ python -I
+  SELFTEST ok  _tool_argv(.ps1) ⇒ powershell -File
+  SELFTEST ok  _run_tool(.py) 真跑 rc=0
+  SELFTEST ok  _run_tool 缺件 ⇒ 127
+SELFTEST GREEN: fixture_chain_gate selftest 38/38
+
+### (e) fixture_chain_gate check（共享管线现含 rng_scene_anchor_selftest / rng_scene_anchor_check）
+rc=0
+rng_scene_anchor_selftest present    rc=0 :: SELFTEST GREEN: check_anchors selftest 13/13（含 12 条改坏必红：行号漂移 / 锚点缺失 / 锚点歧义 / 未登记
+rng_scene_anchor_check present    rc=0 :: GREEN: check_anchors 7/7 锚点保鲜（文档行号 == 当前源码首个匹配行；闭世界 + 裸续引用）
+FIXTURE_CHAIN GREEN: runner_ok=10 prereq_or_skip=0 red=0

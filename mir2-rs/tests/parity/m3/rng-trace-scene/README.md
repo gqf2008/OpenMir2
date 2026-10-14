@@ -345,6 +345,25 @@ reviewer-6 在 approve `f11129a84` 时记了一条非阻塞 Minor（M-1）：`ch
 > doc 路径写成占位 `<...>`（不可直接复制复跑）⇒ 改为**实路径 + 构造命令**（`git show <base>:<file>`
 > 取旧工具、`printf` 造坏样本），见该证据 dir 的 README。
 
+#### 5.2.3 锚门接入 fixture_chain（2026-10-14 收口；`main.rs:5598` 静默漂移实例）
+
+`check_anchors.py` 此前**零调用方**（只靠手工跑证据 README；`run_rng_trace_pair.ps1 -SelfCheckNoStack`
+仅在系统 B READY 时才走）⇒ 与 castle/guild/hero/selloff/quest/party 六个同族锚门相比，它是唯一
+「在场却坏无声」的一个。本片实测其真身已漂移：`bins/game-svr/src/main.rs` 的
+`enable_production_monster_ai(&mut world)` 从 `:5598` 漂到 `:5665`（后续合并继续加长宿主），而
+`DRIVER-CONTRACT.md:59` 仍写 `:5598` ⇒ `check_anchors check` 与 `selftest` **都 RED、无人发现**。
+
+收口：① 文档订正 `:5598`→`:5665`；② 把 `check_anchors.py` 的 `selftest` + `check` 两向登记进
+`fixture_chain_gate.SHARED_CHECKS`（不看矩阵状态、独立常跑），并在链门 selftest 加**防回退牙**
+（必须两向常在；`.py` 登记项计数 `≥17`→`≥19`）。
+
+```sh
+python -I fixture_chain_gate.py check    # 共享管线含 rng_scene_anchor_selftest / _check 两向，FIXTURE_CHAIN GREEN
+python -I fixture_chain_gate.py selftest # 38/38 GREEN（含「RNG 场景锚门已接入共享管线」防回退牙）
+```
+
+> 注：锚点随 master 继续漂移时，本门会在链门里**恒 RED**（这正是它接入共享管线要拿到的“不再静默”）。
+
 ### 5.3 站点表 `oracle_ref` 可解析性机判（`rng_consumer_groups.py`）
 
 `consumer_groups.tsv` 是 Claim B 的**唯一真源**，其 `oracle_ref` 列是站点归因的唯一溯源
@@ -355,15 +374,23 @@ reviewer-6 在 approve `f11129a84` 时记了一条非阻塞 Minor（M-1）：`ch
   `src/Modules/SystemModule/Conf/ServerConf.cs`（缺 `Modules/` 段）⇒ 承接卡/评审按它找会找空。
 
 `rng_consumer_groups.py` 现把「能解析成源码文件的 `oracle_ref` 必须**文件存在**且**行号在范围内**」
-钉成 fail-closed 机判（不可解析的 ref——glob、目录、Rust 模块入口无行号——按口径跳过）：
+钉成 fail-closed 机判（不可解析的 ref——glob、目录、Rust 模块入口无行号——按口径跳过）；2026-10-14
+再加一道 **C# 方法体归属语义牙**（与 `drop-exp/drop_exp_purity_gate.py` 同口径，两处各带改坏必红）：
+
+- 真身缺陷：`RegenMonsters` 的 ref 曾写 `WorldServer.MonGen.cs:238`（该行落在 `ProcessMonsters` 里）
+  ⇒ 只查「文件存在 + 行号在范围」**抓不到它**；现在 C# 行的 ref 必须落在其 `pattern` 点名的**方法体**内；
+- 正则族名（`GameItemSystem.UpgradeRandom\w+`）按**字面前缀**匹配（`UpgradeRandom\w*(`），覆盖
+  `UpgradeRandomWeapon/Dress/...`；
+- **O-1 收口**（reviewer-5 `f7318e59`）：方法体识别只认**真声明**（名字前是类型/修饰符）——旧口径把
+  `if (Think()) { … }` 这类**调用点块**误当方法体（伪 range `(255,259)`）⇒ 潜在假负通道，现封死；
 
 ```sh
-python -I rng-trace-probe/rng_consumer_groups.py selftest   # 15/15 GREEN（含坏路径 / 越界行 2 条改坏必红）
+python -I rng-trace-probe/rng_consumer_groups.py selftest   # 20/20 GREEN（原 15 + 方法体归属 5 条：真表全绿 + 真身错锚/伪 range/正则族错行必红 + 正则族正确行不误伤）
 ```
 
 - 路径口径：`src/...` 相对仓库根（C#）；`crates/...`/`bins/...` 相对 `mir2-rs/`（Rust）；`mir2-rs/...` 相对仓库根；
-- 已接入 `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`station-table-refs-selftest`）⇒ **自检项数
-  由 30 增至 31**（本片之前报告里的 `29/29`、`30/30` 是片时读数，不受影响）。
+- 已接入 `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`station-table-refs-selftest`）⇒ runner 的自检
+  **项数不变**（`selftest` 作为一个子项被调用，其内部条数不改变 runner 项数）。
 
 ### 5.4 证据包「声明 head」一致性机判（`check_evidence_head.py`，O-1 收口）
 
@@ -427,7 +454,7 @@ python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（�
 python -I rng-trace-scene/check_evidence_counts.py selftest    # 10/10 GREEN（报告证据头行计数 + §0 head/base 全 oid vs 真实包）
 python -I rng-trace-scene/check_anchors.py selftest             # 13/13 GREEN（承接卡规格锚点保鲜；含 12 条改坏必红：行号漂移/缺失/歧义/未登记引用/折叠定义回退/同名目录串台/裸续引用未登记/裸续内容漂移/未识别扩展名/裸续引用归属未登记/裸续引用归属文件缺失/裸续引用登记行越界）
 python -I rng-trace-scene/check_evidence_head.py selftest       # 19/19 GREEN（证据包声明 head：check 对 HEAD + check-pack 对书证 head；含改坏必红 + PREREQ + 多处声明 fail-closed）
-python -I rng-trace-probe/rng_consumer_groups.py selftest       # 15/15 GREEN（站点表 oracle_ref 可解析性；含坏路径/越界行 2 条改坏必红）
+python -I rng-trace-probe/rng_consumer_groups.py selftest       # 20/20 GREEN（站点表 oracle_ref 可解析性 + C# 方法体归属；含真身错锚/伪 range/正则族错行 3 条改坏必红 + 正则族正确行不误伤）
 python -I rng-trace-scene/check_window_batch.py selftest        # 13/13 GREEN（本卡 vs ④ 场景件：同图/同种子/同起点）
 
 # 同窗口批次前提（本卡 scenario vs ④ drop-exp scenario；非 GREEN ⇒ 批次不可比，拒跑）

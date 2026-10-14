@@ -194,18 +194,36 @@ def validate_oracle_refs(rows, repo_root=REPO_ROOT):
     return problems
 
 
-def _pattern_symbol(pattern):
-    """从站点 `pattern` 抽出被点名的方法/构造名（`...\\Class.Method@File.cs:NN` ⇒ `Method`）。
+# 控制/表达式关键字：若紧邻被点名符号的**前一个词**是它们，则匹配处是调用/表达式而非声明。
+_CTRL_BLOCKERS = frozenset((
+    "if", "while", "for", "foreach", "switch", "catch", "lock", "using",
+    "return", "new", "case", "else", "do", "throw", "yield", "when", "in", "is", "as",
+))
 
-    `\\.ctor` ⇒ 该类名（构造函数）。抽不出 ⇒ None（调用方跳过语义牙，不误伤）。
+
+def _pattern_symbol(pattern):
+    """从站点 `pattern` 抽出被点名的方法/构造名 + 是否**正则族**。
+
+    `...\\Class.Method@File.cs:NN` ⇒ `("Method", False)`；`\\.ctor` ⇒ 该类名（构造函数）；
+    含正则元字符的族名（`GameItemSystem.UpgradeRandom\\w+@...`）⇒ 取**字面前缀**
+    （`("UpgradeRandom", True)`，按前缀覆盖 `UpgradeRandomWeapon/Dress/...`——修
+    reviewer-5 实测的「族名 ref 找不到方法体」假负）。抽不出（类名本身是正则，如
+    `Monsters.\\w+..ctor@`）⇒ `(None, False)`（调用方跳过语义牙，不误伤）。
     """
     head = (pattern or "").split("@")[0].replace("\\.", ".")
     segs = [s for s in head.split(".") if s]
     if not segs:
-        return None
+        return None, False
     if segs[-1] == "ctor":
-        return segs[-2] if len(segs) >= 2 else None
-    return segs[-1]
+        if len(segs) < 2:
+            return None, False
+        segs = segs[:-1]
+    seg = segs[-1]
+    m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", seg)
+    if not m:
+        return None, False
+    literal = m.group(0)
+    return literal, literal != seg
 
 
 def _code_only(lines):
@@ -270,13 +288,40 @@ def _code_only(lines):
     return out
 
 
-def _method_body_ranges(lines, name):
-    """找 `name` 每个声明的方法体 `(decl_line, close_line)`（1-based，含声明行）。"""
+def _looks_like_declaration(masked_line, match):
+    """匹配处是否像**方法/构造声明**（而非调用点后跟花括号块）。
+
+    O-1（reviewer-5 `f7318e59`，2026-10-14 收口）：旧口径把任何 `name(` 都当声明，于是
+    `if (_Attack(...)) { … }` 的**块**被误当成 `_Attack` 的方法体（伪 range `(13,17)`），
+    给「ref 落错方法」留了假负通道。判据 = 名字前（同行）最后一个非空字符必须是
+    标识符尾 / 泛型 `>` / 数组 `]`（即前面是类型或修饰符），且前一个词不是控制/表达式关键字。
+    多行签名（名字单独成行）保守跳过——现有真表全部单行，不误伤。
+    """
+    before = masked_line[:match.start()].rstrip()
+    if not before:
+        return False
+    if before[-1] not in (">", "]") and not re.match(r"[A-Za-z0-9_]", before[-1]):
+        return False
+    last = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", before)
+    if last and last.group(1) in _CTRL_BLOCKERS:
+        return False
+    return True
+
+
+def _method_body_ranges(lines, name, prefix=False):
+    """找 `name` 每个**声明**的方法体 `(decl_line, close_line)`（1-based，含声明行）。
+
+    `prefix=True`（正则族名，如 `UpgradeRandom\\w+`）⇒ 按 `<name>\\w*(` 前缀匹配，覆盖
+    `UpgradeRandomWeapon/Dress/...`。调用点（经 `_looks_like_declaration` 判定）不再产生
+    伪 range；`;` 先于 `{` 出现也算「非声明体」（原口径）。
+    """
     masked = _code_only(lines)
-    pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"\s*\(")
+    pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name)
+                     + (r"\w*" if prefix else "") + r"\s*\(")
     ranges = []
     for idx, ml in enumerate(masked):
-        if not pat.search(ml):
+        match = pat.search(ml)
+        if not match or not _looks_like_declaration(ml, match):
             continue
         opened = False
         depth = 0
@@ -314,13 +359,13 @@ def check_oracle_ref_methods(rows, repo_root=REPO_ROOT):
             continue
         ref = r.get("oracle_ref", "")
         line = oracle_ref_line(ref)
-        name = _pattern_symbol(r.get("pattern"))
+        name, is_regex = _pattern_symbol(r.get("pattern"))
         if line is None or not name:
             continue
         path = resolve_oracle_ref_path(ref, repo_root)
         if path is None or not os.path.isfile(path):
             continue  # 存在性牙已点名，不重复
-        ranges = _method_body_ranges(_read_lines(path), name)
+        ranges = _method_body_ranges(_read_lines(path), name, prefix=is_regex)
         if not any(a <= line <= b for a, b in ranges):
             problems.append(
                 "行%d(%s/%s): oracle_ref 行 %d 不在 `%s` 方法体内（range=%s；ref=%s）"
@@ -789,6 +834,29 @@ def cmd_selftest(_args):
              lambda: check_oracle_ref_methods(
                  [_ref_row(r"GameSrv\.Word\.WorldServer\.RegenMonsters@WorldServer\.MonGen\.cs:815$",
                            "src/GameSrv/Word/WorldServer.MonGen.cs:811")]))
+        # ㉕ 改坏必红（O-1 收口，2026-10-14）：`BaseObject.Attack.cs:14` 落在**调用点**
+        #     `if (_Attack(...)) { … }` 的块里（旧口径伪 range `(13,17)` 会放行）⇒
+        #     收紧为「真声明」后必须点名（证明伪 range 假负通道已封死）。
+        case("oracle-ref-method-pseudo-callsite-red", True,
+             lambda: any("不在 `_Attack` 方法体内" in p for p in check_oracle_ref_methods(
+                 [_ref_row(r"M2Server\.Actor\.BaseObject\._Attack@BaseObject\.Attack\.cs:41$",
+                           "src/M2Server/Actor/BaseObject.Attack.cs:14")])))
+        # ㉖ 同一文件的**真声明** `:30` 仍落在 `_Attack` 方法体内 ⇒ 语义牙不误伤。
+        case("oracle-ref-method-decl-ok", [],
+             lambda: check_oracle_ref_methods(
+                 [_ref_row(r"M2Server\.Actor\.BaseObject\._Attack@BaseObject\.Attack\.cs:41$",
+                           "src/M2Server/Actor/BaseObject.Attack.cs:30")]))
+        # ㉗ 正则族名按**字面前缀**匹配（`UpgradeRandom\w*\(`）：`GetUpgrade` 的方法体
+        #     （142..157）不含任何 `UpgradeRandom*` 声明 ⇒ ref `:182` 写成 `:142` 必点名。
+        case("oracle-ref-method-regex-family-red", True,
+             lambda: any("不在 `UpgradeRandom` 方法体内" in p for p in check_oracle_ref_methods(
+                 [_ref_row(r"GameItemSystem\.UpgradeRandom\w+@GameItemSystem\.cs:182$",
+                           "src/M2Server/Items/GameItemSystem.cs:142")])))
+        # ㉘ 正则族名的**正确** ref `:182`（`UpgradeRandomWeapon` 声明）⇒ GREEN。
+        case("oracle-ref-method-regex-family-ok", [],
+             lambda: check_oracle_ref_methods(
+                 [_ref_row(r"GameItemSystem\.UpgradeRandom\w+@GameItemSystem\.cs:182$",
+                           "src/M2Server/Items/GameItemSystem.cs:182")]))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

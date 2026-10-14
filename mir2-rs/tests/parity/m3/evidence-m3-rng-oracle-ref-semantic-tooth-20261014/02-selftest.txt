@@ -1,0 +1,71 @@
+### rng_consumer_groups.py selftest  (rc=0)
+  ok  table-validate
+  ok  classify bins/game-svr/src/mongen.rs:289 -> spawn（got=spawn）
+  ok  classify bins\game-svr\src\mongen.rs:434 -> spawn（got=spawn）
+  ok  classify crates/world/src/mongen.rs:321 -> spawn（got=spawn）
+  ok  classify crates/world/src/monai.rs:171 -> monster_ai（got=monster_ai）
+  ok  classify crates/formula/src/drop.rs:100 -> drop（got=drop）
+  ok  classify bins/game-svr/src/main.rs:2884 -> startup（got=startup）
+  ok  classify crates/world/src/combat.rs:758 -> attack（got=attack）
+  ok  classify bins/game-svr/src/not_in_table.rs:1 -> other（got=other）
+  ok  mutation-host-row-removed（删掉 1 行）
+  ok  mutation-host-site-becomes-other（got=other）
+  ok  mutation-core-group-validate-red（期望 validate 点名 merchant）
+  ok  oracle-refs-fresh
+  ok  mutation-oracle-ref-path-red（行28(startup/csharp): oracle_ref 指向不存在的源码文件 src\NoSuchModule\Conf\ServerConf.cs（ref=src/NoSuchModule/Conf/ServerConf.cs:114））
+  ok  mutation-oracle-ref-line-red（行28(startup/csharp): oracle_ref 行 999999 越界（src\Modules\SystemModule\Conf\ServerConf.cs 共 682 行））
+  ok  oracle-ref-methods-fresh
+  ok  mutation-oracle-ref-method-red（行12(spawn/csharp): oracle_ref 行 238 不在 `RegenMonsters` 方法体内（range=[(811, 878)]；ref=src/GameSrv/Word/WorldServer.MonGen.cs:238））
+  ok  mutation-oracle-ref-pseudo-callsite-red（行3(monster_ai/csharp): oracle_ref 行 255 不在 `Think` 方法体内（range=[(187, 218)]；ref=src/M2Server/Monster/MonsterObject.cs:255））
+  ok  mutation-oracle-ref-method-regex-family-red（行7(drop/csharp): oracle_ref 行 142 不在 `UpgradeRandom` 方法体内（range=[(182, 232), (234, 268), (270, 304), (306, 340), (342, 376), (378, 402), (404, 438), (440, 474)]；ref=src/M2Server/Items/GameItemSystem.cs:142））
+  ok  oracle-ref-method-regex-family-ok
+SELFTEST GREEN: rng_consumer_groups selftest 20/20
+
+
+### drop_exp_purity_gate.py selftest  (rc=0)
+PREREQ_MISSING: consumers 表里 side=rust 没有 `measured` 行 ⇒ 认不出被测量路径，拒跑（不许假绿；实现卡落地后按实测站点补表）
+PREREQ_MISSING: 找不到抽数流水 C:\Users\gxh\AppData\Local\Temp\drop-exp-purity-selftest-_ue3zf5o\nope.tsv
+RED: PREREQ_RED k 不连续/非 0 起（第 1 条 k=2）(C:\Users\gxh\AppData\Local\Temp\drop-exp-purity-selftest-_ue3zf5o\badraw.jsonl)
+PREREQ_MISSING: consumers 表里 side=csharp 没有 `measured` 行 ⇒ 认不出被测量路径，拒跑（不许假绿；实现卡落地后按实测站点补表）
+=== 场景纯度（drop_exp_purity_gate）===
+  side=csharp stream=C:\Users\gxh\AppData\Local\Temp\drop-exp-purity-selftest-_ue3zf5o\wall.tsv
+  draws=2 measured=1 setup=0 wallclock=1 other=0 unknown=0 missing_site=0 ambiguous=0
+  --- 逐消费者清单（site 计数，降序）---
+         1  Measured.Drop@Measured.cs:10
+         1  Noise.Wondering@Noise.cs:20
+  RED: wallclock_consumer: 1 处墙钟驱动抽数（首个 line=4 site=Noise.Wondering@Noise.cs:20）⇒ pin 抑制未生效；需 (a) 把怪钉住（不游走/不搜索目标）或 (b) 接专用流（实现卡）
+  结论：场景不纯 / 认不出 ⇒ **拒比**（fail-closed，不放宽判据）
+SELFTEST ok clean-green expect='GREEN' got='GREEN'
+SELFTEST ok wallclock-red expect='RED' got='RED'
+SELFTEST ok wallclock-names-problem expect=True got=True
+SELFTEST ok other-red expect='RED' got='RED'
+SELFTEST ok other-names-problem expect=True got=True
+SELFTEST ok unknown-red expect='RED' got='RED'
+SELFTEST ok unknown-names-problem expect=True got=True
+SELFTEST ok ambiguous-class-red expect='RED' got='RED'
+SELFTEST ok empty-red expect='RED' got='RED'
+SELFTEST ok missing-site-red expect='RED' got='RED'
+SELFTEST ok no-measured-row-prereq expect=2 got=2
+SELFTEST ok missing-stream-prereq expect=2 got=2
+SELFTEST ok kill-count-mismatch-red expect='RED' got='RED'
+SELFTEST ok raw-k-gap-prereq expect=2 got=2
+SELFTEST ok table-measured-removed-red expect=2 got=2
+SELFTEST ok cli-wallclock-rc1 expect=1 got=1
+SELFTEST ok real-table-both-sides-measured expect={'csharp': True, 'rust': True} got={'csharp': True, 'rust': True}
+SELFTEST ok real-table-rust-green expect='GREEN' got='GREEN'
+SELFTEST ok real-table-kill-measured expect='GREEN' got='GREEN'
+SELFTEST ok real-table-csharp-green expect='GREEN' got='GREEN'
+SELFTEST ok real-table-rust-wallclock-red expect='RED' got='RED'
+SELFTEST ok real-table-rust-wallclock-names expect=True got=True
+SELFTEST ok real-table-rust-unknown-red expect='RED' got='RED'
+SELFTEST ok oracle-refs-fresh expect=[] got=[]
+SELFTEST ok oracle-ref-path-red expect=True got=True
+SELFTEST ok oracle-ref-line-red expect=True got=True
+SELFTEST ok oracle-ref-method-red expect=True got=True
+SELFTEST ok oracle-ref-method-ok expect=[] got=[]
+SELFTEST ok oracle-ref-method-pseudo-callsite-red expect=True got=True
+SELFTEST ok oracle-ref-method-decl-ok expect=[] got=[]
+SELFTEST ok oracle-ref-method-regex-family-red expect=True got=True
+SELFTEST ok oracle-ref-method-regex-family-ok expect=[] got=[]
+SELFTEST ok=32/32
+
