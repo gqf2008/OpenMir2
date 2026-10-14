@@ -1,0 +1,9 @@
+### restored-green: 还原 pristine 后重跑 3 条判据（期望全绿）
+$ cargo test -p game-svr --lib sm_changenamecolor
+test smframe::tests::sm_changenamecolor_header_only ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 198 filtered out; finished in 0.00s
+
+$ cargo test -p game-svr --bin game-svr slave_mutiny
+test tests::slave_mutiny_downlink_groups_all_colors_before_names ... ok
+test tests::slave_mutiny_downlink_emits_namecolor_then_username ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 211 filtered out; finished in 0.00s

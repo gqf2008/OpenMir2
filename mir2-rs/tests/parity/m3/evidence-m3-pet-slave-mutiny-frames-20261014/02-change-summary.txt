@@ -1,0 +1,81 @@
+M3⑨-3 宝宝叛变帧面——变更清单
+================================
+卡：openmir2-m3-pet-slave-masterdie-wire（M3⑨ 主人死/幽灵 1s 自投递，残余帧面）
+作者：openmir2-worker-20（worktree m3hp，分支 worktree-m3-selloff-dealoffform-recog）
+
+base（净差量口径） = refs/heads/master = walgit/master = origin/master = 9edfc745d48ec7edafcbcb9da3d9a6a0c19073ad
+       （本地 refs/heads/master 缓冲在 ad0592b19 = 共享主检出 HEAD；未移动，见 04-boundary.txt。）
+代码提交 = c55dff977（本片唯一实现提交）；证据提交 = 本目录所在提交 = patch head。
+
+## 1) 为什么有这一片
+
+本卡前片（已合入 master `41e61029e`）把状态层接好了：`World::deliver_self_delay_msgs()`
+在 tick 的消息段投递到点自投递消息 → `slave::process_slave_mutiny()` → 返回**叛变宝宝 id 列表**，
+落在 `TickRecord::slave_self_deliveries`（`Vec<SelfDelayOutcome>`）。但 `crates/world` 明写
+（`world.rs:107-109`、`crates/world/src/slave.rs:44-46`）：
+
+    帧面（RefNameColor ⇒ RM_CHANGENAMECOLOR / RefShowName ⇒ RM_USERNAME）不在 crates/world 层，
+    宿主据本记录出帧或登记 not_verified。
+
+实测 `bins/` 对 `slave_self_deliveries` **零消费者**（`grep -rn slave_self_deliveries bins/` = 0 命中）
+⇒ 叛变在客户端**不可见**（名字不变色 / 名字不刷新）。本片即接上这一环，只动宿主（`bins/game-svr`）。
+
+## 2) 变更（2 个 .rs，329 insertions, 0 deletions）
+
+    $ git diff --stat 9edfc745d c55dff977
+     mir2-rs/bins/game-svr/src/main.rs    | 296 +++++++++++++++++++++++++++++++++++
+     mir2-rs/bins/game-svr/src/smframe.rs |  33 ++++
+     2 files changed, 329 insertions(+)
+
+### 2.1 `smframe.rs`：新增 `sm_changenamecolor(actor_id, name_color)`
+
+- 编码：`MakeMessage(SM_CHANGENAMECOLOR, Recog=processMsg.ActorId, Param=GetChrColor(baseObject), Tag=0, Series=0)`
+  + **无尾**（`SendDefMessage` 的 5 参重载）。
+- 锚：`PlayObject.Message.cs:1678`（观察者 `RM_CHANGENAMECOLOR` 支）。
+- 对应 `sm_username`（已有）：同载荷 + 尾 `EncodeString(GetShowName())`（`:1663-1664`）。
+
+### 2.2 `main.rs`：新增 `drain_slave_mutiny_downlink(...)` + 调用点
+
+- 输入 = `rec.slave_self_deliveries` 里 `ident == RM_MASTERDIEMUTINY` 的项，遍历其 `mutinied`。
+- 对每只叛变宝宝：`color = mir2_world::slave::get_chr_color(e, cfg.slave_color, 0)`
+  （叛变后 `Master == null` ⇒ 怪的 `NameColor`；`PlayObject.GetChrColor` 对非 `Play` 目标回落
+  `BaseObject.GetChrColor` ⇒ `GetNameColor()`），`show_name = gbk(filter_show_name(e.name))`
+  （`BaseObject.GetShowName()`：`Master == null` ⇒ 无 `(主人名)` 后缀）。
+- 接收者 = `game_svr::chat::hear_targets(world, slave_id, enter_cfg.ref_msg_range)`
+  —— 与 oracle `SendRefMsg` 的「同图 + `Race==Play` + 非 `Ghost` + 切比雪夫 ≤ 12」同集合。
+- **出帧序**（按观察者 `MsgQueue` 的优先级字节，不是源码入队序）：
+  `(byte)wIdent` 入队（`BaseObject.Message.cs:181`），`MsgQueue` 是
+  `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:16`）⇒ 小根堆；
+  `8090 & 0xFF = 154 < 8101 & 0xFF = 165` ⇒ **所有宝宝的色帧先于所有名帧**出队，
+  宝宝序 = `SlaveList` 末尾往前（= `mutinied` 序）。
+- 调用点：`world.tick()` / `drain_party_death_events` 之后、`world.party_run_tick()` 之前
+  （oracle 属主人 `Run()` 的消息段 `PlayObject.Message.cs:2116-2121`，先于 `base.Run()`
+  的恢复/体力段）。
+
+### 2.3 单测（3 条，其中 2 条带改坏必红牙）
+
+| 用例 | 钉住 |
+| --- | --- |
+| `smframe::tests::sm_changenamecolor_header_only` | 帧头 5 字段 + 无尾 |
+| `tests::slave_mutiny_downlink_emits_namecolor_then_username` | 色→名 序、载荷、AOI 距离门（远者不收） |
+| `tests::slave_mutiny_downlink_groups_all_colors_before_names` | 多宝宝时「全色帧再全名帧」的优先级出队序 |
+
+## 3) 登记（未 1:1，属真机项）
+
+1. **500ms `VisibleHumanList` 缓存**：oracle `SendRefMsg`（`BaseObject.Message.cs:395`）每 ≤500ms（或表空）
+   重算接收集，重算支用 `SendRefMsgRange`=12 的 25×25 块（`:399-402`），缓存命中支用 `< 11` 窄门（`:460`）。
+   本实现每 tick 用 `hear_targets(range=enter_cfg.ref_msg_range)` 现算现发（同 `drain_combat_downlink` 口径）
+   ⇒ 接收集可能比 oracle 的缓存快照宽/窄（差集仅出现在 12/11 边界与 500ms 窗口内）。
+2. **帧先入观察者 `MsgQueue`，下一轮 `Run()` 才回 `SM_*`**：本实现当 tick 直发（同既有下行族）。
+3. **`NpcNameColor` 未在 Rust 配置层建模**：本路径叛变宝宝恒非 NPC ⇒ 不可达，传 `0` 且不消费。
+4. **`GetShowName()` 的 `(主人名)` 后缀**：本路径 `process_slave_mutiny` 已把 `Master` 置 `None` ⇒ 不可达。
+5. **`ghosted` 支不产帧**：`RM_MASTERDIEGHOST` 在 oracle 里恒不可达（本卡 BUG-REPLICA ④，
+   `send_self_delay_msg` 的 `!Ghost` 门）⇒ `process_slave_ghost` 是死代码。
+
+## 4) 本片**不**覆盖（另行登记）
+
+- **召唤/受奴路径的 `RefNameColor`/`RefShowName`**：`MakeSlave`（`BaseObject.cs:1194`）在入 `SlaveList`
+  前调 `monObj.RefNameColor()`；`MagTamming` 受奴落尾调 `RefShowName()`（`MagicManager.cs:764`）。
+  这两处在**召唤命令**的处理路径（宿主 `SKILL_TAMMING`/召唤支），与叛变自投递不同接点，未纳入本片。
+- 卡级真机 DoD（R 级）：真机两侧 `run_hero_pet_pair.ps1` 同序列 `diff=0`（含叛变站点帧序/字节），
+  需 owner 独占窗口 —— 本片只交离线实现片，**not_verified**。

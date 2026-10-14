@@ -1,0 +1,56 @@
+M3⑨-3 宝宝叛变帧面——判据读数（证据四件套：命令 + 输出 + 路径 + hash）
+==============================================================
+head = 本证据提交（含 c55dff977 实现）；base = refs/heads/master = 9edfc745d48ec7edafcbcb9da3d9a6a0c19073ad
+环境：Windows 10 x64；rustc 1.98.1；`CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target`（检出外）；cwd = `mir2-rs`
+
+## 1) 判据（≥1 条；本片 3 条）
+
+    $ cargo test -p game-svr --lib sm_changenamecolor
+    test smframe::tests::sm_changenamecolor_header_only ... ok
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 198 filtered out; finished in 0.00s
+
+    $ cargo test -p game-svr --bin game-svr slave_mutiny
+    test tests::slave_mutiny_downlink_groups_all_colors_before_names ... ok
+    test tests::slave_mutiny_downlink_emits_namecolor_then_username ... ok
+    test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 211 filtered out; finished in 0.00s
+
+（还原后重跑同一组 = `redchecks/restored-green.txt`，3/3 GREEN rc=0。）
+
+## 2) 改坏必红（3 条，逐条：改 → 跑 → 还原）
+
+| 编号 | 变异 | 期望红 | 实读 |
+| --- | --- | --- | --- |
+| RC1 | `sm_changenamecolor` 的 `Param` 由 `color` 改 `0` | `sm_changenamecolor_header_only` | **rc=101** FAILED 0 passed 1 failed（`redchecks/RC1-*.txt`） |
+| RC2 | `drain_slave_mutiny_downlink` 的两循环合并为「每宝宝 色+名」 | `slave_mutiny_downlink_groups_all_colors_before_names` | **rc=101** FAILED 1 passed 1 failed（`redchecks/RC2-*.txt`） |
+| RC3 | 删掉名帧循环（只留色帧） | 两条 frame 用例 | **rc=101** FAILED 0 passed 2 failed（`redchecks/RC3-*.txt`） |
+
+还原口径（机器）：`git checkout -- bins/game-svr/src/main.rs bins/game-svr/src/smframe.rs` 后
+`git hash-object <f> == git rev-parse HEAD:<f>`：
+
+    mir2-rs/bins/game-svr/src/main.rs    wd=da04add7445c266a38182e5a0e01d45c795becba head=da04add7445c266a38182e5a0e01d45c795becba
+    mir2-rs/bins/game-svr/src/smframe.rs wd=248bcb7e972c166d5a24b0d8fff9c8a7e6b26096 head=248bcb7e972c166d5a24b0d8fff9c8a7e6b26096
+
+`git status --porcelain` 仅剩未跟踪的证据目录（实现文件干净）。
+
+## 3) 四门禁（gates/，HEAD = 本证据提交前一刻的实现提交）
+
+| 门禁 | 命令 | 读数 |
+| --- | --- | --- |
+| fmt | `cargo fmt --all -- --check` | **rc=0**（`gates/10-fmt.txt`，0 字节） |
+| clippy | `cargo clippy --workspace --all-targets -- -D warnings` | **rc=0**（`gates/11-clippy.txt`） |
+| test | `cargo test --workspace --no-fail-fast` | **101 suites · 1222 passed · 0 failed · 22 ignored · rc=0**（`gates/13-workspace-test.txt`） |
+| msgcodegen | `cargo run -q -p msgcodegen -- --check` | **604 条 rc=0**（`gates/12-msgcodegen.txt`） |
+
+本片新增 3 条单测（+3 ⇒ 1222；其余读数与合并检查点同形）。
+
+## 4) 真机判据（R 级，**本片未跑** ⇒ not_verified）
+
+- 卡级 DoD = 真机两侧 `run_hero_pet_pair.ps1` 同序列 `diff=0`（含叛变站点的名色/名帧序与字节）。
+- 阻塞：需世界侧场景驱动 + owner **独占窗口**（`WINDOW-OPEN`）；本车道被明令禁止起真机栈/占端口。
+- ⇒ 本片只交离线实现片；`tier=R`、`window_required=true`，**不据此收卡**。
+
+## 5) 一句话结论
+
+`TickRecord::slave_self_deliveries` 此前在宿主**无消费者**（叛变在客户端不可见）；本片接上
+`RefNameColor→SM_CHANGENAMECOLOR(656)` 与 `RefShowName→SM_USERNAME(42)`，并按观察者 `MsgQueue`
+的优先级字节（154 < 165）复刻「全色帧先于全名帧、宝宝末尾往前」的出队序；3 条单测 + 3 条改坏必红全绿。

@@ -1,0 +1,61 @@
+M3⑨-3 宝宝叛变帧面——边界 / 纪律 / 端口 / 残留物
+==================================================
+卡：openmir2-m3-pet-slave-masterdie-wire（残余帧面）
+作者：openmir2-worker-20（worktree m3hp，分支 worktree-m3-selloff-dealoffform-recog）
+
+base（净差量口径） = refs/heads/master = walgit/master = origin/master = 9edfc745d48ec7edafcbcb9da3d9a6a0c19073ad
+head = 本证据提交（含 c55dff977 实现）
+  （本地 refs/heads/master 缓冲在 ad0592b19 = 共享主检出 HEAD，与 walgit/master 分叉；未移动。）
+
+## 1) 冻结面（期望空）
+
+    $ git diff --name-only 9edfc745d <head> -- src sql MirClient
+    (空)
+
+    $ git diff --name-only 9edfc745d <head> -- mir2-rs/crates/protocol mir2-rs/crates/storage
+    (空)
+
+## 2) 净差量（代码 2 个 .rs；证据目录全在 mir2-rs/tests/parity/m3/**）
+
+    $ git diff --name-only 9edfc745d c55dff977
+    mir2-rs/bins/game-svr/src/main.rs
+    mir2-rs/bins/game-svr/src/smframe.rs
+
+    $ git diff --stat 9edfc745d c55dff977
+     mir2-rs/bins/game-svr/src/main.rs    | 296 +++++++++++++++++++++++++++++++++++
+     mir2-rs/bins/game-svr/src/smframe.rs |  33 ++++
+     2 files changed, 329 insertions(+)
+
+零 `.rs` 删除、零 `Cargo.toml`/`Cargo.lock` 改动、零 schema/迁移。
+
+## 3) 纪律
+
+- **未碰共享主检出** `E:/Users/gxh/Documents/GitHub/OpenMir2`（HEAD 仍 `ad0592b19`，`git status` 干净）；
+  所有提交只在本 worktree `m3hp` 的分支 `worktree-m3-selloff-dealoffform-recog`。
+- **未 merge、未自签 review、未移卡**（只签自己的 `status`/`patch`；review 须另一 principal）。
+- 未改 `tools/orchestration/lanes.conf` / `.walgit/board.toml` / 别人 inbox；未动编排配置。
+- **零起真机栈、零占端口**（下表）。
+- 未改 `src/`（oracle）、`sql/`、`MirClient`、`crates/protocol`、`crates/storage`。
+- 改坏必红还原后 `git hash-object` 与 `HEAD:` 逐文件相等（见 `03-tests.txt` §2），`git status --porcelain` 实现文件干净。
+- 未新增/修改任何"其他车道写集"文件（`crates/world` 的宠物/英雄、`crates/data` 寄售、`bins/game-svr` 之外零改动）。
+
+## 4) 端口实拍
+
+    5000 DOWN   5100 DOWN   5500 DOWN   5600 DOWN
+    6000 DOWN   7000 DOWN   7100 DOWN   7200 DOWN
+
+仅既有 `127.0.0.1:3306`（mysqld）与 `127.0.0.1:8081`（walgit host）在听 —— 本线未起任何
+服务端/客户端/假人/代理进程。
+
+## 5) 残留物清单（登记）
+
+| 路径 | 说明 | 处置 |
+| --- | --- | --- |
+| `E:/tmp/openmir2-m3hp-target` | 隔离 `CARGO_TARGET_DIR`（检出外） | 保留复用（后续 tick） |
+| `E:/tmp/m3hp-t56/{10-fmt,11-clippy,12-test,13-msgcodegen}.txt` | 四门禁中间输出 | 保留（已入证据包；可删） |
+| `E:/tmp/m3hp-t56/{20-red-m1,20-red-m2,20-red-m3,21-restored-green}.txt` | 改坏必红 + 还原重跑 | 保留（已入证据包；可删） |
+| `E:/tmp/m3hp-t56/mutate.py` | 变异脚本 | 已入证据包 `redchecks/mutate.py`（可删中间件） |
+| 分支 `worktree-m3-selloff-dealoffform-recog` | 已 push origin + walgit | 未 merge（等独立 review） |
+| 本证据目录 `mir2-rs/tests/parity/m3/evidence-m3-pet-slave-mutiny-frames-20261014/**` | 15 件 | 已入库 |
+
+> 更早 tick 的残留（`E:/tmp/m3hp-t*`、`E:/tmp/m3hp-*`）属既有登记，不在本片新增。

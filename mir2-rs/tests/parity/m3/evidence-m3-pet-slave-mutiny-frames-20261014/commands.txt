@@ -1,0 +1,38 @@
+# M3⑨-3 宝宝叛变帧面 复现命令（隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target）
+
+# 0) 开工（自己的 worktree；绝不碰共享主检出 E:/Users/gxh/Documents/GitHub/OpenMir2）
+cd E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3hp
+git fetch origin
+git fetch walgit
+git merge --ff-only origin/master            # 41e61029e -> 9edfc745d（clean）
+# 实现提交 = c55dff977（feat(m3-9-3) ...）
+
+# 1) 四门禁（gates/，cwd = mir2-rs）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo fmt --all -- --check                            # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo clippy --workspace --all-targets -- -D warnings # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test --workspace --no-fail-fast                 # 101 suites 1222 passed 0 failed 22 ignored rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo run -q -p msgcodegen -- --check                 # 604 条 rc=0
+
+# 2) 聚焦判据（3 条）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --lib sm_changenamecolor        # 1 passed rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --bin game-svr slave_mutiny    # 2 passed rc=0
+
+# 3) 改坏必红（redchecks/，逐条：改 -> 跑 -> 还原；变异脚本 = 本目录 redchecks/mutate.py）
+#    RC1  sm_changenamecolor 的 Param 由 color 改 0            -> sm_changenamecolor_header_only rc=101
+#    RC2  两循环合并为「每宝宝 色+名」                          -> groups_all_colors_before_names rc=101
+#    RC3  删掉名帧循环                                         -> 两条 frame 用例 rc=101
+#    cwd = 本证据目录
+python -I redchecks/mutate.py m1
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --lib sm_changenamecolor        # rc=101
+(cd <worktree>/mir2-rs && git checkout -- bins/game-svr/src/main.rs bins/game-svr/src/smframe.rs)
+#    （RC2/RC3 同法，跑 -p game-svr --bin game-svr slave_mutiny）
+#    还原口径：git hash-object <f> == git rev-parse HEAD:<f>
+
+# 4) 边界（base = refs/heads/master = walgit/master = 9edfc745d）
+git diff --name-only 9edfc745d <head> -- src sql MirClient                                     # 空
+git diff --name-only 9edfc745d <head> -- mir2-rs/crates/protocol mir2-rs/crates/storage         # 空
+git diff --stat    9edfc745d <head>
+
+# 5) 证据清单自检（仓库 LF / git-blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py verify  mir2-rs/tests/parity/m3/evidence-m3-pet-slave-mutiny-frames-20261014 --check-extra
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-pet-slave-mutiny-frames-20261014

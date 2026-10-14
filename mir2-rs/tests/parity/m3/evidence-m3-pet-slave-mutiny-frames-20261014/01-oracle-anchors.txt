@@ -1,0 +1,101 @@
+M3⑨-3 宝宝叛变帧面——oracle 锚（冻结 src/ 行号实测，卡 openmir2-m3-pet-slave-masterdie-wire 残余）
+============================================================
+作者：openmir2-worker-20（worktree m3hp）  口径：行号 = 本仓 src/ 当前字节行（git blob）
+生成方式：awk 'NR==<n>' 逐行打印（无手抄）
+
+## A) 触发点：ProcessSlaveMutiny 的两行出帧（本片接线点）
+src/M2Server/Player/PlayObject.Base.cs:331:         private void ProcessSlaveMutiny()
+src/M2Server/Player/PlayObject.Base.cs:342:             for (int i = SlaveList.Count - 1; i >= 0; i--)
+src/M2Server/Player/PlayObject.Base.cs:351:                     SlaveList[i].RefNameColor();
+src/M2Server/Player/PlayObject.Base.cs:352:                     SlaveList[i].RefShowName();
+src/M2Server/Player/PlayObject.Base.cs:359:         }
+src/M2Server/Player/PlayObject.Base.cs:361:         private void ProcessSlaveGhost()
+
+## B) 帧产者 RefNameColor / RefShowName
+src/M2Server/Actor/BaseObject.cs:730:         public void RefNameColor()
+src/M2Server/Actor/BaseObject.cs:731:         {
+src/M2Server/Actor/BaseObject.cs:732:             SendRefMsg(Messages.RM_CHANGENAMECOLOR, 0, 0, 0, 0, "");
+src/M2Server/Actor/BaseObject.cs:733:         }
+src/M2Server/Actor/BaseObject.cs:1174:         public void RefShowName()
+src/M2Server/Actor/BaseObject.cs:1175:         {
+src/M2Server/Actor/BaseObject.cs:1176:             SendRefMsg(Messages.RM_USERNAME, 0, 0, 0, 0, GetShowName());
+src/M2Server/Actor/BaseObject.cs:1177:         }
+
+## C) GetShowName / GetChrColor（观察者侧颜色与名字）
+src/M2Server/Actor/BaseObject.Base.cs:779:         public virtual string GetShowName()
+src/M2Server/Actor/BaseObject.Base.cs:780:         {
+src/M2Server/Actor/BaseObject.Base.cs:781:             string result = M2Share.FilterShowName(ChrName);
+src/M2Server/Actor/BaseObject.Base.cs:782:             if ((Master != null) && !Master.ObMode)
+src/M2Server/Actor/BaseObject.Base.cs:783:             {
+src/M2Server/Actor/BaseObject.Base.cs:784:                 result = result + '(' + Master.ChrName + ')';
+src/M2Server/Actor/BaseObject.Base.cs:785:             }
+src/M2Server/Actor/BaseObject.Base.cs:786:             return result;
+src/M2Server/Actor/BaseObject.Base.cs:787:         }
+src/M2Server/Actor/BaseObject.Base.cs:869:         protected virtual byte GetChrColor(IActor baseObject)
+src/M2Server/Actor/BaseObject.Base.cs:870:         {
+src/M2Server/Actor/BaseObject.Base.cs:871:             if (baseObject.Race == ActorRace.NPC) //增加NPC名字颜色单独控制
+src/M2Server/Actor/BaseObject.Base.cs:872:             {
+src/M2Server/Actor/BaseObject.Base.cs:873:                 return SystemShare.Config.NpcNameColor;
+src/M2Server/Actor/BaseObject.Base.cs:874:             }
+src/M2Server/Actor/BaseObject.Base.cs:875:             if (baseObject.Master != null)
+src/M2Server/Actor/BaseObject.Base.cs:876:             {
+src/M2Server/Actor/BaseObject.Base.cs:877:                 byte slaveExpLevel = ((MonsterObject)baseObject).SlaveExpLevel;
+src/M2Server/Actor/BaseObject.Base.cs:878:                 if (slaveExpLevel <= Grobal2.SlaveMaxLevel)
+src/M2Server/Actor/BaseObject.Base.cs:879:                 {
+src/M2Server/Actor/BaseObject.Base.cs:880:                     return SystemShare.Config.SlaveColor[slaveExpLevel];
+src/M2Server/Actor/BaseObject.Base.cs:881:                 }
+src/M2Server/Actor/BaseObject.Base.cs:882:             }
+src/M2Server/Actor/BaseObject.Base.cs:883:             return baseObject.GetNameColor();
+src/M2Server/Actor/BaseObject.Base.cs:884:         }
+src/M2Server/Player/PlayObject.cs:3585:         protected override byte GetChrColor(IActor baseObject)
+src/M2Server/Player/PlayObject.cs:3656:             return base.GetChrColor(baseObject);
+src/M2Server/Monster/MonsterObject.cs:482:         protected override byte GetChrColor(IActor baseObject)
+src/M2Server/Monster/MonsterObject.cs:483:         {
+src/M2Server/Monster/MonsterObject.cs:484:             if (baseObject.ActorId == this.ActorId && this.CrazyMode)
+src/M2Server/Monster/MonsterObject.cs:485:             {
+src/M2Server/Monster/MonsterObject.cs:486:                 return 0xF9;
+src/M2Server/Monster/MonsterObject.cs:487:             }
+src/M2Server/Monster/MonsterObject.cs:488:             if (baseObject.ActorId == this.ActorId && this.HolySeize)
+src/M2Server/Monster/MonsterObject.cs:489:             {
+src/M2Server/Monster/MonsterObject.cs:490:                 return 0x7D;
+src/M2Server/Monster/MonsterObject.cs:491:             }
+src/M2Server/Monster/MonsterObject.cs:492:             return base.GetChrColor(baseObject);
+
+## D) SendRefMsg 接收集合（同图 / Race==Play / 非 Ghost / 切比雪夫≤SendRefMsgRange）
+   注：:395 的 500ms 缓存支命中时用 :460 的 <11 窄门；重算支用 :399-402 的 SendRefMsgRange=12。
+src/M2Server/Actor/BaseObject.Message.cs:383:         public void SendRefMsg(int wIdent, int wParam, int nParam1, int nParam2, int nParam3, string sMsg)
+src/M2Server/Actor/BaseObject.Message.cs:395:             if (((HUtil32.GetTickCount() - SendRefMsgTick) >= 500) || (VisibleHumanList.Count == 0))
+src/M2Server/Actor/BaseObject.Message.cs:399:                 short nLx = (short)(CurrX - SystemShare.Config.SendRefMsgRange); // 12
+src/M2Server/Actor/BaseObject.Message.cs:453:             for (int i = 0; i < VisibleHumanList.Count; i++)
+src/M2Server/Actor/BaseObject.Message.cs:460:                 if ((targetObject.Envir == Envir) && (Math.Abs(targetObject.CurrX - CurrX) < 11) && (Math.Abs(targetObject.CurrY - CurrY) < 11))
+src/M2Server/Actor/BaseObject.Message.cs:462:                     if (targetObject.Race == ActorRace.Play)
+src/M2Server/Actor/BaseObject.Message.cs:475:         }
+
+## E) 观察者 MsgQueue 的优先级字节（出队序的依据）
+src/M2Server/Actor/BaseObject.Message.cs:98:         public void SendMsg(IActor baseObject, int wIdent, int wParam, int nParam1, int nParam2, int nParam3, string sMsg = "")
+src/M2Server/Actor/BaseObject.Message.cs:181:                 MsgQueue.Enqueue(sendMessage, (byte)wIdent);
+src/M2Server/Actor/ActorEntity.cs:16:         protected readonly PriorityQueue<SendMessage, byte> MsgQueue;
+    (byte)RM_CHANGENAMECOLOR = 8090 & 0xFF = 154 ; (byte)RM_USERNAME = 8101 & 0xFF = 165
+    => 小根堆：同观察者上所有色帧先于所有名帧出队。
+
+## F) 观察者侧 RM_* -> SM_* 编码
+src/M2Server/Player/PlayObject.Message.cs:1662:                 case Messages.RM_USERNAME:
+src/M2Server/Player/PlayObject.Message.cs:1663:                     ClientMsg = Messages.MakeMessage(Messages.SM_USERNAME, processMsg.ActorId, GetChrColor(baseObject), 0, 0);
+src/M2Server/Player/PlayObject.Message.cs:1664:                     SendSocket(ClientMsg, EDCode.EncodeString(processMsg.Msg));
+src/M2Server/Player/PlayObject.Message.cs:1677:                 case Messages.RM_CHANGENAMECOLOR:
+src/M2Server/Player/PlayObject.Message.cs:1678:                     SendDefMessage(Messages.SM_CHANGENAMECOLOR, processMsg.ActorId, GetChrColor(baseObject), 0, 0);
+src/M2Server/Player/PlayObject.Message.cs:1679:                     break;
+
+## G) 消息号常量
+203:        public const int SM_USERNAME = 42;
+318:        public const int SM_CHANGENAMECOLOR = 656;
+690:        public const int RM_CHANGENAMECOLOR = 8090;
+699:        public const int RM_USERNAME = 8101;
+
+## H) Operate 派发（自投递 RM_MASTERDIEMUTINY -> ProcessSlaveMutiny）
+src/M2Server/Player/PlayObject.Message.cs:2116:                 case Messages.RM_MASTERDIEMUTINY:
+src/M2Server/Player/PlayObject.Message.cs:2117:                     ProcessSlaveMutiny();
+src/M2Server/Player/PlayObject.Message.cs:2118:                     break;
+src/M2Server/Player/PlayObject.Message.cs:2119:                 case Messages.RM_MASTERDIEGHOST:
+src/M2Server/Player/PlayObject.Message.cs:2120:                     ProcessSlaveGhost();
+src/M2Server/Player/PlayObject.Message.cs:2121:                     break;
