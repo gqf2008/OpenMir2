@@ -6,6 +6,9 @@
 聚焦用例全绿机器核对。变异脚本 = [`mutate.py`](mutate.py)
 （`python -I mutate.py <rc1|rc2|rc3|rc4|rc5>`，断言 anchor 唯一；相对返工提交 `ecd455765`）。
 
+> 本目录各 `RC*-mutated.txt` 已在**本轮前移 head `5e932b4eb`**（base 3db79cae0）上复跑，读数不变
+> （均 `rc=101`）；`restored-green.txt` 亦在该 head 上重生成。
+
 | 编号 | 变异 | 应红的用例 | 实读 |
 | --- | --- | --- | --- |
 | RC1 | `smframe.rs`：`sm_changenamecolor` 的 `Param` 由 `u16::from(name_color)` 改 `0` | `smframe::tests::sm_changenamecolor_header_only` | **rc=101** · 0 passed 1 FAILED |

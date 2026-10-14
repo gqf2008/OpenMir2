@@ -1,3 +1,6 @@
+$ python -I tests/parity/m3/evidence-m3-pet-slave-mutiny-frames-20261014/redchecks/mutate.py rc3
+$ cargo test -p game-svr --bin game-svr slave_mutiny
+
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
 warning: variant `UserName` is never constructed
     --> bins\game-svr\src\main.rs:1145:5
@@ -11,7 +14,7 @@ warning: variant `UserName` is never constructed
      = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 warning: `game-svr` (bin "game-svr" test) generated 1 warning
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.61s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.36s
      Running unittests src\main.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-d40510517c77a420.exe)
 
 running 2 tests
@@ -22,24 +25,26 @@ failures:
 
 ---- tests::slave_mutiny_downlink_emits_namecolor_then_username stdout ----
 
-thread 'tests::slave_mutiny_downlink_emits_namecolor_then_username' (28308) panicked at bins\game-svr\src\main.rs:13486:9:
+thread 'tests::slave_mutiny_downlink_emits_namecolor_then_username' (26496) panicked at bins\game-svr\src\main.rs:13661:9:
 assertion `left == right` failed: 只给视野内玩家（near）发 2 帧
   left: 1
  right: 2
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
 ---- tests::slave_mutiny_downlink_follows_msgqueue_heap_order stdout ----
 
-thread 'tests::slave_mutiny_downlink_follows_msgqueue_heap_order' (26188) panicked at bins\game-svr\src\main.rs:13578:9:
+thread 'tests::slave_mutiny_downlink_follows_msgqueue_heap_order' (30840) panicked at bins\game-svr\src\main.rs:13753:9:
 assertion `left == right` failed: 2 只宝宝 × (色 + 名)
   left: 2
  right: 4
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
 
 failures:
     tests::slave_mutiny_downlink_emits_namecolor_then_username
     tests::slave_mutiny_downlink_follows_msgqueue_heap_order
 
-test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 211 filtered out; finished in 0.01s
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 212 filtered out; finished in 0.00s
 
 error: test failed, to rerun pass `-p game-svr --bin game-svr`
+
+[cargo test rc=101]

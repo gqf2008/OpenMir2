@@ -1,7 +1,7 @@
 M3⑨-3 宝宝叛变帧面（rework：reviewer-6 F-1 收口）——判据与门禁读数
 ==================================================================
 卡：openmir2-m3-pet-slave-masterdie-wire   作者：openmir2-worker-20
-base = f43364c45（walgit/master = origin/master）；证据提交 = 本目录所在提交 = patch head。
+base = 3db79cae0（walgit/master = origin/master）；证据提交 = 本目录所在提交 = patch head。
 环境：cwd = mir2-rs，隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target，--offline。
 
 ## 1) 四门禁
@@ -10,7 +10,7 @@ base = f43364c45（walgit/master = origin/master）；证据提交 = 本目录�
 | --- | --- | --- |
 | fmt | `cargo fmt --all -- --check` | **rc=0**（`gates/10-fmt.txt`，0 字节） |
 | clippy | `cargo clippy --workspace --all-targets -- -D warnings` | **rc=0**（`gates/11-clippy.txt`） |
-| test | `cargo test --workspace --no-fail-fast` | **101 suites · 1224 passed · 0 failed · 22 ignored · rc=0**（`gates/13-workspace-test.txt`；base f43364c45 = 1222 ⇒ 本片 +2 条 msgqueue 单测） |
+| test | `cargo test --workspace --no-fail-fast` | **101 suites · 1227 passed · 0 failed · 22 ignored · rc=0**（`gates/13-workspace-test.txt`；合并 head = master 3db79cae0 + 本片 +2 条 msgqueue 单测） |
 | msgcodegen | `cargo run -p msgcodegen -- --check` | **604 条 rc=0**（`gates/12-msgcodegen.txt`） |
 
 ## 2) 判据（3 条聚焦 + 1 条堆对照，全绿 rc=0）
@@ -18,16 +18,16 @@ base = f43364c45（walgit/master = origin/master）；证据提交 = 本目录�
     cargo test -p game-svr --lib msgqueue
       test msgqueue::tests::matches_dotnet_priority_queue_dequeue_order ... ok
       test msgqueue::tests::ties_are_not_insertion_order ... ok
-      test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 199 filtered out
+      test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 201 filtered out
 
     cargo test -p game-svr --lib sm_changenamecolor
       test smframe::tests::sm_changenamecolor_header_only ... ok
-      test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 200 filtered out
+      test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 202 filtered out
 
     cargo test -p game-svr --bin game-svr slave_mutiny
       test tests::slave_mutiny_downlink_follows_msgqueue_heap_order ... ok
       test tests::slave_mutiny_downlink_emits_namecolor_then_username ... ok
-      test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 211 filtered out
+      test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 212 filtered out
 
 | 判据 | 钉住 |
 | --- | --- |

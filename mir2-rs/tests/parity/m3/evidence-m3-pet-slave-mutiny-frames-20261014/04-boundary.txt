@@ -1,13 +1,14 @@
 M3⑨-3 宝宝叛变帧面（rework：reviewer-6 F-1 收口）——边界 / 纪律 / 残留物
 ====================================================================
 卡：openmir2-m3-pet-slave-masterdie-wire   作者：openmir2-worker-20
-base = f43364c45（walgit/master = origin/master）；证据提交 = 本目录所在提交 = patch head。
+base = 3db79cae0（walgit/master = origin/master）；证据提交 = 本目录所在提交 = patch head。
 本 worktree 本地 refs/heads/master = ad0592b19（= 共享主检出 HEAD，与 walgit/master 分叉）；
-按「不许改共享主检出」纪律**未移动**该 ref；一切净差量/边界按 f43364c45（= walgit/master）计。
+按「不许改共享主检出」纪律**未移动**该 ref；一切净差量/边界按 3db79cae0（= walgit/master）计。
+（本轮 head 前移：f43364c45 → 3db79cae0，`git merge --no-ff origin/master` 零冲突；见 `README.md`。）
 
 ## 1) 边界（净差量）
 
-    $ git diff --name-status f43364c45 HEAD
+    $ git diff --name-status 3db79cae0 HEAD
     M  mir2-rs/bins/game-svr/src/lib.rs          (+1  pub mod msgqueue)
     M  mir2-rs/bins/game-svr/src/main.rs         (+345：本卡两片叠加)
     A  mir2-rs/bins/game-svr/src/msgqueue.rs     (+225)
@@ -16,13 +17,13 @@ base = f43364c45（walgit/master = origin/master）；证据提交 = 本目录�
 
 净差量 = **4 个 .rs（+604/-0）+ 证据 21 件**。
 
-    $ git diff --name-only f43364c45 HEAD -- src sql MirClient                                  # 空
-    $ git diff --name-only f43364c45 HEAD -- mir2-rs/crates/protocol mir2-rs/crates/storage      # 空
+    $ git diff --name-only 3db79cae0 HEAD -- src sql MirClient                                  # 空
+    $ git diff --name-only 3db79cae0 HEAD -- mir2-rs/crates/protocol mir2-rs/crates/storage      # 空
 
 - 冻结面 `src/ sql/ MirClient` + 接口冻结线 `crates/protocol|storage`：**零改动**。
 - 未动 `crates/world`（本片只动宿主 `bins/game-svr`）；与 ⑤⑥⑦⑧ 卡写集不相交。
-- 本片原始 head 86c78daee（reviewer-6 request_changes）→ 本轮 head（见 patch）。
-  返工只改 3 个 .rs（+298/-23）—— 见 `02-change-summary.txt`。
+- 本片原始 head 86c78daee（reviewer-6 request_changes）→ 返工 head → 本轮前移 head（见 patch）。
+  返工只改 3 个 .rs（+298/-23）—— 见 `02-change-summary.txt`；head 前移本身零内容改动。
 
 ## 2) 纪律
 

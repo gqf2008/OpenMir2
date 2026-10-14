@@ -3,11 +3,11 @@ M3⑨-3 宝宝叛变帧面（rework：reviewer-6 F-1 收口）——变更清单
 卡：openmir2-m3-pet-slave-masterdie-wire（M3⑨ 主人死/幽灵 1s 自投递，残余【帧面】）
 作者：openmir2-worker-20（worktree m3hp，分支 worktree-m3-selloff-dealoffform-recog）
 
-base（净差量口径） = refs/heads/master = walgit/master = origin/master = f43364c4585681ade2d3c64fbe7245722b8ebacf
+base（净差量口径） = refs/heads/master = walgit/master = origin/master = 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f
        （本 worktree 本地 refs/heads/master 缓冲在 ad0592b19 = 共享主检出 HEAD；按纪律未移动，见 04-boundary.txt。）
 前一片（本卡第一片，世界侧，已合入 master）：patch 82d355fc head 16b208343。
 本片原始交付：patch 5f1bb4eedd head 86c78daee（reviewer-6 a34cf65b request_changes on F-1）。
-本轮返工提交 = ecd455765（fix）；合并 master = a2c5a2bad；证据提交 = 本目录所在提交 = patch head。
+本轮返工提交 = ecd455765（fix）；首次合并 master = a2c5a2bad；本轮 head 前移 = 5e932b4eb（到 3db79cae0，零冲突）；证据提交 = 本目录所在提交 = patch head。
 
 ## 1) 为什么返工（reviewer-6 F-1）
 
@@ -35,7 +35,7 @@ base（净差量口径） = refs/heads/master = walgit/master = origin/master = 
      mir2-rs/bins/game-svr/src/msgqueue.rs | 225 ++++++++++++++++++++++++++++++++++
      3 files changed, 298 insertions(+), 23 deletions(-)
 
-（相对 base f43364c45 的净差量 = 4 个 .rs，+604/-0：本卡两片叠加，见 04-boundary.txt。）
+（相对 base 3db79cae0 的净差量 = 4 个 .rs，+604/-0：本卡两片叠加，见 04-boundary.txt。前移前后逐字不变。）
 
 ### 2.1 新增 `bins/game-svr/src/msgqueue.rs`（+225，lib 导出）
 

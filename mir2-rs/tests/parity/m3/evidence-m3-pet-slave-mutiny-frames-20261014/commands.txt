@@ -6,12 +6,13 @@ git fetch origin
 git fetch walgit
 git checkout worktree-m3-selloff-dealoffform-recog
 git merge --no-edit origin/master            # 9edfc745d..f43364c45（clean；无冲突）
-# 实现提交 = ecd455765（fix(m3-9-3) ...）；合并 = a2c5a2bad
+git merge --no-edit origin/master            # f43364c45..3db79cae0（本轮 head 前移；clean，自动合并 main.rs/smframe.rs，无冲突）
+# 实现提交 = ecd455765（fix(m3-9-3) ...）；首次合并 = a2c5a2bad；本轮 head 前移 merge = 5e932b4eb
 
 # 1) 四门禁（gates/，cwd = mir2-rs）
 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo fmt --all -- --check                            # rc=0
 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo clippy --workspace --all-targets -- -D warnings # rc=0
-CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test --workspace --no-fail-fast                 # 101 suites 1224 passed 0 failed 22 ignored rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test --workspace --no-fail-fast                 # 101 suites 1227 passed 0 failed 22 ignored rc=0
 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo run -q -p msgcodegen -- --check                 # 604 条 rc=0
 
 # 2) 聚焦判据（全绿 rc=0）
@@ -36,10 +37,10 @@ git checkout -- bins/game-svr/src/main.rs bins/game-svr/src/smframe.rs bins/game
 #    （rc2/rc5 跑 -p game-svr --bin game-svr slave_mutiny；rc3 同上；rc4 跑 -p game-svr --lib msgqueue）
 #    还原口径：git status --porcelain 实现文件干净 + cargo test 全绿
 
-# 5) 边界（base = refs/heads/master = walgit/master = f43364c45）
-git diff --name-only f43364c45 <head> -- src sql MirClient                                 # 空
-git diff --name-only f43364c45 <head> -- mir2-rs/crates/protocol mir2-rs/crates/storage     # 空
-git diff --stat    f43364c45 <head>
+# 5) 边界（base = refs/heads/master = walgit/master = 3db79cae0）
+git diff --name-only 3db79cae0 <head> -- src sql MirClient                                 # 空
+git diff --name-only 3db79cae0 <head> -- mir2-rs/crates/protocol mir2-rs/crates/storage     # 空
+git diff --stat    3db79cae0 <head>
 
 # 6) 证据清单自检（仓库 LF / git-blob 口径）
 python -I tools/evidence-hash/verify_sha256sums.py verify  mir2-rs/tests/parity/m3/evidence-m3-pet-slave-mutiny-frames-20261014 --check-extra
