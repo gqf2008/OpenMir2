@@ -1,0 +1,10 @@
+改坏必红①（真数据）：把 quest_scenario.json 的一条真锚 src/OpenMir2/Messages.cs:62 → 1/2/Messages.cs:62（纯非字母错误前缀），check 必须 RED 且点名『锚路径前缀』；还原后 sha256 逐字节一致。
+
+sha256 before: 1a863f9a6e457a4b988866c7e2fd4d4ba55180af581576138a58eaef50c7bf93
+sha256 mutated: a16c9438109ee0429d61a0008ce38eb2cf16c170afd7310dc268f8c0e94cbe33
+
+$ python -I quest_anchor_gate.py check
+RED: quest 场景锚门失败（1 项 / 共 14 锚）
+  - 锚路径前缀：1/2/Messages.cs 的目录前缀 '1/2' 与登记路径 'src/OpenMir2/Messages.cs' 不符（须为路径后缀）
+rc=1
+sha256 restored: 1a863f9a6e457a4b988866c7e2fd4d4ba55180af581576138a58eaef50c7bf93
