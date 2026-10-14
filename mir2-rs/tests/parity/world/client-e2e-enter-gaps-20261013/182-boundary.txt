@@ -1,54 +1,54 @@
-182-boundary.txt —— 片㊳ 边界（base = origin/master 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f；head = 本片提交）
+182-boundary.txt —— 片㊳ 边界（base = origin/master 6e01fce5150c8558256f7d39892ddaf40fc45a64；head = 本片提交）
 卡 `openmir2-client-e2e-enter-gaps` / m2-svr / openmir2-worker-11 / 2026-10-14
 ====================================================================================================
-# 0) 起手式：先 git fetch/merge（新规矩）—— 本片开工时 HEAD a06f942fc（片㊲）base 已是当前 master
-$ git fetch origin master ; git merge --no-edit origin/master
-Already up to date.（origin/master = 3db79cae0 = 片㊲ base；本片直接在其上追加）
+# 0) 起手式：git fetch + git merge origin/master（新规矩）—— master 在本 burst 内前进两次
+$ git fetch origin master
+origin/master: 3db79cae0 → d89e93edd（片㊲ a06f942fc 被合入 master）→ 6e01fce5150c8558256f7d39892ddaf40fc45a64（chain-gate-o1o2 合入）
+$ git merge --no-edit origin/master      # ×2（d89e93edd、6e01fce5150c8558256f7d39892ddaf40fc45a64），rc=0，无冲突
+#   说明：本片开工时 HEAD = a06f942fc（片㊲，base 3db79cae0）；交付 head 已把当前 master 并入，
+#   ⇒ origin/master 是 head 的祖先，#2 的交付差量只含本片净改动。
 
-# 1) 本片（㊳）代码/证据提交净差量（父 = 3db79cae0；HEAD = 1781c396a）
-$ git diff --name-status 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f 1781c396a
-A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/179-viewrange12-aoi-oracle-golden.txt
-A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/180-redcheck-viewrange12.txt
-A	mir2-rs/tests/parity/world/golden/aoi_viewrange12.txt
-A	mir2-rs/tests/parity/world/scenarios/aoi_viewrange12.json
+# 1) 本片（㊳）净差量（父 = a06f942fc 片㊲ head，即 master 已含的那条；限本片写集）
+$ git diff --name-status a06f942fc HEAD -- mir2-rs/tests/parity/tests mir2-rs/tests/parity/world
 M	mir2-rs/tests/parity/tests/world_aoi_parity.rs
 M	mir2-rs/tests/parity/world/README.md
-M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
-（= 1 场景 + 1 C# 金标准 + 1 测试文件（+119/-6）+ 2 处 README + 2 件证据；零生产代码）
-
-# 2) 交付差量 = origin/master..HEAD（walgit patch 用的 base/head；含在审片㊲ + 本片㊳）
-$ git diff --name-status 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f HEAD
-A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/175-r6-build-source-freshness.txt
-A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/176-boundary.txt
-A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/177-gates.txt
-A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/178-redcheck-r6.txt
 A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/179-viewrange12-aoi-oracle-golden.txt
 A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/180-redcheck-viewrange12.txt
 A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/181-gates.txt
 A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/182-boundary.txt
-A	mir2-rs/tests/parity/world/golden/aoi_viewrange12.txt
-A	mir2-rs/tests/parity/world/scenarios/aoi_viewrange12.json
-M	mir2-rs/tests/parity/tests/world_aoi_parity.rs
-M	mir2-rs/tests/parity/world/README.md
 M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
 M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
-M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py
-M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
-（其中 175-178 + 2 个 .py = 在审㊲；179-182 + 场景/golden + 测试 + world/README = 本片㊳）
+A	mir2-rs/tests/parity/world/golden/aoi_viewrange12.txt
+A	mir2-rs/tests/parity/world/scenarios/aoi_viewrange12.json
+（= 1 场景 + 1 C# 金标准 + 1 测试文件 + 2 处 README + 4 件证据 + 清单；零生产代码）
+
+# 2) 交付差量 = origin/master..HEAD（walgit patch 用的 base/head）
+$ git diff --name-status 6e01fce5150c8558256f7d39892ddaf40fc45a64 HEAD
+M	mir2-rs/tests/parity/tests/world_aoi_parity.rs
+M	mir2-rs/tests/parity/world/README.md
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/179-viewrange12-aoi-oracle-golden.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/180-redcheck-viewrange12.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/181-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/182-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+A	mir2-rs/tests/parity/world/golden/aoi_viewrange12.txt
+A	mir2-rs/tests/parity/world/scenarios/aoi_viewrange12.json
+（10 路径；片㊲ 已在 master 中，不在本差量里）
 
 # 3) 冻结面（必须全空）
-$ git diff --name-only 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+$ git diff --name-only 6e01fce5150c8558256f7d39892ddaf40fc45a64 HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
 (空 = 通过)
-$ git diff --name-only 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f HEAD -- src ':!src/BotSrv'
+$ git diff --name-only 6e01fce5150c8558256f7d39892ddaf40fc45a64 HEAD -- src ':!src/BotSrv'
 (空 = 通过)
-$ git diff --name-only 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f HEAD -- '*.toml'
+$ git diff --name-only 6e01fce5150c8558256f7d39892ddaf40fc45a64 HEAD -- '*.toml'
 (空 = 通过)
-$ git diff --name-only 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f HEAD -- mir2-rs/bins
+$ git diff --name-only 6e01fce5150c8558256f7d39892ddaf40fc45a64 HEAD -- mir2-rs/bins
 (空 = 通过)
-$ git diff --name-only 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f HEAD -- mir2-rs/crates/world
+$ git diff --name-only 6e01fce5150c8558256f7d39892ddaf40fc45a64 HEAD -- mir2-rs/crates/world
 (空 = 通过；MUT-A 的临时变异已在同一 burst 内还原，sha256 复核见 180 §3)
-# 注：本片唯一的 `.rs` 改动在 `mir2-rs/tests/parity/tests/world_aoi_parity.rs`（对拍测试，非生产）：
-$ git diff --name-only 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f HEAD -- '*.rs'
+# 本片唯一的 `.rs` 改动在**测试**目录（非生产）：
+$ git diff --name-only 6e01fce5150c8558256f7d39892ddaf40fc45a64 HEAD -- '*.rs'
 mir2-rs/tests/parity/tests/world_aoi_parity.rs
 
 # 4) 证据完整性（LF/git-blob 口径）
@@ -61,5 +61,9 @@ EOLCHECK GREEN 188/188 件文本证据与仓库口径（LF）在 EOL 上一致  
 # 5) 检出外改动（登记；未动共享主检出）
 $ git -C /e/Users/gxh/Documents/GitHub/OpenMir2 status --porcelain | wc -l
 0                       # 共享主检出零改动（只读）
-$ ls -d E:/tmp/m2svr-target          # 编译隔离 target（本片四门禁/聚焦判据用）
-$ ls E:/tmp/m2svr-b26-*.{txt,sha,bak}  # 红检/门禁原始件（保留可复算，可删）
+$ ls -d E:/tmp/m2svr-target              # 编译隔离 target（四门禁/聚焦判据用）
+$ ls E:/tmp/m2svr-b26-*.{txt,sha,bak}    # 红检/门禁原始件（保留可复算，可删）
+
+# 6) 纪律自述
+零起栈、零游戏端口（仅共享 3306）；未改 root 的活脚本；未 merge 到 master、未自签 review；
+未写他人 inbox；MUT-A/MUT-B 只在自身 worktree 内做且同一 burst 内还原（仓内件 sha256 复核不变）。
