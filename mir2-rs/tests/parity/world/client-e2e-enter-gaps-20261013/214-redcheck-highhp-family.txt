@@ -1,0 +1,106 @@
+214-redcheck-highhp-family.txt —— 卡 openmir2-client-e2e-enter-gaps 的 verify_client_highhp_family.py 改坏必红
+m2-svr / openmir2-worker-11 / 2026-10-14（只读；变异只在 /tmp 副本，仓内零改动；不 merge、不自签）
+====================================================================================================
+
+工具：verify_client_highhp_family.py（冻结客户端 {$IF HIGHHP} 家族机判；已接入 window_handoff G2）
+副本：E:/tmp/m2svr-burst22/mut/client（Grobal2.pas + ClMain.pas）、mut/rust（全量 bins/game-svr/src/*.rs）
+
+### M0 baseline（未变异副本 + 全量 .rs）
+$ python -I -B verify_client_highhp_family.py --client-root E:/tmp/m2svr-burst22/mut/client --rust-dir E:/tmp/m2svr-burst22/mut/rust
+# client-root = E:/tmp/m2svr-burst22/mut/client
+HIGHHP = True
+HIGHHP 站点（文件:行 上下文 -> 状态）：
+  Grobal2.pas:2103 TMonInfo -> client-db-not-a-frame
+  Grobal2.pas:2174 TAbility -> closed:encode_ability_client
+  Grobal2.pas:2494 TAddAbility -> dead-record-no-uses
+  ClMain.pas:10225 SM_HEALTHSPELLCHANGED -> closed:sm_healthspellchanged_client
+  ClMain.pas:10269 SM_STRUCK -> GAP:rust-sends-oracle-layout
+  ClMain.pas:10338 SM_OPENHEALTH -> not-sent-by-rust
+  ClMain.pas:10365 SM_INSTANCEHEALGUAGE -> not-sent-by-rust
+Rust 侧客户端布局实现齐备：encode_ability_client, sm_healthspellchanged_client
+GREEN: 7 个 HIGHHP 站点与登记集合逐项一致（2 闭环 / 1 帧面 GAP / 1 客户端库 / 1 死记录 / 2 未发送）
+rc=0
+
+### M1 前提破坏：Grobal2.pas 的 HIGHHP=True -> False
+mutated Grobal2.pas HIGHHP=True -> False
+$ python -I -B verify_client_highhp_family.py --client-root E:/tmp/m2svr-burst22/mut/client
+# client-root = E:/tmp/m2svr-burst22/mut/client
+HIGHHP = False
+HIGHHP 站点（文件:行 上下文 -> 状态）：
+  Grobal2.pas:2103 TMonInfo -> client-db-not-a-frame
+  Grobal2.pas:2174 TAbility -> closed:encode_ability_client
+  Grobal2.pas:2494 TAddAbility -> dead-record-no-uses
+  ClMain.pas:10225 SM_HEALTHSPELLCHANGED -> closed:sm_healthspellchanged_client
+  ClMain.pas:10269 SM_STRUCK -> GAP:rust-sends-oracle-layout
+  ClMain.pas:10338 SM_OPENHEALTH -> not-sent-by-rust
+  ClMain.pas:10365 SM_INSTANCEHEALGUAGE -> not-sent-by-rust
+RED:
+  - Grobal2.pas 的 `HIGHHP` = False（期望 True；整个家族判定的前提）
+rc=1
+
+### M2 删登记站点：SM_STRUCK 的 {$IF HIGHHP} -> {$IFDEF FOO}
+mutated ClMain.pas:10269 {$IF HIGHHP} -> {$IFDEF FOO}
+$ python -I -B verify_client_highhp_family.py --client-root E:/tmp/m2svr-burst22/mut/client
+# client-root = E:/tmp/m2svr-burst22/mut/client
+HIGHHP = True
+HIGHHP 站点（文件:行 上下文 -> 状态）：
+  Grobal2.pas:2103 TMonInfo -> client-db-not-a-frame
+  Grobal2.pas:2174 TAbility -> closed:encode_ability_client
+  Grobal2.pas:2494 TAddAbility -> dead-record-no-uses
+  ClMain.pas:10225 SM_HEALTHSPELLCHANGED -> closed:sm_healthspellchanged_client
+  ClMain.pas:10338 SM_OPENHEALTH -> not-sent-by-rust
+  ClMain.pas:10365 SM_INSTANCEHEALGUAGE -> not-sent-by-rust
+RED:
+  - 登记站点缺失（客户端漂移）：ClMain.pas `SM_STRUCK`（GAP:rust-sends-oracle-layout）
+rc=1
+
+### M3 新增未登记站点：追加 SM_NEWFRAME 的 {$IF HIGHHP}
+appended SM_NEWFRAME {IF HIGHHP} site
+$ python -I -B verify_client_highhp_family.py --client-root E:/tmp/m2svr-burst22/mut/client
+# client-root = E:/tmp/m2svr-burst22/mut/client
+HIGHHP = True
+HIGHHP 站点（文件:行 上下文 -> 状态）：
+  Grobal2.pas:2103 TMonInfo -> client-db-not-a-frame
+  Grobal2.pas:2174 TAbility -> closed:encode_ability_client
+  Grobal2.pas:2494 TAddAbility -> dead-record-no-uses
+  ClMain.pas:10225 SM_HEALTHSPELLCHANGED -> closed:sm_healthspellchanged_client
+  ClMain.pas:10269 SM_STRUCK -> GAP:rust-sends-oracle-layout
+  ClMain.pas:10338 SM_OPENHEALTH -> not-sent-by-rust
+  ClMain.pas:10365 SM_INSTANCEHEALGUAGE -> not-sent-by-rust
+  ClMain.pas:16773 SM_NEWFRAME -> UNREGISTERED
+RED:
+  - 未登记的 HIGHHP 站点：ClMain.pas:16773 上下文 `SM_NEWFRAME`（认不出即红）
+rc=1
+
+### M4 Rust 侧删 53 客户端布局实现（fn sm_healthspellchanged_client -> fn zz_disabled_53_impl）
+$ python -I -B verify_client_highhp_family.py --client-root E:/tmp/m2svr-burst22/mut/client --rust-dir E:/tmp/m2svr-burst22/mut/rust-no53
+# client-root = E:/tmp/m2svr-burst22/mut/client
+HIGHHP = True
+HIGHHP 站点（文件:行 上下文 -> 状态）：
+  Grobal2.pas:2103 TMonInfo -> client-db-not-a-frame
+  Grobal2.pas:2174 TAbility -> closed:encode_ability_client
+  Grobal2.pas:2494 TAddAbility -> dead-record-no-uses
+  ClMain.pas:10225 SM_HEALTHSPELLCHANGED -> closed:sm_healthspellchanged_client
+  ClMain.pas:10269 SM_STRUCK -> GAP:rust-sends-oracle-layout
+  ClMain.pas:10338 SM_OPENHEALTH -> not-sent-by-rust
+  ClMain.pas:10365 SM_INSTANCEHEALGUAGE -> not-sent-by-rust
+RED:
+  - Rust 侧缺客户端布局实现 `sm_healthspellchanged_client`（`--rust-dir E:/tmp/m2svr-burst22/mut/rust-no53`）
+rc=1
+
+### M5 还原（恢复原状）
+$ python -I -B verify_client_highhp_family.py --client-root E:/tmp/m2svr-burst22/mut/client --rust-dir E:/tmp/m2svr-burst22/mut/rust
+# client-root = E:/tmp/m2svr-burst22/mut/client
+HIGHHP = True
+HIGHHP 站点（文件:行 上下文 -> 状态）：
+  Grobal2.pas:2103 TMonInfo -> client-db-not-a-frame
+  Grobal2.pas:2174 TAbility -> closed:encode_ability_client
+  Grobal2.pas:2494 TAddAbility -> dead-record-no-uses
+  ClMain.pas:10225 SM_HEALTHSPELLCHANGED -> closed:sm_healthspellchanged_client
+  ClMain.pas:10269 SM_STRUCK -> GAP:rust-sends-oracle-layout
+  ClMain.pas:10338 SM_OPENHEALTH -> not-sent-by-rust
+  ClMain.pas:10365 SM_INSTANCEHEALGUAGE -> not-sent-by-rust
+Rust 侧客户端布局实现齐备：encode_ability_client, sm_healthspellchanged_client
+GREEN: 7 个 HIGHHP 站点与登记集合逐项一致（2 闭环 / 1 帧面 GAP / 1 客户端库 / 1 死记录 / 2 未发送）
+rc=0
+

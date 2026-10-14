@@ -1,0 +1,79 @@
+215-gates.txt —— 片「HIGHHP 家族完整性审计」（卡 openmir2-client-e2e-enter-gaps）
+m2-svr / openmir2-worker-11 / 2026-10-14；CARGO_TARGET_DIR=E:/tmp/m2svr-target（--offline）
+base = master 714898ed0（= origin/walgit master；片㊿ 4726723ab 已合入）
+====================================================================================================
+
+# 1) 四门禁（cwd=E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr/mir2-rs）
+$ cargo fmt --all -- --check
+    rc=0（无输出）
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.49s
+    rc=0
+$ cargo test --workspace --offline
+    聚合：suites=101 passed=1232 failed=0 ignored=22（逐 suite `test result: ok`，无 FAILED）
+    rc=0
+$ cargo run -p msgcodegen --offline -- --check
+    msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+    rc=0
+
+# 2) 本片新增/改动能机判的部分
+$ python -I -B verify_client_highhp_family.py --client-root E:/Users/gxh/Documents/GitHub/MirClient \
+      --rust-dir E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr/mir2-rs/bins/game-svr/src
+# client-root = E:/Users/gxh/Documents/GitHub/MirClient
+HIGHHP = True
+HIGHHP 站点（文件:行 上下文 -> 状态）：
+  Grobal2.pas:2103 TMonInfo -> client-db-not-a-frame
+  Grobal2.pas:2174 TAbility -> closed:encode_ability_client
+  Grobal2.pas:2494 TAddAbility -> dead-record-no-uses
+  ClMain.pas:10225 SM_HEALTHSPELLCHANGED -> closed:sm_healthspellchanged_client
+  ClMain.pas:10269 SM_STRUCK -> GAP:rust-sends-oracle-layout
+  ClMain.pas:10338 SM_OPENHEALTH -> not-sent-by-rust
+  ClMain.pas:10365 SM_INSTANCEHEALGUAGE -> not-sent-by-rust
+Rust 侧客户端布局实现齐备：encode_ability_client, sm_healthspellchanged_client
+GREEN: 7 个 HIGHHP 站点与登记集合逐项一致（2 闭环 / 1 帧面 GAP / 1 客户端库 / 1 死记录 / 2 未发送）
+rc=0
+
+$ python -I -B verify_client_highhp_family.py --selftest
+SELFTEST OK (6/6)
+rc=0
+
+$ python -I -B window_handoff.py --selftest
+SELFTEST OK (98/98)
+rc=0
+
+# 3) 开窗前聚合门（入库逐字替身脚本口径） + Rust 前置门
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer \
+      --target-dir E:/tmp/m2svr-window-target --provenance .../window-provenance.json
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=5e757b0252 相对基线 origin/master@714898ed0c 生产路径零差异
+[OK] R7 出处清单 window-provenance.json source_head=5e757b0252，6 件 exe sha256 逐字节一致
+RESULT: GREEN
+rc=0
+
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target --window-script ./client-e2e-window.fixed.sh.txt
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 verify_client_highhp_family.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R7）
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0
