@@ -13,13 +13,15 @@
   G1 **聚合 Rust 侧窗口前置门**：调片⑮ `check_rust_window_preflight.py`（R1..R5），解析 `RESULT:`。
      其中 R1/R2 直接点住「窗口脚本 `client-e2e-window.sh` 的 `repo=` 指向的检出是否含片⑪」——
      这是 2026-10-14 实测到的真缺陷（共享主检出停在 `ad0592b19`）。
-  G2 **聚合判据工具自检**：证据目录 7 件判据脚本的 `--selftest` 必须全 `SELFTEST OK`（缺一件 ⇒ PREREQ）。
+  G2 **聚合判据工具自检**：证据目录 8 件判据脚本的 `--selftest` 必须全 `SELFTEST OK`（缺一件 ⇒ PREREQ）。
   G3（可选）**聚合 C# 侧抓包前置门**：调片⑭ `check_csharp_capture_preflight.py --shadow-config ...`。
   G4（`--plan`/`--plan-only`）**计划 ↔ 工具面机判**（片㉕）：计划里每个被调脚本必须存在、只用它声明
      的参数，且必须含「代理(7200)/影子 gate(7600) 清端口 + 7200/7600 回落断言 + C# 清栈保留 3306」的
      teardown 段 —— 手工起的影子 gate 与代理**不在** `start_rust_stack.ps1` 的 pid 文件里 ⇒ `-Stop`
      不会收它们，留着会让下一趟起栈预检 RED / C# 影子绑不上 7600，白烧一次性窗口。
-  J1（`--judge`）**聚合 ③b/③a 两趟窗口产物的五条 AOI 判据**（只消费既有 capture/log，不起栈）：
+  J1（`--judge`）**聚合 ③b/③a 两趟窗口产物的六条判据**（只消费既有 capture/log，不起栈）：
+     ③b 服务端 `vis>=1` / ③b 客户端 `pairs>=1` / ③b 两侧 `visible` / **③b 两侧攻击/伤害
+     （DoD③ 第三半「能攻击造成伤害」）** / ③a 服务端 `vis==0` / ③a 两侧 `none`。
      ③a 第二趟必须用**独立目录**（默认 `<work-dir>-a`）——`start_rust_stack.ps1` 每次起栈都会删掉
      旧 `game-svr.out.log`（`Start-One` 的 `Remove-Item $out, $err`），共用一个目录会把 ③b 读数覆盖掉。
   另加一条**只读信息行**：`check_mongen_dense_points.py --rank` 的窗口内期望出生怪数排行（选点用）。
@@ -71,14 +73,16 @@ TOOL_SELFTESTS = (
     "aoi_visibility_pair.py",
     "check_client_s2c_frames.py",
     "check_appearance_pairs.py",
+    "check_attack_observability.py",
     RUST_PREFLIGHT,
     CSHARP_PREFLIGHT,
 )
 
-# `--judge` 消费的三件判据脚本（③b/③a 两趟各跑服务端 / 客户端 / 两侧）。
+# `--judge` 消费的判据脚本（③b/③a 两趟各跑服务端 / 客户端 / 两侧 / 攻击）。
 AOI_DIAG = "check_aoi_visibility_diag.py"
 CLIENT_FRAMES = "check_client_s2c_frames.py"
 PAIR_TOOL = "aoi_visibility_pair.py"
+ATTACK_TOOL = "check_attack_observability.py"
 
 _RESULT_RE = re.compile(r"^RESULT:\s*(GREEN|RED|PREREQ_RED)\b", re.MULTILINE)
 _SELFTEST_RE = re.compile(r"^SELFTEST\s+(OK|GREEN|FAILED|RED)\b", re.MULTILINE)
@@ -333,9 +337,9 @@ def pass_roots(work_dir: str, pass_a_dir: str = "") -> tuple[str, str, str, str]
 
 
 def window_judge_items(work_dir: str, pass_a_dir: str = "", check_dir: str = HERE):
-    """五条窗口判据（只聚合既有脚本，不复制判据逻辑）：
+    """六条窗口判据（只聚合既有脚本，不复制判据逻辑）：
 
-      ③b：服务端 `vis>=1` + 客户端 `pairs>=1` + 两侧 `visible`；
+      ③b：服务端 `vis>=1` + 客户端 `pairs>=1` + 两侧 `visible` + 两侧攻击/伤害（DoD③ 第三半）；
       ③a：服务端 `vis==0 && af==0` + 两侧 `none`。
     每项 = (名称, 判据脚本, argv, 必需证据件)。
     """
@@ -352,6 +356,10 @@ def window_judge_items(work_dir: str, pass_a_dir: str = "", check_dir: str = HER
          ["--left", f"{b_rust}/s2c/capture.jsonl", "--right", f"{b_csh}/s2c/capture.jsonl",
           "--expect", "visible", "--min-pairs", "1"],
          [f"{b_rust}/s2c/capture.jsonl", f"{b_csh}/s2c/capture.jsonl"]),
+        ("③b 两侧攻击/伤害", ATTACK_TOOL,
+         ["--left", f"{b_rust}/s2c/capture.jsonl", "--right", f"{b_csh}/s2c/capture.jsonl",
+          "--expect", "any", "--min-hits", "1"],
+         [f"{b_rust}/s2c/capture.jsonl", f"{b_csh}/s2c/capture.jsonl"]),
         ("③a 服务端 vis==0", AOI_DIAG,
          ["--log", f"{a_rust}/stack/game-svr.out.log", "--expect", "none"],
          [f"{a_rust}/stack/game-svr.out.log"]),
@@ -363,7 +371,7 @@ def window_judge_items(work_dir: str, pass_a_dir: str = "", check_dir: str = HER
 
 
 def run_window_judges(work_dir: str, pass_a_dir: str = "", check_dir: str = HERE) -> Report:
-    """跑五条窗口判据并聚合成一个 rc：0 全绿 / 1 有 RED / 2 有 PREREQ（缺证据/判不了）。
+    """跑六条窗口判据并聚合成一个 rc：0 全绿 / 1 有 RED / 2 有 PREREQ（缺证据/判不了）。
 
     fail-closed：任何必需证据件缺失 ⇒ PREREQ（**绝不静默当绿**）；缺判据脚本同理。
     """
@@ -499,7 +507,7 @@ def plan_text(
     A(f"#     python tools/capture/mir2_proxy.py --out {rust}/proxy --map 7200=127.0.0.1:7600")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 ^")
     A(f"#       -Account mir2test -Password mir2pass -OutDir {rust}/shots -WalkClicks 0 -AutoPlaySec 12 ^")
-    A(f"#       -SkipReenter -SkipLogout -SkipTalk")
+    A(f"#       -AttackClicks 12 -SkipReenter -SkipLogout -SkipTalk")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 ^")
     A(f"#       -ProxyDir {rust}/proxy -OutDir {rust}/s2c")
     A("#     # 2b) 【本趟跑完必做 · 进 C# 趟/③a 前必做】清端口：")
@@ -538,7 +546,7 @@ def plan_text(
     A(f"#     #   c. 确认 7200 DOWN、7600 UP（{mirserver}/port-status.ps1）后才起代理占 7200")
     A(f"#     python tools/capture/mir2_proxy.py --out {csh}/proxy --map 7200=127.0.0.1:7600")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 -Account mir2test ^")
-    A(f"#       -Password mir2pass -OutDir {csh}/shots -WalkClicks 0 -AutoPlaySec 12 -SkipReenter -SkipLogout -SkipTalk")
+    A(f"#       -Password mir2pass -OutDir {csh}/shots -WalkClicks 0 -AutoPlaySec 12 -AttackClicks 12 -SkipReenter -SkipLogout -SkipTalk")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 ^")
     A(f"#       -ProxyDir {csh}/proxy -OutDir {csh}/s2c")
     A("#     # 2b) 【C# 趟跑完必做】清端口并收栈：")
@@ -560,6 +568,8 @@ def plan_text(
     A(f"#     --capture {rust}/s2c/capture.jsonl --min-appearance-pairs 1")
     A(f"#   ③b 两侧：python -I -B aoi_visibility_pair.py --left {rust}/s2c/capture.jsonl \\")
     A(f"#     --right {csh}/s2c/capture.jsonl --expect visible --min-pairs 1")
+    A(f"#   ③b 攻击/伤害（DoD③ 第三半「能攻击造成伤害」）：python -I -B check_attack_observability.py \\")
+    A(f"#     --left {rust}/s2c/capture.jsonl --right {csh}/s2c/capture.jsonl --expect any --min-hits 1")
     A("")
     A(f"# 4) ③a 反向第二趟：把 §1 的 aaa 改到 site_none={site_none} 后重跑 §2，**独立目录**")
     A(f"#    （③a 根 = {w_a}；start_rust_stack.ps1 每次起栈删旧 game-svr.out.log ⇒ 不独立就覆盖 ③b 读数）")
@@ -805,7 +815,7 @@ def _write_fake_judges(check_dir: str, rc_map: dict | None = None) -> None:
     os.makedirs(check_dir, exist_ok=True)
     rc_dir = os.path.join(check_dir, "_rc")
     os.makedirs(rc_dir, exist_ok=True)
-    for tool in (AOI_DIAG, CLIENT_FRAMES, PAIR_TOOL):
+    for tool in (AOI_DIAG, CLIENT_FRAMES, PAIR_TOOL, ATTACK_TOOL):
         with open(os.path.join(check_dir, tool), "w", encoding="utf-8") as fh:
             fh.write(
                 "import os, sys\n"
@@ -846,7 +856,7 @@ def _write_fake_plan_tree(tmp: str) -> tuple[str, str, str]:
           "param([string]$ProxyDir,[string]$OutDir)\n")
     write(os.path.join(repo, "tools/client/mir_flow.ps1"),
           "param([string]$Account,[string]$Password,[string]$OutDir,[int]$WalkClicks,"
-          "[int]$AutoPlaySec,[switch]$SkipReenter,[switch]$SkipLogout,[switch]$SkipTalk)\n")
+          "[int]$AutoPlaySec,[int]$AttackClicks,[switch]$SkipReenter,[switch]$SkipLogout,[switch]$SkipTalk)\n")
     write(os.path.join(repo, "tools/capture/mir2_proxy.py"),
           "import argparse\nap=argparse.ArgumentParser()\n"
           "ap.add_argument('--out')\nap.add_argument('--map')\n")
@@ -868,6 +878,11 @@ def _write_fake_plan_tree(tmp: str) -> tuple[str, str, str]:
           "import argparse\nap=argparse.ArgumentParser()\n"
           "ap.add_argument('--left')\nap.add_argument('--right')\nap.add_argument('--expect')\n"
           "ap.add_argument('--min-pairs', type=int)\n")
+    write(os.path.join(check, "check_attack_observability.py"),
+          "import argparse\nap=argparse.ArgumentParser()\n"
+          "ap.add_argument('--left')\nap.add_argument('--right')\nap.add_argument('--capture')\n"
+          "ap.add_argument('--expect')\nap.add_argument('--min-hits', type=int)\n"
+          "ap.add_argument('--min-struck', type=int)\nap.add_argument('--min-kills', type=int)\n")
     for stub in ("start-all.ps1", "port-status.ps1"):
         write(os.path.join(ms, stub), "param([switch]$Stop)\n")
     return repo, check, ms
@@ -1052,7 +1067,7 @@ def selftest() -> int:
         _write_fake_artifacts(work + "-a")  # ③a 缺省根 = <work-dir>-a
         rep = run_window_judges(work, "", cdir)
         chk("judge-allgreen-rc0", rep.rc() == 0, str(rep.rc()))
-        chk("judge-five-items", len(rep.info) == 5, str(len(rep.info)))
+        chk("judge-six-items", len(rep.info) == 6, str(len(rep.info)))
 
     with tempfile.TemporaryDirectory(prefix="wh-judge-red-") as tmp:
         cdir = os.path.join(tmp, "check")
@@ -1062,7 +1077,7 @@ def selftest() -> int:
         _write_fake_artifacts(work + "-a")
         rep = run_window_judges(work, "", cdir)
         chk("judge-red-rc1", rep.rc() == 1, str(rep.rc()))
-        chk("judge-red-two", len(rep.problems) == 2 and len(rep.info) == 3,
+        chk("judge-red-two", len(rep.problems) == 2 and len(rep.info) == 4,
             f"{len(rep.problems)}/{len(rep.info)}")
 
     with tempfile.TemporaryDirectory(prefix="wh-judge-missing-") as tmp:
@@ -1089,6 +1104,10 @@ def selftest() -> int:
         "保留 MySQL 3306" in _fresh and "stop-all.ps1" not in _fresh
         and "Get-Process GameSvr,DBSrv,LoginSrv,LoginGate,SelGate,GameGate" in _fresh)
     chk("plan-no-bin-dir-placeholder", "<bin_dir>" not in _fresh)
+    # 片㉜：DoD③ 第三半「能攻击造成伤害」——真机跑必须带攻击步 + 攻击/伤害判据
+    chk("plan-has-attack-step", "-AttackClicks 12" in _fresh)
+    chk("plan-has-attack-judge",
+        "check_attack_observability.py" in _fresh and "--expect any --min-hits 1" in _fresh)
     # 片㉗：站位 SQL 必须真实列（本表无 x/y），且给出 before 探针
     chk("plan-position-sql-real-columns",
         position_sql_findings(_fresh) == []

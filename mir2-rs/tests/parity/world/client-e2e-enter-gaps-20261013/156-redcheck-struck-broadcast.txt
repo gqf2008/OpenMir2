@@ -1,0 +1,34 @@
+156-redcheck-struck-broadcast.txt —— 片㉜ 改坏必红（受击帧广播）原始输出
+卡 openmir2-client-e2e-enter-gaps / m2-svr / openmir2-worker-11 / 2026-10-14
+变异只在仓内同一文件上做一次，跑完立即 cp 还原并 sha256 复核（逐字节一致）。
+
+==================================================================================
+A. 改坏前（仓内文件 sha256）
+### [mir2-rs/bins/game-svr/src/main.rs] sha256 before:
+7a4e8015529f3eff2acc7dc13f570e5ec051b570e2897ed2c7c7cca34c1ba4b4 *mir2-rs/bins/game-svr/src/main.rs
+
+B. 变异：把 oracle 广播面改回「只发受击者自己」
+   old: for observer_id in chat::hear_targets(world, *target, chat::SEND_REF_MSG_RANGE) {
+   new: for observer_id in vec![*target].into_iter() {
+
+C. 变异后 cargo test（RED，rc=101）—— 关键行
+test tests::combat_downlink_sends_struck_and_nowdeath ... ok
+test tests::combat_downlink_broadcasts_struck_to_all_visible_players ... FAILED
+test tests::combat_downlink_broadcasts_struck_for_monster_target ... FAILED
+assertion `left == right` failed: 受击帧必须广播给同图视野内全体在线玩家（受害者 + 观察者）：{901: [1, 0, 0, 0, 31, 0, 12, 0, 100, 0, 7, 0, 111, 100, 104, 95, 100, 100, 104, 107, 100, 100, 106, 107, 100, 100, 104, 107, 100, 100, 104, 107, 100, 63]}
+  left: 1
+ right: 2
+assertion `left == right` failed: 怪物受击 ⇒ 视野内玩家收 1 帧 SM_STRUCK（旧实现 = 0 帧）
+  left: 0
+ right: 1
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 208 filtered out; finished in 0.00s
+
+D. 还原（cp /tmp/rc-main.rs.bak）+ sha256 复核
+### restore + sha256 check:
+mir2-rs/bins/game-svr/src/main.rs: OK
+
+E. 还原后 cargo test（GREEN，rc=0）—— 关键行
+test tests::combat_downlink_sends_struck_and_nowdeath ... ok
+test tests::combat_downlink_broadcasts_struck_for_monster_target ... ok
+test tests::combat_downlink_broadcasts_struck_to_all_visible_players ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 208 filtered out; finished in 0.01s

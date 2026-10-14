@@ -4544,10 +4544,15 @@ fn body_luck_level_of(body_luck: f64) -> i32 {
 /// `openmir2-m3-attack-magic-wiring`（第一片）：本 world tick 的攻击结算 → 客户端下行。
 ///
 /// 逐条口径：
-/// - **受击**（`BaseObject.Attack.cs:61-64`）：`_Attack` 对 `Race > Play` 的目标
-///   `SendMsg(target, RM_STRUCK, nPower, HP, MaxHP, ActorId)`，由目标自己的
-///   `RM_STRUCK` 处理器（`PlayObject.Message.cs:1562-1628`）回 `SM_STRUCK`。只有玩家目标有连接
-///   ⇒ 仅对在线玩家发帧；怪物（无连接）不发（登记）。
+/// - **受击**（`BaseObject.Attack.cs:57` + `BaseObject.Base.cs:699-705` +
+///   `BaseObject.Message.cs:383-470` + `PlayObject.Message.cs:1562-1628`）：`_Attack` 对受击者
+///   `SendStruckDelayMsg(RM_REFMESSAGE, nPower, HP, MaxHP, ActorId, "", 200)`；受击者 `Run()`
+///   处理 `RM_REFMESSAGE` 时 `SendRefMsg(RM_STRUCK, damage, HP, MaxHP, hitter, "")` ⇒
+///   **同图、切比雪夫 ≤ `SendRefMsgRange`(12)、`Race==Play` 且非 Ghost 的每个对象**都收到
+///   `RM_STRUCK`，各观察者再用**受击者**的 `HP/MaxHP/伤害` 回 `SM_STRUCK` 给自己的客户端。
+///   ⇒ **怪物目标同样广播**（怪物自身无连接，但视野内的玩家收到 ⇒ 客户端能看到掉血/伤害）。
+///   登记（未 1:1，本次不动）：oracle 该帧经受击者 `MsgQueue` 以 `LateDelivery=200ms` +
+///   `MessagePriority.Lowest` 延时投递；本实现**即时**发（见证据 `155-*`）。
 /// - **死亡**（`BaseObject.Base.cs:351`）：`Die()` 的 `SendRefMsg(RM_DEATH, Dir, CurrX, CurrY, 1, "")`
 ///   ⇒ 观察者（**含自己**，该 `case` 不像 `RM_HIT` 那样过滤 `ActorId`）收 `SM_NOWDEATH`。
 ///   怪物 death 帧的 `CharDesc`（`GetFeature`/`CharStatus`）未建模 ⇒ 跳过并登记。
@@ -4564,14 +4569,22 @@ fn drain_combat_downlink(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
-    // ① 受击帧（发给受击者自己）。
+    // ① 受击帧（oracle `SendRefMsg(RM_STRUCK)` ⇒ **受击者视野内全体 `Play`**，不只是受击者自己）。
+    //
+    // 口径：`BaseObject.Attack.cs:57`（`SendStruckDelayMsg(RM_REFMESSAGE, …)`）→ 受击者 `Run()` 的
+    // `RM_REFMESSAGE` 支（`BaseObject.Base.cs:699-705`）`SendRefMsg(RM_STRUCK, damage, HP, MaxHP,
+    // hitter, "")` → `SendRefMsg`（`BaseObject.Message.cs:383+`）对**同图、切比雪夫 ≤ 12、`Race==Play`、
+    // 非 Ghost** 的对象 `SendMsg(this /*受击者*/, RM_STRUCK, …)` → 观察者 `RM_STRUCK` 处理器
+    // （`PlayObject.Message.cs:1562-1628`）用**受击者**的 `HP/MaxHP/伤害` 回 `SM_STRUCK` 给自己客户端。
+    // ⇒ 怪物目标也一样广播（怪物无连接，但视野内玩家收到 ⇒ 客户端能看见掉血/伤害）。
+    //
+    // 登记（未 1:1，本次不动）：oracle 的该帧经受击者 `MsgQueue` 以 `LateDelivery=200ms` +
+    // `MessagePriority.Lowest` 延时投递，本实现即时发。
     for (attacker, target, outcome) in &rec.attacks {
         if outcome.damage == 0 {
+            // oracle `RM_STRUCK` 支只在 `processMsg.wParam > 0` 时回帧（`PlayObject.Message.cs:1563`）。
             continue;
         }
-        let Some(entry) = online.iter().find(|e| e.actor_id == *target) else {
-            continue;
-        };
         let Some(d) = displays.get(*target) else {
             continue;
         };
@@ -4579,15 +4592,17 @@ fn drain_combat_downlink(
             .entities
             .get(*target)
             .map_or(outcome.target_hp_after, |e| e.max_hp);
-        // 世界实体 HP 是本次结算后的权威值；同步回该会话的 `WAbil.HP`（供 52/752 与后续帧）。
-        if let Some(sg) = sessions.get_mut(&entry.chr_name) {
-            sg.state.wabil.hp = outcome.target_hp_after;
-            // `RM_STRUCK` 处理器开头（`PlayObject.Message.cs:1587-1590`）：
-            // `HealthTick = 0; SpellTick = 0; PerHealth -= 1; PerSpell -= 1`。
-            // 受击清零 ⇒ 受害者永远到不了 `HealthFillTime`，与真机 dump 一致（受害方不回血）。
-            sg.stamina.on_struck();
-            sg.recovery.per_health = sg.recovery.per_health.wrapping_sub(1);
-            sg.recovery.per_spell = sg.recovery.per_spell.wrapping_sub(1);
+        // 受击者是**在线玩家**时：世界权威 HP 同步回其会话（供 52/752 与后续帧），并按 oracle
+        // `RM_STRUCK` 处理器开头（`PlayObject.Message.cs:1587-1590`）清零体力/魔力点。
+        // 怪物无会话 ⇒ 无这些副作用（它们只存在于有 `WAbil`/`MsgQueue` 的受击者上）。
+        if let Some(victim_entry) = online.iter().find(|e| e.actor_id == *target) {
+            if let Some(sg) = sessions.get_mut(&victim_entry.chr_name) {
+                sg.state.wabil.hp = outcome.target_hp_after;
+                // 受击清零 ⇒ 受害者永远到不了 `HealthFillTime`，与真机 dump 一致（受害方不回血）。
+                sg.stamina.on_struck();
+                sg.recovery.per_health = sg.recovery.per_health.wrapping_sub(1);
+                sg.recovery.per_spell = sg.recovery.per_spell.wrapping_sub(1);
+            }
         }
         let body = game_svr::smframe::sm_struck(
             *target,
@@ -4599,10 +4614,17 @@ fn drain_combat_downlink(
             *attacker,
             false,
         );
-        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "受击帧") {
+        for observer_id in chat::hear_targets(world, *target, chat::SEND_REF_MSG_RANGE) {
+            let Some(observer) = online.iter().find(|e| e.actor_id == observer_id) else {
+                continue;
+            };
+            let Some(tx) = route_to_gate(gates, observer.gate_idx, observer.socket, "受击帧")
+            else {
+                continue;
+            };
             let _ = tx.send(SimToGate::SendFrame {
-                socket: entry.socket,
-                body,
+                socket: observer.socket,
+                body: body.clone(),
             });
         }
     }
@@ -13027,6 +13049,201 @@ mod tests {
             &death[12..],
             &mir2_protocol::edcode::encode(&downlink::char_desc(111, 0)),
             "死亡尾 = Encode(8B CharDesc)"
+        );
+    }
+
+    /// **片㉜（③ DoD③「屏幕见怪并能攻击造成伤害」）**：受击帧按 oracle `SendRefMsg(RM_STRUCK)`
+    /// 广播给**受击者视野内全体 `Play`**（含受害者自己），不再只发受害者一人。
+    ///
+    /// 锚点：`BaseObject.Attack.cs:57` → `BaseObject.Base.cs:699-705` →
+    /// `BaseObject.Message.cs:383+`（`Race==Play` 且切比雪夫 ≤ `SendRefMsgRange`=12）→
+    /// `PlayObject.Message.cs:1562-1628`。
+    ///
+    /// 红检：把 `drain_combat_downlink` ① 的广播循环改回「只发受击者自己」（旧实现）⇒
+    /// 本用例必红（观察者 902 收不到 `SM_STRUCK`）。
+    #[test]
+    fn combat_downlink_broadcasts_struck_to_all_visible_players() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let victim = {
+            let mut e = mir2_world::Entity::new(0, "victim".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let attacker = {
+            let mut e = mir2_world::Entity::new(0, "atk".to_string(), 11, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let observer = {
+            let mut e = mir2_world::Entity::new(0, "obs".to_string(), 21, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            victim,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"victim".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uv".into(),
+                chr_name: "victim".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: victim,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uo".into(),
+                chr_name: "obs".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: observer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("victim".into(), test_session_ground(victim));
+
+        let rec = mir2_world::TickRecord {
+            attacks: vec![(
+                attacker,
+                victim,
+                mir2_world::AttackOutcome {
+                    power: 10,
+                    hit: true,
+                    damage: 7,
+                    killed: false,
+                    target_hp_after: 12,
+                },
+            )],
+            ..Default::default()
+        };
+        drain_combat_downlink(&rec, &world, &displays, &online, &mut sessions, &gates);
+        let mut per_socket: HashMap<i32, Vec<u8>> = HashMap::new();
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { socket, body } = m {
+                per_socket.insert(socket, body);
+            }
+        }
+        assert_eq!(
+            per_socket.len(),
+            2,
+            "受击帧必须广播给同图视野内全体在线玩家（受害者 + 观察者）：{per_socket:?}"
+        );
+        for socket in [901_i32, 902_i32] {
+            let body = per_socket.get(&socket).expect("每个玩家都应收受击帧");
+            let cm = CommandMessage::from_bytes(body).expect("12B");
+            assert_eq!(
+                u16::from_le_bytes([body[4], body[5]]),
+                mir2_protocol::messages::SM_STRUCK
+            );
+            assert_eq!(
+                (cm.recog, cm.param, cm.tag, cm.series),
+                (victim, 12, 100, 7),
+                "socket={socket} 的受击帧头 = (受击者, HP, MaxHP, 伤害)"
+            );
+        }
+        assert_eq!(
+            sessions["victim"].state.wabil.hp, 12,
+            "受击后世界 HP 同步回会话 WAbil"
+        );
+    }
+
+    /// **片㉜**：**怪物目标**也要广播受击帧 —— 怪物自身无连接，但视野内玩家收到 ⇒ 真客户端
+    /// 能看到怪掉血/伤害（DoD③「能攻击造成伤害」）。
+    ///
+    /// 红检：把广播循环改回「只发受击者自己」（旧实现）⇒ 怪物不在 `online` ⇒ **零帧**，本用例必红。
+    #[test]
+    fn combat_downlink_broadcasts_struck_for_monster_target() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let monster = {
+            let mut e = mir2_world::Entity::new(0, "mon".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            e.hp = 200;
+            e.max_hp = 200;
+            world.add_entity(e)
+        };
+        let attacker = {
+            let mut e = mir2_world::Entity::new(0, "atk".to_string(), 11, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let observer = {
+            let mut e = mir2_world::Entity::new(0, "obs".to_string(), 13, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            monster,
+            downlink::ActorDisplay::new(0, 0, 222, 0, 0, 255, Vec::new()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uo".into(),
+                chr_name: "obs".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: observer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+
+        let rec = mir2_world::TickRecord {
+            attacks: vec![(
+                attacker,
+                monster,
+                mir2_world::AttackOutcome {
+                    power: 30,
+                    hit: true,
+                    damage: 20,
+                    killed: false,
+                    target_hp_after: 180,
+                },
+            )],
+            ..Default::default()
+        };
+        drain_combat_downlink(&rec, &world, &displays, &online, &mut sessions, &gates);
+        let mut bodies = Vec::new();
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { socket, body } = m {
+                assert_eq!(socket, 902, "只有观察者在线 ⇒ 只给他发");
+                bodies.push(body);
+            }
+        }
+        assert_eq!(
+            bodies.len(),
+            1,
+            "怪物受击 ⇒ 视野内玩家收 1 帧 SM_STRUCK（旧实现 = 0 帧）"
+        );
+        let cm = CommandMessage::from_bytes(&bodies[0]).expect("12B");
+        assert_eq!(
+            u16::from_le_bytes([bodies[0][4], bodies[0][5]]),
+            mir2_protocol::messages::SM_STRUCK
+        );
+        assert_eq!(
+            (cm.recog, cm.param, cm.tag, cm.series),
+            (monster, 180, 200, 20),
+            "SM_STRUCK 头 = (怪物, 扣血后 HP, MaxHP, 伤害)"
         );
     }
 

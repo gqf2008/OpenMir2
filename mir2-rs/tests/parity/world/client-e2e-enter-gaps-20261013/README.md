@@ -784,3 +784,34 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   「屏幕见怪并能攻击造成伤害」；跨图候选的 MapInfo 属性（`NORECONNECT/DAY`）/客户端 `.map` 一致性须窗口实拍。
 - 证据：`151-cross-map-site-plan.txt`、`152-redcheck-cross-map-site-plan.txt`、`153-gates.txt`、
   `154-boundary.txt`、`window_handoff.py`。
+
+### ㉜ ③ DoD③ 第三半「能攻击造成伤害」：oracle 受击帧广播修正 + 窗口攻击步/机判（2026-10-14）—— `155`/`156`
+
+- **根因（parity 缺陷，oracle 逐行复核）**：`bins/game-svr` 的 `drain_combat_downlink` ①
+  **只把 `SM_STRUCK` 发给受击者本人**；而 oracle 是
+  `BaseObject.Attack.cs:57`（`SendStruckDelayMsg(RM_REFMESSAGE, …)`）→ 受击者 `Run()` 的
+  `RM_REFMESSAGE` 支（`BaseObject.Base.cs:699-705`）`SendRefMsg(RM_STRUCK, …)` →
+  `BaseObject.Message.cs:383+` 对**同图、切比雪夫 ≤ 12、`Race==Play`、非 Ghost** 的每个对象
+  `SendMsg` → 观察者 `RM_STRUCK` 处理器（`PlayObject.Message.cs:1562-1628`）回 `SM_STRUCK`。
+  ⇒ **怪物目标也广播**（怪物无连接，但视野内玩家收到）⇒ 不修则真客户端**看不到怪掉血/伤害**，
+  DoD③ 第三半在真机上不可观测。旧注释自称「oracle 同」只看了 `:61-64` 的 `SendMsg(targetObject,…)`，
+  漏了 `:57` 的 `RM_REFMESSAGE → SendRefMsg` 链。
+- **本片交付**（写集 = `bins/game-svr/src/main.rs` + 本证据目录；零 `src/ sql/ MirClient/ crates/**`）：
+  ① ① 段帧体构造一次，按 `chat::hear_targets(world, *target, chat::SEND_REF_MSG_RANGE)`（与 ② 死帧
+     同函数/同常量）发给**每个在线玩家**；受击者是在线玩家时的会话 HP 同步 + `on_struck` 保留；
+  ② 两条构造级用例：玩家受击 ⇒ 受害者 + 同图观察者**各 1 帧** `SM_STRUCK`；**怪物**受击 ⇒ 视野内玩家
+     1 帧（旧实现 0 帧）；
+  ③ 新判据 `check_attack_observability.py`（c2s `CM_HIT(3014)` + s2c `SM_STRUCK(31)`/`SM_NOWDEATH(34)`；
+     `--expect attack|damage|kill|any|none`；`--left/--right` 两侧；`--selftest` 12/12）；
+  ④ 窗口接线：`window_handoff.py` `TOOL_SELFTESTS` 7→8、`--plan` 两侧加 `-AttackClicks 12` 与攻击判据行、
+     `--judge` 五条→**六条**（新增「③b 两侧攻击/伤害」）、`--selftest` 80→**82/82**；
+     `82-two-side-window-runbook.md` §0/§3.3/§5/§7 同步。
+- **改坏必红（`156`，变异只在仓内文件、跑完 sha256 复核逐字节一致）**：广播循环改回
+  `vec![*target]` ⇒ 两条新用例 FAILED（`left: 1/2`、`left: 0/1`），旧用例仍 ok；还原 ⇒ 3 passed。
+- **登记（未 1:1，交 owner）**：oracle 该帧以 `LateDelivery=200ms` + `Lowest` 优先级延时投递，
+  本实现**即时**发（旧实现也即时）；跨侧 s2c 逐帧序/延时的 R 级对拍仍需窗口。
+- 四门禁（合并树 `8a49940d9` 之上）fmt 0 / clippy 0(`-D warnings`) / **101 suites · 1216 passed ·
+  0 failed · 22 ignored** / msgcodegen 604 rc=0；就绪门 `PLAN_CONFORMANCE=GREEN` / `WINDOW_READY=YES`。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：真机 ③b 两侧「攻击 + 伤害可见」读数。
+- 证据：`155-attack-observability-and-struck-broadcast.txt`、`156-redcheck-struck-broadcast.txt`、
+  `157-gates.txt`、`158-boundary.txt`、`check_attack_observability.py`。
