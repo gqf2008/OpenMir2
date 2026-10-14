@@ -6995,7 +6995,8 @@ fn sim_loop(
                                                             bag_items: d.bag_items.as_deref(),
                                                             gold: d.gold,
                                                             // 帧 52 尾的冻结客户端 58B `TAbility` 布局；
-                                                            // 默认关（未设 = oracle 逐字节，见该字段文档与
+                                                            // 默认开（未设 = client-58；`MIR2_CLIENT_ABILITY_LAYOUT=0`
+                                                            // 才 oracle 逐字节，见该字段文档与
                                                             // `openmir2-client-e2e-enter-gaps` 的 owner 裁决）。
                                                             client_ability_layout:
                                                                 mir2_client_ability_layout(),

@@ -21,16 +21,27 @@ $ git log --oneline ad0592b19..8e491f81e -- mir2-rs/bins/game-svr/src
 ecd455765 fix(m3-9-3): 宝宝叛变帧面同优先级出队序 —— 复刻 oracle .NET 4 叉堆（reviewer-6 F-1）
 d3b39c157 feat(m3-9-2): 护身符扣光删除帧面——SM_DELITEM(202) 编发（消费 use_amulet 的 deleted 支）
 c55dff977 feat(m3-9-3): 宝宝叛变帧面接线——RM_CHANGENAMECOLOR/RM_USERNAME 出帧（消费 slave_self_deliveries）
-ca10f4a87 Merge 0d0d62a69 (…) / 0d0d62a69 fix(game-svr): 片㉜ … SM_STRUCK 广播
-41e61029e Merge 16b208343 / a6359cd78 feat(m3-pet-slave-masterdie-wire): ⑨ 主人死/幽灵 1s 自投递驱动
-f8ab7ff24 fix(m3-party-gotolabel-ext): NpcPlayer 取数优先运行时态 / ce7879223 feat(…): GotoLable 四组队 label
-057d7dc9e Merge 9f6b02179 / 0a1b83f7b feat(m3-selloff-dealybme-wire) / 65d0b34f2 fix(…): SM_SENDDEALOFFFORM 头字段
-2d2426f5b / 620ac1f13 / 7a108f4d2 / 8358058fc（⑩-1 各 merge）
-8c4e0fc49 feat(m3-pet-slave-clone46): 46 分身宿主接线 + RM_TURN 帧
-1a2b1ed51 feat(m3-party-recall-ext): ⑦ 扩展面 5 个脚本/命令处理器 + 宿主组队快照
-d16b5199d fix(game-svr): AOI 诊断 vis 语义（当前可见集，不含自身）+ vr/new/af 读数
+ca10f4a87 Merge 0d0d62a69 (enter-gaps-window-dense-menu): 客户端联调实测缺口（2026-10-13 真客户端进图）：① 进图未下发 52/752 ⇒ 血/体力 0、跑不动 ② 世界 tick 无实体、无怪 - approve openmir2-reviewer-5 @reviewed_head 0d0d62a69
+0d0d62a69 fix(game-svr): 片㉜ ③ DoD③「能攻击造成伤害」——受击帧按 oracle SendRefMsg(RM_STRUCK) 广播给视野内全体 Play（怪物目标也发）+ 窗口攻击步/机判 check_attack_observability.py
+41e61029e Merge 16b208343 (worktree-m3-selloff-dealoffform-recog): openmir2-m3-pet-slave-masterdie-wire - approve openmir2-reviewer-5 @reviewed_head 16b208343
+a6359cd78 feat(m3-pet-slave-masterdie-wire): ⑨ 主人死/幽灵 1s 自投递驱动（World 延时消息表 + Die() 触发点 + 生产接线）
+f8ab7ff24 fix(m3-party-gotolabel-ext): NpcPlayer 取数优先运行时态（ground_sessions 的 Gold/ItemList/WAbil）
+cefdf1586 Merge remote-tracking branch 'origin/master' into worktree-m3-party-recall-ext
+15e795d8a Merge remote-tracking branch 'origin/master' into worktree-m3-party-recall-ext
+ce7879223 feat(m3-party-gotolabel-ext): FunctionNPC.GotoLable 四组队 label 宿主接线
+057d7dc9e Merge 9f6b02179 (worktree-m3-selloff-dealoffform-recog): M3⑩-实现 1：世界侧元宝寄售（`SellOffItemList`/`DealOffInfo` + `SaleDeal`/`SellOffConfirm` + 7 个 `CM_SELLOFF*` 派发 + `RM_SENDDEALOFFFORM`/`SM_SELLOFF*` 帧） - approve openmir2-reviewer-5 @reviewed_head 9f6b02179
+2d2426f5b Merge 4d2d939857 (worktree-m3-party-recall-ext): openmir2-m3-party-recall-ext - approve openmir2-reviewer-5 @reviewed_head 4d2d939857
+620ac1f13 Merge 4a314ecce0 (worktree-m3-selloff-dealoffform-recog): M3⑩-实现 1：世界侧元宝寄售（`SellOffItemList`/`DealOffInfo` + `SaleDeal`/`SellOffConfirm` + 7 个 `CM_SELLOFF*` 派发 + `RM_SENDDEALOFFFORM`/`SM_SELLOFF*` 帧） - approve openmir2-reviewer-6 @reviewed_head 4a314ecce0
+7a108f4d2 Merge remote-tracking branch 'origin/master' into worktree-m3-selloff-dealoffform-recog
+0a1b83f7b feat(m3-selloff-dealybme-wire): M3⑩-1 @dealybme 开窗接线 + SM_MERCHANTSAY 两失败支
+8358058fc Merge remote-tracking branch 'origin/master' into worktree-m3-party-recall-ext
+65d0b34f2 fix(m3-selloff-dealoffform-recog): SM_SENDDEALOFFFORM 头字段口径（Recog=npc_id / Param=0）
+8c4e0fc49 feat(m3-pet-slave-clone46): 46 分身（MagMakeClone/PlayCloneObject）宿主接线 + RM_TURN 帧
+1a2b1ed51 feat(m3-party-recall-ext): M3⑦ 扩展面 5 个脚本/命令处理器 + 宿主组队快照（缺陷 1:1 照搬）
+d16b5199d fix(game-svr): AOI 诊断 vis 语义（当前可见集，不含自身）+ vr/new/af 读数 —— 卡 openmir2-client-e2e-enter-gaps 缺口② root 判读误伤
 ```
-（共 19 条；均为 **⑨/⑩/⑦ 帧面 + 片⑪ AOI 诊断**，无一条碰 52/752/53/`CM_RUN`。）
+（**共 22 条**——原文「共 19 条」为节选计数错误（reviewer-5/6 的 F-1）；上面 22 行为该命令的**逐行原样输出**。
+均为 **⑨/⑩/⑦ 帧面 + 片⑪ AOI 诊断 + 若干 merge**，无一条碰 52/752/53/`CM_RUN`。）
 
 # 2) 二分 B：相关文件的区间差量与符号计数
 

@@ -27,7 +27,7 @@ M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
 = 13 路径（8 增 + 5 改）。生产代码**仅 1 件**：`mir2-rs/bins/game-svr/src/main.rs`（片㊼，
 `ability_tail` + 3 个调用点 + 用例）；其余为证据/工具。
 
-# 本片㊼ 自身差量（片㊻ `276f2f95e` → 本 head，5 路径）
+# 本片㊼ 自身差量（片㊻ `276f2f95e` → 本 head，7 路径）
 
 ```
 M  mir2-rs/bins/game-svr/src/main.rs

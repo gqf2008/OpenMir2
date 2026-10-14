@@ -1,0 +1,49 @@
+207 — 片㊾ 四门禁（cwd = `mir2-rs`，`CARGO_TARGET_DIR=E:/tmp/m2svr-target`，offline）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+base = `refs/heads/master` `c44c58e3a`
+====================================================================================================
+
+# 1) cargo fmt --all -- --check
+```
+rc=0（无输出：无格式差）
+```
+
+# 2) cargo clippy --offline --workspace --all-targets -- -D warnings
+```
+    Checking game-svr v0.1.0 (…/m2-svr/mir2-rs/bins/game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.98s
+rc=0
+```
+
+# 3) cargo test --offline --workspace
+```
+test rc=0
+suites=101 passed=1232 failed=0 ignored=22
+```
+（与本片 base 基线读数逐一相同——本片只改 1 条注释 + 证据文本，未加/删/改任何用例；
+`smframe::tests::healthspellchanged_client_carries_tchardesc_tail` 的红检真跑见 `206 §4`。）
+
+# 4) cargo run --offline -p msgcodegen -- --check
+```
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+```
+
+# 5) 证据清单门（`tools/evidence-hash/verify_sha256sums.py`）
+```
+$ python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013 --check-extra
+GREEN …\SHA256SUMS.txt  [repo 口径]  OK 214/214 rc=0
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+EOLCHECK GREEN 215/215 件文本证据与仓库口径（LF）在 EOL 上一致 rc=0
+```
+（清单 214 行 = 原 211 + 本片新增 `206`/`207`/`208`；EOL 215 件 = 214 清单件 + 清单自身。）
+
+**改坏必红（清单门有牙，实跑）**：临时向 `205-…txt` 追加 1 行 ⇒ 同命令 rc=1 并点名：
+```
+       mismatch: …\205-bisect-52-752-run0-closure.txt
+         清单 b94880a131d872a9a11c3de3923cee30da81cdb4e4fa6499f7e2c90d6abeb331
+         实算 a21b328f7e29124b2c370e5b56634310d2b2e592eac5e029bfdf8ad9418d3aa2  (text attr=set)
+```
+还原（从 `E:/tmp/205.bak` 拷回，非 `git checkout`——本片改动尚未提交）⇒ 同命令 rc=0；
+`sha256sum` 回 `b94880a131d8…` = 清单值（逐字节回原）。

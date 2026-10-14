@@ -1,0 +1,134 @@
+206 — 收口 reviewer-5/6 的随卡 findings（F-1 + O-1~O-5）+ 53 牙真跑
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+base = `refs/heads/master` `c44c58e3a`（= 片㊽ 合入后的 master；本分支 `merge --ff-only` 对齐）
+只读复核 + 3 处证据/注释订正 + 1 段离线红检（Rust 用例真跑）；零起栈、零游戏端口；未动共享主检出；不 merge、不自签 review
+====================================================================================================
+
+# 0) 为什么有这一片
+
+片㊽ 的两条非作者 approve（reviewer-5 `9a6733b5` / reviewer-6 `6724b964`）共登记：
+
+- **F-1**（两条 review 都点名，Minor/Observation，非阻塞）：`205-bisect-52-752-run0-closure.txt §1`
+  写 `git log --oneline ad0592b19..8e491f81e -- mir2-rs/bins/game-svr/src`「共 19 条」，实测 **22 条**
+  （且文中列出的是**折叠/节选**）。建议「下次动该文件时订正」。
+- **O-1**：`main.rs` 注释漂移 —— 写「默认关（未设 = oracle 逐字节）」，而 `smframe::client_layout_enabled()`
+  的实际语义是**未设 ⇒ 开**（client-58）。见 `205 §1` 上方 `client_ability_layout` 字段注释。
+- **O-2 / O-4**：计数措辞漂移 —— `200-boundary.txt` 写「本片㊼ 自身差量（…，**5 路径**）」，
+  其下列表实为 **7 条**（M main.rs + M README + M SHA256SUMS + A 197/198/199/200）。
+- **O-5**（reviewer-6 新提）：`202-redcheck-window-provenance-4.txt §E` 的牙
+  「把 `sm_healthspellchanged_frame` 默认支改回 header-only ⇒ 片㊴ 用例必红」**在该片未真跑**（该片零 .rs）。
+- **本片自查新增**：README 顶部 `## 结论` 的 #3「默认关 / 0/0 是既有问题 / 要不要修需 owner 决策」
+  与 #5、`## 本目录代码改动` 标题/末条，均与 ⑨/㊴/㊽ 的**现行默认（client-58）**矛盾 ⇒ 同一处订正。
+
+本片只做**证据保真 + 注释订正 + 一条离线红检真跑**，不引入任何新语义、不改出帧/取数/模拟。
+
+# 1) F-1：205 §1 计数 19 → 22，且粘贴命令的逐行原样输出
+
+```
+$ git log --oneline ad0592b19..8e491f81e -- mir2-rs/bins/game-svr/src | wc -l
+22
+```
+（22 行原文已逐行粘进 `205 §1` 的代码块；该节尾注由「共 19 条」改为「共 22 条」+ 说明原文为节选计数错误。
+`205 §1` 起首的注释行「（共 19 条；均为 ⑨/⑩/⑦ 帧面 + 片⑪ AOI 诊断…）」同步更新。）
+锚点（可复算、DAG 不可变）：`ad0592b19` / `8e491f81e` 均为 master 祖先；命令只依赖这两个固定提交。
+
+# 2) O-1：`main.rs` 字段注释「默认关」→「默认开」
+
+改前（`mir2-rs/bins/game-svr/src/main.rs`，`client_ability_layout` 字段上方）：
+```
+// 帧 52 尾的冻结客户端 58B `TAbility` 布局；
+// 默认关（未设 = oracle 逐字节，见该字段文档与
+// `openmir2-client-e2e-enter-gaps` 的 owner 裁决）。
+```
+改后：
+```
+// 帧 52 尾的冻结客户端 58B `TAbility` 布局；
+// 默认开（未设 = client-58；`MIR2_CLIENT_ABILITY_LAYOUT=0`
+// 才 oracle 逐字节，见该字段文档与
+// `openmir2-client-e2e-enter-gaps` 的 owner 裁决）。
+```
+依据（唯一真源，非本片推断）：`smframe.rs::client_layout_enabled()` =
+`!matches!(MIR2_CLIENT_ABILITY_LAYOUT, "0"|"false"|"FALSE"|"False")` ⇒ **未设 = true**；片⑨ 已把生产默认翻为 client-58。
+纯注释改动，零行为变化（`git diff` 见 §5）。
+
+# 3) O-2 / O-4：`200-boundary.txt` 自身差量条数 5 → 7
+
+改前：`# 本片㊼ 自身差量（片㊻ 276f2f95e → 本 head，5 路径）`
+改后：`# 本片㊼ 自身差量（片㊻ 276f2f95e → 本 head，7 路径）`
+该节紧随其后的列表即 7 条（M main.rs / M README / M SHA256SUMS / A 197 / A 198 / A 199 / A 200）；
+同文上一节的「= 13 路径（8 增 + 5 改）」是 `ae6443924..head` 的 net 差量，**正确，未动**。
+
+# 4) O-5：53 牙真跑（「默认支改回 header-only ⇒ 用例必红」）
+
+红检对象：`mir2-rs/bins/game-svr/src/smframe.rs`（单文件变异，变异只在工作树做，`git checkout --` 还原）
+
+【4.1 基线（未变异）GREEN，rc=0】
+```
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test --offline -p game-svr healthspellchanged_client_carries_tchardesc_tail
+running 1 test
+test smframe::tests::healthspellchanged_client_carries_tchardesc_tail ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 203 filtered out; finished in 0.00s
+$ sha256sum mir2-rs/bins/game-svr/src/smframe.rs
+156433069f84f23c8d48d483ea6d948264e799de540e068a0f39c533a8d397a1 *mir2-rs/bins/game-svr/src/smframe.rs
+```
+
+【4.2 变异（`sm_healthspellchanged_frame` 默认支由 `client_layout_enabled()` 改 `false` ⇒ 退回 header-only）】
+```
+$ sha256sum mir2-rs/bins/game-svr/src/smframe.rs   # 变异后
+e7efe82debde927c28b3fb82a041c15b899de79ff91198a320e3570a322700ae *mir2-rs/bins/game-svr/src/smframe.rs
+
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test --offline -p game-svr healthspellchanged_client_carries_tchardesc_tail
+running 1 test
+test smframe::tests::healthspellchanged_client_carries_tchardesc_tail ... FAILED
+---- smframe::tests::healthspellchanged_client_carries_tchardesc_tail stdout ----
+thread 'smframe::tests::healthspellchanged_client_carries_tchardesc_tail' (35676) panicked at bins\game-svr\src\smframe.rs:1215:13:
+assertion `left == right` failed: 默认（未设/其它）= 冻结客户端布局
+  left: [52, 18, 0, 0, 53, 0, 18, 0, 15, 0, 19, 0]
+ right: [52, 18, 0, 0, 53, 0, 18, 0, 15, 0, 19, 0, 106, 100, 104, 107, 100, 103, 104, 104, 100, 100, 123, 107, 100, 100, 104, 107]
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 203 filtered out; finished in 0.00s
+rc=101
+```
+`left` = header-only 12B（oracle 形态）；`right` = 12B 头 + `EDCode.Encode(TCharDesc)` 16B = 28B（冻结客户端形态）。
+
+【4.3 还原（`git checkout --`）+ sha256 回原 + 复跑 GREEN，rc=0】
+```
+$ git checkout -- mir2-rs/bins/game-svr/src/smframe.rs
+$ sha256sum mir2-rs/bins/game-svr/src/smframe.rs
+156433069f84f23c8d48d483ea6d948264e799de540e068a0f39c533a8d397a1 *mir2-rs/bins/game-svr/src/smframe.rs   # == 4.1（逐字节回原）
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test --offline -p game-svr healthspellchanged_client_carries_tchardesc_tail
+running 1 test
+test smframe::tests::healthspellchanged_client_carries_tchardesc_tail ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 203 filtered out; finished in 0.00s
+```
+⇒ `202 §E` 的口径现**已真跑**：改坏（默认支回 header-only）⇒ 必红（12 vs 28）；还原 ⇒ 绿；仓内件 sha256 前后一致。
+
+# 5) README 顶部「结论 / 本目录代码改动」与现行默认（client-58）align
+
+- `## 结论` 下插入 **⚠ 现行口径（2026-10-14 起，以 ⑨/㊴/㊽ 为准）** 注：#3/#5 为 2026-10-13 首轮当时口径；
+  - 52/53 生产默认 = 冻结客户端布局（52 尾 58B `TAbility`、53 尾 12B `TCharDesc`）；`MIR2_CLIENT_ABILITY_LAYOUT` **未设 ⇒ 开**；
+  - 「HUD `0/0` + 跑不动」真凶 = 53 缺 `TCharDesc` 尾（触发 = 进图 `HP<MaxHP`），修点 = 片㊴ `c61b9627a` + 片㊼ `6cadc9fbf`（均已入 master）。
+- #3 末句「要不要修需 owner 决策」加注「已决策：见本节顶部现行口径注 + ⑨/㊴/㊽」。
+- `## 本目录代码改动` 标题「默认关的布局开关」→「默认开的布局开关，见本节顶『现行口径』与 ⑨」；
+  两条「默认关 / 未设 ⇒ 关」措辞改为「默认开（未设 = client-58）/ 显式 `=0` ⇒ oracle」。
+- 本次改动仅文字与注释；不改任何示例命令/判据阈值。
+
+# 6) 交付边界（见 `208-boundary.txt`）与门禁（见 `207-gates.txt`）
+
+本片差量（base `c44c58e3a` → head）：
+```
+M  mir2-rs/bins/game-svr/src/main.rs                                              # O-1 注释 3 行
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/205-...txt            # F-1 计数 + 原文
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/200-boundary.txt      # O-2/O-4 5→7
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md             # 结论/默认开 align
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/206-...txt            # 本文件
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/207-gates.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/208-boundary.txt
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+```
+冻结面 `src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/` 空（`main.rs` 在 `bins/game-svr`，不属冻结面）。
+
+# 7) 未做（不在本片）与仍归窗口
+
+- **O-3**（`52→58B` / `53→TCharDesc` 尾的 §6.0-3 白名单登记 + owner 签字）：属 owner 裁决面，**不在本片**。
+- `202 §E` 的 Rust 牙现已真跑（本片 §4）；但**真机** R 窗口（①压血进图 HUD/CM_RUN ②世界 tick 实体 ③两侧同点对照）仍归 **root 独占窗口**，本片零起栈/零端口。
+- G5（root 活脚本 `client-e2e-window.sh` 未换入库替身 `client-e2e-window.fixed.sh.txt`）：仍 RED，属 root 开窗前置，**不在本片**。
