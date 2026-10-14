@@ -1,0 +1,26 @@
+# 三点一致：文档行号 / ANCHORS 登记的符号正则 / 源码实际首个匹配行
+
+$ grep -n 'main.rs:' mir2-rs/tests/parity/m3/rng-trace-scene/DRIVER-CONTRACT.md
+59:- master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/main.rs:5795`
+
+$ grep -n 'enable_production_monster_ai' mir2-rs/bins/game-svr/src/main.rs
+5795:    game_svr::mongen::enable_production_monster_ai(&mut world);
+
+$ sed -n '82,90p' mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py   # ANCHORS 登记（literal/path/rx）
+ANCHORS = (
+    dict(literal="mir2-rs/bins/game-svr/src/main.rs",
+         path="mir2-rs/bins/game-svr/src/main.rs",
+         rx=r"enable_production_monster_ai\(&mut world\)",
+         why="宿主无条件开怪 AI 调用点（本卡要 AI 开）"),
+    dict(literal="mongen.rs",
+         path="mir2-rs/bins/game-svr/src/mongen.rs",
+         rx=r"pub fn enable_production_monster_ai\(",
+         why="宿主 AI 开关接缝",
+
+$ git log -1 --format='%h %s' -- mir2-rs/bins/game-svr/src/main.rs   # 最近一次动 main.rs 的提交
+41e61029e Merge 16b208343 (worktree-m3-selloff-dealoffform-recog): openmir2-m3-pet-slave-masterdie-wire - approve openmir2-reviewer-5 @reviewed_head 16b208343
+
+$ git show 17389f05f:mir2-rs/bins/game-svr/src/main.rs | grep -n 'enable_production_monster_ai(&mut world)' | head -1   # 合并目标侧（master）当时已是 :5795
+5795:    game_svr::mongen::enable_production_monster_ai(&mut world);
+$ git show 1b88c9d3c:mir2-rs/bins/game-svr/src/main.rs | grep -n 'enable_production_monster_ai(&mut world)' | head -1   # m3bag 分支上当时是 :5665（⇒ 合入即失准）
+5665:    game_svr::mongen::enable_production_monster_ai(&mut world);

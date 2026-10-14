@@ -1,0 +1,122 @@
+155-attack-observability-and-struck-broadcast.txt —— 卡 `openmir2-client-e2e-enter-gaps` DoD③ 第三半
+「屏幕见怪**并能攻击造成伤害**」（片㉜，2026-10-14）
+m2-svr / openmir2-worker-11
+本片**零起栈、零占端口**（仅共享 MySQL 3306）；写集 = `mir2-rs/bins/game-svr/src/main.rs` +
+本证据目录（1 个新判据 `.py` + `window_handoff.py` / `82-…md` + 证据）；未动
+`src/ sql/ MirClient/ crates/**/ tests/parity/m3/**`。
+==============================================================================================
+一句话：DoD③「能攻击造成伤害」在真客户端上**此前不可能观测到** —— `bins/game-svr` 把受击帧
+`SM_STRUCK` 只发给**受击者本人**，而 oracle 是 `SendRefMsg(RM_STRUCK)` **广播给受击者视野内全体
+`Play`**（怪物目标也一样）。本片按 oracle 修好（+2 条构造级用例 + 改坏必红），并把「攻击/伤害」
+做成窗口步 + 机判（`check_attack_observability.py`，接入 `window_handoff.py` G2/`--plan`/`--judge`）。
+R 级真机读数仍归 root 独占窗口。
+
+A. 缺陷（oracle 逐行锚点 vs Rust 旧实现）
+----------------------------------------------------------------------------------------------
+oracle 命中一次（目标 = 怪 or 人）：
+1) `src/M2Server/Actor/BaseObject.Attack.cs:57`
+   `targetObject.SendStruckDelayMsg(Messages.RM_REFMESSAGE, nPower, targetObject.WAbil.HP,
+    targetObject.WAbil.MaxHP, ActorId, "", 200);`
+2) `src/M2Server/Actor/BaseObject.Message.cs:211-232`：把这条入到**受击者**的 `MsgQueue`：
+   `wIdent = RM_REFMESSAGE`、`ActorId = Messages.RM_STRUCK`、`DeliveryTime = now+200`、
+   `LateDelivery = true`、优先级 `Lowest`。
+3) `src/M2Server/Actor/BaseObject.Base.cs:699-705`（受击者 `Run()` 处理 `RM_REFMESSAGE`）：
+   `SendRefMsg(processMsg.ActorId /*=RM_STRUCK*/, processMsg.wParam /*damage*/,
+    processMsg.nParam1 /*HP*/, processMsg.nParam2 /*MaxHP*/, processMsg.nParam3 /*hitter*/, Msg);`
+4) `src/M2Server/Actor/BaseObject.Message.cs:383-470` `SendRefMsg`：对**同图、切比雪夫 ≤
+   SystemShare.Config.SendRefMsgRange(=12)、`Race==Play`、非 Ghost** 的每个对象
+   `SendMsg(this /*=受击者*/, RM_STRUCK, …)`；对 `Race!=Play` 且 `WantRefMsg` 的对象同发
+   （仅 `RM_STRUCK`/`RM_HEAR`/`RM_DEATH` 三个 ident）。
+5) `src/M2Server/Player/PlayObject.Message.cs:1562-1628`（观察者处理的 `RM_STRUCK` 支）：
+   `ClientMsg = MakeMessage(SM_STRUCK, processMsg.ActorId /*=受击者*/, baseObject.WAbil.HP,
+    baseObject.WAbil.MaxHP, processMsg.wParam /*damage*/)` + 16B `MessageBodyWL`
+   （`Tag1 = 命中者 ActorId`、`Tag2 = 0/1(MAG)`）⇒ 发给**观察者自己的客户端**。
+⇒ 玩家打怪时，**攻击者客户端收到 `SM_STRUCK`**（怪掉血/伤害可见）。这正是 DoD③ 第三半要证的。
+
+Rust 旧实现（`mir2-rs/bins/game-svr/src/main.rs` 的 `drain_combat_downlink` ①）：
+    let Some(entry) = online.iter().find(|e| e.actor_id == *target) else { continue; };
+⇒ 只查**受击者自己**有没有在线会话；怪物不在 `online` ⇒ **一帧不发**；玩家受击时也只发受害者、
+不发同屏其他人。旧注释自称「（oracle 同）」，经上面 5 条锚点复核**不成立**：只看了
+`BaseObject.Attack.cs:61-64` 的 `SendMsg(targetObject, RM_STRUCK, …)`，漏了 :57 的
+`SendStruckDelayMsg` → `RM_REFMESSAGE` → `SendRefMsg` 广播链。
+
+B. 修法（行为等价优先：1:1 照搬 oracle 的广播面）
+----------------------------------------------------------------------------------------------
+`drain_combat_downlink` ①：
+- **保留**：受击者是**在线玩家**时，世界权威 HP 同步回会话 `WAbil.HP` + `stamina.on_struck()` +
+  `PerHealth/PerSpell -= 1`（`PlayObject.Message.cs:1587-1590`）；
+- **改为**：帧体 `smframe::sm_struck(...)` 只构造一次，发给
+  `chat::hear_targets(world, *target, chat::SEND_REF_MSG_RANGE)` 里的**每个在线玩家**
+  （与 ② 死亡广播同一函数、同一常量 `SEND_REF_MSG_RANGE = 12`，
+  `bins/game-svr/src/chat.rs:30/56-78`：同图 + `Race==Play` + 非 ghost + 切比雪夫 ≤ range）；
+- `outcome.damage == 0` 仍跳过（`PlayObject.Message.cs:1563` 的 `wParam > 0` 门）。
+⇒ 怪物目标也广播（怪物无连接，但视野内玩家收到）。**T- 级白名单无需新增**：这是 parity 修正，
+不是故意偏离。
+
+登记（未 1:1，本次不动，交 owner）：
+- oracle 该帧经受击者 `MsgQueue` 以 `LateDelivery = 200ms` + `MessagePriority.Lowest` **延时**投递；
+  本实现**即时**发（旧实现也即时；本片不引入时序改动，避免把 R 级时序差异混进本片）。
+- 广播范围口径沿 ② 死亡广播：`(dx,dy) ≤ 12`。oracle `SendRefMsg` 有两条分支（缓存命中时
+  `abs < 11`、重扫时 `abs ≤ 12`），本片与既有死帧同口径；边界差（恰 11/12）未单独钉。
+
+C. 构造级用例 + 改坏必红
+----------------------------------------------------------------------------------------------
+命令（cwd=`mir2-rs`，`CARGO_TARGET_DIR=E:/tmp/m2svr-target`）：
+    cargo test -p game-svr --bin game-svr --offline combat_downlink
+新增两条（与既有 `combat_downlink_sends_struck_and_nowdeath` 同口径）：
+- `combat_downlink_broadcasts_struck_to_all_visible_players`：玩家受击 ⇒ 受害者(socket 901) 与
+  同图观察者(socket 902) **各收 1 帧** `SM_STRUCK`（头 = 受击者/HP/MaxHP/伤害），会话 HP 同步。
+- `combat_downlink_broadcasts_struck_for_monster_target`：**怪物**受击（怪物不在 `online`）⇒
+  视野内玩家(socket 902) 收 1 帧 `SM_STRUCK`（头 = 怪物/180/200/20）。**旧实现 = 0 帧。**
+改坏必红（原始输出 `15-redcheck-mut-RED.txt` / `16` / `17-redcheck-restored-GREEN.txt`）：
+  把广播循环改回 `for observer_id in vec![*target].into_iter()` ⇒
+  `test result: FAILED. 1 passed; 2 failed`（新两条 FAILED：`left: 1/2` 与 `left: 0/1`），
+  既有旧用例仍 ok；`cp` 还原后 sha256 逐字节一致、`3 passed; 0 failed`。
+
+D. 窗口步 + 机判（root ③「判据/capture 工具你准备」）
+----------------------------------------------------------------------------------------------
+新判据 `check_attack_observability.py`（零起栈、零端口、不 import 生产 crate）：
+  ① c2s `CM_HIT(3014)` ≥ `--min-hits`（客户端确实对目标发出攻击）；
+  ② s2c `SM_STRUCK(31)` ≥ `--min-struck` **或** `SM_NOWDEATH(34)` ≥ `--min-kills`（伤害可见/击杀）；
+  `--expect attack|damage|kill|any|none`（`any` = ① 且 ②，= DoD③ 默认）；
+  `--left/--right` 两侧同口径；退出码 `0/1/2`；`--selftest` **12/12**
+  （`18-attack-selftest.txt`；含「只攻击无伤害 ⇒ RED」「有击杀无 struck 在 `--expect damage` 下 ⇒ RED」）。
+接线（`mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py`）：
+- `TOOL_SELFTESTS` 7 → **8** 件（G2：每件 `--selftest` 必须过；缺件 ⇒ PREREQ）；
+- `--plan`：Rust 与 C# 两侧 `mir_flow.ps1` 都加 `-AttackClicks 12`；§3/§5 打印
+  `check_attack_observability.py --left … --right … --expect any --min-hits 1`；
+- `--judge`（J1）：五条 → **六条**，新增「③b 两侧攻击/伤害」（消费两侧 `s2c/capture.jsonl`）；
+- `--selftest` 80 → **82/82**（新增 `plan-has-attack-step` / `plan-has-attack-judge`）
+  （`19-wh-selftest.txt`）；真计划 `PLAN_CONFORMANCE=GREEN` / `WINDOW_READY=YES` / `RESULT: GREEN`
+  （`20-plan.txt`）。
+手册 `82-two-side-window-runbook.md`：§0 改「要证的三件事」（加攻击/伤害行）、§3.3 客户端加
+`-AttackClicks 12` 与攻击判据、§5 两侧加 `check_attack_observability.py --expect any`、
+§7 登记本片生产修正与 200ms 延时未接。
+
+E. 四门禁 / 边界（本片头）
+----------------------------------------------------------------------------------------------
+- 四门禁（cwd=`mir2-rs`，`CARGO_TARGET_DIR=E:/tmp/m2svr-target`，`--offline`）：
+  `fmt rc=0`（`10-fmt.txt`）/ `clippy --workspace --all-targets -D warnings rc=0`（`11-clippy.txt`）/
+  `cargo test --workspace --no-fail-fast rc=0`：**101 suites · 1216 passed · 0 failed · 22 ignored**
+  （`12-tests.txt`；比合并树基线 1213 多 3 = 本片 2 条新用例 + `check_...` 无关计数）/
+  `msgcodegen --check rc=0`（604；`13-msgcodegen.txt`）。
+- 边界：见 `158-boundary.txt`（净差量仅 `bins/game-svr/src/main.rs` + 本证据目录；
+  `src/ sql/ MirClient/ crates/protocol/ crates/storage/ tests/parity/m3/**` 空）。
+
+F. 未闭环（R 级，归 root 独占窗口，不因本片收卡）
+----------------------------------------------------------------------------------------------
+真机 ③b（同一位置两侧）：客户端点怪 ⇒ c2s `CM_HIT ≥1` 且客户端侧收到 `SM_STRUCK`/`SM_NOWDEATH`；
+两侧都要过 `--expect any`。本片只准备判据与窗口步，**未跑真机**（车道纪律：不起栈）。
+另：跨侧逐帧序/延时的 R 级对拍仍需窗口（B 的 200ms 延时差异在窗口 s2c 序里可能可见，须登记）。
+
+G. 复算命令
+----------------------------------------------------------------------------------------------
+    # 构造级判据
+    cd mir2-rs
+    CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr --bin game-svr --offline combat_downlink
+    # 攻击/伤害判据自检 + 窗口就绪门
+    cd mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+    python -I -B check_attack_observability.py --selftest
+    python -I -B window_handoff.py --selftest
+    python -I -B window_handoff.py --repo <本 worktree> --ref HEAD --check-dir . --plan --best-site \
+      --client-map-dir D:/MirClient-run/Map

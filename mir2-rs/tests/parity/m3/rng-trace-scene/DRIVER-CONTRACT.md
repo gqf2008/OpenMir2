@@ -114,6 +114,11 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
      （0 次 ⇒ `ANCHOR_SYMBOL_MISSING`；>1 次 ⇒ `ANCHOR_AMBIGUOUS`）。**判据不降级**：宿主 AI 调用点
      被删 / 被复制仍必红，只是把不稳定的行号换成稳定的唯一性，从根上消掉「别的车道合并 ⇒ 本卡假 RED」
      这一族。已接入 `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`anchors-freshness-selftest`）。
+
+  > **合并订正（2026-10-14，本片与链门车道的同一处修法并集）**：链门车道 `42d421188` 的收口是把
+  > 该行号**再钉一次**（`5665 → 5795`）——那是本片要消除的**成因**（第 6 次漂移正是它造成的假 RED）。
+  > 本片合并时取**根因**侧：main.rs 不再做行号锚（改符号唯一性），链门侧新增的 fmt 证据门与
+  > `.py` 登记下界（`≥23`）原样保留（不在本卡写集，未动）。行号锚仍保留于**稳定文件**。
 - **锚点覆盖面收口（2026-10-14 reviewer-5 M-1 / reviewer-6 M-1+M-2）**：旧口径有两处静默通道 ——
   ① 覆盖判定用「结尾 basename 匹配」⇒ **别的目录下的同名文件**会被误判 COVERED（既非
   `UNGUARDED_ANCHOR` 也不 `ANCHOR_DRIFT`）；② 同行**裸续引用**（同一条引用后面再跟一个冒号行号，

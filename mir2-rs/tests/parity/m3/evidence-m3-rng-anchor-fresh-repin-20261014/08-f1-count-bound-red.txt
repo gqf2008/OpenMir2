@@ -1,0 +1,23 @@
+# reviewer-6 F-1 收口：.py 登记项下界必须 == 实际登记数（并集后 = 23），否则既有 castle 锚门可被静默摘除
+
+$ grep -n 'endswith(".py")) >=' mir2-rs/tests/parity/m3/fixture_chain_gate.py
+414:           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 23)
+
+$ python -c '... 统计 SHARED_CHECKS 内 .py 登记数 ...'
+SHARED_CHECKS .py 登记数 = 23
+
+# ---- 改坏必红：只抽掉 castle 锚门两条 .py 登记（^\s*\("castle_anchor_(selftest|check)"）----
+$ python -c '... re.sub 删 castle_anchor_(selftest|check) 两行 ...'
+删行数 = 2
+抽掉后 .py 登记数 = 21 (< 23 ⇒ 计数牙必须 RED)
+$ python -I fixture_chain_gate.py selftest   # cwd=mir2-rs/tests/parity/m3
+  SELFTEST FAIL 主机门（.py）登记项 ≥23（castle + 行会/攻城 + 英雄/宠物 + 元宝寄售 + 任务 + 组队/交易 + markers 前缀 + 宝宝登记 + 白名单审计 + 行会战怪行为登记 + RNG 场景锚 + fmt 证据 各 selftest[/check]）
+SELFTEST RED: fixture_chain_gate selftest 39/40
+rc=1
+
+# ---- 还原 ----
+$ python -I fixture_chain_gate.py selftest   # 还原后
+SELFTEST GREEN: fixture_chain_gate selftest 40/40
+rc=0
+$ git diff --quiet -- mir2-rs/tests/parity/m3/fixture_chain_gate.py && echo 'worktree restored: git diff empty (rc=0)'
+worktree restored: git diff empty (rc=0)

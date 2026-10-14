@@ -1,0 +1,133 @@
+151-cross-map-site-plan.txt —— 片㉛ ③① 跨图密点窗口计划接线 + 选点「可站立 / 客户端带图」过滤
+卡 `openmir2-client-e2e-enter-gaps`（m2-svr / openmir2-worker-11 / 2026-10-14）
+回应 brief-m2svr-next 顶部 root 2026-10-14 00:4x 的 ③①「换怪密点（…或 MonGen 里密度高的图）」
+本片零起栈、零占端口（仅共享 MySQL 3306）、零生产语义改动；只在自身 worktree 写。
+====================================================================================================
+
+一句话：把片㉚ 登记为「未闭环」的 `--client-map-dir` 接线补上，并把两类**可离线预防的烧窗**做成机判 ——
+③b 选点若落在**别的图**（站位 SQL 写死 `MapName='0'`）或**墙上**（未过滤最密点），计划/门禁必须红。
+跨图选点（root ①「MonGen 里密度高的图」）现在能选、能写对站位 SQL、且 `PLAN_CONFORMANCE` 会核对
+「站位 SQL 图名 == 选点图」。
+
+A. 背景：三条已复现的假绿 / 未接线
+====================================================================================================
+1. **跨图站位 SQL 假绿（本片复现）**：旧实现
+   `window_handoff.py --plan-only --best-site --map-name D10071` 选到 D10071 的 `(17,21)`，却在 §1b
+   写死 `UPDATE … SET MapName='0', CX=17, CY=21 …`，而 `PLAN_CONFORMANCE=GREEN` ⇒ root 照抄会把
+   角色放到 **0 号图 (17,21)**（不是 D10071 的密点）= 白烧窗口。G4 的旧站位牙只查「有没有
+   `MapName`/`CX`/`CY`」，**不查图名是否与选点同图**。
+2. **选点未过「可站立 / 客户端带图」过滤（片㉚ 已登记未接线）**：`resolve_best_site` 调
+   `check_mongen_dense_points.py --best-point` 时**不传** `--map-dir/--client-map-dir`，即使片㉚ 已给
+   checker 加了这两层过滤 ⇒ 「未过滤最密点」可能落在墙上（真机 6 张图的站点在 §C）。
+3. **跨图 BEST 形态解析不到**：`check_mongen_dense_points.py --all-maps --best-point` 打的是
+   `BEST (D10071) (17,21) E=…`，而旧 `_BEST_RE` 只认 `BEST (x,y) E=…` ⇒ 跨图选点
+   `parse_best_point` 恒 `None`（fail-soft 静默跳过，root ① 的「密度高的图」用不上）。
+
+B. 本片改动（唯一代码文件 `window_handoff.py`；只读规划器，不复制第二份几何/判据）
+====================================================================================================
+1. `_BEST_RE` 支持跨图形态：`^BEST\s+(?:\((?P<map>[^()\s]+)\)\s+)?\((?P<x>-?\d+),(?P<y>-?\d+)\)\s+E=…`；
+   `parse_best_point` 返回值加 `"map"`（单图形态 ⇒ `None`）。
+2. `resolve_best_site` 返回三元组 `(site, site_map, note)`，新增 `all_maps`/`map_dir`/`client_map_dir`：
+   有目录就传 `--map-dir + --require-walkable`、`--client-map-dir + --require-client-map`；缺目录
+   **不静默**（note 里登记「未做该层过滤」）。`--all-maps` 时用跨图排行并回传**选点所在图名**。
+3. `plan_text` 新增 `site_map`/`site_none_map`（默认 `"0"`，向后兼容）：§1b/§1c 站位 SQL 写实际图名；
+   `site_map != "0"` 时计划内附**跨图告警**（须实拍客户端能进该图；MapInfo `NORECONNECT/DAY` 属性）。
+4. `position_sql_findings` 新增可选 `site/site_map/site_none/site_none_map`：命中该坐标的站位 UPDATE，
+   `MapName` 必须 == 选点图，否则红（点名「图名与选点不一致」）。
+5. `plan_conformance` 透传上述四参；`main()` 新增
+   `--best-site-all-maps` / `--client-map-dir`（默认 `D:/MirClient-run/Map`）/ `--site-none-map`，
+   并把解析出的 `site_map` 同时喂给 `plan_text` **与**`plan_conformance`（同一真实来源，不走两遍）。
+
+C. 真机读数（本机部署，命令 + 原始输出）
+====================================================================================================
+C-1 默认（map 0，本图选点）：`--plan-only --best-site`
+```
+# ③b 有怪点 site=605,578 (MapName=0) / ③a 反向点 site_none=291,666 (MapName=0) / view_range=12
+# ③b 本图最密点自动选取 BEST=605,578 E=12.681（check_mongen_dense_points.py --best-point，root ③①「换怪密点」）
+… -e "UPDATE mir2_db.characters SET MapName='0', CX=605, CY=578 WHERE ChrName='aaa';"
+… -e "UPDATE mir2_db.characters SET MapName='0', CX=291, CY=666 WHERE ChrName='aaa';"
+PLAN_CONFORMANCE=GREEN      rc=0
+```
+C-2 跨图（root ①「MonGen 里密度高的图」）：`--plan-only --best-site-all-maps`
+```
+# ③b 有怪点 site=17,21 (MapName=D10071) / ③a 反向点 site_none=291,666 (MapName=0) / view_range=12
+# ③b 全图最密点自动选取 BEST=17,21 map=D10071 E=59.533（check_mongen_dense_points.py --best-point，root ③①「换怪密点」）
+… -e "UPDATE mir2_db.characters SET MapName='D10071', CX=17, CY=21 WHERE ChrName='aaa';"
+#   ⚠ ③b 是**跨图**点（root ①「MonGen 里密度高的图」）：选点已过 tile=Walk + clientmap=yes
+#     过滤；起栈前仍须实拍客户端能进该图（MapInfo 属性 NORECONNECT/DAY 与客户端 .map 一致）。
+PLAN_CONFORMANCE=GREEN      rc=0
+```
+C-3 `--map-name D10071 --best-site`（= §A.1 的假绿复现路径）：现在写对图名
+```
+… -e "UPDATE mir2_db.characters SET MapName='D10071', CX=17, CY=21 WHERE ChrName='aaa';"
+… -e "UPDATE mir2_db.characters SET MapName='0', CX=291, CY=666 WHERE ChrName='aaa';"
+PLAN_CONFORMANCE=GREEN      rc=0
+```
+C-4 可站立过滤真牙齿（**未过滤最密点在墙上**）：`check_mongen_dense_points.py` 逐图扫出的
+「未过滤最密点 != 过滤后最密点」共 **6** 张图（脚本见 §D-M2）：
+```
+D515  (73,22)  tile=oor      -> (19,24)
+D711  (255,306) tile=LowWall -> (287,286) tile=Walk
+D712  (255,306) tile=LowWall -> (287,286) tile=Walk
+D713  (255,306) tile=LowWall -> (287,286) tile=Walk
+D714  (255,306) tile=LowWall -> (153,237)
+F013  (25,25)  tile=HighWall -> (29,15)
+```
+⇒ 接线前 `resolve_best_site("D711")` 会选 `(255,306)`（`tile=LowWall`）。
+
+D. 改坏必红（三条，变异只在 `E:/tmp/m2svr-burst19/mut/` 复制件；仓内 `window_handoff.py`
+   sha256 `9347e0545f479d77689fae63eece7486f16cb2e9c8677d4af6a80f6bb9e39d25` 前后一致）
+====================================================================================================
+M1 = `plan_text` 把 ③b 图名写死 `'0'`（= §A.1 缺陷本体）；`--best-site-all-maps`
+     ⇒ 选点 `D10071 (17,21)` 而站位 SQL `MapName='0'`：
+```
+RED 站位 SQL 的 ③b 图名与选点不一致：MapName='0' != 选点图 'D10071'（把角色放到别的图 = 白烧窗口）
+PLAN_CONFORMANCE=RED      rc=1
+```
+M2 = `resolve_best_site` 删掉 `--map-dir/--require-walkable`（+ clientmap）过滤；真机 map `D711`：
+```
+fixed    site=287,286 …     （过滤后，tile=Walk）
+mutated  site=255,306 …     （未过滤，tile=LowWall）
+```
+M3 = `parse_best_point` 不回传 `map`（跨图形态图名丢）；`--selftest`：
+```
+SELFTEST FAILED (79/80)
+[FAIL] selftest parse-best-point-allmaps
+```
+（完整原始输出见 `152-redcheck-cross-map-site-plan.txt`。）
+
+E. 窗口就绪门不受影响（G1..G4 / G2 仍绿）
+====================================================================================================
+```
+$ python -I -B window_handoff.py --selftest
+SELFTEST OK (80/80)                      rc=0     （片㉚ 74 → 80：新增 6 条）
+$ python -I -B window_handoff.py --repo <本 worktree> --ref HEAD --target-dir E:/tmp/m2svr-target --with-csharp
+OK G1 Rust 窗口前置门 GREEN（R1..R5） / OK G3 C# 抓包拓扑前置门 GREEN
+WINDOW_READY=YES / RESULT: GREEN         rc=0
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --target-dir E:/tmp/m2svr-window-target --with-csharp
+WINDOW_READY=YES / RESULT: GREEN         rc=0     （root 专用构建源，仍是推荐开窗路径）
+```
+
+F. 向后兼容（map 0 默认计划与旧实现逐行对照）
+====================================================================================================
+`git show HEAD:…/window_handoff.py`（旧）与新脚本同参跑 `--plan-only --best-site` 做 `diff`：**只有两行头部文本**
+变化（站点行补 `(MapName=0)`、说明补「本图」并去一个空格）；**站位 SQL、构建块、抓包拓扑、teardown、
+判据命令全部逐字节相同**。⇒ 默认路径零行为变化。
+
+G. 仍未闭环 / 登记（不静默）
+====================================================================================================
+* 卡级 DoD③ 的 **R 级真机两侧同框对照** + 「屏幕见怪并能攻击造成伤害」仍归 **root 独占窗口**
+  （本片只把「换怪密点」的选点/站位/过滤机判化，不据此收卡；`window_required=false`）。
+* **跨图候选的窗口事实**（MapInfo `NORECONNECT/DAY`、客户端 `.map` 与服务端图尺寸是否一致）仍须
+  窗口实拍；本片只保证「选点可站立 + 客户端带图（存在性）+ 站位 SQL 图名正确」这三层。
+  默认仍是 map 0（`605,578`，E=12.681，已有先例），跨图（`D10071`）为可选 `--best-site-all-maps`。
+* C# 侧世界数据能否经代理下来、怪物侧 `ViewRange` 子类覆盖、`RM_DISAPPEAR` 无编码器等既有登记不变。
+
+H. 涉及文件
+====================================================================================================
+  改动（唯一代码文件）：`window_handoff.py`
+  新增：本文件 + `152-redcheck-cross-map-site-plan.txt` + `153-gates.txt` + `154-boundary.txt`
+  改动：`README.md`（§㉛）+ `SHA256SUMS.txt`（重生成）
+  只读引用：`147-site-walkability-gate.txt`（片㉚ 登记「client-map-dir 未接线」）、
+            `check_mongen_dense_points.py`、`E:/MirServer/M2GameSvr/Envir/MonGen.txt`、
+            `E:/MirServer/M2GameSvr/Map`、`D:/MirClient-run/Map`
