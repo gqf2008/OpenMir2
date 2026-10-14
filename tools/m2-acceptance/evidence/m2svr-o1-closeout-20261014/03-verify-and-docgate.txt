@@ -1,0 +1,17 @@
+# 03 — 修复后复核（离线，零端口）
+# cwd = 仓库根（m2-svr worktree）
+
+$ python -I tools/evidence-hash/verify_sha256sums.py tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014
+GREEN tools\m2-acceptance\evidence\m2svr-client-ability-layout-plumb-20261014\SHA256SUMS.txt  [repo 口径]  OK 9/9
+rc=0
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014
+EOLCHECK GREEN 10/10 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
+
+$ python -I -B tools/m2-acceptance/check_client_ability_layout_doc_counts.py
+  [OK  ] D4 README 改坏必红 id 集 == 证据 03 [FAIL] 集（顺序无关）
+        doc=['②a', '②c', '③a', '⑤b'] evidence=['②a', '②c', '③a', '⑤b']
+SUMMARY total=5 ok=5 fail=0
+CLIENT_ABILITY_LAYOUT_DOC_COUNTS GREEN
+rc=0

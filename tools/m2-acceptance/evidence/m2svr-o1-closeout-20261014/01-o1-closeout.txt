@@ -1,0 +1,24 @@
+# 01 — reviewer-5 O-1 收口（非阻塞 Minor：证据叙述中间态订正）
+#
+# 来源：walgit review entry a1b16f3d（openmir2-reviewer-5 @ reviewed_head aff1f7c17）findings O-1；
+#       其中 07/08 由 reviewer-5 逐字点名。
+#
+# 问题（reviewer-5 原文口径）：
+#   - 07-four-gates-closeout.txt 末行记 `SHA256SUMS ... GREEN 8/8`；而 06/07/08 + 清单写入后
+#     该目录实际为 9/9（本轮独立跑 verify_sha256sums.py = GREEN 9/9，与其一致）。
+#   - 08-boundary.txt 记的 `git diff --stat`（6 文件）与 `git status --porcelain` 是**写 08 自身之前**
+#     的中间态快照，未含新增的 06/07/08 与 check_client_ability_layout_doc_counts.py。
+#
+# 判定：纯证据叙述/中间态读数；不影响任何判据（漂移门只绑定 README §0b.4）。
+#
+# 改前 → 改后：
+#   tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/07-four-gates-closeout.txt 末行：
+#     `GREEN 8/8（写完清单后复跑，见下）` → `GREEN 9/9 rc=0（写完 06/07/08 + 清单后复跑）`
+#   tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/08-boundary.txt 全表：
+#     6 文件中间态 → 10 路径最终态（base 567c4e390 → head 0c3561629；
+#     `10 files changed, 242 insertions(+), 23 deletions(-)`）
+#   tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/SHA256SUMS.txt：
+#     随 07/08 内容重录（9 行，repo 口径）。
+#
+# 未改：README.md / check_client_ability_layout_doc_counts.py / check_client_ability_layout_plumb.ps1
+#       / 02-selftest.txt / 03-redcheck.txt / 06-readme-doc-counts.txt；零 .rs。
