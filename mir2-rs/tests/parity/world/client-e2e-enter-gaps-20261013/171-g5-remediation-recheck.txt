@@ -1,0 +1,72 @@
+171 — G5 修复块「换替身」复跑命令配对（片㊱，卡 openmir2-client-e2e-enter-gaps）
+==================================================================================
+背景（实测、非推测）：G5 RED 的修复块有两条修法：① 换成入库替身 client-e2e-window.fixed.sh.txt（repo=/e/tmp/m2svr-window-origin）；
+② 手改活脚本 repo=/tgt= 两行（repo= 变成**本计划 --repo**）。片㊱ 之前两条路共用**同一条**复跑命令
+--repo <本计划构建源>，于是：走 ① 把替身 cp 成活脚本后，照修复块复跑仍 RED ⇒ 修复块自相矛盾/死循环，
+对一次性窗口是烧窗风险（root 会以为没修好而反复折腾）。
+
+重现现场：把入库替身 cp 成一个「活脚本」路径，模拟 root 已执行 ① 之后的状态。
+  live 脚本两行： repo=/e/tmp/m2svr-window-origin  tgt='E:\tmp\m2svr-window-target'
+
+========================= BEFORE（工具 HEAD = 2af5a6a52） =========================
+--- B1) 计划修复块（--repo=<本 worktree>，--window-script=<替身活脚本>） ---
+# ==== 修复块：G5 RED（root 实际会跑的一键脚本 ≠ 本计划的构建源） ====
+# root 现跑的脚本：E:/tmp/m2svr-burst22/before/live-standin.sh
+# 它的 repo=/tgt= 与本计划 -repo/--target-dir 不一致（或指共享主检出）⇒ 直接跑它会构建另一棵树
+# / 从旧 exe 起栈，白烧一次性窗口。本仓已备逐字替身（仅 2 行 diff；bash -n OK）：
+#   cp E:/tmp/m2svr-burst22/before/client-e2e-window.fixed.sh.txt /e/tmp/openmir2-watch/client-e2e-window.sh
+# 或把该脚本里的 repo= / tgt= 两行改成上面首行打印的构建源（repo=/tgt=）；改完复跑本门至 GREEN：
+#   python -I -B E:/tmp/m2svr-burst22/before/window_handoff.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr --ref HEAD
+
+
+--- B2) 照修复块复跑（--repo=<本 worktree>）⇒ 仍 RED（死循环复现） ---
+RED G5 root 会跑的窗口脚本 repo=/e/tmp/m2svr-window-origin != 本计划构建源 --repo=E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr ⇒ 直接跑它会构建另一棵树（窗口 PREREQ_RED / 白烧）
+WINDOW_READY=NO
+RESULT: RED
+    rc=1
+
+--- B3) 正确复跑源（--repo=/e/tmp/m2svr-window-origin --target-dir=E:\tmp\m2svr-window-target）⇒ GREEN ---
+     （证 B2 的 RED 是 --repo 取错，不是环境）
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+    rc=0
+
+=========================== AFTER（片㊱） ===========================
+--- A1) 同一条计划的修复块（两条路各配各的复跑命令 + 显式警示） ---
+# ==== 修复块：G5 RED（root 实际会跑的一键脚本 ≠ 本计划的构建源） ====
+# root 现跑的脚本：E:/tmp/m2svr-burst22/before/live-standin.sh
+# 它的 repo=/tgt= 与本计划 -repo/--target-dir 不一致（或指共享主检出）⇒ 直接跑它会构建另一棵树
+# / 从旧 exe 起栈，白烧一次性窗口。**两条修法任选一条、别混着用**（混用会让本门一直 RED）；
+# 每条后面各带**与它配套**的复跑命令 —— ① 用替身自己的构建源，② 才用本计划的构建源：
+#   ① 换成入库替身（推荐；替身与 root 现脚本只差 repo=/tgt= 两行，bash -n OK）：
+#        cp E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr/mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt /e/tmp/openmir2-watch/client-e2e-window.sh
+#      替身自带构建源 repo=/e/tmp/m2svr-window-origin tgt=E:\tmp\m2svr-window-target；换完**用替身的构建源**复跑本门至 GREEN：
+#        python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr/mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py --repo /e/tmp/m2svr-window-origin --target-dir E:\tmp\m2svr-window-target --ref HEAD
+#      （⚠ 别拿 ② 的 --repo 去复跑 ①：替身的 repo= 是它自己那份，用别的 --repo 会一直 RED）
+#   ② 手改活脚本的 repo= / tgt= 两行（改成上面首行打印的构建源）；改完用**本计划构建源**复跑至 GREEN：
+#        repo=E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr   tgt='E:\tmp\m2svr-window-target'
+#        python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr/mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr --ref HEAD
+
+
+--- A2) 照 ① 的复跑命令（--repo=/e/tmp/m2svr-window-origin --target-dir=E:\tmp\m2svr-window-target）⇒ GREEN ---
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+    rc=0
+
+--- A3) 向后兼容：推荐流程（--repo=专用源 + 活脚本已是替身）本来就 GREEN，片㊱ 不改它 ---
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+
+--- A4) 工具自检：BEFORE 95/95 ⇒ AFTER 98/98（+3 牙：standin-recheck / edit-recheck / distinct） ---
+BEFORE(window_handoff.py @2af5a6a52): SELFTEST OK (95/95)
+AFTER (片㊱):                      SELFTEST OK (98/98)
+
+工具件 sha256：
+  7c001abf33fe8d9b01fb8ba66fd905d2124bbae6abdc8e8d24d574fe897b8f74 *E:/tmp/m2svr-burst22/before/window_handoff.py
+  f7037eb7e8cef62da2b656b1263c21d483829af23f8479dc626eab763d36dfaf *E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr/mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py

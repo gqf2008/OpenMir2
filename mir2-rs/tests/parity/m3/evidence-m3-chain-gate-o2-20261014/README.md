@@ -88,3 +88,12 @@ def _drop_one_guard(guard_markers):
    需 `mir2-rs/tests/parity/world/**` 写集（非本车道）⇒ 本片只接 `selftest` 向，未接 `--strict`。
 2. 卡级真机 DoD（⑧-6/⑧-10/⑨-5 各 READY 夹具 `run_*.ps1` 两侧同序列 diff=0）仍需
    `openmir2-m3-clock-injection` + owner 独占窗口；本片不涉、不据此收卡。
+
+## 追改登记（retro-fix record，2026-10-14）
+
+> 卡 `openmir2-m3-fixture-chain-gate`；reviewer-6 `090d0cc4`（@`f114a5e90`）**O-1** 的收口片 `becf075db`。
+> 本包 `20-gate-fmt.txt` 原为 **0 B（空）**，追改为自描述体例（`$ cargo fmt --all -- --check` + `rc=0`）；
+> `SHA256SUMS.txt` 同步按**仓库口径（LF 归一 = git blob 字节）**重记。
+> **方向为增强、非篡改**（原空件不能自证 fmt 绿）。5 包清单与前后对照见
+> `../evidence-m3-fixture-fmt-evidence-20261014/README.md` §1。
+> 本次 README 追记（O-1 的「包内登记」）同样在该约定下重记本包清单。

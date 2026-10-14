@@ -1,0 +1,60 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.12s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-e3b807fec57e6cfc.exe)
+
+running 2 tests
+test smframe::tests::delitem_field_layout_and_tail_passthrough ... ok
+test slave::tests::deleted_amulet_body_encodes_delitem_with_zero_dura ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 198 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-d40510517c77a420.exe)
+
+running 1 test
+test tests::spell_cmd_summon_exhausted_amulet_emits_delitem ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 211 filtered out; finished in 0.01s
+
+     Running tests\clock_inject.rs (E:/tmp/openmir2-m3hp-target\debug\deps\clock_inject-3eeaee9757c7e973.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests\deal_try_oracle_anchors.rs (E:/tmp/openmir2-m3hp-target\debug\deps\deal_try_oracle_anchors-b25b1e4975fe3cbb.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests\goldsales_load.rs (E:/tmp/openmir2-m3hp-target\debug\deps\goldsales_load-ec66d2446415a18f.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests\merchant_rng_trace.rs (E:/tmp/openmir2-m3hp-target\debug\deps\merchant_rng_trace-435d0eb79ad09346.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests\monitems_attach.rs (E:/tmp/openmir2-m3hp-target\debug\deps\monitems_attach-3955c3080f67d91d.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests\relay.rs (E:/tmp/openmir2-m3hp-target\debug\deps\relay-6ae57f01ca87322a.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+     Running tests\seed_inject.rs (E:/tmp/openmir2-m3hp-target\debug\deps\seed_inject-363c35bbd9f9725e.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+CARGO_TEST_RC=0

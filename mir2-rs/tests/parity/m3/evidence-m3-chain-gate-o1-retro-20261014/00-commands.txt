@@ -1,0 +1,32 @@
+# evidence-m3-chain-gate-o1-retro-20261014 —— 命令清单与原始读数
+
+## 本片做了什么
+
+- 卡 `openmir2-m3-fixture-chain-gate`；收口 reviewer-6 `090d0cc4`（@reviewed_head `f114a5e90`）**O-1** 的残余建议：
+  「5 个被追改证据包在 merge 时的字节与当前 head 不同，建议下次动这些文件时在**包内 README 或 whitelist** 追一行『追改原因+日期』」。
+- 本片在 5 个包各自的 `README.md` 追加「追改登记（retro-fix record，2026-10-14）」段，并各自重记 `SHA256SUMS.txt`。
+- 零 `.rs`/`.toml`/`.ps1`/`.cs`；边界全在 `mir2-rs/tests/parity/m3/**`。
+
+## 命令（全部 cwd = 本 worktree；零起栈/零端口）
+
+```sh
+# 1) 追记 5 个 README 后，按仓库口径（LF 归一 = git blob）重记各自清单
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/<pkg>
+
+# 2) 逐包复核 + EOL
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/<pkg>
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/<pkg>
+
+# 3) 链深检门 + fmt 证据门（新门）
+python -I mir2-rs/tests/parity/m3/fixture_chain_gate.py selftest
+python -I mir2-rs/tests/parity/m3/fixture_chain_gate.py check
+python -I mir2-rs/tests/parity/m3/m3_fixture_fmt_evidence_gate.py selftest
+python -I mir2-rs/tests/parity/m3/m3_fixture_fmt_evidence_gate.py check
+python -I mir2-rs/tests/parity/m3/m3_fixture_fmt_evidence_gate.py mutation
+
+# 4) 四门禁（cwd=mir2-rs, CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo run -p msgcodegen -- --check
+```

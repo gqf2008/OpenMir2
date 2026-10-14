@@ -1,0 +1,107 @@
+# 01 — oracle 锚（行号为在本仓库 src/ 实测）
+
+## A. 效果体：MagicBase.UseAmulet（src/M2Server/Magic/MagicBase.cs）
+
+```
+109:        public static void UseAmulet(PlayObject playObject, byte nCount, byte nType, short idx)
+110:        {
+111:            if (playObject == null)
+112:            {
+113:                return;
+114:            }
+115:            ushort duration = (ushort)(nCount * 100);
+116:            if (playObject.UseItems[idx] != null && playObject.UseItems[idx].Dura > duration)
+117:            {
+118:                playObject.UseItems[idx].Dura -= duration;//减少护身符持久即数量
+119:                playObject.SendMsg(playObject, Messages.RM_DURACHANGE, idx, playObject.UseItems[idx].Dura, playObject.UseItems[idx].DuraMax, 0);
+120:            }
+121:            else
+122:            {
+123:                playObject.UseItems[idx].Dura = 0;
+124:                playObject.SendDelItems(playObject.UseItems[idx]);
+125:                playObject.UseItems[idx].Index = 0;
+126:            }
+127:        }
+```
+
+要点：
+- `:116` 的距离门是**严格 `>`** ⇒ `Dura == nCount*100` 走 else（扣光支）。配合 `CheckAmulet`
+  的 `Round(Dura/100) >= count`（`MagicBase.cs:47-105`）⇒ 扣光支的可达域 = `count*100 >= Dura >= (count-0.5)*100`。
+- **语句序**：`:123` 先把 `Dura` 置 0，**再** `:124` `SendDelItems` ⇒ 帧内 `Dura` **恒 0**；
+  `:125` 最后清 `Index`（帧构造用的 `Index`/`MakeIndex`/`DuraMax`/`Desc` 仍是原件）。
+
+## B. 帧构造：PlayObject.SendDelItems（src/M2Server/Player/PlayObject.Base.cs）
+
+```
+1648:        public void SendDelItems(UserItem userItem)
+1649:        {
+1650:            StdItem stdItem = SystemShare.ItemSystem.GetStdItem(userItem.Index);
+1651:            if (stdItem != null)
+1652:            {
+1653:                ClientItem clientItem = new ClientItem();
+1654:                SystemShare.ItemSystem.GetUpgradeStdItem(stdItem, userItem, ref clientItem);
+1655:                clientItem.Item.Name = CustomItemSystem.GetItemName(userItem);
+1656:                clientItem.MakeIndex = userItem.MakeIndex;
+1657:                clientItem.Dura = userItem.Dura;
+1658:                clientItem.DuraMax = userItem.DuraMax;
+1659:                if (stdItem.StdMode == 50)
+1660:                {
+1661:                    clientItem.Item.Name = clientItem.Item.Name + " #" + userItem.Dura;
+1662:                }
+1663:                ClientMsg = Messages.MakeMessage(Messages.SM_DELITEM, ActorId, 0, 0, 1);
+1664:                SendSocket(ClientMsg, EDCode.EncodeBuffer(clientItem));
+1665:            }
+1666:        }
+```
+
+要点：
+- 头字段位（`Messages.MakeMessage(ident, recog, param, tag, series)`）：`Recog = ActorId`、`Param = 0`、
+  `Tag = 0`、`Series = 1`。
+- 尾 = `EDCode.EncodeBuffer(clientItem)` = `Encode(ClientItem.WritePacket())`（与 `SM_BAGITEMS` /
+  `SendAddItem` 同编码器；本仓 `bins/game-svr/src/itemwire.rs::encode_client_item`）。
+- **与 `SendAddItem`（`PlayObject.Base.cs:198-227`）的差异**：`SendDelItems` **不做**
+  `if (M2Share.StdModeMap.Contains(item.StdMode)) { Item.Shape = Desc[8]==0 ? 0 : 130; }` 的 Shape 改写；
+- 立即帧：`SendSocket` 直写（`BaseObject.Socket.cs`），**不进** `MsgQueue` ⇒ 无优先级/出队序问题。
+
+## C. 消息号
+
+```
+src/OpenMir2/Messages.cs:222:        public const int SM_DELITEM = 202;
+```
+
+Rust 侧同值（本层自持常量，不依赖 mir2-protocol）：
+```
+mir2-rs/crates/protocol/src/messages.rs:217:pub const SM_DELITEM: u16 = 202;
+```
+
+## D. 三个召唤技能的触发点（src/M2Server/Magic/MagicManager.cs）
+
+```
+319: case MagicConst.SKILL_SKELLETON:      // 17
+323:     if (MagicBase.CheckAmulet(playObject, 1, 1, ref nAmuletIdx))
+325:         MagicBase.UseAmulet(playObject, 1, 1, nAmuletIdx);
+450: case MagicConst.SKILL_SINSU:          // 30
+452:     if (MagicBase.CheckAmulet(playObject, 5, 1, ref nAmuletIdx))
+454:         MagicBase.UseAmulet(playObject, 5, 1, nAmuletIdx);
+462: case MagicConst.SKILL_ANGEL:          // 41
+464:     if (MagicBase.CheckAmulet(playObject, 2, 1, ref nAmuletIdx))
+466:         MagicBase.UseAmulet(playObject, 2, 1, nAmuletIdx);
+```
+
+Rust 对应：`crates/world/src/magic.rs:492 amulet_requirement`（17⇒(1,1) 走 `13..=19` 支、30⇒(5,1)、
+41⇒(2,1)）、`:394 AmuletUse` / `:407 use_amulet`（纯结果）；`bins/game-svr/src/slave.rs::cast_slave_spell`
+只在 `CheckAmulet` 命中后产出 `AmuletUse`。
+
+## E. ClientItem 编码（复用既有锚，未改）
+
+```
+src/OpenMir2/Packets/ClientPackets/ClientItem.cs:22-84   (WritePacket 字段序)
+src/OpenMir2/EDCode.cs:187                               (EncodeBuffer = EncryptUtil.Encode(GetBuffer()))
+mir2-rs/bins/game-svr/src/itemwire.rs:83                 (encode_client_item，M3⑤ 已合)
+```
+
+## F. 已知未建模（照搬既有登记，不在本片差量内）
+
+- `GetUpgradeStdItem` 的 desc 升级差量（`GameItemSystem.cs` 大 switch）：`itemwire.rs` 既有登记；
+  `Desc` 全 0 的物品（新号默认物品 / 无升级护身符）逐字节等价。
+- `CustomItemSystem.GetItemName` 的 `Desc[13]==1` 自定义名：`bag::item_display_name` 返回空串（既有登记）。

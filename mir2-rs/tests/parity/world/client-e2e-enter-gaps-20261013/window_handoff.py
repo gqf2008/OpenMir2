@@ -84,6 +84,11 @@ CSHARP_PREFLIGHT = "check_csharp_capture_preflight.py"
 # 片㉝：root 实际会跑的一键窗口脚本（默认；文件不存在 ⇒ 干净检出上跳过 G5，不当 RED）。
 DEFAULT_WINDOW_SCRIPT = os.environ.get(
     "MIR2_WINDOW_SCRIPT", "E:/tmp/openmir2-watch/client-e2e-window.sh")
+# 片㊱：入库的逐字替身（㉘，仅 `repo=`/`tgt=` 两行 diff）。G5 RED 修复块的「换成替身」一路
+# 必须用**替身自己的** repo=/tgt= 复跑，否则 `cp` 换完后门仍 RED（见证据 171/172）。
+STANDIN_SCRIPT_NAME = "client-e2e-window.fixed.sh.txt"
+STANDIN_SCRIPT = os.environ.get(
+    "MIR2_WINDOW_STANDIN", os.path.join(HERE, STANDIN_SCRIPT_NAME))
 # 共享主检出（rev 车道的 worktree）；窗口构建源**不得**是它。
 SHARED_MAIN_CHECKOUT_DEFAULT = os.environ.get(
     "MIR2_SHARED_CHECKOUT", "E:/Users/gxh/Documents/GitHub/OpenMir2")
@@ -169,6 +174,29 @@ def _norm_path(path: str) -> str:
     if m:
         p = f"{m.group('drive')}:/{m.group('rest')}"
     return p.rstrip("/").lower()
+
+
+def standin_script_info(path: str = "") -> dict:
+    """入库替身 `client-e2e-window.fixed.sh.txt` 的构建源（片㊱）。
+
+    返回 `{"path", "repo", "tgt"}`；替身文件不存在 / 解析不到 ⇒ `repo`/`tgt` 为 `None`。
+    用途：G5 RED 修复块里「换成替身」这条路的**配套复跑命令**必须用**替身的** `repo=/tgt=`，
+    不能拿本计划的 `--repo` 去复跑 —— 替身的 `repo=/tgt=` 与计划可以不同（片㊱ 之前就踩到：
+    `cp` 换完替身后按修复块的 `--repo <本计划>` 复跑，G5 仍 RED ⇒ 修复块自相矛盾/死循环，
+    见证据 `171-g5-remediation-recheck.txt` / `172-redcheck-g5-remediation-recheck.txt`）。
+    """
+    p = path or STANDIN_SCRIPT
+    out: dict = {"path": p, "repo": None, "tgt": None}
+    try:
+        if not os.path.isfile(p):
+            return out
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            parsed = parse_window_script(fh.read())
+    except OSError:
+        return out
+    out["repo"] = parsed["repo"]
+    out["tgt"] = parsed["tgt"]
+    return out
 
 
 def window_script_findings(
@@ -572,13 +600,23 @@ def plan_text(
     if live_script_stale:
         _here_fwd = HERE.replace("\\", "/")
         _wh_fwd = os.path.join(HERE, "window_handoff.py").replace("\\", "/")
+        _si = standin_script_info()
         A("# ==== 修复块：G5 RED（root 实际会跑的一键脚本 ≠ 本计划的构建源） ====")
         A(f"# root 现跑的脚本：{window_script or DEFAULT_WINDOW_SCRIPT}")
         A("# 它的 repo=/tgt= 与本计划 -repo/--target-dir 不一致（或指共享主检出）⇒ 直接跑它会构建另一棵树")
-        A("# / 从旧 exe 起栈，白烧一次性窗口。本仓已备逐字替身（仅 2 行 diff；bash -n OK）：")
-        A(f"#   cp {_here_fwd}/client-e2e-window.fixed.sh.txt /e/tmp/openmir2-watch/client-e2e-window.sh")
-        A("# 或把该脚本里的 repo= / tgt= 两行改成上面首行打印的构建源（repo=/tgt=）；改完复跑本门至 GREEN：")
-        A(f"#   python -I -B {_wh_fwd} --repo {repo or '(未给 --repo)'} --ref {ref}")
+        A("# / 从旧 exe 起栈，白烧一次性窗口。**两条修法任选一条、别混着用**（混用会让本门一直 RED）；")
+        A("# 每条后面各带**与它配套**的复跑命令 —— ① 用替身自己的构建源，② 才用本计划的构建源：")
+        A("#   ① 换成入库替身（推荐；替身与 root 现脚本只差 repo=/tgt= 两行，bash -n OK）：")
+        A(f"#        cp {_here_fwd}/{STANDIN_SCRIPT_NAME} /e/tmp/openmir2-watch/client-e2e-window.sh")
+        if _si["repo"] and _si["tgt"]:
+            A(f"#      替身自带构建源 repo={_si['repo']} tgt={_si['tgt']}；换完**用替身的构建源**复跑本门至 GREEN：")
+            A(f"#        python -I -B {_wh_fwd} --repo {_si['repo']} --target-dir {_si['tgt']} --ref {ref}")
+            A("#      （⚠ 别拿 ② 的 --repo 去复跑 ①：替身的 repo= 是它自己那份，用别的 --repo 会一直 RED）")
+        else:
+            A("#      ⚠ 本机取不到替身的 repo=/tgt=（文件缺失/形态变了）⇒ 先按 ㉘ 生成替身，或直接走 ② 手改。")
+        A("#   ② 手改活脚本的 repo= / tgt= 两行（改成上面首行打印的构建源）；改完用**本计划构建源**复跑至 GREEN：")
+        A(f"#        repo={repo or '(未给 --repo)'}   tgt='{tgt_win}'")
+        A(f"#        python -I -B {_wh_fwd} --repo {repo or '(未给 --repo)'} --ref {ref}")
         A("")
     A("# 0) 前置：端口/进程（5000/5100/5500/5600/5700/6000/7000/7100/7200 全 DOWN；仅共享 3306 可 UP）")
     A("#    起栈禁接管道（禁 | tee/tail/head/grep，会把调用挂死）；一律 > <log> 2>&1")
@@ -1372,6 +1410,21 @@ def selftest() -> int:
         chk("plan-g5-remediation",
             "G5 RED" in _g5_plan and "client-e2e-window.fixed.sh.txt" in _g5_plan)
         chk("plan-g5-no-remediation", "G5 RED" not in _g5_plan_ok)
+        # 片㊱：修复块两条路各配各的复跑命令 —— ①「换替身」必须用**替身自己的** repo/tgt
+        # （拿本计划的 --repo 去复跑 ① ⇒ `cp` 换完替身后 G5 仍 RED，修复块自相矛盾/死循环）；
+        # ②「手改活脚本」才用本计划的 --repo。两行都在、且不得互相串。
+        _si = standin_script_info()
+        chk("plan-g5-standin-recheck",
+            bool(_si["repo"] and _si["tgt"])
+            and f"--repo {_si['repo']} --target-dir {_si['tgt']} --ref HEAD" in _g5_plan,
+            f"standin={_si}")
+        chk("plan-g5-edit-recheck", "--repo R --ref HEAD" in _g5_plan)
+        # 死循环守卫：① 的复跑行（= 含替身 repo 且是 `--repo` 复跑命令的那行）必须带 --target-dir。
+        _standin_lines = [l for l in _g5_plan.splitlines()
+                          if _si["repo"] and _si["repo"] in l and "--repo" in l]
+        chk("plan-g5-standin-recheck-distinct",
+            bool(_standin_lines) and all("--target-dir" in l for l in _standin_lines),
+            " | ".join(_standin_lines))
 
     print(f"SELFTEST {'OK' if ok == total else 'FAILED'} ({ok}/{total})")
     return 0 if ok == total else 1

@@ -1,0 +1,49 @@
+# 04 — 边界 / 纪律 / 端口 / 残留物
+
+base = `refs/heads/master` = walgit/master = origin/master = `9edfc745d48ec7edafcbcb9da3d9a6a0c19073ad`
+head = 本分支 `worktree-m3-pet-slave-amulet-delitem` 的证据提交（= patch head）。
+
+## 冻结面（必须为空）
+
+```
+git diff --name-only 9edfc745d <head> -- src sql MirClient                              # 空
+git diff --name-only 9edfc745d <head> -- mir2-rs/crates/protocol mir2-rs/crates/storage # 空
+```
+
+- `src/`（C# oracle）/ `sql/` / `MirClient` 零改动。
+- 接口冻结线 `crates/protocol` / `crates/storage` 零改动（`SM_DELITEM` 常量本已存在，未改）。
+
+## 净差量
+
+```
+mir2-rs/bins/game-svr/src/main.rs    | 183 ++++++++++++++++++++++++++++++++++-
+mir2-rs/bins/game-svr/src/slave.rs   | 132 ++++++++++++++++++++++++-
+mir2-rs/bins/game-svr/src/smframe.rs |  27 ++++++
+3 files changed, 335 insertions(+), 7 deletions(-)
++ mir2-rs/tests/parity/m3/evidence-m3-pet-slave-amulet-delitem-20261014/**（证据 17 件：16 件入 SHA256SUMS + SHA256SUMS 自身）
+   self-check：verify --check-extra = OK 16/16；eolcheck = GREEN 17/17
+```
+
+分支基点：直接从 `9edfc745d` 分出，**不含**本车道尚未合入的宝宝叛变帧面补丁
+`86c78daee`（卡 `openmir2-m3-pet-slave-masterdie-wire`）——两者写集（smframe/main 的不同区域）
+不相交，故独立交付、互不依赖。
+
+## 纪律
+
+- **未**改共享主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2`（HEAD 仍 `ad0592b19`，`git status` 干净）；
+- **未**改他人 worktree/分支；**未**动 `src/`(oracle) / `sql/` / `MirClient`；
+- **未** merge、**未**自签 review（本卡 review 待**非作者** principal）；
+- 本 worktree 本地 `refs/heads/master` 仍缓冲在 `ad0592b19`（与 walgit/master 分叉），按纪律未移动。
+
+## 端口 / 真机
+
+- **零起栈、零占端口**：M2 九端口（5000/5100/5500/5600/6000/7000/7100/7200 等）全 DOWN；
+  仅既有的 3306 / 8081 在听。
+- 真机 DoD 未跑（tier=L 不占窗口），见 `03-tests.txt` §4。
+
+## 残留物清单
+
+- `E:/tmp/openmir2-m3hp-target`（隔离 cargo target，保留复用）；
+- `E:/tmp/m3hp-t57/**`（门禁/红检/变异脚本中间输出与 `amulet.patch`，已复刻入库到证据目录，可删）；
+- 分支 `worktree-m3-pet-slave-amulet-delitem` 已 push walgit+origin，**未** merge（等非作者 review）；
+- worktree `.claude/worktrees/m3hp` 保留（本线在用）。

@@ -67,3 +67,12 @@ fail-closed 表 ⇒ 在 **master 上**该门恒 RED ⇒ 常跑的 `fixture_chain
    owner 独占窗口）**不在本片范围**，卡保持 `in-progress`。
 3. `evidence-m3-hero-pet-anchor-20261014/08-gate-test.txt` 为分支上原始转录（无汇总行），
    README/`00-commands.txt` 现标注为**合并树读数**（1200）。
+
+## 追改登记（retro-fix record，2026-10-14）
+
+> 卡 `openmir2-m3-fixture-chain-gate`；reviewer-6 `090d0cc4`（@`f114a5e90`）**O-1** 的收口片 `becf075db`。
+> 本包 `08-gate-fmt.txt` 原为 **0 B（空）**，追改为自描述体例（`$ cargo fmt --all -- --check` + `rc=0`）；
+> `SHA256SUMS.txt` 同步按**仓库口径（LF 归一 = git blob 字节）**重记。
+> **方向为增强、非篡改**（原空件不能自证 fmt 绿）。5 包清单与前后对照见
+> `../evidence-m3-fixture-fmt-evidence-20261014/README.md` §1。
+> 本次 README 追记（O-1 的「包内登记」）同样在该约定下重记本包清单。

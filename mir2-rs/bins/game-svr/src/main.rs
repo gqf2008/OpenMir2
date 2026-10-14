@@ -3934,10 +3934,27 @@ fn handle_spell_cmd(
                     rcd.level = train.level;
                     rcd.tran_point = train.tran_point;
                 }
-                // 护身符消耗落 `UseItems` + `SendMsg(RM_DURACHANGE, idx, Dura, DuraMax, 0)`（`MagicBase.cs:118-121`）。
+                // 护身符消耗（`MagicBase.UseAmulet`，`MagicBase.cs:109-127`）：
+                // - `Dura > nCount*100` ⇒ `Dura -= …` + `SendMsg(RM_DURACHANGE, idx, Dura, DuraMax, 0)`
+                //   （自身队列 ⇒ `SM_DURACHANGE`）；
+                // - else ⇒ `Dura = 0; SendDelItems(item); Index = 0;` ⇒ **立即** `SM_DELITEM(202)`
+                //   （`PlayObject.Base.cs:1648-1665`），且帧内 `Dura` 恒 0（oracle 先置 0 再发）。
                 if let Some((slot, used)) = outcome.amulet {
-                    apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
-                    if !used.deleted {
+                    if used.deleted {
+                        // 清槽前取件（`apply_amulet_use` 会把 `UseItems[slot]` 置 None）。
+                        let body = ground_sessions
+                            .get(chr_name)
+                            .and_then(|sg| sg.use_items.get(usize::from(slot)))
+                            .and_then(Option::as_ref)
+                            .and_then(|it| {
+                                game_svr::slave::deleted_amulet_body(actor_id, it, catalog)
+                            });
+                        apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                        if let Some(body) = body {
+                            send_self_frame(online, gates, chr_name, body);
+                        }
+                    } else {
+                        apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
                         if let Some(it) = ground_sessions
                             .get(chr_name)
                             .and_then(|sg| sg.use_items.get(usize::from(slot)))
@@ -3947,7 +3964,6 @@ fn handle_spell_cmd(
                             send_self_frame(online, gates, chr_name, body);
                         }
                     }
-                    // `deleted` 支的 `SendDelItems` 帧面未接（登记）；清槽已由 `apply_amulet_use` 落。
                 }
                 // `boSpellFire` ⇒ `SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType,Effect), MakeLong(tx,ty), targetActorId, "")`（`:648-658`）。
                 // **F-1**：`RM_MAGICFIRE` 处理器无 `ActorId != ActorId` 守卫（`PlayObject.Message.cs:1788-1793`）
@@ -12890,6 +12906,165 @@ mod tests {
                 .dura,
             350,
             "UseAmulet 扣耐久落 UseItems"
+        );
+    }
+
+    /// **⑨-2 护身符扣光帧面**：`UseAmulet` 的 `else` 支（`MagicBase.cs:121-126`）——耐久恰为
+    /// `nCount*100` 时 oracle 走 `Dura = 0; SendDelItems(item); Index = 0;`，宿主须发**立即**
+    /// `SM_DELITEM(202)`（`PlayObject.Base.cs:1648-1665`），且帧内 `Dura` = 0、清槽。
+    ///
+    /// 红检：① 删掉清槽前取件/发帧（回到登记前的 header-only 无帧）⇒ 无 `SM_DELITEM` 必红；
+    /// ② 帧内 `Dura` 用扣光前的值（不做 `Dura=0`）⇒ 尾字节不等必红。
+    #[test]
+    fn spell_cmd_summon_exhausted_amulet_emits_delitem() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let caster = {
+            let mut e = new_player_entity("caster".to_string(), 10, 10);
+            e.level = 40;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            caster,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uc".into(),
+                chr_name: "caster".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 911,
+                actor_id: caster,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        let mut record = stage6_record();
+        record.data.magic = Some(vec![Some(record::MagicRcd {
+            mag_idx: 17,
+            level: 1,
+            magic_key: u16::from(b'm'),
+            tran_point: 0,
+        })]);
+        saves.insert(
+            "caster".into(),
+            SavedHuman {
+                account: "uc".into(),
+                record,
+                enter_map: "0".into(),
+            },
+        );
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(caster);
+        // 17 的护身符需求 = `CheckAmulet(1,1)`：`round(Dura/100) >= 1` ⇒ Dura=100 过门，
+        // 且 `Dura > 100` 为假 ⇒ 走 else（扣光删除）支。
+        sg.use_items[game_svr::ability::SLOT_ARMRING_L] = Some(game_svr::bag::BagItem {
+            make_index: 1,
+            index: 1,
+            dura: 100,
+            dura_max: 1000,
+            desc: [0; 14],
+        });
+        ground_sessions.insert("caster".into(), sg);
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        let amulet_tpl = mir2_data::StdItem {
+            name: "护身符".into(),
+            std_mode: 25,
+            shape: 5,
+            ..mir2_data::StdItem::default()
+        };
+        catalog.insert(1, amulet_tpl.clone());
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 17,
+            effect: 3,
+            effect_type: 4,
+            train_lv: 3,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let registry = mir2_envir::MapRegistry::from_entries(
+            mir2_envir::MapLoader::new(".", "map", "envir"),
+            Vec::new(),
+        );
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+
+        handle_spell_cmd(
+            game_svr::feature::make_long(10, 11),
+            17,
+            9999,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            Some(&registry),
+            &table,
+            &mut displays,
+            &gates,
+        );
+
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(m) = rx0.try_recv() {
+            match m {
+                SimToGate::SendFrame { socket, body } => frames.push((socket, body)),
+                SimToGate::SendRaw { socket, payload } => frames.push((socket, payload)),
+                other => panic!("意外的下行：{other:?}"),
+            }
+        }
+        let ident_of = |b: &[u8]| {
+            mir2_protocol::frame::CommandMessage::from_bytes(b)
+                .unwrap()
+                .ident
+        };
+        let me: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|(s, _)| *s == 911)
+            .map(|(_, b)| b)
+            .collect();
+        let del = me
+            .iter()
+            .find(|b| ident_of(b) == mir2_protocol::messages::SM_DELITEM)
+            .unwrap_or_else(|| panic!("扣光支应发 SM_DELITEM；实得 {me:?}"));
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(del).unwrap();
+        assert_eq!(cm.recog, caster, "Recog=ActorId");
+        assert_eq!((cm.param, cm.tag, cm.series), (0, 0, 1), "Series=1");
+        // 尾 = `EncodeBuffer(clientItem)`：`Dura` 恒 0（oracle 先置 0 再 `SendDelItems`）。
+        let expect_ci = game_svr::itemwire::ClientItem {
+            tpl: &amulet_tpl,
+            name: "护身符".into(),
+            make_index: 1,
+            dura: 0,
+            dura_max: 1000,
+            desc: [0; 14],
+        };
+        let expect_tail =
+            mir2_protocol::edcode::encode(&game_svr::itemwire::encode_client_item(&expect_ci));
+        assert_eq!(
+            mir2_protocol::edcode::decode(&del[12..]),
+            mir2_protocol::edcode::decode(&expect_tail),
+            "SM_DELITEM 尾 = EncodeBuffer(ClientItem，Dura=0)"
+        );
+        assert!(
+            !me.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_DURACHANGE),
+            "扣光支不发 SM_DURACHANGE（oracle 只发 SendDelItems）；实得 {me:?}"
+        );
+        assert!(
+            ground_sessions["caster"].use_items[game_svr::ability::SLOT_ARMRING_L].is_none(),
+            "扣光支清槽（UseItems[idx] = None）"
         );
     }
 
