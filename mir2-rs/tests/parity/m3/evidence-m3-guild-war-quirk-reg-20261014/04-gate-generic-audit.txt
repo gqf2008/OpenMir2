@@ -1,0 +1,29 @@
+# 04 — 通用白名单登记号审计（唯一性 + 夹具 token 解析）：audit 非 strict 报告 + selftest
+# [cmd] python -I m3_whitelist_registry_audit.py audit
+WHITELIST_REGISTRY scope=T-36+ entries=19 duplicates=[42] strict=False tokens=10
+  token T-41   <- 5 NPC / 商店  rows=[227] fixture=READY
+  token T-42   <- 6 任务  rows=[229, 242] fixture=READY
+  token T-43   <- 7 组队 / 交易  rows=[243] fixture=READY
+  token T-46   <- 8 公会 / 攻城  rows=[273] fixture=READY
+  token T-45   <- 9 英雄 / 宠物  rows=[300] fixture=READY
+  token T-44   <- 10 拍卖（元宝寄售 SellOff）  rows=[247] fixture=READY
+  FINDING DUPLICATE T-42 × 2 @ L229,L242（全局唯一编号约定被破坏）
+  FINDING TOKEN_MULTI 6 任务：token T-42 解析到 2 行（L229,242）
+WHITELIST_REGISTRY GREEN（无重复编号；夹具 token 解析唯一或不可用）
+rc=0
+
+# [cmd] python -I m3_whitelist_registry_audit.py selftest
+  SELFTEST ok  唯一编号 -> 无 DUPLICATE
+  SELFTEST ok  token T-41 解析 1 行
+  SELFTEST ok  缺 token T-45 默认 info、不判红
+  SELFTEST ok  行号解析（T-42 -> L2）
+  SELFTEST ok  重复 T-42 被点名
+  SELFTEST ok  重复 token -> TOKEN_MULTI
+  SELFTEST ok  --strict 下重复必红（改坏必红）
+  SELFTEST ok  --strict 下 READY 缺 token 判红
+  SELFTEST ok  非 strict 只报告不判红
+SELFTEST GREEN 9/9
+rc=0
+
+# 注：audit --strict 现仍 RED，唯一原因是**已路由 owner 的历史 T-42 撞号**（⑤-2 vs ⑥-5），
+#     与本片 T-54 无关；本片未单方面重编号（见 whitelist 编号说明 + 门边界声明）。
