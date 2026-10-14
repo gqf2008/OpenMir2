@@ -1,0 +1,14 @@
+# 02 — 本片四门禁（cwd = mir2-rs   CARGO_TARGET_DIR = E:/tmp/m2svr-target）
+# base = origin/master 0c3561629（片㊸ aff1f7c17 已合入后的 master）
+#
+# 1) cargo fmt --all -- --check                         => rc=0
+#    (E:/tmp/m2svr-o1-fmt.txt)
+# 2) cargo clippy --workspace --all-targets -- -D warnings => rc=0
+#    (E:/tmp/m2svr-o1-clippy.txt)
+# 3) cargo test --workspace --no-fail-fast              => rc=0；101 suites / passed=1231 failed=0 ignored=22
+#    (E:/tmp/m2svr-o1-test.txt)
+# 4) cargo run -p msgcodegen -- --check                 => rc=0；msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+#    (E:/tmp/m2svr-o1-msgcodegen.txt)
+#
+# 附：文档漂移门 python -I -B tools/m2-acceptance/check_client_ability_layout_doc_counts.py => rc=0 GREEN（见 03）
+# 附：SHA256SUMS repo 口径复核 python -I tools/evidence-hash/verify_sha256sums.py <原片目录> => GREEN 9/9 rc=0（见 03）
