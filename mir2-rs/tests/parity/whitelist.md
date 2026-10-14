@@ -274,6 +274,20 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 
 > **编号连号**：T-46（M3⑧ 公会/攻城夹具；T-22/T-29/T-41 的同族扩展）。
 
+### M3⑧ 实现登记（行会战；卡片 `openmir2-m3-guild-war`(⑧-5)，2026-10-14）
+
+> 收口 reviewer-6 对 ⑧-5 第①片（`reviewed_head efa75a9dee`，approve `0fce7a8c`）登记的**非阻塞 Minor O-1**：
+> 「先扣钱后判掌门」的照搬怪行为当时只在 `crates/world/src/guild.rs` 模块头 + 证据 README 说明，
+> `whitelist.md` 无对应行 ⇒「登记在案」不可机判。本行补齐，并由同片新增的
+> `m3_guild_war_quirk_registry_gate.py`（接入 `fixture_chain_gate.py` 共享管线常跑）行级钉住。
+> **编号说明（不假绿）**：`T-48` 按闭合卡 `openmir2-m3-whitelist-registry-integrity` 建议留给「`T-42` 撞号去重」（待 owner）；
+> `T-49`（⑨-3）/`T-50`/`T-51`（④ 夹具）已用；`T-52`/`T-53` 由卡 `openmir2-m3-party-recall-ext`（已合入 master `2d2426f5b`）占用 ⇒ 本行取 **T-54**。
+> 本行**待独立 principal 复核**。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
+| --- | --- | --- | --- |
+| T-54 | **N6（本片登记）：`ReQuestGuildWar` 的「先扣钱后判掌门」照搬怪行为** —— NPC 层 `GuildOfficial.ReQuestGuildWar`（`src/GameSrv/Npc/GuildOfficial.cs:180-199`）在目标行会存在且 `Gold >= SystemShare.Config.GuildWarPrice` 时**先** `DecGold(GuildWarPrice)` + `GoldChanged()`（`GuildOfficial.cs:186-187`），**再**进 `PlayObject.ReQuestGuildWar`；而后者第一道门是 `IsGuildMaster()`（`src/M2Server/Player/PlayObject.Base.cs:3351`，定义 `PlayObject.cs:4402` = `MyGuild != null && GuildRankNo == 1`）⇒ **非掌门 / `M2Share.ServerIndex != 0` / 目标缺失 都会白扣 `GuildWarPrice` 且不退还**。 | **不是差异，是 oracle 怪行为 1:1 照搬**（§8.1 行为等价优先于修 bug）：Rust `crates/world/src/guild.rs::GuildManager::request_guild_war` 逐序复刻 —— 第 1 层（目标在 + 钱够）先置 `gold_spent = war_price` 交由调用方从 `Gold` 扣，第 2 层才判 `requester_rank_no != 1` / `ServerIndex` / 目标；3 条向量锁死（`request_guild_war_non_master_still_pays_gold` / `request_guild_war_no_guild_still_pays_gold` / `request_guild_war_non_zero_server_still_pays_gold`）+ 改坏必红（把 `gold_spent` 恒 0 / 把扣钱挪到掌门判定之后 ⇒ 向量必 RED）；与 **T-39**（N2 `AddWarGuild` 反逻辑）叠加后只有「本会与目标已处战态、但目标未把本会列入战表」这一非对称态令 `request_ok=true`（发 `SS_207`）。**不许**「修好」（退还金币 / 前置判掌门），将来要修另开 `S-*` 并保留改前/改后读数。 | 作者登记（`openmir2-worker-5`，⑧-5 `openmir2-m3-guild-war` reviewer-6 `O-1` 收口）；**待独立 principal 复核本登记行** |
+
 ## M3⑨ 登记（英雄 / 宠物（宝宝/下属 slave）动作序列夹具；卡片 `openmir2-m3-hero-pet-fixture-botsrv`，2026-10-13）
 
 > 盘点报告：[`m3/M3⑨英雄宠物现状盘点报告-20261013.md`](m3/M3⑨英雄宠物现状盘点报告-20261013.md)；本卡父卡 `openmir2-m3-hero-pet-align`。
