@@ -1,0 +1,76 @@
+176-boundary.txt —— 片㊲ 边界（base = origin/master 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f；head = 本片提交）
+卡 openmir2-client-e2e-enter-gaps / m2-svr / openmir2-worker-11 / 2026-10-14
+====================================================================================================
+# 0) 本片起手式：先 git fetch origin && git merge origin/master（新规矩）
+$ git -C <worktree> fetch origin master
+$ git -C <worktree> merge --no-edit origin/master
+Updating 8c1378d2f..3db79cae0   # rc=0，无冲突（HEAD 8c1378d2f 已是 master 祖先 ⇒ 快进）
+# 说明：上一片㊱（head 8c1378d2f）已被非作者 approve（reviewer-6 649c6351）并合入
+# master（4996fbae7），其后 master 又前进两条（ffbaaa72e / 3db79cae0）⇒ 本片基于当前 master。
+
+# 1) 本片（㊲）净差量（父 = base；HEAD = 4a266cc11 片㊲ 代码/证据提交）
+$ git diff --name-status 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f 4a266cc11
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/175-r6-build-source-freshness.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+（= 2 个在审 `.py`（前置门 R6 + G1 文案）+ 1 件证据 + README §㊲；零 `.rs`、零 `.toml`、零生产代码；
+  `176`/`177`/`178` 与重生成的 `SHA256SUMS.txt` 在紧随其后的边界提交里）
+
+# 2) 交付差量 = origin/master..HEAD（walgit patch 用的 base/head）
+$ git diff --name-status 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f HEAD
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/175-r6-build-source-freshness.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/176-boundary.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/177-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/178-redcheck-r6.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+（8 路径全在本卡证据目录；冻结面全空）
+
+# 3) 冻结面（必须全空）
+$ git diff --name-only 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f HEAD -- src sql MirClient \
+    mir2-rs/crates/protocol mir2-rs/crates/storage
+(空 = 通过)
+
+$ git diff --name-only 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f HEAD -- '*.rs'
+(空 = 通过)
+
+$ git diff --name-only 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f HEAD -- '*.toml'
+(空 = 通过)
+
+$ git diff --name-only 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f HEAD -- mir2-rs/bins
+(空 = 通过；本片不碰 bins/)
+
+# 4) 证据完整性（LF/git-blob 口径）
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+GREEN mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+EOLCHECK GREEN
+（清单 179 → 183 件：+175/176/177/178；并重记 check_rust_window_preflight.py / window_handoff.py / README.md）
+
+# 5) 工具自检
+$ python -I -B check_rust_window_preflight.py --selftest
+SELFTEST OK (32/32)      # 片㊲ 前 23/23（+9：R6 四态 + 两条 fail-closed + 基线常量 + 两条 git oid 前提）
+$ python -I -B window_handoff.py --selftest
+SELFTEST OK (98/98)      # 不变（G2 只认 SELFTEST OK，不看件数）
+
+# 6) 四门禁（cwd=mir2-rs，CARGO_TARGET_DIR=E:/tmp/m2svr-target，--offline）
+$ cargo fmt --all -- --check
+fmt_rc=0
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+clippy_rc=0
+$ cargo test --workspace --offline --no-fail-fast
+101 suites · 1222 passed · 0 failed · 22 ignored · test_rc=0
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量   · msgcodegen_rc=0
+（本片零 `.rs`/`.toml` 改动 ⇒ 与合并树基线 3db79cae0 同读数）
+
+# 7) 检出外改动（登记；未动共享主检出）
+$ git -C E:/tmp/m2svr-window-origin rev-parse HEAD
+3db79cae05261d5fcdb90a9fdd6afb8e0c78179f      # 专用窗口构建源（片㉟ 刷到 9edfc745d；本片 ㊲ 再刷到当前 master）
+$ sha256sum E:/tmp/m2svr-window-target/debug/game-svr.exe
+1e088ae7581a9a8484fea0711939d4d8454816181745c5713c4fac893a6fba3e   # 片㉟ 旧件 dcfd0040… → 本片重链
+$ git -C /e/Users/gxh/Documents/GitHub/OpenMir2 status --porcelain | wc -l
+0                                             # 共享主检出零改动（只读）

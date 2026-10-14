@@ -1,0 +1,42 @@
+178-redcheck-r6.txt —— 片㊲ R6 改坏必红原始读数（牙齿；变异只在 E:/tmp 副本，仓内件 sha256 不变）
+卡 openmir2-client-e2e-enter-gaps / m2-svr / openmir2-worker-11 / 2026-10-14
+====================================================================================================
+# 口径
+#   SRCE = 本卡证据目录（仓库件）；MUT = E:/tmp/m2svr-r6-mut/（复制件，变异只在这里）
+#   被检源 = E:/tmp/m2svr-window-origin，基线 = origin/master = 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f
+#   陈旧 oid = 9edfc745d48ec7edafcbcb9da3d9a6a0c19073ad（片㉟ 刷源时的 master；含两片修复但落后）
+$ sha256sum "$SRCE/check_rust_window_preflight.py" | cut -d' ' -f1
+171d5d14c1fd93050cec2185859a7edfeeaa4fb2956fb1847de73022fb0ee31b     # BEFORE
+
+# D1) 本片的牙：把 --ref 指回刷新前的 oid ⇒ 必红
+$ cd "$MUT" && python -I -B check_rust_window_preflight.py \
+      --repo /e/tmp/m2svr-window-origin --ref 9edfc745d --mirserver E:/MirServer
+[OK] R5 判据工具齐备（4 件）
+RED R6: 构建源 9edfc745d=9edfc745d4 落后于基线 origin/master@3db79cae05 的生产路径（3 件：
+mir2-rs/bins/game-svr/src/main.rs, mir2-rs/bins/game-svr/src/slave.rs,
+mir2-rs/bins/game-svr/src/smframe.rs）⇒ 窗口会测旧件，先 `fetch` + `checkout --detach <基线>` + 重编译
+RESULT: RED
+MUT1_rc=1
+
+# D2) 掏空牙齿（MUT2：changed=[] 忽略 diff 结果）⇒ 同一陈旧 oid 变假绿（证明 D1 的 RED 来自 R6 真判据）
+$ python - <<'PY'   # 仅改 MUT 副本
+  s.replace('    changed = [ln for ln in out.splitlines() if ln.strip()]',
+            '    changed = []  # MUT2\n    _ignore = [ln for ln in out.splitlines() if ln.strip()]')
+PY
+mutated OK
+$ python -I -B check_rust_window_preflight.py \
+      --repo /e/tmp/m2svr-window-origin --ref 9edfc745d --mirserver E:/MirServer
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 9edfc745d=9edfc745d4 相对基线 origin/master@3db79cae05 生产路径零差异
+RESULT: GREEN
+MUT2_rc=0
+
+# D3) 还原：仓内件 sha256 与 BEFORE 逐字节一致
+$ sha256sum "$SRCE/check_rust_window_preflight.py" | cut -d' ' -f1
+171d5d14c1fd93050cec2185859a7edfeeaa4fb2956fb1847de73022fb0ee31b     # AFTER == BEFORE
+
+# D4) （对照）刷源后同一门 GREEN
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD --mirserver E:/MirServer
+[OK] R6 构建源 HEAD=3db79cae05 == 基线 origin/master@3db79cae05
+RESULT: GREEN
+rc=0

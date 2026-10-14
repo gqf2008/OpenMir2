@@ -33,10 +33,18 @@
      `check_mongen_dense_points.py --point x,y --expect ...`，退出码必须为 0。
   R5 **判据工具齐备**：`check_mongen_dense_points.py` / `check_aoi_visibility_diag.py` /
      `aoi_visibility_pair.py` / `check_client_s2c_frames.py` 必须在证据目录里（缺 ⇒ PREREQ_RED）。
+  R6 **构建源必须是当前基线**（片㊲，默认基线 `origin/master`）：只含两片修复**不等于**「源是基线」——
+     `R1` 是 `--is-ancestor` 单向门，一份停在更早 master 的旧源（例如刷源后 master 又前进了 2 条）
+     仍会 GREEN，窗口就会**测旧 exe**。R6 补上另一半：`--ref` 要么 == 基线，要么是基线的后继；
+     否则必须 `git diff --name-only <基线> <ref> -- <生产路径>` 为空（非生产面差异可接受）。
+     生产路径 = `mir2-rs/bins` / `mir2-rs/crates` / `mir2-rs/Cargo.toml` / `mir2-rs/Cargo.lock` / `src` / `sql`
+     （与合并门禁同口径）。基线解析不到 ⇒ PREREQ_RED（fail-closed）。`--baseline-ref ''` 显式跳过
+     （只给无 remote 的离线自测用，**不是**窗口口径）。
 
 用法：
   python -I -B check_rust_window_preflight.py \
-      --repo E:/Users/gxh/Documents/GitHub/OpenMir2 [--ref HEAD] \
+      --repo E:/tmp/m2svr-window-origin [--ref HEAD] \
+      [--baseline-ref origin/master] \
       --mirserver E:/MirServer \
       --points "291,666:outside;291,651:outside;289,618:inside;287,620:inside" \
       [--fix-commit <oid>] [--map-name 0] [--map-id 26]
@@ -79,6 +87,17 @@ REQUIRED_TOOLS = (
     "check_client_s2c_frames.py",
 )
 MAIN_RS_REL = os.path.join("mir2-rs", "bins", "game-svr", "src", "main.rs")
+# R6 生产路径（与合并门禁同口径：只有这些路径上的差异才算「构建源并非当前基线」）。
+PRODUCTION_PATHS = (
+    "mir2-rs/bins",
+    "mir2-rs/crates",
+    "mir2-rs/Cargo.toml",
+    "mir2-rs/Cargo.lock",
+    "src",
+    "sql",
+)
+# R6 基线 ref（默认 origin/master；空串 ⇒ 显式跳过，仅用于无 remote 的离线自测）。
+BASELINE_REF_DEFAULT = "origin/master"
 # MapInfo 逻辑名分隔符（`crates/envir/src/mapinfo.rs:28`：空格/逗号/制表）
 _MAPINFO_SEPS = " \t,"
 SECTION_RE = re.compile(r"^\s*\[([^\]]*)\]")
@@ -155,6 +174,58 @@ def required_fix_findings(
         else:
             prereqs.append(f"PREREQ_RED R1: 判不了 {nice}（{err}）")
     return oks, problems, prereqs
+
+
+def baseline_freshness_findings(
+    repo: str, ref: str, baseline_ref: str
+) -> tuple[list[str], list[str], list[str]]:
+    """R6 的纯逻辑：构建源 `ref` 必须含基线（默认 `origin/master`）在生产路径上的全部提交。
+
+    返回 `(ok 行, problems, prereqs)`。语义：
+      * `baseline_ref` 为空 ⇒ 显式跳过（返回一条 INFO，供无 remote 的离线自测；非窗口口径）。
+      * 解析不到基线/被检 ref ⇒ prereq（fail-closed，不静默放行）。
+      * `ref` == 基线，或 `ref` 是基线的后继（`--is-ancestor <base> <ref>`）⇒ OK。
+      * 否则比 `git diff --name-only <base> <ref> -- <生产路径>`：空 ⇒ OK（非生产面差异可接受）；
+        非空 ⇒ RED（构建源落后于基线 ⇒ 窗口会测旧件）。
+    不打印，便于 selftest 直测与调用方分类。
+    """
+    if not baseline_ref:
+        return (["INFO R6 跳过（--baseline-ref 为空）"], [], [])
+    rc, base_oid = git(repo, "rev-parse", "--verify", f"{baseline_ref}^{{commit}}")
+    if rc != 0 or not base_oid:
+        return ([], [], [f"PREREQ_RED R6: 解析不到基线 ref {baseline_ref!r}（rc={rc}）"])
+    rc, ref_oid = git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    if rc != 0 or not ref_oid:
+        return ([], [], [f"PREREQ_RED R6: 解析不到被检 ref {ref!r}（rc={rc}）"])
+    short = f"{baseline_ref}@{base_oid[:10]}"
+    if ref_oid == base_oid:
+        return ([f"[OK] R6 构建源 {ref}={ref_oid[:10]} == 基线 {short}"], [], [])
+    val, err = is_ancestor(repo, base_oid, ref)
+    if val is True:
+        return (
+            [f"[OK] R6 构建源 {ref}={ref_oid[:10]} 含基线 {short}（--is-ancestor=YES）"],
+            [],
+            [],
+        )
+    rc, out = git(repo, "diff", "--name-only", base_oid, ref_oid, "--", *PRODUCTION_PATHS)
+    if rc != 0:
+        return ([], [], [f"PREREQ_RED R6: git diff 失败（{out or 'rc=' + str(rc)}）"])
+    changed = [ln for ln in out.splitlines() if ln.strip()]
+    if not changed:
+        return (
+            [f"[OK] R6 构建源 {ref}={ref_oid[:10]} 相对基线 {short} 生产路径零差异"],
+            [],
+            [],
+        )
+    head = ", ".join(changed[:5]) + (" …" if len(changed) > 5 else "")
+    return (
+        [],
+        [
+            f"RED R6: 构建源 {ref}={ref_oid[:10]} 落后于基线 {short} 的生产路径"
+            f"（{len(changed)} 件：{head}）⇒ 窗口会测旧件，先 `fetch` + `checkout --detach <基线>` + 重编译"
+        ],
+        [],
+    )
 
 
 def mapinfo_logical_name(content: str) -> str | None:
@@ -359,6 +430,46 @@ def selftest() -> int:
         val, _ = is_ancestor(os.path.join(tmp, "nope"), first, "HEAD")
         chk("git-not-a-repo-prereq", val is None, repr(val))
 
+        # R6（片㊲）：构造「仅生产路径变化」的提交对，直测四态 + 两条 fail-closed。
+        os.makedirs(os.path.join(tmp, "mir2-rs", "bins"), exist_ok=True)
+        with open(os.path.join(tmp, "mir2-rs", "bins", "prod.rs"), "w", encoding="utf-8") as fh:
+            fh.write("v1\n")
+        for cmd in (
+            ["git", "-C", tmp, "add", "-A"],
+            ["git", "-C", tmp, "commit", "-q", "-m", "prod1"],
+        ):
+            subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        rc, third = git(tmp, "rev-parse", "HEAD")
+        chk("git-third-oid", rc == 0 and len(third) == 40, third)
+        with open(os.path.join(tmp, "mir2-rs", "bins", "prod.rs"), "w", encoding="utf-8") as fh:
+            fh.write("v2\n")
+        for cmd in (
+            ["git", "-C", tmp, "add", "-A"],
+            ["git", "-C", tmp, "commit", "-q", "-m", "prod2"],
+        ):
+            subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        rc, fourth = git(tmp, "rev-parse", "HEAD")
+        chk("git-fourth-oid", rc == 0 and len(fourth) == 40, fourth)
+
+        oks, probs, pre = baseline_freshness_findings(tmp, fourth, fourth)
+        chk("r6-equal-green", len(oks) == 1 and not probs and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        # ref=third 是 baseline=fourth 的**祖先**（真实形态：构建源停在旧 master）⇒ 落后必判 RED。
+        oks, probs, pre = baseline_freshness_findings(tmp, third, fourth)
+        chk("r6-behind-prod-red", not oks and len(probs) == 1 and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        oks, probs, pre = baseline_freshness_findings(tmp, fourth, second)
+        chk("r6-ahead-green", len(oks) == 1 and not probs and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        oks, probs, pre = baseline_freshness_findings(tmp, second, first)
+        chk("r6-nonprod-diff-green", len(oks) == 1 and not probs and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        oks, probs, pre = baseline_freshness_findings(tmp, fourth, "no-such-base-xyz")
+        chk("r6-unknown-baseline-prereq", not oks and not probs and len(pre) == 1, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        oks, probs, pre = baseline_freshness_findings(tmp, fourth, "")
+        chk("r6-empty-baseline-skip", len(oks) == 1 and not probs and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        chk(
+            "r6-default-baseline-origin-master",
+            BASELINE_REF_DEFAULT == "origin/master",
+            repr(BASELINE_REF_DEFAULT),
+        )
+
     # --- 合成 mongen 检查器：验证调用与退出码传播 ---
     with tempfile.TemporaryDirectory(prefix="rustpf-mg-") as tmp:
         checker = os.path.join(tmp, "fake_checker.py")
@@ -403,6 +514,14 @@ def main(argv: list[str] | None = None) -> int:
         "--points",
         default="291,666:outside;291,651:outside;289,618:inside;287,620:inside",
         help="窗口坐标 `x,y:inside|outside;...`（默认 = ③a 反向 + ③b 框内）",
+    )
+    ap.add_argument(
+        "--baseline-ref",
+        default=BASELINE_REF_DEFAULT,
+        help=(
+            f"R6 基线 ref（默认 {BASELINE_REF_DEFAULT}；构建源必须含它在生产路径上的提交；"
+            "空串 = 显式跳过，仅用于无 remote 的离线自测）"
+        ),
     )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
@@ -497,6 +616,14 @@ def main(argv: list[str] | None = None) -> int:
         prereq.append(f"PREREQ_RED R5: 证据目录缺判据工具 {missing}")
     else:
         print(f"[OK] R5 判据工具齐备（{len(REQUIRED_TOOLS)} 件）")
+
+    # R6 构建源必须是当前基线（默认 origin/master）——片㊲；R1 只管「含修复提交」不管「没落后」。
+    if repo:
+        oks, probs, pre = baseline_freshness_findings(repo, args.ref, args.baseline_ref)
+        for line in oks:
+            print(line)
+        problems.extend(probs)
+        prereq.extend(pre)
 
     for line in problems:
         print(line)

@@ -10,7 +10,9 @@
   做成**一条机判的 GO/NO-GO**，避免再出现「开了窗口才发现构建源过旧、判据 PREREQ_RED」的烧窗。
 
 本工具**不重新实现任何判据**，只做四件事：
-  G1 **聚合 Rust 侧窗口前置门**：调片⑮ `check_rust_window_preflight.py`（R1..R5），解析 `RESULT:`。
+  G1 **聚合 Rust 侧窗口前置门**：调片⑮ `check_rust_window_preflight.py`（R1..R6），解析 `RESULT:`。
+     片㊲ 起 R6 = 「构建源必须是当前基线（默认 `origin/master`）」；R1 只管「含两片修复」
+     （单向 `--is-ancestor`），一份含两片但停在旧 master 的源 R1 仍 GREEN，必须靠 R6 才能判「测旧件」。
      其中 R1/R2 直接点住「构建源是否含 ③ 判据要的两片」——片⑪（`vr/new/af` 读数）与
      片㉜（受击帧 `SM_STRUCK` 广播 ⇒ DoD③「能攻击造成伤害」）——这是 2026-10-14 实测到的真缺陷
      （共享主检出停在 `ad0592b19`；专用源 `m2svr-window-origin` 停在 `6dba8719d`、缺片㉜）。
@@ -406,7 +408,7 @@ def run_checks(
         result = parse_result(out)
         if rc == 0 and result == "GREEN":
             rep.rust_ok = True
-            rep.info.append("OK   G1 Rust 窗口前置门 GREEN（R1..R5）")
+            rep.info.append("OK   G1 Rust 窗口前置门 GREEN（R1..R6）")
         elif result == "RED" or rc == 1:
             rep.build_source_stale = True
             rep.problems.append(
