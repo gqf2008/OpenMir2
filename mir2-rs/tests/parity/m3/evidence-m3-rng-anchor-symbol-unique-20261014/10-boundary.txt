@@ -1,26 +1,35 @@
-## 边界（base = origin/master 41e61029e；声明 head = 7692ff08015a8f96661922dace9060ef0b353d50）
+## 边界（base = origin/master 9edfc745d；声明 head = b79d7b9b5951c12bbcb75fdb5ee2739cbf60c2f7）
 
-`git diff --name-status 41e61029e 7692ff08015a8f96661922dace9060ef0b353d50`：
+`git diff --name-status 9edfc745d b79d7b9b5951c12bbcb75fdb5ee2739cbf60c2f7`（实测）：
+
   A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/00-commands.txt
   A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/01-change-summary.txt
   A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/02-base-red.txt
   A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/03-after-green.txt
   A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/04-mutation-red.txt
+  A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/05-base-newmaster-red.txt
   A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/06-gates-fmt.txt
   A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/07-gates-clippy.txt
   A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/08-gates-test.txt
   A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/09-gates-msgcodegen.txt
+  A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/10-boundary.txt
   A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/11-rng-runner-selfcheck.txt
   A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/12-dropexp-runner-selfcheck.txt
+  A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/13-merge-resolution.txt
   A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/README.md
+  A	mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014/SHA256SUMS.txt
   M	mir2-rs/tests/parity/m3/rng-trace-scene/DRIVER-CONTRACT.md
   M	mir2-rs/tests/parity/m3/rng-trace-scene/README.md
   M	mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py
   M	mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
 
 - 冻结面 `src/` / `sql/` / `MirClient/` / `mir2-rs/crates/protocol/` / `mir2-rs/crates/storage/` / `mir2-rs/bins/` 零改动；
-- `*.rs = 0`（本片纯工具/文档/证据）；
-- 未手工改写已推送历史（本片在 1b88c9d3c..a2b5ffd7f 首次推送后 5 分钟内重排为单 head 提交，peer 未审、仅本分支；重排已在 walgit 以 supersede 条目声明），最终 origin=walgit 双端一致；未 merge 被审以外的分支；`sessions/csharp-*` 无关残留未入交付。
-- 交付 tail（**纯证据**，在声明 head 之后）：`10-boundary.txt`、`SHA256SUMS.txt`。
+- `*.rs = 0`、`*.toml = 0`（本片纯工具/文档/证据）；
+- **合并**：本片合并 `origin/master 9edfc745d` 一次（`f2c8f9b1d`；冲突解见 `13-merge-resolution.txt`）。
+  这是在既有已推送 head `6ba164a3b` 之上**前进**（merge 的第二父是 `9edfc745d`），**未改写已推送历史**、
+  未强推；链门车道写集内的文件（`m3_fixture_fmt_evidence_gate.py`、`fixture_chain_gate.py` 的 `≥23`）原样保留；
+- 未 merge 被审以外的分支；未自签 review；零起栈、零端口；`sessions/csharp-*` 无关残留未入交付；
+- 交付 tail（**纯证据**，在声明 head 之后）：本 `10-boundary.txt`、`SHA256SUMS.txt`。
 
-> `head = 7692ff08015a8f96661922dace9060ef0b353d50`（本片聚合 head：4 个 m3 工具/文档改动 + 本证据包读数；紧随其后的纯证据提交只补 boundary/sums）。
+> 首次交付 head `6ba164a3b`（base `41e61029e`）已被本条 **supersede**：其 patch/status 条目未被任何 review
+> 覆盖，且与 master 的同一行号锚改法冲突（不可干净合并）。
