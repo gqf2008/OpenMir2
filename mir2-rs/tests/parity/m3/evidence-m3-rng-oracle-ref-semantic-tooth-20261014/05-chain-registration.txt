@@ -23,7 +23,7 @@ rc=0
   SELFTEST ok  _tool_argv(.ps1) ⇒ powershell -File
   SELFTEST ok  _run_tool(.py) 真跑 rc=0
   SELFTEST ok  _run_tool 缺件 ⇒ 127
-SELFTEST GREEN: fixture_chain_gate selftest 38/38
+SELFTEST GREEN: fixture_chain_gate selftest 39/39
 
 ### (e) fixture_chain_gate check（共享管线现含 rng_scene_anchor_selftest / rng_scene_anchor_check）
 rc=0

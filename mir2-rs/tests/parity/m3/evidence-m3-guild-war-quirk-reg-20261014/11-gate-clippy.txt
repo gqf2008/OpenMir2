@@ -1,0 +1,5 @@
+# 11 — 四门禁② clippy
+# [cmd] cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.66s
+rc=0

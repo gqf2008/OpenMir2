@@ -1,0 +1,4 @@
+# 12b — 上面全量 test 的汇总
+# [cmd] grep '^test result:' … | awk 求和
+suites=101
+passed=1213 failed=0 ignored=22

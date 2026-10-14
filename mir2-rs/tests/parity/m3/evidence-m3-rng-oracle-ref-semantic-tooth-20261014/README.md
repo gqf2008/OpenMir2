@@ -33,7 +33,7 @@
 | `drop_exp_purity_gate.py selftest` = **32/32** GREEN（原 28 + O-1/正则族 4 条） | `02-selftest.txt` |
 | 真表**改坏必红**（真身错锚 / 伪 range 调用点 / 正则族错行） | `03-mut-real-table-red.txt` |
 | C# 行 `oracle_ref` 方法体归属逐行审计（两表 37 行，0 RED） | `04-oracle-ref-audit.txt` |
-| 锚门漂移 RED→GREEN + 接入 fixture_chain（selftest 38/38 / check GREEN） | `05-chain-registration.txt` |
+| 锚门漂移 RED→GREEN + 接入 fixture_chain（selftest 39/39 / check GREEN） | `05-chain-registration.txt` |
 | 四门禁 | `06`–`09` |
 | 两侧驱动无栈自检（37/37、20/20） | `11`、`12` |
 | 边界 / 冻结面 / 零 `.rs` | `10-boundary.txt` |

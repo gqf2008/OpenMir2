@@ -1,0 +1,30 @@
+# 06 — 外部改坏必红（临时副本 /e/tmp/…，仓库文件不动）
+# [cmd] python -I m3_guild_war_quirk_registry_gate.py check --whitelist <改坏副本>
+
+=== MUT-1 删除 T-54 登记行 ===
+GUILD_WAR_QUIRK_REGISTRY_GATE whitelist=E:/tmp/m3cs-wl-mut1.md required=1
+  FINDING NOTE T-52 存在（已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用）
+  FINDING NOTE T-53 存在（已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用）
+GUILD_WAR_QUIRK_REGISTRY_RED 1：MISSING T-54：whitelist 里没有 `| T-54 |` 行
+rc=1
+
+=== MUT-2 把 oracle 锚 PlayObject.Base.cs:3351 改成不存在的行号 ===
+GUILD_WAR_QUIRK_REGISTRY_GATE whitelist=E:/tmp/m3cs-wl-mut2.md required=1
+  FINDING NOTE T-52 存在（已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用）
+  FINDING NOTE T-53 存在（已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用）
+GUILD_WAR_QUIRK_REGISTRY_RED 1：ANCHOR T-54 @L289：缺锚点 PlayObject.Base.cs:3351
+rc=1
+
+=== MUT-3 追加重复的 T-54 行 ===
+GUILD_WAR_QUIRK_REGISTRY_GATE whitelist=E:/tmp/m3cs-wl-mut3.md required=1
+  FINDING NOTE T-52 存在（已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用）
+  FINDING NOTE T-53 存在（已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用）
+GUILD_WAR_QUIRK_REGISTRY_RED 1：DUPLICATE T-54 x 2 @ L289,L354
+rc=1
+
+=== MUT-4 删掉 Rust 锁定用例名（照搬口径被悄悄改写的一个可机判面）===
+GUILD_WAR_QUIRK_REGISTRY_GATE whitelist=E:/tmp/m3cs-wl-mut4.md required=1
+  FINDING NOTE T-52 存在（已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用）
+  FINDING NOTE T-53 存在（已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用）
+GUILD_WAR_QUIRK_REGISTRY_RED 1：ANCHOR T-54 @L289：缺锚点 non_master_still_pays_gold
+rc=1

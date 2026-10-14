@@ -1,0 +1,8 @@
+# 02 — 收口门改后 GREEN（本片 whitelist）
+# [cmd] python -I m3_guild_war_quirk_registry_gate.py check
+GUILD_WAR_QUIRK_REGISTRY_GATE whitelist=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\whitelist.md required=1
+  FINDING OK T-54 @L289：锚点 6/6 齐
+  FINDING NOTE T-52 存在（已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用）
+  FINDING NOTE T-53 存在（已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用）
+GUILD_WAR_QUIRK_REGISTRY GREEN（1 行登记齐 + 锚点齐 + 编号唯一）
+rc=0
