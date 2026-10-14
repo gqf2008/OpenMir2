@@ -41,18 +41,31 @@ python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mon
 ## 2. 站位（两侧必须逐字节同一坐标）
 
 `mir2_db.characters.aaa` 的坐标就是进世界起点（真机日志 `进世界 ChrName:aaa CurMap:0 (x,y)`）。
-逐相位改：
 
-```sql
--- 有怪点（片⑯ 最密）
-UPDATE characters SET x=605, y=578 WHERE chrname='aaa';
--- 有怪点（保守：oracle 出生点 / 片⑦ 已证点）
-UPDATE characters SET x=289, y=618 WHERE chrname='aaa';   -- 或 287,620
--- 无怪点（反向）
-UPDATE characters SET x=291, y=666 WHERE chrname='aaa';
+> ⚠ **列名口径（片㉗ 订正）**：`characters` 表**没有** `x`/`y` 列；实测 `SHOW COLUMNS FROM mir2_db.characters`
+> 只有 `MapName`(varchar) / `CX`(int) / `CY`(int)。旧写法 `SET x=…, y=…` 会 `ERROR 1054 (42S22):
+> Unknown column 'x' in 'field list'`，**角色不移动** ⇒ 两趟都停在旧点位、窗口白烧（见
+> `135-window-plan-position-columns.txt`）。且必须钉 `MapName='0'`，否则两侧可能不同图。
+> 命令行（本机 mysql CLI 与 `run_pair.ps1:127` 同源；`--password=` = 空口令）：
+
+```powershell
+$mysql = 'D:/mysql/mariadb-10.11.19-winx64/bin/mysql.exe'
+$margs = @('-h','127.0.0.1','-P','3306','-u','root','--password=','--batch','--skip-column-names')
+
+# 1a. 每趟起栈前先记 before（还原用）
+& $mysql @margs -e "SELECT MapName,CX,CY FROM mir2_db.characters WHERE ChrName='aaa';"
+# 1b. 有怪点（片⑯ 最密）
+& $mysql @margs -e "UPDATE mir2_db.characters SET MapName='0', CX=605, CY=578 WHERE ChrName='aaa';"
+# 1c. 有怪点（保守：oracle 出生点 / 片⑦ 已证点，二选一）
+& $mysql @margs -e "UPDATE mir2_db.characters SET MapName='0', CX=289, CY=618 WHERE ChrName='aaa';"   # 或 287,620
+# 1d. 无怪点（③a 反向，第二趟起栈前改）
+& $mysql @margs -e "UPDATE mir2_db.characters SET MapName='0', CX=291, CY=666 WHERE ChrName='aaa';"
+# 收工还原：把 1a 打印的 before 三值填回
+& $mysql @margs -e "UPDATE mir2_db.characters SET MapName=BEFORE_MAP, CX=BEFORE_X, CY=BEFORE_Y WHERE ChrName='aaa';"
 ```
 
-⚠ 跑完必须还原到开工前值并记录（本手册开工前 = `(291,666)`，2026-10-14 实测值；若已漂移以实测为准）。
+⚠ **每一趟起栈前都要重跑站位**：上一趟客户端走动 / 断线存档会改写 `aaa` 的坐标。跑完还原到
+开工前值并记录（2026-10-14 实测开工前 = `MapName='0' CX=297 CY=629`；若已漂移以 §1a 的 before 为准）。
 
 ## 3. Rust 侧（已证可跑，照抄）
 

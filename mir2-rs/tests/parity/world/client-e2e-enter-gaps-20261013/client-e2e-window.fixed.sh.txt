@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# client-e2e-window.sh —— 一键客户端联调窗口（root 2026-10-13）
+#   start: 暂停车队 → 增量构建全链 → 起 Rust 栈（+ C# DBSrv/LoginSrv）→ preflight → 起客户端（可见窗口，指向 127.0.0.1:7000）
+#   stop : 停栈 → 关客户端 → 校验十端口回落 → 恢复车队
+set -u
+w=/e/tmp/openmir2-watch; repo=/e/tmp/m2svr-window-origin
+tgt='E:\tmp\m2svr-window-target'; logdir='E:\tmp\client-e2e\stack'
+ps='/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
+case "${1:-}" in
+start)
+  echo "== 1) 暂停车队（lanes-pause）"; bash "$w/lanes-pause.sh"
+  echo "== 2) 增量构建全链（复用暖 target，检出外）"
+  ( cd "$repo/mir2-rs" && CARGO_TARGET_DIR="$tgt" cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv ) || { echo "BUILD_FAIL"; exit 1; }
+  echo "== 3) 起栈"
+  "$ps" -NoProfile -ExecutionPolicy Bypass -File "$repo/tools/m2-acceptance/start_rust_stack.ps1" -RustBinDir "$tgt\\debug" -LogDir "$logdir" -Seed 42 -WaitSeconds 90 | tail -5
+  echo "== 4) preflight"
+  "$ps" -NoProfile -ExecutionPolicy Bypass -File "$repo/tools/m2-acceptance/preflight.ps1" | tail -5
+  echo "== 5) 起客户端（可见）"
+  "$ps" -NoProfile -Command "Start-Process -FilePath 'D:\\MirClient-run\\run-release.cmd' -WorkingDirectory 'D:\\MirClient-run'"
+  echo "WINDOW_OPEN_OK  (收窗口请跑： bash $w/client-e2e-window.sh stop)"
+  ;;
+stop)
+  echo "== 1) 停栈"; "$ps" -NoProfile -ExecutionPolicy Bypass -File "$repo/tools/m2-acceptance/start_rust_stack.ps1" -LogDir "$logdir" -Stop 2>&1 | tail -12
+  echo "== 2) 关客户端"; "$ps" -NoProfile -Command "Get-Process MirClinet -EA SilentlyContinue | Stop-Process -Force"
+  echo "== 3) 端口实拍"; "$ps" -NoProfile -Command "3306,5000,5100,5500,5600,5700,6000,7000,7100,7200 | ForEach-Object { \$p=\$_; \$x=Get-NetTCPConnection -State Listen -LocalPort \$p -EA SilentlyContinue; '{0}:{1}' -f \$p, \$(if(\$x){'UP'}else{'DOWN'}) }" | tr '\n' ' '
+  echo; echo "== 4) 恢复车队"; bash "$w/lanes-resume.sh" | tail -12
+  ;;
+*) echo "用法: $0 start|stop"; exit 2;;
+esac

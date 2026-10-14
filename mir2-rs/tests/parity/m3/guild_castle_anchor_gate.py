@@ -77,7 +77,34 @@ PATHS = {
 }
 
 # `File.cs:A[-B][/C[-D]...]`；与 castle_oracle_anchor_gate.py 同形（含裸 `/ :NNN` 续写）。
-FILE_RE = re.compile(r'([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\.cs)')
+# 锚引用可接受的扩展名集合 —— 由 `PATHS` 登记路径推导（reviewer-6 O-2 / reviewer-5 O-B 收口）：
+#   不再硬编码 `cs|sql`；未来 `PATHS` 增列其它扩展名（如 `.txt`）的冻结面文件时，
+#   覆盖面解析（`FILE_RE`）与路径前缀判据（`_PATHREF_RE`）都自动覆盖，避免 fail-open。
+def _anchor_exts(pather=PATHS):
+    exts = set()
+    for rel in pather.values():
+        ext = os.path.splitext(rel)[1].lstrip(".")
+        if ext:
+            exts.add(ext)
+    return sorted(exts)
+
+
+def _ext_group(exts):
+    return "(?:%s)" % "|".join(re.escape(e) for e in exts) if exts else r"(?!)"
+
+
+def _file_re(pather=PATHS):
+    return re.compile(r'([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\.%s)'
+                      % _ext_group(_anchor_exts(pather)))
+
+
+def _pathref_re(pather=PATHS):
+    return re.compile(
+        r'((?:[A-Za-z0-9_.-]+/)*)([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\.%s)(?=\s*:)'
+        % _ext_group(_anchor_exts(pather)))
+
+
+FILE_RE = _file_re(PATHS)
 SPEC_RE = re.compile(r'/?\s*:(\d+(?:-\d+)?(?:/\d+(?:-\d+)?)*)')
 
 # 读侧 token 强度（判据 4）：整组只剩纯标点/空白 ⇒ 弱锚 ⇒ RED。
@@ -94,8 +121,9 @@ _WEAK_ONLY_TOKEN_RE = re.compile(r'^[^0-9A-Za-z_\u4e00-\u9fff]*$')
 #   `:3966-4105/File.cs` 的 spec 区间误报，副作用是「纯数字/点/横线构成的错误前缀」
 #   （如 `1/2/Messages.cs:62`）整段被跳过 ⇒ fail-open。现改为**只剔除紧跟 `:` 且形如
 #   `数字[-数字]` 的 spec 区间首段**，其余段一律按目录前缀判（不再要求含字母）。
-_PATHREF_RE = re.compile(
-    r'((?:[A-Za-z0-9_.-]+/)*)([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\.(?:cs|sql))(?=\s*:)')
+#   reviewer-6 同批 O-2（非阻塞）收口：扩展名集合改由 `PATHS` 推导（`_pathref_re`），不再硬编码
+#   `cs|sql`；`_path_prefix_findings` 按传入 `pather` 逐次构造，便于 selftest 用替身 PATHS 咬住。
+_PATHREF_RE = _pathref_re(PATHS)
 
 # spec 区间段（`:3966-4105/File.cs` 里的 `3966-4105`）：仅当该段紧跟在锚文本 `:` 之后时剔除。
 _SPEC_RANGE_COMP_RE = re.compile(r'^\d+(?:-\d+)?$')
@@ -103,7 +131,7 @@ _SPEC_RANGE_COMP_RE = re.compile(r'^\d+(?:-\d+)?$')
 
 def _path_prefix_findings(anchor_text, pather=PATHS):
     findings = []
-    for m in _PATHREF_RE.finditer(anchor_text):
+    for m in _pathref_re(pather).finditer(anchor_text):
         comps = [c for c in m.group(1).strip("/").split("/") if c]
         # 剔除紧跟 `:` 的 spec 区间首段（如 `:3966-4105/`）；`1/2/Messages.cs` 这类真错前缀不在其列。
         if (comps and m.start(1) > 0 and anchor_text[m.start(1) - 1] == ":"
@@ -344,10 +372,10 @@ def _cached_src(src_root, rel):
     return _read_text(os.path.join(src_root, rel)).splitlines()
 
 
-def parse_refs(anchor_text):
+def parse_refs(anchor_text, pather=PATHS):
     """把一段锚文本解析成有序的 `file:spec` 引用列表（file 用基名）。"""
     out = []
-    parts = FILE_RE.split(anchor_text)
+    parts = _file_re(pather).split(anchor_text)
     i = 1
     while i < len(parts):
         fname = parts[i]
@@ -517,6 +545,17 @@ def cmd_selftest(args):
     sys.stdout.write("selftest 工具侧名字锚牙齿: %s (bad=%r)\n" % ("GREEN" if t7 else "RED", tb))
     ok = ok and t7
 
+    # 7) 扩展名推导牙（reviewer-6 O-2 / reviewer-5 O-B 收口）：锚引用的扩展名集合由 `PATHS`
+    #    推导 ⇒ 未来 `PATHS` 增列非 `.cs`/`.sql` 的冻结面文件时，覆盖面解析与路径前缀判据
+    #    都自动覆盖（旧实现硬编码 `cs|sql` ⇒ 该锚的错前缀被整段跳过 = fail-open）。
+    fake_paths = {"Foo.gd": "src/Evil2/Foo.gd"}
+    t7 = (parse_refs("Foo.gd:1", fake_paths) == ["Foo.gd:1"]
+          and _path_prefix_findings("Bad/Dir/Foo.gd:1", fake_paths) != []
+          and _path_prefix_findings("src/Evil2/Foo.gd:1", fake_paths) == []
+          and _path_prefix_findings("Foo.gd:1", fake_paths) == [])
+    sys.stdout.write("selftest 扩展名推导牙齿(O-2): %s\n" % ("GREEN" if t7 else "RED"))
+    ok = ok and t7
+
     sys.stdout.write("SELFTEST %s\n" % ("GREEN" if ok else "RED"))
     return 0 if ok else 1
 
@@ -621,6 +660,21 @@ def cmd_mutation(args):
     sys.stdout.write("MUT-O1 路径前缀(错前缀/纯非字母前缀必红；spec 区间·正确·裸基名不误伤): %s（%d+%d 项）\n"
                      % ("RED" if red_o1 else "GREEN", len(pf_bad), len(pf_num)))
     ok = ok and red_o1
+
+    # MUT-O2（扩展名推导，reviewer-6 O-2 / reviewer-5 O-B 收口）：把扩展名集合退化成旧的
+    #   硬编码 `cs|sql` ⇒ 非 `.cs`/`.sql` 冻结面锚的错前缀不再被咬（fail-open 复现）⇒ 牙可失败向。
+    _saved_ext_group = globals()["_ext_group"]
+    globals()["_ext_group"] = lambda _exts: r"(?:cs|sql)"
+    try:
+        o2_fake = {"Foo.gd": "src/Evil2/Foo.gd"}
+        mut_o2 = (parse_refs("Foo.gd:1", o2_fake) == []
+                  and _path_prefix_findings("Bad/Dir/Foo.gd:1", o2_fake) == [])
+    finally:
+        globals()["_ext_group"] = _saved_ext_group
+    red_o2 = mut_o2
+    sys.stdout.write("MUT-O2 扩展名硬编码退化(非 .cs/.sql 错前缀漏判): %s（漏判=%s）\n"
+                     % ("RED" if red_o2 else "GREEN", "是" if mut_o2 else "否"))
+    ok = ok and red_o2
 
     sys.stdout.write("MUTATION %s (%s)\n" % ("GREEN" if ok else "RED", out))
     return 0 if ok else 1

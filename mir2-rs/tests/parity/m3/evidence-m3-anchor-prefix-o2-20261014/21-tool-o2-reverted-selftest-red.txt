@@ -1,0 +1,7 @@
+== 改坏必红①：外部工具变异（_ext_group 硬编码回 cs|sql）⇒ 该门 selftest 必 RED ==
+[quest] rc=1 | selftest 扩展名推导牙齿(O-2): RED
+[party_trade] rc=1 | selftest 扩展名推导牙齿(O-2): RED
+[guild_castle] rc=1 | selftest 扩展名推导牙齿(O-2): RED
+[hero_pet] rc=1 | selftest 扩展名推导牙齿(O-2): RED
+[selloff] rc=1 | selftest 扩展名推导牙齿(O-2): RED
+OVERALL GREEN（改坏必红成立：5/5 selftest rc=1）

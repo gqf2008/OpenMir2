@@ -1,0 +1,18 @@
+边界（冻结面零改动）
+====================
+
+base = a4058a19a
+head(代码提交) = 65d0b34f28a60bb4905d8759346e81168632c73d
+
+## git diff --name-only $BASE $HEAD -- src sql MirClient
+(空 ⇒ PASS)
+
+## git diff --name-only $BASE $HEAD -- mir2-rs/crates/protocol mir2-rs/crates/storage
+(空 ⇒ PASS)
+
+## git diff --name-status $BASE $HEAD
+M	mir2-rs/bins/game-svr/src/selloff.rs
+
+净改动仅 1 个 .rs（bins/game-svr/src/selloff.rs；gitattributes 声明 *.rs text eol=lf ⇒ 仓库字节 = LF）。
+
+说明：本证据目录（mir2-rs/tests/parity/m3/evidence-.../）随证据提交追加，不在冻结面内。

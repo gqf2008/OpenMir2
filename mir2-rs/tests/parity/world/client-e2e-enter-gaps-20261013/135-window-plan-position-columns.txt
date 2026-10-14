@@ -1,0 +1,96 @@
+135-window-plan-position-columns.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉗
+「③ 窗口站位 SQL 列名订正（`x/y` → 真实列 `MapName/CX/CY`）」
+m2-svr / openmir2-worker-11 / 2026-10-14（回应 brief-m2svr-next 顶部 root 2026-10-14 00:4x
+「真机窗口由 root 开；判据/capture 工具你准备」）
+本片零起栈、零占游戏端口（仅共享 MySQL 3306 可 UP，只读本份）；零 .rs/.toml/.ps1；只在自身 worktree 写。
+====================================================================================================
+一句话：窗口手册/规划器里的**站位 SQL 用了不存在的列**（`SET x=…, y=…`），真机执行会
+`ERROR 1054 (42S22) Unknown column 'x' in 'SET'`、**角色不移动** ⇒ ③b/③a 两趟都停在旧点位
+⇒ 一次性窗口白烧（且很容易被误读成「③ 仍未闭环」）。已订正为真实列
+`SET MapName='0', CX=…, CY=…`，并加 G4 机判牙钉死（改回 `x/y` ⇒ 必红）。
+
+A. 根因：`characters` 表没有 `x/y` 列（oracle / 同族夹具口径）
+====================================================================================================
+[A1] 部署库实测（只读；命令行见 §B）：
+     `SHOW COLUMNS FROM mir2_db.characters WHERE Field IN ('MapName','CX','CY','x','y')`
+     ⇒ 只有三行：`MapName varchar(10)` / `CX int(11)` / `CY int(11)`；`x`、`y` 不存在。
+[A2] 同族夹具早就按真实列写 SQL（本片只是把窗口侧对齐）：
+     `mir2-rs/tests/parity/m3/run_pair.ps1:547-554` 用 `MapName='{1}' AND CX={2} AND CY={3}`；
+     `mir2-rs/bins/db-srv/src/playdata.rs:93-95` 读 `MapName`/`CX`/`CY`；
+     `mir2-rs/bins/db-srv/tests/live_data.rs:249/498/516-517` 插入/读取同一组列名。
+[A3] 旧写法在窗口里的后果：MySQL 直接报错、语句原子失败 ⇒ 角色**不会**被移动。
+     此后两趟都从旧坐标进世界；若旧坐标不在 MonGen 生成框内（root verify1 就是这种情况），
+     ③b 客户端 `pairs=0` ⇒ 极易被误判为「AOI 仍不下发/怪仍未闭环」，就是烧窗口。
+
+B. 硬证据（真机 MySQL，只读/失败语句；ct 2026-10-14）
+====================================================================================================
+命令（cwd 任意；`--password=` = 空口令，与 `run_pair.ps1:127/372` 同源）：
+
+```
+$ D:/mysql/mariadb-10.11.19-winx64/bin/mysql.exe -h 127.0.0.1 -P 3306 -u root --password= \
+    --batch --skip-column-names -e "SHOW COLUMNS FROM mir2_db.characters WHERE Field IN ('MapName','CX','CY','x','y');"
+MapName	varchar(10)	YES		NULL
+CX	int(11)	YES		0
+CY	int(11)	YES		0
+```
+⇒ 无 `x`/`y` 列。
+
+```
+$ ... -e "UPDATE mir2_db.characters SET x=605, y=578 WHERE ChrName='aaa';"
+--------------
+UPDATE mir2_db.characters SET x=605, y=578 WHERE ChrName='aaa'
+--------------
+
+ERROR 1054 (42S22) at line 1: Unknown column 'x' in 'SET'
+old_rc=1
+
+$ ... -e "SELECT MapName,CX,CY FROM mir2_db.characters WHERE ChrName='aaa';"
+0	297	629          # 角色未被移动（语句整体失败）
+```
+⇒ **真实列**的写法（本片计划现在打印的形态）：
+`UPDATE mir2_db.characters SET MapName='0', CX=605, CY=578 WHERE ChrName='aaa';`
+（`MapName='0'` 必须一起钉：否则两侧可能进不同图，坐标相同也不可比。）
+
+C. 本片改动（只读规划器 + 手册；不改任何模拟/出帧/取数语义）
+====================================================================================================
+`window_handoff.py`：
+  1. §1 站位段由 `mysql> UPDATE characters SET x=…, y=… WHERE chrname='aaa'` 改为
+     **可原样执行**的真实列 SQL，并打印 1a before 探针（`SELECT MapName,CX,CY …`）+ 1b ③b 有怪点
+     + 1c ③a 反向点（每条都带 `MapName='0'`）；新增常量 `MYSQL_EXE`（可被环境变量
+     `MIR2_MYSQL_EXE` 覆盖，缺省 = `run_pair.ps1:127` 的同一路径）。
+  2. §5 收工补**显式还原**：把 §1a 的 before 三值填回（`SET MapName=BEFORE_MAP, CX=BEFORE_X,
+     CY=BEFORE_Y`）—— 原来只有一句「还原 aaa」，没有可执行形态。
+  3. 新增 G4 纯函数 `position_sql_findings(plan)` 并接入 `plan_conformance`：
+     站位 `UPDATE …characters SET …` 必须含 `CX`/`CY`（否则点名「未用真实列」，本表无 x/y）、
+     不得含列 `x`/`y`（点名 ERROR 1054）、必须含 `MapName`（否则两侧可能不同图）、
+     且计划里至少得有一条站位 UPDATE（缺 ⇒ 点名）。
+`82-two-side-window-runbook.md` §2：同步订正为真实列 + PowerShell 可执行命令 + 每趟重钉 +
+开工前实测值（2026-10-14 = `MapName='0' CX=297 CY=629`；若漂移以 §1a 的 before 为准）。
+`--selftest` **69/69 → 74/74**（新增 5 条：`plan-position-sql-real-columns`、`plan-position-sql-before-probe`、
+`position-sql-x-y-red`、`position-sql-missing-mapname-red`、`plan-conf-red-position-columns`）。
+
+`--plan` 真读数（`--repo . --ref HEAD`，2026-10-14）：
+`PLAN_CONFORMANCE=GREEN` / `WINDOW_READY=YES` / `RESULT: GREEN` rc=0；计划 §1 现打印
+`UPDATE mir2_db.characters SET MapName='0', CX=287, CY=620 …`（本机 best-site 解析值；
+同样形态覆盖 ③a 的 291,666）。
+
+D. 改坏必红（`136-redcheck-window-plan-position-columns.txt`）
+====================================================================================================
+  * 纯函数牙：`UPDATE mir2_db.characters SET x=1, y=2 WHERE …` ⇒ `position-sql-x-y-red` PASS（有 findings）；
+    `SET CX=1, CY=2`（缺 MapName）⇒ `position-sql-missing-mapname-red` PASS。
+  * 计划级牙：把真计划里的 `SET MapName='0', CX=605, CY=578` 改回 `SET x=605, y=578`
+    ⇒ `plan-conf-red-position-columns` 点名「站位 SQL 未用真实列 CX/CY / 未钉 MapName」。
+  * 变异在 `E:/tmp/m2svr-burst14/mut/`（仓内 sha256 前后一致，见 136）。
+
+E. 未闭环 / 登记（不静默）
+====================================================================================================
+* 本片只保证「窗口**不会因为站位 SQL 报错而烧**」；卡级 DoD③ 的 R 级真机「③b/③a 两趟同框对照 +
+  屏幕见怪并能攻击造成伤害」仍归 **root 独占窗口**，不因本片收卡。
+* 本片**未执行**正确列 UPDATE（不改 `aaa` 的现坐标 297,629 —— root 窗口开跑前请按 §1a 记 before）。
+* `E:/tmp/openmir2-watch/client-e2e-window.sh`（root 工具）本片**未动**（只读核对）。
+
+F. 涉及文件
+====================================================================================================
+  改：`window_handoff.py`、`82-two-side-window-runbook.md`、`README.md`（§㉗）、`SHA256SUMS.txt`
+  新增：本文件 + `136-redcheck-window-plan-position-columns.txt` + `137-gates.txt` + `138-boundary.txt`
+  只读引用：`run_pair.ps1:127/547-554`、`playdata.rs:93-95`、`live_data.rs:249`、`133/134`
