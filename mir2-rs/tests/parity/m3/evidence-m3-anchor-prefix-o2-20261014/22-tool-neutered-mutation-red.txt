@@ -1,0 +1,17 @@
+== 改坏必红②：外部工具变异（_path_prefix_findings 直接 return []）⇒ mutation 必 RED ==
+[quest] rc=1
+      MUT-O1 路径前缀(错前缀/纯非字母前缀必红；spec 区间·正确·裸基名不误伤): GREEN（0+0 项）
+      MUT-O2 扩展名硬编码退化(非 .cs/.sql 错前缀漏判): RED（漏判=是）
+[party_trade] rc=1
+      MUT-O1 路径前缀(错前缀/纯非字母前缀必红；spec 区间·正确·裸基名不误伤): GREEN（0+0 项）
+      MUT-O2 扩展名硬编码退化(非 .cs/.sql 错前缀漏判): RED（漏判=是）
+[guild_castle] rc=1
+      MUT-O1 路径前缀(错前缀/纯非字母前缀必红；spec 区间·正确·裸基名不误伤): GREEN（0+0 项）
+      MUT-O2 扩展名硬编码退化(非 .cs/.sql 错前缀漏判): RED（漏判=是）
+[hero_pet] rc=1
+      MUT-O1 路径前缀(错前缀/纯非字母前缀必红；spec 区间·正确·裸基名不误伤): GREEN（0+0 项）
+      MUT-O2 扩展名硬编码退化(非 .cs/.sql 错前缀漏判): RED（漏判=是）
+[selloff] rc=1
+      MUT-O1 路径前缀(错前缀/纯非字母前缀必红；spec 区间·正确·裸基名不误伤): GREEN（0+0 项）
+      MUT-O2 扩展名硬编码退化(非 .cs/.sql 错前缀漏判): RED（漏判=是）
+OVERALL GREEN（改坏必红成立：5/5 mutation rc=1）
