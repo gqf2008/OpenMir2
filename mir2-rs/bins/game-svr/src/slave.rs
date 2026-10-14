@@ -47,9 +47,10 @@
 //!   `mag_tamming` 消费，账本不变）⇒ 帧面/状态登记未接。
 //! - **race 54 的 `Animal = true`**（`BaseObject.ReAliveEx` `:2601-2603`）：复活路径未建模（⑨-3 登记）
 //!   ⇒ [`mir2_world::combat::race_is_animal`] 不计入。
-//! - **护身符扣光分支的 `SM_DELITEMS` 帧**：oracle `UseAmulet` 的 `else` 支
-//!   （`MagicBase.cs:124-126`）`SendDelItems` 尚无编码器 ⇒ 状态照改（`Dura=0`/清槽），
-//!   帧面登记。
+//! - **护身符扣光分支的 `SM_DELITEM` 帧已接**：oracle `UseAmulet` 的 `else` 支
+//!   （`MagicBase.cs:124-126`）`SendDelItems(UseItems[idx])` ⇒ `SM_DELITEM(202)` + `EncodeBuffer(clientItem)`
+//!   （`PlayObject.Base.cs:1648-1665`）；帧体见 [`deleted_amulet_body`]，宿主在 `CM_SPELL` 的
+//!   护身符结算处发（清槽**前**取件、`Dura` 恒 0）。
 
 use std::path::Path;
 
@@ -64,8 +65,49 @@ use mir2_world::slave::{
 };
 use mir2_world::{SlaveSpawner, SummonOutcome, World};
 
+use crate::ability::ItemCatalog;
+use crate::bag::{item_display_name, BagItem};
 use crate::downlink::DisplayTable;
 use crate::mongen::{create_monster_oracle, MonsterTable, WorldMonsterSink};
+
+/// `MagicBase.UseAmulet`（`MagicBase.cs:109-127`）`else` 支里 `SendDelItems(UseItems[idx])`
+/// 的**立即帧** body（`PlayObject.Base.cs:1648-1665`）。
+///
+/// oracle 语句序（`:121-126`）：
+/// ```text
+/// playObject.UseItems[idx].Dura = 0;                 // ① 先置 0
+/// playObject.SendDelItems(playObject.UseItems[idx]);// ② 帧内 Dura 即 0
+/// playObject.UseItems[idx].Index = 0;                // ③ 再清槽
+/// ```
+/// ⇒ 帧里的 `Dura` **恒 0**（不是扣光前的值），`DuraMax`/`MakeIndex`/`Desc` 与 `Index` 取原件。
+/// `StdMode == 50` 的名称后缀用当下的 `Dura`（= 0）⇒ `" #0"`。
+///
+/// 与 [`crate::trade::send_add_item_body`]（`SM_ADDITEM`）的差别只在两处：ident `202` vs `200`，
+/// 以及**不做** `M2Share.StdModeMap` 的 `Desc[8]`⇒`Shape`(0/130) 改写（`SendDelItems` 不动 `Shape`）。
+/// `GetUpgradeStdItem` 的 desc 升级差量未建模（同 `T-24`）：`desc` 全 0 的物品逐字节等价。
+#[must_use]
+pub fn deleted_amulet_body(
+    actor_id: i32,
+    item: &BagItem,
+    catalog: &dyn ItemCatalog,
+) -> Option<Vec<u8>> {
+    let tpl = catalog.get(item.index)?;
+    let mut name = item_display_name(catalog, item);
+    if tpl.std_mode == 50 {
+        // oracle `clientItem.Item.Name = clientItem.Item.Name + " #" + userItem.Dura;`（Dura 已置 0）。
+        name = format!("{name} #0");
+    }
+    let ci = crate::itemwire::ClientItem {
+        tpl,
+        name,
+        make_index: item.make_index,
+        dura: 0,
+        dura_max: item.dura_max,
+        desc: item.desc,
+    };
+    let tail = mir2_protocol::edcode::encode(&crate::itemwire::encode_client_item(&ci));
+    Some(crate::smframe::sm_delitem(actor_id, &tail))
+}
 
 /// `[Server]`/`[Setup]` 的宝宝配置读侧（等价 `GameSvrConf` 的对应读取点）。
 ///
@@ -861,5 +903,89 @@ mod tests {
             expect_rng.random(),
             "尾部取数次序与 do_spell_tail 一致"
         );
+    }
+
+    /// **⑨-2 护身符扣光帧体**：`deleted_amulet_body` = `SM_DELITEM(202)` +
+    /// `EncodeBuffer(ClientItem{Dura=0})`；`StdMode==50` 的名称后缀用当下的 `Dura`(0) ⇒ `" #0"`。
+    #[test]
+    fn deleted_amulet_body_encodes_delitem_with_zero_dura() {
+        let mut catalog = crate::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "护身符".into(),
+                std_mode: 25,
+                shape: 5,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        catalog.insert(
+            2,
+            mir2_data::StdItem {
+                name: "药".into(),
+                std_mode: 50,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let item = BagItem {
+            make_index: 7,
+            index: 1,
+            dura: 100,
+            dura_max: 1000,
+            desc: [0; 14],
+        };
+        let body = deleted_amulet_body(42, &item, &catalog).expect("模板存在 ⇒ Some");
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).unwrap();
+        assert_eq!(cm.recog, 42, "Recog=ActorId");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_DELITEM);
+        assert_eq!((cm.param, cm.tag, cm.series), (0, 0, 1), "Series=1");
+        let expect = crate::itemwire::ClientItem {
+            tpl: catalog.get(1).unwrap(),
+            name: "护身符".into(),
+            make_index: 7,
+            dura: 0,
+            dura_max: 1000,
+            desc: [0; 14],
+        };
+        let expect_tail =
+            mir2_protocol::edcode::encode(&crate::itemwire::encode_client_item(&expect));
+        assert_eq!(
+            mir2_protocol::edcode::decode(&body[12..]),
+            mir2_protocol::edcode::decode(&expect_tail),
+            "尾 = EncodeBuffer(ClientItem，Dura 恒 0)"
+        );
+        // `StdMode == 50`：名称后缀 `" #" + userItem.Dura`，而 oracle 在 `SendDelItems` 前已置 Dura=0。
+        let item50 = BagItem {
+            make_index: 8,
+            index: 2,
+            dura: 5,
+            dura_max: 9,
+            desc: [0; 14],
+        };
+        let body50 = deleted_amulet_body(42, &item50, &catalog).expect("模板存在 ⇒ Some");
+        let expect50 = crate::itemwire::ClientItem {
+            tpl: catalog.get(2).unwrap(),
+            name: "药 #0".into(),
+            make_index: 8,
+            dura: 0,
+            dura_max: 9,
+            desc: [0; 14],
+        };
+        let expect_tail50 =
+            mir2_protocol::edcode::encode(&crate::itemwire::encode_client_item(&expect50));
+        assert_eq!(
+            mir2_protocol::edcode::decode(&body50[12..]),
+            mir2_protocol::edcode::decode(&expect_tail50),
+            "StdMode==50 名称后缀用当下的 Dura（=0）"
+        );
+        // 模板缺失 ⇒ `SendDelItems` 的 `if (stdItem != null)` 不成立 ⇒ 无帧。
+        let missing = BagItem {
+            make_index: 9,
+            index: 999,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        };
+        assert!(deleted_amulet_body(42, &missing, &catalog).is_none());
     }
 }

@@ -175,6 +175,18 @@ pub fn sm_additem(actor_id: i32) -> Vec<u8> {
     gm_data_body(header, &[])
 }
 
+/// `PlayObject.SendDelItems(UserItem)`（`PlayObject.Base.cs:1648-1665`）：
+/// `MakeMessage(SM_DELITEM(202), ActorId, 0, 0, 1)` + 尾 `EDCode.EncodeBuffer(clientItem)`。
+///
+/// 与 [`sm_additem`] 的差别（逐行对照）：**无** `M2Share.StdModeMap` 的 `Desc[8]`⇒`Shape`
+/// 0/130 改写（`SendDelItems` 不动 `Item.Shape`）；`StdMode == 50` 的名称 `" #" + Dura`
+/// 后缀、`Series=1`、字段序同源。**立即帧**（oracle 走 `SendSocket` 直发，不进 `MsgQueue`）。
+#[must_use]
+pub fn sm_delitem(actor_id: i32, tail: &[u8]) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_DELITEM, 0, 0, 1);
+    gm_data_body(header, tail)
+}
+
 /// 见 [`sm_additem`] 段的口径表。
 #[must_use]
 pub fn sm_itemhide(item_id: i32, x: i32, y: i32) -> Vec<u8> {
@@ -1459,5 +1471,20 @@ mod tests {
         assert_eq!(cm.tag, 0x2710, "LoWord(DuraMax)");
         assert_eq!(cm.series, 0, "HiWord(DuraMax)");
         assert!(body[12..].is_empty(), "无尾");
+    }
+
+    /// **⑨-2 护身符扣光帧面**：`SM_DELITEM(202)` 的字段位与「尾原样透传」
+    /// （`PlayObject.Base.cs:1648-1665` 的 `MakeMessage(SM_DELITEM, ActorId, 0, 0, 1)` + `SendSocket`）。
+    #[test]
+    fn delitem_field_layout_and_tail_passthrough() {
+        use mir2_protocol::frame::CommandMessage;
+        let tail = [0x11, 0x22, 0x33];
+        let body = sm_delitem(0x0000_0007, &tail);
+        let cm = CommandMessage::from_bytes(&body).unwrap();
+        assert_eq!(cm.recog, 7, "ActorId 在 Recog");
+        assert_eq!(cm.ident, messages::SM_DELITEM);
+        assert_eq!((cm.param, cm.tag, cm.series), (0, 0, 1), "Series=1");
+        // 尾 = `EDCode.EncodeBuffer(clientItem)`，本层原样透传（不在本函数编码）。
+        assert_eq!(&body[12..], &tail, "尾原样透传");
     }
 }
