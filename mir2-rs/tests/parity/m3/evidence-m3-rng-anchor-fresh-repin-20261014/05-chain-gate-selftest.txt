@@ -1,0 +1,9 @@
+# 链深检门 selftest（含并集后的防回退牙：fmt 证据门 + RNG 场景锚门 双向常在；.py 登记项 ≥23）
+$ python -I fixture_chain_gate.py selftest   # cwd=mir2-rs/tests/parity/m3
+  SELFTEST ok  共享管线 (file,args) 登记唯一
+  SELFTEST ok  _tool_argv(.py) ⇒ python -I
+  SELFTEST ok  _tool_argv(.ps1) ⇒ powershell -File
+  SELFTEST ok  _run_tool(.py) 真跑 rc=0
+  SELFTEST ok  _run_tool 缺件 ⇒ 127
+SELFTEST GREEN: fixture_chain_gate selftest 40/40
+rc=0

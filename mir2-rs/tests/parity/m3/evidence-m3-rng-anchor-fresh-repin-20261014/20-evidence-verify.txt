@@ -1,0 +1,12 @@
+# 证据 hash 复核（仓库 LF/git-blob 口径）
+# 本包 SHA256SUMS.txt 由 `verify_sha256sums.py write` 从 15 个文本件（不含清单自身）归一生成；
+# 下列为对**最终清单**的 verify --check-extra 与 eolcheck 读数（稳定、可复跑）。
+# 注：`write` 的「N 行 hash 变更」读数随迭代次数漂移，故不转录，只转录最终 verify/eolcheck。
+
+$ python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-fresh-repin-20261014
+GREEN mir2-rs\tests\parity\m3\evidence-m3-rng-anchor-fresh-repin-20261014\SHA256SUMS.txt  [repo 口径]  OK 16/16
+  rc=0
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-fresh-repin-20261014
+EOLCHECK GREEN 17/17 件文本证据与仓库口径（LF）在 EOL 上一致
+  rc=0

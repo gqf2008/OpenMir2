@@ -1,0 +1,4 @@
+# cwd=mir2-rs, CARGO_TARGET_DIR=E:/tmp/m3cs-target, HEAD=224cea0c9
+$ cargo test --workspace --no-fail-fast
+TOTAL: suites=101 passed=1217 failed=0 ignored=22
+rc=0

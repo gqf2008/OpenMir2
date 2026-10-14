@@ -1,0 +1,6 @@
+# 收口前：origin/master (41e61029e) 的 DRIVER-CONTRACT.md（5665）在 --doc 副本上复核
+$ git show origin/master:mir2-rs/tests/parity/m3/rng-trace-scene/DRIVER-CONTRACT.md > E:/tmp/m3cs-before-DRIVER-CONTRACT.md
+$ python -I rng-trace-scene/check_anchors.py check --doc E:/tmp/m3cs-before-DRIVER-CONTRACT.md   # cwd=mir2-rs/tests/parity/m3
+  RED ANCHOR_DRIFT 宿主无条件开怪 AI 调用点（本卡要 AI 开）：文档写 mir2-rs/bins/game-svr/src/main.rs:5665，但 /enable_production_monster_ai\(&mut world\)/ 的首个匹配在 :5795
+RED: check_anchors 1 项 RED
+rc=1

@@ -1,0 +1,13 @@
+# 证明：链门 FIXTURE_CHAIN 的 B（Claim B）RED 在本片 base（origin/master f0a9ab911）上同样复现 ⇒ 与本片无关
+
+$ (cd E:/tmp/m3cs-base-fmtw/mir2-rs/tests/parity/m3 && python -I fixture_chain_gate.py check)   # 纯 base，未含本片改动
+  rc=1
+whitelist_registry_selftest present    rc=0 :: SELFTEST GREEN 9/9
+FIXTURE_CHAIN RED: runner_ok=9 prereq_or_skip=0 red=1
+  RED B 全服 RNG 消费者账本（Claim B）：runner -SelfCheckNoStack rc=1（SELFTEST ok=36/37 failures=anchors-freshness-selftest）
+
+# base 上共享管线不含本片新增的 fixture_fmt_evidence_*（本片新增）：
+$ grep -c fixture_fmt_evidence <base>/fixture_chain_gate.py
+0
+
+# 结论：B RED 在 base 已存在（anchors-freshness-selftest），属 Claim B 承接卡（openmir2-m3-rng-trace-scene-groups / openmir2-m3-rng-scene-driver 未开）的遗留，与本片写集（fmt 证据）无关。

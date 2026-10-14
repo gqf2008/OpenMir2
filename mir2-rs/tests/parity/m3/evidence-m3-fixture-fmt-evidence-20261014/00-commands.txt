@@ -1,0 +1,58 @@
+# M3 夹具链族 fmt 证据自描述收口（卡 openmir2-m3-fixture-chain-gate · reviewer-6 O-1）
+
+工作目录：本车道 worktree（m3cs）；base=origin/master f0a9ab911（合并后的树）；零起栈 / 零端口 / 零 .rs。
+
+## 1) 收口前实测（origin/master 的 git blob）
+
+    git show origin/master:<path> | wc -c
+    git show origin/master:<path> | sha256sum
+
+见 `01-before-scan.txt`。
+
+## 2) 修复：5 个 fmt 证据件改为自描述（`$ <命令>` + `rc=<n>`）
+
+    printf '$ cargo fmt --all -- --check\nrc=0\n' > <5 个欠件路径>
+
+## 3) 重记 5 个证据包的 SHA256SUMS（仓库 LF/git-blob 口径）
+
+    python -I tools/evidence-hash/verify_sha256sums.py write <pkg>
+    python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra <pkg>
+    python -I tools/evidence-hash/verify_sha256sums.py eolcheck <pkg>
+
+见 `20-evidence-verify.txt`。
+
+## 4) 新门（防复发）：m3_fixture_fmt_evidence_gate.py
+
+    cd mir2-rs/tests/parity/m3
+    python -I m3_fixture_fmt_evidence_gate.py check
+    python -I m3_fixture_fmt_evidence_gate.py selftest
+    python -I m3_fixture_fmt_evidence_gate.py mutation
+
+见 `02-fmt-gate-check.txt` / `03-fmt-gate-selftest.txt` / `04-fmt-gate-mutation.txt`。
+
+## 5) 接入共享管线（fixture_chain_gate.SHARED_CHECKS + 防回退牙）
+
+    cd mir2-rs/tests/parity/m3
+    python -I fixture_chain_gate.py selftest
+    python -I fixture_chain_gate.py check
+    python -I fixture_chain_gate.py check --require-all
+
+见 `05-chain-gate-selftest.txt` / `06-chain-gate-check.txt` / `07-chain-gate-require-all.txt`。
+`check` 的 `FIXTURE_CHAIN RED` 仅来自 B（Claim B）`anchors-freshness-selftest`，
+base 上同项同 RED（见 `09-chain-red-preexisting-base-proof.txt`）⇒ 与本片无关。
+
+## 6) 外部改坏必红
+
+    抹空 evidence-m3-anchor-prefix-o2-20261014/40-fmt.txt ⇒ m3_fixture_fmt_evidence_gate.py check rc=1
+    还原 ⇒ rc=0
+
+见 `21-external-mutation-red.txt`。`mutation` 子命令另含 MUT1-MUT4（抹空 / 删命令头 / 删 rc / 删件）。
+
+## 7) 四门禁（cwd=mir2-rs，CARGO_TARGET_DIR=E:/tmp/m3cs-target，合并 origin/master f0a9ab911 后的树）
+
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets -- -D warnings
+    cargo test --workspace --no-fail-fast
+    cargo run -p msgcodegen -- --check
+
+见 `10-gate-fmt.txt` / `11-gate-clippy.txt` / `12-gate-test.txt` / `13-gate-msgcodegen.txt`。

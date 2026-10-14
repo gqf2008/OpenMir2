@@ -1,0 +1,13 @@
+# 外部改坏（不复用作者 RC）：抹空真身证据件 -> 门 check 必 RED；还原 -> GREEN
+
+$ : > mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/40-fmt.txt
+FIXTURE_FMT_EVIDENCE dirs=9
+FIXTURE_FMT_EVIDENCE_RED 1：EMPTY mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/40-fmt.txt
+  rc=1
+
+$ 还原 mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/40-fmt.txt
+FIXTURE_FMT_EVIDENCE dirs=9
+FIXTURE_FMT_EVIDENCE GREEN（9 个证据包 / 9 件 fmt 证据非空 + 命令头 + rc）
+  rc=0
+
+# 改坏只落在工作树内且已还原。
