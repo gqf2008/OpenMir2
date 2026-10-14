@@ -1,0 +1,42 @@
+256 — 返工边界 / 冻结面（片61 rework；回应 reviewer-5 I-1）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `ea2322d04`；返工前被审 head = `ad05280ad`（片61）
+====================================================================================================
+
+# 0) 差量（git diff --name-only ea2322d04..<本返工 head>）
+
+本返工相对 `ad05280ad`（片61 被审 head）的增量（**全部在同一个证据目录**）：
+
+  M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/251-redcheck-window-step0.txt
+  M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/252-gates.txt
+  M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+  M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+  A mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/254-redcheck-window-step0-rework-20261015.txt
+  A mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/255-gates.txt
+  A mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/256-boundary.txt
+  A mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/probe-free.json
+  A mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/probe-occupied.json
+  A mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/probe-bad.json
+  A mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/preflight-probe-free.txt
+  A mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/preflight-probe-occupied.txt
+  A mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/preflight-probe-bad.txt
+  A mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/preflight-probe-occupied-before-invalid.txt
+
+（相对片61 base `ea2322d04` 的**全量**差量 = 片61 的 7 件 + 本返工的 14 件，见 SHA256SUMS；
+本件只登记返工增量。）
+
+# 1) 冻结面（必须空）
+
+$ git diff --name-only ea2322d04..<head> -- \
+    src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins src/BotSrv mir2-rs/tests/parity/m3
+（空）
+
+# 2) 扩展名计数
+
+本返工增量：`.txt` 8 + `.json` 3 + `README.md` 1 + `SHA256SUMS.txt` 1
+⇒ **零 `.rs` / `.toml` / `.ps1` / `.cs`**（工具与本返工前的片61 同字节，本返工未动工具）。
+
+# 3) 口径
+
+变更全部在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`（本卡证据目录）。
+行尾：所有文本证据 LF（`eolcheck` GREEN，读数见 `255` §5）。

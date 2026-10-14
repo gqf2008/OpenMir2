@@ -1,0 +1,75 @@
+254 — 返工（reviewer-5 I-1）：三态「注入探针占位 ⇒ RED」自述与原始件不符 —— 修 probe JSON 转义 + 三态原样重跑 + 原始件入库
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `ea2322d04`；被审 head（返工前）= `ad05280ad`（片61）；本返工 head = 本提交
+====================================================================================================
+
+# 0) reviewer-5 findings I-1（原文摘）
+
+> 位置：`251-redcheck-window-step0.txt` §1 B + `252-gates.txt` §4 + patch body `evidence.redcheck`
+> 问题：三处均写「注入探针 occupied（5000 被 pid 30284 占 + 异源 exe）⇒ `RESULT: RED` rc=1」；
+>       但引用的原始件 `E:/tmp/m2svr-burst-b54/preflight-probe-occupied.txt` 实际是 `PREREQ_RED` rc=2。
+> root_cause：`probe-occupied.json` 的 exe 路径用了未转义的 Windows 单反斜杠 ⇒ 非法 JSON
+>       （`Invalid \escape: line 1 column 107 (char 106)`）⇒ 工具 `json.loads` 失败走 fail-closed `PREREQ_RED`。
+> ask：把 probe 路径改成**正斜杠或转义反斜杠**，重跑三态使 occupied 真得 `RESULT: RED` rc=1；
+>      并把 251 §1 B / 252 §4 / patch body 的读数改成实际值。
+
+# 1) 改前（缺陷可复现；原始件 `preflight-probe-occupied-before-invalid.txt`，入库）
+
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin \
+    --target-dir E:/tmp/m2svr-window-target \
+    --provenance E:/tmp/m2svr-window-target/window-provenance.json \
+    --slot-probe-json E:/tmp/m2svr-burst-b54/probe-occupied.json
+  WARN R8 使用注入探针 E:/tmp/m2svr-burst-b54/probe-occupied.json（仅自测/证据复算；窗口机上禁用）
+  PREREQ_RED R8: 注入探针不可用（读不了注入探针 ...（Invalid \escape: line 1 column 107 (char 106)））
+  RESULT: PREREQ_RED
+  rc=2
+（探针文件原文：`{"...","ExecutablePath":"E:\tmp\openmir2-merge-target\debug\game-svr.exe"}` —— 单反斜杠未转义。
+ 与 reviewer-5 钉住 head 的复跑逐字一致。）
+
+# 2) 修法（本次唯一实质改动：探针 JSON 一行）
+
+`probe-occupied.json`（入库件，**正斜杠**，合法 JSON；工具侧用 `os.path.abspath`/`normcase` 归一，
+`E:/tmp/...` 与 `E:\tmp\...` 等价，故仍是「异源 exe」判定）：
+
+  {"ports": [{"LocalPort":5000,"OwningProcess":30284}],
+   "exes": [{"ProcessId":30284,"ExecutablePath":"E:/tmp/openmir2-merge-target/debug/game-svr.exe"}]}
+
+# 3) 改后：三态同口径重跑（三次都带 `--provenance`，R7 走同一命令模板 ⇒ 顺带收 O-2）
+
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin \
+    --target-dir E:/tmp/m2svr-window-target \
+    --provenance E:/tmp/m2svr-window-target/window-provenance.json \
+    --slot-probe-json probe-<st>.json
+
+| 态 | 探针 | 关键行 | RESULT | rc | 原始件（入库） |
+| --- | --- | --- | --- | --- | --- |
+| A | `probe-free.json` = 全空闲 | `[OK] R8 游戏端口全 DOWN（9 个…）` + `[OK] R8 无 game-svr.exe 在跑` | GREEN | 0 | `preflight-probe-free.txt` |
+| B | `probe-occupied.json` = 5000(pid 30284) + `E:/tmp/openmir2-merge-target/debug/game-svr.exe` | `RED R8` ×2：①「窗口槽位被占 … 5000(pid 30284)」②「在跑的 game-svr.exe（pid 30284）来自 E:/tmp/openmir2-merge-target/debug/…，不是本计划 E:/tmp/m2svr-window-target\debug\game-svr.exe」 | RED | 1 | `preflight-probe-occupied.txt` |
+| C | `probe-bad.json` = 坏 JSON | `PREREQ_RED R8: 注入探针不可用（… Expecting value: line 1 column 13 (char 12)）` | PREREQ_RED | 2 | `preflight-probe-bad.txt` |
+
+⇒ 三态**均与自述一致**；I-1 的自相矛盾消失。三次均 `[OK] R7 出处清单 … 6 件 exe sha256 逐字节一致`
+（O-2：命令模板统一，R7 不再因缺 `--provenance` 落 INFO）。
+
+# 4) 原始件入库（O-1）
+
+`E:/tmp/m2svr-burst-b54/` 的易失原始件已改为**随本片入库**（同目录，可 hash 复算）：
+
+  probe-free.json / probe-occupied.json / probe-bad.json
+  preflight-probe-free.txt / preflight-probe-occupied.txt / preflight-probe-bad.txt
+  preflight-probe-occupied-before-invalid.txt   ← 改前（I-1 复现，审计留痕）
+
+⇒ 复算不再依赖 `E:/tmp`（reviewer-5 O-1）。
+
+# 5) 改坏必红（本片新增/保持）
+
+- **探针坏 ⇒ fail-closed**：`probe-bad.json` ⇒ `PREREQ_RED` rc=2（不静默通过，见上表 C）。
+- **探针占位 ⇒ RED**：`probe-occupied.json` ⇒ `RESULT: RED` rc=1（上表 B；本条正是 I-1 修好的那态）。
+- **判定由真实槽位驱动**：真探（不注入）在泄漏栈在位时仍 `RESULT: RED` rc=1（9 端口 + 异源 exe）——
+  见 `249` §1；去掉 R8（片60 BEFORE）在同机同源同脚本下会假绿 `WINDOW_READY=YES`，工具层牙见 `245` §6。
+
+# 6) 判级与纪律
+
+判级 **L**（工具/证据 + 只读机判，零生产代码）。零起栈 / 零占端口 / 零 kill；未动共享主检出 /
+root 活脚本 / 泄漏栈；未 merge、未自签 review。改造 7 件：
+`251`（§1 读数订正）/ `252`（§4 读数订正 + 返工说明）/ `254`（本件）+ 6 件原始件入库
+（三个 `probe-*.json` + 三个 `preflight-probe-*.txt`，另 `...-before-invalid.txt` 为改前留痕）。

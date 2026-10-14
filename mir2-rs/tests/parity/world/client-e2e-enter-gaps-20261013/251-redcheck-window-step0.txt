@@ -1,0 +1,49 @@
+251 — 反向对照 / 改坏必红：R8 的判定由「真实槽位」驱动（非硬编码）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `ea2322d04`；head = 本片提交（证据-only）
+====================================================================================================
+
+# 0) 要证
+
+`249`/`250` 的结论「唯一阻塞 = R8」必须由**本机真实槽位**决定，且门要有牙：
+① 槽位干净 ⇒ GREEN（不是恒 RED）；② 槽位被占 ⇒ RED 并点名 pid + 异源 exe；
+③ 探针坏 ⇒ PREREQ_RED（fail-closed，不是「探不动 ⇒ INFO 跳过」假绿）。三条都真跑。
+
+# 1) 注入探针三态（`--slot-probe-json`；仅自测/证据复算，窗口机上禁用）
+
+> ⚠ **2026-10-15 返工（reviewer-5 I-1）**：初版 B 态写「occupied ⇒ RED rc=1」，但其引用的原始件实为
+> `PREREQ_RED` rc=2 —— 当时 `probe-occupied.json` 的 exe 路径用了**未转义的 Windows 单反斜杠** ⇒
+> 非法 JSON（`Invalid \escape: line 1 column 107 (char 106)`）。已把该探针改为**正斜杠**并**三态原样重跑**
+> （下读数即重跑值），原始件随本片入库。改前/改后与逐字对照见 `254-redcheck-window-step0-rework-20261015.txt`。
+
+三次均带 `--provenance E:/tmp/m2svr-window-target/window-provenance.json`（命令模板统一，R7 同口径；见 254 §3）。
+
+A) `probe-free.json` = `{"ports":[],"exes":[]}`
+   ⇒ `WARN R8 使用注入探针 ...` ; `[OK] R8 游戏端口全 DOWN（9 个；3306 共享 MySQL 不在门内）` ;
+     `[OK] R8 无 game-svr.exe 在跑` ⇒ `RESULT: GREEN` rc=0
+B) `probe-occupied.json` = 5000 被 pid 30284 占 + exe = `E:/tmp/openmir2-merge-target/debug/game-svr.exe`（正斜杠，合法 JSON）
+   ⇒ `RED R8` ×2（① 点名 `5000(pid 30284)`；② 点名在跑 pid 30284 来自
+     `E:/tmp/openmir2-merge-target/debug/game-svr.exe`）⇒ `RESULT: RED` rc=1
+C) `probe-bad.json` = 坏 JSON
+   ⇒ `PREREQ_RED R8: 注入探针不可用（...）` ⇒ `RESULT: PREREQ_RED` rc=2
+
+原始件（**随本片入库**，可 hash 复算）：`preflight-probe-free.txt` / `preflight-probe-occupied.txt` /
+`preflight-probe-bad.txt`（探针本身 `probe-free.json` / `probe-occupied.json` / `probe-bad.json`）；
+改前（I-1 复现）留痕：`preflight-probe-occupied-before-invalid.txt`。
+
+# 2) 反向对照（同机 / 同替身源 / 同替身脚本，只差「R8 看不看槽位」）
+
+- 本片（**有** R8）：泄漏栈在位 ⇒ 真探 `RESULT: RED`；替身脚本路径 `WINDOW_READY=NO`
+  （G1 = R8；原始件 `E:/tmp/m2svr-burst-b54/handoff-aggregate-fixed.txt`）。
+- 片60 BEFORE（**无** R8，master `bf9c5c620` 工具）：同机同源同脚本 ⇒ 真探 `RESULT: GREEN` 且
+  `WINDOW_READY=YES`（**假绿**）—— 见 `246-window-slot-falsegreen-20261015.txt`。
+
+⇒ 去掉 R8（= 回到片60 before）后，在**泄漏栈仍占 9 端口**的机器上 `WINDOW_READY` 会重新变 YES，
+开窗就会从修复前 exe 抓包。这就是本片的「改坏必红」等价物；其工具层牙已在 `245` §6 用
+`window_slot_findings` 顶部强制绿（MUT-A）复现：`--selftest FAILED (53/57)` + 真探回落假 GREEN，
+还原后 sha256 与改前逐字节一致。
+
+# 3) 判级与纪律
+
+判级 L（只读机判 + 文档，零生产代码）。零起栈 / 零占端口 / 零 kill；未动共享主检出 / root 活脚本 /
+泄漏栈；未 merge、未自签 review。原始件随本片入库（见 §1 末）；返工记录见 `254`。

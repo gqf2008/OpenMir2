@@ -1,0 +1,18 @@
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 c61b9627a1（片㊴ 53 SM_HEALTHSPELLCHANGED TCharDesc 尾）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 6cadc9fbf9（片㊼ 52 SM_ABILITY 调用点布局全覆盖）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 fd68e037db（片31 SM_STRUCK 客户端布局（HIGHHP 家族））（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=da2df1fdbd 相对基线 origin/master@ea2322d044 生产路径零差异
+[OK] R7 出处清单 window-provenance.json source_head=da2df1fdbd，6 件 exe sha256 逐字节一致
+WARN R8 使用注入探针 E:/tmp/m2svr-burst-b55/probe-bad.json（仅自测/证据复算；窗口机上禁用）
+PREREQ_RED R8: 注入探针不可用（读不了注入探针 E:/tmp/m2svr-burst-b55/probe-bad.json（Expecting value: line 1 column 13 (char 12)））
+RESULT: PREREQ_RED

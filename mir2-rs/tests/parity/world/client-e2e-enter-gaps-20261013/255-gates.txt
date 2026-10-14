@@ -1,0 +1,73 @@
+255 — 返工后四门禁 + 工具自检 + 证据清单（片61 rework；回应 reviewer-5 I-1/O-1/O-2）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `ea2322d04`；返工前被审 head = `ad05280ad`（片61）；cwd = mir2-rs；CARGO_TARGET_DIR=/e/tmp/m2svr-target
+====================================================================================================
+
+# 0) 边界声明
+
+本返工**零生产代码**：无 `.rs`/`.toml`/`.ps1`/`.cs`；`src/ sql/ MirClient/ mir2-rs/crates/protocol/
+mir2-rs/crates/storage/ mir2-rs/bins/ src/BotSrv/ mir2-rs/tests/parity/m3/` 全空。
+改动全部在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`：3 件订正（`251`/`252`/README）
++ `254`（返工记录）+ 6 件三态原始件入库 + `256`（本返工边界）+ 本件。见 `256-boundary.txt`。
+
+# 1) 四门禁（cwd = mir2-rs，CARGO_TARGET_DIR=/e/tmp/m2svr-target）
+
+$ cargo fmt --all -- --check
+rc=0（无输出）
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.54s
+rc=0
+
+$ cargo test --workspace --offline
+101 result-lines：1233 passed / 0 failed / 22 ignored（rc=0；无 FAILED/panicked）
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+（原始件 `E:/tmp/m2svr-burst-b55/gates-part1.txt` / `gates-part2.txt`。）
+
+# 2) 工具自检（fresh）
+
+$ python -I -B check_rust_window_preflight.py --selftest   ⇒ SELFTEST OK (57/57)
+$ python -I -B window_handoff.py --selftest                ⇒ SELFTEST OK (107/107)
+
+（两件工具本返工**逐字节未动**，自检仅作 fresh 复核。）
+
+# 3) 真探 fresh（只读；未注入探针；带出处清单）
+
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin \
+    --target-dir E:/tmp/m2svr-window-target \
+    --provenance E:/tmp/m2svr-window-target/window-provenance.json
+  R1（5 修复提交）OK / R2 OK / R3 OK / R4（4 点）OK / R5 OK / R6 OK / R7 OK
+  RED R8 ×2：9 端口 LISTENING（5000/5100/5500/5600/5700/6000/7000/7100/7200，pid 见 249 §1）
+             + 在跑 game-svr.exe(pid 30284) 来自 E:\tmp\openmir2-merge-target\debug\（异源）
+  RESULT: RED   rc=1
+⇒ 与 `249` §1 逐字一致：开窗唯一剩余阻塞 = R8（泄漏的修复前栈）。
+
+# 4) 三态（返工后；详见 `254`）
+
+- `probe-free.json` ⇒ `RESULT: GREEN` rc=0
+- `probe-occupied.json`（**正斜杠**，合法 JSON）⇒ `RED R8` ×2 ⇒ `RESULT: RED` rc=1
+- `probe-bad.json` ⇒ `PREREQ_RED` rc=2
+三次均带 `--provenance`（R7 同口径）。改前（非法 JSON ⇒ `PREREQ_RED`）留痕见
+`preflight-probe-occupied-before-invalid.txt`。
+
+# 5) 证据清单口径（LF / git-blob）
+
+$ python -I tools/evidence-hash/verify_sha256sums.py write <dir>          # 先写入已有行
+$ python -I tools/evidence-hash/verify_sha256sums.py verify <dir>
+    GREEN ... OK 270/270  [repo 口径]
+$ python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra --exclude '__pycache__/*' <dir>
+    GREEN ... OK 270/270（无多件）
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck <dir>
+    EOLCHECK GREEN 273/273 件文本证据与仓库口径（LF）在 EOL 上一致
+
+（6 件新增原始件以 LF 写出；首轮 `preflight-probe-*.txt` 由 Python 在 Windows 上 stdout 重定向
+ 产生 CRLF ⇒ 已归一为 LF 后重记清单。）
+
+# 6) 判级与纪律
+
+判级 L（证据/文档，零生产代码；无 RNG 抽数/时序/落库/战斗数值面）。零起栈 / 零占端口 / 零 kill；
+未动共享主检出 / root 活脚本 / 泄漏栈；未 merge、未自签 review。卡级 R 真机 ①②③ 归 root 独占窗口。

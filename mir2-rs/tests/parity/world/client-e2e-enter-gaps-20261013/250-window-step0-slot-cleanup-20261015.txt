@@ -1,0 +1,72 @@
+250 — 开窗 step0：停泄漏栈（可原样照抄）+ 安全性核验
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `ea2322d04`；head = 本片提交（证据-only）
+====================================================================================================
+
+# 0) 为什么需要这一步
+
+R8 现在 RED（见 `249`）：9 个 Rust 栈游戏端口被一台 **2026-10-14 14:55 起**的**修复前栈**占着，
+其 `game-svr.exe` 来自 `E:\tmp\openmir2-merge-target\debug\`（不是本计划 `E:/tmp/m2svr-window-target`）。
+不先停它，开窗会从旧 exe 抓包 = root 2026-10-14 15:0x「假回归」（HUD `0/0` + `CM_RUN=0`）的机器态。
+
+# 1) 目标栈的 pid 文件（只读核验；原始件 `E:/tmp/m2svr-burst-b54/leaked-stack.txt`）
+
+`E:/tmp/client-e2e/stack2/rust-stack.pid.json`（**存在**；UTF-8 with BOM）内容：
+
+  DBSrv      pid= 33132 ports=[6000, 5100, 5700] exe=...\src\DBSrv\bin\Release\DBSrv.exe
+  LoginSrv   pid= 29240 ports=[5500, 5600]       exe=...\src\LoginSrv\bin\Release\LoginSrv.exe
+  game-svr   pid= 30284 ports=[5000]             exe=E:\tmp\openmir2-merge-target\debug\game-svr.exe
+  login-gate pid=  9100 ports=[7000]             exe=E:\tmp\openmir2-merge-target\debug\login-gate.exe
+  sel-gate   pid= 13052 ports=[7100]             exe=E:\tmp\openmir2-merge-target\debug\sel-gate.exe
+  game-gate  pid= 34944 ports=[7200, 7201, 7202] exe=E:\tmp\openmir2-merge-target\debug\game-gate.exe
+
+⇒ R8 打印的 `-LogDir E:/tmp/client-e2e/stack2 -Stop` **指向的正是这台栈**：pid 文件在位，
+`start_rust_stack.ps1 -Stop` 按该文件逐条 `Stop-Process`（脚本 `166-176` 行）。
+（上一 burst 担心的「`stack/` 无 pid 文件 ⇒ `NOTHING_TO_STOP`」属实，但那只对 `stack`；泄漏栈的
+pid 文件在 `stack2`，所以 R8 打印的这条是对的。）
+
+# 2) 安全性核验：无客户端挂在它上面
+
+9 端口上的 `ESTABLISHED` 全部是**栈内互联**，无外部/本地客户端：
+
+  5000  ← game-gate(34944) ×3
+  5100/6000/5600  = DBSrv(33132) ↔ game-svr(30284) ↔ LoginSrv(29240)（内部互联）
+  5500  ← login-gate(9100)
+
+`MirOld.dat` pid 3204 **不在这 9 端口的任何连接里**（它只连外网 IP；前片已证）。
+`stack2` 下 DBSrv/LoginSrv/game-svr 的 `.out.log` 仍在 2026-10-15 04:52 写 ⇒ 该栈已空转 ~14h。
+⇒ 停它不影响任何本地客户端。
+
+# 3) step0 命令（原样照抄）
+
+  powershell -NoProfile -ExecutionPolicy Bypass -File \
+    E:/tmp/m2svr-window-origin/tools/m2-acceptance/start_rust_stack.ps1 \
+    -LogDir E:/tmp/client-e2e/stack2 -Stop
+
+  （`<源>` 用你将要开窗的构建源；替身源 = `E:/tmp/m2svr-window-origin`（推荐），脚本本身与源无关。）
+
+预期：逐条 `STOPPED <name> pid=<pid>`（6 条）⇒ 9 端口 DOWN、无 `game-svr.exe`。
+
+# 4) step0 之后的验门（必须转 GREEN 才开窗）
+
+  python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin \
+    --target-dir E:/tmp/m2svr-window-target \
+    --provenance E:/tmp/m2svr-window-target/window-provenance.json
+  # 期望：R1..R7 全 OK + R8 两条 OK ⇒ RESULT: GREEN rc=0
+
+  python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin \
+    --target-dir E:/tmp/m2svr-window-target --ref HEAD \
+    --window-script client-e2e-window.fixed.sh.txt
+  # 期望：G1/G5 全 OK ⇒ WINDOW_READY=YES rc=0
+
+# 5) 为什么不能照抄替身脚本 stop 段的 `-LogDir`（坑）
+
+替身脚本（= root 活脚本）的 `stop` 段用 `logdir='E:\tmp\client-e2e\stack'`；**泄漏栈不在 `stack`
+而在 `stack2`** ⇒ 直接跑 `-Stop -LogDir stack` 会得 `NOTHING_TO_STOP (无 pid 文件)`（`stack/` 确实没有
+pid 文件——那是 2026-10-14 00:40 那一趟的栈）。故本 step0 必须显式给 `-LogDir E:/tmp/client-e2e/stack2`
+（= R8 打印的那条）。替身脚本自己起的栈用 `stack`，其 stop 段自洽，两者不冲突。
+
+# 6) 纪律
+
+只读核验（`netstat` / `tasklist` / 读 pid 文件 / 读日志 mtime）；**未执行任何 Stop / kill**
+（栈属 root，等授权或 root 自己跑）；零起栈、零占端口；未动共享主检出 / root 活脚本 / 泄漏栈。判级 L。
