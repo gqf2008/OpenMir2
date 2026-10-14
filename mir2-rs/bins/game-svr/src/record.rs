@@ -199,7 +199,7 @@ impl Writer {
 // ===================== 嵌套类型 =====================
 
 /// `RecordHeader`（struct：固定 7 个成员，无 null 标记）。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct RecordHeader {
     pub s_account: Option<String>,
     pub name: Option<String>,
@@ -510,7 +510,7 @@ impl MagicRcd {
 // ===================== CharacterData（52 个成员） =====================
 
 /// `CharacterData`（class：52 个成员，顺序 = `PlayerDataInfo.cs` 声明顺序）。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CharacterData {
     pub server_index: u8,
     pub chr_name: Option<String>,
@@ -796,7 +796,7 @@ pub struct PlayerDataHead {
 }
 
 /// 全字段角色记录：`LoadPlayerDataPacket{ChrName, HumDataInfo{Header, Data}}`。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct PlayerRecord {
     pub chr_name: Option<String>,
     pub header: RecordHeader,
