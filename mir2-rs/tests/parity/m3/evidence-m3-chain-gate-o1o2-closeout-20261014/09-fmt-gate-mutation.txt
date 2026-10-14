@@ -1,0 +1,6 @@
+$ python -I mir2-rs/tests/parity/m3/m3_fixture_fmt_evidence_gate.py mutation
+  MUTATION ok  改坏 MUT2：删命令头 -> NO_COMMAND RED
+  MUTATION ok  改坏 MUT3：删 rc -> NO_RC RED
+  MUTATION ok  改坏 MUT4：删 fmt 证据件 -> NO_FMT_EVIDENCE RED
+MUTATION GREEN 5/5
+rc=0

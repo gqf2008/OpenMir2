@@ -1,0 +1,6 @@
+$ python -I mir2-rs/tests/parity/m3/m3_fixture_fmt_evidence_gate.py selftest
+  SELFTEST ok  包内无 fmt 证据 -> NO_FMT_EVIDENCE RED
+  SELFTEST ok  登记包缺失 -> MISSING_DIR RED
+  SELFTEST ok  只审 *fmt*.txt（raw 证据不判红）
+SELFTEST GREEN 8/8
+rc=0

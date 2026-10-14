@@ -1,0 +1,4 @@
+$ cargo test --workspace   # cwd=mir2-rs, CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target
+合计：101 suites / 1219 passed / 0 failed / 22 ignored
+（逐 suite test result 行已省略；0 failed）
+rc=0

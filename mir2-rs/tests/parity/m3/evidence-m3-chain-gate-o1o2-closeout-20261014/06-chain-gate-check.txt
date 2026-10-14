@@ -1,0 +1,6 @@
+$ python -I mir2-rs/tests/parity/m3/fixture_chain_gate.py check
+fixture_fmt_evidence_check present    rc=0 :: FIXTURE_FMT_EVIDENCE GREEN（9 个证据包 / 9 件 fmt 证据非空 + 命令头 + rc）
+rng_scene_anchor_selftest present    rc=0 :: SELFTEST GREEN: check_anchors selftest 17/17（含 16 条改坏必红：符号唯一性锚写回行号 / 文件引用删除 / 符号
+rng_scene_anchor_check present    rc=0 :: GREEN: check_anchors 7/7 锚点保鲜（行号锚：文档行号 == 当前源码首个匹配行；符号唯一性锚：文档只引用文件、符号恰出现 1 次；闭世界
+FIXTURE_CHAIN GREEN: runner_ok=10 prereq_or_skip=0 red=0
+rc=0
