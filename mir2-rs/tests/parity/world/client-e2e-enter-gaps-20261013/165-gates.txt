@@ -49,12 +49,17 @@ D. 证据完整性（LF/git-blob 口径，写入本片 4 件后重跑）
 ----------------------------------------------------------------------------------------------------
 ```
 $ python -I -B tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+写入 mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt（171 行，repo 口径）
+GREEN: write 完成（4 行 hash 变更，mode=repo）
+rc=0
 $ python -I -B tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
-GREEN（见下方实测行）
+GREEN mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK 171/171
+rc=0
 $ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
-GREEN（见下方实测行）
+EOLCHECK GREEN 172/172 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
 ```
-（原始输出在提交后由同一命令复跑，读数见本文件末尾追加行与 `SHA256SUMS.txt`。）
+（`SHA256SUMS.txt` 167 → 171 件：+163/164/165/166。）
 
 E. 卫生
 ----------------------------------------------------------------------------------------------------
