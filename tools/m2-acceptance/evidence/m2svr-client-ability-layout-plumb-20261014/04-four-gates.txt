@@ -1,0 +1,20 @@
+# 四门禁（cwd=mir2-rs，CARGO_TARGET_DIR=E:\tmp\m2svr-target，--offline）
+# base = origin/master 68b8af6b1（片㊶ 已合入）
+
+## cargo fmt --all -- --check
+FMT_RC=0
+
+## cargo clippy --offline --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s
+CLIPPY_RC=0
+
+## cargo run --offline -p msgcodegen -- --check
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+MSGCODEGEN_RC=0
+
+## cargo test --offline --workspace（摘要；全文 E:/tmp/m2svr-test.txt）
+suites=101 passed=1231 failed=0 ignored=22
+failed_suites=0
+TEST_RC=0

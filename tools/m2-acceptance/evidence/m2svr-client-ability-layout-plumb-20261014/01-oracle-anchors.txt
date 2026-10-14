@@ -1,0 +1,67 @@
+# 片 ㊷ oracle/客户端锚点：帧 52/53 的记录布局与 M2 验收③ 的耦合
+
+## A. 现象（为什么本片必须存在）
+
+* **生产默认**（自 `bdd3a2ae9`「真机『跑不动』根因 = 帧 52 能力布局——默认翻为冻结客户端 58B + 跑键探针目标点按下」起）
+  = **冻结客户端布局**：帧 52 = 58B `TAbility`，帧 53 = 12B `TCharDesc` 尾。
+* **M2 验收③**：`tools/m2-acceptance/s2c_diff.py` 比 `ident/param/tag/series/body_len/body_sha256/raw_hex`
+  （`s2c_diff.py:19`），默认窗口 `--start-ident 658 --upto-ident 46`（`s2c_diff.py:158-160`）。
+* **金标准** `mir2-rs/tests/golden/c-line-baseline-c3-20261010.jsonl` 的窗口内序列（0-based 行号）：
+
+```
+13 ident=658   body_len=320
+14 ident=1018  body_len=0
+15 ident=51    body_len=1
+16 ident=50    body_len=16
+17 ident=41    body_len=0
+18 ident=213   body_len=0
+19 ident=11029 body_len=23
+20 ident=42    body_len=5
+21 ident=766   body_len=0
+22 ident=54    body_len=6
+23 ident=5008  body_len=9
+24 ident=1106  body_len=4
+25 ident=52    body_len=40   <-- oracle 布局；生产默认会发 58
+26 ident=752   body_len=0
+27 ident=811   body_len=60
+28 ident=46    body_len=0    <-- 窗口末尾
+```
+
+* ⇒ 窗口**含 52、不含 53**（金标准首条 53 在第 90 行，> 46；`752` 布局与 HIGHHP 无关，仍是 header-only）。
+* ⇒ 生产默认起栈时，52 的 `body_len=58` ≠ 金标准 `40` ⇒ ③ 在 52 上必红（`body_len`/`body_sha256`/`raw_hex`
+  三条，**与 max_hp/max_mp 数值无关**）。
+* `tools/m2-acceptance/start_rust_stack.ps1` 此前**无** `MIR2_CLIENT_ABILITY_LAYOUT` 管线
+  （`grep -rn "MIR2_CLIENT_ABILITY_LAYOUT" tools/ mir2-rs/tests/` 只命中 `tools/client/mir_flow.ps1` 的注释与
+  证据文档）⇒ 只能靠 operator 手工在起栈 shell 里设变量，否则 52 必红且看不出原因。
+  与卡 `openmir2-m3-rust-stack-seed-plumb` / `openmir2-m2-rust-state-log-plumb` /
+  `openmir2-m2-rust-rng-log-plumb` / `openmir2-m2-rust-isolate-attack-plumb` **同款 operability 缺口**。
+
+## B. 客户端锚点（为什么默认不能翻回 oracle）
+
+* `MirClient@c61d912d` `Source/Common/Grobal2.pas:39`：`HIGHHP = True`（编译期常量，改不得 —— 客户端冻结）。
+* 帧 53：`Source/MirClient/ClMain.pas:10225`（`{$IF HIGHHP}`）
+  `DecodeBuffer(body, @desc, SizeOf(TCharDesc))` ⇒ 从**尾**解 12B
+  `TCharDesc{Feature,Status,StatusEx}` → `HP/MP/MaxHP`（`Grobal2.pas:3515`）。
+* 帧 52：`Source/MirClient/ClMain.pas:10102` 在 HIGHHP 下整块拷 `SizeOf(TAbility)` = 58B
+  （`Grobal2.pas:2174`）；HUD 取 `m_Abil.HP/MaxHP`，`CanRun` 要求 `HP >= RUN_MINHEALTH(10)`。
+* oracle 侧：帧 53 是 `SendSocket(ClientMsg)` **header-only**（`src/M2Server/Player/PlayObject.Socket.cs:77-96`），
+  帧 52 是 `EncodeMessage(WAbil)` **40B** ⇒ 与客户端记录布局不匹配。
+  ⇒ §6.0-3 意义上的**故意偏离**（客户端冻结 > oracle 逐字节），两帧共用同一开关
+  `smframe::client_layout_enabled()`。
+
+## C. 本片做了什么
+
+* `start_rust_stack.ps1 -ClientAbilityLayout <0|1|...>`（或读 `$env:MIR2_CLIENT_ABILITY_LAYOUT`）
+  ⇒ 把该变量**注入 game-svr 子进程环境（原文）** + 打 `RUST_CLIENT_ABILITY_LAYOUT_INJECTED=<0|1>`；
+  **不传 ⇒ 不注入、不打行**（与改动前逐字节一致，生产默认仍是冻结客户端）。
+* game-svr 启动打 `CLIENT_ABILITY_LAYOUT layout=oracle-40|client-58`
+  （`smframe::client_layout_probe_line`，只读日志）⇒ 与起栈器行必须对得上（同 `SEED_PROBE` 口径）。
+* 取值只认 Rust 读端 `client_layout_enabled()` 的原值集（`0|false|FALSE|False` = oracle，
+  `1|true|TRUE|True` = client）；`on/off/yes/no`/垃圾 ⇒ **fail-closed**（exit 1，不起栈），
+  不静默当开或当关。
+
+## D. 口径（写进 README §0b.4）
+
+* **③a/③b（跨侧逐字节对拍）必须 `-ClientAbilityLayout 0`**（oracle 布局）——否则 52 必红。
+* **①②（真客户端截图）必须用默认**（生产 = 冻结客户端布局）——否则 HUD `0/0`、跑不动。
+* 两种口径不可同时满足；不要拿一个口径的读数判另一个窗口。

@@ -70,7 +70,24 @@
   ⇒ 拒绝起栈——`attack_isolation_seed_from_env` 在开而无种子时 **panic**（专用流种子无法与对侧对齐），
   若不拦，栈会带着 panic 起来而不是 fail-closed 的 RED。
 
-  只读约束：本文件不自己起栈、不占端口；进程级用例由 `check_seed_plumb.ps1` / `check_state_log_plumb.ps1` / `check_rng_log_plumb.ps1` / `check_isolate_plumb.ps1` 驱动。
+  `MIR2_CLIENT_ABILITY_LAYOUT`（卡 `openmir2-client-e2e-enter-gaps` 片 ㊷）——帧 52/53 的**记录布局**开关：
+  - **生产默认 = 冻结客户端布局**（`52` 的 58B `TAbility` / `53` 的 12B `TCharDesc` 尾），因为冻结客户端
+    `MirClient@c61d912d` 在 `Source/Common/Grobal2.pas:39` 写死 `HIGHHP = True`（否则 HUD `0/0`、跑不动，
+    真机根因见 `tests/parity/world/client-e2e-enter-gaps-20261013/61-*` / `183-*`）；
+  - `=0|false` ⇒ 回到 oracle 的 **header-only**（`52` 的 40B `EncodeMessage(WAbil)` + `53` 无尾），这是
+    **跨侧逐字节对拍**（M2 验收③ `s2c_diff.py` vs 金标准）必须的口径：金标准 `ident=52 body_len=40`、
+    `ident=53 body_len=0`，而生产默认会发 `58`/`12` ⇒ 不显式关掉开关，③ 必在 52/53 上红。
+  - 起栈器此前**没有这条管线** ⇒ 只有 operator 手工在起栈 shell 里设过变量才切到 oracle 布局，
+    M2 验收③ 会以「未知原因 52/53 字节不同」红掉（与种子/状态/流水/隔离同款 operability 缺口）。
+  三条硬约束同上：① 未指定（`-ClientAbilityLayout` 空且 `MIR2_CLIENT_ABILITY_LAYOUT` 未设/空）⇒ 不注入、
+  不打 `RUST_CLIENT_ABILITY_LAYOUT_INJECTED` 行（与改动前逐字节一致，生产默认仍是冻结客户端）；
+  ② 指定 ⇒ 子进程环境确为**原文**（`game-svr` 的 `smframe::client_layout_enabled()` 只认
+  `0|false|FALSE|False` 为 oracle），且打印规范判据行 `RUST_CLIENT_ABILITY_LAYOUT_INJECTED=<0|1>`
+  （`0` = oracle 逐字节 / `1` = 冻结客户端）；③ 取值认不出（含 `on`/`off`/`yes`/`no`/垃圾）⇒ **fail-closed**
+  （`Resolve-Mir2ClientAbilityLayout` 抛错、调用方 exit 1），不静默当开或当关——**不接受 `on/off` 就是为了
+  避免起栈器口径与生产读取口径发散**（Rust 读端只把 `0|false` 当 oracle）。
+
+  只读约束：本文件不自己起栈、不占端口；进程级用例由 `check_seed_plumb.ps1` / `check_state_log_plumb.ps1` / `check_rng_log_plumb.ps1` / `check_isolate_plumb.ps1` / `check_client_ability_layout_plumb.ps1` 驱动。
 #>
 
 function Resolve-Mir2Seed {
@@ -210,6 +227,47 @@ function Get-IsolateAttackInjectedLine {
   return $null
 }
 
+function Resolve-Mir2ClientAbilityLayout {
+  [CmdletBinding()]
+  param(
+    # 显式布局（`start_rust_stack.ps1 -ClientAbilityLayout <0|1|...>`）。空串 = 未给。
+    [string]$LayoutArg = '',
+    # 调用方环境里的 `MIR2_CLIENT_ABILITY_LAYOUT` 值（`start_rust_stack.ps1` 传 `$env:MIR2_CLIENT_ABILITY_LAYOUT`）。
+    [string]$EnvValue = ''
+  )
+  # 优先级：显式 `-ClientAbilityLayout` > 环境变量（与 `Resolve-Mir2Seed` / `Resolve-Mir2StateLog` / `Resolve-Mir2RngLog` 同口径）。
+  $text = if (-not [string]::IsNullOrEmpty($LayoutArg)) { $LayoutArg } else { $EnvValue }
+  if ([string]::IsNullOrEmpty($text)) {
+    # C# `String.IsNullOrEmpty`：未设与空串同义 ⇒ 不启用（生产默认 = 冻结客户端布局，零行为差）。
+    return [pscustomobject]@{ Present = $false; Text = ''; Oracle = $null; Semantic = '' }
+  }
+  $raw = $text.Trim()
+  # **只认生产读取端认得的原值集**（`bins/game-svr/src/smframe.rs::client_layout_enabled()`）：
+  # `0|false|FALSE|False` ⇒ oracle 逐字节；`1|true|TRUE|True` ⇒ 冻结客户端布局。
+  # 不接受 `on`/`off`/`yes`/`no`：Rust 读端会把 `off` 当**客户端布局**（只白名单 4 个 oracle 字面量），
+  # 起栈器若把 `off` 当 oracle 就会与生产发散 ⇒ 宁可 fail-closed。
+  if (@('0', 'false', 'FALSE', 'False') -contains $raw) {
+    return [pscustomobject]@{ Present = $true; Text = $raw; Oracle = $true; Semantic = '0' }
+  }
+  if (@('1', 'true', 'TRUE', 'True') -contains $raw) {
+    return [pscustomobject]@{ Present = $true; Text = $raw; Oracle = $false; Semantic = '1' }
+  }
+  throw ("MIR2_CLIENT_ABILITY_LAYOUT/-ClientAbilityLayout 取值非法: {0}（只认 0|false|FALSE|False = oracle 逐字节 / 1|true|TRUE|True = 冻结客户端 —— 即 game-svr smframe::client_layout_enabled() 的原值集；别把认不出的值当开或当关）" -f $raw)
+}
+
+function Get-ClientAbilityLayoutInjectedLine {
+  [CmdletBinding()]
+  param(
+    # `Resolve-Mir2ClientAbilityLayout` 的返回值；`$null` / `Present=$false` ⇒ 不打该行（返回 `$null`）。
+    [psobject]$ClientAbilityLayout = $null
+  )
+  if (($null -ne $ClientAbilityLayout) -and ($ClientAbilityLayout.Present -eq $true)) {
+    # 规范判据行打**语义值**（0=oracle 逐字节 / 1=冻结客户端），与原文拼写解耦（`FALSE` 也打 `0`）。
+    return ("RUST_CLIENT_ABILITY_LAYOUT_INJECTED={0}" -f $ClientAbilityLayout.Semantic)
+  }
+  return $null
+}
+
 function Assert-Mir2RngLogSeed {
   <#
     交叉 fail-closed 守卫：`MIR2_RNG_LOG` 已解析但种子 `MIR2_RNG_SEED` 未解析 ⇒ 返回 `$false`
@@ -271,12 +329,15 @@ function Start-SeededProcess {
     # `Resolve-Mir2RngLog` 的返回值；`$null` / `Present=$false` ⇒ 不注入（与改动前逐字节相同）。
     [psobject]$RngLog = $null,
     # `Resolve-Mir2IsolateAttack` 的返回值；`$null` / `Present=$false` ⇒ 不注入（与改动前逐字节相同）。
-    [psobject]$IsolateAttack = $null
+    [psobject]$IsolateAttack = $null,
+    # `Resolve-Mir2ClientAbilityLayout` 的返回值；`$null` / `Present=$false` ⇒ 不注入（生产默认 = 冻结客户端布局，与改动前逐字节相同）。
+    [psobject]$ClientAbilityLayout = $null
   )
   $inject = ($null -ne $Seed) -and ($Seed.Present -eq $true)
   $injectState = ($null -ne $StateLog) -and ($StateLog.Present -eq $true)
   $injectRng = ($null -ne $RngLog) -and ($RngLog.Present -eq $true)
   $injectIso = ($null -ne $IsolateAttack) -and ($IsolateAttack.Present -eq $true)
+  $injectLayout = ($null -ne $ClientAbilityLayout) -and ($ClientAbilityLayout.Present -eq $true)
 
   # 快照调用方环境：只改 game-svr 这一个子进程的环境，起完立即还原（不影响后续网关等子进程，
   # 也不污染调用方 shell）。`Start-Process` 的子进程在**创建时**快照环境块 ⇒ 还原时机安全。
@@ -288,6 +349,8 @@ function Start-SeededProcess {
   $prevRng = if ($hadRng) { $env:MIR2_RNG_LOG } else { $null }
   $hadIso = Test-Path Env:MIR2_RNG_ISOLATE_ATTACK
   $prevIso = if ($hadIso) { $env:MIR2_RNG_ISOLATE_ATTACK } else { $null }
+  $hadLayout = Test-Path Env:MIR2_CLIENT_ABILITY_LAYOUT
+  $prevLayout = if ($hadLayout) { $env:MIR2_CLIENT_ABILITY_LAYOUT } else { $null }
 
   $sp = @{ FilePath = $FilePath; WindowStyle = $WindowStyle; PassThru = $true }
   if ($ArgumentList.Count -gt 0) { $sp.ArgumentList = $ArgumentList }
@@ -304,6 +367,9 @@ function Start-SeededProcess {
     if ($injectRng) { $env:MIR2_RNG_LOG = [string]$RngLog.Path }
     # 隔离开关注入规范开值 `1`（Rust `attack_isolation_seed_from_env` 同样只认开值集合）。
     if ($injectIso) { $env:MIR2_RNG_ISOLATE_ATTACK = '1' }
+    # 布局开关按**原文**注入（`smframe::client_layout_enabled()` 只白名单 `0|false|FALSE|False` 为 oracle；
+    # `Resolve-Mir2ClientAbilityLayout` 已保证原文落在这两个集合内，故注入原文即与生产读取口径逐字一致）。
+    if ($injectLayout) { $env:MIR2_CLIENT_ABILITY_LAYOUT = [string]$ClientAbilityLayout.Text }
     $p = Start-Process @sp
   } finally {
     if ($inject) {
@@ -318,9 +384,12 @@ function Start-SeededProcess {
     if ($injectIso) {
       if ($hadIso) { $env:MIR2_RNG_ISOLATE_ATTACK = $prevIso } else { Remove-Item Env:MIR2_RNG_ISOLATE_ATTACK -ErrorAction SilentlyContinue }
     }
+    if ($injectLayout) {
+      if ($hadLayout) { $env:MIR2_CLIENT_ABILITY_LAYOUT = $prevLayout } else { Remove-Item Env:MIR2_CLIENT_ABILITY_LAYOUT -ErrorAction SilentlyContinue }
+    }
   }
   # 只返回进程对象（`RUST_SEED_INJECTED` / `RUST_STATE_LOG_INJECTED` / `RUST_RNG_LOG_INJECTED` /
-  # `RUST_ISOLATE_ATTACK_INJECTED` 行由调用方经 `Get-*-InjectedLine` 打印）——保证
+  # `RUST_ISOLATE_ATTACK_INJECTED` / `RUST_CLIENT_ABILITY_LAYOUT_INJECTED` 行由调用方经 `Get-*-InjectedLine` 打印）——保证
   # `$p = Start-SeededProcess ...` 拿到的是进程而不是数组。
   return $p
 }

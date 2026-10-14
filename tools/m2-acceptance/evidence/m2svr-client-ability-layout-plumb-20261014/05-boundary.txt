@@ -1,0 +1,43 @@
+# 片 ㊷ 边界（base = origin/master 68b8af6b1；staged 视角）
+
+## git status --short
+M  mir2-rs/bins/game-svr/src/main.rs
+M  mir2-rs/bins/game-svr/src/smframe.rs
+M  tools/m2-acceptance/README.md
+A  tools/m2-acceptance/check_client_ability_layout_plumb.ps1
+A  tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/01-oracle-anchors.txt
+A  tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/02-selftest.txt
+A  tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/03-redcheck.txt
+A  tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/04-four-gates.txt
+AM tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/05-boundary.txt
+A  tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/README.md
+A  tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/SHA256SUMS.txt
+M  tools/m2-acceptance/rust_seed_plumb.ps1
+M  tools/m2-acceptance/start_rust_stack.ps1
+
+## git diff --cached --stat（本片净差量）
+ mir2-rs/bins/game-svr/src/main.rs                  |  11 +
+ mir2-rs/bins/game-svr/src/smframe.rs               |  16 ++
+ tools/m2-acceptance/README.md                      |  39 ++++
+ .../check_client_ability_layout_plumb.ps1          | 230 +++++++++++++++++++++
+ .../01-oracle-anchors.txt                          |  67 ++++++
+ .../02-selftest.txt                                |  43 ++++
+ .../03-redcheck.txt                                |  52 +++++
+ .../04-four-gates.txt                              |  20 ++
+ .../05-boundary.txt                                |  31 +++
+ .../README.md                                      |  54 +++++
+ .../SHA256SUMS.txt                                 |   6 +
+ tools/m2-acceptance/rust_seed_plumb.ps1            |  75 ++++++-
+ tools/m2-acceptance/start_rust_stack.ps1           |  40 +++-
+ 13 files changed, 678 insertions(+), 6 deletions(-)
+
+## 冻结面（应为空）
+src : 0 路径
+sql : 0 路径
+MirClient : 0 路径
+mir2-rs/crates/protocol : 0 路径
+mir2-rs/crates/storage : 0 路径
+
+## 本片 .rs（应只有 game-svr 两文件）
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/smframe.rs
