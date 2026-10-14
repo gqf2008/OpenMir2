@@ -966,3 +966,34 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - 证据：`175-r6-build-source-freshness.txt`、`176-boundary.txt`、`177-gates.txt`、`178-redcheck-r6.txt`、
   `check_rust_window_preflight.py`、`window_handoff.py`；只读引用 `167`/`168`（片㉟ 刷源与预构建）、
   `89`/`90`（片⑮ 前置门与红检）。
+
+### ㊳ ③ 玩家 `ViewRange=12`（25×25 窗口）的 **C# oracle 金标准对拍**（把「可见集算得对不对」这半边从 R 降到 L）（2026-10-14）—— `179`
+
+- **缺口**：`30-oracle-anchors-viewrange.txt` 把「同屏少怪」钉在玩家窗口 = 缺省 5（11×11）vs oracle 的
+  `ViewRange=12`（`PlayObject.cs:904`，25×25）。但现有离线判据只有 `bins/game-svr` 的**构造层 + 人写死断言**
+  （`player_aoi_window_covers_view_range_12`），而 `world/scenarios/*.json` 的 5 个 golden **全是
+  `view_range:5`** ⇒ 25×25 窗口的整集 / 12-13 环形边界 / 扫描序 / self 入集 / 观察者过滤器，
+  **没有 oracle 侧离线判据**；这部分此前只有真机窗口能判。
+- **本片交付**：新增场景 `world/scenarios/aoi_viewrange12.json` + C# 金标准
+  `world/golden/aoi_viewrange12.txt`（`dotnet run --project … -- aoi_viewrange12.json`，桩逐字拷贝
+  `BaseObject.ViewRange.cs`）。玩家 1 号 `(32,32) view_range=12 race=0 want_ref_msg=true`；怪在
+  Chebyshev 1/7/**12/13**（轴向、对角、-Y、混合符号）；第二个玩家距 13；`tick=2` 走一格。
+  金标准读数：玩家首 tick 可见集 = Chebyshev ≤12 的 7 项（含 self `1:2`），**13 距离的 5/7/9 号不在集内**；
+  tick2 走一格后 `5:2`（新进窗口）出现；怪 2 号（观察者）只见玩家 `1:2`。
+- **Rust 对拍（diff = 0）**：`world_aoi_parity.rs` 新增 `world_aoi_viewrange12_ring_matches_csharp`
+  （逐行 vs 金标准）+ `golden_viewrange12_ring_boundary_is_pinned`（金标准自检：12 可见/13 不可见）
+  + `redcheck_viewrange12_ring_collapsed_to_default_must_differ`（把 vr 压回 5 ⇒ 6..12 环消失 ⇒ 必红）；
+  并抽 `assert_scenario_matches_golden` 复用给 `basic.json`（行为不变）。
+- **改坏必红（`180`）**：MUT-A `crates/world/src/aoi.rs` 把 `view_range` 硬编码 5 ⇒ **新用例 RED、旧 basic 用例仍 GREEN**
+  （证明本片确实**增加了覆盖**）；MUT-B 腐蚀 golden（删 Chebyshev=12 成员）⇒ 金标准自检先红（fail-closed）；
+  两处变异同一 burst 内还原，`sha256sum -c` 复核仓内件逐字节不变（`crates/world/**` 净改动 = 0）。
+- **判据分级 / 与真机窗口的关系**：本片 = **L 级**（纯 AOI 集合逻辑；构造级抽样冒烟 = 6/6 + workspace
+  101 suites 1225 passed / 0 failed / 22 ignored）。**真机客户端是否真的渲染出怪 + ③ DoD「能攻击造成伤害」
+  仍归 root 独占窗口**（R 级，not_verified），本片**不替代**它，只把「可见集口径」这半边离线化。
+- **边界与纪律**：本片只改 `tests/parity/world/**`（1 场景 + 1 golden + README）+ `tests/parity/tests/world_aoi_parity.rs`
+  + 本卡证据/README/清单；**零生产 `.rs`、零 `.toml`、`bins/` 零改动**；零起栈、零游戏端口；未动共享主检出；
+  未 merge、未自签 review。
+- 证据：`179-viewrange12-aoi-oracle-golden.txt`、`180-redcheck-viewrange12.txt`、`181-gates.txt`、
+  `182-boundary.txt`、`world/scenarios/aoi_viewrange12.json`、`world/golden/aoi_viewrange12.txt`、
+  `tests/parity/tests/world_aoi_parity.rs`；只读引用 `30-oracle-anchors-viewrange.txt`、
+  `csharp/WorldGolden/{Program.cs,Stubs.cs}`、`world/README.md`。
