@@ -1,0 +1,29 @@
+236-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片55 边界与冻结面（2026-10-15，tag m2svr）
+worktree = E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr（branch enter-gaps-window-dense-menu）
+base = origin/master = 60e7ddbd12427041a94cf1d660253a0aa1c81651；HEAD（改动前/后）= f0ff83e997037b854273b54bbc8e189bf71451b0
+====================================================================================================
+
+# 1) 改动路径（git status --porcelain=v1）
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/234-aoi-gap3-oracle-geometry-and-window-source-20261015.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/235-gates.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/236-boundary.txt
+
+# 2) 改动路径清单（全部在证据目录内）
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/234-aoi-gap3-oracle-geometry-and-window-source-20261015.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/235-gates.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/236-boundary.txt
+
+# 3) 扩展名门：零 .rs / .toml / .ps1 / .cs / .py
+  OK 无匹配
+
+# 4) 冻结面（git diff --name-only origin/master -- <冻结面>）
+  （上面为空 = 冻结面零改动）
+
+# 5) 差量统计（git diff --stat origin/master）
+ .../world/client-e2e-enter-gaps-20261013/README.md | 26 ++++++++++++++++++++++
+ .../client-e2e-enter-gaps-20261013/SHA256SUMS.txt  |  3 ++-
+ 2 files changed, 28 insertions(+), 1 deletion(-)

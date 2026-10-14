@@ -1,0 +1,77 @@
+235-gates.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片55 门禁/机判读数（2026-10-15，tag `m2svr`）
+base = `origin/master` = `60e7ddbd12427041a94cf1d660253a0aa1c81651`；本片零生产代码改动
+本 worktree = `.claude/worktrees/m2-svr`（branch `enter-gaps-window-dense-menu`），cwd=mir2-rs，
+CARGO_TARGET_DIR=E:/tmp/m2svr-target（隔离）
+====================================================================================================
+
+# 1) 四门禁（`--no-fail-fast` 口径逐条跑）
+
+$ cargo fmt --all -- --check
+    rc=0（无输出）
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.75s
+    rc=0
+
+$ cargo test --workspace
+    聚合：suites=101 passed=1233 failed=0 ignored=22（无 FAILED 行）
+    rc=0
+
+$ cargo run -p msgcodegen -- --check
+    msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+    rc=0
+
+# 2) 本片用到的判据工具自检（真身，不是引用历史）
+
+$ python -I -B check_mongen_dense_points.py --selftest        # ③ 同点位判据（本片主判据）
+SELFTEST OK (60/60)
+$ python -I -B check_rust_window_preflight.py --selftest      # 窗口源 R1..R7
+SELFTEST OK (50/50)
+$ python -I -B window_handoff.py --selftest                   # 开窗聚合门 G1..G5 / J1
+SELFTEST OK (107/107)
+
+# 3) ③ 同点位对照（oracle 几何，机判；详见 `234` §1）
+
+$ python -I -B check_mongen_dense_points.py --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt \
+      --map 0 --point 297,629 --expect outside
+RESULT: GREEN rc=0        # (297,629) 框外；最近框 Chebyshev=7（=verify2 进图点）
+$ python -I -B check_mongen_dense_points.py … --map 0 --point 292,652 --expect outside
+RESULT: GREEN rc=0        # (292,652) 框外；最近框 Chebyshev=30 > vr=12（=verify2 末点）
+$ python -I -B check_mongen_dense_points.py … --map 0 --point 297,629 --expect inside
+RESULT: RED   rc=1        # 判据有牙（反向必红）
+$ python -I -B check_mongen_dense_points.py … --map 0 --view-range 12 --best-point \
+      --map-dir E:/MirServer/M2GameSvr/Map --require-walkable
+BEST (605,578) E=12.681 … tile=Walk   rc=0   # 窗口 ③b 用点：框内 + 可站立
+
+# 4) 窗口源（fresh；详见 `234` §2）
+
+$ python -I -B check_rust_window_preflight.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer --target-dir E:/tmp/openmir2-merge-target
+RESULT: RED  rc=1   # 活源 HEAD=8e491f81e 缺 c61b9627a/6cadc9fbf/fd68e037d + R6 落后 3 文件
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer --target-dir E:/tmp/m2svr-window-target
+RESULT: GREEN rc=0  # 替身源 HEAD=da2df1fdb 含三片；R6 生产路径零差异
+$ python -I -B window_handoff.py …（活脚本口径，默认 --window-script）
+WINDOW_READY=NO  RESULT: RED  rc=1   # G5×2（repo= 指共享主检出 / tgt= 不一致）
+$ python -I -B window_handoff.py … --window-script ./client-e2e-window.fixed.sh.txt
+WINDOW_READY=YES RESULT: GREEN rc=0
+
+# 5) 证据清单门 + 行尾门
+
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+GREEN <本目录>/SHA256SUMS.txt  [repo 口径]  OK 241/241
+    rc=0
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+EOLCHECK GREEN 242/242 件文本证据与仓库口径（LF）在 EOL 上一致
+    rc=0
+
+# 6) 边界/冻结面
+
+见 `236-boundary.txt`：改动 5 路径全在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`，
+零 `.rs`/`.toml`/`.ps1`/`.cs`；冻结面 `src/ sql/ MirClient mir2-rs/crates/protocol
+mir2-rs/crates/storage mir2-rs/bins src/BotSrv mir2-rs/tests/parity/m3` 全空。
+
+# 7) 原始读数（仓外，供 root 复核）
+
+`E:/tmp/m2svr-burst46/{01-window-source,02-preflight-live,03-preflight-subst,
+04-handoff-live-script,05-handoff-subst-script,06..10-pt-*,11-clippy,12-test,13-msgcodegen}.txt`
