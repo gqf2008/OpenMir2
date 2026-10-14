@@ -1107,14 +1107,21 @@ fn drain_party_death_events(
 ///   载荷 `(Recog=ActorId, Param=GetChrColor(baseObject), 0, 0)`，无尾；
 ///   `RM_USERNAME` 支（`:1662-1664`）⇒ `SM_USERNAME(42)` 同载荷 + 尾 `EncodeString(GetShowName())`。
 ///
-/// # 次序（按观察者 `MsgQueue` 的**优先级字节**，不是源码入队序）
+/// # 次序（观察者 `MsgQueue` 的**堆出队序**，不是源码入队序）
 ///
 /// oracle `SendMsg`（`BaseObject.Message.cs:98/181`：`SendMsg(IActor, …)` 的 `MsgQueue.Enqueue(msg, (byte)wIdent)`）入队，
-/// 而 `MsgQueue` 是 `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:16`）⇒ **小根堆**：
-/// `(byte)RM_CHANGENAMECOLOR` = `8090 & 0xFF` = **154** < `(byte)RM_USERNAME` = `8101 & 0xFF` = **165**。
-/// ⇒ 同一观察者上**所有宝宝的色帧先于所有名帧**出队。宝宝本身按 `SlaveList` **末尾往前**序
-/// （[`mir2_world::slave::process_slave_mutiny`] 返回的就是该序）。故对每个观察者：
-/// `色(s_n) … 色(s_1)` 然后 `名(s_n) … 名(s_1)`。
+/// 而 `MsgQueue` 是 `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:16`）。入队序 = 每只宝宝
+/// `RefNameColor(); RefShowName();`（`:351-352`），宝宝按 `SlaveList` **末尾往前**
+/// （[`mir2_world::slave::process_slave_mutiny`] 返回的就是该序）。
+///
+/// 出队序 = **优先级字节升序**：`(byte)RM_CHANGENAMECOLOR` = `8090 & 0xFF` = **154**
+/// < `(byte)RM_USERNAME` = `8101 & 0xFF` = **165** ⇒ **同一观察者上所有宝宝的色帧先于所有名帧**。
+/// 但**同优先级不是入队序** —— .NET 8 的 `PriorityQueue` 是 **4 叉最小堆**
+/// （`Arity=4`/`Log2Arity=2`），同优先级元素按堆的 sift 结果出队
+/// （reviewer-6 F-1：入队 `色(s2),名(s2),色(s1),名(s1)` ⇒ 出队
+/// `色(s2),色(s1),名(s1),名(s2)`，名组与入队序**相反**）。
+/// 故本函数按 oracle 入队序灌入 [`game_svr::msgqueue::NetPriorityQueue`]（逐位复刻该 4 叉堆）
+/// 再出队编码，而不是「全部色循环 + 全部名循环」。
 ///
 /// # 登记（未 1:1，真机项）
 ///
@@ -1127,6 +1134,21 @@ fn drain_party_death_events(
 ///   `Master` 置 `None` ⇒ 不可达；`NpcNameColor` 分支同理（叛变宝宝恒非 NPC）⇒ 传 0 且不消费。
 /// - `ghosted` 支（`MakeGhost` 的 `RM_MASTERDIEGHOST`）在 oracle 里**恒不可达**（本卡 BUG-REPLICA ④）
 ///   ⇒ 本函数不产帧。
+/// - 本模块只复刻**堆算法**；oracle 真实出队序还受「入队前队列里已有其它消息」影响（跨 tick、
+///   其它下行），本项目不建模整条观察者队列 ⇒ 混合队列场景登记 `not_verified`（R 级）。
+///
+/// 每次入队的帧（按 `MsgQueue` 出队序编码）。
+enum MutinyFrame {
+    /// `RM_CHANGENAMECOLOR`（优先级字节 154）。
+    NameColor { sid: i32, color: u8 },
+    /// `RM_USERNAME`（优先级字节 165）。
+    UserName {
+        sid: i32,
+        color: u8,
+        show_name: Vec<u8>,
+    },
+}
+
 #[allow(clippy::too_many_arguments)]
 fn drain_slave_mutiny_downlink(
     rec: &mir2_world::TickRecord,
@@ -1175,19 +1197,42 @@ fn drain_slave_mutiny_downlink(
         let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "叛变名色帧") else {
             continue;
         };
-        // ① 色帧（优先级字节 154，`mutinied` 序）。
+        // 观察者 `MsgQueue` = `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:16`）：入队序 = 每只宝宝
+        // `RefNameColor(); RefShowName();`（`PlayObject.Base.cs:351-352`），出队 = 4 叉堆序。
+        // 按 oracle 入队序灌堆再出队，**不能**用「所有色循环 + 所有名循环」（同优先级非入队序，F-1）。
+        let mut queue: game_svr::msgqueue::NetPriorityQueue<MutinyFrame> =
+            game_svr::msgqueue::NetPriorityQueue::new();
         for h in hits.iter().filter(|h| h.0 == observer) {
-            let _ = tx.send(SimToGate::SendFrame {
-                socket: entry.socket,
-                body: game_svr::smframe::sm_changenamecolor(h.1, h.2),
-            });
-            sent += 1;
+            queue.enqueue(
+                MutinyFrame::NameColor {
+                    sid: h.1,
+                    color: h.2,
+                },
+                (mir2_protocol::messages::RM_CHANGENAMECOLOR & 0xFF) as u8,
+            );
+            queue.enqueue(
+                MutinyFrame::UserName {
+                    sid: h.1,
+                    color: h.2,
+                    show_name: h.3.clone(),
+                },
+                (mir2_protocol::messages::RM_USERNAME & 0xFF) as u8,
+            );
         }
-        // ② 名帧（优先级字节 165，同序）。
-        for h in hits.iter().filter(|h| h.0 == observer) {
+        while let Some(frame) = queue.dequeue() {
+            let body = match frame {
+                MutinyFrame::NameColor { sid, color } => {
+                    game_svr::smframe::sm_changenamecolor(sid, color)
+                }
+                MutinyFrame::UserName {
+                    sid,
+                    color,
+                    show_name,
+                } => game_svr::smframe::sm_username(sid, color, &show_name),
+            };
             let _ = tx.send(SimToGate::SendFrame {
                 socket: entry.socket,
-                body: game_svr::smframe::sm_username(h.1, h.2, &h.3),
+                body,
             });
             sent += 1;
         }
@@ -13478,14 +13523,18 @@ mod tests {
         );
     }
 
-    /// **M3⑨-3 帧面残余（出队序）**：多只宝宝叛变时，按观察者 `MsgQueue` 的**优先级字节**
-    /// （`BaseObject.Message.cs:181` 的 `(byte)wIdent`）出队 —— `8090&0xFF=154` < `8101&0xFF=165`
-    /// ⇒ **所有色帧先于所有名帧**，宝宝序 = `SlaveList` 末尾往前。
+    /// **M3⑨-3 帧面残余（出队序，reviewer-6 F-1）**：多只宝宝叛变时，按观察者 `MsgQueue` 的
+    /// **堆出队序**（`BaseObject.Message.cs:181` 的 `(byte)wIdent` 入队 + `ActorEntity.cs:16` 的
+    /// `PriorityQueue`）—— 优先级字节 154(色) < 165(名) ⇒ 所有色帧先于所有名帧；但**同优先级不是
+    /// 入队序**（.NET 8 为 4 叉堆）⇒ mutinied `[s2,s1]` 的两条名帧出队为 `名(s1),名(s2)`（**反序**）。
     ///
-    /// 红检：把 `drain_slave_mutiny_downlink` 的「色循环 / 名循环」合并成每宝宝一组的
-    /// `色(s2),名(s2),色(s1),名(s1)` ⇒ 本用例的帧序断言必红。
+    /// 堆算法逐位对照见 [`game_svr::msgqueue`] 的 `matches_dotnet_priority_queue_dequeue_order`
+    /// （n=1..12 与 net8.0.26 实跑 `dotnet` 对齐）。
+    ///
+    /// 红检：① `msgqueue` 换成「按优先级稳定排序」（入队序）⇒ 名帧序反过来，本断言必红；
+    ///       ② 删名帧 / 把色帧名帧互换 ⇒ 帧数/种类必红。
     #[test]
-    fn slave_mutiny_downlink_groups_all_colors_before_names() {
+    fn slave_mutiny_downlink_follows_msgqueue_heap_order() {
         use std::collections::HashMap;
         let mut world = mir2_world::World::new(64, 64);
         let master = {
@@ -13547,10 +13596,10 @@ mod tests {
             vec![
                 (mir2_protocol::messages::SM_CHANGENAMECOLOR, slaves[1]),
                 (mir2_protocol::messages::SM_CHANGENAMECOLOR, slaves[0]),
-                (mir2_protocol::messages::SM_USERNAME, slaves[1]),
                 (mir2_protocol::messages::SM_USERNAME, slaves[0]),
+                (mir2_protocol::messages::SM_USERNAME, slaves[1]),
             ],
-            "优先级字节 154(色) < 165(名) ⇒ 全部色帧先出队，宝宝序 = mutinied 序"
+            "入队序 色(s2),名(s2),色(s1),名(s1) ⇒ oracle 4 叉堆出队 色(s2),色(s1),名(s1),名(s2)"
         );
     }
 

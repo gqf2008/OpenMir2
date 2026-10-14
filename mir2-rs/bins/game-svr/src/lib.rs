@@ -22,6 +22,7 @@ pub mod merchant;
 pub mod mongen;
 pub mod monitems;
 pub mod movewire;
+pub mod msgqueue;
 pub mod npc;
 pub mod party;
 pub mod pickwire;
