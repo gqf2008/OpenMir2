@@ -1,0 +1,55 @@
+218-redcheck-r7-ok-line.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片「R7 末行报清单头」**改坏必红**
+m2-svr / openmir2-worker-11 / 2026-10-14；零起栈、零游戏端口；变异只在 `E:/tmp` 副本，仓内零改动
+base = `origin/master` = `714898ed0cc99773f854873e7f9beb73a7a178ca`
+====================================================================================================
+
+# 0) 结论
+
+把 `check_rust_window_preflight.py` 的 R7 **末行**从 `source_head={head[:10]}` **改回**
+`source_head={oid[:10]}`（= 恢复 reviewer-5 O-1 的缺陷形态）⇒ 新增牙
+`r7-nonprod-advance-ok-names-manifest-head` **必红**：
+`SELFTEST FAILED (48/49)`，且 FAIL 详情点名末行报的是**当前 ref**（`502f3fb498`）而不是清单头。
+还原后（= 仓内已修版本）复跑 **`SELFTEST OK (49/49)`**。变异在 `/tmp` 复制件上做，
+**仓内文件 sha256 全程不变**（见 §3）。
+
+# 1) 变异（/tmp 副本）
+
+```
+$ mkdir -p E:/tmp/m2svr-burst23/mut && cp <repo>/check_rust_window_preflight.py E:/tmp/m2svr-burst23/mut/
+$ cd E:/tmp/m2svr-burst23/mut
+# 反向变异：末行 head -> oid
+- f"[OK] R7 出处清单 {os.path.basename(provenance_path)} source_head={head[:10]}，"
++ f"[OK] R7 出处清单 {os.path.basename(provenance_path)} source_head={oid[:10]}，"
+```
+（脚本化替换为一次性 `python - <<PY`，断言命中恰好 1 处后写回。）
+
+# 2) 变异后自检：新牙红 ⇒ 整轮红
+
+```
+$ python -I -B check_rust_window_preflight.py --selftest   # cwd = E:/tmp/m2svr-burst23/mut
+[FAIL] selftest r7-nonprod-advance-ok-names-manifest-head '[OK] R7 出处清单 window-provenance.json source_head=502f3fb498，2 件 exe sha256 逐字节一致'
+...
+SELFTEST FAILED (48/49)
+rc=1
+```
+读数解读：`502f3fb498` = `sixth`（当前 ref，selftest 合成仓里清单**之后**的那条非生产提交）
+⇒ 末行把「当前 ref」冒充「清单头」，正是 O-1 所说的不实文案；牙把它判红。
+
+# 3) 还原 = 仓内已修版本；仓内文件未被变异触碰
+
+```
+$ sha256sum /tmp/m2svr-burst23/mut/check_rust_window_preflight.py   # 变异件（仅留痕）
+5c2788ee9f2ab229ea8c8139feca18d410188897e7f48a85b6ac22447245559d
+$ sha256sum <repo>/.../check_rust_window_preflight.py
+85a794893581fb12bbc6aa1be7e30c20c2449a56e129abbd479983b0063b33c5   # 仓内（= 217 §2 的「改后」）
+$ python -I -B <repo>/.../check_rust_window_preflight.py --selftest
+SELFTEST OK (49/49)
+rc=0
+```
+（上一步已记入 `217` §3a；此处复述以证「改坏 ⇒ 红 / 还原 ⇒ 绿」两向。）
+
+# 4) 判据面覆盖确认
+
+- 本变异只改**文案**，不改任何 `problems`/`prereq` 判定路径 ⇒ 只有新牙（与 `r7-green`/
+  `r7-nonprod-advance-green` 的条数断言）会命中；`SELFTEST FAILED (48/49)` 恰为 +1 条红 ⇒ 无旁路误红。
+- 未动 `RUST_BUILD_PATHS` / sha256 对账 / `record_provenance` ⇒ 不重复 `194`/`202` 已覆盖的牙齿。

@@ -21,7 +21,7 @@
      片㉜（受击帧 `SM_STRUCK` 广播 ⇒ DoD③「能攻击造成伤害」）——这是 2026-10-14 实测到的真缺陷
      （共享主检出停在 `ad0592b19`；专用源 `m2svr-window-origin` 停在 `6dba8719d`、缺片㉜）。
      门一旦 RED，`--plan` 的修复块点明「换/刷新构建源」而不会让你白烧窗口。
-  G2 **聚合判据工具自检**：证据目录 8 件判据脚本的 `--selftest` 必须全 `SELFTEST OK`（缺一件 ⇒ PREREQ）。
+  G2 **聚合判据工具自检**：证据目录 9 件判据脚本的 `--selftest` 必须全 `SELFTEST OK`（缺一件 ⇒ PREREQ）。
   G3（可选）**聚合 C# 侧抓包前置门**：调片⑭ `check_csharp_capture_preflight.py --shadow-config ...`。
   G4（`--plan`/`--plan-only`）**计划 ↔ 工具面机判**（片㉕）：计划里每个被调脚本必须存在、只用它声明
      的参数，且必须含「代理(7200)/影子 gate(7600) 清端口 + 7200/7600 回落断言 + C# 清栈保留 3306」的
@@ -108,6 +108,7 @@ TOOL_SELFTESTS = (
     "check_client_s2c_frames.py",
     "check_appearance_pairs.py",
     "check_attack_observability.py",
+    "verify_client_highhp_family.py",
     RUST_PREFLIGHT,
     CSHARP_PREFLIGHT,
 )

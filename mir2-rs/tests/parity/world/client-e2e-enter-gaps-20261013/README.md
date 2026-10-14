@@ -1203,3 +1203,60 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **仍归 root 独占窗口（R）**：卡级真机 ①②③（含一次升级/换装步）；**G5**（root 活脚本未换入库替身）仍 RED。
 - **O-3**（`52→58B`/`53→12B` 的 §6.0-3 白名单登记 + owner 签字）仍属 owner 裁决面，未做。
 - 判级 = **L**（纯来源刷新 + 只读门复跑，零生产代码、零取数/时序/RNG/落库改动）。
+
+### 51) HIGHHP 家族完整性审计：52/53 之外的第三个同源帧 `SM_STRUCK`（2026-10-14）—— `213`/`214`
+
+片㊴/㊼ 修好了 52/53，但 `HIGHHP` 是冻结客户端的**编译期记录布局开关**
+（`MirClient@c61d912d`，`Grobal2.pas:39 HIGHHP = True`）：凡客户端在 `{$IF HIGHHP}` 下按**另一种字节布局**
+读的服务端帧，都必须有「客户端布局」侧实现。本片把**家族清单**做全并机判（**L 级：只读源码 + 工具 + 证据，
+零生产代码**；不改、真机 R 归 root 窗口）：
+
+- **工具 `verify_client_highhp_family.py`**：从冻结客户端源码枚举全部 `{$IF HIGHHP}` 站点（共 **7 个**：
+  `Grobal2.pas` 2103/2174/2494 + `ClMain.pas` 10225/10269/10338/10365），与「已登记集合」逐项比对；
+  客户端新增/删除站点、`HIGHHP` 改值、或 Rust 侧两件客户端布局实现（`encode_ability_client` /
+  `sm_healthspellchanged_client`）被删/改名 ⇒ **RED（认不出即红）**。`--selftest` 6/6；已接入
+  `window_handoff.py` **G2**（`TOOL_SELFTESTS` 8→9，开窗前判据工具自检里跑）。
+- **审计结论**：7 站点的帧面处理 = **2 闭环**（52 `TAbility`→`encode_ability_client`；53→
+  `sm_healthspellchanged_client`）/ **1 同源 GAP** / **1 客户端库**（`TMonInfo`，非帧面）/
+  **1 死记录**（`TAddAbility`，零使用点）/ **2 未发送**（`SM_OPENHEALTH(1100)`、
+  `SM_INSTANCEHEALGUAGE(1103)`：客户端 HIGHHP 分支在，Rust 生产路径未发送）。
+- **GAP = `SM_STRUCK(31)`**（`ClMain.pas:10269`）：客户端 HIGHHP 下读 `HP := Makelong(msg.param, msg.tag)`
+  （**32 位 HP 拆在 header 两格**）、`MaxHP := wl.Param1`（尾 `MessageBodyWL`）；而 C#
+  （`PlayObject.Message.cs:1601`）与 Rust（`smframe.rs:752-768`）都发 oracle 布局
+  （`param=HP, tag=MaxHP`、尾 `.Param1=feature`）⇒ 受击后客户端 HUD 的 HP/MaxHP 错乱
+  （与 §结论 #3 的 C# 读数 `655360/25165829` 同形态）。**本片不改**：① 会打断 m3 攻击夹具
+  （`BotSrv` 非 HIGHHP，`attack_diff.py` 按 `msg.Param/Tag` 跨侧对拍 `hp/maxhp`）；② R 级；③ 应与 52/53
+  的 O-3 登记**一次裁决**而非逐帧各开。建议见 `213` §4d（O-3 扩容到 HIGHHP 家族 + 全局口径 = 夹具显式 pin
+  `MIR2_CLIENT_ABILITY_LAYOUT=0`）。
+- **红检（`214`）**：M0 GREEN / M1 `HIGHHP=False` RED / M2 删登记站点 RED / M3 新增未登记站点 RED /
+  M4 Rust 缺 53 客户端布局实现 RED / M5 还原 GREEN（变异只在 `E:/tmp` 副本，仓内零改动）。
+- **门禁**：fmt rc=0 / clippy rc=0(`-D warnings`) / **101 suites 1232 passed 0 failed 22 ignored** /
+  msgcodegen 604 rc=0；聚合门（入库逐字替身脚本口径）**`WINDOW_READY=YES` / GREEN rc=0**
+  （含 `OK G2 verify_client_highhp_family.py --selftest`）；`check_rust_window_preflight.py` R1..R7 GREEN。
+- **仍归 root/owner**：真机 R ①②③（含受击步）；G5（root 活脚本未换入库替身）；O-3（现建议**扩容**到
+  HIGHHP 家族）。
+
+### 52) R7「出处清单」末行改报清单头（收 reviewer-5 `871cc797` O-1）（2026-10-14）—— `217`/`218`
+
+`check_rust_window_preflight.py` 的 `binary_provenance_findings()`（R7）在「清单 `source_head` 滞后、
+但 `mir2-rs/**` 生产路径零差异」的**豁免支**里，末行 `[OK] …` 把清单头打印成**当前 ref 的 oid**，
+而非清单里真实的 `source_head` ⇒ 人读门输出时会误以为清单本就来自该 head（reviewer-5 在
+`871cc797` @`276f2f95` 判 **Minor(non-blocking)**，建议「下次动该文件时改」）。
+
+- **改**：末行 `source_head={oid[:10]}` → **`source_head={head[:10]}`**（清单里的头）。
+  **判绿/判红逻辑零改动**（前一行 INFO 一直正确报 `source_head=<清单旧头> != <ref>`）；
+  正面支（`head == oid`）**逐字节不变**。文件 git blob `e21fb4ad60` → `2ae578fd1f`。
+- **新牙**：`r7-nonprod-advance-ok-names-manifest-head` —— selftest 合成仓里清单录 `fifth`、再前进一条
+  非生产提交 `sixth` ⇒ 豁免支末行必须含 `source_head=fifth[:10]` 且不含 `sixth[:10]`；
+  `--selftest` **48/48 → 49/49**。
+- **改坏必红（`218`）**：把末行改回 `{oid[:10]}` ⇒ 新牙红、`SELFTEST FAILED (48/49)`（FAIL 详情点名
+  末行报的是当前 ref `502f3fb498`）；还原 ⇒ `SELFTEST OK (49/49)`。变异只在 `E:/tmp` 副本，仓内 sha256
+  全程不变。
+- **复跑**：真身 R1..R7 **GREEN rc=0**（R7 末行 `source_head=5e757b0252`，正面支与改前逐字节相同）；
+  聚合门（入库替身脚本口径）**`WINDOW_READY=YES` / GREEN rc=0**；活脚本口径仍 **G5 RED**（登记，非本片缺陷）。
+- **四门禁（`219`）**：fmt rc=0 / clippy rc=0(`-D warnings`) / **101 suites 1232 passed 0 failed 22 ignored** /
+  msgcodegen 604 rc=0。
+- **边界（`220`）**：本片净 6 路径（1 `.py` + 4 证据 + README/SHA256SUMS），全在
+  `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`；**零 `.rs`/`.toml`/`.ps1`/`.cs`**；
+  冻结面 `src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/` 空。
+- 判级 = **L**（证据/工具文案，零行为变化；正面支逐字节不变）。卡级 R 真机 ①②③ 仍归 root 独占窗口。

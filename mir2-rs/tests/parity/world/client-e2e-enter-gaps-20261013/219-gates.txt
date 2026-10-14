@@ -1,0 +1,64 @@
+219-gates.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片「R7 末行报清单头」（卡内 Minor 收口）
+m2-svr / openmir2-worker-11 / 2026-10-14；CARGO_TARGET_DIR=E:/tmp/m2svr-target
+base = `origin/master` = `714898ed0cc99773f854873e7f9beb73a7a178ca`
+====================================================================================================
+
+# 1) 四门禁（cwd = <m2-svr worktree>/mir2-rs）
+
+$ cargo fmt --all -- --check
+    rc=0（无输出）
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.39s
+    rc=0
+$ cargo test --workspace
+    聚合：suites=101 passed=1232 failed=0 ignored=22
+    每条 `test result: ok`，无 FAILED；rc=0
+$ cargo run -p msgcodegen -- --check
+    msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+    rc=0
+
+# 2) 工具自检（本片唯一代码件的判据）
+
+$ python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py --selftest
+SELFTEST OK (49/49)
+rc=0
+
+# 3) 真身 R1..R7（零端口；构建源 + 出处清单）
+
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer \
+      --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-window-target/window-provenance.json
+RESULT: GREEN
+rc=0
+（逐行见 `217` §3b / `209` §1）
+
+# 4) 开窗聚合门（入库逐字替身脚本口径）
+
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target --mirserver E:/MirServer \
+      --window-script ./client-e2e-window.fixed.sh.txt
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0
+
+# 5) 活脚本口径（登记，非本片缺陷）
+
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target --mirserver E:/MirServer
+RED G5 窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 指向共享主检出 ⇒ 直接跑它会构建另一棵树
+RED G5 窗口脚本 tgt=E:\tmp\openmir2-merge-target != 本计划 --target-dir=E:/tmp/m2svr-window-target
+WINDOW_READY=NO
+RESULT: RED
+rc=1
+（= 片㊻ 起一直登记的唯一 root 侧前置：把活脚本换成入库替身 `client-e2e-window.fixed.sh.txt`，仅
+ `repo=`/`tgt=` 两行 diff。）
+
+# 6) 证据清单门 + 行尾门
+
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+GREEN <本目录>/SHA256SUMS.txt  [repo 口径]  OK 227/227
+    rc=0（本片新增 217/218/219/220 四条 + README/工具重记 hash；`write` 报「2 行 hash 变更」）
+
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+EOLCHECK GREEN 228/228 件文本证据与仓库口径（LF）在 EOL 上一致
+    rc=0

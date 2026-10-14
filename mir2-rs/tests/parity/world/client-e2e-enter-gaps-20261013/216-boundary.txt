@@ -1,0 +1,56 @@
+216-boundary.txt —— 片「HIGHHP 家族完整性审计」的边界与留痕
+卡 `openmir2-client-e2e-enter-gaps`（m2-svr / openmir2-worker-11 / 2026-10-14）
+零起栈、零游戏端口；不 merge、不自签
+base = master 714898ed0（= origin/walgit master；片㊿ 4726723ab 已合入）
+====================================================================================================
+
+# 1) 本片净改动（`git diff --name-status 714898ed0`，提交后复核）
+
+```
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/213-highhp-family-audit.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/214-redcheck-highhp-family.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/215-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/216-boundary.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/verify_client_highhp_family.py
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+```
+= 8 路径（5 增 + 3 改），全部在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`。
+
+> 与既往片的差别（如实登记）：本片**含一个 `.py`**（`verify_client_highhp_family.py`，新增判据工具）
+> 与 `window_handoff.py` 的一行清单改动（`TOOL_SELFTESTS` 8→9），这是**有意为之**——把家族机判接进
+> 开窗前 G2；两处都不改任何 Rust 生产代码。累计 6 路径为纯证据 + README + 清单。
+
+# 2) 冻结面（必须空）
+
+```
+$ git diff --name-only 714898ed0 -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+```
+（上面为空 ⇒ 冻结面干净；`src/BotSrv` 亦空 —— 本片只读引用未改）
+
+# 3) 零 Rust（必须空）
+
+```
+$ git diff --name-only 714898ed0 -- '*.rs' '*.toml' '*.ps1' '*.cs'
+```
+（上面为空 ⇒ 本片不改 Rust/C# 生产代码）
+
+# 4) 仓外产物（不在本片 diff 内）
+
+```
+E:/tmp/m2svr-burst22/mut/client/Source/Common/Grobal2.pas   # 红检变异副本（M1/M2/M3 用）
+E:/tmp/m2svr-burst22/mut/client/Source/MirClient/ClMain.pas  # 同上
+E:/tmp/m2svr-burst22/mut/rust/**                             # 原样 .rs 副本（--rust-dir 用）
+E:/tmp/m2svr-burst22/mut/rust-no53/smframe.rs                # M4 变异（fn 改名）
+E:/tmp/m2svr-burst22/{redcheck.raw.txt,test.out,215.tmp}     # 原始输出中间件
+E:/tmp/m2svr-burst22/mandiff.py                              # 清单对账脚本
+```
+（本片未起栈、未占端口；`E:/tmp/m2svr-window-origin` / `E:/tmp/m2svr-window-target` 为片㊿ 遗留、
+供 root 开窗，本片只读复跑前置门，未改写。）
+
+# 5) 纪律
+
+- 未 start 任何服务/客户端/代理进程；十端口状态与开工前一致（3306 为共享 MySQL，只读）。
+- 未 merge、未自签 review、未移卡；共享主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2` 未触碰。
+- `git status` 收工干净；`src/ sql/ MirClient` 零改动。

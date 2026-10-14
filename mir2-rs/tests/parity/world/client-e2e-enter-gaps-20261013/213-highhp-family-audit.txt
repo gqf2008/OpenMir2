@@ -1,0 +1,145 @@
+213-highhp-family-audit.txt —— 卡 `openmir2-client-e2e-enter-gaps` 冻结客户端 `{$IF HIGHHP}` 家族完整性审计
+m2-svr / openmir2-worker-11 / 2026-10-14（只读：零起栈、零游戏端口；不 merge、不自签）
+证据基准 = master `714898ed0`（= origin/walgit master，片㊿ `4726723ab` 已合入）
+====================================================================================================
+
+# 0) 一句话
+
+片㊴/㊼ 修好了 52/53，但 `HIGHHP` 是冻结客户端的一个**编译期记录布局开关**
+（`MirClient@c61d912d`，`Source/Common/Grobal2.pas:39 HIGHHP = True`）：凡客户端在 `{$IF HIGHHP}`
+下按**另一种字节布局**读的服务端帧，都必须有「客户端布局」侧实现，否则字段被读成 0/错位（与 52/53 同源）。
+本片把**家族清单**做全：共 **7 个** `{$IF HIGHHP}` 站点；其中 **52/53 已闭环**，
+**`SM_STRUCK(31)` 是同源未闭环 GAP**（Rust 与 C# 都发 oracle 布局，客户端按 HIGHHP 布局读 ⇒ 受击后
+HP/MaxHP 错），`SM_OPENHEALTH(1100)`/`SM_INSTANCEHEALGUAGE(1103)` 客户端有 HIGHHP 分支但 Rust
+生产路径**未发送**。⇒ 建议 owner 把 **O-3 的范围从「52/53」扩到「HIGHHP 家族」**，并裁决
+「服务端按客户端布局 vs 按 oracle 布局」的全局取舍（与 m3 攻击夹具的跨侧判据直接冲突，见 §5）。
+
+**本片不改任何生产代码**（判级 = L：只读源码 + 机判工具 + 证据）；SM_STRUCK 的修法与判据交 owner，
+真机 R 判据仍归 root 独占窗口。
+
+# 1) 冻结客户端 `{$IF HIGHHP}` 站点清单（机判：`verify_client_highhp_family.py`）
+
+命令（cwd = 本证据目录）：
+```
+$ python -I -B verify_client_highhp_family.py \
+      --client-root E:/Users/gxh/Documents/GitHub/MirClient \
+      --rust-dir <repo>/mir2-rs/bins/game-svr/src
+```
+原始输出（2026-10-14）：
+```
+HIGHHP = True
+HIGHHP 站点（文件:行 上下文 -> 状态）：
+  Grobal2.pas:2103 TMonInfo -> client-db-not-a-frame
+  Grobal2.pas:2174 TAbility -> closed:encode_ability_client
+  Grobal2.pas:2494 TAddAbility -> dead-record-no-uses
+  ClMain.pas:10225 SM_HEALTHSPELLCHANGED -> closed:sm_healthspellchanged_client
+  ClMain.pas:10269 SM_STRUCK -> GAP:rust-sends-oracle-layout
+  ClMain.pas:10338 SM_OPENHEALTH -> not-sent-by-rust
+  ClMain.pas:10365 SM_INSTANCEHEALGUAGE -> not-sent-by-rust
+Rust 侧客户端布局实现齐备：encode_ability_client, sm_healthspellchanged_client
+GREEN: 7 个 HIGHHP 站点与登记集合逐项一致（2 闭环 / 1 帧面 GAP / 1 客户端库 / 1 死记录 / 2 未发送）
+rc=0
+```
+> `GREEN` = 「家族集合与登记一致」，**不等于**「全部闭环」：`SM_STRUCK` 是**已登记的 GAP**。
+> 客户端若新增/删除一个 `{$IF HIGHHP}` 站点，或把 `HIGHHP` 改成 False，或 Rust 侧两件客户端布局实现
+> 被删/改名 ⇒ 工具 **RED**（认不出即红）。红检见 `214-redcheck-highhp-family.txt`（M1..M4 逐条）。
+
+# 2) 类型级站点（改记录字段尺寸）
+
+| 站点 | 客户端锚 | 影响 | 服务端帧 | 状态 |
+| --- | --- | --- | --- | --- |
+| `TMonInfo` | `Grobal2.pas:2103`（`wMP/wHP: DWORD`） | 客户端 `Monster.DB` 侧怪物表记录 | **不是服务端帧**（客户端从 `Monster.DB` 加载） | 非帧面 |
+| `TAbility` | `Grobal2.pas:2174`（`HP/MP/MaxHP/MaxMP: DWORD`） | `SM_ABILITY(52)` 载荷 | **是**（`SM_ABILITY`） | **已闭环**（片⑨/㊼：`record::encode_ability_client`，58B，`HP@22`） |
+| `TAddAbility` | `Grobal2.pas:2494`（`wHP/wMP: DWORD`） | 全仓仅定义、**零使用点**（`grep -rn TAddAbility Source/` 只有定义 + `.dcu`） | — | 死记录 |
+
+`TAbility`（HIGHHP=True）= `Level:Word` + `AC/MAC/DC/MC/SC:Integer` + `HP/MP/MaxHP/MaxMP:DWORD`
++ `Exp/MaxExp:DWORD` + `Weight..MaxHandWeight:Word` = **58B**，`HP@22`（独立复算见 `26-frozen-client-layout-verify.txt`
+与 `verify_client_ability_layout.py`）。C# oracle 的 `Ability` 是 **40B**（`src/OpenMir2/Packets/ClientPackets/Ability.cs:9`：
+`[StructLayout(… Size = 40)]`；`AbilityFormatter.Serialize` 写 21 个字段 = 40B）⇒ **oracle 与冻结客户端不可同时满足**。
+
+# 3) 处理器级站点（改 HP/MP/MaxHP 的读取来源）
+
+| 客户端处理 | 客户端锚 | HIGHHP 下客户端怎么读 | C# oracle 怎么发 | Rust 现状 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| `SM_HEALTHSPELLCHANGED(53)` | `ClMain.pas:10225` | 从**尾**解 `TCharDesc`(12B)：HP=Feature / MP=Status / MaxHP=StatusEx；**不读** header 的 param/tag/series | header-only（`SendSocket`，`PlayObject.Socket.cs:77-96`） | `sm_healthspellchanged_frame`（默认 client 布局 = 头 + `Encode(TCharDesc)`） | **已闭环**（片㊴ `c61b9627a`） |
+| `SM_STRUCK(31)` | `ClMain.pas:10269` | `HP := Makelong(msg.param, msg.tag)`（**32 位 HP 拆在 header 两格**）；`MaxHP := wl.Param1`（从**尾** `MessageBodyWL` 16B） | `MakeMessage(SM_STRUCK, ActorId, WAbil.HP, WAbil.MaxHP, wParam)`（`PlayObject.Message.cs:1601`）⇒ `param=HP, tag=MaxHP`；尾 `MessageBodyWL{Param1=GetFeature, Param2=CharStatus, Tag1=hitter, Tag2=mag}` | `smframe::sm_struck`（`smframe.rs:752-768`）**逐字节复刻 oracle**（`param=hp, tag=max_hp, 尾.Param1=feature`） | **同源 GAP**（见 §4） |
+| `SM_OPENHEALTH(1100)` | `ClMain.pas:10338` | `HP := Makelong(param, tag)`；`MaxHP := Makelong(sMsg.ident, sMsg.wMsg)`（尾 `TShortMessage` 4B） | `SendDefMessage(SM_OPENHEALTH, ActorId, WAbil.HP, WAbil.MaxHP, 0)`（`PlayObject.Message.cs:2010`） | **未发送**（生产路径无 1100 编发点） | 未发送（实现日再判） |
+| `SM_INSTANCEHEALGUAGE(1103)` | `ClMain.pas:10365` | 同 1100（尾 `TShortMessage`） | `PlayObject.Message.cs:2019` | **未发送** | 未发送（实现日再判） |
+
+> 客户端源码全文只有这 4 个**处理器级** `{$IF HIGHHP}`（`grep -n 'HIGHHP' Source/MirClient/ClMain.pas` =
+> 10225 / 10269 / 10338 / 10365）+ 3 个**类型级**（`Grobal2.pas` 2103 / 2174 / 2494）+ 常量定义 `:39`。
+> `TNakedAbility`（`SM_ADJUST_BONUS(811)` 的载荷）**不在** HIGHHP 分支里（`Grobal2.pas:2467`）⇒ 811 无此问题。
+
+# 4) `SM_STRUCK` GAP 详情（本片**新**发现）
+
+## 4a) 客户端要求的布局（从冻结客户端源码直接可得）
+
+```
+ClMain.pas:10238 SM_STRUCK:
+  DecodeBuffer(body, @wl, SizeOf(TMessageBodyWL));      // 尾 = 16B {Param1,Param2,Tag1,Tag2}
+  ...
+  {$IF HIGHHP}
+    Actor.m_Abil.HP    := DWORD(Makelong(msg.param, msg.tag));   // header 两格拼 32 位 HP
+    Actor.m_Abil.MaxHP := DWORD(wl.lParam1);                     // MaxHP 在**尾** Param1
+  {$ELSE}
+    Actor.m_Abil.HP    := msg.param;
+    Actor.m_Abil.MaxHP := msg.tag;
+  {$IFEND}
+```
+⇒ 冻结客户端要的 SM_STRUCK = **header(actor, LoWord(HP), HiWord(HP), damage) + 尾{Param1=MaxHP, …}**；
+而 C#/Rust 发的是 **header(actor, HP, MaxHP, damage) + 尾{Param1=feature, …}**（非 HIGHHP 口径）。
+⇒ 客户端会算出 `HP = HP | (MaxHP<<16)`（一个虚高值）、`MaxHP = feature`（玩家 `GetFeature()` 值）。
+受击**不伴随** 53（oracle 在 `RM_STRUCK` 支只发 `SM_STRUCK`，除 `DisableSelfStruck/DisableStruck` 两支），
+故这个错值会**一直留在** `Actor.m_Abil.HP/MaxHP` 直到下一条 52/53/升级/换装覆盖 ⇒ 受击后 HUD 血条错乱。
+
+## 4b) 与既有真机读数的自洽
+
+既有 C# 对照组真机读数（`README.md` §结论 #3）：客户端 HUD `0/0` + `655360/25165829`
+（`0xA0000 = 10<<16`、`0x1800005 = 24<<16 | 5`）——这正是「把 header 两格当 32 位拼」的形态，
+与 HIGHHP 口径一致（片⑨/㊴ 的 52/53 归因同源）。⇒ 本 GAP 与 52/53 **不是**新缺陷类，是同一类的第三、四、五张牌。
+
+## 4c) 为什么本片**不改**（交 owner）
+
+1. **跨侧夹具冲突（硬阻塞）**：m3 ②③ 攻击夹具经 `src/BotSrv`（C#，**非 HIGHHP**）解 SM_STRUCK：
+   `RobotPlayer.Operate.cs:682` 的 `Actor.Abil.HP = msg.Param; Actor.Abil.MaxHP = msg.Tag;` 与落盘
+   `M3ATTSEQ {role=struck, "hp":msg.Param, "maxhp":msg.Tag, "src":wl.Tag1}`；`attack_diff.py` 按这两格做
+   **跨侧逐 k 对拍**。若把 Rust 的 SM_STRUCK 改成客户端布局、C# 侧不动 ⇒ 夹具必红（本片若强改，会打断 ②③）。
+   要修必须先裁决「夹具侧是否 pin `MIR2_CLIENT_ABILITY_LAYOUT=0`」或「C# 夹具同步改造」，**不在本片写集**。
+2. **R 级**：SM_STRUCK 属战斗数值/客户端可见行为，真机两相（受击前后 HUD）判据归 root 独占窗口。
+3. **§6.0-3 登记面**：52/53 的偏差登记（O-3）尚无 owner 签字；本 GAP 应**并入同一登记**一次裁决，
+   不要逐帧各开一张（否则登记碎片化、且易与夹具口径打架）。
+
+## 4d) 建议的下一步（供 owner 裁决，本片不实施）
+
+- **O-3 扩容**：登记条目从「52→58B / 53→TCharDesc 尾」改为「**HIGHHP 家族**：52/53/SM_STRUCK
+  （未来 SM_OPENHEALTH/SM_INSTANCEHEALGUAGE）默认按冻结客户端布局，`MIR2_CLIENT_ABILITY_LAYOUT=0`
+  才回 oracle 逐字节」；同时写明**触发条件/后果/改前改后**（本文件 §1..§4 可直接引用）。
+- **全局口径**：裁定「跨侧对拍夹具一律显式 pin oracle 布局（`=0`），生产默认客户端布局」——
+  这样 m3 ②③ 的 C#/Rust 逐 k 对拍在 oracle 口径下继续成立，而真机客户端联调走客户端口径。
+- **下一片候选**（本 lane 可承接）：SM_STRUCK 客户端布局片（`sm_struck_client` + 尾 `Param1=MaxHP`），
+  判据 = 客户端源码逐字节锚 + 构造级字节断言 + 改坏必红；真机 R 判据归 root。
+
+# 5) 工具与判据
+
+- `verify_client_highhp_family.py`（本片新增）：从冻结客户端源码枚举 `{$IF HIGHHP}` 站点，
+  机判「已登记集合」；`--rust-dir` 追加 Rust 侧两件客户端布局实现的存在性（按 `fn <sym>` 定义匹配，
+  子串不算）。`--selftest` 6/6（含 HIGHHP=False / 删站点 / 未登记站点 / Rust 缺件 四向牙）。
+- 已接入聚合门 `window_handoff.py` 的 **G2**（`TOOL_SELFTESTS` 8→9 件）：开窗前的判据工具自检里
+  会跑本工具的 `--selftest`，缺件 ⇒ `PREREQ`。
+- 红检：`214-redcheck-highhp-family.txt`（M0 GREEN / M1..M4 RED / M5 GREEN，变异只在 `/tmp` 副本）。
+- 聚合门复跑（入库逐字替身脚本口径）：`WINDOW_READY=YES` / `RESULT: GREEN` rc=0（含
+  `OK G2 verify_client_highhp_family.py --selftest`）；`check_rust_window_preflight.py` R1..R7 GREEN rc=0。
+
+# 6) 边界与纪律
+
+- 只读源码（冻结客户端 checkout + 本仓），**零生产代码改动**；本片只新增本证据目录
+  `213`/`214`/`215`/`216` + `verify_client_highhp_family.py` + `window_handoff.py`（G2 清单一行）
+  + `README.md` + `SHA256SUMS.txt`。
+- 冻结面 `src/`(含 BotSrv) `sql/` `MirClient/` `mir2-rs/crates/protocol` `mir2-rs/crates/storage` 空。
+- 零起栈、零游戏端口（仅共享 3306 只读，未触碰）；未动共享主检出；未 merge、未自签 review。
+- 真机 R 判据（①②③ + 受击步）仍归 **root 独占窗口**；本片不占窗口。
+
+# 7) 残留物清单（仓外，可删）
+
+- `E:/tmp/m2svr-burst22/mut/**`（红检变异副本：client / rust / rust-no53）。
+- `E:/tmp/m2svr-burst22/*.log`（若有）。

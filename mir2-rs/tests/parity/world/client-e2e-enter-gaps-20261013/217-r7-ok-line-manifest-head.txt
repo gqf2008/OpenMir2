@@ -1,0 +1,133 @@
+217-r7-ok-line-manifest-head.txt —— 卡 `openmir2-client-e2e-enter-gaps` ③ 窗口就绪工具收口：
+R7「出处清单」末行改报**清单里的** `source_head`（收 reviewer-5 `871cc797` O-1）
+m2-svr / openmir2-worker-11 / 2026-10-14（零起栈、零游戏端口，仅共享 3306 只读；不 merge、不自签）
+base = `origin/master` = `714898ed0cc99773f854873e7f9beb73a7a178ca`（= walgit/master 双端一致）
+====================================================================================================
+
+# 0) 一句话
+
+`check_rust_window_preflight.py` 的 `binary_provenance_findings()`（R7）在
+「清单 `source_head` 滞后、但生产路径零差异」的**豁免支**里，末行 `[OK] …` 把清单头打印成
+**当前 ref 的 oid**（`oid`）而不是清单里真实的 `source_head`（`head`）⇒ 人读门输出时会误以为
+清单本来自该 head。**判绿/判红逻辑零改动**（前一行 INFO 一直正确报出 `source_head=<清单旧头> != <ref>`）；
+本片只把末行改成 `head`，并加一条 selftest 牙钉住它。正面支（`head == oid`）**逐字节不变**。
+
+# 1) 来源（reviewer-5 的原始 finding）
+
+- review entry = `871cc797a5a409c497f3edfdd13085240280ba02`（openmir2-reviewer-5，approve/do_not_close）
+- 被审 head = `276f2f95eda467cd4d5d2c1654e376a6967dc8b2`（片㊻，`window_handoff.py`…，已合入 master `35abf9f9`）
+- finding O-1（Minor(non-blocking)）原文要点：
+  > `binary_provenance_findings` 的末行 OK 文案在『清单 source_head != 当前 ref 且生产路径零差异』
+  > （即 R7 允许的假红豁免支）时，把清单头打印成**当前 ref 的 oid**，而非清单里真实的 `source_head`。
+  > 判绿/判红逻辑不受影响……属证据行文案不实……建议下次动该文件时把末行改成打印清单头。
+- 位置 = `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py`
+  `binary_provenance_findings()` 末段 `f"[OK] R7 出处清单 {basename} source_head={oid[:10]}…"`
+
+触发面 = **正片㊻ 自己修的形态**：源刷了、清单停在旧 head、但 `mir2-rs/**` 零差异（`cargo` 不重链）
+⇒ 该支必须是 GREEN；也正因此支的读数会被 root/审查者在开窗时逐行读，文案必须指清单头。
+
+# 2) 改前 / 改后（工具件）
+
+文件（git blob id / 盘上 sha256，LF 口径）：
+```
+改前 e21fb4ad605bab06bbdfd3ab2bae8b1b1a17bf81  sha256=b741b1eea47e4c28c981d7519d51202b7aacbaf7cc23fd67810f3a3519f7aa71
+改后 2ae578fd1f30b656a0b82ad636acae71224da65c  sha256=85a794893581fb12bbc6aa1be7e30c20c2449a56e129abbd479983b0063b33c5
+```
+
+```
+$ git diff -- mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py
+@@ -398,10 +398,13 @@ def binary_provenance_findings(
+     if not problems:
++        # 末行必须报**清单里的** `source_head`（不是当前 ref 的 oid）：两者在
++        # 「清单 head 滞后但生产路径零差异」的豁免支会不同，报 ref 会让人误以为清单本就来自该 head
++        # （reviewer-5 `871cc797` O-1）。正面支两者相等 ⇒ 该改动逐字节不变。
+         return (
+             infos
+             + [
+-                f"[OK] R7 出处清单 {os.path.basename(provenance_path)} source_head={oid[:10]}，"
++                f"[OK] R7 出处清单 {os.path.basename(provenance_path)} source_head={head[:10]}，"
+                 f"{len(bins)} 件 exe sha256 逐字节一致"
+             ],
+             [],
+@@ -691,6 +694,14 @@ def selftest() -> int:
+         oks, probs, pre = binary_provenance_findings(tmp, sixth, win_tgt, prov, r7_bins)
+         chk("r7-nonprod-advance-green", len(oks) == 2 and not probs and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
++        # 豁免支的末行必须点名**清单**的 `source_head`（= fifth），而不是当前 ref（= sixth）。
++        # 红检（改坏必红）：把末行改回 `source_head={oid[:10]}` ⇒ 本牙必红。
++        last_ok = oks[-1] if oks else ""
++        chk(
++            "r7-nonprod-advance-ok-names-manifest-head",
++            f"source_head={fifth[:10]}" in last_ok and f"source_head={sixth[:10]}" not in last_ok,
++            repr(last_ok),
++        )
+         # 源前移且在 `mir2-rs/**` 上有生产差异（清单停在旧 head）⇒ RED（真身 = 刷源后不重编译）。
+```
+
+新增牙锚定的正是**豁免支**：selftest 合成一个临时 git 仓，`fifth` 录清单（非生产提交），
+再前进一条非生产提交 `sixth` ⇒ `binary_provenance_findings(ref=sixth)` 走豁免支，返回 2 条 ok
+（INFO + 末行）。牙断言末行含 `source_head=fifth[:10]` 且**不含** `source_head=sixth[:10]`。
+
+# 3) 判据（零端口、可复跑）
+
+## 3a) 工具自检 48/48 → **49/49**（含新牙）
+
+```
+$ python -I -B check_rust_window_preflight.py --selftest
+...
+[PASS] selftest r7-nonprod-advance-ok-names-manifest-head '[OK] R7 出处清单 window-provenance.json source_head=0425d2ba0e，2 件 exe sha256 逐字节一致'
+...
+SELFTEST OK (49/49)
+rc=0
+```
+
+## 3b) 真身 R1..R7（构建源 `E:/tmp/m2svr-window-origin`，清单 head `5e757b0252`）
+
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer \
+      --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-window-target/window-provenance.json
+[OK] R1 … d16b5199d9（片⑪ AOI 诊断 vr/new/af）…
+[OK] R1 … 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）…
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=5e757b0252 相对基线 origin/master@714898ed0c 生产路径零差异
+[OK] R7 出处清单 window-provenance.json source_head=5e757b0252，6 件 exe sha256 逐字节一致
+RESULT: GREEN
+rc=0
+```
+（正面支 `head == oid == 5e757b0252` ⇒ 末行读数与改前逐字节相同。）
+
+## 3c) 开窗聚合门（入库逐字替身脚本口径）= `WINDOW_READY=YES`
+
+```
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target --mirserver E:/MirServer \
+      --window-script ./client-e2e-window.fixed.sh.txt
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 verify_client_highhp_family.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R7）
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0
+```
+
+# 4) 纪律 / 边界
+
+- **零生产代码**：本片只改一个证据目录内的 `.py` 判据工具（+ 证据/README/清单）。
+- 未起栈、未占端口（共享 3306 只读）；未动共享主检出；未 merge、未自签 review；
+  根因登记（`E:/tmp/m2svr-burst23/**` 的中间件）见 `220-boundary.txt` §4。
+- **判级 = L**（证据/工具文案，零行为变化；正面支逐字节不变）；卡级 R 真机 ①②③ 仍归 root 独占窗口。
