@@ -1,0 +1,2 @@
+$ cargo fmt --all -- --check   # cwd=mir2-rs, CARGO_TARGET_DIR=E:/tmp/m3cs-target
+rc=0

@@ -1,0 +1,41 @@
+# 本片边界（base=origin/master f0a9ab911）
+# 命令：git diff --cached --name-status origin/master
+
+M	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/40-fmt.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/20-gate-fmt.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/10-gate-fmt.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/05-gate-fmt.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/08-gate-fmt.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/SHA256SUMS.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/00-commands.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/01-before-scan.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/02-fmt-gate-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/03-fmt-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/04-fmt-gate-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/05-chain-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/06-chain-gate-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/07-chain-gate-require-all.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/09-chain-red-preexisting-base-proof.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/10-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/11-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/12-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/13-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/20-evidence-verify.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/21-external-mutation-red.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/README.md
+M	mir2-rs/tests/parity/m3/fixture_chain_gate.py
+A	mir2-rs/tests/parity/m3/m3_fixture_fmt_evidence_gate.py
+
+# 追加本文件自身（生成时尚未入库）：
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/07-boundary.txt
+
+# 冻结面自检：
+$ git diff --cached --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins src/BotSrv
+(空 = 冻结面未触)
+
+$ git diff --cached --name-only origin/master -- '*.rs' '*.toml' '*.ps1'
+(空 = 零 .rs/.toml/.ps1)

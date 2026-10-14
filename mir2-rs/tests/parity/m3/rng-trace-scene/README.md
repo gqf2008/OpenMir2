@@ -364,6 +364,14 @@ python -I fixture_chain_gate.py selftest # 38/38 GREEN（含「RNG 场景锚门�
 
 > 注：锚点随 master 继续漂移时，本门会在链门里**恒 RED**（这正是它接入共享管线要拿到的“不再静默”）。
 
+**首次实战命中（2026-10-14，链门车道收口）**：本片合入 master 后，`:5665` 这个值在**合并当时**
+就已再次失准 —— 合并目标 master（`17389f05f`，⑦-`gotolabel-ext`）把 `main.rs` 加长到 `:5795`，
+而文档仍写在 m3bag 分支上核出的 `:5665` ⇒ `FIXTURE_CHAIN` 随即 **RED**（`rng_scene_anchor_selftest`
+12/13、`rng_scene_anchor_check` 1 项、系统 B runner 36/37，三红同根）。按该门设计，这正是它要
+抓的漂移；收口 = 把 `DRIVER-CONTRACT.md:59` 由 `:5665` 订正为 `:5795`（零 `.rs`、零行为改动），
+链门随之 **GREEN（runner_ok=10、red=0、共享管线全绿）**。⇒ 经验：**行号类锚点必须在合并树上重钉**，
+分支上核过的值不保证在 merge 目标上成立。
+
 ### 5.3 站点表 `oracle_ref` 可解析性机判（`rng_consumer_groups.py`）
 
 `consumer_groups.tsv` 是 Claim B 的**唯一真源**，其 `oracle_ref` 列是站点归因的唯一溯源

@@ -1,0 +1,4 @@
+# cwd=mir2-rs, CARGO_TARGET_DIR=E:/tmp/m3cs-target, HEAD=224cea0c9（含最新 origin/master 41e61029e）
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.68s
+rc=0

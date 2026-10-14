@@ -116,7 +116,13 @@ SHARED_CHECKS = [
     #   非本车道写集）⇒ `--strict` 现为 RED。等 owner 裁决重编后，把 `audit --strict` 补登记为 `check`
     #   （届时本段注释一并更新）。
     ("whitelist_registry_selftest", "mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py", ["selftest"]),
-    # 主机门（本片新增，锚门族最后一处「在场却坏无声」）：本卡场景两相 trace 的承接卡规格锚门
+    # fmt 证据自描述门（`m3_fixture_fmt_evidence_gate.py`，卡 `openmir2-m3-fixture-chain-gate`
+    #   reviewer-6 `090d0cc4 @f114a5e90` O-1 收口）：夹具链族 9 个证据包的 `*fmt*.txt` 必须
+    #   非空 + 带 `$ <命令>` 命令头 + `rc=<n>`。此前 5 个欠件（0 字节 / 只有 rc 无命令头）
+    #   在 hash 清单里"在场"却无法自证跑过什么 ⇒ 审计噪声。接入共享管线常跑。
+    ("fixture_fmt_evidence_selftest", "mir2-rs/tests/parity/m3/m3_fixture_fmt_evidence_gate.py", ["selftest"]),
+    ("fixture_fmt_evidence_check", "mir2-rs/tests/parity/m3/m3_fixture_fmt_evidence_gate.py", ["check"]),
+    # 主机门（m3bag 片，锚门族最后一处「在场却坏无声」）：本卡场景两相 trace 的承接卡规格锚门
     #   `rng-trace-scene/check_anchors.py`——它把 `DRIVER-CONTRACT.md` 里每个 `<path>:<line>`
     #   引用与**当前源码**的首个匹配行钉成 fail-closed。它此前**零调用方**（只靠手工跑证据
     #   README）⇒ 实测已静默漂移：`main.rs:5598` 因合并增长到 `:5665` 而 gate RED、无人发现。
@@ -392,14 +398,20 @@ def cmd_selftest(_args):
     #   （selftest 向）。它此前零调用方（reviewer-6 `4f5d3eeb1` O-1）⇒ 工具自身逻辑回归会静默。
     _wl_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("m3_whitelist_registry_audit.py")]
     expect("白名单登记号审计门 selftest 已接入共享管线（防回退）", ["selftest"] in _wl_gate)
+    # 本片防回退牙：fmt 证据自描述门（`m3_fixture_fmt_evidence_gate.py`）必须常驻共享管线
+    #   （selftest + check 两向）。它此前不存在（reviewer-6 `090d0cc4 @f114a5e90` O-1：5 个
+    #   fmt 证据欠件在场却无法自证）⇒ 反注册后空件/无命令头会静默通过整条链。
+    _fmt_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("m3_fixture_fmt_evidence_gate.py")]
+    expect("fmt 证据自描述门 selftest+check 已接入共享管线（防回退）",
+           ["selftest"] in _fmt_gate and ["check"] in _fmt_gate)
     # 本片防回退牙：本卡场景两相 trace 的承接卡规格锚门（`rng-trace-scene/check_anchors.py`）
     #   必须常驻共享管线（selftest + check 两向）。它此前零调用方（只靠手工跑），实测已静默
-    #   漂移（`main.rs:5598`→`:5665`）⇒ 缺行/漂移会静默通过整条链。
+    #   漂移（`main.rs:5598`→`:5665`→`:5795`）⇒ 缺行/漂移会静默通过整条链。
     _sa_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("rng-trace-scene/check_anchors.py")]
     expect("RNG 场景锚门已接入共享管线（防回退）",
            ["selftest"] in _sa_gate and ["check"] in _sa_gate)
-    expect("主机门（.py）登记项 ≥21（castle + 行会/攻城 + 英雄/宠物 + 元宝寄售 + 任务 + 组队/交易 + markers 前缀 + 宝宝登记 + 白名单审计 + 行会战怪行为登记 + RNG 场景锚 各 selftest[/check]）",
-           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 21)
+    expect("主机门（.py）登记项 ≥23（castle + 行会/攻城 + 英雄/宠物 + 元宝寄售 + 任务 + 组队/交易 + markers 前缀 + 宝宝登记 + 白名单审计 + 行会战怪行为登记 + RNG 场景锚 + fmt 证据 各 selftest[/check]）",
+           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 23)
     expect("共享管线登记名唯一（防重复注册偷懒）",
            len({n for n, _r, _e in SHARED_CHECKS}) == len(SHARED_CHECKS))
     expect("共享管线 (file,args) 登记唯一",
