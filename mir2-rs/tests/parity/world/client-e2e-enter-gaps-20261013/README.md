@@ -21,6 +21,10 @@
 > ⑥（`2026-10-14` 追补，片㊵）：**片㊴ 的 R 窗口触发前置** —— 53 只在 `HP<MaxHP` 时发出，
 > 满血进图永远覆盖不到 ⇒ 补压血 SQL（`82-…md` §2b）+ 机判 `check_healthspellchanged_trigger.py`
 > （T1 前置/T2 已发/T3 尾长，selftest 8/8，含 header-only ⇒ 改坏必红），证据 `187`/`188`/`189`。
+> ⑦（`2026-10-14` 追补，burst26）：**精确 head 窗口源刷新 + 头号项一次手复验** —— 片54 合入 master
+> `da2df1fdb` 后把窗口专用源 `E:/tmp/m2svr-window-origin` 从 `52c91180f` 刷到精确 `da2df1fdb`
+> （生产路径零差异 ⇒ **六件 exe 逐字节不变**、零重编），出处清单 `source_head=da2df1fdb`；
+> 入库逐字替身口径 `WINDOW_READY=YES`，root 现跑活脚本仍 G5 RED（见 §5）。证据 `230-window-source-refresh.txt`。
 
 ## 结论（先看这三条）
 

@@ -1,0 +1,146 @@
+230-window-source-refresh.txt —— 卡 `openmir2-client-e2e-enter-gaps` **精确 head 窗口源刷新 + 头号项一次手复验**
+（片54 合入 master 后 master 由 `52c91180f` 前进到 `da2df1fdb`）
+m2-svr / openmir2-worker-11 / 2026-10-14（burst26）；零仓库生产代码改动（只动检出外 `E:/tmp/m2svr-window-*` + 本证据）
+====================================================================================================
+
+# 0) 本片的边界与判级
+
+- 判级 = **L**：环境刷新（检出外 checkout + 出处清单重录）+ 只读复验；**仓库里零 `.rs`/`.ps1`/`.cs`/`.toml`**，
+  唯一入库文件 = 本 `230-*.txt`（+ `README.md`/`SHA256SUMS.txt` 两条口径更新）。生产路径（`mir2-rs/bins/game-svr/src`）
+  在 `52c91180f..da2df1fdb` 区间**零差异** ⇒ 六件 exe 逐字节不变（见 §3）。
+- 未起栈、未占端口；未动共享主检出；未 merge、未自签 review。
+
+# 1) 为什么刷（R6 口径 + 片54 合入）
+
+- 片54（`cff52c241`）经 reviewer-5 `8ce6a953` approve（tier=L）由 merge 车道合入 master
+  **`da2df1fdb`**（线程 merge 检查点 `1791986265`；`origin/master == walgit/master == da2df1fdb`）。
+- 窗口专用源 `E:/tmp/m2svr-window-origin` 停在片54 刷的**当时 master `52c91180f`**。
+  裸跑前置门时 `52c91180f` 相对基线 `da2df1fdb` 生产路径**零差异** ⇒ R6 走**豁免支** GREEN；
+  本片把它刷成**精确 head**（`R6 ==` 而非「零差异豁免」），并把出处清单 `source_head` 重录为 `da2df1fdb`，
+  避免 root 开窗前 master 再前进时出处清单与基线「看着不一致」。
+
+# 2) 刷源（检出外；仓库工作树零改动）
+
+```
+$ git -C /e/tmp/m2svr-window-origin log -1 --format='%H %ci %s'     # BEFORE
+52c91180f2279976f2bc1f1c981e41cbe1a4663b 2026-10-14 21:27:27 +0800 Merge fd68e037d (enter-gaps-window-dense-menu): …
+$ git -C /e/tmp/m2svr-window-origin status --porcelain | wc -l
+0
+$ git -C /e/tmp/m2svr-window-origin fetch origin master
+ * branch                master     -> FETCH_HEAD
+$ git -C /e/tmp/m2svr-window-origin checkout --detach origin/master
+HEAD is now at da2df1fdb Merge cff52c241 (enter-gaps-window-dense-menu): …
+$ git -C /e/tmp/m2svr-window-origin log -1 --format='%H %ci %s'     # AFTER
+da2df1fdbd58dd76008bc8d08c8aed08ae7cf2fb 2026-10-14 21:54:09 +0800 Merge cff52c241 (enter-gaps-window-dense-menu): …
+
+$ cd /e/tmp/m2svr-window-origin/mir2-rs && CARGO_TARGET_DIR=E:/tmp/m2svr-window-target \
+    cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.66s
+```
+⇒ **零重编**（`52c91180f..da2df1fdb` 生产路径零差异，cargo 直判 Fresh）。
+
+# 3) 出处清单重录 + R1..R7（原始输出，逐字）
+
+```
+$ python -I -B check_rust_window_preflight.py --repo /e/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target --record-provenance E:/tmp/m2svr-window-target/window-provenance.json
+R7_PROVENANCE_RECORDED source_head=da2df1fdbd58dd76008bc8d08c8aed08ae7cf2fb bins=6 -> E:/tmp/m2svr-window-target/window-provenance.json
+
+$ python -I -B check_rust_window_preflight.py --repo /e/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-window-target/window-provenance.json
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=da2df1fdbd == 基线 origin/master@da2df1fdbd
+[OK] R7 出处清单 window-provenance.json source_head=da2df1fdbd，6 件 exe sha256 逐字节一致
+RESULT: GREEN
+```
+
+# 4) exe 对照（**六件全部逐字节不变**；只有出处清单 `source_head` 变）
+
+| 件 | sha256（`52c91180f` == `da2df1fdb`，不变） | bytes |
+|---|---|---|
+| `game-svr.exe` | `cfecda1c1f7c6a50ffa144c6e37f975bbc6612e73f6707765aa4937fdb4e27a5` | 135602989 |
+| `db-srv.exe` | `15fb1f25af19ee719501eed4406805ab49c2bb6d26dd0522f6a7f33bd5eaf771` | 84322707 |
+| `game-gate.exe` | `146fb23cd841b089d60738873fbb210489efeee36756743ef95ff6875645735e` | 29233601 |
+| `login-gate.exe` | `78c7dac971d93e51f9be874f82ef1fc8b9a51a656bf7473ad6efddf4251622d3` | 27939672 |
+| `login-srv.exe` | `daa1ba949478d98ec31c8becabcff6853ea64f98be56dd25d8e57673274a0068` | 82221827 |
+| `sel-gate.exe` | `741ea627cd1cd65578dfc567130245dfd7f953d6eab5ea31acf67cc79d08accd` | 27918761 |
+
+出处清单 = `E:/tmp/m2svr-window-target/window-provenance.json`，`source_head=da2df1fdbd58dd76008bc8d08c8aed08ae7cf2fb`。
+
+# 5) 聚合窗口就绪门（入库逐字替身口径 ⇒ WINDOW_READY=YES；root 现跑脚本仍 G5 RED）
+
+```
+$ python -I -B window_handoff.py --repo /e/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target --window-script <本目录 client-e2e-window.fixed.sh.txt>
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 check_client_run_frames.py --selftest
+OK   G2 check_healthspellchanged_trigger.py --selftest
+OK   G2 verify_client_highhp_family.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R7）
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+```
+
+对**root 现跑的活脚本**（`E:/tmp/openmir2-watch/client-e2e-window.sh`，未换替身）同一门仍判红：
+
+```
+$ python -I -B window_handoff.py --repo /e/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target
+OK   G1 Rust 窗口前置门 GREEN（R1..R7）
+RED G5 窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 指向**共享主检出**（E:/Users/gxh/Documents/GitHub/OpenMir2，rev 车道工作区） ⇒ 直接跑它会构建另一棵树（白烧窗口）
+RED G5 窗口脚本 tgt=E:\tmp\openmir2-merge-target != 本计划 --target-dir=E:/tmp/m2svr-window-target ⇒ 会从另一份（可能过期的）exe 起栈，判据读数对不上构建源
+WINDOW_READY=NO
+RESULT: RED
+```
+
+⇒ **root 侧唯一剩余动作**：把活脚本换成入库逐字替身
+`mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt`
+（与活脚本仅 `repo=` / `tgt=` 两行 diff），换后本门判 `WINDOW_READY=YES`（本片在 `da2df1fdb` 上重证）。
+
+# 6) 头号项（root 2026-10-14 15:0x「二分 52/752 不生效 + 跑=0」）一次手复验
+
+```
+### git log --oneline --no-merges ad0592b19..8e491f81e -- mir2-rs/bins/game-svr/src   （12 条）
+ecd455765 d3b39c157 c55dff977 0d0d62a69 a6359cd78 f8ab7ff24 ce7879223 0a1b83f7b 65d0b34f2 8c4e0fc49 1a2b1ed51 d16b5199d
+### -S 探针（同区间同路径）
+RM_HEALTHSPELLCHANGED = 0 ; IncHealth = 0 ; sm_healthspellchanged = 0 ; sm_ability = 0 ; CM_RUN = 0
+### 53 尾修复存在性
+sm_healthspellchanged_client in origin/master smframe.rs = 4 ; in 8e491f81e smframe.rs = 0
+c61b9627a（片㊴ 53 补 TCharDesc 尾）is-ancestor of origin/master = YES
+8e491f81e..origin/master = 29 commits
+git diff --stat 8e491f81e origin/master -- mir2-rs/bins/game-svr/src
+ mir2-rs/bins/game-svr/src/main.rs     | 232 +++++++---
+ mir2-rs/bins/game-svr/src/pickwire.rs |   3 +-
+ mir2-rs/bins/game-svr/src/smframe.rs  | 251 ++++++++++
+```
+
+**结论（与片㊽/㊾ 一致，本片独立复算）**：区间 `ad0592b19..8e491f81e` 内**无任何提交**碰 52/752/53/`CM_RUN`
+路径；root 15:0x 实测的 `8e491f81e` 比修复合入后的 master **落后 29 条**、其 `smframe.rs` 里
+`sm_healthspellchanged_client` = **0** ⇒ 它测的是**修复前镜像**。真因 = 53 `SM_HEALTHSPELLCHANGED`
+缺冻结客户端 `TCharDesc(12B)` 尾（`HIGHHP=True` 从尾解，进图 `HP<MaxHP` 触发），修 = 片㊴ `c61b9627a`
++ 片㊼ `6cadc9fbf`（均已入 master）。**R 级真机判据（①②③ + 受击后 HUD 血条）仍归 root 独占窗口**，本片不起栈。
+
+# 7) 残留（仓外，**供 root 开窗，勿清**）与纪律
+
+- 仓外保留：`E:/tmp/m2svr-window-origin`（detach @`da2df1fdb`）、
+  `E:/tmp/m2svr-window-target/{debug/*.exe, window-provenance.json}`（`source_head=da2df1fdb`）。
+- 未起任何服务端/客户端/假人进程；未占游戏端口；未动共享主检出；未 merge、未自签。
+- 若 root 开窗前 master 再前进一格：按本文件 §2/§3 重刷即可（`window_handoff.py` 的 G1 RED 修复块会打印同样步骤）。
