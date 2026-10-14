@@ -56,7 +56,7 @@
 - ④ 要 `monai == 0`：`drop-exp/drop_exp_scenario.json` `purity.wallclock_policy = "pinned"`；
   `drop-exp/drop_exp_consumers.tsv` 的 rust `wallclock` 行 = `crates/world/src/monai\.rs:`，`max=0`
   （「pin 抑制必须使其为 0」）。
-- master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/main.rs:5665`
+- master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/main.rs:5795`
   → `mongen.rs:61 pub fn enable_production_monster_ai` → `world.enable_monster_ai()`
   ⇒ 只要场上有活怪，`World::tick` 就按槽位驱动 `crates/world/src/monai.rs:697 monster_ai_tick`；
   无目标且 walk 到点时 `monai.rs:171 wondering` **至少抽 1 次 `Random(20)`**
@@ -101,7 +101,7 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
 - **本文档自身的源码锚点保鲜（2026-10-13 第二次窗口前置审计）**：§4 引用的 `path:line` 是
   **承重锚点**（宿主 AI 调用点 / 世界层 tick / oracle Wondering）；master 一直在动 ⇒ 行号会漂
   （实测 `main.rs` 因 ④-D / client-e2e / ⑧-10 等多次合并行长，`enable_production_monster_ai` 从
-  `:5229` 漂到 `:5440`、再漂到 `:5488`）。机判 = `python -I rng-trace-scene/check_anchors.py selftest`：要求「文档写的行号
+  `:5229` 漂到 `:5440`、再漂到 `:5488`、再漂到 `:5665`、`:5795`）。机判 = `python -I rng-trace-scene/check_anchors.py selftest`：要求「文档写的行号
   == 该符号在当前源码里的**首个**匹配行」，缺失/重复/漂移都 fail-closed 点名；已接入
   `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`anchors-freshness-selftest`）。
 - **锚点覆盖面收口（2026-10-14 reviewer-5 M-1 / reviewer-6 M-1+M-2）**：旧口径有两处静默通道 ——
