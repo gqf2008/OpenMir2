@@ -1,0 +1,32 @@
+# M3 10-1 收口片 #2（@dealybme 开窗接线）命令（隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target）
+
+# 0) 开工（自己的 worktree，绝不碰共享主检出）
+git fetch origin
+# base = refs/heads/master = 6dba8719d；分支 worktree-m3-selloff-dealoffform-recog（承接第一张收口片）
+git merge --no-edit origin/master        # 7a108f4d2（clean upstream 合并，供 patch base 用）
+git commit -m "feat(m3-selloff-dealybme-wire): ..."   # 0a1b83f7b
+
+# 1) 四门禁（gates/）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo fmt --all -- --check                       # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo clippy --workspace --all-targets -- -D warnings  # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test --workspace                          # 101 suites 1208 passed 0 failed 22 ignored rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo run -p msgcodegen -- --check              # 604 条 rc=0
+
+# 2) 判据
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --offline --lib selloff::
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --offline --bin game-svr dealybme
+
+# 3) 改坏必红（redchecks/，逐条：改 -> 跑 -> 还原 -> 重跑；还原用备份副本）
+#    RC1: main.rs 条件 -> if false && label.eq_ignore_ascii_case(...)
+#    RC2: main.rs 条件 -> if true  && label.eq_ignore_ascii_case(...)
+#    RC3: selloff.rs merchant_say 的 series: 1 -> series: 0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --offline --bin game-svr dealybme
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --offline --lib selloff::
+
+# 4) 边界（base = 6dba8719d）
+git diff --name-only 6dba8719d <head> -- src sql MirClient                                   # 空
+git diff --name-only 6dba8719d <head> -- mir2-rs/crates/protocol mir2-rs/crates/storage       # 空
+
+# 5) 证据清单自检
+python -I tools/evidence-hash/verify_sha256sums.py verify  <本目录> --check-extra
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>

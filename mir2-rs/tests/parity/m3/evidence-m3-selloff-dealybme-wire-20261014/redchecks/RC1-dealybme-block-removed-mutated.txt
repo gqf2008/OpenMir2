@@ -1,0 +1,24 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world)
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\envir)
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.64s
+     Running unittests src\main.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-d40510517c77a420.exe)
+
+running 1 test
+test tests::shop_dealybme_opens_consignment_form ... FAILED
+
+failures:
+
+---- tests::shop_dealybme_opens_consignment_form stdout ----
+
+thread 'tests::shop_dealybme_opens_consignment_form' (8792) panicked at bins\game-svr\src\main.rs:14436:18:
+@dealybme 未开通 ⇒ 应回 1 帧商人说话
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::shop_dealybme_opens_consignment_form
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 207 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
