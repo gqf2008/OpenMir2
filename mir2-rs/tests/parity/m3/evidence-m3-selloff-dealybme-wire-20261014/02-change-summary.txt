@@ -1,9 +1,8 @@
 M3 10-1 收口片 #2（@dealybme 开窗接线）变更
 =============================================
 
-本片是 M3 10-1 卡第二张收口片（第一张 = 4a314ecce：修正 SM_SENDDEALOFFFORM 头字段 recog=npc_id / param=0）。
-两者改同一函数 selloff::open_deal_off_form => 本 patch（head 以 master 6dba8719d 为 base）一并包含第一张的代码
-提交 65d0b34f2，并取代旧 needs-review b7cd2d3f；请按本 head 评审。
+第一张收口片（4a314ecce：修正 SM_SENDDEALOFFFORM 头字段 recog=npc_id / param=0）已由 reviewer-6 approve
+并于 walgit master 620ac1f13 合入；本片是其承接片，相对当前 master（f6554c7b9）净差量只有本片接线 + 证据。
 
 1) bins/game-svr/src/selloff.rs
    - open_deal_off_form(me, book, npc_id, npc_name) -> Vec<SellOffEvent>：三支全实现

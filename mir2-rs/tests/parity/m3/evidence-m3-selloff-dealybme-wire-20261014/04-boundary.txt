@@ -1,44 +1,46 @@
 M3 10-1 收口片 #2（@dealybme 开窗接线）边界 / 纪律 / 端口
 ==========================================================
 
-base = refs/heads/master = 6dba8719d (= origin/master = walgit/master)
-head(代码) = 7a108f4d2（merge origin/master；含 0a1b83f7b 本片 + 65d0b34f2 收口片 #1）
-head(patch) = <本证据提交>（本目录合入后为分支 tip）
+base = refs/heads/master = f6554c7b9 (= walgit/master；origin/master 为 6dba8719d，落后一格)
+head(代码+证据) = 7c9dac66b（merge walgit/master；含 0a1b83f7b 本片接线 + 证据提交）
 
-## git diff --name-only 6dba8719d 7a108f4d2
+## git diff --name-only f6554c7b9 7c9dac66b
 mir2-rs/bins/game-svr/src/main.rs
 mir2-rs/bins/game-svr/src/selloff.rs
-mir2-rs/tests/parity/m3/evidence-m3-selloff-dealoffform-recog-20261014/01-oracle-anchors.txt
-mir2-rs/tests/parity/m3/evidence-m3-selloff-dealoffform-recog-20261014/02-change-summary.txt
-mir2-rs/tests/parity/m3/evidence-m3-selloff-dealoffform-recog-20261014/03-selloff-tests.txt
-mir2-rs/tests/parity/m3/evidence-m3-selloff-dealoffform-recog-20261014/20-boundary.txt
-mir2-rs/tests/parity/m3/evidence-m3-selloff-dealoffform-recog-20261014/README.md
-mir2-rs/tests/parity/m3/evidence-m3-selloff-dealoffform-recog-20261014/SHA256SUMS.txt
-mir2-rs/tests/parity/m3/evidence-m3-selloff-dealoffform-recog-20261014/gates/10-fmt.txt
-mir2-rs/tests/parity/m3/evidence-m3-selloff-dealoffform-recog-20261014/gates/11-clippy.txt
-mir2-rs/tests/parity/m3/evidence-m3-selloff-dealoffform-recog-20261014/gates/12-msgcodegen.txt
-mir2-rs/tests/parity/m3/evidence-m3-selloff-dealoffform-recog-20261014/gates/13-workspace-test.txt
-mir2-rs/tests/parity/m3/evidence-m3-selloff-dealoffform-recog-20261014/redcheck/01-mutated-red.txt
-mir2-rs/tests/parity/m3/evidence-m3-selloff-dealoffform-recog-20261014/redcheck/02-restored-green.txt
-mir2-rs/tests/parity/m3/evidence-m3-selloff-dealoffform-recog-20261014/redcheck/README.md
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/01-oracle-anchors.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/02-change-summary.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/03-tests.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/04-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/gates/10-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/gates/11-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/gates/12-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/gates/13-workspace-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/redchecks/RC1-dealybme-block-removed-mutated.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/redchecks/RC1-restored.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/redchecks/RC2-isybdeal-gate-removed-mutated.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/redchecks/RC3-merchantsay-series-mutated.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/redchecks/RC3-restored.txt
+mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/redchecks/README.md
 
-## git diff --name-only 6dba8719d 7a108f4d2 -- src sql MirClient  (期望空)
+## git diff --name-only f6554c7b9 7c9dac66b -- src sql MirClient  (期望空)
 (空)
 
-## git diff --name-only 6dba8719d 7a108f4d2 -- mir2-rs/crates/protocol mir2-rs/crates/storage  (期望空)
+## git diff --name-only f6554c7b9 7c9dac66b -- mir2-rs/crates/protocol mir2-rs/crates/storage  (期望空)
 (空)
 
-## git diff --stat 6dba8719d 7a108f4d2 | tail
- .../redcheck/02-restored-green.txt                 |   35 +
- .../redcheck/README.md                             |   23 +
- 15 files changed, 2731 insertions(+), 31 deletions(-)
+## git diff --stat f6554c7b9 7c9dac66b | tail
+ .../redchecks/RC3-restored.txt                     |   34 +
+ .../redchecks/README.md                            |   11 +
+ 19 files changed, 2675 insertions(+), 35 deletions(-)
 
-## 改坏必红还原后 git status --porcelain
-（`cp` 备份回填后实测：仅 `?? mir2-rs/tests/parity/m3/evidence-m3-selloff-dealybme-wire-20261014/04-boundary.txt 所属目录` 一行 = 本证据目录本身尚未提交；
-  代码面 0 修改 ⇒ 无突变残留。本证据目录随后由本片证据提交入库。）
+## 改坏必红还原后 git status --porcelain  (期望空)
+（cp 备份回填后实测：git status --porcelain 为空。本文件最终随证据提交入库。）
 
 ## 纪律 / 端口
 - 本 worktree=m3hp；共享主检出 E:/Users/gxh/Documents/GitHub/OpenMir2 未写（本线只在本 worktree 提交）。
 - 未起真机栈 / 未占端口（M2 九端口未动；真机对拍归窗口车道）。
-- 未 merge、未自签 review；未改 lanes.conf / board；未动别人分支。
-- 净代码改动 2 个 .rs：bins/game-svr/src/main.rs + bins/game-svr/src/selloff.rs。
+- 未 merge 到 master、未自签 review；未改 lanes.conf / board；未动别人分支。
+- 净代码改动 2 个 .rs：bins/game-svr/src/main.rs + bins/game-svr/src/selloff.rs（+ 本证据目录 17 件）。

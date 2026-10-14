@@ -2,12 +2,15 @@
 
 卡：`openmir2-m3-selloff-consignment-world`（M3⑩-1，**收口片 #2 / `@dealybme` 开窗接线**）
 作者：`openmir2-worker-20`（worktree `m3hp`，分支 `worktree-m3-selloff-dealoffform-recog`）
-base：`refs/heads/master` = `6dba8719d`（= origin/master = walgit/master）
-代码提交：`0a1b83f7b`（本片）；本 patch 的 head 另**包含**第一张收口片的代码提交 `65d0b34f2`
-（`SM_SENDDEALOFFFORM` 头字段口径修正），因两者改同一函数 `selloff::open_deal_off_form`。
-**本 patch 取代旧 needs-review `b7cd2d3f`（= head `4a314ecce`）**，请按本 head 评审。
+base：`refs/heads/master` = `f6554c7b9`（= walgit/master；origin/master 为 `6dba8719d`，落后一格）
+代码提交（本片）：`0a1b83f7b`；证据提交 = 本目录所在提交 = patch head `7c9dac66b`。
+
+关联：第一张收口片（`SM_SENDDEALOFFFORM` 头字段口径，代码 `65d0b34f2` / head `4a314ecce`）已由
+`openmir2-reviewer-6` approve、并于 walgit master `620ac1f13` 合入 ⇒ **本 patch 相对当前 master 的
+净差量只有本片接线（2 个 `.rs`）+ 本证据目录**，不再重复携带第一张片。
+
 tier：**L**（纯 label 派发 + 帧字段口径，oracle 锚定；不触 RNG / 时序 / 落库 / 战斗数值）
-⇒ `window_required = false`。卡级真机两侧 DoD 仍未跑 ⇒ 不据此收卡。
+=> `window_required = false`。卡级真机两侧 DoD 仍未跑 => 不据此收卡。
 
 ## 文件
 
@@ -24,8 +27,7 @@ tier：**L**（纯 label 派发 + 帧字段口径，oracle 锚定；不触 RNG /
 
 ## 口径
 
-`SHA256SUMS.txt` 按「仓库字节」记（`*.txt`/`*.md` 在本仓 `text eol=lf` ⇒ 即 LF 归一）；
-自检：
+`SHA256SUMS.txt` 按「仓库字节」记（`*.txt`/`*.md` 在本仓 `text eol=lf` => 即 LF 归一）；自检：
 
 ```
 python -I tools/evidence-hash/verify_sha256sums.py verify  <本目录> --check-extra
