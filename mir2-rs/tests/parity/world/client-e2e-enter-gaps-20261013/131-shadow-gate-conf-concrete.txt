@@ -1,0 +1,137 @@
+131-shadow-gate-conf-concrete.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉖ 判定书
+③ 窗口计划：影子 gate 的 conf **造得出、路径具体**（C# 侧必须整目录拷贝）
+root 2026-10-14 00:4x ③「判据/capture 工具你准备」；零起栈、零端口、零生产代码改动
+被测件：`window_handoff.py`  sha256 = 39dd6f854a7763da954d7db39ad31cb323aa1b63eb74ef2c2c950b9d62f53668
+base = origin/master `083dc1d6d`（片㉕ 已并入；本片只动本卡证据目录）
+====================================================================================================
+
+A. 本片修的是什么（一个逻辑变更：让「影子 gate」从「说一句」变成「照着敲就能跑」）
+----------------------------------------------------------------------------------------------------
+片㉔ 把「起代理前的抓包拓扑」补进计划、片㉕ 补了「收」，但**影子 gate 本身怎么起**只留了散文 +
+未替换占位：计划里 `--shadow-config <影子 RunGate/config.conf>`、Rust 段的
+`-ArgumentList '<影子 conf>' -WorkingDirectory '<conf 目录>'` ⇒ root 必须现场猜路径、猜 conf 内容。
+两处都会**白烧一次性窗口**，第二处还会**假绿**（见 B）。
+
+[A1] **C# 影子不能只改 conf、仍起原 exe。** oracle 的 conf 路径写死为 exe 目录：
+     `src/GameGate/Conf/ConfigManager.cs:5`
+       `private static readonly string fileName = Path.Combine(AppContext.BaseDirectory, "config.conf");`
+     且 `src/GameGate/Program.cs:14` 的 `Main(string[] args)` **不解析 conf 参数**（`args` 只喂
+     `HostApplicationBuilder(args)`，`:42`）；`appsettings.json` 同样是 `SetBasePath(AppContext.BaseDirectory)`（`:31`）。
+     ⇒ 直接 `Start-Process E:\MirServer\RunGate\GameGate.exe` 时 `BaseDirectory` = 原目录 ⇒ **读回原
+     config（`GatePort1=7200`）**，不是那份改好的影子 conf。后果二连：
+       ① 影子仍绑 7200 ⇒ `mir2_proxy.py --map 7200=127.0.0.1:7600` 绑不上 ⇒ 无 capture（白烧）；
+       ② 前置门 `check_csharp_capture_preflight.py --shadow-config <改好的 conf>` 读的是**文件**、
+          不是进程实际读的 config ⇒ 影子分支 **GREEN**，而线上进程其实在 7200 ⇒ **false-green**。
+     正解：影子 = **自己的目录 + 自己目录下的 config.conf**（整目录拷贝）。
+
+[A2] **conf 必须 cp936 原样改。** 部署件 `E:/MirServer/RunGate/config.conf` 4456 B，含 **1523 个非 ASCII
+     字节**（`[MagicInterval]` / `[Strings]` 的中文技能名），CRLF 236 处。用 UTF-8 解码再写回会把 GBK
+     字节改坏；直接照抄 `Count=3` 又会让 Rust 影子多绑 7201/7202 ⇒ 代理仍抢不到 7200。
+     ⇒ 用 `[Text.Encoding]::GetEncoding(936)` 读、只把两个**数字**替换掉（零宽断言，不动行尾 CRLF）、
+        再按 cp936 写回；Rust 侧镜像同一份 conf（`bins/game-gate/src/config.rs:13-19` 就是这套 INI，
+        `main.rs:81-84` 取 argv[1] 当 conf 路径）。
+
+B. 修前 / 修后（计划文本，逐行）
+----------------------------------------------------------------------------------------------------
+修前（Rust 段）：
+    #     #   b. 起影子 game-gate 于 7600（Rust 读法 `game-gate.exe <conf>`；conf 最小集 = 下面 5 键）：
+    #     #        [GameGate] Count=1 / ServerAddr1=127.0.0.1 / ServerPort1=5000 / ...
+    #     #        Start-Process -FilePath '...\game-gate.exe' -ArgumentList '<影子 conf>' -WorkingDirectory '<conf 目录>'
+修后（Rust 段，节选；全文见 `--plan` 输出 §2a Rust）：
+    #     #   b0. 造影子 gate 的 conf（从部署件拷、**GBK 原样**改 Count=1 / GatePort1=7600；两趟共用）：
+    #     #        New-Item -ItemType Directory -Force 'E:/tmp/window/cliente2e/shadow' | Out-Null
+    #     #        Copy-Item -LiteralPath 'E:\MirServer\RunGate\config.conf' -Destination '.../shadow/game-gate.conf' -Force
+    #     #        $enc = [Text.Encoding]::GetEncoding(936); $t = [IO.File]::ReadAllText('.../shadow/game-gate.conf', $enc);
+    #     #        $t = $t -replace '(?m)(?<=^Count=)\d+(?=\r?$)','1' -replace '(?m)(?<=^GatePort1=)\d+(?=\r?$)','7600';
+    #     #        [IO.File]::WriteAllText('.../shadow/game-gate.conf', $t, $enc)
+    #     #        Select-String -Path '.../shadow/game-gate.conf' -Pattern '^Count=|^GatePort1='
+    #     #   b. 起影子 game-gate 于 7600（Rust 读法 = 第 1 个位置参数是 conf 路径，`bins/game-gate/src/main.rs:81-84`）：
+    #     #        Start-Process -FilePath '...\game-gate.exe' -ArgumentList '.../shadow/game-gate.conf' -WorkingDirectory '.../shadow'
+
+修前（C# 段）：
+    #     python -I -B check_csharp_capture_preflight.py --repo ... --mirserver E:/MirServer ^
+    #       --shadow-config <影子 RunGate/config.conf>        # 必须 GREEN 再起栈
+    #     powershell ... E:/MirServer/start-all.ps1
+    #     # 2a) ... 停标准 RunGate(7200) → 起影子 game-gate(7600)
+    #     #     （拷 .../RunGate/config.conf、只改 GatePort1=7600、保留 ServerWorkThread=1，见 82 §4.1）
+修后（C# 段，节选）：
+    #     # 2a.0) 造影子 RunGate = **整目录拷贝**（不是只拷 config.conf；配方见 82-...md §4.1）：
+    #     #     拷贝即保留 ServerWorkThread=1；oracle 的 conf 路径 =
+    #     #     `Path.Combine(AppContext.BaseDirectory, 'config.conf')`（ConfigManager.cs:5；Program.cs:31），
+    #     #     且 Main 不吃 conf 参数 ⇒ 直接起 E:\MirServer\RunGate\GameGate.exe 只会读回原 config（仍绑 7200）
+    #     #     ⇒ 代理绑不上，且前置门会拿着 7600 副本误判 GREEN（false-green）。
+    #     #        Remove-Item -Recurse -Force '.../shadow/run-gate' -EA SilentlyContinue
+    #     #        Copy-Item -Recurse -Force 'E:\MirServer\RunGate' '.../shadow/run-gate'
+    #     #        Copy-Item -Force '.../shadow/game-gate.conf' '.../shadow/run-gate/config.conf'
+    #     python -I -B check_csharp_capture_preflight.py --repo ... --mirserver E:/MirServer ^
+    #       --shadow-config E:/tmp/window/cliente2e/shadow/run-gate/config.conf        # 必须 GREEN 再起栈
+    #     ... start-all.ps1
+    #     # 2a) a. 停标准 RunGate 让出 7200（按绝对路径精确停；只停真身）：
+    #     #        Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq 'E:\MirServer\RunGate\GameGate.exe' } | ...
+    #     #   b. 起影子 RunGate 于 7600（读自己目录下的 config.conf，即上面那份）：
+    #     #        Start-Process -FilePath '.../shadow/run-gate\GameGate.exe' -WorkingDirectory '.../shadow/run-gate'
+    #     #   c. 确认 7200 DOWN、7600 UP 后才起代理占 7200
+
+顺带：整份计划里**命令面**的 `<...>` 占位清零（唯一保留的 `<log>` 在纯散文行「禁接管道…一律 > <log> 2>&1」，
+不含任何脚本/进程调用）。
+
+C. 真读数（本机离线复算；命令 + 输出）
+----------------------------------------------------------------------------------------------------
+[C1] 计划 G4（真计划，`--plan-only --best-site`）：
+     $ python -I -B window_handoff.py --plan-only --best-site --repo <本 worktree> | tail -2
+     PLAN_CONFORMANCE=GREEN
+     rc=0
+     占位扫描：`grep -nE '<[^>]+>' plan.txt` ⇒ 仅 1 行（§0 纯散文 `> <log> 2>&1`）。
+
+[C2] 影子 conf 逐字节（**照计划文本原样执行**，非另写一份）：
+     $ powershell -File rust-conf-cmds-run.ps1   # 计划 §2a.Rust b0 的四条命令逐字抽出
+     E:\tmp\window\cliente2e\shadow\game-gate.conf:2:Count=1
+     E:\tmp\window\cliente2e\shadow\game-gate.conf:5:GatePort1=7600
+     $ powershell -File csharp-shadow-cmds-run.ps1   # 计划 §2a.0 的整目录拷贝
+     E:\tmp\window\cliente2e\shadow\run-gate\config.conf:2:Count=1
+     E:\tmp\window\cliente2e\shadow\run-gate\config.conf:5:GatePort1=7600
+     E:\tmp\window\cliente2e\shadow\run-gate\config.conf:12:ServerWorkThread=1
+     ⇒ 与部署件逐字节比较（Python）：
+        game-gate.conf      len 4456/4456  diff_offsets [18, 73]  ('3'→'1', '2'→'6')
+        run-gate/config.conf len 4456/4456 diff_offsets [18, 73]  ('3'→'1', '2'→'6')
+        （即**恰好只差 Count 与 GatePort1 各 1 个数字**，中文 GBK 字节、CRLF 全部原样）
+     影子目录件齐（oracle 按 BaseDirectory 找的那两件在）：
+        run-gate/{GameGate.exe, config.conf, appsettings.json, nlog.config} = True/True/True/True
+
+[C3] 前置门用**计划打印的那个具体路径** ⇒ GREEN：
+     $ python -I -B check_csharp_capture_preflight.py --repo <本 worktree> --mirserver E:/MirServer \
+         --shadow-config E:/tmp/window/cliente2e/shadow/run-gate/config.conf
+     OK  影子上游 127.0.0.1:5000 == GameSvr 监听
+     OK  C# 侧抓包拓扑前置全部满足
+     RESULT: GREEN          rc=0
+
+[D] 改坏必红（见 `132-redcheck-shadow-gate-concrete.txt`）
+----------------------------------------------------------------------------------------------------
+[D1] G4 命令面占位牙：把真计划的 `--shadow-config <具体路径>` 换回 `<影子 conf>` ⇒
+     real plan problems: []
+     mutated problems  : ['计划命令面残留未替换占位 <影子 conf>（应代入实际路径/值；勿让 root 现场猜）']
+[D2] 前置门牙：把 `--shadow-config` 指到**真实** conf ⇒
+     RED 影子 GatePort1=7200 != 影子端口 7600
+     RESULT: RED            rc=1
+
+E. `--selftest` 63/63 → 69/69（新增 6 条；既有 63 条不动）
+----------------------------------------------------------------------------------------------------
+新增：`plan-shadow-conf-concrete` / `plan-shadow-conf-created` / `plan-shadow-conf-before-start` /
+`plan-csharp-shadow-copy-dir` / `plan-csharp-shadow-not-real-exe` / `plan-conf-red-cmdline-placeholder`。
+（`plan-topology-shadow-conf` 由「5 键最小 conf 文案」改判「GatePort1=7600 + Count=1 + cp936」，
+因为 conf 现在是从部署件拷、不再手写 5 键。）
+
+F. 涉及文件
+----------------------------------------------------------------------------------------------------
+  工具: `window_handoff.py`（`plan_text` 影子段 + G4 `_CMDLINE_FACE_RE`/`_PLACEHOLDER_RE` + selftest）
+  手册: `82-two-side-window-runbook.md` §3.2/§4.0/§4.1（订正为整目录拷贝 + 具体路径）
+  证据: 本文件 + `132-…` + `133-…` + `134-…`
+
+G. 未做 / 登记（不静默）
+----------------------------------------------------------------------------------------------------
+  * **C# 影子端口实拍仍未证**：本片只把「进程实际读哪份 conf」钉死到源码锚点 + 离线复算；
+    「C# 世界数据能否经代理下来」仍需 root 独占窗口实拍（看 `chunks.ndjson` 里公告之后是否还有 s2c
+    字节）。失败则走 `82` §4.1 的降级判据（截图级两侧对照）并在卡上写明。
+  * 卡级 DoD③ 的 R 级「③b/③a 两趟真机同框对照 + 屏幕见怪并能攻击造成伤害」**未跑**（归 root 窗
+    口）；本片**不据此收卡**、不放宽判据。
+  * 未改任何模拟/出帧/取数语义；未起栈、未占端口；未动共享主检出。

@@ -20,8 +20,10 @@
 //!   主人死/幽灵的 `ProcessSlaveMutiny`/`ProcessSlaveGhost`（`PlayObject.Base.cs:331-370`）、
 //!   诱惑受奴落尾（`MagicManager.cs:753-770`）与 `GetChrColor` 色彩（`BaseObject.Base.cs:869-883`）。
 //! - **46 分身**（`MagMakeClone`，`MagicManager.cs:1337-1341`）：`new PlayCloneObject(PlayObject)`
-//!   造的是一个**玩家型克隆体**（不入 `SlaveList`、不走 `MakeSlave`），与宝宝系统不同轴；
-//!   本片**登记未实现**（见 [`CLONE_DEFERRED`]）。
+//!   造的是一个**玩家型克隆体**（不入 `SlaveList`、不走 `MakeSlave`），与宝宝系统不同轴。
+//!   本模块提供 [`spawn_clone`]（实体 + 格占用门 + 静态可观测面），帧面/展示登记归宿主
+//!   （`bins/game-svr::slave::cast_clone_spell` + `handle_spell_cmd` 的 46 支）；
+//!   克隆体的 tick/AI 生命周期未建模，登记白名单 `T-51`、真机项 `not_verified`。
 //!
 //! ## oracle 缺陷照搬（`BUG-REPLICA`）
 //!
@@ -62,7 +64,7 @@ use crate::entity::{
     Entity, ACTOR_RACE_ANIMAL, ACTOR_RACE_ELF_MONSTER, ACTOR_RACE_ELF_WARRIORMON, ACTOR_RACE_NPC,
     ACTOR_RACE_PLAY, ACTOR_RACE_WHITE_SKELETON,
 };
-use crate::magic::front_position;
+use crate::magic::{front_position, mag_make_clone, MakeCloneInput};
 use crate::world::World;
 
 /// `MagicConst.SKILL_SKELLETON`（`src/Modules/SystemModule/Const/MagicConst.cs:72`）：17 召唤骷髅。
@@ -76,10 +78,14 @@ pub const SKILL_ANGEL: u16 = 41;
 /// `MagicConst.SKILL_46`（`MagicConst.cs:175`）：46 分身（`MagMakeClone`，见模块头「不负责」）。
 pub const SKILL_46: u16 = 46;
 
-/// `MagicConst.SKILL_46` 的登记（本片未实现，理由见模块头）。
-pub const CLONE_DEFERRED: &str =
-    "46 分身 = `new PlayCloneObject(PlayObject)`（造玩家型克隆体，不入 SlaveList）；\
-    与宝宝系统不同轴 ⇒ 归后续片（登记，不冒充已实现）";
+/// `PlayCloneObject.ChrName`（`PlayCloneObject.cs:9`）：克隆体的名字常量。
+///
+/// `SendRefMsg(RM_TURN, …, ChrName)`（`:17`）据此带出「Clone」名尾。
+pub const CLONE_NAME: &str = "Clone";
+
+/// `PlayObject` 构造器置 `ViewRange = 12`（`PlayObject.cs:904`；`BaseObject` 缺省 5，
+/// `BaseObject.cs:383`）。
+pub const PLAYER_VIEW_RANGE: i32 = 12;
 
 /// `WorldEngine.RegenMonsterByName`（`WorldServer.MonGen.cs:382-432`）的**宿主侧接缝**。
 ///
@@ -990,6 +996,81 @@ pub fn get_chr_color(e: &Entity, slave_color: &[u8], npc_name_color: u8) -> u8 {
     e.name_color
 }
 
+/// [`spawn_clone`] 的结果（宿主据此登记展示表并发 `RM_TURN`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CloneSpawn {
+    pub clone_id: i32,
+    pub x: i32,
+    pub y: i32,
+    /// `PlayCloneObject.Dir = GetBackDir(playObject.Dir)`（`PlayCloneObject.cs:12`）。
+    pub dir: u8,
+    /// `Envir.AddMapObject` 的返回（格子已追加该对象）；oracle 侧返回值不上抛。
+    pub created: bool,
+}
+
+/// `MagMakeClone`（`MagicManager.cs:1337-1341`）`new PlayCloneObject(playObject)`
+/// （`PlayCloneObject.cs:5-23`）的骨架等价物：造一个**玩家型**克隆体实体并落格。
+///
+/// 逐字段锚点：
+/// - `ChrName = "Clone"`（`:9`）⇒ [`CLONE_NAME`]；
+/// - `CurrX/CurrY = playObject.CurrX/CurrY`（`:10-11`）⇒ 与主人同格；
+/// - `Dir = GetBackDir(playObject.Dir)`（`:12`）⇒ 取 `caster_dir` 的背面（[`mag_make_clone`]
+///   内的 `back_dir` 落，`GetBackDir` = `(dir + 4) % 8`）；
+/// - `Envir = playObject.Envir`（`:13`）⇒ `map_id` 取主人所在图；
+/// - `Gender`/`Hair = playObject.Gender/Hair`（`:14-15`）：骨架 `Entity` 不存这两个展示层字段
+///   （它们编码在 `bins/game-svr::downlink::ActorDisplay.feature` 的位域里）⇒ 宿主登记展示时
+///   从主人的 `feature` 反解 `gender = byte1 & 1` / `hair = byte2 >> 1`（见 `clone_display`）；
+/// - `Envir.AddMapObject(CurrX, CurrY, CellType.Play, ActorId, this)`（`:16`）⇒
+///   [`mag_make_clone`] 的 `created`（格占用门）；
+/// - `SendRefMsg(RM_TURN, Dir, CurrX, CurrY, 0, ChrName)`（`:17`）⇒ 帧面归宿主。
+///
+/// **不入 `SlaveList`**（oracle `PlayCloneObject` 非 `MonsterObject`）；**不抽随机数**
+/// （oracle 构造器无 `Random`，RNG 账本不变）。
+///
+/// oracle 里 `PlayCloneObject` 是完整 `PlayObject` 子类，会走基类 `Run`/AOI/buff/tick；
+/// 本骨架的克隆体是**静态可观测实体**（存在/名字/坐标/朝向/格占用/展示），tick 生命周期
+/// 登记白名单 `T-51`、`not_verified`。
+///
+/// 主人不在世界 / 地图 id 越界 ⇒ `None`（oracle 侧这两个前置在 `PlayObject`/`Envir` 上不可达）。
+pub fn spawn_clone(world: &mut World, caster_id: i32, caster_dir: u8) -> Option<CloneSpawn> {
+    let (x, y, map_id) = {
+        let c = world.entities.get(caster_id)?;
+        (c.x, c.y, c.map_id)
+    };
+    if map_id >= world.maps.len() {
+        return None;
+    }
+    let clone_id = world.entities.alloc_id();
+    // `Envir.AddMapObject(...)`：`mag_make_clone` 已把「格子能否放下」这一门落成 `created`。
+    let out = mag_make_clone(
+        &mut world.maps[map_id],
+        &MakeCloneInput {
+            x,
+            y,
+            dir: caster_dir,
+            clone_id,
+        },
+    );
+    let mut e = Entity::new(0, CLONE_NAME.to_string(), x, y);
+    e.id = clone_id;
+    e.race = ACTOR_RACE_PLAY;
+    e.map_id = map_id;
+    e.view_range = PLAYER_VIEW_RANGE;
+    // `PlayObject` 构造器置 `WantRefMsg = true`（`PlayObject.cs:889`）。
+    e.want_ref_msg = true;
+    // oracle `AddMapObject`（`Envirnoment.cs:279-284`）：成功才 `AddObject` + 置 `AddToMaped`；
+    // 失败时对象仍在 `ActorMgr`（= 本骨架 `EntityStore`）但不在图上 ⇒ `add_to_mapped` 跟 `created`。
+    e.add_to_mapped = out.created;
+    world.entities.insert(e);
+    Some(CloneSpawn {
+        clone_id,
+        x,
+        y,
+        dir: out.dir,
+        created: out.created,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1866,5 +1947,56 @@ mod tests {
         s.master = Some(1);
         s.slave_exp_level = 20;
         assert_eq!(get_chr_color(&s, &slave_color, 77), 200);
+    }
+
+    /// **⑨-2 残余判据（46 分身）**：`spawn_clone` 造玩家型克隆体并落格——名字/坐标/
+    /// 朝向=`GetBackDir(主人)`/格被占/不入 `SlaveList`/不抽 RNG。
+    ///
+    /// 红检（改坏必红）：① `dir` 改成主人的正向 `caster_dir`（不用 `back_dir`）⇒ 朝向断言必红；
+    /// ② 不 `insert` 实体（只落格）⇒ `entities.get` 必红；③ 把 `e.race` 改成 `MONSTER`
+    /// ⇒ race 断言必红。
+    #[test]
+    fn spawn_clone_creates_player_clone_and_occupies_cell() {
+        let mut w = World::new(32, 32);
+        let caster = {
+            let mut e = Entity::new(0, "主人".to_string(), 7, 9);
+            e.race = ACTOR_RACE_PLAY;
+            w.add_entity(e)
+        };
+        w.tick(); // 让 `Enter` 生效（主人落图）。
+        let mut fresh = w.rng.clone();
+        let out = spawn_clone(&mut w, caster, 2).expect("主人在世界 ⇒ 应造出克隆体");
+        // `Dir = GetBackDir(2)` = (2 + 4) % 8 = 6。
+        assert_eq!(out.dir, 6, "PlayCloneObject.Dir = GetBackDir(主人.Dir)");
+        assert_eq!((out.x, out.y), (7, 9), "坐标 = 主人坐标");
+        assert!(out.created, "同格可放 ⇒ AddMapObject 成功");
+        let c = w.entities.get(out.clone_id).expect("克隆体实体应存在");
+        assert_eq!(c.name, CLONE_NAME);
+        assert_eq!(c.race, ACTOR_RACE_PLAY, "玩家型克隆体");
+        assert_eq!((c.x, c.y), (7, 9));
+        assert!(c.add_to_mapped, "格占用成功 ⇒ AddToMaped");
+        assert!(c.slave_list.is_empty(), "克隆体不入 SlaveList");
+        assert!(
+            w.entities.get(caster).unwrap().slave_list.is_empty(),
+            "主人的 SlaveList 不被触碰"
+        );
+        // 格占用：同格 cell 里有该克隆体对象。
+        let (cell, ok) = w.maps[0].get_cell_info(7, 9);
+        assert!(ok);
+        assert!(
+            cell.obj_list
+                .iter()
+                .any(|o| o.cell_obj_id == out.clone_id && o.actor_object),
+            "克隆体应进同格 obj_list"
+        );
+        // 不抽随机数：两流下一次取数相同。
+        assert_eq!(w.rng.random(), fresh.random(), "构造克隆体不消费 RNG");
+    }
+
+    /// **⑨-2 残余判据（46 分身）**：主人不在世界 ⇒ `None`（不造实体、不抽数）。
+    #[test]
+    fn spawn_clone_absent_caster_returns_none() {
+        let mut w = World::new(8, 8);
+        assert!(spawn_clone(&mut w, 999, 0).is_none());
     }
 }

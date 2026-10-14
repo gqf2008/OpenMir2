@@ -1,0 +1,18 @@
+改坏必红②（门本体）：把 _path_prefix_findings 首行插 return []（等于删判据）⇒ mutation 必须 RED、且 MUT-O1 显示 GREEN（牙可失败向）；还原后 sha256 回到本片修复版（以副本还原，不用 git checkout）。
+
+sha256 (fixed, before neuter): a09cd9c3b1798ddfe8015351784da9068228be253f0d684f134556a4a5a5b57c
+sha256 (neutered): 20ec5280cd44315d97e260e17b50fbb1acc46b269b35d1c3e7aa491b938bb4ff
+
+$ python -I quest_anchor_gate.py mutation --out E:/tmp/m3cs-o1/neuter
+MUT1 范围漂移(:3966-4105→:3966-4110): RED（2 项）
+MUT2 基名漂移(PlayDataStorage.Query.cs→Query.cs): RED（4 项）
+MUT3 读侧 token 漂移: RED（1 项）
+MUT4 真身 check: GREEN（0 项）
+MUT5 token 强度(整组只剩 `}`): RED（1 项）
+MUT6 token 强度(纯标点 `]);`/`]`/`//{`): RED（1+2 项）
+MUT-O1 路径前缀(错前缀/纯非字母前缀必红；spec 区间·正确·裸基名不误伤): GREEN（0+0 项）
+MUTATION RED (E:/tmp/m3cs-o1/neuter)
+rc=1
+
+sha256 (restored from copy): a09cd9c3b1798ddfe8015351784da9068228be253f0d684f134556a4a5a5b57c
+expected fixed            : a09cd9c3b1798ddfe8015351784da9068228be253f0d684f134556a4a5a5b57c
