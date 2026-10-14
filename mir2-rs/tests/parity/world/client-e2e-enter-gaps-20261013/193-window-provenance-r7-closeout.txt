@@ -1,0 +1,210 @@
+193 — 片㊻：③ 窗口就绪收口 #3 —— 专用构建源刷到当前 master（含 53 修复链）+ 预构建六件 + R7「exe ↔ 源出处」门
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+cwd（构建）= `E:/tmp/m2svr-window-origin`（检出外；共享主检出只读、零改动）
+CARGO_TARGET_DIR = `E:/tmp/m2svr-window-target`
+零起栈、零游戏端口（仅共享 3306 只读）；不 merge、不自签 review
+base = `origin/master` `ae6443924`（= 片㊹ `ba1cf337a` 合入后的 master；本分支已 `merge --ff-only`）
+====================================================================================================
+
+# 0) 一句话结论
+
+开窗前实测到**两个会白烧窗口的真缺陷**并都收口：
+1. **专用构建源落后**：`E:/tmp/m2svr-window-origin` 停在 `3db79cae0`（片㊲ 于 11:26 刷的当时 master），
+   而 master 已前进到 `ae6443924` ⇒ 源里**没有** 53 修复链（片㊴ `c61b9627a` / 片㊷ `448f62ab7` /
+   片㊸ `aff1f7c17`）。若此时开窗，窗口编出的 `game-svr.exe` 仍是**回归态** ⇒ root 会再次读到
+   HUD `0/0`、`CM_RUN=0`，把已修的 53 判成「没修好」。
+2. **R6 的已登记盲区**（`175-r6-build-source-freshness.txt` §F 原文：「R6 比的是**生产路径的 git 差异**，
+   不是『exe 与源一一对应』——若有人在源刷后手工替换 exe 或复用暖 target 的旧件，R6 不会发现」）：
+   本片把它做成 **R7「预构建二进制 ↔ 构建源出处」**（`--record-provenance` 录清单 + 确定性 sha256 对账），
+   并把两者一起接进聚合门 G1（R1..R7）。
+
+修后读数：源 `ae6443924`（53 修复链 5 个 oid 全 YES），六件预构建（只 `game-svr.exe` 重链
+`1e088ae7…` → `60b4dc4f…`），`check_rust_window_preflight.py` = **R1..R7 全 OK / GREEN rc=0**，
+聚合门（入库逐字替身脚本口径）= **WINDOW_READY=YES / GREEN rc=0**。
+**仍归 root 的两步**：① 把活脚本 `client-e2e-window.sh` 换成入库替身（仅 `repo=`/`tgt=` 两行 diff）；
+② 起栈后按 `--plan`/`--judge` 跑 ③b/③a 两侧真机对照。
+
+# 1) 缺陷 A：专用构建源落后于 master（会使窗口测到回归态 exe）
+
+```
+$ git -C E:/tmp/m2svr-window-origin rev-parse HEAD            # BEFORE
+3db79cae05261d5fcdb90a9fdd6afb8e0c78179f
+$ git -C E:/tmp/m2svr-window-origin rev-parse origin/master
+0c3561629cabfaa46a5d3524f414ed58e83370b4                      # 当时 master（后前进到 ae6443924）
+$ for c in c61b9627a 24725dfd5 fc125ea70 1cda79225 c656467d7 68b8af6b1 448f62ab7 567c4e390 aff1f7c17; do
+    printf '%s: ' $c; git -C E:/tmp/m2svr-window-origin merge-base --is-ancestor $c HEAD && echo YES || echo no; done
+c61b9627a: no       # 片㊴ 53 布局修复
+24725dfd5: no
+fc125ea70: no
+1cda79225: no
+c656467d7: no
+68b8af6b1: no
+448f62ab7: no       # 片㊷ 53 生产发点选路
+567c4e390: no       # 片㊸ O-1 收口
+aff1f7c17: no
+```
+门读数（before，片㊲ 的门 + 当时基线）：
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+    --baseline-ref origin/master --mirserver E:/MirServer
+[OK] R1 …含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 …含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记 …  [OK] R3 …  [OK] R4 ×4 …  [OK] R5 …
+RED R6: 构建源 HEAD=3db79cae05 落后于基线 origin/master@0c3561629c 的生产路径（5 件：mir2-rs/bins/game-svr/src/lib.rs,
+        mir2-rs/bins/game-svr/src/main.rs, mir2-rs/bins/game-svr/src/msgqueue.rs, mir2-rs/bins/game-svr/src/pickwire.rs,
+        mir2-rs/bins/game-svr/src/smframe.rs）⇒ 窗口会测旧件，先 `fetch` + `checkout --detach <基线>` + 重编译
+RESULT: RED
+rc=1
+```
+聚合门（before）= `WINDOW_READY=NO`：`RED G1 …` + `RED G5 窗口脚本 repo=… 指向共享主检出`。
+
+# 2) 修复：刷源 + 预构建（before/after 逐字节）
+
+```
+$ git -C E:/tmp/m2svr-window-origin fetch origin && git -C E:/tmp/m2svr-window-origin checkout --detach origin/master
+HEAD is now at ae6443924 Merge ba1cf337a (enter-gaps-window-dense-menu): 客户端联调实测缺口（2026-10-13 真客户端进图）：
+             ① 进图未下发 52/752 ⇒ 血/体力 0、跑不动 ② 世界 tick 无实体、无怪 - approve openmir2-reviewer-6 @reviewed_head ba1cf337a
+$ git -C E:/tmp/m2svr-window-origin rev-parse HEAD            # AFTER
+ae64439246cba0ea5e7cc406112284b83d1c69cc
+$ git -C E:/tmp/m2svr-window-origin status --porcelain | wc -l
+0
+$ for c in c61b9627a 448f62ab7 567c4e390 aff1f7c17 0c3561629; do printf '%s: ' $c;
+    git -C E:/tmp/m2svr-window-origin merge-base --is-ancestor $c HEAD && echo YES || echo no; done
+c61b9627a: YES   # 片㊴
+448f62ab7: YES   # 片㊷
+567c4e390: YES   # 片㊸
+aff1f7c17: YES   # 片㊹
+0c3561629: YES
+```
+
+预构建（六件，`--offline`，暖 target）：
+
+```
+$ cd E:/tmp/m2svr-window-origin/mir2-rs && CARGO_TARGET_DIR='E:\tmp\m2svr-window-target' cargo build --offline \
+    -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv
+   Compiling game-svr v0.1.0 (E:\tmp\m2svr-window-origin\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.50s
+build_rc=0
+```
+
+| 二进制 | 字节 | mtime | sha256 |
+|---|---|---|---|
+| `game-svr.exe` | 135599692 | 2026-10-14 18:06:02 | `60b4dc4fbec8bb7db6f02b6aab45b79c75f2db2e570a12b0d9f386d74e445ee0` |
+| `game-gate.exe` | 29233601 | 2026-10-14 07:43:02 | `146fb23cd841b089d60738873fbb210489efeee36756743ef95ff6875645735e` |
+| `login-srv.exe` | 82221827 | 2026-10-14 07:43:07 | `daa1ba949478d98ec31c8becabcff6853ea64f98be56dd25d8e57673274a0068` |
+| `login-gate.exe` | 27939672 | 2026-10-14 07:43:05 | `78c7dac971d93e51f9be874f82ef1fc8b9a51a656bf7473ad6efddf4251622d3` |
+| `sel-gate.exe` | 27918761 | 2026-10-14 07:43:08 | `741ea627cd1cd65578dfc567130245dfd7f953d6eab5ea31acf67cc79d08accd` |
+| `db-srv.exe` | 84322707 | 2026-10-14 07:43:09 | `15fb1f25af19ee719501eed4406805ab49c2bb6d26dd0522f6a7f33bd5eaf771` |
+
+与片㊲ 旧读数对照（`175` §C3）：`game-svr.exe` sha256 `1e088ae7…` → **`60b4dc4f…`**（字节
+135466928 → 135599692）；其余五件**逐字节不变** ⇒ 53 修复链只落在 `game-svr`（与 `186-boundary` 的
+「生产改动仅 `bins/game-svr/src/{smframe,main,pickwire}.rs`」自洽）。
+
+> §2 的 master 前进（`0c3561629` → `ae6443924`）只改了非生产件（证据/文档），cargo 判最新
+> （`Finished … in 0.28s`，六件 sha256 不变）⇒ 清单按 `ae6443924` 重录；R7 对这种「只动非生产件」
+> 的源前进**不判红**（见 §3 的 `RUST_BUILD_PATHS` 语义与 selftest `r7-nonprod-advance-green`）。
+
+# 3) R7「预构建二进制 ↔ 构建源出处」（收 `175` §F 已登记的 R6 界限）
+
+`check_rust_window_preflight.py` 新增：
+
+* **录制模式** `--record-provenance <path>`（`cargo build` 之后跑）：
+  ```
+  $ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target \
+      --record-provenance E:/tmp/m2svr-window-target/window-provenance.json
+  R7_PROVENANCE_RECORDED source_head=ae64439246cba0ea5e7cc406112284b83d1c69cc bins=6 \
+      -> E:/tmp/m2svr-window-target/window-provenance.json
+  rc=0
+  ```
+  清单 = `{version, source_head, target_dir, bins:{<exe>:{sha256,bytes}}}`（六件 = 窗口 `cargo build`
+  的 `-p` 列表，逐字同源；缺任一件 ⇒ 录不出、拒写半份）。
+* **判据模式** `--target-dir <dir> --provenance <path>`（R7）：
+  * 清单 `source_head` == 当前 `--ref` ⇒ 继续；否则比 `git diff --name-only <head> <ref> -- <RUST_BUILD_PATHS>`：
+    **零差异**（只动 `docs/` 之类）⇒ OK（cargo 不重链，exe 仍逐字节有效，**不假红**）；
+    **有差异** ⇒ RED（exe 来自另一棵树）；
+  * 每件 exe 的 sha256 必须与清单**逐字节相等**；缺件/清单无记录 ⇒ RED；
+  * 清单缺失 ⇒ **PREREQ_RED**（fail-closed；不传 `--target-dir/--provenance` 时打 INFO 跳过，向后兼容）。
+* `RUST_BUILD_PATHS = mir2-rs/bins | mir2-rs/crates | mir2-rs/Cargo.toml | mir2-rs/Cargo.lock`
+  （R7 只用这组，**不用** R6 的 `PRODUCTION_PATHS`：后者含会变的 `src/BotSrv`，那不影响这六个 exe）。
+* `window_handoff.py`：G1 透传 `--target-dir/--provenance`；G1 文案 `R1..R6` → `R1..R7`；
+  `--plan` §0a 新增 `0a-2)` 录清单步骤（照抄可执行，无占位）。
+
+门读数（after）：
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+    --baseline-ref origin/master --mirserver E:/MirServer \
+    --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-window-target/window-provenance.json
+[OK] R1 … d16b5199d9（片⑪）…   [OK] R1 … 0d0d62a695（片㉜）…
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666)/(291,651) --expect outside → rc=0；(289,618)/(287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=ae64439246 == 基线 origin/master@ae64439246
+[OK] R7 出处清单 window-provenance.json source_head=ae64439246，6 件 exe sha256 逐字节一致
+RESULT: GREEN
+rc=0
+```
+
+聚合门（两种口径，都跑）：
+```
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --target-dir 'E:\tmp\m2svr-window-target' \
+    --mirserver E:/MirServer
+… OK G2 ×8 …
+OK   G1 Rust 窗口前置门 GREEN（R1..R7）
+RED G5 窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 指向**共享主检出**（… rev 车道工作区）⇒ 直接跑它会构建另一棵树（白烧窗口）
+RED G5 窗口脚本 tgt=E:\tmp\openmir2-merge-target != 本计划 --target-dir=E:\tmp\m2svr-window-target
+WINDOW_READY=NO
+RESULT: RED
+rc=1
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --target-dir 'E:\tmp\m2svr-window-target' \
+    --mirserver E:/MirServer --window-script client-e2e-window.fixed.sh.txt
+… OK G2 ×8 …
+OK   G1 Rust 窗口前置门 GREEN（R1..R7）
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0
+```
+⇒ 唯一仍 RED 的是 **G5**（root 的活脚本仍指共享主检出）；换成入库替身（仅两行 diff，
+`client-e2e-window.fixed.sh.txt`）即 GREEN。这是 root 的一步动作，本片不代改 root 的活脚本。
+
+# 4) 改坏必红（红检原文见 `194-redcheck-r7-provenance.txt`）
+
+* **§A 缺陷复现（before）**：`--ref 3db79cae0` + 现清单 ⇒ 真件同时判 **R6 RED + R7 RED** / `RESULT: RED`。
+* **§B 牙齿 A（R6 盲区）**：清单 `source_head=3db79cae0`、exe = 当前、`--ref HEAD` ⇒
+  **R6 GREEN，R7 RED**（「源刷了但没重编译」——`175` §F 登记的正是这个形态，只有 R7 判）。
+* **§C 牙齿 B（暖 target 旧件）**：清单 `source_head=HEAD` 但 `game-svr.exe` sha = 刷新前 `1e088ae7…` ⇒
+  **R7 RED**（`sha256 60b4dc4fbe != 清单 1e088ae758`）。
+* **§D 掏空牙齿**（MUT-A 源判定短路 + MUT-B sha256 对账短路，变异只在 `E:/tmp/m2svr-r7-mut/` 副本上）：
+  同一输入 §B/§C 都变 **GREEN** ⇒ 两条 RED 来自真判据，不是硬编码/环境。
+* **§E 非生产提交不假红（设计牙）**：selftest `r7-nonprod-advance-green`（master 只动 `docs/` ⇒ 判 OK）。
+
+# 5) 判据分级 / 与真机窗口的关系
+
+本片 = **L 级**（窗口就绪工具 + 预构建 + 出处清单；不可能只在真机暴露差异）。真机 R 级判据
+（①②压血进图 ⇒ HUD `19/19` + `CM_RUN(3013)≥1`；③两侧同点对照 `--expect none` / `--min-pairs 1`）
+仍归 **root 独占窗口**；本片只保证「root 开窗时构建源 = 当前基线、exe = 该源编出、聚合门 GREEN」，
+**未起栈、未占端口、未跑真机**。
+
+# 6) 边界与纪律
+
+* 生产代码**零改动**；本片只动证据目录里的两件判据工具 + 证据/README/清单：
+  `check_rust_window_preflight.py`（R7 + 录制模式）、`window_handoff.py`（G1 透传 + 文案 + §0a-2）、
+  `README.md` §㊻、`SHA256SUMS.txt`、`193/194/195/196`。
+* `src/`(含 BotSrv) `sql/` `MirClient/` `mir2-rs/bins/` `mir2-rs/crates/` `mir2-rs/crates/protocol/`
+  `mir2-rs/crates/storage/` `tests/parity/m3/**` 全空；`*.rs` / `*.toml` / `*.ps1` / `*.cs` NONE（见 `196`）。
+* `E:/tmp/m2svr-window-origin` 与 `E:/tmp/m2svr-window-target` 是车道既有的检出外构建面（片㉘ 起）；
+  本片只刷源 + 重编译 + 录清单，**未动共享主检出**（`git status` clean）。
+* 未合并、未自签 review。
+
+# 7) 涉及文件
+
+新增：`193-window-provenance-r7-closeout.txt`（本文件）、`194-redcheck-r7-provenance.txt`、
+`195-gates.txt`、`196-boundary.txt`
+改动：`check_rust_window_preflight.py`、`window_handoff.py`、`README.md`、`SHA256SUMS.txt`
+仓外只读引用（不进库）：`E:/tmp/m2svr-window-origin`（源检出）、`E:/tmp/m2svr-window-target`（六件 exe +
+`window-provenance.json`）
+只读参考：`175-r6-build-source-freshness.txt` §F（R6 界限原文）、`167` §C（片㉟ 预构建读数）、
+`139`/`client-e2e-window.fixed.sh.txt`（入库替身脚本）

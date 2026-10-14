@@ -1,0 +1,80 @@
+195 — 片㊻ 四门禁 + 判据工具自检 + 清单/EOL 门（原始输出）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m2svr-target；--offline；base = origin/master ae6443924
+零起栈、零游戏端口（仅共享 3306）；未动共享主检出；不 merge、不自签 review
+====================================================================================================
+
+A) 四门禁（`--no-fail-fast`；本片零 `.rs`/`.toml` 改动 ⇒ 读数 = base ae6443924 基线）
+----------------------------------------------------------------------------------------------------
+```
+$ cargo fmt --all -- --check
+rc=0
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.51s
+rc=0
+
+$ cargo test --workspace --no-fail-fast --offline
+test result: … （逐套件）
+rc=0   ⇒ 101 suites · 1231 passed · 0 failed · 22 ignored（`grep -c FAILED` = 0）
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+```
+原始输出：`E:/tmp/m2svr-r7-out/g-{fmt,clippy,test,msgcodegen}.txt`
+
+B) 判据工具自检（本片改动的两件 + 证据目录八件聚合）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B check_rust_window_preflight.py --selftest
+SELFTEST OK (48/48)          # 片㊲ 的 32/32 + R7 的 16 条
+
+$ python -I -B window_handoff.py --selftest
+SELFTEST OK (98/98)          # 不变（G2 只认 SELFTEST OK；G1 文案与 §0a-2 已同步）
+
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --target-dir 'E:\tmp\m2svr-window-target' \
+    --mirserver E:/MirServer
+OK G2 check_mongen_dense_points.py --selftest
+OK G2 check_aoi_visibility_diag.py --selftest
+OK G2 aoi_visibility_pair.py --selftest
+OK G2 check_client_s2c_frames.py --selftest
+OK G2 check_appearance_pairs.py --selftest
+OK G2 check_attack_observability.py --selftest
+OK G2 check_rust_window_preflight.py --selftest
+OK G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R7）
+RED  G5 窗口脚本 repo=… 指向共享主检出 / tgt= 不一致（root 活脚本，待换入库替身）
+WINDOW_READY=NO / RESULT: RED  rc=1
+# 同一命令把 --window-script 指向入库替身 client-e2e-window.fixed.sh.txt：
+OK   G1 Rust 窗口前置门 GREEN（R1..R7）
+OK   G5 repo=/tgt= 一致
+WINDOW_READY=YES / RESULT: GREEN  rc=0
+```
+原始输出：`E:/tmp/m2svr-r7-out/{03-preflight-green,04-agg-live,05-agg-standin}.txt`
+
+C) 证据清单（repo 口径）+ EOL 门
+----------------------------------------------------------------------------------------------------
+```
+$ python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+写入 …SHA256SUMS.txt（202 行，repo 口径）
+GREEN: write 完成（0 行 hash 变更，mode=repo）                    rc=0
+
+$ python -I tools/evidence-hash/verify_sha256sums.py <dir> --check-extra
+GREEN <dir>\SHA256SUMS.txt  [repo 口径]  OK 202/202             rc=0
+（0 mismatch / 0 缺件 / 0 多件）
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck <dir>
+EOLCHECK GREEN 203/203 件文本证据与仓库口径（LF）在 EOL 上一致   rc=0
+```
+
+D) 仓内件在红检变异前后 sha256 不变
+----------------------------------------------------------------------------------------------------
+```
+$ sha256sum mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py
+b741b1eea47e4c28c981d7519d51202b7aacbaf7cc23fd67810f3a3519f7aa71 *…/check_rust_window_preflight.py
+$ sha256sum mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+8a66e227bc18434b27ef632b3b666746d2ed9ac3e024729e1b5687b9d1290377 *…/window_handoff.py
+```
+上两行与 `SHA256SUMS.txt` 对应行逐字节相等（`SHA256SUMS.txt:188` / `:202`）⇒ 变异只在
+`E:/tmp/m2svr-r7-mut/check_rust_window_preflight.py` 副本上，**仓内件未被红检改动**。

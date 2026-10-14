@@ -40,14 +40,25 @@
      生产路径 = `mir2-rs/bins` / `mir2-rs/crates` / `mir2-rs/Cargo.toml` / `mir2-rs/Cargo.lock` / `src` / `sql`
      （与合并门禁同口径）。基线解析不到 ⇒ PREREQ_RED（fail-closed）。`--baseline-ref ''` 显式跳过
      （只给无 remote 的离线自测用，**不是**窗口口径）。
-
+  R7 **预构建二进制 ↔ 构建源出处**（片㊻，收 `175` §F 已登记的 R6 界限）：R6 比的是**生产路径的
+git 差异**，不是「`<target-dir>/debug` 里的 exe 与源一一对应」——源刷了但**没重编译**（或暖 target
+里是别处拷来的旧件）时 R6 仍 GREEN，窗口照样从旧 exe 起栈（2026-10-14 实测：专用源刷到 master 后
+若只 `checkout` 不 `cargo build`，`game-svr.exe` 仍是上一版）。R7 用**出处清单**（`--record-provenance`
+录制的 JSON：`source_head` + 六件 exe 的 sha256/字节）做确定性对账：`source_head` 必须 == 当前 `--ref`，
+且每件 exe 的 sha256 必须与清单逐字节相等；缺件/缺清单/清单与源不一致 ⇒ RED/PREREQ（fail-closed）。
 用法：
   python -I -B check_rust_window_preflight.py \
       --repo E:/tmp/m2svr-window-origin [--ref HEAD] \
       [--baseline-ref origin/master] \
       --mirserver E:/MirServer \
+      --target-dir E:/tmp/m2svr-window-target \
+      [--provenance <target-dir>/window-provenance.json] \
       --points "291,666:outside;291,651:outside;289,618:inside;287,620:inside" \
       [--fix-commit <oid>] [--map-name 0] [--map-id 26]
+  # 录出处清单（每次 `cargo build` 之后跑；写进 target-dir）
+  python -I -B check_rust_window_preflight.py --repo <源> --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target \
+      --record-provenance E:/tmp/m2svr-window-target/window-provenance.json
   python -I -B check_rust_window_preflight.py --selftest
 
 退出码：`0` = GREEN、`1` = RED（判据不符）、`2` = PREREQ_RED（缺输入/解析不到 git）。
@@ -57,6 +68,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import re
 import subprocess
@@ -98,6 +111,28 @@ PRODUCTION_PATHS = (
 )
 # R6 基线 ref（默认 origin/master；空串 ⇒ 显式跳过，仅用于无 remote 的离线自测）。
 BASELINE_REF_DEFAULT = "origin/master"
+# R7 只关心「会影响这六个 Rust exe 的源」：清单 `source_head` 与当前 ref 若只差在这些路径之外，
+# exe 逐字节不变（cargo 不会重链）⇒ 不能判 RED（否则 master 前进一条非生产提交就假红）。
+# 不用 R6 的 `PRODUCTION_PATHS`（它含 `src`/`sql`，包括会变的 `src/BotSrv` —— 那不影响这六个 exe）。
+RUST_BUILD_PATHS = (
+    "mir2-rs/bins",
+    "mir2-rs/crates",
+    "mir2-rs/Cargo.toml",
+    "mir2-rs/Cargo.lock",
+)
+# R7 窗口二进制（= `client-e2e-window.sh` 第 2 步 `cargo build` 的 `-p` 列表，逐字同源）。
+WINDOW_BINS: tuple[str, ...] = (
+    "game-svr.exe",
+    "game-gate.exe",
+    "login-srv.exe",
+    "login-gate.exe",
+    "sel-gate.exe",
+    "db-srv.exe",
+)
+# R7 出处清单（provenance manifest）默认落点（放 target-dir 根）。
+PROVENANCE_NAME = "window-provenance.json"
+PROVENANCE_VERSION = 1
+HASH_CHUNK = 1024 * 1024
 # MapInfo 逻辑名分隔符（`crates/envir/src/mapinfo.rs:28`：空格/逗号/制表）
 _MAPINFO_SEPS = " \t,"
 SECTION_RE = re.compile(r"^\s*\[([^\]]*)\]")
@@ -226,6 +261,153 @@ def baseline_freshness_findings(
         ],
         [],
     )
+
+
+def sha256_file(path: str) -> str | None:
+    """流式 sha256；文件不存在/读不了 ⇒ `None`（fail-closed 由调用方处置）。"""
+    if not os.path.isfile(path):
+        return None
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(HASH_CHUNK)
+                if not chunk:
+                    break
+                h.update(chunk)
+    except OSError:
+        return None
+    return h.hexdigest()
+
+
+def record_provenance(
+    repo: str, ref: str, target_dir: str, bins: "tuple[str, ...] | list[str]"
+) -> tuple[dict | None, str | None]:
+    """录制出处清单：`{"version", "source_head", "target_dir", "bins": {name: {"sha256", "bytes"}}}`。
+
+    返回 `(manifest, error)`；`error` 非空 = 录不了（缺 ref / 缺 target-dir / 缺任一件）。
+    """
+    if not repo:
+        return None, "缺 --repo"
+    if not target_dir:
+        return None, "缺 --target-dir"
+    rc, oid = git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    if rc != 0 or not oid:
+        return None, f"解析不到 ref {ref!r}（rc={rc}）"
+    entries: dict[str, dict] = {}
+    missing: list[str] = []
+    for name in bins:
+        path = os.path.join(target_dir, "debug", name)
+        digest = sha256_file(path)
+        if digest is None:
+            missing.append(name)
+            entries[name] = {"sha256": None, "bytes": None}
+            continue
+        entries[name] = {"sha256": digest, "bytes": os.path.getsize(path)}
+    if missing:
+        return None, f"缺件（先 `cargo build … -p …`）：{', '.join(missing)}"
+    return (
+        {
+            "version": PROVENANCE_VERSION,
+            "source_head": oid,
+            "target_dir": os.path.abspath(target_dir),
+            "bins": entries,
+        },
+        None,
+    )
+
+
+def binary_provenance_findings(
+    repo: str,
+    ref: str,
+    target_dir: str,
+    provenance_path: str,
+    bins: "tuple[str, ...] | list[str]",
+) -> tuple[list[str], list[str], list[str]]:
+    """R7 的纯逻辑：`target-dir/debug` 的 exe 必须与出处清单逐字节一致，且清单必须来自当前 `ref`。
+
+    返回 `(ok 行, problems, prereqs)`；不打印，便于 selftest 直测。语义：
+      * `target_dir` 为空或 `provenance_path` 为空 ⇒ INFO 跳过（向后兼容旧调用；窗口口径两者都要给）。
+      * 清单缺失/坏 JSON/字段缺失 ⇒ prereq（fail-closed）。
+      * 清单 `source_head` != 当前 `ref` oid ⇒ 若两者在 `RUST_BUILD_PATHS` 上零差异 ⇒ OK（只差非生产文件，
+        cargo 不会重链，exe 仍逐字节有效）；有生产差异 ⇒ RED（exe 来自另一棵树 ⇒ 窗口会测旧件）。
+      * 任一件 exe 缺失或其 sha256 != 清单 ⇒ RED。
+    """
+    if not target_dir or not provenance_path:
+        return (["INFO R7 跳过（未给 --target-dir/--provenance；窗口口径两者都必须给）"], [], [])
+    if not repo:
+        return ([], [], ["PREREQ_RED R7: 缺 --repo（判不了 out 清单与源的对账）"])
+    rc, oid = git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    if rc != 0 or not oid:
+        return ([], [], [f"PREREQ_RED R7: 解析不到被检 ref {ref!r}（rc={rc}）"])
+    if not os.path.isfile(provenance_path):
+        return (
+            [],
+            [],
+            [
+                f"PREREQ_RED R7: 缺出处清单 {provenance_path}"
+                "（先 `--record-provenance` 录制，再复跑本门）"
+            ],
+        )
+    try:
+        with open(provenance_path, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return ([], [], [f"PREREQ_RED R7: 清单解析失败（{type(exc).__name__}: {exc}）"])
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("bins"), dict):
+        return ([], [], [f"PREREQ_RED R7: 清单结构不符（缺 bins 映射）：{provenance_path}"])
+    head = manifest.get("source_head")
+    if not isinstance(head, str) or not head:
+        return ([], [], [f"PREREQ_RED R7: 清单缺 source_head：{provenance_path}"])
+    problems: list[str] = []
+    infos: list[str] = []
+    if head != oid:
+        rc, out = git(repo, "diff", "--name-only", head, oid, "--", *RUST_BUILD_PATHS)
+        if rc != 0:
+            return ([], [], [f"PREREQ_RED R7: git diff（清单 head ↔ ref）失败（{out or 'rc=' + str(rc)}）"])
+        moved = [ln for ln in out.splitlines() if ln.strip()]
+        if moved:
+            problems.append(
+                f"RED R7: 出处清单 source_head={head[:10]} != 当前构建源 {ref}={oid[:10]}"
+                f" 且在影响六件 exe 的路径上有 {len(moved)} 件差异（{', '.join(moved[:3])}"
+                + (" …" if len(moved) > 3 else "")
+                + "）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）；先重编译 + 重录清单"
+            )
+        else:
+            infos.append(
+                f"[OK] R7 出处清单 source_head={head[:10]} != {ref}={oid[:10]}，但两者在"
+                f" `mir2-rs/**` 零差异 ⇒ 六件 exe 仍有效（cargo 不会重链）"
+            )
+    recorded = manifest["bins"]
+    bad: list[str] = []
+    for name in bins:
+        entry = recorded.get(name)
+        want = entry.get("sha256") if isinstance(entry, dict) else None
+        path = os.path.join(target_dir, "debug", name)
+        got = sha256_file(path)
+        if want is None:
+            bad.append(f"{name}（清单无记录）")
+        elif got is None:
+            bad.append(f"{name}（缺件）")
+        elif got != want:
+            bad.append(f"{name}（sha256 {got[:10]} != 清单 {want[:10]}）")
+    if bad:
+        problems.append(
+            f"RED R7: {len(bad)} 件 exe 与出处清单不一致（{', '.join(bad[:4])}"
+            + (" …" if len(bad) > 4 else "")
+            + ") ⇒ 窗口会从旧/异构 exe 起栈；先重编译 + 重录清单"
+        )
+    if not problems:
+        return (
+            infos
+            + [
+                f"[OK] R7 出处清单 {os.path.basename(provenance_path)} source_head={oid[:10]}，"
+                f"{len(bins)} 件 exe sha256 逐字节一致"
+            ],
+            [],
+            [],
+        )
+    return ([], problems, [])
 
 
 def mapinfo_logical_name(content: str) -> str | None:
@@ -470,6 +652,82 @@ def selftest() -> int:
             repr(BASELINE_REF_DEFAULT),
         )
 
+        # R7（片㊻）：exe ↔ 源出处清单（收 R6 登记的界限）。
+        def _commit_extra(path_rel: str, body: str, msg: str) -> str:
+            full = os.path.join(tmp, path_rel)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            for cmd in (
+                ["git", "-C", tmp, "add", "-A"],
+                ["git", "-C", tmp, "commit", "-q", "-m", msg],
+            ):
+                subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            rc, oid = git(tmp, "rev-parse", "HEAD")
+            chk(f"git-{msg}-oid", rc == 0 and len(oid) == 40, oid)
+            return oid
+
+        fifth = _commit_extra("docs/x.txt", "x1\n", "fifth-nonprod")
+        win_tgt = os.path.join(tmp, "tgt")
+        win_dbg = os.path.join(win_tgt, "debug")
+        os.makedirs(win_dbg, exist_ok=True)
+        r7_bins = ("game-svr.exe", "db-srv.exe")
+        for name, blob in (("game-svr.exe", b"gs"), ("db-srv.exe", b"db")):
+            with open(os.path.join(win_dbg, name), "wb") as fh:
+                fh.write(blob)
+        prov = os.path.join(win_tgt, "window-provenance.json")
+        man, err = record_provenance(tmp, "HEAD", win_tgt, r7_bins)
+        chk("r7-record-ok", man is not None and not err, repr(err))
+        chk(
+            "r7-record-source-head",
+            isinstance(man, dict) and man.get("source_head") == fifth,
+            repr(man and man.get("source_head")),
+        )
+        with open(prov, "w", encoding="utf-8") as fh:
+            json.dump(man, fh)
+        # master 再前进一条**非生产**提交（只动 docs/）⇒ cargo 不重链 ⇒ exe 仍有效 ⇒ 不能假红。
+        sixth = _commit_extra("docs/x.txt", "x2\n", "sixth-nonprod")
+        oks, probs, pre = binary_provenance_findings(tmp, fifth, win_tgt, prov, r7_bins)
+        chk("r7-green", len(oks) == 1 and not probs and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        oks, probs, pre = binary_provenance_findings(tmp, sixth, win_tgt, prov, r7_bins)
+        chk("r7-nonprod-advance-green", len(oks) == 2 and not probs and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        # 源前移且在 `mir2-rs/**` 上有生产差异（清单停在旧 head）⇒ RED（真身 = 刷源后不重编译）。
+        oks, probs, pre = binary_provenance_findings(tmp, third, win_tgt, prov, r7_bins)
+        chk("r7-source-head-mismatch-red", not oks and len(probs) == 1 and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        # 换掉一件 exe（暖 target 里是旧件）⇒ sha256 对不上 ⇒ RED。
+        with open(os.path.join(win_dbg, "game-svr.exe"), "wb") as fh:
+            fh.write(b"STALE")
+        oks, probs, pre = binary_provenance_findings(tmp, fifth, win_tgt, prov, r7_bins)
+        chk("r7-hash-mismatch-red", not oks and len(probs) == 1 and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        # 缺件（清单列了但磁盘没了）⇒ RED。
+        os.remove(os.path.join(win_dbg, "db-srv.exe"))
+        oks, probs, pre = binary_provenance_findings(tmp, fifth, win_tgt, prov, r7_bins)
+        chk("r7-missing-bin-red", not oks and len(probs) == 1 and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        # 缺清单 ⇒ PREREQ_RED（fail-closed，不静默放行）。
+        oks, probs, pre = binary_provenance_findings(
+            tmp, "HEAD", win_tgt, os.path.join(win_tgt, "nope.json"), r7_bins
+        )
+        chk("r7-missing-manifest-prereq", not oks and not probs and len(pre) == 1, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        # 未给 target-dir/provenance ⇒ INFO 跳过（向后兼容旧调用）。
+        oks, probs, pre = binary_provenance_findings(tmp, "HEAD", "", "", r7_bins)
+        chk("r7-empty-skip-info", len(oks) == 1 and not probs and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        # 录不出（缺 target-dir / 缺件）⇒ 返回错误（别写半份清单）。
+        _, err_nt = record_provenance(tmp, "HEAD", "", r7_bins)
+        chk("r7-record-needs-target", err_nt is not None, repr(err_nt))
+        _, err_miss = record_provenance(tmp, "HEAD", win_tgt, ("game-svr.exe", "nope.exe"))
+        chk("r7-record-missing-bin", err_miss is not None and "nope.exe" in err_miss, repr(err_miss))
+        chk(
+            "r7-window-bins-six",
+            len(WINDOW_BINS) == 6 and WINDOW_BINS[0] == "game-svr.exe" and "db-srv.exe" in WINDOW_BINS,
+            repr(WINDOW_BINS),
+        )
+        chk("r7-provenance-name", PROVENANCE_NAME == "window-provenance.json", PROVENANCE_NAME)
+        chk(
+            "r7-rust-build-paths",
+            RUST_BUILD_PATHS[0] == "mir2-rs/bins" and "mir2-rs/Cargo.lock" in RUST_BUILD_PATHS,
+            repr(RUST_BUILD_PATHS),
+        )
+
     # --- 合成 mongen 检查器：验证调用与退出码传播 ---
     with tempfile.TemporaryDirectory(prefix="rustpf-mg-") as tmp:
         checker = os.path.join(tmp, "fake_checker.py")
@@ -523,6 +781,27 @@ def main(argv: list[str] | None = None) -> int:
             "空串 = 显式跳过，仅用于无 remote 的离线自测）"
         ),
     )
+    ap.add_argument(
+        "--target-dir",
+        default="",
+        help="R7 预构建目录（CARGO_TARGET_DIR；exe 在 <target-dir>/debug/）",
+    )
+    ap.add_argument(
+        "--provenance",
+        default="",
+        help=f"R7 出处清单 JSON（默认 <target-dir>/{PROVENANCE_NAME}；空 = 跳过 R7）",
+    )
+    ap.add_argument(
+        "--record-provenance",
+        default="",
+        help="录制 R7 出处清单到该路径后退出（每次 cargo build 之后跑）",
+    )
+    ap.add_argument(
+        "--bin",
+        action="append",
+        default=None,
+        help=f"R7 覆盖窗口件列表（可重复；默认六件 {WINDOW_BINS}）",
+    )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
 
@@ -530,6 +809,28 @@ def main(argv: list[str] | None = None) -> int:
         return selftest()
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    repo = args.repo or find_repo_root(script_dir) or ""
+    bins = tuple(args.bin) if args.bin else WINDOW_BINS
+
+    # R7 录制模式（`cargo build` 之后跑；写完清单 + 打一行可判据后退出）。
+    if args.record_provenance:
+        man, err = record_provenance(repo, args.ref, args.target_dir, bins)
+        if man is None:
+            print(f"PREREQ_RED R7-record: {err}")
+            return 2
+        try:
+            with open(args.record_provenance, "w", encoding="utf-8") as fh:
+                json.dump(man, fh, ensure_ascii=False, indent=1, sort_keys=True)
+                fh.write("\n")
+        except OSError as exc:
+            print(f"PREREQ_RED R7-record: 写不了 {args.record_provenance}（{exc}）")
+            return 2
+        print(
+            f"R7_PROVENANCE_RECORDED source_head={man['source_head']} "
+            f"bins={len(man['bins'])} -> {args.record_provenance}"
+        )
+        return 0
+
     mongen = args.mongen or os.path.join(args.mirserver, "M2GameSvr", "Envir", "MonGen.txt")
     mapinfo = args.mapinfo or os.path.join(args.mirserver, "M2GameSvr", "Envir", "MapInfo.txt")
 
@@ -538,7 +839,6 @@ def main(argv: list[str] | None = None) -> int:
 
     # R1 构建源含全部必需修复提交
     fixes = [(c, "") for c in args.fix_commit] if args.fix_commit else list(REQUIRED_FIX_COMMITS)
-    repo = args.repo or find_repo_root(script_dir) or ""
     if not repo:
         prereq.append("PREREQ_RED R1: 找不到 git 根（用 --repo 指明构建源检出）")
     else:
@@ -620,6 +920,16 @@ def main(argv: list[str] | None = None) -> int:
     # R6 构建源必须是当前基线（默认 origin/master）——片㊲；R1 只管「含修复提交」不管「没落后」。
     if repo:
         oks, probs, pre = baseline_freshness_findings(repo, args.ref, args.baseline_ref)
+        for line in oks:
+            print(line)
+        problems.extend(probs)
+        prereq.extend(pre)
+
+    # R7 预构建二进制 ↔ 构建源出处（片㊻）——R6 只比 git 差异，不比 exe。
+    if repo:
+        oks, probs, pre = binary_provenance_findings(
+            repo, args.ref, args.target_dir, args.provenance, bins
+        )
         for line in oks:
             print(line)
         problems.extend(probs)

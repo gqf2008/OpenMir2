@@ -1,0 +1,36 @@
+196 — 片㊻ 边界（净差量 / 冻结面 / 文件类型）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+base = `refs/heads/master` `ae6443924`（= 片㊹ 合入后的 master；本分支已 `merge --ff-only`）
+====================================================================================================
+
+# 净差量（含本文件自身；`git status --porcelain` + `git diff --name-status ae6443924`）
+
+```
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/193-window-provenance-r7-closeout.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/194-redcheck-r7-provenance.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/195-gates.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/196-boundary.txt
+```
+= 8 路径（4 改 + 4 增），全部在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`。
+
+# 冻结面 / 非本片写集（必须为空）
+
+```
+$ git diff --name-only ae6443924 -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+（空）
+$ git diff --name-only ae6443924 -- mir2-rs/bins mir2-rs/crates
+（空）
+$ git diff --name-only ae6443924 -- mir2-rs/tests/parity/m3 tests/parity/m3
+（空；m3 写集归 m3bag/m3cs）
+```
+* `src/`（含 `src/BotSrv`）`sql/` `MirClient/` `mir2-rs/bins/` `mir2-rs/crates/`
+  `mir2-rs/crates/protocol/` `mir2-rs/crates/storage/` `mir2-rs/tests/parity/m3/` **全空**。
+* 本片**零生产代码**：`*.rs` / `*.toml` / `*.ps1` / `*.cs` = NONE（净差量里只有 `.py` + `.md` + `.txt`）。
+* 仓外（不进库）改动面：`E:/tmp/m2svr-window-origin`（源检出，刷到 `ae6443924`）、
+  `E:/tmp/m2svr-window-target/debug/{六件 exe}` + `window-provenance.json`（重编译 + 录清单）。
+  共享主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2` **零改动**（只读）。
+* 无起栈、无游戏端口占用；红检变异只在 `E:/tmp/m2svr-r7-mut/` 副本上（仓内件 sha256 不变，见 `195` §D）。
