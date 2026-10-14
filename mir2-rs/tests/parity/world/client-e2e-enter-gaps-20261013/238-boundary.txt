@@ -1,0 +1,43 @@
+238-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片57 边界与冻结面（2026-10-15，tag m2svr）
+worktree = E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr（branch enter-gaps-window-dense-menu）
+base = origin/master = 0067a08ad；HEAD（改动前）= 0067a08ad（= 片55 f84464ad1 已合入后的 master）
+====================================================================================================
+
+# 1) 改动路径（git status --porcelain=v1）
+
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/235-gates.txt
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/236-boundary.txt
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/237-gates.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/238-boundary.txt
+
+# 2) 改动路径清单（全部在证据目录内）
+
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/235-gates.txt      （M 陈旧计数订正）
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/236-boundary.txt   （M 自引用差量订正）
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md          （M §56 独立复验）
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt     （M 重生成）
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/237-gates.txt      （A 本片门禁）
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/238-boundary.txt   （A 本文件）
+
+# 3) 扩展名门：零 .rs / .toml / .ps1 / .cs / .py
+
+$ git status --porcelain=v1 | grep -E '\.(rs|toml|ps1|cs|py)$'
+  （空）⇒ OK 无匹配
+
+# 4) 冻结面（git diff --name-only origin/master -- <冻结面>）
+
+  冻结面 = src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+           src/BotSrv mir2-rs/tests/parity/m3
+  （上面为空 = 冻结面零改动）
+
+# 5) 差量统计（提交前 `git status --porcelain` 6 路径；提交后以 `git show --stat` 为准：
+
+ 6 files changed（4 M + 2 A），全部在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`。
+
+# 6) 判级
+
+本片 = **L**（只读复验 + 证据文档订正）：零生产代码、零 `.rs`/`.toml`/`.py`/`.ps1`/`.cs`、
+零取数/时序/RNG/落库改动。卡级 **R** 真机 ①②③（52/752 生效 / CM_RUN>=1 / 同屏怪+受击步）
+仍归 **root 独占窗口**；不 merge、不自签 review。

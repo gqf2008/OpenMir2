@@ -1362,3 +1362,33 @@ root 2026-10-14 15:0x 的 ③ 原话是「**拿 C# 侧同点位对照**」。此
   修复前的 exe）⇒ 开窗前须 `start_rust_stack.ps1 -LogDir E:\tmp\client-e2e\stack2 -Stop`。
 - 判级 = **L**（只读机判 + 证据；零生产代码、零新增判据工具——复用 `check_mongen_dense_points.py`
   的 `--point/--expect`，与 `check_rust_window_preflight.py` R4 同一函数）。卡级 **R** 真机 ①②③ 仍归 root 窗口。
+
+### 56) 头号项的**独立复验**（片57，零生产代码）+ 收 235 §5 / 236 §5 两条自引用陈旧计数（2026-10-15，tag `m2svr`）
+
+burst48 对 brief 顶部 root 2026-10-14 15:0x 的「二分 + 修 + 改坏必红」做**独立复验**（不采信前一轮自述），
+并把 merge 检查点随卡携带的两条 Minor（`235` §5 / `236` §5 自引用陈旧计数）一并收口。**零生产代码改动**。
+
+- **① 二分：区间内无引入点（复验成立）**。
+  `git log --no-merges --oneline ad0592b19..8e491f81e -- mir2-rs/bins/game-svr/src` = **12 条**；逐条 `--stat`
+  的文件表里**没有** `enter.rs` / `ability.rs`（`git log … -- enter.rs ability.rs` 为空）；唯一碰
+  `record.rs` 的 `ce7879223` **只加 `#[derive(Default)]`**。三条修复 `c61b9627a`(15:31)/`6cadc9fbf`(18:33)/
+  `fd68e037d`(21:10) 时间戳**全晚于** `8e491f81e`(12:14)、且 `--is-ancestor origin/master` 全 YES
+  ⇒ **是既有 53 布局缺陷被 `HP<MaxHP` 触发**，不是夜里某片改回坏了（与 `234` 结论一致）。
+- **② HIGHHP 家族 fresh GREEN + 752 反证**。`verify_client_highhp_family.py --rust-dir mir2-rs/bins/game-svr/src`
+  ⇒ `GREEN: 7 个 HIGHHP 站点与登记集合逐项一致`；`--selftest` 6/6。**额外反证**：冻结客户端
+  `SM_SUBABILITY(752)`（`Source/MirClient/ClMain.pas:10104`）**不**读 `TAbility`/不 `DecodeBuffer`（只取
+  `msg.param/tag/series/Recog` 位段），对比 `SM_ABILITY(52)`（`:10096`）的 `DecodeBuffer(body, @m_Abil, SizeOf(TAbility))`
+  ⇒ **752 与 HIGHHP 无关、无需尾**；需要客户端布局的只有 **52 / 53 / 31** 三帧（与片㊼/㊴/31 一致）。
+- **③ 窗口源 fresh**：活源 = 共享主检出 `8e491f81e` ⇒ `check_rust_window_preflight.py` **RED**
+  （R1 缺 `c61b9627a`/`6cadc9fbf`/`fd68e037d`；R6 落后 `origin/master@0067a08ad` 生产路径 3 件）、`window_handoff.py`
+  **`WINDOW_READY=NO`**（G1 RED + G5「repo= 指共享主检出」）；入库替身源 `E:/tmp/m2svr-window-origin @da2df1fdb`
+  ⇒ R1..R6 全 OK、`window_handoff.py … --window-script ./client-e2e-window.fixed.sh.txt` **`WINDOW_READY=YES` GREEN**
+  ⇒ **开窗即绿，只差 root 把活脚本指向替身源**。
+- **④ 泄漏栈仍在**（fresh，2026-10-15 02:36）：6 进程 / 9 端口 UP，`game-svr` pid 30284（起于**修复前**的 exe）
+  仍在推进 tick；`LoginSrv`/`client-e2e/stack2/*.out.log` mtime 02:37 ⇒ 开窗前须
+  `start_rust_stack.ps1 -RustBinDir <替身 target>\debug -LogDir E:\tmp\client-e2e\stack2 -Stop`。
+- **⑤ 收 Minor**：`235` §5 的 `241/241`+`242/242` → `243/243`+`244/244`（片55 提交口径，附「以当场跑为准」注）；
+  `236` §5 的 `2 files changed, 28 insertions` → `5 files changed, 335 insertions(+), 1 deletion(-)`（`git show --stat f84464ad1`）。
+- 判级 = **L**（只读复验 + 文档订正；零生产代码、零 `.rs`/`.toml`/`.py`/`.ps1` 改动）。卡级 **R** 真机 ①②③ 仍归 root 独占窗口。
+  四门禁/机判读数见 `237-gates.txt`，边界/冻结面见 `238-boundary.txt`；原始读数：
+  `E:/tmp/m2svr-burst48/`（`01/02-handoff-subst*`、`03-handoff-live`、`04-pt-verify2`、`10-fmt`..`13-msgcodegen`）。
