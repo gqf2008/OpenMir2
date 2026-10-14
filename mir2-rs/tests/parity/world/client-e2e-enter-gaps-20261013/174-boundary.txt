@@ -1,0 +1,60 @@
+174-boundary.txt —— 片㊱ 边界（base = origin/master cb2a0ab88eca13825da391c973f53939976c4b29；head = 本片合并提交）
+卡 openmir2-client-e2e-enter-gaps / m2-svr / openmir2-worker-11 / 2026-10-14
+====================================================================================================
+# 0) 本片起手式：先 git fetch origin && git merge origin/master（新规矩）
+$ git -C <worktree> merge --no-edit origin/master
+Merge remote-tracking branch 'origin/master' into enter-gaps-window-dense-menu   # rc=0，无冲突
+# 说明：上一片㉟（head 2af5a6a52）在片㊱ 工作期间已被非作者 approve（reviewer-6）并合入
+# master（cb2a0ab88 = "Merge 2af5a6a52 … approve openmir2-reviewer-6 @reviewed_head 2af5a6a52"）
+# ⇒ 本片基于「2af5a6a52 已入 master」的树，deliverable 差量只含本片 6+1 件。
+
+# 1) 本片（㊱）净差量（父 = 2af5a6a52；HEAD = a0f5867ee 的合并结果）
+$ git diff --name-status a0f5867ee^ a0f5867ee
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/171-g5-remediation-recheck.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/172-redcheck-g5-remediation-recheck.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/173-gates.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+（= 1 个在审 `.py`（window_handoff.py，G5 修复块配对）+ 3 件证据 + README §㊱ + 清单重生成；
+  零 `.rs`、零 `.toml`、零生产代码）
+
+# 2) 交付差量 = origin/master..HEAD（walgit patch 用的 base/head）
+$ git diff --name-status cb2a0ab88eca13825da391c973f53939976c4b29 HEAD
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/171-g5-remediation-recheck.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/172-redcheck-g5-remediation-recheck.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/173-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/174-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+（7 路径全在本卡证据目录；冻结面全空）
+
+# 3) 冻结面（必须全空）
+$ git diff --name-only cb2a0ab88eca13825da391c973f53939976c4b29 HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+(空 = 通过)
+
+$ git diff --name-only cb2a0ab88eca13825da391c973f53939976c4b29 HEAD -- '*.rs'
+(空 = 通过)
+
+$ git diff --name-only cb2a0ab88eca13825da391c973f53939976c4b29 HEAD -- '*.toml'
+(空 = 通过)
+
+# 4) 证据完整性（LF/git-blob 口径）
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+GREEN mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK 179/179
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+EOLCHECK GREEN 180/180 件文本证据与仓库口径（LF）在 EOL 上一致
+（清单 175 → 179 件：+171/172/173/174）
+
+# 5) 工具自检
+$ python -I -B window_handoff.py --selftest
+SELFTEST OK (98/98)    # 片㊱ 前 95/95（+3 牙：plan-g5-standin-recheck / -edit-recheck / -distinct）
+
+# 6) 检出外改动（登记；未动共享主检出）
+$ git -C E:/tmp/m2svr-window-origin rev-parse HEAD
+9edfc745d48ec7edafcbcb9da3d9a6a0c19073ad    # 专用窗口构建源（片㉟ 刷新，未再动）
+$ ls E:/tmp/m2svr-window-target/debug/game-svr.exe
+135459053 B（片㉟ 预构建；本片未重建）
+$ git -C E:/Users/gxh/Documents/GitHub/OpenMir2 status --porcelain | wc -l
+0                                            # 共享主检出零改动（只读）

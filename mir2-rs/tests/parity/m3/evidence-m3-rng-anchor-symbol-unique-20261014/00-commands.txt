@@ -1,0 +1,67 @@
+# evidence-m3-rng-anchor-symbol-unique-20261014 —— 复跑命令
+
+卡 `openmir2-m3-rng-trace-scene-groups`（M3 夹具卫生片；**根因**收口：把行号锚从多车道共享的
+增长文件 `bins/game-svr/src/main.rs` 上撤下，改做「符号存在且唯一」机判）。
+
+首次交付 base = `origin/master 41e61029e`；**再交付 base = `origin/master 9edfc745d`**（合并 master 后
+的并集 head = 见 `10-boundary.txt` 的声明值）。下面 §0/§1 给**再交付 base** 的 RED→GREEN 对照；首次 base 的 RED 见
+`02-base-red.txt`（历史留痕）。
+
+## 0) base = origin/master 9edfc745d（干净 detached worktree；工具/文档均为 base 原样）
+
+```sh
+# git worktree add --detach E:/tmp/m3bag-base-9edfc745d origin/master
+cd E:/tmp/m3bag-base-9edfc745d/mir2-rs/tests/parity/m3
+python -I rng-trace-scene/check_anchors.py check        # RED 1 项（ANCHOR_DRIFT :5795 vs :5817）
+python -I rng-trace-scene/check_anchors.py selftest     # RED 12/13
+python -I fixture_chain_gate.py check                   # FIXTURE_CHAIN RED red=3
+```
+
+（完整输出见 `05-base-newmaster-red.txt`；`02-base-red.txt` 是首次 base `41e61029e` 的同类 RED。）
+
+## 1) after = 本片声明 head（见 10-boundary.txt）（工作树；GREEN）
+
+```sh
+cd mir2-rs/tests/parity/m3
+python -I rng-trace-scene/check_anchors.py check        # GREEN 7/7
+python -I rng-trace-scene/check_anchors.py selftest     # 16/16 GREEN（含 15 条改坏必红）
+python -I fixture_chain_gate.py selftest                # 40/40 GREEN（含链门车道新并入的 fmt 门）
+python -I fixture_chain_gate.py check                   # FIXTURE_CHAIN GREEN runner_ok=10 red=0
+```
+
+（完整输出见 `03-after-green.txt`；合并冲突与解见 `13-merge-resolution.txt`。）
+
+## 2) 真身文档改坏（见 `04-mutation-red.txt` §4.3 的可直接复跑脚本）
+
+```sh
+cd mir2-rs/tests/parity/m3
+# A：把符号唯一性锚写回行号（`.../main.rs:5795`）⇒ ANCHOR_LINE_NOT_ALLOWED
+# B：删掉该锚的文件引用 ⇒ ANCHOR_MISSING
+# 对 rng-trace-scene/DRIVER-CONTRACT.md 的**副本**变异后：
+python -I rng-trace-scene/check_anchors.py check --doc <变异的副本>
+```
+
+## 3) 两侧驱动无栈自检
+
+```sh
+cd mir2-rs/tests/parity/m3
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack  # 37/37 GREEN
+powershell -NoProfile -ExecutionPolicy Bypass -File drop-exp/run_drop_exp_pair.ps1 -SelfCheckNoStack           # 20/20 GREEN
+```
+
+## 4) 四门禁（cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m3bag-target）
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline --no-fail-fast     # 101 suites / 1219 passed / 0 failed / 22 ignored
+cargo run -q -p msgcodegen --offline -- --check     # 604 rc=0
+```
+
+## 5) 证据口径复核
+
+```sh
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014
+python -I mir2-rs/tests/parity/m3/rng-trace-scene/check_evidence_head.py check-pack --dir mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-20261014 --since 9edfc745d
+```
