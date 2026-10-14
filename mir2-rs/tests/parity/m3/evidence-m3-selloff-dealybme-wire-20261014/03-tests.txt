@@ -1,0 +1,31 @@
+M3 10-1 收口片 #2（@dealybme 开窗接线）判据
+=============================================
+
+1) selloff::tests::open_deal_off_form_gated_by_sale_deal_and_active_sell（改，三支）
+   支1 !SaleDeal => SM_MERCHANTSAY, Recog=商人 ActorId, Param=Tag=0, Series=1,
+       尾 = 商人/您未开通元宝服务,请先开通元宝服务!!<bs> <bs><返回/@main>
+   支2 SaleDeal && !SellOffInTime(0) => SM_SENDDEALOFFFORM, priority=152, Recog=42, Param=0
+   支3 SaleDeal && SellOffInTime(0) => SM_MERCHANTSAY, 尾 = 商人/您还有元宝服务正在进行!!<bs> <bs><返回/@main>
+
+2) selloff::tests::open_deal_off_form_failure_wire_is_merchant_say（新，线缆级）
+   npc_id = 0x1234_5678 (> u16::MAX)，经生产编码路径 selloff_event_body 逐字节断言：
+     [0..4] Recog = 0x1234_5678 (32 位完整)
+     [4..6] Ident = SM_MERCHANTSAY(643)
+     [6..8] Param = 0; [8..10] Tag = 0; [10..12] Series = 1
+     [12..] = EncodeString(GBK('商人/您未开通元宝服务,请先开通元宝服务!!<bs> <bs><返回/@main>'))
+
+3) tests::shop_dealybme_opens_consignment_form（新，进程级，经生产 handle_shop_cmd）
+   1 IsBDeal 商人 + label @dealybme + SaleDeal=false => gate 恰 1 帧 SM_MERCHANTSAY（头 + 尾逐字节）
+   2 置 SaleDeal=true => 恰 1 帧 SM_SENDDEALOFFFORM（Recog=商人 ActorId, Param=0）
+   3 商人 is_yb_deal=false => 零帧（oracle if (IsYbDeal) 门）
+
+读数（cwd=mir2-rs）：
+  cargo test -p game-svr --lib --offline                 => ok. 195 passed; 0 failed; 1 ignored（selloff:: 26 passed）
+  cargo test -p game-svr --bin game-svr --offline dealybme => ok. 1 passed; 0 failed; 207 filtered out
+  cargo test --workspace                                  => 101 suites / 1208 passed / 0 failed / 22 ignored rc=0
+
+改坏必红（redchecks/，读数在合并后 head 7a108f4d2 上实跑）：
+  RC1 禁用整块 @dealybme 派发（条件改 false &&）      => rc=101 RED（进程级用例 panic）
+  RC2 去掉 mflags.is_yb_deal 门（条件改 true &&）      => rc=101 RED（3 IsBDeal=false 仍开窗）
+  RC3 merchant_say 的 Series 1 -> 0                    => rc=101 RED（selloff 24 passed / 2 failed）
+  还原后：RC1 restored rc=0 GREEN、RC3 restored rc=0 GREEN，git status 干净（见 04-boundary.txt）。

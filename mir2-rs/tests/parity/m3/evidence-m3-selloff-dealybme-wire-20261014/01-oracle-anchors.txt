@@ -1,0 +1,43 @@
+M3 10-1 收口片 #2（@dealybme 开窗接线）oracle 锚
+=========================================================
+
+A) 触发点（Merchant.UserSelect 的 label 链）
+  src/GameSrv/Npc/Merchant.cs:930-934
+    else if (string.Compare(sLabel, ScriptFlagConst.sDealYBme, StringComparison.OrdinalIgnoreCase) == 0)
+    {
+        if (IsYbDeal)
+        {
+            UserSelectOpenDealOffForm(playObject); // 打开出售物品窗口
+        }
+    }
+  src/Modules/SystemModule/Const/ScriptFlagConst.cs:25  sDealYBme = "@dealybme"
+  src/GameSrv/Npc/Merchant.cs:79  public bool IsYbDeal { get; set; }
+
+B) 三支（Merchant.UserSelectOpenDealOffForm，Merchant.cs:1038-1056）
+    if (user.SaleDeal) {
+        if (!user.SellOffInTime(0)) { user.SendMsg(RM_SENDDEALOFFFORM, 0, ActorId, 0, 0); }
+        else { user.SendMsg(this, RM_MERCHANTSAY, 0,0,0,0, ChrName + "/您还有元宝服务正在进行!!\\ \\<返回/@main>"); }
+    } else {
+        user.SendMsg(this, RM_MERCHANTSAY, 0,0,0,0, ChrName + "/您未开通元宝服务,请先开通元宝服务!!\\ \\<返回/@main>");
+    }
+
+C) RM -> SM 出队映射
+  C1 成功支：M2Server/Player/PlayObject.Message.cs:2046-2048
+      SendDefMessage(SM_SENDDEALOFFFORM, processMsg.nParam1, processMsg.nParam2, 0, 0, processMsg.Msg);
+    SendDefMessage(wIdent, nRecog, nParam, nTag, nSeries, sMsg)  (PlayObject.Socket.cs:27)
+    SendMsg(wIdent, wParam, nParam1, nParam2, nParam3, sMsg)     (BaseObject.Message.cs:34)
+      => SendMsg(RM_SENDDEALOFFFORM, wParam=0, nParam1=ActorId, nParam2=0, nParam3=0)
+      => Recog = nParam1 = 商人 ActorId(32 位), Param = nParam2 = 0, Tag=Series=0
+    CommandMessage.Size=12: Recog(i32 4B)+Ident(u16)+Param(u16)+Tag(u16)+Series(u16)
+      (OpenMir2/Packets/ClientPackets/ClientMesaagePacket.cs:11-24)
+
+  C2 失败支：M2Server/Player/PlayObject.Message.cs:1722-1724（RM_MERCHANTSAY 支）
+      MakeMessage(SM_MERCHANTSAY, processMsg.ActorId,
+                  MakeWord((ushort)nParam1, (ushort)nParam2), 0, 1)
+      SendSocket(ClientMsg, EDCode.EncodeString(processMsg.Msg));
+    SendMsg(IActor baseObject, ...) (BaseObject.Message.cs:98-158, ActorId = baseObject.ActorId = 商人)
+      => SM_MERCHANTSAY(643): Recog=商人 ActorId, Param=MakeWord(0,0)=0, Tag=0, Series=1,
+         尾 = EncodeString(ChrName + '/' + text)
+
+D) 同源先例（仓库已合）：bins/game-svr/src/shop.rs:938-945 的 SendMsgToUser（@Superrepairfail 支）
+   frame(SM_MERCHANTSAY, m.actor_id, 0, 0, 1, downlink::gbk(&format!("{}/{}", m.chr_name, MSG)))
