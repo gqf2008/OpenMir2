@@ -1449,3 +1449,40 @@ burst53 对 head 项 ① 的修复链（53 `TCharDesc` 尾 / 52 58B `TAbility` /
 - 边界与纪律：改动 = 本卡证据目录内 4 件（`242`/`243`/`244` + README + SHA256SUMS）；零 `.rs`/`.toml`/
   `.py`/`.ps1`/`.cs`；零起栈、零游戏端口、零进程；共享 3306 只读；未动共享主检出 / root 活脚本 / 泄漏栈；未 merge、未自签。
   四门禁/机判读数见 `243-gates.txt`，边界/冻结面见 `244-boundary.txt`。
+
+### 59) 窗口就绪门的**假绿**收口：R8「窗口槽位空闲」（真身 = 泄漏栈占 9 游戏端口 + 修复前 exe）（2026-10-15，tag `m2svr`）—— `245`/`246`/`247`/`248`
+
+片58（§58）如实登记了 `WINDOW_READY=YES` 与「泄漏栈 pid 30284 仍在」并存；本片把这条**收成机判缺口**并修掉：
+
+- **门缺口（真缺陷，非文案）**：`check_rust_window_preflight.py` 的 R1..R7 与 `window_handoff.py` 的 G5
+  只看**源提交 / 出处清单 / exe 文件 / 脚本两行**，**没有任何一门看本机槽位** —— 因此在一台
+  **还跑着修复前栈**（`E:\tmp\openmir2-merge-target\debug\game-svr.exe` 占 5000..7200）的机器上，
+  用**完全正确的替身源 + 替身脚本**跑，仍判 `WINDOW_READY=YES`。这正是 root 2026-10-14 15:0x
+  「假回归」的机器态：门说 GO，窗口却从旧 exe 抓包 ⇒ HUD `0/0` + `CM_RUN=0`。
+- **本片（片60）**：新增 **R8「窗口槽位空闲」fail-closed** —— ① 九个 Rust 栈游戏端口
+  （`5000/5100/5500/5600/5700/6000/7000/7100/7200`；**3306 共享 MySQL 不在门内**）必须全 DOWN；
+  ② 任何在跑的 `game-svr.exe` 必须是本计划 `--target-dir/debug/game-svr.exe`（防「源/清单都对但
+  跑着旧件」）。判 RED 时原样打印**停栈命令**。探不动本机（非 Windows / 无 PowerShell）⇒ INFO 跳过
+  （干净检出本来就没有栈）；`--slot-probe-json` 仅供自测/证据复算，会打 `WARN`。
+- **before/after（同机同源同脚本，`246`）**：BEFORE = master `bf9c5c620` 的工具 ⇒ 真探
+  `RESULT: GREEN` rc=0 且替身脚本口径 `WINDOW_READY=YES`；AFTER = 本片 ⇒ 真探 `RESULT: RED` rc=1
+  （R8 点名 9 端口 pid + 修复前 exe 路径）且 `WINDOW_READY=NO` rc=1。
+- **读数（`245`）**：真探 RED（9 端口 + 异源 exe）；注入探针「全空闲」⇒ `RESULT: GREEN` rc=0；
+  注入「5000 + 修复前 exe」⇒ `RESULT: RED` rc=1；注入**坏 JSON** ⇒ `PREREQ_RED` rc=2（不许假绿）；
+  `--selftest` **57/57 OK**（新增 7 牙：端口 9 个且不含 3306 / 全空闲绿 / 占位+异源红 / 本计划 exe 绿 /
+  缺 target-dir 红 / 注入探针坏·缺 ⇒ PREREQ）；`window_handoff.py --selftest` **107/107 OK**。
+- **改坏必红（`245` §6）**：把 `window_slot_findings` 顶部插 `return [ok]`（MUT-A）⇒
+  `--selftest` **FAILED 53/57** 且真探从 RED 变回**假 GREEN** ⇒ 门有牙；还原后逐字节同改前。
+- **口径未变**：R1..R7 语义、替身源 `da2df1fdb`（相对 `origin/master@bf9c5c620` 生产路径零差异）、
+  替身脚本 `client-e2e-window.fixed.sh.txt`（仅 `repo=`/`tgt=` 两行 diff）均未动；本片只**新增** R8 并
+  把 G1 文案从 `R1..R7` 改 `R1..R8`（fail-closed 单向收紧，同片㊱ 先例）。
+- **对窗口的操作含义**：现在**先**跑 `start_rust_stack.ps1 -LogDir E:/tmp/client-e2e/stack2 -Stop`，
+  再跑 `check_rust_window_preflight.py`/`window_handoff.py`；R8 转 GREEN 后 `WINDOW_READY` 才会是 `YES`。
+  本片**不代跑**该停栈（栈属 root），仅把条件做成 fail-closed 机判。
+- 判级 = **L**（工具/门 + 只读证据；零生产代码、零起栈、零端口、零进程）。卡级 **R** 真机 ①②③
+  仍归 root 独占窗口。
+- 边界与纪律：改动 = 本卡证据目录内 8 件（`M` `check_rust_window_preflight.py` / `window_handoff.py` /
+  `README.md` / `SHA256SUMS.txt` + `A` `245`/`246`/`247`/`248`）；冻结面 `src/ sql/ MirClient/
+  mir2-rs/crates/protocol/ mir2-rs/crates/storage/ mir2-rs/bins/` 空；零 `.rs`/`.toml`/`.ps1`/`.cs`；
+  未动共享主检出 / root 活脚本 / 泄漏栈；未 merge、未自签。
+  四门禁/机判读数见 `247-gates.txt`，边界/冻结面见 `248-boundary.txt`。

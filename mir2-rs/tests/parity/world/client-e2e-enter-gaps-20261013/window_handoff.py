@@ -10,7 +10,11 @@
   做成**一条机判的 GO/NO-GO**，避免再出现「开了窗口才发现构建源过旧、判据 PREREQ_RED」的烧窗。
 
 本工具**不重新实现任何判据**，只做四件事：
-  G1 **聚合 Rust 侧窗口前置门**：调片⑮ `check_rust_window_preflight.py`（R1..R7），解析 `RESULT:`。
+  G1 **聚合 Rust 侧窗口前置门**：调片⑮ `check_rust_window_preflight.py`（R1..R8），解析 `RESULT:`。
+     片60 起 R8 = 「窗口槽位空闲」：九个游戏端口必须全 DOWN，任何在跑的 `game-svr.exe` 必须是
+     本计划 `--target-dir/debug/game-svr.exe` —— 堵「源/清单都对但机器上还跑着修复前栈」的假绿
+     （2026-10-14 15:0x 的假回归即此：泄漏栈 `E:/tmp/openmir2-merge-target/debug/game-svr.exe`
+     占着 5000..7200 ⇒ 窗口从旧件抓包 ⇒ HUD `0/0` + `CM_RUN=0`）。
      片㊲ 起 R6 = 「构建源必须是当前基线（默认 `origin/master`）」；R1 只管「含两片修复」
      （单向 `--is-ancestor`），一份含两片但停在旧 master 的源 R1 仍 GREEN，必须靠 R6 才能判「测旧件」。
      片㊻ 起 R7 = 「预构建 exe ↔ 构建源出处」（`--target-dir` + `--provenance` 传出）：R6 只比
@@ -429,11 +433,11 @@ def run_checks(
         result = parse_result(out)
         if rc == 0 and result == "GREEN":
             rep.rust_ok = True
-            rep.info.append("OK   G1 Rust 窗口前置门 GREEN（R1..R7）")
+            rep.info.append("OK   G1 Rust 窗口前置门 GREEN（R1..R8）")
         elif result == "RED" or rc == 1:
             rep.build_source_stale = True
             rep.problems.append(
-                f"G1 Rust 窗口前置门 RED（构建源/读数标记不符；窗口会 PREREQ_RED）"
+                f"G1 Rust 窗口前置门 RED（构建源/读数标记/窗口槽位任一不符；窗口会 PREREQ_RED）"
                 f"—— 见下方修复块"
             )
         else:
