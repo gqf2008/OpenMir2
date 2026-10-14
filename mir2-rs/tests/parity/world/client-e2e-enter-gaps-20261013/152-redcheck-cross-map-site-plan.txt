@@ -1,0 +1,46 @@
+152-redcheck-cross-map-site-plan.txt —— 片㉛ 改坏必红（三条牙）
+卡 `openmir2-client-e2e-enter-gaps`（m2-svr / openmir2-worker-11 / 2026-10-14）
+本片零起栈、零占端口、零生产语义改动；变异只在 `E:/tmp/m2svr-burst19/mut/` 复制件，仓内文件未动。
+====================================================================================================
+仓内 `window_handoff.py` sha256（本片前后一致）：
+  9347e0545f479d77689fae63eece7486f16cb2e9c8677d4af6a80f6bb9e39d25
+
+变异运行器：`E:/tmp/m2svr-burst19/mutate.py`（复制件上做精确字符串替换后跑判据，不触仓内文件）。
+原始输出：`E:/tmp/m2svr-burst19/evidence/redcheck-mutations.txt`（下文逐字复制）。
+
+----------------------------------------------------------------------------------------------------
+$ python -I -B mutate.py
+=== baseline (unmutated) selftest ===
+rc=0  SELFTEST OK (80/80)
+
+=== M1: plan_text 把 ③b 图名写死 '0'（跨图 → 站位 SQL MapName='0'） ===
+rc=1
+  # ③b 全图最密点自动选取 BEST=17,21 map=D10071 E=59.533（check_mongen_dense_points.py --best-point，root ③①「换怪密点」）
+  #   D:/mysql/mariadb-10.11.19-winx64/bin/mysql.exe -h 127.0.0.1 -P 3306 -u root --password= --batch --skip-column-names -e "UPDATE mir2_db.characters SET MapName='0', CX=17, CY=21 WHERE ChrName='aaa';"
+  RED 站位 SQL 的 ③b 图名与选点不一致：MapName='0' != 选点图 'D10071'（把角色放到别的图 = 白烧窗口）
+  PLAN_CONFORMANCE=RED
+
+=== M2: 删掉 --map-dir/--require-walkable 过滤（map D711） ===
+  fixed    site=287,286 map=D711 note=③b 本图最密点自动选取 BEST=287,286 E=4.875（check_mongen_dense_points.py --best-
+  mutated  site=255,306 map=D711 note=③b 本图最密点自动选取 BEST=255,306 E=4.875（check_mongen_dense_points.py --best-
+  INFO map=D711 生成框 58 个；待判定坐标 2 个
+  INFO (255,306) 框内；到最近生成框 Chebyshev=0 （gen=(255,306) range=30 count=7 name=红野猪）；view_range=12 覆盖最近框 ⇒ 可能有出生怪在窗口内 tile=LowWall clientmap=yes
+  INFO (287,286) 框内；到最近生成框 Chebyshev=0 （gen=(287,286) range=30 count=7 name=红野猪）；view_range=12 覆盖最近框 ⇒ 可能有出生怪在窗口内 tile=Walk clientmap=yes
+
+=== M3: parse_best_point 不回传 map（--selftest） ===
+rc=1  SELFTEST FAILED (79/80)
+  [FAIL] selftest parse-best-point-allmaps
+----------------------------------------------------------------------------------------------------
+
+读法：
+* **M1** = 片㉛ 要防的缺陷本体（`--map-name`/`--best-site-all-maps` 选出的跨图点被写成 `MapName='0'`）。
+  变异后 `PLAN_CONFORMANCE` 从 `GREEN` 翻 `RED` 并**点名**「图名与选点不一致」⇒ 新牙是活的；
+  未变异时同一命令 `PLAN_CONFORMANCE=GREEN`（见 `151` §C-2）。
+* **M2** = 片㉚ 的「可站立过滤」在**窗口计划**里被接线前的状态：真机 map `D711` 的未过滤最密点
+  `(255,306)` 实测 `tile=LowWall`，过滤后 `(287,286)` 实测 `tile=Walk`（同一条 `check_mongen_dense_points.py`
+  的 `--points` 读数）⇒ 过滤删掉就选墙上，窗口白烧。
+* **M3** = 跨图 BEST 形态（`BEST (图名) (x,y) E=…`）的解析牙：不回传 `map` 时 `--best-site-all-maps`
+  会退回 `--map-name`（默认 `0`），`--selftest` 立刻 `FAILED (79/80)` 并点名
+  `parse-best-point-allmaps`。
+
+还原后复绿：基线 `SELFTEST OK (80/80)`（同一次运行的头部）；仓内 sha256 未变（上）。

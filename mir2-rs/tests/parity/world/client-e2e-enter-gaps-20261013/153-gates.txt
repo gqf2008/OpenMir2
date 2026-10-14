@@ -1,0 +1,47 @@
+153-gates.txt —— 卡 openmir2-client-e2e-enter-gaps 片㉛ 门禁（四门禁 + 窗口就绪门 + 本片判据自检）
+m2-svr / openmir2-worker-11 / 2026-10-14
+合并树：`git fetch origin && git merge origin/master` 干净合入（base = origin/master = f0a9ab911）
+cwd = <worktree>/mir2-rs；CARGO_TARGET_DIR=E:/tmp/m2svr-target
+====================================================================================================
+[1] cargo fmt --all -- --check
+$ cargo fmt --all -- --check
+rc=0（无输出）
+
+[2] cargo clippy --workspace --all-targets -- -D warnings
+$ cargo clippy --workspace --all-targets -- -D warnings
+rc=0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.05s
+
+[3] cargo test --workspace --no-fail-fast
+$ cargo test --workspace --no-fail-fast
+rc=0
+  101 suites · 1213 passed · 0 failed · 22 ignored
+
+[4] cargo run -p msgcodegen -- --check
+$ cargo run -q -p msgcodegen -- --check
+rc=0
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+
+[5] 本片判据自检（窗口就绪规划器）
+$ python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py --selftest
+SELFTEST OK (80/80)                     rc=0        （片㉚ 74 → 80）
+
+[6] 窗口就绪门（G1..G4；G2 含 7 件判据自检）
+$ python -I -B …/window_handoff.py --repo <本 worktree> --ref HEAD \
+      --target-dir E:/tmp/m2svr-target --with-csharp
+  OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+  OK   G3 C# 抓包拓扑前置门 GREEN
+WINDOW_READY=YES
+RESULT: GREEN                           rc=0
+
+$ python -I -B …/window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target --with-csharp
+WINDOW_READY=YES
+RESULT: GREEN                           rc=0        （root 专用构建源仍推荐）
+
+[7] 改坏必红
+见 `152-redcheck-cross-map-site-plan.txt`（M1 跨图站位图名 / M2 可站立过滤 / M3 跨图 BEST 解析；三条全红，还原复绿）。
+
+原始输出文件（E:/tmp/m2svr-burst19/evidence/）：
+  gate-fmt.txt / gate-clippy.txt / gate-test.txt / gate-msgcodegen.txt / selftest.txt
+  gate-window-head.txt / gate-window-origin.txt / redcheck-mutations.txt

@@ -753,3 +753,34 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   「屏幕见怪并能攻击造成伤害」。
 - 证据：`147-site-walkability-gate.txt`、`148-redcheck-site-walkability.txt`、`149-gates.txt`、
   `150-boundary.txt`、`check_mongen_dense_points.py`。
+
+### ㉛ ③① 跨图密点窗口计划接线 + 选点「可站立 / 客户端带图」过滤（2026-10-14）—— `151`/`152`
+
+- **背景（片㉚ 登记未闭环 + root 00:4x ①）**：㉚ 已给 checker 加 `--map-dir/--client-map-dir` 过滤，
+  但**窗口计划没接线**（`147` §G 明写「`--client-map-dir` 在窗口计划里未接线」）；而 root ① 明说可选
+  「MonGen 里密度高的图」。本片把这两条缺口一起收口，并复现出一条**跨图假绿**：
+  `--plan-only --best-site --map-name D10071` 选到 `D10071 (17,21)`，却写死
+  `UPDATE … SET MapName='0', CX=17, CY=21 …`（角色会落到 0 号图 (17,21)）**且 `PLAN_CONFORMANCE=GREEN`**。
+- **本片交付（唯一代码文件 `window_handoff.py`；只读规划器，不复制第二份几何/判据）**：
+  ① `_BEST_RE`/`parse_best_point` 支持跨图形态 `BEST (图名) (x,y) E=…`（回传 `map`）；
+  ② `resolve_best_site` 改三元组 `(site, site_map, note)` + `all_maps`/`map_dir`/`client_map_dir`：
+     有目录就传 `--map-dir/--require-walkable`、`--client-map-dir/--require-client-map`（缺目录**不静默**）；
+  ③ `plan_text` 新增 `site_map`/`site_none_map`（默认 `"0"` 向后兼容），§1b/§1c 站位 SQL 写实际图名，
+     跨图时附告警；④ `position_sql_findings`/`plan_conformance` 新增「命中该坐标的站位 SQL `MapName`
+     必须 == 选点图」牙；⑤ `main()` 新增 `--best-site-all-maps`/`--client-map-dir`/`--site-none-map`。
+- **真读数**：默认 map 0 `605,578`（E=12.681）不变、`PLAN_CONFORMANCE=GREEN`；
+  `--best-site-all-maps` ⇒ `BEST=17,21 map=D10071 E=59.533` 且 SQL 写 `MapName='D10071'`、GREEN；
+  旧实现（`git show HEAD:`）与新实现的 map 0 计划 `diff` **只有两行头部文本**，命令面逐字节相同。
+  未过滤最密点落在墙上的真机图 **6** 张（`D711 (255,306) LowWall → (287,286) Walk` 等）。
+- **改坏必红（`152`，3 颗牙，变异只在 `E:/tmp/m2svr-burst19/mut/`，仓内 sha256 前后一致）**：
+  M1 跨图图名写死 `'0'` ⇒ `PLAN_CONFORMANCE=RED` 点名「图名与选点不一致」；
+  M2 删可站立过滤 ⇒ `D711` 选点从 `(287,286)` 变 `(255,306) LowWall`；
+  M3 跨图 BEST 不回传 `map` ⇒ `SELFTEST FAILED (79/80)`（`parse-best-point-allmaps`）。
+- **窗口就绪门**：`--selftest` **74 → 80/80**；`--with-csharp` ⇒ `WINDOW_READY=YES` / `RESULT: GREEN`
+  （本 worktree 与 root 专用源 `E:/tmp/m2svr-window-origin` 均绿）。
+- 四门禁（合并树 `f0a9ab911`）fmt 0 / clippy 0(`-D warnings`) / 101 suites · **1213 passed** · 0 failed ·
+  22 ignored / msgcodegen 604 rc=0。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：卡级 DoD③ 的 R 级「③b/③a 两趟真机同框对照」+
+  「屏幕见怪并能攻击造成伤害」；跨图候选的 MapInfo 属性（`NORECONNECT/DAY`）/客户端 `.map` 一致性须窗口实拍。
+- 证据：`151-cross-map-site-plan.txt`、`152-redcheck-cross-map-site-plan.txt`、`153-gates.txt`、
+  `154-boundary.txt`、`window_handoff.py`。

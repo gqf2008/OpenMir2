@@ -1,0 +1,42 @@
+154-boundary.txt —— 卡 openmir2-client-e2e-enter-gaps 片㉛ 边界
+base = origin/master（本片交片时 = f0a9ab911；开工时 67898a834，master 中途推进，`git merge origin/master` 干净合入）
+head = 本片交付 commit（见卡上 patch body）
+命令：git diff --name-status origin/master（+ `git ls-files --others --exclude-standard` 取新增件）
+====================================================================================================
+⚠ 本卡前序片㉙（head e9d6fb3c）/片㉚（head 398e5e40）**尚未合入 master**（等 rev 车道 approve，
+  merge 车道 comment `29023cee` 已登记）。本分支是同一分支 `enter-gaps-window-dense-menu` ⇒
+  vs origin/master 的差量同时含**未合前序 ㉙ 的 8 路径 + ㉚ 的 5 路径**（下 §B）+ **本片㉛增量**（§A）。
+  审线请按增量审本片；merge 准入仍以 approve 的 reviewed_head == patch head 为准。
+
+§A 本片㉛增量（2 M + 4 A + 1 M 清单件）
+----------------------------------------------------------------------------------------------------
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py      （唯一代码文件）
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/151-cross-map-site-plan.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/152-redcheck-cross-map-site-plan.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/153-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/154-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md              （新增 §㉛）
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt         （重生成）
+
+§B 未合前序片（在审，非本片新增量）
+----------------------------------------------------------------------------------------------------
+㉙（怪物出现帧判据）：143/144/145/146 + check_appearance_pairs.py + README.md + SHA256SUMS.txt + window_handoff.py
+㉚（站点可站立/clientmap 机判）：147/148/149/150 + check_mongen_dense_points.py + README.md + SHA256SUMS.txt
+
+冻结面（必须为空）：git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+  ⇒ 0 行
+
+编译面（必须为空，本片零 .rs/.toml/.ps1）：git diff --name-only origin/master -- '*.rs' '*.toml' '*.ps1'
+  ⇒ 0 行
+
+m3bag/m3cs 写集：git diff --name-only origin/master -- mir2-rs/tests/parity/m3
+  ⇒ 0 行（本片未动 mir2-rs/tests/parity/m3/**）
+
+EOL：改动/新增件扩展名 .py / .txt（`.gitattributes` 的 `text eol=lf`）⇒ 干净检出不落 CRLF；
+  交前 `grep -cU $'\r'` 逐件 = 0，SHA256SUMS 按 LF/git-blob 口径生成（`verify_sha256sums.py write/verify`）。
+
+root 工具：本片**未动** E:/tmp/openmir2-watch/client-e2e-window.sh 与 client-e2e-window.fixed.sh.txt（只读；
+  专用构建源 E:/tmp/m2svr-window-origin 只读复核，未改）
+共享主检出：E:/Users/gxh/Documents/GitHub/OpenMir2 **未动**（本片全部读写都在自身 worktree）
+进程/端口：本片**未起栈、未占任何游戏端口**；判据只读 `E:/MirServer/M2GameSvr/{Map,Envir}`、
+  `D:/MirClient-run/Map`（未连 MySQL；共享 3306 保持开工前状态）

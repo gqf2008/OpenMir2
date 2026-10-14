@@ -82,9 +82,12 @@ PAIR_TOOL = "aoi_visibility_pair.py"
 
 _RESULT_RE = re.compile(r"^RESULT:\s*(GREEN|RED|PREREQ_RED)\b", re.MULTILINE)
 _SELFTEST_RE = re.compile(r"^SELFTEST\s+(OK|GREEN|FAILED|RED)\b", re.MULTILINE)
-# `BEST (605,578) E=12.681 view_range=12 box=(605,578) range=30 count=10 name=半兽人`
+# 单图（`--map`）：`BEST (605,578) E=12.681 view_range=12 box=(605,578) range=30 count=10 name=半兽人`
+# 跨图（`--all-maps`）：`BEST (D10071) (17,21) E=59.533 … tile=Walk clientmap=yes`（图名在坐标前的括号里）
 _BEST_RE = re.compile(
-    r"^BEST\s+\((?P<x>-?\d+),(?P<y>-?\d+)\)\s+E=(?P<e>[0-9]+(?:\.[0-9]+)?)\b", re.MULTILINE
+    r"^BEST\s+(?:\((?P<map>[^()\s]+)\)\s+)?\((?P<x>-?\d+),(?P<y>-?\d+)\)"
+    r"\s+E=(?P<e>[0-9]+(?:\.[0-9]+)?)\b",
+    re.MULTILINE,
 )
 _PASS_STATES = ("OK", "GREEN")
 _FAIL_STATES = ("FAILED", "RED")
@@ -107,39 +110,81 @@ def parse_selftest(text: str) -> str | None:
 
 
 def parse_best_point(text: str) -> dict | None:
-    """从 `check_mongen_dense_points.py --best-point` 的 stdout 抽 `BEST (x,y) E=<e>`。
+    """从 `check_mongen_dense_points.py --best-point` 的 stdout 抽 `BEST …`。
 
-    返回 `{"x": int, "y": int, "e": str}`；无该行 ⇒ `None`（调用方 fail-soft）。
+    返回 `{"x": int, "y": int, "e": str, "map": str | None}`；`map` 只在 `--all-maps` 形态
+    `BEST (图名) (x,y) E=…` 里出现（单图形态无图名 ⇒ `None`）。无该行 ⇒ `None`（调用方 fail-soft）。
     """
     m = _BEST_RE.search(text or "")
     if not m:
         return None
-    return {"x": int(m.group("x")), "y": int(m.group("y")), "e": m.group("e")}
+    return {"x": int(m.group("x")), "y": int(m.group("y")), "e": m.group("e"),
+            "map": m.group("map")}
 
 
 def resolve_best_site(
-    check_dir: str, mirserver: str, map_name: str, view_range: int
-) -> tuple[str | None, str]:
+    check_dir: str,
+    mirserver: str,
+    map_name: str,
+    view_range: int,
+    all_maps: bool = False,
+    map_dir: str = "",
+    client_map_dir: str = "",
+) -> tuple[str | None, str | None, str]:
     """用片⑯ MonGen 排行给 ③b 选「窗口内期望出生怪数最大」的点（root ③①「换怪密点」）。
 
-    只读聚合：调 `check_mongen_dense_points.py --best-point`，解析 `BEST (x,y) E=`。
-    缺工具/缺 MonGen/解析不到 ⇒ `(None, 说明)`（fail-soft：计划回落到 `--site` 缺省并打印说明，
+    只读聚合：调 `check_mongen_dense_points.py --best-point`，解析 `BEST [(图名)] (x,y) E=`。
+    返回 `(site, site_map, 说明)`；`all_maps=True` 时用 `--all-maps`（跨图排行）并回传**选点所在图名**。
+
+    片㉛：把片㉚ 的「服务端可站立（tile=Walk）+ 冻结客户端带图（clientmap=yes）」过滤接进来 ——
+    有目录就传 `--map-dir/--client-map-dir` + `--require-walkable/--require-client-map`，
+    缺目录**不静默**：在说明里登记「未做该层过滤」。
+    缺工具/缺 MonGen/解析不到 ⇒ `(None, None, 说明)`（fail-soft：计划回落到 `--site` 缺省，
     绝不静默假装选过点）。
     """
     tool = os.path.join(check_dir, "check_mongen_dense_points.py")
     mongen = os.path.join(mirserver, "M2GameSvr", "Envir", "MonGen.txt")
+    mapinfo = os.path.join(mirserver, "M2GameSvr", "Envir", "MapInfo.txt")
     if not os.path.isfile(tool):
-        return None, f"选点跳过：缺判据脚本 {tool}"
+        return None, None, f"选点跳过：缺判据脚本 {tool}"
     if not os.path.isfile(mongen):
-        return None, f"选点跳过：缺 {mongen}"
-    rc, out = run_tool(tool, ["--mongen", mongen, "--map", map_name,
-                              "--view-range", str(view_range), "--best-point"])
+        return None, None, f"选点跳过：缺 {mongen}"
+    args = ["--mongen", mongen]
+    notes: list[str] = []
+    if os.path.isfile(mapinfo):
+        args += ["--mapinfo", mapinfo, "--require-enterable"]
+    else:
+        notes.append("缺 MapInfo.txt ⇒ 未做 enterable 过滤")
+    if all_maps:
+        args += ["--all-maps"]
+    else:
+        args += ["--map", map_name]
+    args += ["--view-range", str(view_range)]
+    if map_dir and os.path.isdir(map_dir):
+        args += ["--map-dir", map_dir, "--require-walkable"]
+    else:
+        notes.append("服务端 Map 目录不存在 ⇒ 未做可站立过滤")
+    if client_map_dir and os.path.isdir(client_map_dir):
+        args += ["--client-map-dir", client_map_dir, "--require-client-map"]
+    else:
+        notes.append("客户端 Map 目录不存在 ⇒ 未做 clientmap 过滤")
+    args += ["--best-point"]
+    rc, out = run_tool(tool, args)
     best = parse_best_point(out)
     if rc != 0 or not best:
-        return None, f"选点跳过：check_mongen_dense_points.py --best-point rc={rc}（解析不到 BEST）"
+        detail = (f"选点跳过：check_mongen_dense_points.py --best-point rc={rc}（解析不到 BEST）")
+        if notes:
+            detail += "；" + "；".join(notes)
+        return None, None, detail
     site = f"{best['x']},{best['y']}"
-    return site, (f"③b 最密点自动选取 BEST={site} E={best['e']} "
-                  f"（check_mongen_dense_points.py --best-point，root ③①「换怪密点」）")
+    picked_map = best.get("map") or map_name
+    scope = "全图最密点" if all_maps else "本图最密点"
+    note = (f"③b {scope}自动选取 BEST={site}"
+            + (f" map={picked_map}" if all_maps else "")
+            + f" E={best['e']}（check_mongen_dense_points.py --best-point，root ③①「换怪密点」）")
+    if notes:
+        note += "；" + "；".join(notes)
+    return site, picked_map, note
 
 
 def run_tool(path: str, args: list[str], timeout: int = 180) -> tuple[int, str]:
@@ -358,6 +403,8 @@ def plan_text(
     site_note: str = "",
     pass_a_dir: str = "",
     bin_missing: bool = False,
+    site_map: str = "0",
+    site_none_map: str = "0",
 ) -> str:
     w, rust, csh, w_a = pass_roots(work_dir, pass_a_dir)
     rust_a = f"{w_a}/rust"
@@ -379,7 +426,8 @@ def plan_text(
 
     A(f"# ③ 两侧同框对照窗口计划（卡 openmir2-client-e2e-enter-gaps）")
     A(f"# 构建源 repo={repo or '(未给 --repo)'} ref={ref}")
-    A(f"# ③b 有怪点 site={site} / ③a 反向点 site_none={site_none} / view_range={view_range}")
+    A(f"# ③b 有怪点 site={site} (MapName={site_map}) / ③a 反向点 site_none={site_none} "
+      f"(MapName={site_none_map}) / view_range={view_range}")
     if site_note:
         A(f"# {site_note}")
     A("")
@@ -419,9 +467,12 @@ def plan_text(
     A("#   1a. 记 before（还原用）：")
     A(f"#   {_my} {_myargs} -e \"SELECT MapName,CX,CY FROM mir2_db.characters WHERE ChrName='aaa';\"")
     A("#   1b. ③b 有怪点：")
-    A(f"#   {_my} {_myargs} -e \"UPDATE mir2_db.characters SET MapName='0', CX={_bx}, CY={_by} WHERE ChrName='aaa';\"")
+    A(f"#   {_my} {_myargs} -e \"UPDATE mir2_db.characters SET MapName='{site_map}', CX={_bx}, CY={_by} WHERE ChrName='aaa';\"")
     A("#   1c. ③a 反向点（第二趟起栈前改）：")
-    A(f"#   {_my} {_myargs} -e \"UPDATE mir2_db.characters SET MapName='0', CX={_nx}, CY={_ny} WHERE ChrName='aaa';\"")
+    A(f"#   {_my} {_myargs} -e \"UPDATE mir2_db.characters SET MapName='{site_none_map}', CX={_nx}, CY={_ny} WHERE ChrName='aaa';\"")
+    if site_map != "0":
+        A("#   ⚠ ③b 是**跨图**点（root ①「MonGen 里密度高的图」）：选点已过 tile=Walk + clientmap=yes")
+        A("#     过滤；起栈前仍须实拍客户端能进该图（MapInfo 属性 NORECONNECT/DAY 与客户端 .map 一致）。")
     A("")
     A("# 2) ③b 两侧跑（有怪点；两侧不同时起 —— 端口互斥）")
     A("#   [③b] Rust：")
@@ -563,12 +614,17 @@ _PLACEHOLDER_RE = re.compile(r"<[^<>\n]{1,80}>")
 _POSITION_UPDATE_RE = re.compile(r"UPDATE\s+(\S*characters)\s+SET\s+([^;]*?)\s+WHERE", re.IGNORECASE)
 
 
-def position_sql_findings(plan: str) -> list[str]:
+def position_sql_findings(plan: str, site: str = "", site_map: str = "",
+                          site_none: str = "", site_none_map: str = "") -> list[str]:
     """站位 SQL 必须写**真实列**（`MapName/CX/CY`），钉同一张图同一坐标。
 
     本表没有 `x`/`y` 列（实测 `SHOW COLUMNS FROM mir2_db.characters`）⇒ `SET x=…, y=…`
     会 MySQL ERROR 1054，角色不移动、两趟都停在旧点位 ⇒ 一次性窗口白烧。
     纯函数、不连库；只做「计划文本 → 列名」的静态对账（片㉗）。
+
+    片㉛：给定选点（`site`/`site_map`、`site_none`/`site_none_map`）时，还要求命中该坐标的站位
+    UPDATE 的 `MapName` **与选点同图** —— 否则 `--map-name`/`--best-site-all-maps` 选出的跨图点
+    会被写成 `MapName='0'`（角色落在 0 号图 (17,21) 而不是 `D10071 (17,21)`）= 假绿 + 白烧窗口。
     """
     problems: list[str] = []
     seen = 0
@@ -576,8 +632,13 @@ def position_sql_findings(plan: str) -> list[str]:
         seen += 1
         table = m.group(1)
         assigns = m.group(2)
-        cols = {c.split("=", 1)[0].strip().strip("`") for c in assigns.split(",") if "=" in c}
-        lowered = {c.lower() for c in cols}
+        pairs: dict[str, str] = {}
+        for c in assigns.split(","):
+            if "=" not in c:
+                continue
+            k, v = c.split("=", 1)
+            pairs[k.strip().strip("`").lower()] = v.strip().strip("'\"")
+        lowered = set(pairs)
         if "cx" not in lowered or "cy" not in lowered:
             problems.append(
                 f"站位 SQL 未用真实列 CX/CY（本表无 x/y）：{table} SET {assigns.strip()}")
@@ -587,6 +648,15 @@ def position_sql_findings(plan: str) -> list[str]:
         if "mapname" not in lowered:
             problems.append(
                 f"站位 SQL 未钉 MapName（两侧可能不同图）：{table} SET {assigns.strip()}")
+            continue
+        for label, coords, want in (("③b", site, site_map), ("③a", site_none, site_none_map)):
+            if not coords or not want or "," not in coords:
+                continue
+            wx, wy = (p.strip() for p in coords.split(",", 1))
+            if pairs.get("cx") == wx and pairs.get("cy") == wy and pairs["mapname"] != want:
+                problems.append(
+                    f"站位 SQL 的 {label} 图名与选点不一致：MapName='{pairs['mapname']}'"
+                    f" != 选点图 '{want}'（把角色放到别的图 = 白烧窗口）")
     if seen == 0:
         problems.append("计划缺站位 UPDATE mir2_db.characters 段（无法把两侧钉到同一坐标）")
     return problems
@@ -657,7 +727,8 @@ def _declared_flags(path: str) -> set[str]:
 
 
 def plan_conformance(plan: str, repo_root: str = "", check_dir: str = HERE,
-                     mirserver: str = "") -> list[str]:
+                     mirserver: str = "", site: str = "", site_map: str = "",
+                     site_none: str = "", site_none_map: str = "") -> list[str]:
     """机判计划与工具面一致：脚本必须存在、参数必须被声明、teardown/清端口段必须齐。
 
     不复制任何其它门的逻辑；只做「字符串 → 脚本 → 声明集合」的静态对账（零起栈/零端口）。
@@ -694,7 +765,7 @@ def plan_conformance(plan: str, repo_root: str = "", check_dir: str = HERE,
         problems.append("计划引用不存在的 {mirserver}/stop-all.ps1（应改为确定性清栈：6 组件 Stop-Process + 保留 3306）")
     if "<bin_dir>" in plan:
         problems.append("计划残留未替换占位 <bin_dir>（应代入 -RustBinDir 的实际目录）")
-    problems.extend(position_sql_findings(plan))
+    problems.extend(position_sql_findings(plan, site, site_map, site_none, site_none_map))
     seen: set[str] = set()
     uniq: list[str] = []
     for p in problems:
@@ -827,12 +898,19 @@ def selftest() -> int:
     chk("parse-selftest-missing", parse_selftest("nothing") is None)
     chk("parse-best-point",
         parse_best_point("BEST (605,578) E=12.681 view_range=12 box=(605,578) range=30 count=10 name=半兽人")
-        == {"x": 605, "y": 578, "e": "12.681"})
+        == {"x": 605, "y": 578, "e": "12.681", "map": None})
     chk("parse-best-point-missing", parse_best_point("RANK (605,578) E=12.681") is None)
-    chk("parse-best-point-int-e", parse_best_point("BEST (1,2) E=3") == {"x": 1, "y": 2, "e": "3"})
-    # 选点 fail-soft：缺部署根 ⇒ 不得抛异常，返回 (None, 说明)
-    _none_site, _none_note = resolve_best_site(HERE, "E:/no-such-mirserver-xyz", "0", 12)
-    chk("resolve-best-site-failsoft", _none_site is None and "选点跳过" in _none_note, _none_note)
+    chk("parse-best-point-int-e",
+        parse_best_point("BEST (1,2) E=3") == {"x": 1, "y": 2, "e": "3", "map": None})
+    # 片㉛：`--all-maps` 形态带图名（窗口计划 `--best-site-all-maps` 靠它回传选点图）
+    chk("parse-best-point-allmaps",
+        parse_best_point("BEST (D10071) (17,21) E=59.533 view_range=12 box=(17,21) range=0 "
+                         "count=1 name=赤月恶魔 enterable=yes tile=Walk clientmap=yes")
+        == {"x": 17, "y": 21, "e": "59.533", "map": "D10071"})
+    # 选点 fail-soft：缺部署根 ⇒ 不得抛异常，返回 (None, None, 说明)
+    _none_site, _none_map, _none_note = resolve_best_site(HERE, "E:/no-such-mirserver-xyz", "0", 12)
+    chk("resolve-best-site-failsoft",
+        _none_site is None and _none_map is None and "选点跳过" in _none_note, _none_note)
 
     # --- 端到端聚合（假判据脚本） ---
     with tempfile.TemporaryDirectory(prefix="wh-allgreen-") as tmp:
@@ -1021,6 +1099,15 @@ def selftest() -> int:
         len(position_sql_findings("UPDATE mir2_db.characters SET x=1, y=2 WHERE ChrName='aaa';")) >= 1)
     chk("position-sql-missing-mapname-red",
         len(position_sql_findings("UPDATE mir2_db.characters SET CX=1, CY=2 WHERE ChrName='aaa';")) >= 1)
+    # 片㉛：给定选点时，站位 SQL 的 MapName 必须与选点同图（跨图选点写回 '0' = 假绿 + 白烧窗口）
+    chk("position-sql-site-map-green",
+        position_sql_findings(
+            "UPDATE mir2_db.characters SET MapName='D10071', CX=17, CY=21 WHERE ChrName='aaa';",
+            site="17,21", site_map="D10071") == [])
+    chk("position-sql-site-map-red",
+        len(position_sql_findings(
+            "UPDATE mir2_db.characters SET MapName='0', CX=17, CY=21 WHERE ChrName='aaa';",
+            site="17,21", site_map="D10071")) >= 1)
     chk("plan-teardown-before-csharp",
         0 <= _fresh.find("2b) 【本趟跑完必做") < _fresh.find("[③b] C#"))
 
@@ -1050,6 +1137,21 @@ def selftest() -> int:
         chk("plan-conf-red-position-columns",
             any("站位 SQL" in p for p in plan_conformance(_bad_pos, _repo, _chk, _ms)),
             "; ".join(plan_conformance(_bad_pos, _repo, _chk, _ms)))
+        # 片㉛：跨图选点（--best-site-all-maps / --map-name）⇒ §1b 站位 SQL 写选点图名，G4 钉死
+        _xmap_kw = dict(site="17,21", site_map="D10071", site_none="291,666", site_none_map="0")
+        _xplan = plan_text(_repo, "HEAD", _ms, "17,21", "291,666", "E:/tmp/w", "E:/tmp/tgt",
+                           "42", 12, stale=False, site_map="D10071")
+        chk("plan-cross-map-sql",
+            "UPDATE mir2_db.characters SET MapName='D10071', CX=17, CY=21 WHERE" in _xplan
+            and "跨图" in _xplan)
+        _xprobs = plan_conformance(_xplan, _repo, _chk, _ms, **_xmap_kw)
+        chk("plan-conf-cross-map-green", _xprobs == [], "; ".join(_xprobs))
+        _bad_xmap = _xplan.replace("SET MapName='D10071', CX=17, CY=21",
+                                   "SET MapName='0', CX=17, CY=21")
+        chk("plan-conf-red-site-map-mismatch",
+            any("图名与选点不一致" in p for p in plan_conformance(_bad_xmap, _repo, _chk, _ms,
+                                                                **_xmap_kw)),
+            "; ".join(plan_conformance(_bad_xmap, _repo, _chk, _ms, **_xmap_kw)))
 
     print(f"SELFTEST {'OK' if ok == total else 'FAILED'} ({ok}/{total})")
     return 0 if ok == total else 1
@@ -1074,7 +1176,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--site", default="287,620", help="③b 有怪点 x,y（默认 287,620，片⑦已证 13 对）")
     ap.add_argument("--best-site", action="store_true",
                     help="③b site 由 MonGen 排行自动选取（--best-point；root ③①「换怪密点」）")
+    ap.add_argument("--best-site-all-maps", action="store_true",
+                    help="③b site 跨全部地图自动选取（--all-maps --best-point；root ①「密度高的图」）")
+    ap.add_argument("--client-map-dir", default="D:/MirClient-run/Map",
+                    help="冻结客户端 Map 目录（选点 clientmap 过滤；缺目录 ⇒ 如实登记不静默）")
     ap.add_argument("--site-none", default="291,666", help="③a 反向点 x,y（默认 291,666，E=0.000）")
+    ap.add_argument("--site-none-map", default="0", help="③a 反向点逻辑图名（默认 0）")
     ap.add_argument("--work-dir", default="E:/tmp/window/cliente2e", help="窗口工作目录")
     ap.add_argument("--pass-a-dir", default="", help="③a 第二趟证据根（默认 = <work-dir>-a）")
     ap.add_argument("--judge", action="store_true",
@@ -1114,21 +1221,30 @@ def main(argv: list[str] | None = None) -> int:
         return rc
 
     site = args.site
+    site_map = args.map_name
+    site_none_map = args.site_none_map
     site_note = ""
-    if args.best_site:
-        auto_site, site_note = resolve_best_site(
-            args.check_dir, args.mirserver, args.map_name, args.view_range)
+    if args.best_site or args.best_site_all_maps:
+        auto_site, auto_map, site_note = resolve_best_site(
+            args.check_dir, args.mirserver, args.map_name, args.view_range,
+            all_maps=args.best_site_all_maps,
+            map_dir=os.path.join(args.mirserver, "M2GameSvr", "Map"),
+            client_map_dir=args.client_map_dir)
         if auto_site:
             site = auto_site
+            site_map = auto_map or args.map_name
 
     if args.plan_only:
         bin_missing = not os.path.isfile(os.path.join(args.target_dir, "debug", "game-svr.exe"))
         plan = plan_text(args.repo, args.ref, args.mirserver, site, args.site_none,
                          args.work_dir, args.target_dir, args.seed, args.view_range,
                          stale=False, site_note=site_note, pass_a_dir=args.pass_a_dir,
-                         bin_missing=bin_missing)
+                         bin_missing=bin_missing, site_map=site_map,
+                         site_none_map=site_none_map)
         print(plan)
-        _conf = plan_conformance(plan, args.repo, args.check_dir, args.mirserver)
+        _conf = plan_conformance(plan, args.repo, args.check_dir, args.mirserver,
+                                 site=site, site_map=site_map,
+                                 site_none=args.site_none, site_none_map=site_none_map)
         for p in _conf:
             print("RED " + p)
         _label = "RED" if _conf else "GREEN"
@@ -1156,9 +1272,12 @@ def main(argv: list[str] | None = None) -> int:
         plan = plan_text(args.repo, args.ref, args.mirserver, site, args.site_none,
                          args.work_dir, args.target_dir, args.seed, args.view_range,
                          stale=rep.build_source_stale, site_note=site_note, pass_a_dir=args.pass_a_dir,
-                         bin_missing=bin_missing)
+                         bin_missing=bin_missing, site_map=site_map,
+                         site_none_map=site_none_map)
         print(plan)
-        conf_probs = plan_conformance(plan, args.repo, args.check_dir, args.mirserver)
+        conf_probs = plan_conformance(plan, args.repo, args.check_dir, args.mirserver,
+                                      site=site, site_map=site_map,
+                                      site_none=args.site_none, site_none_map=site_none_map)
         for p in conf_probs:
             print("RED " + p)
         conf_label = "RED" if conf_probs else "GREEN"
