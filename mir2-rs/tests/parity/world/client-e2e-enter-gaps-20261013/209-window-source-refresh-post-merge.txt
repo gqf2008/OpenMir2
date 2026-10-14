@@ -1,0 +1,208 @@
+209-window-source-refresh-post-merge.txt —— 卡 `openmir2-client-e2e-enter-gaps` ③ 窗口构建源
+**post-merge 刷新**（片㊽ `d100038b9` + 片㊾ `cd6374407` 合入 master `5e757b025` 后 R6 RED 收口）
+m2-svr / openmir2-worker-11 / 2026-10-14（零起栈、零游戏端口，仅共享 3306 只读；不 merge、不自签）
+base = `origin/master` = `5e757b02527aee53535130ac43a829ff1d7bc353`（= walgit/master，双端一致）
+====================================================================================================
+
+# 0) 一句话
+
+卡 `openmir2-client-e2e-enter-gaps` 合入 master（`5e757b025`）后，**专用窗口构建源
+`E:/tmp/m2svr-window-origin` 落后了一格**：片㊾ 在 `mir2-rs/bins/game-svr/src/main.rs` 有一条
+**纯注释**订正（字段注释「默认关」→「默认开（未设 = client-58）」）⇒ `check_rust_window_preflight.py`
+的 **R6（构建源必须是当前基线）** 由 GREEN 转 **RED**（1 件生产路径差），`window_handoff.py` 的
+`WINDOW_READY` 会打 **NO** ⇒ root 开窗前的聚合门失败、白烧一次性窗口（R6 的用途就是堵「测旧件」）。
+
+修：把专用源刷新到 master `5e757b025` + 重编译六件（只 `game-svr.exe` 重链）+ **重录出处清单**（R7）
+⇒ `check_rust_window_preflight.py` **R1..R7 全 OK / RESULT: GREEN rc=0**；聚合门（入库逐字替身脚本口径）
+**WINDOW_READY=YES / GREEN rc=0**。
+
+**仍归 root 的两步（未变）**：① 把活脚本 `E:/tmp/openmir2-watch/client-e2e-window.sh` 换成入库替身
+（仅 `repo=`/`tgt=` 两行 diff）；② 起栈后跑卡级 R 真机 ①②③（含一次升级/换装步，见 197 §判级）。
+
+# 1) 缺陷：片㊾ 合入后 R6 转 RED（现场读数，刷新前）
+
+命令（cwd = 本证据目录；`--provenance E:/tmp/m2svr-window-target/window-provenance.json`）：
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer \
+      --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-window-target/window-provenance.json
+```
+原始输出（刷新前，`HEAD` = `81f9d8f551`）：
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R7 出处清单 window-provenance.json source_head=81f9d8f551，6 件 exe sha256 逐字节一致
+RED R6: 构建源 HEAD=81f9d8f551 落后于基线 origin/master@5e757b0252 的生产路径（1 件：mir2-rs/bins/game-svr/src/main.rs）⇒ 窗口会测旧件，先 `fetch` + `checkout --detach <基线>` + 重编译
+RESULT: RED
+rc=1
+
+那一件 = 片㊾ 的纯注释订正（机判：`git diff --stat` = `1 file changed, 1 insertion(+), 2 deletions(-)`）：
+```
+$ git -C E:/tmp/m2svr-window-origin diff --name-only 5e757b025 81f9d8f55 \
+      -- mir2-rs/bins mir2-rs/crates mir2-rs/Cargo.toml mir2-rs/Cargo.lock src sql
+mir2-rs/bins/game-svr/src/main.rs
+
+$ git -C E:/tmp/m2svr-window-origin diff 5e757b025 81f9d8f55 -- mir2-rs/bins/game-svr/src/main.rs
+@@ -6995,8 +6995,7 @@
+                                                             bag_items: d.bag_items.as_deref(),
+                                                             gold: d.gold,
+                                                             // 帧 52 尾的冻结客户端 58B `TAbility` 布局；
+-                                                            // 默认开（未设 = client-58；`MIR2_CLIENT_ABILITY_LAYOUT=0`
+-                                                            // 才 oracle 逐字节，见该字段文档与
++                                                            // 默认关（未设 = oracle 逐字节，见该字段文档与
+                                                             // `openmir2-client-e2e-enter-gaps` 的 owner 裁决）。
+```
+（方向：`5e757b025 → 81f9d8f55`；即旧源 `81f9d8f55` 里这句注释仍是**错的**「默认关」，
+片㊾ O-1 已订正为「默认开（未设 = client-58）」。R6 不区分注释/行为，只按生产路径 diff 判 ⇒ RED。）
+
+# 2) 修（离线；只动 E:/tmp 专用源 / target，仓内零 .rs）
+
+```
+$ git -C E:/tmp/m2svr-window-origin fetch walgit 'master:refs/remotes/origin/master' --force
+$ git -C E:/tmp/m2svr-window-origin rev-parse origin/master
+5e757b02527aee53535130ac43a829ff1d7bc353
+$ git -C E:/tmp/m2svr-window-origin checkout --detach origin/master
+HEAD is now at 5e757b025 Merge cd6374407 (enter-gaps-window-dense-menu): ...
+
+$ cd E:/tmp/m2svr-window-origin/mir2-rs
+$ CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=E:/tmp/m2svr-window-target \
+    cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv
+   Compiling game-svr v0.1.0 (E:\tmp\m2svr-window-origin\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.12s        # rc=0
+
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer --target-dir E:/tmp/m2svr-window-target \
+      --record-provenance E:/tmp/m2svr-window-target/window-provenance.json
+R7_PROVENANCE_RECORDED source_head=5e757b02527aee53535130ac43a829ff1d7bc353 bins=6 -> E:/tmp/m2svr-window-target/window-provenance.json
+```
+
+# 3) AFTER：R1..R7 全 OK / RESULT: GREEN（原始输出，逐字）
+
+命令同 §1（`--provenance` 复跑）：
+```
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=5e757b0252 == 基线 origin/master@5e757b0252
+[OK] R7 出处清单 window-provenance.json source_head=5e757b0252，6 件 exe sha256 逐字节一致
+RESULT: GREEN
+```
+
+# 4) 聚合门（`window_handoff.py`，G1..G5）
+
+## 4a) 入库逐字替身脚本口径 ⇒ WINDOW_READY=YES / GREEN rc=0
+```
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target --window-script ./client-e2e-window.fixed.sh.txt
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R7）
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+```
+
+## 4b) root 现活脚本口径（默认，未换替身）⇒ 仍 RED（G5，归 root；本片不改）
+```
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R7）
+RED G5 窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 指向**共享主检出**（E:/Users/gxh/Documents/GitHub/OpenMir2，rev 车道工作区） ⇒ 直接跑它会构建另一棵树（白烧窗口）
+RED G5 窗口脚本 tgt=E:\tmp\openmir2-merge-target != 本计划 --target-dir=E:/tmp/m2svr-window-target ⇒ 会从另一份（可能过期的）exe 起栈，判据读数对不上构建源
+WINDOW_READY=NO
+RESULT: RED
+```
+
+# 5) 重编译后可复核读数
+
+## 5a) 六件 exe sha256（`E:/tmp/m2svr-window-target/debug/`）
+```
+15fb1f25af19ee719501eed4406805ab49c2bb6d26dd0522f6a7f33bd5eaf771 *E:/tmp/m2svr-window-target/debug/db-srv.exe
+146fb23cd841b089d60738873fbb210489efeee36756743ef95ff6875645735e *E:/tmp/m2svr-window-target/debug/game-gate.exe
+f6163ab581054dc8b3b19be481901d80db3ed2d2fb3629d6597468158aa3bf58 *E:/tmp/m2svr-window-target/debug/game-svr.exe
+78c7dac971d93e51f9be874f82ef1fc8b9a51a656bf7473ad6efddf4251622d3 *E:/tmp/m2svr-window-target/debug/login-gate.exe
+daa1ba949478d98ec31c8becabcff6853ea64f98be56dd25d8e57673274a0068 *E:/tmp/m2svr-window-target/debug/login-srv.exe
+741ea627cd1cd65578dfc567130245dfd7f953d6eab5ea31acf67cc79d08accd *E:/tmp/m2svr-window-target/debug/sel-gate.exe
+```
+注：本次只有 `game-svr.exe` 重链（mtime `19:51:03`；上一版 `d4228c00…` → 现 `f6163ab5…`），其余 5 件本次**未重链**（mtime 仍 `07:43:0x`，与刷新前逐字节相同）。
+
+## 5b) 出处清单（`E:/tmp/m2svr-window-target/window-provenance.json`）
+```
+{
+ "bins": {
+  "db-srv.exe": {
+   "bytes": 84322707,
+   "sha256": "15fb1f25af19ee719501eed4406805ab49c2bb6d26dd0522f6a7f33bd5eaf771"
+  },
+  "game-gate.exe": {
+   "bytes": 29233601,
+   "sha256": "146fb23cd841b089d60738873fbb210489efeee36756743ef95ff6875645735e"
+  },
+  "game-svr.exe": {
+   "bytes": 135600776,
+   "sha256": "f6163ab581054dc8b3b19be481901d80db3ed2d2fb3629d6597468158aa3bf58"
+  },
+  "login-gate.exe": {
+   "bytes": 27939672,
+   "sha256": "78c7dac971d93e51f9be874f82ef1fc8b9a51a656bf7473ad6efddf4251622d3"
+  },
+  "login-srv.exe": {
+   "bytes": 82221827,
+   "sha256": "daa1ba949478d98ec31c8becabcff6853ea64f98be56dd25d8e57673274a0068"
+  },
+  "sel-gate.exe": {
+   "bytes": 27918761,
+   "sha256": "741ea627cd1cd65578dfc567130245dfd7f953d6eab5ea31acf67cc79d08accd"
+  }
+ },
+ "source_head": "5e757b02527aee53535130ac43a829ff1d7bc353",
+ "target_dir": "E:\\tmp\\m2svr-window-target",
+ "version": 1
+}
+```
+
+# 6) 未做 / 边界（不静默）
+
+- **卡级 R 真机 ①②③**（压血进图 HUD/`CM_RUN`、world tick 实体、两侧同点对照；含一次升级/换装步）
+  仍归 **root 独占窗口**；本片只把「开窗前的构建源硬前置」从 R6-RED 固化成 R1..R7/聚合门 GREEN。
+- **G5（root 活脚本未换入库替身）** 仍 RED —— 按既定口径归 root 开窗前置（本片只读核对，未改活脚本）。
+- **O-3**（`52→58B` / `53→12B` 的 §6.0-3 白名单登记 + owner 签字）属 owner 裁决面，未做。
+- 边界：本片只新增本证据目录 4 件 + `README.md` + `SHA256SUMS.txt`；**零 `.rs`/`.toml`/`.py`/`.ps1`**；
+  冻结面 `src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/` 空。
+- 纪律：零起栈、零游戏端口（3306 为共享 MySQL，只读）；未 merge、未自签 review；共享主检出未触碰。
+
+# 7) 涉及文件
+
+  新增：本文件 + `210-redcheck-window-source-refresh.txt` + `211-gates.txt` + `212-boundary.txt`
+  仓外（可复算）：`E:/tmp/m2svr-window-origin`（源，detached `5e757b025`）
+                `E:/tmp/m2svr-window-target`（暖 target + `window-provenance.json`）
+                `E:/tmp/m2svr-burst20/*.txt`（本片原始件：before/after/redcheck/gates/handoff）

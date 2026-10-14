@@ -1,0 +1,35 @@
+211-gates.txt —— 四门禁 + 证据清单门（卡 `openmir2-client-e2e-enter-gaps` 片㊿）
+m2-svr / openmir2-worker-11 / 2026-10-14；cwd = `mir2-rs`；隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-target`
+base = `origin/master` = `5e757b02527aee53535130ac43a829ff1d7bc353`
+本片**零 `.rs`**（只新增本证据目录 4 件 + README + SHA256SUMS）⇒ 四门禁按基线复跑。
+====================================================================================================
+
+[1] fmt
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo fmt --all -- --check
+rc=0
+
+[2] clippy
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.47s
+rc=0
+
+[3] test
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test --workspace --no-fail-fast --offline -- --test-threads=16
+  test result 汇总：101 suites / 1232 passed / 0 failed / 22 ignored
+rc=0
+
+[4] msgcodegen
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo run -q -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+（原始整份输出：`E:/tmp/m2svr-burst20/211a-fmt.txt` / `211b-clippy.txt` / `211c-test.txt` / `211d-msgcodegen.txt`）
+
+[5] 证据清单门（SHA256SUMS，LF/git-blob 口径）—— 最终态（本文件写入后由 `write` 重记、再复跑）
+$ python tools/evidence-hash/verify_sha256sums.py verify mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013 --check-extra
+GREEN mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK 218/218
+rc=0
+$ python tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+EOLCHECK GREEN 219/219 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
+（改坏必红见 `210` §M3：清单一条 hash 改零 ⇒ RED 217/218 rc=1，还原 ⇒ GREEN 218/218 rc=0）
