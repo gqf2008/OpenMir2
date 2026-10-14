@@ -1,0 +1,47 @@
+01-change-summary.txt —— 改动摘要（M3 夹具卫生片；零 .rs）
+
+卡：openmir2-m3-rng-trace-scene-groups（lane m3bag / openmir2-worker-4）
+base：origin/master 6dba8719d（merge --ff-only a4058a19a -> 6dba8719d）
+写集：mir2-rs/tests/parity/m3/**（零 .rs；冻结面 src/ sql/ MirClient/ crates/protocol crates/storage bins 空）
+
+## 缘起（同族坑 + 真身缺陷）
+
+1. 同族：`rng-trace-probe/rng_consumer_groups.py` 早已把「`oracle_ref` 指向不存在源码 / 行号越界」
+   钉成 fail-closed（其注释记了真身缺陷：一条 ref 曾写错目录前缀而静默通过）。但本卡 ④ 侧的
+   **唯一真源** `drop-exp/drop_exp_consumers.tsv` 的 `oracle_ref` 列**只被读取、从未校验** ⇒ 同一族
+   缺口在本表复现（`run_drop_exp_pair.ps1` / `fixture_chain_gate.py` / `drop_exp_purity_gate.py` 均无该牙）。
+2. 真身：人复核本表时发现 `RegenMonsters` 行（第 46 行）的 `oracle_ref` 写
+   `src/GameSrv/Word/WorldServer.MonGen.cs:238`，而该行文本是 `}`，实际落在
+   `private void ProcessMonsters(MonsterThread ...)`（@192）里；`RegenMonsters` 声明在 **`:811`**
+   （方法体 811-878）。⇒ 只查「文件存在 + 行号在范围」抓不到它（238 在范围内），必须加**语义**牙。
+
+## 改动
+
+- `drop-exp/drop_exp_purity_gate.py`：
+  * 新增 `REPO_ROOT` + `resolve_oracle_ref_path` / `oracle_ref_line` / `validate_oracle_refs`：
+    `oracle_ref` 存在性 + 行号范围（与 `rng_consumer_groups.validate_oracle_refs` 同口径）。
+  * 新增 `check_oracle_ref_methods`（**语义牙**）：C# 行的 ref 必须落在其 `pattern` 点名的
+    `Class.Method` 方法体内；用剥字符串/字符/注释后的花括号匹配求方法体 range；`pattern` 抽不出
+    方法名 ⇒ 跳过（不可判，保守不误伤）；抽得出但 ref 不在任一同名方法体内 ⇒ 点名 RED（fail-closed）。
+  * `check_oracle_refs` = 上述两者合并；接入 `selftest` 新增 5 条（真表保鲜 + 4 条改坏/真身）。
+  * `selftest` 16→**28** 条（原 23 + 新 5）。
+- `drop-exp/drop_exp_consumers.tsv`：第 46 行 `oracle_ref` `MonGen.cs:238` → **`MonGen.cs:811`**
+  （与同表 `Wondering` 行「ref = 方法声明行」口径一致）。
+- `drop-exp/README.md`：判据新增第 7 条（锚点保鲜）、文件表注明、命令期望 23/23 → 28/28。
+
+## 判据
+
+- `drop_exp_purity_gate.py selftest` = **28/28 GREEN**（含真表 `oracle-refs-fresh` = []）。
+- 改坏必红（真表，本片真身）：`:811` → `:238` ⇒ `oracle-refs-fresh` FAIL 且点名
+  `行46(csharp/wallclock): oracle_ref 行 238 不在 `RegenMonsters` 方法体内（range=[(811, 878)]…）`，rc=1；
+  还原 ⇒ 28/28 rc=0。
+- 四门禁：fmt 0 / clippy 0(-D warnings) / 101 suites 1205 passed 0 failed 22 ignored / msgcodegen 604。
+- 零 .rs、零起栈、零端口；共享主检出未动；未 merge、未自签 review。
+
+## 未做（如实登记）
+
+- Rust 侧 `measured`/`setup` 行仍是**文件级**前缀锚（`#[track_caller]` 世界层调用点）——
+  reviewer-5 `108fc72b` O-1 明示为**窗口期/④ 侧**按 `attack_sites.tsv` 行级锚收紧；本片不动
+  （真机实测前收紧会误判窗口站点集合，风险 > 收益）。
+- 卡级 R 真机 DoD（同场景含怪两相 trace + groupdiff --fold --strict site/order diff=0）仍待
+  承接卡 `openmir2-m3-rng-scene-driver` + owner 独占窗口。

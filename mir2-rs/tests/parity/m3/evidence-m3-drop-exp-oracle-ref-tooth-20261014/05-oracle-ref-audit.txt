@@ -1,0 +1,27 @@
+table = mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv
+审计：每条 csharp 行的 oracle_ref 行号；期望 = 落在其 pattern 点名的 Class.Method 方法体内。
+
+| # | class | pattern 方法 | oracle_ref | 行内容 | 方法体 range | 结论 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | measured | MonGetRandomItems | `WorldServer.MonGen.cs:439` | `private void MonGetRandomItems(IMonsterActor mon)` | [(439, 492)] | OK |
+| 2 | measured | GetAttackPower | `BaseObject.Base.cs:886` | `public virtual int GetAttackPower(int basePower, int` | [(886, 902)] | OK |
+| 3 | measured | GetAttackPower | `PlayObject.cs:2929` | `result = nBasePower + M2Share.RandomNumber.Random(nP` | [(2909, 2952)] | OK |
+| 4 | measured | _Attack | `BaseObject.Attack.cs:41` | `if (HitPoint < M2Share.RandomNumber.RandomByte(targe` | [(13, 17), (30, 66)] | OK |
+| 5 | measured | GetHitStruckDamage | `BaseObject.Base.cs:792` | `int nRnd = HUtil32.LoByte(WAbil.AC) + M2Share.Random` | [(789, 810)] | OK |
+| 6 | measured | StruckDamage | `PlayObject.cs:2957` | `ushort nDam = (ushort)(M2Share.RandomNumber.Random(1` | [(2954, 3036)] | OK |
+| 7 | measured | AttackSuccess | `PlayObject.Attack.cs:225` | `ushort nWeaponDamage = (ushort)(M2Share.RandomNumber` | [(215, 338)] | OK |
+| 8 | setup | CreateMonster | `WorldServer.MonGen.cs:498` | `private IMonsterActor CreateMonster(string sMapName,` | [(498, 804)] | OK |
+| 9 | setup | InitializeMonster | `WorldServer.MonGen.cs:66` | `int threadId = M2Share.RandomNumber.Random(SystemSha` | [(30, 117)] | OK |
+| 10 | setup | BaseObject | `BaseObject.cs:438` | `ObMode = false;` | [(371, 464)] | OK |
+| 11 | setup | AnimalObject | `AnimalObject.cs:75` | `Race = ActorRace.Animal;` | [(72, 87)] | OK |
+| 12 | setup | PlayObject | `PlayObject.cs:1046` | `MapMoveTick = HUtil32.GetTickCount();` | [(870, 1048)] | OK |
+| 13 | wallclock | Wondering | `AnimalObject.cs:425` | `protected virtual void Wondering()` | [(425, 440)] | OK |
+| 14 | wallclock | RegenMonsters | `WorldServer.MonGen.cs:811` | `private bool RegenMonsters(MonGenInfo monGen, int nC` | [(811, 878)] | OK |
+| 15 | wallclock | Run | `Merchant.cs:132` | `if (M2Share.RandomNumber.Random(50) == 0)` | [(112, 171)] | OK |
+
+csharp 行 = 15；RED = 0
+
+本片真身（fix 前）：`RegenMonsters` 行 oracle_ref 写 `WorldServer.MonGen.cs:238`，
+该行落在 `ProcessMonsters`（`private void ProcessMonsters(MonsterThread ...)` @192）里，
+而 `RegenMonsters` 声明在 `:811`（方法体 811-878）⇒ 人复核会找空。
+fix：`:238` → `:811`（与同表 `Wondering` 行「ref = 方法声明行」口径一致）。

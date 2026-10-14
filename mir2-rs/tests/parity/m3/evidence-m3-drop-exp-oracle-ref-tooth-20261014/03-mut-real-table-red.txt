@@ -1,0 +1,17 @@
+改坏必红（真表）：把本片修正的 `RegenMonsters` 行 oracle_ref 从 :811 改回错值 :238，
+门的 oracle_ref 保鲜牙必须判红且点名——只查「文件存在 + 行号范围」抓不到它（238 在范围内）。
+
+### 1) BEFORE（修正值 :811）
+SELFTEST ok oracle-refs-fresh expect=[] got=[]
+SELFTEST ok=28/28
+rc=0
+
+### 2) MUTATED（真身错值 :238，改坏）
+SELFTEST FAIL oracle-refs-fresh expect=[] got=['行46(csharp/wallclock): oracle_ref 行 238 不在 `RegenMonsters` 方法体内（range=[(811, 878)]；ref=src/GameSrv/Word/WorldServer.MonGen.cs:238）']
+SELFTEST ok=27/28
+rc=1
+
+### 3) RESTORED（:811）
+SELFTEST ok oracle-refs-fresh expect=[] got=[]
+SELFTEST ok=28/28
+rc=0
