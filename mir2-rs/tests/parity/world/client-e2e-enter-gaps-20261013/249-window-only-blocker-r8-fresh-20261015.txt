@@ -1,0 +1,85 @@
+249 — 窗口就绪 fresh：唯一剩余阻塞 = R8「窗口槽位」（泄漏的修复前栈）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `ea2322d04`（= 本线 head `22ffb91e1` 的 merge）；head = 本片提交（证据-only）
+====================================================================================================
+
+# 0) 本片要回答什么
+
+brief 顶部（root 2026-10-14 15:0x）的离线四项（二分 / 修 / 改坏必红 / ③）在片㊽㊾㊿、§55..§59
+已闭环并入 master；片60（§59）把「`WINDOW_READY=YES` 却跑着修复前栈」收成 R8 fail-closed。
+本片**独立重读**开窗就绪（不采信上一 burst 自述），回答一个问题：**现在开窗还差什么。**
+
+结论：**只差 R8 一条** —— 其余 R1..R7 全 GREEN；把入库替身脚本换上去后 G5 也 GREEN，
+`WINDOW_READY=NO` 的唯一原因就是泄漏栈仍占 9 个游戏端口。
+
+# 1) 前置门 fresh（真探 + 出处清单；只读，零起栈 / 零端口 / 零 kill）
+
+命令（cwd = 本卡证据目录）：
+
+  python -I -B check_rust_window_preflight.py \
+    --repo E:/tmp/m2svr-window-origin \
+    --target-dir E:/tmp/m2svr-window-target \
+    --provenance E:/tmp/m2svr-window-target/window-provenance.json
+
+读数（原始件 `E:/tmp/m2svr-burst-b54/preflight-real-r7.txt`）：
+
+  [OK] R1 构建源 E:/tmp/m2svr-window-origin 含修复提交 d16b5199d9（片⑪ AOI vr/new/af）
+  [OK] R1 ... 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）
+  [OK] R1 ... c61b9627a1（片㊴ 53 SM_HEALTHSPELLCHANGED TCharDesc 尾）
+  [OK] R1 ... 6cadc9fbf9（片㊼ 52 SM_ABILITY 调用点布局全覆盖）
+  [OK] R1 ... fd68e037db（片31 SM_STRUCK 客户端布局 / HIGHHP 家族）  （五条全 --is-ancestor=YES）
+  [OK] R2 源码含 ③ 读数标记（版式 vr= vis= new= af=）
+  [OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+  [OK] R4 (291,666)/(291,651) --expect outside rc=0 ; (289,618)/(287,620) --expect inside rc=0
+  [OK] R5 判据工具齐备（4 件）
+  [OK] R6 构建源 HEAD=da2df1fdbd 相对基线 origin/master@ea2322d044 生产路径零差异
+  [OK] R7 出处清单 window-provenance.json source_head=da2df1fdbd，6 件 exe sha256 逐字节一致
+  RED  R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 30284), 5100(pid 33132),
+            5500(pid 29240), 5600(pid 29240), 5700(pid 33132), 6000(pid 33132),
+            7000(pid 9100), 7100(pid 13052), 7200(pid 34944)
+  RED  R8: 在跑的 game-svr.exe（pid 30284）来自 E:\tmp\openmir2-merge-target\debug\game-svr.exe，
+            不是本计划 E:/tmp/m2svr-window-target\debug\game-svr.exe
+  RESULT: RED   rc=1
+
+# 2) 聚合门 fresh（两条路各跑一次；原始件 `E:/tmp/m2svr-burst-b54/handoff-aggregate*.txt`）
+
+A) 默认（= root 现活脚本 `/e/tmp/openmir2-watch/client-e2e-window.sh`）：
+
+  RED G1 Rust 窗口前置门 RED（构建源/读数标记/窗口槽位任一不符）
+  RED G5 窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 指向**共享主检出**
+  RED G5 窗口脚本 tgt=E:\tmp\openmir2-merge-target != 本计划 --target-dir=E:/tmp/m2svr-window-target
+  WINDOW_READY=NO   rc=1
+
+B) 换入库替身脚本 `client-e2e-window.fixed.sh.txt`（`--window-script client-e2e-window.fixed.sh.txt`）：
+
+  OK  G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+  OK  G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+  RED G1 Rust 窗口前置门 RED（唯一原因 = R8，见 §1）
+  WINDOW_READY=NO   rc=1
+
+⇒ 归因：**换掉活脚本后，唯一的开窗阻塞是 R8 = 泄漏的修复前栈仍占 9 端口。**
+
+# 3) 替身源 / 共享主检出对照（为什么活脚本会白烧窗）
+
+- 共享主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2` HEAD = `8e491f81e`（2026-10-14 12:14），
+  三片修复 `c61b9627a` / `6cadc9fbf` / `fd68e037d` 的 `--is-ancestor = NO`
+  ⇒ 活脚本 `repo=` 指向它 = 会构建/使用**修复前** exe。
+- 替身源 `E:/tmp/m2svr-window-origin` HEAD = `da2df1fdbd`，R1/R6/R7 全 OK（`preflight-real-r7.txt`）。
+- 活脚本 sha256 = `0567f89e5a8f82305dd75c50d8d150c86d72cd7e4efd0da52e431608756aacec`；
+  入库替身 sha256 = `ab2ee6f3a0784a26f47f20bc083b71cceea432dfa6be418f4d25647950845249`
+  （两者只差 `repo=`/`tgt=` 两行；见 `139-window-build-source-fixed-script.txt`）。
+
+# 4) 判据工具自检（fresh）
+
+  python -I -B check_rust_window_preflight.py --selftest   ⇒ SELFTEST OK (57/57)
+  python -I -B window_handoff.py --selftest                ⇒ SELFTEST OK (107/107)
+
+# 5) 判级与结论
+
+- 判级 L（只读机判 + 文档，零生产代码；零 `.rs`/`.toml`/`.ps1`/`.cs`）。
+- 卡级 **R** 真机 ①②③（HUD 血/体力非 0 / `CM_RUN>0` / 同屏有怪）仍归 **root 独占窗口**。
+- 上一 burst（b53）的「无离线代码缺口」结论**复核成立**。本片**新增**的只是
+  「唯一剩余阻塞 = R8」的机器判据（本文）+ 泄漏栈**可安全停止**的可验证证据与 step0 命令（`250`）。
+- root 侧剩余动作（按序）：① 跑 `250` 的 step0 停泄漏栈（或授权本车道跑）→
+  ② 把活脚本换成替身 → ③ 跑 `249` §4 两条门确认 `WINDOW_READY=YES` → ④ 开窗。
+  owner 侧剩余：O-3 HIGHHP 家族白名单签字。

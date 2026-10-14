@@ -1,0 +1,65 @@
+252 — 四门禁 + 机判读数（本片：窗口唯一剩余阻塞 = R8 + step0 停泄漏栈）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `ea2322d04`；cwd = mir2-rs；CARGO_TARGET_DIR=/e/tmp/m2svr-target
+====================================================================================================
+
+# 0) 边界声明
+
+本片**零生产代码**：无 `.rs`/`.toml`/`.ps1`/`.cs`；`src/ sql/ MirClient/ mir2-rs/crates/protocol/
+mir2-rs/crates/storage/ mir2-rs/bins/` 全空。改动 = 本卡证据目录内 7 件（5 新增证据 + README + SHA256SUMS）。
+`cargo test --workspace` 读数与 base 一致（无新增/删除用例）。
+
+# 1) 四门禁（cwd = mir2-rs，CARGO_TARGET_DIR=/e/tmp/m2svr-target）
+
+$ cargo fmt --all -- --check
+rc=0（无输出）
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.83s
+rc=0
+
+$ cargo test --workspace --offline
+101 result-lines：1233 passed / 0 failed / 22 ignored（rc=0；无 FAILED）
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+# 2) 判据工具自检（fresh；原始件 `E:/tmp/m2svr-burst-b54/selftests.txt`）
+
+$ python -I -B check_rust_window_preflight.py --selftest   ⇒ SELFTEST OK (57/57)
+$ python -I -B window_handoff.py --selftest                ⇒ SELFTEST OK (107/107)
+
+# 3) 窗口就绪机判 fresh（只读；详见 249）
+
+真探 + 出处清单（`--repo E:/tmp/m2svr-window-origin --target-dir E:/tmp/m2svr-window-target
+--provenance E:/tmp/m2svr-window-target/window-provenance.json`）：
+  R1（5 修复提交）OK / R2 OK / R3 OK / R4（4 点）OK / R5 OK / R6 OK / R7 OK
+  RED R8 ×2：9 端口 LISTENING（5000/5100/5500/5600/5700/6000/7000/7100/7200）
+             + 在跑 game-svr.exe(pid 30284) 来自 E:\tmp\openmir2-merge-target\debug\（异源）
+  RESULT: RED   rc=1
+
+聚合门（替身脚本 `client-e2e-window.fixed.sh.txt`）：G5 ×2 OK、G1 RED（唯一原因 = R8）、
+`WINDOW_READY=NO` rc=1。活脚本（repo= 共享主检出）另有 G5 ×2 RED。
+
+# 4) 反向对照 / 改坏必红（详见 251）
+
+- 注入探针「全空闲」⇒ RESULT: GREEN rc=0；「5000 + 修复前 exe」⇒ RED rc=1；「坏 JSON」⇒ PREREQ_RED rc=2。
+- 片60 BEFORE（无 R8）：同机同源同脚本 ⇒ 真探 GREEN 且 WINDOW_READY=YES（假绿，见 246）；
+  工具层 MUT-A 强制绿 ⇒ selftest FAILED (53/57) + 真探回落假 GREEN（见 245 §6）。
+⇒ R8 判定由真实槽位驱动，去掉 R8 必然在泄漏栈在位时假绿。
+
+# 5) 纪律
+
+- 零起栈、零占端口；**未执行任何 Stop/kill**（泄漏栈属 root，等授权或 root 自跑 step0 `250`）；
+  共享 3306 未连接。未动共享主检出 / root 活脚本 / 泄漏栈；未 merge、未自签 review。
+- 判级 L（只读机判 + 文档）；卡级 R 真机 ①②③ 归 root 独占窗口。
+
+# 6) 证据清单口径（LF / git-blob）
+
+$ python -I tools/evidence-hash/verify_sha256sums.py verify <dir>
+GREEN ... OK 260/260
+$ python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra --exclude '__pycache__/*' <dir>
+GREEN ... OK 260/260（无多件）
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck <dir>
+EOLCHECK GREEN 263/263 件文本证据与仓库口径（LF）在 EOL 上一致

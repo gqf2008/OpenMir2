@@ -1486,3 +1486,26 @@ burst53 对 head 项 ① 的修复链（53 `TCharDesc` 尾 / 52 58B `TAbility` /
   mir2-rs/crates/protocol/ mir2-rs/crates/storage/ mir2-rs/bins/` 空；零 `.rs`/`.toml`/`.ps1`/`.cs`；
   未动共享主检出 / root 活脚本 / 泄漏栈；未 merge、未自签。
   四门禁/机判读数见 `247-gates.txt`，边界/冻结面见 `248-boundary.txt`。
+
+### 60) 开窗就绪 fresh：**唯一剩余阻塞 = R8**（泄漏的修复前栈）+ step0 停栈与安全性核验（2026-10-15，tag `m2svr`）—— `249`/`250`/`251`
+
+brief 顶部（root 2026-10-14 15:0x）的离线四项早已闭环（§㊽㊾㊿/§55..§59，片60 建了 R8）。本片**独立重读**
+（不采信上一 burst 自述）只得到一个结论：**现在开窗只差 R8 一条**。
+
+- **前置门 fresh**（真探 + 出处清单，`249` §1）：R1（5 修复提交）/R2/R3/R4（4 点）/R5/R6/R7 **全 OK**；
+  **R8 RED ×2** —— 9 个游戏端口仍被 `stack2`（2026-10-14 14:55 起、修复前 `merge-target` exe）占着。
+- **聚合门 fresh**（`249` §2）：活脚本（`repo=` 指共享主检出 `8e491f81e`）⇒ `WINDOW_READY=NO`（G1 + G5×2）；
+  **换上入库替身脚本** ⇒ G5 ×2 转 OK、`WINDOW_READY=NO` 的唯一原因 = **R8**。
+- **step0（可原样照抄）**（`250`）：`start_rust_stack.ps1 -LogDir E:/tmp/client-e2e/stack2 -Stop`。
+  只读核验：`stack2/rust-stack.pid.json` **在位**（6 条 pid；R8 打印的正是这台）；9 端口 `ESTABLISHED`
+  **全是栈内互联**（gate↔game-svr↔DBSrv/LoginSrv），无外部/本地客户端（`MirOld.dat` 不在其中）
+  ⇒ **停它安全**。坑：替身脚本 stop 段用 `-LogDir stack`（≠ 泄漏栈的 `stack2`）⇒ 会 `NOTHING_TO_STOP`。
+- **反向对照/改坏必红**（`251`）：注入探针 全空闲⇒GREEN / 占位⇒RED / 坏 JSON⇒PREREQ_RED；片60 BEFORE 假绿
+  与 MUT-A 见 `245`/`246`。
+- **root 侧剩余**（按序）：① step0 停泄漏栈（或授权本车道跑）→ ② 换活脚本为替身 → ③ 跑 `249` §4 两条门
+  确认 `WINDOW_READY=YES` → ④ 开窗。**owner 侧**：O-3 HIGHHP 家族白名单签字。
+- 判级 **L**（只读机判 + 文档，零生产代码）。卡级 **R** 真机 ①②③ 仍归 root 独占窗口。
+- 边界与纪律：改动 = 本卡证据目录内 7 件（`249`/`250`/`251`/`252`/`253` + README + SHA256SUMS）；
+  冻结面 `src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/ mir2-rs/bins/` 空；
+  零 `.rs`/`.toml`/`.ps1`/`.cs`；零起栈/零端口/**零 kill**；未动共享主检出 / root 活脚本 / 泄漏栈；
+  未 merge、未自签。四门禁/机判读数见 `252-gates.txt`，边界/冻结面见 `253-boundary.txt`。
