@@ -1,0 +1,197 @@
+M3⑨-3 观察者 MsgQueue 出队序 —— .NET 8 PriorityQueue 源摘（dotnet/runtime release/8.0）
+==============================================================================
+文件：src/libraries/System.Collections/src/System/Collections/Generic/PriorityQueue.cs
+取源命令：curl.exe -sS -L -o PQ8.cs \
+  https://raw.githubusercontent.com/dotnet/runtime/release/8.0/src/libraries/System.Collections/src/System/Collections/Generic/PriorityQueue.cs
+本机 sha256：9a1e9145e404166c7a4ee4bc7571cefc192fad813ade835f52ba83c8c36e0365
+说明：oracle 运行时 = net8.0.26（与 reviewer-6 实测同版本）。以下为决定出队序的关键片段。
+
+## Arity = 4 / Log2Arity = 2（4 叉最小堆，不是二叉）
+        /// </summary>
+        private int _version;
+
+        /// <summary>
+        /// Specifies the arity of the d-ary heap, which here is quaternary.
+        /// It is assumed that this value is a power of 2.
+        /// </summary>
+        private const int Arity = 4;
+
+        /// <summary>
+        /// The binary logarithm of <see cref="Arity" />.
+        /// </summary>
+        private const int Log2Arity = 2;
+
+#if DEBUG
+        static PriorityQueue()
+
+## Enqueue（入队 -> MoveUpDefaultComparer）
+        public void Enqueue(TElement element, TPriority priority)
+        {
+            // Virtually add the node at the end of the underlying array.
+            // Note that the node being enqueued does not need to be physically placed
+            // there at this point, as such an assignment would be redundant.
+
+            int currentSize = _size;
+            _version++;
+
+            if (_nodes.Length == currentSize)
+            {
+                Grow(currentSize + 1);
+            }
+
+            _size = currentSize + 1;
+
+            if (_comparer == null)
+            {
+                MoveUpDefaultComparer((element, priority), currentSize);
+            }
+            else
+            {
+                MoveUpCustomComparer((element, priority), currentSize);
+            }
+        }
+
+        /// <summary>
+        ///  Returns the minimal element from the <see cref="PriorityQueue{TElement, TPriority}"/> without removing it.
+
+## RemoveRootNode（出队 -> MoveDownDefaultComparer）
+        private void RemoveRootNode()
+        {
+            int lastNodeIndex = --_size;
+            _version++;
+
+            if (lastNodeIndex > 0)
+            {
+                (TElement Element, TPriority Priority) lastNode = _nodes[lastNodeIndex];
+                if (_comparer == null)
+                {
+                    MoveDownDefaultComparer(lastNode, 0);
+                }
+                else
+                {
+                    MoveDownCustomComparer(lastNode, 0);
+                }
+            }
+
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<(TElement, TPriority)>())
+            {
+                _nodes[lastNodeIndex] = default;
+            }
+        }
+
+        /// <summary>
+        /// Gets the index of an element's parent.
+        /// </summary>
+        private static int GetParentIndex(int index) => (index - 1) >> Log2Arity;
+
+        /// <summary>
+        /// Gets the index of the first child of an element.
+        /// </summary>
+        private static int GetFirstChildIndex(int index) => (index << Log2Arity) + 1;
+
+        /// <summary>
+        /// Converts an unordered list into a heap.
+        /// </summary>
+        private void Heapify()
+        {
+            // Leaves of the tree are in fact 1-element heaps, for which there
+            // is no need to correct them. The heap property needs to be restored
+            // only for higher nodes, starting from the first node that has children.
+            // It is the parent of the very last element in the array.
+
+            (TElement Element, TPriority Priority)[] nodes = _nodes;
+
+## MoveUpDefaultComparer（严格小于父才上浮）
+        private void MoveUpDefaultComparer((TElement Element, TPriority Priority) node, int nodeIndex)
+        {
+            // Instead of swapping items all the way to the root, we will perform
+            // a similar optimization as in the insertion sort.
+
+            Debug.Assert(_comparer is null);
+            Debug.Assert(0 <= nodeIndex && nodeIndex < _size);
+
+            (TElement Element, TPriority Priority)[] nodes = _nodes;
+
+            while (nodeIndex > 0)
+            {
+                int parentIndex = GetParentIndex(nodeIndex);
+                (TElement Element, TPriority Priority) parent = nodes[parentIndex];
+
+                if (Comparer<TPriority>.Default.Compare(node.Priority, parent.Priority) < 0)
+                {
+                    nodes[nodeIndex] = parent;
+                    nodeIndex = parentIndex;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            nodes[nodeIndex] = node;
+        }
+
+
+## MoveDownDefaultComparer（4 个孩子里取首个最小者；末元素 <= 选中子时停）
+        private void MoveDownDefaultComparer((TElement Element, TPriority Priority) node, int nodeIndex)
+        {
+            // The node to move down will not actually be swapped every time.
+            // Rather, values on the affected path will be moved up, thus leaving a free spot
+            // for this value to drop in. Similar optimization as in the insertion sort.
+
+            Debug.Assert(_comparer is null);
+            Debug.Assert(0 <= nodeIndex && nodeIndex < _size);
+
+            (TElement Element, TPriority Priority)[] nodes = _nodes;
+            int size = _size;
+
+            int i;
+            while ((i = GetFirstChildIndex(nodeIndex)) < size)
+            {
+                // Find the child node with the minimal priority
+                (TElement Element, TPriority Priority) minChild = nodes[i];
+                int minChildIndex = i;
+
+                int childIndexUpperBound = Math.Min(i + Arity, size);
+                while (++i < childIndexUpperBound)
+                {
+                    (TElement Element, TPriority Priority) nextChild = nodes[i];
+                    if (Comparer<TPriority>.Default.Compare(nextChild.Priority, minChild.Priority) < 0)
+                    {
+                        minChild = nextChild;
+                        minChildIndex = i;
+                    }
+                }
+
+                // Heap property is satisfied; insert node in this location.
+                if (Comparer<TPriority>.Default.Compare(node.Priority, minChild.Priority) <= 0)
+                {
+                    break;
+                }
+
+                // Move the minimal child up by one node and
+                // continue recursively from its location.
+                nodes[nodeIndex] = minChild;
+                nodeIndex = minChildIndex;
+            }
+
+            nodes[nodeIndex] = node;
+        }
+
+        /// <summary>
+        /// Moves a node down in the tree to restore heap order.
+        /// </summary>
+        private void MoveDownCustomComparer((TElement Element, TPriority Priority) node, int nodeIndex)
+        {
+            // The node to move down will not actually be swapped every time.
+            // Rather, values on the affected path will be moved up, thus leaving a free spot
+            // for this value to drop in. Similar optimization as in the insertion sort.
+
+            Debug.Assert(_comparer is not null);
+            Debug.Assert(0 <= nodeIndex && nodeIndex < _size);
+
+            IComparer<TPriority> comparer = _comparer;
+            (TElement Element, TPriority Priority)[] nodes = _nodes;
+            int size = _size;
+
+            int i;

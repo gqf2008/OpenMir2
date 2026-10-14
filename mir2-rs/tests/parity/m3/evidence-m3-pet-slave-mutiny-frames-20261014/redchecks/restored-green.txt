@@ -1,0 +1,18 @@
+### restored-green: 还原 pristine 后重跑 5 条判据（期望全绿）——在 head 5e932b4eb 上复跑
+$ git status --porcelain   # 实现文件为空：0 项
+
+== cargo test -p game-svr --lib msgqueue ==
+test msgqueue::tests::ties_are_not_insertion_order ... ok
+test msgqueue::tests::matches_dotnet_priority_queue_dequeue_order ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 201 filtered out; finished in 0.00s
+== cargo test -p game-svr --lib sm_changenamecolor ==
+test smframe::tests::sm_changenamecolor_header_only ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 202 filtered out; finished in 0.00s
+== cargo test -p game-svr --bin game-svr slave_mutiny ==
+test tests::slave_mutiny_downlink_emits_namecolor_then_username ... ok
+test tests::slave_mutiny_downlink_follows_msgqueue_heap_order ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 212 filtered out; finished in 0.00s
+$ git hash-object bins/game-svr/src/main.rs bins/game-svr/src/smframe.rs bins/game-svr/src/msgqueue.rs
+c45b3e198311dce85ba816f38c4d82ef5a14f1f6
+9eee584b8a6aab731002953d5dea69a0dee2cfc1
+3a601437d4486b028be153d6c2fd2abed1495a65

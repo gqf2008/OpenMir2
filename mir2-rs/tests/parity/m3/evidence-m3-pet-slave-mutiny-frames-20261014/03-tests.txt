@@ -1,0 +1,56 @@
+M3⑨-3 宝宝叛变帧面（rework：reviewer-6 F-1 收口）——判据与门禁读数
+==================================================================
+卡：openmir2-m3-pet-slave-masterdie-wire   作者：openmir2-worker-20
+base = 3db79cae0（walgit/master = origin/master）；证据提交 = 本目录所在提交 = patch head。
+环境：cwd = mir2-rs，隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target，--offline。
+
+## 1) 四门禁
+
+| 门禁 | 命令 | 读数 |
+| --- | --- | --- |
+| fmt | `cargo fmt --all -- --check` | **rc=0**（`gates/10-fmt.txt`，0 字节） |
+| clippy | `cargo clippy --workspace --all-targets -- -D warnings` | **rc=0**（`gates/11-clippy.txt`） |
+| test | `cargo test --workspace --no-fail-fast` | **101 suites · 1227 passed · 0 failed · 22 ignored · rc=0**（`gates/13-workspace-test.txt`；合并 head = master 3db79cae0 + 本片 +2 条 msgqueue 单测） |
+| msgcodegen | `cargo run -p msgcodegen -- --check` | **604 条 rc=0**（`gates/12-msgcodegen.txt`） |
+
+## 2) 判据（3 条聚焦 + 1 条堆对照，全绿 rc=0）
+
+    cargo test -p game-svr --lib msgqueue
+      test msgqueue::tests::matches_dotnet_priority_queue_dequeue_order ... ok
+      test msgqueue::tests::ties_are_not_insertion_order ... ok
+      test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 201 filtered out
+
+    cargo test -p game-svr --lib sm_changenamecolor
+      test smframe::tests::sm_changenamecolor_header_only ... ok
+      test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 202 filtered out
+
+    cargo test -p game-svr --bin game-svr slave_mutiny
+      test tests::slave_mutiny_downlink_follows_msgqueue_heap_order ... ok
+      test tests::slave_mutiny_downlink_emits_namecolor_then_username ... ok
+      test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 212 filtered out
+
+| 判据 | 钉住 |
+| --- | --- |
+| `msgqueue::matches_dotnet_priority_queue_dequeue_order` | n=1..12 的 `色/名` 交错入队出队序，**逐位等于** net8.0.26 实跑 `dotnet`（`msgqueue-dotnet-ref.txt`） |
+| `msgqueue::ties_are_not_insertion_order` | 同优先级出队序 ≠ 入队序（F-1 根因：入队 c1,n1,c2,n2 ⇒ 出队 c1,c2,n2,n1） |
+| `smframe::sm_changenamecolor_header_only` | `SM_CHANGENAMECOLOR(656)` 头 5 字段（`Recog=ActorId`/`Param=color`/0/0）+ **无尾** |
+| `slave_mutiny_downlink_follows_msgqueue_heap_order` | 多宝宝（2 只，mutinied `[s2,s1]`）出帧序 = oracle **4 叉堆**实出序 `色(s2),色(s1),名(s1),名(s2)` |
+| `slave_mutiny_downlink_emits_namecolor_then_username` | 单宝宝色→名序 + 载荷（`Recog/Param`）+ 尾 `EncodeString(FilterShowName)` + AOI 距离门（远者不收） |
+
+## 3) 改坏必红（RC1..RC5，均 mutated rc=101，`redchecks/`）
+
+| RC | 改动 | 触发用例 | 读数 |
+| --- | --- | --- | --- |
+| RC1 | `sm_changenamecolor` 的 `Param = color` 改 `0` | `sm_changenamecolor_header_only` | FAILED rc=101 |
+| RC2 | drain 退回「所有色循环 + 所有名循环」（同优先级=入队序，F-1 前的错误） | `slave_mutiny_downlink_follows_msgqueue_heap_order` | FAILED rc=101 |
+| RC3 | 丢掉名帧（只入队色帧） | 两条 `slave_mutiny_downlink_*` | 2 FAILED rc=101 |
+| RC4 | `msgqueue` 的 `LOG2_ARITY` 2→1（4 叉改成二叉） | `matches_dotnet_priority_queue_dequeue_order`（n=3 起分叉） | FAILED rc=101 |
+| RC5 | 色帧优先级抬到 255（> 名 165） | 两条 `slave_mutiny_downlink_*` | 2 FAILED rc=101 |
+
+还原口径：每条跑完 `git checkout -- bins/game-svr/src/{main,smframe,msgqueue}.rs`；还原后
+`git status --porcelain` 实现文件干净、`cargo test -p game-svr` 全绿（`redchecks/restored-green.txt`）。
+
+## 4) 真机 DoD
+
+卡级 R 级真机判据（真机两侧 `run_hero_pet_pair.ps1` 同序列 `diff=0`，含叛变站点帧序/字节）
+**not_verified** —— 本车道禁止起栈/占端口，需 owner 独占窗口。本片只交离线实现片 ⇒ **不据此收卡**。
