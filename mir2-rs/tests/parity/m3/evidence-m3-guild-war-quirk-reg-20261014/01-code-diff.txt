@@ -1,5 +1,5 @@
-# 01 — 本片代码差量（base origin/master 0002ed39c → head 120377ac4）
-# [cmd] git --no-pager diff 0002ed39c4fe98d9a5940e03eb1ca0ff69fb9ea5 HEAD -- mir2-rs/tests/parity/whitelist.md mir2-rs/tests/parity/m3/fixture_chain_gate.py
+# 01 — 本片代码差量（base origin/master 057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce → head）
+# [cmd] git --no-pager diff 057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce -- mir2-rs/tests/parity/whitelist.md mir2-rs/tests/parity/m3/fixture_chain_gate.py
 diff --git a/mir2-rs/tests/parity/m3/fixture_chain_gate.py b/mir2-rs/tests/parity/m3/fixture_chain_gate.py
 index a779290f5..c26797c3c 100644
 --- a/mir2-rs/tests/parity/m3/fixture_chain_gate.py

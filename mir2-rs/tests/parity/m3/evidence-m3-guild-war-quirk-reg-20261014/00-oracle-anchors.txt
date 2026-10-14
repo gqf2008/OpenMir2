@@ -1,5 +1,5 @@
 # 00 — oracle 锚原文 + Rust 锁定用例（⑧-5「先扣钱后判掌门」）
-# base=origin/master 0002ed39c4fe98d9a5940e03eb1ca0ff69fb9ea5；branch=worktree-m3-guild-war-quirk-reg
+# base=origin/master 057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce；branch=worktree-m3-guild-war-quirk-reg
 
 # [cmd] sed -n '180,199p' src/GameSrv/Npc/GuildOfficial.cs
         private static void ReQuestGuildWar(IPlayerActor PlayObject, string sGuildName)
@@ -70,7 +70,7 @@
             return (MyGuild != null) && (GuildRankNo == 1);
         }
 
-# [cmd] rg -n 'fn request_guild_war_non_master_still_pays_gold|fn request_guild_war_no_guild_still_pays_gold|fn request_guild_war_non_zero_server_still_pays_gold' mir2-rs/crates/world/src/guild.rs
+# [cmd] rg -n 'fn request_guild_war_(non_master_still_pays_gold|no_guild_still_pays_gold|non_zero_server_still_pays_gold)' mir2-rs/crates/world/src/guild.rs
 1595:    fn request_guild_war_non_master_still_pays_gold() {
 1618:    fn request_guild_war_no_guild_still_pays_gold() {
 1637:    fn request_guild_war_non_zero_server_still_pays_gold() {

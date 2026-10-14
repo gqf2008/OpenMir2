@@ -1,6 +1,6 @@
 # 09 — 链门里 B（全服 RNG 消费者账本 / Claim B）RED 是**改前既有**，与本片无关
-# 本片 diff 不碰 B 的任何输入（rng-trace-scene/**、crates/**、src/**）——见 01-code-diff 与 13-boundary。
-# [cmd] 在 base=origin/master 0002ed39c 的临时 detached worktree（/e/tmp/m3cs-base-proof）上跑 B 的 runner：
+# 本片 diff 不碰 B 的任何输入（rng-trace-scene/**、crates/**、src/**）——见 01-code-diff 与 14-boundary。
+# [cmd] 在 base origin/master 057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce 的临时 detached worktree（/e/tmp/m3cs-base-proof）上跑 B 的 runner：
 #   powershell -NoProfile -File mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack
 # 读数（改前）：
 SELFTEST_NO_STACK: 无栈自检——场景门 + 账本 + folded 映射全路径都必须 fail-closed（缺失绝不静默 GREEN）

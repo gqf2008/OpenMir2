@@ -1,4 +1,4 @@
-# boundary: git diff --name-status origin/master（含 git add -N 的未跟踪件）
+# boundary: git diff --name-status 057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce（含 git add -N 的未跟踪件）
 A	mir2-rs/tests/parity/m3/evidence-m3-guild-war-quirk-reg-20261014/00-oracle-anchors.txt
 A	mir2-rs/tests/parity/m3/evidence-m3-guild-war-quirk-reg-20261014/01-code-diff.txt
 A	mir2-rs/tests/parity/m3/evidence-m3-guild-war-quirk-reg-20261014/02-gate-check-green.txt
@@ -14,15 +14,17 @@ A	mir2-rs/tests/parity/m3/evidence-m3-guild-war-quirk-reg-20261014/11-gate-clipp
 A	mir2-rs/tests/parity/m3/evidence-m3-guild-war-quirk-reg-20261014/12-gate-test.txt
 A	mir2-rs/tests/parity/m3/evidence-m3-guild-war-quirk-reg-20261014/12b-gate-test-summary.txt
 A	mir2-rs/tests/parity/m3/evidence-m3-guild-war-quirk-reg-20261014/13-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-guild-war-quirk-reg-20261014/14-boundary.txt
 A	mir2-rs/tests/parity/m3/evidence-m3-guild-war-quirk-reg-20261014/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-guild-war-quirk-reg-20261014/SHA256SUMS.txt
 M	mir2-rs/tests/parity/m3/fixture_chain_gate.py
 A	mir2-rs/tests/parity/m3/m3_guild_war_quirk_registry_gate.py
 M	mir2-rs/tests/parity/whitelist.md
 
 # 冻结面（应为空）
-# [cmd] git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+# [cmd] git diff --name-only 057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
 # (空以上)
 
 # .rs/.toml（应为空）
-# [cmd] git diff --name-only origin/master -- '*.rs' '*.toml'
+# [cmd] git diff --name-only 057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce -- '*.rs' '*.toml'
 # (空以上)

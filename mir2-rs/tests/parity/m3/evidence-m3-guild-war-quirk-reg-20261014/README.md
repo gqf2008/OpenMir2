@@ -5,7 +5,7 @@
 「先扣钱后判掌门」的照搬怪行为当时只在 `crates/world/src/guild.rs` 模块头 + 证据 README 说明，
 `whitelist.md` 没有对应行 ⇒「登记在案」不可机判、将来被「修好」不会被发现。
 
-- base = `origin/master` `0002ed39c4fe98d9a5940e03eb1ca0ff69fb9ea5`；分支 `worktree-m3-guild-war-quirk-reg`。
+- base = `origin/master` `057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce`；分支 `worktree-m3-guild-war-quirk-reg`。
 - 本片**只读 / 零端口**：只改 `mir2-rs/tests/parity/whitelist.md`（+T-54 行）+
   `mir2-rs/tests/parity/m3/fixture_chain_gate.py`（新门接入共享管线）+ 新增
   `mir2-rs/tests/parity/m3/m3_guild_war_quirk_registry_gate.py` + 本证据包；
@@ -25,7 +25,7 @@
 | `09-chain-red-preexisting-base-proof.txt` | 在 base 的临时 detached worktree 上跑 B runner ⇒ 同 `anchors-freshness-selftest` RED ⇒ **改前既有、与本片无关** | `powershell -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack` |
 | `10-gate-fmt.txt` | 四门禁① rc=0 | `cargo fmt --all -- --check` |
 | `11-gate-clippy.txt` | 四门禁② rc=0 | `cargo clippy --workspace --all-targets --offline -- -D warnings` |
-| `12-gate-test.txt` / `12b-gate-test-summary.txt` | 四门禁③ **101 suites / 1211 passed / 0 failed / 22 ignored** rc=0 | `cargo test --workspace --no-fail-fast --offline` |
+| `12-gate-test.txt` / `12b-gate-test-summary.txt` | 四门禁③ **101 suites / 1213 passed / 0 failed / 22 ignored** rc=0 | `cargo test --workspace --no-fail-fast --offline` |
 | `13-gate-msgcodegen.txt` | 四门禁④ OK 604 rc=0 | `cargo run -p msgcodegen --offline -- --check` |
 | `14-boundary.txt` | 差量清单 + 冻结面 / `.rs` 空 | `git diff --name-status origin/master`（`git add -N` 后含未跟踪件） |
 

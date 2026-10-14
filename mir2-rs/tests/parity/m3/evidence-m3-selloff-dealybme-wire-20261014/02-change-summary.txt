@@ -1,0 +1,30 @@
+M3 10-1 收口片 #2（@dealybme 开窗接线）变更
+=============================================
+
+第一张收口片（4a314ecce：修正 SM_SENDDEALOFFFORM 头字段 recog=npc_id / param=0）已由 reviewer-6 approve
+并于 walgit master 620ac1f13 合入；本片是其承接片，相对当前 master（f6554c7b9）净差量只有本片接线 + 证据。
+
+1) bins/game-svr/src/selloff.rs
+   - open_deal_off_form(me, book, npc_id, npc_name) -> Vec<SellOffEvent>：三支全实现
+       !sale_deal              -> merchant_say('您未开通元宝服务,请先开通元宝服务!!<bs> <bs><返回/@main>')
+       sale_deal && in_time(0) -> merchant_say('您还有元宝服务正在进行!!<bs> <bs><返回/@main>')
+       sale_deal && !in_time(0)-> SM_SENDDEALOFFFORM(recog=npc_id, param=0, tag=0, series=0)
+   - 新增 merchant_say()：SM_MERCHANTSAY(643)，Recog=商人 ActorId、Param=Tag=0、Series=1、
+     尾 = EncodeString(GBK(ChrName+'/'+text))（走既有 SellOffFrame::Def + selloff_event_body 编码路径）。
+   - 新增 LABEL_DEAL_YB_ME="@dealybme"、PRIO_RM_MERCHANTSAY。
+2) bins/game-svr/src/main.rs
+   - handle_shop_cmd 新增形参 sell_off_sessions: &mut HashMap<String,SellOffState> + sell_off_book: &mut SellOffBook
+     （主循环 1 处 + 单测 3 处调用点同步）。
+   - CM_MERCHANTDLGSELECT 支：label 与 @dealybme 相等（OrdinalIgnoreCase）且 mflags.is_yb_deal
+     => 组装 SellOffSide 调 open_deal_off_form，按 selloff_event_body 走 gate 回帧后 return。
+     is_yb_deal=false => 零帧（oracle if (IsYbDeal) 门）。
+3) 测试
+   - selloff.rs：改 open_deal_off_form_gated_by_sale_deal_and_active_sell（三支 + 文案）；
+     新增 open_deal_off_form_failure_wire_is_merchant_say（失败支线缆 12B 头 + EncodeString 尾）。
+   - main.rs：新增进程级 shop_dealybme_opens_consignment_form（三支 + IsBDeal 门，经生产 handle_shop_cmd）。
+
+未做（登记，交 owner / 另卡）：
+   - SaleDeal 无 setter：oracle 由脚本 OPENYBDEAL -> ActionOfOpenSaleDeal（ExecutionProcessingSys.cs:2329-2356）置真；
+     Rust 动作体在 crates/script/src/engine/actions.rs（不在本卡写集）=> 接线后可达的仍是失败支；
+     脚本动作落地后，成功支（SM_SENDDEALOFFFORM）随本片接线自动可达。
+   - 商人脚本 Market_Def 未装载（⑤ 面）=> @dealybme 只能由客户端直接发；本片保证该路径与 oracle 一致。
