@@ -1528,3 +1528,34 @@ brief 顶部（root 2026-10-14 15:0x）的离线四项早已闭环（§㊽㊾㊿
 - **不改**：`249`/`250` 的真探结论（R8 RED ×2 = 9 端口 + 异源 exe）、`245`/`246` 的片60 BEFORE 假绿与
   MUT-A、以及一切工具语义（`check_rust_window_preflight.py` / `window_handoff.py` 本片逐字节未动）。
 - 判级 **L**（证据/文档，零生产代码）；卡级 **R** 真机 ①②③ 仍归 root 独占窗口。四门禁/边界见 `255`。
+
+### 62) R8 停栈建议收口：`-LogDir` 不再写死，必须由**持有占用 pid 的 pid 文件**校验（2026-10-15，tag `m2svr`）—— `256`/`257`/`258`/`259`
+
+片60（`245`）的 R8 收掉了「`WINDOW_READY=YES` 却跑着修复前栈」的假绿，但它的**补救命令**把
+`-LogDir E:/tmp/client-e2e/stack2` **写死**（旧 `WINDOW_SLOT_STOP_CMD`）。`start_rust_stack.ps1 -Stop`
+只读**自己 `-LogDir` 下**的 `rust-stack.pid.json` ⇒ 换个窗口目录（例如 root 活脚本的
+`logdir='E:\tmp\client-e2e\stack'`，`client-e2e-window.sh:7`）的泄漏栈时，照抄该命令是静默 no-op
+（`NOTHING_TO_STOP`），操作者会**以为已停干净**、随后起窗又撞上旧栈 ⇒ 再测修复前镜像
+（= 2026-10-14 15:0x 假回归的同一形态）。这是「假绿=已停栈」，与片60 的「假绿=YES」同类。
+
+- **改（唯一逻辑变更）**：`check_rust_window_preflight.py` —— 删写死常量，新增
+  `SLOT_LOG_DIR_DEFAULT`/`SLOT_PID_FILE_NAME`/`slot_stop_command(dir)` + `load_slot_pid_file(dir)`
+  + `slot_stop_dir_findings(...)`；`window_slot_findings` 加参；`main()` 加 `--slot-log-dir`
+  （默认仍是 `stack2`，向后兼容）。占用端口的 pid **不在**该目录的 pid 文件里（或文件读不了）
+  ⇒ 追加 RED 且只打占位 `<持有这些 pid 的 rust-stack.pid.json 所在目录>`，**不打印**任何像
+  「照抄即可」的固定目录。
+- **缺陷复现（`257`）**：同一合成探针（pid 424242 不在 stack2 的 pid 文件里）——
+  OLD（`HEAD`）⇒ 恒打 `-LogDir E:/tmp/client-e2e/stack2 -Stop`（误导）；NEW ⇒ 占位 + RED 点名
+  `[424242]` 不持有。
+- **改坏必红（`257`）**：MUT-A（mismatch 检查永不触发）/ MUT-B（`validated` 恒真）⇒ 新牙
+  `r8-stop-dir-mismatch-red`/`r8-stop-dir-missing-red` **FAIL**，`SELFTEST FAILED (64/66)`；
+  变异只在 `E:/tmp`，仓内 sha256 全程 `ca033e23…` 不变。
+- **真机 fresh（`258` §3）**：本机泄漏栈**就是** `stack2` ⇒ 新行
+  `[OK] R8 停栈目录校验：E:/tmp/client-e2e/stack2/rust-stack.pid.json 持有全部占用端口的 pid`
+  （`[9100,13052,29240,30284,33132,34944]`）⇒ 给 root 的停栈命令**确实**可停该栈；
+  R1..R7 全 OK、R8 RED ×2（9 端口 + 异源 exe）⇒ **卡级结论不变**（开窗唯一剩余阻塞仍是 R8）。
+- **自检**：`check_rust_window_preflight.py --selftest` **57/57 → 66/66**（+9 牙）；
+  `window_handoff.py --selftest` **107/107**（本片未动该件）；聚合门（替身脚本口径）仍
+  `WINDOW_READY=NO`，唯一原因是 R8（`258` §4）。
+- 判级 **L**（就绪工具 + 文档，零生产代码、零起栈/端口/进程）；卡级 **R** 真机 ①②③ 仍归
+  root 独占窗口。

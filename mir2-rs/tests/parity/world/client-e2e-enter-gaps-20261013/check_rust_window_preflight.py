@@ -58,6 +58,11 @@ git 差异**，不是「`<target-dir>/debug` 里的 exe 与源一一对应」—
      （HUD `0/0` + `CM_RUN=0`）。R8 是 fail-closed：十个游戏端口（3306 共享 MySQL **不在门内**）
      必须全 DOWN；任何在跑的 `game-svr.exe` 必须是本计划 `--target-dir/debug/game-svr.exe`。
      探不动本机（非 Windows / 无 PowerShell）⇒ INFO 跳过（干净检出本来就没有栈）。
+     **片63（停栈目录校验）**：`start_rust_stack.ps1 -Stop` 只读自己 `-LogDir` 下的
+     `rust-stack.pid.json` ⇒ 目录选错就是静默 no-op（`NOTHING_TO_STOP`）。旧版把
+     `E:/tmp/client-e2e/stack2` **写死**，换个窗口目录的泄漏栈时操作者会误以为已停干净、
+     随后起窗又撞上旧栈（= 再测修复前镜像）。现在 `--slot-log-dir`（默认仍是 `stack2`，向后兼容）
+     下的 pid 文件必须**持有全部占用端口的 pid**，否则另加 RED 且**不打印**任何像「照抄即可」的命令。
      自测/证据复算可用 `--slot-probe-json` 注入合成探针（会打 `WARN`，窗口机上禁用）。
 用法：
   python -I -B check_rust_window_preflight.py \
@@ -157,12 +162,21 @@ PROVENANCE_NAME = "window-provenance.json"
 PROVENANCE_VERSION = 1
 # R8 窗口槽位（片60）：九个 Rust 栈游戏端口；3306 是**共享 MySQL**（必须常开）⇒ 不在门内。
 GAME_PORTS: tuple[int, ...] = (5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200)
-# R8 停泄漏栈的原始命令（判 RED 时原样可抄；`<源>` = 当前 --repo）。
-WINDOW_SLOT_STOP_CMD = (
-    "powershell -NoProfile -ExecutionPolicy Bypass -File "
-    "<源>/tools/m2-acceptance/start_rust_stack.ps1 "
-    "-LogDir E:/tmp/client-e2e/stack2 -Stop"
-)
+# R8 停泄漏栈（片63）：`-LogDir` 必须 = 持有占用端口的 `rust-stack.pid.json` 所在目录。
+# 旧版把 `E:/tmp/client-e2e/stack2` **写死** —— 换一台/L 另一窗口目录的泄漏栈时，照抄该命令会
+# `NOTHING_TO_STOP`（`start_rust_stack.ps1 -Stop` 只读自己 `-LogDir` 下的 pid 文件），操作者会误以为
+# 已停干净、随后起窗又撞上旧栈 ⇒ 再次测修复前镜像（正是 2026-10-14 15:0x 假回归的形态）。
+SLOT_LOG_DIR_DEFAULT = "E:/tmp/client-e2e/stack2"
+SLOT_PID_FILE_NAME = "rust-stack.pid.json"
+
+
+def slot_stop_command(slot_log_dir: str) -> str:
+    """停栈命令（`<源>` = 当前 `--repo`）；`slot_log_dir` 由调用方按**校验后**的目录传入。"""
+    return (
+        "powershell -NoProfile -ExecutionPolicy Bypass -File "
+        "<源>/tools/m2-acceptance/start_rust_stack.ps1 "
+        f"-LogDir {slot_log_dir} -Stop"
+    )
 HASH_CHUNK = 1024 * 1024
 # MapInfo 逻辑名分隔符（`crates/envir/src/mapinfo.rs:28`：空格/逗号/制表）
 _MAPINFO_SEPS = " \t,"
@@ -396,12 +410,82 @@ def load_slot_probe(path: str) -> "tuple[dict, list, str | None]":
     return _normalize_slot_probe(obj)
 
 
-def window_slot_findings(
-    ports: "dict | None", exes: "list | None", target_dir: str
-) -> "tuple[list[str], list[str], list[str]]":
-    """R8 的纯逻辑：`(ports, exes, target_dir)` ⇒ `(ok 行, problems, prereqs)`。
+def load_slot_pid_file(slot_log_dir: str) -> "tuple[set, str | None]":
+    """读 `<slot_log_dir>/rust-stack.pid.json` ⇒ `(pids, err)`；err 非空 = 读不了/认不出。"""
+    if not slot_log_dir:
+        return set(), "未给停栈目录（--slot-log-dir）"
+    path = os.path.join(slot_log_dir, SLOT_PID_FILE_NAME)
+    try:
+        with open(path, "r", encoding="utf-8-sig") as fh:
+            obj = json.load(fh)
+    except OSError as exc:
+        return set(), f"读不了 {path}（{exc}）"
+    except ValueError as exc:
+        return set(), f"{path} 不是合法 JSON（{exc}）"
+    if not isinstance(obj, list):
+        return set(), f"{path} 顶层应为 array（实为 {type(obj).__name__}）"
+    pids: set = set()
+    for item in obj:
+        if not isinstance(item, dict):
+            continue
+        try:
+            if item.get("pid") is not None:
+                pids.add(int(item["pid"]))
+        except (TypeError, ValueError):
+            continue
+    return pids, None
 
-    - 任一游戏端口 LISTENING ⇒ RED（点名列 pid + 停栈命令）；
+
+def slot_stop_dir_findings(
+    occupied_pids, slot_log_dir: str, pid_file_pids, pid_file_err: str | None
+) -> "tuple[list[str], list[str], list[str]]":
+    """R8 附加牙（片63）：推荐的停栈 `-LogDir` 必须**真的持有**占用端口的那些 pid。
+
+    `start_rust_stack.ps1 -Stop` 只读自己 `-LogDir` 下的 `rust-stack.pid.json` ⇒ 目录选错时它是
+    静默 no-op（`NOTHING_TO_STOP`）。旧版把 `stack2` 写死 ⇒ 别的目录的泄漏栈会被误报成「已给停栈命令」。
+    本函数 fail-closed：pid 文件读不了 / 不持有这些 pid ⇒ RED（不打印任何像「照抄即可」的命令）。
+    无占用端口 ⇒ 不产生任何行（不误伤干净槽位）。
+    """
+    oks: list = []
+    probs: list = []
+    prereqs: list = []
+    if not occupied_pids:
+        return oks, probs, prereqs
+    want = sorted({int(p) for p in occupied_pids})
+    if pid_file_err:
+        probs.append(
+            f"RED R8: 占用端口的栈无法从推荐停栈目录 {slot_log_dir or '<未给>'} 找到 pid 文件"
+            f"（{pid_file_err}）⇒ **不要照抄任何固定 -LogDir**；请用**持有这些 pid** 的窗口目录："
+            f" {slot_stop_command('<持有这些 pid 的 rust-stack.pid.json 所在目录>')}"
+        )
+        return oks, probs, prereqs
+    missing = sorted(set(want) - {int(p) for p in (pid_file_pids or [])})
+    if missing:
+        probs.append(
+            f"RED R8: 推荐停栈目录 {slot_log_dir} 的 {SLOT_PID_FILE_NAME} 不持有占用端口的 pid"
+            f" {missing} ⇒ 照抄该目录的 -Stop 会 NOTHING_TO_STOP（白烧窗）。"
+            f"请改用**持有这些 pid** 的窗口目录："
+            f" {slot_stop_command('<持有这些 pid 的 rust-stack.pid.json 所在目录>')}"
+        )
+        return oks, probs, prereqs
+    oks.append(
+        f"[OK] R8 停栈目录校验：{slot_log_dir}/{SLOT_PID_FILE_NAME} 持有全部占用端口的 pid（{want}）"
+    )
+    return oks, probs, prereqs
+
+
+def window_slot_findings(
+    ports: "dict | None",
+    exes: "list | None",
+    target_dir: str,
+    slot_log_dir: str = "",
+    pid_file_pids=None,
+    pid_file_err: "str | None" = None,
+) -> "tuple[list[str], list[str], list[str]]":
+    """R8 的纯逻辑：`(ports, exes, target_dir, slot_log_dir, pid file)` ⇒ `(ok 行, problems, prereqs)`。
+
+    - 任一游戏端口 LISTENING ⇒ RED（点名列 pid + **校验过**的停栈命令）；
+    - 停栈 `-LogDir` 校验（片63）：pid 文件读不了/不持有占用 pid ⇒ 另加 RED（不打印误导命令）；
     - 在跑的 `game-svr.exe` 路径 != `<target_dir>/debug/game-svr.exe`（缺 target_dir 亦然）⇒ RED；
     - 两者都干净 ⇒ ok。不打印，便于 selftest 直测与调用方分类。
     """
@@ -413,12 +497,27 @@ def window_slot_findings(
     occupied = sorted((int(p), int(pid)) for p, pid in ports.items() if pid)
     if occupied:
         pretty = ", ".join(f"{p}(pid {pid})" for p, pid in occupied)
+        want = {pid for _, pid in occupied}
+        validated = (
+            pid_file_err is None
+            and pid_file_pids is not None
+            and want <= {int(p) for p in pid_file_pids}
+        )
+        cmd = slot_stop_command(
+            (slot_log_dir or SLOT_LOG_DIR_DEFAULT) if validated else "<持有这些 pid 的目录>"
+        )
         probs.append(
             "RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: "
             f"{pretty} ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包"
             "（2026-10-14 15:0x 的假回归即此）。先停栈："
-            f" {WINDOW_SLOT_STOP_CMD}"
+            f" {cmd}"
         )
+        v_oks, v_probs, v_pre = slot_stop_dir_findings(
+            want, slot_log_dir or SLOT_LOG_DIR_DEFAULT, pid_file_pids, pid_file_err
+        )
+        oks.extend(v_oks)
+        probs.extend(v_probs)
+        prereqs.extend(v_pre)
     else:
         oks.append(f"[OK] R8 游戏端口全 DOWN（{len(GAME_PORTS)} 个；3306 共享 MySQL 不在门内）")
     if not exes:
@@ -927,12 +1026,83 @@ def selftest() -> int:
         {"5000": 30284},
         [(30284, "E:\\tmp\\openmir2-merge-target\\debug\\game-svr.exe")],
         "E:/tmp/m2svr-window-target",
+        slot_log_dir="E:/tmp/client-e2e/stack2",
+        pid_file_pids={30284, 33132},
     )
     joined = " | ".join(probs)
     chk(
         "r8-occupied-and-stale-exe-red",
-        not oks and len(probs) == 2 and "5000" in joined and "不是本计划" in joined and not pre,
+        len(oks) == 1 and len(probs) == 2 and "5000" in joined and "不是本计划" in joined and not pre,
         f"ok={len(oks)} prob={len(probs)} pre={len(pre)}: {joined[:200]}",
+    )
+    chk(
+        "r8-stop-dir-validated-names-owning-dir",
+        "-LogDir E:/tmp/client-e2e/stack2 -Stop" in joined
+        and "持有全部占用端口的 pid" in " | ".join(oks),
+        f"ok={' | '.join(oks)[:160]}; prob={joined[:160]}",
+    )
+    # 片63：推荐停栈目录的 pid 文件**不持有**占用 pid ⇒ 另加 RED，且**不许**打印可照抄的固定目录。
+    oks, probs, pre = window_slot_findings(
+        {"5000": 30284},
+        [],
+        "E:/tmp/m2svr-window-target",
+        slot_log_dir="E:/tmp/client-e2e/stack2",
+        pid_file_pids={9999},
+    )
+    joined = " | ".join(probs)
+    chk(
+        "r8-stop-dir-mismatch-red",
+        len(oks) == 1 and len(probs) == 2 and "不持有占用端口的 pid" in joined
+        and "[30284]" in joined
+        and "-LogDir E:/tmp/client-e2e/stack2 -Stop" not in joined
+        and "<持有这些 pid" in joined,
+        f"ok={len(oks)} prob={len(probs)} pre={len(pre)}: {joined[:240]}",
+    )
+    # pid 文件读不了/认不出 ⇒ 同样 fail-closed（不得静默把固定目录当答案）。
+    oks, probs, pre = window_slot_findings(
+        {"5000": 30284},
+        [],
+        "E:/tmp/m2svr-window-target",
+        slot_log_dir="E:/tmp/client-e2e/stack2",
+        pid_file_err="读不了 .../nope.json（FileNotFoundError）",
+    )
+    joined = " | ".join(probs)
+    chk(
+        "r8-stop-dir-missing-red",
+        len(oks) == 1 and len(probs) == 2 and "找到 pid 文件" in joined
+        and "-LogDir E:/tmp/client-e2e/stack2 -Stop" not in joined,
+        f"ok={len(oks)} prob={len(probs)} pre={len(pre)}: {joined[:240]}",
+    )
+    # 纯函数直测：① 无占用 ⇒ 零行；② 持有全部 pid ⇒ OK + 命令用该目录。
+    oks, probs, pre = slot_stop_dir_findings(set(), "E:/tmp/x", set(), None)
+    chk("stop-dir-no-occupied-noop", not oks and not probs and not pre, f"ok={len(oks)} prob={len(probs)}")
+    oks, probs, pre = slot_stop_dir_findings(
+        {30284, 33132}, "E:/tmp/leak", {30284, 33132, 5}, None
+    )
+    chk(
+        "stop-dir-owns-pids-ok",
+        len(oks) == 1 and not probs and not pre
+        and "-LogDir E:/tmp/leak -Stop" in slot_stop_command("E:/tmp/leak"),
+        f"ok={len(oks)} prob={len(probs)} pre={len(pre)}",
+    )
+    # `load_slot_pid_file`：真文件能读出 pid；缺文件/坏 JSON ⇒ err（fail-closed）。
+    _sd = tempfile.mkdtemp(prefix="rustpf-r8-pid-")
+    with open(os.path.join(_sd, SLOT_PID_FILE_NAME), "w", encoding="utf-8") as fh:
+        json.dump([{"name": "game-svr", "pid": 30284}], fh)
+    _pids, _err = load_slot_pid_file(_sd)
+    chk("load-pid-file-ok", _pids == {30284} and _err is None, f"pids={_pids} err={_err}")
+    _pids, _err = load_slot_pid_file(os.path.join(_sd, "nope"))
+    chk("load-pid-file-missing-err", not _pids and bool(_err), repr(_err))
+    _bad_sd = os.path.join(_sd, "bad")
+    os.mkdir(_bad_sd)
+    with open(os.path.join(_bad_sd, SLOT_PID_FILE_NAME), "w", encoding="utf-8") as fh:
+        fh.write("[ not-json")
+    _pids, _err = load_slot_pid_file(_bad_sd)
+    chk("load-pid-file-bad-json-err", not _pids and bool(_err), repr(_err))
+    chk(
+        "slot-log-dir-default-preserved",
+        SLOT_LOG_DIR_DEFAULT == "E:/tmp/client-e2e/stack2" and SLOT_PID_FILE_NAME == "rust-stack.pid.json",
+        f"{SLOT_LOG_DIR_DEFAULT} / {SLOT_PID_FILE_NAME}",
     )
     oks, probs, pre = window_slot_findings(
         {}, [(30284, "E:\\tmp\\m2svr-window-target\\debug\\game-svr.exe")], "E:/tmp/m2svr-window-target"
@@ -1030,6 +1200,14 @@ def main(argv: list[str] | None = None) -> int:
             "R8 注入探针（仅自测/证据复算；窗口机禁用）：JSON "
             '{"ports":[{"LocalPort":n,"OwningProcess":pid}],'
             ' "exes":[{"ProcessId":pid,"ExecutablePath":"..."}]}'
+        ),
+    )
+    ap.add_argument(
+        "--slot-log-dir",
+        default=SLOT_LOG_DIR_DEFAULT,
+        help=(
+            f"R8 停栈校验：占用端口的 `{SLOT_PID_FILE_NAME}` 应落在此目录（默认 "
+            f"{SLOT_LOG_DIR_DEFAULT}）；该文件不持有占用 pid ⇒ RED（不打印误导命令）"
         ),
     )
     ap.add_argument("--selftest", action="store_true")
@@ -1177,7 +1355,20 @@ def main(argv: list[str] | None = None) -> int:
         if slot_err:
             print(f"INFO R8 跳过，未探本机槽位（{slot_err}）")
     if not slot_err:
-        oks, probs, pre = window_slot_findings(slot_ports, slot_exes, args.target_dir)
+        # 片63：停栈 `-LogDir` 必须真的持有占用端口的 pid（旧版写死 stack2 ⇒ 别的目录会 NOTHING_TO_STOP）。
+        slot_log_dir = args.slot_log_dir or SLOT_LOG_DIR_DEFAULT
+        if slot_ports:
+            pid_file_pids, pid_file_err = load_slot_pid_file(slot_log_dir)
+        else:
+            pid_file_pids, pid_file_err = None, None
+        oks, probs, pre = window_slot_findings(
+            slot_ports,
+            slot_exes,
+            args.target_dir,
+            slot_log_dir=slot_log_dir,
+            pid_file_pids=pid_file_pids,
+            pid_file_err=pid_file_err,
+        )
         for line in oks:
             print(line)
         problems.extend(probs)
