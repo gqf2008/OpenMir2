@@ -292,7 +292,7 @@ AOI 诊断）后又漂到 `:5488`，由本片在**合并树的** `-SelfCheckNoSt
 
 ```sh
 python -I rng-trace-scene/check_anchors.py check      # GREEN：7/7 锚点保鲜
-python -I rng-trace-scene/check_anchors.py selftest   # 16/16 GREEN（含 15 条改坏必红）
+python -I rng-trace-scene/check_anchors.py selftest   # 17/17 GREEN（含 16 条改坏必红）
 ```
 
 **2026-10-14 根因收口（两类锚点）**：行号漂移的**成因**是「把行号锚钉在多车道共享的增长文件
@@ -301,7 +301,7 @@ python -I rng-trace-scene/check_anchors.py selftest   # 16/16 GREEN（含 15 条
 | 锚点类型 | 适用 | 文档写法 | 机判 |
 | --- | --- | --- | --- |
 | **行号锚** | 稳定文件（`mongen.rs` / `monai.rs` / oracle `AnimalObject.cs` / 本卡 `rng_consumer_groups.py` / `consumer_groups.tsv`） | `path:line` | 行号 == 源码首个匹配行；缺失 / 重复 / 漂移 ⇒ 红 |
-| **符号唯一性锚** | **共享增长文件**（现为 `bins/game-svr/src/main.rs`） | 只写 `path`（**不得**带 `:line`，带了 ⇒ `ANCHOR_LINE_NOT_ALLOWED`） | 符号在该文件里**恰好出现 1 次**（0 次 ⇒ `ANCHOR_SYMBOL_MISSING`，>1 次 ⇒ `ANCHOR_AMBIGUOUS`） |
+| **符号唯一性锚** | **共享增长文件**（现为 `bins/game-svr/src/main.rs`） | 只写 `path`（**不得**带 `:line`，带了 ⇒ `ANCHOR_LINE_NOT_ALLOWED`） | 符号在该文件里**恰好出现 1 次**（**按匹配总次数计**，同一物理行写两遍也算 2 次；0 次 ⇒ `ANCHOR_SYMBOL_MISSING`，>1 次 ⇒ `ANCHOR_AMBIGUOUS`） |
 
 **判据不降级**：宿主 AI 调用点被删 / 被复制仍 fail-closed 必红，只是把不稳定的行号换成稳定的
 唯一性 —— 别的车道再往 main.rs 插代码不再制造「合并即假 RED」。
@@ -311,6 +311,10 @@ python -I rng-trace-scene/check_anchors.py selftest   # 16/16 GREEN（含 15 条
 - 改坏必红覆盖：符号唯一性锚写回行号 `/` 文件引用删除 `/` 符号重复 `/` 符号缺失 `/`
   行号锚缺失 `/` 同 literal 写两处行号（歧义）`/` **未登记的新引用**（闭世界 `UNGUARDED_ANCHOR`）
   `/` R-6 折叠定义行号回退；
+- **符号唯一性按次数计（2026-10-14 reviewer-5 F-1 收口）**：旧实现 `sum(1 for line if re.search)`
+  数的是**匹配行数** ⇒ 同一物理行写两遍符号（`spawn(); spawn();`）只计 1 次而放行；现改为
+  `sum(len(re.findall(...)))` 计**匹配总次数** ⇒ 同行重复必红（新增改坏必红
+  `mutation-symbol-ambiguous-same-line-red`，selftest 16/16 → 17/17）。
 - **闭世界（本片新增的牙）**：旧锚点表只硬编码 5 条 ⇒ 文档里**其它** `path:line` 引用可静默漂移。
   本片实测到同族真身缺陷：上一片（`06f5faf7b`）在 `rng_consumer_groups.py` 顶部插入 5 行
   （`_HERE`/`REPO_ROOT`），使 `FOLD_RULES` 从 `:52` 漂到 `:57`，而 `DRIVER-CONTRACT.md:94` 仍写
