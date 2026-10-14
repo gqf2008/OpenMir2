@@ -1,0 +1,9 @@
+# 07 — 收口片四门禁（reviewer Minor 收口；零 .rs 改动，读数与片㊷ 相同）
+#
+# cwd = mir2-rs   CARGO_TARGET_DIR = E:/tmp/m2svr-target
+# 1) cargo fmt --all -- --check                         => rc=0
+# 2) cargo clippy --workspace --all-targets -- -D warnings => rc=0
+# 3) cargo test --workspace --no-fail-fast              => rc=0；101 suites / passed=1231 failed=0 ignored=22
+# 4) cargo run -p msgcodegen -- --check                 => rc=0；msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+# 附：文档漂移门 python -I -B tools/m2-acceptance/check_client_ability_layout_doc_counts.py => rc=0 GREEN（见 06）
+# 附：SHA256SUMS repo 口径复核 python -I tools/evidence-hash/verify_sha256sums.py <本目录> => GREEN 8/8（写完清单后复跑，见下）
