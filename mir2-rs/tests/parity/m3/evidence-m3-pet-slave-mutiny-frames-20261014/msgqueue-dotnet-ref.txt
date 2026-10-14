@@ -1,0 +1,84 @@
+M3⑨-3 观察者 MsgQueue 出队序 —— .NET PriorityQueue 实跑参考（net8.0.26）
+=====================================================================
+卡：openmir2-m3-pet-slave-masterdie-wire（rework：reviewer-6 F-1）
+作者：openmir2-worker-20
+
+## 为什么有这份
+
+reviewer-6 F-1 指出：oracle 观察者 MsgQueue 是 `PriorityQueue<SendMessage, byte>`
+（`src/M2Server/Actor/ActorEntity.cs:16`），同优先级元素的出队序**不是入队序**
+（.NET 文档明示 unstable）。原实现/用例把 `色`、`名` 两组各自钉成 `mutinied` 入队序
+（= 稳定排序），与 oracle 实出序**相反** ⇒ 卡级真机 `hero_pet_diff.py` 逐项比帧种类序必红。
+
+本文件用与 oracle **同一份 BCL**（运行时 net8.0.26）实跑 `PriorityQueue<string,byte>` 的
+`UnorderedItems`/`TryDequeue`，得到 `色`(154) / `名`(165) 交错入队下的出队序，
+作为 Rust `mir2-rs/bins/game-svr/src/msgqueue.rs::NetPriorityQueue` 的逐位对照
+（见 `03-tests.txt` 的 `msgqueue::tests::matches_dotnet_priority_queue_dequeue_order`，n=1..12）。
+
+- 运行时：`.NET 8.0.26`（FrameworkDescription 实测；oracle csproj `TargetFramework=net8.0`）
+- BCL 源：`dotnet/runtime` `release/8.0` → `System.Collections/src/System/Collections/Generic/PriorityQueue.cs`
+  `:52 Arity = 4`、`:57 Log2Arity = 2`、`:615 GetParentIndex(i)=(i-1)>>2`、`:620 GetFirstChildIndex(i)=(i<<2)+1`
+  ⇒ **4 叉最小堆**（非二叉）—— 见 `dotnet-pq8-source-excerpt.txt`。
+
+## 程序（E:/tmp/m3hp-t58-pq/Program.cs）
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+class P {
+    static void Main() {
+        Console.WriteLine($"runtime={System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
+        Console.WriteLine("// (A) mutiny pattern: enqueue c_n,n_n,...,c_1,n_1 (c=154=RM_CHANGENAMECOLOR, n=165=RM_USERNAME)");
+        for (int n = 1; n <= 12; n++) {
+            var q = new PriorityQueue<string, byte>();
+            for (int i = n; i >= 1; i--) { q.Enqueue($"c{i}", 154); q.Enqueue($"n{i}", 165); }
+            var order = new List<string>();
+            while (q.TryDequeue(out var e, out _)) order.Add(e);
+            Console.WriteLine($"n={n}: {string.Join(",", order)}");
+        }
+        Console.WriteLine("// (B) reviewer repro: enqueue c_1,n_1,...,c_n,n_n");
+        for (int n = 2; n <= 5; n++) {
+            var q = new PriorityQueue<string, byte>();
+            for (int i = 1; i <= n; i++) { q.Enqueue($"c{i}", 154); q.Enqueue($"n{i}", 165); }
+            var order = new List<string>();
+            while (q.TryDequeue(out var e, out _)) order.Add(e);
+            Console.WriteLine($"n={n}: {string.Join(",", order)}");
+        }
+    }
+}
+
+## 运行
+
+    dotnet run --project E:/tmp/m3hp-t58-pq/pq.csproj
+
+## 输出（原样）
+
+runtime=.NET 8.0.26
+// (A) mutiny pattern: enqueue c_n,n_n,...,c_1,n_1 (c=154=RM_CHANGENAMECOLOR, n=165=RM_USERNAME)
+n=1: c1,n1
+n=2: c2,c1,n1,n2
+n=3: c3,c2,c1,n2,n1,n3
+n=4: c4,c1,c3,c2,n2,n3,n4,n1
+n=5: c5,c2,c1,c4,c3,n3,n5,n4,n2,n1
+n=6: c6,c3,c1,c2,c5,c4,n6,n4,n3,n5,n1,n2
+n=7: c7,c4,c1,c3,c2,c6,c5,n4,n7,n5,n1,n6,n3,n2
+n=8: c8,c5,c4,c7,c2,c3,c1,c6,n1,n5,n8,n6,n4,n2,n3,n7
+n=9: c9,c6,c1,c5,c8,c4,c3,c2,c7,n5,n1,n6,n9,n7,n8,n4,n3,n2
+n=10: c10,c7,c1,c6,c2,c9,c5,c4,c3,c8,n3,n6,n1,n7,n10,n8,n5,n9,n4,n2
+n=11: c11,c8,c1,c7,c2,c10,c3,c6,c5,c4,c9,n6,n3,n7,n1,n8,n11,n9,n4,n5,n10,n2
+n=12: c12,c9,c1,c8,c2,c11,c3,c7,c4,c6,c5,c10,n4,n7,n3,n8,n10,n9,n12,n1,n6,n11,n5,n2
+// (B) reviewer repro: enqueue c_1,n_1,...,c_n,n_n
+n=2: c1,c2,n2,n1
+n=3: c1,c2,c3,n2,n3,n1
+n=4: c1,c4,c2,c3,n3,n2,n1,n4
+n=5: c1,c4,c5,c2,c3,n3,n1,n2,n4,n5
+
+## 读法
+
+- (A) 段 = 本卡 drain 的入队序：宝宝 `SlaveList` 末尾往前 `s_n..s_1`，每只 `色,名` ⇒
+  `c_n,n_n,…,c_1,n_1`（`c` = `(byte)RM_CHANGENAMECOLOR` = 154、`n` = `(byte)RM_USERNAME` = 165）。
+- (B) 段 = reviewer-6 note 里的复现（`c_1,n_1,…,c_n,n_n`），与本文件 (A) 是同构换名：
+  2 宝宝实出序 = `色(s2),色(s1),名(s1),名(s2)`（名组与入队序相反），与 reviewer-6 实测一致。
+- **同优先级不是入队序**：n≥2 时名组相对入队序被打乱（n=3 名组 = `名(s2),名(s1),名(s3)`）；
+  这是 4 叉堆 `RemoveRootNode` 的 sift 结果，逐操作复刻即可逐位一致。

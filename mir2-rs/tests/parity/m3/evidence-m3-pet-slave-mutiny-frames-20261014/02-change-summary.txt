@@ -1,0 +1,89 @@
+M3⑨-3 宝宝叛变帧面（rework：reviewer-6 F-1 收口）——变更清单
+============================================================
+卡：openmir2-m3-pet-slave-masterdie-wire（M3⑨ 主人死/幽灵 1s 自投递，残余【帧面】）
+作者：openmir2-worker-20（worktree m3hp，分支 worktree-m3-selloff-dealoffform-recog）
+
+base（净差量口径） = refs/heads/master = walgit/master = origin/master = 3db79cae05261d5fcdb90a9fdd6afb8e0c78179f
+       （本 worktree 本地 refs/heads/master 缓冲在 ad0592b19 = 共享主检出 HEAD；按纪律未移动，见 04-boundary.txt。）
+前一片（本卡第一片，世界侧，已合入 master）：patch 82d355fc head 16b208343。
+本片原始交付：patch 5f1bb4eedd head 86c78daee（reviewer-6 a34cf65b request_changes on F-1）。
+本轮返工提交 = ecd455765（fix）；首次合并 master = a2c5a2bad；本轮 head 前移 = 5e932b4eb（到 3db79cae0，零冲突）；证据提交 = 本目录所在提交 = patch head。
+
+## 1) 为什么返工（reviewer-6 F-1）
+
+原实现按「优先级字节稳定排序」推出出帧序：
+`(byte)RM_CHANGENAMECOLOR` = 8090&0xFF = 154 < `(byte)RM_USERNAME` = 8101&0xFF = 165
+⇒ 「**所有色帧先于所有名帧**，两组内各按入队序（mutinied 序）」。
+但 oracle 的 `MsgQueue` 是 `PriorityQueue<SendMessage, byte>`
+（`src/M2Server/Actor/ActorEntity.cs:16`），.NET 8 的实现是 **4 叉最小堆**
+（`dotnet/runtime release/8.0 .../PriorityQueue.cs:52 Arity = 4 / :57 Log2Arity = 2`），
+**同优先级元素的出队序不是入队序**（二叉堆 sift 结果）。reviewer-6 在 net8.0.26 实测：
+
+    入队 色(s2),名(s2),色(s1),名(s1)  =>  出队 色(s2),色(s1),名(s1),名(s2)   （名组与入队序相反）
+    入队 c1,n1,c2,n2,c3,n3（n=3）    =>  出队 c1,c2,c3,n2,n3,n1
+    入队 c1..n4（n=4）               =>  出队 c1,c4,c2,c3,n3,n2,n1,n4
+    入队 c1..n5（n=5）               =>  出队 c1,c4,c5,c2,c3,n3,n1,n2,n4,n5
+
+`hero_pet_diff.py` 对帧种类序列**逐项**比 ⇒ 原期望（名组=入队序）会让卡级真机 diff 必红。
+本片按 reviewer-6 的选项 ①：「忠实复刻观察者 MsgQueue 的堆出队序」，逐操作复刻 .NET 8 的 4 叉堆。
+
+## 2) 变更（相对本片原始 head 86c78daee：3 个 .rs，+298/-23）
+
+    $ git diff --stat 86c78daee a2c5a2bad -- mir2-rs/bins/game-svr/src
+     mir2-rs/bins/game-svr/src/lib.rs      |   1 +
+     mir2-rs/bins/game-svr/src/main.rs     |  95 ++++++++++----
+     mir2-rs/bins/game-svr/src/msgqueue.rs | 225 ++++++++++++++++++++++++++++++++++
+     3 files changed, 298 insertions(+), 23 deletions(-)
+
+（相对 base 3db79cae0 的净差量 = 4 个 .rs，+604/-0：本卡两片叠加，见 04-boundary.txt。前移前后逐字不变。）
+
+### 2.1 新增 `bins/game-svr/src/msgqueue.rs`（+225，lib 导出）
+
+`NetPriorityQueue<T>`：`.NET PriorityQueue<TElement, TPriority>`（`TPriority = u8`）的**出队序等价物**。
+
+- `.NET 8` 是 **4 叉**最小堆：`GetParentIndex(i) = (i-1) >> 2`、`GetFirstChildIndex(i) = (i<<2)+1`；
+- `enqueue` = .NET `MoveUpDefaultComparer`（严格小于父才上浮）；
+- `dequeue` = root 取出 + **末元素回填根** + `MoveDownDefaultComparer`
+  （4 个孩子里取**首个**最小者；末元素 `<=` 选中子时停）；
+- 单测 `matches_dotnet_priority_queue_dequeue_order` 钉 n=1..12 的实出队序
+  （与 net8.0.26 实跑逐位对齐，见 `msgqueue-dotnet-ref.txt` / `dotnet-pq8-source-excerpt.txt`）；
+- 单测 `ties_are_not_insertion_order` 钉「同优先级 ≠ 入队序」这一 F-1 根因。
+
+`lib.rs` +1 行：`pub mod msgqueue;`（bin 与集成测试共用）。
+
+### 2.2 `main.rs::drain_slave_mutiny_downlink`（改：两循环 → 堆）
+
+- 新增局部 `enum MutinyFrame { NameColor{sid,color}, UserName{sid,color,show_name} }`；
+- 对每个观察者，按 **oracle 入队序**（每只宝宝 `RefNameColor(); RefShowName();`，
+  `PlayObject.Base.cs:351-352`）`enqueue` 进 `NetPriorityQueue`
+  （优先级 = `(byte)wIdent`：色 154、名 165），再 `dequeue` 逐条编码下发；
+- **不再**用「所有色循环 + 所有名循环」；
+- 函数头「次序」段改写为堆出队序说明（含 F-1 的实例），并补一条登记：
+  本模块只复刻堆算法，混合队列（入队前已有其它消息）场景 `not_verified`（R 级）。
+
+### 2.3 `main.rs` 用例
+
+| 用例 | 变更 |
+| --- | --- |
+| `smframe::tests::sm_changenamecolor_header_only` | 不变（帧头 5 字段 + 无尾） |
+| `tests::slave_mutiny_downlink_emits_namecolor_then_username` | 不变（单宝宝：色→名，载荷 + AOI 距离门） |
+| `tests::slave_mutiny_downlink_groups_all_colors_before_names` → **`slave_mutiny_downlink_follows_msgqueue_heap_order`** | 期望从「名组=入队序（名(s2),名(s1)）」改成 **oracle 实出序（名(s1),名(s2)）** |
+
+## 3) 登记（未 1:1，属真机项）
+
+1. **500ms `VisibleHumanList` 缓存**（`BaseObject.Message.cs:395`；重算支 `:399-402` 用 12 的 25×25，
+   缓存命中支 `:453-460` 用 `<11`）：本实现每 tick 现算现发（同 `drain_combat_downlink` 口径）。
+2. **帧先入观察者 `MsgQueue`，下一轮 `Run()` 才回 `SM_*`**：本实现当 tick 直发（同既有下行族）。
+3. **堆只复刻算法、不建模整条队列**：oracle 真实出队序还受「入队前队列里已有其它消息」影响
+   （跨 tick、其它下行）⇒ 混合队列场景 `not_verified`（R 级，真机窗口）。堆布局随 .NET 运行时版本
+   可变，本模块对齐**现状 oracle 运行版本 net8.0.26**。
+4. `NpcNameColor` 未在 Rust 配置层建模（本路径恒非 NPC ⇒ 不可达，传 0 且不消费）。
+5. `GetShowName()` 的 `(主人名)` 后缀：本路径 `process_slave_mutiny` 已把 `Master` 置 `None` ⇒ 不可达。
+6. `ghosted` 支不产帧：`RM_MASTERDIEGHOST` 在 oracle 里恒不可达（本卡 BUG-REPLICA ④）。
+
+## 4) 本片**不**覆盖（另行登记）
+
+- **召唤/受奴路径的 `RefNameColor`/`RefShowName`**：`MakeSlave`（`BaseObject.cs:1194`）、
+  `MagTamming` 落尾（`MagicManager.cs:764`）在召唤命令路径，属另一接点。
+- 卡级真机 DoD（R 级）：真机两侧 `run_hero_pet_pair.ps1` 同序列 `diff=0`（含叛变站点帧序/字节），
+  需 owner 独占窗口 —— 本片只交离线实现片，**not_verified**。

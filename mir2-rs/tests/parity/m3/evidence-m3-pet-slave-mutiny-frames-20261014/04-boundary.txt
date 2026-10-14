@@ -1,0 +1,44 @@
+M3⑨-3 宝宝叛变帧面（rework：reviewer-6 F-1 收口）——边界 / 纪律 / 残留物
+====================================================================
+卡：openmir2-m3-pet-slave-masterdie-wire   作者：openmir2-worker-20
+base = 3db79cae0（walgit/master = origin/master）；证据提交 = 本目录所在提交 = patch head。
+本 worktree 本地 refs/heads/master = ad0592b19（= 共享主检出 HEAD，与 walgit/master 分叉）；
+按「不许改共享主检出」纪律**未移动**该 ref；一切净差量/边界按 3db79cae0（= walgit/master）计。
+（本轮 head 前移：f43364c45 → 3db79cae0，`git merge --no-ff origin/master` 零冲突；见 `README.md`。）
+
+## 1) 边界（净差量）
+
+    $ git diff --name-status 3db79cae0 HEAD
+    M  mir2-rs/bins/game-svr/src/lib.rs          (+1  pub mod msgqueue)
+    M  mir2-rs/bins/game-svr/src/main.rs         (+345：本卡两片叠加)
+    A  mir2-rs/bins/game-svr/src/msgqueue.rs     (+225)
+    M  mir2-rs/bins/game-svr/src/smframe.rs      (+33)
+    A  mir2-rs/tests/parity/m3/evidence-m3-pet-slave-mutiny-frames-20261014/**（21 件）
+
+净差量 = **4 个 .rs（+604/-0）+ 证据 21 件**。
+
+    $ git diff --name-only 3db79cae0 HEAD -- src sql MirClient                                  # 空
+    $ git diff --name-only 3db79cae0 HEAD -- mir2-rs/crates/protocol mir2-rs/crates/storage      # 空
+
+- 冻结面 `src/ sql/ MirClient` + 接口冻结线 `crates/protocol|storage`：**零改动**。
+- 未动 `crates/world`（本片只动宿主 `bins/game-svr`）；与 ⑤⑥⑦⑧ 卡写集不相交。
+- 本片原始 head 86c78daee（reviewer-6 request_changes）→ 返工 head → 本轮前移 head（见 patch）。
+  返工只改 3 个 .rs（+298/-23）—— 见 `02-change-summary.txt`；head 前移本身零内容改动。
+
+## 2) 纪律
+
+- **共享主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2` 未写**：HEAD 仍 `ad0592b19`、
+  `refs/heads/master` 未移动（本 worktree 内 `git status` 干净，除本卡证据/代码）。
+- **零起栈 / 零占端口**：九个游戏端口（5000/5100/5500/5600/5700/6000/7000/7100/7200）全 DOWN；
+  仅共享 `3306`（MySQL）与 `8081`（walgit）在听（本线未起任何服务）。
+- **未 merge、未自签 review、未移卡**：只交 `patch` + `status: needs-review`。
+- 隔离构建：`CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target`（在检出外）。
+
+## 3) 残留物清单
+
+- `E:/tmp/openmir2-m3hp-target`（隔离 target，保留复用）。
+- `E:/tmp/m3hp-t58/`（本轮门禁/红检中间输出 + `RC-rc*.txt`；已复刻入库，可删）。
+- `E:/tmp/m3hp-t58-pq/`（.NET PriorityQueue 实跑参考工程 `Program.cs`/`pq.csproj` + `dotnet-ref.txt`）
+  与 `E:/tmp/m3hp-t58-pq-ref/PQ8.cs`（.NET 8 BCL 源摘来源）—— 参考材料，入库摘录后留存（可删）。
+- 分支 `worktree-m3-selloff-dealoffform-recog` @本 head 已 push origin+walgit，**未 merge**（等非作者 review）。
+- 证据目录已在库（`mir2-rs/tests/parity/m3/evidence-m3-pet-slave-mutiny-frames-20261014/**`）。
