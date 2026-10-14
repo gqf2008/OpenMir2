@@ -1,0 +1,78 @@
+240 — 片58（`239`）门禁 / 机判 / 就绪读数（2026-10-15，tag `m2svr`）
+卡 `openmir2-client-e2e-enter-gaps`；base = `origin/master` = `12f2a4187`；本片零生产代码改动
+cwd = `mir2-rs`（四门禁）/ 证据目录（工具自检）；`CARGO_TARGET_DIR=E:/tmp/m2svr-target`（隔离）
+====================================================================================================
+
+# 0) 本片内容（零生产代码）
+
+brief 顶部 root 2026-10-14 15:0x 头号项 ① 的二分结论（`205` §3）遗留一条未解释读数：
+「失败侧进图 `hp=18` / 工作侧 `hp=19`，18 从哪来？」本片用**真机两侧读数 + 库行**钉死 = **持久化 DB 状态**
+（进图对 HP 是纯 DB 读），非进图路径回归、也非区间引入。判据全文见 `239-residual-hp-origin-20261015.txt`。
+本片不动 `205` 的二分结论，只补最后一条读数；**无生产代码可改**。
+
+# 1) 四门禁（`--no-fail-fast` 口径逐条跑）
+
+$ cargo fmt --all -- --check
+    rc=0（无输出）
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.84s
+    rc=0
+
+$ cargo test --workspace --no-fail-fast
+    聚合：suites=101 passed=1233 failed=0 ignored=22（`grep -c FAILED` = 0）
+    rc=0
+
+$ cargo run -q -p msgcodegen -- --check
+    msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+    rc=0
+
+# 2) 判据工具自检（本片引用到的判据工具，真身）
+
+$ python -I -B verify_client_highhp_family.py --selftest
+    SELFTEST OK (6/6)   rc=0
+$ python -I -B check_rust_window_preflight.py --selftest
+    SELFTEST OK (50/50) rc=0
+
+# 3) 窗口就绪（fresh，2026-10-15 03:1x；与 `239` 的 R 前置结论配套）
+
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer --target-dir E:/tmp/m2svr-window-target
+    R1..R6 全 OK（R7 未给 --provenance ⇒ PREREQ/INFO 跳过）
+    RESULT: GREEN   rc=0
+    # R6 构建源 HEAD=da2df1fdb 相对基线 origin/master@12f2a4187 生产路径零差异
+
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --check-dir . \
+      --window-script ./client-e2e-window.fixed.sh.txt --target-dir 'E:\tmp\m2svr-window-target'
+    OK G1 Rust 窗口前置门 GREEN（R1..R7）
+    OK G2 ×11 件判据脚本 selftest
+    OK G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+    OK G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+    WINDOW_READY=YES   RESULT: GREEN   rc=0
+
+$ python -I -B window_handoff.py --repo /e/tmp/m2svr-window-origin --ref HEAD --check-dir . \
+      --window-script E:/tmp/openmir2-watch/client-e2e-window.sh --target-dir 'E:\tmp\m2svr-window-target'
+    OK  G1 Rust 窗口前置门 GREEN（R1..R7）
+    RED G5 窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 指向**共享主检出**（rev 车道工作区）
+    RED G5 窗口脚本 tgt=E:\tmp\openmir2-merge-target != 本计划 --target-dir=E:\tmp\m2svr-window-target
+    WINDOW_READY=NO    RESULT: RED      rc=1
+    # 活脚本 sha256=0567f89e5a8f82305dd75c50d8d150c86d72cd7e4efd0da52e431608756aacec（mtime 10-13 21:49）逐字节未变
+    # 共享主检出 HEAD = 8e491f81e（**缺** c61b9627a/6cadc9fbf/fd68e037d）⇒ 直接跑它会构建回未含修复的 exe
+
+# 4) 库行 / 日志快照锚（只读；`239` 的原始件）
+
+$ mysql -h 127.0.0.1 -P 3306 -u root -e "<见 239 §2.3 的 SELECT>"
+    12215  aaa  292  652  19  19  2026-10-14 15:04:01      # 只读，无写入
+
+$ sha256sum E:/tmp/client-e2e/stack2/game-svr.out.log E:/tmp/client-e2e/stack/game-svr.out.log
+    6292b49b6f8f4acfe4887b7cfda6145924fa63df719c8ee672826a14fcf78b55 *…/stack2/game-svr.out.log
+    b3ca32eae6b69b127eadf1cac4f4d3fdf53e717a5cd72b79426bc6636b4d5798 *…/stack/game-svr.out.log
+    # 两文件都是 append-only（stack2 仍被泄漏栈追加）⇒ 上面是**本片读取时刻**的快照锚；
+    # 被引用的行（131/132/250/262/263）在此锚点稳定不变。
+
+# 5) 残留物 / 纪律
+
+- 本片零起栈、零端口占用、零进程；未杀任何 root 进程；未动共享主检出 / root 活脚本 / 泄漏栈。
+- 共享 3306 只读 SELECT 一次（无写入）。未 merge、未自签 review。
+- 原始读数：`E:/tmp/m2svr-burst50/`（`01-preflight-subst.txt` / `02-handoff-subst.txt` / `03-ports.txt` /
+  `04-handoff-live.txt` / `10-fmt.txt` / `11-clippy.txt` / `12-test.txt` / `13-msgcodegen.txt` / `14-selftest.txt`）。

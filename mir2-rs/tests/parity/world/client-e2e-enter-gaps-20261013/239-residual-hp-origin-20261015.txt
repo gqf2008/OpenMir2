@@ -1,0 +1,114 @@
+239 — brief 头号项 ① 的**最后一条未解释读数**收口：首次进图 `hp=18` 的来源 = 持久化 DB 状态，非进图路径回归（2026-10-15，tag `m2svr`）
+卡 `openmir2-client-e2e-enter-gaps` / 车道 m2-svr / `openmir2-worker-11` / burst50
+base = `origin/master` = `12f2a41877e507de97f16341273093bee3109706`；本片零生产代码改动
+只读复查（git + 真机日志 + 共享 3306 只读 SELECT）；零起栈、零游戏端口；未动共享主检出 / root 活脚本；不 merge、不自签 review
+====================================================================================================
+
+# 0) 一句话结论
+
+root 2026-10-14 15:0x 头号项 ① 的二分结论（`205-bisect-52-752-run0-closure.txt` §3）把失败侧/工作侧的
+唯一差别归结为「第一次进图 `hp`（失败侧 18 / 工作侧 19）」，但**没有解释 18 从哪来**。本片用**真机两侧读数 +
+库行**把它钉死：
+
+- **18 是上一趟会话落库的持久化状态，不是进图路径掉血**；
+- **进图对 HP 是纯 DB 读**（同一栈、同一二进制，两趟进图读到的 HP 分别 = 18 / 19，差异只能来自 DB）。
+
+⇒ 头号项 ①「夜里某片把客户端吃不到 52/752 改回坏了」的否证**再加强一层**：连「残血从哪来」也不是回归，
+而是**正常持久化 + 一直存在的 53 布局缺陷被非满血场景暴露**。**无生产代码可修**，故本片零 patch 语义。
+
+# 1) 问题（盘点遗留）
+
+`205` §3 原文（失败侧 = root `E:/tmp/client-e2e/{stack2,verify2}`，工作侧 = `E:/tmp/client-e2e/{stack,verify1}`）：
+
+```
+失败侧 stack2/game-svr.out.log:132  52/752 入图输入 … hp=18 mp=15 max_hp=19 …
+工作侧 stack/game-svr.out.log:200   52/752 入图输入 … hp=19 mp=15 max_hp=19 …
+⇒ 唯一差别 = 第一次进图的 hp（失败侧 18 / 工作侧 19）
+```
+
+未答：**18 是进图路径（读档/重算/消耗）算出来的，还是 DB 里本来就是 18？** 前者=新回归；后者=持久化。
+
+# 2) 原始件（全部只读；命令 + 输出）
+
+## 2.1 同一个失败栈内**两趟进图**的读数（决定性）
+
+```
+$ grep -nE '进世界 ChrName|52/752 入图输入' E:/tmp/client-e2e/stack2/game-svr.out.log
+131:07:01:43.220 [INF] 进世界 ChrName:aaa CurMap:0 (297,629) Dir:4 entity=17886
+132:07:01:43.222 [DBG] 52/752 入图输入 ChrName=aaa layout=client-58 tail_len=58 WAbil[… hp=18 mp=15 max_hp=19 …]
+262:07:03:47.498 [INF] 进世界 ChrName:aaa CurMap:0 (292,652) Dir:4 entity=20012
+263:07:03:47.498 [DBG] 52/752 入图输入 ChrName=aaa layout=client-58 tail_len=58 WAbil[… hp=19 mp=15 max_hp=19 …]
+```
+
+⇒ **同一进程 / 同一 exe / 同一代码**，第一次进图 `(297,629) hp=18`，第二次进图 `(292,652) hp=19`。
+若进图路径有掉血/错算，两趟都应异常；两趟不同 ⇒ **差异来自 DB 状态**，进图路径是**纯读**。
+
+## 2.2 两趟进图之间的**存档**（说明 DB 何时被改写）
+
+```
+$ grep -nE '存档请求已发|存档应答' E:/tmp/client-e2e/stack2/game-svr.out.log
+250:07:03:37.879 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:aaa queryId=2 记录 4826 字节
+253:07:03:38.075 [INF] 存档应答 queryId=2 ChrName=aaa Ident=1102 Recog=1
+278:07:04:01.936 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:aaa queryId=4 记录 4826 字节
+281:07:04:02.135 [INF] 存档应答 queryId=4 ChrName=aaa Ident=1102 Recog=1
+```
+
+会话①（entity=17886）在 `07:03:37` 存档后退出；会话②（entity=20012）在 `07:03:47` 用同一 `ChrName:aaa` 重进，
+读到的就是会话①刚落库的状态。⇒ 会话①在 `HP<MaxHP` 下按 oracle 消费体力/周期恢复把 HP 补回 `MaxHP=19`，
+并把**位置 `(292,652)` + HP `19`** 一起落库（与 README §4「同会话重进 hp=19 ⇒ 不再发 53 ⇒ HUD 回到 `19/19`」自洽）。
+
+## 2.3 共享 3306 **只读** SELECT（库行锚）
+
+```
+$ D:/mysql/mariadb-10.11.19-winx64/bin/mysql.exe -h 127.0.0.1 -P 3306 -u root \
+    -e "SELECT c.Id,c.ChrName,c.CX,c.CY,a.Hp,a.MaxHP,a.ModifyTime
+        FROM mir2_db.characters c JOIN mir2_db.characters_ablity a ON a.PlayerId=c.Id
+        WHERE c.ChrName='aaa';"
+Id      ChrName CX      CY      Hp      MaxHP   ModifyTime
+12215   aaa     292     652     19      19      2026-10-14 15:04:01
+```
+
+- 位置 `(292,652)` / HP `19` / `ModifyTime 2026-10-14 15:04:01` = **会话②**（log 时钟 `07:04:01.936`）的落库值，
+  与 §2.1 第二次进图逐字段一致。
+- 会话①**进入**时读到的 `(297,629) hp=18` 是**更早一趟**会话留下的持久化值（`205` 的两侧对照里，
+  00:40 工作侧两趟进图分别是 `(291,666) hp=19` → `(291,651) hp=19`，也不是 `(297,629)`；
+  即 `(297,629) hp=18` 由 00:40 与 14:55 之间的某趟会话/初始化写入，与头号项区间 `ad0592b19..8e491f81e` **无关**）。
+
+## 2.4 工作侧 00:40 对照（同一口径，证明「满血就不发 53」）
+
+```
+$ grep -nE '进世界 ChrName' E:/tmp/client-e2e/stack/game-svr.out.log
+199:16:37:57.143 [INF] 进世界 ChrName:aaa CurMap:0 (291,666) Dir:4 entity=22017   # 52/752 hp=19
+305:16:40:01.624 [INF] 进世界 ChrName:aaa CurMap:0 (291,651) Dir:4 entity=26971   # 52/752 hp=19
+$ grep -nE '存档请求已发' E:/tmp/client-e2e/stack/game-svr.out.log
+291:16:39:44.993 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:aaa queryId=2 记录 4826 字节
+337:16:40:16.207 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:aaa queryId=4 记录 4826 字节
+```
+
+⇒ 工作侧两趟进图都满血（`19/19`）⇒ `BaseObject.Run()` 回血门为假 ⇒ **从不发 53** ⇒ HUD 正确。
+与失败侧的唯一差别仍是「进图那一刻 DB 里的 HP」，而非代码。
+
+# 3) 判断
+
+| 假说 | 证据 | 结论 |
+| --- | --- | --- |
+| 进图路径掉血/错算（新回归） | 同栈两趟进图 18→19（§2.1） | **否证** |
+| DB 里本来就是 18（持久化） | 两趟差 + 落库时序（§2.2）+ 库行（§2.3） | **成立** |
+| 区间 `ad0592b19..8e491f81e` 引入 | `205` §1/§2（`enter.rs`/`ability.rs` 零改动、8 个符号 `-S` 全 0） | **否证** |
+| 53 `SM_HEALTHSPELLCHANGED` header-only 布局缺陷（长存）被 `HP<MaxHP` 触发 | `183`/`187`/`205` + 片㊴ `c61b9627a`（已在 master） | **成立** |
+
+# 4) 对 R 窗口的含义（不是判据变更，是操作前置）
+
+- 窗口要复现/验证 53 修复，**必须显式制造 `HP<MaxHP`**（R 判据「保持 HP<MaxHP 进图 ⇒ HUD `19/19` +
+  `CM_RUN≥1`」）。**不能靠自然残血**：残血来自上一趟落库，不可控（本片实测同一栈内两趟就 18→19 自愈）。
+  ⇒ 按 `82-two-side-window-runbook.md` §2b 的压血 SQL（`characters_ablity.Hp/MaxHP`，主键 `PlayerId`）显式设 `Hp`。
+- 本片**不新增/不收紧**任何 ①②③ 判据；`window_handoff.py --judge` 的 8 条与 `check_healthspellchanged_trigger.py`
+  的「53 触发前置」读数口径不变。
+
+# 5) 边界与纪律
+
+- 改动 = **零生产代码**（本片为阅读 + 只读复核；交付物为本文件 + `240`/`241` + README §57 + 清单）。
+- 共享 3306：**只读 SELECT 一次**（无 INSERT/UPDATE/DELETE；`mir2_db.characters` / `characters_ablity`）。
+- 未起栈、未占端口、未杀进程、未动共享主检出 / root 活脚本 / 泄漏栈；未 merge、未自签 review。
+- 原始只读件（仓外，root 侧真机）：`E:/tmp/client-e2e/stack2/game-svr.out.log`（失败侧）、
+  `E:/tmp/client-e2e/stack/game-svr.out.log`（工作侧）；本片读取时刻快照见 `240-gates.txt` §4。
