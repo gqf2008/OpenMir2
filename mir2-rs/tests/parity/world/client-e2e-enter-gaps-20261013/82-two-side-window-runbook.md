@@ -6,8 +6,13 @@
 
 ## 0. 要证的三件事（与 root 00:4x / 卡 DoD③ 逐条对应）
 
+> ⚠ **片㊴（53 帧）追加前置**：①② 的「进图后 HUD 保持 / 能跑」在**满血进图**下证不出——53
+> `SM_HEALTHSPELLCHANGED` 只在 `HP<MaxHP` 时被体力/恢复段发出。本窗口**必须先压血**（§2b），
+> 并用 `check_healthspellchanged_trigger.py` 机判 T1/T2/T3。
+
 | # | 判据 | 期望读数 | 机判命令 |
 | --- | --- | --- | --- |
+| ①② | 53 帧按冻结客户端 `TCharDesc` 尾发（HUD 不归零 / 能跑） | 入图 `hp<max_hp`；s2c `53` ≥1 且 `body_len=12` | `check_healthspellchanged_trigger.py --log … --capture …` |
 | ③a | 该点确实无怪（两侧一致） | 两侧 `appearance_pairs == 0`；Rust 服务端 `vis==0 && af==0` | `aoi_visibility_pair.py --expect none` + `check_aoi_visibility_diag.py --expect none` |
 | ③b | 框内点 AOI 有算有下发（两侧一致） | 两侧 `appearance_pairs >= 1`；Rust 服务端 `vis>=1 && af>=2` | `aoi_visibility_pair.py --expect visible --min-pairs 1` |
 | ③b | **能攻击造成伤害**（卡 DoD③ 第三半） | 两侧 c2s `CM_HIT(3014) >= 1` 且 s2c 有 `SM_STRUCK(31)` 或 `SM_NOWDEATH(34)` | `check_attack_observability.py --left … --right … --expect any --min-hits 1` |
@@ -38,6 +43,7 @@ python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mon
 2. 无残留 BotSrv / game-svr / cargo / rustc（`Get-Process`）。
 3. `git fetch origin && git reset --hard origin/master`（窗口基 = 跑前 master oid，写进证据）。
 4. 抓包栈一律**不用管道**：起栈命令 `... > <log> 2>&1`（禁 `| tee/tail/head/grep`，会把调用挂死）。
+5. `characters_ablity.Hp < MaxHP`（§2b；否则 53 永不发，①② 覆盖不到片㊴）。
 
 ## 2. 站位（两侧必须逐字节同一坐标）
 
@@ -67,6 +73,41 @@ $margs = @('-h','127.0.0.1','-P','3306','-u','root','--password=','--batch','--s
 
 ⚠ **每一趟起栈前都要重跑站位**：上一趟客户端走动 / 断线存档会改写 `aaa` 的坐标。跑完还原到
 开工前值并记录（2026-10-14 实测开工前 = `MapName='0' CX=297 CY=629`；若已漂移以 §1a 的 before 为准）。
+
+### 2b. 53 触发前置（片㊴ ①/② R 判定的**必要条件**）
+
+片㊴ 的真凶是 `SM_HEALTHSPELLCHANGED(53)` 的布局：冻结客户端 `HIGHHP=True` 从**尾**解 12B
+`TCharDesc`，而 oracle 发 header-only ⇒ 解出 `HP/MP/MaxHP=0`（HUD `0/0`、`CanRun` 拒跑）。
+**该帧只在 `HP<MaxHP` 时被体力段/恢复段发出**（`BaseObject.Base.cs:55/68/109/244` 的
+`HealthSpellChanged()` + `BaseObject.cs:974` 的 `IncHealthSpell`）⇒ **满血进图永不发 53**，
+窗口既证不了修复也复现不了回归（既有 7 份真机 capture 里 53 计数**全为 0** 即此因，
+见 `187-healthspellchanged-trigger-precondition.md`）。**每趟起栈前压血**：
+
+```powershell
+$mysql = 'D:/mysql/mariadb-10.11.19-winx64/bin/mysql.exe'
+$margs = @('-h','127.0.0.1','-P','3306','-u','root','--password=','--batch','--skip-column-names')
+# before（还原用）：Hp / MaxHP
+& $mysql @margs -e "SELECT c.ChrName,a.Hp,a.MaxHP FROM mir2_db.characters c JOIN mir2_db.characters_ablity a ON a.PlayerId=c.Id WHERE c.ChrName='aaa';"
+# 压血：Hp = MaxHP - 2（留两格便于观察回血；smallint，MaxHP>=3 才动）
+& $mysql @margs -e "UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id SET a.Hp = a.MaxHP - 2 WHERE c.ChrName='aaa' AND a.MaxHP >= 3;"
+# 收工还原：把 before 的 Hp/MaxHP 写回
+```
+
+> ⚠ `characters_ablity` 的主键是 `PlayerId`（= `characters.Id`），**不是** `ChrName`；且 HP 列在
+> `characters_ablity.Hp` / `characters_ablity.MaxHP`（`sql/mir2_db.sql:6073`），**不在** `characters`。
+
+进世界后机判（T1 前置 + T2 已发 + T3 尾长）：
+
+```powershell
+cd mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+python -I -B check_healthspellchanged_trigger.py `
+  --log E:/tmp/window/cliente2e/rust/stack/game-svr.out.log `
+  --capture E:/tmp/window/cliente2e/rust/s2c/capture.jsonl
+```
+
+**改坏必红**：拿修复前二进制（master `8e491f81e`）跑同一窗口 ⇒ T2 命中（53 发过）但 **T3 RED**
+（`body_len=0` = oracle header-only）⇒ 客户端 HUD `0/0` + `CM_RUN=0`；修复后（`24725dfd5`+）T3 GREEN
+（`body_len=12`）。用户级读数仍是 root 的 HUD 截图 + `check_client_run_frames.py` 的 `CM_RUN` 计数。
 
 ## 3. Rust 侧（已证可跑，照抄）
 
@@ -219,4 +260,8 @@ python -I -B check_attack_observability.py `
   §4.0 前置门可离线机判。**但世界数据能否经代理下来仍须窗口实拍**；未实拍前不得写「两侧帧级一致」。
 - `RM_DISAPPEAR(48)` 无编码器（怪离视野无消失帧，`bins/game-svr/src/downlink.rs` 已登记）与 ③ 无因果，
   本手册不含；归属见 `70-…txt` §F（等 owner 指派）。
-- 本手册**零生产代码改动**；只补判据工具（`check_mongen_dense_points.py`、`check_csharp_capture_preflight.py`）与运行步骤。
+- **53 触发前置（片㊴，2026-10-14 收口）**：本手册旧版未要求 `HP<MaxHP` ⇒ 满血进图 53 永不发
+  （既有 7 份 capture 全 0 条）。已补 §2b + 机判 `check_healthspellchanged_trigger.py`（T1/T2/T3，
+  selftest 8/8，含「满血 ⇒ T1 RED / header-only ⇒ T3 RED」两向牙）；证据 `187-…md`。
+- 本手册**零生产代码改动**；只补判据工具（`check_mongen_dense_points.py`、`check_csharp_capture_preflight.py`、
+  `check_healthspellchanged_trigger.py`）与运行步骤。
