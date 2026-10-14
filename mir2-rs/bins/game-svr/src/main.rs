@@ -865,6 +865,11 @@ fn handle_say(
 ///
 /// 世界侧状态机在 `crates/world/src/party.rs`；本函数只负责「找会话 → 调状态机 → 把事件按
 /// `[GateIdx, Socket]` 回帧」（事件顺序已按 oracle 的「立即帧 / `MsgQueue` 出队序」排好，别重排）。
+///
+/// `PartyEvent::GotoLabel`（oracle `FunctionNPC.GotoLable(this, "@GroupClose"/"@GroupCreate"/
+/// "@GroupAddMember"/"@GroupDelMember", false)`，`Operate.cs:806/843/881/907`）**不是帧**：
+/// 在本位置执行 `QFunction` 脚本（见 [`run_party_goto_label`]），脚本说词经 `RM_MERCHANTSAY`
+/// （优先级字节 1）→ `SM_MERCHANTSAY` 下发。
 #[allow(clippy::too_many_arguments)]
 fn handle_party_cmd(
     ident: u16,
@@ -876,6 +881,10 @@ fn handle_party_cmd(
     world: &mut mir2_world::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     party_cfg: &mir2_world::PartyConfig,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    npc_host: Option<&game_svr::npc::NpcHost>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
 ) {
     let Some(sender) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -901,7 +910,26 @@ fn handle_party_cmd(
     };
     let mut delivered = 0usize;
     for ev in &events {
-        let (to, body) = partywire::event_body(ev);
+        if let mir2_world::PartyEvent::GotoLabel { label, .. } = ev {
+            // oracle `FunctionNPC.GotoLable`：不是帧。在此位置执行脚本，脚本说词经
+            // `RM_MERCHANTSAY`（优先级字节 1）→ `SM_MERCHANTSAY` 在本批帧序里就地下发。
+            run_party_goto_label(
+                label,
+                chr_name,
+                socket,
+                online,
+                world,
+                saves,
+                ground_sessions,
+                npc_host,
+                catalog,
+                gates,
+            );
+            continue;
+        }
+        let Some((to, body)) = partywire::event_body(ev) else {
+            continue;
+        };
         let Some(t) = online.iter().find(|e| e.actor_id == to) else {
             continue;
         };
@@ -918,6 +946,101 @@ fn handle_party_cmd(
         "INF",
         "组队 ChrName={chr_name} ActorId={actor} ident={ident} param={param} target={target:?} → {delivered} 帧（事件 {} 条）",
         events.len()
+    );
+}
+
+/// `SystemShare.FunctionNPC.GotoLable(this, label, false)`（`PlayObject.Operate.cs:806/843/881/907`）。
+///
+/// 由 [`handle_party_cmd`] 在 `PartyEvent::GotoLabel` 的**位置**调用（位置 = oracle 排队序：
+/// `RM_MERCHANTSAY` 优先级字节 `1`，排在组队其它排队帧前）。
+///
+/// oracle 守卫 `if (SystemShare.FunctionNPC != null)` ⇒ `QFunction` 未装载（[`NpcHost::has_function_npc`]
+/// 为 false）时不执行。`NpcPlayer` 取数/回写与进世界块的 `@Login`（`PlayObject.cs:1440`）同法：
+/// 临时移出 `world.rng` 供脚本抽数后归位，脚本改写的 `Gold`/`QuestFlag` 回写存档与地面会话。
+#[allow(clippy::too_many_arguments)]
+fn run_party_goto_label(
+    label: &str,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    world: &mut mir2_world::World,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    npc_host: Option<&game_svr::npc::NpcHost>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    let Some(host) = npc_host else {
+        return;
+    };
+    if !host.has_function_npc() {
+        return;
+    }
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        return;
+    };
+    let actor = entry.actor_id;
+    let gate_idx = entry.gate_idx;
+    let Some(saved) = saves.get(chr_name) else {
+        glog!(
+            "WRN",
+            "组队 GotoLable({label})：ChrName={chr_name} 无存档记录 ⇒ 不执行"
+        );
+        return;
+    };
+    // 取数先按值抽出（避免与后面的 `saves.get_mut` 借用冲突）；口径与 `@Login` 一致。
+    let level = saved
+        .record
+        .data
+        .abil
+        .as_ref()
+        .map_or(1, |a| i32::from(a.level));
+    let gold = saved.record.data.gold;
+    let bag = saved.record.data.bag_items.clone();
+    let quest_flag = saved.record.data.quest_flag.clone();
+    let map_name = saved.enter_map.clone();
+    let (group_owner, group_member_jobs) = world.party_script_group_snapshot(actor);
+    // 脚本取数走**同一条** `world.rng`（临时移出后归位，与 `@Login`/`step_mon_gen` 同法）。
+    let mut rng = std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+    let mut says_len = 0usize;
+    let mut sent = 0usize;
+    {
+        let mut rngf = |v: i32| rng.random_below(v);
+        let mut player = npc_player_from(
+            &mut rngf,
+            chr_name,
+            actor,
+            &map_name,
+            level,
+            gold,
+            bag.as_deref(),
+            quest_flag.as_deref(),
+            catalog,
+            group_owner,
+            &group_member_jobs,
+        );
+        if let Some(says) = host.goto_label("QFunction", &mut player, label, false) {
+            says_len = says.len();
+            if let Some(tx) = route_to_gate(gates, gate_idx, socket, "组队 GotoLable 说词") {
+                sent = emit_npc_says(tx, socket, actor, &says);
+            }
+        }
+        // 回写（`@Login` 同法）：脚本改写的 `Gold`/`QuestFlag`。
+        if let Some(s) = saves.get_mut(chr_name) {
+            s.record.data.gold = player.gold;
+            if let Some(qf) = s.record.data.quest_flag.as_mut() {
+                let n = qf.len().min(player.quest_flag.as_bytes().len());
+                qf[..n].copy_from_slice(&player.quest_flag.as_bytes()[..n]);
+            }
+        }
+        if let Some(sg) = ground_sessions.get_mut(chr_name) {
+            sg.state.gold = player.gold;
+        }
+    }
+    world.rng = rng;
+    glog!(
+        "INF",
+        "组队 GotoLable({label}) 已执行 ChrName={chr_name} 说词 {says_len} 条（下发 {sent}）"
     );
 }
 
@@ -938,7 +1061,8 @@ fn drain_party_death_events(
     }
     let mut delivered = 0usize;
     for ev in &rec.party_events {
-        let (to, body) = partywire::event_body(ev);
+        let (to, body) =
+            partywire::event_body(ev).expect("死亡退组路径不含 GotoLabel（无脚本触发）");
         let Some(t) = online.iter().find(|e| e.actor_id == to) else {
             continue;
         };
@@ -6045,6 +6169,10 @@ fn sim_loop(
                             &mut world,
                             &gates,
                             &party_cfg,
+                            &mut saves,
+                            &mut ground_sessions,
+                            npc_host.as_ref(),
+                            &enter_cfg.catalog,
                         );
                     } else if game_svr::attackwire::is_hit_ident(cmd.ident) {
                         // `openmir2-m3-attack-magic-wiring`（第一片）：9 条 `CM_*HIT` 派发
@@ -6165,7 +6293,8 @@ fn sim_loop(
                             let owner = world.entities.get(aid).map(|e| e.group_owner).unwrap_or(0);
                             if owner != 0 {
                                 for ev in world.party_del_member(owner, aid, &party_cfg) {
-                                    let (to, body) = partywire::event_body(&ev);
+                                    let (to, body) = partywire::event_body(&ev)
+                                        .expect("断线退组路径不含 GotoLabel（无脚本触发）");
                                     let Some(t) = online.iter().find(|e| e.actor_id == to) else {
                                         continue;
                                     };
@@ -8096,6 +8225,10 @@ mod tests {
             &mut world,
             &gates,
             &cfg,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            None,
+            &game_svr::ability::StdItemCatalog::new(),
         );
         let t_mode = drain(&mut rx0);
         assert_eq!(t_mode.len(), 1, "T 只收到一条 SM_GROUPMODECHANGED");
@@ -8116,6 +8249,10 @@ mod tests {
             &mut world,
             &gates,
             &cfg,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            None,
+            &game_svr::ability::StdItemCatalog::new(),
         );
         let frames = drain(&mut rx0);
         // 事件表的**全局次序**（两 socket 共用一条 channel）：立即帧先、排队帧后；
@@ -8162,6 +8299,10 @@ mod tests {
             &mut world,
             &gates,
             &cfg,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            None,
+            &game_svr::ability::StdItemCatalog::new(),
         );
         let frames = drain(&mut rx0);
         // 全局事件次序：GCANCEL(L,立即), DELMEM_OK(L), GCANCEL(T,排队156),
@@ -8184,6 +8325,167 @@ mod tests {
             mir2_protocol::edcode::decode(&delok[12..]),
             gbk_encode("T"),
             "SM_GROUPDELMEM_OK 尾 = EncodeString(被删者名)"
+        );
+    }
+
+    /// **`openmir2-m3-party-gotolabel-ext` 进程级判据**：`FunctionNPC.GotoLable` 宿主接线。
+    ///
+    /// 走**生产路径** `handle_party_cmd`：`CM_CREATEGROUP` 成功 ⇒ 世界侧在 oracle `Operate.cs:843`
+    /// 的位置入 `PartyEvent::GotoLabel("@GroupCreate")`（排队桶，优先级字节 1）；宿主 drain 时装载
+    /// `QFunction` 并执行脚本，说词经 `SM_MERCHANTSAY(643)` 就地在 `SM_GROUPMEMBERS(667)` 之后、
+    /// `RM_GROUPMESSAGE` 的 `SM_SYSMESSAGE(100)` 之前下发（oracle 线上序：立即帧 → 排队帧按优先级升序）。
+    ///
+    /// 红检（两条）：① 把世界侧 `party_create_group` 的 `em.later(..GotoLabel..)` 删掉 ⇒ 无 643；
+    /// ② 把 `handle_party_cmd` 的 `GotoLabel` 分支删掉（或把脚本说词 append 到帧尾）⇒ 643 缺失/位置必红。
+    #[test]
+    fn party_gotolabel_runs_qfunction_script_at_queued_position() {
+        use mir2_script::{SayingProcedure, SayingRecord, ScriptInfo};
+        use mir2_world::{Entity, PartyConfig};
+        use std::collections::HashMap;
+
+        fn ident(body: &[u8]) -> u16 {
+            u16::from_le_bytes([body[4], body[5]])
+        }
+        fn drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
+            let mut out = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                match ev {
+                    SimToGate::SendFrame { body, .. } => out.push(body),
+                    other => panic!("组队路径不得发 SendFrame 以外的命令，实得 {other:?}"),
+                }
+            }
+            out
+        }
+
+        // `QFunction`（`SystemShare.FunctionNPC = new Merchant()`，`GameApp.cs:87`）装载一个
+        // `@GroupCreate` 说词；`has_function_npc()` 只看 `loaded`。
+        let host = game_svr::npc::NpcHost {
+            envir_root: std::path::PathBuf::new(),
+            defs: vec![game_svr::npc::NpcDef {
+                chr_name: "QFunction".into(),
+                file_path: "Market_Def".into(),
+                script_name: Some("QFunction".into()),
+                is_hide: false,
+                is_quest: false,
+                loaded: true,
+                scripts: vec![ScriptInfo {
+                    is_quest: false,
+                    quest_info: Default::default(),
+                    record_list: vec![SayingRecord {
+                        s_label: "@GroupCreate".into(),
+                        procedure_list: vec![SayingProcedure {
+                            condition_list: Vec::new(),
+                            action_list: Vec::new(),
+                            else_action_list: Vec::new(),
+                            s_say_msg: "grp".into(),
+                            s_else_say_msg: String::new(),
+                        }],
+                        bo_ext_jmp: false,
+                    }],
+                    quest_count: 0,
+                }],
+            }],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut world = mir2_world::World::new(32, 32);
+        let l = world.add_entity(Entity::new(1, "L", 10, 10));
+        let t = world.add_entity(Entity::new(2, "T", 11, 10));
+        world.entities.get_mut(t).unwrap().allow_group = true;
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "L".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: l,
+            },
+            OnlineEntry {
+                account: "b".into(),
+                chr_name: "T".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 6,
+                actor_id: t,
+            },
+        ];
+        let cfg = PartyConfig::default();
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert(
+            "L".into(),
+            SavedHuman {
+                account: "a".into(),
+                record: record::PlayerRecord::default(),
+                enter_map: "0".into(),
+            },
+        );
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        let _ = drain(&mut rx0);
+        handle_party_cmd(
+            mir2_protocol::messages::CM_GROUPMODE,
+            1,
+            None,
+            "T",
+            6,
+            &online,
+            &mut world,
+            &gates,
+            &cfg,
+            &mut saves,
+            &mut ground_sessions,
+            Some(&host),
+            &catalog,
+        );
+        let _ = drain(&mut rx0);
+        handle_party_cmd(
+            mir2_protocol::messages::CM_CREATEGROUP,
+            0,
+            Some("T"),
+            "L",
+            5,
+            &online,
+            &mut world,
+            &gates,
+            &cfg,
+            &mut saves,
+            &mut ground_sessions,
+            Some(&host),
+            &catalog,
+        );
+        let frames = drain(&mut rx0);
+        let idents: Vec<u16> = frames.iter().map(|b| ident(b)).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_CREATEGROUP_OK,
+                mir2_protocol::messages::SM_GROUPMEMBERS,
+                mir2_protocol::messages::SM_GROUPMEMBERS,
+                // GotoLable("@GroupCreate") 的脚本说词：`RM_MERCHANTSAY`（优先级字节 1）
+                // ⇒ 在 `RM_GROUPMESSAGE(253)` 的组队说词之前。
+                mir2_protocol::messages::SM_MERCHANTSAY,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+            ],
+            "实际 {idents:?}"
+        );
+        let say = frames
+            .iter()
+            .find(|b| ident(b) == mir2_protocol::messages::SM_MERCHANTSAY)
+            .unwrap();
+        assert_eq!(
+            mir2_protocol::edcode::decode(&say[12..]),
+            gbk_encode("QFunction/grp"),
+            "GotoLable 说词行 = normNpc.ChrName + '/' + sMsg"
         );
     }
 
@@ -8254,6 +8556,10 @@ mod tests {
             &mut world,
             &gates,
             &cfg,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            None,
+            &game_svr::ability::StdItemCatalog::new(),
         );
         let _ = drain(&mut rx0);
         handle_party_cmd(
@@ -8266,6 +8572,10 @@ mod tests {
             &mut world,
             &gates,
             &cfg,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            None,
+            &game_svr::ability::StdItemCatalog::new(),
         );
         let _ = drain(&mut rx0);
         assert_eq!(

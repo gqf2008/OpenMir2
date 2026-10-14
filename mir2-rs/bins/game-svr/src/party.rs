@@ -50,42 +50,45 @@ pub fn world_config(
 /// - [`PartyEvent::GroupMembers`]（尾 `EncodeString("a/b/c/")`）⇒ `PlayObject.Base.cs:1361-1366`；
 /// - [`PartyEvent::GroupCancel`] ⇒ `PlayObject.cs:5150`（立即）/ `PlayObject.Message.cs:1848-1850`（排队）；
 /// - [`PartyEvent::SysMessage`] ⇒ `SM_SYSMESSAGE(100)`（`PlayObject.Message.cs:1715-1724` 的
-///   `RM_SYSMESSAGE`/`RM_GROUPMESSAGE` 出队映射）。
+///   `RM_SYSMESSAGE`/`RM_GROUPMESSAGE` 出队映射）；
+/// - [`PartyEvent::GotoLabel`] ⇒ **`None`**（不是帧；宿主 drain 时特判并执行 `QFunction` 脚本，
+///   脚本说词另经 `RM_MERCHANTSAY` 下发，见 `mir2_world::party::PartyEvent::GotoLabel`）。
 #[must_use]
-pub fn event_body(ev: &PartyEvent) -> (i32, Vec<u8>) {
+pub fn event_body(ev: &PartyEvent) -> Option<(i32, Vec<u8>)> {
     match ev {
+        PartyEvent::GotoLabel { .. } => None,
         PartyEvent::GroupModeChanged { target, param } => {
-            (*target, smframe::sm_groupmodechanged(*param))
+            Some((*target, smframe::sm_groupmodechanged(*param)))
         }
-        PartyEvent::CreateGroupOk { target } => (*target, smframe::sm_creategroup_ok()),
+        PartyEvent::CreateGroupOk { target } => Some((*target, smframe::sm_creategroup_ok())),
         PartyEvent::CreateGroupFail { target, recog } => {
-            (*target, smframe::sm_creategroup_fail(*recog))
+            Some((*target, smframe::sm_creategroup_fail(*recog)))
         }
-        PartyEvent::AddMemberOk { target } => (*target, smframe::sm_groupaddmem_ok()),
+        PartyEvent::AddMemberOk { target } => Some((*target, smframe::sm_groupaddmem_ok())),
         PartyEvent::AddMemberFail { target, recog } => {
-            (*target, smframe::sm_groupaddmem_fail(*recog))
+            Some((*target, smframe::sm_groupaddmem_fail(*recog)))
         }
         PartyEvent::DelMemberOk { target, name } => {
-            (*target, smframe::sm_groupdelmem_ok(&gbk(name)))
+            Some((*target, smframe::sm_groupdelmem_ok(&gbk(name))))
         }
         PartyEvent::DelMemberFail { target, recog } => {
-            (*target, smframe::sm_groupdelmem_fail(*recog))
+            Some((*target, smframe::sm_groupdelmem_fail(*recog)))
         }
         PartyEvent::GroupMembers {
             target,
             members_text,
-        } => (*target, smframe::sm_groupmembers(&gbk(members_text))),
-        PartyEvent::GroupCancel { target } => (*target, smframe::sm_groupcancel()),
+        } => Some((*target, smframe::sm_groupmembers(&gbk(members_text)))),
+        PartyEvent::GroupCancel { target } => Some((*target, smframe::sm_groupcancel())),
         PartyEvent::SysMessage {
             target,
             recog,
             f_color,
             b_color,
             text,
-        } => (
+        } => Some((
             *target,
             smframe::sm_sysmessage(*recog, *f_color, *b_color, &gbk(text)),
-        ),
+        )),
     }
 }
 
@@ -107,34 +110,38 @@ mod tests {
         let (t, body) = event_body(&PartyEvent::GroupModeChanged {
             target: 7,
             param: 1,
-        });
+        })
+        .expect("帧事件必可编码");
         assert_eq!(t, 7);
         assert_eq!(decode_header(&body), (0, messages::SM_GROUPMODECHANGED, 1));
         assert_eq!(body.len(), 12); // header-only
 
-        let (_, body) = event_body(&PartyEvent::CreateGroupOk { target: 7 });
+        let (_, body) = event_body(&PartyEvent::CreateGroupOk { target: 7 }).expect("编码");
         assert_eq!(decode_header(&body), (0, messages::SM_CREATEGROUP_OK, 0));
 
         let (_, body) = event_body(&PartyEvent::CreateGroupFail {
             target: 7,
             recog: -4,
-        });
+        })
+        .expect("编码");
         assert_eq!(decode_header(&body), (-4, messages::SM_CREATEGROUP_FAIL, 0));
 
         let (_, body) = event_body(&PartyEvent::AddMemberFail {
             target: 7,
             recog: -5,
-        });
+        })
+        .expect("编码");
         assert_eq!(decode_header(&body), (-5, messages::SM_GROUPADDMEM_FAIL, 0));
 
-        let (_, body) = event_body(&PartyEvent::GroupCancel { target: 7 });
+        let (_, body) = event_body(&PartyEvent::GroupCancel { target: 7 }).expect("编码");
         assert_eq!(decode_header(&body), (0, messages::SM_GROUPCANCEL, 0));
 
         // DelMemberOk：尾 = EncodeString("T")
         let (_, body) = event_body(&PartyEvent::DelMemberOk {
             target: 7,
             name: "T".into(),
-        });
+        })
+        .expect("编码");
         assert_eq!(decode_header(&body), (0, messages::SM_GROUPDELMEM_OK, 0));
         assert_eq!(edcode::decode(&body[12..]), gbk("T"));
 
@@ -145,7 +152,8 @@ mod tests {
             f_color: 0xC4,
             b_color: 0xFF,
             text: "hi".into(),
-        });
+        })
+        .expect("编码");
         let (recog, ident, param) = decode_header(&body);
         assert_eq!(recog, 7);
         assert_eq!(ident, messages::SM_SYSMESSAGE);
@@ -153,5 +161,14 @@ mod tests {
         let series = u16::from_le_bytes([body[10], body[11]]);
         assert_eq!(series, 1);
         assert_eq!(edcode::decode(&body[12..]), gbk("hi"));
+
+        // GotoLabel 不是帧 ⇒ `event_body` 返回 `None`（由宿主 drain 特判执行脚本）。
+        assert_eq!(
+            event_body(&PartyEvent::GotoLabel {
+                target: 7,
+                label: mir2_world::party::PARTY_LABEL_GROUP_CREATE,
+            }),
+            None
+        );
     }
 }
