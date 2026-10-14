@@ -125,7 +125,7 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
   本 §6 的 R-6 站点写法即此）完全没有被解析。现机判（`check_anchors.py`）：带目录引用必须与锚点的
   `literal`/`path` **全等**（裸 basename 仅限显式 `basename_ok`）、未识别扩展名走
   `UNKNOWN_REF_EXT` fail-closed、裸续引用归到同行前一个引用并按锚点 `also` 校验**行内容**
-  （未登记 / 越界 / 内容不符都判 RED）；`selftest` 16/16（含 15 条改坏必红；裸续引用三条分支
+  （未登记 / 越界 / 内容不符都判 RED）；`selftest` 17/17（含 16 条改坏必红；裸续引用三条分支
   `BARE_REF_UNGUARDED`/`BARE_REF_FILE_MISSING`/`BARE_REF_OUT_OF_RANGE` 亦各有活用例）。
 
 ## 7. 当前状态（阻塞）
