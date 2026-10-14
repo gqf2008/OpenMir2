@@ -18,11 +18,11 @@
   `FIXTURE_CHAIN GREEN: runner_ok=10 prereq_or_skip=0 red=0`（`04`）；
   链门 `selftest 40/40`（`05`）；外部改坏必红（`:5795`→`:5665` ⇒ check RED + selftest 12/13，
   还原 ⇒ GREEN 且 `git diff` 空，`06`）；四门禁 fmt/clippy/test/msgcodegen（`10`–`13`）。
-- base / head：origin/master `41e61029e` / `224cea0c9`（+ 本证据提交）；
+- base / head：origin/master `41e61029e` / `be425cd06`（最终 head，含本证据提交）；
   branch `worktree-m3-chain-gate-fmt-evidence`；双端 push origin=walgit（本片后续）。
 - 作者 / 复核：`openmir2-worker-5` / **待独立 principal**（不 merge、不自签）。
 - tier：**L**（文档行号 + 证据；零 `.rs`、零运行时、冻结面空；不触 RNG 抽数序 / 时序 / 落库 / 战斗数值）。
-- 边界（`07`）：`git diff origin/master HEAD` = 32 路径，全部 `mir2-rs/tests/parity/**`；
+- 边界（`07`）：`git diff origin/master HEAD` = 49 路径，全部 `mir2-rs/tests/parity/**`（其中本新证据包 17 件）；
   `*.rs` = 0；冻结面（`src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/ mir2-rs/bins/`）= 0。
 
 - **写集声明（如实登记，不藏）**：本片改的 `rng-trace-scene/DRIVER-CONTRACT.md` 与
@@ -42,7 +42,7 @@
 | `04-chain-gate-green.txt` | `fixture_chain_gate.py check` 全量 ⇒ `FIXTURE_CHAIN GREEN runner_ok=10 red=0` |
 | `05-chain-gate-selftest.txt` | `fixture_chain_gate.py selftest` ⇒ 40/40（含并集后的两条防回退牙） |
 | `06-mutation-doc-drift-red.txt` | 外部改坏必红：`:5795`→`:5665` ⇒ check RED + selftest 12/13；还原 ⇒ GREEN 且 `git diff` 空 |
-| `07-boundary.txt` | 边界：32 路径全在 `mir2-rs/tests/parity/**`、`*.rs`=0、冻结面 0、`git status` 干净 |
+| `07-boundary.txt` | 边界：49 路径全在 `mir2-rs/tests/parity/**`、`*.rs`=0、冻结面 0、`git status` 干净 |
 | `08-f1-count-bound-red.txt` | reviewer-6 **F-1** 收口：链门 `.py` 登记项下界 `>=23`（== 实计数 23）；抽掉 castle 两条登记（23→21）⇒ 计数牙 RED，还原 ⇒ GREEN |
 | `10-gate-fmt.txt` / `11-gate-clippy.txt` / `12-gate-test.txt` / `13-gate-msgcodegen.txt` | 四门禁读数（HEAD `224cea0c9`，隔离 `CARGO_TARGET_DIR`） |
 | `20-evidence-verify.txt` | 本包 `SHA256SUMS` 的 `verify --check-extra` + `eolcheck`（仓库 LF/git-blob 口径） |
