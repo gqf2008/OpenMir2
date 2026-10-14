@@ -94,6 +94,9 @@ impl Engine<'_, '_> {
             }
             "ConditionOfCheckUseItem" => self.cond_check_use_item(info, result),
             "ConditionOfCheckJob" => self.cond_check_job(info, result),
+            "ConditionOfCheckGroupCount" => self.cond_check_group_count(info, result),
+            "ConditionOfCheckGroupClass" => self.cond_check_group_class(info, result),
+            "ConditionOfIsGroupMaster" => self.cond_is_group_master(info, result),
             "ConditionOfGender" => self.cond_gender(info, result),
             "ConditionOfCheckItemAddValue" => self.cond_check_item_add_value(info, result),
             "ConditionOfCheckBagSize" => self.cond_check_bag_size(info, result),
@@ -237,6 +240,81 @@ impl Engine<'_, '_> {
             *result = false;
         }
         if mir2_shared::hutil32::compare_lstr(p1, "Taoist") && job != 2 {
+            *result = false;
+        }
+    }
+
+    /// `ConditionOfCheckGroupCount`（code 73，`ConditionProcessingSys.cs:2670`）。
+    ///
+    /// oracle 结构：无组 ⇒ 提前返回（恒假）；`sParam2` 非整数字面量时走
+    /// `GetVarValue(playerActor, sParam2, ref nCount)`，仍 <0 ⇒ 脚本条件错误。
+    /// **`switch (cMethod)` 整段被注释掉（原文如此，`:2692-2726`）⇒ `success` 恒 `false`**
+    /// —— `nCount` 参与不了任何判定，缺陷 1:1 照搬（whitelist **T-52**）。
+    fn cond_check_group_count(&mut self, info: &QuestConditionInfo, result: &mut bool) {
+        *result = false;
+        if self.player.group_owner() == 0 {
+            return;
+        }
+        // C# `HUtil32.StrToInt(sParam2, -1)`：解析失败给 -1。
+        let mut n_count = mir2_shared::hutil32::str_to_int(&info.s_param2, -1);
+        if n_count < 0 {
+            // `GetVarValue(playerActor, sParam2, ref nCount)` —— `ref` 传入值 = -1。
+            n_count = self.var_info_of_in(&info.s_param2, n_count).n;
+            if n_count < 0 {
+                self.script_condition_error("CHECKGROUPCOUNT", info);
+                return;
+            }
+        }
+        // 缺陷照搬：oracle 的 `switch (cMethod)` 整段被注释 ⇒ 此处仅保留读 `cMethod` 的
+        // 结构位（`sParam1[0]`），不产生任何判定（`success` 保持 false）。
+        let _c_method = first_char(&info.s_param1);
+    }
+
+    /// `ConditionOfCheckGroupClass`（code 194，`ConditionProcessingSys.cs:262`）。
+    ///
+    /// 逐 `playerActor.GroupMembers` 按 `Job` 计数，再按 `sParam2[0]` 的 `=/ >/ </ default(>=)`
+    /// 同 `nParam3` 比较。oracle 的 `if (nJob < 0)` 是**死分支**（`PlayerJob.None = 3`，
+    /// byte 枚举无负值，`PlayerJob.cs:3-21`）⇒ 未识别的 `sParam1` 不会报错（缺陷照搬，
+    /// whitelist **T-52**）。
+    fn cond_check_group_class(&mut self, info: &QuestConditionInfo, result: &mut bool) {
+        *result = false;
+        let mut n_count = 0;
+        // `PlayerJob nJob = PlayerJob.None;`（None = 3）。
+        let mut n_job: i32 = 3;
+        let p1 = info.s_param1.as_str();
+        if mir2_shared::hutil32::compare_lstr(p1, "Warrior") {
+            n_job = 0;
+        }
+        if mir2_shared::hutil32::compare_lstr(p1, "Wizard") {
+            n_job = 1;
+        }
+        if mir2_shared::hutil32::compare_lstr(p1, "Taoist") {
+            n_job = 2;
+        }
+        // oracle 此处为 `if (nJob < 0) { ScriptConditionError(…ChangeJob…); return; }`；
+        // 因 `None = 3` 恒假，不报错也不返回（死代码，照搬其「不存在」）。
+        if self.player.group_owner() != 0 {
+            for job in self.player.group_member_jobs() {
+                if job == n_job {
+                    n_count += 1;
+                }
+            }
+        }
+        let c_method = first_char(&info.s_param2);
+        *result = method_cmp(c_method, n_count, info.n_param3);
+    }
+
+    /// `ConditionOfIsGroupMaster`（code 148，`ConditionProcessingSys.cs:4466`）。
+    ///
+    /// oracle 两个分支**都只写 `success = false`**，从不置 `true` ⇒ 恒假（缺陷照搬，
+    /// whitelist **T-52**）。保留读 `GroupOwner`/`ActorId` 的结构位。
+    fn cond_is_group_master(&mut self, _info: &QuestConditionInfo, result: &mut bool) {
+        let group_owner = self.player.group_owner();
+        if group_owner != 0 {
+            if group_owner != self.player.actor_id() {
+                *result = false;
+            }
+        } else {
             *result = false;
         }
     }
@@ -661,11 +739,21 @@ impl Engine<'_, '_> {
     }
 
     /// `ProcessingBase.GetVarValue(player, sData, ref sVar, ref sValue, ref nValue)`。
+    ///
+    /// `nValue` 是 `ref` 实参：C# 大重载**不初始化**它，未命中任何分支时保留**调用方传入值**
+    /// （`ProcessingBase.cs:1184-1268`；`GetValNameValue`/`GetDynamicValue` 也只在命中时写）。
+    /// 本仓 `n_in` 即该传入值；`var_info_of` 传 0，`ConditionOfCheckGroupCount` 传 `-1`
+    /// （见 `cond_check_group_count`）。
     fn var_info_of(&mut self, s_data: &str) -> VarInfoRes {
+        self.var_info_of_in(s_data, 0)
+    }
+
+    /// 带 `ref nValue` 初值的 `GetVarValue`（见 [`Self::var_info_of`]）。
+    fn var_info_of_in(&mut self, s_data: &str, n_in: i32) -> VarInfoRes {
         let s_var_name = s_data.to_string();
         let mut s_var = s_data.to_string();
         let mut s_value = s_data.to_string();
-        let mut n_value = 0;
+        let mut n_value = n_in;
         if s_data.is_empty() {
             return VarInfoRes {
                 var: s_var,

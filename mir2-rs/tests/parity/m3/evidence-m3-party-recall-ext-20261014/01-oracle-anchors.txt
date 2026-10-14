@@ -1,0 +1,147 @@
+# M3⑦ recall-ext oracle 锚（本仓库 src/ 实测行号，LF）
+
+## src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs
+74:            _conditionMap[(int)ConditionCode.CHECKGROUPCOUNT] = ConditionOfCheckGroupCount;
+144:            _conditionMap[(int)ConditionCode.ISGROUPMASTER] = ConditionOfIsGroupMaster;
+154:            _conditionMap[(int)ConditionCode.CHECKGROUPCLASS] = ConditionOfCheckGroupClass;
+262:        private void ConditionOfCheckGroupClass(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, ref bool success)
+2670:        private void ConditionOfCheckGroupCount(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, ref bool success)
+2683:                    ScriptConditionError(normNpc, playerActor, questConditionInfo, ConditionCode.CHECKGROUPCOUNT);
+4466:        private void ConditionOfIsGroupMaster(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, ref bool success)
+
+## src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs
+44:            ProcessExecutionMessage[(int)ExecutionCode.ReCallgroupMembers] = ActionOfRecallGroupMembers;
+118:            ProcessExecutionMessage[(int)ExecutionCode.GroupReCall] = ActionOfGroupRecall;
+3487:        private void ActionOfRecallGroupMembers(INormNpc normNpc, IPlayerActor playerActor, QuestActionInfo questActionInfo, ref bool Success)
+3918:        private void ActionOfGroupRecall(INormNpc normNpc, IPlayerActor playerActor, QuestActionInfo questActionInfo, ref bool Success)
+
+## src/OpenMir2/Enums/PlayerJob.cs
+8:        Warrior = 0,
+12:        Wizard = 1,
+16:        Taoist = 2,
+20:        None = 3
+
+## src/Modules/SystemModule/Const/ScriptFlagConst.cs
+12:        public const string sWarrior = "Warrior";
+13:        public const string sWizard = "Wizard";
+14:        public const string sTaos = "Taoist";
+
+## src/M2Server/Player/PlayObject.cs（GroupMembers 列表 + 初始化）
+587:        public IList<IPlayerActor> GroupMembers { get; set; }
+1042:            GroupMembers = new List<IPlayerActor>();
+
+## src/M2Server/Player/PlayObject.Operate.cs（GroupMembers.Add 只在团长上）
+834:            this.GroupMembers.Add(this);
+835:            this.GroupMembers.Add(playObject);
+875:            this.GroupMembers.Add(playObject);
+
+## src/OpenMir2/Grobal2.cs（GroupMax）
+35:        public const byte GroupMax = 11;
+
+## 缺陷本体（逐字）
+--- ConditionOfCheckGroupCount 的 switch 被注释（:2692-2726）---
+            //{
+            //    case '=':
+            //        if (groupOwner.GroupMembers.Count == nCount)
+            //        {
+            //            success = true;
+            //        }
+            //        break;
+
+            //    case '>':
+            //        if (groupOwner.GroupMembers.Count > nCount)
+            //        {
+            //            success = true;
+            //        }
+            //        break;
+
+            //    case '<':
+            //        if (groupOwner.GroupMembers.Count < nCount)
+            //        {
+            //            success = true;
+            //        }
+            //        break;
+            //    default:
+            //        if (groupOwner.GroupMembers.Count >= nCount)
+            //        {
+            //            success = true;
+            //        }
+            //        break;
+            //}
+        }
+
+        /// <summary>
+        /// 是否加入行会
+        /// </summary>
+        private void ConditionOfCheckHaveGuild(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, ref bool success)
+        {
+            success = playerActor.MyGuild != null;
+        }
+
+--- ActionOfRecallGroupMembers 空体（:3487-3489）---
+        private void ActionOfRecallGroupMembers(INormNpc normNpc, IPlayerActor playerActor, QuestActionInfo questActionInfo, ref bool Success)
+        {
+        }
+
+--- ActionOfGroupRecall 只剩注释行（:3918-3924）---
+        private void ActionOfGroupRecall(INormNpc normNpc, IPlayerActor playerActor, QuestActionInfo questActionInfo, ref bool Success)
+        {
+            if (playerActor.GroupOwner != 0)
+            {
+                // playerActor.GroupRecall('GroupRecall');
+            }
+        }
+--- ConditionOfIsGroupMaster 两分支只写 false（:4466-4482）---
+        private void ConditionOfIsGroupMaster(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, ref bool success)
+        {
+            if (playerActor.GroupOwner != 0)
+            {
+                if (playerActor.GroupOwner != playerActor.ActorId)
+                {
+                    success = false;
+                }
+            }
+            else
+            {
+                success = false;
+            }
+        }
+
+        /// <summary>
+        /// 判断字符串包含在文件里
+        /// </summary>
+--- ConditionOfCheckGroupClass 的 if (nJob < 0) 死分支（:283-287）---
+                return;
+            }
+            if (playerActor.GroupOwner != 0)
+            {
+                for (int i = 0; i < playerActor.GroupMembers.Count; i++)
+
+--- 返工 T-53：GetValNameValue 的 per-player S/N 回退（ProcessingBase.cs:1412-1434）---
+              else if (sName != "" && char.ToUpper(sName[0]) == 'S')   // :1412
+              {
+                  if (playerActor.m_StringList.ContainsKey(sName))
+                  {
+                      sValue = playerActor.m_StringList[sName];
+                  }
+                  else
+                  {
+                      playerActor.m_StringList.Add(sName, "");
+                      sValue = "";
+                  }
+                  result = VarType.String;                                 // 只写 sValue，不写 nValue
+              }
+              else if (sName != "" && char.ToUpper(sName[0]) == 'N')   // :1422
+              {
+                  if (playerActor.IntegerList.ContainsKey(sName))
+                  {
+                      nValue = playerActor.IntegerList[sName];
+                  }
+                  else
+                  {
+                      nValue = 0;                                          // :1430 未命中 ⇒ nValue = 0
+                      playerActor.IntegerList.Add(sName, nValue);
+                  }
+                  result = VarType.Integer;                                // Rust 未建模该回退（T-53）
+              }
+（前置：GetValNameNo(sName) < 0 才进入这两支；ProcessingBase.cs:1357/1363 的 `if (n01 >= 0) {...} else if ...`）

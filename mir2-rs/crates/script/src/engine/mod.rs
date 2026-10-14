@@ -350,6 +350,21 @@ pub trait ScriptPlayer {
     fn world_broadcast(&mut self, _msg: &str, _msg_type: i32) {}
     /// `playerActor.SendGroupText(msg)`
     fn send_group_text(&mut self, _msg: &str) {}
+    /// `playerActor.GroupOwner`（0 = 无组）。
+    ///
+    /// 供 §1.O 扩展面脚本读侧使用：`ConditionOfCheckGroupCount`
+    /// （`ConditionProcessingSys.cs:2670`）/ `ConditionOfIsGroupMaster`（`:4466`）/
+    /// `ActionOfGroupRecall`（`ExecutionProcessingSys.cs:3918`）。默认 0 = 无组。
+    fn group_owner(&self) -> i32 {
+        0
+    }
+    /// `playerActor.GroupMembers` 各成员的 `Job`（`PlayerJob`：Warrior=0 / Wizard=1 /
+    /// Taoist=2）。oracle 只有**团长自己**持有这份列表（`PlayObject.Operate.cs:834-835/875`），
+    /// 非团长为空 ⇒ 默认空表与 oracle 一致。供 `ConditionOfCheckGroupClass`
+    /// （`ConditionProcessingSys.cs:262`）读侧使用。
+    fn group_member_jobs(&self) -> Vec<i32> {
+        Vec::new()
+    }
     /// `playerActor.MyGuild.SendGuildMsg(msg)`（仅在 `MyGuild != null` 时调用）
     fn guild_send_msg(&mut self, _msg: &str) {}
     /// `playerActor.SendDefMessage(ident, param, tag1, tag2, series[, msg])`

@@ -1,0 +1,158 @@
+# 改坏必红（4 条）：每条只改一处「缺陷照搬」点，对应用例必红；随后从内存备份还原（非 git，避免误还原返工改动）。
+# 还原后本门禁全绿（见 05-gate-test.txt）。
+
+====================================================================
+## MUT1 —— cond_is_group_master 退化为恒假（把 oracle 的「团长保持初值 true」抹平）
+====================================================================
+
+running 1 test
+test is_group_master_true_only_for_leader_like_oracle ... FAILED
+
+failures:
+
+---- is_group_master_true_only_for_leader_like_oracle stdout ----
+
+thread 'is_group_master_true_only_for_leader_like_oracle' (27896) panicked at crates\script\tests\engine_tests.rs:2447:9:
+团长为真
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    is_group_master_true_only_for_leader_like_oracle
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.00s
+
+   Compiling mir2-script v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\crates\script)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.21s
+     Running tests\engine_tests.rs (E:/tmp/openmir2-m3pt-target\debug\deps\engine_tests-4a2c04efbe69d139.exe)
+error: test failed, to rerun pass `-p mir2-script --test engine_tests`
+
+[exit code = 101]
+
+====================================================================
+## MUT2 —— cond_check_group_class 不看 GroupMembers 职业（计数恒 0）
+====================================================================
+
+running 1 test
+test check_group_class_counts_members_by_job ... FAILED
+
+failures:
+
+---- check_group_class_counts_members_by_job stdout ----
+
+thread 'check_group_class_counts_members_by_job' (3848) panicked at crates\script\tests\engine_tests.rs:2515:9:
+assertion failed: engine.check_conditions(&[cond3(194, "Warrior", "=", 2)])
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    check_group_class_counts_members_by_job
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.00s
+
+   Compiling mir2-script v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\crates\script)
+warning: variable `n_job` is assigned to, but never used
+   --> crates\script\src\engine\conditions.rs:283:13
+    |
+283 |         let mut n_job: i32 = 3;
+    |             ^^^^^^^^^
+    |
+    = note: consider using `_n_job` instead
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `job`
+   --> crates\script\src\engine\conditions.rs:297:17
+    |
+297 |             for job in self.player.group_member_jobs() {
+    |                 ^^^ help: if this is intentional, prefix it with an underscore: `_job`
+
+warning: value assigned to `n_job` is never read
+   --> crates\script\src\engine\conditions.rs:286:13
+    |
+286 |             n_job = 0;
+    |             ^^^^^^^^^ this value is reassigned later and never used
+...
+289 |             n_job = 1;
+    |             --------- `n_job` is overwritten here before the previous value is read
+    |
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `n_job` is never read
+   --> crates\script\src\engine\conditions.rs:289:13
+    |
+289 |             n_job = 1;
+    |             ^^^^^^^^^ this value is reassigned later and never used
+...
+292 |             n_job = 2;
+    |             --------- `n_job` is overwritten here before the previous value is read
+
+warning: value assigned to `n_job` is never read
+   --> crates\script\src\engine\conditions.rs:292:13
+    |
+292 |             n_job = 2;
+    |             ^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: `mir2-script` (lib) generated 5 warnings (run `cargo fix --lib -p mir2-script` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.92s
+     Running tests\engine_tests.rs (E:/tmp/openmir2-m3pt-target\debug\deps\engine_tests-4a2c04efbe69d139.exe)
+error: test failed, to rerun pass `-p mir2-script --test engine_tests`
+
+[exit code = 101]
+
+====================================================================
+## MUT3 —— cond_check_group_count 把被注释的 switch 实现成真比较（去缺陷）
+====================================================================
+
+running 1 test
+test check_group_count_always_false_like_oracle ... FAILED
+
+failures:
+
+---- check_group_count_always_false_like_oracle stdout ----
+
+thread 'check_group_count_always_false_like_oracle' (13844) panicked at crates\script\tests\engine_tests.rs:2501:9:
+assertion failed: !engine.check_conditions(&[cond(73, "=", "不是数字也不是变量", 0)])
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    check_group_count_always_false_like_oracle
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.00s
+
+   Compiling mir2-script v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\crates\script)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.97s
+     Running tests\engine_tests.rs (E:/tmp/openmir2-m3pt-target\debug\deps\engine_tests-4a2c04efbe69d139.exe)
+error: test failed, to rerun pass `-p mir2-script --test engine_tests`
+
+[exit code = 101]
+
+====================================================================
+## MUT4 —— ActionOfGroupRecall 从 no-op 改成发一帧
+====================================================================
+
+running 1 test
+test group_recall_actions_are_noops_like_oracle ... FAILED
+
+failures:
+
+---- group_recall_actions_are_noops_like_oracle stdout ----
+
+thread 'group_recall_actions_are_noops_like_oracle' (36144) panicked at crates\script\tests\engine_tests.rs:2560:9:
+owner=0 不应发帧
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    group_recall_actions_are_noops_like_oracle
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.00s
+
+   Compiling mir2-script v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\crates\script)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.01s
+     Running tests\engine_tests.rs (E:/tmp/openmir2-m3pt-target\debug\deps\engine_tests-4a2c04efbe69d139.exe)
+error: test failed, to rerun pass `-p mir2-script --test engine_tests`
+
+[exit code = 101]

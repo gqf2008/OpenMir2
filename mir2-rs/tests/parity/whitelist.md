@@ -302,6 +302,21 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 
 > ⑨-2/⑨-3 的 4 条复刻缺陷（`DC` 高字节截断 / `MasterDieMutinySpeed` 除零 / `GainSlaveExp` 死代码 / 色表 latent 越界）见 B 段 **B-112..B-115**。
 
+## M3⑦ 扩展面登记（组队脚本/命令；卡片 `openmir2-m3-party-recall-ext`，2026-10-14）
+
+> 盘点报告 `mir2-rs/tests/parity/m3/M3⑦组队交易现状盘点报告-20261013.md` §1.O/§2#18 列的 5 个脚本面
+> （`RECALLGROUPMEMBERS`/`GROUPRECALL`/`CHECKGROUPCOUNT`/`CHECKGROUPCLASS`/`ISGROUPMASTER`）本节登记其中
+> **oracle 缺陷本体**（**T-52**）；另把返工时实证的通用变量解析缺口（`S`/`N` per-player 回退未实现，**T-53**）一并登记。
+> `@GroupRecall` GameCommand（`GroupRecallCommand.cs:12-66`）因本仓**无命令派发框架**，
+> 不在本卡范围（已在卡上登记待承接）。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
+| --- | --- | --- | --- |
+| T-52 | **M3⑦ 扩展面 4 处 oracle 缺陷 1:1 照搬（`openmir2-worker-21`，`recall-ext`）**：① `ConditionOfCheckGroupCount`（`ConditionProcessingSys.cs:2670-2726`）的 `switch (cMethod)` **整段被注释**（`:2692-2726`）⇒ 该条件**恒假**，`nCount` 参与不了任何判定（仅保留 `GetVarValue(ref nValue)` 的脚本条件错误路径：`sParam2` 解析失败且 `GetVarValue` 未写回 ⇒ 报 `CHECKGROUPCOUNT`）。② `ConditionOfIsGroupMaster`（`:4466-4482`）两个分支**都只写 `success = false`**，从不置 `true` ⇒ 唯一为真的路径是「`GroupOwner != 0` 且 `GroupOwner == ActorId`」时**不写**、`success` 保持 `ConditionScript.Execute` 侧传入的 `true`（= 团长为真、余为假）。③ `ConditionOfCheckGroupClass`（`:262-312`）的 `if (nJob < 0)` 是**死分支**（`PlayerJob.None = 3`，byte 枚举无负值，`src/OpenMir2/Enums/PlayerJob.cs:3-21`）⇒ 未识别的 `sParam1` 不报错、按 `None` 计数（玩家职业 0/1/2 ⇒ 计数 0）。④ `ActionOfRecallGroupMembers`（`ExecutionProcessingSys.cs:3487-3489`）**方法体为空**、`ActionOfGroupRecall`（`:3918-3924`）只剩 `if (GroupOwner != 0) { /* 被注释的 GroupRecall 调用 */ }` ⇒ 两者都是**可观测 no-op**。 | **不是差异，是 oracle 怪行为/死代码 1:1 复刻**（§8.1「行为等价优先于修 bug」）：Rust 侧照搬，**不许**「修好」成真计数/真召回/真报错。落地卡 `openmir2-m3-party-recall-ext`：`crates/script/src/engine/{conditions,actions}.rs` 的五个分支 + `dispatch.rs` 登记名 + 宿主读侧 `ScriptPlayer::group_owner/group_member_jobs`（`bins/game-svr/src/npc.rs`）与 `World::party_script_group_snapshot`（`crates/world/src/party.rs`）。向量锁死：`engine_tests::check_group_count_always_false_like_oracle` / `is_group_master_true_only_for_leader_like_oracle` / `check_group_class_counts_members_by_job` / `group_recall_actions_are_noops_like_oracle` + `party_vectors::script_group_snapshot_reads_owner_and_member_jobs`；**改坏必红**（把任一缺陷改成「正确」行为 ⇒ 对应用例必红，读数见证据 `m3/evidence-m3-party-recall-ext-20261014/`）。将来要修另开 `S-*`。 | 作者登记（`openmir2-worker-21`）；**待独立 principal 复核** |
+| T-53 | **`GetValNameValue` 的 per-player `S`/`N` 回退未实现（`openmir2-worker-21`，`recall-ext` 返工实证）**：oracle `ProcessingBase.GetValNameValue`（`ProcessingBase.cs:1420-1432`）在 `GetValNameNo(sName) < 0` 之后还有两支——首字母 `S` ⇒ 读/建 `playerActor.m_StringList[sName]`（**只写 `sValue`，不写 `nValue`**）；首字母 `N` ⇒ 读/建 `playerActor.IntegerList[sName]`，未命中则 `nValue = 0`。本仓 `get_val_name_value_var`（`crates/script/src/engine/conditions.rs`）在 `n01 < 0` 时一律 `found=false`、不写回 `nValue`（`set_val_name_value_var` 同样缺这两支）。⇒ 对 `<$STR(N…非数字)>`（未知名）oracle 写 `nValue=0`、Rust 保持传入值；`<$STR(S…)>`（未知名）两侧都**不写** `nValue`（一致）。 | **未实现（不是「实现得不同」）**：该缺口是本卡之前就存在的通用变量解析面（本卡只是因 `CHECKGROUPCOUNT` 的 `ref nValue = -1` 初值把它显形，见 reviewer-5 F-1），故不在本卡顺势扩写集；`recall-ext` 的判据改用 `<$STR(Q999)>`（oracle 下同样保持 -1 ⇒ 报错）避免把差异锁进 `..._like_oracle` 用例。可观测影响仅限「`<$STR(N…非数字)>` 且调用方使用 `ref` 初值」的脚本条件（当前语料未检出）。将来实现 = 为 `ScriptPlayer` 建 `m_StringList`/`IntegerList` 并补两支（另开卡）。 | 作者登记（`openmir2-worker-21`，reviewer-5 F-1 返工）；**待独立 principal 复核** |
+
+> **编号连号**：T-51（M3⑨-2 46 分身 tick/AI 未建模，已合入 master）→ **T-52**（M3⑦ `recall-ext` 4 处 oracle 缺陷 1:1 照搬）+ **T-53**（同卡返工实证的 `S`/`N` per-player 回退未实现）。
+
 ## M1 S4b 登记（DBSrv 6000 `DataService` 面 + 5700 `MarketService` 面 + `TimedService` 缓存回写，2026-10-12）
 
 > 卡 `openmir2-m1-dbsrv-6000-face`；交付说明 `docs/M1-S4b-DBSrv-6000-交付说明.md`。

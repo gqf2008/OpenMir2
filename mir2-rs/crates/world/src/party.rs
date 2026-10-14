@@ -592,6 +592,25 @@ impl World {
         self.party_members_of(owner).contains(&target)
     }
 
+    /// §1.O 扩展面（`recall-ext`）脚本读侧的宿主快照：`(GroupOwner, GroupMembers 各成员的 Job)`。
+    ///
+    /// oracle 侧 `ConditionProcessingSys` 读的是 `playerActor.GroupOwner` /
+    /// `playerActor.GroupMembers[i].Job`（`ConditionProcessingSys.cs:2670/262/4466`）；本仓
+    /// 把这两个字段从实体表取出来交给 `bins/game-svr` 的 `ScriptPlayer` 适配。
+    ///
+    /// `GroupMembers` **只存在于团长实体上**（`PlayObject.Operate.cs:834-835/875`，与
+    /// [`Self::party_members_of`] 同口径）⇒ 非团长的成员列表为空；成员 Job 按**加入序**。
+    #[must_use]
+    pub fn party_script_group_snapshot(&self, actor: i32) -> (i32, Vec<i32>) {
+        let owner = self.party_group_owner_of(actor);
+        let jobs = self
+            .party_members_of(actor)
+            .into_iter()
+            .filter_map(|m| self.entities.get(m).map(|e| i32::from(e.job)))
+            .collect();
+        (owner, jobs)
+    }
+
     /// `PlayObject.Operate.cs:885-909` 的 `ClientDelGroupMember(sHumName)`。
     pub fn party_del_group_member(
         &mut self,
