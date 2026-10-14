@@ -1,0 +1,3 @@
+# 10 — 四门禁① fmt（cwd=mir2-rs, CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target）
+# [cmd] cargo fmt --all -- --check
+rc=0
