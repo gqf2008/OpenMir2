@@ -1,0 +1,11 @@
+$ python -I m3_fixture_fmt_evidence_gate.py selftest
+  SELFTEST ok  合规 fmt 证据 -> GREEN
+  SELFTEST ok  空件 -> EMPTY RED
+  SELFTEST ok  纯空白 -> EMPTY RED
+  SELFTEST ok  只有 rc 无命令头 -> NO_COMMAND RED
+  SELFTEST ok  只有命令头无 rc -> NO_RC RED
+  SELFTEST ok  包内无 fmt 证据 -> NO_FMT_EVIDENCE RED
+  SELFTEST ok  登记包缺失 -> MISSING_DIR RED
+  SELFTEST ok  只审 *fmt*.txt（raw 证据不判红）
+SELFTEST GREEN 8/8
+rc=0

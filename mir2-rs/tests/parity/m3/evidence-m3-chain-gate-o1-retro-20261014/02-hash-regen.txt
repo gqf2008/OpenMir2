@@ -1,0 +1,24 @@
+$ # 首次：追记 README 后重记清单（每包恰 1 行 hash 变更 = README.md）
+
+写入 mir2-rs\tests\parity\m3\evidence-m3-anchor-prefix-o2-20261014\SHA256SUMS.txt（27 行，repo 口径）
+GREEN: write 完成（1 行 hash 变更，mode=repo）
+写入 mir2-rs\tests\parity\m3\evidence-m3-chain-gate-o2-20261014\SHA256SUMS.txt（18 行，repo 口径）
+GREEN: write 完成（1 行 hash 变更，mode=repo）
+写入 mir2-rs\tests\parity\m3\evidence-m3-chain-gate-residuals-20261014\SHA256SUMS.txt（16 行，repo 口径）
+GREEN: write 完成（1 行 hash 变更，mode=repo）
+写入 mir2-rs\tests\parity\m3\evidence-m3-fixture-chain-hero-anchor-20261014\SHA256SUMS.txt（12 行，repo 口径）
+GREEN: write 完成（1 行 hash 变更，mode=repo）
+写入 mir2-rs\tests\parity\m3\evidence-m3-fixture-family-minors-20261014\SHA256SUMS.txt（14 行，repo 口径）
+GREEN: write 完成（1 行 hash 变更，mode=repo）
+
+$ # 幂等复跑（应 0 行变化）
+写入 mir2-rs\tests\parity\m3\evidence-m3-anchor-prefix-o2-20261014\SHA256SUMS.txt（27 行，repo 口径）
+GREEN: write 完成（0 行 hash 变更，mode=repo）
+写入 mir2-rs\tests\parity\m3\evidence-m3-chain-gate-o2-20261014\SHA256SUMS.txt（18 行，repo 口径）
+GREEN: write 完成（0 行 hash 变更，mode=repo）
+写入 mir2-rs\tests\parity\m3\evidence-m3-chain-gate-residuals-20261014\SHA256SUMS.txt（16 行，repo 口径）
+GREEN: write 完成（0 行 hash 变更，mode=repo）
+写入 mir2-rs\tests\parity\m3\evidence-m3-fixture-chain-hero-anchor-20261014\SHA256SUMS.txt（12 行，repo 口径）
+GREEN: write 完成（0 行 hash 变更，mode=repo）
+写入 mir2-rs\tests\parity\m3\evidence-m3-fixture-family-minors-20261014\SHA256SUMS.txt（14 行，repo 口径）
+GREEN: write 完成（0 行 hash 变更，mode=repo）

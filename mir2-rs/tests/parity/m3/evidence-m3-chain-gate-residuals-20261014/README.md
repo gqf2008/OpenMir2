@@ -91,3 +91,12 @@ check("guards-missing-real-guard-red",
   `duplicates=[42]`（T-42 撞号）是已路由 owner 的历史问题，本片**不碰**（同上一片口径）。
 - `check_window_batch.py` / `compare_dedicated_streams.py` 等为窗口期辅助件，不在「在场却坏」
   的 fail-closed 门之列，未登记。
+
+## 追改登记（retro-fix record，2026-10-14）
+
+> 卡 `openmir2-m3-fixture-chain-gate`；reviewer-6 `090d0cc4`（@`f114a5e90`）**O-1** 的收口片 `becf075db`。
+> 本包 `10-gate-fmt.txt` 原为 **5 B（仅 `rc=0`，无命令头）**，追改为自描述体例
+> （`$ cargo fmt --all -- --check` + `rc=0`）；`SHA256SUMS.txt` 同步按**仓库口径（LF 归一 = git blob 字节）**重记。
+> **方向为增强、非篡改**（原件不能自证 fmt 绿）。5 包清单与前后对照见
+> `../evidence-m3-fixture-fmt-evidence-20261014/README.md` §1。
+> 本次 README 追记（O-1 的「包内登记」）同样在该约定下重记本包清单。
