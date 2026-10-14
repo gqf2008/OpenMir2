@@ -43,10 +43,25 @@
 | `05-chain-gate-selftest.txt` | `fixture_chain_gate.py selftest` ⇒ 40/40（含并集后的两条防回退牙） |
 | `06-mutation-doc-drift-red.txt` | 外部改坏必红：`:5795`→`:5665` ⇒ check RED + selftest 12/13；还原 ⇒ GREEN 且 `git diff` 空 |
 | `07-boundary.txt` | 边界：32 路径全在 `mir2-rs/tests/parity/**`、`*.rs`=0、冻结面 0、`git status` 干净 |
+| `08-f1-count-bound-red.txt` | reviewer-6 **F-1** 收口：链门 `.py` 登记项下界 `>=23`（== 实计数 23）；抽掉 castle 两条登记（23→21）⇒ 计数牙 RED，还原 ⇒ GREEN |
 | `10-gate-fmt.txt` / `11-gate-clippy.txt` / `12-gate-test.txt` / `13-gate-msgcodegen.txt` | 四门禁读数（HEAD `224cea0c9`，隔离 `CARGO_TARGET_DIR`） |
 | `20-evidence-verify.txt` | 本包 `SHA256SUMS` 的 `verify --check-extra` + `eolcheck`（仓库 LF/git-blob 口径） |
 | `21-doc-consistency.txt` | 文档行号 / `ANCHORS` 登记 / 源码实际行的三点一致对照 |
 | `SHA256SUMS.txt` | 本包全部文本件的仓库口径 hash 清单 |
+
+## reviewer-6 `989df60357ec`（@ `becf075db`）`request_changes` 逐条回（本 head `cbf330874`）
+
+- **F-1（Important，已收口）**：`fixture_chain_gate.py` 的「主机门（.py）登记项」断言改为与
+  **并集后的实计数一致**：`sum(...endswith(".py")) >= 23`（并集 = base 19 + 本片 fmt 2 + master 侧
+  RNG 场景锚 2 = **23**；reviewer 预估的 21 只算了 fmt 2，并入当前 master 后另加 RNG 2）。
+  改坏必红（`08`）：只抽掉 `castle_anchor_selftest`/`castle_anchor_check` 两条 ⇒ `.py` 计数 23→21
+  ⇒ `SELFTEST FAIL 主机门（.py）登记项 ≥23` / `SELFTEST RED 39/40`；还原 ⇒ GREEN 40/40 且 `git diff` 空。
+  （即：reviewer 复现的「castle 锚门可被静默摘除」在本 head 已被堵住。）
+- **O-1（非阻塞，已收口）**：head `becf075db` 对当前 master 的 `merge-tree` 冲突已解决 —— 本 head 已
+  并入 `origin/master 41e61029e`，`fixture_chain_gate.py` 的 `SHARED_CHECKS`/防回退牙按**并集**解
+  （fmt 证据门两向 + RNG 场景锚门两向都保留，`.py` 下界同步订正为 23），`05` 链门 selftest 40/40。
+- **O-2（非阻塞，接受）**：`m3_fixture_fmt_evidence_gate.py` 的 `FAMILY_DIRS` 仍只登记夹具链族
+  9 个历史包；本包不在其内（门自述已登记全仓 ≈40 欠件清理需单开卡），本包 `10-gate-fmt.txt` 仍按同族体例书写。
 
 ## 口径说明（与同族的差异，避免误解）
 
