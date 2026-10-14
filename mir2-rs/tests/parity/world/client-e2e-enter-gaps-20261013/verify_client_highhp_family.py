@@ -9,8 +9,8 @@
 
   1. **客户端漂移**：冻结客户端若新增/删除一个 `{$IF HIGHHP}` 站点（换客户端版本/改 HIGHHP），
      下面的「已登记集合」不再成立 ⇒ 必须重新判定（RED，认不出即红）。
-  2. **Rust 漂移**：52/53 的客户端布局实现（`encode_ability_client` / `sm_healthspellchanged_client`）
-     被删掉/改名 ⇒ RED。
+  2. **Rust 漂移**：52/53/31 的客户端布局实现（`encode_ability_client` /
+     `sm_healthspellchanged_client` / `sm_struck_client`）被删掉/改名 ⇒ RED。
 
 它**不**改任何生产代码，只读源码（零起栈/零端口）。真机 R 判据仍归 root 独占窗口。
 
@@ -22,10 +22,10 @@
     - `TAddAbility`: 客户端死记录（全仓仅定义、零使用点），非帧面。
   ClMain.pas 处理器（`{$IF HIGHHP}` 改 HP/MP/MaxHP 的读取来源）：
     - `SM_HEALTHSPELLCHANGED(53)` : **已闭环**（`sm_healthspellchanged_client`，片㊴）。
-    - `SM_STRUCK(31)`             : **未闭环** —— 客户端从 `param/tag` 拼 32 位 HP、从尾
-                                    `MessageBodyWL.Param1` 取 MaxHP；Rust/C# 均发 oracle 布局
-                                    （`param=HP, tag=MaxHP, 尾.Param1=feature`）⇒ **同源 GAP**
-                                    （登记见 `213`；修法/跨夹具影响交 owner 裁决）。
+    - `SM_STRUCK(31)`             : **已闭环**（`sm_struck_client`，片「SM_STRUCK 客户端布局」）——
+                                    客户端从 `param/tag` 拼 32 位 HP、从尾 `MessageBodyWL.Param1`
+                                    取 MaxHP；生产默认发客户端布局，`MIR2_CLIENT_ABILITY_LAYOUT=0`
+                                    才回 oracle（`param=HP, tag=MaxHP, 尾.Param1=feature`）。
     - `SM_OPENHEALTH(1100)`       : Rust 生产路径**未发送**（C# `PlayMessage.cs:2010` 发 oracle 布局）。
     - `SM_INSTANCEHEALGUAGE(1103)`: Rust 生产路径**未发送**（C# `PlayMessage.cs:2019`）。
 
@@ -53,12 +53,16 @@ EXPECTED = {
     ("Grobal2.pas", "TAbility"): "closed:encode_ability_client",
     ("Grobal2.pas", "TAddAbility"): "dead-record-no-uses",
     ("ClMain.pas", "SM_HEALTHSPELLCHANGED"): "closed:sm_healthspellchanged_client",
-    ("ClMain.pas", "SM_STRUCK"): "GAP:rust-sends-oracle-layout",
+    ("ClMain.pas", "SM_STRUCK"): "closed:sm_struck_client",
     ("ClMain.pas", "SM_OPENHEALTH"): "not-sent-by-rust",
     ("ClMain.pas", "SM_INSTANCEHEALGUAGE"): "not-sent-by-rust",
 }
 # Rust 侧必须存在的客户端布局实现函数（缺 ⇒ RED）。
-RUST_REQUIRED = ("encode_ability_client", "sm_healthspellchanged_client")
+RUST_REQUIRED = (
+    "encode_ability_client",
+    "sm_healthspellchanged_client",
+    "sm_struck_client",
+)
 
 _SITE_RE = re.compile(r"\{\$IF\s+HIGHHP\b", re.IGNORECASE)
 _RECORD_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s*=\s*(?:packed\s+)?record\b", re.IGNORECASE)
@@ -222,15 +226,16 @@ def selftest() -> int:
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         with open(os.path.join(tmp, "x.rs"), "w", encoding="utf-8") as fh:
-            fh.write("fn encode_ability_client() {}\n")  # 缺 sm_healthspellchanged_client
+            fh.write("fn encode_ability_client() {}\n")  # 缺 sm_healthspellchanged_client / sm_struck_client
         missing = check_rust(tmp)
-        ok = len(missing) == 1 and "sm_healthspellchanged_client" in missing[0]
+        ok = len(missing) == 2 and "sm_healthspellchanged_client" in missing[0]\
+            and "sm_struck_client" in missing[1]
         print(f"[PASS] selftest rust-missing-red: missing={missing}" if ok
               else f"[FAIL] selftest rust-missing-red: missing={missing}")
         if not ok:
             rc = 1
         with open(os.path.join(tmp, "y.rs"), "w", encoding="utf-8") as fh:
-            fh.write("fn sm_healthspellchanged_client() {}\n")
+            fh.write("fn sm_healthspellchanged_client() {}\nfn sm_struck_client() {}\n")
         ok = check_rust(tmp) == []
         print("[PASS] selftest rust-present-green" if ok else "[FAIL] selftest rust-present-green")
         if not ok:
@@ -284,7 +289,7 @@ def main() -> int:
         for p in problems:
             print(f"  - {p}")
         return 1
-    print(f"GREEN: {len(table)} 个 HIGHHP 站点与登记集合逐项一致（2 闭环 / 1 帧面 GAP / 1 客户端库 / 1 死记录 / 2 未发送）")
+    print(f"GREEN: {len(table)} 个 HIGHHP 站点与登记集合逐项一致（3 闭环 / 1 客户端库 / 1 死记录 / 2 未发送）")
     return rc
 
 

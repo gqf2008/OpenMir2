@@ -1,0 +1,66 @@
+224-boundary.txt —— 片「SM_STRUCK 客户端布局」的边界与留痕
+卡 `openmir2-client-e2e-enter-gaps`（m2-svr / openmir2-worker-11 / 2026-10-14）
+零起栈、零游戏端口；不 merge、不自签
+base = master `f7dc69de4`（= origin/walgit master）
+====================================================================================================
+
+# 1) 本片净改动（`git diff --name-status f7dc69de4`，提交后复核）
+
+```
+M	mir2-rs/bins/game-svr/src/main.rs
+M	mir2-rs/bins/game-svr/src/smframe.rs
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/verify_client_highhp_family.py
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/221-struck-client-layout.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/222-redcheck-struck-client-layout.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/223-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/224-boundary.txt
+```
+= 9 路径（2 Rust 生产 + 5 证据/清单 - 1 + 工具 1 + README 1；见下表）。
+
+> **与既往「离线证据片」的差别（如实登记、必须）**：本片是一次**生产帧面修复**，
+> 有意改 `mir2-rs/bins/game-svr/src/{smframe,main}.rs`（`HIGHHP` 家族第三帧 `SM_STRUCK(31)`），
+> ⇒ **`*.rs` 非空是预期**，不适用「零 Rust」那条离线片口径。判级 **tier=R**（触④战斗数值 +
+> 客户端可见帧面），真机 R 判据归 root 独占窗口。
+
+# 2) 冻结面（必须空）
+
+```
+$ git diff --name-only f7dc69de4 -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+```
+（空 ⇒ 冻结面干净）
+
+```
+$ git diff --name-only f7dc69de4 -- src/BotSrv
+```
+（空 ⇒ m3 ②③ 夹具侧**未改**；该侧的 `MIR2_CLIENT_ABILITY_LAYOUT=0` pin 属其它写集/操作约定，本片只登记）
+
+# 3) 生产改动逐条
+
+| 文件 | 改动 | 理由（oracle/客户端锚） |
+| --- | --- | --- |
+| `bins/game-svr/src/smframe.rs` | + `sm_struck_client`（客户端布局）+ `sm_struck_frame`（生产选路）；`sm_struck`（oracle）保留；单测 1 条 | `ClMain.pas:10238/10269`（HIGHHP 支）、`Grobal2.pas:39`、`PlayObject.Message.cs:1601`（oracle）、`213` §4 |
+| `bins/game-svr/src/main.rs` | `drain_combat_downlink` 唯一调用点 `sm_struck` → `sm_struck_frame`；3 条既有用例断言按布局分支 | 同上 |
+| `verify_client_highhp_family.py` | `SM_STRUCK` 登记 `GAP` → `closed:sm_struck_client`；`RUST_REQUIRED` + `sm_struck_client`；selftest/摘要同步 | 机判工具与登记集合一致（认不出即红） |
+
+# 4) 仓外产物（不在本片 diff 内）
+
+```
+E:/tmp/m2svr-burst24/mut/smframe.fixed.rs    # 未变异基准副本（还原锚，sha256 aa55bf6f…）
+E:/tmp/m2svr-burst24/{m1,m2,m3}.raw.txt      # 三次改坏必红的原始输出
+E:/tmp/m2svr-burst24/bytes.direct.txt        # before/after 逐字节 dump（真身二进制直跑 --nocapture）
+E:/tmp/m2svr-burst24/{gates,test,msgcodegen}.raw.txt
+E:/tmp/m2svr-burst24/bytes.full.txt          # cargo test 重定向中间件（无 stdout，仅留痕）
+```
+（本片未起栈、未占端口；`E:/tmp/m2svr-window-origin` / `E:/tmp/m2svr-window-target` 为既往片遗留、
+供 root 开窗，本片未读写。）
+
+# 5) 纪律
+
+- 未 start 任何服务/客户端/代理进程；十游戏端口状态与开工前一致（3306 为共享 MySQL，只读）。
+- 变异只在 `E:/tmp/m2svr-burst24/mut/smframe.fixed.rs` 的**工作副本**上做；仓内 `smframe.rs`
+  每次变异后均还原并 sha256 复核 = `aa55bf6f2a64b93ec90c24b90a0c7890456d10ed7f97bdd89cdf8b17e0056d57`。
+- 未 merge、未自签 review、未移卡；共享主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2` 未触碰
+  （本 burst 只在自身 worktree `E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr` 写）。
+- 收工 `git status` 见 §1 的 9 路径（已提交），无其它残留。

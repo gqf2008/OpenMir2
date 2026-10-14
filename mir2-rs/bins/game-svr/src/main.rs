@@ -4801,7 +4801,7 @@ fn drain_combat_downlink(
                 sg.recovery.per_spell = sg.recovery.per_spell.wrapping_sub(1);
             }
         }
-        let body = game_svr::smframe::sm_struck(
+        let body = game_svr::smframe::sm_struck_frame(
             *target,
             outcome.target_hp_after,
             max_hp,
@@ -13357,12 +13357,14 @@ mod tests {
     }
 
     /// **第一片（战斗下行）**：手造一个 tick 记录 ⇒ `drain_combat_downlink` 给受击玩家自己发
-    /// `SM_STRUCK`（头 `HP/MaxHP/伤害` + 16B `MessageBodyWL` 尾）、给同屏（含死者自己）发
+    /// `SM_STRUCK`（生产默认 = 冻结客户端 `HIGHHP` 布局：头 `LoWord(HP)/HiWord(HP)/伤害` +
+    /// 16B `MessageBodyWL` 尾 `{Param1=MaxHP,Param2=status,Tag1=hitter,Tag2=mag}`；
+    /// `MIR2_CLIENT_ABILITY_LAYOUT=0` ⇒ oracle 布局 `{Param1=feature}`）、给同屏（含死者自己）发
     /// `SM_NOWDEATH`（头 `X/Y/Dir` + 8B `CharDesc` 尾），并把世界实体 HP 同步回会话 `WAbil.HP`。
     ///
-    /// 红检：① 把 `smframe::sm_struck` 的头 `hp`/`max_hp` 互换 ⇒ 头断言必红；
+    /// 红检：① 把 `smframe::sm_struck_client` 的头 `hp` 拆位（`lo_word`/`hi_word` 互换）⇒ 客户端布局头断言必红；
     /// ② 把死亡广播改成 `broadcast_ref_msg`（排除自己）⇒ 死者自己收不到 `SM_NOWDEATH` 必红；
-    /// ③ 把 `smframe::sm_struck` 的尾 `feature`/`status` 互换 ⇒ `struck[12..]` 尾断言必红
+    /// ③ 把 `smframe::sm_struck_client` 的尾 `Param1` 改回 `feature` ⇒ `struck[12..]` 尾断言必红
     ///   （**M-1 收口**：本用例现在真的逐字节断言 16B `MessageBodyWL` 尾，不再只声称覆盖）。
     #[test]
     fn combat_downlink_sends_struck_and_nowdeath() {
@@ -13433,24 +13435,40 @@ mod tests {
             "第一帧 = SM_STRUCK"
         );
         let cm = CommandMessage::from_bytes(struck).expect("12B");
-        assert_eq!(
-            (cm.recog, cm.param, cm.tag, cm.series),
-            (victim, 0, 100, 7),
-            "SM_STRUCK 头 = (受击者, HP, MaxHP, 伤害)"
-        );
+        // 生产默认 = 冻结客户端 `HIGHHP` 布局（`sm_struck_frame` ⇒ `sm_struck_client`）：
+        // `param/tag` 拆 32 位 HP、`MaxHP` 在尾 `Param1`。`MIR2_CLIENT_ABILITY_LAYOUT=0` ⇒ oracle 布局。
+        if game_svr::smframe::client_layout_enabled() {
+            assert_eq!(
+                (cm.recog, cm.param, cm.tag, cm.series),
+                (victim, 0, 0, 7),
+                "SM_STRUCK(客户端布局) 头 = (受击者, LoWord(HP), HiWord(HP), 伤害)"
+            );
+        } else {
+            assert_eq!(
+                (cm.recog, cm.param, cm.tag, cm.series),
+                (victim, 0, 100, 7),
+                "SM_STRUCK(oracle) 头 = (受击者, HP, MaxHP, 伤害)"
+            );
+        }
         // **M-1 收口**（reviewer-5 `ebfd15a8`）：文档声称覆盖 16B `MessageBodyWL` 尾，这里真的
         // 逐字节断言 `struck[12..]`，否则尾 mutation 抓不到。
-        // 尾 = Encode(MessageBodyWL{ Param1=GetFeature(), Param2=CharStatus,
+        // 尾 = Encode(MessageBodyWL{ Param1=?, Param2=CharStatus,
         //                            Tag1=命中者 ActorId, Tag2=(RM_STRUCK_MAG ? 1 : 0) })。
+        // `Param1`：客户端布局 = `MaxHP`（HIGHHP 支读这个）；oracle = `GetFeature()`。
+        let param1 = if game_svr::smframe::client_layout_enabled() {
+            100_i32 // MaxHP
+        } else {
+            111_i32 // GetFeature()
+        };
         let mut wl = [0u8; 16];
-        wl[0..4].copy_from_slice(&111_i32.to_le_bytes()); // Param1 = GetFeature()
+        wl[0..4].copy_from_slice(&param1.to_le_bytes()); // Param1
         wl[4..8].copy_from_slice(&0_i32.to_le_bytes()); // Param2 = CharStatus
         wl[8..12].copy_from_slice(&attacker.to_le_bytes()); // Tag1 = 命中者 ActorId
         wl[12..16].copy_from_slice(&0_i32.to_le_bytes()); // Tag2 = (RM_STRUCK_MAG ? 1 : 0)
         assert_eq!(
             &struck[12..],
             &mir2_protocol::edcode::encode(&wl),
-            "SM_STRUCK 尾 = Encode(MessageBodyWL{{Param1=feature,Param2=status,Tag1=hitter,Tag2=mag}})"
+            "SM_STRUCK 尾 = Encode(MessageBodyWL{{Param1=MaxHP(client)|feature(oracle),Param2=status,Tag1=hitter,Tag2=mag}})"
         );
         assert_eq!(
             sessions["victim"].state.wabil.hp, 0,
@@ -13567,9 +13585,16 @@ mod tests {
                 u16::from_le_bytes([body[4], body[5]]),
                 mir2_protocol::messages::SM_STRUCK
             );
+            // 生产默认 = 客户端 `HIGHHP` 布局（`param=LoWord(HP)=12, tag=HiWord(HP)=0`）；
+            // `=0` ⇒ oracle 布局（`param=HP=12, tag=MaxHP=100`）。HP=12<65536 ⇒ HiWord=0。
+            let want = if game_svr::smframe::client_layout_enabled() {
+                (victim, 12, 0, 7)
+            } else {
+                (victim, 12, 100, 7)
+            };
             assert_eq!(
                 (cm.recog, cm.param, cm.tag, cm.series),
-                (victim, 12, 100, 7),
+                want,
                 "socket={socket} 的受击帧头 = (受击者, HP, MaxHP, 伤害)"
             );
         }
@@ -13659,9 +13684,15 @@ mod tests {
             u16::from_le_bytes([bodies[0][4], bodies[0][5]]),
             mir2_protocol::messages::SM_STRUCK
         );
+        // 生产默认 = 客户端 `HIGHHP` 布局（`param=LoWord(HP)=180, tag=HiWord(HP)=0`）。
+        let want = if game_svr::smframe::client_layout_enabled() {
+            (monster, 180, 0, 20)
+        } else {
+            (monster, 180, 200, 20)
+        };
         assert_eq!(
             (cm.recog, cm.param, cm.tag, cm.series),
-            (monster, 180, 200, 20),
+            want,
             "SM_STRUCK 头 = (怪物, 扣血后 HP, MaxHP, 伤害)"
         );
     }

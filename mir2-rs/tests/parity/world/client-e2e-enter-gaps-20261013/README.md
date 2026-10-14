@@ -1260,3 +1260,32 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`；**零 `.rs`/`.toml`/`.ps1`/`.cs`**；
   冻结面 `src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/` 空。
 - 判级 = **L**（证据/工具文案，零行为变化；正面支逐字节不变）。卡级 R 真机 ①②③ 仍归 root 独占窗口。
+
+### 53) `SM_STRUCK(31)` 客户端布局：HIGHHP 家族第三帧闭环（2026-10-14）—— `221`/`222`/`223`/`224`
+
+片 51（`213`）登记的 `SM_STRUCK(31)` 同源 GAP 本片实现客户端布局（**tier=R**：触④战斗数值 +
+客户端可见帧面；真机两相判据归 root 独占窗口）。
+
+- **客户端锚**：`Source/Common/Grobal2.pas:39 HIGHHP = True`；`ClMain.pas:10238` 的 `SM_STRUCK` 支在
+  `{$IF HIGHHP}` 下 `Actor.m_Abil.HP := Makelong(msg.param, msg.tag)`、`Actor.m_Abil.MaxHP := wl.lParam1`
+  ⇒ 客户端布局 = 头 `LoWord(HP)/HiWord(HP)/伤害` + 尾 `MessageBodyWL{Param1=MaxHP, Param2=CharStatus,
+  Tag1=hitter, Tag2=mag}`。`feature` 在 HIGHHP 下不被消费（`Actor.pas:1833-1839` 的 `SM_STRUCK` 支
+  只取 `nSound`→`m_nHiterCode`），故客户端布局不再携带 feature。
+- **oracle 锚**：`src/M2Server/Player/PlayObject.Message.cs:1601` ⇒ 头 `(HP, MaxHP, 伤害)` + 尾
+  `{Param1=GetFeature, ...}`。两者不可同时满足 ⇒ 与 52/53 同款 §6.0-3 故意偏离：默认以冻结客户端为准。
+- **生产改动**：`smframe::sm_struck_client`（客户端布局）+ `smframe::sm_struck_frame`（生产选路，唯一真源
+  = `client_layout_enabled()`）；`sm_struck`（oracle 逐字节）保留；`main.rs` 的 `drain_combat_downlink`
+  唯一调用点改走 `sm_struck_frame`；3 条既有用例断言按布局分支。
+- **逐字节 before/after**：种值 `hp=19/max_hp=42/damage=7` —— 头 `…1f00 1300 2a00 0700…`（oracle）
+  vs `…1f00 1300 0000 0700…`（客户端），尾首字节 `49…`（feature）vs `5e…`（MaxHP）。见 `221` §4。
+- **改坏必红**：M1 头退回 oracle（`tag` 42≠0）RED / M2 尾 `Param1` 回 feature RED / M3 选路两支互换 RED；
+  还原后 sha256 = `aa55bf6f…` 三次全等。见 `222`。
+- **门禁（`223`）**：fmt rc=0 / clippy rc=0(`-D warnings`) / **101 suites 1233 passed 0 failed 22 ignored** /
+  msgcodegen 604 rc=0；专项 `-- struck` 4 条在**默认与 `=0` 两种布局**下都 GREEN；
+  `verify_client_highhp_family.py` 真身 GREEN（`SM_STRUCK -> closed:sm_struck_client`）+ `--selftest 6/6`。
+- **跨侧判据约定（重要）**：任何按 oracle 字段位解 `SM_STRUCK` 的夹具（m3 ②③ `attack_diff.py` /
+  `src/BotSrv` 的 `M3ATTSEQ {hp,maxhp}`）**必须显式 pin `MIR2_CLIENT_ABILITY_LAYOUT=0`**，与 52/53 的既有
+  约定同款（§结论 #6）。本片**未改** `src/BotSrv/**`、`tests/parity/m3/**`（非本 lane 写集），该 pin 提请
+  owner 在 O-3 一并裁决。
+- **仍未做**：真机 R（受击后 HUD 血条不再错乱）归 root；O-3（§6.0-3 白名单，建议**扩容**到 HIGHHP 家族）
+  待 owner 签字，本片不自加。
