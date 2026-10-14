@@ -55,6 +55,6 @@ $ 冻结面（应为空）
   src/BotSrv = 0
 
 $ HEAD / base
-  base = cb2a0ab88eca13825da391c973f53939976c4b29 (Merge 2af5a6a52 (enter-gaps-window-dense-menu): 客户端联)
-  head = 生成本边界时的分支 tip = 9602ae3c888f10a10a3d9187e82207f46a8c73b9
-         （本证据包自身随后的一次证据提交会使 tip 前进；**交付 head 以 walgit patch 条目 / `git ls-remote` 为准**）
+  base = f43364c4585681ade2d3c64fbe7245722b8ebacf (Merge 716d84676 (wip/m3bag-anchor-teeth): M3 RNG 站点组�)
+  head = 生成本边界时的分支 tip = 3b00855cb20a174d5e3995520e234fdf033de6f3
+         （本证据包自身随后的一次证据提交会使 tip 前进；**交付 head 以 walgit patch 条目 / git ls-remote 为准**）
