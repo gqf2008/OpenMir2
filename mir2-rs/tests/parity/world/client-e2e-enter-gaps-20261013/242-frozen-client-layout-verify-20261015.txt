@@ -1,0 +1,234 @@
+242 — 冻结客户端 HIGHHP 家族的**独立源码复核**（不采信既有 EXPECTED 表）+ R 窗口就绪 fresh（R1..R7）
+卡 `openmir2-client-e2e-enter-gaps`（tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15（burst53）
+base = `4215e1444`（= origin/master）；零起栈、零游戏端口（仅共享 3306 只读第 3 方）；未动共享主检出；未 merge、未自签 review
+====================================================================================================
+
+# 0) 一句话结论
+
+root 2026-10-14 15:0x 头号项（①HUD 0/0 ②跑=0 ③同屏没怪）**离线面**：① 的真凶修复（53 `TCharDesc` 尾 /
+52 58B `TAbility` / 31 客户端布局）已在 master 且与**真冻结客户端源码**（`E:/Users/gxh/Documents/GitHub/MirClient`
+@ `c61d912d`）逐字段吻合；窗口构建源（入库替身 + 预构建六件）R1..R7 fresh **GREEN**；
+唯一剩余 = **root 把活脚本指向替身源 + 停泄漏栈**（活脚本 G5 fresh **RED**）+ owner 签 O-3 白名单。
+判级 = L（只读源码/机判复核 + 证据；零 .rs/.toml/.py/.ps1/.cs 改动）。
+
+# 1) 冻结客户端出处（回代计数：**不是** /e/tmp/rev-hh 的旧检出）
+
+$ git -C E:/Users/gxh/Documents/GitHub/MirClient rev-parse HEAD
+c61d912d35efbe44b10f3abde32e40cbd93fc166
+$ git log -1 --format='%h %ad %s' --date=short
+c61d912d 2026-10-10 修复底部主面板错位 + 攻击模式标签卡英文
+
+注：`/e/tmp/rev-hh/Source/Common/Grobal2.pas:39` 是 `HIGHHP = False` 的**另一份检出**，与本卡无关；
+权威检出 = 上表 `E:/Users/gxh/Documents/GitHub/MirClient`（= `verify_client_highhp_family.py` 的 DEFAULT_CLIENT_ROOT）。
+
+# 2) `HIGHHP = True` + 家族站点（逐行）
+
+$ grep -n 'HIGHHP = ' E:/Users/gxh/Documents/GitHub/MirClient/Source/Common/Grobal2.pas
+39:  HIGHHP = True;
+
+$ grep -n '{$IF HIGHHP}\|{$IFEND HIGHHP}' …/Grobal2.pas …/ClMain.pas
+/e/Users/gxh/Documents/GitHub/MirClient/Source/Common/Grobal2.pas:2103:{$IF HIGHHP}
+/e/Users/gxh/Documents/GitHub/MirClient/Source/Common/Grobal2.pas:2174:{$IF HIGHHP}
+/e/Users/gxh/Documents/GitHub/MirClient/Source/Common/Grobal2.pas:2494:{$IF HIGHHP}
+/e/Users/gxh/Documents/GitHub/MirClient/Source/Common/Grobal2.pas:2500:{$IFEND HIGHHP}
+/e/Users/gxh/Documents/GitHub/MirClient/Source/MirClient/ClMain.pas:10225:{$IF HIGHHP}
+/e/Users/gxh/Documents/GitHub/MirClient/Source/MirClient/ClMain.pas:10269:{$IF HIGHHP}
+/e/Users/gxh/Documents/GitHub/MirClient/Source/MirClient/ClMain.pas:10338:{$IF HIGHHP}
+/e/Users/gxh/Documents/GitHub/MirClient/Source/MirClient/ClMain.pas:10365:{$IF HIGHHP}
+
+⇒ 记录面 3 处（`TMonInfo` :2103 / `TAbility` :2174 / `TAddAbility` :2494）+ 处理器面 4 处
+（53 :10225 / 31 :10269 / 1100 :10338 / 1103 :10365）。
+
+# 3) 记录布局（本卡三帧的字节真源）
+
+$ sed -n '3515,3519p' Source/Common/Grobal2.pas
+  TCharDesc = packed record
+    Feature: Integer;
+    Status: Integer;
+    StatusEx: Integer;
+  end;
+⇒ `TCharDesc` = 3×Integer = **12B**（Feature/Status/StatusEx）。
+
+$ sed -n '2167,2193p' Source/Common/Grobal2.pas
+  TAbility = packed record
+    Level: Word;
+    AC: Integer;
+    MAC: Integer;
+    DC: Integer;
+    MC: Integer;
+    SC: Integer;
+{$IF HIGHHP}
+    HP: DWORD;
+    MP: DWORD;
+    MaxHP: DWORD;
+    MaxMP: DWORD;
+{$ELSE}
+    HP: Word;
+    MP: Word;
+    MaxHP: Word;
+    MaxMP: Word;
+{$IFEND}
+    Exp: DWORD;
+    MaxExp: DWORD;
+    Weight: Word;
+    MaxWeight: Word;
+    WearWeight: Word;
+    MaxWearWeight: Word;
+    HandWeight: Word;
+    MaxHandWeight: Word;
+  end;
+⇒ `TAbility`（packed，HIGHHP=True）偏移：Level Word@0 / AC@2 / MAC@6 / DC@10 / MC@14 / SC@18 /
+  **HP DWORD@22 / MP@26 / MaxHP@30 / MaxMP@34** / Exp@38 / MaxExp@42 / Weight Word@46 / MaxWeight@48 /
+  WearWeight@50 / MaxWearWeight@52 / HandWeight@54 / MaxHandWeight@56 ⇒ 总 **58B**。
+  oracle `EncodeMessage(WAbil)` 的 40B 在 offset 22 处是 `Exp`（本部署=0）⇒ 客户端 `HP` 读成 0。
+
+# 4) 处理器（客户端怎么读）
+
+$ sed -n '10220,10233p' Source/MirClient/ClMain.pas   # SM_HEALTHSPELLCHANGED(53)
+    SM_HEALTHSPELLCHANGED:
+      begin
+        Actor := g_PlayScene.FindActor(msg.Recog);
+        if Actor <> nil then
+        begin
+{$IF HIGHHP}
+          DecodeBuffer(body, @desc, SizeOf(TCharDesc));
+          Actor.m_Abil.HP := DWORD(desc.Feature);
+          Actor.m_Abil.MP := DWORD(desc.Status);
+          Actor.m_Abil.MaxHP := DWORD(desc.StatusEx);
+{$ELSE}
+          Actor.m_Abil.HP := msg.param;
+          Actor.m_Abil.MP := msg.tag;
+          Actor.m_Abil.MaxHP := msg.series;
+
+$ sed -n '10269,10275p' Source/MirClient/ClMain.pas   # SM_STRUCK(31) HIGHHP 支
+{$IF HIGHHP}
+          Actor.m_Abil.HP := DWORD(Makelong(msg.param, msg.tag));
+          Actor.m_Abil.MaxHP := DWORD(wl.lParam1);
+{$ELSE}
+          Actor.m_Abil.HP := msg.param;
+          Actor.m_Abil.MaxHP := msg.tag;
+{$IFEND}
+
+$ sed -n '10096,10103p' Source/MirClient/ClMain.pas   # SM_ABILITY(52) 恒 DecodeBuffer(SizeOf(TAbility))
+    SM_ABILITY:
+      begin
+        g_MySelf.m_nGold := msg.Recog;
+        g_MySelf.m_btJob := LoByte(msg.param);
+        g_MySelf.m_nIPowerLvl := HiByte(msg.param);
+        g_MySelf.m_nGameGold := Makelong(msg.tag, msg.series);
+        DecodeBuffer(body, @g_MySelf.m_Abil, SizeOf(TAbility));
+      end;
+
+⇒ 53 在 HIGHHP 下**不读 12B 头**、从尾解 `TCharDesc`（Feature→HP / Status→MP / StatusEx→MaxHP）；
+  31 从 `param/tag` 拼 32 位 HP、从尾 `wl.Param1` 取 MaxHP；52 **无条件**按 `SizeOf(TAbility)=58B` 整块解。
+
+# 5) 跑闸（`g_boCanStartRun` 之外还有 HP 闸）
+
+$ grep -n 'RUN_MINHEALTH' Source/MirClient/Actor.pas && sed -n '2162,2170p' Source/MirClient/Actor.pas
+22:  RUN_MINHEALTH             = 10;
+2165:  if m_Abil.HP < RUN_MINHEALTH then begin
+function TActor.CanRun: Integer;
+begin
+  Result := 1;
+  if m_Abil.HP < RUN_MINHEALTH then begin
+    Result := -1;
+  end {else if (GetTickCount - LastStruckTime < 3 * 1000) or (GetTickCount - LatestSpellTime < MagicPKDelayTime) then
+    Result := -2;}
+end;
+
+⇒ `CanRun`：`HP < RUN_MINHEALTH(10)` ⇒ \-1；`ClMain.pas:2193` 仅当 `g_boCanStartRun or (g_nRunReadyCount>=1)`
+  且 `crun > 0` 才发 `CM_RUN(3013)` ⇒ HUD `HP=0` 时**恒不发**，与 root 实测 `CM_RUN=0` 吻合。
+
+# 6) Rust 侧实现（与上表逐字段对）
+
+$ grep -n 'pub fn encode_ability_client' mir2-rs/bins/game-svr/src/record.rs
+345:pub fn encode_ability_client(abil: &Ability) -> Vec<u8> {
+  偏移：u16(level)@0, i32(ac)@2, i32(mac)@6, i32(dc)@10, i32(mc)@14, i32(sc)@18, i32(hp)@22,
+        i32(mp)@26, i32(max_hp)@30, i32(max_mp)@34, i32(exp)@38, i32(max_exp)@42,
+        u16(weight)@46 … u16(max_hand_weight)@56 ⇒ 58B（= 冻结客户端 `TAbility`）
+
+$ sed -n '282,291p' mir2-rs/bins/game-svr/src/smframe.rs
+pub fn sm_healthspellchanged_client(recog: i32, hp: u16, mp: u16, max_hp: u16) -> Vec<u8> {
+    let header = command_header(recog, messages::SM_HEALTHSPELLCHANGED, hp, mp, max_hp);
+    // `TCharDesc`（`Grobal2.pas:3515`）：Feature=HP、Status=MP、StatusEx=MaxHP，各 `Integer`(i32)。
+    let mut desc = [0u8; 12];
+    desc[0..4].copy_from_slice(&i32::from(hp).to_le_bytes());
+    desc[4..8].copy_from_slice(&i32::from(mp).to_le_bytes());
+    desc[8..12].copy_from_slice(&i32::from(max_hp).to_le_bytes());
+    gm_data_body(header, &edcode::encode(&desc))
+}
+
+⇒ 53 尾 = `edcode::encode([HP:i32 LE][MP:i32 LE][MaxHP:i32 LE])` = 12B `TCharDesc`（与 `DecodeBuffer` 同码）。
+
+# 7) R 窗口就绪 fresh（入库替身源 + 预构建六件）
+
+$ python check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --baseline-ref origin/master \
+      --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-window-target/window-provenance.json
+[OK] R1 ×5（片⑪ d16b5199d / 片㉜ 0d0d62a69 / 片㊴ c61b9627a / 片㊼ 6cadc9fbf / 片31 fd68e037d 全 --is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（vr/vis/new/af + 可见集判据）
+[OK] R3 MapInfo 第 26 个 section 逻辑名 == '0'（真机 map_id 26）
+[OK] R4 (291,666) outside rc=0 / (291,651) outside rc=0 / (289,618) inside rc=0 / (287,620) inside rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=da2df1fdbd 相对基线 origin/master@4215e1444f 生产路径零差异
+[OK] R7 出处清单 source_head=da2df1fdbd，6 件 exe sha256 逐字节一致
+RESULT: GREEN
+
+出处清单（6 件 exe sha256）：
+{
+ "bins": {
+  "db-srv.exe": {
+   "bytes": 84322707,
+   "sha256": "15fb1f25af19ee719501eed4406805ab49c2bb6d26dd0522f6a7f33bd5eaf771"
+  },
+  "game-gate.exe": {
+   "bytes": 29233601,
+   "sha256": "146fb23cd841b089d60738873fbb210489efeee36756743ef95ff6875645735e"
+  },
+  "game-svr.exe": {
+   "bytes": 135602989,
+   "sha256": "cfecda1c1f7c6a50ffa144c6e37f975bbc6612e73f6707765aa4937fdb4e27a5"
+  },
+  "login-gate.exe": {
+   "bytes": 27939672,
+   "sha256": "78c7dac971d93e51f9be874f82ef1fc8b9a51a656bf7473ad6efddf4251622d3"
+  },
+  "login-srv.exe": {
+   "bytes": 82221827,
+   "sha256": "daa1ba949478d98ec31c8becabcff6853ea64f98be56dd25d8e57673274a0068"
+  },
+  "sel-gate.exe": {
+   "bytes": 27918761,
+   "sha256": "741ea627cd1cd65578dfc567130245dfd7f953d6eab5ea31acf67cc79d08accd"
+  }
+ },
+ "source_head": "da2df1fdbd58dd76008bc8d08c8aed08ae7cf2fb",
+ "target_dir": "E:\\tmp\\m2svr-window-target",
+ "version": 1
+}
+
+# 8) 活脚本 fresh（root 需要换的两处）
+
+$ python window_handoff.py --repo E:/tmp/m2svr-window-origin --target-dir E:/tmp/m2svr-window-target   # --window-script 默认 = 活脚本
+     OK   G2 ×11 判据工具 --selftest
+     OK   G1 Rust 窗口前置门 GREEN（R1..R7）
+     RED  G5 窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 指向**共享主检出** ⇒ 直接跑会构建另一棵树
+     RED  G5 窗口脚本 tgt=E:\tmp\openmir2-merge-target != --target-dir=E:/tmp/m2svr-window-target
+     WINDOW_READY=NO / RESULT: RED
+
+$ sha256sum /e/tmp/openmir2-watch/client-e2e-window.sh
+0567f89e5a8f82305dd75c50d8d150c86d72cd7e4efd0da52e431608756aacec */e/tmp/openmir2-watch/client-e2e-window.sh
+     第 6 行：repo=/e/Users/gxh/Documents/GitHub/OpenMir2
+     第 7 行：tgt='E:\tmp\openmir2-merge-target'
+     ⇒ 与入库修复副本 client-e2e-window.fixed.sh.txt（repo=/e/tmp/m2svr-window-origin, tgt=E:\tmp\m2svr-window-target）逐行只差这两处。
+
+# 9) 泄漏栈 fresh
+
+$ powershell -NoProfile -Command "Get-Process game-svr | Select Id,StartTime,Path"
+Id=30284 StartTime=2026/10/14 14:55:06 Path=E:\tmp\openmir2-merge-target\debug\game-svr.exe
+⇒ 起于**修复前**（< 15:31 c61b9627a）的 exe；开窗前须：
+   powershell -File <替身源>/tools/m2-acceptance/start_rust_stack.ps1 -RustBinDir E:\tmp\m2svr-window-target\debug -LogDir E:\tmp\client-e2e\stack2 -Stop
+
+# 10) 纪律与边界
+
+- 零生产代码；零起栈、零游戏端口（仅共享 3306 只读）；未杀任何进程；未动共享主检出 / root 活脚本；未 merge、未自签 review。
+- 改动 = 本卡证据目录内 4 件（242/243/244 + README + SHA256SUMS）；零 .rs/.toml/.py/.ps1/.cs。

@@ -1,0 +1,65 @@
+243 — 四门禁 + 机判读数（片53 冻结客户端 HIGHHP 独立复核 / R 窗口就绪 fresh）
+卡 `openmir2-client-e2e-enter-gaps`（tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = `4215e1444`（= origin/master）；cwd = mir2-rs；CARGO_TARGET_DIR=/e/tmp/m2svr-target
+====================================================================================================
+
+# 0) 边界声明
+
+本片**零生产代码**（无 .rs/.toml/.py/.ps1/.cs 改动），改动仅本卡证据目录内文件；
+`cargo test --workspace` 读数与 base 一致（无新增/删除用例）。
+
+# 1) 四门禁（cwd = mir2-rs，CARGO_TARGET_DIR=/e/tmp/m2svr-target）
+
+$ cargo fmt --all -- --check
+rc=0（无输出）
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.60s
+rc=0
+
+$ cargo test --workspace --offline   # tail
+   Doc-tests mir2_shared: running 0 tests
+   Doc-tests mir2_storage: running 0 tests
+   Doc-tests mir2_world: running 0 tests
+   Doc-tests mir2_world_bevy: running 0 tests
+rc=0（全 workspace 用例通过；无 FAILED）
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+# 2) 判据工具自检（window_handoff G2 聚合 11 件，全部 SELFTEST OK）
+
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --target-dir E:/tmp/m2svr-window-target
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 check_client_run_frames.py --selftest
+OK   G2 check_healthspellchanged_trigger.py --selftest
+OK   G2 verify_client_highhp_family.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+
+# 3) R 窗口就绪 fresh（替身源 + 预构建六件；R7 出处清单）
+
+$ python check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --baseline-ref origin/master \
+      --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-window-target/window-provenance.json
+G1: R1 ×5 OK / R2 OK / R3 OK / R4 ×4 OK / R5 OK / R6 OK / R7 OK
+RESULT: GREEN   rc=0
+
+# 4) 活脚本（root 需换的两处）：G5×2 RED
+
+RED G5 窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 指向共享主检出
+RED G5 窗口脚本 tgt=E:\tmp\openmir2-merge-target != --target-dir=E:/tmp/m2svr-window-target
+WINDOW_READY=NO / RESULT: RED
+
+# 5) SHA256SUMS / EOL
+
+$ python tools/evidence-hash/verify_sha256sums.py verify mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+GREEN mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt  [repo 口径]  OK 251/251
+
+$ python tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+EOLCHECK GREEN 252/252 件文本证据与仓库口径（LF）在 EOL 上一致
