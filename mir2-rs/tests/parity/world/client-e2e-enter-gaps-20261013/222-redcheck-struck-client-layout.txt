@@ -1,0 +1,76 @@
+222-redcheck-struck-client-layout.txt —— 片「SM_STRUCK 客户端布局」的改坏必红（M1/M2/M3）
+卡 `openmir2-client-e2e-enter-gaps`（m2-svr / openmir2-worker-11 / 2026-10-14）
+base = master `f7dc69de4`；零起栈、零游戏端口；不 merge、不自签
+变异只在 `E:/tmp/m2svr-burst24/mut/smframe.fixed.rs` 的**工作副本**上做（每次改回、逐次 sha256 复核）
+====================================================================================================
+
+判据测试：`mir2-rs/bins/game-svr/src/smframe.rs::tests::struck_client_splits_hp_and_puts_maxhp_in_tail`
+命令（每次变异后）：`cwd=mir2-rs，CARGO_TARGET_DIR=E:/tmp/m2svr-target \
+  cargo test -p game-svr -- struck_client_splits`
+
+还原锚（每次变异前/后都等于它）：
+```
+$ sha256sum mir2-rs/bins/game-svr/src/smframe.rs
+aa55bf6f2a64b93ec90c24b90a0c7890456d10ed7f97bdd89cdf8b17e0056d57 *mir2-rs/bins/game-svr/src/smframe.rs
+```
+（= `E:/tmp/m2svr-burst24/mut/smframe.fixed.rs`，逐字节相同。）
+
+# M1 —— 头退回 oracle（`param=HP, tag=MaxHP`），保留客户端尾
+
+变异：`sm_struck_client` 的 `command_header(actor_id, SM_STRUCK, lo_word(hp), hi_word(hp), damage)`
+→ `command_header(actor_id, SM_STRUCK, hp, max_hp, damage)`。
+
+原始输出（`E:/tmp/m2svr-burst24/m1.raw.txt`，rc=101）：
+```
+test smframe::tests::struck_client_splits_hp_and_puts_maxhp_in_tail ... FAILED
+thread '...' panicked at bins\game-svr\src\smframe.rs:1321:9:
+assertion `left == right` failed: Tag = HiWord(HP)（HP 是 u16 ⇒ 恒 0）
+  left: 42
+ right: 0
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 204 filtered out
+```
+
+# M2 —— 尾 `Param1` 从 `MaxHP` 改回 `feature`
+
+变异：`sm_struck_client` 的 `wl[0..4] = i32::from(max_hp)` → `wl[0..4] = 0`（= feature 位被 HIGHHP 顶掉）。
+
+原始输出（`E:/tmp/m2svr-burst24/m2.raw.txt`，rc=101）：
+```
+test smframe::tests::struck_client_splits_hp_and_puts_maxhp_in_tail ... FAILED
+thread '...' panicked at bins\game-svr\src\smframe.rs:1331:9:
+assertion `left == right` failed: Param1 = MaxHP（HIGHHP 支读这个）
+  left: 0
+ right: 42
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 204 filtered out
+```
+
+# M3 —— `sm_struck_frame` 生产选路两支互换
+
+变异：`if client_layout_enabled() { sm_struck_client(...) } else { sm_struck(...) }`
+→ `if !client_layout_enabled() { ... }`（默认支发 oracle）。
+
+原始输出（`E:/tmp/m2svr-burst24/m3.raw.txt`，rc=101）：
+```
+test smframe::tests::struck_client_splits_hp_and_puts_maxhp_in_tail ... FAILED
+thread '...' panicked at bins\game-svr\src\smframe.rs:1349:13:
+assertion `left == right` failed: 默认（未设/其它）= 冻结客户端布局
+  left:  [52, 18, 0, 0, 31, 0, 19, 0, 42, 0, 7, 0, 73, 100, 104, ...]   # oracle（M3 后的默认）
+ right: [52, 18, 0, 0, 31, 0, 19, 0,  0, 0, 7, 0, 94, 100, 104, ...]   # client
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 204 filtered out
+```
+
+# 还原与仓内字节
+
+每次变异后均 `cp E:/tmp/m2svr-burst24/mut/smframe.fixed.rs mir2-rs/bins/game-svr/src/smframe.rs`
+并复核 sha256 = `aa55bf6f2a64b93ec90c24b90a0c7890456d10ed7f97bdd89cdf8b17e0056d57`（三次全等）。
+
+# 正向对照（未变异）
+
+```
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr -- struck
+test smframe::tests::struck_client_splits_hp_and_puts_maxhp_in_tail ... ok
+test tests::combat_downlink_sends_struck_and_nowdeath ... ok
+test tests::combat_downlink_broadcasts_struck_to_all_visible_players ... ok
+test tests::combat_downlink_broadcasts_struck_for_monster_target ... ok
+```
+`MIR2_CLIENT_ABILITY_LAYOUT=0` 下同组用例同样 GREEN（生产选路回 oracle 期望）。

@@ -1,0 +1,146 @@
+221-struck-client-layout.txt —— 片「SM_STRUCK 客户端布局」（HIGHHP 家族第三帧）
+卡：`openmir2-client-e2e-enter-gaps`（m2-svr / openmir2-worker-11 / 2026-10-14）
+base = master `f7dc69de4`（= origin/walgit master）；零起栈、零游戏端口；不 merge、不自签
+tier = **R**（触④战斗数值 + 客户端可见帧面；真机判据归 root 独占窗口）
+====================================================================================================
+
+# 0) 一句话
+
+`213-highhp-family-audit.txt` §4 登记的 `SM_STRUCK(31)` 同源 GAP 现已实现**客户端布局**：
+生产默认发「头 `LoWord(HP)/HiWord(HP)/伤害` + 尾 `MessageBodyWL.Param1=MaxHP`」，
+`MIR2_CLIENT_ABILITY_LAYOUT=0` 才回 oracle 逐字节（`param=HP, tag=MaxHP, 尾.Param1=feature`）。
+与 52/53 同源同开关；判据 = 客户端源码逐字节锚 + 构造级逐字节断言 + 改坏必红（222）。
+真机两相（受击前后 HUD）判据仍归 root 独占窗口。
+
+# 1) 客户端要求的布局（冻结客户端源码，`MirClient@c61d912d`）
+
+`Source/Common/Grobal2.pas:39  HIGHHP = True;`
+
+`Source/MirClient/ClMain.pas:10238` 的 `SM_STRUCK` 支：
+
+```pascal
+    SM_STRUCK:
+      begin
+        DecodeBuffer(body, @wl, SizeOf(TMessageBodyWL));      // 尾 = 16B {Param1,Param2,Tag1,Tag2}
+        ...
+        Actor.UpdateMsg(SM_STRUCK, wl.lTag2, 0, msg.series { damage },
+          wl.lParam1, wl.lParam2, '', wl.lTag1);
+{$IF HIGHHP}
+          Actor.m_Abil.HP    := DWORD(Makelong(msg.param, msg.tag));   // 头两格拼 32 位 HP
+          Actor.m_Abil.MaxHP := DWORD(wl.lParam1);                     // MaxHP 在**尾** Param1
+{$ELSE}
+          Actor.m_Abil.HP    := msg.param;
+          Actor.m_Abil.MaxHP := msg.tag;
+{$IFEND}
+```
+
+⇒ 冻结客户端（`HIGHHP=True`）要的 `SM_STRUCK` =
+**头 `(Recog=受击者, param=LoWord(HP), tag=HiWord(HP), series=伤害)`**
++ **尾 `Encode(MessageBodyWL{ Param1=MaxHP, Param2=CharStatus, Tag1=命中者, Tag2=mag })`**。
+
+`feature` 在 `HIGHHP` 下**不被客户端消费**：`ClMain.pas:10266` 把 `wl.lParam1` 当 `nFeature` 传进
+`TActor.UpdateMsg`，而 `TActor.SendMsg` 的 `SM_STRUCK` 支（`Actor.pas:1833-1839`）只取 `nSound`
+（→ `m_nHiterCode`），`nFeature` 随即被 `Actor.m_Abil.MaxHP := wl.lParam1` 顶掉 ⇒ 客户端布局不再携带 feature。
+
+# 2) oracle 发的是什么（C# 参照实现）
+
+`src/M2Server/Player/PlayObject.Message.cs:1601`：
+
+```csharp
+ClientMsg = Messages.MakeMessage(Messages.SM_STRUCK, processMsg.ActorId,
+                                 baseObject.WAbil.HP, baseObject.WAbil.MaxHP, processMsg.wParam);
+MessageBodyWL struckMessage = default;
+struckMessage.Param1 = baseObject.GetFeature(this);   // ← oracle 的 Param1 = feature
+struckMessage.Param2 = baseObject.CharStatus;
+struckMessage.Tag1   = processMsg.nParam3;            // 命中者
+struckMessage.Tag2   = (wIdent == RM_STRUCK_MAG) ? 1 : 0;
+SendSocket(ClientMsg, EDCode.EncodePacket(struckMessage));
+```
+
+⇒ oracle = 头 `(HP, MaxHP, 伤害)` + 尾 `{Param1=feature, ...}`（非 HIGHHP 口径）。
+两者**不可同时满足** ⇒ 与 52 的 58B / 53 的 `TCharDesc` 尾同款 §6.0-3 故意偏离：**默认以冻结客户端为准**。
+
+# 3) 本片生产改动（`mir2-rs/bins/game-svr/src/{smframe,main}.rs`）
+
+- `smframe.rs` 新增：
+  - `pub fn sm_struck_client(actor_id, hp, max_hp, damage, status, hitter_id, mag) -> Vec<u8>`
+    —— 客户端布局（头拆 HP、尾 `Param1=MaxHP`；`feature` 参数不存在，因为 HIGHHP 下不被消费）。
+  - `pub fn sm_struck_frame(...)` —— 生产选路：`client_layout_enabled()` ⇒ `sm_struck_client`，
+    `MIR2_CLIENT_ABILITY_LAYOUT=0` ⇒ oracle `sm_struck`（**唯一真源 = `smframe::client_layout_enabled()`**）。
+  - `sm_struck`（oracle 逐字节实现）**保留不动**，供 `=0` 对拍/金标准夹具。
+  - 单测 `struck_client_splits_hp_and_puts_maxhp_in_tail`：客户端/ oracle 两条各逐字节断言 + 生产选路断言。
+- `main.rs`：`drain_combat_downlink` 的 `smframe::sm_struck(...)` → `smframe::sm_struck_frame(...)`（唯一调用点）。
+- 既有用例 `combat_downlink_sends_struck_and_nowdeath` / `..._broadcasts_struck_to_all_visible_players`
+  / `..._broadcasts_struck_for_monster_target` 的头部/尾部断言改为**按 `client_layout_enabled()` 分支**
+  （默认客户端布局；`=0` 时回 oracle 期望）。
+
+# 4) before / after 逐字节（构造级，种值 hp=19 / max_hp=42 / damage=7 / status=0x11 / hitter=0x22 / mag=false）
+
+命令（真身二进制直跑 `--nocapture`，绕开 cargo test 的重定向吞 stdout）：
+
+```
+E:/tmp/m2svr-target/debug/deps/game_svr-e3b807fec57e6cfc.exe struck_client_splits --nocapture
+```
+
+原始输出（`E:/tmp/m2svr-burst24/bytes.direct.txt`）：
+
+```
+CLIENT_BODY_HEX=341200001f001300000007005e6468636469686b64644a6b6464686b6464686b643f
+CLIENT_HEADER_HEX=341200001f00130000000700
+CLIENT_TAIL_EDHEX=5e6468636469686b64644a6b6464686b6464686b643f
+ORACLE_BODY_HEX=341200001f0013002a000700496468636469686b64644a6b6464686b6464686b643f
+ORACLE_HEADER_HEX=341200001f0013002a000700
+ORACLE_TAIL_EDHEX=496468636469686b64644a6b6464686b6464686b643f
+test smframe::tests::struck_client_splits_hp_and_puts_maxhp_in_tail ... ok
+```
+
+解读（12B 头：`Recog:i32 | ident:u16 | param:u16 | tag:u16 | series:u16`）：
+
+| | Recog | ident | param | tag | series | 尾 Param1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| **BEFORE**（master `f7dc69de4` 生产默认 = oracle） | `0x1234` | `0x001f`(31) | `0x0013`(19=HP) | `0x002a`(42=MaxHP) | `0x0007`(7) | feature |
+| **AFTER**（本片生产默认 = 客户端布局） | `0x1234` | `0x001f`(31) | `0x0013`(19=LoWord HP) | `0x0000`(HiWord HP) | `0x0007`(7) | **MaxHP=42** |
+
+（BEFORE/AFTER 的 oracle 逐字节路径 `=0` 下完全不变：`ORACLE_*` 行即该路径。）
+
+# 5) 与 52/53 的关系 / 跨侧判据口径（**重要，供审线与 owner**）
+
+- 本片把 `SM_STRUCK` 并入 52/53 已确立的**同一开关** `MIR2_CLIENT_ABILITY_LAYOUT`；
+  **跨侧对拍约定不变**：任何按 oracle 字段位解 `SM_STRUCK`（`param`=HP、`tag`=MaxHP、尾 `Param1`=feature）
+  的夹具（如 m3 ②③ 的 `attack_diff.py` / `src/BotSrv` 的 `M3ATTSEQ {hp,maxhp}`）**必须显式 pin
+  `MIR2_CLIENT_ABILITY_LAYOUT=0`**，与 52/53 的既有约定同款（卡 README §结论 #6：『默认翻 58B 后跨侧
+  s2c 逐字节对拍需 Rust 显式 `MIR2_CLIENT_ABILITY_LAYOUT=0`』）。生产（真客户端联调）走客户端布局。
+- 本片**未**改 `src/BotSrv/**`、`mir2-rs/tests/parity/m3/**`（非本 lane 写集）；该 pin 属操作约定期，
+  已在 patch body 与卡内 comment 明确登记，提请 owner 在 O-3（§6.0-3 白名单登记，扩容到 HIGHHP 家族）
+  一并裁决。
+- `213` §4c 列的三条「本片不改」理由中，①「夹具 pin」= 上面这条约定；②「R 级」= 本片 tier=R；
+  ③「登记面」= O-3 仍待 owner 签字（本片不自加白名单）。
+
+# 6) 机判工具同步
+
+`verify_client_highhp_family.py`：
+- 登记状态 `SM_STRUCK -> GAP:rust-sends-oracle-layout` 改为 `closed:sm_struck_client`；
+- `RUST_REQUIRED` 增 `sm_struck_client`（缺件 ⇒ RED）；
+- selftest 的 `rust-missing-red` 期望改为缺 2 件；摘要行 `2 闭环` → `3 闭环`。
+
+真身输出（`--rust-dir mir2-rs/bins/game-svr/src`）：
+
+```
+HIGHHP = True
+  ...
+  ClMain.pas:10269 SM_STRUCK -> closed:sm_struck_client
+  ...
+Rust 侧客户端布局实现齐备：encode_ability_client, sm_healthspellchanged_client, sm_struck_client
+GREEN: 7 个 HIGHHP 站点与登记集合逐项一致（3 闭环 / 1 客户端库 / 1 死记录 / 2 未发送）
+rc=0
+```
+`--selftest` = `SELFTEST OK (6/6)` rc=0。
+
+# 7) 未做 / 诚实登记
+
+- **真机 R 判据**（受击后 HUD 血条不再错乱）归 root 独占窗口 —— `213` §4b 的真机读数
+  `0/0` + `655360/25165829`（= `10<<16` / `24<<16|5`）正是本 GAP 的形态，修后应消失。
+- `SM_OPENHEALTH(1100)` / `SM_INSTANCEHEALGUAGE(1103)`：Rust 生产路径**未发送** ⇒ 本片不动
+  （工具登记 `not-sent-by-rust`；实现日再判）。
+- O-3（§6.0-3 白名单登记 + owner 签字）**未自加**。
+- m3 ②③ 夹具的 `=0` pin 属其它写集，本片只登记、不改。

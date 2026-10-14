@@ -222,12 +222,13 @@ pub fn sm_healthspellchanged(recog: i32, hp: u16, mp: u16, max_hp: u16) -> Vec<u
 }
 
 /// 冻结客户端布局开关（`MIR2_CLIENT_ABILITY_LAYOUT`）：`0|false|FALSE|False` ⇒ oracle 逐字节；
-/// 未设/其它（含 `1`/`true`）⇒ **冻结客户端布局**（52 的 58B `TAbility` + 53 的 `TCharDesc` 尾）。
+/// 未设/其它（含 `1`/`true`）⇒ **冻结客户端布局**（52 的 58B `TAbility` + 53 的 `TCharDesc` 尾
+/// + 31 的 `SM_STRUCK` `param/tag` 拆 HP、尾 `Param1`=MaxHP）。
 ///
 /// 这是全仓唯一真源：`bins/game-svr/src/main.rs::mir2_client_ability_layout()` 只是本函数的别名。
 /// 真机约定（`openmir2-client-e2e-enter-gaps`，证据 `61-*`）：客户端 `MirClient@c61d912d`
-/// 在 `Source/Common/Grobal2.pas:39` 写死 `HIGHHP = True` ⇒ 52/53 都必须按客户端记录布局发，
-/// 否则客户端把能力/血量读成 0（HUD `0/0`、`CanRun(HP>=10)` 拒绝跑）。
+/// 在 `Source/Common/Grobal2.pas:39` 写死 `HIGHHP = True` ⇒ 52/53/31 都必须按客户端记录布局发，
+/// 否则客户端把能力/血量读成 0（HUD `0/0`、`CanRun(HP>=10)` 拒绝跑；受击后血条错乱）。
 #[must_use]
 pub fn client_layout_enabled() -> bool {
     !matches!(
@@ -768,6 +769,92 @@ pub fn sm_struck(
     gm_data_body(header, &edcode::encode(&wl))
 }
 
+/// `SM_STRUCK`(31) 的**冻结客户端 `HIGHHP` 布局**（生产默认；`HIGHHP` 家族第三帧）。
+///
+/// 冻结客户端 `Source/MirClient/ClMain.pas:10238` 的 `SM_STRUCK` 支在 `{$IF HIGHHP}`
+/// （`Source/Common/Grobal2.pas:39 = True`，`MirClient@c61d912d`）下按**另一种布局**读 HP/MaxHP：
+///
+/// ```pascal
+/// DecodeBuffer(body, @wl, SizeOf(TMessageBodyWL));
+/// ...
+/// {$IF HIGHHP}
+///   Actor.m_Abil.HP    := DWORD(Makelong(msg.param, msg.tag));  // param=LoWord(HP), tag=HiWord(HP)
+///   Actor.m_Abil.MaxHP := DWORD(wl.lParam1);                    // MaxHP 在**尾** Param1
+/// {$ELSE}
+///   Actor.m_Abil.HP    := msg.param;
+///   Actor.m_Abil.MaxHP := msg.tag;
+/// {$IFEND}
+/// ```
+///
+/// ⇒ 客户端布局 = 头 `(Recog=受击者, param=LoWord(HP), tag=HiWord(HP), series=伤害)`
+/// + 尾 `Encode(MessageBodyWL{ Param1=MaxHP, Param2=CharStatus, Tag1=命中者, Tag2=mag })`。
+///
+/// 与 oracle [`sm_struck`]（`PlayObject.Message.cs:1601`：`param=HP, tag=MaxHP, 尾.Param1=feature`）
+/// 只差 HP 的拆分位置与尾 `Param1` 的取值。`feature` 在 `HIGHHP` 下**不被客户端消费**：
+/// `ClMain.pas:10266` 把 `wl.lParam1` 当 `nFeature` 传给 `TActor.UpdateMsg`，而
+/// `TActor.SendMsg` 的 `SM_STRUCK` 支（`Actor.pas:1833-1839`）只取 `nSound`（→ `m_nHiterCode`），
+/// `nFeature` 被 `Actor.m_Abil.MaxHP := wl.lParam1` 顶掉 ⇒ 客户端布局不再携带 feature。
+///
+/// **缺口后果**（`213-highhp-family-audit.txt` §4）：oracle 布局下客户端算出
+/// `HP = HP | (MaxHP << 16)`、`MaxHP = feature` ⇒ 受击后 HUD 血条错乱，且该错值一直留到
+/// 下一条 52/53/升级/换装覆盖（`RM_STRUCK` 支不回 53）。
+///
+/// 调用方：**生产路径一律用** [`sm_struck_frame`]（本函数只在 `=0` 对拍夹具里显式选）。
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn sm_struck_client(
+    actor_id: i32,
+    hp: u16,
+    max_hp: u16,
+    damage: u16,
+    status: i32,
+    hitter_id: i32,
+    mag: bool,
+) -> Vec<u8> {
+    let header = command_header(
+        actor_id,
+        messages::SM_STRUCK,
+        lo_word(i32::from(hp)),
+        hi_word(i32::from(hp)),
+        damage,
+    );
+    // `MessageBodyWL`（`ClMain.pas:10240` 解 16B）：`Param1=MaxHP`（HIGHHP 支读这个）、
+    // `Param2=CharStatus`、`Tag1=命中者 ActorId`、`Tag2=(RM_STRUCK_MAG ? 1 : 0)`。
+    let mut wl = [0u8; 16];
+    wl[0..4].copy_from_slice(&i32::from(max_hp).to_le_bytes());
+    wl[4..8].copy_from_slice(&status.to_le_bytes());
+    wl[8..12].copy_from_slice(&hitter_id.to_le_bytes());
+    wl[12..16].copy_from_slice(&i32::from(mag).to_le_bytes());
+    gm_data_body(header, &edcode::encode(&wl))
+}
+
+/// 31 帧的**生产选路**（[`client_layout_enabled`]）：客户端布局（默认）⇒ [`sm_struck_client`]；
+/// `MIR2_CLIENT_ABILITY_LAYOUT=0` ⇒ oracle 逐字节 [`sm_struck`]（跨侧对拍/金标准夹具）。
+///
+/// 与 52/53 的选路同源同开关。**跨侧判据约定**：任何按 oracle 字段位解 `SM_STRUCK`
+/// （`param`=HP、`tag`=MaxHP、尾 `Param1`=feature）的夹具（如 m3 ②③ 的 `attack_diff.py`）
+/// 必须显式 pin `MIR2_CLIENT_ABILITY_LAYOUT=0`（同 52/53 的既有约定，见该卡 README §结论 #6）。
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn sm_struck_frame(
+    actor_id: i32,
+    hp: u16,
+    max_hp: u16,
+    damage: u16,
+    feature: i32,
+    status: i32,
+    hitter_id: i32,
+    mag: bool,
+) -> Vec<u8> {
+    if client_layout_enabled() {
+        sm_struck_client(actor_id, hp, max_hp, damage, status, hitter_id, mag)
+    } else {
+        sm_struck(
+            actor_id, hp, max_hp, damage, feature, status, hitter_id, mag,
+        )
+    }
+}
+
 /// `SM_NOWDEATH`(34)/`SM_DEATH`(32)：死亡广播
 /// （`BaseObject.Base.cs:351` 的 `SendRefMsg(RM_DEATH, Dir, CurrX, CurrY, 1, "")` ⇒ 观察者 34；
 /// `PlayObject.cs:3235` 的 `SendMsg(..., RM_DEATH, Dir, CurrX, CurrY, 0)` ⇒ 观察者 32）。
@@ -1219,6 +1306,49 @@ mod tests {
                 12,
                 "MIR2_CLIENT_ABILITY_LAYOUT=0 ⇒ oracle header-only"
             );
+        }
+    }
+
+    /// **HIGHHP 家族第三帧（31 `SM_STRUCK`，片「SM_STRUCK 客户端布局」）**：冻结客户端
+    /// `ClMain.pas:10238` 的 `{$IF HIGHHP}` 支把 HP 读成 `Makelong(msg.param, msg.tag)`、
+    /// MaxHP 读成尾 `MessageBodyWL.Param1` ⇒ 客户端布局 = 头 `(LoWord(HP), HiWord(HP), 伤害)`
+    /// 与尾 `{Param1=MaxHP, Param2=status, Tag1=hitter, Tag2=mag}`；
+    /// oracle [`sm_struck`] 是 `(HP, MaxHP, 伤害)` 与尾 `{Param1=feature, ...}`。
+    ///
+    /// 红检（改坏必红）：① `sm_struck_client` 的 `param/tag` 写回 `(hp, max_hp)` ⇒ 头断言必红；
+    /// ② 尾 `Param1` 从 `MaxHP` 改回 `feature` ⇒ 尾回读断言必红；
+    /// ③ `sm_struck_frame` 两支互换 ⇒ 末段选路断言必红。
+    #[test]
+    fn struck_client_splits_hp_and_puts_maxhp_in_tail() {
+        let body = sm_struck_client(0x0000_1234, 19, 42, 7, 0x11, 0x22, false);
+        assert_eq!(i32at(&body, 0), 0x0000_1234, "Recog = 受击者");
+        assert_eq!(u16at12(&body, 4), messages::SM_STRUCK);
+        assert_eq!(u16at12(&body, 6), 19, "Param = LoWord(HP)");
+        assert_eq!(u16at12(&body, 8), 0, "Tag = HiWord(HP)（HP 是 u16 ⇒ 恒 0）");
+        assert_eq!(u16at12(&body, 10), 7, "Series = 伤害");
+        let wl = edcode::decode(&body[12..]);
+        assert_eq!(wl.len(), 16, "尾 = Encode(16B MessageBodyWL)");
+        assert_eq!(i32at(&wl, 0), 42, "Param1 = MaxHP（HIGHHP 支读这个）");
+        assert_eq!(i32at(&wl, 4), 0x11, "Param2 = CharStatus");
+        assert_eq!(i32at(&wl, 8), 0x22, "Tag1 = 命中者 ActorId");
+        assert_eq!(i32at(&wl, 12), 0, "Tag2 = mag");
+
+        // oracle 路径仍 = `(HP, MaxHP, 伤害)` + 尾 `Param1=feature`。
+        let oracle = sm_struck(0x0000_1234, 19, 42, 7, 0x99, 0x11, 0x22, false);
+        assert_eq!(u16at12(&oracle, 6), 19, "oracle Param = HP");
+        assert_eq!(u16at12(&oracle, 8), 42, "oracle Tag = MaxHP");
+        assert_eq!(
+            i32at(&edcode::decode(&oracle[12..]), 0),
+            0x99,
+            "oracle Param1 = feature"
+        );
+
+        // 生产选路：默认（未设/其它）= 客户端布局；`MIR2_CLIENT_ABILITY_LAYOUT=0` = oracle 逐字节。
+        let chosen = sm_struck_frame(0x0000_1234, 19, 42, 7, 0x99, 0x11, 0x22, false);
+        if client_layout_enabled() {
+            assert_eq!(chosen, body, "默认（未设/其它）= 冻结客户端布局");
+        } else {
+            assert_eq!(chosen, oracle, "=0 ⇒ oracle 逐字节");
         }
     }
 

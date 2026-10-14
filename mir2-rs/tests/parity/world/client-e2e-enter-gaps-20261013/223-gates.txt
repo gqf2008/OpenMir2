@@ -1,0 +1,63 @@
+223-gates.txt —— 片「SM_STRUCK 客户端布局」的四门禁
+卡 `openmir2-client-e2e-enter-gaps`（m2-svr / openmir2-worker-11 / 2026-10-14）
+base = master `f7dc69de4`；cwd = `mir2-rs`；`CARGO_TARGET_DIR=E:/tmp/m2svr-target`（隔离，非共享主检出）
+零起栈、零游戏端口；不 merge、不自签
+====================================================================================================
+
+时点：变异全部还原后（`smframe.rs` sha256 = `aa55bf6f2a64b93ec90c24b90a0c7890456d10ed7f97bdd89cdf8b17e0056d57`）。
+
+# ① fmt
+
+```
+$ cargo fmt --all -- --check
+fmt rc=0
+```
+
+# ② clippy（`-D warnings`）
+
+```
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo clippy --workspace --all-targets -- -D warnings
+    Checking game-svr v0.1.0 (...)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.39s
+clippy rc=0
+```
+
+# ③ test（workspace）
+
+```
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test --workspace
+test rc=0
+suites=101 passed=1233 failed=0 ignored=22
+```
+（原始输出 `E:/tmp/m2svr-burst24/test.raw.txt`；聚合命令 = `grep -E '^test result:' | awk`。）
+
+# ④ msgcodegen
+
+```
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo run -q -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
+```
+
+# 专项（两种布局都跑）
+
+```
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr -- struck
+  smframe::tests::struck_client_splits_hp_and_puts_maxhp_in_tail ... ok
+  tests::combat_downlink_sends_struck_and_nowdeath ... ok
+  tests::combat_downlink_broadcasts_struck_to_all_visible_players ... ok
+  tests::combat_downlink_broadcasts_struck_for_monster_target ... ok
+$ MIR2_CLIENT_ABILITY_LAYOUT=0 CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr -- struck
+  （同 4 条全 ok；断言按 oracle 期望分支）
+```
+
+# 判据工具
+
+```
+$ python -I -B verify_client_highhp_family.py --rust-dir ../../../../bins/game-svr/src
+GREEN: 7 个 HIGHHP 站点与登记集合逐项一致（3 闭环 / 1 客户端库 / 1 死记录 / 2 未发送）
+rc=0
+$ python -I -B verify_client_highhp_family.py --selftest
+SELFTEST OK (6/6)
+rc=0
+```
