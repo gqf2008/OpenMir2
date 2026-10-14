@@ -367,11 +367,11 @@ reviewer-6 在 approve `f11129a84` 时记了一条非阻塞 Minor（M-1）：`ch
 
 收口：① 文档订正 `:5598`→`:5665`；② 把 `check_anchors.py` 的 `selftest` + `check` 两向登记进
 `fixture_chain_gate.SHARED_CHECKS`（不看矩阵状态、独立常跑），并在链门 selftest 加**防回退牙**
-（必须两向常在；`.py` 登记项计数 `≥19`→`≥21`，随链门增门继续上提）。
+（必须两向常在；`.py` 登记项计数随链门增门逐片上提，现为 `≥23`，见 `fixture_chain_gate.py`）。
 
 ```sh
 python -I fixture_chain_gate.py check    # 共享管线含 rng_scene_anchor_selftest / _check 两向，FIXTURE_CHAIN GREEN
-python -I fixture_chain_gate.py selftest # 39/39 GREEN（含「RNG 场景锚门已接入共享管线」防回退牙）
+python -I fixture_chain_gate.py selftest # 40/40 GREEN（含「RNG 场景锚门已接入共享管线」防回退牙）
 ```
 
 > 注：锚点随 master 继续漂移时，本门会在链门里**恒 RED**（这正是它接入共享管线要拿到的“不再静默”）。
@@ -383,6 +383,12 @@ python -I fixture_chain_gate.py selftest # 39/39 GREEN（含「RNG 场景锚门�
 抓的漂移；收口 = 把 `DRIVER-CONTRACT.md:59` 由 `:5665` 订正为 `:5795`（零 `.rs`、零行为改动），
 链门随之 **GREEN（runner_ok=10、red=0、共享管线全绿）**。⇒ 经验：**行号类锚点必须在合并树上重钉**，
 分支上核过的值不保证在 merge 目标上成立。
+
+> **本段被根因收口取代（2026-10-14，m3bag 片）**：这次「再钉一次」（`:5665`→`:5795`，`42d421188`）
+> 正是本卡要消的**成因** —— 行号锚钉在多车道共享的增长文件上，注定在合并树上失准。本卡改为
+> **符号唯一性锚**（`main.rs` 只引用文件路径，机判符号恰好出现一次）⇒ 该族「合并即假 RED」从根上消失；
+> 上面这条「首次实战命中」保留为历史记录。并集口径见 §5.2 的两类锚点表与 `DRIVER-CONTRACT.md` §6。
+> 其余锚点（稳定文件）仍为行号锚，判据不降级。
 
 ### 5.3 站点表 `oracle_ref` 可解析性机判（`rng_consumer_groups.py`）
 
