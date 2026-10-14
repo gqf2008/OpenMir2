@@ -29,14 +29,17 @@
 165:        // GotoLabel 不是帧 ⇒ `event_body` 返回 `None`（由宿主 drain 特判执行脚本）。
 167:            event_body(&PartyEvent::GotoLabel {
 
-## bins/game-svr/src/main.rs
+## bins/game-svr/src/main.rs（触发点/宿主/取数/判据）
 869:/// `PartyEvent::GotoLabel`（oracle `FunctionNPC.GotoLable(this, "@GroupClose"/"@GroupCreate"/
 874:fn handle_party_cmd(
 913:        if let mir2_world::PartyEvent::GotoLabel { label, .. } = ev {
 954:/// 由 [`handle_party_cmd`] 在 `PartyEvent::GotoLabel` 的**位置**调用（位置 = oracle 排队序：
 961:fn run_party_goto_label(
-8398:    /// 的位置入 `PartyEvent::GotoLabel("@GroupCreate")`（排队桶，优先级字节 1）；宿主 drain 时装载
-8405:    fn party_gotolabel_runs_qfunction_script_at_queued_position() {
+1005:    let level = runtime.map_or(rec_level, |sg| i32::from(sg.state.wabil.level));
+1006:    let gold = runtime.map_or(rec_gold, |sg| sg.state.gold);
+1007:    let bag = runtime.map_or(rec_bag, |sg| Some(bag_items_for_save(&sg.state.item_list)));
+8404:    /// 的位置入 `PartyEvent::GotoLabel("@GroupCreate")`（排队桶，优先级字节 1）；宿主 drain 时装载
+8411:    fn party_gotolabel_runs_qfunction_script_at_queued_position() {
 
 ## tests/parity/whitelist.md
 317:| T-54 | **`@GroupClose`/`@GroupCreate`/`@GroupAddMember`/`@GroupDelMember` 脚本触发的非说词面未建模（`openmir2-worker-21`，`gotolabel-ext`）**：oracle `SystemShare.FunctionNPC.GotoLable(this, label, false)`（`PlayObject.Operate.cs:806/843/881/907`）执行 `QFunction` 脚本（`Market_Def/QFunction-0.txt`）；脚本可含任意 `GIVE`/`TAKE`/`CHANGEGOLD`/`SetScriptLabel`/文件条件等动作。本片建模：① **触发点与顺序**（世界侧 `PartyEvent::GotoLabel` 入**排队桶**，优先级字节 `1` = `RM_MERCHANTSAY(11009) & 0xFF`，排在 `RM_GROUPCANCEL(156)`/`RM_SYSMESSAGE(252)`/`RM_GROUPMESSAGE(253)` 之前；`GroupOwner == 0` 的早退分支不触发）；② 脚本**说词**（`SM_MERCHANTSAY(643)`，`emit_npc_says` 出队序）；③ 脚本改写的 `Gold`/`QuestFlag` 回写（与进世界块的 `@Login` 同法）。**未建模**：脚本的其它立即帧（若脚本动作直接 `SendDefMessage`）与其余可写状态（`QuestUnit`/`QuestUnitOpen`/`ItemList`/`LastNpc`/`Script`/`ScriptGotoCount`）。 | **不是「实现得不同」而是未建模轴**：本机无游戏语料 ⇒ 无法核 `QFunction` 对这四个 label 的用量；即使有，也只影响「脚本自身产出」面，不影响 `GotoLable` 的**触发存在性/位置**（已由 `party_vectors` 的逐事件向量 + `game-svr` 进程级 643 位置用例钉住）。同族先例：`@Login` 的写回也只覆盖 `Gold`/`QuestFlag`（进世界块注释登记）。真机判据 `not_verified`（需真机窗口 + 语料）。将来补齐另开卡。 | 作者登记（`openmir2-worker-21`）；**待独立 principal 复核** |
