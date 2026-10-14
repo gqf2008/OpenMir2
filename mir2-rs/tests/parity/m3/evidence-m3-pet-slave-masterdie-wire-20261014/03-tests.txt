@@ -1,0 +1,64 @@
+M3⑨ masterdie-wire 判据 / 改坏必红
+===================================
+卡：openmir2-m3-pet-slave-masterdie-wire
+隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target，`--offline`，head=d90d69872（+ 证据提交）
+
+## 判据（≥1 条构造/进程级；本片 3 条，全部走生产路径 `World::tick`）
+
+新增 3 条（`crates/world/src/slave.rs` 的 `mod tests`）：
+
+1. `slave::tests::master_die_self_delays_1000ms_then_mutinies_in_reverse`
+   - 玩家主人（`Race == ACTOR_RACE_PLAY`）带 2 只宝宝（`slave_list = [s1, s2]`，`last_hiter = Some(s1)`），
+     `enable_slave_self_delay(master_die_mutiny=true, rate=1, power=2, speed=2)`。
+   - `kill(master)` → tick：
+     - 死亡结算后队列恰 1 条，`ident == RM_MASTERDIEMUTINY`，
+       `deliver_at_ms == 200 + 1000`（`DeliveryTime = GetTickCount() + 1000`）；
+     - 本 tick `slave_self_deliveries` 为空；
+     - clock 400/600/800/1000 四个 tick 仍未投递、宝宝 `master` 未变；
+     - clock **1200**（`>= deliver_at`）投递：`mutinied == [s2, s1]`（**倒序**），
+       两只均 `master=None` / `slave_exp_level=15` / `dc=20`（`(ushort)` 截断）/ `walk_speed=200`。
+2. `slave::tests::master_die_self_delay_else_branch_zeros_hp`
+   - `last_hiter = None` ⇒ `&&` 短路不抽数 ⇒ 到点后逐宝宝 `HP = 0`、`master` 不变（else 支）。
+3. `slave::tests::master_die_ghost_self_delay_is_blocked_by_ghost_gate`
+   - BUG-REPLICA 第 4 条：`ghost=true` 的实体 `send_master_die_ghost` ⇒ 队列为空（oracle `if (!Ghost)` 门）；
+     另绕过入口门手工入队 `RM_MASTERDIEGHOST` 到点 ⇒ `ghosted == [slave]`、`slave.ghost == true`
+     （反证投递支已接线，只是入口不可达）。
+
+读数（restored-green.txt 全文在 `redchecks/restored-green.txt`）：
+
+    test slave::tests::master_die_ghost_self_delay_is_blocked_by_ghost_gate ... ok
+    test slave::tests::master_die_self_delay_else_branch_zeros_hp ... ok
+    test slave::tests::master_die_self_delays_1000ms_then_mutinies_in_reverse ... ok
+    test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 168 filtered out
+    # cargo rc=0
+
+  聚焦命令：`cargo test -p mir2-world --lib slave::`（本片前 42 passed ⇒ 本片 +3 = 45）。
+  既有既有判据 `process_slave_mutiny_mutinies_on_zero_roll` / `_no_rng_without_last_hiter` /
+  `_early_return` / `process_slave_ghost_marks_all` 仍全绿（效果体未改）。
+
+## 改坏必红（4 条，逐条「改 → 跑 → 还原 → 重跑」；原始件在 redchecks/）
+
+| 编号 | 变异 | 命中判据 | 读数 |
+| --- | --- | --- | --- |
+| RC1 | `MASTER_DIE_SELF_DELAY_MS: 1000 → 0`（去 1000ms 延迟） | (1) | **rc=101 RED**，`Die() 尾应入队一条自投递`（left=0 right=1） |
+| RC2 | `process_slave_mutiny` 遍历 `iter().rev() → iter()`（倒序改正序） | (1) | **rc=101 RED**，`倒序遍历 SlaveList` |
+| RC3 | `if !master.death \|\| !cfg.master_die_mutiny` → `if !cfg.master_die_mutiny`（去 `!Death` 门） | `process_slave_mutiny_early_return` | **rc=101 RED** |
+| RC4 | `send_self_delay_msg` 删去 `if ghost { return; }`（去 `!Ghost` 门） | (3) | **rc=101 RED**，Ghost 实体不再被拦 |
+
+还原后：`git checkout -- crates/world/src/slave.rs`，`git hash-object` 复原为
+`7cdab58ba8112f3e93b611986fa39d7a375451d8`（pristine == restored），`git status --porcelain` 为空，
+`cargo test -p mir2-world --lib slave::` 回到 45 passed rc=0。
+
+## 四门禁（gates/）
+
+| 门禁 | 命令（cwd=mir2-rs，隔离 target） | 读数 |
+| --- | --- | --- |
+| fmt | `cargo fmt --all -- --check` | rc=0（`gates/10-fmt.txt`，空输出） |
+| clippy | `cargo clippy --workspace --all-targets -- -D warnings` | rc=0（`gates/11-clippy.txt`） |
+| test | `cargo test --workspace --no-fail-fast` | **101 suites · 1216 passed · 0 failed · 22 ignored** rc=0（`gates/13-workspace-test.txt`；本片前基线 1213 ⇒ +3） |
+| msgcodegen | `cargo run -p msgcodegen -- --check` | **604 条 rc=0**（`gates/12-msgcodegen.txt`） |
+
+## 真机 DoD（未跑，登记 not_verified）
+
+tier=R：真机两侧 `run_hero_pet_pair.ps1` 同序列（主人死 step）diff=0 + RNG 账本 `site/order` 一致，
+需 owner 独占窗口；本片**未起真机栈/未占端口**，不作已跑声明。

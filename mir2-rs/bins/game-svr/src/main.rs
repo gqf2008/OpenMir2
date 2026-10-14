@@ -5812,6 +5812,17 @@ fn sim_loop(
         "INF",
         "商人 tick 已启用（生产宿主）EnableMerchantTick=true（200ms sim 节奏；whitelist T-42 登记丢 NpcLimit 墙钟预算）"
     );
+    // **M3⑨ 主人死/幽灵自投递**（卡 `openmir2-m3-pet-slave-masterdie-wire`）：生产宿主启用
+    // 「自身延时消息」驱动并灌入宝宝配置（oracle `PlayObject.Die()` 尾
+    // `SendSelfDelayMsg(RM_MASTERDIEMUTINY, …, 1000)`（`PlayObject.cs:1996`）→ 1s 后
+    // `Operate`（`PlayObject.Message.cs:2116`）→ `ProcessSlaveMutiny`）。`World::tick` 在死亡
+    // 结算之后、宝宝清表之前投递到点消息（与 oracle `PlayObject.Run` 消息段先于 `base.Run` 同形）。
+    // 合成 golden 场景不经本函数 ⇒ 仍缺省关闭，逐字节不变。
+    world.enable_slave_self_delay(enter_cfg.pet_cfg.clone());
+    glog!(
+        "INF",
+        "主人死自投递已启用（生产宿主）EnableSlaveSelfDelay=true（1000ms sim 延迟；RM_MASTERDIEGHOST 恒不可达 = BUG-REPLICA）"
+    );
     // **M3④-实现 B 第 ③ 片**：MonGen 刷怪调度宿主（`WorldServer.MonGen.cs:30/192/811`）。
     // `entries=None` ⇒ 无 `Envir/MonGen.txt`，不建宿主；`initialize_monster` 在此消耗一次
     // `world.rng`（oracle `InitializeMonster` 同一时机；RNG 次序 = 怪名分组序 + `MonsterList.Values`）。

@@ -1,0 +1,27 @@
+# mutation: RC1  (test: slave::tests::master_die_self_delays_1000ms_then_mutinies_in_reverse)
+# mutated file git hash-object: 1d76187308f9db7014ad8b455e1cfb7e02069faa  (pristine: 7cdab58ba8112f3e93b611986fa39d7a375451d8)
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.88s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test slave::tests::master_die_self_delays_1000ms_then_mutinies_in_reverse ... FAILED
+
+failures:
+
+---- slave::tests::master_die_self_delays_1000ms_then_mutinies_in_reverse stdout ----
+
+thread 'slave::tests::master_die_self_delays_1000ms_then_mutinies_in_reverse' (2132) panicked at crates\world\src\slave.rs:2038:9:
+assertion `left == right` failed: Die() 尾应入队一条自投递
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    slave::tests::master_die_self_delays_1000ms_then_mutinies_in_reverse
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 212 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
+# cargo rc=101  (expect 101 = RED)

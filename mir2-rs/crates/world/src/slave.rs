@@ -42,8 +42,9 @@
 //! - `SpaceMove` 的**出帧**（`RM_CLEAROBJECTS`/`RM_CHANGEMAP`/`RM_SPACEMOVE_SHOW2`）不在此层；
 //!   本模块只做**格子移动 + `SpaceMoveGetRandXY` 取数**（帧面归宿主接线片）。
 //! - **⑨-3 的帧面不在本层**：`RefNameColor`（`RM_CHANGENAMECOLOR`）/`RefShowName`（`RM_USERNAME`）/
-//!   `MakeGhost` 的 `DisappearA`/`RM_MASTERDIEMUTINY`/`RM_MASTERDIEGHOST`/`RM_SPIRITSUITE` 的自投递
-//!   队列都是**帧面**，归 `CM_SPELL`/宿主接线片；本层只改实体状态。
+//!   `MakeGhost` 的 `DisappearA`/`RM_MASTERDIEMUTINY`/`RM_MASTERDIEGHOST`/`RM_SPIRITSUITE` 的**出帧**
+//!   归 `CM_SPELL`/宿主接线片；本层实现**自投递队列本体 + 主人死触发点**（卡
+//!   `openmir2-m3-pet-slave-masterdie-wire`），只改实体状态。
 //! - **`MakeGhost` 的 `CanReAlive` 分支未建模**（`BaseObject.Base.cs:484-497`）：召唤物常态
 //!   `Ghost=true`；`CanReAlive ⇒ Invisible=true` 变体（需 `MonGen` 字段）登记未实现。
 //! - **`CrazyMode` 字段不在骨架**：`MagTamming` 的 `OpenCrazyMode`/`BreakCrazyMode` 与
@@ -77,6 +78,16 @@ pub const SKILL_SINSU: u16 = 30;
 pub const SKILL_ANGEL: u16 = 41;
 /// `MagicConst.SKILL_46`（`MagicConst.cs:175`）：46 分身（`MagMakeClone`，见模块头「不负责」）。
 pub const SKILL_46: u16 = 46;
+
+/// `Messages.RM_MASTERDIEMUTINY`（`src/OpenMir2/Messages.cs:836`）：主人死 1s 后自投递
+/// （`PlayObject.Die`/`KickException` 发，`PlayObject.Operate` 收 → `ProcessSlaveMutiny`）。
+/// 与 `crates/protocol/src/messages.rs:577` 同值（本层不依赖 `mir2-protocol`，登记数值同源）。
+pub const RM_MASTERDIEMUTINY: u16 = 60003;
+/// `Messages.RM_MASTERDIEGHOST`（`Messages.cs:840`）：主人幽灵 1s 后自投递（→ `ProcessSlaveGhost`）。
+/// 与 `crates/protocol/src/messages.rs:579` 同值。
+pub const RM_MASTERDIEGHOST: u16 = 60004;
+/// `PlayObject.Die()` / `MakeGhost()` 的 `SendSelfDelayMsg(..., 1000)` 延时（`PlayObject.cs:1996/2005/3527`）。
+pub const MASTER_DIE_SELF_DELAY_MS: i64 = 1000;
 
 /// `PlayCloneObject.ChrName`（`PlayCloneObject.cs:9`）：克隆体的名字常量。
 ///
@@ -714,6 +725,14 @@ pub fn slave_color_level_index(exp_level: u8) -> Option<usize> {
 //    （不可达分支，登记不冒充已实现）。
 // 3. **`GainSlaveExp` 是死代码**（`MonsterObject.cs:71-84`，全仓无调用点）⇒ 本片**不实现**宝宝击杀涨级，
 //    照搬「击杀不涨 `SlaveExpLevel`」。
+// 4. **`RM_MASTERDIEGHOST` 恒不可达**（卡 `openmir2-m3-pet-slave-masterdie-wire`）：
+//    `PlayObject.MakeGhost()`（`PlayObject.cs:3524-3527`）在 `base.MakeGhost()`
+//    （`BaseObject.Base.cs:484-497`）**之后**判 `if (Ghost) SendSelfDelayMsg(RM_MASTERDIEGHOST,…,1000)`；
+//    而 `base.MakeGhost()` 已把 `Ghost = true`（玩家 `CanReAlive == false`），`SendSelfDelayMsg`
+//    首行 `if (!Ghost) return;`（`BaseObject.Message.cs:190`）随即拦截 ⇒ **消息永不入队**、
+//    `ProcessSlaveGhost`（`PlayObject.Base.cs:361-369`）在 oracle 里是**死代码**。
+//    Rust `World::send_master_die_ghost` 逐字保留两道门（进队为空），`deliver_self_delay_msgs`
+//    保留 `RM_MASTERDIEGHOST` 支以与 oracle 同形（唯 `RM_MASTERDIEMUTINY` 可达）。
 
 /// `MonsterObject.CheckRoyalty` 的检查间隔（`MonsterObject.cs:365` `> 10000`）。
 pub const CHECK_ROYALTY_INTERVAL: i64 = 10_000;
@@ -971,6 +990,118 @@ pub fn process_slave_ghost(world: &mut World, master_id: i32) -> Vec<i32> {
         out.push(*sid);
     }
     out
+}
+
+/// `BaseObject.SendSelfDelayMsg`（`BaseObject.Message.cs:188-206`）入队的一条自身延时消息。
+///
+/// `deliver_at_ms` = oracle 的 `DeliveryTime = GetTickCount() + dwDelay`；`BaseObject.GetMessage`
+/// （`:334-352`）在 `GetTickCount() < DeliveryTime` 时重新入队，`now >= DeliveryTime` 时投递
+/// ⇒ 本骨架的到点门为 `world.clock_ms >= deliver_at_ms`（同一个 `>=` 边界）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelfDelayMsg {
+    /// 收件人（自投递 ⇒ 发件人本人）的 actor id（oracle `SendMessage.ActorId`）。
+    pub actor_id: i32,
+    /// `SendMessage.wIdent`（本层只承载 `RM_MASTERDIEMUTINY` / `RM_MASTERDIEGHOST`）。
+    pub ident: u16,
+    /// 到点时刻（sim 毫秒）。
+    pub deliver_at_ms: i64,
+}
+
+/// 一条自身延时消息**到点投递**（`PlayObject.Operate`）的效果记录。
+///
+/// 帧面（`RefNameColor` ⇒ `RM_CHANGENAMECOLOR` / `RefShowName` ⇒ `RM_USERNAME`）不在本层，
+/// 由宿主据本记录出帧（登记）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelfDelayOutcome {
+    /// 收件人 id。
+    pub actor_id: i32,
+    /// 被投递的消息号（当前仅 `RM_MASTERDIEMUTINY` / `RM_MASTERDIEGHOST`）。
+    pub ident: u16,
+    /// `ProcessSlaveMutiny` 的叛变宝宝 id（末尾往前序；非该支恒空）。
+    pub mutinied: Vec<i32>,
+    /// `ProcessSlaveGhost` 置 Ghost 的宝宝 id（末尾往前序；非该支恒空）。
+    pub ghosted: Vec<i32>,
+}
+
+impl World {
+    /// `BaseObject.SendSelfDelayMsg`（`BaseObject.Message.cs:188-206`）：**先判 `!Ghost`**——
+    /// `Ghost == true` 的实体不入队（见「生命周期」节 BUG-REPLICA 第 4 条：`RM_MASTERDIEGHOST`
+    /// 恒不可达）。
+    ///
+    /// 入队优先级一律 `MessagePriority.Lowest`（`:204`）；本骨架以**插入序**代替优先队列。
+    pub fn send_self_delay_msg(&mut self, actor_id: i32, ident: u16, delay_ms: i64) {
+        let ghost = self.entities.get(actor_id).is_some_and(|e| e.ghost);
+        if ghost {
+            return;
+        }
+        let deliver_at_ms = self.clock_ms + delay_ms;
+        self.self_delay_msgs.push(SelfDelayMsg {
+            actor_id,
+            ident,
+            deliver_at_ms,
+        });
+    }
+
+    /// `PlayObject.Die()` / `KickException()` 尾（`PlayObject.cs:1996/2005`）：
+    /// `SendSelfDelayMsg(RM_MASTERDIEMUTINY, 0,0,0,0,"",1000)`。
+    pub fn send_master_die_mutiny(&mut self, master_id: i32) {
+        self.send_self_delay_msg(master_id, RM_MASTERDIEMUTINY, MASTER_DIE_SELF_DELAY_MS);
+    }
+
+    /// `PlayObject.MakeGhost()` 尾（`PlayObject.cs:3524-3527`）：`base.MakeGhost()` 后若 `Ghost`
+    /// 则 `SendSelfDelayMsg(RM_MASTERDIEGHOST, …, 1000)`。
+    ///
+    /// **照搬的 oracle 缺陷（生命周期 BUG-REPLICA 第 4 条）**：`base.MakeGhost()`（`BaseObject.Base.cs:484-497`）
+    /// 已把 `Ghost = true`（`CanReAlive == false`，玩家恒如此），而 `SendSelfDelayMsg` 首行的
+    /// `if (!Ghost)` 门（`BaseObject.Message.cs:190`）随即拦截 ⇒ `RM_MASTERDIEGHOST` **永不入队**、
+    /// `ProcessSlaveGhost` 是死代码。本方法逐字保留两道门（`Ghost` 已是 true ⇒ 入队为空）。
+    pub fn send_master_die_ghost(&mut self, master_id: i32) {
+        self.send_self_delay_msg(master_id, RM_MASTERDIEGHOST, MASTER_DIE_SELF_DELAY_MS);
+    }
+
+    /// 到点投递自身延时消息（oracle `PlayObject.Message.cs:360-364` 的消息段）：按**插入序**扫描，
+    /// 对 `clock_ms >= deliver_at_ms` 的项出队并按 `ident` 调生产效果体。
+    ///
+    /// 借道 oracle `Operate`（`PlayObject.Message.cs:2116-2121`）：`RM_MASTERDIEMUTINY` ⇒
+    /// [`process_slave_mutiny`]，`RM_MASTERDIEGHOST` ⇒ [`process_slave_ghost`]。未到点的项**保留**
+    /// 在队里（oracle `GetMessage` 重新入队等价）。
+    pub fn deliver_self_delay_msgs(&mut self) -> Vec<SelfDelayOutcome> {
+        let now = self.clock_ms;
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < self.self_delay_msgs.len() {
+            if self.self_delay_msgs[i].deliver_at_ms > now {
+                i += 1;
+                continue;
+            }
+            let msg = self.self_delay_msgs.remove(i);
+            match msg.ident {
+                RM_MASTERDIEMUTINY => {
+                    // 只在真正有到点的叛变消息时才克隆配置（避免每 tick 无谓 clone）。
+                    let cfg = self.pet_slave_cfg.clone();
+                    let mutinied = process_slave_mutiny(self, msg.actor_id, &cfg);
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        mutinied,
+                        ghosted: Vec::new(),
+                    });
+                }
+                RM_MASTERDIEGHOST => {
+                    let ghosted = process_slave_ghost(self, msg.actor_id);
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        mutinied: Vec::new(),
+                        ghosted,
+                    });
+                }
+                // 本层只承载这一族自投递（登记：其他 `RM_*` 自投递未建模）。
+                _ => {}
+            }
+        }
+        out
+    }
 }
 
 /// `BaseObject.GetChrColor`（`BaseObject.Base.cs:869-883`）的**宝宝色支** + 兜底：
@@ -1863,6 +1994,135 @@ mod tests {
         assert_eq!(process_slave_ghost(&mut w, master), vec![s2, s1]);
         assert!(w.entities.get(s1).unwrap().ghost);
         assert!(w.entities.get(s2).unwrap().ghost);
+    }
+
+    /// 卡 `openmir2-m3-pet-slave-masterdie-wire`：主人死 ⇒ `SendSelfDelayMsg(...,1000)`（
+    /// `PlayObject.cs:1996`）⇒ **+1000ms（虚拟时钟）**才到点投递 ⇒ 倒序逐宝宝、`Random(rate)==0`
+    /// 支叛变（`PlayObject.Base.cs:331-357`）。
+    #[test]
+    fn master_die_self_delays_1000ms_then_mutinies_in_reverse() {
+        let (mut w, master, s1) = slave_world(100);
+        let s2 = {
+            let mut e = Entity::new(0, "变异骷髅2".to_string(), 12, 10);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.master = Some(master);
+            e.is_slave = true;
+            e.hp = 100;
+            e.max_hp = 100;
+            e.dc = 10 | (20 << 8);
+            e.ai.walk_speed = 400;
+            w.add_entity(e)
+        };
+        for id in [s1, s2] {
+            let s = w.entities.get_mut(id).unwrap();
+            s.dc = 10 | (20 << 8);
+            s.ai.walk_speed = 400;
+        }
+        w.entities.get_mut(master).unwrap().slave_list = vec![s1, s2];
+        // oracle `SlaveList[i].Master.LastHiter != null` 门：置个活着的命中者。
+        w.entities.get_mut(master).unwrap().last_hiter = Some(s1);
+        w.enable_slave_self_delay(pet_cfg(|c| {
+            c.master_die_mutiny = true;
+            c.master_die_mutiny_rate = 1; // Random(1) 恒 0 ⇒ 必叛变
+            c.master_die_mutiny_power = 2;
+            c.master_die_mutiny_speed = 2;
+        }));
+
+        w.kill(master);
+        let rec = w.tick(); // clock 0 -> 200：死亡结算 + 入队
+        assert!(
+            rec.deaths.iter().any(|(id, ..)| *id == master),
+            "死亡应已结算"
+        );
+        assert!(w.entities.get(master).unwrap().death);
+        assert_eq!(w.self_delay_msgs.len(), 1, "Die() 尾应入队一条自投递");
+        assert_eq!(w.self_delay_msgs[0].ident, RM_MASTERDIEMUTINY);
+        assert_eq!(
+            w.self_delay_msgs[0].deliver_at_ms,
+            200 + MASTER_DIE_SELF_DELAY_MS,
+            "DeliveryTime = GetTickCount() + 1000"
+        );
+        assert!(
+            rec.slave_self_deliveries.is_empty(),
+            "本 tick 未到点 ⇒ 不投递"
+        );
+
+        // 到点前 4 个 tick（200ms 步进 ⇒ clock 400/600/800/1000）仍未投递。
+        for _ in 0..4 {
+            let r = w.tick();
+            assert!(
+                r.slave_self_deliveries.is_empty(),
+                "clock {} 未到点",
+                r.clock_ms
+            );
+        }
+        assert_eq!(w.clock_ms, 1_000);
+        assert_eq!(
+            w.entities.get(s1).unwrap().master,
+            Some(master),
+            "未到点不变"
+        );
+
+        // 第 5 个 tick：clock = 1200 == deliver_at ⇒ 到点（`>=` 门，与 `GetMessage` 同）。
+        let r = w.tick();
+        assert_eq!(r.clock_ms, 1_200);
+        assert_eq!(r.slave_self_deliveries.len(), 1, "到点应投递一条");
+        let d = &r.slave_self_deliveries[0];
+        assert_eq!(d.ident, RM_MASTERDIEMUTINY);
+        assert_eq!(d.mutinied, vec![s2, s1], "倒序遍历 SlaveList");
+        assert!(w.self_delay_msgs.is_empty(), "到点后出队");
+        for id in [s1, s2] {
+            let s = w.entities.get(id).unwrap();
+            assert_eq!(s.master, None);
+            assert_eq!(s.slave_exp_level, 15, "SlaveColor.Length");
+            assert_eq!(s.dc, 20, "(ushort) 截断 ⇒ 只剩 LoByte(10)*power");
+            assert_eq!(s.ai.walk_speed, 200, "WalkSpeed / speed");
+        }
+    }
+
+    /// 主人死但 `LastHiter == null` ⇒ `&&` 短路：不抽数、逐宝宝 `HP = 0`（else 支）。
+    #[test]
+    fn master_die_self_delay_else_branch_zeros_hp() {
+        let (mut w, master, slave) = slave_world(100);
+        w.entities.get_mut(master).unwrap().last_hiter = None;
+        w.enable_slave_self_delay(pet_cfg(|c| {
+            c.master_die_mutiny = true;
+            c.master_die_mutiny_rate = 1;
+        }));
+        w.kill(master);
+        w.tick(); // 死亡 tick（clock 200）
+        for _ in 0..5 {
+            w.tick(); // 到点 tick（clock 1200）
+        }
+        let s = w.entities.get(slave).unwrap();
+        assert_eq!(s.hp, 0, "else 支置 HP=0");
+        assert_eq!(s.master, Some(master), "未叛变 ⇒ Master 不变");
+    }
+
+    /// BUG-REPLICA 第 4 条：`MakeGhost` 后 `Ghost == true`，`SendSelfDelayMsg` 首行的 `!Ghost` 门
+    /// 随即拦截 ⇒ `RM_MASTERDIEGHOST` **永不入队**（`ProcessSlaveGhost` 在 oracle 里是死代码）。
+    /// 本测试同时反证「投递支本身已接线」（手工入队可触发 `ProcessSlaveGhost`）。
+    #[test]
+    fn master_die_ghost_self_delay_is_blocked_by_ghost_gate() {
+        let (mut w, master, slave) = slave_world(100);
+        w.enable_slave_self_delay(pet_cfg(|_| {}));
+        // `base.MakeGhost()` 的结果（玩家 `CanReAlive == false` ⇒ `Ghost = true`）。
+        w.entities.get_mut(master).unwrap().ghost = true;
+        w.send_master_die_ghost(master);
+        assert!(
+            w.self_delay_msgs.is_empty(),
+            "Ghost 实体不入队（oracle `if (!Ghost)` 门）"
+        );
+        // 反证：绕过入口门手工入队，到点后 `Operate` 支确实调 `ProcessSlaveGhost`。
+        w.self_delay_msgs.push(SelfDelayMsg {
+            actor_id: master,
+            ident: RM_MASTERDIEGHOST,
+            deliver_at_ms: w.clock_ms,
+        });
+        let r = w.tick();
+        assert_eq!(r.slave_self_deliveries.len(), 1);
+        assert_eq!(r.slave_self_deliveries[0].ghosted, vec![slave]);
+        assert!(w.entities.get(slave).unwrap().ghost);
     }
 
     /// 诱惑受奴落尾（`MagicManager.cs:753-770`）。
