@@ -51,6 +51,18 @@
     **交叉 fail-closed**：隔离开但无 `MIR2_RNG_SEED` ⇒ 拒绝起栈（`attack_isolation_seed_from_env`
     开而无种子会 panic）。与 C# 半同名变量（`start-csharp-hook.ps1 -IsolateAttack`）⇒ 两侧同口径。
 
+  帧 52/53 记录布局管线（卡 `openmir2-client-e2e-enter-gaps` 片 ㊷，M2 验收③ 的前置）：
+    `-ClientAbilityLayout <0|1|true|false>`（或读调用方 `MIR2_CLIENT_ABILITY_LAYOUT`）⇒ 起 `game-svr.exe`
+    时把该变量**注入子进程环境（原文）**，并打一行可判据的 `RUST_CLIENT_ABILITY_LAYOUT_INJECTED=<0|1>`
+    （`0` = oracle 逐字节 / `1` = 冻结客户端）；game-svr 自身启动时打
+    `CLIENT_ABILITY_LAYOUT layout=oracle-40|client-58`，两者须能对上。**不传 ⇒ 不注入、不打该行**
+    （与改动前逐字节一致，**生产默认 = 冻结客户端布局**，真客户端可玩）。
+    **为什么需要**：M2 验收③ `s2c_diff.py` 比的是 `ident=52/53` 的 `body_len/body_sha256/raw_hex`，
+    金标准是 oracle 布局（52 `body_len=40`、53 `body_len=0`）；生产默认发 58/12 ⇒ **③a/③b 必须
+    以 `-ClientAbilityLayout 0` 起 Rust 栈**，否则 52/53 必红（与数值无关；§6.0-3 的客户端冻结偏离）。
+    取值认不出（含 `on`/`off`/`yes`/`no`）⇒ fail-closed：打印 `RED` 并 exit 1（不静默当开或当关；
+    Rust 读端只把 `0|false|FALSE|False` 当 oracle，起栈器口径必须与生产读取逐字一致）。详见 README §0b.4。
+
   判据/退出码：
     `-Stop`   按 pid 文件停掉本脚本起的进程；缺 pid 文件 ⇒ `NOTHING_TO_STOP`。
     `-Status` 只按端口实况打印，不改状态。
@@ -99,6 +111,10 @@ param(
   [string]$RngLog     = '',
   # ②③ 活栈隔离口径的攻击路径专用种子流开关（显式 switch；或读调用方 `MIR2_RNG_ISOLATE_ATTACK`）。
   [switch]$IsolateAttack,
+  # 帧 52/53 记录布局（`openmir2-client-e2e-enter-gaps` 片 ㊷）：`0|false|FALSE|False` = oracle 逐字节（③ 对拍），
+  # `1|true|TRUE|True` = 冻结客户端布局（真客户端可玩，生产默认）；空 ⇒ 回落读调用方 `MIR2_CLIENT_ABILITY_LAYOUT`，
+  # 两者皆空 ⇒ 不注入（生产默认）。取值认不出 ⇒ fail-closed。
+  [string]$ClientAbilityLayout = '',
   [switch]$Stop,
   [switch]$Status,
   [switch]$Force
@@ -271,15 +287,30 @@ if ($isolateInfo.Present) {
   Write-Output 'ISOLATE_ATTACK: 未指定攻击路径专用流（不注入，与改动前行为一致）'
 }
 
+# ---- 0e) 帧 52/53 记录布局（M2 验收③ 前置；未传 ⇒ `Present=$false`，零行为差 = 生产默认冻结客户端）----
+$layoutInfo = $null
+try {
+  $layoutInfo = Resolve-Mir2ClientAbilityLayout -LayoutArg $ClientAbilityLayout -EnvValue $env:MIR2_CLIENT_ABILITY_LAYOUT
+} catch {
+  Write-Output ("RED: " + $_.Exception.Message + " —— 拒绝在非法布局取值下起栈（fail-closed）")
+  exit 1
+}
+if ($layoutInfo.Present) {
+  $layoutName = if ($layoutInfo.Oracle) { 'oracle-40/header-only（逐字节对拍）' } else { 'client-58/TCharDesc 尾（冻结客户端）' }
+  Write-Output ("CLIENT_ABILITY_LAYOUT: 将向 game-svr 注入 MIR2_CLIENT_ABILITY_LAYOUT={0}（{1}）" -f $layoutInfo.Text, $layoutName)
+} else {
+  Write-Output 'CLIENT_ABILITY_LAYOUT: 未指定（不注入，生产默认 = 冻结客户端布局）'
+}
+
 $started = @()
-function Start-One([string]$Name, [string]$Exe, [string[]]$ExeArgs, [string]$WorkDir, [int[]]$Ports, [int]$StopOrder, [psobject]$Seed = $null, [psobject]$StateLog = $null, [psobject]$RngLog = $null, [psobject]$IsolateAttack = $null) {
+function Start-One([string]$Name, [string]$Exe, [string[]]$ExeArgs, [string]$WorkDir, [int[]]$Ports, [int]$StopOrder, [psobject]$Seed = $null, [psobject]$StateLog = $null, [psobject]$RngLog = $null, [psobject]$IsolateAttack = $null, [psobject]$ClientAbilityLayout = $null) {
   $out = Join-Path $LogDir ($Name + '.out.log')
   $err = Join-Path $LogDir ($Name + '.err.log')
   Remove-Item $out, $err -Force -ErrorAction SilentlyContinue
   # `Start-SeededProcess` = 原 `Start-Process @sp`；仅当 `$Seed.Present` / `$StateLog.Present` / `$RngLog.Present` /
   # `$IsolateAttack.Present` 时在子进程环境里注入。
   $p = Start-SeededProcess -FilePath $Exe -ArgumentList $ExeArgs -WorkingDirectory $WorkDir `
-         -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle 'Hidden' -Seed $Seed -StateLog $StateLog -RngLog $RngLog -IsolateAttack $IsolateAttack
+         -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle 'Hidden' -Seed $Seed -StateLog $StateLog -RngLog $RngLog -IsolateAttack $IsolateAttack -ClientAbilityLayout $ClientAbilityLayout
   $script:started += [pscustomobject]@{ name = $Name; pid = $p.Id; ports = $Ports; stop_order = $StopOrder; exe = $Exe }
   Write-Output ("START {0} pid={1} ports={2}" -f $Name, $p.Id, ($Ports -join ','))
   # 传种子 ⇒ 打一行可判据的 `RUST_SEED_INJECTED=<n>`（不传 ⇒ `Get-SeedInjectedLine` 返回 `$null`，不打）。
@@ -294,6 +325,9 @@ function Start-One([string]$Name, [string]$Exe, [string[]]$ExeArgs, [string]$Wor
   # 传隔离开关 ⇒ 打一行 `RUST_ISOLATE_ATTACK_INJECTED=1`（不传 ⇒ `$null`，不打）。
   $isoLine = Get-IsolateAttackInjectedLine -IsolateAttack $IsolateAttack
   if (-not [string]::IsNullOrEmpty($isoLine)) { Write-Output $isoLine }
+  # 传布局 ⇒ 打一行 `RUST_CLIENT_ABILITY_LAYOUT_INJECTED=<0|1>`（不传 ⇒ `$null`，不打）。
+  $layoutLine = Get-ClientAbilityLayoutInjectedLine -ClientAbilityLayout $ClientAbilityLayout
+  if (-not [string]::IsNullOrEmpty($layoutLine)) { Write-Output $layoutLine }
 }
 
 # ---- 1) MySQL ----
@@ -316,7 +350,7 @@ Start-One -Name 'DBSrv'    -Exe $dbsrvExe -ExeArgs @() -WorkDir $dbsrvDir -Ports
 Start-One -Name 'LoginSrv' -Exe $lsrvExe  -ExeArgs @() -WorkDir $lsrvDir  -Ports @(5500, 5600)       -StopOrder 6
 
 # ---- 3) Rust game-svr（先于网关：网关注册需要 GameSvr 在） ----
-Start-One -Name 'game-svr'   -Exe $gsvrExe -ExeArgs @($gsvrConf) -WorkDir (Split-Path $gsvrConf -Parent) -Ports @(5000)           -StopOrder 5 -Seed $seedInfo -StateLog $stateLogInfo -RngLog $rngLogInfo -IsolateAttack $isolateInfo
+Start-One -Name 'game-svr'   -Exe $gsvrExe -ExeArgs @($gsvrConf) -WorkDir (Split-Path $gsvrConf -Parent) -Ports @(5000)           -StopOrder 5 -Seed $seedInfo -StateLog $stateLogInfo -RngLog $rngLogInfo -IsolateAttack $isolateInfo -ClientAbilityLayout $layoutInfo
 # ---- 4) Rust 三网关 ----
 Start-One -Name 'login-gate' -Exe $lgExe   -ExeArgs @($lgConf)   -WorkDir (Split-Path $lgConf  -Parent) -Ports @(7000)           -StopOrder 1
 Start-One -Name 'sel-gate'   -Exe $sgExe   -ExeArgs @($sgConf)   -WorkDir (Split-Path $sgConf  -Parent) -Ports @(7100)           -StopOrder 2

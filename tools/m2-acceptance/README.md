@@ -210,6 +210,45 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_rng_log_plumb
 
 证据：`tools/m2-acceptance/evidence/m2svr-rust-rng-log-plumb-20261013/`（卡 `openmir2-m2-rust-rng-log-plumb`）。
 
+### 0b.4 `-ClientAbilityLayout` · 帧 52/53 的记录布局（M2 验收③ 的前置；卡 `openmir2-client-e2e-enter-gaps` 片 ㊷）
+
+冻结客户端 `MirClient@c61d912d` 在 `Source/Common/Grobal2.pas:39` 写死 `HIGHHP = True`：帧 52 的 `TAbility`
+是 **58B**、帧 53 `SM_HEALTHSPELLCHANGED` 从**尾**解 12B `TCharDesc`（`Source/MirClient/ClMain.pas:10220`）。
+⇒ **Rust 生产默认**走**冻结客户端布局**（否则真客户端 HUD `0/0`、跑不动；根因/真机见
+`mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/61-*`、`183-*`）。
+
+但 **M2 验收③**（`s2c_diff.py` vs 金标准 `c-line-baseline-c3-20261010.jsonl`）比的是 `ident=52/53` 的
+`body_len/body_sha256/raw_hex`，金标准是 **oracle 布局**（52 `body_len=40`、53 `body_len=0`）
+⇒ ③a/③b 的 Rust 半**必须**以 oracle 布局起栈：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+  -RustBinDir E:\tmp\openmir2-m2svr-target\debug -ClientAbilityLayout 0
+# 启动日志出现：CLIENT_ABILITY_LAYOUT: 将向 game-svr 注入 MIR2_CLIENT_ABILITY_LAYOUT=0（oracle-40/header-only（逐字节对拍））
+#              … RUST_CLIENT_ABILITY_LAYOUT_INJECTED=0
+# game-svr.out.log 出现：CLIENT_ABILITY_LAYOUT layout=oracle-40（…）
+```
+
+- **不传 ⇒ 不注入、不打该行**（与改动前逐字节一致，生产默认 = 冻结客户端布局 = 真客户端可玩）。
+- 取值：`0|false|FALSE|False` = oracle 逐字节（③ 对拍）；`1|true|TRUE|True` = 冻结客户端布局。
+  **不接受 `on`/`off`/`yes`/`no`**（Rust 读端 `smframe::client_layout_enabled()` 只把 `0|false|FALSE|False`
+  当 oracle，起栈器口径必须与生产读取逐字一致）⇒ 认不出的值 **fail-closed**（exit 1，不起栈）。
+- 管线实现（`Resolve-Mir2ClientAbilityLayout` / `Get-ClientAbilityLayoutInjectedLine` /
+  `Start-SeededProcess -ClientAbilityLayout`）在 `tools/m2-acceptance/rust_seed_plumb.ps1`，与判据脚本共用同一份。
+- 判红/判绿（不占 5000/7000/7100/7200；用临时目录 + 空闲端口起单个 game-svr）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_client_ability_layout_plumb.ps1 `
+  -GameSvrExe E:\tmp\openmir2-m2svr-target\debug\game-svr.exe
+# 15/15 ⇒ CLIENT_ABILITY_LAYOUT_PLUMB GREEN (rc=0)；删掉注入行 ⇒ ②a/③a 必红 (rc=1)
+```
+
+> **③ 口径提醒（不改变判据，只补操作面）**：`52/53` 的客户端布局是 §6.0-3 意义上的**故意偏离**
+> （客户端冻结 > oracle 逐字节）。因此 ③a/③b **必须** `-ClientAbilityLayout 0`；而真机①②（客户端截图）
+> **必须**用默认（生产 = 客户端布局）。两种口径不可同时满足，别拿一个口径的读数判另一个窗口。
+
+证据：`tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/`。
+
 ---
 
 ## 1. ① 端口所有权实拍 —— `check_ports.ps1`

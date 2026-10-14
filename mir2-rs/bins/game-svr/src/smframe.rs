@@ -236,6 +236,22 @@ pub fn client_layout_enabled() -> bool {
     )
 }
 
+/// 帧 52/53 记录布局的**起栈自证行**（卡 `openmir2-client-e2e-enter-gaps` 片 ㊷）：
+/// `CLIENT_ABILITY_LAYOUT layout=oracle-40|client-58`。
+///
+/// `main()` 启动时打一行，供起栈器
+/// （`tools/m2-acceptance/start_rust_stack.ps1 -ClientAbilityLayout`）的
+/// `RUST_CLIENT_ABILITY_LAYOUT_INJECTED=<0|1>` 行**对得上**（同 `SEED_PROBE` 口径）：
+/// `0` ⇒ 本行必须 `layout=oracle-40`；`1` ⇒ `layout=client-58`。只读日志，不改任何出帧语义。
+#[must_use]
+pub fn client_layout_probe_line() -> &'static str {
+    if client_layout_enabled() {
+        "CLIENT_ABILITY_LAYOUT layout=client-58"
+    } else {
+        "CLIENT_ABILITY_LAYOUT layout=oracle-40"
+    }
+}
+
 /// `SM_HEALTHSPELLCHANGED` 的**冻结客户端布局**（`HIGHHP=True`），与 oracle 的 header-only 帧
 /// 只差**尾**：`EDCode.Encode(TCharDesc)`（12B）。
 ///

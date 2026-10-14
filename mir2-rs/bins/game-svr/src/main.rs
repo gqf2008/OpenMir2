@@ -213,6 +213,17 @@ async fn main() -> Result<()> {
             clock::probe_line(origin)
         );
     }
+    // **卡 `openmir2-client-e2e-enter-gaps` 片 ㊷**：帧 52/53 记录布局**起栈自证行**。起栈器
+    // （`tools/m2-acceptance/start_rust_stack.ps1 -ClientAbilityLayout`）会打
+    // `RUST_CLIENT_ABILITY_LAYOUT_INJECTED=<0|1>`，本行必须与它对上（同 `SEED_PROBE` 口径）：
+    // `0` ⇒ `layout=oracle-40`（M2 验收③ 逐字节对拍）；`1` ⇒ `layout=client-58`（冻结客户端可玩）。
+    // **只读日志，不改任何出帧语义**；两帧的实际布局由 `smframe::client_layout_enabled()` 统一决定。
+    glog!(
+        "INF",
+        "{}（MIR2_CLIENT_ABILITY_LAYOUT={}）",
+        game_svr::smframe::client_layout_probe_line(),
+        std::env::var("MIR2_CLIENT_ABILITY_LAYOUT").unwrap_or_else(|_| "<unset>".to_string())
+    );
     glog!(
         "INF",
         "游戏服务启动：监听 {}:{}（CheckBlock={}，{ } 张地图占位，config={}）",
