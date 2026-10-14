@@ -1,0 +1,37 @@
+172 — 改坏必红（片㊱）：G5 修复块 ① 复跑命令的配对牙（卡 openmir2-client-e2e-enter-gaps）
+====================================================================================
+口径：变异只在 E:/tmp 复制件（E:/tmp/m2svr-burst22/mut/）上做，仓内 window_handoff.py 前后 sha256 逐字节一致。
+复制件 = window_handoff.py + client-e2e-window.fixed.sh.txt 两份（selftest 只依赖这两件）。
+
+原地复现（无变异）: SELFTEST OK (98/98)   sha256=f7037eb7e8cef62da2b656b1263c21d483829af23f8479dc626eab763d36dfaf
+
+--- MUT-A：把 ① 的复跑行退回片㊱ 之前的形状（--repo 用本计划，去掉 --target-dir）
+    期望：plan-g5-standin-recheck FAIL（1 ① 段拿本计划 repo 复跑 ⇒ cp 换完替身仍 RED）
+    patch: " --repo {_si['repo']} --target-dir {_si['tgt']} --ref {ref}" -> " --repo {repo or '(未给 --repo)'} --ref {ref}"
+[PASS] selftest agg-badtool-reason G2 aoi_visibility_pair.py --selftest FAILED（rc=1）
+[FAIL] selftest plan-g5-standin-recheck standin={'path': 'E:\\tmp\\m2svr-burst22\\mut\\MUT-A\\client-e2e-window.fixed.sh.txt', 'repo': '/e/tmp/m2svr-window-origin', 'tgt': 'E:\\tmp\\m2svr-window-target'}
+[FAIL] selftest plan-g5-standin-recheck-distinct
+SELFTEST FAILED (96/98)
+    rc=1
+
+--- MUT-B：standin_script_info 恒返回 None（取不到替身构建源）
+    期望：plan-g5-standin-recheck / -distinct 双 FAIL（修复块退回「取不到替身」分支）
+    patch: 在 out 初始化后立即 return out
+[PASS] selftest agg-badtool-reason G2 aoi_visibility_pair.py --selftest FAILED（rc=1）
+[FAIL] selftest plan-g5-standin-recheck standin={'path': 'E:\\tmp\\m2svr-burst22\\mut\\MUT-B\\client-e2e-window.fixed.sh.txt', 'repo': None, 'tgt': None}
+[FAIL] selftest plan-g5-standin-recheck-distinct
+SELFTEST FAILED (96/98)
+    rc=1
+
+--- MUT-C：① 复跑行漏掉 --target-dir（只留 --repo <替身> --ref）
+    期望：plan-g5-standin-recheck / -distinct 双 FAIL（tgt 不一致仍会被 G5 判 RED）
+    patch: "--repo {_si['repo']} --target-dir {_si['tgt']} --ref {ref}" -> "--repo {_si['repo']} --ref {ref}"
+[PASS] selftest agg-badtool-reason G2 aoi_visibility_pair.py --selftest FAILED（rc=1）
+[FAIL] selftest plan-g5-standin-recheck standin={'path': 'E:\\tmp\\m2svr-burst22\\mut\\MUT-C\\client-e2e-window.fixed.sh.txt', 'repo': '/e/tmp/m2svr-window-origin', 'tgt': 'E:\\tmp\\m2svr-window-target'}
+[FAIL] selftest plan-g5-standin-recheck-distinct #        python -I -B E:/tmp/m2svr-burst22/mut/MUT-C/window_handoff.py --repo /e/tmp/m2svr-window-origin --ref HEAD
+SELFTEST FAILED (96/98)
+    rc=1
+
+--- 还原复核（仓内原件） ---
+SELFTEST OK/FAILED: SELFTEST OK (98/98)
+仓内 window_handoff.py sha256=f7037eb7e8cef62da2b656b1263c21d483829af23f8479dc626eab763d36dfaf

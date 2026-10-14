@@ -903,3 +903,35 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   `window_handoff.py --plan` 跑 ③b/③a 两趟 + `--judge` 六条判据（③b `--best-site` = `605,578` E=12.681）。
 - 证据：`167-window-source-refresh-and-prebuild.txt`、`168-redcheck-window-source-refresh.txt`、
   `169-gates.txt`、`170-boundary.txt`。
+
+### ㊱ ③ G5 修复块「换替身」复跑命令配对（不烧窗）（2026-10-14）—— `171`/`172`
+
+- **缺口（实测、可复现）**：G5 RED 的修复块给两条修法 —— ① 换成入库替身
+  `client-e2e-window.fixed.sh.txt`（`repo=/e/tmp/m2svr-window-origin`）、② 手改活脚本 `repo=`/`tgt=`
+  两行（`repo=` 变成**本计划 `--repo`**）。片㊱ 之前两条路共用**同一条**复跑命令
+  `--repo <本计划构建源>`：走 ① 把替身 `cp` 成活脚本后，照修复块复跑 **G5 仍 RED**
+  （`171` §B2）⇒ 修复块自相矛盾/死循环。对**一次性窗口**是烧窗风险（root 会以为没修好而反复折腾，
+  每折腾一次就少一次窗口机会）。
+- **本片交付**（唯一代码文件 `window_handoff.py`；只读规划器，不新增第二份判据）：
+  ① 新增纯函数 `standin_script_info()`（解析替身自己的 `repo=`/`tgt=`，复用既有 `parse_window_script`）
+     与常量 `STANDIN_SCRIPT`（可用 `MIR2_WINDOW_STANDIN` 覆盖）；
+  ② G5 修复块改成**两条路各配各的复跑命令**并显式警示「别混着用」：
+     ① 用**替身的构建源**（`--repo <替身 repo> --target-dir <替身 tgt>`，`171` §A2 ⇒ GREEN）；
+     ② 才用**本计划构建源**（`--repo <--repo>`）；取不到替身时 fail-soft 提示走 ②（不静默假装选过）；
+  ③ 新增 3 条自检牙：`plan-g5-standin-recheck`（① 必须带替身 repo **且** tgt）、
+     `plan-g5-edit-recheck`（② 用本计划 repo）、`plan-g5-standin-recheck-distinct`（① 那条命令必须带
+     `--target-dir`，钉死「cp 换完替身仍 RED」的复现）。`--selftest` **95 → 98/98**。
+- **改坏必红（`172`，3 颗牙，变异只在 `E:/tmp/m2svr-burst22/mut/` 复制件，仓内 sha256 前后一致）**：
+  MUT-A ① 复跑行退回片㊱ 之前形状 ⇒ `SELFTEST FAILED (96/98)`、rc=1；
+  MUT-B `standin_script_info` 恒 `None` ⇒ `(96/98)`、rc=1；
+  MUT-C ① 漏 `--target-dir` ⇒ `(96/98)`、rc=1；还原后 `SELFTEST OK (98/98)`，仓内件 sha256
+  `f7037eb7…` 前后不变。
+- **向后兼容**：推荐流程（`--repo` = 专用源 + 活脚本已是替身）片㊱ 前后都 GREEN 且**不打印**修复块
+  （`171` §A3）；`--window-script ''`（干净检出）行为不变。
+- **边界与纪律**：本片只改证据目录 1 个 `.py`（+ 证据/README/清单）；**零 `.rs`/`.toml`、零生产代码、
+  零起栈、零游戏端口**（3306 UP，其余 DOWN）；未动共享主检出、未改 root 的活脚本；未 merge、未自签。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级真机两侧同框对照 + 攻击/伤害可见；
+  root 开窗前两步 = ① 换活脚本为入库替身（换完**用替身的构建源**复跑 G5 至 GREEN，见修复块 ①）
+  ② 起栈后按 `window_handoff.py --plan` 跑 ③b/③a 两趟 + `--judge` 六条判据（③b `--best-site` = `605,578` E=12.681）。
+- 证据：`171-g5-remediation-recheck.txt`、`172-redcheck-g5-remediation-recheck.txt`、
+  `173-gates.txt`、`174-boundary.txt`、`window_handoff.py`。
