@@ -677,3 +677,24 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   屏幕见怪并能攻击造成伤害。
 - 证据：`135-window-plan-position-columns.txt`、`136-redcheck-window-plan-position-columns.txt`、
   `137-gates.txt`、`138-boundary.txt`。
+
+### ㉘ ③ 窗口构建源固化：root 一键脚本 `repo=`/`tgt=` 两行修复副本 + 专用源推进到 master + 六件预构建（2026-10-14）
+
+- **根因（机判）**：root 的 `E:/tmp/openmir2-watch/client-e2e-window.sh:6-7` 用 `repo=` = **共享主检出**
+  （rev 车道 worktree），实测停在 `ad0592b19`、**不含** AOI 诊断片 `d16b5199d` ⇒ 默认构建出的 `game-svr`
+  无 `vr=/new=/af=` 读数 ⇒ `check_aoi_visibility_diag.py` 版式门 `PREREQ_RED`、③ 窗口白烧
+  （root verify1 的原始件正是旧版式：`grep -c 'vr='` = 0、`grep -c 'vis=0'` = 11）。
+- **本片交付（零生产代码改动、零起栈、零游戏端口）**：
+  1. 专用源 `E:/tmp/m2svr-window-origin` 推进到当前 `origin/master = 6dba8719d`（detached、status 0 行、含 `d16b5199d`）；
+  2. 六件 exe 预构建到 `E:/tmp/m2svr-window-target/debug`（`game-svr.exe` = `39f44544…`，字节含 `vr=/new=/af=`）；
+  3. root 脚本的**逐字副本 + 仅 2 行 diff**：`client-e2e-window.fixed.sh.txt`
+     （sha256 `ab2ee6f3…`，`bash -n` OK，`diff | grep -c '^-[^-]'` = 2）；根可直接跑它以开窗；
+  4. **改坏必红**：把构建源改回共享主检出 ⇒ `window_handoff.py` G1 RED（`WINDOW_READY=NO` / rc=1）；
+     把修复件两行改回默认 ⇒ 与 root 原脚本**逐字节相同**。
+- **真读数**：`window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD` ⇒ `WINDOW_READY=YES` /
+  `RESULT: GREEN` rc=0（对照：共享主检出 ⇒ `WINDOW_READY=NO` / RED rc=1）；
+  四门禁 fmt 0 / clippy 0(`-D warnings`) / 101 suites · 1205 passed · 0 failed · 22 ignored / msgcodegen 604 rc=0。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：卡级 DoD③ 的 R 级「③b/③a 两趟真机同框对照」+
+  「屏幕见怪并能攻击造成伤害」。
+- 证据：`139-window-build-source-fixed-script.txt`、`140-redcheck-window-build-source.txt`、
+  `141-gates.txt`、`142-boundary.txt`、`client-e2e-window.fixed.sh.txt`。
