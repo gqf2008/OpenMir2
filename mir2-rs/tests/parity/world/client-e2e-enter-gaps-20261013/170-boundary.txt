@@ -1,0 +1,56 @@
+170-boundary.txt —— 片㉟ 边界（base = origin/master 9edfc745d48ec7edafcbcb9da3d9a6a0c19073ad；head = 本片提交）
+卡 openmir2-client-e2e-enter-gaps / m2-svr / openmir2-worker-11 / 2026-10-14
+====================================================================================================
+# 1) 本片（㉟）提交净差量（pre-㉟ head = 2a1d4237d → 本片提交）
+$ git diff --name-status 2a1d4237d HEAD
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/167-window-source-refresh-and-prebuild.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/168-redcheck-window-source-refresh.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/169-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/170-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+（= 本片只新增证据 + README §㉟ + 清单重生成；零 `.py`、零 `.rs`、零 `.toml`、零生产代码）
+
+# 2) 整卡未合差量 = origin/master..HEAD（含在审的 ㉝/㉞ 与本片 ㉟）
+$ git diff --name-status 9edfc745d48ec7edafcbcb9da3d9a6a0c19073ad HEAD
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/159-live-window-script-gate.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/160-redcheck-live-window-script.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/161-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/162-boundary.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/163-window-source-freshness-struck.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/164-redcheck-window-source-freshness.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/165-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/166-boundary.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/167-window-source-refresh-and-prebuild.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/168-redcheck-window-source-refresh.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/169-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/170-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+（上面为「含本文件」的最终写集 = 2 个在审 .py（㉝/㉞）+ 12 件证据/README/清单，无 `.rs`；其中 159-162 为在审㉝、
+ 163-166 为在审㉞、167-170 为本片㉟）
+
+# 3) 冻结面（必须全空）
+$ git diff --name-only 9edfc745d48ec7edafcbcb9da3d9a6a0c19073ad HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+(空 = 通过)
+
+$ git diff --name-only 9edfc745d48ec7edafcbcb9da3d9a6a0c19073ad HEAD -- src ':!src/BotSrv'
+(空 = 通过)
+
+$ git diff --name-only 9edfc745d48ec7edafcbcb9da3d9a6a0c19073ad HEAD -- '*.rs'
+(空 = 通过)
+
+# 4) 证据完整性
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+GREEN mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK 175/175
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+EOLCHECK GREEN 176/176 件文本证据与仓库口径（LF）在 EOL 上一致
+（清单 171 → 175 件：+167/168/169/170）
+
+# 5) 检出外改动（登记；未动共享主检出）
+$ git -C E:/tmp/m2svr-window-origin rev-parse HEAD
+9edfc745d48ec7edafcbcb9da3d9a6a0c19073ad    # 专用窗口构建源：6dba8719d → 9edfc745d（快进）
+$ ls -l E:/tmp/m2svr-window-target/debug/*.exe
+（六件窗口二进制；game-svr.exe 本片 10:30 重链 = dcfd00408fbf5fccb7c807ed8bc718b403a418522a8235b60a398586aaa65a77）

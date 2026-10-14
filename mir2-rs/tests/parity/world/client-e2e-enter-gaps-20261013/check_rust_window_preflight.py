@@ -16,8 +16,12 @@
   ⇒ 直接跑窗口会得到 `PREREQ_RED`，白烧一个独占窗口。
 
 本工具把窗口前的 Rust 侧静态前置做成机判（fail-closed），四组判据：
-  R1 **构建源含修复提交**：`git -C <repo> merge-base --is-ancestor <fix-commit> <ref>`；
-     fix-commit 默认 = 片⑪ `d16b5199d`（推出 ③ 判据所需读数的提交）；`ref` 默认 `HEAD`。
+  R1 **构建源含全部必需修复提交**：对每个 `<fix-commit>` 跑
+     `git -C <repo> merge-base --is-ancestor <fix-commit> <ref>`；默认两个——片⑪ `d16b5199d`
+     （推出 ③ 判据读数 `vr/new/af`）与片㉜ `0d0d62a69`（受击帧 `SM_STRUCK` 按 oracle `SendRefMsg`
+     广播，DoD③ 第三半「能攻击造成伤害」必需）；`--fix-commit` 可重复覆盖（单值 = 只查那一个，
+     向后兼容旧调用）；`ref` 默认 `HEAD`。只含片⑪、缺片㉜ 的专用源（实测 `m2svr-window-origin
+     @6dba8719d`）必须判 RED —— 这正是「窗口构建源过期」的 fail-closed 门。
   R2 **源码含 ③ 读数标记**：`<repo>/mir2-rs/bins/game-svr/src/main.rs` 必须同时含
      版式字面量 `"vr={} vis={} new={} af={}"` 与可见集判据 `!= mir2_world::VisibleFlag::Hidden`
      （旧版 `== VisibleFlag::Show` 只数「本轮新增」，是 root 误读的根因，`70-aoi-visibility-verdict.txt` §A）。
@@ -52,7 +56,17 @@ import sys
 import tempfile
 
 # 片⑪：`fix(game-svr): AOI 诊断 vis 语义（当前可见集，不含自身）+ vr/new/af 读数`
-FIX_COMMIT_DEFAULT = "d16b5199d98029081daccd9252f81b94a9596eaf"
+FIX_COMMIT_DIAG = "d16b5199d98029081daccd9252f81b94a9596eaf"
+# 片㉜：`fix(game-svr): 受击帧按 oracle SendRefMsg(RM_STRUCK) 广播给视野内全体 Play`
+#   —— DoD③ 第三半「屏幕见怪并能攻击造成伤害」的判据（`check_attack_observability.py`）要靠它。
+FIX_COMMIT_STRUCK = "0d0d62a695082730dd2398e6d35bf40c8f70480a"
+# R1 默认要求源同时含两片；`--fix-commit` 可重复覆盖。
+REQUIRED_FIX_COMMITS: tuple[tuple[str, str], ...] = (
+    (FIX_COMMIT_DIAG, "片⑪ AOI 诊断 vr/new/af"),
+    (FIX_COMMIT_STRUCK, "片㉜ 受击帧 SM_STRUCK 广播"),
+)
+# 向后兼容旧签名（单值默认）。
+FIX_COMMIT_DEFAULT = FIX_COMMIT_DIAG
 # 新周期行版式（`main.rs::SessionAoiDiag::session_summary`）
 DIAG_FORMAT_MARKER = "vr={} vis={} new={} af={}"
 # 可见集过滤（`Show|Invisible` == `!= Hidden`）；旧版是 `== VisibleFlag::Show`
@@ -114,6 +128,33 @@ def is_ancestor(repo: str, commit: str, ref: str) -> tuple[bool | None, str]:
     if rc == 1:
         return False, ""
     return None, out or f"rc={rc}"
+
+
+def required_fix_findings(
+    repo: str, ref: str, fixes: "list[tuple[str, str]] | tuple[tuple[str, str], ...]"
+) -> tuple[list[str], list[str], list[str]]:
+    """R1 的纯逻辑：对每个必需修复提交跑 ancestry，分类成 `(ok 行, problems, prereqs)`。
+
+    `False`（提交存在但不是 `ref` 祖先）⇒ problem（缺该片 ⇒ 对应判据 PREREQ/红）；
+    `None`（缺提交/缺 ref）⇒ prereq。不打印，便于 selftest 直测与调用方分类。
+    """
+    oks: list[str] = []
+    problems: list[str] = []
+    prereqs: list[str] = []
+    for commit, label in fixes:
+        nice = commit[:10] + (f"（{label}）" if label else "")
+        val, err = is_ancestor(repo, commit, ref)
+        if val is True:
+            oks.append(f"[OK] R1 构建源 {repo} 的 {ref} 含修复提交 {nice}（--is-ancestor=YES）")
+        elif val is False:
+            rc, head = git(repo, "rev-parse", ref)
+            problems.append(
+                f"RED R1: {repo} 的 {ref}={head or '?'} 不含 {nice}"
+                "（窗口缺该片 ⇒ 对应判据 PREREQ/红，白烧一次性窗口）"
+            )
+        else:
+            prereqs.append(f"PREREQ_RED R1: 判不了 {nice}（{err}）")
+    return oks, problems, prereqs
 
 
 def mapinfo_logical_name(content: str) -> str | None:
@@ -280,6 +321,39 @@ def selftest() -> int:
             subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         val, _ = is_ancestor(tmp, first, "HEAD")
         chk("git-ancestor-yes", val is True, repr(val))
+        rc, second = git(tmp, "rev-parse", "HEAD")
+        chk("git-second-oid", rc == 0 and len(second) == 40, second)
+        val, _ = is_ancestor(tmp, second, first)
+        chk("git-ancestor-no", val is False, repr(val))
+        # R1 多修复提交（片㉝ 新增）：只含第一个 ⇒ 第二个必判 RED（真身 = 专用源只含片⑪、缺片㉜）。
+        oks, probs, prereqs = required_fix_findings(
+            tmp, first, [(first, "片⑪"), (second, "片㉜")]
+        )
+        chk(
+            "fixes-second-missing-red",
+            len(oks) == 1 and len(probs) == 1 and not prereqs,
+            f"ok={len(oks)} prob={len(probs)} pre={len(prereqs)}",
+        )
+        oks, probs, prereqs = required_fix_findings(
+            tmp, "HEAD", [(first, "片⑪"), (second, "片㉜")]
+        )
+        chk(
+            "fixes-all-present",
+            len(oks) == 2 and not probs and not prereqs,
+            f"ok={len(oks)} prob={len(probs)} pre={len(prereqs)}",
+        )
+        oks, probs, prereqs = required_fix_findings(tmp, first, [(first, "片⑪"), ("0" * 40, "x")])
+        chk(
+            "fixes-unknown-prereq",
+            len(oks) == 1 and not probs and len(prereqs) == 1,
+            f"ok={len(oks)} prob={len(probs)} pre={len(prereqs)}",
+        )
+        chk(
+            "required-fixes-default-two",
+            REQUIRED_FIX_COMMITS[0][0] == FIX_COMMIT_DIAG
+            and REQUIRED_FIX_COMMITS[1][0] == FIX_COMMIT_STRUCK,
+            repr(REQUIRED_FIX_COMMITS),
+        )
         val, _ = is_ancestor(tmp, "0" * 40, "HEAD")
         chk("git-ancestor-unknown-prereq", val is None, repr(val))
         val, _ = is_ancestor(os.path.join(tmp, "nope"), first, "HEAD")
@@ -314,7 +388,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--repo", default="", help="Rust 构建源检出（默认从本脚本位置向上找 .git）")
     ap.add_argument("--ref", default="HEAD", help="被检查的 ref/oid（默认 HEAD）")
-    ap.add_argument("--fix-commit", default=FIX_COMMIT_DEFAULT, help="必须为 --ref 祖先的修复提交")
+    ap.add_argument(
+        "--fix-commit",
+        action="append",
+        default=None,
+        help="必须为 --ref 祖先的修复提交（可重复；默认 = 片⑪+片㉜；单值 = 只查那一个）",
+    )
     ap.add_argument("--mirserver", default="E:/MirServer", help="oracle 部署根（默认 E:/MirServer）")
     ap.add_argument("--mongen", default="", help="MonGen.txt；默认 <mirserver>/M2GameSvr/Envir/MonGen.txt")
     ap.add_argument("--mapinfo", default="", help="MapInfo.txt；默认 <mirserver>/M2GameSvr/Envir/MapInfo.txt")
@@ -338,22 +417,17 @@ def main(argv: list[str] | None = None) -> int:
     problems: list[str] = []
     prereq: list[str] = []
 
-    # R1 构建源含修复提交
+    # R1 构建源含全部必需修复提交
+    fixes = [(c, "") for c in args.fix_commit] if args.fix_commit else list(REQUIRED_FIX_COMMITS)
     repo = args.repo or find_repo_root(script_dir) or ""
     if not repo:
         prereq.append("PREREQ_RED R1: 找不到 git 根（用 --repo 指明构建源检出）")
     else:
-        val, err = is_ancestor(repo, args.fix_commit, args.ref)
-        if val is True:
-            print(f"[OK] R1 构建源 {repo} 的 {args.ref} 含修复提交 {args.fix_commit[:10]}（--is-ancestor=YES）")
-        elif val is False:
-            rc, head = git(repo, "rev-parse", args.ref)
-            problems.append(
-                f"RED R1: {repo} 的 {args.ref}={head or '?'} 不含 {args.fix_commit[:10]}"
-                "（旧诊断版式 ⇒ 窗口判据 PREREQ_RED）"
-            )
-        else:
-            prereq.append(f"PREREQ_RED R1: 判不了（{err}）")
+        oks, probs, pre = required_fix_findings(repo, args.ref, fixes)
+        for line in oks:
+            print(line)
+        problems.extend(probs)
+        prereq.extend(pre)
 
     # R2 源码含 ③ 读数标记
     main_rs = os.path.join(repo, MAIN_RS_REL) if repo else ""
