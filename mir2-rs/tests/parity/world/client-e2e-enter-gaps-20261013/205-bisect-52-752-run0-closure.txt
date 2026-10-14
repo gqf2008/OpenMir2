@@ -1,0 +1,115 @@
+205 — root 最高优先（2026-10-14 15:0x）闭环：区间 `ad0592b19..8e491f81e` 二分 + 「52/752 不生效 + 跑=0」根因
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+只读复查（git + 两侧真机日志）；零起栈、零游戏端口；未动共享主检出；不 merge、不自签 review
+====================================================================================================
+
+# 0) 结论（一句话）
+
+**区间 `ad0592b19..8e491f81e` 内没有任何提交改动 52/752/53/`CM_RUN` 的代码路径**（`enter.rs` 零改动；
+8 个相关符号 `-S` 命中 0；两侧符号计数全 EQUAL）。失败真实原因是**一直存在**的 53 `SM_HEALTHSPELLCHANGED`
+缺冻结客户端 12B `TCharDesc` 尾（片㊴ `c61b9627a` 已修），触发条件 = **进图 `HP<MaxHP`**：
+`8e491f81e` 实测进图 `hp=18/19` ⇒ 体力/周期恢复到点发 53（旧实现 header-only）⇒ 客户端 `HIGHHP=True`
+从**尾**解 `TCharDesc` ⇒ HUD `0/0`、`CanRun(HP>=10)` 拒跑 ⇒ 所有跑键被降级成走（`CM_RUN=0`）；
+`ad0592b19` 实测进图 `hp=19/19` ⇒ 从不发 53 ⇒ HUD 正确。**根因 = 潜伏布局缺陷被「进图残血」这一场景暴露，
+不是区间里的某条回归提交。**
+
+# 1) 二分 A：区间内碰 `bins/game-svr/src` 的提交（root 点名的命令）
+
+```
+$ git log --oneline ad0592b19..8e491f81e -- mir2-rs/bins/game-svr/src
+5e932b4eb Merge origin/master (3db79cae0) into worktree-m3-selloff-dealoffform-recog
+ecd455765 fix(m3-9-3): 宝宝叛变帧面同优先级出队序 —— 复刻 oracle .NET 4 叉堆（reviewer-6 F-1）
+d3b39c157 feat(m3-9-2): 护身符扣光删除帧面——SM_DELITEM(202) 编发（消费 use_amulet 的 deleted 支）
+c55dff977 feat(m3-9-3): 宝宝叛变帧面接线——RM_CHANGENAMECOLOR/RM_USERNAME 出帧（消费 slave_self_deliveries）
+ca10f4a87 Merge 0d0d62a69 (…) / 0d0d62a69 fix(game-svr): 片㉜ … SM_STRUCK 广播
+41e61029e Merge 16b208343 / a6359cd78 feat(m3-pet-slave-masterdie-wire): ⑨ 主人死/幽灵 1s 自投递驱动
+f8ab7ff24 fix(m3-party-gotolabel-ext): NpcPlayer 取数优先运行时态 / ce7879223 feat(…): GotoLable 四组队 label
+057d7dc9e Merge 9f6b02179 / 0a1b83f7b feat(m3-selloff-dealybme-wire) / 65d0b34f2 fix(…): SM_SENDDEALOFFFORM 头字段
+2d2426f5b / 620ac1f13 / 7a108f4d2 / 8358058fc（⑩-1 各 merge）
+8c4e0fc49 feat(m3-pet-slave-clone46): 46 分身宿主接线 + RM_TURN 帧
+1a2b1ed51 feat(m3-party-recall-ext): ⑦ 扩展面 5 个脚本/命令处理器 + 宿主组队快照
+d16b5199d fix(game-svr): AOI 诊断 vis 语义（当前可见集，不含自身）+ vr/new/af 读数
+```
+（共 19 条；均为 **⑨/⑩/⑦ 帧面 + 片⑪ AOI 诊断**，无一条碰 52/752/53/`CM_RUN`。）
+
+# 2) 二分 B：相关文件的区间差量与符号计数
+
+```
+$ git diff --stat ad0592b19 8e491f81e -- mir2-rs/bins/game-svr/src/{enter,ability,smframe,record,movewire,main}.rs
+ mir2-rs/bins/game-svr/src/main.rs    | 2117 ++++++++++++++++++++++++++++++++--
+ mir2-rs/bins/game-svr/src/record.rs  |    6 +-
+ mir2-rs/bins/game-svr/src/smframe.rs |   60 +
+ 3 files changed, 2057 insertions(+), 126 deletions(-)
+# enter.rs / ability.rs / movewire.rs ⇒ 不在输出里（零改动）
+```
+`main.rs` 的 2117 行差量 = ⑨/⑩/⑦/片㉜/片⑪ 的新帧与派发；逐符号复核：
+
+```
+$ for sym in encode_ability sm_ability sm_subability client_ability_layout ability_tail CM_RUN CM_WALK sm_healthspellchanged; do
+    git log --oneline ad0592b19..8e491f81e -S"$sym" -- mir2-rs/bins/game-svr/src | wc -l; done
+0 0 0 0 0 0 0 0        # 8 个符号在区间内全部 0 次改动
+
+$ for sym in encode_ability sm_ability sm_subability ability_tail CM_RUN CM_WALK sm_healthspellchanged mir2_client_ability_layout; do …; done
+  encode_ability : ad0592b19=30 8e491f81e=30  [EQUAL]
+  sm_ability : ad0592b19=6 8e491f81e=6  [EQUAL]
+  sm_subability : ad0592b19=6 8e491f81e=6  [EQUAL]
+  ability_tail : ad0592b19=1 8e491f81e=1  [EQUAL]
+  CM_RUN : ad0592b19=12 8e491f81e=12  [EQUAL]
+  CM_WALK : ad0592b19=21 8e491f81e=21  [EQUAL]
+  sm_healthspellchanged : ad0592b19=5 8e491f81e=5  [EQUAL]
+  mir2_client_ability_layout : ad0592b19=3 8e491f81e=3  [EQUAL]
+```
+
+`smframe.rs` / `record.rs` 的区间差量逐行核对 = **只新增 `SM_DELITEM(202)`（⑨-2）与 `SM_CHANGENAMECOLOR(656)`
+（⑨-3）两个帧 + 3 处 `Default` derive**，未碰 52/752/53 的编码：
+```
++pub fn sm_delitem(actor_id: i32, tail: &[u8]) -> Vec<u8>            # 202
++pub fn sm_changenamecolor(actor_id: i32, name_color: u8) -> Vec<u8> # 656
+-#[derive(Debug, Clone, PartialEq)]  →  +#[derive(Debug, Clone, PartialEq, Default)]   # ×3
+```
+
+# 3) 二分 C：两侧真机日志的唯一差别（原始件）
+
+失败侧 = master `8e491f81e`（root 2026-10-14 15:0x，`E:/tmp/client-e2e/{stack2,verify2}`）
+工作侧 = master `ad0592b19`（root 2026-10-14 00:4x，`E:/tmp/client-e2e/{stack,verify1}`）
+
+进图 52/752 输入行（`layout=client-58 tail_len=58`，两侧同一版式）：
+```
+失败侧 stack2/game-svr.out.log:132  52/752 入图输入 … hp=18 mp=15 max_hp=19 …  ability_tail_hex=…12000000…
+失败侧 stack2/game-svr.out.log:263  52/752 入图输入 … hp=19 mp=15 max_hp=19 …  ability_tail_hex=…13000000…  # 二次登录
+工作侧 stack/game-svr.out.log:200   52/752 入图输入 … hp=19 mp=15 max_hp=19 …  ability_tail_hex=…13000000…
+工作侧 stack/game-svr.out.log:306   52/752 入图输入 … hp=19 mp=15 max_hp=19 …  ability_tail_hex=…13000000…
+```
+⇒ **唯一差别 = 第一次进图的 `hp`（失败侧 18 / 工作侧 19）**。`HP<MaxHP` ⇒ 恢复/体力 tick 到点
+`HealthSpellChanged()` ⇒ 发 53；`HP==MaxHP` ⇒ 不发 53。
+
+上行命令 Ident 直方（客户端行为的直接后果）：
+```
+失败侧   Ident=3011（CM_WALK）=74   Ident=3013（CM_RUN）=0
+工作侧   Ident=3011（CM_WALK）=44   Ident=3013（CM_RUN）=17
+```
+⇒ 失败侧客户端 `CanRun` 拒跑（HUD HP=0）⇒ 脚本的跑键全被客户端降级为走（74 走 / 0 跑）；
+工作侧正常（44 走 / 17 跑）。这与 root 的 HUD 截图（`06run_6.png` = `0/0`）一致。
+
+失败侧 AOI 读数（③ 判定的原始件）：
+```
+[aaa(17886) map=26 vr=12 vis=0 new=0 af=2 same_map=1726 nearest=14]    # tick #2000
+… nearest=19 / 20 / 23 / 34 / 25 / 32 / 30 / 25 / 30 / 30 …            # 全程 14..34
+```
+⇒ `nearest` 全程 ≥14 > `vr=12`（25×25 窗口 ±12）⇒ **该点位窗口内确实无怪**（`vis=0` 非缺陷）；
+`af=2` = 恰一对已实发的出现帧（`SM_TURN(10)` + `SM_FEATURECHANGED(41)`，`turn_pair` 对每个 Show 目标 2 帧）
+⇒ 出现帧管线**有算有发**；C# 侧同点位对照（R 级）仍归 root 独占窗口。
+
+# 4) 修点与现状
+
+| 片 | 修复 | 落地 |
+|---|---|---|
+| 片㊴ `c61b9627a` | 53 `SM_HEALTHSPELLCHANGED` 补冻结客户端 12B `TCharDesc` 尾（`sm_healthspellchanged_client` / `…_frame`；默认 client 布局，`MIR2_CLIENT_ABILITY_LAYOUT=0` ⇒ oracle header-only） | **已入 master**（`24725dfd5`） |
+| 片㊼ `6cadc9fbf` | 52 `SM_ABILITY` 生产调用点布局全覆盖（入图 / 升级 / 装备卸下全走 `ability_tail` / `client_ability_layout`） | **已入 master**（`81f9d8f55`，`merge_result ec756712`） |
+
+机判牙（`202` §E）：`8e491f81e` 的 `sm_healthspellchanged_client` 出现 0 处（53 全 header-only）；
+`81f9d8f55` 出现 1 处（53 走冻结客户端尾）。把 53 默认支改回 header-only ⇒ 片㊴ 的
+`healthspellchanged_client_carries_tchardesc_tail` + `drain_recovery`/`drain_stamina` 生产断言必红。
+
+* 原始输出：`E:/tmp/m2svr-burst/bisect-evidence-20261014.txt`（A..E 全部原始件）、
+  `E:/tmp/m2svr-burst/bisect-log-evidence-20261014.txt`（两侧日志 raw grep + Ident 直方）。
