@@ -1,0 +1,107 @@
+================================================================================
+197-52-layout-all-sites.txt — 片㊼：SM_ABILITY(52) 生产调用点布局全覆盖（同 53 尾缺陷类）
+卡 openmir2-client-e2e-enter-gaps / head = 见 200-boundary.txt（base ae6443924）
+tier = L（等价即放行 + 抽样冒烟；真机 R 判据仍归 root 独占窗口）
+================================================================================
+
+0. 为什么有这一片（承接 brief 顶块 DoD②「修 + 改坏必红」的**闭合**）
+--------------------------------------------------------------------------------
+片㊴（c61b9627a）修了 53 `SM_HEALTHSPELLCHANGED` 缺冻结客户端 `TCharDesc` 12B 尾；片㊴ 的
+作者审计（卡内 comment，ts 1791969899）声称「52 生产默认 client-58 与客户端一致」。
+本片**独立复核发现该结论不完整**：只有**入图**那条 52 走了布局开关，另两条生产出帧点
+（升级 / 装备卸下）**无条件**发 oracle 40B `EncodeMessage(WAbil)`。
+
+冻结客户端的 `SM_ABILITY` 处理器对**每一条** 52 都走同一个分支，按 `SizeOf(TAbility)` 整块解：
+
+    Source/MirClient/ClMain.pas:10096-10102   DecodeBuffer(body, @m_Abil, SizeOf(TAbility))
+    Source/Common/Grobal2.pas:39              HIGHHP = True  ⇒ TAbility 为 58B
+    Source/Common/Grobal2.pas:2167-2193       TAbility: HP@22 / MP@26 / MaxHP@30 / MaxMP@34 (DWORD)
+    Source/MirClient/Actor.pas:2162-2169      CanRun(): HP < RUN_MINHEALTH(10) ⇒ -1（拒跑）
+
+40B 布局下客户端把 offset 22 读成 oracle 的 `Exp`（本部署 = 0）⇒ **HUD 0/0、CanRun 拒跑**。
+⇒ 只要玩家**升级**或**换装**，客户端 HUD/跑门再次归零（与 root 在 verify2 观察到的
+「52/752 不生效 + 跑=0」同一故障类），且会**烧掉 root 的 R 窗口**：窗口内若发生升级/换装，
+已修好的入图 52 会被随后一条 40B 52 覆盖。
+
+1. 审计（改前；base ae6443924 上逐调用点）
+--------------------------------------------------------------------------------
+命令：
+    rg -n 'sm_ability\(' mir2-rs/bins/*/src/*.rs
+    rg -n 'encode_ability\b|encode_ability_client\b' mir2-rs/bins/*/src/*.rs
+
+改前 52 帧尾的选路（`mir2-rs/bins/game-svr/src/`）：
+
+  调用点                                               改前行为
+  ------------------------------------------------------------------------------------
+  enter.rs:623-630（入图 RM_ABILITY）                  ✅ 已走开关（ability_inputs.client_ability_layout）
+  main.rs:1861 handle_bag_cmd（装备/卸下重算）         ❌ `record::encode_ability`（oracle 40B，无条件）
+  main.rs:5025 drain_levelup_downlink（升级）          ❌ `record::encode_ability`（oracle 40B，无条件）
+  main.rs:4429 log_enter_ability（只读日志）            ⚠ 自算 if/else（与生产**可能**漂移）
+
+  752 `sm_subability`：头-only（`smframe.rs:549` `gm_data_body(header, &[])`），客户端
+  `ClMain.pas:10104-10116` 只读 param/tag/series/Recog，不做 DecodeBuffer ⇒ **无尾是对的**，
+  本片不动 752（片㊴ 审计⑤ 已确认）。
+
+  `rg` 全仓无其它 52 出帧点（bins/*/src 仅 game-svr；slave/bag/ground/pickwire/useitem 均不拼 52）。
+
+2. 修（改后）
+--------------------------------------------------------------------------------
+新增**唯一选路**函数（main.rs:196-215）：
+
+    fn ability_tail(wabil: &game_svr::ability::Ability, client_layout: bool) -> Vec<u8> {
+        if client_layout { record::encode_ability_client(wabil) }
+        else             { record::encode_ability(wabil) }
+    }
+
+三个调用点全部改走它；入图路径继续用 `enter.rs` 的既有开关（同源 `smframe::client_layout_enabled`）：
+
+  调用点                                     改后
+  ------------------------------------------------------------------------------------
+  enter.rs                                    不变（本来就对；同源开关）
+  main.rs handle_bag_cmd                      `&ability_tail(&sg.state.wabil, client_layout)`
+  main.rs drain_levelup_downlink              `&ability_tail(&sg.state.wabil, client_layout)`
+  main.rs log_enter_ability                   `ability_tail(w, layout == "client-58")`（去重复实现）
+
+`client_layout` 参数由生产入口注入（**不在帧构造里读 env**，保证用例确定性）：
+
+  sim_loop → handle_bag_cmd(..., mir2_client_ability_layout())
+  sim_loop → drain_run_downlinks(..., mir2_client_ability_layout())
+           → drain_kill_exp_chain(..., client_layout)
+           → drain_levelup_downlink(..., client_layout)
+
+改后 grep（生产里再没有裸 `record::encode_ability`，除 `ability_tail` 自身两支）：
+
+    $ rg -n 'record::encode_ability\b' mir2-rs/bins/game-svr/src/main.rs
+    198,205,214   # 文档引用 + ability_tail 的 oracle 支
+    （生产调用点 0 命中）
+
+3. 判据（构造层；真机 R 判据见 §5）
+--------------------------------------------------------------------------------
+① `tests::ability_tail_switches_between_client_58_and_oracle_40`（新增，1 passed）
+   `ability_tail(&w,false).len()==40` / `(true).len()==58` / `client[22..26]==hp` / `[30..34]==max_hp`。
+② `tests::bag_takeoff_recalc_uses_prior_subability`（扩展）——换装后 52 尾 == `Encode(58B TAbility)`
+   （生产默认 `client_layout=true` 传入 `handle_bag_cmd`）。
+③ `tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity`（改断言）——升级链
+   第 3 帧（index 3）的 52 尾 == `Encode(58B TAbility)`（原断言钉的是 oracle 40B；oracle 支
+   由 `record::encode_ability_matches_golden_frame_12_tail` 与 ① 继续钉住）。
+④ 其它 7 个既有用例（`bag_cmd_field_order...` / `bag_equip_broadcasts...` / 交易/dealing 等）
+   显式传 `false`，**逐字节行为不变**（本片不改 oracle 支）。
+
+改坏必红（3 条，见 198-redcheck-52-layout.txt）：
+  M1 `ability_tail` 退化为恒 oracle-40     ⇒ ①②③ 三条同红（1 passed; 3 failed）
+  M2 `handle_bag_cmd` 调用点绕过 helper    ⇒ 仅 ② 红（3 passed; 1 failed）
+  M3 `drain_levelup_downlink` 调用点绕过   ⇒ 仅 ③ 红（3 passed; 1 failed）
+
+4. 与 oracle 的关系（§6.0-3 故意偏离，same switch as 52-58B / 53-TCharDesc）
+--------------------------------------------------------------------------------
+oracle 的 52 是 40B `EncodeMessage(WAbil)`（`PlayObject.Message.cs:1732-1735`）。oracle 的 40B
+与冻结客户端的 58B **不可同时满足**；按硬约束 #1（客户端冻结）⇒ 默认以客户端为准
+（`MIR2_CLIENT_ABILITY_LAYOUT` 缺省 = client-58；`=0` 回到 oracle-40 逐字节对拍）。
+白名单登记（52 的 58B + 53 的 12B 尾）仍待 owner 签字（片㊴ 的 reviewer-5 O-1，随卡带走）。
+
+5. 未验证 / 归 root 独占窗口（R）
+--------------------------------------------------------------------------------
+- 真机：升级或换装后再看 HUD/跑门（本次修复的可观测面）。root 的 82-runbook §2b 已含
+  「保 HP<MaxHP 进图 ⇒ HUD 19/19 + CM_RUN≥1」；本片额外建议窗口内**做一次升级/换装**再确认
+  HUD 不归零（同一 52 选路的直接后果）。
+- 若不升级/不换装，本片改动在窗口内**不可观测**（入图路径字节不变）。

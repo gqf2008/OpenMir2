@@ -1106,3 +1106,26 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **判据分级 / 与窗口的关系**：本片 = **L 级**（就绪工具 + 预构建）；真机 R 级（①②③）仍归 **root 独占窗口**，
   本片**未起栈、未占端口、未跑真机**，只保证「开窗时构建源 = 当前基线、exe = 该源编出、聚合门 GREEN」。
 - 交付：`193-window-provenance-r7-closeout.txt`、`194-redcheck-r7-provenance.txt`、`195-gates.txt`、`196-boundary.txt`。
+
+### ㊼ 52 `SM_ABILITY` 生产调用点布局全覆盖：升级 / 装备卸下也走冻结客户端 58B（2026-10-14）—— `197`/`198`
+
+**同 53 尾缺陷类的遗漏调用点**：片㊴ 修了 53（`TCharDesc` 12B 尾）并在作者审计里声称
+「52 生产默认 client-58 与客户端一致」，但本片独立复核发现**只有入图那条 52** 走了布局开关——
+`handle_bag_cmd`（装备/卸下重算，`main.rs:1861`）与 `drain_levelup_downlink`（升级，`main.rs:5025`）
+**无条件**发 oracle 40B `EncodeMessage(WAbil)`。冻结客户端的 `SM_ABILITY` 支对每条 52 都按
+`SizeOf(TAbility)`（`ClMain.pas:10096-10102`，`HIGHHP=True`）整块解 ⇒ 40B 下 `HP@22` 读到 oracle 的
+`Exp`（= 0）⇒ **升级或换装后 HUD 归零、`CanRun` 拒跑**（会覆盖已修好的入图 52，烧掉 root 的 R 窗口）。
+
+- **修**：新增唯一选路 `ability_tail(wabil, client_layout)`（`main.rs:196-215`），三个生产点全部改走它；
+  `client_layout` 由生产入口注入 `mir2_client_ability_layout()`（**不在帧构造里读 env**，保证用例确定性）；
+  `log_enter_ability` 去重复实现（同一 helper）。入图路径（`enter.rs`）本来就对，不改。
+- **判据（`199`）**：新增 `ability_tail_switches_between_client_58_and_oracle_40`（40B/58B/HP@22/MaxHP@30）；
+  装备用例改按 58B 钉尾（换装后 52 尾 == `Encode(58B TAbility)`）；升级链用例的 index-3 52 尾改按 58B 钉；
+  其余 7 个既有用例显式传 `false`（oracle 支逐字节不变）。四门禁：fmt/clippy rc=0、
+  **101 suites / 1232 passed / 0 failed / 22 ignored**、msgcodegen 604。
+- **改坏必红（`198`，3 条逐跑）**：M1 `ability_tail` 退化为恒 oracle ⇒ 3 用例同红；M2 `handle_bag_cmd`
+  绕过 helper ⇒ 仅装备用例红；M3 `drain_levelup_downlink` 绕过 ⇒ 仅升级用例红；还原后 sha256 与改前一致。
+- **判级 / 与窗口**：本片 = **L**（纯选路接线 + 离线字节判据；入图路径字节不变 ⇒ 不升级/不换装则窗口不可观测）。
+  建议 root 的 R 窗口在 ①②③ 之外**做一次升级或换装**再确认 HUD 不归零（本片修复的直接可观测面）。
+- 交付：`197-52-layout-all-sites.txt`（审计 + 修 + 锚点）、`198-redcheck-52-layout.txt`（3 条变异）、
+  `199-gates.txt`、`200-boundary.txt`。

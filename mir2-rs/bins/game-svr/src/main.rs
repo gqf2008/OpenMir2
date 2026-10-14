@@ -193,6 +193,28 @@ fn mir2_client_ability_layout() -> bool {
     game_svr::smframe::client_layout_enabled()
 }
 
+/// 52 帧尾的**生产选路**（唯一真源 = [`mir2_client_ability_layout`]，与 53 的 `TCharDesc` 尾同开关）：
+/// `client_layout=true` ⇒ 冻结客户端 58B `TAbility`（[`record::encode_ability_client`]）；
+/// `false` ⇒ oracle 40B `EncodeMessage(WAbil)`（[`record::encode_ability`]，逐字节对拍/金标准夹具）。
+///
+/// **所有**生产出帧点（入图 `enter.rs` / 升级 [`drain_levelup_downlink`] / 装备卸下
+/// [`handle_bag_cmd`]）必须走本函数：冻结客户端 `SM_ABILITY` 支按 `SizeOf(TAbility)` 整块解
+/// （`ClMain.pas:10102`），任一处漏用 ⇒ 该帧之后客户端把 `HP` 读成 oracle 的 `Exp`（= 0）
+/// ⇒ HUD `0/0`、`CanRun`（`HP >= 10`）拒跑（与 53 缺尾同源的故障类）。
+///
+/// 红检：任一处换回裸 `record::encode_ability` ⇒ 对应用例的 52 尾断言必红
+/// （`tests::ability_tail_switches_between_client_58_and_oracle_40` /
+/// `tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity` /
+/// `tests::bag_takeoff_recalc_uses_prior_subability` 已按 58B 钉尾）。
+#[must_use]
+fn ability_tail(wabil: &game_svr::ability::Ability, client_layout: bool) -> Vec<u8> {
+    if client_layout {
+        record::encode_ability_client(wabil)
+    } else {
+        record::encode_ability(wabil)
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let conf = std::env::args()
@@ -1767,6 +1789,7 @@ fn handle_bag_cmd(
     displays: &mut downlink::DisplayTable,
     ref_msg_range: i32,
     dealing: bool,
+    client_layout: bool,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -1858,7 +1881,7 @@ fn handle_bag_cmd(
                 sg.state.gold,
                 sg.equip.job,
                 sg.game_gold,
-                &record::encode_ability(&sg.state.wabil),
+                &ability_tail(&sg.state.wabil, client_layout),
             ),
         });
         let sb = sg.sub.to_frame_bytes();
@@ -4425,11 +4448,8 @@ fn log_enter_ability(chr_name: &str, out: &game_svr::ability::RecalcOutput) {
     } else {
         "oracle-40"
     };
-    let tail_bytes = if layout == "client-58" {
-        record::encode_ability_client(w)
-    } else {
-        record::encode_ability(w)
-    };
+    // 与生产路径用**同一**选路（`ability_tail`，唯一真源 `MIR2_CLIENT_ABILITY_LAYOUT`）。
+    let tail_bytes = ability_tail(w, layout == "client-58");
     let tail_len = tail_bytes.len();
     let tail: String = tail_bytes.iter().map(|b| format!("{b:02x}")).collect();
     let s = &out.sub;
@@ -4995,6 +5015,7 @@ fn drain_levelup_downlink(
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    client_layout: bool,
 ) {
     for (winner, _amount, leveled, _level) in &rec.exp_awards {
         if !*leveled {
@@ -5022,7 +5043,7 @@ fn drain_levelup_downlink(
             sg.state.gold,
             sg.equip.job,
             sg.game_gold,
-            &record::encode_ability(&sg.state.wabil),
+            &ability_tail(&sg.state.wabil, client_layout),
         ));
         let sb = sg.sub.to_frame_bytes();
         send(game_svr::smframe::sm_subability(
@@ -5046,11 +5067,12 @@ fn drain_kill_exp_chain(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
     range: i32,
+    client_layout: bool,
 ) {
     // 53（= `GetExp` 尾的 `IncHealthSpell(2000,2000)`）先于 44（`SendMsg(RM_WINEXP)`）。
     drain_levelup_healthspell(rec, world, online, sessions, gates, catalog, range);
     drain_combat_downlink(rec, world, displays, online, sessions, gates);
-    drain_levelup_downlink(rec, online, sessions, gates);
+    drain_levelup_downlink(rec, online, sessions, gates, client_layout);
 }
 
 /// 每 tick 的**周期恢复**（oracle `PlayObject.Run` 的 `:70-141` 段，见 [`game_svr::recover`] 模块头）。
@@ -5247,9 +5269,18 @@ fn drain_run_downlinks(
     range: i32,
     health_fill_time: i32,
     spell_fill_time: i32,
+    client_layout: bool,
 ) -> Vec<(String, usize)> {
     drain_kill_exp_chain(
-        rec, world, displays, online, sessions, gates, catalog, range,
+        rec,
+        world,
+        displays,
+        online,
+        sessions,
+        gates,
+        catalog,
+        range,
+        client_layout,
     );
     let aoi_frames = drain_aoi_downlink(world, displays, online, gates);
     drain_stamina(
@@ -6326,6 +6357,8 @@ fn sim_loop(
                             enter_cfg.ref_msg_range,
                             // `PlayObject.Dealing`（M3⑦-实现 4）：交易中禁穿装/卸装。
                             trade_sessions.get(&chr_name).is_some_and(|s| s.dealing),
+                            // 52 的尾布局与入图/升级同源（`ability_tail`）。
+                            mir2_client_ability_layout(),
                         );
                     } else if cmd.ident == game_svr::useitem::CM_EAT {
                         // `CM_EAT(1006)`：oracle `PlayObject.Message.cs:826` 的 `ClientUseItems(nParam1, Msg)`。
@@ -7487,6 +7520,7 @@ fn sim_loop(
             enter_cfg.ref_msg_range,
             enter_cfg.health_fill_time,
             enter_cfg.spell_fill_time,
+            mir2_client_ability_layout(),
         );
         for (chr, n) in aoi_frames_this_tick {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
@@ -10507,15 +10541,19 @@ mod tests {
             &mut displays,
             12,
             false,
+            // 生产默认 = 冻结客户端 58B（`ability_tail`）。
+            true,
         );
 
         // 出帧：SM_ADDITEM(200，换下回背包) → SM_TAKEOFF_OK(619) → SM_TAKEOFF_FAIL(620，oracle
         // 既有形态) → SM_ABILITY(52) → SM_SUBABILITY(752)。
         let mut idents = Vec::new();
+        let mut bodies: Vec<Vec<u8>> = Vec::new();
         while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
             assert_eq!(socket, 901, "回帧必须发给该用户的 socket");
             let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("body >= 12B");
             idents.push(cm.ident);
+            bodies.push(body);
         }
         assert_eq!(
             idents,
@@ -10527,6 +10565,22 @@ mod tests {
                 mir2_protocol::messages::SM_SUBABILITY
             ],
             "出帧序：SM_ADDITEM → SM_TAKEOFF_OK/FAIL → SM_ABILITY → SM_SUBABILITY"
+        );
+        // **换装后的 52 尾必须是冻结客户端 58B `TAbility`**（生产默认 `client_layout=true`）：
+        // 若 `handle_bag_cmd` 漏用 `ability_tail`（退回 oracle 40B）⇒ 本断言必红。
+        let ability = bodies
+            .iter()
+            .find(|b| {
+                CommandMessage::from_bytes(b).expect(">=12B").ident
+                    == mir2_protocol::messages::SM_ABILITY
+            })
+            .expect("必须出现 SM_ABILITY");
+        assert_eq!(
+            &ability[12..],
+            &mir2_protocol::edcode::encode(&record::encode_ability_client(
+                &sessions["hero"].state.wabil
+            )),
+            "换装后 SM_ABILITY 尾 = Encode(58B TAbility)"
         );
 
         let sg = sessions.get("hero").unwrap();
@@ -10630,6 +10684,7 @@ mod tests {
             &world,
             &mut displays,
             12,
+            false,
             false,
         );
 
@@ -10774,6 +10829,7 @@ mod tests {
             &world,
             &mut displays,
             12,
+            false,
             false,
         );
 
@@ -11837,6 +11893,7 @@ mod tests {
             12,
             300,
             800,
+            false,
         );
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
@@ -13855,6 +13912,35 @@ mod tests {
         assert_eq!(sg.state.wabil.level, 9);
     }
 
+    /// **52 帧尾的布局选路（`ability_tail`）**：生产默认 `client_layout=true` ⇒ 冻结客户端 58B
+    /// `TAbility`（`HP@22` / `MaxHP@30`）；`false` ⇒ oracle 40B `EncodeMessage(WAbil)`。
+    ///
+    /// 红检（改坏必红）：`ability_tail` 两支互换（或恒走 `encode_ability`）⇒
+    /// `oracle.len() == 40` / `client.len() == 58` / `client[22..26] == hp` 必红。
+    #[test]
+    fn ability_tail_switches_between_client_58_and_oracle_40() {
+        let mut w = test_ability();
+        w.hp = 19;
+        w.mp = 15;
+        w.max_hp = 19;
+        w.max_mp = 15;
+        let oracle = ability_tail(&w, false);
+        let client = ability_tail(&w, true);
+        assert_eq!(oracle.len(), 40, "oracle 支 = 40B EncodeMessage(WAbil)");
+        assert_eq!(client.len(), 58, "client 支 = 58B TAbility");
+        assert_eq!(
+            i32::from_le_bytes(client[22..26].try_into().unwrap()),
+            i32::from(w.hp),
+            "58B 布局的 HP 在 offset 22（`Grobal2.pas:2167-2184`）"
+        );
+        assert_eq!(
+            i32::from_le_bytes(client[30..34].try_into().unwrap()),
+            i32::from(w.max_hp),
+            "58B 布局的 MaxHP 在 offset 30"
+        );
+        assert_ne!(oracle, client, "两种布局不得同字节");
+    }
+
     /// **D②（升级链下行）**：一条 `leveled=true` 的 `exp_awards` ⇒ 帧序按 oracle `MsgQueue`
     /// **出队序**（优先级字节升序）
     /// `SM_HEALTHSPELLCHANGED(53) → SM_WINEXP(44) → SM_LEVELUP(45) → SM_ABILITY(52) → SM_SUBABILITY(752)`
@@ -13924,6 +14010,7 @@ mod tests {
             &gates,
             &game_svr::ability::StdItemCatalog::new(),
             12,
+            true, // 生产默认 = 冻结客户端 58B（`ability_tail`）
         );
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         let mut frames = Vec::new();
@@ -13965,11 +14052,13 @@ mod tests {
             "GetExp: dwExp*0.002（1.0）与升级 +100 均须累加"
         );
         assert_eq!(sg.equip.body_luck_level, 0);
-        // 52 的尾 = Encode(WAbil)（升级重算后的值）。bodies = [53,44,45,52,752] ⇒ 52 在 index 3。
+        // 52 的尾 = **冻结客户端 58B `TAbility`**（升级重算后的值；生产默认 `client_layout=true`）。
+        // bodies = [53,44,45,52,752] ⇒ 52 在 index 3。oracle 40B 支由
+        // `record::encode_ability_matches_golden_frame_12_tail` 与 `ability_tail` 单测钉住。
         assert_eq!(
             &bodies[3][12..],
-            &mir2_protocol::edcode::encode(&record::encode_ability(&sg.state.wabil)),
-            "SM_ABILITY 尾 = Encode(WAbil)"
+            &mir2_protocol::edcode::encode(&record::encode_ability_client(&sg.state.wabil)),
+            "SM_ABILITY 尾 = Encode(58B TAbility)"
         );
         // 世界实体（战斗权威值）同步。
         let e = world.entities.get(killer).unwrap();
@@ -14516,6 +14605,7 @@ mod tests {
             &mut displays,
             12,
             true,
+            false,
         );
         let mut fail_seen = false;
         while let Ok(m) = rx0.try_recv() {
