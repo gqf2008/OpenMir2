@@ -6,9 +6,10 @@
 
 ## 0. 要证的三件事（与 root 00:4x / 卡 DoD③ 逐条对应）
 
-> ⚠ **片㊴（53 帧）追加前置**：①② 的「进图后 HUD 保持 / 能跑」在**满血进图**下证不出——53
-> `SM_HEALTHSPELLCHANGED` 只在 `HP<MaxHP` 时被体力/恢复段发出。本窗口**必须先压血**（§2b），
-> 并用 `check_healthspellchanged_trigger.py` 机判 T1/T2/T3。
+> ⚠ **片㊴（53 帧）追加前置**：①② 的「进图后 HUD 保持 / 能跑」在**满血进图**下证不出——**本窗口场景
+> （进图后就地不动）**里 53 `SM_HEALTHSPELLCHANGED` 由**周期恢复段**发出，其前置为 `HP<MaxHP`。
+> 本窗口**必须先压血**（§2b），并用 `check_healthspellchanged_trigger.py` 机判 T1/T2/T3。
+> （oracle 另有不依赖该前置的 53 发点，见 `187-…md` §2 边界表；T1 取 `hp<max_hp` 是有意更严的**充分前置**。）
 
 | # | 判据 | 期望读数 | 机判命令 |
 | --- | --- | --- | --- |
@@ -43,7 +44,7 @@ python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mon
 2. 无残留 BotSrv / game-svr / cargo / rustc（`Get-Process`）。
 3. `git fetch origin && git reset --hard origin/master`（窗口基 = 跑前 master oid，写进证据）。
 4. 抓包栈一律**不用管道**：起栈命令 `... > <log> 2>&1`（禁 `| tee/tail/head/grep`，会把调用挂死）。
-5. `characters_ablity.Hp < MaxHP`（§2b；否则 53 永不发，①② 覆盖不到片㊴）。
+5. `characters_ablity.Hp < MaxHP`（§2b；否则本窗口场景下 53 永不发，①② 覆盖不到片㊴）。
 
 ## 2. 站位（两侧必须逐字节同一坐标）
 
@@ -78,10 +79,14 @@ $margs = @('-h','127.0.0.1','-P','3306','-u','root','--password=','--batch','--s
 
 片㊴ 的真凶是 `SM_HEALTHSPELLCHANGED(53)` 的布局：冻结客户端 `HIGHHP=True` 从**尾**解 12B
 `TCharDesc`，而 oracle 发 header-only ⇒ 解出 `HP/MP/MaxHP=0`（HUD `0/0`、`CanRun` 拒跑）。
-**该帧只在 `HP<MaxHP` 时被体力段/恢复段发出**（`BaseObject.Base.cs:55/68/109/244` 的
-`HealthSpellChanged()` + `BaseObject.cs:974` 的 `IncHealthSpell`）⇒ **满血进图永不发 53**，
-窗口既证不了修复也复现不了回归（既有 7 份真机 capture 里 53 计数**全为 0** 即此因，
-见 `187-healthspellchanged-trigger-precondition.md`）。**每趟起栈前压血**：
+**本窗口场景（进图后就地不动、同一 socket、不战斗）里，该帧由周期恢复段发出，其前置为 `HP < MaxHP`**
+（`BaseObject.Base.cs:44-70` 的恢复段；Rust 三个生产调用点也都只在血量/魔法变化时触发）
+⇒ **满血进图永不发 53**，窗口既证不了修复也复现不了回归（既有 7 份真机 capture 里 53 计数**全为 0** 即此因，
+见 `187-healthspellchanged-trigger-precondition.md`）。
+> 措辞边界：**不要**读成「53 只在 `HP<MaxHP` 时发出」——oracle 另有非该前置的发点
+> （`BaseObject.Base.cs:109` 饥饿 [守卫 `HP>1`]、`:244` `HP>MaxHP` 重算、`:628` `RM_MAGSTRUCK`、
+> `BaseObject.cs:973-975` `IncHealthSpell` 无条件）；T1 取 `hp<max_hp` 是本「进图不动」窗口的**充分前置**。
+**每趟起栈前压血**：
 
 ```powershell
 $mysql = 'D:/mysql/mariadb-10.11.19-winx64/bin/mysql.exe'

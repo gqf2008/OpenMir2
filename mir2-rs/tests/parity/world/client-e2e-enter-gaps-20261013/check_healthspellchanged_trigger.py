@@ -9,11 +9,24 @@
   `Source/MirClient/ClMain.pas:10220` 的 53 支**不读 12B 命令头**，而是从**尾**解
   `SizeOf(TCharDesc)`=12B（`Grobal2.pas:3515`）⇒ oracle 的 header-only 帧让客户端把
   `HP/MP/MaxHP` 全解成 0（HUD `0/0`、`CanRun(HP>=10)` 拒绝跑）。
-  **该帧只在角色 `HP < MaxHP` 时**被体力段/周期恢复段发出（`src/M2Server/Actor/BaseObject.Base.cs:55/68/109/244`
-  的 `HealthSpellChanged()` + `BaseObject.cs:974` 的 `IncHealthSpell`）。
+  本 R 窗口是「进图后就地不动、同一 socket」的场景，其中 53 由**周期恢复段**发出，其**前置为
+  `HP < MaxHP`**（`src/M2Server/Actor/BaseObject.Base.cs:44-70` 的恢复段 → `HealthSpellChanged()`）。
   ⇒ **满血进图永不发 53**：既有 7 份真机 capture（`capture-client-*.jsonl` / `capture-run-ability-*.jsonl`）
   里 53 计数**全为 0**，窗口既证不了修复、也复现不了回归（白烧一个独占窗口）。
   且 `client-e2e-window.sh` / `check_rust_window_preflight.py` 都**没有**「保 `HP<MaxHP`」这条前置。
+
+  ⚠ 措辞边界（审查 reviewer-5 O-1 / reviewer-6 O-2）：不要读成「53 **只**在 `HP<MaxHP` 时发出」。
+  oracle 另有**不依赖该前置**的 53 发出点（不在本窗口场景内，只作边界记录）：
+  `BaseObject.Base.cs:244`（`HP>MaxHP` 重算后钳到 `MaxHP-1`）、`:109`（饥饿掉血，守卫是 `HP>1`
+  而非 `HP<MaxHP`）、`:628`（`RM_MAGSTRUCK` 受击）、`BaseObject.cs:973-975` `IncHealthSpell`
+  （升级/属性重算，**无条件**调 `HealthSpellChanged()`）。⇒ T1 取 `hp<max_hp` 是本「进图不动」
+  窗口的**充分前置**（有意更严），不是对全部 53 发点的等价刻画。
+
+  已知边界（审查 Observation，不在本片扩）：
+  · `derive_expect_body_len` 在「日志无已知 layout」时缺省 `12`（fail-closed 偏 RED 侧，不产生假绿）；
+    若窗口用非 `client-58`/`oracle-40` 的新 layout 名，须显式 `--expect-body-len`（reviewer-5 O-2）。
+  · T3 **只**判 53 尾的**长度**（12 vs 0），不判 12B 内容 = `[HP][MP][MaxHP]`；尾内容正确性由片㊴
+    的 `smframe` 单测 + 金标准单独覆盖（reviewer-6 O-3）。
 
 本工具把「53 触发前置 + 53 已发且尾长对」做成机判（fail-closed），三条判据：
 
@@ -175,6 +188,10 @@ def check(log_recs: list[dict] | None, rows: list[dict] | None,
             )
         elif f53:
             msgs.append("OK  T3 53 body_len=%d（%s）" % (exp, why))
+    else:
+        # 只给 --log ⇒ T1 可判、T2/T3 无输入参与；显式报出未检查面，维持 fail-closed 体裁。
+        # （reviewer-6 O-1：不打印会让人把 T1-only 的 GREEN 误读成「53 已发且尾长对」。）
+        msgs.append("INFO T2/T3 NOT CHECKED（未给 --capture）")
 
     rc = 1 if red else 0
     return rc, msgs, facts
@@ -199,26 +216,29 @@ def _cap(ident: int, body_len: int, direction: str = "s2c") -> dict:
 
 
 def selftest() -> int:
-    cases: list[tuple[str, list[str] | None, list[dict] | None, int | None, int, int]] = [
-        # name, log lines, capture rows, expect_body_len, min_53, want_rc
+    cases: list[tuple[str, list[str] | None, list[dict] | None, int | None, int, int, str | None]] = [
+        # name, log lines, capture rows, expect_body_len, min_53, want_rc, want_msg(substring)
         ("green-client58", [_log_line("client-58", 18, 19)],
-         [_cap(52, 58), _cap(53, 12)], None, 1, 0),
+         [_cap(52, 58), _cap(53, 12)], None, 1, 0, None),
         ("green-oracle40-derived", [_log_line("oracle-40", 18, 19)],
-         [_cap(52, 40), _cap(53, 0)], None, 1, 0),
+         [_cap(52, 40), _cap(53, 0)], None, 1, 0, None),
         ("red-precondition-full-hp", [_log_line("client-58", 19, 19)],
-         [_cap(52, 58), _cap(53, 12)], None, 1, 1),
+         [_cap(52, 58), _cap(53, 12)], None, 1, 1, None),
         ("red-53-absent", [_log_line("client-58", 18, 19)],
-         [_cap(52, 58)], None, 1, 1),
+         [_cap(52, 58)], None, 1, 1, None),
         ("red-53-header-only", [_log_line("client-58", 18, 19)],
-         [_cap(52, 58), _cap(53, 0)], None, 1, 1),
+         [_cap(52, 58), _cap(53, 0)], None, 1, 1, None),
         ("red-53-mixed-lens", [_log_line("client-58", 18, 19)],
-         [_cap(53, 12), _cap(53, 0)], None, 1, 1),
+         [_cap(53, 12), _cap(53, 0)], None, 1, 1, None),
         ("red-min53-2", [_log_line("client-58", 18, 19)],
-         [_cap(53, 12)], None, 2, 1),
-        ("green-explicit-0", None, [_cap(53, 0)], 0, 1, 0),
+         [_cap(53, 12)], None, 2, 1, None),
+        ("green-explicit-0", None, [_cap(53, 0)], 0, 1, 0, None),
+        # reviewer-6 O-1 牙：只给 --log（无 capture）⇒ T1 过即 GREEN，但必须显式报 T2/T3 未检查
+        ("green-log-only-t23-skipped", [_log_line("client-58", 18, 19)],
+         None, None, 1, 0, "INFO T2/T3 NOT CHECKED"),
     ]
     bad = 0
-    for name, log_lines, rows, exp, min53, want in cases:
+    for name, log_lines, rows, exp, min53, want, want_msg in cases:
         log_recs = None
         if log_lines is not None:
             # 走真实的解析路径（合成到临时文件），确保 selftest 咬住解析而非绕过
@@ -233,8 +253,13 @@ def selftest() -> int:
                 os.unlink(tmp)
         rc, _msgs, _facts = check(log_recs, rows, exp, min53)
         ok = rc == want
+        if want_msg is not None:
+            # 文案牙：INFO 必须在输出里，否则「T1-only 静默 GREEN」会退化回来
+            ok = ok and any(want_msg in m for m in _msgs)
         bad += 0 if ok else 1
-        print("[%s] selftest %-28s rc=%d (want %d)" % ("PASS" if ok else "FAIL", name, rc, want))
+        print("[%s] selftest %-28s rc=%d (want %d%s)"
+              % ("PASS" if ok else "FAIL", name, rc, want,
+                 "" if want_msg is None else ", msg~=%r" % want_msg))
     print("SELFTEST %s (%d/%d)" % ("OK" if bad == 0 else "FAILED", len(cases) - bad, len(cases)))
     return 0 if bad == 0 else 1
 

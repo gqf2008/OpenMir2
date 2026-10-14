@@ -1,0 +1,108 @@
+190 — 片㊶：③「同点位 `af` 只有 2」的坐标口径机判订正（root 2026-10-14 15:0x 第 3 条）
+
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+cwd = 本证据目录；零起栈、零游戏端口（仅共享 3306 只读）；未动共享主检出；不 merge、不自签 review
+====================================================================================================
+
+# 0) 一句话结论
+
+`af=2` = **恰一对已实发出现帧**（`SM_TURN(10)` + `SM_FEATURECHANGED(41)`，`turn_pair` 对每个 `Show`
+目标发 2 帧）⇒ **AOI 出现帧管线有算有发**，不是「AF 没算/没发」。但 root 读数的进世界点
+`(297,629)` **不是**「确实无怪」点（它是相邻生成框的**边缘**点）⇒ ③a 反向点**必须**改用
+`(291,666)`，否则 `check_aoi_visibility_diag.py --expect none` 的 `af==0` 牙会**假 RED**、白烧窗口。
+
+# 1) root 原始读数（`E:/tmp/client-e2e/stack2/game-svr.out.log`；快照 sha256=fcfdc9986c6c55996579ee8507058d03eda4152b6a929bcafb4f5a1ab92db3fa）
+
+```
+$ grep -n '进世界 ChrName:aaa CurMap:0 (297,629)' E:/tmp/client-e2e/stack2/game-svr.out.log
+131:07:01:43.220 [INF] 进世界 ChrName:aaa CurMap:0 (297,629) Dir:4 entity=17886
+
+$ grep -c 'aaa(17886) map=26 vr=12 vis=0' E:/tmp/client-e2e/stack2/game-svr.out.log
+11
+
+$ grep 'aaa(17886) map=26 vr=12 vis=0' <log> | head -1
+07:01:50.762 [DBG] sim: tick #2000 clock=400000ms 处理 0 项（本地第 2000 次）实体内 18258 展示表 18127 在世界会话 1 [aaa(17886) map=26 vr=12 vis=0 new=0 af=2 same_map=1726 nearest=14]
+
+$ grep 'aaa(17886) map=26 vr=12 vis=0' <log> | tail -1
+07:03:30.992 [DBG] sim: tick #2500 clock=500000ms 处理 0 项（本地第 2500 次）实体内 19970 展示表 19839 在世界会话 1 [aaa(17886) map=26 vr=12 vis=0 new=0 af=2 same_map=1726 nearest=30]
+
+# nearest 极值（11 条采样）
+nearest=14 .. nearest=34   （全程 > vr=12）
+```
+
+* 该文件是 **root 活栈**的日志（append-only）：上表 11 行（entity=17886）在 `07:01:50.762`–`07:03:30.992`
+  两个 tick 段内，**不受后续追加影响**；sha256 只锚定本片读取时刻。
+* 逐字段：`vis=0`（同屏可见实体 0）、`new=0`（本 tick 新可见 0）、`af=2`（累计实发出现帧 2）、
+  `same_map=1726`（同图候选实体）、`nearest=14..34`（最近实体 Chebyshev 距离）。
+
+# 2) `af=2` 的代码口径（本片重读，钉在 head 上）
+
+| 事实 | 文件:行 | 说明 |
+| --- | --- | --- |
+| 出现帧 = 对每个 `Show` 目标发**两帧** | `mir2-rs/bins/game-svr/src/downlink.rs:267-279` | `turn_pair()` 返回 `[sm_turn, sm_featurechanged]` |
+| AOI 下行只对 `Show` 发帧 | `mir2-rs/bins/game-svr/src/main.rs:4607-4609`（`drain_aoi_downlink`） | 返回值 = 本调用实发帧数 |
+| `af` = 每会话**累计**实发帧数 | `main.rs:7468-7481` → `main.rs:4564` | `aoi_frames_total[chr] += n`；诊断打印见 `main.rs:4508-4512` |
+
+⇒ `af=2` 等价于「**恰好 1 个目标被 `Show` 过一次**」⇒ 出现帧管线**有算有发**（否证「AF 没算/没发」）。
+`vis=0` + `nearest>=14 > vr=12` ⇒ 该**瞬时** 25×25 窗口内确无实体 ⇒ `vis=0` 与几何自洽；
+但 `nearest` 会随怪游走/重生波动，**不能**据单趟 `vis=0` 断言「该点永远无怪」。
+
+# 3) 真机点位 **不是**真空点（机判 RED）—— `(297,629)`
+
+`check_mongen_dense_points.py`（离线只读；`E:/MirServer/M2GameSvr/Envir/MonGen.txt` 快照 sha256=e5c39fb7eda66b70f82a61a5c2cea25df9cf0b6892b916fb6d579f88ff43748f）：
+
+```powershell
+cd mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+python -I -B check_mongen_dense_points.py `
+  --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --map 0 --view-range 12 `
+  --point 297,629 --max-expected 0
+```
+
+```
+INFO map=0 生成框 76 个；待判定坐标 1 个
+INFO (297,629) 框外；到最近生成框 Chebyshev=7 （gen=(256,572) range=50 count=50 name=鹿）；view_range=12 >= d ⇒ **框边缘**，出生怪可能落在窗口内（需窗口实拍）
+INFO (297,629) 窗口内期望出生怪数 E=1.294（view_range=12；只算出生）
+RED (297,629) E=1.294 > --max-expected 0.0
+RED 1 个坐标与判据不符
+RESULT: RED
+```
+⇒ rc=**1 RED**：`(297,629)` 在 76 个生成框**之外**，但到最近框 `(256,572) range=50 count=50 name=鹿`
+的 Chebyshev=**7 < vr=12** ⇒ **框边缘**，出生怪可落在窗口内（窗口内期望出生怪数 `E=1.294 > 0`）。
+
+# 4) 「确实无怪」的真空点 —— `(291,666)`（机判 GREEN）
+
+```powershell
+python -I -B check_mongen_dense_points.py `
+  --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --map 0 --view-range 12 `
+  --point 291,666 --max-expected 0
+```
+
+```
+INFO map=0 生成框 76 个；待判定坐标 1 个
+INFO (291,666) 框外；到最近生成框 Chebyshev=30 （gen=(211,629) range=50 count=50 name=鹿）；view_range=12 < d ⇒ 新出生的怪必在窗口外 （游走怪另算；真机 `nearest` 可能更小）
+INFO (291,666) 窗口内期望出生怪数 E=0.000（view_range=12；只算出生）
+OK 期望出生怪数判据全部通过
+RESULT: GREEN
+```
+⇒ rc=**0 GREEN**：到最近框 `(211,629) range=50 count=50` 的 Chebyshev=**30 > vr=12**、`E=0.000`
+⇒ 新出生的怪**必**在窗口外。（游走怪另算；真机 `nearest` 可能更小。）
+
+# 5) 对窗口参数的直接影响（③a/③b 用点）
+
+* **③a 反向点（期望两侧 0 对）必须用 `(291,666)`** = `window_handoff.py --plan` 的缺省 `--site-none 291,666`。
+  **不要**用 `(297,629)`：它会被 `(256,572)` 框的出生怪污染，且
+  `check_aoi_visibility_diag.py --expect none` 自带牙 —— `vis==0 但 af>0` 判 **RED**
+  （`check_aoi_visibility_diag.py:134-137`，语义 =「本会话曾实发过出现帧」）⇒ 该点会假 RED、白烧窗口。
+* **③b 有怪点**用框内点 `(287,620)`（`--plan` 缺省 `--site`）或 `(605,578)`（`--best-point`）。
+* C# 同点位对照：`MapName=0`、同 `(291,666)`/`(287,620)`、同 `vr=12`；
+  C# 侧 s2c 管线见 `85-csharp-capture-topology-rootcause.md`。
+
+# 6) 边界与纪律
+
+* 生产代码**零改动**：本片只加本证据 + `191-gates.txt` / `192-boundary.txt` + 文案收紧
+  （`check_healthspellchanged_trigger.py` docstring/INFO、`187`、`82-…runbook.md`、`README.md`）。
+  `src/`(含 BotSrv) `sql/` `MirClient/` `mir2-rs/bins/` `mir2-rs/crates/` `*.rs` `*.toml` 空（见 `192-boundary.txt`）。
+* 未起栈、未占游戏端口（§1/§3/§4 的读数全为**只读**读取 root 的活日志 + 离线 MonGen 件）；
+  未动共享主检出；未 merge、未自签 review。
+* 残留（归 root 窗口）：③ 两侧真机对照（③a 0 对 / ③b ≥1 对 + `vis>=1 && af>=2`）与 ①② 的
+  HUD/`CM_RUN`（压血进图）仍要 root 独占窗口，属卡级 R 级 DoD。
