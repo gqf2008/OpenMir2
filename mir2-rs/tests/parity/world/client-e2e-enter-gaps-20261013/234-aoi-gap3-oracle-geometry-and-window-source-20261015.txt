@@ -1,0 +1,199 @@
+234-aoi-gap3-oracle-geometry-and-window-source-20261015.txt —— 卡 `openmir2-client-e2e-enter-gaps`
+③「同屏没怪」的 **oracle 侧同点位对照**（机判）+ ②窗口源三处现况（fresh 实测）
+m2-svr / openmir2-worker-11 / 2026-10-15（tag `m2svr`）
+base = `origin/master` = `60e7ddbd12427041a94cf1d660253a0aa1c81651`；本片**零生产代码改动**、零起栈、零游戏端口
+（只读共享 MySQL 3306 一次 SELECT；未动共享主检出；未 merge、未自签 review）
+====================================================================================================
+
+# 0) 一句话
+
+brief 顶部 root 2026-10-14 15:0x 的 ①（二分 + 修 + 改坏必红）在离线面已完成并入 master（`c61b9627a` /
+`6cadc9fbf` / `fd68e037d`，见 §2 的祖先判定）；本 burst 新增**两件实据**：
+
+1. **③ 的 oracle 侧同点位对照**（root 原话「拿 C# 侧同点位对照」）——不再只靠 Rust 侧 `nearest>vr`，
+   而是用 **oracle 自己的出生几何**（`WorldServer.MonGen.cs:825-826` 的正方形生成框）对真机 run 的
+   *实测坐标*（进图 `(297,629)`、run 末存盘 `(292,652)`）做机判 ⇒ **「该点确实没怪」成立**；
+   `af=2` = 进图一对出现帧 ⇒ **不是**「AF 没算/没发」。
+2. **窗口源三处现况**（fresh）：root 现跑的活脚本指向的构建源是**共享主检出 `8e491f81e`**（**不含**三片修复
+   ⇒ preflight **RED**）；入库替身源 `da2df1fdb` **含**三片（生产路径相对基线零差异 ⇒ preflight **GREEN**）。
+   ⇒ root 若直接跑活脚本，窗口会**再复现**「HUD `0/0` + `CM_RUN=0`」；这不是「夜里合入的某片改回坏了」，
+   是**构建源停在未含修复的提交**（root 的 brief 把它写作 "master 8e491f81e"，该 oid 并非 master）。
+
+# 1) ③ 的 oracle 侧同点位对照（本片新增；机判可复跑）
+
+## 1a) oracle 锚点（出生几何）
+
+```
+src/GameSrv/Word/WorldServer.MonGen.cs:825-826
+    nX = monGen.X - monGen.Range + Random(monGen.Range * 2 + 1);
+    nY = monGen.Y - monGen.Range + Random(monGen.Range * 2 + 1);
+```
+⇒ 出生点均匀落在 **正方形** `[X-R, X+R] × [Y-R, Y+R]`（Chebyshev 口径），不是圆/菱形。
+「点在框外且到最近框 Chebyshev = d」⇒ **新出生**的怪至少离该点 d 格；`view_range < d` 时该点窗口内
+**不可能有「出生即看见」的怪**（游走怪另算，机判工具已在输出里显式登记这一口径）。
+
+## 1b) 被测点位 = verify2 真机 run 的**实测**坐标（不是估的）
+
+* 进图：`E:/tmp/client-e2e/stack2/game-svr.out.log`
+  `07:01:43.220 [INF] 进世界 ChrName:aaa CurMap:0 (297,629) Dir:4 entity=17886`
+* run 末存盘（断线存档落库后的一次只读 SELECT，`mir2_db.characters`）：
+
+```
+$ mysql -h127.0.0.1 -uroot --batch -e "SELECT Id,ChrName,MapName,CX,CY,Dir FROM mir2_db.characters WHERE ChrName='aaa';"
+Id      ChrName MapName CX      CY      Dir
+12215   aaa     0       292     652     4
+```
+（`MapName=0` = 比奇省；`map_id` = MapInfo 第 26 个 section，即诊断里的 `map=26`，与 `R3` 判据一致。）
+
+## 1c) 机判读数（命令 + 原始输出 + rc）
+
+```
+$ python -I -B check_mongen_dense_points.py \
+    --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --map 0 --point 297,629 --expect outside
+INFO map=0 生成框 76 个；待判定坐标 1 个
+INFO (297,629) 框外；到最近生成框 Chebyshev=7 （gen=(256,572) range=50 count=50 name=鹿）
+OK 1 个坐标全部与 --expect outside 一致
+RESULT: GREEN
+rc=0
+
+$ python -I -B check_mongen_dense_points.py \
+    --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --map 0 --point 292,652 --expect outside
+INFO (292,652) 框外；到最近生成框 Chebyshev=30 （gen=(256,572) range=50 count=50 name=鹿）
+OK 1 个坐标全部与 --expect outside 一致
+RESULT: GREEN
+rc=0
+
+$ python -I -B check_mongen_dense_points.py \
+    --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --map 0 \
+    --points "297,629;292,652;291,666;287,620;605,578" --view-range 12
+INFO (297,629) 框外；Chebyshev=7 …；view_range=12 >= d ⇒ **框边缘**，出生怪可能落在窗口内（需窗口实拍）
+INFO (292,652) 框外；Chebyshev=30 …；view_range=12 < d ⇒ 新出生的怪必在窗口外 （游走怪另算；真机 `nearest` 可能更小）
+INFO (291,666) 框外；Chebyshev=30 …；view_range=12 < d ⇒ 新出生的怪必在窗口外 （游走怪另算；真机 `nearest` 可能更小）
+INFO (287,620) 框内；Chebyshev=0 …；view_range=12 覆盖最近框 ⇒ 可能有出生怪在窗口内
+INFO (605,578) 框内；Chebyshev=0 …；view_range=12 覆盖最近框 ⇒ 可能有出生怪在窗口内
+RESULT: GREEN
+rc=0
+```
+
+⇒ **oracle 侧同点位对照结论**：verify2 那趟 run 的**进图点** `(297,629)` 在全部 76 个生成框之外、只贴
+最密框的边缘（Chebyshev=7）；run 末角色实际停在 `(292,652)`，那里到最近生成框 **30 格 > view_range 12**
+⇒ **新生怪必在窗口外**。真机 `nearest=14..34`（全程 > `vr=12`）正是「框边缘的出生怪 + 慢速游走」的形态，
+不是 AOI 没算/没发。
+
+## 1d) 判据有牙（同一工具反向必红）
+
+```
+$ python -I -B check_mongen_dense_points.py \
+    --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --map 0 --point 297,629 --expect inside
+RED 1 个坐标与判据不符
+RESULT: RED
+rc=1
+```
+（若把「框外」判成「框内」也绿，则 §1c 的 GREEN 没有信息量 ⇒ 这条反向读数证明判据在区分。）
+
+## 1e) 窗口 ③b 用点（复核，fresh）
+
+```
+$ python -I -B check_mongen_dense_points.py --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --map 0 \
+    --view-range 12 --best-point --map-dir E:/MirServer/M2GameSvr/Map --require-walkable
+BEST (605,578) E=12.681 view_range=12 box=(605,578) range=30 count=10 name=半兽人 tile=Walk
+OK  --require-walkable：1 个站点全部 tile=Walk
+rc=0
+```
+⇒ 窗口选点 `(605,578)` **在生成框内**（Chebyshev=0、窗口内期望出生怪 `E=12.681`）且 `.map` 格
+`tile=Walk`（可站立）⇒ ③b「有怪」趟的点位成立；反向 ③a 点 `(291,666)` 见 §1c（框外、d=30）。
+
+# 2) 窗口源三处现况（fresh 实测；root 开窗前的真前置）
+
+## 2a) 源 ↔ 含不含三片修复（单向祖先判定）
+
+```
+$ git -C E:/Users/gxh/Documents/GitHub/OpenMir2        rev-parse HEAD
+8e491f81e7e21ce780ff1e8f7596f7e099a2541a
+$ git -C E:/Users/gxh/Documents/GitHub/OpenMir2 merge-base --is-ancestor c61b9627a HEAD   # 53 尾
+NO      （6cadc9fbf 52 全调用点 = NO；fd68e037d 31 SM_STRUCK 客户端布局 = NO）
+$ git -C E:/tmp/m2svr-window-origin                    rev-parse HEAD
+da2df1fdbd58dd76008bc8d08c8aed08ae7cf2fb
+$ git -C E:/tmp/m2svr-window-origin merge-base --is-ancestor c61b9627a HEAD
+YES     （6cadc9fbf = YES；fd68e037d = YES）
+```
+
+## 2b) preflight：活源 RED / 替身源 GREEN
+
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer --target-dir E:/tmp/openmir2-merge-target
+RED R1: … HEAD=8e491f81e7e21ce780ff1e8f7596f7e099a2541a 不含 c61b9627a1（片㊴ 53 … TCharDesc 尾）…
+RED R1: … 不含 6cadc9fbf9（片㊼ 52 SM_ABILITY 调用点布局全覆盖）…
+RED R1: … 不含 fd68e037db（片31 SM_STRUCK 客户端布局（HIGHHP 家族））…
+RED R6: 构建源 HEAD=8e491f81e7 落后于基线 origin/master@60e7ddbd12 的生产路径（3 件：mir2-rs/bins/game-svr/src/main.rs,
+        mir2-rs/bins/game-svr/src/pickwire.rs, mir2-rs/bins/game-svr/src/smframe.rs）⇒ 窗口会测旧件，先 `fetch` +
+        `checkout --detach <基线>` + 重编译
+RESULT: RED
+rc=1
+
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer --target-dir E:/tmp/m2svr-window-target
+[OK] R1 … 含 d16b5199d9 / 0d0d62a695 / c61b9627a1 / 6cadc9fbf9 / fd68e037db（逐条 --is-ancestor=YES）
+[OK] R6 构建源 HEAD=da2df1fdbd 相对基线 origin/master@60e7ddbd12 生产路径零差异
+RESULT: GREEN
+rc=0
+```
+
+## 2c) 开窗聚合门：活脚本 G5 RED / 入库替身脚本 WINDOW_READY=YES
+
+```
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target --mirserver E:/MirServer            # ① 活脚本口径（默认）
+… G1/G2 全 OK …
+RED G5 窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 指向**共享主检出**（… rev 车道工作区）⇒ 直接跑它会构建另一棵树（白烧窗口）
+RED G5 窗口脚本 tgt=E:\tmp\openmir2-merge-target != 本计划 --target-dir=E:/tmp/m2svr-window-target ⇒ 会从另一份（可能过期的）exe 起栈
+WINDOW_READY=NO
+RESULT: RED
+rc=1
+
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --target-dir E:/tmp/m2svr-window-target --mirserver E:/MirServer \
+      --window-script ./client-e2e-window.fixed.sh.txt                            # ② 入库替身口径
+… G1/G2 全 OK … OK G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0
+```
+
+⇒ **root 侧唯一前置仍是一条 2 行 diff**（把活脚本换成入库逐字替身 `client-e2e-window.fixed.sh.txt`；
+`--plan-only` 的「修复块」已自带两条互斥修法与配套复跑命令）。**若直接跑活脚本**：窗口会构建共享主检出的
+`8e491f81e`（不含三片）⇒ 真机读数必回「HUD `0/0` + `CM_RUN=0`」，与 root 15:0x 看到的现象同形。
+
+# 3) 泄漏栈（fresh 实拍；仍是开窗硬阻塞）
+
+```
+$ powershell -NoProfile -Command "<Get-Process -Id 33132,29240,30284,9100,13052,34944>; <Get-NetTCPConnection -State Listen 3306,5000,5100,5500,5600,5700,6000,7000,7100,7200>"
+33132 DBSrv UP  29240 LoginSrv UP  30284 game-svr UP  9100 login-gate UP  13052 sel-gate UP  34944 game-gate UP
+3306:UP 5000:UP 5100:UP 5500:UP 5600:UP 5700:UP 6000:UP 7000:UP 7100:UP 7200:UP
+```
+pid 逐条匹配 `E:/tmp/client-e2e/stack2/rust-stack.pid.json`；`game-svr` pid 30284 起于 2026-10-14 14:55
+（**修复前**的 exe）⇒ 它起的栈不能用来验三片修复。
+活脚本 `stop` 的 `logdir=E:\tmp\client-e2e\stack` 无 pidfile（pidfile 在 `stack2`）⇒ `-Stop` 打
+`NOTHING_TO_STOP`。root 侧一次性处置：
+
+```
+powershell -ExecutionPolicy Bypass -File E:/tmp/m2svr-window-origin/tools/m2-acceptance/start_rust_stack.ps1 -LogDir E:\tmp\client-e2e\stack2 -Stop
+```
+（收完实拍 5000/5100/5500/5600/5700/6000/7000/7100/7200 全 DOWN 再开窗。）
+
+# 4) 交付与纪律
+
+* **零生产代码改动**（`mir2-rs/**` 的生产件未动）；本片只新增本证据件 + `SHA256SUMS.txt`/`README.md` 登记。
+* 冻结面 `src/` `sql/` `MirClient` `mir2-rs/crates/protocol` `mir2-rs/crates/storage` 空。
+* 本片未起栈、零游戏端口（共享 3306 只做 1 次只读 SELECT）；未动共享主检出；未 merge、未自签 review。
+* **tier = R**：卡级真机 ①②③（52/752 生效 / 跑 / 同屏怪 + 受击步）仍归 **root 独占窗口**，本片不据此收卡。
+* 本片**不新增判据工具**（③ 的机判复用既有 `check_mongen_dense_points.py` 的 `--point/--expect`，
+  与 `check_rust_window_preflight.py` R4 同一函数）⇒ 无「复制判据逻辑」。
+
+# 5) 残留物清单（仓外，可删）
+
+* `E:/tmp/m2svr-burst46/`：本片全部原始读数（`01-window-source.txt`、`02-preflight-live.txt`、
+  `03-preflight-subst.txt`、`04-handoff-live-script.txt`、`05-handoff-subst-script.txt`、
+  `06..10-pt-*.txt`）。保留供 root 复核；无进程、无端口、无库。
+* 本 lane 未建任何临时栈/客户端进程。

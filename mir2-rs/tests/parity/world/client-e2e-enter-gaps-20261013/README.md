@@ -1336,3 +1336,29 @@ root 2026-10-14 15:0x 头号项要的是 **①②③ 一起真机复核**（①�
   `f6163ab5…→cfecda1c…`）+ 重录出处清单 ⇒ R1..R7 GREEN、`WINDOW_READY=YES`。
 - 判级 = **L**（就绪工具 + 计划/判据接线；零生产代码、零取数/时序/RNG/落库改动）。卡级 **R** 真机 ①②③
   （+ 一次升级/换装步 + 受击步）仍归 **root 独占窗口**；**G5**（root 活脚本未换替身）/ **O-3**（白名单）仍归 root/owner。
+
+### 55) ③ 的 **oracle 侧同点位对照**（机判）+ 窗口源三处现况 fresh 实测（2026-10-15，tag `m2svr`）—— `234`/`235`/`236`
+
+root 2026-10-14 15:0x 的 ③ 原话是「**拿 C# 侧同点位对照**」。此前各片只用 **Rust 侧**读数
+（`vr=12 vis=0 nearest>12`）判「该点确实没怪」；本片改用 **oracle 自己的出生几何**对**真机实测坐标**
+做机判，把 ③ 在离线面钉死（不再依赖窗口才能定性）。
+
+- **oracle 锚点**：`src/GameSrv/Word/WorldServer.MonGen.cs:825-826` 出生点 = 正方形
+  `[X-R,X+R] × [Y-R,Y+R]`（Chebyshev），⇒ 「点在框外且到最近框距离 d」时，`view_range < d`
+  ⇒ **新出生的怪必在观察窗口之外**（游走怪另算，工具输出里显式登记）。
+- **被测点位取自 verify2 真机 run 的实测值**（不是估的）：进图 `(297,629)`
+  （`E:/tmp/client-e2e/stack2/game-svr.out.log` `07:01:43.220 进世界 … (297,629)`）、
+  run 末断线存档落库后 `(292,652)`（`mir2_db.characters` id=12215 只读 SELECT）。
+- **读数**：`(297,629)` 框外、最近框 Chebyshev=**7**（框边缘）；`(292,652)` 框外、最近框 **30 > 12**
+  ⇒ 新生怪必在窗口外 ⇒ 那趟 `vis=0` 与 oracle 侧几何一致；`af=2` = 进图一对出现帧（管线有实发），
+  **不是**「AF 没算/没发」。反向 `--expect inside` 必 RED（判据有牙）。
+- **窗口 ③b 用点复核**：`BEST (605,578) E=12.681 … tile=Walk`（框内 + 可站立 ⇒ 「有怪」趟成立）。
+- **窗口源三处现况（fresh）**：活脚本构建源 = **共享主检出 `8e491f81e`**（**不含** `c61b9627a`/`6cadc9fbf`/
+  `fd68e037d`，且 R6 落后基线 3 文件）⇒ preflight **RED**；入库替身源 `da2df1fdb` **含**三片 ⇒ preflight
+  **GREEN**；活脚本 `WINDOW_READY=NO`（G5×2 RED）/ 替身脚本 `WINDOW_READY=YES`。
+  ⇒ root 若直接跑活脚本，窗口会**再复现**「HUD `0/0` + `CM_RUN=0`」；这不是「夜里某片改坏」，是
+  **构建源停在未含修复的提交**（brief 把它写作 "master 8e491f81e"，该 oid **并非** master）。
+- **泄漏栈**：6 进程 / 9 端口仍 UP（pid 逐条匹配 `stack2/rust-stack.pid.json`；`game-svr` pid 30284 起于
+  修复前的 exe）⇒ 开窗前须 `start_rust_stack.ps1 -LogDir E:\tmp\client-e2e\stack2 -Stop`。
+- 判级 = **L**（只读机判 + 证据；零生产代码、零新增判据工具——复用 `check_mongen_dense_points.py`
+  的 `--point/--expect`，与 `check_rust_window_preflight.py` R4 同一函数）。卡级 **R** 真机 ①②③ 仍归 root 窗口。
