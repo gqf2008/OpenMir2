@@ -997,3 +997,44 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   `182-boundary.txt`、`world/scenarios/aoi_viewrange12.json`、`world/golden/aoi_viewrange12.txt`、
   `tests/parity/tests/world_aoi_parity.rs`；只读引用 `30-oracle-anchors-viewrange.txt`、
   `csharp/WorldGolden/{Program.cs,Stubs.cs}`、`world/README.md`。
+
+### ㊴ root 裁决「52/752 客户端不生效 + 跑=0 回归」的定位与修复 —— 真凶 = **53 帧 `TCharDesc` 尾**（2026-10-14）—— `183`
+
+- **root 判据**（`E:/tmp/client-e2e/verify2/`，master `8e491f81e`）：HUD `0/0`（`06run_6.png`）、
+  c2s `Ident=3013 (CM_RUN)` **0 次**、日志仍发 `52/752 入图输入 layout=client-58 hp=18/19`；
+  对照 `verify1/`（master `ad0592b19`，00:40）= HUD `19/19` + `CM_RUN` 17 次。区间 `ad0592b19..8e491f81e`。
+- **二分结论**：区间内碰 `bins/game-svr/src` 的非 merge 提交共 12 条（首条 `d16b5199d` 只加只读诊断读数），
+  **没有一条改到进图帧序/52-752 尾**；`enter.rs`/`ability.rs` **不在**区间的改动文件里，`record.rs` 只多
+  `#[derive(Default)]`，`smframe.rs` 只**新增** `sm_delitem`/`sm_changenamecolor`。⇒ 52/752 帧字节不变
+  （root 日志的 `ability_tail_hex` 只差 HP 那一字节 `13`→`12`）。
+- **真凶（一直存在的 53 布局缺陷）**：冻结客户端 `MirClient@c61d912d` 的 `Grobal2.pas:39 HIGHHP=True`，
+  其 `SM_HEALTHSPELLCHANGED` 支（`ClMain.pas:10220-10231`）**不读 12B 头**，而是从**尾**解
+  `SizeOf(TCharDesc)`=12B（`Grobal2.pas:3515`：`Feature/Status/StatusEx`）⇒ `HP/MP/MaxHP`。
+  而 oracle 的 53 = `SendSocket(CommandMessage)` = **header-only**（`PlayObject.Socket.cs:77-96`）
+  ⇒ 客户端 `desc` 全 0 ⇒ HUD `0/0`（`MaxMP` 仍 15 ⇒ `0/15`，与截图逐像素一致）、`CanRun(HP>=10)` 拒绝跑。
+- **触发条件 = `HP < MaxHP`**：verify1 进图满血（`19/19`）⇒ `BaseObject.Run()` 回血门为假 ⇒ **从不发 53**；
+  verify2 进图 `18/19` ⇒ 体力段/周期恢复到点回血 ⇒ 发 53 ⇒ 客户端归零。佐证：既有 7 份真机
+  capture（`capture-client-*.jsonl` / `capture-run-ability-*.jsonl`）里**一条 53 都没有**（满血从不触发）；
+  同会话重进（`09_reenter`，此时存档 `hp=19`）⇒ 不再发 53 ⇒ HUD 回到 `19/19`。
+- **修复（`bins/game-svr`，本车道写集；§6.0-3 与 52 的 58B 同款「以冻结客户端为准」）**：
+  `smframe::sm_healthspellchanged_client`（头 + `EDCode.Encode(TCharDesc[HP,MP,MaxHP])` 尾）+
+  `sm_healthspellchanged_frame`（生产选路，开关 = `MIR2_CLIENT_ABILITY_LAYOUT`，默认客户端布局；
+  `=0` ⇒ oracle header-only 供逐字节对拍）；`main.rs` 的 3 个生产调用点 + `pickwire.rs` 的
+  `CM_EAT` 回帧全部改走选路；`mir2_client_ability_layout()` 收敛为库层 `client_layout_enabled()` 的别名。
+  `sm_ability`/`sm_subability`（52/752）**一行未动**。
+- **改坏必红（`184`）**：MUT-A 删掉 `TCharDesc` 尾 ⇒ 新增单测
+  `smframe::tests::healthspellchanged_client_carries_tchardesc_tail` 与生产 drain 上的
+  `tests::recovery_healthspell_is_superseded_by_levelup_in_same_tick` **双双 RED**
+  （`assertion left: 0 / right: 12`）；同一 burst 内还原，`smframe.rs` sha256 复核不变
+  （`c91de488…` → `682f744c…` → `c91de488…`）。
+- **③「同屏没怪」判定（顺带）**：`vr=12` + `vis=0` + `nearest=14→34`（全程 > 12）= 该点位**确实**无实体进入窗口 ⇒
+  `vis=0` 几何自洽；`af=2` = 恰一对 `SM_TURN(10)+SM_FEATURECHANGED(41)` ⇒ **出现帧管线有实发**，不是「没算/没发」。
+  C# 侧同点位（密点 `605,578`/`291,666`）对照仍归 root 独占窗口（R 级，not_verified）。
+- **判据分级 / 与窗口的关系**：本片修复 = **R 级**（战斗数值/客户端可见行为，须真机复跑）；
+  验收 = 同一 char 保持 `HP<MaxHP` 进图 ⇒ HUD `19/19`、`CM_RUN≥1`、同点位 `af>2`（root 窗口）。
+- **边界与纪律**：生产改动仅 `mir2-rs/bins/game-svr/src/{smframe,main,pickwire}.rs`；`src/`(含 BotSrv) `sql/`
+  `MirClient/` `mir2-rs/crates` `*.toml` 全空；零起栈、零游戏端口（仅共享 3306）；未动共享主检出；未 merge、未自签 review。
+- 证据：`183-52-752-53-rootcause.txt`、`184-redcheck-healthspellchanged-tail.txt`、`185-gates.txt`、`186-boundary.txt`；
+  只读引用 `61-client-run-ability-layout-fix.txt`（52 的 58B 先例）、`mir2-rs/tests/parity/world/README.md`、
+  冻结客户端 `/e/Users/gxh/Documents/GitHub/MirClient@c61d912d` 的
+  `Source/Common/Grobal2.pas:39/3515`、`Source/MirClient/ClMain.pas:10220-10231`。

@@ -81,7 +81,8 @@ pub fn notice_frame(n: &QueuedNotice, session: &WireSession) -> Option<Vec<u8>> 
         )),
         // `CM_EAT` 的 `StdMode 0` 回帧（`BaseObject.IncHealthSpell` 尾部 `HealthSpellChanged()`，
         // `BaseObject.cs:704` ⇒ `SendMsg(RM_HEALTHSPELLCHANGED)`，`PlayObject.Message.cs:1736-1739`）。
-        RM_HEALTHSPELLCHANGED => Some(smframe::sm_healthspellchanged(
+        // 布局：生产默认冻结客户端（`TCharDesc` 尾），`MIR2_CLIENT_ABILITY_LAYOUT=0` ⇒ oracle header-only。
+        RM_HEALTHSPELLCHANGED => Some(smframe::sm_healthspellchanged_frame(
             session.actor_id,
             session.wabil.hp,
             session.wabil.mp,

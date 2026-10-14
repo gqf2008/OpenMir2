@@ -1,0 +1,27 @@
+185-gates.txt —— 片㊴ 四门禁 + 聚焦判据（53 帧 TCharDesc 尾；52/752 路径未动）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / openmir2-worker-11 / 2026-10-14
+cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m2svr-target；--offline；零起栈、零游戏端口（仅共享 3306）
+交付 base = refs/heads/master = 8e491f81e（本片 head 的树 = 8e491f81e 的树 + 本片净改动）
+====================================================================================================
+# 1) 四门禁
+$ cargo fmt --all -- --check
+fmt rc=0
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+clippy rc=0
+$ cargo test --workspace --offline --no-fail-fast
+101 suites · 1231 passed · 0 failed · 22 ignored · test_rc=0
+#   （master 基线 1230 passed；本片 +1 = 新增单测 smframe::tests::healthspellchanged_client_carries_tchardesc_tail；
+#    recovery_healthspell_... 是既有用例加断言，不改计数）
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。 · msgcodegen_rc=0
+
+# 2) 聚焦判据（本片新增/加断言）
+$ cargo test -p game-svr --lib --offline -- healthspellchanged_client_carries_tchardesc_tail
+running 1 test
+test smframe::tests::healthspellchanged_client_carries_tchardesc_tail ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 203 filtered out; finished in 0.00s
+$ cargo test -p game-svr --bin game-svr --offline -- --exact tests::recovery_healthspell_is_superseded_by_levelup_in_same_tick
+running 1 test
+test tests::recovery_healthspell_is_superseded_by_levelup_in_same_tick ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 213 filtered out; finished in 0.00s

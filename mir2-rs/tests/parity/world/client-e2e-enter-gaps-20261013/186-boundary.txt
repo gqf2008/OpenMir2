@@ -1,0 +1,68 @@
+186-boundary.txt —— 片㊴ 边界（base = refs/heads/master = 8e491f81e；head = 本片提交）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / openmir2-worker-11 / 2026-10-14
+====================================================================================================
+# 0) 起手式
+$ git fetch origin && git rev-parse origin/master
+8e491f81e7e21ce780ff1e8f7596f7e099a2541a        # 本片开工时的 master；HEAD(b6511c37d) 的树 == 8e491f81e 的树
+$ git diff --stat 8e491f81e HEAD   # 提交前 = 工作树 diff
+
+# 1) 本片净差量 = origin/master..HEAD（walgit patch 用的 base/head）
+$ git diff --name-status 8e491f81e HEAD
+M	mir2-rs/bins/game-svr/src/main.rs        # 2 处 53 调用点改选路 + 1 处日志文案 + 既有用例加“尾”断言
+M	mir2-rs/bins/game-svr/src/pickwire.rs    # CM_EAT 的 RM_HEALTHSPELLCHANGED → 选路
+M	mir2-rs/bins/game-svr/src/smframe.rs     # 新增 client_layout_enabled / sm_healthspellchanged_client / _frame + 单测
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/183-52-752-53-rootcause.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/184-redcheck-healthspellchanged-tail.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/185-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/186-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+（10 路径 = 3 生产 + 4 证据 + README + 清单；**无** 52/752 路径改动）
+
+# 2) 冻结面（必须全空）
+$ git diff --name-only 8e491f81e HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+(空 = 通过)
+$ git diff --name-only 8e491f81e HEAD -- src ':!src/BotSrv'
+(空 = 通过)
+$ git diff --name-only 8e491f81e HEAD -- '*.toml' '*.lock'
+(空 = 通过)
+$ git diff --name-only 8e491f81e HEAD -- mir2-rs/crates
+(空 = 通过)
+$ git diff --name-only 8e491f81e HEAD -- '*.rs'
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/pickwire.rs
+mir2-rs/bins/game-svr/src/smframe.rs
+（= 本车道写集 `mir2-rs/bins/game-svr/**`，有意；不是测试目录，是本片的生产修复）
+$ git diff --name-only 8e491f81e HEAD -- mir2-rs/bins | grep -v 'bins/game-svr/'
+(空 = 通过；未碰 gateway/db/loginsrv 等其它 bin)
+
+# 3) 52/752 路径未动（本片核心反证）
+$ git diff --name-only 8e491f81e HEAD -- mir2-rs/bins/game-svr/src/enter.rs mir2-rs/bins/game-svr/src/ability.rs mir2-rs/bins/game-svr/src/record.rs mir2-rs/bins/game-svr/src/smframe.rs
+mir2-rs/bins/game-svr/src/smframe.rs
+（enter.rs/ability.rs/record.rs 空 = 52 的 58B 尾与 752 头字段实现一字未动；
+  smframe.rs 的改动只在**新增** `sm_healthspellchanged_*` 与 `client_layout_enabled`，
+  `sm_ability`/`sm_subability` 原样 —— 见 `$ git diff 8e491f81e HEAD -- mir2-rs/bins/game-svr/src/smframe.rs`）
+
+# 4) 证据完整性（LF/git-blob 口径）
+$ python -I -B tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+写入 ...SHA256SUMS.txt（191 行，repo 口径）
+GREEN: write 完成（0 行 hash 变更，mode=repo）
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+GREEN  [repo 口径]  OK 191/191
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+EOLCHECK GREEN 192/192 件文本证据与仓库口径（LF）在 EOL 上一致
+
+# 4.1) 读数
+verify 191/191（含新加的 183/184/185/186 四条；`--check-extra` 无“多件”）；
+eolcheck 192/192（= 191 + 清单自身）。上一片（㊳）为 verify 187/187、eolcheck 188/188；本片 +4。
+写清单时曾落一次 CRLF（184/185 由 heredoc 生成），已 `tr`/`write_bytes` 转回 LF 并重记 hash（上表 `write` 0 行变更即证）。
+
+# 5) 检出外改动（登记；未动共享主检出）
+$ git -C E:/Users/gxh/Documents/GitHub/OpenMir2 status --porcelain | wc -l
+0                       # 共享主检出零改动（只读）
+$ ls -d E:/tmp/m2svr-target
+$ ls E:/tmp/m2svr-b27-*.{txt,bak}   # 红检/门禁原始件（保留可复算，可删）
+
+# 6) 纪律自述
+零起栈、零游戏端口（仅共享 3306）；未改 root 的活脚本；未 merge 到 master、未自签 review；
+未写他人 inbox；MUT-A 只在自身 worktree 内做且同一 burst 内还原（184 的 sha256 复核：c91de488→682f744c→c91de488）。

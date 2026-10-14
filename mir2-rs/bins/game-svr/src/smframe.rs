@@ -221,6 +221,70 @@ pub fn sm_healthspellchanged(recog: i32, hp: u16, mp: u16, max_hp: u16) -> Vec<u
     gm_data_body(header, &[])
 }
 
+/// 冻结客户端布局开关（`MIR2_CLIENT_ABILITY_LAYOUT`）：`0|false|FALSE|False` ⇒ oracle 逐字节；
+/// 未设/其它（含 `1`/`true`）⇒ **冻结客户端布局**（52 的 58B `TAbility` + 53 的 `TCharDesc` 尾）。
+///
+/// 这是全仓唯一真源：`bins/game-svr/src/main.rs::mir2_client_ability_layout()` 只是本函数的别名。
+/// 真机约定（`openmir2-client-e2e-enter-gaps`，证据 `61-*`）：客户端 `MirClient@c61d912d`
+/// 在 `Source/Common/Grobal2.pas:39` 写死 `HIGHHP = True` ⇒ 52/53 都必须按客户端记录布局发，
+/// 否则客户端把能力/血量读成 0（HUD `0/0`、`CanRun(HP>=10)` 拒绝跑）。
+#[must_use]
+pub fn client_layout_enabled() -> bool {
+    !matches!(
+        std::env::var("MIR2_CLIENT_ABILITY_LAYOUT").as_deref(),
+        Ok("0") | Ok("false") | Ok("FALSE") | Ok("False")
+    )
+}
+
+/// `SM_HEALTHSPELLCHANGED` 的**冻结客户端布局**（`HIGHHP=True`），与 oracle 的 header-only 帧
+/// 只差**尾**：`EDCode.Encode(TCharDesc)`（12B）。
+///
+/// # 为什么必须有尾（真机根因）
+///
+/// 冻结客户端 `Source/MirClient/ClMain.pas:10220` 的 `SM_HEALTHSPELLCHANGED` 支在
+/// `{$IF HIGHHP}`（`Grobal2.pas:39 = True`）下**不读 12B 命令头的 `param/tag/series`**，
+/// 而是从**尾**解码 `SizeOf(TCharDesc)`：
+///
+/// ```pascal
+/// DecodeBuffer(body, @desc, SizeOf(TCharDesc));
+/// Actor.m_Abil.HP    := DWORD(desc.Feature);
+/// Actor.m_Abil.MP    := DWORD(desc.Status);
+/// Actor.m_Abil.MaxHP := DWORD(desc.StatusEx);
+/// ```
+///
+/// `TCharDesc = packed record Feature: Integer; Status: Integer; StatusEx: Integer; end;`
+/// （`Grobal2.pas:3515`）⇒ 尾 = `[HP:i32][MP:i32][MaxHP:i32]`（12B）。
+///
+/// oracle 的 53 是 `SendSocket(ClientMsg)` = **header-only**（`PlayObject.Socket.cs:77-96`，
+/// `PackLength = CommandMessage.Size`）⇒ 客户端解出 `desc = 0` ⇒ `HP=0 / MP=0 / MaxHP=0`，
+/// HUD `0/0`、跑不动（真机 verify2 实测：进图 `18/19` 之后一旦恢复/体力段发 53 即归零）。
+/// **oracle 与冻结客户端不可同时满足** ⇒ 与 52 的 58B 同款 §6.0-3 故意偏离：默认以客户端为准。
+///
+/// 调用方：**生产路径一律用** [`sm_healthspellchanged_frame`]（本函数只在 `=0` 对拍夹具里显式选）。
+#[must_use]
+pub fn sm_healthspellchanged_client(recog: i32, hp: u16, mp: u16, max_hp: u16) -> Vec<u8> {
+    let header = command_header(recog, messages::SM_HEALTHSPELLCHANGED, hp, mp, max_hp);
+    // `TCharDesc`（`Grobal2.pas:3515`）：Feature=HP、Status=MP、StatusEx=MaxHP，各 `Integer`(i32)。
+    let mut desc = [0u8; 12];
+    desc[0..4].copy_from_slice(&i32::from(hp).to_le_bytes());
+    desc[4..8].copy_from_slice(&i32::from(mp).to_le_bytes());
+    desc[8..12].copy_from_slice(&i32::from(max_hp).to_le_bytes());
+    gm_data_body(header, &edcode::encode(&desc))
+}
+
+/// 53 帧的**生产选路**（[`client_layout_enabled`]）：客户端布局（默认）⇒ [`sm_healthspellchanged_client`]；
+/// `MIR2_CLIENT_ABILITY_LAYOUT=0` ⇒ oracle header-only [`sm_healthspellchanged`]（逐字节对拍/金标准夹具）。
+///
+/// 与 52 的选路同源同开关（`bins/game-svr/src/enter.rs::AbilityInputs::client_ability_layout`）。
+#[must_use]
+pub fn sm_healthspellchanged_frame(recog: i32, hp: u16, mp: u16, max_hp: u16) -> Vec<u8> {
+    if client_layout_enabled() {
+        sm_healthspellchanged_client(recog, hp, mp, max_hp)
+    } else {
+        sm_healthspellchanged(recog, hp, mp, max_hp)
+    }
+}
+
 /// `SM_WINEXP`（`PlayObject.Message.cs:1666-1669` 的 `case RM_WINEXP`）：
 /// `MakeMessage(SM_WINEXP, Abil.Exp, LoWord(processMsg.nParam1), HiWord(processMsg.nParam1), 0)`
 /// + `SendSocket`（无尾）。发点是 `PlayObject.Base.cs:153` 的 `GetExp`（`SendMsg(RM_WINEXP,0,dwExp,0,0)`）。
@@ -1099,6 +1163,47 @@ mod tests {
 
     fn u16at12(b: &[u8], o: usize) -> u16 {
         u16::from_le_bytes([b[o], b[o + 1]])
+    }
+
+    /// **卡 `openmir2-client-e2e-enter-gaps` ①/② 真机根因（53 帧尾）**：冻结客户端
+    /// `HIGHHP=True`（`Source/Common/Grobal2.pas:39`）的 `SM_HEALTHSPELLCHANGED` 支
+    /// （`Source/MirClient/ClMain.pas:10220`）**不读 12B 头**，而是从**尾**解码
+    /// `SizeOf(TCharDesc)`=12B（`Grobal2.pas:3515`）：`HP=desc.Feature / MP=desc.Status /
+    /// MaxHP=desc.StatusEx`。oracle 的 header-only 帧（`PlayObject.Socket.cs:77-96`）会让客户端
+    /// 解出全 0 ⇒ HUD `0/0`、`CanRun(HP>=10)` 拒绝跑（真机 verify2：进图 `18/19` 后一旦发 53 即归零）。
+    ///
+    /// 红检（改坏必红）：① 去掉尾（退回 [`sm_healthspellchanged`]）⇒ `desc.len() == 12` 必红；
+    /// ② 把 `Feature`/`StatusEx` 写反（MaxHP 塞进 `Status`）⇒ 尾部回读断言必红。
+    #[test]
+    fn healthspellchanged_client_carries_tchardesc_tail() {
+        let body = sm_healthspellchanged_client(0x0000_1234, 18, 15, 19);
+        assert_eq!(i32at(&body, 0), 0x0000_1234, "Recog = processMsg.ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_HEALTHSPELLCHANGED);
+        assert_eq!(u16at12(&body, 6), 18, "Param = HP");
+        assert_eq!(u16at12(&body, 8), 15, "Tag = MP");
+        assert_eq!(u16at12(&body, 10), 19, "Series = MaxHP");
+        let desc = edcode::decode(&body[12..]);
+        assert_eq!(
+            desc.len(),
+            12,
+            "TCharDesc = 3 × Integer = 12B（HIGHHP 客户端要尾）"
+        );
+        assert_eq!(i32at(&desc, 0), 18, "Feature = HP");
+        assert_eq!(i32at(&desc, 4), 15, "Status = MP");
+        assert_eq!(i32at(&desc, 8), 19, "StatusEx = MaxHP");
+
+        // oracle 路径仍 header-only；生产选路由 `client_layout_enabled()`（默认客户端布局）决定。
+        assert_eq!(sm_healthspellchanged(0x0000_1234, 18, 15, 19).len(), 12);
+        let chosen = sm_healthspellchanged_frame(0x0000_1234, 18, 15, 19);
+        if client_layout_enabled() {
+            assert_eq!(chosen, body, "默认（未设/其它）= 冻结客户端布局");
+        } else {
+            assert_eq!(
+                chosen.len(),
+                12,
+                "MIR2_CLIENT_ABILITY_LAYOUT=0 ⇒ oracle header-only"
+            );
+        }
     }
 
     /// 回读 M0 金标准文件，核对上面 5 个常量确实是其原始字节（防抄错、防漂移）。

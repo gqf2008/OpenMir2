@@ -1,0 +1,59 @@
+184-redcheck-healthspellchanged-tail.txt —— 片㊴ 改坏必红（53 帧 TCharDesc 尾）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / openmir2-worker-11 / 2026-10-14
+cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m2svr-target；--offline；零起栈、零游戏端口
+====================================================================================================
+# 保护前缀：变异前 smframe.rs sha256（= 交付件的仓库字节口径）
+c91de4886c6b19b37716ebc28cef65e8f26b721d0a277bbde62bc6f3366e9ccc *mir2-rs/bins/game-svr/src/smframe.rs
+
+# MUT-A：把 sm_healthspellchanged_client 的 TCharDesc 尾删掉（回退成 header-only）
+$ python (replace 'edcode::encode(&desc)' block by 'gm_data_body(header, &[])'
+变异后 sha256:
+mutated ok
+682f744cdbac027cdf21cd46fdcecaee3f75f8c338238cb811aa6762005aadc4 *mir2-rs/bins/game-svr/src/smframe.rs
+
+# MUT-A 下的两条判据（必须 RED）
+$ cargo test -p game-svr --lib --offline -- healthspellchanged_client_carries_tchardesc_tail
+running 1 test
+test smframe::tests::healthspellchanged_client_carries_tchardesc_tail ... FAILED
+
+failures:
+
+---- smframe::tests::healthspellchanged_client_carries_tchardesc_tail stdout ----
+
+thread 'smframe::tests::healthspellchanged_client_carries_tchardesc_tail' (17640) panicked at bins\game-svr\src\smframe.rs:1182:9:
+assertion `left == right` failed: TCharDesc = 3 × Integer = 12B（HIGHHP 客户端要尾）
+  left: 0
+ right: 12
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    smframe::tests::healthspellchanged_client_carries_tchardesc_tail
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 203 filtered out; finished in 0.00s
+
+$ cargo test -p game-svr --bin game-svr --offline -- --exact tests::recovery_healthspell_is_superseded_by_levelup_in_same_tick
+running 1 test
+test tests::recovery_healthspell_is_superseded_by_levelup_in_same_tick ... FAILED
+
+failures:
+
+---- tests::recovery_healthspell_is_superseded_by_levelup_in_same_tick stdout ----
+
+thread 'tests::recovery_healthspell_is_superseded_by_levelup_in_same_tick' (34908) panicked at bins\game-svr\src\main.rs:14043:13:
+assertion `left == right` failed: 53 尾 = TCharDesc（12B，HIGHHP 客户端要求）
+  left: 0
+ right: 12
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::recovery_healthspell_is_superseded_by_levelup_in_same_tick
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 213 filtered out; finished in 0.00s
+
+# 还原（同一 burst 内）
+还原后 sha256（必须 == 变异前）:
+c91de4886c6b19b37716ebc28cef65e8f26b721d0a277bbde62bc6f3366e9ccc *mir2-rs/bins/game-svr/src/smframe.rs
+MUT-A 残留计数（必须 0）:
+0

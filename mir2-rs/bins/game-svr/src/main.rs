@@ -189,10 +189,8 @@ impl CommandMessage {
 /// 金标准夹具用）。**这是 §6.0-3 意义上的「与 oracle 的故意偏离」**：oracle 的 40B 与冻结客户端的
 /// 58B 不可同时满足，而客户端冻结（硬约束 #1）⇒ 默认以客户端为准；白名单登记条目待 owner 签字。
 fn mir2_client_ability_layout() -> bool {
-    !matches!(
-        std::env::var("MIR2_CLIENT_ABILITY_LAYOUT").as_deref(),
-        Ok("0") | Ok("false") | Ok("FALSE") | Ok("False")
-    )
+    // 唯一真源在库层（`smframe::client_layout_enabled`）——53 的尾布局与 52 的 58B 共用同一开关。
+    game_svr::smframe::client_layout_enabled()
 }
 
 #[tokio::main]
@@ -4954,7 +4952,8 @@ fn drain_levelup_healthspell(
             apply_ability_to_entity(e, &sg.state.wabil, &sg.sub);
         }
         // ④ `RM_HEALTHSPELLCHANGED` 入队后按优先级 68 出队 ⇒ 线上**先于** 44
-        let hb = game_svr::smframe::sm_healthspellchanged(
+        // 布局：默认冻结客户端（`TCharDesc` 尾），`MIR2_CLIENT_ABILITY_LAYOUT=0` ⇒ oracle header-only。
+        let hb = game_svr::smframe::sm_healthspellchanged_frame(
             sg.actor_id,
             sg.state.wabil.hp,
             sg.state.wabil.mp,
@@ -5093,7 +5092,7 @@ fn drain_recovery(
             );
             continue;
         };
-        let body = game_svr::smframe::sm_healthspellchanged(
+        let body = game_svr::smframe::sm_healthspellchanged_frame(
             sg.actor_id,
             sg.state.wabil.hp,
             sg.state.wabil.mp,
@@ -5180,7 +5179,7 @@ fn drain_stamina(
         // 每次 `HealthSpellChanged()` 各发一条帧；帧内容取自**当次快照**（不是终态）——
         // oracle `PlayObject.Message.cs:1736-1739` 用当时 `WAbil` 拼包，HP 支那条是中间态。
         for (hp, mp) in &changes {
-            let body = game_svr::smframe::sm_healthspellchanged(actor_id, *hp, *mp, max_hp);
+            let body = game_svr::smframe::sm_healthspellchanged_frame(actor_id, *hp, *mp, max_hp);
             if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "体力/魔力点回帧")
             {
                 let _ = tx.send(SimToGate::SendFrame {
@@ -14027,14 +14026,42 @@ mod tests {
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), mk());
         drain_recovery(&mut sessions, &world, &online, &gates, 12, &HashSet::new());
-        let cm = match rx0.try_recv() {
+        let (cm, frame_body) = match rx0.try_recv() {
             Ok(SimToGate::SendFrame { body, socket }) => {
                 assert_eq!(socket, 901);
-                CommandMessage::from_bytes(&body).expect("12B")
+                (CommandMessage::from_bytes(&body).expect("12B"), body)
             }
             _ => panic!("未取代时必须有 53 帧"),
         };
         assert_eq!(cm.ident, mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
+        // **①/② 真机根因（卡 `openmir2-client-e2e-enter-gaps`）**：冻结客户端 `HIGHHP=True`
+        // （`Grobal2.pas:39`）的 53 支从**尾**读 `TCharDesc`（`ClMain.pas:10220`）⇒ 生产默认
+        // （`client_layout_enabled()`）必须带 12B 尾，否则客户端 HUD 归零、`CanRun` 拒绝跑。
+        // 红检：把 `sm_healthspellchanged_frame` 的默认支改回 header-only ⇒ 下面断言必红。
+        if game_svr::smframe::client_layout_enabled() {
+            let desc = mir2_protocol::edcode::decode(&frame_body[12..]);
+            assert_eq!(
+                desc.len(),
+                12,
+                "53 尾 = TCharDesc（12B，HIGHHP 客户端要求）"
+            );
+            let le = |o: usize| i32::from_le_bytes(desc[o..o + 4].try_into().unwrap());
+            assert_eq!(
+                le(0),
+                i32::from(sessions["hero"].state.wabil.hp),
+                "Feature = HP"
+            );
+            assert_eq!(
+                le(4),
+                i32::from(sessions["hero"].state.wabil.mp),
+                "Status = MP"
+            );
+            assert_eq!(
+                le(8),
+                i32::from(sessions["hero"].state.wabil.max_hp),
+                "StatusEx = MaxHP"
+            );
+        }
     }
 
     /// **F-2（`AddBodyLuck`）**：`PlayObject.AddBodyLuck`（`PlayObject.cs:4304-4323`）的纯函数口径——

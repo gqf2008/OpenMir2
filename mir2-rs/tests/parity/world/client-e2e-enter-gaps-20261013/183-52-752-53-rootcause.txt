@@ -1,0 +1,113 @@
+183-52-752-53-rootcause.txt —— 片㊴ root 裁决「52/752 客户端不生效 + 跑=0 回归」的定位与修复
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / openmir2-worker-11 / 2026-10-14
+cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m2svr-target；--offline；零起栈、零游戏端口（仅共享 3306）
+root 判据来源：`E:/tmp/client-e2e/verify2/`（HUD `06run_6.png`=0/0）+ `.../stack2/game-svr.out.log`（master 8e491f81e）
+对照：`E:/tmp/client-e2e/verify1/` + `.../stack/game-svr.out.log`（master ad0592b19，00:40，HUD 19/19、CM_RUN 17 次）
+====================================================================================================
+
+# 0) 结论（一句话）
+
+**回归不是「进图帧序」被改坏**：`ad0592b19..8e491f81e` 内 52/752 的编码路径（`enter.rs`/`ability.rs`/`record.rs`
+的 52 尾/`smframe.rs` 的 `sm_ability`/`sm_subability`）**逐字节未变**；真凶是**一直存在的 53 帧布局缺陷**
+（`SM_HEALTHSPELLCHANGED` 发 header-only，而冻结客户端 `HIGHHP=True` 从**尾**读 12B `TCharDesc`）。
+它**只在 `HP < MaxHP` 时**被恢复/体力段触发 —— verify1 的角色进图满血（19/19）⇒ 永不发 53 ⇒ 没暴露；
+verify2 的角色进图 18/19 ⇒ 到点回血那一刻发 53 ⇒ 客户端把 HP/MP/MaxHP 解成全 0 ⇒ HUD `0/0`、`CanRun` 拒绝跑。
+
+# 1) 二分：`ad0592b19..8e491f81e` 内碰 `bins/game-svr/src` 的提交（首parent 排序的 12 条非 merge）
+
+$ git log --format='%h %ci %s' ad0592b19..8e491f81e --no-merges -- mir2-rs/bins/game-svr/src
+d16b5199d 2026-10-14 01:00:36 +0800 fix(game-svr): AOI 诊断 vis 语义（当前可见集，不含自身）+ vr/new/af 读数   ← 本区间第一条
+1a2b1ed51 2026-10-14 07:28:49 +0800 feat(m3-party-recall-ext): M3⑦ 扩展面 5 个脚本/命令处理器 + 宿主组队快照
+8c4e0fc49 2026-10-14 07:28:59 +0800 feat(m3-pet-slave-clone46): 46 分身（MagMakeClone/PlayCloneObject）宿主接线 + RM_TURN 帧
+65d0b34f2 2026-10-14 07:50:07 +0800 fix(m3-selloff-dealoffform-recog): SM_SENDDEALOFFFORM 头字段口径
+0a1b83f7b 2026-10-14 08:10:33 +0800 feat(m3-selloff-dealybme-wire): M3⑩-1 @dealybme 开窗接线 + SM_MERCHANTSAY 两失败支
+ce7879223 2026-10-14 08:34:08 +0800 feat(m3-party-gotolabel-ext): FunctionNPC.GotoLable 四组队 label 宿主接线
+f8ab7ff24 2026-10-14 08:44:54 +0800 fix(m3-party-gotolabel-ext): NpcPlayer 取数优先运行时态
+a6359cd78 2026-10-14 09:10:44 +0800 feat(m3-pet-slave-masterdie-wire): ⑨ 主人死/幽灵 1s 自投递驱动
+0d0d62a69 2026-10-14 09:36:46 +0800 fix(game-svr): 片㉜ ③ 受击帧按 oracle SendRefMsg(RM_STRUCK) 广播给视野内全体 Play
+c55dff977 2026-10-14 10:19:09 +0800 feat(m3-9-3): 宝宝叛变帧面接线——RM_CHANGENAMECOLOR/RM_USERNAME 出帧
+d3b39c157 2026-10-14 10:51:54 +0800 feat(m3-9-2): 护身符扣光删除帧面——SM_DELITEM(202) 编发
+ecd455765 2026-10-14 11:08:55 +0800 fix(m3-9-3): 宝宝叛变帧面同优先级出队序 —— 复刻 oracle .NET 4 叉堆
+
+⇒ 逐条读 diff：**没有一条改到进图帧序/52-752 尾**（d16b5199d 只加 `vr/new/af` 只读读数并回传计数；
+其余都是组队/寄售/宝宝帧面/受击广播，均在 `Show`/事件驱动支）。区间内被改的 game-svr 文件只有：
+$ git diff --stat ad0592b19..8e491f81e -- mir2-rs/bins/game-svr/src
+ downlink.rs / lib.rs / main.rs / msgqueue.rs(新) / npc.rs / party.rs / record.rs / selloff.rs / slave.rs / smframe.rs
+**`enter.rs`、`ability.rs` 不在其中**；`record.rs` 只多了 3 个 `#[derive(Default)]`；`smframe.rs` 只**新增**
+`sm_delitem`/`sm_changenamecolor`（既有 `sm_ability`/`sm_subability` 一行未动）。
+⇒ 同输入下 52/752 帧字节不变（root 日志亦证：两条日志的 `ability_tail_hex` 只差 HP 那一字节 `13`→`12`）。
+
+# 2) 真凶：53 `SM_HEALTHSPELLCHANGED` 的布局（冻结客户端 `HIGHHP=True`）
+
+冻结客户端 `~ == /e/Users/gxh/Documents/GitHub/MirClient @ c61d912d`（= `D:/MirClient-run/MirClinet.exe`）：
+
+* `Source/Common/Grobal2.pas:39`  → `HIGHHP = True;`
+* `Source/MirClient/ClMain.pas:10220-10231`（`{$IF HIGHHP}` 支）：
+    DecodeBuffer(body, @desc, SizeOf(TCharDesc));
+    Actor.m_Abil.HP    := DWORD(desc.Feature);
+    Actor.m_Abil.MP    := DWORD(desc.Status);
+    Actor.m_Abil.MaxHP := DWORD(desc.StatusEx);
+* `Source/Common/Grobal2.pas:3515` → `TCharDesc = packed record Feature: Integer; Status: Integer; StatusEx: Integer; end;`（12B）
+
+即：**HIGHHP 客户端不读 12B 命令头的 `param/tag/series`，只从「尾」解 12B `TCharDesc`**。
+而 oracle 的 53 是 `SendSocket(ClientMsg)` = **header-only**（`src/M2Server/Player/PlayObject.Socket.cs:77-96`，
+`PackLength = CommandMessage.Size` = 12，无尾）⇒ 客户端 `body` 为空 ⇒ `desc` 全 0 ⇒ `HP=0 / MP=0 / MaxHP=0`
+⇒ HUD `0/0`、`m_Abil.MaxMP` 仍保留（HUD `0/15`，与 root 截图逐像素一致）、`CanRun`（`HP>=10`）拒绝跑。
+
+这与 52 的既定裁决同源：客户端冻结 ⇒ 52 用客户端 58B `TAbility`（`bdd3a2ae9`，默认开），
+**53 的 `TCharDesc` 尾是同一客户端布局的漏项**（`SM_ABILITY` 走 `DecodeBuffer(body, @m_Abil, SizeOf(TAbility))`，
+`SM_HEALTHSPELLCHANGED` 走 `DecodeBuffer(body, @desc, SizeOf(TCharDesc))` —— 同一文件同一区块）。
+
+## 2.1 为什么 00:40（verify1）好、15:0x（verify2）坏
+
+两次进图日志（`stack/game-svr.out.log` vs `stack2/game-svr.out.log`）：
+
+| | verify1（ad0592b19） | verify2（8e491f81e） |
+|---|---|---|
+| 进图 52 输入 | `hp=19 max_hp=19`（**满血**） | `hp=18 max_hp=19` |
+| `BaseObject.Run()` 体力段回血门 `HP<MaxHP` | **假** ⇒ 无 53 | **真** ⇒ 到点回血 ⇒ **发 53** |
+| 客户端 HUD | `19/19`（05_ingame→06run_6） | `05_ingame`=**18/19** → `05b_after_notice`=**0/0** |
+| c2s `CM_RUN(3013)` | 17 次 | **0 次**（只有 3011 走路） |
+| 同会话重进（09_reenter） | — | **19/19**（满血 ⇒ 不再发 53） |
+
+* 53 的发点：`drain_stamina`（体力/魔力点段，回血 `HealthTick>=HealthFillTime(300)`，约进图 ~7.5s 后）
+  与 `drain_recovery`（`IncHealth/IncSpell/IncHealing>0` 的周期恢复）—— 两者都用 `sg.state.wabil` 的头字段，
+  值本身正确（服务端 18→19 且断线存档写回 `characters.Abil.HP=19`），坏的是**帧布局**。
+* 佐证：所有既有真机 capture（`capture-client-*.jsonl` / `capture-run-ability-*.jsonl`，7 份）里
+  **一条 53 都没有**（满血 ⇒ 从不触发）——所以这个缺陷在 window 前的所有 capture 里都不可见。
+* D B 佐证：verify2 第二个会话 `进世界 ... hp=19`（第一次的周期/断线存档把 19 写回）⇒ 服务端血量是好的。
+
+# 3) 修法（`bins/game-svr/**`，本车道写集；§6.0-3 故意偏离，与 52 的 58B 同款）
+
+* `smframe.rs`：新增 `client_layout_enabled()`（`MIR2_CLIENT_ABILITY_LAYOUT` 唯一真源）、
+  `sm_healthspellchanged_client()`（头 + `EDCode.Encode(TCharDesc[Feature=HP,Status=MP,StatusEx=MaxHP])` 尾）、
+  `sm_healthspellchanged_frame()`（生产选路：默认客户端布局，`=0` ⇒ oracle header-only）；
+  既有 `sm_healthspellchanged()`（header-only）**原样保留**给逐字节对拍/金标准夹具。
+* `main.rs`：`mir2_client_ability_layout()` 改为委托 `smframe::client_layout_enabled()`（消重复）；
+  3 个生产调用点（升级段 53 / 周期恢复 53 / 体力段 53）改用 `sm_healthspellchanged_frame`。
+* `pickwire.rs`：`RM_HEALTHSPELLCHANGED`（`CM_EAT` 的 `StdMode 0` 回帧）同改。
+* 判据（改坏必红，见 184）：① 新增单测 `smframe::tests::healthspellchanged_client_carries_tchardesc_tail`
+  逐字段钉 12B 尾；② `tests::recovery_healthspell_is_superseded_by_levelup_in_same_tick` 在生产 drain 上
+  断言尾的 `Feature/Status/StatusEx`。两处在「删尾」变异下都 RED（`left: 0 / right: 12`）。
+
+# 4) ③「同屏没怪」判定（root 2026-10-14 00:4x 项）
+
+**判定：该点位确实（几乎）没怪 —— `AF`/`AOI` 有算也有发，不是「没算/没发」。**
+
+* verify2 诊断行 `[aaa(17886) map=26 vr=12 vis=0 new=0 af=2 same_map=1726 nearest=14→34]`：
+  `vr=12` ⇒ AOI 窗口 25×25；Diagnostic 的 `nearest` = 同图最近实体的 **Chebyshev** 距离。
+  首条诊断 `nearest=14` 已 > `vr=12`，随后 19/20/23/34/25/32/30 ⇒ 全程**没有实体进入 12 格** ⇒ `vis=0` 几何自洽。
+* `af=2` = 恰好**一对** `SM_TURN(10)+SM_FEATURECHANGED(41)`（`drain_aoi_downlink` 只在 `VisibleFlag::Show` 发）
+  ⇒ 出现帧管线**有实发**（累计计数），不是恒 0。
+* 待窗口补的 R 级项（本片不据此收口）：**C# 侧同点位（同 `view_range=12`）对照**——
+  用 `tools/capture/mir2_proxy.py` 在 ③b/③a 两个密点（`605,578` / `291,666`）抓 s2c，
+  `aoi_visibility_pair.py --expect visible --min-pairs N`，与 Rust 半逐对拍。
+  离线已有的密度依据：`93-mongen-dense-rank.txt` + `check_mongen_dense_points.py`。
+
+# 5) 边界与残留
+
+* 生产改动仅 `mir2-rs/bins/game-svr/src/{smframe,main,pickwire}.rs`（本车道写集）；
+  `src/`(含 BotSrv) `sql/` `MirClient/` `crates/` `*.toml` 空（见 186-boundary）。
+* 未起栈、未占游戏端口；未动共享主检出；未 merge、未自签 review。
+* MUT-A 只在自身 worktree 内做且同一 burst 内还原，`smframe.rs` sha256 复核不变
+  （`c91de488…` → `682f744c…` → `c91de488…`，见 184）。
