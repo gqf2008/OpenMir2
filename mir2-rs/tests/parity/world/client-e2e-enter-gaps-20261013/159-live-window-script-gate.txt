@@ -1,0 +1,110 @@
+159-live-window-script-gate.txt —— 卡 openmir2-client-e2e-enter-gaps ③ 窗口「root 实际会跑的一键脚本」
+口径 guard（G5）的机器判据与读数
+m2-svr / openmir2-worker-11 / 2026-10-14（片㉝；零起栈、零游戏端口、零生产代码改动）
+====================================================================================================
+一句话：G1 只校验『你传给 window_handoff.py 的 --repo』，而 root 开窗时跑的是
+client-e2e-window.sh **里那两行** —— 两者可以不一致。2026-10-14 实测：工具的 --repo 已指专用源，
+root 的活脚本仍指共享主检出（rev 车道 worktree）且 tgt 还是 merge 车道的暖 target ⇒
+WINDOW_READY 会打 YES 而窗口照样构建另一棵树/从旧 exe 起栈（白烧一次性窗口）。
+本片给它加 fail-closed 门 G5：解析活脚本 repo=/tgt=，必须与本工具 --repo/--target-dir 一致，
+且 repo= 不得指共享主检出；脚本不存在（干净检出）⇒ INFO 跳过，不当 RED。
+
+0. oracle/事实锚（活脚本当前字节）
+====================================================================================================
+$ sha256sum /e/tmp/openmir2-watch/client-e2e-window.sh
+0567f89e5a8f82305dd75c50d8d150c86d72cd7e4efd0da52e431608756aacec */e/tmp/openmir2-watch/client-e2e-window.sh
+$ sed -n '6,7p' /e/tmp/openmir2-watch/client-e2e-window.sh
+w=/e/tmp/openmir2-watch; repo=/e/Users/gxh/Documents/GitHub/OpenMir2
+tgt='E:\tmp\openmir2-merge-target'; logdir='E:\tmp\client-e2e\stack'
+
+$ diff /e/tmp/openmir2-watch/client-e2e-window.sh client-e2e-window.fixed.sh.txt   # 仅 2 行
+6,7c6,7
+< w=/e/tmp/openmir2-watch; repo=/e/Users/gxh/Documents/GitHub/OpenMir2
+< tgt='E:\tmp\openmir2-merge-target'; logdir='E:\tmp\client-e2e\stack'
+---
+> w=/e/tmp/openmir2-watch; repo=/e/tmp/m2svr-window-origin
+> tgt='E:\tmp\m2svr-window-target'; logdir='E:\tmp\client-e2e\stack'
+(diff rc=1 ⇒ 有差；上面就是全部差量)
+
+1. G5 真读数：默认（活脚本）⇒ RED / WINDOW_READY=NO
+====================================================================================================
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --target-dir E:/tmp/m2svr-window-target
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+RED G5 窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 指向**共享主检出**（E:/Users/gxh/Documents/GitHub/OpenMir2，rev 车道工作区） ⇒ 直接跑它会构建另一棵树（白烧窗口）
+RED G5 窗口脚本 tgt=E:\tmp\openmir2-merge-target != 本计划 --target-dir=E:/tmp/m2svr-window-target ⇒ 会从另一份（可能过期的）exe 起栈，判据读数对不上构建源
+WINDOW_READY=NO
+RESULT: RED
+rc=1
+
+2. 反向对照：--window-script ''（显式关掉 G5）⇒ 与片㉜ 逐字节同款 GREEN（向后兼容）
+====================================================================================================
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --target-dir E:/tmp/m2svr-window-target --window-script ''
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0
+
+3. 修复后对照：--window-script <入库的逐字替身> ⇒ G5 GREEN / WINDOW_READY=YES
+====================================================================================================
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --target-dir E:/tmp/m2svr-window-target --window-script ./client-e2e-window.fixed.sh.txt
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0
+
+4. 计划面：G5 RED 时 --plan 额外打印『换成入库替身』的修复块（G1 块不动）
+====================================================================================================
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --target-dir E:/tmp/m2svr-window-target --plan --site 605,578 --site-none 291,666  # 摘录
+# ==== 修复块：G5 RED（root 实际会跑的一键脚本 ≠ 本计划的构建源） ====
+# root 现跑的脚本：E:/tmp/openmir2-watch/client-e2e-window.sh
+# 它的 repo=/tgt= 与本计划 -repo/--target-dir 不一致（或指共享主检出）⇒ 直接跑它会构建另一棵树
+# / 从旧 exe 起栈，白烧一次性窗口。本仓已备逐字替身（仅 2 行 diff；bash -n OK）：
+#   cp E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr/mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt /e/tmp/openmir2-watch/client-e2e-window.sh
+# 或把该脚本里的 repo= / tgt= 两行改成上面首行打印的构建源（repo=/tgt=）；改完复跑本门至 GREEN：
+#   python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr/mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD
+
+# 0) 前置：端口/进程（5000/5100/5500/5600/5700/6000/7000/7100/7200 全 DOWN；仅共享 3306 可 UP）
+PLAN_CONFORMANCE=GREEN
+WINDOW_READY=NO
+RESULT: RED
+
+5. 判据自检
+====================================================================================================
+$ python -I -B window_handoff.py --selftest
+[PASS] selftest plan-g5-no-remediation
+SELFTEST OK (94/94)
+（㉜ 记 82/82；本片 +12 牙 ⇒ 94/94：ws-parse-fixed-repo/tgt、ws-norm-msys/quoted、ws-parse-missing、
+ g5-match-rc0、g5-repo-mismatch-red、g5-shared-checkout-red、g5-tgt-mismatch-red、g5-missing-skip、
+ plan-g5-remediation、plan-g5-no-remediation）
+
+6. 涉及文件
+====================================================================================================
+工具: mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py（唯一代码文件；零 .rs）
+入库替身: client-e2e-window.fixed.sh.txt（㉘ 已入库，本片只把它接进 G5 修复块）
+证据: 本文件 + 160-redcheck-live-window-script.txt + 161-gates.txt + 162-boundary.txt
