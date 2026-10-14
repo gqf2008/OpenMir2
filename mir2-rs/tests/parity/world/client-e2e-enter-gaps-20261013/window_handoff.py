@@ -11,14 +11,23 @@
 
 本工具**不重新实现任何判据**，只做四件事：
   G1 **聚合 Rust 侧窗口前置门**：调片⑮ `check_rust_window_preflight.py`（R1..R5），解析 `RESULT:`。
-     其中 R1/R2 直接点住「窗口脚本 `client-e2e-window.sh` 的 `repo=` 指向的检出是否含片⑪」——
-     这是 2026-10-14 实测到的真缺陷（共享主检出停在 `ad0592b19`）。
+     其中 R1/R2 直接点住「构建源是否含 ③ 判据要的两片」——片⑪（`vr/new/af` 读数）与
+     片㉜（受击帧 `SM_STRUCK` 广播 ⇒ DoD③「能攻击造成伤害」）——这是 2026-10-14 实测到的真缺陷
+     （共享主检出停在 `ad0592b19`；专用源 `m2svr-window-origin` 停在 `6dba8719d`、缺片㉜）。
+     门一旦 RED，`--plan` 的修复块点明「换/刷新构建源」而不会让你白烧窗口。
   G2 **聚合判据工具自检**：证据目录 8 件判据脚本的 `--selftest` 必须全 `SELFTEST OK`（缺一件 ⇒ PREREQ）。
   G3（可选）**聚合 C# 侧抓包前置门**：调片⑭ `check_csharp_capture_preflight.py --shadow-config ...`。
   G4（`--plan`/`--plan-only`）**计划 ↔ 工具面机判**（片㉕）：计划里每个被调脚本必须存在、只用它声明
      的参数，且必须含「代理(7200)/影子 gate(7600) 清端口 + 7200/7600 回落断言 + C# 清栈保留 3306」的
      teardown 段 —— 手工起的影子 gate 与代理**不在** `start_rust_stack.ps1` 的 pid 文件里 ⇒ `-Stop`
      不会收它们，留着会让下一趟起栈预检 RED / C# 影子绑不上 7600，白烧一次性窗口。
+  G5（默认开）**root 一键窗口脚本口径 guard**（片㉝，fail-closed）：解析 root 实际会跑的
+     `client-e2e-window.sh`（`--window-script`，默认 `E:/tmp/openmir2-watch/client-e2e-window.sh`）里的
+     `repo=` / `tgt=`，必须与本工具的 `--repo` / `--target-dir` 一致，且 `repo=` 不得指向共享主检出。
+     为什么必须与 G1 分开：G1 校验的是**你传进来的** `--repo`，而 root 开窗时跑的是**脚本里那两行** ——
+     两者可以不一致（2026-10-14 实测：工具的 `--repo` 已指专用源，root 的脚本仍指共享主检出），
+     于是 `WINDOW_READY=YES` 而窗口照样构建另一棵树 / 从旧 exe 起栈。脚本文件不存在（干净检出）
+     ⇒ 该门跳过（INFO），不当 RED。
   J1（`--judge`）**聚合 ③b/③a 两趟窗口产物的六条判据**（只消费既有 capture/log，不起栈）：
      ③b 服务端 `vis>=1` / ③b 客户端 `pairs>=1` / ③b 两侧 `visible` / **③b 两侧攻击/伤害
      （DoD③ 第三半「能攻击造成伤害」）** / ③a 服务端 `vis==0` / ③a 两侧 `none`。
@@ -28,7 +37,12 @@
 
 `--plan` 把 ③a/③b 两侧对照的**全部命令**（Rust 起栈/代理/客户端/解码 + C# 侧 + 三条判据 + 收工）
 按 runbook `82-two-side-window-runbook.md` 的口径生成成可粘贴文本；当 G1 判 RED 时，额外打印
-「改用专用 worktree 从 origin/master 构建」的修复块（不动共享主检出）。
+「改用专用 worktree 从 origin/master 构建」的修复块（不动共享主检出）；当 G5 判 RED 时，额外打印
+「把 root 的一键脚本换成入库的逐字替身 `client-e2e-window.fixed.sh.txt`（仅 2 行 diff）」的修复块。
+
+  # 门（可选显式指定 root 实际会跑的一键脚本；默认 = E:/tmp/openmir2-watch/client-e2e-window.sh）
+  python -I -B window_handoff.py --repo <构建源> --window-script <脚本路径>
+  python -I -B window_handoff.py --repo <构建源> --window-script ''   # 干净检出上显式关掉 G5
 
 用法：
   # 就绪门（开窗前跑；rc 0=GO / 1=NO-GO / 2=PREREQ）
@@ -67,6 +81,12 @@ MYSQL_EXE = os.environ.get("MIR2_MYSQL_EXE", "D:/mysql/mariadb-10.11.19-winx64/b
 
 RUST_PREFLIGHT = "check_rust_window_preflight.py"
 CSHARP_PREFLIGHT = "check_csharp_capture_preflight.py"
+# 片㉝：root 实际会跑的一键窗口脚本（默认；文件不存在 ⇒ 干净检出上跳过 G5，不当 RED）。
+DEFAULT_WINDOW_SCRIPT = os.environ.get(
+    "MIR2_WINDOW_SCRIPT", "E:/tmp/openmir2-watch/client-e2e-window.sh")
+# 共享主检出（rev 车道的 worktree）；窗口构建源**不得**是它。
+SHARED_MAIN_CHECKOUT_DEFAULT = os.environ.get(
+    "MIR2_SHARED_CHECKOUT", "E:/Users/gxh/Documents/GitHub/OpenMir2")
 TOOL_SELFTESTS = (
     "check_mongen_dense_points.py",
     "check_aoi_visibility_diag.py",
@@ -95,6 +115,9 @@ _BEST_RE = re.compile(
 )
 _PASS_STATES = ("OK", "GREEN")
 _FAIL_STATES = ("FAILED", "RED")
+# 窗口脚本里的赋值：`repo=/e/tmp/x` / `repo='…'` / `repo="…"`（片㉝）。
+_WS_VALUE_RE = re.compile(r"(?<![\w-])(?P<key>repo|tgt)=('(?P<sq>[^']*)'|\"(?P<dq>[^\"]*)\"|(?P<bare>[^\s;]+))")
+_MSYS_DRIVE_RE = re.compile(r"^/(?P<drive>[A-Za-z])/(?P<rest>.*)$")
 
 
 # ---------------------------------------------------------------- 解析（纯函数，selftest 直接打）
@@ -124,6 +147,85 @@ def parse_best_point(text: str) -> dict | None:
         return None
     return {"x": int(m.group("x")), "y": int(m.group("y")), "e": m.group("e"),
             "map": m.group("map")}
+
+
+def parse_window_script(text: str) -> dict:
+    """从 `client-e2e-window.sh` 里抽 `repo=` / `tgt=`（片㉝）。
+
+    脚本第 6/7 行形如 `w=…; repo=/e/tmp/m2svr-window-origin`、`tgt='E:\\tmp\\m2svr-window-target'…`。
+    同键出现多次**取最后一条**（对齐 bash 顺序脚本的 last-wins；reviewer-5 ㉝ O-1：旧实现取第一条，
+    在活脚本出现重复键时会与 bash 实跑不一致 ⇒ 朝假绿判）。解析不到 ⇒ 该键 `None`。
+    """
+    out: dict = {"repo": None, "tgt": None}
+    for m in _WS_VALUE_RE.finditer(text or ""):
+        out[m.group("key")] = m.group("sq") or m.group("dq") or m.group("bare") or ""
+    return out
+
+
+def _norm_path(path: str) -> str:
+    """路径归一（片㉝）：msys `/e/tmp` → `e:/tmp`、反斜杠 → 正斜杠、去尾斜杠、小写（Win 不区分大小写）。"""
+    p = (path or "").strip().replace("\\", "/")
+    m = _MSYS_DRIVE_RE.match(p)
+    if m:
+        p = f"{m.group('drive')}:/{m.group('rest')}"
+    return p.rstrip("/").lower()
+
+
+def window_script_findings(
+    path: str,
+    repo: str,
+    target_dir: str,
+    shared_checkout: str = SHARED_MAIN_CHECKOUT_DEFAULT,
+) -> tuple[list[str], list[str], list[str], bool]:
+    """G5：root 实际会跑的一键脚本的 `repo=`/`tgt=` 必须与本工具的构建源一致（片㉝，fail-closed）。
+
+    返回 `(problems, prereq, info, stale)`。文件不存在 ⇒ 只记 INFO 跳过（干净检出/评审环境）；
+    解析不到 `repo=`、指向共享主检出、或与 `--repo`/`--target-dir` 不一致 ⇒ RED（`stale=True`）。
+    """
+    problems: list[str] = []
+    prereq: list[str] = []
+    info: list[str] = []
+    stale = False
+    if not path:
+        return problems, prereq, info, stale
+    if not os.path.isfile(path):
+        info.append(f"INFO G5 跳过：root 一键脚本不存在 {path}（非本机/干净检出）")
+        return problems, prereq, info, stale
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError as exc:
+        prereq.append(f"G5 窗口脚本不可读：{exc}")
+        return problems, prereq, info, stale
+    parsed = parse_window_script(text)
+    repo_in = parsed["repo"]
+    tgt_in = parsed["tgt"]
+    if repo_in is None:
+        stale = True
+        problems.append(f"G5 窗口脚本解析不到 repo=（{path}）—— 脚本形态变了？失败关闭")
+    elif _norm_path(repo_in) == _norm_path(shared_checkout):
+        stale = True
+        problems.append(
+            f"G5 窗口脚本 repo={repo_in} 指向**共享主检出**（{shared_checkout}，rev 车道工作区）"
+            f" ⇒ 直接跑它会构建另一棵树（白烧窗口）")
+    elif not repo:
+        prereq.append("G5 未给 --repo，无法比对 root 窗口脚本的 repo=")
+    elif _norm_path(repo_in) != _norm_path(repo):
+        stale = True
+        problems.append(
+            f"G5 root 会跑的窗口脚本 repo={repo_in} != 本计划构建源 --repo={repo}"
+            f" ⇒ 直接跑它会构建另一棵树（窗口 PREREQ_RED / 白烧）")
+    else:
+        info.append(f"OK   G5 root 窗口脚本 repo= 与本计划构建源一致（{repo_in}）")
+    if tgt_in is not None and target_dir:
+        if _norm_path(tgt_in) != _norm_path(target_dir):
+            stale = True
+            problems.append(
+                f"G5 窗口脚本 tgt={tgt_in} != 本计划 --target-dir={target_dir}"
+                f" ⇒ 会从另一份（可能过期的）exe 起栈，判据读数对不上构建源")
+        else:
+            info.append(f"OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（{tgt_in}）")
+    return problems, prereq, info, stale
 
 
 def resolve_best_site(
@@ -217,6 +319,8 @@ class Report:
         self.info: list[str] = []
         self.build_source_stale = False
         self.rust_ok = False
+        # 片㉝：root 实际会跑的一键脚本 ≠ 本工具构建源（WINDOW_READY 必须 NO）。
+        self.live_script_stale = False
 
     def rc(self) -> int:
         if self.problems:
@@ -238,6 +342,9 @@ def run_checks(
     rank: int,
     view_range: int,
     map_name: str,
+    target_dir: str = "",
+    window_script: str = "",
+    shared_checkout: str = SHARED_MAIN_CHECKOUT_DEFAULT,
 ) -> Report:
     rep = Report()
 
@@ -280,6 +387,15 @@ def run_checks(
             )
         else:
             rep.prereq.append(f"G1 Rust 窗口前置门 PREREQ_RED（rc={rc}，末行={last_line(out)}）")
+
+    # ---- G5 root 一键脚本口径（片㉝）：默认关（`--window-script` 为空 ⇒ 跳过），
+    #      main() 默认传 DEFAULT_WINDOW_SCRIPT；selftest 直接调本函数时保持不启用。
+    if window_script:
+        _p, _q, _i, _stale = window_script_findings(window_script, repo, target_dir, shared_checkout)
+        rep.problems.extend(_p)
+        rep.prereq.extend(_q)
+        rep.info.extend(_i)
+        rep.live_script_stale = rep.live_script_stale or _stale
 
     # ---- G3 C# 侧抓包前置门（可选） ----
     if with_csharp:
@@ -413,6 +529,8 @@ def plan_text(
     bin_missing: bool = False,
     site_map: str = "0",
     site_none_map: str = "0",
+    live_script_stale: bool = False,
+    window_script: str = "",
 ) -> str:
     w, rust, csh, w_a = pass_roots(work_dir, pass_a_dir)
     rust_a = f"{w_a}/rust"
@@ -450,6 +568,17 @@ def plan_text(
         A(f"#   tgt='{tgt_win}'")
         A("# 开窗前复跑本门至 GREEN：")
         A(f"#   python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD")
+        A("")
+    if live_script_stale:
+        _here_fwd = HERE.replace("\\", "/")
+        _wh_fwd = os.path.join(HERE, "window_handoff.py").replace("\\", "/")
+        A("# ==== 修复块：G5 RED（root 实际会跑的一键脚本 ≠ 本计划的构建源） ====")
+        A(f"# root 现跑的脚本：{window_script or DEFAULT_WINDOW_SCRIPT}")
+        A("# 它的 repo=/tgt= 与本计划 -repo/--target-dir 不一致（或指共享主检出）⇒ 直接跑它会构建另一棵树")
+        A("# / 从旧 exe 起栈，白烧一次性窗口。本仓已备逐字替身（仅 2 行 diff；bash -n OK）：")
+        A(f"#   cp {_here_fwd}/client-e2e-window.fixed.sh.txt /e/tmp/openmir2-watch/client-e2e-window.sh")
+        A("# 或把该脚本里的 repo= / tgt= 两行改成上面首行打印的构建源（repo=/tgt=）；改完复跑本门至 GREEN：")
+        A(f"#   python -I -B {_wh_fwd} --repo {repo or '(未给 --repo)'} --ref {ref}")
         A("")
     A("# 0) 前置：端口/进程（5000/5100/5500/5600/5700/6000/7000/7100/7200 全 DOWN；仅共享 3306 可 UP）")
     A("#    起栈禁接管道（禁 | tee/tail/head/grep，会把调用挂死）；一律 > <log> 2>&1")
@@ -1172,6 +1301,78 @@ def selftest() -> int:
                                                                 **_xmap_kw)),
             "; ".join(plan_conformance(_bad_xmap, _repo, _chk, _ms, **_xmap_kw)))
 
+    # --- G5：root 一键窗口脚本口径 guard（片㉝） ---
+    # 解析/归一（纯函数）
+    _fixed = os.path.join(HERE, "client-e2e-window.fixed.sh.txt")
+    if os.path.isfile(_fixed):
+        with open(_fixed, encoding="utf-8", errors="replace") as _fh:
+            _fixed_text = _fh.read()
+        _fixed_parsed = parse_window_script(_fixed_text)
+        chk("ws-parse-fixed-repo", _fixed_parsed["repo"] == "/e/tmp/m2svr-window-origin",
+            str(_fixed_parsed))
+        chk("ws-parse-fixed-tgt", _fixed_parsed["tgt"] == "E:\\tmp\\m2svr-window-target",
+            str(_fixed_parsed))
+        chk("ws-norm-msys", _norm_path("/e/tmp/x") == _norm_path("E:\\tmp\\x") == "e:/tmp/x")
+        chk("ws-norm-quoted", _norm_path("'E:\\tmp\\x'".strip("'")) == "e:/tmp/x")
+    chk("ws-parse-missing", parse_window_script("no assignments here") == {"repo": None, "tgt": None})
+    # 片㉞（reviewer-5 ㉝ O-1）：重复键取**最后一条**（对齐 bash last-wins），不是第一条。
+    # 旧实现取 /good，而 bash 会跑 /bad ⇒ G5 会朝假绿判（fail-open）。
+    _dup = parse_window_script("repo=/good\nrepo=/bad\ntgt=/t1; tgt=/t2\n")
+    chk("ws-parse-dup-last-wins", _dup["repo"] == "/bad" and _dup["tgt"] == "/t2", str(_dup))
+    # G5 四种：一致 GREEN / repo 不一致 RED / 指共享主检出 RED / 文件缺失跳过
+    with tempfile.TemporaryDirectory(prefix="wh-g5-") as tmp:
+        _write_fake_tools(tmp, "GREEN")
+        ws_ok = os.path.join(tmp, "win-ok.sh")
+        with open(ws_ok, "w", encoding="utf-8") as fh:
+            fh.write("w=/e/tmp/w; repo=R\ntgt='E:\\tmp\\tgt'; logdir='E:\\tmp\\l'\n")
+        rep_ok = run_checks(tmp, repo="R", ref="HEAD", mirserver="M", shadow_config="",
+                            with_csharp=False, rank=0, view_range=12, map_name="0",
+                            target_dir="E:/tmp/tgt", window_script=ws_ok)
+        chk("g5-match-rc0", rep_ok.rc() == 0 and not rep_ok.live_script_stale, str(rep_ok.problems))
+        ws_other = os.path.join(tmp, "win-other.sh")
+        with open(ws_other, "w", encoding="utf-8") as fh:
+            fh.write("w=/e/tmp/w; repo=/e/other\ntgt='E:\\tmp\\tgt'\n")
+        rep_other = run_checks(tmp, repo="R", ref="HEAD", mirserver="M", shadow_config="",
+                               with_csharp=False, rank=0, view_range=12, map_name="0",
+                               target_dir="E:/tmp/tgt", window_script=ws_other)
+        chk("g5-repo-mismatch-red",
+            rep_other.rc() == 1 and rep_other.live_script_stale
+            and any("G5" in p for p in rep_other.problems), "; ".join(rep_other.problems))
+        ws_shared = os.path.join(tmp, "win-shared.sh")
+        with open(ws_shared, "w", encoding="utf-8") as fh:
+            fh.write("w=/e/tmp/w; repo=/e/Users/gxh/Documents/GitHub/OpenMir2\n"
+                     "tgt='E:\\tmp\\tgt'\n")
+        rep_shared = run_checks(tmp, repo="R", ref="HEAD", mirserver="M", shadow_config="",
+                                with_csharp=False, rank=0, view_range=12, map_name="0",
+                                target_dir="E:/tmp/tgt", window_script=ws_shared)
+        chk("g5-shared-checkout-red",
+            rep_shared.rc() == 1 and any("共享主检出" in p for p in rep_shared.problems),
+            "; ".join(rep_shared.problems))
+        ws_tgt = os.path.join(tmp, "win-tgt.sh")
+        with open(ws_tgt, "w", encoding="utf-8") as fh:
+            fh.write("w=/e/tmp/w; repo=R\ntgt='E:\\tmp\\merge-target'\n")
+        rep_tgt = run_checks(tmp, repo="R", ref="HEAD", mirserver="M", shadow_config="",
+                             with_csharp=False, rank=0, view_range=12, map_name="0",
+                             target_dir="E:/tmp/tgt", window_script=ws_tgt)
+        chk("g5-tgt-mismatch-red",
+            rep_tgt.rc() == 1 and any("target-dir" in p for p in rep_tgt.problems),
+            "; ".join(rep_tgt.problems))
+        rep_nofile = run_checks(tmp, repo="R", ref="HEAD", mirserver="M", shadow_config="",
+                                with_csharp=False, rank=0, view_range=12, map_name="0",
+                                target_dir="E:/tmp/tgt",
+                                window_script=os.path.join(tmp, "nope.sh"))
+        chk("g5-missing-skip",
+            rep_nofile.rc() == 0 and not rep_nofile.live_script_stale
+            and any("G5 跳过" in i for i in rep_nofile.info), "; ".join(rep_nofile.info))
+        # 计划：G5 RED 时必须有替身修复块；G5 绿时不得出现。
+        _g5_plan = plan_text("R", "HEAD", "M", "287,620", "291,666", "E:/tmp/w", "E:/tmp/tgt",
+                             "42", 12, stale=False, live_script_stale=True, window_script="/e/tmp/x.sh")
+        _g5_plan_ok = plan_text("R", "HEAD", "M", "287,620", "291,666", "E:/tmp/w", "E:/tmp/tgt",
+                                "42", 12, stale=False, live_script_stale=False)
+        chk("plan-g5-remediation",
+            "G5 RED" in _g5_plan and "client-e2e-window.fixed.sh.txt" in _g5_plan)
+        chk("plan-g5-no-remediation", "G5 RED" not in _g5_plan_ok)
+
     print(f"SELFTEST {'OK' if ok == total else 'FAILED'} ({ok}/{total})")
     return 0 if ok == total else 1
 
@@ -1207,6 +1408,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="聚合 ③b/③a 两趟窗口产物的五条 AOI 判据（消费既有 capture/log，不起栈）")
     ap.add_argument("--target-dir", default="E:/tmp/m2svr-window-target",
                     help="CARGO_TARGET_DIR（RustBinDir = <target-dir>/debug）")
+    ap.add_argument("--window-script", default=DEFAULT_WINDOW_SCRIPT,
+                    help="root 实际会跑的一键窗口脚本（G5；默认 E:/tmp/openmir2-watch/client-e2e-window.sh；"
+                         "传空串 '' 显式关掉 G5）")
+    ap.add_argument("--shared-checkout", default=SHARED_MAIN_CHECKOUT_DEFAULT,
+                    help="共享主检出路径（G5：窗口脚本 repo= 不得指它）")
     ap.add_argument("--seed", default="42", help="MIR2_RNG_SEED（两侧同种子）")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--selftest", action="store_true")
@@ -1255,12 +1461,21 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.plan_only:
         bin_missing = not os.path.isfile(os.path.join(args.target_dir, "debug", "game-svr.exe"))
+        _wp, _wq, _wi, _wstale = window_script_findings(
+            args.window_script, args.repo, args.target_dir, args.shared_checkout)
         plan = plan_text(args.repo, args.ref, args.mirserver, site, args.site_none,
                          args.work_dir, args.target_dir, args.seed, args.view_range,
                          stale=False, site_note=site_note, pass_a_dir=args.pass_a_dir,
                          bin_missing=bin_missing, site_map=site_map,
-                         site_none_map=site_none_map)
+                         site_none_map=site_none_map, live_script_stale=_wstale,
+                         window_script=args.window_script)
         print(plan)
+        for line in _wi:
+            print(line)
+        for line in _wp:
+            print("RED " + line)
+        for line in _wq:
+            print("PREREQ " + line)
         _conf = plan_conformance(plan, args.repo, args.check_dir, args.mirserver,
                                  site=site, site_map=site_map,
                                  site_none=args.site_none, site_none_map=site_none_map)
@@ -1275,7 +1490,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if _conf else 0
 
     rep = run_checks(args.check_dir, args.repo, args.ref, args.mirserver,
-                     args.shadow_config, args.with_csharp, args.rank, args.view_range, args.map_name)
+                     args.shadow_config, args.with_csharp, args.rank, args.view_range, args.map_name,
+                     target_dir=args.target_dir, window_script=args.window_script,
+                     shared_checkout=args.shared_checkout)
 
     for line in rep.info:
         print(line)
@@ -1292,7 +1509,8 @@ def main(argv: list[str] | None = None) -> int:
                          args.work_dir, args.target_dir, args.seed, args.view_range,
                          stale=rep.build_source_stale, site_note=site_note, pass_a_dir=args.pass_a_dir,
                          bin_missing=bin_missing, site_map=site_map,
-                         site_none_map=site_none_map)
+                         site_none_map=site_none_map, live_script_stale=rep.live_script_stale,
+                         window_script=args.window_script)
         print(plan)
         conf_probs = plan_conformance(plan, args.repo, args.check_dir, args.mirserver,
                                       site=site, site_map=site_map,
@@ -1311,6 +1529,8 @@ def main(argv: list[str] | None = None) -> int:
             "rc": rc,
             "result": "GREEN" if rc == 0 else ("PREREQ_RED" if rc == 2 else "RED"),
             "build_source_stale": rep.build_source_stale,
+            "live_script_stale": rep.live_script_stale,
+            "window_script": args.window_script,
             "problems": rep.problems,
             "prereq": rep.prereq,
             "info": rep.info,

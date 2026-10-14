@@ -1,0 +1,40 @@
+168-redcheck-window-source-refresh.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉟ 红检（改坏必红）
+m2-svr / openmir2-worker-11 / 2026-10-14
+本文件是 `167-window-source-refresh-and-prebuild.txt` §E 的原始输出；零起栈、零游戏端口。
+====================================================================================================
+R1) 改坏必红 —— 把构建源回退到刷新前的 6dba8719d（片⑪ 在、片㉜ 缺）⇒ R1 必 RED
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref 6dba8719d0d5dd834bbab159716b2a538160d333 --mirserver E:/MirServer
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 6dba8719d0d5dd834bbab159716b2a538160d333 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+RED R1: E:/tmp/m2svr-window-origin 的 6dba8719d0d5dd834bbab159716b2a538160d333=6dba8719d0d5dd834bbab159716b2a538160d333 不含 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（窗口缺该片 ⇒ 对应判据 PREREQ/红，白烧一次性窗口）
+RESULT: RED
+rc=1
+
+R2) 对照（非本片改坏项，仅证 G5 仍在）：root 活脚本仍指共享主检出 ⇒ WINDOW_READY=NO
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --check-dir .
+OK   G2 check_attack_observability.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+RED G5 窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 指向**共享主检出**（E:/Users/gxh/Documents/GitHub/OpenMir2，rev 车道工作区） ⇒ 直接跑它会构建另一棵树（白烧窗口）
+RED G5 窗口脚本 tgt=E:\tmp\openmir2-merge-target != 本计划 --target-dir=E:/tmp/m2svr-window-target ⇒ 会从另一份（可能过期的）exe 起栈，判据读数对不上构建源
+WINDOW_READY=NO
+RESULT: RED
+
+R3) 工具自检计数（G2 内联跑，此处取原始摘要行）
+$ python -I -B check_rust_window_preflight.py --selftest
+[PASS] selftest mongen-wire-prereq 2
+SELFTEST OK (23/23)
+$ python -I -B window_handoff.py --selftest
+[PASS] selftest plan-g5-no-remediation
+SELFTEST OK (95/95)
+
+注：R1/R2 未做仓内文件变异——「改坏」对象是**检出外的构建源 ref**（`--ref 6dba8719d`），
+故无需还原仓内文件；本目录内工具 sha256 与片㉞ 提交逐字节一致（见 `SHA256SUMS.txt`）。
