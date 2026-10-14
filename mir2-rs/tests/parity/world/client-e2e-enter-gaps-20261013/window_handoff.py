@@ -10,9 +10,13 @@
   做成**一条机判的 GO/NO-GO**，避免再出现「开了窗口才发现构建源过旧、判据 PREREQ_RED」的烧窗。
 
 本工具**不重新实现任何判据**，只做四件事：
-  G1 **聚合 Rust 侧窗口前置门**：调片⑮ `check_rust_window_preflight.py`（R1..R6），解析 `RESULT:`。
+  G1 **聚合 Rust 侧窗口前置门**：调片⑮ `check_rust_window_preflight.py`（R1..R7），解析 `RESULT:`。
      片㊲ 起 R6 = 「构建源必须是当前基线（默认 `origin/master`）」；R1 只管「含两片修复」
      （单向 `--is-ancestor`），一份含两片但停在旧 master 的源 R1 仍 GREEN，必须靠 R6 才能判「测旧件」。
+     片㊻ 起 R7 = 「预构建 exe ↔ 构建源出处」（`--target-dir` + `--provenance` 传出）：R6 只比
+     **生产路径的 git 差异**，比不出「源刷了但没重编译/ 暖 target 里是别处拷来的旧 exe」（2026-10-14
+     实测：专用源只 `checkout` 不 `cargo build` 时 `game-svr.exe` 仍是上一版）⇒ 窗口会从旧 exe 起栈。
+     R7 用出处清单（`source_head` + 六件 sha256）做确定性对账；清单缺失 ⇒ PREREQ（先 `--record-provenance`）。
      其中 R1/R2 直接点住「构建源是否含 ③ 判据要的两片」——片⑪（`vr/new/af` 读数）与
      片㉜（受击帧 `SM_STRUCK` 广播 ⇒ DoD③「能攻击造成伤害」）——这是 2026-10-14 实测到的真缺陷
      （共享主检出停在 `ad0592b19`；专用源 `m2svr-window-origin` 停在 `6dba8719d`、缺片㉜）。
@@ -83,6 +87,9 @@ MYSQL_EXE = os.environ.get("MIR2_MYSQL_EXE", "D:/mysql/mariadb-10.11.19-winx64/b
 
 RUST_PREFLIGHT = "check_rust_window_preflight.py"
 CSHARP_PREFLIGHT = "check_csharp_capture_preflight.py"
+# 片㊻：R7 出处清单名（与 `check_rust_window_preflight.py::PROVENANCE_NAME` 同源）；
+# G1 把它传给 Rust 前置门的 `--provenance`（<target-dir>/window-provenance.json）。
+PROVENANCE_NAME = "window-provenance.json"
 # 片㉝：root 实际会跑的一键窗口脚本（默认；文件不存在 ⇒ 干净检出上跳过 G5，不当 RED）。
 DEFAULT_WINDOW_SCRIPT = os.environ.get(
     "MIR2_WINDOW_SCRIPT", "E:/tmp/openmir2-watch/client-e2e-window.sh")
@@ -404,11 +411,15 @@ def run_checks(
     elif not os.path.isfile(rp):
         rep.prereq.append(f"G1 缺 {rp}")
     else:
-        rc, out = run_tool(rp, ["--repo", repo, "--ref", ref, "--mirserver", mirserver], timeout=180)
+        rc, out = run_tool(rp, [
+            "--repo", repo, "--ref", ref, "--mirserver", mirserver,
+            "--target-dir", target_dir,
+            "--provenance", os.path.join(target_dir, PROVENANCE_NAME),
+        ], timeout=180)
         result = parse_result(out)
         if rc == 0 and result == "GREEN":
             rep.rust_ok = True
-            rep.info.append("OK   G1 Rust 窗口前置门 GREEN（R1..R6）")
+            rep.info.append("OK   G1 Rust 窗口前置门 GREEN（R1..R7）")
         elif result == "RED" or rc == 1:
             rep.build_source_stale = True
             rep.problems.append(
@@ -629,6 +640,12 @@ def plan_text(
     A(f"#   git -C {_build_repo} rev-parse HEAD   # 记进证据（构建源 oid）")
     A(f"#   cd {_build_repo}/mir2-rs && CARGO_TARGET_DIR={target_dir} cargo build --offline \\")
     A("#     -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv")
+    A("#   0a-2) 录 R7 出处清单（每次构建后必做，否则 R7 PREREQ）：")
+    _rp_fwd = os.path.join(HERE, RUST_PREFLIGHT).replace("\\", "/")
+    A(
+        f"#   python -I -B {_rp_fwd} --repo {_build_repo} --ref HEAD "
+        f"--target-dir {target_dir} --record-provenance {target_dir}/{PROVENANCE_NAME}"
+    )
     if bin_missing:
         A(f"#   ⚠ 构建产物不存在：{bin_dir}/game-svr.exe（本次 --plan 时实测）⇒ 不先跑 §0a 就地起栈必 PREREQ_MISSING")
     A("")

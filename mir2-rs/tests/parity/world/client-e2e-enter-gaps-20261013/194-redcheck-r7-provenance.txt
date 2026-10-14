@@ -1,0 +1,88 @@
+194 — 片㊻ 红检（改坏必红）+ 缺陷复现（before 读数）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+变异只在 `E:/tmp/m2svr-r7-mut/` 的副本上做；仓内件 sha256 前后不变（见 `195-gates.txt` §E）
+零起栈、零游戏端口；未动共享主检出；不 merge、不自签 review
+====================================================================================================
+
+§A 缺陷复现（before）：源停在刷新前 oid `3db79cae0` —— 真件同时判 R6 与 R7 RED
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref 3db79cae0 \
+    --baseline-ref origin/master --mirserver E:/MirServer \
+    --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-window-target/window-provenance.json
+RED R6: 构建源 3db79cae0=3db79cae05 落后于基线 origin/master@ae64439246 的生产路径（5 件：
+        mir2-rs/bins/game-svr/src/lib.rs, mir2-rs/bins/game-svr/src/main.rs,
+        mir2-rs/bins/game-svr/src/msgqueue.rs, mir2-rs/bins/game-svr/src/pickwire.rs,
+        mir2-rs/bins/game-svr/src/smframe.rs）⇒ 窗口会测旧件，先 `fetch` + `checkout --detach <基线>` + 重编译
+RED R7: 出处清单 source_head=ae64439246 != 当前构建源 3db79cae0=3db79cae05 且在影响六件 exe 的路径上有
+        5 件差异（…）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）；先重编译 + 重录清单
+RESULT: RED
+rc=1
+```
+⇒ 聚合门 G1 因此 RED（`WINDOW_READY=NO`）。这就是本片修复前的真实状态（`193` §1）。
+
+§B 牙齿 A（R6 的已登记盲区：清单停在旧 head，ref = HEAD；R6 GREEN 而 R7 RED）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+    --baseline-ref origin/master --mirserver E:/MirServer \
+    --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-r7-mut/prov-old-head.json
+[OK] R6 构建源 HEAD=ae64439246 == 基线 origin/master@ae64439246
+RED R7: 出处清单 source_head=3db79cae05 != 当前构建源 HEAD=ae64439246 且在影响六件 exe 的路径上有 5 件差异
+        （mir2-rs/bins/game-svr/src/lib.rs, …）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）
+RESULT: RED
+```
+⇒ 这正是 `175-r6-build-source-freshness.txt` §F 登记、本片要收的形态：「源刷了但**没重编译**」
+（或暖 target 里是别处拷来的旧件）——R6 只比 `git diff`，判不出来；R7 判得出。
+
+§C 牙齿 B（暖 target 里是刷新前的旧 `game-svr.exe`：sha 取片㊲ 读数 `1e088ae7…`）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+    --baseline-ref origin/master --mirserver E:/MirServer \
+    --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-r7-mut/prov-stale-exe.json
+[OK] R6 构建源 HEAD=ae64439246 == 基线 origin/master@ae64439246
+RED R7: 1 件 exe 与出处清单不一致（game-svr.exe（sha256 60b4dc4fbe != 清单 1e088ae758）)
+        ⇒ 窗口会从旧/异构 exe 起栈；先重编译 + 重录清单
+RESULT: RED
+```
+
+§D 掏空牙齿（MUT-A 源判定短路 + MUT-B sha256 对账短路）⇒ 同一输入变假绿
+----------------------------------------------------------------------------------------------------
+变异（只在副本 `E:/tmp/m2svr-r7-mut/check_rust_window_preflight.py`）：
+```
+-        if moved:                                   # 真件：清单 head 与 ref 有生产差异 ⇒ RED
++        if False:  # MUT-A 源判定掏空
+-        elif got != want:                            # 真件：exe sha256 与清单不符 ⇒ RED
++        elif False:  # MUT-B sha256 对账掏空
+```
+```
+$ python -I -B E:/tmp/m2svr-r7-mut/check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin \
+    --ref HEAD --baseline-ref origin/master --mirserver E:/MirServer \
+    --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-r7-mut/prov-old-head.json
+[OK] R6 构建源 HEAD=ae64439246 == 基线 origin/master@ae64439246
+[OK] R7 出处清单 prov-old-head.json source_head=ae64439246，6 件 exe sha256 逐字节一致
+RESULT: GREEN
+$ … --provenance E:/tmp/m2svr-r7-mut/prov-stale-exe.json
+[OK] R6 构建源 HEAD=ae64439246 == 基线 origin/master@ae64439246
+[OK] R7 出处清单 prov-stale-exe.json source_head=ae64439246，6 件 exe sha256 逐字节一致
+RESULT: GREEN
+```
+⇒ §B/§C 的 RED 来自 R7 的真判据（不是硬编码、不是环境）：掏空后同输入即变 GREEN。
+
+§E 非生产提交不假红（设计牙，收在 `--selftest`）
+----------------------------------------------------------------------------------------------------
+* `r7-nonprod-advance-green`：清单 `source_head=第五次提交`、`ref=第六次提交`（只动 `docs/`）⇒
+  R7 输出两条 OK（含「`mir2-rs/**` 零差异 ⇒ exe 仍有效」）⇒ 不假红。
+  这条对应现场实测：master `0c3561629` → `ae6443924` 只动证据/文档，`cargo build` 0.28s 不再重链，
+  六件 sha256 不变 ⇒ 必须判 OK，否则每次 master 前进一条非生产提交就会挡住窗口。
+* 反例（必红）：`r7-source-head-mismatch-red`（清单停 `fourth`、`ref=third`，`mir2-rs/bins/prod.rs`
+  有生产差异）⇒ RED。
+
+§F 工具自检（与红检同源的机判牙）
+----------------------------------------------------------------------------------------------------
+* `check_rust_window_preflight.py --selftest`：**32/32 → 48/48**（+16 = R7 的
+  `record-ok`/`record-source-head`/`green`/`nonprod-advance-green`/`source-head-mismatch-red`/
+  `hash-mismatch-red`/`missing-bin-red`/`missing-manifest-prereq`/`empty-skip-info`/
+  `record-needs-target`/`record-missing-bin`/`window-bins-six`/`provenance-name`/`rust-build-paths`）。
+* `window_handoff.py --selftest`：**98/98 不变**（G2 只认 `SELFTEST OK`；G1 文案与 §0a-2 步骤已同步）。

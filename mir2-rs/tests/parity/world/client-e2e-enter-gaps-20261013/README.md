@@ -1079,3 +1079,30 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 
 - 交付：`190-aoi-gap3-af2-coordinate-verdict.txt`（坐标口径真机＋MonGen 机判）、`191-gates.txt`、`192-boundary.txt`。
 - 真机 R 窗口（root 排）的判据不变：压血进图 ⇒ HUD `19/19` + `CM_RUN≥1` + 同点位 `af>2` + C# 同点位 s2c 对照。
+
+### ㊻ ③ 窗口就绪收口 #3：专用源刷到当前 master（含 53 修复链）+ 预构建六件 + R7「exe ↔ 源出处」（2026-10-14）—— `193`/`194`
+
+两件事合成一片（**L 级：窗口就绪工具 + 检出外预构建 + 出处清单，零生产代码**）：
+
+1. **专用构建源落后（实测到的真缺陷）**：`E:/tmp/m2svr-window-origin` 停在 `3db79cae0`
+   （片㊲ 11:26 刷的当时 master），**不含** 53 修复链（片㊴ `c61b9627a` / 片㊷ `448f62ab7` / 片㊸ `aff1f7c17`）
+   ⇒ 若此时开窗，编出的 `game-svr.exe` 仍是**回归态**，root 会再次读到 HUD `0/0` / `CM_RUN=0`（`193` §0-§1）。
+   本片把源刷到 `ae6443924`（= 当前 master，5 个修复 oid 全 YES）并重编译六件（只 `game-svr.exe` 重链
+   `1e088ae7…` → `60b4dc4f…`；其余五件逐字节不变）。
+2. **收 `175` §F 已登记的 R6 界限** —— `check_rust_window_preflight.py` 新增 **R7「预构建二进制 ↔ 构建源出处」**：
+   `--record-provenance`（`cargo build` 之后跑）录 `{source_head, bins:{<exe>:{sha256,bytes}}}`；
+   判据模式对账「清单 `source_head` == `--ref`（只看 `RUST_BUILD_PATHS` 的生产差异）且六件 exe sha256 逐字节相等」，
+   缺件/缺清单/不一致 ⇒ RED/PREREQ（fail-closed）。`window_handoff.py` G1 透传 `--target-dir/--provenance`
+   （G1 文案 `R1..R6` → `R1..R7`），`--plan` §0a 增「`0a-2)` 录清单」可执行步骤。
+
+- **判据（机判，零端口）**：`check_rust_window_preflight.py` = **R1..R7 全 OK / `RESULT: GREEN` rc=0**；
+  聚合门（入库替身脚本口径）= **`WINDOW_READY=YES` / GREEN rc=0**。仍 RED 的只有 **G5**（root 的活脚本
+  `client-e2e-window.sh` 仍指共享主检出）⇒ root 换入库替身（仅两行 diff）即 GREEN。
+- **改坏必红（`194`）**：① 缺陷复现 `--ref 3db79cae0` ⇒ R6+R7 双 RED；② 牙齿 A「源刷了但没重编译」
+  （清单停旧 head + `--ref HEAD`）⇒ **R6 GREEN 而 R7 RED**（正是 `175` §F 登记、R6 判不出的形态）；
+  ③ 牙齿 B「暖 target 旧 exe」⇒ R7 sha256 RED；④ 掏空牙齿（源判定/sha256 对账短路）⇒ 同输入变假绿；
+  ⑤ 设计牙「非生产提交不假红」（`r7-nonprod-advance-green`）。两处 selftest：`check_rust_window_preflight.py`
+  **32/32 → 48/48**；`window_handoff.py` **98/98 不变**。
+- **判据分级 / 与窗口的关系**：本片 = **L 级**（就绪工具 + 预构建）；真机 R 级（①②③）仍归 **root 独占窗口**，
+  本片**未起栈、未占端口、未跑真机**，只保证「开窗时构建源 = 当前基线、exe = 该源编出、聚合门 GREEN」。
+- 交付：`193-window-provenance-r7-closeout.txt`、`194-redcheck-r7-provenance.txt`、`195-gates.txt`、`196-boundary.txt`。
