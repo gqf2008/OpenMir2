@@ -1,0 +1,67 @@
+# evidence-m3-rng-anchor-symbol-unique-f1-20261014 —— 复跑命令
+
+卡 `openmir2-m3-rng-trace-scene-groups`（M3 夹具卫生片）。
+本片 = **reviewer-5 F-1 收口**：`check_anchors.py` 的符号唯一性锚由「匹配**行**数」改为
+「匹配**总次数**」计数（同一物理行写两遍符号不再放行）。
+
+- base = `origin/master 515c6b5ea`；声明 head（code head）= `15fac97ac`（见 `10-boundary.txt`）。
+- 写集：`mir2-rs/tests/parity/m3/**`；**零 `.rs`**、零 `.toml`；零起栈 / 零端口。
+
+## 0) base（code 未改）——本片修的是「假绿通道」，故 base 的 selftest 仍 GREEN 16/16
+
+```sh
+# 在 worktree 里 git stash push 仅本片 4 个改动文件，使 check_anchors.py 回到 base 内容
+cd mir2-rs/tests/parity/m3/rng-trace-scene
+python -I check_anchors.py selftest        # 16/16 GREEN（旧口径：同行两遍符号只计 1 行 ⇒ 假绿）
+# git stash pop 还原
+```
+
+## 1) after = 声明 head
+
+```sh
+cd mir2-rs/tests/parity/m3/rng-trace-scene
+python -I check_anchors.py check           # GREEN 7/7
+python -I check_anchors.py selftest        # 17/17 GREEN（含 16 条改坏必红）
+```
+
+## 2) 改坏必红（把修法还原成「按行计数」⇒ 新牙必红）
+
+```sh
+cd mir2-rs/tests/parity/m3/rng-trace-scene
+python -I - <<'EOF'
+import io
+src = io.open('check_anchors.py', encoding='utf-8').read()
+new = 'n = sum(len(re.findall(a["rx"], line)) for line in lines)'
+old = 'n = sum(1 for line in lines if re.search(a["rx"], line))'
+io.open('_mut_linecount.py','w',encoding='utf-8',newline='
+').write(src.replace(new, old))
+EOF
+python -I _mut_linecount.py selftest       # RED 16/17（点名 mutation-symbol-ambiguous-same-line-red）
+rm -f _mut_linecount.py
+```
+
+## 3) 夹具链深检门 / 两侧驱动无栈自检
+
+```sh
+cd mir2-rs/tests/parity/m3
+python -I fixture_chain_gate.py selftest   # 40/40 GREEN
+python -I fixture_chain_gate.py check      # FIXTURE_CHAIN GREEN runner_ok=10 red=0
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack  # 37/37 GREEN
+```
+
+## 4) 四门禁（cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m3bag-target；--offline）
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline --no-fail-fast     # 101 suites / 1219 passed / 0 failed / 22 ignored
+cargo run -q -p msgcodegen --offline -- --check     # 604 rc=0
+```
+
+## 5) 证据口径复核
+
+```sh
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-f1-20261014
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-f1-20261014
+python -I mir2-rs/tests/parity/m3/rng-trace-scene/check_evidence_head.py check-pack --dir mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-symbol-unique-f1-20261014 --since 515c6b5ea
+```

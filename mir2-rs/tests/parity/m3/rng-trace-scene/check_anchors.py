@@ -38,7 +38,8 @@ client-e2e 两次合并而行号增长，`enable_production_monster_ai` 调用�
    （现为 `bins/game-svr/src/main.rs`——该行号锚实测已漂 6 次 `5229→5440→5488→5598→5665→5795`，
    每次都是别的车道往 main.rs 插代码把文档钉的行号推平）**不再做行号锚**：文档只引用该文件路径、
    **不得**再写 `path:<line>`（写了 ⇒ `ANCHOR_LINE_NOT_ALLOWED`），机判改为「期望符号在该文件里
-   **恰好出现一次**」——0 次 ⇒ `ANCHOR_SYMBOL_MISSING`、>1 次 ⇒ `ANCHOR_AMBIGUOUS`。
+   **恰好出现一次**」——**按匹配总次数计数**（不是「匹配行数」：同一物理行写两遍符号也算两次），
+   0 次 ⇒ `ANCHOR_SYMBOL_MISSING`、>1 次 ⇒ `ANCHOR_AMBIGUOUS`。
    收益：① 别的车道往 main.rs 插代码不再制造「合并即假 RED」的行号漂移；
    ② 宿主 AI 调用点被删 / 被复制仍 fail-closed 必红（判据不降级，只是把不稳定的行号换成稳定的唯一性）。
 
@@ -57,6 +58,7 @@ import bisect
 import os
 import re
 import sys
+import tempfile
 
 DOC_NAME = "DRIVER-CONTRACT.md"
 
@@ -84,8 +86,8 @@ KNOWN_EXTS = frozenset({
 #   why          = 这个锚点为什么承重（给 RED 输出用）
 #   basename_ok  = 允许文档用**裸 basename**（无目录）引用本锚点
 #   symbol_unique= True ⇒ **不做行号锚**（共享增长文件）：文档只写文件路径、不得带 `:line`，
-#                  机判 = `rx` 在该文件里**恰好匹配 1 行**（0 ⇒ ANCHOR_SYMBOL_MISSING，
-#                  >1 ⇒ ANCHOR_AMBIGUOUS）。见判据 8。
+#                  机判 = `rx` 在该文件里**恰好匹配 1 次**（按匹配总次数计，不是行数；
+#                  0 ⇒ ANCHOR_SYMBOL_MISSING，>1 ⇒ ANCHOR_AMBIGUOUS）。见判据 8。
 #   also         = 同一 literal 的**同行裸续引用** `:NN` 的登记表：
 #                  {line, rx, why}；未登记 ⇒ BARE_REF_UNDECLARED
 # ---------------------------------------------------------------------------
@@ -200,7 +202,9 @@ def check_doc_text(doc_text, root=REPO_ROOT, anchors=ANCHORS):
                 problems.append("ANCHOR_FILE_MISSING %s：%s 不存在" % (a["why"], a["path"]))
                 continue
             lines = _read_lines(src)
-            n = sum(1 for line in lines if re.search(a["rx"], line))
+            # 按「匹配总次数」计数（reviewer-5 F-1 收口）：旧口径 `sum(1 for line if re.search)`
+            # 数的是**匹配行数** ⇒ 同一物理行写两遍符号只计 1 次而放行（现实形状不可达，但门不该有这条缝）。
+            n = sum(len(re.findall(a["rx"], line)) for line in lines)
             if n == 0:
                 problems.append("ANCHOR_SYMBOL_MISSING %s：%s 里找不到 /%s/"
                                 % (a["why"], a["path"], a["rx"]))
@@ -383,6 +387,26 @@ def selftest():
                any("ANCHOR_SYMBOL_MISSING" in p and "check_anchors.py" in p for p in bad1d),
                "; ".join(bad1d))
 
+    # ②e 改坏必红③b（reviewer-5 F-1 收口）：期望符号在**同一物理行**出现两次（如 `spawn(); spawn();`）
+    #    也必须判 `ANCHOR_AMBIGUOUS`。旧实现按「匹配**行**数」计数会把同行两遍算 1 次 ⇒ 假绿；
+    #    新实现按「匹配总次数」计数 ⇒ 必红。（用临时源文件，跑完即删，不留痕。）
+    with tempfile.TemporaryDirectory() as td:
+        src_dir = os.path.join(td, "crates", "world", "src")
+        os.makedirs(src_dir)
+        with open(os.path.join(src_dir, "dup_same_line.rs"), "w", encoding="utf-8") as fh:
+            fh.write("spawn(); spawn();\n")
+        dup_same_line_anchor = dict(literal="crates/world/src/dup_same_line.rs",
+                                    path="crates/world/src/dup_same_line.rs",
+                                    rx=r"spawn\(\)",
+                                    why="改坏：符号在同一物理行出现两次",
+                                    symbol_unique=True)
+        bad1e = check_doc_text("（另见 `crates/world/src/dup_same_line.rs`）\n",
+                               root=td,
+                               anchors=(dup_same_line_anchor,))
+    check_case("mutation-symbol-ambiguous-same-line-red",
+               any("ANCHOR_AMBIGUOUS" in p and "dup_same_line.rs" in p for p in bad1e),
+               "; ".join(bad1e))
+
     # ③ 改坏必红②：删掉 `mongen.rs:61` 锚点行 ⇒ 必红且点名 ANCHOR_MISSING。
     missing = text.replace("`mongen.rs:61", "`mongen.rs")
     bad2 = check_doc_text(missing)
@@ -491,10 +515,10 @@ def selftest():
     if badn:
         print("SELFTEST RED: check_anchors selftest %d/%d" % (total - len(badn), total))
         return 1
-    print("SELFTEST GREEN: check_anchors selftest %d/%d（含 15 条改坏必红：符号唯一性锚写回行号 / "
-          "文件引用删除 / 符号重复 / 符号缺失 / 行号锚缺失 / 行号锚歧义 / 未登记引用 / 折叠定义回退 / "
-          "同名目录串台 / 裸续引用未登记 / 裸续内容漂移 / 未识别扩展名 / 裸续引用归属未登记 / "
-          "裸续引用归属文件缺失 / 裸续引用登记行越界）"
+    print("SELFTEST GREEN: check_anchors selftest %d/%d（含 16 条改坏必红：符号唯一性锚写回行号 / "
+          "文件引用删除 / 符号重复 / 符号同行重复 / 符号缺失 / 行号锚缺失 / 行号锚歧义 / 未登记引用 / "
+          "折叠定义回退 / 同名目录串台 / 裸续引用未登记 / 裸续内容漂移 / 未识别扩展名 / "
+          "裸续引用归属未登记 / 裸续引用归属文件缺失 / 裸续引用登记行越界）"
           % (total, total))
     return 0
 

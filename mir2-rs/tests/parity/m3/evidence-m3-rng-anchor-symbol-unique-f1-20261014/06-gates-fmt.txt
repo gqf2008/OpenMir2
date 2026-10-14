@@ -1,0 +1,2 @@
+# cargo fmt --all -- --check  （cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m3bag-target）
+# 输出为空；rc=0
