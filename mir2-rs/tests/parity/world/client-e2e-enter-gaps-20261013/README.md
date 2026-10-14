@@ -4,7 +4,7 @@
 （同一 `D:\MirClient-run\MirClinet.exe`、同一角色 `aaa`、同一 `mir2_db`）把两侧跑成逐像素同类，
 并用服务端日志证明“帧发了 / 世界有实体 / AOI 真可见”。按 §6.0-3 与项目硬约束，不单方面行为偏离；
 
-> **本目录覆盖五片（同一卡）**：
+> **本目录覆盖六片（同一卡）**：
 > ① 只读可观测性片（`7c8ac2fc3`，已合入 `f6869cb26`）：`log_enter_ability` + 周期世界/AOI 快照 + 1 条用例；
 > ② 能力帧布局片（`a602e8a94`，已合入 `636bdce53`）：**默认关闭**的 58B 冻结客户端布局开关
 > `MIR2_CLIENT_ABILITY_LAYOUT`（`record::encode_ability_client`），证据 `21`/`22`/`23`/`24`/`25`；
@@ -18,6 +18,9 @@
 >
 > ⚠ `40`/`41` 与 `capture-client-*.jsonl`、`shots/rust-client-wire-*.png` 是**真机采集件**
 > （2026-10-13 19:5x，栈 = merge c59a5e754 的 Rust 二进制），不是回填的固定件。
+> ⑥（`2026-10-14` 追补，片㊵）：**片㊴ 的 R 窗口触发前置** —— 53 只在 `HP<MaxHP` 时发出，
+> 满血进图永远覆盖不到 ⇒ 补压血 SQL（`82-…md` §2b）+ 机判 `check_healthspellchanged_trigger.py`
+> （T1 前置/T2 已发/T3 尾长，selftest 8/8，含 header-only ⇒ 改坏必红），证据 `187`/`188`/`189`。
 
 ## 结论（先看这三条）
 
@@ -1038,3 +1041,17 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   只读引用 `61-client-run-ability-layout-fix.txt`（52 的 58B 先例）、`mir2-rs/tests/parity/world/README.md`、
   冻结客户端 `/e/Users/gxh/Documents/GitHub/MirClient@c61d912d` 的
   `Source/Common/Grobal2.pas:39/3515`、`Source/MirClient/ClMain.pas:10220-10231`。
+
+## ⑥（2026-10-14 追补，片㊵）53 帧 R 窗口的触发前置 + 机判 `check_healthspellchanged_trigger.py`
+
+片㊴ 修好了 53 的**布局**，但本卡剩下的 R 窗口**缺一条必要条件**：53 只在 `HP<MaxHP` 时被体力/恢复段
+发出（`BaseObject.Base.cs:55/68/109/244` + `BaseObject.cs:974`），**满血进图永不发 53** ⇒ 窗口既证不了
+修复、也复现不了回归（既有 7 份 capture 的 `ident==53` 计数**全 0**，见 `187-…md` §2）。本片（**L 级：
+文档 + 夹具工具，零生产代码**）补：
+
+- `82-two-side-window-runbook.md` **§2b**：压血 SQL（`characters_ablity.Hp/MaxHP`，主键 `PlayerId`
+  = `characters.Id`）+ 机判命令 + 两向「改坏必红」；
+- `check_healthspellchanged_trigger.py`：T1 前置（`hp<max_hp`）/ T2（s2c 53 ≥1）/ T3（53 `body_len`
+  = `--expect-body-len`，缺省由日志 `layout=` 推：`client-58 ⇒ 12` / `oracle-40 ⇒ 0`），
+  退出码 `0/1/2`，`--selftest` 8/8（含「满血 ⇒ T1 RED」「header-only ⇒ T3 RED」两向牙）；
+- 证据：`187-healthspellchanged-trigger-precondition.md`、`188-gates.txt`、`189-boundary.txt`。

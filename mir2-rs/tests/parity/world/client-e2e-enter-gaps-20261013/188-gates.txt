@@ -1,0 +1,61 @@
+188-gates.txt —— 片㊵ 四门禁（53 帧 R 窗口触发前置 + 机判工具；零生产代码）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / openmir2-worker-11 / 2026-10-14
+cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m2svr-target；--offline；零起栈、零游戏端口（仅共享 3306）
+交付 base = refs/heads/master = 24725dfd5（本片 head 的树 = 24725dfd5 的树 + 本片净改动）
+====================================================================================================
+# 1) 四门禁
+$ cargo fmt --all -- --check
+fmt rc=0
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+clippy rc=0
+$ cargo test --workspace --offline --no-fail-fast
+101 suites · 1231 passed · 0 failed · 22 ignored · test_rc=0
+#   （与 master 基线一致：本片**零 Rust 改动** ⇒ 计数不变）
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。 · msgcodegen_rc=0
+
+# 2) 本片聚焦判据（只读工具，无 cargo 用例）
+$ python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_healthspellchanged_trigger.py --selftest
+[PASS] selftest green-client58               rc=0 (want 0)
+[PASS] selftest green-oracle40-derived       rc=0 (want 0)
+[PASS] selftest red-precondition-full-hp     rc=1 (want 1)
+[PASS] selftest red-53-absent                rc=1 (want 1)
+[PASS] selftest red-53-header-only           rc=1 (want 1)
+[PASS] selftest red-53-mixed-lens            rc=1 (want 1)
+[PASS] selftest red-min53-2                  rc=1 (want 1)
+[PASS] selftest green-explicit-0             rc=0 (want 0)
+SELFTEST OK (8/8) · rc=0
+
+# 2.1) 真机数据只读复跑（T1 前置命中；既有 capture 无 53 ⇒ T2 RED）
+$ python -I -B .../check_healthspellchanged_trigger.py \
+      --log E:/tmp/client-e2e/stack2/game-svr.out.log \
+      --capture .../capture-run-ability-after-client58.jsonl
+OK  T1 53 触发前置：1/2 条入图行 hp<max_hp（首条 hp=18<19 max_hp=19）
+RED T2 s2c 里 `53 SM_HEALTHSPELLCHANGED` 只有 0 条 < 要求 1：53 未触发/未下发
+VERDICT RED   (rc=1)
+
+# 2.2) 既有 7 份 capture 的 ident==53 计数（现场重算，全 0 ⇒ 本片要堵的洞）
+capture-client-default-oracle40.jsonl       53count=0
+capture-client-run5.jsonl                   53count=0
+capture-client-switch58.jsonl               53count=0
+capture-client-viewrange12-seed42.jsonl     53count=0
+capture-client-viewrange5-seed42.jsonl      53count=0
+capture-run-ability-after-client58.jsonl    53count=0
+capture-run-ability-before-oracle40.jsonl   53count=0
+
+# 3) 相关既有工具 selftest（防连带回归）
+$ python -I -B check_client_run_frames.py --selftest
+[PASS] selftest pair-ok                   rc=0 (want 0)
+[PASS] selftest pair-swapped-red          rc=1 (want 1)
+[PASS] selftest pair-before-has-run-red   rc=1 (want 1)
+[PASS] selftest pair-11029-changed-red    rc=1 (want 1)
+[PASS] selftest pair-missing-11029-red    rc=1 (want 1)
+[PASS] selftest pair-after-40-red         rc=1 (want 1)
+[PASS] selftest pair-minrun-4-red         rc=1 (want 1)
+SELFTEST_PAIR OK (7/7) · rc=0
+$ python -I -B check_client_s2c_frames.py --selftest
+合成 capture 含 52/752 ⇒ GREEN                    OK (rc=0, want 0)
+合成 capture 去掉 52 ⇒ RED                         OK (rc=1, want 1)
+合成 capture 序列乱序 ⇒ RED                          OK (rc=1, want 1)
+52 body_len 门：40 期望 58 ⇒ RED                   OK (rc=1, want 1)
+同屏对门：0 对 期望 1 ⇒ RED                            OK (rc=1, want 1)
+SELFTEST GREEN · rc=0
