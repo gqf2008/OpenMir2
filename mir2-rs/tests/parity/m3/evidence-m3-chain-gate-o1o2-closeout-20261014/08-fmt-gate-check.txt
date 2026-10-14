@@ -1,0 +1,4 @@
+$ python -I mir2-rs/tests/parity/m3/m3_fixture_fmt_evidence_gate.py check
+FIXTURE_FMT_EVIDENCE dirs=9
+FIXTURE_FMT_EVIDENCE GREEN（9 个证据包 / 9 件 fmt 证据非空 + 命令头 + rc）
+rc=0
