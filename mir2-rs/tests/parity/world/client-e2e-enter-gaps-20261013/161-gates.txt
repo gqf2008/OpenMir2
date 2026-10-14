@@ -1,0 +1,23 @@
+161-gates.txt —— 片㉝ 四门禁（合并树）
+m2-svr / openmir2-worker-11 / 2026-10-14
+====================================================================================================
+head = 4b358658b9e96c6dc2dfe62fdd74e9ce00194466（= 18bd78669 片㉝ + git merge origin/master；base origin/master = 41e61029e7be497f953033921a374558c314b10c）
+cwd = mir2-rs/   CARGO_TARGET_DIR = E:/tmp/m2svr-target   （--offline）
+
+$ cargo fmt --all -- --check
+rc=0（无输出 = 全绿）
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.07s
+rc=0（Finished dev profile；无 warning）
+
+$ cargo test --workspace --no-fail-fast --offline
+101 suites · 1219 passed · 0 failed · 22 ignored
+rc=0
+
+$ cargo run -q -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+说明：本片唯一代码文件 = window_handoff.py（Python 判据工具）；无 .rs/.toml/protocol/storage/src/sql/MirClient 改动，
+故 Rust 三件与 msgcodegen 不因本片变化（上面为合并树实测，不是引用旧读数）。

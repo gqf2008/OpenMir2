@@ -815,3 +815,36 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **仍未闭环（归 root 独占窗口，不因本片收卡）**：真机 ③b 两侧「攻击 + 伤害可见」读数。
 - 证据：`155-attack-observability-and-struck-broadcast.txt`、`156-redcheck-struck-broadcast.txt`、
   `157-gates.txt`、`158-boundary.txt`、`check_attack_observability.py`。
+
+### ㉝ ③ 窗口「root 实际会跑的一键脚本」口径 guard（G5 fail-closed）（2026-10-14）—— `159`/`160`
+
+- **缺口（实测、非推测）**：㉘ 把「窗口构建源」固化成了 `client-e2e-window.fixed.sh.txt`（入库替身，
+  仅 2 行 diff），但 **root 的活脚本 `/e/tmp/openmir2-watch/client-e2e-window.sh` 一直没换**
+  （sha256 `0567f89e…`，mtime 10-13 21:49）：`repo=` 仍指**共享主检出**（`E:/Users/gxh/Documents/GitHub/OpenMir2`，
+  rev 车道 worktree）、`tgt=` 仍是 **merge 车道的暖 target**（`E:\tmp\openmir2-merge-target`）。
+  而 G1 校验的是**你传给工具的 `--repo`**，不是**脚本里那两行** ⇒ 可以出现
+  「`--repo` = 专用源 ⇒ `WINDOW_READY=YES`，root 照活脚本开窗 ⇒ 构建共享主检出 / 从旧 exe 起栈」
+  的**假绿烧窗**（root verify1 的旧版式日志就是这么来的）。
+- **本片交付**（唯一代码文件 `window_handoff.py`；零 `.rs/.toml`、零起栈、零游戏端口）：
+  ① 新增纯函数 `parse_window_script`（抽脚本 `repo=`/`tgt=`，支持裸值/单双引号）与 `_norm_path`
+     （msys `/e/tmp` ↔ `E:\tmp`、大小写、尾斜杠归一）；
+  ② 新增 **G5** `window_script_findings`：活脚本 `repo=` 必须 == 本工具 `--repo`、不得指共享主检出、
+     `tgt=` 必须 == `--target-dir`；脚本**不存在** ⇒ INFO 跳过（干净检出不当 RED）；解析不到 ⇒ RED（fail-closed）；
+  ③ `run_checks`/`Report` 接入 G5（`live_script_stale` 进 JSON）；`--window-script` 默认
+     `E:/tmp/openmir2-watch/client-e2e-window.sh`，`--window-script ''` 显式关掉（向后兼容）；
+  ④ `--plan`/`--plan-only` 在 G5 RED 时额外打印「换成入库替身 `client-e2e-window.fixed.sh.txt`」修复块；
+  ⑤ `--selftest` **82 → 94/94**（+12 牙：脚本解析/路径归一 ×4、G5 匹配绿、repo 不一致红、
+     指共享主检出红、tgt 不一致红、文件缺失跳过、计划有/无修复块）。
+- **真读数**（`159`）：默认（活脚本）⇒ `RED`（点名 repo=共享主检出 + tgt=merge 暖 target）/
+  `WINDOW_READY=NO` rc=1；`--window-script ''` ⇒ 与 ㉜ 逐字节同款 `WINDOW_READY=YES` rc=0（向后兼容）；
+  `--window-script ./client-e2e-window.fixed.sh.txt` ⇒ `G5 ... 一致` / `WINDOW_READY=YES` rc=0；
+  `--plan` ⇒ 额外修复块 + `PLAN_CONFORMANCE=GREEN` / `WINDOW_READY=NO`。
+- **改坏必红（`160`，变异只在 `E:/tmp/m2svr-burst19/mut/`，仓内 sha256 前后一致）**：
+  M1 一致性比对取反（`!=`→`==`）⇒ 2 FAIL；M2 关掉「共享主检出」支 ⇒ 1 FAIL；
+  M3 整段 G5 短路 ⇒ 4 FAIL；原件 `SELFTEST OK (94/94)`。
+- 四门禁（合并树 `41e61029e` 之上）fmt 0 / clippy 0(`-D warnings`) / **101 suites · 1219 passed ·
+  0 failed · 22 ignored** / msgcodegen 604 rc=0。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：③ 的 R 级两侧同框真机对照 + 攻击/伤害可见；
+  **另请 root 开窗前把活脚本换成替身（或照改 repo=/tgt= 两行）—— 否则 G5 会判 `WINDOW_READY=NO`**。
+- 证据：`159-live-window-script-gate.txt`、`160-redcheck-live-window-script.txt`、`161-gates.txt`、
+  `162-boundary.txt`、`window_handoff.py`、`client-e2e-window.fixed.sh.txt`。
