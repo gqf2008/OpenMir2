@@ -1,0 +1,32 @@
+158-boundary.txt —— 片㉜ 边界（base = origin/master 8a49940d9；head = 本片提交）
+卡 openmir2-client-e2e-enter-gaps / m2-svr / openmir2-worker-11 / 2026-10-14
+==================================================================================
+# 1) git diff --name-status origin/master（= ㉛+㉜ 未合增量）
+M	mir2-rs/bins/game-svr/src/main.rs
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/151-cross-map-site-plan.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/152-redcheck-cross-map-site-plan.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/153-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/154-boundary.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/155-attack-observability-and-struck-broadcast.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/156-redcheck-struck-broadcast.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/157-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/158-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/82-two-side-window-runbook.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_attack_observability.py
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+
+# 2) 冻结面（必须为空）
+  src : 0 路径
+  sql : 0 路径
+  MirClient : 0 路径
+  mir2-rs/crates/protocol : 0 路径
+  mir2-rs/crates/storage : 0 路径
+  mir2-rs/tests/parity/m3 : 0 路径
+
+# 3) bins/game-svr 之外的 .rs（必须为空）
+  (空)
+
+# 4) 非 .rs/.txt/.md/.py 的改动（预期空）
+  (空)

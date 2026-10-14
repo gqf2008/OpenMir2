@@ -1,0 +1,29 @@
+157-gates.txt —— 片㉜ 四门禁 + 判据自检（合并树 8a49940d9 之上，cwd=mir2-rs，CARGO_TARGET_DIR=E:/tmp/m2svr-target）
+卡 openmir2-client-e2e-enter-gaps / m2-svr / openmir2-worker-11 / 2026-10-14
+==================================================================================
+[1] cargo fmt --all -- --check  ->  rc=0
+[2] cargo clippy --workspace --all-targets --offline -- -D warnings  ->  rc=0
+    Checking mir2-parity-tests v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity)
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.19s
+[3] cargo test --workspace --offline --no-fail-fast  ->  rc=0
+    suites=101 passed=1216 failed=0 ignored=22
+    (全绿 suite 计数：101 / 101)
+[4] cargo run -p msgcodegen --offline -- --check  ->  rc=0
+        Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s
+         Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
+    msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+==================================================================================
+[判据] check_attack_observability.py --selftest  ->  rc=0
+    事实计数逐项                                               OK (rc=0, want 0)
+    SELFTEST GREEN
+[判据] window_handoff.py --selftest  ->  rc=0
+    SELFTEST OK (82/82)
+[就绪门] window_handoff.py --repo <本 worktree> --ref HEAD --plan --best-site  ->  rc=0
+    PLAN_CONFORMANCE=GREEN
+    WINDOW_READY=YES
+    RESULT: GREEN
+    G2 判据脚本自检：8 件全过
+==================================================================================
+[构造级] cargo test -p game-svr --bin game-svr --offline combat_downlink  ->  rc=0
+    test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 208 filtered out; finished in 0.01s

@@ -4,12 +4,13 @@
 > 本手册把 ③ 收口所需的两侧对照做成**可照抄的步骤**，并显式登记唯一未证风险的环节（C# 侧抓包拓扑）。
 > **车道自身不起栈**（m2-svr 纪律）；窗口里由 root 执行。
 
-## 0. 要证的两件事（与 root 00:4x 逐条对应）
+## 0. 要证的三件事（与 root 00:4x / 卡 DoD③ 逐条对应）
 
 | # | 判据 | 期望读数 | 机判命令 |
 | --- | --- | --- | --- |
 | ③a | 该点确实无怪（两侧一致） | 两侧 `appearance_pairs == 0`；Rust 服务端 `vis==0 && af==0` | `aoi_visibility_pair.py --expect none` + `check_aoi_visibility_diag.py --expect none` |
 | ③b | 框内点 AOI 有算有下发（两侧一致） | 两侧 `appearance_pairs >= 1`；Rust 服务端 `vis>=1 && af>=2` | `aoi_visibility_pair.py --expect visible --min-pairs 1` |
+| ③b | **能攻击造成伤害**（卡 DoD③ 第三半） | 两侧 c2s `CM_HIT(3014) >= 1` 且 s2c 有 `SM_STRUCK(31)` 或 `SM_NOWDEATH(34)` | `check_attack_observability.py --left … --right … --expect any --min-hits 1` |
 
 坐标（用 `check_mongen_dense_points.py` 现场复核，别凭记忆）：
 
@@ -80,9 +81,11 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps
 python tools/capture/mir2_proxy.py --out E:/tmp/window/cliente2e/rust/proxy --map 7200=127.0.0.1:7600
 
 # 3.3 真客户端（同一 MirClinet.exe / 同一账号 mir2test / 角色 aaa）
+#     `-AttackClicks 12` = 进世界后绕角色点 12 下（点到怪 = c2s CM_HIT，覆盖 DoD③「能攻击造成伤害」；
+#     点到地 = CM_WALK）。若 12 下全未命中，可加 `-AttackRing` 自定义环。
 powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
   -Account mir2test -Password mir2pass -OutDir E:/tmp/window/cliente2e/rust/shots `
-  -WalkClicks 0 -AutoPlaySec 12 -SkipReenter -SkipLogout -SkipTalk
+  -WalkClicks 0 -AutoPlaySec 12 -AttackClicks 12 -SkipReenter -SkipLogout -SkipTalk
 
 # 3.4 解码客户端收到的 s2c 字节
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 `
@@ -99,6 +102,9 @@ python -I -B check_aoi_visibility_diag.py --log E:/tmp/window/cliente2e/rust/sta
 # 客户端：出现帧对 >= 1
 python -I -B check_client_s2c_frames.py --capture E:/tmp/window/cliente2e/rust/s2c/capture.jsonl `
   --min-appearance-pairs 1
+# 攻击/伤害（DoD③ 第三半）：c2s CM_HIT>=1 且 s2c SM_STRUCK/SM_NOWDEATH（单侧先自证 Rust）
+python -I -B check_attack_observability.py --capture E:/tmp/window/cliente2e/rust/s2c/capture.jsonl `
+  --expect any --min-hits 1
 # 截图留证（屏幕上要能看到怪）
 ```
 
@@ -180,6 +186,10 @@ python -I -B aoi_visibility_pair.py `
 python -I -B aoi_visibility_pair.py `
   --left E:/tmp/window/cliente2e/rust/s2c/capture.jsonl `
   --right E:/tmp/window/cliente2e/csharp/s2c/capture.jsonl --expect none
+# ③b 攻击/伤害（两侧都 >=1 击且都看得到伤害帧）
+python -I -B check_attack_observability.py `
+  --left E:/tmp/window/cliente2e/rust/s2c/capture.jsonl `
+  --right E:/tmp/window/cliente2e/csharp/s2c/capture.jsonl --expect any --min-hits 1
 ```
 
 工具口径：默认按**计数**判（`--min-pairs`），`--strict-recogs`（默认关）会额外要求两侧 actor 集合逐项相等
@@ -198,6 +208,13 @@ python -I -B aoi_visibility_pair.py `
 
 ## 7. 登记的风险 / 未做
 
+- **③b 攻击/伤害（片㉜）**：判据 = `check_attack_observability.py`（c2s `CM_HIT(3014)` + s2c
+  `SM_STRUCK(31)`/`SM_NOWDEATH(34)`）。生产侧同片修了 oracle 偏差：`bins/game-svr` 的
+  `drain_combat_downlink` ① 原先只把 `SM_STRUCK` 发给**受击者本人**，而 oracle
+  （`BaseObject.Attack.cs:57` → `BaseObject.Base.cs:699-705` → `BaseObject.Message.cs:383+`）
+  是 `SendRefMsg(RM_STRUCK)` **广播给受击者视野内全体 `Play`**（怪物目标也一样）⇒ 不修则真客户端
+  看不到怪掉血/伤害。**登记（未 1:1）**：oracle 该帧经受击者 `MsgQueue` 以 `LateDelivery=200ms`
+  延时投递，本实现即时发；本次不改。
 - **C# 抓包拓扑**：旧归因（端口被挪）已由 `85-…md` 订正为 S1 缺陷①（已修 + 已部署）；
   §4.0 前置门可离线机判。**但世界数据能否经代理下来仍须窗口实拍**；未实拍前不得写「两侧帧级一致」。
 - `RM_DISAPPEAR(48)` 无编码器（怪离视野无消失帧，`bins/game-svr/src/downlink.rs` 已登记）与 ③ 无因果，
