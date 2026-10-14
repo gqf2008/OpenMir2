@@ -101,6 +101,12 @@ pub struct TickRecord {
     /// ⇒ 死亡者立即退组（团长死亡 ⇒ 整组散）。事件序 = [`crate::party::PartyEvent`] 的
     /// 「立即帧 → `MsgQueue` 出队序」，由宿主（`bins/game-svr`）逐条回帧。
     pub party_events: Vec<crate::party::PartyEvent>,
+    /// **M3⑨ 主人死/幽灵自投递**：本 tick **到点投递**的自身延时消息（oracle `PlayObject.Operate`
+    /// 的 `RM_MASTERDIEMUTINY` / `RM_MASTERDIEGHOST` 支）。
+    ///
+    /// 帧面（`RefNameColor` ⇒ `RM_CHANGENAMECOLOR` / `RefShowName` ⇒ `RM_USERNAME`）不在
+    /// `crates/world` 层（见 `crate::slave` 模块头），宿主据本记录出帧或登记 `not_verified`。
+    pub slave_self_deliveries: Vec<crate::slave::SelfDelayOutcome>,
 }
 
 pub struct World {
@@ -175,6 +181,23 @@ pub struct World {
     /// `SlaveExpLevel < 5` ⇒ `MasterRoyaltyTick = 0`（立即叛变）。归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）。
     /// 缺省 `0`（= 无窗口）⇒ 既有 golden 路径一字不改。
     pub spirit_mutiny_tick: i64,
+    /// **M3⑨ 主人死/幽灵自投递（卡 `openmir2-m3-pet-slave-masterdie-wire`）**：是否在
+    /// [`World::tick`] 里驱动「自身延时消息」队列（oracle `BaseObject.MsgQueue` +
+    /// `BaseObject.SendSelfDelayMsg`）。
+    ///
+    /// **缺省 `false`**：合成 golden 场景不含 oracle 的玩家 `Run()` 消息段；生产宿主
+    /// （`bins/game-svr` 的 sim 循环）起世界时用 [`World::enable_slave_self_delay`] 打开。
+    /// 关闭时 `settle_deaths` 不入队、`tick` 不投递 ⇒ 既有对拍逐字节不变。
+    slave_self_delay_enabled: bool,
+    /// 自身延时消息队列（oracle `BaseObject.MsgQueue` 的延时子集，**插入序**）。
+    ///
+    /// oracle 的完整 `MsgQueue` 是「优先级 + 插入序」的优先队列（`SendSelfDelayMsg` 一律
+    /// `MessagePriority.Lowest`）；本骨架只承载这一族自投递（`RM_MASTERDIEMUTINY` /
+    /// `RM_MASTERDIEGHOST`）⇒ 按插入序扫描（登记：多产者/其他优先级的交织未建模）。
+    pub self_delay_msgs: Vec<crate::slave::SelfDelayMsg>,
+    /// `Server.conf` 的宝宝配置（`ProcessSlaveMutiny` 的 `Config.MasterDieMutiny*` 输入）；
+    /// 由宿主 [`World::enable_slave_self_delay`] 灌入。缺省 = [`PetSlaveConfig::default`]。
+    pub pet_slave_cfg: mir2_data::pet_slave::PetSlaveConfig,
     /// 帧内待处理命令（FIFO）
     pending: VecDeque<Command>,
     /// 判据③：tick 必须始终跑在同一个线程上
@@ -232,6 +255,9 @@ impl World {
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
             map_exp_rate: vec![None; maps_len],
             spirit_mutiny_tick: 0,
+            slave_self_delay_enabled: false,
+            self_delay_msgs: Vec::new(),
+            pet_slave_cfg: mir2_data::pet_slave::PetSlaveConfig::default(),
             pending: VecDeque::new(),
             owner_thread: None,
             clock_runner,
@@ -307,6 +333,24 @@ impl World {
     #[must_use]
     pub fn merchant_tick_enabled(&self) -> bool {
         self.merchant_enabled
+    }
+
+    /// **M3⑨ 主人死/幽灵自投递**（卡 `openmir2-m3-pet-slave-masterdie-wire`）：开启
+    /// 「自身延时消息」驱动并灌入宝宝配置。
+    ///
+    /// 生产宿主（`bins/game-svr` 的 sim 循环）在起世界时用 `Server.conf` 的
+    /// [`mir2_data::pet_slave::PetSlaveConfig`] 调一次（oracle `SystemShare.Config.MasterDieMutiny*`）。
+    /// 缺省关闭（见 `World` 的 `slave_self_delay_enabled` 字段说明）⇒ 合成 golden 场景逐字节不变。
+    /// 幂等：重复调用只覆盖配置。
+    pub fn enable_slave_self_delay(&mut self, cfg: mir2_data::pet_slave::PetSlaveConfig) {
+        self.pet_slave_cfg = cfg;
+        self.slave_self_delay_enabled = true;
+    }
+
+    /// 自身延时消息驱动是否开启（自证/测试用）。
+    #[must_use]
+    pub fn slave_self_delay_enabled(&self) -> bool {
+        self.slave_self_delay_enabled
     }
 
     /// 设置某张地图的 `Envir.Flag.boEXPRATE`/`ExpRate`（see [`World::map_exp_rate`]）。
@@ -434,6 +478,7 @@ impl World {
             merchant_space_moves: Vec::new(),
             merchant_removed: Vec::new(),
             party_events: Vec::new(),
+            slave_self_deliveries: Vec::new(),
         };
 
         // 命令 FIFO
@@ -516,6 +561,15 @@ impl World {
         // 死亡结算（C# 在实体下一次 `Run()` 里发现 `HP == 0` 才 `Die()`；
         // 这里同一 tick 内先跑命令、再统一结算死亡，语义等价且顺序确定）
         self.settle_deaths(&mut record);
+
+        // **M3⑨ 主人死/幽灵自投递**（卡 `openmir2-m3-pet-slave-masterdie-wire`）：oracle
+        // `PlayObject.Run()`（`PlayObject.Message.cs:360-364`）在 `base.Run()`（`:765`）之前
+        // 先跑 `while (GetMessage(GetMessageTick, ...)) Operate(...)` 消息段 ⇒ 自投递的
+        // `ProcessSlaveMutiny` / `ProcessSlaveGhost`（`PlayObject.Message.cs:2116-2121`）
+        // **先于** `BaseObject.Run` 的宝宝清表（`BaseObject.Base.cs:208-217`）。同序放置。
+        if self.slave_self_delay_enabled {
+            record.slave_self_deliveries = self.deliver_self_delay_msgs();
+        }
 
         // **M3⑨-实现 3**：`BaseObject.Run` 的宝宝列表清理（`BaseObject.Base.cs:208-217`）。
         // oracle 里这跑在每个主人（玩家）自己的 `Run()` 里；本骨架玩家无 `Run` ⇒ 在死亡结算后
@@ -966,8 +1020,14 @@ impl World {
             let Some(e) = self.entities.get(id) else {
                 continue;
             };
-            let (_map_id, gold, mon_exp, exp_hitter, group_owner) =
-                (e.map_id, e.gold, e.mon_exp, e.exp_hitter, e.group_owner);
+            let (_map_id, gold, mon_exp, exp_hitter, group_owner, is_play) = (
+                e.map_id,
+                e.gold,
+                e.mon_exp,
+                e.exp_hitter,
+                e.group_owner,
+                e.race == crate::entity::ACTOR_RACE_PLAY,
+            );
             // 死亡标记（C# `Die()` 的 `Death = true`）
             if let Some(e) = self.entities.get_mut(id) {
                 e.death = true;
@@ -1030,6 +1090,14 @@ impl World {
                 }
             }
             record.deaths.push((id, placed, gold, exp_hitter, gained));
+            // **M3⑨ 主人死/幽灵自投递**：oracle `PlayObject.Die()` 尾
+            // （`src/M2Server/Player/PlayObject.cs:1993-1996`）在 `base.Die()`（掉落）**之后**
+            // `SendSelfDelayMsg(RM_MASTERDIEMUTINY, 0,0,0,0,"",1000)`（玩家 `Race == Play` 的
+            // `Die()` override；怪物走 `BaseObject.Die()` 不发）。1s 后由本 tick 的自投递段
+            // 触发 `ProcessSlaveMutiny`。
+            if is_play && self.slave_self_delay_enabled {
+                self.send_master_die_mutiny(id);
+            }
         }
     }
 

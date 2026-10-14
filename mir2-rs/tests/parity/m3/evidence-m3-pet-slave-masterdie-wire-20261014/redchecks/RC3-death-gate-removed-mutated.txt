@@ -1,0 +1,27 @@
+# mutation: RC3  (test: slave::tests::process_slave_mutiny_early_return)
+# mutated file git hash-object: 034cafd08dfd98fe14c7f12f2955f4baf6e90a51  (pristine: 7cdab58ba8112f3e93b611986fa39d7a375451d8)
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.93s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test slave::tests::process_slave_mutiny_early_return ... FAILED
+
+failures:
+
+---- slave::tests::process_slave_mutiny_early_return stdout ----
+
+thread 'slave::tests::process_slave_mutiny_early_return' (32604) panicked at crates\world\src\slave.rs:1974:9:
+assertion `left == right` failed
+  left: 0
+ right: 100
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    slave::tests::process_slave_mutiny_early_return
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 212 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
+# cargo rc=101  (expect 101 = RED)

@@ -1,0 +1,35 @@
+# M3⑨ masterdie-wire 复现命令（隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target，--offline）
+
+# 0) 开工（自己的 worktree；绝不碰共享主检出 E:/Users/gxh/Documents/GitHub/OpenMir2）
+git fetch origin
+git fetch walgit
+git merge --no-edit origin/master          # 67898a834 -> d90d69872（clean upstream 合并，供 patch base 用）
+git commit -m "feat(m3-pet-slave-masterdie-wire): ..."   # a6359cd78（实现）
+
+# 1) 四门禁（gates/）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo fmt --all -- --check                            # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo clippy --workspace --all-targets --offline -- -D warnings   # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test --workspace --no-fail-fast --offline       # 101 suites 1216 passed 0 failed 22 ignored rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo run -p msgcodegen --offline -- --check          # 604 条 rc=0
+
+# 2) 聚焦判据
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p mir2-world --lib slave:: --offline      # 45 passed 0 failed rc=0
+
+# 3) 改坏必红（redchecks/，逐条：改 -> 跑 -> 还原 -> 重跑；变异脚本 E:/tmp/m3hp-t54-redcheck/mutate.py）
+#    RC1  MASTER_DIE_SELF_DELAY_MS: 1000 -> 0
+#    RC2  process_slave_mutiny 的 slave_ids.iter().rev() -> slave_ids.iter()
+#    RC3  process_slave_mutiny 的 `if !master.death || !cfg.master_die_mutiny` -> `if !cfg.master_die_mutiny`
+#    RC4  send_self_delay_msg 删去 `if ghost { return; }`
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p mir2-world --lib slave::tests::master_die_self_delays_1000ms_then_mutinies_in_reverse --offline
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p mir2-world --lib slave::tests::process_slave_mutiny_early_return --offline
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p mir2-world --lib slave::tests::master_die_ghost_self_delay_is_blocked_by_ghost_gate --offline
+git checkout -- crates/world/src/slave.rs
+
+# 4) 边界（base = refs/heads/master = walgit/master = f0a9ab911）
+git diff --name-only f0a9ab911 <head> -- src sql MirClient                                   # 空
+git diff --name-only f0a9ab911 <head> -- mir2-rs/crates/protocol mir2-rs/crates/storage       # 空
+git diff --stat     f0a9ab911 <head>
+
+# 5) 证据清单自检（仓库 LF / git-blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py verify  mir2-rs/tests/parity/m3/evidence-m3-pet-slave-masterdie-wire-20261014 --check-extra
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-pet-slave-masterdie-wire-20261014

@@ -1,0 +1,51 @@
+M3⑨ masterdie-wire（主人死/幽灵 1s 自投递驱动）oracle 锚
+=========================================================
+卡：openmir2-m3-pet-slave-masterdie-wire
+作者：openmir2-worker-20（worktree m3hp）
+oracle 根：E:/Users/gxh/Documents/GitHub/OpenMir2（只读，未改一行）
+
+## A. 触发点（发消息）
+
+| 锚 | 内容 |
+| --- | --- |
+| src/M2Server/Player/PlayObject.cs:1995-1996 | `Die()` 尾：`base.Die();` → `SendSelfDelayMsg(Messages.RM_MASTERDIEMUTINY, 0, 0, 0, 0, "", 1000);`（玩家 `Die()` override，怪物走 `BaseObject.Die()` 不发） |
+| src/M2Server/Player/PlayObject.cs:1999-2005 | `KickException()` 覆盖：置 HomeMap/HomeX/HomeY + `BoEmergencyClose=true` → 同一条 `RM_MASTERDIEMUTINY` 1000ms |
+| src/M2Server/Player/PlayObject.cs:3422-3528 | `MakeGhost()` override：`base.MakeGhost();`（:3524）→ `if (Ghost) SendSelfDelayMsg(RM_MASTERDIEGHOST, …, 1000)`（:3525-3527） |
+| src/M2Server/Actor/BaseObject.Base.cs:484-497 | `MakeGhost()`：`CanReAlive ⇒ Invisible=true` else `Ghost=true`；`GhostTick=now`；`DisappearA()`。玩家 `CanReAlive` 缺省 false ⇒ `Ghost=true` |
+
+## B. 自投递队列 / 到点门（BaseObject.MsgQueue）
+
+| 锚 | 内容 |
+| --- | --- |
+| src/M2Server/Actor/BaseObject.Message.cs:188-206 | `SendSelfDelayMsg`：**首行 `if (!Ghost)`**；`DeliveryTime = HUtil32.GetTickCount() + dwDelay`；`LateDelivery=true`；`MsgQueue.Enqueue(msg, (byte)MessagePriority.Lowest)` |
+| src/M2Server/Actor/BaseObject.Message.cs:334-352 | `GetMessage(now)`：出队后若 `DeliveryTime > 0 && now < DeliveryTime` ⇒ 重新入队 Lowest 并 `return false`；否则投递 ⇒ **到点门 = `now >= DeliveryTime`** |
+| src/OpenMir2/Messages.cs:836 / :840 | `RM_MASTERDIEMUTINY = 60003` / `RM_MASTERDIEGHOST = 60004` |
+
+## C. 投递效果体（Operate → ProcessSlave*）
+
+| 锚 | 内容 |
+| --- | --- |
+| src/M2Server/Player/PlayObject.Message.cs:2116-2121 | `case RM_MASTERDIEMUTINY: ProcessSlaveMutiny(); break;` / `case RM_MASTERDIEGHOST: ProcessSlaveGhost(); break;` |
+| src/M2Server/Player/PlayObject.Base.cs:331-357 | `ProcessSlaveMutiny`：`!Death` 早退；`!Config.MasterDieMutiny` 早退；**`for (i = SlaveList.Count-1; i>=0; i--)`（倒序）**；`SlaveList[i].Master.LastHiter != null && Random(MasterDieMutinyRate)==0` ⇒ `Master=null` / `SlaveExpLevel=SlaveColor.Length` / `RecalcAbilitys` / `WAbil.DC=(ushort)MakeLong((short)(LoByte(DC)*Power),(short)(HiByte(DC)*Power))` / `WalkSpeed /= MasterDieMutinySpeed` / `RefNameColor()` / `RefShowName()`；else ⇒ `WAbil.HP = 0` |
+| src/M2Server/Player/PlayObject.Base.cs:361-369 | `ProcessSlaveGhost`：`!Ghost` 早退；倒序 `SlaveList[i].MakeGhost()` |
+
+## D. tick 内次序
+
+| 锚 | 内容 |
+| --- | --- |
+| src/M2Server/Player/PlayObject.Message.cs:360-364 | `PlayObject.Run()` 消息段：`while (... && GetMessage(GetMessageTick, ref processMsg)) { ... Operate(processMsg) ... }` |
+| src/M2Server/Player/PlayObject.Message.cs:765 | 同一 `Run()` 里 `base.Run()` ⇒ 消息段（含 `ProcessSlaveMutiny`）**先于**清表 |
+| src/M2Server/Actor/BaseObject.Base.cs:208-217 | `BaseObject.Run` 尾「清除宝宝列表中已经死亡及叛变的宝宝信息」⇒ 清掉 `Death || Ghost || Master != this` |
+| src/M2Server/Actor/BaseObject.Base.cs:80-83 | `if (WAbil.HP == 0) Die();`（玩家死亡进入 `PlayObject.Die()` 的时机） |
+
+## E. 配置 + Rust 现状锚
+
+| 锚 | 内容 |
+| --- | --- |
+| src/Modules/SystemModule/Conf/ServerConf.cs:518-521 | `[Setup] MasterDieMutiny`（缺省 false）/ `MasterDieMutinyRate`(5) / `MasterDieMutinyPower`(10) / **`MasterDieMutinySpeed`（:521 错读 `MasterDieMutinyPower` 键 = B-113）** |
+| mir2-rs/crates/data/src/pet_slave.rs:133-141 | Rust 侧 `master_die_mutiny*` 同源（含 B-113 错读键登记） |
+| mir2-rs/crates/world/src/slave.rs:910/956 | 效果体 `process_slave_mutiny` / `process_slave_ghost`（本片不动） |
+| mir2-rs/crates/world/src/slave.rs:44-46（改前）| 登记「自投递队列缺失」——本片就地更新为「队列本体 + 主人死触发点已落，帧面归宿主」 |
+| mir2-rs/crates/world/src/world.rs::settle_deaths | 死亡置位点（`e.death = true` 处），玩家 `Race == ACTOR_RACE_PLAY` |
+| mir2-rs/crates/protocol/src/messages.rs:577/579 | `RM_MASTERDIEMUTINY = 60003` / `RM_MASTERDIEGHOST = 60004`（本层不依赖 protocol，slave.rs 以同名常量登记同源） |
+| src/M2Server/Player/PlayObject.cs:3292 | `KickException()` 的调用点（断线/异常关闭面）——本片**未**接线，登记见 02-change-summary §未做 |
