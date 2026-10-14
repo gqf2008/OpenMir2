@@ -1,27 +1,36 @@
-# base(origin/master)=f0a9ab911ddc84846b69f0a3541390e81dba977a  head=本返工提交（见 patch 条目）
-# cmd: git diff --name-only f0a9ab911ddc84846b69f0a3541390e81dba977a HEAD -- src sql MirClient
-# (以上为空 = 边界 OK)
+# 边界（冻结面）：base(origin/master)=f0a9ab911ddc84846b69f0a3541390e81dba977a  code_head=c5625c1af
+# 说明：证据文件不能自指其所在提交的 oid。本文件钉的是**最后一个含代码/whitelist 的提交** code_head；
+#       其后的证据订正提交（含本文件）只改本证据目录，故非证据 delta 已由 code_head 完整覆盖（见下 name-status）。
+#       被审 head = 远端分支 refs/heads/worktree-m3-party-gotolabel-ext 的 tip（见 patch 条目）。
 
-# cmd: git diff --stat f0a9ab911ddc84846b69f0a3541390e81dba977a HEAD -- . :!mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014
- mir2-rs/SHA256SUMS.txt                      |   1 +
+## git diff --name-only f0a9ab911ddc84846b69f0a3541390e81dba977a c5625c1af -- src sql MirClient
+# (以上为空 = 未触碰 oracle/表结构/客户端)
+
+## 全量改动清单（git diff --name-status f0a9ab911ddc84846b69f0a3541390e81dba977a c5625c1af）
+M	mir2-rs/bins/game-svr/src/main.rs
+M	mir2-rs/bins/game-svr/src/party.rs
+M	mir2-rs/bins/game-svr/src/record.rs
+M	mir2-rs/crates/world/src/party.rs
+M	mir2-rs/crates/world/tests/party_vectors.rs
+A	mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014/00-commands.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014/01-oracle-anchors.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014/02-rust-status-greps.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014/03-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014/04-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014/05-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014/06-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014/07-mutations-red.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014/08-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014/09-whitelist-t55-renumber.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/whitelist.md
+
+## git diff --stat f0a9ab911ddc84846b69f0a3541390e81dba977a c5625c1af（排除本证据目录，避免行数自指）
  mir2-rs/bins/game-svr/src/main.rs           | 338 +++++++++++++++++++++++++++-
  mir2-rs/bins/game-svr/src/party.rs          |  57 +++--
  mir2-rs/bins/game-svr/src/record.rs         |   6 +-
  mir2-rs/crates/world/src/party.rs           |  71 +++++-
  mir2-rs/crates/world/tests/party_vectors.rs |  40 +++-
- mir2-rs/tests/parity/whitelist.md           |   3 +-
- 7 files changed, 479 insertions(+), 37 deletions(-)
-
-# cmd: git diff --stat f0a9ab911ddc84846b69f0a3541390e81dba977a HEAD -- mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014
- .../00-commands.txt                                |   23 +
- .../01-oracle-anchors.txt                          |   45 +
- .../02-rust-status-greps.txt                       |   46 +
- .../03-gate-fmt.txt                                |    1 +
- .../04-gate-clippy.txt                             |    2 +
- .../05-gate-test.txt                               | 1852 ++++++++++++++++++++
- .../06-gate-msgcodegen.txt                         |    4 +
- .../07-mutations-red.txt                           |   25 +
- .../08-boundary.txt                                |   12 +
- .../README.md                                      |   56 +
- .../SHA256SUMS.txt                                 |   10 +
- 11 files changed, 2076 insertions(+)
+ mir2-rs/tests/parity/whitelist.md           |   5 +-
+ 6 files changed, 480 insertions(+), 37 deletions(-)
