@@ -1,0 +1,30 @@
+## 边界（base = origin/master f0a9ab911ddc84846b69f0a3541390e81dba977a；head = 5ccaee2f178ce9cd42a4fedaf7add25e531052c7）
+
+`git diff --name-only f0a9ab911 5ccaee2f1`（19 路径）：
+
+  M/A  mir2-rs/tests/parity/m3/drop-exp/README.md
+  M/A  mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py
+  M/A  mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014/00-commands.txt
+  M/A  mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014/01-change-summary.txt
+  M/A  mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014/02-selftest.txt
+  M/A  mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014/03-mut-real-table-red.txt
+  M/A  mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014/04-oracle-ref-audit.txt
+  M/A  mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014/05-chain-registration.txt
+  M/A  mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014/06-gates-fmt.txt
+  M/A  mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014/07-gates-clippy.txt
+  M/A  mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014/08-gates-test.txt
+  M/A  mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014/09-gates-msgcodegen.txt
+  M/A  mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014/11-rng-runner-selfcheck.txt
+  M/A  mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014/12-dropexp-runner-selfcheck.txt
+  M/A  mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014/README.md
+  M/A  mir2-rs/tests/parity/m3/fixture_chain_gate.py
+  M/A  mir2-rs/tests/parity/m3/rng-trace-probe/rng_consumer_groups.py
+  M/A  mir2-rs/tests/parity/m3/rng-trace-scene/DRIVER-CONTRACT.md
+  M/A  mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+
+- 冻结面 `src/` / `sql/` / `MirClient/` / `mir2-rs/crates/protocol/` / `mir2-rs/crates/storage/` / `mir2-rs/bins/` 零改动；
+- `*.rs = 0`（本片纯口径/文档/证据）；
+- 未手工改写已推送历史；未 merge 被审以外的分支；`sessions/csharp-*` 无关残留未入交付。
+- 交付 tail（**纯证据**，在声明 head 之后）：`10-boundary.txt`、`13-evidence-head.txt`、`SHA256SUMS.txt`。
+
+> `head = 5ccaee2f178ce9cd42a4fedaf7add25e531052c7`（合并 origin/master f0a9ab911ddc84846b69f0a3541390e81dba977a 后的聚合 head；本包由紧随其后的一条**纯证据**提交交付，故声明 head 是交付 head 的祖先）。

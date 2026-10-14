@@ -20,7 +20,7 @@
 4. **fail-closed**：缺文件 / 缺字段 / 非法 JSON / k 不连续 ⇒ 非零退出并点名（`PREREQ_RED`）。
 5. **改坏必红**：改掉落项名 / 金币 / 经验 / 掉落条数 / 记录条数 / 高 32 位，逐个必须判红。
 6. **场景纯度（whitelist T-35，owner comment `c78bd13f`）**：除被测量路径（1 只 pin 怪 + 击杀→掉落/经验取数）外 **RNG 消费者数 = 0**，由 `drop_exp_purity_gate.py` 按**实测抽数流水**证明（逐消费者清单 + 计数）；**墙钟消费者必须压到 0**（本夹具取 (a) pin 抑制）；**认不出 / 缺 site / 未分类 ⇒ 点名 RED，拒比**。
-7. **消费者表锚点保鲜（本片新增）**：`drop_exp_consumers.tsv` 的 `oracle_ref` 是站点归因的**唯一人复核入口**，必须 fail-closed 保鲜：① 存在性 + 行号范围；② **C# 行的 ref 必须落在其 `pattern` 点名的 `Class.Method` 方法体内**（只查存在/范围抓不到「行号在文件里但方法不对」）。真身缺陷：`RegenMonsters` 行的 ref 曾写 `WorldServer.MonGen.cs:238`，该行实际落在 `ProcessMonsters` 里。
+7. **消费者表锚点保鲜（本片新增）**：`drop_exp_consumers.tsv` 的 `oracle_ref` 是站点归因的**唯一人复核入口**，必须 fail-closed 保鲜：① 存在性 + 行号范围；② **C# 行的 ref 必须落在其 `pattern` 点名的 `Class.Method` 方法体内**（只查存在/范围抓不到「行号在文件里但方法不对」）。真身缺陷：`RegenMonsters` 行的 ref 曾写 `WorldServer.MonGen.cs:238`，该行实际落在 `ProcessMonsters` 里。③ **2026-10-14 收口 O-1**（reviewer-5 `f7318e59`）：方法体识别只认真**声明**——旧口径把 `if (_Attack(...)) { … }` 这类**调用点块**误当方法体（伪 range `(13,17)`）⇒ 潜在假负通道；正则族名（`UpgradeRandom\w+`）按字面前缀 `UpgradeRandom\w*(` 匹配。
 
 ## 文件
 
@@ -38,7 +38,7 @@
 # 判据本体自检（fail-closed + 改坏必红）：期望 SELFTEST ok=12/12 rc=0
 python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_diff.py selftest
 
-# 纯度门自检（fail-closed + 改坏必红 + 真表承重 + oracle_ref 保鲜）：期望 SELFTEST ok=28/28 rc=0
+# 纯度门自检（fail-closed + 改坏必红 + 真表承重 + oracle_ref 保鲜）：期望 SELFTEST ok=32/32 rc=0
 python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py selftest
 
 # 无栈自检：比较器 + 纯度门 + LF 写出 + 零端口 + no-Go fail-closed + DoD② run_pair/BotSrv DropExp 透传 + BotSrv 生产函数 selftest；期望 SELFTEST ok=20/20 rc=0
@@ -94,7 +94,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/drop
 > **仍未接线的依赖**：「0137 上运行时 pin 出单只固定怪」（C# 侧 GM/脚本 spawn + Rust 宿主 AI 模式开关），归 shared 承接卡
 > `openmir2-m3-rng-scene-driver`（规格见 [`rng-trace-scene/DRIVER-CONTRACT.md`](../rng-trace-scene/DRIVER-CONTRACT.md) §7，与 ④ 同批窗口）；
 > 单只怪未落地时 `run_pair` 的 DropExp 分支会在「0 杀 < -DropExpKills」处 RED（fail-closed，不符就是不符）。
-> 纯度门（T-35）**离线已就绪**（门 selftest 28/28、无栈自检 19/19）；`drop_exp_consumers.tsv` 的
+> 纯度门（T-35）**离线已就绪**（门 selftest 32/32、无栈自检 19/19）；`drop_exp_consumers.tsv` 的
 > **两侧实测站点行**已按 oracle 源码 + 真机实测（C# 掉落/构造/墙钟 + `rng-isolate-attack/attack_sites.tsv` 的
 > 两侧攻击路径）与 ④-D（master `4521d451`）Rust 实现文件级锚补入：Rust 侧不再判 `PREREQ`，`measured`
 > （drop/kill）/`setup`（spawn/构造）/`wallclock`（monai/merchant）各类都有站点行；`max` 未实测者留 `*`，

@@ -1,0 +1,107 @@
+143-monster-appearance-pairs-decoded.txt —— 卡 `openmir2-client-e2e-enter-gaps` 缺口③ root 2026-10-14 00:4x
+②「打印可见集大小与下发帧数（**怪物**出现帧数）」的机器判据与读数
+m2-svr / openmir2-worker-11 / 2026-10-14（片㉙；本片零起栈、零游戏端口、零生产代码改动）
+====================================================================================================
+一句话：把已入库的**真机客户端抓包**（`capture-client-viewrange12-seed42.jsonl`）里 13 对
+`10 SM_TURN`+`41 SM_FEATURECHANGED` 的 `SM_TURN` **帧体**解出来 ⇒ **13 个 actor 全是怪**：
+**10 只「稻草人」+ 3 只「鹿」**（`ShowName/Color` = `稻草人/255` / `鹿/255`），
+**可见集大小 = 13，下发帧数 = 26**（13×SM_TURN + 13×SM_FEATURECHANGED），无一是玩家。
+⇒ ④「AOI 可见集未算/未下发」**不成立**，且这次把「怪」从**计数**升级为**按 actor 名解出**的证据。
+唯一剩余仍是 root 独占窗口的 R 级「两侧同框」对照（本片不改判据、不据此收卡）。
+
+0. 为什么需要本片（此前判据数不出「怪」）
+====================================================================================================
+`check_client_s2c_frames.py --min-appearance-pairs` 只数 `10`+`41` 的**对数**：玩家与怪物的出现帧
+在计数上不可区分。root ② 问的是**怪物**出现帧数 ⇒ 必须解 `SM_TURN` 帧体（出现帧名尾 = `ShowName`）。
+本片新增 `check_appearance_pairs.py` 做这件事，并给出可机判的 `--expect-names` 直方图门。
+
+A. 命令与原始读数
+====================================================================================================
+```
+$ python -I -B check_appearance_pairs.py --selftest                      # 5/5
+合成 2 稻草人 + 1 鹿 ⇒ 计数/直方图 GREEN        OK
+期望名写错（鹿=2）⇒ RED                          OK
+--min-pairs 4 ⇒ RED                              OK
+缺 41 帧 ⇒ 对数 0 ⇒ RED                          OK
+解码密钥错(SEED=0xAD) ⇒ RED                       OK
+SELFTEST GREEN
+rc=0
+```
+```
+$ python -I -B check_appearance_pairs.py --capture capture-client-viewrange12-seed42.jsonl \
+    --min-pairs 13 --min-actors 13 --expect-names "稻草人=10,鹿=3"
+capture=capture-client-viewrange12-seed42.jsonl
+  appearance_pairs=13 actors=13 frames=26
+  names={"稻草人": 10, "鹿": 3}
+  actor=0x00000146 (279,621) feature=0x00a1000b raceImg=11 name=鹿/255
+  actor=0x0000012c (288,610) feature=0x00a1000b raceImg=11 name=鹿/255
+  actor=0x00000128 (289,621) feature=0x00a1000b raceImg=11 name=鹿/255
+  actor=0x00000316 (275,620) feature=0x001b0012 raceImg=18 name=稻草人/255
+  actor=0x00000303 (276,616) feature=0x001b0012 raceImg=18 name=稻草人/255
+  actor=0x00000314 (276,619) feature=0x001b0012 raceImg=18 name=稻草人/255
+  actor=0x00000322 (287,609) feature=0x001b0012 raceImg=18 name=稻草人/255
+  actor=0x00000309 (291,611) feature=0x001b0012 raceImg=18 name=稻草人/255
+  actor=0x00000318 (291,620) feature=0x001b0012 raceImg=18 name=稻草人/255
+  actor=0x0000032a (294,611) feature=0x001b0012 raceImg=18 name=稻草人/255
+  actor=0x0000030f (299,608) feature=0x001b0012 raceImg=18 name=稻草人/255
+  actor=0x00000382 (292,614) feature=0x001b0012 raceImg=18 name=稻草人/255
+  actor=0x00000332 (300,616) feature=0x001b0012 raceImg=18 name=稻草人/255
+RESULT: GREEN
+rc=0
+```
+同一判据跑其余已入库 capture（口径一致性；不新增判据，只列读数）：
+
+| capture | 出现帧对 | actor | 帧数 | ShowName 直方图 |
+|---|---|---|---|---|
+| `capture-client-viewrange12-seed42.jsonl`（片⑦ after，本片主证） | 13 | 13 | 26 | 稻草人 10 / 鹿 3 |
+| `capture-client-default-oracle40.jsonl`（片⑤ RunA） | 12 | 12 | 24 | 稻草人 8 / 鹿 4 |
+| `capture-client-viewrange5-seed42.jsonl`（窗口 5 对照） | 2 | 2 | 4 | 稻草人 1 / 鹿 1 |
+| `capture-client-switch58.jsonl` | 1 | 1 | 2 | 稻草人 1 |
+
+* 4 份 capture 解出的 actor 名**全是怪名**（稻草人/鹿），**无一是角色的登录名**（本真机 run 的角色是 `aaa`）；
+  `capture-client-viewrange12-seed42.jsonl` 的 `50 SM_LOGON` 头 = `Param=287 / Tag=620` ⇒ 角色**进图点**在 **(287,620)**
+  （该点在生成框内，E=5.617）。注意上表 actor 坐标是**出现帧下发瞬间** `SM_TURN` 的 `Param/Tag`，
+  而本 run 带 autoplay（角色会走动）⇒ **逐帧几何不等于进图点几何**；本判据的口径是**客户端实收的出现帧**
+  （不是几何预测），故不以「相对进图点的 Chebyshev」作断言。
+
+B. 口径（不解自造；脚本内联协议层同一算法）
+====================================================================================================
+* `SM_TURN`(10) 体布局 = `BodyLayout::StructThenRest { struct_len: 8 }`（`crates/protocol/src/frame.rs::body_layout`）：
+  头 16 字符 → 12B 命令头；体 = `Encode(8B CharDesc)` ++ `Encode(ShowName/Color)`（`smframe.rs::sm_turn`；
+  两段各自编码后**直接相接**，故必须**按段长**解码）。
+* 出现帧路径 = `downlink::turn_pair`（`PlayObject.cs:3240` 出现支）：`RM_TURN` 带非空 `Msg=GetShowName()`
+  ⇒ `PlayObject.Message.cs:1549-1555` 追加 `Encode($"{Msg}/{Color}")` 名尾；紧接 `SM_FEATURECHANGED`(41)。
+  ⇒ 名尾就是 actor 的 `ShowName`，这是把「怪」与「玩家」分开的**唯一在帧内的判据**。
+* 帧体解码用 `crates/protocol/src/edcode.rs`（逐字节移植自 `src/OpenMir2/EncryptUtil.cs` / Delphi `EDcode.pas`）
+  的 `decode`；本脚本**内联同一算法**（不 import 生产 crate），故证据在干净检出可 `python -I -B` 复算（无 cargo）。
+* `Feature` 位域仅作**核对输入**打印（`feature.rs`：怪物 `MakeMonsterFeature` = `[raceImg:8][weapon:8][appr:16]`）：
+  稻草人 `0x001b0012`（raceImg=18, appr=27）、鹿 `0x00a1000b`（raceImg=11, appr=161）；**分类不以位域断言**，
+  以解出的 `ShowName` 直方图机判（`--expect-names`）。
+
+C. ③a / ③b / ④ 的判定（与 105/108/115 同口径，本片补的是 B 段的 actor 解出）
+====================================================================================================
+* **③a（该点确实无怪）成立**：root verify1 的 (291,666)/(291,651) 在 map 0 全部 76 个生成框之外
+  （最近框 Chebyshev=30/29 > `ViewRange=12`）⇒ 窗口内**期望出生怪 E=0.000**；真机 `vis=0` 是**正确行为**。
+  命令：`check_mongen_dense_points.py … --point "291,666" --max-expected 0` ⇒ `E=0.000` / GREEN（见 145 §mongen）。
+* **③b（框内点 AOI 有算有下发）成立**：真机客户端在 (287,620)（进图点，E=5.617）实收 **13 对怪出现帧**
+  （本片解出 10 稻草人 + 3 鹿）；同批次截图见 `shots/rust-monsters-visible-256-584.png`
+  （HUD 坐标 `比奇省 256: 584`，画面上可见两只带血条的怪 ⇒ 屏幕级也见怪）。
+* **④（AOI 未算/未下发）不成立**：上面 13 对 / 26 帧就是 `drain_aoi_downlink` 的实发出现帧
+  （服务端读数 `af=` 见 105 §D；旧 verify1 无该字段是因为二进制早于诊断片 `d16b5199d`）。
+
+D. 为什么这已足够回答 root ②，而「两侧同框」仍是窗口项
+====================================================================================================
+* root ② 要的是**怪物出现帧数**这个读数 ⇒ 本片给出 **13 只怪 / 26 帧**（并逐 actor 列名）。
+* root ③ 要的**两侧同框**（C# 与 Rust 在同一坐标、同一 `view_range` 下的对照）**仍需真机窗口**：
+  生成框几何来自**内容冻结的共享件** `Envir/MonGen.txt`，两侧玩家 `ViewRange` 同为 12
+  ⇒ 「同一坐标的期望可见集」两侧**由构造相同**；但 C# 侧客户端**实收字节**须在窗口里抓（runbook §4）。
+  在此之前，本片**不把「应该一致」写成「已经两侧一致」**。
+
+E. 涉及文件
+====================================================================================================
+  新增：`check_appearance_pairs.py`（判据 + 内联 edcode + selftest）、本文件、`144-redcheck-appearance-pairs.txt`
+  改动：`window_handoff.py`（G2 判据自检 6→7 件：注册 `check_appearance_pairs.py`，窗口一并门禁）、
+        `README.md`、`SHA256SUMS.txt`
+  只读引用：`capture-client-viewrange12-seed42.jsonl`、`capture-client-default-oracle40.jsonl`、
+            `capture-client-viewrange5-seed42.jsonl`、`capture-client-switch58.jsonl`、
+            `shots/rust-monsters-visible-256-584.png`、`105/108/115`、`check_mongen_dense_points.py`

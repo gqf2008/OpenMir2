@@ -1,0 +1,68 @@
+148-redcheck-site-walkability.txt —— 卡 openmir2-client-e2e-enter-gaps 片㉚ **改坏必红**
+被测件：`check_mongen_dense_points.py`（本片唯一代码文件）
+本片零起栈、零端口；三条变异都用**本判据脚本的副本**（原文件不动，跑完删副本/还原）
+====================================================================================================
+三条牙齿各咬一类失效：①过滤逻辑被拔（把墙当候选）②缺图被当可站立（`missing`→`Walk`）
+③缺目录时后缀污染旧输出（破坏「旧输出逐字节不变」这条硬回归）。
+====================================================================================================
+
+MUT-1：`site_ok` 恒 True（拔掉 `--best-point` 的候选过滤）
+----------------------------------------------------------------------------------------------------
+改：`if map_dir and not is_walkable(map_dir, mp, x, y):` → `if False and not is_walkable(...):`
+输入（合成、确定）：`MonGen.txt` 单框 `9 10 10 骷髅 0 5`；`Map/9.map` 20×20，(10,10) = HighWall。
+```
+$ # 基线（本片交付）
+$ python -I -B check_mongen_dense_points.py --mongen <synth>/MonGen.txt --map 9 --view-range 12 \
+    --best-point --map-dir <synth>/Map
+RED --best-point：1 个候选全部不可站立或客户端缺图（tile!=Walk 或 clientmap=no；检查 --map-dir/--client-map-dir）
+rc=1                        ← 期望 RED(1)
+
+$ # MUT-1（过滤被拔）
+$ python -I -B mutA.py --mongen <synth>/MonGen.txt --map 9 --view-range 12 --best-point --map-dir <synth>/Map
+BEST (10,10) E=5.000 view_range=12 box=(10,10) range=0 count=5 name=骷髅 tile=HighWall
+rc=0                        ← 期望：把墙当合法站点 ⇒ GREEN（不许可）
+```
+⇒ 过滤一被拔，墙上候选立刻被 `--best-point` 选中 ⇒ 这条牙真咬住「选点必须可站立」。
+
+MUT-2：`read_tile` 把「缺图」也返 `Walk`（缺图被当可站立）
+----------------------------------------------------------------------------------------------------
+改：`if path is None: return "missing"` → `return "Walk"`（`read_tile` 内，唯一一处）。
+输入：真机部署件 `M100A`（`MapInfo.txt` 有、`MonGen.txt` 有，但 `M2GameSvr/Map/` **无** `m100a.map`）。
+```
+$ # 基线（本片交付）
+$ python -I -B check_mongen_dense_points.py --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt \
+    --map M100A --view-range 12 --point 155,180 --map-dir E:/MirServer/M2GameSvr/Map --require-walkable
+INFO (155,180) 框内；… tile=missing
+RED --require-walkable：(M100A) (155,180) tile=missing（不可站立）
+RESULT: RED
+rc=1
+
+$ # MUT-2
+$ python -I -B mutB.py … --map M100A --point 155,180 --map-dir <Map> --require-walkable
+OK  --require-walkable：1 个站点全部 tile=Walk
+RESULT: GREEN
+rc=0                        ← 期望：缺图不许当可站立
+```
+⇒ `missing` 一旦被当 `Walk`，一个**两边都没有 `.map` 的图**会被判成可站立 ⇒ 窗口会烧在无图上。
+
+MUT-3：`tile_suffix` 在缺 `--map-dir` 时也返回非空（破坏「旧输出逐字节不变」）
+----------------------------------------------------------------------------------------------------
+改：`if not map_dir: return ""` → `if False: …`（并把 `read_tile` 变成 `map_dir` 缺省兜底 `none`）。
+```
+$ python -I -B mutC.py --selftest
+[FAIL] selftest suffix-absent
+[FAIL] selftest site-legacy-output-clean
+SELFTEST FAILED (58/60)
+rc=1
+
+$ python -I -B check_mongen_dense_points.py --selftest          # 还原后
+SELFTEST OK (60/60)
+rc=0
+```
+⇒ 新增门若在缺目录时也打印 `tile=`，`--selftest` 两条点名必红；同时 §D 的 7 命令 `diff` 回归
+（147 §D）也会 DIFF。即「不影响既有读数」这条有牙。
+
+复现脚本（本片自用，均在 `E:/tmp/m2svr-burst18/mut/{mutA,mutB,mutC}.py`；未入库）
+----------------------------------------------------------------------------------------------------
+`mutA` = sed 单点；`mutB`/`mutC` = Python 单点替换（断言 `count==1` 后写副本）。
+原文件在跑变异期间**未被修改**；改坏后未提交任何变异版本。

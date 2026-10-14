@@ -43,10 +43,14 @@
 //! 写入点，即 oracle `Die()` 的等价处）调用 [`World::party_del_member`]，事件落
 //! `TickRecord::party_events`，由宿主逐条回帧。
 //!
+//! ## 已接线：`FunctionNPC.GotoLable`（`openmir2-m3-party-gotolabel-ext`）
+//! oracle `Operate.cs:806/843/881/907` 在四条组队成功/`GroupOwner != 0` 分支尾调
+//! `SystemShare.FunctionNPC.GotoLable(this, "@GroupClose"/"@GroupCreate"/"@GroupAddMember"/"@GroupDelMember", false)`。
+//! 本仓在对应写入点把 [`PartyEvent::GotoLabel`] 按 `RM_MERCHANTSAY`（优先级字节 `1`，最低）入
+//! **排队桶**，宿主 drain 时在**该位置**执行 `QFunction` 脚本（脚本说词经 `RM_MERCHANTSAY` 下发）。
+//! ⇒ oracle 线上序「立即帧 → 排队帧（优先级升序，脚本说词最先）」无偏移。
+//!
 //! ## 未建模（登记，随 ⑦ 对齐窗口收口）
-//! - `FunctionNPC.GotoLable(this, "@GroupClose"/"@GroupCreate"/"@GroupAddMember"/"@GroupDelMember")`
-//!   （`Operate.cs:806/843/881/907`）：脚本触发面属 ⑥/⑦ 扩展卡，本片不发事件（`FunctionNPC != null`
-//!   时才走，且不产生帧）。
 //! - `@GroupRecall` / `RECALLGROUPMEMBERS` / `CHECKGROUPCOUNT` / `ISGROUPMASTER` 脚本面（盘点 §1.O）：
 //!   非 §6 核心，归可选卡。
 //! - `AllowGroupReCall`（`PlayObject.cs:224`）字段已在 [`Entity`] 就位，但本模块无消费点（同上扩展面）。
@@ -75,12 +79,27 @@ pub const PARTY_CANCEL_GROUP_MSG: &str = "你的小组被解散了.";
 /// `PlayObject.Operate.cs:804` 的 `ClientGroupClose` 团长分支文案（**硬编码**）。
 pub const PARTY_LEADER_CLOSE_MSG: &str = "如果你想退出，使用编组功能（删除按钮）";
 
+/// `SystemShare.FunctionNPC.GotoLable(this, "@GroupClose", false)`（`Operate.cs:806`）。
+pub const PARTY_LABEL_GROUP_CLOSE: &str = "@GroupClose";
+/// `SystemShare.FunctionNPC.GotoLable(this, "@GroupCreate", false)`（`Operate.cs:843`）。
+pub const PARTY_LABEL_GROUP_CREATE: &str = "@GroupCreate";
+/// `SystemShare.FunctionNPC.GotoLable(this, "@GroupAddMember", false)`（`Operate.cs:881`）。
+pub const PARTY_LABEL_GROUP_ADD_MEMBER: &str = "@GroupAddMember";
+/// `SystemShare.FunctionNPC.GotoLable(this, "@GroupDelMember", false)`（`Operate.cs:907`）。
+pub const PARTY_LABEL_GROUP_DEL_MEMBER: &str = "@GroupDelMember";
+
 /// `RM_GROUPCANCEL` 的队列优先级字节：`10140 & 0xFF = 156`。
 const PRIO_RM_GROUPCANCEL: u8 = (10_140 & 0xFF) as u8;
 /// `RM_SYSMESSAGE` 的队列优先级字节：`11004 & 0xFF = 252`。
 const PRIO_RM_SYSMESSAGE: u8 = (11_004 & 0xFF) as u8;
 /// `RM_GROUPMESSAGE` 的队列优先级字节：`11005 & 0xFF = 253`。
 const PRIO_RM_GROUPMESSAGE: u8 = (11_005 & 0xFF) as u8;
+/// `RM_MERCHANTSAY` 的队列优先级字节：`11009 & 0xFF = 1`（`NormNpc.cs:1615` 的 `SayMsg`）。
+///
+/// `FunctionNPC.GotoLable` 的脚本说词经此队列下发；**1 是最低优先级字节** ⇒ 同一 `Run()` 的
+/// `while (GetMessage)` 出队里，脚本说词排在本模块其它排队帧（`RM_GROUPCANCEL` 156 /
+/// `RM_SYSMESSAGE` 252 / `RM_GROUPMESSAGE` 253）**之前**。见 [`PartyEvent::GotoLabel`]。
+const PRIO_RM_MERCHANTSAY: u8 = (11_009 & 0xFF) as u8;
 
 /// 组队相关的运行时配置（host 从 `crates/data` 的 `PartyConfig` + `Server.conf` 的颜色/前缀/文案取）。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -159,6 +178,18 @@ pub enum PartyEvent {
         f_color: u8,
         b_color: u8,
         text: String,
+    },
+    /// `SystemShare.FunctionNPC.GotoLable(this, label, false)`（`Operate.cs:806/843/881/907`）。
+    ///
+    /// **不是帧**：宿主收到本事件时按 oracle 执行 `QFunction` 脚本，脚本说词另经
+    /// `RM_MERCHANTSAY`（优先级字节 `1`）下发 ⇒ 本事件排在 [`Emitter::finish`] 的**排队桶最前**
+    /// （`em.later(PRIO_RM_MERCHANTSAY, ..)`），宿主 drain 时在此位置执行脚本即可复刻 oracle
+    /// 「先立即帧 → 再排队帧按优先级升序（脚本说词最先）」的线上序。
+    GotoLabel {
+        /// 触发者 `ActorId`（oracle 的 `this`；CM 发送者）。
+        target: i32,
+        /// `@GroupClose`/`@GroupCreate`/`@GroupAddMember`/`@GroupDelMember`。
+        label: &'static str,
     },
 }
 
@@ -419,6 +450,16 @@ impl World {
                 },
             );
         }
+        // oracle `Operate.cs:806`：`GroupOwner != 0`（上面已早退滤除 0）⇒ 两条分支后都触发
+        // `FunctionNPC.GotoLable(this, "@GroupClose", false)`（脚本说词经 `RM_MERCHANTSAY` 排队，
+        // 优先级字节 1 ⇒ 排在本方法的其它排队帧之前）。
+        em.later(
+            PRIO_RM_MERCHANTSAY,
+            PartyEvent::GotoLabel {
+                target: actor,
+                label: PARTY_LABEL_GROUP_CLOSE,
+            },
+        );
     }
 
     /// `PlayObject.Message.cs:914-929` 的 `CM_GROUPMODE` 支。
@@ -511,6 +552,14 @@ impl World {
         for ev in self.party_send_group_members(actor) {
             em.now(ev);
         }
+        // oracle `Operate.cs:843`：成功路径尾 `FunctionNPC.GotoLable(this, "@GroupCreate", false)`。
+        em.later(
+            PRIO_RM_MERCHANTSAY,
+            PartyEvent::GotoLabel {
+                target: actor,
+                label: PARTY_LABEL_GROUP_CREATE,
+            },
+        );
         em.finish()
     }
 
@@ -579,6 +628,14 @@ impl World {
         for ev in self.party_send_group_members(actor) {
             em.now(ev);
         }
+        // oracle `Operate.cs:881`：成功路径尾 `FunctionNPC.GotoLable(this, "@GroupAddMember", false)`。
+        em.later(
+            PRIO_RM_MERCHANTSAY,
+            PartyEvent::GotoLabel {
+                target: actor,
+                label: PARTY_LABEL_GROUP_ADD_MEMBER,
+            },
+        );
         em.finish()
     }
 
@@ -645,6 +702,14 @@ impl World {
             target: actor,
             name: target_name.to_string(),
         });
+        // oracle `Operate.cs:907`：成功路径尾 `FunctionNPC.GotoLable(this, "@GroupDelMember", false)`。
+        em.later(
+            PRIO_RM_MERCHANTSAY,
+            PartyEvent::GotoLabel {
+                target: actor,
+                label: PARTY_LABEL_GROUP_DEL_MEMBER,
+            },
+        );
         em.finish()
     }
 

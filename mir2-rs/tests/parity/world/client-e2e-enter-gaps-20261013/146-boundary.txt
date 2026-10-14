@@ -1,0 +1,30 @@
+146-boundary.txt —— 卡 openmir2-client-e2e-enter-gaps 片㉙ 边界
+base = origin/master 0002ed39c（交片时 master；本片开工时为 6dba8719d，master 随后推进且**已含片㉗/㉘**，
+        本分支 `git merge origin/master` 干净合入 ⇒ 差量只余片㉙）
+head = 本片交付 commit（见卡上 patch body）
+命令：git diff --name-status origin/master
+====================================================================================================
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/143-monster-appearance-pairs-decoded.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/144-redcheck-appearance-pairs.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/145-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/146-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_appearance_pairs.py
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+（SHA256SUMS.txt 亦随本片重生成）
+
+冻结面（必须为空）：git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+  ⇒ 0 行
+
+编译面（必须为空）：git diff --name-only origin/master -- '*.rs' '*.toml' '*.ps1'
+  ⇒ 0 行
+
+m3bag 写集：git diff --name-only origin/master -- mir2-rs/tests/parity/m3
+  ⇒ 0 行（本片未动 mir2-rs/tests/parity/m3/**）
+
+EOL：新增件扩展名为 .py / .txt（`.gitattributes` 的 `text eol=lf`）⇒ 干净检出不会 CRLF；
+  本片交前逐件核对 `grep -cU $'\r'` = 0（145 由命令输出拼装，已显式 CRLF→LF 归一后入库）。
+
+root 工具：本片**未动** E:/tmp/openmir2-watch/client-e2e-window.sh（只读核对）
+共享主检出：E:/Users/gxh/Documents/GitHub/OpenMir2 **未动**（本片全部读写都在自身 worktree）
+进程/端口：本片**未起栈、未占任何游戏端口**（离线判据只读已入库 capture + MonGen.txt；未连 MySQL）

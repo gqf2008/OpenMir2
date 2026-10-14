@@ -56,7 +56,7 @@
 - ④ 要 `monai == 0`：`drop-exp/drop_exp_scenario.json` `purity.wallclock_policy = "pinned"`；
   `drop-exp/drop_exp_consumers.tsv` 的 rust `wallclock` 行 = `crates/world/src/monai\.rs:`，`max=0`
   （「pin 抑制必须使其为 0」）。
-- master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/main.rs:5598`
+- master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/main.rs:5665`
   → `mongen.rs:61 pub fn enable_production_monster_ai` → `world.enable_monster_ai()`
   ⇒ 只要场上有活怪，`World::tick` 就按槽位驱动 `crates/world/src/monai.rs:697 monster_ai_tick`；
   无目标且 walk 到点时 `monai.rs:171 wondering` **至少抽 1 次 `Random(20)`**

@@ -1,0 +1,6 @@
+## 证据包声明 head 机判（check_evidence_head check-pack）
+
+命令：python -I rng-trace-scene/check_evidence_head.py check-pack --dir evidence-m3-rng-oracle-ref-semantic-tooth-20261014 --since f0a9ab911ddc84846b69f0a3541390e81dba977a
+rc=0
+EVIDENCE_HEAD_PACK dir=mir2-rs/tests/parity/m3/evidence-m3-rng-oracle-ref-semantic-tooth-20261014 decl=10-boundary.txt(line 1（共 2 处声明）) declared=5ccaee2f178ce9cd42a4fedaf7add25e531052c7 since=f0a9ab911ddc84846b69f0a3541390e81dba977a changed=19 allow_prefixes=['mir2-rs/tests/parity/m3']
+  OK 包内声明 head 可解析、since 锚 ≤ 声明 head ≤ HEAD，且 since..声明 head 全在证据侧

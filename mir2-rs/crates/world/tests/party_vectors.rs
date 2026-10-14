@@ -54,6 +54,12 @@ fn create_group_matches_oracle_call_order_and_dequeue_order() {
             target: t,
             members_text: "L/T/".into(),
         },
+        // GotoLable("@GroupCreate")（`Operate.cs:843`）：脚本说词经 `RM_MERCHANTSAY`（优先级字节 1）
+        // ⇒ 排在 `RM_GROUPMESSAGE(253)` 之前。
+        PartyEvent::GotoLabel {
+            target: l,
+            label: "@GroupCreate",
+        },
         // 排队帧（RM_GROUPMESSAGE，优先级 253；入队序 = JoinGroup(L) 再 JoinGroup(T)）
         sys(l, l, "〖组队〗L 已加入小组."),
         sys(t, l, "〖组队〗L 已加入小组."),
@@ -169,6 +175,11 @@ fn del_member_regular_keeps_leader_with_cancel_and_delmem_ok() {
             target: l,
             name: "T".into(),
         },
+        // GotoLable("@GroupDelMember")（`Operate.cs:907`，优先级字节 1）。
+        PartyEvent::GotoLabel {
+            target: l,
+            label: "@GroupDelMember",
+        },
         PartyEvent::GroupCancel { target: t },
         sys(l, t, "〖组队〗T 已经退出了本组."),
         sys(t, t, "〖组队〗T 已经退出了本组."),
@@ -220,6 +231,11 @@ fn group_close_non_leader_calls_del_member_and_clears_allow_group() {
         evs,
         vec![
             PartyEvent::GroupCancel { target: l },
+            // GotoLable("@GroupClose")（`Operate.cs:806`）：触发者是**发 CM 的成员** T。
+            PartyEvent::GotoLabel {
+                target: t,
+                label: "@GroupClose",
+            },
             PartyEvent::GroupCancel { target: t },
             sys(l, t, "〖组队〗T 已经退出了本组."),
             sys(t, t, "〖组队〗T 已经退出了本组."),
@@ -236,13 +252,19 @@ fn group_close_leader_emits_red_sysmsg_only() {
     let evs = w.party_group_close(l, &cfg());
     assert_eq!(
         evs,
-        vec![PartyEvent::SysMessage {
-            target: l,
-            recog: l,
-            f_color: 0xFF,
-            b_color: 0x38,
-            text: "如果你想退出，使用编组功能（删除按钮）".into(),
-        }]
+        vec![
+            PartyEvent::GotoLabel {
+                target: l,
+                label: "@GroupClose",
+            },
+            PartyEvent::SysMessage {
+                target: l,
+                recog: l,
+                f_color: 0xFF,
+                b_color: 0x38,
+                text: "如果你想退出，使用编组功能（删除按钮）".into(),
+            }
+        ]
     );
     // 团长仍保留组
     assert_eq!(w.entities.get(l).unwrap().group_owner, l);
@@ -449,6 +471,10 @@ fn die_member_triggers_oracle_del_member_and_group_survives() {
             PartyEvent::GroupMembers {
                 target: t,
                 members_text: "L/U/T/".into(),
+            },
+            PartyEvent::GotoLabel {
+                target: l,
+                label: "@GroupAddMember",
             },
             sys(l, t, "〖组队〗T 已加入小组."),
             sys(u, t, "〖组队〗T 已加入小组."),
