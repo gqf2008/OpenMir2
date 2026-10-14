@@ -22,6 +22,6 @@
 ### 证据
 | 路径 | 说明 |
 | --- | --- |
-| `evidence-m3-rng-oracle-ref-semantic-tooth-20261014/**` | 13 件（本包） |
+| `evidence-m3-rng-oracle-ref-semantic-tooth-20261014/**` | 16 件（本包） |
 
 **零 `.rs`**；冻结面 `src/` / `sql/` / `MirClient/` / `mir2-rs/crates/protocol` / `mir2-rs/crates/storage` 零改动。
