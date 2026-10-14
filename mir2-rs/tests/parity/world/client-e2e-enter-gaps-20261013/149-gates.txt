@@ -1,0 +1,98 @@
+149-gates.txt —— 卡 openmir2-client-e2e-enter-gaps 片㉚ 四门禁 + 离线判据
+（cwd = mir2-rs，CARGO_TARGET_DIR = E:/tmp/m2svr-target）
+本片只改 1 个离线判据脚本 .py + 证据 .txt/README/SHA256SUMS ⇒ 编译面不受影响；仍全跑。
+本片开工时 master = 057d7dc9e；交片前 master 推进到 **67898a834**（selloff 收口片合入），
+本分支 `git merge origin/master` 干净合入 ⇒ 门禁读数取**合并树**。
+====================================================================================================
+### cargo fmt --all -- --check
+FMT_RC=0
+
+### cargo clippy --workspace --all-targets -- -D warnings
+CLIPPY_RC=0
+
+### cargo test --workspace --no-fail-fast
+TEST_RC=0
+（明细汇总：101 suites · 1213 passed · 0 failed · 22 ignored）
+（对照：片㉙ 交片树 0002ed39c 为 1211 passed；本片合并 67898a834 后 +2 = 1213，均为 master 侧带入）
+
+### cargo run -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+MSGCODEGEN_RC=0
+
+---- 离线判据（本片面：③①「换怪密点」选点的烧窗前置）----
+
+### check_mongen_dense_points.py --selftest（30 → 60）
+$ python -I -B check_mongen_dense_points.py --selftest
+[PASS] selftest tile-walk / tile-highwall / tile-lowwall / tile-low-overrides-high / tile-oor / tile-bad
+[PASS] selftest resolve-map-file / -case / -pipe / -missing
+[PASS] selftest read-tile-walk / read-tile-wall / read-tile-missing-map / is-walkable
+[PASS] selftest client-has-map / client-has-map-no / client-has-map-undecided
+[PASS] selftest suffix-absent / suffix-present / site-legacy-output-clean
+[PASS] selftest site-ok-no-dirs / site-ok-wall / site-ok-walk / site-ok-client-missing
+[PASS] selftest site-gate-walk-pass / site-gate-wall-red / site-gate-client-red
+[PASS] selftest site-gate-no-mapdir-prereq / site-gate-no-clientdir-prereq / site-gate-off
+SELFTEST OK (60/60)
+rc=0
+
+### 旧输出逐字节不变（缺新目录时；7 种命令形状 git-show 对照 diff）
+$ # 旧 = `git show HEAD:check_mongen_dense_points.py`；新 = 本片交付；同一 argv
+SAME rank-map0 / best-map0 / rank-all / best-all / point-outside / points-min / startpoint
+（含 --mapinfo 跨图排行/选点、单点 --expect、多点 --min-expected、--start-point）
+
+### 真机部署读数（--map-dir E:/MirServer/M2GameSvr/Map --client-map-dir D:/MirClient-run/Map）
+$ … --map 0 --view-range 12 --rank 3 --map-dir <Map> --client-map-dir <ClientMap>
+RANK (605,578) E=12.681 box=(605,578) range=30 count=10 name=半兽人 tile=Walk clientmap=yes
+RANK (211,629) E=12.225 … tile=Walk clientmap=yes
+RANK (256,572) E=12.225 … tile=Walk clientmap=yes
+RESULT: GREEN (Top-3)         ⇒ 窗口 ③b 站点本来就干净
+
+$ … --mapinfo <MapInfo> --map-dir <Map> --client-map-dir <ClientMap> --all-maps --rank 600   # 摘录
+RANK (D10071) (17,21) E=59.533 … enterable=yes tile=Walk    clientmap=yes
+RANK (D10071) (20,20) E=59.533 … enterable=yes tile=LowWall clientmap=yes    ← 并列第一密但不可站
+RANK (M100)   (150,150) E=6.740 … enterable=yes tile=HighWall clientmap=yes  ← 不可站
+RANK (M100A)  (155,180) E=3.002 … enterable=yes tile=missing  clientmap=no   ← 两边都没有 .map
+RANK (M100B)  (155,180) E=3.002 … enterable=yes tile=missing  clientmap=no
+RANK (M100C)  (155,180) E=3.002 … enterable=yes tile=missing  clientmap=no
+⇒ `enterable=yes` 不等于可用（旧工具会把这些当合法候选）
+
+$ … --mapinfo <MapInfo> --all-maps --view-range 12 --best-point --map-dir <Map> --client-map-dir <ClientMap>
+BEST (D10071) (17,21) E=59.533 … enterable=yes tile=Walk clientmap=yes
+INFO --best-point 跳过 159 个不可站立/客户端缺图的候选（tile!=Walk 或 clientmap=no）
+
+$ … --map D10071 --point 20,20 --map-dir <Map> --require-walkable
+INFO (20,20) … tile=LowWall
+RED --require-walkable：(D10071) (20,20) tile=LowWall（不可站立）
+RESULT: RED        rc=1
+
+$ … --map M100A --point 155,180 --client-map-dir <ClientMap> --require-client-map
+INFO (155,180) … clientmap=no
+RED --require-client-map：(M100A) 冻结客户端缺图（无法渲染）
+RESULT: RED        rc=1
+
+$ … --map 0 --points "291,666;605,578" --map-dir <Map> --client-map-dir <ClientMap> \
+    --require-walkable --require-client-map
+OK  --require-walkable/--require-client-map：2 个站点全部可站立且客户端带图
+RESULT: GREEN      rc=0       ⇒ 窗口 ③b/③a 两条站点两层都过
+
+### 改坏必红（三条；原文见 148）
+MUT-1 site_ok 恒 True            ⇒ 墙上候选被 --best-point 选中（RED→GREEN，不许可）
+MUT-2 read_tile 缺图返回 Walk    ⇒ M100A --require-walkable RED→GREEN（不许可）
+MUT-3 缺 map-dir 时后缀非空      ⇒ --selftest 58/60 FAILED（suffix-absent / site-legacy-output-clean）
+
+### 窗口就绪门不受影响（G2 仍绿；本片未改 window_handoff.py）
+$ python -I -B window_handoff.py --selftest
+SELFTEST OK (74/74)
+rc=0
+
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --check-dir .
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0
