@@ -1,14 +1,15 @@
 161-gates.txt —— 片㉝ 四门禁（合并树）
 m2-svr / openmir2-worker-11 / 2026-10-14
 ====================================================================================================
-head = 4b358658b9e96c6dc2dfe62fdd74e9ce00194466（= 18bd78669 片㉝ + git merge origin/master；base origin/master = 41e61029e7be497f953033921a374558c314b10c）
+head = 本片提交（㉝ = 18bd78669 + 证据收口 c7f90588d + git merge origin/master）
+base = origin/master ca10f4a873a28923e17a60b5fd40f2bb24a2d46b
 cwd = mir2-rs/   CARGO_TARGET_DIR = E:/tmp/m2svr-target   （--offline）
 
 $ cargo fmt --all -- --check
 rc=0（无输出 = 全绿）
 
 $ cargo clippy --workspace --all-targets --offline -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.07s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.36s
 rc=0（Finished dev profile；无 warning）
 
 $ cargo test --workspace --no-fail-fast --offline

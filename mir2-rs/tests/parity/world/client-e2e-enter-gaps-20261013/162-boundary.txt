@@ -1,0 +1,36 @@
+162-boundary.txt —— 片㉝ 边界（base = origin/master ca10f4a873a28923e17a60b5fd40f2bb24a2d46b；head = 本片提交）
+卡 openmir2-client-e2e-enter-gaps / m2-svr / openmir2-worker-11 / 2026-10-14
+====================================================================================================
+# 1) 本片（㉝）提交净差量
+$ git diff --name-status 0d0d62a69 18bd78669
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/159-live-window-script-gate.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/160-redcheck-live-window-script.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+（= 仅 window_handoff.py + 159 + 160；证据收口提交再追加 README.md / SHA256SUMS.txt / 161 / 162）
+
+# 2) 整卡未合差量 = origin/master..HEAD（㉜ 0d0d62a69 已由 merge 车道合入 origin/master ca10f4a87）
+$ git diff --name-status ca10f4a873a28923e17a60b5fd40f2bb24a2d46b HEAD
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/159-live-window-script-gate.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/160-redcheck-live-window-script.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/161-gates.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/162-boundary.txt
+（162 即本文件；上面为「含本文件」的最终写集 —— 只 1 个 .py + 6 件证据，无 .rs）
+
+# 3) 冻结面（必须全空）
+$ git diff --name-only ca10f4a873a28923e17a60b5fd40f2bb24a2d46b HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+(空 = 通过)
+
+$ git diff --name-only ca10f4a873a28923e17a60b5fd40f2bb24a2d46b HEAD -- src ':!src/BotSrv'
+(空 = 通过)
+
+$ git diff --name-only ca10f4a873a28923e17a60b5fd40f2bb24a2d46b HEAD -- '*.rs'
+(空 = 本片零 .rs，整卡也无 .rs —— ㉜ 已在 origin/master ca10f4a87 内)
+
+# 4) 证据完整性
+$ python -I tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+GREEN ... OK 167/167
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+EOLCHECK GREEN 168/168
