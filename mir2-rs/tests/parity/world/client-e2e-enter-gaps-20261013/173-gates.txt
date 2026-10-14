@@ -1,0 +1,16 @@
+173 — 四门禁（片㊱；cwd=mir2-rs，CARGO_TARGET_DIR=E:/tmp/m2svr-target，--offline）
+============================================================================
+== 1) cargo fmt --all -- --check
+fmt rc=0
+
+== 2) cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.84s
+clippy rc=0
+
+== 3) cargo test --workspace --offline
+  101 个 suite 聚合: passed=1219 failed=0 ignored=22
+test rc=0
+
+== 4) cargo run -q --offline -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
