@@ -1182,3 +1182,24 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - 边界（`208`）：8 路径（3 增 + 5 改）；生产代码仅 `main.rs` 一条注释；冻结面 `src/ sql/ MirClient/ crates/protocol/ crates/storage/` 空。
 - 交付：`206-carryover-closeout-f1-o1o5.txt`、`207-gates.txt`、`208-boundary.txt`。
 - **仍归 root 独占窗口（R）**：卡级真机 ①②③；G5（root 活脚本未换入库替身）仍 RED。
+
+### ㊿ 窗口源 post-merge 刷新（片㊽/㊾ 合入 master 后 R6 RED 收口）（2026-10-14）—— `209`/`210`/`211`/`212`
+
+片㊽（`d100038b9`）/片㊾（`cd6374407`）合入 master `5e757b025` 后，**专用窗口构建源
+`E:/tmp/m2svr-window-origin` 落到基线后面一格**：片㊾ 在 `bins/game-svr/src/main.rs` 有一条
+**纯注释**订正（字段注释「默认关」→「默认开（未设 = client-58）」）⇒ `check_rust_window_preflight.py`
+的 **R6（构建源必须是当前基线）转 RED**（`1 file changed, 1 insertion(+), 2 deletions(-)`），
+`window_handoff.py` 会打 `WINDOW_READY=NO` ⇒ root 开窗前聚合门失败、白烧一次性窗口。
+
+- **修（`209`）**：`git -C E:/tmp/m2svr-window-origin checkout --detach origin/master`（`5e757b025`）
+  + 重编译六件（只 `game-svr.exe` 重链）+ **重录出处清单**（R7）⇒ `check_rust_window_preflight.py`
+  **R1..R7 全 OK / RESULT: GREEN rc=0**；聚合门（入库逐字替身脚本口径）**`WINDOW_READY=YES` GREEN rc=0**。
+- **改坏必红（`210`，2 颗牙，变异只在 `E:/tmp/m2svr-burst20/mut/` 与 ref 输入，仓内零改动）**：
+  M1 构建源回退到旧 ref `81f9d8f55` ⇒ **R6 RED rc=1**；M2 清单 `source_head` 改回 `81f9d8f55`
+  ⇒ **R7 RED rc=1**；还原 ⇒ R1..R7 GREEN rc=0。
+- **四门禁（`211`）**：fmt rc=0 / clippy rc=0（`-D warnings`）/ **101 suites 1232 passed 0 failed 22 ignored** / msgcodegen 604 rc=0。
+- **边界（`212`）**：本片只新增本证据目录 4 件 + `README.md` + `SHA256SUMS.txt`；**零 `.rs`/`.toml`/`.py`/`.ps1`**；
+  冻结面 `src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/` 空。
+- **仍归 root 独占窗口（R）**：卡级真机 ①②③（含一次升级/换装步）；**G5**（root 活脚本未换入库替身）仍 RED。
+- **O-3**（`52→58B`/`53→12B` 的 §6.0-3 白名单登记 + owner 签字）仍属 owner 裁决面，未做。
+- 判级 = **L**（纯来源刷新 + 只读门复跑，零生产代码、零取数/时序/RNG/落库改动）。

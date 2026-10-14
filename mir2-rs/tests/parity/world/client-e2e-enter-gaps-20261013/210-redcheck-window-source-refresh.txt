@@ -1,0 +1,102 @@
+210-redcheck-window-source-refresh.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㊿ 的**改坏必红**
+（三颗牙；变异只在 `E:/tmp/m2svr-burst20/mut/`、`--ref` 输入、以及「把清单一条 hash 改零」三种输入，
+**仓内工具/源文件零改动**）
+m2-svr / openmir2-worker-11 / 2026-10-14；零起栈、零游戏端口；不 merge、不自签
+====================================================================================================
+
+牙型：把「已刷新到基线」的构建源/出处清单/清单哈希**改回本片要修掉的缺陷形态** ⇒ 前置门必 RED（rc=1）；
+还原（重新指向新源/新清单/重记哈希）⇒ 必 GREEN（rc=0）。
+
+# M1) 构建源回退到旧 ref（= 片㊾ 合入前的 `81f9d8f551`）⇒ R6 必 RED
+（`--provenance ''` 显式关掉 R7，隔离 R6 这一条）
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin \
+      --ref 81f9d8f55112dcc5036984cfa67d89dc8a2f33c1 --baseline-ref origin/master \
+      --mirserver E:/MirServer --provenance ''
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 81f9d8f55112dcc5036984cfa67d89dc8a2f33c1 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 81f9d8f55112dcc5036984cfa67d89dc8a2f33c1 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+INFO R7 跳过（未给 --target-dir/--provenance；窗口口径两者都必须给）
+RED R6: 构建源 81f9d8f55112dcc5036984cfa67d89dc8a2f33c1=81f9d8f551 落后于基线 origin/master@5e757b0252 的生产路径（1 件：mir2-rs/bins/game-svr/src/main.rs）⇒ 窗口会测旧件，先 `fetch` + `checkout --detach <基线>` + 重编译
+RESULT: RED
+```
+
+# M2) 出处清单 `source_head` 改回旧 ref（模拟「源刷了但没重编译/没重录清单」）⇒ R7 必 RED
+（变异件 = 清单复制件 `E:/tmp/m2svr-burst20/mut/window-provenance.tampered.json`，仅改 `source_head`；
+`E:/tmp/m2svr-window-target/window-provenance.json` 原件不动）
+```
+$ python -c "import json; m=json.load(open('E:/tmp/m2svr-window-target/window-provenance.json'));
+             m['source_head']='81f9d8f55112dcc5036984cfa67d89dc8a2f33c1';
+             json.dump(m,open('E:/tmp/m2svr-burst20/mut/window-provenance.tampered.json','w'))"
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer --target-dir E:/tmp/m2svr-window-target \
+      --provenance E:/tmp/m2svr-burst20/mut/window-provenance.tampered.json
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=5e757b0252 == 基线 origin/master@5e757b0252
+RED R7: 出处清单 source_head=81f9d8f551 != 当前构建源 HEAD=5e757b0252 且在影响六件 exe 的路径上有 1 件差异（mir2-rs/bins/game-svr/src/main.rs）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）；先重编译 + 重录清单
+RESULT: RED
+```
+
+# 还原确认（*同一 burst 内*）：指向新源 + 新清单原件 ⇒ 复绿
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer --target-dir E:/tmp/m2svr-window-target \
+      --provenance E:/tmp/m2svr-window-target/window-provenance.json
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=5e757b0252 == 基线 origin/master@5e757b0252
+[OK] R7 出处清单 window-provenance.json source_head=5e757b0252，6 件 exe sha256 逐字节一致
+RESULT: GREEN
+```
+
+# M3) 证据清单门（SHA256SUMS）改坏必红：把清单里 `209` 一条 hash 改零 ⇒ verify 必 RED
+（变异**就地**改仓内 `SHA256SUMS.txt` 再逐字还原：备份 → 改 → 跑 → 还原 → 复跑）
+```
+$ cp SHA256SUMS.txt SHA256SUMS.orig.txt
+$ python -c "…# 把 209-…txt 那行的 hash 换成 64 个 0…"
+$ python -I tools/evidence-hash/verify_sha256sums.py verify mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+RED   mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK 217/218
+       mismatch: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\209-window-source-refresh-post-merge.txt
+         清单 0000000000000000000000000000000000000000000000000000000000000000
+         实算 26ac69324b4e888948f4868f20c2a3ef50bdf8a3879880b2ab1c144dadd92019  (text attr=set)
+rc=1
+$ cp SHA256SUMS.orig.txt SHA256SUMS.txt   # 逐字还原
+$ python -I tools/evidence-hash/verify_sha256sums.py verify mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013 --check-extra
+GREEN mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK 218/218
+rc=0
+```
+
+结论：M1（陈旧 ref）⇒ R6 RED rc=1；M2（清单 head 陈旧）⇒ R7 RED rc=1；M3（清单一条 hash 改零）⇒ 清单门 RED rc=1；
+三条还原后均 GREEN（R1..R7 rc=0；清单 218/218 rc=0）。仓内 `check_rust_window_preflight.py` / 源文件本片零改动
+（M3 的 `SHA256SUMS.txt` 就地还原后与 `write` 产物逐字节一致）。
+
+# 牙齿与「假绿」关系
+
+- R6 的用途正是堵「构建源落后于基线 ⇒ 窗口测旧件」；M1 证明它在**注释级**生产路径差上也 fail-closed。
+- R7 的用途是堵 R6 的已登记界限（「源刷了但 exe 没重编」）；M2 证明 `source_head` 对不上就 RED。
+- M3 证明清单门对**单条哈希**也点名 fail-closed（不是只报总数）。
+- 三颗牙都不是改数据/改期望值（改 ref 输入 / 改清单复制件 / 改清单一条 hash），且都可逐字还原。

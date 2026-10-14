@@ -1,0 +1,39 @@
+212-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㊿（窗口源 post-merge 刷新）的边界与留痕
+m2-svr / openmir2-worker-11 / 2026-10-14；零起栈、零游戏端口；不 merge、不自签
+base = origin/master = 5e757b02527aee53535130ac43a829ff1d7bc353
+====================================================================================================
+
+# 1) 本片净改动（`git diff --name-status 5e757b025`）
+```
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/209-window-source-refresh-post-merge.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/210-redcheck-window-source-refresh.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/211-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/212-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+```
+= 6 路径（4 增 + 2 改），全部在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`。
+
+# 2) 冻结面（必须空）
+```
+$ git diff --name-only 5e757b025 -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+```
+（上面为空 ⇒ 冻结面干净）
+
+# 3) 零 .rs / .toml / .py / .ps1（必须空）
+```
+$ git diff --name-only 5e757b025 -- '*.rs' '*.toml' '*.py' '*.ps1'
+```
+（上面为空 ⇒ 本片零代码/脚本文件，纯证据 + README + 清单）
+
+# 4) 仓外产物（不在本片 diff 内，可复算）
+```
+E:/tmp/m2svr-window-origin        # 专用构建源，detached HEAD = 5e757b025
+E:/tmp/m2svr-window-target        # 暖 target（六件 exe）+ window-provenance.json
+E:/tmp/m2svr-burst20/*.txt        # 本片原始件（before/after/redcheck/gates/handoff/rebuild.log）
+E:/tmp/m2svr-burst20/mut/         # 改坏必红的变异复制件（清单 tampered）
+```
+
+# 5) 纪律
+- 未起栈、未占游戏端口（5000–7200 若 UP 属 root 既存联调栈；3306 为共享 MySQL，只读）。
+- 未 merge、未自签 review、未移卡；共享主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2` 未触碰。
