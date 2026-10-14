@@ -38,6 +38,24 @@ Invisible **阻挡**）、离开世界。
    教训：对拍红了先查夹具自身（这次是夹具漏字段），别直接改被测实现。
 
 
+## 玩家 `ViewRange=12`（25×25 窗口）——`aoi_viewrange12.json`（卡 `openmir2-client-e2e-enter-gaps`）
+
+判据② 的几何：oracle 玩家构造器把 `ViewRange` 置 **12**（`src/M2Server/Player/PlayObject.cs:904`），
+而 `BaseObject` 缺省是 5（`BaseObject.cs:383`）。生产宿主 `bins/game-svr/src/main.rs::new_player_entity`
+必须同时置 `want_ref_msg=true`（`PlayObject.cs:889`）与 `view_range=12`，否则 Chebyshev **6..12** 的怪
+不进 `visible_actors`（客户端同屏少怪）。
+
+`aoi_viewrange12.json` 把该窗口的**环形边界**用 C# 金标准钉死（玩家 `(32,32) vr=12`；怪在
+Chebyshev 1/7/12/13 的轴向/对角/-Y/混合符号位置；第二个玩家距 13；`tick=2` 走一格）：
+
+```bash
+dotnet run --project mir2-rs/tests/parity/csharp/WorldGolden -- aoi_viewrange12.json
+cargo test -p mir2-parity-tests --test world_aoi_parity   # 含金标准自检 + vr=5 红检
+```
+
+覆盖：Chebyshev **12 可见 / 13 不可见**、扫描序（X 外升/Y 内升）、self 入集（D-8）、观察者过滤器
+（怪只见玩家、不见怪）、以及走一格后新进窗口对象发 `Show` 的增量语义。
+
 ## M2 下半程（最小切片）：会话进世界 + 掉落系统
 
 范围（刻意收窄，见 `M2骨架报告.md`）：**会话进世界**（进图/切图/掉线/小退/再进）+ **一个系统（掉落）**；

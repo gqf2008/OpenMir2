@@ -1,0 +1,84 @@
+179-viewrange12-aoi-oracle-golden.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㊳
+③ 缺口「同屏没怪」：**玩家 `ViewRange=12`（25×25 AOI 窗口）的 C# oracle 金标准对拍**（把窗口判据的一部分离线化）
+m2-svr / openmir2-worker-11 / 2026-10-14
+本片零起栈、零占游戏端口（仅共享 MySQL 3306）；只在自身 worktree 写；共享主检出未动。
+====================================================================================================
+一句话：③「该点确实无怪」/④「AOI 有算有下发」此前只有**真机窗口**能证；本片补上**离线可复算**的
+oracle 侧对照 —— 用 `csharp/WorldGolden`（逐字拷贝 `BaseObject.ViewRange.cs` 的 `SearchViewRange`）
+产出玩家 `ViewRange=12`、Chebyshev **12 可见 / 13 不可见** 的可见集金标准，再由
+`tests/parity/tests/world_aoi_parity.rs` 对 Rust 逐行比对（**diff = 0**）。这正是 brief 顶部 root
+2026-10-14 00:4x ③「**用两侧对照（同一位置、同一 viewrange）给证据**」的**离线那一半**。
+
+A. 缺口：修复的几何根因**无 oracle 侧离线判据**
+----------------------------------------------------------------------------------------------------
+- ③ 的几何根因（`30-oracle-anchors-viewrange.txt` §A/§B）：玩家 `PlayObject` 构造器把 `ViewRange`
+  置 12（`src/M2Server/Player/PlayObject.cs:904`），Rust 生产宿主 `new_player_entity` 改前未置它
+  ⇒ 窗口只有缺省 5（`src/M2Server/Actor/BaseObject.cs:383`）= **11×11**；Chebyshev **6..12** 的怪/玩家
+  不进 `visible_actors` ⇒ `drain_aoi_downlink` 不发出现帧 ⇒ 客户端同屏少怪。
+- 现有离线判据只到**构造层 + Rust 内部**：`bins/game-svr/src/main.rs` 的
+  `player_aoi_window_covers_view_range_12`（钉 (22,10)=12 可见 / (23,10)=13 不可见）与
+  `new_player_entity_sets_want_ref_msg`。它们**没有 oracle 参照**（断言值由人写死）。
+- **缺口**：`tests/parity/world/scenarios/*.json` 的 5 个 golden 场景**全部是 `view_range: 5`**
+  （`grep -n view_range *.json` 逐行可验）⇒ 25×25 窗口、12/13 环形边界、扫描序、自己是否入集、
+  观察者过滤器在 vr=12 下的整集，都**没有 C# 金标准钉住**。修复的几何根因目前只有真机窗口能判。
+
+B. 本片改动（1 场景 + 1 金标准 + `world_aoi_parity.rs` 3 用例 + 1 自检牙；零生产代码）
+----------------------------------------------------------------------------------------------------
+| 文件 | 改动 |
+|---|---|
+| `mir2-rs/tests/parity/world/scenarios/aoi_viewrange12.json` | 新增场景：玩家 1 号 `(32,32) view_range=12 race=0 want_ref_msg=true`；怪（race 80）在 Chebyshev **1/7/12/13**（轴向、对角、-Y、混合符号各覆盖）+ 第二个玩家 11 号 `(32,45) race=0`（距 13）；`tick=2` 玩家走一格。 |
+| `mir2-rs/tests/parity/world/golden/aoi_viewrange12.txt` | `dotnet run --project mir2-rs/tests/parity/csharp/WorldGolden -- aoi_viewrange12.json` 产出（C# oracle 桩）。 |
+| `mir2-rs/tests/parity/tests/world_aoi_parity.rs` | 抽 `assert_scenario_matches_golden` / `golden_first_tick_entity_line`；`world_positions_and_visible_sets_match_csharp` 改用前者（行为不变）；**新增** `world_aoi_viewrange12_ring_matches_csharp`（逐行比对）+ `golden_viewrange12_ring_boundary_is_pinned`（金标准自检：12 号距离的 4/6/8/10 号必须可见、13 号距离的 5/7/9 号必须不可见）+ `redcheck_viewrange12_ring_collapsed_to_default_must_differ`（把 1 号 `view_range` 压回 5 ⇒ 6..12 环消失 ⇒ 与金标准必不同）。 |
+
+C. 金标准读数（`golden/aoi_viewrange12.txt`，oracle 桩产出；**这是「同一位置、同一 viewrange」的 C# 侧证据**）
+----------------------------------------------------------------------------------------------------
+```
+tick 1 clock 200
+ent 1 0 32 32 100 1 0 vis 8:2 1:2 2:2 3:2 10:2 4:2 6:2
+ent 2 0 32 33 100 1 0 vis 1:2
+ent 3 0 32 39 100 1 0 vis
+...
+ent 11 0 32 45 100 1 0 vis 11:2
+tick 2 clock 400
+ent 1 0 33 32 100 1 0 vis 8:1 1:1 2:1 3:1 10:1 4:1 6:1 5:2
+...
+```
+* **玩家 1 号**首 tick 可见集 = `8(32,20) 1(self) 2(32,33) 3(32,39) 10(44,20) 4(44,32) 6(44,44)`：
+  全部 Chebyshev ≤ **12**；**5(45,32)/7(45,45)/9(32,19) 三个 Chebyshev=13 的怪不在集内** —— 25×25 窗口
+  的上界被钉住（不是「越大越好」）。序 = 扫描序（X 外升 / Y 内升）。
+* **自证 self 入集**（`1:2`）：与 `whitelist.md` D-8（oracle AOI 不排除观察者自己）一致，vr=12 下同样成立。
+* **tick 2 走一格后** `5:2` 出现（`(45,32)` 距 `(33,32)` = 12）⇒ 钉住「新进窗口对象发 `Show`」的增量语义。
+* **怪 2 号**（观察者 race 80、无 master、`WantRefMsg=false`）只见 `1:2`（玩家）⇒ 钉住观察者过滤器：
+  怪不把怪纳入自己的可见集，但把玩家纳入（`BaseObject.ViewRange.cs:112` 同构）。
+
+D. Rust 对拍（逐行 diff = 0）
+----------------------------------------------------------------------------------------------------
+```
+$ cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p mir2-parity-tests --test world_aoi_parity --offline
+running 6 tests
+test golden_viewrange12_ring_boundary_is_pinned ... ok
+test redcheck_viewrange12_ring_collapsed_to_default_must_differ ... ok
+test redcheck_view_range_change_must_alter_visible_set ... ok
+test redcheck_position_change_must_differ ... ok
+test world_aoi_viewrange12_ring_matches_csharp ... ok
+test world_positions_and_visible_sets_match_csharp ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+* ⇒ Rust `crates/world` 的 `search_view_range` 在 **view_range=12** 下与 oracle 的 25×25 可见集
+  **逐行相同**（含集合、flag、顺序、self、增量 Show）。**这是 ③「同屏有怪」的可见集口径在离线可复算的对照**。
+
+E. 判据分级 / 与真机窗口的关系（不说满）
+----------------------------------------------------------------------------------------------------
+* **本片 = L 级**：纯逻辑（AOI 集合运算），不触 RNG 抽数序列 / 时序 / 落库 / 战斗数值；差异只可能在
+  离线构造面暴露（构造级抽样冒烟 = 本用例 6/6 + 全 workspace 101 suites 1230 passed）。
+* **仍未闭环（仍归 root 独占窗口，不因本片收卡）**：真机**客户端**是否真的渲染出怪（`SM_TURN(10)` +
+  `SM_FEATURECHANGED(41)` 经 gate 下发到真客户端）、以及 ③ DoD 的「能攻击造成伤害」可见 —— 属 R 级，
+  需真机两侧同框。本片只把「可见集算得对不对」这半边从 R 降到 L，**不替代**窗口判据。
+* `RM_DISAPPEAR`（`PlayObject.cs:3211-3219`，离屏不发消失帧）Rust 无编码器等既有登记不变。
+
+F. 涉及文件
+----------------------------------------------------------------------------------------------------
+  新增：`world/scenarios/aoi_viewrange12.json`、`world/golden/aoi_viewrange12.txt`、本文件、`180`/`181`/`182`
+  改动：`tests/parity/tests/world_aoi_parity.rs`（+119/-6）、`world/README.md`（场景登记）、本卡 `README.md`（§㊳）、`SHA256SUMS.txt`
+  冻结面：`src/`、`sql/`、`MirClient/`、`crates/protocol`、`crates/storage`、`mir2-rs/bins`、`*.toml` 全空；
+  生产 `.rs` = 0（`crates/world/**` 一字未动，只在证据里做临时变异并在同一 burst 内还原，见 `180`）

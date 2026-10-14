@@ -1,0 +1,21 @@
+{
+  "width": 64,
+  "height": 64,
+  "ticks": 3,
+  "entities": [
+    {"id": 1,  "x": 32, "y": 32, "view_range": 12, "race": 0, "want_ref_msg": true},
+    {"id": 2,  "x": 32, "y": 33, "view_range": 5, "race": 80},
+    {"id": 3,  "x": 32, "y": 39, "view_range": 5, "race": 80},
+    {"id": 4,  "x": 44, "y": 32, "view_range": 5, "race": 80},
+    {"id": 5,  "x": 45, "y": 32, "view_range": 5, "race": 80},
+    {"id": 6,  "x": 44, "y": 44, "view_range": 5, "race": 80},
+    {"id": 7,  "x": 45, "y": 45, "view_range": 5, "race": 80},
+    {"id": 8,  "x": 32, "y": 20, "view_range": 5, "race": 80},
+    {"id": 9,  "x": 32, "y": 19, "view_range": 5, "race": 80},
+    {"id": 10, "x": 44, "y": 20, "view_range": 5, "race": 80},
+    {"id": 11, "x": 32, "y": 45, "view_range": 5, "race": 0, "want_ref_msg": true}
+  ],
+  "commands": [
+    {"tick": 2, "kind": "walk", "id": 1, "dx": 1, "dy": 0}
+  ]
+}

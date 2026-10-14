@@ -1,0 +1,31 @@
+181-gates.txt —— 片㊳ 四门禁 + 聚焦判据（③ 玩家 `ViewRange=12` 的 C# oracle 金标准对拍）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / openmir2-worker-11 / 2026-10-14
+cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m2svr-target；--offline；零起栈、零游戏端口（仅共享 3306）
+交付 head = 含 `git merge origin/master`（master = `6e01fce51`）后的合并树。
+====================================================================================================
+# 1) 四门禁
+$ cargo fmt --all -- --check
+fmt rc=0
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+clippy rc=0
+$ cargo test --workspace --offline --no-fail-fast
+101 suites · 1230 passed · 0 failed · 22 ignored · test_rc=0
+#   （片㊲ 基线 1222 passed；master 新增（㊲ 已合 + pet-slave-mutiny + chain-gate 等）+5 = 1230；
+#    本片对拍文件新增 3 用例已含在其中：world_aoi_parity 由 3 → 6 用例）
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。 · msgcodegen_rc=0
+
+# 2) 聚焦判据（本片新增）
+$ cargo test -p mir2-parity-tests --test world_aoi_parity --offline
+running 6 tests
+test golden_viewrange12_ring_boundary_is_pinned ... ok
+test redcheck_viewrange12_ring_collapsed_to_default_must_differ ... ok
+test redcheck_view_range_change_must_alter_visible_set ... ok
+test redcheck_position_change_must_differ ... ok
+test world_aoi_viewrange12_ring_matches_csharp ... ok
+test world_positions_and_visible_sets_match_csharp ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+# 3) 金标准生成（离线；dotnet，不占端口）
+$ dotnet run --project mir2-rs/tests/parity/csharp/WorldGolden -- aoi_viewrange12.json
+world golden: 11 实体 × 3 tick -> mir2-rs/tests/parity/world/golden/aoi_viewrange12.txt

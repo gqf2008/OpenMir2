@@ -1,0 +1,67 @@
+180-redcheck-viewrange12.txt —— 片㊳ 改坏必红（③ 玩家 `ViewRange=12` oracle 金标准对拍）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / openmir2-worker-11 / 2026-10-14
+本片零起栈、零占游戏端口；变异**只在自身 worktree 内**做，且**同一 burst 内用备份还原**（下方 §3 复核 sha256）。
+====================================================================================================
+# 0) 变异前基线 sha256（仓内件）
+$ cd mir2-rs && sha256sum crates/world/src/aoi.rs tests/parity/world/golden/aoi_viewrange12.txt \
+    tests/parity/world/scenarios/aoi_viewrange12.json
+309348bf83ab7a9b790157a9360211fd51a438761024b0353284450af51eb537 *crates/world/src/aoi.rs
+23c21c3512a8dda620020f51690661517b3349b26767b089303ca08966e376b0 *tests/parity/world/golden/aoi_viewrange12.txt
+af0c9a99388f69d88713961b3b2563f9aaf152c0d15e54d84cad1cca8d6949c4 *tests/parity/world/scenarios/aoi_viewrange12.json
+
+# 1) MUT-A（改坏被测实现）：`crates/world/src/aoi.rs:59` 把 `view_range` 硬编码成 5
+#    （= 模拟「AOI 窗口停在 `BaseObject.cs:383` 的缺省 5」这一缺陷本体）
+$ sed -i 's/let (cx, cy, view_range) = (viewer.x, viewer.y, viewer.view_range);/let (cx, cy, view_range) = (viewer.x, viewer.y, 5);/' crates/world/src/aoi.rs
+$ grep -n 'let (cx, cy, view_range)' crates/world/src/aoi.rs
+59:    let (cx, cy, view_range) = (viewer.x, viewer.y, 5);
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p mir2-parity-tests --test world_aoi_parity --offline
+running 6 tests
+test golden_viewrange12_ring_boundary_is_pinned ... ok
+test redcheck_viewrange12_ring_collapsed_to_default_must_differ ... ok
+test world_aoi_viewrange12_ring_matches_csharp ... FAILED
+test redcheck_view_range_change_must_alter_visible_set ... ok
+...
+---- world_aoi_viewrange12_ring_matches_csharp stdout ----
+aoi_viewrange12.json 位置/可见集与 C# oracle 不一致，首个差异在第 2 行:
+  rust  = ent 1 0 32 32 100 1 0 vis 1:2 2:2
+  csharp= ent 1 0 32 32 100 1 0 vis 8:2 1:2 2:2 3:2 10:2 4:2 6:2
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+MUT-A rc=101
+#   ★ 关键：**basic.json 的旧用例仍在 `ok`**（它全是 vr=5，压不出这个差异）⇒ 本片新增的 vr=12 用例
+#     确实**增加了覆盖**，不是旧用例的重复；「窗口压在 5」这类缺陷从此会被本用例判红。
+
+# 2) MUT-B（改坏金标准自身）：`golden/aoi_viewrange12.txt` 删掉 Chebyshev=12 的成员 `4:2`
+#    （= 模拟「有人用 view_range=5 重生成 golden」/ 金标准被腐蚀）
+$ python -c "p='tests/parity/world/golden/aoi_viewrange12.txt';s=open(p,encoding='utf-8').read();
+s=s.replace('vis 8:2 1:2 2:2 3:2 10:2 4:2 6:2','vis 8:2 1:2 2:2 3:2 10:2 6:2',1);
+open(p,'w',encoding='utf-8',newline='').write(s)"
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p mir2-parity-tests --test world_aoi_parity --offline
+running 6 tests
+test golden_viewrange12_ring_boundary_is_pinned ... FAILED
+test world_aoi_viewrange12_ring_matches_csharp ... FAILED
+...
+---- golden_viewrange12_ring_boundary_is_pinned stdout ----
+金标准自检失效：Chebyshev=12 的 4 号应可见，实际首 tick 行 = ent 1 0 32 32 100 1 0 vis 8:2 1:2 2:2 3:2 10:2 6:2
+---- world_aoi_viewrange12_ring_matches_csharp stdout ----
+aoi_viewrange12.json 位置/可见集与 C# oracle 不一致，首个差异在第 2 行:
+  rust  = ent 1 0 32 32 100 1 0 vis 8:2 1:2 2:2 3:2 10:2 4:2 6:2
+  csharp= ent 1 0 32 32 100 1 0 vis 8:2 1:2 2:2 3:2 10:2 6:2
+test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out
+MUT-B rc=101
+#   ★ 金标准自检门（`golden_viewrange12_ring_boundary_is_pinned`）**先于**对拍用例报红 ⇒ golden 一旦被
+#     用错窗口重生成即 fail-closed，不会让「Rust 与错 golden 一起假绿」。
+
+# 3) 还原 + 复核（同一 burst 内；变异不落交付）
+$ cp <backup>/aoi.rs crates/world/src/aoi.rs && cp <backup>/aoi_viewrange12.txt tests/parity/world/golden/aoi_viewrange12.txt
+$ sha256sum -c <baseline.sha256>
+crates/world/src/aoi.rs: OK
+tests/parity/world/golden/aoi_viewrange12.txt: OK
+tests/parity/world/scenarios/aoi_viewrange12.json: OK
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p mir2-parity-tests --test world_aoi_parity --offline
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+#   ⇒ `crates/world/**` 在本片**净改动 = 0**（git 交付差量里不含它；边界见 `182`）。
+
+# 4) 判据与牙的对应
+#   ① `world_aoi_viewrange12_ring_matches_csharp`：Rust vr=12 可见集 == oracle 金标准（逐行）——MUT-A 红。
+#   ② `golden_viewrange12_ring_boundary_is_pinned`：金标准自身必须钉住 12 可见 / 13 不可见——MUT-B 红。
+#   ③ `redcheck_viewrange12_ring_collapsed_to_default_must_differ`：把玩家 vr 压回 5 ⇒ 6..12 环消失——恒红。
