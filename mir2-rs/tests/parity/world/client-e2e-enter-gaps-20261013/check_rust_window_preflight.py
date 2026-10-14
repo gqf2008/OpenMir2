@@ -51,6 +51,14 @@ git 差异**，不是「`<target-dir>/debug` 里的 exe 与源一一对应」—
 若只 `checkout` 不 `cargo build`，`game-svr.exe` 仍是上一版）。R7 用**出处清单**（`--record-provenance`
 录制的 JSON：`source_head` + 六件 exe 的 sha256/字节）做确定性对账：`source_head` 必须 == 当前 `--ref`，
 且每件 exe 的 sha256 必须与清单逐字节相等；缺件/缺清单/清单与源不一致 ⇒ RED/PREREQ（fail-closed）。
+  R8 **窗口槽位空闲**（片60，收「`WINDOW_READY=YES` 却仍跑着修复前栈」这个假绿）：R1..R7 只看
+     **源/清单/exe 文件**，不看**有没有别的栈正占着游戏端口**。2026-10-14 15:0x 的「回归」复现根因
+     即此：泄漏栈 `game-svr.exe`（`E:/tmp/openmir2-merge-target/debug`，修复前 exe）仍在
+     LISTENING 5000/5100/5500/5600/5700/6000/7000/7100/7200 ⇒ 窗口起不来或从旧 exe 抓包
+     （HUD `0/0` + `CM_RUN=0`）。R8 是 fail-closed：十个游戏端口（3306 共享 MySQL **不在门内**）
+     必须全 DOWN；任何在跑的 `game-svr.exe` 必须是本计划 `--target-dir/debug/game-svr.exe`。
+     探不动本机（非 Windows / 无 PowerShell）⇒ INFO 跳过（干净检出本来就没有栈）。
+     自测/证据复算可用 `--slot-probe-json` 注入合成探针（会打 `WARN`，窗口机上禁用）。
 用法：
   python -I -B check_rust_window_preflight.py \
       --repo E:/tmp/m2svr-window-origin [--ref HEAD] \
@@ -147,6 +155,14 @@ WINDOW_BINS: tuple[str, ...] = (
 # R7 出处清单（provenance manifest）默认落点（放 target-dir 根）。
 PROVENANCE_NAME = "window-provenance.json"
 PROVENANCE_VERSION = 1
+# R8 窗口槽位（片60）：九个 Rust 栈游戏端口；3306 是**共享 MySQL**（必须常开）⇒ 不在门内。
+GAME_PORTS: tuple[int, ...] = (5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200)
+# R8 停泄漏栈的原始命令（判 RED 时原样可抄；`<源>` = 当前 --repo）。
+WINDOW_SLOT_STOP_CMD = (
+    "powershell -NoProfile -ExecutionPolicy Bypass -File "
+    "<源>/tools/m2-acceptance/start_rust_stack.ps1 "
+    "-LogDir E:/tmp/client-e2e/stack2 -Stop"
+)
 HASH_CHUNK = 1024 * 1024
 # MapInfo 逻辑名分隔符（`crates/envir/src/mapinfo.rs:28`：空格/逗号/制表）
 _MAPINFO_SEPS = " \t,"
@@ -293,6 +309,141 @@ def sha256_file(path: str) -> str | None:
     except OSError:
         return None
     return h.hexdigest()
+
+
+# ---------------------------------------------------------------- R8 窗口槽位
+def _powershell_path() -> str:
+    for cand in (
+        os.path.join(
+            os.environ.get("SystemRoot", "C:\\Windows"),
+            "System32",
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe",
+        ),
+        "/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+    ):
+        if cand and os.path.isfile(cand):
+            return cand
+    return ""
+
+
+def _normalize_slot_probe(obj) -> "tuple[dict, list, str | None]":
+    """把探针 JSON（真探的 PS 输出或注入件）归一成 `(ports={port:pid}, exes=[(pid,path)], err)`。"""
+    ports: dict = {}
+    exes: list = []
+    if not isinstance(obj, dict):
+        return {}, [], f"探针结构不符（顶层 {type(obj).__name__}，要 object）"
+    try:
+        raw_ports = obj.get("ports") or []
+        if isinstance(raw_ports, dict):
+            raw_ports = [raw_ports]
+        for item in raw_ports:
+            ports[str(int(item["LocalPort"]))] = int(item["OwningProcess"])
+        raw_exes = obj.get("exes") or []
+        if isinstance(raw_exes, dict):
+            raw_exes = [raw_exes]
+        for item in raw_exes:
+            exes.append((int(item["ProcessId"]), str(item.get("ExecutablePath") or "")))
+    except (KeyError, TypeError, ValueError) as exc:
+        return {}, [], f"探针结构不符（{type(exc).__name__}: {exc}）"
+    return ports, exes, None
+
+
+def probe_window_slot(powershell: str = "") -> "tuple[dict, list, str | None]":
+    """真探本机窗口槽位：LISTENING 游戏端口 + 在跑的 `game-svr.exe`。
+
+    只读（`Get-NetTCPConnection` / `Get-CimInstance`），零起栈、零 kill。探不了 ⇒ `err` 非空，
+    调用方按 INFO 跳过（不是 RED —— 干净检出/非 Windows 本来就没有栈可占端口）。
+    """
+    ps = powershell or _powershell_path()
+    if not ps or not os.path.isfile(ps):
+        return {}, [], "找不到 powershell（非 Windows / 干净检出 ⇒ 无栈可占端口）"
+    script = (
+        "$ports = Get-NetTCPConnection -State Listen -LocalPort "
+        + ",".join(str(p) for p in GAME_PORTS)
+        + " -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess; "
+        "$procs = Get-CimInstance Win32_Process -Filter \"Name='game-svr.exe'\" | "
+        "Select-Object ProcessId,ExecutablePath; "
+        "ConvertTo-Json -Compress -Depth 4 -InputObject "
+        "([pscustomobject]@{ports=@($ports); exes=@($procs)})"
+    )
+    try:
+        proc = subprocess.run(
+            [ps, "-NoProfile", "-Command", script], capture_output=True, timeout=60
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {}, [], f"探针失败（{type(exc).__name__}: {exc}）"
+    if proc.returncode != 0:
+        return {}, [], f"探针 rc={proc.returncode}: {decode_text(proc.stderr)[:200]}"
+    raw = decode_text(proc.stdout).strip()
+    if not raw:
+        return {}, [], "探针无输出（Get-NetTCPConnection 不可用？）"
+    try:
+        obj = json.loads(raw)
+    except ValueError as exc:
+        return {}, [], f"探针输出不是 JSON（{exc}: {raw[:160]}）"
+    return _normalize_slot_probe(obj)
+
+
+def load_slot_probe(path: str) -> "tuple[dict, list, str | None]":
+    """`--slot-probe-json`：自测/证据复算的注入探针（窗口机上禁用）。"""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            obj = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return {}, [], f"读不了注入探针 {path}（{exc}）"
+    return _normalize_slot_probe(obj)
+
+
+def window_slot_findings(
+    ports: "dict | None", exes: "list | None", target_dir: str
+) -> "tuple[list[str], list[str], list[str]]":
+    """R8 的纯逻辑：`(ports, exes, target_dir)` ⇒ `(ok 行, problems, prereqs)`。
+
+    - 任一游戏端口 LISTENING ⇒ RED（点名列 pid + 停栈命令）；
+    - 在跑的 `game-svr.exe` 路径 != `<target_dir>/debug/game-svr.exe`（缺 target_dir 亦然）⇒ RED；
+    - 两者都干净 ⇒ ok。不打印，便于 selftest 直测与调用方分类。
+    """
+    oks: list = []
+    probs: list = []
+    prereqs: list = []
+    ports = ports or {}
+    exes = list(exes or [])
+    occupied = sorted((int(p), int(pid)) for p, pid in ports.items() if pid)
+    if occupied:
+        pretty = ", ".join(f"{p}(pid {pid})" for p, pid in occupied)
+        probs.append(
+            "RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: "
+            f"{pretty} ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包"
+            "（2026-10-14 15:0x 的假回归即此）。先停栈："
+            f" {WINDOW_SLOT_STOP_CMD}"
+        )
+    else:
+        oks.append(f"[OK] R8 游戏端口全 DOWN（{len(GAME_PORTS)} 个；3306 共享 MySQL 不在门内）")
+    if not exes:
+        oks.append("[OK] R8 无 game-svr.exe 在跑")
+        return oks, probs, prereqs
+    if not target_dir:
+        probs.append(
+            f"RED R8: 有 game-svr.exe 在跑 {exes}，但未给 --target-dir ⇒ 无法证明它是本计划 exe"
+        )
+        return oks, probs, prereqs
+    want = os.path.normcase(os.path.abspath(os.path.join(target_dir, "debug", "game-svr.exe")))
+    ok_pids: list = []
+    for pid, path in exes:
+        got = os.path.normcase(os.path.abspath(path)) if path else ""
+        if got != want:
+            probs.append(
+                f"RED R8: 在跑的 game-svr.exe（pid {pid}）来自 {path or '<未知>'}，"
+                f"不是本计划 {os.path.join(target_dir, 'debug', 'game-svr.exe')}"
+                " ⇒ 修复前/异源栈，窗口会测旧件"
+            )
+        else:
+            ok_pids.append(pid)
+    if ok_pids:
+        oks.append(f"[OK] R8 在跑的 game-svr.exe（pid {', '.join(map(str, ok_pids))}）来自本计划 target")
+    return oks, probs, prereqs
 
 
 def record_provenance(
@@ -768,6 +919,36 @@ def selftest() -> int:
             repr(RUST_BUILD_PATHS),
         )
 
+    # R8（片60）：窗口槽位 fail-closed（真身 = 2026-10-14 泄漏栈占 9 端口 + 修复前 exe）。
+    chk("r8-game-ports-nine-no-3306", len(GAME_PORTS) == 9 and 3306 not in GAME_PORTS, repr(GAME_PORTS))
+    oks, probs, pre = window_slot_findings({}, [], "E:/tmp/plan-target")
+    chk("r8-free-green", len(oks) == 2 and not probs and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+    oks, probs, pre = window_slot_findings(
+        {"5000": 30284},
+        [(30284, "E:\\tmp\\openmir2-merge-target\\debug\\game-svr.exe")],
+        "E:/tmp/m2svr-window-target",
+    )
+    joined = " | ".join(probs)
+    chk(
+        "r8-occupied-and-stale-exe-red",
+        not oks and len(probs) == 2 and "5000" in joined and "不是本计划" in joined and not pre,
+        f"ok={len(oks)} prob={len(probs)} pre={len(pre)}: {joined[:200]}",
+    )
+    oks, probs, pre = window_slot_findings(
+        {}, [(30284, "E:\\tmp\\m2svr-window-target\\debug\\game-svr.exe")], "E:/tmp/m2svr-window-target"
+    )
+    chk("r8-plan-exe-green", len(oks) == 2 and not probs and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+    oks, probs, pre = window_slot_findings({}, [(1, "C:\\other\\game-svr.exe")], "")
+    chk("r8-no-target-dir-red", len(oks) == 1 and len(probs) == 1 and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+    # 注入探针坏了必须 PREREQ（fail-closed），不能被当成「探不了 ⇒ INFO 跳过」而假绿。
+    _bad = os.path.join(tempfile.mkdtemp(prefix="rustpf-r8-"), "bad.json")
+    with open(_bad, "w", encoding="utf-8") as fh:
+        fh.write("{\"ports\": [ not-json")
+    _p, _x, _e = load_slot_probe(_bad)
+    chk("r8-injected-probe-bad-prereq", not _p and not _x and bool(_e), repr(_e))
+    _p, _x, _e = load_slot_probe(os.path.join(os.path.dirname(_bad), "nope.json"))
+    chk("r8-injected-probe-missing-prereq", not _p and not _x and bool(_e), repr(_e))
+
     # --- 合成 mongen 检查器：验证调用与退出码传播 ---
     with tempfile.TemporaryDirectory(prefix="rustpf-mg-") as tmp:
         checker = os.path.join(tmp, "fake_checker.py")
@@ -841,6 +1022,15 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=None,
         help=f"R7 覆盖窗口件列表（可重复；默认六件 {WINDOW_BINS}）",
+    )
+    ap.add_argument(
+        "--slot-probe-json",
+        default="",
+        help=(
+            "R8 注入探针（仅自测/证据复算；窗口机禁用）：JSON "
+            '{"ports":[{"LocalPort":n,"OwningProcess":pid}],'
+            ' "exes":[{"ProcessId":pid,"ExecutablePath":"..."}]}'
+        ),
     )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
@@ -970,6 +1160,24 @@ def main(argv: list[str] | None = None) -> int:
         oks, probs, pre = binary_provenance_findings(
             repo, args.ref, args.target_dir, args.provenance, bins
         )
+        for line in oks:
+            print(line)
+        problems.extend(probs)
+        prereq.extend(pre)
+
+    # R8 窗口槽位（片60）：R1..R7 只证「源/清单/exe 文件」，证不了「没有别的栈占着端口 / 在跑旧 exe」。
+    if args.slot_probe_json:
+        print(f"WARN R8 使用注入探针 {args.slot_probe_json}（仅自测/证据复算；窗口机上禁用）")
+        slot_ports, slot_exes, slot_err = load_slot_probe(args.slot_probe_json)
+        if slot_err:
+            # 注入了却读不了 ⇒ fail-closed，不许当成「探不了 ⇒ 跳过」而假绿。
+            prereq.append(f"PREREQ_RED R8: 注入探针不可用（{slot_err}）")
+    else:
+        slot_ports, slot_exes, slot_err = probe_window_slot()
+        if slot_err:
+            print(f"INFO R8 跳过，未探本机槽位（{slot_err}）")
+    if not slot_err:
+        oks, probs, pre = window_slot_findings(slot_ports, slot_exes, args.target_dir)
         for line in oks:
             print(line)
         problems.extend(probs)

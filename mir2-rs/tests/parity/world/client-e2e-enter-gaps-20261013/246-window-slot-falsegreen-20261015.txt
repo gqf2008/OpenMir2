@@ -1,0 +1,80 @@
+# 246 — 片60：修掉「WINDOW_READY=YES 却仍跑着修复前栈」的假绿（before/after 逐字对照）
+# 卡 openmir2-client-e2e-enter-gaps / tag m2svr / 2026-10-15
+# BEFORE = master bf9c5c620 的工具（R1..R7）；AFTER = 本片（R1..R8）。同一台机器、同一替身源/替身脚本、同一泄漏栈。
+
+===== [1] BEFORE：旧 check_rust_window_preflight.py（R1..R7，真探）—— 期望假 GREEN =====
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 c61b9627a1（片㊴ 53 SM_HEALTHSPELLCHANGED TCharDesc 尾）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 6cadc9fbf9（片㊼ 52 SM_ABILITY 调用点布局全覆盖）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 fd68e037db（片31 SM_STRUCK 客户端布局（HIGHHP 家族））（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=da2df1fdbd 相对基线 origin/master@bf9c5c6205 生产路径零差异
+[OK] R7 出处清单 window-provenance.json source_head=da2df1fdbd，6 件 exe sha256 逐字节一致
+RESULT: GREEN
+
+===== [2] BEFORE：旧 window_handoff.py（入库替身脚本口径）—— 期望 WINDOW_READY=YES =====
+OK   G1 Rust 窗口前置门 GREEN（R1..R7）
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+
+===== [3] AFTER：新 check_rust_window_preflight.py（R1..R8，真探）—— 期望 RED（R8 点名泄漏）=====
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 c61b9627a1（片㊴ 53 SM_HEALTHSPELLCHANGED TCharDesc 尾）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 6cadc9fbf9（片㊼ 52 SM_ABILITY 调用点布局全覆盖）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 fd68e037db（片31 SM_STRUCK 客户端布局（HIGHHP 家族））（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=da2df1fdbd 相对基线 origin/master@bf9c5c6205 生产路径零差异
+[OK] R7 出处清单 window-provenance.json source_head=da2df1fdbd，6 件 exe sha256 逐字节一致
+RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 30284), 5100(pid 33132), 5500(pid 29240), 5600(pid 29240), 5700(pid 33132), 6000(pid 33132), 7000(pid 9100), 7100(pid 13052), 7200(pid 34944) ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包（2026-10-14 15:0x 的假回归即此）。先停栈： powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir E:/tmp/client-e2e/stack2 -Stop
+RED R8: 在跑的 game-svr.exe（pid 30284）来自 E:\tmp\openmir2-merge-target\debug\game-svr.exe，不是本计划 E:/tmp/m2svr-window-target\debug\game-svr.exe ⇒ 修复前/异源栈，窗口会测旧件
+RESULT: RED
+
+===== [4] AFTER：新 window_handoff.py（入库替身脚本口径）—— 期望 WINDOW_READY=NO =====
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 check_client_run_frames.py --selftest
+OK   G2 check_healthspellchanged_trigger.py --selftest
+OK   G2 verify_client_highhp_family.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+RED G1 Rust 窗口前置门 RED（构建源/读数标记不符；窗口会 PREREQ_RED）—— 见下方修复块
+WINDOW_READY=NO
+RESULT: RED
+
+===== [5] AFTER：新 window_handoff.py（root 现活脚本口径）—— 期望 G5 RED + G1 RED =====
+RED G1 Rust 窗口前置门 RED（构建源/读数标记/窗口槽位任一不符；窗口会 PREREQ_RED）—— 见下方修复块
+RED G5 窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 指向**共享主检出**（E:/Users/gxh/Documents/GitHub/OpenMir2，rev 车道工作区） ⇒ 直接跑它会构建另一棵树（白烧窗口）
+RED G5 窗口脚本 tgt=E:\tmp\openmir2-merge-target != 本计划 --target-dir=E:/tmp/m2svr-window-target ⇒ 会从另一份（可能过期的）exe 起栈，判据读数对不上构建源
+WINDOW_READY=NO
+RESULT: RED
+
+===== [6] AFTER：window_handoff.py --selftest（期望 107/107 OK）=====
+SELFTEST OK (107/107)
+
+===== [7] 收口条件（root 动作）=====
+  停泄漏栈后 R8 转 GREEN，WINDOW_READY 才转 YES：
+  powershell -NoProfile -ExecutionPolicy Bypass -File /e/tmp/m2svr-window-origin/tools/m2-acceptance/start_rust_stack.ps1 -LogDir E:/tmp/client-e2e/stack2 -Stop

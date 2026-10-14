@@ -1,0 +1,71 @@
+247 — 四门禁 + 机判读数（片60：R8「窗口槽位空闲」fail-closed 门）
+卡 `openmir2-client-e2e-enter-gaps`（tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = `13b8c9ec1`（= origin/master `bf9c5c620` 分支 tip）；cwd = mir2-rs；CARGO_TARGET_DIR=/e/tmp/m2svr-target
+====================================================================================================
+
+# 0) 边界声明
+
+本片**零生产代码**：无 `.rs`/`.toml`/`.ps1`/`.cs`；`src/ sql/ MirClient/ mir2-rs/crates/protocol/
+mir2-rs/crates/storage/ mir2-rs/bins/` 全空。改动 = 本卡证据目录内 8 件（2 改 `.py` 本卡工具 +
+README/SHA256SUMS + 4 新增证据）。`cargo test --workspace` 读数与 base 一致（无新增/删除用例）。
+
+# 1) 四门禁（cwd = mir2-rs，CARGO_TARGET_DIR=/e/tmp/m2svr-target）
+
+$ cargo fmt --all -- --check
+rc=0（无输出）
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.50s
+rc=0
+
+$ cargo test --workspace --offline
+101 suites：1233 passed / 0 failed / 22 ignored（rc=0；无 FAILED）
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+# 2) 判据工具自检（window_handoff G2 聚合 11 件，全部 SELFTEST OK）
+
+$ python -I -B window_handoff.py --selftest
+SELFTEST OK (107/107)     # 本片新增 R8 后，聚合门自身 107 牙全绿（原 107 未变）
+
+$ python -I -B check_rust_window_preflight.py --selftest
+SELFTEST OK (57/57)       # 原 50/50 + R8 新增 7 牙
+  r8-game-ports-nine-no-3306 / r8-free-green / r8-occupied-and-stale-exe-red /
+  r8-plan-exe-green / r8-no-target-dir-red / r8-injected-probe-bad-prereq /
+  r8-injected-probe-missing-prereq
+
+# 3) R8 机判（只读；详见 245/246）
+
+真探（本机现况，泄漏栈在位）:
+  RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 30284), 5100(pid 33132),
+           5500(pid 29240), 5600(pid 29240), 5700(pid 33132), 6000(pid 33132),
+           7000(pid 9100), 7100(pid 13052), 7200(pid 34944)
+  RED R8: 在跑的 game-svr.exe（pid 30284）来自 E:\tmp\openmir2-merge-target\debug\game-svr.exe，
+           不是本计划 E:/tmp/m2svr-window-target\debug\game-svr.exe
+  RESULT: RED   rc=1
+
+注入探针「全空闲」:  RESULT: GREEN  rc=0
+注入探针「5000 + 修复前 exe」: RESULT: RED  rc=1
+注入探针「坏 JSON」: PREREQ_RED  rc=2（fail-closed，不许假绿）
+
+before/after（同机同替身源同替身脚本；旧 = master bf9c5c620 工具，新 = 本片）:
+  BEFORE: 真探 RESULT: GREEN rc=0 ; handoff(替身脚本) WINDOW_READY=YES rc=0   <-- 假绿（真身缺口）
+  AFTER : 真探 RESULT: RED   rc=1 ; handoff(替身脚本) WINDOW_READY=NO  rc=1
+
+改坏必红（MUT-A：window_slot_findings 顶部插 `return [ok]`）:
+  --selftest FAILED (53/57) ; 真探回落假 GREEN（RESULT: GREEN rc=0）
+  还原后 sha256 与改前逐字节一致（见 245 §6 / 248 §3）
+
+# 4) SHA256SUMS / EOL（本清单写出后复跑；含本文件自身）
+
+$ python tools/evidence-hash/verify_sha256sums.py verify mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+GREEN mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt  [repo 口径]  OK 255/255
+
+$ python tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+GREEN mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt  [repo 口径]  OK 255/255
+      （无「多件」行 ⇒ 未列入清单的文件 = 0）
+
+$ python tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+EOLCHECK GREEN 256/256 件文本证据与仓库口径（LF）在 EOL 上一致
