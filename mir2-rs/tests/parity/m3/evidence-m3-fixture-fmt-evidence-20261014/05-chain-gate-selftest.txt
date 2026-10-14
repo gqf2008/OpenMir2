@@ -1,0 +1,41 @@
+  SELFTEST ok  classify_runner(0) ⇒ RUN-OK
+  SELFTEST ok  classify_runner(2) ⇒ PREREQ
+  SELFTEST ok  classify_runner(1) ⇒ RED
+  SELFTEST ok  classify_runner(127) ⇒ RED
+  SELFTEST ok  A READY + RUN-OK
+  SELFTEST ok  B PENDING（runner SKIP）
+  SELFTEST ok  C READY + PREREQ（默认不红）
+  SELFTEST ok  D runner rc=1 ⇒ RED
+  SELFTEST ok  E comparator rc=1 ⇒ RED
+  SELFTEST ok  默认 RED 仅 2 条（D runner + E comparator）
+  SELFTEST ok  默认 PENDING / PREREQ 不判红
+  SELFTEST ok  require-all 把 PENDING 判红
+  SELFTEST ok  require-all 把 runner PREREQ 判红
+  SELFTEST ok  共享管线 rc=3 ⇒ 判红
+  SELFTEST ok  共享管线缺件默认不红
+  SELFTEST ok  共享管线缺件 require-all 判红
+  SELFTEST ok  删 runner ⇒ INCONSISTENT（改坏必红）
+  SELFTEST ok  MATRIX runner 命名合规
+  SELFTEST ok  MATRIX comparator 命名合规
+  SELFTEST ok  共享管线登记项 ≥2
+  SELFTEST ok  共享管线件在本仓库树内可解析（REPO_ROOT 口径）
+  SELFTEST ok  主机门（.py）登记项 ≥1
+  SELFTEST ok  行会/攻城锚门已接入共享管线（⑧-10 残余 Minor，防回退）
+  SELFTEST ok  英雄/宠物锚门已接入共享管线（⑨-5 残余 Minor，防回退）
+  SELFTEST ok  元宝寄售锚门已接入共享管线（⑩-3 残余 Minor，防回退）
+  SELFTEST ok  任务锚门已接入共享管线（⑥ 锚门族覆盖面收口，防回退）
+  SELFTEST ok  组队/交易锚门已接入共享管线（⑦ 锚门族覆盖面收口，防回退）
+  SELFTEST ok  markers 前缀门已接入共享管线（防回退）
+  SELFTEST ok  宝宝登记门已接入共享管线（防回退）
+  SELFTEST ok  行会战怪行为登记门已接入共享管线（防回退）
+  SELFTEST ok  白名单登记号审计门 selftest 已接入共享管线（防回退）
+  SELFTEST ok  fmt 证据自描述门 selftest+check 已接入共享管线（防回退）
+  SELFTEST ok  主机门（.py）登记项 ≥21（castle + 行会/攻城 + 英雄/宠物 + 元宝寄售 + 任务 + 组队/交易 + markers 前缀 + 宝宝登记 + 白名单审计 + 行会战怪行为登记 + fmt 证据 各 selftest[/check]）
+  SELFTEST ok  共享管线登记名唯一（防重复注册偷懒）
+  SELFTEST ok  共享管线 (file,args) 登记唯一
+  SELFTEST ok  _tool_argv(.py) ⇒ python -I
+  SELFTEST ok  _tool_argv(.ps1) ⇒ powershell -File
+  SELFTEST ok  _run_tool(.py) 真跑 rc=0
+  SELFTEST ok  _run_tool 缺件 ⇒ 127
+SELFTEST GREEN: fixture_chain_gate selftest 39/39
+chain-selftest rc=0
