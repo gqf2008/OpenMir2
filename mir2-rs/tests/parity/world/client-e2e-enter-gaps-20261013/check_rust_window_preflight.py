@@ -398,10 +398,13 @@ def binary_provenance_findings(
             + ") ⇒ 窗口会从旧/异构 exe 起栈；先重编译 + 重录清单"
         )
     if not problems:
+        # 末行必须报**清单里的** `source_head`（不是当前 ref 的 oid）：两者在
+        # 「清单 head 滞后但生产路径零差异」的豁免支会不同，报 ref 会让人误以为清单本就来自该 head
+        # （reviewer-5 `871cc797` O-1）。正面支两者相等 ⇒ 该改动逐字节不变。
         return (
             infos
             + [
-                f"[OK] R7 出处清单 {os.path.basename(provenance_path)} source_head={oid[:10]}，"
+                f"[OK] R7 出处清单 {os.path.basename(provenance_path)} source_head={head[:10]}，"
                 f"{len(bins)} 件 exe sha256 逐字节一致"
             ],
             [],
@@ -691,6 +694,14 @@ def selftest() -> int:
         chk("r7-green", len(oks) == 1 and not probs and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
         oks, probs, pre = binary_provenance_findings(tmp, sixth, win_tgt, prov, r7_bins)
         chk("r7-nonprod-advance-green", len(oks) == 2 and not probs and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        # 豁免支的末行必须点名**清单**的 `source_head`（= fifth），而不是当前 ref（= sixth）。
+        # 红检（改坏必红）：把末行改回 `source_head={oid[:10]}` ⇒ 本牙必红。
+        last_ok = oks[-1] if oks else ""
+        chk(
+            "r7-nonprod-advance-ok-names-manifest-head",
+            f"source_head={fifth[:10]}" in last_ok and f"source_head={sixth[:10]}" not in last_ok,
+            repr(last_ok),
+        )
         # 源前移且在 `mir2-rs/**` 上有生产差异（清单停在旧 head）⇒ RED（真身 = 刷源后不重编译）。
         oks, probs, pre = binary_provenance_findings(tmp, third, win_tgt, prov, r7_bins)
         chk("r7-source-head-mismatch-red", not oks and len(probs) == 1 and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")

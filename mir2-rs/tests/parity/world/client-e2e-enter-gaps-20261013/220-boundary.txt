@@ -1,0 +1,71 @@
+220-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片「R7 末行报清单头」的边界与留痕
+m2-svr / openmir2-worker-11 / 2026-10-14；零起栈、零游戏端口；不 merge、不自签
+base = `origin/master` = `714898ed0cc99773f854873e7f9beb73a7a178ca`（= walgit/master 双端一致）
+====================================================================================================
+
+# 1) 本提交（片）净改动 = 7 路径，全部在证据目录
+
+```
+$ git diff --name-status 40d45ac1f <本片 head>          # 本片增量
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/217-r7-ok-line-manifest-head.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/218-redcheck-r7-ok-line.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/219-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/220-boundary.txt
+```
+= 7 路径（4 增 + 3 改）；**唯一非证据件 = `check_rust_window_preflight.py`**（证据目录内的判据工具，
+非生产代码）。
+
+# 2) 分支相对基线 `origin/master` 的累计差量（含上一片「HIGHHP 家族完整性审计」= 8 路径）
+
+```
+$ git diff --name-status 714898ed0 <本片 head>
+A	.../213-highhp-family-audit.txt
+A	.../214-redcheck-highhp-family.txt
+A	.../215-gates.txt
+A	.../216-boundary.txt
+A	.../217-r7-ok-line-manifest-head.txt
+A	.../218-redcheck-r7-ok-line.txt
+A	.../219-gates.txt
+A	.../220-boundary.txt
+M	.../README.md
+M	.../SHA256SUMS.txt
+M	.../check_rust_window_preflight.py
+A	.../verify_client_highhp_family.py
+M	.../window_handoff.py
+```
+= 13 路径（8 增 + 5 改：上一片 8 + 本片 7，README/SHA256SUMS 两片各改一次 ⇒ 去重后 13）。
+**全部**在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`。
+
+# 3) 冻结面（必须空）与零 Rust/C#（必须空）
+
+```
+$ git diff --name-only 714898ed0 -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+（空）
+$ git diff --name-only 714898ed0 -- '*.rs' '*.toml' '*.ps1' '*.cs'
+（空）
+```
+（`*.py` 有 3 件：`verify_client_highhp_family.py`（上一片）、`check_rust_window_preflight.py`（本片）、
+`window_handoff.py`（上一片一行清单改动）——均为**证据目录内的判据工具**，不改任何 Rust 生产代码。）
+
+# 4) 仓外产物（不在 diff 内；只留痕）
+
+```
+E:/tmp/m2svr-burst23/mut/check_rust_window_preflight.py   # 红检变异副本（218 用；仓内零改动）
+E:/tmp/m2svr-burst23/selftest-fixed.txt                    # 自检 49/49 原始输出
+E:/tmp/m2svr-burst23/selftest-mut.txt                      # 变异后 48/49 原始输出
+E:/tmp/m2svr-burst23/gate-real.txt                         # 真身 R1..R7 GREEN 原始输出
+E:/tmp/m2svr-burst23/gate-agg-fixed.txt                    # 聚合门（替身脚本口径）YES
+E:/tmp/m2svr-burst23/gate-agg-live.txt                     # 聚合门（活脚本口径）NO（G5）
+E:/tmp/m2svr-burst23/g-{fmt,clippy,test,msg}.txt           # 四门禁原始输出
+```
+（`E:/tmp/m2svr-window-origin` / `E:/tmp/m2svr-window-target` 为既往片遗留、供 root 开窗；
+本片只读复跑前置门，未改写——须保留到 root 收窗后，登记为「待 root 收窗」的检出外中间件。）
+
+# 5) 纪律
+
+- 未 start 任何服务/客户端/代理进程；十端口状态与开工前一致（3306 为共享 MySQL，只读）。
+- 未 merge、未自签 review、未移卡；共享主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2` 未触碰（只读复核）。
+- `src/ sql/ MirClient` 零改动；本片零生产代码。

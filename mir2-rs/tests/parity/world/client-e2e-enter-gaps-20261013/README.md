@@ -1235,3 +1235,28 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   （含 `OK G2 verify_client_highhp_family.py --selftest`）；`check_rust_window_preflight.py` R1..R7 GREEN。
 - **仍归 root/owner**：真机 R ①②③（含受击步）；G5（root 活脚本未换入库替身）；O-3（现建议**扩容**到
   HIGHHP 家族）。
+
+### 52) R7「出处清单」末行改报清单头（收 reviewer-5 `871cc797` O-1）（2026-10-14）—— `217`/`218`
+
+`check_rust_window_preflight.py` 的 `binary_provenance_findings()`（R7）在「清单 `source_head` 滞后、
+但 `mir2-rs/**` 生产路径零差异」的**豁免支**里，末行 `[OK] …` 把清单头打印成**当前 ref 的 oid**，
+而非清单里真实的 `source_head` ⇒ 人读门输出时会误以为清单本就来自该 head（reviewer-5 在
+`871cc797` @`276f2f95` 判 **Minor(non-blocking)**，建议「下次动该文件时改」）。
+
+- **改**：末行 `source_head={oid[:10]}` → **`source_head={head[:10]}`**（清单里的头）。
+  **判绿/判红逻辑零改动**（前一行 INFO 一直正确报 `source_head=<清单旧头> != <ref>`）；
+  正面支（`head == oid`）**逐字节不变**。文件 git blob `e21fb4ad60` → `2ae578fd1f`。
+- **新牙**：`r7-nonprod-advance-ok-names-manifest-head` —— selftest 合成仓里清单录 `fifth`、再前进一条
+  非生产提交 `sixth` ⇒ 豁免支末行必须含 `source_head=fifth[:10]` 且不含 `sixth[:10]`；
+  `--selftest` **48/48 → 49/49**。
+- **改坏必红（`218`）**：把末行改回 `{oid[:10]}` ⇒ 新牙红、`SELFTEST FAILED (48/49)`（FAIL 详情点名
+  末行报的是当前 ref `502f3fb498`）；还原 ⇒ `SELFTEST OK (49/49)`。变异只在 `E:/tmp` 副本，仓内 sha256
+  全程不变。
+- **复跑**：真身 R1..R7 **GREEN rc=0**（R7 末行 `source_head=5e757b0252`，正面支与改前逐字节相同）；
+  聚合门（入库替身脚本口径）**`WINDOW_READY=YES` / GREEN rc=0**；活脚本口径仍 **G5 RED**（登记，非本片缺陷）。
+- **四门禁（`219`）**：fmt rc=0 / clippy rc=0(`-D warnings`) / **101 suites 1232 passed 0 failed 22 ignored** /
+  msgcodegen 604 rc=0。
+- **边界（`220`）**：本片净 6 路径（1 `.py` + 4 证据 + README/SHA256SUMS），全在
+  `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`；**零 `.rs`/`.toml`/`.ps1`/`.cs`**；
+  冻结面 `src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/` 空。
+- 判级 = **L**（证据/工具文案，零行为变化；正面支逐字节不变）。卡级 R 真机 ①②③ 仍归 root 独占窗口。
