@@ -1,0 +1,9 @@
+$ python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014   # 重记（README §5 措辞订正后）
+写入 mir2-rs\tests\parity\m3\evidence-m3-chain-gate-o1-retro-20261014\SHA256SUMS.txt（17 行，repo 口径）
+GREEN: write 完成（1 行 hash 变更，mode=repo）
+rc=0
+
+$ # 幂等复跑（应 0 行变化）
+写入 mir2-rs\tests\parity\m3\evidence-m3-chain-gate-o1-retro-20261014\SHA256SUMS.txt（17 行，repo 口径）
+GREEN: write 完成（0 行 hash 变更，mode=repo）
+rc=0

@@ -1,0 +1,45 @@
+# evidence-m3-chain-gate-o1o2-closeout-20261014 —— 命令清单与原始读数
+
+## 本片做了什么
+
+- 卡 `openmir2-m3-fixture-chain-gate`；收口 reviewer-5 在上一片
+  `evidence-m3-chain-gate-o1-retro-20261014`（head `f58b8dfa6`）上携带的两条**非阻塞 Minor**：
+  - **O-1（文档时效）**：该包 README 写 base / 链门树为 `515c6b5ea`，而交付 patch 的 base 是 `f43364c45`。
+  - **O-2（证据卫生）**：`14-redcheck-readme-drift.txt` 原始输出含作者 worktree 绝对路径，且当时留下临时件
+    `README.md.o1bak`（RED 行含「多件: README.md.o1bak」）。
+- 本片只动该包的 `README.md` 与 `14-*` 两件并重记其 `SHA256SUMS.txt`；零 `.rs`/`.toml`/`.ps1`/`.cs`；
+  不引入任何 gating 逻辑改动。另新增本证据包。
+
+## 命令（全部 cwd = 本 worktree；零起栈/零端口）
+
+```sh
+# 0) O-2 重抓：备份件放仓外（不污染证据目录），改坏 → 验证 RED → 还原 → 验证 GREEN
+cp  <pkg>/README.md E:/tmp/m3cs-o1o2/README.bak
+printf '<!-- O2 redcheck mutate 20261014 -->\r\n' >> <pkg>/README.md
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra <pkg>     # 期望 RED 15/16 点名 README.md
+cp  E:/tmp/m3cs-o1o2/README.bak <pkg>/README.md
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra <pkg>     # 期望 GREEN 16/16
+
+# 1) 订正 README base 后，按仓库口径（LF 归一 = git blob）重记本片清单
+python -I tools/evidence-hash/verify_sha256sums.py write  <pkg>
+python -I tools/evidence-hash/verify_sha256sums.py write  <pkg>   # 幂等复跑：0 行变化
+
+# 2) 复核 + EOL
+python -I tools/evidence-hash/verify_sha256sums.py verify  --check-extra <pkg>
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <pkg>
+
+# 3) 链深检门 + fmt 证据门
+python -I mir2-rs/tests/parity/m3/fixture_chain_gate.py selftest
+python -I mir2-rs/tests/parity/m3/fixture_chain_gate.py check
+python -I mir2-rs/tests/parity/m3/m3_fixture_fmt_evidence_gate.py selftest
+python -I mir2-rs/tests/parity/m3/m3_fixture_fmt_evidence_gate.py check
+python -I mir2-rs/tests/parity/m3/m3_fixture_fmt_evidence_gate.py mutation
+
+# 4) 四门禁（cwd=mir2-rs, CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo run -p msgcodegen -- --check
+```
+
+> `<pkg>` = `mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014`。

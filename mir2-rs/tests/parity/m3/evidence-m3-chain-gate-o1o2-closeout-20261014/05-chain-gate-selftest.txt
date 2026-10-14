@@ -1,0 +1,5 @@
+$ python -I mir2-rs/tests/parity/m3/fixture_chain_gate.py selftest
+  SELFTEST ok  _run_tool(.py) 真跑 rc=0
+  SELFTEST ok  _run_tool 缺件 ⇒ 127
+SELFTEST GREEN: fixture_chain_gate selftest 40/40
+rc=0

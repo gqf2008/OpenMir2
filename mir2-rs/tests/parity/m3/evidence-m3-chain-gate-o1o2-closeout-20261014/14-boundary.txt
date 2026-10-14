@@ -1,0 +1,47 @@
+# 边界（本收口片 vs origin/master = `3db79cae0`）
+
+## 1. `git diff --name-status origin/master..HEAD`（提交后复核）
+
+3 M + 18 A = 21 路径（全部前缀 `mir2-rs/tests/parity/m3/evidence-m3-chain-gate-*`）：
+
+```
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/14-redcheck-readme-drift.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/README.md
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/SHA256SUMS.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/00-commands.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/01-readme-base-diff.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/02-redcheck-normalized.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/03-verify-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/04-hash-regen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/05-chain-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/06-chain-gate-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/07-fmt-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/08-fmt-gate-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/09-fmt-gate-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/10-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/11-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/12-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/13-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/14-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/15-self-verify.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1o2-closeout-20261014/SHA256SUMS.txt
+```
+
+```
+$ git diff --name-status origin/master..HEAD | wc -l
+21
+$ git diff --name-status origin/master..HEAD | grep -cE '\.rs$'
+0
+$ git diff --name-status origin/master..HEAD | grep -cE '\.(toml|ps1|cs)$'
+0
+```
+
+## 2. 冻结面（自 `origin/master`）
+
+```
+$ git diff --name-only origin/master..HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+（空）
+```
+
+（`src/` 含 `src/BotSrv/`：本片在 `src/**` 下零改动。）
