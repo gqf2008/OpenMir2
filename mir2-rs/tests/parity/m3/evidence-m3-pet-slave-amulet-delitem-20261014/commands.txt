@@ -1,0 +1,39 @@
+# M3⑨-2 护身符扣光删除帧面 复现命令（隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target）
+
+# 0) 开工（自己的 worktree；绝不碰共享主检出 E:/Users/gxh/Documents/GitHub/OpenMir2）
+cd E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3hp
+git fetch walgit
+git fetch origin
+git switch -c worktree-m3-pet-slave-amulet-delitem 9edfc745d   # 直接从 walgit/master 分出
+# 代码提交 = 本目录的父提交；证据提交 = 本目录所在提交 = patch head
+
+# 1) 四门禁（gates/，cwd = mir2-rs）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo fmt --all -- --check                            # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo clippy --workspace --all-targets -- -D warnings # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test --workspace --no-fail-fast                 # 101 suites 1222 passed 0 failed 22 ignored rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo run -q -p msgcodegen -- --check                 # 604 条 rc=0
+
+# 2) 聚焦判据（3 条）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --no-fail-fast delitem           # lib 2 passed rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --no-fail-fast exhausted_amulet  # bin 1 passed rc=0
+
+# 3) 改坏必红（redchecks/，逐条：改 -> 跑 -> 还原；变异脚本 = redchecks/mutate.py）
+#    RC1  删掉 deleted 支发帧            -> spell_cmd_summon_exhausted_amulet_emits_delitem rc=101
+#    RC2  帧内 Dura 不置 0（item.dura）   -> deleted_amulet_body_encodes_delitem_with_zero_dura rc=101
+#    RC3  去掉 StdMode==50 名称后缀      -> 同上 rc=101
+#    cwd = 本证据目录
+python -I redchecks/mutate.py m1
+(cd <worktree>/mir2-rs && CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --no-fail-fast exhausted_amulet)  # rc=101
+python -I redchecks/mutate.py restore
+python -I redchecks/mutate.py m2 ; (cd <worktree>/mir2-rs && CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --no-fail-fast deleted_amulet) ; python -I redchecks/mutate.py restore
+python -I redchecks/mutate.py m3 ; (cd <worktree>/mir2-rs && CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --no-fail-fast deleted_amulet) ; python -I redchecks/mutate.py restore
+#    还原口径：git hash-object <f> == git rev-parse :<f>（index）
+
+# 4) 边界（base = refs/heads/master = walgit/master = 9edfc745d）
+git diff --name-only 9edfc745d <head> -- src sql MirClient                              # 空
+git diff --name-only 9edfc745d <head> -- mir2-rs/crates/protocol mir2-rs/crates/storage # 空
+git diff --stat    9edfc745d <head>
+
+# 5) 证据清单自检（仓库 LF / git-blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py verify  mir2-rs/tests/parity/m3/evidence-m3-pet-slave-amulet-delitem-20261014 --check-extra
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-pet-slave-amulet-delitem-20261014

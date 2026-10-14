@@ -1,0 +1,83 @@
+# 02 — 变更清单（净差量 3 个 .rs，+335/-7，全部在 bins/game-svr）
+
+## 1) bins/game-svr/src/smframe.rs（+27）
+
+新增帧编码器（紧随既有 `sm_additem`，同一口径表）：
+
+```rust
+/// PlayObject.SendDelItems(UserItem)（PlayObject.Base.cs:1648-1665）：
+/// MakeMessage(SM_DELITEM(202), ActorId, 0, 0, 1) + 尾 EDCode.EncodeBuffer(clientItem)。
+#[must_use]
+pub fn sm_delitem(actor_id: i32, tail: &[u8]) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_DELITEM, 0, 0, 1);
+    gm_data_body(header, tail)
+}
+```
+
+- 与 `sm_additem` 一致：本函数只拼 12B 命令头 + **尾原样透传**（不在此编码 ClientItem）。
+- 新增单测 `delitem_field_layout_and_tail_passthrough`：`Recog=ActorId/Param=Tag=0/Series=1`，尾原样。
+
+## 2) bins/game-svr/src/slave.rs（+132）
+
+新增帧体构造器（模块头把「登记未接」改为「已接」）：
+
+```rust
+#[must_use]
+pub fn deleted_amulet_body(actor_id: i32, item: &BagItem, catalog: &dyn ItemCatalog) -> Option<Vec<u8>> {
+    let tpl = catalog.get(item.index)?;                    // SendDelItems 的 if (stdItem != null)
+    let mut name = item_display_name(catalog, item);       // CustomItemSystem.GetItemName
+    if tpl.std_mode == 50 { name = format!("{name} #0"); } // " #" + Dura，而 Dura 已置 0
+    let ci = itemwire::ClientItem { tpl, name, make_index: item.make_index,
+                                    dura: 0, dura_max: item.dura_max, desc: item.desc };
+    let tail = edcode::encode(&itemwire::encode_client_item(&ci));
+    Some(smframe::sm_delitem(actor_id, &tail))
+}
+```
+
+- `dura: 0` 是**照搬语句序**的结果（oracle `:123` 先置 0 再 `:124` 发帧），不是近似。
+- **无** `StdModeMap` 的 `Desc[8]`⇒`Shape`(0/130) 改写（`SendDelItems` 不动 `Shape`，与 `SendAddItem` 不同）。
+- 新增单测 `deleted_amulet_body_encodes_delitem_with_zero_dura`：普通护身符逐字节 + `StdMode==50` 的
+  `"药 #0"` 后缀 + 模板缺失 ⇒ `None`。
+
+## 3) bins/game-svr/src/main.rs（+183）
+
+`handle_spell_cmd` 的护身符结算点（`outcome.amulet`）由「只发非 deleted 支的 `SM_DURACHANGE`」
+改为两支分开：
+
+```rust
+if let Some((slot, used)) = outcome.amulet {
+    if used.deleted {
+        // 清槽前取件（apply_amulet_use 会把 UseItems[slot] 置 None）
+        let body = ground_sessions.get(chr_name)
+            .and_then(|sg| sg.use_items.get(usize::from(slot))).and_then(Option::as_ref)
+            .and_then(|it| game_svr::slave::deleted_amulet_body(actor_id, it, catalog));
+        apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+        if let Some(body) = body { send_self_frame(online, gates, chr_name, body); }
+    } else {
+        apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+        // …原 SM_DURACHANGE 支（不变）…
+    }
+}
+```
+
+- `send_self_frame` 即「只回发起者那条连接」（oracle `SendSocket` 语义）。
+- 新增集成用例 `spell_cmd_summon_exhausted_amulet_emits_delitem`（Dura=100 走扣光支）。
+
+## 调用点/遍历序影响
+
+- **零并行**：无新任务/无迭代序变化。
+- **RNG 账本**：本片不调 `world.rng`（`use_amulet`/`encode_client_item` 均为纯函数），
+  故施法后 `do_spell_tail` 的取数位置不变。
+- **出队序**：`SM_DELITEM` 是**立即**帧（oracle `SendSocket`），不参与 `MsgQueue` 优先级出队；
+  测试断言扣光支**不**发 `SM_DURACHANGE`。
+
+## 不覆盖项（登记，本片差量外）
+
+1. `SendDelItems` 的其他调用点（`CharacterObject.cs:200/239`、`PlayObject.Attack.cs:1451`、
+   `PlayObject.cs:2972/3007/4120/5375`、`PlayObject.Message.cs:416/430/1872/2260` 等）：本片只接
+   ⑨-2 召唤面的那一处；其余归各自系统（⑦/⑤/掉落/复活等）的卡。
+2. `SendUpdateItem`（`SM_UPDATEITEM=203`）与 `SM_DELITEMS`（复数 709，`SendDelItemList`）：
+   本片**不实现**（不同调用面，未登记在 ⑨ 卡）。
+3. `GetUpgradeStdItem` desc 升级差量 / `Desc[13]==1` 自定义名：既有登记（`T-24` 同源），
+   `Desc` 全 0 的物品逐字节等价。
+4. 真机 DoD：`run_hero_pet_pair.ps1` 的护身符扣光 step 同序列 `diff=0`（等窗口线）。
