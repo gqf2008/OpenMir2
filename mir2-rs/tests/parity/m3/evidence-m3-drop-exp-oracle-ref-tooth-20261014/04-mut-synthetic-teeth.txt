@@ -1,0 +1,5 @@
+SELFTEST ok oracle-refs-fresh expect=[] got=[]
+SELFTEST ok oracle-ref-path-red expect=True got=True
+SELFTEST ok oracle-ref-line-red expect=True got=True
+SELFTEST ok oracle-ref-method-red expect=True got=True
+SELFTEST ok oracle-ref-method-ok expect=[] got=[]

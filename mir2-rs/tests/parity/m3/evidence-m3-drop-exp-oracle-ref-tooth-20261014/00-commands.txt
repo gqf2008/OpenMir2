@@ -1,0 +1,38 @@
+# 00-commands.txt —— 本片全部可复现命令（cwd = 仓库根，除注明外）
+
+## 交付/边界
+
+    git fetch origin
+    git merge --ff-only origin/master          # a4058a19a -> 6dba8719d（base）
+    git diff --name-only HEAD -- . ":(exclude)mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014"
+    git diff --name-only HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+    git diff --name-only HEAD -- "*.rs" "*.toml" | wc -l
+
+## 门（纯度门，唯一真源 = drop_exp_consumers.tsv）
+
+    cd mir2-rs/tests/parity/m3/drop-exp
+    python -I drop_exp_purity_gate.py selftest           # 期望 SELFTEST ok=28/28 rc=0
+
+## 改坏必红（真表）
+
+    # 把 drop_exp_consumers.tsv 第 46 行的 oracle_ref 由 :811 改回错值 :238
+    #   csharp wallclock GameSrv...RegenMonsters@...:815 ... MonGen.cs:811 -> :238
+    python -I drop_exp_purity_gate.py selftest           # 期望 FAIL oracle-refs-fresh + ok=27/28 rc=1
+    # 还原 :811 后回到 ok=28/28 rc=0
+
+## oracle_ref 审计（人复核表）
+
+    python -I /e/tmp/m3bag-tick/audit.py                 # 15 条 csharp 行逐条列方法体归属（见 05）
+
+## 四门禁（cwd = mir2-rs，CARGO_TARGET_DIR=E:/tmp/m3bag-target）
+
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets --offline -- -D warnings
+    cargo test --workspace --offline --no-fail-fast
+    cargo run -p msgcodegen --offline -- --check
+
+## 证据清单复核（仓库字节/git-blob 口径）
+
+    python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014
+    python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014
+    python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3
