@@ -1,53 +1,60 @@
-$ git status --porcelain（本片全部改动，未提交态）
+$ git diff --name-status origin/master..HEAD（HEAD = 本片 head，含 merge origin/master）
 
- M mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/README.md
- M mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/SHA256SUMS.txt
- M mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/README.md
- M mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/SHA256SUMS.txt
- M mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/README.md
- M mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/SHA256SUMS.txt
- M mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/README.md
- M mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/SHA256SUMS.txt
- M mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/README.md
- M mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/SHA256SUMS.txt
-?? mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/
+M	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/README.md
+M	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/SHA256SUMS.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/00-commands.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/01-readme-retro-diff.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/02-hash-regen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/03-verify-green.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/04-chain-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/05-chain-gate-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/06-fmt-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/07-fmt-gate-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/08-fmt-gate-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/09-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/10-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/11-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/12-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/13-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/14-redcheck-readme-drift.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/15-self-verify.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/README.md
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/README.md
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/README.md
+M	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/README.md
+M	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/SHA256SUMS.txt
 
-$ 分类
+$ 计数（应为纯 m3 证据/文档，零 .rs/.toml/.ps1/.cs）
 
-所有路径（M 与 ??）都在 mir2-rs/tests/parity/m3/** 之下：
-
-mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/README.md
-mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/SHA256SUMS.txt
-mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/README.md
-mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/SHA256SUMS.txt
-mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/README.md
-mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/SHA256SUMS.txt
-mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/README.md
-mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/SHA256SUMS.txt
-mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/README.md
-mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/SHA256SUMS.txt
-mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/
-
-$ 扩展名计数（在工作树新增/修改的路径里）
+  路径数 = 28
   *.rs = 0
   *.toml = 0
   *.ps1 = 0
   *.cs = 0
 
+$ 全部路径前缀（应只有 mir2-rs/tests/parity/m3/**）
+  mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014
+  mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014
+  mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014
+  mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014
+  mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014
+  mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014
+
 $ 冻结面（应为空）
-  src:
-  sql:
-  MirClient:
-  mir2-rs/crates/protocol:
-  mir2-rs/crates/storage:
-  mir2-rs/bins:
-  src/BotSrv:
+  src = 0
+  sql = 0
+  MirClient = 0
+  mir2-rs/crates/protocol = 0
+  mir2-rs/crates/storage = 0
+  mir2-rs/bins = 0
+  src/BotSrv = 0
 
-$ 本片改动清单（5 README + 5 SHA256SUMS + 本证据包）
-
-  M mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/{README.md,SHA256SUMS.txt}
-  M mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/{README.md,SHA256SUMS.txt}
-  M mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/{README.md,SHA256SUMS.txt}
-  M mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/{README.md,SHA256SUMS.txt}
-  M mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/{README.md,SHA256SUMS.txt}
-  A mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/**
+$ HEAD / base
+  base = cb2a0ab88eca13825da391c973f53939976c4b29 (Merge 2af5a6a52 (enter-gaps-window-dense-menu): 客户端联)
+  head = 生成本边界时的分支 tip = 9602ae3c888f10a10a3d9187e82207f46a8c73b9
+         （本证据包自身随后的一次证据提交会使 tip 前进；**交付 head 以 walgit patch 条目 / `git ls-remote` 为准**）
