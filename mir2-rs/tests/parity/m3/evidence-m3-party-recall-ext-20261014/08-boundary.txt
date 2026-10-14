@@ -1,30 +1,51 @@
-# 边界（冻结面）：base=083dc1d6d706c2841c3d4e1386048528264a0fbf
+# 边界（冻结面）：base=origin/master 6dba8719d0d5dd834bbab159716b2a538160d333（返工 head 见远端分支 tip；本文件不钉 head oid 以免 amend 自指）
 
-## git diff --name-only 083dc1d6d HEAD -- src sql MirClient
+## git diff --name-only origin/master HEAD -- src sql MirClient
 (空 = 未触碰 oracle/表结构/客户端)
 
-## 全量改动清单（含未提交工作树）
- M mir2-rs/bins/game-svr/src/main.rs
- M mir2-rs/bins/game-svr/src/npc.rs
- M mir2-rs/crates/script/src/engine/actions.rs
- M mir2-rs/crates/script/src/engine/conditions.rs
- M mir2-rs/crates/script/src/engine/dispatch.rs
- M mir2-rs/crates/script/src/engine/mod.rs
- M mir2-rs/crates/script/tests/engine_tests.rs
- M mir2-rs/crates/world/src/party.rs
- M mir2-rs/crates/world/tests/party_vectors.rs
- M mir2-rs/tests/parity/whitelist.md
-?? mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014/
+## 全量改动清单（git diff --name-status origin/master HEAD）
+M	mir2-rs/bins/game-svr/src/main.rs
+M	mir2-rs/bins/game-svr/src/npc.rs
+M	mir2-rs/crates/script/src/engine/actions.rs
+M	mir2-rs/crates/script/src/engine/conditions.rs
+M	mir2-rs/crates/script/src/engine/dispatch.rs
+M	mir2-rs/crates/script/src/engine/mod.rs
+M	mir2-rs/crates/script/tests/engine_tests.rs
+M	mir2-rs/crates/world/src/party.rs
+M	mir2-rs/crates/world/tests/party_vectors.rs
+A	mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014/00-commands.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014/01-oracle-anchors.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014/02-rust-status-greps.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014/03-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014/04-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014/05-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014/06-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014/07-mutations-red.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014/08-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/whitelist.md
 
-## git diff --stat（工作树 vs base，排除证据目录）
- mir2-rs/bins/game-svr/src/main.rs              |  17 +++
- mir2-rs/bins/game-svr/src/npc.rs               |  12 ++
- mir2-rs/crates/script/src/engine/actions.rs    |  11 ++
- mir2-rs/crates/script/src/engine/conditions.rs |  90 +++++++++++++-
- mir2-rs/crates/script/src/engine/dispatch.rs   |   7 ++
- mir2-rs/crates/script/src/engine/mod.rs        |  15 +++
- mir2-rs/crates/script/tests/engine_tests.rs    | 160 +++++++++++++++++++++++++
- mir2-rs/crates/world/src/party.rs              |  19 +++
- mir2-rs/crates/world/tests/party_vectors.rs    |  25 ++++
- mir2-rs/tests/parity/whitelist.md              |  11 ++
- 10 files changed, 366 insertions(+), 1 deletion(-)
+## git diff --stat origin/master HEAD
+ mir2-rs/bins/game-svr/src/main.rs                  |   17 +
+ mir2-rs/bins/game-svr/src/npc.rs                   |   12 +
+ mir2-rs/crates/script/src/engine/actions.rs        |   11 +
+ mir2-rs/crates/script/src/engine/conditions.rs     |   90 +-
+ mir2-rs/crates/script/src/engine/dispatch.rs       |    7 +
+ mir2-rs/crates/script/src/engine/mod.rs            |   15 +
+ mir2-rs/crates/script/tests/engine_tests.rs        |  164 ++
+ mir2-rs/crates/world/src/party.rs                  |   19 +
+ mir2-rs/crates/world/tests/party_vectors.rs        |   25 +
+ .../00-commands.txt                                |   25 +
+ .../01-oracle-anchors.txt                          |  147 ++
+ .../02-rust-status-greps.txt                       |   39 +
+ .../03-gate-fmt.txt                                |    0
+ .../04-gate-clippy.txt                             |    7 +
+ .../05-gate-test.txt                               | 1853 ++++++++++++++++++++
+ .../06-gate-msgcodegen.txt                         |    1 +
+ .../07-mutations-red.txt                           |  158 ++
+ .../08-boundary.txt                                |   30 +
+ .../README.md                                      |   91 +
+ .../SHA256SUMS.txt                                 |   10 +
+ mir2-rs/tests/parity/whitelist.md                  |   15 +
+ 21 files changed, 2735 insertions(+), 1 deletion(-)

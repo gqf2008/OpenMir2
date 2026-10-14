@@ -249,7 +249,7 @@ impl Engine<'_, '_> {
     /// oracle 结构：无组 ⇒ 提前返回（恒假）；`sParam2` 非整数字面量时走
     /// `GetVarValue(playerActor, sParam2, ref nCount)`，仍 <0 ⇒ 脚本条件错误。
     /// **`switch (cMethod)` 整段被注释掉（原文如此，`:2692-2726`）⇒ `success` 恒 `false`**
-    /// —— `nCount` 参与不了任何判定，缺陷 1:1 照搬（whitelist **T-51**）。
+    /// —— `nCount` 参与不了任何判定，缺陷 1:1 照搬（whitelist **T-52**）。
     fn cond_check_group_count(&mut self, info: &QuestConditionInfo, result: &mut bool) {
         *result = false;
         if self.player.group_owner() == 0 {
@@ -275,7 +275,7 @@ impl Engine<'_, '_> {
     /// 逐 `playerActor.GroupMembers` 按 `Job` 计数，再按 `sParam2[0]` 的 `=/ >/ </ default(>=)`
     /// 同 `nParam3` 比较。oracle 的 `if (nJob < 0)` 是**死分支**（`PlayerJob.None = 3`，
     /// byte 枚举无负值，`PlayerJob.cs:3-21`）⇒ 未识别的 `sParam1` 不会报错（缺陷照搬，
-    /// whitelist **T-51**）。
+    /// whitelist **T-52**）。
     fn cond_check_group_class(&mut self, info: &QuestConditionInfo, result: &mut bool) {
         *result = false;
         let mut n_count = 0;
@@ -307,7 +307,7 @@ impl Engine<'_, '_> {
     /// `ConditionOfIsGroupMaster`（code 148，`ConditionProcessingSys.cs:4466`）。
     ///
     /// oracle 两个分支**都只写 `success = false`**，从不置 `true` ⇒ 恒假（缺陷照搬，
-    /// whitelist **T-51**）。保留读 `GroupOwner`/`ActorId` 的结构位。
+    /// whitelist **T-52**）。保留读 `GroupOwner`/`ActorId` 的结构位。
     fn cond_is_group_master(&mut self, _info: &QuestConditionInfo, result: &mut bool) {
         let group_owner = self.player.group_owner();
         if group_owner != 0 {

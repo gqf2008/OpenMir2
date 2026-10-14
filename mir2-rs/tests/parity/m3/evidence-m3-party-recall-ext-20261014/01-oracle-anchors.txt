@@ -116,3 +116,32 @@
             if (playerActor.GroupOwner != 0)
             {
                 for (int i = 0; i < playerActor.GroupMembers.Count; i++)
+
+--- 返工 T-53：GetValNameValue 的 per-player S/N 回退（ProcessingBase.cs:1412-1434）---
+              else if (sName != "" && char.ToUpper(sName[0]) == 'S')   // :1412
+              {
+                  if (playerActor.m_StringList.ContainsKey(sName))
+                  {
+                      sValue = playerActor.m_StringList[sName];
+                  }
+                  else
+                  {
+                      playerActor.m_StringList.Add(sName, "");
+                      sValue = "";
+                  }
+                  result = VarType.String;                                 // 只写 sValue，不写 nValue
+              }
+              else if (sName != "" && char.ToUpper(sName[0]) == 'N')   // :1422
+              {
+                  if (playerActor.IntegerList.ContainsKey(sName))
+                  {
+                      nValue = playerActor.IntegerList[sName];
+                  }
+                  else
+                  {
+                      nValue = 0;                                          // :1430 未命中 ⇒ nValue = 0
+                      playerActor.IntegerList.Add(sName, nValue);
+                  }
+                  result = VarType.Integer;                                // Rust 未建模该回退（T-53）
+              }
+（前置：GetValNameNo(sName) < 0 才进入这两支；ProcessingBase.cs:1357/1363 的 `if (n01 >= 0) {...} else if ...`）

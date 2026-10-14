@@ -2412,7 +2412,7 @@ fn checkunit_checkopen_parse_anchors() {
 //
 // oracle 锚：`ConditionProcessingSys.cs:2670`(CHECKGROUPCOUNT) / `:262`(CHECKGROUPCLASS) /
 // `:4466`(ISGROUPMASTER) / `ExecutionProcessingSys.cs:3487`(RECALLGROUPMEMBERS) /
-// `:3918`(GROUPRECALL)。缺陷本体（注释掉的 switch / 空方法体 / 死分支）登记 whitelist T-51。
+// `:3918`(GROUPRECALL)。缺陷本体（注释掉的 switch / 空方法体 / 死分支）登记 whitelist T-52。
 
 /// 构造带 `nParam3` 的条件（`cond` 辅助不填 `nParam3`，而 CHECKGROUPCLASS 的比较右值是它）。
 fn cond3(code: i32, p1: &str, p2: &str, n3: i32) -> mir2_script::QuestConditionInfo {
@@ -2481,11 +2481,15 @@ fn check_group_count_always_false_like_oracle() {
         );
         assert!(engine.errors.is_empty(), "{:?}", engine.errors);
     }
-    // 有组、`sParam2` 形如 `<$STR(未知名)>` ⇒ `GetValNameValue` 未命中 ⇒ nValue 保持 -1
+    // 有组、`sParam2` 形如 `<$STR(Q999)>`（未知名且 `GetValNameNo` 不命中 ⇒ oracle
+    // `GetValNameValue` 无任何分支写 `nValue`）⇒ `nValue` 保持 `ref` 传入的 -1
     // ⇒ ScriptConditionError（且仍恒假）。
+    // 注：`<$STR(N…)>`（未知名、首字母 N）在 oracle 会走 per-player `IntegerList` 回退
+    // （`ProcessingBase.cs:1420-1432`）写 `nValue = 0`、**不报错**；本仓未建模该回退 ⇒
+    // 不拿该输入断言，差异登记 whitelist **T-53**。
     {
         let mut engine = Engine::new(&mut npc, &mut player);
-        assert!(!engine.check_conditions(&[cond(73, "=", "<$STR(NOTAVAR)>", 0)]));
+        assert!(!engine.check_conditions(&[cond(73, "=", "<$STR(Q999)>", 0)]));
         assert_eq!(engine.errors.len(), 1, "{:?}", engine.errors);
         let text = format!("{:?}", engine.errors);
         assert!(text.contains("CHECKGROUPCOUNT"), "{text}");

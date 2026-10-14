@@ -599,7 +599,7 @@ impl World {
     /// 把这两个字段从实体表取出来交给 `bins/game-svr` 的 `ScriptPlayer` 适配。
     ///
     /// `GroupMembers` **只存在于团长实体上**（`PlayObject.Operate.cs:834-835/875`，与
-    /// [`Self::party_members_of`] 同口径）⇒ 非团长的成员列表为空；成员 Job 按实体表槽位序。
+    /// [`Self::party_members_of`] 同口径）⇒ 非团长的成员列表为空；成员 Job 按**加入序**。
     #[must_use]
     pub fn party_script_group_snapshot(&self, actor: i32) -> (i32, Vec<i32>) {
         let owner = self.party_group_owner_of(actor);
