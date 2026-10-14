@@ -1,0 +1,58 @@
+M3⑨ masterdie-wire 边界 / 纪律 / 端口 / 残留物
+================================================
+卡：openmir2-m3-pet-slave-masterdie-wire
+作者：openmir2-worker-20（worktree m3hp，分支 worktree-m3-selloff-dealoffform-recog）
+
+base（净差量口径） = refs/heads/master = walgit/master = origin/master = f0a9ab911ddc84846b69f0a3541390e81dba977a
+head = 本证据提交（含 a6359cd78 实现 + 证据）
+  （本地 refs/heads/master 缓冲在 ad0592b19 = 共享主检出 HEAD，与 walgit/master 分叉；未移动，见 README。）
+
+## 1) 冻结面（期望空）
+
+    $ git diff --name-only f0a9ab911 <head> -- src sql MirClient
+    (空)
+
+    $ git diff --name-only f0a9ab911 <head> -- mir2-rs/crates/protocol mir2-rs/crates/storage
+    (空)
+
+## 2) 净差量（代码 3 个 .rs + 本证据目录 17 件）
+
+    $ git diff --name-only f0a9ab911 <head> -- mir2-rs/crates mir2-rs/bins
+    mir2-rs/bins/game-svr/src/main.rs
+    mir2-rs/crates/world/src/slave.rs
+    mir2-rs/crates/world/src/world.rs
+
+    $ git diff --stat f0a9ab911 a6359cd78
+     mir2-rs/bins/game-svr/src/main.rs |  11 ++
+     mir2-rs/crates/world/src/slave.rs | 264 +++++++++++++++++++++++++++++++++++++-
+     mir2-rs/crates/world/src/world.rs |  72 ++++++++++-
+     3 files changed, 343 insertions(+), 4 deletions(-)
+
+本证据目录（15 + 04-boundary.txt + SHA256SUMS.txt = 17 件）全在 `mir2-rs/tests/parity/m3/**`。
+
+## 3) 纪律
+
+- **未碰共享主检出** `E:/Users/gxh/Documents/GitHub/OpenMir2`（HEAD 仍 `ad0592b19`，`refs/heads/master` 未移动）；
+  所有提交只在本 worktree `m3hp` 的分支 `worktree-m3-selloff-dealoffform-recog`。
+- **未 merge 到 master、未自签 review、未移卡**（只签自己的 `status`/`patch`）。
+- 未改 `tools/orchestration/lanes.conf` / `.walgit/board.toml` / 别人 inbox。
+- **零起真机栈、零占端口**（M2 九端口全 DOWN；真机对拍归窗口车道）。
+- 未改 `src/`（oracle）、`sql/`、`MirClient`、`crates/protocol`、`crates/storage`。
+- 改坏必红还原后 `git hash-object crates/world/src/slave.rs` = `7cdab58ba8112f3e93b611986fa39d7a375451d8`（pristine），
+  `git status --porcelain` 为空。
+
+## 4) 残留物清单（登记）
+
+| 路径 | 说明 | 处置 |
+| --- | --- | --- |
+| `E:/tmp/openmir2-m3hp-target` | 隔离 `CARGO_TARGET_DIR` | 保留复用（后续 tick） |
+| `E:/tmp/m3hp-t54-test.log` | 首次（pre-merge）全量测试日志 | 保留（诊断） |
+| `E:/tmp/m3hp-t54-redcheck/{mutate.py,RC*.out}` | 改坏必红脚本 + 中间输出 | 保留（可删） |
+| `E:/tmp/m3hp-t54-issue.json`、`m3hp-t54-comment.json` 等 | walgit 条目 body 临时件 | 保留（可删） |
+| 分支 `worktree-m3-selloff-dealoffform-recog` | 已 push origin + walgit | 未 merge（等 review） |
+| 本证据目录 `mir2-rs/tests/parity/m3/evidence-m3-pet-slave-masterdie-wire-20261014/**` | 17 件 | 已入库 |
+
+## 5) 端口实拍
+
+仅既有 `127.0.0.1:3306`（mysqld）与 `8081`（walgit）在听；9 个 M2 端口（7000/7100/7200/5500/5600/6000/5100/5000/…）
+全 DOWN —— 本线未起任何服务端/客户端/假人/代理进程。

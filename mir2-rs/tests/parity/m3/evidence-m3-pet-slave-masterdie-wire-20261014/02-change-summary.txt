@@ -1,0 +1,68 @@
+M3⑨ masterdie-wire 变更清单
+============================
+卡：openmir2-m3-pet-slave-masterdie-wire（tier R，window_required=true）
+分支：worktree-m3-selloff-dealoffform-recog（worktree m3hp）
+base（净差量口径）：refs/heads/master = walgit/master = origin/master = f0a9ab911ddc84846b69f0a3541390e81dba977a
+  （注：本 worktree 本地 `refs/heads/master` 缓冲在 ad0592b19 = 共享主检出 E:/Users/gxh/Documents/GitHub/OpenMir2 的
+   HEAD，与 walgit/master 分叉；按「不改共享主检出」纪律**未移动**该 ref。净差量/边界一律按 f0a9ab911 计。）
+
+净差量（相对 f0a9ab911）= 3 个 .rs（+343 / -4）：
+
+1. mir2-rs/crates/world/src/world.rs
+   - `World` 新增字段：
+     - `slave_self_delay_enabled: bool`（缺省 false）；
+     - `pub self_delay_msgs: Vec<crate::slave::SelfDelayMsg>`（自身延时消息队列，插入序）；
+     - `pub pet_slave_cfg: mir2_data::pet_slave::PetSlaveConfig`（缺省 default）。
+   - `TickRecord` 新增 `pub slave_self_deliveries: Vec<crate::slave::SelfDelayOutcome>`。
+   - `World::tick()`：在 `settle_deaths` 之后、`slave_list_cleanup_all` **之前**，当开关开时
+     `record.slave_self_deliveries = self.deliver_self_delay_msgs();`
+     （对齐 oracle：`PlayObject.Run` 消息段 `:360-364` 先于 `base.Run` 的清表 `:208-217`）。
+   - `World::settle_deaths()`：死亡结算末（`Die()` 尾的位置），玩家 `Race == ACTOR_RACE_PLAY` 且开关开时
+     `self.send_master_die_mutiny(id)`。
+   - 新 API：`enable_slave_self_delay(cfg)` / `slave_self_delay_enabled()`。
+
+2. mir2-rs/crates/world/src/slave.rs
+   - 常量：`RM_MASTERDIEMUTINY = 60003`、`RM_MASTERDIEGHOST = 60004`、
+     `MASTER_DIE_SELF_DELAY_MS = 1000`（登记与 mir2-rs/crates/protocol/src/messages.rs:577/579 同源；
+     本 crate 不依赖 mir2-protocol）。
+   - 结构：`SelfDelayMsg { actor_id, ident, deliver_at_ms }`、`SelfDelayOutcome { actor_id, ident, mutinied, ghosted }`。
+   - `impl World`：
+     - `send_self_delay_msg(actor_id, ident, delay_ms)`：先判 `actor.ghost`（oracle `if (!Ghost)`），
+       `deliver_at_ms = clock_ms + delay_ms`，push。
+     - `send_master_die_mutiny(master_id)`：`RM_MASTERDIEMUTINY` + 1000ms（`PlayObject.cs:1996`）。
+     - `send_master_die_ghost(master_id)`：`RM_MASTERDIEGHOST` + 1000ms（`PlayObject.cs:3527`）。
+     - `deliver_self_delay_msgs()`：按插入序对 `clock_ms >= deliver_at_ms` 的项出队；
+       `RM_MASTERDIEMUTINY ⇒ process_slave_mutiny`、`RM_MASTERDIEGHOST ⇒ process_slave_ghost`。
+   - 模块头登记就地更新：「自投递队列缺失」→「队列本体 + 主人死触发点已落；出帧（RefNameColor/RefShowName/
+     DisappearA）仍归宿主接线片」。
+   - 生命周期 `BUG-REPLICA` 新增第 4 条（`RM_MASTERDIEGHOST` 恒不可达，见下）。
+   - 3 条新判据（见 03-tests.txt）。
+
+3. mir2-rs/bins/game-svr/src/main.rs
+   - 生产宿主起世界时（`world.enable_merchant_tick()` 之后）
+     `world.enable_slave_self_delay(enter_cfg.pet_cfg.clone());` + 一条 INF 日志。
+     `enter_cfg.pet_cfg` = `Server.conf` → `PetSlaveConfig`（⑨-2 已接）。合成 golden 场景不经此函数 ⇒ 逐字节不变。
+
+## 照搬的 oracle 缺陷（BUG-REPLICA，本片第 4 条）
+
+`RM_MASTERDIEGHOST` **恒不可达**：
+- `PlayObject.MakeGhost()`（`PlayObject.cs:3524-3527`）先 `base.MakeGhost()`，再 `if (Ghost) SendSelfDelayMsg(RM_MASTERDIEGHOST,…)`；
+- `BaseObject.MakeGhost()`（`BaseObject.Base.cs:484-497`）对玩家（`CanReAlive == false`）已置 `Ghost = true`；
+- `SendSelfDelayMsg` 首行 `if (!Ghost) return;`（`BaseObject.Message.cs:190`）随即拦截 ⇒ 消息**永不入队**，
+  `ProcessSlaveGhost`（`PlayObject.Base.cs:361-369`）在 oracle 里是**死代码**。
+Rust 逐字保留两道门：`send_master_die_ghost` 对 Ghost 实体入队为空；`deliver_self_delay_msgs` 保留
+`RM_MASTERDIEGHOST` 支以与 oracle 同形（唯 `RM_MASTERDIEMUTINY` 可达）。判据 `master_die_ghost_self_delay_is_blocked_by_ghost_gate`
+钉住（含绕过入口门手工入队反证投递支已接线）。
+
+## 未做 / 登记（不冒充已实现）
+
+1. **出帧**：`RefNameColor()` ⇒ `RM_CHANGENAMECOLOR`、`RefShowName()` ⇒ `RM_USERNAME`（`ProcessSlaveMutiny` 内）
+   与 `MakeGhost` 的 `DisappearA` 均不在 `crates/world` 层（本层只改实体状态）。本片把投递结果经
+   `TickRecord::slave_self_deliveries` 上抛，宿主出帧是后续接线片。⇒ 卡级真机 DoD 未达，按 `not_verified`。
+2. **`KickException()` 触发点未接线**（`PlayObject.cs:1999-2005`）：Rust 骨架无等价的「断线/异常紧急关闭」
+   玩家路径映射；本片只接 `Die()` 触发点（卡 ② 明示的触发点）。
+3. **多产者/优先级交织未建模**：oracle `MsgQueue` 是「优先级 + 插入序」的优先队列（`SendSelfDelayMsg` 一律
+   `MessagePriority.Lowest`，`GetMessage` 未到点重新入队仍 Lowest）；本骨架只承载这一族自投递，按插入序扫描。
+4. **`CanReAlive ⇒ Invisible` 变体未建模**（既登记，`BaseObject.Base.cs:484-497`）。
+5. **`tier=R`**：触 RNG 抽数序列（`Random(MasterDieMutinyRate)`）+ 时序（1000ms）+ 实体状态面 ⇒
+   真机两侧 `run_hero_pet_pair.ps1` 同序列 diff=0 需 owner 独占窗口，本片离线判据全绿但**不据此收卡**。
