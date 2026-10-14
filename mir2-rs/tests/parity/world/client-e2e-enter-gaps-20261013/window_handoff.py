@@ -11,8 +11,10 @@
 
 本工具**不重新实现任何判据**，只做四件事：
   G1 **聚合 Rust 侧窗口前置门**：调片⑮ `check_rust_window_preflight.py`（R1..R5），解析 `RESULT:`。
-     其中 R1/R2 直接点住「窗口脚本 `client-e2e-window.sh` 的 `repo=` 指向的检出是否含片⑪」——
-     这是 2026-10-14 实测到的真缺陷（共享主检出停在 `ad0592b19`）。
+     其中 R1/R2 直接点住「构建源是否含 ③ 判据要的两片」——片⑪（`vr/new/af` 读数）与
+     片㉜（受击帧 `SM_STRUCK` 广播 ⇒ DoD③「能攻击造成伤害」）——这是 2026-10-14 实测到的真缺陷
+     （共享主检出停在 `ad0592b19`；专用源 `m2svr-window-origin` 停在 `6dba8719d`、缺片㉜）。
+     门一旦 RED，`--plan` 的修复块点明「换/刷新构建源」而不会让你白烧窗口。
   G2 **聚合判据工具自检**：证据目录 8 件判据脚本的 `--selftest` 必须全 `SELFTEST OK`（缺一件 ⇒ PREREQ）。
   G3（可选）**聚合 C# 侧抓包前置门**：调片⑭ `check_csharp_capture_preflight.py --shadow-config ...`。
   G4（`--plan`/`--plan-only`）**计划 ↔ 工具面机判**（片㉕）：计划里每个被调脚本必须存在、只用它声明

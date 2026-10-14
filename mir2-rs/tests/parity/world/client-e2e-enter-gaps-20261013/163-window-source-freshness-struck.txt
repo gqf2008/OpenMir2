@@ -1,0 +1,116 @@
+163-window-source-freshness-struck.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉞
+③ 窗口构建源「缺片㉜」fail-closed 门（R1 从「单提交」扩为「必需提交集」）
+m2-svr / openmir2-worker-11 / 2026-10-14；零起栈、零游戏端口（仅共享 3306）、零生产代码改动
+base = origin/master 9edfc745d（本片开工时 `git fetch` 的 tip；本片只动本卡证据目录 2 个 .py）
+工具 sha256（改后，改动前见 SHA256SUMS 的历史提交）：
+  check_rust_window_preflight.py  7d25e32afe039215f4840636c05229d543a7bf2a96b5f9dc8c0c5c8857c1a8a7
+  window_handoff.py               54d9aad0bf9cb897fd256062c9700287fc188eff6b6870b7ae2b534b8fae737e
+====================================================================================================
+A. 缺陷（同类烧窗，旧 G1 漏网）
+----------------------------------------------------------------------------------------------------
+`check_rust_window_preflight.py` 的 R1 旧实现只查**一个**「修复提交」（片⑪ `d16b5199d`）
+⇒ 构建源「含片⑪、不含片㉜」时 G1 仍 GREEN / `WINDOW_READY=YES`。
+
+实测本仓入库替身 `client-e2e-window.fixed.sh.txt` 的构建源 = 专用源
+`E:/tmp/m2svr-window-origin`（detached，`repo=`/`tgt=` 指向它 / `E:/tmp/m2svr-window-target`）；
+`git -C E:/tmp/m2svr-window-origin rev-parse HEAD` = `6dba8719d0d5dd834bbab159716b2a538160d333`
+= origin/master 在片㉜ `0d0d62a69` **之前**的位置 ⇒ **含片⑪、缺片㉜**。
+
+后果：窗口照开，③b 的 DoD③ 第三半「屏幕见怪并能攻击造成伤害」判据
+`check_attack_observability.py`（要片㉜ 的 `SM_STRUCK` 广播）必然 0 帧 ⇒ 白烧一次性窗口。
+（片㉜ = `fix(game-svr): 受击帧按 oracle SendRefMsg(RM_STRUCK) 广播给视野内全体 Play`，
+ 已由 merge_result `e5f9c3cd` 合入 master `ca10f4a87`。）
+
+B. 修法（一个逻辑变更）
+----------------------------------------------------------------------------------------------------
+R1 从「单提交」扩为「**必需提交集**」`REQUIRED_FIX_COMMITS`：
+  1. 片⑪ `d16b5199d` —— ③ 判据读数 `vr=/new=/af=`（`vis` 语义 = 当前可见集，不含自身）；
+  2. 片㉜ `0d0d62a69` —— 受击帧 `SM_STRUCK` 广播（DoD③「能攻击造成伤害」）。
+对每个跑 `git merge-base --is-ancestor <c> <ref>`；缺任一 ⇒ R1 RED（fail-closed，绝不静默绿）。
+抽出纯函数 `required_fix_findings(repo, ref, fixes) -> (ok 行, problems, prereqs)`（selftest 直测）。
+`--fix-commit` 改 `action="append"`：不传 = 默认两片；传单值 = 只查那一个（向后兼容旧调用）。
+`window_handoff.py` 的 G1 docstring 同步写清「两片」（G1 只聚合，不复制判据逻辑，接口不变）。
+
+C. 真读数（机判，可复跑；命令 + 原始输出）
+----------------------------------------------------------------------------------------------------
+命令：`python -I -B check_rust_window_preflight.py --repo <源> --ref HEAD`
+
+C1 专用源（入库替身的构建源）——**旧 G1 会绿、新 R1 必红**：
+```
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+RED R1: E:/tmp/m2svr-window-origin 的 HEAD=6dba8719d0d5dd834bbab159716b2a538160d333 不含 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（窗口缺该片 ⇒ 对应判据 PREREQ/红，白烧一次性窗口）
+RESULT: RED
+rc=1
+```
+
+C2 当前构建源（本分支 head 含片⑪+片㉜）——GREEN：
+```
+[OK] R1 构建源 E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr 的 HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+RESULT: GREEN
+rc=0
+```
+
+C3 聚合门（`window_handoff.py`，`--window-script ''` 隔离掉 G5 root 活脚本）：
+```
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --window-script '' --check-dir .
+...（G2 八件自检全 OK）...
+RED G1 Rust 窗口前置门 RED（构建源/读数标记不符；窗口会 PREREQ_RED）—— 见下方修复块
+WINDOW_READY=NO
+RESULT: RED
+rc=1
+$
+$ python -I -B window_handoff.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr --ref HEAD --window-script '' --check-dir .
+...（G2 八件自检全 OK）...
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0
+```
+
+D. `--selftest` 17/17 → 23/23（+6 牙）
+----------------------------------------------------------------------------------------------------
+新增：`git-second-oid` / `git-ancestor-no` / `fixes-second-missing-red` / `fixes-all-present` /
+`fixes-unknown-prereq` / `required-fixes-default-two`。末两行：
+```
+[PASS] selftest required-fixes-default-two (('d16b5199d98029081daccd9252f81b94a9596eaf', '片⑪ AOI 诊断 vr/new/af'), ('0d0d62a695082730dd2398e6d35bf40c8f70480a', '片㉜ 受击帧 SM_STRUCK 广播'))
+SELFTEST OK (23/23)
+rc=0
+```
+`window_handoff.py --selftest` 仍 `94/94`（本片只改 docstring，未动聚合逻辑）。
+
+E. 改坏必红（变异只在 E:/tmp；仓内工具 sha256 前后一致）
+----------------------------------------------------------------------------------------------------
+见 `164-redcheck-window-source-freshness.txt`：把 `REQUIRED_FIX_COMMITS` 删回「只有片⑪」
+（`/e/tmp/m2svr-burst20/mut/m1-only-diag.py`）⇒ 同一 C1 命令变成 `RESULT: GREEN`
+（即旧 G1 的漏网状态复现）⇒ 新 R1 的 ㉜ 检查正是抓这个的那颗牙。
+
+F. 未做 / 登记（不静默）
+----------------------------------------------------------------------------------------------------
+* 本片**不**推进专用源 `E:/tmp/m2svr-window-origin`（车道只读/只备判据；窗口归 root）。
+  开窗前置因此变成：换用含片⑪+片㉜ 的构建源（本分支 head，或把专用源刷到 `origin/master`），
+  再复跑 G1 至 GREEN —— `window_handoff.py --plan` 的 G1 修复块已给命令。
+* 卡级 DoD③ 的 R 级真机「③b/③a 两趟同框对照 + 攻击/伤害可见」仍归 root 独占窗口，不据此收卡。
+* 本片零生产代码改动（两个 .py 都在证据目录）；未起栈、未占端口、未动共享主检出。
+
+G. 涉及文件
+----------------------------------------------------------------------------------------------------
+  改动：`check_rust_window_preflight.py`（R1 必需提交集 + `required_fix_findings` + selftest + `--fix-commit` 可重复）、
+       `window_handoff.py`（G1 docstring 订正，零逻辑）
+  证据：本文件 + `164-redcheck-window-source-freshness.txt` + `165-gates.txt` + `166-boundary.txt`
+       + `README.md`（§㉞）+ `SHA256SUMS.txt`（重生成）

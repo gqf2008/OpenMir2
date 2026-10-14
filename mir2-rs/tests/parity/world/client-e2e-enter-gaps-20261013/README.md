@@ -848,3 +848,29 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   **另请 root 开窗前把活脚本换成替身（或照改 repo=/tgt= 两行）—— 否则 G5 会判 `WINDOW_READY=NO`**。
 - 证据：`159-live-window-script-gate.txt`、`160-redcheck-live-window-script.txt`、`161-gates.txt`、
   `162-boundary.txt`、`window_handoff.py`、`client-e2e-window.fixed.sh.txt`。
+
+### ㉞ ③ 窗口构建源「缺片㉜」fail-closed 门（R1 单提交 → 必需提交集）（2026-10-14）—— `163`/`164`
+
+- **同类烧窗（旧 G1 漏网）**：`check_rust_window_preflight.py` 的 R1 旧实现只查**一个**提交
+  （片⑪ `d16b5199d`）⇒ 构建源「含片⑪、缺片㉜」时 G1 仍 GREEN / `WINDOW_READY=YES`。
+  实测入库替身 `client-e2e-window.fixed.sh.txt` 的构建源 = 专用源 `E:/tmp/m2svr-window-origin`，
+  它停在 `6dba8719d`（origin/master 在片㉜ `0d0d62a69` **之前**）⇒ **含片⑪、缺片㉜**。
+  后果：③b 的 DoD③ 第三半「能攻击造成伤害」判据 `check_attack_observability.py`（要片㉜ 的
+  `SM_STRUCK` 广播）必然 0 帧 ⇒ 白烧一次性窗口。
+- **本片交付（一个逻辑变更；两个 `.py` 都在证据目录，零生产代码）**：R1 扩为**必需提交集**
+  `REQUIRED_FIX_COMMITS` = 片⑪ + 片㉜，逐个 `merge-base --is-ancestor`，缺任一 ⇒ RED；抽纯函数
+  `required_fix_findings(repo, ref, fixes)`；`--fix-commit` 改可重复（缺省两片，单值向后兼容）；
+  `window_handoff.py` G1 docstring 同步（零逻辑）。
+- **真读数（`163`）**：专用源 `m2svr-window-origin` ⇒ `RED R1 …不含 0d0d62a695（片㉜…）` rc=1
+  （`window_handoff --window-script ''` ⇒ `RED G1` / `WINDOW_READY=NO`）；本 worktree head ⇒ `RESULT: GREEN`
+  （聚合 `OK G1` / `WINDOW_READY=YES`）。`--selftest` **17/17 → 23/23**（+6 牙）。
+- **改坏必红（`164`，变异只在 `E:/tmp/m2svr-burst20/mut/`）**：删掉 `REQUIRED_FIX_COMMITS` 的片㉜ 行
+  （`sed -i '/FIX_COMMIT_STRUCK, "片㉜/d'`）⇒ 同一专用源命令变 `RESULT: GREEN`（旧漏网复现）⇒
+  新检查正是抓它的那颗牙；仓内工具 sha256 前后一致。
+- 四门禁（合并树 `c12931af3` = 片㉝ + `origin/master 9edfc745d`）fmt 0 / clippy 0(`-D warnings`) /
+  **101 suites · 1219 passed · 0 failed · 22 ignored** / msgcodegen 604 rc=0。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：开窗前必须换用含片⑪+片㉜ 的构建源
+  （本分支 head，或把专用源刷到 `origin/master`）并复跑 G1 至 GREEN——`window_handoff.py --plan`
+  的 G1 修复块已给命令；R 级真机两侧同框对照 + 攻击/伤害可见归 root 独占窗口。
+- 证据：`163-window-source-freshness-struck.txt`、`164-redcheck-window-source-freshness.txt`、
+  `165-gates.txt`、`166-boundary.txt`、`check_rust_window_preflight.py`、`window_handoff.py`。
