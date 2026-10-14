@@ -2,22 +2,21 @@
 
 卡：`openmir2-m3-rng-trace-scene-groups`（M3 夹具卫生片）
 lane：`m3bag` / principal `openmir2-worker-4` / branch `wip/m3bag-anchor-teeth`
-base：`origin/master` = `41e61029e`（本片 cut 时）
+首次交付 base：`origin/master` = `41e61029e`（cut 时）
+**再交付 base：`origin/master` = `9edfc745d`（合并 origin/master 后的并集 head = 见 `10-boundary.txt` 的声明值）**
 
-## 真身缺陷（在本片 cut 的 master 上实测 RED）
+## 真身缺陷（根因，非偶发）
 
-`rng-trace-scene/check_anchors.py`（承接卡规格 `DRIVER-CONTRACT.md` 的源码锚点保鲜门）
-**在 master 上是 RED**，且 `fixture_chain_gate check` 因此 **RED red=3**：
+`rng-trace-scene/check_anchors.py`（承接卡规格 `DRIVER-CONTRACT.md` 的源码锚点保鲜门）把
+「宿主无条件开怪 AI 调用点」钉成 **`bins/game-svr/src/main.rs:<line>` 行号锚**，而 `main.rs` 是
+被 ④-D / client-e2e / ⑧-10 / ⑦ 等**多条车道**反复插入代码的**共享增长文件**。该行号已漂
+**7 次**：`5229 → 5440 → 5488 → 5598 → 5665 → 5795 → 5817`。
 
-    RED ANCHOR_DRIFT 宿主无条件开怪 AI 调用点（本卡要 AI 开）：
-      文档写 mir2-rs/bins/game-svr/src/main.rs:5665，
-      但 /enable_production_monster_ai\(&mut world\)/ 的首个匹配在 :5795
-
-**根因（家庭第 6 次，非偶发）**：该锚是**行号锚**，钉在 `bins/game-svr/src/main.rs` —— 一个被
-④-D / client-e2e / ⑧-10 / ⑦ 等**多条车道**反复插入代码的**共享增长文件**。历史漂移序列：
-`5229 → 5440 → 5488 → 5598 → 5665 → 5795`（每次都是别的车道合并把它推平，本卡每次都被迫回来改文档）。
-上一次收口（`1b88c9d3c`，已合 `8f58bded9`）只把 `:5598` 改成 `:5665`，随即被 `17389f05f`
-（party-gotolabel 合并）推到 `:5795` —— **只治标**。
+- 首次交付 base（`41e61029e`）：`check` RED（`:5665` vs `:5795`）、`selftest` RED 12/13、
+  `fixture_chain_gate check` **RED red=3** ⇒ 见 `02-base-red.txt`。
+- 链门车道随后把同一锚「再钉一次」（`:5665`→`:5795`，`42d421188`）并合入 master；但 **同一轮 master**
+  的 `ca10f4a87`（enter-gaps，动 main.rs）又把它推到 `:5817` ⇒ **再交付 base `9edfc745d` 仍 RED**
+  （`:5795` vs `:5817`）⇒ 见 `05-base-newmaster-red.txt`。**band-aid 活了不到一轮合并**。
 
 ## 本片修法（根因，不动任何生产代码）
 
@@ -35,15 +34,23 @@ base：`origin/master` = `41e61029e`（本片 cut 时）
 
 `rng-trace-scene/DRIVER-CONTRACT.md`：§4 第 59 行锚改为**文件路径 + 符号**（不写行号），
 并写明「为什么不做行号锚」；§6 把两类锚点口径写清。`rng-trace-scene/README.md` /
-`run_rng_trace_pair.ps1`：同步口径与计数（`check_anchors` 16/16、链门 39/39）。
+`run_rng_trace_pair.ps1`：同步口径与计数（`check_anchors` 16/16、链门 40/40）。
+
+## 再交付：与链门车道 band-aid 的合并（`13-merge-resolution.txt`）
+
+合并 `origin/master 9edfc745d` 时，链门车道的 band-aid 与本片的根因修法落在 `DRIVER-CONTRACT.md`
+同一处 ⇒ 冲突。解：取**根因侧**（`main.rs` 不写行号），并把链门侧新增的 fmt 证据门 /
+`.py` 计数下界 `≥23` 原样保留；README 过时计数订正为 `40/40`/`≥23`，band-aid 段注明被取代
+（历史留痕）。合并后全部本卡判定门复绿（`03-after-green.txt` / `13-merge-resolution.txt`）。
 
 ## 改动文件（4；全在写集 `mir2-rs/tests/parity/m3/**`，零 `.rs`）
 
 | 文件 | 改动 |
 | --- | --- |
 | `rng-trace-scene/check_anchors.py` | `symbol_unique` 锚类 + 4 条改坏必红 + 计数/文案（selftest 16/16） |
-| `rng-trace-scene/DRIVER-CONTRACT.md` | §4 宿主 AI 锚改文件级（不写行号）+ §6 两类锚点口径 |
-| `rng-trace-scene/README.md` | §5.2 根因收口（两类锚点表）+ 计数订正 |
+| `rng-trace-scene/DRIVER-CONTRACT.md` | §4 宿主 AI 锚改文件级（不写行号）+ §6 两类锚点口径 + 合并订正 |
+| `rng-trace-scene/README.md` | §5.2 根因收口（两类锚点表）+ 计数订正（40/40、≥23）+ band-aid 取代说明 |
 | `rng-trace-scene/run_rng_trace_pair.ps1` | ㉙ 注释与 GREEN 摘要文案同步（项数不变，仍 37/37） |
 
-> 未改任何门阈值 / 未改生产代码 / 未改其它车道文件；未 merge、未自签 review；零起栈、零端口。
+> 未改任何门阈值 / 未改生产代码 / 未动其它车道写集内的文件（链门车道的 fmt 门与 `fixture_chain_gate.py`
+> 原样保留）；未 merge 被审以外的分支、未自签 review；零起栈、零端口。

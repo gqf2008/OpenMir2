@@ -1,3 +1,4 @@
+$ powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack   # cwd=mir2-rs/tests/parity/m3
 SELFTEST_NO_STACK: 无栈自检——场景门 + 账本 + folded 映射全路径都必须 fail-closed（缺失绝不静默 GREEN）
 SELFTEST ok scenario-fixed-input (canon/seed/map/pose/monsters/fold/mongen_fixture)
 SELFTEST ok mongen-fixture-zero-rows (path=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\rng-trace-scene\..\fixtures\mongen-map0137.tsv)
@@ -53,3 +54,4 @@ SELFTEST ok evidence-counts-head-mutation-red (rc=1)
 SELFTEST ok no-port-touched (offline-only)
 SELFTEST ok=37/37 failures=
 GREEN: 无栈自检全绿（场景前置门 fail-closed + **流水头同种子**制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 拒绝比）+ DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + **DoD② scenario 声明组必须真的出现（缺组 / monster_ai 抽数不足必红且点名）** + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + **承接卡规格锚点保鲜（check_anchors：行号锚 `path:line` == 当前源码首个匹配行；共享增长文件 `main.rs` 走符号唯一性锚，符号须恰出现 1 次）** + **站点表 `oracle_ref` 可解析性（文件存在 + 行号在范围内）** + **证据包书证 head 机判接线（check_evidence_head check-pack：真件四包 rc=0 + 改坏必红 HEAD_UNRESOLVABLE）** + **报告 §0 书证 head/base 全 oid 机判接线（check_evidence_counts：真报告 rc=0 + 短 oid 改坏必红）** + LF 写出 + 零端口）
+rc=0

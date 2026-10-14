@@ -25,3 +25,29 @@ rc=1
 RED ANCHOR_MISSING 宿主无条件开怪 AI 调用点（本卡要 AI 开）：文档里找不到 `mir2-rs/bins/game-svr/src/main.rs`（符号唯一性锚：只认文件路径，不写行号）
 RED: check_anchors 1 项 RED
 rc=1
+
+## 4.3 复跑（对 `DRIVER-CONTRACT.md` 的**副本**做变异；不依赖 selftest 的内存文本）
+$ cd mir2-rs/tests/parity/m3
+$ python -I - <<'PY'
+import subprocess, pathlib
+src = pathlib.Path("rng-trace-scene/DRIVER-CONTRACT.md")
+text = src.read_text(encoding="utf-8")
+# A：把符号唯一性锚写回行号
+pathlib.Path("E:/tmp/mut-A.md").write_text(
+    text.replace("`mir2-rs/bins/game-svr/src/main.rs`（调用",
+                 "`mir2-rs/bins/game-svr/src/main.rs:5795`（调用"), encoding="utf-8")
+# B：删掉该锚的文件引用
+pathlib.Path("E:/tmp/mut-B.md").write_text(
+    text.replace("mir2-rs/bins/game-svr/src/main.rs", "mir2-rs/bins/game-svr/src/NOPE.rs"), encoding="utf-8")
+for tag in ("A", "B"):
+    r = subprocess.run(["python", "-I", "rng-trace-scene/check_anchors.py", "check",
+                        "--doc", "E:/tmp/mut-%s.md" % tag], capture_output=True, text=True)
+    print("== mutation", tag, "== rc=%d" % r.returncode)
+    print(r.stdout.strip())
+PY
+== mutation A == rc=1
+RED ANCHOR_LINE_NOT_ALLOWED 宿主无条件开怪 AI 调用点（本卡要 AI 开）：`mir2-rs/bins/game-svr/src/main.rs` 是**符号唯一性锚**（共享增长文件不做行号锚，行号必漂）⇒ 文档不得写 `mir2-rs/bins/game-svr/src/main.rs:<line>`，只写文件路径
+RED: check_anchors 1 项 RED
+== mutation B == rc=1
+RED ANCHOR_MISSING 宿主无条件开怪 AI 调用点（本卡要 AI 开）：文档里找不到 `mir2-rs/bins/game-svr/src/main.rs`（符号唯一性锚：只认文件路径，不写行号）
+RED: check_anchors 1 项 RED

@@ -1,0 +1,27 @@
+## base（再交付）= origin/master 9edfc745d（干净 detached worktree E:/tmp/m3bag-base-9edfc745d；工具/文档均为 base 原样）
+## 背景：本片首次交付的 base 是 41e61029e。期间链门车道把**同一个行号锚**「再钉一次」
+##       （`:5665`→`:5795`，提交 `42d421188`，合入 master `9edfc745d`）。但该 band-aid 在**同一轮
+##       master** 里就被别的车道（`ca10f4a87` enter-gaps-window-dense-menu，动 main.rs）再次推平：
+##       文档仍写 `:5795`，而调用点实际首个匹配已在 `:5817` ⇒ **第 7 次漂移**，base 依旧 RED。
+
+$ python -I rng-trace-scene/check_anchors.py check
+  RED ANCHOR_DRIFT 宿主无条件开怪 AI 调用点（本卡要 AI 开）：文档写 mir2-rs/bins/game-svr/src/main.rs:5795，但 /enable_production_monster_ai\(&mut world\)/ 的首个匹配在 :5817
+RED: check_anchors 1 项 RED
+rc=1
+
+$ python -I rng-trace-scene/check_anchors.py selftest
+  RED real-doc-fresh（ANCHOR_DRIFT 宿主无条件开怪 AI 调用点（本卡要 AI 开）：文档写 mir2-rs/bins/game-svr/src/main.rs:5795，但 /enable_production_monster_ai\(&mut world\)/ 的首个匹配在 :5817）
+SELFTEST RED: check_anchors selftest 12/13
+rc=1
+
+$ python -I fixture_chain_gate.py check    # tail
+FIXTURE_CHAIN RED: runner_ok=9 prereq_or_skip=0 red=3
+  RED B 全服 RNG 消费者账本（Claim B）：runner -SelfCheckNoStack rc=1（SELFTEST ok=36/37 failures=anchors-freshness-selftest）
+  RED 共享管线 rng_scene_anchor_selftest：mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py rc=1（SELFTEST RED: check_anchors selftest 12/13）
+  RED 共享管线 rng_scene_anchor_check：mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py rc=1（RED: check_anchors 1 项 RED）
+rc=1
+
+## 本锚行号漂移全序列（7 次）
+##   5229 → 5440 → 5488 → 5598 → 5665 → 5795 → 5817
+## 前 6 次由 ④-D / client-e2e / ⑧-10 / ⑦ 等车道合并造成；第 7 次由 `ca10f4a87`（enter-gaps）造成，
+## 且**就在链门车道本轮把 :5665 改钉成 :5795 之后**——证明「回来改行号」是治标，下一轮合并即失效。
