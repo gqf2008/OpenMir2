@@ -1,0 +1,49 @@
+228-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片54 边界
+m2-svr / openmir2-worker-11 / 2026-10-14；cwd = <本 worktree>；未 merge、未自签、未动共享主检出
+====================================================================================================
+
+# A) 改树（`git status --porcelain`；`228` 自身为新增，此处清单为其写盘前一时点）
+
+```
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/225-window-plan-ability-run.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/226-redcheck-window-ability-run.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/227-gates.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/228-boundary.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/229-window-source-refresh.txt
+```
+`git diff --stat`：`README.md` +34 / `window_handoff.py` +115-23（`git diff --stat` 口径见 `227` §A 前）。
+
+⇒ 本片净 8 路径：1 `.py`（生产无关的判据/计划工具）+ 4 新增证据（`225`/`226`/`227`/`229`）+ `228` +
+`README.md` + `SHA256SUMS.txt`（regen）。**全在** `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`。
+
+# B) 冻结面（必须空）
+
+```
+$ git status --porcelain -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins src/BotSrv mir2-rs/tests/parity/m3
+(空)
+frozen_lines=0
+```
+⇒ 冻结面 `src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/ mir2-rs/bins/ src/BotSrv/`
+与 `mir2-rs/tests/parity/m3/**`（m3bag/m3cs 写集）**全空**；本片**未起栈、未占端口**（十端口状态与开工前一致，
+`3306` 为共享 MySQL，只读）。
+
+# C) 边界外零改动清单（供审线复核）
+
+| 区 | 状态 |
+|---|---|
+| `src/**`（含 `src/BotSrv`） | 空 |
+| `sql/**` | 空 |
+| `MirClient/**`（冻结客户端） | 空 |
+| `mir2-rs/crates/protocol/**`、`mir2-rs/crates/storage/**` | 空 |
+| `mir2-rs/bins/**`（生产二进制） | 空（本片零生产代码） |
+| `mir2-rs/tests/parity/m3/**` | 空 |
+| 本片写入 | `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**` 7 路径 |
+
+# D) 残留物（仓外，可删）
+
+- `E:/tmp/m2svr-burst25/**`（`ev/` 原始输出、`whmut/` 变异副本、`judge/`+`judge-a/` 合成产物、
+  `gen_judge_demo.py`/`mut.py`/`mutate_wh.py`/`mk225b.py`/`mk226.py`/`mk227.py`/`tests.raw.txt`）。
+- 既往片留给 root 开窗的 `E:/tmp/m2svr-window-origin` / `E:/tmp/m2svr-window-target`（**勿清**）。
