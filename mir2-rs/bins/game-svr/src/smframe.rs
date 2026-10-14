@@ -363,6 +363,24 @@ pub fn sm_username(target_id: i32, name_color: u8, show_name: &[u8]) -> Vec<u8> 
     gm_data_body(header, &edcode::encode(show_name))
 }
 
+/// `SM_CHANGENAMECOLOR`（`PlayObject.Message.cs:1677-1679` 的 `RM_CHANGENAMECOLOR` 观察者支）：
+/// `SendDefMessage(SM_CHANGENAMECOLOR, processMsg.ActorId, GetChrColor(baseObject), 0, 0)`
+/// ⇒ `MakeMessage(656, ActorId, color, 0, 0)` + **无尾**（`SendDefMessage` 的 5 参重载）。
+///
+/// 产者 = `RefNameColor()`（`BaseObject.cs:730-733`）经 `SendRefMsg(RM_CHANGENAMECOLOR,…)` 广播；
+/// ⑨-3 的宝宝叛变（`PlayObject.Base.cs:351`）就是这条。
+#[must_use]
+pub fn sm_changenamecolor(actor_id: i32, name_color: u8) -> Vec<u8> {
+    let header = command_header(
+        actor_id,
+        messages::SM_CHANGENAMECOLOR,
+        u16::from(name_color),
+        0,
+        0,
+    );
+    gm_data_body(header, &[])
+}
+
 /// `SM_AREASTATE`（`PlayObject.Base.cs:270-286` 的 `RefUserState`）：
 /// `SendDefMessage(SM_AREASTATE, n8, 0, 0, 0)`，无尾。`n8` 是地图 Flag 位或
 /// （`FightZone|1`、`SafeArea|2`、`InGuildWarArea|4`），落在 `Recog`。
@@ -1050,6 +1068,21 @@ mod tests {
         let (head, wire_tail) = split_wire(&wire);
         assert_eq!(u16at(&head, 4), messages::SM_MERCHANTSAY);
         assert_eq!(edcode::decode(&wire_tail), msg, "尾解码后仍是 GBK 原文");
+    }
+
+    /// **M3⑨-3 帧面残余**：`SM_CHANGENAMECOLOR`(656) = `SendDefMessage(656, Recog=ActorId, Param=color, 0, 0)`
+    /// （`PlayObject.Message.cs:1677-1679` 的 `RM_CHANGENAMECOLOR` 观察者支），**无尾**。
+    ///
+    /// 红检：把 `color` 从 `param` 挪到 `tag`/`series`、或给它加尾 ⇒ 本用例必红。
+    #[test]
+    fn sm_changenamecolor_header_only() {
+        let body = sm_changenamecolor(0x7c30_3998, 0xAB);
+        assert_eq!(i32at(&body, 0), 0x7c30_3998, "Recog = processMsg.ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_CHANGENAMECOLOR);
+        assert_eq!(u16at12(&body, 6), 0xAB, "Param = GetChrColor(baseObject)");
+        assert_eq!(u16at12(&body, 8), 0, "Tag");
+        assert_eq!(u16at12(&body, 10), 0, "Series");
+        assert_eq!(body.len(), 12, "SendDefMessage 5 参重载 ⇒ 无尾");
     }
 
     fn u16at12(b: &[u8], o: usize) -> u16 {

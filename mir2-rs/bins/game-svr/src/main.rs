@@ -1088,6 +1088,113 @@ fn drain_party_death_events(
     );
 }
 
+/// **M3⑨-3 帧面残余（卡 `openmir2-m3-pet-slave-masterdie-wire`）**：
+/// `PlayObject.ProcessSlaveMutiny`（`PlayObject.Base.cs:331-359`）末两行
+/// （`:351-352` `SlaveList[i].RefNameColor(); SlaveList[i].RefShowName();`）的**下行帧**。
+///
+/// 状态层（`World::deliver_self_delay_msgs` → `slave::process_slave_mutiny`）已由本卡前片落地，
+/// 事件落在 [`mir2_world::TickRecord::slave_self_deliveries`]；本函数只负责把 `mutinied` 出帧（
+/// `crates/world/src/world.rs:107-109` 的「宿主据本记录出帧」）。
+///
+/// # oracle 链路（逐行）
+///
+/// - `RefNameColor()`（`BaseObject.cs:730-733`）= `SendRefMsg(RM_CHANGENAMECOLOR, 0,0,0,0, "")`；
+/// - `RefShowName()`（`BaseObject.cs:1174-1177`）= `SendRefMsg(RM_USERNAME, 0,0,0,0, GetShowName())`；
+/// - `SendRefMsg`（`BaseObject.Message.cs:383-475`）对**同图**、`Race == Play`、非 `Ghost`、
+///   切比雪夫 ≤ `Config.SendRefMsgRange`（缺省 12）的对象 `SendMsg(this, ident, …)`；
+///   非 `Play` 目标仅在 `RM_STRUCK/RM_HEAR/RM_DEATH` 时收 ⇒ 这两条只发玩家；
+/// - 观察者侧 `RM_CHANGENAMECOLOR` 支（`PlayObject.Message.cs:1677-1679`）⇒ `SM_CHANGENAMECOLOR(656)`
+///   载荷 `(Recog=ActorId, Param=GetChrColor(baseObject), 0, 0)`，无尾；
+///   `RM_USERNAME` 支（`:1662-1664`）⇒ `SM_USERNAME(42)` 同载荷 + 尾 `EncodeString(GetShowName())`。
+///
+/// # 次序（按观察者 `MsgQueue` 的**优先级字节**，不是源码入队序）
+///
+/// oracle `SendMsg`（`BaseObject.Message.cs:98/181`：`SendMsg(IActor, …)` 的 `MsgQueue.Enqueue(msg, (byte)wIdent)`）入队，
+/// 而 `MsgQueue` 是 `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:16`）⇒ **小根堆**：
+/// `(byte)RM_CHANGENAMECOLOR` = `8090 & 0xFF` = **154** < `(byte)RM_USERNAME` = `8101 & 0xFF` = **165**。
+/// ⇒ 同一观察者上**所有宝宝的色帧先于所有名帧**出队。宝宝本身按 `SlaveList` **末尾往前**序
+/// （[`mir2_world::slave::process_slave_mutiny`] 返回的就是该序）。故对每个观察者：
+/// `色(s_n) … 色(s_1)` 然后 `名(s_n) … 名(s_1)`。
+///
+/// # 登记（未 1:1，真机项）
+///
+/// - oracle `SendRefMsg` 的 `VisibleHumanList` 有 **500ms 缓存**（`BaseObject.Message.cs:395`）：缓存命中支
+///   （`:453-460`）按 `< 11` 的窄门重扫，重算支（`:399-402`）按 `SendRefMsgRange`=12 的 25×25 块；
+///   本实现每 tick 现算现发（同
+///   [`drain_combat_downlink`] 口径）—— 真机两侧同序列对拍时须对齐。
+/// - 帧先入观察者 `MsgQueue`，下一轮 `Run()` 才回 `SM_*`；本实现当 tick 直发（同既有下行族）。
+/// - `GetShowName()` 的 `Master != null ⇒ "(主人名)"` 后缀：本路径 `process_slave_mutiny` 已把
+///   `Master` 置 `None` ⇒ 不可达；`NpcNameColor` 分支同理（叛变宝宝恒非 NPC）⇒ 传 0 且不消费。
+/// - `ghosted` 支（`MakeGhost` 的 `RM_MASTERDIEGHOST`）在 oracle 里**恒不可达**（本卡 BUG-REPLICA ④）
+///   ⇒ 本函数不产帧。
+#[allow(clippy::too_many_arguments)]
+fn drain_slave_mutiny_downlink(
+    rec: &mir2_world::TickRecord,
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    cfg: &mir2_data::pet_slave::PetSlaveConfig,
+    range: i32,
+) -> usize {
+    if rec.slave_self_deliveries.is_empty() {
+        return 0;
+    }
+    // `NpcNameColor` 未在 Rust 配置层建模；本路径 `Race != NPC` ⇒ 不可达不消费（见函数头登记）。
+    const NPC_NAME_COLOR_UNMODELED: u8 = 0;
+    // 每只叛变宝宝的 `(观察者, 宝宝 id, 色, 名)`（宝宝按 `mutinied` 序 = `SlaveList` 末尾往前）。
+    let mut hits: Vec<(i32, i32, u8, Vec<u8>)> = Vec::new();
+    for outcome in &rec.slave_self_deliveries {
+        if outcome.ident != mir2_world::slave::RM_MASTERDIEMUTINY {
+            continue;
+        }
+        for sid in &outcome.mutinied {
+            let Some(e) = world.entities.get(*sid) else {
+                continue;
+            };
+            // 观察者侧 `GetChrColor(baseObject)`：叛变后 `Master == null` ⇒ 怪的 `NameColor`。
+            let color =
+                mir2_world::slave::get_chr_color(e, &cfg.slave_color, NPC_NAME_COLOR_UNMODELED);
+            // `BaseObject.GetShowName()`（`BaseObject.Base.cs:779`）：怪物走 `FilterShowName`（GBK 字节）。
+            let show_name = downlink::gbk(downlink::filter_show_name(&e.name));
+            for observer in game_svr::chat::hear_targets(world, *sid, range) {
+                hits.push((observer, *sid, color, show_name.clone()));
+            }
+        }
+    }
+    if hits.is_empty() {
+        return 0;
+    }
+    let mut observers: Vec<i32> = hits.iter().map(|h| h.0).collect();
+    observers.sort_unstable();
+    observers.dedup();
+    let mut sent = 0usize;
+    for observer in observers {
+        let Some(entry) = online.iter().find(|e| e.actor_id == observer) else {
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "叛变名色帧") else {
+            continue;
+        };
+        // ① 色帧（优先级字节 154，`mutinied` 序）。
+        for h in hits.iter().filter(|h| h.0 == observer) {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body: game_svr::smframe::sm_changenamecolor(h.1, h.2),
+            });
+            sent += 1;
+        }
+        // ② 名帧（优先级字节 165，同序）。
+        for h in hits.iter().filter(|h| h.0 == observer) {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body: game_svr::smframe::sm_username(h.1, h.2, &h.3),
+            });
+            sent += 1;
+        }
+    }
+    sent
+}
+
 /// `CM_PICKUP`(1001) / `CM_DROPITEM`(1000) 的派发（owner §26）。
 ///
 /// 口径：纯判定在 `ground::pick_up`/`drop_item`（m3bag 交付，逐字段对 oracle 向量），
@@ -7249,6 +7356,19 @@ fn sim_loop(
         // 放在 `party_run_tick()` 之前：oracle `Run()` 的组队段（`PlayObject.Message.cs:704-719`）
         // 晚于 `Die()`，而 `Die()` 已把死亡成员摘出（段内无死成员可清）。
         drain_party_death_events(&rec, &online, &gates);
+        // **M3⑨-3 帧面残余**：本 tick 的 `World::tick` 已在消息段投递到点自投递消息
+        // （`RM_MASTERDIEMUTINY` → `ProcessSlaveMutiny`，`world.rs:565-572`）并落
+        // `rec.slave_self_deliveries`；这里补出帧（`RefNameColor`/`RefShowName`）。
+        // 位置：oracle 属主人 `Run()` 的消息段（`PlayObject.Message.cs:2116-2121`），先于
+        // `base.Run()` 的恢复/体力段 ⇒ 放在 `drain_recovery`/`drain_run_downlinks` 之前。
+        let _mutiny_frames = drain_slave_mutiny_downlink(
+            &rec,
+            &world,
+            &online,
+            &gates,
+            &enter_cfg.pet_cfg,
+            enter_cfg.ref_msg_range,
+        );
         // `openmir2-m3-party-group-state`：`PlayObject.Run()` 的组队段（`PlayObject.Message.cs:704-719`）
         // 在同一 tick 的恢复段之前（`base.Run()` 在 `:765`，晚于组队段）。
         world.party_run_tick();
@@ -13255,6 +13375,182 @@ mod tests {
             (cm.recog, cm.param, cm.tag, cm.series),
             (monster, 180, 200, 20),
             "SM_STRUCK 头 = (怪物, 扣血后 HP, MaxHP, 伤害)"
+        );
+    }
+
+    /// **M3⑨-3 帧面残余**：`rec.slave_self_deliveries` 里一条 `RM_MASTERDIEMUTINY` ⇒
+    /// `drain_slave_mutiny_downlink` 给**叛变宝宝视野内的在线玩家**发
+    /// `SM_CHANGENAMECOLOR(656)`（无尾，`Param = GetChrColor`）与 `SM_USERNAME(42)`
+    /// （尾 = `EncodeString(FilterShowName(ChrName))`）。
+    ///
+    /// 锚：`PlayObject.Base.cs:351-352`（`RefNameColor(); RefShowName();`）→
+    /// `BaseObject.cs:730-733/1174-1177` → `PlayObject.Message.cs:1662-1664/1677-1679`。
+    ///
+    /// 红检：删掉 `drain_slave_mutiny_downlink` 的名帧（或把色帧/名帧互换）⇒ 本用例必红（帧序/条数）。
+    #[test]
+    fn slave_mutiny_downlink_emits_namecolor_then_username() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let master = {
+            let mut e = mir2_world::Entity::new(0, "master".to_string(), 9, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.death = true;
+            world.add_entity(e)
+        };
+        // 叛变后的宝宝：`Master == null`（`process_slave_mutiny` 已置）⇒ `GetChrColor` = `NameColor`(255)。
+        let slave = {
+            let mut e = mir2_world::Entity::new(0, "骷髅2".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            world.add_entity(e)
+        };
+        let near = {
+            let mut e = mir2_world::Entity::new(0, "near".to_string(), 12, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let far = {
+            let mut e = mir2_world::Entity::new(0, "far".to_string(), 40, 40);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut online: OnlineRegistry = Vec::new();
+        for (i, (name, socket, actor)) in [("near", 901_i32, near), ("far", 902, far)]
+            .into_iter()
+            .enumerate()
+        {
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: name.into(),
+                    session_id: i as i32 + 1,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: actor,
+                },
+            );
+        }
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let rec = mir2_world::TickRecord {
+            slave_self_deliveries: vec![mir2_world::slave::SelfDelayOutcome {
+                actor_id: master,
+                ident: mir2_world::slave::RM_MASTERDIEMUTINY,
+                mutinied: vec![slave],
+                ghosted: Vec::new(),
+            }],
+            ..Default::default()
+        };
+        let cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let sent = drain_slave_mutiny_downlink(&rec, &world, &online, &gates, &cfg, 12);
+        assert_eq!(sent, 2, "只给视野内玩家（near）发 2 帧");
+        let mut bodies: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { socket, body } = m {
+                bodies.push((socket, body));
+            }
+        }
+        assert!(
+            bodies.iter().all(|(s, _)| *s == 901),
+            "远距（40,40）观察者不得收帧：{bodies:?}"
+        );
+        assert_eq!(bodies.len(), 2, "色帧 + 名帧");
+        let cm0 = CommandMessage::from_bytes(&bodies[0].1).expect("12B");
+        assert_eq!(cm0.ident, mir2_protocol::messages::SM_CHANGENAMECOLOR);
+        assert_eq!(
+            (cm0.recog, cm0.param, cm0.tag, cm0.series),
+            (slave, 255, 0, 0)
+        );
+        assert_eq!(bodies[0].1.len(), 12, "SM_CHANGENAMECOLOR 无尾");
+        let cm1 = CommandMessage::from_bytes(&bodies[1].1).expect("12B");
+        assert_eq!(cm1.ident, mir2_protocol::messages::SM_USERNAME);
+        assert_eq!(
+            (cm1.recog, cm1.param, cm1.tag, cm1.series),
+            (slave, 255, 0, 0)
+        );
+        assert_eq!(
+            mir2_protocol::edcode::decode(&bodies[1].1[12..]),
+            downlink::gbk("骷髅"),
+            "尾 = EncodeString(FilterShowName(ChrName))（“骷髅2” ⇒ “骷髅”）"
+        );
+    }
+
+    /// **M3⑨-3 帧面残余（出队序）**：多只宝宝叛变时，按观察者 `MsgQueue` 的**优先级字节**
+    /// （`BaseObject.Message.cs:181` 的 `(byte)wIdent`）出队 —— `8090&0xFF=154` < `8101&0xFF=165`
+    /// ⇒ **所有色帧先于所有名帧**，宝宝序 = `SlaveList` 末尾往前。
+    ///
+    /// 红检：把 `drain_slave_mutiny_downlink` 的「色循环 / 名循环」合并成每宝宝一组的
+    /// `色(s2),名(s2),色(s1),名(s1)` ⇒ 本用例的帧序断言必红。
+    #[test]
+    fn slave_mutiny_downlink_groups_all_colors_before_names() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let master = {
+            let mut e = mir2_world::Entity::new(0, "master".to_string(), 9, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.death = true;
+            world.add_entity(e)
+        };
+        let mut slaves = Vec::new();
+        for (name, x) in [("s1", 10_i32), ("s2", 11)] {
+            let mut e = mir2_world::Entity::new(0, name.to_string(), x, 10);
+            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            slaves.push(world.add_entity(e));
+        }
+        let obs = {
+            let mut e = mir2_world::Entity::new(0, "obs".to_string(), 12, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uo".into(),
+                chr_name: "obs".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 905,
+                actor_id: obs,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // `mutinied` 序 = `SlaveList` 末尾往前 ⇒ [s2, s1]。
+        let rec = mir2_world::TickRecord {
+            slave_self_deliveries: vec![mir2_world::slave::SelfDelayOutcome {
+                actor_id: master,
+                ident: mir2_world::slave::RM_MASTERDIEMUTINY,
+                mutinied: vec![slaves[1], slaves[0]],
+                ghosted: Vec::new(),
+            }],
+            ..Default::default()
+        };
+        let cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let sent = drain_slave_mutiny_downlink(&rec, &world, &online, &gates, &cfg, 12);
+        assert_eq!(sent, 4, "2 只宝宝 × (色 + 名)");
+        let mut idents: Vec<(u16, i32)> = Vec::new();
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = m {
+                let cm = CommandMessage::from_bytes(&body).expect("12B");
+                idents.push((cm.ident, cm.recog));
+            }
+        }
+        assert_eq!(
+            idents,
+            vec![
+                (mir2_protocol::messages::SM_CHANGENAMECOLOR, slaves[1]),
+                (mir2_protocol::messages::SM_CHANGENAMECOLOR, slaves[0]),
+                (mir2_protocol::messages::SM_USERNAME, slaves[1]),
+                (mir2_protocol::messages::SM_USERNAME, slaves[0]),
+            ],
+            "优先级字节 154(色) < 165(名) ⇒ 全部色帧先出队，宝宝序 = mutinied 序"
         );
     }
 
