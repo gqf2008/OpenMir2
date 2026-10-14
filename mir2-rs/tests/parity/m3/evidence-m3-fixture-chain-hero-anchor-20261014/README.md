@@ -87,3 +87,12 @@ RED）。三条锚门现在同等受保护。这与 ⑧-6 O-1 对 `castle_oracle
   `04b.txt`（改坏必红 B）、`bnd.txt`（`09` 来源）；另有 `E:/tmp/hps.bak`（改坏必红 A 前的
   `hero_pet_scenario.json` 备份，已还原）、`E:/tmp/fcg.bak`（改坏必红 B 前的
   `fixture_chain_gate.py` 备份，已还原）。
+
+## 追改登记（retro-fix record，2026-10-14）
+
+> 卡 `openmir2-m3-fixture-chain-gate`；reviewer-6 `090d0cc4`（@`f114a5e90`）**O-1** 的收口片 `becf075db`。
+> 本包 `05-gate-fmt.txt` 原为 **1 B（仅换行）**，追改为自描述体例（`$ cargo fmt --all -- --check` + `rc=0`）；
+> `SHA256SUMS.txt` 同步按**仓库口径（LF 归一 = git blob 字节）**重记。
+> **方向为增强、非篡改**（原件不能自证 fmt 绿）。5 包清单与前后对照见
+> `../evidence-m3-fixture-fmt-evidence-20261014/README.md` §1。
+> 本次 README 追记（O-1 的「包内登记」）同样在该约定下重记本包清单。

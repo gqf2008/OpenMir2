@@ -1,0 +1,8 @@
+$ python -I m3_fixture_fmt_evidence_gate.py mutation
+  MUTATION ok  真身体例（临时副本）-> GREEN
+  MUTATION ok  改坏 MUT1：抹空 -> EMPTY RED
+  MUTATION ok  改坏 MUT2：删命令头 -> NO_COMMAND RED
+  MUTATION ok  改坏 MUT3：删 rc -> NO_RC RED
+  MUTATION ok  改坏 MUT4：删 fmt 证据件 -> NO_FMT_EVIDENCE RED
+MUTATION GREEN 5/5
+rc=0

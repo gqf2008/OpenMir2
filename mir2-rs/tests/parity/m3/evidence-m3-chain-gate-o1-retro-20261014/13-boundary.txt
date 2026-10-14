@@ -1,0 +1,53 @@
+$ git status --porcelain（本片全部改动，未提交态）
+
+ M mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/README.md
+ M mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/SHA256SUMS.txt
+ M mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/README.md
+ M mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/SHA256SUMS.txt
+ M mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/README.md
+ M mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/SHA256SUMS.txt
+ M mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/README.md
+ M mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/SHA256SUMS.txt
+ M mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/README.md
+ M mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/SHA256SUMS.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/
+
+$ 分类
+
+所有路径（M 与 ??）都在 mir2-rs/tests/parity/m3/** 之下：
+
+mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/
+
+$ 扩展名计数（在工作树新增/修改的路径里）
+  *.rs = 0
+  *.toml = 0
+  *.ps1 = 0
+  *.cs = 0
+
+$ 冻结面（应为空）
+  src:
+  sql:
+  MirClient:
+  mir2-rs/crates/protocol:
+  mir2-rs/crates/storage:
+  mir2-rs/bins:
+  src/BotSrv:
+
+$ 本片改动清单（5 README + 5 SHA256SUMS + 本证据包）
+
+  M mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/{README.md,SHA256SUMS.txt}
+  M mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/{README.md,SHA256SUMS.txt}
+  M mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/{README.md,SHA256SUMS.txt}
+  M mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/{README.md,SHA256SUMS.txt}
+  M mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/{README.md,SHA256SUMS.txt}
+  A mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o1-retro-20261014/**
