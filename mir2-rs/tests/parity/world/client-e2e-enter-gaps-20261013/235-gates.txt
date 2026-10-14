@@ -59,11 +59,17 @@ WINDOW_READY=YES RESULT: GREEN rc=0
 # 5) 证据清单门 + 行尾门
 
 $ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
-GREEN <本目录>/SHA256SUMS.txt  [repo 口径]  OK 241/241
+GREEN <本目录>/SHA256SUMS.txt  [repo 口径]  OK 243/243
     rc=0
 $ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
-EOLCHECK GREEN 242/242 件文本证据与仓库口径（LF）在 EOL 上一致
+EOLCHECK GREEN 244/244 件文本证据与仓库口径（LF）在 EOL 上一致
     rc=0
+
+> ⚠ 计数订正（片57，收 reviewer-6 approve 携带的 Minor「235 §5 自引用陈旧计数」）：本行初稿写
+> `241/241`+`242/242`，那是**在把 234/235/236 三件加进清单之前**抓的读数；片55 提交后清单实为
+> **243** 行（`git show f84464ad1:…/SHA256SUMS.txt | wc -l` = 243；`verify` 报 `243/243`、`eolcheck`
+> 报 `244/244`）。此处改为**提交时口径**。计数随证据增删变化，复核一律以「当场跑 `verify`/`eolcheck`」
+> 为准，不用本行数字下判。
 
 # 6) 边界/冻结面
 

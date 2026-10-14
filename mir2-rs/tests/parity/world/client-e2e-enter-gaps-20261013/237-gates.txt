@@ -1,0 +1,102 @@
+237-gates.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片57 门禁/机判读数（2026-10-15，tag `m2svr`）
+base = `origin/master` = `0067a08ad`（片55 `f84464ad1` 已合入）；本片零生产代码改动
+本 worktree = `.claude/worktrees/m2-svr`（branch `enter-gaps-window-dense-menu`），cwd=mir2-rs，
+CARGO_TARGET_DIR=E:/tmp/m2svr-target（隔离）
+====================================================================================================
+
+# 0) 本片内容（零生产代码）
+
+brief 顶部 root 2026-10-14 15:0x 的 ①「二分 + 修 + 改坏必红」在离线面已完成并入 master；本片只做两件事：
+  1. **独立复验**（不采信前一轮自述）：二分区间无引入点 + HIGHHP 家族 + 窗口源现况 + 泄漏栈（详见 `README.md` §56）；
+  2. **收 235 §5 / 236 §5 两条自引用陈旧计数**（merge 检查点随卡携带的 reviewer-6 Minor）。
+
+# 1) 四门禁（`--no-fail-fast` 口径逐条跑）
+
+$ cargo fmt --all -- --check
+    rc=0（无输出）
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.58s
+    rc=0
+
+$ cargo test --workspace --no-fail-fast
+    聚合：suites=101 passed=1233 failed=0 ignored=22（`grep -c FAILED` = 0）
+    rc=0
+
+$ cargo run -q -p msgcodegen -- --check
+    msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+    rc=0
+
+# 2) 工具自检（本片用到的判据工具，真身）
+
+$ python -I -B verify_client_highhp_family.py --selftest
+    SELFTEST OK (6/6)
+$ python -I -B verify_client_highhp_family.py --rust-dir <worktree>/mir2-rs/bins/game-svr/src
+    GREEN: 7 个 HIGHHP 站点与登记集合逐项一致（3 闭环 / 1 客户端库 / 1 死记录 / 2 未发送）
+    rc=0
+$ python -I -B check_rust_window_preflight.py --selftest
+    SELFTEST OK (50/50)
+
+# 3) ① 二分复验（区间内无引入点）
+
+$ git log --no-merges --oneline ad0592b19..8e491f81e -- mir2-rs/bins/game-svr/src
+    12 条（ecd455765 / d3b39c157 / c55dff977 / 0d0d62a69 / a6359cd78 / f8ab7ff24 /
+    ce7879223 / 0a1b83f7b / 65d0b34f2 / 8c4e0fc49 / 1a2b1ed51 / d16b5199d）
+$ git log --no-merges --oneline ad0592b19..8e491f81e -- \
+      mir2-rs/bins/game-svr/src/enter.rs mir2-rs/bins/game-svr/src/ability.rs
+    （空）⇒ 进图帧序 / 52-752 生成面在区间内零改动
+$ git show ce7879223 -- mir2-rs/bins/game-svr/src/record.rs | grep '^[+-]#\[derive'
+    -#[derive(Debug, Clone, PartialEq)]
+    +#[derive(Debug, Clone, PartialEq, Default)]   （唯一 record.rs 改动 = 加 Default）
+$ for c in c61b9627a 6cadc9fbf fd68e037d; do git merge-base --is-ancestor $c origin/master; done
+    三条均 rc=0（YES）；三条时间戳 15:31/18:33/21:10 全晚于 8e491f81e（12:14）
+    ⇒ 修复晚于被测提交：8e491f81e 时窗口确会复现 53 布局缺陷（HP<MaxHP 触发），非区间引入。
+
+# 4) ③ 同点位对照（fresh 复跑；oracle 出生几何）
+
+$ python -I -B check_mongen_dense_points.py --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt \
+      --map 0 --point 297,629 --expect outside
+    RESULT: GREEN rc=0   # 框外；最近框 Chebyshev=7（gen=(256,572) range=50 name=鹿）
+$ python -I -B check_mongen_dense_points.py … --map 0 --point 292,652 --expect outside
+    RESULT: GREEN rc=0   # 框外；最近框 Chebyshev=30 > vr=12 ⇒ 新生怪必在窗口外
+$ python -I -B check_mongen_dense_points.py … --map 0 --point 297,629 --expect inside
+    RESULT: RED rc=1     # 判据有牙（反向必红）
+$ python -I -B check_mongen_dense_points.py … --map 0 --view-range 12 --best-point \
+      --map-dir E:/MirServer/M2GameSvr/Map --require-walkable
+    BEST (605,578) E=12.681 view_range=12 box=(605,578) range=30 count=10 name=半兽人 tile=Walk  rc=0
+
+# 5) 窗口源现况（fresh；live vs 入库替身）
+
+$ python -I -B check_rust_window_preflight.py --repo /e/Users/gxh/Documents/GitHub/OpenMir2 --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer --target-dir E:/tmp/openmir2-merge-target
+    RED rc=1   # R1 缺 c61b9627a/6cadc9fbf/fd68e037d + R6 落后 origin/master@0067a08ad 生产路径 3 件
+$ python -I -B window_handoff.py --repo /e/Users/gxh/Documents/GitHub/OpenMir2 --ref HEAD --check-dir . \
+      --target-dir 'E:\tmp\openmir2-merge-target'
+    WINDOW_READY=NO  RESULT: RED rc=1   # G1 RED + G5（repo= 指共享主检出）
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --baseline-ref origin/master --mirserver E:/MirServer --target-dir E:/tmp/m2svr-window-target
+    R1..R6 全 OK（R7 需 --provenance，清单随 target 清理而缺 ⇒ PREREQ）
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --check-dir . \
+      --window-script ./client-e2e-window.fixed.sh.txt --target-dir 'E:\tmp\m2svr-window-target'
+    WINDOW_READY=YES RESULT: GREEN rc=0   # G2 11/11 + G1 R1..R7 + G5 双条 OK
+
+# 6) 泄漏栈（fresh；root 处置）
+
+2026-10-15 02:36 实拍：6 进程 / 9 端口 UP（DBSrv 33132 / LoginSrv 29240 / game-svr 30284[5000] /
+login-gate 9100[7000] / sel-gate 13052[7100] / game-gate 34944[7200]）；`game-svr` 为**修复前** exe，
+仍在推进 tick；`E:/tmp/client-e2e/stack2/*.out.log` mtime 02:37。清栈命令：
+`start_rust_stack.ps1 -RustBinDir <替身 target>\debug -LogDir E:\tmp\client-e2e\stack2 -Stop`。
+
+# 7) 证据清单门 + 行尾门
+
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+GREEN <本目录>/SHA256SUMS.txt  [repo 口径]  OK 245/245
+    rc=0
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+EOLCHECK GREEN 246/246 件文本证据与仓库口径（LF）在 EOL 上一致
+    rc=0
+
+# 8) 原始读数（仓外，供 root 复核）
+
+`E:/tmp/m2svr-burst48/{01-handoff-subst,02-handoff-subst-src,03-handoff-live,04-pt-verify2,
+10-fmt,11-clippy,12-test,13-msgcodegen}.txt`

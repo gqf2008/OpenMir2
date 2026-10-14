@@ -23,7 +23,15 @@ mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/236-boundary.txt
 # 4) 冻结面（git diff --name-only origin/master -- <冻结面>）
   （上面为空 = 冻结面零改动）
 
-# 5) 差量统计（git diff --stat origin/master）
- .../world/client-e2e-enter-gaps-20261013/README.md | 26 ++++++++++++++++++++++
- .../client-e2e-enter-gaps-20261013/SHA256SUMS.txt  |  3 ++-
- 2 files changed, 28 insertions(+), 1 deletion(-)
+# 5) 差量统计（片55 提交 f84464ad1 口径：`git show --stat f84464ad1`）
+ ...-oracle-geometry-and-window-source-20261015.txt | 199 +++++++++++++++++++++
+ .../client-e2e-enter-gaps-20261013/235-gates.txt   |  77 ++++++++
+ .../236-boundary.txt                               |  29 +++
+ .../world/client-e2e-enter-gaps-20261013/README.md |  26 ++++
+ .../client-e2e-enter-gaps-20261013/SHA256SUMS.txt  |   5 +-
+ 5 files changed, 335 insertions(+), 1 deletion(-)
+
+> ⚠ 计数订正（片57，收 reviewer-6 approve 携带的 Minor「236 §5 自引用陈旧差量」）：本行初稿写
+> `2 files changed, 28 insertions`，那是 `git diff --stat origin/master`（**只算已跟踪件**）在 234/235/236
+> 三件**尚未 `git add` 时**的读数；提交后（`git show --stat f84464ad1`）实为 **5 files changed, 335
+> insertions(+), 1 deletion(-)**。此处改为**提交时口径**，与本文件 §2/§3 的 5 路径清单自洽。
