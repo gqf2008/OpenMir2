@@ -878,3 +878,28 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   的 G1 修复块已给命令；R 级真机两侧同框对照 + 攻击/伤害可见归 root 独占窗口。
 - 证据：`163-window-source-freshness-struck.txt`、`164-redcheck-window-source-freshness.txt`、
   `165-gates.txt`、`166-boundary.txt`、`check_rust_window_preflight.py`、`window_handoff.py`。
+
+### ㉟ ③ 窗口就绪收口：专用构建源刷到含片⑪+片㉜ + 预构建六件 exe（2026-10-14）—— `167`/`168`
+
+- **承接片㉞ 登记项**：㉞ 把「构建源缺片㉜」做成 fail-closed 门（`RED R1 …不含 0d0d62a695`），
+  并登记「开窗前必须换用含片⑪+片㉜ 的构建源（本分支 head，**或把专用源刷到 `origin/master`**）并复跑 G1 至 GREEN」。
+  本片取**后半条**：直接把专用源 `E:/tmp/m2svr-window-origin` 从 `6dba8719d`（含片⑪、缺片㉜）
+  **快进**到 `9edfc745d`（= 当时 `origin/master`，两片都在），并用 `E:\tmp\m2svr-window-target`
+  **预构建**六件窗口二进制（`game-svr.exe` 重链，含片㉜ 的 `SM_STRUCK` 广播）。
+- **真读数（`167`）**：刷新后 `check_rust_window_preflight.py --repo <专用源> --ref HEAD`
+  ⇒ `R1..R5` 全 OK / `RESULT: GREEN` rc=0（与㉞ 刷源前的 `RED R1` 同门前后对照）；
+  `window_handoff.py --window-script client-e2e-window.fixed.sh.txt`
+  ⇒ `G1` + `G2 8/8` + `G5` 两条一致 / `WINDOW_READY=YES` / `RESULT: GREEN` rc=0。
+  构建：`cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv`
+  rc=0（13.66s，`game-svr.exe` 10:30 重链 135459053 B）。
+- **改坏必红（`168`）**：`--ref 6dba8719d`（刷源前）⇒ `RED R1 …不含 0d0d62a695` / `RESULT: RED` rc=1
+  —— 证「本片刷源」非空动作；对照：root 活脚本仍指共享主检出 ⇒ `G5` 两条 RED / `WINDOW_READY=NO`
+  （换活脚本仍是 root 的开窗动作，本片不动 root 工具）。工具自检 `23/23` + `95/95` 不变。
+- **边界与纪律**：本片只新增证据（`167`/`168` + README §㉟ + `SHA256SUMS.txt`）；**零 `.rs`/`.toml`、
+  零生产代码、零起栈、零游戏端口**（3306 UP，其余 DOWN）；刷新与预构建都在 `E:/tmp` 检出外，未动共享主检出；
+  未 merge、未自签 review。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级真机两侧同框对照 + 攻击/伤害可见；
+  root 开窗前两步 = ① 换活脚本为入库替身（否则 G5 `WINDOW_READY=NO`）② 起栈后按
+  `window_handoff.py --plan` 跑 ③b/③a 两趟 + `--judge` 六条判据（③b `--best-site` = `605,578` E=12.681）。
+- 证据：`167-window-source-refresh-and-prebuild.txt`、`168-redcheck-window-source-refresh.txt`、
+  `169-gates.txt`、`170-boundary.txt`。

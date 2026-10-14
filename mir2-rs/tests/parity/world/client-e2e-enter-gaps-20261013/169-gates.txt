@@ -1,0 +1,67 @@
+169-gates.txt —— 片㉟ 门禁与自检（卡 `openmir2-client-e2e-enter-gaps`）
+m2-svr / openmir2-worker-11 / 2026-10-14
+cwd = mir2-rs（自身 worktree .claude/worktrees/m2-svr）；CARGO_TARGET_DIR = E:/tmp/m2svr-target；--offline
+head（本片提交前）= 2a1d4237d（片㉞）+ 本片只加证据（无代码改动）
+====================================================================================================
+A. 四门禁
+----------------------------------------------------------------------------------------------------
+```
+$ cargo fmt --all -- --check
+（无输出）
+rc=0
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.00s
+rc=0
+$ cargo test --workspace --offline
+    Finished ...
+test result: ...（101 个 suite，逐 suite 全 ok；0 个 FAILED）
+聚合：101 suites · 1219 passed · 0 failed · 22 ignored   rc=0
+$ cargo run --offline -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+```
+
+B. 本片判据工具自检（G2 内联；计数不变 = 本片未改 `.py`）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B check_rust_window_preflight.py --selftest
+...（23 条 PASS）
+SELFTEST OK (23/23)
+rc=0
+$ python -I -B window_handoff.py --selftest
+...（95 条 PASS）
+SELFTEST OK (95/95)
+rc=0
+```
+
+C. 本片真读数（详见 `167-…` / `168-…`）
+----------------------------------------------------------------------------------------------------
+| 命令 | 构建源 | 结果 |
+|---|---|---|
+| `check_rust_window_preflight.py --ref HEAD` | `E:/tmp/m2svr-window-origin @9edfc745d`（**本片刷新后**） | `R1..R5` 全 OK / `RESULT: GREEN` rc=0 |
+| `check_rust_window_preflight.py --ref 6dba8719d` | 同上（**刷源前 ref**） | `RED R1 …不含 0d0d62a695（片㉜…）` / `RESULT: RED` rc=1 |
+| `window_handoff.py --window-script client-e2e-window.fixed.sh.txt` | `E:/tmp/m2svr-window-origin @9edfc745d` | `OK G1` + `G2 8/8` + `G5` 两条一致 / `WINDOW_READY=YES` / `RESULT: GREEN` rc=0 |
+| `window_handoff.py`（默认 = root 活脚本） | 同上 | `OK G1` + `RED G5`（repo=共享主检出 / tgt=merge 暖 target）/ `WINDOW_READY=NO` / rc=1 |
+
+D. 证据完整性（LF/git-blob 口径，写入本片 4 件后重跑）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+写入 mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt（175 行，repo 口径）
+GREEN: write 完成（4 行 hash 变更，mode=repo）
+rc=0
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+GREEN mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK 175/175
+rc=0
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+EOLCHECK GREEN 176/176 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
+```
+（`SHA256SUMS.txt` 171 → 175 件：+167/168/169/170。）
+
+E. 卫生
+----------------------------------------------------------------------------------------------------
+* 零起栈、零游戏端口；十端口实拍：3306 UP（共享 MySQL），5000/5100/5500/5600/5700/6000/7000/7100/7200/7600 全 DOWN。
+* 共享主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2` 只读、未动。
+* 本片零生产代码改动：`git diff --name-status origin/master HEAD` 只含本证据目录（`.py` 为在审㉝/㉞ 的既有改动，
+  非本片新增）。
