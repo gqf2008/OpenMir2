@@ -1,0 +1,96 @@
+# 夹具链深检门（cwd = mir2-rs/tests/parity/m3）
+
+$ python -I fixture_chain_gate.py selftest
+  SELFTEST ok  classify_runner(0) ⇒ RUN-OK
+  SELFTEST ok  classify_runner(2) ⇒ PREREQ
+  SELFTEST ok  classify_runner(1) ⇒ RED
+  SELFTEST ok  classify_runner(127) ⇒ RED
+  SELFTEST ok  A READY + RUN-OK
+  SELFTEST ok  B PENDING（runner SKIP）
+  SELFTEST ok  C READY + PREREQ（默认不红）
+  SELFTEST ok  D runner rc=1 ⇒ RED
+  SELFTEST ok  E comparator rc=1 ⇒ RED
+  SELFTEST ok  默认 RED 仅 2 条（D runner + E comparator）
+  SELFTEST ok  默认 PENDING / PREREQ 不判红
+  SELFTEST ok  require-all 把 PENDING 判红
+  SELFTEST ok  require-all 把 runner PREREQ 判红
+  SELFTEST ok  共享管线 rc=3 ⇒ 判红
+  SELFTEST ok  共享管线缺件默认不红
+  SELFTEST ok  共享管线缺件 require-all 判红
+  SELFTEST ok  删 runner ⇒ INCONSISTENT（改坏必红）
+  SELFTEST ok  MATRIX runner 命名合规
+  SELFTEST ok  MATRIX comparator 命名合规
+  SELFTEST ok  共享管线登记项 ≥2
+  SELFTEST ok  共享管线件在本仓库树内可解析（REPO_ROOT 口径）
+  SELFTEST ok  主机门（.py）登记项 ≥1
+  SELFTEST ok  行会/攻城锚门已接入共享管线（⑧-10 残余 Minor，防回退）
+  SELFTEST ok  英雄/宠物锚门已接入共享管线（⑨-5 残余 Minor，防回退）
+  SELFTEST ok  元宝寄售锚门已接入共享管线（⑩-3 残余 Minor，防回退）
+  SELFTEST ok  任务锚门已接入共享管线（⑥ 锚门族覆盖面收口，防回退）
+  SELFTEST ok  组队/交易锚门已接入共享管线（⑦ 锚门族覆盖面收口，防回退）
+  SELFTEST ok  markers 前缀门已接入共享管线（防回退）
+  SELFTEST ok  宝宝登记门已接入共享管线（防回退）
+  SELFTEST ok  行会战怪行为登记门已接入共享管线（防回退）
+  SELFTEST ok  白名单登记号审计门 selftest 已接入共享管线（防回退）
+  SELFTEST ok  fmt 证据自描述门 selftest+check 已接入共享管线（防回退）
+  SELFTEST ok  RNG 场景锚门已接入共享管线（防回退）
+  SELFTEST ok  主机门（.py）登记项 ≥23（castle + 行会/攻城 + 英雄/宠物 + 元宝寄售 + 任务 + 组队/交易 + markers 前缀 + 宝宝登记 + 白名单审计 + 行会战怪行为登记 + RNG 场景锚 + fmt 证据 各 selftest[/check]）
+  SELFTEST ok  共享管线登记名唯一（防重复注册偷懒）
+  SELFTEST ok  共享管线 (file,args) 登记唯一
+  SELFTEST ok  _tool_argv(.py) ⇒ python -I
+  SELFTEST ok  _tool_argv(.ps1) ⇒ powershell -File
+  SELFTEST ok  _run_tool(.py) 真跑 rc=0
+  SELFTEST ok  _run_tool 缺件 ⇒ 127
+SELFTEST GREEN: fixture_chain_gate selftest 40/40
+
+$ python -I fixture_chain_gate.py check
+== M3 夹具链深检（runner 级）==
+#     系统                     矩阵状态         runner     卡
+1     背包 / 装备                READY        RUN-OK     openmir2-m3-bag-equip-alignment
+       runner -SelfCheckNoStack rc=0 :: SELFTEST_RED GREEN: 无栈自检全过（配置透传有/无两向 + run_pair 关挂机耦合两向 + 固定起点两相 + pin settle+hold 可判红自检（跳过 sett
+2/3   战斗 / 技能                READY        RUN-OK     openmir2-m3-attack-pair-fixture
+       runner -SelfCheckNoStack rc=0 :: SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinM
+4     掉落 / 经验                READY        RUN-OK     openmir2-m3-drop-exp-align
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（比较器 + 纯度门 fail-closed + 改坏必红 + LF 写出 + no-Go real-run fail-closed + DoD② run_pair 
+5     NPC / 商店               READY        RUN-OK     openmir2-m3-shop-fixture-botsrv
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + 入口/DiffOnly/A
+6     任务                     READY        RUN-OK     openmir2-m3-quest-fixture-botsrv
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + 入口/DiffOnly/A
+7     组队 / 交易                READY        RUN-OK     openmir2-m3-party-trade-fixture-botsrv
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + bot 集合 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + run_
+8     公会 / 攻城                READY        RUN-OK     openmir2-m3-guild-castle-fixture-botsrv
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + 场景锚门 check/selftest/mutation + bot 集合 + 开关耦合两向 + peer 护栏两
+9     英雄 / 宠物                READY        RUN-OK     openmir2-m3-hero-pet-fixture-botsrv
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + 场景锚门 check/selftest/mutation + bot 集合 + 开关耦合两向 + peer 护栏两
+10    拍卖（元宝寄售 SellOff）       READY        RUN-OK     openmir2-m3-selloff-fixture-botsrv
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + bot 集合 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + run_
+B     全服 RNG 消费者账本（Claim B）  READY        RUN-OK     openmir2-m3-rng-trace-scene-groups
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（场景前置门 fail-closed + **流水头同种子**制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 拒绝比）+ DoD① 单一入口 -Sc
+-- 共享管线 / 主机门 --
+run_bots         present    rc=0 :: SELFTEST_RED GREEN: M3 序列收尾计数离线自检全过（attack done 2/1/0 + bag done 2/0 + dropexp d
+selftest_gate    present    rc=0 :: GREEN: 十条机判护栏的判红/判绿口径都经构造输入验证
+castle_anchor_selftest present    rc=0 :: SELFTEST GREEN
+castle_anchor_check present    rc=0 :: GREEN: castle oracle 锚门通过（159 锚命中冻结 src/ + 写侧在位 + 覆盖区间无未登记/裸锚）
+guild_castle_anchor_selftest present    rc=0 :: SELFTEST GREEN
+guild_castle_anchor_check present    rc=0 :: GREEN: guild/castle 场景锚门通过（31 锚 / 92 行点全部命中冻结 src/ 且覆盖面闭合）
+hero_pet_anchor_selftest present    rc=0 :: SELFTEST GREEN
+hero_pet_anchor_check present    rc=0 :: GREEN: hero/pet 场景锚门通过（27 锚 / 57 行点全部命中冻结 src/ 且覆盖面闭合）
+selloff_anchor_selftest present    rc=0 :: SELFTEST GREEN
+selloff_anchor_check present    rc=0 :: GREEN: 元宝寄售场景锚门通过（19 锚 / 36 行点全部命中冻结面且覆盖面闭合）
+quest_anchor_selftest present    rc=0 :: SELFTEST GREEN
+quest_anchor_check present    rc=0 :: GREEN: quest 场景锚门通过（14 锚 / 20 行点全部命中冻结 src/ 且覆盖面闭合）
+party_trade_anchor_selftest present    rc=0 :: SELFTEST GREEN
+party_trade_anchor_check present    rc=0 :: GREEN: party/trade 场景锚门通过（22 锚 / 47 行点全部命中冻结 src/ 且覆盖面闭合）
+marker_prefix_selftest present    rc=0 :: SELFTEST ok=40/40
+marker_prefix_check present    rc=0 :: GREEN: markers 前缀口径一致（run_pair 无去前缀截断 + 7 生产牙（含 1 个 guard-only 例外）+ 6 比较器按前缀扫描；B
+pet_slave_registry_selftest present    rc=0 :: SELFTEST GREEN 5/5
+pet_slave_registry_check present    rc=0 :: PET_SLAVE_REGISTRY GREEN（5 行登记齐 + 锚点齐 + B 段编号唯一）
+guild_war_quirk_registry_selftest present    rc=0 :: SELFTEST GREEN 6/6
+guild_war_quirk_registry_check present    rc=0 :: GUILD_WAR_QUIRK_REGISTRY GREEN（1 行登记齐 + 锚点齐 + 编号唯一）
+whitelist_registry_selftest present    rc=0 :: SELFTEST GREEN 9/9
+fixture_fmt_evidence_selftest present    rc=0 :: SELFTEST GREEN 8/8
+fixture_fmt_evidence_check present    rc=0 :: FIXTURE_FMT_EVIDENCE GREEN（9 个证据包 / 9 件 fmt 证据非空 + 命令头 + rc）
+rng_scene_anchor_selftest present    rc=0 :: SELFTEST GREEN: check_anchors selftest 17/17（含 16 条改坏必红：符号唯一性锚写回行号 / 文件引用删除 / 符号
+rng_scene_anchor_check present    rc=0 :: GREEN: check_anchors 7/7 锚点保鲜（行号锚：文档行号 == 当前源码首个匹配行；符号唯一性锚：文档只引用文件、符号恰出现 1 次；闭世界
+FIXTURE_CHAIN GREEN: runner_ok=10 prereq_or_skip=0 red=0
+
