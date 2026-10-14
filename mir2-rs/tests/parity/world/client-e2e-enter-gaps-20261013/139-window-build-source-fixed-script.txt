@@ -1,0 +1,140 @@
+139-window-build-source-fixed-script.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉘
+③「同屏没怪」窗口的**构建源固化**：把 root 一键窗口脚本的 `repo=`/`tgt=` 两行指到「专用构建源」，
+并把该源推进到当前 `origin/master` 后重建六件 —— 这是「判据/capture 工具就绪」面最后一个硬前置。
+m2-svr / openmir2-worker-11 / 2026-10-14；**零起栈、零游戏端口、零生产代码改动**。
+被测件：`client-e2e-window.fixed.sh.txt`  sha256 = ab2ee6f3a0784a26f47f20bc083b71cceea432dfa6be418f4d25647950845249
+base = `origin/master` 6dba8719d…（本片开工时 `git merge origin/master` 的 tip；本片只加证据目录内文件）
+====================================================================================================
+
+A. 缺陷（机判，不是散文）—— 用默认构建源，③ 窗口会烧在「旧版式读数」上
+----------------------------------------------------------------------------------------------------
+[A1] root 的一键窗口脚本 `E:/tmp/openmir2-watch/client-e2e-window.sh:6-7`（逐字）：
+```
+w=/e/tmp/openmir2-watch; repo=/e/Users/gxh/Documents/GitHub/OpenMir2
+tgt='E:\tmp\openmir2-merge-target'; logdir='E:\tmp\client-e2e\stack'
+```
+     其中 `repo` = **共享主检出**（现为 rev 车道 worktree）。第 2 步是
+     `( cd "$repo/mir2-rs" && CARGO_TARGET_DIR="$tgt" cargo build … )`，第 3 步用 `-RustBinDir "$tgt\debug"` 起栈。
+
+[A2] 机判（本片当场重跑；命令与原始输出见 `141-gates.txt`）：
+```
+$ git -C /e/Users/gxh/Documents/GitHub/OpenMir2 rev-parse HEAD
+ad0592b1912b2c740aea01f83265370aa7d94139                      # 停在旧提交
+$ git -C /e/Users/gxh/Documents/GitHub/OpenMir2 status --porcelain | wc -l
+0
+$ git -C /e/Users/gxh/Documents/GitHub/OpenMir2 merge-base --is-ancestor d16b5199d HEAD
+# rc=1 ⇒ d16b5199d_in_shared=NO
+$ git rev-parse origin/master
+6dba8719d0d5dd834bbab159716b2a538160d333                      # = walgit/master
+$ git merge-base --is-ancestor d16b5199d origin/master
+# rc=0 ⇒ d16b5199d_in_master=YES
+```
+     `d16b5199d` = 片⑪（AOI 诊断口径修复：`vis` 改「当前可见集」+ 新增 `vr=/new=/af=`）。
+
+[A3] 后果（这正是 root verify1 看到的形态）：用默认源构建的 `game-svr` **不含** `vr=/new=/af=` 字段
+     ⇒ 真机周期行只有 `[aaa(…) map=.. vis=0 same_map=.. nearest=..]`；而判据脚本
+     `check_aoi_visibility_diag.py` 的**版式门 fail-closed** 会把这种日志判 `PREREQ_RED`
+     ⇒ 窗口读数不可判、白烧一趟。
+     复核（从本目录已入库的 root 原始件 `capture-root-verify1-game-svr.out.txt`，逐字节来自
+     `E:/tmp/client-e2e/stack/game-svr.out.log`）：
+```
+$ grep -c 'vr='  capture-root-verify1-game-svr.out.txt     # 0    ⇒ 旧版式（无 vr=/new=/af=）
+$ grep -c 'vis=0' capture-root-verify1-game-svr.out.txt    # 11   ⇒ 11/11 玩家读数全 vis=0（root 报的同一条）
+```
+
+B. 本片交付（全部离线；`E:/tmp` 状态 + 仓内证据）
+----------------------------------------------------------------------------------------------------
+[B1] **专用构建源**（burst 15 建，本片推进到当前 master）：
+```
+$ git -C /e/tmp/m2svr-window-origin rev-parse HEAD
+6dba8719d0d5dd834bbab159716b2a538160d333      # = origin/master
+$ git -C /e/tmp/m2svr-window-origin status --porcelain | wc -l
+0
+$ git -C /e/tmp/m2svr-window-origin merge-base --is-ancestor d16b5199d HEAD
+# rc=0 ⇒ d16b5199d_in_window_origin=YES
+```
+[B2] **六件预构建**（`cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate
+     -p sel-gate -p db-srv`，`CARGO_TARGET_DIR=E:/tmp/m2svr-window-target`，rc=0）到
+     `E:/tmp/m2svr-window-target/debug/`（消除 plan §0a 的「构建产物不存在 ⇒ 起栈 PREREQ_MISSING」烧窗路径）：
+```
+39f44544c47070d17e390768a460dd45675b8116ab3e65390b94c78b0af4712e *game-svr.exe
+146fb23cd841b089d60738873fbb210489efeee36756743ef95ff6875645735e *game-gate.exe
+15fb1f25af19ee719501eed4406805ab49c2bb6d26dd0522f6a7f33bd5eaf771 *db-srv.exe
+daa1ba949478d98ec31c8becabcff6853ea64f98be56dd25d8e57673274a0068 *login-srv.exe
+78c7dac971d93e51f9be874f82ef1fc8b9a51a656bf7473ad6efddf4251622d3 *login-gate.exe
+741ea627cd1cd65578dfc567130245dfd7f953d6eab5ea31acf67cc79d08accd *sel-gate.exe
+```
+     字节级复核 `game-svr.exe` **确含**新读数版式字面量（rustc 内联 format 占位，非 `{}` 明文）：
+     `map=`×2 / `vr=`×1 / `new=`×1 / `af=`×1 / `same_map=`×1 / `nearest=`×1。
+[B3] **修复脚本**（本目录内 `client-e2e-window.fixed.sh.txt`）：root 脚本的**逐字副本**，
+     **只改 `repo=`/`tgt=` 两行**（机判 `diff | grep -c '^-[^-]'` = 2、`'^+[^+]'` = 2；`bash -n` SYNTAX_OK）。
+     sha256 = `ab2ee6f3a0784a26f47f20bc083b71cceea432dfa6be418f4d25647950845249`。
+[B4] **窗口就绪 GO**（本片当场重跑）：
+```
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+      --check-dir <本目录>
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+WINDOW_READY=YES
+RESULT: GREEN
+# rc=0
+```
+
+C. 两行 diff（机判：minus=2 / plus=2）
+----------------------------------------------------------------------------------------------------
+```
+$ diff -u /e/tmp/openmir2-watch/client-e2e-window.sh <本目录>/client-e2e-window.fixed.sh.txt
+--- /e/tmp/openmir2-watch/client-e2e-window.sh
++++ <本目录>/client-e2e-window.fixed.sh.txt
+@@ -3,8 +3,8 @@
+ #   start: 暂停车队 → 增量构建全链 → 起 Rust 栈（+ C# DBSrv/LoginSrv）→ preflight → 起客户端（可见窗口，指向 127.0.0.1:7000）
+ #   stop : 停栈 → 关客户端 → 校验十端口回落 → 恢复车队
+ set -u
+-w=/e/tmp/openmir2-watch; repo=/e/Users/gxh/Documents/GitHub/OpenMir2
+-tgt='E:\tmp\openmir2-merge-target'; logdir='E:\tmp\client-e2e\stack'
++w=/e/tmp/openmir2-watch; repo=/e/tmp/m2svr-window-origin
++tgt='E:\tmp\m2svr-window-target'; logdir='E:\tmp\client-e2e\stack'
+ ps='/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
+ case "${1:-}" in
+```
+
+D. root 怎么用（二选一）
+----------------------------------------------------------------------------------------------------
+* **D-1（推荐，零改动）**：直接跑本目录的修复脚本（与原脚本 start/stop 语义逐字一致）：
+```
+bash mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt start
+… 按 82-two-side-window-runbook.md §E/§3/§4 跑两趟与 --judge …
+bash mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt stop
+```
+* **D-2（改 root 脚本）**：只改 `E:/tmp/openmir2-watch/client-e2e-window.sh:6-7` 两行（上面 C 的 `+` 行）。
+* **开窗前刷新源到最新 master**（master 每有新合并，源就相对旧；刷新后重建即最新）：
+```
+git -C /e/tmp/m2svr-window-origin fetch origin master
+git -C /e/tmp/m2svr-window-origin checkout --detach FETCH_HEAD
+```
+  若 `E:/tmp/m2svr-window-origin` 被清掉，可用
+  `git -C <本仓> worktree add --detach E:/tmp/m2svr-window-origin origin/master` 重建。
+
+E. 改坏必红（见 `140-redcheck-window-build-source.txt`）
+----------------------------------------------------------------------------------------------------
+把构建源「改回 root 默认的共享主检出」= 本片要修掉的缺陷形态 ⇒ `window_handoff.py` 的 G1 必 RED
+（`WINDOW_READY=NO` / `RESULT: RED`，rc=1）。真跑读数在 140。
+
+F. 未做 / 登记（不静默）
+----------------------------------------------------------------------------------------------------
+* 卡级 DoD③ 的 **R 级真机 ③b/③a 两趟同框对照** + 「屏幕见怪并能攻击造成伤害」仍归 **root 独占窗口**；
+  本片只把开窗前的**构建源硬前置**从「默认 RED」固化成「一行可跑 GREEN」。**不据此收卡。**
+* `stop` 分支沿用 root 原脚本语义（连坐语义、C# 栈的 3306 处置等）见 `82` §5 / 片㉕；
+  本片**未改** root 的 `client-e2e-window.sh`（只读核对）。
+
+G. 涉及文件
+----------------------------------------------------------------------------------------------------
+  新增：本文件 + `client-e2e-window.fixed.sh.txt` + `140-redcheck-window-build-source.txt`
+        + `141-gates.txt` + `142-boundary.txt`；`README.md` + `SHA256SUMS.txt` 同步。
+  只读引用：`E:/tmp/openmir2-watch/client-e2e-window.sh`、`window_handoff.py`（片⑪–㉗）、
+            `capture-root-verify1-game-svr.out.txt`、`check_aoi_visibility_diag.py`、`82-two-side-window-runbook.md`。

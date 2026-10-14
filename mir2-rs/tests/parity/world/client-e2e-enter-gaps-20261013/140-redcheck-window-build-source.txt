@@ -1,0 +1,65 @@
+140-redcheck-window-build-source.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉘ 改坏必红
+被测件：`client-e2e-window.fixed.sh.txt`  sha256 = ab2ee6f3a0784a26f47f20bc083b71cceea432dfa6be418f4d25647950845249
+m2-svr / openmir2-worker-11 / 2026-10-14；零起栈、零游戏端口、零生产代码改动
+口径：变异只在 `E:/tmp` 上做；仓内被测件 sha256 前后一致（末节核对）。
+====================================================================================================
+
+牙①（真判据红相）构建源改回 root 默认的共享主检出 ⇒ G1 必 RED
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --check-dir <本目录>
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+WINDOW_READY=YES
+RESULT: GREEN
+# rc=0
+```
+```
+$ python -I -B window_handoff.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --ref HEAD --check-dir <本目录>
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+RED G1 Rust 窗口前置门 RED（构建源/读数标记不符；窗口会 PREREQ_RED）—— 见下方修复块
+WINDOW_READY=NO
+RESULT: RED
+# rc=1
+```
+判读：同一判据脚本、同一 `--ref HEAD`，只换构建源（专用源 vs 共享主检出）⇒ 绿↔红。这正是片㉘ 要修的
+缺陷形态：默认源不含 `d16b5199d` ⇒ 构建出的 `game-svr` 无 `vr=/new=/af=` ⇒ ③ 窗口白烧。红相 **rc=1**（fail-closed）。
+
+牙② 修复脚本的「两行」本身可判：改回默认源 ⇒ diff 归零
+----------------------------------------------------------------------------------------------------
+```
+$ diff /e/tmp/openmir2-watch/client-e2e-window.sh <本目录>/client-e2e-window.fixed.sh.txt | grep -c '^[<>]'
+4          # = 2 组 (6,7c6,7)：- 2 行 / + 2 行
+$ # MUT：把修复件的 repo=/tgt= 改回 root 默认（模拟「没修」；二进制读写，避免文本模式把 LF 变 CRLF）
+$ python - <<'PY'
+  s=open('E:/tmp/m2svr-window/client-e2e-window.fixed.sh.txt','rb').read()
+  s=s.replace(b'repo=/e/tmp/m2svr-window-origin', b'repo=/e/Users/gxh/Documents/GitHub/OpenMir2')
+  s=s.replace(b'm2svr-window-target', b'openmir2-merge-target')
+  open('E:/tmp/m2svr-burst/mut-unfixed.sh','wb').write(s)
+  PY
+$ diff /e/tmp/openmir2-watch/client-e2e-window.sh /e/tmp/m2svr-burst/mut-unfixed.sh | grep -c '^[<>]'
+0
+$ cmp /e/tmp/openmir2-watch/client-e2e-window.sh /e/tmp/m2svr-burst/mut-unfixed.sh && echo IDENTICAL
+IDENTICAL      ⇒ 与 root 原脚本**逐字节相同**（= 完全没修）⇒ 牙① 的 G1 RED 复现。
+```
+判读：「两行 diff」不是散文：修回默认 ⇒ 与 root 原脚本逐字节相同 ⇒ 前置门 RED。两者互钉。
+
+还原核对（仓内文件未被变异污染）
+----------------------------------------------------------------------------------------------------
+```
+$ sha256sum <本目录>/client-e2e-window.fixed.sh.txt
+ab2ee6f3a0784a26f47f20bc083b71cceea432dfa6be418f4d25647950845249 *client-e2e-window.fixed.sh.txt
+$ bash -n <本目录>/client-e2e-window.fixed.sh.txt && echo SYNTAX_OK
+SYNTAX_OK
+（变异件只在 /e/tmp/m2svr-burst/mut-unfixed.sh；未改仓内任何文件）
+```

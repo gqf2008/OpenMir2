@@ -1,0 +1,87 @@
+141-gates.txt —— 卡 openmir2-client-e2e-enter-gaps 片㉘ 四门禁 + 离线判据
+（cwd = mir2-rs，CARGO_TARGET_DIR = E:/tmp/m2svr-target；base = origin/master 6dba8719d）
+改动仅 1 个 .sh（root 窗口脚本的 2 行修复副本）+ 证据 .txt + README/SHA256SUMS ⇒ 编译面不受影响；仍全跑。
+====================================================================================================
+### cargo fmt --all -- --check
+FMT_RC=0
+
+### cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.06s
+CLIPPY_RC=0
+
+### cargo test --workspace --no-fail-fast
+TEST_RC=0
+（明细汇总：101 suites · 1205 passed · 0 failed · 22 ignored）
+
+### cargo run -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+MSGCODEGEN_RC=0
+
+---- 离线判据（本片面：窗口构建源）----
+### 专用源 = origin/master；共享主检出不含 AOI 诊断片 d16b5199d
+$ git -C /e/Users/gxh/Documents/GitHub/OpenMir2 rev-parse HEAD
+ad0592b1912b2c740aea01f83265370aa7d94139
+$ git -C /e/Users/gxh/Documents/GitHub/OpenMir2 status --porcelain | wc -l
+0
+$ git -C /e/Users/gxh/Documents/GitHub/OpenMir2 merge-base --is-ancestor d16b5199d HEAD ; echo rc=$?
+rc=1                        # ⇒ d16b5199d_in_shared=NO
+$ git rev-parse origin/master
+6dba8719d0d5dd834bbab159716b2a538160d333
+$ git merge-base --is-ancestor d16b5199d origin/master ; echo rc=$?
+rc=0                        # ⇒ d16b5199d_in_master=YES
+$ git -C /e/tmp/m2svr-window-origin rev-parse HEAD
+6dba8719d0d5dd834bbab159716b2a538160d333
+$ git -C /e/tmp/m2svr-window-origin status --porcelain | wc -l
+0
+$ git -C /e/tmp/m2svr-window-origin merge-base --is-ancestor d16b5199d HEAD ; echo rc=$?
+rc=0                        # ⇒ d16b5199d_in_window_origin=YES
+
+### 六件预构建（cargo build --offline … rc=0）与 game-svr.exe 版式字面量
+39f44544c47070d17e390768a460dd45675b8116ab3e65390b94c78b0af4712e *game-svr.exe
+146fb23cd841b089d60738873fbb210489efeee36756743ef95ff6875645735e *game-gate.exe
+15fb1f25af19ee719501eed4406805ab49c2bb6d26dd0522f6a7f33bd5eaf771 *db-srv.exe
+daa1ba949478d98ec31c8becabcff6853ea64f98be56dd25d8e57673274a0068 *login-srv.exe
+78c7dac971d93e51f9be874f82ef1fc8b9a51a656bf7473ad6efddf4251622d3 *login-gate.exe
+741ea627cd1cd65578dfc567130245dfd7f953d6eab5ea31acf67cc79d08accd *sel-gate.exe
+（字节计数：map= 2 / vr= 1 / new= 1 / af= 1 / same_map= 1 / nearest= 1）
+
+### root verify1 原始件是旧版式（无 vr=/new=/af=）
+$ grep -c 'vr='  capture-root-verify1-game-svr.out.txt
+0
+$ grep -c 'vis=0' capture-root-verify1-game-svr.out.txt
+11
+
+### window_handoff.py（片⑪–㉗ 的窗口就绪门）
+$ python -I -B window_handoff.py --selftest | tail -1
+SELFTEST OK (74/74)                              # rc=0
+
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --check-dir <本目录>
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+WINDOW_READY=YES
+RESULT: GREEN                                    # rc=0
+
+$ python -I -B window_handoff.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --ref HEAD --check-dir <本目录>
+…（G2 6/6 OK）…
+RED G1 Rust 窗口前置门 RED（构建源/读数标记不符；窗口会 PREREQ_RED）—— 见下方修复块
+WINDOW_READY=NO
+RESULT: RED                                      # rc=1（改坏必红，见 140）
+
+### 两行修复可判：diff = 2/2；修回默认 ⇒ 与 root 原脚本逐字节相同
+$ diff -u /e/tmp/openmir2-watch/client-e2e-window.sh <本目录>/client-e2e-window.fixed.sh.txt | grep -c '^-[^-]'   # 2
+$ diff -u /e/tmp/openmir2-watch/client-e2e-window.sh <本目录>/client-e2e-window.fixed.sh.txt | grep -c '^+[^+]'   # 2
+$ bash -n <本目录>/client-e2e-window.fixed.sh.txt && echo SYNTAX_OK
+SYNTAX_OK
+
+### 证据完整性 / EOL
+$ python -I -B tools/evidence-hash/verify_sha256sums.py --check-extra <本目录>
+GREEN <本目录>/SHA256SUMS.txt  [repo 口径]  OK 145/145        # rc=0
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+EOLCHECK GREEN 146/146 件文本证据与仓库口径（LF）在 EOL 上一致   # rc=0
+
+（口径：零起栈、零游戏端口；仅共享 MySQL 3306 的只读 SHOW COLUMNS/SELECT 一次 —— 沿用片㉗ 读数）
