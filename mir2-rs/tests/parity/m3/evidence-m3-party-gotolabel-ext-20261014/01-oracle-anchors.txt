@@ -1,5 +1,5 @@
 M3⑦ gotolabel-ext（FunctionNPC.GotoLable 四个组队 label 宿主接线）oracle 锚点
-卡：openmir2-m3-party-gotolabel-ext；base = 057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce（origin/master）；行号均在本仓库 src/ 实测（2026-10-14）
+卡：openmir2-m3-party-gotolabel-ext；base = 67898a834e67f40a01e6129f5089e2a5f95c3169（origin/master）；行号均在本仓库 src/ 实测（2026-10-14）
 
 == A. 触发点（PlayObject.Operate.cs）==
 ClientGroupClose      :787-808   GroupOwner==0 ⇒ AllowGroup=false 早退（**不触发**）；

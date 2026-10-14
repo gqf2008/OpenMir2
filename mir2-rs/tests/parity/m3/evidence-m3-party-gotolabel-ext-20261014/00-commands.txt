@@ -1,7 +1,7 @@
 # 复现命令清单（M3⑦ gotolabel-ext）
 # 全部在 worktree E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3pt/mir2-rs
 # CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target（检出外）；零起栈、零端口。
-# base(origin/master)=67898a834e67f40a01e6129f5089e2a5f95c3169  code_head=f8ab7ff242d6138a00935814a6d34c5ec225f2bf
+# base(origin/master)=67898a834e67f40a01e6129f5089e2a5f95c3169  code_head=293a34a8e81cb3f639d0c7dfe76f96926ff13241
 
 # 0) 四门禁
 cargo fmt --all -- --check
