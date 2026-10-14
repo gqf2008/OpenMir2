@@ -154,6 +154,203 @@ def validate_oracle_refs(rows, repo_root=REPO_ROOT):
     return problems
 
 
+# ---- C# 方法体归属语义牙（2026-10-14 收口；与 `drop-exp/drop_exp_purity_gate.py` 同口径）----
+#
+# 存在性/范围牙只能抓「文件不存在 / 行号越界」；真身缺陷 `RegenMonsters` 的 ref 曾写
+# `WorldServer.MonGen.cs:238`（落在 `ProcessMonsters` 里，行号在范围内）⇒ 人复核会找空。
+# 这里再加一道**语义**牙：C# 行的 ref 必须落在其 `pattern` 点名的**方法体**内。
+# 同片还收 reviewer-5 `f7318e59` 的 O-1：旧口径把任何 `name(`（含 `if (Think()) { … }`
+# 的调用点）都当声明 ⇒ 产出**伪 range**（潜在假负通道）；现要求「名字前是类型/修饰符」的真声明。
+# 正则族名（`GameItemSystem.UpgradeRandom\w+@...`）按**字面前缀**匹配（`UpgradeRandom\w*(`）。
+#
+# 本段与 `drop-exp/drop_exp_purity_gate.py` 的同名实现**逐行同口径**（两处各带改坏必红：
+# 伪 range / 调用点 / 正则族错行），单侧改动会被对面的 selftest 咬住。
+
+# 控制/表达式关键字：若紧邻被点名符号的**前一个词**是它们，则匹配处是调用/表达式而非声明。
+_CTRL_BLOCKERS = frozenset((
+    "if", "while", "for", "foreach", "switch", "catch", "lock", "using",
+    "return", "new", "case", "else", "do", "throw", "yield", "when", "in", "is", "as",
+))
+
+
+def _pattern_symbol(pattern):
+    """从站点 `pattern` 抽出被点名的方法/构造名 + 是否**正则族**。
+
+    `...\\Class.Method@File.cs:NN` ⇒ `("Method", False)`；`\\.ctor` ⇒ 该类名（构造函数）；
+    含正则元字符的族名（`GameItemSystem.UpgradeRandom\\w+@...`）⇒ 取**字面前缀**
+    （`("UpgradeRandom", True)`，按前缀覆盖 `UpgradeRandomWeapon/Dress/...`）。抽不出
+    （类名本身是正则，如 `Monsters.\\w+..ctor@`）⇒ `(None, False)`（跳过语义牙，不误伤）。
+    """
+    head = (pattern or "").split("@")[0].replace("\\.", ".")
+    segs = [s for s in head.split(".") if s]
+    if not segs:
+        return None, False
+    if segs[-1] == "ctor":
+        if len(segs) < 2:
+            return None, False
+        segs = segs[:-1]
+    seg = segs[-1]
+    m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", seg)
+    if not m:
+        return None, False
+    literal = m.group(0)
+    return literal, literal != seg
+
+
+def _read_lines(path):
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        return fh.read().splitlines()
+
+
+def _code_only(lines):
+    """逐行剥掉字符串/字符/注释（花括号计数前用，避免 `'{'` 之类误计）。"""
+    out = []
+    in_block = False
+    for s in lines:
+        i = 0
+        n = len(s)
+        res = []
+        while i < n:
+            if in_block:
+                j = s.find("*/", i)
+                if j < 0:
+                    break
+                in_block = False
+                i = j + 2
+                continue
+            c = s[i]
+            if c == '"':
+                if i > 0 and s[i - 1] == "@":  # C# 逐字字符串（内部 `""` 转义）
+                    j = i + 1
+                    while j < n:
+                        if s[j] == '"':
+                            if j + 1 < n and s[j + 1] == '"':
+                                j += 2
+                                continue
+                            break
+                        j += 1
+                    i = j + 1
+                    continue
+                j = i + 1
+                while j < n:
+                    if s[j] == "\\":
+                        j += 2
+                        continue
+                    if s[j] == '"':
+                        break
+                    j += 1
+                i = j + 1
+                continue
+            if c == "'":
+                j = i + 1
+                while j < n:
+                    if s[j] == "\\":
+                        j += 2
+                        continue
+                    if s[j] == "'":
+                        break
+                    j += 1
+                i = j + 1
+                continue
+            if c == "/" and i + 1 < n and s[i + 1] == "/":
+                break
+            if c == "/" and i + 1 < n and s[i + 1] == "*":
+                in_block = True
+                i += 2
+                continue
+            res.append(c)
+            i += 1
+        out.append("".join(res))
+    return out
+
+
+def _looks_like_declaration(masked_line, match):
+    """匹配处是否像**方法/构造声明**（而非调用点后跟花括号块）。
+
+    O-1（reviewer-5 `f7318e59`，2026-10-14 收口）：旧口径把任何 `name(` 都当声明，于是
+    `if (Think()) { … }` 的**块**被误当成 `Think` 的方法体（伪 range）⇒ 假负通道。
+    判据 = 名字前（同行）最后一个非空字符必须是标识符尾 / 泛型 `>` / 数组 `]`
+    （即前面是类型或修饰符），且前一个词不是控制/表达式关键字。多行签名保守跳过。
+    """
+    before = masked_line[:match.start()].rstrip()
+    if not before:
+        return False
+    if before[-1] not in (">", "]") and not re.match(r"[A-Za-z0-9_]", before[-1]):
+        return False
+    last = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", before)
+    if last and last.group(1) in _CTRL_BLOCKERS:
+        return False
+    return True
+
+
+def _method_body_ranges(lines, name, prefix=False):
+    """找 `name` 每个**声明**的方法体 `(decl_line, close_line)`（1-based，含声明行）。
+
+    `prefix=True`（正则族名）⇒ 按 `<name>\\w*(` 前缀匹配。调用点（`_looks_like_declaration`）
+    不再产生伪 range；`;` 先于 `{` 出现也算「非声明体」（原口径）。
+    """
+    masked = _code_only(lines)
+    pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name)
+                     + (r"\w*" if prefix else "") + r"\s*\(")
+    ranges = []
+    for idx, ml in enumerate(masked):
+        match = pat.search(ml)
+        if not match or not _looks_like_declaration(ml, match):
+            continue
+        opened = False
+        depth = 0
+        j = idx
+        while j < len(masked):
+            stop = False
+            for ch in masked[j]:
+                if ch == "{":
+                    opened = True
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if opened and depth == 0:
+                        ranges.append((idx + 1, j + 1))
+                        stop = True
+                        break
+                elif ch == ";" and not opened:
+                    stop = True
+                    break
+            if stop:
+                break
+            j += 1
+    return ranges
+
+
+def check_oracle_ref_methods(rows, repo_root=REPO_ROOT):
+    """C# 行的 ref 必须落在其 `pattern` 点名的方法体内（语义锚；Rust / 不可解析行跳过）。
+
+    抓不到方法体（同名多载皆不含 / 解析失败）⇒ 点名 RED（fail-closed）；`pattern` 抽不出
+    方法名 ⇒ 跳过（不可判，保守不误伤）。
+    """
+    problems = []
+    for i, (group, side, rx, ref, _note) in enumerate(rows, 1):
+        if side != "csharp":
+            continue
+        line = oracle_ref_line(ref)
+        name, is_regex = _pattern_symbol(rx.pattern)
+        if line is None or not name:
+            continue
+        path = resolve_oracle_ref_path(ref, repo_root)
+        if path is None or not os.path.isfile(path):
+            continue  # 存在性牙已点名，不重复
+        ranges = _method_body_ranges(_read_lines(path), name, prefix=is_regex)
+        if not any(a <= line <= b for a, b in ranges):
+            problems.append(
+                "行%d(%s/%s): oracle_ref 行 %d 不在 `%s` 方法体内（range=%s；ref=%s）"
+                % (i, group, side, line, name, ranges, ref))
+    return problems
+
+
+def check_oracle_refs(rows, repo_root=REPO_ROOT):
+    """`oracle_ref` 全量保鲜：存在性/范围 + C# 方法体归属。"""
+    return validate_oracle_refs(rows, repo_root) + check_oracle_ref_methods(rows, repo_root)
+
+
 def norm(site):
     return (site or "").replace("\\", "/")
 
@@ -418,6 +615,40 @@ def selftest():
     bad_line = validate_oracle_refs(_swap_startup_ref("src/Modules/SystemModule/Conf/ServerConf.cs:999999"))
     check("mutation-oracle-ref-line-red",
           any("越界" in p for p in bad_line), "; ".join(bad_line))
+
+    # oracle_ref **方法体归属**语义牙（2026-10-14 收口；与 `drop-exp/drop_exp_purity_gate.py`
+    # 同口径）：存在性/范围牙抓不到「行号在范围内但落在**别的**方法里」的真身错锚。
+    def _swap_pattern_ref(sub, new_ref):
+        return [(g, s, rx, (new_ref if sub in rx.pattern else ref), note)
+                for (g, s, rx, ref, note) in table.rows]
+
+    method_refs = check_oracle_ref_methods(table.rows)
+    check("oracle-ref-methods-fresh", not method_refs, "; ".join(method_refs))
+
+    # 改坏必红：真身错锚 `RegenMonsters` 的 ref 写 `:238`（落在 `ProcessMonsters` 里）⇒ 必红。
+    m_bad = check_oracle_ref_methods(
+        _swap_pattern_ref("RegenMonsters", "src/GameSrv/Word/WorldServer.MonGen.cs:238"))
+    check("mutation-oracle-ref-method-red",
+          any("不在 `RegenMonsters` 方法体内" in p for p in m_bad), "; ".join(m_bad))
+
+    # 改坏必红（O-1）：`MonsterObject.cs:255` 是调用点 `if (Think()) { … }` 的块
+    # （旧口径伪 range `(255,259)` 会放行）⇒ 收紧为「真声明」后必点名。
+    m_pseudo = check_oracle_ref_methods(
+        _swap_pattern_ref("Think", "src/M2Server/Monster/MonsterObject.cs:255"))
+    check("mutation-oracle-ref-pseudo-callsite-red",
+          any("不在 `Think` 方法体内" in p for p in m_pseudo), "; ".join(m_pseudo))
+
+    # 改坏必红（正则族）：`UpgradeRandom\w+` 的 ref 从 `:182`（声明）错写成 `:142`
+    # （`GetUpgrade` 方法体内）⇒ **字面前缀**匹配下必点名。
+    m_rx = check_oracle_ref_methods(
+        _swap_pattern_ref("UpgradeRandom", "src/M2Server/Items/GameItemSystem.cs:142"))
+    check("mutation-oracle-ref-method-regex-family-red",
+          any("不在 `UpgradeRandom` 方法体内" in p for p in m_rx), "; ".join(m_rx))
+
+    # 反向：正则族名的**正确** ref `:182`（`UpgradeRandomWeapon` 声明）⇒ 不误伤。
+    rx_ok = check_oracle_ref_methods(
+        _swap_pattern_ref("UpgradeRandom", "src/M2Server/Items/GameItemSystem.cs:182"))
+    check("oracle-ref-method-regex-family-ok", not rx_ok, "; ".join(rx_ok))
 
     total = len(checks)
     bad = [(n, d) for n, ok, d in checks if not ok]

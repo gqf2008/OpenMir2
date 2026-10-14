@@ -1,0 +1,46 @@
+## crates/world/src/party.rs
+49://! 本仓在对应写入点把 [`PartyEvent::GotoLabel`] 按 `RM_MERCHANTSAY`（优先级字节 `1`，最低）入
+83:pub const PARTY_LABEL_GROUP_CLOSE: &str = "@GroupClose";
+85:pub const PARTY_LABEL_GROUP_CREATE: &str = "@GroupCreate";
+87:pub const PARTY_LABEL_GROUP_ADD_MEMBER: &str = "@GroupAddMember";
+89:pub const PARTY_LABEL_GROUP_DEL_MEMBER: &str = "@GroupDelMember";
+101:/// `RM_SYSMESSAGE` 252 / `RM_GROUPMESSAGE` 253）**之前**。见 [`PartyEvent::GotoLabel`]。
+102:const PRIO_RM_MERCHANTSAY: u8 = (11_009 & 0xFF) as u8;
+186:    /// （`em.later(PRIO_RM_MERCHANTSAY, ..)`），宿主 drain 时在此位置执行脚本即可复刻 oracle
+188:    GotoLabel {
+457:            PRIO_RM_MERCHANTSAY,
+458:            PartyEvent::GotoLabel {
+460:                label: PARTY_LABEL_GROUP_CLOSE,
+557:            PRIO_RM_MERCHANTSAY,
+558:            PartyEvent::GotoLabel {
+560:                label: PARTY_LABEL_GROUP_CREATE,
+633:            PRIO_RM_MERCHANTSAY,
+634:            PartyEvent::GotoLabel {
+636:                label: PARTY_LABEL_GROUP_ADD_MEMBER,
+707:            PRIO_RM_MERCHANTSAY,
+708:            PartyEvent::GotoLabel {
+710:                label: PARTY_LABEL_GROUP_DEL_MEMBER,
+
+## bins/game-svr/src/party.rs
+54:/// - [`PartyEvent::GotoLabel`] ⇒ **`None`**（不是帧；宿主 drain 时特判并执行 `QFunction` 脚本，
+55:///   脚本说词另经 `RM_MERCHANTSAY` 下发，见 `mir2_world::party::PartyEvent::GotoLabel`）。
+57:pub fn event_body(ev: &PartyEvent) -> Option<(i32, Vec<u8>)> {
+59:        PartyEvent::GotoLabel { .. } => None,
+165:        // GotoLabel 不是帧 ⇒ `event_body` 返回 `None`（由宿主 drain 特判执行脚本）。
+167:            event_body(&PartyEvent::GotoLabel {
+
+## bins/game-svr/src/main.rs（触发点/宿主/取数/判据）
+869:/// `PartyEvent::GotoLabel`（oracle `FunctionNPC.GotoLable(this, "@GroupClose"/"@GroupCreate"/
+874:fn handle_party_cmd(
+913:        if let mir2_world::PartyEvent::GotoLabel { label, .. } = ev {
+954:/// 由 [`handle_party_cmd`] 在 `PartyEvent::GotoLabel` 的**位置**调用（位置 = oracle 排队序：
+961:fn run_party_goto_label(
+1005:    let level = runtime.map_or(rec_level, |sg| i32::from(sg.state.wabil.level));
+1006:    let gold = runtime.map_or(rec_gold, |sg| sg.state.gold);
+1007:    let bag = runtime.map_or(rec_bag, |sg| Some(bag_items_for_save(&sg.state.item_list)));
+8404:    /// 的位置入 `PartyEvent::GotoLabel("@GroupCreate")`（排队桶，优先级字节 1）；宿主 drain 时装载
+8411:    fn party_gotolabel_runs_qfunction_script_at_queued_position() {
+
+## tests/parity/whitelist.md
+331:| T-55 | **（原 T-54，与 ⑧-5 撞号 ⇒ 本卡返工改 T-55）`@GroupClose`/`@GroupCreate`/`@GroupAddMember`/`@GroupDelMember` 脚本触发的非说词面未建模（`openmir2-worker-21`，`gotolabel-ext`）**：oracle `SystemShare.FunctionNPC.GotoLable(this, label, false)`（`PlayObject.Operate.cs:806/843/881/907`）执行 `QFunction` 脚本（`Market_Def/QFunction-0.txt`）；脚本可含任意 `GIVE`/`TAKE`/`CHANGEGOLD`/`SetScriptLabel`/文件条件等动作。本片建模：① **触发点与顺序**（世界侧 `PartyEvent::GotoLabel` 入**排队桶**，优先级字节 `1` = `RM_MERCHANTSAY(11009) & 0xFF`，排在 `RM_GROUPCANCEL(156)`/`RM_SYSMESSAGE(252)`/`RM_GROUPMESSAGE(253)` 之前；`GroupOwner == 0` 的早退分支不触发）；② 脚本**说词**（`SM_MERCHANTSAY(643)`，`emit_npc_says` 出队序）；③ 脚本改写的 `Gold`/`QuestFlag` 回写（与进世界块的 `@Login` 同法）。**未建模**：脚本的其它立即帧（若脚本动作直接 `SendDefMessage`）与其余可写状态（`QuestUnit`/`QuestUnitOpen`/`ItemList`/`LastNpc`/`Script`/`ScriptGotoCount`）。 | **不是「实现得不同」而是未建模轴**：本机无游戏语料 ⇒ 无法核 `QFunction` 对这四个 label 的用量；即使有，也只影响「脚本自身产出」面，不影响 `GotoLable` 的**触发存在性/位置**（已由 `party_vectors` 的逐事件向量 + `game-svr` 进程级 643 位置用例钉住）。同族先例：`@Login` 的写回也只覆盖 `Gold`/`QuestFlag`（进世界块注释登记）。真机判据 `not_verified`（需真机窗口 + 语料）。将来补齐另开卡。 | 作者登记（`openmir2-worker-21`）；**待独立 principal 复核** |
+335:> **T-54 撞号订正（2026-10-14 返工）**：本行原取 **T-54**；后 ⑧-5 卡 `openmir2-m3-guild-war` 的 reviewer-6 O-1 收口片（已合入 master `f0a9ab911`）按「`T-52`/`T-53` 已被 `recall-ext` 占用」也取 **T-54** ⇒ 合并树出现两行 `| T-54 |`，⑧-5 同片落地并接入 `fixture_chain_gate.py` 共享管线的 `m3_guild_war_quirk_registry_gate.py check` 判 `DUPLICATE T-54 x 2 @ L289,L331`（rc=1）⇒ **本卡合并会打断链门**。按「后注册者让号」先例（同本卡 `T-51`→`T-52`）把**本卡**行改为 **T-55**；T-54 唯一归属 ⑧-5。改前/改后读数与红检见 `m3/evidence-m3-party-gotolabel-ext-20261014/09-whitelist-t55-renumber.txt`。
