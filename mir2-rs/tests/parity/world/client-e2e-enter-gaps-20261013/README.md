@@ -963,5 +963,6 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级真机两侧同框对照 + 攻击/伤害可见；
   root 开窗前两步不变 = ① 换活脚本为入库替身（换完按**替身的**构建源复跑 G5 至 GREEN）
   ② 起栈后按 `window_handoff.py --plan` 跑 ③b/③a + `--judge`（③b `--best-site` = `605,578` E=12.681）。
-- 证据：`175-r6-build-source-freshness.txt`、`176-boundary.txt`、`check_rust_window_preflight.py`、
-  `window_handoff.py`；只读引用 `167`/`168`（片㉟ 刷源与预构建）、`89`/`90`（片⑮ 前置门与红检）。
+- 证据：`175-r6-build-source-freshness.txt`、`176-boundary.txt`、`177-gates.txt`、`178-redcheck-r6.txt`、
+  `check_rust_window_preflight.py`、`window_handoff.py`；只读引用 `167`/`168`（片㉟ 刷源与预构建）、
+  `89`/`90`（片⑮ 前置门与红检）。

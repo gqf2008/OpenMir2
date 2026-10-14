@@ -1,0 +1,75 @@
+177-gates.txt —— 片㊲ 门禁/自检原始读数（head = 4a266cc11；cwd = mir2-rs，CARGO_TARGET_DIR=E:/tmp/m2svr-target，--offline）
+卡 openmir2-client-e2e-enter-gaps / m2-svr / openmir2-worker-11 / 2026-10-14
+====================================================================================================
+# 1) 四门禁
+$ cargo fmt --all -- --check
+fmt_rc=0
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking game-svr v0.1.0 (...\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.32s
+clippy_rc=0
+
+$ cargo test --workspace --offline --no-fail-fast
+（逐套件求和）101 suites · 1222 passed · 0 failed · 22 ignored
+test_rc=0
+（原始：E:/tmp/openmir2-watch/m2svr-b25-test.txt；与合并树基线 3db79cae0 同读数）
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen_rc=0
+
+# 2) 本片工具自检
+$ python -I -B check_rust_window_preflight.py --selftest
+SELFTEST OK (32/32)          # 片㊲ 前 23/23；+9 = R6 四态 + 两条 fail-closed + 基线常量 + 两条 git oid 前提
+$ python -I -B window_handoff.py --selftest
+SELFTEST OK (98/98)          # 不变
+
+# 3) 八件判据工具自检（window_handoff G2 口径 + 单项）
+$ for t in check_mongen_dense_points check_aoi_visibility_diag aoi_visibility_pair \
+        check_client_s2c_frames check_appearance_pairs check_attack_observability \
+        check_rust_window_preflight check_csharp_capture_preflight; do python -I -B $t.py --selftest; done
+check_mongen_dense_points   rc=0 SELFTEST OK (60/60)
+check_aoi_visibility_diag   rc=0 SELFTEST OK (9/9)
+aoi_visibility_pair         rc=0 SELFTEST OK (11/11)
+check_client_s2c_frames     rc=0 SELFTEST GREEN
+check_appearance_pairs      rc=0 SELFTEST GREEN
+check_attack_observability  rc=0 SELFTEST GREEN
+check_rust_window_preflight rc=0 SELFTEST OK (32/32)
+check_csharp_capture_preflight rc=0 SELFTEST OK (12/12)
+
+# 4) 窗口前置门（刷源后，含 R6）
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD --mirserver E:/MirServer
+[OK] R1 ...含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 ...含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666)/(291,651) --expect outside → rc=0；(289,618)/(287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=3db79cae05 == 基线 origin/master@3db79cae05
+RESULT: GREEN
+rc=0
+
+# 5) 聚合就绪门（root 会跑的入库替身脚本口径）
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --check-dir . \
+    --window-script client-e2e-window.fixed.sh.txt
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R6）
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0
+
+# 6) 证据完整性
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+GREEN .../SHA256SUMS.txt  [repo 口径]  OK 183/183
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+EOLCHECK GREEN 184/184 件文本证据与仓库口径（LF）在 EOL 上一致
