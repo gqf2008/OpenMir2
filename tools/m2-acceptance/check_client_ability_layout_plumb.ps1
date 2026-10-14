@@ -214,7 +214,7 @@ $wired = ($stackSrc -match 'rust_seed_plumb\.ps1') -and ($stackSrc -match ("game
 Check '⑤a start_rust_stack.ps1 点源管线并把 -ClientAbilityLayout $layoutInfo 传给 game-svr' $wired '结构检查（端到端见 ③ 的三个真 game-svr 起栈）'
 $plumbSrc = Get-Content (Join-Path $Here 'rust_seed_plumb.ps1') -Raw
 $hasInjectLine = $plumbSrc -match "\`$env:MIR2_CLIENT_ABILITY_LAYOUT = \[string\]\`$ClientAbilityLayout\.Text"
-Check '⑤b 管线文件含 $env:MIR2_CLIENT_ABILITY_LAYOUT 注入行' $hasInjectLine '删掉该行 ⇒ ②a/③a 必红'
+Check '⑤b 管线文件含 $env:MIR2_CLIENT_ABILITY_LAYOUT 注入行' $hasInjectLine '删掉该行 ⇒ ②a/②c/③a/⑤b 必红（见 03-redcheck.txt）'
 
 # ---- 汇总 ----
 $failed = @($script:Checks | Where-Object { -not $_.ok })

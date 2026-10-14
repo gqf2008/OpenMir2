@@ -1,0 +1,26 @@
+# 08 — 收口片边界（base = origin/master 567c4e3906a830d7af502407fecc20119363b5ce）
+#
+# git diff --stat origin/master：
+#    tools/m2-acceptance/README.md                      | 10 +++++++-
+#    .../check_client_ability_layout_plumb.ps1          |  2 +-
+#    .../02-selftest.txt                                | 12 +++++-----
+#    .../03-redcheck.txt                                | 27 ++++++++++++----------
+#    .../README.md                                      | 15 ++++++++++++
+#    .../SHA256SUMS.txt                                 |  7 +++---
+#    6 files changed, 50 insertions(+), 23 deletions(-)
+#
+# 冻结面 git diff --name-only origin/master -- src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins/ ：
+#   <空>
+#
+# 改动 .rs：NONE（本片只动 tools/m2-acceptance/**，零 Rust/协议/存储/冻结面）
+#
+# git status --porcelain：
+#    M tools/m2-acceptance/README.md
+#    M tools/m2-acceptance/check_client_ability_layout_plumb.ps1
+#    M tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/02-selftest.txt
+#    M tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/03-redcheck.txt
+#    M tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/README.md
+#    M tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/SHA256SUMS.txt
+#   ?? tools/m2-acceptance/check_client_ability_layout_doc_counts.py
+#   ?? tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/06-readme-doc-counts.txt
+#   ?? tools/m2-acceptance/evidence/m2svr-client-ability-layout-plumb-20261014/07-four-gates-closeout.txt

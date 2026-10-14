@@ -240,8 +240,16 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_client_ability_layout_plumb.ps1 `
   -GameSvrExe E:\tmp\openmir2-m2svr-target\debug\game-svr.exe
-# 15/15 ⇒ CLIENT_ABILITY_LAYOUT_PLUMB GREEN (rc=0)；删掉注入行 ⇒ ②a/③a 必红 (rc=1)
+# 20/20 ⇒ CLIENT_ABILITY_LAYOUT_PLUMB GREEN (rc=0)；删掉注入行 ⇒ ②a/②c/③a/⑤b 必红 (rc=1)
 ```
+
+> **文档漂移门**（reviewer-5/6 同一 Minor 的收口）：§0b.4 的上述读数（条数 / 改坏必红 id 集）与
+> 判据脚本和证据逐项绑定，静态可判红/绿（纯文件读取，零进程/零端口）：
+>
+> ```powershell
+> python -I -B tools/m2-acceptance/check_client_ability_layout_doc_counts.py
+> # CLIENT_ABILITY_LAYOUT_DOC_COUNTS GREEN（rc=0）；把 N 改回 15 ⇒ D2/D4 必红 rc=1
+> ```
 
 > **③ 口径提醒（不改变判据，只补操作面）**：`52/53` 的客户端布局是 §6.0-3 意义上的**故意偏离**
 > （客户端冻结 > oracle 逐字节）。因此 ③a/③b **必须** `-ClientAbilityLayout 0`；而真机①②（客户端截图）

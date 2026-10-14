@@ -33,6 +33,9 @@
 | --- | --- | --- |
 | 命令 + 输出 | `02-selftest.txt` | `SUMMARY total=20 ok=20 fail=0` ⇒ `CLIENT_ABILITY_LAYOUT_PLUMB GREEN` rc=0 |
 | 改坏必红 | `03-redcheck.txt` | 删注入行 ⇒ ②a/②c/③a/⑤b FAIL，`total=20 ok=16 fail=4` rc=1；还原 sha256 逐字节回原 |
+| 文档漂移门 | `06-readme-doc-counts.txt` | README §0b.4 读数与判据/证据绑定：GREEN 5/5；改回 `15/15` ⇒ D2/D3/D4 必红 rc=1 |
+| 收口片门禁 | `07-four-gates-closeout.txt` | 零 `.rs` 改动；fmt 0 / clippy 0 / 101 suites 1231 passed 0 failed 22 ignored / msgcodegen 604 rc=0 |
+| 收口片边界 | `08-boundary.txt` | 仅 `tools/m2-acceptance/**`；冻结面 `src/ sql/ MirClient/ crates/protocol/ crates/storage/ bins/` 空；`.rs` = NONE |
 | 四门禁 | `04-four-gates.txt` | fmt rc=0 / clippy rc=0 / 101 suites 1231 passed 0 failed 22 ignored / msgcodegen 604 rc=0 |
 | 边界 | `05-boundary.txt` | 5 改 + 2 新增；`src/ sql/ MirClient/ crates/protocol/ crates/storage/` 空；非本片 `.rs` 仅 game-svr 两文件 |
 | 锚点 | `01-oracle-anchors.txt` | 金标准窗口 `ident=52 body_len=40`；客户端 `HIGHHP=True` 四个发点 |
@@ -43,6 +46,20 @@
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_client_ability_layout_plumb.ps1 `
   -GameSvrExe E:\tmp\m2svr-target\debug\game-svr.exe
 ```
+
+## 3.1 reviewer Minor 收口（本目录 02/03 重生成 + 新增 06）
+
+reviewer-5（`e74f870a`）/ reviewer-6（`ad719ce7`）对片㊷ 的同一非阻塞 Minor：
+`tools/m2-acceptance/README.md §0b.4` 读数过时——写 `15/15` + 红检 `②a/③a`，
+实际 `20/20` + `②a/②c/③a/⑤b`。收口：
+
+1. 订正 `README.md §0b.4` 该行为 `20/20` / `②a/②c/③a/⑤b`；
+2. 订正判据脚本 ⑤b 的 Detail 文案（同一条陈旧 `②a/③a`）⇒ `02-selftest.txt` / `03-redcheck.txt`
+   **重生成**（条数/红检集不变，仅文案）；
+3. **新增静态文档漂移门** `tools/m2-acceptance/check_client_ability_layout_doc_counts.py`：
+   D1 `N/M` 自洽、D2 README N == 脚本 `Check '` 条数、D3 README N == `02` 的 `SUMMARY total`、
+   D4 README 红检 id 集 == `03` 的 `[FAIL]` 集 ⇒ 防止同类漂移再次发生（纯文件读取，零进程/零端口）。
+   证据：`06-readme-doc-counts.txt`（GREEN + 改坏必红）。
 
 ## 4. 残留物清单
 
