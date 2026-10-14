@@ -17,11 +17,16 @@
 
 本工具把窗口前的 Rust 侧静态前置做成机判（fail-closed），四组判据：
   R1 **构建源含全部必需修复提交**：对每个 `<fix-commit>` 跑
-     `git -C <repo> merge-base --is-ancestor <fix-commit> <ref>`；默认两个——片⑪ `d16b5199d`
-     （推出 ③ 判据读数 `vr/new/af`）与片㉜ `0d0d62a69`（受击帧 `SM_STRUCK` 按 oracle `SendRefMsg`
-     广播，DoD③ 第三半「能攻击造成伤害」必需）；`--fix-commit` 可重复覆盖（单值 = 只查那一个，
-     向后兼容旧调用）；`ref` 默认 `HEAD`。只含片⑪、缺片㉜ 的专用源（实测 `m2svr-window-origin
-     @6dba8719d`）必须判 RED —— 这正是「窗口构建源过期」的 fail-closed 门。
+     `git -C <repo> merge-base --is-ancestor <fix-commit> <ref>`；默认五个——片⑪ `d16b5199d`
+     （推出 ③ 判据读数 `vr/new/af`）、片㉜ `0d0d62a69`（受击帧 `SM_STRUCK` 按 oracle `SendRefMsg`
+     广播，DoD③ 第三半「能攻击造成伤害」必需），以及 **HIGHHP 家族三帧的客户端布局修复**：
+     片㊴ `c61b9627a`（53 `TCharDesc` 尾）/ 片㊼ `6cadc9fbf`（52 全调用点）/ 片 `fd68e037d`（31）。
+     后三片是「HUD `0/0` + `CM_RUN=0`」**真凶的修复**（触发 = 进图 `HP<MaxHP` 时发 53；缺尾 ⇒
+     HIGHHP 客户端把 HP 解成 0）；缺任一片都会让窗口测到**修复前镜像** —— root 2026-10-14 15:0x
+     的实测失败即此：源 `8e491f81e` 含片⑪/㉜ 但缺 53 尾修，旧的两片集判 R1 **GREEN**。
+     `--fix-commit` 可重复覆盖（单值 = 只查那一个，向后兼容旧调用）；`ref` 默认 `HEAD`。
+     只含片⑪、缺片㉜ 的专用源（实测 `m2svr-window-origin @6dba8719d`）必须判 RED —— 这正是
+     「窗口构建源过期」的 fail-closed 门。
   R2 **源码含 ③ 读数标记**：`<repo>/mir2-rs/bins/game-svr/src/main.rs` 必须同时含
      版式字面量 `"vr={} vis={} new={} af={}"` 与可见集判据 `!= mir2_world::VisibleFlag::Hidden`
      （旧版 `== VisibleFlag::Show` 只数「本轮新增」，是 root 误读的根因，`70-aoi-visibility-verdict.txt` §A）。
@@ -81,10 +86,20 @@ FIX_COMMIT_DIAG = "d16b5199d98029081daccd9252f81b94a9596eaf"
 # 片㉜：`fix(game-svr): 受击帧按 oracle SendRefMsg(RM_STRUCK) 广播给视野内全体 Play`
 #   —— DoD③ 第三半「屏幕见怪并能攻击造成伤害」的判据（`check_attack_observability.py`）要靠它。
 FIX_COMMIT_STRUCK = "0d0d62a695082730dd2398e6d35bf40c8f70480a"
-# R1 默认要求源同时含两片；`--fix-commit` 可重复覆盖。
+# 片㊴：`fix(game-svr): 片㊴ 53 帧 SM_HEALTHSPELLCHANGED 补冻结客户端 TCharDesc 尾`
+#   —— 卡级「HUD 0/0 + 跑=0」的**真凶修复**（触发 = 进图 `HP<MaxHP` 时发 53；缺尾 ⇒ HIGHHP 客户端解成 0）。
+FIX_COMMIT_53_TAIL = "c61b9627a1cad79f300b0efab184ec1dd1eec017"
+# 片㊼：`fix(game-svr): 片㊼ SM_ABILITY(52) 生产调用点布局全覆盖`（入图/升级/装备卸下全走冻结客户端 58B）。
+FIX_COMMIT_52_LAYOUT = "6cadc9fbf9004198a0ce02c2452cb7851e0bc488"
+# 片「SM_STRUCK(31) 客户端布局」：HIGHHP 家族第三帧闭环（收 `213-highhp-family-audit.txt` §4 GAP）。
+FIX_COMMIT_STRUCK_LAYOUT = "fd68e037db0c68e00774b0c3ab4b1eeda29af051"
+# R1 默认要求源含五片（③ 读数 + 受击广播 + HIGHHP 家族三帧）；`--fix-commit` 可重复覆盖。
 REQUIRED_FIX_COMMITS: tuple[tuple[str, str], ...] = (
     (FIX_COMMIT_DIAG, "片⑪ AOI 诊断 vr/new/af"),
     (FIX_COMMIT_STRUCK, "片㉜ 受击帧 SM_STRUCK 广播"),
+    (FIX_COMMIT_53_TAIL, "片㊴ 53 SM_HEALTHSPELLCHANGED TCharDesc 尾"),
+    (FIX_COMMIT_52_LAYOUT, "片㊼ 52 SM_ABILITY 调用点布局全覆盖"),
+    (FIX_COMMIT_STRUCK_LAYOUT, "片31 SM_STRUCK 客户端布局（HIGHHP 家族）"),
 )
 # 向后兼容旧签名（单值默认）。
 FIX_COMMIT_DEFAULT = FIX_COMMIT_DIAG
@@ -605,9 +620,23 @@ def selftest() -> int:
             f"ok={len(oks)} prob={len(probs)} pre={len(prereqs)}",
         )
         chk(
-            "required-fixes-default-two",
-            REQUIRED_FIX_COMMITS[0][0] == FIX_COMMIT_DIAG
-            and REQUIRED_FIX_COMMITS[1][0] == FIX_COMMIT_STRUCK,
+            "required-fixes-default-five",
+            [c for c, _ in REQUIRED_FIX_COMMITS]
+            == [
+                FIX_COMMIT_DIAG,
+                FIX_COMMIT_STRUCK,
+                FIX_COMMIT_53_TAIL,
+                FIX_COMMIT_52_LAYOUT,
+                FIX_COMMIT_STRUCK_LAYOUT,
+            ],
+            repr(REQUIRED_FIX_COMMITS),
+        )
+        # HIGHHP 家族三片必须都在默认必查集里（缺任一片 ⇒ 「测修复前镜像」类假绿；真身 =
+        # 源 8e491f81e 含片⑪/㉜ 但缺 53 尾修，旧两片集判 GREEN）。
+        chk(
+            "required-fixes-include-highhp-family",
+            {FIX_COMMIT_53_TAIL, FIX_COMMIT_52_LAYOUT, FIX_COMMIT_STRUCK_LAYOUT}
+            <= {c for c, _ in REQUIRED_FIX_COMMITS},
             repr(REQUIRED_FIX_COMMITS),
         )
         val, _ = is_ancestor(tmp, "0" * 40, "HEAD")
@@ -772,7 +801,7 @@ def main(argv: list[str] | None = None) -> int:
         "--fix-commit",
         action="append",
         default=None,
-        help="必须为 --ref 祖先的修复提交（可重复；默认 = 片⑪+片㉜；单值 = 只查那一个）",
+        help="必须为 --ref 祖先的修复提交（可重复；默认 = 片⑪+片㉜+HIGHHP 家族三帧；单值 = 只查那一个）",
     )
     ap.add_argument("--mirserver", default="E:/MirServer", help="oracle 部署根（默认 E:/MirServer）")
     ap.add_argument("--mongen", default="", help="MonGen.txt；默认 <mirserver>/M2GameSvr/Envir/MonGen.txt")

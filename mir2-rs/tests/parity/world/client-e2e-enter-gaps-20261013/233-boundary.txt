@@ -1,0 +1,40 @@
+233 — 片「窗口源 fix-pin R1」边界
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+base = `7dff2e68c`（= 片55 合入后的 master）
+====================================================================================================
+
+# 1) 差量（`git diff --name-status 7dff2e68c` + 新增件）
+
+```
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/231-window-source-fixpin-r1.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/232-gates.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/233-boundary.txt
+```
+
+`check_rust_window_preflight.py` 是**判据工具**（`tests/parity/**`，非生产路径）：本片只扩它的 R1 必查集
++ 两条 selftest 牙，不改任何出帧/取数/模拟语义。
+
+# 2) 冻结面（必须空）
+
+```
+$ git diff --name-only 7dff2e68c -- src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/
+（空）
+```
+
+# 3) 扩展名统计
+
+```
+$ git diff --name-only 7dff2e68c | grep -cE '\.rs$|\.ps1$|\.cs$|\.toml$'
+0
+```
+
+新增/改动全在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`，零生产代码。
+
+# 4) 不动的东西
+
+- 未改窗口专用源 `E:/tmp/m2svr-window-origin`（仍 detach @ `da2df1fdb`）、未重编六件 exe；
+- 未改 root 活脚本 / 入库替身 `client-e2e-window.fixed.sh.txt`（G5 仍归 root）；
+- 未改 `src/`（C# oracle）/ `sql/` / `MirClient` / `crates/protocol` / `crates/storage`。
