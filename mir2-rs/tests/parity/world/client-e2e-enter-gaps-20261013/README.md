@@ -649,3 +649,52 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级「③b/③a 两趟真机同框对照」+「屏幕见怪并
   能攻击造成伤害」；C# 世界数据能否经代理下来仍须窗口实拍（见 `82` §4.1）。
 - 证据：`131-shadow-gate-conf-concrete.txt`、`132-redcheck-shadow-gate-concrete.txt`、`133-gates.txt`、`134-boundary.txt`。
+
+### ㉗ ③ 窗口站位 SQL 列名订正（`x/y` → 真实列 `MapName/CX/CY`）+ G4 站位牙（2026-10-14）
+
+- **根因（真机实测）**：窗口计划/手册的站位 SQL 写的是 `UPDATE characters SET x=…, y=…`，但部署库
+  `mir2_db.characters` **没有** `x`/`y` 列（`SHOW COLUMNS` 只有 `MapName`/`CX`/`CY`；
+  `bins/db-srv/src/playdata.rs:93-95`、`tests/parity/m3/run_pair.ps1:547-554` 同口径）⇒ 真机执行
+  `ERROR 1054 (42S22) Unknown column 'x' in 'SET'`、**角色不移动**，两趟都停在旧点位 =
+  一次性窗口白烧，且极易被误读成「③ 仍未闭环」。
+- **本片改动（`window_handoff.py` + `82-two-side-window-runbook.md`，只读规划器 + 手册）**：
+  ① §1 站位段改**可原样执行**的真实列 SQL（`UPDATE mir2_db.characters SET MapName='0', CX=…, CY=…`），
+     加 1a `SELECT MapName,CX,CY` before 探针 + 1b/1c 两个相位点；新增常量 `MYSQL_EXE`（缺省 =
+     `run_pair.ps1:127` 同路径，可用 `MIR2_MYSQL_EXE` 覆盖）；
+  ② §5 收工补**显式还原**（把 §1a 的 before 三值填回），原只有一句散文；
+  ③ G4 新增纯函数 `position_sql_findings` 并接入 `plan_conformance`：站位 `UPDATE …characters SET …`
+     必须含 `CX`/`CY` 且不得含列 `x`/`y`（点名 ERROR 1054）、必须含 `MapName`、且计划里至少一条站位 UPDATE；
+  ④ `82` §2 同步订正为 PowerShell 可执行命令 + **每趟起栈前重钉** + 开工前实测值。
+- **真读数**：`--plan --repo . --ref HEAD` ⇒ `PLAN_CONFORMANCE=GREEN` / `WINDOW_READY=YES`
+  / `RESULT: GREEN` rc=0；旧 SQL 真机 `ERROR 1054` rc=1、`SELECT` 复核 `aaa` 仍在 `0/297/629`（未移动）。
+- **改坏必红**（`136`）：纯函数两向红（`SET x=…, y=…`、缺 `MapName`）+ 计划级红（真计划改回 `x/y` ⇒
+  点名）；MUT-A 删接线 ⇒ `73/74`、MUT-B 牙本体恒 `[]` ⇒ `71/74`；仓内 `window_handoff.py`
+  sha256 前后一致（`7690d406…`）。
+- **`--selftest` 69/69 → 74/74**；四门禁 fmt 0 / clippy 0(`-D warnings`) / 101 suites · 1200 passed ·
+  0 failed · 22 ignored / msgcodegen 604 rc=0。
+- **零生产代码改动**（1 `.py` + 2 `.md` + 四份证据 + README/清单）；未起栈、未占任何游戏端口。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：卡级 DoD③ 的 R 级 ③b/③a 两趟真机同框对照 +
+  屏幕见怪并能攻击造成伤害。
+- 证据：`135-window-plan-position-columns.txt`、`136-redcheck-window-plan-position-columns.txt`、
+  `137-gates.txt`、`138-boundary.txt`。
+
+### ㉘ ③ 窗口构建源固化：root 一键脚本 `repo=`/`tgt=` 两行修复副本 + 专用源推进到 master + 六件预构建（2026-10-14）
+
+- **根因（机判）**：root 的 `E:/tmp/openmir2-watch/client-e2e-window.sh:6-7` 用 `repo=` = **共享主检出**
+  （rev 车道 worktree），实测停在 `ad0592b19`、**不含** AOI 诊断片 `d16b5199d` ⇒ 默认构建出的 `game-svr`
+  无 `vr=/new=/af=` 读数 ⇒ `check_aoi_visibility_diag.py` 版式门 `PREREQ_RED`、③ 窗口白烧
+  （root verify1 的原始件正是旧版式：`grep -c 'vr='` = 0、`grep -c 'vis=0'` = 11）。
+- **本片交付（零生产代码改动、零起栈、零游戏端口）**：
+  1. 专用源 `E:/tmp/m2svr-window-origin` 推进到当前 `origin/master = 6dba8719d`（detached、status 0 行、含 `d16b5199d`）；
+  2. 六件 exe 预构建到 `E:/tmp/m2svr-window-target/debug`（`game-svr.exe` = `39f44544…`，字节含 `vr=/new=/af=`）；
+  3. root 脚本的**逐字副本 + 仅 2 行 diff**：`client-e2e-window.fixed.sh.txt`
+     （sha256 `ab2ee6f3…`，`bash -n` OK，`diff | grep -c '^-[^-]'` = 2）；根可直接跑它以开窗；
+  4. **改坏必红**：把构建源改回共享主检出 ⇒ `window_handoff.py` G1 RED（`WINDOW_READY=NO` / rc=1）；
+     把修复件两行改回默认 ⇒ 与 root 原脚本**逐字节相同**。
+- **真读数**：`window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD` ⇒ `WINDOW_READY=YES` /
+  `RESULT: GREEN` rc=0（对照：共享主检出 ⇒ `WINDOW_READY=NO` / RED rc=1）；
+  四门禁 fmt 0 / clippy 0(`-D warnings`) / 101 suites · 1205 passed · 0 failed · 22 ignored / msgcodegen 604 rc=0。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：卡级 DoD③ 的 R 级「③b/③a 两趟真机同框对照」+
+  「屏幕见怪并能攻击造成伤害」。
+- 证据：`139-window-build-source-fixed-script.txt`、`140-redcheck-window-build-source.txt`、
+  `141-gates.txt`、`142-boundary.txt`、`client-e2e-window.fixed.sh.txt`。

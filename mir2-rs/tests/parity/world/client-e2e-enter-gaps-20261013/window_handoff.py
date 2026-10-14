@@ -59,6 +59,9 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 # 仓根（含 `tools/` 与 `mir2-rs/`）：HERE = <repo>/mir2-rs/tests/parity/world/<this-dir> ⇒ 上溯 5 级。
 DEFAULT_REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", "..", "..", "..", ".."))
+# 本机 MySQL CLI（与 `mir2-rs/tests/parity/m3/run_pair.ps1:127` 同源；`--password=` 即空口令）。
+# 片㉗：站位计划必须打印**可原样执行**的 SQL，且列名必须是真实列（`MapName/CX/CY`）。
+MYSQL_EXE = os.environ.get("MIR2_MYSQL_EXE", "D:/mysql/mariadb-10.11.19-winx64/bin/mysql.exe")
 
 RUST_PREFLIGHT = "check_rust_window_preflight.py"
 CSHARP_PREFLIGHT = "check_csharp_capture_preflight.py"
@@ -403,9 +406,21 @@ def plan_text(
     if bin_missing:
         A(f"#   ⚠ 构建产物不存在：{bin_dir}/game-svr.exe（本次 --plan 时实测）⇒ 不先跑 §0a 就地起栈必 PREREQ_MISSING")
     A("")
-    A("# 1) 站位：两侧必须逐字节同坐标（跑完还原并记录 before/after）")
-    A(f"#   mysql> UPDATE characters SET x={site.split(',')[0]}, y={site.split(',')[1]} WHERE chrname='aaa';  -- ③b 有怪")
-    A(f"#   mysql> UPDATE characters SET x={site_none.split(',')[0]}, y={site_none.split(',')[1]} WHERE chrname='aaa';  -- ③a 反向")
+    _bx, _by = site.split(",")[0].strip(), site.split(",")[1].strip()
+    _nx, _ny = site_none.split(",")[0].strip(), site_none.split(",")[1].strip()
+    _my = MYSQL_EXE
+    _myargs = "-h 127.0.0.1 -P 3306 -u root --password= --batch --skip-column-names"
+    A("# 1) 站位：两侧必须逐字节同坐标。real 列 = `mir2_db.characters.MapName/CX/CY`；")
+    A("#    本表**没有** x/y 列（实测 2026-10-14：SHOW COLUMNS 只有 MapName/CX/CY）⇒ 旧计划的")
+    A("#    `SET x=…, y=…` 必 MySQL ERROR 1054（Unknown column）且角色不动，两趟都停在旧点位 = 白烧窗口")
+    A("#    （证据 135-window-plan-position-columns.txt）；G4 已加机判牙钉死。")
+    A("#    ⚠ 每一趟**起栈前**都要重跑本节：上一趟客户端走动/断线存档会改写 aaa 的坐标。")
+    A("#   1a. 记 before（还原用）：")
+    A(f"#   {_my} {_myargs} -e \"SELECT MapName,CX,CY FROM mir2_db.characters WHERE ChrName='aaa';\"")
+    A("#   1b. ③b 有怪点：")
+    A(f"#   {_my} {_myargs} -e \"UPDATE mir2_db.characters SET MapName='0', CX={_bx}, CY={_by} WHERE ChrName='aaa';\"")
+    A("#   1c. ③a 反向点（第二趟起栈前改）：")
+    A(f"#   {_my} {_myargs} -e \"UPDATE mir2_db.characters SET MapName='0', CX={_nx}, CY={_ny} WHERE ChrName='aaa';\"")
     A("")
     A("# 2) ③b 两侧跑（有怪点；两侧不同时起 —— 端口互斥）")
     A("#   [③b] Rust：")
@@ -508,7 +523,8 @@ def plan_text(
     A(f"#   （③a 两侧都必须 0 对出现帧 + 服务端 vis==0 且 af==0）")
     A("")
     A("# 5) 收工：§2b / §2b(C#) 清代理+影子 gate；start_rust_stack 的 -Stop；6 个 C# 组件 Stop-Process（保留 3306）；")
-    A("#     还原 aaa；实拍十端口；SHA256SUMS 按 LF/git-blob 口径")
+    A("#     还原 aaa：把 §1a 打印的 before 三值填回 ⇒ UPDATE mir2_db.characters SET MapName=BEFORE_MAP, CX=BEFORE_X, CY=BEFORE_Y WHERE ChrName='aaa';")
+    A("#     实拍十端口；SHA256SUMS 按 LF/git-blob 口径")
     A("")
     return "\n".join(lines) + "\n"
 
@@ -541,6 +557,38 @@ _CMDLINE_FACE_RE = re.compile(
     r"Copy-Item|Set-Content|New-Item|Select-String|\bcargo\b|mysql>"
 )
 _PLACEHOLDER_RE = re.compile(r"<[^<>\n]{1,80}>")
+
+
+_POSITION_UPDATE_RE = re.compile(r"UPDATE\s+(\S*characters)\s+SET\s+([^;]*?)\s+WHERE", re.IGNORECASE)
+
+
+def position_sql_findings(plan: str) -> list[str]:
+    """站位 SQL 必须写**真实列**（`MapName/CX/CY`），钉同一张图同一坐标。
+
+    本表没有 `x`/`y` 列（实测 `SHOW COLUMNS FROM mir2_db.characters`）⇒ `SET x=…, y=…`
+    会 MySQL ERROR 1054，角色不移动、两趟都停在旧点位 ⇒ 一次性窗口白烧。
+    纯函数、不连库；只做「计划文本 → 列名」的静态对账（片㉗）。
+    """
+    problems: list[str] = []
+    seen = 0
+    for m in _POSITION_UPDATE_RE.finditer(plan):
+        seen += 1
+        table = m.group(1)
+        assigns = m.group(2)
+        cols = {c.split("=", 1)[0].strip().strip("`") for c in assigns.split(",") if "=" in c}
+        lowered = {c.lower() for c in cols}
+        if "cx" not in lowered or "cy" not in lowered:
+            problems.append(
+                f"站位 SQL 未用真实列 CX/CY（本表无 x/y）：{table} SET {assigns.strip()}")
+        elif "x" in lowered or "y" in lowered:
+            problems.append(
+                f"站位 SQL 引用了不存在的列（MySQL ERROR 1054）：{table} SET {assigns.strip()}")
+        if "mapname" not in lowered:
+            problems.append(
+                f"站位 SQL 未钉 MapName（两侧可能不同图）：{table} SET {assigns.strip()}")
+    if seen == 0:
+        problems.append("计划缺站位 UPDATE mir2_db.characters 段（无法把两侧钉到同一坐标）")
+    return problems
 
 
 def _plan_command_lines(plan: str) -> list[str]:
@@ -645,6 +693,7 @@ def plan_conformance(plan: str, repo_root: str = "", check_dir: str = HERE,
         problems.append("计划引用不存在的 {mirserver}/stop-all.ps1（应改为确定性清栈：6 组件 Stop-Process + 保留 3306）")
     if "<bin_dir>" in plan:
         problems.append("计划残留未替换占位 <bin_dir>（应代入 -RustBinDir 的实际目录）")
+    problems.extend(position_sql_findings(plan))
     seen: set[str] = set()
     uniq: list[str] = []
     for p in problems:
@@ -961,6 +1010,16 @@ def selftest() -> int:
         "保留 MySQL 3306" in _fresh and "stop-all.ps1" not in _fresh
         and "Get-Process GameSvr,DBSrv,LoginSrv,LoginGate,SelGate,GameGate" in _fresh)
     chk("plan-no-bin-dir-placeholder", "<bin_dir>" not in _fresh)
+    # 片㉗：站位 SQL 必须真实列（本表无 x/y），且给出 before 探针
+    chk("plan-position-sql-real-columns",
+        position_sql_findings(_fresh) == []
+        and "UPDATE mir2_db.characters SET MapName='0', CX=605, CY=578 WHERE" in _fresh)
+    chk("plan-position-sql-before-probe",
+        "SELECT MapName,CX,CY FROM mir2_db.characters WHERE ChrName='aaa'" in _fresh)
+    chk("position-sql-x-y-red",
+        len(position_sql_findings("UPDATE mir2_db.characters SET x=1, y=2 WHERE ChrName='aaa';")) >= 1)
+    chk("position-sql-missing-mapname-red",
+        len(position_sql_findings("UPDATE mir2_db.characters SET CX=1, CY=2 WHERE ChrName='aaa';")) >= 1)
     chk("plan-teardown-before-csharp",
         0 <= _fresh.find("2b) 【本趟跑完必做") < _fresh.find("[③b] C#"))
 
@@ -985,6 +1044,11 @@ def selftest() -> int:
                                      "--shadow-config <影子 conf>")
         chk("plan-conf-red-cmdline-placeholder",
             any("占位" in p for p in plan_conformance(_bad_ph, _repo, _chk, _ms)))
+        # 片㉗：把真实列改回 x/y ⇒ 站位牙必红
+        _bad_pos = _conf_plan.replace("SET MapName='0', CX=605, CY=578", "SET x=605, y=578")
+        chk("plan-conf-red-position-columns",
+            any("站位 SQL" in p for p in plan_conformance(_bad_pos, _repo, _chk, _ms)),
+            "; ".join(plan_conformance(_bad_pos, _repo, _chk, _ms)))
 
     print(f"SELFTEST {'OK' if ok == total else 'FAILED'} ({ok}/{total})")
     return 0 if ok == total else 1
