@@ -1,0 +1,60 @@
+200 — 片㊼ 边界（净差量 / 冻结面 / 文件类型）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+base = `refs/heads/master` `ae6443924`（本分支 `merge --ff-only` 对齐；net 差量含未合的片㊻）
+====================================================================================================
+
+# 净差量（base `ae6443924` → 本 head；含本文件与 `SHA256SUMS.txt`）
+
+> 说明：本分支 tip 出发时 = 片㊻ `276f2f95e`（已在【待审】、尚无 approve 覆盖）。
+> 本片㊼提交在其上，故 base..head 的 net 差量 = 片㊻ 8 路径 ∪ 片㊼ 5 路径（README/SHA256SUMS 两片都碰）。
+> 两片均为 **L 级**（证据/门/选路接线），合并车道按整条分支差量审。
+
+```
+M  mir2-rs/bins/game-svr/src/main.rs
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/193-window-provenance-r7-closeout.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/194-redcheck-r7-provenance.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/195-gates.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/196-boundary.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/197-52-layout-all-sites.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/198-redcheck-52-layout.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/199-gates.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/200-boundary.txt
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+```
+= 13 路径（8 增 + 5 改）。生产代码**仅 1 件**：`mir2-rs/bins/game-svr/src/main.rs`（片㊼，
+`ability_tail` + 3 个调用点 + 用例）；其余为证据/工具。
+
+# 本片㊼ 自身差量（片㊻ `276f2f95e` → 本 head，5 路径）
+
+```
+M  mir2-rs/bins/game-svr/src/main.rs
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/197-52-layout-all-sites.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/198-redcheck-52-layout.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/199-gates.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/200-boundary.txt
+```
+（7 条含 README/SHA256SUMS；生产代码 1 件。）
+
+# 冻结面 / 非本片写集（必须为空）
+
+```
+$ git diff --name-only ae6443924 -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+（空）
+$ git diff --name-only ae6443924 -- mir2-rs/crates
+（空）
+$ git diff --name-only ae6443924 -- mir2-rs/tests/parity/m3 tests/parity/m3
+（空；m3 写集归 m3bag/m3cs）
+```
+* `src/`（含 `src/BotSrv`）`sql/` `MirClient/` `mir2-rs/crates/`（含 `protocol`/`storage`）
+  `mir2-rs/tests/parity/m3/` **全空**。
+* 生产面唯一改动 = `mir2-rs/bins/game-svr/src/main.rs`（片㊼）；冻结面 `crates/protocol`、
+  `crates/storage` 未动（52 的编码器 `record.rs`/`ability.rs`/`smframe.rs` 本片**零改动**）。
+* 仓外（不进库）改动面：`E:/tmp/m2svr-target`（隔离编译产物）、`E:/tmp/m2svr-burst/main.rs.mine`
+  （红检备份，还原后 sha256 一致）。共享主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2` **零改动**（只读）。
+* 无起栈、无游戏端口占用（root 的既有活栈未动）；红检变异在 worktree 的 `main.rs` 上做、跑完即还原
+  （三条变异的 `RESTORED sha256` 均为 `92669b92ad8d672344a004dcfbb041296a5fe357125e35ea003804bace41c19c`，见 `198`）。

@@ -1,0 +1,63 @@
+ORIGINAL main.rs sha256=92669b92ad8d672344a004dcfbb041296a5fe357125e35ea003804bace41c19c
+
+================================================================================
+198-redcheck-52-layout.txt — 片㊼ 改坏必红（3 条变异，逐条真跑）
+口径：变异在**自身 worktree 的 main.rs** 上做，跑完**立即从 E:/tmp 备份还原**
+（还原后 sha256 == 变异前；见每条 `RESTORED sha256=`）。零起栈/零端口。
+运行：cwd=mir2-rs, CARGO_TARGET_DIR=E:/tmp/m2svr-target, cargo test -p game-svr --bin game-svr
+================================================================================
+
+[改前原文 sha256 已记于下行]
+
+--------------------------------------------------------------------------------
+MUT M1 ability_tail degenerates to oracle-40 (always)
+  mutate: 'fn ability_tail(wabil: &game_svr::ability::Ability, client_layout: bool) -> Vec<u8> {
+    if client_layout {
+        record::encode_ability_client(wabil)
+    } else {
+        record::encode_ability(wabil)
+    }
+}'  ->  'fn ability_tail(wabil: &game_svr::ability::Ability, client_layout: bool) -> Vec<u8> {
+    let _ = client_layout;
+    record::encode_ability(wabil)
+}'
+  --- cargo test (grep) ---
+test tests::ability_tail_switches_between_client_58_and_oracle_40 ... FAILED
+test tests::bag_takeoff_blocked_while_dealing ... ok
+test tests::bag_takeoff_recalc_uses_prior_subability ... FAILED
+test tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity ... FAILED
+test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 211 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+  RESTORED sha256=92669b92ad8d672344a004dcfbb041296a5fe357125e35ea003804bace41c19c
+
+--------------------------------------------------------------------------------
+MUT M2 handle_bag_cmd bypasses helper -> raw oracle-40
+  mutate: '                sg.game_gold,
+                &ability_tail(&sg.state.wabil, client_layout),'  ->  '                sg.game_gold,
+                &record::encode_ability(&sg.state.wabil),'
+  --- cargo test (grep) ---
+test tests::ability_tail_switches_between_client_58_and_oracle_40 ... ok
+test tests::bag_takeoff_blocked_while_dealing ... ok
+test tests::bag_takeoff_recalc_uses_prior_subability ... FAILED
+test tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity ... ok
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 211 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+  RESTORED sha256=92669b92ad8d672344a004dcfbb041296a5fe357125e35ea003804bace41c19c
+
+--------------------------------------------------------------------------------
+MUT M3 drain_levelup_downlink bypasses helper -> raw oracle-40
+  mutate: '            sg.game_gold,
+            &ability_tail(&sg.state.wabil, client_layout),'  ->  '            sg.game_gold,
+            &record::encode_ability(&sg.state.wabil),'
+  --- cargo test (grep) ---
+test tests::ability_tail_switches_between_client_58_and_oracle_40 ... ok
+test tests::bag_takeoff_blocked_while_dealing ... ok
+test tests::bag_takeoff_recalc_uses_prior_subability ... ok
+test tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity ... FAILED
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 211 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+  RESTORED sha256=92669b92ad8d672344a004dcfbb041296a5fe357125e35ea003804bace41c19c
+
+
+结论：三条变异各自咬住对应面（M1 = helper 本身；M2/M3 = 两个生产调用点各自独立），
+且还原后 sha256 与改前一致 ⇒ 「改回 ⇒ 必红」成立。
