@@ -1,0 +1,266 @@
+# 01 — 本片代码差量（base origin/master 0002ed39c → head 120377ac4）
+# [cmd] git --no-pager diff 0002ed39c4fe98d9a5940e03eb1ca0ff69fb9ea5 HEAD -- mir2-rs/tests/parity/whitelist.md mir2-rs/tests/parity/m3/fixture_chain_gate.py
+diff --git a/mir2-rs/tests/parity/m3/fixture_chain_gate.py b/mir2-rs/tests/parity/m3/fixture_chain_gate.py
+index a779290f5..c26797c3c 100644
+--- a/mir2-rs/tests/parity/m3/fixture_chain_gate.py
++++ b/mir2-rs/tests/parity/m3/fixture_chain_gate.py
+@@ -103,6 +103,11 @@ SHARED_CHECKS = [
+     #   不看矩阵状态、独立常跑（在场却坏 ⇒ 恒 RED，绝不判绿）。
+     ("pet_slave_registry_selftest", "mir2-rs/tests/parity/m3/m3_pet_slave_registry_gate.py", ["selftest"]),
+     ("pet_slave_registry_check", "mir2-rs/tests/parity/m3/m3_pet_slave_registry_gate.py", ["check"]),
++    # ⑧-5 怪行为登记门（`m3_guild_war_quirk_registry_gate.py`，reviewer-6 O-1「先扣钱后判掌门」收口片）：
++    #   与宝宝登记门同形 —— 若不接入共享管线，缺行 / 撞号 / 锚点不符会静默通过整条链。
++    #   登记进共享管线后不看矩阵状态、独立常跑（在场却坏 ⇒ 恒 RED）。
++    ("guild_war_quirk_registry_selftest", "mir2-rs/tests/parity/m3/m3_guild_war_quirk_registry_gate.py", ["selftest"]),
++    ("guild_war_quirk_registry_check", "mir2-rs/tests/parity/m3/m3_guild_war_quirk_registry_gate.py", ["check"]),
+     # 白名单登记号审计门（`m3_whitelist_registry_audit.py`，卡 `openmir2-m3-whitelist-registry-integrity`）
+     #   此前**无任何调用方**（reviewer-6 `4f5d3eeb1` O-1：纯审计、非 fail-closed 门仍零调用方）——
+     #   与宝宝登记门同类的「在场却坏无声」隐患。本片接入其 **selftest**（工具自身逻辑 + 改坏必红）。
+@@ -370,12 +375,18 @@ def cmd_selftest(_args):
+     _pet_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("m3_pet_slave_registry_gate.py")]
+     expect("宝宝登记门已接入共享管线（防回退）",
+            ["selftest"] in _pet_gate and ["check"] in _pet_gate)
++    # 本片防回退牙：⑧-5 怪行为登记门（`m3_guild_war_quirk_registry_gate.py`）必须常驻共享管线
++    #   （selftest + check 两向）。它此前不存在（「先扣钱后判掌门」只在代码模块头 + 证据 README）⇒
++    #   缺行 / 撞号 / 锚点不符会静默，与上面宝宝登记门同根因。
++    _gwq_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("m3_guild_war_quirk_registry_gate.py")]
++    expect("行会战怪行为登记门已接入共享管线（防回退）",
++           ["selftest"] in _gwq_gate and ["check"] in _gwq_gate)
+     # 本片防回退牙：白名单登记号审计门（`m3_whitelist_registry_audit.py`）必须常驻共享管线
+     #   （selftest 向）。它此前零调用方（reviewer-6 `4f5d3eeb1` O-1）⇒ 工具自身逻辑回归会静默。
+     _wl_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("m3_whitelist_registry_audit.py")]
+     expect("白名单登记号审计门 selftest 已接入共享管线（防回退）", ["selftest"] in _wl_gate)
+-    expect("主机门（.py）登记项 ≥17（castle + 行会/攻城 + 英雄/宠物 + 元宝寄售 + 任务 + 组队/交易 + markers 前缀 + 宝宝登记 + 白名单审计 各 selftest[/check]）",
+-           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 17)
++    expect("主机门（.py）登记项 ≥19（castle + 行会/攻城 + 英雄/宠物 + 元宝寄售 + 任务 + 组队/交易 + markers 前缀 + 宝宝登记 + 白名单审计 + 行会战怪行为登记 各 selftest[/check]）",
++           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 19)
+     expect("共享管线登记名唯一（防重复注册偷懒）",
+            len({n for n, _r, _e in SHARED_CHECKS}) == len(SHARED_CHECKS))
+     expect("共享管线 (file,args) 登记唯一",
+diff --git a/mir2-rs/tests/parity/whitelist.md b/mir2-rs/tests/parity/whitelist.md
+index e6e6ae240..59098c2d4 100644
+--- a/mir2-rs/tests/parity/whitelist.md
++++ b/mir2-rs/tests/parity/whitelist.md
+@@ -274,6 +274,20 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② 
+ 
+ > **编号连号**：T-46（M3⑧ 公会/攻城夹具；T-22/T-29/T-41 的同族扩展）。
+ 
++### M3⑧ 实现登记（行会战；卡片 `openmir2-m3-guild-war`(⑧-5)，2026-10-14）
++
++> 收口 reviewer-6 对 ⑧-5 第①片（`reviewed_head efa75a9dee`，approve `0fce7a8c`）登记的**非阻塞 Minor O-1**：
++> 「先扣钱后判掌门」的照搬怪行为当时只在 `crates/world/src/guild.rs` 模块头 + 证据 README 说明，
++> `whitelist.md` 无对应行 ⇒「登记在案」不可机判。本行补齐，并由同片新增的
++> `m3_guild_war_quirk_registry_gate.py`（接入 `fixture_chain_gate.py` 共享管线常跑）行级钉住。
++> **编号说明（不假绿）**：`T-48` 按闭合卡 `openmir2-m3-whitelist-registry-integrity` 建议留给「`T-42` 撞号去重」（待 owner）；
++> `T-49`（⑨-3）/`T-50`/`T-51`（④ 夹具）已用；`T-52`/`T-53` 由卡 `openmir2-m3-party-recall-ext`（已合入 master `2d2426f5b`）占用 ⇒ 本行取 **T-54**。
++> 本行**待独立 principal 复核**。
++
++| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
++| --- | --- | --- | --- |
++| T-54 | **N6（本片登记）：`ReQuestGuildWar` 的「先扣钱后判掌门」照搬怪行为** —— NPC 层 `GuildOfficial.ReQuestGuildWar`（`src/GameSrv/Npc/GuildOfficial.cs:180-199`）在目标行会存在且 `Gold >= SystemShare.Config.GuildWarPrice` 时**先** `DecGold(GuildWarPrice)` + `GoldChanged()`（`GuildOfficial.cs:186-187`），**再**进 `PlayObject.ReQuestGuildWar`；而后者第一道门是 `IsGuildMaster()`（`src/M2Server/Player/PlayObject.Base.cs:3351`，定义 `PlayObject.cs:4402` = `MyGuild != null && GuildRankNo == 1`）⇒ **非掌门 / `M2Share.ServerIndex != 0` / 目标缺失 都会白扣 `GuildWarPrice` 且不退还**。 | **不是差异，是 oracle 怪行为 1:1 照搬**（§8.1 行为等价优先于修 bug）：Rust `crates/world/src/guild.rs::GuildManager::request_guild_war` 逐序复刻 —— 第 1 层（目标在 + 钱够）先置 `gold_spent = war_price` 交由调用方从 `Gold` 扣，第 2 层才判 `requester_rank_no != 1` / `ServerIndex` / 目标；3 条向量锁死（`request_guild_war_non_master_still_pays_gold` / `request_guild_war_no_guild_still_pays_gold` / `request_guild_war_non_zero_server_still_pays_gold`）+ 改坏必红（把 `gold_spent` 恒 0 / 把扣钱挪到掌门判定之后 ⇒ 向量必 RED）；与 **T-39**（N2 `AddWarGuild` 反逻辑）叠加后只有「本会与目标已处战态、但目标未把本会列入战表」这一非对称态令 `request_ok=true`（发 `SS_207`）。**不许**「修好」（退还金币 / 前置判掌门），将来要修另开 `S-*` 并保留改前/改后读数。 | 作者登记（`openmir2-worker-5`，⑧-5 `openmir2-m3-guild-war` reviewer-6 `O-1` 收口）；**待独立 principal 复核本登记行** |
++
+ ## M3⑨ 登记（英雄 / 宠物（宝宝/下属 slave）动作序列夹具；卡片 `openmir2-m3-hero-pet-fixture-botsrv`，2026-10-13）
+ 
+ > 盘点报告：[`m3/M3⑨英雄宠物现状盘点报告-20261013.md`](m3/M3⑨英雄宠物现状盘点报告-20261013.md)；本卡父卡 `openmir2-m3-hero-pet-align`。
+
+# [cmd] 新增门全文（git show HEAD:...）：mir2-rs/tests/parity/m3/m3_guild_war_quirk_registry_gate.py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""M3⑧-5 行会战「先扣钱后判掌门」登记行存在性 + 锚点门（`m3_guild_war_quirk_registry_gate.py`）——只读、零端口。
+
+## 为什么有它
+
+`mir2-rs/tests/parity/whitelist.md` 是行为差异 / 复刻缺陷的**唯一真源**。⑧-5
+（卡 `openmir2-m3-guild-war`）的 reviewer-6 **O-1** 指出：NPC 层
+`GuildOfficial.ReQuestGuildWar`（`GuildOfficial.cs:186`）先 `DecGold(GuildWarPrice)`，
+`PlayObject.ReQuestGuildWar`（`PlayObject.Base.cs:3351`）才判 `IsGuildMaster()` ⇒
+「非掌门 / 非 0 区 / 目标缺失也白扣」这条照搬怪行为当时只在 `crates/world/src/guild.rs`
+模块头 + 证据 README 说明，`whitelist.md` 无行 ⇒「登记在案」不可机判、将来被「修好」不会被发现。
+
+本件把「T-54 登记行**存在**、编号**唯一**、且带 oracle 锚 + Rust 锁定用例名」做成一条命令 +
+可复跑读数。它不是通用的 whitelist 审计（那是 `m3_whitelist_registry_audit.py`，审 T-* 全局唯一性 /
+夹具 token 解析）：本门只对**本片声明的登记合同** fail-closed —— 缺行 / 撞号 / 锚点不符 ⇒ 点名 + `rc=1`。
+
+## 命令
+
+    python -I m3_guild_war_quirk_registry_gate.py check [--whitelist PATH]
+    python -I m3_guild_war_quirk_registry_gate.py selftest
+
+口径：**只读**（只读 whitelist.md）、**零端口**、不写仓库。`selftest` 用合成文本 + 改坏必红。
+
+## 接入（2026-10-14，卡 `openmir2-m3-guild-war`）
+
+本门与 `m3_pet_slave_registry_gate.py` 同形：若**无任何调用方**（只在证据 README 里手工跑）
+就会成为「在场却坏无声」隐患。故随本片一并接入 `fixture_chain_gate.py` 的 `SHARED_CHECKS`
+（`guild_war_quirk_registry_selftest` + `guild_war_quirk_registry_check`），不看矩阵状态、独立常跑；
+`fixture_chain_gate.selftest` 内含**防回退牙**（本门被反注册 ⇒ 链门 selftest RED）。
+
+## 边界（如实登记，不假绿）
+
+**不检查** `T-42` 撞号（whitelist 现存两行 `| T-42 |`：⑤-2 商人 tick vs ⑥-5 任务夹具）。
+那是跨车道历史问题，已由闭合卡 `openmir2-m3-whitelist-registry-integrity` 路由 owner、
+建议重编到 T-48；本门不单方面重编号、也不拿它判本片的红。
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_WHITELIST = os.path.normpath(os.path.join(HERE, "..", "whitelist.md"))
+
+# 登记行 = `| <前缀>-<数字> | ...`；本门只认 T-*。
+ROW_RE = re.compile(r"^\|\s*([A-Z]{1,3})-(\d+)\s*\|(.*)$", re.MULTILINE)
+
+# 本片声明的登记合同：token -> 该行必须出现的 oracle 锚 / Rust 锁定用例名 / 语义关键词。
+# 锚点取自冻结 oracle（`src/**`，只读；本门不改它）与已合入的 Rust 用例名。
+REQUIRED = [
+    ("T-54", ["GuildOfficial.cs:186", "PlayObject.Base.cs:3351", "PlayObject.cs:4402",
+              "GuildWarPrice", "request_guild_war", "non_master_still_pays_gold"]),
+]
+
+# 历史编号说明（不判红，只提示）。
+RESERVED_NOTE = {
+    "T-48": "已闭合卡 openmir2-m3-whitelist-registry-integrity 建议留给「T-42 撞号去重」（待 owner）",
+    "T-52": "已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用",
+    "T-53": "已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用",
+}
+
+
+def parse_rows(text):
+    """⇒ [{token, prefix, num, line, body}]（按出现顺序；body = `|` 后到行尾的原文）。"""
+    out = []
+    for m in ROW_RE.finditer(text):
+        prefix, num, body = m.group(1), int(m.group(2)), m.group(3)
+        line = text.count("\n", 0, m.start()) + 1
+        out.append({"token": "{0}-{1}".format(prefix, num), "prefix": prefix,
+                    "num": num, "line": line, "body": body})
+    return out
+
+
+def check_text(text):
+    """纯函数（便于 selftest 注入）⇒ (findings, reds)。"""
+    rows = parse_rows(text)
+    by_token = {}
+    for r in rows:
+        by_token.setdefault(r["token"], []).append(r)
+
+    findings = []
+    reds = []
+
+    # ① 本片声明的行：存在、唯一、锚点齐。
+    for token, anchors in REQUIRED:
+        hits = by_token.get(token, [])
+        if not hits:
+            reds.append("MISSING {0}：whitelist 里没有 `| {0} |` 行".format(token))
+            continue
+        if len(hits) > 1:
+            where = ",".join("L{0}".format(h["line"]) for h in hits)
+            reds.append("DUPLICATE {0} x {1} @ {2}".format(token, len(hits), where))
+            continue
+        body = hits[0]["body"]
+        missing = [a for a in anchors if a not in body]
+        if missing:
+            reds.append("ANCHOR {0} @L{1}：缺锚点 {2}".format(
+                token, hits[0]["line"], ",".join(missing)))
+        else:
+            findings.append("OK {0} @L{1}：锚点 {2}/{2} 齐".format(
+                token, hits[0]["line"], len(anchors)))
+
+    # ② 提示（不判红）：本片声明的保留号若出现在表里（编号说明需同步）。
+    for token, note in RESERVED_NOTE.items():
+        if token in by_token:
+            findings.append("NOTE {0} 存在（{1}）".format(token, note))
+    return findings, reds
+
+
+def cmd_check(args):
+    if not os.path.isfile(args.whitelist):
+        print("WHITELIST_MISSING {0}".format(args.whitelist))
+        return 2
+    with open(args.whitelist, "r", encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    findings, reds = check_text(text)
+    print("GUILD_WAR_QUIRK_REGISTRY_GATE whitelist={0} required={1}".format(
+        args.whitelist, len(REQUIRED)))
+    for f in findings:
+        print("  FINDING {0}".format(f))
+    if reds:
+        print("GUILD_WAR_QUIRK_REGISTRY_RED {0}：{1}".format(len(reds), "; ".join(reds)))
+        return 1
+    print("GUILD_WAR_QUIRK_REGISTRY GREEN（{0} 行登记齐 + 锚点齐 + 编号唯一）".format(len(REQUIRED)))
+    return 0
+
+
+def cmd_selftest(_args):
+    ok = 0
+    total = 0
+
+    def expect(name, cond):
+        nonlocal ok, total
+        total += 1
+        if cond:
+            ok += 1
+            print("  SELFTEST ok  {0}".format(name))
+        else:
+            print("  SELFTEST FAIL {0}".format(name))
+
+    def row(token, body):
+        return "| {0} | {1} |".format(token, body)
+
+    t54_body = ("N6 先扣钱后判掌门 GuildOfficial.cs:186-187 PlayObject.Base.cs:3351 "
+                "PlayObject.cs:4402 GuildWarPrice request_guild_war_non_master_still_pays_gold "
+                "T-39 AddWarGuild")
+    base = "\n".join([
+        row("T-54", t54_body),
+        # 干扰项：T-42 撞号（本门不判红） + 邻行 T-39 / T-46
+        row("T-39", "N2 AddWarGuild 反逻辑"),
+        row("T-42", "⑤-2 商人 tick"),
+        row("T-42", "⑥-5 任务夹具"),
+        row("T-46", "夹具"),
+    ])
+
+    _f, reds = check_text(base)
+    expect("T-54 登记齐 + 锚点齐 -> GREEN（T-42 撞号不判红）", reds == [])
+
+    no_t54 = base.replace(row("T-54", t54_body) + "\n", "")
+    _f, reds = check_text(no_t54)
+    expect("删 T-54 行 -> RED", any("MISSING T-54" in r for r in reds))
+
+    wrong_anchor = base.replace("PlayObject.Base.cs:3351", "PlayObject.Base.cs:9999")
+    _f, reds = check_text(wrong_anchor)
+    expect("锚点改错 -> RED", any("ANCHOR T-54" in r for r in reds))
+
+    dup = base + "\n" + row("T-54", "重复行 " + t54_body)
+    _f, reds = check_text(dup)
+    expect("T-54 撞号 -> RED", any("DUPLICATE T-54" in r for r in reds))
+
+    # 「照搬口径被悄悄改写」的一个可机判面：删掉 Rust 锁定用例名 / 号链交叉引用即缺锚点。
+    no_lock = base.replace("non_master_still_pays_gold", "some_other_test")
+    _f, reds = check_text(no_lock)
+    expect("删掉 Rust 锁定用例名 -> RED", any("ANCHOR T-54" in r for r in reds))
+
+    empty = "## 无登记\n"
+    _f, reds = check_text(empty)
+    expect("空表 -> 全 MISSING", len([r for r in reds if r.startswith("MISSING")]) == len(REQUIRED))
+
+    print("SELFTEST {0} {1}/{2}".format("GREEN" if ok == total else "RED", ok, total))
+    return 0 if ok == total else 1
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description="M3⑧-5 行会战怪行为登记门（只读。零端口）")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("check")
+    c.add_argument("--whitelist", default=DEFAULT_WHITELIST)
+    c.set_defaults(fn=cmd_check)
+    s = sub.add_parser("selftest")
+    s.set_defaults(fn=cmd_selftest)
+    args = p.parse_args(argv)
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

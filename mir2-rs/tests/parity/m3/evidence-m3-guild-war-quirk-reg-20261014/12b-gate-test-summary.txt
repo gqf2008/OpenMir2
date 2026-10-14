@@ -1,0 +1,3 @@
+# 12b — 上面全量 test 的汇总
+suites=101
+passed=1211 failed=0 ignored=22

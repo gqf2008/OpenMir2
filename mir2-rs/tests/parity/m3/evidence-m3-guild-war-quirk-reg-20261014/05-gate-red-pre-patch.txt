@@ -1,0 +1,7 @@
+# 05 — 改前读数（base origin/master 的 whitelist，无 T-54 行）⇒ MISSING
+# [cmd] python -I m3_guild_war_quirk_registry_gate.py check --whitelist /e/tmp/m3cs-whitelist-base.md
+GUILD_WAR_QUIRK_REGISTRY_GATE whitelist=E:/tmp/m3cs-whitelist-base.md required=1
+  FINDING NOTE T-52 存在（已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用）
+  FINDING NOTE T-53 存在（已由卡 openmir2-m3-party-recall-ext（合入 master 2d2426f5b）占用）
+GUILD_WAR_QUIRK_REGISTRY_RED 1：MISSING T-54：whitelist 里没有 `| T-54 |` 行
+rc=1
