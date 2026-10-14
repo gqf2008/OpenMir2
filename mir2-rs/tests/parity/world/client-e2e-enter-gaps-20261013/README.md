@@ -24,6 +24,14 @@
 
 ## 结论（先看这三条）
 
+> **⚠ 现行口径（2026-10-14 起，以 ⑨/㊴/㊽ 为准；本节 #3/#5 是 2026-10-13 首轮的当时口径，已被超越）**
+> - **52/53 的生产默认 = 冻结客户端布局**（52 尾 58B `TAbility`、53 尾 12B `TCharDesc`）：
+>   `MIR2_CLIENT_ABILITY_LAYOUT` **未设 ⇒ 开**（`smframe::client_layout_enabled()`，片⑨ 翻默认）；
+>   只有显式 `=0` 才回 oracle 布局（逐字节对拍口径）。⇒ 本节 #3 的「默认关 / 需 owner 决策」已过时。
+> - 「HUD `0/0` + 跑不动」的真凶 = **53 `SM_HEALTHSPELLCHANGED` 缺冻结客户端 12B `TCharDesc` 尾**
+>   （`HIGHHP=True` 从尾解），触发条件 = 进图 `HP<MaxHP`；**修点 = 片㊴ `c61b9627a` + 片㊼ `6cadc9fbf`（均已入 master）**。
+> - 本节 #5 的 Run B「开 `MIR2_CLIENT_ABILITY_LAYOUT=1`」现等价于**默认**（`=1` 仍接受，但不再需要显式设）。
+
 1. **① “进图未下发 52/752” = 否**。真机 Rust 日志 `进世界帧下发：socket=… 共 15 条（输入齐备的）`
    恰好是 658,51,50,41,213,11029,42,766,54,5008,1106,**52,752**,811,46；新加的
    `52/752 入图输入` 行给出输入值：`WAbil[level=1 … hp=19 mp=15 max_hp=19 max_mp=15 …]`。
@@ -37,7 +45,7 @@
    HUD 逐像素一致（`0/0` + `655360/25165829`）⇒ 52 的 40B 尾与客户端 `TAbility`（HIGHHP=True，58B）
    记录长度不匹配（客户端把 `HP` 读成尾部 offset 22 的 `Exp` 段 = 0）——**C# 也一样**，
    因此 `CanRun`（`HP < RUN_MINHEALTH(10)`）两边都拒绝跑。要不要修需 owner 决策
-   （客户端冻结 ⇒ 只能改服务端布局，属与 oracle 的**故意偏离**）。锚点见 `01-oracle-anchors.txt` §A/§B。
+   （客户端冻结 ⇒ 只能改服务端布局，属与 oracle 的**故意偏离**）**——已决策：见本节顶部「现行口径」注 + ⑨/㊴/㊽**。锚点见 `01-oracle-anchors.txt` §A/§B。
 4. **104（`CM_SELECTSERVER`）= `SS_KEEPALIVE`（IDS 链路在线数心跳）**，忽略对客户端选服/心跳无可见影响。
 5. **客户端侧帧可见性（片⑤，2026-10-13 追补）**：`40`/`41` 是 `mir2_proxy` 在 7200 抓到的
    **客户端实际收到的 s2c 字节** —— 入图序列 `658…46` 里 **52/752 都在**（Run A `52 body_len=40` = oracle 布局；
@@ -71,14 +79,14 @@ powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
   `27-redcheck-layout-verify.txt`（两条改坏必红）。
 - `04-gates.txt` / `05-boundary.txt` / `20-redcheck-world-aoi-diag.txt` / `24-gates.txt` / `25-boundary.txt`。
 
-## 本目录代码改动（只读可观测性 + 默认关的布局开关）
+## 本目录代码改动（只读可观测性 + 默认开的布局开关，见本节顶「现行口径」与 ⑨）
 
 - `mir2-rs/bins/game-svr/src/main.rs`
   - `log_enter_ability`（进图时打印实际写入 52/752 的输入值、**实际布局**与**实际尾长**；只读）。
   - `WorldDiag`/`SessionAoiDiag`/`world_aoi_diag`：周期 `sim:` 行追加
     `实体内 N 展示表 M 在世界会话 K` 与每会话 `[name(id) map=… vis=… same_map=… nearest=…]`，
     从根本上消除“`处理 0 项` ⇒ 无实体”的误读。
-  - `mir2_client_ability_layout()`：读 `MIR2_CLIENT_ABILITY_LAYOUT`（`1/true/TRUE/True` ⇒ 开；**未设 ⇒ 关**）。
+  - `mir2_client_ability_layout()`：读 `MIR2_CLIENT_ABILITY_LAYOUT`（**未设 ⇒ 开** = client-58；`0/false/FALSE/False` ⇒ oracle 逐字节）。
   - [`new_player_entity`]（片④）：生产宿主唯一的玩家构造点，对齐 `PlayObject` 构造器 —— `WantRefMsg=true`
     （`PlayObject.cs:889`，片①）+ **`ViewRange=12`**（`PlayObject.cs:904`）。后者决定 AOI 扫描窗口
     （边长 `2*ViewRange+1`，`BaseObject.ViewRange.cs:71-74`）：缺它只有缺省 5（`entity.rs:402` = `BaseObject.cs:383`）
@@ -90,8 +98,8 @@ powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
 - 用例 `world_aoi_diag_reports_visible_and_nearest`（构造级；改坏必红见 `20-…`）、
   `record::tests::encode_ability_client_matches_highhp_record` + `enter::tests::ability_frames_follow_recalc_abilitys`
   （改坏必红见 `23-…`）。
-- **默认关**：未设 `MIR2_CLIENT_ABILITY_LAYOUT` 时，52 尾仍 = oracle `EncodeMessage(WAbil)` 40B
-  （金标准 #12 与 `enter` 默认分支不回归）。
+- **默认开**（2026-10-14 片⑨ 起）：未设 `MIR2_CLIENT_ABILITY_LAYOUT` 时，52 尾 = 冻结客户端 58B `TAbility`；
+  显式 `=0` ⇒ oracle `EncodeMessage(WAbil)` 40B（金标准 #12 与 `enter` oracle 支不回归）。
 - **不改**任何模拟/出帧/取数语义；`src/ sql/ MirClient` 与 `crates/protocol`/`crates/storage` 边界为空。
 
 ## ④ 玩家 `ViewRange=12` 对齐（缺口②「同屏无怪」）——`30`/`31`/`32`/`33`
@@ -1154,3 +1162,23 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **分级**：根因/就绪片 = **L**（离线构造层 + 就绪工具）；真机 ①②③（含一次升级/换装步）仍归 **root 独占窗口（R）**。
 - 交付：`201-window-provenance-r7-closeout-4.txt`、`202-redcheck-window-provenance-4.txt`、`203-gates.txt`、
   `204-boundary.txt`、`205-bisect-52-752-run0-closure.txt`。
+
+### ㊾ 随卡 findings 收口（reviewer-5/6 的 F-1 + O-1~O-5）+ 53 牙真跑 + 顶部结论与现行默认 align（2026-10-14）—— `206`/`207`/`208`
+
+片㊽（`d100038b9`，已合 `c44c58e3a`）的两条非作者 approve 登记的**非阻塞** findings，本片「下次动该文件时」收口：
+
+- **F-1（两条 review 一致）**：`205 §1` 写 `git log … -- mir2-rs/bins/game-svr/src`「共 19 条」，实测 **22 条**（且原列出的是折叠/节选）
+  ⇒ `205 §1` 改为**逐行原样输出 22 行** + 尾注「共 22 条」并说明原文为节选计数错误。
+- **O-1**：`main.rs` 字段注释「默认关（未设 = oracle 逐字节）」与 `client_layout_enabled()`（**未设 ⇒ 开**）矛盾 ⇒ 订正为「默认开（未设 = client-58；`=0` 才 oracle）」（纯注释）。
+- **O-2/O-4**：`200-boundary.txt` 的「本片㊼ 自身差量（…，5 路径）」实列 7 条 ⇒ 订正为 7（同文上一节 net「13 路径（8 增 + 5 改）」正确，未动）。
+- **O-5（reviewer-6）**：`202 §E` 的牙「`sm_healthspellchanged_frame` 默认支改回 header-only ⇒ 片㊴ 用例必红」该片未真跑
+  ⇒ 本片**真跑**：变异（默认支 → `false`）⇒ `panicked … assertion left == right`（`left` 12B header-only / `right` 28B = 12B 头 + `EDCode(TCharDesc)` 16B）rc=101；
+  `git checkout --` 还原（sha256 前后 `156433069f…` 一致）⇒ 复跑 GREEN rc=0（原始输出见 `206 §4`）。
+- **本片自查新增（同族漂移）**：顶部 `## 结论` 的 #3「默认关 / 0/0 是既有问题 / 要不要修需 owner 决策」与 `## 本目录代码改动` 标题/末条
+  与 ⑨/㊴/㊽ 的**现行默认（client-58）**矛盾 ⇒ 插入「⚠ 现行口径（2026-10-14 起，以 ⑨/㊴/㊽ 为准）」注并改「默认关」措辞。
+- **O-3 未做（不在本片）**：`52→58B` / `53→TCharDesc` 尾的 §6.0-3 白名单登记 + owner 签字，属 owner 裁决面。
+- 门禁（`207`）：fmt rc=0 / clippy rc=0(-D warnings) / 101 suites 1232 passed 0 failed 22 ignored / msgcodegen 604 rc=0；
+  证据清单门 `verify --check-extra` **GREEN 214/214** + `eolcheck` **GREEN 215/215**（含实跑的清单门改坏必红）。
+- 边界（`208`）：8 路径（3 增 + 5 改）；生产代码仅 `main.rs` 一条注释；冻结面 `src/ sql/ MirClient/ crates/protocol/ crates/storage/` 空。
+- 交付：`206-carryover-closeout-f1-o1o5.txt`、`207-gates.txt`、`208-boundary.txt`。
+- **仍归 root 独占窗口（R）**：卡级真机 ①②③；G5（root 活脚本未换入库替身）仍 RED。

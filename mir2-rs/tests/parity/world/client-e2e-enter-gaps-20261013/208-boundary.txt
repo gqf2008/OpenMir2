@@ -1,0 +1,41 @@
+208 — 片㊾ 边界（净差量 / 冻结面 / 文件类型）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+base = `refs/heads/master` `c44c58e3a`（本分支 `merge --ff-only origin/master` 对齐；net 差量 = 本片差量）
+====================================================================================================
+
+# 净差量（base `c44c58e3a` → 本 head）
+
+```
+$ git diff --name-status c44c58e3a <head>
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/206-carryover-closeout-f1-o1o5.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/207-gates.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/208-boundary.txt
+M  mir2-rs/bins/game-svr/src/main.rs
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/200-boundary.txt
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/205-bisect-52-752-run0-closure.txt
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+```
+= **8 路径（3 增 + 5 改）**。
+
+# 文件类型
+
+```
+$ git diff --name-only c44c58e3a <head> | grep -E '\.(rs|toml|ps1|cs|py)$'
+mir2-rs/bins/game-svr/src/main.rs
+```
+⇒ 生产代码**仅 1 件**（`main.rs`），且改动是 **1 条字段注释的 3 行文字**（见 `206 §2`），零行为变化；
+其余 7 件均为证据文本 / 清单（`*.txt` / `README.md` / `SHA256SUMS.txt`）。
+
+# 冻结面
+
+```
+$ git diff --name-only c44c58e3a <head> -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+（空）
+```
+⇒ 冻结面 `src/ sql/ MirClient/ crates/protocol/ crates/storage/` 全空。
+（`main.rs` 位于 `mir2-rs/bins/game-svr/`，不在冻结面内；本片未动 `mir2-rs/bins/` 下任何其他文件。）
+
+# 证据清单门与 EOL 门
+
+见 `207 §5`：`verify_sha256sums.py --check-extra` GREEN / `eolcheck` GREEN（本目录 `SHA256SUMS.txt` 已按「仓库字节(LF)」口径重生成）。
