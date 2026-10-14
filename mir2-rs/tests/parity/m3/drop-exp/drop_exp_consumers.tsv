@@ -43,7 +43,7 @@ csharp	setup	M2Server\.Actor\.BaseObject\.\.ctor@BaseObject\.cs:(438|441)$	*	src
 csharp	setup	M2Server\.Actor\.AnimalObject\.\.ctor@AnimalObject\.cs:75$	*	src/M2Server/Actor/AnimalObject.cs:75	场景构建：AnimalObject ctor（AttackTick/WalkTick）
 csharp	setup	M2Server\.Player\.PlayObject\.\.ctor@PlayObject\.cs:1046$	*	src/M2Server/Player/PlayObject.cs:1046	场景构建：玩家进世界构造
 csharp	wallclock	M2Server\.Actor\.AnimalObject\.Wondering@AnimalObject\.cs:(427|432|434)	0	src/M2Server/Actor/AnimalObject.cs:425	游走/转向/寻敌；owner 点名（②③ 实测占 C# 流水 99.98% 噪声）⇒ pin 抑制必须使其为 0
-csharp	wallclock	GameSrv\.Word\.WorldServer\.RegenMonsters@WorldServer\.MonGen\.cs:815	0	src/GameSrv/Word/WorldServer.MonGen.cs:238	刷怪 regen 抽数在 GetTickCount 门控的 tick 里 ⇒ 墙钟消费者，必须 0
+csharp	wallclock	GameSrv\.Word\.WorldServer\.RegenMonsters@WorldServer\.MonGen\.cs:815	0	src/GameSrv/Word/WorldServer.MonGen.cs:811	刷怪 regen 抽数在 GetTickCount 门控的 tick 里 ⇒ 墙钟消费者，必须 0
 csharp	wallclock	GameSrv\.Npc\.Merchant\.Run@Merchant\.cs:(132|138)	0	src/GameSrv/Npc/Merchant.cs:132	商人 tick 抽数在 dwCurrentTick 门控里 ⇒ 墙钟消费者；本场景无商人 ⇒ 必须 0
 
 # ---- Rust（④-D 实现；文件级 = #[track_caller] 世界层调用点）------------------
