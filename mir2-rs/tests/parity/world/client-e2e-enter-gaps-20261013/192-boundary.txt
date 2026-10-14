@@ -1,0 +1,60 @@
+192-boundary.txt —— 片㊶ 边界（base = refs/heads/master = 1cda79225；head = 本片提交）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / openmir2-worker-11 / 2026-10-14
+====================================================================================================
+# 0) 起手式（本片开工前的 master 已含片㊵）
+$ git fetch origin && git rev-parse origin/master
+1cda792251eea83f4093c60d37aa5ef375657a82      # Merge fc125ea70（片㊵）——本片 base
+$ git merge --ff-only origin/master           # fc125ea70 → 1cda79225
+
+# 1) 本片净差量 = origin/master..HEAD（walgit patch 用的 base/head）
+$ git diff --cached --name-status 1cda79225
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/82-two-side-window-runbook.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/187-healthspellchanged-trigger-precondition.md
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/190-aoi-gap3-af2-coordinate-verdict.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/191-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/192-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_healthspellchanged_trigger.py
+（8 路径 = 1 个只读判据脚本文案/INFO 改动 + 3 新增证据 + 4 文案/清单；**无任何生产代码**）
+
+# 2) 冻结面（必须全空）
+$ git diff --cached --name-only 1cda79225 -- src sql MirClient
+(空 = 通过)
+$ git diff --cached --name-only 1cda79225 -- src ':!src/BotSrv'
+(空 = 通过)
+$ git diff --cached --name-only 1cda79225 -- mir2-rs/bins mir2-rs/crates
+(空 = 通过)
+$ git diff --cached --name-only 1cda79225 -- '*.rs' '*.toml' '*.lock'
+(空 = 通过)
+$ git diff --cached --name-only 1cda79225 -- mir2-rs/crates/protocol mir2-rs/crates/storage
+(空 = 通过)
+
+# 3) 本片只碰 `mir2-rs/tests/parity/world/**`（本车道独家写集）
+$ git diff --cached --name-only 1cda79225 | grep -v '^mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/'
+(空 = 通过；未碰 tests/parity/m3/**，未碰他人写集)
+
+# 4) 证据完整性（LF/git-blob 口径）
+$ python -I -B tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+写入 mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt（198 行，repo 口径）
+GREEN: write 完成（3 行 hash 变更，mode=repo）      # 190/191/192 新增行
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify ... --check-extra
+GREEN mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK 198/198
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck ...
+EOLCHECK GREEN 199/199 件文本证据与仓库口径（LF）在 EOL 上一致
+
+# 4.1) 读数
+verify GREEN 198/198（上片片㊵ 195 + 本片 3 = 190/191/192）；
+eolcheck GREEN 199/199（= 198 + 清单自身）。
+
+# 5) 检出外改动（登记；未动共享主检出）
+$ git -C E:/Users/gxh/Documents/GitHub/OpenMir2 status --porcelain | wc -l
+0                       # 共享主检出（rev 车道）零改动（只读）
+# 原始件（保留可复算，可删）：E:/tmp/m2svr-b31-test.txt、E:/tmp/m2svr-b31-check/
+#   （MUT-A 变体 mut_no_info.py 与判据脚本副本）、E:/tmp/m2svr-target/**
+# 只读引用（非本车道所有，未编辑）：E:/tmp/client-e2e/stack2/game-svr.out.log（root 活栈日志）、
+#   E:/MirServer/M2GameSvr/Envir/MonGen.txt
+
+# 6) 纪律自述
+零起栈、零游戏端口（仅共享 3306 只读）；未改 root 的活脚本；未 merge 到 master、未自签 review；
+未写他人 inbox；生产代码零改动（README/证据/只读判据脚本文案）。

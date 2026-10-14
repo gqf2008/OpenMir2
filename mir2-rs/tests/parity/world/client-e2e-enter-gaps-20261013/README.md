@@ -1033,6 +1033,12 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **③「同屏没怪」判定（顺带）**：`vr=12` + `vis=0` + `nearest=14→34`（全程 > 12）= 该点位**确实**无实体进入窗口 ⇒
   `vis=0` 几何自洽；`af=2` = 恰一对 `SM_TURN(10)+SM_FEATURECHANGED(41)` ⇒ **出现帧管线有实发**，不是「没算/没发」。
   C# 侧同点位（密点 `605,578`/`291,666`）对照仍归 root 独占窗口（R 级，not_verified）。
+  > **坐标口径订正（片㊶）**：上面那句「该点位确实无实体」**只对 `(291,666)` 成立**；
+  > 本 ③ 判定的原始读数点 `(297,629)`（`E:/tmp/client-e2e/stack2/game-svr.out.log` 的
+  > `进世界 ChrName:aaa CurMap:0 (297,629) Dir:4 entity=17886`）**不是**真空点 —— 到最近生成框
+  > `(256,572) range=50 count=50` 的 Chebyshev=**7 < `vr=12`**（窗口内期望出生怪数 E=1.294）
+  > ⇒ 该点 `vis=0` 只是采样瞬时现象，不能当「AOI 无怪」的证据。详见
+  > `190-aoi-gap3-af2-coordinate-verdict.txt`。
 - **判据分级 / 与窗口的关系**：本片修复 = **R 级**（战斗数值/客户端可见行为，须真机复跑）；
   验收 = 同一 char 保持 `HP<MaxHP` 进图 ⇒ HUD `19/19`、`CM_RUN≥1`、同点位 `af>2`（root 窗口）。
 - **边界与纪律**：生产改动仅 `mir2-rs/bins/game-svr/src/{smframe,main,pickwire}.rs`；`src/`(含 BotSrv) `sql/`
@@ -1053,5 +1059,23 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   = `characters.Id`）+ 机判命令 + 两向「改坏必红」；
 - `check_healthspellchanged_trigger.py`：T1 前置（`hp<max_hp`）/ T2（s2c 53 ≥1）/ T3（53 `body_len`
   = `--expect-body-len`，缺省由日志 `layout=` 推：`client-58 ⇒ 12` / `oracle-40 ⇒ 0`），
-  退出码 `0/1/2`，`--selftest` 8/8（含「满血 ⇒ T1 RED」「header-only ⇒ T3 RED」两向牙）；
+  退出码 `0/1/2`，`--selftest` 8/8（含「满血 ⇒ T1 RED」「header-only ⇒ T3 RED」两向牙；
+  **片㊶ 起为 9/9**，新增 `T1-only` 时打印 `INFO T2/T3 NOT CHECKED` 的文案牙，见下节）；
 - 证据：`187-healthspellchanged-trigger-precondition.md`、`188-gates.txt`、`189-boundary.txt`。
+
+### ㊶ ③「`af=2`」坐标口径机判订正 + 片㊵ 审查 Observation 收口（2026-10-14）—— `190`/`191`/`192`
+
+两件事合并为一片（**L 级：文档 + 只读夹具零生产代码**）：
+
+1. **③ 坐标口径订正（root 15:0x 第 3 条）**：把 `af=2` 的真机读数点与「确实无怪」的判据坐标**分开**——
+   `af=2` = 恰一对出现帧（`turn_pair` 对 `Show` 目标发 `SM_TURN(10)+SM_FEATURECHANGED(41)`，2 帧/目标）
+   ⇒ **出现帧管线有算有发**；但 root 的进世界点 `(297,629)` 是**框边缘点**（到 `(256,572)` 框 Chebyshev=7），
+   ③a 反向点**必须**用 `(291,666)`（到最近框 d=30，E=0.000）。机判重跑见 `190-…txt`。
+2. **审查 Observation 收口**：reviewer-5 O-1 / reviewer-6 O-1/O-2 的文案与静默面 ——
+   工具 docstring + `187` + `82-…runbook.md` 的「53 只在 `HP<MaxHP` 时发出」收紧为
+   「本窗口内 53 由周期恢复段发出，其前置为 `HP<MaxHP`」+ 边界表；只给 `--log` 时打印
+   `INFO T2/T3 NOT CHECKED（未给 --capture）`，selftest 8/8 → 9/9（新增文案牙）。
+   未扩判据面（reviewer-5 O-2 / reviewer-6 O-3 仅记录，见 `187` §7）。
+
+- 交付：`190-aoi-gap3-af2-coordinate-verdict.txt`（坐标口径真机＋MonGen 机判）、`191-gates.txt`、`192-boundary.txt`。
+- 真机 R 窗口（root 排）的判据不变：压血进图 ⇒ HUD `19/19` + `CM_RUN≥1` + 同点位 `af>2` + C# 同点位 s2c 对照。

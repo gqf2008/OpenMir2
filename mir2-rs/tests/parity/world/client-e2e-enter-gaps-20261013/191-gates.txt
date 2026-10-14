@@ -1,0 +1,72 @@
+191-gates.txt —— 片㊶ 四门禁 + 聚焦判据（③ 坐标口径订正 + 片㊵ 审查 Observation 收口；零生产代码）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / openmir2-worker-11 / 2026-10-14
+cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m2svr-target；--offline；零起栈、零游戏端口（仅共享 3306）
+交付 base = refs/heads/master = 1cda79225（片㊵ 已合入）；head = 本片提交
+====================================================================================================
+# 1) 四门禁
+$ cargo fmt --all -- --check
+fmt rc=0
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.47s
+clippy rc=0
+$ cargo test --workspace --offline --no-fail-fast
+101 suites · 1231 passed · 0 failed · 22 ignored · test_rc=0
+#   （与 master 基线一致：本片**零 Rust 改动** ⇒ 计数不变）
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。 · msgcodegen_rc=0
+
+# 2) 本片聚焦判据 A：工具 selftest 8/8 → 9/9（reviewer-6 O-1 新增文案牙）
+$ python -I -B check_healthspellchanged_trigger.py --selftest
+[PASS] selftest green-client58               rc=0 (want 0)
+[PASS] selftest green-oracle40-derived       rc=0 (want 0)
+[PASS] selftest red-precondition-full-hp     rc=1 (want 1)
+[PASS] selftest red-53-absent                rc=1 (want 1)
+[PASS] selftest red-53-header-only           rc=1 (want 1)
+[PASS] selftest red-53-mixed-lens            rc=1 (want 1)
+[PASS] selftest red-min53-2                  rc=1 (want 1)
+[PASS] selftest green-explicit-0             rc=0 (want 0)
+[PASS] selftest green-log-only-t23-skipped   rc=0 (want 0, msg~='INFO T2/T3 NOT CHECKED')
+SELFTEST OK (9/9) · rc=0
+
+# 2.1) 真机数据只读复跑：只给 --log ⇒ T1 命中且显式报 T2/T3 未检查
+$ python -I -B check_healthspellchanged_trigger.py --log E:/tmp/client-e2e/stack2/game-svr.out.log
+OK  T1 53 触发前置：1/2 条入图行 hp<max_hp（首条 hp=18<19 max_hp=19）
+INFO T2/T3 NOT CHECKED（未给 --capture）
+VERDICT GREEN   (rc=0)
+
+# 3) 本片聚焦判据 B：改坏必红（新增牙不是恒真）
+$ cp check_healthspellchanged_trigger.py E:/tmp/m2svr-b31-check/mut_no_info.py
+#   MUT-A：删掉「无 --capture ⇒ 打印 INFO T2/T3 NOT CHECKED」那条 append
+$ python -I -B E:/tmp/m2svr-b31-check/mut_no_info.py --selftest
+[PASS] selftest green-client58               rc=0 (want 0)
+...
+[FAIL] selftest green-log-only-t23-skipped   rc=0 (want 0, msg~='INFO T2/T3 NOT CHECKED')
+SELFTEST FAILED (8/9) · rc=1
+⇒ 删掉 INFO ⇒ **必红**（T1-only 静默 GREEN 会退化回来即可被咬住）
+
+# 4) 本片聚焦判据 C：③ 坐标口径（离线只读，MonGen 件）
+$ python -I -B check_mongen_dense_points.py --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt \
+      --map 0 --view-range 12 --point 297,629 --max-expected 0
+INFO (297,629) 框外；到最近生成框 Chebyshev=7 （gen=(256,572) range=50 count=50 name=鹿）；view_range=12 >= d ⇒ **框边缘**
+INFO (297,629) 窗口内期望出生怪数 E=1.294（view_range=12；只算出生）
+RED (297,629) E=1.294 > --max-expected 0.0
+RESULT: RED · rc=1        ← root 读数点**不是**真空点
+$ python -I -B check_mongen_dense_points.py --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt \
+      --map 0 --view-range 12 --point 291,666 --max-expected 0
+INFO (291,666) 框外；到最近生成框 Chebyshev=30 （gen=(211,629) range=50 count=50 name=鹿）；view_range=12 < d ⇒ 新出生的怪必在窗口外
+INFO (291,666) 窗口内期望出生怪数 E=0.000（view_range=12；只算出生）
+RESULT: GREEN · rc=0      ← ③a 反向点（真空点）用这个
+
+# 5) 相关既有工具 selftest（防连带回归）
+check_aoi_visibility_diag.py --selftest  ⇒ SELFTEST OK (9/9) · rc=0
+aoi_visibility_pair.py --selftest        ⇒ SELFTEST OK (11/11) · rc=0
+check_client_run_frames.py --selftest    ⇒ SELFTEST_PAIR OK (7/7) · rc=0
+check_client_s2c_frames.py --selftest    ⇒ SELFTEST GREEN · rc=0
+check_appearance_pairs.py --selftest     ⇒ SELFTEST GREEN · rc=0
+
+# 6) 证据 hash（LF/git-blob 口径）+ EOL
+$ python -I -B tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+写入 .../SHA256SUMS.txt（198 行，repo 口径） · GREEN: write 完成
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify ... --check-extra
+GREEN .../SHA256SUMS.txt  [repo 口径]  OK 198/198
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck ...
+EOLCHECK GREEN 199/199 件文本证据与仓库口径（LF）在 EOL 上一致

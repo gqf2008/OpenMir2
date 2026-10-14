@@ -7,9 +7,12 @@ cwd = 本证据目录；零起栈、零游戏端口（仅共享 3306 只读观�
 # 0) 结论（一句话）
 
 片㊴ 的修复（head `c61b9627a`，已合入 master `24725dfd5`）**正确**，但本卡剩下的 R 窗口
-**缺一条必要条件**：53 `SM_HEALTHSPELLCHANGED` **只在 `HP<MaxHP` 时**被发出；满血进图时
-53 永不发 ⇒ 窗口既证不了修复、也复现不了回归。本片把该前置与机判补齐（**L 级：文档 + 夹具工具，
-零生产代码**），并给出「改坏必红」的两向牙。
+**缺一条必要条件**：**本 R 窗口（进图后就地不动、同一 socket）内** 53 `SM_HEALTHSPELLCHANGED` 由
+**周期恢复段**发出，其**前置为 `HP<MaxHP`**；满血进图时 53 永不发 ⇒ 窗口既证不了修复、
+也复现不了回归。本片把该前置与机判补齐（**L 级：文档 + 夹具工具，零生产代码**），并给出「改坏必红」的两向牙。
+
+> 措辞边界（片㊶ 收紧，审查 reviewer-5 O-1 / reviewer-6 O-2）：**不要**读成「53 **只**在 `HP<MaxHP` 时发出」；
+> oracle 另有不依赖该前置的发点，见 §2 的边界表。
 
 # 1) 独立复核：修复本身逐字节成立（作者侧只读各读一遍）
 
@@ -30,9 +33,22 @@ cwd = 本证据目录；零起栈、零游戏端口（仅共享 3306 只读观�
 
 # 2) 本片真正补的洞：R 窗口没有「保 `HP<MaxHP`」这条前置
 
-53 的三个发点（Rust 生产选路 `sm_healthspellchanged_frame`）都只在**血量/魔法变化**时触发；
-oracle 侧对应 `HealthSpellChanged()` 的调用点是 `BaseObject.Base.cs:55/68/109/244`（`Run()` 体力/魔力段）
-与 `BaseObject.cs:974`（`IncHealthSpell`）等 —— **满血满魔时就地不动 ⇒ 永不发 53**。
+**本 R 窗口的场景** = 进图后**就地不动、同一 socket、不战斗**；该场景下 53 由**周期恢复段**发出，
+其守卫是 `HP < MaxHP`（`BaseObject.Base.cs:44-70`：`(HP<MaxHP && HealthTick>=HealthFillTime)` /
+`(MP<MaxMP && …)` → `HealthSpellChanged()`）。Rust 生产选路 `sm_healthspellchanged_frame` 的三个
+调用点也都只在**血量/魔法变化**时触发 —— **满血满魔就地不动 ⇒ 永不发 53**。
+
+**边界表（措辞收紧，片㊶；这些发点不依赖上面的守卫，但不在本窗口场景内）**：
+
+| 发点（oracle） | 守卫 | 说明 |
+| --- | --- | --- |
+| `BaseObject.Base.cs:44-70`（恢复段） | `HP<MaxHP` / `MP<MaxMP` | **本窗口的 53 来源**（T1 前置取 `hp<max_hp`） |
+| `BaseObject.Base.cs:109` | `HealthTick<0 && HP>1` | 饥饿掉血；守卫是 `HP>1`，可在 `HP==MaxHP` 触发 |
+| `BaseObject.Base.cs:244` | `needRecalc` 且 `HP>MaxHP` | 重算后钳到 `MaxHP-1` |
+| `BaseObject.Base.cs:628` | — | `RM_MAGSTRUCK` 受击 |
+| `BaseObject.cs:973-975` | — | `IncHealthSpell`（升级/属性重算），**无条件**调 `HealthSpellChanged()` |
+
+⇒ T1 取 `hp<max_hp` 是本「进图不动」窗口的**充分前置**（有意更严），不是对全部 53 发点的等价刻画。
 
 **既有 7 份真机 capture 的 53 计数（`ident==53`，本片现场重算）**：
 
@@ -70,7 +86,7 @@ capture-run-ability-before-oracle40.jsonl   53count=0
 
 退出码 `0`=GREEN / `1`=RED / `2`=PREREQ_RED（没输入、文件缺、日志无入图行、不可解析）。
 
-**selftest（本片现场，8/8）**：
+**selftest（本片现场，8/8；片㊶ 收紧文案后为 9/9）**：
 
 ```
 [PASS] selftest green-client58               rc=0 (want 0)
@@ -81,7 +97,8 @@ capture-run-ability-before-oracle40.jsonl   53count=0
 [PASS] selftest red-53-mixed-lens            rc=1 (want 1)
 [PASS] selftest red-min53-2                  rc=1 (want 1)
 [PASS] selftest green-explicit-0             rc=0 (want 0)
-SELFTEST OK (8/8)
+[PASS] selftest green-log-only-t23-skipped   rc=0 (want 0, msg~='INFO T2/T3 NOT CHECKED')  ← 片㊶ 新增（reviewer-6 O-1）
+SELFTEST OK (9/9)   ← 片㊵ 时为 8/8
 ```
 
 **真机数据上现场跑（只读）**：
@@ -119,3 +136,15 @@ VERDICT RED   (rc=1)
 * 未起栈、未占游戏端口；未动共享主检出；未 merge、未自签 review。
 * 残留（归 root 窗口，不属本片）：真机 HUD/`CM_RUN`/`af` 读数与 C# 同点位 s2c 对照仍要 root 独占窗口；
   本片只是让那次窗口**必然覆盖** 53 路径。
+
+# 7) 片㊶ 追补：审查 Observation 收口（2026-10-14）
+
+| 来源 | 条目 | 处理 |
+| --- | --- | --- |
+| reviewer-5 O-1 | 「53 只在 `HP<MaxHP` 时发出」措辞比 oracle 强 | 已收紧：本文档 §0/§2 + 工具 docstring + `82-…runbook.md` §0/§1/§2b → 「本窗口内 53 由周期恢复段发出，其前置 `HP<MaxHP`」，并列出非该前置的 oracle 发点（§2 边界表） |
+| reviewer-5 O-2 | 缺省 `body_len=12` 在未知 layout 时 | 仅记录（fail-closed 偏 RED 侧、不产生假绿）；工具 docstring 新增「已知边界」，未改行为 |
+| reviewer-6 O-1 | 只给 `--log` 时 T1 过即静默 GREEN | 已改：无 `--capture` ⇒ 显式打印 `INFO T2/T3 NOT CHECKED（未给 --capture）`；selftest 新增 `green-log-only-t23-skipped` 文案牙（8/8 → 9/9），删掉该 INFO ⇒ 必红 |
+| reviewer-6 O-2 | 同 reviewer-5 O-1 | 同 O-1 |
+| reviewer-6 O-3 | T3 只判尾长不判内容 | 仅记录（内容由片㊴ `smframe` 单测 + 金标准覆盖）；工具 docstring 新增「已知边界」，未扩判据面 |
+
+本条为 **L 级**（文档 + 只读夹具工具），判据 = `--selftest` 9/9 + 改坏必红（删 INFO ⇒ `green-log-only-t23-skipped` FAIL）。
