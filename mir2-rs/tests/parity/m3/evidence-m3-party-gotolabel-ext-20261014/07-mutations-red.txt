@@ -1,0 +1,22 @@
+# 改坏必红（4 条，每条只改一处；改后跑定向用例，再从 git 备份还原）
+# 还原后 git status 干净（仅本证据目录未跟踪）
+
+### MUT1: 删除 party_create_group 的 GotoLabel("@GroupCreate") 发射
+  - world/pary_vectors: rc=101 fails=['create_group_matches_oracle_call_order_and_dequeue_order'] results=[('FAILED', '15', '1')]
+  - game-svr/party: rc=101 fails=['tests::party_gotolabel_runs_qfunction_script_at_queued_position'] results=[('FAILED', '1', '1')]
+
+### MUT2: run_party_goto_label 强制早退（脚本永不执行）
+  - world/pary_vectors: rc=0 fails=[] results=[('ok', '16', '0')]
+  - game-svr/party: rc=101 fails=['tests::party_gotolabel_runs_qfunction_script_at_queued_position'] results=[('FAILED', '1', '1')]
+
+### MUT3: PRIO_RM_MERCHANTSAY 1 -> 253（脚本说词排到组队说词之后）
+  - world/pary_vectors: rc=101 fails=['group_close_leader_emits_red_sysmsg_only', 'create_group_matches_oracle_call_order_and_dequeue_order', 'del_member_regular_keeps_leader_with_cancel_and_delmem_ok', 'group_close_non_leader_calls_del_member_and_clears_allow_group', 'die_member_triggers_oracle_del_member_and_group_survives'] results=[('FAILED', '11', '5')]
+  - game-svr/party: rc=101 fails=['tests::party_gotolabel_runs_qfunction_script_at_queued_position'] results=[('FAILED', '1', '1')]
+
+### MUT4: 删除 party_group_close_em 的 GotoLabel("@GroupClose") 发射
+  - world/pary_vectors: rc=101 fails=['group_close_leader_emits_red_sysmsg_only', 'group_close_non_leader_calls_del_member_and_clears_allow_group'] results=[('FAILED', '14', '2')]
+  - game-svr/party: rc=0 fails=[] results=[('ok', '2', '0')]
+
+git status after restore:
+?? mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014/
+

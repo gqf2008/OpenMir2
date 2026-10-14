@@ -1,0 +1,23 @@
+# 复现命令清单（M3⑦ gotolabel-ext）
+# 全部在 worktree E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3pt/mir2-rs
+# CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target（检出外）；零起栈、零端口。
+# base(origin/master)=057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce  head=cefdf1586d7238cdcf18a8fc4a76b0c15be30c03
+
+# 0) 四门禁
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo run -p msgcodegen -- --check
+
+# 1) 新用例（跑得快，定向）
+cargo test -p mir2-world  --test party_vectors
+cargo test -p game-svr   --bin game-svr party
+
+# 2) 改坏必红（4 条；每条只改一处，跑后从备份还原）：见 07-mutations-red.txt
+
+# 3) 边界
+git diff --name-only 057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce HEAD -- src sql MirClient
+
+# 4) 本包自检
+python -I tools/evidence-hash/verify_sha256sums.py verify mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014

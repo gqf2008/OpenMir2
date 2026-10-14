@@ -1,0 +1,12 @@
+# base(origin/master)=057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce  head=cefdf1586d7238cdcf18a8fc4a76b0c15be30c03
+# cmd: git diff --name-only 057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce HEAD -- src sql MirClient
+# (以上为空 = 边界 OK)
+
+# cmd: git diff --stat 057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce HEAD -- . ':(exclude)mir2-rs/tests/parity/m3/evidence-m3-party-gotolabel-ext-20261014'
+ mir2-rs/bins/game-svr/src/main.rs           | 316 +++++++++++++++++++++++++++-
+ mir2-rs/bins/game-svr/src/party.rs          |  57 +++--
+ mir2-rs/bins/game-svr/src/record.rs         |   6 +-
+ mir2-rs/crates/world/src/party.rs           |  71 ++++++-
+ mir2-rs/crates/world/tests/party_vectors.rs |  40 +++-
+ mir2-rs/tests/parity/whitelist.md           |   3 +-
+ 6 files changed, 456 insertions(+), 37 deletions(-)

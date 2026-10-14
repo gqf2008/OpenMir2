@@ -1,0 +1,45 @@
+M3⑦ gotolabel-ext（FunctionNPC.GotoLable 四个组队 label 宿主接线）oracle 锚点
+卡：openmir2-m3-party-gotolabel-ext；base = 057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce（origin/master）；行号均在本仓库 src/ 实测（2026-10-14）
+
+== A. 触发点（PlayObject.Operate.cs）==
+ClientGroupClose      :787-808   GroupOwner==0 ⇒ AllowGroup=false 早退（**不触发**）；
+                                 非团长 ⇒ groupOwnerPlay.DelMember(this)+AllowGroup=false；
+                                 团长自己 ⇒ SysMsg("如果你想退出...", Red, Hint)；
+                                 两分支尾 if (SystemShare.FunctionNPC != null)
+                                   FunctionNPC.GotoLable(this, "@GroupClose", false)   :806
+ClientCreateGroup     :810-845   守卫 -1/-2/-3/-4 早退；成功尾（SM_CREATEGROUP_OK + SendGroupMembers 之后）
+                                   GotoLable(this, "@GroupCreate", false)             :843
+ClientAddGroupMember  :847-883   -1(非团长)/-5(Count > Max 严格大于)/-2/-3/-4 早退；成功尾
+                                   GotoLable(this, "@GroupAddMember", false)          :881
+ClientDelGroupMember  :885-909   -1/-2/-3 早退；成功尾（DelMember + SM_GROUPDELMEM_OK 之后）
+                                   GotoLable(this, "@GroupDelMember", false)          :907
+
+收包派发：PlayObject.Message.cs:914-935
+  CM_GROUPMODE(1019) :914-929  nParam2==0 ⇒ ClientGroupClose()；否则 AllowGroup=true；
+                               随后按 AllowGroup 发 SM_GROUPMODECHANGED(659)
+  CM_CREATEGROUP(1020) :930-931 / CM_ADDGROUPMEMBER :932-933 / CM_DELGROUPMEMBER :934-935
+
+== B. 宿主与脚本（SystemShare.FunctionNPC）==
+GameApp.cs:87              SystemShare.FunctionNPC = new Merchant();
+NormNpc.cs:1889-1891       NormNpc.GotoLable(playObject, sLabel, boExtJmp) ⇒ ScriptEngine.GotoLable(this, ...)
+ScriptEngine.cs:987-998    GotoLableSendMerChantSayMsg：说词行 = normNpc.ChrName + '/' + sMsg；
+                           boFlag ⇒ SendPriorityMsg(RM_MERCHANTSAY,... High) 否则 SendMsg(normNpc, RM_MERCHANTSAY,...)
+Messages.cs:304/651        SM_MERCHANTSAY=643 / RM_MERCHANTSAY=11009
+PlayObject.Message.cs:1702-1724  RM_MERCHANTSAY 出队 ⇒ SM_MERCHANTSAY(643)（尾 EncodeString）
+
+== C. 队列优先级（本卡的顺序依据）==
+BaseObject.Base.cs:25-31   Run() 的 while(GetMessage) 同批出队，按 (byte)wIdent 升序；
+BaseObject.Message.cs:94   MsgQueue.Enqueue(sendMessage, (byte)wIdent)
+SendDefMessage/立即帧      Operate 期直接下发（源码调用序）
+优先级字节（(byte)ident）：
+  RM_MERCHANTSAY(11009) & 0xFF = 1    ← GotoLable 脚本说词（本卡建模为“排队桶最前”）
+  RM_GROUPCANCEL(10140) & 0xFF = 156
+  RM_SYSMESSAGE(11004) & 0xFF = 252
+  RM_GROUPMESSAGE(11005) & 0xFF = 253
+⇒ 同一 Run 的线上序 = 立即帧（源码序）→ 排队帧按优先级升序（**脚本说词最先**）。
+⇒ 本仓 crates/world/src/party.rs 把 PartyEvent::GotoLabel 用 em.later(PRIO_RM_MERCHANTSAY=1, ..)
+   入排队桶；Emitter::finish = immediate ++ queued(按优先级稳定排序)。
+
+== D. 不在本卡 ==
+@GroupRecall GameCommand（src/Modules/GameCommand/Commands/GroupRecallCommand.cs:12-66）：本仓无
+聊天 '@' 命令派发框架 + Permission/RecallSuite/RecallHuman 未建模 ⇒ 须另立卡（见 lane-repin 登记）。
