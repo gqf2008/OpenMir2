@@ -1415,3 +1415,37 @@ burst48 对 brief 顶部 root 2026-10-14 15:0x 的「二分 + 修 + 改坏必红
 - 边界与纪律：改动 = 本卡证据目录内 5 件（`239`/`240`/`241` + README + SHA256SUMS）；零 `.rs`/`.toml`/`.py`/`.ps1`；
   零起栈、零游戏端口、零进程；共享 3306 只读 SELECT 一次（无写入）；未动共享主检出 / root 活脚本 / 泄漏栈；未 merge、未自签。
 - 四门禁/机判读数见 `240-gates.txt`，边界/冻结面见 `241-boundary.txt`；原始读数：`E:/tmp/m2svr-burst50/`。
+
+### 58) 冻结客户端 HIGHHP 家族的**独立源码复核**（不采信既有 `EXPECTED` 表）+ R 窗口就绪 fresh（R1..R7）（2026-10-15，tag `m2svr`）—— `242`/`243`/`244`
+
+burst53 对 head 项 ① 的修复链（53 `TCharDesc` 尾 / 52 58B `TAbility` / 31 客户端布局）做**独立源码复核**：
+此前各片都以 `verify_client_highhp_family.py` 的 `EXPECTED` 表为准；本片**直接读真冻结客户端源码**
+（`E:/Users/gxh/Documents/GitHub/MirClient @ c61d912d`，= 该工具 `DEFAULT_CLIENT_ROOT`），逐字段核对
+记录布局与处理器读法，**不用工具结论回代**。附带 fresh 复核 R 窗口就绪（R1..R7 + 活脚本 G5）。
+
+- **出处回代（防「拿错检出」）**：权威检出 = `E:/Users/gxh/Documents/GitHub/MirClient @ c61d912d`
+  （`Grobal2.pas:39 HIGHHP = True`）；`/e/tmp/rev-hh/Source/Common/Grobal2.pas:39` 是 `HIGHHP = False` 的
+  **另一份**检出 ⇒ 只按前者。
+- **记录面**：`TCharDesc = packed record Feature/Status/StatusEx: Integer end`（`Grobal2.pas:3515`，**12B**）；
+  `TAbility`（`Grobal2.pas:2167`，HIGHHP=True）⇒ **HP DWORD@22 / MP@26 / MaxHP@30 / MaxMP@34 / Exp@38 /
+  MaxExp@42 / 尾 6 个 Word**，总 **58B**；oracle 40B 在 @22 是 `Exp`（本部署=0）⇒ 客户端 `HP` 读成 0。
+- **处理器面**：53（`ClMain.pas:10220`，HIGHHP 支**不读 12B 头**、从尾解 `TCharDesc`）；
+  31（`:10269`，`param/tag` 拼 HP + 尾 `wl.Param1` 取 MaxHP）；52（`:10096`，**无条件**
+  `DecodeBuffer(body, @m_Abil, SizeOf(TAbility))`，与 HIGHHP 无关 ⇒ 58B 是硬要求）。
+- **跑闸**：`TActor.CanRun`（`Actor.pas:2162`）= `HP < RUN_MINHEALTH(10)` ⇒ -1；`ClMain.pas:2193`
+  仅 `g_boCanStartRun or g_nRunReadyCount>=1` 且 `crun>0` 才发 `CM_RUN(3013)` ⇒ HUD `HP=0` 恒不发
+  （与 root 实测 `CM_RUN=0` 吻合；② 由 ① 派生，非第二个独立缺陷）。
+- **Rust 侧逐字段对**：`record.rs:345 encode_ability_client`（58B 偏移与上表同）+
+  `smframe.rs:282 sm_healthspellchanged_client`（尾 = `edcode::encode([HP,MP,MaxHP] i32 LE)` = 12B，
+  与客户端 `DecodeBuffer` 同码）。
+- **R 窗口就绪 fresh**：替身源 `E:/tmp/m2svr-window-origin` + 预构建六件
+  `E:/tmp/m2svr-window-target` ⇒ `check_rust_window_preflight.py` **R1..R7 全 OK / `RESULT: GREEN`**
+  （R7 出处清单 `source_head=da2df1fdbd`，6 件 exe sha256 逐字节一致）；活脚本仍 **G5×2 RED /
+  `WINDOW_READY=NO`**（`repo=` 指共享主检出、`tgt=` 指 `openmir2-merge-target`）。
+- **泄漏栈 fresh**：`game-svr.exe` pid **30284** 起于 `2026-10-14 14:55`（**修复前** exe）；开窗前须
+  `start_rust_stack.ps1 -RustBinDir E:\tmp\m2svr-window-target\debug -LogDir E:\tmp\client-e2e\stack2 -Stop`。
+- 判级 = **L**（只读源码/机判复核 + 证据；零生产代码）。卡级 **R** 真机 ①②③ 仍归 root 独占窗口；
+  root 侧剩余动作 = 活脚本换替身源 + 停泄漏栈，owner 侧 = O-3 HIGHHP 白名单签字。
+- 边界与纪律：改动 = 本卡证据目录内 4 件（`242`/`243`/`244` + README + SHA256SUMS）；零 `.rs`/`.toml`/
+  `.py`/`.ps1`/`.cs`；零起栈、零游戏端口、零进程；共享 3306 只读；未动共享主检出 / root 活脚本 / 泄漏栈；未 merge、未自签。
+  四门禁/机判读数见 `243-gates.txt`，边界/冻结面见 `244-boundary.txt`。
