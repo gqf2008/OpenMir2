@@ -988,17 +988,23 @@ fn run_party_goto_label(
         );
         return;
     };
-    // 取数先按值抽出（避免与后面的 `saves.get_mut` 借用冲突）；口径与 `@Login` 一致。
-    let level = saved
+    // `@Login` 同法取数；但组队发生在**进世界之后**，此时 `PlayObject.Gold/ItemList/WAbil`
+    // 的运行时真身在 `ground_sessions`（`saves.record` 只在读档/存档时刷新）⇒ 优先取运行时，
+    // 无会话（已断线/未进世界）回退到读档记录。`QuestFlag` 运行时唯一存储就在 `saves.record`。
+    let map_name = saved.enter_map.clone();
+    let quest_flag = saved.record.data.quest_flag.clone();
+    let rec_level = saved
         .record
         .data
         .abil
         .as_ref()
         .map_or(1, |a| i32::from(a.level));
-    let gold = saved.record.data.gold;
-    let bag = saved.record.data.bag_items.clone();
-    let quest_flag = saved.record.data.quest_flag.clone();
-    let map_name = saved.enter_map.clone();
+    let rec_gold = saved.record.data.gold;
+    let rec_bag = saved.record.data.bag_items.clone();
+    let runtime = ground_sessions.get(chr_name);
+    let level = runtime.map_or(rec_level, |sg| i32::from(sg.state.wabil.level));
+    let gold = runtime.map_or(rec_gold, |sg| sg.state.gold);
+    let bag = runtime.map_or(rec_bag, |sg| Some(bag_items_for_save(&sg.state.item_list)));
     let (group_owner, group_member_jobs) = world.party_script_group_snapshot(actor);
     // 脚本取数走**同一条** `world.rng`（临时移出后归位，与 `@Login`/`step_mon_gen` 同法）。
     let mut rng = std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
@@ -8490,6 +8496,11 @@ mod tests {
             },
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        // 运行时 Gold（`PlayObject.Gold`）在会话态；脚本不读/不改它 ⇒ 回写后应保持。
+        // 令它与 `saves.record.data.gold`（默认 0）不同，钉住「运行时优先于读档记录」的取数口径。
+        let mut sg_l = test_session_ground(l);
+        sg_l.state.gold = 12345;
+        ground_sessions.insert("L".into(), sg_l);
         let catalog = game_svr::ability::StdItemCatalog::new();
 
         let _ = drain(&mut rx0);
@@ -8550,6 +8561,17 @@ mod tests {
             mir2_protocol::edcode::decode(&say[12..]),
             gbk_encode("QFunction/grp"),
             "GotoLable 说词行 = normNpc.ChrName + '/' + sMsg"
+        );
+        // 取数口径：运行时 `PlayObject.Gold`（ground_sessions）优先于读档记录（saves）；脚本未改 ⇒ 回写后不变。
+        assert_eq!(
+            ground_sessions.get("L").unwrap().state.gold,
+            12345,
+            "运行时 Gold 应保持 12345（若误取 saves 的陈旧 0 则此处必红）"
+        );
+        assert_eq!(
+            saves.get("L").unwrap().record.data.gold,
+            12345,
+            "saves 回写同步为运行时 Gold"
         );
     }
 
