@@ -1,17 +1,24 @@
 145-gates.txt —— 卡 openmir2-client-e2e-enter-gaps 片㉙ 四门禁 + 离线判据
-（cwd = mir2-rs，CARGO_TARGET_DIR = E:/tmp/m2svr-target；base = origin/master 6dba8719d）
+（cwd = mir2-rs，CARGO_TARGET_DIR = E:/tmp/m2svr-target）
 本片只加 1 个离线判据脚本 .py + 窗口就绪门注册 1 行 + 证据 .txt/README/SHA256SUMS ⇒ 编译面不受影响；仍全跑。
+⚠ 本读数在**合并 origin/master 之后**的树上重跑（片㉙ 开工时 master = 6dba8719d；交片时 master 已推进到
+   0002ed39c 且**已含片㉗/㉘**，本分支 `git merge origin/master` 干净合入 ⇒ 门禁读数取合并树）。
+本 patch 的 base = origin/master 0002ed39c；`git diff --name-status origin/master HEAD` 只列本片 6 路径（见 146）。
 ====================================================================================================
 ### cargo fmt --all -- --check
 FMT_RC=0
 
 ### cargo clippy --workspace --all-targets -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.69s
+    Checking mir2-envir v0.1.0 …
+    Checking mir2-parity-tests v0.1.0 …
+    Checking game-svr v0.1.0 …
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.48s
 CLIPPY_RC=0
 
 ### cargo test --workspace --no-fail-fast
 TEST_RC=0
-（明细汇总：101 suites · 1205 passed · 0 failed · 22 ignored）
+（明细汇总：101 suites · 1211 passed · 0 failed · 22 ignored）
+（对照：pre-merge 6dba8719d 树为 1205 passed；差值 6 = master 侧其它车道随合并带入的用例）
 
 ### cargo run -p msgcodegen -- --check
 msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
@@ -50,7 +57,7 @@ capture=capture-client-viewrange12-seed42.jsonl
 RESULT: GREEN
 rc=0
 
-### 改坏必红（两条，均 RED/rc=1）
+### 改坏必红（三条，均 RED / rc=1 或 2）
 ### MUT-1：SEED 0xAC→0xAD（解码密钥错）
 $ python -I -B mut1.py --capture capture-client-viewrange12-seed42.jsonl --min-pairs 13 --expect-names 稻草人=10,鹿=3
   actor=0x0000032a (294,611) feature=0x011a0113 raceImg=19 name=纯耻墒.344/
@@ -72,6 +79,23 @@ $ python -I -B mut2.py --capture capture-client-viewrange12-seed42.jsonl --min-p
   RED: actor 0x00000332 体长解码 8 != 帧声明 18
 RESULT: RED
 rc=1 — 期望 RED(1)
+### MUT-3：把 check_appearance_pairs.py 从证据目录移走（窗口就绪门 G2 必须 PREREQ，不许静默绿）
+$ mv check_appearance_pairs.py <tmp>; python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --check-dir .
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+PREREQ G2 缺判据工具 ['check_appearance_pairs.py']（--check-dir=.）
+WINDOW_READY=NO
+RESULT: PREREQ_RED
+rc=2 — 期望 2 (PREREQ)
+
+$ mv <tmp> check_appearance_pairs.py（还原）
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --check-dir .   # 还原后
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0 — 期望 0 (GREEN)
 
 ### ③a/③b 选点期望出生怪数（MonGen 几何；与 105 的 §C 表一致）
 $ python -I -B check_mongen_dense_points.py --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --map 0 --view-range 12 --point "291,666" --max-expected 0
