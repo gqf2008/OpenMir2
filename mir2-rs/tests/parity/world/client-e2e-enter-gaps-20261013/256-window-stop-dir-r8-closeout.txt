@@ -1,0 +1,73 @@
+256 — R8 停栈建议收口：`-LogDir` 不再写死，必须由**持有占用 pid 的 pid 文件**校验（片62 dev）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `dd48c05a0`；head = 本片提交；cwd = mir2-rs；CARGO_TARGET_DIR=/e/tmp/m2svr-target
+====================================================================================================
+
+# 0) 为什么还要动 R8（不是文案，是 fail-open）
+
+`start_rust_stack.ps1 -Stop` 只读**自己 `-LogDir` 下**的 `rust-stack.pid.json`；目录选错 ⇒
+静默 no-op（`NOTHING_TO_STOP`）。片60 的 R8 判 RED 时把 `-LogDir E:/tmp/client-e2e/stack2` **写死**
+（`check_rust_window_preflight.py` 旧 `WINDOW_SLOT_STOP_CMD`）⇒ 换了窗口目录（例如 root 活脚本的
+`logdir='E:\tmp\client-e2e\stack'`，见 `client-e2e-window.sh:7`）的泄漏栈时，操作者照抄该命令会
+**以为已停干净**，随后起窗又撞上旧栈 ⇒ 再测修复前镜像（= 2026-10-14 15:0x 假回归的同一形态）。
+这正是本卡反复打的「假绿/白烧窗」类，只是从「假绿=YES」换成了「假绿=已停栈」。
+
+# 1) 改（唯一逻辑变更：停栈目录必须被 pid 文件校验）
+
+`mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py`
+
+- 删常量 `WINDOW_SLOT_STOP_CMD`（写死 stack2）→ 新增
+  `SLOT_LOG_DIR_DEFAULT`（`:169`，仍是 `E:/tmp/client-e2e/stack2`，向后兼容）、
+  `SLOT_PID_FILE_NAME`（`:170`）、`slot_stop_command(dir)`（`:173`）。
+- 新增 `load_slot_pid_file(slot_log_dir)`（`:413`）：读 `<dir>/rust-stack.pid.json` ⇒ `(pids, err)`；
+  缺文件/坏 JSON/非 array ⇒ `err` 非空（fail-closed）。
+- 新增 `slot_stop_dir_findings(occupied_pids, slot_log_dir, pid_file_pids, pid_file_err)`（`:439`）：
+  - 无占用端口 ⇒ 零行（不误伤干净槽位）；
+  - pid 文件读不了 / **不持有**占用端口的 pid ⇒ 追加 RED，且只打占位
+    `<持有这些 pid 的 rust-stack.pid.json 所在目录>`（**不打印任何可照抄的固定目录**）；
+  - 持全部占用 pid ⇒ OK 行 + 用**该目录**的命令。
+- `window_slot_findings(...)`（`:477`）加参 `slot_log_dir/pid_file_pids/pid_file_err`：占用行里的
+  命令只在**校验通过**时用真实目录，否则用占位符。
+- `main()`（`:1360`）新增 `--slot-log-dir`（默认 `SLOT_LOG_DIR_DEFAULT`），只在**真的探到端口占用**时
+  读 pid 文件（无占用不读、不报）。
+- docstring R8 段（`:55-64`）写清旧写死的失败模式与 `--slot-log-dir` 语义。
+
+# 2) 真机（本机泄漏栈就是 stack2；只读真探，零起栈/零端口/零 kill）
+
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin \
+    --target-dir E:/tmp/m2svr-window-target \
+    --provenance E:/tmp/m2svr-window-target/window-provenance.json
+  R1（5 修复提交）OK / R2 OK / R3 OK / R4（4 点）OK / R5 OK / R6 OK / R7 OK
+  [OK] R8 停栈目录校验：E:/tmp/client-e2e/stack2/rust-stack.pid.json 持有全部占用端口的 pid
+       （[9100, 13052, 29240, 30284, 33132, 34944]）      ← 新行：本机建议命令**确实**可停该栈
+  RED  R8: 窗口槽位被占 —— 9 端口 LISTENING（pid 见上）
+  RED  R8: 在跑的 game-svr.exe(pid 30284) 来自 E:\tmp\openmir2-merge-target\debug\（异源/修复前）
+  RESULT: RED   rc=1
+⇒ **本片不改变卡级结论**：开窗唯一剩余阻塞仍是 R8（泄漏栈属 root，本线不代停）；本片只保证
+  给 root 的**停栈命令是对的**（且当它不是时 fail-closed 说出来）。
+
+# 3) 缺陷复现 + 改坏必红
+
+原始件 `257-redcheck-window-stop-dir.txt`（OLD/HEAD 与 NEW 同探针对比 + MUT-A/MUT-B）：
+- 探针 pid **不在** stack2 的 pid 文件里：OLD 恒打 `-LogDir E:/tmp/client-e2e/stack2 -Stop`（误导）；
+  NEW 打占位并追加 RED（点名 `[424242]` 不持有）。
+- MUT-A（mismatch 检查永不触发）/ MUT-B（`validated` 恒真）⇒ 新牙
+  `r8-stop-dir-mismatch-red` / `r8-stop-dir-missing-red` **FAIL**，`SELFTEST FAILED (64/66)`；
+  还原后仓内 sha256 = `ca033e23c44038450794a558ab7821687dcd63353d03c5cd283967493e384a85`（与改前逐字节相同）。
+
+# 4) 自检（fresh）
+
+$ python -I -B check_rust_window_preflight.py --selftest   ⇒ SELFTEST OK (66/66)   （57 → 66：+8 停栈目录牙 +1 默认值牙）
+$ python -I -B window_handoff.py --selftest                ⇒ SELFTEST OK (107/107) （本片未动该件）
+
+新增/改动的牙：`r8-stop-dir-validated-names-owning-dir` / `r8-stop-dir-mismatch-red` /
+`r8-stop-dir-missing-red` / `stop-dir-no-occupied-noop` / `stop-dir-owns-pids-ok` /
+`load-pid-file-ok` / `load-pid-file-missing-err` / `load-pid-file-bad-json-err` /
+`slot-log-dir-default-preserved`；并把 `r8-occupied-and-stale-exe-red` 改为带**已校验** pid 文件
+（ok=1/prob=2）。
+
+# 5) 判级与纪律
+
+判级 **L**（就绪工具/文档，零生产代码；无 RNG 抽数/时序/落库/战斗数值面）。零起栈 / 零占端口 /
+零 kill；未动共享主检出 / root 活脚本 / 泄漏栈；未 merge、未自签 review。卡级 **R** 真机 ①②③
+仍归 root 独占窗口。

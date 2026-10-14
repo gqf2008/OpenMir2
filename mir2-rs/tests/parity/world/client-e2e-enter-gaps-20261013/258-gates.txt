@@ -1,0 +1,60 @@
+258 — 四门禁 + 工具自检 + 真探/聚合门（片62 dev：R8 停栈目录校验）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `dd48c05a0`；head = 本片提交；cwd = mir2-rs；CARGO_TARGET_DIR=/e/tmp/m2svr-target
+====================================================================================================
+
+# 0) 边界声明
+
+本片**零生产代码**：无 `.rs`/`.toml`/`.ps1`/`.cs`；`src/ sql/ MirClient/ mir2-rs/crates/protocol/
+mir2-rs/crates/storage/ mir2-rs/bins/ src/BotSrv/ mir2-rs/tests/parity/m3/` 全空。改动全部在
+`mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`：1 件工具（`check_rust_window_preflight.py`）
++ `256`/`257`/`258`/`259` + README §62 + SHA256SUMS。见 `259-boundary.txt`。
+
+# 1) 四门禁（原始件 `E:/tmp/m2svr-burst-next/gates-{fmt,clippy,test,msgcodegen}.txt`）
+
+$ cargo fmt --all -- --check
+rc=0（无输出）
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.36s
+rc=0
+
+$ cargo test --workspace --offline
+101 result-lines：1233 passed / 0 failed / 22 ignored（rc=0；无 FAILED/panicked）
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+# 2) 工具自检（fresh；原始件 `E:/tmp/m2svr-burst-next/03-selftest-preflight.txt`）
+
+$ python -I -B check_rust_window_preflight.py --selftest   ⇒ SELFTEST OK (66/66)    （base 57/57）
+$ python -I -B window_handoff.py --selftest                ⇒ SELFTEST OK (107/107)  （本片未动该件）
+
+# 3) 真探 fresh（只读；未注入探针；带出处清单；原始件 `E:/tmp/m2svr-burst-next/04-preflight-real.txt`）
+
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin \
+    --target-dir E:/tmp/m2svr-window-target \
+    --provenance E:/tmp/m2svr-window-target/window-provenance.json
+  R1（5 修复提交）OK / R2 OK / R3 OK / R4（4 点）OK / R5 OK / R6 OK
+    R6 行：构建源 HEAD=da2df1fdbd 相对基线 origin/master@dd48c05a03 生产路径零差异
+    R7 行：出处清单 source_head=da2df1fdbd，6 件 exe sha256 逐字节一致
+  **新** [OK] R8 停栈目录校验：E:/tmp/client-e2e/stack2/rust-stack.pid.json 持有全部占用端口的 pid
+        （[9100, 13052, 29240, 30284, 33132, 34944]）
+  RED R8 ×2：9 端口 LISTENING（5000/5100/5500/5600/5700/6000/7000/7100/7200）
+             + 在跑 game-svr.exe(pid 30284) 来自 E:\tmp\openmir2-merge-target\debug\（异源/修复前）
+  RESULT: RED   rc=1
+
+# 4) 聚合门（入库替身脚本口径；原始件 `E:/tmp/m2svr-burst-next/05-handoff-standin.txt`）
+
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin \
+    --target-dir E:/tmp/m2svr-window-target --window-script ./client-e2e-window.fixed.sh.txt
+  OK  G2 ×11（含 `OK G2 check_rust_window_preflight.py --selftest`）
+  OK  G5 ×2（替身脚本 repo=/tgt= 与本计划一致）
+  RED G1（唯一原因 = R8，见 §3）⇒ `WINDOW_READY=NO`  rc=1
+⇒ **本片不改变卡级结论**：开窗唯一剩余阻塞仍是 R8（泄漏的修复前栈，属 root；本线不代停）。
+
+# 5) 判级与纪律
+
+判级 **L**（就绪工具/文档，零生产代码；无 RNG 抽数/时序/落库/战斗数值面）。零起栈 / 零占端口 /
+零 kill；未动共享主检出 / root 活脚本 / 泄漏栈；未 merge、未自签 review。

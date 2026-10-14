@@ -1,0 +1,40 @@
+257 — 改坏必红 / 缺陷复现：R8 停栈目录校验（片62 dev；回应 brief 顶部 + R8 假绿同类）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `dd48c05a0`；本件全部为只读复算 + `E:/tmp` 内变异（仓内零改动）
+====================================================================================================
+
+# 1) 缺陷复现（OLD = HEAD 改前工具，NEW = 本片）
+
+## 场景：占用端口的 pid **不在** 推荐停栈目录（E:/tmp/client-e2e/stack2）的 pid 文件里
+探针 = E:/tmp/m2svr-burst-next/redcheck/probe-foreign.json（pid 424242，正斜杠合法 JSON）
+
+$ python -I -B <OLD/HEAD> check_rust_window_preflight.py ... --slot-probe-json probe-foreign.json
+WARN R8 使用注入探针 E:/tmp/m2svr-burst-next/redcheck/probe-foreign.json（仅自测/证据复算；窗口机上禁用）
+RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 424242) ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包（2026-10-14 15:0x 的假回归即此）。先停栈： powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir E:/tmp/client-e2e/stack2 -Stop
+RED R8: 在跑的 game-svr.exe（pid 424242）来自 E:/tmp/openmir2-merge-target/debug/game-svr.exe，不是本计划 E:/tmp/m2svr-window-target\debug\game-svr.exe ⇒ 修复前/异源栈，窗口会测旧件
+RESULT: RED
+⇒ OLD 把 `-LogDir E:/tmp/client-e2e/stack2 -Stop` 原样给出（**误导**：该目录的 pid 文件不持有 424242，照抄即 NOTHING_TO_STOP）。
+
+$ python -I -B <NEW/本片> check_rust_window_preflight.py ... --slot-probe-json probe-foreign.json
+WARN R8 使用注入探针 E:/tmp/m2svr-burst-next/redcheck/probe-foreign.json（仅自测/证据复算；窗口机上禁用）
+RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 424242) ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包（2026-10-14 15:0x 的假回归即此）。先停栈： powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir <持有这些 pid 的目录> -Stop
+RED R8: 推荐停栈目录 E:/tmp/client-e2e/stack2 的 rust-stack.pid.json 不持有占用端口的 pid [424242] ⇒ 照抄该目录的 -Stop 会 NOTHING_TO_STOP（白烧窗）。请改用**持有这些 pid** 的窗口目录： powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir <持有这些 pid 的 rust-stack.pid.json 所在目录> -Stop
+RED R8: 在跑的 game-svr.exe（pid 424242）来自 E:/tmp/openmir2-merge-target/debug/game-svr.exe，不是本计划 E:/tmp/m2svr-window-target\debug\game-svr.exe ⇒ 修复前/异源栈，窗口会测旧件
+RESULT: RED
+⇒ NEW 改打占位 `<持有这些 pid 的目录>` + 追加一条 RED 点名 mismatch（fail-closed，不再误导）。
+
+# 2) 改坏必红（变异只在 E:/tmp/m2svr-burst-next/redcheck/*.py；仓内 sha256 前后见 §3）
+
+## MUT-A：把 mismatch 检查改成永不触发（`if missing:` → `if False:`）
+[FAIL] selftest r8-stop-dir-mismatch-red ok=2 prob=1 pre=0: RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 30284) ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包（2026-10-14 15:0x 的假回归即此）。先停栈： powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir <持有这些 pid 的目录> -Stop
+[PASS] selftest r8-stop-dir-missing-red ok=1 prob=2 pre=0: RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 30284) ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包（2026-10-14 15:0x 的假回归即此）。先停栈： powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir <持有这些 pid 的目录> -Stop | RE
+SELFTEST FAILED (64/66)
+
+## MUT-B：`validated` 恒真（占用行恒打印固定 stack2）
+[FAIL] selftest r8-stop-dir-mismatch-red ok=1 prob=2 pre=0: RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 30284) ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包（2026-10-14 15:0x 的假回归即此）。先停栈： powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir E:/tmp/client-e2e/stack2 
+[FAIL] selftest r8-stop-dir-missing-red ok=1 prob=2 pre=0: RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 30284) ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包（2026-10-14 15:0x 的假回归即此）。先停栈： powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir E:/tmp/client-e2e/stack2 
+SELFTEST FAILED (64/66)
+
+# 3) 还原核对（仓内文件自始至终未动：本件跑完全程）
+ca033e23c44038450794a558ab7821687dcd63353d03c5cd283967493e384a85 *check_rust_window_preflight.py
+⇒ = `E:/tmp/m2svr-burst-next/redcheck/00-sha-before.txt`（改前 = 改后，逐字节相同）
