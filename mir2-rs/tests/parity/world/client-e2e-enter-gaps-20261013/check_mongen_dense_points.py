@@ -39,6 +39,15 @@ oracle 锚点（生成框 = 正方形，不是圆/菱形）：
   # 机判：排行里出现 MapInfo 未加载的图 ⇒ RED（防窗口选到不可进入的图）
   python -I -B check_mongen_dense_points.py --mongen <...> --mapinfo <...> \
       --all-maps --view-range 12 --rank 20 --require-enterable
+  # 站点可站立性 / 客户端带图（root ③①「换怪密点」的烧窗前置）：给 --map-dir 时按部署
+  # `.map` 的 12B 格判 `tile=Walk|LowWall|HighWall|missing`（`--best-point` 只选 Walk 候选）；
+  # 给 --client-map-dir 时判冻结客户端带不带该图（不带 ⇒ 必烧窗口）。
+  python -I -B check_mongen_dense_points.py --mongen <...> --mapinfo <...> \
+      --map-dir <MirServer/M2GameSvr/Map> --client-map-dir <客户端/Map> \
+      --all-maps --view-range 12 --rank 20
+  # 机判：被报告/选中的站点必须 tile=Walk 且客户端带图 ⇒ 否则 RED（缺目录 ⇒ PREREQ_RED）
+  python -I -B check_mongen_dense_points.py --mongen <...> --map-dir <...> --client-map-dir <...> \
+      --all-maps --view-range 12 --rank 20 --require-walkable --require-client-map
   python -I -B check_mongen_dense_points.py --selftest
 
 退出码：`0` = GREEN / `1` = RED（--expect 或 --min/max-expected 不符）/ `2` = PREREQ_RED（缺输入/解析不到）。
@@ -52,7 +61,9 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import struct
 import sys
+import tempfile
 
 # MonGen.txt 头（GBK）：`;地图 x y 名称 范围 数量 时间 分钟比率 分钟模式 分钟点X 分钟点Y`
 MONGEN_FIELDS = 6
@@ -145,6 +156,165 @@ def enterable_suffix(map_name: str, mapinfo_keys: set[str] | None) -> str:
     return " enterable=" + ("yes" if is_enterable(map_name, mapinfo_keys) else "no")
 
 
+# ---------------------------------------------------------------- 站点可站立性 / 客户端带图
+# `.map` 格格式定案见 `crates/envir/src/mapfile.rs`（部署件实测）：52B 头（偏移 0..3 = int16
+# Width/Height，小端）+ 每格 12B；文件序 `k = x * Height + y`；`wBkImg` bit15 = HighWall、
+# `wFrImg` bit15 = LowWall、Low 覆盖 High；`wMidImg` 不参与。此处**内联**同口径、只 seek 读 12B，
+# 不加载整图（700x700 图 = 5.8MB；跨图排行 547 候选必须 O(1) 内存）。
+MAP_HEADER_BYTES = 52
+MAP_CELL_BYTES = 12
+MAP_WALL_BIT = 0x8000
+
+
+def map_name_candidates(map_name: str) -> list[str]:
+    """逻辑名 ⇒ 可能的 `.map` 文件名（去重保序）：整字段、`|` 前、`|` 后。
+
+    `MapMgr` 的键是逻辑名（`|` 前）、落的文件是 `|` 后（`[DB|DM011]` ⇒ `DM011.map`）；
+    本部署 MonGen 字段多不带 `|`，故三种都要试（大小写不敏感）。
+    """
+    out: list[str] = []
+    for p in [map_name, *map_name.split("|")]:
+        p = p.strip()
+        if p and p not in out:
+            out.append(p)
+    return out
+
+
+def resolve_map_file(map_dir: str, map_name: str) -> str | None:
+    """在 `map_dir` 里按**大小写不敏感**查 `.map`；缺目录/找不到 ⇒ None（不猜、不造）。"""
+    if not map_dir or not os.path.isdir(map_dir):
+        return None
+    try:
+        entries = {f.lower(): f for f in os.listdir(map_dir)}
+    except OSError:
+        return None
+    for cand in map_name_candidates(map_name):
+        hit = entries.get(cand.lower() + ".map")
+        if hit:
+            return os.path.join(map_dir, hit)
+    return None
+
+
+def tile_attr_from_bytes(data: bytes, x: int, y: int) -> str:
+    """从 `.map` 字节串判 `(x,y)` 格：`Walk` / `LowWall` / `HighWall` / `bad` / `oor`。"""
+    if len(data) < MAP_HEADER_BYTES:
+        return "bad"
+    width, height = struct.unpack_from("<hh", data, 0)
+    if width <= 0 or height <= 0:
+        return "bad"
+    off = MAP_HEADER_BYTES + (x * height + y) * MAP_CELL_BYTES
+    if off < MAP_HEADER_BYTES or off + MAP_CELL_BYTES > len(data):
+        return "oor"
+    bk, _mid, fr = struct.unpack_from("<HHH", data, off)
+    if fr & MAP_WALL_BIT:
+        return "LowWall"
+    if bk & MAP_WALL_BIT:
+        return "HighWall"
+    return "Walk"
+
+
+def read_tile(map_dir: str, map_name: str, x: int, y: int) -> str:
+    """服务端部署地图格读数；缺目录/缺图/坏头 ⇒ `missing`/`bad`（fail-explicit，绝不当 `Walk`）。"""
+    path = resolve_map_file(map_dir, map_name)
+    if path is None:
+        return "missing"
+    try:
+        with open(path, "rb") as fh:
+            hdr = fh.read(MAP_HEADER_BYTES)
+            if len(hdr) < MAP_HEADER_BYTES:
+                return "bad"
+            width, height = struct.unpack_from("<hh", hdr, 0)
+            if width <= 0 or height <= 0:
+                return "bad"
+            fh.seek(MAP_HEADER_BYTES + (x * height + y) * MAP_CELL_BYTES)
+            cell = fh.read(MAP_CELL_BYTES)
+    except OSError:
+        return "missing"
+    if len(cell) < MAP_CELL_BYTES:
+        return "oor"
+    bk, _mid, fr = struct.unpack_from("<HHH", cell, 0)
+    if fr & MAP_WALL_BIT:
+        return "LowWall"
+    if bk & MAP_WALL_BIT:
+        return "HighWall"
+    return "Walk"
+
+
+def is_walkable(map_dir: str, map_name: str, x: int, y: int) -> bool:
+    """站点所在格是否 `Walk`（服务端权威可站立性）。"""
+    return read_tile(map_dir, map_name, x, y) == "Walk"
+
+
+def client_has_map(client_dir: str, map_name: str) -> bool | None:
+    """冻结客户端是否带该图；未给目录 ⇒ None（不判、不记）。"""
+    if not client_dir:
+        return None
+    return resolve_map_file(client_dir, map_name) is not None
+
+
+def tile_suffix(map_dir: str, map_name: str, x: int, y: int) -> str:
+    """` tile=Walk|LowWall|HighWall|missing|bad|oor`；未给 `--map-dir` ⇒ 空串（旧输出不变）。"""
+    if not map_dir:
+        return ""
+    return " tile=" + read_tile(map_dir, map_name, x, y)
+
+
+def client_suffix(client_dir: str, map_name: str) -> str:
+    """` clientmap=yes|no`；未给 `--client-map-dir` ⇒ 空串（旧输出不变）。"""
+    if not client_dir:
+        return ""
+    return " clientmap=" + ("yes" if client_has_map(client_dir, map_name) else "no")
+
+
+def site_ok(mp: str, x: int, y: int, map_dir: str, client_dir: str) -> bool:
+    """`--best-point` 候选过滤：给了目录就必须可站立 + 客户端带图；未给目录 ⇒ 恒 True（旧行为）。"""
+    if map_dir and not is_walkable(map_dir, mp, x, y):
+        return False
+    if client_dir and client_has_map(client_dir, mp) is False:
+        return False
+    return True
+
+
+def require_site_check(
+    cands: list[tuple[str, int, int]],
+    map_dir: str,
+    client_dir: str,
+    require_walkable: bool,
+    require_client_map: bool,
+) -> tuple[int, list[str]]:
+    """`--require-walkable` / `--require-client-map` 机判（只判**被报告/选中的**站点）。
+
+    缺相应目录 ⇒ PREREQ_RED(2)；任一站不可站立或客户端缺图 ⇒ RED(1)。
+    **`missing` 不当 `Walk`**：缺图/坏头一律算不可站立。
+    """
+    if require_walkable and not map_dir:
+        return 2, ["PREREQ_RED: --require-walkable 需要 --map-dir <MirServer/M2GameSvr/Map>"]
+    if require_client_map and not client_dir:
+        return 2, ["PREREQ_RED: --require-client-map 需要 --client-map-dir <冻结客户端 Map 目录>"]
+    if not (require_walkable or require_client_map):
+        return 0, []
+    bad = 0
+    msgs: list[str] = []
+    for (mp, x, y) in cands:
+        if require_walkable:
+            attr = read_tile(map_dir, mp, x, y)
+            if attr != "Walk":
+                bad += 1
+                msgs.append(f"RED --require-walkable：({mp}) ({x},{y}) tile={attr}（不可站立）")
+        if require_client_map and client_has_map(client_dir, mp) is False:
+            bad += 1
+            msgs.append(f"RED --require-client-map：({mp}) 冻结客户端缺图（无法渲染）")
+    if bad:
+        return 1, msgs
+    if require_walkable and require_client_map:
+        msgs.append(f"OK  --require-walkable/--require-client-map：{len(cands)} 个站点全部可站立且客户端带图")
+    elif require_walkable:
+        msgs.append(f"OK  --require-walkable：{len(cands)} 个站点全部 tile=Walk")
+    else:
+        msgs.append(f"OK  --require-client-map：{len(cands)} 个站点客户端全部带图")
+    return 0, msgs
+
+
 def nearest_box(boxes: list[dict], x: int, y: int) -> tuple[int, dict | None]:
     """返回 `(Chebyshev 距离, 最近框)`；距离 0 ⇒ 框内（取 range 最小的那个框作代表）。"""
     best_d = None
@@ -159,7 +329,9 @@ def nearest_box(boxes: list[dict], x: int, y: int) -> tuple[int, dict | None]:
     return (-1 if best_d is None else best_d), best
 
 
-def report_point(boxes: list[dict], x: int, y: int, view_range: int | None) -> tuple[bool, str]:
+def report_point(
+    boxes: list[dict], x: int, y: int, view_range: int | None, extra: str = ""
+) -> tuple[bool, str]:
     d, b = nearest_box(boxes, x, y)
     if b is None:
         return False, f"({x},{y}) 无任何生成框（该图 MonGen 为空？）"
@@ -179,7 +351,7 @@ def report_point(boxes: list[dict], x: int, y: int, view_range: int | None) -> t
                 f"；view_range={view_range} < d ⇒ 新出生的怪必在窗口外 "
                 "（游走怪另算；真机 `nearest` 可能更小）"
             )
-    return inside, line
+    return inside, line + extra
 
 
 def expected_in_window(boxes: list[dict], x: int, y: int, view_range: int) -> float:
@@ -295,6 +467,9 @@ def run(
     view_range: int | None,
     min_expected: float | None = None,
     max_expected: float | None = None,
+    map_name: str = "",
+    map_dir: str = "",
+    client_dir: str = "",
 ) -> tuple[int, list[str]]:
     msgs: list[str] = []
     if not points:
@@ -306,7 +481,8 @@ def run(
 
     bad = 0
     for (x, y) in points:
-        inside, line = report_point(boxes, x, y, view_range)
+        extra = tile_suffix(map_dir, map_name, x, y) + client_suffix(client_dir, map_name)
+        inside, line = report_point(boxes, x, y, view_range, extra)
         msgs.append("INFO " + line)
         if expect == "inside" and not inside:
             bad += 1
@@ -497,9 +673,91 @@ def selftest() -> int:
     mi_bad += 0 if ok else 1
     print(f"[{'PASS' if ok else 'FAIL'}] selftest mapinfo-legacy-output-clean")
 
+    # 站点可站立性 / 客户端带图（`.map` 12B 格；root ③①「换怪密点」选点的烧窗前置）。
+    site_bad = 0
+    site_total = 0
+
+    def schk(name: str, cond: bool, detail: str = "") -> None:
+        nonlocal site_bad, site_total
+        site_total += 1
+        if not cond:
+            site_bad += 1
+        print(f"[{'PASS' if cond else 'FAIL'}] selftest {name}{(' ' + detail) if detail else ''}")
+
+    def synth_map(width: int, height: int, walls: dict[tuple[int, int], str]) -> bytes:
+        hdr = bytearray(MAP_HEADER_BYTES)
+        struct.pack_into("<hh", hdr, 0, width, height)
+        data = bytearray(hdr)
+        for x in range(width):
+            for y in range(height):
+                bk, fr = 1, 1
+                a = walls.get((x, y))
+                if a == "HighWall":
+                    bk = 0x8001
+                elif a == "LowWall":
+                    fr = 0x8001
+                data += struct.pack("<HHHBBBBBB", bk, 1, fr, 0, 0, 0, 0, 0, 0)
+        return bytes(data)
+
+    sm = synth_map(4, 3, {(1, 1): "HighWall", (2, 1): "LowWall"})
+    schk("tile-walk", tile_attr_from_bytes(sm, 0, 0) == "Walk")
+    schk("tile-highwall", tile_attr_from_bytes(sm, 1, 1) == "HighWall")
+    schk("tile-lowwall", tile_attr_from_bytes(sm, 2, 1) == "LowWall")
+    # Low 覆盖 High（两位置位 ⇒ LowWall），与 `mapfile.rs` 定案⑤同。
+    both = bytearray(sm)
+    cell_off_10 = MAP_HEADER_BYTES + (1 * 3 + 0) * MAP_CELL_BYTES
+    struct.pack_into("<H", both, cell_off_10, 0x8001)
+    struct.pack_into("<H", both, cell_off_10 + 4, 0x8001)
+    schk("tile-low-overrides-high", tile_attr_from_bytes(bytes(both), 1, 0) == "LowWall")
+    schk("tile-oor", tile_attr_from_bytes(sm, 9, 9) == "oor")
+    schk("tile-bad", tile_attr_from_bytes(b"\x00" * 8, 0, 0) == "bad")
+
+    with tempfile.TemporaryDirectory(prefix="dense-map-") as mdir:
+        # 文件名大小写不敏感 + `|` 前/后两种逻辑名都要能解析（`[DB|DM011]` ⇒ `DM011.map`）。
+        with open(os.path.join(mdir, "0.map"), "wb") as fh:
+            fh.write(sm)
+        with open(os.path.join(mdir, "DM011.map"), "wb") as fh:
+            fh.write(synth_map(2, 2, {(1, 1): "LowWall"}))
+        schk("resolve-map-file", resolve_map_file(mdir, "0") is not None)
+        schk("resolve-map-file-case", resolve_map_file(mdir, "dm011") is not None)
+        schk("resolve-map-file-pipe", resolve_map_file(mdir, "DB|DM011") is not None)
+        schk("resolve-map-file-missing", resolve_map_file(mdir, "NOPE") is None)
+        schk("read-tile-walk", read_tile(mdir, "0", 0, 0) == "Walk")
+        schk("read-tile-wall", read_tile(mdir, "0", 2, 1) == "LowWall")
+        schk("read-tile-missing-map", read_tile(mdir, "NOPE", 0, 0) == "missing")
+        schk("is-walkable", is_walkable(mdir, "0", 0, 0) and not is_walkable(mdir, "0", 2, 1))
+        schk("client-has-map", client_has_map(mdir, "0") is True)
+        schk("client-has-map-no", client_has_map(mdir, "NOPE") is False)
+        schk("client-has-map-undecided", client_has_map("", "0") is None)
+        # 未给目录 ⇒ 后缀为空（旧输出逐字节不变）。
+        schk("suffix-absent", tile_suffix("", "0", 0, 0) == "" and client_suffix("", "0") == "")
+        schk("suffix-present", tile_suffix(mdir, "0", 0, 0) == " tile=Walk"
+             and client_suffix(mdir, "0") == " clientmap=yes")
+        legacy_site = [
+            f"RANK ({x},{y}) E={e:.3f}{tile_suffix('', '0', x, y)}{client_suffix('', '0')}"
+            for e, x, y, _b in rk[:2]
+        ]
+        schk("site-legacy-output-clean",
+             all("tile=" not in ln and "clientmap=" not in ln for ln in legacy_site))
+        schk("site-ok-no-dirs", site_ok("0", 2, 1, "", ""))
+        schk("site-ok-wall", not site_ok("0", 2, 1, mdir, ""))
+        schk("site-ok-walk", site_ok("0", 0, 0, mdir, ""))
+        schk("site-ok-client-missing", not site_ok("NOPE", 0, 0, "", mdir))
+        gate_site_cases = [
+            ("site-gate-walk-pass", [("0", 0, 0)], mdir, mdir, True, True, 0),
+            ("site-gate-wall-red", [("0", 2, 1)], mdir, mdir, True, False, 1),
+            ("site-gate-client-red", [("NOPE", 0, 0)], mdir, mdir, False, True, 1),
+            ("site-gate-no-mapdir-prereq", [("0", 0, 0)], "", mdir, True, False, 2),
+            ("site-gate-no-clientdir-prereq", [("0", 0, 0)], mdir, "", False, True, 2),
+            ("site-gate-off", [("0", 2, 1)], "", "", False, False, 0),
+        ]
+        for name, cs, md, cd, rw, rcm, want_rc in gate_site_cases:
+            rc, _ = require_site_check(cs, md, cd, rw, rcm)
+            schk(name, rc == want_rc, f"rc={rc} (want {want_rc})")
+
     total = (len(cases) + 2 + 3 + len(exp_cases) + 1 + len(exp_judge)
-             + 3 + len(gate_cases) + 1)
-    failed = bad + am_bad + exp_bad + mi_bad
+             + 3 + len(gate_cases) + 1) + site_total
+    failed = bad + am_bad + exp_bad + mi_bad + site_bad
     print(f"SELFTEST {'OK' if failed == 0 else 'FAILED'} ({total - failed}/{total})")
     return 0 if failed == 0 else 1
 
@@ -539,6 +797,18 @@ def main(argv: list[str] | None = None) -> int:
                          "（逻辑名 = `|` 前，对齐 oracle `FindMap`）。不给时旧输出逐字节不变")
     ap.add_argument("--require-enterable", action="store_true",
                     help="机判：被报告/选中的候选图必须在 MapInfo 逻辑名内；否则 RED（需 --mapinfo）")
+    ap.add_argument("--map-dir", default="",
+                    help="可选：服务端 Map 目录（如 E:/MirServer/M2GameSvr/Map）；给定时每条排行/选点/"
+                         "点判定追加 `tile=Walk|LowWall|HighWall|missing`（`.map` 12B 格格式，见 "
+                         "`crates/envir/src/mapfile.rs`）；`--best-point` 只选 Walk 候选。"
+                         "不给时旧输出逐字节不变")
+    ap.add_argument("--client-map-dir", default="",
+                    help="可选：冻结客户端 Map 目录（如 D:/MirClient-run/Map）；给定时追加 "
+                         "`clientmap=yes/no`（客户端不带图 ⇒ 无法渲染，选它必烧窗口）")
+    ap.add_argument("--require-walkable", action="store_true",
+                    help="机判：被报告/选中的站点必须 tile=Walk；否则 RED（需 --map-dir）")
+    ap.add_argument("--require-client-map", action="store_true",
+                    help="机判：被报告/选中的图必须在冻结客户端 Map 目录内；否则 RED（需 --client-map-dir）")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
 
@@ -584,13 +854,30 @@ def main(argv: list[str] | None = None) -> int:
             print("PREREQ_RED: MonGen 里解析不到任何生成框")
             return 2
         if args.best_point:
-            e, mp, x, y, b = rk[0]
+            kept = [(e, mp, x, y, b) for e, mp, x, y, b in rk
+                    if site_ok(mp, x, y, args.map_dir, args.client_map_dir)]
+            skipped = len(rk) - len(kept)
+            if not kept:
+                print(f"RED --best-point：{len(rk)} 个候选全部不可站立或客户端缺图"
+                      f"（tile!=Walk 或 clientmap=no；检查 --map-dir/--client-map-dir）")
+                return 1
+            e, mp, x, y, b = kept[0]
             print(f"BEST ({mp}) ({x},{y}) E={e:.3f} view_range={args.view_range} "
                   f"box=({b['x']},{b['y']}) range={b['range']} count={b['count']} name={b['name']}"
-                  f"{enterable_suffix(mp, mapinfo_keys)}")
+                  f"{enterable_suffix(mp, mapinfo_keys)}"
+                  f"{tile_suffix(args.map_dir, mp, x, y)}{client_suffix(args.client_map_dir, mp)}")
+            if skipped:
+                print(f"INFO --best-point 跳过 {skipped} 个不可站立/客户端缺图的候选"
+                      f"（tile!=Walk 或 clientmap=no）")
             rc, msgs = require_enterable_check([mp], mapinfo_keys, args.require_enterable)
             for m in msgs:
                 print(m)
+            rc2, msgs2 = require_site_check([(mp, x, y)], args.map_dir, args.client_map_dir,
+                                           args.require_walkable, args.require_client_map)
+            for m in msgs2:
+                print(m)
+            if rc == 0 and rc2:
+                rc = rc2
             return rc
         n = max(1, min(args.rank or 10, len(rk)))
         shown = rk[:n]
@@ -600,11 +887,19 @@ def main(argv: list[str] | None = None) -> int:
         for e, mp, x, y, b in shown:
             print(f"RANK ({mp}) ({x},{y}) E={e:.3f} box=({b['x']},{b['y']}) "
                   f"range={b['range']} count={b['count']} name={b['name']}"
-                  f"{enterable_suffix(mp, mapinfo_keys)}")
+                  f"{enterable_suffix(mp, mapinfo_keys)}"
+                  f"{tile_suffix(args.map_dir, mp, x, y)}{client_suffix(args.client_map_dir, mp)}")
         rc, msgs = require_enterable_check([mp for _, mp, _, _, _ in shown], mapinfo_keys,
                                            args.require_enterable)
         for m in msgs:
             print(m)
+        rc2, msgs2 = require_site_check([(mp, x, y) for _, mp, x, y, _ in shown],
+                                        args.map_dir, args.client_map_dir,
+                                        args.require_walkable, args.require_client_map)
+        for m in msgs2:
+            print(m)
+        if rc == 0 and rc2:
+            rc = rc2
         if rc:
             print("RESULT: " + ("PREREQ_RED" if rc == 2 else "RED"))
             return rc
@@ -617,13 +912,30 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         rk = rank_points(boxes, args.view_range)
         if args.best_point:
-            e, x, y, b = rk[0]
+            kept = [(e, x, y, b) for e, x, y, b in rk
+                    if site_ok(args.map, x, y, args.map_dir, args.client_map_dir)]
+            skipped = len(rk) - len(kept)
+            if not kept:
+                print(f"RED --best-point：{len(rk)} 个候选全部不可站立或客户端缺图"
+                      f"（tile!=Walk 或 clientmap=no；检查 --map-dir/--client-map-dir）")
+                return 1
+            e, x, y, b = kept[0]
             print(f"BEST ({x},{y}) E={e:.3f} view_range={args.view_range} "
                   f"box=({b['x']},{b['y']}) range={b['range']} count={b['count']} name={b['name']}"
-                  f"{enterable_suffix(args.map, mapinfo_keys)}")
+                  f"{enterable_suffix(args.map, mapinfo_keys)}"
+                  f"{tile_suffix(args.map_dir, args.map, x, y)}{client_suffix(args.client_map_dir, args.map)}")
+            if skipped:
+                print(f"INFO --best-point 跳过 {skipped} 个不可站立/客户端缺图的候选"
+                      f"（tile!=Walk 或 clientmap=no）")
             rc, msgs = require_enterable_check([args.map], mapinfo_keys, args.require_enterable)
             for m in msgs:
                 print(m)
+            rc2, msgs2 = require_site_check([(args.map, x, y)], args.map_dir, args.client_map_dir,
+                                           args.require_walkable, args.require_client_map)
+            for m in msgs2:
+                print(m)
+            if rc == 0 and rc2:
+                rc = rc2
             return rc
         n = max(1, min(args.rank, len(rk)))
         print(f"INFO map={args.map} 生成框 {len(boxes)} 个；窗口半径 {args.view_range}；"
@@ -631,10 +943,18 @@ def main(argv: list[str] | None = None) -> int:
               f"{enterable_suffix(args.map, mapinfo_keys)}")
         for e, x, y, b in rk[:n]:
             print(f"RANK ({x},{y}) E={e:.3f} box=({b['x']},{b['y']}) "
-                  f"range={b['range']} count={b['count']} name={b['name']}")
+                  f"range={b['range']} count={b['count']} name={b['name']}"
+                  f"{tile_suffix(args.map_dir, args.map, x, y)}{client_suffix(args.client_map_dir, args.map)}")
         rc, msgs = require_enterable_check([args.map], mapinfo_keys, args.require_enterable)
         for m in msgs:
             print(m)
+        rc2, msgs2 = require_site_check([(args.map, x, y) for _, x, y, _ in rk[:n]],
+                                        args.map_dir, args.client_map_dir,
+                                        args.require_walkable, args.require_client_map)
+        for m in msgs2:
+            print(m)
+        if rc == 0 and rc2:
+            rc = rc2
         if rc:
             print("RESULT: " + ("PREREQ_RED" if rc == 2 else "RED"))
             return rc
@@ -669,6 +989,9 @@ def main(argv: list[str] | None = None) -> int:
         args.view_range,
         min_expected=args.min_expected,
         max_expected=args.max_expected,
+        map_name=args.map,
+        map_dir=args.map_dir,
+        client_dir=args.client_map_dir,
     )
     print(f"INFO map={args.map} 生成框 {len(boxes)} 个；待判定坐标 {len(points)} 个"
           f"{enterable_suffix(args.map, mapinfo_keys)}")
@@ -679,6 +1002,13 @@ def main(argv: list[str] | None = None) -> int:
         print(m)
     if rc == 0 and g_rc:
         rc = g_rc
+    s_rc, s_msgs = require_site_check([(args.map, x, y) for (x, y) in points],
+                                      args.map_dir, args.client_map_dir,
+                                      args.require_walkable, args.require_client_map)
+    for m in s_msgs:
+        print(m)
+    if rc == 0 and s_rc:
+        rc = s_rc
     print("RESULT: " + ("GREEN" if rc == 0 else ("PREREQ_RED" if rc == 2 else "RED")))
     return rc
 

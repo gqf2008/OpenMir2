@@ -395,7 +395,8 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **新工具 `window_handoff.py`**（只读、零起栈、零端口；不复制任何判据，只聚合）：
   - **G1** = 片⑮ `check_rust_window_preflight.py`（R1..R5）解析 `RESULT:`；R1/R2 点住窗口脚本
     `repo=` 指向的检出是否含片⑪（2026-10-14 实测共享主检出停在 `ad0592b19` ⇒ RED）。
-  - **G2** = 证据目录 6 件判据脚本的 `--selftest` 必须全过（缺一件 ⇒ PREREQ；某件 FAILED ⇒ RED）。
+  - **G2** = 证据目录 6 件判据脚本的 `--selftest` 必须全过（缺一件 ⇒ PREREQ；某件 FAILED ⇒ RED）；
+    片㉙ 起并入 `check_appearance_pairs.py` ⇒ 现为 **7 件**（历史读数 6 件见 `97`/`98`/`99`）。
   - **G3**（可选 `--with-csharp`）= 片⑭ `check_csharp_capture_preflight.py`。
   - **INFO** = `check_mongen_dense_points.py --rank`（选点用，见 ⑯）。
   - `--plan` = ③a/③b 两侧对照的**可粘贴命令序列**（Rust 起栈/代理/客户端/解码 + C# 侧 +
@@ -698,3 +699,57 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   「屏幕见怪并能攻击造成伤害」。
 - 证据：`139-window-build-source-fixed-script.txt`、`140-redcheck-window-build-source.txt`、
   `141-gates.txt`、`142-boundary.txt`、`client-e2e-window.fixed.sh.txt`。
+
+### ㉙ ③ root ②「怪物出现帧数」机器判据：解开 `SM_TURN` 名尾 ⇒ 13 只怪 / 26 帧（2026-10-14）
+
+- **问题**：`check_client_s2c_frames.py --min-appearance-pairs` 只数 `10`+`41` 的**对数**，
+  玩家与怪物在计数上不可区分；而 root 00:4x ② 问的是**怪物**出现帧数。
+- **本片交付（零生产代码改动、零起栈、零游戏端口）**：新增判据 `check_appearance_pairs.py`：
+  - 按 `crates/protocol/src/frame.rs::body_layout` 的 `StructThenRest{8}` + `edcode.rs::decode`
+    （内联移植，不 import 生产 crate）解开 `SM_TURN` 帧体 ⇒ `CharDesc(8B)` + `ShowName/Color` 名尾；
+  - 机判门 `--min-pairs` / `--min-actors` / `--expect-names "稻草人=10,鹿=3"`（直方图逐项相等）；
+  - `--selftest` 5/5（合成 capture + 名尾 + 改坏必红），**无 cargo 依赖**。
+- **真读数**（钉住的 head 上，跑**已入库**的真机 capture）：
+  `capture-client-viewrange12-seed42.jsonl` ⇒ `appearance_pairs=13 actors=13 frames=26` /
+  `names={"稻草人":10,"鹿":3}`（13 个 actor **全是怪**，无一是角色 `aaa`）；
+  RunA `capture-client-default-oracle40.jsonl` ⇒ 12 对 = 稻草人 8 / 鹿 4。⇒ root ② 的直接答案。
+- **改坏必红**（`144`）：解码密钥 `0xAC→0xAD` ⇒ 直方图 RED；名尾不再解码 ⇒ 体长不符 RED；
+  判据脚本从目录移走 ⇒ 窗口就绪门 G2 `PREREQ_RED`（`WINDOW_READY=NO`），还原后 `GREEN` rc=0。
+- **窗口就绪门**：`window_handoff.py` 的 `TOOL_SELFTESTS` 6→7 件（并入本判据）；
+  `--selftest` 仍 `74/74`，专用源 `WINDOW_READY=YES` / `RESULT: GREEN` rc=0。
+- 四门禁 fmt 0 / clippy 0(`-D warnings`) / 101 suites · 1205 passed · 0 failed · 22 ignored / msgcodegen 604 rc=0。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：卡级 DoD③ 的 R 级「③b/③a 两趟真机同框对照」+
+  「屏幕见怪并能攻击造成伤害」；本片把 ③a/③b 的**离线侧**加厚到「逐 actor 解出怪物名」。
+- 证据：`143-monster-appearance-pairs-decoded.txt`、`144-redcheck-appearance-pairs.txt`、
+  `145-gates.txt`、`146-boundary.txt`、`check_appearance_pairs.py`。
+
+### ㉚ ③①「换怪密点」选点的烧窗前置：部署 `.map` 格可站立性 + 冻结客户端带图机判（2026-10-14）
+
+- **问题**：`check_mongen_dense_points.py` 此前只能判「图在不在 `MapInfo`」（`enterable=yes/no`），
+  **不判**「站不站得住 / 冻结客户端有没有这张图」。root 00:4x ① 明确可选「MonGen 里密度高的图」
+  ⇒ 跨图候选若落在墙上或客户端无图，窗口必白烧，且离线可预防。
+- **本片交付（零生产代码改动、零起栈、零游戏端口，写集 = 本卡证据目录 1 个 `.py`）**：
+  `check_mongen_dense_points.py` 新增 `--map-dir` / `--client-map-dir` / `--require-walkable` /
+  `--require-client-map`：按 `crates/envir/src/mapfile.rs` 定案的 **12B 格**（内联同口径、只 seek 读，
+  不 import 生产 crate、O(1) 内存）判 `tile=Walk|LowWall|HighWall|missing`、判 `clientmap=yes/no`；
+  **`--best-point` 只选可站立（且客户端带图）的候选**并打印跳过数；两条 `--require-*` 缺目录 ⇒
+  `PREREQ_RED`、站点不可站立/缺图 ⇒ `RED`（`missing` **绝不当 `Walk`**）。`--selftest` 30→60。
+- **真机牙齿**（`M2GameSvr/Map` × `D:/MirClient-run/Map`）：`enterable=yes` **不等于**可用——
+  `D10071 (20,20) E=59.533`（并列第一密）`tile=LowWall`；`M100 (150,150)` `tile=HighWall`；
+  `M100A/B/C` `tile=missing clientmap=no`（`MapInfo.txt` 与 `MonGen.txt` 都有，但两边都**没有** `.map`）。
+  `--best-point --all-maps` 改为选 `D10071 (17,21)` `tile=Walk` 并**跳过 159 个**不可站立/缺图候选。
+  窗口 ③b `605,578` / ③a `291,666` 在「服务端格 + 客户端带图」两层都是 `tile=Walk clientmap=yes`。
+- **旧输出逐字节不变**：缺新目录时 7 种命令形状（单图/跨图排行与选点、单点 `--expect`、
+  多点 `--min-expected`、`--start-point`）与 `git show HEAD:` 旧脚本 `diff` 全 `SAME`。
+- **改坏必红**（`148`）：MUT-1 `site_ok` 恒 True ⇒ 墙上候选被 `--best-point` 选中（RED→GREEN）；
+  MUT-2 `read_tile` 缺图返回 `Walk` ⇒ `M100A --require-walkable` RED→GREEN；
+  MUT-3 缺 `--map-dir` 时后缀非空 ⇒ `--selftest` 58/60 `FAILED`（点名 `suffix-absent` /
+  `site-legacy-output-clean`）。
+- **窗口就绪门不受影响**：本片未改 `window_handoff.py`（计划 map 0 选点仍 `605,578`，已判 `Walk`）；
+  `--selftest` 仍 `74/74`，专用源 `WINDOW_READY=YES` / `RESULT: GREEN` rc=0。
+- 四门禁（合并树 `67898a834`）fmt 0 / clippy 0(`-D warnings`) / 101 suites · **1213 passed** · 0 failed ·
+  22 ignored / msgcodegen 604 rc=0。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：卡级 DoD③ 的 R 级「③b/③a 两趟真机同框对照」+
+  「屏幕见怪并能攻击造成伤害」。
+- 证据：`147-site-walkability-gate.txt`、`148-redcheck-site-walkability.txt`、`149-gates.txt`、
+  `150-boundary.txt`、`check_mongen_dense_points.py`。

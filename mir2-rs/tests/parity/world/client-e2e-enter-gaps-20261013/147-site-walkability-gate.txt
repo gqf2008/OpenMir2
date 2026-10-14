@@ -1,0 +1,143 @@
+147-site-walkability-gate.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉚
+③①「换怪密点」选点的**烧窗前置**：部署 `.map` 格可站立性 + 冻结客户端带图机判
+m2-svr / openmir2-worker-11 / 2026-10-14（片㉚；本 burst）
+零起栈、零游戏端口（只共享 MySQL 3306 未动）、零生产代码改动；只写自身 worktree。
+====================================================================================================
+一句话
+====================================================================================================
+`check_mongen_dense_points.py` 此前只能判「图在不在 `MapInfo`」（`enterable=yes/no`），**不判**
+「站不站得住 / 冻结客户端有没有这张图」。本片补上这两条：给 `--map-dir`/`--client-map-dir` 时
+按部署 `.map` 的 **12B 格**判 `tile=Walk|LowWall|HighWall|missing`、并判 `clientmap=yes/no`；
+`--best-point` 只选可站立候选；`--require-walkable`/`--require-client-map` fail-closed。
+真机部署实测牙齿：**`MapInfo` 说 `enterable=yes` 但实际不能用的候选真有**——
+`D10071 (20,20) E=59.533`（并列第一密）`tile=LowWall`；`M100A/B/C` `tile=missing clientmap=no`
+（两边都没有 `.map`）；`M100 (150,150)` `tile=HighWall`。旧工具会把这些当合法候选推给窗口。
+
+A. 归因与口径（oracle / 部署锚点）
+====================================================================================================
+* `.map` 格式**不在本片新建**：定案在 `mir2-rs/crates/envir/src/mapfile.rs`（卡
+  `openmir2-m2-map-loading`，comment `862396f8` 在部署件上定案）。本片**内联同口径**只读 12B，
+  **不 import 生产 crate**（判据脚本必须 `python -I -B` 零依赖可跑）：
+  - 头 52B；偏移 `0..3` = `int16 Width/Height`（小端）；`k = x * Height + y`；
+  - 格 12B = `wBkImg u16` + `wMidImg u16` + `wFrImg u16` + 6×`u8`；
+  - `wBkImg` bit15 = HighWall、`wFrImg` bit15 = LowWall、**Low 覆盖 High**、`wMidImg` 不参与。
+  - 只 `seek+read(12)`，不加载整图（700×700 图 = 5.88MB；跨图排行 547 候选必须 O(1) 内存）。
+* 「图存在」口径沿用片㉑：oracle `MapMgr.FindMap` 按**逻辑名**（`|` 前）查表；落盘文件名是
+  `|` 后（`[DB|DM011]` ⇒ `DM011.map`）⇒ 本片三种都试（整字段/`|` 前/`|` 后，大小写不敏感）。
+* 「冻结客户端有没有这张图」= 客户端 `Map/*.map` 存在性（**客户端改不了**，缺图就渲染不出怪）。
+* 为什么这是烧窗前置：`③b` 要 root 把 `aaa` 站到候选点再看同屏出现帧；候选若落在墙上或
+  客户端无图，窗口必然白烧（且离线可预防）。root 00:4x ① 明确「换怪密点（例如比奇省郊外，
+  **或 MonGen 里密度高的图**）」⇒ 跨图候选正是最需要这条门的地方。
+
+B. 本片改动（写集 = 本卡证据目录，1 文件：`check_mongen_dense_points.py`）
+====================================================================================================
+新增（缺目录 ⇒ 旧输出逐字节不变）：
+  1. `map_name_candidates` / `resolve_map_file`：逻辑名 ⇒ `.map` 字节（大小写不敏感）。
+  2. `tile_attr_from_bytes` / `read_tile` / `is_walkable`：O(1) 内存判单格；
+     缺目录/缺图/坏头 ⇒ `missing`/`bad`（**绝不当 `Walk`**）。
+  3. `client_has_map`：冻结客户端是否带图（未给目录 ⇒ `None`，不判不记）。
+  4. `tile_suffix` / `client_suffix`：追加 ` tile=…` / ` clientmap=…`；目录为空 ⇒ 空串。
+  5. `site_ok` / `require_site_check`：候选过滤与 fail-closed 机判（缺目录 ⇒ `PREREQ_RED`）。
+  6. CLI：`--map-dir` / `--client-map-dir` / `--require-walkable` / `--require-client-map`。
+     `--rank`/`--best-point`/`--point(s)`/`--start-point` 四条路径全部接入；
+     **`--best-point` 只选 `tile=Walk`（且客户端带图）的候选**，并打印跳过的候选数；
+     全被过滤 ⇒ `RED` rc=1（不静默回退到墙上）。
+  7. `--selftest` **30 → 60**（新增 30 条：12B 格解析/Low 覆盖 High/OOR/BAD、文件解析
+     大小写与 `|` 前后、缺图/坏头、后缀缺目录为空、`site_ok` 四态、`require_site_check` 6 态、
+     旧输出不含 `tile=`/`clientmap=`）。
+
+C. 真机部署实测（本片自跑，命令 + 原始输出；`--map-dir E:/MirServer/M2GameSvr/Map`，
+   `--client-map-dir D:/MirClient-run/Map`）
+====================================================================================================
+C-1 map 0（窗口 ③b/③a 所在图）Top-3：全部 `tile=Walk clientmap=yes`（窗口选点本来就干净）
+```
+$ python -I -B check_mongen_dense_points.py --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt \
+    --map 0 --view-range 12 --rank 3 --map-dir E:/MirServer/M2GameSvr/Map \
+    --client-map-dir D:/MirClient-run/Map
+RANK (605,578) E=12.681 box=(605,578) range=30 count=10 name=半兽人 tile=Walk clientmap=yes
+RANK (211,629) E=12.225 box=(211,629) range=30 count=10 name=半兽人 tile=Walk clientmap=yes
+RANK (256,572) E=12.225 box=(256,572) range=30 count=10 name=半兽人 tile=Walk clientmap=yes
+RESULT: GREEN (Top-3)
+```
+C-2 **牙齿**（`--all-maps --rank 600` 里的行；旧工具只有 `enterable=yes`）：
+```
+RANK (D10071) (17,21) E=59.533 … enterable=yes tile=Walk    clientmap=yes
+RANK (D10071) (20,20) E=59.533 … enterable=yes tile=LowWall clientmap=yes   ← 并列第一密但不可站
+RANK (M100)   (150,150) E=6.740 … enterable=yes tile=HighWall clientmap=yes  ← 不可站
+RANK (M100A)  (155,180) E=3.002 … enterable=yes tile=missing  clientmap=no   ← 两边都没有 .map
+RANK (M100B)  (155,180) E=3.002 … enterable=yes tile=missing  clientmap=no
+RANK (M100C)  (155,180) E=3.002 … enterable=yes tile=missing  clientmap=no
+```
+⇒ `enterable=yes`（MapInfo 有）**不等于**可用：`M100A/B/C` 在 `MapInfo.txt` 与 `MonGen.txt` 都在，
+但 `M2GameSvr/Map/` 与冻结客户端 `Map/` 都**没有** `m100a.map`（脚本实算 `tile=missing clientmap=no`）。
+C-3 `--best-point` 只选可站立候选（跨图）：
+```
+$ python -I -B check_mongen_dense_points.py --mongen … --mapinfo … --all-maps --view-range 12 \
+    --best-point --map-dir E:/MirServer/M2GameSvr/Map --client-map-dir D:/MirClient-run/Map
+BEST (D10071) (17,21) E=59.533 … tile=Walk clientmap=yes
+INFO --best-point 跳过 159 个不可站立/客户端缺图的候选（tile!=Walk 或 clientmap=no）
+```
+C-4 fail-closed 机判（真机部署件）：
+```
+$ … --map D10071 --point 20,20 --map-dir <Map> --require-walkable
+INFO (20,20) 框内；… view_range=12 覆盖最近框 ⇒ 可能有出生怪在窗口内 tile=LowWall
+RED --require-walkable：(D10071) (20,20) tile=LowWall（不可站立）
+RESULT: RED        rc=1
+
+$ … --map M100A --point 155,180 --client-map-dir <客户端 Map> --require-client-map
+INFO (155,180) 框内；… tile 行 preceding；clientmap=no
+RED --require-client-map：(M100A) 冻结客户端缺图（无法渲染）
+RESULT: RED        rc=1
+
+$ … --map 0 --points "291,666;605,578" --map-dir <Map> --client-map-dir <客户端 Map> \
+    --require-walkable --require-client-map
+OK  --require-walkable/--require-client-map：2 个站点全部可站立且客户端带图
+RESULT: GREEN      rc=0
+```
+⇒ 窗口 ③b `605,578` / ③a `291,666` 两条站点在**服务端格 + 客户端带图**两层都过。
+
+D. 旧输出逐字节不变（缺新目录时；回归硬判据）
+====================================================================================================
+`git show HEAD:<tool>` 取改动前脚本，对 7 种命令形状逐一 `diff`：
+```
+SAME rank-map0 / best-map0 / rank-all / best-all / point-outside / points-min / startpoint
+```
+（含 `--mapinfo` 的跨图排行与选点、单点 `--expect`、多点 `--min-expected`、`--start-point`。）
+⇒ 不触碰既有判据/读数，纯新增可选门。
+
+E. 判据自带牙齿（本片自复现；原始输出见 `148-redcheck-site-walkability.txt`）
+====================================================================================================
+* MUT-1：`site_ok` 恒 True（拔掉候选过滤）⇒ 同一「唯一候选是墙」的合成输入由 `RED rc=1` 变
+  `BEST (10,10) … tile=HighWall` / `rc=0`（把墙当合法站点）。
+* MUT-2：`read_tile` 缺图也返 `Walk` ⇒ `M100A --require-walkable` 由 `RED rc=1` 变
+  `OK … tile=Walk` / `rc=0`。
+* MUT-3：`tile_suffix` 在缺 `--map-dir` 时也非空 ⇒ `--selftest` **58/60 FAILED**（`suffix-absent`、
+  `site-legacy-output-clean` 两条点名）——即 D 的「旧输出不变」有牙。
+三条均为「改坏判据 ⇒ 必红/必变」；还原后 `SELFTEST OK (60/60)` rc=0。
+
+F. 窗口就绪门不受影响（G2 仍绿）
+====================================================================================================
+```
+$ python -I -B window_handoff.py --selftest            ⇒ SELFTEST OK (74/74)
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --check-dir <dir>
+  OK   G2 check_mongen_dense_points.py --selftest      （并入 7 件判据自检）
+  …   G1 Rust 窗口前置门 GREEN（R1..R5）
+  WINDOW_READY=YES / RESULT: GREEN     rc=0
+```
+本片**未改** `window_handoff.py`：窗口计划里 map 0 的自动选点仍是 `605,578`（已判 `tile=Walk`），
+故计划文本与 G4 参数面不变；新门是**运行时/手工/跨图**选点的安全网（root ① 的另一种选法）。
+
+G. 仍未闭环 / 登记（不静默）
+====================================================================================================
+* 卡级 DoD③ 的 **R 级真机两侧同框对照** + 「屏幕见怪并能攻击造成伤害」仍归 **root 独占窗口**
+  （本片只加厚离线选点门，不据此收卡；`window_required` 见 status）。
+* `--client-map-dir` 在窗口计划里未接线（`window_handoff.py` 不知道客户端 Map 路径，且不改它以避免
+  动已审文件）；本片给的是**可手工/跨图**的机判与 `--best-point` 过滤，证据 §C。
+* 怪物侧 `ViewRange` 子类覆盖、`RM_DISAPPEAR` 无编码器等既有登记不变。
+
+H. 涉及文件
+====================================================================================================
+  改动：`check_mongen_dense_points.py`（唯一代码文件）
+  新增：本文件 + `148-redcheck-site-walkability.txt` + `149-gates.txt` + `150-boundary.txt`
+  改动：`README.md`（§㉚）+ `SHA256SUMS.txt`（重生成）
+  只读引用：`crates/envir/src/mapfile.rs`、`112-mapinfo-enterability.txt`、`143-monster-appearance-pairs-decoded.txt`

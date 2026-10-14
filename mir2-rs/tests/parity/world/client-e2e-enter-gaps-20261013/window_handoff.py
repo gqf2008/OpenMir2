@@ -13,7 +13,7 @@
   G1 **聚合 Rust 侧窗口前置门**：调片⑮ `check_rust_window_preflight.py`（R1..R5），解析 `RESULT:`。
      其中 R1/R2 直接点住「窗口脚本 `client-e2e-window.sh` 的 `repo=` 指向的检出是否含片⑪」——
      这是 2026-10-14 实测到的真缺陷（共享主检出停在 `ad0592b19`）。
-  G2 **聚合判据工具自检**：证据目录 6 件判据脚本的 `--selftest` 必须全 `SELFTEST OK`（缺一件 ⇒ PREREQ）。
+  G2 **聚合判据工具自检**：证据目录 7 件判据脚本的 `--selftest` 必须全 `SELFTEST OK`（缺一件 ⇒ PREREQ）。
   G3（可选）**聚合 C# 侧抓包前置门**：调片⑭ `check_csharp_capture_preflight.py --shadow-config ...`。
   G4（`--plan`/`--plan-only`）**计划 ↔ 工具面机判**（片㉕）：计划里每个被调脚本必须存在、只用它声明
      的参数，且必须含「代理(7200)/影子 gate(7600) 清端口 + 7200/7600 回落断言 + C# 清栈保留 3306」的
@@ -70,6 +70,7 @@ TOOL_SELFTESTS = (
     "check_aoi_visibility_diag.py",
     "aoi_visibility_pair.py",
     "check_client_s2c_frames.py",
+    "check_appearance_pairs.py",
     RUST_PREFLIGHT,
     CSHARP_PREFLIGHT,
 )
