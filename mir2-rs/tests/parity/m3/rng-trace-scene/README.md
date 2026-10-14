@@ -292,13 +292,25 @@ AOI 诊断）后又漂到 `:5488`，由本片在**合并树的** `-SelfCheckNoSt
 
 ```sh
 python -I rng-trace-scene/check_anchors.py check      # GREEN：7/7 锚点保鲜
-python -I rng-trace-scene/check_anchors.py selftest   # 13/13 GREEN（含 12 条改坏必红）
+python -I rng-trace-scene/check_anchors.py selftest   # 16/16 GREEN（含 15 条改坏必红）
 ```
 
-- 锚点缺失 / **重复**（歧义）/ 文件缺失 / 符号缺失 / 行号漂移 ⇒ rc=1 **逐个点名**（漂移还报出正确的
-  实际行号，即要改成的值）；
-- 改坏必红覆盖：行号改回历史漂移值 `/` 删锚点 `/` 同 literal 写两处行号（歧义）/
-  **未登记的新引用**（闭世界 `UNGUARDED_ANCHOR`）`/` R-6 折叠定义行号回退（本片真身）；
+**2026-10-14 根因收口（两类锚点）**：行号漂移的**成因**是「把行号锚钉在多车道共享的增长文件
+上」⇒ 本片新增**符号唯一性锚**（`symbol_unique=True`），从根上消掉这一族：
+
+| 锚点类型 | 适用 | 文档写法 | 机判 |
+| --- | --- | --- | --- |
+| **行号锚** | 稳定文件（`mongen.rs` / `monai.rs` / oracle `AnimalObject.cs` / 本卡 `rng_consumer_groups.py` / `consumer_groups.tsv`） | `path:line` | 行号 == 源码首个匹配行；缺失 / 重复 / 漂移 ⇒ 红 |
+| **符号唯一性锚** | **共享增长文件**（现为 `bins/game-svr/src/main.rs`） | 只写 `path`（**不得**带 `:line`，带了 ⇒ `ANCHOR_LINE_NOT_ALLOWED`） | 符号在该文件里**恰好出现 1 次**（0 次 ⇒ `ANCHOR_SYMBOL_MISSING`，>1 次 ⇒ `ANCHOR_AMBIGUOUS`） |
+
+**判据不降级**：宿主 AI 调用点被删 / 被复制仍 fail-closed 必红，只是把不稳定的行号换成稳定的
+唯一性 —— 别的车道再往 main.rs 插代码不再制造「合并即假 RED」。
+
+- 锚点缺失 / **重复**（歧义）/ 文件缺失 / 符号缺失 / 行号漂移 / 符号唯一性锚被写回行号 ⇒ rc=1
+  **逐个点名**（行号漂移还报出正确的实际行号，即要改成的值）；
+- 改坏必红覆盖：符号唯一性锚写回行号 `/` 文件引用删除 `/` 符号重复 `/` 符号缺失 `/`
+  行号锚缺失 `/` 同 literal 写两处行号（歧义）`/` **未登记的新引用**（闭世界 `UNGUARDED_ANCHOR`）
+  `/` R-6 折叠定义行号回退；
 - **闭世界（本片新增的牙）**：旧锚点表只硬编码 5 条 ⇒ 文档里**其它** `path:line` 引用可静默漂移。
   本片实测到同族真身缺陷：上一片（`06f5faf7b`）在 `rng_consumer_groups.py` 顶部插入 5 行
   （`_HERE`/`REPO_ROOT`），使 `FOLD_RULES` 从 `:52` 漂到 `:57`，而 `DRIVER-CONTRACT.md:94` 仍写
@@ -355,11 +367,11 @@ reviewer-6 在 approve `f11129a84` 时记了一条非阻塞 Minor（M-1）：`ch
 
 收口：① 文档订正 `:5598`→`:5665`；② 把 `check_anchors.py` 的 `selftest` + `check` 两向登记进
 `fixture_chain_gate.SHARED_CHECKS`（不看矩阵状态、独立常跑），并在链门 selftest 加**防回退牙**
-（必须两向常在；`.py` 登记项计数 `≥17`→`≥19`）。
+（必须两向常在；`.py` 登记项计数 `≥19`→`≥21`，随链门增门继续上提）。
 
 ```sh
 python -I fixture_chain_gate.py check    # 共享管线含 rng_scene_anchor_selftest / _check 两向，FIXTURE_CHAIN GREEN
-python -I fixture_chain_gate.py selftest # 38/38 GREEN（含「RNG 场景锚门已接入共享管线」防回退牙）
+python -I fixture_chain_gate.py selftest # 39/39 GREEN（含「RNG 场景锚门已接入共享管线」防回退牙）
 ```
 
 > 注：锚点随 master 继续漂移时，本门会在链门里**恒 RED**（这正是它接入共享管线要拿到的“不再静默”）。

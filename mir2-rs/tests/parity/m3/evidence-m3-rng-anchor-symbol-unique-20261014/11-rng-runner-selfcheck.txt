@@ -1,0 +1,55 @@
+SELFTEST_NO_STACK: 无栈自检——场景门 + 账本 + folded 映射全路径都必须 fail-closed（缺失绝不静默 GREEN）
+SELFTEST ok scenario-fixed-input (canon/seed/map/pose/monsters/fold/mongen_fixture)
+SELFTEST ok mongen-fixture-zero-rows (path=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\rng-trace-scene\..\fixtures\mongen-map0137.tsv)
+SELFTEST ok scene-gate-selftest (rc=0)
+SELFTEST ok=22/22
+GREEN: 场景前置门 selftest 全绿（同场景绿 + seed/怪集合/起点/map/MonGen 漂移必红 + 流水头同种子制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 缺件 PREREQ / 只给一侧流水 PREREQ / 未给流水向后兼容） + scenario 声明 vs 代码 folded 映射/组清单漂移必红 + 缺件/坏 JSON PREREQ fail-closed）
+
+SELFTEST ok scene-gate-identical-green (rc=0)
+SELFTEST ok scene-gate-monster-drift-red (rc=1)
+SELFTEST ok ledger-selftest (rc=0)
+SELFTEST ok folded-equivalent-green (rc=0)
+SELFTEST ok folded-count-red (rc=1)
+SELFTEST ok folded-order-red (rc=1)
+SELFTEST ok scene-gate-missing-prereq (rc=2)
+SELFTEST ok lf-writer-selftest
+SELFTEST ok scenario-runner-params-declared (tokens=[Go,PeerSession,PinScene,Side] missing=[])
+SELFTEST ok scenario-runner-param-drift-red (missing=NotARealParam)
+SELFTEST ok scenario-fold-group-consistency-green (rc=0)
+SELFTEST ok scenario-fold-drift-red (rc=1)
+SELFTEST ok scenario-groups-unknown-red (rc=1)
+SELFTEST ok scenario-drift-samples-json-native (runner/fold/groups drift 样本均为 JSON 字段改写且与源不同（base 牙内自解析，无跨块依赖）)
+SELFTEST ok scenario-drift-tooth-not-vacuous (空转样本 ⇒ 同一 fold 谓词为 false（牙非恒真、不空转）)
+SELFTEST ok scene-groupdiff-identical-green (rc=0)
+SELFTEST ok scene-groupdiff-scene-drift-refused (rc=1 ranDiff=False)
+SELFTEST ok scene-groupdiff-missing-prereq-refused (rc=2)
+SELFTEST ok scene-groupdiff-diff-red-propagates (rc=1)
+SELFTEST ok scene-gate-stream-seed-green (rc=0)
+SELFTEST ok scene-gate-stream-seed-mismatch-red (rc=1)
+SELFTEST ok scene-gate-stream-inject-missing-red (rc=1)
+SELFTEST ok scene-groupdiff-stream-seed-refused (rc=1 ranDiff=False)
+SELFTEST ok scene-groupdiff-expected-group-missing-red (rc=1 ranDiff=True)
+SELFTEST ok scene-groupdiff-min-monster-ai-red (rc=1 ranDiff=True)
+SELFTEST ok anchors-freshness-selftest (rc=0)
+SELFTEST ok station-table-refs-selftest (rc=0)
+SELFTEST ok evidence-head-selftest (rc=0)
+EVIDENCE_HEAD_PACK dir=mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014 decl=11-boundary.txt(line 3（共 2 处声明）) declared=2591a7b316ae7e9c3a31ac38e26248178a75f182 since=10f0daa93ebeaf220581a3239cce6f7e7a522b85 changed=19 allow_prefixes=['mir2-rs/tests/parity/m3']
+  OK 包内声明 head 可解析、since 锚 ≤ 声明 head ≤ HEAD，且 since..声明 head 全在证据侧
+
+EVIDENCE_HEAD_PACK dir=mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014 decl=10-boundary.txt(line 2) declared=9740b7d0c6ae66752f6195a4104416a61d913e99 since=30c52f85df2b08170537f83a2113f520e364f679 changed=21 allow_prefixes=['mir2-rs/tests/parity/m3']
+  OK 包内声明 head 可解析、since 锚 ≤ 声明 head ≤ HEAD，且 since..声明 head 全在证据侧
+
+EVIDENCE_HEAD_PACK dir=mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-pack-20261014 decl=10-boundary.txt(line 2) declared=c9d7731645979894fbd441ffeb37ef00c3cabedf since=61f613702ea61186eae98d92ad49415c56a1ab2e changed=15 allow_prefixes=['mir2-rs/tests/parity/m3']
+  OK 包内声明 head 可解析、since 锚 ≤ 声明 head ≤ HEAD，且 since..声明 head 全在证据侧
+
+EVIDENCE_HEAD_PACK dir=mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-ambig-20261014 decl=10-boundary.txt(line 2) declared=b0a2a3130815413591b78e68576e6bf3194b8056 since=b00987707a714402573a1e1e4be222f8fbcc583d changed=15 allow_prefixes=['mir2-rs/tests/parity/m3']
+  OK 包内声明 head 可解析、since 锚 ≤ 声明 head ≤ HEAD，且 since..声明 head 全在证据侧
+
+SELFTEST ok evidence-head-pack-real-green (evidence-m3-rng-scene-anchor-teeth-20261014:rc=0,evidence-m3-rng-scene-head-o1-20261014:rc=0,evidence-m3-rng-scene-head-pack-20261014:rc=0,evidence-m3-rng-scene-head-ambig-20261014:rc=0)
+SELFTEST ok evidence-head-pack-mutation-red (rc=1)
+SELFTEST ok evidence-counts-selftest (rc=0)
+SELFTEST ok evidence-counts-real-green (rc=0)
+SELFTEST ok evidence-counts-head-mutation-red (rc=1)
+SELFTEST ok no-port-touched (offline-only)
+SELFTEST ok=37/37 failures=
+GREEN: 无栈自检全绿（场景前置门 fail-closed + **流水头同种子**制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 拒绝比）+ DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + **DoD② scenario 声明组必须真的出现（缺组 / monster_ai 抽数不足必红且点名）** + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + **承接卡规格锚点保鲜（check_anchors：行号锚 `path:line` == 当前源码首个匹配行；共享增长文件 `main.rs` 走符号唯一性锚，符号须恰出现 1 次）** + **站点表 `oracle_ref` 可解析性（文件存在 + 行号在范围内）** + **证据包书证 head 机判接线（check_evidence_head check-pack：真件四包 rc=0 + 改坏必红 HEAD_UNRESOLVABLE）** + **报告 §0 书证 head/base 全 oid 机判接线（check_evidence_counts：真报告 rc=0 + 短 oid 改坏必红）** + LF 写出 + 零端口）

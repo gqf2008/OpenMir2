@@ -34,6 +34,13 @@ client-e2e 两次合并而行号增长，`enable_production_monster_ai` 调用�
    未登记 ⇒ `BARE_REF_UNDECLARED`；越界 ⇒ `BARE_REF_OUT_OF_RANGE`；
    行内容不匹配 ⇒ `BARE_REF_DRIFT`；归属的文件不存在 ⇒ `BARE_REF_FILE_MISSING`。
    （旧口径完全无视裸 `:NN` ⇒ 它指向的行可静默漂移。）
+8. **符号唯一性锚**（`symbol_unique=True`，2026-10-14 **根因**收口）：对**多车道共享的增长文件**
+   （现为 `bins/game-svr/src/main.rs`——该行号锚实测已漂 6 次 `5229→5440→5488→5598→5665→5795`，
+   每次都是别的车道往 main.rs 插代码把文档钉的行号推平）**不再做行号锚**：文档只引用该文件路径、
+   **不得**再写 `path:<line>`（写了 ⇒ `ANCHOR_LINE_NOT_ALLOWED`），机判改为「期望符号在该文件里
+   **恰好出现一次**」——0 次 ⇒ `ANCHOR_SYMBOL_MISSING`、>1 次 ⇒ `ANCHOR_AMBIGUOUS`。
+   收益：① 别的车道往 main.rs 插代码不再制造「合并即假 RED」的行号漂移；
+   ② 宿主 AI 调用点被删 / 被复制仍 fail-closed 必红（判据不降级，只是把不稳定的行号换成稳定的唯一性）。
 
 > 收录自 2026-10-14 reviewer-5 M-1 / reviewer-6 M-1+M-2（均为对
 > `a173eba89`「锚点闭世界」片的同族非阻塞 Minor）的收口。
@@ -76,14 +83,21 @@ KNOWN_EXTS = frozenset({
 #   rx           = 该行必须匹配的**符号正则**；要求「首个匹配行 == 文档行号」
 #   why          = 这个锚点为什么承重（给 RED 输出用）
 #   basename_ok  = 允许文档用**裸 basename**（无目录）引用本锚点
+#   symbol_unique= True ⇒ **不做行号锚**（共享增长文件）：文档只写文件路径、不得带 `:line`，
+#                  机判 = `rx` 在该文件里**恰好匹配 1 行**（0 ⇒ ANCHOR_SYMBOL_MISSING，
+#                  >1 ⇒ ANCHOR_AMBIGUOUS）。见判据 8。
 #   also         = 同一 literal 的**同行裸续引用** `:NN` 的登记表：
 #                  {line, rx, why}；未登记 ⇒ BARE_REF_UNDECLARED
 # ---------------------------------------------------------------------------
 ANCHORS = (
+    # [symbol_unique] 宿主 AI 调用点落在**多车道共享的增长文件** main.rs 上：行号锚实测已漂 6 次
+    # （5229→5440→5488→5598→5665→5795，每次都是别的车道插代码推平）⇒ 改做符号唯一性锚，
+    # 从根上不再产生「合并即假 RED」，同时保留「调用点被删 / 被复制 ⇒ 必红」的半导体牙。
     dict(literal="mir2-rs/bins/game-svr/src/main.rs",
          path="mir2-rs/bins/game-svr/src/main.rs",
          rx=r"enable_production_monster_ai\(&mut world\)",
-         why="宿主无条件开怪 AI 调用点（本卡要 AI 开）"),
+         why="宿主无条件开怪 AI 调用点（本卡要 AI 开）",
+         symbol_unique=True),
     dict(literal="mongen.rs",
          path="mir2-rs/bins/game-svr/src/mongen.rs",
          rx=r"pub fn enable_production_monster_ai\(",
@@ -168,8 +182,32 @@ def check_doc_text(doc_text, root=REPO_ROOT, anchors=ANCHORS):
     """返回问题清单（空 = 全部锚点保鲜）。纯函数，便于 selftest 注入改坏文本。"""
     problems = []
 
-    # ---- ① 主锚点：文档写的行号 == 当前源码首个匹配行 ----
+    # ---- ① 主锚点：文档写的行号 == 当前源码首个匹配行（行号锚）/ 符号唯一（symbol_unique） ----
     for a in anchors:
+        if a.get("symbol_unique"):
+            # 符号唯一性锚（判据 8）：共享增长文件不做行号锚 —— 文档须引用该文件，且**不得**带行号；
+            # 机判只看期望符号在该文件里「恰好出现一次」（稳定，不再被别的车道插代码推平）。
+            if _norm(a["literal"]) not in _norm(doc_text):
+                problems.append("ANCHOR_MISSING %s：文档里找不到 `%s`（符号唯一性锚：只认文件路径，"
+                                "不写行号）" % (a["why"], a["literal"]))
+                continue
+            if _anchor_re(a).search(doc_text):
+                problems.append("ANCHOR_LINE_NOT_ALLOWED %s：`%s` 是**符号唯一性锚**（共享增长文件不做"
+                                "行号锚，行号必漂）⇒ 文档不得写 `%s:<line>`，只写文件路径"
+                                % (a["why"], a["literal"], a["literal"]))
+            src = os.path.join(root, a["path"])
+            if not os.path.isfile(src):
+                problems.append("ANCHOR_FILE_MISSING %s：%s 不存在" % (a["why"], a["path"]))
+                continue
+            lines = _read_lines(src)
+            n = sum(1 for line in lines if re.search(a["rx"], line))
+            if n == 0:
+                problems.append("ANCHOR_SYMBOL_MISSING %s：%s 里找不到 /%s/"
+                                % (a["why"], a["path"], a["rx"]))
+            elif n > 1:
+                problems.append("ANCHOR_AMBIGUOUS %s：%s 里 /%s/ 出现 %d 次 ⇒ 无法判定"
+                                % (a["why"], a["path"], a["rx"], n))
+            continue
         rx = _anchor_re(a)
         hits = rx.findall(doc_text)
         if not hits:
@@ -284,7 +322,8 @@ def _print(problems, prefix):
     if problems:
         print("%s: check_anchors %d 项 RED" % (prefix, len(problems)))
         return 1
-    print("%s: check_anchors %d/%d 锚点保鲜（文档行号 == 当前源码首个匹配行；闭世界 + 裸续引用）"
+    print("%s: check_anchors %d/%d 锚点保鲜（行号锚：文档行号 == 当前源码首个匹配行；"
+          "符号唯一性锚：文档只引用文件、符号恰出现 1 次；闭世界 + 裸续引用）"
           % (prefix, len(ANCHORS), len(ANCHORS)))
     return 0
 
@@ -304,14 +343,45 @@ def selftest():
     with open(doc_path, "r", encoding="utf-8-sig") as fh:
         text = fh.read()
 
-    # ② 改坏必红①：把宿主 AI 行号改回历史漂移值 `:5229` ⇒ 必红且点名实际行。
-    #    （2026-10-13 实测：main.rs 合并后该符号在 :5440，文档曾写 :5229。）
-    a_main = next(a for a in ANCHORS if a["literal"].endswith("main.rs"))
-    drifted = _anchor_re(a_main).sub(lambda m: "%s:5229" % a_main["literal"], text, count=1)
-    bad = check_doc_text(drifted)
-    check_case("mutation-line-drift-red",
-               any("ANCHOR_DRIFT" in p and "5229" in p for p in bad),
+    # ② 改坏必红①（符号唯一性锚，2026-10-14 根因收口）：宿主 AI 调用点在共享增长文件 main.rs 上
+    #    ⇒ 不做行号锚。改坏：文档把它写回带行号的形式 ⇒ `ANCHOR_LINE_NOT_ALLOWED` 必红。
+    a_main = next(a for a in ANCHORS if a.get("symbol_unique"))
+    line_ref = text + "\n（另见 `%s:5795`）\n" % a_main["literal"]
+    bad = check_doc_text(line_ref)
+    check_case("mutation-symbol-line-ref-red",
+               any("ANCHOR_LINE_NOT_ALLOWED" in p and "main.rs" in p for p in bad),
                "; ".join(bad))
+
+    # ②b 改坏必红②：把符号唯一性锚的**文件引用**从文档里删掉 ⇒ `ANCHOR_MISSING` 必红。
+    dropped_ref = text.replace("`%s`" % a_main["literal"], "`（该文件）`")
+    bad1b = check_doc_text(dropped_ref)
+    check_case("mutation-symbol-ref-removed-red",
+               any("ANCHOR_MISSING" in p and "main.rs" in p for p in bad1b),
+               "; ".join(bad1b))
+
+    # ②c 改坏必红③（唯一性牙）：符号在文件里出现 >1 次 ⇒ `ANCHOR_AMBIGUOUS` 必红
+    #     （证明「恰好一次」不是空话：调用点被复制 = 判据必红）。
+    dup_symbol = dict(literal="rng-trace-scene/check_anchors.py",
+                      path="mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py",
+                      rx=r"^def ",
+                      why="改坏：符号在文件里出现多次",
+                      symbol_unique=True)
+    bad1c = check_doc_text(text, anchors=tuple(list(ANCHORS) + [dup_symbol]))
+    check_case("mutation-symbol-ambiguous-red",
+               any("ANCHOR_AMBIGUOUS" in p and "check_anchors.py" in p for p in bad1c),
+               "; ".join(bad1c))
+
+    # ②d 改坏必红④（存在性牙）：符号在文件里 0 次 ⇒ `ANCHOR_SYMBOL_MISSING` 必红
+    #     （证明调用点被删仍 fail-closed）。
+    missing_symbol = dict(literal="rng-trace-scene/check_anchors.py",
+                          path="mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py",
+                          rx=r"^def NOPE_THIS_SYMBOL_IS_NOT_HERE\(",
+                          why="改坏：符号在文件里不存在",
+                          symbol_unique=True)
+    bad1d = check_doc_text(text, anchors=tuple(list(ANCHORS) + [missing_symbol]))
+    check_case("mutation-symbol-missing-red",
+               any("ANCHOR_SYMBOL_MISSING" in p and "check_anchors.py" in p for p in bad1d),
+               "; ".join(bad1d))
 
     # ③ 改坏必红②：删掉 `mongen.rs:61` 锚点行 ⇒ 必红且点名 ANCHOR_MISSING。
     missing = text.replace("`mongen.rs:61", "`mongen.rs")
@@ -421,9 +491,10 @@ def selftest():
     if badn:
         print("SELFTEST RED: check_anchors selftest %d/%d" % (total - len(badn), total))
         return 1
-    print("SELFTEST GREEN: check_anchors selftest %d/%d（含 12 条改坏必红：行号漂移 / 锚点缺失 / "
-          "锚点歧义 / 未登记引用 / 折叠定义回退 / 同名目录串台 / 裸续引用未登记 / 裸续内容漂移 / "
-          "未识别扩展名 / 裸续引用归属未登记 / 裸续引用归属文件缺失 / 裸续引用登记行越界）"
+    print("SELFTEST GREEN: check_anchors selftest %d/%d（含 15 条改坏必红：符号唯一性锚写回行号 / "
+          "文件引用删除 / 符号重复 / 符号缺失 / 行号锚缺失 / 行号锚歧义 / 未登记引用 / 折叠定义回退 / "
+          "同名目录串台 / 裸续引用未登记 / 裸续内容漂移 / 未识别扩展名 / 裸续引用归属未登记 / "
+          "裸续引用归属文件缺失 / 裸续引用登记行越界）"
           % (total, total))
     return 0
 

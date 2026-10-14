@@ -56,7 +56,11 @@
 - ④ 要 `monai == 0`：`drop-exp/drop_exp_scenario.json` `purity.wallclock_policy = "pinned"`；
   `drop-exp/drop_exp_consumers.tsv` 的 rust `wallclock` 行 = `crates/world/src/monai\.rs:`，`max=0`
   （「pin 抑制必须使其为 0」）。
-- master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/main.rs:5665`
+- master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/main.rs`（调用
+  `game_svr::mongen::enable_production_monster_ai(&mut world)`；**故意不写行号锚**：main.rs 是
+  ④-D / client-e2e / ⑧-10 / ⑦ 等多车道共享的增长文件，行号锚实测已漂 6 次
+  `5229 → 5440 → 5488 → 5598 → 5665 → 5795`，全是别的车道插代码推平 ⇒ 改由「符号存在且唯一」
+  机判保鲜，见 §6）
   → `mongen.rs:61 pub fn enable_production_monster_ai` → `world.enable_monster_ai()`
   ⇒ 只要场上有活怪，`World::tick` 就按槽位驱动 `crates/world/src/monai.rs:697 monster_ai_tick`；
   无目标且 walk 到点时 `monai.rs:171 wondering` **至少抽 1 次 `Random(20)`**
@@ -98,19 +102,25 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
   （`consumer_groups.tsv` 表末补一行）。固定场景（图 0137，MonGen 0 行）里它是**唯一**的
   `spawn` 来源；漏归类会被算成 `other` ⇒ `--strict` 的 `GROUP_SET_DIFF` + DoD② 的
   `MISSING_EXPECTED_GROUPS(spawn)` 双红（会在共用窗口里空转一轮）。机判 = `python -I rng-trace-probe/rng_consumer_groups.py selftest`（含删行必红）。
-- **本文档自身的源码锚点保鲜（2026-10-13 第二次窗口前置审计）**：§4 引用的 `path:line` 是
-  **承重锚点**（宿主 AI 调用点 / 世界层 tick / oracle Wondering）；master 一直在动 ⇒ 行号会漂
-  （实测 `main.rs` 因 ④-D / client-e2e / ⑧-10 等多次合并行长，`enable_production_monster_ai` 从
-  `:5229` 漂到 `:5440`、再漂到 `:5488`）。机判 = `python -I rng-trace-scene/check_anchors.py selftest`：要求「文档写的行号
-  == 该符号在当前源码里的**首个**匹配行」，缺失/重复/漂移都 fail-closed 点名；已接入
-  `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`anchors-freshness-selftest`）。
+- **本文档自身的源码锚点保鲜（2026-10-13 第二次窗口前置审计；2026-10-14 根因收口）**：§4 引用的
+  源码锚点是**承重锚点**（宿主 AI 调用点 / 世界层 tick / oracle Wondering）。两类机判
+  （`python -I rng-trace-scene/check_anchors.py selftest`）：
+  ① **行号锚**：文档写的行号 == 该符号在当前源码里的**首个**匹配行（缺失 / 重复 / 漂移都 fail-closed
+     点名）——用于**稳定文件**（`mongen.rs` / `monai.rs` / oracle `AnimalObject.cs` / 本卡自己的
+     `rng_consumer_groups.py` / `consumer_groups.tsv`）；
+  ② **符号唯一性锚**（`symbol_unique=True`）：**共享增长文件**（`bins/game-svr/src/main.rs`——行号锚
+     实测已漂 6 次 `5229 → 5440 → 5488 → 5598 → 5665 → 5795`，每次都是别的车道插代码推平）
+     **不做行号锚**：文档只引用文件路径、不得再写 `:line`，机判改为「该符号在文件里**恰好出现一次**」
+     （0 次 ⇒ `ANCHOR_SYMBOL_MISSING`；>1 次 ⇒ `ANCHOR_AMBIGUOUS`）。**判据不降级**：宿主 AI 调用点
+     被删 / 被复制仍必红，只是把不稳定的行号换成稳定的唯一性，从根上消掉「别的车道合并 ⇒ 本卡假 RED」
+     这一族。已接入 `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`anchors-freshness-selftest`）。
 - **锚点覆盖面收口（2026-10-14 reviewer-5 M-1 / reviewer-6 M-1+M-2）**：旧口径有两处静默通道 ——
   ① 覆盖判定用「结尾 basename 匹配」⇒ **别的目录下的同名文件**会被误判 COVERED（既非
   `UNGUARDED_ANCHOR` 也不 `ANCHOR_DRIFT`）；② 同行**裸续引用**（同一条引用后面再跟一个冒号行号，
   本 §6 的 R-6 站点写法即此）完全没有被解析。现机判（`check_anchors.py`）：带目录引用必须与锚点的
   `literal`/`path` **全等**（裸 basename 仅限显式 `basename_ok`）、未识别扩展名走
   `UNKNOWN_REF_EXT` fail-closed、裸续引用归到同行前一个引用并按锚点 `also` 校验**行内容**
-  （未登记 / 越界 / 内容不符都判 RED）；`selftest` 13/13（含 12 条改坏必红；裸续引用三条分支
+  （未登记 / 越界 / 内容不符都判 RED）；`selftest` 16/16（含 15 条改坏必红；裸续引用三条分支
   `BARE_REF_UNGUARDED`/`BARE_REF_FILE_MISSING`/`BARE_REF_OUT_OF_RANGE` 亦各有活用例）。
 
 ## 7. 当前状态（阻塞）
