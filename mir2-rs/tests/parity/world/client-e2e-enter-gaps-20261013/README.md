@@ -4,7 +4,7 @@
 （同一 `D:\MirClient-run\MirClinet.exe`、同一角色 `aaa`、同一 `mir2_db`）把两侧跑成逐像素同类，
 并用服务端日志证明“帧发了 / 世界有实体 / AOI 真可见”。按 §6.0-3 与项目硬约束，不单方面行为偏离；
 
-> **本目录覆盖六片（同一卡）**：
+> **本目录覆盖以下各片（同一卡）**：
 > ① 只读可观测性片（`7c8ac2fc3`，已合入 `f6869cb26`）：`log_enter_ability` + 周期世界/AOI 快照 + 1 条用例；
 > ② 能力帧布局片（`a602e8a94`，已合入 `636bdce53`）：**默认关闭**的 58B 冻结客户端布局开关
 > `MIR2_CLIENT_ABILITY_LAYOUT`（`record::encode_ability_client`），证据 `21`/`22`/`23`/`24`/`25`；
@@ -25,6 +25,11 @@
 > `da2df1fdb` 后把窗口专用源 `E:/tmp/m2svr-window-origin` 从 `52c91180f` 刷到精确 `da2df1fdb`
 > （生产路径零差异 ⇒ **六件 exe 逐字节不变**、零重编），出处清单 `source_head=da2df1fdb`；
 > 入库逐字替身口径 `WINDOW_READY=YES`，root 现跑活脚本仍 G5 RED（见 §5）。证据 `230-window-source-refresh.txt`。
+> ⑧（`2026-10-14` 追补，burst27）：**窗口源「修复前镜像」fail-closed 收紧** —— R1 默认必查集由
+> 片⑪+片㉜（2）扩到 **+HIGHHP 家族三帧**（片㊴ `c61b9627a` 53 `TCharDesc` 尾 / 片㊼ `6cadc9fbf` 52 全调用点 /
+> 片 `fd68e037d` 31，共 5）：旧集让 root 15:0x 的失败源 `8e491f81e`（含片⑪/㉜、**缺 53 尾修**）判
+> **GREEN** ⇒ 会构建修复前镜像；新集判 **RED（缺 3 片）**。`--selftest` 49/49→**50/50**；现行窗口源
+> `da2df1fdb` 在新集下仍 R1..R7 全绿（不移动窗口源、不重编）。证据 `231-window-source-fixpin-r1.txt`。
 
 ## 结论（先看这三条）
 

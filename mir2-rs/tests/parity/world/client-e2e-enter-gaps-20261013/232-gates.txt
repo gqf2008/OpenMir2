@@ -1,0 +1,68 @@
+232 — 片「窗口源 fix-pin R1」门禁读数（@ base `7dff2e68c` 工作树）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+cwd = `mir2-rs`；`CARGO_TARGET_DIR=E:/tmp/m2svr-target`（隔离；未动共享主检出）
+====================================================================================================
+
+# 1) fmt
+
+```
+$ cargo fmt --all -- --check
+fmt rc=0
+```
+
+# 2) clippy（-D warnings）
+
+```
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.56s
+clippy rc=0
+```
+
+# 3) cargo test --workspace
+
+```
+$ cargo test --workspace
+… （完整输出 `E:/tmp/m2svr-burst27/tests-full.txt`，100110 B）
+suites 101
+passed 1233   failed 0   ignored 22
+non-ok: []
+test rc=0
+```
+
+# 4) msgcodegen --check
+
+```
+$ cargo run -q -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
+```
+
+# 5) 本片判据牙（非 cargo 门禁，独立跑）
+
+```
+$ python -I -B check_rust_window_preflight.py --selftest
+SELFTEST OK (50/50)
+rc=0
+```
+
+（改前 49/49；新增牙 `required-fixes-default-five` + `required-fixes-include-highhp-family`。）
+
+# 6) 清单核对（写入 `SHA256SUMS.txt` 后跑）
+
+```
+$ python -I -B tools/evidence-hash/verify_sha256sums.py write <证据目录>
+写入 …\SHA256SUMS.txt（240 行，repo 口径）
+GREEN: write 完成（5 行 hash 变更，mode=repo）
+
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify <证据目录> --check-extra
+GREEN …\SHA256SUMS.txt  [repo 口径]  OK 240/240
+rc=0
+
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <证据目录>
+EOLCHECK GREEN 241/241 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
+
+$ python -I -B tools/evidence-hash/verify_sha256sums.py reconcile <证据目录>
+… 240  240  240  0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+reconcile: 1/1 GREEN
+```
