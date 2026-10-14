@@ -11,15 +11,25 @@ base = origin/master `ea2322d04`；head = 本片提交（证据-only）
 
 # 1) 注入探针三态（`--slot-probe-json`；仅自测/证据复算，窗口机上禁用）
 
+> ⚠ **2026-10-15 返工（reviewer-5 I-1）**：初版 B 态写「occupied ⇒ RED rc=1」，但其引用的原始件实为
+> `PREREQ_RED` rc=2 —— 当时 `probe-occupied.json` 的 exe 路径用了**未转义的 Windows 单反斜杠** ⇒
+> 非法 JSON（`Invalid \escape: line 1 column 107 (char 106)`）。已把该探针改为**正斜杠**并**三态原样重跑**
+> （下读数即重跑值），原始件随本片入库。改前/改后与逐字对照见 `254-redcheck-window-step0-rework-20261015.txt`。
+
+三次均带 `--provenance E:/tmp/m2svr-window-target/window-provenance.json`（命令模板统一，R7 同口径；见 254 §3）。
+
 A) `probe-free.json` = `{"ports":[],"exes":[]}`
    ⇒ `WARN R8 使用注入探针 ...` ; `[OK] R8 游戏端口全 DOWN（9 个；3306 共享 MySQL 不在门内）` ;
      `[OK] R8 无 game-svr.exe 在跑` ⇒ `RESULT: GREEN` rc=0
-B) `probe-occupied.json` = 5000 被 pid 30284 占 + exe = `E:\tmp\openmir2-merge-target\debug\game-svr.exe`
-   ⇒ `RED R8` ×2（点名 `5000(pid 30284)` + 异源 exe）⇒ `RESULT: RED` rc=1
+B) `probe-occupied.json` = 5000 被 pid 30284 占 + exe = `E:/tmp/openmir2-merge-target/debug/game-svr.exe`（正斜杠，合法 JSON）
+   ⇒ `RED R8` ×2（① 点名 `5000(pid 30284)`；② 点名在跑 pid 30284 来自
+     `E:/tmp/openmir2-merge-target/debug/game-svr.exe`）⇒ `RESULT: RED` rc=1
 C) `probe-bad.json` = 坏 JSON
    ⇒ `PREREQ_RED R8: 注入探针不可用（...）` ⇒ `RESULT: PREREQ_RED` rc=2
 
-原始件：`E:/tmp/m2svr-burst-b54/preflight-probe-free.txt` / `...-probe-occupied.txt` / `...-probe-bad.txt`。
+原始件（**随本片入库**，可 hash 复算）：`preflight-probe-free.txt` / `preflight-probe-occupied.txt` /
+`preflight-probe-bad.txt`（探针本身 `probe-free.json` / `probe-occupied.json` / `probe-bad.json`）；
+改前（I-1 复现）留痕：`preflight-probe-occupied-before-invalid.txt`。
 
 # 2) 反向对照（同机 / 同替身源 / 同替身脚本，只差「R8 看不看槽位」）
 
@@ -36,4 +46,4 @@ C) `probe-bad.json` = 坏 JSON
 # 3) 判级与纪律
 
 判级 L（只读机判 + 文档，零生产代码）。零起栈 / 零占端口 / 零 kill；未动共享主检出 / root 活脚本 /
-泄漏栈；未 merge、未自签 review。原始件：`E:/tmp/m2svr-burst-b54/`。
+泄漏栈；未 merge、未自签 review。原始件随本片入库（见 §1 末）；返工记录见 `254`。

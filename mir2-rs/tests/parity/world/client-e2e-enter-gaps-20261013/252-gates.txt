@@ -45,6 +45,8 @@ $ python -I -B window_handoff.py --selftest                ⇒ SELFTEST OK (107/
 # 4) 反向对照 / 改坏必红（详见 251）
 
 - 注入探针「全空闲」⇒ RESULT: GREEN rc=0；「5000 + 修复前 exe」⇒ RED rc=1；「坏 JSON」⇒ PREREQ_RED rc=2。
+  （2026-10-15 返工：初版「occupied」探针是非法 JSON ⇒ 实得 PREREQ_RED rc=2；已改正斜杠重跑，
+  现值即上读；本轮三次均带 `--provenance`。改前/改后与原始件见 `254`，返工后四门禁见 `255`。）
 - 片60 BEFORE（无 R8）：同机同源同脚本 ⇒ 真探 GREEN 且 WINDOW_READY=YES（假绿，见 246）；
   工具层 MUT-A 强制绿 ⇒ selftest FAILED (53/57) + 真探回落假 GREEN（见 245 §6）。
 ⇒ R8 判定由真实槽位驱动，去掉 R8 必然在泄漏栈在位时假绿。
@@ -54,6 +56,14 @@ $ python -I -B window_handoff.py --selftest                ⇒ SELFTEST OK (107/
 - 零起栈、零占端口；**未执行任何 Stop/kill**（泄漏栈属 root，等授权或 root 自跑 step0 `250`）；
   共享 3306 未连接。未动共享主检出 / root 活脚本 / 泄漏栈；未 merge、未自签 review。
 - 判级 L（只读机判 + 文档）；卡级 R 真机 ①②③ 归 root 独占窗口。
+
+# 5b) 返工（2026-10-15，reviewer-5 I-1；详见 254/255）
+
+- I-1 本体 = `probe-occupied.json` 非法 JSON（未转义单反斜杠）⇒ B 态实得 PREREQ_RED rc=2、
+  与 251 §1 B / 本件 §4 / patch body 自述不符。已改正斜杠 ⇒ B 态实得 `RESULT: RED` rc=1（三态全部与自述一致）。
+- O-1（原建议）已做：三态原样件（`probe-*.json` + `preflight-probe-*.txt` + 改前留痕）随本片入库，复算不再依赖 `E:/tmp`。
+- O-2（原建议）已做：三态重跑统一带 `--provenance`，R7 落到与 `249` §1 相同的命令模板。
+- 返工后四门禁/边界/证据清单见 `255-gates.txt` / `256-boundary.txt`（原 §1/§2/§6 读数未变，因本返工零代码改动）。
 
 # 6) 证据清单口径（LF / git-blob）
 

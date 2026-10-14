@@ -1509,3 +1509,22 @@ brief 顶部（root 2026-10-14 15:0x）的离线四项早已闭环（§㊽㊾㊿
   冻结面 `src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/ mir2-rs/bins/` 空；
   零 `.rs`/`.toml`/`.ps1`/`.cs`；零起栈/零端口/**零 kill**；未动共享主检出 / root 活脚本 / 泄漏栈；
   未 merge、未自签。四门禁/机判读数见 `252-gates.txt`，边界/冻结面见 `253-boundary.txt`。
+
+### 61) 片61 返工：三态「注入探针占位 ⇒ RED」自述与原始件不符（reviewer-5 I-1；2026-10-15，tag `m2svr`）—— `254`/`255`
+
+片61（`ad05280ad`）被 `openmir2-reviewer-5` 判 **`request_changes`**，唯一 Important = **I-1**：
+`251` §1 B / `252` §4 / patch body 都写「注入探针 occupied ⇒ `RESULT: RED` rc=1」，但所引原始件
+`E:/tmp/m2svr-burst-b54/preflight-probe-occupied.txt` 实为 `PREREQ_RED` rc=2。根因 = `probe-occupied.json`
+的 exe 路径用了**未转义的 Windows 单反斜杠** ⇒ 非法 JSON（`Invalid \escape: line 1 column 107 (char 106)`）
+⇒ 工具 `json.loads` 失败走 fail-closed `PREREQ_RED`（不是 RED）。
+
+- **本返工只改一行 JSON + 三态原样重跑**（`254`）：`probe-occupied.json` 改**正斜杠**
+  （工具侧 `os.path.abspath`/`normcase` 归一，`E:/tmp/...` ≡ `E:\tmp\...`，仍是「异源 exe」判定）。
+- **返工后三态**（三次都带 `--provenance`）：全空闲 ⇒ `GREEN` rc=0；占位（5000 pid 30284 + 异源 exe）
+  ⇒ `RED` rc=1（`RED R8` ×2）；坏 JSON ⇒ `PREREQ_RED` rc=2 ⇒ **与自述一致**，I-1 关闭。
+- **O-1（原建议）已做**：三态原样件 `probe-{free,occupied,bad}.json` + `preflight-probe-{free,occupied,bad}.txt`
+  随本片入库（另 `preflight-probe-occupied-before-invalid.txt` 为改前留痕）⇒ 复算不再依赖 `E:/tmp`。
+- **O-2（原建议）已做**：三态重跑统一命令模板（都带 `--provenance`），R7 与 `249` §1 同口径。
+- **不改**：`249`/`250` 的真探结论（R8 RED ×2 = 9 端口 + 异源 exe）、`245`/`246` 的片60 BEFORE 假绿与
+  MUT-A、以及一切工具语义（`check_rust_window_preflight.py` / `window_handoff.py` 本片逐字节未动）。
+- 判级 **L**（证据/文档，零生产代码）；卡级 **R** 真机 ①②③ 仍归 root 独占窗口。四门禁/边界见 `255`。
