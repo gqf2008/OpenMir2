@@ -1,2 +1,2 @@
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.04s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.91s
 rc=0

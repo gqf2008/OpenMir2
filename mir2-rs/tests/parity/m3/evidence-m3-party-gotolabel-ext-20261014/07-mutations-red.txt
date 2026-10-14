@@ -23,3 +23,15 @@
 
 git status after restore:
 
+
+# ==== 返工追加（T-54→T-55 撞号订正，2026-10-14）====
+# 牙 = ⑧-5 已接入 fixture_chain_gate 共享管线的 m3_guild_war_quirk_registry_gate.py check
+# （对 T-54 编号唯一性 fail-closed）；不新增本卡自有门，复用既有硬牙。
+
+### MUT6: 把本卡登记行从 T-55 还原成 T-54（= 制造与 ⑧-5 的 T-54 撞号）
+  - cmd: python -I m3_guild_war_quirk_registry_gate.py check  (cwd=mir2-rs/tests/parity/m3)
+  - rc=1
+  - GUILD_WAR_QUIRK_REGISTRY_RED 1：DUPLICATE T-54 x 2 @ L289,L331
+  - 还原（T-55）后同一 check = GREEN（1 行登记齐 + 锚点齐 + 编号唯一），rc=0（见 09-whitelist-t55-renumber.txt）
+
+git status after restore:
