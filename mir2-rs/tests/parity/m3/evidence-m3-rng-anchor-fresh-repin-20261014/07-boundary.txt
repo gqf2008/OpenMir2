@@ -1,0 +1,56 @@
+# 边界：patch base=origin/master 41e61029e，head=HEAD（本片）
+$ git rev-parse origin/master HEAD
+41e61029e7be497f953033921a374558c314b10c
+224cea0c99575f4773e0ca67a65d85a1e7a9598e
+
+$ git diff --name-status origin/master HEAD
+M	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/40-fmt.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-o2-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/20-gate-fmt.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/10-gate-fmt.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/05-gate-fmt.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/08-gate-fmt.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/SHA256SUMS.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/00-commands.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/01-before-scan.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/02-fmt-gate-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/03-fmt-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/04-fmt-gate-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/05-chain-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/06-chain-gate-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/07-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/07-chain-gate-require-all.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/09-chain-red-preexisting-base-proof.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/10-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/11-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/12-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/13-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/20-evidence-verify.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/21-external-mutation-red.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-fmt-evidence-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/fixture_chain_gate.py
+A	mir2-rs/tests/parity/m3/m3_fixture_fmt_evidence_gate.py
+M	mir2-rs/tests/parity/m3/rng-trace-scene/DRIVER-CONTRACT.md
+M	mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+
+$ git diff --name-only origin/master HEAD | wc -l   # 路径数
+32
+
+$ git diff --name-only origin/master HEAD -- '*.rs' | wc -l   # .rs 改动数（期望 0）
+0
+
+$ git diff --name-only origin/master HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins | wc -l   # 冻结面（期望 0）
+0
+
+$ git diff --name-only origin/master HEAD | grep -v '^mir2-rs/tests/parity/' | wc -l   # parity 之外路径（期望 0）
+0
+
+$ git status --short   # 工作树干净（期望空）
+?? mir2-rs/tests/parity/m3/evidence-m3-rng-anchor-fresh-repin-20261014/
+
+$ git merge-base --is-ancestor HEAD origin/master && echo ANCESTOR || echo NOT-ANCESTOR   # 期望 NOT-ANCESTOR
+NOT-ANCESTOR
