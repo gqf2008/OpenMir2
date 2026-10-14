@@ -1,0 +1,160 @@
+201 — 片㊽ ③ 窗口就绪收口 #4 —— 专用构建源刷到 master `81f9d8f55`（含片㊼ 52 布局全覆盖）+ 预构建六件 + R1..R7 GREEN
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+cwd（构建）= `E:/tmp/m2svr-window-origin`（检出外克隆；共享主检出只读、零改动）
+CARGO_TARGET_DIR = `E:/tmp/m2svr-window-target`
+零起栈、零游戏端口（仅共享 3306 只读）；不 merge、不自签 review
+base = `origin/master` `81f9d8f551`（= 片㊼ `6cadc9fbf` 合入后的 master；本分支已 `merge --ff-only`）
+====================================================================================================
+
+# 0) 一句话结论
+
+片㊼ 已在 `18:5x` 被合并检查点合入 master（`merge_result ec756712` → `81f9d8f55`）。**该合并使窗口就绪态再次
+变 RED**：专用构建源 `E:/tmp/m2svr-window-origin` 仍停在片㊻ 刷的 `ae6443924`，落后 master **1 个生产件**
+（`mir2-rs/bins/game-svr/src/main.rs`，即片㊼）⇒ R6 RED，且暖 target 里的 `game-svr.exe` 仍是刷前旧件 ⇒ R7 也会 RED。
+
+本片：刷源 `ae6443924 → 81f9d8f55` + 重编译六件（只 `game-svr.exe` 重链）+ 重录出处清单，
+`check_rust_window_preflight.py` = **R1..R7 全 OK / GREEN rc=0**；聚合门（入库替身脚本口径）=
+**`WINDOW_READY=YES` / GREEN rc=0**。**仍归 root 的两步**：① 把活脚本 `client-e2e-window.sh` 换入库替身
+（`client-e2e-window.fixed.sh.txt`，仅 `repo=`/`tgt=` 两行 diff）——当前活脚本仍指**共享主检出**
+`/e/Users/gxh/Documents/GitHub/OpenMir2` 与 `E:\tmp\openmir2-merge-target`（G5 双 RED）；
+② 起栈后按 `--plan`/`--judge` 跑 ③b/③a 两侧真机对照。
+
+> ⚠ **根因（本片同时闭环，证据 `205`）**：①「52/752 不生效 + 跑=0」不是区间 `ad0592b19..8e491f81e`
+> 里某条提交引入的——区间内 **52/752/53/CM_RUN 代码路径逐字节未变**（`enter.rs` 零改动、8 个符号 `-S` 命中 0、
+> 两侧符号计数全 EQUAL），真凶是**一直存在**的 53 `SM_HEALTHSPELLCHANGED` 缺冻结客户端 12B `TCharDesc` 尾，
+> 触发条件 = 进图 `HP<MaxHP`（片㊴ 已修）。两侧真机日志的唯一差别是进图 HP（失败侧 `hp=18`、工作侧 `hp=19`）。
+
+# 1) 缺陷：master 前进后专用构建源又落后（R6/R7 双 RED）
+
+```
+$ git -C E:/tmp/m2svr-window-origin rev-parse HEAD            # BEFORE
+ae64439246cba0ea5e7cc406112284b83d1c69cc
+$ git -C E:/tmp/m2svr-window-origin rev-parse origin/master
+81f9d8f55112dcc5036984cfa67d89dc8a2f33c1                      # 片㊼ 合入后的 master
+```
+门读数（before；只给 `--target-dir`，未给 `--provenance`，故 R7 按「窗口口径缺件」INFO 跳过）：
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+    --baseline-ref origin/master --mirserver E:/MirServer --target-dir E:/tmp/m2svr-window-target
+[OK] R1 构建源 … HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 … HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+INFO R7 跳过（未给 --target-dir/--provenance；窗口口径两者都必须给）
+RED R6: 构建源 HEAD=ae64439246 落后于基线 origin/master@81f9d8f551 的生产路径（1 件：
+        mir2-rs/bins/game-svr/src/main.rs）⇒ 窗口会测旧件，先 `fetch` + `checkout --detach <基线>` + 重编译
+RESULT: RED
+```
+⇒ 若此时开窗，窗口从**旧 exe**（缺片㊼ 的升级/换装 52 布局）起栈：不升级/不换装时 ①②③ 读数可能仍绿，
+但一旦窗口内做升级或换装，HUD 会再次归零 ⇒ 白烧窗口（与片㊻ 收的同一形态，只是这次只差 1 个生产件）。
+
+# 2) 修复：刷源 + 预构建（before/after）
+
+```
+$ git -C E:/tmp/m2svr-window-origin fetch origin
+$ git -C E:/tmp/m2svr-window-origin checkout --detach 81f9d8f55
+HEAD is now at 81f9d8f55 Merge 6cadc9fbf (enter-gaps-window-dense-menu): … - approve openmir2-reviewer-5 @reviewed_head 6cadc9fbf
+$ git -C E:/tmp/m2svr-window-origin rev-parse HEAD            # AFTER
+81f9d8f55112dcc5036984cfa67d89dc8a2f33c1
+$ git -C E:/tmp/m2svr-window-origin status --porcelain | wc -l
+0
+$ for c in c61b9627a 448f62ab7 aff1f7c17 276f2f95e 6cadc9fbf; do printf '%s: ' $c;
+    git -C E:/tmp/m2svr-window-origin merge-base --is-ancestor $c HEAD && echo YES || echo no; done
+c61b9627a: YES   # 片㊴ 53 TCharDesc 尾
+448f62ab7: YES   # 片㊷ 53 生产发点选路
+aff1f7c17: YES   # 片㊸ O-1 收口
+276f2f95e: YES   # 片㊻
+6cadc9fbf: YES   # 片㊼ 52 生产调用点布局全覆盖
+```
+
+预构建（六件，`--offline`，暖 target）：
+```
+$ cd E:/tmp/m2svr-window-origin/mir2-rs && CARGO_TARGET_DIR='E:\tmp\m2svr-window-target' cargo build --offline \
+    -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv
+   Compiling game-svr v0.1.0 (E:\tmp\m2svr-window-origin\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.49s
+build_rc=0
+```
+
+| 二进制 | bytes | sha256 | 相对片㊻（`193`） |
+|---|---|---|---|
+| `game-svr.exe` | 135600776 | `d4228c00c2857f87c6c0293e267bcd4c5127ffebfe63f66d9734575b6afc1f06` | **重链** `60b4dc4f…` → `d4228c00…` |
+| `game-gate.exe` | 29233601 | `146fb23cd841b089d60738873fbb210489efeee36756743ef95ff6875645735e` | 不变 |
+| `login-srv.exe` | 82221827 | `daa1ba949478d98ec31c8becabcff6853ea64f98be56dd25d8e57673274a0068` | 不变 |
+| `login-gate.exe` | 27939672 | `78c7dac971d93e51f9be874f82ef1fc8b9a51a656bf7473ad6efddf4251622d3` | 不变 |
+| `sel-gate.exe` | 27918761 | `741ea627cd1cd65578dfc567130245dfd7f953d6eab5ea31acf67cc79d08accd` | 不变 |
+| `db-srv.exe` | 84322707 | `15fb1f25af19ee719501eed4406805ab49c2bb6d26dd0522f6a7f33bd5eaf771` | 不变 |
+
+（其余五件逐字节不变 ⇒ 片㊼ 与 53 修复链只落在 `game-svr`，与片㊼ `200-boundary` 的「生产改动仅 `main.rs`」自洽。）
+
+重录出处清单：
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+    --target-dir E:/tmp/m2svr-window-target \
+    --record-provenance E:/tmp/m2svr-window-target/window-provenance.json
+R7_PROVENANCE_RECORDED source_head=81f9d8f55112dcc5036984cfa67d89dc8a2f33c1 bins=6 \
+    -> E:/tmp/m2svr-window-target/window-provenance.json
+rc=0
+```
+
+门读数（after，窗口口径 = 给 `--target-dir` + `--provenance`）：
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+    --baseline-ref origin/master --mirserver E:/MirServer \
+    --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-window-target/window-provenance.json
+[OK] R1 … d16b5199d9 / [OK] R1 … 0d0d62a695 / [OK] R2 / [OK] R3 / [OK] R4 ×4 / [OK] R5
+[OK] R6 构建源 HEAD=81f9d8f551 == 基线 origin/master@81f9d8f551
+[OK] R7 出处清单 window-provenance.json source_head=81f9d8f551，6 件 exe sha256 逐字节一致
+RESULT: GREEN
+rc=0
+```
+
+# 3) 聚合门（G1..G5）与 root 的活脚本
+
+```
+# root 现跑的活脚本（E:/tmp/openmir2-watch/client-e2e-window.sh）口径：
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin \
+    --target-dir 'E:\tmp\m2svr-window-target' --mirserver E:/MirServer
+OK   G2 ×8 selftest / OK G1 Rust 窗口前置门 GREEN（R1..R7）
+RED  G5 窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 指向**共享主检出** ⇒ 直接跑它会构建另一棵树（白烧窗口）
+RED  G5 窗口脚本 tgt=E:\tmp\openmir2-merge-target != 本计划 --target-dir=E:\tmp\m2svr-window-target
+WINDOW_READY=NO / RESULT: RED  rc=1
+
+# 入库替身 client-e2e-window.fixed.sh.txt（仅 repo=/tgt= 两行 diff）口径：
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin \
+    --target-dir 'E:\tmp\m2svr-window-target' --mirserver E:/MirServer \
+    --window-script client-e2e-window.fixed.sh.txt
+OK   G2 ×8 / OK G1（R1..R7）
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES / RESULT: GREEN  rc=0
+```
+
+⇒ **仍 RED 的只有 G5 = root 的活脚本未换入库替身**（这是 root 侧两行 diff 的动作，本车道不写 root 的活脚本）。
+
+# 4) 现场交接观察（本片只读实测，未动任何进程）
+
+`2026-10-14 18:5x` 实测：**root 的联调栈仍在跑**，且其 `game-svr` 镜像是**修复前**的：
+
+| 项 | 读数 |
+|---|---|
+| `game-svr` PID/启动 | `30284` @ `2026-10-14 14:55:06`（早于片㊴ `15:31`） |
+| 运行 exe | `E:\tmp\openmir2-merge-target\debug\game-svr.exe`（**merge 车道 target，不是本窗口 target**） |
+| 该 exe 文件 mtime | `2026-10-14 18:53:32`（merge 时重链）；但 **14:55 起的进程仍是旧镜像** |
+| 监听端口 | 5000/5500/5600/6000/7000/7100/7200 UP（`rust-stack.pid.json`：DBSrv/LoginSrv/game-svr/game-gate/login-gate/sel-gate） |
+
+⇒ **若从这条在跑的栈抓包，会复现 HUD `0/0` + `CM_RUN=0`（进程镜像是修复前的）**。下一次真机窗口应：
+`bash client-e2e-window.sh stop`（或按 `rust-stack.pid.json` 的 `stop_order` 收）→ 换入库替身脚本 → `start`
+（此刻脚本会 `cargo build` 本 target = 已在 `81f9d8f55` 源上的 `d4228c00…`）→ 再跑 ②③。
+
+# 5) 分级与边界
+
+* 本片 = **L 级**（就绪工具 + 预构建；零生产代码；判据全在离线构造层）。真机 R 级（①②③，含升级/换装步）
+  仍归 **root 独占窗口**；本片**未起栈、未占端口、未跑真机**。
+* `src` / `sql` / `MirClient` / `mir2-rs/crates/protocol` / `mir2-rs/crates/storage` 冻结面**零改动**（见 `204`）。
+* 交付：本文件 + `202-redcheck-window-provenance-4.txt` + `203-gates.txt` + `204-boundary.txt` + `205-bisect-52-752-run0-closure.txt`。

@@ -1,0 +1,85 @@
+202 — 片㊽ 红检（改坏必红）+ 缺陷复现（before 读数）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+变异只在 `E:/tmp/m2svr-r7b-mut/` 的副本上做；仓内件 sha256 前后不变（见 `203` §E）
+零起栈、零游戏端口；未动共享主检出；不 merge、不自签 review
+====================================================================================================
+
+§A 缺陷复现（before）：源停在片㊻ 刷的 `ae6443924` —— R6 + R7 双 RED
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref ae6443924 \
+    --baseline-ref origin/master --mirserver E:/MirServer \
+    --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-window-target/window-provenance.json
+RED R6: 构建源 ae6443924=ae64439246 落后于基线 origin/master@81f9d8f551 的生产路径（1 件：
+        mir2-rs/bins/game-svr/src/main.rs）⇒ 窗口会测旧件，先 `fetch` + `checkout --detach <基线>` + 重编译
+RED R7: 出处清单 source_head=81f9d8f551 != 当前构建源 ae6443924=ae64439246 且在影响六件 exe 的路径上有
+        1 件差异（mir2-rs/bins/game-svr/src/main.rs）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）；先重编译 + 重录清单
+RESULT: RED
+```
+（另在 `--ref HEAD` + 刷前旧清单的真实 before 态实测只 R6 RED：`193`/`201` §1。两处都指向同一件事：
+窗口前的源/exe 必须与当前基线一致。）
+
+§B 牙齿 A（假清单 head=ae6443924；R6 GREEN 而 R7 RED）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+    --baseline-ref origin/master --mirserver E:/MirServer \
+    --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-r7b-mut/prov-old-head.json
+[OK] R6 构建源 HEAD=81f9d8f551 == 基线 origin/master@81f9d8f551
+RED R7: 出处清单 source_head=ae64439246 != 当前构建源 HEAD=81f9d8f551 且在影响六件 exe 的路径上有
+        1 件差异（mir2-rs/bins/game-svr/src/main.rs）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）
+RESULT: RED
+```
+⇒ 这正是 `175` §F 登记、R6 判不出的形态：「源刷了但**清单/镜像停在旧 head**」。片㊼ 合并后本片若不刷源，
+窗口就落在这里。
+
+§C 牙齿 B（暖 target 里是刷前旧 `game-svr.exe`：sha `60b4dc4f…` vs 实编 `d4228c00…`）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+    --baseline-ref origin/master --mirserver E:/MirServer \
+    --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-r7b-mut/prov-stale-exe.json
+[OK] R6 构建源 HEAD=81f9d8f551 == 基线 origin/master@81f9d8f551
+RED R7: 1 件 exe 与出处清单不一致（game-svr.exe（sha256 d4228c00c2 != 清单 60b4dc4fbe）)
+        ⇒ 窗口会从旧/异构 exe 起栈；先重编译 + 重录清单
+RESULT: RED
+```
+
+§D 掏空牙齿（MUT-A 源判定短路 + MUT-B sha256 对账短路）⇒ 同一输入变假绿
+----------------------------------------------------------------------------------------------------
+变异（只在副本 `E:/tmp/m2svr-r7b-mut/mutated.py`）：
+```
+-        if moved:                                   # 真件：清单 head 与 ref 有生产差异 ⇒ RED
++        if False:  # MUT-A
+-        elif got != want:                            # 真件：exe sha256 与清单不符 ⇒ RED
++        elif False:  # MUT-B
+```
+```
+$ python -I -B E:/tmp/m2svr-r7b-mut/mutated.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+    --baseline-ref origin/master --mirserver E:/MirServer \
+    --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-r7b-mut/prov-old-head.json
+[OK] R6 构建源 HEAD=81f9d8f551 == 基线 origin/master@81f9d8f551
+[OK] R7 出处清单 source_head=ae64439246 != HEAD=81f9d8f551，但两者在 `mir2-rs/**` 零差异 ⇒ 六件 exe 仍有效（cargo 不会重链）
+[OK] R7 出处清单 prov-old-head.json source_head=81f9d8f551，6 件 exe sha256 逐字节一致
+RESULT: GREEN
+$ … --provenance E:/tmp/m2svr-r7b-mut/prov-stale-exe.json
+[OK] R6 构建源 HEAD=81f9d8f551 == 基线 origin/master@81f9d8f551
+[OK] R7 出处清单 prov-stale-exe.json source_head=81f9d8f551，6 件 exe sha256 逐字节一致
+RESULT: GREEN
+```
+⇒ §B/§C 的 RED 来自 R7 真判据（不是硬编码/环境）：掏空后同输入即变 GREEN；还原变异后 §B/§C 复 RED。
+
+§E 二分闭环的机判牙（「52/752/CM_RUN 路径在区间内未变」+「53 生产点从 header-only 改为带尾」）
+----------------------------------------------------------------------------------------------------
+```
+$ git -C <worktree> log --oneline ad0592b19..8e491f81e -S'encode_ability'     -- mir2-rs/bins/game-svr/src | wc -l   # 0
+$ git -C <worktree> log --oneline ad0592b19..8e491f81e -S'CM_RUN'             -- mir2-rs/bins/game-svr/src | wc -l   # 0
+$ git -C <worktree> log --oneline ad0592b19..8e491f81e -S'sm_healthspellchanged' -- mir2-rs/bins/game-svr/src | wc -l  # 0
+$ git -C <worktree> grep -l sm_healthspellchanged_client 8e491f81e -- mir2-rs/bins/game-svr/src | wc -l   # 0  ⇒ 失败侧 53 全 header-only
+$ git -C <worktree> grep -l sm_healthspellchanged_client 81f9d8f55 -- mir2-rs/bins/game-svr/src | wc -l   # 1  ⇒ master 53 走冻结客户端尾
+```
+反例（改坏必红）：把 `sm_healthspellchanged_frame` 的默认支改回 `sm_healthspellchanged`（header-only）⇒
+片㊴ 的用例（`healthspellchanged_client_carries_tchardesc_tail` + `drain_recovery`/`drain_stamina` 生产断言）必红
+（片㊴ `c61b9627a` 的 commit message 记：变异下「left:0/right:12」双双 RED，同一 burst 内还原）。
+
+* 原始输出：`E:/tmp/m2svr-r7b-out/202-redcheck-raw.txt`、`E:/tmp/m2svr-burst/bisect-{evidence,log-evidence}-20261014.txt`。

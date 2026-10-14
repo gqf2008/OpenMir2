@@ -1129,3 +1129,28 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   建议 root 的 R 窗口在 ①②③ 之外**做一次升级或换装**再确认 HUD 不归零（本片修复的直接可观测面）。
 - 交付：`197-52-layout-all-sites.txt`（审计 + 修 + 锚点）、`198-redcheck-52-layout.txt`（3 条变异）、
   `199-gates.txt`、`200-boundary.txt`。
+
+### ㊽ root 最高优先闭环（二分 + 53 根因）+ ③ 窗口就绪收口 #4（2026-10-14）—— `201`/`202`/`203`/`204`/`205`
+
+**root 2026-10-14 15:0x 的最高优先项**（区间 `ad0592b19..8e491f81e` 二分「52/752 不生效 + 跑=0」）在本片闭环：
+
+- **① 二分（`205`）**：区间内**没有任何提交**改动 52/752/53/`CM_RUN` 路径（`enter.rs` 零改动；8 个符号
+  `-S` 命中 0；两侧符号计数全 EQUAL；`smframe.rs`/`record.rs` 只新增 202/656 帧）。真凶 = **一直存在**的
+  53 `SM_HEALTHSPELLCHANGED` 缺冻结客户端 12B `TCharDesc` 尾（`HIGHHP=True` 从尾解），触发条件 = **进图 `HP<MaxHP`**。
+  两侧真机日志唯一差别 = 进图 `hp`（失败侧 `18` / 工作侧 `19`）⇒ 失败侧发 53 ⇒ HUD `0/0` ⇒ `CanRun` 拒跑 ⇒
+  `CM_RUN=0`（走 74 / 跑 0），工作侧 `CM_RUN=17`（走 44 / 跑 17）。**修点 = 片㊴（已入 master）+ 片㊼（已入 master）**。
+- **② 63 同族遗漏（片㊼）**：52 生产调用点在升级/换装也走冻结客户端 58B（见上节）。
+- **③「同屏没怪」判定（`205` §3）**：失败侧 `nearest` 全程 14..34 > `vr=12` ⇒ 该点位窗口内确实无怪（`vis=0` 非缺陷）；
+  `af=2` = 一对已实发出现帧（`SM_TURN`+`SM_FEATURECHANGED`）⇒ 出现帧管线有算有发。C# 同点位对照仍归 root 窗口。
+- **窗口就绪收口 #4（`201`）**：片㊼ 合入 master `81f9d8f55` 后，专用源停在 `ae6443924` ⇒ R6/R7 RED。
+  刷源 `ae6443924 → 81f9d8f55` + 重编译六件（只 `game-svr.exe` 重链 `60b4dc4f…` → `d4228c00…`）+ 重录清单 ⇒
+  `check_rust_window_preflight.py` **R1..R7 GREEN rc=0**；聚合门（入库替身脚本口径）**`WINDOW_READY=YES` GREEN rc=0**。
+  仍 RED 的只有 **G5 = root 的活脚本未换入库替身**（活脚本仍指共享主检出 + merge-target）。
+- **改坏必红（`202`）**：R6+R7 缺陷复现；牙齿 A（假清单 head，R6 GREEN/R7 RED）；牙齿 B（暖 target 旧 exe，R7 RED）；
+  掏空（MUT-A/MUT-B）⇒ 同输入假绿；二分机判牙（`sm_healthspellchanged_client` 0 处 @`8e491f81e` vs 1 处 @master）。
+- **现场观察**：`18:5x` root 联调栈仍在跑，`game-svr` PID 30284 启动于 `14:55:06`（早于片㊴ 15:31），
+  运行 `E:\tmp\openmir2-merge-target\debug\game-svr.exe` = **修复前镜像** ⇒ 从该栈抓包会复现 `0/0`/`CM_RUN=0`；
+  下一次窗口应先 `stop` → 换入库替身脚本 → `start`（从本 target 的 `d4228c00…` 起）。
+- **分级**：根因/就绪片 = **L**（离线构造层 + 就绪工具）；真机 ①②③（含一次升级/换装步）仍归 **root 独占窗口（R）**。
+- 交付：`201-window-provenance-r7-closeout-4.txt`、`202-redcheck-window-provenance-4.txt`、`203-gates.txt`、
+  `204-boundary.txt`、`205-bisect-52-752-run0-closure.txt`。

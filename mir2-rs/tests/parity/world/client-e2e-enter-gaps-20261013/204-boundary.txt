@@ -1,0 +1,40 @@
+204 — 片㊽ 边界（本片差量 + 冻结面空）
+卡 `openmir2-client-e2e-enter-gaps` / m2-svr / `openmir2-worker-11` / 2026-10-14
+base = `origin/master` `81f9d8f551`（片㊼ 合入后的 master；本分支 `merge --ff-only` 到该点）
+零起栈、零游戏端口；未动共享主检出；不 merge、不自签 review
+====================================================================================================
+
+A) 本片路径（相对 base `81f9d8f551` 的差量；7 路径 = 5 A + 2 M）
+----------------------------------------------------------------------------------------------------
+```
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/201-window-provenance-r7-closeout-4.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/202-redcheck-window-provenance-4.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/203-gates.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/204-boundary.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/205-bisect-52-752-run0-closure.txt
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+```
+⇒ **零 `.rs` / `.toml` / `.ps1` / `.cs`**；仅证据 `.txt` 与 README/清单。
+
+B) 冻结面（相对 base 必须为空）
+----------------------------------------------------------------------------------------------------
+```
+$ git diff --name-only 81f9d8f55 -- src/ sql/ MirClient \
+      mir2-rs/crates/protocol/ mir2-rs/crates/storage/ mir2-rs/bins/
+（空）
+$ git diff --name-only 81f9d8f55 -- src/ ':!src/BotSrv'
+（空）
+```
+⇒ 生产代码零改动；`game-svr` 源码（`mir2-rs/bins/game-svr/**`）本片也未动（只动了 `E:/tmp` 检出外的
+专用构建源与 target 的编译产物，那些不入库）。
+
+C) 构建/编译产物（仓外，不入库；路径登记见 `201` §4）
+----------------------------------------------------------------------------------------------------
+```
+E:/tmp/m2svr-window-origin                 # 专用构建源克隆，已 checkout --detach 81f9d8f55（porcelain=0）
+E:/tmp/m2svr-window-target/debug/*.exe     # 预构建六件（game-svr.exe = d4228c00…）
+E:/tmp/m2svr-window-target/window-provenance.json  # 出处清单（source_head=81f9d8f55）
+E:/tmp/m2svr-r7b-mut/**                    # 红检变异副本（pristine/mutated/prov-*.json）——**仓外**，可删
+E:/tmp/m2svr-r7b-out/**                    # 四门禁/门/红检原始输出——**仓外**，可删
+```
