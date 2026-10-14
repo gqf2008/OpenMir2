@@ -1,0 +1,69 @@
+165-gates.txt —— 片㉞ 门禁与自检（卡 `openmir2-client-e2e-enter-gaps`）
+m2-svr / openmir2-worker-11 / 2026-10-14
+cwd = mir2-rs（自身 worktree .claude/worktrees/m2-svr）；CARGO_TARGET_DIR = E:/tmp/m2svr-target；--offline
+head（本片提交前）= c12931af3（= 片㉝ e5b158563 + `git merge origin/master` 9edfc745d 的合并树）
+====================================================================================================
+A. 四门禁
+----------------------------------------------------------------------------------------------------
+```
+$ cargo fmt --all -- --check
+（无输出）
+rc=0
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.74s
+rc=0
+$ cargo test --workspace --no-fail-fast --offline
+    Finished ...
+test result: ...（101 个 suite，逐 suite 全 ok）
+聚合：101 suites · 1219 passed · 0 failed · 22 ignored   rc=0
+$ cargo run --offline -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+```
+
+B. 本片两件判据工具的 selftest
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B check_rust_window_preflight.py --selftest
+...
+[PASS] selftest required-fixes-default-two (('d16b5199d98029081daccd9252f81b94a9596eaf', '片⑪ AOI 诊断 vr/new/af'), ('0d0d62a695082730dd2398e6d35bf40c8f70480a', '片㉜ 受击帧 SM_STRUCK 广播'))
+SELFTEST OK (23/23)      # 17/17 → 23/23（+6 牙）
+rc=0
+$ python -I -B window_handoff.py --selftest
+...
+SELFTEST OK (95/95)      # 94/94 → 95/95（+1 牙 ws-parse-dup-last-wins = reviewer-5 ㉝ O-1）
+rc=0
+```
+
+C. 本片真读数（详见 `163-…` / `164-…`）
+----------------------------------------------------------------------------------------------------
+| 命令 | 源 | 结果 |
+|---|---|---|
+| `check_rust_window_preflight.py --ref HEAD` | `E:/tmp/m2svr-window-origin @6dba8719d` | `RED R1 …不含 0d0d62a695（片㉜…）` / `RESULT: RED` rc=1 |
+| `check_rust_window_preflight.py --ref HEAD` | 本 worktree head | `RESULT: GREEN` rc=0 |
+| `window_handoff.py --window-script ''` | `E:/tmp/m2svr-window-origin @6dba8719d` | `RED G1` / `WINDOW_READY=NO` / rc=1 |
+| `window_handoff.py --window-script ''` | 本 worktree head | `OK G1` / `WINDOW_READY=YES` / rc=0 |
+| 变异副本（删 ㉜ 检查）对专用源 | `E:/tmp/m2svr-window-origin` | `RESULT: GREEN`（复现旧漏网，牙齿 M1 成立） |
+| 变异副本（`parse_window_script` 改回取第一条）自检 | — | `ws-parse-dup-last-wins` **1 FAIL** / `SELFTEST FAILED (94/95)`（O-1 fail-open 复现，牙齿 M2 成立） |
+
+D. 证据完整性（LF/git-blob 口径，写入本片 4 件后重跑）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+写入 mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt（171 行，repo 口径）
+GREEN: write 完成（4 行 hash 变更，mode=repo）
+rc=0
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+GREEN mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK 171/171
+rc=0
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+EOLCHECK GREEN 172/172 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
+```
+（`SHA256SUMS.txt` 167 → 171 件：+163/164/165/166。）
+
+E. 卫生
+----------------------------------------------------------------------------------------------------
+* 零起栈、零游戏端口；十端口实拍：5000/5100/5500/5600/5700/6000/7000/7100/7200 全 DOWN，仅共享 MySQL 3306 UP。
+* 共享主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2` 只读、未动（`git status` 空）。
+* 本片零生产代码改动：`git diff --name-status origin/master HEAD` 只含本证据目录的 2 个 .py + 4 件证据/README/清单。

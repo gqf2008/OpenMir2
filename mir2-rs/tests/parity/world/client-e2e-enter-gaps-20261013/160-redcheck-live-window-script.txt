@@ -1,0 +1,39 @@
+160-redcheck-live-window-script.txt —— 片㉝ G5 的改坏必红（变异只在 /e/tmp/m2svr-burst19/mut；仓内文件 sha256 前后一致）
+m2-svr / openmir2-worker-11 / 2026-10-14（零起栈、零游戏端口）
+====================================================================================================
+牙型：把 window_handoff.py 的 G5 判据改坏 ⇒ `--selftest` 必有 FAIL（rc=1）；把仓内原件跑一遍 ⇒ 94/94 OK。
+变异 = 复制件，原文件不动（末尾打印前后 sha256）。
+
+0) 仓内原件（对照）
+----------------------------------------------------------------------------------------------------
+$ sha256sum window_handoff.py
+d63899fb9063ac8fd53fd13a00169eea8a45c7d5b26b65201761b0ffd2466ba4 *window_handoff.py
+$ python -I -B window_handoff.py --selftest | tail -1
+SELFTEST OK (94/94)
+
+M1 repo 一致性比对取反（!= → ==）⇒ 正确配置被误判 RED（假红），反之漏判
+$ python -I -B /e/tmp/m2svr-burst19/mut/window_handoff.py --selftest | grep -E '^\[FAIL\]|SELFTEST'
+[FAIL] selftest g5-match-rc0 ['G5 root 会跑的窗口脚本 repo=R != 本计划构建源 --repo=R ⇒ 直接跑它会构建另一棵树（窗口 PREREQ_RED / 白烧）']
+[FAIL] selftest g5-repo-mismatch-red
+SELFTEST FAILED (92/94)
+
+M2 关掉「repo= 指共享主检出」支 ⇒ 活脚本指共享主检出时不再点名（漏判）
+$ python -I -B /e/tmp/m2svr-burst19/mut/window_handoff.py --selftest | grep -E '^\[FAIL\]|SELFTEST'
+[FAIL] selftest g5-shared-checkout-red G5 root 会跑的窗口脚本 repo=/e/Users/gxh/Documents/GitHub/OpenMir2 != 本计划构建源 --repo=R ⇒ 直接跑它会构建另一棵树（窗口 PREREQ_RED / 白烧）
+SELFTEST FAILED (93/94)
+
+M3 整个 G5 判据短路成空 ⇒ 三种 RED 场景全部漏判
+$ python -I -B /e/tmp/m2svr-burst19/mut/window_handoff.py --selftest | grep -E '^\[FAIL\]|SELFTEST'
+[FAIL] selftest g5-repo-mismatch-red
+[FAIL] selftest g5-shared-checkout-red
+[FAIL] selftest g5-tgt-mismatch-red
+[FAIL] selftest g5-missing-skip OK   G2 check_mongen_dense_points.py --selftest; OK   G2 check_aoi_visibility_diag.py --selftest; OK   G2 aoi_visibility_pair.py --selftest; OK   G2 check_client_s2c_frames.py --selftest; OK   G2 check_appearance_pairs.py --selftest; OK   G2 check_attack_observability.py --selftest; OK   G2 check_rust_window_preflight.py --selftest; OK   G2 check_csharp_capture_preflight.py --selftest; OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+SELFTEST FAILED (90/94)
+
+4) 仓内原件还原确认（必须与 §0 同值）
+----------------------------------------------------------------------------------------------------
+$ sha256sum window_handoff.py
+d63899fb9063ac8fd53fd13a00169eea8a45c7d5b26b65201761b0ffd2466ba4 *window_handoff.py
+
+结论：三条牙都在**判据自己**上（不是改数据/改期望值）：M1 2 FAIL、M2 1 FAIL、M3 4 FAIL；
+原件 94/94 OK 且 sha256 前后一致（d63899fb9063ac8fd53fd13a00169eea8a45c7d5b26b65201761b0ffd2466ba4）。

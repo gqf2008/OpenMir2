@@ -1,0 +1,42 @@
+# 改动摘要
+
+## 旧口径（假绿通道，reviewer-5 F-1）
+
+`check_anchors.py` 的符号唯一性锚用 `n = sum(1 for line in lines if re.search(a["rx"], line))`
+统计 —— 数的是**匹配行数**：同一物理行写两遍期望符号（如 `spawn(); spawn();`）只计 **1** 次，
+于是 `n == 1` 放行，**`ANCHOR_AMBIGUOUS` 不触发**。
+
+## 本片修法（按「匹配总次数」计）
+
+```python
+n = sum(len(re.findall(a["rx"], line)) for line in lines)
+```
+
+同一物理行两遍符号 ⇒ n = 2 ⇒ `ANCHOR_AMBIGUOUS` 必红。0 次仍 ⇒ `ANCHOR_SYMBOL_MISSING`。
+
+## 同步文档 / 计数
+
+- `check_anchors.py`：docstring 判据 8、`ANCHORS` 注释、`symbol_unique` 分支注释、GREEN 结语计数
+  `16/16`→`17/17`（含 15→16 条改坏必红）。
+- `README.md`：锚点表「符号唯一性锚」机判列 ⇒ 明确「**按匹配总次数计**」；新增 F-1 收口小节；
+  `selftest 16/16`→`17/17`。
+- `DRIVER-CONTRACT.md`：§6 覆盖面收口段 `selftest 16/16`→`17/17`。
+- `run_rng_trace_pair.ps1`：`㉙` 注释 `自带 15 条`→`16 条`（仅注释；接线断言只比 rc=0 与 (a/a) 相等，不锁死数字）。
+
+## 新增改坏必红（1 条）
+
+`mutation-symbol-ambiguous-same-line-red`：临时源文件 `crates/world/src/dup_same_line.rs`
+内容 `spawn(); spawn();`（同一物理行两遍），断言 `ANCHOR_AMBIGUOUS` 点名该文件。旧实现下本用例
+**RED**（未检出）⇒ 证明这条牙在咬「按行计数」的假绿。
+
+## 边界（base 515c6b5ea → 声明 head 15fac97ac）
+
+```
+M	mir2-rs/tests/parity/m3/rng-trace-scene/DRIVER-CONTRACT.md
+M	mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+M	mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py
+M	mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
+```
+
+- 全部落在 `mir2-rs/tests/parity/m3/rng-trace-scene/`；`*.rs = 0`、`*.toml = 0`；
+  冻结面 `src/` / `sql/` / `MirClient/` / `mir2-rs/crates/protocol/` / `mir2-rs/crates/storage/` / `mir2-rs/bins/` 零改动。

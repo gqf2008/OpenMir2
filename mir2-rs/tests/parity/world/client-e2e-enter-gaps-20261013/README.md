@@ -815,3 +815,91 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **仍未闭环（归 root 独占窗口，不因本片收卡）**：真机 ③b 两侧「攻击 + 伤害可见」读数。
 - 证据：`155-attack-observability-and-struck-broadcast.txt`、`156-redcheck-struck-broadcast.txt`、
   `157-gates.txt`、`158-boundary.txt`、`check_attack_observability.py`。
+
+### ㉝ ③ 窗口「root 实际会跑的一键脚本」口径 guard（G5 fail-closed）（2026-10-14）—— `159`/`160`
+
+- **缺口（实测、非推测）**：㉘ 把「窗口构建源」固化成了 `client-e2e-window.fixed.sh.txt`（入库替身，
+  仅 2 行 diff），但 **root 的活脚本 `/e/tmp/openmir2-watch/client-e2e-window.sh` 一直没换**
+  （sha256 `0567f89e…`，mtime 10-13 21:49）：`repo=` 仍指**共享主检出**（`E:/Users/gxh/Documents/GitHub/OpenMir2`，
+  rev 车道 worktree）、`tgt=` 仍是 **merge 车道的暖 target**（`E:\tmp\openmir2-merge-target`）。
+  而 G1 校验的是**你传给工具的 `--repo`**，不是**脚本里那两行** ⇒ 可以出现
+  「`--repo` = 专用源 ⇒ `WINDOW_READY=YES`，root 照活脚本开窗 ⇒ 构建共享主检出 / 从旧 exe 起栈」
+  的**假绿烧窗**（root verify1 的旧版式日志就是这么来的）。
+- **本片交付**（唯一代码文件 `window_handoff.py`；零 `.rs/.toml`、零起栈、零游戏端口）：
+  ① 新增纯函数 `parse_window_script`（抽脚本 `repo=`/`tgt=`，支持裸值/单双引号）与 `_norm_path`
+     （msys `/e/tmp` ↔ `E:\tmp`、大小写、尾斜杠归一）；
+  ② 新增 **G5** `window_script_findings`：活脚本 `repo=` 必须 == 本工具 `--repo`、不得指共享主检出、
+     `tgt=` 必须 == `--target-dir`；脚本**不存在** ⇒ INFO 跳过（干净检出不当 RED）；解析不到 ⇒ RED（fail-closed）；
+  ③ `run_checks`/`Report` 接入 G5（`live_script_stale` 进 JSON）；`--window-script` 默认
+     `E:/tmp/openmir2-watch/client-e2e-window.sh`，`--window-script ''` 显式关掉（向后兼容）；
+  ④ `--plan`/`--plan-only` 在 G5 RED 时额外打印「换成入库替身 `client-e2e-window.fixed.sh.txt`」修复块；
+  ⑤ `--selftest` **82 → 94/94**（+12 牙：脚本解析/路径归一 ×4、G5 匹配绿、repo 不一致红、
+     指共享主检出红、tgt 不一致红、文件缺失跳过、计划有/无修复块）。
+- **真读数**（`159`）：默认（活脚本）⇒ `RED`（点名 repo=共享主检出 + tgt=merge 暖 target）/
+  `WINDOW_READY=NO` rc=1；`--window-script ''` ⇒ 与 ㉜ 逐字节同款 `WINDOW_READY=YES` rc=0（向后兼容）；
+  `--window-script ./client-e2e-window.fixed.sh.txt` ⇒ `G5 ... 一致` / `WINDOW_READY=YES` rc=0；
+  `--plan` ⇒ 额外修复块 + `PLAN_CONFORMANCE=GREEN` / `WINDOW_READY=NO`。
+- **改坏必红（`160`，变异只在 `E:/tmp/m2svr-burst19/mut/`，仓内 sha256 前后一致）**：
+  M1 一致性比对取反（`!=`→`==`）⇒ 2 FAIL；M2 关掉「共享主检出」支 ⇒ 1 FAIL；
+  M3 整段 G5 短路 ⇒ 4 FAIL；原件 `SELFTEST OK (94/94)`。
+- 四门禁（合并树 `41e61029e` 之上）fmt 0 / clippy 0(`-D warnings`) / **101 suites · 1219 passed ·
+  0 failed · 22 ignored** / msgcodegen 604 rc=0。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：③ 的 R 级两侧同框真机对照 + 攻击/伤害可见；
+  **另请 root 开窗前把活脚本换成替身（或照改 repo=/tgt= 两行）—— 否则 G5 会判 `WINDOW_READY=NO`**。
+- 证据：`159-live-window-script-gate.txt`、`160-redcheck-live-window-script.txt`、`161-gates.txt`、
+  `162-boundary.txt`、`window_handoff.py`、`client-e2e-window.fixed.sh.txt`。
+
+### ㉞ ③ 窗口构建源「缺片㉜」fail-closed 门（R1 单提交 → 必需提交集）（2026-10-14）—— `163`/`164`
+
+- **同类烧窗（旧 G1 漏网）**：`check_rust_window_preflight.py` 的 R1 旧实现只查**一个**提交
+  （片⑪ `d16b5199d`）⇒ 构建源「含片⑪、缺片㉜」时 G1 仍 GREEN / `WINDOW_READY=YES`。
+  实测入库替身 `client-e2e-window.fixed.sh.txt` 的构建源 = 专用源 `E:/tmp/m2svr-window-origin`，
+  它停在 `6dba8719d`（origin/master 在片㉜ `0d0d62a69` **之前**）⇒ **含片⑪、缺片㉜**。
+  后果：③b 的 DoD③ 第三半「能攻击造成伤害」判据 `check_attack_observability.py`（要片㉜ 的
+  `SM_STRUCK` 广播）必然 0 帧 ⇒ 白烧一次性窗口。
+- **本片交付（两个 `.py` 都在证据目录，零生产代码）**：R1 扩为**必需提交集**
+  `REQUIRED_FIX_COMMITS` = 片⑪ + 片㉜，逐个 `merge-base --is-ancestor`，缺任一 ⇒ RED；抽纯函数
+  `required_fix_findings(repo, ref, fixes)`；`--fix-commit` 改可重复（缺省两片，单值向后兼容）；
+  `window_handoff.py` G1 docstring 同步。另收 **reviewer-5 对 ㉝ 的 O-1**（Minor，潜在 fail-open）：
+  `parse_window_script` 旧实现重复键取**第一条**，而 bash 顺序脚本是 **last-wins** ⇒ 重复 `repo=`
+  时会按 bash 不会跑的值比对、朝假绿判；本片改为**取最后一条**（对齐 bash）+ 订正 docstring +
+  新牙 `ws-parse-dup-last-wins`。O-2（JSON 补 `g5=enabled|disabled`）未做、登记。
+- **真读数（`163`）**：专用源 `m2svr-window-origin` ⇒ `RED R1 …不含 0d0d62a695（片㉜…）` rc=1
+  （`window_handoff --window-script ''` ⇒ `RED G1` / `WINDOW_READY=NO`）；本 worktree head ⇒ `RESULT: GREEN`
+  （聚合 `OK G1` / `WINDOW_READY=YES`）。`check_rust_window_preflight.py --selftest` **17/17 → 23/23**；
+  `window_handoff.py --selftest` **94/94 → 95/95**。
+- **改坏必红（`164`，变异只在 `E:/tmp/m2svr-burst20/mut/`）**：M1 删掉 `REQUIRED_FIX_COMMITS` 的片㉜ 行
+  ⇒ 同一专用源命令变 `RESULT: GREEN`（旧漏网复现）；M2 `parse_window_script` 改回取第一条
+  ⇒ `ws-parse-dup-last-wins` 1 FAIL（`{'repo': '/good'}` = O-1 复现）；仓内工具 sha256 前后一致。
+- 四门禁（合并树 `c12931af3` = 片㉝ + `origin/master 9edfc745d`）fmt 0 / clippy 0(`-D warnings`) /
+  **101 suites · 1219 passed · 0 failed · 22 ignored** / msgcodegen 604 rc=0。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：开窗前必须换用含片⑪+片㉜ 的构建源
+  （本分支 head，或把专用源刷到 `origin/master`）并复跑 G1 至 GREEN——`window_handoff.py --plan`
+  的 G1 修复块已给命令；R 级真机两侧同框对照 + 攻击/伤害可见归 root 独占窗口。
+- 证据：`163-window-source-freshness-struck.txt`、`164-redcheck-window-source-freshness.txt`、
+  `165-gates.txt`、`166-boundary.txt`、`check_rust_window_preflight.py`、`window_handoff.py`。
+
+### ㉟ ③ 窗口就绪收口：专用构建源刷到含片⑪+片㉜ + 预构建六件 exe（2026-10-14）—— `167`/`168`
+
+- **承接片㉞ 登记项**：㉞ 把「构建源缺片㉜」做成 fail-closed 门（`RED R1 …不含 0d0d62a695`），
+  并登记「开窗前必须换用含片⑪+片㉜ 的构建源（本分支 head，**或把专用源刷到 `origin/master`**）并复跑 G1 至 GREEN」。
+  本片取**后半条**：直接把专用源 `E:/tmp/m2svr-window-origin` 从 `6dba8719d`（含片⑪、缺片㉜）
+  **快进**到 `9edfc745d`（= 当时 `origin/master`，两片都在），并用 `E:\tmp\m2svr-window-target`
+  **预构建**六件窗口二进制（`game-svr.exe` 重链，含片㉜ 的 `SM_STRUCK` 广播）。
+- **真读数（`167`）**：刷新后 `check_rust_window_preflight.py --repo <专用源> --ref HEAD`
+  ⇒ `R1..R5` 全 OK / `RESULT: GREEN` rc=0（与㉞ 刷源前的 `RED R1` 同门前后对照）；
+  `window_handoff.py --window-script client-e2e-window.fixed.sh.txt`
+  ⇒ `G1` + `G2 8/8` + `G5` 两条一致 / `WINDOW_READY=YES` / `RESULT: GREEN` rc=0。
+  构建：`cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv`
+  rc=0（13.66s，`game-svr.exe` 10:30 重链 135459053 B）。
+- **改坏必红（`168`）**：`--ref 6dba8719d`（刷源前）⇒ `RED R1 …不含 0d0d62a695` / `RESULT: RED` rc=1
+  —— 证「本片刷源」非空动作；对照：root 活脚本仍指共享主检出 ⇒ `G5` 两条 RED / `WINDOW_READY=NO`
+  （换活脚本仍是 root 的开窗动作，本片不动 root 工具）。工具自检 `23/23` + `95/95` 不变。
+- **边界与纪律**：本片只新增证据（`167`/`168` + README §㉟ + `SHA256SUMS.txt`）；**零 `.rs`/`.toml`、
+  零生产代码、零起栈、零游戏端口**（3306 UP，其余 DOWN）；刷新与预构建都在 `E:/tmp` 检出外，未动共享主检出；
+  未 merge、未自签 review。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级真机两侧同框对照 + 攻击/伤害可见；
+  root 开窗前两步 = ① 换活脚本为入库替身（否则 G5 `WINDOW_READY=NO`）② 起栈后按
+  `window_handoff.py --plan` 跑 ③b/③a 两趟 + `--judge` 六条判据（③b `--best-site` = `605,578` E=12.681）。
+- 证据：`167-window-source-refresh-and-prebuild.txt`、`168-redcheck-window-source-refresh.txt`、
+  `169-gates.txt`、`170-boundary.txt`。

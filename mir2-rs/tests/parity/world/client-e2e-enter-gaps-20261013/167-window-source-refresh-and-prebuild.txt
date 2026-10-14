@@ -1,0 +1,125 @@
+167-window-source-refresh-and-prebuild.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉟
+③ 窗口就绪收口：把专用构建源从「含片⑪、缺片㉜」刷到含两片 + 预构建六件 exe + 聚合门复跑至 GREEN
+m2-svr / openmir2-worker-11 / 2026-10-14（回应 brief-m2svr-next 顶部 root 2026-10-14 00:4x ③）
+本片零起栈、零占游戏端口（仅共享 MySQL 3306）、零生产代码改动、零 `.rs/.toml`；只在自身 worktree 写。
+====================================================================================================
+一句话：片㉞ 把「构建源缺片㉜」做成 fail-closed 门（`RED R1 …不含 0d0d62a695`）后，**唯一剩下的
+开窗前置就是「把源刷到含片⑪+片㉜」**；本片把它做掉：专用源 `E:/tmp/m2svr-window-origin`
+从 `6dba8719d`（含片⑪、缺片㉜）快进到 `9edfc745d`（= 当时 `origin/master`，两片都在），
+用 `E:\tmp\m2svr-window-target` 预构建六件窗口二进制（`game-svr.exe` 重链，含片㉜ 的受击帧广播），
+再跑聚合门：`RESULT: GREEN` / `WINDOW_READY=YES` rc=0。⇒ root 开窗前**无需再手工刷源**，
+只差把活脚本换成入库替身（G5 仍会为共享主检出判 RED，见 §E-R2）。
+
+A. 为什么这是「③ 判定与闭环」的收口动作（承接片㉞ 登记项）
+----------------------------------------------------------------------------------------------------
+* 片㉞（`163`）的结论与登记（原文）：「开窗前必须换用含片⑪+片㉜ 的构建源（本分支 head，
+  **或把专用源刷到 `origin/master`**）并复跑 G1 至 GREEN」。
+* 本片取**后半条**：直接刷新专用源（不要求 root 先手工 `fetch/checkout`），并把它**预构建**好，
+  使一次性窗口的开窗步骤只剩「换活脚本 → `bash client-e2e-window.sh start`」。
+* 为何必须刷源（不是可选项）：DoD③ 第三半「能攻击造成伤害」的判据 `check_attack_observability.py`
+  需要片㉜ `0d0d62a695` 的 `SM_STRUCK` 字段广播；源停在 `6dba8719d`（在其之前）⇒ 该判据必然 0 帧 ⇒ 白烧窗口。
+
+B. 源刷新（实测；`E:/tmp` 检出外，未动共享主检出）
+----------------------------------------------------------------------------------------------------
+```
+$ git -C E:/tmp/m2svr-window-origin rev-parse HEAD          # BEFORE（仅片⑪）
+6dba8719d0d5dd834bbab159716b2a538160d333
+$ git -C E:/tmp/m2svr-window-origin fetch origin
+$ git -C E:/tmp/m2svr-window-origin checkout --detach origin/master
+HEAD is now at 9edfc745d Merge 49aeb9582 (worktree-m3-chain-gate-fmt-evidence) ...
+$ git -C E:/tmp/m2svr-window-origin rev-parse HEAD          # AFTER
+9edfc745d48ec7edafcbcb9da3d9a6a0c19073ad
+$ git -C E:/tmp/m2svr-window-origin merge-base --is-ancestor d16b5199d98029081daccd9252f81b94a9596eaf HEAD
+  d16b5199d: YES (ancestor)
+$ git -C E:/tmp/m2svr-window-origin merge-base --is-ancestor 0d0d62a695082730dd2398e6d35bf40c8f70480a HEAD
+  0d0d62a69: YES (ancestor)
+```
+* `6dba8719d` 是 `9edfc745d` 的祖先（快进，无冲突）；刷新后检出树 `git status` 干净。
+* 依赖已解除：`check_rust_window_preflight.py` 的 R1 必需提交集（片⑪ + 片㉜）在刷新源上**双双 GREEN**（§D1）。
+
+C. 预构建六件窗口二进制（暖 target 复用，检出外 `E:\tmp\m2svr-window-target`）
+----------------------------------------------------------------------------------------------------
+```
+$ cd E:/tmp/m2svr-window-origin/mir2-rs
+$ CARGO_TARGET_DIR='E:\tmp\m2svr-window-target' cargo build --offline \
+    -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv
+   Compiling mir2-script v0.1.0 (E:\tmp\m2svr-window-origin\mir2-rs\crates\script)
+   Compiling mir2-world  v0.1.0 (E:\tmp\m2svr-window-origin\mir2-rs\crates\world)
+   Compiling mir2-envir  v0.1.0 (E:\tmp\m2svr-window-origin\mir2-rs\crates\envir)
+   Compiling game-svr    v0.1.0 (E:\tmp\m2svr-window-origin\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.66s
+build_rc=0
+```
+`E:/tmp/m2svr-window-target/debug/` 六件（`game-svr.exe` 在本轮 10:30 重链；其余 5 件 cargo 判已最新）：
+
+| 二进制 | 字节 | mtime | sha256 |
+|---|---|---|---|
+| `game-svr.exe` | 135459053 | 2026-10-14 10:30 | `dcfd00408fbf5fccb7c807ed8bc718b403a418522a8235b60a398586aaa65a77` |
+| `game-gate.exe` | 29233601 | 2026-10-14 07:43 | `146fb23cd841b089d60738873fbb210489efeee36756743ef95ff6875645735e` |
+| `login-srv.exe` | 82221827 | 2026-10-14 07:43 | `daa1ba949478d98ec31c8becabcff6853ea64f98be56dd25d8e57673274a0068` |
+| `login-gate.exe` | 27939672 | 2026-10-14 07:43 | `78c7dac971d93e51f9be874f82ef1fc8b9a51a656bf7473ad6efddf4251622d3` |
+| `sel-gate.exe` | 27918761 | 2026-10-14 07:43 | `741ea627cd1cd65578dfc567130245dfd7f953d6eab5ea31acf67cc79d08accd` |
+| `db-srv.exe` | 84322707 | 2026-10-14 07:43 | `15fb1f25af19ee719501eed4406805ab49c2bb6d26dd0522f6a7f33bd5eaf771` |
+
+* 注意：**07:43 那五件是本片刷新前（`6dba8719d`）构建的**；cargo 判定其依赖图未变（本刷新改动的
+  `mir2-script/world/envir` 不在它们图上）⇒ 不需重链。`game-svr` 是 ③ 判据的唯一宿主，已按新源重链。
+
+D. 聚合门复跑（刷新后；cwd = 本车道 worktree 证据目录，脚本取本分支）
+----------------------------------------------------------------------------------------------------
+D1) `check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD --mirserver E:/MirServer`：
+```
+[OK] R1 … HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 … HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666)/(291,651) --expect outside → rc=0； (289,618)/(287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+RESULT: GREEN
+rc=0
+```
+D2) `window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD --check-dir . --window-script client-e2e-window.fixed.sh.txt`：
+```
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0
+```
+⇒ 与片㉞（源未刷时的 `RED R1` / `WINDOW_READY=NO`）形成**同一门的前后对照**：门没变，读数因源刷新转 GREEN。
+
+E. 改坏必红 / 对照（见 `168-redcheck-window-source-refresh.txt` 原始输出）
+----------------------------------------------------------------------------------------------------
+* **R1（本片的牙）**：把 `--ref` 指回刷新前的 `6dba8719d` ⇒
+  `RED R1: … 6dba8719d 不含 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）` / `RESULT: RED` rc=1 ——
+  证明「本片刷源」不是空动作：不刷源这条门必红。
+* **R2（对照，非本片改坏项）**：root 活脚本仍 `repo=共享主检出` / `tgt=merge 暖 target` ⇒ G5 两条 RED /
+  `WINDOW_READY=NO`。这是片㉝ 的 guard 仍在工作；**换活脚本仍是 root 的开窗动作**（本片不动 root 工具）。
+* 工具自检（G2 已内联）：`check_rust_window_preflight.py --selftest` `SELFTEST OK (23/23)`；
+  `window_handoff.py --selftest` `SELFTEST OK (95/95)`。
+
+F. 写入 / 边界 / 纪律
+----------------------------------------------------------------------------------------------------
+* 本片**只新增证据**：`167`（本文件）+ `168`（红检）；`README.md` §㉟ + `SHA256SUMS.txt` 同步。
+  **零 `.rs` / 零 `.toml` / 零生产代码**；`window-origin` 刷新与预构建都在 `E:/tmp` 检出外，
+  **未动共享主检出** `E:/Users/gxh/Documents/GitHub/OpenMir2`。
+* 零起栈、零占游戏端口：实测 `3306:UP`（共享 MySQL）、`5000/5100/5500/5600/5700/6000/7000/7100/7200/7600` 全 DOWN。
+* 未 merge、未自签 review；未改 root 的一键脚本 / `lanes.conf`。
+
+G. 残留物 / 仍未闭环（登记，不静默）
+----------------------------------------------------------------------------------------------------
+* **仍未闭环 = DoD③ 的 R 级真机两侧同框对照 + 攻击/伤害可见**：归 root 独占窗口（本片只把
+  「构建源 / 预构建 exe / 落点 / 判据」备齐；③b 站点仍取 `--best-site` = `605,578` E=12.681，
+  ③a 反向 `291,666` E=0.000）。
+* **开窗前 root 的两步**：① 把活脚本换成入库替身 `client-e2e-window.fixed.sh.txt`（仅 `repo=`/`tgt=` 两行 diff，
+  否则 G5 判 `WINDOW_READY=NO`）；② 起栈后按 `window_handoff.py --plan` 跑 ③b/③a 两趟 + `--judge` 六条判据。
+* 残留：`E:/tmp/m2svr-window-origin`（已刷新到 `9edfc745d`，detached、clean）+ `E:/tmp/m2svr-window-target`
+  （六件 exe，暖 target）——两者**保留**供窗口复用；`E:/tmp/m2svr-burst21/**` 为本片捕捉件（保留）。
