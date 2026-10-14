@@ -1,0 +1,25 @@
+# 复现命令清单（M3⑦ recall-ext）
+# 全部在 worktree E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3pt/mir2-rs
+# CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target（检出外）；零起栈、零端口。
+
+# 0) 四门禁
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo run -p msgcodegen -- --check
+
+# 1) 新用例（跑得快，定向）
+cargo test -p mir2-script --test engine_tests is_group_master_true_only_for_leader_like_oracle
+cargo test -p mir2-script --test engine_tests check_group_count_always_false_like_oracle
+cargo test -p mir2-script --test engine_tests check_group_class_counts_members_by_job
+cargo test -p mir2-script --test engine_tests group_recall_actions_are_noops_like_oracle
+cargo test -p mir2-world  --test party_vectors script_group_snapshot_reads_owner_and_member_jobs
+
+# 2) 改坏必红（4 条；每条只改一处，跑后从备份还原）：见 07-mutations-red.txt
+
+# 3) 边界
+git diff --name-only 083dc1d6d HEAD -- src sql MirClient
+
+# 4) 本包自检
+python -I tools/evidence-hash/verify_sha256sums.py verify mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-party-recall-ext-20261014

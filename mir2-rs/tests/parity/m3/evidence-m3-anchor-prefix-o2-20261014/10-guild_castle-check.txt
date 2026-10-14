@@ -1,0 +1,3 @@
+$ python -I guild_castle_anchor_gate.py check
+GREEN: guild/castle 场景锚门通过（31 锚 / 92 行点全部命中冻结 src/ 且覆盖面闭合）
+[rc=0]

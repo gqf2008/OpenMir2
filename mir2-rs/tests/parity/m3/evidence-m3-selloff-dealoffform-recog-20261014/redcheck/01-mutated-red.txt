@@ -1,0 +1,34 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.79s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-e3b807fec57e6cfc.exe)
+
+running 2 tests
+test selloff::tests::open_deal_off_form_gated_by_sale_deal_and_active_sell ... FAILED
+test selloff::tests::open_deal_off_form_wire_header_puts_npc_id_in_recog ... FAILED
+
+failures:
+
+---- selloff::tests::open_deal_off_form_gated_by_sale_deal_and_active_sell stdout ----
+
+thread 'selloff::tests::open_deal_off_form_gated_by_sale_deal_and_active_sell' (13260) panicked at bins\game-svr\src\selloff.rs:1761:17:
+assertion `left == right` failed: Recog = nParam1 = 商人 ActorId（32 位）
+  left: 0
+ right: 42
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- selloff::tests::open_deal_off_form_wire_header_puts_npc_id_in_recog stdout ----
+
+thread 'selloff::tests::open_deal_off_form_wire_header_puts_npc_id_in_recog' (32140) panicked at bins\game-svr\src\selloff.rs:1788:9:
+assertion `left == right` failed: Recog = 商人 ActorId（32 位完整，不得截进 16 位的 Param）
+  left: 0
+ right: 305419896
+
+
+failures:
+    selloff::tests::open_deal_off_form_gated_by_sale_deal_and_active_sell
+    selloff::tests::open_deal_off_form_wire_header_puts_npc_id_in_recog
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 193 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`
+mutated rc=101

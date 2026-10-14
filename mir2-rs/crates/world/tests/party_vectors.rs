@@ -517,3 +517,28 @@ fn play_object_by_name_ignores_non_player_entities() {
         }]
     );
 }
+
+/// §1.O `recall-ext` 读侧宿主快照：`(GroupOwner, GroupMembers[i].Job)`。
+///
+/// oracle 锚：`ConditionProcessingSys.cs:2670/262/4466` 读 `playerActor.GroupOwner` /
+/// `playerActor.GroupMembers[i].Job`；`GroupMembers` 只挂在团长实体上
+/// （`PlayObject.Operate.cs:834-835/875`）。非团长 ⇒ 空表。
+#[test]
+fn script_group_snapshot_reads_owner_and_member_jobs() {
+    let (mut w, l, t, u) = three_players();
+    // 三种职业各一名：L=战士(0)、T=法师(1)、U=道士(2)。
+    w.entities.get_mut(l).unwrap().job = 0;
+    w.entities.get_mut(t).unwrap().job = 1;
+    w.entities.get_mut(u).unwrap().job = 2;
+
+    // 无组：owner=0、空表。
+    assert_eq!(w.party_script_group_snapshot(l), (0, vec![]));
+
+    // 建组后团长 L 持有成员表（含自己）⇒ job 序 = 实体槽位序。
+    let _ = w.party_create_group(l, "T", &cfg());
+    assert_eq!(w.party_script_group_snapshot(l), (l, vec![0, 1]));
+    // 组员 T 的 GroupOwner 指向团长，但自己的成员表为空。
+    assert_eq!(w.party_script_group_snapshot(t), (l, vec![]));
+    // 未入组的 U 无组。
+    assert_eq!(w.party_script_group_snapshot(u), (0, vec![]));
+}

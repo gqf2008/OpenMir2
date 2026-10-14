@@ -29,6 +29,8 @@ struct MockPlayer {
     permission: i32,
     gender: i32,
     job: i32,
+    group_owner: i32,
+    group_member_jobs: Vec<i32>,
     dear_name: String,
     guild: Option<String>,
     is_guild_master: bool,
@@ -149,6 +151,8 @@ impl MockPlayer {
             permission: 0,
             gender: mir2_script::engine::GENDER_MAN,
             job: 0,
+            group_owner: 0,
+            group_member_jobs: Vec::new(),
             dear_name: String::new(),
             guild: None,
             is_guild_master: false,
@@ -273,6 +277,12 @@ impl ScriptPlayer for MockPlayer {
     }
     fn actor_id(&self) -> i32 {
         4242
+    }
+    fn group_owner(&self) -> i32 {
+        self.group_owner
+    }
+    fn group_member_jobs(&self) -> Vec<i32> {
+        self.group_member_jobs.clone()
     }
     fn level(&self) -> i32 {
         self.level
@@ -2396,4 +2406,158 @@ fn checkunit_checkopen_parse_anchors() {
         mir2_script::engine::dispatch::condition_handler(c2.cmd_code),
         Some("ConditionOfCheckOpen")
     );
+}
+
+// ---- M3⑦ 扩展面 `recall-ext`（2026-10-14，`openmir2-m3-party-recall-ext`）----
+//
+// oracle 锚：`ConditionProcessingSys.cs:2670`(CHECKGROUPCOUNT) / `:262`(CHECKGROUPCLASS) /
+// `:4466`(ISGROUPMASTER) / `ExecutionProcessingSys.cs:3487`(RECALLGROUPMEMBERS) /
+// `:3918`(GROUPRECALL)。缺陷本体（注释掉的 switch / 空方法体 / 死分支）登记 whitelist T-52。
+
+/// 构造带 `nParam3` 的条件（`cond` 辅助不填 `nParam3`，而 CHECKGROUPCLASS 的比较右值是它）。
+fn cond3(code: i32, p1: &str, p2: &str, n3: i32) -> mir2_script::QuestConditionInfo {
+    mir2_script::QuestConditionInfo {
+        cmd_code: code,
+        s_param1: p1.into(),
+        s_param2: p2.into(),
+        n_param3: n3,
+        ..Default::default()
+    }
+}
+
+/// `ISGROUPMASTER`(148)：**团长**时 `success` 保持调用方初值（= `true`），其余两路显式置 false。
+/// oracle 从不在「是团长」支写 `true`，`success` 初值由 `ConditionScript.Execute` 侧为 `true`。
+#[test]
+fn is_group_master_true_only_for_leader_like_oracle() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    // 无组 ⇒ false
+    player.group_owner = 0;
+    {
+        let mut engine = Engine::new(&mut npc, &mut player);
+        assert!(
+            !engine.check_conditions(&[cond(148, "", "", 0)]),
+            "无组必假"
+        );
+        assert!(engine.errors.is_empty(), "{:?}", engine.errors);
+    }
+    // 自己是团长（owner == actor_id = 4242）⇒ 保持初值 true
+    player.group_owner = 4242;
+    {
+        let mut engine = Engine::new(&mut npc, &mut player);
+        assert!(engine.check_conditions(&[cond(148, "", "", 0)]), "团长为真");
+        assert!(engine.errors.is_empty(), "{:?}", engine.errors);
+    }
+    // 组员（owner != 自己）⇒ false
+    player.group_owner = 999;
+    {
+        let mut engine = Engine::new(&mut npc, &mut player);
+        assert!(
+            !engine.check_conditions(&[cond(148, "", "", 0)]),
+            "组员为假"
+        );
+        assert!(engine.errors.is_empty(), "{:?}", engine.errors);
+    }
+}
+
+/// `CHECKGROUPCOUNT`(73)：oracle 的 `switch (cMethod)` 整段被注释 ⇒ **恒假**（缺陷照搬）。
+/// 但要区分三条路径：无组早返、`sParam2` 可解、`sParam2` 不可解 ⇒ 脚本条件错误。
+#[test]
+fn check_group_count_always_false_like_oracle() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    // 无组：恒假、无错
+    player.group_owner = 0;
+    {
+        let mut engine = Engine::new(&mut npc, &mut player);
+        assert!(!engine.check_conditions(&[cond(73, "=", "1", 0)]));
+        assert!(engine.errors.is_empty(), "{:?}", engine.errors);
+    }
+    // 有组、整数字面量：恒假（注释掉的 switch）、无错
+    player.group_owner = 4242;
+    {
+        let mut engine = Engine::new(&mut npc, &mut player);
+        assert!(
+            !engine.check_conditions(&[cond(73, ">", "0", 0)]),
+            "缺陷：恒假"
+        );
+        assert!(engine.errors.is_empty(), "{:?}", engine.errors);
+    }
+    // 有组、`sParam2` 形如 `<$STR(Q999)>`（未知名且 `GetValNameNo` 不命中 ⇒ oracle
+    // `GetValNameValue` 无任何分支写 `nValue`）⇒ `nValue` 保持 `ref` 传入的 -1
+    // ⇒ ScriptConditionError（且仍恒假）。
+    // 注：`<$STR(N…)>`（未知名、首字母 N）在 oracle 会走 per-player `IntegerList` 回退
+    // （`ProcessingBase.cs:1420-1432`）写 `nValue = 0`、**不报错**；本仓未建模该回退 ⇒
+    // 不拿该输入断言，差异登记 whitelist **T-53**。
+    {
+        let mut engine = Engine::new(&mut npc, &mut player);
+        assert!(!engine.check_conditions(&[cond(73, "=", "<$STR(Q999)>", 0)]));
+        assert_eq!(engine.errors.len(), 1, "{:?}", engine.errors);
+        let text = format!("{:?}", engine.errors);
+        assert!(text.contains("CHECKGROUPCOUNT"), "{text}");
+    }
+    // 有组、`sParam2` 是普通非数字串 ⇒ oracle `GetVarValue` 尾支 `nValue = StrToInt(sValue, 0)`
+    // = 0（不回 -1）⇒ **不报错**（且恒假）。这是与上一条的关键分野。
+    {
+        let mut engine = Engine::new(&mut npc, &mut player);
+        assert!(!engine.check_conditions(&[cond(73, "=", "不是数字也不是变量", 0)]));
+        assert!(engine.errors.is_empty(), "{:?}", engine.errors);
+    }
+}
+
+/// `CHECKGROUPCLASS`(194)：按 `playerActor.GroupMembers[i].Job` 计数再与 `nParam3` 比。
+/// 成员列表只存在于**团长**身上（非团长空表）⇒ 非团长计数 0。
+#[test]
+fn check_group_class_counts_members_by_job() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.group_owner = 4242;
+    player.group_member_jobs = vec![0, 0, 1, 2];
+    {
+        let mut engine = Engine::new(&mut npc, &mut player);
+        assert!(engine.check_conditions(&[cond3(194, "Warrior", "=", 2)]));
+        assert!(engine.check_conditions(&[cond3(194, "Wizard", "=", 1)]));
+        assert!(!engine.check_conditions(&[cond3(194, "Taoist", ">", 1)]));
+        // default 分支 = >=
+        assert!(engine.check_conditions(&[cond3(194, "Warrior", "?", 2)]));
+        assert!(engine.errors.is_empty(), "{:?}", engine.errors);
+    }
+    // 非团长（owner != 自己）：宿主给的 `GroupMembers` 为空（oracle 只有团长持表）⇒ 计数 0
+    player.group_owner = 999;
+    player.group_member_jobs = vec![];
+    {
+        let mut engine = Engine::new(&mut npc, &mut player);
+        assert!(!engine.check_conditions(&[cond3(194, "Warrior", ">", 0)]));
+        assert!(engine.check_conditions(&[cond3(194, "Warrior", "<", 1)]));
+        assert!(engine.errors.is_empty(), "{:?}", engine.errors);
+    }
+    // `PlayerJob.None = 3` 使 `if (nJob < 0)` 恒假 ⇒ 未识别职业不报错（缺陷照搬）
+    player.group_owner = 4242;
+    player.group_member_jobs = vec![0, 0, 1, 2];
+    {
+        let mut engine = Engine::new(&mut npc, &mut player);
+        assert!(engine.check_conditions(&[cond3(194, "Bard", "=", 0)]));
+        assert!(engine.errors.is_empty(), "{:?}", engine.errors);
+    }
+}
+
+/// `RECALLGROUPMEMBERS`(64) / `GROUPRECALL`(331)：oracle 方法体为空 / 只剩被注释的一行
+/// ⇒ 可观测 no-op（无帧、无错误、`result` 不变）。
+#[test]
+fn group_recall_actions_are_noops_like_oracle() {
+    let (mut npc, mut player) = setup("[@main]\n#ACT\nx\n");
+    for owner in [0, 4242] {
+        player.group_owner = owner;
+        player.msgs.clear();
+        player.events.clear();
+        {
+            let mut engine = Engine::new(&mut npc, &mut player);
+            engine.run_actions(&[act(64, "", "", 0, 0)]);
+            engine.run_actions(&[act(331, "", "", 0, 0)]);
+            assert!(
+                engine.errors.is_empty(),
+                "owner={owner} 不应报错：{:?}",
+                engine.errors
+            );
+        }
+        assert!(player.msgs.is_empty(), "owner={owner} 不应发帧");
+        assert!(player.events.is_empty(), "owner={owner} 不应有副作用");
+    }
 }

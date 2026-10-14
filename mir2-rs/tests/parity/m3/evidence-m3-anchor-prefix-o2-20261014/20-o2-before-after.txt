@@ -1,0 +1,63 @@
+== O-2 定值机判（改前 HEAD vs 改后 worktree）==
+
+[quest] PATHS 基名=Messages.cs rel=src/OpenMir2/Messages.cs
+    错前缀(含字母)               改前=1   改后=1   MATCH
+    错前缀(纯非字母)              改前=1   改后=1   MATCH
+    spec 区间首段              改前=0   改后=0   MATCH
+    正确路径                   改前=0   改后=0   MATCH
+    裸基名                    改前=0   改后=0   MATCH
+    parse_refs(真身场景)       改前=14  改后=14  MATCH
+    未来扩展名 .gd 错前缀          改前=0   改后=1   0->1（fail-open 堵上）
+    parse_refs(Foo.gd:1)   改前=[] 改后=['Foo.gd:1']
+    _path_prefix_findings(正确 .gd) 改后=[]
+    => GREEN（现有口径逐格一致 + 未来扩展名覆盖）
+
+[party_trade] PATHS 基名=PlayObject.cs rel=src/M2Server/Player/PlayObject.cs
+    错前缀(含字母)               改前=1   改后=1   MATCH
+    错前缀(纯非字母)              改前=1   改后=1   MATCH
+    spec 区间首段              改前=0   改后=0   MATCH
+    正确路径                   改前=0   改后=0   MATCH
+    裸基名                    改前=0   改后=0   MATCH
+    parse_refs(真身场景)       改前=22  改后=22  MATCH
+    未来扩展名 .gd 错前缀          改前=0   改后=1   0->1（fail-open 堵上）
+    parse_refs(Foo.gd:1)   改前=[] 改后=['Foo.gd:1']
+    _path_prefix_findings(正确 .gd) 改后=[]
+    => GREEN（现有口径逐格一致 + 未来扩展名覆盖）
+
+[guild_castle] PATHS 基名=GuildOfficial.cs rel=src/GameSrv/Npc/GuildOfficial.cs
+    错前缀(含字母)               改前=1   改后=1   MATCH
+    错前缀(纯非字母)              改前=1   改后=1   MATCH
+    spec 区间首段              改前=0   改后=0   MATCH
+    正确路径                   改前=0   改后=0   MATCH
+    裸基名                    改前=0   改后=0   MATCH
+    parse_refs(真身场景)       改前=31  改后=31  MATCH
+    未来扩展名 .gd 错前缀          改前=0   改后=1   0->1（fail-open 堵上）
+    parse_refs(Foo.gd:1)   改前=[] 改后=['Foo.gd:1']
+    _path_prefix_findings(正确 .gd) 改后=[]
+    => GREEN（现有口径逐格一致 + 未来扩展名覆盖）
+
+[hero_pet] PATHS 基名=MagicManager.cs rel=src/M2Server/Magic/MagicManager.cs
+    错前缀(含字母)               改前=1   改后=1   MATCH
+    错前缀(纯非字母)              改前=1   改后=1   MATCH
+    spec 区间首段              改前=0   改后=0   MATCH
+    正确路径                   改前=0   改后=0   MATCH
+    裸基名                    改前=0   改后=0   MATCH
+    parse_refs(真身场景)       改前=27  改后=27  MATCH
+    未来扩展名 .gd 错前缀          改前=0   改后=1   0->1（fail-open 堵上）
+    parse_refs(Foo.gd:1)   改前=[] 改后=['Foo.gd:1']
+    _path_prefix_findings(正确 .gd) 改后=[]
+    => GREEN（现有口径逐格一致 + 未来扩展名覆盖）
+
+[selloff] PATHS 基名=PlayObject.Message.cs rel=src/M2Server/Player/PlayObject.Message.cs
+    错前缀(含字母)               改前=1   改后=1   MATCH
+    错前缀(纯非字母)              改前=1   改后=1   MATCH
+    spec 区间首段              改前=0   改后=0   MATCH
+    正确路径                   改前=0   改后=0   MATCH
+    裸基名                    改前=0   改后=0   MATCH
+    parse_refs(真身场景)       改前=19  改后=19  MATCH
+    未来扩展名 .gd 错前缀          改前=0   改后=1   0->1（fail-open 堵上）
+    parse_refs(Foo.gd:1)   改前=[] 改后=['Foo.gd:1']
+    _path_prefix_findings(正确 .gd) 改后=[]
+    => GREEN（现有口径逐格一致 + 未来扩展名覆盖）
+
+OVERALL GREEN

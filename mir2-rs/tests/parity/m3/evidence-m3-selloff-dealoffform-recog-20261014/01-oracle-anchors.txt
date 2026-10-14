@@ -1,0 +1,58 @@
+M3⑩-1 收口片 oracle 锚点（行号为冻结 src/ 实测；卡 openmir2-m3-selloff-consignment-world）
+========================================================================
+
+[触发点] Merchant.cs:930-935（label @dealybme + IsYbDeal ⇒ UserSelectOpenDealOffForm）
+                        else if (string.Compare(sLabel, ScriptFlagConst.sDealYBme, StringComparison.OrdinalIgnoreCase) == 0) // 元宝寄售:出售物品 
+                        {
+                            if (IsYbDeal)
+                            {
+                                UserSelectOpenDealOffForm(playObject); // 打开出售物品窗口
+                            }
+
+[本体] Merchant.cs:1038-1057 UserSelectOpenDealOffForm
+        private void UserSelectOpenDealOffForm(IPlayerActor user)
+        {
+            if (user.SaleDeal)
+            {
+                if (!user.SellOffInTime(0))
+                {
+                    user.SendMsg(Messages.RM_SENDDEALOFFFORM, 0, ActorId, 0, 0);
+                    //user.GetBackSellOffItems();
+                }
+                else
+                {
+                    user.SendMsg(this, Messages.RM_MERCHANTSAY, 0, 0, 0, 0, ChrName + "/您还有元宝服务正在进行!!\\ \\<返回/@main>");
+                }
+            }
+            else
+            {
+                user.SendMsg(this, Messages.RM_MERCHANTSAY, 0, 0, 0, 0, ChrName + "/您未开通元宝服务,请先开通元宝服务!!\\ \\<返回/@main>");
+            }
+        }
+
+
+[SendMsg 签名] BaseObject.Message.cs:34
+        public void SendMsg(int wIdent, int wParam, int nParam1, int nParam2, int nParam3, string sMsg = "")
+
+[RM→SM 映射] PlayObject.Message.cs:2046-2048
+                case Messages.RM_SENDDEALOFFFORM:// 打开出售物品窗口
+                    SendDefMessage(Messages.SM_SENDDEALOFFFORM, processMsg.nParam1, processMsg.nParam2, 0, 0, processMsg.Msg);
+                    break;
+
+[SendDefMessage 签名] PlayObject.Socket.cs:27
+        public void SendDefMessage(short wIdent, int nRecog, int nParam, int nTag, int nSeries, string sMsg)
+
+[MakeMessage 签名] OpenMir2/Messages.cs:846
+        public static CommandMessage MakeMessage(int msg, int recog, int param, int tag, int series)
+
+[Label 常量] ScriptFlagConst.cs:25
+        public const string sDealYBme = "@dealybme";
+
+------------------------------------------------------------------------
+字段推导（逐位）:
+  SendMsg(wIdent, wParam=0, nParam1=ActorId, nParam2=0, nParam3=0, sMsg="")
+  => 出队 SendDefMessage(SM_SENDDEALOFFFORM, nRecog=processMsg.nParam1=ActorId, nParam=processMsg.nParam2=0, nTag=0, nSeries=0, sMsg="")
+  => MakeMessage(SM_SENDDEALOFFFORM, recog=ActorId, param=0, tag=0, series=0)
+  => 线缆 12B 头 = [Recog=ActorId(i32, LSB) | Ident=23001 | Param=0 | Tag=0 | Series=0]
+
+结论: Rust 必须 recog = npc_id(32 位), param = 0。旧实现 recog=0 / param=npc_id as u16 是字段错位 + 32->16 截断。

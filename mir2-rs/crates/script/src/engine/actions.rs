@@ -82,6 +82,17 @@ impl Engine<'_, '_> {
                 self.player
                     .send_msg(RM_MERCHANTDLGCLOSE, 0, npc_id, 0, 0, None);
             }
+            "ActionOfRecallGroupMembers" => {
+                // `ExecutionProcessingSys.cs:3487` 的 `ActionOfRecallGroupMembers` **方法体为空**
+                // （叫「逐成员召回」，实际什么都不做，`Success` 不变）⇒ 可观测 no-op，
+                // 1:1 照搬（whitelist T-52）。**不许**在此实现「本该有」的召回。
+            }
+            "ActionOfGroupRecall" => {
+                // `ExecutionProcessingSys.cs:3918-3924`：`if (playerActor.GroupOwner != 0) {
+                //     // playerActor.GroupRecall('GroupRecall');  ← 被注释 }
+                // ⇒ 只读 `GroupOwner`，无任何副作用/无帧（缺陷照搬，whitelist T-52）。
+                let _ = self.player.group_owner();
+            }
             "ActionOfMessageBox" => {
                 // playerActor.SendMsg(normNpc, RM_MENU_OK, 0, playerActor.ActorId, 0, 0,
                 //                     GetLineVariableText(playerActor, sParam1))

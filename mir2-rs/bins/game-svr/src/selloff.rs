@@ -1004,8 +1004,13 @@ pub fn sell_off_in_time(me: &SellOffSide<'_>, book: &SellOffBook, n_code: i32) -
 }
 
 /// `UserSelectOpenDealOffForm(user)`（`Merchant.cs:1038-1056`）的**成功支**帧：
-/// `user.SendMsg(RM_SENDDEALOFFFORM, 0, ActorId, 0, 0)`（`ActorId` = 商人）⇒ `Run()` 出队时映射
-/// `SM_SENDDEALOFFFORM(23001)`（`PlayObject.Message.cs:2046-2048`）。
+/// `user.SendMsg(RM_SENDDEALOFFFORM, 0, ActorId, 0, 0)`（`ActorId` = 商人）⇒ `Run()` 出队时
+/// `SendDefMessage(SM_SENDDEALOFFFORM, processMsg.nParam1, processMsg.nParam2, 0, 0, processMsg.Msg)`
+/// （`PlayObject.Message.cs:2046-2048`）。
+///
+/// **字段口径**：`SendMsg(wIdent, wParam, nParam1, nParam2, nParam3, sMsg)` 里 `wParam=0`、
+/// `nParam1=ActorId`（商人）⇒ `SM` 头 `Recog = nParam1 = 商人 ActorId`、`Param = nParam2 = 0`
+/// （**不是** `Recog=0`/`Param=ActorId`）：`ActorId` 是 32 位，只能落 `Recog`；`Param` 是 16 位。
 ///
 /// 返回 `None` 表示 oracle 走 `RM_MERCHANTSAY` 失败支（未开通元宝服务 / 已有进行中的寄售）
 /// （`Merchant.cs:1041-1056`）—— 那两路是 **商人说话帧**（`SM_MERCHANTSAY(643)`，
@@ -1028,8 +1033,8 @@ pub fn open_deal_off_form(
         SellOffFrame::Def {
             target: me.id,
             ident: messages::SM_SENDDEALOFFFORM,
-            recog: 0,
-            param: npc_id as u16,
+            recog: npc_id,
+            param: 0,
             tag: 0,
             series: 0,
             name: None,
@@ -1753,8 +1758,8 @@ mod tests {
                     "优先级字节 23000&0xFF=152"
                 );
                 assert_eq!(ident, messages::SM_SENDDEALOFFFORM);
-                assert_eq!(param, 42, "param = 商人 ActorId");
-                assert_eq!(recog, 0);
+                assert_eq!(recog, 42, "Recog = nParam1 = 商人 ActorId（32 位）");
+                assert_eq!(param, 0, "Param = nParam2 = 0");
             }
             other => panic!("应为排队 Def 帧，实得 {other:?}"),
         }
@@ -1763,6 +1768,39 @@ mod tests {
             open_deal_off_form(&side(&mut m), &book, 42).is_none(),
             "已有进行中的寄售 ⇒ 不开窗（回商人说话帧）"
         );
+    }
+
+    /// **⑩-1 收口片判据**：`SM_SENDDEALOFFFORM` 的线缆 12B 命令头字段口径
+    /// （`Merchant.cs:1044` → `PlayObject.Message.cs:2046-2048` 的 `SendDefMessage`）：
+    /// `Recog = nParam1 = 商人 ActorId`（32 位，可 > `u16::MAX`）、`Param = nParam2 = 0`。
+    /// 改坏（换回 `recog=0` / `param=npc_id as u16`）⇒ 本用例必红（Recog 恒 0 且 ActorId 被截断）。
+    #[test]
+    fn open_deal_off_form_wire_header_puts_npc_id_in_recog() {
+        let cat = catalog();
+        let book = SellOffBook::default();
+        let mut m = P::new(1, "seller");
+        m.state.sale_deal = true;
+        // 0x1234_5678 > u16::MAX：若落进 16 位的 Param 必被截断 ⇒ 这是口径判据的核心。
+        let ev = open_deal_off_form(&side(&mut m), &book, 0x1234_5678).expect("应开窗");
+        let (target, body) = selloff_event_body(&ev, &cat).expect("应可编码");
+        assert_eq!(target, 1);
+        assert!(body.len() >= 12, "GM_DATA body 至少 12B 命令头");
+        assert_eq!(
+            i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            0x1234_5678,
+            "Recog = 商人 ActorId（32 位完整，不得截进 16 位的 Param）"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            messages::SM_SENDDEALOFFFORM
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[6], body[7]]),
+            0,
+            "Param = nParam2 = 0"
+        );
+        assert_eq!(u16::from_le_bytes([body[8], body[9]]), 0, "Tag = 0");
+        assert_eq!(u16::from_le_bytes([body[10], body[11]]), 0, "Series = 0");
     }
 
     // ---- 帧编码 ----
