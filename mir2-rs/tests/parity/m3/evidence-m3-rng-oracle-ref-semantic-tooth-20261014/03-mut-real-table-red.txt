@@ -1,0 +1,28 @@
+## 真表改坏（在**已加载的真表**上就地换 ref，同一语义牙必红）
+
+### rng_consumer_groups / consumer_groups.tsv
+
+真表 oracle-refs-fresh = []  (绿)
+
+改坏 (MUTATED) RegenMonsters :815 -> :238 (ProcessMonsters 内)
+  RED = ['行12(spawn/csharp): oracle_ref 行 238 不在 `RegenMonsters` 方法体内（range=[(811, 878)]；ref=src/GameSrv/Word/WorldServer.MonGen.cs:238）']
+
+改坏 (MUTATED) Think :208 -> :255 (调用点 if (Think()) 的块；O-1)
+  RED = ['行3(monster_ai/csharp): oracle_ref 行 255 不在 `Think` 方法体内（range=[(187, 218)]；ref=src/M2Server/Monster/MonsterObject.cs:255）']
+
+改坏 (MUTATED) UpgradeRandom\w+ :182 -> :142 (GetUpgrade 方法体)
+  RED = ['行7(drop/csharp): oracle_ref 行 142 不在 `UpgradeRandom` 方法体内（range=[(182, 232), (234, 268), (270, 304), (306, 340), (342, 376), (378, 402), (404, 438), (440, 474)]；ref=src/M2Server/Items/GameItemSystem.cs:142）']
+
+还原后 oracle-refs-fresh = []
+
+
+### drop_exp_purity_gate / drop_exp_consumers.tsv
+
+真表 oracle-refs-fresh = []  (绿)
+
+改坏 (MUTATED) RegenMonsters :811 -> :238
+  RED = ['行46(csharp/wallclock): oracle_ref 行 238 不在 `RegenMonsters` 方法体内（range=[(811, 878)]；ref=src/GameSrv/Word/WorldServer.MonGen.cs:238）']
+
+改坏 (MUTATED) _Attack :41 -> :14 (调用点 if (_Attack(...)) 的块；O-1)
+  RED = ['行36(csharp/measured): oracle_ref 行 14 不在 `_Attack` 方法体内（range=[(30, 66)]；ref=src/M2Server/Actor/BaseObject.Attack.cs:14）']
+
