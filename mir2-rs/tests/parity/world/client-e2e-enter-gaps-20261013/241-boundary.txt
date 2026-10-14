@@ -1,0 +1,51 @@
+241-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片58 边界与冻结面（2026-10-15，tag m2svr）
+worktree = E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr（branch enter-gaps-window-dense-menu）
+base = origin/master = 12f2a4187；HEAD（改动前）= 12f2a4187（= 片57 502d09f4 已合入后的 master）
+====================================================================================================
+
+# 1) 改动路径（提交前 `git status --porcelain=v1`）
+
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/239-residual-hp-origin-20261015.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/240-gates.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/241-boundary.txt
+
+# 2) 改动路径清单（全部在证据目录内）
+
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/239-residual-hp-origin-20261015.txt  （A 本片证据）
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/240-gates.txt                        （A 本片门禁/机判）
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/241-boundary.txt                     （A 本文件）
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md                            （M §57 收口）
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt                       （M 重生成，248/248）
+
+# 3) 扩展名门：零 .rs / .toml / .ps1 / .cs / .py
+
+$ git status --porcelain=v1 | grep -E '\.(rs|toml|ps1|cs|py)$'
+  （空）⇒ OK 无匹配
+
+# 4) 冻结面（`git diff --name-only origin/master -- <冻结面>`）
+
+  冻结面 = src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+           src/BotSrv mir2-rs/crates
+  （上面为空 = 冻结面零改动）
+
+# 5) 证据清单门（在仓库字节 / LF 归一口径下，提交前已按索引 blob 记）
+
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra \
+      mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+    GREEN  ...\SHA256SUMS.txt  [repo 口径]  OK 248/248   rc=0
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck \
+      mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+    EOLCHECK GREEN 249/249 件文本证据与仓库口径（LF）在 EOL 上一致
+
+# 6) 差量统计
+
+ 5 files changed（2 M + 3 A），全部在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`。
+（提交后以 `git show --stat <head>` 为准。）
+
+# 7) 判级
+
+本片 = **L**（只读复核 + 证据文档）：零生产代码、零 `.rs`/`.toml`/`.py`/`.ps1`/`.cs`、
+零取数/时序/RNG/落库改动；不新增/不收紧 ①②③ 判据。卡级 **R** 真机 ①②③（52/752 生效 / `CM_RUN>=1` /
+同屏怪 + 两侧同框 + 受击步）仍归 **root 独占窗口**；不 merge、不自签 review。
