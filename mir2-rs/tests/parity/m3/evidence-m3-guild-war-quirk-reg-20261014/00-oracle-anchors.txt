@@ -1,0 +1,81 @@
+# 00 — oracle 锚原文 + Rust 锁定用例（⑧-5「先扣钱后判掌门」）
+# base=origin/master 057d7dc9e597ec0b4c2c6d3f7f9feb4993b206ce；branch=worktree-m3-guild-war-quirk-reg
+
+# [cmd] sed -n '180,199p' src/GameSrv/Npc/GuildOfficial.cs
+        private static void ReQuestGuildWar(IPlayerActor PlayObject, string sGuildName)
+        {
+            if (SystemShare.GuildMgr.FindGuild(sGuildName) != null)
+            {
+                if (PlayObject.Gold >= SystemShare.Config.GuildWarPrice)
+                {
+                    PlayObject.DecGold(SystemShare.Config.GuildWarPrice);
+                    PlayObject.GoldChanged();
+                    PlayObject.ReQuestGuildWar(sGuildName);
+                }
+                else
+                {
+                    PlayObject.SysMsg("你没有足够的金币!!!", MsgColor.Red, MsgType.Hint);
+                }
+            }
+            else
+            {
+                PlayObject.SysMsg("行会 " + sGuildName + " 不存在!!!", MsgColor.Red, MsgType.Hint);
+            }
+        }
+
+# [cmd] sed -n '3349,3385p' src/M2Server/Player/PlayObject.Base.cs
+        public void ReQuestGuildWar(string sGuildName)
+        {
+            if (!IsGuildMaster())
+            {
+                SysMsg("只有行会掌门人才能申请!!!", MsgColor.Red, MsgType.Hint);
+                return;
+            }
+            if (M2Share.ServerIndex != 0)
+            {
+                SysMsg("这个命令不能在本服务器上使用!!!", MsgColor.Red, MsgType.Hint);
+                return;
+            }
+            IGuild guild = SystemShare.GuildMgr.FindGuild(sGuildName);
+            if (guild == null)
+            {
+                SysMsg("行会不存在!!!", MsgColor.Red, MsgType.Hint);
+                return;
+            }
+            bool boReQuestOk = false;
+            WarGuild warGuild = MyGuild.AddWarGuild(guild);
+            if (warGuild.WarTick > 0)
+            {
+                if (guild.AddWarGuild(MyGuild).Guild != null)
+                {
+                    warGuild.WarTick = 0;
+                }
+                else
+                {
+                    boReQuestOk = true;
+                }
+            }
+            if (boReQuestOk)
+            {
+                SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_207, M2Share.ServerIndex, MyGuild.GuildName);
+                SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_207, M2Share.ServerIndex, guild.GuildName);
+            }
+        }
+
+# [cmd] sed -n '4400,4405p' src/M2Server/Player/PlayObject.cs
+        }
+
+        public bool IsGuildMaster()
+        {
+            return (MyGuild != null) && (GuildRankNo == 1);
+        }
+
+# [cmd] rg -n 'fn request_guild_war_(non_master_still_pays_gold|no_guild_still_pays_gold|non_zero_server_still_pays_gold)' mir2-rs/crates/world/src/guild.rs
+1595:    fn request_guild_war_non_master_still_pays_gold() {
+1618:    fn request_guild_war_no_guild_still_pays_gold() {
+1637:    fn request_guild_war_non_zero_server_still_pays_gold() {
+
+# [cmd] rg -n '先 NPC 层|gold_spent = req.war_price|先于掌门人判定' mir2-rs/crates/world/src/guild.rs
+961:    /// **顺序**：先 NPC 层（目标存在 ⇒ `GuildWarPrice` 门 ⇒ 扣金币），**再** `PlayObject` 层
+999:        // `DecGold(GuildWarPrice); GoldChanged();`（`:186-187`）先于掌门人判定。
+1000:        let gold_spent = req.war_price;

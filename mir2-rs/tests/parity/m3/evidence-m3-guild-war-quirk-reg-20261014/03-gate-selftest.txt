@@ -1,0 +1,10 @@
+# 03 — 门自检（合成文本 + 注入 + 改坏必红）
+# [cmd] python -I m3_guild_war_quirk_registry_gate.py selftest
+  SELFTEST ok  T-54 登记齐 + 锚点齐 -> GREEN（T-42 撞号不判红）
+  SELFTEST ok  删 T-54 行 -> RED
+  SELFTEST ok  锚点改错 -> RED
+  SELFTEST ok  T-54 撞号 -> RED
+  SELFTEST ok  删掉 Rust 锁定用例名 -> RED
+  SELFTEST ok  空表 -> 全 MISSING
+SELFTEST GREEN 6/6
+rc=0
