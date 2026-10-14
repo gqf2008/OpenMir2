@@ -1,0 +1,38 @@
+263 — 边界 / 冻结面（片63：窗口脚本前置门 fail-closed）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `dd48c05a0`；head = 本片提交
+====================================================================================================
+
+# 1) 改件清单（全部 = 本卡证据目录内；生产/协议/存储面 = 0）
+
+  M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt
+     （加 `guard` 子命令 + `start` 的 step 0 前置门 `run_guard || exit 1`（在 `lanes-pause` 之前）
+       + `stop [LogDir]` 可选形参；只读门 = 已有 `check_rust_window_preflight.py`）
+  A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/260-window-guard-failclosed.txt
+  A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/261-redcheck-window-guard.txt
+  A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/262-gates.txt
+  A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/263-boundary.txt
+  M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md            # 追加 §63
+  M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+
+# 2) 冻结面（必须全空）
+
+$ git diff --name-only <base>..<head> -- src/ sql/ MirClient \
+      mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins/ src/BotSrv \
+      mir2-rs/tests/parity/m3
+（空）
+
+# 3) 零生产源码面
+
+$ git diff --name-only <base>..<head> -- '*.rs' '*.toml' '*.ps1' '*.cs'
+（空）
+
+# 4) 纪律
+
+- 零起栈、零游戏端口；零进程启动/终止；**未 kill 泄漏栈**（栈属 root；本片只读真探 + 把已验证的
+  停栈命令交给操作者）。
+- **未动** root 活脚本 `E:/tmp/openmir2-watch/client-e2e-window.sh`（不在写集；只提供入库替身）。
+- **未动** `check_rust_window_preflight.py`（片59/62 已收口；本片只调用它）。
+- 未动共享主检出；未 merge master 之外的分支、未自签 review。
+- 未新增/删除任何 cargo 用例（`cargo test --workspace` 1233 passed / 0 failed / 22 ignored 与 base 一致）。
+- 判级 L（脚本/门 + 只读证据）；卡级 R 真机 ①②③ 归 root 独占窗口（仍 not_verified）。

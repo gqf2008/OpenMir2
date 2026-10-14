@@ -1,0 +1,51 @@
+261 — 改坏必红：窗口前置门 fail-closed 的牙齿（片63）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `dd48c05a0`；head = 本片提交
+====================================================================================================
+
+# 1) 变体 A（本 tick 实跑）：把 `run_guard` 的拒绝分支 `return 1` 改成 `return 0`
+#    ⇒ 门 RED 时不再拒绝（恒放行）⇒ 判据「RED ⇒ rc=1」必须变红。
+#    红检只在 `/e/tmp` 的副本上做，**不写仓内文件**（sha256 前后一致证明）。
+#    原始件：`E:/tmp/m2svr-burst-0800/03-redcheck.txt`
+
+```
+$ sha256sum client-e2e-window.fixed.sh.txt
+d6648370f3d1c64bb301288699a5c81284d5608aa6f9b9f7b74f0ddeafe1ea20
+
+# mutate: return 1 → return 0  （唯一一处，assert count==1）
+$ python - ... client-e2e-window.fixed.sh.txt /e/tmp/m2svr-burst-0800/mutated-guard-return0.sh
+
+$ WINDOW_PREFLIGHT_CMD=false bash mutated-guard-return0.sh guard
+WINDOW_PREFLIGHT_RED  （...）
+rc=0      <== 【RED】门被废掉 ⇒ 拒绝失效（判据要的是 rc=1）
+
+$ sha256sum client-e2e-window.fixed.sh.txt
+d6648370f3d1c64bb301288699a5c81284d5608aa6f9b9f7b74f0ddeafe1ea20
+RESTORE_OK（仓内文件未被红检改动）
+```
+
+# 2) 变体 B（静态咬合，**不执行 start**）：`start` 分支里门必须在 `lanes-pause` **之前**
+#    且以 `|| exit 1` 短路（否则门 RED 仍会暂停车队/构建/起栈）。
+
+```
+$ grep -n "run_guard || exit 1" client-e2e-window.fixed.sh.txt
+42:  echo "== 0) 窗口前置门（fail-closed）"; run_guard || exit 1
+$ grep -n "lanes-pause" client-e2e-window.fixed.sh.txt
+43:  echo "== 1) 暂停车队（lanes-pause）"; bash "$w/lanes-pause.sh"
+$ grep -n "start)" client-e2e-window.fixed.sh.txt
+41:start)
+```
+
+⇒ 门（第 42 行，含 `|| exit 1`）严格早于 `lanes-pause`（第 43 行）与构建/起栈；`guard` 子命令
+（第 35-38 行）可单独复跑，零副作用。
+
+# 3) 为什么变体 B 不真跑
+
+`start` 的真跑会 `lanes-pause.sh`（暂停整个车队）+ `cargo build` + 起栈（占 9 个游戏端口）——
+这正是 `brief` 明令「车道不要自己起栈占端口」的面，也是本片要防的副作用。故对 `start` 只做
+**静态咬合**（门行号 < `lanes-pause` 行号 + `|| exit 1` 存在），门本身的**行为**由变体 A 的
+三态注入（RED rc=1 / GREEN rc=0 / 用法 rc=2）+ §260 的真跑覆盖。
+
+# 4) 判级
+
+**L**（脚本/门 + 只读证据，零生产代码）。牙齿 = 变体 A（行为，双向）+ 变体 B（静态）。

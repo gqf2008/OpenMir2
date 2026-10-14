@@ -1,13 +1,45 @@
 #!/usr/bin/env bash
 # client-e2e-window.sh —— 一键客户端联调窗口（root 2026-10-13）
-#   start: 暂停车队 → 增量构建全链 → 起 Rust 栈（+ C# DBSrv/LoginSrv）→ preflight → 起客户端（可见窗口，指向 127.0.0.1:7000）
-#   stop : 停栈 → 关客户端 → 校验十端口回落 → 恢复车队
+#   guard: 只跑窗口前置门（check_rust_window_preflight.py 的 R1..R8，零副作用）—— 源/槽位/出处不过门 ⇒ exit 1
+#   start: guard → 暂停车队 → 增量构建全链 → 起 Rust 栈（+ C# DBSrv/LoginSrv）→ preflight → 起客户端（可见窗口，指向 127.0.0.1:7000）
+#   stop [LogDir]: 停栈（缺省 E:\tmp\client-e2e\stack）→ 关客户端 → 校验十端口回落 → 恢复车队
+#
+# 2026-10-15（片63，收口 root 15:0x「假回归」）：15:0x 那次实测是在**修复前的源/旧 exe + 被泄漏栈占着端口**
+# 上起的窗口 —— 复现出的 HUD 0/0 + CM_RUN=0 是 53 帧布局缺陷（`c61b9627a`），不是 52/752 的回归，且已随
+# `c61b9627a`/`6cadc9fbf`/`fd68e037d` 修掉。⇒ `start` 前**必须**过前置门：RED 就拒绝起窗（一个字节都不构建、
+# 不占端口、不暂停车队），RED 文本里给出**由 pid 文件校验过**的停栈命令。
 set -u
 w=/e/tmp/openmir2-watch; repo=/e/tmp/m2svr-window-origin
-tgt='E:\tmp\m2svr-window-target'; logdir='E:\tmp\client-e2e\stack'
+tgt='E:\tmp\m2svr-window-target'; tgt_pf='E:/tmp/m2svr-window-target'
+logdir='E:\tmp\client-e2e\stack'
 ps='/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 只在红检/自检里注入：WINDOW_PREFLIGHT_CMD=<任意命令>
+preflight_cmd=${WINDOW_PREFLIGHT_CMD:-"python -I -B $here/check_rust_window_preflight.py --repo \"$repo\" --ref HEAD --target-dir \"$tgt_pf\" --provenance \"$tgt_pf/window-provenance.json\""}
+
+# 窗口前置门（fail-closed）：rc=0 才允许起窗；rc!=0 ⇒ 打印门输出尾部 + 已验证停栈命令 + RED 行。
+run_guard() {
+  local out stop
+  if ! out=$(eval "$preflight_cmd" 2>&1); then
+    printf '%s\n' "$out" | tail -25
+    stop=$(printf '%s\n' "$out" | grep -oE -- '-LogDir [^ ]+ -Stop' | tail -1)
+    echo "WINDOW_PREFLIGHT_RED  （拒绝起窗：源/槽位/出处未过前置门；零副作用：未暂停车队/未构建/未起栈）"
+    if [ -n "$stop" ]; then
+      echo "PREFLIGHT_STOP_CMD: powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 $stop"
+    fi
+    return 1
+  fi
+  printf '%s\n' "$out" | tail -3
+  echo "WINDOW_GUARD_OK"
+  return 0
+}
+
 case "${1:-}" in
+guard)
+  run_guard
+  ;;
 start)
+  echo "== 0) 窗口前置门（fail-closed）"; run_guard || exit 1
   echo "== 1) 暂停车队（lanes-pause）"; bash "$w/lanes-pause.sh"
   echo "== 2) 增量构建全链（复用暖 target，检出外）"
   ( cd "$repo/mir2-rs" && CARGO_TARGET_DIR="$tgt" cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv ) || { echo "BUILD_FAIL"; exit 1; }
@@ -20,10 +52,11 @@ start)
   echo "WINDOW_OPEN_OK  (收窗口请跑： bash $w/client-e2e-window.sh stop)"
   ;;
 stop)
-  echo "== 1) 停栈"; "$ps" -NoProfile -ExecutionPolicy Bypass -File "$repo/tools/m2-acceptance/start_rust_stack.ps1" -LogDir "$logdir" -Stop 2>&1 | tail -12
+  [ -n "${2:-}" ] && logdir=$2
+  echo "== 1) 停栈（LogDir=$logdir）"; "$ps" -NoProfile -ExecutionPolicy Bypass -File "$repo/tools/m2-acceptance/start_rust_stack.ps1" -LogDir "$logdir" -Stop 2>&1 | tail -12
   echo "== 2) 关客户端"; "$ps" -NoProfile -Command "Get-Process MirClinet -EA SilentlyContinue | Stop-Process -Force"
   echo "== 3) 端口实拍"; "$ps" -NoProfile -Command "3306,5000,5100,5500,5600,5700,6000,7000,7100,7200 | ForEach-Object { \$p=\$_; \$x=Get-NetTCPConnection -State Listen -LocalPort \$p -EA SilentlyContinue; '{0}:{1}' -f \$p, \$(if(\$x){'UP'}else{'DOWN'}) }" | tr '\n' ' '
   echo; echo "== 4) 恢复车队"; bash "$w/lanes-resume.sh" | tail -12
   ;;
-*) echo "用法: $0 start|stop"; exit 2;;
+*) echo "用法: $0 guard|start|stop [LogDir]"; exit 2;;
 esac
