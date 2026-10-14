@@ -65,6 +65,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_TABLE = os.path.join(HERE, "drop_exp_consumers.tsv")
+# 仓库根（`oracle_ref` 保鲜用）：drop-exp → m3 → parity → tests → mir2-rs → 仓库根。
+REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", "..", "..", "..", ".."))
 
 CLASSES = ("measured", "setup", "wallclock", "other")
 
@@ -125,6 +127,210 @@ def load_table(path):
     for r in rows:
         by_side[r["side"]].append(r)
     return {"path": path, "rows": rows, "by_side": by_side}
+
+
+# ---- `oracle_ref` 锚点保鲜（2026-10-14 收口：同族 `oracle_ref` 列此前无人校验） ---------
+#
+# 背景：`rng_consumer_groups.py` 早已把「`oracle_ref` 指向不存在源码 / 行号越界」钉成
+# fail-closed（真身缺陷：一条 ref 曾写错目录前缀而静默通过），但本文件的**唯一真源**
+# `drop_exp_consumers.tsv` 的 `oracle_ref` 列此前只被读取、从未校验 ⇒ 同一族坑在本表复现。
+# 本片把它补齐，并再加一道**语义**牙：C# 行的 ref 必须落在其 `pattern` 点名的**方法体**内
+# （真身缺陷：`RegenMonsters` 行的 ref 曾写 `WorldServer.MonGen.cs:238`，该行实际落在
+# `ProcessMonsters` 方法里，人复核会找空；只查「文件存在 + 行号在范围」抓不到它）。
+#
+# 路径口径（与 `rng_consumer_groups.py` 同）：`src/...` 相对仓库根；`crates/...`/`bins/...`
+# 相对 `mir2-rs/`；`mir2-rs/...` 相对仓库根。不可解析的 ref（无行号 / glob / 目录）跳过。
+
+_SOURCE_EXTS = (".cs", ".rs")
+
+
+def resolve_oracle_ref_path(ref, repo_root=REPO_ROOT):
+    """`oracle_ref` → 绝对源码路径；不可解析（glob / 目录 / 非源码 / 未知前缀）⇒ None。"""
+    base = (ref or "").split(":")[0].strip()
+    if not base or base.endswith("/") or "*" in base or not base.endswith(_SOURCE_EXTS):
+        return None
+    if base.startswith("mir2-rs/"):
+        rel = base
+    elif base.startswith(("crates/", "bins/")):
+        rel = "mir2-rs/" + base
+    elif base.startswith("src/"):
+        rel = base
+    else:
+        return None
+    return os.path.join(repo_root, rel)
+
+
+def oracle_ref_line(ref):
+    """`path:line` → line；无行号 ⇒ None。"""
+    m = re.search(r":(\d+)\s*$", (ref or "").strip())
+    return int(m.group(1)) if m else None
+
+
+def _read_lines(path):
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        return fh.read().splitlines()
+
+
+def validate_oracle_refs(rows, repo_root=REPO_ROOT):
+    """存在性 + 行号范围（与 `rng_consumer_groups.validate_oracle_refs` 同口径）。"""
+    problems = []
+    for r in rows:
+        ref = r.get("oracle_ref", "")
+        path = resolve_oracle_ref_path(ref, repo_root)
+        if path is None:
+            continue
+        tag = "行%d(%s/%s)" % (r["lineno"], r["side"], r["class"])
+        if not os.path.isfile(path):
+            problems.append("%s: oracle_ref 指向不存在的源码文件 %s（ref=%s）"
+                            % (tag, os.path.relpath(path, repo_root), ref))
+            continue
+        line = oracle_ref_line(ref)
+        if line is None:
+            continue
+        n = len(_read_lines(path))
+        if line < 1 or line > n:
+            problems.append("%s: oracle_ref 行 %d 越界（%s 共 %d 行）"
+                            % (tag, line, os.path.relpath(path, repo_root), n))
+    return problems
+
+
+def _pattern_symbol(pattern):
+    """从站点 `pattern` 抽出被点名的方法/构造名（`...\\Class.Method@File.cs:NN` ⇒ `Method`）。
+
+    `\\.ctor` ⇒ 该类名（构造函数）。抽不出 ⇒ None（调用方跳过语义牙，不误伤）。
+    """
+    head = (pattern or "").split("@")[0].replace("\\.", ".")
+    segs = [s for s in head.split(".") if s]
+    if not segs:
+        return None
+    if segs[-1] == "ctor":
+        return segs[-2] if len(segs) >= 2 else None
+    return segs[-1]
+
+
+def _code_only(lines):
+    """逐行剥掉字符串/字符/注释（花括号计数前用，避免 `'{'` 之类误计）。"""
+    out = []
+    in_block = False
+    for s in lines:
+        i = 0
+        n = len(s)
+        res = []
+        while i < n:
+            if in_block:
+                j = s.find("*/", i)
+                if j < 0:
+                    break
+                in_block = False
+                i = j + 2
+                continue
+            c = s[i]
+            if c == '"':
+                if i > 0 and s[i - 1] == "@":  # C# 逐字字符串（内部 `""` 转义）
+                    j = i + 1
+                    while j < n:
+                        if s[j] == '"':
+                            if j + 1 < n and s[j + 1] == '"':
+                                j += 2
+                                continue
+                            break
+                        j += 1
+                    i = j + 1
+                    continue
+                j = i + 1
+                while j < n:
+                    if s[j] == "\\":
+                        j += 2
+                        continue
+                    if s[j] == '"':
+                        break
+                    j += 1
+                i = j + 1
+                continue
+            if c == "'":
+                j = i + 1
+                while j < n:
+                    if s[j] == "\\":
+                        j += 2
+                        continue
+                    if s[j] == "'":
+                        break
+                    j += 1
+                i = j + 1
+                continue
+            if c == "/" and i + 1 < n and s[i + 1] == "/":
+                break
+            if c == "/" and i + 1 < n and s[i + 1] == "*":
+                in_block = True
+                i += 2
+                continue
+            res.append(c)
+            i += 1
+        out.append("".join(res))
+    return out
+
+
+def _method_body_ranges(lines, name):
+    """找 `name` 每个声明的方法体 `(decl_line, close_line)`（1-based，含声明行）。"""
+    masked = _code_only(lines)
+    pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"\s*\(")
+    ranges = []
+    for idx, ml in enumerate(masked):
+        if not pat.search(ml):
+            continue
+        opened = False
+        depth = 0
+        j = idx
+        while j < len(masked):
+            stop = False
+            for ch in masked[j]:
+                if ch == "{":
+                    opened = True
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if opened and depth == 0:
+                        ranges.append((idx + 1, j + 1))
+                        stop = True
+                        break
+                elif ch == ";" and not opened:
+                    stop = True
+                    break
+            if stop:
+                break
+            j += 1
+    return ranges
+
+
+def check_oracle_ref_methods(rows, repo_root=REPO_ROOT):
+    """C# 行的 ref 必须落在其 `pattern` 点名的方法体内（语义锚；Rust 行跳过）。
+
+    抓不到方法体（同名多载皆不含 / 解析失败）⇒ 点名 RED（fail-closed）；`pattern`
+    抽不出方法名 ⇒ 跳过（不可判，保守不误伤）。
+    """
+    problems = []
+    for r in rows:
+        if r["side"] != "csharp":
+            continue
+        ref = r.get("oracle_ref", "")
+        line = oracle_ref_line(ref)
+        name = _pattern_symbol(r.get("pattern"))
+        if line is None or not name:
+            continue
+        path = resolve_oracle_ref_path(ref, repo_root)
+        if path is None or not os.path.isfile(path):
+            continue  # 存在性牙已点名，不重复
+        ranges = _method_body_ranges(_read_lines(path), name)
+        if not any(a <= line <= b for a, b in ranges):
+            problems.append(
+                "行%d(%s/%s): oracle_ref 行 %d 不在 `%s` 方法体内（range=%s；ref=%s）"
+                % (r["lineno"], r["side"], r["class"], line, name, ranges, ref))
+    return problems
+
+
+def check_oracle_refs(rows, repo_root=REPO_ROOT):
+    """`oracle_ref` 全量保鲜：存在性/范围 + C# 方法体归属。"""
+    return validate_oracle_refs(rows, repo_root) + check_oracle_ref_methods(rows, repo_root)
 
 
 def classify(site, table_rows):
@@ -554,6 +760,35 @@ def cmd_selftest(_args):
                                         "crates/world/src/castle.rs:1"]))
         case("real-table-rust-unknown-red", "RED",
              lambda: _judge_file(DEFAULT_TABLE, runk, side="rust")[0])
+
+        # ⑳ `oracle_ref` 保鲜（真表）：存在性/范围 + C# 方法体归属全绿。
+        case("oracle-refs-fresh", [],
+             lambda: check_oracle_refs(load_table(DEFAULT_TABLE)["rows"]))
+
+        def _ref_row(pattern, ref):
+            return {"lineno": 9900, "side": "csharp", "class": "wallclock",
+                    "pattern": pattern, "oracle_ref": ref, "note": "synthetic"}
+
+        # ㉑ 改坏必红：ref 指向不存在源码 ⇒ 点名（`rng_consumer_groups` 真身缺陷同族）。
+        case("oracle-ref-path-red", True,
+             lambda: any("不存在的源码文件" in p for p in validate_oracle_refs(
+                 [_ref_row(r"X@WorldServer\.MonGen\.cs:1$", "src/NoSuch/Dir/File.cs:1")])))
+        # ㉒ 改坏必红：ref 行号越界 ⇒ 点名。
+        case("oracle-ref-line-red", True,
+             lambda: any("越界" in p for p in validate_oracle_refs(
+                 [_ref_row(r"X@WorldServer\.MonGen\.cs:1$",
+                           "src/GameSrv/Word/WorldServer.MonGen.cs:999999")])))
+        # ㉓ 改坏必红（本片真身）：`RegenMonsters` 的 ref 写 `:238`（落在 `ProcessMonsters` 里）
+        # ⇒ 语义牙点名；`存在性/范围` 牙抓不到它（238 在范围内）——证明该牙是承重的。
+        case("oracle-ref-method-red", True,
+             lambda: any("不在 `RegenMonsters` 方法体内" in p for p in check_oracle_ref_methods(
+                 [_ref_row(r"GameSrv\.Word\.WorldServer\.RegenMonsters@WorldServer\.MonGen\.cs:815$",
+                           "src/GameSrv/Word/WorldServer.MonGen.cs:238")])))
+        # ㉔ 真身修正：同一条 ref 改为方法声明 `:811` ⇒ 语义牙不再报红。
+        case("oracle-ref-method-ok", [],
+             lambda: check_oracle_ref_methods(
+                 [_ref_row(r"GameSrv\.Word\.WorldServer\.RegenMonsters@WorldServer\.MonGen\.cs:815$",
+                           "src/GameSrv/Word/WorldServer.MonGen.cs:811")]))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

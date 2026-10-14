@@ -2061,6 +2061,8 @@ fn handle_shop_cmd(
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    sell_off_book: &mut game_svr::selloff::SellOffBook,
     trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     world: &mut mir2_world::World,
@@ -2148,7 +2150,7 @@ fn handle_shop_cmd(
         price_rate: mprice,
         castle_merchant: mcastle,
         item_type_list: mitem_type,
-        chr_name: mchr_name,
+        chr_name: mchr_name.clone(),
     };
     let mut out: Vec<game_svr::shop::ShopFrame> = Vec::new();
     match ident {
@@ -2185,6 +2187,66 @@ fn handle_shop_cmd(
             );
             let goods = world.merchant_goods_groups(merchant_id).unwrap_or(&[]);
             out = game_svr::shop::user_select(label, &view, goods, &sg.storage.items, &ctx);
+            // `Merchant.UserSelect`（`Merchant.cs:930-934`）的 `@dealybme` 支（⑩-1 接线）：
+            // `if (sLabel == sDealYBme) { if (IsYbDeal) { UserSelectOpenDealOffForm(playObject); } }`
+            // ⇒ `SM_SENDDEALOFFFORM(23001)`（开通 + 无进行中）或两条 `SM_MERCHANTSAY(643)` 失败帧。
+            // `Rust user_select` 不产出该 label 的帧（需世界侧 `SellOffBook`/`SellOffState`）⇒ 宿主在此派发。
+            if mflags.is_yb_deal && label.eq_ignore_ascii_case(game_svr::selloff::LABEL_DEAL_YB_ME)
+            {
+                let mut me_so = sell_off_sessions.remove(chr_name).unwrap_or_default();
+                let events = {
+                    let weight = sg.state.wabil.weight;
+                    let wear_weight = sg.state.wabil.wear_weight;
+                    let hand_weight = sg.state.wabil.hand_weight;
+                    let max_weight = sg.state.wabil.max_weight;
+                    let game_point = sg.game_point;
+                    let send_gold = sg.soft_version_date != 0;
+                    let me = game_svr::selloff::SellOffSide {
+                        id: actor_id,
+                        name: chr_name.to_string(),
+                        // 在线会话（`PlayObject.OffLineFlag` 未建模 ⇒ 恒 false，登记）。
+                        offline: false,
+                        items: &mut sg.state.item_list,
+                        gold: &mut sg.state.gold,
+                        game_gold: &mut sg.game_gold,
+                        game_point,
+                        weight,
+                        wear_weight,
+                        hand_weight,
+                        max_weight,
+                        send_game_gold_info: send_gold,
+                        state: &mut me_so,
+                    };
+                    game_svr::selloff::open_deal_off_form(
+                        &me,
+                        sell_off_book,
+                        merchant_id,
+                        &mchr_name,
+                    )
+                };
+                sell_off_sessions.insert(chr_name.to_string(), me_so);
+                for ev in &events {
+                    let Some((target, body)) = game_svr::selloff::selloff_event_body(ev, catalog)
+                    else {
+                        continue;
+                    };
+                    let Some(t) = online.iter().find(|e| e.actor_id == target) else {
+                        glog!(
+                            "DBG",
+                            "元宝寄售开窗回帧：目标 ActorId={target} 不在在线登记表 ⇒ 丢弃"
+                        );
+                        continue;
+                    };
+                    if let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "元宝寄售开窗回帧")
+                    {
+                        let _ = tx.send(SimToGate::SendFrame {
+                            socket: t.socket,
+                            body,
+                        });
+                    }
+                }
+                return;
+            }
         }
         game_svr::shop::CM_MERCHANTQUERYSELLPRICE => {
             // `ClientMerchantQuerySellPrice`（`Operate.cs:131-153`）。
@@ -5975,6 +6037,8 @@ fn sim_loop(
                             &online,
                             &mut ground_sessions,
                             &mut shop_sessions,
+                            &mut sell_off_sessions,
+                            &mut sell_off_book,
                             &trade_sessions,
                             &gates,
                             &mut world,
@@ -14150,6 +14214,9 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
         let mut shop_sessions: HashMap<String, ShopSession> = HashMap::new();
+        let mut sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState> =
+            HashMap::new();
+        let mut sell_off_book = game_svr::selloff::SellOffBook::default();
         let shop_cfg = ShopCfg {
             castle_member_price_rate: 100,
             super_repair_price_rate: 100,
@@ -14184,6 +14251,8 @@ mod tests {
             &online,
             &mut sessions,
             &mut shop_sessions,
+            &mut sell_off_sessions,
+            &mut sell_off_book,
             &trade_dealing,
             &gates,
             &mut world,
@@ -14220,6 +14289,8 @@ mod tests {
             &online,
             &mut sessions,
             &mut shop_sessions,
+            &mut sell_off_sessions,
+            &mut sell_off_book,
             &trade_dealing,
             &gates,
             &mut world,
@@ -14245,6 +14316,8 @@ mod tests {
             &online,
             &mut sessions,
             &mut shop_sessions,
+            &mut sell_off_sessions,
+            &mut sell_off_book,
             &trade_open,
             &gates,
             &mut world,
@@ -14270,6 +14343,213 @@ mod tests {
         assert!(
             world.merchant_goods_groups(merchant_id).unwrap().is_empty(),
             "非 Dealing ⇒ 库存减（空组移除）"
+        );
+    }
+
+    /// **⑩-1 接线判据**：`Merchant.UserSelect` 的 `@dealybme` 支（`Merchant.cs:930-934`）已接线：
+    /// `IsBDeal` 商人 + label `@dealybme` ⇒ `UserSelectOpenDealOffForm(playObject)`：
+    /// 未开通 ⇒ `SM_MERCHANTSAY(643)`（`Recog`=商人 `ActorId`、`Param=Tag=0`、`Series=1`、
+    /// 尾 = `EncodeString(GBK(商人名+'/'+text))`）；开通且无进行中 ⇒ `SM_SENDDEALOFFFORM(23001)`
+    /// （`Recog`=商人 `ActorId`、`Param=0`）；`IsBDeal=false` ⇒ 零帧（oracle `if (IsYbDeal)` 门）。
+    #[test]
+    fn shop_dealybme_opens_consignment_form() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let merchant_id = world
+            .insert_merchant(mir2_world::merchant::MerchantSpawn {
+                name: "商人".to_string(),
+                x: 11,
+                y: 10,
+                map_id: 0,
+                state: mir2_world::merchant::MerchantState::new(
+                    "卫家店".to_string(),
+                    "0".to_string(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    mir2_world::merchant::MerchantFlags {
+                        is_yb_deal: true,
+                        ..Default::default()
+                    },
+                    Vec::new(),
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("商人入世界");
+
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".to_string(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut shop_sessions: HashMap<String, ShopSession> = HashMap::new();
+        let mut sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState> =
+            HashMap::new();
+        let mut sell_off_book = game_svr::selloff::SellOffBook::default();
+        let shop_cfg = ShopCfg {
+            castle_member_price_rate: 100,
+            super_repair_price_rate: 100,
+            repair_item_dec_dura: 0,
+            get_all_npc_tax: false,
+            human_max_gold: 10_000_000,
+        };
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+        };
+        let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+
+        // ---- ① 未开通 `SaleDeal` ⇒ `SM_MERCHANTSAY` 失败支①。
+        handle_shop_cmd(
+            game_svr::shop::CM_MERCHANTDLGSELECT,
+            merchant_id,
+            0,
+            0,
+            Some(game_svr::selloff::LABEL_DEAL_YB_ME),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut shop_sessions,
+            &mut sell_off_sessions,
+            &mut sell_off_book,
+            &trade,
+            &gates,
+            &mut world,
+            &catalog,
+            &shop_cfg,
+            &colors,
+        );
+        let body = match rx0.try_recv() {
+            Ok(SimToGate::SendFrame { socket, body }) => {
+                assert_eq!(socket, 901);
+                body
+            }
+            _ => panic!("@dealybme 未开通 ⇒ 应回 1 帧商人说话"),
+        };
+        assert!(
+            matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "@dealybme ⇒ 恰 1 帧"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            mir2_protocol::messages::SM_MERCHANTSAY
+        );
+        assert_eq!(
+            i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            merchant_id,
+            "Recog = 商人 ActorId"
+        );
+        assert_eq!(u16::from_le_bytes([body[6], body[7]]), 0, "Param=0");
+        assert_eq!(u16::from_le_bytes([body[8], body[9]]), 0, "Tag=0");
+        assert_eq!(u16::from_le_bytes([body[10], body[11]]), 1, "Series=1");
+        let expect = mir2_protocol::edcode::encode(&game_svr::downlink::gbk(
+            "商人/您未开通元宝服务,请先开通元宝服务!!\\ \\<返回/@main>",
+        ));
+        assert_eq!(
+            &body[12..],
+            &expect[..],
+            "尾 = EncodeString(商人名+'/'+text)"
+        );
+
+        // ---- ② 开通且无进行中 ⇒ `SM_SENDDEALOFFFORM`。
+        sell_off_sessions.get_mut("hero").unwrap().sale_deal = true;
+        handle_shop_cmd(
+            game_svr::shop::CM_MERCHANTDLGSELECT,
+            merchant_id,
+            0,
+            0,
+            Some(game_svr::selloff::LABEL_DEAL_YB_ME),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut shop_sessions,
+            &mut sell_off_sessions,
+            &mut sell_off_book,
+            &trade,
+            &gates,
+            &mut world,
+            &catalog,
+            &shop_cfg,
+            &colors,
+        );
+        let body = match rx0.try_recv() {
+            Ok(SimToGate::SendFrame { socket, body }) => {
+                assert_eq!(socket, 901);
+                body
+            }
+            _ => panic!("@dealybme 开通 ⇒ 应回 1 帧开窗"),
+        };
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            mir2_protocol::messages::SM_SENDDEALOFFFORM
+        );
+        assert_eq!(
+            i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            merchant_id,
+            "Recog = 商人 ActorId（32 位）"
+        );
+        assert_eq!(u16::from_le_bytes([body[6], body[7]]), 0, "Param=0");
+
+        // ---- ③ `IsBDeal=false` ⇒ 零帧（oracle `if (IsBDeal)` 门）。
+        world
+            .entities
+            .get_mut(merchant_id)
+            .unwrap()
+            .merchant
+            .as_mut()
+            .unwrap()
+            .flags
+            .is_yb_deal = false;
+        handle_shop_cmd(
+            game_svr::shop::CM_MERCHANTDLGSELECT,
+            merchant_id,
+            0,
+            0,
+            Some(game_svr::selloff::LABEL_DEAL_YB_ME),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut shop_sessions,
+            &mut sell_off_sessions,
+            &mut sell_off_book,
+            &trade,
+            &gates,
+            &mut world,
+            &catalog,
+            &shop_cfg,
+            &colors,
+        );
+        assert!(
+            matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "IsBDeal=false ⇒ 不得开窗（oracle Merchant.cs:932）"
         );
     }
 }

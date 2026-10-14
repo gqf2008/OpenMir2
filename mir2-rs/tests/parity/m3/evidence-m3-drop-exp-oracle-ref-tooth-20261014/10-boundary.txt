@@ -1,0 +1,46 @@
+# boundary（本片差量；base = origin/master = 6dba8719d）
+
+$ git diff --stat 6dba8719d..HEAD
+ mir2-rs/tests/parity/m3/drop-exp/README.md         |    7 +-
+ .../parity/m3/drop-exp/drop_exp_consumers.tsv      |    2 +-
+ .../parity/m3/drop-exp/drop_exp_purity_gate.py     |  235 +++
+ .../00-commands.txt                                |   38 +
+ .../01-change-summary.txt                          |   47 +
+ .../02-selftest.txt                                |   43 +
+ .../03-mut-real-table-red.txt                      |   17 +
+ .../04-mut-synthetic-teeth.txt                     |    5 +
+ .../05-oracle-ref-audit.txt                        |   27 +
+ .../06-gates-fmt.txt                               |    0
+ .../07-gates-clippy.txt                            |    5 +
+ .../08-gates-test.txt                              | 1847 ++++++++++++++++++++
+ .../09-gates-msgcodegen.txt                        |    3 +
+ .../10-boundary.txt                                |   29 +
+ .../README.md                                      |   55 +
+ .../SHA256SUMS.txt                                 |   12 +
+ 16 files changed, 2368 insertions(+), 4 deletions(-)
+
+$ git diff --name-only 6dba8719d..HEAD
+mir2-rs/tests/parity/m3/drop-exp/README.md
+mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv
+mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014/01-change-summary.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014/02-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014/03-mut-real-table-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014/04-mut-synthetic-teeth.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014/05-oracle-ref-audit.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014/06-gates-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014/07-gates-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014/08-gates-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014/09-gates-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014/10-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-oracle-ref-tooth-20261014/SHA256SUMS.txt
+
+# 冻结面（必须为空）：src/ sql/ MirClient/ mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+$ git diff --name-only 6dba8719d..HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+(空 = OK)
+
+# *.rs / *.toml 差量（应为 0）
+$ git diff --name-only 6dba8719d..HEAD -- "*.rs" "*.toml" | wc -l
+0
