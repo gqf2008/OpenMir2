@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""window_handoff.py —— 卡 `openmir2-client-e2e-enter-gaps` ③ 收口的
+"""window_handoff.py —— 卡 `openmir2-client-e2e-enter-gaps` **①②③ 收口**的
 **窗口就绪聚合门 + 一键两侧 capture 计划**（只读、零起栈、零端口）。
 
 背景（root 2026-10-14 00:4x ③；本片 = 片⑰）：
@@ -21,7 +21,7 @@
      片㉜（受击帧 `SM_STRUCK` 广播 ⇒ DoD③「能攻击造成伤害」）——这是 2026-10-14 实测到的真缺陷
      （共享主检出停在 `ad0592b19`；专用源 `m2svr-window-origin` 停在 `6dba8719d`、缺片㉜）。
      门一旦 RED，`--plan` 的修复块点明「换/刷新构建源」而不会让你白烧窗口。
-  G2 **聚合判据工具自检**：证据目录 9 件判据脚本的 `--selftest` 必须全 `SELFTEST OK`（缺一件 ⇒ PREREQ）。
+  G2 **聚合判据工具自检**：证据目录 11 件判据脚本的 `--selftest` 必须全 `SELFTEST OK`（缺一件 ⇒ PREREQ）。
   G3（可选）**聚合 C# 侧抓包前置门**：调片⑭ `check_csharp_capture_preflight.py --shadow-config ...`。
   G4（`--plan`/`--plan-only`）**计划 ↔ 工具面机判**（片㉕）：计划里每个被调脚本必须存在、只用它声明
      的参数，且必须含「代理(7200)/影子 gate(7600) 清端口 + 7200/7600 回落断言 + C# 清栈保留 3306」的
@@ -34,15 +34,19 @@
      两者可以不一致（2026-10-14 实测：工具的 `--repo` 已指专用源，root 的脚本仍指共享主检出），
      于是 `WINDOW_READY=YES` 而窗口照样构建另一棵树 / 从旧 exe 起栈。脚本文件不存在（干净检出）
      ⇒ 该门跳过（INFO），不当 RED。
-  J1（`--judge`）**聚合 ③b/③a 两趟窗口产物的六条判据**（只消费既有 capture/log，不起栈）：
-     ③b 服务端 `vis>=1` / ③b 客户端 `pairs>=1` / ③b 两侧 `visible` / **③b 两侧攻击/伤害
-     （DoD③ 第三半「能攻击造成伤害」）** / ③a 服务端 `vis==0` / ③a 两侧 `none`。
+  J1（`--judge`）**聚合 ③b/③a 两趟窗口产物的八条判据**（只消费既有 capture/log，不起栈）：
+     **①②（root 2026-10-14 15:0x 头号项）** ③b Rust 侧 `52` 客户端 58B 布局 + `CM_RUN>=1`（`check_client_run_frames.py`）
+     与 `53` 触发前置/已发/尾长 12B（`check_healthspellchanged_trigger.py`）；③b 服务端 `vis>=1` /
+     ③b 客户端 `pairs>=1` / ③b 两侧 `visible` / **③b 两侧攻击/伤害（DoD③ 第三半「能攻击造成伤害」）** /
+     ③a 服务端 `vis==0` / ③a 两侧 `none`。
+     ①② 只在 ③b 趟判（③a 反向点 `(291,666)` 是城墙走道，`CanRun` 恒假 ⇒ `CM_RUN` 必 0，见 `61-*` §B）。
      ③a 第二趟必须用**独立目录**（默认 `<work-dir>-a`）——`start_rust_stack.ps1` 每次起栈都会删掉
      旧 `game-svr.out.log`（`Start-One` 的 `Remove-Item $out, $err`），共用一个目录会把 ③b 读数覆盖掉。
   另加一条**只读信息行**：`check_mongen_dense_points.py --rank` 的窗口内期望出生怪数排行（选点用）。
 
-`--plan` 把 ③a/③b 两侧对照的**全部命令**（Rust 起栈/代理/客户端/解码 + C# 侧 + 三条判据 + 收工）
-按 runbook `82-two-side-window-runbook.md` 的口径生成成可粘贴文本；当 G1 判 RED 时，额外打印
+`--plan` 把 ①②③ 两侧对照的**全部命令**（Rust 起栈/代理/客户端/解码 + C# 侧 + 八条判据 + 收工）
+按 runbook `82-two-side-window-runbook.md` 的口径生成成可粘贴文本；①②（root 2026-10-14 15:0x 头号项）
+额外带 §1d 压血（53 触发前置）+ `mir_flow.ps1 -RunHoldMs 500`（跑键探针）；当 G1 判 RED 时，额外打印
 「改用专用 worktree 从 origin/master 构建」的修复块（不动共享主检出）；当 G5 判 RED 时，额外打印
 「把 root 的一键脚本换成入库的逐字替身 `client-e2e-window.fixed.sh.txt`（仅 2 行 diff）」的修复块。
 
@@ -108,16 +112,21 @@ TOOL_SELFTESTS = (
     "check_client_s2c_frames.py",
     "check_appearance_pairs.py",
     "check_attack_observability.py",
+    "check_client_run_frames.py",
+    "check_healthspellchanged_trigger.py",
     "verify_client_highhp_family.py",
     RUST_PREFLIGHT,
     CSHARP_PREFLIGHT,
 )
 
-# `--judge` 消费的判据脚本（③b/③a 两趟各跑服务端 / 客户端 / 两侧 / 攻击）。
+# `--judge` 消费的判据脚本（③b/③a 两趟各跑服务端 / 客户端 / 两侧 / 攻击；①② 能力布局/跑/53）。
 AOI_DIAG = "check_aoi_visibility_diag.py"
 CLIENT_FRAMES = "check_client_s2c_frames.py"
 PAIR_TOOL = "aoi_visibility_pair.py"
 ATTACK_TOOL = "check_attack_observability.py"
+# ①②（root 2026-10-14 15:0x 头号项）：52 客户端 58B 布局 + `CM_RUN`；53 触发前置 + `TCharDesc` 尾。
+RUN_FRAMES = "check_client_run_frames.py"
+HSC_TRIGGER = "check_healthspellchanged_trigger.py"
 
 _RESULT_RE = re.compile(r"^RESULT:\s*(GREEN|RED|PREREQ_RED)\b", re.MULTILINE)
 _SELFTEST_RE = re.compile(r"^SELFTEST\s+(OK|GREEN|FAILED|RED)\b", re.MULTILINE)
@@ -495,8 +504,9 @@ def pass_roots(work_dir: str, pass_a_dir: str = "") -> tuple[str, str, str, str]
 
 
 def window_judge_items(work_dir: str, pass_a_dir: str = "", check_dir: str = HERE):
-    """六条窗口判据（只聚合既有脚本，不复制判据逻辑）：
+    """八条窗口判据（只聚合既有脚本，不复制判据逻辑）：
 
+      ①②（仅 ③b 趟，Rust 侧）：`52` 客户端 58B 布局 + `CM_RUN>=1`；`53` 触发前置/已发/尾长 12B；
       ③b：服务端 `vis>=1` + 客户端 `pairs>=1` + 两侧 `visible` + 两侧攻击/伤害（DoD③ 第三半）；
       ③a：服务端 `vis==0 && af==0` + 两侧 `none`。
     每项 = (名称, 判据脚本, argv, 必需证据件)。
@@ -518,6 +528,16 @@ def window_judge_items(work_dir: str, pass_a_dir: str = "", check_dir: str = HER
          ["--left", f"{b_rust}/s2c/capture.jsonl", "--right", f"{b_csh}/s2c/capture.jsonl",
           "--expect", "any", "--min-hits", "1"],
          [f"{b_rust}/s2c/capture.jsonl", f"{b_csh}/s2c/capture.jsonl"]),
+        # ①② root 2026-10-14 15:0x 头号项（52 客户端布局 + 能跑 + 53 尾）。只在 ③b 趟判：
+        # ③a 反向点 (291,666) 是城墙走道（`61-*` §B 实测 `CM_RUN=0`）⇒ 放到 ③a 会假 RED。
+        ("①② Rust 52=58 + CM_RUN>=1", RUN_FRAMES,
+         ["--capture", f"{b_rust}/s2c/capture.jsonl",
+          "--expect-52-body-len", "58", "--min-run-count", "1"],
+         [f"{b_rust}/s2c/capture.jsonl"]),
+        ("① Rust 53 触发+尾长", HSC_TRIGGER,
+         ["--log", f"{b_rust}/stack/game-svr.out.log",
+          "--capture", f"{b_rust}/s2c/capture.jsonl"],
+         [f"{b_rust}/stack/game-svr.out.log", f"{b_rust}/s2c/capture.jsonl"]),
         ("③a 服务端 vis==0", AOI_DIAG,
          ["--log", f"{a_rust}/stack/game-svr.out.log", "--expect", "none"],
          [f"{a_rust}/stack/game-svr.out.log"]),
@@ -529,7 +549,7 @@ def window_judge_items(work_dir: str, pass_a_dir: str = "", check_dir: str = HER
 
 
 def run_window_judges(work_dir: str, pass_a_dir: str = "", check_dir: str = HERE) -> Report:
-    """跑六条窗口判据并聚合成一个 rc：0 全绿 / 1 有 RED / 2 有 PREREQ（缺证据/判不了）。
+    """跑八条窗口判据并聚合成一个 rc：0 全绿 / 1 有 RED / 2 有 PREREQ（缺证据/判不了）。
 
     fail-closed：任何必需证据件缺失 ⇒ PREREQ（**绝不静默当绿**）；缺判据脚本同理。
     """
@@ -589,10 +609,14 @@ def plan_text(
     cs_shadow_dir_w = cs_shadow_dir.replace("/", "\\")
     cs_shadow_conf = f"{cs_shadow_dir}/config.conf"
     cs_run_gate_w = (mirserver.rstrip("/\\") + "/RunGate").replace("/", "\\")
+    # 本计划出处（判据脚本所在的检出）：`--judge` 必须跑**这份** `window_handoff.py`/`--check-dir`，
+    # 不能跑构建源 `repo=` 里的旧副本（可能不含本片新增的 ①② 判据）。
+    here_fwd = HERE.replace("\\", "/")
+    wh_fwd = os.path.join(HERE, "window_handoff.py").replace("\\", "/")
     lines: list[str] = []
     A = lines.append
 
-    A(f"# ③ 两侧同框对照窗口计划（卡 openmir2-client-e2e-enter-gaps）")
+    A(f"# ①②③ 两侧对照窗口计划（卡 openmir2-client-e2e-enter-gaps）")
     A(f"# 构建源 repo={repo or '(未给 --repo)'} ref={ref}")
     A(f"# ③b 有怪点 site={site} (MapName={site_map}) / ③a 反向点 site_none={site_none} "
       f"(MapName={site_none_map}) / view_range={view_range}")
@@ -612,8 +636,8 @@ def plan_text(
         A(f"#   python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD")
         A("")
     if live_script_stale:
-        _here_fwd = HERE.replace("\\", "/")
-        _wh_fwd = os.path.join(HERE, "window_handoff.py").replace("\\", "/")
+        _here_fwd = here_fwd
+        _wh_fwd = wh_fwd
         _si = standin_script_info()
         A("# ==== 修复块：G5 RED（root 实际会跑的一键脚本 ≠ 本计划的构建源） ====")
         A(f"# root 现跑的脚本：{window_script or DEFAULT_WINDOW_SCRIPT}")
@@ -665,6 +689,11 @@ def plan_text(
     A(f"#   {_my} {_myargs} -e \"UPDATE mir2_db.characters SET MapName='{site_map}', CX={_bx}, CY={_by} WHERE ChrName='aaa';\"")
     A("#   1c. ③a 反向点（第二趟起栈前改）：")
     A(f"#   {_my} {_myargs} -e \"UPDATE mir2_db.characters SET MapName='{site_none_map}', CX={_nx}, CY={_ny} WHERE ChrName='aaa';\"")
+    A("#   1d. 53 触发前置（片㊴/㊵ 实测：满血进图**永不发** 53 ⇒ ①② 覆盖不到；**每趟起栈前重跑**）：")
+    A("#       主键/列名实测：characters_ablity.PlayerId = characters.Id；HP 在 characters_ablity.Hp / MaxHP")
+    A("#       （不在 characters；见 sql/mir2_db.sql 与 82-two-side-window-runbook.md §2b）")
+    A(f"#   {_my} {_myargs} -e \"SELECT c.ChrName,a.Hp,a.MaxHP FROM mir2_db.characters c JOIN mir2_db.characters_ablity a ON a.PlayerId=c.Id WHERE c.ChrName='aaa';\"")
+    A(f"#   {_my} {_myargs} -e \"UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id SET a.Hp = a.MaxHP - 2 WHERE c.ChrName='aaa' AND a.MaxHP >= 3;\"")
     if site_map != "0":
         A("#   ⚠ ③b 是**跨图**点（root ①「MonGen 里密度高的图」）：选点已过 tile=Walk + clientmap=yes")
         A("#     过滤；起栈前仍须实拍客户端能进该图（MapInfo 属性 NORECONNECT/DAY 与客户端 .map 一致）。")
@@ -694,7 +723,9 @@ def plan_text(
     A(f"#     python tools/capture/mir2_proxy.py --out {rust}/proxy --map 7200=127.0.0.1:7600")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 ^")
     A(f"#       -Account mir2test -Password mir2pass -OutDir {rust}/shots -WalkClicks 0 -AutoPlaySec 12 ^")
-    A(f"#       -AttackClicks 12 -SkipReenter -SkipLogout -SkipTalk")
+    A(f"#       -AttackClicks 12 -RunHoldMs 500 -SkipReenter -SkipLogout -SkipTalk")
+    A("#     #  -RunHoldMs 500 = 跑键探针（8 方向在**目标点**按住左键；① ② 的 `CM_RUN` 靠它；")
+    A("#     #  ③b 是开阔点才跑得动，③a 城墙走道 `CM_RUN` 恒 0 ⇒ ①② 只在 ③b 趟判）")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 ^")
     A(f"#       -ProxyDir {rust}/proxy -OutDir {rust}/s2c")
     A("#     # 2b) 【本趟跑完必做 · 进 C# 趟/③a 前必做】清端口：")
@@ -748,7 +779,8 @@ def plan_text(
     A("#     #        Get-Process GameSvr,DBSrv,LoginSrv,LoginGate,SelGate,GameGate -EA SilentlyContinue | Stop-Process -Force")
     A(f"#     #   d. 断言 7200/7600 都 DOWN 再往下：{mirserver}/port-status.ps1")
     A("")
-    A(f"# 3) ③b 判据（一键：python -I -B window_handoff.py --judge --work-dir {w}）")
+    A(f"# 3) ①②③b 判据（一键，用本计划出处的判据：--check-dir {here_fwd}）：")
+    A(f"#   python -I -B {wh_fwd} --judge --work-dir {w} --check-dir {here_fwd}")
     A(f"#   服务端（Rust，新读数 vr/new/af）：python -I -B check_aoi_visibility_diag.py \\")
     A(f"#     --log {rust}/stack/game-svr.out.log --expect visible --min-vis 1")
     A(f"#   客户端（Rust）：python -I -B check_client_s2c_frames.py \\")
@@ -757,6 +789,12 @@ def plan_text(
     A(f"#     --right {csh}/s2c/capture.jsonl --expect visible --min-pairs 1")
     A(f"#   ③b 攻击/伤害（DoD③ 第三半「能攻击造成伤害」）：python -I -B check_attack_observability.py \\")
     A(f"#     --left {rust}/s2c/capture.jsonl --right {csh}/s2c/capture.jsonl --expect any --min-hits 1")
+    A("#   ①②（root 2026-10-14 15:0x 头号项）52 客户端 58B 布局 + 跑位（`CM_RUN` 需 HP>=10）：")
+    A(f"#   python -I -B check_client_run_frames.py --capture {rust}/s2c/capture.jsonl \\")
+    A("#     --expect-52-body-len 58 --min-run-count 1")
+    A("#   ① 53 触发前置+已发+尾长（12B `TCharDesc`；前置由 §1d 压血保证）：")
+    A(f"#   python -I -B check_healthspellchanged_trigger.py \\")
+    A(f"#     --log {rust}/stack/game-svr.out.log --capture {rust}/s2c/capture.jsonl")
     A("")
     A(f"# 4) ③a 反向第二趟：把 §1 的 aaa 改到 site_none={site_none} 后重跑 §2，**独立目录**")
     A(f"#    （③a 根 = {w_a}；start_rust_stack.ps1 每次起栈删旧 game-svr.out.log ⇒ 不独立就覆盖 ③b 读数）")
@@ -764,7 +802,8 @@ def plan_text(
     A("#      `-Stop` 收不走它们（片㉕ 源码实测，见 127-window-plan-teardown.txt）")
     A(f"#    ③a Rust：§2 的 [③b] Rust 命令，把 -LogDir/--out/-OutDir 的 {rust} 换成 {rust_a}")
     A(f"#    ③a C#  ：§2 的 [③b] C# 命令，把 --out/-OutDir 的 {csh} 换成 {csh_a}")
-    A(f"#   判据（一键：python -I -B window_handoff.py --judge --work-dir {w} --pass-a-dir {w_a}）")
+    A(f"#   判据（一键，同 §3 的出处：--check-dir {here_fwd}）：")
+    A(f"#   python -I -B {wh_fwd} --judge --work-dir {w} --pass-a-dir {w_a} --check-dir {here_fwd}")
     A(f"#   服务端：python -I -B check_aoi_visibility_diag.py \\")
     A(f"#     --log {rust_a}/stack/game-svr.out.log --expect none")
     A(f"#   ③a 两侧：python -I -B aoi_visibility_pair.py --left {rust_a}/s2c/capture.jsonl \\")
@@ -773,6 +812,7 @@ def plan_text(
     A("")
     A("# 5) 收工：§2b / §2b(C#) 清代理+影子 gate；start_rust_stack 的 -Stop；6 个 C# 组件 Stop-Process（保留 3306）；")
     A("#     还原 aaa：把 §1a 打印的 before 三值填回 ⇒ UPDATE mir2_db.characters SET MapName=BEFORE_MAP, CX=BEFORE_X, CY=BEFORE_Y WHERE ChrName='aaa';")
+    A("#     还原压血：把 §1d 打印的 before Hp 写回 ⇒ UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id SET a.Hp=BEFORE_HP WHERE c.ChrName='aaa';")
     A("#     实拍十端口；SHA256SUMS 按 LF/git-blob 口径")
     A("")
     return "\n".join(lines) + "\n"
@@ -1002,7 +1042,7 @@ def _write_fake_judges(check_dir: str, rc_map: dict | None = None) -> None:
     os.makedirs(check_dir, exist_ok=True)
     rc_dir = os.path.join(check_dir, "_rc")
     os.makedirs(rc_dir, exist_ok=True)
-    for tool in (AOI_DIAG, CLIENT_FRAMES, PAIR_TOOL, ATTACK_TOOL):
+    for tool in (AOI_DIAG, CLIENT_FRAMES, PAIR_TOOL, ATTACK_TOOL, RUN_FRAMES, HSC_TRIGGER):
         with open(os.path.join(check_dir, tool), "w", encoding="utf-8") as fh:
             fh.write(
                 "import os, sys\n"
@@ -1043,7 +1083,7 @@ def _write_fake_plan_tree(tmp: str) -> tuple[str, str, str]:
           "param([string]$ProxyDir,[string]$OutDir)\n")
     write(os.path.join(repo, "tools/client/mir_flow.ps1"),
           "param([string]$Account,[string]$Password,[string]$OutDir,[int]$WalkClicks,"
-          "[int]$AutoPlaySec,[int]$AttackClicks,[switch]$SkipReenter,[switch]$SkipLogout,[switch]$SkipTalk)\n")
+          "[int]$AutoPlaySec,[int]$AttackClicks,[int]$RunHoldMs,[switch]$SkipReenter,[switch]$SkipLogout,[switch]$SkipTalk)\n")
     write(os.path.join(repo, "tools/capture/mir2_proxy.py"),
           "import argparse\nap=argparse.ArgumentParser()\n"
           "ap.add_argument('--out')\nap.add_argument('--map')\n")
@@ -1070,6 +1110,14 @@ def _write_fake_plan_tree(tmp: str) -> tuple[str, str, str]:
           "ap.add_argument('--left')\nap.add_argument('--right')\nap.add_argument('--capture')\n"
           "ap.add_argument('--expect')\nap.add_argument('--min-hits', type=int)\n"
           "ap.add_argument('--min-struck', type=int)\nap.add_argument('--min-kills', type=int)\n")
+    write(os.path.join(check, "check_client_run_frames.py"),
+          "import argparse\nap=argparse.ArgumentParser()\n"
+          "ap.add_argument('--capture')\nap.add_argument('--expect-52-body-len', type=int)\n"
+          "ap.add_argument('--min-run-count', type=int)\n")
+    write(os.path.join(check, "check_healthspellchanged_trigger.py"),
+          "import argparse\nap=argparse.ArgumentParser()\n"
+          "ap.add_argument('--log')\nap.add_argument('--capture')\n"
+          "ap.add_argument('--expect-body-len', type=int)\nap.add_argument('--min-53', type=int)\n")
     for stub in ("start-all.ps1", "port-status.ps1"):
         write(os.path.join(ms, stub), "param([switch]$Stop)\n")
     return repo, check, ms
@@ -1245,7 +1293,7 @@ def selftest() -> int:
                          with_csharp=False, rank=0, view_range=12, map_name="0")
         chk("agg-norepo-prereq", rep.rc() == 2 and any("--repo" in p for p in rep.prereq), str(rep.rc()))
 
-    # --- J1 窗口判据聚合（--judge）：五条判据消费 ③b/③a 两趟产物 ---
+    # --- J1 窗口判据聚合（--judge）：八条判据消费 ③b/③a 两趟产物（含 ①②） ---
     with tempfile.TemporaryDirectory(prefix="wh-judge-") as tmp:
         cdir = os.path.join(tmp, "check")
         work = os.path.join(tmp, "work")
@@ -1254,7 +1302,13 @@ def selftest() -> int:
         _write_fake_artifacts(work + "-a")  # ③a 缺省根 = <work-dir>-a
         rep = run_window_judges(work, "", cdir)
         chk("judge-allgreen-rc0", rep.rc() == 0, str(rep.rc()))
-        chk("judge-six-items", len(rep.info) == 6, str(len(rep.info)))
+        chk("judge-eight-items", len(rep.info) == 8, str(len(rep.info)))
+        # ①②（root 15:0x 头号项）必须在聚合面里：drop 任一条 ⇒ 本条必红。
+        _items = [name for name, *_ in window_judge_items(work, "", cdir)]
+        chk("judge-ability-run-item-present",
+            any("①②" in n for n in _items), " | ".join(_items))
+        chk("judge-53-trigger-item-present",
+            any("53 触发" in n for n in _items), " | ".join(_items))
 
     with tempfile.TemporaryDirectory(prefix="wh-judge-red-") as tmp:
         cdir = os.path.join(tmp, "check")
@@ -1264,8 +1318,29 @@ def selftest() -> int:
         _write_fake_artifacts(work + "-a")
         rep = run_window_judges(work, "", cdir)
         chk("judge-red-rc1", rep.rc() == 1, str(rep.rc()))
-        chk("judge-red-two", len(rep.problems) == 2 and len(rep.info) == 4,
+        chk("judge-red-two", len(rep.problems) == 2 and len(rep.info) == 6,
             f"{len(rep.problems)}/{len(rep.info)}")
+
+    # ①② 各自 RED 必须传播（不能只加条目不接线：把 rc 吞掉 ⇒ 本条必红）。
+    with tempfile.TemporaryDirectory(prefix="wh-judge-run-") as tmp:
+        cdir = os.path.join(tmp, "check")
+        work = os.path.join(tmp, "work")
+        _write_fake_judges(cdir, {RUN_FRAMES: 1})
+        _write_fake_artifacts(work)
+        _write_fake_artifacts(work + "-a")
+        rep = run_window_judges(work, "", cdir)
+        chk("judge-run-red",
+            rep.rc() == 1 and any("①②" in p for p in rep.problems), "; ".join(rep.problems))
+
+    with tempfile.TemporaryDirectory(prefix="wh-judge-53-") as tmp:
+        cdir = os.path.join(tmp, "check")
+        work = os.path.join(tmp, "work")
+        _write_fake_judges(cdir, {HSC_TRIGGER: 1})
+        _write_fake_artifacts(work)
+        _write_fake_artifacts(work + "-a")
+        rep = run_window_judges(work, "", cdir)
+        chk("judge-53-red",
+            rep.rc() == 1 and any("53 触发" in p for p in rep.problems), "; ".join(rep.problems))
 
     with tempfile.TemporaryDirectory(prefix="wh-judge-missing-") as tmp:
         cdir = os.path.join(tmp, "check")
@@ -1295,6 +1370,17 @@ def selftest() -> int:
     chk("plan-has-attack-step", "-AttackClicks 12" in _fresh)
     chk("plan-has-attack-judge",
         "check_attack_observability.py" in _fresh and "--expect any --min-hits 1" in _fresh)
+    # ①②（root 2026-10-14 15:0x 头号项）：真机跑必须带跑键探针 + 压血前置 + 52/53 判据
+    chk("plan-has-run-step", "-AttackClicks 12 -RunHoldMs 500" in _fresh)
+    chk("plan-has-ability-run-judge",
+        "check_client_run_frames.py" in _fresh and "--expect-52-body-len 58" in _fresh
+        and "--min-run-count 1" in _fresh)
+    chk("plan-has-53-trigger-judge",
+        "check_healthspellchanged_trigger.py" in _fresh
+        and "--log E:/tmp/w/rust/stack/game-svr.out.log" in _fresh)
+    chk("plan-has-hp-precondition",
+        "characters_ablity" in _fresh and "a.Hp = a.MaxHP - 2" in _fresh
+        and "SELECT c.ChrName,a.Hp,a.MaxHP FROM mir2_db.characters c JOIN" in _fresh)
     # 片㉗：站位 SQL 必须真实列（本表无 x/y），且给出 before 探针
     chk("plan-position-sql-real-columns",
         position_sql_findings(_fresh) == []
@@ -1333,6 +1419,10 @@ def selftest() -> int:
         _bad_flag = _conf_plan.replace("--min-vis 1", "--min-visibility 1")
         chk("plan-conf-red-unknown-flag",
             any("min-visibility" in p for p in plan_conformance(_bad_flag, _repo, _chk, _ms)))
+        _bad_runflag = _conf_plan.replace("--min-run-count 1", "--min-runs 1")
+        chk("plan-conf-red-run-flag",
+            any("min-runs" in p for p in plan_conformance(_bad_runflag, _repo, _chk, _ms)),
+            "; ".join(plan_conformance(_bad_runflag, _repo, _chk, _ms)))
         # 片㉖：命令面不得留 <...> 占位（root 现场猜路径 = 烧窗口）
         _bad_ph = _conf_plan.replace("--shadow-config E:/tmp/w/shadow/run-gate/config.conf",
                                      "--shadow-config <影子 conf>")
@@ -1464,7 +1554,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--rank", type=int, default=0, help=">0 时打印 MonGen 窗口内期望出生怪数排行（选点）")
     ap.add_argument("--view-range", type=int, default=12, help="观察者视野半径（默认 12）")
     ap.add_argument("--map-name", default="0", help="MonGen 逻辑图名（默认 0）")
-    ap.add_argument("--plan", action="store_true", help="打印 ③ 两侧对照窗口计划")
+    ap.add_argument("--plan", action="store_true", help="打印 ①②③ 两侧对照窗口计划")
     ap.add_argument("--plan-only", action="store_true", help="只打印计划，不跑判据")
     ap.add_argument("--site", default="287,620", help="③b 有怪点 x,y（默认 287,620，片⑦已证 13 对）")
     ap.add_argument("--best-site", action="store_true",
@@ -1478,7 +1568,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--work-dir", default="E:/tmp/window/cliente2e", help="窗口工作目录")
     ap.add_argument("--pass-a-dir", default="", help="③a 第二趟证据根（默认 = <work-dir>-a）")
     ap.add_argument("--judge", action="store_true",
-                    help="聚合 ③b/③a 两趟窗口产物的五条 AOI 判据（消费既有 capture/log，不起栈）")
+                    help="聚合 ③b/③a 两趟窗口产物的八条判据（①② 能力布局/跑/53 + ③ AOI；消费既有 capture/log，不起栈）")
     ap.add_argument("--target-dir", default="E:/tmp/m2svr-window-target",
                     help="CARGO_TARGET_DIR（RustBinDir = <target-dir>/debug）")
     ap.add_argument("--window-script", default=DEFAULT_WINDOW_SCRIPT,
@@ -1506,6 +1596,7 @@ def main(argv: list[str] | None = None) -> int:
         label = "GREEN" if rc == 0 else ("PREREQ_RED" if rc == 2 else "RED")
         if args.json:
             print(json.dumps({
+                "window_judge": label,
                 "aoi_gap3": label,
                 "rc": rc,
                 "work_dir": args.work_dir,
@@ -1515,6 +1606,7 @@ def main(argv: list[str] | None = None) -> int:
                 "info": rep.info,
             }, ensure_ascii=False))
         else:
+            print(f"WINDOW_JUDGE={label}")
             print(f"AOI_GAP3={label}")
         return rc
 

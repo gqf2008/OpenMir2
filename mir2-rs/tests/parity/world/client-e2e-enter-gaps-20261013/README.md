@@ -1289,3 +1289,41 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   owner 在 O-3 一并裁决。
 - **仍未做**：真机 R（受击后 HUD 血条不再错乱）归 root；O-3（§6.0-3 白名单，建议**扩容**到 HIGHHP 家族）
   待 owner 签字，本片不自加。
+
+### 54) 窗口计划/一键判据补齐 ①②（52 客户端布局 + 跑 + 53 触发前置）（2026-10-14）—— `225`/`226`/`227`/`228`
+
+root 2026-10-14 15:0x 头号项要的是 **①②③ 一起真机复核**（①进图 52/752 让 HUD/负重正常；②能跑
+`CM_RUN>=1`；③同屏有怪 + 两侧对照）。但本卡此前 20+ 片把「开窗前 `--plan` + 跑完一键 `--judge`」
+**只做到 ③**：`check_client_run_frames.py`（52 尾长 + `CM_RUN`）与
+`check_healthspellchanged_trigger.py`（53 触发前置 + `TCharDesc` 尾）虽已存在、各有 selftest/证据，
+却**没进 `--judge`、也没进 `--plan`**；计划里还缺 53 的触发前置（满血进图永不发 53）与跑键探针
+（`-RunHoldMs`）⇒ root 照旧计划跑完，`--judge` 会打 GREEN 但**根本没判 ①②**（头号项漏判、白烧窗口）。
+
+- **改（`window_handoff.py` 一个逻辑变更，生产代码零改动）**：
+  - `TOOL_SELFTESTS`（G2）9→**11** 件（+两件 ①② 判据 ⇒ 开窗前工具面自检覆盖）；
+  - `--judge` J1 6→**8** 项：+`①② Rust 52=58 + CM_RUN>=1`（`check_client_run_frames.py
+    --expect-52-body-len 58 --min-run-count 1`）、+`① Rust 53 触发+尾长`
+    （`check_healthspellchanged_trigger.py --log <rust log> --capture <rust cap>`）；
+    **只在 ③b 趟判**（③a 点 `(291,666)` 是城墙走道、`CM_RUN` 恒 0 ⇒ 会假 RED，`61-*` §B）；
+  - `--plan`：§1d **压血**（`characters_ablity` before 探针 + `SET a.Hp = a.MaxHP - 2`，列名/主键锚 =
+    `82-…runbook.md` §2b）、§2 Rust 追加 **`-RunHoldMs 500`**（跑键探针，`61-*` §C 已证）、§3 加两条 ①② 判据、
+    §5 加还原压血；§3/§4 一键判据改「**绝对路径 + `--check-dir <本计划出处>`**」（构建源 `repo=` 里可能是
+    不含 ①② 的旧副本 ⇒ 必须跑生成本计划那份）；
+  - `--judge` 输出 `WINDOW_JUDGE=`（保留 `AOI_GAP3=` 兼容别名）；selftest **98/98 → 107/107**。
+- **判据（`225` §3）**：本目录真判据脚本 + 合成产物（③b 用仓内真机 `capture-run-ability-after-client58.jsonl`
+  + 追加 `53@12B`/`31`）⇒ **8/8 OK**，`WINDOW_JUDGE=GREEN`。
+- **改坏必红（`226`）**：变异 `window_handoff.py`（仅在 `/tmp` 副本；仓内 sha256 前后一致）——删 ①② 条目
+  /删计划判据/退 `-RunHoldMs`/删压血 ⇒ 对应新牙 `SELFTEST FAILED`；`--judge` 五相红（52→40、删 53、
+  满血前置、删 `CM_RUN`、缺 ③a）⇒ RED/PREREQ_RED rc=1/2，fail-closed 成立。
+- **门禁（`227`）**：fmt 0 / clippy 0（`-D warnings`）/ **101 suites 1233 passed 0 failed 22 ignored** /
+  msgcodegen 604；G2（11 件）+ G1 R1..R7 + G5（入库替身脚本口径）= **`WINDOW_READY=YES` GREEN**；
+  清单门见 `227` §D。
+- **边界（`228`）**：6 路径，全在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`；
+  **零 `.rs`/`.toml`/`.ps1`/`.cs`**；冻结面 `src/ sql/ MirClient/ mir2-rs/crates/protocol/
+  mir2-rs/crates/storage/ mir2-rs/bins/ src/BotSrv/` 与 `tests/parity/m3/**` 空。
+- **窗口源 post-merge 刷新（`229`）**：本片进行中 merge 车道把前一片 `fd68e037d`（SM_STRUCK 客户端布局，
+  生产面 `main.rs`+`smframe.rs`）合入 master ⇒ `origin/master == 52c91180f`，窗口源 `5e757b025`
+  **R6 转 RED** ⇒ `checkout --detach origin/master` + 重编译六件（只 `game-svr.exe` 重链
+  `f6163ab5…→cfecda1c…`）+ 重录出处清单 ⇒ R1..R7 GREEN、`WINDOW_READY=YES`。
+- 判级 = **L**（就绪工具 + 计划/判据接线；零生产代码、零取数/时序/RNG/落库改动）。卡级 **R** 真机 ①②③
+  （+ 一次升级/换装步 + 受击步）仍归 **root 独占窗口**；**G5**（root 活脚本未换替身）/ **O-3**（白名单）仍归 root/owner。

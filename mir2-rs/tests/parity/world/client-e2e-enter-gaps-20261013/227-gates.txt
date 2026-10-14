@@ -1,0 +1,168 @@
+227-gates.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片54 四门禁 + G2 工具面自检 + 清单门
+m2-svr / openmir2-worker-11 / 2026-10-14；cwd = <本 worktree>/mir2-rs；隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-target`
+被测件 `window_handoff.py` sha256 = 2b6db6759dceb6d87d41a6e84165a849b3d7815f2a007daa356775752bb3ade1（唯一改动文件；其余为新增证据）
+====================================================================================================
+
+# A) 四门禁（各自独立跑，逐条记 rc）
+
+```
+$ cargo fmt --all -- --check
+fmt_rc=0
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.61s
+clippy_rc=0
+
+$ cargo test --workspace
+test_rc=0
+suites=101 passed=1233 failed=0 ignored=22     # 逐 `^test result:` 行汇总；FAILED 计数=0
+
+$ cargo run -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen_rc=0
+```
+
+> 本片只动 `tests/parity/world/**` 的一个 `.py` + 证据文件 ⇒ Rust 侧门禁是**回归证明**（读数与片53 相同）。
+
+# B) G2（开窗前「判据工具面自检」，`window_handoff.py` 聚合）—— 9 件 → **11 件**
+
+```
+$ python -I -B window_handoff.py --repo /e/tmp/m2svr-window-origin \
+    --target-dir 'E:\tmp\m2svr-window-target' --ref HEAD \
+    --window-script <本目录 client-e2e-window.fixed.sh.txt>
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 check_client_run_frames.py --selftest
+OK   G2 check_healthspellchanged_trigger.py --selftest
+OK   G2 verify_client_highhp_family.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R7）
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+WINDOW_READY=YES
+RESULT: GREEN
+```
+⇒ 新增两件进 G2：`check_client_run_frames.py`、`check_healthspellchanged_trigger.py`（**①② 判据**）。
+
+> 本片进行中 merge 车道合入前一片 ⇒ 窗口源 `R6` 转 RED；刷源/重编译/重录出处 + 复跑本聚合门见 `229`
+> （刷后同样是 `WINDOW_READY=YES` / `G1 R1..R7 GREEN`）。
+
+两件新入 G2 工具的自身 selftest：
+```
+$ python -I -B check_client_run_frames.py --selftest
+[PASS] selftest all-green: rc=0 (want 0)
+        OK  ① c2s CM_WALK(3011)=1
+        OK  ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，可跑）
+        OK  ③ CM_RUN(3013)=1 >= 1（客户端真的发跑位）
+[PASS] selftest run-0-red: rc=1 (want 1)
+        OK  ① c2s CM_WALK(3011)=1
+        OK  ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，可跑）
+        RED ③ CM_RUN(3013)=0，期望 >= 1
+[PASS] selftest run-many-ok: rc=0 (want 0)
+        OK  ① c2s CM_WALK(3011)=1
+        OK  ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，可跑）
+        OK  ③ CM_RUN(3013)=3 >= 1（客户端真的发跑位）
+[PASS] selftest 52-len-40-red: rc=1 (want 1)
+        OK  ① c2s CM_WALK(3011)=1
+        RED ② 52 尾长=[40]，期望 [58]
+        OK  ③ CM_RUN(3013)=1 >= 1（客户端真的发跑位）
+[PASS] selftest no-walk-red: rc=1 (want 1)
+        RED ① 没有 CM_WALK(3011)：移动路径不通（c2s=[(3013, 1)]）
+        OK  ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，可跑）
+        OK  ③ CM_RUN(3013)=1 >= 1（客户端真的发跑位）
+[PASS] selftest expect-run-0-before: rc=0 (want 0)
+        OK  ① c2s CM_WALK(3011)=1
+        OK  ② 52 尾长=40（客户端 58B TAbility ⇒ HP>0，可跑）
+        OK  ③ CM_RUN(3013)=0 >= 0（客户端真的发跑位）
+SELFTEST OK (6/6)
+[PASS] selftest pair-ok: rc=0 (want 0)
+        OK  A 11029 body 两侧逐字节相同（3B）⇒ ClientConf 未动
+        --  BEFORE(oracle-40): CM_WALK=1 52=[40] CM_RUN=0
+        --  AFTER (client-58): CM_WALK=1 52=[58] CM_RUN=3
+        OK  B BEFORE 52 尾=40 + CM_RUN=0（oracle-40 ⇒ CanRun 拒跑）
+        OK  C AFTER 52 尾=58 + CM_RUN=3 >= 1（client-58 ⇒ CanRun 放行）
+[PASS] selftest pair-swapped-red: rc=1 (want 1)
+        OK  A 11029 body 两侧逐字节相同（3B）⇒ ClientConf 未动
+        --  BEFORE(oracle-40): CM_WALK=1 52=[58] CM_RUN=3
+        --  AFTER (client-58): CM_WALK=1 52=[40] CM_RUN=0
+        RED B BEFORE 52 尾长=[58]，期望 [40]
+        RED B BEFORE CM_RUN=3，期望 0（oracle-40 基线必须跑不动）
+        RED C AFTER 52 尾长=[40]，期望 [58]
+        RED C AFTER CM_RUN=0，期望 >= 1
+[PASS] selftest pair-before-has-run-red: rc=1 (want 1)
+        OK  A 11029 body 两侧逐字节相同（3B）⇒ ClientConf 未动
+        --  BEFORE(oracle-40): CM_WALK=1 52=[40] CM_RUN=1
+        --  AFTER (client-58): CM_WALK=1 52=[58] CM_RUN=3
+        RED B BEFORE CM_RUN=1，期望 0（oracle-40 基线必须跑不动）
+        OK  C AFTER 52 尾=58 + CM_RUN=3 >= 1（client-58 ⇒ CanRun 放行）
+[PASS] selftest pair-11029-changed-red: rc=1 (want 1)
+        RED A 11029 body 两侧不同 ⇒ 本配对的唯一变量不止 52 布局（ClientConf 也变了）
+        --  BEFORE(oracle-40): CM_WALK=1 52=[40] CM_RUN=0
+        --  AFTER (client-58): CM_WALK=1 52=[58] CM_RUN=3
+        OK  B BEFORE 52 尾=40 + CM_RUN=0（oracle-40 ⇒ CanRun 拒跑）
+        OK  C AFTER 52 尾=58 + CM_RUN=3 >= 1（client-58 ⇒ CanRun 放行）
+[PASS] selftest pair-missing-11029-red: rc=1 (want 1)
+        RED A 11029 SM_SERVERCONFIG 缺失（before=0 after=1）⇒ 无法排除 ClientConf 假说
+        --  BEFORE(oracle-40): CM_WALK=1 52=[40] CM_RUN=0
+        --  AFTER (client-58): CM_WALK=1 52=[58] CM_RUN=3
+        OK  B BEFORE 52 尾=40 + CM_RUN=0（oracle-40 ⇒ CanRun 拒跑）
+        OK  C AFTER 52 尾=58 + CM_RUN=3 >= 1（client-58 ⇒ CanRun 放行）
+[PASS] selftest pair-after-40-red: rc=1 (want 1)
+        OK  A 11029 body 两侧逐字节相同（3B）⇒ ClientConf 未动
+        --  BEFORE(oracle-40): CM_WALK=1 52=[40] CM_RUN=0
+        --  AFTER (client-58): CM_WALK=1 52=[40] CM_RUN=3
+        OK  B BEFORE 52 尾=40 + CM_RUN=0（oracle-40 ⇒ CanRun 拒跑）
+        RED C AFTER 52 尾长=[40]，期望 [58]
+[PASS] selftest pair-minrun-4-red: rc=1 (want 1)
+        OK  A 11029 body 两侧逐字节相同（3B）⇒ ClientConf 未动
+        --  BEFORE(oracle-40): CM_WALK=1 52=[40] CM_RUN=0
+        --  AFTER (client-58): CM_WALK=1 52=[58] CM_RUN=3
+        OK  B BEFORE 52 尾=40 + CM_RUN=0（oracle-40 ⇒ CanRun 拒跑）
+        RED C AFTER CM_RUN=3，期望 >= 4
+SELFTEST_PAIR OK (7/7)
+
+$ python -I -B check_healthspellchanged_trigger.py --selftest
+[PASS] selftest green-client58               rc=0 (want 0)
+[PASS] selftest green-oracle40-derived       rc=0 (want 0)
+[PASS] selftest red-precondition-full-hp     rc=1 (want 1)
+[PASS] selftest red-53-absent                rc=1 (want 1)
+[PASS] selftest red-53-header-only           rc=1 (want 1)
+[PASS] selftest red-53-mixed-lens            rc=1 (want 1)
+[PASS] selftest red-min53-2                  rc=1 (want 1)
+[PASS] selftest green-explicit-0             rc=0 (want 0)
+[PASS] selftest green-log-only-t23-skipped   rc=0 (want 0, msg~='INFO T2/T3 NOT CHECKED')
+SELFTEST OK (9/9)
+```
+
+# C) `window_handoff.py --selftest`（98/98 → **107/107**）
+
+```
+$ python -I -B window_handoff.py --selftest | tail -1
+SELFTEST OK (107/107)
+```
+新增 9 条：`judge-eight-items` / `judge-ability-run-item-present` / `judge-53-trigger-item-present` /
+`judge-run-red` / `judge-53-red` / `plan-has-run-step` / `plan-has-ability-run-judge` /
+`plan-has-53-trigger-judge` / `plan-has-hp-precondition`；并把 `judge-red-two` 的预期从 `2/4` 校到 `2/6`
+（条目 6→8），新增 `plan-conf-red-run-flag`。变异点红见 `226`。
+
+# D) 清单门（`SHA256SUMS.txt` 按 LF / git blob 口径）
+
+
+```
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+GREEN mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK 236/236
+verify_rc=0
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+EOLCHECK GREEN 237/237 件文本证据与仓库口径（LF）在 EOL 上一致
+eol_rc=0
+```
+
+口径 = `SHA-256(git blob)`（`text eol=lf` 先 CRLF→LF 归一）；`README.md`/`window_handoff.py` 的 hash 已随本片
+改动更新；本片新增 5 件（`225`/`226`/`227`/`228`/`229`）已入清单（`write` 只更新既有行 ⇒ 新件先 append 再 `write`）。
+提交后另跑一次「干净检出」复核（`git worktree add --detach`）⇒ 同上 GREEN。

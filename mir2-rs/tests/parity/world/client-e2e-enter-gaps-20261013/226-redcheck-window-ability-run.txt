@@ -1,0 +1,139 @@
+226-redcheck-window-ability-run.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片54 的**改坏必红**
+① 变异 `window_handoff.py`（只在 /tmp 副本）⇒ 新牙必 FAIL；② `--judge` 五相红（真判据脚本 + 合成产物）
+m2-svr / openmir2-worker-11 / 2026-10-14；仓内 `window_handoff.py` sha256 全程 = 2b6db6759dceb6d87d41a6e84165a849b3d7815f2a007daa356775752bb3ade1（变异前后逐次复核一致）
+====================================================================================================
+
+# A) 变异（`E:/tmp/m2svr-burst25/whmut/`，整目录拷贝；每次从仓内原文件重灌再改一处）
+
+## M1-drop-run-item —— 删 J1 的 ①② 条目
+```
+$ python -I -B window_handoff.py --selftest   # 变异：M1-drop-run-item（/tmp 副本）
+[FAIL] selftest judge-eight-items 7
+[FAIL] selftest judge-ability-run-item-present ③b 服务端 vis>=1 | ③b 客户端 pairs>=1 | ③b 两侧 visible | ③b 两侧攻击/伤害 | ① Rust 53 触发+尾长 | ③a 服务端 vis==0 | ③a 两侧 none
+[FAIL] selftest judge-red-two 2/5
+[FAIL] selftest judge-run-red
+SELFTEST FAILED (103/107)
+```
+（点红牙：judge-eight-items / judge-ability-run-item-present / judge-red-two / judge-run-red）
+
+## M2-drop-53-item —— 删 J1 的 ① 53 条目
+```
+$ python -I -B window_handoff.py --selftest   # 变异：M2-drop-53-item（/tmp 副本）
+[FAIL] selftest judge-eight-items 7
+[FAIL] selftest judge-53-trigger-item-present ③b 服务端 vis>=1 | ③b 客户端 pairs>=1 | ③b 两侧 visible | ③b 两侧攻击/伤害 | ①② Rust 52=58 + CM_RUN>=1 | ③a 服务端 vis==0 | ③a 两侧 none
+[FAIL] selftest judge-red-two 2/5
+[FAIL] selftest judge-53-red
+SELFTEST FAILED (103/107)
+```
+（点红牙：judge-eight-items / judge-53-trigger-item-present / judge-red-two / judge-53-red）
+
+## M3-drop-plan-run-items —— 删计划 §3 的 ①② 两条判据
+```
+$ python -I -B window_handoff.py --selftest   # 变异：M3-drop-plan-run-items（/tmp 副本）
+[FAIL] selftest plan-has-ability-run-judge
+[FAIL] selftest plan-has-53-trigger-judge
+[FAIL] selftest plan-conf-red-run-flag
+SELFTEST FAILED (104/107)
+```
+（点红牙：plan-has-ability-run-judge / plan-has-53-trigger-judge / plan-conf-red-run-flag）
+
+## M4-drop-plan-hp —— 删计划 §1d 压血 5 行
+```
+$ python -I -B window_handoff.py --selftest   # 变异：M4-drop-plan-hp（/tmp 副本）
+[FAIL] selftest plan-has-hp-precondition
+SELFTEST FAILED (106/107)
+```
+（点红牙：plan-has-hp-precondition）
+
+## M5-drop-runholdms —— 把计划 §2 的 `-AttackClicks 12 -RunHoldMs 500` 退回 `-AttackClicks 12`
+```
+$ python -I -B window_handoff.py --selftest   # 变异：M5-drop-runholdms（/tmp 副本）
+[FAIL] selftest plan-has-run-step
+SELFTEST FAILED (106/107)
+```
+（点红牙：plan-has-run-step）
+
+**仓内 sha256 不变**：变异前 = 变异后 = `2b6db6759dceb6d87d41a6e84165a849b3d7815f2a007daa356775752bb3ade1`（逐次 `sha256sum` 复核；上表每条退出码 1）。
+
+# B) `--judge` 五相红（本目录真判据脚本 + 合成产物；对照 `225` §3 的全绿）
+
+## r1 52 尾长 58→40
+```
+OK   ③b 服务端 vis>=1（RESULT: GREEN）
+OK   ③b 客户端 pairs>=1（RESULT: GREEN）
+OK   ③b 两侧 visible（RESULT: GREEN）
+OK   ③b 两侧攻击/伤害（RESULT: GREEN）
+OK   ① Rust 53 触发+尾长（VERDICT GREEN）
+OK   ③a 服务端 vis==0（RESULT: GREEN）
+OK   ③a 两侧 none（RESULT: GREEN）
+RED ①② Rust 52=58 + CM_RUN>=1 RED（末行=RESULT: RED）
+WINDOW_JUDGE=RED
+AOI_GAP3=RED
+```
+（①② RED（52 布局））
+
+## r2 删 s2c 53
+```
+OK   ③b 服务端 vis>=1（RESULT: GREEN）
+OK   ③b 客户端 pairs>=1（RESULT: GREEN）
+OK   ③b 两侧 visible（RESULT: GREEN）
+OK   ③b 两侧攻击/伤害（RESULT: GREEN）
+OK   ①② Rust 52=58 + CM_RUN>=1（RESULT: GREEN）
+OK   ③a 服务端 vis==0（RESULT: GREEN）
+OK   ③a 两侧 none（RESULT: GREEN）
+RED ① Rust 53 触发+尾长 RED（末行=VERDICT RED）
+WINDOW_JUDGE=RED
+AOI_GAP3=RED
+```
+（① 53 RED（T2））
+
+## r3 入图行 hp=18→19（满血）
+```
+OK   ③b 服务端 vis>=1（RESULT: GREEN）
+OK   ③b 客户端 pairs>=1（RESULT: GREEN）
+OK   ③b 两侧 visible（RESULT: GREEN）
+OK   ③b 两侧攻击/伤害（RESULT: GREEN）
+OK   ①② Rust 52=58 + CM_RUN>=1（RESULT: GREEN）
+OK   ③a 服务端 vis==0（RESULT: GREEN）
+OK   ③a 两侧 none（RESULT: GREEN）
+RED ① Rust 53 触发+尾长 RED（末行=VERDICT RED）
+WINDOW_JUDGE=RED
+AOI_GAP3=RED
+```
+（① 53 RED（T1 前置））
+
+## r4 删 c2s CM_RUN
+```
+OK   ③b 服务端 vis>=1（RESULT: GREEN）
+OK   ③b 客户端 pairs>=1（RESULT: GREEN）
+OK   ③b 两侧 visible（RESULT: GREEN）
+OK   ③b 两侧攻击/伤害（RESULT: GREEN）
+OK   ① Rust 53 触发+尾长（VERDICT GREEN）
+OK   ③a 服务端 vis==0（RESULT: GREEN）
+OK   ③a 两侧 none（RESULT: GREEN）
+RED ①② Rust 52=58 + CM_RUN>=1 RED（末行=RESULT: RED）
+WINDOW_JUDGE=RED
+AOI_GAP3=RED
+```
+（①② RED（CM_RUN=0））
+
+## r5 删 ③a 目录
+```
+OK   ③b 服务端 vis>=1（RESULT: GREEN）
+OK   ③b 客户端 pairs>=1（RESULT: GREEN）
+OK   ③b 两侧 visible（RESULT: GREEN）
+OK   ③b 两侧攻击/伤害（RESULT: GREEN）
+OK   ①② Rust 52=58 + CM_RUN>=1（RESULT: GREEN）
+OK   ① Rust 53 触发+尾长（VERDICT GREEN）
+PREREQ ③a 服务端 vis==0：缺窗口证据 ['E:/tmp/m2svr-burst25/judge-a/rust/stack/game-svr.out.log']
+PREREQ ③a 两侧 none：缺窗口证据 ['E:/tmp/m2svr-burst25/judge-a/rust/s2c/capture.jsonl', 'E:/tmp/m2svr-burst25/judge-a/csharp/s2c/capture.jsonl']
+WINDOW_JUDGE=PREREQ_RED
+AOI_GAP3=PREREQ_RED
+```
+（③a 两条 PREREQ（fail-closed））
+
+# C) 判读
+
+- 每个新牙都**咬在具体改点上**（不是恒真）：删条目/删计划行/退回 `-RunHoldMs`/删压血 都会点红；
+- `--judge` 的 **fail-closed**：任一必需证据缺失 ⇒ `PREREQ_RED` rc=2，绝不静默当绿；
+- 吞掉 RED（把 rc=1 当绿）会让 `WINDOW_JUDGE` 假绿 ⇒ `judge-*-red` 两条牙必红。
