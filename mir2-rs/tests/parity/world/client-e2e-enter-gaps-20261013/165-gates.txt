@@ -31,7 +31,7 @@ SELFTEST OK (23/23)      # 17/17 → 23/23（+6 牙）
 rc=0
 $ python -I -B window_handoff.py --selftest
 ...
-SELFTEST OK (94/94)
+SELFTEST OK (95/95)      # 94/94 → 95/95（+1 牙 ws-parse-dup-last-wins = reviewer-5 ㉝ O-1）
 rc=0
 ```
 
@@ -43,7 +43,8 @@ C. 本片真读数（详见 `163-…` / `164-…`）
 | `check_rust_window_preflight.py --ref HEAD` | 本 worktree head | `RESULT: GREEN` rc=0 |
 | `window_handoff.py --window-script ''` | `E:/tmp/m2svr-window-origin @6dba8719d` | `RED G1` / `WINDOW_READY=NO` / rc=1 |
 | `window_handoff.py --window-script ''` | 本 worktree head | `OK G1` / `WINDOW_READY=YES` / rc=0 |
-| 变异副本（删 ㉜ 检查）对专用源 | `E:/tmp/m2svr-window-origin` | `RESULT: GREEN`（复现旧漏网，牙齿成立） |
+| 变异副本（删 ㉜ 检查）对专用源 | `E:/tmp/m2svr-window-origin` | `RESULT: GREEN`（复现旧漏网，牙齿 M1 成立） |
+| 变异副本（`parse_window_script` 改回取第一条）自检 | — | `ws-parse-dup-last-wins` **1 FAIL** / `SELFTEST FAILED (94/95)`（O-1 fail-open 复现，牙齿 M2 成立） |
 
 D. 证据完整性（LF/git-blob 口径，写入本片 4 件后重跑）
 ----------------------------------------------------------------------------------------------------

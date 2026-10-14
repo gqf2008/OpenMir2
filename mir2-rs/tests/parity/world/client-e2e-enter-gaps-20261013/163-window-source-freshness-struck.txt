@@ -4,7 +4,7 @@ m2-svr / openmir2-worker-11 / 2026-10-14；零起栈、零游戏端口（仅共�
 base = origin/master 9edfc745d（本片开工时 `git fetch` 的 tip；本片只动本卡证据目录 2 个 .py）
 工具 sha256（改后，改动前见 SHA256SUMS 的历史提交）：
   check_rust_window_preflight.py  7d25e32afe039215f4840636c05229d543a7bf2a96b5f9dc8c0c5c8857c1a8a7
-  window_handoff.py               54d9aad0bf9cb897fd256062c9700287fc188eff6b6870b7ae2b534b8fae737e
+  window_handoff.py               7c001abf33fe8d9b01fb8ba66fd905d2124bbae6abdc8e8d24d574fe897b8f74
 ====================================================================================================
 A. 缺陷（同类烧窗，旧 G1 漏网）
 ----------------------------------------------------------------------------------------------------
@@ -30,6 +30,11 @@ R1 从「单提交」扩为「**必需提交集**」`REQUIRED_FIX_COMMITS`：
 抽出纯函数 `required_fix_findings(repo, ref, fixes) -> (ok 行, problems, prereqs)`（selftest 直测）。
 `--fix-commit` 改 `action="append"`：不传 = 默认两片；传单值 = 只查那一个（向后兼容旧调用）。
 `window_handoff.py` 的 G1 docstring 同步写清「两片」（G1 只聚合，不复制判据逻辑，接口不变）。
+
+另收 reviewer-5 对 ㉝ 的 **O-1（Minor，潜在 fail-open）**：`parse_window_script` 旧实现「同键取**第一条**」，
+而 bash 顺序脚本是 **last-wins** ⇒ 活脚本出现重复 `repo=` 时 G5 会按 bash 不会跑的那个值比对，朝假绿判。
+本片改为**取最后一条**（对齐 bash）并订正 docstring；新增 selftest 牙 `ws-parse-dup-last-wins`
+（`repo=/good\nrepo=/bad` ⇒ `/bad`）。O-2（Observation，JSON 里补 `g5=enabled|disabled`）本片未做、登记。
 
 C. 真读数（机判，可复跑；命令 + 原始输出）
 ----------------------------------------------------------------------------------------------------
@@ -92,13 +97,15 @@ D. `--selftest` 17/17 → 23/23（+6 牙）
 SELFTEST OK (23/23)
 rc=0
 ```
-`window_handoff.py --selftest` 仍 `94/94`（本片只改 docstring，未动聚合逻辑）。
+`window_handoff.py --selftest` **94/94 → 95/95**（+1 牙：`ws-parse-dup-last-wins`，reviewer-5 O-1）。
 
 E. 改坏必红（变异只在 E:/tmp；仓内工具 sha256 前后一致）
 ----------------------------------------------------------------------------------------------------
-见 `164-redcheck-window-source-freshness.txt`：把 `REQUIRED_FIX_COMMITS` 删回「只有片⑪」
-（`/e/tmp/m2svr-burst20/mut/m1-only-diag.py`）⇒ 同一 C1 命令变成 `RESULT: GREEN`
-（即旧 G1 的漏网状态复现）⇒ 新 R1 的 ㉜ 检查正是抓这个的那颗牙。
+见 `164-redcheck-window-source-freshness.txt`：
+  M1 把 `REQUIRED_FIX_COMMITS` 删回「只有片⑪」（`/e/tmp/m2svr-burst20/mut/m1-only-diag.py`）
+     ⇒ 同一 C1 命令变成 `RESULT: GREEN`（即旧 G1 的漏网状态复现）⇒ ㉜ 检查正是抓这个的那颗牙。
+  M2 把 `parse_window_script` 改回「取第一条」（`/e/tmp/m2svr-burst20/mut/m2-first-wins.py`）
+     ⇒ `ws-parse-dup-last-wins` 1 FAIL（`{'repo': '/good', 'tgt': '/t1'}` 即 O-1 的 fail-open 复现）。
 
 F. 未做 / 登记（不静默）
 ----------------------------------------------------------------------------------------------------
@@ -111,6 +118,6 @@ F. 未做 / 登记（不静默）
 G. 涉及文件
 ----------------------------------------------------------------------------------------------------
   改动：`check_rust_window_preflight.py`（R1 必需提交集 + `required_fix_findings` + selftest + `--fix-commit` 可重复）、
-       `window_handoff.py`（G1 docstring 订正，零逻辑）
+       `window_handoff.py`（G1 docstring 订正 + reviewer-5 O-1：`parse_window_script` 重复键 last-wins）
   证据：本文件 + `164-redcheck-window-source-freshness.txt` + `165-gates.txt` + `166-boundary.txt`
        + `README.md`（§㉞）+ `SHA256SUMS.txt`（重生成）

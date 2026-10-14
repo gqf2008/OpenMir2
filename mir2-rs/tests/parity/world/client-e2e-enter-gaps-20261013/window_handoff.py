@@ -153,12 +153,11 @@ def parse_window_script(text: str) -> dict:
     """从 `client-e2e-window.sh` 里抽 `repo=` / `tgt=`（片㉝）。
 
     脚本第 6/7 行形如 `w=…; repo=/e/tmp/m2svr-window-origin`、`tgt='E:\\tmp\\m2svr-window-target'…`。
-    同键出现多次只取**第一条**（与 bash 先赋值者生效一致）。解析不到 ⇒ 该键 `None`。
+    同键出现多次**取最后一条**（对齐 bash 顺序脚本的 last-wins；reviewer-5 ㉝ O-1：旧实现取第一条，
+    在活脚本出现重复键时会与 bash 实跑不一致 ⇒ 朝假绿判）。解析不到 ⇒ 该键 `None`。
     """
     out: dict = {"repo": None, "tgt": None}
     for m in _WS_VALUE_RE.finditer(text or ""):
-        if out[m.group("key")] is not None:
-            continue
         out[m.group("key")] = m.group("sq") or m.group("dq") or m.group("bare") or ""
     return out
 
@@ -1316,6 +1315,10 @@ def selftest() -> int:
         chk("ws-norm-msys", _norm_path("/e/tmp/x") == _norm_path("E:\\tmp\\x") == "e:/tmp/x")
         chk("ws-norm-quoted", _norm_path("'E:\\tmp\\x'".strip("'")) == "e:/tmp/x")
     chk("ws-parse-missing", parse_window_script("no assignments here") == {"repo": None, "tgt": None})
+    # 片㉞（reviewer-5 ㉝ O-1）：重复键取**最后一条**（对齐 bash last-wins），不是第一条。
+    # 旧实现取 /good，而 bash 会跑 /bad ⇒ G5 会朝假绿判（fail-open）。
+    _dup = parse_window_script("repo=/good\nrepo=/bad\ntgt=/t1; tgt=/t2\n")
+    chk("ws-parse-dup-last-wins", _dup["repo"] == "/bad" and _dup["tgt"] == "/t2", str(_dup))
     # G5 四种：一致 GREEN / repo 不一致 RED / 指共享主检出 RED / 文件缺失跳过
     with tempfile.TemporaryDirectory(prefix="wh-g5-") as tmp:
         _write_fake_tools(tmp, "GREEN")

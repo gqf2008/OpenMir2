@@ -49,11 +49,36 @@ D. 仓内工具未被改坏（sha256 前后一致）
 ```
 $ sha256sum <证据目录>/check_rust_window_preflight.py
 7d25e32afe039215f4840636c05229d543a7bf2a96b5f9dc8c0c5c8857c1a8a7  check_rust_window_preflight.py
+$ sha256sum <证据目录>/window_handoff.py
+7c001abf33fe8d9b01fb8ba66fd905d2124bbae6abdc8e8d24d574fe897b8f74  window_handoff.py
 $ sha256sum /e/tmp/m2svr-burst20/mut/m1-only-diag.py
 f4b8d9769db0b90439ceba34d73ed78547004f552967845a3def09a8af2b7fd0  m1-only-diag.py
+$ sha256sum /e/tmp/m2svr-burst20/mut/m2-first-wins.py
+443a2db2f6f6a4450ca0c29cdf1520e0d2c21b49903be22202f053f84c4de9e6  m2-first-wins.py
 ```
 `git status` / `git diff` 对证据目录只显示片㉞ 的 2 个 .py 改动（见 `166-boundary.txt`）。
 
-E. 保留物
+E. 第二颗牙（reviewer-5 对 ㉝ 的 O-1：`parse_window_script` 重复键 last-wins）
 ----------------------------------------------------------------------------------------------------
-  `E:/tmp/m2svr-burst20/mut/**`：本片变异副本 + 4 件工具只读拷贝（保留，可复跑）。
+变异（只在 `E:/tmp`；`/e/tmp/m2svr-burst20/mut/m2-first-wins.py`）：把 `parse_window_script`
+改回旧实现「同键取第一条」（`if out[key] is not None: continue`）。
+```
+$ python -I -B mutate_wh.py window_handoff.py /e/tmp/m2svr-burst20/mut/m2-first-wins.py
+mutated -> /e/tmp/m2svr-burst20/mut/m2-first-wins.py
+$ python -I -B /e/tmp/m2svr-burst20/mut/m2-first-wins.py --selftest | grep dup
+[FAIL] selftest ws-parse-dup-last-wins {'repo': '/good', 'tgt': '/t1'}
+SELFTEST FAILED (94/95)
+rc=1
+
+$ # 仓内原件（last-wins，对齐 bash）
+$ python -I -B window_handoff.py --selftest | tail -1
+SELFTEST OK (95/95)
+rc=0
+```
+⇒ `repo=/good\nrepo=/bad` 时旧实现解析得 `/good`（bash 实跑 `/bad`）——即 reviewer-5 O-1 的 fail-open
+被新牙捕捉。
+
+F. 保留物
+----------------------------------------------------------------------------------------------------
+  `E:/tmp/m2svr-burst20/mut/**`：本片两颗牙的变异副本 + 证据目录工具只读拷贝
+  （`client-e2e-window.fixed.sh.txt` + 7 件判据工具；内容不动，只为让 G2/R5 找得到）——保留，可复跑。

@@ -857,16 +857,20 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   它停在 `6dba8719d`（origin/master 在片㉜ `0d0d62a69` **之前**）⇒ **含片⑪、缺片㉜**。
   后果：③b 的 DoD③ 第三半「能攻击造成伤害」判据 `check_attack_observability.py`（要片㉜ 的
   `SM_STRUCK` 广播）必然 0 帧 ⇒ 白烧一次性窗口。
-- **本片交付（一个逻辑变更；两个 `.py` 都在证据目录，零生产代码）**：R1 扩为**必需提交集**
+- **本片交付（两个 `.py` 都在证据目录，零生产代码）**：R1 扩为**必需提交集**
   `REQUIRED_FIX_COMMITS` = 片⑪ + 片㉜，逐个 `merge-base --is-ancestor`，缺任一 ⇒ RED；抽纯函数
   `required_fix_findings(repo, ref, fixes)`；`--fix-commit` 改可重复（缺省两片，单值向后兼容）；
-  `window_handoff.py` G1 docstring 同步（零逻辑）。
+  `window_handoff.py` G1 docstring 同步。另收 **reviewer-5 对 ㉝ 的 O-1**（Minor，潜在 fail-open）：
+  `parse_window_script` 旧实现重复键取**第一条**，而 bash 顺序脚本是 **last-wins** ⇒ 重复 `repo=`
+  时会按 bash 不会跑的值比对、朝假绿判；本片改为**取最后一条**（对齐 bash）+ 订正 docstring +
+  新牙 `ws-parse-dup-last-wins`。O-2（JSON 补 `g5=enabled|disabled`）未做、登记。
 - **真读数（`163`）**：专用源 `m2svr-window-origin` ⇒ `RED R1 …不含 0d0d62a695（片㉜…）` rc=1
   （`window_handoff --window-script ''` ⇒ `RED G1` / `WINDOW_READY=NO`）；本 worktree head ⇒ `RESULT: GREEN`
-  （聚合 `OK G1` / `WINDOW_READY=YES`）。`--selftest` **17/17 → 23/23**（+6 牙）。
-- **改坏必红（`164`，变异只在 `E:/tmp/m2svr-burst20/mut/`）**：删掉 `REQUIRED_FIX_COMMITS` 的片㉜ 行
-  （`sed -i '/FIX_COMMIT_STRUCK, "片㉜/d'`）⇒ 同一专用源命令变 `RESULT: GREEN`（旧漏网复现）⇒
-  新检查正是抓它的那颗牙；仓内工具 sha256 前后一致。
+  （聚合 `OK G1` / `WINDOW_READY=YES`）。`check_rust_window_preflight.py --selftest` **17/17 → 23/23**；
+  `window_handoff.py --selftest` **94/94 → 95/95**。
+- **改坏必红（`164`，变异只在 `E:/tmp/m2svr-burst20/mut/`）**：M1 删掉 `REQUIRED_FIX_COMMITS` 的片㉜ 行
+  ⇒ 同一专用源命令变 `RESULT: GREEN`（旧漏网复现）；M2 `parse_window_script` 改回取第一条
+  ⇒ `ws-parse-dup-last-wins` 1 FAIL（`{'repo': '/good'}` = O-1 复现）；仓内工具 sha256 前后一致。
 - 四门禁（合并树 `c12931af3` = 片㉝ + `origin/master 9edfc745d`）fmt 0 / clippy 0(`-D warnings`) /
   **101 suites · 1219 passed · 0 failed · 22 ignored** / msgcodegen 604 rc=0。
 - **仍未闭环（归 root 独占窗口，不因本片收卡）**：开窗前必须换用含片⑪+片㉜ 的构建源
