@@ -94,6 +94,8 @@ pub const SELL_OFF_TEMP_MAX: usize = 9;
 const SHORT_MAX: i32 = i16::MAX as i32;
 /// oracle `ushort.MaxValue`（写入金刚石标记，`:556-558`）。
 const USHORT_MAX: u16 = u16::MAX;
+/// `ScriptFlagConst.sDealYBme`（`ScriptFlagConst.cs:25`）：元宝寄售开窗 label。
+pub const LABEL_DEAL_YB_ME: &str = "@dealybme";
 
 /// `RM_SELLOFFADDITEM_OK(23004)` 的队列优先级字节。
 const PRIO_RM_SELLOFFADDITEM_OK: u8 = (messages::RM_SELLOFFADDITEM_OK & 0xFF) as u8;
@@ -119,6 +121,8 @@ const PRIO_RM_WEIGHTCHANGED: u8 = (10_115 & 0xFF) as u8;
 const PRIO_RM_GAMEGOLDCHANGED: u8 = (8_084 & 0xFF) as u8;
 /// `RM_SYSMESSAGE(11004)`。
 const PRIO_RM_SYSMESSAGE: u8 = (11_004 & 0xFF) as u8;
+/// `RM_MERCHANTSAY(11009)`（`UserSelectOpenDealOffForm` 两失败支）。
+const PRIO_RM_MERCHANTSAY: u8 = (messages::RM_MERCHANTSAY & 0xFF) as u8;
 
 /// `SendUpdateMsg` 的去重 key（同 ident 覆盖，`BaseObject.Message.cs:283-306`）。
 const KEY_RM_GAMEGOLDCHANGED: u16 = messages::RM_GAMEGOLDCHANGED;
@@ -423,6 +427,26 @@ fn blue_msg(em: &mut Emitter, target: i32, cfg: &SellOffConfig, text: &str) {
             f_color: cfg.blue_f_color,
             b_color: cfg.blue_b_color,
             text: text.to_string(),
+        },
+    );
+}
+
+/// `SendMsg(this, RM_MERCHANTSAY, 0, 0, 0, 0, ChrName + '/' + text)`（`NormNpc.cs:1613-1616`）。
+///
+/// `RM_MERCHANTSAY` 出队映射（`PlayObject.Message.cs:1722-1724`）
+/// `MakeMessage(SM_MERCHANTSAY(643), processMsg.ActorId, MakeWord(0,0), 0, 1)` + `EncodeString(Msg)`
+/// ⇒ `Recog` = **商人** `ActorId`、`Param = Tag = 0`、`Series = 1`、尾 = `GBK(ChrName + '/' + text)`。
+fn merchant_say(em: &mut Emitter, target: i32, npc_id: i32, npc_name: &str, text: &str) {
+    em.later(
+        PRIO_RM_MERCHANTSAY,
+        SellOffFrame::Def {
+            target,
+            ident: messages::SM_MERCHANTSAY,
+            recog: npc_id,
+            param: 0,
+            tag: 0,
+            series: 1,
+            name: Some(format!("{npc_name}/{text}")),
         },
     );
 }
@@ -1003,31 +1027,50 @@ pub fn sell_off_in_time(me: &SellOffSide<'_>, book: &SellOffBook, n_code: i32) -
     result
 }
 
-/// `UserSelectOpenDealOffForm(user)`（`Merchant.cs:1038-1056`）的**成功支**帧：
-/// `user.SendMsg(RM_SENDDEALOFFFORM, 0, ActorId, 0, 0)`（`ActorId` = 商人）⇒ `Run()` 出队时
-/// `SendDefMessage(SM_SENDDEALOFFFORM, processMsg.nParam1, processMsg.nParam2, 0, 0, processMsg.Msg)`
-/// （`PlayObject.Message.cs:2046-2048`）。
+/// `Merchant.UserSelectOpenDealOffForm(user)`（`Merchant.cs:1038-1056`）的三条支（**全实现**）：
 ///
-/// **字段口径**：`SendMsg(wIdent, wParam, nParam1, nParam2, nParam3, sMsg)` 里 `wParam=0`、
+/// | 条件 | oracle 帧 |
+/// |---|---|
+/// | `!user.SaleDeal` | `SendMsg(this, RM_MERCHANTSAY, …, ChrName+"/您未开通元宝服务,请先开通元宝服务!!…")` ⇒ `SM_MERCHANTSAY(643)` |
+/// | `user.SaleDeal && user.SellOffInTime(0)` | 同上，文案 `"您还有元宝服务正在进行!!…"` ⇒ `SM_MERCHANTSAY(643)` |
+/// | `user.SaleDeal && !user.SellOffInTime(0)` | `SendMsg(RM_SENDDEALOFFFORM, 0, ActorId, 0, 0)` ⇒ `SM_SENDDEALOFFFORM(23001)` |
+///
+/// **成功支字段口径**：`SendMsg(wIdent, wParam, nParam1, nParam2, nParam3, sMsg)` 里 `wParam=0`、
 /// `nParam1=ActorId`（商人）⇒ `SM` 头 `Recog = nParam1 = 商人 ActorId`、`Param = nParam2 = 0`
 /// （**不是** `Recog=0`/`Param=ActorId`）：`ActorId` 是 32 位，只能落 `Recog`；`Param` 是 16 位。
+/// 出队映射见 `PlayObject.Message.cs:2046-2048`。
 ///
-/// 返回 `None` 表示 oracle 走 `RM_MERCHANTSAY` 失败支（未开通元宝服务 / 已有进行中的寄售）
-/// （`Merchant.cs:1041-1056`）—— 那两路是 **商人说话帧**（`SM_MERCHANTSAY(643)`，
-/// `ChrName + '/' + text`），由 merchant/NPC 层产出（[`crate::npc`]/[`crate::shop`]）。
-///
-/// **未接线**：生产触发点 = merchant 脚本 label `@dealybme`（`Merchant.cs:930-934`），在
-/// `crates/script`（不在本卡写集）⇒ 本函数只落纯逻辑 + 帧，供脚本层接线时直接调用。
+/// **失败支**两条 `SM_MERCHANTSAY` 见 [`merchant_say`]（尾 = `商人 ChrName + '/' + text`）。
+/// 生产触发点 = merchant 脚本 label `@dealybme`（`Merchant.cs:930-934`，`IsYbDeal` 门）；宿主接线见
+/// `bins/game-svr/src/main.rs::handle_shop_cmd` 的 `CM_MERCHANTDLGSELECT` 支。
 #[must_use]
 pub fn open_deal_off_form(
     me: &SellOffSide<'_>,
     book: &SellOffBook,
     npc_id: i32,
-) -> Option<SellOffEvent> {
-    if !me.state.sale_deal || sell_off_in_time(me, book, 0) {
-        return None;
-    }
+    npc_name: &str,
+) -> Vec<SellOffEvent> {
     let mut em = Emitter::new();
+    if !me.state.sale_deal {
+        merchant_say(
+            &mut em,
+            me.id,
+            npc_id,
+            npc_name,
+            "您未开通元宝服务,请先开通元宝服务!!\\ \\<返回/@main>",
+        );
+        return em.finish();
+    }
+    if sell_off_in_time(me, book, 0) {
+        merchant_say(
+            &mut em,
+            me.id,
+            npc_id,
+            npc_name,
+            "您还有元宝服务正在进行!!\\ \\<返回/@main>",
+        );
+        return em.finish();
+    }
     em.later(
         PRIO_RM_SENDDEALOFFFORM,
         SellOffFrame::Def {
@@ -1040,7 +1083,7 @@ pub fn open_deal_off_form(
             name: None,
         },
     );
-    em.finish().into_iter().next()
+    em.finish()
 }
 
 /// `SelectSellDate()`（`PlayObject.Sale.cs:440-473`）的纯逻辑。
@@ -1728,20 +1771,57 @@ mod tests {
         assert!(sell_off_in_time(&side(&mut buyer), &book, 1));
     }
 
-    /// **`RM_SENDDEALOFFFORM` 的成功支**（`Merchant.cs:1038-1045`）：未开通 ⇒ `None`；
-    /// 开通且无进行中的寄售 ⇒ `SM_SENDDEALOFFFORM(23001)` 排队帧（`param` = 商人 `ActorId`）；
-    /// 已有进行中 ⇒ `None`（或oracle 回商人说话帧）。
+    /// 取单条 `Def` 排队帧的 `(ident, recog, param, tag, series, name)`。
+    fn def_parts(evs: &[SellOffEvent]) -> (u16, i32, u16, u16, u16, String) {
+        assert_eq!(evs.len(), 1, "应恰一条帧，实得 {evs:?}");
+        match &evs[0] {
+            SellOffEvent::Queued {
+                body:
+                    SellOffFrame::Def {
+                        ident,
+                        recog,
+                        param,
+                        tag,
+                        series,
+                        name,
+                        ..
+                    },
+                ..
+            } => (
+                *ident,
+                *recog,
+                *param,
+                *tag,
+                *series,
+                name.clone().unwrap_or_default(),
+            ),
+            other => panic!("应为排队 Def 帧，实得 {other:?}"),
+        }
+    }
+
+    /// **`UserSelectOpenDealOffForm` 三支**（`Merchant.cs:1038-1056`）：未开通 ⇒ `SM_MERCHANTSAY`
+    /// 失败文案①；开通且无进行中 ⇒ `SM_SENDDEALOFFFORM`（`Recog` = 商人 `ActorId`）；
+    /// 已有进行中 ⇒ `SM_MERCHANTSAY` 失败文案②。
     #[test]
     fn open_deal_off_form_gated_by_sale_deal_and_active_sell() {
         let mut book = SellOffBook::default();
         let mut m = P::new(1, "seller");
-        assert!(
-            open_deal_off_form(&side(&mut m), &book, 42).is_none(),
-            "未开通元宝服务 ⇒ 不开窗"
+
+        // 支①：`!SaleDeal` ⇒ 商人说话帧（不是开窗帧）。
+        let evs = open_deal_off_form(&side(&mut m), &book, 42, "商人");
+        let (ident, recog, param, tag, series, name) = def_parts(&evs);
+        assert_eq!(ident, messages::SM_MERCHANTSAY);
+        assert_eq!(recog, 42, "Recog = 商人 ActorId");
+        assert_eq!((param, tag, series), (0, 0, 1), "Param=Tag=0、Series=1");
+        assert_eq!(
+            name,
+            "商人/您未开通元宝服务,请先开通元宝服务!!\\ \\<返回/@main>"
         );
+
+        // 支②：`SaleDeal && !SellOffInTime(0)` ⇒ `SM_SENDDEALOFFFORM`。
         m.state.sale_deal = true;
-        let ev = open_deal_off_form(&side(&mut m), &book, 42).expect("应发 SM_SENDDEALOFFFORM");
-        match ev {
+        let evs = open_deal_off_form(&side(&mut m), &book, 42, "商人");
+        match &evs[0] {
             SellOffEvent::Queued {
                 priority,
                 body:
@@ -1754,20 +1834,24 @@ mod tests {
                 ..
             } => {
                 assert_eq!(
-                    priority, PRIO_RM_SENDDEALOFFFORM,
+                    *priority, PRIO_RM_SENDDEALOFFFORM,
                     "优先级字节 23000&0xFF=152"
                 );
-                assert_eq!(ident, messages::SM_SENDDEALOFFFORM);
-                assert_eq!(recog, 42, "Recog = nParam1 = 商人 ActorId（32 位）");
-                assert_eq!(param, 0, "Param = nParam2 = 0");
+                assert_eq!(*ident, messages::SM_SENDDEALOFFFORM);
+                assert_eq!(*recog, 42, "Recog = nParam1 = 商人 ActorId（32 位）");
+                assert_eq!(*param, 0, "Param = nParam2 = 0");
             }
             other => panic!("应为排队 Def 帧，实得 {other:?}"),
         }
+
+        // 支③：`SaleDeal && SellOffInTime(0)` ⇒ 商人说话帧（“正在进行”）。
         book.entries.push(entry("seller", "x", 1, 0, slots(None)));
-        assert!(
-            open_deal_off_form(&side(&mut m), &book, 42).is_none(),
-            "已有进行中的寄售 ⇒ 不开窗（回商人说话帧）"
-        );
+        let evs = open_deal_off_form(&side(&mut m), &book, 42, "商人");
+        let (ident, recog, param, tag, series, name) = def_parts(&evs);
+        assert_eq!(ident, messages::SM_MERCHANTSAY);
+        assert_eq!(recog, 42);
+        assert_eq!((param, tag, series), (0, 0, 1));
+        assert_eq!(name, "商人/您还有元宝服务正在进行!!\\ \\<返回/@main>");
     }
 
     /// **⑩-1 收口片判据**：`SM_SENDDEALOFFFORM` 的线缆 12B 命令头字段口径
@@ -1781,8 +1865,9 @@ mod tests {
         let mut m = P::new(1, "seller");
         m.state.sale_deal = true;
         // 0x1234_5678 > u16::MAX：若落进 16 位的 Param 必被截断 ⇒ 这是口径判据的核心。
-        let ev = open_deal_off_form(&side(&mut m), &book, 0x1234_5678).expect("应开窗");
-        let (target, body) = selloff_event_body(&ev, &cat).expect("应可编码");
+        let evs = open_deal_off_form(&side(&mut m), &book, 0x1234_5678, "商人");
+        assert_eq!(evs.len(), 1);
+        let (target, body) = selloff_event_body(&evs[0], &cat).expect("应可编码");
         assert_eq!(target, 1);
         assert!(body.len() >= 12, "GM_DATA body 至少 12B 命令头");
         assert_eq!(
@@ -1801,6 +1886,37 @@ mod tests {
         );
         assert_eq!(u16::from_le_bytes([body[8], body[9]]), 0, "Tag = 0");
         assert_eq!(u16::from_le_bytes([body[10], body[11]]), 0, "Series = 0");
+    }
+
+    /// **⑩-1 接线片判据（失败支线缆）**：未开通元宝服务 ⇒ `SM_MERCHANTSAY(643)`，
+    /// 头 `Recog` = 商人 `ActorId`（32 位）、`Param=Tag=0`、`Series=1`，尾 = `EncodeString(GBK(ChrName+'/'+text))`。
+    #[test]
+    fn open_deal_off_form_failure_wire_is_merchant_say() {
+        let cat = catalog();
+        let book = SellOffBook::default();
+        let mut m = P::new(1, "seller"); // `sale_deal` 默认 false ⇒ 失败支①
+        let evs = open_deal_off_form(&side(&mut m), &book, 0x1234_5678, "商人");
+        let (_, body) = selloff_event_body(&evs[0], &cat).expect("应可编码");
+        assert_eq!(
+            i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            0x1234_5678,
+            "Recog = 商人 ActorId（32 位）"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            messages::SM_MERCHANTSAY
+        );
+        assert_eq!(u16::from_le_bytes([body[6], body[7]]), 0, "Param = 0");
+        assert_eq!(u16::from_le_bytes([body[8], body[9]]), 0, "Tag = 0");
+        assert_eq!(u16::from_le_bytes([body[10], body[11]]), 1, "Series = 1");
+        let expect_tail = edcode::encode(&gbk(
+            "商人/您未开通元宝服务,请先开通元宝服务!!\\ \\<返回/@main>",
+        ));
+        assert_eq!(
+            &body[12..],
+            &expect_tail[..],
+            "尾 = EncodeString(ChrName+'/'+text)"
+        );
     }
 
     // ---- 帧编码 ----
