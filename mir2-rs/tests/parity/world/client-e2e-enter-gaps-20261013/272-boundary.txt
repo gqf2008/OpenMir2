@@ -17,6 +17,7 @@ $ git diff --name-status <base> -- mir2-rs/tests/parity/world/client-e2e-enter-g
   A  …/271-gates.txt                       # 四门禁 + 工具自检 + 真门/聚合门
   A  …/272-boundary.txt                    # 本件
   M  …/SHA256SUMS.txt                      # 清单重算（仓库字节口径；`verify_sha256sums.py write`）
+  ↑ 注：本清单行数在**片65 提交时 = 287**（`fc00c7581` 为 283）；本件 §4 的快照读数即指 287。
 
 > `check_rust_window_preflight.py` 的差量从 `14421a4f0` 起算 = 片64 + 片65 两段；本片（片65）只追加
 > 「带值 + 执行性牙 + `）` 位置」，不改片64 的 R7 判据语义。
@@ -38,7 +39,10 @@ $ git diff --name-only <base>..<head> -- '*.rs' '*.toml' '*.ps1' '*.cs'
 
 - hash **一律按「仓库字节」**（`SHA-256(Git blob 内容)`；文本文件 = CRLF→LF 归一后的字节），
   用 `tools/evidence-hash/verify_sha256sums.py write <本目录>` 重算后再 `verify`；
-- **权威读数**（本件写完后 fresh 重跑）：`write` 写入 283 行、`verify` = **GREEN 283/283**（repo 口径）；
+- **权威读数**（**片65 提交时快照** = `f810e6e2f`）：`write` 写入 **287** 行、`verify` = **GREEN 287/287**（repo 口径）；
+  · 订正（O-1 收口，见 `273`/README §66）：原写 `283` 是**片65 前旧数**（`fc00c7581` 的清单行数），
+    漏算本片 4 个新件（269/270/271/272）⇒ 与 `f810e6e2f` 的 `wc -l`（=287）不符；实质结论（verify GREEN）不变。
+  · 本目录件数**随后续片增长** ⇒ 此处只作**快照**语义，**以当场 `wc -l SHA256SUMS.txt` 为准**；
   本目录历史上就是混合行末（部分件盘上是 CRLF、部分 LF）——这正是该工具存在的理由（它逐文件用
   `git check-attr` 解析 `text`/`eol`，不自己猜），所以本片**不**用「盘上 0 个 CRLF」作判据；
 - 新增/修改件均为 `text eol=lf`（`git check-attr` 实测），入库字节一律 LF。

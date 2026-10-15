@@ -1,0 +1,46 @@
+275 — 边界 / 冻结面（片66：O-1 收口 + brief 顶部项复核）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15 / tag `m2svr`
+base = walgit/master `2fc29deb95d80f6aaf30eeac3040636ddd34d0a7`；head = 本片提交（追加在 `2fc29deb9` 之后）
+====================================================================================================
+
+# 1) 改件清单（全部 = 本卡证据目录内；生产/协议/存储面 = 0）
+
+$ git add -N <本片 3 个新件>; git diff --name-status <base> -- mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/272-boundary.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/273-o1-count-closeout.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/274-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/275-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+
+# 2) 冻结面（必须全空）
+
+$ git diff --name-only <base> -- src/ sql/ MirClient       mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins/ src/BotSrv       mir2-rs/tests/parity/m3
+
+（0 行 = 空）
+
+# 3) 零生产源码面
+
+$ git diff --name-only <base> -- '*.rs' '*.toml' '*.py' '*.ps1' '*.cs'
+
+（0 行 = 空 —— 本片**未**动 `.py`：`check_rust_window_preflight.py` / `window_handoff.py` 一字未改）
+
+# 4) 清单口径（`SHA256SUMS.txt`）
+
+- hash 一律按「仓库字节」（`SHA-256(Git blob 内容)`；`text eol=lf` 件 = CRLF→LF 归一后的字节），
+  用 `tools/evidence-hash/verify_sha256sums.py write <本目录>` 重算后再 `verify --check-extra`；
+- 本片新增/修改件均为 `text eol=lf`（`git check-attr` 实测）；
+- 件数见 `274` §3（`wc -l` 与 `verify` 同值）。
+
+# 5) 纪律
+
+- 零起栈、零游戏端口起占、零进程 kill、**零窗口 exe 构建**（四门禁的 `cargo` 调用是
+  `fmt --check` / `clippy` / `test` / `msgcodegen --check`，均只读）；
+- O-1 的 `287→283` 变异红检只在 `E:/tmp/m2svr-burst-o1/mut/` 的**副本**上做，作者 worktree 只写正本；
+- **未动** root 活脚本 `E:/tmp/openmir2-watch/client-e2e-window.sh`、**未代停** R8 泄漏栈（栈属 root）；
+- 未动共享主检出（`E:/Users/gxh/Documents/GitHub/OpenMir2`）、未动 `lanes.conf`；
+- 未动任何工具/门语义（本片只改 `272-boundary.txt` 的一个数字 + 快照语义 + README/证据）；
+- 未新增/删除 cargo 用例（101 suites / 1233 passed / 0 failed / 22 ignored，与 base 一致）；
+- 未 merge、未自签 review。
+- 判级 **L**（证据/文档 + 只读复核）；卡级 **R** 真机 DoD ①②③ 归 root 独占窗口，仍 not_verified。
