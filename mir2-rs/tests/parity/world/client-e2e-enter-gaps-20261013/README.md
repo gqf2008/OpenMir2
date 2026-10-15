@@ -1559,3 +1559,37 @@ brief 顶部（root 2026-10-14 15:0x）的离线四项早已闭环（§㊽㊾㊿
   `WINDOW_READY=NO`，唯一原因是 R8（`258` §4）。
 - 判级 **L**（就绪工具 + 文档，零生产代码、零起栈/端口/进程）；卡级 **R** 真机 ①②③ 仍归
   root 独占窗口。
+
+### 63) 窗口脚本前置门 fail-closed：起窗前必须过 R1..R8，RED 就**不构建/不占端口/不暂停车队**（2026-10-15，tag `m2svr`）—— `260`/`261`/`262`/`263`
+
+root 15:0x 的「52/752 不生效 + 跑=0 回归」判定面已由片㊴/㊽ 收口（区间零引入点；真凶 = 早于
+窗口就存在的 53 帧 `TCharDesc` 尾布局缺陷，`c61b9627a` 修 / 52 全调用点 `6cadc9fbf` / 31 `fd68e037d`），
+但**触发路径仍在**：那次实测跑的是「修复前的源 + 旧 exe（`E:\tmp\openmir2-merge-target\debug`）
++ 被泄漏栈占着 9 个游戏端口」的窗口。入库替身脚本 `client-e2e-window.fixed.sh.txt` 当时只修了
+`repo=`/`tgt=` 两行，**没有**「起窗前先过门」这一步 ⇒ 谁照它跑都会同一形态地再产一次假回归。
+
+- **改（唯一逻辑变更，`client-e2e-window.fixed.sh.txt`）**：加 `guard` 子命令（只跑
+  `check_rust_window_preflight.py` 的 R1..R8，零副作用）；`start` 加 **step 0**
+  `run_guard || exit 1`（在 `lanes-pause`/构建/起栈**之前**）；`stop` 加可选 `[LogDir]` 形参
+  （缺省 `E:\tmp\client-e2e\stack`——泄漏栈常在**别的**目录，见片62）。`run_guard` 用
+  `WINDOW_PREFLIGHT_CMD` 可注入（只为红检，不改变生产默认）。**未动**门本身
+  （`check_rust_window_preflight.py` 仍 = 片59/62 的版本）。
+- **真跑 fresh（`260` §2）**：`bash client-e2e-window.fixed.sh.txt guard`（真门，repo=`/e/tmp/m2svr-window-origin`）
+  ⇒ R1..R7 全 `[OK]`、`RESULT: RED`（唯一 RED = R8 泄漏栈）⇒ 脚本打
+  `WINDOW_PREFLIGHT_RED` + `PREFLIGHT_STOP_CMD: powershell … -LogDir E:/tmp/client-e2e/stack2 -Stop`，
+  `rc=1`。⇒ **门在本机当前状态上确实咬住，且给出的是持有占用 pid 的目录**（root 活脚本写死的是
+  `stack`，照抄它才是静默 no-op，片62 已记）。
+- **三态注入（`260` §3）**：`WINDOW_PREFLIGHT_CMD=false` ⇒ `rc=1`（拒绝）；`=true` ⇒
+  `WINDOW_GUARD_OK` `rc=0`（放行）；无参 ⇒ `用法: … guard|start|stop [LogDir]` `rc=2`。
+- **改坏必红（`261`）**：变体 A（`run_guard` 的 `return 1` → `return 0` = 门恒放行）⇒
+  `WINDOW_PREFLIGHT_CMD=false … guard` 实测 `rc=0`（**RED**：判据要的是 `rc=1`）；变异只在
+  `/e/tmp` 副本，仓内 sha256 全程 `d6648370…` 不变。变体 B（静态咬合，**不执行 start**）：
+  门行 42（含 `|| exit 1`）严格早于 `lanes-pause` 行 43。
+- **门禁（`262`）**：`fmt` rc=0 / `clippy -D warnings` rc=0 / `cargo test --workspace` 101 suites
+  **1233 passed / 0 failed / 22 ignored** rc=0 / `msgcodegen --check` 604 rc=0；
+  `check_rust_window_preflight.py --selftest` **66/66**、`window_handoff.py --selftest` **107/107**；
+  聚合门 `WINDOW_READY=NO`，唯一原因仍是 R8（G2×11/G5×2 OK）。
+- **判级 L**（脚本/门 + 只读证据，零生产代码、零起栈/端口/进程/kill；未动 root 活脚本与泄漏栈）；
+  卡级 **R** 真机 ①②③ 仍 not_verified —— 开窗唯一剩余阻塞 = **R8 泄漏栈**（属 root），
+  清栈后请用本替身 `guard`→`start`，并按 `82-two-side-window-runbook.md` §2b 压血保
+  `HP<MaxHP`（否则 53 不发、覆盖不到片㊴），再跑 `check_healthspellchanged_trigger.py --log/--capture`。

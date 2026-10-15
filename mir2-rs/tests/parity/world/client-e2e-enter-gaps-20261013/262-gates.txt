@@ -1,0 +1,57 @@
+262 — 四门禁 + 门自检（片63：窗口脚本前置门 fail-closed）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `dd48c05a0`；head = 本片提交；cwd = mir2-rs；CARGO_TARGET_DIR=/e/tmp/m2svr-target
+====================================================================================================
+
+# 0) 边界声明
+
+本片**零生产代码**：无 `.rs`/`.toml`/`.ps1`/`.cs`；`src/ sql/ MirClient/ mir2-rs/crates/protocol/
+mir2-rs/crates/storage/ mir2-rs/bins/ src/BotSrv/ mir2-rs/tests/parity/m3/` 全空。改动全部在
+`mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`：1 件脚本（`client-e2e-window.fixed.sh.txt`）
++ `260`/`261`/`262`/`263` + README §63 + SHA256SUMS。见 `263-boundary.txt`。
+
+# 1) 四门禁（原始件 `E:/tmp/m2svr-burst-0800/gates/{fmt,clippy,test,msgcodegen}.txt`）
+
+$ cargo fmt --all -- --check
+rc=0（无输出）
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.94s
+rc=0
+
+$ cargo test --workspace --offline
+101 result-lines：1233 passed / 0 failed / 22 ignored（rc=0；无 FAILED/panicked）
+（与 base 逐项一致 ⇒ 本片未动任何 cargo 用例）
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+# 2) 门自检（本片**未改** `check_rust_window_preflight.py`；仍复跑防漂移）
+
+$ python -I -B check_rust_window_preflight.py --selftest     ⇒ SELFTEST OK (66/66)   rc=0
+$ python -I -B window_handoff.py --selftest                  ⇒ SELFTEST OK (107/107) rc=0
+
+# 2b) 聚合门（入库替身脚本口径）
+
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin \
+    --target-dir E:/tmp/m2svr-window-target --window-script ./client-e2e-window.fixed.sh.txt
+  OK  G2 ×11（各判据工具自检）
+  OK  G5 ×2（替身脚本 repo=/tgt= 与本计划一致；**本片改脚本后仍 OK**）
+  RED G1（唯一原因 = R8，见 §3）⇒ `WINDOW_READY=NO`  rc=1
+⇒ **本片不改变卡级结论**：开窗唯一剩余阻塞仍是 R8（泄漏的修复前栈，属 root；本线不代停）。
+
+# 3) 窗口脚本自身的三态 + 真跑（原始件 `E:/tmp/m2svr-burst-0800/0{1,2,3}-*.txt`）
+
+- `01-guard-real.txt`：真实前置门（repo=/e/tmp/m2svr-window-origin）⇒ `RESULT: RED`（唯一 RED = R8
+  泄漏栈）+ `WINDOW_PREFLIGHT_RED` + `PREFLIGHT_STOP_CMD: ... -LogDir E:/tmp/client-e2e/stack2 -Stop`，rc=1。
+- `02-guard-inject.txt`：`WINDOW_PREFLIGHT_CMD=false ⇒ rc=1` / `=true ⇒ rc=0 WINDOW_GUARD_OK` /
+  无参 ⇒ `用法 … guard|start|stop [LogDir]` rc=2。
+- `03-redcheck.txt`：变体 A（`return 1`→`return 0`）⇒ 门 RED 时 rc=0【RED】；还原后 sha256 不变。
+  变体 B（静态咬合）：门行 42（含 `|| exit 1`）< `lanes-pause` 行 43。
+
+# 4) 判级与纪律
+
+判级 **L**（就绪脚本/文档 + 只读证据；无 RNG 抽数/时序/落库/战斗数值面）。零起栈 / 零端口占用 /
+零 kill / 零客户端启动；未动共享主检出 / root 活脚本 / 泄漏栈；未 merge、未自签 review。
+卡级 R 真机 DoD ①②③ 仍 not_verified（等 root 清 R8 后开窗）。

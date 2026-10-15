@@ -1,0 +1,84 @@
+260 — 窗口脚本前置门 fail-closed（片63 收口 root 15:0x「假回归」的**触发路径**）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15
+base = origin/master `dd48c05a0`；head = 本片提交；cwd = mir2-rs；CARGO_TARGET_DIR=/e/tmp/m2svr-target
+====================================================================================================
+
+# 0) 本片要收的是什么
+
+`brief-m2svr-next.md` 顶部 root 2026-10-14 15:0x「52/752 客户端不生效 + 跑=0 回归」的
+**判定面**已由片㊴/㊽ 收口（区间 `ad0592b19..8e491f81e` 零引入点；真凶 = 早于窗口就存在的
+53 帧 `TCharDesc` 尾布局缺陷，`c61b9627a` 修；52 全调用点 `6cadc9fbf`、31 `fd68e037d`）。
+但**触发路径仍在**：那次实测跑的是「修复前的源 + 旧 exe + 被泄漏栈占着端口」的窗口
+（`E:/tmp/client-e2e/stack2`，起于 2026-10-14 14:55，game-svr pid 30284 =
+`E:\tmp\openmir2-merge-target\debug\game-svr.exe`）。只要窗口还能这样起，同一类**假回归**
+（把旧件的失败读成新 master 的回归）就会再发生一次，白烧一个窗口。
+
+⇒ 本片把「窗口起不来就别起」做进**入库替身脚本**
+`client-e2e-window.fixed.sh.txt`：`start` 之前无条件过 `check_rust_window_preflight.py`
+（R1..R8），RED 即拒绝（退出码 1，**不暂停车队 / 不构建 / 不占端口**），并在 RED 文本里
+给出**由 pid 文件校验过**的停栈命令（片62 的 R8 校验）。零生产代码。
+
+# 1) 改动（`client-e2e-window.fixed.sh.txt`，diff 只有 3 处 + 头注释）
+
+```
++ guard)  新增子命令：只跑前置门，零副作用（不起栈、不暂停车队、不构建）
++ start)  加 step 0：`run_guard || exit 1`——在 `lanes-pause` **之前**
++ stop)   加可选 `[LogDir]` 形参（缺省 E:\tmp\client-e2e\stack）——泄漏栈常在别的目录
++ run_guard(): eval "$preflight_cmd"（可注入 WINDOW_PREFLIGHT_CMD，只为红检/自检）；
+             rc!=0 ⇒ 打印门输出尾部 + WINDOW_PREFLIGHT_RED + PREFLIGHT_STOP_CMD（grep 门的
+             `-LogDir <dir> -Stop`，该 dir 已由 R8 的 pid 文件校验持有全部占用 pid）
+```
+
+sha256（本片提交内）= `d6648370f3d1c64bb301288699a5c81284d5608aa6f9b9f7b74f0ddeafe1ea20`
+
+# 2) 真跑（本 tick 实拍，真实前置门；原始件 `E:/tmp/m2svr-burst-0800/01-guard-real.txt`）
+
+```
+$ bash client-e2e-window.fixed.sh.txt guard          # 未注入 ⇒ 真前置门 repo=/e/tmp/m2svr-window-origin
+[OK] R1 构建源 ... 含修复提交 d16b5199d9 / 0d0d62a695 / c61b9627a1 / 6cadc9fbf9 / fd68e037db（5/5）
+[OK] R2 源码含 ③ 读数标记（vr/vis/new/af）
+[OK] R3 MapInfo 第 26 section 逻辑名 == '0'
+[OK] R4 四点（(291,666)/(291,651) outside；(289,618)/(287,620) inside）
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=da2df1fdbd 相对基线 origin/master@d02efa23f3 生产路径零差异
+[OK] R7 出处清单 source_head=da2df1fdbd，6 件 exe sha256 逐字节一致
+[OK] R8 停栈目录校验：E:/tmp/client-e2e/stack2/rust-stack.pid.json 持有全部占用端口的 pid
+     （[9100, 13052, 29240, 30284, 33132, 34944]）
+RED R8: 窗口槽位被占 —— 9 端口 LISTENING（5000/5100/5500/5600/5700/6000/7000/7100/7200）
+         ... 先停栈： powershell ... start_rust_stack.ps1 -LogDir E:/tmp/client-e2e/stack2 -Stop
+RED R8: 在跑的 game-svr.exe（pid 30284）来自 E:\tmp\openmir2-merge-target\debug\（修复前/异源）
+RESULT: RED
+WINDOW_PREFLIGHT_RED  （拒绝起窗：源/槽位/出处未过前置门；零副作用：未暂停车队/未构建/未起栈）
+PREFLIGHT_STOP_CMD: powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir E:/tmp/client-e2e/stack2 -Stop
+rc=1
+```
+
+⇒ **门在真环境的当前状态（R8 泄漏栈）上确实咬住**，并把**正确的**停栈目录（`stack2`，不是
+root 活脚本写的 `stack`）交到操作者手里。本线**未代停**（窗口归 root）。
+
+# 3) 三态注入（原始件 `E:/tmp/m2svr-burst-0800/02-guard-inject.txt`）
+
+```
+$ WINDOW_PREFLIGHT_CMD=false bash client-e2e-window.fixed.sh.txt guard   # 门 RED ⇒ 必须拒绝
+WINDOW_PREFLIGHT_RED ...
+rc=1
+
+$ WINDOW_PREFLIGHT_CMD=true bash client-e2e-window.fixed.sh.txt guard    # 门 GREEN ⇒ 必须放行
+WINDOW_GUARD_OK
+rc=0
+
+$ bash client-e2e-window.fixed.sh.txt                                    # 用法
+用法: client-e2e-window.fixed.sh.txt guard|start|stop [LogDir]
+rc=2
+```
+
+# 4) 口径与边界
+
+- 前置门是**已有**的 `check_rust_window_preflight.py`（片59/62 收口的 R1..R8），本片**不改**它；
+  本片只把「起窗前必须过门」写进**入库替身脚本**——即 root 活脚本里缺的那一步。
+- 本片不碰 root 的活脚本 `E:/tmp/openmir2-watch/client-e2e-window.sh`（不在写集），只提供替身。
+- 只读面：真跑只读 git / exe hash / 端口；**零起栈、零端口占用、零 kill、零构建**。
+- 判级 **L**（就绪脚本/文档，零生产代码，无 RNG 抽数/时序/落库/战斗数值面）。
+- 卡级 R 真机 DoD ①②③ **不变、仍 not_verified**：需 root 清 R8 后用本替身起窗，按
+  `82-two-side-window-runbook.md` §2b 压血保 `HP<MaxHP`（否则 53 不发、覆盖不到片㊴），
+  再跑 `check_healthspellchanged_trigger.py --log/--capture` 的 T1/T2/T3。
