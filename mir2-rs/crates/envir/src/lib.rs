@@ -17,10 +17,12 @@ pub mod castle;
 pub mod conf;
 pub mod error;
 pub mod guardlist;
+pub mod makeitem;
 pub mod mapfile;
 pub mod mapinfo;
 pub mod mapquest;
 pub mod merchant;
+pub mod minimap;
 pub mod mongen;
 pub mod npcs;
 pub mod paths;
@@ -37,6 +39,7 @@ pub use castle::{
 };
 pub use conf::{ClientConf, GameSvrConf, NakedAbility};
 pub use error::EnvirError;
+pub use makeitem::{parse_make_item_lines, MakeItem, MakeItemRegistry, MAKE_ITEM_TEXT_SPLIT};
 pub use mapfile::{
     attach_points, load_map_file, parse_map_bytes, DoorStatus, MapCell, MapDoor, MapFile,
     CELL_BYTES, DOOR_BIT, DOOR_MERGE_RANGE, DOOR_POINT_MASK, HEADER_BYTES, WALL_BIT,
@@ -52,6 +55,9 @@ pub use mapquest::{
 pub use merchant::{
     parse_merchant_line, MerchantRecord, MERCHANT_DEFAULT_PRICE_RATE, MERCHANT_PRICE_RATE_MIN,
     MERCHANT_SCRIPT_DIR, MERCHANT_TEXT_SPLIT,
+};
+pub use minimap::{
+    load_minimap, parse_minimap_line, MiniMapEntry, MiniMapRegistry, MINIMAP_SEPARATOR,
 };
 pub use mongen::{
     mon_gen_count, parse_mon_gen_line, MonGenInfo, MON_GEN_THREAD_MON_LIMIT, TEXT_SPLIT_CONST,

@@ -13,6 +13,7 @@ pub mod ability;
 pub mod attackwire;
 pub mod bag;
 pub mod chat;
+pub mod contentload;
 pub mod downlink;
 pub mod feature;
 pub mod ground;
