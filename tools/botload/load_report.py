@@ -149,8 +149,16 @@ def summarize_tick(stats, count):
     return out
 
 
-def summarize_mem(rows, tail_sec=60):
-    """按进程归算内存曲线：峰值/均值/最后 tail_sec 的斜率（MB/s）。"""
+def summarize_mem(rows, tail_sec=60, peak_mean_pct=5.0):
+    """按进程归算内存曲线：峰值/均值/最后 tail_sec 的斜率（MB/s）。
+
+    另给「峰值-均值」标注（README.md 判据表「内存末段斜率」行：M5 长跑另判「峰值-均值 < 5%」）：
+      · peak_mean_gap_pct = 100*(ws_peak_mb - ws_mean_mb)/ws_mean_mb（ws_mean_mb<=0 ⇒ None）
+      · peak_mean_pct     = 生效阈值回显（默认 5.0）
+      · peak_mean_ok      = gap 非 None 且 gap < peak_mean_pct
+    **只作标注，不并入 tier["verdict"]**（README 明写「M5 长跑另判」；
+    并入会把现有档位 GREEN 翻红 = R 级判据变更，须另开卡）。
+    """
     by_proc = {}
     for r in rows:
         by_proc.setdefault(r["proc"], []).append(r)
@@ -168,15 +176,22 @@ def summarize_mem(rows, tail_sec=60):
             slope = (tail[-1]["ws_mb"] - tail[0]["ws_mb"]) / dt if dt > 0 else 0.0
         else:
             slope = None
+        ws_peak = round(max(ws), 1)
+        ws_mean = round(sum(ws) / len(ws), 1)
+        # 「峰值-均值」标注（README「内存末段斜率」行：M5 长跑另判）。只标注，不改 verdict。
+        peak_mean_gap = (round(100.0 * (ws_peak - ws_mean) / ws_mean, 1) if ws_mean > 0 else None)
         out[proc] = {
             "samples": len(rs),
-            "ws_peak_mb": round(max(ws), 1),
-            "ws_mean_mb": round(sum(ws) / len(ws), 1),
+            "ws_peak_mb": ws_peak,
+            "ws_mean_mb": ws_mean,
             "ws_last_mb": round(ws[-1], 1),
             "priv_peak_mb": round(max((r.get("priv_mb") or 0) for r in rs), 1),
             "slope_tail_mb_per_s": (round(slope, 3) if slope is not None else None),
             "tail_window_s": round((last.get("t_ms", 0) - tail[0].get("t_ms", 0)) / 1000.0, 1) if tail else 0,
             "window_s": round((last.get("t_ms", 0) - t0) / 1000.0, 1),
+            "peak_mean_gap_pct": peak_mean_gap,
+            "peak_mean_pct": peak_mean_pct,
+            "peak_mean_ok": (peak_mean_gap is not None) and peak_mean_gap < peak_mean_pct,
         }
     return out
 
@@ -328,7 +343,7 @@ def cmd_summarize(args):
     stats = load_ndjson(args.stats) if args.stats else []
     tier = summarize_tick(stats, args.count)
     if args.mem:
-        tier["mem"] = summarize_mem(load_ndjson(args.mem))
+        tier["mem"] = summarize_mem(load_ndjson(args.mem), tail_sec=args.mem_tail_sec)
     if args.login_conns and os.path.exists(args.login_conns):
         tier["login_conn_diag"] = summarize_login_conns(load_ndjson(args.login_conns))
     if args.hostload and os.path.exists(args.hostload):
@@ -460,6 +475,98 @@ def cmd_selftest(_args):
     expect(abs(s_flat["slope_tail_mb_per_s"]) < 0.01,
            f"平坦曲线斜率应 ≈0，实得 {s_flat['slope_tail_mb_per_s']}")
     expect(s_up["ws_peak_mb"] == 200.0 and s_flat["ws_peak_mb"] == 100.0, "峰值归算错")
+
+    # 4b) 「峰值-均值」判据（README「内存末段斜率」行：M5 长跑另判 峰值-均值 < 5%）：
+    #     100 点 100MB + 1 点 150MB 的尖峰 ⇒ gap≈50% ⇒ peak_mean_ok=False；
+    #     平坦 ⇒ gap≈0 ⇒ True。布尔随数据变（非恒值），阈值也有牙齿（5% 判假、60% 判真）。
+    mem_spike = ([{"t_ms": i * 1000, "proc": "GameSvr", "pid": 1, "ws_mb": 100, "priv_mb": 120}
+                  for i in range(100)]
+                 + [{"t_ms": 100 * 1000, "proc": "GameSvr", "pid": 1, "ws_mb": 150, "priv_mb": 170}])
+    s_spike = summarize_mem(mem_spike)["GameSvr"]
+    expect(s_spike["peak_mean_ok"] is False and s_spike["peak_mean_gap_pct"] >= 49.0,
+           f"尖峰（100×100MB + 1×150MB）gap 应 ≈50% 且 peak_mean_ok=False，实得 "
+           f"gap={s_spike['peak_mean_gap_pct']} ok={s_spike['peak_mean_ok']}")
+    expect(s_flat["peak_mean_ok"] is True and abs(s_flat["peak_mean_gap_pct"]) < 0.01,
+           f"平坦曲线 gap 应 ≈0 且 peak_mean_ok=True，实得 "
+           f"gap={s_flat['peak_mean_gap_pct']} ok={s_flat['peak_mean_ok']}")
+    expect(s_spike["peak_mean_pct"] == 5.0, "peak_mean_pct 应回显默认阈值 5.0")
+    expect(summarize_mem(mem_spike, peak_mean_pct=60.0)["GameSvr"]["peak_mean_ok"] is True,
+           "峰值-均值阈值有牙齿：尖峰在 5% 下判假、在 60% 下判真")
+
+    # 4c) --mem-tail-sec 接线牙：「前 50s 升、后 50s 平」⇒ tail=50 斜率≈0、tail=100 斜率>0；
+    #     且不传 tail_sec 必须逐字段等价于显式 60（默认行为不变，不破坏既有报告口径）。
+    mem_bend = ([{"t_ms": i * 1000, "proc": "GameSvr", "pid": 1, "ws_mb": 100 + i, "priv_mb": 120 + i}
+                 for i in range(51)]
+                + [{"t_ms": i * 1000, "proc": "GameSvr", "pid": 1, "ws_mb": 150, "priv_mb": 170}
+                   for i in range(51, 101)])
+    b50 = summarize_mem(mem_bend, tail_sec=50)["GameSvr"]
+    b100 = summarize_mem(mem_bend, tail_sec=100)["GameSvr"]
+    expect(abs(b50["slope_tail_mb_per_s"]) < 0.01,
+           f"后 50s 平的曲线在 tail_sec=50 斜率应 ≈0，实得 {b50['slope_tail_mb_per_s']}")
+    expect(b100["slope_tail_mb_per_s"] > 0.4,
+           f"含上升段的曲线在 tail_sec=100 斜率应 >0.4，实得 {b100['slope_tail_mb_per_s']}")
+    expect(b100["tail_window_s"] > b50["tail_window_s"],
+           "tail_window_s 必须随 tail_sec 变（参数真接线，非死参数）")
+    expect(summarize_mem(mem_bend)["GameSvr"] == summarize_mem(mem_bend, tail_sec=60)["GameSvr"],
+           "不传 tail_sec 必须逐字段等价于 tail_sec=60（默认行为不变）")
+
+    # 4d) 「峰值-均值」只作标注、不并入 verdict（README 明写「M5 长跑另判」）：
+    #     即便内存是尖峰，login-only 判据仍 GREEN，且 fails 里不得出现「峰值」。
+    tier_pm = summarize_tick(stats, 100)
+    tier_pm["mem"] = summarize_mem(mem_spike)
+    j_pm = judge(tier_pm, DEFAULT_THRESHOLDS, ("login",))
+    expect(j_pm["verdict"] == "GREEN" and not any("峰值" in f for f in j_pm["fails"]),
+           "尖峰内存的 peak_mean 标注不得把档位翻红（只标注不改判 = 非 R 级判据变更）")
+
+    # 4e) CLI 缝牙齿（2026-10-15 验证者 F-1/F-2 补）：4c 只钉了**函数**默认与接线，
+    #     真实调用方走 argparse（load_gate.ps1:267），故此处钉两个 CLI 级不变式：
+    #     (i) argparse 默认值必须 =60（改默认 = 静默改变既有报告口径）；
+    #     (ii) --mem-tail-sec 必须真接到 call site（解析后丢弃/不接线 ⇒ 与默认逐字节相同 ⇒ 必红）。
+    import subprocess
+    import tempfile
+    with tempfile.TemporaryDirectory() as _td:
+        _mem = os.path.join(_td, "mem.ndjson")
+        _stats = os.path.join(_td, "stats.ndjson")
+        with open(_mem, "w", encoding="utf-8", newline=chr(10)) as _f:
+            for _i in range(51):
+                print(json.dumps({"t_ms": _i * 1000, "proc": "GameSvr", "pid": 1,
+                                  "ws_mb": 100 + _i, "priv_mb": 120 + _i}), file=_f)
+            for _i in range(51, 101):
+                print(json.dumps({"t_ms": _i * 1000, "proc": "GameSvr", "pid": 1,
+                                  "ws_mb": 150, "priv_mb": 170}), file=_f)
+        with open(_stats, "w", encoding="utf-8", newline=chr(10)) as _g:
+            for _i in range(2):
+                print(json.dumps({"t_ms": (_i + 1) * 1000, "login_ok": 100, "tick_samples": 5,
+                                  "tick_sum_ms": 100, "tick_max_ms": 30, "conn_lost": 0,
+                                  "hist": [0] * 201}), file=_g)
+
+        def _cli_mem(_extra):
+            _tag = ("_".join(_extra) or "default").replace("-", "")
+            _out = os.path.join(_td, "r_%s.json" % _tag)
+            _p = subprocess.run([sys.executable, "-I", "-B", os.path.abspath(__file__),
+                                 "summarize", "--stats", _stats, "--count", "100",
+                                 "--mem", _mem, "--out", _out] + _extra,
+                                capture_output=True, text=True)
+            # rc=0/1 = 正常退出（1 只是 judge 判 RED，与本节所钉的接线/默认无关）；其它值 = 真崩溃。
+            expect(_p.returncode in (0, 1),
+                   "CLI summarize 应 rc in (0,1)，实得 " + str(_p.returncode) + "；stderr 尾部=" + _p.stderr[-200:])
+            with open(_out, encoding="utf-8") as _fh:
+                return json.load(_fh)["mem"]["GameSvr"]
+
+        _m_default = _cli_mem([])
+        _m_explicit = _cli_mem(["--mem-tail-sec", "60"])
+        _m_20 = _cli_mem(["--mem-tail-sec", "20"])
+        expect(_m_default["tail_window_s"] == 60.0,
+               "CLI 默认 --mem-tail-sec 必须 60（改默认=静默改既有报告口径），实得 "
+               + str(_m_default["tail_window_s"]))
+        expect(_m_default == _m_explicit,
+               "CLI 不传 --mem-tail-sec 必须与 --mem-tail-sec 60 逐字段等价")
+        expect(_m_20["tail_window_s"] == 20.0,
+               "--mem-tail-sec 20 必须真接线到 call site（解析后丢弃必红），实得 tail_window_s="
+               + str(_m_20["tail_window_s"]))
+        expect(abs(_m_20["slope_tail_mb_per_s"]) < 0.01 < _m_default["slope_tail_mb_per_s"],
+               "后 20s 平 / 默认 60s 含上升段 ⇒ 两档斜率必须不同（死参数必红）：20⇒"
+               + str(_m_20["slope_tail_mb_per_s"]) + " vs 默认⇒" + str(_m_default["slope_tail_mb_per_s"]))
 
     # 5) 「缺 tick 样本」默认判 RED，且 --criteria 不能把它变成绿灯（2026-10-10 的恒绿假门禁回归项）
     stats5 = [{"t_ms": 1000, "login_ok": 100, "tick_samples": 0, "tick_sum_ms": 0, "tick_max_ms": 0,
@@ -656,6 +763,9 @@ def main():
     s = sub.add_parser("summarize")
     s.add_argument("--stats", required=True, help="BotSrv 落的 load_stats.ndjson")
     s.add_argument("--mem", default="", help="内存采样 mem.ndjson（可选）")
+    s.add_argument("--mem-tail-sec", type=int, default=60,
+                   help="内存末段斜率窗口（秒）；默认 60（不传 ⇒ 与既有报告口径逐字段一致）。"
+                        "只影响 slope_tail_mb_per_s / tail_window_s")
     s.add_argument("--count", type=int, required=True, help="目标假人数（档位）")
     s.add_argument("--stagger-ms", type=int, default=0)
     s.add_argument("--hold-sec", type=int, default=0)

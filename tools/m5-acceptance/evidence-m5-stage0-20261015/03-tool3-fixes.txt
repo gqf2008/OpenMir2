@@ -1,0 +1,8 @@
+# 03 tool3 脚本语法检查（修复后）
+tools/m5-acceptance/stage_gray_rollback.ps1: PARSE OK
+tools/m5-acceptance/start_full_rust_stack.ps1: PARSE OK
+
+# 04 tool3 验证者 I1/D1/D2 三处修复的落点（grep 证据）
+370:    if ($g.name -eq 'MySQL') { Write-Output ("SKIP-STOP MySQL pid={0}（共享 DB 永不由本脚本停）" -f $g.pid); continue }
+452:  Write-Output ("RED: 目标端口已被监听 {0} —— 先停掉现有栈再起（用**持有该端口的栈自己的起栈器 -Stop**：tools/m2-acceptance/start_rust_stack.ps1 -LogDir <同一起栈的 -LogDir> -Stop，或本脚本 -Stop）；**不要**用 E:\MirServer\start-all.ps1 -Stop —— 它的 targets 含 mysqld，会停掉共享 DB（2026-10-15 验证者 D1）" -f ($busy -join ','))
+553:    Write-Output 'SELFTEST_RED RED: -SelfTestRed 与 -SkipFlow 互斥（无 flow 相位的非零 rc 不是改坏必红证据，见验证者 I1）；真机红检归 R 窗口'

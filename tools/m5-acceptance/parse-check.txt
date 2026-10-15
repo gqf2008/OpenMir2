@@ -1,0 +1,7 @@
+parse-check @ 2026-10-15T20:15:08.1954799+08:00  (PowerShell 7.6.6)
+工具：$sb = [scriptblock]::Create((Get-Content -Raw <f>))  —— 仅解析，不执行（不起任何进程/栈/端口）
+
+start_full_rust_stack.ps1: PARSE OK   bytes=18165  sha256=de4fd63b4e9cfb298ccfcaac1b9db357aa8f5d8962f17926ccd1f5820e4140d2
+stage_gray_rollback.ps1: PARSE OK   bytes=28333  sha256=04f687bfd87939767aaee9be9ea76ee5d3fec51ac94ecc52a229ca16e256d830
+
+files with parse errors: 0
