@@ -1,0 +1,53 @@
+268 — 边界 / 冻结面（片64：R7 恢复命令可执行化）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15 / tag `m2svr`
+base = origin/master `14421a4f01c0c4829f32dad80252a6887f0eacc3`；head = 本片提交
+====================================================================================================
+
+# 1) 改件清单（全部 = 本卡证据目录内；生产/协议/存储面 = 0）
+
+$ git diff --name-status <base> -- mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+
+  M  …/check_rust_window_preflight.py      # R7 恢复命令（mark + WINDOW_BUILD_PKGS + provenance_record_command + 3 处消息 + 5 条 selftest 牙）
+  M  …/client-e2e-window.fixed.sh.txt      # run_guard 在 RED 时额外提取并印 PREFLIGHT_RECORD_CMD
+  M  …/82-two-side-window-runbook.md       # 新增 §1b：R1..R8 的 RED 含义与可照抄恢复动作表
+  M  …/README.md                          # 追加 §64 + 订正 §⑧ 的陈旧 selftest 计数标注
+  A  …/264-r7-recovery-cmd.txt             # 主证据（改前/改后 + 真门原始输出）
+  A  …/265-redcheck-r7-recovery.txt        # 改坏必红（工具侧 68/71；脚本侧 1 → 0）
+  A  …/266-selftest-r7-recovery.txt        # 改后 selftest 全文（71/71）
+  A  …/267-gates.txt                       # 四门禁 + 门自检 + 聚合门
+  A  …/268-boundary.txt                    # 本件
+  M  …/SHA256SUMS.txt                      # 清单重算（仓库字节口径；`verify_sha256sums.py write`）
+
+> 行列 = `git diff --name-status`；`head` 就是本片提交（单一提交，无 amend/rebase 历史）。
+
+# 2) 冻结面（必须全空）
+
+$ git diff --name-only <base>..<head> -- src/ sql/ MirClient \
+      mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins/ src/BotSrv \
+      mir2-rs/tests/parity/m3
+（空 —— 0 行）
+
+# 3) 零生产源码面
+
+$ git diff --name-only <base>..<head> -- '*.rs' '*.toml' '*.ps1' '*.cs'
+（空 —— 0 行）
+
+# 4) 证据清单口径（`SHA256SUMS.txt`）
+
+- 按项目约定：hash **一律按「仓库字节」**（`SHA-256(Git blob 内容)`；文本文件 = CRLF→LF 归一后的字节），
+  用 `tools/evidence-hash/verify_sha256sums.py write <本目录>` 重算后再 `verify`；
+- 本片读写的文件全部是纯 LF（0 个 CRLF 行）—— 证据件均由脚本/工具直接落盘并 `tr -d '\r'` 处理过
+  python 的 CRLF stdout。
+
+# 5) 纪律
+
+- 零起栈、零游戏端口起占、零进程 kill、**零窗口 exe 构建**（`cargo build` 只作为命令文本出现在
+  `264` §3 的证据里，本片从未执行；四门禁的 cargo 调用是只读检查/测试）；
+- **未动** root 活脚本 `E:/tmp/openmir2-watch/client-e2e-window.sh`（不在写集；只提供入库替身）；
+- **未代停** R8 泄漏栈（栈属 root；本片只读探针 + 把工具打印的 `PREFLIGHT_STOP_CMD` 记进证据）；
+- 未动共享主检出（`E:/Users/gxh/Documents/GitHub/OpenMir2`），未动 `lanes.conf`；
+- 未改判据语义（`RUST_BUILD_PATHS` / sha256 对账 / `record_provenance` 的信任边界），只在 R7 的
+  RED/PREREQ 侧追加一行可照抄命令 ⇒ 绿径逐字节不变（`264` §3.3）；
+- 未新增/删除任何 cargo 用例（`cargo test --workspace` 1233 passed / 0 failed / 22 ignored 与 base 一致）；
+- 未 merge、未自签 review。
+- 判级 **L**（就绪脚本/文档 + 只读证据）；卡级 **R** 真机 DoD ①②③ 归 root 独占窗口，仍 not_verified。

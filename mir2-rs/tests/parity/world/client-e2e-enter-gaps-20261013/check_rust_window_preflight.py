@@ -177,6 +177,50 @@ def slot_stop_command(slot_log_dir: str) -> str:
         "<源>/tools/m2-acceptance/start_rust_stack.ps1 "
         f"-LogDir {slot_log_dir} -Stop"
     )
+
+
+# R7 恢复命令（片64）：与 R8 的 `PREFLIGHT_STOP_CMD` 对等 —— R7 的 RED/PREREQ 必须自带**可照抄**的
+# 恢复动作，否则一次 R7 RED 就把开窗卡死。
+PROVENANCE_RECORD_CMD_MARK = "PREFLIGHT_RECORD_CMD:"
+CHECKER_SELF_NAME = "check_rust_window_preflight.py"
+# R7 恢复命令的 `-p` 列表 = 窗口脚本第 2 步逐字同源（与 `WINDOW_BINS` 一一对应）。
+WINDOW_BUILD_PKGS: tuple[str, ...] = (
+    "game-svr",
+    "game-gate",
+    "login-srv",
+    "login-gate",
+    "sel-gate",
+    "db-srv",
+)
+
+
+def provenance_record_command(repo: str, target_dir: str, provenance_path: str) -> str:
+    """R7 恢复命令（片64）：**先重编六件 exe，编译成功才重录出处清单**。
+
+    为什么需要（2026-10-15 实测到的操作缺口）：R8 的 RED 自带可照抄的停栈命令
+    （`PREFLIGHT_STOP_CMD`，片63），而 R7 的 RED 只有一句散文「先重编译 + 重录清单」；
+    操作员得回翻证据包才拿到确切命令，而 `client-e2e-window.fixed.sh.txt start` 又在
+    `run_guard || exit 1` 处停住（**不会**替操作员编译）⇒ 一次 R7 RED（源前移且 `mir2-rs/**`
+    有生产差异、或暖 target 里是别处拷来的旧件）就把开窗卡死。
+
+    **fail-closed 要点**：`record_provenance` 只是把**当前** `--ref` 盖到清单上，它**不校验**
+    exe 是否真由该 ref 编出（这是该子命令的信任边界）⇒ 「编译失败也录制」会把旧件洗成新源。
+    故命令用 shell 的 `&&` 把录制**门在编译成功之后**（`cargo build` 非零 ⇒ 整条链短路，
+    清单保持原样 ⇒ R7 继续 RED，不会假绿）。
+
+    形态 = **bash 单行**（`&&` 链）：窗口脚本与 root 的手册命令都在 MSYS bash 里执行，
+    `cd /e/tmp/...` / `cd E:/tmp/...` 两种写法都能用；路径加双引号以容忍空格。
+    """
+    checker = os.path.join(os.path.dirname(os.path.abspath(__file__)), CHECKER_SELF_NAME)
+    pkgs = " ".join(f"-p {p}" for p in WINDOW_BUILD_PKGS)
+    return (
+        f'cd "{repo}/mir2-rs" && CARGO_TARGET_DIR="{target_dir}" '
+        f"cargo build --offline {pkgs} && "
+        f'python -I -B "{checker}" --repo "{repo}" --ref HEAD --target-dir "{target_dir}" '
+        f'--provenance "{provenance_path}" --record-provenance'
+    )
+
+
 HASH_CHUNK = 1024 * 1024
 # MapInfo 逻辑名分隔符（`crates/envir/src/mapinfo.rs:28`：空格/逗号/制表）
 _MAPINFO_SEPS = " \t,"
@@ -611,7 +655,9 @@ def binary_provenance_findings(
             [],
             [
                 f"PREREQ_RED R7: 缺出处清单 {provenance_path}"
-                "（先 `--record-provenance` 录制，再复跑本门）"
+                "（先编译 + 录制，再复跑本门。"
+                f"{PROVENANCE_RECORD_CMD_MARK} "
+                f"{provenance_record_command(repo, target_dir, provenance_path)}）"
             ],
         )
     try:
@@ -636,7 +682,10 @@ def binary_provenance_findings(
                 f"RED R7: 出处清单 source_head={head[:10]} != 当前构建源 {ref}={oid[:10]}"
                 f" 且在影响六件 exe 的路径上有 {len(moved)} 件差异（{', '.join(moved[:3])}"
                 + (" …" if len(moved) > 3 else "")
-                + "）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）；先重编译 + 重录清单"
+                + "）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）；先重编译 + 重录清单。"
+                + PROVENANCE_RECORD_CMD_MARK
+                + " "
+                + provenance_record_command(repo, target_dir, provenance_path)
             )
         else:
             infos.append(
@@ -660,7 +709,10 @@ def binary_provenance_findings(
         problems.append(
             f"RED R7: {len(bad)} 件 exe 与出处清单不一致（{', '.join(bad[:4])}"
             + (" …" if len(bad) > 4 else "")
-            + ") ⇒ 窗口会从旧/异构 exe 起栈；先重编译 + 重录清单"
+            + ") ⇒ 窗口会从旧/异构 exe 起栈；先重编译 + 重录清单。"
+            + PROVENANCE_RECORD_CMD_MARK
+            + " "
+            + provenance_record_command(repo, target_dir, provenance_path)
         )
     if not problems:
         # 末行必须报**清单里的** `source_head`（不是当前 ref 的 oid）：两者在
@@ -989,6 +1041,40 @@ def selftest() -> int:
             fh.write(b"STALE")
         oks, probs, pre = binary_provenance_findings(tmp, fifth, win_tgt, prov, r7_bins)
         chk("r7-hash-mismatch-red", not oks and len(probs) == 1 and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        # 片64：R7 的 RED 必须自带**可照抄**的恢复命令（与 R8 的 `PREFLIGHT_STOP_CMD` 对等）。
+        # 改坏必红：删掉 `binary_provenance_findings` 里那两处 `PROVENANCE_RECORD_CMD_MARK` 拼接
+        # ⇒ `r7-red-names-record-cmd`（本牙）与 `r7-prereq-names-record-cmd` 必红。
+        hash_red = " | ".join(probs)
+        chk(
+            "r7-red-names-record-cmd",
+            PROVENANCE_RECORD_CMD_MARK in hash_red
+            and "--record-provenance" in hash_red
+            and f'--provenance "{prov}"' in hash_red,
+            repr(hash_red[-220:]),
+        )
+        oks, probs, pre = binary_provenance_findings(tmp, third, win_tgt, prov, r7_bins)
+        chk(
+            "r7-stale-head-red-names-record-cmd",
+            not oks and not pre
+            and any(
+                PROVENANCE_RECORD_CMD_MARK in p and "cargo build --offline" in p for p in probs
+            ),
+            repr(" | ".join(probs)[-220:]),
+        )
+        _rec_cmd = provenance_record_command(tmp, win_tgt, prov)
+        chk(
+            "r7-record-cmd-builds-six-pkgs",
+            len(WINDOW_BUILD_PKGS) == 6
+            and all(f"-p {p}" in _rec_cmd for p in WINDOW_BUILD_PKGS)
+            and _rec_cmd.startswith(f'cd "{tmp}/mir2-rs"'),
+            repr(_rec_cmd),
+        )
+        # fail-closed：录制必须**门在编译成功之后**（`cargo build` 非零 ⇒ `&&` 短路 ⇒ 不写清单）。
+        chk(
+            "r7-record-cmd-gated-on-build-success",
+            "&&" in _rec_cmd and _rec_cmd.index("cargo build") < _rec_cmd.index("--record-provenance"),
+            repr(_rec_cmd),
+        )
         # 缺件（清单列了但磁盘没了）⇒ RED。
         os.remove(os.path.join(win_dbg, "db-srv.exe"))
         oks, probs, pre = binary_provenance_findings(tmp, fifth, win_tgt, prov, r7_bins)
@@ -998,6 +1084,11 @@ def selftest() -> int:
             tmp, "HEAD", win_tgt, os.path.join(win_tgt, "nope.json"), r7_bins
         )
         chk("r7-missing-manifest-prereq", not oks and not probs and len(pre) == 1, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
+        chk(
+            "r7-prereq-names-record-cmd",
+            PROVENANCE_RECORD_CMD_MARK in pre[0] and "--record-provenance" in pre[0],
+            repr(pre[0][-220:]),
+        )
         # 未给 target-dir/provenance ⇒ INFO 跳过（向后兼容旧调用）。
         oks, probs, pre = binary_provenance_findings(tmp, "HEAD", "", "", r7_bins)
         chk("r7-empty-skip-info", len(oks) == 1 and not probs and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")

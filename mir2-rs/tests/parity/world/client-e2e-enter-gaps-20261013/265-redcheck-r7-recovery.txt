@@ -1,0 +1,69 @@
+265 — 片64 改坏必红：① 删掉 R7 恢复命令的拼接 ⇒ selftest 必红；② 删掉脚本的提取块 ⇒ 印不出命令
+卡 `openmir2-client-e2e-enter-gaps` / 车道 m2-svr / `openmir2-worker-11` / 2026-10-15 / tag `m2svr`
+base = `origin/master` = `14421a4f01c0c4829f32dad80252a6887f0eacc3`
+零起栈、零游戏端口、零 kill、零编译；未动共享主检出 / root 活脚本；未 merge、未自签 review
+====================================================================================================
+
+# 0) 两条牙（都可判红/绿）
+
+| # | 改坏对象 | 改法 | 期望 | 实测 |
+| --- | --- | --- | --- | --- |
+| ① | `check_rust_window_preflight.py` | `binary_provenance_findings` 里两处 `+ PROVENANCE_RECORD_CMD_MARK` → `+ "MUT"`，PREREQ 支 `f"{PROVENANCE_RECORD_CMD_MARK} "` → `f"{'MUT'} "` | 新牙 3 条 FAIL | **`SELFTEST FAILED (68/71)`**（3 条新牙全红） |
+| ② | `client-e2e-window.fixed.sh.txt` | 删掉 `run_guard` 的 `rec=$(... grep -oE 'PREFLIGHT_RECORD_CMD: .*' ...)` 与 `if [ -n "$rec" ]; then echo "$rec"; fi` 整块 | 合成长输出（命令在 `tail -25` 之外）印不出命令 | 读数 **1 → 0** |
+
+# 1) 牙①：工具侧（原始输出）
+
+生成改坏件（`/e/tmp/r7base/mutated_check.py`）的改法：
+
+```python
+src = open('check_rust_window_preflight.py', encoding='utf-8').read()
+mut = src.replace('+ PROVENANCE_RECORD_CMD_MARK', '+ "MUT"').replace(
+    'f"{PROVENANCE_RECORD_CMD_MARK} "', 'f"{\'MUT\'} "')
+assert mut.count('+ "MUT"') == 2
+```
+
+```
+$ python -I -B /e/tmp/r7base/mutated_check.py --selftest | grep -E "FAIL|SELFTEST"
+[FAIL] selftest r7-red-names-record-cmd 'Data\\Local\\Temp\\rustpf-_kesfr6q" --ref HEAD --target-dir "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-_kesfr6q\\tgt" --provenance "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-_kesfr6q\\tgt\\window-provenance.json" --record-provenance'
+[FAIL] selftest r7-stale-head-red-names-record-cmd 'Data\\Local\\Temp\\rustpf-_kesfr6q" --ref HEAD --target-dir "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-_kesfr6q\\tgt" --provenance "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-_kesfr6q\\tgt\\window-provenance.json" --record-provenance'
+[FAIL] selftest r7-prereq-names-record-cmd 'sers\\gxh\\AppData\\Local\\Temp\\rustpf-_kesfr6q" --ref HEAD --target-dir "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-_kesfr6q\\tgt" --provenance "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-_kesfr6q\\tgt\\nope.json" --record-provenance）'
+SELFTEST FAILED (68/71)
+```
+
+- 3 条新牙全红（对照：正本 `71/71`，见 `266-selftest-r7-recovery.txt`）。
+- **未 mutate** 的两条（`r7-record-cmd-builds-six-pkgs` / `r7-record-cmd-gated-on-build-success`）仍 PASS ——
+  它们判的是 **产者函数** `provenance_record_command()` 本身，与「消息里有没有拼进去」是两条独立的牙
+  （这正是「生产者与拼装点分开测」的意思：只改一边不会互相掩盖）。
+
+# 2) 牙②：脚本侧（原始读数）
+
+合成长输出 = 注入的假前置门（`WINDOW_PREFLIGHT_CMD` 是脚本自带的红检注入口）：
+命令打在**第 1 行**，其后 **40 行** filler ⇒ `tail -25` 只保留 filler，命令**不在**尾部输出里；
+只有 `run_guard` 的提取块能把它印出来。
+
+```
+$ cat /e/tmp/m2svr-burst-0837/fake-preflight.sh
+echo "PREFLIGHT_RECORD_CMD: MAGIC_REC cd \"/x/mir2-rs\" && cargo build --offline"
+for i in $(seq 1 40); do echo "filler line $i"; done
+exit 1
+```
+
+```
+$ WINDOW_PREFLIGHT_CMD="bash /e/tmp/m2svr-burst-0837/fake-preflight.sh" \
+    bash mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt guard \
+    | grep -c PREFLIGHT_RECORD_CMD
+1                                          # 改后：提取块在
+$ ... 同一命令、脚本换成删掉提取块的 /e/tmp/m2svr-burst-0837/mutated-window.sh ...
+0                                          # 改坏：印不出来（grep -c 无输出行 ⇒ 它落在 tail -25 之外）
+```
+
+另：注入真门 `--ref 8e491f81e`（R7 RED）时，改后脚本输出里 `PREFLIGHT_RECORD_CMD` 共 **2** 次 ——
+1 次在 R7 的 RED 文本里、1 次是提取块单独印的那行；删掉提取块后只剩 1 次（文本内那份），
+即「单独一行」这条可判据性来自提取块本身。
+
+# 3) 结论
+
+- 两条牙都真红真绿（不是恒真/恒假断言）；
+- 改坏只动「消息拼装 + 脚本提取」两处，**不动** R7 的判据语义（`RUST_BUILD_PATHS`、sha256 对账、
+  `record_provenance` 的信任边界），也不动 R1..R6/R8；
+- 正本读数 = selftest `71/71` + 提取读数 `1`；改坏读数 = `68/71` + `0`。
