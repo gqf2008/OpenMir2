@@ -1,0 +1,50 @@
+281 — 改坏必红 / 判据自检（2026-10-15）
+==== A) 判据工具 selftest（--selftest 自证绿/红两向） ====
+---------- check_client_run_frames.py --selftest ----------
+        RED C AFTER CM_RUN=3，期望 >= 4
+SELFTEST_PAIR OK (7/7)
+---------- check_healthspellchanged_trigger.py --selftest ----------
+[PASS] selftest green-log-only-t23-skipped   rc=0 (want 0, msg~='INFO T2/T3 NOT CHECKED')
+SELFTEST OK (9/9)
+---------- check_aoi_visibility_diag.py --selftest ----------
+        INFO 仅报告：samples=1 max_vis=5 max_af=10
+SELFTEST OK (9/9)
+---------- check_client_s2c_frames.py --selftest ----------
+同屏对门：0 对 期望 1 ⇒ RED                            OK (rc=1, want 1)
+SELFTEST GREEN
+---------- check_attack_observability.py --selftest ----------
+事实计数逐项                                               OK (rc=0, want 0)
+SELFTEST GREEN
+---------- aoi_visibility_pair.py --selftest ----------
+[PASS] selftest 10-10-41 只算一对（相邻 10→41）：pairs=1
+SELFTEST OK (11/11)
+---------- check_mongen_dense_points.py --selftest ----------
+[PASS] selftest site-gate-off rc=0 (want 0)
+SELFTEST OK (60/60)
+
+==== B) 本窗口真读到的 RED（判据在区分，非恒绿） ====
+-- B1) ③b 两侧攻击/伤害（Rust 侧 CM_HIT=2 但无伤害帧）--
+### two-side attack observability ###
+[left] cm_hit=2 sm_struck=0 sm_nowdeath=0 expect=any
+  RED: s2c 既没有 SM_STRUCK(31)（0<要求 1）也没有 SM_NOWDEATH(34)（0<要求 1）⇒ 伤害不可见（或未击杀）
+[right] cm_hit=3 sm_struck=6 sm_nowdeath=1 expect=any
+RED: 两侧攻击/伤害判据有 1 条不成立
+RESULT: RED
+RC=1
+
+-- B2) ③a 两侧 none（C# 侧 1 对出现）--
+### ③a two-side none (rust a-rust vs csharp a-cs) ###
+rust: pairs=0 recogs=[] | csharp: pairs=1 recogs=['0x0f336101']
+INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=0 only_rust=0 only_csharp=1
+INFO 注意：两侧 recog 集合不等。若两侧「可见/不可见」结论一致而 recog 不同，说明 `70 §E step 3` 的 ActorId 相同假设在该场景不成立——以计数/截图为判据并登记。
+RED --expect none：csharp 出现对=1 != 0
+RESULT: RED
+RC=1
+
+### ③a C# client frames ###
+  s2c_frames=28
+  enter_seq=658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46
+  52_present=True body_len=40
+  752_present=True
+  appearance_pairs=1 recogs=['0x0f336101']
+RESULT: GREEN

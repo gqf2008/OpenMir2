@@ -1,0 +1,92 @@
+04:57:57.423 [INF] CLIENT_ABILITY_LAYOUT layout=client-58（MIR2_CLIENT_ABILITY_LAYOUT=<unset>）
+04:57:57.426 [INF] 游戏服务启动：监听 127.0.0.1:5000（CheckBlock=12288，0 张地图占位，config=E:\MirServer\M2GameSvr\Server.conf）
+04:57:57.919 [INF] Envir 真地图注册表：322 张（base=E:\MirServer\M2GameSvr EnvirDir=Envir MapDir=Map，跳过 0 张）
+04:57:57.925 [INF] 配置层已载入：[Names] GameGold=元宝 GamePoint=成长（帧 5008）/ [Setup] BonusAbilofWarr/NakedAbilofWarr 等（帧 811）
+04:57:57.928 [INF] 公告已载入：320 字节（base=E:\MirServer\M2GameSvr NoticeDir=Notice）
+04:57:57.930 [INF] 出生点回落已载入：StartPoint.txt 8 条，StartPointSize=2，Config.HomeMap=3 (839,668)（空 HomeMap 的新角色用它；RNG 抽数照 oracle）
+04:57:57.949 [INF] 物品模板表 stditems：1000 条（直连 MySQL，帧 50/41 的 Shape 输入）
+04:57:57.952 [INF] 魔法模板表 magics：108 条（直连 MySQL，DoSpell 效果体/帧参输入）
+04:57:57.954 [INF] 经验表 Exps.conf 已载入：NeedExps[1..] 非零 598 项
+04:57:58.005 [INF] 怪物模板表 monsters：705 条（MonItems 挂接 182/705，7427 条掉落），刷怪输入就绪
+04:57:58.029 [INF] Envir/MonGen.txt 已载入：2827 条刷怪配置（有文件 ⇒ 末尾哨兵占 thread 0 首槽）
+04:57:58.036 [INF] 加载物品寄售系统...
+04:57:58.038 [INF] 读取物品寄售列表成功...[0]
+04:57:58.038 [INF] 游戏服务[127.0.0.1:5000]已启动...
+04:57:58.038 [INF] 登录服务器[127.0.0.1:5600]连接成功...
+04:57:58.040 [INF] 游戏网关连接：127.0.0.1:50478
+04:57:58.040 [DBG] sim: 网关连接 127.0.0.1:50478 分配线号 0
+04:57:58.044 [INF] 游戏网关连接：127.0.0.1:50488
+04:57:58.044 [DBG] sim: 网关连接 127.0.0.1:50488 分配线号 1
+04:57:58.048 [INF] 游戏网关连接：127.0.0.1:50489
+04:57:58.048 [DBG] sim: 网关连接 127.0.0.1:50489 分配线号 2
+04:57:58.104 [INF] 数据库服务器[127.0.0.1:6000]连接成功...
+04:57:58.170 [INF] RNG 同种子注入：seed=42 参照序列=SEED_PROBE 1434747710 302596119 269548474 1122627734 361709742 563913476 1555655117 1101493307
+04:57:58.171 [INF] Monster AI 已启用（生产宿主）EnableMonsterAI=true
+04:57:58.171 [INF] 怪物恢复节拍已灌入 HealthFillTime=300 SpellFillTime=800
+04:57:58.171 [INF] 商人 tick 已启用（生产宿主）EnableMerchantTick=true（200ms sim 节奏；whitelist T-42 登记丢 NpcLimit 墙钟预算）
+04:57:58.171 [INF] 主人死自投递已启用（生产宿主）EnableSlaveSelfDelay=true（1000ms sim 延迟；RM_MASTERDIEGHOST 恒不可达 = BUG-REPLICA）
+04:57:58.176 [INF] MonGen 刷怪宿主就绪：2828 条配置，207 个怪名，threads=1，哨兵=true（mon_limit=10 zen_limit=5 user_full=3000 regen_time=200ms gen_rate=10）
+04:57:59.149 [INF] Envir/Merchant.txt 已载入：131 条（FindMap 门丢 0 条，挂图失败 0 条）⇒ 世界内商人 131
+04:57:59.199 [INF] MapQuest 隐藏 NPC 宿主就绪：quest_npcs=3 merchants=1 装载失败=0 ManageNPC=true FunctionNPC=false goto_limit=10000
+04:57:59.199 [INF] sim 线程就绪：tick=200ms，地图 322 张（Envir 真地图）
+04:57:59.199 [DBG] sim: 登记网关线号 0 的命令通道
+04:57:59.199 [DBG] sim: 登记网关线号 1 的命令通道
+04:57:59.200 [DBG] sim: 登记网关线号 2 的命令通道
+04:58:01.934 [ERR] 网关连接断开。
+04:58:01.934 [DBG] sim: 网关线号 0 已释放
+04:58:01.934 [ERR] 网关连接断开。
+04:58:01.934 [ERR] 网关连接断开。
+04:58:01.934 [DBG] sim: 网关线号 2 已释放
+04:58:01.935 [DBG] sim: 网关线号 1 已释放
+04:58:02.004 [DBG] sim: 注销网关线号 0 的命令通道
+04:58:02.004 [DBG] sim: 注销网关线号 2 的命令通道
+04:58:02.005 [DBG] sim: 注销网关线号 1 的命令通道
+04:58:04.100 [INF] 游戏网关连接：127.0.0.1:50493
+04:58:04.100 [DBG] sim: 网关连接 127.0.0.1:50493 分配线号 0
+04:58:04.210 [DBG] sim: 登记网关线号 0 的命令通道
+04:58:05.637 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+04:58:05.637 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+04:58:09.018 [DBG] sim: tick #50 clock=10000ms 处理 0 项（本地第 50 次）实体内 153 展示表 22 在世界会话 0
+04:58:12.639 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+04:58:19.033 [DBG] sim: tick #100 clock=20000ms 处理 0 项（本地第 100 次）实体内 253 展示表 122 在世界会话 0
+04:58:20.631 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+04:58:27.644 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+04:58:29.048 [DBG] sim: tick #150 clock=30000ms 处理 0 项（本地第 150 次）实体内 253 展示表 122 在世界会话 0
+04:58:35.634 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+04:58:36.523 [INF] 会话准入登记 Account:mir2test SessionId:2 PayCost:0 PayMode:0 IP:127.0.0.1:50507
+04:58:36.523 [DBG] IDS: 处理 1 条会话通知
+04:58:39.062 [DBG] sim: tick #200 clock=40000ms 处理 0 项（本地第 200 次）实体内 263 展示表 132 在世界会话 0
+04:58:42.641 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+04:58:43.291 [INF] 新用户链接... socket=304 SessionId=9077 index=1 ip=127.0.0.1 在线=1 槽=1
+04:58:43.320 [INF] 会话验证通过 Account:mir2test ChrName:aaa SessionId:2 PayMent:1 index=1
+04:58:43.463 [DBG] sim: 新用户登记 index=1 ip=127.0.0.1（open_session 属 S2b-3）
+04:58:43.463 [INF] sim: 认证通过 ⇒ 取角色进世界 Account:mir2test ChrName:aaa SessionId:2 GateIdx:0 （读档控制流在 load.rs；DB 请求属 S2b-2b）
+04:58:43.546 [DBG] 执行任务Id:1成功
+04:58:43.663 [INF] 收到角色数据 queryId=1 Ident=1100 Recog=1
+04:58:43.663 [INF] 进世界 ChrName:aaa CurMap:0 (291,666) Dir:2 entity=275
+04:58:43.664 [DBG] 52/752 入图输入 ChrName=aaa layout=client-58 tail_len=58 WAbil[level=1 ac=0 mac=0 dc=257 mc=0 sc=0 hp=17 mp=15 max_hp=19 max_mp=15 exp=0 max_exp=10 weight=0 max_weight=50 wear_weight=0 max_wear_weight=15 hand_weight=0 max_hand_weight=12] SubAbility[anti_magic=1 hit_point=5 speed_point=15 anti_poison=0 poison_recover=0 health_recover=0 spell_recover=0] ability_tail_hex=01000000000000000000010100000000000000000000110000000f000000130000000f000000000000000a0000000000320000000f0000000c00
+04:58:43.665 [INF] IsNewHuman 判定 ChrName=aaa home_empty=false 记录 Abil.Level=1 is_new_human=false bag_items=46
+04:58:43.665 [DBG] 同屏展示表登记：actor=275 dir=2 light=0 feature=131072
+04:58:43.665 [INF] 进世界帧下发：socket=304 共 15 条（输入齐备的）
+04:58:43.665 [INF] @Login 已执行 ChrName=aaa 说词 0 条（下发 0）
+04:58:43.665 [INF] 进世界标记：socket=304
+04:58:43.863 [DBG] sim: index=1 命令 Recog=786444 Ident=84 Param=0 Tag=0 Series=0 tail="5;Y\u{4}\u{1c}\u{3}U\u{1c}\u{3}\u{4}\u{1c}\u{3}\0\u{10}"
+04:58:43.864 [DBG] sim: index=1 命令 Recog=1310720 Ident=10431 Param=0 Tag=0 Series=0 tail=""
+04:58:43.864 [DBG] sim: index=1 命令 Recog=0 Ident=10433 Param=0 Tag=0 Series=0 tail=""
+04:58:43.864 [DBG] sim: index=1 命令 Recog=275 Ident=1200 Param=0 Tag=0 Series=0 tail=""
+04:58:44.264 [DBG] sim: index=1 命令 Recog=0 Ident=1018 Param=0 Tag=0 Series=46 tail=""
+04:58:45.866 [DBG] sim: index=1 命令 Recog=43647267 Ident=3010 Param=0 Tag=4 Series=0 tail=""
+04:58:49.079 [DBG] sim: tick #250 clock=50000ms 处理 0 项（本地第 250 次）实体内 768 展示表 637 在世界会话 1 [aaa(275) map=26 vr=12 vis=0 new=0 af=0 same_map=456 nearest=31]
+04:58:50.640 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+04:58:58.637 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+04:58:59.097 [DBG] sim: tick #300 clock=60000ms 处理 0 项（本地第 300 次）实体内 1870 展示表 1739 在世界会话 1 [aaa(275) map=26 vr=12 vis=0 new=0 af=0 same_map=1056 nearest=31]
+04:59:06.630 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+04:59:07.040 [INF] 用户关闭：socket=304 index=1 在线=0 槽=1
+04:59:07.093 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:aaa queryId=2 记录 4826 字节
+04:59:07.093 [INF] 断线清世界 ChrName:aaa socket=304 index=1（FrontEngine.DeleteHuman + WorldEngine 摘除）
+04:59:07.183 [DBG] 执行任务Id:2成功
+04:59:07.293 [INF] 存档应答 queryId=2 ChrName=aaa Ident=1102 Recog=1
+04:59:09.116 [DBG] sim: tick #350 clock=70000ms 处理 0 项（本地第 350 次）实体内 2779 展示表 2648 在世界会话 0
+04:59:09.556 [ERR] 网关连接断开。
+04:59:09.556 [DBG] sim: 网关线号 0 已释放
+04:59:09.696 [DBG] sim: 注销网关线号 0 的命令通道

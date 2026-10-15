@@ -1,0 +1,424 @@
+277 — 两侧窗口 ①②③ 判据原始输出（2026-10-15 / m2-svr / worker-11）
+本文件只拼装 E:/tmp/m2svr-window-run 下的原始读数，不重跑、不改口径。
+======================================================================================
+
+########## 01-before.txt ##########
+=== before characters ===
+12215	aaa	0	292	652	4
+=== before ablity ===
+aaa	19	19	15	15
+=== account ===
+--------------
+SELECT LoginId,ChrName FROM mir2_db.accounts WHERE LoginId='mir2test'
+--------------
+
+ERROR 1146 (42S02) at line 1: Table 'mir2_db.accounts' doesn't exist
+
+########## 02-start-rust.txt ##########
+SEED: 将向 game-svr 注入 MIR2_RNG_SEED=42
+STATE_LOG: 未指定服务端逐击状态 dump（不注入，与改动前行为一致）
+RNG_LOG: 未指定逐次 rng 流水（不注入，与改动前行为一致）
+ISOLATE_ATTACK: 未指定攻击路径专用流（不注入，与改动前行为一致）
+CLIENT_ABILITY_LAYOUT: 未指定（不注入，生产默认 = 冻结客户端布局）
+MYSQL already up (3306)
+START DBSrv pid=27008 ports=6000,5100,5700
+START LoginSrv pid=6700 ports=5500,5600
+START game-svr pid=37000 ports=5000
+RUST_SEED_INJECTED=42
+START login-gate pid=37452 ports=7000
+START sel-gate pid=20980 ports=7100
+START game-gate pid=30368 ports=7200,7201,7202
+PIDFILE E:\tmp\window\cliente2e\rust\stack\rust-stack.pid.json
+CORE_UP MySQL ports=3306
+CORE_UP DBSrv ports=6000,5100,5700
+CORE_UP LoginSrv ports=5500,5600
+CORE_UP game-svr ports=5000
+CORE_UP login-gate ports=7000
+CORE_UP sel-gate ports=7100
+CORE_UP game-gate ports=7200
+=== M2 验收栈 端口实况 ===
+  3306  <- pid=23556 mysqld.exe  D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+  6000  <- pid=27008 DBSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+  5100  <- pid=27008 DBSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+  5700  <- pid=27008 DBSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+  5500  <- pid=6700 LoginSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+  5600  <- pid=6700 LoginSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+  5000  <- pid=37000 game-svr.exe  E:\tmp\m2svr-window-target\debug\game-svr.exe
+  7000  <- pid=37452 login-gate.exe  E:\tmp\m2svr-window-target\debug\login-gate.exe
+  7100  <- pid=20980 sel-gate.exe  E:\tmp\m2svr-window-target\debug\sel-gate.exe
+  7200  <- pid=30368 game-gate.exe  E:\tmp\m2svr-window-target\debug\game-gate.exe
+RUST_STACK_OK E:\tmp\window\cliente2e\rust\stack\rust-stack.pid.json
+
+########## 03-shadow-conf.txt ##########
+--- shadow conf keys ---
+Count=1
+ServerAddr1=127.0.0.1
+ServerPort1=5000
+GatePort1=7600
+GateAddress1=127.0.0.1
+
+########## 04-shadow-start.txt ##########
+STOP game-gate pid=30368
+--- ports 7200/7201/7202/7600 ---
+7200:DOWN
+7201:DOWN
+7202:DOWN
+7600:UP pid=10836
+
+########## 05-proxy-start.txt ##########
+--- ready.flag ---
+35748
+--- port 7200 ---
+7200:UP pid=35748
+7600:UP pid=10836
+
+########## 09-rust-judge.txt ##########
+########## 1) check_client_run_frames (52 layout + CM_RUN) ##########
+OK  ① c2s CM_WALK(3011)=26
+OK  ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，可跑）
+OK  ③ CM_RUN(3013)=3 >= 1（客户端真的发跑位）
+RESULT: GREEN
+RC=0
+
+########## 2) check_healthspellchanged_trigger (53 T1/T2/T3) ##########
+OK  T1 53 触发前置：1/1 条入图行 hp<max_hp（首条 hp=17<19 max_hp=19）
+OK  T2 s2c 53 条数=2 >= 1（修复路径被真实覆盖）
+OK  T3 53 body_len=12（由日志 layout=client-58 推得）
+facts {"enter_lines": 1, "enter_precondition_lines": 1, "enter_samples": [{"hp": 17, "layout": "client-58", "line": 99, "max_hp": 19}], "expect_body_len": 12, "expect_body_len_why": "由日志 layout=client-58 推得", "s2c_53": 2, "s2c_53_body_lens": [12]}
+VERDICT GREEN
+RC=0
+
+########## 3) check_aoi_visibility_diag (server vis/af) ##########
+INFO 进世界 aaa CurMap=0 (605,578)
+INFO 采样 aaa(11415) map=26 vr=12 vis=9 new=0 af=18 same_map=1726 nearest=2 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(11415) map=26 vr=12 vis=10 new=0 af=24 same_map=1726 nearest=3 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(11415) map=26 vr=12 vis=6 new=0 af=26 same_map=1726 nearest=6 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(11415) map=26 vr=12 vis=6 new=0 af=28 same_map=1726 nearest=6 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(11415) map=26 vr=12 vis=6 new=0 af=28 same_map=1726 nearest=6 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(11415) map=26 vr=12 vis=6 new=0 af=28 same_map=1726 nearest=6 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(11415) map=26 vr=12 vis=8 new=0 af=36 same_map=1726 nearest=2 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(11415) map=26 vr=12 vis=9 new=0 af=46 same_map=1726 nearest=3 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(11415) map=26 vr=12 vis=7 new=0 af=54 same_map=1726 nearest=1 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+OK  ③ --expect visible：max vis=10 >= 1，max af=54 >= 2
+RESULT: GREEN
+RC=0
+
+########## 4) check_client_s2c_frames (appearance pairs) ##########
+capture=E:/tmp/window/cliente2e/rust/s2c/capture.jsonl
+  s2c_frames=101
+  enter_seq=658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46
+  52_present=True body_len=58
+  752_present=True
+  appearance_pairs=28 recogs=['0x000003ab', '0x000003b1', '0x0000086d', '0x000003ae', '0x000003b5', '0x000001d9', '0x00000866', '0x000004ea', '0x00000555', '0x000001c0', '0x000004e4', '0x000003c6', '0x000001c2', '0x00000555', '0x000001c9', '0x000001de', '0x000001cd', '0x000001be', '0x000001bd', '0x000003b3', '0x000001c2', '0x000003b2', '0x0000039f', '0x000001c9', '0x000003b2', '0x0000039f', '0x000001c0', '0x000001c9']
+RESULT: GREEN
+RC=0
+
+########## 5) check_attack_observability (single side) ##########
+[single] cm_hit=0 sm_struck=0 sm_nowdeath=0 expect=any
+  RED: c2s CM_HIT(3014) 只有 0 条 < 要求 1（客户端没打到目标）
+  RED: s2c 既没有 SM_STRUCK(31)（0<要求 1）也没有 SM_NOWDEATH(34)（0<要求 1）⇒ 伤害不可见（或未击杀）
+RESULT: RED
+RC=1
+
+########## 10-run2-stack.txt ##########
+SEED: 将向 game-svr 注入 MIR2_RNG_SEED=42
+STATE_LOG: 未指定服务端逐击状态 dump（不注入，与改动前行为一致）
+RNG_LOG: 未指定逐次 rng 流水（不注入，与改动前行为一致）
+ISOLATE_ATTACK: 未指定攻击路径专用流（不注入，与改动前行为一致）
+CLIENT_ABILITY_LAYOUT: 未指定（不注入，生产默认 = 冻结客户端布局）
+MYSQL already up (3306)
+START DBSrv pid=10012 ports=6000,5100,5700
+START LoginSrv pid=12428 ports=5500,5600
+START game-svr pid=34244 ports=5000
+RUST_SEED_INJECTED=42
+START login-gate pid=8080 ports=7000
+START sel-gate pid=14780 ports=7100
+START game-gate pid=33220 ports=7200,7201,7202
+PIDFILE E:\tmp\m2svr-window-run\run2\rust\stack\rust-stack.pid.json
+CORE_UP MySQL ports=3306
+CORE_UP DBSrv ports=6000,5100,5700
+CORE_UP LoginSrv ports=5500,5600
+CORE_UP game-svr ports=5000
+CORE_UP login-gate ports=7000
+CORE_UP sel-gate ports=7100
+CORE_UP game-gate ports=7200
+=== M2 验收栈 端口实况 ===
+  3306  <- pid=23556 mysqld.exe  D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+  6000  <- pid=10012 DBSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+  5100  <- pid=10012 DBSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+  5700  <- pid=10012 DBSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+  5500  <- pid=12428 LoginSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+  5600  <- pid=12428 LoginSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+  5000  <- pid=34244 game-svr.exe  E:\tmp\m2svr-window-target\debug\game-svr.exe
+  7000  <- pid=8080 login-gate.exe  E:\tmp\m2svr-window-target\debug\login-gate.exe
+  7100  <- pid=14780 sel-gate.exe  E:\tmp\m2svr-window-target\debug\sel-gate.exe
+  7200  <- pid=33220 game-gate.exe  E:\tmp\m2svr-window-target\debug\game-gate.exe
+RUST_STACK_OK E:\tmp\m2svr-window-run\run2\rust\stack\rust-stack.pid.json
+STOP game-gate pid=33220
+--- 7200/7600 after shadow ---
+7200:DOWN
+7600:UP pid=31476
+--- ready.flag ---
+28128
+--- final ports ---
+7200:UP pid=28128
+7600:UP pid=31476
+5000:UP pid=34244
+
+########## 13-run2-judge.txt ##########
+### attack observability (run2) ###
+[single] cm_hit=2 sm_struck=0 sm_nowdeath=0 expect=any
+  RED: s2c 既没有 SM_STRUCK(31)（0<要求 1）也没有 SM_NOWDEATH(34)（0<要求 1）⇒ 伤害不可见（或未击杀）
+RESULT: RED
+RC=1
+
+### run frames (run2) ###
+OK  ① c2s CM_WALK(3011)=38
+OK  ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，可跑）
+OK  ③ CM_RUN(3013)=2 >= 1（客户端真的发跑位）
+RESULT: GREEN
+RC=0
+
+### 53 trigger (run2) ###
+OK  T1 53 触发前置：1/1 条入图行 hp<max_hp（首条 hp=17<19 max_hp=19）
+OK  T2 s2c 53 条数=2 >= 1（修复路径被真实覆盖）
+OK  T3 53 body_len=12（由日志 layout=client-58 推得）
+facts {"enter_lines": 1, "enter_precondition_lines": 1, "enter_samples": [{"hp": 17, "layout": "client-58", "line": 68, "max_hp": 19}], "expect_body_len": 12, "expect_body_len_why": "由日志 layout=client-58 推得", "s2c_53": 2, "s2c_53_body_lens": [12]}
+VERDICT GREEN
+RC=0
+
+### aoi diag (run2) ###
+INFO 进世界 aaa CurMap=0 (605,578)
+INFO 采样 aaa(1068) map=26 vr=12 vis=10 new=0 af=20 same_map=1056 nearest=4 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(1068) map=26 vr=12 vis=9 new=0 af=28 same_map=1466 nearest=9 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(1068) map=26 vr=12 vis=8 new=0 af=36 same_map=1726 nearest=8 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(1068) map=26 vr=12 vis=15 new=0 af=56 same_map=1726 nearest=4 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(1068) map=26 vr=12 vis=15 new=0 af=58 same_map=1726 nearest=2 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(1068) map=26 vr=12 vis=17 new=0 af=66 same_map=1726 nearest=2 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(1068) map=26 vr=12 vis=15 new=0 af=70 same_map=1726 nearest=1 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+INFO 采样 aaa(1068) map=26 vr=12 vis=17 new=0 af=74 same_map=1726 nearest=1 ⇒ nearest<=vr（窗口内）；vis>0 与窗口内自洽
+OK  ③ --expect visible：max vis=17 >= 1，max af=74 >= 2
+RESULT: GREEN
+RC=0
+
+### appearance pairs (run2) ###
+  s2c_frames=130
+  enter_seq=658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46
+  52_present=True body_len=58
+  752_present=True
+  appearance_pairs=37 recogs=['0x000001bf', '0x000003b5', '0x000001d0', '0x000003b1', '0x000003ae', '0x000001d9', '0x000003be', '0x000004eb', '0x000004e5', '0x00000556', '0x0000086e', '0x0000086f', '0x000001cd', '0x000003b6', '0x000003c6', '0x000001d0', '0x000003ae', '0x0000086f', '0x000003ab', '0x000003b9', '0x0000086f', '0x000003b5', '0x000001d9', '0x00000867', '0x00000556', '0x000003ab', '0x000003b9', '0x000004eb', '0x000001c0', '0x000001c8', '0x00000763', '0x000003a5', '0x00000550', '0x000001d9', '0x000003ae', '0x00000767', '0x000003b9']
+RESULT: GREEN
+
+########## 15-cs1-stack.txt ##########
+=== 启动 Legend of Mir 2 服务端 ===
+  MySQL         已在运行（3306）
+  DBSrv      pid=7768  端口 6000 OK 端口 5100 OK 端口 5700 OK
+  LoginSrv   pid=11036  端口 5500 OK 端口 5600 OK
+  GameSvr    pid=11368  端口 5000 OK
+  LoginGate  pid=20716  端口 7000 OK
+  SelGate    pid=26388  端口 7100 OK
+  RunGate    pid=31944  端口 7200 OK
+
+=== Legend of Mir 2 服务端状态 ===
+
+Component   PID Ports                  
+---------   --- -----                  
+MySQL     23556 3306 OK                
+DBSrv      7768 6000 OK 5100 OK 5700 OK
+LoginSrv  11036 5500 OK 5600 OK        
+GameSvr   11368 5000 OK                
+LoginGate 20716 7000 OK                
+SelGate   26388 7100 OK                
+RunGate   31944 7200 OK                
+客户端           - 未连接                    
+
+
+日志目录: E:\MirServer\logs
+
+账号: mir2test / mir2pass
+客户端: D:\MirClient-run\run-release.cmd（指向 127.0.0.1:7000；登录后自动选服进角色界面，选角色点「开始」进游戏）
+STOP RunGate pid=31944
+--- 7200/7600 after shadow ---
+7200:DOWN
+7600:UP pid=1572
+--- ready.flag ---
+37244
+--- ports ---
+7200:UP pid=37244
+7600:UP pid=1572
+5000:UP pid=11368
+6000:UP pid=7768
+7000:UP pid=20716
+7100:UP pid=26388
+
+########## 18-cs1-judge.txt ##########
+### C# client s2c frames (cs1) ###
+capture=E:/tmp/m2svr-window-run/cs1/csharp/s2c/capture.jsonl
+  s2c_frames=217
+  enter_seq=658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46
+  52_present=True body_len=40
+  752_present=True
+  appearance_pairs=23 recogs=['0x7323eccf', '0x4d29f590', '0x77c40e78', '0x494c9d38', '0x77ea04eb', '0x04ef9ed0', '0x52bcd732', '0x052ce152', '0x59be8d0f', '0x494c9d38', '0x66b84dfa', '0x3db5c1fd', '0x0ee233f5', '0x77ea04eb', '0x605f9912', '0x7b246919', '0x60966d63', '0x77c40e78', '0x052ce152', '0x5bd3bacd', '0x052ce152', '0x77ea04eb', '0x052ce152']
+RESULT: GREEN
+
+### two-side aoi_visibility_pair (visible) ###
+rust: pairs=37 recogs=['0x000001bf', '0x000001c0', '0x000001c8', '0x000001cd', '0x000001d0', '0x000001d9', '0x000003a5', '0x000003ab', '0x000003ae', '0x000003b1', '0x000003b5', '0x000003b6', '0x000003b9', '0x000003be', '0x000003c6', '0x000004e5', '0x000004eb', '0x00000550', '0x00000556', '0x00000763', '0x00000767', '0x00000867', '0x0000086e', '0x0000086f'] | csharp: pairs=23 recogs=['0x04ef9ed0', '0x052ce152', '0x0ee233f5', '0x3db5c1fd', '0x494c9d38', '0x4d29f590', '0x52bcd732', '0x59be8d0f', '0x5bd3bacd', '0x605f9912', '0x60966d63', '0x66b84dfa', '0x7323eccf', '0x77c40e78', '0x77ea04eb', '0x7b246919']
+INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=0 only_rust=24 only_csharp=16
+INFO 注意：两侧 recog 集合不等。若两侧「可见/不可见」结论一致而 recog 不同，说明 `70 §E step 3` 的 ActorId 相同假设在该场景不成立——以计数/截图为判据并登记。
+OK  --expect visible：两侧出现对均 >= 1（rust=37 / csharp=23）
+RESULT: GREEN
+RC=0
+
+### two-side attack observability ###
+[left] cm_hit=2 sm_struck=0 sm_nowdeath=0 expect=any
+  RED: s2c 既没有 SM_STRUCK(31)（0<要求 1）也没有 SM_NOWDEATH(34)（0<要求 1）⇒ 伤害不可见（或未击杀）
+[right] cm_hit=3 sm_struck=6 sm_nowdeath=1 expect=any
+RED: 两侧攻击/伤害判据有 1 条不成立
+RESULT: RED
+RC=1
+
+########## 22-a-rust-stack.txt ##########
+SEED: 将向 game-svr 注入 MIR2_RNG_SEED=42
+STATE_LOG: 未指定服务端逐击状态 dump（不注入，与改动前行为一致）
+RNG_LOG: 未指定逐次 rng 流水（不注入，与改动前行为一致）
+ISOLATE_ATTACK: 未指定攻击路径专用流（不注入，与改动前行为一致）
+CLIENT_ABILITY_LAYOUT: 未指定（不注入，生产默认 = 冻结客户端布局）
+MYSQL already up (3306)
+START DBSrv pid=23576 ports=6000,5100,5700
+START LoginSrv pid=27604 ports=5500,5600
+START game-svr pid=29268 ports=5000
+RUST_SEED_INJECTED=42
+START login-gate pid=31784 ports=7000
+START sel-gate pid=35028 ports=7100
+START game-gate pid=19228 ports=7200,7201,7202
+PIDFILE E:\tmp\m2svr-window-run\a-rust\rust\stack\rust-stack.pid.json
+CORE_UP MySQL ports=3306
+CORE_UP DBSrv ports=6000,5100,5700
+CORE_UP LoginSrv ports=5500,5600
+CORE_UP game-svr ports=5000
+CORE_UP login-gate ports=7000
+CORE_UP sel-gate ports=7100
+CORE_UP game-gate ports=7200
+=== M2 验收栈 端口实况 ===
+  3306  <- pid=23556 mysqld.exe  D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+  6000  <- pid=23576 DBSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+  5100  <- pid=23576 DBSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+  5700  <- pid=23576 DBSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+  5500  <- pid=27604 LoginSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+  5600  <- pid=27604 LoginSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+  5000  <- pid=29268 game-svr.exe  E:\tmp\m2svr-window-target\debug\game-svr.exe
+  7000  <- pid=31784 login-gate.exe  E:\tmp\m2svr-window-target\debug\login-gate.exe
+  7100  <- pid=35028 sel-gate.exe  E:\tmp\m2svr-window-target\debug\sel-gate.exe
+  7200  <- pid=19228 game-gate.exe  E:\tmp\m2svr-window-target\debug\game-gate.exe
+RUST_STACK_OK E:\tmp\m2svr-window-run\a-rust\rust\stack\rust-stack.pid.json
+STOP game-gate pid=19228
+--- 7200/7600 after shadow ---
+7200:DOWN
+7600:UP pid=30732
+--- ready.flag ---
+9072
+--- final ports ---
+7200:UP pid=9072
+7600:UP pid=30732
+5000:UP pid=29268
+
+########## 25-a-rust-judge.txt ##########
+### ③a Rust server diag (expect none) ###
+INFO 进世界 aaa CurMap=0 (291,666)
+INFO 采样 aaa(275) map=26 vr=12 vis=0 new=0 af=0 same_map=456 nearest=31 ⇒ nearest>vr（窗口外）；vis==0 与窗口外自洽
+INFO 采样 aaa(275) map=26 vr=12 vis=0 new=0 af=0 same_map=1056 nearest=31 ⇒ nearest>vr（窗口外）；vis==0 与窗口外自洽
+OK  ② --expect none：2 条采样 vis==0 且 af==0（该点窗口内无怪）
+RESULT: GREEN
+RC=0
+
+### ③a Rust client pairs ###
+usage: check_client_s2c_frames.py [-h] [--capture CAPTURE]
+                                  [--expect-52-body-len EXPECT_52_BODY_LEN]
+                                  [--min-appearance-pairs MIN_APPEARANCE_PAIRS]
+                                  [--json] [--selftest]
+check_client_s2c_frames.py: error: unrecognized arguments: --max-appearance-pairs 0
+
+########## 26-a-cs-stack.txt ##########
+=== 启动 Legend of Mir 2 服务端 ===
+  MySQL         已在运行（3306）
+  DBSrv      pid=35196  端口 6000 OK 端口 5100 OK 端口 5700 OK
+  LoginSrv   pid=31512  端口 5500 OK 端口 5600 OK
+  GameSvr    pid=26592  端口 5000 OK
+  LoginGate  pid=33100  端口 7000 OK
+  SelGate    pid=31472  端口 7100 OK
+  RunGate    pid=33220  端口 7200 OK
+
+=== Legend of Mir 2 服务端状态 ===
+
+Component   PID Ports                  
+---------   --- -----                  
+MySQL     23556 3306 OK                
+DBSrv     35196 6000 OK 5100 OK 5700 OK
+LoginSrv  31512 5500 OK 5600 OK        
+GameSvr   26592 5000 OK                
+LoginGate 33100 7000 OK                
+SelGate   31472 7100 OK                
+RunGate   33220 7200 OK                
+客户端           - 未连接                    
+
+
+日志目录: E:\MirServer\logs
+
+账号: mir2test / mir2pass
+客户端: D:\MirClient-run\run-release.cmd（指向 127.0.0.1:7000；登录后自动选服进角色界面，选角色点「开始」进游戏）
+STOP RunGate pid=33220
+--- 7200/7600 after shadow ---
+7200:DOWN
+7600:UP pid=33880
+--- ready.flag ---
+17656
+--- ports ---
+7200:UP pid=17656
+7600:UP pid=33880
+5000:UP pid=26592
+6000:UP pid=35196
+7000:UP pid=33100
+7100:UP pid=31472
+
+########## 29-a-two-side-judge.txt ##########
+### ③a two-side none (rust a-rust vs csharp a-cs) ###
+rust: pairs=0 recogs=[] | csharp: pairs=1 recogs=['0x0f336101']
+INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=0 only_rust=0 only_csharp=1
+INFO 注意：两侧 recog 集合不等。若两侧「可见/不可见」结论一致而 recog 不同，说明 `70 §E step 3` 的 ActorId 相同假设在该场景不成立——以计数/截图为判据并登记。
+RED --expect none：csharp 出现对=1 != 0
+RESULT: RED
+RC=1
+
+### ③a C# client frames ###
+  s2c_frames=28
+  enter_seq=658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46
+  52_present=True body_len=40
+  752_present=True
+  appearance_pairs=1 recogs=['0x0f336101']
+RESULT: GREEN
+
+########## 30-final-ports.txt ##########
+STOP GameSrv.exe pid=26592 E:\MirServer\M2GameSvr\GameSrv.exe
+3306:UP pid=23556
+5000:DOWN
+5100:DOWN
+5500:DOWN
+5600:DOWN
+5700:DOWN
+6000:DOWN
+7000:DOWN
+7100:DOWN
+7200:DOWN
+7600:DOWN
+
+########## 31-window-judge.txt ##########
+OK   ③b 服务端 vis>=1（RESULT: GREEN）
+OK   ③b 客户端 pairs>=1（RESULT: GREEN）
+OK   ③b 两侧 visible（RESULT: GREEN）
+OK   ①② Rust 52=58 + CM_RUN>=1（RESULT: GREEN）
+OK   ① Rust 53 触发+尾长（VERDICT GREEN）
+OK   ③a 服务端 vis==0（RESULT: GREEN）
+RED ③b 两侧攻击/伤害 RED（末行=RESULT: RED）
+RED ③a 两侧 none RED（末行=RESULT: RED）
+WINDOW_JUDGE=RED
+AOI_GAP3=RED
