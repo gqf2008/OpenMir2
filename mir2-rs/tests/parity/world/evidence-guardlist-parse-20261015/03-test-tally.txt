@@ -1,0 +1,2 @@
+== 03 串行门禁复核（修 fmt 后；101 suites 1240 passed = 1233 既有 + 7 新）==
+101 suites 1240 passed 0 failed 22 ignored

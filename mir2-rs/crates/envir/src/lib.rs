@@ -16,6 +16,7 @@
 pub mod castle;
 pub mod conf;
 pub mod error;
+pub mod guardlist;
 pub mod mapfile;
 pub mod mapinfo;
 pub mod mapquest;
