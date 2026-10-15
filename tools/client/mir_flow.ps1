@@ -58,6 +58,13 @@ param(
   [string]$HookOut   = "",   # dump 输出目录（作为环境变量给子进程，DLL 启动时读取）
   [int]$AttackClicks = 0,    # 进世界后绕角色点 N 下（点到怪=CM_HIT，点到地=CM_WALK）
   [string]$AttackRing = "",  # 覆盖默认点击环："dx,dy;dx,dy;..."（相对角色屏幕中心）
+  # ---- 转向后攻击（片68 ③b 阳性对照：空地左键攻击不先发 CM_TURN ⇒ 服务端用旧朝向取前方格 ⇒ 必打空）----
+  # -AttackTurn "dx,dy" = **格偏移**（"1,0"=东 / "0,-1"=北 / "1,-1"=东北）：每次攻击左键前先**右键**点该相邻格触发
+  # CM_TURN（客户端只有右键支发 CM_TURN：ClMain.pas:5344 块内 :5454 SendMsg；服务端
+  # ClientChangeDir 立即置 Dir ⇒ 随后 CM_HIT 的前方格即该向）。像素换算固定按**格心锚
+  # (512,304)**（48x32 px/格），不是 -CenterX/-CenterY：259 是精灵中心标定，格点击锚 304（推导见
+  # rationale.md）。仅与 -AttackClicks 联动；默认空 = 现状逐字节不变。
+  [string]$AttackTurn = "",
   [int]$CenterX = 512,       # 角色屏幕中心 X（攻击环 / 跑动拖拽基准；默认 512 = 现状，不破坏既有调用）
   [int]$CenterY = 384,       # 角色屏幕中心 Y（真机实测本部署角色屏幕中心约 y=259——底部 UI 遮挡；
                              #   命中环须配 -CenterY 259，否则整环偏下约 2 格，片67 受击步判读受此影响）
@@ -191,6 +198,25 @@ function Send-Click([int]$x, [int]$y, [int]$times = 2) {
     [void][MirFlow]::PostMessage($script:hwnd, 0x0202, [IntPtr]0, $lp)
     Start-Sleep -Milliseconds 220
   }
+}
+
+function Send-RightClick([int]$x, [int]$y) {
+  # 右键单击（CM_TURN 专用）。右键相邻格是唯一可控/确定性的 CM_TURN 触发点（另有 ProcessActionMessages 被挡转向与挂机随机转向，均不可用于驱动）——CM_TURN 亦见于 _DXDrawMouseDown 的 ssRight 支发出（ClMain.pas:5344 块内
+  # :5444 相邻判定→ :5450 GetNextDirection → :5454 SendMsg(CM_TURN, 自格, tdir)）；左键支（:5467 起）
+  # 只会 caHit/caWalk——这正是片68「空地攻击不先发 CM_TURN ⇒ 服务端用旧朝向取前方格 ⇒ 必打空」的根因。
+  # 消息序列照 Send-Click 的已验证路径：mousemove → WM_RBUTTONDOWN(0x0204, wparam=MK_RBUTTON=2) →
+  # WM_RBUTTONUP(0x0205)。wparam=2 ⇒ VCL Shift=[ssRight]（ClMain.pas:5384 有 Shift=[ssRight] 精确比较，
+  # 不能混入其它键态）；FormMouseDown 的 120ms 重入门（ClMain.pas:4748）由内部节拍满足。
+  [void][MirFlow]::SetCursorPos(($pt.X + $x), ($pt.Y + $y))
+  [void][MirFlow]::SetForegroundWindow($script:hwnd)
+  Start-Sleep -Milliseconds 200
+  $lp = [IntPtr](($y -shl 16) -bor ($x -band 0xFFFF))
+  [void][MirFlow]::PostMessage($script:hwnd, 0x0200, [IntPtr]0, $lp)   # mousemove（VCL 位置跟踪）
+  Start-Sleep -Milliseconds 90
+  [void][MirFlow]::PostMessage($script:hwnd, 0x0204, [IntPtr]2, $lp)   # rbuttondown（MK_RBUTTON）
+  Start-Sleep -Milliseconds 90
+  [void][MirFlow]::PostMessage($script:hwnd, 0x0205, [IntPtr]0, $lp)   # rbuttonup
+  Start-Sleep -Milliseconds 220
 }
 
 function Send-RealClick([int]$x, [int]$y) {
@@ -420,8 +446,31 @@ if ($AttackClicks -gt 0) {
   $ring = @("0,-40", "40,0", "0,40", "-40,0", "28,-28", "28,28", "-28,28", "-28,-28",
             "70,0", "0,70", "-70,0", "0,-70")
   if ($AttackRing -ne "") { $ring = $AttackRing.Split(";") }
+  $turnCell = $null
+  if ($AttackTurn -ne "") {
+    # 校验：客户端分支要求 abs(Δ格)<=1（ClMain.pas:5444；>1 会落进 caRun 支不发 CM_TURN）
+    $td = $AttackTurn.Split(",") | ForEach-Object { [int]$_ }
+    if ($td.Count -ne 2) { throw "-AttackTurn 须为 'dx,dy'（两个整数格偏移），当前：$AttackTurn" }
+    if ([Math]::Abs($td[0]) -gt 1 -or [Math]::Abs($td[1]) -gt 1) { throw "-AttackTurn 须为相邻格（|dx|,|dy|<=1），当前：$AttackTurn" }
+    if ($td[0] -eq 0 -and $td[1] -eq 0) { throw "-AttackTurn 不能为 (0,0)（自格 ⇒ tdir 退化），当前：$AttackTurn" }
+    $turnCell = $td
+  }
+  # 格心锚（idle 时 CXYfromMouseXY 的逆映射原点；与 -CenterX/-CenterY 无关，后者是**精灵**中心标定）：
+  #   x=512=SCREENWIDTH div 2；y=304=ShiftYOffset=Round((768-150)/32/2)*32-16（MShare.pas:4620，自格带 y∈[288,320)）
+  $TurnCellCx = 512
+  $TurnCellCy = 304
   for ($i = 0; $i -lt [Math]::Min($AttackClicks, $ring.Count); $i++) {
     $d = $ring[$i].Split(",") | ForEach-Object { [int]$_ }
+    if ($turnCell) {
+      Stage ("attack_turn_" + ($i + 1))
+      # 右键相邻格格心：512+dx*48 / 304+dy*32 ⇒ CXYfromMouseXY 恰得 (Rx+dx, Ry+dy)（idle ShiftX/Y=0）
+      Send-RightClick ($TurnCellCx + $turnCell[0] * 48) ($TurnCellCy + $turnCell[1] * 32)
+      # oracle TurnIntervalTime=600ms（GameSvrConf.cs:1814，连续 CM_TURN 更快会被拒；Rust 侧未接限速，
+      # 但驱动必须按 oracle 节拍）；客户端 CanNextAction/ServerAcceptNextAction
+      # （ClMain.pas:5452）也要求上一动作收尾。右键助手内部已 ~510ms，再 400ms ⇒ turn→hit ~0.9s、
+      # 连续 turn >2.3s，均在 oracle 节拍内（HitIntervalTime=900ms 不变）。
+      Start-Sleep -Milliseconds 400
+    }
     Stage ("attack_" + ($i + 1))
     Send-Click ($CenterX + $d[0]) ($CenterY + $d[1]) 1
     Start-Sleep -Milliseconds 900
