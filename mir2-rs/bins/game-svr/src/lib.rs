@@ -25,6 +25,7 @@ pub mod monitems;
 pub mod movewire;
 pub mod msgqueue;
 pub mod npc;
+pub mod npcs;
 pub mod party;
 pub mod pickwire;
 pub mod recover;

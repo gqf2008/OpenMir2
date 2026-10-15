@@ -388,6 +388,11 @@ pub struct Entity {
     /// [`crate::monai::monster_ai_tick`] 显式跳过它（race 50 与 `ActorRace.Animal` 同值，
     /// 靠 race 会误跑 `monster_run`）。
     pub merchant: Option<crate::merchant::MerchantState>,
+    /// 固定管理 NPC 状态（`NormNpc` 字段子集 + ctor 抽数，卡 `openmir2-npcs-fixed-loading`）。
+    /// `Some(_)` ⇒ 本实体是 `Envir/Npcs.txt` 的固定 NPC（Merchant/GuildOfficial/CastleOfficial）：
+    /// [`crate::monai::monster_ai_tick`] 显式跳过它（NPC 由 oracle `ProcessNpcs` 驱动，本仓未建模）；
+    /// [`crate::World::merchant_tick`] 只认 `merchant.is_some()` ⇒ 也跳过。
+    pub npc: Option<crate::npc::NpcState>,
     /// C# `PlayObject.AllowGroup`（`PlayObject.cs:106` 声明、`:902` 构造初值 `false`）——
     /// 是否允许被拉进小组（`ClientCreateGroup`/`ClientAddGroupMember` 的门）。
     pub allow_group: bool,
@@ -477,6 +482,7 @@ impl Entity {
             ctor_draws: MonsterCtorDraws::default(),
             ai: AnimalState::default(),
             merchant: None,
+            npc: None,
             // 组队态构造初值：`PlayObject.cs:902` `AllowGroup=false`、`:583` `GroupOwner=0`、
             // `:1042` `GroupMembers=new List()`、`AllowGroupReCall`（`:224`）bool 缺省 `false`。
             allow_group: false,
