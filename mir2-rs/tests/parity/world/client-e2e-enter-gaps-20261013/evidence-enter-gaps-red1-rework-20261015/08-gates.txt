@@ -1,0 +1,17 @@
+08 — 四门禁（cwd=<red1fix worktree>/mir2-rs，CARGO_TARGET_DIR=E:/tmp/openmir2-merge-target，head=508e8f72d8ac9916a50cfabc563465bd02253314）
+test：101 个 suite 全 ok（rc=0）；完整原始输出见下方 / E:/tmp/red1fix-evidence/gates-raw.log
+================================================================================
+=== 1) fmt 19:45:04 ===
+fmt rc=0
+=== 2) clippy 19:45:05 ===
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\red1fix\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.76s
+clippy rc=0
+=== 3) test 19:45:17 ===
+101
+test rc=0
+=== 4) msgcodegen 19:47:15 ===
+     Running `E:/tmp/openmir2-merge-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
+=== ALL DONE 19:47:20 ===

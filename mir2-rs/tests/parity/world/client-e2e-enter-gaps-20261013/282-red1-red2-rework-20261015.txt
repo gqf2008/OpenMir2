@@ -1,0 +1,62 @@
+282 — RED-1/RED-2 返工判定书（片68，2026-10-15，tier=L）
+
+## 0. 结论
+- RED-1（片67 登记「③b Rust CM_HIT 打空 ⇒ 攻击链未闭环」）**推翻**：Rust 与 oracle 取目标语义**逐行同构**，
+  打空是 oracle 的正确行为；旧判据把「入站受击」读成「出站伤害」。
+- RED-2（③a 反向点两侧不一致）**归因完成**：C# 侧 actor = `Envir/GuardList.txt` 第 28 行确定性卫士 ⇒
+  **Rust 未实现 GuardList 加载**（功能缺口；白名单 T-56 + 新卡）。
+- 修正面（判据/工具，零生产代码）：`check_attack_observability.py` victim 过滤；新 `check_reverse_point_clean.py`；
+  `tools/client/mir_flow.ps1` `-CenterX/-CenterY`。
+
+## 1. 语义层（两侧同构，行号已实读）
+| 步 | oracle | Rust |
+| --- | --- | --- |
+| 取目标 | `PlayObject.Attack.cs:26` `attackTarget = targetObject ?? GetPoseCreate()`（用**本击前** `Dir`） | `main.rs:3732` `pose_dir = displays.get(actor_id).map_or(dir, |d| d.dir)`（状态化朝向；仅展示表缺失才回退点击 dir） |
+| 前格 | `BaseObject.cs:977-1030 GetFrontPosition`（按 `Dir` 偏移，越界原地） | `attackwire.rs:97-135 front_position(pose_dir,…)`（8 向 + clamp，逐 case 同） |
+| 更新朝向 | `BaseObject.Attack.cs:12 Dir = nDir`（在取目标**之后**，经 `PlayObject.Attack.cs:75 AttackDir`） | `main.rs:3740 set_display_dir(displays,actor_id,dir)`（在 `:3738` 之后） |
+| 动作帧 | `PlayObject.Attack.cs:76 SendAttackMsg(GetHitMode, Dir, …)`（用**新** `Dir`） | `main.rs:3774-3785 sm_action_hit(…, dir)`（点击方向） |
+
+⇒ 「环点每击换向」在**两侧**都必然落后一拍；既有用例 `main.rs:12224`（红检④）已钉住该语义 ⇒ 本片**不加** Rust 测试。
+
+## 2. 场景层（两侧不是同点同动作；capture 自解复算）
+- Rust：`CM_HIT(3014)` recog=37487194 = **(602,572)** tag=**7** ×2；走步 `CM_WALK=38` / `CM_RUN=2`。
+- C#：recog=38994527 = **(607,595)** tag=**4** ×2；recog=38797917 = **(605,592)** tag=**2**；走步 `14` / `3`。
+- 两侧 `CM_TURN(3010)` = **0**（真客户端空地攻击不先发 CM_TURN）。
+- ⇒ 两点相差 20+ 格，「同点同动作」前提不成立。
+
+## 3. 归因层（决定性：C# 的 6 条 SM_STRUCK 全是入站）
+- 6 条 `SM_STRUCK(31)` recog 全 = **1849558029**（玩家 aaa 自己的 ActorId，= `SM_LOGON(50)` 的 recog）；
+  `param`(HP) = 14→12→5→3→1→0 递减、`tag`(MaxHP) = 19；`SM_NOWDEATH(34)` 1 条同 victim。
+- seq/ts：首条 `SM_STRUCK` = seq107 / ts 1792040110043；首条 `CM_HIT` = seq161 / ts 1792040118314 ⇒ **受击早于攻击**。
+- 两侧都**没有** victim≠自己的 `SM_STRUCK` ⇒ 两侧玩家自己的攻击都打空；C# 只是被怪围殴（配 `SM_NOWDEATH`）。
+- 命令：`python -I -B check_attack_observability.py --capture run-20261015-b-csharp-capture.jsonl --expect damage`
+  ⇒ 新脚本 `出站 sm_struck=0｜入站 sm_struck=6` ⇒ RED；旧脚本 ⇒ GREEN（见 `283`）。
+
+## 4. RED-2 归因（GuardList 卫士）
+- `SM_TURN param=281 / tag=661` ⇒ 世界坐标 (281,661)；`series=1029=0x0405` 低字节 `Dir=5`；
+  `Envir/GuardList.txt:28` = 「卫士 0 281, 661 : 5」⇒ 位置+朝向双命中；全程无 walk/run/disappear ⇒ 静止确定性对象。
+- 新工具实跑：`check_reverse_point_clean.py --point 291,666 --map 0 --vr 12` ⇒ **NOT_CLEAN**
+  （`GuardList.txt (281,661)` 切比雪夫 10 ≤ vr 12）；建议新点 `--point 311,666` ⇒ CLEAN（d=30）。
+
+## 5. 阳性对照缺失（本片新发现，下窗第一步）
+两侧 `SM_STRUCK` 中 victim≠自己 的条数**都是 0** ⇒「玩家打中怪」尚无实拍样本；旧判据的 GREEN 从未被真实足迹钉死。
+⇒ 下窗必须**先在 C# 侧**打出 victim=怪 的 `SM_STRUCK` 作为阳性对照，再比 Rust。
+
+## 5b. 未决（只登记，不归因）
+Rust 侧全程无「怪打玩家」行（`nearest=1` 且玩家走步被挡段），C# 同窗被怪围殴致死 —— 这一半**不在**
+「取目标语义同构」结论范围内（该结论仅覆盖**玩家攻击**子链）。探针：玩家贴怪静止 ~10s 看 Rust 侧有无 victim=自己的 `SM_STRUCK`；无 ⇒ 另立卡查怪物 AI。
+
+## 6. 下窗最小复现参数（③b）
+1. 两侧钉同一 `(x,y)`（起栈前 UPDATE，全程不漂移）；
+2. 动作：`CM_TURN(dirToMonster)` → `CM_HIT(MakeLong(自x,自y), tag=dirToMonster)`（或全同单向 `-AttackRing`）；
+3. 判据：`check_attack_observability.py --left <rust> --right <csharp> --expect any`（出站 ≥1 两侧）；
+4. ③a 反向点：`(311,666)`（先过净空判据）；
+5. 驱动加 `-CenterY 259`。
+
+## 6. 边界与门禁
+- 净 5 代码/文档路径 + 证据包；零 `.rs`/`.toml`/`.cs`；冻结面 `src/ sql/ MirClient/ mir2-rs/crates/` 空。
+- 四门禁见 `evidence-enter-gaps-red1-rework-20261015/08-gates.txt`。
+
+## 7. 未做（归宿）
+- `GuardList` 加载实现 ⇒ 新卡 `openmir2-guardlist-guards-loading`（本片只做 T-56 登记 + 净空判据）。
+- 卡级 ③b/③a 真机判据 ⇒ 修正后下窗（params 见 §5）。

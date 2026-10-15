@@ -1,0 +1,29 @@
+283 — 改坏必红 / 牙（片68，2026-10-15）
+
+## A) 判据 victim 过滤（判别式验证，均对片67 已入库 capture）
+```
+cmd: python -I -B <master 版 check_attack_observability.py> --capture run-20261015-b-csharp-capture.jsonl --expect damage
+[single] cm_hit=3 sm_struck=6 sm_nowdeath=1 expect=damage
+RESULT: GREEN                       ← 假绿（把 6 条入站受击读成伤害）
+
+cmd: python -I -B check_attack_observability.py --capture run-20261015-b-csharp-capture.jsonl --expect damage
+[single] cm_hit=3 出站 sm_struck=0 sm_nowdeath=0｜入站 sm_struck=6 sm_nowdeath=1｜self=1849558029 expect=damage
+  RED: s2c 出站 SM_STRUCK(31)（victim≠自己）只有 0 条 < 要求 1
+RESULT: RED                         ← 修正后
+
+cmd: python -I -B check_attack_observability.py --capture … --expect damage --self-recog 0   （等价关掉过滤）
+RESULT: GREEN                       ← 复现假绿 ⇒ 过滤器是唯一判别式
+```
+- selftest 8/8 → **18/18**（新增 6 条：入站不计入伤害/击杀、旧口径假绿、detect_self 两向、事实计数逐项）。
+- 输出原件：`evidence-enter-gaps-red1-rework-20261015/01-judge-selftest.txt`、`02-…`、`03-…`。
+
+## B) 净空判据 `check_reverse_point_clean.py`（selftest 9/9）
+- ★片67 反向点 `(291,666)` ⇒ NOT_CLEAN（卫士 (281,661) d=10 ≤ 12）——**与 C# 实测行为吻合**（该点确有 1 对出现帧）。
+- ★牙：抽掉 `GuardList.txt` 源 ⇒ `(291,666)` 变 CLEAN ⇒ 该源承重（改坏必红）。
+- ★牙：缺 `MonGen.txt` ⇒ fail-closed（entries=None）；`--allow-missing-sources` 才降级为 WARN。
+- ★MonGen 框半径参与：`(303,697)` 落在 (300,700) range=5 框内 ⇒ NOT_CLEAN。
+- 实跑：`05-cleanpoint-real-291-666.txt`（NOT_CLEAN）/ `06-cleanpoint-suggest-311-666.txt`（CLEAN, d=30）。
+
+## C) 驱动 `mir_flow.ps1`
+- `-CenterX/-CenterY` 默认 `512/384` = 现状（既有调用逐字节不变）；真机角色屏幕中心 ~`(512,259)`。
+- `[scriptblock]::Create(...)` 语法检查 ⇒ PARSE OK（`07-driver-parse-ok.txt`）。
