@@ -41,11 +41,10 @@ pub fn parse_guard_line(line: &str) -> Result<Option<GuardInfo>, EnvirError> {
     }
 
     // `:117` MonName：`GetValidStrCap(sLine, ref monName, ' ')`（分隔符只有空格）。
-    let (mut mon_name, rest) = get_valid_str_cap(line, &[' ']).map_err(|_| {
-        EnvirError::GuardListCaptureString {
+    let (mut mon_name, rest) =
+        get_valid_str_cap(line, &[' ']).map_err(|_| EnvirError::GuardListCaptureString {
             line: line.to_string(),
-        }
-    })?;
+        })?;
     // `:117-120` 首字符为 `"` ⇒ `ArrestStringEx` 去引号（与 `mongen.rs` 同款三态写回）。
     if !mon_name.is_empty() && mon_name.starts_with('"') {
         if let (ArrestWrite::Value(v), _) = arrest_string_ex_ref(&mon_name, '"', '"') {
@@ -145,8 +144,8 @@ mod tests {
     fn gate_requires_name_map_direction_but_not_xy() {
         assert_eq!(parse_guard_line("G 0 281, 661").unwrap(), None); // 无方向
         assert_eq!(parse_guard_line("G 281, 661 : 5").unwrap(), None); // 无地图
-        // 注意：`G 0 : 5` 在 oracle 里也**被拒**——cX 的分隔符是 { ' ', ',' }（不含 ':'），
-        // `: 5` 的首 token 切成 `:`，direction 落空 ⇒ 入库门拒绝。X/Y 实际不可缺省。
+                                                                       // 注意：`G 0 : 5` 在 oracle 里也**被拒**——cX 的分隔符是 { ' ', ',' }（不含 ':'），
+                                                                       // `: 5` 的首 token 切成 `:`，direction 落空 ⇒ 入库门拒绝。X/Y 实际不可缺省。
         assert_eq!(parse_guard_line("G 0 : 5").unwrap(), None);
     }
 
@@ -163,7 +162,9 @@ mod tests {
     /// 部署件 `GuardList.txt` 全部为裸中文名（无引号）⇒ 本形态实际不可达，钉住防"顺手修"。
     #[test]
     fn quoted_mon_name_replicates_capture_string_quirk() {
-        let g = parse_guard_line("\"Big Guard\" 0 10, 20 : 6").unwrap().unwrap();
+        let g = parse_guard_line("\"Big Guard\" 0 10, 20 : 6")
+            .unwrap()
+            .unwrap();
         assert_eq!(g.mon_name, "\"Bi");
         // 连锁错位照搬：名字吞掉 "Big 后，余下 Guard" 0 10, 20 : 6 依次落到 map/cX/cY/direction。
         assert_eq!((g.x, g.y, g.dir), (0, 10, 20));
