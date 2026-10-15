@@ -1186,7 +1186,7 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   `git checkout --` 还原（sha256 前后 `156433069f…` 一致）⇒ 复跑 GREEN rc=0（原始输出见 `206 §4`）。
 - **本片自查新增（同族漂移）**：顶部 `## 结论` 的 #3「默认关 / 0/0 是既有问题 / 要不要修需 owner 决策」与 `## 本目录代码改动` 标题/末条
   与 ⑨/㊴/㊽ 的**现行默认（client-58）**矛盾 ⇒ 插入「⚠ 现行口径（2026-10-14 起，以 ⑨/㊴/㊽ 为准）」注并改「默认关」措辞。
-- **O-3 未做（不在本片）**：`52→58B` / `53→TCharDesc` 尾的 §6.0-3 白名单登记 + owner 签字，属 owner 裁决面。
+- **O-3（片69 已落）**：`52→58B` / `53→TCharDesc` 尾的 §6.0-3 白名单登记已入 `whitelist.md` **D-9**（2026-10-15 owner 授权控制台代行裁决；可对拍性由 `MIR2_CLIENT_ABILITY_LAYOUT=0` 保留）。
 - 门禁（`207`）：fmt rc=0 / clippy rc=0(-D warnings) / 101 suites 1232 passed 0 failed 22 ignored / msgcodegen 604 rc=0；
   证据清单门 `verify --check-extra` **GREEN 214/214** + `eolcheck` **GREEN 215/215**（含实跑的清单门改坏必红）。
 - 边界（`208`）：8 路径（3 增 + 5 改）；生产代码仅 `main.rs` 一条注释；冻结面 `src/ sql/ MirClient/ crates/protocol/ crates/storage/` 空。
@@ -1211,7 +1211,7 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **边界（`212`）**：本片只新增本证据目录 4 件 + `README.md` + `SHA256SUMS.txt`；**零 `.rs`/`.toml`/`.py`/`.ps1`**；
   冻结面 `src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/` 空。
 - **仍归 root 独占窗口（R）**：卡级真机 ①②③（含一次升级/换装步）；**G5**（root 活脚本未换入库替身）仍 RED。
-- **O-3**（`52→58B`/`53→12B` 的 §6.0-3 白名单登记 + owner 签字）仍属 owner 裁决面，未做。
+- **O-3（片69 已落）**：`52→58B`/`53→12B` 的 §6.0-3 白名单登记 = `whitelist.md` **D-9**（一次裁决覆盖 HIGHHP 家族四帧）。
 - 判级 = **L**（纯来源刷新 + 只读门复跑，零生产代码、零取数/时序/RNG/落库改动）。
 
 ### 51) HIGHHP 家族完整性审计：52/53 之外的第三个同源帧 `SM_STRUCK`（2026-10-14）—— `213`/`214`
