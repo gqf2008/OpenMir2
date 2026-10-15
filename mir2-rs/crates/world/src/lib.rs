@@ -25,6 +25,7 @@ pub mod map;
 pub mod merchant;
 pub mod monai;
 pub mod mongen;
+pub mod npc;
 pub mod party;
 pub mod session;
 pub mod slave;
@@ -86,6 +87,7 @@ pub use mongen::{
     MonGenConfig, MonGenEntry, MonGenState, MonGenThread, MonsterCreator, TickClockFn,
     MON_GEN_THREAD_MON_LIMIT,
 };
+pub use npc::{NpcSpawn, NpcState, NPC_RUN_DELAY_MAX, NPC_SEARCH_DRAW_MAX};
 pub use party::{
     PartyConfig, PartyEvent, PARTY_CANCEL_GROUP_MSG, PARTY_EXIT_GROUP_MSG, PARTY_EXP_BONUS,
     PARTY_GROUP_MAX, PARTY_GROUP_MEMBERS_MAX_DEFAULT, PARTY_GROUP_MSG_B_COLOR_DEFAULT,

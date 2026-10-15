@@ -586,6 +586,35 @@ async fn main() -> Result<()> {
             }
         }
     };
+    // **固定管理 NPC 加载半（R0-1 `openmir2-npcs-fixed-loading`）**：`LocalDB.LoadNpcs`
+    // （`LocalDB.cs:655-713`，`GameApp.cs:229` 调）的文件+解析半。解析在主线程装载；建实体
+    // （ctor 抽数）+ 挂图在 sim 线程（要 `world.rng` 同一条流），照 oracle
+    // 「LoadMerchant → LoadNpcs → … → LoadGuardList → WorldEngine.Initialize」次序：
+    // 构造抽在商人之后、守卫之前，挂图在守卫之后（`GameApp.cs:226-244`）。
+    let npcs = match game_svr::npcs::load_npcs_file(&envir_loader) {
+        Ok(Some(list)) => {
+            glog!(
+                "INF",
+                "Envir/Npcs.txt 已载入：{} 条固定管理 NPC",
+                list.len()
+            );
+            Some(list)
+        }
+        Ok(None) => {
+            glog!(
+                "INF",
+                "无 Envir/Npcs.txt ⇒ 不放置固定 NPC（oracle File.Exists 门）"
+            );
+            None
+        }
+        Err(e) => {
+            glog!(
+                "WRN",
+                "加载 Envir/Npcs.txt 失败（{e}）⇒ 不放置固定 NPC（oracle LoadNpcs 无 try/catch ⇒ 宿主登记）"
+            );
+            None
+        }
+    };
     // **M3⑨-实现 2 第②片**：`Server.conf` 的宝宝配置（`PetSlaveConfig::from_ini`，
     // ① 已交付但未接生产路径）。`DoSpell` 召唤面用它选型。读不到 ⇒ oracle 初值（登记）。
     let pet_cfg = match game_svr::slave::pet_slave_config_from_conf(&conf) {
@@ -681,6 +710,7 @@ async fn main() -> Result<()> {
                         config: mon_gen_config,
                     },
                     guards,
+                    npcs,
                     loader: Some(envir_loader),
                     script_goto_count_limit: cfg.script_goto_count_limit,
                     trade: game_svr::trade::DealConfig {
@@ -5895,6 +5925,10 @@ struct EnterConfig {
     /// `game_svr::guardlist::load_guard_list_file`）；`None` = 无文件 / VentureServer=TRUE /
     /// 读失败 ⇒ 不放置。放置在 sim 线程起世界后（`game_svr::guardlist::place_guards`）。
     guards: Option<Vec<mir2_envir::guardlist::GuardInfo>>,
+    /// **固定管理 NPC 加载半（R0-1 `openmir2-npcs-fixed-loading`）**：`Envir/Npcs.txt` 解析出的
+    /// 记录（主线程装载，`game_svr::npcs::load_npcs_file`）；`None` = 无文件 / 读失败 ⇒ 不放置。
+    /// 建实体（ctor 抽数）+ 挂图在 sim 线程起世界后（`game_svr::npcs::{build_npc_spawns,place_npcs}`）。
+    npcs: Option<Vec<mir2_envir::npcs::NpcInfo>>,
     /// **M3⑤-实现 2 第①片**：`Envir/Merchant.txt` 的宿主装载器（O-1 FindMap 门 + O-2 `rename_rand`
     /// 要用**世界同一条** `world.rng`，故装载放在 `sim_loop` 起世界之后，而不是主线程侧）。
     loader: Option<mir2_envir::MapLoader>,
@@ -6148,6 +6182,29 @@ fn sim_loop(
                 }
             }
             Err(e) => glog!("WRN", "加载 Envir/Merchant.txt 失败（{e}）⇒ 无商人（登记）"),
+        }
+        // **固定管理 NPC 放置半（R0-1 `openmir2-npcs-fixed-loading`）**：`WorldServer.Merchant.cs`
+        // 的 `NpCinitialize`（`:37-63`，FindMap 门 + `Initialize()`/AddToMap + 失败移除）。
+        // 建实体（`BaseObject` ctor 抽数 `Random(1500)`+`Random(2000)`）在商人之后、守卫之前，
+        // 与 oracle `GameApp.cs:226-244`（LoadMerchant → LoadNpcs → … → LoadGuardList）同序；
+        // 挂图（RNG-free）紧随其后。走**同一条** `world.rng`。
+        if let Some(npcs) = enter_cfg.npcs.take() {
+            let (spawns, dropped) = game_svr::npcs::build_npc_spawns(&npcs, |n| reg.id_of(n));
+            let (kept, failed) = game_svr::npcs::place_npcs(&mut world, spawns);
+            glog!(
+                "INF",
+                "Envir/Npcs.txt 放置完成：{} 条配置（FindMap 门丢 {}，挂图失败 {}）⇒ 世界内固定 NPC {}",
+                npcs.len(),
+                dropped.len(),
+                failed.len(),
+                kept
+            );
+            for (name, map) in &dropped {
+                glog!(
+                    "WRN",
+                    "固定 NPC {name} 的 MapName={map} 不在注册表 ⇒ 按 oracle FindMap 门丢弃"
+                );
+            }
         }
         // **M3⑥-实现 3 第②片**：隐藏任务 NPC 脚本宿主（`LocalDB.LoadMapQuest` 的宿主侧消费，
         // `mapquest.rs:403-405` 的 `QMangeNpc()/QFunctionNpc()/RobotNpc()`）。`MapQuest.txt`

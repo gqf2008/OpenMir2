@@ -53,6 +53,13 @@ pub enum EnvirError {
     )]
     GuardListCaptureString { line: String },
 
+    /// Npcs.txt 角色名列解析越界（CaptureString，对应 C# IndexOutOfRangeException）；
+    /// 交付卡 `openmir2-npcs-fixed-loading`（`LocalDB.cs:674` 的 GetValidStrCap）。
+    #[error(
+        "Npcs.txt 角色名列解析越界（CaptureString，对应 C# IndexOutOfRangeException）：{line}"
+    )]
+    NpcsCaptureString { line: String },
+
     /// 商人脚本（`Market_Def/<ScriptName>-<MapName>.txt`）解析抛出 `LoadPanic`
     /// （对应 C# `ScriptParsers.LoadScriptFile` 内异常的穿透，如重复 label 的
     /// `ArgumentException` / `CaptureString` 越界）。
