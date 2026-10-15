@@ -90,6 +90,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -194,8 +195,26 @@ WINDOW_BUILD_PKGS: tuple[str, ...] = (
 )
 
 
+def provenance_record_tail(repo: str, target_dir: str, provenance_path: str) -> str:
+    """R7 恢复命令的 **argv 尾**（`python -I -B <checker>` 之后的参数，已按 shell 词法引号化）。
+
+    **片65（reviewer-5 F-1 返工）**：`--record-provenance` 在 argparse 里是**带值**选项
+    （`main()` 拿它当输出路径），而片64 打印的命令只写了 `--record-provenance`（**没给值**）
+    ⇒ 操作员逐字节照抄得到 `error: argument --record-provenance: expected one argument`（rc=2），
+    「可照抄」的 DoD 不成立。故尾部由本函数**单一来源**产出（与工具 `--help` 的
+    `--record-provenance <path>` 逐字一致），`provenance_record_command()` 只加前半段；
+    selftest 再把该尾按 shell 词法切开喂回 `build_parser().parse_args(...)` 做**执行性**牙。
+    """
+    return (
+        f'--repo "{repo}" --ref HEAD --target-dir "{target_dir}" '
+        f'--record-provenance "{provenance_path}"'
+    )
+
+
 def provenance_record_command(repo: str, target_dir: str, provenance_path: str) -> str:
-    """R7 恢复命令（片64）：**先重编六件 exe，编译成功才重录出处清单**。
+    """R7 恢复命令（片64；片65 修 reviewer-5 F-1 的不可执行）。
+
+    **先重编六件 exe，编译成功才重录出处清单**。
 
     为什么需要（2026-10-15 实测到的操作缺口）：R8 的 RED 自带可照抄的停栈命令
     （`PREFLIGHT_STOP_CMD`，片63），而 R7 的 RED 只有一句散文「先重编译 + 重录清单」；
@@ -210,14 +229,15 @@ def provenance_record_command(repo: str, target_dir: str, provenance_path: str) 
 
     形态 = **bash 单行**（`&&` 链）：窗口脚本与 root 的手册命令都在 MSYS bash 里执行，
     `cd /e/tmp/...` / `cd E:/tmp/...` 两种写法都能用；路径加双引号以容忍空格。
+    尾部由 `provenance_record_tail()` 单一来源产出（与工具的 `--help` 用法逐字一致：
+    `--record-provenance <path>`，**带值**）。
     """
     checker = os.path.join(os.path.dirname(os.path.abspath(__file__)), CHECKER_SELF_NAME)
     pkgs = " ".join(f"-p {p}" for p in WINDOW_BUILD_PKGS)
     return (
         f'cd "{repo}/mir2-rs" && CARGO_TARGET_DIR="{target_dir}" '
         f"cargo build --offline {pkgs} && "
-        f'python -I -B "{checker}" --repo "{repo}" --ref HEAD --target-dir "{target_dir}" '
-        f'--provenance "{provenance_path}" --record-provenance'
+        f'python -I -B "{checker}" {provenance_record_tail(repo, target_dir, provenance_path)}'
     )
 
 
@@ -655,9 +675,9 @@ def binary_provenance_findings(
             [],
             [
                 f"PREREQ_RED R7: 缺出处清单 {provenance_path}"
-                "（先编译 + 录制，再复跑本门。"
-                f"{PROVENANCE_RECORD_CMD_MARK} "
-                f"{provenance_record_command(repo, target_dir, provenance_path)}）"
+                "（先编译 + 录制，再复跑本门）"
+                f" {PROVENANCE_RECORD_CMD_MARK} "
+                f"{provenance_record_command(repo, target_dir, provenance_path)}"
             ],
         )
     try:
@@ -1049,7 +1069,7 @@ def selftest() -> int:
             "r7-red-names-record-cmd",
             PROVENANCE_RECORD_CMD_MARK in hash_red
             and "--record-provenance" in hash_red
-            and f'--provenance "{prov}"' in hash_red,
+            and f'--record-provenance "{prov}"' in hash_red,
             repr(hash_red[-220:]),
         )
         oks, probs, pre = binary_provenance_findings(tmp, third, win_tgt, prov, r7_bins)
@@ -1075,19 +1095,40 @@ def selftest() -> int:
             "&&" in _rec_cmd and _rec_cmd.index("cargo build") < _rec_cmd.index("--record-provenance"),
             repr(_rec_cmd),
         )
+        # 片65（reviewer-5 F-1②）：**执行性**牙 —— 把打印出来的命令尾部按 shell 词法切开，
+        # 喂给本工具**自己的** argparse。旧版尾部是 `--record-provenance`（无值）⇒ SystemExit(2)，
+        # 而子串牙（`--record-provenance in ...`）照样 PASS ⇒ 只有本牙能吹。
+        _rec_argv = shlex.split(_rec_cmd.split("python -I -B ", 1)[1])[1:]
+        try:
+            _rec_ns = build_parser().parse_args(_rec_argv)
+            _argv_ok = _rec_ns.record_provenance == prov
+            _argv_why = f"record_provenance={_rec_ns.record_provenance!r} argv={_rec_argv}"
+        except SystemExit as exc:  # argparse 在缺值时 SystemExit(2)
+            _argv_ok = False
+            _argv_why = f"argparse SystemExit({exc.code}) argv={_rec_argv}"
+        chk("r7-record-cmd-argv-parses", _argv_ok, _argv_why)
         # 缺件（清单列了但磁盘没了）⇒ RED。
         os.remove(os.path.join(win_dbg, "db-srv.exe"))
         oks, probs, pre = binary_provenance_findings(tmp, fifth, win_tgt, prov, r7_bins)
         chk("r7-missing-bin-red", not oks and len(probs) == 1 and not pre, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
         # 缺清单 ⇒ PREREQ_RED（fail-closed，不静默放行）。
+        _missing_prov = os.path.join(win_tgt, "nope.json")
         oks, probs, pre = binary_provenance_findings(
-            tmp, "HEAD", win_tgt, os.path.join(win_tgt, "nope.json"), r7_bins
+            tmp, "HEAD", win_tgt, _missing_prov, r7_bins
         )
         chk("r7-missing-manifest-prereq", not oks and not probs and len(pre) == 1, f"ok={len(oks)} prob={len(probs)} pre={len(pre)}")
         chk(
             "r7-prereq-names-record-cmd",
             PROVENANCE_RECORD_CMD_MARK in pre[0] and "--record-provenance" in pre[0],
             repr(pre[0][-220:]),
+        )
+        # 片65（reviewer-5 F-2）：替身脚本用 `grep -oE 'PREFLIGHT_RECORD_CMD: .*'`（吃到行尾）提取 ⇒
+        # 命令**不许**被后随全角括号 `）` 粘住（旧版 PREREQ 支 `…--record-provenance）` ⇒ 照抄带括号）。
+        _pre_tail = pre[0].split(PROVENANCE_RECORD_CMD_MARK, 1)[-1].strip()
+        chk(
+            "r7-record-cmd-tail-clean",
+            _pre_tail.endswith(f'"{_missing_prov}"') and "）" not in _pre_tail,
+            repr(_pre_tail[-90:]),
         )
         # 未给 target-dir/provenance ⇒ INFO 跳过（向后兼容旧调用）。
         oks, probs, pre = binary_provenance_findings(tmp, "HEAD", "", "", r7_bins)
@@ -1233,7 +1274,9 @@ def selftest() -> int:
     return 0 if ok == total else 1
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """本工具的 argparse（片65：抽成函数，供 selftest 把打印出的命令尾部**实际解析**一遍，
+    即对『照抄可否跑』做执行性断言，而不是只查子串）。"""
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -1302,6 +1345,11 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     ap.add_argument("--selftest", action="store_true")
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = build_parser()
     args = ap.parse_args(argv)
 
     if args.selftest:

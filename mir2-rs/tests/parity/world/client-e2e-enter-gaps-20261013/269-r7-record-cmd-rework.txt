@@ -1,0 +1,142 @@
+269 — 片65：R7 恢复命令**可执行化返工**（reviewer-5 `a3ffedcf` 的 F-1 blocker + F-2 minor）
+卡 `openmir2-client-e2e-enter-gaps` / 车道 m2-svr / `openmir2-worker-11` / 2026-10-15 / tag `m2svr`
+base = `origin/master` = `14421a4f01c0c4829f32dad80252a6887f0eacc3`；被审 head = `fc00c7581`（片64）
+zero 起栈 / zero 游戏端口 / zero kill / zero 编译（`cargo build` 只作为命令**文本**出现；四门禁的
+`cargo` 调用是只读检查/测试）；未动共享主检出 / root 活脚本 / 泄漏栈；未 merge、未自签 review
+====================================================================================================
+
+# 0) 一句话
+
+reviewer-5 判 `request_changes`：片64 交付的 `PREFLIGHT_RECORD_CMD:` **照抄即 rc=2** —— 打印出的尾部是
+`--provenance "<path>" --record-provenance`，而 `--record-provenance` 在 argparse 里是**带值**选项
+（`main()` 拿它当输出路径）⇒ 操作员得到一个 argparse 报错，R7 仍卡死，片64 的「与 R8 的
+`PREFLIGHT_STOP_CMD` 对等」DoD **不成立**。本片（片65）：
+
+1. **F-1（blocker）**：尾部改成**带值** `--record-provenance "<path>"`，并把尾部抽成单一来源
+   `provenance_record_tail()`；新增**执行性**牙 `r7-record-cmd-argv-parses`（把打印出的尾部按 shell
+   词法 `shlex.split` 后喂给本工具**自己的** `build_parser().parse_args(...)`，不再只查子串）；
+2. **F-2（minor）**：PREREQ 支命令尾不再被全角括号 `）` 粘住（脚本用 `grep -oE '… .*'` 吃到行尾）；
+   新增牙 `r7-record-cmd-tail-clean` 咬住；
+3. 用修好的命令重跑 `264`/`265` 的读数并重生成 `266`（selftest 71/71 → **73/73**）。
+
+改前/改后（同一 ref `8e491f81e`、同一窗口源 + 同一清单）：
+`--record-provenance`（**无值**，rc=2）→ `--record-provenance "E:/tmp/m2svr-window-target/window-provenance.json"`（rc=0 + 写出清单）。
+
+# 1) 审查发现（原文要点；reviewer-5 `a3ffedcf`）
+
+- **F-1（blocker）**：`provenance_record_command()`（`check_rust_window_preflight.py:212-221`）返回的尾部
+  没有给 `--record-provenance` 传值，而 argparse 把它定义为**需要一个参数**（`:1276-1280`）
+  ⇒ 逐字节照抄得到 `error: argument --record-provenance: expected one argument`（rc=2）。
+  工具**自己的**用法（`:78-79`）恰是 `--record-provenance <path>` ⇒ 产者与消费者自相矛盾。
+  审查者还指出：现有 5 条牙只断言**子串存在**，故对「命令不可跑」是**盲的**。
+- **F-2（minor）**：仅 PREREQ 支（清单完全缺失）的命令后面被 `）` 粘住（`:659-661`），而替身脚本的
+  提取是 `grep -oE 'PREFLIGHT_RECORD_CMD: .*'`（吃到行尾）⇒ 打印行以 `--record-provenance）` 结尾。
+
+# 2) 根因与修法
+
+片64 把「可照抄」理解成「有一行命令」；没有**验证**那行命令能被本工具自己的 argparse 接受。
+这是「子串牙」的盲区：`"--record-provenance" in msg` 与「该选项有值」是两件事。
+
+**修（2 文件，零生产代码）**：
+
+| 文件 | 改动 |
+| --- | --- |
+| `check_rust_window_preflight.py` | 新增 `provenance_record_tail(repo,target_dir,provenance_path)`（尾部**单一来源**，与 `--help` 用法逐字一致）；`provenance_record_command()` 只加前半段；PREREQ 支 `）` 移到命令**之前**；`build_parser()` 从 `main()` 抽出（供 selftest 真解析）；新增 2 条牙 |
+| `82-two-side-window-runbook.md` | §1b 的命令形态补 `--record-provenance "<path>"` 的值；新增一条「`--record-provenance` 必须带值（片65，reviewer-5 F-1）」 |
+| `264-r7-recovery-cmd.txt` | 顶部加片65 订正声明；§3.2「改后」与 §4 的命令形态换成带值形 |
+| `266-selftest-r7-recovery.txt` | 用 73/73 全文重生成 |
+
+`client-e2e-window.fixed.sh.txt` **本片不改**（片64 的提取块已正确；命令文本由工具提供）。
+
+# 3) F-1：「照抄可否跑」—— 改前 rc=2 / 改后 rc=0（原始件）
+
+## 3.1 改前（片64 `fc00c7581`，pristine 副本 `/e/tmp/m2svr-burst-r65/check-64.py`）
+
+同一条命令尾部逐字节照抄（`--target-dir` 换成临时目录以避开 `cargo build`）：
+
+```
+$ python -I -B /e/tmp/m2svr-burst-r65/check-64.py --repo <worktree> --ref HEAD \
+    --target-dir /e/tmp/m2svr-burst-r65/faketgt --record-provenance
+check-64.py: error: argument --record-provenance: expected one argument
+rc=2
+```
+
+## 3.2 改后（本片）：R7 RED 文本里打印出的命令（ref = `8e491f81e`，同一窗口源 + 同一清单）
+
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref 8e491f81e \
+    --target-dir E:/tmp/m2svr-window-target \
+    --provenance E:/tmp/m2svr-window-target/window-provenance.json
+RED R7: 出处清单 source_head=da2df1fdbd != 当前构建源 8e491f81e=8e491f81e7 且在影响六件 exe 的路径上有 3 件差异（mir2-rs/bins/game-svr/src/main.rs, mir2-rs/bins/game-svr/src/pickwire.rs, mir2-rs/bins/game-svr/src/smframe.rs）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）；先重编译 + 重录清单。PREFLIGHT_RECORD_CMD: cd "E:/tmp/m2svr-window-origin/mir2-rs" && CARGO_TARGET_DIR="E:/tmp/m2svr-window-target" cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv && python -I -B "<证据目录>/check_rust_window_preflight.py" --repo "E:/tmp/m2svr-window-origin" --ref HEAD --target-dir "E:/tmp/m2svr-window-target" --record-provenance "E:/tmp/m2svr-window-target/window-provenance.json"
+```
+
+尾部 = `… --ref HEAD --target-dir "<tgt>" --record-provenance "<tgt>/window-provenance.json"`（**带值**）。
+
+## 3.3 执行性（不跑 `cargo build`，只跑 `&&` 之后的 checker 尾部；用假 target 的六件）
+
+```
+$ python -I -B check_rust_window_preflight.py --repo <worktree> --ref HEAD \
+    --target-dir /e/tmp/m2svr-burst-r65/faketgt \
+    --record-provenance /e/tmp/m2svr-burst-r65/faketgt/window-provenance.json
+R7_PROVENANCE_RECORDED source_head=fc00c7581ea6e13827cd0f803cdf910d0db71815 bins=6 -> E:/tmp/m2svr-burst-r65/faketgt/window-provenance.json
+rc=0
+```
+
+⇒ 同一 argv 形态：改前 rc=2（argparse 拒绝），改后 rc=0 且**真的写出**清单（`--record-provenance` 的值绑到了输出路径）。
+
+# 4) F-2：PREREQ 支命令尾是干净的（原始件）
+
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+    --target-dir /e/tmp/m2svr-burst-r65/faketgt --provenance /e/tmp/m2svr-burst-r65/faketgt/nope.json
+PREREQ_RED R7: 缺出处清单 E:/tmp/m2svr-burst-r65/faketgt/nope.json（先编译 + 录制，再复跑本门） PREFLIGHT_RECORD_CMD: cd "E:/tmp/m2svr-window-origin/mir2-rs" && CARGO_TARGET_DIR="E:/tmp/m2svr-burst-r65/faketgt" cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv && python -I -B "<证据目录>/check_rust_window_preflight.py" --repo "E:/tmp/m2svr-window-origin" --ref HEAD --target-dir "E:/tmp/m2svr-burst-r65/faketgt" --record-provenance "E:/tmp/m2svr-burst-r65/faketgt/nope.json"
+```
+
+模拟替身脚本的提取（`grep -oE 'PREFLIGHT_RECORD_CMD: .*'`，吃到行尾）后，尾部逐字为：
+
+```
+--target-dir "E:/tmp/m2svr-burst-r65/faketgt" --record-provenance "E:/tmp/m2svr-burst-r65/faketgt/nope.json"
+$ … | grep -c '）$'
+0
+```
+
+⇒ 不再以 `）` 结尾（改前：`…--record-provenance）`）。
+
+# 5) 替身脚本单独印出的那一行（`guard`，注入真门 `--ref 8e491f81e`）
+
+```
+$ WINDOW_PREFLIGHT_CMD="python -I -B <checker> --repo E:/tmp/m2svr-window-origin --ref 8e491f81e \
+    --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-window-target/window-provenance.json" \
+  bash client-e2e-window.fixed.sh.txt guard   # rc=1
+PREFLIGHT_STOP_CMD: powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir E:/tmp/client-e2e/stack2 -Stop
+PREFLIGHT_RECORD_CMD: cd "E:/tmp/m2svr-window-origin/mir2-rs" && CARGO_TARGET_DIR="E:/tmp/m2svr-window-target" cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv && python -I -B "<证据目录>/check_rust_window_preflight.py" --repo "E:/tmp/m2svr-window-origin" --ref HEAD --target-dir "E:/tmp/m2svr-window-target" --record-provenance "E:/tmp/m2svr-window-target/window-provenance.json"
+```
+
+（`PREFLIGHT_STOP_CMD` 的 `<源>` 占位符未动 —— 本片只按 F-1/F-2 的清单返工，不扩大写集。）
+
+# 6) 绿径逐字节不变
+
+窗口源 `HEAD`（`da2df1fdb`）+ 现行清单的真门输出与**片64 逐字节相同**（`diff` 空）：
+R1..R7 全 `[OK]` + R8 RED ×2，`RESULT: RED` rc=1，`grep -c PREFLIGHT_RECORD_CMD` = **0**（R7 走 OK 支）。
+⇒ 本片只改 RED/PREREQ 侧的消息字符串与两条牙，**不动** R7 判据语义（`RUST_BUILD_PATHS` / sha256 对账 /
+`record_provenance` 的信任边界）。
+
+# 7) selftest 与改坏必红
+
+- `check_rust_window_preflight.py --selftest`：`66/66`（base）→ `71/71`（片64）→ **`73/73`**（本片 +2 牙）；
+  `window_handoff.py --selftest` = `107/107`（本片未动该件）。
+- 改坏必红（`270`）：① 删掉 `--record-provenance` 的值 ⇒ `SELFTEST FAILED (70/73)`
+  （`r7-red-names-record-cmd` / **`r7-record-cmd-argv-parses` = argparse SystemExit(2)** /
+  `r7-record-cmd-tail-clean` 三条红）；② 把 PREREQ 支的 `）` 加回去 ⇒ `SELFTEST FAILED (72/73)`
+  （`r7-record-cmd-tail-clean` 红）；还原 ⇒ `73/73`。
+
+# 8) 边界与纪律
+
+- 改动全在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`；
+  `src/ sql/ MirClient/ mir2-rs/crates/protocol/ mir2-rs/crates/storage/ mir2-rs/crates/ mir2-rs/bins/`
+  零改动（`272-boundary.txt`）；`*.rs`/`*.toml`/`*.ps1`/`*.cs` = 0。
+- 零起栈 / 零游戏端口起占 / 零 kill / 零窗口 exe 构建（`cargo build` 只在命令**文本**里）；
+  四门禁的 `cargo` 调用是 `fmt --check` / `clippy` / `test` / `msgcodegen --check`（只读）。
+- 未动共享主检出 / root 活脚本 `/e/tmp/openmir2-watch/client-e2e-window.sh` / **未代停 R8 泄漏栈**；
+  未 merge、未自签 review。判级 **L**（就绪工具/文档 + 只读证据，零生产代码）；卡级 **R** 真机 ①②③
+  仍归 root 独占窗口（唯一开窗阻塞 = R8 泄漏栈）。

@@ -1,6 +1,13 @@
 264 — 片64：R7「出处清单 ↔ 预构建 exe」的**恢复命令可执行化**（与 R8 的 PREFLIGHT_STOP_CMD 对等）
 卡 `openmir2-client-e2e-enter-gaps` / 车道 m2-svr / `openmir2-worker-11` / 2026-10-15 / tag `m2svr`
 base = `origin/master` = `14421a4f01c0c4829f32dad80252a6887f0eacc3`；改动 = 1 .py + 1 .sh.txt + 1 .md + 本证据
+
+> ⚠ **本件已由片65 返工订正（reviewer-5 `a3ffedcf` F-1/F-2）**：片64 打印的命令尾部是
+> `--provenance "<path>" --record-provenance`（**`--record-provenance` 没给值**）⇒ 照抄即
+> `error: argument --record-provenance: expected one argument`（rc=2）。本文下面所有命令形态
+> **已换成片65 修正后的带值形**（`--record-provenance "<target-dir>/window-provenance.json"`）；
+> 修正的完整读数/执行性证明/改坏必红见 `269`/`270`。片64 的历史读数（selftest 71/71）保留在
+> `266`（片65 后为 73/73）。
 只读复核（git + 真机两侧日志）；零起栈、零游戏端口、零 kill、零编译；未动共享主检出 / root 活脚本
 ====================================================================================================
 
@@ -66,7 +73,7 @@ $ grep -c "PREFLIGHT_RECORD_CMD" <before 输出>
 0
 $ grep -E "^RED R7|^PREREQ_RED R7" <after 输出>           # 改后（带命令）
 
-RED R7: 出处清单 source_head=da2df1fdbd != 当前构建源 8e491f81e=8e491f81e7 且在影响六件 exe 的路径上有 3 件差异（mir2-rs/bins/game-svr/src/main.rs, mir2-rs/bins/game-svr/src/pickwire.rs, mir2-rs/bins/game-svr/src/smframe.rs）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）；先重编译 + 重录清单。PREFLIGHT_RECORD_CMD: cd "E:/tmp/m2svr-window-origin/mir2-rs" && CARGO_TARGET_DIR="E:/tmp/m2svr-window-target" cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv && python -I -B "E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\check_rust_window_preflight.py" --repo "E:/tmp/m2svr-window-origin" --ref HEAD --target-dir "E:/tmp/m2svr-window-target" --provenance "E:/tmp/m2svr-window-target/window-provenance.json" --record-provenance
+RED R7: 出处清单 source_head=da2df1fdbd != 当前构建源 8e491f81e=8e491f81e7 且在影响六件 exe 的路径上有 3 件差异（mir2-rs/bins/game-svr/src/main.rs, mir2-rs/bins/game-svr/src/pickwire.rs, mir2-rs/bins/game-svr/src/smframe.rs）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）；先重编译 + 重录清单。PREFLIGHT_RECORD_CMD: cd "E:/tmp/m2svr-window-origin/mir2-rs" && CARGO_TARGET_DIR="E:/tmp/m2svr-window-target" cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv && python -I -B "E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\check_rust_window_preflight.py" --repo "E:/tmp/m2svr-window-origin" --ref HEAD --target-dir "E:/tmp/m2svr-window-target" --record-provenance "E:/tmp/m2svr-window-target/window-provenance.json"
 $ grep -c "PREFLIGHT_RECORD_CMD" <after 输出>
 1
 ```
@@ -122,8 +129,9 @@ $ WINDOW_PREFLIGHT_CMD="bash <fake-preflight.sh>" bash client-e2e-window.fixed.s
 PREFLIGHT_RECORD_CMD: cd "<源>/mir2-rs" && CARGO_TARGET_DIR="<target-dir>" cargo build --offline \
   -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv && \
   python -I -B "<证据目录>/check_rust_window_preflight.py" --repo "<源>" --ref HEAD \
-    --target-dir "<target-dir>" --provenance "<target-dir>/window-provenance.json" --record-provenance
+    --target-dir "<target-dir>" --record-provenance "<target-dir>/window-provenance.json"
 ```
+（片65 订正：`--record-provenance` 必须带值，否则 argparse `expected one argument` rc=2；见 `269`。）
 
 - 与 `client-e2e-window.fixed.sh.txt start` 第 2 步的 `cargo build` **逐字同源**（同一对 `-p` 列表）；
 - 形态 = bash 单行（窗口脚本与手册命令都在 MSYS bash 里执行；`cd /e/...` 与 `cd E:/...` 都能用）；

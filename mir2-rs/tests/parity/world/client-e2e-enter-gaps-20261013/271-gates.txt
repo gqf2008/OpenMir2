@@ -1,0 +1,106 @@
+271 — 片65 四门禁 + 工具自检 + 真门读数（fresh）
+卡 `openmir2-client-e2e-enter-gaps` / 车道 m2-svr / `openmir2-worker-11` / 2026-10-15 / tag `m2svr`
+cwd = mir2-rs（本车道 worktree），CARGO_TARGET_DIR = E:/tmp/m2svr-target
+====================================================================================================
+
+# 1) 四门禁（cwd = mir2-rs）
+
+```
+### fmt
+fmt rc=0
+### clippy
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.11s
+clippy rc=0
+### msgcodegen
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
+
+### cargo test --workspace --offline --no-fail-fast
+101 suites: passed=1233 failed=0 ignored=22
+
+test rc=0
+```
+
+# 2) 工具自检（fresh）
+
+```
+$ python -I -B check_rust_window_preflight.py --selftest
+SELFTEST OK (73/73)   rc=0        # base 66/66 → 片64 71/71 → 片65 73/73（+2 牙）
+$ python -I -B window_handoff.py --selftest
+SELFTEST OK (107/107) rc=0
+```
+
+# 3) 真门（窗口源 HEAD + 现行清单）——绿径逐字节未变
+
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin \
+    --target-dir E:/tmp/m2svr-window-target \
+    --provenance E:/tmp/m2svr-window-target/window-provenance.json
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 c61b9627a1（片㊴ 53 SM_HEALTHSPELLCHANGED TCharDesc 尾）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 6cadc9fbf9（片㊼ 52 SM_ABILITY 调用点布局全覆盖）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 fd68e037db（片31 SM_STRUCK 客户端布局（HIGHHP 家族））（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=da2df1fdbd 相对基线 origin/master@14421a4f01 生产路径零差异
+[OK] R7 出处清单 window-provenance.json source_head=da2df1fdbd，6 件 exe sha256 逐字节一致
+[OK] R8 停栈目录校验：E:/tmp/client-e2e/stack2/rust-stack.pid.json 持有全部占用端口的 pid（[9100, 13052, 29240, 30284, 33132, 34944]）
+RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 30284), 5100(pid 33132), 5500(pid 29240), 5600(pid 29240), 5700(pid 33132), 6000(pid 33132), 7000(pid 9100), 7100(pid 13052), 7200(pid 34944) ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包（2026-10-14 15:0x 的假回归即此）。先停栈： powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir E:/tmp/client-e2e/stack2 -Stop
+RED R8: 在跑的 game-svr.exe（pid 30284）来自 E:\tmp\openmir2-merge-target\debug\game-svr.exe，不是本计划 E:/tmp/m2svr-window-target\debug\game-svr.exe ⇒ 修复前/异源栈，窗口会测旧件
+RESULT: RED
+```
+
+- `RESULT: RED` rc=1：R1..R7 全 `[OK]`、**唯一 RED = R8**（泄漏栈占 9 端口，属 root）；
+- 与片64 的 HEAD 口径输出 **`diff` 为空**（只改 RED 侧信息，不动绿径）；
+- `grep -c PREFLIGHT_RECORD_CMD` = 0（R7 走 OK 支 ⇒ 不打印恢复命令）。
+
+# 4) 改后 R7 RED（`--ref 8e491f81e`）与执行性
+
+```
+RED R7: 出处清单 source_head=da2df1fdbd != 当前构建源 8e491f81e=8e491f81e7 且在影响六件 exe 的路径上有 3 件差异（mir2-rs/bins/game-svr/src/main.rs, mir2-rs/bins/game-svr/src/pickwire.rs, mir2-rs/bins/game-svr/src/smframe.rs）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）；先重编译 + 重录清单。PREFLIGHT_RECORD_CMD: cd "E:/tmp/m2svr-window-origin/mir2-rs" && CARGO_TARGET_DIR="E:/tmp/m2svr-window-target" cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv && python -I -B "E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\check_rust_window_preflight.py" --repo "E:/tmp/m2svr-window-origin" --ref HEAD --target-dir "E:/tmp/m2svr-window-target" --record-provenance "E:/tmp/m2svr-window-target/window-provenance.json"
+
+```
+
+```
+$ python -I -B check_rust_window_preflight.py --repo <worktree> --ref HEAD \
+    --target-dir /e/tmp/m2svr-burst-r65/faketgt \
+    --record-provenance /e/tmp/m2svr-burst-r65/faketgt/window-provenance.json
+R7_PROVENANCE_RECORDED source_head=fc00c7581ea6e13827cd0f803cdf910d0db71815 bins=6 -> E:/tmp/m2svr-burst-r65/faketgt/window-provenance.json
+rc=0
+```
+
+# 5) 聚合门（窗口就绪，fresh）
+
+```
+$ python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin \
+    --target-dir E:/tmp/m2svr-window-target --ref HEAD \
+    --window-script client-e2e-window.fixed.sh.txt
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_appearance_pairs.py --selftest
+OK   G2 check_attack_observability.py --selftest
+OK   G2 check_client_run_frames.py --selftest
+OK   G2 check_healthspellchanged_trigger.py --selftest
+OK   G2 verify_client_highhp_family.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G5 root 窗口脚本 repo= 与本计划构建源一致（/e/tmp/m2svr-window-origin）
+OK   G5 root 窗口脚本 tgt= 与本计划 target-dir 一致（E:\tmp\m2svr-window-target）
+RED  G1 Rust 窗口前置门 RED（构建源/读数标记/窗口槽位任一不符；窗口会 PREREQ_RED）—— 见下方修复块
+WINDOW_READY=NO
+RESULT: RED   rc=1
+```
+
+⇒ 与片64 的 `267` 同结论：G2×11 / G5×2 OK，**唯一 RED = R8 泄漏栈**（属 root）；本片只改 R7 的
+**RED 文本**，不改变该结论（§3 的逐字节 diff 为空）。

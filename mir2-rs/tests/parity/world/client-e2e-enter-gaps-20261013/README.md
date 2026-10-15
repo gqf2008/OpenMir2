@@ -29,7 +29,7 @@
 > 片⑪+片㉜（2）扩到 **+HIGHHP 家族三帧**（片㊴ `c61b9627a` 53 `TCharDesc` 尾 / 片㊼ `6cadc9fbf` 52 全调用点 /
 > 片 `fd68e037d` 31，共 5）：旧集让 root 15:0x 的失败源 `8e491f81e`（含片⑪/㉜、**缺 53 尾修**）判
 > **GREEN** ⇒ 会构建修复前镜像；新集判 **RED（缺 3 片）**。`--selftest` 49/49→**50/50**（后续片继续递增，
-> 片64 起为 **71/71**，见 §64）；现行窗口源
+> 片64 为 **71/71**、片65 起为 **73/73**，见 §64/§65）；现行窗口源
 > `da2df1fdb` 在新集下仍 R1..R7 全绿（不移动窗口源、不重编）。证据 `231-window-source-fixpin-r1.txt`。
 
 ## 结论（先看这三条）
@@ -1622,4 +1622,29 @@ root 15:0x 的「52/752 不生效 + 跑=0 回归」判定面已由片㊴/㊽ 收
   `check_rust_window_preflight.py --selftest` **71/71**、`window_handoff.py --selftest` **107/107**；
   聚合门 `WINDOW_READY=NO`（G2×11/G5×2 OK，唯一 RED = R8）⇒ **不改变卡级结论**。
 - **判级 L**（就绪脚本/文档 + 只读证据，零生产代码、零起栈/端口/进程/kill；未动 root 活脚本与泄漏栈）；
+  卡级 **R** 真机 ①②③ 仍 not_verified —— 唯一剩余阻塞 = **R8 泄漏栈**（属 root）。
+
+### 65) R7 恢复命令**执行性**返工：`--record-provenance` 带值 + 执行性牙（2026-10-15，tag `m2svr`）—— `269`/`270`/`271`/`272`
+
+- **trigger = reviewer-5 `a3ffedcf` 的 `request_changes`（F-1 blocker / F-2 minor）**：片64 打印的
+  `PREFLIGHT_RECORD_CMD:` **逐字节照抄即 rc=2** —— 尾部是 `--provenance "<path>" --record-provenance`
+  （**`--record-provenance` 没给值**），而 argparse 把它定义为需要参数（`main()` 拿它当输出路径）
+  ⇒ `error: argument --record-provenance: expected one argument`。片64 的「可照抄」DoD 不成立；
+  且片64 的 5 条牙只断言**子串存在**，对「命令不可跑」是盲的。
+- **F-1 修**：尾部抽成单一来源 `provenance_record_tail()`，产出**带值**的
+  `--record-provenance "<target-dir>/window-provenance.json"`（与 `--help` 用法逐字一致）；
+  新增**执行性**牙 `r7-record-cmd-argv-parses`：把打印出的尾部 `shlex.split` 后喂回本工具自己的
+  `build_parser().parse_args(...)`（`build_parser()` 从 `main()` 抽出）。
+- **F-2 修**：PREREQ 支（清单完全缺失）的 `）` 移到命令**之前** ⇒ 脚本的
+  `grep -oE 'PREFLIGHT_RECORD_CMD: .*'` 不再把全角括号粘到命令尾；新增牙 `r7-record-cmd-tail-clean`。
+- **改前/改后（`269`）**：同一 argv 形态 `--record-provenance`（无值）**rc=2** → 带值 **rc=0 +
+  `R7_PROVENANCE_RECORDED … bins=6`**（真写出清单）；`--selftest` **71/71 → 73/73**；绿径与片64
+  的真门输出 **`diff` 为空**（只改 RED/PREREQ 侧信息）。
+- **改坏必红（`270`）**：① 删掉值 ⇒ `SELFTEST FAILED (70/73)`（`r7-record-cmd-argv-parses` 报
+  `argparse SystemExit(2)`）；② PREREQ 支加回 `）` ⇒ `SELFTEST FAILED (72/73)`；还原 ⇒ `73/73`。
+- **四门禁（`271`）**：`fmt` rc=0 / `clippy -D warnings` rc=0 / `cargo test --workspace --no-fail-fast`
+  101 suites **1233 passed / 0 failed / 22 ignored** rc=0 / `msgcodegen --check` 604 rc=0；
+  `check_rust_window_preflight.py --selftest` **73/73**、`window_handoff.py --selftest` **107/107**；
+  聚合门 `WINDOW_READY=NO`（G2×11/G5×2 OK，唯一 RED = R8）⇒ 不改变卡级结论。
+- **判级 L**（就绪工具/文档 + 只读证据，零生产代码、零起栈/端口/进程/kill；未动 root 活脚本与泄漏栈）；
   卡级 **R** 真机 ①②③ 仍 not_verified —— 唯一剩余阻塞 = **R8 泄漏栈**（属 root）。

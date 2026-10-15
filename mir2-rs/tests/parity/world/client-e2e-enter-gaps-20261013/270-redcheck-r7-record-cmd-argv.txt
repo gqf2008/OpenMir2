@@ -1,0 +1,62 @@
+270 — 片65 改坏必红：① 删掉 `--record-provenance` 的值 ⇒ 2 条新牙红；② PREREQ 支尾随 `）` ⇒ 1 条新牙红
+卡 `openmir2-client-e2e-enter-gaps` / 车道 m2-svr / `openmir2-worker-11` / 2026-10-15 / tag `m2svr`
+零起栈、零游戏端口、零 kill、零编译（变异只在 `/e/tmp/m2svr-burst-r65/` 的 **副本**上）；未 merge、未自签
+====================================================================================================
+
+# 0) 两条牙（都可判红/绿）
+
+| # | 改坏对象（本片新改的那一行） | 改法 | 期望 | 实测 |
+| --- | --- | --- | --- | --- |
+| ① | `provenance_record_tail()` 的 `f'--record-provenance "{provenance_path}"'` | 删掉值 → `f'--record-provenance'`（= 片64 的坏形态） | 执行性牙 + 2 条子串牙红 | **`SELFTEST FAILED (70/73)`**（3 条红） |
+| ② | PREREQ 支 `f"{provenance_record_command(...)}"` | 尾部加回 `）`（= 片64 的坏形态） | `r7-record-cmd-tail-clean` 红 | **`SELFTEST FAILED (72/73)`**（1 条红） |
+
+两处改坏都只动「消息/命令拼装」，**不动** R7 的判据语义（`RUST_BUILD_PATHS`、sha256 对账、
+`record_provenance` 的信任边界），也不动 R1..R6/R8。
+
+# 1) 牙①：工具侧（原始输出）
+
+生成改坏件 `/e/tmp/m2svr-burst-r65/mutA.py`（在片65 正本上把值删掉）：
+
+```python
+old_a = 'f\'--record-provenance "{provenance_path}"\''
+assert src.count(old_a) == 1
+mutA = src.replace(old_a, "f'--record-provenance'")
+```
+
+```
+$ python -I -B /e/tmp/m2svr-burst-r65/mutA.py --selftest | grep -E "FAIL|SELFTEST"
+[FAIL] selftest r7-red-names-record-cmd 'hon -I -B "…check_rust_window_preflight.py" --repo "…" --ref HEAD --target-dir "…\tgt" --record-provenance'
+[FAIL] selftest r7-record-cmd-argv-parses argparse SystemExit(2) argv=['--repo', '…', '--ref', 'HEAD', '--target-dir', '…\tgt', '--record-provenance']
+[FAIL] selftest r7-record-cmd-tail-clean 'EAD --target-dir "…\tgt" --record-provenance'
+SELFTEST FAILED (70/73)
+```
+
+- `r7-record-cmd-argv-parses` 直接报 **`argparse SystemExit(2)`** —— 这正是 reviewer-5 照抄时得到的
+  `error: argument --record-provenance: expected one argument`（两条独立路径同一根因）。
+- 片64 的 5 条旧牙在这种改坏下**依然 PASS**（只查子串）—— 这就是「子串牙对『命令不可跑』是盲的」
+  的机判证据。
+
+# 2) 牙②：PREREQ 支全角括号（原始输出）
+
+生成改坏件 `/e/tmp/m2svr-burst-r65/mutB.py`（把 `）` 加回命令尾）：
+
+```
+$ python -I -B /e/tmp/m2svr-burst-r65/mutB.py --selftest | grep -E "FAIL|SELFTEST"
+[FAIL] selftest r7-record-cmd-tail-clean '\tgt" --record-provenance "…\tgt\nope.json"）'
+SELFTEST FAILED (72/73)
+```
+
+# 3) 还原（正本）
+
+```
+$ python -I -B check_rust_window_preflight.py --selftest | tail -1
+SELFTEST OK (73/73)
+$ sha256sum check_rust_window_preflight.py
+303396f97727591f7840f874b44a23ed17f56af799c3ed8725cc3d4102197ad1 *check_rust_window_preflight.py
+```
+
+# 4) 结论
+
+- 两条牙都真红真绿（不是恒真/恒假断言）：值缺失 ⇒ 执行性牙报 SystemExit(2)；尾随 `）` ⇒ 干净尾牙红。
+- 片65 的两条新牙（`r7-record-cmd-argv-parses` / `r7-record-cmd-tail-clean`）**正本 73/73、改坏 70/73 与 72/73**。
+- 片64 的红检（`265`）仍然成立且未被本片削弱（消息 mark 拼接与脚本提取块都还在）。

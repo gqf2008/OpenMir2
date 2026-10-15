@@ -75,13 +75,18 @@ R7 的恢复命令形态（片64；`client-e2e-window.fixed.sh.txt guard` 会把
 PREFLIGHT_RECORD_CMD: cd "<源>/mir2-rs" && CARGO_TARGET_DIR="<target-dir>" \
   cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv && \
   python -I -B "<证据目录>/check_rust_window_preflight.py" --repo "<源>" --ref HEAD \
-    --target-dir "<target-dir>" --provenance "<target-dir>/window-provenance.json" --record-provenance
+    --target-dir "<target-dir>" --record-provenance "<target-dir>/window-provenance.json"
 ```
 
 - **为什么录制必须跟在编译成功之后**：`--record-provenance` 只是把**当前** `--ref` 盖到清单上，
   它**不校验** exe 是否真由该 ref 编出（这是该子命令的信任边界）⇒ 「编译失败也录制」会把旧件
   洗成新源、R7 随即假绿。故命令用 `&&` 串联：`cargo build` 非零 ⇒ 整条链短路，清单保持原样、
   R7 继续 RED。
+- **`--record-provenance` 必须带值**（片65，reviewer-5 F-1）：它在本工具里是**带值**选项
+  （`--record-provenance <输出清单路径>`，与 `--help` 用法一致）。旧版打印出的命令漏了该值 ⇒
+  逐字节照抄得到 `error: argument --record-provenance: expected one argument`（rc=2）、R7 仍卡死。
+  现在 selftest 有一条**执行性**牙 `r7-record-cmd-argv-parses`（把打印的尾部按 shell 词法切 token
+  再喂给本工具自己的 argparse，不再只是子串断言）。
 - **别用固定的 `E:/tmp/client-e2e/stack2` 当停栈目录**（片63）：`-LogDir` 必须是**持有占用端口那些 pid
   的** `rust-stack.pid.json` 所在目录（R8 会校验后才打印可照抄的命令；不持有则打 `<持有这些 pid 的目录>`）。
 
