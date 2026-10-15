@@ -1,0 +1,19 @@
+279 — 四门禁（本片：证据-only，零 .rs/.toml；cwd = mir2-rs，CARGO_TARGET_DIR=E:/tmp/m2svr-target）
+base = origin/master 0f05c26607（本片开工 merge 的 tip；窗口源 da2df1fdb 相对其生产路径零差异）
+======================================================================================
+1) cargo fmt --all -- --check
+rc=0
+
+2) cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.71s
+rc=0
+
+3) cargo test --workspace
+  101 suites · passed=1233 failed=0
+rc=0
+
+4) cargo run -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+附：判据工具 selftest（跑前 G2/开窗前）；见 281-redcheck-window-run-20261015.txt §A

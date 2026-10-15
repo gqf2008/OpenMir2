@@ -1,0 +1,10 @@
+﻿{"t_wall_ms":1792040294980,"stage":"start"}
+{"t_wall_ms":1792040311148,"stage":"login_id"}
+{"t_wall_ms":1792040313698,"stage":"login_pwd"}
+{"t_wall_ms":1792040316186,"stage":"login_submit"}
+{"t_wall_ms":1792040322059,"stage":"charsel"}
+{"t_wall_ms":1792040322098,"stage":"enter_game"}
+{"t_wall_ms":1792040323844,"stage":"notice_poll"}
+{"t_wall_ms":1792040344825,"stage":"ingame"}
+{"t_wall_ms":1792040346875,"stage":"skip_logout"}
+{"t_wall_ms":1792040346922,"stage":"done"}

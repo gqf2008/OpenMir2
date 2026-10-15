@@ -1,0 +1,86 @@
+278 — 窗口命令 / 前置门 / 出处（2026-10-15 / m2-svr / worker-11）
+窗口源 E:/tmp/m2svr-window-origin HEAD=da2df1fdb；target-dir=E:/tmp/m2svr-window-target
+======================================================================================
+
+########## [1] Rust 侧窗口前置门 R1..R8（guard 口径；只读零端口） ##########
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 c61b9627a1（片㊴ 53 SM_HEALTHSPELLCHANGED TCharDesc 尾）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 6cadc9fbf9（片㊼ 52 SM_ABILITY 调用点布局全覆盖）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 fd68e037db（片31 SM_STRUCK 客户端布局（HIGHHP 家族））（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+[OK] R6 构建源 HEAD=da2df1fdbd 相对基线 origin/master@0f05c26607 生产路径零差异
+[OK] R7 出处清单 window-provenance.json source_head=da2df1fdbd，6 件 exe sha256 逐字节一致
+[OK] R8 游戏端口全 DOWN（9 个；3306 共享 MySQL 不在门内）
+[OK] R8 无 game-svr.exe 在跑
+RESULT: GREEN
+RC=0
+
+########## [2] C# 侧抓包前置门（shadow-config = 影子 RunGate 7600） ##########
+INFO deployed git_head=628d8024ab85 fix=607e9b77347f ancestor=True (ok)
+INFO mirserver=E:/MirServer proxy_port=7200 shadow_port=7600
+OK  部署件 git_head 含修复提交 607e9b773（S1 缺陷①）
+OK  真实 RunGate ServerWorkThread=1（ServiceId 0 ↔ GameSvr 槽位 0，无多网关错配）
+OK  真实 GatePort1=7200 == 代理端口
+OK  真实上游 127.0.0.1:5000 == GameSvr 监听
+OK  !servertable.txt GameGate 端口 [7200] == 代理端口
+OK  影子 RunGate ServerWorkThread=1
+OK  影子 GatePort1=7600 == 影子端口
+OK  影子上游 127.0.0.1:5000 == GameSvr 监听
+OK  C# 侧抓包拓扑前置全部满足
+RESULT: GREEN
+RC=0
+
+########## [3] 出处清单 window-provenance.json ##########
+{
+ "bins": {
+  "db-srv.exe": {
+   "bytes": 84322707,
+   "sha256": "15fb1f25af19ee719501eed4406805ab49c2bb6d26dd0522f6a7f33bd5eaf771"
+  },
+  "game-gate.exe": {
+   "bytes": 29233601,
+   "sha256": "146fb23cd841b089d60738873fbb210489efeee36756743ef95ff6875645735e"
+  },
+  "game-svr.exe": {
+   "bytes": 135602989,
+   "sha256": "cfecda1c1f7c6a50ffa144c6e37f975bbc6612e73f6707765aa4937fdb4e27a5"
+  },
+  "login-gate.exe": {
+   "bytes": 27939672,
+   "sha256": "78c7dac971d93e51f9be874f82ef1fc8b9a51a656bf7473ad6efddf4251622d3"
+  },
+  "login-srv.exe": {
+   "bytes": 82221827,
+   "sha256": "daa1ba949478d98ec31c8becabcff6853ea64f98be56dd25d8e57673274a0068"
+  },
+  "sel-gate.exe": {
+   "bytes": 27918761,
+   "sha256": "741ea627cd1cd65578dfc567130245dfd7f953d6eab5ea31acf67cc79d08accd"
+  }
+ },
+ "source_head": "da2df1fdbd58dd76008bc8d08c8aed08ae7cf2fb",
+ "target_dir": "E:\\tmp\\m2svr-window-target",
+ "version": 1
+}
+
+########## [4] 窗口源 oid ##########
+da2df1fdbd58dd76008bc8d08c8aed08ae7cf2fb
+fd68e037d HIGHHP-31 = YES
+
+########## [5] 源件 sha256（E:/tmp，跑后盘上原始字节） ##########
+a3f970e7a24a9d400270a16ff7438959382a709bbad927faa1f419e37dc74ca1 *run2/rust/stack/game-svr.out.log
+c695f40ad41e1e01608fab7569796bb36b835580a57597897958d93256972552 *run2/rust/s2c/capture.jsonl
+573167fa28f83f450c159dfc145f75778de14a103e0ad93e6b318c94abf53fda *run2/rust/shots/stages.ndjson
+0316fae427315eff7b9662f9debdc30e2b26b9394351e92c0ae84dedc68f7e19 *cs1/csharp/s2c/capture.jsonl
+326654a24b94f301ed5c7ddd3b5e612a02661f92d1f982668fa157c0010e57c7 *a-rust/rust/stack/game-svr.out.log
+fda562320202d65e041be2be52ec0ef479125497caf45a7b5fbf1d1cd32ee29b *a-rust/rust/s2c/capture.jsonl
+456eb8118fdb42213b26de206249bccc91ee6b0a5c057da92a2788cb181ac3b4 *a-cs/csharp/s2c/capture.jsonl
+13f8eb8f660d89c886881786f7a2288ee18dae38f2194940ae47a49756729556 *a-rust/rust/shots/stages.ndjson

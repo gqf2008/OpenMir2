@@ -1,0 +1,49 @@
+280 — 边界（卡 `openmir2-client-e2e-enter-gaps` / 片67 / 2026-10-15 / tag `m2svr`）
+本片 = **证据-only**（零生产代码、零 `.rs`/`.toml`/`.py`/`.ps1`/`.cs`）；只写本卡证据目录。
+base = `origin/master` `0f05c26607`（本片开工 merge 的 tip）；head = 本片提交。
+====================================================================================================
+
+# 1) 改动清单（全部在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`）
+
+新增（A）：
+  276-two-side-window-run-20261015.txt
+  277-two-side-window-judge-20261015.txt
+  278-window-commands-and-preflight-20261015.txt
+  279-gates.txt
+  280-boundary.txt
+  281-redcheck-window-run-20261015.txt
+  run-20261015-a-csharp-05c-ingame.png
+  run-20261015-a-csharp-capture.jsonl
+  run-20261015-a-rust-capture.jsonl
+  run-20261015-a-rust-game-svr.out.txt
+  run-20261015-a-rust-stages.ndjson
+  run-20261015-b-csharp-capture.jsonl
+  run-20261015-b-rust-05-ingame-hud-17-19.png
+  run-20261015-b-rust-06-attack.png
+  run-20261015-b-rust-capture.jsonl
+  run-20261015-b-rust-game-svr.out.txt
+  run-20261015-b-rust-stages.ndjson
+
+修改（M）：
+  README.md（新增 §67 小节）
+  SHA256SUMS.txt（按仓库字节口径重生成）
+
+# 2) 冻结面（必须为空）
+
+```
+$ git status --short -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+（无输出 ⇒ 空）
+```
+
+# 3) 扩展名计数（本片 diff）
+
+- `*.rs` = 0、`*.toml` = 0、`*.py` = 0、`*.ps1` = 0、`*.cs` = 0；
+- 新增面 = `.txt` / `.jsonl` / `.ndjson` / `.png`（真机原始件 + 判定书 + 门禁/边界）；
+- 无 `*.log`（入库日志一律 `.txt`，避免 `.gitignore` 吞件）。
+
+# 4) 与窗口源/部署件的关系
+
+- 窗口构建源 `E:/tmp/m2svr-window-origin @ da2df1fdb`（**不在**本仓检出内），相对 `origin/master` 生产路径零差异
+  （`check_rust_window_preflight.py` R6 GREEN）⇒ 本片**不改**任何生产件。
+- C# 侧用 `E:/MirServer` 部署件（`628d8024`，含 `607e9b773`），**只读启动**；未改部署件。
+- 实测窗口产物（capture/日志/截图）已按 raw 入 `run-20261015-*`；未入 34MB 级全量截图（只入 3 张关键帧）。

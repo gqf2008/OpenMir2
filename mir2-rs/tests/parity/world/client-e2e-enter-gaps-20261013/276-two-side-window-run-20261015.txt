@@ -1,0 +1,152 @@
+276 — 卡 `openmir2-client-e2e-enter-gaps` **R 级真机两侧窗口 ①②③ 收口**（root 2026-10-15 12:2x 授权自开窗口）
+m2-svr / openmir2-worker-11 / 2026-10-15（tag `m2svr`）
+窗口源 = `E:/tmp/m2svr-window-origin` @ `da2df1fdb`（相对 `origin/master@0f05c26607` 生产路径零差异）；
+target-dir = `E:/tmp/m2svr-window-target`（六件 exe 出处清单逐字节一致）；
+本片**零生产代码改动**（只入库真机原始件 + 本报告/判据聚合）；未 merge、未自签 review。
+====================================================================================================
+
+# 0) 一句话
+
+root 授权的**两侧窗口已由本车道自开并跑完**：
+①（52/752 实下发、HUD 不归零 + 53 触发/TCharDesc 尾）**GREEN**；
+②（`CM_RUN(3013)>=1`）**GREEN**（读 2）；
+③（有怪点 `af>2` 且两侧都有出现帧）**GREEN**（Rust `af` 峰值 74 / 客户端 37 对，C# 23 对）。
+聚合一键判据 `window_handoff.py --judge` = **6/8 OK**，两条 RED 都**如实登记**：
+**(A)** ③b「能攻击造成伤害」——Rust 侧 `CM_HIT(3014)=2` 但 **0 伤害帧**（C# 侧 `SM_STRUCK=6`/`SM_NOWDEATH=1`）；
+**(B)** ③a 反向对照点 `(291,666)`——Rust 0 对（与 `vis==0 && af==0` 自洽），**C# 侧 1 对**（城墙上的一个 actor）。
+
+# 1) 就绪门（开窗前，全绿；原始件 `278-…txt`）
+
+| 门 | 读数 |
+| --- | --- |
+| Rust R1..R8（`check_rust_window_preflight.py`） | **GREEN**（五片修复全 `--is-ancestor=YES`；R6 生产路径零差异；R7 六件 exe 出处一致；R8 九游戏端口全 DOWN） |
+| C# 抓包前置（`check_csharp_capture_preflight.py`，shadow=影子 RunGate 7600） | **GREEN**（部署件含 `607e9b773`；真/影 `ServerWorkThread=1`；上游 5000；`!servertable` 7200） |
+| 窗口槽位 | `3306:UP`（共享 MySQL）；`5000/5100/5500/5600/5700/6000/7000/7100/7200/7600` 全 **DOWN** |
+
+# 2) 跑法与站位（每趟起栈前重设）
+
+- 站位列 = `mir2_db.characters.MapName/CX/CY`（本表无 `x/y` 列）；**压血** = `characters_ablity.Hp = MaxHP - 2`（主键 `PlayerId = characters.Id`）。
+- ③b 有怪点 = **`(605,578)`**（`check_mongen_dense_points.py --best-point`：框内、`E=12.681`、`tile=Walk`）。
+- ③a 反向点 = **`(291,666)`**（全部 76 个 `MonGen` 生成框之外，最近框 Chebyshev=30 > `ViewRange=12`）。
+- 客户端 = 冻结 `D:\MirClient-run\MirClinet.exe`，账号 `mir2test`，角色 `aaa`；每趟经 7200 代理 → 影子网关 7600 抓包，`export_s2c.ps1` 解码成 `capture.jsonl`。
+- Rust 侧：`start_rust_stack.ps1 -RustBinDir E:/tmp/m2svr-window-target/debug -Seed 42`；`-AutoPlaySec 0 -AttackClicks 24 -AttackRing <环> -RunHoldMs 500`。
+- C# 侧：`E:/MirServer/start-all.ps1`（oracle 部署件），同客户端同动作；孤儿 `GameSvr.exe` 由绝对路径精确停（`start-all.ps1 -Stop` 会连 3306 一起停，未用）。
+- 收工：游戏端口实拍全 DOWN（`3306` 除外），`aaa` 还原到开工前 `(0,292,652)` / `Hp=19`（§7）。
+
+# 3) ③b 有怪点 `(605,578)`（两侧）
+
+## 3a) ① 血/体力 + 53 帧（Rust，判据 `check_healthspellchanged_trigger.py` / `check_client_run_frames.py`）
+
+```
+入图输入（run-20261015-b-rust-game-svr.out.txt）：
+  52/752 入图输入 ChrName=aaa layout=client-58 tail_len=58 WAbil[level=1 ac=0 … hp=17 mp=15 max_hp=19 max_mp=15 …]
+check_healthspellchanged_trigger.py --log … --capture …   ⇒ VERDICT GREEN
+  OK  T1 53 触发前置：1/1 条入图行 hp<max_hp（首条 hp=17<19）
+  OK  T2 s2c 53 条数=2 >= 1（修复路径被真实覆盖）
+  OK  T3 53 body_len=12（由日志 layout=client-58 推得）
+check_client_run_frames.py --capture … --expect-52-body-len 58 --min-run-count 1  ⇒ RESULT GREEN
+  OK ① c2s CM_WALK(3011)=38
+  OK ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，可跑）
+  OK ③ CM_RUN(3013)=2 >= 1
+```
+
+- **HUD 截图**：`run-20261015-b-rust-05-ingame-hud-17-19.png`（进世界帧，`17/19` + `15/15`，血球非黑）。
+  （root 判据写「HUD 19/19」；本窗口按 §2 压血到 `MaxHP-2` ⇒ **17/19** 才是正确读数；
+  关键是 **HUD 不是 `0/0`**、52 是 58B 冻结客户端布局。）
+- 对照：C# 侧同点同客户端 HUD 仍是 **`0/0`**（oracle 40B 布局）——即卡 ① 的**故意偏离**在生产默认下生效（§6 白名单）。
+
+## 3b) ② 跑（`CM_RUN`）——见上，Rust `CM_RUN=2`；C# 侧本窗口未计 `CM_RUN`（oracle HUD 0/0 ⇒ `CanRun` 拒跑，属预期）
+
+## 3c) ③ 出现帧（Rust 服务端 + 两侧客户端）
+
+```
+check_aoi_visibility_diag.py --log <b-rust log> --expect visible --min-vis 1   ⇒ RESULT GREEN
+  进世界 aaa CurMap=0 (605,578)
+  采样 … vr=12 vis=10 new=0 af=20 same_map=1056 nearest=4 …
+  采样 … vr=12 vis=15 new=0 af=56 same_map=1726 nearest=4 …
+  采样 … vr=12 vis=17 new=0 af=74 same_map=1726 nearest=1 …
+  OK  ③ --expect visible：max vis=17 >= 1，max af=74 >= 2
+
+check_client_s2c_frames.py --capture <b-rust cap> --min-appearance-pairs 1  ⇒ GREEN
+  s2c_frames=130  enter_seq=658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46
+  52_present=True body_len=58  752_present=True  appearance_pairs=37
+
+aoi_visibility_pair.py --left <b-rust cap> --right <b-csharp cap> --expect visible --min-pairs 1  ⇒ RESULT GREEN
+  rust: pairs=37 | csharp: pairs=23
+  INFO recog 集合对照（仅信息）：both=0 only_rust=24 only_csharp=16   （两侧 ActorId 不同 ⇒ 以计数/截图为据）
+```
+
+- **C# 侧**：`appearance_pairs=23`，`52 body_len=40`（oracle）。截图 `run-20261015-b-rust-06-attack.png`（Rust，同屏多怪）。
+- ⇒ ③ 的 root 判据（「有怪点 `af>2` 且两侧同框」）**成立**：`(605,578)` 在生成框内（E=12.681），两侧都真的收到出现帧。
+
+## 3d) RED-1：③b「能攻击造成伤害」（DoD③ 第三半）Rust 侧未达
+
+```
+check_attack_observability.py --left <b-rust cap> --right <b-csharp cap> --expect any --min-hits 1  ⇒ RESULT RED
+  [left]  cm_hit=2 sm_struck=0 sm_nowdeath=0
+  [right] cm_hit=3 sm_struck=6 sm_nowdeath=1
+```
+
+- **Rust 侧 2 击都打空**，服务端日志（`run-20261015-b-rust-game-svr.out.txt`）：
+  `攻击：actor_id=1068 前方格 (602,571) 无目标 ⇒ 仍按 oracle 抽攻击力（attack_swing）…`（两行，`(602,571)`/`(601,571)`）。
+- 机制（照 oracle，非本片改）：`PlayObject.Attack.cs:884` 成功门 `nX==CurrX && nY==CurrY`；取目标是 `GetPoseCreate()` = **状态化朝向**的前方格（`PlayObject.Attack.cs:26`），消息 `Tag` 的 dir 只在取目标**之后**更新朝向（`BaseObject.Attack.cs:12`）。
+  该 2 击消息 `Tag=7`（upleft），而角色状态化朝向是**北**（前一步 `Tag=0` 走步留下）⇒ 前方格 (x,y-1) 空 ⇒ 无目标。
+- 对照：C#（oracle）同点同动作得 `SM_STRUCK=6`/`SM_NOWDEATH=1` ⇒ 该点能打；两侧差异的**直接原因是状态化朝向/怪物摆位不同**（两侧 ActorId 集合 both=0），本窗口不足以判「Rust 攻击结算缺陷」。
+- **登记（不静默）**：Rust 侧本窗口**未观测到任何伤害/受击帧**；DoD③ 第三半在 Rust 侧**未闭环**，需下一次窗口（让状态化朝向对准怪，或换受击探针）复跑。
+- **工具观察（登记，未改）**：`mir_flow.ps1` 的命中点环/按住点以 `(512,384)` 为中心，而本部署真客户端角色屏幕中心约 `(512,259)`（底部 UI 占下方）⇒ 默认环整体偏下约 2 格；本趟已用自定义 `-AttackRing` 补偿。是否改工具（如加 `-CenterY`）归 owner 裁决。
+
+# 4) ③a 反向对照点 `(291,666)`（两侧）
+
+```
+check_aoi_visibility_diag.py --log <a-rust log> --expect none  ⇒ RESULT GREEN
+  进世界 aaa CurMap=0 (291,666)
+  采样 … vr=12 vis=0 new=0 af=0 same_map=456  nearest=31 ⇒ nearest>vr（窗口外）
+  采样 … vr=12 vis=0 new=0 af=0 same_map=1056 nearest=31
+  OK  ② --expect none：2 条采样 vis==0 且 af==0
+
+aoi_visibility_pair.py --left <a-rust cap> --right <a-csharp cap> --expect none  ⇒ RESULT RED
+  rust: pairs=0 | csharp: pairs=1 recogs=['0x0f336101']
+  RED --expect none：csharp 出现对=1 != 0
+```
+
+- **Rust 侧 0 对**（与 `vis==0 && af==0` 自洽）；**C# 侧 1 对**（`SM_TURN(10)+SM_FEATURECHANGED(41)`，actor `0x0f336101`）。
+- 截图 `run-20261015-a-csharp-05c-ingame.png`：角色在城墙走道，**左上角有一个 actor**（C# 侧 HUD 为 `0/0`）。
+- 该点在全部生成框**之外**（最近框 Chebyshev=30），故该 actor **不是新出生**（游走怪/守卫类）。⇒ **RED-2 登记**：
+  ③a「两侧都 0 对」不成立；两侧的差异是「该点是否恰好有一个远距 actor 进入 12 格窗口」，**不是**「AOI 没算/没发」。
+  不影响 ③b（有怪点两侧都有帧）。
+
+# 5) 一键聚合判据（`window_handoff.py --judge`）
+
+```
+OK   ③b 服务端 vis>=1
+OK   ③b 客户端 pairs>=1
+OK   ③b 两侧 visible
+OK   ①② Rust 52=58 + CM_RUN>=1
+OK   ① Rust 53 触发+尾长
+OK   ③a 服务端 vis==0
+RED  ③b 两侧攻击/伤害 RED
+RED  ③a 两侧 none RED
+WINDOW_JUDGE=RED   AOI_GAP3=RED
+```
+
+| # | root 判据（12:2x） | 结果 | 证据 |
+| --- | --- | --- | --- |
+| ① | HUD 不为 0/0 且 `52/752` 实下发 | **GREEN** | HUD `17/19`；`52 body_len=58` + `752 present`；53 T1/T2/T3 |
+| ② | `CM_RUN(3013) >= 1` | **GREEN** | `CM_RUN=2` |
+| ③ | 有怪点 `af>2` 且两侧同框 | **GREEN** | Rust `af` 峰值 74；两侧 pairs 37 / 23 |
+| （附） | 受击步「能攻击造成伤害」 | **RED（Rust 侧）** | `CM_HIT=2` 但 0 伤害帧；前方格无目标 |
+| （附） | ③a 反向 `(291,666)` 两侧 0 对 | **RED（C# 侧 1 对）** | `a-csharp` capture + 截图 |
+
+# 6) 判级 / 白名单 / 登记
+
+- 卡级 **tier = R**：本窗口是 R 级真机全量对拍（触及时序/战斗路径）。**不据此收卡**（两条 RED 未闭环）。
+- 生产默认 `MIR2_CLIENT_ABILITY_LAYOUT` 未设 = 冻结客户端 58B（卡 ① 的故意偏离，白名单待 owner 签字，见 `61-…txt`）；本窗口**未改**该默认。
+- 未做/未接（沿用既有登记，不在本片扩）：`RM_DISAPPEAR` 无编码器；`STONE` 未移植；`RM_MOVEFAIL` 未接。
+
+# 7) 收工与残留
+
+- 端口实拍（`277-…txt` §30-final-ports）：`3306:UP`；`5000/5100/5500/5600/5700/6000/7000/7100/7200/7600` 全 **DOWN**。
+- `aaa` 还原：`MapName='0' CX=292 CY=652`；`Hp=19`（开工前 `19/19`，见 `277 §01-before`）。
+- 本片零生产代码改动；冻结面 `src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage` 空。
+- **残留物清单（仓外，可删）**：`E:/tmp/m2svr-window-run/{run2,cs1,a-rust,a-cs,merged-b,merged-a}/`（全部原始件，已按 §证据入库主要件）、`E:/tmp/window/cliente2e/shadow/**`（影子 conf/RunGate，两趟共用）、`E:/tmp/window/cliente2e/rust/**`（首趟 ③b）。无残留进程；`E:/MirServer/logs/*` 为 C# 部署件本轮日志（原位，未清）。
+- **入库件**：本文件 + `277-two-side-window-judge-20261015.txt` + `278-window-commands-and-preflight-20261015.txt` + `279-gates.txt` + `280-boundary.txt` + `281-redcheck-window-run-20261015.txt` + `run-20261015-{b-rust,b-csharp,a-rust,a-csharp}-*`（raw capture / 服务端日志 / stages / 3 张截图）。
