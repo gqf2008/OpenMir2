@@ -1,0 +1,146 @@
+264 — 片64：R7「出处清单 ↔ 预构建 exe」的**恢复命令可执行化**（与 R8 的 PREFLIGHT_STOP_CMD 对等）
+卡 `openmir2-client-e2e-enter-gaps` / 车道 m2-svr / `openmir2-worker-11` / 2026-10-15 / tag `m2svr`
+base = `origin/master` = `14421a4f01c0c4829f32dad80252a6887f0eacc3`；改动 = 1 .py + 1 .sh.txt + 1 .md + 本证据
+
+> ⚠ **本件已由片65 返工订正（reviewer-5 `a3ffedcf` F-1/F-2）**：片64 打印的命令尾部是
+> `--provenance "<path>" --record-provenance`（**`--record-provenance` 没给值**）⇒ 照抄即
+> `error: argument --record-provenance: expected one argument`（rc=2）。本文下面所有命令形态
+> **已换成片65 修正后的带值形**（`--record-provenance "<target-dir>/window-provenance.json"`）；
+> 修正的完整读数/执行性证明/改坏必红见 `269`/`270`。片64 的历史读数（selftest 71/71）保留在
+> `266`（片65 后为 73/73）。
+只读复核（git + 真机两侧日志）；零起栈、零游戏端口、零 kill、零编译；未动共享主检出 / root 活脚本
+====================================================================================================
+
+# 0) 一句话结论
+
+R8 的 RED 自片63 起自带**可照抄**的停栈命令（`PREFLIGHT_STOP_CMD`），而 R7 的 RED 只有一句散文
+「先重编译 + 重录清单」；同时 `client-e2e-window.fixed.sh.txt start` 在 `run_guard || exit 1` 处
+**fail-closed 停住（不会替操作员编译）** ⇒ 一次 R7 RED（源前移且 `mir2-rs/**` 有生产差异、
+或暖 target 里是别处拷来的旧件）就把开窗卡死，操作员只能回翻证据包。本片把 R7 的恢复动作
+**可执行化**：工具打印 `PREFLIGHT_RECORD_CMD:`、替身脚本在 RED 时单独提取并印出该行、手册补 §1b。
+
+# 1) 缺口（为什么这是开窗期的真缺陷，不是文案）
+
+`check_rust_window_preflight.py` 的 R7（片㊻）在做一件 R6 做不到的事：证明 `<target-dir>/debug`
+里的六件 exe **就是当前构建源编出来的**（R6 只比 git 差异）。它红起来只有两种原因：
+
+  a. 清单 `source_head` != 当前 `--ref`，且两者在 `mir2-rs/bins|crates|Cargo.toml|Cargo.lock`
+     上有差（真身 = **刷了源但没重编译**）；
+  b. 某件 exe 的 sha256 != 清单（真身 = 暖 target 里是别处拷来的旧件 / 缺件）。
+
+两种的正确恢复都一样：**重编译六件 + 重录清单**。但片63 只把 R8 的停栈命令做成了可照抄行，R7 没有；
+且替身脚本的 `start` 顺序是 `run_guard || exit 1` → `cargo build`（即 RED 时**拒绝走到编译那步**）。
+⇒ 操作员必须**手工**拿到确切命令。
+
+反证（本片实拍，§3.2）：拿修复前 ref `8e491f81e` 跑真门，R1/R6/R7 都 RED，但 base 版的输出里
+**没有**任何可照抄的 R7 恢复命令（`grep -c PREFLIGHT_RECORD_CMD` = 0）—— R8 那条有
+（`PREFLIGHT_STOP_CMD`），R7 这条没有。
+
+# 2) 改动（3 文件 + 5 条新 selftest 牙）
+
+| 文件 | 改动 |
+| --- | --- |
+| `check_rust_window_preflight.py` | 新增 `PROVENANCE_RECORD_CMD_MARK = "PREFLIGHT_RECORD_CMD:"` / `WINDOW_BUILD_PKGS`（六 `-p`，与 `WINDOW_BINS` 一一对应）/ `provenance_record_command(repo,target_dir,provenance_path)`；R7 的 **2 条 RED + 1 条 PREREQ** 消息尾接该命令；新增 5 条 selftest 牙 |
+| `client-e2e-window.fixed.sh.txt` | `run_guard` 在 RED 时**额外**提取并单独印一行 `PREFLIGHT_RECORD_CMD:`（与已有的 `PREFLIGHT_STOP_CMD` 对等）；R7 的 RED 文本很长，`tail -25` 可能截掉它 |
+| `82-two-side-window-runbook.md` | 新增 §1b「开窗前的前置门与 RED 恢复」：R1..R8 → RED 含义 → 可照抄恢复动作表；点名 R7 的录制必须**门在编译成功之后** |
+| （不改 Rust） | `src/ sql/ MirClient/ mir2-rs/bins/ mir2-rs/crates/` 全空（`268-boundary.txt`） |
+
+**fail-closed 要点（本片最要紧的一条）**：`--record-provenance` 只是把**当前** `--ref` 盖到清单上，
+它**不校验** exe 是否真由该 ref 编出（这是该子命令的信任边界）⇒ 「编译失败也录制」会把旧件洗成新源、
+R7 随即**假绿**。故命令用 `&&` 串联：`cargo build` 非零 ⇒ 整条链短路、清单保持原样、R7 继续 RED。
+该性质有独立牙：`r7-record-cmd-gated-on-build-success`（断言 `cargo build` 必须出现在
+`--record-provenance` **之前**，且两者之间是 `&&`）。
+
+# 3) 改前 / 改后（真门原始输出）
+
+## 3.1 selftest 计数：66/66 → 71/71
+```
+$ python -I -B <base 14421a4f0 的 pristine 副本 /e/tmp/r7base/baseline_check.py> --selftest | tail -1
+SELFTEST OK (66/66)
+$ python -I -B <改后 check_rust_window_preflight.py> --selftest | tail -1
+SELFTEST OK (71/71)
+```
+
+## 3.2 R7 RED 消息：改前无命令 / 改后有命令（同一 ref = 修复前 `8e491f81e`、同一窗口源 + 同一清单）
+
+`before` = base `14421a4f0` 的 pristine 副本；`after` = 本片改后；
+两侧 `--repo E:/tmp/m2svr-window-origin --ref 8e491f81e --target-dir E:/tmp/m2svr-window-target
+--provenance E:/tmp/m2svr-window-target/window-provenance.json` 逐字相同（退出码两侧都是 1）。
+```
+$ grep -E "^RED R7|^PREREQ_RED R7" <before 输出>          # 改前（无命令）
+RED R7: 出处清单 source_head=da2df1fdbd != 当前构建源 8e491f81e=8e491f81e7 且在影响六件 exe 的路径上有 3 件差异（mir2-rs/bins/game-svr/src/main.rs, mir2-rs/bins/game-svr/src/pickwire.rs, mir2-rs/bins/game-svr/src/smframe.rs）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）；先重编译 + 重录清单
+$ grep -c "PREFLIGHT_RECORD_CMD" <before 输出>
+0
+$ grep -E "^RED R7|^PREREQ_RED R7" <after 输出>           # 改后（带命令）
+
+RED R7: 出处清单 source_head=da2df1fdbd != 当前构建源 8e491f81e=8e491f81e7 且在影响六件 exe 的路径上有 3 件差异（mir2-rs/bins/game-svr/src/main.rs, mir2-rs/bins/game-svr/src/pickwire.rs, mir2-rs/bins/game-svr/src/smframe.rs）⇒ 预构建 exe 来自另一棵树（窗口会测旧件）；先重编译 + 重录清单。PREFLIGHT_RECORD_CMD: cd "E:/tmp/m2svr-window-origin/mir2-rs" && CARGO_TARGET_DIR="E:/tmp/m2svr-window-target" cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv && python -I -B "E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\check_rust_window_preflight.py" --repo "E:/tmp/m2svr-window-origin" --ref HEAD --target-dir "E:/tmp/m2svr-window-target" --record-provenance "E:/tmp/m2svr-window-target/window-provenance.json"
+$ grep -c "PREFLIGHT_RECORD_CMD" <after 输出>
+1
+```
+
+## 3.3 正常口径**逐字节不变**：真门在窗口源 HEAD（`da2df1fdb`）+ 现行清单上仍是「R1..R7 全 OK + R8 RED」
+
+（R7 走 OK 支 ⇒ 不打印恢复命令，`grep -c PREFLIGHT_RECORD_CMD` = 0：这正证明本片只加 RED 侧信息、不动绿径。）
+```
+$ python -I -B check_rust_window_preflight.py --repo E:/tmp/m2svr-window-origin --ref HEAD \
+    --target-dir E:/tmp/m2svr-window-target --provenance E:/tmp/m2svr-window-target/window-provenance.json
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 d16b5199d9（片⑪ AOI 诊断 vr/new/af）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 0d0d62a695（片㉜ 受击帧 SM_STRUCK 广播）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 c61b9627a1（片㊴ 53 SM_HEALTHSPELLCHANGED TCharDesc 尾）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 6cadc9fbf9（片㊼ 52 SM_ABILITY 调用点布局全覆盖）（--is-ancestor=YES）
+[OK] R1 构建源 E:/tmp/m2svr-window-origin 的 HEAD 含修复提交 fd68e037db（片31 SM_STRUCK 客户端布局（HIGHHP 家族））（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+[OK] R6 构建源 HEAD=da2df1fdbd 相对基线 origin/master@14421a4f01 生产路径零差异
+[OK] R7 出处清单 window-provenance.json source_head=da2df1fdbd，6 件 exe sha256 逐字节一致
+RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 30284), 5100(pid 33132), 5500(pid 29240), 5600(pid 29240), 5700(pid 33132), 6000(pid 33132), 7000(pid 9100), 7100(pid
+RED R8: 在跑的 game-svr.exe（pid 30284）来自 E:\tmp\openmir2-merge-target\debug\game-svr.exe，不是本计划 E:/tmp/m2svr-window-target\debug\game-svr.exe ⇒ 修复前/异源栈，
+$ echo $?    # 真门退出码
+1           # RED（仅因 R8 槽位被泄漏栈占；R1..R7 与 base 逐字节相同）
+$ tail -1 <该输出>
+RESULT: RED
+$ grep -c "PREFLIGHT_RECORD_CMD" <该输出>
+0
+```
+
+## 3.4 替身脚本把命令单独印出来（`run_guard`）——含「命令落在 tail -25 之外」的牙
+
+`WINDOW_PREFLIGHT_CMD` 是脚本自带的红检注入口（片㊼/㊽ 既有）。三个读数：
+
+① 真门（HEAD）：只有 `PREFLIGHT_STOP_CMD`（R7 绿）；
+② 注入 `--ref 8e491f81e`：`PREFLIGHT_STOP_CMD` + **`PREFLIGHT_RECORD_CMD`** 两行都在；
+③ 合成长输出（命令在**第 1 行**、其后 40 行 filler ⇒ 落在 `tail -25` 之外）：仍被单独印出 ⇒
+   提取逻辑是活的（把提取块删掉 ⇒ 该读数从 1 变 0，见 `265-redcheck-r7-recovery.txt`）。
+```
+$ bash client-e2e-window.fixed.sh.txt guard                       # ① 真门 @HEAD
+WINDOW_PREFLIGHT_RED  （拒绝起窗：源/槽位/出处未过前置门；零副作用：未暂停车队/未构建/未起栈）
+PREFLIGHT_STOP_CMD: powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir E:/tmp/client-e2e/stack
+$ WINDOW_PREFLIGHT_CMD=<同门但 --ref 8e491f81e> bash client-e2e-window.fixed.sh.txt guard   # ②
+RED R7: 出处清单 source_head=da2df1fdbd != 当前构建源 8e491f81e=8e491f81e7 且在影响六件 exe 的路径上有 3 件差异（mir2-rs/bins/
+WINDOW_PREFLIGHT_RED  （拒绝起窗：源/槽位/出处未过前置门；零副作用：未暂停车队/未构建/未起栈）
+PREFLIGHT_STOP_CMD: powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir E:/tmp/client-e2e/stack
+PREFLIGHT_RECORD_CMD: cd "E:/tmp/m2svr-window-origin/mir2-rs" && CARGO_TARGET_DIR="E:/tmp/m2svr-window-target" cargo build --offline -p game-svr -p ga
+$ WINDOW_PREFLIGHT_CMD="bash <fake-preflight.sh>" bash client-e2e-window.fixed.sh.txt guard | grep -c PREFLIGHT_RECORD_CMD   # ③
+1
+```
+
+# 4) 恢复命令形态（工具实际打印的那一行）
+
+```
+PREFLIGHT_RECORD_CMD: cd "<源>/mir2-rs" && CARGO_TARGET_DIR="<target-dir>" cargo build --offline \
+  -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv && \
+  python -I -B "<证据目录>/check_rust_window_preflight.py" --repo "<源>" --ref HEAD \
+    --target-dir "<target-dir>" --record-provenance "<target-dir>/window-provenance.json"
+```
+（片65 订正：`--record-provenance` 必须带值，否则 argparse `expected one argument` rc=2；见 `269`。）
+
+- 与 `client-e2e-window.fixed.sh.txt start` 第 2 步的 `cargo build` **逐字同源**（同一对 `-p` 列表）；
+- 形态 = bash 单行（窗口脚本与手册命令都在 MSYS bash 里执行；`cd /e/...` 与 `cd E:/...` 都能用）；
+- 路径加双引号以容忍空格；`--ref HEAD` 与窗口口径一致（不引入新的 ref 语义）。
+
+# 5) 边界与纪律
+
+- 生产面零改动（`src/ sql/ MirClient/ mir2-rs/bins/ mir2-rs/crates/**` 空，`*.rs`/`*.toml` 零改动）；
+- 零起栈 / 零游戏端口起占 / 零 kill / 零编译（`cargo build` 只出现在命令**文本**里，未执行）；
+- 未动共享主检出、未动 root 活脚本 `/e/tmp/openmir2-watch/client-e2e-window.sh`、**未代停泄漏栈**；
+- 未改 R7 的判据语义（`RUST_BUILD_PATHS` / sha256 对账 / `record_provenance` 的信任边界都不动），
+  只在 RED/PREREQ 侧**追加**一行可照抄命令 ⇒ 绿径逐字节不变（§3.3）。

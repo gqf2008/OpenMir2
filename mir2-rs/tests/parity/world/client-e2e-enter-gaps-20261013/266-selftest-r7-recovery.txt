@@ -1,0 +1,83 @@
+266 — 片64/片65 改后 selftest 全文（73/73；片64 为 71/71，片65 新增 2 条牙）
+卡 `openmir2-client-e2e-enter-gaps` / 车道 m2-svr / `openmir2-worker-11` / 2026-10-15 / tag `m2svr`
+命令：cd mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013 && python -I -B check_rust_window_preflight.py --selftest
+（对照：base 14421a4f0 的 pristine 副本 = 66/66；片64 = 71/71；本片 = 73/73）
+片65 新增：`r7-record-cmd-argv-parses`（执行性：把打印的命令尾部按 shell 词法切 token 喂回本工具 argparse）
++ `r7-record-cmd-tail-clean`（PREREQ 支命令尾不得被全角括号 `）` 粘住）。
+====================================================================================================
+```
+[PASS] selftest mapinfo-names ['jiaren', 'DB', 'G002', '0']
+[PASS] selftest mapinfo-index 3
+[PASS] selftest mapinfo-missing
+[PASS] selftest mapinfo-26-is-0 0
+[PASS] selftest mapinfo-count-27 27
+[PASS] selftest marker-good
+[PASS] selftest marker-old-red
+[PASS] selftest format-line-finder
+[PASS] selftest points-spec [(291, 666, 'outside'), (289, 618, 'inside')]
+[PASS] selftest points-spec-bad
+[PASS] selftest git-init 1cb204afa6f4ad8c80d028453c151b13f3d847c2
+[PASS] selftest git-ancestor-yes True
+[PASS] selftest git-second-oid 32dd03f0094353ad12a577cc7344ced3a4c4dcc3
+[PASS] selftest git-ancestor-no False
+[PASS] selftest fixes-second-missing-red ok=1 prob=1 pre=0
+[PASS] selftest fixes-all-present ok=2 prob=0 pre=0
+[PASS] selftest fixes-unknown-prereq ok=1 prob=0 pre=1
+[PASS] selftest required-fixes-default-five (('d16b5199d98029081daccd9252f81b94a9596eaf', '片⑪ AOI 诊断 vr/new/af'), ('0d0d62a695082730dd2398e6d35bf40c8f70480a', '片㉜ 受击帧 SM_STRUCK 广播'), ('c61b9627a1cad79f300b0efab184ec1dd1eec017', '片㊴ 53 SM_HEALTHSPELLCHANGED TCharDesc 尾'), ('6cadc9fbf9004198a0ce02c2452cb7851e0bc488', '片㊼ 52 SM_ABILITY 调用点布局全覆盖'), ('fd68e037db0c68e00774b0c3ab4b1eeda29af051', '片31 SM_STRUCK 客户端布局（HIGHHP 家族）'))
+[PASS] selftest required-fixes-include-highhp-family (('d16b5199d98029081daccd9252f81b94a9596eaf', '片⑪ AOI 诊断 vr/new/af'), ('0d0d62a695082730dd2398e6d35bf40c8f70480a', '片㉜ 受击帧 SM_STRUCK 广播'), ('c61b9627a1cad79f300b0efab184ec1dd1eec017', '片㊴ 53 SM_HEALTHSPELLCHANGED TCharDesc 尾'), ('6cadc9fbf9004198a0ce02c2452cb7851e0bc488', '片㊼ 52 SM_ABILITY 调用点布局全覆盖'), ('fd68e037db0c68e00774b0c3ab4b1eeda29af051', '片31 SM_STRUCK 客户端布局（HIGHHP 家族）'))
+[PASS] selftest git-ancestor-unknown-prereq None
+[PASS] selftest git-not-a-repo-prereq None
+[PASS] selftest git-third-oid d9a61d374be7eb1c3f054dc3ac067f05ed7f90f0
+[PASS] selftest git-fourth-oid e4bf5304dbd25df69ac714cb9e48cacbd8a87bdc
+[PASS] selftest r6-equal-green ok=1 prob=0 pre=0
+[PASS] selftest r6-behind-prod-red ok=0 prob=1 pre=0
+[PASS] selftest r6-ahead-green ok=1 prob=0 pre=0
+[PASS] selftest r6-nonprod-diff-green ok=1 prob=0 pre=0
+[PASS] selftest r6-unknown-baseline-prereq ok=0 prob=0 pre=1
+[PASS] selftest r6-empty-baseline-skip ok=1 prob=0 pre=0
+[PASS] selftest r6-default-baseline-origin-master 'origin/master'
+[PASS] selftest git-fifth-nonprod-oid f7e482304d2782b848f830ec7db1917c148d28f8
+[PASS] selftest r7-record-ok None
+[PASS] selftest r7-record-source-head 'f7e482304d2782b848f830ec7db1917c148d28f8'
+[PASS] selftest git-sixth-nonprod-oid ab0745acd0462d35acf5db0ade90fa9e34711a8a
+[PASS] selftest r7-green ok=1 prob=0 pre=0
+[PASS] selftest r7-nonprod-advance-green ok=2 prob=0 pre=0
+[PASS] selftest r7-nonprod-advance-ok-names-manifest-head '[OK] R7 出处清单 window-provenance.json source_head=f7e482304d，2 件 exe sha256 逐字节一致'
+[PASS] selftest r7-source-head-mismatch-red ok=0 prob=1 pre=0
+[PASS] selftest r7-hash-mismatch-red ok=0 prob=1 pre=0
+[PASS] selftest r7-red-names-record-cmd 'Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy" --ref HEAD --target-dir "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt" --record-provenance "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt\\window-provenance.json"'
+[PASS] selftest r7-stale-head-red-names-record-cmd 'Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy" --ref HEAD --target-dir "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt" --record-provenance "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt\\window-provenance.json"'
+[PASS] selftest r7-record-cmd-builds-six-pkgs 'cd "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy/mir2-rs" && CARGO_TARGET_DIR="C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt" cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv && python -I -B "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m2-svr\\mir2-rs\\tests\\parity\\world\\client-e2e-enter-gaps-20261013\\check_rust_window_preflight.py" --repo "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy" --ref HEAD --target-dir "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt" --record-provenance "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt\\window-provenance.json"'
+[PASS] selftest r7-record-cmd-gated-on-build-success 'cd "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy/mir2-rs" && CARGO_TARGET_DIR="C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt" cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv && python -I -B "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m2-svr\\mir2-rs\\tests\\parity\\world\\client-e2e-enter-gaps-20261013\\check_rust_window_preflight.py" --repo "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy" --ref HEAD --target-dir "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt" --record-provenance "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt\\window-provenance.json"'
+[PASS] selftest r7-record-cmd-argv-parses record_provenance='C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt\\window-provenance.json' argv=['--repo', 'C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy', '--ref', 'HEAD', '--target-dir', 'C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt', '--record-provenance', 'C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt\\window-provenance.json']
+[PASS] selftest r7-missing-bin-red ok=0 prob=1 pre=0
+[PASS] selftest r7-missing-manifest-prereq ok=0 prob=0 pre=1
+[PASS] selftest r7-prereq-names-record-cmd '" --repo "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy" --ref HEAD --target-dir "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt" --record-provenance "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt\\nope.json"'
+[PASS] selftest r7-record-cmd-tail-clean 'y\\tgt" --record-provenance "C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-jo6vccsy\\tgt\\nope.json"'
+[PASS] selftest r7-empty-skip-info ok=1 prob=0 pre=0
+[PASS] selftest r7-record-needs-target '缺 --target-dir'
+[PASS] selftest r7-record-missing-bin '缺件（先 `cargo build … -p …`）：nope.exe'
+[PASS] selftest r7-window-bins-six ('game-svr.exe', 'game-gate.exe', 'login-srv.exe', 'login-gate.exe', 'sel-gate.exe', 'db-srv.exe')
+[PASS] selftest r7-provenance-name window-provenance.json
+[PASS] selftest r7-rust-build-paths ('mir2-rs/bins', 'mir2-rs/crates', 'mir2-rs/Cargo.toml', 'mir2-rs/Cargo.lock')
+[PASS] selftest r8-game-ports-nine-no-3306 (5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200)
+[PASS] selftest r8-free-green ok=2 prob=0 pre=0
+[PASS] selftest r8-occupied-and-stale-exe-red ok=1 prob=2 pre=0: RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 30284) ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包（2026-10-14 15:0x 的假回归即此）。先停栈： powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_sta
+[PASS] selftest r8-stop-dir-validated-names-owning-dir ok=[OK] R8 停栈目录校验：E:/tmp/client-e2e/stack2/rust-stack.pid.json 持有全部占用端口的 pid（[30284]）; prob=RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 30284) ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包（2026-10-14 15:0x 的假回归即此）。先停栈： powershell -NoProfile -ExecutionPolicy Bypass -Fil
+[PASS] selftest r8-stop-dir-mismatch-red ok=1 prob=2 pre=0: RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 30284) ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包（2026-10-14 15:0x 的假回归即此）。先停栈： powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir <持有这些 pid 的目录> -Stop | RE
+[PASS] selftest r8-stop-dir-missing-red ok=1 prob=2 pre=0: RED R8: 窗口槽位被占 —— 游戏端口仍在 LISTENING: 5000(pid 30284) ⇒ 这是别的/修复前的栈；直接起窗会从旧 exe 抓包（2026-10-14 15:0x 的假回归即此）。先停栈： powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 -LogDir <持有这些 pid 的目录> -Stop | RE
+[PASS] selftest stop-dir-no-occupied-noop ok=0 prob=0
+[PASS] selftest stop-dir-owns-pids-ok ok=1 prob=0 pre=0
+[PASS] selftest load-pid-file-ok pids={30284} err=None
+[PASS] selftest load-pid-file-missing-err "读不了 C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-r8-pid-dz2pgvlr\\nope\\rust-stack.pid.json（[Errno 2] No such file or directory: 'C:\\\\Users\\\\gxh\\\\AppData\\\\Local\\\\Temp\\\\rustpf-r8-pid-dz2pgvlr\\\\nope\\\\rust-stack.pid.json'）"
+[PASS] selftest load-pid-file-bad-json-err 'C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-r8-pid-dz2pgvlr\\bad\\rust-stack.pid.json 不是合法 JSON（Expecting value: line 1 column 3 (char 2)）'
+[PASS] selftest slot-log-dir-default-preserved E:/tmp/client-e2e/stack2 / rust-stack.pid.json
+[PASS] selftest r8-plan-exe-green ok=2 prob=0 pre=0
+[PASS] selftest r8-no-target-dir-red ok=1 prob=1 pre=0
+[PASS] selftest r8-injected-probe-bad-prereq '读不了注入探针 C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-r8-uy1c7g6f\\bad.json（Expecting value: line 1 column 13 (char 12)）'
+[PASS] selftest r8-injected-probe-missing-prereq "读不了注入探针 C:\\Users\\gxh\\AppData\\Local\\Temp\\rustpf-r8-uy1c7g6f\\nope.json（[Errno 2] No such file or directory: 'C:\\\\Users\\\\gxh\\\\AppData\\\\Local\\\\Temp\\\\rustpf-r8-uy1c7g6f\\\\nope.json'）"
+[PASS] selftest mongen-wire-green 0
+[PASS] selftest mongen-wire-red 1
+[PASS] selftest mongen-wire-prereq 2
+SELFTEST OK (73/73)
+```

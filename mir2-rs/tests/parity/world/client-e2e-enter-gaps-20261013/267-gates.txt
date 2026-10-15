@@ -1,0 +1,54 @@
+267 — 四门禁 + 门自检（片64：R7 恢复命令可执行化）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15 / tag `m2svr`
+base = origin/master `14421a4f01c0c4829f32dad80252a6887f0eacc3`；head = 本片提交
+cwd = `mir2-rs`；CARGO_TARGET_DIR = `E:/tmp/m2svr-target`
+====================================================================================================
+
+# 0) 边界声明
+
+本片**零生产代码**：无 `.rs`/`.toml`/`.ps1`/`.cs` 改动；`src/ sql/ MirClient/
+mir2-rs/crates/protocol/ mir2-rs/crates/storage/ mir2-rs/bins/ src/BotSrv/ mir2-rs/tests/parity/m3/`
+全空。改动全部在 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`：
+`check_rust_window_preflight.py`（M，R7 恢复命令）、`client-e2e-window.fixed.sh.txt`（M，`run_guard` 提取）、
+`82-two-side-window-runbook.md`（M，新增 §1b）+ `264`/`265`/`266`/`267`/`268` + README §64 + SHA256SUMS。
+见 `268-boundary.txt`。
+
+# 1) 四门禁（原始件 `E:/tmp/m2svr-burst-0837/{clippy,test}.txt`）
+
+$ cargo fmt --all -- --check
+rc=0（无输出）
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.63s
+rc=0
+
+$ cargo test --workspace --no-fail-fast
+101 result-lines：**1233 passed / 0 failed / 22 ignored**（rc=0；无 FAILED / panicked）
+（与 base `14421a4f0` 的合并门读数逐项一致 ⇒ 本片未动任何 cargo 用例）
+
+$ cargo run -q -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+# 2) 门自检（本片改的是 `check_rust_window_preflight.py`；连同 `window_handoff.py` 一起复跑）
+
+$ python -I -B check_rust_window_preflight.py --selftest
+SELFTEST OK (**71/71**)   rc=0        # 改前 = 66/66（`264` §3.1）；新 5 条牙全文见 `266-…txt`
+$ python -I -B window_handoff.py --selftest
+SELFTEST OK (107/107)     rc=0        # 未改该工具，复跑防漂移
+
+# 3) 聚合门（入库替身脚本口径；`window_handoff.py --repo … --window-script ./client-e2e-window.fixed.sh.txt`）
+
+  OK   G2 ×11（各判据工具自检；含 `check_rust_window_preflight.py --selftest`）
+  OK   G5 ×2（替身脚本 `repo=`/`tgt=` 与本计划一致：`/e/tmp/m2svr-window-origin`、`E:\tmp\m2svr-window-target`）
+  RED  G1 Rust 窗口前置门 RED（唯一原因 = **R8 泄漏栈**，见 `264` §3.3）
+  WINDOW_READY=NO        RESULT: RED      rc=1
+⇒ **本片不改变卡级结论**：开窗唯一剩余阻塞仍是 R8（泄漏的修复前栈，属 root；本线不代停）。
+
+# 4) 判级与纪律
+
+判级 **L**（就绪脚本/文档 + 只读证据；不触 RNG 抽数 / 时序 / 落库 / 战斗数值）。
+零起栈、零游戏端口起占、零进程 kill、零编译构建（`cargo build` 只作为**命令文本**出现在证据里，
+本片从未执行它；四门禁的 `cargo` 调用是只读检查/测试，不产出窗口 exe）。
+未动共享主检出、未动 root 活脚本 `/e/tmp/openmir2-watch/client-e2e-window.sh`、**未代停泄漏栈**；
+未 merge、未自签 review。卡级 **R** 真机 DoD ①②③ 仍 not_verified（等 root 清 R8 后开窗）。

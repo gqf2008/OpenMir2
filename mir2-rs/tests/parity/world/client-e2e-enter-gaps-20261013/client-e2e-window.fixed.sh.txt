@@ -17,15 +17,23 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 只在红检/自检里注入：WINDOW_PREFLIGHT_CMD=<任意命令>
 preflight_cmd=${WINDOW_PREFLIGHT_CMD:-"python -I -B $here/check_rust_window_preflight.py --repo \"$repo\" --ref HEAD --target-dir \"$tgt_pf\" --provenance \"$tgt_pf/window-provenance.json\""}
 
-# 窗口前置门（fail-closed）：rc=0 才允许起窗；rc!=0 ⇒ 打印门输出尾部 + 已验证停栈命令 + RED 行。
+# 窗口前置门（fail-closed）：rc=0 才允许起窗；rc!=0 ⇒ 打印门输出尾部 + 已验证停栈命令 + **出处恢复命令** + RED 行。
+#
+# 片64：R8 的停栈命令（`stop`）与 R7 的重编/重录命令（`rec`）必须**都**被单独提出来印一行：
+# R7 那条 RED 文本很长（含 file 列表），`tail -25` 可能把它截掉，而 `start` 在 `run_guard || exit 1`
+# 处就停了（**不会**替操作员编译）⇒ 提取失败 = 一次 R7 RED 把开窗卡死。
 run_guard() {
-  local out stop
+  local out stop rec
   if ! out=$(eval "$preflight_cmd" 2>&1); then
     printf '%s\n' "$out" | tail -25
     stop=$(printf '%s\n' "$out" | grep -oE -- '-LogDir [^ ]+ -Stop' | tail -1)
+    rec=$(printf '%s\n' "$out" | grep -oE 'PREFLIGHT_RECORD_CMD: .*' | tail -1)
     echo "WINDOW_PREFLIGHT_RED  （拒绝起窗：源/槽位/出处未过前置门；零副作用：未暂停车队/未构建/未起栈）"
     if [ -n "$stop" ]; then
       echo "PREFLIGHT_STOP_CMD: powershell -NoProfile -ExecutionPolicy Bypass -File <源>/tools/m2-acceptance/start_rust_stack.ps1 $stop"
+    fi
+    if [ -n "$rec" ]; then
+      echo "$rec"
     fi
     return 1
   fi

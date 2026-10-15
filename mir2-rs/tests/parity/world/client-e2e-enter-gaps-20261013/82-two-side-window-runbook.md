@@ -46,6 +46,50 @@ python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mon
 4. 抓包栈一律**不用管道**：起栈命令 `... > <log> 2>&1`（禁 `| tee/tail/head/grep`，会把调用挂死）。
 5. `characters_ablity.Hp < MaxHP`（§2b；否则本窗口场景下 53 永不发，①② 覆盖不到片㊴）。
 
+## 1b. 开窗前的前置门（`check_rust_window_preflight.py` R1..R8）与 **RED 恢复**（片64）
+
+**开窗前必跑**（只读、零端口、零起栈；入库逐字替身 `client-e2e-window.fixed.sh.txt` 的 `guard`
+子命令跑的就是它，且 `start` 在 `run_guard || exit 1` 处 fail-closed）：
+
+```bash
+bash mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt guard
+# ⇒ rc=0 打 WINDOW_GUARD_OK；rc!=0 打 WINDOW_PREFLIGHT_RED（不构建 / 不占端口 / 不暂停车队）
+```
+
+每条 RED 的**可照抄恢复动作**（片面命令；`R7`/`R8` 两条由工具自己打印到输出里，别再回翻证据包）：
+
+| 门 | RED 含义 | 恢复动作 |
+| --- | --- | --- |
+| R1 | 构建源缺 HIGHHP 家族/③ 读数等修复提交 | `git fetch` + 把窗口源切到 `origin/master`（或含全部五片的 head） |
+| R2 | 源码缺 `vr/new/af` 版式或可见集判据 | 源太旧 ⇒ 同 R1 |
+| R3 | `MapInfo.txt` 第 N 个 section 的逻辑名 != 真机 `map_id` | 换 `--map-id/--map-name`，或核部署件 |
+| R4 | 坐标与 MonGen 生成框不符 | 用 `check_mongen_dense_points.py --rank 10` 重新选点（③a 用 `(291,666)`） |
+| R5 | 证据目录缺判据工具 | 补工具（不要拿老版式脚本顶上） |
+| R6 | 构建源落后基线（生产路径有差异） | `git fetch` + `checkout --detach <基线>` + 重编译（跟 R7） |
+| **R7** | 出处清单 ↔ exe 不一致 / 清单来自另一棵树 | **照抄工具打印的 `PREFLIGHT_RECORD_CMD:`**（重编六件 + 重录清单） |
+| **R8** | 槽位被占（泄漏/修复前的栈） | **照抄工具打印的 `PREFLIGHT_STOP_CMD:`**（＝ `start_rust_stack.ps1 -LogDir <持有 pid 的目录> -Stop`） |
+
+R7 的恢复命令形态（片64；`client-e2e-window.fixed.sh.txt guard` 会把它单独印一行）：
+
+```bash
+PREFLIGHT_RECORD_CMD: cd "<源>/mir2-rs" && CARGO_TARGET_DIR="<target-dir>" \
+  cargo build --offline -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv && \
+  python -I -B "<证据目录>/check_rust_window_preflight.py" --repo "<源>" --ref HEAD \
+    --target-dir "<target-dir>" --record-provenance "<target-dir>/window-provenance.json"
+```
+
+- **为什么录制必须跟在编译成功之后**：`--record-provenance` 只是把**当前** `--ref` 盖到清单上，
+  它**不校验** exe 是否真由该 ref 编出（这是该子命令的信任边界）⇒ 「编译失败也录制」会把旧件
+  洗成新源、R7 随即假绿。故命令用 `&&` 串联：`cargo build` 非零 ⇒ 整条链短路，清单保持原样、
+  R7 继续 RED。
+- **`--record-provenance` 必须带值**（片65，reviewer-5 F-1）：它在本工具里是**带值**选项
+  （`--record-provenance <输出清单路径>`，与 `--help` 用法一致）。旧版打印出的命令漏了该值 ⇒
+  逐字节照抄得到 `error: argument --record-provenance: expected one argument`（rc=2）、R7 仍卡死。
+  现在 selftest 有一条**执行性**牙 `r7-record-cmd-argv-parses`（把打印的尾部按 shell 词法切 token
+  再喂给本工具自己的 argparse，不再只是子串断言）。
+- **别用固定的 `E:/tmp/client-e2e/stack2` 当停栈目录**（片63）：`-LogDir` 必须是**持有占用端口那些 pid
+  的** `rust-stack.pid.json` 所在目录（R8 会校验后才打印可照抄的命令；不持有则打 `<持有这些 pid 的目录>`）。
+
 ## 2. 站位（两侧必须逐字节同一坐标）
 
 `mir2_db.characters.aaa` 的坐标就是进世界起点（真机日志 `进世界 ChrName:aaa CurMap:0 (x,y)`）。
