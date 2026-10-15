@@ -1,0 +1,54 @@
+274 — 四门禁 + 工具自检 + 清单门（片66：O-1 收口）
+卡 `openmir2-client-e2e-enter-gaps`（卡级 tier R）/ m2-svr / `openmir2-worker-11` / 2026-10-15 / tag `m2svr`
+base = walgit/master `2fc29deb95d80f6aaf30eeac3040636ddd34d0a7`（= merge 片65 `f810e6e2f`）
+head = 本片提交（**追加**在 `2fc29deb9` 之后）
+====================================================================================================
+
+# 1) 四门禁（cwd = `mir2-rs`，CARGO_TARGET_DIR = `E:/tmp/m2svr-target`）
+
+$ cargo fmt --all -- --check
+rc=0（无输出）
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.59s
+rc=0
+
+$ cargo test --workspace --no-fail-fast
+101 suites；汇总（逐 suite 解析 test result 行）：passed=1233 failed=0 ignored=22
+rc=0
+
+$ cargo run -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+# 2) 工具自检（本卡证据目录内的工具，fresh 重跑）
+
+$ python <本目录>/check_rust_window_preflight.py --selftest
+SELFTEST OK (73/73)
+rc=0
+
+$ python <本目录>/window_handoff.py --selftest
+SELFTEST OK (107/107)
+rc=0
+
+$ python tools/evidence-hash/verify_sha256sums.py selftest
+GREEN: verify_sha256sums selftest 13/13（口径 + 改 hash / 多件 / 少件 / 口径切换 / 冻结声明 / EOL 陷阱×2 / 不误伤 / eolcheck×3）
+rc=0
+
+# 3) 清单门（fresh；`write` 之后）
+
+$ wc -l SHA256SUMS.txt
+290
+
+$ python tools/evidence-hash/verify_sha256sums.py <本目录> --check-extra
+GREEN mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK 290/290
+
+$ python tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+EOLCHECK GREEN 291/291 件文本证据与仓库口径（LF）在 EOL 上一致
+
+# 4) 口径
+
+- 本片零 `.rs`/`.toml`/`.py`/`.ps1`/`.cs` 改动（边界见 `275`）⇒ 四门禁面与 base 逐项一致
+  （101 suites / 1233 passed / 0 failed / 22 ignored + 604）。
+- 清单按「仓库字节」口径（`verify_sha256sums.py write`）；件数 = `wc -l` 同值（见上）。
+- O-1 的改前/改后与「改坏必红」见 `273` §2/§3。
