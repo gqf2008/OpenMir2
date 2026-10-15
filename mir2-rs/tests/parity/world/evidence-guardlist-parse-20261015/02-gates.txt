@@ -1,0 +1,40 @@
+=== fmt ===
+`cargo metadata` exited with an error: error: could not find `Cargo.toml` in `E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\guardlist` or any parent directory
+
+This utility formats all bin and lib files of the current crate using rustfmt.
+
+Usage: cargo fmt [OPTIONS] [-- <rustfmt_options>...]
+
+Arguments:
+  [rustfmt_options]...  Options passed to rustfmt
+
+Options:
+  -q, --quiet
+          No output printed to stdout
+  -v, --verbose
+          Use verbose output
+      --version
+          Print rustfmt version and exit
+  -p, --package <package>...
+          Specify package to format
+      --manifest-path <manifest-path>
+          Specify path to Cargo.toml
+      --message-format <message-format>
+          Specify message-format: short|json|human
+      --all
+          Format all packages, and also their local path-based dependencies
+      --check
+          Run rustfmt in check mode
+  -h, --help
+          Print help
+
+fmt rc=1
+=== clippy ===
+error: could not find `Cargo.toml` in `E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\guardlist` or any parent directory
+clippy rc=101
+=== test ===
+test rc=101
+=== msgcodegen ===
+error: could not find `Cargo.toml` in `E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\guardlist` or any parent directory
+msgcodegen rc=101
+DONE

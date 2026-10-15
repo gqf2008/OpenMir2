@@ -46,6 +46,13 @@ pub enum EnvirError {
     )]
     MonGenCaptureString { line: String },
 
+    /// GuardList.txt 怪物名列解析越界（CaptureString，对应 C# IndexOutOfRangeException）；
+    /// 交付卡 `openmir2-guardlist-guards-loading`（`LocalDB.cs:117` 的 GetValidStrCap）。
+    #[error(
+        "GuardList.txt 怪物名列解析越界（CaptureString，对应 C# IndexOutOfRangeException）：{line}"
+    )]
+    GuardListCaptureString { line: String },
+
     /// 商人脚本（`Market_Def/<ScriptName>-<MapName>.txt`）解析抛出 `LoadPanic`
     /// （对应 C# `ScriptParsers.LoadScriptFile` 内异常的穿透，如重复 label 的
     /// `ArgumentException` / `CaptureString` 越界）。
