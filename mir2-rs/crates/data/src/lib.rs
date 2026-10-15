@@ -16,6 +16,7 @@
 pub mod exps;
 pub mod guild;
 pub mod guild_castle;
+pub mod lists;
 pub mod loaders;
 pub mod models;
 pub mod monitems;
