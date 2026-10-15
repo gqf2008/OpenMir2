@@ -22,6 +22,9 @@ tools/botload/run_bots.ps1    假人压测驱动（BotSrv N 并发登录）     
 tools/botload/load_gate.ps1   压测档位（200/500/1000：登录率/掉线/tick P99/内存） -SelfTestRed（无监听端口必红）
 tools/botload/load_report.py  档位指标归算（P50/P90/P99、内存斜率、§M5 判据）  selftest（含尾部敏感）
 tools/logdiff/timeline.py     多源日志归一 + 时间线对拍                      selftest（2 项）
+tools/logdiff/error_curve.py  ERROR 行分桶曲线 + 不上升趋势判定（M5①：ERROR 不呈上升趋势）  selftest（19 项；桶界索引/窗口大小两向牙）
+tools/m5-acceptance/start_full_rust_stack.ps1  含 game-svr 的全 Rust 栈起栈器（六件；起停同一 -LogDir、端口 fail-closed）  PARSE 检查（真机项归 R 窗口）
+tools/m5-acceptance/stage_gray_rollback.ps1   灰度阶梯 + 回滚演练 + 计时口径（每步时间戳落 ndjson；MySQL 永不停）  PARSE 检查 + 真机红检归 R 窗口
 tools/dbsnap/dbsnap.py        MySQL 快照/字段级比对                          selftest（2 项）
 tools/e2e/run_e2e.ps1         E2E 回归套件（工具自测+金标准+流程+冒烟）      -SelfTestRed；-FailOnSkip 严格模式
 tools/e2e/stack_e2e.ps1       **整栈 E2E 一条命令**（停栈→开号→起栈→run_e2e→压测档→收尾） -SelfTestRed

@@ -1,0 +1,8 @@
+# 02 tool2 error_curve：selftest（19/19）+ 桶界平移变异必红
+cmd: python -I -B tools/logdiff/error_curve.py selftest
+SELFTEST GREEN: error_curve 19/19
+
+== 变异 A（bucket 界 +1000ms）⇒ 必红 ==
+    assert cond, f"TOOTH FAIL: {name}"
+           ^^^^
+AssertionError: TOOTH FAIL: 桶界索引：59:59.500 与 01:00:00.000 必须落相邻两桶（桶界平移必红）

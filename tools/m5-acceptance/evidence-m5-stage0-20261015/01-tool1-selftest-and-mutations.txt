@@ -1,0 +1,13 @@
+# 01 tool1 load_report --mem-tail-sec：selftest + CLI 缝两向牙
+cmd: python -I -B tools/botload/load_report.py selftest
+GREEN: load_report selftest 全过（分位数/尾部敏感/登录阈值牙齿/在线判据牙齿/掉线分窗/内存斜率/残余丢包方向/本机负载窗）
+
+== 变异 M1（call site 丢 args.mem_tail_sec）⇒ 必红 ==
+RED: --mem-tail-sec 20 必须真接线到 call site（解析后丢弃必红），实得 tail_window_s=60.0
+RED: 后 20s 平 / 默认 60s 含上升段 ⇒ 两档斜率必须不同（死参数必红）：20⇒0.167 vs 默认⇒0.167
+RED: load_report selftest 有未通过项
+
+== 变异 M2（argparse 默认 60→120）⇒ 必红 ==
+RED: CLI 默认 --mem-tail-sec 必须 60（改默认=静默改既有报告口径），实得 100.0
+RED: CLI 不传 --mem-tail-sec 必须与 --mem-tail-sec 60 逐字段等价
+RED: load_report selftest 有未通过项

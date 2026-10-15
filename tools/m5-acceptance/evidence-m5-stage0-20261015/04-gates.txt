@@ -1,0 +1,9 @@
+# 04 四门禁（cwd=<m5tools worktree>/mir2-rs, CARGO_TARGET_DIR=E:/tmp/openmir2-merge-target, head=4d43ade58b817b85907e90bb54efea1a024244b2）
+=== test ===
+test rc=0
+=== msgcodegen ===
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
+DONE
+
+counting: 101 suites 1233 passed 0 failed 22 ignored
