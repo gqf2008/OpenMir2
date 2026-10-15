@@ -1,0 +1,8 @@
+cmd: python -I -B check_attack_observability.py --capture run-20261015-b-csharp-capture.jsonl --expect damage --self-recog 0（等价关掉过滤）
+[single] cm_hit=3 出站 sm_struck=6 sm_nowdeath=1｜入站 sm_struck=0 sm_nowdeath=0｜self=0 expect=damage
+RESULT: GREEN
+
+cmd: ... --capture run-20261015-b-rust-capture.jsonl --expect any
+[single] cm_hit=2 出站 sm_struck=0 sm_nowdeath=0｜入站 sm_struck=0 sm_nowdeath=0｜self=1068 expect=any
+  RED: s2c 既没有出站 SM_STRUCK(31)（victim≠自己：0<要求 1）也没有出站 SM_NOWDEATH(34)（0<要求 1）⇒ 本侧玩家的攻击没有造成可见伤害（入站受击不计：SM_STRUCK 入站 0 条 / SM_NOWDEATH 入站 0 条）
+RESULT: RED

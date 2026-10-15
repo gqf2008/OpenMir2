@@ -1,0 +1,5 @@
+cmd: python -I -B check_reverse_point_clean.py --point 291,666 --map 0 --vr 12
+点 (291,666) map=0 vr=12：最近对象 = GuardList.txt (281,661) range=0，切比雪夫=10；有效距离=10 vs vr=12
+  最近对象明细：source=GuardList.txt (281,661) range=0 有效距离=10
+VERDICT: NOT_CLEAN（该点会被已知确定性对象污染，不能作反向对照点）
+RESULT: NOT_CLEAN

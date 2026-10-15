@@ -1,0 +1,10 @@
+四源齐备 ⇒ 无 problem                                           OK
+★片67 反向点 (291,666) ⇒ NOT_CLEAN（卫士 (281,661) d=10 ≤ 12）     OK
+★not-clean 描述点名 GuardList                                  OK
+远处点 (341,666) ⇒ CLEAN                                      OK
+★MonGen 框内点 (303,697) ⇒ NOT_CLEAN（框半径参与）                   OK
+★not-clean 描述点名 MonGen                                     OK
+★牙：抽掉 GuardList ⇒ (291,666) 变 CLEAN（该源承重）                  OK
+★缺 MonGen.txt ⇒ fail-closed（entries=None）                  OK
+★同缺 + allow-missing ⇒ 降级为 WARN                             OK
+SELFTEST GREEN

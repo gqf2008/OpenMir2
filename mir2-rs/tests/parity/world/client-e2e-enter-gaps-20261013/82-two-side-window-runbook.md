@@ -314,3 +314,18 @@ python -I -B check_attack_observability.py `
   selftest 8/8，含「满血 ⇒ T1 RED / header-only ⇒ T3 RED」两向牙）；证据 `187-…md`。
 - 本手册**零生产代码改动**；只补判据工具（`check_mongen_dense_points.py`、`check_csharp_capture_preflight.py`、
   `check_healthspellchanged_trigger.py`）与运行步骤。
+
+## §2c 返工后的 ③b/③a 执行口径（片68，2026-10-15）
+
+- **③b 攻击步**：两侧**必须钉同一 `(x,y)`**（每趟起栈前 `UPDATE characters SET MapName='0', CX=…, CY=…`，全程不让其漂移）；
+  动作序列 = 先 `CM_TURN(dirToMonster)` 再 `CM_HIT(MakeLong(自x,自y), tag=dirToMonster)`——真客户端空地攻击**不先发** `CM_TURN`，
+  单发换向环点每一击都用「上一动作遗留朝向」取前方格 ⇒ 必打空（Rust 与 oracle 同构，见 README §68）。
+  快捷键：`-AttackRing` 给**全同单向**且方向 = 上一步走步方向。
+- **③b 第一步 = 阳性对照（C# 侧）**：两侧至今没有任何「玩家→怪」伤害帧 ⇒ 先在 **C#（oracle）** 侧打出
+  **victim=怪** 的 `SM_STRUCK`，把 GREEN 定义钉在实拍足迹上，再比 Rust。
+- **③b 判据**：`check_attack_observability.py`（已带 victim 过滤，出站 = victim ≠ 自己）。**旧版**会把「玩家被怪围殴」读成「玩家造成伤害」。
+- **探针（未决项）**：玩家贴怪旁静止 ~10s，看 Rust 侧有无 **victim=自己** 的 `SM_STRUCK`（怪打玩家）。无 ⇒ 另立卡查怪物 AI 攻击支。
+- **③a 反向点**：不得再用 `(291,666)`（`GuardList` 卫士 `(281,661)` d=10 污染）；先过
+  `check_reverse_point_clean.py --point <x,y> --map 0 --vr 12`（fail-closed，缺源文件即 RED），
+  **建议 `(311,666)`**（最近确定性对象 d=30）。
+- **客户端驱动**：`mir_flow.ps1 … -CenterY 259`（角色屏幕中心；默认 `384` 会把命中环整体偏下 ~2 格）。

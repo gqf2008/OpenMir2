@@ -1,0 +1,10 @@
+== 旧脚本（master 版，无 victim 过滤）对片67 C# capture ==
+cmd: python -I -B <master 版脚本> --capture run-20261015-b-csharp-capture.jsonl --expect damage
+[single] cm_hit=3 sm_struck=6 sm_nowdeath=1 expect=damage
+RESULT: GREEN
+
+== 新脚本（victim 过滤）同一 capture ==
+cmd: python -I -B check_attack_observability.py --capture run-20261015-b-csharp-capture.jsonl --expect damage
+[single] cm_hit=3 出站 sm_struck=0 sm_nowdeath=0｜入站 sm_struck=6 sm_nowdeath=1｜self=1849558029 expect=damage
+  RED: s2c 出站 SM_STRUCK(31)（victim≠自己）只有 0 条 < 要求 1
+RESULT: RED

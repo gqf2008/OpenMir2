@@ -58,6 +58,9 @@ param(
   [string]$HookOut   = "",   # dump 输出目录（作为环境变量给子进程，DLL 启动时读取）
   [int]$AttackClicks = 0,    # 进世界后绕角色点 N 下（点到怪=CM_HIT，点到地=CM_WALK）
   [string]$AttackRing = "",  # 覆盖默认点击环："dx,dy;dx,dy;..."（相对角色屏幕中心）
+  [int]$CenterX = 512,       # 角色屏幕中心 X（攻击环 / 跑动拖拽基准；默认 512 = 现状，不破坏既有调用）
+  [int]$CenterY = 384,       # 角色屏幕中心 Y（真机实测本部署角色屏幕中心约 y=259——底部 UI 遮挡；
+                             #   命中环须配 -CenterY 259，否则整环偏下约 2 格，片67 受击步判读受此影响）
   # ---- 会话拆除（「小退」阶段的一种真实形态）----
   # 客户端自己的小退要走 AppLogout 的确认框（Alt+X → 确定 → CM_SOFTCLOSE 1009），
   # 合成按键打不穿那个模态框（实测 keybd_event / SendInput 都不行）；
@@ -420,7 +423,7 @@ if ($AttackClicks -gt 0) {
   for ($i = 0; $i -lt [Math]::Min($AttackClicks, $ring.Count); $i++) {
     $d = $ring[$i].Split(",") | ForEach-Object { [int]$_ }
     Stage ("attack_" + ($i + 1))
-    Send-Click (512 + $d[0]) (384 + $d[1]) 1
+    Send-Click ($CenterX + $d[0]) ($CenterY + $d[1]) 1
     Start-Sleep -Milliseconds 900
   }
   Shot "06_attack.png"
@@ -456,8 +459,8 @@ if ($RunHoldMs -gt 0) {
   foreach ($rad in (110, 210)) {
     foreach ($ang in (0, 45, 90, 135, 180, 225, 270, 315)) {
       $rr = $ang * [Math]::PI / 180.0
-      $px = [int](512 + $rad * [Math]::Cos($rr))
-      $py = [int](384 + $rad * [Math]::Sin($rr))
+      $px = [int]($CenterX + $rad * [Math]::Cos($rr))
+      $py = [int]($CenterY + $rad * [Math]::Sin($rr))
       $ri++
       Stage ("run_hold_" + $ri)
       Send-HoldRun $px $py $RunHoldMs

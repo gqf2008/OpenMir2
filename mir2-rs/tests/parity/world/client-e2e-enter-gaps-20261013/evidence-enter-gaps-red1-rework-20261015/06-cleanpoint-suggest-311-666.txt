@@ -1,0 +1,5 @@
+cmd: python -I -B check_reverse_point_clean.py --point 311,666 --map 0 --vr 12
+点 (311,666) map=0 vr=12：最近对象 = GuardList.txt (281,661) range=0，切比雪夫=30；有效距离=30 vs vr=12
+  最近对象明细：source=GuardList.txt (281,661) range=0 有效距离=30
+VERDICT: CLEAN
+RESULT: CLEAN

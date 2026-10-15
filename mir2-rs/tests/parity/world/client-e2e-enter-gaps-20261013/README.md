@@ -1700,3 +1700,56 @@ root 2026-10-15 12:2x 清掉泄漏栈并**授权本卡自开真机窗口**后，
 - 入库：`276`（判定书）/`277`（判据原始输出）/`278`（命令+前置门+出处）/`279`（门禁）/`280`（边界）/`281`（改坏必红与工具自检）
   + `run-20261015-{b-rust,b-csharp,a-rust,a-csharp}-*`（raw capture / 服务端日志 / stages / 3 张截图）。
 - 收工：九游戏端口全 DOWN（仅 3306），`aaa` 还原 `(0,292,652)`/`Hp=19`；零生产代码改动、未 merge、未自签 review。
+
+> **订正（片68，2026-10-15）**：本节（片67）「C#（oracle）**同点同动作**得 `SM_STRUCK=6`/`SM_NOWDEATH=1` ⇒ 该点能打」
+> 为**误读与误述**——① 两侧并非同点同动作（攻击时刻相差 20+ 格，见 §68 场景层）；
+> ② 那 6 条 `SM_STRUCK` 的 victim 全是玩家自己（入站受击），**C# 玩家自己也没打中**；③ 该点不能打（旧判据缺陷见 §68）。
+> 本节其余读数（`CM_HIT` 条数、日志锚点、`vis/af` 采样）不变。
+
+### 68) RED-1/RED-2 返工：攻击判据 victim 过滤 + 反向点净空判据 + 驱动环心参数（2026-10-15）—— `282`/`283`
+
+片67 登记的两条 RED 经独立复现返工。**tier=L**（判据/工具/文档，**零生产代码、零行为变化**）。
+
+- **RED-1 推翻（不是 Rust 攻击链缺陷）**：Rust `CM_HIT` 取目标 = **状态化旧朝向**的前方格、点击方向在取到目标**之后**才写 `Dir`
+  （`main.rs:3732 pose_dir=display.dir` → `:3738 front_position` → `:3740 set_display_dir`），与 oracle
+  （`PlayObject.Attack.cs:26 GetPoseCreate()` 用旧 `Dir` → `BaseObject.Attack.cs:12 Dir = nDir`）**逐行同构**
+  ⇒ 打空正是 oracle 的正确行为。既有用例 `hit_cmd_dispatches_ack_action_frame_and_world_attack`（`main.rs:12224`）
+  本就钉住该语义（其红检④「取目标改回用本帧消息 dir ⇒ 段②必红」）⇒ **本片不新增 Rust 测试**（避免同义重复）。
+- **旧判据的误读链（复算证据）**：C# 侧 `SM_STRUCK(31)=6` 全部是**入站受击**——6 条 `recog` 全 = 玩家自己 ActorId
+  `1849558029`、`param`(HP)=14→12→5→3→1→0 递减、`tag`(MaxHP)=19，配 `SM_NOWDEATH(34)`（同样 victim=自己）；
+  首条 `SM_STRUCK`(seq107, ts…10043) **早于**首条 `CM_HIT`(seq161, ts…118314)；两侧都**没有一条 victim=怪**的 `SM_STRUCK`
+  ⇒ 两侧玩家自己的攻击都打空。且两侧**不是同点同动作**：c2s `CM_HIT` 自解 `recog` —— Rust `(602,572)` tag=7 ×2；
+  C# `(607,595)` tag=4 ×2 + `(605,592)` tag=2（相差 20+ 格；走步 C# 14/3 vs Rust 38/2；两侧 `CM_TURN(3010)=0`）。
+- **判据修复**：`check_attack_observability.py` 增 **victim 过滤** ——「出站」= `recog ≠ 本侧玩家 ActorId`
+  （self 从 `SM_LOGON(50)` > `SM_NEWMAP(51)` > `SM_HEALTHSPELLCHANGED(53)` 探测；探测不到 **fail-closed** `PREREQ_RED`，
+  可用 `--self-recog N` 显式给 / `--allow-unknown-self` 退回旧口径**仅诊断**）。报告行同时列出站/入站读数。
+  selftest 8/8 → **18/18**（新增 6 条含「入站不计入」「detect_self」「旧口径假绿」）。
+- **改坏必红（`283`）**：同一份片67 C# capture，**master 旧脚本**判 `--expect damage` = **GREEN（假绿）**；
+  **新脚本**判 **RED**（出站 0、入站 6 如实列出）⇒ 过滤器是判别式；`--self-recog 0`（等价关过滤）复现假绿。
+- **RED-2 归因完成**：③a 反向点 actor `0x0f336101` = `Envir/GuardList.txt` **第 28 行「卫士 0 281, 661 : 5」**的
+  **确定性卫士**（`SM_TURN param=281/tag=661` 逐格同、`series` 低字节 `Dir=5` 同、全程无移动帧）
+  ⇒ **Rust 未实现 `GuardList` 守卫加载**（功能缺口，**不是** AOI 判据缺陷）⇒ 白名单登记 **T-56** + 实现另立卡。
+- **新工具 `check_reverse_point_clean.py`**（fail-closed）：四源（`MonGen.txt`/`GuardList.txt`/`Merchant.txt`/`Npcs.txt`）
+  距该点全部 > `vr`（切比雪夫；MonGen 计入 `range` 半径）才算净空；缺源文件即 RED（`--allow-missing-sources` 仅诊断）。
+  实跑：`(291,666)` ⇒ **NOT_CLEAN**（`GuardList.txt` 卫士 `(281,661)` d=10 ≤ vr=12，与 C# 实测吻合）；
+  **新反向点建议 `(311,666)`**（同行东移 20 格，最近确定性对象 d=30）。改坏必红：抽掉 `GuardList` 源 ⇒ `(291,666)` 变 CLEAN（该源承重）；
+  缺 `MonGen.txt` ⇒ fail-closed。selftest 9/9。
+- **驱动**：`tools/client/mir_flow.ps1` 增 `-CenterX/-CenterY`（默认 `512/384` = **现状逐字节不变**，不破坏既有调用）；
+  真机角色屏幕中心约 `(512,259)` ⇒ 命中环须配 `-CenterY 259`（片67 环偏下 ~2 格的来源）。语法检查 PARSE OK。
+- **阳性对照（下窗第一步，先于任何比较）**：本片复算发现**两侧从未产出过「玩家→怪」的伤害帧**
+  （两侧 `SM_STRUCK` 里 victim≠自己 的条数都是 0）⇒「能攻击造成伤害」的 GREEN 定义**尚无实拍样本**。
+  下窗必须**先在 C#（oracle）侧**走出「贴邻怪 → 朝向对准 → 命中」，抓到 **victim=怪** 的 `SM_STRUCK`（或其 `SM_NOWDEATH`），
+  把判据的 GREEN 钉死在实拍足迹上，**再**拿 Rust 与之比。`check_attack_observability.py` 的报告行已分列出站/入站，便于就地判读。
+- **未决（本片只登记，不归因）**：Rust 侧**全程无「怪打玩家」行**（`nearest=1` 且玩家走步被挡那段），
+  而 C# 同窗被怪围殴致死 —— 这一半**不属于**「取目标语义同构」的结论范围（该结论只覆盖**玩家攻击**子链）。
+  归因探针（下窗）：把玩家贴到怪旁静止若干秒，看 Rust 侧是否出现 **victim=自己** 的 `SM_STRUCK`；
+  有 ⇒ 与 C# 同构；无 ⇒ 另立卡查 `crates/world` 的怪物 AI 攻击支（`monai` 攻击目标选择）。
+- **本片不做（下窗按需补）**：`SM_HIT(14)` 动作帧方向字节断言（现判据只数 `CM_HIT/SM_STRUCK/SM_NOWDEATH`）；
+  仅当出站仍 0 条、需要分清「打空」与「打中但没结算」时再加。
+- **下窗 ③b 最小复现参数**：两侧**必须钉同一 `(x,y)`** 才可比；动作 = 先 `CM_TURN(dirToMonster)` 再
+  `CM_HIT(MakeLong(自x,自y), tag=dirToMonster)`（真客户端空地攻击**不先发** `CM_TURN`，单发换向环点每击落后一拍）；
+  或 `-AttackRing` 用**全同单向**且方向 = 上一步走步方向。期望 = **出站** `SM_STRUCK/SM_NOWDEATH ≥ 1`（两侧）。
+- **边界**：净 5 路径（2 `.py` + 1 `.ps1` + README/whitelist）+ 证据包 `evidence-enter-gaps-red1-rework-20261015/**`；
+  **零 `.rs`/`.toml`/`.cs`**；冻结面 `src/ sql/ MirClient/ mir2-rs/crates/` 空。
+- **未做（归宿）**：`GuardList` 加载实现 = 新卡 `openmir2-guardlist-guards-loading`（白名单 T-56 登记为本片）；
+  卡级 ③b/③a 真机判据仍 `not_verified`（修正后的下窗）。

@@ -1,0 +1,20 @@
+== 本片净变更（git status --porcelain, head=508e8f72d8ac9916a50cfabc563465bd02253314, base=master 508e8f72d) ==
+ M mir2-rs/tests/parity/whitelist.md
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/82-two-side-window-runbook.md
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+ M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_attack_observability.py
+ M tools/client/mir_flow.ps1
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/282-red1-red2-rework-20261015.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/283-teeth-20261015.txt
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_reverse_point_clean.py
+?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/evidence-enter-gaps-red1-rework-20261015/
+
+== 冻结面 diff（应为空）==
+(空=clean)
+
+== 类型分布 ==
+      3 md
+      1 ps1
+      2 py
+      3 txt
