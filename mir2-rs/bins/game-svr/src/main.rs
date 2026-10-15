@@ -615,6 +615,64 @@ async fn main() -> Result<()> {
             None
         }
     };
+    // **R0-2/R0-3/R0-4 内容装载红名单**：`Envir/MiniMap.txt` + `Envir/MakeItem.txt` +
+    // `Notice/LineNotice.txt` 的宿主装载。oracle 时机：
+    // - `GameApp.cs:118 Map.LoadMinMap()`（`Initialize` 里物品库之后）；
+    // - `GameApp.cs:231 LocalDb.LoadMakeItem()`（`InitializeWorld` 里 `LoadNpcs` 之后）；
+    // - `GameApp.cs:204 M2Share.LoadLineNotice(SystemShare.GetNoticeFilePath("LineNotice.txt"))`
+    //   （`Initialize` 里公告之后）。
+    // 解析半在 `crates/envir`（MiniMap/MakeItem）与本 crate 的 `notice.rs`（LineNotice）；
+    // 本块只做「读文件 + 解析 + 日志」，结果登记进 [`EnterConfig`]（消费点属 R1 入站红名单，未实现 ⇒ 登记）。
+    let minimap = match game_svr::contentload::load_minimap_file(&envir_loader) {
+        Ok(Some((reg, dups))) => {
+            // 复刻 `Maps.cs:411 LogService.Error($"重复小地图配置信息[...]")`。
+            for name in &dups {
+                glog!("ERR", "重复小地图配置信息[{name}]");
+            }
+            glog!("INF", "小地图数据加载成功...[{}]", reg.len());
+            Some(reg)
+        }
+        Ok(None) => {
+            glog!(
+                "INF",
+                "无 Envir/MiniMap.txt ⇒ 不载小地图（oracle File.Exists 门）"
+            );
+            None
+        }
+        Err(e) => {
+            glog!("WRN", "加载 Envir/MiniMap.txt 失败（{e}）⇒ 不载（登记）");
+            None
+        }
+    };
+    let make_items = match game_svr::contentload::load_make_item_file(&envir_loader) {
+        Ok(Some(reg)) => {
+            glog!("INF", "炼制物品信息加载成功...[{}]", reg.len());
+            Some(reg)
+        }
+        Ok(None) => {
+            glog!(
+                "INF",
+                "无 Envir/MakeItem.txt ⇒ 不载合成配方（oracle File.Exists 门）"
+            );
+            None
+        }
+        Err(e) => {
+            glog!(
+                "WRN",
+                "加载 Envir/MakeItem.txt 失败（{e}）⇒ 不载（oracle 异常穿透 ⇒ 登记）"
+            );
+            None
+        }
+    };
+    let line_notice = notice::load_line_notice(&base, &cfg.notice_dir);
+    if line_notice.is_empty() {
+        glog!(
+            "INF",
+            "无 Notice/LineNotice.txt（或为空）⇒ 不载滚动公告（oracle File.Exists 门）"
+        );
+    } else {
+        glog!("INF", "公告提示信息加载成功...[{}]", line_notice.len());
+    }
     // **M3⑨-实现 2 第②片**：`Server.conf` 的宝宝配置（`PetSlaveConfig::from_ini`，
     // ① 已交付但未接生产路径）。`DoSpell` 召唤面用它选型。读不到 ⇒ oracle 初值（登记）。
     let pet_cfg = match game_svr::slave::pet_slave_config_from_conf(&conf) {
@@ -710,6 +768,9 @@ async fn main() -> Result<()> {
                         config: mon_gen_config,
                     },
                     guards,
+                    minimap,
+                    make_items,
+                    line_notice,
                     npcs,
                     loader: Some(envir_loader),
                     script_goto_count_limit: cfg.script_goto_count_limit,
@@ -5925,6 +5986,16 @@ struct EnterConfig {
     /// `game_svr::guardlist::load_guard_list_file`）；`None` = 无文件 / VentureServer=TRUE /
     /// 读失败 ⇒ 不放置。放置在 sim 线程起世界后（`game_svr::guardlist::place_guards`）。
     guards: Option<Vec<mir2_envir::guardlist::GuardInfo>>,
+    /// **R0-2（内容装载红名单）**：`Envir/MiniMap.txt` 解析出的地图名→小地图索引表
+    /// （主线程装载，`game_svr::contentload::load_minimap_file`）。消费点（`CM_WANTMINIMAP`
+    /// → `SM_READMINIMAP_OK/FAIL` + `Envirnoment.MinMap`）属 R1 入站红名单，未实现 ⇒ 暂只登记。
+    minimap: Option<mir2_envir::minimap::MiniMapRegistry>,
+    /// **R0-3**：`Envir/MakeItem.txt` 解析出的合成配方表（`load_make_item_file`）。消费点
+    /// （`CM_USERMAKEDRUGITEM` → `Merchant.ClientMakeDrugCheckNeedItem`）属 R1 ⇒ 暂只登记。
+    make_items: Option<mir2_envir::makeitem::MakeItemRegistry>,
+    /// **R0-4**：`Notice/LineNotice.txt` 解析出的逐行滚动公告（`notice::load_line_notice`）。
+    /// 消费点（`WorldServer.cs:669-696` 的逐玩家定时公告）涉及未实现的逐 tick 公告帧 ⇒ 暂只登记。
+    line_notice: Vec<String>,
     /// **固定管理 NPC 加载半（R0-1 `openmir2-npcs-fixed-loading`）**：`Envir/Npcs.txt` 解析出的
     /// 记录（主线程装载，`game_svr::npcs::load_npcs_file`）；`None` = 无文件 / 读失败 ⇒ 不放置。
     /// 建实体（ctor 抽数）+ 挂图在 sim 线程起世界后（`game_svr::npcs::{build_npc_spawns,place_npcs}`）。
@@ -6263,6 +6334,33 @@ fn sim_loop(
     // S3 后半段（第一格）：同屏 AOI 下行要用的展示表（`ActorId -> Dir/Light/Feature/…`）。
     // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world`**。
     let mut displays = downlink::DisplayTable::new();
+    // **R0-2/R0-3/R0-4 内容装载红名单**：主线程装载的注册表随 `EnterConfig` 到 sim 线程。
+    // 三者的消费点（MiniMap 下发帧 / 制药合成 / 滚动公告）都属 R1 入站红名单、未实现
+    // ⇒ 此处只「取用 + 登记」（保留读数，不静默丢字段）。
+    if let Some(mm) = enter_cfg.minimap.take() {
+        glog!(
+            "INF",
+            "MiniMap 注册表就绪：{} 条（下发帧 CM_WANTMINIMAP 未实现 ⇒ 登记）",
+            mm.len()
+        );
+    }
+    if let Some(mi) = enter_cfg.make_items.take() {
+        glog!(
+            "INF",
+            "MakeItem 注册表就绪：{} 组（CM_USERMAKEDRUGITEM 未实现 ⇒ 登记）",
+            mi.len()
+        );
+    }
+    {
+        let line_notice = std::mem::take(&mut enter_cfg.line_notice);
+        if !line_notice.is_empty() {
+            glog!(
+                "INF",
+                "LineNotice 注册表就绪：{} 行（滚动公告未实现 ⇒ 登记）",
+                line_notice.len()
+            );
+        }
+    }
     // **GuardList 放置半（片71）**：`LocalDB.cs:113-135` 的放置循环（逐行
     // `RegenMonsterByName` + `:133` 置 `Dir`）。前置 = `MonGenHost::start` 已按 oracle
     // `InitializeMonster`（`GameApp.cs:150`）填齐 `MonsterThreadMap`；放置在商人/NPC 装载

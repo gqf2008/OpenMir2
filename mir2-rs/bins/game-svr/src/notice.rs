@@ -39,6 +39,9 @@ pub const NOTICE_REPLACE_FROM: &[u8] = b"/r/n/r/n ";
 /// 公告文件名（`NoticeMgr.GetNoticeMsg` 里恒为 `sStr + ".txt"`，调用点是 `"Notice"`）。
 pub const NOTICE_FILE: &str = "Notice.txt";
 
+/// 逐行滚动公告文件名（`GameApp.cs:204 M2Share.LoadLineNotice(GetNoticeFilePath("LineNotice.txt"))`）。
+pub const LINE_NOTICE_FILE: &str = "LineNotice.txt";
+
 /// 按 C# `StreamReader.ReadLine()` 语义切行。
 ///
 /// `\r\n`、`\n`、`\r` 均为行界；行界**不**进入返回的行；末尾的换行**不**产生额外空行
@@ -120,6 +123,73 @@ pub fn load_notice(base: &Path, notice_dir: &str) -> Vec<u8> {
     let path = base.join(notice_dir).join(NOTICE_FILE);
     match std::fs::read(&path) {
         Ok(text) => notice_from_bytes(&text),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// 按 C# `StreamReader.ReadLine()` 语义在**已解码文本**上切行。
+///
+/// `\r\n`、`\n`、`\r` 均为行界；行界不进入返回的行；末尾的行界**不**产生额外空行。
+/// 空输入 ⇒ 空 `Vec`。（与 [`split_read_lines`] 同语义，但作用在 `&str` 上——
+/// `LineNotice` 走 `StringList.LoadFromFile` 解码后逐行 `.Trim()`，需先整文件解码再切行。）
+fn split_read_lines_str(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut out: Vec<&str> = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\r' => {
+                out.push(&text[start..i]);
+                i += if bytes.get(i + 1) == Some(&b'\n') {
+                    2
+                } else {
+                    1
+                };
+                start = i;
+            }
+            b'\n' => {
+                out.push(&text[start..i]);
+                i += 1;
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    if start < bytes.len() {
+        out.push(&text[start..]);
+    }
+    out
+}
+
+/// 1:1 复刻 `M2Share.LoadLineNotice`（`src/M2Server/M2Share.cs:213-238`）的**文本半**：
+/// 逐行 `Trim()`，**空行丢弃**（原实现 `LoadList.RemoveAt(i); continue;` 等价于过滤空行），
+/// 其余按序保留。`result = true` 由「文件存在」决定（见 [`load_line_notice`]）。
+///
+/// 注：oracle 用 `StringList.LoadFromFile` 的 `StreamReader.ReadLine` 切行，
+/// 故先对**整文件**做 BOM/GBK 判定再切行（见 [`load_line_notice`]）。
+#[must_use]
+pub fn parse_line_notice(text: &str) -> Vec<String> {
+    split_read_lines_str(text)
+        .into_iter()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// 读 `<base>/<notice_dir>/LineNotice.txt` 并产出逐行公告（`GameApp.cs:204`）。
+///
+/// 文件不存在/读失败 ⇒ 空 `Vec`（oracle `File.Exists` 假 ⇒ 返回 `false`、不装载）。
+/// 编码走 `StringList.LoadFromFile` 的判定（GBK 缺省，BOM 覆盖）——与 [`load_notice`] 同口径。
+///
+/// 消费点（**不在本片**，登记）：`WorldServer.cs:669-696` 的逐玩家定时滚动公告
+/// （`ShowLineNoticeTick` + `ShowLineNoticeTime` + `GetLineVariableText` + `SysMsg(MsgType.Notice)`
+/// 的 `R/G/B` 颜色前缀分支）——涉及未实现的逐 tick 公告帧，登记不做。
+#[must_use]
+pub fn load_line_notice(base: &Path, notice_dir: &str) -> Vec<String> {
+    let path = base.join(notice_dir).join(LINE_NOTICE_FILE);
+    match std::fs::read(&path) {
+        Ok(bytes) => parse_line_notice(&mir2_envir::decode_text(&bytes)),
         Err(_) => Vec::new(),
     }
 }
@@ -264,6 +334,72 @@ mod tests {
         assert_eq!(load_notice(&dir, "Notice"), Vec::<u8>::new());
         std::fs::write(dir.join("Notice").join("Notice.txt"), b"hello\r\n").unwrap();
         assert_eq!(load_notice(&dir, "Notice"), b"hello\x20\x1b\x1b".to_vec());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- LineNotice（R0-4）：`M2Share.LoadLineNotice`（`M2Share.cs:213-238`）----
+
+    /// `StringList.LoadFromFile` 的 ReadLine 语义（`\r\n`/`\n`/`\r` 均行界、末尾行界不产生空行）。
+    #[test]
+    fn line_notice_readline_semantics() {
+        assert_eq!(split_read_lines_str(""), Vec::<&str>::new());
+        assert_eq!(
+            split_read_lines_str("a\r\nb\nc\rd"),
+            vec!["a", "b", "c", "d"]
+        );
+        assert_eq!(
+            split_read_lines_str("a\r\n"),
+            vec!["a"],
+            "末尾行界不产生空行"
+        );
+        assert_eq!(split_read_lines_str("a\r\n\r\n"), vec!["a", ""]);
+    }
+
+    /// 文本半：逐行 `Trim()` + 丢空行 + 保序（`M2Share.cs:226-235`）。
+    #[test]
+    fn line_notice_trims_and_drops_blank_lines() {
+        let got = parse_line_notice("  甲  \r\n\r\n\t乙\t\r\n\n丙");
+        assert_eq!(got, vec!["甲", "乙", "丙"], "trim + 丢空行");
+        assert_eq!(parse_line_notice(""), Vec::<String>::new());
+        assert_eq!(
+            parse_line_notice("\r\n\r\n"),
+            Vec::<String>::new(),
+            "全空行 ⇒ 空"
+        );
+    }
+
+    /// 文件半：GBK 字节解码（部署件形态：`[公告]X` 行）+ 缺文件 ⇒ 空。
+    #[test]
+    fn load_line_notice_decodes_gbk_and_missing_is_empty() {
+        let dir = std::env::temp_dir().join(format!("gs-linenotice-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Notice")).unwrap();
+        // 缺文件 ⇒ 空（oracle `File.Exists` 假 ⇒ 返回 false）。
+        assert_eq!(load_line_notice(&dir, "Notice"), Vec::<String>::new());
+        // `[公告]甲\r\n[公告]乙\r\n[公告]丙` 的 GBK 字节（无 BOM，同部署件）。
+        let mut body: Vec<u8> = Vec::new();
+        for tail in [[0xBCu8, 0xD7], [0xD2, 0xD2], [0xB1, 0xFB]] {
+            body.extend_from_slice(&[0x5B, 0xB9, 0xAB, 0xB8, 0xE6, 0x5D]);
+            body.extend_from_slice(&tail);
+            body.extend_from_slice(b"\r\n");
+        }
+        std::fs::write(dir.join("Notice").join("LineNotice.txt"), &body).unwrap();
+        assert_eq!(
+            load_line_notice(&dir, "Notice"),
+            vec!["[公告]甲", "[公告]乙", "[公告]丙"],
+            "GBK 解码 + ReadLine 切行"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 文件半：UTF-8 BOM 覆盖（`StringList.GetEncoding` 的 BOM 判定）⇒ UTF-8 文本原样。
+    #[test]
+    fn load_line_notice_honours_utf8_bom() {
+        let dir = std::env::temp_dir().join(format!("gs-linenotice-bom-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Notice")).unwrap();
+        let mut body: Vec<u8> = vec![0xEF, 0xBB, 0xBF];
+        body.extend_from_slice("[公告]测试\r\n".as_bytes());
+        std::fs::write(dir.join("Notice").join("LineNotice.txt"), &body).unwrap();
+        assert_eq!(load_line_notice(&dir, "Notice"), vec!["[公告]测试"]);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -53,6 +53,12 @@ pub enum EnvirError {
     )]
     GuardListCaptureString { line: String },
 
+    /// `Envir/MakeItem.txt` 组名重复（`Dictionary<string, IList<MakeItem>>.Add` 抛
+    /// `ArgumentException`，`LocalDB.LoadMakeItem` 无 try/catch ⇒ 异常穿透）。
+    /// 交付卡 `openmir2-envir-redlist-batch`（R0-3；`LocalDB.cs:170/187`）。
+    #[error("MakeItem.txt 组名重复（对应 C# Dictionary.Add 抛 ArgumentException）：{name}")]
+    MakeItemDuplicateGroup { name: String },
+
     /// Npcs.txt 角色名列解析越界（CaptureString，对应 C# IndexOutOfRangeException）；
     /// 交付卡 `openmir2-npcs-fixed-loading`（`LocalDB.cs:674` 的 GetValidStrCap）。
     #[error(
