@@ -552,6 +552,40 @@ async fn main() -> Result<()> {
             mir2_world::mongen::MonGenConfig::default()
         }
     };
+    // **GuardList 放置半（片71）**：`LocalDB.LoadGuardList`（`LocalDB.cs:100-144`）的
+    // 文件+解析半在主线程装载；放置半在 sim 线程（要 `world.rng` 同一条流 + MonGen 宿主状态）。
+    // oracle 时机 = `GameApp.cs:239-243`（`InitializeWorld`：`InitializationMonsterThread` 之后、
+    // `WorldEngine.Initialize` 之前 ⇒ 首个 regen tick 前），且 `GameApp.cs:240` 的
+    // `!Config.VentureServer` 门在**调用点**（整文件不读）。
+    let guards = if mon_gen_config.venture_server {
+        glog!("INF", "VentureServer=TRUE ⇒ 不载守卫（GameApp.cs:240 门）");
+        None
+    } else {
+        match game_svr::guardlist::load_guard_list_file(&envir_loader) {
+            Ok(Some(list)) => {
+                glog!(
+                    "INF",
+                    "Envir/GuardList.txt 已载入：{} 条守卫配置",
+                    list.len()
+                );
+                Some(list)
+            }
+            Ok(None) => {
+                glog!(
+                    "INF",
+                    "无 Envir/GuardList.txt ⇒ 不放守卫（oracle File.Exists 门）"
+                );
+                None
+            }
+            Err(e) => {
+                glog!(
+                    "WRN",
+                    "加载 Envir/GuardList.txt 失败（{e}）⇒ 不放守卫（oracle try/catch 登记）"
+                );
+                None
+            }
+        }
+    };
     // **M3⑨-实现 2 第②片**：`Server.conf` 的宝宝配置（`PetSlaveConfig::from_ini`，
     // ① 已交付但未接生产路径）。`DoSpell` 召唤面用它选型。读不到 ⇒ oracle 初值（登记）。
     let pet_cfg = match game_svr::slave::pet_slave_config_from_conf(&conf) {
@@ -646,6 +680,7 @@ async fn main() -> Result<()> {
                         entries: mon_gen_entries,
                         config: mon_gen_config,
                     },
+                    guards,
                     loader: Some(envir_loader),
                     script_goto_count_limit: cfg.script_goto_count_limit,
                     trade: game_svr::trade::DealConfig {
@@ -5856,6 +5891,10 @@ struct EnterConfig {
     /// **M3④-实现 B 第 ③ 片**：MonGen 刷怪启动输入（怪物模板表 + `Envir/MonGen.txt` 运行时条目
     /// + `Server.conf` 刷怪参数）；`entries=None` ⇒ 无 `MonGen.txt`，不建宿主。
     mon_gen: MonGenStartup,
+    /// **GuardList 放置半（片71）**：`Envir/GuardList.txt` 解析出的守卫行（主线程装载，
+    /// `game_svr::guardlist::load_guard_list_file`）；`None` = 无文件 / VentureServer=TRUE /
+    /// 读失败 ⇒ 不放置。放置在 sim 线程起世界后（`game_svr::guardlist::place_guards`）。
+    guards: Option<Vec<mir2_envir::guardlist::GuardInfo>>,
     /// **M3⑤-实现 2 第①片**：`Envir/Merchant.txt` 的宿主装载器（O-1 FindMap 门 + O-2 `rename_rand`
     /// 要用**世界同一条** `world.rng`，故装载放在 `sim_loop` 起世界之后，而不是主线程侧）。
     loader: Option<mir2_envir::MapLoader>,
@@ -6167,6 +6206,38 @@ fn sim_loop(
     // S3 后半段（第一格）：同屏 AOI 下行要用的展示表（`ActorId -> Dir/Light/Feature/…`）。
     // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world`**。
     let mut displays = downlink::DisplayTable::new();
+    // **GuardList 放置半（片71）**：`LocalDB.cs:113-135` 的放置循环（逐行
+    // `RegenMonsterByName` + `:133` 置 `Dir`）。前置 = `MonGenHost::start` 已按 oracle
+    // `InitializeMonster`（`GameApp.cs:150`）填齐 `MonsterThreadMap`；放置在商人/NPC 装载
+    // 之后、首个 tick 之前 —— 与 oracle `InitializeWorld` 的
+    // 「LoadMerchant → LoadNpcs → … → LoadGuardList → WorldEngine.Initialize」次序一致
+    // （`GameApp.cs:226-244`），取数走 `world.rng` 同一条流。
+    if let (Some(guards), Some(reg)) = (enter_cfg.guards.take(), registry.as_ref()) {
+        match mon_gen_host.as_mut() {
+            Some(host) => {
+                let report = game_svr::guardlist::place_guards(
+                    &guards,
+                    &enter_cfg.mon_gen.table,
+                    host,
+                    reg,
+                    &mut world,
+                    &mut displays,
+                );
+                glog!(
+                    "INF",
+                    "守卫列表放置完成：{} 条配置，世界内守卫 {}，跳过 {}（未知地图/未知模板名/移位失败 ⇒ oracle null 支）",
+                    report.lines,
+                    report.placed,
+                    report.skipped
+                );
+            }
+            None => glog!(
+                "WRN",
+                "无 MonGen 刷怪宿主（无 Envir/MonGen.txt）⇒ 跳过 {} 条守卫放置（登记：oracle InitializeMonster 恒建线程表，部署件必有 MonGen.txt）",
+                guards.len()
+            ),
+        }
+    }
     // owner 2026-10-12 23:50 第 ③ 条 / §5.254（夹具 `run_attack_pair.ps1:1164`「归 m2-svr」）：
     // **服务端权威逐击状态 dump**（环境变量 `MIR2_RNG_STATE_LOG`；未设 ⇒ 关闭、零行为差）。
     // 每个**玩家攻击单元**落一行，供 `server_state_gate.py` 判「目标格上是否还站着 `!Ghost && !Death`
