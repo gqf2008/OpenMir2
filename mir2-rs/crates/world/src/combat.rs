@@ -577,14 +577,32 @@ pub fn paralysis_from_ring_shapes(shapes: impl IntoIterator<Item = Option<u8>>) 
 /// 支（登记，与 [`is_attack_target_player_grouped`] 的行会/师徒登记同源）。
 /// `is_group_member` 由调用方按 oracle `IsGroupMember` 解析（`GroupOwner != 0` 且成员表含 `cret`）。
 ///
-/// **登记 F2（独立复验 2026-10-17，`openmir2-buff-producer-wiring`，未实现）**：本函数**只**建模到
-/// `AttatckMode` 分派 + Master/Guild **名单**这一层；oracle `IsProperIsFriend` 在 `IsProperIsFriend`
-/// 判完之后还有三段**未建模**：
-/// ① **PK 值保护**（`PlayObject.cs` 里按 `PKLevel`/`PkPoint` 决定「红名不保护 / 白名保护」的支）；
-/// ② **`target.Master` 链**（目标是别人宝宝 ⇒ 走其主人的友军判定，而非目标自身）；
-/// ③ **`MapMoveTick` 3 秒窗**（刚换图 3 秒内不视为友军）。
-/// ⇒ 本函数的 `true` 是**上界**（比 oracle 宽松）；本片只把该缺口**登记**在案，**未引入、亦未修**。
-/// 影响面：A-5 的 `MagMakeDefenceArea` 友军门可能多加点（保守方向：多加点 ≠ 漏取数）。
+/// **登记 F2（订正版，独立复验 2026-10-17，`openmir2-buff-producer-wiring`，未实现）**：
+/// 原文把偏差说成「返回**上界**（比 oracle 宽松，A-5 的 `MagMakeDefenceArea` 可能**多加点**）」
+/// ——**方向说反了**，本处更正。逐条核实：
+///
+/// ① **`PlayObject.Attack.cs:755-817` 那三段是玩家目标路径上的死代码**（省略**不产生偏差**）：
+///    该 `IsProperFriend` override 先 `bool result = IsProperIsFriend(targetObject)`（`:756`），
+///    其 `:757` 判 `targetObject.Race == ActorRace.Play`，紧接 **`:760 if (targetObject.Race <
+///    ActorRace.Animal) return result;`**；而 `ActorRace.Play = 0`（`src/OpenMir2/Enums/Race.cs:8`）、
+///    `Animal = 50`（同文件 `:24`）⇒ `0 < 50` **恒成立** ⇒ `:764-817` 的
+///    **`target.Master` 链 / PK 值保护 / `MapMoveTick` 3 秒窗**在**玩家目标**路径上永不执行。
+///    ⇒ 原登记的「三段未建模 ⇒ 上界」**不成立**：省略它们**不产生任何偏差**（无论方向）。
+///
+/// ② **真实偏差在另一侧、方向相反（收窄 ⇒ 漏加点）**：本函数对
+///    `HAM_MASTER`（= `AttackMode.HAM_MASTER`，3）与 `HAM_GUILD`（5）只保留 `self == cret`
+///    （见 `match caster.attack_mode`），而 oracle 的 `IsProperIsFriend`（`PlayObject.cs:4202-4296`）
+///    在这两支还收**名单**：
+///    · `HAM_MASTER` 走 `MasterList`（师徒）——`PlayObject.cs:4221-4248`（`IsMaster` / 对方 `IsMaster`
+///      两向遍历 `MasterList`）；
+///    · `HAM_GUILD` 走 `MyGuild.IsMember(cret.ChrName)` 与 `GuildWarArea && MyGuild.IsAllyGuild(…)`
+///      ——`PlayObject.cs:4259-4278`。
+///    ⇒ 本仓这两支**比 oracle 窄** ⇒ 在该模式下 14/15（`MagMakeDefenceArea` 的友军门）会
+///    **漏加**友军 buff（**漏加点**，不是多加点）。
+///
+/// ③ **可达性 = 生产可达，不是理论面**：`attack_mode` 来自线上报文
+///    （`bins/game-svr/src/main.rs` `attack_mode: d.attatck_mode`）⇒ 模式 3/5 由客户端上报即可进入。
+///    ⇒ 该缺口是**真实可触发的收窄**，登记为**未实现**（保守方向登记 = 收窄 = 漏加点）。
 #[must_use]
 pub fn is_proper_is_friend(caster: &Entity, cret: &Entity, is_group_member: bool) -> bool {
     if cret.race != ACTOR_RACE_PLAY {
@@ -980,10 +998,19 @@ pub fn attack_with_grouped(
 /// **命中/躲闪都抽**（`AttackSuccess` 在 `_Attack` 返回后无条件调用，不看 `canHit`/`nPower`）。
 /// 漏掉这一次会让跨侧取数账本从**第一击**起整体错位（C# 每次有目标的攻击都多 1 抽）。
 ///
-/// 其余 `AttackSuccess` 取数（`:221` 麻痹 `Random(AntiPoison + AttackPosionRate)`、
-/// `:254/:261` 技能熟练度 `Random(3)+1`、`TrainCurrentSkill` 的 `Random(3)+1`）都依赖运行态
-/// （`Paralysis` / `SuckupEnemyHealthRate` / `MagicArr`），本骨架未建模 ⇒ **登记**（见模块头），
-/// 不做静默降级。
+/// 其余 `AttackSuccess` 取数都依赖运行态（`Paralysis` / `SuckupEnemyHealthRate` / `MagicArr`）。
+/// **登记订正 1（独立复验 2026-10-17）**——原文写「`:221` … 未建模」与「`:254/:261`」两处**已陈旧**
+/// （`:221` 本片已建模；`:261` 行号有漂）。按现况如实登记（见模块头），不做静默降级：
+/// - **`:221` 麻痹门** `Random(targetObject.AntiPoison + Config.AttackPosionRate)`：**本片已建模**——
+///   [`attack_dir_grouped_poison`] 在 `poison = Some(..)` 且 `!UnParalysis && Paralysis` 时插一次抽取
+///   并回 `poisoned`；**`poison = None` ⇒ 不抽**。故 [`attack_dir_grouped`]（恒传 `None`）与
+///   `attack_with` / `World::attack_once` 等**不传运行态的入口仍不抽**（与旧口径逐取数等价）。
+/// - **`:246` / `:254` 技能熟练度** `CheckSkillProficiency(M2Share.RandomNumber.Random(3) + 1, …)`
+///   （`SKILL_ILKWANG` 支 `:246`、`SKILL_YEDO` 支 `:254`；原注的 `:254/:261` 订正为 `:246`/`:254`）；
+/// - **`:364` / `:375` / `:388` / `:1207`** 亦有 `TrainSkill(MagicArr[…], Random(3) + 1)`（`wHitMode`
+///   尾与另一处命中尾）。
+///   以上技能熟练度支都要求对应 `MagicArr` 槽非 null（本骨架无 `MagicArr` / `UserMagic[]` 面）
+///   ⇒ **未建模**，维持登记。
 ///
 /// 返回值 = `nWeaponDamage`（本骨架无武器耐久面，值不使用；只保取数次数与顺序）。
 #[must_use]

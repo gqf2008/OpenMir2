@@ -570,6 +570,17 @@ impl World {
     /// 与 oracle 的接线口径不符**（oracle 那 6 处是**按怪物类**写的），需编排侧确认后再决定
     /// 是否为这 6 处单开片；本片**未引入、亦未修**。
     ///
+    /// **登记订正 3（独立复验 2026-10-17）**：上面「oracle 入口」的枚举**低估**了——除本函数的
+    /// 玩家攻击路径（`PlayObject.Attack.cs:223`）与 6 个怪物类（`CentipedeKingMonster.cs:70/74`、
+    /// `GasAttackMonster.cs:33`、`GreenMonster.cs:25`、`Khazard.cs:32/46`、`RedMonster.cs:25`、
+    /// `SpitSpider.cs:48`）外，还有**延迟消息路径**：`MagicManager.cs:241/245`
+    /// （施毒术 `RM_POISON` DECHEALTH/DAMAGEARMOR）、`:921/:925`、`:1257`（麻痹 STONE）经
+    /// `SendSelfDelayMsg(Messages.RM_POISON, …)` 落到 `BaseObject.Base.cs:740-758` 的
+    /// `case Messages.RM_POISON:` ⇒ `MakePosion(processMsg.wParam, (ushort)nParam1, nParam3)`
+    /// （另见 `BaseObject.Message.cs:44/108` 的同名 case 的延迟投递路径）。
+    /// 本仓这些路径**都没有**（`SendSelfDelayMsg` 定时消息面未移植）⇒ 「本仓唯一可达生产入口 =
+    /// 玩家攻击路径」这句**仍成立**，但 oracle 侧入口枚举按此**如实放宽**（保守方向）。
+    ///
     /// 前置：`actor_id` 须是已落图的实体（oracle 里 `this` 恒有效）；`nType` 的 `from_index` 在
     /// `n_type < MAX_STATUS_ATTRIBUTE` 后恒 `Some`（12 值全覆盖）。
     pub fn make_posion(&mut self, actor_id: i32, n_type: u8, n_time: i32, n_point: i32) -> bool {

@@ -5017,33 +5017,57 @@ fn handle_spell_cmd(
             (i32::from(sg.state.wabil.mc), i32::from(sg.state.wabil.sc))
         });
         let magic_level = matched.as_ref().map_or(0, |m| m.level);
-        // **F-1（独立复验 2026-10-17 阻塞项）**：`DoSpell` 的**距离门**
+        // **F-1（独立复验 2026-10-17）**：`DoSpell` 的**距离门**
         // （`src/M2Server/Magic/MagicManager.cs:152-155`）——
         // `Math.Abs(playObject.CurrX - nTargetX) > SystemShare.Config.MagicAttackRage
         //  || Math.Abs(playObject.CurrY - nTargetY) > SystemShare.Config.MagicAttackRage`
         // ⇒ `return false`：**越界 = 一个随机数都不抽、也不施放**。技能 14/15/31 同属 `DoSpell`
         // 的 `switch` 支，而该门在 `switch` **之前**（`:152`）⇒ 必须先过门。
-        // **坐标取原始 `req.target_x`/`req.target_y`**：oracle 这一句用的是**入参** `nTargetX`/`nTargetY`，
-        // 不是 `CretInNearXy` 之后的 snap 值 ⇒ 与下方召唤面（17/30/41）用 `tx`/`ty` 的兄弟块**不同**，
-        // 不得照抄（照抄会把 in-range 的 snap 目标误判成越界）。
-        // 漏此门 ⇒ 越界施放会抽世界 RNG 并落下 DefenceUp/MagDefenceUp/MagicShield
+        //
+        // **坐标 = snap 之后的 `tx`/`ty`**（本块是复验 `2026-10-17` 的 must_fix ① 更正处）：
+        // `68b0730df` 曾用原始 `req.target_x`/`req.target_y` 过门，并论证「oracle 这一句用的是
+        // **入参**、不是 `CretInNearXy` 之后的 snap 值」——**该论证是错的**。oracle `default` 支
+        // （`PlayObject.Attack.cs:1272-1277`）**先**做
+        // `if (CretInNearXy(targetObject, nTargetX, nTargetY)) { spellObject = targetObject;
+        //  nTargetX = spellObject.CurrX; nTargetY = spellObject.CurrY; }`——把 `nTargetX/nTargetY`
+        // **就地改写**为目标的实际坐标——**再**把这**改写后的局部变量**交给
+        // `DoSpell(UserMagic, nTargetX, nTargetY, spellObject)`（`:1278`）。
+        // ⇒ `DoSpell` 的形参 `nTargetX/nTargetY` **就是 snap 值**，`:152` 的门读的就是它。
+        // 原论证把「`default` 支的入参」与「`DoSpell` 的形参」混为一谈 ⇒ 更正为与下方召唤面
+        // （17/30/41）、诱惑（20）、分身（46）**同口径**。
+        // 漏此门（或口径错）⇒ 越界施放会抽世界 RNG 并落下 DefenceUp/MagDefenceUp/MagicShield
         // ⇒ 破坏 RNG 流水等价（R 级，见 `docs/Rust重写设计文档.md` §17.1 判据分级）。
-        if magic::spell_in_range(
-            i16::try_from(cur_x).unwrap_or(0),
-            i16::try_from(cur_y).unwrap_or(0),
-            i16::try_from(req.target_x).unwrap_or(0),
-            i16::try_from(req.target_y).unwrap_or(0),
-            magic_attack_rage,
-        ) {
+        //
+        // **裁决（登记订正 4，独立复验 2026-10-17）**：门改在 **i32 域**比较
+        // （[`mir2_world::magic::spell_in_range_i32`]）——oracle 的 `Math.Abs(short - short)` 在 C#
+        // 里本就提升为 `int`，且本仓 `cur_x`/`tx` 是 `i32`；原 `i16::try_from(..).unwrap_or(0)`
+        // 会把超 `i16` 的坐标**静默折成 0** 参与判定 = fail-open，故弃用。兄弟块（17/30/41、20、46）
+        // 的门本片同步改用同一 i32 口径（同一逻辑变更）。
+        //
+        // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：
+        // 目标在 `(nTargetX,nTargetY)` 的 1×1 邻域内 ⇒ snap 到目标实际坐标。
+        // （`spellObject` 本身在 14/15/31 的效果体里不被使用 ⇒ 只取坐标，与兄弟块同判据。）
+        let (mut tx, mut ty) = (req.target_x, req.target_y);
+        if let Some(t) = world
+            .entities
+            .get(req.target_actor_id)
+            .filter(|t| !t.ghost && (t.x - tx).abs() <= 1 && (t.y - ty).abs() <= 1)
+        {
+            tx = t.x;
+            ty = t.y;
+        }
+        if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
             match req.magic_id {
-                // `SKILL_SHIELD(31)`：`MagBubbleDefenceUp(level, GetPower(GetRPow(MC) + 15))`（`:475`）。
+                // `SKILL_SHIELD(31)`：`MagBubbleDefenceUp(level, GetPower(GetRPow(MC) + 15))`（`:475`）
+                // ——作用于**施法者自身**（不读目标坐标）⇒ 坐标口径对 31 无影响。
                 mir2_world::world::SKILL_SHIELD => {
                     if let Some(magic) = magic_table.get(req.magic_id) {
                         let _ = world.cast_shield_spell(actor_id, magic, magic_level, mc);
                     }
                 }
                 // `SKILL_HANGMAJINBUB(14)`：`MagMakeDefenceArea(nTargetX, nTargetY, 3, nPower, 1)`
-                // ⇒ `MagDefenceUp`（`:352-357`）。
+                // ⇒ `MagDefenceUp`（`:352-357`）。**中心坐标 = snap 后的 `tx`/`ty`**——oracle 的
+                // `MagMakeDefenceArea` 收的就是被 `:1275-1276` 改写后的局部变量。
                 mir2_world::world::SKILL_HANGMAJINBUB => {
                     if let Some(magic) = magic_table.get(req.magic_id) {
                         let _ = world.cast_defence_area_spell(
@@ -5051,14 +5075,14 @@ fn handle_spell_cmd(
                             magic,
                             magic_level,
                             sc,
-                            req.target_x,
-                            req.target_y,
+                            tx,
+                            ty,
                             1,
                         );
                     }
                 }
                 // `SKILL_DEJIWONHO(15)`：`MagMakeDefenceArea(nTargetX, nTargetY, 3, nPower, 0)`
-                // ⇒ `DefenceUp`（`:359-365`）。
+                // ⇒ `DefenceUp`（`:359-365`）。中心坐标同上 = snap 后的 `tx`/`ty`。
                 mir2_world::world::SKILL_DEJIWONHO => {
                     if let Some(magic) = magic_table.get(req.magic_id) {
                         let _ = world.cast_defence_area_spell(
@@ -5066,8 +5090,8 @@ fn handle_spell_cmd(
                             magic,
                             magic_level,
                             sc,
-                            req.target_x,
-                            req.target_y,
+                            tx,
+                            ty,
                             0,
                         );
                     }
@@ -5097,13 +5121,9 @@ fn handle_spell_cmd(
                 _ => None,
             };
             // `DoSpell` 距离门（`MagicManager.cs:155`，`SystemShare.Config.MagicAttackRage`）。
-            if magic::spell_in_range(
-                i16::try_from(cur_x).unwrap_or(0),
-                i16::try_from(cur_y).unwrap_or(0),
-                i16::try_from(tx).unwrap_or(0),
-                i16::try_from(ty).unwrap_or(0),
-                magic_attack_rage,
-            ) {
+            // i32 域比较（登记订正 4）：弃用 `i16::try_from(..).unwrap_or(0)` 的 fail-open 折 0，
+            // 见 [`mir2_world::magic::spell_in_range_i32`]。
+            if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
                 // `SendRefMsg(RM_SPELL, Magic.Effect, nTargetX, nTargetY, Magic.MagicId, "")`（`:159`）。
                 let rm = smframe::sm_spell(
                     actor_id,
@@ -5240,13 +5260,9 @@ fn handle_spell_cmd(
                 _ => None,
             };
             // `DoSpell` 的距离门（`MagicManager.cs:154`）。
-            if magic::spell_in_range(
-                i16::try_from(cur_x).unwrap_or(0),
-                i16::try_from(cur_y).unwrap_or(0),
-                i16::try_from(tx).unwrap_or(0),
-                i16::try_from(ty).unwrap_or(0),
-                magic_attack_rage,
-            ) {
+            // i32 域比较（登记订正 4）：弃用 `i16::try_from(..).unwrap_or(0)` 的 fail-open 折 0，
+            // 见 [`mir2_world::magic::spell_in_range_i32`]。
+            if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
                 // `DoSpell` 顶部的 `SendRefMsg(RM_SPELL, Effect, nTargetX, nTargetY, MagicId, "")`（`:159`）。
                 let rm = smframe::sm_spell(
                     actor_id,
@@ -5336,13 +5352,9 @@ fn handle_spell_cmd(
                 _ => None,
             };
             // `DoSpell` 的距离门（`MagicManager.cs:152-155`，`SystemShare.Config.MagicAttackRage`）。
-            if magic::spell_in_range(
-                i16::try_from(cur_x).unwrap_or(0),
-                i16::try_from(cur_y).unwrap_or(0),
-                i16::try_from(tx).unwrap_or(0),
-                i16::try_from(ty).unwrap_or(0),
-                magic_attack_rage,
-            ) {
+            // i32 域比较（登记订正 4）：弃用 `i16::try_from(..).unwrap_or(0)` 的 fail-open 折 0，
+            // 见 [`mir2_world::magic::spell_in_range_i32`]。
+            if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
                 // `DoSpell` 顶部 `SendRefMsg(RM_SPELL, Effect, nTargetX, nTargetY, MagicId, "")`（`:159`）。
                 let rm = smframe::sm_spell(
                     actor_id,
@@ -5456,10 +5468,20 @@ fn ring_paralysis(
 /// （[`mir2_world::World::set_attack_poison`]）。
 ///
 /// - `paralysis`：麻痹戒指（`RING_MAKESTONE_ITEM`）⇒ `PlayObject.Paralysis`（`PlayObject.cs:2230-2239`）；
-/// - `anti_poison`：`BaseObject.AntiPoison`（= `AddAbil.AntiPoison`，`BaseObject.Abil.cs:66`）。
-///   **登记**：本骨架的会话态只留 `WAbil`（`Ability`）不含 `AddAbil` ⇒ 恒 `0`（未建模守方抗毒，
-///   接线待会话态扩 `AddAbil` 面）；
-/// - `un_paralysis`：本骨架未建模（无对应的卸盾/免疫戒指面）⇒ 常 `false`（登记）。
+/// - `anti_poison`：`BaseObject.AntiPoison`（`BaseObject.cs:109` 的 `public byte AntiPoison`）。
+///   **登记（订正 2，独立复验 2026-10-17 新增，R 级）**：oracle 侧该值**不是恒 0**——
+///   玩家由 `RecalcAbilitys` 累加 `AntiPoison = AntiPoison + AddAbil.AntiPoison`
+///   （`PlayObject.cs:2892`；`AddAbil.AntiPoison` 又在 `:2600 = +1`、`:2656 = +6`、
+///   `:4435/4514/4559/4593` 按装备 `ToxAvoid`/`AC` 高字节累加）；怪物/NPC 构造里直接赋非零
+///   （`CastleDoor.cs:19 = 200`、`WallStructure.cs:14 = 200`、`NormNpc.cs:44 = 99`）。
+///   本骨架的会话态只留 `WAbil`（`Ability`）、不含 `AddAbil` ⇒ 这里**恒 `0`**。
+///   ⇒ 影响面：`PlayObject.Attack.cs:221` 的**门开条件**（`!UnParalysis && Paralysis`）两侧一致，
+///   但**抽样参数**不同（Rust `Random(0 + AttackPosionRate)` vs oracle `Random(AntiPoison + AttackPosionRate)`）。
+///   因两侧恒消耗 **1 个样本**，**RNG 流水位置不漂**；但**取值/命中概率漂**
+///   ⇒ R 级对拍的 **value 账本会红**（不是流水账本）。接线待会话态扩 `AddAbil` 面。
+/// - `un_paralysis`：`BaseObject.UnParalysis`（`BaseObject.cs:85`）在 oracle **全仓无赋值点**
+///   （只有 `Attack.cs:221` / `MagicManager.cs:1255` 两处**读**）⇒ 恒 `false`；本骨架常 `false`
+///   ⇒ **与 oracle 一致，不是缺口**（登记订正 2；原先笼统写作「未建模」易被误读为偏差）。
 ///
 /// 目标不在场 / 无会话（怪物）⇒ 不写（[`mir2_world::World::attack_once`] 对缺席守方取缺省 `false`/`0`）。
 fn set_actor_poison_state(
@@ -16041,6 +16063,174 @@ mod tests {
                 !wire.contains(&mir2_protocol::messages::SM_CHARSTATUSCHANGED),
                 "[魔号 {magic_id}] 越界 ⇒ 不得有任何 SM_CHARSTATUSCHANGED(657) 下行帧，实得 {wire:?}"
             );
+        }
+    }
+
+    /// **片 A-5 夹逼牙 t1（must_fix ①：距离门的**坐标系**，R 级）**——**原始点击点在界内、snap 后越界
+    /// ⇒ 必须零抽数、零 buff**。
+    ///
+    /// 布置：施法者 (10,10)、**点击点 (18,10)**（原始 `|Δx| = 8 <= MagicAttackRage = 8`
+    /// ⇒ 用**原始坐标**过门）、**目标实体在 (19,10)**（落在点击点的 1×1 邻域内 ⇒ `CretInNearXy`
+    /// 命中 ⇒ snap 成 (19,10) ⇒ `|Δx| = 9 > 8` **越界**）。
+    /// oracle `default` 支先 snap（`PlayObject.Attack.cs:1272-1277` **就地改写** `nTargetX/nTargetY`）
+    /// 再把改写后的值交给 `DoSpell`（`:1278`）⇒ `MagicManager.cs:152-155` 的门读的是 **snap 后的坐标**
+    /// ⇒ 直接 `return false`：**世界 RNG 抽取数 == 0**、目标/施法者三种 buff 全无。
+    ///
+    /// 覆盖差异：现有三条用例的点击点恒等于目标实体坐标（snap 是恒等变换）⇒ 覆盖不到本差异；
+    /// 本牙的点击点与目标实体坐标**差 1**，正是 `CretInNearXy` 生效的唯一窗口。
+    ///
+    /// 红检（变异牙）：把 A-5 的门换回**原始坐标** `req.target_x/req.target_y` ⇒ 本牙必红
+    /// （`68b0730df` 上实测会抽 3 个数且目标获 buff）。魔号 14/15/31 各跑一遍。
+    #[test]
+    fn spell_cmd_a5_snap_pushes_click_out_of_range() {
+        for magic_id in [14u16, 15, 31] {
+            let (
+                mut world,
+                caster,
+                target,
+                online,
+                mut saves,
+                magic_table,
+                mut displays,
+                gates,
+                mut rx0,
+            ) = a5_spell_rig(magic_id, 19, 10); // 目标实体在 (19,10)
+            let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+                std::collections::HashMap::new();
+            ground_sessions.insert("caster".into(), test_session_ground(caster));
+            let catalog = game_svr::ability::StdItemCatalog::new();
+            let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+            let table = game_svr::mongen::MonsterTable::new(Vec::new());
+            let rng_before = world.rng.clone();
+            handle_spell_cmd(
+                game_svr::feature::make_long(18, 10), // 点击点 (18,10)：原始 |Δx|=8 在界
+                magic_id,
+                u16::try_from(target).unwrap_or(0), // target_actor_id = target ⇒ snap 命中
+                0,
+                "caster",
+                911,
+                &online,
+                &mut world,
+                &mut saves,
+                &mut ground_sessions,
+                &catalog,
+                &magic_table,
+                &pet_cfg,
+                8,
+                None,
+                &table,
+                &mut displays,
+                &gates,
+            );
+            // ① snap 成 (19,10) ⇒ |Δx| = 9 > 8 ⇒ 距离门在任何取数之前 `return false`。
+            assert_eq!(
+                draws_between(&rng_before, &world.rng),
+                0,
+                "[魔号 {magic_id}] snap 后越界（点击 (18,10) → 目标 (19,10)，|Δx|=9 > 8）\
+                 ⇒ 距离门在取数前 false ⇒ 世界 RNG 零推进"
+            );
+            // ② 三种 buff 全无（目标 + 施法者）。
+            for (who, id) in [("target", target), ("caster", caster)] {
+                assert!(
+                    !world.buffs.has_buff(id, mir2_world::BuffType::DefensePower),
+                    "[魔号 {magic_id}] snap 后越界 ⇒ {who} 不得获 `DefencePower`"
+                );
+                assert!(
+                    !world
+                        .buffs
+                        .has_buff(id, mir2_world::BuffType::MagicDefensePower),
+                    "[魔号 {magic_id}] snap 后越界 ⇒ {who} 不得获 `MagicDefensePower`"
+                );
+                assert!(
+                    !world.buffs.has_buff(id, mir2_world::BuffType::MagicShield),
+                    "[魔号 {magic_id}] snap 后越界 ⇒ {who} 不得获 `MagicShield` buff"
+                );
+                assert!(
+                    !world.entities.get(id).unwrap().magic_shield,
+                    "[魔号 {magic_id}] snap 后越界 ⇒ {who} 的 `MagicShield` 不得置位"
+                );
+            }
+            let _ = a5_take_idents(&mut rx0);
+        }
+    }
+
+    /// **片 A-5 夹逼牙 t2（must_fix ① 的另一侧）**——**原始点击点越界、snap 后在界 ⇒ 必须施放**。
+    ///
+    /// 布置：施法者 (10,10)、**点击点 (19,10)**（原始 `|Δx| = 9 > 8` ⇒ 用原始坐标**过不了门**）、
+    /// **目标实体在 (18,10)**（邻域内 ⇒ snap 成 (18,10) ⇒ `|Δx| = 8 <= 8` **在界**）
+    /// ⇒ oracle 的 `DoSpell` 照常施放。
+    ///
+    /// 断言：① `draws > 0`（生产链确实走到取数）；② 目标/施法者获得对应 buff
+    /// （14 ⇒ 目标 `MagicDefensePower`；15 ⇒ 目标 `DefensePower`；31 ⇒ 施法者 `MagicShield`）。
+    ///
+    /// 红检（变异牙）：换回**原始坐标** ⇒ 本牙必红（原始 |Δx|=9 越界 ⇒ 零抽数、零 buff）。
+    #[test]
+    fn spell_cmd_a5_snap_pulls_click_into_range() {
+        for magic_id in [14u16, 15, 31] {
+            let (
+                mut world,
+                caster,
+                target,
+                online,
+                mut saves,
+                magic_table,
+                mut displays,
+                gates,
+                mut rx0,
+            ) = a5_spell_rig(magic_id, 18, 10); // 目标实体在 (18,10)
+            let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+                std::collections::HashMap::new();
+            ground_sessions.insert("caster".into(), test_session_ground(caster));
+            let catalog = game_svr::ability::StdItemCatalog::new();
+            let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+            let table = game_svr::mongen::MonsterTable::new(Vec::new());
+            let rng_before = world.rng.clone();
+            handle_spell_cmd(
+                game_svr::feature::make_long(19, 10), // 点击点 (19,10)：原始 |Δx|=9 越界
+                magic_id,
+                u16::try_from(target).unwrap_or(0), // target_actor_id = target ⇒ snap 命中
+                0,
+                "caster",
+                911,
+                &online,
+                &mut world,
+                &mut saves,
+                &mut ground_sessions,
+                &catalog,
+                &magic_table,
+                &pet_cfg,
+                8,
+                None,
+                &table,
+                &mut displays,
+                &gates,
+            );
+            assert!(
+                draws_between(&rng_before, &world.rng) > 0,
+                "[魔号 {magic_id}] snap 后在界（点击 (19,10) → 目标 (18,10)，|Δx|=8 ≤ 8）\
+                 ⇒ 生产链必须走到取数（世界 RNG 前进）"
+            );
+            match magic_id {
+                31 => assert!(
+                    world
+                        .buffs
+                        .has_buff(caster, mir2_world::BuffType::MagicShield),
+                    "snap 后在界 ⇒ 施法者获 `MagicShield`（技能 31 作用于自身）"
+                ),
+                14 => assert!(
+                    world
+                        .buffs
+                        .has_buff(target, mir2_world::BuffType::MagicDefensePower),
+                    "snap 后在界 ⇒ 目标获 `MagicDefensePower`（技能 14 → `MagDefenceUp`）"
+                ),
+                _ => assert!(
+                    world
+                        .buffs
+                        .has_buff(target, mir2_world::BuffType::DefensePower),
+                    "snap 后在界 ⇒ 目标获 `DefencePower`（技能 15 → `DefenceUp`）"
+                ),
+            }
+            let _ = a5_take_idents(&mut rx0);
         }
     }
 

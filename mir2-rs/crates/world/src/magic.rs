@@ -464,9 +464,32 @@ pub fn spell_in_range(
     target_y: i16,
     magic_attack_rage: i32,
 ) -> bool {
-    let dx = (i32::from(cur_x) - i32::from(target_x)).abs();
-    let dy = (i32::from(cur_y) - i32::from(target_y)).abs();
-    !(dx > magic_attack_rage || dy > magic_attack_rage)
+    spell_in_range_i32(
+        i32::from(cur_x),
+        i32::from(cur_y),
+        i32::from(target_x),
+        i32::from(target_y),
+        magic_attack_rage,
+    )
+}
+
+/// [`spell_in_range`] 的 **i32 域**版本（登记订正 4，独立复验 2026-10-17）。
+///
+/// 语义与 oracle **逐字同构**：C# 的 `Math.Abs(playObject.CurrX - nTargetX)` 里两个 `short`
+/// 运算数先按 `int` 提升再相减/取绝对值 ⇒ 该门本来就在 `int` 域成立，不是 `short` 域。
+/// 宿主侧 `cur_x`/`tx` 本就是 `i32`，直接走本函数可**免掉** `i16::try_from(..).unwrap_or(0)`：
+/// 后者会把超 `i16` 范围的坐标**静默折成 0** 再参与判定（fail-open：两个超界坐标可能被折成同一个
+/// 0 而误判「在界内」）。oracle 侧坐标是 `short`、超界不可达，故此差异只在**本仓的非法输入**上
+/// 显形；本函数把它收敛为「按真实 `i32` 差值判定」，即越界 ⇒ 不施放（保守/非 fail-open 方向）。
+#[must_use]
+pub fn spell_in_range_i32(
+    cur_x: i32,
+    cur_y: i32,
+    target_x: i32,
+    target_y: i32,
+    magic_attack_rage: i32,
+) -> bool {
+    !((cur_x - target_x).abs() > magic_attack_rage || (cur_y - target_y).abs() > magic_attack_rage)
 }
 
 /// `DoSpell` 版本/魔号门（`src/M2Server/Magic/MagicManager.cs:167`）：
