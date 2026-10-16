@@ -23,7 +23,7 @@
 ```powershell
 python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mongen_dense_points.py `
   --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --map 0 --view-range 12 `
-  --points "291,666;291,651;289,618;287,620;650,631;330,266"
+  --points "291,666;291,651;289,618;287,620;650,631;330,266;311,666"
 # 选点：窗口内期望出生怪数排行（片⑯；只算出生，不含游走）
 python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mongen_dense_points.py `
   --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --map 0 --view-range 12 --rank 10
@@ -33,10 +33,10 @@ python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mon
   - 想一次拿**最多同屏怪** ⇒ `(605,578)`（片⑯ 实测 E=12.681，5 个重叠框中心；次密 `(211,629)`/`(256,572)` E=12.225）；
   - 想复用**既有证据** ⇒ `(289,618)`（= `Envir/StartPoint.txt` 的 oracle 出生点，E=6.754，也是新角色默认体验）
     或 `(287,620)`（片⑦ AFTER 已证客户端实收 13 对，E=5.617）；`(330,266)` 也框内（另一出生点）。
-  - 两侧对照的**反向** ③a 点仍用 `(291,666)`（E=0.000，机判 `--max-expected 0`）。
+  - 两侧对照的**反向** ③a 点用 `(311,666)`（E=0.000，机判 `--max-expected 0`；**不得再用 `(291,666)`**：片68 起卫士 `(281,661)` d=10 ≤ vr=12 污染 ⇒ NOT_CLEAN，见 §2c/§2d W0-3）。
 - **不要再用 `(291,666)` / `(291,651)` 当「有怪点」**：二者在 map "0" 的 **76 个生成框之外**
   （最近框 Chebyshev=30 / 29 > `ViewRange=12`）⇒ 该点同屏无怪是正确行为（见 `81-…txt` §B/§C）。
-  `(291,666)` 只用来做 ③a 的**反向对照**。
+  `(291,666)` 现**只**用作 **GuardList 帧一致点**（§2d W0-4：卫士 `(281,661)` 两侧对称出帧），**不再**作 ③a 反向点（反向点已改 `(311,666)`）。
 
 ## 1. 前置（任一不满足就停手）
 
@@ -63,7 +63,7 @@ bash mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window
 | R1 | 构建源缺 HIGHHP 家族/③ 读数等修复提交 | `git fetch` + 把窗口源切到 `origin/master`（或含全部五片的 head） |
 | R2 | 源码缺 `vr/new/af` 版式或可见集判据 | 源太旧 ⇒ 同 R1 |
 | R3 | `MapInfo.txt` 第 N 个 section 的逻辑名 != 真机 `map_id` | 换 `--map-id/--map-name`，或核部署件 |
-| R4 | 坐标与 MonGen 生成框不符 | 用 `check_mongen_dense_points.py --rank 10` 重新选点（③a 用 `(291,666)`） |
+| R4 | 坐标与 MonGen 生成框不符 | 用 `check_mongen_dense_points.py --rank 10` 重新选点（③a 用 `(311,666)`） |
 | R5 | 证据目录缺判据工具 | 补工具（不要拿老版式脚本顶上） |
 | R6 | 构建源落后基线（生产路径有差异） | `git fetch` + `checkout --detach <基线>` + 重编译（跟 R7） |
 | **R7** | 出处清单 ↔ exe 不一致 / 清单来自另一棵树 | **照抄工具打印的 `PREFLIGHT_RECORD_CMD:`**（重编六件 + 重录清单） |
@@ -110,8 +110,8 @@ $margs = @('-h','127.0.0.1','-P','3306','-u','root','--password=','--batch','--s
 & $mysql @margs -e "UPDATE mir2_db.characters SET MapName='0', CX=605, CY=578 WHERE ChrName='aaa';"
 # 1c. 有怪点（保守：oracle 出生点 / 片⑦ 已证点，二选一）
 & $mysql @margs -e "UPDATE mir2_db.characters SET MapName='0', CX=289, CY=618 WHERE ChrName='aaa';"   # 或 287,620
-# 1d. 无怪点（③a 反向，第二趟起栈前改）
-& $mysql @margs -e "UPDATE mir2_db.characters SET MapName='0', CX=291, CY=666 WHERE ChrName='aaa';"
+# 1d. 无怪点（③a 反向 = (311,666)；片68 起 (291,666) 被卫士污染 ⇒ 改 311；第二趟起栈前改）
+& $mysql @margs -e "UPDATE mir2_db.characters SET MapName='0', CX=311, CY=666 WHERE ChrName='aaa';"
 # 收工还原：把 1a 打印的 before 三值填回
 & $mysql @margs -e "UPDATE mir2_db.characters SET MapName=BEFORE_MAP, CX=BEFORE_X, CY=BEFORE_Y WHERE ChrName='aaa';"
 ```
@@ -235,7 +235,7 @@ Copy-Item -Force 'E:/tmp/window/cliente2e/shadow/game-gate.conf' 'E:/tmp/window/
 # 3) 前置门
 cd mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
 python -I -B check_csharp_capture_preflight.py `
-  --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr `
+  --repo E:/Users/gxh/Documents/GitHub/OpenMir2 `
   --mirserver E:/MirServer --shadow-config E:/tmp/window/cliente2e/shadow/run-gate/config.conf
 ```
 
@@ -243,6 +243,7 @@ python -I -B check_csharp_capture_preflight.py `
 `ServerWorkThread=1`（S1 §2.1 多网关错配边界）；真实 `GatePort1=7200`；`!servertable.txt`
 GameGate 端口 `=7200`；上游 `127.0.0.1:5000`。**红灯先修，不要带着红灯起栈。**
 （片㉖ 实测：把 `--shadow-config` 指到真实 conf ⇒ `RED 影子 GatePort1=7200 != 影子端口 7600`。）
+（**片D3 订正**：`--repo` 必须是**含修复提交 `607e9b773` 的检出**；旧写死的 `.claude/worktrees/m2-svr` 路径已不存在 ⇒ 逐字照抄会 `PREREQ_RED` rc=2。改用主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2` 实测 rc=0。）
 
 ### 4.1 影子 RunGate 配置（片㉖ 订正：**整目录拷贝**）
 
@@ -272,7 +273,7 @@ python -I -B aoi_visibility_pair.py `
   --left E:/tmp/window/cliente2e/rust/s2c/capture.jsonl `
   --right E:/tmp/window/cliente2e/csharp/s2c/capture.jsonl `
   --expect visible --min-pairs 1
-# ③a 无怪点（291,666）：两侧都 0 对 ⇒ 「该点确实无怪」
+# ③a 无怪点（311,666）：两侧都 0 对 ⇒ 「该点确实无怪」
 python -I -B aoi_visibility_pair.py `
   --left E:/tmp/window/cliente2e/rust/s2c/capture.jsonl `
   --right E:/tmp/window/cliente2e/csharp/s2c/capture.jsonl --expect none
@@ -299,7 +300,7 @@ python -I -B check_attack_observability.py `
 ## 7. 登记的风险 / 未做
 
 - **③b 攻击/伤害（片㉜）**：判据 = `check_attack_observability.py`（c2s `CM_HIT(3014)` + s2c
-  `SM_STRUCK(31)`/`SM_NOWDEATH(34)`）。生产侧同片修了 oracle 偏差：`bins/game-svr` 的
+  `SM_STRUCK(31)`/`SM_NOWDEATH(34)`）。生产侧同片修了 oracle 偏差：`mir2-rs/bins/game-svr` 的
   `drain_combat_downlink` ① 原先只把 `SM_STRUCK` 发给**受击者本人**，而 oracle
   （`BaseObject.Attack.cs:57` → `BaseObject.Base.cs:699-705` → `BaseObject.Message.cs:383+`）
   是 `SendRefMsg(RM_STRUCK)` **广播给受击者视野内全体 `Play`**（怪物目标也一样）⇒ 不修则真客户端
@@ -307,7 +308,7 @@ python -I -B check_attack_observability.py `
   延时投递，本实现即时发；本次不改。
 - **C# 抓包拓扑**：旧归因（端口被挪）已由 `85-…md` 订正为 S1 缺陷①（已修 + 已部署）；
   §4.0 前置门可离线机判。**但世界数据能否经代理下来仍须窗口实拍**；未实拍前不得写「两侧帧级一致」。
-- `RM_DISAPPEAR(48)` 无编码器（怪离视野无消失帧，`bins/game-svr/src/downlink.rs` 已登记）与 ③ 无因果，
+- `RM_DISAPPEAR(48)` 无编码器（怪离视野无消失帧，`mir2-rs/bins/game-svr/src/downlink.rs` 已登记）与 ③ 无因果，
   本手册不含；归属见 `70-…txt` §F（等 owner 指派）。
 - **53 触发前置（片㊴，2026-10-14 收口）**：本手册旧版未要求 `HP<MaxHP` ⇒ 满血进图 53 永不发
   （既有 7 份 capture 全 0 条）。已补 §2b + 机判 `check_healthspellchanged_trigger.py`（T1/T2/T3，
@@ -332,8 +333,8 @@ python -I -B check_attack_observability.py `
 - **③a 反向点**：不得再用 `(291,666)`（`GuardList` 卫士 `(281,661)` d=10 污染）；先过
   `check_reverse_point_clean.py --point <x,y> --map 0 --vr 12`（fail-closed，缺源文件即 RED），
   **建议 `(311,666)`**（最近确定性对象 d=30）。
-  ⚠ **更新（2026-10-16，GuardList 已实现）**：Rust 现已加载 `GuardList.txt`（`crates/envir/src/guardlist.rs` +
-  `bins/game-svr/src/guardlist.rs`，白名单 T-56 对应卡已落）⇒ `(291,666)` 上卫士 `(281,661)` 现**两侧都应有**
+  ⚠ **更新（2026-10-16，GuardList 已实现）**：Rust 现已加载 `GuardList.txt`（`mir2-rs/crates/envir/src/guardlist.rs` +
+  `mir2-rs/bins/game-svr/src/guardlist.rs`，白名单 T-56 对应卡已落）⇒ `(291,666)` 上卫士 `(281,661)` 现**两侧都应有**
   （片68 时是『C# 有、Rust 无』的**对称性已修复**态）。故 `(291,666)` **仍不可**当反向点（仍污染），但它现在正好是
   **GuardList 帧一致的验证点**（两侧对称出帧，见 §2d W0-4）。
 - **客户端驱动**：`mir_flow.ps1 … -CenterY 259`（角色屏幕中心；默认 `384` 会把命中环整体偏下 ~2 格）。
@@ -415,13 +416,13 @@ python -I -B check_reverse_point_clean.py --point 311,666 --map 0 --vr 12
 
 ### W0-4 第四步：GuardList 帧一致（新实现，两侧应**对称**）
 
-> **新事实（GuardList 已实现）**：`crates/envir/src/guardlist.rs` ＋ `bins/game-svr/src/guardlist.rs` 已落地
+> **新事实（GuardList 已实现）**：`mir2-rs/crates/envir/src/guardlist.rs` ＋ `mir2-rs/bins/game-svr/src/guardlist.rs` 已落地
 > （白名单 T-56 对应卡 `openmir2-guardlist-guards-loading`）⇒ **Rust 世界现在也放守卫**。于是 `(291,666)`
 > （卫士 `(281,661)` d=10 ≤ vr=12）**两侧都应出现卫士在其视野内**——与片67/§2c「C# 有、Rust 无」的旧态相反。
 
 - 点位：`(291,666)`（视野内确定性卫士 `(281,661)` dir=5 = `Envir/GuardList.txt` 第 28 行「卫士 0 281, 661 : 5」）。
 - 两侧各跑一趟，对照出现帧：期望**两侧都有**该卫士的 `SM_APPEAR`/`SM_TURN`（`param=281` / `tag=661`）⇒ 帧一致。
-- **失败分叉**：Rust 侧仍 0 帧 ⇒ 查 GuardList 接线（`[Server] VentureServer` 门 ＋ 宿主调用点，见 `bins/game-svr/src/guardlist.rs` 头注）；
+- **失败分叉**：Rust 侧仍 0 帧 ⇒ 查 GuardList 接线（`[Server] VentureServer` 门 ＋ 宿主调用点，见 `mir2-rs/bins/game-svr/src/guardlist.rs` 头注）；
   两侧都有但 Dir/位置不一致 ⇒ 逐字段 diff、登记。
 
 ### W0-5 第五步：怪打玩家探针（victim=自己 的 `SM_STRUCK`）
@@ -436,7 +437,7 @@ python -I -B check_reverse_point_clean.py --point 311,666 --map 0 --vr 12
   # 报告行分列出站/入站；本步看「入站」栏（victim=自己）是否 ≥1
   ```
 - 期望：**C# 侧**（同点位）应出现入站 `SM_STRUCK`（片68 已证 C# 同窗被怪围殴致死）；**Rust 侧**按上面口径判读。
-- **失败分叉**：Rust 入站 0 且 **C# 也 0** ⇒ 该怪非主动族，换主动族怪重试；**C# 有、Rust 无** ⇒ 另立卡查 `crates/world` 的怪物 AI 攻击支（`monai` 目标选择）。
+- **失败分叉**：Rust 入站 0 且 **C# 也 0** ⇒ 该怪非主动族，换主动族怪重试；**C# 有、Rust 无** ⇒ 另立卡查 `mir2-rs/crates/world` 的怪物 AI 攻击支（`monai` 目标选择）。
 
 ### W0-6 第六步：RNG 双侧账本（`rng-scene` 驱动器）
 
@@ -462,8 +463,13 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene
 
 > **严格账本校验（必须先过，2026-10-16 起）**：既有消费链（`rng-trace-scene/rng_scene_gate.py` + groupdiff）
 > 对**断号/重复 seq 完全不看** ⇒「组集合相等」可能建立在被截断的流水上（静默假绿）。
-> 窗口内两侧落账本后**先跑新严格校验器**：
-> `python -I -B mir2-rs/tests/parity/m3/rng-scene/rng_trace_diff.py check --side <csharp|rust> --trace <side>-rng-stream.tsv --seed 42`
+> 窗口内两侧落账本后**先跑新严格校验器**。⚠ **两个近似同名目录别选错**：本步的**严格校验器/驱动器**在
+> `mir2-rs/tests/parity/m3/rng-scene/`（`rng_trace_diff.py` ＋ 包装器 `run_rng_scene_pair.ps1`，片84 新增）；
+> 上一步的 **DoD① driver** 在 `mir2-rs/tests/parity/m3/rng-trace-scene/`（`run_rng_trace_pair.ps1` ＋ `rng_scene_gate.py`）——**两者是不同目录**。
+> **首选照抄该目录 README §3 认证的包装器形态**：
+> `powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-scene/run_rng_scene_pair.ps1 -TraceCheckOnly -Side <csharp|rust> -AStream <side>-rng-stream.tsv -Seed 42`
+> 等价的直接 python 形态（`check` 收**位置参数** `stream`，**没有** `--trace` 旗标）：
+> `python -I -B mir2-rs/tests/parity/m3/rng-scene/rng_trace_diff.py check <side>-rng-stream.tsv --side <csharp|rust> --seed 42`
 > （5 条 fail-closed：头 `INJECT_OK <seed>` 必须存在且 == `--seed`（与 `MIR2_RNG_SEED` 注入同源）/ seq 必须 1..N 连续无缺无重 / 列数=5 / site 非空 / 无数据行 ⇒ PREREQ）；
 > **任一侧 check 不 GREEN ⇒ 拒比**（不得调用比较器、不得输出结论行）；两侧都 GREEN 才 `-SceneGroupDiff`。
 ### W0-7 收窗（缺一不算收）
