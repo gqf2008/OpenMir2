@@ -456,6 +456,25 @@ pub fn sm_username(target_id: i32, name_color: u8, show_name: &[u8]) -> Vec<u8> 
     gm_data_body(header, &edcode::encode(show_name))
 }
 
+/// `SM_GHOST`(803)（`PlayObject.Operate.cs:32-33` 的 else 支）：
+/// `SendDefMessage(SM_GHOST, baseObject.ActorId, x, y, 0)` → `MakeMessage(803, targetId, x, y, 0)` + **无尾**。
+///
+/// 语义：查询的目标**不在请求的 3×3 窗口内**时，服务端回「幽灵」提示（x/y 是**请求参数**原样回带）。
+#[must_use]
+pub fn sm_ghost(actor_id: i32, x: u16, y: u16) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_GHOST, x, y, 0);
+    gm_data_body(header, &[])
+}
+
+/// `SM_SENDUSERSTATE`(751)（`PlayObject.Operate.cs:110-111` 的 `ClientQueryUserInformation`）：
+/// `ClientMsg = MakeMessage(SM_SENDUSERSTATE, 0, 0, 0, 0)` + 尾 = `EDCode.EncodeBuffer(userState)`
+/// ⇒ 线缆尾就是 `EncryptUtil.Encode(UserStateInfo.GetBuffer())`。`tail` 传**已编码**缓冲。
+#[must_use]
+pub fn sm_senduserstate(tail: &[u8]) -> Vec<u8> {
+    let header = command_header(0, messages::SM_SENDUSERSTATE, 0, 0, 0);
+    gm_data_body(header, tail)
+}
+
 /// `SM_CHANGENAMECOLOR`（`PlayObject.Message.cs:1677-1679` 的 `RM_CHANGENAMECOLOR` 观察者支）：
 /// `SendDefMessage(SM_CHANGENAMECOLOR, processMsg.ActorId, GetChrColor(baseObject), 0, 0)`
 /// ⇒ `MakeMessage(656, ActorId, color, 0, 0)` + **无尾**（`SendDefMessage` 的 5 参重载）。
