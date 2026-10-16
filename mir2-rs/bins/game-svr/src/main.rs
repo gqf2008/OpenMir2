@@ -724,8 +724,9 @@ async fn main() -> Result<()> {
     // 抽掉的构造数的**站点表**（主线程算，只读文件、**不抽数**）。抽数在 sim 线程：
     // 阶段①（`GameApp.cs:58` RobotObject / `:85-87` G1–G3 / `:124` M2 `CHECKQUEST`）必须早于
     // `InitializeMonster`（`:155`），阶段②（`:184` M1 + 尾 L2/L1/L3）在其后、`LoadMerchant`（`:227`）之前。
-    // 算不出（读文件失败/隐藏 NPC 名未知）⇒ 空计划 + ERR 登记（fail-closed：宁可少抽可见地报错，
-    // 也不静默降级；构造段账本此时**本来就不对齐**，与未实现前同状态）。
+    // 算不出（读文件失败/隐藏 NPC 名未知）⇒ **只含屏障 A** 的最小计划 + ERR 登记（fail-closed：
+    // 宁可少抽可见地报错，也不静默降级；段①②③ 的账本此时**本来就不对齐**，与未实现前同状态）。
+    // 屏障 A 与语料**无关**（oracle 在 `LoadConfig()` 里无条件抽它）⇒ 任何情形下都要落账。
     let ctor_fold_plan = match registry.as_ref() {
         Some(reg) => {
             match game_svr::ctor_fold::build_plan(&envir_loader, |n| reg.id_of(n).is_some()) {
@@ -743,15 +744,18 @@ async fn main() -> Result<()> {
                 Err(e) => {
                     glog!(
                         "ERR",
-                        "构造段 fold 计划失败（{e}）⇒ 空计划（构造段账本不对齐，登记）"
+                        "构造段 fold 计划失败（{e}）⇒ 只含屏障 A 的最小计划（段①②③ 账本不对齐，登记）"
                     );
-                    mir2_world::CtorFoldPlan::new()
+                    game_svr::ctor_fold::minimal_plan()
                 }
             }
         }
         None => {
-            glog!("WRN", "无地图注册表 ⇒ 构造段 fold 计划为空（登记）");
-            mir2_world::CtorFoldPlan::new()
+            glog!(
+                "WRN",
+                "无地图注册表 ⇒ 构造段 fold 计划只含屏障 A（段①②③ 不落账，登记）"
+            );
+            game_svr::ctor_fold::minimal_plan()
         }
     };
     let _sim = std::thread::Builder::new()
@@ -7748,10 +7752,11 @@ struct EnterConfig {
     rng_seed: Option<i32>,
     /// **构造段 fold（`openmir2-ctor-draws-fold`）**：oracle 启动期「`LoadMerchant`/`LoadNpcs`
     /// 之外」的构造点站点表（主线程按 `Envir` 语料算好，**不抽数**；
-    /// 见 `game_svr::ctor_fold::build_plan`）。sim 线程按 oracle 次序分**三段**落进
-    /// `world.rng` 账本：段①（`GameApp` ctor：RobotObject / G1–G3）→【屏障 A：`ServerConf.cs:114`
-    /// 1 抽，**未建模留空**】→ 段②（`:124` M2 `CHECKQUEST`）→【屏障 B：`InitializeMonster`】→
+    /// 见 `game_svr::ctor_fold::build_plan`）。sim 线程按 oracle 次序分**四段**落进
+    /// `world.rng` 账本：段①（`GameApp` ctor：RobotObject / G1–G3）→ **屏障 A**（`ServerConf.cs:114`
+    /// 的 `Random(10000)`，**已补**）→ 段②（`:124` M2 `CHECKQUEST`）→【屏障 B：`InitializeMonster`】→
     /// 段③（`:184` M1 + L2/L1/L3）→【屏障 C：`LoadMerchant`/`LoadNpcs`】。
+    /// 无注册表 / 计划算不出 ⇒ `game_svr::ctor_fold::minimal_plan()`（**只含屏障 A**，与语料无关）。
     ctor_fold_plan: mir2_world::CtorFoldPlan,
     /// **M3④-实现 B 第 ③ 片**：MonGen 刷怪启动输入（怪物模板表 + `Envir/MonGen.txt` 运行时条目
     /// + `Server.conf` 刷怪参数）；`entries=None` ⇒ 无 `MonGen.txt`，不建宿主。
@@ -8064,18 +8069,31 @@ fn sim_loop(
         ctor_ledger_ctor.len(),
         enter_cfg.ctor_fold_plan.game_app_ctor.len()
     );
-    // ★**屏障 A**：oracle `AppService.cs:87` `GameShare.LoadConfig()` → `GameShare.cs:90` →
-    // `ServerConf.cs:114` 的 `Random(10000)`（**1 抽**）—— 位置在 `GameApp` ctor **之后**、
-    // `GameApp.Initialize`（⇒ `:124` M2）**之前**（`new GameApp(...)` 由 DI 在构造 `AppService`
-    // 时发生，`StartingAsync` 才 `LoadConfig()`）。**本片未建模**（Rust `config.rs` 读同一键但不抽）
-    // ⇒ 此处**留空**并登记：补上这 1 抽后，段②/段③ 才与 oracle 等距（相对次序本片已排好）。
+    // ★**屏障 A**（卡 `openmir2-ctor-barrier-a-draw`）：oracle `AppService.cs:87`
+    // `GameShare.LoadConfig()` → `GameShare.cs:90` → `ServerConf.cs:114` 的
+    // `SystemShare.Config.ItemNumber += SystemShare.RandomNumber.Random(10000)`（**恰 1 抽**）
+    // —— 位置在 `GameApp` ctor **之后**、`GameApp.Initialize`（⇒ `:124` M2）**之前**
+    // （`new GameApp(...)` 由 DI 在构造 `AppService` 时发生，`StartingAsync` 才 `LoadConfig()`）。
+    // 抽出的值**不是丢弃**的：`item_number_counter_init` 把它**加到** `[Setup] ItemNumber` 上
+    // （oracle 是 `+=`），成为 `M2Share.GetItemNumber()` 计数器初值（`M2Share.cs:547`）⇒
+    // 新角色四件新手物品的 `MakeIndex` 起点（下面的 `item_number`）。该方法是 `#[track_caller]`
+    // ⇒ `MIR2_RNG_LOG` 把这一抽记在**本行**（`startup` 组，见 `consumer_groups.tsv` 的
+    // `startup|rust|bins/game-svr/src/main\.rs:` 行）。
+    let barrier_a = world.fold_ctor_draw_item_number_barrier_a(&enter_cfg.ctor_fold_plan);
+    glog!(
+        "INF",
+        "构造段 fold 屏障 A（ServerConf.cs:114 的 Random(10000)）已落账：{} 抽；抽数 {} ⇒ `[Setup] ItemNumber` {} 将 `+=` 它",
+        barrier_a.len(),
+        barrier_a.entries.first().map_or(0, |e| e.result),
+        enter_cfg.newbie.item_number
+    );
     // **构造段 fold · 段②**（`GameApp.cs:124` `Map.LoadMapInfo()` 的 `CHECKQUEST` 行 ⇒
     // `Maps.cs:454` 的 `new Merchant`）—— **必须早于** `InitializeMonster`（`:155` = 下面的
     // `MonGenHost::start` 的 `Random(limit)`，屏障 B）。
     let ctor_ledger_m2 = world.fold_ctor_draws_load_map_info(&enter_cfg.ctor_fold_plan);
     glog!(
         "INF",
-        "构造段 fold 段②（LoadMapInfo/CHECKQUEST）已落账：{} 抽（{} 站点；其前有未建模的屏障 A 1 抽待补）",
+        "构造段 fold 段②（LoadMapInfo/CHECKQUEST）已落账：{} 抽（{} 站点；其前屏障 A 的 1 抽已落账）",
         ctor_ledger_m2.len(),
         enter_cfg.ctor_fold_plan.load_map_info.len()
     );
@@ -8315,9 +8333,13 @@ fn sim_loop(
             state_log::STATE_LOG_ENV
         );
     }
-    // `M2Share.GetItemNumber()` 的计数器（`M2Share.cs:547`；初值 `[Setup] ItemNumber`）——
-    // 新角色新手物品的 `MakeIndex` 用它。
-    let mut item_number = enter_cfg.newbie.item_number;
+    // `M2Share.GetItemNumber()` 的计数器（`M2Share.cs:547`）—— 初值 = `[Setup] ItemNumber`
+    // **加上**屏障 A 的抽数（oracle `ServerConf.cs:114` 的 `+=`；屏障 A 已在段①之后落账，见上面的
+    // `barrier_a`）。`item_number_counter_init` 是这一加的**唯一**接线处（fail-closed：账本不恰 1 条
+    // 即 panic）。新角色四件新手物品的 `MakeIndex` 用它（`add_newbie_items`）。
+    let mut item_number =
+        game_svr::ctor_fold::item_number_counter_init(enter_cfg.newbie.item_number, &barrier_a)
+            .unwrap_or_else(|e| panic!("屏障 A 落账失败（fail-closed）：{e}"));
     // `CM_PICKUP`/`CM_DROPITEM` 的**地面交互会话态**（按 `ChrName` 键；进世界建立、断线/小退移除）。
     // 进世界前解析出的 `CharacterData` 在其他路径上用完即弃，这里把 `ground::*` 要的字段留下来。
     let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
@@ -15281,6 +15303,54 @@ mod tests {
         let mut nf = 0;
         add_newbie_items(&mut list_f, &catalog, &names, 1, &mut nf);
         assert_eq!(list_f[3].index, 5, "女号第 4 件 = 布衣(女)（index 5）");
+    }
+
+    /// **屏障 A 的抽数落到用户可见处**（卡 `openmir2-ctor-barrier-a-draw` 判据 ②）：oracle
+    /// `ServerConf.cs:114` 把 `Random(10000)` **加到** `[Setup] ItemNumber` 上，而该计数器就是
+    /// 新角色四件新手物品 `MakeIndex` 的起点（`M2Share.cs:547` → `add_newbie_items`）⇒
+    /// `sim_loop` 的 `let mut item_number = item_number_counter_init([Setup] ItemNumber, &barrier_a)?;`
+    /// 必须带上屏障 A 的抽数。本用例按**生产同路**走一遍（真 `world.rng` 抽 → `item_number_counter_init`
+    /// → `add_newbie_items`），把「用户可见后果」钉住：`MakeIndex` 整段前移 `r`。
+    /// 红检：把 `+=` 改成赋值（`=`）或丢掉抽数（只返回 conf 值）⇒ 下面的 `make_index` 断言必红
+    /// （`bins/game-svr/src/ctor_fold.rs::barrier_a_counter_init_adds_not_assigns` 另有同口径牙）。
+    /// **残余（如实登记）**：宿主那**一行**绑定（`let mut item_number = …`）本身没有进程级用例钉住
+    /// —— 把它改回 `enter_cfg.newbie.item_number`（抽数仍抽、但不用）**仓内无用例会红**；
+    /// 要机判「登录后首包的 `SM_BAGITEMS.make_index`」需另开进程级用例（另立条目）。
+    #[test]
+    fn barrier_a_draw_moves_newbie_make_index() {
+        // 生产位置与生产顺序：段①（1 Robot + 3 孤儿 = 16 抽）→ 屏障 A（1 抽）。
+        let mut plan = mir2_world::CtorFoldPlan::new();
+        plan.push_robot_objects(1);
+        plan.push_orphan_merchants();
+        plan.push_barrier_a();
+        let mut world = mir2_world::World::with_maps(vec![(8, 8)]);
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(20240229);
+        assert_eq!(
+            world.fold_ctor_draws_game_app_ctor(&plan).len(),
+            16,
+            "段① 16 抽（部署件形态）"
+        );
+        let barrier_a = world.fold_ctor_draw_item_number_barrier_a(&plan);
+
+        let names = newbie_names(); // `[Setup] ItemNumber` = 100
+        let init = game_svr::ctor_fold::item_number_counter_init(names.item_number, &barrier_a)
+            .expect("屏障 A 账本恰 1 条");
+        let r = i32::try_from(barrier_a.entries[0].result).unwrap();
+        assert_ne!(
+            r, 0,
+            "本固定种子下抽数非 0（⇒「丢弃抽数」的变异必红，r={r}）"
+        );
+        assert_eq!(init, 100 + r, "oracle `ItemNumber += Random(10000)`");
+
+        let mut list = Vec::new();
+        let mut n = init;
+        let warns = add_newbie_items(&mut list, &newbie_catalog(), &names, 0, &mut n);
+        assert!(warns.is_empty(), "模板都在：{warns:?}");
+        assert_eq!(
+            list.iter().map(|i| i.make_index).collect::<Vec<_>>(),
+            vec![100 + r + 1, 100 + r + 2, 100 + r + 3, 100 + r + 4],
+            "四件新手物品的 MakeIndex 起点 = [Setup] ItemNumber + 屏障 A 抽数（整段前移，不是从 101 起）"
+        );
     }
 
     /// **owner 追加的卡项 ②**：`CM_QUERYBAGITEMS(81)` 回 `SM_BAGITEMS(201)`，`recog=ActorId`、

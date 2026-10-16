@@ -10,26 +10,38 @@
 //! | `Envir/MapQuest.txt` | **2 有效行**（+1 注释行） | `MapQuestRow` × 2 |
 //! | `Envir/{MapQuest_def/QManage.txt, Market_Def/QFunction-0.txt, Robot_def/}` | 三只隐藏 NPC 件/目录都在 | `HiddenQManage`/`HiddenQFunction`/`HiddenRobotManage` |
 //!
+//! 屏障 A（`AppService.cs:87` → `ServerConf.cs:114` 的 `Random(10000)`）**不在语料里**——它是恒
+//! **1 抽**，位置固定在段①与段②之间、与 Envir 内容无关。
+//!
 //! ## 判据（按 oracle 三段 + 两条屏障）
 //!
 //! 1. **段①**（`GameApp` ctor：`GameApp.cs:58`/`:85-87`）4 站点 × 4 抽 ⇒ `site`/`order`/`kind`/`arg`
 //!    逐项 = [`EXPECTED_SEG_ONE`]（字面表），`result` 逐项 = 同种子独立流；
-//! 2. **屏障 A**（`AppService.cs:87` → `ServerConf.cs:114` 的 `Random(10000)`，**1 抽，本片未建模**）：
-//!    本用例用**第二条** oracle 对齐流显式抽出它，并断言 Rust 侧**没有**这一抽（⇒ 段② 起两侧差 1，
-//!    这是**登记在案**的未做项，见 `crates/world/src/ctor_fold.rs` 模块头）——
-//!    **将来补上屏障 A 时本断言必红**，即本用例也是「补屏障 A」那条线的改坏必红牙；
+//! 2. **屏障 A**（`AppService.cs:87` → `ServerConf.cs:114` 的 `Random(10000)`，**恰 1 抽，已补**）：
+//!    卡 `openmir2-ctor-barrier-a-draw` 把这一抽落进账本（`site = BarrierAItemNumber`、`kind` =
+//!    `Next(max)`、`arg = 10000`）⇒ 本用例断言它的**位置**（段①之后、段②之前）、`site`/`kind`/`arg`
+//!    逐项 = [`EXPECTED_BARRIER_A`]、`result` = **独立流同位置**的那一条，并断言段② 起与 oracle
+//!    **整段等距**（删这一抽 / 改 `arg` / 挪位置 ⇒ 必红）；抽数的**消费**（`ItemNumber += r`）由
+//!    `item_number_counter_init` 的断言钉住（第 7 条）；
 //! 3. **段②**（`GameApp.cs:124` ⇒ `Maps.cs:454` 的 `CHECKQUEST`）3 站点 × 4 抽 ⇒ 逐项 = [`EXPECTED_SEG_TWO`]；
 //! 4. **屏障 B**（`GameApp.cs:155` `InitializeMonster`）：本用例插一抽占位（真机是宿主
 //!    `MonGenHost::start` 的 `Random(limit)`），断言段③ 在它**之后**；
 //! 5. **段③**（`GameApp.cs:184`：M1 行 → L2/L1/L3）5 站点 × 4 抽 ⇒ 逐项 = [`EXPECTED_SEG_THREE`]；
 //! 6. **改坏必红**：见 [`two_line_robot_file_shifts_the_whole_ledger`]（语料改 2 行 ⇒ 从第 4 条起
-//!    全部错位）与 `crates/world/src/ctor_fold.rs` 的单测（删站点 / 调次序 / 挪屏障 A）。
+//!    全部错位）、`crates/world/src/ctor_fold.rs` 的单测（删站点 / 调次序 / 挪屏障 A / 删屏障 A 站点）
+//!    与 `bins/game-svr/src/ctor_fold.rs::barrier_a_counter_init_adds_not_assigns`（`+=` 语义）；
+//! 7. **屏障 A 的消费**：`item_number_counter_init([Setup] ItemNumber, &barrier_a)` = 初值 + 抽数
+//!    （oracle `+=`，不是赋值/丢弃）——该计数器即新角色新手物品 `MakeIndex` 的起点
+//!    （`main.rs::barrier_a_draw_moves_newbie_make_index` 钉住**用户可见**后果）。
 
 use std::path::PathBuf;
 
 use mir2_envir::MapLoader;
 use mir2_shared::rng::RandomNumber;
-use mir2_world::{CtorFoldEntry, CtorFoldSite, CTOR_FOLD_BARRIER_A_DRAWS, CTOR_FOLD_DRAW_KIND};
+use mir2_world::{
+    CtorFoldEntry, CtorFoldSite, CTOR_FOLD_BARRIER_A_DRAWS, CTOR_FOLD_BARRIER_A_MOD,
+    CTOR_FOLD_DRAW_KIND,
+};
 
 /// **期望表 · 段①（字面，逐站点一组）**：`(站点, kind, [4 抽的 arg])` —— 次序即 oracle 次序：
 /// `GameApp.cs:58`（`Robot.txt` 1 有效行）→ `:85/86/87`（G1/G2/G3）。
@@ -76,6 +88,14 @@ const EXPECTED_SEG_TWO: [(CtorFoldSite, &str, [i64; 4]); 3] = [
     ),
 ];
 
+/// **期望表 · 屏障 A（字面）**：`AppService.cs:87` `GameShare.LoadConfig()` → `ServerConf.cs:114`
+/// 的 `Random(10000)` —— **恰 1 抽**（非 ctor 公共链的 4 抽），位置在段①与段②之间。
+const EXPECTED_BARRIER_A: [(CtorFoldSite, &str, [i64; 1]); 1] = [(
+    CtorFoldSite::BarrierAItemNumber,
+    CTOR_FOLD_DRAW_KIND,
+    [CTOR_FOLD_BARRIER_A_MOD],
+)];
+
 /// **期望表 · 段③（字面）**：`GameApp.cs:184` 的 M1（`MapQuest.txt` 2 有效行）后接
 /// `:403/404/405` 的 L2/L1/L3 —— 三者次序 = oracle 调用序（`QMangeNpc` → `QFunctionNpc` →
 /// `RobotNpc`），且**必须**晚于 `InitializeMonster`（`:155`）、**早于** `LoadMerchant`（`:227`）。
@@ -110,8 +130,9 @@ const EXPECTED_SEG_THREE: [(CtorFoldSite, &str, [i64; 4]); 5] = [
 /// 固定种子（与真机 `MIR2_RNG_SEED` 注入口同口径；本用例两侧都用它）。
 const SEED: i32 = 20240229;
 
-/// 屏障 A 的抽数上界（oracle `ServerConf.cs:114` 的 `Random(10000)`）。
-const BARRIER_A_MOD: i32 = 10_000;
+/// 屏障 A 的抽数上界（oracle `ServerConf.cs:114` 的 `Random(10000)`）——**唯一真源**是
+/// `crates/world/src/ctor_fold.rs` 的 `CTOR_FOLD_BARRIER_A_MOD`（此处只换宽度，不写第二份字面量）。
+const BARRIER_A_MOD: i32 = CTOR_FOLD_BARRIER_A_MOD as i32;
 /// 屏障 B 槽位的占位抽数上界（oracle `WorldServer.MonGen.cs:66` 的 `Random(limit)`）。
 const MON_GEN_SLOT_MOD: i32 = 6;
 
@@ -169,7 +190,9 @@ fn corpus(tag: &str, robot_extra_lines: usize) -> (PathBuf, MapLoader) {
     (base, loader)
 }
 
-fn expand<'a>(sites: &'a [(CtorFoldSite, &'a str, [i64; 4])]) -> Vec<(CtorFoldSite, &'a str, i64)> {
+fn expand<'a, const N: usize>(
+    sites: &'a [(CtorFoldSite, &'a str, [i64; N])],
+) -> Vec<(CtorFoldSite, &'a str, i64)> {
     let mut out = Vec::new();
     for (site, kind, args) in sites {
         for arg in args {
@@ -217,7 +240,7 @@ fn ledger_prefix_matches_expected_table() {
 
     let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
     world.rng = RandomNumber::with_seed(SEED);
-    // 与 world 同步的独立流（**不含**屏障 A —— Rust 侧不抽它）。
+    // 与 world 同步的独立流（**含**屏障 A —— Rust 侧在段①之后抽它）。
     let mut exp = RandomNumber::with_seed(SEED);
 
     // ---- 段①（`GameApp` ctor：`:58`/`:85-87`）----
@@ -230,8 +253,25 @@ fn ledger_prefix_matches_expected_table() {
     );
     assert_results_follow_stream(&seg1.entries, &mut exp, "段①");
 
+    // ---- 屏障 A（`ServerConf.cs:114` 的 `Random(10000)`，**恰 1 抽**，段①之后 / 段②之前）----
+    assert_eq!(CTOR_FOLD_BARRIER_A_DRAWS, 1, "屏障 A = 1 抽");
+    let barrier_a = world.fold_ctor_draw_item_number_barrier_a(&plan);
+    assert_eq!(barrier_a.len(), 1, "屏障 A 恒 1 站点 ⇒ 恰 1 抽");
+    assert_eq!(
+        rows(&barrier_a.entries),
+        expand(&EXPECTED_BARRIER_A),
+        "屏障 A 的 site/kind/arg 逐项相等（`BarrierAItemNumber` / `Next(max)` / 10000）"
+    );
+    assert_results_follow_stream(&barrier_a.entries, &mut exp, "屏障 A");
+    let barrier_a_result = barrier_a.entries[0].result;
+    // 抽数的**消费**：oracle `ServerConf.cs:114` 是 `+=`（把它加到 `[Setup] ItemNumber` 上）。
+    assert_eq!(
+        game_svr::ctor_fold::item_number_counter_init(0, &barrier_a),
+        Ok(barrier_a_result as i32),
+        "屏障 A 的抽数加到 `ItemNumber`（`+=`，不是只抽不用、也不是赋值）"
+    );
+
     // ---- 段②（`GameApp.cs:124` ⇒ `Maps.cs:454`）----
-    // ⚠ Rust 侧段② **紧跟**段①（中间不抽），而 oracle 在两者之间有屏障 A 的 1 抽（下节断言）。
     let seg2 = world.fold_ctor_draws_load_map_info(&plan);
     assert_eq!(seg2.len(), 12, "段② 3 站点 × 4 抽");
     assert_eq!(
@@ -241,28 +281,29 @@ fn ledger_prefix_matches_expected_table() {
     );
     assert_results_follow_stream(&seg2.entries, &mut exp, "段②");
 
-    // ---- 屏障 A（`ServerConf.cs:114` 的 `Random(10000)`，1 抽，**本片未建模**）----
-    assert_eq!(CTOR_FOLD_BARRIER_A_DRAWS, 1, "屏障 A = 1 抽");
+    // oracle 侧独立重建（不动 `exp`）：段① 的 16 抽 → 屏障 A 的 1 抽 → 段② 的首抽 ⇒ 必须**相等**
+    // （屏障 A 已补 ⇒ 段②/段③ 与 oracle **整段等距**；删这一抽 / 改 arg / 挪位置都必红）。
     let oracle_seg2_first = {
-        // oracle 对齐流（独立重建，不动 `exp`）：段① 的 16 抽 → 屏障 A 的 1 抽 → 段② 的首抽。
         let mut r = RandomNumber::with_seed(SEED);
         for e in &seg1.entries {
             let _ = r.random_below(e.arg as i32);
         }
-        let barrier_a = r.random_below(BARRIER_A_MOD); // ← oracle 独有（Rust 未建模）
+        let barrier_a_oracle = r.random_below(BARRIER_A_MOD);
         assert!(
-            (0..BARRIER_A_MOD).contains(&barrier_a),
+            (0..BARRIER_A_MOD).contains(&barrier_a_oracle),
             "屏障 A 是 Random(10000) 的一抽"
+        );
+        assert_eq!(
+            i64::from(barrier_a_oracle),
+            barrier_a_result,
+            "屏障 A 的值 = oracle 同位置的那一抽"
         );
         r.random_below(1500)
     };
-    // **登记项（改坏必红）**：Rust 侧没有屏障 A 这一抽 ⇒ 段② 首抽与 oracle 的不同（差 1 抽，
-    // 即段②/段③ 的**绝对**位置差 1；相对次序已按 oracle 排好）。将来补上屏障 A 时本断言必红
-    // ⇒ 本用例就是「补屏障 A」那条线的牙，须同步更新本用例与 `crates/world/src/ctor_fold.rs` 的登记。
-    assert_ne!(
+    assert_eq!(
         i64::from(oracle_seg2_first),
         seg2.entries[0].result,
-        "屏障 A 未建模 ⇒ 段② 起与 oracle 差 1 抽（登记于 crates/world/src/ctor_fold.rs 模块头）"
+        "屏障 A 已补 ⇒ 段② 起与 oracle **整段等距**（抽数或位置任一处错 ⇒ 本断言必红）"
     );
 
     // ---- 屏障 B（`GameApp.cs:155` `InitializeMonster` 槽位）----
@@ -297,7 +338,11 @@ fn two_line_robot_file_shifts_the_whole_ledger() {
     let plan =
         game_svr::ctor_fold::build_plan(&loader, |n| n == "0137" || n == "0").expect("计划成功");
     assert_eq!(plan.game_app_ctor.len(), 5, "2 有效行 + 3 孤儿 ⇒ 5 站点");
-    assert_eq!(plan.total_draws(), 52, "(5 + 3 + 5) 站点 × 4 抽");
+    assert_eq!(
+        plan.total_draws(),
+        53,
+        "52（(5 + 3 + 5) 站点 × 4）+ 屏障 A 1 抽"
+    );
 
     let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
     world.rng = RandomNumber::with_seed(SEED);

@@ -70,7 +70,7 @@ pub use combat::{
 };
 pub use ctor_fold::{
     CtorFoldEntry, CtorFoldLedger, CtorFoldPlan, CtorFoldSite, CTOR_FOLD_BARRIER_A_DRAWS,
-    CTOR_FOLD_DRAWS_PER_SITE, CTOR_FOLD_DRAW_KIND,
+    CTOR_FOLD_BARRIER_A_MOD, CTOR_FOLD_DRAWS_PER_SITE, CTOR_FOLD_DRAW_KIND,
 };
 pub use entity::{
     BaseAnimalCtorDraws, Entity, EntityStore, MonsterCtorDraws, VisibleFlag, ACTOR_RACE_MONSTER,

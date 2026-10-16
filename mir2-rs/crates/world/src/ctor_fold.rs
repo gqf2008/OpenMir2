@@ -10,7 +10,7 @@
 //! | --- | --- | --- | --- |
 //! | ① `GameApp` ctor | `GameApp.cs:58` → `RobotManage.cs:8-12/21-49`（`:48`） | `Robot.txt` **每有效行**一个 `new RobotObject()` | 4 |
 //! | ① `GameApp` ctor | `GameApp.cs:85`（G1）/`:86`（G2）/`:87`（G3） | 三只**孤儿** `new Merchant()`（不入任何列表，被 `LocalDB` 覆盖） | 4×3 |
-//! | ★屏障 A（**未建模**） | `AppService.cs:87` → `GameShare.cs:90` → `ServerConf.cs:114` | `SystemShare.Config.ItemNumber += Random(10000)` | **1** |
+//! | ★屏障 A（**已补**） | `AppService.cs:87` → `GameShare.cs:90` → `ServerConf.cs:114` | `SystemShare.Config.ItemNumber += Random(10000)`（[`CtorFoldSite::BarrierAItemNumber`]） | **1** |
 //! | ② `GameApp.Initialize` | `GameApp.cs:124` → `Maps.cs:137` → `:454` | `MapInfo` 每个 `CHECKQUEST(x)` 行一个 `new Merchant` | 4×行数 |
 //! | ★屏障 B（已建模） | `GameApp.cs:155` `WorldEngine.InitializeMonster()` | 宿主 `mon_gen`（`WorldServer.MonGen.cs:66/94` 的 `Random(limit)`） | — |
 //! | ③ `GameApp.Initialize` | `GameApp.cs:184` → `MapQuestManager.cs:40` | `MapQuest.txt` **每个有效行**一个 `new Merchant` | 4×有效行数 |
@@ -18,28 +18,34 @@
 //! | ★屏障 C（已建模） | `GameApp.cs:227`/`:229` | `LoadMerchant`/`LoadNpcs`（见 `merchant.rs`/`npc.rs`） | 4×条 |
 //!
 //! 每处 `new Merchant`/`new RobotObject` 都走同一条 ctor 公共链
-//! （`BaseObject` `:439/441` + `AnimalObject` `:76/77`）⇒ **恒 4 抽**，唯一抽数点仍是
-//! [`BaseAnimalCtorDraws::draw`]（本模块不新增抽数点、不重复模数表）。实体缺口（`RobotObject`/
-//! 任务 NPC/隐藏 NPC 的世界实体）**另立条目**，不在本片。
+//! （`BaseObject` `:439/441` + `AnimalObject` `:76/77`）⇒ **恒 4 抽**，ctor 链的唯一抽数点仍是
+//! [`BaseAnimalCtorDraws::draw`]（不重复模数表）。**唯一的 1 抽例外**是屏障 A——它不是 ctor 链上的
+//! 构造点，而是 `ServerConf.cs:114` 的 `Random(10000)`，由
+//! [`World::fold_ctor_draw_item_number_barrier_a`] 单独抽（`arg = `[`CTOR_FOLD_BARRIER_A_MOD`]）。
+//! 实体缺口（`RobotObject`/任务 NPC/隐藏 NPC 的世界实体）**另立条目**，不在本片。
 //!
-//! ## 三条阶段硬约束（次序即位置）
+//! ## 四条阶段硬约束（次序即位置）
 //!
 //! fold 不是「一共补 N 抽」就够——**位置**决定账本能否逐项对齐。本模块按 oracle 的三条**屏障**
-//! 切成三段，宿主必须按 [`World::fold_ctor_draws_game_app_ctor`] →
+//! 切成四段调用点（屏障 A 自带 1 抽，不是「一段」而是「一处」），宿主必须按
+//! [`World::fold_ctor_draws_game_app_ctor`] → [`World::fold_ctor_draw_item_number_barrier_a`] →
 //! [`World::fold_ctor_draws_load_map_info`] → [`World::fold_ctor_draws_load_map_quest`] 的次序
 //! 调用，且中间两处**别的东西**的抽数不许挪：
 //!
 //! - **屏障 A**（`AppService.cs:87` `GameShare.LoadConfig()` → `ServerConf.cs:114` 的
-//!   `Random(10000)`，**1 抽，本片未建模**）：它在 `GameApp` ctor **之后**、
+//!   `Random(10000)`，**恰 1 抽，已补**）：它在 `GameApp` ctor **之后**、
 //!   `GameApp.Initialize`（⇒ M2 `:124`）**之前**——`new GameApp(...)` 由 DI 在
-//!   `AppService` 构造时发生，`StartingAsync` 里才 `LoadConfig()`。⇒ 段①与段②之间**必须**留出
-//!   这 1 抽的位置（本片留空 + 登记，见下「仍阻塞」）。
+//!   `AppService` 构造时发生，`StartingAsync` 里才 `LoadConfig()`。⇒ 段①与段②之间**就是**它：
+//!   [`World::fold_ctor_draw_item_number_barrier_a`] 必须在这两段**之间**、且**恰一次**。
+//!   它**不**走 ctor 公共链（`arg = 10000`、**1 抽**），且抽出的值**不是丢弃**的——宿主把它
+//!   **加到** `[Setup] ItemNumber` 初值上（oracle 是 `+=`；宿主
+//!   `bins/game-svr/src/ctor_fold.rs::item_number_counter_init`）。
 //! - **屏障 B**（`GameApp.cs:155` `InitializeMonster`）：段②与段③之间的抽数属宿主 `mon_gen`，
 //!   **不许**把段③提到它前面（否则 M1/L1-L3 与 `mon_gen` 互换位置、整本账本错位）。
 //! - **屏障 C**（`GameApp.cs:227`/`:229`）：段③**必须早于** `LoadMerchant`（L4）/`LoadNpcs`（L5）
 //!   （oracle `:184` < `:227`/`:229`）。
 //!
-//! ## 登记（本片未做 / 不可达 / 仍阻塞）
+//! ## 登记（不可达 / 未做 / 已补）
 //!
 //! - **L6 `LocalDB.cs:1067`（`ReLoadMerchants`）= N/A（不可达）**：唯一调用者是
 //!   `ReloadNpcCommand.Execute`（`src/Modules/GameCommand/Commands/ReloadNpcCommand.cs:14`），
@@ -49,17 +55,23 @@
 //! - **实体缺口（本片只 fold 抽数、不建实体）**：`RobotObject` 世界实体 + `AutoRun` 驱动器；
 //!   M1/M2 任务 NPC 进 `QuestNpcList`；L1 `QFunction` 进 `MerchantList`（`AddMerchant`）；
 //!   L2/L3 进 `QuestNpcList` + `ActorId` 按序分配 —— 均另立条目，不在本片。
-//! - **仍阻塞「真机账本从 `seq=0` 逐项对齐」的未核/未做项**：
+//! - **构造段「真机账本从 `seq=0` 逐项对齐」的逐条状态**：
 //!   ① `GameApp.cs:55-58` 与本片同段的 `GameCommandSystem`/`AuthenticationService`/`ScriptEngine`
 //!   **已核实读不抽**（`CommandSystem.cs:19-22`/`AuthenticationService.cs:15-20`/
 //!   `ScriptEngine.cs:30-36`，见 `bins/game-svr/src/ctor_fold.rs` 模块头）；
 //!   ② `GameApp.cs:88-93` 的 `ItemSystem`/`GuildMgr`/`CastleMgr`/`MapMgr`/`EventMgr`/`WorldServer`
 //!   六个 ctor **已核实读不抽**（同上；这与 §4.4.2 的「须一并核」清单逐条对上）；
-//!   ③ **未做（屏障 A）**：`ServerConf.cs:114` 的 `Random(10000)`（1 抽）——Rust 侧
-//!   `bins/game-svr/src/config.rs` 读同一键但**不抽**。⇒ 真机账本自**第 17 条**（1-based；0-based
-//!   `seq == 16`）起即分歧——段① 在部署件上是 **16 抽**（`Robot.txt` 1 有效行 × 4 + 孤儿 G1–G3 × 4），
-//!   屏障 A 紧随其后；本片**只留位置、不复刻该抽** ⇒ 段②/段③ 的**绝对**位置仍差 1
-//!   （但相对次序已与 oracle 一致，补上屏障 A 即整段对齐）。
+//!   ③ **已补（屏障 A）**：`ServerConf.cs:114` 的 `Random(10000)`（1 抽）——宿主在段①之后、
+//!   段②之前恰调一次 [`World::fold_ctor_draw_item_number_barrier_a`]，并由
+//!   `item_number_counter_init` 把该抽**加到** `bins/game-svr/src/config.rs` 读到的
+//!   `[Setup] ItemNumber` 初值上（消费点**已建模**：该计数器 → `M2Share.GetItemNumber()`
+//!   (`M2Share.cs:547`) → 新角色新手物品 `MakeIndex`，`main.rs::add_newbie_items`）。⇒ 段① 在部署件上
+//!   是 **16 抽**（`Robot.txt` 1 有效行 × 4 + 孤儿 G1–G3 × 4），屏障 A 即**第 17 条**，其后段②/段③
+//!   与 oracle **整段等距**。
+//!   ④ 运行期路径（`M2Share.cs:279/:526`、`ScriptEngine.cs:156`）不在启动构造段内，不计。
+//!   **⇒ 构造段已无阻塞项（可整段等距）**：上面 ①② 已核「读不抽」、③ 已补；余下的缺口只在
+//!   **消费点/实体层**（「实体缺口」那条：世界实体、`QuestNpcList`、`MerchantList` 入表等），
+//!   它们**不改变抽数的位置与条数**，故不影响账本逐项对齐。
 //!
 //! ## 实测计数与影响面（2026-10-17 复验订正，**行号/数字以此段为准**）
 //!
@@ -67,24 +79,38 @@
 //! `Robot.txt` 有效行 **1** ⇒ 4 抽；`CHECKQUEST` **9** ⇒ 36 抽；`MapQuest.txt` 有效行 **1** ⇒ 4 抽
 //! （唯一行 `Q001` **未被 FindMap 门丢**——`MapInfo.txt:16 [Q001 勇斗寺殿]` 的 `map_file_name` 是
 //! `Q001` 而非描述串，且 `Map/Q001.map` 存在 ⇒ oracle `FindMap("Q001")` 命中 ⇒ `CreateQuest` 建对象）；
-//! 隐藏 NPC **3** ⇒ 12 抽 ⇒ **共 68 抽 / 17 站点**（原提交信息写的「MapQuest 0 行 / 64 抽 / 16 站点」
-//! 系把这个计数算错，已订正）。**⇒ 补上屏障 A 的 1 抽后，段②/段③ 与 oracle 等距。**
+//! 隐藏 NPC **3** ⇒ 12 抽；再加**屏障 A 的 1 抽** ⇒ **共 69 抽 / 18 站点**（原提交信息写的
+//! 「MapQuest 0 行 / 64 抽 / 16 站点」系把这个计数算错，已订正；`openmir2-ctor-draws-fold` 的
+//! 「68 抽 / 17 站点」是**未含**屏障 A 的值，本片补上后为 69 抽 / 18 站点）。
+//! **⇒ 段②/段③ 与 oracle 整段等距。**
 //!
 //! **影响面订正**：`push_orphan_merchants()`（G1–G3）是**无条件**的 ⇒ 计划**永不为空**：任何到达
 //! `sim_loop` 且 registry 非空的会话都会多抽至少 12 个（与语料里有没有 `Robot.txt`/`CHECKQUEST`/
 //! `MapQuest.txt` 无关）。实测：既有进程级用例
 //! `game-svr/tests/relay.rs::starts_without_worldmaps_when_envir_present`（合成 Envir 只有
 //! `MapInfo.txt="[0 town]"` + `Map/0.map`）在父提交 `befd3ad7c` 上 RNG 流水 **0 条**抽数行、
-//! 本提交 **12 条**（`entity.rs` 的 construct 组）。**套件仍全绿**只因为仓内没有用例/golden 钉住
-//! 这类会话的 RNG 流水 —— 原提交信息的「既有用例/golden 0 条受影响 ⇒ 只在真机可见」**不成立**，
-//! 已由本段订正；R 级窗口的必要性据此**加强**（默认流水已变）。
-//!   **⇒ 账本对齐在本片之后仍受此未做项阻塞（须另立条目）。**
-//!   ④ 运行期路径（`M2Share.cs:279/:526`、`ScriptEngine.cs:156`）不在启动构造段内，不计。
+//! `openmir2-ctor-draws-fold` 提交 **12 条**（`entity.rs` 的 construct 组）、本片（屏障 A 已补）
+//! **13 条**——多出的第 13 条是屏障 A，记在**宿主调用点** `bins/game-svr/src/main.rs`（= 调度表的
+//! `startup` 组，见下节）。**套件仍全绿**只因为仓内没有用例/golden 钉住这类会话的 RNG 流水
+//! —— 原提交信息的「既有用例/golden 0 条受影响 ⇒ 只在真机可见」**不成立**，已由本段订正；
+//! R 级窗口的必要性据此**加强**（默认流水已变）。
+//!
+//! **另一处流水变化（本片新增）**：**无地图注册表**（或计划算不出）的会话原本**一条都不抽**
+//! （空计划），本片改用 `minimal_plan()`（**只含屏障 A**）⇒ 这类会话的流水 **0 → 1 条**
+//! （实测 `game-svr/tests/relay.rs::ids_notification_enables_login_certification`，同种子
+//! `MIR2_RNG_LOG`：父提交 0 条、本片 1 条 = `main.rs` 的 `Next(max) 10000`）。oracle 在该情形下
+//! **照样抽**（`ServerConf.LoadConfig()` 与 `Envir` 无关）⇒ 方向与 oracle 一致；段①②③ 仍不落账
+//! （`main.rs` 既有登记：无注册表 ⇒ 算不出站点表），本片只把「与语料无关的那 1 抽」补上。
 //!
 //! ## 与 `rng_trace` 的关系
 //!
 //! 本模块的抽数走共享 `world.rng` ⇒ `MIR2_RNG_LOG` 流水里每处仍是
-//! `crates/world/src/entity.rs:106-110`（`construct` 组，4 行/处）。[`CtorFoldLedger`] 是**同一批
+//! `crates/world/src/entity.rs:106-110`（`construct` 组，4 行/处）；**唯一例外**是屏障 A：
+//! [`World::fold_ctor_draw_item_number_barrier_a`] 标了 `#[track_caller]` ⇒ 流水里记的是
+//! **调用方**的站点（生产 = `bins/game-svr/src/main.rs`，与 `consumer_groups.tsv` 既有的
+//! `startup|rust|bins/game-svr/src/main\.rs:` 行同组；oracle 侧同组 =
+//! `ServerConf.LoadConfig@ServerConf.cs:114`）。⇒ 这一抽**不落 `other` 组**，结构一致性门的
+//! `groupdiff --require-closed` 不会因本片新增站点而判红。[`CtorFoldLedger`] 是**同一批
 //! 抽数的符号化投影**（site = oracle 锚），供构造级用例把「次序」也钉死——真机流水的 site 列
 //! 两侧都区分不出这些同形构造点（oracle 侧同为 `BaseObject..ctor`/`AnimalObject..ctor`），
 //! 只有本账本的 site 列能咬住次序错位。
@@ -113,6 +139,10 @@ pub enum CtorFoldSite {
     HiddenQFunction,
     /// `LocalDB.cs:312` `RobotNpc()` 的 `new Merchant{ChrName="RobotManage"}`。
     HiddenRobotManage,
+    /// **屏障 A**：`ServerConf.cs:114` `SystemShare.Config.ItemNumber +=
+    /// SystemShare.RandomNumber.Random(10000)`（`AppService.cs:87` 的 `GameShare.LoadConfig()` 链）
+    /// —— **恰 1 抽**，且抽数要 `+=` 到 `[Setup] ItemNumber` 上（不是 ctor 链的 4 抽、也不是丢弃）。
+    BarrierAItemNumber,
 }
 
 impl CtorFoldSite {
@@ -129,6 +159,7 @@ impl CtorFoldSite {
             CtorFoldSite::HiddenQManage => "Merchant..ctor@LocalDB.cs:268",
             CtorFoldSite::HiddenQFunction => "Merchant..ctor@LocalDB.cs:210",
             CtorFoldSite::HiddenRobotManage => "Merchant..ctor@LocalDB.cs:312",
+            CtorFoldSite::BarrierAItemNumber => "ServerConf.LoadConfig@ServerConf.cs:114",
         }
     }
 }
@@ -141,10 +172,18 @@ pub const CTOR_FOLD_DRAWS_PER_SITE: usize = 4;
 pub const CTOR_FOLD_DRAW_KIND: &str = "Next(max)";
 
 /// **屏障 A**：oracle `AppService.cs:87` → `GameShare.cs:90` → `ServerConf.cs:114` 的
-/// `Random(10000)`（`SystemShare.Config.ItemNumber += …`）——**1 抽，本片未建模**（登记见模块头）。
+/// `Random(10000)`（`SystemShare.Config.ItemNumber += …`）——**恰 1 抽**（站点数 =
+/// [`CtorFoldPlan::barrier_a`] 的长度，恒 1）。
 ///
-/// 它在段①（`GameApp` ctor）之后、段②（`:124` `LoadMapInfo`）之前 ⇒ 段①与段②之间要**留出这 1 抽**。
+/// 它在段①（`GameApp` ctor）之后、段②（`:124` `LoadMapInfo`）之前 ⇒
+/// [`World::fold_ctor_draw_item_number_barrier_a`] 必须在这两段**之间**、且**恰一次**。
 pub const CTOR_FOLD_BARRIER_A_DRAWS: usize = 1;
+
+/// 屏障 A 的抽数上界（oracle `ServerConf.cs:114` 的 `Random(10000)`）。
+///
+/// `kind` 仍是 [`CTOR_FOLD_DRAW_KIND`]（`Next(max)`，与 `rng_trace` 同列）；与 ctor 公共链的
+/// `1500/2000/3000/3000` **不同表**。
+pub const CTOR_FOLD_BARRIER_A_MOD: i64 = 10_000;
 
 /// **构造段 fold 计划**：按 oracle 次序排好的站点表，按三条屏障切成三段（见模块头）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -152,6 +191,10 @@ pub struct CtorFoldPlan {
     /// 段①（`GameApp` ctor）：`GameApp.cs:58`（RobotObject）+ `:85-87`（G1–G3）。
     /// **调用时机**：早于屏障 A（`ServerConf.cs:114` 的 1 抽）。
     pub game_app_ctor: Vec<CtorFoldSite>,
+    /// **屏障 A**（0 或 1 个 [`CtorFoldSite::BarrierAItemNumber`]）：`AppService.cs:87`
+    /// `GameShare.LoadConfig()` → `ServerConf.cs:114` 的 `Random(10000)`。
+    /// **调用时机**：晚于段①、早于段②；**每站点 1 抽**（不是 ctor 公共链的 4 抽）。
+    pub barrier_a: Vec<CtorFoldSite>,
     /// 段②（`GameApp.Initialize` 的 `:124`）：`MapInfo` 的 `CHECKQUEST`。
     /// **调用时机**：晚于屏障 A、早于屏障 B（`InitializeMonster` `:155`）。
     pub load_map_info: Vec<CtorFoldSite>,
@@ -184,6 +227,14 @@ impl CtorFoldPlan {
         ]);
     }
 
+    /// **屏障 A**：`AppService.cs:87` → `ServerConf.cs:114` 的 `Random(10000)`（恒 1 站点）。
+    ///
+    /// 计划里**恒有**它（`build_plan` 无条件 push）；宿主**必须**在段①之后、段②之前**恰调一次**
+    /// （漏掉 ⇒ 段②/段③ 的绝对位置差 1，账本自第 17 条起分歧）。
+    pub fn push_barrier_a(&mut self) {
+        self.barrier_a.push(CtorFoldSite::BarrierAItemNumber);
+    }
+
     /// 段②：`MapInfo` 的 `CHECKQUEST` 行数 × `new Merchant`（`GameApp.cs:124` → `Maps.cs:454`）。
     pub fn push_map_check_quests(&mut self, lines: usize) {
         self.load_map_info
@@ -209,11 +260,17 @@ impl CtorFoldPlan {
         self.load_map_quest.push(site);
     }
 
-    /// 计划总抽数（= 站点数 × 4；**不含**屏障 A 的 1 抽——那是未建模项）。
+    /// ctor 公共链的抽数（三段的站点数 × 4；**不含**屏障 A 的 1 抽）。
     #[must_use]
-    pub fn total_draws(&self) -> usize {
+    pub fn ctor_chain_draws(&self) -> usize {
         (self.game_app_ctor.len() + self.load_map_info.len() + self.load_map_quest.len())
             * CTOR_FOLD_DRAWS_PER_SITE
+    }
+
+    /// 计划总抽数（= ctor 公共链的 `站点数 × 4` + 屏障 A 的 1 抽）。
+    #[must_use]
+    pub fn total_draws(&self) -> usize {
+        self.ctor_chain_draws() + self.barrier_a.len()
     }
 }
 
@@ -248,7 +305,10 @@ impl CtorFoldLedger {
         self.entries.is_empty()
     }
 
-    /// 逐站点折叠成 `(site, 该处 4 抽的原值)` 的视图（判据用例的期望表按此写）。
+    /// ctor 公共链账本逐站点折叠成 `(site, 该处 4 抽的原值)` 的视图（判据用例的期望表按此写）。
+    ///
+    /// **只对 4 抽/站点的 ctor 链账本成立**：尾余数（屏障 A 的 1 条）被 `as_chunks` 丢掉 ⇒
+    /// 不要对 [`World::fold_ctor_draw_item_number_barrier_a`] 的返回值用它（直接读 `entries`）。
     #[must_use]
     pub fn by_site(&self) -> Vec<(CtorFoldSite, [i64; CTOR_FOLD_DRAWS_PER_SITE])> {
         self.entries
@@ -273,6 +333,44 @@ impl World {
     /// 只抽数、不建实体（fold）：抽出的 4 个分量**全部丢弃**，仅推进共享 `world.rng` 位置。
     pub fn fold_ctor_draws_game_app_ctor(&mut self, plan: &CtorFoldPlan) -> CtorFoldLedger {
         Self::fold_sites(self, &plan.game_app_ctor)
+    }
+
+    /// **屏障 A**：oracle `AppService.cs:87` → `GameShare.cs:90` → `ServerConf.cs:114` 的
+    /// `SystemShare.Config.ItemNumber += SystemShare.RandomNumber.Random(10000)`（**恰 1 抽**）。
+    ///
+    /// **必须晚于段①（[`Self::fold_ctor_draws_game_app_ctor`]）、早于段②
+    /// （[`Self::fold_ctor_draws_load_map_info`]）**。`plan.barrier_a` 为空 ⇒ 不抽、返回空账本
+    /// （**宿主侧的 fail-closed 在** `bins/game-svr/src/ctor_fold.rs::item_number_counter_init`：
+    /// 账本不恰 1 条即报错，绝不静默按 0 加到 `ItemNumber` 上）。
+    ///
+    /// 与另三段两点不同：① 每站点 **1 抽**（不是 ctor 公共链的 4 抽）、`arg =
+    /// `[`CTOR_FOLD_BARRIER_A_MOD`]；② 抽出的值**不是丢弃**的——宿主把它**加到** `[Setup]
+    /// ItemNumber` 上（oracle 是 `+=`，`ServerConf.cs:114`）。
+    ///
+    /// `#[track_caller]`：本方法**故意**让 `rng_trace`（`MIR2_RNG_LOG`）把这一抽记在**调用方**的
+    /// 站点（生产 = `bins/game-svr/src/main.rs`）——`consumer_groups.tsv` 已把 Rust 侧启动期抽数
+    /// 归因到 `startup|rust|bins/game-svr/src/main\.rs:`（oracle 侧同组 =
+    /// `ServerConf.LoadConfig@ServerConf.cs:114`）；不标则记成 `crates/world/src/ctor_fold.rs:`，
+    /// 在结构一致性门里落 `other` 组 ⇒ `groupdiff --require-closed` 判红。
+    #[track_caller]
+    pub fn fold_ctor_draw_item_number_barrier_a(&mut self, plan: &CtorFoldPlan) -> CtorFoldLedger {
+        let mut ledger = CtorFoldLedger {
+            entries: Vec::with_capacity(plan.barrier_a.len()),
+        };
+        for &site in &plan.barrier_a {
+            debug_assert_eq!(
+                site,
+                CtorFoldSite::BarrierAItemNumber,
+                "屏障 A 段只装 BarrierAItemNumber 站点"
+            );
+            ledger.entries.push(CtorFoldEntry {
+                site,
+                kind: CTOR_FOLD_DRAW_KIND,
+                arg: CTOR_FOLD_BARRIER_A_MOD,
+                result: i64::from(self.rng.random_below(CTOR_FOLD_BARRIER_A_MOD as i32)),
+            });
+        }
+        ledger
     }
 
     /// **段②**：`GameApp.cs:124` `Map.LoadMapInfo()` 的 `CHECKQUEST` 构造抽（`Maps.cs:454`）。
@@ -372,13 +470,14 @@ mod tests {
         }
     }
 
-    /// **三段 → 抽数与共享流位置**：三段合起来的 `result` 列**逐项等于**独立流按同一 `arg` 序列
-    /// 抽出的原值；且三段之间**留出屏障 A 的 1 抽位置**（屏障 A 挪一抽即其后全部错位）。
+    /// **四段 → 抽数与共享流位置**：段①→屏障 A→段②→段③ 合起来的 `result` 列**逐项等于**独立流
+    /// 按同一 `arg` 序列抽出的原值（屏障 A 的 `arg = 10000`，恰夹在段①与段②之间）。
     #[test]
     fn ledger_results_match_independent_stream_across_three_segments() {
         let mut plan = CtorFoldPlan::new();
         plan.push_robot_objects(2);
         plan.push_orphan_merchants();
+        plan.push_barrier_a(); // ★屏障 A：`ServerConf.cs:114` 的 `Random(10000)`（1 抽）
         plan.push_map_check_quests(1);
         plan.push_map_quest_rows(3);
         plan.push_hidden_npc(CtorFoldSite::HiddenQManage);
@@ -388,31 +487,54 @@ mod tests {
         let mut world = World::with_maps(vec![(8, 8)]);
         world.rng = RandomNumber::with_seed(20240229);
         let seg1 = world.fold_ctor_draws_game_app_ctor(&plan);
-        // ★屏障 A 槽位：oracle `ServerConf.cs:114` 的 `Random(10000)`（未建模）——
-        // 本用例按 oracle 位置把它**跳过去**（不抽），只验证「段②在段①之后、段③在段②之后」。
+        let barrier_a = world.fold_ctor_draw_item_number_barrier_a(&plan);
         let seg2 = world.fold_ctor_draws_load_map_info(&plan);
         let seg3 = world.fold_ctor_draws_load_map_quest(&plan);
 
+        // 独立流按**同一位置**重建期望：段①（`game_app_ctor` 站点 × 4）→ 屏障 A（1）→ 段②+段③。
         let mut exp = RandomNumber::with_seed(20240229);
-        let expected: Vec<i64> = BASE_ANIMAL_CTOR_DRAW_MODS
+        let seg1_draws = plan.game_app_ctor.len() * CTOR_FOLD_DRAWS_PER_SITE;
+        let mut expected: Vec<i64> = BASE_ANIMAL_CTOR_DRAW_MODS
             .iter()
             .cycle()
-            .take(plan.total_draws())
+            .take(seg1_draws)
             .map(|m| i64::from(exp.random_below(*m)))
             .collect();
+        let expected_barrier_a = i64::from(exp.random_below(CTOR_FOLD_BARRIER_A_MOD as i32));
+        expected.push(expected_barrier_a);
+        expected.extend(
+            BASE_ANIMAL_CTOR_DRAW_MODS
+                .iter()
+                .cycle()
+                .take(plan.ctor_chain_draws() - seg1_draws)
+                .map(|m| i64::from(exp.random_below(*m))),
+        );
+
         let got: Vec<i64> = seg1
             .entries
             .iter()
+            .chain(barrier_a.entries.iter())
             .chain(seg2.entries.iter())
             .chain(seg3.entries.iter())
             .map(|e| e.result)
             .collect();
-        assert_eq!(got, expected, "三段账本 result 列 = 独立流同 arg 序列");
-        // `World::fold_*` 不碰屏障 A ⇒ 屏障 A 由宿主在段①之后自己抽（本片留空）。
+        assert_eq!(
+            got, expected,
+            "四段账本 result 列 = 独立流同 arg 序列（段①→屏障 A→段②→段③）"
+        );
+        assert_eq!(
+            barrier_a.entries[0].result, expected_barrier_a,
+            "屏障 A = 流上段①之后的第 {seg1_draws} 条（0-based）"
+        );
+        assert_eq!(
+            plan.total_draws(),
+            plan.ctor_chain_draws() + 1,
+            "总抽数 = ctor 链 + 屏障 A 1 抽"
+        );
         assert_eq!(
             world.rng.random(),
             exp.random(),
-            "三段共推进 4×站点数 个抽数（屏障 A 的 1 抽由宿主负责）"
+            "四段共推进 ctor 链 + 屏障 A 1 抽"
         );
         assert_eq!(CTOR_FOLD_BARRIER_A_DRAWS, 1, "屏障 A 是 1 抽（ServerConf）");
     }
@@ -478,22 +600,24 @@ mod tests {
         assert_ne!(run(&plan), run(&minus), "少一处 4 抽 ⇒ 其后全部错位");
     }
 
-    /// **屏障 A 挪位必红**：把屏障 A 的 1 抽从段①之后挪到段①之前 ⇒ 段①的 `result` 列整体错位。
+    /// **屏障 A 挪位必红**：把屏障 A 的 1 抽从段①之后挪到段①之前 ⇒ 段① 与屏障 A 的 `result`
+    /// 都变（⇒ 挪位置必被账本咬住）。
     #[test]
     fn barrier_a_position_matters() {
         let mut plan = CtorFoldPlan::new();
         plan.push_robot_objects(1);
+        plan.push_barrier_a();
 
         // 正确位置：段①（4 抽）→ 屏障 A（1 抽）→ 段②…
         let mut w1 = World::with_maps(vec![(8, 8)]);
         w1.rng = RandomNumber::with_seed(99);
         let seg1 = w1.fold_ctor_draws_game_app_ctor(&plan);
-        let barrier_after = w1.rng.random_below(10_000);
+        let barrier_after = w1.fold_ctor_draw_item_number_barrier_a(&plan);
 
         // 改坏位置：屏障 A 抽在段①之前。
         let mut w2 = World::with_maps(vec![(8, 8)]);
         w2.rng = RandomNumber::with_seed(99);
-        let barrier_before = w2.rng.random_below(10_000);
+        let barrier_before = w2.fold_ctor_draw_item_number_barrier_a(&plan);
         let seg1_bad = w2.fold_ctor_draws_game_app_ctor(&plan);
 
         // 同一独立流、屏障 A 在两个不同位置 ⇒ 段① 的 `result` 列必错位（且屏障自身的值也变）。
@@ -501,8 +625,83 @@ mod tests {
         let b: Vec<i64> = seg1_bad.entries.iter().map(|e| e.result).collect();
         assert_ne!(a, b, "屏障 A 位置挪动 ⇒ 段① result 列错位");
         assert_ne!(
-            barrier_after, barrier_before,
+            barrier_after.entries[0].result, barrier_before.entries[0].result,
             "屏障 A 的值随位置变 ⇒ 位置可判"
+        );
+    }
+
+    /// **屏障 A 的落账形态**（卡 `openmir2-ctor-barrier-a-draw` 判据 ①）：计划里**恒 1 站点** ⇒
+    /// 恰 **1 抽**、`arg = 10000`、`kind = Next(max)`、站点 = [`CtorFoldSite::BarrierAItemNumber`]
+    /// （锚 = `ServerConf.LoadConfig@ServerConf.cs:114`）；计划里**没有**该站点 ⇒ **不抽**。
+    #[test]
+    fn barrier_a_is_exactly_one_draw_with_arg_10000() {
+        let mut plan = CtorFoldPlan::new();
+        plan.push_robot_objects(1);
+        plan.push_barrier_a();
+
+        let mut w = World::with_maps(vec![(8, 8)]);
+        w.rng = RandomNumber::with_seed(4242);
+        assert!(
+            w.fold_ctor_draw_item_number_barrier_a(&CtorFoldPlan::new())
+                .is_empty(),
+            "计划里没有屏障 A 站点 ⇒ 不抽（宿主侧 `item_number_counter_init` 会 fail-closed）"
+        );
+
+        let ledger = w.fold_ctor_draw_item_number_barrier_a(&plan);
+        assert_eq!(ledger.len(), 1, "屏障 A 恰 1 抽（**不是** ctor 链的 4 抽）");
+        let e = ledger.entries[0];
+        assert_eq!(e.site, CtorFoldSite::BarrierAItemNumber);
+        assert_eq!(
+            e.kind, CTOR_FOLD_DRAW_KIND,
+            "`RandomNumber.Random` ⇒ `Next(max)`"
+        );
+        assert_eq!(e.arg, CTOR_FOLD_BARRIER_A_MOD);
+        assert_eq!(
+            e.arg, 10_000,
+            "oracle `ServerConf.cs:114` 的 `Random(10000)`"
+        );
+        assert!(
+            (0..CTOR_FOLD_BARRIER_A_MOD).contains(&e.result),
+            "result 落在 [0,10000)：{}",
+            e.result
+        );
+        assert_eq!(
+            CtorFoldSite::BarrierAItemNumber.oracle_anchor(),
+            "ServerConf.LoadConfig@ServerConf.cs:114"
+        );
+        assert_eq!(CTOR_FOLD_BARRIER_A_DRAWS, 1, "屏障 A 是 1 抽");
+        // 屏障 A 只在 `barrier_a` 段 ⇒ 不进 ctor 链计数。
+        assert_eq!(plan.barrier_a, vec![CtorFoldSite::BarrierAItemNumber]);
+        assert_eq!(plan.ctor_chain_draws(), 4);
+        assert_eq!(plan.total_draws(), 5);
+    }
+
+    /// **改坏必红（漏抽屏障 A）**：计划里不 push 屏障 A ⇒ 其后的抽数（段② 首抽 = `Random(1500)`）
+    /// 与 oracle 位置差 1（同种子下两值不同）⇒ 账本自第 17 条起分歧（部署件段① = 16 抽）。
+    #[test]
+    fn dropping_barrier_a_shifts_the_following_draws() {
+        let mut with = CtorFoldPlan::new();
+        with.push_robot_objects(1);
+        with.push_orphan_merchants();
+        with.push_barrier_a();
+        let mut without = with.clone();
+        without.barrier_a.clear();
+
+        let run = |p: &CtorFoldPlan| {
+            let mut w = World::with_maps(vec![(8, 8)]);
+            w.rng = RandomNumber::with_seed(20240229);
+            let seg1 = w.fold_ctor_draws_game_app_ctor(p);
+            let barrier = w.fold_ctor_draw_item_number_barrier_a(p);
+            let seg2_first = w.rng.random_below(1500); // 段② 的首抽（`BaseObject..ctor`）
+            (seg1.len(), barrier.len(), seg2_first)
+        };
+        let (n1, b1, first_with) = run(&with);
+        let (n2, b2, first_without) = run(&without);
+        assert_eq!((n1, n2), (16, 16), "段① 不受影响（4 站点 × 4 抽）");
+        assert_eq!((b1, b2), (1, 0), "屏障 A 的条数随计划变");
+        assert_ne!(
+            first_with, first_without,
+            "漏抽屏障 A ⇒ 其后的抽数整体错位（段① 16 抽之后的第 17 条起分歧）"
         );
     }
 

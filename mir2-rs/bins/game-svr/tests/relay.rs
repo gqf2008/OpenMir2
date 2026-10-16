@@ -356,6 +356,26 @@ async fn starts_without_worldmaps_when_envir_present() {
         text.contains("Envir 真地图注册表：1 张"),
         "必须用真注册表建世界（不是占位）；日志实得：{text}"
     );
+    // **构造段 fold 的四段次序**（卡 `openmir2-ctor-barrier-a-draw` 判据 ②）：`sim_loop` 每落一段
+    // 打一行「已落账」⇒ **行序 = 调用序** ⇒ 用它把 oracle 的次序机判住：
+    // 段①（`GameApp` ctor）→ **屏障 A**（`AppService.cs:87` → `ServerConf.cs:114` 的 1 抽）→
+    // 段②（`GameApp.cs:124` `LoadMapInfo`）。屏障 A 是这一片唯一的「位置」改动点。
+    // 红检：把 `fold_ctor_draw_item_number_barrier_a` 的调用挪到段②之后（或段①之前）⇒ 本断言必红。
+    let text = support::wait_log_contains(&log, "构造段 fold 段②", Duration::from_secs(5)).await;
+    let pos_seg1 = text
+        .find("构造段 fold 段①")
+        .unwrap_or_else(|| panic!("段① 落账行缺失；日志实得：{text}"));
+    let pos_barrier_a = text
+        .find("构造段 fold 屏障 A")
+        .unwrap_or_else(|| panic!("屏障 A 落账行缺失；日志实得：{text}"));
+    let pos_seg2 = text
+        .find("构造段 fold 段②")
+        .unwrap_or_else(|| panic!("段② 落账行缺失；日志实得：{text}"));
+    assert!(
+        pos_seg1 < pos_barrier_a && pos_barrier_a < pos_seg2,
+        "构造段次序必须是 段① → 屏障 A → 段②（oracle `AppService.cs:87` 的 1 抽在 \
+         `GameApp` ctor 之后、`:124` `LoadMapInfo` 之前）；日志实得：{text}"
+    );
     proc.kill().await.ok();
     std::fs::remove_dir_all(&dir).ok();
 }
