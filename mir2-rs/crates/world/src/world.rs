@@ -59,6 +59,15 @@ pub enum Command {
         speed_point: u8,
         drop_list: Vec<MonsterDropItem>,
     },
+    /// **出站接线片 W2**：被推（`BaseObject.CharPushed`，`src/M2Server/Actor/BaseObject.cs:854-901`）。
+    /// `dir` = `nDir`（推进方向）、`count` = `nPushCount`。tick 里逐格推进并记 [`crate::action::PushEvent`]。
+    Push { actor_id: i32, dir: u8, count: u8 },
+    /// **出站接线片 W2**：野蛮冲撞（`PlayObject.DoMotaebo` 的**无正前目标**支，
+    /// `src/M2Server/Player/PlayObject.Base.cs:1443-1467`）。`dir` = `nDir`、`steps` = `_MAX(2, level+1)`。
+    Rush { actor_id: i32, dir: u8, steps: i32 },
+    /// **出站接线片 W2**：宰杀（`PlayObject.ClientGetButchItem` 的转发，`PlayObject.Operate.cs:702-750`）。
+    /// `dir` = 已解析的 `Dir`（目标 2 格内且有效 ⇒ `btDir`，否则当前朝向；解析在宿主 `CM_BUTCH` 门面）。
+    Butch { actor_id: i32, dir: u8 },
 }
 
 /// 一个 tick 的处理记录（判据①：断言"谁、按什么顺序"被处理）。
@@ -107,6 +116,13 @@ pub struct TickRecord {
     /// 帧面（`RefNameColor` ⇒ `RM_CHANGENAMECOLOR` / `RefShowName` ⇒ `RM_USERNAME`）不在
     /// `crates/world` 层（见 `crate::slave` 模块头），宿主据本记录出帧或登记 `not_verified`。
     pub slave_self_deliveries: Vec<crate::slave::SelfDelayOutcome>,
+    /// **出站接线片 W2**：本 tick 的 `RM_PUSH` 族（`SM_BACKSTEP(9)`）——`CharPushed` 每推进一格一条，保序。
+    pub pushes: Vec<crate::action::PushEvent>,
+    /// **出站接线片 W2**：本 tick 的 `RM_RUSH`/`RM_RUSHKUNG` 族（`SM_RUSH(6)`/`SM_RUSHKUNG(7)`）——
+    /// `DoMotaebo` 每成功推进一格一条 `Rush`，末尾若有则追加一条 `RushKung`，保序。
+    pub rushes: Vec<crate::action::RushEvent>,
+    /// **出站接线片 W2**：本 tick 的 `RM_BUTCH` 族（`SM_BUTCH(637)`）——每次 `ClientGetButchItem` 一条。
+    pub butches: Vec<crate::action::ButchEvent>,
 }
 
 pub struct World {
@@ -479,6 +495,9 @@ impl World {
             merchant_removed: Vec::new(),
             party_events: Vec::new(),
             slave_self_deliveries: Vec::new(),
+            pushes: Vec::new(),
+            rushes: Vec::new(),
+            butches: Vec::new(),
         };
 
         // 命令 FIFO
@@ -552,6 +571,31 @@ impl World {
                         &drop_list,
                     );
                     record.processed.push((id, ok));
+                }
+                Command::Push {
+                    actor_id,
+                    dir,
+                    count,
+                } => {
+                    let events = self.push_now(actor_id, dir, count);
+                    record.processed.push((actor_id, !events.is_empty()));
+                    record.pushes.extend(events);
+                }
+                Command::Rush {
+                    actor_id,
+                    dir,
+                    steps,
+                } => {
+                    let events = self.rush_now(actor_id, dir, steps);
+                    record.processed.push((actor_id, !events.is_empty()));
+                    record.rushes.extend(events);
+                }
+                Command::Butch { actor_id, dir } => {
+                    let event = self.butch_now(actor_id, dir);
+                    record.processed.push((actor_id, event.is_some()));
+                    if let Some(event) = event {
+                        record.butches.push(event);
+                    }
                 }
             }
         }
@@ -1263,6 +1307,129 @@ impl World {
             }
         }
         moved
+    }
+
+    /// **出站接线片 W2**：`BaseObject.CharPushed`（`src/M2Server/Actor/BaseObject.cs:854-901`）的
+    /// **世界侧**转发（帧面在宿主）。
+    ///
+    /// 逐格照 oracle 的 `for` 循环：`GetFrontPosition(Dir = nDir)` → `CanWalk(nx, ny, false)`
+    /// （= [`World::cell_free`]，含越界/墙/活体阻挡）→ 走一格 → 记一条
+    /// [`crate::action::PushEvent`]（`dir = nBackDir`、位置 = 走**后**的 `CurrX/CurrY`）。
+    /// 任一步不可走即 `break`（oracle 的 `break`）。返回的事件表**逐格一条、保序**，
+    /// `len` = oracle `CharPushed` 的返回值 `result`。
+    ///
+    /// **不建模**（登记）：`if (Race >= ActorRace.Animal) WalkTick += 800`（`WalkTick` 不在本骨架）、
+    /// 以及 `Dir` 的落盘（`CharPushed` 会把 `Dir` 改成 `nBackDir`/`olddir`——本骨架 `Dir` 属宿主展示表，
+    /// 帧值用的是 `nBackDir` 本身，故不影响帧字节）。
+    fn push_now(&mut self, actor_id: i32, n_dir: u8, count: u8) -> Vec<crate::action::PushEvent> {
+        let Some(e) = self.entities.get(actor_id) else {
+            return Vec::new();
+        };
+        let (mut x, mut y, map_id) = (e.x, e.y, e.map_id);
+        let Some((w, h)) = self.maps.get(map_id).map(|m| (m.width, m.height)) else {
+            return Vec::new();
+        };
+        let back = crate::magic::back_dir(n_dir);
+        let mut out = Vec::new();
+        for _ in 0..count {
+            let (nx, ny) = crate::magic::front_position(x, y, n_dir, w, h);
+            // oracle `CanWalk(nx, ny, false)`：越界/墙/活体皆不可走 ⇒ break。
+            if !self.cell_free(map_id, nx, ny, actor_id) {
+                break;
+            }
+            if !self.try_step(actor_id, nx - x, ny - y) {
+                break;
+            }
+            x = nx;
+            y = ny;
+            out.push(crate::action::PushEvent {
+                actor_id,
+                dir: back,
+                x,
+                y,
+            });
+        }
+        out
+    }
+
+    /// `Envirnoment.CanWalk(nx, ny, true)` 的 `cellSuccess` 子集（`Envirnoment.cs:442-486` 的
+    /// **boFlag=true** 支：只判 `cellSuccess && Valid`，不查格上对象）——`DoMotaebo` 的
+    /// `if (Envir.CanWalk(nX, nY, true)) n28 = 0;`（`src/M2Server/Player/PlayObject.Base.cs:1461`）。
+    fn can_walk_ignore_objects(&self, map_id: usize, x: i32, y: i32) -> bool {
+        self.maps
+            .get(map_id)
+            .is_some_and(|m| m.get_cell_info(x, y).1)
+    }
+
+    /// **出站接线片 W2**：`PlayObject.DoMotaebo`（`src/M2Server/Player/PlayObject.Base.cs:1389-1490`）
+    /// 的**无正前目标**支（`else`，`:1443-1467`）的世界侧转发。
+    ///
+    /// 向前冲刺至多 `steps` 格：每成功一格发 `SendRefMsg(RM_RUSH, nDir, CurrX, CurrY, 0, "")`
+    /// ⇒ 记 [`crate::action::RushEvent`]（`frame = Rush`、`dir = nDir`、位置 = 走**后**格）；
+    /// 被挡时若正前**不可走**（`CanWalk(nX, nY, true)` 为假）⇒ `bo35`，循环末尾 `GetFrontPosition`
+    /// 后再发 `SendRefMsg(RM_RUSHKUNG, Dir, nX, nY, 0, "")` ⇒ 追加一条 `frame = RushKung` 事件
+    /// （位置 = **被挡的正前格**，角色不在该格上）。正前可走但被活体挡 ⇒ 照 oracle 继续循环
+    /// （`n28 = 0` 只影响伤害，非本例建模面）。
+    ///
+    /// **不在本片**（登记）：有正前目标支（`:1404-1440`：`CharPushed` 目标 + 进占其旧格 + 伤害）、
+    /// `bo35 == false` 时的 `RM_STRUCK` 伤害段（`:1469-1486`）。
+    fn rush_now(&mut self, actor_id: i32, n_dir: u8, steps: i32) -> Vec<crate::action::RushEvent> {
+        if steps <= 0 {
+            return Vec::new();
+        }
+        let Some(e) = self.entities.get(actor_id) else {
+            return Vec::new();
+        };
+        let (mut x, mut y, map_id) = (e.x, e.y, e.map_id);
+        let Some((w, h)) = self.maps.get(map_id).map(|m| (m.width, m.height)) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut blocked_front = false;
+        for _ in 0..steps {
+            let (nx, ny) = crate::magic::front_position(x, y, n_dir, w, h);
+            if self.try_step(actor_id, nx - x, ny - y) {
+                x = nx;
+                y = ny;
+                out.push(crate::action::RushEvent {
+                    actor_id,
+                    frame: crate::action::RushFrame::Rush,
+                    dir: n_dir,
+                    x,
+                    y,
+                });
+            } else if !self.can_walk_ignore_objects(map_id, nx, ny) {
+                // `CanWalk(nX, nY, true)` 为假 ⇒ `bo35 = true; break;`
+                blocked_front = true;
+                break;
+            }
+        }
+        if blocked_front {
+            let (nx, ny) = crate::magic::front_position(x, y, n_dir, w, h);
+            out.push(crate::action::RushEvent {
+                actor_id,
+                frame: crate::action::RushFrame::RushKung,
+                dir: n_dir,
+                x: nx,
+                y: ny,
+            });
+        }
+        out
+    }
+
+    /// **出站接线片 W2**：`RM_BUTCH`（`src/M2Server/Player/PlayObject.Operate.cs:749`）的世界侧事件。
+    ///
+    /// oracle 末尾**无条件** `SendRefMsg(RM_BUTCH, Dir, CurrX, CurrY, 0, "")`；`Dir` 由宿主
+    /// （`CM_BUTCH` 门面）按 oracle 的「2 格 + `IsValidObject` + 具肉动物尸」门解析后传入——本片
+    /// 不含该入站门面，故事件只承载 `(dir, CurrX, CurrY)`。actor 不在世界 ⇒ 无事件。
+    fn butch_now(&self, actor_id: i32, dir: u8) -> Option<crate::action::ButchEvent> {
+        let e = self.entities.get(actor_id)?;
+        Some(crate::action::ButchEvent {
+            actor_id,
+            dir,
+            x: e.x,
+            y: e.y,
+        })
     }
 
     /// 对拍用地面物品清单：`(map_id, x, y, obj_id)`，按 `(map, x, y, obj_id)` 升序。
@@ -2166,5 +2333,197 @@ mod tests {
         let e = w.entities.get(mon).unwrap();
         assert_eq!(e.last_hiter, None, "命中者死亡 ⇒ LastHiter 清");
         assert_eq!(e.exp_hitter, None, "命中者死亡 ⇒ ExpHitter 清");
+    }
+
+    // ---- 出站接线片 W2：RM_PUSH / RM_RUSH / RM_RUSHKUNG / RM_BUTCH 的 tick 产出 ------------------
+
+    /// `Command::Push` → `BaseObject.CharPushed`（`BaseObject.cs:854-901`）的逐格 `RM_PUSH`：
+    /// **每成功推一格一条**事件、`dir = nBackDir`、位置 = 走**后**格；被挡即停。
+    ///
+    /// 红检：把 `push_now` 里的 `back` 改成 `n_dir`（正推方向）或把事件位置改成走**前**格 ⇒ 必红。
+    #[test]
+    fn push_command_emits_backstep_per_step() {
+        use crate::action::PushEvent;
+        let mut w = world_with(&[(1, 5, 5)]);
+        w.tick(); // 先跑 Enter 落图（`add_map_object`），否则格子簿记无源格可摘。
+        w.enqueue(Command::Push {
+            actor_id: 1,
+            dir: crate::magic::DIR_UP,
+            count: 3,
+        });
+        let r = w.tick();
+        assert_eq!(
+            r.pushes,
+            vec![
+                PushEvent {
+                    actor_id: 1,
+                    dir: crate::magic::DIR_DOWN,
+                    x: 5,
+                    y: 4
+                },
+                PushEvent {
+                    actor_id: 1,
+                    dir: crate::magic::DIR_DOWN,
+                    x: 5,
+                    y: 3
+                },
+                PushEvent {
+                    actor_id: 1,
+                    dir: crate::magic::DIR_DOWN,
+                    x: 5,
+                    y: 2
+                },
+            ],
+            "每推一格一条，dir = nBackDir(DIR_DOWN)，位置 = 走后格"
+        );
+        let e = w.entities.get(1).unwrap();
+        assert_eq!((e.x, e.y), (5, 2), "世界权威坐标随推进更新");
+    }
+
+    /// `Command::Push` 与既有**已验收**的 [`crate::magic::char_pushed`] 末端状态必须一致
+    /// （同一图、同一初值 ⇒ 同 `result`、同 `(x, y)`、同终态 `dir`）——防逐格重写引入漂移。
+    #[test]
+    fn push_now_final_state_matches_magic_char_pushed() {
+        let mut w = world_with(&[(1, 5, 5)]);
+        w.tick();
+        w.enqueue(Command::Push {
+            actor_id: 1,
+            dir: crate::magic::DIR_UP,
+            count: 4,
+        });
+        let r = w.tick();
+        let steps = i32::try_from(r.pushes.len()).unwrap();
+        let (wx, wy) = {
+            let e = w.entities.get(1).unwrap();
+            (e.x, e.y)
+        };
+
+        let mut map = crate::map::MapGrid::new(64, 64);
+        let (mut x, mut y, mut dir) = (5_i32, 5_i32, 0_u8);
+        let res = crate::magic::char_pushed(
+            &mut map,
+            &mut x,
+            &mut y,
+            &mut dir,
+            crate::magic::DIR_UP,
+            4,
+            1,
+        );
+
+        assert_eq!(res, steps, "成功步数 = 事件数");
+        assert_eq!((wx, wy), (x, y), "末端坐标一致");
+        assert_eq!(dir, crate::magic::DIR_DOWN, "result>0 ⇒ Dir 落 nBackDir");
+    }
+
+    /// `Command::Rush`（`DoMotaebo` 无正前目标支，`PlayObject.Base.cs:1443-1467`）：向前冲刺，
+    /// 每格一条 `Rush`（`dir = nDir`、位置 = 走后格），不产 `RushKung`。
+    ///
+    /// 红检：把 `rush_now` 的 `Rush` 事件 ident 换成 `RushKung`（或方向改 `back_dir`）⇒ 必红。
+    #[test]
+    fn rush_command_emits_rush_per_step() {
+        use crate::action::{RushEvent, RushFrame};
+        let mut w = world_with(&[(1, 5, 5)]);
+        w.tick();
+        w.enqueue(Command::Rush {
+            actor_id: 1,
+            dir: crate::magic::DIR_RIGHT,
+            steps: 3,
+        });
+        let r = w.tick();
+        assert_eq!(
+            r.rushes,
+            vec![
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::Rush,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 6,
+                    y: 5
+                },
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::Rush,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 7,
+                    y: 5
+                },
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::Rush,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 8,
+                    y: 5
+                },
+            ]
+        );
+        let e = w.entities.get(1).unwrap();
+        assert_eq!((e.x, e.y), (8, 5));
+    }
+
+    /// `Command::Rush` 被**不可走**格挡住 ⇒ `bo35` ⇒ 末尾一条 `RushKung`，且其坐标是**正前格**
+    /// （角色不在该格上），`dir = Dir`（= `nDir`）。
+    ///
+    /// 红检：把 `RushKung` 的位置改成角色当前格（`x, y`）而非 `front_position` ⇒ 必红。
+    #[test]
+    fn rush_blocked_emits_rushkung_at_front_cell() {
+        use crate::action::{RushEvent, RushFrame};
+        use crate::map::CellAttribute;
+        let mut w = world_with(&[(1, 5, 5)]);
+        w.tick();
+        w.maps[0]
+            .get_cell_info_mut(7, 5)
+            .0
+            .set_attribute(CellAttribute::HighWall);
+        w.enqueue(Command::Rush {
+            actor_id: 1,
+            dir: crate::magic::DIR_RIGHT,
+            steps: 4,
+        });
+        let r = w.tick();
+        assert_eq!(
+            r.rushes,
+            vec![
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::Rush,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 6,
+                    y: 5
+                },
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::RushKung,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 7,
+                    y: 5
+                },
+            ],
+            "走到 (6,5) 后正前 (7,5) 是墙 ⇒ RushKung 落在正前格"
+        );
+        let e = w.entities.get(1).unwrap();
+        assert_eq!((e.x, e.y), (6, 5), "角色停在墙前，不入正前格");
+    }
+
+    /// `Command::Butch`（`PlayObject.Operate.cs:749`）：一条事件，位置 = 当前 `CurrX/CurrY`、
+    /// `dir` = 传入的已解析 `Dir`。
+    #[test]
+    fn butch_command_emits_event_at_current_cell() {
+        use crate::action::ButchEvent;
+        let mut w = world_with(&[(1, 7, 9)]);
+        w.tick();
+        w.enqueue(Command::Butch {
+            actor_id: 1,
+            dir: 3,
+        });
+        let r = w.tick();
+        assert_eq!(
+            r.butches,
+            vec![ButchEvent {
+                actor_id: 1,
+                dir: 3,
+                x: 7,
+                y: 9
+            }]
+        );
     }
 }
