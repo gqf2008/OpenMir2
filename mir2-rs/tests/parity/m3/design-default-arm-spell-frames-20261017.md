@@ -21,11 +21,11 @@
 | 3 | oracle 走 **default**（无 `case`）的魔号 | 魔表 108 行 − 45 `case` − 8 战士门 = **55 行 / 43 个不同魔号** | **成立**（§1.2）|
 | 4 | Rust 侧 `RM_SPELL`（`sm_spell(`）发射点 | **恰 3 处块 / 5 个魔号：17、30、41、20、46** | **成立**（§2，`main.rs:4997/5025`、`:5146/5168`、`:5242/5264`）|
 | 5 | **缺口**：走 default 且 Rust 不发 `RM_SPELL` | **55 行 / 43 个魔号**（其中 1 个 `56` 另有攻击路径分派器）| **成立**（§3）|
-| 6 | 更宽的缺口（oracle 会发、Rust 不发） | 108 行 − 8 战士 − 5 已接 = **95 行 / 82 个魔号** | **成立**（§3.2，供「只补帧」片定范围）|
+| 6 | 更宽的缺口（oracle 会发、Rust 不发） | 108 行 − 11（战士门 9 ∪ 外层 `switch (MagIdx)` 独立 case 8 的**并集**）− 5 已接 = **93 行 / 80 个魔号** | **成立**（§3.2；**2026-10-17 订正**：原写 95/82，漏扣外层独立 case `SKILL_43(43)` 与 `SKILL_REDBANWOL(56)`——这两号 `DoSpell` 根本不被调用 ⇒ 不发帧）|
 
 > **一句话**：oracle 对**任何**非战士技能、在 `MagicAttackRage` 内的施法**都会广播 `RM_SPELL`**；
 > Rust 目前只对 5 个魔号（17/20/30/41/46）广播，其余 **103 行**不发。其中 8 行是战士技能（oracle 也不发，无缺口），
-> 剩下 **95 行**是**真实帧面缺口**。
+> 剩下 **93 行**是**真实帧面缺口**（2026-10-17 订正：原写 95）。
 
 ---
 
@@ -179,15 +179,20 @@ MagicManager.cs:644   共享尾（boSpellFail / boSpellFire -> RM_MAGICFIRE / �
 
 ### 3.2 宽口径（「只补帧」片实际要覆盖的面）
 
-oracle **会发 `RM_SPELL`** 的魔表行 = 108 − 8（战士门 `:151` 早退） = **100 行**；
-Rust 已发 5 行 ⇒ **宽缺口 = 95 行 / 82 个不同魔号**。
+oracle **会发 `RM_SPELL`** 的魔表行 = 108 − **11** = **98 行 / 85 个不同魔号**。被扣的 11 = 两个集合并：
+① 战士门（`MagicManager.cs:151` `IsWarrSkill` 早退）= `{3,4,7,12,25,26,27,34,38}`（`MagicManager.cs:82-100`，**9 值**）；
+② 外层 `switch (UserMagic.MagIdx)`（`PlayObject.Attack.cs:1118`）的独立 case = `{12,25,26,27,34,38,43,56}`
+（行号 `:1120/1136/1152/1168/1187/1218/1234/1253`）——**这两号 `DoSpell` 不被调用 ⇒ 不发帧**。
+⇒ 并集 = `{3,4,7,12,25,26,27,34,38,43,56}`（11 值）。Rust 已发 5 ⇒ **宽缺口 = 93 行 / 80 个不同魔号**。
+> **2026-10-17 订正**：本段原按「108 − 8 战士 = 100 ⇒ 缺口 95/82」计算，**漏扣 ②**（`56` 虽在 §1.2 A' 被点明「效果路径不在 DoSpell」，此处却未扣；`43` 全文未提）。订正后 98/85、缺口 93/80，与实现侧口径一致（实现条件 = 不进外层 default ∧ 非战士 ⇒ 集合逐 id 相等）。
 
-> **对「只补帧」片的建议范围**：以宽口径 95 行为准（**帧面与是否有 `case` 无关**——
+> **对「只补帧」片的建议范围**：以宽口径 **93 行 / 80 个魔号**为准（**帧面与是否有 `case` 无关**——
 > oracle `:159` 在 `switch` 之前，`case` 只决定效果体）。
-> 若只补窄口径 43 个，则 45 个「有 `case` 但 Rust 未接」的魔号（`implemented` 29 + `context_required` 余 5 +
-> `no_effect_case` 6 中未接者）**仍不发帧**，真机对拍仍会在这些魔号上出现帧缺失——**这是范围决策点，请 owner 拍**。
+> 若只补窄口径（**内层 `switch` 无该魔号 case 且会发**）= **54 行 / 42 个魔号**，则 **44 行 / 43 个魔号**
+> （内层**有** `case`、Rust 未接者）**仍不发帧**，真机对拍仍会在这些魔号上出现帧缺失。
+> ⇒ **编排侧已裁决：按宽口径做**（卡上 comment `e6d8e835`）。
 
-**宽口径 82 个不同魔号** = 魔表 95 个不同魔号 − 已接 5 个 − 战士 8 个。逐 id 复算见 §7 命令 `C5`。
+**宽口径 80 个不同魔号** = fire 85 − 已接 5；fire 85 = 魔表 95 − (战士 9 ∪ 外层独立 case 8) 的并集 11。逐 id 复算见 §7 命令 `C5`（已订正）。
 
 ---
 
@@ -221,7 +226,7 @@ Rust 已发 5 行 ⇒ **宽缺口 = 95 行 / 82 个不同魔号**。
 
 ### 5.1 ① 只补帧（无条件广播 `RM_SPELL`；效果体仍不建模）
 
-**范围**：宽口径 **95 行 / 82 个魔号**（§3.2），或在 `MagicId <= 80` 内取字面 default + 有 `case` 未接者的并集。
+**范围**：宽口径 **93 行 / 80 个魔号**（§3.2 订正后），或在 `MagicId <= 80` 内取字面 default + 有 `case` 未接者的并集。
 **行为**：在 `handle_spell_cmd` 的 `magicwire::spell_reject` 守卫之后、`takes_default_dir` 附近，
 按 oracle `:151`/`:155`/`:159` 的**同一顺序**插入无条件广播：
 
@@ -340,8 +345,10 @@ sed -n '4997,5001p;5146p;5242p' mir2-rs/bins/game-svr/src/main.rs
 #         5242 if req.magic_id == mir2_world::slave::SKILL_46 {
 
 # C5 -- 独立复算宽缺口（oracle 会发帧 vs Rust 已发）
-python -c "import json; d=json.load(open('mir2-rs/tests/parity/m3/skill-probe/vectors/skills_registry.json',encoding='utf-8')); rows=d['skills']; rust={17,20,30,41,46}; warr={s['magic_id'] for s in rows if s['dospell_class']=='warr_reject'}; cap=[s['magic_id'] for s in rows if s['magic_id'] not in warr]; gap=[i for i in cap if i not in rust]; print('rows',len(rows),'warr',len(warr),'capable',len(cap),'gap_rows',len(gap),'gap_distinct',len(set(gap)))"
-#   期望：rows 108 warr 8 capable 100 gap_rows 95 gap_distinct 82
+python -c "import json; d=json.load(open('mir2-rs/tests/parity/m3/skill-probe/vectors/skills_registry.json',encoding='utf-8')); rows=d['skills']; rust={17,20,30,41,46}; E={12,25,26,27,34,38,43,56}; W={3,4,7,12,25,26,27,34,38}; ids=[s['magic_id'] for s in rows]; fire=[i for i in ids if i not in E and i not in W]; gap=[i for i in fire if i not in rust]; inner=set(s['magic_id'] for s in rows if s.get('dospell_class') in ('implemented','context_required','no_effect_case')) ; print('rows',len(rows),'E',len(E),'W',len(W),'fire_rows',len(fire),'fire_distinct',len(set(fire)),'gap_rows',len(gap),'gap_distinct',len(set(gap)),'narrow_fire_rows',len([i for i in fire if i not in inner]))"
+#   期望：rows 108 E 8 W 9 fire_rows 98 fire_distinct 85 gap_rows 93 gap_distinct 80
+#   注：`E`=外层 switch(MagIdx) 独立 case、`W`=IsWarrSkill 9 值（并集 11）；`inner` 用 registry 三类近似内层有 case 者。
+#   订正前本命令只减 `warr_reject`（registry 桶仅 8 值、且缺 38）⇒ 得 100/95/82（错）。
 
 # C6 -- oracle 侧：8 条独立 case 的行号（攻击路径分派器）
 grep -n "case MagicConst" src/M2Server/Player/PlayObject.Attack.cs
