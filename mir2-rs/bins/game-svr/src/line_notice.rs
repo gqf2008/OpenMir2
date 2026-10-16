@@ -27,7 +27,7 @@
 //!
 //! **建模差异（登记）**：
 //! - `GetLineVariableText` 的 `<$…>` 变量替换**未建模**（返回原串）。oracle 只在
-//!   `sVariable[0] == '$'` 时替换；现网 `Notice/LineNotice.txt` **不含** `<$…>`（实测 8 行）
+//!   `sVariable[0] == '$'` 时替换；现网 `Notice/LineNotice.txt` **不含** `<$…>`（实测 **7 行**/832B，2026-10-17 订正：四份部署副本一致）
 //!   ⇒ 恒等 = oracle 同结果（`must_be_verified_elsewhere`：变量面随 NPC 脚本层）。
 //! - `GetValidStrCap` 的**逗号切分已对齐 oracle**（`HUtil32.GetValidStr3` 的
 //!   `Split(delimiter, 2, RemoveEmptyEntries)` ⇒ 空首段被删），见

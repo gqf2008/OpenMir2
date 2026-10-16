@@ -36,6 +36,12 @@
   **生产活跃函数**内（从任一 `*/bins/*/src` 的 `main` 经名字调用图可达；`#[cfg(test)]` 模块整体剔除）。
   ⇒ **编码器函数存在 / 常量定义 / 名表 / doc 注释都不算**；编码器自身的**未被调用**定义也不算——修掉
   红名单 v2 §4.1「编码器一落地，无论有无生产发射都计 implemented」这一整层假绿。
+  **已知不对称（2026-10-17 登记；判据不放宽）**：与入站「生产派发点」相比，出站的「生产发射点」判据**更弱**——
+  只要求 ident 整词出现在某个生产活跃函数的**行**里，**不要求该行是调用点**。实测后果：证据列（`rust_at`）
+  常落在**编码器函数体**（例：`smframe_ext.rs` 里 `messages::SM_WHISPER,` 那行）而非调用点。**潜在假绿面**：
+  若某编码器被生产函数调用但其返回值被丢弃 / 未下发（`let _ = sm_x(...)`，或返回值未进任何出帧路径），
+  门仍判 **implemented**。⇒ 若要收紧，须把判据改为「ident 出现在**产生出帧的调用点**」——**另开片**；
+  本片只如实登记该不对称，**不修改判据**（保持与既有基线的可比性）。
 「可达」（派发·出站） = 触发该 SM 帧的**任一 `RM_*`** 在 `src/**/*.cs` 里有**生产者用法**（见下）
   ⇒ 可达。`RM_*` 全仓**每一处**出现都只是 `const` 定义或 `case` 标签（即确证无任何生产者）⇒ oracle
   死支 ⇒ 该帧永不发出 ⇒ 不判 RED（豁免 `n/a-unreachable`）。这修掉 SM_41/SM_43/SM_PASSWORDSTATUS
@@ -1081,6 +1087,19 @@ def inbound_dispatch_at(corpus, name, live=None, spans=None):
     return None
 
 
+def _rel_repo_path(path, repo):
+    """证据列用的**仓库相对路径**（如 `mir2-rs/bins/game-svr/src/main.rs`）；无法相对化时退回 basename。
+
+    起因（2026-10-17，判据可审计性）：证据列原只印 basename（`main.rs:1545`），而 `bins/` 下有 **6** 个
+    `main.rs`（db-srv/game-gate/game-svr/login-gate/login-srv/sel-gate）⇒ 复核者按证据列去错的 `main.rs`
+    找不到行、会误判「假绿」。改印仓库相对路径即消歧。
+    """
+    try:
+        return Path(path).resolve().relative_to(Path(repo).resolve()).as_posix()
+    except ValueError:
+        return Path(path).name
+
+
 def build_dispatch_rows(repo: Path, cards: dict):
     oracle = repo / ORACLE_DISPATCH
     corpus = RustCorpus(rust_source_dirs(repo, exclude=DISPATCH_EXCLUDE))
@@ -1097,7 +1116,7 @@ def build_dispatch_rows(repo: Path, cards: dict):
         rows.append(dict(bucket="inbound", key="inbound:" + name, name=name,
                          oracle=f"Message.cs:{line}",
                          rust=("yes" if site else "no"),
-                         rust_at=(f"{Path(site[0]).name}:{site[1]}" if site else "-"),
+                         rust_at=(f"{_rel_repo_path(site[0], repo)}:{site[1]}" if site else "-"),
                          status=dispatch_item_status("inbound", name, bool(site), cards, noop=noop),
                          card=card_for(cards, "inbound:" + name),
                          reach="-",
@@ -1109,7 +1128,7 @@ def build_dispatch_rows(repo: Path, cards: dict):
         reach = outbound_reachability(rm_users, rm_producers)
         rows.append(dict(bucket="outbound", key="outbound:" + sm, name=sm,
                          oracle="(RM→SM)", rust=("yes" if emit else "no"),
-                         rust_at=(f"{Path(emit[0]).name}:{emit[1]}" if emit else "-"),
+                         rust_at=(f"{_rel_repo_path(emit[0], repo)}:{emit[1]}" if emit else "-"),
                          status=dispatch_item_status("outbound", sm, bool(emit), cards, reachable=reach),
                          card=card_for(cards, "outbound:" + sm),
                          reach=("yes" if reach else ("no" if reach is False else "-")),
@@ -1977,8 +1996,10 @@ def cmd_mutate(args):
     #   · buff / 状态效果簇（HP 量条 + 状态位 + 武器破碎 + 照明耐久；随 world-tick-expansion buff 批）
     #     —— SM_OPENHEALTH(1100)/SM_CLOSEHEALTH(1101)/SM_INSTANCEHEALGUAGE(1103)（V2-06）/
     #        SM_CHARSTATUSCHANGED(657)（V2-07）/ SM_BREAKWEAPON(1102)（V2-08）/ SM_LAMPCHANGEDURA(655)（V2-09）。
-    #   · NPC Run / 脚本事件簇（脚本/事件驱动的移动文字与机关显隐；world-tick-expansion NPC Run 批）
-    #     —— SM_MOVEMESSAGE(99)（V2-10）/ SM_HIDEEVENT(805)/SM_SHOWEVENT(804)（V2-11）。
+    #   · NPC Run / 脚本事件簇（脚本/事件驱动的机关显隐；world-tick-expansion NPC Run 批）
+    #     —— SM_HIDEEVENT(805)/SM_SHOWEVENT(804)（V2-11）。
+    #     （SM_MOVEMESSAGE(99)（V2-10）原列本簇；片107 接线滚动公告后已移入 `_wired_now`，见上——
+    #      本注释块曾与集合成员矛盾，2026-10-17 订正为一致。）
     #   · 门与事件系统（门显隐 612/614；随门系统进 MapGrid，见门设计件）—— SM_OPENDOOR_OK(612)/SM_CLOSEDOOR(614)（V2-11）。
     #   · 商人脚本簇（商人/公务员/元宝寄售对话）—— SM_MERCHANTDLGCLOSE(644)/SM_QUERYYBDEAL(23023)/
     #     SM_QUERYYBSELL(23021)/SM_716(716)（V2-13）。
