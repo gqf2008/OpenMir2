@@ -636,6 +636,16 @@ pub struct ActionLocks {
     pub is_can_get_back_item: bool,
 }
 
+/// **接线批 A**：一个会话的 `CM_PASSWORD` 密码态（`StoragePwdState` + `ActionLocks`）。
+///
+/// `process_client_password` **原地改**这两组字段、跨多次 `CM_PASSWORD` 调用累积
+/// （`IsSetStoragePwd`→`IsReConfigPwd`→… 的状态机）。宿主按 `chr_name` 持有本结构。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PwdSession {
+    pub state: StoragePwdState,
+    pub locks: ActionLocks,
+}
+
 /// 一条 `SysMsg` 的语义标签（文案 = `MessageSettings.*`，`String.conf` 无键 ⇒ 未建模）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PwdMsg {

@@ -33,6 +33,7 @@ pub mod pickwire;
 pub mod queryuser;
 pub mod recover;
 pub mod selloff;
+pub mod sessionwire;
 pub mod shop;
 pub mod slave;
 pub mod smframe;

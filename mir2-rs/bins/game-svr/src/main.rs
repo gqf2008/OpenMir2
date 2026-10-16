@@ -1424,6 +1424,7 @@ fn handle_inbound_cmd(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     registry: Option<&mir2_envir::MapRegistry>,
+    pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
     cfg: &GroundCfg,
 ) {
     use game_svr::inbound;
@@ -1604,11 +1605,31 @@ fn handle_inbound_cmd(
             );
         }
         messages::CM_PASSWORD => {
-            // 密码态（`StoragePwdState`）未挂会话态/未落库 ⇒ 只记日志（登记）。
+            // oracle `PlayObject.Message.cs:1397-1399` → `PlayObject.Base.cs:3190-3298`：
+            // `ProcessClientPassword(wParam, Msg)`。`wParam` = 12B 头 `Param`（本骨架 `cmd.param`），
+            // `sData` = 尾 `Msg`（`tail`）。原地改会话密码态；命中 `SendMsg(RM_PASSWORD)` 支时出 `SM_PASSWORD`。
+            let pwd = pwd_sessions.entry(chr_name.to_string()).or_default();
+            let cfg = game_svr::inbound::PasswordLockConfig::default();
+            let out = inbound::process_client_password(
+                &mut pwd.state,
+                &mut pwd.locks,
+                &cfg,
+                cmd.param,
+                tail.unwrap_or(""),
+            );
+            if out.send_password_frame {
+                let body = game_svr::sessionwire::password_frame().body;
+                if let Some(tx) = route_to_gate(gates, gate_idx, socket, "CM_PASSWORD/SM_PASSWORD")
+                {
+                    let _ = tx.send(SimToGate::SendFrame { socket, body });
+                }
+            }
             glog!(
                 "INF",
-                "CM_PASSWORD：ChrName={chr_name} wParam={}（密码态会话字段未接线，登记）",
-                cmd.param
+                "CM_PASSWORD：ChrName={chr_name} wParam={} ⇒ msgs={:?} send_password={}（SysMsg 文案未建模，登记）",
+                cmd.param,
+                out.msgs,
+                out.send_password_frame
             );
         }
         _ => {}
@@ -2284,10 +2305,31 @@ fn handle_bag_cmd(
             .map(|c| c.as_ref().map_or((0, 0), |it| (it.index, it.dura)))
             .collect();
         let light = downlink::my_light(sg.equip.abil.level, &light_pairs, catalog);
+        // **接线批 A**：`PlayObject.RecalcAbilitys`（`PlayObject.cs:2882-2885`）在 `oldlight != Light`
+        // 时 `SendRefMsg(RM_CHANGELIGHT, 0, 0, 0, 0, "")`。旧值取展示表里上一次写入的 `Light`
+        // （进世界/上次重算写入）；缺展示表项 ⇒ 无法比对，跳过并登记（不静默改）。
+        let old_light = displays.get(sg.actor_id).map(|d| d.light);
         if let Some(mut d) = displays.get(sg.actor_id).cloned() {
             d.feature = feature;
             d.light = light;
             displays.set(sg.actor_id, d);
+        }
+        match old_light {
+            Some(old) if old != light => {
+                let body = game_svr::sessionwire::changelight_frame(
+                    sg.actor_id,
+                    light,
+                    game_svr::sessionwire::N_CLIENT_KEY_DEFAULT,
+                )
+                .body;
+                broadcast_ref_msg_with_self(world, online, gates, sg.actor_id, &[body]);
+            }
+            Some(_) => {}
+            None => glog!(
+                "WRN",
+                "换装重算：actor={} 无展示表 ⇒ 无法比对 Light ⇒ 跳过 SM_CHANGELIGHT（登记）",
+                sg.actor_id
+            ),
         }
         broadcast_feature_changed(
             world,
@@ -5685,6 +5727,97 @@ fn drain_action_downlink(
     }
 }
 
+/// **接线批 A**：本 tick 由 `World::switch_map`/`switch_map_space` 记下的切图事件 → TransMap 簇出帧。
+///
+/// oracle 链：`BaseObject.SpaceMove`（`BaseObject.cs:1130-1144`）/`PlayObject.EnterAnotherMap`
+/// （`PlayObject.cs:3772-3778`）在落地后**同步**发 `RM_CLEAROBJECTS` → `RM_CHANGEMAP`
+/// （→ 可选 `RM_SPACEMOVE_SHOW(|2)`）。本宿主把世界侧落地记成
+/// `SessionRegistry::drain_map_changes`，在本 tick 的下行段 drain，由
+/// `game_svr::sessionwire::map_change_frames` 装配 body（逐字节见其单测）。
+///
+/// 路由：`SM_CLEAROBJECTS`/`SM_CHANGEMAP` 是 `SendMsg`（只发自己）；
+/// `SM_SPACEMOVE_SHOW` 是 `SendRefMsg`（±`SendRefMsgRange` 格，含自己）。
+///
+/// **登记（未做项）**：触发本事件的**玩法路径**（地图链接格 `MapRoute` / 传送技能换图支）尚未移植
+/// 到 sim 宿主 ⇒ 真机上 `switch_map` 暂无调用者（parity harness 里有调用，sim 宿主没有）。**登记（未做项）**：
+/// `RM_CHANGEMAP` 观测点随后还有 `RefUserState()`/`SendMapDescription()`/`SendServerConfig()` 三帧（另一族、不在本卡帧集）。
+fn drain_map_change(
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    displays: &downlink::DisplayTable,
+    registry: Option<&mir2_envir::MapRegistry>,
+) {
+    let changes = world.sessions.drain_map_changes();
+    for mut ev in changes {
+        let Some(entry) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
+            glog!(
+                "WRN",
+                "切图下行：actor={} 不在在线登记表 ⇒ 跳过 TransMap 簇（登记）",
+                ev.actor_id
+            );
+            continue;
+        };
+        // 地图文件名（`Envir.MapFileName`）：与进图 51 帧同源，取 `MapRegistry::name_of`。
+        let map_file = registry
+            .and_then(|r| r.name_of(ev.map_id))
+            .unwrap_or("")
+            .as_bytes()
+            .to_vec();
+        // `DayBright()`：新图的 flag + 世界时钟（缺则 0，并记 WRN 不静默）。
+        let day_bright = match registry.and_then(|r| r.flag_of(ev.map_id)) {
+            Some(f) => enter::day_bright(f, Some(enter::game_time_now())).unwrap_or(0),
+            None => {
+                glog!(
+                    "WRN",
+                    "切图下行：map_id={} 无 Envir flag ⇒ DayBright=0（登记）",
+                    ev.map_id
+                );
+                0
+            }
+        };
+        // `SM_SPACEMOVE_SHOW` 的 `Dir/Light`（`Series` 两半字节）+ `CharDesc`（`Feature`/`Status`）：
+        // 取展示表；**未登记的 show 变体跳过并登记**（不编造）。
+        let (dir, light, desc) = match displays.get(ev.actor_id) {
+            Some(d) => (
+                d.dir,
+                d.light,
+                downlink::char_desc(d.feature, d.status).to_vec(),
+            ),
+            None => {
+                if ev.space_move_show.is_some() {
+                    glog!(
+                        "WRN",
+                        "切图下行：actor={} 无展示表 ⇒ 跳过 SM_SPACEMOVE_SHOW（登记）",
+                        ev.actor_id
+                    );
+                    ev.space_move_show = None;
+                }
+                (0, 0, Vec::new())
+            }
+        };
+        let frames =
+            game_svr::sessionwire::map_change_frames(&ev, &map_file, day_bright, dir, light, &desc);
+        for f in frames {
+            match f.route {
+                game_svr::sessionwire::Route::SelfOnly => {
+                    if let Some(tx) =
+                        route_to_gate(gates, entry.gate_idx, entry.socket, "切图下行/自身")
+                    {
+                        let _ = tx.send(SimToGate::SendFrame {
+                            socket: entry.socket,
+                            body: f.body,
+                        });
+                    }
+                }
+                game_svr::sessionwire::Route::Ref => {
+                    broadcast_ref_msg_with_self(world, online, gates, ev.actor_id, &[f.body]);
+                }
+            }
+        }
+    }
+}
+
 /// `MessageSettings.BODYLUCKUNIT`（`MessageSettings.cs:9`）。
 const BODYLUCK_UNIT: f64 = 5000.0;
 
@@ -7215,6 +7348,9 @@ fn sim_loop(
     // S3 后半段（第一格）：同屏 AOI 下行要用的展示表（`ActorId -> Dir/Light/Feature/…`）。
     // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world`**。
     let mut displays = downlink::DisplayTable::new();
+    // **接线批 A**：`CM_PASSWORD` 的会话密码态（`PlayObject.StoragePwdState` + `ActionLocks`）。
+    let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
+        std::collections::HashMap::new();
     // **R0-2/R0-3/R0-4 内容装载红名单**：主线程装载的注册表随 `EnterConfig` 到 sim 线程。
     // 三者的消费点（MiniMap 下发帧 / 制药合成 / 滚动公告）都属 R1 入站红名单、未实现
     // ⇒ 此处只「取用 + 登记」（保留读数，不静默丢字段）。
@@ -7668,6 +7804,7 @@ fn sim_loop(
                             &mut ground_sessions,
                             &gates,
                             registry.as_ref(),
+                            &mut pwd_sessions,
                             &enter_cfg.ground,
                         );
                     }
@@ -8612,6 +8749,9 @@ fn sim_loop(
         // ⇒ `SM_BACKSTEP(9)`/`SM_RUSH(6)`/`SM_RUSHKUNG(7)`/`SM_BUTCH(637)`）。同属「本 tick 动作段」，
         // 先于 AOI 出现帧/战斗下行（oracle 在 `CharPushed`/`DoMotaebo`/`ClientGetButchItem` 内即时发）。
         drain_action_downlink(&rec, &world, &displays, &online, &gates);
+        // **接线批 A**：TransMap 簇（`SM_CLEAROBJECTS(633)`/`SM_CHANGEMAP(634)`/[`SM_SPACEMOVE_SHOW(801)`]）。
+        // oracle 在 `SpaceMove`/`EnterAnotherMap` 内**同步**发；本宿主在世界侧落地后由本段 drain。
+        drain_map_change(&mut world, &online, &gates, &displays, registry.as_ref());
         // **M3⑨-3 帧面残余**：本 tick 的 `World::tick` 已在消息段投递到点自投递消息
         // （`RM_MASTERDIEMUTINY` → `ProcessSlaveMutiny`，`world.rs:565-572`）并落
         // `rec.slave_self_deliveries`；这里补出帧（`RefNameColor`/`RefShowName`）。
@@ -17946,5 +18086,421 @@ mod tests {
         let sg = sessions.get("hero").unwrap();
         assert_eq!(sg.mns_val[3], "hello", "CM_QUERYVAL 尾经派发落 MNSval[3]");
         assert!(sg.goto_npc_label.is_empty(), "末尾清空 GotoNpcLabel");
+    }
+    // ======================= 接线批 A（TransMap 簇 + 会话/门）端到端 =======================
+
+    /// **接线批 A 端到端（TransMap 簇）**：`World::switch_map_space` 成功 ⇒ `SessionRegistry` 记一条
+    /// `MapChange` ⇒ `drain_map_change` 按 oracle 序出
+    /// `SM_CLEAROBJECTS(633)` → `SM_CHANGEMAP(634)`（`SendMsg`，只发自己）→
+    /// `SM_SPACEMOVE_SHOW(801)`（`SendRefMsg`，±`SendRefMsgRange` 格内 `Race==Play && !Ghost`，含自己）。
+    ///
+    /// **观察者集合**：SHOW 只到 hero（自己）+ peer（近邻）；far（远）与 mon（怪物）不收。
+    /// **红检 1**：把 `map_change_frames` 里 CLEAROBJECTS/CHANGEMAP 两条对调 ⇒ 帧序断言必红。
+    /// **红检 3**：把 SHOW 的 `route` 从 `Ref` 改成 `SelfOnly` ⇒ 观察者断言必红。
+    #[test]
+    fn drain_map_change_emits_transmap_cluster_and_ref_observers() {
+        use mir2_protocol::messages;
+        use std::collections::HashMap;
+        // `World::new` 只建 0 号图 ⇒ 手工加 1 号图供换图落地。
+        let mut world = mir2_world::World::new(64, 64);
+        world.maps.push(mir2_world::map::MapGrid::new(64, 64));
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", new_player_entity("hero".to_string(), 5, 5), 0)
+            .expect("hero 进图");
+        // 观察者们在**目标图**（1 号图）上，落点 (7,9) 的 ±12 格内。
+        world.open_session("peer");
+        let peer = world
+            .enter_map("peer", new_player_entity("peer".to_string(), 8, 9), 1)
+            .expect("peer 进图");
+        world.open_session("far");
+        let far = world
+            .enter_map("far", new_player_entity("far".to_string(), 40, 40), 1)
+            .expect("far 进图");
+        // 近处怪物（Race != Play）⇒ 不该收 SHOW。
+        world.add_entity({
+            let mut e = mir2_world::Entity::new(0, "mon", 8, 9);
+            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            e.map_id = 1;
+            e
+        });
+        let mut displays = downlink::DisplayTable::new();
+        for id in [hero, peer, far] {
+            displays.set(
+                id,
+                downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"n".to_vec()),
+            );
+        }
+        let mut online: OnlineRegistry = Vec::new();
+        for (acct, nm, sid, sock, id) in [
+            ("a", "hero", 1, 901, hero),
+            ("b", "peer", 2, 902, peer),
+            ("c", "far", 3, 903, far),
+        ] {
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: acct.into(),
+                    chr_name: nm.into(),
+                    session_id: sid,
+                    gate_idx: 0,
+                    socket: sock,
+                    actor_id: id,
+                },
+            );
+        }
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // SpaceMove 支（`nInt != 1` ⇒ `SM_SPACEMOVE_SHOW(801)`）。
+        world
+            .switch_map_space("hero", 1, 7, 9, false)
+            .expect("换图落地");
+        assert_eq!(
+            world.sessions.map_changes().len(),
+            1,
+            "落地记一条 MapChange"
+        );
+
+        drain_map_change(&mut world, &online, &gates, &displays, None);
+        assert!(
+            world.sessions.map_changes().is_empty(),
+            "drain 后事件清空（不重复出帧）"
+        );
+
+        let mut seq: Vec<(i32, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            seq.push((socket, u16::from_le_bytes([body[4], body[5]])));
+        }
+        // ① hero 自己收 CLEAROBJECTS + CHANGEMAP（`SendMsg`）。
+        assert!(
+            seq.contains(&(901, messages::SM_CLEAROBJECTS)),
+            "hero 收 633"
+        );
+        assert!(seq.contains(&(901, messages::SM_CHANGEMAP)), "hero 收 634");
+        // ② SHOW(801) 到 hero + peer（近邻），不到 far（远）/ mon（非玩家）。
+        assert!(
+            seq.contains(&(901, messages::SM_SPACEMOVE_SHOW)),
+            "hero(自己) 收 801"
+        );
+        assert!(
+            seq.contains(&(902, messages::SM_SPACEMOVE_SHOW)),
+            "peer(近邻) 收 801"
+        );
+        assert!(
+            !seq.iter()
+                .any(|(sk, id)| *sk == 903 && *id == messages::SM_SPACEMOVE_SHOW),
+            "far(40,40) 超出 SendRefMsgRange ⇒ 不收 801"
+        );
+        // ③ CLEAROBJECTS/CHANGEMAP 是 SendMsg ⇒ peer 不收这两条。
+        assert!(
+            !seq.iter().any(|(sk, id)| *sk == 902
+                && (*id == messages::SM_CLEAROBJECTS || *id == messages::SM_CHANGEMAP)),
+            "peer 不收 SendMsg 帧（633/634）"
+        );
+        // ④ 帧序（hero 的 socket 上）：CLEAROBJECTS 必须先于 CHANGEMAP。
+        let hero_ids: Vec<u16> = seq
+            .iter()
+            .filter(|(sk, _)| *sk == 901)
+            .map(|(_, id)| *id)
+            .collect();
+        let pos_clear = hero_ids
+            .iter()
+            .position(|id| *id == messages::SM_CLEAROBJECTS)
+            .unwrap();
+        let pos_map = hero_ids
+            .iter()
+            .position(|id| *id == messages::SM_CHANGEMAP)
+            .unwrap();
+        assert!(
+            pos_clear < pos_map,
+            "oracle 序：CLEAROBJECTS(633) 先于 CHANGEMAP(634)"
+        );
+    }
+
+    /// **接线批 A 端到端（EnterAnotherMap 支）**：无 `space_move_show` ⇒ 只出 2 帧（不出 `SM_SPACEMOVE_SHOW`）。
+    #[test]
+    fn drain_map_change_enter_another_map_has_no_show_frame() {
+        use mir2_protocol::messages;
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        world.maps.push(mir2_world::map::MapGrid::new(64, 64));
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", new_player_entity("hero".to_string(), 5, 5), 0)
+            .expect("进图");
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"n".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        world.switch_map("hero", 1, 7, 9).expect("换图落地");
+        drain_map_change(&mut world, &online, &gates, &displays, None);
+        let mut ids = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            ids.push(u16::from_le_bytes([body[4], body[5]]));
+        }
+        assert_eq!(
+            ids,
+            vec![messages::SM_CLEAROBJECTS, messages::SM_CHANGEMAP],
+            "EnterAnotherMap 支：无 SM_SPACEMOVE_SHOW"
+        );
+    }
+
+    /// **接线批 A 端到端（SM_PASSWORD）**：`CM_PASSWORD` 命中 `ProcessClientPassword` 的重设支
+    /// （`IsSetStoragePwd=true` + 4-7 位密码）⇒ 出 `SM_PASSWORD(5009)`，且状态迁到 `IsReConfigPwd`。
+    ///
+    /// **红检 2**：把 `CM_PASSWORD` 分支改回「只记日志」（不出帧）⇒ 本用例必红。
+    #[test]
+    fn cm_password_emits_sm_password_on_reset_branch() {
+        use mir2_protocol::messages;
+        use std::collections::HashMap;
+        let world = mir2_world::World::new(32, 32);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 1,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        pwd_sessions.insert(
+            "hero".into(),
+            game_svr::inbound::PwdSession {
+                state: game_svr::inbound::StoragePwdState {
+                    is_set_storage_pwd: true,
+                    ..Default::default()
+                },
+                locks: Default::default(),
+            },
+        );
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            can_drop_gold: 1000,
+            drop_item_rage: 3,
+        };
+        let cmd = CommandMessage {
+            recog: 0,
+            ident: messages::CM_PASSWORD,
+            param: 1,
+            tag: 0,
+            series: 0,
+        };
+        handle_inbound_cmd(
+            &cmd,
+            Some("abcd"),
+            "hero",
+            901,
+            &online,
+            &world,
+            &mut sessions,
+            &gates,
+            None,
+            &mut pwd_sessions,
+            &cfg,
+        );
+        let mut ids = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            ids.push(u16::from_le_bytes([body[4], body[5]]));
+        }
+        assert_eq!(
+            ids,
+            vec![messages::SM_PASSWORD],
+            "重设支 ⇒ 只出 SM_PASSWORD(5009)"
+        );
+        assert!(
+            pwd_sessions.get("hero").unwrap().state.is_re_config_pwd,
+            "状态机迁到 IsReConfigPwd"
+        );
+        assert!(
+            pwd_sessions.get("hero").unwrap().state.ms_temp_pwd == "abcd",
+            "临时密码写回会话"
+        );
+    }
+
+    /// **接线批 A**：`CM_PASSWORD` 的 `wParam == 0` 早退支 ⇒ **不出帧**（冻结非空转对照，防过度出帧）。
+    #[test]
+    fn cm_password_wparam_zero_emits_nothing() {
+        use mir2_protocol::messages;
+        use std::collections::HashMap;
+        let world = mir2_world::World::new(32, 32);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 1,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        pwd_sessions.insert(
+            "hero".into(),
+            game_svr::inbound::PwdSession {
+                state: game_svr::inbound::StoragePwdState {
+                    is_set_storage_pwd: true,
+                    ..Default::default()
+                },
+                locks: Default::default(),
+            },
+        );
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            can_drop_gold: 1000,
+            drop_item_rage: 3,
+        };
+        let cmd = CommandMessage {
+            recog: 0,
+            ident: messages::CM_PASSWORD,
+            param: 0,
+            tag: 0,
+            series: 0,
+        };
+        handle_inbound_cmd(
+            &cmd,
+            Some("abcd"),
+            "hero",
+            901,
+            &online,
+            &world,
+            &mut sessions,
+            &gates,
+            None,
+            &mut pwd_sessions,
+            &cfg,
+        );
+        assert!(
+            rx0.try_recv().is_err(),
+            "wParam==0 ⇒ oracle 首行 return ⇒ 零出帧"
+        );
+        assert!(
+            pwd_sessions.get("hero").unwrap().state.is_set_storage_pwd,
+            "早退不改状态"
+        );
+    }
+
+    /// **接线批 A 端到端（SM_CHANGELIGHT）**：卸下一件 `Light>0` 的装备 ⇒ `RecalcAbilitys` 的
+    /// `oldlight != Light` 支 ⇒ `SM_CHANGELIGHT(654)` 广播给 ±`SendRefMsgRange` 格内的玩家（含自己）。
+    ///
+    /// 造：actor 42 在世界上；`UseItems[Dress]` 放一件 `Light=5` 的衣；展示表 `light=5`
+    /// （进世界时的 `GetMyLight`）；卸下后 `my_light` 回落到 0 ⇒ 出帧。
+    /// **红检**：删掉 `handle_bag_cmd` 里的 `changelight_frame` 广播 ⇒ 本用例必红。
+    #[test]
+    fn bag_takeoff_emits_changelight_when_light_drops() {
+        use std::collections::HashMap;
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "布衣".into(),
+                std_mode: 5,
+                light: 5,
+                ..Default::default()
+            },
+        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(42);
+        sg.use_items[0] = Some(game_svr::bag::BagItem {
+            make_index: 60001,
+            index: 1,
+            dura: 10,
+            dura_max: 10,
+            desc: [0u8; 14],
+        });
+        sessions.insert("hero".into(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 42,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut world = mir2_world::World::new(8, 8);
+        world.add_entity(mir2_world::Entity::new(42, "hero", 3, 3));
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            42,
+            downlink::ActorDisplay::new(2, 5, 111, 0, 0, 255, b"hero".to_vec()),
+        );
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEOFFITEM,
+            60001,
+            0,
+            0,
+            Some("布衣"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+            &mut displays,
+            12,
+            false,
+            true,
+        );
+        let mut ids = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            assert_eq!(socket, 901, "回帧发给该用户 socket");
+            ids.push(u16::from_le_bytes([body[4], body[5]]));
+        }
+        assert!(
+            ids.contains(&mir2_protocol::messages::SM_CHANGELIGHT),
+            "卸下 Light=5 装备 ⇒ 出 SM_CHANGELIGHT(654)；实得 idents {ids:?}"
+        );
+        assert_eq!(
+            displays.get(42).unwrap().light,
+            0,
+            "重算后展示表 Light 回落到 0"
+        );
     }
 }
