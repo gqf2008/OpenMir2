@@ -440,7 +440,18 @@ pub fn attack_target(world: &mut World, actor_id: i32) -> bool {
             // oracle `AnimalObject.Attack`：`GetBaseAttackPoewr()`（怪物 = `AttackPowerMode::Base`）
             // + `AttackDir(target, nPower, nDir)`。`World::attack_once` 的怪物路径逐取数同构
             // （`combat::attack_dir` 对非玩家攻方不加 `AttackSuccess`）。
-            world.attack_once(actor_id, target_id);
+            //
+            // **W4 下行接线**：oracle `AnimalObject.Attack`（`AnimalObject.cs:165-170`）在
+            // `AttackDir` 之后 `SendAttackMsg(RM_HIT, …)`；本次结算（`_Attack` 的伤害/命中）
+            // 与玩家 `CM_HIT` 攻击走**同一条** `SM_STRUCK` 下行（受击者 `RM_REFMESSAGE` →
+            // `SendRefMsg(RM_STRUCK)` → 视野内广播）。因此把结算记进 `pending_ai_attacks`
+            // （宿主 `World::tick` 转抄进 `TickRecord::attacks`）⇒ 既有 `drain_combat_downlink`
+            // 的 ① 段无需改动即出「怪打玩家」的 `SM_STRUCK` 帧。
+            if let Some(outcome) = world.attack_once(actor_id, target_id) {
+                world
+                    .pending_ai_attacks
+                    .push((actor_id, target_id, outcome));
+            }
         }
         true
     } else {
@@ -460,6 +471,65 @@ pub fn attack_target(world: &mut World, actor_id: i32) -> bool {
             del_target_creature(world, actor_id);
         }
         false
+    }
+}
+
+/// `AnimalObject.Struck(hiter)`（`AnimalObject.cs:334-360`）——怪物**被命中**时的索敌与受击后果。
+///
+/// oracle 调用点 = `Operate(RM_STRUCK)`（`AnimalObject.cs:118-124`）：
+/// `SetLastHiter(struckObject); Struck(struckObject); BreakHolySeizeMode(); …`。
+/// 本骨架由 [`crate::world::World::attack_once`] 把命中者按入队序压进目标的
+/// [`crate::entity::AnimalState::pending_struck`]（= oracle `SendMsg` 的 `MsgQueue.Enqueue`），
+/// 再由 [`base_object_run_monster`]（= 目标自己的 `base.Run()` 的消息段）出队调本函数
+/// ⇒ `Struck` 的取数落在「怪自己的 `base.Run`」这个 site（与 oracle 同）。
+/// `SetLastHiter`/`BreakHolySeizeMode` 不消费随机数，仍折在 `attack_once`（见该处注释）。
+///
+/// 取数（oracle 逐行，`AnimalObject.cs:334-360`）：
+/// - 仅当 `TargetCret != null && !GetAttackDir(TargetCret, btDir)` 时抽 **1 次 `Random(6)`**
+///   （短路：无目标或已邻接 ⇒ **不抽**）；
+/// - 命中门通过后 `IsProperTarget(hiter)` 为真 ⇒ `SetTargetCreat(hiter)`；
+/// - `if (Animal)` ⇒ 再抽 **1 次 `Random(300)`** 扣 `MeatQuality`（本骨架 `Animal` 恒 `false`，登记）；
+/// - 尾：`AttackTick += 150 - MIN(130, Abil.Level * 4)`（不抽数）。
+///
+/// **前置**：调用方保证 `hiter_id` 在场（oracle `Operate` 的 `struckObject != null` 门在出队处）。
+pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
+    let now = world.clock_ms;
+    // `StruckTick = HUtil32.GetTickCount();`（`AnimalObject.cs:336`）
+    if let Some(e) = world.entities.get_mut(victim_id) {
+        e.ai.struck_tick = now;
+    }
+    let cur_target = world
+        .entities
+        .get(victim_id)
+        .and_then(|e| e.ai.target_creature);
+    // `if (TargetCret == null || GetAttackDir(TargetCret, ref btDir) || M2Share.RandomNumber.Random(6) == 0)`
+    let take = match cur_target {
+        None => true,
+        Some(t) => get_attack_dir(world, victim_id, t).is_some() || world.rng.random_below(6) == 0,
+    };
+    if take {
+        let proper = world
+            .entities
+            .get(victim_id)
+            .zip(world.entities.get(hiter_id))
+            .is_some_and(|(a, b)| is_proper_target(a, b));
+        if proper {
+            set_target_creature(world, victim_id, hiter_id);
+        }
+    }
+    // `if (Animal) { MeatQuality = (ushort)(MeatQuality - Random(300)); if (MeatQuality < 0) MeatQuality = 0; }`
+    if world.entities.get(victim_id).is_some_and(|e| e.ai.animal) {
+        let dec = world.rng.random_below(300);
+        if let Some(e) = world.entities.get_mut(victim_id) {
+            let v = i32::from(e.ai.meat_quality) - dec;
+            e.ai.meat_quality = if v < 0 { 0 } else { v as u16 };
+        }
+    }
+    // `AttackTick = AttackTick + (150 - HUtil32._MIN(130, Abil.Level * 4));`
+    let level = world.entities.get(victim_id).map_or(0, |e| e.level);
+    let add = 150 - (i32::from(level) * 4).min(130);
+    if let Some(e) = world.entities.get_mut(victim_id) {
+        e.ai.attack_tick += i64::from(add);
     }
 }
 
@@ -604,6 +674,19 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
 /// 改坏必红：把 `HealthFillTime` 门（或 `HP > 1` 门）拆掉⇒`base_recovery_*`/
 /// `health_tick_negative_cost_is_clamped` 必红（见 `tests/parity/world/monster-ai-host-20261013`）。
 pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
+    // `BaseObject.Run` 的**消息段**（`BaseObject.Base.cs:26-30`）：先把入队的 `RM_STRUCK` 出队，
+    // 逐个 `Operate(RM_STRUCK) → Struck`（`AnimalObject.cs:118-124`）。本骨架用
+    // [`crate::entity::AnimalState::pending_struck`] 承载队列（入队处 = `World::attack_once`）。
+    let pending: Vec<i32> = match world.entities.get_mut(actor_id) {
+        Some(e) => std::mem::take(&mut e.ai.pending_struck),
+        None => return,
+    };
+    for hiter in pending {
+        // oracle `if (processMsg.ActorId == ActorId && struckObject != null)`：命中者已不在场 ⇒ 跳过。
+        if world.entities.get(hiter).is_some() {
+            animal_struck(world, actor_id, hiter);
+        }
+    }
     let now = world.clock_ms;
     let Some(e) = world.entities.get(actor_id) else {
         return;
@@ -1226,5 +1309,237 @@ mod tests {
             e.visible_actors.iter().any(|v| v.target == 999),
             "其它可见体不受影响"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // W4：怪物 → 玩家攻击判定链（AnimalObject.Struck / MonsterObject.AttackTarget）
+    //     oracle：AnimalObject.cs:334-360、MonsterObject.cs:220-245、BaseObject.Attack.cs:37-64
+    // ------------------------------------------------------------------
+
+    /// 找一个「首抽 `Random(6)` 为 `want_zero`」的种子。
+    fn seed_random6(want_zero: bool) -> i32 {
+        for seed in 0..100_000 {
+            let mut r = RandomNumber::with_seed(seed);
+            if (r.random_below(6) == 0) == want_zero {
+                return seed;
+            }
+        }
+        unreachable!("应能在 10 万种子里找到 Random(6) 门取值");
+    }
+
+    /// W4-A：`AnimalObject.Struck`（`AnimalObject.cs:334-360`）的**索敌支**——
+    /// `TargetCret == null` ⇒ 短路**不抽** `Random(6)`；`IsProperTarget(hiter)` 成立即认领；
+    /// 尾 `AttackTick += 150 - MIN(130, Level*4)`。
+    /// 改坏必红：删掉认领支（或 `base_object_run_monster` 的队列出队）⇒ 第一个断言红。
+    #[test]
+    fn animal_struck_acquires_hitter_without_target_and_bumps_attack_tick() {
+        let mut world = World::new(30, 30);
+        let mid = monster(&mut world, 10, 10);
+        world.entities.get_mut(mid).unwrap().level = 1;
+        let pid = player(&mut world, 11, 10);
+        world.rng = RandomNumber::with_seed(1234);
+        let mut probe = RandomNumber::with_seed(1234);
+        let probe_next = probe.random();
+        animal_struck(&mut world, mid, pid);
+        let e = world.entities.get(mid).unwrap();
+        assert_eq!(
+            e.ai.target_creature,
+            Some(pid),
+            "无目标 ⇒ 认领命中者（Struck 索敌支）"
+        );
+        assert_eq!(e.ai.attack_tick, 146, "AttackTick += 150 - min(130, 1*4)");
+        assert_eq!(
+            world.rng.random(),
+            probe_next,
+            "TargetCret==null ⇒ 不得抽 Random(6)"
+        );
+    }
+
+    /// W4-B：`TargetCret != null` 且**邻接** ⇒ `GetAttackDir` 真 ⇒ 短路**不抽** `Random(6)`。
+    #[test]
+    fn animal_struck_adjacent_target_takes_without_drawing() {
+        let mut world = World::new(30, 30);
+        let mid = monster(&mut world, 10, 10);
+        let old = player(&mut world, 11, 10); // 邻接
+        let hitter = player(&mut world, 12, 10);
+        set_target_creature(&mut world, mid, old);
+        world.rng = RandomNumber::with_seed(7);
+        let mut probe = RandomNumber::with_seed(7);
+        let probe_next = probe.random();
+        animal_struck(&mut world, mid, hitter);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            Some(hitter)
+        );
+        assert_eq!(world.rng.random(), probe_next, "邻接支不得抽 Random(6)");
+    }
+
+    /// W4-C：`TargetCret != null` 且**不邻接** ⇒ 恰好抽 **1 次** `Random(6)`：
+    /// `== 0` 认领命中者、`!= 0` 保持旧目标。取数次序/次数须与 oracle 逐次一致。
+    /// 改坏必红：把 `get_attack_dir(...).is_some() || ...` 短路改反（无条件抽/不抽）⇒ 次数断言红。
+    #[test]
+    fn animal_struck_draws_random6_only_when_target_present_and_far() {
+        // Random(6) == 0 ⇒ take=true ⇒ 目标换成命中者，恰好抽 1 次。
+        let seed = seed_random6(true);
+        let mut world = World::new(40, 40);
+        let mid = monster(&mut world, 10, 10);
+        let far = player(&mut world, 20, 20); // 非邻接
+        let hitter = player(&mut world, 11, 10);
+        set_target_creature(&mut world, mid, far);
+        world.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        assert_eq!(probe.random_below(6), 0);
+        let probe_next = probe.random();
+        animal_struck(&mut world, mid, hitter);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            Some(hitter),
+            "Random(6)==0 ⇒ 认领命中者"
+        );
+        assert_eq!(
+            world.rng.random(),
+            probe_next,
+            "非邻接支恰好抽 1 次 Random(6)"
+        );
+
+        // Random(6) != 0 ⇒ take=false ⇒ 保持旧目标，仍恰好抽 1 次。
+        let seed = seed_random6(false);
+        let mut world = World::new(40, 40);
+        let mid = monster(&mut world, 10, 10);
+        let far = player(&mut world, 20, 20);
+        let hitter = player(&mut world, 11, 10);
+        set_target_creature(&mut world, mid, far);
+        world.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        assert_ne!(probe.random_below(6), 0);
+        let probe_next = probe.random();
+        animal_struck(&mut world, mid, hitter);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            Some(far),
+            "Random(6)!=0 ⇒ 保持旧目标"
+        );
+        assert_eq!(
+            world.rng.random(),
+            probe_next,
+            "非邻接支恰好抽 1 次 Random(6)"
+        );
+    }
+
+    /// W4-D：`IsProperTarget(hiter)` 门（`AnimalObject.cs:344-347`）——已死命中者不得被认领。
+    /// 改坏必红：删掉 `is_proper_target` 门 ⇒ 断言红。
+    #[test]
+    fn animal_struck_rejects_improper_hitter() {
+        let mut world = World::new(30, 30);
+        let mid = monster(&mut world, 10, 10);
+        let dead = player(&mut world, 11, 10);
+        world.entities.get_mut(dead).unwrap().death = true;
+        world.rng = RandomNumber::with_seed(3);
+        let mut probe = RandomNumber::with_seed(3);
+        let probe_next = probe.random();
+        animal_struck(&mut world, mid, dead);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            None,
+            "已死命中者不得被认领"
+        );
+        assert_eq!(world.rng.random(), probe_next, "TargetCret==null 支不抽数");
+    }
+
+    /// W4-E：`RM_STRUCK` 队列（`AnimalState::pending_struck`）在怪物自己的 `base.Run()`
+    /// （[`base_object_run_monster`]）里按**入队序**出队；已消失的命中者跳过。
+    /// 改坏必红：删掉出队循环 ⇒ 第一个断言红。
+    #[test]
+    fn base_object_run_monster_drains_struck_queue_in_order() {
+        let mut world = World::new(30, 30);
+        let mid = monster(&mut world, 10, 10);
+        let gone = player(&mut world, 12, 10);
+        let live = player(&mut world, 11, 10);
+        world.entities.remove(gone);
+        world.entities.get_mut(mid).unwrap().ai.pending_struck = vec![gone, live];
+        base_object_run_monster(&mut world, mid);
+        let e = world.entities.get(mid).unwrap();
+        assert!(e.ai.pending_struck.is_empty(), "队列应被出队清空");
+        assert_eq!(
+            e.ai.target_creature,
+            Some(live),
+            "已消失的命中者跳过，活的命中者被认领"
+        );
+    }
+
+    /// W4-F：`MonsterObject.AttackTarget`（`MonsterObject.cs:220-245`）——邻接且到点
+    /// （`now - AttackTick > NextHitTime`）才对目标 `_Attack`；结算落进 `pending_ai_attacks`
+    /// （宿主转抄 `TickRecord::attacks` ⇒ `drain_combat_downlink` ① 出 `SM_STRUCK`）。
+    /// 改坏必红：去攻击间隔门 ⇒ 首个断言（未到点不得出记录）红；去记录支 ⇒ 末条断言红。
+    #[test]
+    fn monster_attack_target_gates_on_interval_and_records_attack() {
+        let mut world = World::new(30, 30);
+        let mid = monster(&mut world, 10, 10);
+        {
+            let m = world.entities.get_mut(mid).unwrap();
+            m.dc = 10 | (10 << 8); // lo=10,hi=10 ⇒ power 10
+            m.level = 1;
+            m.ai.attack_tick = 0;
+        }
+        let pid = player(&mut world, 11, 10);
+        set_target_creature(&mut world, mid, pid);
+        world.clock_ms = 1000;
+        assert!(attack_target(&mut world, mid), "邻接 ⇒ 返回 true");
+        assert!(
+            world.pending_ai_attacks.is_empty(),
+            "到点门未过（1000-0=1000 <= 2000）⇒ 不得出攻击记录"
+        );
+        world.clock_ms = 2200;
+        assert!(attack_target(&mut world, mid), "邻接 ⇒ 返回 true");
+        let m = world.entities.get(mid).unwrap();
+        assert_eq!(m.ai.dir, DIR_RIGHT, "先 TurnTo(GetAttackDir)");
+        assert_eq!(m.ai.attack_tick, 2200, "到点后刷新 AttackTick");
+        let rec = world.pending_ai_attacks.clone();
+        assert_eq!(rec.len(), 1, "恰 1 条 AI 攻击记录");
+        assert_eq!(
+            (rec[0].0, rec[0].1),
+            (mid, pid),
+            "记录 (攻方=怪, 受击方=玩家)"
+        );
+        assert!(rec[0].2.hit, "怪对玩家的攻击应命中");
+        assert!(rec[0].2.damage > 0, "护甲 0 ⇒ 伤害应 > 0（下游才出帧）");
+    }
+
+    /// W4-G（端到端）：玩家打怪 ⇒ 怪被 `RM_STRUCK` ⇒ 怪在后续 AI 里**反击玩家**，
+    /// 且反击结算落进 `TickRecord::attacks`（= 宿主「怪打玩家」帧的数据源）。固定种子两次一致。
+    /// 改坏必红：删掉 `attack_target` 的攻击支（或 `pending_struck` 的出队）⇒ 找不到记录。
+    #[test]
+    fn player_hit_triggers_monster_retaliation_via_tick_and_records_frame() {
+        fn run() -> Option<(i32, i32)> {
+            let mut world = World::new(40, 40);
+            let mid = monster(&mut world, 10, 10);
+            {
+                let m = world.entities.get_mut(mid).unwrap();
+                m.dc = 10 | (10 << 8);
+                m.level = 1;
+            }
+            let pid = player(&mut world, 11, 10);
+            world.rng = RandomNumber::with_seed(2024);
+            world.enable_monster_ai();
+            // 玩家攻击怪（= CM_HIT 的结算）⇒ 怪被命中 ⇒ 入队 `RM_STRUCK`。
+            let o = world.attack_once(pid, mid).expect("玩家攻怪应结算");
+            assert!(o.hit, "玩家应命中怪");
+            let mut found = None;
+            for _ in 0..40 {
+                let rec = world.tick();
+                for (a, t, _) in &rec.attacks {
+                    if *a == mid && *t == pid {
+                        found = Some((*a, *t));
+                    }
+                }
+                if found.is_some() {
+                    break;
+                }
+            }
+            found
+        }
+        let a = run();
+        assert!(a.is_some(), "怪应在被命中后的某 tick 反击玩家");
+        assert_eq!(a, run(), "固定种子两次运行必须一致（确定性）");
     }
 }

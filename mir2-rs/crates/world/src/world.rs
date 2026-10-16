@@ -226,6 +226,14 @@ pub struct World {
     pub last_tick: TickRecord,
     /// AOI 分组的复用缓冲（避免每 tick 分配；P99 回归即由那次分配量出）
     by_map_scratch: Vec<Vec<i32>>,
+    /// **W4 怪物 AI 攻击支**：本 tick 由 [`crate::monai::attack_target`]（怪物 AI）
+    /// 发起的攻击结算。`World::tick` 在 AI 段之后转抄进 [`TickRecord::attacks`]，
+    /// 使既有的 `drain_combat_downlink` ①（`SM_STRUCK` 受击广播）**无需宿主改动**
+    /// 即覆盖「怪打玩家」（oracle `AnimalObject.Attack` → `_Attack` 走同一条
+    /// `SendStruckDelayMsg(RM_REFMESSAGE) → SendRefMsg(RM_STRUCK)` 路径）。
+    ///
+    /// 只在 `ai_enabled` 时被写入 ⇒ 关闭时恒空、既有 golden 一字不改。
+    pub(crate) pending_ai_attacks: Vec<(i32, i32, AttackOutcome)>,
 }
 
 impl World {
@@ -280,6 +288,7 @@ impl World {
             item_number: ItemNumberCounter::default(),
             last_tick: TickRecord::default(),
             by_map_scratch: Vec::new(),
+            pending_ai_attacks: Vec::new(),
         };
         // **M3②③ 隔离口径**：`MIR2_RNG_ISOLATE_ATTACK` 开启时按 `MIR2_RNG_SEED` 派生专用流
         // （缺省未设 ⇒ `None`，`isolate_attack` 保持 `false`，一字不改）。读 env 的 fail-closed
@@ -627,6 +636,10 @@ impl World {
         if self.ai_enabled {
             crate::monai::monster_ai_tick(self);
         }
+        // **W4**：把 AI（怪物）本 tick 的攻击结算转抄进 `record.attacks`——与玩家 `CM_HIT`
+        // 命令的攻击**同一份**记录，宿主 `drain_combat_downlink` ① 据它出 `SM_STRUCK`。
+        // 关闭 AI 时 `pending_ai_attacks` 恒空 ⇒ 既有 golden 逐字节不变。
+        record.attacks.append(&mut self.pending_ai_attacks);
 
         // **M3⑤-实现 2 第②片**：商人 tick（oracle `MerchantProcessor` 的 200ms 线程单线程等价物）。
         // 单线程串行：在怪物 AI 之后、AOI 刷新之前（与 oracle 同 tick 内的显式定序；oracle 里是两个
@@ -1201,6 +1214,12 @@ impl World {
             // 本次 `_Attack` 期间的 `StruckDamage` 仍看到旧的 `LastHiter`，与 C# 同序。
             if target.race > crate::entity::ACTOR_RACE_PLAY {
                 e.set_last_hiter(actor_id, now);
+                // `targetObject.SendMsg(targetObject, RM_STRUCK, …)`（`BaseObject.Attack.cs:61-64`）
+                // 的**入队等价物**：`SendMsg` 只在 `!Ghost` 时入队（`BaseObject.Message.cs:152-183`）。
+                // 出队处理在目标的 `base.Run`（[`crate::monai::base_object_run_monster`]）。
+                if !e.ghost {
+                    e.ai.pending_struck.push(actor_id);
+                }
             }
         }
         Some(outcome)

@@ -156,6 +156,29 @@ pub struct AnimalState {
     /// —— `CheckRoyalty`（`MonsterObject.cs:363-397`）的 10s 检查门。
     /// 归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）；由 [`AnimalState::seed_from_spawn`] 置为生成时刻。
     pub check_royalty_tick: i64,
+    /// **`RM_STRUCK` 消息队列的等价物**（W4 怪物 AI 攻击支）。
+    ///
+    /// oracle `_Attack`（`BaseObject.Attack.cs:61-64`）对被命中的 `Race > ActorRace.Play` 目标
+    /// `targetObject.SendMsg(targetObject, RM_STRUCK, …)` ⇒ **入队**（`BaseObject.Message.cs:98-183`
+    /// 的 `MsgQueue.Enqueue`，非同步）。目标在自己的 `Run()` 里由
+    /// `while (GetMessage(...)) Operate(...)`（`BaseObject.Base.cs:26-30`）出队，`Operate(RM_STRUCK)`
+    /// （`AnimalObject.cs:118-124`）→ `SetLastHiter` + `Struck`。
+    ///
+    /// 本骨架无 `MsgQueue`：命中者按**入队序**压入本 `Vec`，由
+    /// [`crate::monai::base_object_run_monster`]（= 怪物自己的 `base.Run()`）在开头出队处理，
+    /// 使 `Struck` 的取数落在「怪自己的 `base.Run`」这个 site（与 oracle 同），
+    /// 而不是攻击方的结算处。
+    pub pending_struck: Vec<i32>,
+    /// `BaseObject.StruckTick`（`AnimalObject.cs:336` 的 `StruckTick = GetTickCount()`）。
+    pub struck_tick: i64,
+    /// `BaseObject.Animal`（`BaseObject.cs:161`，构造缺省 `false`；`BaseObject.cs:2602` 的
+    /// `case 54` 置 `true`）——`Struck` 的肉质扣减门（`AnimalObject.cs:348-355`）。
+    /// 本骨架**不建模** `Initialize` 的 `Animal` 置位路径（需 `BaseObject.cs:2555+` 的怪种分类装载）
+    /// ⇒ 恒 `false`（登记，见模块头/rationale）。
+    pub animal: bool,
+    /// `AnimalObject.MeatQuality`（`BaseObject.cs:2576` 的 `Random(3500)+3000` 初始化，
+    /// `Struck` 里按 `Random(300)` 扣减）。本骨架只落字段与扣减，初始化路径未建模（登记）。
+    pub meat_quality: u16,
 }
 
 impl AnimalState {
@@ -225,6 +248,10 @@ impl Default for AnimalState {
             run_away_start: 0,
             run_away_time: 0,
             check_royalty_tick: 0,
+            pending_struck: Vec::new(),
+            struck_tick: 0,
+            animal: false,
+            meat_quality: 0,
         }
     }
 }
