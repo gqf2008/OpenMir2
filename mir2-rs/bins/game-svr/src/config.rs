@@ -67,6 +67,12 @@ pub struct GateConfig {
     pub hear_msg_f_color: u8,
     /// `[Setup] HearMsgBColor`（oracle `GameSvrConf.cs:1529` 缺省 `0xFF`）——同上，背景色。现网 `=255`。
     pub hear_msg_b_color: u8,
+    /// `[Setup] WhisperMsgFColor`（oracle `ServerConf.cs:323`，`GameSvrConf.cs:1530` 缺省 `0xFC`）——
+    /// 私聊(`/`)下行 `SM_WHISPER` 的前景色（`PlayObject.Chat.cs:57` 的 `btWhisperMsgFColor`）。现网 `=252`。
+    pub whisper_msg_f_color: u8,
+    /// `[Setup] WhisperMsgBColor`（oracle `ServerConf.cs:324`，`GameSvrConf.cs:1531` 缺省 `0xFF`）——
+    /// 同上，背景色。现网 `=255`。
+    pub whisper_msg_b_color: u8,
     /// `[Setup] BlueMsgFColor`（oracle `GameSvrConf.cs:1538` 缺省 `0xFF`；现网 `=251`）——`SysMsg(...,
     /// Blue, ...)` 的前景色（`PlayObject.Sale.cs` 寄售提示）。落在 `SM_SYSMESSAGE` 的 `Param` 低字节。
     pub blue_msg_f_color: u8,
@@ -239,6 +245,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut disable_deal: Option<bool> = None;
     let mut hear_msg_f_color: Option<u8> = None;
     let mut hear_msg_b_color: Option<u8> = None;
+    let mut whisper_msg_f_color: Option<u8> = None;
+    let mut whisper_msg_b_color: Option<u8> = None;
     let mut blue_msg_f_color: Option<u8> = None;
     let mut blue_msg_b_color: Option<u8> = None;
     let mut group_members_max: Option<u8> = None;
@@ -420,6 +428,18 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                     hear_msg_b_color = Some(
                         v.parse()
                             .with_context(|| format!("HearMsgBColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "WHISPERMSGFCOLOR" => {
+                    whisper_msg_f_color = Some(
+                        v.parse()
+                            .with_context(|| format!("WhisperMsgFColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "WHISPERMSGBCOLOR" => {
+                    whisper_msg_b_color = Some(
+                        v.parse()
+                            .with_context(|| format!("WhisperMsgBColor 不是合法字节：{v:?}"))?,
                     );
                 }
                 // `ServerConf.cs:225/337/338` 的组队配置（M3⑦-实现 2）。
@@ -651,6 +671,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`GameSvrConf.cs:1528-1529`）：`HearMsgFColor=0x00` / `HearMsgBColor=0xFF`。
         hear_msg_f_color: hear_msg_f_color.unwrap_or(0x00),
         hear_msg_b_color: hear_msg_b_color.unwrap_or(0xFF),
+        // oracle 缺省值（`GameSvrConf.cs:1530-1531`）：`WhisperMsgFColor=0xFC` / `WhisperMsgBColor=0xFF`。
+        whisper_msg_f_color: whisper_msg_f_color.unwrap_or(0xFC),
+        whisper_msg_b_color: whisper_msg_b_color.unwrap_or(0xFF),
         // oracle 缺省值（`GameSvrConf.cs:1402/1544/1545`）：`[Setup]` 里没写不算错。
         group_members_max: group_members_max.unwrap_or(10),
         group_msg_f_color: group_msg_f_color.unwrap_or(0xC4),

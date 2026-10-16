@@ -123,6 +123,16 @@ pub struct TickRecord {
     pub rushes: Vec<crate::action::RushEvent>,
     /// **出站接线片 W2**：本 tick 的 `RM_BUTCH` 族（`SM_BUTCH(637)`）——每次 `ClientGetButchItem` 一条。
     pub butches: Vec<crate::action::ButchEvent>,
+    /// **orphan 编码器接线首批**：本 tick 各观察者「离开视野」的对象
+    /// （`(观察者 id, 离开者 id)`，保序 = AOI 移除顺序）。
+    ///
+    /// 对应 oracle `PlayObject.Run()` 的 `VisibleFlag.Hidden` 支（`src/M2Server/Player/PlayObject.cs:3214-3222`）：
+    /// 观察者 `SendMsg(baseObject, RM_DISAPPEAR, 0, 0, 0, 0)` 走的是 **6 参**重载
+    /// `SendMsg(IActor baseObject, int wIdent, …)`（`BaseObject.Message.cs:98`）——它把
+    /// `SendMessage.ActorId` 置为 **`baseObject.ActorId` = 离开者**的 ActorId（**不是** `this`）；
+    /// 帧经**观察者自己**的消息队列发出 ⇒ 收件人 = 观察者，`Recog` = 离开者。
+    /// 由 [`crate::aoi::search_view_range`] 的返回值填充；帧面由宿主（`bins/game-svr`）出。
+    pub hides: Vec<(i32, i32)>,
 }
 
 /// **L1 TransMap 触发**：`World::step_with_route` 的结果（供宿主排帧序）。
@@ -539,6 +549,7 @@ impl World {
             pushes: Vec::new(),
             rushes: Vec::new(),
             butches: Vec::new(),
+            hides: Vec::new(),
         };
 
         // 命令 FIFO
@@ -718,7 +729,10 @@ impl World {
                 } else {
                     let (map, entities, clock) =
                         (&mut self.maps, &mut self.entities, self.clock_ms);
-                    search_view_range(&mut map[map_id], entities, *id, clock);
+                    for target in search_view_range(&mut map[map_id], entities, *id, clock) {
+                        // 观察者 `*id` 收「`target` 离开视野」⇒ `SM_DISAPPEAR(target)`（保序）。
+                        record.hides.push((*id, target));
+                    }
                 }
                 record.aoi_order.push(*id);
             }

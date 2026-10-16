@@ -13,11 +13,14 @@
 //! - `PlayObject.Message.cs:1705-1707`：`RM_HEAR` ⇒ `MakeMessage(SM_HEAR, ActorId, MakeWord(FColor,
 //!   BColor), 0, 1)` + 尾 `EncodeString(processMsg.Msg)`。
 //!
-//! **本切片未接（登记，见 `docs/M2-聊天-普通说话-20261012.md`）**：私聊 `/`、喊话/组队/行会 `!`、
+//! **本切片未接（登记，见 `docs/M2-聊天-普通说话-20261012.md`）**：喊话/组队/行会 `!`、
 //! `@` 命令系统、GM 红字、`SayMsgTime/SayMsgCount/DisableSayMsg` 频率限制、`FilterSendMsg`、
 //! `DenySayMsgList`、地图 `boNOCHAT`、`SayMsgMaxLen` 截断、`@@加速处理` 特判、怪物 `WantRefMsg` 支；
 //! `SendRefMsgTick` 的 500ms 收件人缓存也**未接** ⇒ 本切片恒走 oracle 的**冷路径**（`<= 12` 格）；
 //! oracle 缓存命中时改用 `< 11` 格，两者只在**恰好 11/12 格**的近邻上收件人集合不同（连发才命中缓存）。
+//!
+//! **已接（orphan 编码器接线首批）**：私聊 `/`（[`parse_whisper`]/[`whisper_text`]）
+//! ⇒ `SM_WHISPER(103)`，发射点见 `main.rs::handle_whisper`。
 
 use mir2_world::{World, ACTOR_RACE_PLAY};
 
@@ -34,6 +37,37 @@ pub const SEND_REF_MSG_RANGE: i32 = 12;
 #[must_use]
 pub fn is_plain_say(line: &str) -> bool {
     !line.is_empty() && !line.starts_with('@') && !line.starts_with('/') && !line.starts_with('!')
+}
+
+/// `PlayObject.Chat.cs:157-166` 的 `/` 私聊支：
+///
+/// ```text
+/// case '/':
+///     sText = sData[1..];
+///     sText = HUtil32.GetValidStr3(sText, ref sParam1, ' ');
+///     if (!FilterSendMsg) Whisper(sParam1, sText);
+///     return;
+/// ```
+///
+/// 返回 `Some((目标名, 正文))`；首字符非 `/` ⇒ `None`。切分语义走 [`mir2_shared::hutil32::get_valid_str3`]
+/// （与 oracle `.NET Split(div, 2, RemoveEmptyEntries)` 逐例对齐，连续分隔符不留进返回值）。
+///
+/// `FilterSendMsg` 支（只发自己 `RM_HEAR`）未建模 ⇒ 登记（属 V1-3 已登记片，非本批）。
+#[must_use]
+pub fn parse_whisper(line: &str) -> Option<(String, String)> {
+    let rest = line.strip_prefix('/')?;
+    Some(mir2_shared::hutil32::get_valid_str3(rest, &[' ']))
+}
+
+/// `PlayObject.Chat.cs:57` 的私聊文本 `ChrName + "=> " + saystr`（**含** `=>` 后的一个空格；
+/// GM 支 `:45` 同形）。GBK 字节拼接，本层不转 UTF-8。
+#[must_use]
+pub fn whisper_text(chr_name: &[u8], say: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(chr_name.len() + 3 + say.len());
+    v.extend_from_slice(chr_name);
+    v.extend_from_slice(b"=> ");
+    v.extend_from_slice(say);
+    v
 }
 
 /// `BaseObject.Base.cs:475-479` 的 `sChrName + ':' + sMsg`（GBK 字节拼接，不在本层做编码）。
@@ -102,6 +136,34 @@ mod tests {
     fn hear_text_is_name_colon_say() {
         assert_eq!(hear_text(b"aaa", b"hi"), b"aaa:hi".to_vec());
         assert_eq!(hear_text(b"", b"x"), b":x".to_vec());
+    }
+
+    /// `parse_whisper` 逐例对齐 oracle `GetValidStr3(sText, ref sParam1, ' ')`：
+    /// `/目标名 正文` ⇒ `(目标名, 正文)`；`/目标名`（无正文）⇒ `(目标名, "")`；
+    /// 连续空格不留进正文；非 `/` 开头 ⇒ `None`。
+    #[test]
+    fn parse_whisper_splits_name_and_text() {
+        assert_eq!(
+            parse_whisper("/bob hello world"),
+            Some(("bob".to_string(), "hello world".to_string()))
+        );
+        assert_eq!(
+            parse_whisper("/bob"),
+            Some(("bob".to_string(), String::new()))
+        );
+        // 连续分隔符：oracle `.NET Split(div, 2, RemoveEmptyEntries)` ⇒ 正文不带前导空格。
+        assert_eq!(
+            parse_whisper("/bob  hi"),
+            Some(("bob".to_string(), "hi".to_string()))
+        );
+        assert_eq!(parse_whisper("hello"), None);
+        assert_eq!(parse_whisper(""), None);
+    }
+
+    #[test]
+    fn whisper_text_is_name_arrow_space_say() {
+        assert_eq!(whisper_text(b"bob", b"hi"), b"bob=> hi".to_vec());
+        assert_eq!(whisper_text(b"", b""), b"=> ".to_vec());
     }
 
     /// 收件人 = ±range 格内的 Play 且非 Ghost，**含自己**；远者与怪物不收。

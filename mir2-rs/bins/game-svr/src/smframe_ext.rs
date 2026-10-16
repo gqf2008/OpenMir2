@@ -138,6 +138,7 @@ pub fn sm_charstatuschanged(actor_id: i32, status: i32, hit_speed: u16) -> Vec<u
 
 /// `SM_CLOSEDOOR`(614)（`PlayObject.Message.cs:1754` 的 `RM_DOORCLOSE` 支）：
 /// `SendDefMessage(SM_CLOSEDOOR, 0, nParam1, nParam2, 0)` ⇒ header-only，`Recog` 恒 0。
+/// **orphan 登记（接线首批，registered_not_wired）**：本帧与 sm_opendoor_ok 在 oracle 属**结构性不可达**—— CM_OPENDOOR 守卫写反（PlayObject.Operate.cs:363-376）⇒ 门永不开 ⇒ SendDoorStatus 永不出帧（见 tests/parity/m3/design-door-and-mapevent-20261016.md §2.2）；按 AGENTS.md 「不许硬接不可达的帧」⇒ 登记不接线。
 #[must_use]
 pub fn sm_closedoor(n_param1: i32, n_param2: i32) -> Vec<u8> {
     let header = command_header(
@@ -167,6 +168,7 @@ pub fn sm_closehealth(actor_id: i32) -> Vec<u8> {
 
 /// `SM_HIDEEVENT`(805)（`PlayObject.Message.cs:1993` 的 `RM_HIDEEVENT` 支）：
 /// `SendDefMessage(SM_HIDEEVENT, nParam1, wParam, nParam2, nParam3)` ⇒ header-only（无尾）。
+/// **orphan 登记（接线首批，registered_not_wired）**：本帧与 sm_showevent 在 oracle 只由 MapEvent 系统（SystemShare.EventMgr + EventProcessor 20ms）在可见变化时发（PlayObject.cs:3278/3284）；本仓 crates/world 未建模 MapEvent（仅 CellType::MapEvent 枚举占位）⇒ 无生产发射点，登记不接线（见 tests/parity/m3/design-door-and-mapevent-20261016.md §0）。
 #[must_use]
 pub fn sm_hideevent(n_param1: i32, w_param: i32, n_param2: i32, n_param3: i32) -> Vec<u8> {
     let header = command_header(

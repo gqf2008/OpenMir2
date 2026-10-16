@@ -13,7 +13,7 @@
 //! 与 C# 的差异（登记在报告里）：C# 的小退会**存档后再回选人界面**，本骨架只做世界侧
 //! 的"离开 + 可再进"，存档/回选人的状态由 M1 持有。
 
-use crate::entity::Entity;
+use crate::entity::{Entity, ACTOR_RACE_PLAY};
 use crate::map::{CellType, MapGrid};
 use crate::world::World;
 
@@ -78,6 +78,9 @@ pub struct SessionRegistry {
     sessions: Vec<Session>,
     /// **接线批 A**：本 tick 内成功的切图事件（`World::switch_map` 记，宿主 drain）。保序。
     map_changes: Vec<MapChange>,
+    /// **orphan 接线第二批**：掉线/小退/顶号时「能看到离开者」的观察者事件
+    /// `(观察者 id, 离开者 id)`（oracle `BaseObject.DisappearA` ⇒ `SendRefMsg(RM_DISAPPEAR)` 广播）。保序。
+    departs: Vec<(i32, i32)>,
 }
 
 impl SessionRegistry {
@@ -85,7 +88,18 @@ impl SessionRegistry {
         SessionRegistry {
             sessions: Vec::new(),
             map_changes: Vec::new(),
+            departs: Vec::new(),
         }
+    }
+
+    /// **orphan 接线第二批**：取走本轮的「离世广播」事件（保序，取走即清）。
+    pub fn drain_departs(&mut self) -> Vec<(i32, i32)> {
+        std::mem::take(&mut self.departs)
+    }
+
+    /// **orphan 接线第二批**：只读查看待 drain 的离世广播（诊断/用例断言用；不消费）。
+    pub fn departs(&self) -> &[(i32, i32)] {
+        &self.departs
     }
 
     pub fn get(&self, chr_name: &str) -> Option<&Session> {
@@ -275,6 +289,14 @@ impl World {
         self.leave_world_inner(chr_name, true)
     }
 
+    /// **orphan 接线第二批**：取走本轮的「离世广播」事件（`(观察者, 离开者)`，保序，取走即清）。
+    ///
+    /// 供宿主把 `SM_DISAPPEAR(30)` 按 `[GateIdx, Socket]` 路由回**观察者自己**
+    /// （oracle `BaseObject.DisappearA` ⇒ `SendRefMsg(RM_DISAPPEAR)` 广播，`BaseObject.cs:1519-1524`）。
+    pub fn drain_departs(&mut self) -> Vec<(i32, i32)> {
+        self.sessions.drain_departs()
+    }
+
     fn leave_world_inner(&mut self, chr_name: &str, soft: bool) -> Result<(), SessionError> {
         let Some(sess) = self.sessions.get(chr_name) else {
             return Err(SessionError::NoSession);
@@ -284,6 +306,32 @@ impl World {
         }
         let actor_id = sess.actor_id.ok_or(SessionError::NotInWorld)?;
         let map_id = sess.map_id;
+        // **orphan 接线第二批**（oracle `BaseObject.DisappearA`，`BaseObject.cs:1519-1524`）：
+        // 掉线/小退/顶号 ⇒ `PlayObject.MakeGhost`（`BaseObject.Base.cs:484-497`，玩家 `CanReAlive=false`
+        // ⇒ `Ghost=true`）⇒ `DisappearA()` ⇒ `SendRefMsg(RM_DISAPPEAR, 0,0,0,0,"")`（`:1519-1524`）
+        // ⇒ `SendRefMsg`（`BaseObject.Message.cs:385-482`）把 `RM_DISAPPEAR` **广播**给同图
+        // ±`SendRefMsgRange`(=12) 格内 `Race==Play` 且 `!Ghost` 的可见玩家。
+        //
+        // 本骨架的收件人集合 = 「`visible_actors` 里含 `actor_id` 的 Play 实体」（谁当前看得见它；
+        // 与 oracle 的 ±12 扫描集在 ViewRange≤12 时一致，差别只在观察者视野已失效的边界）。
+        // `ObMode || FixedHideMode` 的离开者 oracle 只发自己（`:389-392`）⇒ 无广播。
+        // **必须在 `entities.remove` 之前采集**，否则实体已消失、反查不到观察者。
+        let self_only = self
+            .entities
+            .get(actor_id)
+            .is_some_and(|e| e.ob_mode || e.fixed_hide_mode);
+        if !self_only {
+            let observers: Vec<i32> = self
+                .entities
+                .iter()
+                .filter(|e| e.id != actor_id && e.race == ACTOR_RACE_PLAY && !e.ghost)
+                .filter(|e| e.visible_actors.iter().any(|v| v.target == actor_id))
+                .map(|e| e.id)
+                .collect();
+            for o in observers {
+                self.sessions.departs.push((o, actor_id));
+            }
+        }
         self.remove_from_map(actor_id, map_id);
         self.entities.remove(actor_id);
         let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");

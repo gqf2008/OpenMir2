@@ -1423,6 +1423,13 @@ pub fn sm_skeleton(actor_id: i32, x: u16, y: u16, dir: u8, char_desc: &[u8]) -> 
 ///
 /// 发帧点：`BaseObject.Base.cs:357`（复活）/`CastleDoor.cs:114`/`WallStructure.cs:39` 的
 /// `SendRefMsg(RM_ALIVE, Dir, CurrX, CurrY, 0, "")`。
+///
+/// **orphan 登记（接线首批，`deferred` / registered_not_wired）**：本帧**无生产发射点**。
+/// 注意口径——`crates/world` **已有**复活判定的纯谓词 `monster_due_for_revive`
+///（`mongen.rs`，钉 `Death && CanReAlive && Invisible && MonGen!=null &&
+/// (now-ReAliveTick) > GetMonstersZenTime`），故缺的**不是** `CanReAlive`/`ReAliveTick` 本身，
+/// 而是**复活状态机与生产消费者**：无 `ReAliveEx` 的落地动作、无 `RM_ALIVE` 的生产消费
+///（`CastleDoor`/`WallStructure` 的门/墙重生同理未建模）⇒ 登记为 `deferred`，不硬接无发射点的帧。
 #[must_use]
 pub fn sm_alive(actor_id: i32, x: u16, y: u16, dir: u8, char_desc: &[u8]) -> Vec<u8> {
     let header = command_header(actor_id, messages::SM_ALIVE, x, y, u16::from(dir));

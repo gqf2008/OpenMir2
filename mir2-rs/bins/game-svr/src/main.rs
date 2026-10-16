@@ -53,6 +53,7 @@ use game_svr::movewire;
 use game_svr::party as partywire;
 use game_svr::queryuser;
 use game_svr::smframe;
+use game_svr::smframe_ext;
 use mir2_protocol::frame::ServerMessage;
 use mir2_protocol::messages::grobal2;
 use mir2_world::magic;
@@ -410,6 +411,8 @@ async fn main() -> Result<()> {
         red_b: cfg.red_msg_b_color,
         hear_f: cfg.hear_msg_f_color,
         hear_b: cfg.hear_msg_b_color,
+        whisper_f: cfg.whisper_msg_f_color,
+        whisper_b: cfg.whisper_msg_b_color,
     };
     // 物品模板表（帧 50/41 的 `UseItems[Dress/Weapon].StdItem.Shape` 输入）：oracle 在 `GameApp.Initialize`
     // 直连 MySQL 读 `stditems`（`MySqlDB.LoadItemsDB`，不经 DBSvr）；加载失败 ⇒ 空表
@@ -979,6 +982,12 @@ fn handle_say(
     let Some(line) = tail else {
         return;
     };
+    // **orphan 编码器接线首批**：`/` 私聊（oracle `PlayObject.Chat.cs:157-166` 的 `case '/'`）
+    // ⇒ `SM_WHISPER(103)`（见 [`handle_whisper`]）。首字符 `/` 时 `is_plain_say` 亦为 false。
+    if let Some((who, text)) = chat::parse_whisper(line) {
+        handle_whisper(online, world, gates, speaker, *colors, &who, &text);
+        return;
+    }
     if !chat::is_plain_say(line) {
         glog!(
             "DBG",
@@ -1011,6 +1020,67 @@ fn handle_say(
         speaker.actor_id,
         delivered,
         line
+    );
+}
+
+/// **orphan 编码器接线首批**：`/目标名 正文` 私聊 ⇒ `SM_WHISPER(103)`
+/// （oracle `PlayObject.Whisper`，`src/M2Server/Player/PlayObject.Chat.cs:15-78`）。
+///
+/// oracle 逐条（非 GM 支 `:57`，本宿主无 `Permission` ⇒ 恒走此支）：
+/// - 目标 = `WorldEngine.GetPlayObject(whostr)`（按 `ChrName`）；找不到 ⇒ `SysMsg(...UserNotOnLine)`
+///   （本宿主无跨服 MQTT，登记不猜）；
+/// - 目标 `!BoReadyRun` ⇒ `SysMsg(...CanotSendmsg)`；本宿主以「在线且已进世界」近似；
+/// - `HearWhisper`/`IsBlockWhisper`/`OffLineLeaveWord`/`WhisperHuman` 面未建模 ⇒ 登记（见模块头）；
+/// - 发帧：`PlayObject.SendMsg(PlayObject, RM_WHISPER, 0, fcolor, bcolor, 0, ChrName + "=> " + saystr)`
+///   ⇒ 6 参 `SendMsg(IActor baseObject=…, …)`（`BaseObject.Message.cs:98-158`）把 `ActorId` 置为
+///   **收件人自己**的 `ActorId`；`PlayObject.Message.cs:1709` 转
+///   `MakeMessage(SM_WHISPER, ActorId, MakeWord(fcolor,bcolor), 0, 1)` + 尾 `EncodeString(Msg)`
+///   ⇒ **只发收件人**（`SelfOnly`），`Recog` = 收件人 ActorId、`Param` = 颜色词、`Series = 1`、尾 = GBK 文本。
+///
+/// 红检：把 [`chat::parse_whisper`] 的名字/正文切反，或把收件人改成说话者（`Recog` 用 sender）
+/// ⇒ 进程级私聊判据必红。
+fn handle_whisper(
+    online: &OnlineRegistry,
+    world: &mir2_world::World,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    speaker: &OnlineEntry,
+    colors: MsgColors,
+    who: &str,
+    text: &str,
+) {
+    // `GetPlayObject(whostr)`：按 `ChrName` 找在线目标（同名唯一）。
+    let Some(target) = online.iter().find(|e| e.chr_name == who) else {
+        glog!(
+            "DBG",
+            "私聊：目标 {who} 不在线 ⇒ 丢弃（oracle `SysMsg(...UserNotOnLine)` 未建模，登记）"
+        );
+        return;
+    };
+    // 近似 `BoReadyRun`：目标必须已在世界（`WorldStage::InWorld`）。
+    let ready = world
+        .session(&target.chr_name)
+        .is_some_and(|s| s.stage == mir2_world::WorldStage::InWorld);
+    if !ready {
+        glog!(
+            "DBG",
+            "私聊：目标 {who} 未进世界 ⇒ 丢弃（oracle `SysMsg(...CanotSendmsg)` 未建模，登记）"
+        );
+        return;
+    }
+    let msg = chat::whisper_text(&gbk_encode(&speaker.chr_name), &gbk_encode(text));
+    let body = smframe_ext::sm_whisper(target.actor_id, colors.whisper_f, colors.whisper_b, &msg);
+    let Some(tx) = route_to_gate(gates, target.gate_idx, target.socket, "私聊") else {
+        return;
+    };
+    let _ = tx.send(SimToGate::SendFrame {
+        socket: target.socket,
+        body,
+    });
+    glog!(
+        "INF",
+        "私聊 ChrName:{} → {} tail={text:?}",
+        speaker.chr_name,
+        target.chr_name
     );
 }
 
@@ -5658,6 +5728,118 @@ fn world_aoi_diag(
     }
 }
 
+/// **orphan 编码器接线首批**：本 tick 的 AOI **消失帧**（oracle `PlayObject.Run()` 的
+/// `VisibleFlag.Hidden` 支，`src/M2Server/Player/PlayObject.cs:3214-3222`）。
+///
+/// 世界侧 [`mir2_world::aoi::search_view_range`] 在移除 `VisibleFlag::Hidden` 条目时把
+/// `(观察者, 离开者)` 记进 `TickRecord::hides`（`crates/world` 只管事件、不出帧）；本函数按
+/// `SM_DISAPPEAR(30)`（[`downlink::disappear_frame`]）逐条路由给**观察者自己**
+/// （oracle 6 参 `SendMsg(IActor baseObject, …)`，`BaseObject.Message.cs:98` ⇒
+/// `SendMessage.ActorId = baseObject.ActorId` = **离开者**；帧经**观察者自己**的消息队列发出 ⇒
+/// 收件人 = 观察者，`Recog` = 离开者 id）。
+///
+/// **顺序（真读 oracle 后订正：实为同序）**：oracle `PlayObject.Run()` 用单个
+/// `while (VisibleActors[n18])` 循环按**列表下标**处理——`Hidden` ⇒ 发 `RM_DISAPPEAR` 并 `RemoveAt`；
+/// `Show` ⇒ 发 `RM_TURN`/`RM_DEATH`（`PlayObject.cs:3207-3252`）。但 `UpdateVisibleGay`
+/// （`BaseObject.ViewRange.cs:12-37`）只对**本轮新见**的对象 `VisibleActors.Add(...)` **追加到表尾**，
+/// 旧条目原地保留（`Invisible`/`Hidden` 恒占**较小下标**）⇒ 不变式「所有 `Hidden` 下标 < 所有 `Show`
+/// 下标」⇒ oracle 出帧次序**必为「先整批消失、后整批出现」**。本宿主在 [`drain_run_downlinks`] 里把
+/// [`drain_aoi_disappear`] 整批排在 [`drain_aoi_downlink`] 之前，与 oracle **同序**（消失帧序 = 下标
+/// 升序 = `hides` 保序；出现帧序 = 追加序 = `drain_aoi_downlink` 遍历序）。⇒ **不是**顺序差异
+/// （原「整批前置 ⇒ 可能与 oracle 不同序」的登记**作废/订正**）。
+///
+/// 去程守卫：观察者不在线（`online` 无登记）⇒ 跳过并记 WRN（不猜线）。离开者是否 `FixedHideMode`/
+/// `Ghost` 已在世界侧 `search_view_range` 过滤，此处不再查实体（实体可能已被移除）。
+fn drain_aoi_disappear(
+    rec: &mir2_world::TickRecord,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) -> usize {
+    let mut sent = 0usize;
+    for (observer_id, target_id) in &rec.hides {
+        let Some(observer) = online.iter().find(|e| e.actor_id == *observer_id) else {
+            glog!(
+                "WRN",
+                "消失帧：观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)"
+            );
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, observer.gate_idx, observer.socket, "消失帧") else {
+            continue;
+        };
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: observer.socket,
+            body: downlink::disappear_frame(*target_id),
+        });
+        sent += 1;
+    }
+    sent
+}
+
+/// **orphan 接线第二批**：掉线/小退/顶号的**离世广播**帧
+/// （oracle `BaseObject.DisappearA`，`src/M2Server/Actor/BaseObject.cs:1519-1524`）。
+///
+/// oracle 链：`PlayObject.MakeGhost`（掉线/小退/顶号，`PlayObject.Message.cs:367-398`）⇒
+/// `BaseObject.MakeGhost`（`BaseObject.Base.cs:484-497`，玩家 `CanReAlive=false` ⇒ `Ghost=true`）⇒
+/// `DisappearA()` ⇒ `SendRefMsg(RM_DISAPPEAR, 0, 0, 0, 0, "")`（`BaseObject.cs:1521-1523`）⇒
+/// `SendRefMsg`（`BaseObject.Message.cs:385-482`）把 `RM_DISAPPEAR` **广播**给同图 ±12 格内
+/// `Race==Play` 且 `!Ghost` 的可见玩家；收件人（观察者）的 `RM_DISAPPEAR` 支
+/// （`PlayObject.Message.cs:1651-1654`）`MakeMessage(SM_DISAPPEAR, processMsg.ActorId, …)`
+/// ⇒ `Recog` = 离开者。即：**观察者收 `SM_DISAPPEAR(离开者)`**（与 [`drain_aoi_disappear`] 同帧面，
+/// 差别在触发时机：这里不依赖观察者当轮 `SearchViewRange`）。
+///
+/// 世界侧收件人集合 = 「`visible_actors` 里含离开者」的 Play 实体，由
+/// [`mir2_world::World::drain_departs`] 取走（`(观察者, 离开者)`，保序）；本函数按观察者的
+/// `[GateIdx, Socket]` 逐条路由回**观察者自己**。离世者自身不在集合里（实体已从世界移除）。
+fn drain_depart_frames(
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) -> usize {
+    let mut sent = 0usize;
+    for (observer_id, target_id) in world.drain_departs() {
+        let Some(observer) = online.iter().find(|e| e.actor_id == observer_id) else {
+            glog!(
+                "WRN",
+                "离世广播：观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)"
+            );
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, observer.gate_idx, observer.socket, "离世广播")
+        else {
+            continue;
+        };
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: observer.socket,
+            body: downlink::disappear_frame(target_id),
+        });
+        sent += 1;
+    }
+    sent
+}
+
+/// **orphan 接线第二批（验证者一号 must_fix#2）**：掉线/小退/顶号**离世广播下行**的**生产入口**
+/// ——`sim_loop` 在 `world.tick()` **之前**调一次（oracle 离开者 `RunNotice`/`MakeGhost` 当轮即发
+/// `RM_DISAPPEAR`，早于下一轮观察者的 `SearchViewRange`）。
+///
+/// 单独成函数（而不是在 `sim_loop` 里**直接**调 [`drain_depart_frames`]）的理由与
+/// [`drain_run_downlinks`]／`enable_production_monster_ai`（`mongen.rs` 模块头）同源：给
+/// 「宿主真的发了离世广播」一条**可判据 + 可改坏**的接缝，供
+/// `disconnect_broadcast_reachable_through_depart_downlink` 在**生产入口级**钉住。
+///
+/// 红检（**实测**）：删掉本函数体里的 `sent += drain_depart_frames(world, online, gates);`
+/// 那一整行 ⇒ `sent` 恒为 0（本函数仍编译）⇒ 该用例收不到 `SM_DISAPPEAR` ⇒ 必红。
+fn drain_depart_downlink(
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) -> usize {
+    let mut sent = 0usize;
+    // 生产发射点：离世广播（oracle `BaseObject.DisappearA` ⇒ `SendRefMsg(RM_DISAPPEAR)`）。
+    sent += drain_depart_frames(world, online, gates);
+    sent
+}
+
 /// **S3 后半段（第一格）**：把世界 tick 的 AOI 结果（观察者实体 `VisibleActors` 里
 /// `VisibleFlag::Show` 的对象）翻成 `SM_TURN` + `SM_FEATURECHANGED` 回帧，
 /// 按该观察者的 `[GateIdx, Socket]` 路由回**它自己那条**网关线。
@@ -6464,6 +6646,11 @@ fn drain_run_downlinks(
         range,
         client_layout,
     );
+    // **orphan 编码器接线首批**：本 tick 的 AOI 消失帧（`SM_DISAPPEAR(30)`）——与下面
+    // [`drain_aoi_downlink`] 的出现帧同属 oracle `PlayObject.Run()` 里 `VisibleActors` 的那趟循环。
+    // oracle 必「先整批消失、后整批出现」（新见对象 `VisibleActors.Add` 追加到表尾 ⇒ `Hidden` 下标恒
+    // < `Show` 下标，见 [`drain_aoi_disappear`] 的顺序订正）⇒ 本宿主先发消失帧与 oracle **同序**。
+    let _disappeared = drain_aoi_disappear(rec, online, gates);
     let aoi_frames = drain_aoi_downlink(world, displays, online, gates);
     drain_stamina(
         sessions,
@@ -6757,6 +6944,8 @@ struct MsgColors {
     red_b: u8,
     hear_f: u8,
     hear_b: u8,
+    whisper_f: u8,
+    whisper_b: u8,
 }
 
 /// 账号级顶号的**即时部分**（oracle `TCPNetChannel.KickUser`，`TCPNetChannel.cs:226-284`）：
@@ -8836,6 +9025,14 @@ fn sim_loop(
             &mut ground_sessions,
             registry.as_ref(),
         );
+        // **orphan 接线第二批**：掉线/小退/顶号的**离世广播**（oracle `BaseObject.DisappearA`
+        // `BaseObject.cs:1519-1524` ⇒ `SendRefMsg(RM_DISAPPEAR)`，由 `MakeGhost` 调用）。
+        // 世界侧 `disconnect`/`soft_close` 已在本轮（事件循环的断线处置 + `drain_kicks` +
+        // `drain_soft_close`）把「能看到离开者」的观察者记进 `world::drain_departs`；此处只按
+        // `[GateIdx, Socket]` 把 `SM_DISAPPEAR(30)` 路由回**观察者自己**（`Recog` = 离开者）。
+        // 位置：在 `world.tick()` 之前（oracle 在离开者 `RunNotice`/`MakeGhost` 当轮即发，早于
+        // 下一轮观察者的 `SearchViewRange`）。
+        let _departed = drain_depart_downlink(&mut world, &online, &gates);
         // **M3④-实现 B 第 ③ 片**：MonGen regen 门 + 刷怪（单线程串行版的 `ProcessMonsters`，
         // `WorldServer.MonGen.cs:192-253`）。`dir`/`cool_eye`/构造抽已随生成结果写进
         // `Entity.ai`（卡 C 第 ② 片）；**怪物帧面**（`SM_TURN`/`SM_FEATURECHANGED`）仍属后续分片。
@@ -10843,6 +11040,437 @@ mod tests {
         );
     }
 
+    /// **orphan 编码器接线首批**：`SM_DISAPPEAR(30)` 的生产发射点
+    /// （oracle `PlayObject.Run()` 的 `VisibleFlag.Hidden` 支，`PlayObject.cs:3214-3222`）。
+    ///
+    /// 口子：观察者 `a` 与 `b` 互相可见；把 `b` 挪到视野外（Chebyshev > 12）⇒ 下一 tick `a` 的 AOI
+    /// 刷新把 `b` 以 `Hidden` 移除（世界侧 [`mir2_world::aoi::search_view_range`] 返回它、
+    /// `TickRecord::hides` 记 `(a, b)`）⇒ [`drain_aoi_disappear`] 给 `a` 发 `SM_DISAPPEAR(30)`
+    /// （`Recog = b`、`Param/Tag/Series = 0`、**无尾**、只发观察者 `a` 自己）。
+    ///
+    /// 红检（**实测口径**，见下条 `aoi_disappear_reachable_through_drain_run_downlinks`）：
+    /// 本用例**直接调** [`drain_aoi_disappear`]，故 `drain_run_downlinks` 里的生产调用**删掉也不红**
+    /// （原「去掉 `drain_run_downlinks` 里的调用 ⇒ 本用必红」的注释**不成立，已订正**）。
+    /// 本用例真正的牙 = **世界侧**：删 `crates/world/src/world.rs` 的 `record.hides.push(...)`
+    /// ⇒ `rec2.hides` 为空 ⇒ 首个 `hides.contains(&(a,b))` 断言必红。
+    /// 生产调用点的牙由下条的 `drain_run_downlinks` 级用例负责（删那行 ⇒ 那条必红）。
+    #[test]
+    fn aoi_disappear_frame_sent_when_target_leaves_view() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(200, 200);
+        world.open_session("a");
+        let a = world
+            .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
+            .expect("a 进图");
+        world.open_session("b");
+        let b = world
+            .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
+            .expect("b 进图");
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "a".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: a,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "b".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: b,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // tick 1：互相进入视野 ⇒ 无消失事件、不发消失帧。
+        let rec1 = world.tick();
+        assert!(
+            rec1.hides.is_empty(),
+            "首 tick 互相进入视野 ⇒ 无消失事件：{:?}",
+            rec1.hides
+        );
+        let _ = drain_aoi_disappear(&rec1, &online, &gates);
+        assert!(rx0.try_recv().is_err(), "首 tick 不应有消失帧");
+
+        // 让 `b` 走远出 `a` 的视野（世界侧同步移动格子登记；Chebyshev 20 > 12）。
+        assert!(world.try_step_now(b, 1, 0, 20), "`b` 应能向东走 20 格");
+        let rec2 = world.tick();
+        assert!(
+            rec2.hides.contains(&(a, b)),
+            "`b` 离开 `a` 视野 ⇒ hides 记 (a,b)：{:?}",
+            rec2.hides
+        );
+        drain_aoi_disappear(&rec2, &online, &gates);
+
+        // 只发观察者：socket 901 收 `SM_DISAPPEAR(30)`，`Recog = b`，全 0 头 + 无尾。
+        let mut to_a: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            if socket == 901 {
+                to_a.push(body);
+            }
+        }
+        assert_eq!(to_a.len(), 1, "观察者 a 恰收 1 条消失帧");
+        let cm = CommandMessage::from_bytes(&to_a[0]).expect("12B");
+        assert_eq!(
+            cm.ident,
+            mir2_protocol::messages::SM_DISAPPEAR,
+            "ident = 30"
+        );
+        assert_eq!(cm.recog, b, "Recog = 离开者 b");
+        assert_eq!((cm.param, cm.tag, cm.series), (0, 0, 0), "头其余字段全 0");
+        assert_eq!(to_a[0].len(), 12, "SM_DISAPPEAR 无尾");
+    }
+
+    /// **orphan 编码器接线首批**：`SM_DISAPPEAR` 的**世界侧**守卫——`Ghost` 目标离开视野时
+    /// **不发**消失帧（oracle `PlayObject.cs:3214` 的 `!FixedHideMode && !Ghost`），但仍从
+    /// `VisibleActors` 移除。
+    ///
+    /// 红检：把 `aoi.rs` 的 `filter(|t| ... !e.fixed_hide_mode && !e.ghost)` 去掉（或改成恒真）
+    /// ⇒ 本用必红。
+    #[test]
+    fn aoi_disappear_skips_ghost_targets() {
+        let mut world = mir2_world::World::new(200, 200);
+        world.open_session("a");
+        let a = world
+            .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
+            .expect("a 进图");
+        world.open_session("b");
+        let b = world
+            .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
+            .expect("b 进图");
+        let _ = world.tick(); // tick1：`b` 非 Ghost ⇒ `a` 看得见它（只入可见集，无消失事件）。
+        world.entities.get_mut(b).unwrap().ghost = true;
+        // tick2：`b` 变 Ghost ⇒ AOI 过滤器（`!other.ghost`）不再看见它 ⇒ 从 `a` 的可见集移除；
+        // 消失帧守卫（`!Ghost`）应把它从 `hides` 里滤掉（**无守卫时这条 hide 会出现**，即红检点）。
+        let rec = world.tick();
+        assert!(
+            !rec.hides.contains(&(a, b)),
+            "Ghost 目标不得进 hides：{:?}",
+            rec.hides
+        );
+        // 但确实从可见集里移除了。
+        assert!(
+            world
+                .entities
+                .get(a)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .all(|v| v.target != b),
+            "Ghost 目标仍应从 VisibleActors 移除"
+        );
+    }
+
+    /// **orphan 编码器接线首批（验证者一号 must_fix#2）**：**单方向**离开用例——只有 `a` 观察 `b`
+    /// 离开，断言路由**不会发错人**：离开者 `b` 的 socket 收 **0** 条 `SM_DISAPPEAR`，只有观察者 `a` 收。
+    ///
+    /// 口子：把 `b` 的 `view_range` 收窄到 1 ⇒ 距 2 格的 `a` 在 `b` 视野外 ⇒ `b` 的可见集**从不含**
+    /// `a`（非对称）；而 `a`（`view_range=12`）看得见 `b`。把 `b` 挪远 ⇒ 仅 `a` 的 AOI 产出
+    /// `Hidden(b)` ⇒ `rec.hides == [(a, b)]`（**单方向**）。若实现把「观察者/离开者」互换
+    /// （按 `target_id` 查 socket，或把帧发给离开者）⇒ `b` 的 socket 会收到帧 ⇒ `to_b` 非空 ⇒ 必红。
+    ///
+    /// 红检：把 [`drain_aoi_disappear`] 里 `observer.socket` 换成按 `target_id` 反查的 socket，
+    /// 或把 `&rec.hides` 的元组解构成 `(target, observer)` ⇒ `to_a` 空 / `to_b` 非空 ⇒ 必红。
+    #[test]
+    fn aoi_disappear_routes_only_to_observer_socket() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(200, 200);
+        world.open_session("a");
+        let a = world
+            .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
+            .expect("a 进图");
+        world.open_session("b");
+        let b = world
+            .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
+            .expect("b 进图");
+        // `b` 视野收窄到 1 ⇒ 看不见 2 格外的 `a`（制造单方向：只有 `a` 观察 `b`）。
+        world.entities.get_mut(b).unwrap().view_range = 1;
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "a", 1, 0, 901, a));
+        online_set(&mut online, entry("ub", "b", 2, 0, 902, b));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let rec1 = world.tick(); // `a` 看见 `b`；`b` 看不见 `a`。
+        assert!(rec1.hides.is_empty(), "首 tick 无离开：{:?}", rec1.hides);
+        assert!(
+            world
+                .entities
+                .get(b)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .all(|v| v.target != a),
+            "`b` view_range=1 ⇒ 看不见 `a`（单方向前提）"
+        );
+
+        assert!(world.try_step_now(b, 1, 0, 20), "`b` 应能向东走 20 格");
+        let rec2 = world.tick();
+        assert_eq!(
+            rec2.hides,
+            vec![(a, b)],
+            "仅 `a` 观察 `b` 离开（单方向）：{:?}",
+            rec2.hides
+        );
+        drain_aoi_disappear(&rec2, &online, &gates);
+
+        let mut to_a: Vec<Vec<u8>> = Vec::new();
+        let mut to_b: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            if socket == 901 {
+                to_a.push(body);
+            } else if socket == 902 {
+                to_b.push(body);
+            }
+        }
+        assert_eq!(to_a.len(), 1, "观察者 `a` 恰收 1 条消失帧");
+        let cm = CommandMessage::from_bytes(&to_a[0]).expect("12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_DISAPPEAR);
+        assert_eq!(cm.recog, b, "`Recog` = 离开者 `b`");
+        assert!(
+            to_b.is_empty(),
+            "离开者 `b` 的 socket 收 0 条（路由不得发错人）：{to_b:?}"
+        );
+    }
+
+    /// **orphan 编码器接线首批（验证者二号 must_fix#1，真牙）**：走**生产路径** [`drain_run_downlinks`]
+    /// （生产 sim 循环级入口），断言观察者真收到 `SM_DISAPPEAR`。
+    ///
+    /// 口子：构造一个 `TickRecord`，其 `hides == [(a, b)]`（等价于世界侧产出的消失事件），交给
+    /// `drain_run_downlinks` ⇒ 其内部的**生产调用点**触发 [`drain_aoi_disappear`] ⇒ socket 901 收
+    /// `SM_DISAPPEAR(b)`（`Recog = b`、`Ident = 30`）。
+    ///
+    /// 红检（**实测**）：删掉 `drain_run_downlinks` 里的
+    /// `let _disappeared = drain_aoi_disappear(rec, online, gates);` **那一整行** ⇒ 本用例收不到帧
+    /// ⇒ 必红。（原「去掉该行 ⇒ 上条 `aoi_disappear_frame_sent_when_target_leaves_view` 必红」
+    /// 的注释**不成立**——上条直接调 `drain_aoi_disappear`，与生产调用点无关。）
+    #[test]
+    fn aoi_disappear_reachable_through_drain_run_downlinks() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(200, 200);
+        world.open_session("a");
+        let a = world
+            .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
+            .expect("a 进图");
+        // `hides` 里的离开者 id：消失帧只编码 id，无需真实体（b 已被移出世界）。
+        let b = 4242;
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "a", 1, 0, 901, a));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut rec = mir2_world::TickRecord::default();
+        rec.hides.push((a, b));
+
+        let displays = downlink::DisplayTable::new();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let _ = drain_run_downlinks(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            12,
+            0,
+            0,
+            false,
+        );
+
+        let mut to_a: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            if socket == 901 {
+                to_a.push(body);
+            }
+        }
+        assert_eq!(
+            to_a.len(),
+            1,
+            "生产路径 `drain_run_downlinks` 应发 1 条 `SM_DISAPPEAR`（删生产调用 ⇒ 必红）"
+        );
+        let cm = CommandMessage::from_bytes(&to_a[0]).expect("12B");
+        assert_eq!(
+            cm.ident,
+            mir2_protocol::messages::SM_DISAPPEAR,
+            "Ident = 30"
+        );
+        assert_eq!(cm.recog, b, "`Recog` = 离开者 id");
+    }
+
+    /// **orphan 接线第二批（验证者一号 must_fix#1）**：`SM_DISAPPEAR(30)` 的**第二个 oracle 发点**——
+    /// `BaseObject.DisappearA`（`BaseObject.cs:1519-1524`）⇒ `SendRefMsg(RM_DISAPPEAR)` 广播，由
+    /// `MakeGhost` 在掉线/小退/顶号时调用（`PlayObject.Message.cs:367-398`）。本仓等价路径 =
+    /// `world.disconnect`/`world.soft_close`。
+    ///
+    /// 口子：`a` 与 `b` 互相可见；`b` **掉线** ⇒ 世界侧 `leave_world_inner` 采「能看到 `b`」的观察者
+    /// `(a, b)` 进 `drain_departs` ⇒ [`drain_depart_frames`] 给观察者 `a` 发 `SM_DISAPPEAR(b)`
+    /// （`Recog = b`）；离开者 `b` 自身收 **0** 条。修复前该路径**零发帧**（红线 V2-01
+    /// 「掉线残留幽灵精灵」未消——观察者的 AOI 只删条目、不告知客户端）。
+    ///
+    /// 红检：删 `session.rs` 里 `leave_world_inner` 的观察者采集段（`self.sessions.departs.push(...)`）
+    /// ⇒ `world.drain_departs()` 为空 ⇒ `sent == 0` 且 `to_a` 空 ⇒ 必红。
+    #[test]
+    fn disconnect_broadcasts_sm_disappear_to_observers() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(200, 200);
+        world.open_session("a");
+        let a = world
+            .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
+            .expect("a 进图");
+        world.open_session("b");
+        let b = world
+            .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
+            .expect("b 进图");
+        let _ = world.tick(); // `a` 看见 `b`（`b` 进 `a` 的可见集）。
+        assert!(
+            world
+                .entities
+                .get(a)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == b),
+            "前提：`a` 看得见 `b`"
+        );
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "a", 1, 0, 901, a));
+        online_set(&mut online, entry("ub", "b", 2, 0, 902, b));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        world.disconnect("b").expect("`b` 在世界上 ⇒ 离世成功");
+        let sent = drain_depart_frames(&mut world, &online, &gates);
+        assert_eq!(sent, 1, "恰观察者 `a` 收 1 条离世广播");
+
+        let mut to_a: Vec<Vec<u8>> = Vec::new();
+        let mut to_b: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            if socket == 901 {
+                to_a.push(body);
+            } else if socket == 902 {
+                to_b.push(body);
+            }
+        }
+        assert_eq!(to_a.len(), 1, "观察者 `a` 收 `SM_DISAPPEAR(b)`");
+        let cm = CommandMessage::from_bytes(&to_a[0]).expect("12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_DISAPPEAR);
+        assert_eq!(cm.recog, b, "`Recog` = 离开者 `b`");
+        assert!(to_b.is_empty(), "离开者 `b` 自身收 0 条：{to_b:?}");
+    }
+
+    /// **orphan 接线第二批（验证者一号 must_fix#2，真牙）**：走**生产入口**
+    /// [`drain_depart_downlink`]（`sim_loop` 在 `world.tick()` 之前调用的那**一个**函数）的第
+    /// 二发点用例——断言**观察者**在目标离世后真收到 `SM_DISAPPEAR`，而**非观察者**（同图远端、
+    /// 看不见离开者）与离开者自身都收不到。口径对齐
+    /// `aoi_disappear_reachable_through_drain_run_downlinks`（**生产入口级**，非直调叶子）。
+    ///
+    /// 口子：`a` 与 `b` 互相可见、`c` 远在同图另一端（看不见 `b`）；`b` **掉线**
+    /// ⇒ 世界侧 `leave_world_inner` 采「能看到 `b`」的观察者 `(a, b)` 进 `world.drain_departs`
+    /// ⇒ [`drain_depart_downlink`] 内部的**生产发射点**给观察者 `a` 发 `SM_DISAPPEAR(30)`
+    /// （`Recog = b`）；离开者 `b` 自身与无关观察者 `c` 各收 **0** 条。
+    ///
+    /// 红检（**实测**）：删掉 [`drain_depart_downlink`] 里 `sent += drain_depart_frames(...)`
+    /// 那一整行 ⇒ 本用例收不到帧（`to_a` 空）⇒ `assert_eq!(to_a.len(), 1, …)` 必红。
+    #[test]
+    fn disconnect_broadcast_reachable_through_depart_downlink() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(200, 200);
+        world.open_session("a");
+        let a = world
+            .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
+            .expect("a 进图");
+        world.open_session("b");
+        let b = world
+            .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
+            .expect("b 进图");
+        world.open_session("c");
+        let c = world
+            .enter_map("c", new_player_entity("c".to_string(), 150, 150), 0)
+            .expect("c 进图（同图远端）");
+        let _ = world.tick(); // `a` 看见 `b`；`c` 远 ⇒ 看不见 `b`。
+        assert!(
+            world
+                .entities
+                .get(a)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == b),
+            "前提：`a` 看得见 `b`"
+        );
+        assert!(
+            world
+                .entities
+                .get(c)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .all(|v| v.target != b),
+            "前提：`c` 看不见 `b`（非观察者）"
+        );
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "a", 1, 0, 901, a));
+        online_set(&mut online, entry("ub", "b", 2, 0, 902, b));
+        online_set(&mut online, entry("uc", "c", 3, 0, 903, c));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        world.disconnect("b").expect("`b` 在世界上 ⇒ 离世成功");
+        drain_depart_downlink(&mut world, &online, &gates);
+
+        let mut to_a: Vec<Vec<u8>> = Vec::new();
+        let mut to_b: Vec<Vec<u8>> = Vec::new();
+        let mut to_c: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            match socket {
+                901 => to_a.push(body),
+                902 => to_b.push(body),
+                903 => to_c.push(body),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            to_a.len(),
+            1,
+            "生产入口 `drain_depart_downlink` 应给观察者 `a` 发 1 条 `SM_DISAPPEAR`（删生产发射点 ⇒ 必红）"
+        );
+        let cm = CommandMessage::from_bytes(&to_a[0]).expect("12B");
+        assert_eq!(
+            cm.ident,
+            mir2_protocol::messages::SM_DISAPPEAR,
+            "Ident = 30"
+        );
+        assert_eq!(cm.recog, b, "`Recog` = 离开者 `b`");
+        assert!(to_b.is_empty(), "离开者 `b` 自身收 0 条：{to_b:?}");
+        assert!(to_c.is_empty(), "非观察者 `c` 收 0 条：{to_c:?}");
+    }
+
     /// 测试用的 `WAbil`（金币分支不使用 `wabil`；字段值不影响本例断言）。
     fn test_ability() -> game_svr::ability::Ability {
         game_svr::ability::Ability {
@@ -11805,6 +12433,8 @@ mod tests {
             red_b: 56,
             hear_f: 0,
             hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
         };
         let catalog = game_svr::ability::StdItemCatalog::new();
 
@@ -12585,6 +13215,8 @@ mod tests {
                 red_b: 0x38,
                 hear_f: 0x00,
                 hear_b: 0xFF,
+                whisper_f: 0,
+                whisper_b: 0,
             },
         );
 
@@ -12621,6 +13253,100 @@ mod tests {
         check(&mut rx0, 901); // 自己（客户端靠这条回声渲染自己发的话）
         check(&mut rx1, 902); // 边界内近邻
         assert!(rx2.try_recv().is_err(), "另一张图的角色不该收到普通说话");
+    }
+
+    /// **orphan 编码器接线首批**：`/目标名 正文` 私聊 ⇒ `SM_WHISPER(103)`
+    /// （oracle `PlayObject.Chat.cs:57` 的非 GM 支）。
+    ///
+    /// 帧 = 12B 头（`Recog` = **收件人** ActorId、`Ident = SM_WHISPER(103)`、
+    /// `Param = MakeWord(WhisperFColor, WhisperBColor)`、`Tag = 0`、`Series = 1`）
+    /// + 尾 `EncodeString("<说话者>=> <正文>")`；**只发收件人**（oracle 不回声给说话者）。
+    ///
+    /// 红检：把 [`handle_whisper`] 的收件人改成说话者、或把 [`chat::whisper_text`] 的 `"=> "` 去掉
+    /// ⇒ 本用例必红。
+    #[test]
+    fn whisper_slash_line_sends_sm_whisper_to_target_only() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("aaa");
+        let a = world
+            .enter_map(
+                "aaa",
+                mir2_world::Entity::new(0, "aaa".to_string(), 10, 10),
+                0,
+            )
+            .expect("说话者进图");
+        world.open_session("bbb");
+        let b = world
+            .enter_map(
+                "bbb",
+                mir2_world::Entity::new(0, "bbb".to_string(), 30, 30),
+                0,
+            )
+            .expect("目标进图");
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
+        online_set(&mut online, entry("b", "bbb", 2, 1, 902, b));
+
+        let colors = MsgColors {
+            red_f: 0,
+            red_b: 0,
+            hear_f: 0,
+            hear_b: 0,
+            whisper_f: 0xFC,
+            whisper_b: 0xFF,
+        };
+        handle_say(
+            &online,
+            &world,
+            &gates,
+            "aaa",
+            901,
+            Some("/bbb 你好呀"),
+            &colors,
+        );
+
+        assert!(
+            rx0.try_recv().is_err(),
+            "说话者不收私聊回声（oracle 只发收件人）"
+        );
+        match rx1.try_recv().expect("目标应收到 SM_WHISPER") {
+            SimToGate::SendFrame { socket, body } => {
+                assert_eq!(socket, 902);
+                assert_eq!(
+                    i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                    b,
+                    "Recog = 收件人 ActorId（BaseObject.Message.cs:143）"
+                );
+                assert_eq!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_WHISPER,
+                    "Ident = SM_WHISPER(103)"
+                );
+                assert_eq!(
+                    u16::from_le_bytes([body[6], body[7]]),
+                    0xFFFC,
+                    "Param = MakeWord(WhisperFColor=0xFC, WhisperBColor=0xFF)"
+                );
+                assert_eq!(u16::from_le_bytes([body[8], body[9]]), 0, "Tag=0");
+                assert_eq!(u16::from_le_bytes([body[10], body[11]]), 1, "Series=1");
+                let mut want = b"aaa=> ".to_vec();
+                want.extend_from_slice(&encoding_rs::GBK.encode("你好呀").0);
+                assert_eq!(
+                    mir2_protocol::edcode::decode(&body[12..]),
+                    want,
+                    "尾 = EncodeString(\"aaa=> 你好呀\")"
+                );
+            }
+            other => panic!("目标应收到 SendFrame，实收 {other:?}"),
+        }
     }
 
     /// **`openmir2-m2-session-lifecycle` ①**：账号级顶号（`SS_CLOSESESSION` ⇒ `KickUser`）：
@@ -12660,6 +13386,8 @@ mod tests {
                 red_b: 0x38,
                 hear_f: 0x00,
                 hear_b: 0xFF,
+                whisper_f: 0,
+                whisper_b: 0,
             },
             "acct1",
             424242,
@@ -12760,6 +13488,8 @@ mod tests {
                 red_b: 0x38,
                 hear_f: 0x00,
                 hear_b: 0xFF,
+                whisper_f: 0,
+                whisper_b: 0,
             },
             "acct1",
             0,
@@ -12992,6 +13722,8 @@ mod tests {
             red_b: 56,
             hear_f: 0,
             hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
         };
 
         // `recog` = `make_index`；`param`/`tag` 故意错位（4242）—— 读数位置错就必红。
@@ -13157,6 +13889,8 @@ mod tests {
             red_b: 56,
             hear_f: 0,
             hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
         };
 
         // 1) 吃药：池药形态只叠加 `IncHealth = 0 + 20`，尾只有 `SM_EAT_OK` + `RM_WEIGHTCHANGED`。
@@ -16008,6 +16742,8 @@ mod tests {
             red_b: 56,
             hear_f: 0,
             hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
         };
         let catalog = game_svr::ability::StdItemCatalog::new();
 
@@ -16290,6 +17026,8 @@ mod tests {
             red_b: 56,
             hear_f: 0,
             hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
         };
         let mut catalog = game_svr::ability::StdItemCatalog::new();
         catalog.insert(
@@ -17017,6 +17755,8 @@ mod tests {
             red_b: 56,
             hear_f: 0,
             hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
         };
 
         // —— 情形 A：`Dealing=true` ⇒ 两条命令都零帧、零副作用。
@@ -17217,6 +17957,8 @@ mod tests {
             red_b: 56,
             hear_f: 0,
             hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
         };
         let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
 
@@ -17496,6 +18238,8 @@ mod tests {
             red_b: 56,
             hear_f: 0,
             hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
         };
         let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
 

@@ -52,9 +52,21 @@ pub fn update_visible_gay(store: &mut EntityStore, viewer_id: i32, target_id: i3
 ///
 /// `now_ms` 为虚拟时钟（毫秒）。C# 读 `HUtil32.GetTickCount()`；
 /// 骨架里时钟由 `crate::world::World` 统一推进（单线程、可复现），**不在模拟逻辑里读墙钟**。
-pub fn search_view_range(map: &mut MapGrid, store: &mut EntityStore, viewer_id: i32, now_ms: i64) {
+///
+/// 返回值 = 本趟**离开视野**（`VisibleFlag::Hidden` ⇒ 被 `RemoveAt`）的观察目标 id，**按移除顺序**
+/// （下标升序，保序）。这些正是 oracle `PlayObject.Run()` 的 Hidden 支发 `SM_DISAPPEAR(30)` 的对象
+/// （`src/M2Server/Player/PlayObject.cs:3214-3222`）——本函数只管产出事件，帧面由宿主出。
+///
+/// **守卫**（oracle `:3214`）：只返回 `!FixedHideMode && !Ghost` 的目标（这两类不发消失帧，
+/// 防重复占带宽）；`RemoveAt` 本身对全部 Hidden 项照做（与 oracle 同）。
+pub fn search_view_range(
+    map: &mut MapGrid,
+    store: &mut EntityStore,
+    viewer_id: i32,
+    now_ms: i64,
+) -> Vec<i32> {
     let Some(viewer) = store.get(viewer_id) else {
-        return;
+        return Vec::new();
     };
     let (cx, cy, view_range) = (viewer.x, viewer.y, viewer.view_range);
     let viewer_master = viewer.master;
@@ -64,7 +76,7 @@ pub fn search_view_range(map: &mut MapGrid, store: &mut EntityStore, viewer_id: 
     // 置位与打标（C#：IsVisibleActive=false；所有 VisibleActors 标 Hidden）
     {
         let Some(viewer) = store.get_mut(viewer_id) else {
-            return;
+            return Vec::new();
         };
         viewer.is_visible_active = false;
         for v in viewer.visible_actors.iter_mut() {
@@ -134,17 +146,34 @@ pub fn search_view_range(map: &mut MapGrid, store: &mut EntityStore, viewer_id: 
         update_visible_gay(store, viewer_id, target);
     }
 
-    // 收尾：删除仍为 Hidden 的条目（按下标升序、保序）
+    // 收尾：删除仍为 Hidden 的条目（按下标升序、保序），并记录「消失」事件。
+    //
+    // oracle `PlayObject.Run()`（`PlayObject.cs:3214-3222`）：
+    //   if (VisibleFlag == Hidden) {
+    //       if (!baseObject.FixedHideMode && !baseObject.Ghost) SendMsg(baseObject, RM_DISAPPEAR, …);
+    //       VisibleActors.RemoveAt(n18); Dispose(visibleBaseObject); continue;
+    //   }
+    // ⇒ 移除顺序 = 列表下标升序；发帧守卫单独判 `FixedHideMode`/`Ghost`（移除**不**受守卫影响）。
+    let mut removed: Vec<i32> = Vec::new();
     if let Some(viewer) = store.get_mut(viewer_id) {
         let mut i = 0;
         while i < viewer.visible_actors.len() {
             if viewer.visible_actors[i].flag == VisibleFlag::Hidden {
+                removed.push(viewer.visible_actors[i].target);
                 viewer.visible_actors.remove(i);
                 continue;
             }
             i += 1;
         }
     }
+    removed
+        .into_iter()
+        .filter(|t| {
+            store
+                .get(*t)
+                .is_some_and(|e| !e.fixed_hide_mode && !e.ghost)
+        })
+        .collect()
 }
 
 /// 对应 `BaseObject.SearchViewRangeDeath`（`BaseObject.ViewRange.cs:159`）。

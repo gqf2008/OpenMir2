@@ -22,7 +22,9 @@
 //! （那是 wbevy/m3bag 的共享写集）。
 //!
 //! **本格仍缺（登记，不猜）**：
-//! - `RM_DISAPPEAR`（`VisibleFlag.Hidden` 支，`PlayObject.cs:3228`）——没有 `sm_disappear` 编码器；
+//! - `RM_DISAPPEAR`（`VisibleFlag.Hidden` 支，`PlayObject.cs:3214-3222`）——**已接**：
+//!   编码器 [`smframe::sm_disappear`]，帧面 [`disappear_frame`]，由 `main.rs` 的 AOI 消失段按
+//!   `world` 的 `TickRecord::hides` 发射（原「没有 `sm_disappear` 编码器」的登记已过期，订正）；
 //! - 怪物的 `SM_TURN`：`Entity` 有怪物，但生产路径尚未生成怪物（无 `DisplayTable` 项）⇒ 跳过；
 //! - `GetChrColor` 的**行会/PK/战争**分支（需要行会与战争系统，未移植）⇒ 用 `NameColor`；
 //!   无行会/PK 时 oracle 的结果就是 `NameColor`（`PlayObject.cs:3585-3595` 的非战斗支）。
@@ -415,6 +417,28 @@ pub fn death_frame(actor_id: i32, x: u16, y: u16, dir: u8, d: &ActorDisplay) -> 
     )
 }
 
+/// **orphan 编码器接线首批**：`SM_DISAPPEAR(30)`（AOI 消失帧，
+/// `src/M2Server/Player/PlayObject.cs:3214-3222` 的 `VisibleFlag.Hidden` 支）。
+///
+/// oracle：观察者 `Run()` 里 `SendMsg(baseObject, RM_DISAPPEAR, 0, 0, 0, 0)`——这是 **6 参**重载
+/// `SendMsg(IActor baseObject, int wIdent, …)`（`BaseObject.Message.cs:98`），把 `SendMessage.ActorId`
+/// 置为 **`baseObject.ActorId` = 消失对象**的 ActorId（**不是** `this`）；帧经**观察者自己**的消息队列
+/// 发出，再经 `PlayObject.Message.cs:1651-1654` 的 `RM_DISAPPEAR` 支：
+/// `MakeMessage(SM_DISAPPEAR, processMsg.ActorId, 0, 0, 0)` + `SendSocket`
+/// ⇒ 头 = `(Recog = 消失对象 id, Param=0, Tag=0, Series=0)`，**无尾**，**收件人 = 观察者自己**。
+///
+/// 另有一个**广播发点** `BaseObject.DisappearA`（`BaseObject.cs:1519-1524`）⇒ `SendRefMsg(RM_DISAPPEAR)`，
+/// 由 `MakeGhost` 在掉线/小退/顶号时调用；本仓等价路径 = `world.disconnect`/`soft_close`
+/// ⇒ 由 `main.rs` 的 `drain_depart_frames` 出帧（见 `world::drain_departs`）。
+///
+/// 逐字节口径见 [`smframe::sm_disappear`]（已被金标准 `c-line-baseline-c2-20261010` 的 15 条 30 帧锚定）。
+///
+/// 红检：把本函数改发别的 ident（或改用发给全网关的广播路由）⇒ 消失帧断言必红。
+#[must_use]
+pub fn disappear_frame(target: i32) -> Vec<u8> {
+    smframe::sm_disappear(target)
+}
+
 /// **出站接线片 W2**：AOI **出现帧**的出现对象分派（`PlayObject.Run()` 的
 /// `VisibleFlag.Show` 支，`src/M2Server/Player/PlayObject.cs:3231-3243`）：
 ///
@@ -424,8 +448,9 @@ pub fn death_frame(actor_id: i32, x: u16, y: u16, dir: u8, d: &ActorDisplay) -> 
 /// ```
 ///
 /// `dead == true` ⇒ 走 [`death_frame`]（`SM_DEATH`）。**`Skeleton` 支**（`SM_SKELETON(33)`）不在本片：
-/// `SM_SKELETON` 无编码器（属 R2 红名单 A 类）且 `mir2_world::Entity` 无 `skeleton` 字段 ⇒
-/// 已死即按 `SM_DEATH` 发（登记，见 rationale）。
+/// `mir2_world::Entity` 无 `skeleton` 字段，且 oracle 里该字段的**唯一 setter** 是
+/// `ClientGetButchItem`（`PlayObject.Operate.cs:734`，动物尸体屠宰成骨架；属 V1-2「屠宰效果体」R 级片）
+/// ⇒ 已死即按 `SM_DEATH` 发，`SM_SKELETON` 登记为 `deferred`（编码器 `smframe::sm_skeleton` 已在，缺 setter）。
 ///
 /// 红检：把 `dead` 支改成 `turn_pair`（恒发 `SM_TURN`）⇒ 死对象出现帧 ident 断言必红。
 #[must_use]
