@@ -1,5 +1,20 @@
 //! Envir 真地图注册表接入（`openmir2-m2-map-loading` 的集成点 ④：`CurMap` → `map_id`）。
 //!
+//! ## 装载把「`Valid` 判据」全面激活（2026-10-17 独立复验 must_fix ③；**tier=R 窗口必核项**）
+//!
+//! 本片之前每格皆 `Walk` ⇒ 所有读 `get_cell_info(...).ok` / `Valid` 的门在真机**恒真**（形同虚设）。
+//! 装载后**真机可达**的变化面（门形与 oracle 逐条抽核同构，**未穷尽** 30 余处消费点）：
+//! - **刷怪（最重）**：`bins/game-svr/src/mongen.rs` 的地形移位环（oracle `WorldServer.MonGen.cs` 的
+//!   31 次 `CanWalk` 环）由 `cell_walkable_ignore_actors`/`can_walk` 驱动，此前恒真 ⇒ 环从不进入。
+//!   装载后真机 `Envir/MonGen.txt` **2827 条里 1072 条**声明出生格是墙格（755 LowWall、306 HighWall、
+//!   11 越界；`D001(200,200)`=HighWall、`3(339,313)`=LowWall、`Q011(75,75)`=LowWall 三点经 `.map`
+//!   二进制独立复核），其中 **40 条首轮就进入抽随机数的边界支**（`Random(Width/2)`/`Random(Height/2)`
+//!   ）⇒ **刷怪位置与 RNG 流水都会变**（向 oracle 收敛，但确为本片引入的、真机可达的 RNG/时序面变化）。
+//! - route 落格 **1658 → 1649**（9 条落墙格 = 7 HighWall + 2 LowWall；oracle `AddMapRoute` 的
+//!   `cellSuccess && Valid` 门同样丢）。
+//! - 其余同族消费点：进图/落格（`add_map_object`）、地面物品（`AddItemToMap`）、AOI 视距
+//!   （`BaseObject.ViewRange`）、`CanWalk(...,true)` 冲刺、`cetin_near_xy`（spell 路径 snap）。
+//!
 //! oracle 路径：`M2Share.BasePath`（可执行体目录）+ `Server.conf` 的 `[Share] EnvirDir`/`MapDir`
 //! （`GameSvrConf.EnvirDir/MapDir` 的默认值分别是 `Envir`/`Map`，`GameSvrConf.cs:1295-1296`）
 //! → `Envir/MapInfo.txt` 的 section 先后顺序就是 `map_id`（见 `mir2_envir::MapRegistry` 的头注释）。
@@ -127,6 +142,10 @@ pub fn apply_map_file_cells(f: &MapFile, grid: &mut MapGrid) -> usize {
 /// 形同虚设；本函数把次序摆正后，那道门才真正生效（墙格 route 被丢 ⇒ `added < routes.len()`）。
 ///
 /// 返回实际写入的格子总数（各图 `W*H` 之和；有图长度不符时会更小 ⇒ 调用方打印该值自证）。
+///
+/// **静默边界（登记）**：若 `world.maps` 比注册表**短**，本函数 `break` 掉后续图（生产里
+/// `sizes(reg)` 与 `reg.maps()` 同源 ⇒ 不可达；日志的 `cells` 变小是唯一线索）。同理
+/// `MapGrid::set_cell_attributes` 遇长度不符会**整图保持 Walk** 并返 0（fail-closed，不半灌）。
 pub fn apply_map_cells(reg: &MapRegistry, world: &mut World) -> usize {
     let mut total = 0usize;
     for (map_id, f) in reg.maps().iter().enumerate() {
@@ -876,15 +895,18 @@ mod tests {
         let loader = MapLoader::new(&base, "Map", "Envir");
         let t0 = std::time::Instant::now();
         let entries = loader.load_map_info_entries().expect("MapInfo 加载");
+        // **键归一化**：oracle 侧 `MapManager` 的表是 `StringComparer.OrdinalIgnoreCase`、本仓注册表用
+        // `normalize_name = to_ascii_lowercase` ⇒ 本测也必须小写化，否则 `h006` 匹配不到 `H006`，会凭空
+        // 多出一条「未加载」并让 `added` 少算 1（独立复验 2026-10-17 实测到的伪影）。
         let name_to_file: HashMap<String, String> = entries
             .iter()
-            .map(|e| (e.map_name.clone(), e.map_file_name.clone()))
+            .map(|e| (e.map_name.to_ascii_lowercase(), e.map_file_name.clone()))
             .collect();
         let routes = loader.load_map_routes().expect("route 加载");
         let mut cache: HashMap<String, Option<MapFile>> = HashMap::new();
         let (mut on_wall, mut unresolved) = (0usize, 0usize);
         for r in &routes {
-            let Some(fname) = name_to_file.get(&r.src_map_name) else {
+            let Some(fname) = name_to_file.get(&r.src_map_name.to_ascii_lowercase()) else {
                 unresolved += 1;
                 continue;
             };
@@ -909,8 +931,10 @@ mod tests {
                 );
             }
         }
+        // 真机实测（2026-10-17；独立复验复算 + 本测）：`routes=1658 / unresolved=0 / added=1649`，
+        // 与**父提交**（无属性装载）的 `added=1658` 相比少 9 条——**不是**「1657 → 1648」。
         println!(
-            "route 总数={} 落在墙格={on_wall} 源图不可解析/未加载={unresolved} ⇒ 生产 added 将 = {}（本片之前 = {}）",
+            "route 总数={} 落在墙格={on_wall} 源图不可解析/未加载={unresolved} ⇒ 生产 added 应为 {}（父提交 = {}）",
             routes.len(),
             routes.len() - unresolved - on_wall,
             routes.len() - unresolved
