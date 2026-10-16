@@ -32,7 +32,7 @@
   只对 Rust game-svr 注入，并打 `RUST_*_INJECTED` 判据行。**不传 ⇒ 不注入、不打该行**（与改动前逐字节一致）。
 
   判据/退出码（与 `start_rust_stack.ps1` 对称）：
-    `-Stop`   按 pid 文件停掉本脚本起的进程；缺 pid 文件 ⇒ `NOTHING_TO_STOP`。
+    `-Stop`   按 pid 文件停掉本脚本起的进程（**MySQL 条目跳过不杀**：共享 DB 永不由本脚本停，见 SKIP-STOP）；缺 pid 文件 ⇒ `NOTHING_TO_STOP`。
     `-Status` 只按端口实况打印，不改状态。
     起栈：任一步端口未就绪 ⇒ 打印 `RED` 并 exit 1；缺 exe/配置 ⇒ `PREREQ_MISSING` 并 exit 2；
           启动前若目标端口已被监听 ⇒ exit 1（**不静默混实现**，先用 `-Stop` 或查清楚谁占着）。
@@ -133,6 +133,10 @@ if ($Stop) {
   # 逆启动序停：网关 → game-svr → login-srv → db-srv → MySQL
   foreach ($g in ($entries | Sort-Object { [int]$_.stop_order })) {
     if (-not $g -or $null -eq $g.pid) { continue }
+    # MySQL 是共享基础设施（M5 计划「保留 3306」）：本脚本可以「起」它（3306 down 时自动拉起并登记），
+    # 但**永不停**它 —— 否则 -Stop 会把和本栈无关的共享 DB 一起带走（2026-10-15 验证者 D2）。
+    # 范式同 tools/m5-acceptance/stage_gray_rollback.ps1 的 SKIP-STOP MySQL 分支。
+    if ($g.name -eq 'MySQL') { Write-Output ("SKIP-STOP MySQL pid={0}（共享 DB 永不由本脚本停）" -f $g.pid); continue }
     $p = Get-Process -Id $g.pid -ErrorAction SilentlyContinue
     if ($p) { Stop-Process -Id $g.pid -Force; Write-Output ("STOPPED {0} pid={1}" -f $g.name, $g.pid) }
     else { Write-Output ("ALREADY_GONE {0} pid={1}" -f $g.name, $g.pid) }
