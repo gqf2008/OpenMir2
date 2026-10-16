@@ -47,6 +47,7 @@
 //! 本模块用 [`eq_label`]（ASCII 大小写不敏感）同口径。
 
 use mir2_data::models::StdItem;
+use mir2_envir::makeitem::MakeItemRegistry;
 use mir2_formula::shop::{self, PriceTables, ShopConfig, StdItemSource};
 use mir2_world::merchant::ACTOR_RACE_MERCHANT;
 use mir2_world::merchant::{MerchantFlags, MerchantItem};
@@ -67,6 +68,9 @@ pub const CM_USERREPAIRITEM: u16 = 1023;
 pub const CM_MERCHANTQUERYREPAIRCOST: u16 = 1024;
 pub const CM_USERSTORAGEITEM: u16 = 1031;
 pub const CM_USERTAKEBACKSTORAGEITEM: u16 = 1032;
+/// `CM_USERMAKEDRUGITEM`（`src/OpenMir2/Messages.cs:92`）——`PlayObject.Message.cs:972` →
+/// `ClientMakeDrugItem(processMsg.nParam1, processMsg.Msg)`（制药片 WB）。
+pub const CM_USERMAKEDRUGITEM: u16 = 1034;
 
 /// `ScriptFlagConst`（`src/Modules/SystemModule/Const/ScriptFlagConst.cs`）本片用到的子集。
 pub const LABEL_BUY: &str = "@buy";
@@ -78,6 +82,9 @@ pub const LABEL_REPAIR_OK: &str = "~@repair";
 pub const LABEL_SUPER_REPAIR_OK: &str = "~@s_repair";
 pub const LABEL_STORAGE: &str = "@storage";
 pub const LABEL_GETBACK: &str = "@getback";
+/// `ScriptFlagConst.sMAKEDURG`（`src/Modules/SystemModule/Const/ScriptFlagConst.cs:48`）：
+/// `Merchant.UserSelect`（`Merchant.cs:857-860`）的 `@makedrug` 支 ⇒ `UserSelectMakeDurg`。
+pub const LABEL_MAKE_DRUG: &str = "@makedrug";
 
 /// `MessageSettings.CanotGetItems` / 修理失败文案（`Merchant.cs:1612`）；GBK 由 `downlink::gbk` 编码。
 pub const SUPER_REPAIR_FAIL_MSG: &str = "对不起!我不能帮你修理这个物品。\\ \\ \\<返回/@main>";
@@ -164,6 +171,11 @@ pub struct ShopContext<'a> {
     pub red_f: u8,
     /// `Config.RedMsgBColor`。
     pub red_b: u8,
+    /// **制药片（WB）**：`Config.MakeDurgPrice`（`GameSvrConf.cs:1450`，缺省 `100`）——
+    /// `UserSelectMakeDurg` 面板价（`Merchant.cs:1010`）与 `ClientMakeDrugItem` 收费/扣金
+    /// （`Merchant.cs:1510/1518`）。不放进 `ShopConfig`（那是 `mir2_formula::shop` 的定价/修理公式面，
+    /// 制药不在公式层）。
+    pub make_durg_price: i32,
 }
 
 /// `Merchant` 侧目录适配器：把宿主的 `ability::ItemCatalog`（键 = 1-based `Index`）接到
@@ -332,11 +344,241 @@ pub fn user_select(
     } else if eq_label(label, LABEL_GETBACK) && m.flags.is_getback {
         // `UserSelectGetBack`（`Merchant.cs:1029`）→ `RM_USERGETBACKITEM` → `SendSaveItemList(ActorId)`。
         out.extend(back_item_list(m.actor_id, storage_items, ctx));
+    } else if eq_label(label, LABEL_MAKE_DRUG) && m.flags.is_make_drug {
+        // `UserSelectMakeDurg`（`Merchant.cs:1002-1017`）：
+        // `for (i<GoodsList.Count) { stdItem = GetStdItem(GoodsList[i][0].Index);
+        //                             sSendMsg += stdItem.Name + '/' + 0 + '/' + MakeDurgPrice + '/' + 1 + '/'; }`
+        // 非空 ⇒ `SendMsg(RM_USERMAKEDRUGITEMLIST, 0, ActorId, 0, 0, sSendMsg)`
+        // ⇒ `SM_SENDUSERMAKEDRUGITEMLIST(Recog=nParam1=ActorId, Param=nParam2=0, 尾=EncodeString(sSendMsg))`
+        //（`PlayObject.Message.cs:1876`）。
+        let mut s_send = String::new();
+        for group in goods {
+            let Some(it) = group.first() else { continue };
+            let Some(tpl) = ctx.catalog.get(it.index) else {
+                continue;
+            };
+            // `sSendMsg += stdItem.Name + '/' + 0 + '/' + MakeDurgPrice + '/' + 1 + '/'`。
+            s_send.push_str(&tpl.name);
+            s_send.push_str(&format!("/0/{}/1/", ctx.make_durg_price));
+        }
+        if !s_send.is_empty() {
+            out.push(frame(
+                mir2_protocol::messages::SM_SENDUSERMAKEDRUGITEMLIST,
+                m.actor_id,
+                0,
+                0,
+                0,
+                downlink::gbk(&s_send),
+            ));
+        }
     }
     out
 }
 
-/// `Merchant.ClientGetDetailGoodsList`（`Merchant.cs:1304`）：物品详情分页（最多 10 件，从组尾往前取）。
+/// `Merchant.ClientMakeDrugItem`（`Merchant.cs:1500-1551`）的结果。
+pub struct MakeDrugResult {
+    /// 出帧（oracle 发送序：`SM_ADDITEM`（`SendAddItem` 直发，成功时）→ `SM_DELITEMS`
+    /// （`RM_SENDDELITEMLIST` 经 `MsgQueue`，优先级 `(byte)10148=164`）→ `SM_MAKEDRUG_SUCCESS/FAIL`
+    /// （`RM_MAKEDRUG_SUCCESS/FAIL`，优先级 `166/167`））。见 [`make_drug_item`] 的头注。
+    pub frames: Vec<ShopFrame>,
+    /// `n14 == 0`（`SM_MAKEDRUG_SUCCESS`）。
+    pub ok: bool,
+}
+
+/// `Merchant.ClientMakeDrugCheckNeedItem`（`Merchant.cs:1432-1500`）：按 `MakeItem.txt`
+/// 配方核对背包材料，命中则**消耗**（从后往前删）并把删除项列表返回。
+///
+/// 逐行：先统计（`for j in 0..ItemList.Count`，精确名 `==`，非 IgnoreCase）；
+/// 全齐则再反向 `for j in (Count-1)..=0` 删除，每删一件记一条 `DeleteItem{ItemName, MakeIndex}`。
+///
+/// 返回 `(result, deleted)`：`result == false` ⇒ 材料不足（oracle `:1462` 的 `break`）。
+/// `deleted` 非空 ⇒ oracle 会 `SendMsg(this, RM_SENDDELITEMLIST, 0, objectId, 0, 0)` ⇒ `SM_DELITEMS`。
+#[must_use]
+pub fn check_need_item(
+    make_items: &MakeItemRegistry,
+    catalog: &dyn ItemCatalog,
+    item_list: &mut Vec<BagItem>,
+    s_item_name: &str,
+) -> (bool, Vec<(String, i32)>) {
+    let Some(list10) = make_items.get(s_item_name) else {
+        // `list10 == null` ⇒ `return false`（`Merchant.cs:1436`）。
+        return (false, Vec::new());
+    };
+    let mut result = true;
+    for mi in list10 {
+        let mut n1c = mi.item_count;
+        for it in item_list.iter() {
+            // `SystemShare.ItemSystem.GetStdItemName(ItemList[j].Index) == s20`（精确串比较）。
+            if catalog.name(it.index) == Some(mi.item_name.as_str()) {
+                n1c -= 1;
+            }
+        }
+        if n1c > 0 {
+            result = false;
+            break;
+        }
+    }
+    let mut deleted: Vec<(String, i32)> = Vec::new();
+    if result {
+        for mi in list10 {
+            let mut n1c = mi.item_count;
+            let mut j = item_list.len();
+            while j > 0 && n1c > 0 {
+                j -= 1;
+                if catalog.name(item_list[j].index) == Some(mi.item_name.as_str()) {
+                    deleted.push((mi.item_name.clone(), item_list[j].make_index));
+                    item_list.remove(j);
+                    n1c -= 1;
+                }
+            }
+        }
+    }
+    (result, deleted)
+}
+
+/// `Merchant.ClientMakeDrugItem`（`Merchant.cs:1500-1551`）：由 `CM_USERMAKEDRUGITEM` 触发
+/// （`PlayObject.Operate.cs:1216` 已过 `FindMerchant`/`IsMakeDrug`/`Envir`/`IsWithinSight` 门，
+/// 由宿主 `handle_shop_cmd` 判）。
+///
+/// 逐行（`n14` = 失败码）：
+/// - 逐个在售组取首件 `makeItem`，`GetStdItem(makeItem.Index)` 非空且 `Name`（IgnoreCase）匹配
+///   请求名 ⇒ 命中；否则 `n14` 保持 `1`（未命中/成功前）。
+/// - `Gold >= MakeDurgPrice` 才进：否则 `n14 = 3`；
+/// - 材料齐（[`check_need_item`]）：`CopyToUserItemFromName` 造新件（`Index` = 名首命中、`MakeIndex` =
+///   计数器、`Dura=DuraMax=tpl.DuraMax`），`AddItemToBag`（46 上限）成功 ⇒ `Gold -= price`、
+///   `SendAddItem`（`SM_ADDITEM`）、`n14 = 0`、`break`；不成功 ⇒ `n14 = 2`（材料**已消耗**）；
+/// - 材料不足 ⇒ `n14 = 4`。
+/// - 收尾：`n14 == 0` ⇒ `SM_MAKEDRUG_SUCCESS(Recog=Gold)`；否则 `SM_MAKEDRUG_FAIL(Recog=n14)`。
+///
+/// **发送序（R 级，见 rationale）**：`SendAddItem` 走 `SendSocket(ClientMsg, EncodeBuffer(...))`（**直发**，
+/// `PlayObject.Base.cs:198-227`）⇒ `SM_ADDITEM` 先出；`RM_SENDDELITEMLIST`（优先级 164）与
+/// `RM_MAKEDRUG_SUCCESS/FAIL`（166/167）经 `MsgQueue` 按 `(byte)wIdent` 升序出队 ⇒ `SM_DELITEMS` 先于
+/// 结果帧。`MakeIndex` 用传入的 `item_number` 单调计数器（`M2Share.GetItemNumber()` 的 `+ GetTickCount()`
+/// 项登记，同 `add_newbie_items`）。
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn make_drug_item(
+    state: &mut GroundState,
+    goods: &[Vec<MerchantItem>],
+    s_item_name: &str,
+    catalog: &dyn ItemCatalog,
+    make_items: &MakeItemRegistry,
+    item_number: &mut i32,
+    ctx: &ShopContext<'_>,
+) -> MakeDrugResult {
+    let mut frames: Vec<ShopFrame> = Vec::new();
+    let mut n14 = 1i32;
+    for group in goods {
+        let Some(first) = group.first() else { continue };
+        let Some(tpl) = catalog.get(first.index) else {
+            continue;
+        };
+        // `string.Compare(stdItem.Name, sItemName, OrdinalIgnoreCase) == 0`。
+        if !tpl.name.eq_ignore_ascii_case(s_item_name) {
+            continue;
+        }
+        if state.gold >= ctx.make_durg_price {
+            let (ok, deleted) =
+                check_need_item(make_items, catalog, &mut state.item_list, s_item_name);
+            if ok {
+                // `CopyToUserItemFromName(sItemName, ref userItem)`（`GameItemSystem.cs:113-140`）：
+                // 名首命中 ⇒ `Index`/`MakeIndex`/`Dura=DuraMax`；未命中 ⇒ `new UserItem()` 形态（全 0）。
+                let mut user_item = BagItem::new(0, 0);
+                if let Some(ni) = catalog.find_by_name(s_item_name) {
+                    if let Some(nt) = catalog.get(ni) {
+                        *item_number += 1;
+                        user_item = BagItem {
+                            make_index: *item_number,
+                            index: ni,
+                            dura: nt.dura_max,
+                            dura_max: nt.dura_max,
+                            desc: [0; 14],
+                        };
+                    }
+                }
+                // `AddItemToBag`（`BaseObject.cs:1241`）：`ItemList.Count >= MaxBagItem(46)` ⇒ false。
+                if state.item_list.len() < MAX_BAG_ITEM {
+                    state.item_list.push(user_item);
+                    // `WeightChanged()`（T-47 ⑤ 未发 `SM_WEIGHTCHANGED`，与 `buy_item` 同口径）。
+                    state.gold -= ctx.make_durg_price;
+                    // `SendAddItem`（`PlayObject.Base.cs:198-227`）⇒ `SM_ADDITEM(Recog=ActorId, Series=1)`
+                    //（尾 `EncodeBuffer(clientItem)` 未建模，T-24；与 `buy_item` 同）。
+                    frames.push(frame(
+                        mir2_protocol::messages::SM_ADDITEM,
+                        ctx.player_actor_id,
+                        0,
+                        0,
+                        1,
+                        Vec::new(),
+                    ));
+                    if !deleted.is_empty() {
+                        frames.push(del_items_frame(&deleted));
+                    }
+                    n14 = 0;
+                    break;
+                }
+                // `DisPose(userItem); n14 = 2`——材料已在 `check_need_item` 消耗，删除列表照发。
+                if !deleted.is_empty() {
+                    frames.push(del_items_frame(&deleted));
+                }
+                n14 = 2;
+            } else {
+                n14 = 4;
+            }
+        } else {
+            n14 = 3;
+        }
+    }
+    if n14 == 0 {
+        // `SendMsg(RM_MAKEDRUG_SUCCESS, 0, Gold, 0, 0)` ⇒ `SendDefMessage(SM_MAKEDRUG_SUCCESS, Gold, 0,0,0)`。
+        frames.push(frame(
+            mir2_protocol::messages::SM_MAKEDRUG_SUCCESS,
+            state.gold,
+            0,
+            0,
+            0,
+            Vec::new(),
+        ));
+    } else {
+        // `SendMsg(RM_MAKEDRUG_FAIL, 0, n14, 0, 0)` ⇒ `SendDefMessage(SM_MAKEDRUG_FAIL, n14, 0,0,0)`。
+        frames.push(frame(
+            mir2_protocol::messages::SM_MAKEDRUG_FAIL,
+            n14,
+            0,
+            0,
+            0,
+            Vec::new(),
+        ));
+    }
+    MakeDrugResult {
+        frames,
+        ok: n14 == 0,
+    }
+}
+
+/// `SendDelItemList`（`PlayObject.Base.cs:1637-1646`）的出帧：
+/// `s10 = "ItemName/MakeIndex/" × n`；`MakeMessage(SM_DELITEMS, 0, 0, 0, n)` + `SendSocket(ClientMsg, EncodeString(s10))`
+/// （**尾已编码** ⇒ `tail_encoded = true`，见 [`ShopFrame`] 口径）。
+///
+/// `ItemName` 是 `std::string`（GBK 线上）⇒ 拼接后按 GBK 字节编码。
+fn del_items_frame(deleted: &[(String, i32)]) -> ShopFrame {
+    let mut s10 = String::new();
+    for (name, make_index) in deleted {
+        s10.push_str(name);
+        s10.push('/');
+        s10.push_str(&make_index.to_string());
+        s10.push('/');
+    }
+    frame_encoded(
+        mir2_protocol::messages::SM_DELITEMS,
+        0,
+        0,
+        0,
+        deleted.len() as u16,
+        mir2_protocol::edcode::encode(&downlink::gbk(&s10)),
+    )
+}
+
 ///
 /// 收包侧 `CM_USERGETDETAILITEM` 与 `CM_USERBUYITEM` 共用 `ClientUserBuyItem`（`Operate.cs:192-213`）
 /// ⇒ 同一套 `IsBuy && 同图 && |dx|,|dy| <= 15` 门（由调用方判）；`n_int` = 收包 `Param`（菜单顶行）。
@@ -1094,6 +1336,7 @@ mod tests {
             player_actor_id: 4242,
             red_f: 0xFF,
             red_b: 0x38,
+            make_durg_price: 100,
         }
     }
 
@@ -1589,5 +1832,296 @@ mod tests {
         let m_none = merchant(MerchantFlags::default());
         assert!(user_select(LABEL_STORAGE, &m_none, &[], &[], &c).is_empty());
         assert!(user_select(LABEL_GETBACK, &m_none, &[], &items, &c).is_empty());
+    }
+
+    // ---- 制药片 WB：`@makedrug` 面板 + `CM_USERMAKEDRUGITEM` 全链（R 级，见 rationale） ----
+
+    /// 把一条 [`ShopFrame`] 编成线上 body = `emit_shop_frames` 的字节等价
+    /// （`command_header` + `tail_encoded ? tail : EncodeString(tail)`）。
+    fn body_of(f: &ShopFrame) -> Vec<u8> {
+        let header = crate::smframe::command_header(f.recog, f.ident, f.param, f.tag, f.series);
+        let tail = if f.tail_encoded {
+            f.tail.clone()
+        } else {
+            mir2_protocol::edcode::encode(&f.tail)
+        };
+        crate::smframe::gm_data_body(header, &tail)
+    }
+
+    fn mflags_makedrug() -> MerchantFlags {
+        MerchantFlags {
+            is_make_drug: true,
+            ..MerchantFlags::default()
+        }
+    }
+
+    fn drug_catalog() -> StdItemCatalog {
+        let mut c = catalog();
+        c.insert(
+            3,
+            StdItem {
+                name: "金创药".to_string(),
+                weight: 3,
+                std_mode: 0,
+                dura_max: 12,
+                ..StdItem::default()
+            },
+        );
+        c.insert(
+            4,
+            StdItem {
+                name: "草药".to_string(),
+                weight: 1,
+                std_mode: 0,
+                dura_max: 5,
+                ..StdItem::default()
+            },
+        );
+        c.insert(
+            5,
+            StdItem {
+                name: "布衣".to_string(),
+                weight: 1,
+                std_mode: 0,
+                dura_max: 5,
+                ..StdItem::default()
+            },
+        );
+        c
+    }
+
+    fn make_reg(text: &str) -> MakeItemRegistry {
+        mir2_envir::makeitem::parse_make_item_lines(text).unwrap()
+    }
+
+    fn mbag(index: u16, make_index: i32) -> BagItem {
+        BagItem {
+            make_index,
+            index,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        }
+    }
+
+    fn ground(gold: i32, items: Vec<BagItem>) -> GroundState {
+        GroundState {
+            item_list: items,
+            gold,
+            wabil: ability(100, 200),
+        }
+    }
+
+    fn goods_one(index: u16) -> Vec<Vec<MerchantItem>> {
+        vec![vec![MerchantItem {
+            make_index: 9,
+            index,
+            dura: 12,
+            dura_max: 12,
+            desc: [0; 14],
+        }]]
+    }
+
+    /// `@makedrug`（`Merchant.cs:1002-1017`）：`SM_SENDUSERMAKEDRUGITEMLIST(712)`。
+    /// `Recog = nParam1 = ActorId`（商人）、`Param = nParam2 = 0`；尾 = `名/0/价/1/` × N（GBK + EncodeString）。
+    ///
+    /// 变异必红：① recog/param 互换 ② 漏 `MakeDurgPrice` 段（写成占位 0）③ 把 `IsMakeDrug` 门去掉。
+    #[test]
+    fn user_select_makedrug_emits_item_list_frame() {
+        let cat = drug_catalog();
+        let c = ctx(&cat);
+        let m = merchant(mflags_makedrug());
+        let goods = vec![
+            vec![MerchantItem {
+                make_index: 7,
+                index: 3,
+                dura: 12,
+                dura_max: 12,
+                desc: [0; 14],
+            }],
+            vec![MerchantItem {
+                make_index: 8,
+                index: 2,
+                dura: 20,
+                dura_max: 20,
+                desc: [0; 14],
+            }],
+        ];
+        let out = user_select(LABEL_MAKE_DRUG, &m, &goods, &[], &c);
+        assert_eq!(out.len(), 1, "只产一条 SM_SENDUSERMAKEDRUGITEMLIST");
+        assert_eq!(
+            out[0].ident,
+            mir2_protocol::messages::SM_SENDUSERMAKEDRUGITEMLIST
+        );
+        assert_eq!(out[0].recog, 4242, "Recog = nParam1 = ActorId（商人）");
+        assert_eq!(out[0].param, 0, "Param = nParam2 = 0");
+        assert_eq!((out[0].tag, out[0].series), (0, 0));
+        let mut expect = String::new();
+        for tpl in ["金创药", "木剑"] {
+            expect.push_str(tpl);
+            expect.push_str("/0/100/1/");
+        }
+        assert_eq!(out[0].tail, downlink::gbk(&expect));
+        // 逐字节钉到已复核编码器 `smframe_ext::sm_sendusermakedrugitemlist`。
+        assert_eq!(
+            body_of(&out[0]),
+            crate::smframe_ext::sm_sendusermakedrugitemlist(4242, 0, &downlink::gbk(&expect)),
+            "线上 body 必须与 W1 编码器逐字节一致"
+        );
+        // `IsMakeDrug` 门：非制药商人 ⇒ 无帧。
+        assert!(user_select(
+            LABEL_MAKE_DRUG,
+            &merchant(MerchantFlags::default()),
+            &goods,
+            &[],
+            &c
+        )
+        .is_empty());
+        // 空在售库存 ⇒ `sSendMsg` 空 ⇒ 不产帧（`!string.IsNullOrEmpty` 门）。
+        assert!(user_select(LABEL_MAKE_DRUG, &m, &[], &[], &c).is_empty());
+    }
+
+    /// `ClientMakeDrugCheckNeedItem`（`Merchant.cs:1432-1500`）：先统计（精确名）→ 全齐则**反向**删并记删除表。
+    ///
+    /// 变异必红：① 把删除扫描改成正向（`j` 升序）⇒ 删除顺序变 ⇒ `deleted` 断言必红；
+    /// ② 把名比较改成 IgnoreCase 之外的模糊匹配 ⇒ 缺料用例仍判齐 ⇒ 必红。
+    #[test]
+    fn check_need_item_counts_and_consumes_from_back() {
+        let cat = drug_catalog();
+        let reg = make_reg("[金创药]\n草药 2\n布衣 1\n");
+        let mut list = vec![
+            mbag(4, 71), // 草药
+            mbag(4, 72), // 草药
+            mbag(5, 73), // 布衣
+            mbag(2, 74), // 木剑（无关）
+        ];
+        let (ok, deleted) = check_need_item(&reg, &cat, &mut list, "金创药");
+        assert!(ok);
+        assert_eq!(
+            deleted,
+            vec![
+                ("草药".to_string(), 72),
+                ("草药".to_string(), 71),
+                ("布衣".to_string(), 73),
+            ],
+            "每条配方按材料名从头删除（后进先出）"
+        );
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].index, 2, "只有无关的木剑留下");
+
+        // 缺一件草药 ⇒ false 且**不删**（oracle 统计失败即 break，不进删除段）。
+        let mut short = vec![mbag(4, 71), mbag(5, 73)];
+        let (ok2, del2) = check_need_item(&reg, &cat, &mut short, "金创药");
+        assert!(!ok2);
+        assert!(del2.is_empty());
+        assert_eq!(short.len(), 2, "缺料不得消耗");
+
+        // 无该配方组 ⇒ false（`GetMakeItemInfo` null）。
+        let (ok3, _) = check_need_item(&reg, &cat, &mut vec![], "不存在");
+        assert!(!ok3);
+    }
+
+    /// `CM_USERMAKEDRUGITEM` 成功支：`SM_ADDITEM`（直发）→ `SM_DELITEMS`（优先级 164）→
+    /// `SM_MAKEDRUG_SUCCESS(Recog=扣后 Gold)`（优先级 166）。
+    ///
+    /// 变异必红：① 漏 `SM_DELITEMS` ② 成功帧 `Recog` 用 `n14` 而非金币 ③ 不扣金/不入包
+    /// ④ 帧序换位（`SM_MAKEDRUG_SUCCESS` 提前）。
+    #[test]
+    fn make_drug_success_emits_additem_delitems_success_in_order() {
+        let cat = drug_catalog();
+        let c = ctx(&cat);
+        let reg = make_reg("[金创药]\n草药 2\n布衣 1\n");
+        let mut st = ground(1000, vec![mbag(4, 71), mbag(4, 72), mbag(5, 73)]);
+        let goods = goods_one(3);
+        let mut item_number = 500;
+        let r = make_drug_item(&mut st, &goods, "金创药", &cat, &reg, &mut item_number, &c);
+
+        assert!(r.ok);
+        let idents: Vec<u16> = r.frames.iter().map(|f| f.ident).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_ADDITEM,
+                mir2_protocol::messages::SM_DELITEMS,
+                mir2_protocol::messages::SM_MAKEDRUG_SUCCESS,
+            ],
+            "发送序：SM_ADDITEM → SM_DELITEMS → SM_MAKEDRUG_SUCCESS"
+        );
+        assert_eq!(st.gold, 900, "Gold -= MakeDurgPrice(100)");
+        assert_eq!(st.item_list.len(), 1, "三件材料被消耗、成品入包");
+        assert_eq!(st.item_list[0].index, 3);
+        assert_eq!(st.item_list[0].make_index, 501, "GetItemNumber() 计数器 +1");
+        assert_eq!(st.item_list[0].dura, 12);
+        assert_eq!(st.item_list[0].dura_max, 12);
+
+        // SM_ADDITEM：Recog=ActorId、Series=1。
+        assert_eq!(r.frames[0].ident, mir2_protocol::messages::SM_ADDITEM);
+        assert_eq!(r.frames[0].recog, 4242);
+        assert_eq!(r.frames[0].series, 1);
+        // SM_DELITEMS：Series=删除数 3、尾已编码（`EncodeString("草药/72/草药/71/布衣/73/")`）。
+        assert_eq!(r.frames[1].ident, mir2_protocol::messages::SM_DELITEMS);
+        assert_eq!(
+            (r.frames[1].recog, r.frames[1].param, r.frames[1].tag),
+            (0, 0, 0)
+        );
+        assert_eq!(r.frames[1].series, 3);
+        assert!(r.frames[1].tail_encoded);
+        assert_eq!(
+            r.frames[1].tail,
+            mir2_protocol::edcode::encode(&downlink::gbk("草药/72/草药/71/布衣/73/"))
+        );
+        // SM_MAKEDRUG_SUCCESS：Recog=扣后金币；逐字节钉到编码器。
+        assert_eq!(
+            r.frames[2].ident,
+            mir2_protocol::messages::SM_MAKEDRUG_SUCCESS
+        );
+        assert_eq!(r.frames[2].recog, 900);
+        assert_eq!(
+            body_of(&r.frames[2]),
+            crate::smframe_ext::sm_makedrug_success(900)
+        );
+    }
+
+    /// `CM_USERMAKEDRUGITEM` 的四个失败码（`Merchant.cs:1502-1550` 的 `n14`）：
+    /// `1`=名不在在售库存、`2`=背包满（`AddItemToBag` 失败）、`3`=金币不足、`4`=材料不足。
+    ///
+    /// 变异必红：把任一 `n14` 写成别的值 ⇒ `Recog` 断言必红。
+    #[test]
+    fn make_drug_failure_codes() {
+        let cat = drug_catalog();
+        let c = ctx(&cat);
+        let reg = make_reg("[金创药]\n草药 2\n布衣 1\n");
+        let goods = goods_one(3);
+
+        // n14=1：请求名不在在售组（组首件名 != 请求名）。
+        let mut st = ground(1000, vec![]);
+        let r = make_drug_item(&mut st, &goods, "别的药", &cat, &reg, &mut 0, &c);
+        assert_eq!(r.frames.len(), 1);
+        assert_eq!(r.frames[0].ident, mir2_protocol::messages::SM_MAKEDRUG_FAIL);
+        assert_eq!(r.frames[0].recog, 1);
+
+        // n14=3：金币不足（< 100）⇒ 不消耗、不发 DELITEMS。
+        let mut st = ground(50, vec![mbag(4, 71), mbag(4, 72), mbag(5, 73)]);
+        let r = make_drug_item(&mut st, &goods, "金创药", &cat, &reg, &mut 0, &c);
+        assert_eq!(r.frames.len(), 1);
+        assert_eq!(r.frames[0].recog, 3);
+        assert_eq!(st.item_list.len(), 3, "金币不足不得消耗材料");
+
+        // n14=4：材料不足（只有 1 件草药 < 2）。
+        let mut st = ground(1000, vec![mbag(4, 71)]);
+        let r = make_drug_item(&mut st, &goods, "金创药", &cat, &reg, &mut 0, &c);
+        assert_eq!(r.frames.len(), 1);
+        assert_eq!(r.frames[0].recog, 4);
+        assert_eq!(st.item_list.len(), 1, "材料不足不得消耗");
+
+        // n14=2：空配方（不需材料）+ 背包满 46 ⇒ `AddItemToBag` 失败。
+        let empty_reg = make_reg("[金创药]\n");
+        let full: Vec<BagItem> = (0..46).map(|i| mbag(2, 100 + i)).collect();
+        let mut st = ground(1000, full);
+        let r = make_drug_item(&mut st, &goods, "金创药", &cat, &empty_reg, &mut 0, &c);
+        assert_eq!(r.frames.len(), 1, "无材料消耗 ⇒ 只发结果帧");
+        assert_eq!(r.frames[0].recog, 2);
+        assert_eq!(st.item_list.len(), 46);
+        assert_eq!(st.gold, 1000, "失败不得扣金");
     }
 }

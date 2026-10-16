@@ -204,6 +204,15 @@ pub trait ItemCatalog {
     fn name(&self, index: u16) -> Option<&str> {
         self.get(index).map(|t| t.name.as_str())
     }
+
+    /// `GameItemSystem.CopyToUserItemFromName`（`GameItemSystem.cs:113-140`）的名命中：
+    /// 表内**最小 Index** 的名字（`OrdinalIgnoreCase`）；无 ⇒ `None`。
+    ///
+    /// **默认 `None`**：泛型目录（如 `mir2_formula::drop::VecItemCatalog`）不做按名查
+    /// （制药 `Merchant.ClientMakeDrugItem` 只走本宿主的 `StdItemCatalog`，见 `shop::make_drug_item`）。
+    fn find_by_name(&self, _name: &str) -> Option<u16> {
+        None
+    }
 }
 
 /// `Vec<StdItem>` 的目录实现（下标 = Index，等价于 `ItemSystem` 的数组语义）。
@@ -251,6 +260,11 @@ impl StdItemCatalog {
 impl ItemCatalog for StdItemCatalog {
     fn get(&self, index: u16) -> Option<&StdItem> {
         self.items.get(&index)
+    }
+
+    fn find_by_name(&self, name: &str) -> Option<u16> {
+        // 走固有方法（表内最小 Index 的名命中，`OrdinalIgnoreCase`）。
+        StdItemCatalog::find_by_name(self, name)
     }
 }
 

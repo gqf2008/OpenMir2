@@ -423,7 +423,8 @@ fn inc_health_spell(state: &mut UseItemActorState, n_hp: i32, n_mp: i32) -> bool
 }
 
 /// `PlayObject.GetMyStatus()`（`PlayObject.Base.cs:1183-1191`）：`min(HungerStatus/1000, 4)`（整数除）。
-fn my_status(hunger_status: i32) -> i32 {
+#[must_use]
+pub fn my_status(hunger_status: i32) -> i32 {
     let result = hunger_status / 1000;
     if result > 4 {
         4

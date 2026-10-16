@@ -746,6 +746,7 @@ async fn main() -> Result<()> {
                         castle_member_price_rate: cfg.castle_member_price_rate,
                         super_repair_price_rate: cfg.super_repair_price_rate,
                         repair_item_dec_dura: cfg.repair_item_dec_dura,
+                        make_durg_price: cfg.make_durg_price,
                         get_all_npc_tax: cfg.castle_get_all_npc_tax,
                         human_max_gold: cfg.human_max_gold,
                     },
@@ -1420,12 +1421,13 @@ fn handle_inbound_cmd(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mut mir2_world::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     registry: Option<&mir2_envir::MapRegistry>,
     pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
     cfg: &GroundCfg,
+    displays: &downlink::DisplayTable,
 ) {
     use game_svr::inbound;
     use mir2_protocol::messages;
@@ -1570,14 +1572,15 @@ fn handle_inbound_cmd(
         }
         messages::CM_BUTCH => {
             let actor_id = sessions.get(chr_name).map_or(0, |s| s.actor_id);
-            let e = world.entities.get(actor_id);
+            let (curr_x, curr_y) = world.entities.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
+            let bt_dir = u8::try_from(cmd.series).unwrap_or(0);
             let out = inbound::client_butch(&inbound::ButchInputs {
                 // `CM_BUTCH` 客户端 `MakeMessage(ident, charId, x, y, dir)` ⇒ nX=param, nY=tag, dir=series。
                 n_x: i32::from(cmd.param),
                 n_y: i32::from(cmd.tag),
-                bt_dir: u8::try_from(cmd.series).unwrap_or(0),
-                curr_x: e.map_or(0, |e| e.x),
-                curr_y: e.map_or(0, |e| e.y),
+                bt_dir,
+                curr_x,
+                curr_y,
                 close_speed_hack_check: true,
                 now_tick: world.clock_ms as i32,
                 turn_tick: 0,
@@ -1586,6 +1589,14 @@ fn handle_inbound_cmd(
                 valid_object: false,
                 target_butcherable: false,
             });
+            // **出站接线片 W2 / 批 B 生产者**：过限速门后 `SendRefMsg(RM_BUTCH, Dir, CurrX, CurrY, 0, "")`
+            // 恒发（`PlayObject.Operate.cs:749`）。`Dir = btDir` 仅在 `|Δ|<=2` 成立时
+            // （`Operate.cs:729-747`，`IsValidObject` 只门效果体、不门方向）；否则当前朝向。
+            if out.send_butch && actor_id != 0 {
+                let cur_dir = displays.get(actor_id).map_or(0, |d| d.dir);
+                let dir = if out.dir_updated { bt_dir } else { cur_dir };
+                world.enqueue(mir2_world::Command::Butch { actor_id, dir });
+            }
             glog!(
                 "INF",
                 "CM_BUTCH：ChrName={chr_name} result={} dir_updated={} butchered={} send_butch={}（RM_BUTCH 附近广播 + 肉品质 RNG 效果体，登记）",
@@ -1596,10 +1607,12 @@ fn handle_inbound_cmd(
             );
         }
         messages::CM_USERMAKEDRUGITEM => {
-            // 商人注册表（`FindMerchant`）+ `Merchant.ClientMakeDrugItem` 体归商店车道（登记）。
+            // 制药片 WB 已把本命令并入 **商店派发**（`handle_shop_cmd`，需商人/在售库存/配方上下文）
+            // ⇒ 该臂在 sim 循环里不可达（商店派发先命中，见 `handle_shop_cmd` 派发列表）。
+            // 保留为兜底：直调 `handle_inbound_cmd` 的测试/旧路径仍能记一条日志。
             glog!(
                 "INF",
-                "CM_USERMAKEDRUGITEM：ChrName={chr_name} merchant={} item={:?}（商人注册表/配方体归商店车道，登记）",
+                "CM_USERMAKEDRUGITEM：ChrName={chr_name} merchant={} item={:?}（走商店派发；此处兜底）",
                 cmd.recog,
                 tail.unwrap_or("")
             );
@@ -1809,6 +1822,7 @@ fn handle_ground_cmd(
         game_gold: sg.game_gold,
         wabil: sg.state.wabil.clone(),
         sys_msg: sg.sys_msg.clone(),
+        hunger_status: sg.hunger_status,
     };
     let bodies = game_svr::pickwire::outcome_frames(&immediate, &notices, &wire, &drop_msg);
     if let Some(tx) = route_to_gate(gates, gate_idx, socket, "拾取/丢弃回帧") {
@@ -3070,6 +3084,7 @@ fn shop_context<'a>(
         player_actor_id,
         red_f: colors.red_f,
         red_b: colors.red_b,
+        make_durg_price: cfg.make_durg_price,
     }
 }
 
@@ -3347,6 +3362,8 @@ fn handle_shop_cmd(
     catalog: &dyn game_svr::ability::ItemCatalog,
     shop_cfg: &ShopCfg,
     colors: &MsgColors,
+    make_items: Option<&mir2_envir::makeitem::MakeItemRegistry>,
+    item_number: &mut i32,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -3639,6 +3656,43 @@ fn handle_shop_cmd(
                     "CM_USERREPAIRITEM：GotoLable({g}) 未执行（Market_Def 商人脚本未装载，登记；ChrName={chr_name}）"
                 );
             }
+        }
+        game_svr::shop::CM_USERMAKEDRUGITEM => {
+            // `ClientMakeDrugItem`（`PlayObject.Operate.cs:1216-1226`）：门 =
+            // `merchant != null && merchant.IsMakeDrug`（FindMerchant 已在函数头过滤）+
+            // `merchant.Envir == Envir && IsWithinSight(merchant)`。无 Death/Ghost 门
+            // （与 `ClientMerchantDlgSelect` 不同）。
+            if !(mflags.is_make_drug && same_map && within_sight) {
+                glog!(
+                    "DBG",
+                    "CM_USERMAKEDRUGITEM：非制药/异图/超视距 ⇒ 无帧 ChrName={chr_name} item={item_name:?}"
+                );
+                return;
+            }
+            let sl = shop_script_lable(shop_sessions, chr_name);
+            let ctx = shop_context(catalog, mprice, mcastle, shop_cfg, &sl, actor_id, colors);
+            let Some(goods) = world.merchant_goods_groups(merchant_id) else {
+                return;
+            };
+            // 无 `Envir/MakeItem.txt` ⇒ 注册表空（oracle `M2Share.MakeItemList` 空 ⇒ `GetMakeItemInfo` null）。
+            let empty_reg = mir2_envir::makeitem::MakeItemRegistry::default();
+            let reg = make_items.unwrap_or(&empty_reg);
+            let r = game_svr::shop::make_drug_item(
+                &mut sg.state,
+                goods,
+                item_name,
+                catalog,
+                reg,
+                item_number,
+                &ctx,
+            );
+            glog!(
+                "INF",
+                "CM_USERMAKEDRUGITEM：ChrName={chr_name} item={item_name:?} ok={} frames={}",
+                r.ok,
+                r.frames.len()
+            );
+            out = r.frames;
         }
         _ => {}
     }
@@ -3969,6 +4023,7 @@ fn handle_eat_cmd(
         game_gold: sg.game_gold,
         wabil: sg.state.wabil.clone(),
         sys_msg: None,
+        hunger_status: sg.hunger_status,
     };
     let mut sent = out.immediate_frames.len();
     for n in &out.notices {
@@ -6817,6 +6872,8 @@ struct ShopCfg {
     super_repair_price_rate: i32,
     /// `Config.RepairItemDecDura`（`Merchant.cs:1656`）。
     repair_item_dec_dura: i32,
+    /// `Config.MakeDurgPrice`（`[Setup] MakeDurg`，`GameSvrConf.cs:1450`）——制药面板价/收费（WB）。
+    make_durg_price: i32,
     /// `Config.GetAllNpcTax`（`Merchant.cs:544/1250/1385/1637`；`[Setup] CastleGetAllNpcTax`）。
     get_all_npc_tax: bool,
     /// `Config.HumanMaxGold`（`IncGold` 上限，`PlayObject.Base.cs:168`）。
@@ -7361,12 +7418,19 @@ fn sim_loop(
             mm.len()
         );
     }
-    if let Some(mi) = enter_cfg.make_items.take() {
-        glog!(
+    // 制药片 WB：`CM_USERMAKEDRUGITEM` 已接线（`handle_shop_cmd`）⇒ 注册表**保留**给 sim 循环的
+    // `Merchant.ClientMakeDrugCheckNeedItem` 用（不再 `take` 后丢弃）。
+    let make_items = enter_cfg.make_items.take();
+    match &make_items {
+        Some(mi) => glog!(
             "INF",
-            "MakeItem 注册表就绪：{} 组（CM_USERMAKEDRUGITEM 未实现 ⇒ 登记）",
+            "MakeItem 注册表就绪：{} 组（CM_USERMAKEDRUGITEM 已接线，制药片 WB）",
             mi.len()
-        );
+        ),
+        None => glog!(
+            "INF",
+            "无 Envir/MakeItem.txt ⇒ 制药配方表空（CM_USERMAKEDRUGITEM 的 ClientMakeDrugCheckNeedItem 恒 false ⇒ n14=4）"
+        ),
     }
     {
         let line_notice = std::mem::take(&mut enter_cfg.line_notice);
@@ -7655,9 +7719,11 @@ fn sim_loop(
                             | game_svr::shop::CM_USERGETDETAILITEM
                             | game_svr::shop::CM_USERREPAIRITEM
                             | game_svr::shop::CM_MERCHANTQUERYREPAIRCOST
+                            | game_svr::shop::CM_USERMAKEDRUGITEM
                     ) {
                         // M3⑤-实现 4：商店 `CM_*`（对话/售价/卖出/买入/详情/查修理价/修理）。
-                        // oracle `PlayObject.Message.cs:888-942`。
+                        // 制药片 WB：并入同一派发（`CM_USERMAKEDRUGITEM` 需商人上下文）。
+                        // oracle `PlayObject.Message.cs:888-942` + `:972-974`。
                         handle_shop_cmd(
                             cmd.ident,
                             cmd.recog,
@@ -7677,6 +7743,8 @@ fn sim_loop(
                             &enter_cfg.catalog,
                             &enter_cfg.shop,
                             &colors,
+                            make_items.as_ref(),
+                            &mut item_number,
                         );
                     } else if matches!(
                         cmd.ident,
@@ -7800,12 +7868,13 @@ fn sim_loop(
                             &chr_name,
                             socket,
                             &online,
-                            &world,
+                            &mut world,
                             &mut ground_sessions,
                             &gates,
                             registry.as_ref(),
                             &mut pwd_sessions,
                             &enter_cfg.ground,
+                            &displays,
                         );
                     }
                 }
@@ -16887,9 +16956,11 @@ mod tests {
             castle_member_price_rate: 100,
             super_repair_price_rate: 100,
             repair_item_dec_dura: 0,
+            make_durg_price: 100,
             get_all_npc_tax: false,
             human_max_gold: 10_000_000,
         };
+        let mut item_number = 0i32;
         let colors = MsgColors {
             red_f: 255,
             red_b: 56,
@@ -16925,6 +16996,8 @@ mod tests {
             &catalog,
             &shop_cfg,
             &colors,
+            None,
+            &mut item_number,
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -16963,6 +17036,8 @@ mod tests {
             &catalog,
             &shop_cfg,
             &colors,
+            None,
+            &mut item_number,
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -16990,6 +17065,8 @@ mod tests {
             &catalog,
             &shop_cfg,
             &colors,
+            None,
+            &mut item_number,
         );
         let mut emitted = 0usize;
         while rx0.try_recv().is_ok() {
@@ -17079,9 +17156,11 @@ mod tests {
             castle_member_price_rate: 100,
             super_repair_price_rate: 100,
             repair_item_dec_dura: 0,
+            make_durg_price: 100,
             get_all_npc_tax: false,
             human_max_gold: 10_000_000,
         };
+        let mut item_number = 0i32;
         let colors = MsgColors {
             red_f: 255,
             red_b: 56,
@@ -17110,6 +17189,8 @@ mod tests {
             &catalog,
             &shop_cfg,
             &colors,
+            None,
+            &mut item_number,
         );
         let body = match rx0.try_recv() {
             Ok(SimToGate::SendFrame { socket, body }) => {
@@ -17164,6 +17245,8 @@ mod tests {
             &catalog,
             &shop_cfg,
             &colors,
+            None,
+            &mut item_number,
         );
         let body = match rx0.try_recv() {
             Ok(SimToGate::SendFrame { socket, body }) => {
@@ -17212,6 +17295,8 @@ mod tests {
             &catalog,
             &shop_cfg,
             &colors,
+            None,
+            &mut item_number,
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -17220,6 +17305,394 @@ mod tests {
     }
 
     // ===================== 入站派发 P0 批（R1 前六条）=====================
+
+    /// **制药片 WB：`@makedrug` 面板 + `CM_USERMAKEDRUGITEM` 全链端到端**（经 `handle_shop_cmd`）。
+    ///
+    /// ① `CM_MERCHANTDLGSELECT("@makedrug")` + 制药商人 ⇒ 网关收一条 `SM_SENDUSERMAKEDRUGITEMLIST(712)`，
+    ///    `Recog=ActorId`、尾 = `名/0/MakeDurgPrice/1/` 拼接。
+    /// ② `CM_USERMAKEDRUGITEM("金创药")` ⇒ 三条帧
+    ///    `SM_ADDITEM(200)` → `SM_DELITEMS(709)` → `SM_MAKEDRUG_SUCCESS(713, Recog=900)`；
+    ///    金币 1000→900、材料消耗、成品入包。
+    /// ③ 非制药商人 ⇒ 零帧。
+    ///
+    /// 变异必红：删掉 `CM_USERMAKEDRUGITEM` 臂（或 `handle_shop_cmd` 里的 `is_make_drug` 门）⇒ ①②/③ 必红。
+    #[test]
+    fn cm_usermakedrugitem_full_chain_over_gate() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let merchant_id = world
+            .insert_merchant(mir2_world::merchant::MerchantSpawn {
+                name: "药商".to_string(),
+                x: 11,
+                y: 10,
+                map_id: 0,
+                state: mir2_world::merchant::MerchantState::new(
+                    "药铺".to_string(),
+                    "0".to_string(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    mir2_world::merchant::MerchantFlags {
+                        is_make_drug: true,
+                        ..Default::default()
+                    },
+                    vec![0, 5],
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("制药商人入世界");
+        // 在售组首件 = 成品「金创药」（`Index=3`）。
+        world.merchant_add_item_to_goods_list(
+            merchant_id,
+            mir2_world::merchant::MerchantItem {
+                make_index: 9,
+                index: 3,
+                dura: 12,
+                dura_max: 12,
+                desc: [0; 14],
+            },
+        );
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        for (idx, name, price, dura) in [
+            (3u16, "金创药", 100i32, 12u16),
+            (4, "草药", 5, 5),
+            (5, "布衣", 5, 5),
+        ] {
+            catalog.insert(
+                idx,
+                mir2_data::StdItem {
+                    name: name.to_string(),
+                    price,
+                    weight: 1,
+                    std_mode: 0,
+                    dura_max: dura,
+                    ..mir2_data::StdItem::default()
+                },
+            );
+        }
+        let make_reg =
+            mir2_envir::makeitem::parse_make_item_lines("[金创药]\n草药 2\n布衣 1\n").unwrap();
+
+        // —— 玩家会话：金币 1000、背包 2×草药 + 1×布衣。
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.state.gold = 1000;
+        sg.state.item_list = vec![
+            game_svr::bag::BagItem {
+                make_index: 71,
+                index: 4,
+                dura: 0,
+                dura_max: 0,
+                desc: [0; 14],
+            },
+            game_svr::bag::BagItem {
+                make_index: 72,
+                index: 4,
+                dura: 0,
+                dura_max: 0,
+                desc: [0; 14],
+            },
+            game_svr::bag::BagItem {
+                make_index: 73,
+                index: 5,
+                dura: 0,
+                dura_max: 0,
+                desc: [0; 14],
+            },
+        ];
+        sessions.insert("hero".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut shop_sessions: HashMap<String, ShopSession> = HashMap::new();
+        let mut sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState> =
+            HashMap::new();
+        let mut sell_off_book = game_svr::selloff::SellOffBook::default();
+        let shop_cfg = ShopCfg {
+            castle_member_price_rate: 100,
+            super_repair_price_rate: 100,
+            repair_item_dec_dura: 0,
+            make_durg_price: 100,
+            get_all_npc_tax: false,
+            human_max_gold: 10_000_000,
+        };
+        let mut item_number = 500i32;
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+        };
+        let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+
+        // —— ① `@makedrug` 面板。
+        handle_shop_cmd(
+            game_svr::shop::CM_MERCHANTDLGSELECT,
+            merchant_id,
+            0,
+            0,
+            Some("@makedrug"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut shop_sessions,
+            &mut sell_off_sessions,
+            &mut sell_off_book,
+            &trade,
+            &gates,
+            &mut world,
+            &catalog,
+            &shop_cfg,
+            &colors,
+            Some(&make_reg),
+            &mut item_number,
+        );
+        let panel = drain_frames(&mut rx0);
+        assert_eq!(
+            panel.len(),
+            1,
+            "① @makedrug ⇒ 一条 SM_SENDUSERMAKEDRUGITEMLIST"
+        );
+        let (ident, param, tag, recog) = hdr(&panel[0]);
+        assert_eq!(ident, mir2_protocol::messages::SM_SENDUSERMAKEDRUGITEMLIST);
+        assert_eq!(recog, merchant_id, "Recog=ActorId（商人）");
+        assert_eq!((param, tag), (0, 0));
+        assert_eq!(
+            &panel[0][12..],
+            &mir2_protocol::edcode::encode(&crate::downlink::gbk("金创药/0/100/1/")),
+            "尾 = EncodeString(名/0/价/1/)"
+        );
+
+        // —— ② 制药请求：三条帧按发送序。
+        handle_shop_cmd(
+            game_svr::shop::CM_USERMAKEDRUGITEM,
+            merchant_id,
+            0,
+            0,
+            Some("金创药"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut shop_sessions,
+            &mut sell_off_sessions,
+            &mut sell_off_book,
+            &trade,
+            &gates,
+            &mut world,
+            &catalog,
+            &shop_cfg,
+            &colors,
+            Some(&make_reg),
+            &mut item_number,
+        );
+        let frames = drain_frames(&mut rx0);
+        let idents: Vec<u16> = frames.iter().map(|b| hdr(b).0).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_ADDITEM,
+                mir2_protocol::messages::SM_DELITEMS,
+                mir2_protocol::messages::SM_MAKEDRUG_SUCCESS,
+            ],
+            "② 发送序 SM_ADDITEM → SM_DELITEMS → SM_MAKEDRUG_SUCCESS"
+        );
+        assert_eq!(
+            hdr(&frames[2]).3,
+            900,
+            "SM_MAKEDRUG_SUCCESS 的 Recog = 扣后金币 900"
+        );
+        assert_eq!(
+            hdr(&frames[1]).0,
+            mir2_protocol::messages::SM_DELITEMS,
+            "SM_DELITEMS 居中"
+        );
+        let g = sessions.get("hero").unwrap();
+        assert_eq!(g.state.gold, 900);
+        assert_eq!(g.state.item_list.len(), 1);
+        assert_eq!(g.state.item_list[0].index, 3);
+        assert_eq!(g.state.item_list[0].make_index, 501);
+
+        // —— ③ 非制药商人（同一实体去掉 IsMakeDrug）⇒ 零帧、零副作用。
+        {
+            let st = world.entities.get_mut(merchant_id).unwrap();
+            st.merchant.as_mut().unwrap().flags.is_make_drug = false;
+        }
+        handle_shop_cmd(
+            game_svr::shop::CM_USERMAKEDRUGITEM,
+            merchant_id,
+            0,
+            0,
+            Some("金创药"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut shop_sessions,
+            &mut sell_off_sessions,
+            &mut sell_off_book,
+            &trade,
+            &gates,
+            &mut world,
+            &catalog,
+            &shop_cfg,
+            &colors,
+            Some(&make_reg),
+            &mut item_number,
+        );
+        assert!(
+            drain_frames(&mut rx0).is_empty(),
+            "③ 非制药商人 ⇒ 零出帧（ClientMakeDrugItem 的 IsMakeDrug 门）"
+        );
+        assert_eq!(sessions.get("hero").unwrap().state.gold, 900, "③ 不得扣金");
+    }
+
+    /// **批 B 生产者（plan §4「W2 五帧的发射点」）：`CM_BUTCH` → `Command::Butch` → `SM_BUTCH(637)`** 端到端。
+    ///
+    /// `PlayObject.Operate.cs:749` 末尾**无条件** `SendRefMsg(RM_BUTCH, Dir, CurrX, CurrY, 0, "")`；
+    /// `Dir` 仅在 `|Δx|<=2 && |Δy|<=2` 成立时更新为 `btDir`（`Operate.cs:729-747`），否则保持当前朝向。
+    ///
+    /// 变异必红：删掉 `CM_BUTCH` 臂里的 `world.enqueue(Command::Butch …)` ⇒ ①② 必红；
+    /// 把方向恒取 `btDir`（无视 `|Δ|<=2` 门）⇒ ② 必红。
+    #[test]
+    fn cm_butch_enqueues_and_host_emits_sm_butch() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(32, 32);
+        let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
+            std::collections::HashMap::new();
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.want_ref_msg = true;
+            e
+        });
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".to_string(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            can_drop_gold: 1000,
+            drop_item_rage: 3,
+        };
+        // 玩家当前朝向 = 2（展示表）。
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, Vec::new()),
+        );
+
+        // ① 目标格 (11,10) 在 2 格内 ⇒ `Dir = btDir = 5`。
+        handle_inbound_cmd(
+            &CommandMessage {
+                recog: hero,
+                ident: mir2_protocol::messages::CM_BUTCH,
+                param: 11,
+                tag: 10,
+                series: 5,
+            },
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            None,
+            &mut pwd_sessions,
+            &cfg,
+            &displays,
+        );
+        let rec = world.tick();
+        assert_eq!(rec.butches.len(), 1, "① CM_BUTCH ⇒ 一条 ButchEvent");
+        assert_eq!(rec.butches[0].dir, 5, "① 2 格内 ⇒ Dir = btDir");
+        assert_eq!((rec.butches[0].x, rec.butches[0].y), (10, 10));
+        drain_action_downlink(&rec, &world, &displays, &online, &gates);
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1, "① 一条 SM_BUTCH(637)");
+        let (ident, param, tag, recog) = hdr(&frames[0]);
+        assert_eq!(ident, 637);
+        assert_eq!(recog, hero);
+        assert_eq!((param, tag), (10, 10), "Param/Tag = CurrX/CurrY");
+        assert_eq!(
+            u16::from_le_bytes([frames[0][10], frames[0][11]]),
+            5,
+            "① Series = Dir = btDir = 5"
+        );
+
+        // ② 目标格 (20,10) 超 2 格 ⇒ `Dir` 取当前朝向 2（**不取** btDir=7）。
+        handle_inbound_cmd(
+            &CommandMessage {
+                recog: hero,
+                ident: mir2_protocol::messages::CM_BUTCH,
+                param: 20,
+                tag: 10,
+                series: 7,
+            },
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            None,
+            &mut pwd_sessions,
+            &cfg,
+            &displays,
+        );
+        let rec = world.tick();
+        assert_eq!(rec.butches.len(), 1);
+        assert_eq!(
+            rec.butches[0].dir, 2,
+            "② 超 2 格 ⇒ Dir 取当前朝向 2（不取 btDir=7）"
+        );
+        drain_action_downlink(&rec, &world, &displays, &online, &gates);
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(u16::from_le_bytes([frames[0][10], frames[0][11]]), 2);
+    }
 
     /// 把一条 `SimToGate::SendFrame` 流排空成帧体列表（body 含 12B 命令头）。
     fn drain_frames(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
@@ -17231,7 +17704,6 @@ mod tests {
         }
         out
     }
-
     /// 从帧体取 `Ident`/`Param`/`Tag`。
     fn hdr(body: &[u8]) -> (u16, u16, u16, i32) {
         (
@@ -18271,7 +18743,8 @@ mod tests {
     fn cm_password_emits_sm_password_on_reset_branch() {
         use mir2_protocol::messages;
         use std::collections::HashMap;
-        let world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world::World::new(32, 32);
+        let displays = downlink::DisplayTable::new();
         let mut online: OnlineRegistry = Vec::new();
         online_set(
             &mut online,
@@ -18321,12 +18794,13 @@ mod tests {
             "hero",
             901,
             &online,
-            &world,
+            &mut world,
             &mut sessions,
             &gates,
             None,
             &mut pwd_sessions,
             &cfg,
+            &displays,
         );
         let mut ids = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -18352,7 +18826,8 @@ mod tests {
     fn cm_password_wparam_zero_emits_nothing() {
         use mir2_protocol::messages;
         use std::collections::HashMap;
-        let world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world::World::new(32, 32);
+        let displays = downlink::DisplayTable::new();
         let mut online: OnlineRegistry = Vec::new();
         online_set(
             &mut online,
@@ -18402,12 +18877,13 @@ mod tests {
             "hero",
             901,
             &online,
-            &world,
+            &mut world,
             &mut sessions,
             &gates,
             None,
             &mut pwd_sessions,
             &cfg,
+            &displays,
         );
         assert!(
             rx0.try_recv().is_err(),

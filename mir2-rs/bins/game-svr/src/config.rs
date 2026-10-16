@@ -138,6 +138,10 @@ pub struct GateConfig {
     /// `[Setup] RepairItemDecDura`（`ServerConf.cs:488`，缺省 `30`；现网 `90`）——普通修理掉持久除数
     /// （`Merchant.cs:1656`）。
     pub repair_item_dec_dura: i32,
+    /// `[Setup] MakeDurg`（oracle `ServerConf.cs:244` 的 `ReadWriteInteger("Setup","MakeDurg",…)`，
+    /// `GameSvrConf.cs:1450` 缺省 `100`）——合成/制药单价
+    /// （`Merchant.cs:1010` 面板价、`Merchant.cs:1510/1518` 收费与扣金）。
+    pub make_durg_price: i32,
     /// `[Setup] CastleMemberPriceRate`（`ServerConf.cs:250`，缺省 `80`）——城堡成员价百分比
     /// （`Merchant.cs:772`）。
     pub castle_member_price_rate: i32,
@@ -252,6 +256,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut magic_attack_rage: Option<u8> = None;
     let mut super_repair_price_rate: Option<i32> = None;
     let mut repair_item_dec_dura: Option<i32> = None;
+    let mut make_durg_price: Option<i32> = None;
     let mut castle_member_price_rate: Option<i32> = None;
     let mut castle_get_all_npc_tax: Option<bool> = None;
     let mut start_point_size: Option<u8> = None;
@@ -571,6 +576,13 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                                 format!("RepairItemDecDura 不是合法整数：{v:?}")
                             })?);
                         }
+                        // `ServerConf.cs:244` 的 `ReadWriteInteger("Setup", "MakeDurg", …)`。
+                        "MAKEDURG" => {
+                            make_durg_price = Some(
+                                v.parse()
+                                    .with_context(|| format!("MakeDurg 不是合法整数：{v:?}"))?,
+                            );
+                        }
                         "CASTLEMEMBERPRICERATE" => {
                             castle_member_price_rate = Some(v.parse().with_context(|| {
                                 format!("CastleMemberPriceRate 不是合法整数：{v:?}")
@@ -659,6 +671,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         magic_attack_rage: magic_attack_rage.unwrap_or(8),
         super_repair_price_rate: super_repair_price_rate.unwrap_or(3),
         repair_item_dec_dura: repair_item_dec_dura.unwrap_or(30),
+        // oracle 缺省值（`GameSvrConf.cs:1450`）：`[Setup]` 里没写不算错。
+        make_durg_price: make_durg_price.unwrap_or(100),
         castle_member_price_rate: castle_member_price_rate.unwrap_or(80),
         castle_get_all_npc_tax: castle_get_all_npc_tax.unwrap_or(false),
         // oracle 缺省值（`GameSvrConf.cs:1400/1374/1375/1376`）：`[Setup]` 里没写不算错。

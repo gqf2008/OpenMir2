@@ -38,7 +38,7 @@ use crate::ground::{
     RM_WEIGHTCHANGED, SM_ADDITEM, SM_DROPITEM_FAIL, SM_DROPITEM_SUCCESS,
 };
 use crate::smframe;
-use crate::useitem::{QueuedNotice, RM_HEALTHSPELLCHANGED};
+use crate::useitem::{my_status, QueuedNotice, RM_HEALTHSPELLCHANGED, RM_MYSTATUS};
 use mir2_world::{FloorItemKind, FloorItemView};
 
 /// 接线层在一次 pickup/drop 处理里需要读到的**会话态**（oracle `PlayObject` 上的当下值）。
@@ -54,6 +54,9 @@ pub struct WireSession {
     pub wabil: Ability,
     /// `MessageSettings.CanotPickUpItem` 的 GBK 原文；缺 ⇒ `RM_SYSMESSAGE` 不产出（缺口 1）。
     pub sys_msg: Option<Vec<u8>>,
+    /// `PlayObject.HungerStatus`（`PlayObject.cs:225`）——`RM_MYSTATUS` 的 `GetMyStatus()`
+    /// （`PlayObject.Base.cs:1183`）读它（**制药/食药片 WB**：`CM_EAT` StdMode 1 的跨档出帧）。
+    pub hunger_status: i32,
 }
 
 /// 把一条立即帧（[`Frame`]）翻成 `SM_*` body；未知 ident ⇒ `None`（调用方记 WRN）。
@@ -98,6 +101,12 @@ pub fn notice_frame(n: &QueuedNotice, session: &WireSession) -> Option<Vec<u8>> 
             )
         }),
         RM_MENU_OK => Some(smframe::sm_menu_ok(n.n_param1, &[])),
+        // `RM_MYSTATUS`（`PlayObject.Base.cs:291` 的 `RefMyStatus()`）⇒
+        // `SendDefMessage(SM_MYSTATUS, 0, (short)GetMyStatus(), 0, 0)`（`PlayObject.Message.cs:1950`）。
+        // `GetMyStatus()` = `min(HungerStatus/1000, 4)` 的**当下**值（`PlayObject.Base.cs:1183`）。
+        RM_MYSTATUS => Some(crate::smframe_ext::sm_mystatus(my_status(
+            session.hunger_status,
+        ))),
         _ => None,
     }
 }
@@ -254,6 +263,7 @@ mod tests {
             game_gold,
             wabil: wire_ability(),
             sys_msg: sys_msg.map(<[u8]>::to_vec),
+            hunger_status: 0,
         }
     }
 
@@ -394,6 +404,44 @@ mod tests {
         )
         .unwrap();
         assert_eq!(menu, header(4660, 767, 0, 0, 0));
+    }
+
+    /// **制药/食药片 WB**：`RM_MYSTATUS`（`PlayObject.Base.cs:291` 的 `RefMyStatus`）⇒
+    /// `SM_MYSTATUS(708)`，`Param = (u16)(short)GetMyStatus()`、`Recog=0`，其中
+    /// `GetMyStatus() = min(HungerStatus/1000, 4)`（当下值）。
+    ///
+    /// 变异必红：把 `Recog` 从 0 改成 `actor_id`、或不做 `/1000` 截断（直接用 HungerStatus）⇒ 必红。
+    #[test]
+    fn mystatus_maps_to_sm_mystatus_with_derived_status() {
+        let mut s = session(0x7C30_3998, 0, 0, None);
+        s.hunger_status = 4500; // ⇒ GetMyStatus() = 4
+        let body = notice_frame(
+            &QueuedNotice {
+                ident: RM_MYSTATUS,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+            },
+            &s,
+        )
+        .expect("RM_MYSTATUS 必须可映射");
+        assert_eq!(body, header(0, 708, 4, 0, 0));
+        assert_eq!(body, crate::smframe_ext::sm_mystatus(4));
+        // 跨档下界（999 ⇒ 0）。
+        s.hunger_status = 999;
+        let low = notice_frame(
+            &QueuedNotice {
+                ident: RM_MYSTATUS,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+            },
+            &s,
+        )
+        .unwrap();
+        assert_eq!(low, header(0, 708, 0, 0, 0));
     }
 
     /// 缺 `sys_msg` ⇒ `RM_SYSMESSAGE` 不产出（缺口 1，不编造空文本）。
