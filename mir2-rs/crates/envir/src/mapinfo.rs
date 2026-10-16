@@ -168,12 +168,19 @@ impl Default for MapInfoFlag {
 }
 
 /// `Maps.cs` 里跨 section 保留的两个局部（`sLine` / `sReConnectMap`）。
+///
+/// **本仓增量（非 oracle 局部）**：`check_quest_count` 只做**计数**，供构造段 fold 用
+/// （`openmir2-ctor-draws-fold`）。它**不进** [`MapInfoFlag`]（那是与 C# `MapInfoFlag.cs` 逐字段
+/// 对齐、并被 `tests/csharp_parity.rs` 序列化比对的类型）⇒ 加在这里不改变 flag 的语义与制品。
 #[derive(Clone, Debug, Default)]
 pub struct MapInfoParseState {
     /// `string sLine = string.Empty;`（`Maps.cs:24`）。
     line: String,
     /// `string sReConnectMap = string.Empty;`（`Maps.cs:25`）。
     reconnect_map: String,
+    /// `Maps.cs:135-139` `CHECKQUEST` 命令的出现次数（每个一次 `LoadMapQuest(sLine)` ⇒ 一次
+    /// `new Merchant`，`Maps.cs:454`）。
+    pub check_quest_count: usize,
 }
 
 /// 一条 MapInfo section 解析结果。
@@ -305,7 +312,10 @@ pub fn parse_flag_commands(rest: &str, state: &mut MapInfoParseState) -> MapInfo
         }
         if mir2_shared::hutil32::compare_lstr(&command, "CHECKQUEST") {
             write_arrest(&mut state.line, &command, '(', ')');
-            // `QuestNPC = LoadMapQuest(sLine)`：本层不建 NPC（集成点由 M2 车道做）。
+            // `Maps.cs:137` `QuestNPC = LoadMapQuest(sLine)`：本层**不建 NPC**（世界实体集成点由 M2
+            // 车道做），但 oracle 那一次 `new Merchant`（`Maps.cs:454-467`）的 **4 抽**必须计数
+            // ⇒ 这里只累加出现次数（构造段 fold 的 `M2` 站点）。
+            state.check_quest_count += 1;
             continue;
         }
         if mir2_shared::hutil32::compare_lstr(&command, "NEEDSET_ON") {
@@ -556,6 +566,22 @@ pub fn parse_map_info_lines(lines: &[String]) -> Vec<MapInfoEntry> {
         .collect()
 }
 
+/// `Maps.cs:135-139` 的 `CHECKQUEST` 命令**出现次数**（构造段 `M2` 站点的计数）。
+///
+/// 走**同一条** [`parse_section_line_with_state`] 解析路径（门/分词完全一致，不另写一份扫描，
+/// 免得两处漂移）：oracle 每个 `CHECKQUEST` 命令一次 `LoadMapQuest(sLine)` ⇒ `Maps.cs:454`
+/// 一次 `new Merchant` ⇒ **4 抽**（`check_quest_count × 4`）。
+///
+/// `Maps.cs:76-79` 的门照抄：非 `[` 行、`[]` 内图名为空的行都不解析 ⇒ 其中的命令也不计数。
+#[must_use]
+pub fn count_check_quest_commands(lines: &[String]) -> usize {
+    let mut state = MapInfoParseState::default();
+    for line in lines {
+        let _ = parse_section_line_with_state(line, &mut state);
+    }
+    state.check_quest_count
+}
+
 /// `Maps.cs:361-379` 的「加载地图连接点」行（非 section 行）分词结果：
 /// `源图 源X,源Y -> 目标图 目标X,目标Y`。
 ///
@@ -747,5 +773,33 @@ mod tests {
             (r[1].src_x, r[1].src_y, r[1].dst_x, r[1].dst_y),
             (18, 15, 34, 15)
         );
+    }
+    /// **构造段 `M2` 计数**（`Maps.cs:135-139`）：`CHECKQUEST` 命令出现几次就记几次
+    /// （每处一次 `LoadMapQuest` ⇒ `Maps.cs:454` 一次 `new Merchant` ⇒ 4 抽）。
+    ///
+    /// 三处门逐条钉死（改坏必红）：
+    /// - 一行里**两个** `CHECKQUEST` ⇒ 计 2（不是 1）；
+    /// - 注释行 `;` 与 section 外的 `CHECKQUEST` 文本 ⇒ 计 0（不是扫全文）；
+    /// - `[]` 内图名为空的 section ⇒ 整段不解析（`Maps.cs:76-79`），其中的命令计 0。
+    #[test]
+    fn counts_check_quest_commands_per_command() {
+        let lines: Vec<String> = vec![
+            "[0137 边境村] CHECKQUEST(Q0001) CHECKQUEST(Q0002)".to_string(),
+            ";CHECKQUEST(Q9999) 注释行".to_string(),
+            "[0] CHECKQUEST(Q0003)".to_string(),
+            "CHECKQUEST(Q0004) 不在 section 里".to_string(),
+            "[] CHECKQUEST(Q0005)".to_string(),
+        ];
+        assert_eq!(count_check_quest_commands(&lines), 3);
+        assert_eq!(count_check_quest_commands(&[]), 0);
+    }
+
+    /// `check_quest_count` **不进** `MapInfoFlag`（flag 是与 C# `MapInfoFlag.cs` 逐字段对齐、
+    /// 被 `tests/csharp_parity.rs` 序列化比对的类型）——同一批行解析两次，flag 逐字段相等。
+    #[test]
+    fn check_quest_count_does_not_leak_into_flag() {
+        let a = parse_map_info_lines(&["[0137 边境村] CHECKQUEST(Q0001)".to_string()]);
+        let b = parse_map_info_lines(&["[0137 边境村]".to_string()]);
+        assert_eq!(a[0].flag, b[0].flag);
     }
 }

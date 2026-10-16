@@ -15,10 +15,11 @@ use std::path::{Path, PathBuf};
 use crate::error::EnvirError;
 use crate::mapfile::{attach_points, load_map_file, MapFile};
 use crate::mapinfo::{
-    connect_map_info_arg, parse_map_info_lines, parse_map_routes, MapInfoEntry, MapInfoFlag,
-    MapRouteEntry,
+    connect_map_info_arg, count_check_quest_commands, parse_map_info_lines, parse_map_routes,
+    MapInfoEntry, MapInfoFlag, MapRouteEntry,
 };
 use crate::paths::{envir_file_path, map_file_path, point_file_path};
+use crate::robot::{parse_robot_lines, RobotRecord};
 use crate::text::decode_text;
 
 /// 一条未能入表的地图（诊断用；对应 C# 的 `LogService.Error`）。
@@ -110,6 +111,42 @@ impl MapLoader {
     /// MapInfo.txt 存在但读取失败。
     pub fn load_map_routes(&self) -> Result<Vec<MapRouteEntry>, EnvirError> {
         Ok(parse_map_routes(&self.load_map_info_lines()?))
+    }
+
+    /// `M2Share.GetEnvirFilePath("Robot.txt")`（**单参数重载** `M2Share.cs:1970-1977`）
+    /// = `Path.Combine(BasePath, EnvirDir, "Robot.txt")`。
+    #[must_use]
+    pub fn robot_path(&self) -> PathBuf {
+        envir_file_path(&self.base_path, &self.envir_dir, "", "Robot.txt")
+    }
+
+    /// 读 `Envir/Robot.txt`（`RobotManage.LoadRobot` `RobotManage.cs:21-49` 的装载半）。
+    ///
+    /// `Ok(None)` = **文件不存在**（oracle `:24-27` 的 `File.Exists` 门 ⇒ 直接 `return`，0 个对象
+    /// ⇒ **0 抽**）；`Ok(Some(records))` = 有效行（每行 1 个 `new RobotObject()` ⇒ 4 抽）。
+    ///
+    /// # Errors
+    /// 文件存在但读取失败。
+    pub fn load_robot(&self) -> Result<Option<Vec<RobotRecord>>, EnvirError> {
+        let path = self.robot_path();
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(EnvirError::Io { path, source }),
+        };
+        Ok(Some(parse_robot_lines(&decode_text(&bytes))))
+    }
+
+    /// `MapInfo`（含 `ConnectMapInfo` 子文件）里 `CHECKQUEST` 命令的出现次数
+    /// （`Maps.cs:135-139`；每处一次 `LoadMapQuest` ⇒ `Maps.cs:454` 一次 `new Merchant` ⇒ 4 抽）。
+    ///
+    /// 与 [`Self::load_map_info_entries`] 共用 [`Self::load_map_info_lines`] ⇒ 与
+    /// M2 站点的行集完全同源。
+    ///
+    /// # Errors
+    /// `MapInfo.txt` 存在但读取失败。
+    pub fn count_map_info_check_quests(&self) -> Result<usize, EnvirError> {
+        Ok(count_check_quest_commands(&self.load_map_info_lines()?))
     }
 
     /// 组装 `Maps.cs` 的 `loadList`：读主 `MapInfo.txt`，再按第一遍扫到的 `ConnectMapInfo`

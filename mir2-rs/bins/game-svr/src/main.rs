@@ -720,6 +720,40 @@ async fn main() -> Result<()> {
             }
         }
     };
+    // **构造段 fold（`openmir2-ctor-draws-fold`）**：oracle `GameApp` 启动链在**任何** NPC Run 之前
+    // 抽掉的构造数的**站点表**（主线程算，只读文件、**不抽数**）。抽数在 sim 线程：
+    // 阶段①（`GameApp.cs:58` RobotObject / `:85-87` G1–G3 / `:124` M2 `CHECKQUEST`）必须早于
+    // `InitializeMonster`（`:155`），阶段②（`:184` M1 + 尾 L2/L1/L3）在其后、`LoadMerchant`（`:227`）之前。
+    // 算不出（读文件失败/隐藏 NPC 名未知）⇒ 空计划 + ERR 登记（fail-closed：宁可少抽可见地报错，
+    // 也不静默降级；构造段账本此时**本来就不对齐**，与未实现前同状态）。
+    let ctor_fold_plan = match registry.as_ref() {
+        Some(reg) => {
+            match game_svr::ctor_fold::build_plan(&envir_loader, |n| reg.id_of(n).is_some()) {
+                Ok(plan) => {
+                    glog!(
+                    "INF",
+                    "构造段 fold 计划就绪：段①={} 段②={} 段③={} 合计抽数={}（GameApp ctor: RobotObject/G1-G3 | :124 M2 | :184 M1+L2/L1/L3）",
+                    plan.game_app_ctor.len(),
+                    plan.load_map_info.len(),
+                    plan.load_map_quest.len(),
+                    plan.total_draws()
+                );
+                    plan
+                }
+                Err(e) => {
+                    glog!(
+                        "ERR",
+                        "构造段 fold 计划失败（{e}）⇒ 空计划（构造段账本不对齐，登记）"
+                    );
+                    mir2_world::CtorFoldPlan::new()
+                }
+            }
+        }
+        None => {
+            glog!("WRN", "无地图注册表 ⇒ 构造段 fold 计划为空（登记）");
+            mir2_world::CtorFoldPlan::new()
+        }
+    };
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -769,6 +803,7 @@ async fn main() -> Result<()> {
                     },
                     need_exps,
                     rng_seed,
+                    ctor_fold_plan,
                     mon_gen: MonGenStartup {
                         table: monster_table,
                         entries: mon_gen_entries,
@@ -7711,6 +7746,13 @@ struct EnterConfig {
     /// **M3 T-30**：`MIR2_RNG_SEED` 解析出的固定种子（`seed::env_seed`）。`None` ⇒ 不注入，
     /// 保持 `World::with_maps` 的既有随机源（生产路径一字不改）。
     rng_seed: Option<i32>,
+    /// **构造段 fold（`openmir2-ctor-draws-fold`）**：oracle 启动期「`LoadMerchant`/`LoadNpcs`
+    /// 之外」的构造点站点表（主线程按 `Envir` 语料算好，**不抽数**；
+    /// 见 `game_svr::ctor_fold::build_plan`）。sim 线程按 oracle 次序分**三段**落进
+    /// `world.rng` 账本：段①（`GameApp` ctor：RobotObject / G1–G3）→【屏障 A：`ServerConf.cs:114`
+    /// 1 抽，**未建模留空**】→ 段②（`:124` M2 `CHECKQUEST`）→【屏障 B：`InitializeMonster`】→
+    /// 段③（`:184` M1 + L2/L1/L3）→【屏障 C：`LoadMerchant`/`LoadNpcs`】。
+    ctor_fold_plan: mir2_world::CtorFoldPlan,
     /// **M3④-实现 B 第 ③ 片**：MonGen 刷怪启动输入（怪物模板表 + `Envir/MonGen.txt` 运行时条目
     /// + `Server.conf` 刷怪参数）；`entries=None` ⇒ 无 `MonGen.txt`，不建宿主。
     mon_gen: MonGenStartup,
@@ -8012,6 +8054,31 @@ fn sim_loop(
     // **M3④-实现 B 第 ③ 片**：MonGen 刷怪调度宿主（`WorldServer.MonGen.cs:30/192/811`）。
     // `entries=None` ⇒ 无 `Envir/MonGen.txt`，不建宿主；`initialize_monster` 在此消耗一次
     // `world.rng`（oracle `InitializeMonster` 同一时机；RNG 次序 = 怪名分组序 + `MonsterList.Values`）。
+    // **构造段 fold · 段①**（`openmir2-ctor-draws-fold`）：`GameApp.cs:58`（`Robot.txt` 每有效行
+    // 一个 `new RobotObject`）/`:85-87`（G1–G3 三只孤儿 `new Merchant`）—— 每处恒 **4 抽**。
+    // fold = **只补抽、不建实体**（实体缺口另立条目）；抽数走共享 `world.rng`（同一条流）。
+    let ctor_ledger_ctor = world.fold_ctor_draws_game_app_ctor(&enter_cfg.ctor_fold_plan);
+    glog!(
+        "INF",
+        "构造段 fold 段①（GameApp ctor）已落账：{} 抽（{} 站点；RobotObject + G1-G3）",
+        ctor_ledger_ctor.len(),
+        enter_cfg.ctor_fold_plan.game_app_ctor.len()
+    );
+    // ★**屏障 A**：oracle `AppService.cs:87` `GameShare.LoadConfig()` → `GameShare.cs:90` →
+    // `ServerConf.cs:114` 的 `Random(10000)`（**1 抽**）—— 位置在 `GameApp` ctor **之后**、
+    // `GameApp.Initialize`（⇒ `:124` M2）**之前**（`new GameApp(...)` 由 DI 在构造 `AppService`
+    // 时发生，`StartingAsync` 才 `LoadConfig()`）。**本片未建模**（Rust `config.rs` 读同一键但不抽）
+    // ⇒ 此处**留空**并登记：补上这 1 抽后，段②/段③ 才与 oracle 等距（相对次序本片已排好）。
+    // **构造段 fold · 段②**（`GameApp.cs:124` `Map.LoadMapInfo()` 的 `CHECKQUEST` 行 ⇒
+    // `Maps.cs:454` 的 `new Merchant`）—— **必须早于** `InitializeMonster`（`:155` = 下面的
+    // `MonGenHost::start` 的 `Random(limit)`，屏障 B）。
+    let ctor_ledger_m2 = world.fold_ctor_draws_load_map_info(&enter_cfg.ctor_fold_plan);
+    glog!(
+        "INF",
+        "构造段 fold 段②（LoadMapInfo/CHECKQUEST）已落账：{} 抽（{} 站点；其前有未建模的屏障 A 1 抽待补）",
+        ctor_ledger_m2.len(),
+        enter_cfg.ctor_fold_plan.load_map_info.len()
+    );
     let mut mon_gen_host = match enter_cfg.mon_gen.entries.take() {
         Some(entries) => {
             let host = game_svr::mongen::MonGenHost::start(
@@ -8038,6 +8105,18 @@ fn sim_loop(
         }
         None => None,
     };
+    // **构造段 fold · 段③**（`openmir2-ctor-draws-fold`）：`GameApp.cs:184`（`LocalDB.LoadMapQuest`
+    // 的 `MapQuest.txt` 每有效行的 `new Merchant`（M1）+ 尾 `:403/404/405` 的 `QMangeNpc`/
+    // `QFunctionNpc`/`RobotNpc` 三只隐藏 `new Merchant`（L2/L1/L3））—— **必须晚于**
+    // `InitializeMonster`（`:155`，上面已跑；屏障 B）、**早于** `LoadMerchant`（`:227`）/
+    // `LoadNpcs`（`:229`，屏障 C）= 下面的商人/固定 NPC 装载（已建模的 L4/L5）。
+    let ctor_ledger_m1 = world.fold_ctor_draws_load_map_quest(&enter_cfg.ctor_fold_plan);
+    glog!(
+        "INF",
+        "构造段 fold 段③（LoadMapQuest）已落账：{} 抽（{} 站点；M1 + L2/L1/L3，位于 InitializeMonster 之后、LoadMerchant 之前）",
+        ctor_ledger_m1.len(),
+        enter_cfg.ctor_fold_plan.load_map_quest.len()
+    );
     // **M3⑤-实现 2 第①片**：`Envir/Merchant.txt` 装载 + O-1 FindMap 门 + O-2 `rename_rand`
     // （`LocalDB.cs:412` / `WorldServer.Merchant.cs:8-25`）。装载在起世界之后 ⇒ `rename_rand`
     // 走**同一条** `world.rng`（oracle `SystemShare.RandomNumber`）。`loader=None`（无 Envir）

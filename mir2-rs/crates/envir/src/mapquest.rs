@@ -264,6 +264,14 @@ pub struct MapQuestLoad {
     pub quest_npcs: Vec<QuestNpcRecord>,
     /// `QFunction` 记录（走 `AddMerchant`）。
     pub merchants: Vec<QuestNpcRecord>,
+    /// **本仓增量（构造段 fold 用，`openmir2-ctor-draws-fold`）**：三个隐藏脚本 NPC 中
+    /// **文件或目录存在**（`present`）的那些，按 [`HIDDEN_NPCS`] 的 oracle 次序
+    /// （`QManage` → `QFunction` → `RobotManage`）列出。
+    ///
+    /// 与 [`Self::quest_npcs`]/[`Self::merchants`] 是**同一批记录的重排**（不新增语义）：
+    /// 后两者按「进哪个列表」分桶，本字段按「`LocalDB.cs:403-405` 的调用次序」列出 —— 构造段
+    /// 账本要的正是后者（每只 `new Merchant` 各 4 抽，`LocalDB.cs:268/210/312`）。
+    pub hidden_npcs: Vec<QuestNpcRecord>,
     /// oracle `LoadMapQuest` 的返回值（1，或最后一条失败行的 `-i`）。
     pub result: i32,
     /// oracle 会 `SaveToFile` 的模板文件（本模块不写盘）。
@@ -370,6 +378,7 @@ impl MapLoader {
         let mut quests: Vec<MapQuestInfo> = Vec::new();
         let mut quest_npcs: Vec<QuestNpcRecord> = Vec::new();
         let mut merchants: Vec<QuestNpcRecord> = Vec::new();
+        let mut hidden_npcs: Vec<QuestNpcRecord> = Vec::new();
         let mut hidden_files_created: Vec<HiddenFileCreation> = Vec::new();
 
         // `:358-401`
@@ -425,9 +434,12 @@ impl MapLoader {
                     is_quest: false,
                 };
                 match spec.target {
-                    HiddenNpcTarget::QuestNpcList => quest_npcs.push(record),
-                    HiddenNpcTarget::MerchantList => merchants.push(record),
+                    HiddenNpcTarget::QuestNpcList => quest_npcs.push(record.clone()),
+                    HiddenNpcTarget::MerchantList => merchants.push(record.clone()),
                 }
+                // 构造段次序（`LocalDB.cs:403-405`：`QMangeNpc(); QFunctionNpc(); RobotNpc();`）
+                // = `HIDDEN_NPCS` 的数组序 ⇒ 本 vec 的次序即 oracle 的 `new` 次序。
+                hidden_npcs.push(record);
             }
         }
 
@@ -435,6 +447,7 @@ impl MapLoader {
             quests,
             quest_npcs,
             merchants,
+            hidden_npcs,
             result,
             hidden_files_created,
         })

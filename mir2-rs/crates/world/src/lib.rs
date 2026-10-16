@@ -20,6 +20,7 @@ pub mod buff;
 pub mod castle;
 pub mod castle_tax;
 pub mod combat;
+pub mod ctor_fold;
 pub mod entity;
 pub mod guild;
 pub mod magic;
@@ -66,6 +67,10 @@ pub use combat::{
     ACTOR_RACE_ANIMAL, ACTOR_RACE_NPC, ACTOR_RACE_PEACE_NPC, ATTACK_MODE_HAM_ALL,
     ATTACK_MODE_HAM_DEAR, ATTACK_MODE_HAM_GROUP, ATTACK_MODE_HAM_GUILD, ATTACK_MODE_HAM_MASTER,
     ATTACK_MODE_HAM_PEACE, ATTACK_MODE_HAM_PKATTACK,
+};
+pub use ctor_fold::{
+    CtorFoldEntry, CtorFoldLedger, CtorFoldPlan, CtorFoldSite, CTOR_FOLD_BARRIER_A_DRAWS,
+    CTOR_FOLD_DRAWS_PER_SITE, CTOR_FOLD_DRAW_KIND,
 };
 pub use entity::{
     BaseAnimalCtorDraws, Entity, EntityStore, MonsterCtorDraws, VisibleFlag, ACTOR_RACE_MONSTER,
