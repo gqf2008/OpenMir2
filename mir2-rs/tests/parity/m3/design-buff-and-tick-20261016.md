@@ -4,6 +4,15 @@
 - **worktree**：`E:/tmp/doc-buff`（detached HEAD = master `b08e065fc`），**只写本新文件**，未动任何既有文件。
 - **原始数据**：`E:/tmp/spec/redlist2.json`（findings V4-03 / V4-08 / V3-11 + V4-09）、`E:/tmp/spec/redlist2-digest.txt`；
   旁证 `E:/tmp/spec/critic.json`（NL2 商人脚本 / NL4 MakeGhost；对 L2/L4/L5/L6 的证伪——**来源与本文档不同，引用时已标注**）。
+- **行号快照声明（2026-10-16 对抗复核）**：本件所有 `file:line` 锚为**写作时（`b08e065fc`）快照**；此后 `main.rs`/`enter.rs`/`world.rs`
+  因片101/103/106 变动**已漂移**。**落地前以符号（函数/字段名）为准，勿按行号直接定位**。已实测漂移（现址）：
+  `main.rs:8310-8314`（`char_status: 0`）→ 现 `main.rs:8546`；`main.rs:5824`（切图 `game_time_now`）→ 现 `main.rs:6021`；
+  `main.rs:8364`（进世界 `game_time_now`）→ 现 `main.rs:8596`；`world.rs:630-650`/`637`/`648`（`tick` 次序与插入点）→
+  现 `world.rs:659`（`settle_deaths`）/`:680`（`monster_ai_tick`）/`:691`（`merchant_tick`，`tick` 首行 `:510`）；`enter.rs:203-215`（`game_time_from_hour`）→
+  现 `:208-215`；`enter.rs:217-226`（`game_time_now`）→ 现 `:223-226`；`enter.rs:329-341`（`day_bright`）→ 现 `:332`；
+  RNG 两件实体路径 = `crates/shared/src/rng.rs` / `crates/shared/src/rng_trace.rs`（**非** `crates/world/src/`）。
+  `merchant.rs` 多数锚**未漂移**（`:547`/`:649`/`:696/697/702` 实测命中），但 §4.7 U-B4 引的 `merchant.rs:597` **已漂移**
+  （丢预算口径现存于 `merchant.rs:526-545` 的 `merchant_tick` 文档第 3 条，`:532`）。`Merchant.cs:112-171/159/163/143-163` **未漂移**（实测命中）。
 - **纪律**：只读 oracle 与 Rust 源码；未跑 cargo、未起服务、未占端口；LF 换行。
 - **判级**：三件**全部 R**（理由逐条见 §2）。R 级未跑真机窗口前 `review` 不得 `closed`（AGENTS.md「判据分级」）。
 - **订正说明（2026-10-16，S2-FIX 复核）**：本文档原 §1 逐字转写了原始 redlist2 JSON 的**错误标题**「`V4-08：SystemProcessor.ProcessNpcs`」——经复核 oracle，NPC 的 200ms 周期驱动实为 **`MerchantProcessor.cs:7`**（`:31` 调 `SystemShare.WorldEngine.ProcessNpcs()`）；`SystemProcessor.cs` 内**不存在** `ProcessNpcs`。全文已统一到 `MerchantProcessor`（§0 / §4.1.1 原即正确）。
@@ -466,7 +475,7 @@ fn npc_run_body(world: &mut World, npc_type: i32) -> NpcRunOutcome;
 - **U-B1**：分派依据 = `npc.npc_type`（0/1/2）。**隐患**：`NpcState` 的 `#[derive(Default)]`（`npc.rs:47`）令未显式赋值的 `npc_type = 0` ⇒ 会被当 Merchant 跑 2 抽。需确认宿主 `npcs.rs` 是否已按 `LocalDB` 的 `switch` 正确赋 `npc_type`（**见 `must_be_verified_elsewhere`**）。
 - **U-B2**：`npc_tick` 在 `World::tick` 的**哪一格**（`merchant_tick` 前/后？）——直接决定 RNG 账本的 `k0`/N。需 owner 裁决 + 记入「同窗口批次前提」。
 - **U-B3**：`npc_run` 是否接 `BaseObject.Run` 的**死亡支**（`MakeGhost`，`BaseObject.Base.cs:84-102`）？该支与 critic **NL4** 重叠。NPC（race=10）一般不会 death，但 ghost 支（`WorldServer.Merchant.cs:140-145` 的 `RemoveAt`）**确实在 `ProcessNpcs` 里**。需裁决：B 是否连带实现 ghost 移除。
-- **U-B4**：`NpcLimit = 5` 的**墙钟预算**（`WorldServer.Merchant.cs:147-151`）是否照搬？照 T-42 先例，Rust 单线程确定性 tick **丢预算**（`merchant.rs:597` 已如此），B 应同口径并登记 whitelist。
+- **U-B4**：`NpcLimit = 5` 的**墙钟预算**（`WorldServer.Merchant.cs:147-151`）是否照搬？照 T-42 先例，Rust 单线程确定性 tick **丢预算**（`merchant.rs:532` 的 `merchant_tick` 文档第 3 条已如此，原 `:597` 已漂移），B 应同口径并登记 whitelist。
 - **U-B5**：`Merchant.Run` 与固定 NPC 的 `Merchant` 类**共用一份 run body** vs **两套**（`merchant.rs::merchant_run` 已存在）——复用会让两处耦合，复制会漂移。需裁决（**建议复用**，把 `merchant_run` 提到公共模块）。
 - **U-B6**：`merchant_tick` 的 250ms `RunTime` 与 `ProcessNpcs` 的 250ms `RunTime` **同值**（`BaseObject.cs:440`），但 `MerchantList` 与 `QuestNpcList` 是两个列表、`MerchantProcessor` 同一 200ms 线程里**先后**调 `ProcessNpcs` 再 `ProcessMerchants`（`MerchantProcessor.cs:31/32`）——Rust 是两个独立 `*_tick`，**谁先谁后**决定 RNG 次序。需裁决（oracle 是 `ProcessNpcs` 先）。
 

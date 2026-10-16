@@ -310,6 +310,8 @@ python -I -B check_attack_observability.py `
   §4.0 前置门可离线机判。**但世界数据能否经代理下来仍须窗口实拍**；未实拍前不得写「两侧帧级一致」。
 - `RM_DISAPPEAR(48)` 无编码器（怪离视野无消失帧，`mir2-rs/bins/game-svr/src/downlink.rs` 已登记）与 ③ 无因果，
   本手册不含；归属见 `70-…txt` §F（等 owner 指派）。
+  ⚠ **订正（2026-10-16）**：片103（`139ccedd3`）已接 `SM_DISAPPEAR(30)`（`downlink.rs:434-439` `disappear_frame`）⇒
+  「怪离视野无消失帧」**已不成立**；本行只余「与 ③ 无因果、本手册不含」有效。
 - **53 触发前置（片㊴，2026-10-14 收口）**：本手册旧版未要求 `HP<MaxHP` ⇒ 满血进图 53 永不发
   （既有 7 份 capture 全 0 条）。已补 §2b + 机判 `check_healthspellchanged_trigger.py`（T1/T2/T3，
   selftest 8/8，含「满血 ⇒ T1 RED / header-only ⇒ T3 RED」两向牙）；证据 `187-…md`。
@@ -327,9 +329,12 @@ python -I -B check_attack_observability.py `
 - **③b 第一步 = 阳性对照（C# 侧）**：两侧至今没有任何「玩家→怪」伤害帧 ⇒ 先在 **C#（oracle）** 侧打出
   **victim=怪** 的 `SM_STRUCK`，把 GREEN 定义钉在实拍足迹上，再比 Rust。
 - **③b 判据**：`check_attack_observability.py`（已带 victim 过滤，出站 = victim ≠ 自己）。**旧版**会把「玩家被怪围殴」读成「玩家造成伤害」。
-- **探针（未决项）**：玩家贴怪旁静止 ~10s，看 Rust 侧有无 **victim=自己** 的 `SM_STRUCK`（怪打玩家）。无 ⇒ 另立卡查怪物 AI 攻击支。
-  ⚠ **缺口警告（既有事实）**：Rust 怪物 AI 当前**只有「被击反击」**（被打才还手），**主动索敌/游走攻击未实现** ⇒
-  若测试点怪属**主动族**，探针**可能仍空转**；判读前须先确认 oracle 侧该怪是否主动攻击（详见 §2d W0-5）。
+- **探针（未决项 → 2026-10-16 订正）**：玩家贴怪旁静止 ~10s，看 Rust 侧有无 **victim=自己** 的 `SM_STRUCK`（怪打玩家）。无 ⇒ 另立卡查怪物 AI 攻击支。
+  ⚠ **订正（2026-10-16）**：**「主动索敌/游走攻击未实现」的旧登记已被片88（`b22295b1e`）推翻**——`crates/world/src/monai.rs`
+  的 `monster_run` 现按时钟门调 `search_target`（`monai.rs:189`），门控 `is_active_seek_race`（`monai.rs:555`，
+  = 不覆写 `Run` 的 `ATMonster` 族 {53,81,83,86,88,89}）。故测试点怪属**主动族**时，Rust 侧探针**应出** victim=自己的
+  `SM_STRUCK`；**空转 = 缺陷**（不再判「可能仍空转、非缺陷」）。非主动族（`is_active_seek_race==false`）才可能合理地无主动攻击。
+  判读前仍须先确认 oracle 侧该怪是否主动攻击（详见 §2d W0-5）。
 - **③a 反向点**：不得再用 `(291,666)`（`GuardList` 卫士 `(281,661)` d=10 污染）；先过
   `check_reverse_point_clean.py --point <x,y> --map 0 --vr 12`（fail-closed，缺源文件即 RED），
   **建议 `(311,666)`**（最近确定性对象 d=30）。
@@ -427,16 +432,18 @@ python -I -B check_reverse_point_clean.py --point 311,666 --map 0 --vr 12
 
 ### W0-5 第五步：怪打玩家探针（victim=自己 的 `SM_STRUCK`）
 
-> **⚠ 缺口警告（先读）**：Rust 怪物 AI 当前**只有「被击反击」**（被打才还手），**主动索敌/游走攻击未实现**。
-> ⇒ 若测试点怪属**主动族**，玩家贴怪静止时探针**可能仍空转**（不出现 victim=自己的 `SM_STRUCK`）。
-> **判读口径**：探针为空**不**自动等于缺陷——须先确认 oracle 侧该怪是否主动攻击；**两侧同点位对照**才有意义。
+> **⚠ 订正（2026-10-16；原文「主动索敌/游走攻击未实现」已被片88 `b22295b1e` 推翻）**：Rust 怪物 AI 现**已实现主动索敌**——
+> `crates/world/src/monai.rs` 的 `monster_run` 按时钟门调 `search_target`（`monai.rs:189`；`ATMonster.Run` 前缀见 `monai.rs:600-618`），
+> 门控 `is_active_seek_race`（`monai.rs:555`，= 不覆写 `Run` 的 `ATMonster` 族 {53,81,83,86,88,89}）；`SearchTarget` 不消费 RNG，改的是分支导向。
+> **判读口径（已收紧）**：测试点怪属**主动族**时，玩家贴怪静止**应**在 Rust 侧出现 victim=自己的 `SM_STRUCK`；**探针空转 = 缺陷**
+> （不再是「可能仍空转、非缺陷」）。仍须**同点位两侧对照**：C# 有 Rust 无 ⇒ 立卡查 `monai` 目标选择；两侧都 0 ⇒ 该怪非主动族，换主动族怪重试。
 
 - 动作：把玩家贴到怪旁**静止** ~10s，采 Rust 侧 **victim=自己** 的 `SM_STRUCK`：
   ```powershell
   python -I -B check_attack_observability.py --capture <rust capture> --expect any --allow-unknown-self
   # 报告行分列出站/入站；本步看「入站」栏（victim=自己）是否 ≥1
   ```
-- 期望：**C# 侧**（同点位）应出现入站 `SM_STRUCK`（片68 已证 C# 同窗被怪围殴致死）；**Rust 侧**按上面口径判读。
+- 期望：**C# 侧**（同点位）应出现入站 `SM_STRUCK`（片68 已证 C# 同窗被怪围殴致死）；**Rust 侧**对**主动族**点怪**同样应出**（片88 已补主动索敌）⇒ 空转即缺陷（按上面收紧口径判读）。
 - **失败分叉**：Rust 入站 0 且 **C# 也 0** ⇒ 该怪非主动族，换主动族怪重试；**C# 有、Rust 无** ⇒ 另立卡查 `mir2-rs/crates/world` 的怪物 AI 攻击支（`monai` 目标选择）。
 
 ### W0-6 第六步：RNG 双侧账本（`rng-scene` 驱动器）
@@ -493,5 +500,5 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene
 | ③b-两侧 | `--left <rust> --right <csharp> --expect any` | 两侧各 ≥1 | 单侧 0 ⇒ 登记 RED |
 | ③a | `check_reverse_point_clean.py --point 311,666` ＋ `aoi_visibility_pair.py --expect none` | CLEAN ＋ 两侧 0 对 | 非 0 对 ⇒ 换净点/看是否对称 |
 | GuardList | 出现帧对照 `(291,666)` | 两侧对称有卫士帧 | 单侧无 ⇒ 查接线 |
-| 探针 | 入站 `SM_STRUCK`（victim=自己） | 按 oracle 主动族口径 | C# 有 Rust 无 ⇒ 立卡 |
+| 探针 | 入站 `SM_STRUCK`（victim=自己） | 主动族点怪 Rust 侧应出（片88 已补主动索敌）；空转 = 缺陷 | C# 有 Rust 无 ⇒ 立卡 |
 | RNG | `-SceneGroupDiff` | 门 GREEN ＋ `VERDICT IDENTICAL` | 门 RED ⇒ 拒比（非实现差异） |

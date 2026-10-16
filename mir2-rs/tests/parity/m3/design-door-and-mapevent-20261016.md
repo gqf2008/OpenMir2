@@ -10,6 +10,15 @@
 > 因此 V4-04 / NL1 把「门永远打不开」当成 Rust 缺口，**部分是假缺口**；真正残余的只是
 > `ArroundDoorOpened` 对 MapRoute（传送点）的门控，而那要等 L1/TransMap 落地才可达。
 > **建议登记条文草案（可直接粘进 `whitelist.md`）见 §2.2.1；本轮 S3-FIX 修正复核（fix#1–#4）见 §8。**
+>
+> **行号快照声明（2026-10-16 对抗复核）**：本件所有 `file:line` 锚为**写作时（`b08e065fc`）快照**；此后 `main.rs`
+> 因片101/103/106 变动**已漂移**。**落地前以符号（函数/字段名）为准，勿按行号直接定位**。已实测漂移（现址）：
+> `main.rs:5796`（`MapRoute` 登记注释）→ 现 `main.rs:5993`；`main.rs:1463-1464`（`CM_OPENDOOR` 臂）→ 现 `main.rs:1532-1537`；
+> `world.rs:1281`（`try_step`）→ 现 `world.rs:1554`；`smframe_ext.rs:331-343`（`sm_opendoor_ok`）→ 现 fn `:336`；
+> `smframe_ext.rs:139-149`（`sm_closedoor`）→ 现 fn `:143`；`map.rs:170`（`MapGrid`）→ 现 `map.rs:195-197`。
+> **未漂移（实测命中）**：`inbound.rs:169-176`（`client_open_door`）、`messages.rs:41`（`CM_OPENDOOR=1002`）、
+> `map.rs:16-31`（`enum CellType`）、`map.rs:20`（`MapRoute=4`）、`session.rs:7`、`mapinfo.rs:83/149/428`（`bo_needhole`）、
+> `world.rs:77`（`clock_ms: i64`）、`registry.rs:137-140`、`mapfile.rs:83-103`。
 
 ---
 
@@ -136,12 +145,14 @@ grep -rn "MagicEventList" src --include=*.cs      → 仅 WorldServer.cs(字段/
 
 > 承 §2.2 结论（`CM_OPENDOOR` 结构性 no-op）。下面一行**照 `T-38`/`T-52` 体例**写就，可直接粘贴。
 > **本件只把它写在这里，不去改 `mir2-rs/tests/parity/whitelist.md`**（该文件由别的车道在改）。
-> 落地时**编号取当前 `whitelist.md` 最大 T 号 +1**（写作时其最大 = **T-59**，故草案先用 **T-60**；
-> 若撞号按「后注册者让号」顺延，先例见 `whitelist.md` 的 T-51/T-54/T-55 撞号记录）。
+> 落地时**编号取当前 `whitelist.md` 最大 T 号 +1**。**订正（2026-10-16）**：原写「写作时其最大 = **T-59**，故草案先用 **T-60**」
+> 的前提**已不实**——此后 `whitelist.md` 连号新增 **T-60**（`NoClearMonList` no-op，`whitelist.md:115`）/ **T-61**（`GameLogItemNameList`，`:116`）/
+> **T-62**（`DisableSendMsgList`，`:117`）/ **T-63**（`DenyChrNameList`，`:118`），**T-60 已被占用**；当前最大 = **T-63** ⇒ 草案号**顺延为 T-64**。
+> 若再撞号按「后注册者让号」顺延，先例见 `whitelist.md` 的 T-51/T-54/T-55 撞号记录。
 
 | 编号 | 差异/豁免点 | 为什么无害 | 谁审的 |
 | --- | --- | --- | --- |
-| T-60 | **V4-04 / NL1 的「门打不开」不是 Rust 缺口，而是 oracle 的结构性 no-op 1:1 照搬**：`CM_OPENDOOR(1002)` 的 `ClientOpenDoor`（`src/M2Server/Player/PlayObject.Operate.cs:363-376`）**守卫写反**——`if (Envir.GetDoor(nX, nY, ref door)) { return; }`（`:366`，**门存在即 return**）；而 `WorldServer.OpenDoor`（`src/GameSrv/Word/WorldServer.cs:1445-1453`）内再判 `if (envir.GetDoor(...) && !door.Status.Opened)`（**要求有门**）。两条合起来 ⇒ 目标格有门则第一行 return、无门则 `OpenDoor` 内 `GetDoor` 必失败 ⇒ **`CM_OPENDOOR` 永不开任何门**（`OpenDoor` 的全仓唯一生产调用者是 `PlayObject.Operate.cs:373`）。推论：门永远 `Opened=false` ⇒ `ProcessMapDoor`（`WorldServer.cs:1497-1515`，500ms 门）**永不关任何门** ⇒ `SendDoorStatus`（`:1467-1492`）/`SM_OPENDOOR_OK(612)`/`SM_CLOSEDDOOR(614)` **永不出帧**。 | **不是差异，是 oracle 冻结 bug 1:1 照搬**（AGENTS.md 硬约束③「行为等价优先于修 bug」）：Rust 侧 `bins/game-svr` 维持 `client_open_door(false)` ⇒ `OpenDoorCallNoop`（`bins/game-svr/src/inbound.rs:169-176`，注释 BUG-REPLICA 1），**零出帧 = 与 oracle 逐字节等价**，**不许**「修好」成真开门（会与冻结客户端 + oracle 分叉）。`SM_OPENDOOR_OK`/`SM_CLOSEDDOOR` 编码器（`bins/game-svr/src/smframe_ext.rs:331-343`/`:139-149`）**登记为 orphan**（无生产发射，与 V2-01 同类）。**唯一活耦合** = `ArroundDoorOpened`（门恒未开）**永久挡住「与门相邻（±1）的 `MapRoute` 传送」**（`PlayObject.cs:1872`）；其 Rust 等价物 + `CellType::MapRoute` 支须与 L1/TransMap 同批落地，tier=**R**（时序）。举证要求：向量断言「`CM_OPENDOOR` 零出帧 + 门状态恒 `Opened=false`」+ **改坏必红**（把 `client_open_door` 的 `false` 改成 `true`/真开门 ⇒ 必红）。将来要修另开 `S-*`。 | 作者登记（`openmir2-worker-5`，S3 设计车道）；**待独立 principal 复核本登记行** |
+| T-64 | **V4-04 / NL1 的「门打不开」不是 Rust 缺口，而是 oracle 的结构性 no-op 1:1 照搬**：`CM_OPENDOOR(1002)` 的 `ClientOpenDoor`（`src/M2Server/Player/PlayObject.Operate.cs:363-376`）**守卫写反**——`if (Envir.GetDoor(nX, nY, ref door)) { return; }`（`:366`，**门存在即 return**）；而 `WorldServer.OpenDoor`（`src/GameSrv/Word/WorldServer.cs:1445-1453`）内再判 `if (envir.GetDoor(...) && !door.Status.Opened)`（**要求有门**）。两条合起来 ⇒ 目标格有门则第一行 return、无门则 `OpenDoor` 内 `GetDoor` 必失败 ⇒ **`CM_OPENDOOR` 永不开任何门**（`OpenDoor` 的全仓唯一生产调用者是 `PlayObject.Operate.cs:373`）。推论：门永远 `Opened=false` ⇒ `ProcessMapDoor`（`WorldServer.cs:1497-1515`，500ms 门）**永不关任何门** ⇒ `SendDoorStatus`（`:1467-1492`）/`SM_OPENDOOR_OK(612)`/`SM_CLOSEDDOOR(614)` **永不出帧**。 | **不是差异，是 oracle 冻结 bug 1:1 照搬**（AGENTS.md 硬约束③「行为等价优先于修 bug」）：Rust 侧 `bins/game-svr` 维持 `client_open_door(false)` ⇒ `OpenDoorCallNoop`（`bins/game-svr/src/inbound.rs:169-176`，注释 BUG-REPLICA 1），**零出帧 = 与 oracle 逐字节等价**，**不许**「修好」成真开门（会与冻结客户端 + oracle 分叉）。`SM_OPENDOOR_OK`/`SM_CLOSEDDOOR` 编码器（`bins/game-svr/src/smframe_ext.rs:331-343`/`:139-149`）**登记为 orphan**（无生产发射，与 V2-01 同类）。**唯一活耦合** = `ArroundDoorOpened`（门恒未开）**永久挡住「与门相邻（±1）的 `MapRoute` 传送」**（`PlayObject.cs:1872`）；其 Rust 等价物 + `CellType::MapRoute` 支须与 L1/TransMap 同批落地，tier=**R**（时序）。举证要求：向量断言「`CM_OPENDOOR` 零出帧 + 门状态恒 `Opened=false`」+ **改坏必红**（把 `client_open_door` 的 `false` 改成 `true`/真开门 ⇒ 必红）。将来要修另开 `S-*`。 | 作者登记（`openmir2-worker-5`，S3 设计车道）；**待独立 principal 复核本登记行** |
 
 > 同族可顺延单列（§7 已列，非本件写集）：`ProcessMapDoor`/`SendDoorStatus` 不可达（本行已含）；`WorldServer.ProcessEvents`(1s)+`MagicEventList` 死代码；`SafeEvent`/`MakeSafePkZone` 的 `MapName` 空守卫；`ADDMAPMAGICEVENT`/`RANDOMADDMAPMAGICEVENT` 无处理器。
 
@@ -612,7 +623,7 @@ sha256sum <各文件>                                             # 见下表
 - 本件**只新增**本文件；**未改**任何 `.rs`/`.cs`/`whitelist.md`/`cards.json`/`recon_gates.py`。
 - **未起**服务、**未占**端口（仅 `mysqld:3306` 在跑）、**未跑** `cargo`。
 - 建议登记（`whitelist.md`，供承卡线落地，本件不写）：
-  - **T-新1**：`CM_OPENDOOR` 恒 no-op（守卫写反，`Operate.cs:366`）——照搬，Rust `client_open_door` 零出帧为等价。**完整登记条文（照 T-38/T-52 体例）见 §2.2.1（草案号 T-60）**。
+  - **T-新1**：`CM_OPENDOOR` 恒 no-op（守卫写反，`Operate.cs:366`）——照搬，Rust `client_open_door` 零出帧为等价。**完整登记条文（照 T-38/T-52 体例）见 §2.2.1（草案号 T-64，原 T-60 已撞 `NoClearMonList` no-op 条，见 §2.2.1 订正）**。
   - **T-新2**：`ProcessMapDoor`(500ms)/`SendDoorStatus`/`SM_OPENDOOR_OK`/`SM_CLOSEDDOOR` 不可达（无门会开）。
   - **T-新3**：`WorldServer.ProcessEvents`(1s)+`MagicEventList` 死代码（`MagicManager.cs:1203` 注释）。
   - **T-新4**：`SafeEvent`/`MakeSafePkZone` 的 `MapName` 空守卫 ⇒ 从不添加。
@@ -696,13 +707,15 @@ bins/game-svr/src/main.rs:5796:/// **登记（未做项）**：触发本事件�
 
 ### fix#4 —— §2.2.1：登记条文草案（本件**不改** `whitelist.md`）
 
-见 §2.2.1（可整行粘贴的 `| T-60 | … |`）。写作时 `whitelist.md` 最大编号实测：
+见 §2.2.1（可整行粘贴的 `| T-64 | … |`）。**订正（2026-10-16）**：写作时该命令实测最大 = 59 属实，但此后 `whitelist.md`
+连号新增 T-60（`NoClearMonList` no-op，`:115`）/T-61（`GameLogItemNameList`，`:116`）/T-62（`DisableSendMsgList`，`:117`）/
+T-63（`DenyChrNameList`，`:118`）⇒ **原「最大 = T-59 ⇒ 草案 T-60」的前提不实**，草案号**顺延为当前最大号 T-63 之后 = T-64**。现行实测：
 
 ```text
 $ grep -oE "T-[0-9]+" mir2-rs/tests/parity/whitelist.md | sed 's/T-//' | sort -n | uniq | tail -1
-59
+63
 ```
-⇒ 草案取 **T-60**（落地时以当时最大 +1 为准；撞号按「后注册者让号」顺延）。
+⇒ 草案取 **T-64**（落地时以当时最大 +1 为准；撞号按「后注册者让号」顺延）。
 
 ---
 
