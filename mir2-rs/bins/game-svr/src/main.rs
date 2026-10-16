@@ -5608,7 +5608,7 @@ fn drain_aoi_downlink(
                 // 展示表里的副本是生成时的初值 ⇒ 出现帧用世界**当前**朝向（oracle `SendMsg(…, Dir, …)`）。
                 frame_display.dir = target.ai.dir;
             }
-            let bodies = downlink::turn_pair(target.id, x, y, &frame_display);
+            let bodies = downlink::appear_frames(target.id, x, y, &frame_display, target.death);
             let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "同屏下行")
             else {
                 continue;
@@ -5626,6 +5626,63 @@ fn drain_aoi_downlink(
         }
     }
     sent
+}
+
+/// **出站接线片 W2**：把世界 tick 的 `RM_PUSH`/`RM_RUSH`/`RM_RUSHKUNG`/`RM_BUTCH` 事件
+/// （`TickRecord::{pushes,rushes,butches}`）翻成 `SM_BACKSTEP(9)`/`SM_RUSH(6)`/`SM_RUSHKUNG(7)`/
+/// `SM_BUTCH(637)` 并广播。
+///
+/// 口径：
+/// - **收件人含自己**：oracle `PlayObject.Message.cs:1527` 的复合条件
+///   `processMsg.ActorId != ActorId || wIdent ∈ {RM_PUSH, RM_RUSH, RM_RUSHKUNG}` **恒真**（这三条
+///   恒发给「观察者**含**移动者本人」）⇒ 用 [`broadcast_ref_msg_with_self`]（对比 `SM_WALK` 族用
+///   `broadcast_ref_msg`，不含自己）；`RM_BUTCH` 支 `:1783` 的 `if (processMsg.ActorId != 0)` 同样
+///   不排除自己 ⇒ 亦带自身。
+/// - **帧方向取自事件**（`nBackDir`/`nDir`），不是角色 `Dir` ⇒ 由 `downlink::{backstep_frame,
+///   rush_frame}` 把事件方向写进展示表克隆（避免误用朝向）。
+/// - **未登记的展示表项跳过**（怪物/未登记 actor 无 `Light/Feature/Status` ⇒ 不编造）。
+///
+/// 时序：oracle 这三族帧在实体动作（`CharPushed`/`DoMotaebo`/`ClientGetButchItem`）内**即时**发出，
+/// 早于同 tick 的 AOI 出现帧与战斗下行；故本函数在 sim 循环里紧接 `drain_party_death_events`
+/// （同属「本 tick 动作段」）调用，先于 [`drain_aoi_downlink`]/[`drain_combat_downlink`]。
+fn drain_action_downlink(
+    rec: &mir2_world::TickRecord,
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    for ev in &rec.pushes {
+        let Some(d) = displays.get(ev.actor_id) else {
+            glog!(
+                "WRN",
+                "推挤下行：actor={} 无展示表 ⇒ 跳过 SM_BACKSTEP（登记）",
+                ev.actor_id
+            );
+            continue;
+        };
+        if let Some(body) = downlink::backstep_frame(ev, d) {
+            broadcast_ref_msg_with_self(world, online, gates, ev.actor_id, &[body]);
+        }
+    }
+    for ev in &rec.rushes {
+        let Some(d) = displays.get(ev.actor_id) else {
+            glog!(
+                "WRN",
+                "冲刺下行：actor={} 无展示表 ⇒ 跳过 SM_{}（登记）",
+                ev.actor_id,
+                ev.ident()
+            );
+            continue;
+        };
+        if let Some(body) = downlink::rush_frame(ev, d) {
+            broadcast_ref_msg_with_self(world, online, gates, ev.actor_id, &[body]);
+        }
+    }
+    for ev in &rec.butches {
+        let body = downlink::butch_frame(ev);
+        broadcast_ref_msg_with_self(world, online, gates, ev.actor_id, &[body]);
+    }
 }
 
 /// `MessageSettings.BODYLUCKUNIT`（`MessageSettings.cs:9`）。
@@ -8551,6 +8608,10 @@ fn sim_loop(
         // 放在 `party_run_tick()` 之前：oracle `Run()` 的组队段（`PlayObject.Message.cs:704-719`）
         // 晚于 `Die()`，而 `Die()` 已把死亡成员摘出（段内无死成员可清）。
         drain_party_death_events(&rec, &online, &gates);
+        // **出站接线片 W2**：本 tick 的推挤/冲刺/宰杀动作帧（`RM_PUSH`/`RM_RUSH`/`RM_RUSHKUNG`/`RM_BUTCH`
+        // ⇒ `SM_BACKSTEP(9)`/`SM_RUSH(6)`/`SM_RUSHKUNG(7)`/`SM_BUTCH(637)`）。同属「本 tick 动作段」，
+        // 先于 AOI 出现帧/战斗下行（oracle 在 `CharPushed`/`DoMotaebo`/`ClientGetButchItem` 内即时发）。
+        drain_action_downlink(&rec, &world, &displays, &online, &gates);
         // **M3⑨-3 帧面残余**：本 tick 的 `World::tick` 已在消息段投递到点自投递消息
         // （`RM_MASTERDIEMUTINY` → `ProcessSlaveMutiny`，`world.rs:565-572`）并落
         // `rec.slave_self_deliveries`；这里补出帧（`RefNameColor`/`RefShowName`）。

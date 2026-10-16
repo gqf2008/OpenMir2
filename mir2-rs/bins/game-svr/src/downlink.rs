@@ -294,17 +294,32 @@ pub fn turn_pair_nameless(target: i32, x: u16, y: u16, d: &ActorDisplay) -> Vec<
     ]
 }
 
-/// `RM_WALK`/`RM_RUN`/`RM_HORSERUN` 支产出的**单帧**（`PlayObject.Message.cs:1403-1432`）。
+/// `RM_WALK`/`RM_RUN`/`RM_HORSERUN`（`PlayObject.Message.cs:1403-1432`）与
+/// `RM_PUSH`/`RM_RUSH`/`RM_RUSHKUNG`（同文件 `:1525-1560`）共用的**单帧**编码：
+/// `MakeMessage(ident, ActorId, nParam1 /*=x*/, nParam2 /*=y*/, MakeWord(wParam /*=帧方向*/, Light))`
+/// + 尾 `Encode(8B CharDesc)`。
 ///
-/// 收件人口径与 `turn_pair` 同：oracle 三个 `case` 都带 `if (processMsg.ActorId != ActorId)`
-/// ⇒ **只发给附近观察者，移动者自己不入帧**（自己那条连接靠 `+GD` ack）。
-/// `ident` 非 `SM_WALK`/`SM_RUN`/`SM_HORSERUN` 时返回 `None`（不猜）。
+/// **帧方向（`Series` 低字节）来自 `d.dir`**——这是本函数的契约：调用方必须把**该帧该用的方向**
+/// 放进 `d.dir`。五条 ident 的方向来源各不同（逐条照 oracle）：`SM_WALK/SM_RUN/SM_HORSERUN`
+/// 用**移动者当前 `Dir`**；`SM_BACKSTEP` 用 `nBackDir`、`SM_RUSH`/`SM_RUSHKUNG` 用 `nDir`——后三者的
+/// 方向**不是**角色 `Dir`，故宿主在调本函数前把事件方向写进一份 `d` 的克隆（见
+/// [`backstep_frame`]/[`rush_frame`]，避免误用角色朝向）。
+///
+/// 收件人口径（oracle）：`SM_WALK/SM_RUN/SM_HORSERUN` 的 `case` 带 `if (processMsg.ActorId != ActorId)`
+/// ⇒ **移动者自己不入帧**；而 `RM_PUSH/RM_RUSH/RM_RUSHKUNG` 的复合条件
+/// `ActorId != ActorId || wIdent == RM_PUSH || == RM_RUSH || == RM_RUSHKUNG` **恒真** ⇒
+/// **移动者自己也收**（宿主用带自身的广播，见 `main.rs::broadcast_ref_msg_with_self`）。
+///
+/// 不在此列的 ident 返回 `None`（不猜）。
 #[must_use]
 pub fn move_frame(ident: u16, target: i32, x: u16, y: u16, d: &ActorDisplay) -> Option<Vec<u8>> {
     match ident {
         mir2_protocol::messages::SM_WALK
         | mir2_protocol::messages::SM_RUN
-        | mir2_protocol::messages::SM_HORSERUN => Some(smframe::sm_move(
+        | mir2_protocol::messages::SM_HORSERUN
+        | mir2_protocol::messages::SM_BACKSTEP
+        | mir2_protocol::messages::SM_RUSH
+        | mir2_protocol::messages::SM_RUSHKUNG => Some(smframe::sm_move(
             ident,
             target,
             x,
@@ -314,6 +329,111 @@ pub fn move_frame(ident: u16, target: i32, x: u16, y: u16, d: &ActorDisplay) -> 
             &char_desc(d.feature, d.status),
         )),
         _ => None,
+    }
+}
+
+/// oracle 的坐标 u16 线缆写法（`i16` 位模式回填；与 `main.rs::wire_coord` 同口径，本模块自持一份
+/// 以免 lib 依赖 bin）。
+fn wire_coord(v: i32) -> u16 {
+    u16::from_ne_bytes(i16::try_from(v).unwrap_or(0).to_ne_bytes())
+}
+
+/// **出站接线片 W2**：世界 [`mir2_world::action::PushEvent`]（`RM_PUSH`）→ `SM_BACKSTEP(9)`。
+///
+/// oracle `PlayObject.Message.cs:1533-1545`：`MakeMessage(SM_BACKSTEP, ActorId, nParam1, nParam2,
+/// MakeWord((ushort)processMsg.wParam /*= nBackDir*/, baseObject.Light))` + `Encode(8B CharDesc)`。
+/// 即帧方向 = 事件的 `nBackDir`（**不是**角色 `Dir`）⇒ 这里把 `ev.dir` 写进 `d` 的克隆再走
+/// [`move_frame`]。
+#[must_use]
+pub fn backstep_frame(ev: &mir2_world::PushEvent, d: &ActorDisplay) -> Option<Vec<u8>> {
+    let mut framed = d.clone();
+    framed.dir = ev.dir;
+    move_frame(
+        mir2_protocol::messages::SM_BACKSTEP,
+        ev.actor_id,
+        wire_coord(ev.x),
+        wire_coord(ev.y),
+        &framed,
+    )
+}
+
+/// **出站接线片 W2**：世界 [`mir2_world::action::RushEvent`]（`RM_RUSH`/`RM_RUSHKUNG`）→
+/// `SM_RUSH(6)`/`SM_RUSHKUNG(7)`。
+///
+/// oracle `PlayObject.Message.cs:1536-1542`：两条同形
+/// `MakeMessage(SM_RUSH|SM_RUSHKUNG, ActorId, nParam1, nParam2, MakeWord((ushort)processMsg.wParam
+/// /*= 事件方向*/, baseObject.Light))` + `Encode(8B CharDesc)`（`Msg` 恒空 ⇒ 无名尾）。ident 由
+/// [`mir2_world::action::RushEvent::ident`] 给出（`Rush` → 6、`RushKung` → 7）。
+#[must_use]
+pub fn rush_frame(ev: &mir2_world::action::RushEvent, d: &ActorDisplay) -> Option<Vec<u8>> {
+    let mut framed = d.clone();
+    framed.dir = ev.dir;
+    move_frame(
+        ev.ident(),
+        ev.actor_id,
+        wire_coord(ev.x),
+        wire_coord(ev.y),
+        &framed,
+    )
+}
+
+/// **出站接线片 W2**：世界 [`mir2_world::action::ButchEvent`]（`RM_BUTCH`）→ `SM_BUTCH(637)`。
+///
+/// oracle `PlayObject.Message.cs:1781-1787`：`if (processMsg.ActorId != 0) ClientMsg =
+/// MakeMessage(SM_BUTCH, processMsg.ActorId, nParam1 /*=CurrX*/, nParam2 /*=CurrY*/,
+/// processMsg.wParam /*=Dir*/); SendSocket(ClientMsg);`——**无尾**（与 `sm_action_hit` 的
+/// `SM_HIT` 族同形：头 `Series = Dir`、`gm_data_body(h, &[])`）。`ActorId != 0` 门由世界事件
+/// 保证（事件只对在世界里的 actor 产生，`actor_id` 必 `> 0`）。
+#[must_use]
+pub fn butch_frame(ev: &mir2_world::action::ButchEvent) -> Vec<u8> {
+    smframe::sm_action_hit(
+        mir2_protocol::messages::SM_BUTCH,
+        ev.actor_id,
+        wire_coord(ev.x),
+        wire_coord(ev.y),
+        ev.dir,
+    )
+}
+
+/// **出站接线片 W2**：`SM_DEATH(32)`（**出现帧**支，`PlayObject.cs:3235` 的
+/// `SendMsg(baseObject, RM_DEATH, Dir, CurrX, CurrY, 0)`，`nParam3 == 0` 走
+/// `PlayObject.Message.cs:1644` 的 **else** 支）。
+///
+/// 头 = `MakeMessage(SM_DEATH, ActorId, nParam1 /*=CurrX*/, nParam2 /*=CurrY*/, wParam /*=Dir*/)`；
+/// 尾 = `EncodePacket(CharDesc)`（`Feature`/`Status`）。**与 `SM_NOWDEATH(34)` 是两条路径**：
+/// `RM_DEATH(nParam3=1)` 来自 `BaseObject.Die()`（`BaseObject.Base.cs:351`，本仓已有发射点）；
+/// 本条只用于**观察者首次看见一个已死对象**（AOI `VisibleFlag.Show` 支）。
+#[must_use]
+pub fn death_frame(actor_id: i32, x: u16, y: u16, dir: u8, d: &ActorDisplay) -> Vec<u8> {
+    smframe::sm_death(
+        mir2_protocol::messages::SM_DEATH,
+        actor_id,
+        x,
+        y,
+        dir,
+        &char_desc(d.feature, d.status),
+    )
+}
+
+/// **出站接线片 W2**：AOI **出现帧**的出现对象分派（`PlayObject.Run()` 的
+/// `VisibleFlag.Show` 支，`src/M2Server/Player/PlayObject.cs:3231-3243`）：
+///
+/// ```text
+/// if (baseObject.Death) { SM_SKELETON(33) 或 SM_DEATH(32) }
+/// else                  { SM_TURN + SM_FEATURECHANGED }   // = turn_pair
+/// ```
+///
+/// `dead == true` ⇒ 走 [`death_frame`]（`SM_DEATH`）。**`Skeleton` 支**（`SM_SKELETON(33)`）不在本片：
+/// `SM_SKELETON` 无编码器（属 R2 红名单 A 类）且 `mir2_world::Entity` 无 `skeleton` 字段 ⇒
+/// 已死即按 `SM_DEATH` 发（登记，见 rationale）。
+///
+/// 红检：把 `dead` 支改成 `turn_pair`（恒发 `SM_TURN`）⇒ 死对象出现帧 ident 断言必红。
+#[must_use]
+pub fn appear_frames(target: i32, x: u16, y: u16, d: &ActorDisplay, dead: bool) -> Vec<Vec<u8>> {
+    if dead {
+        vec![death_frame(target, x, y, d.dir, d)]
+    } else {
+        turn_pair(target, x, y, d)
     }
 }
 
@@ -656,5 +776,206 @@ mod tests {
             make_human_feature(0, 1, 1, 5 * 2 + 1),
             "Gender/Hair 照抄、Dress/Weapon 归 0"
         );
+    }
+
+    // ---- 出站接线片 W2：SM_BACKSTEP/SM_RUSH/SM_RUSHKUNG/SM_BUTCH/SM_DEATH 的帧面 --------------
+
+    /// 测试用展示表项：`dir=99`（一个**不会**被事件方向覆盖的哨兵值）、`light=7`、
+    /// `feature=0x01020304`、`status=0x05060708`。`dir=99` 让「方向取自事件」的断言有区分度。
+    fn w2_display() -> ActorDisplay {
+        ActorDisplay::new(99, 7, 0x0102_0304, 0, 0x0506_0708, 255, b"hero".to_vec())
+    }
+
+    /// `SM_BACKSTEP(9)`（`RM_PUSH`）逐字节：12B 头手算
+    /// `recog=9001 → 29 23 00 00`、`ident=9 → 09 00`、`param=x=18 → 12 00`、`tag=y=20 → 14 00`、
+    /// `series=MakeWord(nBackDir=5, Light=7) → 05 07`；尾 = `Encode(8B CharDesc)`。
+    ///
+    /// 红检（见 [`redcheck_backstep_direction_must_come_from_event`]）。
+    #[test]
+    fn backstep_frame_bytes_match_oracle_layout() {
+        let d = w2_display();
+        let ev = mir2_world::PushEvent {
+            actor_id: 9001,
+            dir: 5,
+            x: 18,
+            y: 20,
+        };
+        let body = backstep_frame(&ev, &d).expect("SM_BACKSTEP 必须有编码器");
+        assert_eq!(
+            &body[..12],
+            &[0x29, 0x23, 0x00, 0x00, 0x09, 0x00, 0x12, 0x00, 0x14, 0x00, 0x05, 0x07],
+            "12B 命令头逐字节（recog/ident/param/tag/series）"
+        );
+        assert_eq!(
+            &body[12..],
+            &mir2_protocol::edcode::encode(&char_desc(d.feature, d.status)),
+            "尾 = Encode(8B CharDesc)，无名尾"
+        );
+        assert_eq!(body.len(), 12 + 11, "尾 = Encode(8B) = 11 字符");
+    }
+
+    /// 变异同义牙：`SM_BACKSTEP` 的帧方向**必须**取自事件的 `nBackDir`，与展示表 `dir` 无关。
+    /// 用「展示表 dir=99、事件 dir=5」与「展示表 dir=5、事件 dir=5」两组输入 ⇒ 同字节；
+    /// 「事件 dir=99」⇒ 字节**必不同**（若实现误用 `d.dir`，第一组断言即红）。
+    #[test]
+    fn redcheck_backstep_direction_must_come_from_event() {
+        let ev5 = mir2_world::PushEvent {
+            actor_id: 9001,
+            dir: 5,
+            x: 18,
+            y: 20,
+        };
+        let sentinel = w2_display(); // dir = 99
+        let same = ActorDisplay {
+            dir: 5,
+            ..w2_display()
+        };
+        let a = backstep_frame(&ev5, &sentinel).unwrap();
+        let b = backstep_frame(&ev5, &same).unwrap();
+        assert_eq!(a, b, "方向只由事件决定，与展示表 dir 无关");
+        let ev99 = mir2_world::PushEvent { dir: 99, ..ev5 };
+        assert_ne!(
+            &backstep_frame(&ev99, &sentinel).unwrap()[..12],
+            &a[..12],
+            "事件方向变 ⇒ series 必变"
+        );
+    }
+
+    /// `SM_RUSH(6)` / `SM_RUSHKUNG(7)` 逐字节：ident 由事件的 `frame` 决定；`series = MakeWord(nDir, Light)`。
+    ///
+    /// 红检（见 [`redcheck_rushkung_ident_distinct_from_rush`]）。
+    #[test]
+    fn rush_frame_bytes_by_frame_kind() {
+        use mir2_world::{RushEvent, RushFrame};
+        let d = w2_display(); // dir=99 sentinel、light=7
+        let rush = RushEvent {
+            actor_id: 9001,
+            frame: RushFrame::Rush,
+            dir: 2,
+            x: 30,
+            y: 31,
+        };
+        let body = rush_frame(&rush, &d).unwrap();
+        assert_eq!(
+            &body[..12],
+            &[0x29, 0x23, 0x00, 0x00, 0x06, 0x00, 0x1E, 0x00, 0x1F, 0x00, 0x02, 0x07],
+            "SM_RUSH(6)：ident=06 00、series=MakeWord(2,7)=02 07"
+        );
+
+        let kung = RushEvent {
+            frame: RushFrame::RushKung,
+            ..rush
+        };
+        let body2 = rush_frame(&kung, &d).unwrap();
+        assert_eq!(
+            &body2[..12],
+            &[0x29, 0x23, 0x00, 0x00, 0x07, 0x00, 0x1E, 0x00, 0x1F, 0x00, 0x02, 0x07],
+            "SM_RUSHKUNG(7)：ident=07 00，其余同形"
+        );
+        assert_eq!(kung.ident(), mir2_protocol::messages::SM_RUSHKUNG);
+    }
+
+    /// 变异同义牙：`Rush` 与 `RushKung` 的 ident **必须**不同（6 vs 7）——若实现把两族并成一条
+    /// ident，本断言必红。
+    #[test]
+    fn redcheck_rushkung_ident_distinct_from_rush() {
+        use mir2_world::{RushEvent, RushFrame};
+        let d = w2_display();
+        let ev = RushEvent {
+            actor_id: 9001,
+            frame: RushFrame::Rush,
+            dir: 2,
+            x: 30,
+            y: 31,
+        };
+        let a = rush_frame(&ev, &d).unwrap();
+        let b = rush_frame(
+            &RushEvent {
+                frame: RushFrame::RushKung,
+                ..ev
+            },
+            &d,
+        )
+        .unwrap();
+        assert_ne!(&a[4..6], &b[4..6], "6 vs 7 必须不同");
+    }
+
+    /// `SM_BUTCH(637)` 逐字节：`MakeMessage(SM_BUTCH, ActorId, CurrX, CurrY, Dir)` **无尾**
+    /// （`series = Dir`，不叠 Light）。
+    #[test]
+    fn butch_frame_bytes_no_tail() {
+        let ev = mir2_world::ButchEvent {
+            actor_id: 9001,
+            dir: 3,
+            x: 18,
+            y: 20,
+        };
+        let body = butch_frame(&ev);
+        assert_eq!(
+            body,
+            vec![0x29, 0x23, 0x00, 0x00, 0x7D, 0x02, 0x12, 0x00, 0x14, 0x00, 0x03, 0x00],
+            "SM_BUTCH=637(0x027D → 7D 02)、series=Dir=3、无尾"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            mir2_protocol::messages::SM_BUTCH
+        );
+    }
+
+    /// `SM_DEATH(32)` 逐字节（出现帧支）+ [`appear_frames`] 分派：
+    /// `dead=true` ⇒ 单帧 `SM_DEATH`（ident=32）；`dead=false` ⇒ `turn_pair`（`SM_TURN`+`SM_FEATURECHANGED`）。
+    ///
+    /// 红检（见 [`redcheck_appear_dead_uses_sm_death_not_turn`]）。
+    #[test]
+    fn death_frame_and_appear_frames_dispatch() {
+        let d = w2_display();
+        let dead = death_frame(9001, 18, 20, 4, &d);
+        assert_eq!(
+            &dead[..12],
+            &[0x29, 0x23, 0x00, 0x00, 0x20, 0x00, 0x12, 0x00, 0x14, 0x00, 0x04, 0x00],
+            "SM_DEATH(32=0x20)：ident=20 00、series=Dir=04 00"
+        );
+        assert_eq!(
+            &dead[12..],
+            &mir2_protocol::edcode::encode(&char_desc(d.feature, d.status))
+        );
+
+        let dead_set = appear_frames(9001, 18, 20, &d, true);
+        assert_eq!(dead_set.len(), 1, "已死出现帧 = 单帧 SM_DEATH");
+        assert_eq!(
+            dead_set[0],
+            death_frame(9001, 18, 20, d.dir, &d),
+            "出现帧支的 SM_DEATH 用被观察者的 Dir（展示表 dir=99）"
+        );
+        assert_eq!(
+            u16::from_le_bytes([dead_set[0][4], dead_set[0][5]]),
+            mir2_protocol::messages::SM_DEATH
+        );
+
+        let alive_set = appear_frames(9001, 18, 20, &d, false);
+        assert_eq!(
+            alive_set.len(),
+            2,
+            "存活出现帧 = SM_TURN + SM_FEATURECHANGED"
+        );
+        assert_eq!(
+            u16::from_le_bytes([alive_set[0][4], alive_set[0][5]]),
+            mir2_protocol::messages::SM_TURN
+        );
+    }
+
+    /// 变异同义牙：已死对象的出现帧**必须**是 `SM_DEATH(32)`，不得退化成 `SM_TURN`。
+    #[test]
+    fn redcheck_appear_dead_uses_sm_death_not_turn() {
+        let d = w2_display();
+        let dead = appear_frames(9001, 18, 20, &d, true);
+        let alive = appear_frames(9001, 18, 20, &d, false);
+        assert_ne!(
+            u16::from_le_bytes([dead[0][4], dead[0][5]]),
+            u16::from_le_bytes([alive[0][4], alive[0][5]]),
+            "死/活出现帧 ident 必不同（32 vs 10）"
+        );
+        assert_eq!(dead.len(), 1);
+        assert_ne!(dead.len(), alive.len());
     }
 }

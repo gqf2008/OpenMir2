@@ -13,6 +13,7 @@
 //! 3. **零并行依赖**：本 crate 只依赖 ECS 内核（`mir2-world-bevy`，单线程 executor）与
 //!    数据/公式 crate，不引入任何线程/异步运行时（`tests/no_parallel.rs` 钉住）。
 
+pub mod action;
 pub mod aoi;
 pub mod bevy_bridge;
 pub mod castle;
@@ -31,6 +32,7 @@ pub mod session;
 pub mod slave;
 pub mod world;
 
+pub use action::{ButchEvent, PushEvent, RushEvent, RushFrame};
 pub use aoi::{search_view_range, search_view_range_death, update_visible_gay, visible_snapshot};
 pub use bevy_bridge::{collect_tick_order_system, snapshot_from_world};
 pub use castle::{
