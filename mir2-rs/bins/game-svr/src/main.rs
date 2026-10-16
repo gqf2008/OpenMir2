@@ -10352,6 +10352,213 @@ mod tests {
         );
     }
 
+    /// **卡 `openmir2-drain-deal-tick-tooth`（片103「19 条生产调用行审计」唯一无牙项）**：
+    /// `PlayObject.Run()` 每 tick 的交易自动取消（`PlayObject.Message.cs:30-36`）——
+    /// `Dealing` 且（`GetPoseCreate() != DealCreat` / `DealCreat == this` / `DealCreat == null`）
+    /// ⇒ `DealCancel()`。本用例走**生产编排层** [`drain_deal_tick`]（`sim_loop` 每 tick 直呼的那个
+    /// 函数，口径同 `drain_buff_downlink`/`drain_run_downlinks` 的同类用例），四条案例：
+    /// 三条取消条件各触发**一次**（`SM_DEALCANCEL` 恰一条 + `SM_SYSMESSAGE`「交易取消!!!」 +
+    /// `Dealing=false` + `DealCreat=null`），外加一条**条件全不满足**的非空转对照（前方格对象
+    /// `== DealCreat` ⇒ 一条帧都不发、会话原样）。
+    ///
+    /// 红检（**实测**）：删掉 `drain_deal_tick` 里 `if doomed { deal_cancel_between(...) }` 的
+    /// `deal_cancel_between` 那整条调用（或删 `if doomed` 包裹）⇒ 取消不落地 ⇒ 对应断言必红。
+    #[test]
+    fn drain_deal_tick_cancels_on_each_oracle_condition_one_shot() {
+        use std::collections::HashMap;
+
+        // `DealCreat` 的四种取值，前三种命中 oracle 的三条取消条件，第四种全不满足。
+        #[derive(Clone, Copy)]
+        enum Case {
+            /// `DealCreat == null`。
+            Null,
+            /// `DealCreat == this`（`DealCreat` 是自己的 `ActorId`）。
+            SelfId,
+            /// `GetPoseCreate() != DealCreat`（`DealCreat` 指向一个既不在世界、也不在前方格的 id）。
+            StaleOther,
+            /// 条件全不满足：前方格对象就是 `DealCreat`（`GetPoseCreate() == DealCreat` 且非自身）。
+            Alive,
+        }
+
+        // 返回 (本角色 socket 收到的 ident 列表, drain 后 dealing, drain 后 deal_creature)。
+        let run = |case: Case| -> (Vec<u16>, bool, Option<i32>) {
+            let mut world = mir2_world::World::new(32, 32);
+            world.clock_ms = 100_000;
+            let hero = world.add_entity({
+                let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+                e.race = mir2_world::ACTOR_RACE_PLAY;
+                e
+            });
+            let mut displays = downlink::DisplayTable::new();
+            // dir=2（Right）⇒ 前方格 = (11,10)（同 `deal_try_target_distinguishes_absent_from_non_player`）。
+            displays.set(
+                hero,
+                downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, b"hero".to_vec()),
+            );
+
+            let deal_creature = match case {
+                Case::Null => None,
+                Case::SelfId => Some(hero),
+                // 9999 既不在世界、也不在前方格 ⇒ `GetPoseCreate()==None != Some(9999)`。
+                Case::StaleOther => Some(9999),
+                Case::Alive => {
+                    let front = world.add_entity({
+                        let mut e = mir2_world::Entity::new(2, "front", 11, 10);
+                        e.race = mir2_world::ACTOR_RACE_PLAY;
+                        e
+                    });
+                    displays.set(
+                        front,
+                        downlink::ActorDisplay::new(6, 0, 0, 0, 0, 255, b"front".to_vec()),
+                    );
+                    Some(front) // == GetPoseCreate() ⇒ 取消条件全不满足
+                }
+            };
+
+            let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+            ground_sessions.insert("hero".into(), test_session_ground(hero));
+            let mut trade_sessions: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+            trade_sessions.insert(
+                "hero".into(),
+                game_svr::trade::DealState {
+                    dealing: true,
+                    deal_creature,
+                    ..Default::default()
+                },
+            );
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".into(),
+                    chr_name: "hero".into(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 901,
+                    actor_id: hero,
+                },
+            );
+            let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx0);
+            let cfg = game_svr::trade::DealConfig::default();
+            let catalog = game_svr::ability::StdItemCatalog::new();
+
+            drain_deal_tick(
+                &world,
+                &displays,
+                &online,
+                &mut ground_sessions,
+                &mut trade_sessions,
+                &gates,
+                &cfg,
+                &catalog,
+            );
+
+            let mut idents = Vec::new();
+            while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+                assert_eq!(socket, 901, "取消帧只能落到本角色那条网关线");
+                idents.push(u16::from_le_bytes([body[4], body[5]]));
+            }
+            let st = trade_sessions.get("hero").expect("会话仍在表内");
+            (idents, st.dealing, st.deal_creature)
+        };
+
+        for (case, label) in [
+            (Case::Null, "DealCreat == null"),
+            (Case::SelfId, "DealCreat == this"),
+            (Case::StaleOther, "GetPoseCreate() != DealCreat"),
+        ] {
+            let (idents, dealing, deal_creature) = run(case);
+            let cancels = idents
+                .iter()
+                .filter(|i| **i == mir2_protocol::messages::SM_DEALCANCEL)
+                .count();
+            assert_eq!(
+                cancels, 1,
+                "{label} ⇒ 恰发一条 SM_DEALCANCEL(681)；实得 {idents:?}"
+            );
+            assert!(
+                idents.contains(&mir2_protocol::messages::SM_SYSMESSAGE),
+                "{label} ⇒ 取消随发 SM_SYSMESSAGE(100)（交易取消提示，green_msg）；实得 {idents:?}"
+            );
+            assert!(!dealing, "{label} ⇒ drain 后 Dealing=false");
+            assert_eq!(deal_creature, None, "{label} ⇒ drain 后 DealCreat=null");
+        }
+
+        // 非空转对照：条件全不满足 ⇒ 不取消、一条帧都不发、会话原样（证明上面三条不是恒真）。
+        let (idents, dealing, deal_creature) = run(Case::Alive);
+        assert!(
+            idents.is_empty(),
+            "前方格对象 == DealCreat ⇒ 不取消、不发帧；实得 {idents:?}"
+        );
+        assert!(dealing, "仍 Dealing（不得误取消）");
+        assert!(deal_creature.is_some(), "DealCreat 保持不变");
+    }
+
+    /// **接线点保鲜门（卡 `openmir2-drain-deal-tick-tooth`）**：`drain_deal_tick` 的**生产调用行**
+    /// ——`sim_loop` 里「`PlayObject.Run()` 每 tick 的交易自动取消」那一段——必须仍在且**未被注释**。
+    ///
+    /// 背景（片103 审计结论，本用例直接钉住）：把 sim 循环里那行 `drain_deal_tick(...)` 注释掉，
+    /// `cargo test -p game-svr` 仍全绿（`src/lib.rs` 单测 **298 passed / 0 failed**，实测），
+    /// 该下行接线点**零行为覆盖**：`sim_loop` 需真机/DB 才能驱到，进程内用例无法直达其 tick 体；
+    /// 直接调 [`drain_deal_tick`] 的行为用例（见上）**不会**因删掉 sim 循环那行而变红
+    /// （只多一条 `function drain_deal_tick is never used` 警告）——这正是「无牙」的根因。
+    /// 本用例用 [`include_str!`] 把本文件源码嵌入，对**该调用点及其实参形状**做锚点保鲜断言，
+    /// 使「调用行被删 / 被注释 / 改坏」直接变红（口径同 `tests/deal_try_oracle_anchors.rs`、
+    /// 片113 的白名单锚点保鲜门）。**非行为覆盖**——行为面由上面那条用例承担。
+    ///
+    /// 红检（**实测**）：把 sim 循环里 `drain_deal_tick(...)` 那一整行用块注释包起来 ⇒ 本用例
+    /// 必红（匹配点归零）；复原 ⇒ 绿。
+    #[test]
+    fn drain_deal_tick_production_call_is_wired_in_sim_loop() {
+        let src = include_str!("main.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        // sim 循环调用点的实参形状（`handle_deal_cmd` 等其它调用点实参不同 ⇒ 唯一命中）。
+        const ARGS: [&str; 9] = [
+            "&world,",
+            "&displays,",
+            "&online,",
+            "&mut ground_sessions,",
+            "&mut trade_sessions,",
+            "&gates,",
+            "&enter_cfg.trade,",
+            "&enter_cfg.catalog,",
+            ");",
+        ];
+        let hits: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(i, l)| {
+                // 调用行：trim 后恰为 `drain_deal_tick(`（定义行 trim 后为 `fn drain_deal_tick(`）。
+                // `//`/`/*` 前缀会改变 trim 结果 ⇒ 被注释的行自动不命中。
+                if l.trim() != "drain_deal_tick(" {
+                    return false;
+                }
+                ARGS.iter()
+                    .enumerate()
+                    .all(|(k, want)| lines.get(i + 1 + k).map(|s| s.trim()) == Some(*want))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "sim 循环里 `drain_deal_tick(...)` 的生产调用行（含实参形状）必须仍在且未被注释；\
+             命中 {hits:?}（0 = 被删/被注释/改坏；>1 = 出现重复调用点）"
+        );
+        // 该调用点必须落在 `sim_loop` 体内（防止挪到别处却仍命中形状断言）。
+        let call = hits[0];
+        let sim_loop = lines
+            .iter()
+            .position(|l| l.trim() == "fn sim_loop(")
+            .expect("`fn sim_loop(` 定义行");
+        assert!(
+            call > sim_loop,
+            "生产调用行（行号 {call}）必须在 `fn sim_loop(`（行号 {sim_loop}）之后"
+        );
+    }
+
     /// F2（reviewer-2）的判据：`ProcessBufferSend` `:58-90` 的四条分支，**含"刚超时清零的那一包也要压住"**。
     #[test]
     fn send_decision_matches_process_buffer_send() {
