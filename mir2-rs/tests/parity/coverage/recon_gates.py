@@ -13,13 +13,25 @@
   selftest  内置夹具自测（含「构造缺口必红」牙）。
   mutate    变异实测：对真实输入做三处自设计变异（注入缺口 / 撤卡 / 空语料），门必须转红。
 
-判红口径（三者缺一即不红）
---------------------------
+判红口径（缺一即不红）
+----------------------
   content : oracle 有该 Load 调用 ∧ 部署有该内容文件 ∧ Rust 无实现 ∧ 无卡  ⇒ RED
-  dispatch: oracle 有 case ∧ Rust 无派发臂/编码器 ∧ 无卡                  ⇒ RED
+  dispatch: oracle 有 case ∧ **该帧可达** ∧ Rust 无派发臂/编码器 ∧ 无卡   ⇒ RED
 
 「无卡」= `coverage/cards.json` 的 `assignments` 未给该缺口指派一个存在于 `known_cards` 的卡 id。
-「Rust 实现」= 在 Rust 语料（去注释/去字符串字面量后）里出现该标识符/文件名字面量。
+「Rust 实现」= 在 Rust 语料（去注释/去字符串字面量后）里出现该标识符（派发）
+              / **同一 src 文件里同时出现文件名字面量与「真装载调用」标记**（内容，见下）。
+「可达」（派发·出站） = 触发该 SM 帧的**任一 `RM_*`** 在 `src/**/*.cs` 里有**生产者用法**（见下）
+  ⇒ 可达。`RM_*` 全仓**每一处**出现都只是 `const` 定义或 `case` 标签（即确证无任何生产者）⇒ oracle
+  死支 ⇒ 该帧永不发出 ⇒ 不判 RED（豁免 `n/a-unreachable`）。这修掉 SM_41/SM_43/SM_PASSWORDSTATUS
+  三条「门误报」假红。**口径保守（对抗验证 v3 修正）**：旧口径「整行同时含 `Send*(` 与该 RM 字面量」
+  会把经动态形参/辅助函数间接发出的 RM（`Walk(Messages.RM_WALK)`、`wIdent = Messages.RM_BIGHIT`
+  后 `SendRefMsg(wIdent,…)`）误判为死支 ⇒ 静默豁免真可达帧；现改为**对无法文本判定者一律按可达处理**，
+  只在能证明「每一处出现都是 const 定义或 case 标签」时才允许豁免（详见 README 判据节）。
+「真装载调用」（内容·收紧了旧口径） = 旧口径「文件名串在源码里出现」可被**报错串/死常量**假绿；新口径要求
+  某 src 文件**同时**命中：①文件名字面量 ②装载标记（`load…(` 调用 / `fn load…` 定义），或镜像模块路径
+  （文件 stem = 内容件模块名且含函数定义）。⇒ 注释-only、纯报错串不再算实现。
+「豁免清单」= `cards.json` 的 `known_unreachable` / `known_false`（人工登记的死支/门误报，与自动可达性互为兜底）。
 
 退出码：0 = 无 RED（缺口全部「已实现或已卡」）；1 = 存在 RED；2 = 用法/环境错误或前置缺失
 （PREREQ_RED：部署目录不存在/不可读/不是目录 ⇒ 印 `PREREQ_MISSING` + `RESULT: PREREQ_RED`，**拒跑而不
@@ -49,6 +61,20 @@ DEFAULT_CARDS = SCRIPT_DIR / "cards.json"
 
 ORACLE_CONTENT = "src/GameSrv/GameApp.cs"
 ORACLE_DISPATCH = "src/M2Server/Player/PlayObject.Message.cs"
+# 出站帧「触发 RM 可达性」判据的 oracle 扫描根：src/**/*.cs 全仓（含各 Actor/NPC/Script 的发送点）。
+ORACLE_SRC_DIR = "src"
+# 可达判据（**保守**口径，见 oracle_rm_producers）：一个 RM_* 只要在 `src/**/*.cs` 里出现任何
+# **非「纯 const 定义」、非「纯 case 标签」** 的用法（作为 Send*/SendRefMsg/Walk/ClientChangeDir/任意
+# 调用的实参、赋给局部变量后经动态形参间接发送、参与比较等）即视为「可能被发出」⇒ 可达。
+# 只有「该 RM_* 的每一处出现都只是 `const int RM_x = …;` 定义或 `case Messages.RM_x:` 标签」才判为
+# **确证死支**并允许豁免。⇒ 动态形参 / 间接发送一律不漏（宁多判可达，绝不静默豁免真可达帧）。
+RE_RM_REF = re.compile(r"\bRM_[A-Za-z0-9_]+\b")
+# 纯 `case Messages.RM_x:` 标签 / 纯 `const int RM_x` 定义行 —— 这两类出现**不算**「生产者用法」。
+RE_CASE_LABEL = re.compile(r"case\s+(?:Messages\.)?(RM_[A-Za-z0-9_]+)\s*:")
+RE_CONST_DEF = re.compile(r"const\s+int\s+(RM_[A-Za-z0-9_]+)")
+# 内容门「真装载调用」标记：load 调用/定义形态。
+RE_LOAD_CALL = re.compile(r"(?<![A-Za-z0-9_])load[a-z0-9_]*\s*[(<]")
+RE_LOAD_FN = re.compile(r"(?<![A-Za-z0-9_])fn\s+load[a-z0-9_]*")
 
 
 def rust_source_dirs(repo: Path, exclude=()):
@@ -217,6 +243,7 @@ class RustCorpus:
     def __init__(self, dirs):
         self.code = []   # (path, lineno, code_line)  去注释+去字符串
         self.text = []   # (path, lineno, text_line)  去注释+保留字符串
+        self.file_text = {}   # path -> 去注释+保留字符串 的整篇文本（供「真装载调用」同文件判据）
         for d in dirs:
             root = Path(d)
             if not root.is_dir():
@@ -226,7 +253,9 @@ class RustCorpus:
                 for no, code in enumerate(strip_code(raw).split(NL), 1):
                     if code.strip():
                         self.code.append((str(p), no, code))
-                for no, txt in enumerate(strip_code(raw, keep_strings=True).split(NL), 1):
+                kept = strip_code(raw, keep_strings=True)
+                self.file_text[str(p)] = kept
+                for no, txt in enumerate(kept.split(NL), 1):
                     if txt.strip():
                         self.text.append((str(p), no, txt))
 
@@ -246,16 +275,32 @@ class RustCorpus:
         needle = QT + lit + QT
         return any(needle in txt for _, _, txt in self.text)
 
+    def files_with_literal(self, lit: str):
+        """含字符串字面量 `lit`（含引号）的 src 文件路径列表（去注释、保留字符串）。"""
+        needle = QT + lit + QT
+        return [p for p, t in sorted(self.file_text.items()) if needle in t]
+
+    def file_has_loader_marker(self, path: str, item_stem: str = "") -> bool:
+        """该文件是否含「真装载调用」标记：`load…(`/`fn load…`，或镜像模块路径（stem 命中且含函数）。"""
+        t = self.file_text.get(path, "")
+        if RE_LOAD_CALL.search(t) or RE_LOAD_FN.search(t):
+            return True
+        if item_stem and Path(path).stem.lower() == item_stem and re.search(r"\bfn\s+", t):
+            return True
+        return False
+
 
 # ---------------------------------------------------------------------------
 # cards.json
 # ---------------------------------------------------------------------------
 def load_cards(path: Path) -> dict:
     if not path.is_file():
-        return {"known_cards": [], "assignments": {}}
+        return {"known_cards": [], "assignments": {}, "known_unreachable": [], "known_false": []}
     data = json.loads(read_text(path))
     data.setdefault("known_cards", [])
     data.setdefault("assignments", {})
+    data.setdefault("known_unreachable", [])
+    data.setdefault("known_false", [])
     return data
 
 
@@ -265,6 +310,14 @@ def card_for(cards: dict, key: str):
     if cid and cid in set(cards.get("known_cards", [])):
         return cid
     return None
+
+
+def is_exempted(cards: dict, key: str) -> bool:
+    """人工豁免登记：key 在 `known_unreachable` / `known_false` 里 ⇒ 不判 RED。"""
+    for bucket in ("known_unreachable", "known_false"):
+        if key in set(cards.get(bucket, []) or []):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +403,31 @@ def emit_deploy_prereq(problems, allow_missing):
     return 2
 
 
+def _item_stem(filename: str) -> str:
+    """内容件名 → 模块 stem（小写、去 .txt、去非字母数字）：MiniMap.txt → minimap。"""
+    s = (filename or "").strip()
+    if s.lower().endswith(".txt"):
+        s = s[:-4]
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def content_rust_implemented(corpus, filename: str) -> bool:
+    """内容门「真装载调用」判据（收紧旧「文件名串出现」口径）。
+
+    判为已实现 ⟺ 存在**一个 src 文件**同时命中：
+      ① 文件名字符串字面量（去注释后仍在，即非注释-only）；② 装载标记（`load…(`/`fn load…`
+      或镜像模块路径 + 函数定义）。
+    ⇒ 注释-only、以及「只把文件名写进报错串/死常量、无任何装载调用」都不再算实现，堵住 critic 指出的假绿。
+    """
+    if not filename:
+        return False
+    stem = _item_stem(filename)
+    for path in corpus.files_with_literal(filename):
+        if corpus.file_has_loader_marker(path, stem):
+            return True
+    return False
+
+
 def content_row_status(spec: dict, deployed: bool, rust: bool, cards: dict, empty: bool = False) -> str:
     kind = spec.get("kind")
     if kind not in ("envir", "notice", "dir"):
@@ -408,7 +486,7 @@ def _make_content_row(repo, envir_dir, notice_dir, corpus, cards, spec, oracle_a
     deployed = path is not None
     empty = deployed_is_empty(path)
     probe = spec.get("probe") or name
-    rust = bool(probe) and corpus.present_literal(probe)
+    rust = content_rust_implemented(corpus, probe)
     status = content_row_status(spec, deployed, rust, cards, empty)
     key = "content:" + name if name else ("call:" + oracle_anchor)
     return dict(key=key, oracle=oracle_anchor, file=name or "-", kind=kind,
@@ -464,18 +542,68 @@ def parse_dispatch(text: str):
     return cm, rm_groups, sm_all
 
 
-def dispatch_item_status(kind: str, name: str, rust: bool, cards: dict) -> str:
+def dispatch_item_status(kind: str, name: str, rust: bool, cards: dict, reachable=None) -> str:
+    """缺口状态。reachable：出站帧触发 RM 的可达性（True/False/None=不可判）。
+
+    次序：已实现 → 已卡(tracked) → 豁免(不可达/人工登记) → RED。
+    `reachable is False`（触发 RM 每一个都是确证死支：全仓仅 const 定义 + case 标签）或人工豁免登记
+    ⇒ `n/a-unreachable`（不判 RED）。`reachable is None`（无触发 RM）**不豁免**——保守按可达处理。
+    """
     if rust:
         return "implemented"
-    if card_for(cards, f"{kind}:{name}"):
+    key = f"{kind}:{name}"
+    if card_for(cards, key):
         return "tracked"
+    if reachable is False or is_exempted(cards, key):
+        return "n/a-unreachable"
     return "RED"
+
+
+def oracle_rm_producers(repo: Path):
+    """扫 `src/**/*.cs`，返回**可能被发出**的 RM_* 全集（= 可达触发点）。
+
+    口径（**保守 / 欠豁免**）——一个 RM_* 只要在某文件里出现**任何非「纯 const 定义」、非「纯 case
+    标签」的用法**即计入，包括：
+      · 作为任意调用（`Send*` / `SendRefMsg` / `Walk(RM_WALK)` / `ClientChangeDir` / …）的实参；
+      · 赋给局部变量后经**动态形参**间接发送（`wIdent = Messages.RM_BIGHIT; … SendRefMsg(wIdent,…)`）；
+      · 参与比较、传递、作数组下标等任何其它代码用法。
+    只有「该 RM_* 的**每一处**出现都只是 `const int RM_x = …;` 定义或 `case Messages.RM_x:` 标签」
+    才**不**计入——即该 RM_* 全仓无任何生产者，判为**确证死支**。
+
+    为何保守：旧口径「整行同时含 `Send<名>(` 与该 RM 字面量」会把经动态形参 / 辅助函数间接发出的 RM
+    误判为死支 ⇒ 静默豁免真可达帧（对抗验证 v3 判 refuted：真语料里 10 条真可达帧被误判死支）。
+    本口径对**无法文本判定者一律按可达处理**，只在能证明「每一处出现都是 const 定义或 case 标签」时
+    才允许豁免。注释 / 字符串字面量已被 `strip_code` 剔除 ⇒ 文档里提一句 `RM_x` 不会误判可达。
+    """
+    producers = set()
+    src = repo / ORACLE_SRC_DIR
+    if not src.is_dir():
+        return producers
+    for p in sorted(src.rglob("*.cs")):
+        code = strip_code(read_text(p))
+        for line in code.split(NL):
+            toks = set(RE_RM_REF.findall(line))
+            if not toks:
+                continue
+            inert = set(RE_CASE_LABEL.findall(line)) | set(RE_CONST_DEF.findall(line))
+            producers |= (toks - inert)
+    return producers
+
+
+def outbound_reachability(rm_users, rm_producers) -> bool:
+    """出站帧可达性：True=任一触发 RM 是「可能被发出」（含经动态形参 / 间接调用）；False=有触发 RM 但
+    每一个都是确证死支（全仓仅 const 定义 + case 标签）；None=无触发 RM（判不了 ⇒ 保守按可达处理）。"""
+    rms = [r for r in rm_users if r]
+    if not rms:
+        return None
+    return any(r in rm_producers for r in rms)
 
 
 def build_dispatch_rows(repo: Path, cards: dict):
     oracle = repo / ORACLE_DISPATCH
     corpus = RustCorpus(rust_source_dirs(repo, exclude=DISPATCH_EXCLUDE))
     cm, rm_groups, sm_all = parse_dispatch(read_text(oracle))
+    rm_producers = oracle_rm_producers(repo)
 
     rows = []
     for name, line in sorted(cm.items()):
@@ -486,17 +614,21 @@ def build_dispatch_rows(repo: Path, cards: dict):
                          rust_at=(f"{Path(rust[0]).name}:{rust[1]}" if rust else "-"),
                          status=dispatch_item_status("inbound", name, bool(rust), cards),
                          card=card_for(cards, "inbound:" + name),
+                         reach="-",
                          emitted_by="-"))
     for sm in sorted(sm_all):
         rust = corpus.find(sm)
         rm_users = sorted(r for r, s in rm_groups.items() if sm in s)
+        reach = outbound_reachability(rm_users, rm_producers)
         rows.append(dict(bucket="outbound", key="outbound:" + sm, name=sm,
                          oracle="(RM→SM)", rust=("yes" if rust else "no"),
                          rust_at=(f"{Path(rust[0]).name}:{rust[1]}" if rust else "-"),
-                         status=dispatch_item_status("outbound", sm, bool(rust), cards),
+                         status=dispatch_item_status("outbound", sm, bool(rust), cards, reachable=reach),
                          card=card_for(cards, "outbound:" + sm),
+                         reach=("yes" if reach else ("no" if reach is False else "-")),
                          emitted_by=",".join(rm_users[:4]) + ("…" if len(rm_users) > 4 else "")))
-    return rows, cm, rm_groups, sm_all
+    return rows, cm, rm_groups, sm_all, rm_producers
+
 
 
 # ---------------------------------------------------------------------------
@@ -554,24 +686,27 @@ def cmd_content(args):
 
 def cmd_dispatch(args):
     repo = Path(args.repo)
-    rows, cm, rm_groups, sm_all = build_dispatch_rows(repo, load_cards(Path(args.cards)))
+    rows, cm, rm_groups, sm_all, rm_producers = build_dispatch_rows(repo, load_cards(Path(args.cards)))
     counts, reds = summarize(rows)
     print("== 协议派发对账门（§4-2）==")
     print(f"oracle={repo / ORACLE_DISPATCH}")
-    print(f"inbound case 全集={len(cm)}  outbound SM 帧全集={len(sm_all)}（来自 {len(rm_groups)} 个 RM 支）")
+    print(f"inbound case 全集={len(cm)}  outbound SM 帧全集={len(sm_all)}（来自 {len(rm_groups)} 个 RM 支；"
+          f"src/** 生产者 RM 数={len(rm_producers)}）")
     print(f"cards={args.cards}")
     print()
-    print_table(rows, ["bucket", "name", "oracle", "rust", "rust_at", "status", "card", "emitted_by"])
+    print_table(rows, ["bucket", "name", "oracle", "rust", "rust_at", "reach", "status", "card", "emitted_by"])
     if args.show_rm:
         print()
-        print("-- RM→SM 映射（advisory，供 R2 定点）--")
+        print("-- RM→SM 映射（advisory，供 R2 定点；← 死支 = 全仓每一处出现都只是 const 定义/case 标签）--")
         for rm in sorted(rm_groups):
-            print(f"  {rm:28s} -> {', '.join(sorted(rm_groups[rm])) or '(无 SM)'}")
+            mark = "" if rm in rm_producers else "   ← 死支（确证无生产者）"
+            print(f"  {rm:28s} -> {', '.join(sorted(rm_groups[rm])) or '(无 SM)'}{mark}")
     print()
     print("summary:", json.dumps(counts, ensure_ascii=False))
     if args.json:
         emit_json(args.json, dict(kind="dispatch", counts=counts, rows=rows,
-                                  rm_to_sm={k: sorted(v) for k, v in rm_groups.items()}))
+                                  rm_to_sm={k: sorted(v) for k, v in rm_groups.items()},
+                                  rm_producers=sorted(rm_producers)))
     return 1 if reds else 0
 
 
@@ -705,6 +840,107 @@ def selftest():
     import io
     import shutil
     import tempfile
+
+    # ---- dispatch: RM 可达性判据（C 类死支不红）----
+    _prods = {"RM_ALIVE", "RM_WALK"}
+    check("reach：触发 RM 有生产者用法 ⇒ 可达", outbound_reachability(["RM_ALIVE"], _prods) is True)
+    check("reach：触发 RM 全无生产者（确证死支）⇒ 不可达", outbound_reachability(["RM_DEADBRANCH"], _prods) is False)
+    check("reach：无 RM 生产者 ⇒ 不可判（None，保守不豁免）", outbound_reachability([], _prods) is None)
+    check("teeth：真不可达 outbound 帧（RM 无发送点 + 无卡）⇒ n/a-unreachable（不红）",
+          dispatch_item_status("outbound", "SM_DEADBRANCH", False,
+                               {"known_cards": [], "assignments": {}}, reachable=False) == "n/a-unreachable")
+    check("teeth：可达 outbound 帧 + Rust 无编码器 + 无卡 ⇒ RED",
+          dispatch_item_status("outbound", "SM_LIVE", False,
+                               {"known_cards": [], "assignments": {}}, reachable=True) == "RED")
+    check("teeth：可达性 None（无生产者）不豁免 ⇒ RED",
+          dispatch_item_status("outbound", "SM_UNK", False,
+                               {"known_cards": [], "assignments": {}}, reachable=None) == "RED")
+    check("teeth：人工豁免登记（known_unreachable）⇒ n/a-unreachable",
+          dispatch_item_status("outbound", "SM_MANUAL", False,
+                               {"known_cards": [], "assignments": {},
+                                "known_unreachable": ["outbound:SM_MANUAL"]}) == "n/a-unreachable")
+
+    # 端到端合成：死支 RM 帧不红、可达 RM 帧必红（门真读 src/** 发送点，非只看 oracle case）
+    _tmp_reach = Path(tempfile.mkdtemp(prefix="recon-reach-"))
+    try:
+        (_tmp_reach / "src/M2Server/Player").mkdir(parents=True)
+        (_tmp_reach / ORACLE_DISPATCH).write_text(NL.join([
+            "switch (w) {",
+            "  case Messages.RM_ZZLIVE:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZLIVE, 0, 0, 0, 0); break;",
+            "  case Messages.RM_ZZDEAD:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZDEAD, 0, 0, 0, 0); break;",
+            "}",
+        ]) + NL, encoding="utf-8")
+        (_tmp_reach / "src/M2Server/Other.cs").write_text(
+            "p.SendMsg(Messages.RM_ZZLIVE, 0, 0, 0, 0);" + NL, encoding="utf-8")
+        (_tmp_reach / "mir2-rs/bins/game-svr/src").mkdir(parents=True, exist_ok=True)
+        _rows_r, _, _, _, _senders_r = build_dispatch_rows(
+            _tmp_reach, {"known_cards": [], "assignments": {}})
+        _st_r = {r["name"]: r["status"] for r in _rows_r}
+    finally:
+        shutil.rmtree(_tmp_reach, ignore_errors=True)
+    check("teeth：端到端 RM_ZZLIVE 被判为发送点", "RM_ZZLIVE" in _senders_r)
+    check("teeth：端到端 死支帧 SM_ZZDEAD ⇒ n/a-unreachable（不红）", _st_r.get("SM_ZZDEAD") == "n/a-unreachable")
+    check("teeth：端到端 可达帧 SM_ZZLIVE + 无编码器 ⇒ RED", _st_r.get("SM_ZZLIVE") == "RED")
+
+    # ---- dispatch: RM 可达性**保守口径**（对抗验证 v3 修正：动态形参 / 辅助函数间接发送不漏）----
+    _tmp_dyn = Path(tempfile.mkdtemp(prefix="recon-reach-dyn-"))
+    try:
+        (_tmp_dyn / "src/M2Server/Player").mkdir(parents=True)
+        (_tmp_dyn / ORACLE_DISPATCH).write_text(NL.join([
+            "switch (w) {",
+            "  case Messages.RM_ZZWALK:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZWALK, 0, 0, 0, 0); break;",
+            "  case Messages.RM_ZZHIT:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZHIT, 0, 0, 0, 0); break;",
+            "  case Messages.RM_ZZDEAD2:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZDEAD2, 0, 0, 0, 0); break;",
+            "}",
+        ]) + NL, encoding="utf-8")
+        (_tmp_dyn / "src/M2Server/Helper.cs").write_text(
+            "if (Walk(Messages.RM_ZZWALK)) { }" + NL                     # 辅助函数实参（本行无 Send*(）
+            + "int wIdent = Messages.RM_ZZHIT;" + NL                     # 动态形参来源
+            + "p.SendRefMsg(wIdent, Dir, X, Y, 0, \"\");" + NL          # 下游发送（本行无 RM 字面量）
+            + "public const int RM_ZZDEAD2 = 9999;" + NL, encoding="utf-8")  # 确证死支：仅 const + case
+        (_tmp_dyn / "mir2-rs/bins/game-svr/src").mkdir(parents=True, exist_ok=True)
+        _rows_dyn, _, _, _, _prod_dyn = build_dispatch_rows(
+            _tmp_dyn, {"known_cards": [], "assignments": {}})
+        _st_dyn = {r["name"]: r["status"] for r in _rows_dyn}
+    finally:
+        shutil.rmtree(_tmp_dyn, ignore_errors=True)
+    check("reach：辅助函数形参（Walk(RM_ZZWALK)）⇒ 生产者（旧「同行 Send*(」口径会误判死支）",
+          "RM_ZZWALK" in _prod_dyn)
+    check("reach：动态形参（wIdent=RM_ZZHIT; SendRefMsg(wIdent,…)）⇒ 生产者（旧口径会误判死支）",
+          "RM_ZZHIT" in _prod_dyn)
+    check("reach：确证死支（仅 const 定义 + case 标签）⇒ 非生产者", "RM_ZZDEAD2" not in _prod_dyn)
+    check("teeth：辅助函数形参可达帧 SM_ZZWALK + 无编码器 + 无卡 ⇒ RED（不误豁免）",
+          _st_dyn.get("SM_ZZWALK") == "RED")
+    check("teeth：动态形参可达帧 SM_ZZHIT + 无编码器 + 无卡 ⇒ RED（不误豁免）",
+          _st_dyn.get("SM_ZZHIT") == "RED")
+    check("teeth：确证死支帧 SM_ZZDEAD2 ⇒ n/a-unreachable（不红）",
+          _st_dyn.get("SM_ZZDEAD2") == "n/a-unreachable")
+
+    # ---- content: 「真装载调用」判据（收紧旧「文件名串出现」口径）----
+    _tmp_ct = Path(tempfile.mkdtemp(prefix="recon-content-"))
+    try:
+        _cdir = _tmp_ct / "mir2-rs/crates/envir/src"
+        _cdir.mkdir(parents=True)
+        _f = _cdir / "minimap.rs"
+        _f.write_text("// MiniMap.txt 仅注释提及" + NL + "pub fn x() {}" + NL, encoding="utf-8")
+        check("teeth：内容=注释-only ⇒ 不算实现",
+              content_rust_implemented(RustCorpus(rust_source_dirs(_tmp_ct)), "MiniMap.txt") is False)
+        _f.write_text('pub const FAKE: &str = "MiniMap.txt";' + NL + "pub struct Marker;" + NL, encoding="utf-8")
+        check("teeth：内容=文件名串（精确引号字面量）无装载调用 ⇒ 不算实现（旧口径会假绿）",
+              content_rust_implemented(RustCorpus(rust_source_dirs(_tmp_ct)), "MiniMap.txt") is False)
+        _f.write_text('pub const F: &str = "MiniMap.txt";' + NL + "pub fn load_minimap() {}" + NL, encoding="utf-8")
+        check("teeth：文件名串 + 真装载调用 ⇒ 实现",
+              content_rust_implemented(RustCorpus(rust_source_dirs(_tmp_ct)), "MiniMap.txt") is True)
+        _f.write_text('pub const F: &str = "MiniMap.txt";' + NL + "pub fn parse_minimap() {}" + NL, encoding="utf-8")
+        check("teeth：镜像模块路径（minimap.rs 含函数，无 load 名）⇒ 实现",
+              content_rust_implemented(RustCorpus(rust_source_dirs(_tmp_ct)), "MiniMap.txt") is True)
+    finally:
+        shutil.rmtree(_tmp_ct, ignore_errors=True)
     miss_e, miss_n = Path("E:/no-such-envir-zzz"), Path("E:/no-such-notice-zzz")
     check("deploy 前置：不存在的部署目录被识别为问题（2 条）",
           len(deploy_prereq_problems(miss_e, miss_n)) == 2)
@@ -802,6 +1038,94 @@ def cmd_mutate(args):
             bool(gr) and gr[0]["status"] == "RED")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+    # M4 —— RM 可达性判据（合成 oracle：一个死支 RM + 一个可达 RM；门须区分）
+    _tmp_m4 = Path(tempfile.mkdtemp(prefix="recon-reach-mut-"))
+    try:
+        (_tmp_m4 / "src/M2Server/Player").mkdir(parents=True)
+        (_tmp_m4 / ORACLE_DISPATCH).write_text(NL.join([
+            "switch (w) {",
+            "  case Messages.RM_ZZLIVE:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZLIVE, 0, 0, 0, 0); break;",
+            "  case Messages.RM_ZZDEAD:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZDEAD, 0, 0, 0, 0); break;",
+            "}",
+        ]) + NL, encoding="utf-8")
+        (_tmp_m4 / "src/M2Server/Other.cs").write_text(
+            "p.SendMsg(Messages.RM_ZZLIVE, 0, 0, 0, 0);" + NL, encoding="utf-8")
+        (_tmp_m4 / "mir2-rs/bins/game-svr/src").mkdir(parents=True, exist_ok=True)
+        _rows_m4, _, _, _, _ = build_dispatch_rows(_tmp_m4, {"known_cards": [], "assignments": {}})
+        _st_m4 = {r["name"]: r["status"] for r in _rows_m4}
+        add("M4a 死支 RM（全仓无发送点）帧 SM_ZZDEAD ⇒ n/a-unreachable（不红）",
+            _st_m4.get("SM_ZZDEAD") == "n/a-unreachable")
+        add("M4b 可达 RM_ZZLIVE 帧 + Rust 无编码器 ⇒ RED（可达性不误豁免）",
+            _st_m4.get("SM_ZZLIVE") == "RED")
+    finally:
+        shutil.rmtree(_tmp_m4, ignore_errors=True)
+
+    # M4c —— 真语料回归（对抗验证 v3）：经动态形参 / 辅助函数间接发出的 RM 必须判「可达」。
+    #         旧口径「整行同时含 Send*( 与该 RM 字面量」把这 10 条真可达帧误判死支 ⇒ 静默豁免。
+    _prod_real = oracle_rm_producers(repo)
+    _dyn_real = ["RM_WALK", "RM_RUN", "RM_HORSERUN", "RM_BIGHIT", "RM_SPELL2",
+                 "RM_WIDEHIT", "RM_LONGHIT", "RM_FIREHIT", "RM_CRSHIT", "RM_TWINHIT"]
+    _miss = [r for r in _dyn_real if r not in _prod_real]
+    add("M4c 真语料：10 条经动态形参/辅助函数发出的 RM 全判可达（缺=%s）" % (_miss or "无"),
+        not _miss)
+
+    # M4d —— 合成动态形参 / 辅助函数形态：无 Rust 编码器 + 无卡 ⇒ 必 RED（不误豁免）；确证死支 ⇒ 不红。
+    _tmp_m4d = Path(tempfile.mkdtemp(prefix="recon-reach-mut-dyn-"))
+    try:
+        (_tmp_m4d / "src/M2Server/Player").mkdir(parents=True)
+        (_tmp_m4d / ORACLE_DISPATCH).write_text(NL.join([
+            "switch (w) {",
+            "  case Messages.RM_ZZWALK:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZWALK, 0, 0, 0, 0); break;",
+            "  case Messages.RM_ZZHIT:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZHIT, 0, 0, 0, 0); break;",
+            "  case Messages.RM_ZZDEAD2:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZDEAD2, 0, 0, 0, 0); break;",
+            "}",
+        ]) + NL, encoding="utf-8")
+        (_tmp_m4d / "src/M2Server/Helper.cs").write_text(
+            "if (Walk(Messages.RM_ZZWALK)) { }" + NL
+            + "int wIdent = Messages.RM_ZZHIT;" + NL
+            + "p.SendRefMsg(wIdent, Dir, X, Y, 0, \"\");" + NL
+            + "public const int RM_ZZDEAD2 = 9999;" + NL, encoding="utf-8")
+        (_tmp_m4d / "mir2-rs/bins/game-svr/src").mkdir(parents=True, exist_ok=True)
+        _rows_m4d, _, _, _, _prod_m4d = build_dispatch_rows(_tmp_m4d, {"known_cards": [], "assignments": {}})
+        _st_m4d = {r["name"]: r["status"] for r in _rows_m4d}
+        add("M4d 辅助函数形参 Walk(RM_ZZWALK) ⇒ 生产者 + 无编码器 ⇒ RED（不误豁免）",
+            "RM_ZZWALK" in _prod_m4d and _st_m4d.get("SM_ZZWALK") == "RED")
+        add("M4d 动态形参 wIdent=RM_ZZHIT; SendRefMsg(wIdent,…) ⇒ 生产者 + 无编码器 ⇒ RED（不误豁免）",
+            "RM_ZZHIT" in _prod_m4d and _st_m4d.get("SM_ZZHIT") == "RED")
+        add("M4d 确证死支（仅 const 定义 + case 标签）RM_ZZDEAD2 ⇒ 非生产者 ⇒ n/a-unreachable（不红）",
+            "RM_ZZDEAD2" not in _prod_m4d and _st_m4d.get("SM_ZZDEAD2") == "n/a-unreachable")
+    finally:
+        shutil.rmtree(_tmp_m4d, ignore_errors=True)
+
+    # M5 —— 内容门「真装载调用」收紧：文件名串出现但无装载调用 ⇒ 必红（旧「文件名串出现」口径会假绿）
+    _tmp_m5 = Path(tempfile.mkdtemp(prefix="recon-content-mut-"))
+    try:
+        (_tmp_m5 / "src/GameSrv").mkdir(parents=True)
+        shutil.copy(repo / ORACLE_CONTENT, _tmp_m5 / "src/GameSrv/GameApp.cs")
+        _cdir5 = _tmp_m5 / "mir2-rs/crates/envir/src"
+        _cdir5.mkdir(parents=True)
+        (_cdir5 / "guardlist.rs").write_text(
+            'pub const FAKE: &str = "GuardList.txt";' + NL + "pub struct G;" + NL, encoding="utf-8")
+        _rows_m5 = build_content_rows(_tmp_m5, Path(args.envir_dir), Path(args.notice_dir), cards)
+        _gr5 = [r for r in _rows_m5 if r.get("file") == "GuardList.txt"]
+        add("M5 内容门收紧：文件名串出现但无装载调用 ⇒ GuardList.txt 必红（旧口径会假绿）",
+            bool(_gr5) and _gr5[0]["status"] == "RED")
+        (_cdir5 / "guardlist.rs").write_text(
+            'pub const F: &str = "GuardList.txt";' + NL + "pub fn load_guard_list() {}" + NL,
+            encoding="utf-8")
+        _rows_m5b = build_content_rows(_tmp_m5, Path(args.envir_dir), Path(args.notice_dir), cards)
+        _gr5b = [r for r in _rows_m5b if r.get("file") == "GuardList.txt"]
+        add("M5 对照：文件名串 + 装载调用 ⇒ GuardList.txt implemented",
+            bool(_gr5b) and _gr5b[0]["status"] == "implemented")
+    finally:
+        shutil.rmtree(_tmp_m5, ignore_errors=True)
 
     print("== recon_gates mutate（变异实测：构造缺陷必红）==")
     for name, passed in results:
