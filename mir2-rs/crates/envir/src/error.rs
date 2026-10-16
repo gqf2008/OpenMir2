@@ -71,4 +71,13 @@ pub enum EnvirError {
     /// `ArgumentException` / `CaptureString` 越界）。
     #[error("商人脚本解析失败（{script}）：{reason}")]
     MerchantScriptLoad { script: String, reason: String },
+
+    /// `Envir/NoClearMonList.txt` 不存在时 oracle 的**异常穿透**（`M2Share.cs:1763`）：
+    /// `File.Exists == false` ⇒ `LoadList.SaveToFile(sFileName)`，而 `StringList.SaveToFile`
+    /// 首行 `GetEncoding(fileName, …)` → `new FileStream(fileName, FileMode.Open)`
+    /// 抛 `FileNotFoundException`（`LoadNoClearMonList` 无 try/catch）。
+    /// 交付卡 `openmir2-envir-redlist-batch`。**注意**：缺文件在 oracle 里不是「空名单」而是异常，
+    /// 别"顺手修"成静默空表（§1 硬约束③：行为等价优先于修 bug）。
+    #[error("NoClearMonList.txt 不存在（oracle 走 SaveToFile 分支抛 FileNotFoundException）：{0}")]
+    NoClearMonListMissing(PathBuf),
 }
