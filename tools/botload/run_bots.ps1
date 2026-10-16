@@ -17,6 +17,17 @@
     - 进程在统计窗口内无异常退出
   红检（-SelfTestRed）：故意指向未监听端口，必须报失败退出码 1。
 
+  内存护栏（2026-10-16，死机取证后补）：起 BotSrv 前注入进程级 GC 堆硬上限（-BotHeapLimitGB，默认 4GiB，
+  起进程前打印 BOTGUARD_ENV 审计行），并在等待循环里对 BotSrv 做越界看门狗（-MemKillThresholdGB，默认 8GiB
+  ⇒ 越界即杀 BotSrv + RED）。helper 见 tools/botload/BotGuard.psm1；有界跑沿用现有 -TimeoutSec。
+
+  保护体检（独立复验者 must_fix #1/#2，2026-10-16；B3 收口 2026-10-16）：`-BotHeapLimitGB` 与
+  `-MemKillThresholdGB` 两项**都失效**⇒ **拒绝启动**（fail-closed，rc=2，纯离线路径 `-SelfCheckNoStack`/
+  `-WriteConfigOnly` 除外）；只失效一项 ⇒ 审计行与 summary 显式标红该保护缺失。默认配置恒为"有保护"（FULL）。
+  **"有效"不是"取值 > 0"**：一项护栏有效 = 阈值 < 有效上界（= 机器推导天花板 = `本机提交上限 × 0.5`，或
+  操作者给的更严上界）。`-MemKillThresholdCeilingGB` 只能把上界调**更严**、**不能放大**（放大值被夹回机器
+  推导值）；堆上限与看门狗走同一套对称判定。见 BotGuard.psm1 ④ 与 check_botguard.ps1 牙⑥。
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File run_bots.ps1 -Count 200 -Prefix loadbot
 .EXAMPLE
@@ -89,12 +100,15 @@ param(
   [string]$DropExpOut = '',          # 仅 -DropExpSequence 时生效：drop_exp_raw.jsonl 输出路径（空 ⇒ 只落标记）
   [int]$SoftCloseAfterWorldMs = 0,   # M1③ 退出路径夹具：进世界后发 CM_SOFTCLOSE(1009)；0=关（默认）
   [switch]$DisableAutoPlay,          # M1③ 退出路径夹具：关掉自动挂机（默认关=原行为）；见 ClientManager.RunAutoPlay
-  [switch]$WriteConfigOnly,       # 只写 AppSetting.json 并退出（不构建/不起进程；供无栈自检与红检用）
+  [switch]$WriteConfigOnly,       # 只写 AppSetting.json 并退出（**强制跳过构建**、不起进程；供无栈自检与红检用）
   [switch]$RequireWorld,          # F4（T-12）：要求全部假人都有"本会话收到 SM_LOGON"的进世界证据（in_world == Count）才 GREEN
   [switch]$RequireCharCreated,    # 固定起点变体①预热相：等到 N 个「创建角色」标记（只建号，不等进世界）才收工
   [switch]$StopAfterCharCreated,  # M3 预热相夹具（白名单 T-29 扩展）：建角后停在选角界面、不发 CM_SELCHR（默认关=原行为）
                                   # 根因：预热假人进世界后 Stop-Process 会被 GameSvr 当真实下线并异步 SaveHumanRcd 覆盖 pin（owner 19:20）
   [switch]$SelfCheckNoStack,      # 离线自检：只测 M3 序列收尾计数（attack done / bag done），不构建/不起进程
+  [int]$BotHeapLimitGB = 4,       # 内存护栏①：起 BotSrv 前注入的进程级 GC 堆硬上限（GiB）；0=不注入
+  [double]$MemKillThresholdGB = 8,# 内存护栏②：看门狗阈值（GiB）；BotSrv 私有字节/工作集越过即杀 + RED；0=关
+  [double]$MemKillThresholdCeilingGB = 0,  # 保护体检上界（GiB）：可选，只能把"有效上界"调**更严**（0=不额外设限，用机推上限）；给成比机推上限大无用（被夹回，见 BotGuard.psm1 ④）
   [switch]$SelfTestRed
 )
 
@@ -104,6 +118,21 @@ $RepoRoot = (Resolve-Path (Join-Path $Here "..\..")).Path
 $BotProj = Join-Path $RepoRoot "src\BotSrv\BotSrv.csproj"
 $BotBinDir = Join-Path $RepoRoot "src\BotSrv\bin\Release"
 $BotExe = Join-Path $BotBinDir "BotSrv.exe"
+# 内存护栏共享 helper（进程级堆上限 / 看门狗）；见 tools/botload/BotGuard.psm1 头部取证说明。
+Import-Module (Join-Path $Here "BotGuard.psm1") -Force
+
+# 护栏④（must_fix #1，2026-10-16）：保护体检 —— 默认须有保护，任何"零保护"组合都不许悄悄跑起来。
+# 纯离线路径（-SelfCheckNoStack / -WriteConfigOnly，都不起进程）不在此列：它们不长跑，无护栏也安全。
+$guardProtection = Get-BotGuardProtection -HeapLimitGb $BotHeapLimitGB -MemKillThresholdGb $MemKillThresholdGB `
+    -ThresholdCeilingGb $MemKillThresholdCeilingGB
+Write-Output (Format-BotGuardProtectionAudit -Protection $guardProtection)
+if ($guardProtection.refuse_start -and -not $SelfCheckNoStack -and -not $WriteConfigOnly) {
+    Write-Output ("RED: BotGuard 拒绝启动 —— heap_limit 与 watchdog 同时缺失（bot_heap_limit_gb=" +
+                  $BotHeapLimitGB + " mem_kill_threshold_gb=" + $MemKillThresholdGB +
+                  " 机推上限=" + $guardProtection.threshold_ceiling_gb + "GiB）；" +
+                  "不允许在零护栏下长跑。请至少打开一项：-BotHeapLimitGB > 0 且 < 机推上限，或 0 < -MemKillThresholdGB < 机推上限（本机提交上限 × 0.5）。")
+    exit 2
+}
 
 # M3 序列收尾标记计数（唯一口径，真实等待与离线自检共用）：
 #   attack = BotSrv `M3ATTSEQ {"role":"done",...}`（RobotPlayer.cs:674；F-E 收尾证据）
@@ -246,12 +275,15 @@ $statsPath = Join-Path $statsDir "load_stats.ndjson"
 $env:MIR2_BOT_OUT = $statsDir
 
 # ---- 1. 构建 ----
-if (-not $SkipBuild -or -not (Test-Path $BotExe)) {
+# must_fix #3（B3 复验者 2026-10-16）：`-WriteConfigOnly` 声称"只写配置、不构建/不起进程"（见 param 注释与
+# 下方 WRITE_CONFIG_ONLY 收尾），但此处原会**无条件 `dotnet build`**——注释与行为不符。该路径强制跳过构建
+# （也不要求 exe 存在：只写 AppSetting.json 不需要 exe），使行为与注释对齐。
+if (-not $WriteConfigOnly -and (-not $SkipBuild -or -not (Test-Path $BotExe))) {
     Write-Output "BUILD BotSrv..."
     dotnet build $BotProj -c Release --nologo -v q | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "BotSrv 构建失败" }
 }
-if (-not (Test-Path $BotExe)) { throw "找不到 $BotExe" }
+if (-not $WriteConfigOnly -and -not (Test-Path $BotExe)) { throw "找不到 $BotExe" }
 
 # ---- 2. 写配置 ----
 $cfg = @{
@@ -373,6 +405,12 @@ if ($WriteConfigOnly) {
 }
 
 # ---- 3. 起进程 ----
+# 护栏①：起进程前注入进程级 GC 堆硬上限，并把最终生效的 env 打出来（可审计）
+$envOverrides = New-BotGuardEnvOverrides -HeapLimitGb $BotHeapLimitGB
+Set-BotGuardEnv -Overrides $envOverrides
+Write-Output (Format-BotGuardEnvAudit -Exe $BotExe -Overrides $envOverrides -HeapLimitGb $BotHeapLimitGB)
+$MemKillThresholdBytes = if ($MemKillThresholdGB -gt 0) { [int64]($MemKillThresholdGB * 1GB) } else { [int64]0 }
+$guardBreachAny = $false
 $proc = Start-Process -FilePath $BotExe -WorkingDirectory $BotBinDir -PassThru -WindowStyle Hidden `
   -RedirectStandardOutput $LogFile -RedirectStandardError "$LogFile.err"
 Write-Output "BOTSRV_PID=$($proc.Id) LOG=$LogFile"
@@ -520,6 +558,17 @@ while ((Get-Date) -lt $deadline) {
     # F4（T-12）：登录不等于进世界；等"本会话收到 SM_LOGON"的进世界证据到齐。
     if ($worldOk -ge $Count) { break }
   } elseif ($success -ge $Count) { break }
+  # 护栏②：内存看门狗——BotSrv 自己越界 ⇒ 杀它 + RED + 收尾（不静默）
+  if ($MemKillThresholdBytes -gt 0) {
+    $sq = Get-ProcMemSample -Name 'BotSrv' -Pid $proc.Id
+    $bq = Find-MemBreach -Samples @($sq) -ThresholdBytes $MemKillThresholdBytes
+    if ($bq) {
+      Write-Output (Format-BotGuardBreachRed -Breach $bq)
+      foreach ($kid in @(Stop-BotSrvForBreach -Breach $bq -BotPids @($proc.Id))) { Write-Output ("BOTGUARD_KILL pid=" + $kid) }
+      $guardBreachAny = $true
+      break
+    }
+  }
   if ($proc.HasExited) { Write-Output "WARN: BotSrv 进程提前退出 code=$($proc.ExitCode)"; break }
 }
 
@@ -539,6 +588,9 @@ $summary = [pscustomobject]@{
   char_created = $charCreated; require_char_created = [bool]$RequireCharCreated
   success_rate_pct = $rate; world_rate_pct = $worldRate; require_world = [bool]$RequireWorld
   timeout_sec = $TimeoutSec; log = $LogFile; stats = $statsPath
+  mem_guard_breach = $guardBreachAny; bot_heap_limit_gb = $BotHeapLimitGB; mem_kill_threshold_gb = $MemKillThresholdGB
+  protection_level = $guardProtection.level; protection_missing = @($guardProtection.missing); refuse_start = [bool]$guardProtection.refuse_start
+  threshold_ceiling_gb = [double]$guardProtection.threshold_ceiling_gb; machine_commit_limit_gb = [double]$guardProtection.machine_commit_limit_gb; ceiling_clamped = [bool]$guardProtection.ceiling_clamped
 }
 $summaryPath = [System.IO.Path]::ChangeExtension($LogFile, ".summary.json")
 $summary | ConvertTo-Json | Set-Content -Path $summaryPath -Encoding utf8
@@ -551,6 +603,12 @@ if ($SelfTestRed) {
     exit 0   # 红检本身按预期变红 = 自测通过
   }
   Write-Output "SELFTEST_RED RED: 连不通却报成功——判据失效！"
+  exit 1
+}
+
+# 护栏②：内存看门狗触发 ⇒ 明确 RED（即使登录数达标也不判 GREEN）
+if ($guardBreachAny) {
+  Write-Output ("RED: BotGuard 内存看门狗触发（BotSrv 越过 " + $MemKillThresholdGB + "GB 阈值，已杀 pid=" + $proc.Id + "）")
   exit 1
 }
 
