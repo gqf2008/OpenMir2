@@ -1038,6 +1038,37 @@ def outbound_emit_at(corpus, ident, live=None, spans=None):
     return None
 
 
+def production_callers_of(corpus, api, code_lines=None, test_regions=None):
+    """`[(path, lineno, code_line), …]`：`api` 在**生产路径**上的**调用点**（定义行 / 单测 / 注释均已剔除）。
+
+    用途：`_wired_no_producer` 注释面（「发射点已就位、生产者缺位」）的**自失效**咬口——声明「某 API 无
+    生产调用者」；一旦生产路径上出现调用者，声明即陈旧（门转红 `WIRED_NO_PRODUCER_STALE`）。
+
+    口径（与既有出站/入站「生产」判据同一套剔除机制）：
+      · 注释 / 字符串：由 `RustCorpus.code`（`strip_code`）预先剔除；
+      · **定义行**：`fn api`（含 `pub fn`/`async fn`/`impl` 内 `fn`）不算「调用者」⇒ 剔除；
+      · **单测**：落在 `#[cfg(test)]` 模块体内的出现不算生产 ⇒ 剔除（复用 [`_cfg_test_regions`]）。
+    空 ⇒ 生产路径零调用者（该 API 仅出现于定义/单测）。注意本判据**不**做「自 bins `main` 可达」收窄——
+    它要的是**最早**发现「生产者已接线」，任何非定义、非单测的调用点都足以让注释面陈旧。
+    """
+    if code_lines is None:
+        code_lines = _file_code_lines(corpus)
+    if test_regions is None:
+        test_regions = _cfg_test_regions(code_lines)
+    call_pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(api) + r"(?![A-Za-z0-9_])\s*\(")
+    def_pat = re.compile(r"(?<![A-Za-z0-9_])fn\s+" + re.escape(api) + r"(?![A-Za-z0-9_])")
+    hits = []
+    for path, no, code in corpus.code:
+        if not call_pat.search(code):
+            continue
+        if def_pat.search(code):          # `fn api(…)` 定义行不算调用者
+            continue
+        if any(a <= no <= b for a, b in test_regions.get(path, ())):   # `#[cfg(test)]` 单测不算生产
+            continue
+        hits.append((path, no, code))
+    return hits
+
+
 # ---------------------------------------------------------------------------
 # 入站「生产派发点」判据（卡 `openmir2-gate-inbound-producer-dimension`，tier=L）
 #
@@ -2017,30 +2048,89 @@ def cmd_mutate(args):
                 "SM_PLAYDICE", "SM_ITEMSHOW", "SM_HIDEEVENT", "SM_SHOWEVENT", "SM_OPENDOOR_OK",
                 "SM_CLOSEDOOR"}
 
-    # `_wired_no_producer`：**注释面**（不参与 blocked 断言）——列出「发射点已就位、但**触发该帧的生产者
-    #   缺位**」的 wired 帧。与 `blocked` **正交**：blocked = 无发射点（判据照旧严格），本表 = 有发射点
-    #   但运行期永不触发。⚠ 与 `known_oracle_noop` 同款限制：门只机判**证据形状**（非空且含 file:line
-    #   形态），不判真伪；**不得**用它把 blocked 帧"洗"成 wired —— 成员必须**已在 `_wired_now`**（断言）。
+    # `_wired_no_producer`：**注释面**（不参与 blocked 断言；**自失效断言**，非人工免检）——列出
+    #   「发射点已就位、但**触发该帧的生产者缺位**」的 wired 帧。与 `blocked` **正交**：blocked =
+    #   无发射点（判据照旧严格），本表 = 有发射点但运行期永不触发。每条为**结构化声明**：
+    #     {"apis": [生产 API 名, …],      # 该帧的**唯一**生产者 API（缺它则帧发不出）
+    #      "root": "为何这些 API 是唯一生产者",  # 人写理由（门只查非空）
+    #      "evidence": "<file:line 形态>"}       # 发射点锚（门只查形状）
+    #   **门在真语料上机判**（不再只查证据形状）：`production_callers_of` 逐 API grep 生产调用者——
+    #     · 任一 API 出现**生产调用者**（定义/单测除外）⇒ RED `WIRED_NO_PRODUCER_STALE`（注释陈旧，
+    #       生产者已接线 ⇒ 必须把该 ident 移出注释面）；
+    #     · 任一 API 在语料里**根本不存在**（拼写错/被改名）⇒ RED `WIRED_NO_PRODUCER_UNKNOWN_API`
+    #       （防「用不存在的 API 名糊过去」）。
+    #   ⚠ **不得**用它把 blocked 帧"洗"成 wired —— 成员必须**已在 `_wired_now`**（断言）。
     _wired_no_producer = {
         # 片112（buff 系统）A-5 deferred：`Operate` 的 boChg 支 ⇒ `StatusChanged()` ⇒ drain 发 657，
-        #   但唯一能加 buff 的生产 API（make_posion/defence_up/mag_defence_up/magic_shield_on）
-        #   除本体单测外 0 生产调用者 ⇒ `TickRecord.buff_status_changes` 恒空 ⇒ 657 运行期永不发。
-        "SM_CHARSTATUSCHANGED": (
-            "生产者缺位证据：`grep -rn \"make_posion|defence_up|mag_defence_up|magic_shield_on\" "
-            "mir2-rs/crates mir2-rs/bins` 仅命中本体单测/doc（无 bins 生产命中）；"
-            "发射点锚（证明**有**发射点）：mir2-rs/bins/game-svr/src/smframe_ext.rs:131（编码器）"
-            " + mir2-rs/bins/game-svr/src/main.rs（drain_buff_downlink 生产调用）。"
-            "承接：卡 openmir2-world-tick-expansion 的 A-5 deferred（消费方接线批）。"
-        ),
+        #   但唯一能加 buff 的生产 API 除本体单测外 0 生产调用者 ⇒ `TickRecord.buff_status_changes`
+        #   恒空 ⇒ 657 运行期永不发。
+        "SM_CHARSTATUSCHANGED": {
+            "apis": ["make_posion", "defence_up", "mag_defence_up", "magic_shield_on"],
+            "root": ("世界侧**唯一**能落 `TickRecord.buff_status_changes` 的生产 API——只有这四个会"
+                     "加 buff（`world.rs:552/572/588/600`）；除本体单测外无生产调用者 ⇒ "
+                     "`buff_status_changes` 恒空 ⇒ drain_buff_downlink 的 657 支运行期永不发。"),
+            "evidence": ("发射点锚（证明**有**发射点，非无编码器）："
+                         "mir2-rs/bins/game-svr/src/smframe_ext.rs:131（657 编码器定义）"
+                         " + mir2-rs/bins/game-svr/src/main.rs:6024（drain_buff_downlink 内调"
+                         " sm_charstatuschanged） + main.rs:9323（drain_buff_downlink 在 tick 循环的生产调用）。"
+                         "承接：卡 openmir2-world-tick-expansion 的 A-5 deferred（消费方接线批）。"),
+        },
     }
+
+
+    def _m6c_wnp_failures(wired, blocked, wired_no_producer, corpus):
+        """`_wired_no_producer` **注释面结构 + 自失效**断言（空 = 全绿）。
+
+        · 结构：每条值须为 dict，含 (c) **非空** `apis`(list[str])、(root) 非空 `root`(str)、
+          (d) `evidence`(str，含 `file:line` 形态)；
+        · 归属：(a) ident **已在 `wired`**、(b) **不在 `blocked`** ⇒ 注释面**不可能**被用来豁免 blocked；
+        · 自失效 STALE：任一声明 API 若在**语料**上有**生产调用者**（定义/单测除外，[`production_callers_of`]）
+          ⇒ 注释陈旧，必红；
+        · 防伪 UNKNOWN：任一声明 API 在语料里**根本不存在**（`corpus.present` 假）⇒ 必红。
+
+        `corpus` 可传隔离副本语料做牙（证明门真读语料，而非只看注释面字符串）。
+        """
+        fails = []
+        _lines = _file_code_lines(corpus)
+        _tr = _cfg_test_regions(_lines)
+        for sm in sorted(wired_no_producer):
+            val = wired_no_producer[sm]
+            if sm not in wired:
+                fails.append("wired_no_producer 不在 wired（不得借此豁免 blocked）:" + sm)
+            if sm in blocked:
+                fails.append("wired_no_producer 与 blocked 同时命中:" + sm)
+            if not isinstance(val, dict):
+                fails.append("wired_no_producer 结构非法（须为 {apis,root,evidence} 结构化声明）:" + sm)
+                continue
+            _apis = val.get("apis")
+            if (not isinstance(_apis, list) or not _apis
+                    or not all(isinstance(a, str) and a.strip() for a in _apis)):
+                fails.append("wired_no_producer.apis 须为非空字符串列表:" + sm)
+                _apis = []
+            _root = val.get("root")
+            if not isinstance(_root, str) or not _root.strip():
+                fails.append("wired_no_producer.root 须为非空字符串（为何这些 API 是唯一生产者）:" + sm)
+            _ev = str(val.get("evidence") or "")
+            if (not _ev.strip()) or (":" not in _ev) or (not re.search(r"[A-Za-z0-9_./\-]+:[0-9]+", _ev)):
+                fails.append("wired_no_producer 证据不合法（须非空且含 file:line 形态）:" + sm)
+            for _api in _apis:
+                if not corpus.present(_api):
+                    fails.append("WIRED_NO_PRODUCER_UNKNOWN_API（拼写错/被改名）:%s:%s" % (sm, _api))
+                    continue
+                _callers = production_callers_of(corpus, _api, _lines, _tr)
+                if _callers:
+                    _p, _no, _ = _callers[0]
+                    fails.append("WIRED_NO_PRODUCER_STALE（API 已有生产调用者，须移出注释面）:%s:%s@%s:%d"
+                                 % (sm, _api, _p, _no))
+        return fails
 
     def _m6c_failures(wired, blocked, wired_no_producer=None):
         """双向不变式违例清单（空 = 全绿）；wired/blocked 可传变异集合做牙。
 
         · wired   ：每条**必须**有生产发射点；
         · blocked ：每条**必须无**生产发射点（**严格，无豁免**）；
-        · wired_no_producer（默认 [`_wired_no_producer`]）：**注释面**。每条必须 (a) 已在 `wired`、
-          (b) 不在 `blocked`、(c) 带非空且含 `file:line` 形态的证据 ⇒ 它**不可能**被用来豁免 blocked。
+        · wired_no_producer（默认 [`_wired_no_producer`]）：**注释面**（[`_m6c_wnp_failures`] 判结构、
+          归属、自失效 STALE / UNKNOWN_API）。
         """
         if wired_no_producer is None:
             wired_no_producer = _wired_no_producer
@@ -2052,14 +2142,7 @@ def cmd_mutate(args):
         for sm in sorted(blocked):
             if outbound_emit_at(_rep_corpus, sm, _live_w, _spans_w) is not None:
                 fails.append("blocked 有发射点:" + sm)
-        for sm in sorted(wnp):
-            if sm not in wired:
-                fails.append("wired_no_producer 不在 wired（不得借此豁免 blocked）:" + sm)
-            if sm in blocked:
-                fails.append("wired_no_producer 与 blocked 同时命中:" + sm)
-            _ev = str(wnp[sm] or "")
-            if (not _ev.strip()) or (":" not in _ev) or (not re.search(r"[A-Za-z0-9_./\-]+:[0-9]+", _ev)):
-                fails.append("wired_no_producer 证据不合法（须非空且含 file:line 形态）:" + sm)
+        fails.extend(_m6c_wnp_failures(wired, blocked, wnp, _rep_corpus))
         _dup = sorted(wired & blocked)
         if _dup:
             fails.append("wired∩blocked 非空:" + ",".join(_dup))
@@ -2069,6 +2152,7 @@ def cmd_mutate(args):
         if _miss or _extra:
             fails.append("并集≠红名单30(缺=%s 多=%s)" % (_miss or "无", _extra or "无"))
         return fails
+
 
     _m6c_real = _m6c_failures(_wired_now, _blocked)
     add("M6c 真语料：orphan 双向不变式（wired 有发点 ∧ blocked **严格无**发点 ∧ 互斥 ∧ 并集=30；"
@@ -2086,13 +2170,73 @@ def cmd_mutate(args):
                            _blocked | {"SM_CHARSTATUSCHANGED"})))
     add("M6c 牙⑤ 注释面放进无发射点的 SM_SKELETON ⇒ 必红（不在 wired ⇒ 不得借此豁免 blocked）",
         bool(_m6c_failures(_wired_now, _blocked,
-                           dict(_wired_no_producer, SM_SKELETON="x.rs:1"))))
+                           dict(_wired_no_producer,
+                                SM_SKELETON={"apis": ["make_posion"], "root": "r", "evidence": "x.rs:1"}))))
     add("M6c 牙⑥ 注释面证据置空 ⇒ 必红（证据形状检查）",
         bool(_m6c_failures(_wired_now, _blocked,
-                           dict(_wired_no_producer, SM_WHISPER=""))))
-    add("M6c 牙⑦ 把已接线的 SM_WHISPER 加进注释面 ⇒ 允许（注释面不构成豁免；其真伪由人审）",
+                           dict(_wired_no_producer,
+                                SM_WHISPER={"apis": ["make_posion"], "root": "r", "evidence": ""}))))
+    add("M6c 牙⑦ 把已接线的 SM_WHISPER 加进注释面（声明一个**确无生产调用者**的 API）⇒ 允许"
+        "（注释面本身**不构成** blocked 豁免；门只按声明咬真伪）",
         not _m6c_failures(_wired_now, _blocked,
-                          dict(_wired_no_producer, SM_WHISPER="a.rs:1")))
+                          dict(_wired_no_producer,
+                               SM_WHISPER={"apis": ["mag_defence_up"], "root": "r", "evidence": "a.rs:1"})))
+
+    # M6c 牙⑧-⑫ —— 注释面**自失效**牙（片114 升级）：门在（隔离副本）语料上 grep 声明的生产 API 的调用者，
+    #   ① 加生产调用者 ⇒ STALE 必红；② 删调用者 ⇒ 不红（对照，证明红来自调用者本身）；
+    #   ③ apis 改不存在名 ⇒ UNKNOWN_API 必红；④ 注释面 ident 不在 wired ⇒ 必红；⑤ 结构牙。
+    _tmp_wnp = Path(tempfile.mkdtemp(prefix="recon-wnp-mut-"))
+
+    def _wnp_iso(extra_lines, name):
+        """隔离副本语料：定义四个声明的生产 API（+ 可选 extra_lines 注入生产调用者）。"""
+        _root = _tmp_wnp / name
+        shutil.rmtree(_root, ignore_errors=True)
+        _d = _root / "mir2-rs/crates/zz-buff/src"
+        _d.mkdir(parents=True)
+        _defs = [
+            "pub fn make_posion(a: i32) -> bool { let _ = a; true }",
+            "pub fn defence_up(a: i32) { let _ = a; }",
+            "pub fn mag_defence_up(a: i32) { let _ = a; }",
+            "pub fn magic_shield_on(a: i32) { let _ = a; }",
+        ]
+        (_d / "lib.rs").write_text(NL.join(_defs + list(extra_lines)) + NL, encoding="utf-8")
+        return RustCorpus(rust_source_dirs(_root, exclude=DISPATCH_EXCLUDE))
+
+    try:
+        # ⑧ 给声明的 API（make_posion）加一个**生产调用者** ⇒ 注释陈旧 STALE 必红（门真读语料）
+        _iso_stale = _wnp_iso(["pub fn zz_wire() { let _ = make_posion(1); }"], "stale")
+        _f_stale = _m6c_wnp_failures(_wired_now, _blocked, _wired_no_producer, _iso_stale)
+        add("M6c 牙⑧ 隔离副本给 make_posion 加生产调用者 ⇒ WIRED_NO_PRODUCER_STALE 必红",
+            any("WIRED_NO_PRODUCER_STALE" in f for f in _f_stale))
+        # ⑨ 对照：同副本**去掉**该调用者 ⇒ 无 STALE（证明 ⑧ 的红来自调用者本身，非别的副作用）
+        _iso_ok = _wnp_iso([], "ok")
+        add("M6c 牙⑨ 对照：同副本去掉生产调用者 ⇒ 无 STALE（不误红）",
+            not _m6c_wnp_failures(_wired_now, _blocked, _wired_no_producer, _iso_ok))
+        # ⑩ 把某条声明的 apis 改成**不存在**的名字 ⇒ UNKNOWN_API 必红（防用假名糊过去）
+        _wnp_unknown = {"SM_CHARSTATUSCHANGED":
+                        dict(_wired_no_producer["SM_CHARSTATUSCHANGED"], apis=["zz_no_such_api_zz"])}
+        add("M6c 牙⑩ 声明 apis 改为不存在的名字 ⇒ WIRED_NO_PRODUCER_UNKNOWN_API 必红",
+            any("WIRED_NO_PRODUCER_UNKNOWN_API" in f
+                for f in _m6c_failures(_wired_now, _blocked, _wnp_unknown)))
+        # ⑪ 把该条从 `_wired_now` 删（注释面不在 wired）⇒ 必红
+        add("M6c 牙⑪ 注释面 ident 不在 _wired_now ⇒ 必红（不得借注释面豁免/悬空）",
+            any("不在 wired" in f
+                for f in _m6c_failures(_wired_now - {"SM_CHARSTATUSCHANGED"}, _blocked)))
+        # ⑫ 结构牙：apis 置空 / evidence 无 file:line / 值非 dict ⇒ 均必红
+        add("M6c 牙⑫ 结构牙：apis 空 / evidence 无 file:line / 值非 dict ⇒ 必红",
+            any("apis 须为非空" in f for f in _m6c_failures(
+                _wired_now, _blocked,
+                dict(_wired_no_producer, SM_CHARSTATUSCHANGED=dict(
+                    _wired_no_producer["SM_CHARSTATUSCHANGED"], apis=[]))))
+            and any("证据不合法" in f for f in _m6c_failures(
+                _wired_now, _blocked,
+                dict(_wired_no_producer, SM_CHARSTATUSCHANGED=dict(
+                    _wired_no_producer["SM_CHARSTATUSCHANGED"], evidence="no line here"))))
+            and any("结构非法" in f for f in _m6c_failures(
+                _wired_now, _blocked,
+                dict(_wired_no_producer, SM_CHARSTATUSCHANGED="legacy-string"))))
+    finally:
+        shutil.rmtree(_tmp_wnp, ignore_errors=True)
 
     # M6d —— 可达性口径鲁棒性（防过近似制造假绿）：名字级宽进图 vs「唯一名 + 显式 `::` 限定」图，
     #         在真语料上必须给出**相同的 outbound 判定集**（同一组非 implemented）。
