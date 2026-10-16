@@ -426,8 +426,11 @@ mod tests {
     /// **跨路径一致性门（本卡重点，防「少抽 2 次」复发）**：
     /// oracle 里怪物 / 固定 NPC / 商人列表**都经**同一条 ctor 公共链
     /// `BaseObject`（`BaseObject.cs:439/441`）→ `AnimalObject`（`AnimalObject.cs:76/77`），
-    /// 抽同样的 4 个数、同序（`mir2_world::BASE_ANIMAL_CTOR_DRAW_MODS` 一处定义）。
-    /// 本判据把三条路径**都**钉在同一张表上 ⇒ 改任一路径的抽数即红。
+    /// 抽同样的 4 个数、同序。不变量 = 一处定义（`mir2_world::BASE_ANIMAL_CTOR_DRAW_MODS` +
+    /// `BaseAnimalCtorDraws::draw`）+ 两模块三调用点直接消费（`crates/world/src/npc.rs` 的
+    /// `insert_npc`；`crates/world/src/merchant.rs` 的 `merchant_ctor_run_delay`/`spawn_merchant`）+
+    /// 一条被本门钉齐的同值副本（怪物路径 `bins/game-svr/src/mongen.rs` 硬编码 4 抽）。
+    /// 本判据把三条路径都钉在同一张表上 ⇒ 改任一路径的抽数即红。
     ///
     /// 注：商人后 3 抽（`SearchTime`/`AttackTick`/`WalkTick`）在 oracle 里对商人**不被消费**
     /// （`Merchant.Run` 只读 `RunTick`；动物 AI 不驱动 NPC），其**值被丢弃**、只有流位置可观测；
@@ -494,6 +497,15 @@ mod tests {
                     e.walk_tick_delta
                 ),
                 "固定 NPC 路径 ctor 抽取必须与公共链表一致（原只抽 2 次 = 少抽 2 次）"
+            );
+            // 流位置：同 4 抽后 `world.rng` 必须落回参考流同一位置。只比上面 4 个值**抓不到
+            // 「多抽 1 次」**（不改这 4 个值、只挪流位置）⇒ 显式比流位置（照 ④ 商人分支写法）。
+            let mut refr = RandomNumber::with_seed(seed);
+            let _ = mir2_world::BaseAnimalCtorDraws::draw(&mut refr);
+            assert_eq!(
+                world.rng.random(),
+                refr.random(),
+                "固定 NPC 路径 ctor 抽取次数/次序 = 公共链 4 抽（多抽 1 次 ⇒ 流位置必错）"
             );
         }
 

@@ -29,10 +29,13 @@
 #   attack      攻击路径（由两侧攻击正则判定，组内不再细分；不写进本表）
 #   other       未归类（**表漂移信号**：`--require-closed` 下判红，拒给假绿）
 #
-# 注意：Rust 侧 ④-D 把构造期抽数折叠在刷怪路径内（`crates/world/src/mongen.rs` 的
-#   `AnimalState::from_spawn_draws`），因此 Rust 的 `construct` 组暂无独立站点；
-#   oracle 侧 `BaseObject..ctor` 等是独立站点。**R-6 裁决（owner 2026-10-13）**：把这个折叠
-#   登记为建模差异，但要求**机判等价** —— `rng_consumer_groups.FOLD_RULES = {construct: spawn}`，
+# 注意（2026-10-17 订正，片114）：Rust 侧的 `construct` 组**已启用**——固定 NPC（`insert_npc`）
+#   与商人列表（`merchant_ctor_run_delay`/`spawn_merchant`）的构造链经 `crates/world/src/entity.rs`
+#   的 `BaseAnimalCtorDraws::draw` 落独立站点（片114 由 `merchant.rs`/`npc.rs` 迁出）；
+#   **怪物**构造期抽数仍折叠在刷怪路径内（`crates/world/src/mongen.rs` 的
+#   `AnimalState::seed_from_spawn` + 宿主 `bins/game-svr/src/mongen.rs`），oracle 侧
+#   `BaseObject..ctor` 等是独立站点。**R-6 裁决（owner 2026-10-13）**：把这个折叠登记为建模差异，
+#   但要求**机判等价** —— `rng_consumer_groups.FOLD_RULES = {construct: spawn}`（两侧同折），
 #   `groupdiff --fold` 在折叠后的序列上重算组集合/计数/相对次序（折叠计数不等 ⇒ `FOLDED_COUNT_DIFF`）。
 #
 # group	side	pattern	oracle_ref	note
@@ -46,7 +49,7 @@ drop	csharp	GameItemSystem\.UpgradeRandom\w+@GameItemSystem\.cs:	src/M2Server/It
 drop	csharp	GameItemSystem\.RandomSetUnknownBracelet@GameItemSystem\.cs:	src/M2Server/Items/GameItemSystem.cs:645	RandomSetUnknownBracelet
 drop	rust	crates/formula/src/drop\.rs:	crates/formula/src/drop.rs	mon_get_random_items + upgrade_random_*
 merchant	csharp	Merchant\.Run@Merchant\.cs:	src/GameSrv/Npc/Merchant.cs:132	Merchant.Run / RefillGoods
-merchant	rust	crates/world/src/merchant\.rs:	crates/world/src/merchant.rs	未实现（M3⑤ merchant-entity-tick 承接）
+merchant	rust	crates/world/src/merchant\.rs:	crates/world/src/merchant.rs	Merchant.Run/RefillGoods tick（⑤-2 已实现，merchant_run :661）+ O-2 rename_rand 站点（:649）；构造抽已迁 entity.rs（见 construct 行）
 spawn	csharp	RegenMonsters@WorldServer\.MonGen\.cs:	src/GameSrv/Word/WorldServer.MonGen.cs:815	RegenMonsters 定时刷怪
 spawn	csharp	CreateMonster@WorldServer\.MonGen\.cs:	src/GameSrv/Word/WorldServer.MonGen.cs:498	CreateMonster 生成期抽数
 spawn	csharp	InitializeMonster@WorldServer\.MonGen\.cs:	src/GameSrv/Word/WorldServer.MonGen.cs:66	InitializeMonster 属性初始化
@@ -56,7 +59,7 @@ construct	csharp	AnimalObject\.\.ctor@AnimalObject\.cs:	src/M2Server/Actor/Anima
 construct	csharp	MonsterObject\.\.ctor@MonsterObject\.cs:	src/M2Server/Monster/MonsterObject.cs:65	MonsterObject ctor
 construct	csharp	Monsters\.\w+\.\.ctor@	src/M2Server/Monster/Monsters/*.cs	各具体怪 ctor（MeatQuality 等）
 construct	csharp	PlayObject\.\.ctor@PlayObject\.cs:	src/M2Server/Player/PlayObject.cs:1046	PlayObject ctor
-construct	rust	crates/world/src/entity\.rs:	crates/world/src/entity.rs	保留：若构造抽数移出 mongen 再启用
+construct	rust	crates/world/src/entity\.rs:	crates/world/src/entity.rs	已启用：固定 NPC（insert_npc）/商人列表（merchant_ctor_run_delay/spawn_merchant）构造链唯一抽数点 BaseAnimalCtorDraws::draw（4 抽）；**怪物**构造仍折在 mongen 宿主（spawn 组）
 npc_ai	csharp	GuildOfficial\.Run@GuildOfficial\.cs:	src/GameSrv/Npc/GuildOfficial.cs:41	行会 NPC AI（非商人）
 revive	csharp	BaseObject\.ReAliveEx@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:2744	复活点随机
 homemap	csharp	GetHomeInfo@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1392	回城点
@@ -74,4 +77,4 @@ startup	rust	bins/game-svr/src/main\.rs:	bins/game-svr/src/main.rs	宿主启动�
 # `groupdiff --fold --strict` 的 `GROUP_SET_DIFF` + DoD② 的 `MISSING_EXPECTED_GROUPS(spawn)`
 # 双红（会在与 ④ 共用的独占窗口里空转一轮）。机判见 `rng_consumer_groups.py selftest`（含删行必红）。
 spawn	rust	bins/game-svr/src/mongen\.rs:	bins/game-svr/src/mongen.rs	宿主生成期构造抽数（create_monster_oracle/draw_monster_construct）；R-6 折叠后 C# construct → Rust spawn，与 drop_exp_consumers.tsv 的 setup 行同口径
-npc_ai	rust	crates/world/src/npc\.rs:	crates/world/src/npc.rs	固定 NPC Run（WorldServer.ProcessNpcs 驱动；GuildOfficial.Run / Merchant.Run 两类 body，RNG 抽数逐次同一 site）；卡 openmir2-world-tick-expansion
+npc_ai	rust	crates/world/src/npc\.rs:	crates/world/src/npc.rs	固定 NPC Run（WorldServer.ProcessNpcs 驱动；GuildOfficial.Run / Merchant.Run 两类 body，RNG 抽数逐次同一 site）；构造抽已迁 entity.rs（construct 组）⇒ 本行现只承 Run 段；卡 openmir2-world-tick-expansion

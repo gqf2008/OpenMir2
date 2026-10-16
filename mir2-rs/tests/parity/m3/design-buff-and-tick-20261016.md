@@ -445,6 +445,38 @@ fn npc_run_body(world: &mut World, npc_type: i32) -> NpcRunOutcome;
 >
 > **⚠ 2026-10-17 订正（构造段必须覆盖）**：上式「两侧账本逐项相等」**必须从 `seq=0`（构造期）起对齐**，不能只从 `k0`（首次 NPC Run）起。原稿以 `k0` 为锚、默认「k0 之前两侧一致」⇒ 构造期分岔（抽数 kind/顺序错）会被 `N` 掩蔽。⇒ 窗口判据**必须含构造段 site/order 逐项相等**：固定 NPC / 商人列表各自 `new` 时的整条 ctor 公共链 4 抽（`BaseObject`×2 `:439/441` + `AnimalObject`×2 `:76/77`）也要落进同一 `MIR2_RNG_LOG` 账本、与 oracle 逐项对齐（R 级窗口项）。
 
+#### 4.4.1 构造点全表（oracle `new Merchant(...)` 全仓枚举，2026-10-17 补登）
+
+§4.4 的构造段判据要求「两侧账本从 `seq=0`（构造期）起逐项相等」。oracle 的 `new Merchant(…)`
+**不止** `LoadMerchant`/`LoadNpcs` 两处——全仓 `grep -rn "new Merchant" src/` 另有 10 处
+（其中 1 处源码已注释）。**每条 `new Merchant(…)` 都经同一 ctor 公共链抽 4 个数**（`BaseObject`×2
+`:439/441` + `AnimalObject`×2 `:76/77`；`Merchant()` ctor 体 `Merchant.cs:82` 不加抽）⇒
+构造段总长与次序由下表决定：
+
+| # | oracle 锚 | 归属方法 / 触发 | Rust 现状 | 处置 |
+| --- | --- | --- | --- | --- |
+| G1 | `src/GameSrv/GameApp.cs:85`（`SystemShare.ManageNPC`） | `InitializeSystem()`，启动期（`GameApp` ctor，**早于** `LoadMerchant`） | **未建模**（Rust 启动期无对应 `new Merchant()`） | 列进窗口项（补 4 抽或显式登记 fold） |
+| G2 | `src/GameSrv/GameApp.cs:86`（`RobotNPC`） | 同上 | 未建模 | 同上 |
+| G3 | `src/GameSrv/GameApp.cs:87`（`FunctionNPC`） | 同上 | 未建模 | 同上 |
+| L1 | `src/GameSrv/DB/LocalDB.cs:210`（`QFunctionNpc()`） | `LoadMapQuest()` 尾 `:404`；`AddMerchant` | **只作脚本宿主标签**（`crates/envir/src/mapquest.rs` `HiddenNpcSpec` → `QuestNpcRecord` → `bins/game-svr/src/npc.rs` `NpcHost`），未建世界实体 ⇒ 不抽 | 列进窗口项 / 显式登记未建模 |
+| L2 | `src/GameSrv/DB/LocalDB.cs:268`（`QMangeNpc()`） | `LoadMapQuest()` 尾 `:403`；`AddQuestNpc` | 同上（`QManage`） | 同上 |
+| L3 | `src/GameSrv/DB/LocalDB.cs:312`（`RobotNpc()`） | `LoadMapQuest()` 尾 `:405`；`AddQuestNpc` | 同上（`RobotManage`） | 同上 |
+| L4 | `src/GameSrv/DB/LocalDB.cs:450`（`LoadMerchant()`） | `Merchant.txt` 逐条；`AddMerchant`（MerchantList） | **已建模**：`bins/game-svr/src/merchant.rs::spawn_merchants` → `World::merchant_ctor_run_delay`（正序，4 抽/条） | 已建模含 4 抽 |
+| L5 | `src/GameSrv/DB/LocalDB.cs:691`（`LoadNpcs()` `case 0`） | `Npcs.txt` 逐条；`AddQuestNpc`（QuestNpcList） | **已建模**：`bins/game-svr/src/npcs.rs::place_npcs` → `World::insert_npc`（正序，4 抽/条） | 已建模含 4 抽 |
+| L6 | `src/GameSrv/DB/LocalDB.cs:1067`（`ReLoadMerchants()`） | 运行期重载；`AddMerchant` | **未建模**（Rust 无 `ReLoadMerchants` 对应） | 列进窗口项 |
+| M1 | `src/GameSrv/Maps/MapQuestManager.cs:40`（`CreateQuest()`） | `LocalDB.LoadMapQuest` 的 `CreateQuest(...)` 调用点（`LocalDB.cs:386`；MapQuest.txt 读取起于 `:352`、for 循环 `:358`）；`AddQuestNpc` | **只作记录**（`crates/envir/src/mapquest.rs::create_quest` → `QuestNpcRecord`），未建世界实体 ⇒ 不抽 | 列进窗口项 / 显式登记未建模 |
+| M2 | `src/GameSrv/Maps/Maps.cs:454`（`LoadMapQuest(sName)`） | `Maps.cs` `CHECKQUEST` 图命令（`:137`）；`AddQuestNpc` | **未建模**（Rust 未建世界实体） | 列进窗口项 |
+| X1 | `src/Modules/GameCommand/Commands/MobNpcCommand.cs:36` | GM 命令（**源码已注释** `//var merchant = new Merchant();`） | N/A | **显式登记 N/A**（不抽） |
+
+**⇒ 一句话回答「构造段 `seq=0` 对齐在补齐前是否可达」**：**不可达**。oracle 构造段**头部**
+（`GameApp` ctor 的 `InitializeSystem`，早于 `LoadMerchant`/`LoadNpcs`/`LoadMapQuest`）就**无条件**
+抽 **12 个**（G1–G3 各 4），Rust 启动期一个都不抽；随后 `LoadMapQuest` 尾的三只隐藏 NPC
+（L1–L3）与 `MapQuest_def` 任务商人（M1/M2）在 Rust 侧只落成**记录 / 脚本宿主**、**不建世界实体**
+⇒ 也不抽。⇒ 只要 G1–G3、L1–L3、L6、M1/M2 尚未**逐条建模（含 4 抽）或显式登记为 fold / N-A**，
+构造段两侧账本就不可能逐项相等（`seq=0` 起第一项即分歧）。L4/L5 已建模，并由
+`bins/game-svr/src/npcs.rs::base_animal_ctor_chain_matches_oracle_on_all_three_paths`
+（含构造后**流位置**比对）钉住 4 抽——是构造段**已对齐的全部**；其余 **10 处**（`MobNpcCommand.cs:36` 源码已注释 ⇒ 待处置 **9 处**）为未对齐窗口项。
+
 ### 4.5 判据
 
 **离线可判（构造级）**
@@ -453,7 +485,7 @@ fn npc_run_body(world: &mut World, npc_type: i32) -> NpcRunOutcome;
 - **B-L2（节奏门）**：`run_tick` 未到 `RunTime`（250ms）时不抽数；到点后 `run_tick` 被刷成 `now`（照 `merchant.rs:567-571` 体例），下一 pass 不再抽。
 - **B-L3（次序）**：多个 NPC（含不同 `npc_type`）按槽位序触发，断言抽数次序 = 槽位序 × 每 NPC 的抽数序列（用 `MIR2_RNG_LOG` 比对 site/order）。
 - **B-L4（`base.Run` 无抽数）**：无消息 NPC 的 `npc_run` 尾部（`base.Run` 段）**新增 0 抽**（负向断言）。
-- **B-L5（构造抽不回归，⚠ 2026-10-17 订正）**：`insert_npc` 按 oracle **整条** ctor 公共链抽 **4 次**（`BaseObject` `Random(1500)`→`Random(2000)+2000`，再 `AnimalObject` `Random(3000)`→`Random(3000)`；`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`）——**原稿「恰 2 抽」与 oracle 相反**（少抽 `AnimalObject` 的 2 抽、流整体错位）。跨路径机判 `bins/game-svr/src/npcs.rs::base_animal_ctor_chain_matches_oracle_on_all_three_paths` 把怪物/固定 NPC/商人列表三路径钉在同一张表（`mir2_world::BASE_ANIMAL_CTOR_DRAW_MODS`，一处定义三处消费）上；加入 `npc_tick` 后构造段账本不变。
+- **B-L5（构造抽不回归，⚠ 2026-10-17 订正）**：`insert_npc` 按 oracle **整条** ctor 公共链抽 **4 次**（`BaseObject` `Random(1500)`→`Random(2000)+2000`，再 `AnimalObject` `Random(3000)`→`Random(3000)`；`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`）——**原稿「恰 2 抽」与 oracle 相反**（少抽 `AnimalObject` 的 2 抽、流整体错位）。跨路径机判 `bins/game-svr/src/npcs.rs::base_animal_ctor_chain_matches_oracle_on_all_three_paths` 把怪物/固定 NPC/商人列表三路径钉在同一张表（`mir2_world::BASE_ANIMAL_CTOR_DRAW_MODS` + `BaseAnimalCtorDraws::draw`，一处定义、两模块三调用点直接消费 + 一条被门钉齐的同值副本（怪物路径 `bins/game-svr/src/mongen.rs` 硬编码））上；加入 `npc_tick` 后构造段账本不变。
 
 **必须真机窗口（R 级理由）**
 

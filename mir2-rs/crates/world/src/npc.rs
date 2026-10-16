@@ -36,7 +36,8 @@
 //!   `AttackTick=now-Random(3000)`、`WalkTick=now-Random(3000)`，次序即此。`NormNpc`/`Merchant`
 //!   的 ctor 体本身不再抽（`NormNpc.cs:39`/`Merchant.cs:82` 只有字段赋值）。本片 `insert_npc` 用
 //!   **同一条** `world.rng` 按同序抽（唯一抽数点 [`crate::entity::BaseAnimalCtorDraws::draw`]，
-//!   怪物/固定 NPC/商人列表三处共用同一张表）。**原实现只抽前 2 抽 ⇒ 每只固定 NPC 少抽 2 次，
+//!   一处定义、两模块三调用点直接消费 + 一条被门钉齐的同值副本（怪物路径
+//!   `bins/game-svr/src/mongen.rs` 硬编码））。**原实现只抽前 2 抽 ⇒ 每只固定 NPC 少抽 2 次，
 //!   共享 RNG 流自首只 NPC 构造起整体错位**（L 级订正，见
 //!   `tests/parity/m3/design-buff-and-tick-20261016.md` §B-L5）。绝对值只存随机分量，绝对时钟由
 //!   消费方合成（照 [`crate::entity::MonsterCtorDraws`] 的口径）。
@@ -83,7 +84,7 @@ pub const NPC_TYPE_CASTLE_OFFICIAL: i32 = 2;
 /// 固定管理 NPC 的状态（`INormNpc`/`BaseObject` 在加载层可对拍的字段子集 + ctor 抽数）。
 ///
 /// `npc_type` 是 `LoadNpcs` 的 `switch` 分支（0 商人 / 1 行会管理 / 2 沙城管理）；
-/// 后四个字段是构造链（`BaseObject`+`AnimalObject`）抽出的**随机分量**（不是绝对值），
+/// ctor 抽数的四个字段是构造链（`BaseObject`+`AnimalObject`）抽出的**随机分量**（不是绝对值），
 /// 定义见 [`crate::entity::BASE_ANIMAL_CTOR_DRAW_MODS`]。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NpcState {
@@ -134,7 +135,8 @@ pub struct NpcSpawn {
 impl World {
     /// **建实体（构造期）**：入 `EntityStore`（**不挂图**），并**照 oracle ctor 公共链抽 4 次数**
     /// （`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`；唯一抽数点
-    /// [`BaseAnimalCtorDraws::draw`]，一处定义、三处消费）。
+    /// [`BaseAnimalCtorDraws::draw`]，一处定义、两模块三调用点直接消费 + 一条被门钉齐的同值副本
+    /// （怪物路径 `bins/game-svr/src/mongen.rs` 硬编码））。
     ///
     /// 顺序契约：宿主必须**正序**逐条调用（实体槽位序 = `QuestNpcList` 序 = Npcs.txt 文件序），
     /// 再**倒序** [`World::attach_npc_to_map`] 落格（`NpCinitialize` 倒序）。

@@ -48,7 +48,7 @@ OTHER_GROUP = "other"
 # C# oracle 在**实体构造期**（`BaseObject..ctor` / `AnimalObject..ctor` / `MonsterObject..ctor` /
 # `Monsters.*..ctor` / `PlayObject..ctor`）独立抽数 ⇒ 独立 `construct` 组；而 Rust 把构造期抽数
 # **折叠进刷怪路径**（`crates/world/src/mongen.rs` 的 `AnimalState::from_spawn_draws`）⇒ Rust 侧
-# 暂无独立 `construct` 站点。owner 裁决：**接受这个折叠为「登记建模差异」**，但要求**机判等价**——
+# construct 组**已启用**（片114：固定 NPC/商人列表构造链的唯一抽数点 = `crates/world/src/entity.rs` 的 `BaseAnimalCtorDraws::draw`；怪物构造仍折在 mongen 宿主）。owner 裁决：**接受这个折叠为「登记建模差异」**，但要求**机判等价**——
 # 「C# `construct` 折叠到 Rust `spawn` 后，**折叠计数与相对次序必须相等**；**只写白名单不校验不算达成**」。
 #
 # 因此：`construct` 归一到 `spawn`（两侧同一条规则），`groupdiff --fold` 在**折叠后的序列**上
