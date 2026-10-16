@@ -7945,6 +7945,31 @@ fn sim_loop(
                 world.set_map_need_hole(map_id, f.bo_needhole);
             }
         }
+        // **片 `openmir2-mapcell-attributes-loading`（静态装载，tier=R）**：把每张 `.map` 的
+        // **格子属性**搬进 `world.maps`——oracle `Envirnoment.LoadMapData` 在加载时就把
+        // `CellArray[nW * Height + nH].Attribute` 写死（`src/M2Server/Maps/Envirnoment.cs:903`/`943-951`：
+        // `wBkImg` bit15 ⇒ `HighWall`、`wFrImg` bit15 ⇒ `LowWall`、**先判 High 再判 Low ⇒
+        // Low 覆盖 High**）。判据来源 = `mir2_envir` 已解析的那份（[`mapwire::apply_map_cells`]，
+        // 不另写解析）。**次序硬约束**：必须早于下面的 `add_map_routes`——oracle 先
+        // `LoadMapData`（写属性）后 `Maps.LoadMapInfo` 尾段的 `MapManager.AddMapRoute`
+        // （`src/GameSrv/Maps/Maps.cs:361-379`），而 `AddMapRoute` 有 `cellSuccess && cellInfo.Valid`
+        // 门（`Envirnoment.cs:176`）⇒ 墙格上的连接点在 oracle 侧**本来就落不下**；属性未灌之前
+        // 每格都是 `Walk`，`crates/world/src/map.rs` 的 `add_map_route` 那道具形同虚设。
+        // 本片之前：`get_cell_info` 对界内每格恒 `ok=true`（掩码面只有运行期城门写得到）。
+        let cell_total = mapwire::apply_map_cells(reg, &mut world);
+        let mut walk_cells = 0usize;
+        let mut low_cells = 0usize;
+        let mut high_cells = 0usize;
+        for m in &world.maps {
+            walk_cells += m.walk_count();
+            low_cells += m.low_wall_count();
+            high_cells += m.high_wall_count();
+        }
+        glog!(
+            "INF",
+            "地图格子属性已灌入（MapCell.Attribute）maps={} cells={cell_total} walk={walk_cells} low={low_cells} high={high_cells}",
+            world.maps.len()
+        );
         // **L1 TransMap**：把注册表解析出的地图连接点灌进各图格子（oracle `Maps.LoadMapInfo`
         // 加载即 `MapManager.AddMapRoute` 落格）。无注册表 ⇒ 无 route，行为一字不变。
         let specs: Vec<mir2_world::map::MapRouteSpec> = reg

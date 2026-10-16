@@ -424,6 +424,56 @@ impl MapGrid {
             .find_map(|(id, hop)| (*id == route_id).then_some(hop))
     }
 
+    /// **静态装载**：批量灌入格子属性（`Envirnoment.LoadMapData` 的
+    /// `CellArray[nW * Height + nH].Attribute`，`src/M2Server/Maps/Envirnoment.cs:903`/`943-951`）。
+    ///
+    /// `attrs` 的顺序 = `k = x * Height + y`（与 `.map` 文件序**同序**，也与本结构的列主序
+    /// 索引同序 ⇒ 宿主可直接把 `mir2_envir::MapFile` 里同序的 `attribute()` 序列递进来）。
+    ///
+    /// **fail-closed**：`attrs.len() != W * H`（尺寸不匹配/错位）⇒ **一格都不改**并返回 0
+    /// ——宁可整图保持 `Walk`，也不写出一张错位的地图（错位比全开更危险：它会让墙与坐标解耦，
+    /// 而 parity 判据正是「格子可用性与 oracle 逐格一致」）。
+    ///
+    /// 只写 `Attribute`，**不碰** `ObjList`（oracle 的 `CellArray[i] = new MapCellInfo()` 也是
+    /// 「属性全量重写 + 对象表重建」；本仓装载发生在任何实体落图之前 ⇒ 空表重建等价于不动。
+    /// 见 `crates/envir/src/mapfile.rs` 模块头第 8 条）。
+    ///
+    /// 返回实际写入的格子数（= `W * H`）。
+    pub fn set_cell_attributes(&mut self, attrs: &[CellAttribute]) -> usize {
+        if attrs.len() != self.cells.len() {
+            return 0;
+        }
+        for (cell, attr) in self.cells.iter_mut().zip(attrs.iter()) {
+            cell.set_attribute(*attr);
+        }
+        attrs.len()
+    }
+
+    /// 属性直方图：`Walk` 格数（对照 `mir2_envir::MapFile::walk_count`）。
+    #[must_use]
+    pub fn walk_count(&self) -> usize {
+        self.count_attribute(CellAttribute::Walk)
+    }
+
+    /// 属性直方图：`HighWall` 格数（对照 `mir2_envir::MapFile::high_count`）。
+    #[must_use]
+    pub fn high_wall_count(&self) -> usize {
+        self.count_attribute(CellAttribute::HighWall)
+    }
+
+    /// 属性直方图：`LowWall` 格数（对照 `mir2_envir::MapFile::low_count`）。
+    #[must_use]
+    pub fn low_wall_count(&self) -> usize {
+        self.count_attribute(CellAttribute::LowWall)
+    }
+
+    fn count_attribute(&self, attribute: CellAttribute) -> usize {
+        self.cells
+            .iter()
+            .filter(|c| c.attribute == attribute)
+            .count()
+    }
+
     /// 宿主 `bins/game-svr` 把注册表 `MapFile.doors`/`door_status` 搬进来
     /// （`Envirnoment.cs:934-991` 加载即建 `DoorList`）。缺省空 ⇒
     /// [`MapGrid::arround_door_opened`] 恒 `true`（改动前行为逐字节不变）。幂等（重复调用覆盖）。
@@ -751,6 +801,57 @@ mod tests {
         assert_eq!(g.get_door(3, 4), Some(d));
         assert_eq!(g.get_door(3, 5), None, "邻格不命中");
         assert_eq!(g.get_door(4, 4), None);
+    }
+
+    /// **静态装载牙（本片 `openmir2-mapcell-attributes-loading`）**：`set_cell_attributes`
+    /// 按 `k = x * Height + y` 逐格落属性、直方图与计数一致；长度不符 ⇒ **一格都不改**（fail-closed）。
+    ///
+    /// 红检（变异牙）：① 把 `attrs.len() != self.cells.len()` 的 fail-closed 门去掉（改成
+    /// `zip` 截断）⇒ 长度不符的断言必红；② 把 `cell.set_attribute(*attr)` 删掉 ⇒ 直方图断言必红。
+    #[test]
+    fn set_cell_attributes_fills_in_column_major_order_and_is_fail_closed() {
+        // 2 宽 × 3 高：k = x*Height + y ⇒ 序列 [W,H,L,W,H,L] 对应
+        // (0,0)=Walk (0,1)=HighWall (0,2)=LowWall (1,0)=Walk (1,1)=HighWall (1,2)=LowWall。
+        let mut g = MapGrid::new(2, 3);
+        let attrs = [
+            CellAttribute::Walk,
+            CellAttribute::HighWall,
+            CellAttribute::LowWall,
+            CellAttribute::Walk,
+            CellAttribute::HighWall,
+            CellAttribute::LowWall,
+        ];
+        assert_eq!(g.set_cell_attributes(&attrs), 6, "写入 6 格");
+        assert_eq!(g.cell_attribute(0, 0), Some(CellAttribute::Walk));
+        assert_eq!(g.cell_attribute(0, 1), Some(CellAttribute::HighWall));
+        assert_eq!(g.cell_attribute(0, 2), Some(CellAttribute::LowWall));
+        assert_eq!(g.cell_attribute(1, 0), Some(CellAttribute::Walk));
+        assert_eq!(g.cell_attribute(1, 1), Some(CellAttribute::HighWall));
+        assert_eq!(g.cell_attribute(1, 2), Some(CellAttribute::LowWall));
+        assert_eq!(
+            (g.walk_count(), g.high_wall_count(), g.low_wall_count()),
+            (2, 2, 2)
+        );
+        // 墙格 ⇒ `get_cell_info` 的 `ok` = false（oracle `Valid == Attribute == Walk`）。
+        assert!(!g.get_cell_info(0, 1).1, "HighWall 格 ok=false");
+        assert!(!g.get_cell_info(0, 2).1, "LowWall 格 ok=false");
+        assert!(g.get_cell_info(0, 0).1, "Walk 格 ok=true");
+
+        // fail-closed：长度不符 ⇒ 一格都不改（此时 2×3 应是全 Walk 的新图）。
+        let mut g2 = MapGrid::new(2, 3);
+        let short = [CellAttribute::LowWall; 5];
+        assert_eq!(g2.set_cell_attributes(&short), 0, "长度不符 ⇒ 写入 0 格");
+        assert_eq!(
+            (g2.walk_count(), g2.high_wall_count(), g2.low_wall_count()),
+            (6, 0, 0),
+            "长度不符 ⇒ 整图保持 Walk（不去动任何格）"
+        );
+        let long = [CellAttribute::HighWall; 7];
+        assert_eq!(g2.set_cell_attributes(&long), 0, "长度不符 ⇒ 写入 0 格");
+        assert_eq!(
+            (g2.walk_count(), g2.high_wall_count(), g2.low_wall_count()),
+            (6, 0, 0)
+        );
     }
 
     /// `set_doors` 空表 ⇒ `arround_door_opened` 恒 `true`（回归保护：改动前行为不变）。

@@ -26,7 +26,7 @@ use crate::combat::{
     AttackPoisonState, AttackPowerMode, CombatConfig,
 };
 use crate::entity::{Entity, EntityStore};
-use crate::map::{CellType, FloorItemKind, MapGrid, MapRouteSpec};
+use crate::map::{CellAttribute, CellType, FloorItemKind, MapGrid, MapRouteSpec};
 use crate::session::SessionRegistry;
 
 /// C# `ProcessHumans` 的节拍（毫秒）。
@@ -824,6 +824,19 @@ impl World {
         if let Some(map) = self.maps.get_mut(map_id) {
             map.set_need_hole(need_hole);
         }
+    }
+
+    /// **静态装载**：把某张图的格子属性搬进 `world.maps`（`Envirnoment.LoadMapData` 的
+    /// `CellArray[nW * Height + nH].Attribute`，见 [`MapGrid::set_cell_attributes`]）。
+    ///
+    /// `attrs` 顺序 = `k = x * Height + y`（与 `.map` 文件序、与 `MapGrid` 索引**同序**）。
+    /// 越界 `map_id` 或长度不符（`!= W*H`）⇒ 静默忽略并返回 0（该图保持全 `Walk`）。
+    /// 生产宿主的调用点是 `bins/game-svr` 的 `sim_loop`（在 `add_map_routes` **之前**——oracle
+    /// 次序：先 `LoadMapData` 后 `Maps.LoadMapInfo` 的 `AddMapRoute`，`Maps.cs:361-379`）。
+    pub fn set_map_cell_attributes(&mut self, map_id: usize, attrs: &[CellAttribute]) -> usize {
+        self.maps
+            .get_mut(map_id)
+            .map_or(0, |map| map.set_cell_attributes(attrs))
     }
 
     /// 把注册表 `MapFile.doors`/`door_status` 搬进某图（`Envirnoment.cs:934-991` 加载即建 `DoorList`）。

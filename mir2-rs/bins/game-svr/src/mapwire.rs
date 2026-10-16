@@ -6,13 +6,16 @@
 //! 角色记录里的 `CurMap` 是**逻辑地图名**，必须经 `MapRegistry::require_id` 换成 `map_id`；
 //! **找不到即拒绝进图**（返回 `Err`），不许静默退回 0 号占位图。
 //!
-//! 本模块只做「加载 + 取尺寸 + 换 id」三件事，不碰 `crates/envir` 内部，也不建世界（那是
-//! `sim_loop` 的事）。`WorldMaps`（S1 占位尺寸）作为**没有 Envir**（开发/测试）时的回退保留并登记：
+//! 本模块做「加载 + 取尺寸 + 换 id」三件事，**外加**静态装载的最后一个搬运步骤
+//! （[`apply_map_cells`]：把 `mir2_envir` 已解析的每格属性灌进 `world.maps`——本仓
+//! `crates/world` 不依赖 `crates/envir`，跨 crate 的搬运只能落在宿主）。不碰 `crates/envir`
+//! 内部，也不建世界（那是 `sim_loop` 的事）。`WorldMaps`（S1 占位尺寸）作为**没有 Envir**（开发/测试）时的回退保留并登记：
 //! 真机验收（始终有 `Envir/MapInfo.txt`）之后应删掉占位键。三种加载结果的处置见 [`Maps`]。
 
 use std::path::{Path, PathBuf};
 
-use mir2_envir::{MapLoader, MapRegistry};
+use mir2_envir::{MapFile, MapLoader, MapRegistry};
+use mir2_world::{CellAttribute, MapGrid, World};
 
 /// 运行目录 = `Server.conf` 所在目录。
 ///
@@ -87,6 +90,52 @@ pub fn load_registry(base: &Path, envir_dir: &str, map_dir: &str) -> Maps {
 #[must_use]
 pub fn sizes(reg: &MapRegistry) -> Vec<(i32, i32)> {
     reg.maps().iter().map(|m| (m.width, m.height)).collect()
+}
+
+/// **静态装载**：把**一张**已解析的 `.map`（`mir2_envir::MapFile`）的格子属性灌进同尺寸的
+/// `MapGrid`——oracle `Envirnoment.LoadMapData`（`src/M2Server/Maps/Envirnoment.cs:903`/`943-951`）
+/// 在加载时就把 `CellArray[nW * Height + nH].Attribute` 写死，本函数是它在世界侧的落点。
+///
+/// **判据来源**：属性只从 `mir2_envir` 已解析的那份取（[`MapFile::attribute`]，
+/// 其判据是 `wBkImg` bit15 ⇒ `HighWall`、`wFrImg` bit15 ⇒ `LowWall`、**先判 High 再判 Low
+/// ⇒ Low 覆盖 High**，见 `crates/envir/src/mapfile.rs` 模块头第 4/5 条）——**不另写一套解析**。
+///
+/// 顺序：逐 `x` 外层、逐 `y` 内层填 `k = x * Height + y`，与 [`MapGrid::set_cell_attributes`]
+/// 的列主序**同序**（也是 `.map` 的文件序）。
+///
+/// 尺寸不符 ⇒ `MapGrid::set_cell_attributes` 的 fail-closed 生效（返回 0、整图保持 `Walk`）。
+/// 返回实际写入的格子数。
+pub fn apply_map_file_cells(f: &MapFile, grid: &mut MapGrid) -> usize {
+    let capacity = (f.width as usize).saturating_mul(f.height as usize);
+    let mut attrs: Vec<CellAttribute> = Vec::with_capacity(capacity);
+    for x in 0..f.width {
+        for y in 0..f.height {
+            attrs.push(f.attribute(x, y));
+        }
+    }
+    grid.set_cell_attributes(&attrs)
+}
+
+/// **静态装载**：把注册表里每张 `.map` 的格子属性灌进 `world.maps`（`map_id` = 下标，
+/// 与 [`sizes`]/[`resolve_map_id`] 同源；尺寸也同源 ⇒ 逐图长度必然等于 `W*H`）。
+///
+/// **调用时机（oracle 次序，别调换）**：必须在 `World::add_map_routes` **之前**。oracle 先
+/// `Envirnoment.LoadMapData`（写属性，`Envirnoment.cs:903`/`943-951`）、后 `Maps.LoadMapInfo` 尾段
+/// 的 `MapManager.AddMapRoute`（`src/GameSrv/Maps/Maps.cs:361-379`）；而 `AddMapRoute` 有
+/// `cellSuccess && cellInfo.Valid` 门（`Envirnoment.cs:176`）⇒ **墙格上的连接点在 oracle 侧本来
+/// 就落不下**。属性灌入前每格都是 `Walk`，`crates/world/src/map.rs` 的 `add_map_route` 那道具
+/// 形同虚设；本函数把次序摆正后，那道门才真正生效（墙格 route 被丢 ⇒ `added < routes.len()`）。
+///
+/// 返回实际写入的格子总数（各图 `W*H` 之和；有图长度不符时会更小 ⇒ 调用方打印该值自证）。
+pub fn apply_map_cells(reg: &MapRegistry, world: &mut World) -> usize {
+    let mut total = 0usize;
+    for (map_id, f) in reg.maps().iter().enumerate() {
+        let Some(grid) = world.maps.get_mut(map_id) else {
+            break;
+        };
+        total += apply_map_file_cells(f, grid);
+    }
+    total
 }
 
 /// `CurMap`（逻辑名）→ `map_id`。
@@ -360,5 +409,530 @@ mod tests {
             Maps::Placeholder => panic!("有 section 但全失败 ⇒ 必须是 Broken，不许当 Placeholder"),
             Maps::Envir(_) => panic!("没有 .map 文件却加载成功？"),
         }
+    }
+
+    // ============================ 片 `openmir2-mapcell-attributes-loading` ============================
+    // 静态装载（`.map` 格属性 → `world.maps` 的 `MapGrid`）的判据与牙。判据来源恒为
+    // `mir2_envir` 已解析的那份（`MapFile::attribute`），**不另写解析**。
+
+    /// 合成 `.map` 一格的三态墙（`wBkImg`/`wFrImg` 的 bit15）。
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum WallKind {
+        /// `wBkImg` bit15 ⇒ `HighWall`。
+        High,
+        /// `wFrImg` bit15 ⇒ `LowWall`。
+        Low,
+        /// **两位都置** ⇒ oracle 先判 High 再判 Low ⇒ `LowWall`（`crates/envir/src/mapfile.rs` 第 5 条）。
+        Both,
+    }
+
+    /// 生成一张 `width×height`、按 `walls` 置位的合成 `.map`（其余格全零 ⇒ `Walk`）。
+    ///
+    /// 每格 12B：`wBkImg u16`、`wMidImg u16`、`wFrImg u16`、6×u8；文件序 `k = x * Height + y`。
+    fn synth_map_walls(width: u16, height: u16, walls: &[(u16, u16, WallKind)]) -> Vec<u8> {
+        let n = usize::from(width) * usize::from(height);
+        let mut buf = vec![0u8; HEADER_BYTES + n * CELL_BYTES];
+        buf[0..2].copy_from_slice(&width.to_le_bytes());
+        buf[2..4].copy_from_slice(&height.to_le_bytes());
+        for &(x, y, kind) in walls {
+            let k = usize::from(x) * usize::from(height) + usize::from(y);
+            let off = HEADER_BYTES + k * CELL_BYTES;
+            if matches!(kind, WallKind::High | WallKind::Both) {
+                buf[off..off + 2].copy_from_slice(&0x8000u16.to_le_bytes());
+            }
+            if matches!(kind, WallKind::Low | WallKind::Both) {
+                buf[off + 4..off + 6].copy_from_slice(&0x8000u16.to_le_bytes());
+            }
+        }
+        buf
+    }
+
+    /// 装载夹具：`0.map` 6×6（1 `High` + 2 `Low` + 1 **Both**⇒`Low`）+ 2 条 route
+    /// （`(2,2)` 落**墙格**、`(5,5)` 落可走格）；`0100.map` 5×4 全 `Walk`（阴性对照图）。
+    struct WallsEnv {
+        dir: PathBuf,
+    }
+
+    impl WallsEnv {
+        fn new() -> Self {
+            let dir = unique_temp("walls");
+            std::fs::remove_dir_all(&dir).ok();
+            std::fs::create_dir_all(dir.join("Envir")).unwrap();
+            std::fs::create_dir_all(dir.join("Map")).unwrap();
+            // 段 0 = 逻辑名 `0`（文件 `0.map`）；段 1 = 逻辑名 `1`（文件 `0100.map`）。
+            // 两条非 section 行 = route（`Maps.cs:361-379` 的 `源图 源x,源y 目标图 目标x,目标y`）。
+            std::fs::write(
+                dir.join("Envir").join("MapInfo.txt"),
+                "[0 town]\n[1|0100 zuma]\n0 2,2 -> 1 1,1\n0 5,5 -> 1 1,2\n",
+            )
+            .unwrap();
+            std::fs::write(
+                dir.join("Map").join("0.map"),
+                synth_map_walls(
+                    6,
+                    6,
+                    &[
+                        (1, 0, WallKind::High),
+                        (2, 2, WallKind::Low),
+                        (4, 4, WallKind::Both),
+                        (0, 5, WallKind::Low),
+                    ],
+                ),
+            )
+            .unwrap();
+            std::fs::write(dir.join("Map").join("0100.map"), synth_map(5, 4)).unwrap();
+            Self { dir }
+        }
+    }
+
+    impl Drop for WallsEnv {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.dir).ok();
+        }
+    }
+
+    fn registry_dir(dir: &Path) -> MapRegistry {
+        match load_registry(dir, "Envir", "Map") {
+            Maps::Envir(reg) => reg,
+            Maps::Placeholder => panic!("夹具 Envir 不该是 Placeholder"),
+            Maps::Broken(why) => panic!("夹具 Envir 不该是 Broken：{why}"),
+        }
+    }
+
+    /// **本片主判据（直方图逐值相等 + 3 格抽查，tier=R）**：`apply_map_cells` 之后，每张图的
+    /// `Walk`/`LowWall`/`HighWall` 计数必须与 `mir2_envir` 解析**同一张** `.map` 得到的三计数
+    /// **逐值相等**；并与 oracle 定案导出的**硬编码期望值**一致（后一半才钉得住「Low 覆盖 High」：
+    /// 若只在 envir 侧把次序判反，两侧会"一起错"，world↔envir 的相等断言仍绿）。
+    ///
+    /// 夹具硬编码期望（oracle `Envirnoment.cs:945-951`：先 `wBkImg` 再 `wFrImg`）：
+    /// - `0.map` 6×6=36 格：`(1,0)`=High、`(2,2)`=Low、`(4,4)`=Both⇒**Low**、`(0,5)`=Low
+    ///   ⇒ `walk=32 low=3 high=1`；
+    /// - `0100.map` 5×4=20 格：全 `Walk` ⇒ `walk=20 low=0 high=0`。
+    ///
+    /// 红检（变异牙，实测见补丁说明）：
+    /// ① 把 `apply_map_cells` 改成直接 `return 0`（= 装载整段删掉）⇒ world 侧恒全 `Walk`
+    ///    ⇒ 本测的计数断言与 `get_cell_info` 的 `ok=false` 断言必红；
+    /// ② 把 `MapCell::attribute` 的 High/Low 判定**对调**（`high_wall()` 先判）⇒ `(4,4)` 变 `HighWall`
+    ///    ⇒ `low=3/high=1` 硬编码断言必红；
+    /// ③ 只灌 `HighWall` 不灌 `LowWall`（去掉 `low_wall()` 支）⇒ `(2,2)`/`(4,4)` 变 `Walk`
+    ///    ⇒ `walk=32` 断言必红。
+    #[test]
+    fn loaded_cell_histogram_matches_envir_and_oracle_constants() {
+        let env = WallsEnv::new();
+        let reg = registry_dir(&env.dir);
+        let mut world = World::with_maps(sizes(&reg));
+        let total = apply_map_cells(&reg, &mut world);
+
+        // ① world ↔ envir 逐图逐值相等（三计数 + 和 = W*H）。
+        for (map_id, f) in reg.maps().iter().enumerate() {
+            let g = &world.maps[map_id];
+            assert_eq!(
+                (g.walk_count(), g.low_wall_count(), g.high_wall_count()),
+                (f.walk_count(), f.low_count(), f.high_count()),
+                "map_id={map_id}（{}）装载后直方图必须与 envir 解析值逐值相等",
+                f.map_name
+            );
+            assert_eq!(
+                g.walk_count() + g.low_wall_count() + g.high_wall_count(),
+                (f.width as usize) * (f.height as usize),
+                "三态计数之和 = W*H（不许有第四态/漏格）"
+            );
+        }
+
+        // ② 硬编码期望值（oracle 定案；钉住 Low 覆盖 High + `wMidImg` 不参与）。
+        let m0 = &world.maps[0];
+        assert_eq!(
+            (m0.walk_count(), m0.low_wall_count(), m0.high_wall_count()),
+            (32, 3, 1),
+            "0.map 6×6：1 High + 2 Low + 1 Both(⇒Low) ⇒ walk=32 low=3 high=1"
+        );
+        let m1 = &world.maps[1];
+        assert_eq!(
+            (m1.walk_count(), m1.low_wall_count(), m1.high_wall_count()),
+            (20, 0, 0),
+            "0100.map 5×4 全 Walk ⇒ walk=20"
+        );
+
+        // ③ 抽查 3 格（属性 + `ok`）+ 1 个 Both 格（Low 覆盖 High 的单格证据）。
+        let spot = |x: i32, y: i32| {
+            (
+                world.maps[0].cell_attribute(x, y),
+                world.maps[0].get_cell_info(x, y).1,
+            )
+        };
+        assert_eq!(
+            spot(1, 0),
+            (Some(CellAttribute::HighWall), false),
+            "抽查①：wBkImg bit15 ⇒ HighWall 且 ok=false"
+        );
+        assert_eq!(
+            spot(2, 2),
+            (Some(CellAttribute::LowWall), false),
+            "抽查②：wFrImg bit15 ⇒ LowWall 且 ok=false"
+        );
+        assert_eq!(
+            spot(0, 0),
+            (Some(CellAttribute::Walk), true),
+            "抽查③：无墙位 ⇒ Walk 且 ok=true"
+        );
+        assert_eq!(
+            spot(4, 4),
+            (Some(CellAttribute::LowWall), false),
+            "两位都置 ⇒ Low 覆盖 High（先判 High 再判 Low）"
+        );
+        // 写入格数自证：各图 W*H 之和。
+        let expect_total: usize = reg
+            .maps()
+            .iter()
+            .map(|m| (m.width as usize) * (m.height as usize))
+            .sum();
+        assert_eq!(total, expect_total, "写入格数 = 各图 W*H 之和");
+        assert_eq!(expect_total, 36 + 20);
+
+        // 与 envir 侧同格读数逐值相等（spot 判据的双侧一致性）。
+        for (x, y) in [(1, 0), (2, 2), (0, 0), (4, 4)] {
+            assert_eq!(
+                world.maps[0].cell_attribute(x, y),
+                Some(reg.maps()[0].attribute(x, y)),
+                "({x},{y}) world↔envir 属性必须逐值相等"
+            );
+        }
+    }
+
+    /// **阴性对照（防「一律不可用」）**：全 `Walk` 的图装载后仍 `ok=true`、可落对象、
+    /// `cetin_near_xy` 仍可命中。
+    ///
+    /// 红检：把 `set_cell_attributes` 改成「无视 `attrs` 一律置 `LowWall`」⇒ 本测必红。
+    #[test]
+    fn all_walk_map_stays_walkable_and_hittable_after_load() {
+        let env = WallsEnv::new();
+        let reg = registry_dir(&env.dir);
+        let mut world = World::with_maps(sizes(&reg));
+        apply_map_cells(&reg, &mut world);
+
+        // `0100.map`（map_id=1）全 Walk：逐格 `ok=true`。
+        for x in 0..world.maps[1].width {
+            for y in 0..world.maps[1].height {
+                assert!(
+                    world.maps[1].get_cell_info(x, y).1,
+                    "全 Walk 图 ({x},{y}) 必须 ok=true"
+                );
+                assert!(world.maps[1].cell_valid(x, y));
+            }
+        }
+        // 可落对象（`AddMapObject` 的 `Valid` 门放行）。
+        assert!(
+            world.maps[1].add_map_object(2, 1, mir2_world::CellType::Play, 7, 0),
+            "全 Walk 格仍可落对象"
+        );
+        // `cetin_near_xy` 仍可命中（同一格上的实体）。
+        let target = world.add_entity(mir2_world::Entity::new(0, "t", 2, 1));
+        world.tick();
+        assert!(
+            crate::queryuser::cetin_near_xy(&world, 0, 2, 1, target),
+            "阴性对照：可走格上的目标必须仍被 `cetin_near_xy` 命中"
+        );
+        // `0.map` 的可走格 (0,0) 同理。
+        assert!(world.maps[0].get_cell_info(0, 0).1);
+        assert!(world.maps[0].cell_valid(0, 0));
+    }
+
+    /// **牙 ④（`cetin_near_xy` × 装载掩码，tier=R）**：`.map` 装载出的 `LowWall` 格必须让
+    /// `cetin_near_xy` 的 `!ok` 支跳过它——即**掩码来源是 `.map` 文件本身**（不是
+    /// `MapGrid::set_map_xy_flag` 的运行期掩码；既有掩码牙 `spell_cmd_snap_masked_cell_does_not_snap`
+    /// 用的是后者）。布置沿用该牙：目标站在 3×3 窗口内、窗口中心 (1,2)、目标 (2,2)。
+    ///
+    /// **夹具次序说明（必须写清）**：先落实体、后灌属性——因为 `add_map_object` 有 `cell.Valid`
+    /// 门，实体**进不了**墙格。生产里「实体已在场上、其格随后被掩码」只可能来自**运行期**掩码
+    /// （城门/城墙结构事件 `crates/world/src/castle.rs::apply_structure_events`，归卡 `M3⑧`）；
+    /// `.map` 静态装载本身发生在任何实体落图**之前**（故生产次序上本牙的「装载前后」两半不会同时
+    /// 真实发生，这里是把它当**等价状态**构造出来）。两侧共同点：`get_cell_info` 对 `LowWall` 格
+    /// 返回 `ok=false` ⇒ `cetin_near_xy` 跳过 ⇒ 下游 `spell_snap_target` 不 snap。
+    ///
+    /// 红检（变异牙）：把 `apply_map_cells` 改成 no-op（`return 0`）⇒ 装载后 (2,2) 仍 `Walk`
+    /// ⇒「装载后不命中」断言必红（这正是「装载整段删掉」的必红面）。
+    #[test]
+    fn loaded_low_wall_cell_is_skipped_by_cetin_near_xy() {
+        let env = WallsEnv::new();
+        let reg = registry_dir(&env.dir);
+        let mut world = World::with_maps(sizes(&reg));
+        // 先在**未灌属性**（全 Walk）的世界上落实体（见用例头的次序说明）。
+        let target = world.add_entity(mir2_world::Entity::new(0, "t", 2, 2));
+        world.tick();
+        assert!(
+            crate::queryuser::cetin_near_xy(&world, 0, 1, 2, target),
+            "装载前：(2,2) 是 Walk ⇒ 目标在 3×3 窗口内 ⇒ 命中"
+        );
+
+        apply_map_cells(&reg, &mut world);
+
+        assert_eq!(
+            world.maps[0].cell_attribute(2, 2),
+            Some(CellAttribute::LowWall),
+            "装载把 (2,2) 落成 LowWall"
+        );
+        assert!(
+            !world.maps[0].get_cell_info(2, 2).1,
+            "装载后 (2,2) 的 `ok` 必须是 false（`Valid == Attribute == Walk`）"
+        );
+        assert!(
+            !crate::queryuser::cetin_near_xy(&world, 0, 1, 2, target),
+            "装载后：目标所在格被 `.map` 掩码 ⇒ `cetin_near_xy` 跳过该格 ⇒ 不命中"
+        );
+        // 同窗口内的可走格不受影响（阴性面：窗口里还有可走格）。
+        assert!(
+            world.maps[0].get_cell_info(1, 2).1,
+            "(1,2) 仍是可走格（装载不是「整窗一律不可用」）"
+        );
+    }
+
+    /// **装配序牙**：oracle 先 `Envirnoment.LoadMapData`（写属性）后 `Maps.LoadMapInfo` 尾段的
+    /// `MapManager.AddMapRoute`（`src/GameSrv/Maps/Maps.cs:361-379`），而 `AddMapRoute` 有
+    /// `cellSuccess && cellInfo.Valid` 门（`Envirnoment.cs:176`）⇒ **落在墙格上的连接点被丢**。
+    ///
+    /// 本测把两种次序都跑一遍：反序（属性未灌 ⇒ 每格 Walk）**两条都落**，正序**只落可走格那条**
+    /// ——前者就是本片之前的实际行为（那道门形同虚设）。
+    ///
+    /// 红检（变异牙）：把 `apply_map_cells` 与 `add_map_routes` 的调用序对调（或把属性灌到 route
+    /// 之后）⇒ `assert_eq!(added, 1)` 必红（会变 2）。
+    #[test]
+    fn wall_cell_route_is_dropped_only_after_attributes_are_loaded() {
+        let env = WallsEnv::new();
+        let reg = registry_dir(&env.dir);
+        assert_eq!(reg.routes().len(), 2, "夹具两条 route 都解析成功");
+        let specs: Vec<mir2_world::map::MapRouteSpec> = reg
+            .routes()
+            .iter()
+            .map(|r| mir2_world::map::MapRouteSpec {
+                map_id: r.src_map_id,
+                x: r.src_x,
+                y: r.src_y,
+                route_id: r.route_id,
+                hop: mir2_world::map::RouteHop {
+                    dst_map_id: r.dst_map_id,
+                    dst_x: r.dst_x,
+                    dst_y: r.dst_y,
+                },
+            })
+            .collect();
+
+        // 反序（本片之前的实际行为）：属性未灌 ⇒ 墙格也是 Walk ⇒ 两条都落。
+        let mut wrong = World::with_maps(sizes(&reg));
+        assert_eq!(
+            wrong.add_map_routes(specs.clone()),
+            2,
+            "属性未灌 ⇒ 连落在墙格 (2,2) 的 route 也落（oracle 不该如此）"
+        );
+        apply_map_cells(&reg, &mut wrong); // 补救：属性晚到（route 已在墙上）
+
+        // 正序（oracle 次序）：先灌属性 ⇒ 墙格那条被 `cell.Valid` 门丢掉。
+        let mut right = World::with_maps(sizes(&reg));
+        apply_map_cells(&reg, &mut right);
+        assert_eq!(
+            right.add_map_routes(specs),
+            1,
+            "先灌属性 ⇒ 落在墙格 (2,2) 的 route 被丢；可走格 (5,5) 那条照落"
+        );
+        assert!(!right.maps[0].get_cell_info(2, 2).1, "(2,2) 是墙格（前置）");
+        assert_eq!(right.maps[0].cell(5, 5).count(), 1, "可走格 route 已落格");
+    }
+
+    /// **生产调用点保鲜（源码锚）**：`sim_loop` 必须在 `world.add_map_routes(specs)` **之前**
+    /// 调用 `mapwire::apply_map_cells(reg, &mut world)`，且两者都在 `if let Some(reg) = registry.as_ref()`
+    /// 支内。
+    ///
+    /// 本仓既有同类样板（`bins/game-svr/src/main.rs:10927` 的 `include_str!("main.rs")` 锚点保鲜）。
+    /// 作用：把「生产路径真的灌了、且次序对」钉进常驻测试——单测覆盖不到 `sim_loop`（巨型函数、
+    /// 起真宿主），源码锚是这条**调用点**在套件内唯一可判的形态。删掉调用点/把两条调用对调 ⇒ 必红。
+    #[test]
+    fn production_sim_loop_loads_cells_before_routes() {
+        let src = include_str!("main.rs");
+        let branch = src
+            .find("if let Some(reg) = registry.as_ref()")
+            .expect("sim_loop 的注册表支");
+        let cells = src
+            .find("mapwire::apply_map_cells(reg, &mut world)")
+            .expect("生产装载调用点必须存在（sim_loop）");
+        let routes = src
+            .find("let added = world.add_map_routes(specs);")
+            .expect("route 装载调用点");
+        assert!(
+            branch < cells,
+            "装载调用必须在注册表支内（有注册表才灌；无注册表 ⇒ 全 Walk 的开发形态）"
+        );
+        assert!(
+            cells < routes,
+            "装载必须在 route 落格之前（oracle：先 LoadMapData 写属性，后 AddMapRoute；Maps.cs:361-379）"
+        );
+    }
+
+    /// **真机部署件向量（`#[ignore]`，需 `E:/MirServer/M2GameSvr`）**：真 `.map` 的 world 侧直方图
+    /// 必须与 `mir2_envir` 解析的同一张三计数**逐值相等**，且与部署件锚值一致；并抽查 3 格。
+    ///
+    /// ```text
+    /// cargo test -p game-svr --bin game-svr -- --ignored --nocapture loaded_real_map_histogram
+    /// ```
+    #[test]
+    #[ignore = "真机部署件向量：需 E:/MirServer/M2GameSvr（证据/owner 跑）"]
+    fn loaded_real_map_histogram_matches_deployment() {
+        let base = PathBuf::from(
+            std::env::var("MIR2_BASE_DIR").unwrap_or_else(|_| "E:/MirServer/M2GameSvr".into()),
+        );
+        let loader = MapLoader::new(&base, "Map", "Envir");
+        // (文件名, W, H, walk, low, high) —— 锚值取自 `crates/envir/tests/real_maps.rs`（部署件 probe）。
+        let vectors: [(&str, i32, i32, usize, usize, usize); 3] = [
+            ("0.map", 700, 700, 327_180, 109, 162_711),
+            ("0100.map", 15, 18, 47, 223, 0),
+            ("0129.map", 7, 10, 11, 0, 59),
+        ];
+        for (name, w, h, walk, low, high) in vectors {
+            let f = loader
+                .load_path(&base.join("Map").join(name))
+                .unwrap_or_else(|e| panic!("加载 {name} 失败：{e}"));
+            let mut grid = MapGrid::new(f.width, f.height);
+            let n = apply_map_file_cells(&f, &mut grid);
+            println!(
+                "{name}: W={} H={} cells={n} | envir(walk={} low={} high={}) | world(walk={} low={} high={})",
+                f.width,
+                f.height,
+                f.walk_count(),
+                f.low_count(),
+                f.high_count(),
+                grid.walk_count(),
+                grid.low_wall_count(),
+                grid.high_wall_count(),
+            );
+            assert_eq!((f.width, f.height), (w, h), "{name} 尺寸锚");
+            assert_eq!(n, (w * h) as usize, "{name} 写入格数");
+            assert_eq!(
+                (f.walk_count(), f.low_count(), f.high_count()),
+                (walk, low, high),
+                "{name} envir 侧部署件锚值"
+            );
+            assert_eq!(
+                (
+                    grid.walk_count(),
+                    grid.low_wall_count(),
+                    grid.high_wall_count()
+                ),
+                (f.walk_count(), f.low_count(), f.high_count()),
+                "{name} world↔envir 直方图逐值相等"
+            );
+            // 抽查 3 格（互不相同）：(0,0) + 首个 LowWall 格 + 首个 HighWall 格。
+            let mut picks: Vec<(i32, i32)> = vec![(0, 0)];
+            let push_first = |attr: CellAttribute, picks: &mut Vec<(i32, i32)>| {
+                if picks.iter().any(|(x, y)| f.attribute(*x, *y) == attr) {
+                    return;
+                }
+                for x in 0..f.width {
+                    for y in 0..f.height {
+                        if f.attribute(x, y) == attr {
+                            picks.push((x, y));
+                            return;
+                        }
+                    }
+                }
+            };
+            push_first(CellAttribute::LowWall, &mut picks);
+            push_first(CellAttribute::HighWall, &mut picks);
+            for (x, y) in picks {
+                println!(
+                    "  {name} ({x},{y}): envir={:?} world={:?} ok={}",
+                    f.attribute(x, y),
+                    grid.cell_attribute(x, y),
+                    grid.get_cell_info(x, y).1
+                );
+                assert_eq!(
+                    grid.cell_attribute(x, y),
+                    Some(f.attribute(x, y)),
+                    "{name} ({x},{y}) 属性逐值相等"
+                );
+                assert_eq!(
+                    grid.get_cell_info(x, y).1,
+                    f.attribute(x, y) == CellAttribute::Walk,
+                    "{name} ({x},{y}) `ok` 必须 == (属性 == Walk)"
+                );
+            }
+        }
+    }
+
+    /// **真机影响面（`#[ignore]`）**：真注册表逐图装载后的三计数 / 格数 + 「有多少条 route 落在
+    /// **墙格**上」（= 本片之前那条 route 会落、oracle 侧本该被丢 ⇒ 本片会改变 `added` 的行数）。
+    ///
+    /// 打印的值就是生产 `sim_loop` 那条 `INF 地图格子属性已灌入` 日志（`cells/walk/low/high`）与
+    /// `INF 地图连接点已灌入（MapRoute）routes=… added=…` 日志的**等价读数**（本测不建 world 网格：
+    /// 只累计 `MapFile` 侧计数，避免 17M 格的 `MapGrid` 常驻）。
+    ///
+    /// ```text
+    /// cargo test -p game-svr --bin game-svr -- --ignored --nocapture real_registry_route_cells_on_wall
+    /// ```
+    #[test]
+    #[ignore = "真机部署件向量：需 E:/MirServer/M2GameSvr（证据/owner 跑）"]
+    fn real_registry_route_cells_on_wall() {
+        use std::collections::HashMap;
+        let base = PathBuf::from(
+            std::env::var("MIR2_BASE_DIR").unwrap_or_else(|_| "E:/MirServer/M2GameSvr".into()),
+        );
+        let loader = MapLoader::new(&base, "Map", "Envir");
+        let t0 = std::time::Instant::now();
+        let entries = loader.load_map_info_entries().expect("MapInfo 加载");
+        let name_to_file: HashMap<String, String> = entries
+            .iter()
+            .map(|e| (e.map_name.clone(), e.map_file_name.clone()))
+            .collect();
+        let routes = loader.load_map_routes().expect("route 加载");
+        let mut cache: HashMap<String, Option<MapFile>> = HashMap::new();
+        let (mut on_wall, mut unresolved) = (0usize, 0usize);
+        for r in &routes {
+            let Some(fname) = name_to_file.get(&r.src_map_name) else {
+                unresolved += 1;
+                continue;
+            };
+            let f = cache
+                .entry(fname.clone())
+                .or_insert_with(|| loader.load(fname).ok());
+            let Some(f) = f else {
+                unresolved += 1;
+                continue;
+            };
+            if f.attribute(r.src_x, r.src_y) != CellAttribute::Walk {
+                on_wall += 1;
+                println!(
+                    "  墙格 route：{} ({},{}) -> {} ({},{}) 属性={:?}",
+                    r.src_map_name,
+                    r.src_x,
+                    r.src_y,
+                    r.dst_map_name,
+                    r.dst_x,
+                    r.dst_y,
+                    f.attribute(r.src_x, r.src_y)
+                );
+            }
+        }
+        println!(
+            "route 总数={} 落在墙格={on_wall} 源图不可解析/未加载={unresolved} ⇒ 生产 added 将 = {}（本片之前 = {}）",
+            routes.len(),
+            routes.len() - unresolved - on_wall,
+            routes.len() - unresolved
+        );
+
+        // 全注册表（含未被 route 引用的图）的三计数 / 格数：生产日志等价值。
+        let reg = MapLoader::new(&base, "Map", "Envir")
+            .load_registry()
+            .expect("全注册表加载");
+        let (mut cells, mut walk, mut low, mut high) = (0usize, 0usize, 0usize, 0usize);
+        for f in reg.maps() {
+            cells += (f.width as usize) * (f.height as usize);
+            walk += f.walk_count();
+            low += f.low_count();
+            high += f.high_count();
+        }
+        println!(
+            "注册表 maps={} cells={cells} walk={walk} low={low} high={high} route 源图缓存={} 用时={:?}",
+            reg.maps().len(),
+            cache.len(),
+            t0.elapsed()
+        );
+        assert_eq!(walk + low + high, cells, "三态计数之和 == 总格数");
     }
 }
