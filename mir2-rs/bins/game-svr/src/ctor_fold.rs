@@ -33,8 +33,9 @@
 //! `SystemShare.Config.ItemNumber += SystemShare.RandomNumber.Random(10000)` ——**1 抽**，
 //! 位于 `GameApp` ctor **之后**（`new GameApp(...)` 由 DI 在 `AppService` 构造时发生）、
 //! `GameApp.Initialize`（`:124` M2）**之前**（`StartingAsync` 才 `LoadConfig()`）。
-//! Rust 侧 `bins/game-svr/src/config.rs` 读同一键但**不抽** ⇒ 真机账本自段①（12 抽）之后的
-//! **第 13 条**起即分歧。本片**只留位置、不复刻该抽** ⇒ **账本对齐在本片之后仍受此未做项阻塞**
+//! Rust 侧 `bins/game-svr/src/config.rs` 读同一键但**不抽** ⇒ 真机账本自段①之后的 **第 17 条**
+//! （1-based；0-based `seq == 16`；段① 在部署件上是 **16 抽** = `Robot.txt` 1 有效行 × 4 + 孤儿 × 4）
+//! 起即分歧。本片**只留位置、不复刻该抽** ⇒ **账本对齐在本片之后仍受此未做项阻塞**
 //! （须另立条目；补上后段②/段③ 即整段对齐，因为相对次序已按 oracle 排好）。
 //! 反向核对：`GameApp.cs`/`AppService.cs`/`AppServer.cs`/`TimedService.cs`/`ServerHost.cs`/
 //! `FrnEngn.cs`/`GeneratorProcessor.cs` 全文 **0 处** `RandomNumber` ⇒ 启动段除上述屏障 A 外

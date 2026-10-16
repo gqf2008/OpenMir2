@@ -56,9 +56,28 @@
 //!   ② `GameApp.cs:88-93` 的 `ItemSystem`/`GuildMgr`/`CastleMgr`/`MapMgr`/`EventMgr`/`WorldServer`
 //!   六个 ctor **已核实读不抽**（同上；这与 §4.4.2 的「须一并核」清单逐条对上）；
 //!   ③ **未做（屏障 A）**：`ServerConf.cs:114` 的 `Random(10000)`（1 抽）——Rust 侧
-//!   `bins/game-svr/src/config.rs` 读同一键但**不抽**。⇒ 真机账本自**第 13 条**
-//!   （段① 12 抽之后）起即分歧；本片**只留位置、不复刻该抽** ⇒ 段②/段③ 的**绝对**位置仍
-//!   差 1（但相对次序已与 oracle 一致，补上屏障 A 即整段对齐）。
+//!   `bins/game-svr/src/config.rs` 读同一键但**不抽**。⇒ 真机账本自**第 17 条**（1-based；0-based
+//!   `seq == 16`）起即分歧——段① 在部署件上是 **16 抽**（`Robot.txt` 1 有效行 × 4 + 孤儿 G1–G3 × 4），
+//!   屏障 A 紧随其后；本片**只留位置、不复刻该抽** ⇒ 段②/段③ 的**绝对**位置仍差 1
+//!   （但相对次序已与 oracle 一致，补上屏障 A 即整段对齐）。
+//!
+//! ## 实测计数与影响面（2026-10-17 复验订正，**行号/数字以此段为准**）
+//!
+//! 用生产解析器对部署件（`E:/MirServer/M2GameSvr/Envir`）实测：
+//! `Robot.txt` 有效行 **1** ⇒ 4 抽；`CHECKQUEST` **9** ⇒ 36 抽；`MapQuest.txt` 有效行 **1** ⇒ 4 抽
+//! （唯一行 `Q001` **未被 FindMap 门丢**——`MapInfo.txt:16 [Q001 勇斗寺殿]` 的 `map_file_name` 是
+//! `Q001` 而非描述串，且 `Map/Q001.map` 存在 ⇒ oracle `FindMap("Q001")` 命中 ⇒ `CreateQuest` 建对象）；
+//! 隐藏 NPC **3** ⇒ 12 抽 ⇒ **共 68 抽 / 17 站点**（原提交信息写的「MapQuest 0 行 / 64 抽 / 16 站点」
+//! 系把这个计数算错，已订正）。**⇒ 补上屏障 A 的 1 抽后，段②/段③ 与 oracle 等距。**
+//!
+//! **影响面订正**：`push_orphan_merchants()`（G1–G3）是**无条件**的 ⇒ 计划**永不为空**：任何到达
+//! `sim_loop` 且 registry 非空的会话都会多抽至少 12 个（与语料里有没有 `Robot.txt`/`CHECKQUEST`/
+//! `MapQuest.txt` 无关）。实测：既有进程级用例
+//! `game-svr/tests/relay.rs::starts_without_worldmaps_when_envir_present`（合成 Envir 只有
+//! `MapInfo.txt="[0 town]"` + `Map/0.map`）在父提交 `befd3ad7c` 上 RNG 流水 **0 条**抽数行、
+//! 本提交 **12 条**（`entity.rs` 的 construct 组）。**套件仍全绿**只因为仓内没有用例/golden 钉住
+//! 这类会话的 RNG 流水 —— 原提交信息的「既有用例/golden 0 条受影响 ⇒ 只在真机可见」**不成立**，
+//! 已由本段订正；R 级窗口的必要性据此**加强**（默认流水已变）。
 //!   **⇒ 账本对齐在本片之后仍受此未做项阻塞（须另立条目）。**
 //!   ④ 运行期路径（`M2Share.cs:279/:526`、`ScriptEngine.cs:156`）不在启动构造段内，不计。
 //!
