@@ -1370,6 +1370,207 @@ pub fn hi_word(v: i32) -> u16 {
     u16::try_from((v >> 16) & 0xFFFF).unwrap_or(0)
 }
 
+// ---------------------------------------------------------------------------
+// R2 余条：出站编码器（`openmir2-outenc-r2`）——9 个 `RM_*` 观察者支的 `SM_*` 帧**编码层**。
+//
+// 判据来源：oracle `PlayObject.Message.cs` 的 9 个 `case`（`RM_SKELETON`/`RM_ALIVE`/
+// `RM_DIGUP`/`RM_DIGDOWN`/`RM_FLYAXE`/`RM_LIGHTING`/`RM_SPACEMOVE_FIRE`(+`FIRE2`)/
+// `RM_SPACEMOVE_SHOW`(+`SHOW2`)）。头一律 `MakeMessage(ident, ActorId, nParam1, nParam2, wParam)`
+// 或按 oracle 显式覆盖；尾的编码口径逐条照 oracle（见各函数注释）。
+//
+// 观察者集合（`RM_*` → `SendRefMsg`，`BaseObject.Message.cs:385-445`）：发帧者 `Envir` 上
+// ±`SendRefMsgRange`(=12) 格内 `Race == Play` 的可见玩家；非 Play 目标仅 `RM_STRUCK`/
+// `RM_HEAR`/`RM_DEATH` 收（本组 9 条**都不在其中** ⇒ 只发玩家）。少数发帧点走 `SendMsg`
+// （单点自发，如 `PlayObject.cs:3231` 的 `RM_SKELETON`）。
+//
+// **生产接线状态：全部「未接（登记）」**——发帧点都挂在怪物 AI 帧（挖地/掷斧/闪电/瞬移）或
+// 玩家瞬移路径上，本仓 `world` 尚未承载这些行为；帧面先备好，待世界事件落地后按
+// `downlink`/`pickwire` 同款接缝接线（**本片不动生产路径，默认行为不变**）。
+//
+// **D-9 客户端布局核查（逐条证「客户端是否要求特殊布局」，结论全部 = 不要求，用 oracle 布局）**：
+// 冻结客户端 `MirClient@c61d912d`（`Source/Common/Grobal2.pas:39` `HIGHHP = True`）：
+// - `SM_SKELETON`/`SM_ALIVE`：`ClMain.pas:10082/10089` 从**尾**解 `SizeOf(TCharDesc)=12B`
+//   （`Grobal2.pas:3515`：`Feature/Status/StatusEx`），但**只消费 `desc.Feature`(→`m_nFeature`)
+//   与 `desc.Status`(→`m_nState`，`Actor.pas:1877`)**，`desc.StatusEx` 不被消费。oracle 尾 =
+//   `EncodePacket(CharDesc)` = `{Feature,Status}` **8B**（`ClientPackets/CharDesc.cs`）：被消费两字段
+//   落在前 8B，客户端多读的 4B（未消费）为栈残值、无副作用。**与现有 `sm_death` 同形**
+//   （`SM_DEATH` 客户端也解 12B、oracle 也发 8B，现网一致）。
+// - `SM_DIGUP`：`ClMain.pas:10541` 解 `SizeOf(TMessageBodyWL)=16B`，消费 `lParam1`(feature)/
+//   `lParam2`(status)/`lTag1`(event id) ⇒ oracle 16B 布局匹配。
+// - `SM_FLYAXE`：`ClMain.pas:10013` 解 `SizeOf(TMessageBodyW)=8B` ⇒ oracle 8B 布局匹配。
+// - `SM_LIGHTING`：`ClMain.pas:10027` 解 `SizeOf(TMessageBodyWL)=16B` ⇒ oracle 16B 布局匹配。
+// - `SM_DIGDOWN`/`SM_SPACEMOVE_HIDE`(`2`)：客户端不读尾（`ClMain.pas:10631`/`:9841` 仅透传头字段）
+//   ⇒ oracle 无尾匹配。
+// - `SM_SPACEMOVE_SHOW`(`2`)：`ClMain.pas:9858` 解 `SizeOf(TCharDesc)=12B` 并消费 `desc.Feature`/
+//   `desc.Status`；名串段按 `GetCodeMsgSize(12*4/3)=16` 与 desc 段切分。oracle 尾 = 8B 编码（11 字符）
+//   `[+ EncodeString(Msg+'/'+color) 当 Msg 非空]`：被消费字段仍在前 8B ⇒ 正常；且 oracle 全部
+//   发帧点 `sMsg` 恒 `""` ⇒ 名串段恒不出现（与 oracle 同形）。
+
+/// `SM_SKELETON`(33)（`PlayObject.Message.cs:1654-1660` 的 `RM_SKELETON` 支）：
+/// `MakeMessage(SM_SKELETON, ActorId, nParam1 /*=X*/, nParam2 /*=Y*/, wParam /*=Dir*/)`
+/// `+ EDCode.EncodePacket(CharDesc{ Feature=GetFeature(this), Status=CharStatus })`。
+///
+/// 发帧点：`PlayObject.Operate.cs:736` 的 `SendRefMsg(RM_SKELETON, Dir, CurrX, CurrY, 0, "")`
+/// 与 `PlayObject.cs:3231` 的 `SendMsg(baseObject, RM_SKELETON, Dir, CurrX, CurrY, 0)` ⇒ 头 `(X, Y, Dir)`。
+#[must_use]
+pub fn sm_skeleton(actor_id: i32, x: u16, y: u16, dir: u8, char_desc: &[u8]) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_SKELETON, x, y, u16::from(dir));
+    gm_data_body(header, &edcode::encode(char_desc))
+}
+
+/// `SM_ALIVE`(27)（`PlayObject.Message.cs:1883-1889` 的 `RM_ALIVE` 支）：与 [`sm_skeleton`] 同形，
+/// 仅 ident 不同（头 `(X, Y, Dir)` + 8B `CharDesc` 编码尾）。
+///
+/// 发帧点：`BaseObject.Base.cs:357`（复活）/`CastleDoor.cs:114`/`WallStructure.cs:39` 的
+/// `SendRefMsg(RM_ALIVE, Dir, CurrX, CurrY, 0, "")`。
+#[must_use]
+pub fn sm_alive(actor_id: i32, x: u16, y: u16, dir: u8, char_desc: &[u8]) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_ALIVE, x, y, u16::from(dir));
+    gm_data_body(header, &edcode::encode(char_desc))
+}
+
+/// `SM_DIGUP`(20)（`PlayObject.Message.cs:1890-1899` 的 `RM_DIGUP` 支）：
+/// `MakeMessage(SM_DIGUP, ActorId, nParam1 /*=X*/, nParam2 /*=Y*/,
+///              HUtil32.MakeWord((ushort)wParam /*=Dir*/, baseObject.Light))`
+/// `+ EDCode.EncodePacket(MessageBodyWL{ Param1=GetFeature(this), Param2=CharStatus, Tag1, Tag2 })`。
+///
+/// ⚠️ oracle 先写 `digupMessage.Tag1 = processMsg.nParam3`、**立即覆盖** `Tag1 = 0`（`:1897-1898`）
+/// ⇒ 尾 `Tag1` **恒 0**（怪行为照搬，不"修"）。
+/// 发帧点：`CastleDoor.cs:53`/`DigOutZombi.cs:62`/`ElfMonster.cs:50`/`ElfWarriorMonster.cs:19,118`/
+/// `ScultureMonster.cs:21`/`ScultureKingMonster.cs:29`/`StickMonster.cs:57`/`WallStructure.cs:79`/
+/// `WhiteSkeleton.cs:36` 的 `SendRefMsg(RM_DIGUP, Dir, CurrX, CurrY, 0|nParam3, "")`。
+#[must_use]
+pub fn sm_digup(
+    actor_id: i32,
+    x: u16,
+    y: u16,
+    dir: u8,
+    light: u8,
+    feature: i32,
+    status: i32,
+) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_DIGUP, x, y, make_word(dir, light));
+    // `MessageBodyWL`：Tag1 被 oracle 覆盖为 0 ⇒ 尾 = `[Feature:i32][Status:i32][0][0]`。
+    let mut wl = [0u8; 16];
+    wl[0..4].copy_from_slice(&feature.to_le_bytes());
+    wl[4..8].copy_from_slice(&status.to_le_bytes());
+    gm_data_body(header, &edcode::encode(&wl))
+}
+
+/// `SM_DIGDOWN`(21)（`PlayObject.Message.cs:1900-1903` 的 `RM_DIGDOWN` 支）：
+/// `MakeMessage(SM_DIGDOWN, ActorId, nParam1 /*=X*/, nParam2 /*=Y*/, 0)`，**无尾**
+/// （`SendSocket(ClientMsg)`）。
+///
+/// 发帧点：`CastleDoor.cs:71`/`StickMonster.cs:62`/`ElfWarriorMonster.cs:148` 的
+/// `SendRefMsg(RM_DIGDOWN, Dir, CurrX, CurrY, 0, "")`。
+#[must_use]
+pub fn sm_digdown(actor_id: i32, x: u16, y: u16) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_DIGDOWN, x, y, 0);
+    gm_data_body(header, &[])
+}
+
+/// `SM_FLYAXE`(22)（`PlayObject.Message.cs:1904-1918` 的 `RM_FLYAXE` 支）：
+/// `MakeMessage(SM_FLYAXE, ActorId, nParam1 /*=X*/, nParam2 /*=Y*/, wParam /*=Dir*/)`
+/// `+ EDCode.EncodePacket(MessageBodyW{ Param1=target.CurrX, Param2=target.CurrY,
+///                                      Tag1=LoWord(nParam3), Tag2=HiWord(nParam3) })`。
+///
+/// oracle 外层有 `if (SystemShare.ActorMgr.Get(processMsg.nParam3) != null)` 守卫——目标不存在
+/// 则**不发帧**；本编码器只产帧面，守卫由调用方（世界的目标查找）负责。
+/// 发帧点：`ArcherGuard.cs:36`/`DualAxeMonster.cs:29` 的
+/// `SendRefMsg(RM_FLYAXE, Dir, CurrX, CurrY, targetObject.ActorId, "")`。
+#[must_use]
+pub fn sm_flyaxe(
+    actor_id: i32,
+    x: u16,
+    y: u16,
+    dir: u8,
+    target_x: u16,
+    target_y: u16,
+    target_id: i32,
+) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_FLYAXE, x, y, u16::from(dir));
+    let mut w = [0u8; 8];
+    w[0..2].copy_from_slice(&target_x.to_le_bytes());
+    w[2..4].copy_from_slice(&target_y.to_le_bytes());
+    w[4..6].copy_from_slice(&lo_word(target_id).to_le_bytes());
+    w[6..8].copy_from_slice(&hi_word(target_id).to_le_bytes());
+    gm_data_body(header, &edcode::encode(&w))
+}
+
+/// `SM_LIGHTING`(23)（`PlayObject.Message.cs:1919-1930` 的 `RM_LIGHTING` 支）：
+/// `MakeMessage(SM_LIGHTING, ActorId, nParam1 /*=X*/, nParam2 /*=Y*/, baseObject.Dir)`
+/// `+ EDCode.EncodePacket(MessageBodyWL{ Param1=target.CurrX, Param2=target.CurrY,
+///                                       Tag1=nParam3 /*=target ActorId*/, Tag2=processMsg.wParam })`。
+///
+/// ⚠️ 头 `Series` = **施法者自己的 `baseObject.Dir`**，`wParam` 落在尾 `Tag2`（不在头）——
+/// 照 `:1927` 的实参序，别按常识把 `wParam` 放进 `Series`。
+/// 发帧点：`Clone.cs:44`/`ElectronicScolpionMon.cs:30`/`LightingZombi.cs:22` 的
+/// `SendRefMsg(RM_LIGHTING, 1, CurrX, CurrY, TargetCret.ActorId, "")`（`wParam` 恒 1）。
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn sm_lighting(
+    actor_id: i32,
+    x: u16,
+    y: u16,
+    dir: u8,
+    target_x: i32,
+    target_y: i32,
+    target_id: i32,
+    w_param: i32,
+) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_LIGHTING, x, y, u16::from(dir));
+    let mut wl = [0u8; 16];
+    wl[0..4].copy_from_slice(&target_x.to_le_bytes());
+    wl[4..8].copy_from_slice(&target_y.to_le_bytes());
+    wl[8..12].copy_from_slice(&target_id.to_le_bytes());
+    wl[12..16].copy_from_slice(&w_param.to_le_bytes());
+    gm_data_body(header, &edcode::encode(&wl))
+}
+
+/// `SM_SPACEMOVE_HIDE`(800) / `SM_SPACEMOVE_HIDE2`(806)
+/// （`PlayObject.Message.cs:1957-1966` 的 `RM_SPACEMOVE_FIRE`/`RM_SPACEMOVE_FIRE2` 支）：
+/// `MakeMessage(SM_*, ActorId, 0, 0, 0)`，**无尾**。`ident` 由发帧点选
+/// （`RM_SPACEMOVE_FIRE`→800、`RM_SPACEMOVE_FIRE2`→806）。
+///
+/// 发帧点：`PlayObject.Base.cs:2234/2241/2247/2308/3334`、`RunAway.cs:27`、`TeleMonster.cs:20`、
+/// `Khazard.cs:28,42`、`MagicManager.cs:881` 的 `SendRefMsg(RM_SPACEMOVE_FIRE(|2), 0, 0, 0, 0, "")`。
+#[must_use]
+pub fn sm_spacemove_hide(ident: u16, actor_id: i32) -> Vec<u8> {
+    let header = command_header(actor_id, ident, 0, 0, 0);
+    gm_data_body(header, &[])
+}
+
+/// `SM_SPACEMOVE_SHOW`(801) / `SM_SPACEMOVE_SHOW2`(807)
+/// （`PlayObject.Message.cs:1967-1985` 的 `RM_SPACEMOVE_SHOW`/`RM_SPACEMOVE_SHOW2` 支）：
+/// `MakeMessage(SM_*, ActorId, nParam1 /*=X*/, nParam2 /*=Y*/,
+///              HUtil32.MakeWord((ushort)wParam /*=Dir*/, baseObject.Light))`
+/// `+ EDCode.EncodePacket(CharDesc{ Feature, Status })`
+/// `[+ EDCode.EncodeString(processMsg.Msg + '/' + GetChrColor(this)) 当 Msg 非空]`。
+///
+/// 两段各自 `Encode` 后**直接相接**（前段 8B 使编码状态未复位——同 [`sm_turn`] 的既有形态，
+/// 非本层引入；客户端按 `GetCodeMsgSize(16)` 切分，被消费字段仍在前 8B）。
+/// `name_msg` = `(Msg + '/' + color)` 的**原始字节**（空则不加名串尾；oracle 发帧点恒传 `""`）。
+/// 发帧点：`BaseObject.cs:1137/1141` 的 `SendRefMsg(RM_SPACEMOVE_SHOW(|2), Dir, CurrX, CurrY, 0, "")`。
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn sm_spacemove_show(
+    ident: u16,
+    actor_id: i32,
+    x: u16,
+    y: u16,
+    dir: u8,
+    light: u8,
+    char_desc: &[u8],
+    name_msg: &[u8],
+) -> Vec<u8> {
+    let header = command_header(actor_id, ident, x, y, make_word(dir, light));
+    let mut tail = edcode::encode(char_desc);
+    if !name_msg.is_empty() {
+        tail.extend_from_slice(&edcode::encode(name_msg));
+    }
+    gm_data_body(header, &tail)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2224,5 +2425,280 @@ mod tests {
             hex("234d6b445a786a685c6464686b6464686b21"),
             "仅 Recog=目标 的帧等于金标准"
         );
+    }
+    // ---- R2 余条：出站编码器 golden（逐字节，自算） ----
+    //
+    // 本组 golden **不是**取自被测函数：由一份**独立**实现（按 oracle C# `EncryptUtil.Encode`，
+    // `src/OpenMir2/EncryptUtil.cs:184-216`，与 `edcode.rs` 同源而异写）重算出的**完整客户端线缆字节**
+    // （`'#' + Encode(头12B) + 尾 + '!'`）。该独立生成器已用**真实 C3 金标准** 3 帧反证逐字节一致
+    // （`SM_NEWMAP`(51) / `SM_LOGON`(50) / `SM_FEATURECHANGED`(41)），见 `golden_generator_selfcheck`。
+    // 会话 `ActorId` 同本文件其余 golden：`0x7c30_3998`。
+    const G_R2_ACTOR_ID: i32 = 0x7c30_3998;
+    /// `CharDesc{ Feature=0x0002_0000, Status=0x0000_0005 }` 的 8B 原始字节（尾编码前）。
+    const R2_DESC8: &str = "0000020005000000";
+
+    const G_R2_SKELETON: &str = "2348615861705d685f6b65426f6664686a64646a6b6465686a64644b21";
+    const G_R2_ALIVE: &str = "2348615861706b685d6b65426f6665686b64646a6b6465686a64644b21";
+    const G_R2_DIGUP: &str =
+        "23486158617068685e5c65783f65666b6b64646a6b6469686b6464686b6464686b6464686b643f21";
+    const G_R2_DIGDOWN: &str = "23486158617069685e5c65783f6564686b21";
+    const G_R2_FLYAXE: &str = "2348615861706a685e6c6460576466686a6d6461576467686b66644b21";
+    const G_R2_LIGHTING: &str =
+        "2348615861706b685e6c6460576467686b6d6468676455686964646b6b6466686b6564686b643f21";
+    const G_R2_SPACEMOVE_HIDE: &str = "2348615861705c6b5f6464686b6464686b21";
+    const G_R2_SPACEMOVE_HIDE2: &str = "2348615861705e6b5e6464686b6464686b21";
+    const G_R2_SPACEMOVE_SHOW: &str = "2348615861705d6b5f6b65426f6664656b64646a6b6465686a64644b21";
+    const G_R2_SPACEMOVE_SHOW2: &str = "2348615861705f6b5e6b65426f6664656b64646a6b6465686a64644b21";
+    const G_R2_SPACEMOVE_SHOW_NAME: &str =
+        "2348615861705d6b5f6b65426f6664656b64646a6b6465686a64644b554e4c3e5a5f556821";
+
+    /// 独立生成器自证：用本组 golden 同款算法重算 3 条**真实** C3 金标准帧（`capture.jsonl` 的
+    /// `SM_NEWMAP`(51)/`SM_LOGON`(50)/`SM_FEATURECHANGED`(41)）逐字节一致 ⇒ 本组 golden 可信。
+    #[test]
+    fn golden_generator_selfcheck() {
+        let g = |ident, param, tag, series, tail: &[u8]| {
+            let mut body = command_header(G_R2_ACTOR_ID, ident, param, tag, series).to_vec();
+            body.extend_from_slice(tail);
+            client_frame(&body)
+        };
+        assert_eq!(g(51, 287, 618, 0, &edcode::encode(b"0")), hex(G_NEWMAP));
+        let wl: [u8; 16] = hex("00000200000000000000000000000000").try_into().unwrap();
+        assert_eq!(
+            g(50, 287, 618, make_word(0, 0), &edcode::encode(&wl)),
+            hex(G_LOGON)
+        );
+        assert_eq!(
+            g(41, 0x0000, 0x0002, 0, &[]),
+            hex(G_FEATURECHANGED),
+            "SM_FEATURECHANGED = 头(ActorId,0x0000,0x0002,0) 无尾"
+        );
+    }
+
+    /// `SM_SKELETON`(33)：头 `(Recog=ActorId, Param=X, Tag=Y, Series=Dir)` + 尾 `Encode(8B CharDesc)`。
+    ///
+    /// 红检：① 头 `Series` 从 `dir` 改 `0`/`x`/`y` ⇒ 头断言必红；② 尾从 `Encode(8B)` 改 header-only ⇒ 尾断言必红。
+    #[test]
+    fn sm_skeleton_frame() {
+        let desc = hex(R2_DESC8);
+        let body = sm_skeleton(G_R2_ACTOR_ID, 287, 618, 4, &desc);
+        assert_eq!(i32at(&body, 0), G_R2_ACTOR_ID, "Recog = ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_SKELETON);
+        assert_eq!(u16at12(&body, 6), 287, "Param = X = nParam1");
+        assert_eq!(u16at12(&body, 8), 618, "Tag = Y = nParam2");
+        assert_eq!(u16at12(&body, 10), 4, "Series = Dir = wParam");
+        assert_eq!(
+            edcode::decode(&body[12..]),
+            desc,
+            "尾 = Encode(8B CharDesc)"
+        );
+        assert_eq!(client_frame(&body), hex(G_R2_SKELETON));
+    }
+
+    /// `SM_ALIVE`(27)：与 `SM_SKELETON` 同形，仅 ident 不同（`Series = Dir`）。
+    #[test]
+    fn sm_alive_frame() {
+        let desc = hex(R2_DESC8);
+        let body = sm_alive(G_R2_ACTOR_ID, 287, 618, 1, &desc);
+        assert_eq!(i32at(&body, 0), G_R2_ACTOR_ID, "Recog = ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_ALIVE);
+        assert_eq!(u16at12(&body, 6), 287, "Param = X");
+        assert_eq!(u16at12(&body, 8), 618, "Tag = Y");
+        assert_eq!(u16at12(&body, 10), 1, "Series = Dir");
+        assert_eq!(
+            edcode::decode(&body[12..]),
+            desc,
+            "尾 = Encode(8B CharDesc)"
+        );
+        assert_eq!(client_frame(&body), hex(G_R2_ALIVE));
+    }
+
+    /// `SM_DIGUP`(20)：头 `(ActorId, X, Y, MakeWord(Dir, Light))` +
+    /// 尾 `Encode(16B MessageBodyWL{ Feature, Status, 0, 0 })`——**`Tag1` 恒 0**（oracle `:1897-1898` 覆盖）。
+    ///
+    /// 红检：① 尾 `Tag1`（第 8..12B）写成 `processMsg.nParam3`（非 0）⇒ 尾断言必红；
+    /// ② 头 `Series` 漏 `Light`（只放 `dir`）⇒ 头断言必红。
+    #[test]
+    fn sm_digup_frame_has_zero_tag1() {
+        let body = sm_digup(G_R2_ACTOR_ID, 300, 400, 2, 3, 0x0002_0000, 0x0000_0011);
+        assert_eq!(i32at(&body, 0), G_R2_ACTOR_ID, "Recog = ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_DIGUP);
+        assert_eq!(u16at12(&body, 6), 300, "Param = X");
+        assert_eq!(u16at12(&body, 8), 400, "Tag = Y");
+        assert_eq!(
+            u16at12(&body, 10),
+            make_word(2, 3),
+            "Series = MakeWord(Dir, Light)"
+        );
+        let wl = edcode::decode(&body[12..]);
+        assert_eq!(wl.len(), 16, "尾 = Encode(16B MessageBodyWL)");
+        assert_eq!(i32at(&wl, 0), 0x0002_0000, "Param1 = GetFeature()");
+        assert_eq!(i32at(&wl, 4), 0x0000_0011, "Param2 = CharStatus");
+        assert_eq!(i32at(&wl, 8), 0, "Tag1 恒 0（oracle 第二赋值覆盖）");
+        assert_eq!(i32at(&wl, 12), 0, "Tag2 恒 0");
+        assert_eq!(client_frame(&body), hex(G_R2_DIGUP));
+    }
+
+    /// `SM_DIGDOWN`(21)：头 `(ActorId, X, Y, 0)`，**无尾**。
+    ///
+    /// 红检：给它加尾、或把 `Series` 置非 0 ⇒ 必红。
+    #[test]
+    fn sm_digdown_frame_header_only() {
+        let body = sm_digdown(G_R2_ACTOR_ID, 300, 400);
+        assert_eq!(body.len(), 12, "SendSocket(ClientMsg) 无尾 ⇒ 恰好 12B");
+        assert_eq!(i32at(&body, 0), G_R2_ACTOR_ID, "Recog = ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_DIGDOWN);
+        assert_eq!(u16at12(&body, 6), 300, "Param = X");
+        assert_eq!(u16at12(&body, 8), 400, "Tag = Y");
+        assert_eq!(u16at12(&body, 10), 0, "Series = 0");
+        assert_eq!(client_frame(&body), hex(G_R2_DIGDOWN));
+    }
+
+    /// `SM_FLYAXE`(22)：头 `(ActorId, X, Y, Dir)` +
+    /// 尾 `Encode(8B MessageBodyW{ targetX, targetY, LoWord(targetId), HiWord(targetId) })`。
+    ///
+    /// 红检：把尾 `Tag1/Tag2` 互换、或头 `Series` 从 `dir` 改别的 ⇒ 必红。
+    #[test]
+    fn sm_flyaxe_frame() {
+        let tid = 0x0002_0003;
+        let body = sm_flyaxe(G_R2_ACTOR_ID, 100, 200, 6, 101, 201, tid);
+        assert_eq!(i32at(&body, 0), G_R2_ACTOR_ID, "Recog = ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_FLYAXE);
+        assert_eq!(u16at12(&body, 6), 100, "Param = X");
+        assert_eq!(u16at12(&body, 8), 200, "Tag = Y");
+        assert_eq!(u16at12(&body, 10), 6, "Series = Dir");
+        let w = edcode::decode(&body[12..]);
+        assert_eq!(w.len(), 8, "尾 = Encode(8B MessageBodyW)");
+        assert_eq!(
+            u16::from_le_bytes([w[0], w[1]]),
+            101,
+            "Param1 = target.CurrX"
+        );
+        assert_eq!(
+            u16::from_le_bytes([w[2], w[3]]),
+            201,
+            "Param2 = target.CurrY"
+        );
+        assert_eq!(
+            u16::from_le_bytes([w[4], w[5]]),
+            0x0003,
+            "Tag1 = LoWord(targetId)"
+        );
+        assert_eq!(
+            u16::from_le_bytes([w[6], w[7]]),
+            0x0002,
+            "Tag2 = HiWord(targetId)"
+        );
+        assert_eq!(client_frame(&body), hex(G_R2_FLYAXE));
+    }
+
+    /// `SM_LIGHTING`(23)：头 `Series = baseObject.Dir`（**施法者的 Dir**），
+    /// 尾 `Encode(16B MessageBodyWL{ targetX, targetY, targetId, wParam })`。
+    ///
+    /// 红检：① 头 `Series` 写 `w_param`（放错位）⇒ 头断言必红；② 尾 `Tag2` 写 `dir` ⇒ 尾断言必红。
+    #[test]
+    fn sm_lighting_series_is_caster_dir() {
+        let tid = 0x0002_0003;
+        let body = sm_lighting(G_R2_ACTOR_ID, 100, 200, 3, 101, 201, tid, 1);
+        assert_eq!(i32at(&body, 0), G_R2_ACTOR_ID, "Recog = ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_LIGHTING);
+        assert_eq!(u16at12(&body, 6), 100, "Param = X");
+        assert_eq!(u16at12(&body, 8), 200, "Tag = Y");
+        assert_eq!(
+            u16at12(&body, 10),
+            3,
+            "Series = baseObject.Dir（不是 wParam）"
+        );
+        let wl = edcode::decode(&body[12..]);
+        assert_eq!(wl.len(), 16, "尾 = Encode(16B MessageBodyWL)");
+        assert_eq!(i32at(&wl, 0), 101, "Param1 = target.CurrX");
+        assert_eq!(i32at(&wl, 4), 201, "Param2 = target.CurrY");
+        assert_eq!(i32at(&wl, 8), tid, "Tag1 = nParam3 = target ActorId");
+        assert_eq!(i32at(&wl, 12), 1, "Tag2 = wParam");
+        assert_eq!(client_frame(&body), hex(G_R2_LIGHTING));
+    }
+
+    /// `SM_SPACEMOVE_HIDE`(800) / `SM_SPACEMOVE_HIDE2`(806)：头 `(ActorId, 0, 0, 0)`，**无尾**。
+    ///
+    /// 红检：把 `ident` 传错（800↔806）或给它加尾 ⇒ 必红。
+    #[test]
+    fn sm_spacemove_hide_frame_header_only() {
+        let body = sm_spacemove_hide(messages::SM_SPACEMOVE_HIDE, G_R2_ACTOR_ID);
+        assert_eq!(body.len(), 12, "无尾 ⇒ 恰好 12B");
+        assert_eq!(i32at(&body, 0), G_R2_ACTOR_ID, "Recog = ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_SPACEMOVE_HIDE);
+        assert_eq!(&body[6..12], &[0u8; 6], "Param/Tag/Series 全 0");
+        assert_eq!(client_frame(&body), hex(G_R2_SPACEMOVE_HIDE));
+
+        let body2 = sm_spacemove_hide(messages::SM_SPACEMOVE_HIDE2, G_R2_ACTOR_ID);
+        assert_eq!(u16at12(&body2, 4), messages::SM_SPACEMOVE_HIDE2);
+        assert_eq!(client_frame(&body2), hex(G_R2_SPACEMOVE_HIDE2));
+    }
+
+    /// `SM_SPACEMOVE_SHOW`(801) / `SM_SPACEMOVE_SHOW2`(807)：头 `(ActorId, X, Y, MakeWord(Dir, Light))`
+    /// + 尾 `Encode(8B CharDesc)`，`Msg` 非空时再接 `EncodeString(Msg+'/'+color)`。
+    ///
+    /// 红检：① 名串段从"两段拼接"改成不拼 ⇒ `_NAME` 用例必红；② `ident` 传错（801↔807）⇒ 必红。
+    #[test]
+    fn sm_spacemove_show_frame_with_and_without_name() {
+        let desc = hex(R2_DESC8);
+        let body = sm_spacemove_show(
+            messages::SM_SPACEMOVE_SHOW,
+            G_R2_ACTOR_ID,
+            287,
+            618,
+            0,
+            5,
+            &desc,
+            &[],
+        );
+        assert_eq!(i32at(&body, 0), G_R2_ACTOR_ID, "Recog = ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_SPACEMOVE_SHOW);
+        assert_eq!(u16at12(&body, 6), 287, "Param = X");
+        assert_eq!(u16at12(&body, 8), 618, "Tag = Y");
+        assert_eq!(
+            u16at12(&body, 10),
+            make_word(0, 5),
+            "Series = MakeWord(Dir, Light)"
+        );
+        assert_eq!(
+            edcode::decode(&body[12..]),
+            desc,
+            "无 Msg ⇒ 尾仅 Encode(8B CharDesc)"
+        );
+        assert_eq!(client_frame(&body), hex(G_R2_SPACEMOVE_SHOW));
+
+        let body2 = sm_spacemove_show(
+            messages::SM_SPACEMOVE_SHOW2,
+            G_R2_ACTOR_ID,
+            287,
+            618,
+            0,
+            5,
+            &desc,
+            &[],
+        );
+        assert_eq!(u16at12(&body2, 4), messages::SM_SPACEMOVE_SHOW2);
+        assert_eq!(client_frame(&body2), hex(G_R2_SPACEMOVE_SHOW2));
+
+        // `Msg` 非空：尾 = Encode(8B desc) ++ EncodeString(Msg+'/'+color)（两段直接相接）。
+        let name = [0xCD_u8, 0xE6, 0xBC, 0xD2, b'/', b'5']; // "玩家/5" 的 GBK 字节
+        let body3 = sm_spacemove_show(
+            messages::SM_SPACEMOVE_SHOW,
+            G_R2_ACTOR_ID,
+            287,
+            618,
+            0,
+            5,
+            &desc,
+            &name,
+        );
+        let mut want_tail = edcode::encode(&desc);
+        want_tail.extend_from_slice(&edcode::encode(&name));
+        assert_eq!(
+            &body3[12..],
+            want_tail.as_slice(),
+            "尾 = 两段各自 Encode 后相接"
+        );
+        assert_eq!(client_frame(&body3), hex(G_R2_SPACEMOVE_SHOW_NAME));
     }
 }
