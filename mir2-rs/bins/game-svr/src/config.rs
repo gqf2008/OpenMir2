@@ -114,6 +114,9 @@ pub struct GateConfig {
     /// `[Setup] CanDropPrice`（oracle `GameSvrConf.cs:1706` 缺省 `500`）——
     /// `ground::DropContext.can_drop_price`（`PlayObject.Operate.cs:284` 的 `stdItem.Price <` 门）。
     pub can_drop_price: i32,
+    /// `[Setup] CanDropGold`（oracle `GameSvrConf.cs:1705` 缺省 `1000`）——
+    /// `inbound::DropGoldInputs.can_drop_gold`（`PlayObject.Operate.cs:229` 的 `nGold < CanDropGold` 门）。
+    pub can_drop_gold: i32,
     /// `[Setup] DropItemRage`（oracle `GameSvrConf.cs:1754` 缺省 `3`，`byte`）——
     /// `ground::DropContext.drop_item_rage`（`PlayObject.Operate.cs:291` 的 `_MIN(...,3)` 散布半径）。
     pub drop_item_rage: u8,
@@ -243,6 +246,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut control_drop_item: Option<bool> = None;
     let mut in_safe_disable_drop: Option<bool> = None;
     let mut can_drop_price: Option<i32> = None;
+    let mut can_drop_gold: Option<i32> = None;
     let mut drop_item_rage: Option<u8> = None;
     let mut send_ref_msg_range: Option<u8> = None;
     let mut magic_attack_rage: Option<u8> = None;
@@ -463,6 +467,12 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("CanDropPrice 不是合法整数：{v:?}"))?,
                     );
                 }
+                "CANDROPGOLD" => {
+                    can_drop_gold = Some(
+                        v.parse()
+                            .with_context(|| format!("CanDropGold 不是合法整数：{v:?}"))?,
+                    );
+                }
                 // `GameSvrConf.DropItemRage` 是 `byte`（`GameSvrConf.cs:878`）；`Server.conf` 现网未写。
                 "DROPITEMRAGE" => {
                     drop_item_rage = Some(
@@ -641,6 +651,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         control_drop_item: control_drop_item.unwrap_or(false),
         in_safe_disable_drop: in_safe_disable_drop.unwrap_or(false),
         can_drop_price: can_drop_price.unwrap_or(500),
+        can_drop_gold: can_drop_gold.unwrap_or(1000),
         drop_item_rage: drop_item_rage.unwrap_or(3),
         // oracle 缺省值（`GameSvrConf.cs:1503`）：`[Setup]` 里没写不算错。
         send_ref_msg_range: send_ref_msg_range.unwrap_or(12),

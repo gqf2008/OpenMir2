@@ -739,6 +739,7 @@ async fn main() -> Result<()> {
                         control_drop_item: cfg.control_drop_item,
                         in_safe_disable_drop: cfg.in_safe_disable_drop,
                         can_drop_price: cfg.can_drop_price,
+                        can_drop_gold: cfg.can_drop_gold,
                         drop_item_rage: cfg.drop_item_rage,
                     },
                     shop: ShopCfg {
@@ -1396,6 +1397,247 @@ fn drain_slave_mutiny_downlink(
         }
     }
     sent
+}
+
+/// R1 入站派发余 10 条（Task C / 片 76）的接线臂。
+///
+/// 决策逻辑在 [`game_svr::inbound`]（纯函数、单测覆盖）；本函数只负责
+/// 「找会话 → 取世界/会话态 → 调纯函数 → 按 `[GateIdx, Socket]` 回帧 / 记日志」。
+///
+/// **收包字段口径**（`WorldServer.cs:781-830` 把 12B 头映射成 `ProcessMessage`）：
+/// `CM_DROPGOLD`/`CM_OPENDOOR`/`CM_WANTMINIMAP`/`CM_TEST`/`CM_1042` 走 `default` 支
+/// `wParam=Series, nParam1=Recog, nParam2=Param, nParam3=Tag`；`CM_PASSWORD` 支 `wParam=Param`。
+/// 客户端侧（`RobotPlayer.cs:4751/4883`）也用 `MakeMessage(ident, recog, param, tag, series)`
+/// 印证：`CM_DROPGOLD` 的金币数在 `recog`、`CM_BUTCH` 的 `(charId,x,y,dir)` 在 `(recog,param,tag,series)`。
+///
+/// **未做**（逐项登记在 `inbound` 模块头「未做清单」）：`SM_ABILITY/SUBABILITY` 帧体、`RM_BUTCH`/
+/// `RM_POWERHIT` 附近广播、`GetGoodTick` 直发字节、`SM_MENU_OK`/`SysMsg` 文案、密码态持久化、
+/// 地图 `MinMap` 字段、商人注册表/配方体。
+#[allow(clippy::too_many_arguments)]
+fn handle_inbound_cmd(
+    cmd: &CommandMessage,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    world: &mir2_world::World,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    registry: Option<&mir2_envir::MapRegistry>,
+    cfg: &GroundCfg,
+) {
+    use game_svr::inbound;
+    use mir2_protocol::messages;
+
+    let ident = cmd.ident;
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "R1 入站：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
+        );
+        return;
+    };
+    let gate_idx = entry.gate_idx;
+
+    match ident {
+        messages::CM_TEST => {
+            let f = inbound::client_test();
+            emit_def_frames(gates, gate_idx, socket, &[f], "CM_TEST");
+        }
+        messages::CM_1042 => {
+            glog!(
+                "WRN",
+                "CM_1042：{}（socket={socket}）",
+                inbound::client_1042(chr_name)
+            );
+        }
+        messages::CM_WANTMINIMAP => {
+            // `Envir.MinMap`（`MapManager.cs:92` 的消费点）未接线 ⇒ 传 0（FAIL 支）；登记。
+            let f = inbound::client_get_min_map(0);
+            emit_def_frames(gates, gate_idx, socket, &[f], "CM_WANTMINIMAP");
+        }
+        messages::CM_OPENDOOR => {
+            // 本宿主无门注册表 ⇒ `Envir.GetDoor == false`；BUG-REPLICA 1 ⇒ 恒零出帧。
+            let (decision, _frames) = inbound::client_open_door(false);
+            glog!(
+                "INF",
+                "CM_OPENDOOR：ChrName={chr_name} nX={} nY={} ⇒ {decision:?}（BUG-REPLICA 1：恒零出帧）",
+                cmd.param,
+                cmd.tag
+            );
+        }
+        messages::CM_ADJUST_BONUS => {
+            // `BonusPoint` 未挂会话态（`EquipInputs` 只带 `bonus_abil`）⇒ 传 0；帧体登记。
+            let out = inbound::client_adjust_bonus(cmd.recog, 0);
+            glog!(
+                "INF",
+                "CM_ADJUST_BONUS：ChrName={chr_name} nPoint={} ⇒ applied={} recalc={} send_ability={} send_subability={} sysmsg_invalid={}（SM_ABILITY/SUBABILITY 帧体复用入图路径，登记）",
+                cmd.recog,
+                out.applied,
+                out.recalc,
+                out.send_ability,
+                out.send_subability,
+                out.sysmsg_invalid
+            );
+        }
+        messages::CM_SITDOWN => {
+            let Some(sg) = sessions.get(chr_name) else {
+                glog!("WRN", "CM_SITDOWN：ChrName={chr_name} 无会话态 ⇒ 丢弃");
+                return;
+            };
+            let actor_id = sg.actor_id;
+            let i = inbound::SitDownInputs {
+                // `Death` 取世界实体；`StatusTimeArr[STONE]` 无对应建模 ⇒ 恒 false（登记）。
+                death: world.entities.get(actor_id).is_some_and(|e| e.death),
+                stone_status_nonzero: false,
+                // 部署 `Server.conf` 无 `CloseSpeedHackCheck` ⇒ oracle 缺省 true（跳过限速）。
+                close_speed_hack_check: true,
+                now_tick: world.clock_ms as i32,
+                turn_tick: 0,
+                turn_interval_time: 600,
+            };
+            let hit = inbound::client_sit_down_hit(&i);
+            match inbound::sit_down_action(&hit) {
+                inbound::SitDownAction::GoodTick => glog!(
+                    "INF",
+                    "CM_SITDOWN：ChrName={chr_name} ==成功（RM_POWERHIT 附近广播 + GetGoodTick 直发字节，登记）"
+                ),
+                inbound::SitDownAction::MoveFail => {
+                    let e = world.entities.get(actor_id);
+                    let f = inbound::DefFrame {
+                        ident: messages::SM_MOVEFAIL,
+                        recog: actor_id,
+                        param: e.map_or(0, |e| e.x),
+                        tag: e.map_or(0, |e| e.y),
+                        series: 0,
+                    };
+                    emit_def_frames(gates, gate_idx, socket, &[f], "CM_SITDOWN/SM_MOVEFAIL");
+                }
+                inbound::SitDownAction::Delayed { delay_time } => {
+                    glog!(
+                        "WRN",
+                        "CM_SITDOWN：ChrName={chr_name} 限速 delay={delay_time}（登记）"
+                    );
+                }
+            }
+        }
+        messages::CM_DROPGOLD => {
+            let Some(sg) = sessions.get(chr_name) else {
+                glog!("WRN", "CM_DROPGOLD：ChrName={chr_name} 无会话态 ⇒ 丢弃");
+                return;
+            };
+            let actor_id = sg.actor_id;
+            let map_id = world
+                .entities
+                .get(actor_id)
+                .map_or(usize::MAX, |e| e.map_id);
+            let flag = registry.and_then(|r| r.flag_of(map_id));
+            let i = inbound::DropGoldInputs {
+                n_gold: cmd.recog,
+                gold: sg.state.gold,
+                game_gold: sg.game_gold,
+                in_safe_disable_drop: cfg.in_safe_disable_drop,
+                in_safe_zone: flag.as_ref().is_some_and(|f| f.safe_area),
+                control_drop_item: cfg.control_drop_item,
+                can_drop_gold: cfg.can_drop_gold,
+                // 无 PK/摆摊等状态 ⇒ `IsCanDrop` 恒真（与 `handle_ground_cmd` 同口径）。
+                is_can_drop: true,
+                no_throw_item: flag.as_ref().is_some_and(|f| f.no_throw_item),
+                actor_id,
+            };
+            match inbound::client_drop_gold(&i) {
+                inbound::DropGoldOutcome::NotPositive | inbound::DropGoldOutcome::NotEnoughGold => {
+                }
+                inbound::DropGoldOutcome::Rejected(reason, f) => {
+                    glog!(
+                        "INF",
+                        "CM_DROPGOLD：ChrName={chr_name} nGold={} 拒绝 {reason:?}（SM_MENU_OK 文案未建模，登记）",
+                        cmd.recog
+                    );
+                    emit_def_frames(gates, gate_idx, socket, &[f], "CM_DROPGOLD/拒绝");
+                }
+                inbound::DropGoldOutcome::Dropped { gold, frame } => {
+                    // BUG-REPLICA 2：净金币不变 ⇒ 不改会话态。
+                    glog!(
+                        "INF",
+                        "CM_DROPGOLD：ChrName={chr_name} nGold={} 净金币不变={gold}（BUG-REPLICA 2）",
+                        cmd.recog
+                    );
+                    emit_def_frames(gates, gate_idx, socket, &[frame], "CM_DROPGOLD/金币变更");
+                }
+            }
+        }
+        messages::CM_BUTCH => {
+            let actor_id = sessions.get(chr_name).map_or(0, |s| s.actor_id);
+            let e = world.entities.get(actor_id);
+            let out = inbound::client_butch(&inbound::ButchInputs {
+                // `CM_BUTCH` 客户端 `MakeMessage(ident, charId, x, y, dir)` ⇒ nX=param, nY=tag, dir=series。
+                n_x: i32::from(cmd.param),
+                n_y: i32::from(cmd.tag),
+                bt_dir: u8::try_from(cmd.series).unwrap_or(0),
+                curr_x: e.map_or(0, |e| e.x),
+                curr_y: e.map_or(0, |e| e.y),
+                close_speed_hack_check: true,
+                now_tick: world.clock_ms as i32,
+                turn_tick: 0,
+                turn_interval_time: 600,
+                // `IsValidObject`/动物实体未建模 ⇒ 恒 false（登记）。
+                valid_object: false,
+                target_butcherable: false,
+            });
+            glog!(
+                "INF",
+                "CM_BUTCH：ChrName={chr_name} result={} dir_updated={} butchered={} send_butch={}（RM_BUTCH 附近广播 + 肉品质 RNG 效果体，登记）",
+                out.result,
+                out.dir_updated,
+                out.butchered,
+                out.send_butch
+            );
+        }
+        messages::CM_USERMAKEDRUGITEM => {
+            // 商人注册表（`FindMerchant`）+ `Merchant.ClientMakeDrugItem` 体归商店车道（登记）。
+            glog!(
+                "INF",
+                "CM_USERMAKEDRUGITEM：ChrName={chr_name} merchant={} item={:?}（商人注册表/配方体归商店车道，登记）",
+                cmd.recog,
+                tail.unwrap_or("")
+            );
+        }
+        messages::CM_PASSWORD => {
+            // 密码态（`StoragePwdState`）未挂会话态/未落库 ⇒ 只记日志（登记）。
+            glog!(
+                "INF",
+                "CM_PASSWORD：ChrName={chr_name} wParam={}（密码态会话字段未接线，登记）",
+                cmd.param
+            );
+        }
+        _ => {}
+    }
+}
+
+/// 把一批 [`game_svr::inbound::DefFrame`]（`SendDefMessage` 口径，无尾）编成 `GM_DATA` body 下发。
+fn emit_def_frames(
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    gate_idx: i32,
+    socket: i32,
+    frames: &[game_svr::inbound::DefFrame],
+    what: &str,
+) {
+    let Some(tx) = route_to_gate(gates, gate_idx, socket, what) else {
+        return;
+    };
+    for f in frames {
+        // `MakeMessage` 把 int 存进 ushort 字段（照 oracle 截断）。
+        let header = game_svr::smframe::command_header(
+            f.recog,
+            f.ident,
+            f.param as u16,
+            f.tag as u16,
+            f.series as u16,
+        );
+        let body = game_svr::smframe::gm_data_body(header, &[]);
+        let _ = tx.send(SimToGate::SendFrame { socket, body });
+    }
 }
 
 /// `CM_PICKUP`(1001) / `CM_DROPITEM`(1000) 的派发（owner §26）。
@@ -6366,6 +6608,9 @@ struct GroundCfg {
     in_safe_disable_drop: bool,
     /// `GameSvrConf.CanDropPrice`（`PlayObject.Operate.cs:284`）。
     can_drop_price: i32,
+    /// `GameSvrConf.CanDropGold`（`PlayObject.Operate.cs:229` 的 `nGold < CanDropGold` 门；
+    /// 缺省 1000，部署 `Server.conf` 写 `CanDropGold=1000`）。
+    can_drop_gold: i32,
     /// `GameSvrConf.DropItemRage`（`PlayObject.Operate.cs:291` 的 `_MIN(...,3)`）。
     drop_item_rage: u8,
 }
@@ -7353,6 +7598,20 @@ fn sim_loop(
                             &enter_cfg.mon_gen.table,
                             &mut displays,
                             &gates,
+                        );
+                    } else if game_svr::inbound::INBOUND_IDENTS.contains(&cmd.ident) {
+                        // R1 入站派发余 10 条（Task C / 片 76）：`game_svr::inbound` 纯函数 + 接线臂。
+                        handle_inbound_cmd(
+                            &cmd,
+                            tail.as_deref(),
+                            &chr_name,
+                            socket,
+                            &online,
+                            &world,
+                            &mut ground_sessions,
+                            &gates,
+                            registry.as_ref(),
+                            &enter_cfg.ground,
                         );
                     }
                 }
@@ -11220,6 +11479,7 @@ mod tests {
             control_drop_item: false,
             in_safe_disable_drop: false,
             can_drop_price: 500,
+            can_drop_gold: 1000,
             drop_item_rage: 3,
         };
         let colors = MsgColors {
@@ -15419,6 +15679,7 @@ mod tests {
             control_drop_item: false,
             in_safe_disable_drop: false,
             can_drop_price: 500,
+            can_drop_gold: 1000,
             drop_item_rage: 3,
         };
         let colors = MsgColors {
@@ -15700,6 +15961,7 @@ mod tests {
             control_drop_item: false,
             in_safe_disable_drop: false,
             can_drop_price: 500,
+            can_drop_gold: 1000,
             drop_item_rage: 3,
         };
         let colors = MsgColors {
