@@ -744,7 +744,7 @@ async fn main() -> Result<()> {
                 Err(e) => {
                     glog!(
                         "ERR",
-                        "构造段 fold 计划失败（{e}）⇒ 只含屏障 A 的最小计划（段①②③ 账本不对齐，登记）"
+                        "构造段 fold 计划失败（{e}）⇒ 只含屏障 A 的最小计划：段①②③ 不落账 ⇒ 屏障 A 落在**错误的流水位置**（oracle 该抽排在段①之后）⇒ 本会话的 `ItemNumber` 初值**不可用于对拍**（登记）"
                     );
                     game_svr::ctor_fold::minimal_plan()
                 }
@@ -753,7 +753,7 @@ async fn main() -> Result<()> {
         None => {
             glog!(
                 "WRN",
-                "无地图注册表 ⇒ 构造段 fold 计划只含屏障 A（段①②③ 不落账，登记）"
+                "无地图注册表 ⇒ 构造段 fold 计划只含屏障 A：段①②③ 不落账 ⇒ 屏障 A 落在**错误的流水位置** ⇒ 本会话的 `ItemNumber` 初值**不可用于对拍**（登记）"
             );
             game_svr::ctor_fold::minimal_plan()
         }
@@ -8080,12 +8080,13 @@ fn sim_loop(
     // ⇒ `MIR2_RNG_LOG` 把这一抽记在**本行**（`startup` 组，见 `consumer_groups.tsv` 的
     // `startup|rust|bins/game-svr/src/main\.rs:` 行）。
     let barrier_a = world.fold_ctor_draw_item_number_barrier_a(&enter_cfg.ctor_fold_plan);
+    // **日志只印事实、不印承诺**（独立复验 surviving ⑤：此前的「将 `+=` 它」会在**接线被改坏**时
+    // 印出一次并未发生的加法，误导读日志的人）。真正的结果值在下方计数器初始化处打印。
     glog!(
         "INF",
-        "构造段 fold 屏障 A（ServerConf.cs:114 的 Random(10000)）已落账：{} 抽；抽数 {} ⇒ `[Setup] ItemNumber` {} 将 `+=` 它",
+        "构造段 fold 屏障 A（ServerConf.cs:114 的 Random(10000)）已落账：{} 抽；本次抽数（原值）={}",
         barrier_a.len(),
-        barrier_a.entries.first().map_or(0, |e| e.result),
-        enter_cfg.newbie.item_number
+        barrier_a.entries.first().map_or(0, |e| e.result)
     );
     // **构造段 fold · 段②**（`GameApp.cs:124` `Map.LoadMapInfo()` 的 `CHECKQUEST` 行 ⇒
     // `Maps.cs:454` 的 `new Merchant`）—— **必须早于** `InitializeMonster`（`:155` = 下面的
@@ -8340,6 +8341,14 @@ fn sim_loop(
     let mut item_number =
         game_svr::ctor_fold::item_number_counter_init(enter_cfg.newbie.item_number, &barrier_a)
             .unwrap_or_else(|e| panic!("屏障 A 落账失败（fail-closed）：{e}"));
+    // **结果值日志**（`[Setup] ItemNumber` + 屏障 A 抽数）——与上面那条「只印事实」的日志配对：
+    // 两条合起来才能读出真实的加法是否发生（独立复验 surviving ⑤ 的缓解；该绑定本身仍无进程级牙，
+    // 见卡 `openmir2-ctor-barrier-a-draw` 的残余 ①）。
+    glog!(
+        "INF",
+        "`[Setup] ItemNumber` {} + 屏障 A 抽数 ⇒ 本会话计数器初值 {item_number}（新角色 `MakeIndex` 起点）",
+        enter_cfg.newbie.item_number
+    );
     // `CM_PICKUP`/`CM_DROPITEM` 的**地面交互会话态**（按 `ChrName` 键；进世界建立、断线/小退移除）。
     // 进世界前解析出的 `CharacterData` 在其他路径上用完即弃，这里把 `ground::*` 要的字段留下来。
     let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
