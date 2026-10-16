@@ -12,13 +12,14 @@
 //!    O-1 口径在构造（抽数）前过门**（部署件三图俱在 ⇒ 门不触发；合成用例才是门的牙齿；
 //!    与 oracle「先构造抽数、后 FindMap」的次序差异登记见模块尾）。
 //! 3. [`place_npcs`] = 建实体 + 挂图两段（照 [`crate::merchant::spawn_merchants`]）：
-//!    **正序** [`mir2_world::World::insert_npc`]（`LocalDB.LoadNpcs` 文件序；每条经 `BaseObject`
-//!    ctor 抽 `Random(1500)`+`Random(2000)`，`BaseObject.cs:439/441`）、**倒序**
+//!    **正序** [`mir2_world::World::insert_npc`]（`LocalDB.LoadNpcs` 文件序；每条经 ctor 公共链
+//!    `BaseObject`+`AnimalObject` 抽 **4 次**：`Random(1500)`/`Random(2000)+2000`/`Random(3000)`/
+//!    `Random(3000)`，`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`）、**倒序**
 //!    [`mir2_world::World::attach_npc_to_map`]（`NpCinitialize` 的 `for (i=Count-1;i>=0;i--)`）。
 //!
 //! ## 与 oracle 的建模差异（登记）
 //!
-//! - **FindMap 门次序**：oracle 在 `LoadNpcs`（`:690-698`）先 `new …`（抽 2 次 ctor 随机数）
+//! - **FindMap 门次序**：oracle 在 `LoadNpcs`（`:690-698`）先 `new …`（抽 4 次 ctor 随机数）
 //!   再 `AddQuestNpc`，`FindMap` 门在**之后的** `NpCinitialize`（`:39-48`）⇒ 未命中地图的记录
 //!   **已抽数**。本片照 merchant 卡 O-1 口径在构造前过门 ⇒ 未命中的记录**不抽数**。部署件
 //!   `Npcs.txt` 三图（`0122`/`0150`/`3`）俱在 ⇒ 该差异**不可达**；仅在合成用例里体现。
@@ -98,7 +99,8 @@ pub fn build_npc_spawns(
 
 /// 建实体 + 挂图两段（照 [`crate::merchant::spawn_merchants`] 的两个独立次序）：
 ///
-/// 1. `LocalDB.LoadNpcs` **正序**逐条 `new …`（ctor 抽 `Random(1500)`+`Random(2000)`）
+/// 1. `LocalDB.LoadNpcs` **正序**逐条 `new …`（ctor 公共链抽 4 次：`Random(1500)`/`Random(2000)+2000`/
+///    `Random(3000)`/`Random(3000)`，`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`）
 ///    ⇒ 先**正序** [`mir2_world::World::insert_npc`]（实体槽位序 = 文件序）；
 /// 2. `NpCinitialize`（`WorldServer.Merchant.cs:39`）的 `for (i = Count-1; i >= 0; i--)`
 ///    ⇒ **倒序** [`mir2_world::World::attach_npc_to_map`] 落格（map cell `obj_list` 追加序 = 倒序）。
@@ -361,12 +363,17 @@ mod tests {
         );
     }
 
-    /// 判据 3（ctor 抽数，改坏必红）：`insert_npc` 每条按 oracle 次序抽 2 次
-    /// （`Random(1500)` 然后 `Random(2000)），位置与手工复算对齐；且两条 ⇒ 共 4 抽。
+    /// 判据 3（ctor 抽数，改坏必红）：`insert_npc` 每条按 oracle ctor **公共链**抽 4 次
+    /// （`BaseObject` `Random(1500)`→`Random(2000)+2000`，再 `AnimalObject` `Random(3000)`→
+    /// `Random(3000)`；`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`），位置与手工复算对齐；
+    /// 两条 ⇒ 共 8 抽。
     ///
-    /// 红检：删掉 `insert_npc` 里的抽数（或只抽 1 次）⇒ 随机流位置断言必红。
+    /// **订正缘由**：原断言「恰 2 抽」与 oracle **相反**——每只固定 NPC 少抽 `AnimalObject` 的
+    /// 2 抽，共享 RNG 流自首只 NPC 构造起整体错位（本卡 critical）。现按 4 抽复算。
+    ///
+    /// 红检：删掉 `insert_npc` 里的抽数（或只抽 2 次）⇒ 随机流位置断言必红。
     #[test]
-    fn insert_npc_draws_two_ctor_values_in_oracle_order() {
+    fn insert_npc_draws_four_ctor_values_in_oracle_order() {
         let seed = 4242;
         let mut world = mir2_world::World::with_maps(vec![(64, 64), (64, 64)]);
         world.rng = RandomNumber::with_seed(seed);
@@ -376,12 +383,17 @@ mod tests {
         ];
         let _ = place_npcs(&mut world, spawns);
 
-        // 期望侧：BaseObject ctor 每条 `Random(1500)` 再 `Random(2000)`（`BaseObject.cs:439/441`）。
+        // 期望侧：每条 `BaseObject`(1500→2000) 再 `AnimalObject`(3000→3000)（字面 oracle 参数）。
         let mut b = RandomNumber::with_seed(seed);
-        let d1_run = b.random_below(1500);
-        let d1_search = b.random_below(2000) + 2000;
-        let d2_run = b.random_below(1500);
-        let d2_search = b.random_below(2000) + 2000;
+        let expect: Vec<(i32, i32, i32, i32)> = (0..2)
+            .map(|_| {
+                let run = b.random_below(1500);
+                let search = b.random_below(2000) + 2000;
+                let attack = b.random_below(3000);
+                let walk = b.random_below(3000);
+                (run, search, attack, walk)
+            })
+            .collect();
 
         assert_eq!(
             world.rng.random(),
@@ -392,13 +404,118 @@ mod tests {
         let s0 = world.entities.get(ids[0]).unwrap().npc.unwrap();
         let s1 = world.entities.get(ids[1]).unwrap().npc.unwrap();
         assert_eq!(
-            (s0.run_tick_delta, s0.base_search_time),
-            (d1_run, d1_search)
+            (
+                s0.run_tick_delta,
+                s0.base_search_time,
+                s0.attack_tick_delta,
+                s0.walk_tick_delta
+            ),
+            expect[0]
         );
         assert_eq!(
-            (s1.run_tick_delta, s1.base_search_time),
-            (d2_run, d2_search)
+            (
+                s1.run_tick_delta,
+                s1.base_search_time,
+                s1.attack_tick_delta,
+                s1.walk_tick_delta
+            ),
+            expect[1]
         );
+    }
+
+    /// **跨路径一致性门（本卡重点，防「少抽 2 次」复发）**：
+    /// oracle 里怪物 / 固定 NPC / 商人列表**都经**同一条 ctor 公共链
+    /// `BaseObject`（`BaseObject.cs:439/441`）→ `AnimalObject`（`AnimalObject.cs:76/77`），
+    /// 抽同样的 4 个数、同序（`mir2_world::BASE_ANIMAL_CTOR_DRAW_MODS` 一处定义）。
+    /// 本判据把三条路径**都**钉在同一张表上 ⇒ 改任一路径的抽数即红。
+    ///
+    /// 注：商人后 3 抽（`SearchTime`/`AttackTick`/`WalkTick`）在 oracle 里对商人**不被消费**
+    /// （`Merchant.Run` 只读 `RunTick`；动物 AI 不驱动 NPC），其**值被丢弃**、只有流位置可观测；
+    /// 故商人路径咬「次数（4 抽）+ 第 0 抽 kind/值」，其余 3 抽的 kind 由单一表保证。
+    ///
+    /// 红检：把 `insert_npc`（或 `merchant_ctor_run_delay`，或宿主 `mongen::draw_monster_construct`
+    /// 的公共段）改回少抽 2 次 ⇒ 对应 `assert_eq!` 必红。
+    #[test]
+    fn base_animal_ctor_chain_matches_oracle_on_all_three_paths() {
+        // ① 定义侧（一处定义）：kind + 顺序 = oracle。
+        assert_eq!(
+            mir2_world::BASE_ANIMAL_CTOR_DRAW_MODS,
+            [1500, 2000, 3000, 3000]
+        );
+
+        let seed = 20261017_i32;
+        let expect_of = |seed: i32| {
+            let mut r = RandomNumber::with_seed(seed);
+            mir2_world::BaseAnimalCtorDraws::draw(&mut r)
+        };
+
+        // ② 怪物路径（宿主 `mongen::draw_monster_construct`；race 11 = GuardUnit，公共链后无额外抽）。
+        {
+            let mut rng = RandomNumber::with_seed(seed);
+            let d = crate::mongen::draw_monster_construct(&mut rng, 11);
+            let e = expect_of(seed);
+            assert_eq!(
+                (
+                    d.run_tick_delta,
+                    d.base_search_time,
+                    d.attack_tick_delta,
+                    d.walk_tick_delta
+                ),
+                (
+                    e.run_tick_delta,
+                    e.base_search_time,
+                    e.attack_tick_delta,
+                    e.walk_tick_delta
+                ),
+                "怪物路径公共段 ctor 抽取必须与公共链表一致"
+            );
+        }
+
+        // ③ 固定 NPC 路径（`World::insert_npc`）。
+        {
+            let mut world = mir2_world::World::with_maps(vec![(8, 8)]);
+            world.rng = RandomNumber::with_seed(seed);
+            let id = world
+                .spawn_npc(to_spawn(&info("甲", NpcType::Merchant, "0", 1, 1, 0, 8), 0))
+                .expect("挂图成功");
+            let s = world.entities.get(id).unwrap().npc.unwrap();
+            let e = expect_of(seed);
+            assert_eq!(
+                (
+                    s.run_tick_delta,
+                    s.base_search_time,
+                    s.attack_tick_delta,
+                    s.walk_tick_delta
+                ),
+                (
+                    e.run_tick_delta,
+                    e.base_search_time,
+                    e.attack_tick_delta,
+                    e.walk_tick_delta
+                ),
+                "固定 NPC 路径 ctor 抽取必须与公共链表一致（原只抽 2 次 = 少抽 2 次）"
+            );
+        }
+
+        // ④ 商人列表路径（宿主 `spawn_merchants` 的预抽 = `World::merchant_ctor_run_delay`）。
+        {
+            let mut world = mir2_world::World::with_maps(vec![(8, 8)]);
+            world.clock_ms = 0;
+            world.rng = RandomNumber::with_seed(seed);
+            let got_run = world.merchant_ctor_run_delay();
+            let mut refr = RandomNumber::with_seed(seed);
+            let e = mir2_world::BaseAnimalCtorDraws::draw(&mut refr);
+            assert_eq!(
+                got_run,
+                i64::from(e.run_tick_delta),
+                "商人 RunTick = 公共链第 0 抽"
+            );
+            assert_eq!(
+                world.rng.random(),
+                refr.random(),
+                "商人路径 ctor 抽取次数/次序 = 公共链 4 抽（少抽 ⇒ 流位置必错）"
+            );
+        }
     }
 
     /// 判据 4（`NpCinitialize` 倒序挂图）：map cell `obj_list` 追加序 = 文件**倒序**

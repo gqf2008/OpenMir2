@@ -389,7 +389,7 @@ impl BuffSystem {
   - `monai.rs:871-874`：`monster_ai_tick` 的过滤显式 `&& e.npc.is_none()` ⇒ 固定 NPC 不跑怪物 AI（注释自陈「NPC 由 oracle `ProcessNpcs` 驱动，本仓未建模」）；
   - `merchant.rs::merchant_tick` 只认 `merchant.is_some()`（`:547` 用 `merchant_ids_sorted`）⇒ 也跳过 `npc`；
   - `npc.rs` 模块头（`:20-26`）自陈「不跑 NPC 的 `Run()`」。
-- **构造抽已照搬**：`insert_npc`（`npc.rs:81-100`）按 oracle `BaseObject` ctor 抽 `Random(1500)`（`RunTick`）+ `Random(2000)+2000`（`SearchTime`）各一次（`BaseObject.cs:439/441`）⇒ **构造期 2 抽已在账本里**。
+- **构造抽已照搬（⚠ 2026-10-17 订正）**：`insert_npc` 按 oracle **整条** ctor 公共链 `BaseObject`（`BaseObject.cs:439/441`）+ `AnimalObject`（`AnimalObject.cs:76/77`）抽 **4 次**（`RunTick=now+Random(1500)`、`SearchTime=Random(2000)+2000`、`AttackTick=now-Random(3000)`、`WalkTick=now-Random(3000)`）⇒ **构造期 4 抽已在账本里**。**原稿误作「2 抽」**：只照搬了 `BaseObject` 的 2 抽、漏掉 `AnimalObject` 的 2 抽 ⇒ 共享 RNG 流自首只 NPC 构造起整体错位（本批 critical 订正；唯一抽数点 `mir2_world::BaseAnimalCtorDraws::draw`）。
 - **`Merchant.Run` 的模板已存在**：`merchant.rs::merchant_run`（`:649`）已 1:1 复刻 `Merchant.cs:112-171`（转身/命中段 2 抽：`:696/702` 的 `random_below(50)`、`:697` 的 `random_byte(8)`；另含条件 `MapRandomMove` 2 抽 ⇒ **2 或 4 抽**，见 §4.1.2）⇒ **NPC Run 是「把 `merchant_run` 的通用 Run 段抽出、按 `npc.npc_type` 分派子类覆写」**。
 
 > ⚠ **一个现存的重复风险**：`npc_type == 0`（Merchant 类）的固定 NPC **与** `MerchantList` 的商人**是两个不同的 oracle 列表**（`QuestNpcList` vs `MerchantList`），但**同一 `Merchant.Run` 体**。Rust 侧目前 `merchant` 与 `npc` 是**互斥的两个字段**（`entity.rs:417/422`），一个实体不会同时有两者 ⇒ 不会双跑；但设计必须写明**分派依据是 `npc.npc_type`，不是字段存在性**（见 U-B1）。
@@ -432,7 +432,7 @@ fn npc_run_body(world: &mut World, npc_type: i32) -> NpcRunOutcome;
 
 **精确定义**：
 
-1. **固定在「第一个满足 `RunTime` 门并被 `ProcessNpcs` 触发的 NPC 的第一次抽数」**。在该时刻之前，两侧账本逐项相同（同种子 + 同注入时钟 + 同构造抽）。
+1. **固定在「第一个满足 `RunTime` 门并被 `ProcessNpcs` 触发的 NPC 的第一次抽数」**。在该时刻之前，两侧账本逐项相同（同种子 + 同注入时钟 + 同构造抽）——**但「同构造抽」是必须机的判据、不是默认前提**（⚠ 2026-10-17 订正）：构造链本身抽错数（如固定 NPC 只抽 `BaseObject` 的 2 抽、漏 `AnimalObject` 的 2 抽）会让 `k0` 之前的账本**已经**分岔；若把 k0 前默认成「一致」，该分岔会被静默吸收进 `N`、**跑绿也假绿**。⇒ **构造段必须显式进账本并逐项对**（固定 NPC / 商人列表各自 `new` 时的整条 ctor 公共链 4 抽 = `BaseObject`×2 + `AnimalObject`×2；见 B-L5）。
 2. **偏移量 N** = 从该点起、到本次比较窗口结束，Rust **少消耗**的抽数总和。单次 `Run()` 的抽数见 §4.1.2（`npc_type 1`：**恒 2 抽**；`npc_type 0/2`：**2 或 4 抽**，取决于 `BoCanMove` 与 `MoveTime` 移动门；`Trainer` 类 0 抽）。**⇒ 因单次抽数依赖运行期状态（`BoCanMove` / `MoveTick` / `Random` 命中），N 离线不可判定**——只能在真机窗口里、按声明的消费者序**实测**（B-R1）；本设计件**不对 N 给出预判值**。
 3. **判据（site/order 账本）**：两侧用 `MIR2_RNG_LOG`（`rng_trace.rs:31`）落 `seq \t kind \t max/arg \t result \t site` 流水；
    - 按 `seq` 对齐后，**第一处分歧 index `k0`** 即 oracle 第一条 NPC Run 抽数所在 index（Rust 在此处记的是**下一个消费者的** site/result）；
@@ -442,6 +442,8 @@ fn npc_run_body(world: &mut World, npc_type: i32) -> NpcRunOutcome;
    ⇒ **Rust 侧能且只能对「一个声明过的串行化消费者序」负责**：`World::tick` 的显式次序（`world.rs:630-650`：死亡结算 → 宝宝清理 → `monster_ai_tick` → AI 攻击转抄 → `merchant_tick` → AOI）。`npc_tick` 插在哪一格，**决定了 `k0` 与 N 的相对关系**；这一格必须有 owner 裁决并写进判据的「同窗口批次前提」（照 `M3RNG同窗口批次前提机判报告-20261013.md`）。
 
 > **⇒ 结论（收敛后）**：B 的 R 判据不是「Rust 消耗了和 oracle 一样的抽数」就够，而是**「在同一个声明过的消费者序下，两侧账本逐项相等」**。而且**偏移量 N 离线不可预判**（单次 `Run` 抽数依赖 `BoCanMove` 等运行期状态）⇒ 只能**在窗口内逐次实测/对齐**；cross-thread 交错**显式不在判据内**（同 T-42 的「跨 pass 交错不在判据内」）。
+>
+> **⚠ 2026-10-17 订正（构造段必须覆盖）**：上式「两侧账本逐项相等」**必须从 `seq=0`（构造期）起对齐**，不能只从 `k0`（首次 NPC Run）起。原稿以 `k0` 为锚、默认「k0 之前两侧一致」⇒ 构造期分岔（抽数 kind/顺序错）会被 `N` 掩蔽。⇒ 窗口判据**必须含构造段 site/order 逐项相等**：固定 NPC / 商人列表各自 `new` 时的整条 ctor 公共链 4 抽（`BaseObject`×2 `:439/441` + `AnimalObject`×2 `:76/77`）也要落进同一 `MIR2_RNG_LOG` 账本、与 oracle 逐项对齐（R 级窗口项）。
 
 ### 4.5 判据
 
@@ -451,7 +453,7 @@ fn npc_run_body(world: &mut World, npc_type: i32) -> NpcRunOutcome;
 - **B-L2（节奏门）**：`run_tick` 未到 `RunTime`（250ms）时不抽数；到点后 `run_tick` 被刷成 `now`（照 `merchant.rs:567-571` 体例），下一 pass 不再抽。
 - **B-L3（次序）**：多个 NPC（含不同 `npc_type`）按槽位序触发，断言抽数次序 = 槽位序 × 每 NPC 的抽数序列（用 `MIR2_RNG_LOG` 比对 site/order）。
 - **B-L4（`base.Run` 无抽数）**：无消息 NPC 的 `npc_run` 尾部（`base.Run` 段）**新增 0 抽**（负向断言）。
-- **B-L5（构造抽不回归）**：`insert_npc` 仍恰抽 2 次（`Random(1500)` + `Random(2000)`），加入 `npc_tick` 后构造段账本不变。
+- **B-L5（构造抽不回归，⚠ 2026-10-17 订正）**：`insert_npc` 按 oracle **整条** ctor 公共链抽 **4 次**（`BaseObject` `Random(1500)`→`Random(2000)+2000`，再 `AnimalObject` `Random(3000)`→`Random(3000)`；`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`）——**原稿「恰 2 抽」与 oracle 相反**（少抽 `AnimalObject` 的 2 抽、流整体错位）。跨路径机判 `bins/game-svr/src/npcs.rs::base_animal_ctor_chain_matches_oracle_on_all_three_paths` 把怪物/固定 NPC/商人列表三路径钉在同一张表（`mir2_world::BASE_ANIMAL_CTOR_DRAW_MODS`，一处定义三处消费）上；加入 `npc_tick` 后构造段账本不变。
 
 **必须真机窗口（R 级理由）**
 

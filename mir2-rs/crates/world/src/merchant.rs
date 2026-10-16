@@ -36,7 +36,7 @@
 use mir2_data::models::StdItem;
 use mir2_shared::rng::RandomNumber;
 
-use crate::entity::Entity;
+use crate::entity::{BaseAnimalCtorDraws, Entity};
 use crate::map::{CellType, MoveRequest};
 use crate::world::World;
 
@@ -254,9 +254,10 @@ impl World {
     /// 返回 `Some(id)` = 已入世界（槽位已分配）；`None` = `map_id` 越界（oracle 不可达，
     /// 宿主 `FindMap` 门已保证）。
     ///
-    /// **构造抽**：按 oracle `BaseObject` ctor 的 `RunTick = now + Random(1500)`
-    /// （`BaseObject.cs:439`）从**共享 `world.rng`** 取一次数（站点归 `merchant` 组）——
-    /// **仅当** [`MerchantState::run_tick`] 仍为 [`MERCHANT_RUN_TICK_UNSET`]（宿主已用
+    /// **构造抽**：按 oracle `new Merchant()` 的整条 ctor 公共链（`BaseObject`→`AnimalObject`）
+    /// 从**共享 `world.rng`** 抽 **4 个数**（`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`，
+    /// 唯一抽数点 [`BaseAnimalCtorDraws::draw`]；站点归 `merchant` 组）——**仅当**
+    /// [`MerchantState::run_tick`] 仍为 [`MERCHANT_RUN_TICK_UNSET`]（宿主已用
     /// [`World::merchant_ctor_run_delay`] 按 `LocalDB.LoadMerchant` 正序预抽时不再重复抽）。
     /// `refill_goods_tick`/`clear_expre_upgrade_tick`/`move_tick` 置为本刻 `clock_ms`（oracle ctor
     /// 的 `GetTickCount()` 同口径；`Goods.RefillTick` 由脚本解析置 0，见 [`MerchantGoods`]）。
@@ -269,7 +270,10 @@ impl World {
         let (x, y) = (spawn.x, spawn.y);
         let mut state = spawn.state;
         if state.run_tick == MERCHANT_RUN_TICK_UNSET {
-            state.run_tick = now + i64::from(self.rng.random_below(MERCHANT_RUN_DELAY_MAX));
+            // 无预抽（[`World::spawn_merchant`] 一步到位）⇒ 在此抽整条公共链 4 抽，同
+            // [`World::merchant_ctor_run_delay`]；只有 `RunTick` 分量被保留（见其注释）。
+            let ctor = BaseAnimalCtorDraws::draw(&mut self.rng);
+            state.run_tick = now + i64::from(ctor.run_tick_delta);
         }
         state.refill_goods_tick = now;
         state.clear_expre_upgrade_tick = now;
@@ -510,14 +514,22 @@ impl World {
         self.item_catalog.get(i)
     }
 
-    /// `BaseObject` ctor 的构造抽（`RunTick = now + Random(1500)`，`BaseObject.cs:439`），
-    /// 单独成步以便宿主按 oracle 次序落定：`LocalDB.LoadMerchant` **正序**逐条抽（本函数），
-    /// 再到 `MerchantInitialize` **倒序**挂图（[`World::spawn_merchant`]）。
+    /// oracle `new Merchant()` 的 ctor 公共链构造抽，单独成步以便宿主按 oracle 次序落定：
+    /// `LocalDB.LoadMerchant` **正序**逐条抽（本函数），再到 `MerchantInitialize` **倒序**挂图
+    /// （[`World::spawn_merchant`]）。
+    ///
+    /// **抽 4 个数**（整条 `BaseObject`→`AnimalObject` 链）：`RunTick = now + Random(1500)`、
+    /// `SearchTime = Random(2000)+2000`、`AttackTick = now - Random(3000)`、`WalkTick = now - Random(3000)`
+    /// （`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`）。唯一抽数点
+    /// [`BaseAnimalCtorDraws::draw`]；原实现只抽第 1 个 ⇒ 每条商人少抽 3 次、共享 RNG 流错位
+    /// （本卡订正）。商人**不消费**后三个（`Merchant.Run` 只读 `RunTick`；动物 AI 不驱动 NPC），
+    /// 故只返回 `RunTick`，余 3 抽**只推进共享 RNG 流**以保流位置与 oracle 一致。
     ///
     /// 取数走共享 `world.rng`，站点落 `crates/world/src/merchant.rs`（`merchant` 组）。
     #[must_use]
     pub fn merchant_ctor_run_delay(&mut self) -> i64 {
-        self.clock_ms + i64::from(self.rng.random_below(MERCHANT_RUN_DELAY_MAX))
+        let ctor = BaseAnimalCtorDraws::draw(&mut self.rng);
+        self.clock_ms + i64::from(ctor.run_tick_delta)
     }
 
     /// **M3⑤-实现 2 第②片**：`ProcessMerchants`（`WorldServer.Merchant.cs:65-110`）的单线程等价物。
@@ -992,8 +1004,24 @@ mod tests {
         }
     }
 
-    /// 构造抽：`RunTick = now + Random(1500)`（`BaseObject.cs:439`），且走共享 `world.rng`
+    /// 复算 **整条** ctor 公共链 4 抽（`BaseObject` `:439/441` + `AnimalObject` `:76/77`，
+    /// 字面 oracle 参数），返回第 0 抽（`RunTick` 的 `Random(1500)`）。
+    ///
+    /// **订正缘由**：原测试只复算 1 抽 ⇒ 与 oracle 相反（少 3 抽）；现按 4 抽字面复算。
+    fn ctor_chain_first_draw(exp: &mut RandomNumber) -> i32 {
+        let d = exp.random_below(MERCHANT_RUN_DELAY_MAX); // #0 BaseObject.RunTick = Random(1500)
+        let _ = exp.random_below(2000); // #1 BaseObject.SearchTime = Random(2000)+2000
+        let _ = exp.random_below(3000); // #2 AnimalObject.AttackTick = Random(3000)
+        let _ = exp.random_below(3000); // #3 AnimalObject.WalkTick = Random(3000)
+        d
+    }
+
+    /// 构造抽：**整条** ctor 公共链 4 抽（`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`），
+    /// `RunTick = now + Random(1500)`（`BaseObject.cs:439`）＝ 公共链第 0 抽；走共享 `world.rng`
     /// （站点归 `merchant` 组）。
+    ///
+    /// **订正缘由**：原断言只抽 1 次（只看 `Random(1500)`）⇒ 每条商人少抽 3 次、与 oracle 相反；
+    /// 现按 4 抽复算（少抽即「同源」断言必红）。
     #[test]
     fn ctor_draws_run_delay_from_shared_rng() {
         let mut w = World::new(64, 64);
@@ -1001,7 +1029,7 @@ mod tests {
         w.clock_ms = 5_000;
         let id = w.spawn_merchant(spawn_at(3, 4)).expect("挂图成功");
         let mut exp = RandomNumber::with_seed(1234);
-        let delay = exp.random_below(MERCHANT_RUN_DELAY_MAX);
+        let delay = ctor_chain_first_draw(&mut exp);
         let st = w.entities.get(id).unwrap().merchant.as_ref().unwrap();
         assert_eq!(st.run_tick, 5_000 + i64::from(delay));
         // 取数与独立流对齐（同一个 `world.rng`，无私有流）。
@@ -1077,7 +1105,7 @@ mod tests {
         let a = w.spawn_merchant(spawn_at(5, 5)).expect("挂图成功");
         set_run_tick_stale(&mut w, a);
         let mut exp = RandomNumber::with_seed(4321);
-        let _ctor = exp.random_below(MERCHANT_RUN_DELAY_MAX);
+        let _ctor = ctor_chain_first_draw(&mut exp);
         let out = merchant_run(&mut w, a);
         if exp.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
             let d = exp.random_byte(MERCHANT_TURN_DIR_MAX);
@@ -1129,7 +1157,7 @@ mod tests {
             st.move_tick = -1000; // 到点（`now - MoveTick > MoveTime*1000`）
         }
         let mut exp = RandomNumber::with_seed(99);
-        let _ctor = exp.random_below(MERCHANT_RUN_DELAY_MAX);
+        let _ctor = ctor_chain_first_draw(&mut exp);
         let out = merchant_run(&mut w, a);
         // 复算 turn/hit 两段取数。
         if exp.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {

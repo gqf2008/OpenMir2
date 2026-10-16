@@ -9,7 +9,7 @@
 //! | 步骤 | 行号 |
 //! | --- | --- |
 //! | `new Merchant()/GuildOfficial()/CastleOfficial()`（`LoadNpcs` 循环内） | `LocalDB.cs:690-698` |
-//! | `BaseObject` ctor 抽数 `RunTick = now + Random(1500)` / `SearchTime = Random(2000) + 2000` | `BaseObject.cs:439/441` |
+//! | ctor 公共链抽数（**4 抽**）`RunTick = now + Random(1500)` / `SearchTime = Random(2000)+2000` / `AttackTick = now - Random(3000)` / `WalkTick = now - Random(3000)` | `BaseObject.cs:439/441` + `AnimalObject.cs:76/77` |
 //! | `WorldEngine.AddQuestNpc(npc)` → `QuestNpcList.Add` | `LocalDB.cs:708` / `WorldServer.cs:1924-1927` |
 //! | `NpCinitialize`：`for (i = Count-1; i >= 0; i--)`；`FindMap(MapName)` 门；`Initialize()`（`AddToMap`）；`AddtoMapSuccess && !IsHide ⇒ RemoveAt` | `WorldServer.Merchant.cs:37-62` |
 //! | 固定 NPC 的 `CellType = CellType.Merchant`（`NormNpc.cs:50` / `Merchant.cs:109`） | `NormNpc.cs:50` |
@@ -30,21 +30,31 @@
 //!   见 [`NpcState::can_move`]）；③ `RM_TURN`/`RM_HIT` 帧面（属 B-4 AOI 车道，本片只落抽数
 //!   与朝向状态）。注：`monster_ai_tick` 仍按 `npc.is_some()` 排除固定 NPC（固定 NPC 只由
 //!   [`World::npc_tick`] 驱动）。
-//! - **构造抽数（本片已照搬）**：`new Merchant()/…` 在 `LoadNpcs` 时按文件序逐条经
-//!   `BaseObject` ctor 抽 `Random(1500)`（`BaseObject.cs:439`）+ `Random(2000)`（`:441`），
-//!   每次 2 抽；本片 `insert_npc` 用**同一条** `world.rng` 按同序抽（业主抽数 = 构造期，
-//!   与 oracle 构造点一致）。绝对值只存随机分量（`run_tick_delta` / `base_search_time`），
-//!   绝对时钟由消费方合成（照 [`crate::entity::MonsterCtorDraws`] 的口径）。
+//! - **构造抽数（本卡订正：原为 2 抽，与 oracle 相反）**：`new Merchant()/…` 在 `LoadNpcs` 时按
+//!   文件序逐条经**整条** ctor 公共链 `BaseObject`（`BaseObject.cs:439/441`）→ `AnimalObject`
+//!   （`AnimalObject.cs:76/77`）抽 **4 个**数——`RunTick=now+Random(1500)`、`SearchTime=Random(2000)+2000`、
+//!   `AttackTick=now-Random(3000)`、`WalkTick=now-Random(3000)`，次序即此。`NormNpc`/`Merchant`
+//!   的 ctor 体本身不再抽（`NormNpc.cs:39`/`Merchant.cs:82` 只有字段赋值）。本片 `insert_npc` 用
+//!   **同一条** `world.rng` 按同序抽（唯一抽数点 [`crate::entity::BaseAnimalCtorDraws::draw`]，
+//!   怪物/固定 NPC/商人列表三处共用同一张表）。**原实现只抽前 2 抽 ⇒ 每只固定 NPC 少抽 2 次，
+//!   共享 RNG 流自首只 NPC 构造起整体错位**（L 级订正，见
+//!   `tests/parity/m3/design-buff-and-tick-20261016.md` §B-L5）。绝对值只存随机分量，绝对时钟由
+//!   消费方合成（照 [`crate::entity::MonsterCtorDraws`] 的口径）。
 //! - **挂图 `obj_list` 追加序**：`NpCinitialize` 倒序 ⇒ 本片宿主按倒序 [`World::attach_npc_to_map`]
 //!   （与 [`crate::merchant`] 同款）；实体槽位序 = 文件正序 [`World::insert_npc`]。
 
-use crate::entity::{Entity, ACTOR_RACE_NPC};
+use crate::entity::{BaseAnimalCtorDraws, Entity, ACTOR_RACE_NPC};
 use crate::map::CellType;
 use crate::World;
 
 /// `BaseObject.RunTick = GetTickCount() + Random(1500)`（`BaseObject.cs:439`）。
+///
+/// 保留作 oracle 模数的具名引用；**权威抽数定义**见 [`crate::entity::BASE_ANIMAL_CTOR_DRAW_MODS`]
+/// 与 [`BaseAnimalCtorDraws::draw`]（`insert_npc` 已改走后者，不再直接用本常量）。
 pub const NPC_RUN_DELAY_MAX: i32 = 1500;
 /// `BaseObject.SearchTime = Random(2000) + 2000`（`BaseObject.cs:441`）。
+///
+/// 保留作 oracle 模数的具名引用（同上，权威定义在 [`crate::entity::BASE_ANIMAL_CTOR_DRAW_MODS`]）。
 pub const NPC_SEARCH_DRAW_MAX: i32 = 2000;
 
 /// `BaseObject.RunTime = 250`（`BaseObject.cs:440`）——`ProcessNpcs` 的逐 NPC `Run` 到点门。
@@ -73,7 +83,8 @@ pub const NPC_TYPE_CASTLE_OFFICIAL: i32 = 2;
 /// 固定管理 NPC 的状态（`INormNpc`/`BaseObject` 在加载层可对拍的字段子集 + ctor 抽数）。
 ///
 /// `npc_type` 是 `LoadNpcs` 的 `switch` 分支（0 商人 / 1 行会管理 / 2 沙城管理）；
-/// 后两个字段是 `BaseObject` ctor 抽出的**随机分量**（不是绝对值）。
+/// 后四个字段是构造链（`BaseObject`+`AnimalObject`）抽出的**随机分量**（不是绝对值），
+/// 定义见 [`crate::entity::BASE_ANIMAL_CTOR_DRAW_MODS`]。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NpcState {
     /// `switch` 分支（`LocalDB.cs:688-698`）：`0`=`Merchant` / `1`=`GuildOfficial` / `2`=`CastleOfficial`。
@@ -86,6 +97,10 @@ pub struct NpcState {
     pub run_tick_delta: i32,
     /// `BaseObject` ctor 的 `Random(2000) + 2000`（`BaseObject.cs:441`）。
     pub base_search_time: i32,
+    /// `AnimalObject` ctor 的 `Random(3000)`（`AnimalObject.cs:76`）——原 Rust 侧漏抽的第 3 个数。
+    pub attack_tick_delta: i32,
+    /// `AnimalObject` ctor 的 `Random(3000)`（`AnimalObject.cs:77`）——原 Rust 侧漏抽的第 4 个数。
+    pub walk_tick_delta: i32,
     /// `BaseObject.RunTick`（`BaseObject.cs:439`）的**绝对值**：`insert_npc` 时 =
     /// 构造时刻 + [`NpcState::run_tick_delta`]（照 [`crate::merchant::MerchantState::run_tick`] 口径）。
     /// 缺省 `0` = 未落定（宿主 `insert_npc` 按 oracle 次序合成）。
@@ -117,7 +132,9 @@ pub struct NpcSpawn {
 }
 
 impl World {
-    /// **建实体（构造期）**：入 `EntityStore`（**不挂图**），并**照 oracle ctor 抽 2 次数**。
+    /// **建实体（构造期）**：入 `EntityStore`（**不挂图**），并**照 oracle ctor 公共链抽 4 次数**
+    /// （`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`；唯一抽数点
+    /// [`BaseAnimalCtorDraws::draw`]，一处定义、三处消费）。
     ///
     /// 顺序契约：宿主必须**正序**逐条调用（实体槽位序 = `QuestNpcList` 序 = Npcs.txt 文件序），
     /// 再**倒序** [`World::attach_npc_to_map`] 落格（`NpCinitialize` 倒序）。
@@ -128,11 +145,14 @@ impl World {
             return None;
         }
         let mut state = spawn.state;
-        // `BaseObject.cs:439` `RunTick = GetTickCount() + Random(1500)`；
-        // `:441` `SearchTime = Random(2000) + 2000`。**次序固定：先 RunTick 后 SearchTime**
-        // （与 oracle ctor 逐行一致）。仅存随机分量，绝对时钟由消费方合成。
-        state.run_tick_delta = self.rng.random_below(NPC_RUN_DELAY_MAX);
-        state.base_search_time = self.rng.random_below(NPC_SEARCH_DRAW_MAX) + NPC_SEARCH_DRAW_MAX;
+        // oracle 构造链 `BaseObject`（`:439/441`）→ `AnimalObject`（`:76/77`）共 **4 抽**、次序固定；
+        // 唯一抽数点 = `BaseAnimalCtorDraws::draw`。原 Rust 侧只抽 `BaseObject` 的 2 抽 ⇒ 每只固定
+        // NPC 少抽 `AnimalObject` 的 2 抽，共享 RNG 流自首只 NPC 起整体错位（本卡订正）。
+        let ctor = BaseAnimalCtorDraws::draw(&mut self.rng);
+        state.run_tick_delta = ctor.run_tick_delta;
+        state.base_search_time = ctor.base_search_time;
+        state.attack_tick_delta = ctor.attack_tick_delta;
+        state.walk_tick_delta = ctor.walk_tick_delta;
         // 绝对 `RunTick`（oracle `ctor` 的 `GetTickCount()` 就是当时的 sim 时钟 == 构造时刻）。
         state.run_tick = self.clock_ms + i64::from(state.run_tick_delta);
         // `Merchant.cs:108` `MoveTick = HUtil32.GetTickCount()`（`Merchant`/`NormNpc` ctor 尾）。
@@ -567,8 +587,8 @@ mod tests {
             ))
             .expect("挂图成功");
         let mut exp = RandomNumber::with_seed(777);
-        let _ = exp.random_below(1500);
-        let _ = exp.random_below(2000);
+        // 复算构造期抽数：整条 ctor 公共链 4 抽（唯一抽数点），再复算 `Run` 段。
+        let _ = BaseAnimalCtorDraws::draw(&mut exp);
         world.clock_ms = 10_000;
         let out = npc_run(&mut world, id);
         // 复算 `Merchant.Run` 转身/命中段（分支逐抽对齐；**字面量 50/8/50**）。
@@ -585,16 +605,21 @@ mod tests {
         );
     }
 
-    /// **B-L5（构造抽不回归）**：`insert_npc` 仍**恰抽 2 次**（`Random(1500)` + `Random(2000)`），
-    /// 加入 `npc_tick` 后构造段账本不变。**字面量钉死模数**：`1500`/`2000` 改 ±1 ⇒ 分量值断言必红
-    /// （`random_below` 的状态推进与模数无关 ⇒ 只有「值」断言能咬住模数，两流对齐咬不住）。
+    /// **B-L5（构造抽不回归，⚠ 订正：原为「恰 2 次」）**：`insert_npc` 按 oracle **整条** ctor 公共链
+    /// 恰抽 **4 次**（`BaseObject` `Random(1500)`→`Random(2000)+2000`，再 `AnimalObject`
+    /// `Random(3000)`→`Random(3000)`；`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`），加入
+    /// `npc_tick` 后构造段账本不变。**订正缘由**：原断言「恰 2 抽」与 oracle **相反**（少抽
+    /// `AnimalObject` 的 2 抽）⇒ 共享 RNG 流自首只 NPC 构造起整体错位，且该错值被本断言**钉死**。
+    ///
+    /// **字面量钉死模数**：`1500`/`2000`/`3000` 改 ±1 ⇒ 对应分量值断言必红（`random_below` 的状态
+    /// 推进与模数无关 ⇒ 只有「值」断言能咬住模数，两流对齐咬不住）。
     ///
     /// **为何扫种子（T3-fix2）**：`random_below(1500)` 的**返回值**对 `1500→1499` 这类 -1 变异
     /// 只在「原始采样落在被截掉的末档」时才变（单种子的区分概率远低于 1）⇒ 单种子（旧 `seed=1234`）
     /// 对 -1 方向**可能全绿**（复验者实测：`1500→1499` 该具名断言仍绿，仅 `+1` 被抓）。扫 **20000**
-    /// 种子后 ±1 两方向都落进可区分窗口（`1500→1499` 与 `2000→1999` 均使本断言必红，见证据）。
+    /// 种子后 ±1 两方向都落进可区分窗口。
     #[test]
-    fn insert_npc_still_draws_exactly_two() {
+    fn insert_npc_still_draws_exactly_four() {
         // 每轮只**重播种**共享流（`insert_npc` 构造抽起于位置 0）⇒ 可与独立流逐抽对齐；
         // 实体只增不删（本测试不挂图，只读该轮 id 的 npc 分量）。
         let mut world = World::with_maps(vec![(20, 20)]);
@@ -604,9 +629,11 @@ mod tests {
                 .insert_npc(spawn_typed("老人", NPC_TYPE_MERCHANT, 0, 3, 3))
                 .expect("map_id 合法");
             let mut exp = RandomNumber::with_seed(seed);
-            // 字面量：`BaseObject.cs:439` 的 `Random(1500)` + `BaseObject.cs:441` 的 `Random(2000)+2000`。
+            // 字面量 4 抽：`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`。
             let d = exp.random_below(1500);
             let sq = exp.random_below(2000) + 2000;
+            let at = exp.random_below(3000);
+            let wk = exp.random_below(3000);
             let n = world.entities.get(id).unwrap().npc.as_ref().unwrap();
             assert_eq!(
                 n.run_tick_delta, d,
@@ -616,7 +643,15 @@ mod tests {
                 n.base_search_time, sq,
                 "seed={seed} SearchTime = Random(2000)+2000"
             );
-            assert_eq!(world.rng.random(), exp.random(), "seed={seed} 构造恰 2 抽");
+            assert_eq!(
+                n.attack_tick_delta, at,
+                "seed={seed} AttackTick 分量 = Random(3000)"
+            );
+            assert_eq!(
+                n.walk_tick_delta, wk,
+                "seed={seed} WalkTick 分量 = Random(3000)"
+            );
+            assert_eq!(world.rng.random(), exp.random(), "seed={seed} 构造恰 4 抽");
         }
     }
 
@@ -756,8 +791,8 @@ mod tests {
             .spawn_npc(spawn_typed("老人", NPC_TYPE_GUILD_OFFICIAL, 0, 3, 3))
             .expect("挂图成功");
         let mut exp = RandomNumber::with_seed(64);
-        let _ = exp.random_below(1500);
-        let _ = exp.random_below(2000);
+        // 构造期整条 ctor 公共链 4 抽（唯一抽数点）；`Run` 段随后复算。
+        let _ = BaseAnimalCtorDraws::draw(&mut exp);
         world.clock_ms = 10_000;
         let _ = npc_run(&mut world, id);
         // oracle 恰 2 抽（字面量 40/8/30）：分支逐抽对齐后两流同源即证明尾部无额外抽数。

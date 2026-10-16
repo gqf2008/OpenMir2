@@ -68,7 +68,8 @@ pub use combat::{
     ATTACK_MODE_HAM_PEACE, ATTACK_MODE_HAM_PKATTACK,
 };
 pub use entity::{
-    Entity, EntityStore, MonsterCtorDraws, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    BaseAnimalCtorDraws, Entity, EntityStore, MonsterCtorDraws, VisibleFlag, ACTOR_RACE_MONSTER,
+    ACTOR_RACE_PLAY, BASE_ANIMAL_CTOR_DRAW_MODS,
 };
 pub use guild::{
     check_guild_name, AddWarGuildOutcome, GuildConfig, GuildManager, GuildRank, GuildState,

@@ -55,6 +55,63 @@ pub struct VisibleBaseObject {
     pub flag: VisibleFlag,
 }
 
+/// oracle `BaseObject` + `AnimalObject` 两层 ctor 的**唯一**抽数契约（kind + 顺序）。
+///
+/// 怪物（`MonsterObject: AnimalObject`）、固定 NPC（`NormNpc: AnimalObject`）、商人列表
+/// （`Merchant: NormNpc: AnimalObject`）三条构造路径**都经**这条公共链，按同一次序抽同样的 4 个数：
+///
+/// | # | oracle | 抽法 |
+/// | --- | --- | --- |
+/// | 0 | `BaseObject.RunTick = GetTickCount() + Random(1500)` | `BaseObject.cs:439` |
+/// | 1 | `BaseObject.SearchTime = Random(2000) + 2000` | `BaseObject.cs:441` |
+/// | 2 | `AnimalObject.AttackTick = GetTickCount() - Random(3000)` | `AnimalObject.cs:76` |
+/// | 3 | `AnimalObject.WalkTick = GetTickCount() - Random(3000)` | `AnimalObject.cs:77` |
+///
+/// **次序**：C# 基类 ctor 先跑 ⇒ `BaseObject`（1500→2000）先于 `AnimalObject`（3000→3000）。
+/// `NormNpc`/`Merchant` 的 ctor 体本身不再抽（`NormNpc.cs:39`、`Merchant.cs:82` 只有字段赋值）；
+/// `MonsterObject` 在此之上**另**抽第 5 个 `SearchTime = 3000 + Random(2000)`（`MonsterObject.cs:65`），
+/// 属怪物专属、不在这条公共链里（见 [`MonsterCtorDraws::search_time`]）。
+///
+/// **一处定义、三处消费（防「少抽 2 次」复发）**：本表与 [`BaseAnimalCtorDraws::draw`] 是唯一抽数点；
+/// 固定 NPC（[`crate::npc`] 的 `insert_npc`）、商人列表（[`crate::merchant`] 的
+/// `merchant_ctor_run_delay`/`insert_merchant`）直接消费；怪物路径（宿主
+/// `bins/game-svr/src/mongen.rs::draw_monster_construct`）的公共段按同一表由
+/// `bins/game-svr/src/npcs.rs` 的跨路径机判核对。改本表即三处同时改。
+pub const BASE_ANIMAL_CTOR_DRAW_MODS: [i32; 4] = [1500, 2000, 3000, 3000];
+
+/// [`BASE_ANIMAL_CTOR_DRAW_MODS`] 定义的一条 `BaseObject`+`AnimalObject` ctor 抽出结果。
+///
+/// 值语义：`*_delta` 是 oracle `GetTickCount() ± Random(...)` 里的 `Random(...)` 项（绝对值依赖
+/// 读取时刻，由消费方用自己的时钟合成）；`base_search_time` 是 `Random(2000)+2000` 的**完整值**
+/// （含 `+2000` 偏移），与 [`MonsterCtorDraws::base_search_time`] 同口径。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BaseAnimalCtorDraws {
+    /// #0 `BaseObject.RunTick` 的 `Random(1500)`（`BaseObject.cs:439`）。
+    pub run_tick_delta: i32,
+    /// #1 `BaseObject.SearchTime = Random(2000) + 2000`（`BaseObject.cs:441`）。
+    pub base_search_time: i32,
+    /// #2 `AnimalObject.AttackTick` 的 `Random(3000)`（`AnimalObject.cs:76`）。
+    pub attack_tick_delta: i32,
+    /// #3 `AnimalObject.WalkTick` 的 `Random(3000)`（`AnimalObject.cs:77`）。
+    pub walk_tick_delta: i32,
+}
+
+impl BaseAnimalCtorDraws {
+    /// 按 [`BASE_ANIMAL_CTOR_DRAW_MODS`] 的次序从 `rng` 抽这 4 个数（**唯一**抽数点）。
+    ///
+    /// #1 的 `+ 2000` 偏移与模数同值（oracle 字面 `Random(2000) + 2000`），故复用同一表项。
+    #[must_use]
+    pub fn draw(rng: &mut mir2_shared::rng::RandomNumber) -> Self {
+        Self {
+            run_tick_delta: rng.random_below(BASE_ANIMAL_CTOR_DRAW_MODS[0]),
+            base_search_time: rng.random_below(BASE_ANIMAL_CTOR_DRAW_MODS[1])
+                + BASE_ANIMAL_CTOR_DRAW_MODS[1],
+            attack_tick_delta: rng.random_below(BASE_ANIMAL_CTOR_DRAW_MODS[2]),
+            walk_tick_delta: rng.random_below(BASE_ANIMAL_CTOR_DRAW_MODS[3]),
+        }
+    }
+}
+
 /// oracle 实体**构造函数链**里抽出的随机数结果（生成路径，卡
 /// `openmir2-m3-mongen-load-spawn` 抽取；卡 `openmir2-m3-monster-ai-tick` 的 AI 只消费不抽）。
 ///
