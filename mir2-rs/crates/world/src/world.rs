@@ -493,6 +493,21 @@ impl World {
         }
     }
 
+    /// 把注册表 `MapFile.doors`/`door_status` 搬进某图（`Envirnoment.cs:934-991` 加载即建 `DoorList`）。
+    /// 越界 `map_id` 静默忽略。幂等（重复调用覆盖）。缺省空 ⇒ `arround_door_opened` 恒 `true`
+    /// （改动前行为逐字节不变）。`crates/world` 不依赖 `crates/envir` ⇒ 用本中立结构
+    /// [`crate::map::MapDoor`]/[`crate::map::DoorStatus`]，由宿主做映射。
+    pub fn set_map_doors(
+        &mut self,
+        map_id: usize,
+        doors: Vec<crate::map::MapDoor>,
+        status: Vec<crate::map::DoorStatus>,
+    ) {
+        if let Some(map) = self.maps.get_mut(map_id) {
+            map.set_doors(doors, status);
+        }
+    }
+
     /// 攻击路径取数的统一入口：按隔离开关选流。
     ///
     /// **只把攻击路径的取数**（[`crate::combat::attack_dir`] / [`crate::combat::swing_power`] 及其
@@ -1389,8 +1404,9 @@ impl World {
     /// （`PlayObject.cs:1909-1911`）。本方法据此返回 `moved == false` 并回滚，宿主因此不发 `SM_WALK`。
     ///
     /// 只对**玩家**触发（`PlayObject.Walk` 覆写专属）；怪物 AI 的 `monai::walk_to` 也走 `try_step_now`，
-    /// 但 `route_enter` 对非玩家直接返回 [`RouteOutcome::Skipped`] ⇒ 怪物/商人走 `BaseObject.Walk`
-    /// （`BaseObject.cs:1525-1560` 对 `MapRoute` 只 `result = false`——**只挡路、不换图**）。
+    /// 但非玩家在 `try_step_now` 即被**非玩家 `MapRoute` 阻挡**拦下（`BaseObject.cs:1548` 的
+    /// `result = false` 配 `WalkTo` 回滚 `:683-688`——**只挡路、不换图**，坐标不变）⇒ 根本到不了本函数；
+    /// 即便到了，`route_enter` 对非玩家也直接返回 [`RouteOutcome::Skipped`]（不换图）。
     #[must_use]
     pub fn step_with_route(&mut self, actor_id: i32, dx: i32, dy: i32, steps: i32) -> StepOutcome {
         let Some(e) = self.entities.get(actor_id) else {
@@ -1456,7 +1472,9 @@ impl World {
     /// - `Envir.CellMatch(CurrX,CurrY)` 失败 ⇒ `return true`（无换图、不回滚）；
     /// - `cellSuccess && cellInfo.IsAvailable` 失败 ⇒ 不进 `for`（无换图）；
     /// - `mapRoute.Envir != null`：本仓 hop 表命中即非空；
-    /// - `Envir.ArroundDoorOpened(CurrX,CurrY)`：**无门模型 ⇒ 恒 true**（登记）；
+    /// - `Envir.ArroundDoorOpened(CurrX,CurrY)`：**已建模**——读本图门表（`MapGrid::arround_door_opened`，
+    ///   宿主按注册表灌入）。±1 邻域内有门且该门 `!Opened` ⇒ 整支跳过、**不换图**（oracle 门结构性
+    ///   恒未开 ⇒ 门相邻的 route 格恒被挡；无门表 ⇒ 恒 true，合成场景行为不变）；
     /// - `(!mapRoute.Envir.Flag.boNEEDHOLE) || EventMgr.GetEvent(Envir,CurrX,CurrY,ET_DIGOUTZOMBI) != null`：
     ///   **本仓无 `MapEvent` 模型 ⇒ 事件恒不存在** ⇒ 落到 Rust 就是「**目标图 `boNEEDHOLE` 命中即挡**」
     ///   （`PlayObject.cs:1874`）。这是一个**真门**：真实 `MapInfo.txt` 有 `Q004/R001/H007/H106` 四段带
@@ -1518,6 +1536,19 @@ impl World {
             else {
                 continue;
             };
+            // `if (Envir.ArroundDoorOpened(CurrX, CurrY))`（`PlayObject.cs:1872`；
+            // `Envirnoment.cs:1185-1203`）：±1 邻域内有门且该门 `!Opened` ⇒ 整支跳过（不换图；
+            // `result` 保持 true ⇒ 走位照常、不回滚——与 NEEDHOLE 门同型）。门数据由宿主
+            // （`bins/game-svr`）按注册表逐图 `set_doors` 灌入；无门表 ⇒ 恒 true（改动前行为不变）。
+            // oracle 门恒未开（`CM_OPENDOOR` 结构性 no-op，见 `design-door-and-mapevent-20261016.md`
+            // §2.2）⇒ 与门相邻（±1）的 route 格**恒被挡**。
+            let door_ok = self
+                .maps
+                .get(map_id)
+                .is_some_and(|m| m.arround_door_opened(x, y));
+            if !door_ok {
+                continue;
+            }
             // `(!mapRoute.Envir.Flag.boNEEDHOLE) || EventMgr.GetEvent(...) != null`：
             // 无 `MapEvent` 模型 ⇒ 事件恒 null ⇒ 目标图 `boNEEDHOLE` 命中即**挡**（门跳过：result 保持
             // true，不换图、不回滚）。**登记：`Q004/R001/H007/H106` 四段带 `NEEDHOLE`，共 7 条真实
@@ -1595,6 +1626,16 @@ impl World {
     /// `steps > 1` 时照 oracle 的写法**先逐格判可走、再一次性移动**（`RunTo` 的
     /// `CanWalkEx(cur+1) && CanWalkEx(cur+2) && MoveToMovingObject(cur, cur+2)`；
     /// `HorseRunTo` 为 3 格）：中途任一格不可走 ⇒ 一格都不动（不是走一段再失败）。
+    ///
+    /// **非玩家 `MapRoute` 阻挡**（`BaseObject.Walk` 的非玩家支）：落点格含 `CellType::MapRoute`
+    /// 且 actor `race != ACTOR_RACE_PLAY` ⇒ 拒绝该步（坐标不变、返回 `false`），语义等价 oracle
+    /// `BaseObject.Walk` 的 `case CellType.MapRoute: result = false`（`BaseObject.cs:1548`）与**上游
+    /// `WalkTo` 回滚**（`DeleteFromMap` → `CurrX=oldX;CurrY=oldY` → `AddMapObject`，`:683-688`）。
+    /// **只挡非玩家**——玩家走 `PlayObject.Walk` 覆写（对 MapRoute 走 `EnterAnotherMap` **换图**、
+    /// 不是阻断），由 [`World::step_with_route`] 负责（`PlayObject.cs:1868-1892`）。
+    ///
+    /// 红检（变异牙）：删掉本函数里的 `race != ACTOR_RACE_PLAY` 落点检查 ⇒
+    /// `try_step_now` 会被怪物走上 route 格、`step_with_route_does_not_switch_for_monster` 必红。
     #[must_use]
     pub fn try_step_now(&mut self, actor_id: i32, dx: i32, dy: i32, steps: i32) -> bool {
         if steps <= 0 || (dx == 0 && dy == 0) {
@@ -1604,10 +1645,21 @@ impl World {
             return false;
         };
         let (fx, fy, map_id) = (e.x, e.y, e.map_id);
+        let race = e.race;
         for k in 1..=steps {
             if !self.cell_free(map_id, fx + dx * k, fy + dy * k, actor_id) {
                 return false;
             }
+        }
+        // 落点格（走完的 `CurrX/CurrY`）含 MapRoute 且非玩家 ⇒ 挡（oracle `BaseObject.cs:1548`
+        // `result = false` + `WalkTo` 回滚 `:683-688`）。玩家由 `step_with_route` 的换图负责。
+        if race != crate::entity::ACTOR_RACE_PLAY
+            && self
+                .maps
+                .get(map_id)
+                .is_some_and(|m| m.has_map_route(fx + dx * steps, fy + dy * steps))
+        {
+            return false;
         }
         self.try_step(actor_id, dx * steps, dy * steps)
     }
@@ -3104,8 +3156,16 @@ mod tests {
         );
     }
 
-    /// **负向对照**：怪物踩同一 route 格 ⇒ **不换图**（oracle `BaseObject.Walk:1548` 对 MapRoute
-    /// 只 `result = false`；换图是 `PlayObject.Walk` 覆写专属）。
+    /// **负向对照**：怪物踩同一 route 格 ⇒ **被挡在走前格**（oracle `BaseObject.Walk:1548` 对 `MapRoute`
+    /// 只 `result = false`，上游 `WalkTo` 回滚坐标 `:683-688`；换图是 `PlayObject.Walk` 覆写专属）。
+    ///
+    /// **原断言与 oracle 相反、已改正**（`openmir2-worker-5`，片 R1 `openmir2-maptrigger-monster-and-door`，
+    /// 2026-10-17）：旧版写 `assert!(out.moved, "怪物走一格仍成功")`——把「怪物不换图」误当成「怪物能走上
+    /// route 格」，漏了 oracle 非玩家 `MapRoute` 支的 `result = false` + `WalkTo` 回滚 ⇒ 实测怪物会走上
+    /// route 格（probe：`moved=true, pos=(5,5)`）。现按 oracle 改为 `!out.moved` + 坐标不动。
+    ///
+    /// 红检（变异牙）：删掉 `try_step_now` 的 `race != ACTOR_RACE_PLAY` 落点检查 ⇒ `out.moved` 变 true、
+    /// 坐标变 (5,5) ⇒ 本测必红。
     #[test]
     fn step_with_route_does_not_switch_for_monster() {
         let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
@@ -3134,9 +3194,53 @@ mod tests {
             },
         }]);
         let out = w.step_with_route(mon, 0, 1, 1);
-        assert!(out.moved, "怪物走一格仍成功");
+        assert!(
+            !out.moved,
+            "非玩家被 MapRoute 挡在走前格（oracle BaseObject.cs:1548 result=false + :683-688 回滚）"
+        );
         assert!(!out.changed_map, "怪物不得触发换图");
-        assert_eq!(w.entities.get(mon).unwrap().map_id, 0, "仍留原图");
+        let e = w.entities.get(mon).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 4), "坐标回到走前格、仍留原图");
+        assert!(w.sessions.map_changes().is_empty());
+    }
+
+    /// **非玩家 `MapRoute` 阻挡（生产怪物路径）**：`monai::walk_to` → `try_step_now` 对非玩家在落点
+    /// 格含 `MapRoute` 时**拒绝该步**（坐标不变）——oracle `BaseObject.Walk` 的非玩家支
+    /// （`BaseObject.cs:1548` `result = false` + `:683-688` 回滚）。
+    ///
+    /// 红检（变异牙）：把 `try_step_now` 的落点检查删掉 ⇒ 本测 `moved`/坐标断言必红。
+    #[test]
+    fn try_step_now_blocks_non_player_on_map_route_cell() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("mon");
+        let mon = w
+            .enter_map(
+                "mon",
+                {
+                    let mut e = Entity::new(0, "mon", 5, 4);
+                    e.race = ACTOR_RACE_MONSTER;
+                    e
+                },
+                0,
+            )
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 9,
+            },
+        }]);
+        assert!(
+            !w.try_step_now(mon, 0, 1, 1),
+            "非玩家踩 route 格 ⇒ 拒绝该步（oracle result=false）"
+        );
+        let e = w.entities.get(mon).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 4), "坐标不变（留在走前格）");
         assert!(w.sessions.map_changes().is_empty());
     }
 
@@ -3220,6 +3324,99 @@ mod tests {
         let e = w.entities.get(hero).unwrap();
         assert_eq!((e.map_id, e.x, e.y), (0, 5, 5), "未换图、未回滚");
         assert!(w.sessions.map_changes().is_empty(), "无换图簇");
+    }
+
+    /// **门控①（`ArroundDoorOpened`）**：route 落点格与**未开门相邻（±1）** ⇒ oracle
+    /// `PlayObject.cs:1872` `Envir.ArroundDoorOpened(CurrX,CurrY)` 返回 false ⇒ **整支跳过、不换图**，
+    /// 但走位照常（`moved == true`、坐标落在源图 route 格、无回滚、无 `MapChange`）——与 NEEDHOLE 门
+    /// 同型。oracle 门恒未开（`CM_OPENDOOR` 结构性 no-op）⇒ 门相邻 route 格**恒被挡**
+    /// （`tests/parity/m3/design-door-and-mapevent-20261016.md` §2.2）。
+    ///
+    /// 红检（变异牙）：把 `route_enter` 里的 `arround_door_opened` 门删掉 ⇒ 本测 `changed_map` 断言必红
+    /// （会误换图）。
+    #[test]
+    fn step_with_route_blocked_when_door_adjacent_unopened() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        // 源图 (5,4) 放一条未开门：route 落点 (5,5) 与门 Chebyshev 距离 1 ⇒ 挡。
+        w.set_map_doors(
+            0,
+            vec![crate::map::MapDoor {
+                x: 5,
+                y: 4,
+                n08: 1,
+                door_id: 0,
+                status_id: 0,
+            }],
+            vec![crate::map::DoorStatus {
+                opened: false,
+                open_tick: 0,
+            }],
+        );
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 9,
+            },
+        }]);
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(out.moved, "门控只挡换图，不挡走（Walk() 仍 true）");
+        assert!(!out.changed_map, "与未开门相邻 ⇒ 不换图");
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 5), "未换图、未回滚");
+        assert!(w.sessions.map_changes().is_empty(), "无换图簇");
+    }
+
+    /// **门控②（阳性对照）**：同一门 `Opened=true`（测试注入）⇒ `arround_door_opened` 返回 true ⇒
+    /// **照常换图**（证明门控读的是门状态、不是恒挡）。
+    #[test]
+    fn step_with_route_proceeds_when_door_adjacent_opened() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.set_map_doors(
+            0,
+            vec![crate::map::MapDoor {
+                x: 5,
+                y: 4,
+                n08: 1,
+                door_id: 0,
+                status_id: 0,
+            }],
+            vec![crate::map::DoorStatus {
+                opened: true,
+                open_tick: 0,
+            }],
+        );
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 9,
+            },
+        }]);
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(out.moved, "走位照常");
+        assert!(
+            out.changed_map,
+            "门开 ⇒ arround_door_opened=true ⇒ 照常换图"
+        );
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (1, 7, 9), "换到目标图目标格");
     }
 
     /// **must_fix #3**：同一源格有**多个** `MapRoute` 对象 ⇒ oracle `for` **不 break**，逐个

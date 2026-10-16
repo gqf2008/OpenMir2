@@ -163,7 +163,7 @@ pub enum OpenDoorDecision {
 
 /// `CM_OPENDOOR(1002)`：`PlayObject.Message.cs:817-819` → `ClientOpenDoor(processMsg.nParam2, nParam3)`。
 ///
-/// 输入是 `Envir.GetDoor(nX, nY)` 是否命中（本宿主无门注册表 ⇒ 接线层传 `false`）。
+/// 输入是 `Envir.GetDoor(nX, nY)` 是否命中（接线层传 `false`——`CM_OPENDOOR` 恒零出帧、不看门表）。
 /// **无论走哪支都零出帧** —— 这是 oracle 两条早退合成出的既有形态（见模块头 BUG-REPLICA 1）。
 #[must_use]
 pub fn client_open_door(has_door_at_target: bool) -> (OpenDoorDecision, Vec<DefFrame>) {

@@ -188,6 +188,32 @@ pub struct MapRouteSpec {
     pub hop: RouteHop,
 }
 
+/// `OpenMir2.Data.DoorStatus`（`src/OpenMir2/Data/DoorStatus.cs:3-7`）：**可被同组多门共享**的
+/// 可变状态（引用类型 ⇒ 同组门共享同一实例）。
+///
+/// 与 `crates/envir/src/mapfile.rs:83-90` 的 `DoorStatus` **逐字段同型**（`open_tick` 是 `i32`
+/// 不是 `i64`——对齐 C# `int`；`crates/world` 不依赖 `crates/envir`，故此处镜像定义，由宿主搬运）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DoorStatus {
+    pub opened: bool,
+    pub open_tick: i32,
+}
+
+/// `src/Modules/SystemModule/Data/MapDoor.cs` 的一条门（镜像 `crates/envir/src/mapfile.rs:92-102`）。
+///
+/// `status_id` 是 C# `MapDoor.Status` 对象身份的 Rust 表示：两条门 `status_id` 相同 ⇔ C# 里它们
+/// 是**同一个** `DoorStatus` 实例。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapDoor {
+    pub x: i16,
+    pub y: i16,
+    /// C# `n08 = btDoorIndex & 0x7F`（> 0）。
+    pub n08: u8,
+    /// `LoadMapData` 里恒为 0（`MapDoor.DoorId` 默认值）。
+    pub door_id: i32,
+    pub status_id: usize,
+}
+
 /// 地图格子网格（`Envirnoment` 的 `CellArray` + `Width`/`Height`）。
 ///
 /// 数组**恒非空**（至少 1 格），以便复刻 `GetCellInfo` 失败时返回 `CellArray[0]` 的行为。
@@ -204,6 +230,11 @@ pub struct MapGrid {
     /// `mapRoute.Envir.Flag.boNEEDHOLE`）——本图作为 route 的落地目标时才有意义，故由宿主
     /// （`bins/game-svr`）按注册表逐图灌入；缺省 `false`（合成 golden 场景行为不变）。
     need_hole: bool,
+    /// 每图门表（`Envirnoment.DoorList`，`:48`/`:64`）。由宿主从注册表
+    /// （`MapFile.doors`）灌入；缺省空 ⇒ [`MapGrid::arround_door_opened`] 恒 `true`（改动前行为不变）。
+    doors: Vec<MapDoor>,
+    /// 门的 `DoorStatus` 实例表（对应 C# 各 `DoorStatus` 对象，`door.status_id` 索引）。
+    door_status: Vec<DoorStatus>,
 }
 
 impl MapGrid {
@@ -223,6 +254,8 @@ impl MapGrid {
             cells,
             routes: Vec::new(),
             need_hole: false,
+            doors: Vec::new(),
+            door_status: Vec::new(),
         }
     }
 
@@ -389,6 +422,55 @@ impl MapGrid {
         self.routes
             .iter()
             .find_map(|(id, hop)| (*id == route_id).then_some(hop))
+    }
+
+    /// 宿主 `bins/game-svr` 把注册表 `MapFile.doors`/`door_status` 搬进来
+    /// （`Envirnoment.cs:934-991` 加载即建 `DoorList`）。缺省空 ⇒
+    /// [`MapGrid::arround_door_opened`] 恒 `true`（改动前行为逐字节不变）。幂等（重复调用覆盖）。
+    pub fn set_doors(&mut self, doors: Vec<MapDoor>, status: Vec<DoorStatus>) {
+        self.doors = doors;
+        self.door_status = status;
+    }
+
+    /// `Envirnoment.GetDoor(nX, nY, ref door)`（`Envirnoment.cs:1241-1254`）：坐标**精确**匹配。
+    #[must_use]
+    pub fn get_door(&self, x: i32, y: i32) -> Option<MapDoor> {
+        self.doors
+            .iter()
+            .find(|d| i32::from(d.x) == x && i32::from(d.y) == y)
+            .copied()
+    }
+
+    /// `Envirnoment.ArroundDoorOpened(nX, nY)`（`Envirnoment.cs:1185-1203`）：**±1 Chebyshev 邻域**内
+    /// 有门且该门 `!Status.Opened` ⇒ `false`（挡住 MapRoute 换图；`PlayObject.cs:1872`）。
+    ///
+    /// 逐行照 oracle 的 `for`：`|door.nX - nX| <= 1 && |door.nY - nY| <= 1` 命中即查该门
+    /// `Status.Opened`，**未开即 `result = false; break`**。oracle 门恒未开（`CM_OPENDOOR` 结构性
+    /// no-op，见 `tests/parity/m3/design-door-and-mapevent-20261016.md` §2.2）⇒ 与门相邻的 route 格
+    /// **恒被挡**；无门表（合成场景）⇒ 恒 `true`。
+    #[must_use]
+    pub fn arround_door_opened(&self, x: i32, y: i32) -> bool {
+        // oracle 的 `for` + `break`：存在「±1 邻域内且未开」的门 ⇒ `false`；否则 `true`。
+        !self.doors.iter().any(|door| {
+            (i32::from(door.x) - x).abs() <= 1
+                && (i32::from(door.y) - y).abs() <= 1
+                && !self
+                    .door_status
+                    .get(door.status_id)
+                    .is_some_and(|s| s.opened)
+        })
+    }
+
+    /// 某格 `ObjList` 是否含 `CellType::MapRoute`（`BaseObject.Walk` 的非玩家支读 `CurrX/CurrY` 格，
+    /// `BaseObject.cs:1548`）。`cellSuccess=false`（越界/非 `Valid`）⇒ 恒 `false`（oracle 不进 `for`）。
+    #[must_use]
+    pub fn has_map_route(&self, x: i32, y: i32) -> bool {
+        let (cell, success) = self.get_cell_info(x, y);
+        success
+            && cell
+                .obj_list
+                .iter()
+                .any(|o| o.cell_type == CellType::MapRoute)
     }
 
     fn add_cell_object(
@@ -588,5 +670,94 @@ mod tests {
         );
         assert_eq!(g.route_hop(9), Some(&hop));
         assert_eq!(g.route_hop(7), None, "被丢弃的 route 不入表");
+    }
+
+    /// `MapGrid::has_map_route` 只对**在界且 Valid** 的 route 格为 `true`。
+    ///
+    /// 红检（变异牙）：把 `success &&` 去掉（对越界/墙格也读 cell0）⇒ 越界断言必红。
+    #[test]
+    fn has_map_route_only_true_for_valid_route_cell() {
+        let mut g = MapGrid::new(8, 8);
+        let hop = RouteHop {
+            dst_map_id: 0,
+            dst_x: 1,
+            dst_y: 1,
+        };
+        assert!(!g.has_map_route(2, 2), "空格无 route");
+        assert!(g.add_map_route(2, 2, 9, hop));
+        assert!(g.has_map_route(2, 2), "route 格命中");
+        assert!(!g.has_map_route(3, 3), "普通格不命中");
+        assert!(!g.has_map_route(99, 99), "越界不命中（oracle 不进 for）");
+    }
+
+    /// `arround_door_opened`（`Envirnoment.cs:1185-1203`）：±1 Chebyshev 邻域内有**未开**门 ⇒
+    /// `false`；门开 ⇒ `true`；距离 2 的门不影响。
+    ///
+    /// 红检（变异牙）：把 `<= 1` 改成 `< 1`（只判同格）⇒ `(5,4)` 门对 `(5,5)` 的断言必红；
+    /// 把 `!s.opened` 判据反过来 ⇒ opened=true 的断言必红。
+    #[test]
+    fn arround_door_opened_chebyshev_one() {
+        let mut g = MapGrid::new(8, 8);
+        let door = |x, y| MapDoor {
+            x,
+            y,
+            n08: 1,
+            door_id: 0,
+            status_id: 0,
+        };
+        // 未开门。
+        g.set_doors(
+            vec![door(5, 4), door(1, 1)],
+            vec![
+                DoorStatus {
+                    opened: false,
+                    open_tick: 0,
+                },
+                DoorStatus {
+                    opened: false,
+                    open_tick: 0,
+                },
+            ],
+        );
+        // (5,5) 与门 (5,4) Chebyshev 距离 1 ⇒ 未开 ⇒ 挡。
+        assert!(!g.arround_door_opened(5, 5), "±1 内有未开门 ⇒ false");
+        assert!(!g.arround_door_opened(5, 4), "同格门 ⇒ false");
+        assert!(!g.arround_door_opened(4, 5), "对角 (±1,±1) ⇒ false");
+        // (3,3) 与门 (5,4) 距离 (2,1) ⇒ 邻域外 ⇒ true（(1,1) 也不在邻域）。
+        assert!(g.arround_door_opened(3, 3), "距离 2 的门不影响 ⇒ true");
+        // 门开 ⇒ true。
+        g.set_doors(
+            vec![door(5, 4)],
+            vec![DoorStatus {
+                opened: true,
+                open_tick: 0,
+            }],
+        );
+        assert!(g.arround_door_opened(5, 5), "门开 ⇒ true");
+    }
+
+    /// `get_door`：坐标**精确**匹配（`Envirnoment.cs:1241-1254`）；无门 ⇒ `None`。
+    #[test]
+    fn get_door_exact_match() {
+        let mut g = MapGrid::new(8, 8);
+        let d = MapDoor {
+            x: 3,
+            y: 4,
+            n08: 2,
+            door_id: 0,
+            status_id: 0,
+        };
+        g.set_doors(vec![d], vec![DoorStatus::default()]);
+        assert_eq!(g.get_door(3, 4), Some(d));
+        assert_eq!(g.get_door(3, 5), None, "邻格不命中");
+        assert_eq!(g.get_door(4, 4), None);
+    }
+
+    /// `set_doors` 空表 ⇒ `arround_door_opened` 恒 `true`（回归保护：改动前行为不变）。
+    #[test]
+    fn arround_door_opened_true_without_doors() {
+        let g = MapGrid::new(8, 8);
+        assert!(g.arround_door_opened(5, 5));
+        assert!(g.arround_door_opened(0, 0));
     }
 }
