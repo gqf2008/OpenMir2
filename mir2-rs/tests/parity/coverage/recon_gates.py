@@ -1963,7 +1963,11 @@ def cmd_mutate(args):
            "SM_RECONNECT", "SM_CHANGEFACE", "SM_MAGICFIRE_FAIL", "SM_PLAYDICE", "SM_ITEMSHOW"]
     # 已接线（orphan-encoder-wiring 批已接生产发点）：SM_DISAPPEAR(30) 离开 AOI/Dispose 的消失帧、
     # SM_WHISPER(103) 私聊下发（红名单 v2 §3 V2-01 / V2-12；对照 dispatch 门 rust_at 有值）。
-    _wired_now = {"SM_DISAPPEAR", "SM_WHISPER"}
+    _wired_now = {"SM_DISAPPEAR", "SM_WHISPER",
+        # 片107（世界 tick 扩容）接线：滚动公告 LineNotice 的 `[`/`{` 支发 SM_MOVEMESSAGE
+        # （bins/game-svr/src/line_notice.rs 的 build_frame 分支 + 生产逐会话接线）。
+        "SM_MOVEMESSAGE",
+    }
     # 仍 blocked（编码器已落地、生产路径无发射点）；各自 blocked_by 与出处（红名单 v2 §3 finding）：
     #   · 传送簇（切图/TransMap：HIDE 侧随切图簇；对照 SHOW(801)/SHOW2(807) 经
     #     sessionwire::map_change_frames 已接）—— SM_SPACEMOVE_HIDE(800)/SM_SPACEMOVE_HIDE2(806)（V2-02）。
@@ -1983,7 +1987,7 @@ def cmd_mutate(args):
     _blocked = {"SM_SPACEMOVE_HIDE", "SM_SPACEMOVE_HIDE2", "SM_SKELETON", "SM_ALIVE",
                 "SM_DIGUP", "SM_DIGDOWN", "SM_FLYAXE", "SM_LIGHTING", "SM_OPENHEALTH",
                 "SM_CLOSEHEALTH", "SM_INSTANCEHEALGUAGE", "SM_CHARSTATUSCHANGED", "SM_BREAKWEAPON",
-                "SM_LAMPCHANGEDURA", "SM_MOVEMESSAGE", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL",
+                "SM_LAMPCHANGEDURA", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL",
                 "SM_QUERYYBSELL", "SM_716", "SM_RECONNECT", "SM_CHANGEFACE", "SM_MAGICFIRE_FAIL",
                 "SM_PLAYDICE", "SM_ITEMSHOW", "SM_HIDEEVENT", "SM_SHOWEVENT", "SM_OPENDOOR_OK",
                 "SM_CLOSEDOOR"}
