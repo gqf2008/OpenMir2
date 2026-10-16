@@ -1724,18 +1724,77 @@ def cmd_mutate(args):
     finally:
         shutil.rmtree(_tmp_m6, ignore_errors=True)
 
-    # M6c —— 真语料回归：报告 §3 的 30 个 orphan ident 必须**全无生产发射点**（旧口径全绿）。
+    # M6c —— 真语料回归：红名单 v2 §3 的 30 个 orphan ident（出处 `mir2-rs/tests/parity/redlist-v2-20261016.md` §3）。
+    # 双向不变式（orphan 接线批起）：接线后 SM_DISAPPEAR(30)/SM_WHISPER(103) 已有生产发射点，故不再断言
+    # 「全 30 条无发射点」，改为断言两组**互斥且并集守恒**，两向漏判一起防：
+    #   (a) wired_now 必均有生产发射点（否则 FAIL —— 防「接线被静默摘掉」）；
+    #   (b) blocked 必均无生产发射点（否则 FAIL —— 防「未解锁却被谎报已接」）；
+    #   (c) wired_now ∩ blocked = ∅ 且 wired_now ∪ blocked = 冻结全集 _r3（防将来漏搬 blocked）。
     _rep_corpus = RustCorpus(rust_source_dirs(repo, exclude=DISPATCH_EXCLUDE))
     _live_w, _spans_w = production_live_functions(_rep_corpus)
+    # 红名单 v2 §3 冻结全集（30 条；**勿删条目**——并集守恒断言依赖它）。
     _r3 = ["SM_DISAPPEAR", "SM_SPACEMOVE_HIDE", "SM_SPACEMOVE_HIDE2", "SM_SKELETON", "SM_ALIVE",
            "SM_DIGUP", "SM_DIGDOWN", "SM_FLYAXE", "SM_LIGHTING", "SM_CLOSEHEALTH", "SM_OPENHEALTH",
            "SM_INSTANCEHEALGUAGE", "SM_CHARSTATUSCHANGED", "SM_BREAKWEAPON", "SM_LAMPCHANGEDURA",
            "SM_MOVEMESSAGE", "SM_HIDEEVENT", "SM_SHOWEVENT", "SM_OPENDOOR_OK", "SM_CLOSEDOOR",
            "SM_WHISPER", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL", "SM_QUERYYBSELL", "SM_716",
            "SM_RECONNECT", "SM_CHANGEFACE", "SM_MAGICFIRE_FAIL", "SM_PLAYDICE", "SM_ITEMSHOW"]
-    _still_green = [sm for sm in _r3 if outbound_emit_at(_rep_corpus, sm, _live_w, _spans_w) is not None]
-    add("M6c 真语料：报告 §3 全 30 个 orphan ident 均无生产发射点（漏判=%s）" % (_still_green or "无"),
-        not _still_green)
+    # 已接线（orphan-encoder-wiring 批已接生产发点）：SM_DISAPPEAR(30) 离开 AOI/Dispose 的消失帧、
+    # SM_WHISPER(103) 私聊下发（红名单 v2 §3 V2-01 / V2-12；对照 dispatch 门 rust_at 有值）。
+    _wired_now = {"SM_DISAPPEAR", "SM_WHISPER"}
+    # 仍 blocked（编码器已落地、生产路径无发射点）；各自 blocked_by 与出处（红名单 v2 §3 finding）：
+    #   · 传送簇（切图/TransMap：HIDE 侧随切图簇；对照 SHOW(801)/SHOW2(807) 经
+    #     sessionwire::map_change_frames 已接）—— SM_SPACEMOVE_HIDE(800)/SM_SPACEMOVE_HIDE2(806)（V2-02）。
+    #   · 怪物模型/形态簇（Entity 缺 skeleton 等形态字段 ⇒ 怪物动作帧发不出）
+    #     —— SM_SKELETON(33)（V2-03）/ SM_ALIVE(27)（V2-04）/ SM_DIGUP(20)/SM_DIGDOWN(21)/SM_FLYAXE(22)/
+    #        SM_LIGHTING(23)（V2-05）。
+    #   · buff / 状态效果簇（HP 量条 + 状态位 + 武器破碎 + 照明耐久；随 world-tick-expansion buff 批）
+    #     —— SM_OPENHEALTH(1100)/SM_CLOSEHEALTH(1101)/SM_INSTANCEHEALGUAGE(1103)（V2-06）/
+    #        SM_CHARSTATUSCHANGED(657)（V2-07）/ SM_BREAKWEAPON(1102)（V2-08）/ SM_LAMPCHANGEDURA(655)（V2-09）。
+    #   · NPC Run / 脚本事件簇（脚本/事件驱动的移动文字与机关显隐；world-tick-expansion NPC Run 批）
+    #     —— SM_MOVEMESSAGE(99)（V2-10）/ SM_HIDEEVENT(805)/SM_SHOWEVENT(804)（V2-11）。
+    #   · 门与事件系统（门显隐 612/614；随门系统进 MapGrid，见门设计件）—— SM_OPENDOOR_OK(612)/SM_CLOSEDOOR(614)（V2-11）。
+    #   · 商人脚本簇（商人/公务员/元宝寄售对话）—— SM_MERCHANTDLGCLOSE(644)/SM_QUERYYBDEAL(23023)/
+    #     SM_QUERYYBSELL(23021)/SM_716(716)（V2-13）。
+    #   · 重连 / 换脸 / 掷骰 / 地面物品簇（杂项）—— SM_RECONNECT(802)/SM_CHANGEFACE(1104)/SM_MAGICFIRE_FAIL(639)/
+    #     SM_PLAYDICE(8001)/SM_ITEMSHOW(610)（V2-14）。
+    _blocked = {"SM_SPACEMOVE_HIDE", "SM_SPACEMOVE_HIDE2", "SM_SKELETON", "SM_ALIVE",
+                "SM_DIGUP", "SM_DIGDOWN", "SM_FLYAXE", "SM_LIGHTING", "SM_OPENHEALTH",
+                "SM_CLOSEHEALTH", "SM_INSTANCEHEALGUAGE", "SM_CHARSTATUSCHANGED", "SM_BREAKWEAPON",
+                "SM_LAMPCHANGEDURA", "SM_MOVEMESSAGE", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL",
+                "SM_QUERYYBSELL", "SM_716", "SM_RECONNECT", "SM_CHANGEFACE", "SM_MAGICFIRE_FAIL",
+                "SM_PLAYDICE", "SM_ITEMSHOW", "SM_HIDEEVENT", "SM_SHOWEVENT", "SM_OPENDOOR_OK",
+                "SM_CLOSEDOOR"}
+
+    def _m6c_failures(wired, blocked):
+        """双向不变式违例清单（空 = 全绿）；wired/blocked 可传变异集合做牙。"""
+        fails = []
+        for sm in sorted(wired):
+            if outbound_emit_at(_rep_corpus, sm, _live_w, _spans_w) is None:
+                fails.append("wired 无发射点:" + sm)
+        for sm in sorted(blocked):
+            if outbound_emit_at(_rep_corpus, sm, _live_w, _spans_w) is not None:
+                fails.append("blocked 有发射点:" + sm)
+        _dup = sorted(wired & blocked)
+        if _dup:
+            fails.append("wired∩blocked 非空:" + ",".join(_dup))
+        _union = wired | blocked
+        _miss = sorted(set(_r3) - _union)
+        _extra = sorted(_union - set(_r3))
+        if _miss or _extra:
+            fails.append("并集≠红名单30(缺=%s 多=%s)" % (_miss or "无", _extra or "无"))
+        return fails
+
+    _m6c_real = _m6c_failures(_wired_now, _blocked)
+    add("M6c 真语料：orphan 双向不变式（wired 有发点 ∧ blocked 无发点 ∧ 互斥 ∧ 并集=30；违例=%s）"
+        % (_m6c_real or "无"), not _m6c_real)
+    # 三向牙：任一方向被改坏必红（构造变异，逐条实测）。
+    add("M6c 牙① SM_DISAPPEAR 挪回 blocked ⇒ 必红（它有生产发射点）",
+        bool(_m6c_failures(_wired_now - {"SM_DISAPPEAR"}, _blocked | {"SM_DISAPPEAR"})))
+    add("M6c 牙② SM_SKELETON 挪进 wired_now ⇒ 必红（它无生产发射点）",
+        bool(_m6c_failures(_wired_now | {"SM_SKELETON"}, _blocked - {"SM_SKELETON"})))
+    add("M6c 牙③ SM_SKELETON 从两集合皆删 ⇒ 并集守恒必红（漏搬一防）",
+        bool(_m6c_failures(_wired_now, _blocked - {"SM_SKELETON"})))
 
     # M6d —— 可达性口径鲁棒性（防过近似制造假绿）：名字级宽进图 vs「唯一名 + 显式 `::` 限定」图，
     #         在真语料上必须给出**相同的 outbound 判定集**（同一组非 implemented）。
