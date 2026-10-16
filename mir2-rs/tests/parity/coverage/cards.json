@@ -96,7 +96,8 @@
     "content:DenyChrNameList.txt": "src/M2Server/M2Share.cs:1626（LoadDenyChrNameList 体整段注释）",
     "content:DisableSendMsgList.txt": "src/M2Server/M2Share.cs:1357（LoadDisableSendMsgList 体整段注释，恒 return false）",
     "inbound:CM_1042": "src/M2Server/Player/PlayObject.Message.cs:996（case 体仅 LogService.Warn，无出帧/无状态改动）",
-    "content:NoClearMonList.txt": "src/Modules/SystemModule/SystemShare.cs:1694（GetNoClearMonList 体整段注释 :1697-1704 ⇒ 恒 return false；同形副本 src/M2Server/M2Share.cs:1782 亦注释）+ src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:2994（唯一消费点 `if (SystemShare.GetNoClearMonList(mon.ChrName)) continue;` 恒假 ⇒ 该名单无行为效果）；同判据已登记 whitelist.md T-60；Rust 侧 mir2-rs/crates/envir/src/noclearmonlist.rs:30-37 亦注明 oracle 恒 false"
+    "content:NoClearMonList.txt": "src/Modules/SystemModule/SystemShare.cs:1694（GetNoClearMonList 体整段注释 :1697-1704 ⇒ 恒 return false；同形副本 src/M2Server/M2Share.cs:1782 亦注释）+ src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:2994（唯一消费点 `if (SystemShare.GetNoClearMonList(mon.ChrName)) continue;` 恒假 ⇒ 该名单无行为效果）；同判据已登记 whitelist.md T-60；Rust 侧 mir2-rs/crates/envir/src/noclearmonlist.rs:30-37 亦注明 oracle 恒 false",
+    "content:GameLogItemNameList.txt": "src/GameSrv/DB/MySqlDB.cs:87-90（三个布尔门 GameLogGold/GameLogGameGold/GameLogGamePoint 由本名单赋值） ⇒ 门后 20 处消费点 AddEventLog(...) 调用体**全部被注释**：src/M2Server/Actor/BaseObject.cs:761-766、src/M2Server/Castle/UserCastle.cs:801-806/830/866、src/M2Server/Player/PlayObject.Base.cs:83/876、src/M2Server/Player/PlayObject.Message.cs:458/477/499/520/563、src/M2Server/Player/PlayObject.Operate.cs:1146/1172、src/M2Server/Player/PlayObject.Sale.cs:326/413（连 `{` 一起注释）、src/Modules/GoldDealSystem/Service/GoldDealService.cs:323/410（同）；⇒ 该名单对运行行为无效果（与 whitelist.md T-61 一致）"
   },
   "known_dead_consumer": {
     "content:MiniMap.txt": "mir2-rs/bins/game-svr/src/main.rs:7414（enter_cfg.minimap take()+glog；下发帧 CM_WANTMINIMAP 未接）",
