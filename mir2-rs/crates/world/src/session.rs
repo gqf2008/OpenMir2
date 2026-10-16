@@ -117,6 +117,14 @@ impl SessionRegistry {
     pub fn map_changes(&self) -> &[MapChange] {
         &self.map_changes
     }
+
+    /// **L1 TransMap 回滚**：把本轮 `map_changes` 截回 `len`（撤掉本次未落地的切图记录）。
+    ///
+    /// 用在 `step_with_route` 的 `EnterAnotherMap` 失败回滚支（oracle `Walk()` 返回 false ⇒ 宿主
+    /// 不发帧 ⇒ 已记的 `633/634` 也必须撤掉，否则宿主会多发一组换图簇）。
+    pub fn truncate_map_changes(&mut self, len: usize) {
+        self.map_changes.truncate(len);
+    }
 }
 
 impl World {
@@ -288,7 +296,9 @@ impl World {
     }
 
     /// 从某张图的格子里摘除实体（按 `ActorId` 匹配）。
-    fn remove_from_map(&mut self, actor_id: i32, map_id: usize) {
+    ///
+    /// `pub(crate)`：`world.rs` 的 `rollback_move`（走前格回滚）也要复用。
+    pub(crate) fn remove_from_map(&mut self, actor_id: i32, map_id: usize) {
         let Some(e) = self.entities.get(actor_id) else {
             return;
         };

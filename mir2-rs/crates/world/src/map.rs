@@ -162,6 +162,32 @@ pub struct MoveRequest {
     pub add_time: i64,
 }
 
+/// 一条地图连接点的**落地目标**（`MapRouteItem` 的 `Envir/X/Y` 三元组）。
+///
+/// 等价于 oracle 的 `MapRouteItem.Envir`（目标图）+ `.X`/`.Y`（目标坐标）；本仓用 `map_id` 而非
+/// `IEnvirnoment` 引用（见 `crates/envir` 的 `MapRegistry`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RouteHop {
+    pub dst_map_id: usize,
+    pub dst_x: i32,
+    pub dst_y: i32,
+}
+
+/// 启动灌入**一条**连接点所需的最小信息（`map_id` 由调用方按注册表下标给出）。
+///
+/// `crates/world` 不依赖 `crates/envir`（避免反向依赖）⇒ 用本中立结构承载
+/// `mir2_envir::ResolvedRoute` 的字段，由宿主（`bins/game-svr`）做映射。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapRouteSpec {
+    /// 源图 `map_id`。
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+    /// `MapRouteItem.RouteId`（帧不读，仅作格子→hop 的键；唯一即可）。
+    pub route_id: i32,
+    pub hop: RouteHop,
+}
+
 /// 地图格子网格（`Envirnoment` 的 `CellArray` + `Width`/`Height`）。
 ///
 /// 数组**恒非空**（至少 1 格），以便复刻 `GetCellInfo` 失败时返回 `CellArray[0]` 的行为。
@@ -170,6 +196,14 @@ pub struct MapGrid {
     pub width: i32,
     pub height: i32,
     cells: Vec<MapCellInfo>,
+    /// `route_id` → 落地目标。替代 oracle 的全局 `M2Share.CellObjectMgr`（帧不读该表）。
+    routes: Vec<(i32, RouteHop)>,
+    /// `Envirnoment.Flag.boNEEDHOLE`（`MapInfo.txt` 的 `NEEDHOLE` 段）。
+    ///
+    /// **仅在 `PlayObject.Walk` 的 `MapRoute` 支被读**（`PlayObject.cs:1874`：作为**目标图**的
+    /// `mapRoute.Envir.Flag.boNEEDHOLE`）——本图作为 route 的落地目标时才有意义，故由宿主
+    /// （`bins/game-svr`）按注册表逐图灌入；缺省 `false`（合成 golden 场景行为不变）。
+    need_hole: bool,
 }
 
 impl MapGrid {
@@ -187,7 +221,20 @@ impl MapGrid {
             width,
             height,
             cells,
+            routes: Vec::new(),
+            need_hole: false,
         }
+    }
+
+    /// 设 `Flag.boNEEDHOLE`（route 落地门的输入；宿主按注册表逐图灌入，幂等）。
+    pub fn set_need_hole(&mut self, need_hole: bool) {
+        self.need_hole = need_hole;
+    }
+
+    /// 读 `Flag.boNEEDHOLE`（`PlayObject.cs:1874` 作为**目标图**读）。
+    #[must_use]
+    pub fn need_hole(&self) -> bool {
+        self.need_hole
     }
 
     /// 对应 `CellMatch(nX, nY) => nX >= 0 && nX < Width && nY >= 0 && nY < Height`。
@@ -295,6 +342,53 @@ impl MapGrid {
         add_time: i64,
     ) -> bool {
         self.add_cell_object(x, y, CellType::Item, obj_id, Some(meta), add_time)
+    }
+
+    /// 对应 `Envirnoment.AddMapRoute(nX, nY, mapRoute)`（`Envirnoment.cs:169-193`）：
+    /// `CellMatch` 且在界内 `cell.Valid` 时，往该格 `ObjList` 追加
+    /// `CellObject{CellType=MapRoute, CellObjId=route_id}`，并把 `route_id → hop` 记进本图表。
+    ///
+    /// 与 `add_map_object` 的差别：oracle 的 route `CellObject.ActorObject` 取**结构体默认 `false`**
+    /// （`CellObject.cs` 的 `bool ActorObject` 零值）⇒ 这里不能沿用 `add_cell_object`（它硬置
+    /// `actor_object = true`，会让 route 格被 `cell_free`/`move_object` 当活体读 `entities`）。
+    ///
+    /// **红检（变异牙）**：把 `if cell_success && cell.valid()` 支改成恒真（`if true`，即不查格子可否走）
+    /// ⇒ 「墙格不落 route」的断言必红。
+    pub fn add_map_route(&mut self, x: i32, y: i32, route_id: i32, hop: RouteHop) -> bool {
+        // `if (!CellMatch(nX, nY)) return;` —— 注意 oracle 失败时**不**记 route 表。
+        if !self.cell_match(x, y) {
+            return false;
+        }
+        let added = {
+            let (cell, cell_success) = self.get_cell_info_mut(x, y);
+            if cell_success && cell.valid() {
+                cell.add(CellObject {
+                    cell_obj_id: route_id,
+                    cell_type: CellType::MapRoute,
+                    actor_object: false,
+                    add_time: 0,
+                    item: None,
+                });
+                true
+            } else {
+                false
+            }
+        };
+        if added {
+            // `M2Share.CellObjectMgr.Add(cellObject.CellObjId, mapRoute)`（在 Valid 支内）。
+            if !self.routes.iter().any(|(id, _)| *id == route_id) {
+                self.routes.push((route_id, hop));
+            }
+        }
+        added
+    }
+
+    /// 读 `route_id` → 落地目标（`M2Share.CellObjectMgr.Get<MapRouteItem>` 的等价物）。
+    #[must_use]
+    pub fn route_hop(&self, route_id: i32) -> Option<&RouteHop> {
+        self.routes
+            .iter()
+            .find_map(|(id, hop)| (*id == route_id).then_some(hop))
     }
 
     fn add_cell_object(
@@ -467,5 +561,32 @@ mod tests {
         );
         assert!(moved, "boFlag=true 时跳过阻挡判定");
         assert_eq!(g.cell(3, 2).count(), 2);
+    }
+
+    /// **L1 TransMap 世界侧落格**：`AddMapRoute` 的 `cell.valid` 门照抄——
+    /// 墙格（`LowWall`）与越界格**不落** route，可走格落 `CellType::MapRoute` 且记进 route 表。
+    ///
+    /// 红检（变异牙）：去掉 `add_map_route` 的 `success && cell.valid()` 门 ⇒ 墙格/越界断言必红。
+    #[test]
+    fn add_map_route_requires_valid_in_bounds_cell() {
+        let mut g = MapGrid::new(8, 8);
+        g.set_map_xy_flag(1, 1, false); // → LowWall（不可走）
+        let hop = RouteHop {
+            dst_map_id: 0,
+            dst_x: 7,
+            dst_y: 9,
+        };
+        assert!(!g.add_map_route(1, 1, 7, hop), "墙格不落 route");
+        assert!(!g.add_map_route(-1, 0, 8, hop), "越界不落 route");
+        assert!(g.add_map_route(2, 2, 9, hop), "可走格落 route");
+        assert_eq!(g.cell(2, 2).count(), 1);
+        assert_eq!(g.cell(2, 2).obj_list[0].cell_type, CellType::MapRoute);
+        assert_eq!(g.cell(2, 2).obj_list[0].cell_obj_id, 9);
+        assert!(
+            !g.cell(2, 2).obj_list[0].actor_object,
+            "route CellObject 不是活体（oracle ActorObject 默认 false）"
+        );
+        assert_eq!(g.route_hop(9), Some(&hop));
+        assert_eq!(g.route_hop(7), None, "被丢弃的 route 不入表");
     }
 }

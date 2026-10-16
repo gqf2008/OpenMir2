@@ -4450,6 +4450,7 @@ fn handle_move_cmd(
     world: &mut mir2_world::World,
     displays: &mut downlink::DisplayTable,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    registry: Option<&mir2_envir::MapRegistry>,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -4495,15 +4496,22 @@ fn handle_move_cmd(
                 return;
             }
             set_display_dir(displays, actor_id, n_dir);
+            // **L1 TransMap**：oracle `ClientChangeDir` 原地转身也调 `Walk(RM_TURN)`
+            // （`PlayObject.Operate.cs:334`）⇒ 转身前在**当前格**做路线检查（命中 MapRoute ⇒ 换图）。
+            if world.walk_route_check(actor_id) {
+                // 帧序：换图簇（633/634）必须先于 SM_TURN（oracle `Walk` 尾段才发移动/转身帧）。
+                drain_map_change(world, online, gates, displays, registry);
+            }
+            // 换图后坐标取新值（oracle 用改后的 `CurrX/CurrY` 发 `RM_TURN`）。
+            let (cx, cy) = world
+                .entities
+                .get(actor_id)
+                .map_or((cur_x, cur_y), |e| (e.x, e.y));
             match displays.get(actor_id) {
                 Some(d) => {
                     // `CM_TURN` 的 `Msg` 恒空 ⇒ 无名尾（见 `downlink::turn_pair_nameless`）。
-                    let bodies = downlink::turn_pair_nameless(
-                        actor_id,
-                        wire_coord(cur_x),
-                        wire_coord(cur_y),
-                        d,
-                    );
+                    let bodies =
+                        downlink::turn_pair_nameless(actor_id, wire_coord(cx), wire_coord(cy), d);
                     broadcast_ref_msg(world, online, gates, actor_id, &bodies);
                 }
                 None => glog!(
@@ -4519,12 +4527,19 @@ fn handle_move_cmd(
             let dir = movewire::next_direction(cur_x, cur_y, nx, ny);
             let (ddx, ddy) = movewire::direction_delta(dir);
             let steps = movewire::steps_for(ident);
-            if !world.try_step_now(actor_id, ddx, ddy, steps) {
+            let outcome = world.step_with_route(actor_id, ddx, ddy, steps);
+            if !outcome.moved {
                 glog!(
                     "DBG",
                     "移动：actor_id={actor_id} 方向={dir} {steps} 格被挡/越界 ⇒ 不动（oracle 回 RM_MOVEFAIL，登记未接）ChrName={chr_name}"
                 );
                 return;
+            }
+            // **L1 TransMap**：踩格换图 ⇒ 换图簇（633/634）必须先于 SM_WALK/SM_RUN（oracle
+            // `PlayObject.Walk` 内 `EnterAnotherMap` 的 633/634 在尾段 `SendRefMsg(nIdent,…)` 之前）。
+            // 移动帧本身也是换图后用**新图/新坐标**广播（oracle 用改后的 `CurrX/CurrY`）。
+            if outcome.changed_map {
+                drain_map_change(world, online, gates, displays, registry);
             }
             set_display_dir(displays, actor_id, dir);
             // 体力/魔力点（`PlayObject.Attack.cs:1424` 走路 `HealthTick -= 10`；
@@ -7230,8 +7245,35 @@ fn sim_loop(
         for map_id in 0..world.maps.len() {
             if let Some(f) = reg.flag_of(map_id) {
                 world.set_map_exp_rate(map_id, f.bo_exprate.then_some(f.exp_rate));
+                // `Envir.Flag.boNEEDHOLE`（route 落地门；`PlayObject.cs:1874` 作为目标图读）。
+                world.set_map_need_hole(map_id, f.bo_needhole);
             }
         }
+        // **L1 TransMap**：把注册表解析出的地图连接点灌进各图格子（oracle `Maps.LoadMapInfo`
+        // 加载即 `MapManager.AddMapRoute` 落格）。无注册表 ⇒ 无 route，行为一字不变。
+        let specs: Vec<mir2_world::map::MapRouteSpec> = reg
+            .routes()
+            .iter()
+            .map(|r| mir2_world::map::MapRouteSpec {
+                map_id: r.src_map_id,
+                x: r.src_x,
+                y: r.src_y,
+                route_id: r.route_id,
+                hop: mir2_world::map::RouteHop {
+                    dst_map_id: r.dst_map_id,
+                    dst_x: r.dst_x,
+                    dst_y: r.dst_y,
+                },
+            })
+            .collect();
+        let added = world.add_map_routes(specs);
+        glog!(
+            "INF",
+            "地图连接点已灌入（MapRoute）routes={} unresolved={} added={}",
+            reg.routes().len(),
+            reg.unresolved_routes().len(),
+            added
+        );
     }
     // **M3④-实现 C 第 ② 片**：生产宿主启用怪物 AI（oracle `ProcessMonsters` 线程的单线程等价物）。
     // 生成路径已按 oracle 把 `cert.Dir`/`CoolEye`/构造链抽数写进 `Entity.ai`
@@ -7789,6 +7831,7 @@ fn sim_loop(
                             &mut world,
                             &mut displays,
                             &gates,
+                            registry.as_ref(),
                         );
                     } else if matches!(
                         cmd.ident,
@@ -11450,6 +11493,7 @@ mod tests {
             &mut world,
             &mut displays,
             &gates,
+            None,
         );
         assert!(rx0.try_recv().is_err(), "目标≠当前位置 ⇒ 不得回 ack / 发帧");
         assert_eq!(
@@ -11470,6 +11514,7 @@ mod tests {
             &mut world,
             &mut displays,
             &gates,
+            None,
         );
         assert_eq!(
             displays.get(mover).unwrap().dir,
@@ -11530,6 +11575,7 @@ mod tests {
             &mut world,
             &mut displays,
             &gates,
+            None,
         );
         {
             let e = world.entities.get(mover).unwrap();
@@ -11575,6 +11621,7 @@ mod tests {
             &mut world,
             &mut displays,
             &gates,
+            None,
         );
         {
             let e = world.entities.get(mover).unwrap();
@@ -11615,6 +11662,7 @@ mod tests {
                 &mut world,
                 &mut displays,
                 &gates,
+                None,
             );
             assert!(
                 rx0.try_recv().is_err(),
@@ -13426,6 +13474,7 @@ mod tests {
             &mut world,
             &mut displays,
             &gates,
+            None,
         );
         assert_eq!(sessions["mover"].stamina.health_tick, -10);
         assert_eq!(
@@ -13446,6 +13495,7 @@ mod tests {
             &mut world,
             &mut displays,
             &gates,
+            None,
         );
         assert_eq!(sessions["mover"].stamina.health_tick, -70);
         assert_eq!(
@@ -13467,6 +13517,7 @@ mod tests {
             &mut world,
             &mut displays,
             &gates,
+            None,
         );
         assert_eq!(sessions["mover"].stamina.health_tick, -130);
         assert_eq!(sessions["mover"].recovery.per_health, 3);
@@ -18977,6 +19028,109 @@ mod tests {
             displays.get(42).unwrap().light,
             0,
             "重算后展示表 Light 回落到 0"
+        );
+    }
+
+    /// **L1 TransMap 端到端 + 帧序**：玩家走一格踩中 `MapRoute` ⇒ `handle_move_cmd` 先冲换图簇
+    /// （`SM_CLEAROBJECTS(633)` → `SM_CHANGEMAP(634)`，`SendMsg` 只发 hero），再广播移动帧
+    /// （`SM_WALK` 给**换图后新图**近邻 obs）——oracle 序：簇先、移动帧后
+    /// （`PlayObject.Walk` 尾段才 `SendRefMsg(nIdent,…)`）。
+    ///
+    /// **帧序回归牙**：去掉 `handle_move_cmd` 里 `if outcome.changed_map { drain_map_change(...) }`
+    /// ⇒ 633/634 只剩 tick 尾的 drain（本测不调 tick）⇒ 帧序断言（633 先于 SM_WALK）必红。
+    #[test]
+    fn move_cmd_route_emits_transmap_cluster_before_move_frame() {
+        use mir2_protocol::messages::{CM_WALK, SM_CHANGEMAP, SM_CLEAROBJECTS, SM_WALK};
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        world.maps.push(mir2_world::map::MapGrid::new(64, 64));
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", new_player_entity("hero".to_string(), 5, 4), 0)
+            .expect("hero 进图");
+        // obs 在目标图 (7,9) ±12 格内 ⇒ 收移动帧（oracle 用换图后新坐标广播）。
+        world.open_session("obs");
+        let obs = world
+            .enter_map("obs", new_player_entity("obs".to_string(), 8, 9), 1)
+            .expect("obs 进图");
+        // map0 (5,5) → map1 (7,9)
+        assert_eq!(
+            world.add_map_routes(vec![mir2_world::map::MapRouteSpec {
+                map_id: 0,
+                x: 5,
+                y: 5,
+                route_id: 1,
+                hop: mir2_world::map::RouteHop {
+                    dst_map_id: 1,
+                    dst_x: 7,
+                    dst_y: 9,
+                },
+            }]),
+            1
+        );
+        let mut displays = downlink::DisplayTable::new();
+        for id in [hero, obs] {
+            displays.set(
+                id,
+                downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"n".to_vec()),
+            );
+        }
+        let mut online: OnlineRegistry = Vec::new();
+        for (acct, nm, sid, sock, id) in [("a", "hero", 1, 901, hero), ("b", "obs", 2, 902, obs)] {
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: acct.into(),
+                    chr_name: nm.into(),
+                    session_id: sid,
+                    gate_idx: 0,
+                    socket: sock,
+                    actor_id: id,
+                },
+            );
+        }
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // 目标 = (5,5)（hero 当前格正下方）⇒ 方向 Down，走一格踩中 route。
+        handle_move_cmd(
+            CM_WALK,
+            game_svr::feature::make_long(5, 5),
+            0,
+            "hero",
+            901,
+            &online,
+            &mut HashMap::new(),
+            &mut world,
+            &mut displays,
+            &gates,
+            None,
+        );
+
+        // 换图落地：hero 在 map1 (7,9)。
+        let he = world.entities.get(hero).unwrap();
+        assert_eq!((he.map_id, he.x, he.y), (1, 7, 9));
+
+        // 同一 gate 0 通道，保序收集出帧。
+        let mut seq: Vec<(i32, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            seq.push((socket, u16::from_le_bytes([body[4], body[5]])));
+        }
+        assert!(seq.contains(&(901, SM_CLEAROBJECTS)), "hero 收 633");
+        assert!(seq.contains(&(901, SM_CHANGEMAP)), "hero 收 634");
+        assert!(
+            seq.iter().any(|(sk, id)| *sk == 902 && *id == SM_WALK),
+            "obs 收移动帧 SM_WALK"
+        );
+        let i_clear = seq
+            .iter()
+            .position(|(_, id)| *id == SM_CLEAROBJECTS)
+            .unwrap();
+        let i_walk = seq.iter().position(|(_, id)| *id == SM_WALK).unwrap();
+        assert!(
+            i_clear < i_walk,
+            "oracle 序：换图簇(633) 先于移动帧(SM_WALK)，实际 {seq:?}"
         );
     }
 }

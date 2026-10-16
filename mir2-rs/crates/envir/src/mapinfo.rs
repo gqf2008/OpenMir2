@@ -556,6 +556,68 @@ pub fn parse_map_info_lines(lines: &[String]) -> Vec<MapInfoEntry> {
         .collect()
 }
 
+/// `Maps.cs:361-379` 的「加载地图连接点」行（非 section 行）分词结果：
+/// `源图 源X,源Y -> 目标图 目标X,目标Y`。
+///
+/// 本结构只是**原始分词结果**（坐标可能落到 0、图名可能不存在）——「两侧都能 `FindMap` 才入表」
+/// 的门在注册表层（[`crate::registry::MapRegistry::routes`]，对应 `MapManager.AddMapRoute`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapRouteEntry {
+    pub src_map_name: String,
+    pub src_x: i32,
+    pub src_y: i32,
+    pub dst_map_name: String,
+    pub dst_x: i32,
+    pub dst_y: i32,
+}
+
+/// `Maps.cs:361-379` 的 1:1 移植（`loadList` 里的非 `[`/`;` 行 → 地图连接点）。
+///
+/// 逐 token 照 oracle 的六次 `HUtil32.GetValidStr3`：
+/// 1. `sMapName` ← `HUtil32.Separator = {' ', ',', '\t'}`；
+/// 2. `nX`      ← `Separator`；
+/// 3. `n18`     ← `Separator`；
+/// 4. `s44`（目标图）← `{' ', ',', '-', '>', '\t'}`（**与前几步分隔符集不同**——正是它吃掉 `->`）；
+/// 5. `n1C`     ← `Separator`；
+/// 6. `n20`     ← `{' ', ',', ';', '\t'}`（**目标 y 用分号集**，又与前面不同）。
+///
+/// 空行 / `[` 开头（section）/ `;` 开头（注释）跳过（`Maps.cs:364` 的首字符判据）。
+/// 源坐标 `29,81` 被 `Separator` 的逗号拆成 `29` / `81` 两段（不是当整串一个 token）——别"顺手修"。
+///
+/// **红检（变异牙）**：把第 4 步的分隔符集换成 `SEPARATORS`（去掉 `-`/`>`）⇒ 对
+/// `M100A\t29,81\t->\tM100B\t287,282` 会得到 `dst_map_name == "->"` ⇒ 下面的单测必红。
+#[must_use]
+pub fn parse_map_routes(lines: &[String]) -> Vec<MapRouteEntry> {
+    let mut out = Vec::new();
+    for line in lines {
+        // `if (!string.IsNullOrEmpty(sFlag) && sFlag[0] != '[' && sFlag[0] != ';')`
+        if line.is_empty() || line.starts_with('[') || line.starts_with(';') {
+            continue;
+        }
+        let (src_map_name, rest) = get_valid_str3(line, &SEPARATORS);
+        let (tok, rest) = get_valid_str3(&rest, &SEPARATORS);
+        let src_x = str_to_int(&tok, 0);
+        let (tok, rest) = get_valid_str3(&rest, &SEPARATORS);
+        let src_y = str_to_int(&tok, 0);
+        // `new[] { ' ', ',', '-', '>', '\t' }` —— 目标图段。
+        let (dst_map_name, rest) = get_valid_str3(&rest, &[' ', ',', '-', '>', '\t']);
+        let (tok, rest) = get_valid_str3(&rest, &SEPARATORS);
+        let dst_x = str_to_int(&tok, 0);
+        // `new[] { ' ', ',', ';', '\t' }` —— 目标 y 段。
+        let (tok, _) = get_valid_str3(&rest, &[' ', ',', ';', '\t']);
+        let dst_y = str_to_int(&tok, 0);
+        out.push(MapRouteEntry {
+            src_map_name,
+            src_x,
+            src_y,
+            dst_map_name,
+            dst_x,
+            dst_y,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,5 +684,68 @@ mod tests {
         assert_eq!(e.map_file_name, "X10");
         assert_eq!(e.desc, "桃源");
         assert_eq!(e.server_index, 0);
+    }
+
+    /// **L1 TransMap 数据面**：`parse_map_routes` 只取非 `[`/`;`/空 行，且源坐标 `29,81`
+    /// 被逗号拆成 `29`/`81`（`Maps.cs:361-379`）。
+    ///
+    /// 红检：见 [`parse_map_routes`] 的变异牙说明（第 4 步分隔符集改错 ⇒ 本测 `dst_map_name` 断言红）。
+    #[test]
+    fn parse_map_routes_tab_line_skips_sections_and_comments() {
+        let lines = vec![
+            "[X|fx 某地] DAY".to_string(),
+            "; 注释".to_string(),
+            String::new(),
+            "M100A\t29,81\t->\tM100B\t287,282".to_string(),
+        ];
+        assert_eq!(
+            parse_map_routes(&lines),
+            vec![MapRouteEntry {
+                src_map_name: "M100A".into(),
+                src_x: 29,
+                src_y: 81,
+                dst_map_name: "M100B".into(),
+                dst_x: 287,
+                dst_y: 282,
+            }]
+        );
+    }
+
+    /// 真实文件另一种分隔（空格串而非单个制表符，`MapInfo.txt:307`）：目标图段靠
+    /// `{' ',',','-','>','\t'}` 吃出。
+    #[test]
+    fn parse_map_routes_space_separated_line() {
+        let lines = vec!["0          346,186              ->         0122       11,41".to_string()];
+        assert_eq!(
+            parse_map_routes(&lines),
+            vec![MapRouteEntry {
+                src_map_name: "0".into(),
+                src_x: 346,
+                src_y: 186,
+                dst_map_name: "0122".into(),
+                dst_x: 11,
+                dst_y: 41,
+            }]
+        );
+    }
+
+    /// 自环 route（`Q012 -> Q012`，真实文件 37-45 行）：源/目标同名、坐标不同，照常解析保序。
+    #[test]
+    fn parse_map_routes_self_loop_and_order() {
+        let lines = vec![
+            "Q012\t14,15\t->\tQ012\t30,15".to_string(),
+            "Q012\t18,15\t->\tQ012\t34,15".to_string(),
+        ];
+        let r = parse_map_routes(&lines);
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].dst_map_name, "Q012");
+        assert_eq!(
+            (r[0].src_x, r[0].src_y, r[0].dst_x, r[0].dst_y),
+            (14, 15, 30, 15)
+        );
+        assert_eq!(
+            (r[1].src_x, r[1].src_y, r[1].dst_x, r[1].dst_y),
+            (18, 15, 34, 15)
+        );
     }
 }

@@ -247,3 +247,40 @@ fn registry_exposes_flag_and_map_desc() {
     // `MapC` 加载失败，`MapD` 拿到 `map_id=2`。
     assert_eq!(reg.name_of(2), Some("MapD"));
 }
+
+/// **L1 TransMap 数据面**：`MapManager.AddMapRoute` 的 `sEnvir && dEnvir` 门——只有 src/dst
+/// 两侧都加载成功才入 `routes()`；任一侧缺失 ⇒ 进 `unresolved_routes()`（对应 `AddMapRoute`
+/// 返回 false）。
+///
+/// 红检（变异牙）：把 `from_entries` 里 `(Some(s), Some(d))` 的 `s`/`d` 对调 ⇒ 下面
+/// `src_map_id`/`dst_map_id` 断言必红。
+#[test]
+fn registry_resolves_routes_only_when_both_maps_load() {
+    let base = temp_dir("registry-routes");
+    let map_dir = base.join("Map");
+    let envir_dir = base.join("Envir");
+    fs::create_dir_all(&map_dir).unwrap();
+    fs::create_dir_all(&envir_dir).unwrap();
+    fs::write(map_dir.join("fa.map"), synth_walk(8, 8)).unwrap();
+    fs::write(map_dir.join("fb.map"), synth_walk(8, 8)).unwrap();
+    write_gbk(
+        &envir_dir.join("MapInfo.txt"),
+        concat!(
+            "[MapA|fa 甲地]\n",
+            "[MapB|fb 乙地]\n",
+            "MapA\t1,1\t->\tMapB\t2,2\n",      // 两侧都在 ⇒ 入表
+            "MapA\t3,3\t->\tNoSuchMap\t4,4\n", // 目标图不存在 ⇒ 丢弃
+        ),
+    );
+    let reg = MapLoader::new(&base, "Map", "Envir")
+        .load_registry()
+        .expect("加载注册表");
+    assert_eq!(reg.len(), 2);
+    assert_eq!(reg.routes().len(), 1, "只保留两侧都能 FindMap 的连接点");
+    let r = &reg.routes()[0];
+    assert_eq!(r.route_id, 1);
+    assert_eq!((r.src_map_id, r.src_x, r.src_y), (0, 1, 1));
+    assert_eq!((r.dst_map_id, r.dst_x, r.dst_y), (1, 2, 2));
+    assert_eq!(reg.unresolved_routes().len(), 1);
+    assert_eq!(reg.unresolved_routes()[0].dst_map_name, "NoSuchMap");
+}

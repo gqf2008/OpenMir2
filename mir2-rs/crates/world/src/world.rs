@@ -22,7 +22,7 @@ use crate::combat::{
     CombatConfig,
 };
 use crate::entity::{Entity, EntityStore};
-use crate::map::{CellType, FloorItemKind, MapGrid};
+use crate::map::{CellType, FloorItemKind, MapGrid, MapRouteSpec};
 use crate::session::SessionRegistry;
 
 /// C# `ProcessHumans` 的节拍（毫秒）。
@@ -123,6 +123,30 @@ pub struct TickRecord {
     pub rushes: Vec<crate::action::RushEvent>,
     /// **出站接线片 W2**：本 tick 的 `RM_BUTCH` 族（`SM_BUTCH(637)`）——每次 `ClientGetButchItem` 一条。
     pub butches: Vec<crate::action::ButchEvent>,
+}
+
+/// **L1 TransMap 触发**：`World::step_with_route` 的结果（供宿主排帧序）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StepOutcome {
+    /// 位移是否被接受。`false` = 底层 [`World::try_step_now`] 失败**或**落点格命中 `MapRoute` 且
+    /// `EnterAnotherMap` 门失败（已回滚到走前格，宿主不得发移动帧）。
+    pub moved: bool,
+    /// 是否发生换图（移动后落点格命中 `CellType::MapRoute` 且 `EnterAnotherMap` 门通过）。
+    pub changed_map: bool,
+}
+
+/// [`World::route_enter`] 的结果：区分「无 route / 被门跳过」「成功换图」「`EnterAnotherMap` 失败」。
+///
+/// 对应 oracle `PlayObject.Walk` 覆写的 `result` 布尔（`PlayObject.cs:1851/1878`）：`Skipped`/`Switched`
+/// ⇒ `result == true`（发移动帧）；`Failed` ⇒ `result == false`（上游回滚、不发移动帧）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RouteOutcome {
+    /// 当前格无 `MapRoute`，或命中但被门跳过（非玩家 / `NEEDHOLE` 等）⇒ 无换图、不回滚。
+    Skipped,
+    /// 至少一条 `MapRoute` 的 `EnterAnotherMap` 成功 ⇒ 换图（终落点 = 最后一条成功者）。
+    Switched,
+    /// 至少一条 `MapRoute` 的 `EnterAnotherMap` 失败 ⇒ 调用方回滚、不发移动帧。
+    Failed,
 }
 
 pub struct World {
@@ -383,6 +407,14 @@ impl World {
     pub fn set_map_exp_rate(&mut self, map_id: usize, rate: Option<i32>) {
         if let Some(slot) = self.map_exp_rate.get_mut(map_id) {
             *slot = rate;
+        }
+    }
+
+    /// 设置某张地图的 `Envir.Flag.boNEEDHOLE`（route 落地门的输入，`PlayObject.cs:1874`）。
+    /// 越界 `map_id` 静默忽略。幂等。生产宿主在起世界时按注册表逐图灌入；缺省 `false`。
+    pub fn set_map_need_hole(&mut self, map_id: usize, need_hole: bool) {
+        if let Some(map) = self.maps.get_mut(map_id) {
+            map.set_need_hole(need_hole);
         }
     }
 
@@ -1223,6 +1255,233 @@ impl World {
             }
         }
         Some(outcome)
+    }
+
+    /// 把注册表解析出的连接点灌进对应 `MapGrid`（oracle `Maps.LoadMapInfo` 加载即
+    /// `Envirnoment.AddMapRoute` 落格）。返回**实际落格**的条数。
+    ///
+    /// `map_id` 越界 ⇒ 该条跳过（不 panic）。无注册表时宿主不调用本方法 ⇒ 无 route，行为一字不变。
+    pub fn add_map_routes<I>(&mut self, routes: I) -> usize
+    where
+        I: IntoIterator<Item = MapRouteSpec>,
+    {
+        let mut added = 0;
+        for spec in routes {
+            let Some(map) = self.maps.get_mut(spec.map_id) else {
+                continue;
+            };
+            if map.add_map_route(spec.x, spec.y, spec.route_id, spec.hop) {
+                added += 1;
+            }
+        }
+        added
+    }
+
+    /// **L1 TransMap 触发（核心）**：先按 [`World::try_step_now`] 移动；**移动成功后**读落点格
+    /// （`PlayObject.Walk` 覆写读 `CurrX/CurrY` 格，`PlayObject.cs:1868`），命中 `CellType::MapRoute`
+    /// 且是玩家时走 `EnterAnotherMap` 门并 `switch_map`。
+    ///
+    /// **失败契约（照 oracle）**：落点格是 `MapRoute` 但 `EnterAnotherMap` 门失败（目标格非
+    /// `CellValid`）⇒ oracle `Walk()` 返回 `false`（`PlayObject.cs:1878`）⇒ 上游 `BaseObject.WalkTo`
+    /// 把坐标**回滚到走前格**（`BaseObject.cs:685-688`）⇒ 因 `if (result)` 不成立而**不发移动帧**
+    /// （`PlayObject.cs:1909-1911`）。本方法据此返回 `moved == false` 并回滚，宿主因此不发 `SM_WALK`。
+    ///
+    /// 只对**玩家**触发（`PlayObject.Walk` 覆写专属）；怪物 AI 的 `monai::walk_to` 也走 `try_step_now`，
+    /// 但 `route_enter` 对非玩家直接返回 [`RouteOutcome::Skipped`] ⇒ 怪物/商人走 `BaseObject.Walk`
+    /// （`BaseObject.cs:1525-1560` 对 `MapRoute` 只 `result = false`——**只挡路、不换图**）。
+    #[must_use]
+    pub fn step_with_route(&mut self, actor_id: i32, dx: i32, dy: i32, steps: i32) -> StepOutcome {
+        let Some(e) = self.entities.get(actor_id) else {
+            return StepOutcome {
+                moved: false,
+                changed_map: false,
+            };
+        };
+        // 走前格（回滚落点；oracle `WalkTo` 的 `oldX/oldY`/`oldEnvir`）。
+        let (old_x, old_y, old_map) = (e.x, e.y, e.map_id);
+        if !self.try_step_now(actor_id, dx, dy, steps) {
+            return StepOutcome {
+                moved: false,
+                changed_map: false,
+            };
+        }
+        // 记下本轮起点，失败回滚时把误记的 `MapChange` 撤掉（否则宿主多发一组换图簇）。
+        let mc_len = self.sessions.map_changes().len();
+        match self.route_enter(actor_id) {
+            RouteOutcome::Failed => {
+                self.sessions.truncate_map_changes(mc_len);
+                self.rollback_move(actor_id, old_x, old_y, old_map);
+                StepOutcome {
+                    moved: false,
+                    changed_map: false,
+                }
+            }
+            RouteOutcome::Switched => StepOutcome {
+                moved: true,
+                changed_map: true,
+            },
+            RouteOutcome::Skipped => StepOutcome {
+                moved: true,
+                changed_map: false,
+            },
+        }
+    }
+
+    /// **L1 TransMap 触发**：actor 在**当前格**做一次路线检查（走/跑/骑跑成功移动之后，或 `CM_TURN`
+    /// 原地转身）。返回 `true` = 发生了换图。
+    ///
+    /// 调用点：① [`World::step_with_route`]（走）；② `CM_TURN` 原地转身（oracle `ClientChangeDir`
+    /// 也调 `Walk(RM_TURN)`，`PlayObject.Operate.cs:334`）。转身路径无「走前格」可回滚，故 `Failed`
+    /// 时只撤掉误记的 `MapChange` 并返回 `false`（oracle 转身时 `Walk()` 返回 false ⇒ 不发转身帧而回
+    /// `RM_MOVEFAIL`；**该帧本宿主未接，登记**）。
+    pub fn walk_route_check(&mut self, actor_id: i32) -> bool {
+        let mc_len = self.sessions.map_changes().len();
+        match self.route_enter(actor_id) {
+            RouteOutcome::Switched => true,
+            RouteOutcome::Failed => {
+                self.sessions.truncate_map_changes(mc_len);
+                false
+            }
+            RouteOutcome::Skipped => false,
+        }
+    }
+
+    /// **`PlayObject.Walk` 覆写（`PlayObject.cs:1850-1918`）的路线检查本体**：读 actor 的当前格，
+    /// **顺序遍历该格 `ObjList` 里的全部 `CellType::MapRoute`**（oracle 的 `for` **不 break**，
+    /// `PlayObject.cs:1862-1884`），逐个走门 + `EnterAnotherMap`（复用 [`World::switch_map`] 落地）。
+    ///
+    /// 逐项对照 oracle 门（`PlayObject.cs:1869-1882` 外套 `EnterAnotherMap`，`:3718-3757`）：
+    /// - `Envir.CellMatch(CurrX,CurrY)` 失败 ⇒ `return true`（无换图、不回滚）；
+    /// - `cellSuccess && cellInfo.IsAvailable` 失败 ⇒ 不进 `for`（无换图）；
+    /// - `mapRoute.Envir != null`：本仓 hop 表命中即非空；
+    /// - `Envir.ArroundDoorOpened(CurrX,CurrY)`：**无门模型 ⇒ 恒 true**（登记）；
+    /// - `(!mapRoute.Envir.Flag.boNEEDHOLE) || EventMgr.GetEvent(Envir,CurrX,CurrY,ET_DIGOUTZOMBI) != null`：
+    ///   **本仓无 `MapEvent` 模型 ⇒ 事件恒不存在** ⇒ 落到 Rust 就是「**目标图 `boNEEDHOLE` 命中即挡**」
+    ///   （`PlayObject.cs:1874`）。这是一个**真门**：真实 `MapInfo.txt` 有 `Q004/R001/H007/H106` 四段带
+    ///   `NEEDHOLE`，共 **7** 条真实 route 以它们为目标图（见下方 `route_enter` 的登记块）⇒ 这些 route
+    ///   在 oracle **不换图**。**将来若建事件模型**：把此判据换回
+    ///   `!dst.need_hole() || self.event_at(dst, hop.dst_x, hop.dst_y, ET_DIGOUTZOMBI).is_some()`
+    ///   （接口位留在此处，`event_at` 待增）。
+    /// - `M2Share.ServerIndex == mapRoute.Envir.ServerIndex`：**单区单 World ⇒ 恒同**（登记；异支
+    ///   `ChangeSpaceMove` 跨服搬家**未建**）；
+    /// - `EnterAnotherMap` 的其余门（`:3721-3757`）：等级门 `Abil.Level < envir.EnterLevel`（oracle
+    ///   `EnterLevel` 是恒 0 的 get-only 属性 ⇒ 照搬"死门"恒过，登记）、`NeedSetonFlag` 门（本仓无任务
+    ///   标志 ⇒ 恒过，登记）、`!envir.CellValid(nDMapX,nDMapY)`（**实门**）、castle 门（无城堡注册表 ⇒
+    ///   恒过，登记）、`NoHorse`（无骑马字段 ⇒ 不建模，登记）。
+    ///
+    /// **多 route 终落点**：oracle 顺序处理、**不 break** ⇒ 终落点 = **最后一条**成功换图的 route 目标
+    /// （真实数据有重复源格：如 `D5069(90,76)` 同时 `→D5062(8,39)` 与 `→D5071(8,10)`，终落点 = `D5071`）。
+    fn route_enter(&mut self, actor_id: i32) -> RouteOutcome {
+        let Some(e) = self.entities.get(actor_id) else {
+            return RouteOutcome::Skipped;
+        };
+        // `PlayObject.Walk` 覆写专属 ⇒ 只有玩家（`Race == ActorRace.Play`）触发；非玩家走
+        // `BaseObject.Walk` 的 `CellType.MapRoute => result = false`（只挡路、不换图）。
+        if e.race != crate::entity::ACTOR_RACE_PLAY {
+            return RouteOutcome::Skipped;
+        }
+        let (x, y, map_id) = (e.x, e.y, e.map_id);
+        // 顺序收集该格全部 `MapRoute`（oracle 的 `for` 不 break）——**在换图前**收集，复刻
+        // oracle「`cellInfo` 在 `EnterAnotherMap` 改 `Envir` 前已捕获」的语义。
+        let route_ids: Vec<i32> = {
+            let Some(map) = self.maps.get(map_id) else {
+                return RouteOutcome::Skipped;
+            };
+            // `if (!Envir.CellMatch(CurrX, CurrY)) return true;`
+            if !map.cell_match(x, y) {
+                return RouteOutcome::Skipped;
+            }
+            // `if (cellSuccess && cellInfo.IsAvailable)`。
+            let (cell, cell_success) = map.get_cell_info(x, y);
+            if !(cell_success && cell.is_available()) {
+                return RouteOutcome::Skipped;
+            }
+            cell.obj_list
+                .iter()
+                .filter(|o| o.cell_type == CellType::MapRoute)
+                .map(|o| o.cell_obj_id)
+                .collect()
+        };
+        if route_ids.is_empty() {
+            return RouteOutcome::Skipped;
+        }
+        let mut switched = false;
+        let mut failed = false;
+        for route_id in route_ids {
+            // `M2Share.CellObjectMgr.Get<MapRouteItem>(CellObjId)`；`mapRoute.Envir != null`。
+            let Some(hop) = self
+                .maps
+                .get(map_id)
+                .and_then(|m| m.route_hop(route_id).copied())
+            else {
+                continue;
+            };
+            // `(!mapRoute.Envir.Flag.boNEEDHOLE) || EventMgr.GetEvent(...) != null`：
+            // 无 `MapEvent` 模型 ⇒ 事件恒 null ⇒ 目标图 `boNEEDHOLE` 命中即**挡**（门跳过：result 保持
+            // true，不换图、不回滚）。**登记：`Q004/R001/H007/H106` 四段带 `NEEDHOLE`，共 7 条真实
+            // route 以它们为目标**（`D402(138,107|138,108|137,107|137,108)→Q004(14,14)`、
+            // `D717(80,28)→R001(162,169)`、`H006(83,25)→H007(161,172)`、`h006(80,28)→H106(163,169)`）
+            // ⇒ 踩这些源格在 oracle **不换图**（moved 正常、changed_map=false）。
+            if self.maps.get(hop.dst_map_id).is_some_and(|m| m.need_hole()) {
+                continue;
+            }
+            // `!envir.CellValid(nDMapX, nDMapY)` ⇒ `EnterAnotherMap` 返回 false。
+            let dst_valid = self
+                .maps
+                .get(hop.dst_map_id)
+                .is_some_and(|m| m.cell_valid(hop.dst_x, hop.dst_y));
+            if !dst_valid {
+                failed = true;
+                continue;
+            }
+            // 复用既有 `switch_map` 落地（旧图摘除 → 新图登记 → 记一条 `MapChange`）。
+            let Some(chr_name) = self
+                .sessions
+                .iter()
+                .find(|s| s.actor_id == Some(actor_id))
+                .map(|s| s.chr_name.clone())
+            else {
+                continue;
+            };
+            if self
+                .switch_map(&chr_name, hop.dst_map_id, hop.dst_x, hop.dst_y)
+                .is_ok()
+            {
+                switched = true;
+            }
+        }
+        // oracle `if (result)`：任一 `EnterAnotherMap` 失败 ⇒ result=false（即便另一条成功过，
+        // oracle 的 `result` 也被置 false；该「部分成功 + 部分失败」病态混合在真实数据不可达，本仓
+        // 按"任一失败 ⇒ 回滚到走前格"处理并登记）。
+        if failed {
+            RouteOutcome::Failed
+        } else if switched {
+            RouteOutcome::Switched
+        } else {
+            RouteOutcome::Skipped
+        }
+    }
+
+    /// **走前格回滚**（oracle `BaseObject.WalkTo:685-688`）：`Envir.DeleteFromMap(CurrX,CurrY)`
+    /// → `CurrX=oldX; CurrY=oldY` → `Envir.AddMapObject(oldX,oldY)`。**不查阻挡**（照 oracle）。
+    ///
+    /// 用于 [`World::step_with_route`] 在 `EnterAnotherMap` 失败后的坐标回滚。注意 oracle 在
+    /// 「先成功换图、后有 route 失败」这种病态混合下会把玩家登记到**目标图**的**源坐标**上（现实
+    /// 不可达）；本仓统一按"回到源图走前格"处理（已登记）。
+    fn rollback_move(&mut self, actor_id: i32, fx: i32, fy: i32, map_id: usize) {
+        let Some(e) = self.entities.get(actor_id) else {
+            return;
+        };
+        let cur_map = e.map_id;
+        // 从当前格摘除（可能是目标图，也可能是同图的目标格）。
+        self.remove_from_map(actor_id, cur_map);
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.map_id = map_id;
+            e.x = fx;
+            e.y = fy;
+        }
+        let now = self.clock_ms;
+        self.maps[map_id].add_map_object(fx, fy, CellType::Play, actor_id, now);
     }
 
     /// **同步移动**（`openmir2-m3-move-wiring` 的接线入口）：`steps` = 走 / 跑 / 骑跑的格数（1/2/3）。
@@ -2544,5 +2803,255 @@ mod tests {
                 y: 9
             }]
         );
+    }
+
+    /// **L1 TransMap 触发（核心）**：玩家走一格踩中 `MapRoute` ⇒ `EnterAnotherMap` 门通过 ⇒
+    /// `switch_map`，实体换图、旧图摘除/新图登记、`SessionRegistry` 记一条 `MapChange`（无 show）。
+    ///
+    /// 红检（变异牙）：把 `step_with_route` 里 `walk_route_check` 调用删掉 ⇒ `changed_map` 断言必红；
+    /// 把 `walk_route_check` 的 `race != Play` 门去掉 ⇒ `step_with_route_does_not_switch_for_monster` 必红。
+    #[test]
+    fn step_with_route_triggers_enter_another_map_for_player() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        let n = w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 9,
+            },
+        }]);
+        assert_eq!(n, 1);
+
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(out.moved, "走一格被接受");
+        assert!(out.changed_map, "踩中 route 应换图");
+
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (1, 7, 9));
+        assert_eq!(w.map(0).cell(5, 4).count(), 0, "旧格已摘除");
+        assert_eq!(
+            w.map(0).cell(5, 5).count(),
+            1,
+            "旧图 (5,5) 只剩 route cell（玩家已摘除）"
+        );
+        assert_eq!(w.map(1).cell(7, 9).count(), 1, "新图已登记");
+
+        let ch = w.sessions.map_changes();
+        assert_eq!(ch.len(), 1, "恰一条 MapChange");
+        assert_eq!(ch[0].actor_id, hero);
+        assert_eq!((ch[0].map_id, ch[0].x, ch[0].y), (1, 7, 9));
+        assert_eq!(
+            ch[0].space_move_show, None,
+            "EnterAnotherMap 无 SM_SPACEMOVE_SHOW"
+        );
+    }
+
+    /// **负向对照**：怪物踩同一 route 格 ⇒ **不换图**（oracle `BaseObject.Walk:1548` 对 MapRoute
+    /// 只 `result = false`；换图是 `PlayObject.Walk` 覆写专属）。
+    #[test]
+    fn step_with_route_does_not_switch_for_monster() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        // 走 `enter_map` 建会话——否则「无会话 ⇒ 不换图」会掩盖 `race != Play` 门的作用。
+        w.open_session("mon");
+        let mon = w
+            .enter_map(
+                "mon",
+                {
+                    let mut e = Entity::new(0, "mon", 5, 4);
+                    e.race = ACTOR_RACE_MONSTER;
+                    e
+                },
+                0,
+            )
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 9,
+            },
+        }]);
+        let out = w.step_with_route(mon, 0, 1, 1);
+        assert!(out.moved, "怪物走一格仍成功");
+        assert!(!out.changed_map, "怪物不得触发换图");
+        assert_eq!(w.entities.get(mon).unwrap().map_id, 0, "仍留原图");
+        assert!(w.sessions.map_changes().is_empty());
+    }
+
+    /// `EnterAnotherMap` 的 `CellValid` 门：目标格不可走（墙）⇒ **换图失败** ⇒ 照 oracle
+    /// `PlayObject.Walk()==false`（`PlayObject.cs:1878`）上游 `WalkTo` **回滚坐标到走前格**
+    /// （`BaseObject.cs:685-688`），因 `if (result)` 不成立而**不发移动帧**（`:1909-1911`）
+    /// ⇒ 本方法返回 `moved == false`。
+    ///
+    /// **为何原先写反了**：旧断言写 `moved == true`（"走一格仍成功"），是把 `step_with_route`
+    /// 当成"移动与路线检查互不影响"来看——漏了 oracle 的 `Walk()` 返回值是**整条走命令的结果**，
+    /// 失败会连同位移一起回滚。验证者给的真实证据（`BaseObject.cs:666-673` 的回滚三步 + `:1909-1911`
+    /// 的 `if (result)` 才发帧）推翻了旧断言。
+    ///
+    /// 红检（变异牙）：把 `step_with_route` 的 `RouteOutcome::Failed` 支里的 `rollback_move` 删掉
+    /// （或不再返回 `moved == false`）⇒ 下面 `moved`/坐标/旧格断言必红。
+    #[test]
+    fn step_with_route_blocked_when_dest_cell_is_wall() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.maps[1].set_map_xy_flag(7, 9, false); // 目标格 → LowWall
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 9,
+            },
+        }]);
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(!out.moved, "EnterAnotherMap 失败 ⇒ Walk()=false ⇒ 位移回滚");
+        assert!(!out.changed_map, "目标格不可走 ⇒ EnterAnotherMap 失败");
+        // 坐标回滚到走前格 (5,4)，仍留原图。
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 4), "坐标回滚到走前格");
+        // 格子簿记也回滚：源格 (5,4) 重新登记玩家、目标格 (5,5) 只剩 route cell。
+        assert_eq!(w.map(0).cell(5, 4).count(), 1, "源格重新登记玩家");
+        assert_eq!(
+            w.map(0).cell(5, 5).count(),
+            1,
+            "目标格 (5,5) 只剩 route cell"
+        );
+        assert!(w.sessions.map_changes().is_empty(), "失败不发换图簇");
+    }
+
+    /// **must_fix #1 阳性对照**：目标图带 `Flag.boNEEDHOLE`（无 `ET_DIGOUTZOMBI` 事件模型）⇒
+    /// oracle `PlayObject.cs:1874` 的门**挡**下 ⇒ **不换图**，但走本身成功（`moved == true`、
+    /// 坐标落在源图的 route 格上、无回滚、无 `MapChange`）。这正是真实数据里
+    /// `D402→Q004` / `D717→R001` / `H006→H007` / `h006→H106` 等 7 条 route 的行为。
+    ///
+    /// 红检（变异牙）：把 `route_enter` 里 `m.need_hole()` 的门删掉（恒不挡）⇒ 本测 `changed_map`
+    /// 断言必红（会误换图）。
+    #[test]
+    fn step_with_route_needhole_dest_blocks_map_change() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.set_map_need_hole(1, true); // 目标图带 NEEDHOLE（Q004/R001/H007/H106 同型）
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 14,
+                dst_y: 14,
+            },
+        }]);
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(out.moved, "NEEDHOLE 门只挡换图，不挡走（Walk() 仍 true）");
+        assert!(!out.changed_map, "目标图 NEEDHOLE ⇒ 不换图");
+        // 落在源图的 route 格上（未回滚），仍在原图。
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 5), "未换图、未回滚");
+        assert!(w.sessions.map_changes().is_empty(), "无换图簇");
+    }
+
+    /// **must_fix #3**：同一源格有**多个** `MapRoute` 对象 ⇒ oracle `for` **不 break**，逐个
+    /// `EnterAnotherMap` ⇒ **终落点 = 最后一条**（`PlayObject.cs:1862-1884`）。真实数据：
+    /// `D5069(90,76)` 同时 `→D5062(8,39)` 与 `→D5071(8,10)`，终落点 = `D5071`。
+    ///
+    /// 红检（变异牙）：把 `route_enter` 收集改回 `find_map` 取**第一条**（`find_map(...)`）⇒
+    /// 终落点断言必红（会停在第一条目标）。
+    #[test]
+    fn step_with_route_multiple_routes_last_wins() {
+        let mut w = World::with_maps(vec![(64, 64), (64, 64), (64, 64)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        // 同一源格 (5,5) 落两条 route：第一条 → map1(8,39)，第二条 → map2(8,10)。
+        w.add_map_routes(vec![
+            MapRouteSpec {
+                map_id: 0,
+                x: 5,
+                y: 5,
+                route_id: 1,
+                hop: crate::map::RouteHop {
+                    dst_map_id: 1,
+                    dst_x: 8,
+                    dst_y: 39,
+                },
+            },
+            MapRouteSpec {
+                map_id: 0,
+                x: 5,
+                y: 5,
+                route_id: 2,
+                hop: crate::map::RouteHop {
+                    dst_map_id: 2,
+                    dst_x: 8,
+                    dst_y: 10,
+                },
+            },
+        ]);
+        assert_eq!(w.map(0).cell(5, 5).count(), 2, "同格两条 route cell");
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(out.moved && out.changed_map, "命中 route ⇒ 换图");
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!(
+            (e.map_id, e.x, e.y),
+            (2, 8, 10),
+            "终落点 = 最后一条 route（D5071 同型）"
+        );
+        // 两条 route 各记一条 MapChange（oracle 会发两组 633/634），终落点为最后一条。
+        let ch = w.sessions.map_changes();
+        assert_eq!(ch.len(), 2, "两条 route ⇒ 两组换图簇");
+        assert_eq!((ch[1].map_id, ch[1].x, ch[1].y), (2, 8, 10));
+    }
+
+    /// 原地转身（`CM_TURN`）：actor 已站在 route 格上 ⇒ `walk_route_check` 直接触发换图。
+    #[test]
+    fn walk_route_check_triggers_on_current_cell() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", Entity::new(0, "hero", 5, 5), 0)
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 3,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 2,
+                dst_y: 2,
+            },
+        }]);
+        assert!(w.walk_route_check(hero), "当前格命中 route ⇒ 换图");
+        assert_eq!(
+            (
+                w.entities.get(hero).unwrap().map_id,
+                w.entities.get(hero).unwrap().x
+            ),
+            (1, 2)
+        );
+        assert_eq!(w.sessions.map_changes().len(), 1);
     }
 }
