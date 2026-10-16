@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -75,6 +76,13 @@ RE_CONST_DEF = re.compile(r"const\s+int\s+(RM_[A-Za-z0-9_]+)")
 # 内容门「真装载调用」标记：load 调用/定义形态。
 RE_LOAD_CALL = re.compile(r"(?<![A-Za-z0-9_])load[a-z0-9_]*\s*[(<]")
 RE_LOAD_FN = re.compile(r"(?<![A-Za-z0-9_])fn\s+load[a-z0-9_]*")
+# 「装载函数名」捕获（判断装载函数是否被 server 二进制引用 —— 见 RustCorpus.loader_wired）。
+RE_LOAD_FN_NAME = re.compile(r"(?<![A-Za-z0-9_])fn\s+(load[a-z0-9_]*)")
+# 入站 no-op 臂结构判据（片 D1-②）：本臂「恒假/恒空」的可机判形态。
+#   (a) handler 输出绑到 `_` 前缀名（形态 `let (decision, _frames) = ...`）⇒ 输出被丢弃。
+RE_NOOP_UNDERSCORE_BIND = re.compile(r"let\s*\([^)]*\b_\w+")
+#   (b) 用裸字面量（false/true/整数）喂 `client_*` handler —— 会话态未挂、被常量顶死。
+RE_CLIENT_LITERAL_ARG = re.compile(r"(?<![A-Za-z0-9_])client_[a-z0-9_]+\s*\([^)]*?(?:\bfalse\b|\btrue\b|(?<![A-Za-z0-9_.])\d+(?![A-Za-z0-9_.]))")
 
 
 def rust_source_dirs(repo: Path, exclude=()):
@@ -135,7 +143,7 @@ CONTENT_MAP = {
     "LoadQuestDiary":            dict(kind="dir", file="QuestDiary", anchor="LocalDB.cs:733-744"),
     "LoadLineNotice":            dict(kind="notice", file="LineNotice.txt", anchor="GameApp.cs:204", card="openmir2-envir-redlist-batch"),
     "LoadAdminList":             dict(kind="envir", file="AdminList.txt", anchor="LocalDB.cs:16-28", card="openmir2-envir-redlist-batch"),
-    "LoadMapDoor":               dict(kind="other", anchor="MapManager.cs:182（随地图文件，非独立内容件）"),
+    "LoadMapDoor":               dict(kind="derived", anchor="MapManager.cs:182（随地图文件，非独立内容件）", probe_ident="add_map_door"),
     "LoadMerchant":              dict(kind="envir", file="Merchant.txt", anchor="LocalDB.cs:412-424"),
     "LoadNpcs":                  dict(kind="envir", file="Npcs.txt", anchor="LocalDB.cs:655-664", card="openmir2-npcs-fixed-loading"),
     "LoadMakeItem":              dict(kind="envir", file="MakeItem.txt", anchor="LocalDB.cs:149-158", card="openmir2-envir-redlist-batch"),
@@ -244,15 +252,19 @@ class RustCorpus:
         self.code = []   # (path, lineno, code_line)  去注释+去字符串
         self.text = []   # (path, lineno, text_line)  去注释+保留字符串
         self.file_text = {}   # path -> 去注释+保留字符串 的整篇文本（供「真装载调用」同文件判据）
+        self.bins_code = []   # code 里来自 server 二进制（*/bins/*/src）的行
         for d in dirs:
             root = Path(d)
             if not root.is_dir():
                 continue
             for p in sorted(root.rglob("*.rs")):
                 raw = read_text(p)
+                is_bins = "bins" in Path(str(p)).parts
                 for no, code in enumerate(strip_code(raw).split(NL), 1):
                     if code.strip():
                         self.code.append((str(p), no, code))
+                        if is_bins:
+                            self.bins_code.append((str(p), no, code))
                 kept = strip_code(raw, keep_strings=True)
                 self.file_text[str(p)] = kept
                 for no, txt in enumerate(kept.split(NL), 1):
@@ -289,6 +301,42 @@ class RustCorpus:
             return True
         return False
 
+    def is_bins_file(self, path: str) -> bool:
+        """该文件是否属 server 二进制（`*/bins/*/src`）。"""
+        return "bins" in Path(path).parts
+
+    def bins_ref_other(self, name: str, selfpath: str) -> bool:
+        """标识符 `name` 是否在**另一个** server 二进制源文件里被引用（= 被接线）。"""
+        pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])")
+        for p, _no, code in self.bins_code:
+            if p == selfpath:
+                continue
+            if pat.search(code):
+                return True
+        return False
+
+    def loader_wired(self, path: str, item_stem: str = "") -> bool:
+        """「装载点被 server 二进制接线」判据（片 D1-① 的**死注册表**牙）。
+
+        一个装载点算「真装载」还要求它不是**死注册表**：
+          · 该文件里定义的装载函数（`fn load…`）被另一个 `*/bins/*/src` 源文件引用；或
+          · 镜像模块路径（文件 stem = 内容件 stem）时，模块名被 `*/bins/*/src` 引用（`use …::stem`）；
+          · 该文件本身就在 bin 里且直接调 crate 装载函数。
+        只写进 crate 内部、二进制侧零引用的装载是死注册表（例：`crates/data/src/lists.rs` 全仓零引用）
+        ⇒ 不算实现、须判 RED。据此 `AdminList/GameLogItemNameList/ItemNameList/DisableSendMsgList/
+        DenyChrNameList/NoClearMonList` 由 `implemented` 降级（见 `content_rust_implemented` 判据）。
+        """
+        text = self.file_text.get(path, "")
+        names = RE_LOAD_FN_NAME.findall(text)
+        for nm in names:
+            if self.bins_ref_other(nm, path):
+                return True
+        if item_stem and Path(path).stem.lower() == item_stem and self.bins_ref_other(Path(path).stem, path):
+            return True
+        if not names and self.is_bins_file(path) and RE_LOAD_CALL.search(text):
+            return True
+        return False
+
 
 # ---------------------------------------------------------------------------
 # cards.json
@@ -301,13 +349,101 @@ def load_cards(path: Path) -> dict:
     data.setdefault("assignments", {})
     data.setdefault("known_unreachable", [])
     data.setdefault("known_false", [])
+    # 片 D1：oracle 侧 no-op / Rust 死消费点 证据桶（key -> 证据串，须含 `file:line`）。
+    data.setdefault("known_oracle_noop", {})
+    data.setdefault("known_dead_consumer", {})
     return data
 
 
+# 证据行须形如 `path.cs:NNN` / `path.rs:NNN`（含文件:行）——「豁免必须逐条带证据行」的机判形态。
+RE_EVIDENCE_LINE = re.compile(r"[^\s:]+\.(?:cs|rs):\d+")
+
+
+def _evidence_ok(ev) -> bool:
+    return isinstance(ev, str) and bool(ev.strip()) and bool(RE_EVIDENCE_LINE.search(ev))
+
+
+def oracle_noop_evidence(cards: dict, key: str):
+    """key 在 `known_oracle_noop` 且证据行合法 ⇒ 返回证据串；否则 None（未豁免）。
+
+    片 D1-①：oracle 该加载点/消费点整体是**注释掉的 no-op**（body 全注释 / getter 恒空）⇒ 特性停用，
+    不该要求 Rust 实现。豁免**必须逐条带证据行**（`file:line`）；空证据 / 无行号证据一律不生效
+    （⇒ 落回普通判据，未豁免即 RED）。
+    """
+    ev = cards.get("known_oracle_noop", {}).get(key)
+    return ev if _evidence_ok(ev) else None
+
+
+def dead_consumer_evidence(cards: dict, key: str):
+    """key 在 `known_dead_consumer` 且证据行合法 ⇒ 证据串；否则 None。
+
+    片 D1-①：Rust 装载点已接入二进制，但**消费点延后/未接**（例：MiniMap 下发帧 / LineNotice 滚动公告）
+    ⇒ 仍算缺口（不判 `implemented`），落回 tracked/RED。
+    """
+    ev = cards.get("known_dead_consumer", {}).get(key)
+    return ev if _evidence_ok(ev) else None
+
+
+def board_card_ids(repo: Path):
+    """看板上存在的卡 id 集合（`walgit collab ls`）。取不到（walgit 不可用）⇒ None（不判缺卡）。"""
+    try:
+        out = subprocess.run(["walgit", "collab", "ls", "--repo", str(repo)],
+                             capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    ids = set()
+    for line in (out.stdout or "").splitlines():
+        line = line.strip()
+        if line.startswith("openmir2-"):
+            ids.add(line)
+    return ids or None
+
+
+def resolve_cards(cards: dict, repo: Path, board_lookup=None):
+    """校验 `known_cards` 引用的卡在**看板上存在**（片 D1-③）。
+
+    `board_lookup(repo) -> set|None`（默认 `board_card_ids`）。取不到看板 ⇒ 不判缺卡（`_board_probed=False`，
+    只印 WARN）。存在的卡写入 `_valid_cards`（`card_for` 以它为准）；看板上不存在的写入 `_missing_cards`。
+    """
+    lookup = board_lookup or board_card_ids
+    known = list(cards.get("known_cards", []) or [])
+    board = lookup(repo)
+    cards["_board_probed"] = board is not None
+    if board is None:
+        cards["_valid_cards"] = known
+        cards["_missing_cards"] = []
+        return cards
+    valid = [c for c in known if c in board]
+    missing = [c for c in known if c not in board]
+    # assignments 里引用的卡也须存在（未列入 known_cards 的由 card_for 门兜底）。
+    for cid in set((cards.get("assignments", {}) or {}).values()):
+        if isinstance(cid, str) and cid.startswith("openmir2-") and cid not in board and cid not in missing:
+            missing.append(cid)
+    cards["_valid_cards"] = valid
+    cards["_missing_cards"] = missing
+    return cards
+
+
+def emit_card_prereq(cards: dict) -> int:
+    """印缺卡点名（片 D1-③）：引用了看板上不存在的卡 ⇒ 印 PREREQ_CARD_MISSING，返回 1（计 RED）。"""
+    missing = cards.get("_missing_cards", []) or []
+    if not cards.get("_board_probed", False):
+        print("WARN 卡存在性未校验（walgit collab ls 不可用）⇒ 缺卡判据本次不生效")
+        return 0
+    for cid in missing:
+        print("PREREQ_CARD_MISSING: 卡 %s 在看板上无条目（walgit collab thread 为空）⇒ 该卡所辖缺口按未立卡处理（RED）" % cid)
+    return 1 if missing else 0
+
+
 def card_for(cards: dict, key: str):
-    """缺口 key 指向的卡 id（须存在于 known_cards），否则 None。"""
+    """缺口 key 指向的卡 id（须是**看板上存在**的卡，片 D1-③），否则 None。
+
+    `known_cards` 中在看板上不存在的卡不算数 ⇒ 该缺口按「未立卡」处理（RED）。
+    """
     cid = cards.get("assignments", {}).get(key)
-    if cid and cid in set(cards.get("known_cards", [])):
+    if cid and cid in set(cards.get("_valid_cards", cards.get("known_cards", []))):
         return cid
     return None
 
@@ -363,11 +499,13 @@ def deployed_is_empty(path) -> bool:
 
 
 def deploy_prereq_problems(envir_dir, notice_dir):
-    """部署目录前置检查（fail-closed）：目录须**存在、是目录、可枚举**。
+    """部署目录前置检查（fail-closed）：目录须**存在、是目录、可枚举、且非空**。
 
     对抗验证 v5 F1（高·静默假绿 fail-open）：部署目录缺失时 `find_deployed` 对每件都返回 None
-    ⇒ 全表 `n/a-deployed`（非红）⇒ 门报「无缺口」且退出 0。故把「判不了」与「判为无缺口」分开：
-    返回问题清单（空 = 通过），由调用方决定 PREREQ_RED 还是（显式 `--allow-missing-deploy` 时）WARN。
+    ⇒ 全表 `n/a-deployed`（非红）⇒ 门报「无缺口」且退出 0。**片 D1-⑤**：目录「存在但为空」
+    （路径笔误指向新建目录 / 父目录）同样 ⇒ 每件 `find_deployed→None` ⇒ 全表 `n/a-deployed` 假绿，
+    故空目录也判 PREREQ_RED。返回问题清单（空 = 通过），由调用方决定 rc=2 还是（显式
+    `--allow-missing-deploy` 时）WARN。
     """
     problems = []
     for label, d in (("Envir", envir_dir), ("Notice", notice_dir)):
@@ -377,10 +515,26 @@ def deploy_prereq_problems(envir_dir, notice_dir):
                 problems.append((label, str(p), "目录不存在"))
             elif not p.is_dir():
                 problems.append((label, str(p), "不是目录"))
-            else:
-                next(p.iterdir(), None)   # 可枚举性探针（不可读 ⇒ PermissionError/OSError）
+            elif next(p.iterdir(), None) is None:
+                problems.append((label, str(p), "目录为空（无任何条目；路径可能指错）"))
         except OSError as exc:
             problems.append((label, str(p), "目录不可读（%s: %s）" % (type(exc).__name__, exc)))
+    return problems
+
+
+def oracle_prereq_problems(repo: Path, rel_paths):
+    """oracle 源文件前置检查（片 D1-⑥，fail-closed）。
+
+    缺 oracle 文件时旧版直接 `read_text` ⇒ 未捕获 `FileNotFoundError` traceback + rc=1（与
+    content/mutate 的 fail-closed 口径不一致）。现改为构表前校验：缺文件 ⇒ PREREQ_RED rc=2。
+    """
+    problems = []
+    for rel in rel_paths:
+        p = repo / rel
+        if not p.exists():
+            problems.append(("oracle", str(p), "文件不存在"))
+        elif not p.is_file():
+            problems.append(("oracle", str(p), "不是文件"))
     return problems
 
 
@@ -393,12 +547,22 @@ def emit_deploy_prereq(problems, allow_missing):
         return None
     if allow_missing:
         for label, path, reason in problems:
-            print("WARN 部署%s目录 %s —— %s；因 --allow-missing-deploy 降级放行（仅诊断，缺口结论不可作数）"
+            print("WARN 部署%s %s —— %s；因 --allow-missing-deploy 降级放行（仅诊断，缺口结论不可作数）"
                   % (label, path, reason))
         return None
     for label, path, reason in problems:
-        print("PREREQ_MISSING: 部署%s目录 %s —— %s（判不了缺口，fail-closed 拒跑；诊断可用 --allow-missing-deploy）"
+        print("PREREQ_MISSING: 部署%s %s —— %s（判不了缺口，fail-closed 拒跑；诊断可用 --allow-missing-deploy）"
               % (label, path, reason))
+    print("RESULT: PREREQ_RED")
+    return 2
+
+
+def emit_oracle_prereq(problems):
+    """oracle 源缺失（片 D1-⑥）：恒 rc=2 PREREQ_RED（`--allow-missing-deploy` 不豁免 oracle 面）。"""
+    if not problems:
+        return None
+    for label, path, reason in problems:
+        print("PREREQ_MISSING: %s %s —— %s（判不了缺口，fail-closed 拒跑）" % (label, path, reason))
     print("RESULT: PREREQ_RED")
     return 2
 
@@ -412,29 +576,38 @@ def _item_stem(filename: str) -> str:
 
 
 def content_rust_implemented(corpus, filename: str) -> bool:
-    """内容门「真装载调用」判据（收紧旧「文件名串出现」口径）。
+    """内容门「真装载调用」判据（片 D1-① 收紧：**死注册表**不再算实现）。
 
     判为已实现 ⟺ 存在**一个 src 文件**同时命中：
-      ① 文件名字符串字面量（去注释后仍在，即非注释-only）；② 装载标记（`load…(`/`fn load…`
-      或镜像模块路径 + 函数定义）。
-    ⇒ 注释-only、以及「只把文件名写进报错串/死常量、无任何装载调用」都不再算实现，堵住 critic 指出的假绿。
+      ① 文件名字符串字面量（去注释后仍在，即非注释-only）；
+      ② 装载标记（`load…(`/`fn load…` 或镜像模块路径 + 函数定义）；
+      ③ **装载点被 server 二进制接线**（`RustCorpus.loader_wired`：装载函数被另一 `*/bins/*/src`
+         文件引用）。⇒ 只写进 crate 内部、二进制侧零引用的装载是**死注册表**（旧口径把它判
+         `implemented`，critic 假绿 #1），现降级 ⇒ 落回 tracked/RED。
     """
     if not filename:
         return False
     stem = _item_stem(filename)
     for path in corpus.files_with_literal(filename):
-        if corpus.file_has_loader_marker(path, stem):
+        if corpus.file_has_loader_marker(path, stem) and corpus.loader_wired(path, stem):
             return True
     return False
 
 
-def content_row_status(spec: dict, deployed: bool, rust: bool, cards: dict, empty: bool = False) -> str:
+def content_row_status(spec: dict, deployed: bool, rust: bool, cards: dict, empty: bool = False,
+                       dead: bool = False, key: str = None) -> str:
     kind = spec.get("kind")
-    if kind not in ("envir", "notice", "dir"):
+    if key is None:
+        key = ("content:" + spec["file"]) if spec.get("file") else ("call:" + str(spec.get("anchor", "")))
+    # 片 D1-①：oracle 侧整体 no-op（body 全注释 / getter 恒空，逐条带证据行）⇒ 非缺口，也不算 implemented。
+    if oracle_noop_evidence(cards, key):
+        return "n/a-oracle-noop"
+    if kind not in ("envir", "notice", "dir", "derived"):
         return "n/a-" + kind
-    if rust:
+    if dead and dead_consumer_evidence(cards, key):
+        pass  # 片 D1-①：装载点已接二进制但消费点延后（例 MiniMap/LineNotice）⇒ 不算实现，落回 tracked/RED
+    elif rust:
         return "implemented"
-    key = "content:" + spec["file"]
     if card_for(cards, key):
         return "tracked"
     if not deployed:
@@ -483,12 +656,18 @@ def _make_content_row(repo, envir_dir, notice_dir, corpus, cards, spec, oracle_a
         path = find_deployed(notice_dir, name)
     elif kind == "dir":
         path = find_deployed(envir_dir, name)
-    deployed = path is not None
+    # 片 D1-④：derived（无独立内容件、随已部署的源内容加载，例 `LoadMapDoor` 随地图文件）——
+    # 「部署有」恒真；Rust 实现改按 `probe_ident` 标识符存在性判（不再静默 n/a-other）。
+    deployed = True if kind == "derived" else (path is not None)
     empty = deployed_is_empty(path)
-    probe = spec.get("probe") or name
-    rust = content_rust_implemented(corpus, probe)
-    status = content_row_status(spec, deployed, rust, cards, empty)
-    key = "content:" + name if name else ("call:" + oracle_anchor)
+    if spec.get("probe_ident"):
+        rust = corpus.present(spec["probe_ident"])
+    else:
+        probe = spec.get("probe") or name
+        rust = content_rust_implemented(corpus, probe)
+    key = ("content:" + name) if name else ("call:" + oracle_anchor)
+    dead = bool(name and dead_consumer_evidence(cards, key))
+    status = content_row_status(spec, deployed, rust, cards, empty, dead=dead, key=key)
     return dict(key=key, oracle=oracle_anchor, file=name or "-", kind=kind,
                 deployed=("yes" if deployed else "no") + ("(empty)" if empty else ""),
                 rust=("yes" if rust else "no"), status=status,
@@ -542,21 +721,82 @@ def parse_dispatch(text: str):
     return cm, rm_groups, sm_all
 
 
-def dispatch_item_status(kind: str, name: str, rust: bool, cards: dict, reachable=None) -> str:
-    """缺口状态。reachable：出站帧触发 RM 的可达性（True/False/None=不可判）。
+def dispatch_item_status(kind: str, name: str, rust: bool, cards: dict, reachable=None, noop=False) -> str:
+    """缺口状态。reachable：出站帧触发 RM 的可达性（True/False/None=不可判）；noop：入站臂是否恒假/恒空。
 
-    次序：已实现 → 已卡(tracked) → 豁免(不可达/人工登记) → RED。
-    `reachable is False`（触发 RM 每一个都是确证死支：全仓仅 const 定义 + case 标签）或人工豁免登记
-    ⇒ `n/a-unreachable`（不判 RED）。`reachable is None`（无触发 RM）**不豁免**——保守按可达处理。
+    次序：oracle-no-op → 已实现（且非 no-op 臂）→ 已卡(tracked) → 豁免(不可达/人工登记) → RED。
+    `noop=True`（片 D1-②：臂在但不干活——恒零出帧 / 恒走 FAIL 支）⇒ **不判 implemented**，落回 tracked/RED。
+    `reachable is False`（触发 RM 每一个都是确证死支）或人工豁免登记 ⇒ `n/a-unreachable`（不判 RED）。
+    `reachable is None`（无触发 RM）**不豁免**——保守按可达处理。
     """
-    if rust:
-        return "implemented"
     key = f"{kind}:{name}"
+    if oracle_noop_evidence(cards, key):
+        return "n/a-oracle-noop"
+    if rust and not noop:
+        return "implemented"
     if card_for(cards, key):
         return "tracked"
     if reachable is False or is_exempted(cards, key):
         return "n/a-unreachable"
     return "RED"
+
+
+# 匹配 `messages::CM_X =>`（含 `mir2_protocol::` 前缀）的派发臂头。
+RE_ARM_HEAD = re.compile(r"^\s*(?:mir2_protocol::)?messages::(CM_[A-Za-z0-9_]+)\s*=>")
+
+
+def _file_code_lines(corpus):
+    """按文件还原（去注释/去字符串后的）逐行代码（空行补 ""），供匹配臂的括号配对。"""
+    by_file = {}
+    for p, no, code in corpus.code:
+        by_file.setdefault(p, {})[no] = code
+    out = {}
+    for p, m in by_file.items():
+        n = max(m) if m else 0
+        out[p] = [m.get(i, "") for i in range(1, n + 1)]
+    return out
+
+
+def extract_cm_arms(corpus):
+    """返回 {CM_name: [arm_body_text, …]}：从 Rust 语料抽取 `messages::CM_X => { … }` 匹配臂体。"""
+    arms = {}
+    for _p, lines in _file_code_lines(corpus).items():
+        for i, line in enumerate(lines):
+            m = RE_ARM_HEAD.match(line)
+            if not m:
+                continue
+            name = m.group(1)
+            if "{" not in line:
+                arms.setdefault(name, []).append(line.strip())
+                continue
+            depth, started, body = 0, False, []
+            for j in range(i, min(i + 200, len(lines))):
+                body.append(lines[j])
+                depth += lines[j].count("{") - lines[j].count("}")
+                if "{" in lines[j]:
+                    started = True
+                if started and depth <= 0:
+                    break
+            arms.setdefault(name, []).append(" ".join(body))
+    return arms
+
+
+def inbound_arm_noop(corpus, name: str, arms: dict = None) -> bool:
+    """片 D1-②：入站 `CM_*` 的派发臂是否**恒假/恒空 no-op**（可机判形态，**非手写黑名单**）。
+
+    形态判据（命中任一即 no-op）：
+      (a) handler 输出被丢弃——`let (decision, _frames) = …`（绑到 `_` 前缀名）；
+      (b) 用裸字面量（`false`/`true`/整数）喂 `client_*` handler——会话态未挂、被常量顶死
+          （`client_open_door(false)` / `client_get_min_map(0)` / `client_adjust_bonus(cmd.recog, 0)`）。
+    臂不存在 ⇒ False（交由既有「缺臂」判据）；所有抽到的臂都命中形态 ⇒ True（⇒ 不算 implemented）。
+    `arms` 可传入 `extract_cm_arms(corpus)` 的缓存（build_dispatch_rows 逐臂复用，避免重复抽取）。
+    """
+    if arms is None:
+        arms = extract_cm_arms(corpus)
+    bodies = arms.get(name)
+    if not bodies:
+        return False
+    return all((RE_NOOP_UNDERSCORE_BIND.search(b) or RE_CLIENT_LITERAL_ARG.search(b)) for b in bodies)
 
 
 def oracle_rm_producers(repo: Path):
@@ -606,15 +846,18 @@ def build_dispatch_rows(repo: Path, cards: dict):
     rm_producers = oracle_rm_producers(repo)
 
     rows = []
+    arms = extract_cm_arms(corpus)
     for name, line in sorted(cm.items()):
         rust = corpus.find(name)
+        noop = inbound_arm_noop(corpus, name, arms)
         rows.append(dict(bucket="inbound", key="inbound:" + name, name=name,
                          oracle=f"Message.cs:{line}",
                          rust=("yes" if rust else "no"),
                          rust_at=(f"{Path(rust[0]).name}:{rust[1]}" if rust else "-"),
-                         status=dispatch_item_status("inbound", name, bool(rust), cards),
+                         status=dispatch_item_status("inbound", name, bool(rust), cards, noop=noop),
                          card=card_for(cards, "inbound:" + name),
                          reach="-",
+                         noop=("noop" if noop else "-"),
                          emitted_by="-"))
     for sm in sorted(sm_all):
         rust = corpus.find(sm)
@@ -666,10 +909,15 @@ def emit_json(path, payload):
 def cmd_content(args):
     repo = Path(args.repo)
     envir_dir, notice_dir = Path(args.envir_dir), Path(args.notice_dir)
+    prereq_rc = emit_oracle_prereq(oracle_prereq_problems(repo, [ORACLE_CONTENT]))
+    if prereq_rc is not None:
+        return prereq_rc
     prereq_rc = emit_deploy_prereq(deploy_prereq_problems(envir_dir, notice_dir), args.allow_missing_deploy)
     if prereq_rc is not None:
         return prereq_rc
-    rows = build_content_rows(repo, envir_dir, notice_dir, load_cards(Path(args.cards)))
+    cards = resolve_cards(load_cards(Path(args.cards)), repo)
+    card_rc = emit_card_prereq(cards)
+    rows = build_content_rows(repo, envir_dir, notice_dir, cards)
     counts, reds = summarize(rows)
     print("== 内容加载对账门（§4-1）==")
     print(f"oracle={repo / ORACLE_CONTENT}")
@@ -680,13 +928,19 @@ def cmd_content(args):
     print()
     print("summary:", json.dumps(counts, ensure_ascii=False))
     if args.json:
-        emit_json(args.json, dict(kind="content", counts=counts, rows=rows))
-    return 1 if reds else 0
+        emit_json(args.json, dict(kind="content", counts=counts, rows=rows,
+                                  missing_cards=cards.get("_missing_cards", [])))
+    return 1 if (reds or card_rc) else 0
 
 
 def cmd_dispatch(args):
     repo = Path(args.repo)
-    rows, cm, rm_groups, sm_all, rm_producers = build_dispatch_rows(repo, load_cards(Path(args.cards)))
+    prereq_rc = emit_oracle_prereq(oracle_prereq_problems(repo, [ORACLE_DISPATCH]))
+    if prereq_rc is not None:
+        return prereq_rc
+    cards = resolve_cards(load_cards(Path(args.cards)), repo)
+    card_rc = emit_card_prereq(cards)
+    rows, cm, rm_groups, sm_all, rm_producers = build_dispatch_rows(repo, cards)
     counts, reds = summarize(rows)
     print("== 协议派发对账门（§4-2）==")
     print(f"oracle={repo / ORACLE_DISPATCH}")
@@ -694,7 +948,7 @@ def cmd_dispatch(args):
           f"src/** 生产者 RM 数={len(rm_producers)}）")
     print(f"cards={args.cards}")
     print()
-    print_table(rows, ["bucket", "name", "oracle", "rust", "rust_at", "reach", "status", "card", "emitted_by"])
+    print_table(rows, ["bucket", "name", "oracle", "rust", "rust_at", "reach", "noop", "status", "card", "emitted_by"])
     if args.show_rm:
         print()
         print("-- RM→SM 映射（advisory，供 R2 定点；← 死支 = 全仓每一处出现都只是 const 定义/case 标签）--")
@@ -706,8 +960,9 @@ def cmd_dispatch(args):
     if args.json:
         emit_json(args.json, dict(kind="dispatch", counts=counts, rows=rows,
                                   rm_to_sm={k: sorted(v) for k, v in rm_groups.items()},
-                                  rm_producers=sorted(rm_producers)))
-    return 1 if reds else 0
+                                  rm_producers=sorted(rm_producers),
+                                  missing_cards=cards.get("_missing_cards", [])))
+    return 1 if (reds or card_rc) else 0
 
 
 # ---------------------------------------------------------------------------
@@ -921,11 +1176,15 @@ def selftest():
     check("teeth：确证死支帧 SM_ZZDEAD2 ⇒ n/a-unreachable（不红）",
           _st_dyn.get("SM_ZZDEAD2") == "n/a-unreachable")
 
-    # ---- content: 「真装载调用」判据（收紧旧「文件名串出现」口径）----
+    # ---- content: 「真装载调用」判据（收紧旧「文件名串出现」口径；片 D1-① 加死注册表牙）----
     _tmp_ct = Path(tempfile.mkdtemp(prefix="recon-content-"))
     try:
         _cdir = _tmp_ct / "mir2-rs/crates/envir/src"
         _cdir.mkdir(parents=True)
+        _bdir = _tmp_ct / "mir2-rs/bins/game-svr/src"
+        _bdir.mkdir(parents=True)
+        _bw = _bdir / "wiring.rs"
+        _bw.write_text("pub fn boot() {}" + NL, encoding="utf-8")
         _f = _cdir / "minimap.rs"
         _f.write_text("// MiniMap.txt 仅注释提及" + NL + "pub fn x() {}" + NL, encoding="utf-8")
         check("teeth：内容=注释-only ⇒ 不算实现",
@@ -933,12 +1192,24 @@ def selftest():
         _f.write_text('pub const FAKE: &str = "MiniMap.txt";' + NL + "pub struct Marker;" + NL, encoding="utf-8")
         check("teeth：内容=文件名串（精确引号字面量）无装载调用 ⇒ 不算实现（旧口径会假绿）",
               content_rust_implemented(RustCorpus(rust_source_dirs(_tmp_ct)), "MiniMap.txt") is False)
+        # 片 D1-①（死注册表牙）：文件名串 + 真装载调用，但装载函数只在 crate 内、二进制侧零引用
+        # ⇒ 是死注册表 ⇒ **不算实现**（旧口径会假绿成 implemented）。
         _f.write_text('pub const F: &str = "MiniMap.txt";' + NL + "pub fn load_minimap() {}" + NL, encoding="utf-8")
-        check("teeth：文件名串 + 真装载调用 ⇒ 实现",
+        check("teeth：文件名串 + 真装载调用 但二进制零引用（死注册表）⇒ 不算实现（旧口径假绿）",
+              content_rust_implemented(RustCorpus(rust_source_dirs(_tmp_ct)), "MiniMap.txt") is False)
+        # 接线（bins 引用该装载函数）后 ⇒ 实现
+        _bw.write_text("mir2_envir::load_minimap();" + NL, encoding="utf-8")
+        check("teeth：装载函数被 bins 接线 ⇒ 实现",
               content_rust_implemented(RustCorpus(rust_source_dirs(_tmp_ct)), "MiniMap.txt") is True)
+        # 镜像模块路径（minimap.rs 含函数、无 load 名）+ 模块名被 bins 引用 ⇒ 实现
         _f.write_text('pub const F: &str = "MiniMap.txt";' + NL + "pub fn parse_minimap() {}" + NL, encoding="utf-8")
-        check("teeth：镜像模块路径（minimap.rs 含函数，无 load 名）⇒ 实现",
+        _bw.write_text("use mir2_envir::minimap;" + NL, encoding="utf-8")
+        check("teeth：镜像模块路径（minimap.rs 含函数，无 load 名）+ 模块被 bins 引用 ⇒ 实现",
               content_rust_implemented(RustCorpus(rust_source_dirs(_tmp_ct)), "MiniMap.txt") is True)
+        # 未接线的镜像模块 ⇒ 不算实现
+        _bw.write_text("pub fn boot() {}" + NL, encoding="utf-8")
+        check("teeth：镜像模块路径但模块未被 bins 引用（死注册表）⇒ 不算实现",
+              content_rust_implemented(RustCorpus(rust_source_dirs(_tmp_ct)), "MiniMap.txt") is False)
     finally:
         shutil.rmtree(_tmp_ct, ignore_errors=True)
     miss_e, miss_n = Path("E:/no-such-envir-zzz"), Path("E:/no-such-notice-zzz")
@@ -973,6 +1244,119 @@ def selftest():
     check("teeth：--allow-missing-deploy ⇒ 降级（rc≠2）且印 WARN 且继续出表",
           rc_allow != 2 and "WARN" in out_allow and "summary:" in out_allow)
 
+    # ---- 片 D1-⑤：空部署目录 ⇒ PREREQ_RED rc=2（旧版 fail-open rc=0）----
+    _tmp_empty = Path(tempfile.mkdtemp(prefix="recon-empty-"))
+    try:
+        _ee, _en = _tmp_empty / "Envir", _tmp_empty / "Notice"
+        _ee.mkdir(); _en.mkdir()
+        check("deploy 前置：存在但为空的部署目录被识别为问题（2 条）",
+              len(deploy_prereq_problems(_ee, _en)) == 2)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc_empty = main(["content", "--envir-dir", str(_ee), "--notice-dir", str(_en)])
+        out_empty = buf.getvalue()
+        check("teeth：content 空部署目录 ⇒ rc=2 且 PREREQ_MISSING + RESULT: PREREQ_RED（非 fail-open rc=0）",
+              rc_empty == 2 and "PREREQ_MISSING" in out_empty and "RESULT: PREREQ_RED" in out_empty)
+    finally:
+        shutil.rmtree(_tmp_empty, ignore_errors=True)
+
+    # ---- 片 D1-⑥：缺 oracle 文件 ⇒ PREREQ_RED rc=2（旧版 traceback + rc=1）----
+    _no_repo = Path("E:/no-such-repo-zzz")
+    for _sub, _args in (("dispatch", ["dispatch", "--repo", str(_no_repo)]),
+                        ("content", ["content", "--repo", str(_no_repo)])):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc_no_oracle = main(_args)
+        out_no_oracle = buf.getvalue()
+        check("teeth（片D1-⑥）：%s 缺 oracle 文件 ⇒ rc=2（非 traceback/rc1）且 PREREQ_MISSING + RESULT: PREREQ_RED" % _sub,
+              rc_no_oracle == 2 and "PREREQ_MISSING" in out_no_oracle and "RESULT: PREREQ_RED" in out_no_oracle)
+
+    # ---- 片 D1-②：入站 no-op 臂（恒假/恒空）判据 + 状态降级 ----
+    _tmp_noop = Path(tempfile.mkdtemp(prefix="recon-noop-"))
+    try:
+        (_tmp_noop / "mir2-rs/bins/game-svr/src").mkdir(parents=True)
+        (_tmp_noop / "mir2-rs/bins/game-svr/src/main.rs").write_text(NL.join([
+            "match ident {",
+            "  messages::CM_ZZDEAD => { let (d, _f) = client_open_door(false); glog!(\"x\"); }",
+            "  messages::CM_ZZDEAD2 => { let f = client_get_min_map(0); emit(f); }",
+            "  messages::CM_ZZLIVE => { let i = client_live(cmd.param); emit(i); }",
+            "}",
+        ]) + NL, encoding="utf-8")
+        _nc = RustCorpus(rust_source_dirs(_tmp_noop))
+        check("teeth（片D1-②）：no-op 臂（绑 `_` 丢弃 handler 输出）⇒ inbound_arm_noop=True",
+              inbound_arm_noop(_nc, "CM_ZZDEAD") is True)
+        check("teeth（片D1-②）：no-op 臂（常量喂 client_* handler，恒走 FAIL 支）⇒ inbound_arm_noop=True",
+              inbound_arm_noop(_nc, "CM_ZZDEAD2") is True)
+        check("对照（片D1-②）：动态入参 + 出帧臂 ⇒ inbound_arm_noop=False",
+              inbound_arm_noop(_nc, "CM_ZZLIVE") is False)
+    finally:
+        shutil.rmtree(_tmp_noop, ignore_errors=True)
+    check("teeth（片D1-②）：no-op 臂虽 rust=yes ⇒ 不判 implemented（已卡 ⇒ tracked）",
+          dispatch_item_status("inbound", "CM_CARDED", True, cards, noop=True) == "tracked")
+    check("对照（片D1-②）：非 no-op 臂 rust=yes ⇒ implemented",
+          dispatch_item_status("inbound", "CM_CARDED", True, cards, noop=False) == "implemented")
+
+    # ---- 片 D1-①：oracle-noop 证据桶（豁免必须逐条带证据行）----
+    check("teeth（片D1-①）：known_oracle_noop 带证据行 ⇒ n/a-oracle-noop（不判 implemented）",
+          content_row_status(dict(kind="envir", file="X.txt"), deployed=True, rust=True,
+                             cards={"known_oracle_noop": {"content:X.txt": "src/A.cs:12"}}) == "n/a-oracle-noop")
+    check("teeth（片D1-①）：known_oracle_noop 证据为空 ⇒ 不生效（rust 无 ⇒ RED）",
+          content_row_status(dict(kind="envir", file="X.txt"), deployed=True, rust=False,
+                             cards={"known_oracle_noop": {"content:X.txt": ""}}) == "RED")
+    check("teeth（片D1-①）：known_oracle_noop 证据无 `file:line` ⇒ 不生效（落回 tracked）",
+          content_row_status(dict(kind="envir", file="Carded.txt"), deployed=True, rust=False,
+                             cards={"known_cards": ["openmir2-envir-redlist-batch"],
+                                    "assignments": {"content:Carded.txt": "openmir2-envir-redlist-batch"},
+                                    "known_oracle_noop": {"content:Carded.txt": "看代码就知道是 no-op"}}) == "tracked")
+    check("teeth（片D1-①）：known_dead_consumer（装载已接二进制、消费延后）⇒ 不判 implemented（落 tracked）",
+          content_row_status(dict(kind="envir", file="Carded.txt"), deployed=True, rust=True, dead=True,
+                             cards={"known_cards": ["openmir2-envir-redlist-batch"],
+                                    "assignments": {"content:Carded.txt": "openmir2-envir-redlist-batch"},
+                                    "known_dead_consumer": {"content:Carded.txt": "src/m.rs:9"}}) == "tracked")
+    check("teeth（片D1-④）：derived 内容项（无独立件、随地图加载）Rust 无 ⇒ RED（不再静默 n/a-other）",
+          content_row_status(dict(kind="derived", anchor="x"), deployed=True, rust=False,
+                             cards={"known_cards": [], "assignments": {}}) == "RED")
+
+    # ---- 片 D1-④ 接线牙：走**整表路径**（CONTENT_MAP 注册 → _make_content_row → status）----
+    # 只测 content_row_status(kind="derived") 覆盖不到「把 CONTENT_MAP 的 LoadMapDoor 注册改回
+    # kind=other」这种回退：那样 deployed 会变 False，整行静默落 n/a-other（RED 消失）而 selftest 仍绿。
+    class _StubCorpus:
+        def __init__(self, has: bool):
+            self._has = has
+
+        def present(self, ident):
+            return self._has
+
+    _map_door = CONTENT_MAP["LoadMapDoor"]
+    check("teeth（片D1-④ 接线）：CONTENT_MAP['LoadMapDoor'] 注册为 derived + probe_ident",
+          _map_door.get("kind") == "derived" and _map_door.get("probe_ident") == "add_map_door")
+    _row_no = _make_content_row(Path("."), Path("."), Path("."), _StubCorpus(False),
+                                {"known_cards": [], "assignments": {}}, _map_door, "MapManager.cs:182")
+    check("teeth（片D1-④ 接线）：整表路径 —— Rust 无 probe_ident ⇒ RED（部署恒真）",
+          _row_no["status"] == "RED" and _row_no["kind"] == "derived" and _row_no["deployed"] == "yes")
+    _row_yes = _make_content_row(Path("."), Path("."), Path("."), _StubCorpus(True),
+                                 {"known_cards": [], "assignments": {}}, _map_door, "MapManager.cs:182")
+    check("teeth（片D1-④ 接线）：整表路径 —— Rust 有 probe_ident ⇒ implemented（不误报）",
+          _row_yes["status"] == "implemented")
+
+    # ---- 片 D1-③：cards.json 引用看板上不存在的卡 ⇒ RED + 点名 ----
+    _cards_bogus = {"known_cards": ["openmir2-real-zzz", "openmir2-bogus-zzz"],
+                    "assignments": {"content:SomeNew.txt": "openmir2-bogus-zzz"}}
+    resolve_cards(_cards_bogus, Path("."), board_lookup=lambda r: {"openmir2-real-zzz"})
+    check("teeth（片D1-③）：引用看板不存在的卡 ⇒ 记入 _missing_cards（点名）",
+          _cards_bogus["_missing_cards"] == ["openmir2-bogus-zzz"])
+    check("teeth（片D1-③）：指向不存在卡的缺口 ⇒ card_for=None（按未立卡 = RED）",
+          card_for(_cards_bogus, "content:SomeNew.txt") is None)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _card_rc = emit_card_prereq(_cards_bogus)
+    check("teeth（片D1-③）：缺卡 ⇒ emit_card_prereq 返回 1 且印 PREREQ_CARD_MISSING + 点名 bogus 卡",
+          _card_rc == 1 and "PREREQ_CARD_MISSING" in buf.getvalue() and "openmir2-bogus-zzz" in buf.getvalue())
+    _cards_none = {"known_cards": ["openmir2-x"], "assignments": {}}
+    resolve_cards(_cards_none, Path("."), board_lookup=lambda r: None)
+    check("对照（片D1-③）：看板不可用 ⇒ 不判缺卡（_missing_cards 空、_board_probed=False）",
+          _cards_none["_missing_cards"] == [] and _cards_none["_board_probed"] is False)
+
     print("== recon_gates selftest ==")
     for l in lines:
         print("  " + l)
@@ -992,11 +1376,14 @@ def cmd_mutate(args):
     import tempfile
 
     repo = Path(args.repo)
-    cards = load_cards(Path(args.cards))
+    prereq_rc = emit_oracle_prereq(oracle_prereq_problems(repo, [ORACLE_CONTENT, ORACLE_DISPATCH]))
+    if prereq_rc is not None:
+        return prereq_rc
     prereq_rc = emit_deploy_prereq(deploy_prereq_problems(Path(args.envir_dir), Path(args.notice_dir)),
                                   args.allow_missing_deploy)
     if prereq_rc is not None:
         return prereq_rc
+    cards = resolve_cards(load_cards(Path(args.cards)), repo)
     results = []
     ok = True
 
@@ -1104,25 +1491,37 @@ def cmd_mutate(args):
     finally:
         shutil.rmtree(_tmp_m4d, ignore_errors=True)
 
-    # M5 —— 内容门「真装载调用」收紧：文件名串出现但无装载调用 ⇒ 必红（旧「文件名串出现」口径会假绿）
+    # M5 —— 内容门「真装载调用」收紧：文件名串出现但无装载调用 ⇒ 必红（旧「文件名串出现」口径会假绿）；
+    #        且装载点必须被 bins 接线（死注册表不算实现，片 D1-①）。
     _tmp_m5 = Path(tempfile.mkdtemp(prefix="recon-content-mut-"))
     try:
         (_tmp_m5 / "src/GameSrv").mkdir(parents=True)
         shutil.copy(repo / ORACLE_CONTENT, _tmp_m5 / "src/GameSrv/GameApp.cs")
         _cdir5 = _tmp_m5 / "mir2-rs/crates/envir/src"
         _cdir5.mkdir(parents=True)
+        _bdir5 = _tmp_m5 / "mir2-rs/bins/game-svr/src"
+        _bdir5.mkdir(parents=True)
+        _bw5 = _bdir5 / "wiring.rs"
+        _bw5.write_text("pub fn boot() {}" + NL, encoding="utf-8")
         (_cdir5 / "guardlist.rs").write_text(
             'pub const FAKE: &str = "GuardList.txt";' + NL + "pub struct G;" + NL, encoding="utf-8")
         _rows_m5 = build_content_rows(_tmp_m5, Path(args.envir_dir), Path(args.notice_dir), cards)
         _gr5 = [r for r in _rows_m5 if r.get("file") == "GuardList.txt"]
         add("M5 内容门收紧：文件名串出现但无装载调用 ⇒ GuardList.txt 必红（旧口径会假绿）",
             bool(_gr5) and _gr5[0]["status"] == "RED")
+        # 有装载调用但二进制零引用 ⇒ 死注册表 ⇒ 仍红（片 D1-①）
         (_cdir5 / "guardlist.rs").write_text(
             'pub const F: &str = "GuardList.txt";' + NL + "pub fn load_guard_list() {}" + NL,
             encoding="utf-8")
+        _rows_m5a = build_content_rows(_tmp_m5, Path(args.envir_dir), Path(args.notice_dir), cards)
+        _gr5a = [r for r in _rows_m5a if r.get("file") == "GuardList.txt"]
+        add("M5 死注册表：装载调用存在但未被 bins 接线 ⇒ GuardList.txt 仍红",
+            bool(_gr5a) and _gr5a[0]["status"] == "RED")
+        # 接线 ⇒ implemented
+        _bw5.write_text("game_svr::guardlist::load_guard_list();" + NL, encoding="utf-8")
         _rows_m5b = build_content_rows(_tmp_m5, Path(args.envir_dir), Path(args.notice_dir), cards)
         _gr5b = [r for r in _rows_m5b if r.get("file") == "GuardList.txt"]
-        add("M5 对照：文件名串 + 装载调用 ⇒ GuardList.txt implemented",
+        add("M5 对照：文件名串 + 装载调用 + bins 接线 ⇒ GuardList.txt implemented",
             bool(_gr5b) and _gr5b[0]["status"] == "implemented")
     finally:
         shutil.rmtree(_tmp_m5, ignore_errors=True)

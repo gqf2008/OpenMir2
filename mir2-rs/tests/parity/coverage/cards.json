@@ -1,5 +1,5 @@
 {
-  "_doc": "对账门卡登记（coverage-recon-gates）。known_cards = 活看板上存在的卡 id（含少数本波实施在途卡：openmir2-noclear-mon-list）；assignments = 缺口 key → 卡 id。缺口 key 形如 content:<file> / inbound:<CM_x> / outbound:<SM_x>。缺口若既未实现又不在 assignments（或指向不存在的卡）⇒ RED。known_unreachable/known_false = 人工豁免登记（与门自动 RM 可达性判据互为兜底）。assignment_roles = 出站 36 帧 triage 三分类（A 真缺编码器 / B 有编码器缺发射点 / C 门误报-oracle 死支）逐条归属。",
+  "_doc": "对账门卡登记（coverage-recon-gates）。known_cards = 活看板上存在的卡 id（**门在加载时用 `walgit collab ls` 校验存在性**：缺失卡 ⇒ PREREQ_CARD_MISSING + 该卡所辖缺口按未立卡处理 = RED；看板不可用时只印 WARN）；assignments = 缺口 key → 卡 id。缺口 key 形如 content:<file> / inbound:<CM_x> / outbound:<SM_x>。缺口若既未实现又不在 assignments（或指向不存在/看板无此卡）⇒ RED。known_unreachable/known_false = 人工豁免登记（与门自动 RM 可达性判据互为兜底）。known_oracle_noop = oracle 侧整体 no-op 的加载点/派发臂（逐条带 `file:line` 证据；空/无行号证据不生效）。known_dead_consumer = Rust 装载点已接二进制但消费点延后（逐条带证据）。assignment_roles = 出站 36 帧 triage 三分类（A 真缺编码器 / B 有编码器缺发射点 / C 门误报-oracle 死支）逐条归属。",
   "_regen": "walgit collab ls（取卡 id 全集）；本文件的 assignments 随红名单卡（R0/R1/R2）维护，批次落库后对应项自动转 implemented、assignments 可清理。",
   "known_cards": [
     "openmir2-coverage-recon-gates",
@@ -9,8 +9,7 @@
     "openmir2-outbound-encoders-red-batch",
     "openmir2-m3-rng-scene-driver",
     "openmir2-m3-monster-ai-tick",
-    "openmir2-m3-guild-state",
-    "openmir2-noclear-mon-list"
+    "openmir2-m3-guild-state"
   ],
   "assignments": {
     "content:GameLogItemNameList.txt": "openmir2-envir-redlist-batch",
@@ -99,8 +98,21 @@
     "outbound:SM_BUTCH": "openmir2-outbound-encoders-red-batch",
     "outbound:SM_BACKSTEP": "openmir2-outbound-encoders-red-batch",
     "outbound:SM_RUSH": "openmir2-outbound-encoders-red-batch",
-    "outbound:SM_RUSHKUNG": "openmir2-outbound-encoders-red-batch",
-    "content:NoClearMonList.txt": "openmir2-noclear-mon-list"
+    "outbound:SM_RUSHKUNG": "openmir2-outbound-encoders-red-batch"
+  },
+  "known_oracle_noop": {
+    "content:DisableMakeItem.txt": "src/M2Server/M2Share.cs:1145（LoadDisableMakeItem 体整段注释 ⇒ 特性停用，恒 return false）",
+    "content:EnableMakeItem.txt": "src/M2Server/M2Share.cs:1244（LoadEnableMakeItem 体整段注释）",
+    "content:UnMaster.txt": "src/M2Server/M2Share.cs:1180（LoadUnMasterList 体整段注释）",
+    "content:DenyIPAddrList.txt": "src/M2Server/M2Share.cs:1564（LoadDenyIPAddrList 体整段注释）",
+    "content:DenyAccountList.txt": "src/M2Server/M2Share.cs:1689（LoadDenyAccountList 填充循环注释 ⇒ 表恒空）+ src/M2Server/M2Share.cs:1712（GetDenyAccountList 比较注释 ⇒ 恒 false）",
+    "content:DenyChrNameList.txt": "src/M2Server/M2Share.cs:1626（LoadDenyChrNameList 体整段注释）",
+    "content:DisableSendMsgList.txt": "src/M2Server/M2Share.cs:1357（LoadDisableSendMsgList 体整段注释，恒 return false）",
+    "inbound:CM_1042": "src/M2Server/Player/PlayObject.Message.cs:996（case 体仅 LogService.Warn，无出帧/无状态改动）"
+  },
+  "known_dead_consumer": {
+    "content:MiniMap.txt": "mir2-rs/bins/game-svr/src/main.rs:7414（enter_cfg.minimap take()+glog；下发帧 CM_WANTMINIMAP 未接）",
+    "content:LineNotice.txt": "mir2-rs/bins/game-svr/src/main.rs:7436（std::mem::take(line_notice)+glog；滚动公告未接）"
   },
   "known_unreachable": [
     "outbound:SM_41",
