@@ -61,7 +61,7 @@ pub struct ClientItem<'a> {
 ///
 /// 口径：空串 ⇒ 长度字节 0；`buffer.len() > defaultSize` ⇒ 长度字节 `defaultSize`、内容截断；
 /// 否则长度字节 = `buffer.len()`、内容补零到 `defaultSize`。
-fn write_ascii_string(out: &mut Vec<u8>, value: &str, default_size: usize) {
+pub(crate) fn write_ascii_string(out: &mut Vec<u8>, value: &str, default_size: usize) {
     let (bytes, _, _) = GBK.encode(value);
     let mut buf = bytes.into_owned();
     if buf.len() > default_size {

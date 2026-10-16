@@ -51,6 +51,7 @@ use game_svr::downlink;
 use game_svr::magics;
 use game_svr::movewire;
 use game_svr::party as partywire;
+use game_svr::queryuser;
 use game_svr::smframe;
 use mir2_protocol::frame::ServerMessage;
 use mir2_protocol::messages::grobal2;
@@ -2191,6 +2192,559 @@ fn handle_query_bag_cmd(
         let _ = tx.send(SimToGate::SendFrame { socket, body });
     } else {
         glog!("WRN", "SM_BAGITEMS：找不到网关线号 {gate_idx}，丢弃");
+    }
+}
+
+/// `CM_QUERYUSERNAME(80)` 派发。
+///
+/// oracle 链：`PlayObject.Message.cs:781-783` → `ClientQueryUserName(nParam1,nParam2,nParam3)`
+/// （`PlayObject.Operate.cs:18-34`）。线缆映射（`WorldServer.cs:793-794`）：`Recog=targetId`、`Param=x`、`Tag=y`。
+///
+/// 出帧：`CretInNearXy(target,x,y)` 成立 ⇒ `SM_USERNAME(targetId, GetChrColor(target), EncodeString(GetShowName()))`；
+/// 否则 ⇒ `SM_GHOST(targetId, x, y)`（无尾）。目标不在世界 ⇒ **不发帧**（oracle `baseObject == null` 早退）。
+///
+/// **登记**：`GetChrColor` 的 PK 红名/行会/城堡支（`PlayObject.cs:3588-3656`）在本骨架全落空 ⇒ 恒取
+/// `NameColor`；`GetShowName()` 取 AOI 展示表缓存（进图时用 `enter::show_name` 算出），表缺项时回落
+/// `FilterShowName(ChrName)`（登记）。
+#[allow(clippy::too_many_arguments)]
+fn handle_query_user_name_cmd(
+    target_id: i32,
+    x: u16,
+    y: u16,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    sessions: &std::collections::HashMap<String, SessionGround>,
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "CM_QUERYUSERNAME：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
+        );
+        return;
+    };
+    let gate_idx = entry.gate_idx;
+    let Some(sg) = sessions.get(chr_name) else {
+        glog!(
+            "WRN",
+            "CM_QUERYUSERNAME：ChrName={chr_name} 无会话态（未进世界/已断线）⇒ 丢弃"
+        );
+        return;
+    };
+    let Some(se) = world.entities.get(sg.actor_id) else {
+        glog!(
+            "WRN",
+            "CM_QUERYUSERNAME：本方 actor_id={} 不在世界 ⇒ 丢弃",
+            sg.actor_id
+        );
+        return;
+    };
+    let self_map = se.map_id;
+    // `IActor baseObject = SystemShare.ActorMgr.Get(targetId); if (baseObject == null) return;`
+    let Some(target) = world.entities.get(target_id) else {
+        glog!(
+            "DBG",
+            "CM_QUERYUSERNAME：目标 ActorId={target_id} 不在世界 ⇒ 不发帧（oracle 早退）"
+        );
+        return;
+    };
+    let body = if queryuser::cetin_near_xy(world, self_map, i32::from(x), i32::from(y), target_id) {
+        // `GetChrColor(target)`：展示表里的 `name_color`（玩家 = `PLAY_NAME_COLOR`；非玩家 =
+        // `MONSTER_NAME_COLOR`），与 `GetChrColor` 在「无行会/PK/城堡」形态下的落点同口径（登记）。
+        let name_color = displays
+            .get(target_id)
+            .map_or(target.name_color, |d| d.name_color);
+        // `GetShowName()`：玩家 = `enter::show_name` 模板（= 展示表缓存）；缺项回落 `FilterShowName`。
+        let show = displays.get(target_id).map_or_else(
+            || {
+                let (b, _, _) = encoding_rs::GBK.encode(downlink::filter_show_name(&target.name));
+                b.into_owned()
+            },
+            |d| d.show_name.clone(),
+        );
+        smframe::sm_username(target_id, name_color, &show)
+    } else {
+        // `SendDefMessage(SM_GHOST, baseObject.ActorId, x, y, 0)`：x/y 是**请求参数**原样回带。
+        smframe::sm_ghost(target_id, x, y)
+    };
+    let ident = u16::from_le_bytes([body[4], body[5]]);
+    glog!(
+        "INF",
+        "CM_QUERYUSERNAME：ChrName={chr_name} target={target_id} 请求=({x},{y}) → 出帧 ident={ident}（{} 字节）",
+        body.len()
+    );
+    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "查询用户名回帧") {
+        let _ = tx.send(SimToGate::SendFrame { socket, body });
+    } else {
+        glog!(
+            "WRN",
+            "SM_USERNAME/SM_GHOST：找不到网关线号 {gate_idx}，丢弃"
+        );
+    }
+}
+
+/// `CM_QUERYUSERSTATE(82)` 派发。
+///
+/// oracle 链：`PlayObject.Message.cs:795-797` → `ClientQueryUserInformation(nParam1,nParam2,nParam3)`
+/// （`PlayObject.Operate.cs:71-111`）。线缆映射（`WorldServer.cs` 的 `default` 支）：`Recog=charId`、
+/// `Param=nX`、`Tag=nY`。
+///
+/// 出帧：`CretInNearXy(target,nX,nY)` 成立 ⇒ `SM_SENDUSERSTATE` + `EncodeBuffer(UserStateInfo)`；
+/// 目标不存在 / 非玩家 / 不在窗口 ⇒ **不发帧**。
+///
+/// **登记**：`MyGuild.GuildName`/`GuildRankName`（行会未建模 ⇒ 空串）、`ExistLover`/`LoverName`（未建模 ⇒
+/// false/空）、`ChangeItemWithLevel`（Dress 槽按等级）/`ChangeItemByJob`（按职业）两个装备显示变换未建模；
+/// 非玩家目标在 C# 触发 `InvalidCastException`（本骨架按「不发帧」处理，登记）。
+#[allow(clippy::too_many_arguments)]
+fn handle_query_user_state_cmd(
+    char_id: i32,
+    n_x: u16,
+    n_y: u16,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    sessions: &std::collections::HashMap<String, SessionGround>,
+    world: &mir2_world::World,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) {
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "CM_QUERYUSERSTATE：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
+        );
+        return;
+    };
+    let gate_idx = entry.gate_idx;
+    let Some(sg) = sessions.get(chr_name) else {
+        glog!(
+            "WRN",
+            "CM_QUERYUSERSTATE：ChrName={chr_name} 无会话态 ⇒ 丢弃"
+        );
+        return;
+    };
+    let Some(se) = world.entities.get(sg.actor_id) else {
+        glog!(
+            "WRN",
+            "CM_QUERYUSERSTATE：本方 actor_id={} 不在世界 ⇒ 丢弃",
+            sg.actor_id
+        );
+        return;
+    };
+    let self_map = se.map_id;
+    // `(IPlayerActor)SystemShare.ActorMgr.Get(charId)`：目标须是玩家（非玩家 ⇒ 不发帧，登记）。
+    let Some(target) = world
+        .entities
+        .get(char_id)
+        .filter(|t| t.race == mir2_world::ACTOR_RACE_PLAY)
+    else {
+        glog!(
+            "DBG",
+            "CM_QUERYUSERSTATE：目标 charId={char_id} 不存在或非玩家 ⇒ 不发帧（登记）"
+        );
+        return;
+    };
+    if !queryuser::cetin_near_xy(world, self_map, i32::from(n_x), i32::from(n_y), char_id) {
+        glog!(
+            "DBG",
+            "CM_QUERYUSERSTATE：目标 charId={char_id} 不在 ({n_x},{n_y}) 3×3 窗口 ⇒ 不发帧"
+        );
+        return;
+    }
+    // 目标的会话态（`use_items`/`equip`）——entity.name == ChrName。
+    let t_sess = sessions.get(&target.name);
+    let (gender, hair) = t_sess.map_or((0u8, 0u8), |s| (s.equip.gender, s.equip.hair));
+    // `GetFeature(this)`：`UseItems[Dress=0].Shape` / `UseItems[Weapon=1].Shape`。
+    let shape_of = |slot: usize| -> Option<u8> {
+        t_sess
+            .and_then(|s| s.use_items.get(slot))
+            .and_then(|o| o.as_ref())
+            .filter(|b| b.index > 0)
+            .and_then(|b| catalog.get(b.index))
+            .map(|tpl| tpl.shape)
+    };
+    let feature = game_svr::feature::human_feature(shape_of(0), shape_of(1), gender, hair);
+    // 13 槽（`UseItems.Length`）：有件编 `ClientItem`，空槽编 null 缓冲。
+    let mut segments: Vec<Vec<u8>> = Vec::with_capacity(game_svr::ability::USE_ITEMS_LEN);
+    for slot in 0..game_svr::ability::USE_ITEMS_LEN {
+        let bag = t_sess
+            .and_then(|s| s.use_items.get(slot))
+            .and_then(|o| o.as_ref());
+        match bag.and_then(|b| catalog.get(b.index).map(|tpl| (tpl, b))) {
+            Some((tpl, b)) => {
+                // `clientItem.Item.Name = CustomItemSystem.GetItemName(useitem)`（默认 = 模板名，登记）。
+                segments.push(game_svr::itemwire::encode_client_item(
+                    &game_svr::itemwire::ClientItem {
+                        tpl,
+                        name: tpl.name.clone(),
+                        make_index: b.make_index,
+                        dura: b.dura,
+                        dura_max: b.dura_max,
+                        desc: b.desc,
+                    },
+                ));
+            }
+            None => segments.push(queryuser::null_item_buffer()),
+        }
+    }
+    let user_state = queryuser::build_user_state_buffer(
+        feature,
+        &target.name,
+        i32::from(target.name_color),
+        "", // `MyGuild.GuildName`（行会未建模 ⇒ 空，登记）
+        "", // `GuildRankName`
+        &segments,
+        false, // `ExistLover`（未建模，登记）
+        "",    // `LoverName`
+    );
+    // `SendSocket(ClientMsg, EDCode.EncodeBuffer(userState))`（`Operate.cs:110-111`）。
+    let body = smframe::sm_senduserstate(&mir2_protocol::edcode::encode(&user_state));
+    glog!(
+        "INF",
+        "CM_QUERYUSERSTATE：ChrName={chr_name} target={char_id} 请求=({n_x},{n_y}) → SM_SENDUSERSTATE（{} 字节）",
+        body.len()
+    );
+    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "查询用户状态回帧") {
+        let _ = tx.send(SimToGate::SendFrame { socket, body });
+    } else {
+        glog!("WRN", "SM_SENDUSERSTATE：找不到网关线号 {gate_idx}，丢弃");
+    }
+}
+
+/// `CM_QUERYUSERSET(3040)` 派发。
+///
+/// oracle 链：`PlayObject.Message.cs:798-799` → `ClientQueryUserSet(processMsg)`
+/// （`PlayObject.Operate.cs:66-69`）。**oracle 函数体为空**
+/// （`private static void ClientQueryUserSet(ProcessMessage processMsg) { }`）⇒ 无帧、无副作用。
+///
+/// 本派发分支的唯一语义 = **「已识别、不静默丢弃」**。
+///
+/// **登记**：「不漏接」保证由 §4-2 的**协议派发对账门**（卡 `openmir2-coverage-recon-gates`）覆盖；
+/// 本单测只能钉「调用不产帧/不改态」。
+fn handle_query_user_set_cmd(chr_name: &str, socket: i32, online: &OnlineRegistry) {
+    // oracle 体为空：不发帧、不改任何会话态；仅记一行供对账门/日志确认「已派发」。
+    let online_found = online.iter().any(|e| e.chr_name == chr_name);
+    glog!(
+        "DBG",
+        "CM_QUERYUSERSET：ChrName={chr_name} socket={socket} 在线={online_found}（oracle 函数体为空 ⇒ 无帧/无副作用）"
+    );
+}
+
+/// `CM_QUERYVAL(1065)` 派发。
+///
+/// oracle 链：`PlayObject.Message.cs:1400-1402` → `ProcessQueryValue(nParam1, Msg)`
+/// （`PlayObject.Base.cs:3420-3473`）。线缆映射（`WorldServer.cs` 的 `default` 支）：`Recog=npc`、尾 = `Msg`。
+///
+/// ```text
+/// if (!Ghost && GotoNpcLabel != "") sRefMsg = DeCodeString(sData);   // 否则 sRefMsg = ""
+/// switch (ValType) { 0: MNSval[ValLabel] = sRefMsg; 1: MNMval[ValLabel] = StrToInt(sRefMsg, 0); }
+/// switch (ValNpcType) { 0/1/2: 找 NPC → GotoLable(this, GotoNpcLabel, false); }
+/// GotoNpcLabel = "";
+/// ```
+///
+/// **本片已实现**：`Ghost`/`GotoNpcLabel` 门 + `ValType` 的 `MNSval`/`MNMval` 赋值 + `GotoNpcLabel` 清空
+/// （入站尾已在网关侧 `EDCode.DeCodeString` ⇒ 与 oracle 的 `DeCodeString(sData)` 同源）。
+/// **登记**：`GotoNpcLabel`/`ValType`/`ValLabel`/`ValNpcType` 由 NPC 脚本 `<QUERYVAL>` 置位，脚本层未接线
+/// ⇒ 生产路径恒早退（`GotoNpcLabel` 空）；`ValNpcType` 的 `GotoLable` 分发依赖 NPC 脚本交互
+/// （卡 `openmir2-npcs-fixed-loading`），未接线。
+///
+/// 返回 `true` = 走到了 `ValType` 赋值（供单测钉门）。
+fn handle_query_val_cmd(
+    npc: i32,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    world: &mir2_world::World,
+) -> bool {
+    let _ = (npc, socket); // `npc`/`socket` 供 `ValNpcType` 的 `GotoLable` 分发用（未接线，登记）。
+    if online.iter().all(|e| e.chr_name != chr_name) {
+        glog!(
+            "WRN",
+            "CM_QUERYVAL：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
+        );
+        return false;
+    }
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        glog!("WRN", "CM_QUERYVAL：ChrName={chr_name} 无会话态 ⇒ 丢弃");
+        return false;
+    };
+    let ghost = world.entities.get(sg.actor_id).is_some_and(|e| e.ghost);
+    // `if (!Ghost && !string.IsNullOrEmpty(GotoNpcLabel)) sRefMsg = DeCodeString(sData);`
+    let s_ref_msg = if !ghost && !sg.goto_npc_label.is_empty() {
+        tail.unwrap_or("").to_string()
+    } else {
+        String::new()
+    };
+    // `switch (ValType)`
+    let idx = usize::from(sg.val_label);
+    match sg.val_type {
+        0 => {
+            if let Some(slot) = sg.mns_val.get_mut(idx) {
+                *slot = s_ref_msg;
+            } else {
+                glog!(
+                    "WRN",
+                    "CM_QUERYVAL：ValLabel={idx} 越界 MNSval（长度 100；oracle 抛 IndexOutOfRange）"
+                );
+            }
+        }
+        1 => {
+            let v = mir2_shared::hutil::str_to_int(&s_ref_msg, 0);
+            if let Some(slot) = sg.mnm_val.get_mut(idx) {
+                *slot = v;
+            } else {
+                glog!(
+                    "WRN",
+                    "CM_QUERYVAL：ValLabel={idx} 越界 MNMval（长度 100；oracle 抛 IndexOutOfRange）"
+                );
+            }
+        }
+        other => {
+            glog!("DBG", "CM_QUERYVAL：ValType={other} 不在 {{0,1}} ⇒ 无赋值");
+        }
+    }
+    // `switch (ValNpcType)` 的 `GotoLable` 分发：登记（依赖 NPC 脚本交互）。
+    // 0 = `FindMerchant(npc) ?? FindNpc(npc)` → `GotoLable(this, GotoNpcLabel, false)`；
+    // 1 = `FunctionNPC.GotoLable`；2 = `ManageNPC.GotoLable`。
+    if sg.val_npc_type <= 2 {
+        glog!(
+            "DBG",
+            "CM_QUERYVAL：ValNpcType={} 的 GotoLable({:?}) 分发未接线（登记）",
+            sg.val_npc_type,
+            sg.goto_npc_label
+        );
+    }
+    // `GotoNpcLabel = string.Empty;`
+    sg.goto_npc_label.clear();
+    true
+}
+
+/// `PlayObject` 的 `ClickNpcTime` 默认限频（`GameSvrConf.cs:1481` `ClickNpcTime = 1000`，
+/// `Server.conf [Server] ClickNPCTime` 覆盖；本部署无该键 ⇒ 缺省 1000。**登记**：配置未接，恒用缺省）。
+const CLICK_NPC_TIME_MS: i32 = 1000;
+
+/// `CM_CLICKNPC(1010)` 派发（点 NPC）。
+///
+/// oracle 链：`PlayObject.Message.cs:885-887` → `ClientClickNpc(nParam1)`（`PlayObject.Base.cs:674-694`）：
+/// ```text
+/// if (!IsCanDeal) { SendMsg(ManageNPC, RM_MENU_OK, 0, ActorId, 0, 0, CanotTryDealMsg); return; }
+/// if (Death || Ghost) return;
+/// if (GetTickCount() - ClickNpcTime > Config.ClickNpcTime) {
+///     ClickNpcTime = GetTickCount();
+///     normNpc = FindMerchant(actorId) ?? FindNpc(actorId);
+///     if (normNpc != null && normNpc.Envir == Envir && |dx| <= 15 && |dy| <= 15) normNpc.Click(this);
+/// }
+/// ```
+/// 线缆映射：`Recog=npcActorId`。
+///
+/// **本片已实现**：`IsCanDeal` 门 + `Death`/`Ghost` 门 + `ClickNpcTime` 限频门 + `FindMerchant` 解析
+/// + 同图/±15 距离门。返回 `true` = 全部通过、走到了 `normNpc.Click(this)` 点。
+///
+/// **登记**：① `FindNpc(actorId)`（固定 NPC，`Envir/Npcs.txt`）未装载（卡 `openmir2-npcs-fixed-loading`）
+/// ⇒ 仅商人可被点；② `normNpc.Click(this)` 的 `GotoLable("@main")` → `SM_MERCHANTSAY` 交互链依赖 NPC 脚本
+/// 宿主，未在本派发内接线（登记为 T1 依赖）；③ `!IsCanDeal` 支的 `MessageSettings.CanotTryDealMsg` 文本 +
+/// `ManageNPC` 回帧未建模（`IsCanDeal` 生产恒真 ⇒ 该支不可达）。
+fn handle_click_npc_cmd(
+    npc_actor_id: i32,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    world: &mir2_world::World,
+) -> bool {
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "CM_CLICKNPC：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
+        );
+        return false;
+    };
+    let _gate_idx = entry.gate_idx;
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        glog!("WRN", "CM_CLICKNPC：ChrName={chr_name} 无会话态 ⇒ 丢弃");
+        return false;
+    };
+    // `if (!IsCanDeal) { SendMsg(...); return; }`
+    if !sg.is_can_deal {
+        glog!(
+            "WRN",
+            "CM_CLICKNPC：IsCanDeal=false ⇒ oracle 发 RM_MENU_OK(CanotTryDealMsg)（文案/帧未建模，登记）ChrName={chr_name}"
+        );
+        return false;
+    }
+    let self_id = sg.actor_id;
+    let Some(se) = world.entities.get(self_id) else {
+        glog!(
+            "WRN",
+            "CM_CLICKNPC：本方 actor_id={self_id} 不在世界 ⇒ 丢弃"
+        );
+        return false;
+    };
+    // `if (Death || Ghost) return;`
+    if se.death || se.ghost {
+        glog!(
+            "DBG",
+            "CM_CLICKNPC：Death/Ghost ⇒ return ChrName={chr_name}"
+        );
+        return false;
+    }
+    let (px, py, pmap) = (se.x, se.y, se.map_id);
+    let now = world.clock_ms;
+    // `if (GetTickCount() - ClickNpcTime > Config.ClickNpcTime)`
+    // `ClickNpcTime == None` = 未点过（照 oracle「首次即过」；oracle 里 `ClickNpcTime=0` +
+    // `GetTickCount()` 为开机毫秒 ⇒ 首次必过，本骨架虚拟时钟从 0 起，用 `None` 表达同一口径）。
+    if let Some(t) = sg.click_npc_time {
+        if now - t <= i64::from(CLICK_NPC_TIME_MS) {
+            glog!(
+                "DBG",
+                "CM_CLICKNPC：ClickNpcTime 限频内 ⇒ 忽略 ChrName={chr_name}"
+            );
+            return false;
+        }
+    }
+    // oracle 在门外立即 `ClickNpcTime = GetTickCount()`（**先于** FindMerchant）。
+    sg.click_npc_time = Some(now);
+    // `FindMerchant(actorId) ?? FindNpc(actorId)`：本骨架只商人落在世界（`Npcs.txt` 未装载，登记）。
+    let Some(ne) = world
+        .entities
+        .get(npc_actor_id)
+        .filter(|e| e.merchant.is_some())
+    else {
+        glog!(
+            "DBG",
+            "CM_CLICKNPC：FindMerchant/FindNpc({npc_actor_id}) == null ⇒ 忽略（FindNpc 未装载，登记）"
+        );
+        return false;
+    };
+    let (nx, ny, nmap) = (ne.x, ne.y, ne.map_id);
+    if nmap == pmap && (nx - px).abs() <= 15 && (ny - py).abs() <= 15 {
+        // `normNpc.Click(this)` ⇒ `GotoLable("@main")`（`NormNpc.cs:68-73`）——NPC 脚本交互链未接线（登记）。
+        glog!(
+            "INF",
+            "CM_CLICKNPC：到达 Click 点 ChrName={chr_name} npc={npc_actor_id}（Click→@main 未接线，登记）"
+        );
+        return true;
+    }
+    glog!(
+        "DBG",
+        "CM_CLICKNPC：NPC 不同图/超 ±15 ⇒ 忽略 ChrName={chr_name} npc={npc_actor_id}"
+    );
+    false
+}
+
+/// `CM_SOFTCLOSE(1009)` 派发（小退/软关）。
+///
+/// oracle 链：`PlayObject.Message.cs:874-884`：
+/// ```text
+/// if (!OffLineFlag) {
+///     BoReconnection = true;
+///     BoSoftClose = true;
+///     if (processMsg.wParam == 1) BoEmergencyClose = true;
+/// }
+/// ```
+/// `wParam` = 线缆 `Series`。置位后**同一 tick** 的 `RunNotice`（`PlayObject.cs:1082-1090`）走 `BoSoftClose`
+/// 支 ⇒ `MakeGhost()`（离开世界）；`BoReconnection` 置真 ⇒ 跳过 `!BoReconnection && BoSoftClose` 的行会
+/// 退出提示支（行会未建模）。
+///
+/// **本片已实现**：三道置位 + `world.soft_close()`（= `MakeGhost` 的世界侧等价物，`crates/world::session`）。
+/// **登记**：`OffLineFlag`（挂机态）未建模 ⇒ 恒 `false`（门恒通过）；`BoKickFlag` 支
+/// （`SM_OUTOFCONNECTION`）不属本命令。
+fn handle_soft_close_cmd(
+    w_param: u16,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    world: &mut mir2_world::World,
+) {
+    if online.iter().all(|e| e.chr_name != chr_name) {
+        glog!(
+            "WRN",
+            "CM_SOFTCLOSE：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
+        );
+        return;
+    }
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        glog!("WRN", "CM_SOFTCLOSE：ChrName={chr_name} 无会话态 ⇒ 丢弃");
+        return;
+    };
+    // `if (!OffLineFlag)`：`OffLineFlag` 未建模 ⇒ 恒真。
+    sg.bo_reconnection = true;
+    sg.bo_soft_close = true;
+    let emergency = w_param == 1;
+    if emergency {
+        sg.bo_emergency_close = true;
+    }
+    // `RunNotice` 的 `BoSoftClose` 支 ⇒ `MakeGhost()`（同 tick 后段）。
+    match world.soft_close(chr_name) {
+        Ok(()) => glog!(
+            "INF",
+            "CM_SOFTCLOSE：ChrName={chr_name} 软关（BoReconnection=true/BoSoftClose=true/BoEmergencyClose={emergency}）⇒ 离开世界"
+        ),
+        Err(e) => glog!(
+            "DBG",
+            "CM_SOFTCLOSE：ChrName={chr_name} 置位完成，但 soft_close 未生效（{e:?}）"
+        ),
+    }
+}
+
+/// 入站 P0 批（R1 前六条）的**派发臂**：把 `sim_loop` 的 6 条 `cmd.ident` 分支收敛到一处，
+/// 使「ident → handler」与「线缆字段 → 形参」的映射可被**派发级单测**直接钉住
+/// （测试构造 12B 帧 → `CommandMessage::from_bytes` → 本函数 → 断言出帧/副作用）。
+///
+/// 返回 `true` = 本 ident 属本批（已派发或已按 oracle 早退）；`false` = 不属本批，
+/// 交由 `sim_loop` 的后续分支处理。字段映射逐条见各 `handle_*_cmd` 的文档
+/// （oracle 侧是 `WorldServer.ProcessUserMessage` 的一处 `switch`）。
+#[allow(clippy::too_many_arguments)]
+fn dispatch_inbound_p0(
+    cmd: &CommandMessage,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    world: &mut mir2_world::World,
+    displays: &downlink::DisplayTable,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) -> bool {
+    if cmd.ident == mir2_protocol::messages::CM_QUERYUSERNAME {
+        // 线缆映射（`WorldServer.cs:793-794`）：`Recog=targetId`、`Param=x`、`Tag=y`。
+        handle_query_user_name_cmd(
+            cmd.recog, cmd.param, cmd.tag, chr_name, socket, online, sessions, world, displays,
+            gates,
+        );
+        true
+    } else if cmd.ident == mir2_protocol::messages::CM_QUERYUSERSTATE {
+        // 线缆映射（`WorldServer.cs` 的 `default` 支）：`Recog=charId`、`Param=nX`、`Tag=nY`。
+        handle_query_user_state_cmd(
+            cmd.recog, cmd.param, cmd.tag, chr_name, socket, online, sessions, world, gates,
+            catalog,
+        );
+        true
+    } else if cmd.ident == mir2_protocol::messages::CM_QUERYUSERSET {
+        // oracle `ClientQueryUserSet` 函数体为空 ⇒ 无帧/无副作用（只保证「不漏接」）。
+        handle_query_user_set_cmd(chr_name, socket, online);
+        true
+    } else if cmd.ident == mir2_protocol::messages::CM_QUERYVAL {
+        // 线缆映射：`Recog=npc`、尾 = `Msg`（已在上游 `EDCode.DeCodeString`）。
+        handle_query_val_cmd(cmd.recog, tail, chr_name, socket, online, sessions, world);
+        true
+    } else if cmd.ident == mir2_protocol::messages::CM_SOFTCLOSE {
+        // `wParam`（= 线缆 `Series`）== 1 ⇒ `BoEmergencyClose`。
+        handle_soft_close_cmd(cmd.series, chr_name, socket, online, sessions, world);
+        true
+    } else if cmd.ident == mir2_protocol::messages::CM_CLICKNPC {
+        // 线缆映射：`Recog=npcActorId`。
+        handle_click_npc_cmd(cmd.recog, chr_name, socket, online, sessions, world);
+        true
+    } else {
+        false
     }
 }
 
@@ -5888,6 +6442,31 @@ struct SessionGround {
     hunger_status: i32,
     /// `PlayObject.QueryBagItemsTick`（`PlayObject.Message.cs:786` 的 30s 限频）：`None` = 未查过（照 oracle 首次即过）。
     query_bag_items_tick: Option<i64>,
+    /// `PlayObject.BoReconnection`（`PlayObject.cs:376`）：`CM_SOFTCLOSE` 置真 ⇒ 小退后允许重连。
+    bo_reconnection: bool,
+    /// `PlayObject.BoSoftClose`（`PlayObject.cs:368`）：`CM_SOFTCLOSE` 置真 ⇒ `RunNotice` 的 `MakeGhost()`。
+    bo_soft_close: bool,
+    /// `PlayObject.BoEmergencyClose`（`PlayObject.cs:364`）：`CM_SOFTCLOSE` 的 `wParam==1` 时置真。
+    bo_emergency_close: bool,
+    /// `PlayObject.IsCanDeal`（`PlayObject.cs:739`，构造缺省 `true`，`PlayObject.cs:954`）：
+    /// `CM_CLICKNPC` 的 `!IsCanDeal` 前置门（`PlayObject.Base.cs:676`）。
+    is_can_deal: bool,
+    /// `PlayObject.ClickNpcTime`（`PlayObject.Base.cs:684`）：`CM_CLICKNPC` 的 `ClickNpcTime`
+    /// 限频基准（毫秒）；`None` = 未点过（照 oracle 首次即过的口径，同 `query_bag_items_tick`）。
+    click_npc_time: Option<i64>,
+    /// `PlayObject.GotoNpcLabel`（`PlayObject.cs:523`）：`CM_QUERYVAL` 的脚本回跳标签
+    /// （由 NPC 脚本置位；脚本层未接线 ⇒ 恒空，登记）。
+    goto_npc_label: String,
+    /// `PlayObject.ValType`（`PlayObject.cs:278`）：`<QUERYVAL>` 的取值类型（0 串 / 1 整）。
+    val_type: u8,
+    /// `PlayObject.ValLabel`（`PlayObject.cs:279`）：`<QUERYVAL>` 的槽位下标（`MNSval`/`MNMval` 的键）。
+    val_label: u8,
+    /// `PlayObject.ValNpcType`（`PlayObject.cs:277`）：`GotoLable` 的 NPC 目标类型（0 商人 / 1 功能 / 2 管理）。
+    val_npc_type: u8,
+    /// `PlayObject.MNSval`（`PlayObject.cs:551`，`new string[100]`）：`<QUERYVAL>` 的串槽。
+    mns_val: Vec<String>,
+    /// `PlayObject.MNMval`（`PlayObject.cs:543`，`new int[100]`）：`<QUERYVAL>` 的整槽。
+    mnm_val: Vec<i32>,
     /// `PlayObject.SaveRcdTick`（`PlayObject.cs:601/886`）——周期存档计时基准（毫秒，
     /// 与 [`now_ms`] 同源）。进世界时起算（= oracle `new PlayObject()`），每次周期触发时
     /// **先重置**再发 `DB_SAVEHUMANRCD`（`WorldServer.cs:698-703`）；见 [`drain_periodic_save`]。
@@ -6614,6 +7193,21 @@ fn sim_loop(
                             &enter_cfg.catalog,
                             &world,
                         );
+                    } else if dispatch_inbound_p0(
+                        &cmd,
+                        tail.as_deref(),
+                        &chr_name,
+                        socket,
+                        &online,
+                        &mut ground_sessions,
+                        &mut world,
+                        &displays,
+                        &gates,
+                        &enter_cfg.catalog,
+                    ) {
+                        // 入站 P0 批（R1 前六条：CM_QUERYUSERNAME/CM_QUERYUSERSTATE/CM_QUERYUSERSET/
+                        // CM_QUERYVAL/CM_SOFTCLOSE/CM_CLICKNPC）：派发与线缆字段映射见
+                        // [`dispatch_inbound_p0`] 的逐条 oracle 对照。
                     } else if matches!(
                         cmd.ident,
                         game_svr::shop::CM_MERCHANTDLGSELECT
@@ -7341,6 +7935,17 @@ fn sim_loop(
                                                             user_unlock_durg: false,
                                                             hunger_status: d.hunger_status,
                                                             query_bag_items_tick: None,
+                                                            bo_reconnection: false,
+                                                            bo_soft_close: false,
+                                                            bo_emergency_close: false,
+                                                            is_can_deal: true,
+                                                            click_npc_time: None,
+                                                            goto_npc_label: String::new(),
+                                                            val_type: 0,
+                                                            val_label: 0,
+                                                            val_npc_type: 0,
+                                                            mns_val: vec![String::new(); 100],
+                                                            mnm_val: vec![0; 100],
                                                             // `PlayObject.SaveRcdTick`（`PlayObject.cs:886`）：
                                                             // 进世界时起算。oracle 在 `new PlayObject()` 里取
                                                             // `GetTickCount()`（每次登入都新建对象，`WorldServer.cs:234`），
@@ -9745,6 +10350,17 @@ mod tests {
             user_unlock_durg: false,
             hunger_status: 0,
             query_bag_items_tick: None,
+            bo_reconnection: false,
+            bo_soft_close: false,
+            bo_emergency_close: false,
+            is_can_deal: true,
+            click_npc_time: None,
+            goto_npc_label: String::new(),
+            val_type: 0,
+            val_label: 0,
+            val_npc_type: 0,
+            mns_val: vec![String::new(); 100],
+            mnm_val: vec![0; 100],
             save_rcd_tick: 0,
         }
     }
@@ -9904,6 +10520,17 @@ mod tests {
             user_unlock_durg: false,
             hunger_status: 55,
             query_bag_items_tick: None,
+            bo_reconnection: false,
+            bo_soft_close: false,
+            bo_emergency_close: false,
+            is_can_deal: true,
+            click_npc_time: None,
+            goto_npc_label: String::new(),
+            val_type: 0,
+            val_label: 0,
+            val_npc_type: 0,
+            mns_val: vec![String::new(); 100],
+            mnm_val: vec![0; 100],
             save_rcd_tick: 0,
         };
         let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
@@ -10558,6 +11185,17 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                bo_reconnection: false,
+                bo_soft_close: false,
+                bo_emergency_close: false,
+                is_can_deal: true,
+                click_npc_time: None,
+                goto_npc_label: String::new(),
+                val_type: 0,
+                val_label: 0,
+                val_npc_type: 0,
+                mns_val: vec![String::new(); 100],
+                mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
             },
         );
@@ -10728,6 +11366,17 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                bo_reconnection: false,
+                bo_soft_close: false,
+                bo_emergency_close: false,
+                is_can_deal: true,
+                click_npc_time: None,
+                goto_npc_label: String::new(),
+                val_type: 0,
+                val_label: 0,
+                val_npc_type: 0,
+                mns_val: vec![String::new(); 100],
+                mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
             },
         );
@@ -10874,6 +11523,17 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                bo_reconnection: false,
+                bo_soft_close: false,
+                bo_emergency_close: false,
+                is_can_deal: true,
+                click_npc_time: None,
+                goto_npc_label: String::new(),
+                val_type: 0,
+                val_label: 0,
+                val_npc_type: 0,
+                mns_val: vec![String::new(); 100],
+                mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
             },
         );
@@ -11000,6 +11660,17 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                bo_reconnection: false,
+                bo_soft_close: false,
+                bo_emergency_close: false,
+                is_can_deal: true,
+                click_npc_time: None,
+                goto_npc_label: String::new(),
+                val_type: 0,
+                val_label: 0,
+                val_npc_type: 0,
+                mns_val: vec![String::new(); 100],
+                mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
             },
         );
@@ -11709,6 +12380,17 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                bo_reconnection: false,
+                bo_soft_close: false,
+                bo_emergency_close: false,
+                is_can_deal: true,
+                click_npc_time: None,
+                goto_npc_label: String::new(),
+                val_type: 0,
+                val_label: 0,
+                val_npc_type: 0,
+                mns_val: vec![String::new(); 100],
+                mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
             },
         );
@@ -11852,6 +12534,17 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                bo_reconnection: false,
+                bo_soft_close: false,
+                bo_emergency_close: false,
+                is_can_deal: true,
+                click_npc_time: None,
+                goto_npc_label: String::new(),
+                val_type: 0,
+                val_label: 0,
+                val_npc_type: 0,
+                mns_val: vec![String::new(); 100],
+                mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
             },
         );
@@ -12378,6 +13071,17 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                bo_reconnection: false,
+                bo_soft_close: false,
+                bo_emergency_close: false,
+                is_can_deal: true,
+                click_npc_time: None,
+                goto_npc_label: String::new(),
+                val_type: 0,
+                val_label: 0,
+                val_npc_type: 0,
+                mns_val: vec![String::new(); 100],
+                mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
             },
         );
@@ -14680,6 +15384,17 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                bo_reconnection: false,
+                bo_soft_close: false,
+                bo_emergency_close: false,
+                is_can_deal: true,
+                click_npc_time: None,
+                goto_npc_label: String::new(),
+                val_type: 0,
+                val_label: 0,
+                val_npc_type: 0,
+                mns_val: vec![String::new(); 100],
+                mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
             },
         );
@@ -14825,6 +15540,17 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                bo_reconnection: false,
+                bo_soft_close: false,
+                bo_emergency_close: false,
+                is_can_deal: true,
+                click_npc_time: None,
+                goto_npc_label: String::new(),
+                val_type: 0,
+                val_label: 0,
+                val_npc_type: 0,
+                mns_val: vec![String::new(); 100],
+                mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
             },
         );
@@ -14939,6 +15665,17 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                bo_reconnection: false,
+                bo_soft_close: false,
+                bo_emergency_close: false,
+                is_can_deal: true,
+                click_npc_time: None,
+                goto_npc_label: String::new(),
+                val_type: 0,
+                val_label: 0,
+                val_npc_type: 0,
+                mns_val: vec![String::new(); 100],
+                mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
             },
         );
@@ -16017,5 +16754,874 @@ mod tests {
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
             "IsBDeal=false ⇒ 不得开窗（oracle Merchant.cs:932）"
         );
+    }
+
+    // ===================== 入站派发 P0 批（R1 前六条）=====================
+
+    /// 把一条 `SimToGate::SendFrame` 流排空成帧体列表（body 含 12B 命令头）。
+    fn drain_frames(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        while let Ok(m) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = m {
+                out.push(body);
+            }
+        }
+        out
+    }
+
+    /// 从帧体取 `Ident`/`Param`/`Tag`。
+    fn hdr(body: &[u8]) -> (u16, u16, u16, i32) {
+        (
+            u16::from_le_bytes([body[4], body[5]]),
+            u16::from_le_bytes([body[6], body[7]]),
+            u16::from_le_bytes([body[8], body[9]]),
+            i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+        )
+    }
+
+    /// `CM_QUERYUSERNAME(80)`：近窗 ⇒ `SM_USERNAME`（尾 = `EncodeString(GetShowName())`）；
+    /// 出窗 ⇒ `SM_GHOST`（x/y 原样回带、无尾）；目标不存在 ⇒ **不发帧**（oracle `baseObject == null` 早退）。
+    ///
+    /// 红检：把 `cetin_near_xy` 的窗口从 3×3 改宽/改窄 ⇒ ①/② 断言必红；删掉「目标不存在即 return」
+    /// ⇒ ③ 断言必红；把 SM_GHOST 的 `x`/`y` 换成目标坐标 ⇒ ② 的红检必红。
+    #[test]
+    fn query_user_name_near_username_far_ghost_missing_no_frame() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
+            .unwrap();
+        world.open_session("tgt");
+        let tgt = world
+            .enter_map("tgt", mir2_world::Entity::new(0, "tgt", 11, 10), 0)
+            .unwrap();
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            tgt,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"TGT-SHOWN".to_vec()),
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // ① 目标 (11,10) 落在以 (10,10) 为心的 3×3 ⇒ SM_USERNAME。
+        handle_query_user_name_cmd(
+            tgt, 10, 10, "hero", 901, &online, &sessions, &world, &displays, &gates,
+        );
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1, "近窗 ⇒ 恰好一帧");
+        let (ident, param, tag, recog) = hdr(&frames[0]);
+        assert_eq!(ident, mir2_protocol::messages::SM_USERNAME, "ident=42");
+        assert_eq!(recog, tgt, "Recog=targetId");
+        assert_eq!(param, 255, "Param=GetChrColor=255");
+        assert_eq!(tag, 0);
+        assert_eq!(
+            mir2_protocol::edcode::decode(&frames[0][12..]),
+            b"TGT-SHOWN",
+            "尾 = EncodeString(GetShowName())"
+        );
+
+        // ② 目标不在窗口（心 (20,20)）⇒ SM_GHOST，x/y 原样回带、无尾。
+        handle_query_user_name_cmd(
+            tgt, 20, 20, "hero", 901, &online, &sessions, &world, &displays, &gates,
+        );
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1, "出窗 ⇒ 恰好一帧");
+        let (ident, param, tag, recog) = hdr(&frames[0]);
+        assert_eq!(ident, mir2_protocol::messages::SM_GHOST, "ident=803");
+        assert_eq!(recog, tgt);
+        assert_eq!(
+            (param, tag),
+            (20, 20),
+            "SM_GHOST 的 Param/Tag = 请求 x/y 原样"
+        );
+        assert_eq!(frames[0].len(), 12, "SM_GHOST 无尾");
+
+        // ③ 目标不存在 ⇒ 不发帧。
+        handle_query_user_name_cmd(
+            9999, 10, 10, "hero", 901, &online, &sessions, &world, &displays, &gates,
+        );
+        assert!(
+            drain_frames(&mut rx0).is_empty(),
+            "目标不存在 ⇒ oracle 早退，不发帧"
+        );
+    }
+
+    /// `CM_QUERYUSERSTATE(82)`：近窗 ⇒ `SM_SENDUSERSTATE`（`Recog=0`），尾 = `EncodeBuffer(UserStateInfo)`；
+    /// 目标的 UserStateInfo 头字段（Feature/UserName/NameColor）逐字段对上；非玩家目标 ⇒ 不发帧。
+    ///
+    /// 红检：把 `build_user_state_buffer` 的字段序换乱（如 NameColor 提到 UserName 前）⇒ 偏移断言必红；
+    /// 删掉 `race == ACTOR_RACE_PLAY` 过滤 ⇒ 非玩家断言必红。
+    #[test]
+    fn query_user_state_frame_fields_and_non_player_guard() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
+            .unwrap();
+        world.open_session("tgt");
+        let tgt = world
+            .enter_map("tgt", mir2_world::Entity::new(0, "tgt", 11, 10), 0)
+            .unwrap();
+        // 一只怪（非玩家）目标，验「非玩家 ⇒ 不发帧」。
+        let mon = world.add_entity({
+            let mut e = mir2_world::Entity::new(0, "mon", 11, 11);
+            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            e
+        });
+        world.tick();
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero));
+        sessions.insert("tgt".into(), test_session_ground(tgt));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        handle_query_user_state_cmd(
+            tgt, 10, 10, "hero", 901, &online, &sessions, &world, &gates, &catalog,
+        );
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1, "近窗玩家 ⇒ 恰好一帧");
+        let (ident, _, _, recog) = hdr(&frames[0]);
+        assert_eq!(
+            ident,
+            mir2_protocol::messages::SM_SENDUSERSTATE,
+            "ident=751"
+        );
+        assert_eq!(recog, 0, "SM_SENDUSERSTATE 的 Recog=0");
+        // 尾 = EncodeBuffer(UserStateInfo) ⇒ 解出 1:1 的 UserStateInfo 缓冲。
+        let tail = mir2_protocol::edcode::decode(&frames[0][12..]);
+        let item_len = queryuser::null_item_buffer().len();
+        assert_eq!(
+            tail.len(),
+            60 + 13 * item_len + 1 + 15,
+            "UserStateInfo 缓冲长度（空背包 13 空槽）"
+        );
+        let feature = game_svr::feature::human_feature(None, None, 0, 0);
+        assert_eq!(
+            &tail[0..4],
+            &feature.to_le_bytes(),
+            "Feature @0（空装备/性别 0/发型 0）"
+        );
+        assert_eq!(tail[4], 3, "UserName='tgt' 长度=3 @4");
+        assert_eq!(&tail[5..8], b"tgt", "UserName 内容");
+        assert_eq!(&tail[20..24], &255i32.to_le_bytes(), "NameColor=255 @20");
+
+        // 非玩家目标 ⇒ 不发帧。
+        handle_query_user_state_cmd(
+            mon, 10, 10, "hero", 901, &online, &sessions, &world, &gates, &catalog,
+        );
+        assert!(
+            drain_frames(&mut rx0).is_empty(),
+            "非玩家目标 ⇒ 不发帧（登记：C# 抛 InvalidCastException）"
+        );
+    }
+
+    /// `CM_QUERYUSERSET(3040)`：oracle 函数体为空 ⇒ 无帧、不改态。
+    ///
+    /// 红检：本用例只钉「调用无副作用」；「不漏接」由 §4-2 派发对账门覆盖（登记在卡内）。
+    #[test]
+    fn query_user_set_is_noop() {
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, 5));
+        // 不 panic、无返回值；直接调用即通过。
+        handle_query_user_set_cmd("hero", 901, &online);
+        handle_query_user_set_cmd("nobody", 902, &online);
+    }
+
+    /// `CM_QUERYVAL(1065)`：`ValType` 0 ⇒ 写 `MNSval[ValLabel]`；1 ⇒ 写 `MNMval[ValLabel]`；
+    /// 两路之后都清空 `GotoNpcLabel`；`Ghost` 时 `sRefMsg` 落空串。
+    ///
+    /// 红检：把 `val_type` 的两支对调（0 写 `mnm_val`）⇒ 断言必红；把 `s_ref_msg` 的 `!ghost` 门删掉
+    /// ⇒ ③ 的 Ghost 断言必红；删 `goto_npc_label.clear()` ⇒ 断言必红。
+    #[test]
+    fn query_val_writes_mns_or_mnm_and_clears_label() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
+            .unwrap();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+
+        // ① ValType=0（串）：写 MNSval[3]=tail，且 GotoNpcLabel 被清。
+        {
+            let sg = sessions.get_mut("hero").unwrap();
+            sg.val_type = 0;
+            sg.val_label = 3;
+            sg.goto_npc_label = "@x".into();
+        }
+        assert!(handle_query_val_cmd(
+            0,
+            Some("hello"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &world
+        ));
+        let sg = sessions.get("hero").unwrap();
+        assert_eq!(sg.mns_val[3], "hello", "ValType=0 ⇒ MNSval[3]=sRefMsg");
+        assert!(sg.goto_npc_label.is_empty(), "末尾清空 GotoNpcLabel");
+
+        // ② ValType=1（整）：写 MNMval[5]=StrToInt(tail)。
+        {
+            let sg = sessions.get_mut("hero").unwrap();
+            sg.val_type = 1;
+            sg.val_label = 5;
+            sg.goto_npc_label = "@y".into();
+        }
+        assert!(handle_query_val_cmd(
+            0,
+            Some(" 42 "),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &world
+        ));
+        let sg = sessions.get("hero").unwrap();
+        assert_eq!(sg.mnm_val[5], 42, "ValType=1 ⇒ MNMval[5]=StrToInt('42')");
+        assert_eq!(sg.mns_val[3], "hello", "ValType=1 不得动 MNSval");
+
+        // ③ Ghost ⇒ sRefMsg 落空串（门 `!Ghost && GotoNpcLabel != ""`）。
+        {
+            let sg = sessions.get_mut("hero").unwrap();
+            sg.val_type = 0;
+            sg.val_label = 7;
+            sg.goto_npc_label = "@z".into();
+        }
+        world.entities.get_mut(hero).unwrap().ghost = true;
+        assert!(handle_query_val_cmd(
+            0,
+            Some("ignored"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &world
+        ));
+        let sg = sessions.get("hero").unwrap();
+        assert_eq!(sg.mns_val[7], "", "Ghost ⇒ sRefMsg 空串");
+    }
+
+    /// `CM_SOFTCLOSE(1009)`：置 `BoReconnection`/`BoSoftClose`；`wParam==1` 追加 `BoEmergencyClose`；
+    /// 并离开世界（`world.session.stage == Left`、`soft_close_count += 1`）。
+    ///
+    /// 红检：删 `if emergency { bo_emergency_close = true }` ⇒ ① 的 emergency 断言必红；
+    /// 删 `world.soft_close(chr_name)` ⇒ 「stage=Left / count=1」断言必红。
+    #[test]
+    fn soft_close_sets_flags_and_leaves_world() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
+            .unwrap();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+
+        // ① wParam=1 ⇒ 三标志全置真 + 离开世界。
+        handle_soft_close_cmd(1, "hero", 901, &online, &mut sessions, &mut world);
+        let sg = sessions.get("hero").unwrap();
+        assert!(sg.bo_reconnection, "BoReconnection=true");
+        assert!(sg.bo_soft_close, "BoSoftClose=true");
+        assert!(sg.bo_emergency_close, "wParam==1 ⇒ BoEmergencyClose=true");
+        assert_eq!(
+            world.session("hero").unwrap().stage,
+            mir2_world::WorldStage::Left,
+            "BoSoftClose 支 ⇒ MakeGhost（离开世界）"
+        );
+        assert_eq!(world.session("hero").unwrap().soft_close_count, 1);
+        assert!(world.entities.get(hero).is_none(), "实体已从世界摘除");
+
+        // ② 再进世界后 wParam=0 ⇒ 不置 emergency（旧的 emergency 需先清）。
+        let hero2 = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 12, 12), 0)
+            .unwrap();
+        sessions.get_mut("hero").unwrap().actor_id = hero2;
+        sessions.get_mut("hero").unwrap().bo_emergency_close = false;
+        handle_soft_close_cmd(0, "hero", 901, &online, &mut sessions, &mut world);
+        let sg = sessions.get("hero").unwrap();
+        assert!(sg.bo_reconnection && sg.bo_soft_close);
+        assert!(!sg.bo_emergency_close, "wParam==0 ⇒ 不置 BoEmergencyClose");
+        assert_eq!(world.session("hero").unwrap().soft_close_count, 2);
+    }
+
+    /// `CM_CLICKNPC(1010)`：`IsCanDeal` 门、`Death`/`Ghost` 门、`ClickNpcTime` 限频门、
+    /// `FindMerchant` 解析、同图/±15 距离门——全过才返回 `true`（走到 `Click` 点）。
+    ///
+    /// 红检：把 `is_can_deal` 门删掉 ⇒ ① 断言必红；把 `<= 15` 放宽到 `<= 20` ⇒ ③ 断言必红；
+    /// 把限频门（`<= CLICK_NPC_TIME_MS`）删掉 ⇒ ④ 断言必红。
+    #[test]
+    fn click_npc_guards_and_reach_click_point() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let mid = world
+            .insert_merchant(mir2_world::merchant::MerchantSpawn {
+                name: "商人".to_string(),
+                x: 11,
+                y: 10,
+                map_id: 0,
+                state: mir2_world::merchant::MerchantState::new(
+                    "卫家店".to_string(),
+                    "0".to_string(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    mir2_world::merchant::MerchantFlags {
+                        is_buy: true,
+                        ..Default::default()
+                    },
+                    vec![0, 5],
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("商人入世界");
+        world.tick();
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+
+        // ① IsCanDeal=false ⇒ 走到 !IsCanDeal 支，返回 false（不点）。
+        sessions.get_mut("hero").unwrap().is_can_deal = false;
+        assert!(
+            !handle_click_npc_cmd(mid, "hero", 901, &online, &mut sessions, &world),
+            "IsCanDeal=false ⇒ 不点"
+        );
+        sessions.get_mut("hero").unwrap().is_can_deal = true;
+
+        // ② 全过：商人 (11,10) 在 ±15 ⇒ 返回 true。
+        assert!(
+            handle_click_npc_cmd(mid, "hero", 901, &online, &mut sessions, &world),
+            "商人在 ±15 ⇒ 到达 Click 点"
+        );
+
+        // ③ 商人太远（挪到 (30,30)）⇒ false。
+        if let Some(m) = world.entities.get_mut(mid) {
+            m.x = 30;
+            m.y = 30;
+        }
+        sessions.get_mut("hero").unwrap().click_npc_time = None; // 复位限频
+        assert!(
+            !handle_click_npc_cmd(mid, "hero", 901, &online, &mut sessions, &world),
+            "NPC 超 ±15 ⇒ 不点"
+        );
+
+        // ④ 限频：刚点过（同 tick）⇒ false。
+        if let Some(m) = world.entities.get_mut(mid) {
+            m.x = 11;
+            m.y = 10;
+        }
+        world.clock_ms = 100_000;
+        sessions.get_mut("hero").unwrap().click_npc_time = Some(100_000);
+        assert!(
+            !handle_click_npc_cmd(mid, "hero", 901, &online, &mut sessions, &world),
+            "限频内 ⇒ 不点"
+        );
+        // 过了一个限频窗 ⇒ 再点成功。
+        world.clock_ms = 100_000 + i64::from(CLICK_NPC_TIME_MS) + 1;
+        assert!(
+            handle_click_npc_cmd(mid, "hero", 901, &online, &mut sessions, &world),
+            "超出限频窗 ⇒ 可点"
+        );
+    }
+
+    // ===================== 入站派发 P0 批：**派发级**用例 =====================
+    //
+    // 上面 6 条直调 `handle_*`（handler 级）；下面这组走**派发入口** [`dispatch_inbound_p0`]：
+    // 构造 12B 帧（含 EDCode 尾）→ `CommandMessage::from_bytes`（= `dispatch()` 的解析口径）
+    // → `dispatch_inbound_p0` → 断言出帧/副作用。牙住「ident→handler」与「线缆字段→形参」的映射
+    // （这正是对抗验证 v5 判阻塞的那一层：直调 `handle_*` 检不出「去派发 / Param-Tag 互换」）。
+
+    /// 构造 12B 命令帧（小端），形态与网关→sim 的入站帧头一致。
+    fn p0_frame(ident: u16, recog: i32, param: u16, tag: u16, series: u16) -> Vec<u8> {
+        let mut b = vec![0u8; COMMAND_MESSAGE_SIZE];
+        b[0..4].copy_from_slice(&recog.to_le_bytes());
+        b[4..6].copy_from_slice(&ident.to_le_bytes());
+        b[6..8].copy_from_slice(&param.to_le_bytes());
+        b[8..10].copy_from_slice(&tag.to_le_bytes());
+        b[10..12].copy_from_slice(&series.to_le_bytes());
+        b
+    }
+
+    /// 按 `dispatch()` 的口径把入站帧解成 `(cmd, tail)`：
+    /// `len == 12 ⇒ tail=None`，否则 `EDCode.DeCodeString(body[12..len-1])`（再 GBK 解码）。
+    fn p0_parse(body: Vec<u8>) -> (CommandMessage, Option<String>) {
+        let cmd = CommandMessage::from_bytes(&body).expect(">=12B");
+        let tail = if body.len() == COMMAND_MESSAGE_SIZE {
+            None
+        } else {
+            Some(gbk_decode(&mir2_protocol::edcode::decode(
+                &body[COMMAND_MESSAGE_SIZE..body.len() - 1],
+            )))
+        };
+        (cmd, tail)
+    }
+
+    /// **派发级**：`CM_SOFTCLOSE(1009)` 经 `dispatch_inbound_p0` —— `Series`(=wParam) 0/1 分别只置
+    /// `BoSoftClose` / 追加 `BoEmergencyClose`，并离开世界（`soft_close`）。
+    ///
+    /// 红检（实测见 fixtures）：把 `dispatch_inbound_p0` 的 `CM_SOFTCLOSE` 分支整条删掉 ⇒ 派发不再匹配
+    /// （返回 `false`、不置位）⇒ ① 断言必红；把 `handle_soft_close_cmd(cmd.series, …)` 的实参换成 `0`
+    /// ⇒ ① 的 emergency 断言必红。
+    #[test]
+    fn p0_dispatch_softclose_series_0_1_sets_flags() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
+            .unwrap();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+        let displays = downlink::DisplayTable::new();
+        let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        // ① Series=1 ⇒ 两标志置真 + 离开世界；派发对 P0 ident 返回 true。
+        let (cmd, tail) = p0_parse(p0_frame(mir2_protocol::messages::CM_SOFTCLOSE, 0, 0, 0, 1));
+        assert!(
+            dispatch_inbound_p0(
+                &cmd,
+                tail.as_deref(),
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &mut world,
+                &displays,
+                &gates,
+                &catalog,
+            ),
+            "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
+        );
+        let sg = sessions.get("hero").unwrap();
+        assert!(sg.bo_soft_close, "BoSoftClose=true");
+        assert!(sg.bo_emergency_close, "Series=1 ⇒ BoEmergencyClose=true");
+        assert_eq!(
+            world.session("hero").unwrap().stage,
+            mir2_world::WorldStage::Left,
+            "BoSoftClose 支 ⇒ 离开世界"
+        );
+
+        // ② 再进世界、Series=0 ⇒ 不置 emergency（先清旧值）。
+        let hero2 = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 12, 12), 0)
+            .unwrap();
+        {
+            let sg = sessions.get_mut("hero").unwrap();
+            sg.actor_id = hero2;
+            sg.bo_emergency_close = false;
+        }
+        let (cmd, tail) = p0_parse(p0_frame(mir2_protocol::messages::CM_SOFTCLOSE, 0, 0, 0, 0));
+        assert!(
+            dispatch_inbound_p0(
+                &cmd,
+                tail.as_deref(),
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &mut world,
+                &displays,
+                &gates,
+                &catalog,
+            ),
+            "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
+        );
+        let sg = sessions.get("hero").unwrap();
+        assert!(
+            sg.bo_soft_close && !sg.bo_emergency_close,
+            "Series=0 ⇒ 不置 BoEmergencyClose"
+        );
+    }
+
+    /// **派发级**：`CM_QUERYUSERNAME(80)` 经 `dispatch_inbound_p0` —— `Param`→x、`Tag`→y 的线缆映射
+    /// 在出窗时原样回带进 `SM_GHOST` 的 `Param`/`Tag`；近窗时出 `SM_USERNAME`。
+    ///
+    /// 用 `Param != Tag` 的请求（7/22）⇒ 一旦映射互换即被检出。
+    ///
+    /// 红检（实测见 fixtures）：把派发分支里 `handle_query_user_name_cmd(cmd.recog, cmd.param, cmd.tag, …)`
+    /// 的 `cmd.param, cmd.tag` 对调 ⇒ ① 的 `(Param,Tag)==(7,22)` 断言必红。
+    #[test]
+    fn p0_dispatch_queryuser_name_param_tag_map_to_ghost_xy() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
+            .unwrap();
+        world.open_session("tgt");
+        let tgt = world
+            .enter_map("tgt", mir2_world::Entity::new(0, "tgt", 11, 10), 0)
+            .unwrap();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            tgt,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"TGT-SHOWN".to_vec()),
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        // ① 出窗请求（x=7,y=22）：Param/Tag 取不同值 ⇒ 对调必被检出。
+        let (cmd, tail) = p0_parse(p0_frame(
+            mir2_protocol::messages::CM_QUERYUSERNAME,
+            tgt,
+            7,
+            22,
+            0,
+        ));
+        assert!(
+            dispatch_inbound_p0(
+                &cmd,
+                tail.as_deref(),
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &mut world,
+                &displays,
+                &gates,
+                &catalog,
+            ),
+            "CM_QUERYUSERNAME 属 P0 批"
+        );
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1, "出窗 ⇒ 恰好一帧 SM_GHOST");
+        let (ident, param, tag, recog) = hdr(&frames[0]);
+        assert_eq!(ident, mir2_protocol::messages::SM_GHOST, "ident=803");
+        assert_eq!(recog, tgt, "SM_GHOST 的 Recog=targetId");
+        assert_eq!(
+            (param, tag),
+            (7, 22),
+            "SM_GHOST 的 Param/Tag = 请求 x/y（Param→x、Tag→y，不互换）"
+        );
+        assert_eq!(frames[0].len(), 12, "SM_GHOST 无尾");
+
+        // ② 近窗请求（x=10,y=10）⇒ SM_USERNAME(42)，尾 = EncodeString(showName)。
+        let (cmd, tail) = p0_parse(p0_frame(
+            mir2_protocol::messages::CM_QUERYUSERNAME,
+            tgt,
+            10,
+            10,
+            0,
+        ));
+        assert!(dispatch_inbound_p0(
+            &cmd,
+            tail.as_deref(),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut world,
+            &displays,
+            &gates,
+            &catalog,
+        ));
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1, "近窗 ⇒ 恰好一帧 SM_USERNAME");
+        let (ident, param, tag, recog) = hdr(&frames[0]);
+        assert_eq!(ident, mir2_protocol::messages::SM_USERNAME, "ident=42");
+        assert_eq!(
+            (recog, param, tag),
+            (tgt, 255, 0),
+            "SM_USERNAME 头（Param=NameColor）"
+        );
+        assert_eq!(
+            mir2_protocol::edcode::decode(&frames[0][12..]),
+            b"TGT-SHOWN",
+            "尾 = EncodeString(GetShowName())"
+        );
+    }
+
+    /// **派发级**：`CM_QUERYUSERSTATE(82)` 经 `dispatch_inbound_p0` —— 线缆 `Param`→`nX`、`Tag`→`nY`
+    /// 的映射进 `cetin_near_xy` 窗口命中判定；命中 ⇒ `SM_SENDUSERSTATE`（`Recog=0`），尾 =
+    /// `EncodeBuffer(UserStateInfo)`（`PlayObject.Message.cs:795-797` →
+    /// `ClientQueryUserInformation(nParam1,nParam2,nParam3)`；线缆即 `WorldServer.cs:793-794` 的
+    /// `nParam1=Recog`、`nParam2=Param`、`nParam3=Tag`）。
+    ///
+    /// 用 `Param != Tag`（10/9）且**只在一侧命中**的请求 ⇒ 一旦 `cmd.param, cmd.tag` 对调，
+    /// `cetin_near_xy` 的窗口不再含目标 ⇒ ① 的「恰好一帧」断言必红。
+    ///
+    /// 红检（实测见 fixtures）：删 `dispatch_inbound_p0` 的 `CM_QUERYUSERSTATE` 分支 ⇒ 派发返回
+    /// `false` 且不再出帧 ⇒ ① 必红；把 `handle_query_user_state_cmd(cmd.recog, cmd.param, cmd.tag, …)`
+    /// 的 `cmd.param, cmd.tag` 对调 ⇒ 请求 `(10,9)` 变 `(9,10)`、目标 `(11,10)` 出窗 ⇒ ① 必红。
+    #[test]
+    fn p0_dispatch_queryuser_state_param_tag_map_to_nx_ny() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
+            .unwrap();
+        world.open_session("tgt");
+        let tgt = world
+            .enter_map("tgt", mir2_world::Entity::new(0, "tgt", 11, 10), 0)
+            .unwrap();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero));
+        sessions.insert("tgt".into(), test_session_ground(tgt));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let displays = downlink::DisplayTable::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        // 目标 tgt 在 (11,10)：窗口心 (10,9) 命中，心 (9,10) 不命中 ⇒ Param(10)/Tag(9) 只在一侧命中。
+        let (cmd, tail) = p0_parse(p0_frame(
+            mir2_protocol::messages::CM_QUERYUSERSTATE,
+            tgt,
+            10,
+            9,
+            0,
+        ));
+        assert!(
+            dispatch_inbound_p0(
+                &cmd,
+                tail.as_deref(),
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &mut world,
+                &displays,
+                &gates,
+                &catalog,
+            ),
+            "CM_QUERYUSERSTATE 属 P0 批 ⇒ 派发返回 true"
+        );
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(
+            frames.len(),
+            1,
+            "近窗玩家 ⇒ 恰好一帧 SM_SENDUSERSTATE（Param/Tag 互换 ⇒ 目标出窗 ⇒ 零帧）"
+        );
+        let (ident, _, _, recog) = hdr(&frames[0]);
+        assert_eq!(
+            ident,
+            mir2_protocol::messages::SM_SENDUSERSTATE,
+            "ident=751"
+        );
+        assert_eq!(recog, 0, "SM_SENDUSERSTATE 的 Recog=0");
+        // 尾 = EncodeBuffer(UserStateInfo)；UserName @4 = target.Name。
+        let user_state = mir2_protocol::edcode::decode(&frames[0][12..]);
+        assert_eq!(user_state[4], 3, "UserName='tgt' 长度=3 @4");
+        assert_eq!(&user_state[5..8], b"tgt", "UserName 内容");
+    }
+
+    /// **派发级**：`CM_CLICKNPC(1010)` 经 `dispatch_inbound_p0` —— 线缆 `Recog=npcActorId` 进
+    /// `handle_click_npc_cmd` 的 `FindMerchant` 解析；命中 ⇒ 派发返回 `true` 且**副作用**可见
+    /// （`ClickNpcTime` 置为当前 `clock`，`PlayObject.Base.cs:684` 在门外立即置位）。
+    /// oracle `PlayObject.Message.cs:885-887` → `ClientClickNpc(nParam1)`；线缆 `nParam1=Recog`。
+    ///
+    /// 红检（实测见 fixtures）：删 `dispatch_inbound_p0` 的 `CM_CLICKNPC` 分支 ⇒ 派发返回 `false`
+    /// **登记（修复批复验 v1 第 4 条）**：本用例钉的是「派发臂存在 + 限频门外先置 ClickNpcTime」的侧效应；
+    /// **并未**钉住 recog→handler 的线缆字段映射——因取 npc id 之前侧效应已发生（换用 param/tag 亦绿）。
+    /// 该映射当前**不可观测**（点击后的 @main label 派发未接线，属后续片），接线后须补真牙。
+    /// 且 `click_npc_time` 不置位 ⇒ ①② 必红。
+    #[test]
+    fn p0_dispatch_clicknpc_arm_and_rate_limit_side_effect() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let mid = world
+            .insert_merchant(mir2_world::merchant::MerchantSpawn {
+                name: "商人".to_string(),
+                x: 11,
+                y: 10,
+                map_id: 0,
+                state: mir2_world::merchant::MerchantState::new(
+                    "卫家店".to_string(),
+                    "0".to_string(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    mir2_world::merchant::MerchantFlags {
+                        is_buy: true,
+                        ..Default::default()
+                    },
+                    vec![0, 5],
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("商人入世界");
+        world.tick();
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+        let displays = downlink::DisplayTable::new();
+        let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        let now = world.clock_ms;
+        assert!(
+            sessions.get("hero").unwrap().click_npc_time.is_none(),
+            "前置：未点过（ClickNpcTime 空）"
+        );
+        // 线缆 Recog=npcActorId=mid；商人在 (11,10)、hero 在 (10,10) ⇒ ±15 命中。
+        let (cmd, tail) = p0_parse(p0_frame(mir2_protocol::messages::CM_CLICKNPC, mid, 0, 0, 0));
+        assert!(
+            dispatch_inbound_p0(
+                &cmd,
+                tail.as_deref(),
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &mut world,
+                &displays,
+                &gates,
+                &catalog,
+            ),
+            "CM_CLICKNPC 属 P0 批 ⇒ 派发返回 true"
+        );
+        assert_eq!(
+            sessions.get("hero").unwrap().click_npc_time,
+            Some(now),
+            "命中 ⇒ 走过限频门，ClickNpcTime 置为当前 clock（副作用）"
+        );
+    }
+
+    /// **派发级**：`dispatch_inbound_p0` 的批成员判定 + `CM_QUERYVAL(1065)` 尾透传。
+    /// - 非 P0 ident（`CM_SAY`）⇒ 返回 `false`（交后续分支，不属本批）；
+    /// - `CM_QUERYUSERSET` ⇒ 返回 `true`、无副作用（oracle 函数体空）；
+    /// - `CM_QUERYVAL` 带 EDCode 尾 ⇒ 返回 `true`，尾按 oracle 落 `MNSval[ValLabel]` 并清 `GotoNpcLabel`。
+    ///
+    /// 红检（实测见 fixtures）：删 `CM_QUERYUSERSET` 分支 ⇒ ② 的返回 `true` 断言必红；
+    /// 删 `CM_QUERYVAL` 分支 ⇒ ③ 的 `MNSval[3]=="hello"` 断言必红。
+    #[test]
+    fn p0_dispatch_membership_and_queryval_tail() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
+            .unwrap();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+        let displays = downlink::DisplayTable::new();
+        let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        // ① 非 P0（CM_SAY=3030）⇒ false（不属本批，交后续分支）。
+        let (cmd, tail) = p0_parse(p0_frame(game_svr::chat::CM_SAY, 0, 0, 0, 0));
+        assert!(
+            !dispatch_inbound_p0(
+                &cmd,
+                tail.as_deref(),
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &mut world,
+                &displays,
+                &gates,
+                &catalog,
+            ),
+            "非 P0 ident ⇒ 返回 false"
+        );
+
+        // ② CM_QUERYUSERSET ⇒ true、不改会话态。
+        let (cmd, tail) = p0_parse(p0_frame(
+            mir2_protocol::messages::CM_QUERYUSERSET,
+            0,
+            0,
+            0,
+            0,
+        ));
+        assert!(dispatch_inbound_p0(
+            &cmd,
+            tail.as_deref(),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut world,
+            &displays,
+            &gates,
+            &catalog,
+        ));
+        assert_eq!(
+            sessions.get("hero").unwrap().mns_val[3],
+            "",
+            "CM_QUERYUSERSET 不改会话态"
+        );
+
+        // ③ CM_QUERYVAL 带 EDCode 尾：ValType=0/ValLabel=3/GotoNpcLabel 非空 ⇒ MNSval[3]=尾串。
+        {
+            let sg = sessions.get_mut("hero").unwrap();
+            sg.val_type = 0;
+            sg.val_label = 3;
+            sg.goto_npc_label = "@ask".into();
+        }
+        let mut body = p0_frame(mir2_protocol::messages::CM_QUERYVAL, 0, 0, 0, 0);
+        body.extend_from_slice(&mir2_protocol::edcode::encode(&gbk_encode("hello")));
+        body.push(0);
+        let (cmd, tail) = p0_parse(body);
+        assert!(dispatch_inbound_p0(
+            &cmd,
+            tail.as_deref(),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut world,
+            &displays,
+            &gates,
+            &catalog,
+        ));
+        let sg = sessions.get("hero").unwrap();
+        assert_eq!(sg.mns_val[3], "hello", "CM_QUERYVAL 尾经派发落 MNSval[3]");
+        assert!(sg.goto_npc_label.is_empty(), "末尾清空 GotoNpcLabel");
     }
 }
