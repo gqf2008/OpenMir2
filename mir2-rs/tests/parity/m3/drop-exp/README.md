@@ -22,6 +22,30 @@
 6. **场景纯度（whitelist T-35，owner comment `c78bd13f`）**：除被测量路径（1 只 pin 怪 + 击杀→掉落/经验取数）外 **RNG 消费者数 = 0**，由 `drop_exp_purity_gate.py` 按**实测抽数流水**证明（逐消费者清单 + 计数）；**墙钟消费者必须压到 0**（本夹具取 (a) pin 抑制）；**认不出 / 缺 site / 未分类 ⇒ 点名 RED，拒比**。
 7. **消费者表锚点保鲜（本片新增）**：`drop_exp_consumers.tsv` 的 `oracle_ref` 是站点归因的**唯一人复核入口**，必须 fail-closed 保鲜：① 存在性 + 行号范围；② **C# 行的 ref 必须落在其 `pattern` 点名的 `Class.Method` 方法体内**（只查存在/范围抓不到「行号在文件里但方法不对」）。真身缺陷：`RegenMonsters` 行的 ref 曾写 `WorldServer.MonGen.cs:238`，该行实际落在 `ProcessMonsters` 里。③ **2026-10-14 收口 O-1**（reviewer-5 `f7318e59`）：方法体识别只认真**声明**——旧口径把 `if (_Attack(...)) { … }` 这类**调用点块**误当方法体（伪 range `(13,17)`）⇒ 潜在假负通道；正则族名（`UpgradeRandom\w+`）按字面前缀 `UpgradeRandom\w*(` 匹配。
 
+## 采集面（T-57，判据加固 §2-2；卡 `openmir2-m3-drop-exp-wiring` comment）
+
+> **背景**：卡 comment 实锤「比对器健康，但真机采集器 `src/BotSrv/MShare.cs` 每件只写 `{name,count:1}`
+> ⇒ `drop_key` 的 `index/dura/dura_max` 真机永不采集」——即「100 杀掉落逐项相同」的**实跑口径被隐式降格**。
+> owner 二选一：(a) BotSrv 扩采 `SM_ITEMSHOW` 字段；(b) 判据文档显式降格声明。**不许维持隐式降格**。
+
+**本片（T-57）落地 = (a) 的真实可行子集 + (b) 的显式声明**：
+
+1. **oracle 帧语义（先读后写）**：`SM_ITEMSHOW(610)` 由
+   `RM_ITEMSHOW(nParam1=Looks, nParam2=ItemId, nParam3=dx, wParam=dy, Msg=Name)`
+   直转（`src/M2Server/Actor/BaseObject.cs:570`/`:752` → `src/M2Server/Player/PlayObject.Message.cs:1744-1745`）。
+   ⇒ 帧**只带** `Looks/ItemId/dx/dy/Name`，**不带** `MakeIndex/Dura/DuraMax`
+   （地面物耐久客户端本来看不见）。**故 (a) 字面「补采 MakeIndex/Dura/DuraMax」不可行**——不是本片偷懒，是帧里没有。
+2. **扩采开关 `MIR2_DROPEXP_EXT_FIELDS`（默认关）**：
+   * 关（未设/`0`/`false`/`off`/`no`；**非法值 fail-closed 也关**）⇒ 每件 `{"name":..,"count":1}`
+     **逐字节与既有输出相同**；
+   * 开 ⇒ 每件五字段 `{"name":..,"index":<槽位序>,"count":1,"dura":null,"dura_max":null}`。
+3. **诚实降格**：`index` = 该杀内出现帧的 **0 起槽位序**（客户端可稳定推导的唯一 index；oracle `MapItem.ItemId`
+   冻结实现恒 0）；`dura/dura_max` = JSON **`null`** = 「未采集」（**绝不伪造成值**）。
+   比较器把 `null` 当「该侧未采集」⇒ 一侧 null 一侧真值 **必 RED**（`drop_exp_diff.py` 4 条改坏必红钉住）。
+4. **真机口径显式声明**：扩采关 = **名称多重集 + 槽位顺序**（**显式**降格，非隐式）；扩采开 = 五字段全进
+   `drop_key`。**服务端真值**（真实 MakeIndex/Dura/DuraMax）只有在帧扩到携带这些字段后才可采——登记为承接
+   （本线写集不含协议/服务端改动，见 whitelist T-57 未做项）。
+
 ## 文件
 
 | 文件 | 作用 |

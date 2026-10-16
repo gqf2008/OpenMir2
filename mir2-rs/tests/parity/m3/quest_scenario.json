@@ -22,6 +22,7 @@
         {"op": "dialog_select", "npc": "任务管理", "label": "@06rw"},
         {"op": "dialog_select", "npc": "任务管理", "label": "@rw06"}
       ],
+      "flag_ops": [[], [], [{"flag": 107, "value": 1}], []],
       "note": "真实数据 MerChant.txt:149 = `任务NPC/任务 3 342 327 任务管理 0 31 0`；脚本 Market_Def/任务NPC/任务-3.txt。玩家 pin 到 NPC 北邻格 (342,326) 朝向 4=DOWN（与 ⑤ 同款 pin 机制）。链路 = 接 + 条件判定：click→@main（菜单说词）；@rw06（check [107] 1 为假、checklevel 45 通过 ⇒ #say 确定提示）；@06rw（set [107] 1 + close + messagebox）；再 @rw06（check [107] 1 为真 ⇒ messagebox『苍月岛的首饰店老板正在找你』）。pin 等级须 >=45 才走 #say 分支（否则 #elsesay『45级才可接此任务』——那也是一条合法的失败分支，但默认 case 钉在可接路径）。"
     },
     "quest_main_only": {
@@ -37,6 +38,7 @@
       "steps": [
         {"op": "click_npc", "npc": "任务管理", "label": "@main"}
       ],
+      "flag_ops": [[]],
       "note": "最小冒烟 case：只点一次 NPC（@main 菜单说词），用于两侧帧面/任务态零变更的快速比对。"
     }
   },
@@ -59,6 +61,7 @@
     "comparator": "python -I quest_diff.py diff <csharp_raw> <rust_raw>",
     "assembler": "python -I quest_diff.py assemble <markers.jsonl> --state <state.jsonl> --out <raw.jsonl>",
     "runner": "run_quest_pair.ps1"
+    ,"state_producer": "python -I quest_state_producer.py emit --case <case> --out <session>/quest_state.jsonl（**构造级**；T-58；默认被 quest_diff.py 拒收，须 --allow-construct-state）"
   },
   "record_required_fields": ["k", "op", "npc", "frames", "gold_before", "gold_after", "branch", "quest_flag_before", "quest_flag_after"],
   "record_optional_fields": ["npc_actor", "map", "label", "req", "bag_before", "bag_after", "quest_unit_before", "quest_unit_after", "quest_open_before", "quest_open_after", "price"],
@@ -70,6 +73,7 @@
     "任务态位的输入 = **服务端**会话 dump（quest_diff.py assemble --state）；BotSrv 客户端看不到任务数组（盘点报告 §4.1 第 2 条）⇒ 缺它一律 PREREQ，绝不 GREEN。",
     "落库口径 = oracle『任务态不落库』：不要判『重登后标志仍在』；DB 侧由 run_quest_pair.ps1 调 scoped_diff --canonical 判 characters_quest 两侧均 0 行 + characters 无任务列变更（承接卡 openmir2-m3-quest-persist-observability）。",
     "真机两侧同序列跑等 ⑥-3 openmir2-m3-quest-dialog-wiring（m2svr 队列，排在 ⑤-2 之后）+ 独占窗口；本片只交夹具骨架（比较器 selftest + 无栈自检）。",
+    "任务态生产者（T-58）：全仓此前 quest_state.jsonl 无生产者（WRITER_FOUND=0）。本片落**构造级**生产者 quest_state_producer.py（把 case 的 flag_ops 按 oracle 位语义作用到 128B 位图；位语义由 oracle 真身向量 quest-state-probe/vectors/quest_state_vectors.tsv 逐字节锚定）。flag_ops 真源 = 冻结脚本 Market_Def/任务NPC/任务-3.txt 的 set [107] 1。构造级**不替代**服务端会话真值：quest_diff.py load_state 默认拒收 construct_level:true（fail-closed 防假绿），须 --allow-construct-state 才收 ⇒ 真机判据仍须服务端 dump（承接卡 openmir2-m3-quest-state-dump；C# 影子 hook 半 + Rust bins/game-svr 半不在本线写集）。",
     "Rust 侧 game-svr 脚本运行时未接线（盘点报告 §2 #8/#9/#11）⇒ run_quest_pair -Side rust 会 fail-closed PREREQ（同 T-27 口径），不白占窗口。"
   ]
 }

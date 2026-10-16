@@ -49,6 +49,20 @@
   "record_required_fields": ["k", "gold", "drops", "exp_delta", "exp_total", "level"],
   "record_optional_fields": ["monster", "x", "y", "hero_exp_delta"],
   "drop_key_fields": ["name", "index", "count", "dura", "dura_max"],
+  "capture_scope": {
+    "card": "openmir2-m3-drop-exp-wiring comment（判据加固 §2-2）",
+    "whitelist": "T-57",
+    "frame": "SM_ITEMSHOW(610)",
+    "frame_fields": ["Looks(Recog)", "ItemId(Param)", "dx(Tag)", "dy(Series)", "Name(body)"],
+    "frame_lacks": ["MakeIndex", "Dura", "DuraMax"],
+    "switch": "MIR2_DROPEXP_EXT_FIELDS（空/0/false/off/no ⇒ 关；1/true/on/yes ⇒ 开；其它非空 ⇒ 关 fail-closed）",
+    "off_default": "每件 {\"name\":..,\"count\":1} —— 逐字节与既有输出相同",
+    "on_extended": "每件 {\"name\":..,\"index\":<槽位序>,\"count\":1,\"dura\":null,\"dura_max\":null}",
+    "null_semantics": "比较器把 dura/dura_max=null 当「该侧未采集」：两侧都 null ⇒ 相等；一侧 null 一侧有真值 ⇒ RED",
+    "real_run_scope_off": "名称多重集 + 槽位顺序（显式降格声明，非隐式）",
+    "real_run_scope_on": "五字段全进 drop_key 多重集/逐槽位比（dura/dura_max 字段面显式）",
+    "uncollected": "dura/dura_max 客户端不可采集（帧不带）；服务端真值须由承接卡把 SM_ITEMSHOW 帧扩到携带耐久才可采"
+  },
   "notes": [
     "掉落列表按多重集/计数式比较（multiset），逐槽位定位到「第 k 次击杀 / 第几个掉落槽」；不许 set 差集。",
     "金额/经验保持原宽度比较，比较器不得做 i32 截断（selftest 有 i32-truncation-red 用例钉住）。",

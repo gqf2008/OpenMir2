@@ -166,6 +166,18 @@ namespace BotSrv
             Console.WriteLine("QUESTSEQ INFO logexit raw-bytes=" + triggerRaw.Length
                 + " literal-bytes=" + triggerLiteral.Length + " payload-bytes=" + triggerPayload.Length);
 
+            // ④d 生产出口直钉（判据加固 §2-3 ②；白名单 T-58）：自检直接走 `MainOutMessage` 的**唯一出口
+            //     组装点** `MarkerExitLine`，断言「前缀 + 生产载荷」逐字节还原。真机 k=0 说词含字面
+            //     `<.../@label>`（`任务-3.txt` @main 菜单）+ frame 嵌套 `{}` ⇒ 正是缺陷触发形态。
+            //     改坏必红：把 `MarkerExitLine` 里的 `SerilogTemplateLiteral` 去掉 ⇒ 出口吞末尾 `}` ⇒ RED。
+            const string prodMsg = "M3QUESTSEQ {\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\"<[确定开始]/@rw06>\"}}";
+            string prodLine = BotSrv.Player.RobotPlayer.MarkerExitLine("bot1", prodMsg);
+            LogService.Info(prodLine);
+            string prodCaptured = captured[captured.Count - 1];
+            Check("logexit-production-exit",
+                prodCaptured == ("机器人:[bot1] " + prodMsg),
+                "got=" + prodCaptured);
+
             Console.WriteLine(failed == 0
                 ? "QUESTSEQ SELFTEST GREEN"
                 : $"QUESTSEQ SELFTEST RED ({failed} failed)");

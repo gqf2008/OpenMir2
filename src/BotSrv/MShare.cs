@@ -709,12 +709,63 @@ namespace BotSrv
         /// <summary>attacker 的精确 LoginId（= LoginAccount + DropExpRole）。</summary>
         public static string g_sDropExpRoleLoginId = string.Empty;
 
+        /// <summary>M3④ 采集面加固（判据加固 §2-2；卡 `openmir2-m3-drop-exp-wiring`；白名单 **T-57**）：
+        /// 掉落项**字段级扩采**开关。默认 false = 逐字节保持既有 `drops`（每件仅 `{"name":..,"count":1}`，
+        /// 与 `BuildDropExpDropsJson` 完全一致）。true 时 `BuildDropExpDropsJsonEx` 为每件补出比对器
+        /// `drop_key` 的五字段（`name/index/count/dura/dura_max`）。
+        ///
+        /// **oracle 采集面（读 `SM_ITEMSHOW(610)` 帧语义得出）**：oracle 发 `RM_ITEMSHOW(wIdent, Looks,
+        /// ItemId, dx, dy, Name)`（`src/M2Server/Actor/BaseObject.cs:570`、`:752`；
+        /// `src/M2Server/Player/PlayObject.Message.cs:1744-1745` RM→SM 直转）⇒ `SM_ITEMSHOW` 只携带
+        /// `Looks(Recog)/ItemId(Param)/dx(Tag)/dy(Series)/Name(body)`，**不携带** `MakeIndex/Dura/DuraMax`
+        /// （地面物耐久客户端不可见——客户端只有名字与外观）。⇒ 扩采里 `index` = 该杀内出现帧的 0 起
+        /// **槽位序**（客户端可稳定推导的唯一 index；oracle `MapItem.ItemId` 冻结实现恒 0），`dura/dura_max`
+        /// 以 JSON `null` 如实写「未采集」，**绝不伪造成值**。字段清单与降格声明见
+        /// `mir2-rs/tests/parity/m3/drop-exp/README.md`（采集面清单）。**开关来源** = `ArmDropExpSequence`
+        /// 读环境变量 `MIR2_DROPEXP_EXT_FIELDS`（空/0/false/off/no ⇒ 关；1/true/on/yes ⇒ 开；
+        /// 其它非空 ⇒ 记一行 `M3DROPEXPSEQ bad=ext_fields_env` 并**失败关**，与 rng-hook 同款 fail-closed）。</summary>
+        public static bool g_boDropExpExtFields = false;
+
         /// <summary>M3④ 夹具：LoginId 是否就是本批的唯一 attacker。精确相等（非 EndsWith）。
         /// 纯函数（不依赖实例），供 `--selftest-dropseq` 与 ArmDropExpSequence 共用。</summary>
         public static bool IsDropExpAttacker(string loginId, string attackerLoginId)
         {
             return !string.IsNullOrEmpty(attackerLoginId)
                 && string.Equals(loginId, attackerLoginId, StringComparison.Ordinal);
+        }
+
+        /// <summary>M3④ 采集面加固（T-57）：解析 `MIR2_DROPEXP_EXT_FIELDS` 开关值。
+        /// null/空/0/false/off/no ⇒ 关；1/true/on/yes ⇒ 开；其它非空 ⇒ 非法（返回 false）。纯函数。</summary>
+        public static bool TryParseDropExpExtFields(string value, out bool on)
+        {
+            on = false;
+            if (string.IsNullOrEmpty(value))
+            {
+                return true;
+            }
+            switch (value.Trim().ToLowerInvariant())
+            {
+                case "0":
+                case "false":
+                case "off":
+                case "no":
+                    return true;
+                case "1":
+                case "true":
+                case "on":
+                case "yes":
+                    on = true;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>M3④ 采集面加固（T-57）：生产路径入口 —— 非法值 **fail-closed 关**（返回 false），
+        /// 不静默降级为「开」。非法与未设都是关（安全侧），语义由 `TryParseDropExpExtFields` 自检钉住。</summary>
+        public static bool ParseDropExpExtFieldsEnv(string value)
+        {
+            return TryParseDropExpExtFields(value, out bool on) && on;
         }
 
         /// <summary>M3④ 夹具：从一行帧 JSON（`{"sm":N,...}`）取 `sm` 值；找不到 ⇒ null。纯函数。</summary>
@@ -860,6 +911,62 @@ namespace BotSrv
                     if (!string.IsNullOrEmpty(n))
                     {
                         parts.Add("{\"name\":\"" + DropExpEsc(n) + "\",\"count\":1}");
+                    }
+                }
+            }
+            return "[" + string.Join(",", parts) + "]";
+        }
+
+        /// <summary>M3④ 扩采（判据加固 §2-2；白名单 T-57）：一件掉落出现帧的**可采集字段**
+        /// （`SM_ITEMSHOW(610)` 帧原样 + 槽位序）。oracle 帧不携带耐久字段 ⇒ 本结构**不含**
+        /// `dura/dura_max`（缺省 ⇒ JSON `null`，见 `BuildDropExpDropsJsonEx`）。</summary>
+        public struct DropExpDropInfo
+        {
+            /// <summary>body（EDCode 解码后的物品名）。</summary>
+            public string Name;
+            /// <summary>该杀内掉落出现帧的 0 起槽位序（客户端可稳定推导的唯一 index）。</summary>
+            public int Ordinal;
+            /// <summary>`Recog`（oracle 发的是 `mapItem.Looks`）。</summary>
+            public int Looks;
+            /// <summary>`Param`（oracle 发的是 `mapItem.ItemId`；冻结实现恒 0）。</summary>
+            public int ItemId;
+            /// <summary>`Tag`（oracle 发的是 dx）。</summary>
+            public int X;
+            /// <summary>`Series`（oracle 发的是 dy）。</summary>
+            public int Y;
+        }
+
+        /// <summary>M3④ 扩采：把收集到的掉落出现帧结构取成物品名列表（供 legacy
+        /// `BuildDropExpDropsJson` 复用**同一**收集列表，保证开关切换时收集面一致）。纯函数。</summary>
+        public static List<string> DropExpDropNames(IList<DropExpDropInfo> drops)
+        {
+            var names = new List<string>();
+            if (drops != null)
+            {
+                foreach (DropExpDropInfo d in drops)
+                {
+                    names.Add(d.Name);
+                }
+            }
+            return names;
+        }
+
+        /// <summary>M3④ 扩采：`drops` 数组，每件补全比对器 `drop_key` 五字段
+        /// （`name/index/count/dura/dura_max`）。**只在 `g_boDropExpExtFields=true` 时**由生产路径调用
+        /// （默认 false 走 `BuildDropExpDropsJson` ⇒ 逐字节不变）。`index` = 槽位序；`count` = 1
+        /// （地面出现帧不带数量）；`dura/dura_max` = JSON `null`（`SM_ITEMSHOW` 帧不携带，如实记「未采集」，
+        /// 绝不伪造成值——比对器把 null 视作「该侧未采集」⇒ 与有真值的一侧比即 RED）。纯函数。</summary>
+        public static string BuildDropExpDropsJsonEx(IList<DropExpDropInfo> drops)
+        {
+            var parts = new List<string>();
+            if (drops != null)
+            {
+                foreach (DropExpDropInfo d in drops)
+                {
+                    if (!string.IsNullOrEmpty(d.Name))
+                    {
+                        parts.Add("{\"name\":\"" + DropExpEsc(d.Name) + "\",\"index\":" + d.Ordinal
+                            + ",\"count\":1,\"dura\":null,\"dura_max\":null}");
                     }
                 }
             }

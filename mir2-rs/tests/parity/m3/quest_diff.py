@@ -254,8 +254,12 @@ def _marker_events(lines):
     return out
 
 
-def load_state(path):
-    """读服务端会话任务态 dump（JSONL，每行含整数 k + quest_*_before/after）。"""
+def load_state(path, allow_construct=False):
+    """读服务端会话任务态 dump（JSONL，每行含整数 k + quest_*_before/after）。
+
+    `construct_level:true`（构造级生产者，见 `quest_state_producer.py` / whitelist T-58）**默认拒收**
+    （Prereq，fail-closed）——防止把「按场景声明推出来的位图」当服务端真值判绿。只有显式
+    `allow_construct=True`（离线自检用）才接受。"""
     if not os.path.isfile(path):
         raise Prereq("缺任务态 dump: %s" % path)
     by_k = {}
@@ -273,6 +277,9 @@ def load_state(path):
             k = rec["k"]
             if k in by_k:
                 raise Prereq("任务态 dump k=%d 重复 (%s)" % (k, path))
+            if rec.get("construct_level") and not allow_construct:
+                raise Prereq("任务态 dump 第 %d 行是构造级(construct_level) —— 非服务端真值，"
+                             "默认拒收（要用于离线自检请显式 --allow-construct-state）(%s)" % (lineno, path))
             by_k[k] = rec
     if not by_k:
         raise Prereq("任务态 dump 无记录: %s" % path)
@@ -365,7 +372,7 @@ def cmd_assemble(args):
     try:
         with open(args.markers, "r", encoding="utf-8") as fh:
             events = _marker_events(fh.read().splitlines())
-        state_by_k = load_state(args.state) if args.state else None
+        state_by_k = load_state(args.state, allow_construct=getattr(args, "allow_construct_state", False)) if args.state else None
         recs = assemble(events, side=args.side, state_by_k=state_by_k)
         validate(recs, args.markers, args.side, require_state=False)
     except Prereq as exc:
@@ -862,6 +869,23 @@ def cmd_selftest(args):
             return cmd_assemble(argparse.Namespace(markers=markers, out=out_nostate, side="rust", state=""))
 
         case("assemble-without-state-ok", 0, _assemble_nostate)
+        # T-58：构造级任务态默认拒收（fail-closed，绝不把「按场景推的位图」当服务端真值判绿）；
+        # 显式 --allow-construct-state（离线自检）才接受。
+        state_construct = os.path.join(tmp, "state_construct.jsonl")
+        with open(state_construct, "w", encoding="utf-8", newline=chr(10)) as fh:
+            for i0 in range(len(base)):
+                fh.write(json.dumps({"k": i0, "quest_flag_before": base[i0]["quest_flag_before"],
+                                     "quest_flag_after": base[i0]["quest_flag_after"],
+                                     "construct_level": True}, ensure_ascii=False, sort_keys=True))
+                fh.write(chr(10))
+        case("assemble-construct-state-rejected", 2,
+             lambda: cmd_assemble(argparse.Namespace(markers=markers, out="", side="csharp",
+                                                     state=state_construct)))
+
+        def _assemble_construct_ok():
+            return cmd_assemble(argparse.Namespace(markers=markers, out="", side="csharp",
+                                                   state=state_construct, allow_construct_state=True))
+        case("assemble-construct-state-allowed", 0, _assemble_construct_ok)
 
         def _nostate_then_diff():
             rc = _assemble_nostate()
@@ -924,6 +948,8 @@ def main(argv=None):
     a.add_argument("--out", default="")
     a.add_argument("--state", default="", help="服务端会话任务态 dump（JSONL，每行含整数 k + quest_*_before/after）")
     a.add_argument("--side", default="?")
+    a.add_argument("--allow-construct-state", dest="allow_construct_state", action="store_true",
+                   help="离线自检用：接受 construct_level:true 的构造级任务态（默认拒收，fail-closed）")
     a.set_defaults(func=cmd_assemble)
     d = sub.add_parser("diff", help="比较两侧 quest_raw.jsonl")
     d.add_argument("csharp")

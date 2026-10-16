@@ -95,6 +95,56 @@ namespace BotSrv
             Check("drops-no-raw-angle",
                 dropsEsc.IndexOf('<') < 0 && dropsEsc.IndexOf('>') < 0 && dropsEsc.Contains("\\u003c"),
                 "got=" + dropsEsc);
+            // ④b T-57 采集面加固：`TryParseDropExpExtFields` / `ParseDropExpExtFieldsEnv`（默认关 + 非法关）。
+            Check("ext-env-null-off", !MShare.ParseDropExpExtFieldsEnv(null), "null");
+            Check("ext-env-empty-off", !MShare.ParseDropExpExtFieldsEnv(""), "empty");
+            Check("ext-env-0-off", !MShare.ParseDropExpExtFieldsEnv("0"), "0");
+            Check("ext-env-OFF-off", !MShare.ParseDropExpExtFieldsEnv("OFF"), "OFF");
+            Check("ext-env-on", MShare.ParseDropExpExtFieldsEnv("1") && MShare.ParseDropExpExtFieldsEnv("true") && MShare.ParseDropExpExtFieldsEnv(" on "), "on");
+            Check("ext-env-illegal-off",
+                !MShare.ParseDropExpExtFieldsEnv("maybe") && !MShare.TryParseDropExpExtFields("2", out _), "illegal-fail-closed");
+
+            // ④c T-57 扩采 drops：每件五字段 `name/index/count/dura/dura_max`；index = 槽位序；
+            //     dura/dura_max = null（帧不携带 ⇒ 如实记「未采集」，绝不伪造成值）；空/缺名 ⇒ `[]`。
+            var exDrops = new List<MShare.DropExpDropInfo>
+            {
+                new MShare.DropExpDropInfo { Name = "金币", Ordinal = 0, Looks = 1, ItemId = 0, X = 17, Y = 20 },
+                new MShare.DropExpDropInfo { Name = "<木剑>", Ordinal = 1, Looks = 2, ItemId = 0, X = 17, Y = 20 },
+            };
+            string exJson = MShare.BuildDropExpDropsJsonEx(exDrops);
+            bool exOk = false; int exLen = -1; string exName1 = null; long exIdx1 = -1; int exCount = 0;
+            bool exDuraNull = false, exDuraMaxNull = false, exHasFiveKeys = false;
+            try
+            {
+                using (var doc = System.Text.Json.JsonDocument.Parse(exJson))
+                {
+                    var arr = doc.RootElement;
+                    exLen = arr.GetArrayLength();
+                    var d0 = arr[0];
+                    var d1 = arr[1];
+                    if (d1.TryGetProperty("name", out var n1)) { exName1 = n1.GetString(); }
+                    if (d1.TryGetProperty("index", out var i1)) { exIdx1 = i1.GetInt64(); }
+                    if (d0.TryGetProperty("count", out var c0)) { exCount = c0.GetInt32(); }
+                    exDuraNull = d0.TryGetProperty("dura", out var dv) && dv.ValueKind == System.Text.Json.JsonValueKind.Null;
+                    exDuraMaxNull = d0.TryGetProperty("dura_max", out var dvm) && dvm.ValueKind == System.Text.Json.JsonValueKind.Null;
+                    exHasFiveKeys = d0.TryGetProperty("name", out _) && d0.TryGetProperty("index", out _)
+                        && d0.TryGetProperty("count", out _) && d0.TryGetProperty("dura", out _)
+                        && d0.TryGetProperty("dura_max", out _);
+                }
+                exOk = true;
+            }
+            catch (System.Exception) { exOk = false; }
+            Check("drops-ex-json-ok", exOk && exLen == 2, "json-ok=" + exOk + " len=" + exLen + " json=" + exJson);
+            Check("drops-ex-five-keys", exHasFiveKeys, "five-keys");
+            Check("drops-ex-index-ordinal", exIdx1 == 1 && exCount == 1, "idx=" + exIdx1 + " count=" + exCount);
+            Check("drops-ex-dura-null", exDuraNull && exDuraMaxNull, "dura-null=" + exDuraNull + " max-null=" + exDuraMaxNull);
+            Check("drops-ex-esc-angle", exName1 == "<木剑>" && exJson.IndexOf('<') < 0, "name=" + exName1);
+            Check("drops-ex-empty", MShare.BuildDropExpDropsJsonEx(new List<MShare.DropExpDropInfo>()) == "[]"
+                && MShare.BuildDropExpDropsJsonEx(null) == "[]", "empty/null");
+            Check("drops-ex-vs-legacy-names",
+                MShare.DropExpDropNames(exDrops).Count == 2 && MShare.DropExpDropNames(exDrops)[1] == "<木剑>",
+                "names");
+
 
             // ⑤ BuildDropExpRecord：必填字段齐全 + JSON 合法 + 大整数原宽度 + 与 drops 嵌套合法。
             string row = MShare.BuildDropExpRecord(3, "稻草人", 17, 20, 0, dropsEsc, bigTotal, bigTotal, 255);
