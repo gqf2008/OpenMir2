@@ -460,6 +460,12 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene
 - **失败分叉**：门 RED（场景漂移/缺件/种子不符）⇒ fail-closed **拒比**，**不是**实现差异，查明后再跑；
   门 GREEN 但 `groupdiff` rc=1（`GROUP_SET_DIFF`/`MISSING_EXPECTED_GROUPS`/`MIN_GROUP_DRAWS`）⇒ **真账本分歧**，逐组 diff 登记。
 
+> **严格账本校验（必须先过，2026-10-16 起）**：既有消费链（`rng-trace-scene/rng_scene_gate.py` + groupdiff）
+> 对**断号/重复 seq 完全不看** ⇒「组集合相等」可能建立在被截断的流水上（静默假绿）。
+> 窗口内两侧落账本后**先跑新严格校验器**：
+> `python -I -B mir2-rs/tests/parity/m3/rng-scene/rng_trace_diff.py check --side <csharp|rust> --trace <side>-rng-stream.tsv --seed 42`
+> （5 条 fail-closed：头 `INJECT_OK <seed>` 必须存在且 == `--seed`（与 `MIR2_RNG_SEED` 注入同源）/ seq 必须 1..N 连续无缺无重 / 列数=5 / site 非空 / 无数据行 ⇒ PREREQ）；
+> **任一侧 check 不 GREEN ⇒ 拒比**（不得调用比较器、不得输出结论行）；两侧都 GREEN 才 `-SceneGroupDiff`。
 ### W0-7 收窗（缺一不算收）
 
 1. **停栈（同 `-LogDir`）**：`start_rust_stack.ps1 -LogDir <本趟 LogDir> -Stop`；C# 侧按既有 `-Stop`。
