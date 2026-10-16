@@ -96,7 +96,7 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps
 # game-svr.out.log 出现：RNG 同种子注入：seed=42 参照序列=SEED_PROBE 1434747710 302596119 …
 ```
 
-- **不传种子 ⇒ 不注入、不打该行**（与改动前逐字节一致）。
+- **不传种子 ⇒ 回落默认 42**（A2，卡 `openmir2-window-collector-preflight`）：与 C# 启动器 `start-csharp-hook.ps1` 的 `[int]$Seed = 42` **对称**。Rust 生产默认随机源本就是 `World::with_maps` 的 `with_seed(42)`（未设 `MIR2_RNG_SEED` 即沿用）⇒ 回落 42 **RNG 行为零变化**，只是把「声明层」补齐（两侧都有种子自证行 `RUST_SEED_INJECTED=42` / `INJECT_OK 42`，消除「C# 恒 42 / Rust 未传不注入」的假不对称）。显式 `-Seed` / `$env:MIR2_RNG_SEED` 仍优先。
 - **非法 `-Seed`/环境变量 ⇒ fail-closed**：打印 `RED: MIR2_RNG_SEED/-Seed 不是合法 int: …` 并 **exit 1**，
   **不起栈**（不静默降级；同 C# 钩子 `TryParse` 失败 ⇒ `Fail/Exit(97)`）。
 - 管线实现（`Resolve-Mir2Seed` / `Get-SeedInjectedLine` / `Start-SeededProcess`）在

@@ -25,7 +25,12 @@
   种子管线（卡 `openmir2-m3-rust-stack-seed-plumb`，②③ 真机同种子攻击对拍的前置）：
     `-Seed <int>` 显式种子（或读调用方 `MIR2_RNG_SEED`）⇒ 起 `game-svr.exe` 时把该变量
     **注入子进程环境**，并在启动日志打一行可判据的 `RUST_SEED_INJECTED=<n>`；game-svr 自身会打
-    `SEED_PROBE` 行，两者须能对上。**不传种子 ⇒ 不注入、不打该行**（与改动前逐字节一致）。
+    `SEED_PROBE` 行，两者须能对上。
+    **A2（卡 `openmir2-window-collector-preflight`）默认种子对称**：`-Seed` 与 `MIR2_RNG_SEED` 都未给时
+    **回落默认 42**（与 C# 启动器 `start-csharp-hook.ps1` 的 `[int]$Seed = 42` 对称）。理由：Rust 生产默认
+    随机源**本就是 seed 42**（`crates/world/src/world.rs::with_maps` 的 `RandomNumber::with_seed(42)`，未设
+    `MIR2_RNG_SEED` 即沿用）⇒ 回落 42 **RNG 行为零变化**，只把「声明层」补齐（两侧都有种子自证行，消除
+    「C# 恒 42 / Rust 未传不注入」的假不对称 ⇒ 假 RED/假 GREEN 源）。显式 `-Seed` / `$env:MIR2_RNG_SEED` 仍优先。
     非法种子（`-Seed`/环境变量不是 int）⇒ fail-closed：打印 `RED` 并 exit 1（不起栈，不静默降级）。
 
   状态 dump 管线（卡 `openmir2-m2-rust-state-log-plumb`，夹具目标可用性门两侧强制的 Rust 半）：
@@ -226,6 +231,13 @@ try {
 } catch {
   Write-Output ("RED: " + $_.Exception.Message + " —— 拒绝在非法种子下起栈（fail-closed）")
   exit 1
+}
+# A2（卡 openmir2-window-collector-preflight）：两侧默认种子对称 = 42。既未给 `-Seed` 也未给
+# `$env:MIR2_RNG_SEED` ⇒ 回落 42（显式/env 仍优先）。Rust 生产默认随机源本就是 `with_maps` 的
+# `with_seed(42)` ⇒ **RNG 行为零变化**，只补「声明层」自证行，消除与 C# 启动器默认 42 的假不对称。
+if (-not $seedInfo.Present) {
+  $seedInfo = Resolve-Mir2Seed -SeedArg '42'
+  Write-Output 'SEED: 未显式指定（-Seed / MIR2_RNG_SEED 均空）⇒ 回落默认 42（与 C# 启动器对称；World::with_maps 生产默认即 seed 42）'
 }
 if ($seedInfo.Present) {
   Write-Output ("SEED: 将向 game-svr 注入 MIR2_RNG_SEED={0}" -f $seedInfo.Value)

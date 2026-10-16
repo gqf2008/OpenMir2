@@ -115,10 +115,58 @@ def parse_trace(path):
 def is_attack(site, rx=None):
     return bool((rx or CSHARP_ATTACK_RE).search(site or ""))
 
+def check_trace_shape(path, marker=""):
+    """A3（卡 openmir2-window-collector-preflight）：流水形态 fail-closed 断言。
+
+    历史缺陷：`parse_trace` 对 <4 列的行 `continue` 静默丢弃、对恰好 4 列的行把 site 置空
+    ⇒ C# 忘设 `MIR2_RNG_SITE=1`（rng-hook 只写 4 列 `seq/kind/max/result`）时**静默退化**，
+    下游只在「无 marker」处 PREREQ（白跑一场）。现改为 fail-closed：任一数据行不是**恰好 5 列**
+    （`seq	kind	max/arg	result	site`，site 非空）⇒ 收进 problems 并**点名缺列**；给了 marker
+    时还要求流水里**出现** marker。返回 `(ok, problems)`，调用方据此 rc≠0（缺列不静默退化）。
+
+    跳过（不算数据行）：空行、含 `INJECT_OK` 的头行、`SEED_PROBE` 头行、首字段非 int 的其它行
+    （如 `ISOLATE_ATTACK <seed> isolate_sites=...`）。与 `parse_trace` 的过滤口径逐条一致。
+    """
+    problems = []
+    data_rows = 0
+    marker_n = norm_site(marker) if marker else ""
+    marker_seen = False
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+        for lineno, line in enumerate(fh, 1):
+            line = line.rstrip("\r\n")
+            if not line or line.startswith("SEED_PROBE") or "INJECT_OK" in line:
+                continue
+            parts = line.split("\t")
+            try:
+                int(parts[0])
+            except ValueError:
+                continue  # 非数据行（头/其它）
+            data_rows += 1
+            if len(parts) != 5:
+                problems.append("line %d: got %d cols (need 5: seq/kind/max/result/site)" % (lineno, len(parts)))
+                continue
+            if not parts[4]:
+                problems.append("line %d: site col empty (need non-empty site; MIR2_RNG_SITE=1 忘设?)" % lineno)
+            if marker_n and norm_site(parts[4]) == marker_n:
+                marker_seen = True
+    if data_rows == 0:
+        problems.append("no data rows (流水为空 / 全是头行)")
+    if marker_n and not marker_seen:
+        problems.append("no marker: %s (MIR2_RNG_SITE 未开? 站点列缺失?)" % marker)
+    return (len(problems) == 0), problems
+
+
+
 
 def cmd_summary(args):
     if not os.path.exists(args.trace):
         return _die("PREREQ_MISSING: 找不到抽数流水 %s" % args.trace)
+    side0, marker0, _rx0 = select_side(args)
+    ok_shape, shape_problems = check_trace_shape(args.trace, marker0)
+    if not ok_shape:
+        for pr in shape_problems:
+            print("SHAPE %s" % pr, file=sys.stderr)
+        return _die("RED: 流水形态 fail-closed（缺列/缺 marker）——%s：%s" % (args.trace, "; ".join(shape_problems)))
     rows = parse_trace(args.trace)
     if not rows:
         return _die("PREREQ_MISSING: %s 解析为空（钩子没开/格式不符）" % args.trace)
@@ -138,10 +186,15 @@ def cmd_summary(args):
 def cmd_segment(args):
     if not os.path.exists(args.trace):
         return _die("PREREQ_MISSING: 找不到抽数流水 %s" % args.trace)
+    side, marker, rx = select_side(args)
+    ok_shape, shape_problems = check_trace_shape(args.trace, marker)
+    if not ok_shape:
+        for pr in shape_problems:
+            print("SHAPE %s" % pr, file=sys.stderr)
+        return _die("RED: 流水形态 fail-closed（缺列/缺 marker）——%s：%s" % (args.trace, "; ".join(shape_problems)))
     rows = parse_trace(args.trace)
     if not rows:
         return _die("PREREQ_MISSING: %s 解析为空" % args.trace)
-    side, marker, rx = select_side(args)
     if rx is None:
         return _die("PREREQ_MISSING: 未知 --side %r（可 csharp/rust）" % side)
     if not marker:
@@ -380,6 +433,36 @@ def cmd_selftest(args):
           out[0] == 1 and "rows_dropped=1" in out[1] and "ROW_COVERAGE DRIFT" in out[1],
           out[1][:500])
 
+    # ---- A3（卡 openmir2-window-collector-preflight）：流水形态 fail-closed（缺列/缺 marker）----
+    t4col = os.path.join(tmp, "shape4.tsv")
+    with open(t4col, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("1\tINJECT_OK\t42\t0\n")
+        fh.write("SEED_PROBE 1 2 3 4 5 6 7 8\n")
+        fh.write("2\tNext(max)\t10\t3\n")            # 4 列：手工起 C# 忘设 MIR2_RNG_SITE
+    rc_s, _so_s, se_s = _capture_both(lambda: cmd_summary(
+        argparse.Namespace(trace=t4col, top=5, side="csharp", attack_re="")))
+    check("A3-summary-4col-red", rc_s != 0, "rc=%d" % rc_s)
+    check("A3-summary-4col-names-cols", "got 4 cols" in se_s, se_s[:200].replace("\n", " "))
+    rc_g, _so_g, se_g = _capture_both(lambda: cmd_segment(
+        argparse.Namespace(trace=t4col, marker=M, json=os.path.join(tmp, "s4.jsonl"),
+                           side=None, attack_re="")))
+    check("A3-segment-4col-red", rc_g != 0, "rc=%d" % rc_g)
+    check("A3-segment-4col-names-cols", "got 4 cols" in se_g, se_g[:200].replace("\n", " "))
+    # 5 列但无 marker ⇒ fail-closed 点名 marker
+    t5nm = os.path.join(tmp, "shape5nomarker.tsv")
+    with open(t5nm, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("1\tINJECT_OK\t42\t0\n")
+        fh.write("SEED_PROBE 1 2 3 4 5 6 7 8\n")
+        fh.write("2\tNext(max)\t10\t3\tSome.Other@x.cs:1\n")
+    rc_m, _so_m, se_m = _capture_both(lambda: cmd_segment(
+        argparse.Namespace(trace=t5nm, marker=M, json=os.path.join(tmp, "s5.jsonl"),
+                           side=None, attack_re="")))
+    check("A3-no-marker-red", rc_m != 0, "rc=%d" % rc_m)
+    check("A3-no-marker-named", "no marker" in se_m, se_m[:200].replace("\n", " "))
+    # 对照：干净 5 列 + marker ⇒ 绿
+    rc_ok, _so_ok, _se_ok = _capture_both(lambda: cmd_summary(
+        argparse.Namespace(trace=ta, top=5, side="csharp", attack_re="")))
+    check("A3-clean-5col-green", rc_ok == 0, "rc=%d" % rc_ok)
     for name in os.listdir(tmp):
         try:
             os.remove(os.path.join(tmp, name))
@@ -401,6 +484,16 @@ def _capture(fn):
     with contextlib.redirect_stdout(buf):
         rc = fn()
     return rc, buf.getvalue()
+
+
+def _capture_both(fn):
+    """同上，但同时捕获 stderr（A3 形态门的诊断走 stderr）。"""
+    import io
+    import contextlib
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = fn()
+    return rc, out.getvalue(), err.getvalue()
 
 
 def _die(msg, rc=2):

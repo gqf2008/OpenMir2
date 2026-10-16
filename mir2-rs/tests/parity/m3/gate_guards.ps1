@@ -2439,3 +2439,149 @@ function Get-M3SessionHeroPetScope {
   if ($null -eq $baseline) { return $null }
   return (ConvertTo-M3HeroPetScope -Raw ([string]$baseline.hero_pet_sequence))
 }
+
+# ===================================================================================================
+# 采集前置门「接线是否在位」机判（卡 openmir2-window-collector-preflight；独立验证者 finding：25b/⑮c 没牙）
+#
+# 历史缺陷：25b/⑮c 的旧断言是一串**裸子串**——
+#   ($src -match 'collector_switch_preflight\.ps1') -and ($src -match '\$collectorRequired -join') -and ($src -match '-ExpectSeed \$Seed')
+# 这三样**全部**能被「非调用」文本满足：路径赋值 `$CollectorPreflight = Join-Path $Here 'collector_switch_preflight.ps1'`、
+# 自检**自身的正则字面量** `'\$collectorRequired -join'`（`-match` 匹配反斜杠之后的 `$collectorRequired -join`），
+# 以及无关的 `Test-M3SeedInjected … -ExpectSeed $Seed` 行。⇒ 把真正的 `& powershell … -File $CollectorPreflight`
+# 调用整行删掉，25b/⑮c **仍然 GREEN（rc=0）**：违反卡的硬规则「改坏必红」。
+#
+# 修法：只认**非注释的真实调用**行（行首调用运算符 + `-File $CollectorPreflight` + `-(Required|Mode)`），
+# 注释（`#…` / `<#…#>`）、自检正则字面量、无关 `-ExpectSeed` 全被排除；元牙 = 对真实文件 ⇒ true、
+# 对「删掉调用行但诱饵全留」的变异文本 ⇒ 必须 false（自检因此变红）。
+# ===================================================================================================
+
+# 去掉 PowerShell 注释（行注释 `#…` 与块注释 `<#…#>`），保留行结构（换行不丢）。
+# 目的：注释掉的调用 ≠ 接线在位；注释里出现 `& powershell … -File $CollectorPreflight` 不应被当真实调用。
+function Remove-M3PsCommentText {
+  param([AllowEmptyString()][AllowNull()][string]$Text = '')
+  if ([string]::IsNullOrEmpty($Text)) { return '' }
+  $t = [regex]::Replace($Text, '(?s)<#.*?#>', '')     # 块注释（含 .SYNOPSIS 头）
+  $out = New-Object System.Collections.Generic.List[string]
+  foreach ($line in ($t -split "`n")) {
+    $inS = $false; $inD = $false; $cut = -1
+    for ($i = 0; $i -lt $line.Length; $i++) {
+      $c = $line[$i]
+      if ($c -eq "'" -and -not $inD) { $inS = -not $inS }
+      elseif ($c -eq '"' -and -not $inS) { $inD = -not $inD }
+      elseif ($c -eq '#' -and -not $inS -and -not $inD) { $cut = $i; break }
+    }
+    if ($cut -ge 0) { $out.Add($line.Substring(0, $cut)) } else { $out.Add($line) }
+  }
+  return ($out -join "`n")
+}
+
+# 判「采集前置门（collector_switch_preflight.ps1）的真实调用」是否在位。对**任意文本**求值。
+#   -Path          <ps1 路径>（从盘上读）
+#   -Content       <文本>（可选；给了就用它，便于对变异文本求值）
+#   -RequireTokens <string[]>（可选；真实调用行还必须**逐字**含这些 token，用于区分 attack / drop_exp 接线）
+# 返回 $true/$false。只认**非注释**的**真实调用**行，排除注释掉的调用、自检正则字面量、无关 `-ExpectSeed` 出现。
+function Test-CollectorGateWired {
+  param(
+    [string]$Path = '',
+    [AllowEmptyString()][AllowNull()][string]$Content = $null,
+    [string[]]$RequireTokens = @()
+  )
+  if ($PSBoundParameters.ContainsKey('Content') -and $null -ne $Content) {
+    $raw = $Content
+  } elseif (-not [string]::IsNullOrWhiteSpace($Path) -and (Test-Path -LiteralPath $Path)) {
+    $raw = [System.IO.File]::ReadAllText($Path)
+  } else {
+    return $false
+  }
+  if ([string]::IsNullOrEmpty($raw)) { return $false }
+  $stripped = Remove-M3PsCommentText -Text (($raw -replace "`r`n", "`n") -replace "`r", "`n")
+  foreach ($line in ($stripped -split "`n")) {
+    # 真实调用：行首（可含空白）是调用运算符 `&` + powershell/pwsh（或裸命令），且同一行调 `-File $CollectorPreflight`。
+    if ($line -notmatch '^\s*(&\s*)?(?:powershell|pwsh)(?:\.exe)?\b') { continue }
+    if ($line -notmatch '-File\s+["'']?\$CollectorPreflight\b') { continue }
+    if ($line -notmatch '-(?:Required|Mode)\b') { continue }
+    $ok = $true
+    foreach ($tok in $RequireTokens) {
+      if ($line -notmatch [regex]::Escape($tok)) { $ok = $false; break }
+    }
+    if ($ok) { return $true }
+  }
+  return $false
+}
+
+# 变异器：删掉「真实调用行」——trim 后以 `&` 起头且含 `$CollectorPreflight` 的行（= 开发者会删的那一行）。
+# **刻意**只删这一行、其余（注释 / 自检正则字面量 / 无关 `-ExpectSeed` / 路径赋值）全留作**诱饵**：
+# 若判据被诱饵骗过（旧实现），删调用行后仍会 true ⇒ 元牙必红。
+function Remove-M3CollectorGateCallLines {
+  param([AllowEmptyString()][AllowNull()][string]$Content = '')
+  if ([string]::IsNullOrEmpty($Content)) { return '' }
+  $out = New-Object System.Collections.Generic.List[string]
+  foreach ($line in (($Content -replace "`r`n", "`n") -split "`n")) {
+    $t = $line.TrimStart()
+    if (($t -match '^&') -and ($line -match '\$CollectorPreflight')) { continue }
+    $out.Add($line)
+  }
+  return ($out -join "`n")
+}
+
+# A2 种子默认对称（行为向）：Rust 起栈器未给种子 ⇒ 回落 42；C# 启动器默认 42。
+# 旧实现只查裸子串 `Resolve-Mir2Seed -SeedArg '42'` ⇒ **发现不了禁用**：把 guard 改成 `if ($false) { … }`
+# 仍保留该行 ⇒ 仍绿。本实现：AST 抽 A2 回落 `if` 块，**求真值表**（Present=$false ⇒ 条件真（回落触发）、
+# Present=$true ⇒ 条件假（显式优先））+ 核回落 RHS=`Resolve-Mir2Seed -SeedArg '42'`；C# 侧 AST 核
+# `[int]$Seed` 参数默认值 = 42。返回 [pscustomobject]@{ ok; … }。
+# 局限（如实登记）：C# 侧只核**参数默认值声明**（`[int]$Seed = 42`）——默认值本身即行为，改 42 即改文本，
+# 无「保留文本却禁用」的同类漏洞；Rust 侧才是「guard 改 $false 而文本不变」的缺口，已行为向闭合。
+function Test-M3SeedDefaultSymmetry {
+  param(
+    [Parameter(Mandatory)][string]$RustStackPath,
+    [Parameter(Mandatory)][string]$CsharpHookPath,
+    [AllowEmptyString()][AllowNull()][string]$RustStackContent = $null,
+    [AllowEmptyString()][AllowNull()][string]$CsharpHookContent = $null
+  )
+  # 注意：`[string]$X = $null` 的默认值会被**强制转成 ''**（不是 $null），故必须用 PSBoundParameters 判「是否显式给了」。
+  $rText = if ($PSBoundParameters.ContainsKey('RustStackContent') -and $null -ne $RustStackContent) { $RustStackContent } else { [System.IO.File]::ReadAllText($RustStackPath) }
+  $cText = if ($PSBoundParameters.ContainsKey('CsharpHookContent') -and $null -ne $CsharpHookContent) { $CsharpHookContent } else { [System.IO.File]::ReadAllText($CsharpHookPath) }
+  $detail = New-Object System.Collections.Generic.List[string]
+
+  # --- Rust：AST 抽 A2 回落 if 块 + 真值表核 guard ---
+  $rt = $null; $re = $null
+  $rast = [System.Management.Automation.Language.Parser]::ParseInput($rText, [ref]$rt, [ref]$re)
+  $rsFound = $false; $rsCondBehavior = $false; $rsRhs42 = $false
+  foreach ($node in @($rast.FindAll({ param($n) $n -is [System.Management.Automation.Language.IfStatementAst] }, $true))) {
+    $body = $node.Clauses[0].Item2.Extent.Text
+    if ($body -notmatch "Resolve-Mir2Seed\s+-SeedArg\s+'42'") { continue }
+    $rsFound = $true
+    $condText = $node.Clauses[0].Item1.Extent.Text
+    $rsRhs42 = ($body -match '\$seedInfo\s*=\s*Resolve-Mir2Seed\s+-SeedArg\s+' + "'42'")
+    # 真值表：用**真实条件文本**求值（Present=$false 应触发回落、$true 应让显式种子优先）
+    $seedInfo = [pscustomobject]@{ Present = $false }
+    $firesWhenAbsent = [bool](& ([scriptblock]::Create($condText)))
+    $seedInfo = [pscustomobject]@{ Present = $true }
+    $firesWhenPresent = [bool](& ([scriptblock]::Create($condText)))
+    $rsCondBehavior = $firesWhenAbsent -and (-not $firesWhenPresent)
+    $detail.Add(("rust cond='{0}' firesWhenAbsent={1} firesWhenPresent={2} rhs42={3}" -f $condText, $firesWhenAbsent, $firesWhenPresent, $rsRhs42))
+    break
+  }
+  if (-not $rsFound) { $detail.Add("rust A2 回落块未找到（Resolve-Mir2Seed -SeedArg '42' 不在任何 if 体内）") }
+
+  # --- C#：AST 核 [int]$Seed 参数默认值 = 42 ---
+  $ct = $null; $ce = $null
+  $cast = [System.Management.Automation.Language.Parser]::ParseInput($cText, [ref]$ct, [ref]$ce)
+  $csDefault42 = $false
+  foreach ($p in @($cast.FindAll({ param($n) $n -is [System.Management.Automation.Language.ParameterAst] }, $true))) {
+    if ($p.Name.VariablePath.UserPath -ne 'Seed') { continue }
+    $isInt = (@($p.Attributes | ForEach-Object { $_.TypeName.Name }) -contains 'int')
+    $dv = if ($null -ne $p.DefaultValue) { $p.DefaultValue.Extent.Text } else { '' }
+    if ($isInt -and $dv.Trim() -eq '42') { $csDefault42 = $true }
+  }
+  $detail.Add(("csharp [int]`$Seed=42 -> {0}" -f $csDefault42))
+
+  $ok = $rsFound -and $rsCondBehavior -and $rsRhs42 -and $csDefault42
+  return [pscustomobject]@{
+    ok = $ok
+    rust_fallback_guard_behavioral = $rsCondBehavior
+    rust_rhs42 = $rsRhs42
+    csharp_default42 = $csDefault42
+    detail = ($detail -join ' | ')
+  }
+}

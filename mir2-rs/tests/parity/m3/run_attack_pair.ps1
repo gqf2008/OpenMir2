@@ -1126,6 +1126,111 @@ if ($SelfCheckNoStack) {
     Write-Output ("SELFTEST 24 攻击路径 save_settle_instrument='{0}'（要求 mode=save_rcd 且 timeout>=1、quiet>=2）" -f $ssInst)
   }
 
+  # 25. 采集器口径收口（卡 openmir2-window-collector-preflight；A1/A2/A4）：
+  #     A1  start-csharp-hook.ps1 的 STATE_LOG 注入已移出隔离分支（-StateDump 独立）；行为向验法 =
+  #         从源里抽出 GameSvr 的 `try/finally` env 块、替掉 `Start-One` 为 env dump，在真子进程里跑三态
+  #         （isolate / statedump / none）核 env 集合 + `ISOLATE_ATTACK ... state_log=...` 行逐字不变；
+  #     A2  start_rust_stack.ps1 未给种子 ⇒ 回落 42（与 C# 启动器 `[int]$Seed = 42` 对称）；
+  #     A4  collector_switch_preflight.ps1 的自检必须 GREEN，且本卡连线（本脚本起头 `-Required $collectorRequired`）在源里。
+  $preflightPath = Join-Path $Here 'collector_switch_preflight.ps1'
+  if (-not (Test-Path $preflightPath)) { $failures += 'collector_preflight_missing' }
+  else {
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $preOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $preflightPath -SelfCheckNoStack 2>&1 | Out-String)
+    $preRc = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($preRc -ne 0) { $failures += ('collector_preflight_selftest_rc=' + $preRc) }
+    if ($preOut -notmatch 'COLLECTOR_PREFLIGHT_SELFTEST pass=(\d+) fail=0') { $failures += 'collector_preflight_selftest_not_green' }
+    Write-Output ("SELFTEST 25a collector_switch_preflight 自检 rc={0}" -f $preRc)
+  }
+
+  # 25b 接线元牙（卡 openmir2-window-collector-preflight）：
+  #   旧实现是三段**裸子串** ⇒ 路径赋值 / 自检**自身的正则字面量** / 无关 `-ExpectSeed $Seed` 都能满足，
+  #   把真正的 `& powershell … -File $CollectorPreflight` 调用整行删掉仍 GREEN（「改坏必红」失效）。
+  #   现由 gate_guards.ps1::Test-CollectorGateWired 只认**非注释的真实调用**行：
+  #     真实文件 ⇒ true；删掉真调用行、**诱饵全留** ⇒ 必须 false。
+  $apSrc = Get-Content -LiteralPath $PSCommandPath -Raw
+  $apTokens = @('-Required', '$collectorRequired')
+  $apWiredReal = Test-CollectorGateWired -Path $PSCommandPath -RequireTokens $apTokens
+  $apMutText = Remove-M3CollectorGateCallLines -Content $apSrc
+  $apDecoysKept = ($apMutText -match '\$collectorRequired -join') -and ($apMutText -match 'collector_switch_preflight\.ps1') -and ($apMutText -match 'Test-M3SeedInjected.*-ExpectSeed \$Seed')
+  $apWiredMut = Test-CollectorGateWired -Content $apMutText -RequireTokens $apTokens
+  $apWired = $apWiredReal -and (-not $apWiredMut) -and $apDecoysKept
+  if (-not $apWired) { $failures += 'attack_pair_collector_preflight_not_wired' }
+  Write-Output ("SELFTEST 25b 接线元牙：真实文件 wired={0} / 删真调用·留诱饵(join/路径/无关ExpectSeed 都在={1}) mutated_wired={2}（须 true/false）=> ok={3}" -f $apWiredReal, $apDecoysKept, $apWiredMut, $apWired)
+
+  # 25c A2 种子默认对称（行为向；卡 openmir2-window-collector-preflight）：
+  #   旧实现只查裸子串（`Resolve-Mir2Seed -SeedArg '42'` / `[int]$Seed = 42`）⇒ **发现不了禁用**：
+  #   把 guard 改成 `if ($false) { … }` 仍保留该行 ⇒ 仍绿。现由 gate_guards.ps1::Test-M3SeedDefaultSymmetry
+  #   对 A2 回落 `if` 块求**真值表**（Present=$false 触发回落 / $true 让显式种子优先）+ 核 RHS；C# 侧核参数默认值。
+  #   元牙：造「禁用」（guard→$false）与「删除」（删掉落回落行）两个变异体，行为向判据必须都 false。
+  $rsPath = Join-Path $RepoRoot 'tools\m2-acceptance\start_rust_stack.ps1'
+  $chPath = Join-Path $Here 'start-csharp-hook.ps1'
+  $rsSrc = Get-Content -LiteralPath $rsPath -Raw
+  $chSrc = Get-Content -LiteralPath $chPath -Raw
+  $sym = Test-M3SeedDefaultSymmetry -RustStackPath $rsPath -CsharpHookPath $chPath
+  if (-not $sym.ok) { $failures += 'seed_default_symmetry_not_behavioral' }
+  $symDisMut = $rsSrc.Replace('if (-not $seedInfo.Present) {', 'if ($false) {')
+  $symDelMut = ((($rsSrc -split "`n") | Where-Object { $_ -notmatch "-SeedArg '42'" }) -join "`n")
+  $symDisOk = ($symDisMut -ne $rsSrc) -and (-not (Test-M3SeedDefaultSymmetry -RustStackPath $rsPath -CsharpHookPath $chPath -RustStackContent $symDisMut).ok)
+  $symDelOk = ($symDelMut -ne $rsSrc) -and (-not (Test-M3SeedDefaultSymmetry -RustStackPath $rsPath -CsharpHookPath $chPath -RustStackContent $symDelMut).ok)
+  if (-not $symDisOk) { $failures += 'seed_default_symmetry_disable_mutant_not_red' }
+  if (-not $symDelOk) { $failures += 'seed_default_symmetry_delete_mutant_not_red' }
+  Write-Output ("SELFTEST 25c 种子默认对称（行为向）real ok={0}（{1}）；禁用变异体(guard->`$false)必红={2} / 删除变异体(删回落行)必红={3}" -f $sym.ok, $sym.detail, $symDisOk, $symDelOk)
+
+  # 25d A1 结构：-StateDump 开关 + $injectStateLog 表达式 + STATE_LOG 赋值出现在隔离分支之外
+  $chStateDump = $chSrc -match '\[switch\]\$StateDump'
+  $chInjectExpr = $chSrc -match 'injectStateLog = \[bool\]\$IsolateAttack -or \[bool\]\$StateDump'
+  $stateAssignCount = ([regex]::Matches($chSrc, 'MIR2_RNG_STATE_LOG = \$StateLog')).Count
+  if (-not $chStateDump) { $failures += 'csharp_hook_statedump_switch_missing' }
+  if (-not $chInjectExpr) { $failures += 'csharp_hook_injectStateLog_expr_missing' }
+  if ($stateAssignCount -lt 2) { $failures += ('csharp_hook_state_log_assign_outside_isolate=' + $stateAssignCount) }
+  Write-Output ("SELFTEST 25d A1 结构（StateDump={0} injectExpr={1} STATE_LOG 赋值×{2}）" -f $chStateDump, $chInjectExpr, $stateAssignCount)
+
+  # 25e A1 行为：抽 GameSvr env 块跑三态（真子进程），核 env 集合 + ISOLATE_ATTACK 行逐字不变
+  $startMark = '$injectStateLog = [bool]$IsolateAttack'
+  $endMark = 'Remove-Item Env:MIR2_RNG_ISOLATE_ATTACK,Env:MIR2_RNG_ISOLATE_SITES,Env:MIR2_RNG_ATTACK_LOG,Env:MIR2_RNG_STATE_LOG -ErrorAction SilentlyContinue'
+  $si = $chSrc.IndexOf($startMark)
+  $ei = $chSrc.IndexOf($endMark)
+  if ($si -lt 0 -or $ei -lt 0 -or $ei -le $si) {
+    $failures += ('a1_block_extract_failed si={0} ei={1}' -f $si, $ei)
+  } else {
+    $extracted = $chSrc.Substring($si, ($ei + $endMark.Length) - $si) + "`n}"
+    $startOneLine = "Start-One 'GameSvr' (Join-Path `$Shadow 'GameSrv.exe') `$Shadow @(5000) 5"
+    if ($extracted.IndexOf($startOneLine) -lt 0) {
+      $failures += 'a1_startOne_line_not_found'
+    } else {
+      $dump = "foreach (`$v in @('MIR2_RNG_STATE_LOG','MIR2_RNG_ISOLATE_ATTACK','MIR2_RNG_ISOLATE_SITES','MIR2_RNG_ATTACK_LOG')) { Write-Output ('DUMPENV ' + `$v + '=' + [string][System.Environment]::GetEnvironmentVariable(`$v)) }"
+      $extracted = $extracted.Replace($startOneLine, $dump)
+      $harnessBody = $extracted
+      function New-A1Harness([bool]$Isolate, [bool]$StateDump) {
+        $pre = "`$IsolateAttack = `$$(if($Isolate){'true'}else{'false'})`n" +
+               "`$StateDump = `$$(if($StateDump){'true'}else{'false'})`n" +
+               "`$StateLog = 'STATE_PATH'`n`$IsolateSites = 'SITES_PATH'`n`$AttackStreamLog = 'ATTACK_PATH'`n" +
+               "`$Seed = 42`n`$Shadow = 'SHADOW_DIR'`n"
+        return $pre + $harnessBody
+      }
+      function Invoke-A1Harness([string]$Text) {
+        $hf = Join-Path $tmpRoot ('a1-harness-' + [guid]::NewGuid().ToString('N') + '.ps1')
+        [System.IO.File]::WriteAllText($hf, $Text, (New-Object System.Text.UTF8Encoding($false)))
+        $out = (& powershell -NoProfile -ExecutionPolicy Bypass -File $hf 2>&1 | Out-String)
+        return $out
+      }
+      $outIso = Invoke-A1Harness (New-A1Harness -Isolate $true -StateDump $false)
+      $okIsoEnv = ($outIso -match 'DUMPENV MIR2_RNG_STATE_LOG=STATE_PATH') -and ($outIso -match 'DUMPENV MIR2_RNG_ISOLATE_ATTACK=1') -and ($outIso -match 'DUMPENV MIR2_RNG_ISOLATE_SITES=SITES_PATH') -and ($outIso -match 'DUMPENV MIR2_RNG_ATTACK_LOG=ATTACK_PATH')
+      $okIsoLine = $outIso -match 'ISOLATE_ATTACK on=true seed=42 sites=SITES_PATH attack_stream=ATTACK_PATH state_log=STATE_PATH'
+      if (-not $okIsoEnv) { $failures += 'a1_isolate_env_changed' }
+      if (-not $okIsoLine) { $failures += 'a1_isolate_line_changed' }
+      $outSd = Invoke-A1Harness (New-A1Harness -Isolate $false -StateDump $true)
+      $okSd = ($outSd -match 'DUMPENV MIR2_RNG_STATE_LOG=STATE_PATH') -and ($outSd -notmatch 'MIR2_RNG_ISOLATE_ATTACK=1')
+      if (-not $okSd) { $failures += 'a1_statedump_independent_missing' }
+      $outNone = Invoke-A1Harness (New-A1Harness -Isolate $false -StateDump $false)
+      $okNone = ($outNone -match 'DUMPENV MIR2_RNG_STATE_LOG=') -and ($outNone -notmatch 'MIR2_RNG_STATE_LOG=STATE_PATH') -and ($outNone -notmatch 'MIR2_RNG_ISOLATE_ATTACK=1')
+      if (-not $okNone) { $failures += 'a1_none_leaked_state_or_isolate' }
+      Write-Output ("SELFTEST 25e A1 行为（三态 env/行）：isolate env={0} line={1} / statedump 独立={2} / none 干净={3}" -f $okIsoEnv, $okIsoLine, $okSd, $okNone)
+    }
+  }
+
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
     Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③） + 活栈隔离口径（owner 21:15：开关 off/on/fail-closed 六向 + attack_seed 公式含 i32 回绕 + 流水头 有/无/缺文件 + C# dump vs Rust 谓词表机判（生产绿 / 删一条红 / 加未登记红）+ C# hook 离线自检 + SHA256 活文件（F1：holder FileShare.ReadWrite 下读=锚 + 旧 ReadAllBytes 必被拒）+ attack_rng_ledger 站点表与决策片同表（F2）+ 目标可用性门两侧接线（owner 00:20：C#/Rust 同一函数，rust good/ghost/missing 三向 fail-closed） + C# 专用流纯度门（F-N1：干净绿 / 混入 base 单元·player 数不符·污染首条 三向必红）+ AFTER 快照前断线存档落库等待仪器（F-2：save_settle mode=save_rcd/timeout>=1/quiet>=2 生产接线机判） + EOL 生产者写 LF（23a：m3hashutil 写出 + Set-Content 覆盖自检，写出件不得含 0x0D；23b：`verify_sha256sums.py eolcheck` 盘上字节 vs git blob——LF 绿 / CRLF 必红并点名 bad.txt；`-SelfCheckOut` 脚本自落 LF 转录）））'
@@ -1185,6 +1290,26 @@ if ($Side -eq 'csharp' -and ($impls -ne @('csharp'))) {
 }
 if ($impls -contains 'csharp' -and $impls -contains 'rust-or-other') {
   Write-Output 'RED: 入口端口被两种实现混占——先统一'
+  exit 1
+}
+
+# --- 0.1) 采集开关前置门（卡 openmir2-window-collector-preflight；A4 主件 + A2 交叉断言）---
+# 起跑前 fail-closed 断言本次攻击对拍所需的采集开关都在调用方环境里，且 C# `INJECT_OK <seed>` 与
+# Rust 自证行一致；缺任一项/取值非法/种子交叉不符 ⇒ 拒跑（绝不静默半采样跑一场）。
+# 所需集合 = **本次运行的**口径（不是 `-Mode attack` 的固定超集）：隔离三件套只在隔离开启时才要求，
+# 以免把文档里合法的「默认关（不构造专用流）」攻击路径误判成缺项（假 RED）。
+$CollectorPreflight = Join-Path $Here 'collector_switch_preflight.ps1'
+$collIsoVal = Test-M3IsolateAttackValue -Value $env:MIR2_RNG_ISOLATE_ATTACK
+$collIsoOn = ([bool]$IsolateAttack) -or ([bool]$collIsoVal.on)
+$collectorRequired = @('MIR2_RNG_SEED','MIR2_RNG_LOG','MIR2_RNG_SITE','MIR2_RNG_STATE_LOG','MIR2_CLOCK_MS')
+if ($collIsoOn) { $collectorRequired += @('MIR2_RNG_ISOLATE_ATTACK','MIR2_RNG_ATTACK_LOG','MIR2_RNG_ISOLATE_SITES') }
+$collCsharpSeedLog = if (-not [string]::IsNullOrEmpty($CsharpSeedLog)) { $CsharpSeedLog }
+  elseif (-not [string]::IsNullOrEmpty($env:MIR2_RNG_LOG)) { $env:MIR2_RNG_LOG } else { '' }
+$collRustSeedLog = if (-not [string]::IsNullOrEmpty($RustSeedLog)) { $RustSeedLog }
+  else { Join-Path $RustStackLogDir 'game-svr.out.log' }
+& powershell -ExecutionPolicy Bypass -File $CollectorPreflight -Required ($collectorRequired -join ',') -ExpectSeed $Seed -CsharpSeedLog $collCsharpSeedLog -RustSeedLog $collRustSeedLog
+if ($LASTEXITCODE -ne 0) {
+  Write-Output 'RED: 采集开关前置门未过（缺项/非法/种子交叉不符）——拒跑（fail-closed）。修法：export 缺失开关后重跑；见 collector_switch_preflight.ps1'
   exit 1
 }
 

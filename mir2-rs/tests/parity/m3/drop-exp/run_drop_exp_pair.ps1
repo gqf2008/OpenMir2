@@ -321,6 +321,20 @@ if ($SelfCheckNoStack) {
       Add-Result 'emit-dropexp-pin-args' ([string]$pinObj.start_pose -like ($wantPosePrefix + '*')) ("start_pose=" + $pinObj.start_pose)
     }
 
+    # ⑮c 采集开关前置门接线元牙（卡 openmir2-window-collector-preflight）：
+    #   旧实现是裸子串：`-Mode drop_exp -ExpectSeed` 出现在**自检自身的正则字面量**里、`collector_switch_preflight.ps1`
+    #   出现在路径赋值/注释里 ⇒ 把真正的 `& powershell … -File $CollectorPreflight -Mode drop_exp …` 调用整行删掉仍绿。
+    #   现由 gate_guards.ps1::Test-CollectorGateWired 只认**非注释的真实调用**行：真实文件 ⇒ true；
+    #   删掉真调用行、**诱饵全留**（自检正则字面量 + 路径赋值）⇒ 必须 false。
+    $dexpSrc = Get-Content -LiteralPath $PSCommandPath -Raw
+    $dexpTokens = @('-Mode', 'drop_exp')
+    $dexpWiredReal = Test-CollectorGateWired -Path $PSCommandPath -RequireTokens $dexpTokens
+    $dexpMutText = Remove-M3CollectorGateCallLines -Content $dexpSrc
+    $dexpDecoysKept = ($dexpMutText -match 'collector_switch_preflight\.ps1') -and ($dexpMutText -match '-Mode drop_exp')
+    $dexpWiredMut = Test-CollectorGateWired -Content $dexpMutText -RequireTokens $dexpTokens
+    $dexpWired = $dexpWiredReal -and (-not $dexpWiredMut) -and $dexpDecoysKept
+    Add-Result 'collector-preflight-wired' $dexpWired ("real={0} decoysKept={1} mutated={2} => ok={3}" -f $dexpWiredReal, $dexpDecoysKept, $dexpWiredMut, $dexpWired)
+
     # ⑯ BotSrv 生产函数 selftest（attacker 精确选择 / 击杀窗口归类 / SM_WINEXP 字段抽取 / 行组装）
     #    —— 改坏必红由代码 review + 本断言钉住（片内红检另存证据）。
     $botProj = Join-Path $RepoRoot 'src\BotSrv\BotSrv.csproj'
@@ -422,6 +436,17 @@ if (-not $Go) {
   Write-Output 'PREREQ_MISSING: 真机 100 杀需 owner 发放窗口（起栈禁接管道；未获 -Go 一律拒跑，不占端口）'
   Write-Output ("NEXT: 获窗口后按 README 的命令序列跑（-Side csharp 基线 → -Side rust -PeerSession <csharp 会话> → -DiffOnly）")
   exit 2
+}
+
+# --- 采集开关前置门（卡 openmir2-window-collector-preflight；A4 主件 + A2 交叉断言）---
+# real-run 起头 fail-closed 断言本次掉落/经验对拍所需的采集开关（MIR2_RNG_SEED/LOG/SITE/STATE_LOG/
+# DROPEXP_EXT_FIELDS/CLOCK_MS）都在调用方环境里，且 C# `INJECT_OK <seed>` 与 Rust 自证行一致；
+# 缺任一项/取值非法/种子交叉不符 ⇒ 拒跑（绝不静默半采样跑一场）。
+$CollectorPreflight = Join-Path (Split-Path -Parent $Here) 'collector_switch_preflight.ps1'
+& powershell -ExecutionPolicy Bypass -File $CollectorPreflight -Mode drop_exp -ExpectSeed $Seed
+if ($LASTEXITCODE -ne 0) {
+  Write-Output 'RED: 采集开关前置门未过（缺项/非法/种子交叉不符）——拒跑（fail-closed）。修法：export 缺失开关后重跑；见 collector_switch_preflight.ps1'
+  exit 1
 }
 
 # 场景固定输入（scenario 是单一真源；命令行 -Kills 必须与之一致，否则 fail-closed）。

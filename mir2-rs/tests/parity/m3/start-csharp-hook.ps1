@@ -15,6 +15,11 @@
     attack_seed = MIR2_RNG_SEED + 0x9E37（由 hook 自己算；本脚本把 seed/路径/hash 记进
     <LogDir>/csharp_isolation.json 供夹具与审计）。
 
+  A1（卡 `openmir2-window-collector-preflight`）：`MIR2_RNG_STATE_LOG`（服务端权威逐击状态 dump）的注入
+  历史上被写在 `if ($IsolateAttack) { ... }` 里 ⇒ 不开隔离就拿不到 C# 半的状态 dump，而 `server_state_gate.py`
+  要求**两侧都有**（目标可用性门只保护一半 ⇒ 假 PREREQ）。现改为独立可控：`-StateDump` 只注入 STATE_LOG、
+  与隔离无关；`-IsolateAttack` 的语义与产物逐字不变（仍注入 ISO/SITES/ATTACK_LOG + STATE_LOG）。
+
   窗口纪律：起栈前自查 5000/7000/7100/7200 空闲；收工用 -Stop（本脚本不负责别的 lane 的栈）。
 #>
 param(
@@ -23,6 +28,7 @@ param(
   [string]$IsolateSites = '',       # 缺省 <LogDir>\rng-isolate-sites.txt
   [string]$AttackStreamLog = '',    # 缺省 <LogDir>\rng-attack-stream.tsv
   [string]$StateLog = '',           # owner 23:50：服务端权威逐击状态 dump（缺省 <LogDir>\rng-server-state.tsv）
+  [switch]$StateDump,              # A1（卡 openmir2-window-collector-preflight）：独立开服务端逐击状态 dump
   [switch]$Stop,
   [switch]$Status,
   [int]$WaitSeconds = 60,
@@ -135,15 +141,24 @@ $env:DOTNET_STARTUP_HOOKS = $hook
 $env:MIR2_RNG_SEED = "$Seed"
 $env:MIR2_RNG_LOG = Join-Path $LogDir 'rng-stream.tsv'
 $env:MIR2_RNG_SITE = '1'
+# A1（卡 openmir2-window-collector-preflight）：`MIR2_RNG_STATE_LOG` 的注入**移出隔离分支**，独立可控。
+#   * `-IsolateAttack` ⇒ 沿用旧语义：注入 ISO/SITES/ATTACK_LOG **且** STATE_LOG（产物逐字不变）；
+#   * `-StateDump`（新）⇒ 仅注入 STATE_LOG，与是否隔离无关；
+#   * 两者都不给 ⇒ 无 isolate env、无 STATE_LOG（与改动前逐字节相同）。
+$injectStateLog = [bool]$IsolateAttack -or [bool]$StateDump
 try {
   if ($IsolateAttack) {
     $env:MIR2_RNG_ISOLATE_ATTACK = '1'
     $env:MIR2_RNG_ISOLATE_SITES = $IsolateSites
     $env:MIR2_RNG_ATTACK_LOG = $AttackStreamLog
-    $env:MIR2_RNG_STATE_LOG = $StateLog
+    if ($injectStateLog) { $env:MIR2_RNG_STATE_LOG = $StateLog }
     Write-Output ("ISOLATE_ATTACK on=true seed={0} sites={1} attack_stream={2} state_log={3}" -f $Seed, $IsolateSites, $AttackStreamLog, $StateLog)
   } else {
     Write-Output 'ISOLATE_ATTACK on=false（默认关；行为逐字节不变）'
+    if ($injectStateLog) {
+      $env:MIR2_RNG_STATE_LOG = $StateLog
+      Write-Output ("STATE_DUMP on=true state_log={0}" -f $StateLog)
+    }
   }
   Start-One 'GameSvr' (Join-Path $Shadow 'GameSrv.exe') $Shadow @(5000) 5
 } finally {
