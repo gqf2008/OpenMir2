@@ -36,6 +36,7 @@ pub mod selloff;
 pub mod shop;
 pub mod slave;
 pub mod smframe;
+pub mod smframe_ext;
 pub mod stamina;
 pub mod trade;
 pub mod useitem;
