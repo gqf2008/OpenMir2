@@ -518,7 +518,12 @@ pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
         }
     }
     // `if (Animal) { MeatQuality = (ushort)(MeatQuality - Random(300)); if (MeatQuality < 0) MeatQuality = 0; }`
-    if world.entities.get(victim_id).is_some_and(|e| e.ai.animal) {
+    // `Animal` 由怪种分类决定（[`is_animal_race`]）；`e.ai.animal` 保留为显式覆盖位（恒 `false`）。
+    let is_animal = world
+        .entities
+        .get(victim_id)
+        .is_some_and(|e| e.ai.animal || is_animal_race(e.race));
+    if is_animal {
         let dec = world.rng.random_below(300);
         if let Some(e) = world.entities.get_mut(victim_id) {
             let v = i32::from(e.ai.meat_quality) - dec;
@@ -533,10 +538,86 @@ pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
     }
 }
 
+/// `CreateMonster`（`WorldServer.MonGen.cs:507-728`）按 `monsters.Race` 选怪类；本函数给出
+/// **`ATMonster` 家族中「未覆写 `Run`」** 的 race 集——这些类直接继承 `ATMonster.Run`
+/// （`ATMonster.cs:13-24`），在 `base.Run()` 之前按时钟门调 `SearchTarget()`。
+///
+/// 由 `CreateMonster` 的 `race → 类` 映射 + 各派生类是否覆写 `Run` 推出：
+/// - 本体：`53`（`AnimalWolf`=`new AtMonster`）、`81`/`86`/`88`/`89`（`new AtMonster`）；
+/// - `83`（`new SlowAtMonster`，`SlowATMonster.cs:3` `: AtMonster` 无覆写）。
+///
+/// **不在此列（登记，本片不建模）**：覆写 `Run` 的 `ATMonster` 派生（`90`/`91`/`92`/`96`/`97`/
+/// `100`/`105`/`107`/`114`/`130`/`132` 等，见模块头「未建模」），以及非 `ATMonster` 家族但自实现
+/// 同样索敌门的类（`BoneKing`/`Clone`/`DigOutZombi`/`Sculture`/`LightingZombi`/…）。
+///
+/// 改坏必红：去掉本门 ⇒ `active_seek_race_*` 用例里 race 81/83 的怪不再发现玩家。
+#[must_use]
+pub fn is_active_seek_race(race: u8) -> bool {
+    matches!(race, 53 | 81 | 83 | 86 | 88 | 89)
+}
+
+/// `AnimalObject.Struck` 的 `if (Animal)` 门（`AnimalObject.cs:350-357`）所读 `BaseObject.Animal`
+/// 的**运行时等价物**——`Animal` 是怪种分类的函数（构造期置位，之后不再变）：
+/// - `WorldServer.MonGen.cs:518-553` 的对象初始化式：`AnimalChicken(51)`/`AnimalDeer(52)`/`AnimalWolf(53)`；
+/// - 派生类 ctor：`SpitSpider(82)`（`SpitSpider.cs:15`）/`Scorpion(84)`（`Scorpion.cs:7`）/
+///   `StickMonster(85)`（`StickMonster.cs:23`）/`GasAttackMonster(90)`（`GasAttackMonster.cs:12`）；
+/// - **继承**上述 ctor 且不再覆写 `Animal` 的派生：`105`/`106`（`: GasAttackMonster`）、
+///   `114`/`118`/`119`（`: SpitSpider`）、`132`（`: StickMonster`）。
+///   `CentipedeKingMonster(107)`（`: StickMonster`）ctor 显式 `Animal = false`（`CentipedeKingMonster.cs:17`）⇒ **排除**。
+///
+/// `BaseObject.ReAliveEx` 的 `case 54`（`BaseObject.cs:2601-2603`）只在**复活**路径置位；本骨架未建模
+/// 复活 ⇒ `54` **不计入**（与 [`crate::combat::race_is_animal`] 口径一致）。这里在
+/// [`crate::combat::race_is_animal`]（服务 `SKILL_TAMMING` 门）之上补 ctor 继承带来的 race。
+///
+/// 改坏必红：去门 ⇒ `animal_struck_no_random300_for_non_animal_race` 的对照与
+/// `animal_struck_no_random300_for_race_51_vs_80` 必红。
+#[must_use]
+pub fn is_animal_race(race: u8) -> bool {
+    crate::combat::race_is_animal(race) || matches!(race, 105 | 106 | 114 | 118 | 119 | 132)
+}
+
+/// 🛡️ `GuardList.txt` 放置的守卫 race 集（`CreateMonster` 的守卫族分支，`WorldServer.MonGen.cs:509-516/659-661`）：
+/// `Supreguard(11)`→`SuperGuard`、`Petsupreguard(12)`→`PetSuperGuard`、`ArcherPolice(20)`、`ArcherGuard(112)`。
+///
+/// 这些类经 `GuardUnit : NormNpc : AnimalObject`（`GuardUnit.cs:14`、`NormNpc.cs:18`），**不继承
+/// `MonsterObject.Run`** ⇒ 不走 `Think`/`AttackTarget`/`GotoTargetXY`/`Wondering`（= [`monster_run`]）。
+/// `NormNpc.Run`（`NormNpc.cs:1604-1611`）只做「清 master + `base.Run()`」⇒ 守卫**静止**（不游走）；
+/// 仍需走 [`base_object_run_monster`]（= `BaseObject.Run` 的恢复/出队/清理段）。
+///
+/// **登记（本片不建模）**：`SuperGuard.Run`（`SuperGuard.cs:68-115`）/`ArcherGuard.Run`
+/// （`ArcherGuard.cs:39-...`）各自另有一套「扫 `VisibleActors` 找 pvp 玩家/怪并攻击」的主动逻辑；
+/// 本片只做「不游走/不索敌」的静止等价（安静场景下与 oracle 一致）。
+///
+/// 改坏必红：去掉本门 ⇒ `guard_race_stays_static_while_normal_monster_wanders` 必红。
+#[must_use]
+pub fn is_guard_race(race: u8) -> bool {
+    matches!(race, 11 | 12 | 20 | 112)
+}
+
 /// `MonsterObject.Run`（`MonsterObject.cs:251-360`）的**普通怪路径**（无 master/任务/逃跑/狂暴）。
 ///
 /// 只做 AI；`BaseObject.Run` 的恢复/死亡/过期段由 `World` 统一处理（见模块头）。
 pub fn monster_run(world: &mut World, actor_id: i32) {
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    // `ATMonster.Run`（`ATMonster.cs:13-24`）：`is_active_seek_race` 的怪在 `base.Run()`
+    // （= `MonsterObject.Run`，本函数余下部分）之前先按时钟门索敌。外层门是 `CanMove()`
+    // （`AnimalObject.cs:162-165`，= [`can_move`]）；门未到 ⇒ 不搜不抽。
+    // `SearchTarget` 本身**不消费随机数**（见其文档）⇒ 只改目标态、不移位 RNG 流水。
+    if is_active_seek_race(e.race) && can_move(e) {
+        let now = world.clock_ms;
+        let enemy_tick = e.ai.search_enemy_tick;
+        let has_target = e.ai.target_creature.is_some();
+        // `(now - SearchEnemyTick) > 8000 || (now - SearchEnemyTick) > 1000 && TargetCret == null`
+        // ——C# 的 `&&` 优先级高于 `||`，故第二项是 `(>1000) && (TargetCret == null)`。
+        if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.search_enemy_tick = now;
+            }
+            search_target(world, actor_id);
+        }
+    }
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
@@ -796,6 +877,13 @@ pub fn monster_ai_tick(world: &mut World) {
         .map(|e| e.id)
         .collect();
     for id in ids {
+        // `GuardList` 放置的守卫（race 11/12/20/112）不继承 `MonsterObject.Run`
+        // （`GuardUnit:NormNpc`，`NormNpc.Run` 只是「清 master + `base.Run()`」）⇒ **不游走/不索敌**，
+        // 但仍要跑自己的 `base.Run()` 段（`BaseObject.Run` 的恢复/`RM_STRUCK` 出队/`TargetCret` 清理）。
+        if is_guard_race(world.entities.get(id).map_or(0, |e| e.race)) {
+            base_object_run_monster(world, id);
+            continue;
+        }
         monster_run(world, id);
         // `MonsterObject.Run` 的末尾 `base.Run()`（`MonsterObject.cs:255/359`）。
         base_object_run_monster(world, id);
@@ -1541,5 +1629,293 @@ mod tests {
         let a = run();
         assert!(a.is_some(), "怪应在被命中后的某 tick 反击玩家");
         assert_eq!(a, run(), "固定种子两次运行必须一致（确定性）");
+    }
+
+    // ==================================================================
+    // W9：① 主动索敌（ATMonster.Run）・② Animal 肉质扣减・③ 守卫静止
+    //     oracle：ATMonster.cs:13-24、AnimalObject.cs:334-360、GuardUnit.cs/NormNpc.cs:1604-1611
+    // ==================================================================
+
+    /// 造一只指定 race 的怪；`walk_speed` 顶高以把 `monster_run` 隔离在索敌段
+    /// （`now - walk_tick > walk_speed` 恒假 ⇒ 不进游走/攻击段）。
+    fn race_monster(world: &mut World, race: u8, x: i32, y: i32) -> i32 {
+        let mut e = Entity::new(0, "m", x, y);
+        e.race = race;
+        e.hp = 60;
+        e.max_hp = 60;
+        e.ai.walk_speed = 1_000_000;
+        world.add_entity(e)
+    }
+
+    /// ①-A：`ATMonster.Run`（`ATMonster.cs:17`）的时钟门四态——race 81/83 的怪只在
+    /// `(now-SearchEnemyTick)>8000 || ((now-SearchEnemyTick)>1000 && TargetCret==null)` 时索敌。
+    /// 改坏必红：去掉 `search_target` 调用 ⇒ 段 3/4（应认领却空）断言红。
+    #[test]
+    fn active_seek_race_searches_only_under_clock_gate() {
+        let mut world = World::new(60, 60);
+        let mid = race_monster(&mut world, 83, 10, 10); // SlowAtMonster：继承 ATMonster.Run
+        let pid = player(&mut world, 12, 10);
+        world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+            target: pid,
+            flag: VisibleFlag::Show,
+        }];
+        // 段1：`now - SearchEnemyTick <= 1000` ⇒ 不搜。
+        world.clock_ms = 1000;
+        world.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 0;
+        monster_run(&mut world, mid);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            None,
+            "<=1000 不索敌"
+        );
+        // 段2：`>1000` 但已有目标 ⇒ 不搜（保持哨兵）。
+        set_target_creature(&mut world, mid, pid);
+        world.clock_ms = 5000;
+        world.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 0;
+        monster_run(&mut world, mid);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            Some(pid),
+            ">1000 但有目标 ⇒ 不重搜"
+        );
+        // 段3：`>1000` 且无目标 ⇒ 搜（认领最近可见玩家）。
+        world.entities.get_mut(mid).unwrap().ai.target_creature = None;
+        world.clock_ms = 5000;
+        world.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 0;
+        monster_run(&mut world, mid);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            Some(pid),
+            ">1000 且无目标 ⇒ 索敌"
+        );
+        // 段4：`>8000` 即使有目标也重搜（超距者被清、取最近合法者）。
+        let far = player(&mut world, 40, 10);
+        world
+            .entities
+            .get_mut(mid)
+            .unwrap()
+            .visible_actors
+            .push(VisibleBaseObject {
+                target: far,
+                flag: VisibleFlag::Show,
+            });
+        set_target_creature(&mut world, mid, far);
+        world.clock_ms = 9000;
+        world.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 0;
+        monster_run(&mut world, mid);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            Some(pid),
+            ">8000 重搜 ⇒ 取更近者（far 超距被清）"
+        );
+    }
+
+    /// ①-B：`SearchTarget` **不消费随机数**（RNG 流水不变）；race 80（非索敌族）即使有可见玩家也不索敌。
+    /// 改坏必红：给 SearchTarget 加抽数 ⇒ 流水断言红；把门放开到全体 ⇒ race 80 断言红。
+    #[test]
+    fn active_seek_is_rng_free_and_non_seek_race_never_searches() {
+        // race 81：门到点、索敌成功，但 RNG 流水不动。
+        let mut world = World::new(60, 60);
+        let mid = race_monster(&mut world, 81, 10, 10);
+        let pid = player(&mut world, 12, 10);
+        world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+            target: pid,
+            flag: VisibleFlag::Show,
+        }];
+        world.clock_ms = 5000;
+        world.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 0;
+        world.rng = RandomNumber::with_seed(777);
+        let mut probe = RandomNumber::with_seed(777);
+        monster_run(&mut world, mid);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            Some(pid),
+            "race 81 应索敌"
+        );
+        assert_eq!(
+            world.rng.random(),
+            probe.random(),
+            "SearchTarget 不得消费随机数"
+        );
+
+        // race 80（MonsterObject 本体）：同样有可见玩家，但**不**自动索敌。
+        let mut world = World::new(60, 60);
+        let mid = race_monster(&mut world, 80, 10, 10);
+        let pid = player(&mut world, 12, 10);
+        world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+            target: pid,
+            flag: VisibleFlag::Show,
+        }];
+        world.clock_ms = 5000;
+        world.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 0;
+        monster_run(&mut world, mid);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            None,
+            "race 80 不索敌"
+        );
+    }
+
+    /// ①-C：`is_active_seek_race` 的分类（含 `AtMonster` 本体 + `SlowAtMonster`；排除覆写 `Run` 的派生）。
+    #[test]
+    fn active_seek_race_classification_matches_oracle() {
+        for r in [53u8, 81, 83, 86, 88, 89] {
+            assert!(is_active_seek_race(r), "race {r} 应为主动索敌族");
+        }
+        // race 80（MonsterObject）与覆写 Run 的派生（82/84/90/105/107/114/132）不在本片族内。
+        for r in [80u8, 82, 84, 85, 90, 105, 106, 107, 114, 118, 119, 132] {
+            assert!(!is_active_seek_race(r), "race {r} 不应为主动索敌族");
+        }
+    }
+
+    /// ②-A：`AnimalObject.Struck`（`AnimalObject.cs:350-357`）——`Animal` 为真 ⇒ 恰抽 1 次
+    /// `Random(300)` 扣 `MeatQuality`。固定种子断言取数与流水位置（在索敌支之后）。
+    /// 改坏必红：门恒 false（去掉 `is_animal_race`）⇒ 断言红。
+    #[test]
+    fn animal_struck_consumes_random300_and_reduces_meat_quality() {
+        let mut world = World::new(30, 30);
+        let mid = race_monster(&mut world, 52, 10, 10); // 鹿：AnimalDeer
+        world.entities.get_mut(mid).unwrap().ai.meat_quality = 5000;
+        let pid = player(&mut world, 11, 10);
+        world.clock_ms = 100;
+        world.rng = RandomNumber::with_seed(4242);
+        let mut probe = RandomNumber::with_seed(4242);
+        // 无目标 ⇒ 索敌支短路**不抽** `Random(6)`；随后 `Animal` 支抽 1 次 `Random(300)`。
+        let draw = probe.random_below(300);
+        animal_struck(&mut world, mid, pid);
+        let e = world.entities.get(mid).unwrap();
+        assert_eq!(
+            e.ai.meat_quality,
+            5000 - draw as u16,
+            "MeatQuality -= Random(300)"
+        );
+        assert_eq!(
+            world.rng.random(),
+            probe.random(),
+            "恰抽 1 次 Random(300)，位置在索敌支之后"
+        );
+    }
+
+    /// ②-B：`Animal` 为假（race 80）⇒ **不**抽 `Random(300)`、`MeatQuality` 不变。
+    /// 改坏必红：门恒真 ⇒ 断言红。
+    #[test]
+    fn animal_struck_no_random300_for_non_animal_race() {
+        let mut world = World::new(30, 30);
+        let mid = race_monster(&mut world, 80, 10, 10);
+        world.entities.get_mut(mid).unwrap().ai.meat_quality = 5000;
+        let pid = player(&mut world, 11, 10);
+        world.clock_ms = 100;
+        world.rng = RandomNumber::with_seed(4242);
+        let mut probe = RandomNumber::with_seed(4242);
+        let probe_next = probe.random();
+        animal_struck(&mut world, mid, pid);
+        let e = world.entities.get(mid).unwrap();
+        assert_eq!(e.ai.meat_quality, 5000, "非 Animal 不扣肉质");
+        assert_eq!(
+            world.rng.random(),
+            probe_next,
+            "恰抽 0 次随机数（无目标支 + 非 Animal）"
+        );
+    }
+
+    /// ②-C：`MeatQuality` 下限 0（`AnimalObject.cs:353-356`）——`u16` 不得回绕。
+    /// 改坏必红：去掉 `< 0 ⇒ 0` 夹取 ⇒ `0u16 - Random(300)` 回绕成 ~65236。
+    #[test]
+    fn animal_struck_clamps_meat_quality_at_zero() {
+        let mut world = World::new(30, 30);
+        let mid = race_monster(&mut world, 53, 10, 10); // 狼：AnimalWolf（AtMonster 系）
+        world.entities.get_mut(mid).unwrap().ai.meat_quality = 0;
+        let pid = player(&mut world, 11, 10);
+        world.rng = RandomNumber::with_seed(5);
+        animal_struck(&mut world, mid, pid);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.meat_quality,
+            0,
+            "扣减后夹到 0（不回绕）"
+        );
+    }
+
+    /// ②-D：`is_animal_race` 分类与 oracle 一致（含 ctor 继承与 `CentipedeKing` 的显式排除）。
+    #[test]
+    fn animal_race_classification_matches_oracle() {
+        for r in [51u8, 52, 53, 82, 84, 85, 90, 105, 106, 114, 118, 119, 132] {
+            assert!(is_animal_race(r), "race {r} 应为 Animal");
+        }
+        // 54（ReAliveEx 才置位，复活未建模）・107（CentipedeKing ctor 显式 false）・非动物。
+        for r in [54u8, 80, 81, 83, 86, 88, 89, 107, 11, 112] {
+            assert!(!is_animal_race(r), "race {r} 不应为 Animal");
+        }
+    }
+
+    /// 造一只有可见玩家的怪，跑 `ticks` 个 `monster_ai_tick`，返回末位置 `(x, y)`。
+    fn run_ai_ticks(race: u8, ticks: u32) -> (i32, i32) {
+        let mut world = World::new(60, 60);
+        let mut m = Entity::new(0, "m", 20, 20);
+        m.race = race;
+        m.hp = 6000;
+        m.max_hp = 6000;
+        let mid = world.add_entity(m);
+        let pid = player(&mut world, 22, 20);
+        world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+            target: pid,
+            flag: VisibleFlag::Show,
+        }];
+        world.rng = RandomNumber::with_seed(20261016);
+        for _ in 0..ticks {
+            world.clock_ms += 200;
+            monster_ai_tick(&mut world);
+        }
+        let e = world.entities.get(mid).unwrap();
+        (e.x, e.y)
+    }
+
+    /// ③-A：race 11（守卫）静止不动；race 80（普通怪）照常游走。
+    /// 改坏必红：去掉 `monster_ai_tick` 的守卫跳过 ⇒ 守卫游走 ⇒ 首个断言红。
+    #[test]
+    fn guard_race_stays_static_while_normal_monster_wanders() {
+        assert_eq!(
+            run_ai_ticks(11, 800),
+            (20, 20),
+            "守卫（race 11）必须静止（不游走/不索敌）"
+        );
+        assert_ne!(
+            run_ai_ticks(80, 800),
+            (20, 20),
+            "普通怪（race 80）应照常游走"
+        );
+    }
+
+    /// ③-B：守卫虽跳过 `monster_run`，仍要跑 `base.Run()` 段——`RM_STRUCK` 队列照常出队。
+    /// 改坏必红：把守卫改成 `continue` 前不出队（或整只跳过 AI）⇒ 队列不为空。
+    #[test]
+    fn guard_still_drains_struck_queue() {
+        let mut world = World::new(30, 30);
+        let gid = race_monster(&mut world, 11, 10, 10);
+        let hitter = player(&mut world, 11, 10);
+        world.entities.get_mut(gid).unwrap().ai.pending_struck = vec![hitter];
+        world.clock_ms = 200;
+        monster_ai_tick(&mut world);
+        let e = world.entities.get(gid).unwrap();
+        assert!(
+            e.ai.pending_struck.is_empty(),
+            "守卫的 RM_STRUCK 队列应被出队"
+        );
+        assert_eq!(
+            e.ai.target_creature,
+            Some(hitter),
+            "守卫被击应认领命中者（GuardUnit.Struck 同 AnimalObject.Struck）"
+        );
+        assert_eq!((e.x, e.y), (10, 10), "处理受击也不移动");
+    }
+
+    /// ③-C：`is_guard_race` 分类（`CreateMonster` 的守卫族；不含普通怪）。
+    #[test]
+    fn guard_race_classification_matches_oracle() {
+        for r in [11u8, 12, 20, 112] {
+            assert!(is_guard_race(r), "race {r} 应为守卫族");
+        }
+        for r in [0u8, 10, 50, 80, 81, 83, 110, 111] {
+            assert!(!is_guard_race(r), "race {r} 不应为守卫族");
+        }
     }
 }

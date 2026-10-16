@@ -173,8 +173,8 @@ pub struct AnimalState {
     pub struck_tick: i64,
     /// `BaseObject.Animal`（`BaseObject.cs:161`，构造缺省 `false`；`BaseObject.cs:2602` 的
     /// `case 54` 置 `true`）——`Struck` 的肉质扣减门（`AnimalObject.cs:348-355`）。
-    /// 本骨架**不建模** `Initialize` 的 `Animal` 置位路径（需 `BaseObject.cs:2555+` 的怪种分类装载）
-    /// ⇒ 恒 `false`（登记，见模块头/rationale）。
+    /// 本骨架按**怪种分类**等价物读它（[`crate::monai::is_animal_race`] 由 `Entity::race` 推出），
+    /// 本字段仅保留作显式覆盖位（当前无写入点，恒 `false`）。
     pub animal: bool,
     /// `AnimalObject.MeatQuality`（`BaseObject.cs:2576` 的 `Random(3500)+3000` 初始化，
     /// `Struck` 里按 `Random(300)` 扣减）。本骨架只落字段与扣减，初始化路径未建模（登记）。
