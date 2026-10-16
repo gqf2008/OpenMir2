@@ -17,6 +17,10 @@ use mir2_shared::rng::RandomNumber;
 use mir2_world_bevy::{advance_clock_system, TickClock, TickOwnerThread, TickRunner};
 
 use crate::aoi::{search_view_range, search_view_range_death};
+use crate::buff::{
+    BuffSysMsg, BuffSystem, BuffTickOutcome, BuffType, BUFF_EPOCH_MS, BUFF_PASSES_PER_TICK,
+    BUFF_PASS_INTERVAL_MS, MAX_STATUS_ATTRIBUTE,
+};
 use crate::combat::{
     attack_dir_grouped, generate_drops, swing_power, win_exp, AttackOutcome, AttackPowerMode,
     CombatConfig,
@@ -141,6 +145,19 @@ pub struct TickRecord {
     /// 帧经**观察者自己**的消息队列发出 ⇒ 收件人 = 观察者，`Recog` = 离开者。
     /// 由 [`crate::aoi::search_view_range`] 的返回值填充；帧面由宿主（`bins/game-svr`）出。
     pub hides: Vec<(i32, i32)>,
+    /// **车道 B1（buff 系统）**：本 tick `StatusChanged()` 的结果 `(actor_id, 新 CharStatus)`，保序。
+    ///
+    /// oracle `ActorBuffSystem.Operate` 的 `boChg` 支（`ActorBuffSystem.cs:220-224`）⇒
+    /// `BaseObject.StatusChanged()`（`BaseObject.cs:1517-1520`）⇒ `RM_CHARSTATUSCHANGED(10139)`
+    /// ⇒ 宿主出 `SM_CHARSTATUSCHANGED(657)`（`PlayObject.Message.cs:1845-1846`）。
+    pub buff_status_changes: Vec<(i32, i32)>,
+    /// 本 tick buff 递减段对玩家发的 `SysMsg`：`(actor_id, msg)`。帧面（聊天/提示行）归接线层。
+    pub buff_sysmsgs: Vec<(i32, BuffSysMsg)>,
+    /// 本 tick buff 的 `boNeedRecalc` 触发的 `RecalcAbilitys()`：actor_id
+    /// （`RM_ABILITY` 帧面归能力层接线，deferred）。
+    pub buff_recalcs: Vec<i32>,
+    /// 本 tick buff 毒伤段每次 `HealthSpellChanged()`：`(actor_id, hp_after, mp_after)`，保序。
+    pub buff_health_changes: Vec<(i32, u16, u16)>,
 }
 
 /// **L1 TransMap 触发**：`World::step_with_route` 的结果（供宿主排帧序）。
@@ -227,6 +244,22 @@ pub struct World {
     /// 由宿主按 `SystemProcessor.GetGameTime`（`SystemProcessor.cs:98-134`）的**本地小时桶**
     /// 口径经 [`World::refresh_game_time`] 周期刷新（原缺省 `0` = oracle `M2Share.GameTime` 初值）。
     pub game_time: u8,
+    /// **车道 B1（buff 系统）**：精灵状态系统（oracle `M2Share.ActorBuffSystem` 等价物，见
+    /// [`crate::buff`]）。
+    pub buffs: BuffSystem,
+    /// 是否在 [`World::tick`] 里驱动 buff pass（oracle `ActorBuffProcessor` 50ms `DoWork` 的
+    /// 单线程等价物）。
+    ///
+    /// **缺省 `false`** ⇒ 既有 golden 逐字节不变；宿主 `bins/game-svr` 的 sim 循环
+    /// `enable_buff_tick()`（生产路径）。每 world tick（200ms）跑 [`BUFF_PASSES_PER_TICK`] 个
+    /// 50ms pass（U-A2 口径，见 [`crate::buff`] 模块头）。
+    buff_enabled: bool,
+    /// 上一 buff pass 的 sim 时钟（`clock_ms + BUFF_EPOCH_MS`；诊断/测试用）。
+    pub buff_pass_tick: i64,
+    /// `Config.PosionDecHealthTime`（`GameSvrConf.cs:893/1766` 缺省 2500；`ServerConf.cs:544`
+    /// 读 `[Setup] PosionDecHealthTime`）——毒伤 DoT 的周期门（`ActorBuffSystem.cs:235`）。
+    /// 宿主未解析该键 ⇒ 缺省 2500（= oracle 缺省；接线待 Envir 侧解析，登记）。
+    pub poison_dec_health_time: i32,
     /// 物品目录（掉落生成按名查 `StdItem`）
     pub item_catalog: Vec<StdItem>,
     /// 怪物极品掉落几率（`Config.MonRandomAddValue`）
@@ -336,6 +369,10 @@ impl World {
             npc_position: 0,
             npc_pass_tick: i64::MIN,
             game_time: 0,
+            buffs: BuffSystem::new(),
+            buff_enabled: false,
+            buff_pass_tick: i64::MIN,
+            poison_dec_health_time: 2500,
             item_catalog: Vec::new(),
             mon_random_add_value: 40,
             need_exps: vec![0; 1000],
@@ -441,6 +478,134 @@ impl World {
         self.npc_enabled
     }
 
+    /// 开启 buff tick 驱动（缺省关闭；见 `buff_enabled` 字段说明）。
+    ///
+    /// 幂等：生产路径由 `bins/game-svr` 的 sim 循环在起世界时调用；合成 golden 场景保持关闭
+    /// ⇒ 既有 `tests/parity/world` 逐字节不变。
+    pub fn enable_buff_tick(&mut self) {
+        self.buff_enabled = true;
+    }
+
+    /// buff tick 驱动是否开启（自证/测试用）。
+    #[must_use]
+    pub fn buff_tick_enabled(&self) -> bool {
+        self.buff_enabled
+    }
+
+    /// buff 门的「当前时刻」= `clock_ms + BUFF_EPOCH_MS`（与 [`World::buff_tick`] 的 pass 同基）。
+    #[must_use]
+    pub fn buff_now(&self) -> i64 {
+        self.clock_ms + BUFF_EPOCH_MS
+    }
+
+    /// 一趟 buff 进：跑 [`BUFF_PASSES_PER_TICK`] 个 50ms pass（每个 pass 一个 `DoWork`）。
+    ///
+    /// pass 的 `now` = `clock_ms + BUFF_EPOCH_MS + i*50`（与 `add_buff`/`make_posion` 同一基）。
+    /// 返回合并后的可观测产出（供 `TickRecord`）。oracle 的 `ActorBuffProcessor` 是独立 50ms
+    /// 线程；本骨架在 200ms 的世界 tick 内串行跑 4 个 pass（U-A2 口径，见 [`crate::buff`] 模块头）。
+    pub fn buff_tick(&mut self) -> BuffTickOutcome {
+        let base = self.clock_ms + BUFF_EPOCH_MS;
+        let mut out = BuffTickOutcome::default();
+        for i in 0..BUFF_PASSES_PER_TICK {
+            let now = base + i * BUFF_PASS_INTERVAL_MS;
+            let pass = self.buff_do_work(now);
+            out.status_changes.extend(pass.status_changes);
+            out.sysmsgs.extend(pass.sysmsgs);
+            out.recalcs.extend(pass.recalcs);
+            out.health_spell_changes.extend(pass.health_spell_changes);
+        }
+        out
+    }
+
+    /// 单 pass 的 buff `DoWork`（供单测与 [`World::buff_tick`]）。`now_ms` 必须与
+    /// `add_buff`/`make_posion` 的基一致（`clock_ms + BUFF_EPOCH_MS + …`）。
+    pub fn buff_do_work(&mut self, now_ms: i64) -> BuffTickOutcome {
+        self.buff_pass_tick = now_ms;
+        // 把 `BuffSystem` 从 `World` 里取出，避免 `do_work` 同时借 `&mut self`（两条秩序都在
+        // `do_work` 里改，且它要 `&mut World` 调用伤害/实体写）。
+        let mut buffs = std::mem::take(&mut self.buffs);
+        let out = buffs.do_work(self, now_ms);
+        self.buffs = buffs;
+        out
+    }
+
+    /// `BaseObject.GetCharStatus()`（`BaseObject.cs:1499-1503`）：
+    /// `GetBuffStatus(this) | (CharStatusEx & 0x0000FFFF)`。见 [`crate::buff::get_char_status`]。
+    #[must_use]
+    pub fn get_char_status(&self, actor_id: i32) -> i32 {
+        crate::buff::get_char_status(self, actor_id)
+    }
+
+    /// `BaseObject.MakePosion`（`BaseObject.cs:1941-1968`）：加毒 buff + 写 `CharStatus`/
+    /// `GreenPoisoningPoint`。**返回值语义照 oracle**：`nType >= MAX_STATUS_ATTRIBUTE` ⇒ `false`
+    /// （`:1943` 的首门）；否则**无条件 `return true`**（`:1966`）——与 `CharStatus` 是否变化**无关**。
+    ///
+    /// **登记（帧面 deferred，A-5）**：oracle 尾 `if (nOldCharStatus != CharStatus) StatusChanged();`
+    /// （⇒ `RM_CHARSTATUSCHANGED`）与 `Race==Play` 的 `SysMsg` 未接（帧面归接线层）；`MakePosion`
+    /// 无生产调用者 ⇒ 该两支当前运行期不可达。
+    ///
+    /// **消费方（生产链接线，A-5，deferred）**：玩家攻击 `MakePosion(STONE, …)`
+    /// （`PlayObject.Attack.cs:223`）与怪物 7 处（`CentipedeKingMonster.cs:74` 等）。
+    ///
+    /// 前置：`actor_id` 须是已落图的实体（oracle 里 `this` 恒有效）；`nType` 的 `from_index` 在
+    /// `n_type < MAX_STATUS_ATTRIBUTE` 后恒 `Some`（12 值全覆盖）。
+    pub fn make_posion(&mut self, actor_id: i32, n_type: u8, n_time: i32, n_point: i32) -> bool {
+        if n_type >= MAX_STATUS_ATTRIBUTE {
+            return false;
+        }
+        let Some(buff_type) = BuffType::from_index(n_type) else {
+            return false;
+        };
+        let now = self.buff_now();
+        self.buffs
+            .add_buff(actor_id, buff_type, n_time, n_point, now);
+        let status = self.get_char_status(actor_id);
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.char_status = status;
+            e.green_poisoning_point = n_point as u8;
+        }
+        true
+    }
+
+    /// `BaseObject.DefenceUp`（`BaseObject.cs:2137-2165`）：有 ⇒ `TryUpdate`，无 ⇒ `AddBuff`。
+    /// （oracle 尾还有 `SysMsg`/`RecalcAbilitys`/`RM_ABILITY`，帧面/能力面 deferred，登记。）
+    pub fn defence_up(&mut self, actor_id: i32, n_sec: i32) {
+        let now = self.buff_now();
+        if self.buffs.has_buff(actor_id, BuffType::DefensePower) {
+            self.buffs
+                .try_update(actor_id, BuffType::DefensePower, n_sec);
+        } else {
+            self.buffs
+                .add_buff(actor_id, BuffType::DefensePower, n_sec, n_sec, now);
+        }
+        let status = self.get_char_status(actor_id);
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.char_status = status;
+        }
+    }
+
+    /// `BaseObject.MagDefenceUp`（`BaseObject.cs:2167-2185`）：无条件 `AddBuff`。
+    pub fn mag_defence_up(&mut self, actor_id: i32, n_sec: i32) {
+        let now = self.buff_now();
+        self.buffs
+            .add_buff(actor_id, BuffType::MagicDefensePower, n_sec, n_sec, now);
+        let status = self.get_char_status(actor_id);
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.char_status = status;
+        }
+    }
+
+    /// `CharacterObject.MagicShield(nSec)`（`CharacterObject.cs:103`）：加魔法盾 buff + 置
+    /// `MagicShield`（`DamageHealth` 的 MP 抵扣门）。
+    pub fn magic_shield_on(&mut self, actor_id: i32, n_sec: i32) {
+        let now = self.buff_now();
+        self.buffs
+            .add_buff(actor_id, BuffType::MagicShield, n_sec, n_sec, now);
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.magic_shield = true;
+        }
+    }
+
     /// oracle `SystemProcessor.GetGameTime`（`SystemProcessor.cs:48/98-134`）的周期刷新等价物。
     ///
     /// 入参 `bucket` = 宿主按本地小时桶算出的桶值（`1`/`2`/`0`/`3`；生产路径走
@@ -535,6 +700,10 @@ impl World {
         if entity.id <= 0 {
             entity.id = self.entities.alloc_id();
         }
+        // `BaseObject` ctor `PoisoningTick = GetTickCount()`（`BaseObject.cs:443`）：毒伤 DoT 的周期门
+        // 从**实体落图那一刻**起算（buff 轴 = `clock_ms + BUFF_EPOCH_MS`，与 `buff_tick`/`make_posion` 同基）。
+        // `Entity::new`（ctor 等价物）拿不到 `World` 时钟 ⇒ 在此按落图时刻精确重盖（同 `auto_recovery_tick`）。
+        entity.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
         let id = self.entities.insert(entity);
         self.enqueue(Command::Enter { actor_id: id });
         id
@@ -634,6 +803,10 @@ impl World {
             rushes: Vec::new(),
             butches: Vec::new(),
             hides: Vec::new(),
+            buff_status_changes: Vec::new(),
+            buff_sysmsgs: Vec::new(),
+            buff_recalcs: Vec::new(),
+            buff_health_changes: Vec::new(),
         };
 
         // 命令 FIFO
@@ -755,6 +928,20 @@ impl World {
         // oracle 里这跑在每个主人（玩家）自己的 `Run()` 里；本骨架玩家无 `Run` ⇒ 在死亡结算后
         // 按槽位顺序对每个**持有宝宝**的实体跑一次。空表 ⇒ 零动作（golden 逐字节不变）。
         crate::slave::slave_list_cleanup_all(self);
+
+        // **车道 B1（buff 系统）**：buff pass（oracle `ActorBuffProcessor` 的 50ms `DoWork`
+        // 单线程等价物，见 [`crate::buff`]）。**缺省关闭**（`buff_enabled=false`）⇒ 既有 golden
+        // 逐字节不变；宿主 `bins/game-svr` 的 sim 循环 `enable_buff_tick()`（生产路径）。
+        // 位置：死亡结算之后、怪物 AI 之前（设计件 §3.3）。每 world tick（200ms）串行跑
+        // [`BUFF_PASSES_PER_TICK`] 个 50ms pass（U-A2 口径）。buff 段**不抽 RNG** ⇒ 对
+        // RNG 账本零影响（消费者次序不变）。
+        if self.buff_enabled {
+            let out = self.buff_tick();
+            record.buff_status_changes = out.status_changes;
+            record.buff_sysmsgs = out.sysmsgs;
+            record.buff_recalcs = out.recalcs;
+            record.buff_health_changes = out.health_spell_changes;
+        }
 
         // M3④-实现 C：怪物 AI 一步（oracle `ProcessMonsters` → 每只 `monster.Run()`）。
         // **缺省关闭**：合成 golden 场景不含 oracle 的怪物线程，开 AI 会把 RNG 序列整体移位；
@@ -956,6 +1143,8 @@ impl World {
         e.map_id = map_id;
         e.gold = gold;
         e.drop_items = items;
+        // `BaseObject.cs:443` ctor `PoisoningTick = GetTickCount()`：按落图时刻重盖（buff 轴）。
+        e.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
         let id = self.entities.insert(e);
         self.enter_world(id)
     }
@@ -1051,6 +1240,8 @@ impl World {
         // `BaseObject` ctor `AutoRecoveryTick = GetTickCount()`（`BaseObject.cs:445`）：
         // 恢复段从实体落库那一刻起算。
         e.auto_recovery_tick = self.clock_ms;
+        // `BaseObject.cs:443` ctor `PoisoningTick = GetTickCount()`：同上，按落图时刻重盖（buff 轴）。
+        e.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
         let id = self.entities.insert(e);
         if !self.enter_world(id) {
             self.entities.remove(id);

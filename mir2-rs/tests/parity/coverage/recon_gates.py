@@ -1986,6 +1986,10 @@ def cmd_mutate(args):
         # 片107（世界 tick 扩容）接线：滚动公告 LineNotice 的 `[`/`{` 支发 SM_MOVEMESSAGE
         # （bins/game-svr/src/line_notice.rs 的 build_frame 分支 + 生产逐会话接线）。
         "SM_MOVEMESSAGE",
+        # 片112（buff 系统）：`SM_CHARSTATUSCHANGED(657)` 的**发射点**已接（`smframe_ext.rs:131` 编码器 +
+        # `bins/game-svr/src/main.rs` 的 `drain_buff_downlink` 生产调用）⇒ 归 wired；其**生产者缺位**
+        # 登记在下方注释面 `_wired_no_producer`（不豁免 blocked）。
+        "SM_CHARSTATUSCHANGED",
     }
     # 仍 blocked（编码器已落地、生产路径无发射点）；各自 blocked_by 与出处（红名单 v2 §3 finding）：
     #   · 传送簇（切图/TransMap：HIDE 侧随切图簇；对照 SHOW(801)/SHOW2(807) 经
@@ -2007,14 +2011,40 @@ def cmd_mutate(args):
     #     SM_PLAYDICE(8001)/SM_ITEMSHOW(610)（V2-14）。
     _blocked = {"SM_SPACEMOVE_HIDE", "SM_SPACEMOVE_HIDE2", "SM_SKELETON", "SM_ALIVE",
                 "SM_DIGUP", "SM_DIGDOWN", "SM_FLYAXE", "SM_LIGHTING", "SM_OPENHEALTH",
-                "SM_CLOSEHEALTH", "SM_INSTANCEHEALGUAGE", "SM_CHARSTATUSCHANGED", "SM_BREAKWEAPON",
+                "SM_CLOSEHEALTH", "SM_INSTANCEHEALGUAGE", "SM_BREAKWEAPON",
                 "SM_LAMPCHANGEDURA", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL",
                 "SM_QUERYYBSELL", "SM_716", "SM_RECONNECT", "SM_CHANGEFACE", "SM_MAGICFIRE_FAIL",
                 "SM_PLAYDICE", "SM_ITEMSHOW", "SM_HIDEEVENT", "SM_SHOWEVENT", "SM_OPENDOOR_OK",
                 "SM_CLOSEDOOR"}
 
-    def _m6c_failures(wired, blocked):
-        """双向不变式违例清单（空 = 全绿）；wired/blocked 可传变异集合做牙。"""
+    # `_wired_no_producer`：**注释面**（不参与 blocked 断言）——列出「发射点已就位、但**触发该帧的生产者
+    #   缺位**」的 wired 帧。与 `blocked` **正交**：blocked = 无发射点（判据照旧严格），本表 = 有发射点
+    #   但运行期永不触发。⚠ 与 `known_oracle_noop` 同款限制：门只机判**证据形状**（非空且含 file:line
+    #   形态），不判真伪；**不得**用它把 blocked 帧"洗"成 wired —— 成员必须**已在 `_wired_now`**（断言）。
+    _wired_no_producer = {
+        # 片112（buff 系统）A-5 deferred：`Operate` 的 boChg 支 ⇒ `StatusChanged()` ⇒ drain 发 657，
+        #   但唯一能加 buff 的生产 API（make_posion/defence_up/mag_defence_up/magic_shield_on）
+        #   除本体单测外 0 生产调用者 ⇒ `TickRecord.buff_status_changes` 恒空 ⇒ 657 运行期永不发。
+        "SM_CHARSTATUSCHANGED": (
+            "生产者缺位证据：`grep -rn \"make_posion|defence_up|mag_defence_up|magic_shield_on\" "
+            "mir2-rs/crates mir2-rs/bins` 仅命中本体单测/doc（无 bins 生产命中）；"
+            "发射点锚（证明**有**发射点）：mir2-rs/bins/game-svr/src/smframe_ext.rs:131（编码器）"
+            " + mir2-rs/bins/game-svr/src/main.rs（drain_buff_downlink 生产调用）。"
+            "承接：卡 openmir2-world-tick-expansion 的 A-5 deferred（消费方接线批）。"
+        ),
+    }
+
+    def _m6c_failures(wired, blocked, wired_no_producer=None):
+        """双向不变式违例清单（空 = 全绿）；wired/blocked 可传变异集合做牙。
+
+        · wired   ：每条**必须**有生产发射点；
+        · blocked ：每条**必须无**生产发射点（**严格，无豁免**）；
+        · wired_no_producer（默认 [`_wired_no_producer`]）：**注释面**。每条必须 (a) 已在 `wired`、
+          (b) 不在 `blocked`、(c) 带非空且含 `file:line` 形态的证据 ⇒ 它**不可能**被用来豁免 blocked。
+        """
+        if wired_no_producer is None:
+            wired_no_producer = _wired_no_producer
+        wnp = dict(wired_no_producer)
         fails = []
         for sm in sorted(wired):
             if outbound_emit_at(_rep_corpus, sm, _live_w, _spans_w) is None:
@@ -2022,6 +2052,14 @@ def cmd_mutate(args):
         for sm in sorted(blocked):
             if outbound_emit_at(_rep_corpus, sm, _live_w, _spans_w) is not None:
                 fails.append("blocked 有发射点:" + sm)
+        for sm in sorted(wnp):
+            if sm not in wired:
+                fails.append("wired_no_producer 不在 wired（不得借此豁免 blocked）:" + sm)
+            if sm in blocked:
+                fails.append("wired_no_producer 与 blocked 同时命中:" + sm)
+            _ev = str(wnp[sm] or "")
+            if (not _ev.strip()) or (":" not in _ev) or (not re.search(r"[A-Za-z0-9_./\-]+:[0-9]+", _ev)):
+                fails.append("wired_no_producer 证据不合法（须非空且含 file:line 形态）:" + sm)
         _dup = sorted(wired & blocked)
         if _dup:
             fails.append("wired∩blocked 非空:" + ",".join(_dup))
@@ -2033,15 +2071,28 @@ def cmd_mutate(args):
         return fails
 
     _m6c_real = _m6c_failures(_wired_now, _blocked)
-    add("M6c 真语料：orphan 双向不变式（wired 有发点 ∧ blocked 无发点 ∧ 互斥 ∧ 并集=30；违例=%s）"
-        % (_m6c_real or "无"), not _m6c_real)
-    # 三向牙：任一方向被改坏必红（构造变异，逐条实测）。
+    add("M6c 真语料：orphan 双向不变式（wired 有发点 ∧ blocked **严格无**发点 ∧ 互斥 ∧ 并集=30；"
+        "注释面 wired_no_producer=%s；违例=%s）"
+        % (",".join(sorted(_wired_no_producer)) or "无", _m6c_real or "无"), not _m6c_real)
+    # 多向牙：任一方向被改坏必红（构造变异，逐条实测）。
     add("M6c 牙① SM_DISAPPEAR 挪回 blocked ⇒ 必红（它有生产发射点）",
         bool(_m6c_failures(_wired_now - {"SM_DISAPPEAR"}, _blocked | {"SM_DISAPPEAR"})))
     add("M6c 牙② SM_SKELETON 挪进 wired_now ⇒ 必红（它无生产发射点）",
         bool(_m6c_failures(_wired_now | {"SM_SKELETON"}, _blocked - {"SM_SKELETON"})))
     add("M6c 牙③ SM_SKELETON 从两集合皆删 ⇒ 并集守恒必红（漏搬一防）",
         bool(_m6c_failures(_wired_now, _blocked - {"SM_SKELETON"})))
+    add("M6c 牙④ SM_CHARSTATUSCHANGED 放回 blocked（并从 wired 移除）⇒ 必红（它有发射点；证 blocked 仍严格）",
+        bool(_m6c_failures(_wired_now - {"SM_CHARSTATUSCHANGED"},
+                           _blocked | {"SM_CHARSTATUSCHANGED"})))
+    add("M6c 牙⑤ 注释面放进无发射点的 SM_SKELETON ⇒ 必红（不在 wired ⇒ 不得借此豁免 blocked）",
+        bool(_m6c_failures(_wired_now, _blocked,
+                           dict(_wired_no_producer, SM_SKELETON="x.rs:1"))))
+    add("M6c 牙⑥ 注释面证据置空 ⇒ 必红（证据形状检查）",
+        bool(_m6c_failures(_wired_now, _blocked,
+                           dict(_wired_no_producer, SM_WHISPER=""))))
+    add("M6c 牙⑦ 把已接线的 SM_WHISPER 加进注释面 ⇒ 允许（注释面不构成豁免；其真伪由人审）",
+        not _m6c_failures(_wired_now, _blocked,
+                          dict(_wired_no_producer, SM_WHISPER="a.rs:1")))
 
     # M6d —— 可达性口径鲁棒性（防过近似制造假绿）：名字级宽进图 vs「唯一名 + 显式 `::` 限定」图，
     #         在真语料上必须给出**相同的 outbound 判定集**（同一组非 implemented）。

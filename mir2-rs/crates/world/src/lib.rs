@@ -16,6 +16,7 @@
 pub mod action;
 pub mod aoi;
 pub mod bevy_bridge;
+pub mod buff;
 pub mod castle;
 pub mod castle_tax;
 pub mod combat;
@@ -35,6 +36,11 @@ pub mod world;
 pub use action::{ButchEvent, PushEvent, RushEvent, RushFrame};
 pub use aoi::{search_view_range, search_view_range_death, update_visible_gay, visible_snapshot};
 pub use bevy_bridge::{collect_tick_order_system, snapshot_from_world};
+pub use buff::{
+    damage_health, get_char_status, ActorBuffData, BuffSysMsg, BuffSystem, BuffTickOutcome,
+    BuffType, BUFF_DESTROY_TICK_MS, BUFF_EPOCH_MS, BUFF_PASSES_PER_TICK, BUFF_PASS_INTERVAL_MS,
+    BUFF_STATE_TICK_GATE_MS, BUFF_STATE_TICK_MAX, MAX_STATUS_ATTRIBUTE,
+};
 pub use castle::{
     apply_structure_events, castle_official_action, compare_lstr, door_map_xy_flag_ops,
     door_state_text, hire_substring, hutil32_round, official_repair_door, official_repair_wall,

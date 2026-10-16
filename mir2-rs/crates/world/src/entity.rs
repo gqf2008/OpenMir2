@@ -363,6 +363,24 @@ pub struct Entity {
     /// `:903`；`BaseObject.Run` 的恢复段仍按 `WAbil.MaxMP` 回蓝）。
     pub mp: u16,
     pub max_mp: u16,
+    /// C# `BaseObject.PoisoningTick`（`BaseObject.cs:301`，ctor `:443` 置 `GetTickCount()`）——
+    /// 毒伤 DoT 的周期门时刻（`ActorBuffSystem.cs:235`，缺省 `Config.PosionDecHealthTime` = 2500ms）。
+    /// 缺省 = [`crate::buff::BUFF_EPOCH_MS`]（模拟开机毫秒基）；ctor 拿不到 `World` 时钟 ⇒ 落图时由
+    /// [`crate::world::World::add_entity`] 按 `clock_ms + BUFF_EPOCH_MS` 精确重盖，与 oracle ctor
+    /// 「对象建立那一刻」取 `GetTickCount()` 对齐。
+    pub poisoning_tick: i64,
+    /// C# `BaseObject.GreenPoisoningPoint`（`BaseObject.cs:117`，`MakePosion` `:1963` 置 `(byte)nPoint`）。
+    /// DoT 扣血量 = `GreenPoisoningPoint + 1`（`ActorBuffSystem.cs:252`）。
+    pub green_poisoning_point: u8,
+    /// C# `BaseObject.CharStatus`（`BaseObject.cs:56`）——`GetCharStatus()` 的结果缓存
+    /// （`ActorBuffSystem.Operate` 的 `boChg` 支 / `MakePosion` 写它）。
+    pub char_status: i32,
+    /// C# `BaseObject.CharStatusEx`（`BaseObject.cs:57`，ctor `:393` 置 0）——低 16 位并入 `GetCharStatus`。
+    pub char_status_ex: i32,
+    /// C# `PlayObject.MagicShield`（`PlayObject.cs:490`）——`DamageHealth` 的 MP 抵扣门（`BaseObject.cs:779`）。
+    pub magic_shield: bool,
+    /// C# `PlayObject.UnMagicShield`（`PlayObject.cs:494`）——`DamageHealth` 首行守卫（`BaseObject.cs:777`）。
+    pub un_magic_shield: bool,
     /// `WAbil.DC`（低字节=下限、高字节=上限，与 C# 一致）
     pub dc: i32,
     /// `WAbil.AC`
@@ -486,6 +504,16 @@ impl Entity {
             max_hp: 100,
             mp: 0,
             max_mp: 0,
+            // `BaseObject.cs:391`/`:393`：`GreenPoisoningPoint = 0`、`CharStatusEx = 0`；
+            // `CharStatus` 未显式赋值 ⇒ int 缺省 0；`PoisoningTick` ctor 置 `GetTickCount()`
+            // （本骨架用模拟开机基 `BUFF_EPOCH_MS`；精确落图时刻由 `World::add_entity` 重盖）。
+            poisoning_tick: crate::buff::BUFF_EPOCH_MS,
+            green_poisoning_point: 0,
+            char_status: 0,
+            char_status_ex: 0,
+            // `PlayObject.cs:490/494`：`MagicShield`/`UnMagicShield` 构造缺省 `false`。
+            magic_shield: false,
+            un_magic_shield: false,
             dc: 0,
             ac: 0,
             hit_point: 0,

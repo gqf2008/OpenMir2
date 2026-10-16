@@ -5990,6 +5990,73 @@ fn drain_action_downlink(
     }
 }
 
+/// **车道 B1（buff 系统）**：本 tick 由 [`mir2_world::World::buff_tick`] 记下的 buff 帧。
+///
+/// - `rec.buff_status_changes`（oracle `ActorBuffSystem.Operate` 的 `boChg` 支 ⇒ `StatusChanged()`）
+///   ⇒ `SM_CHARSTATUSCHANGED(657)`（`PlayObject.Message.cs:1845-1846`：
+///   `SendDefMessage(SM_CHARSTATUSCHANGED, ActorId, LoWord(CharStatus), HiWord(CharStatus), HitSpeed)`）。
+///   `StatusChanged()` 是 `SendRefMsg`（±`range` 格观察者 + 自己）⇒ 用
+///   [`broadcast_ref_msg_with_self`]。同时刷新展示表 `status`，使后续走/跑/转向/受击/死亡帧尾的
+///   `CharDesc.Status`（`PlayObject.Message.cs:1409/1419/1429/…`）取到新 `CharStatus`。
+/// - `rec.buff_health_changes`（毒伤段的 `HealthSpellChanged()`，`BaseObject.cs:700-708`）
+///   ⇒ `SM_HEALTHSPELLCHANGED(53)`：先把 DoT 后的 `(HP, MP)` 同步进会话 `WAbil`
+///   （与 [`drain_combat_downlink`] 受击同一口径），再出帧；`Race==Play` ⇒ 给自己
+///   （`SendUpdateMsg`），`ShowHp` ⇒ 再 `SendRefMsg`（±`range` 观察者）。
+///
+/// **登记（未接线）**：`HitSpeed`（`CharacterObject.HitSpeed`）本仓未建模其加成源
+/// （`ExtraAbil[EABIL_HITSPEEDUP]`，`PlayObject.cs:2832`）⇒ 基线玩家 `0`（`PlayObject.cs:2024`），
+/// 照 0 发（`SM_CHARSTATUSCHANGED` 的 `Series`）。buff 递减段的 `SysMsg`（`rec.buff_sysmsgs`）
+/// 与 `boNeedRecalc`（`rec.buff_recalcs`，`RM_ABILITY`）帧面 deferred（见 buff 设计件 A-7）。
+fn drain_buff_downlink(
+    rec: &mir2_world::TickRecord,
+    world: &mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    online: &OnlineRegistry,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    range: i32,
+) {
+    for (actor_id, status) in &rec.buff_status_changes {
+        if let Some(mut d) = displays.get(*actor_id).cloned() {
+            d.status = *status;
+            displays.set(*actor_id, d);
+        }
+        let body = game_svr::smframe_ext::sm_charstatuschanged(*actor_id, *status, 0);
+        broadcast_ref_msg_with_self(world, online, gates, *actor_id, &[body]);
+    }
+    for (actor_id, hp, mp) in &rec.buff_health_changes {
+        let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+            continue;
+        };
+        let name = entry.chr_name.clone();
+        let (body, show_hp) = {
+            let Some(sg) = ground_sessions.get_mut(&name) else {
+                continue;
+            };
+            sg.state.wabil.hp = *hp;
+            sg.state.wabil.mp = *mp;
+            (
+                game_svr::smframe::sm_healthspellchanged_frame(
+                    sg.actor_id,
+                    sg.state.wabil.hp,
+                    sg.state.wabil.mp,
+                    sg.state.wabil.max_hp,
+                ),
+                sg.show_hp,
+            )
+        };
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "buff 毒伤回帧") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body: body.clone(),
+            });
+        }
+        if show_hp {
+            broadcast_healthspellchanged(world, online, gates, *actor_id, &body, range);
+        }
+    }
+}
+
 /// **接线批 A**：本 tick 由 `World::switch_map`/`switch_map_space` 记下的切图事件 → TransMap 簇出帧。
 ///
 /// oracle 链：`BaseObject.SpaceMove`（`BaseObject.cs:1130-1144`）/`PlayObject.EnterAnotherMap`
@@ -7638,6 +7705,15 @@ fn sim_loop(
         "INF",
         "固定 NPC tick 已启用（生产宿主）EnableNpcTick=true（200ms sim 节奏；whitelist T-42 登记丢 NpcLimit 墙钟预算）"
     );
+    // **车道 B1（buff 系统）**：生产宿主启用 buff tick（oracle `ActorBuffProcessor` 的 50ms
+    // `DoWork` 单线程等价物）。`World::tick` 在死亡结算之后、怪物 AI 之前串行跑
+    // `BUFF_PASSES_PER_TICK`（=4）个 50ms pass（U-A2 口径）。合成 golden 场景不经本函数
+    // ⇒ 仍缺省关闭，逐字节不变。
+    world.enable_buff_tick();
+    glog!(
+        "INF",
+        "buff tick 已启用（生产宿主）EnableBuffTick=true（200ms sim = 4×50ms pass；U-A2 口径；buff 段不抽 RNG）"
+    );
     // **M3⑨ 主人死/幽灵自投递**（卡 `openmir2-m3-pet-slave-masterdie-wire`）：生产宿主启用
     // 「自身延时消息」驱动并灌入宝宝配置（oracle `PlayObject.Die()` 尾
     // `SendSelfDelayMsg(RM_MASTERDIEMUTINY, …, 1000)`（`PlayObject.cs:1996`）→ 1s 后
@@ -9242,6 +9318,17 @@ fn sim_loop(
         // ⇒ `SM_BACKSTEP(9)`/`SM_RUSH(6)`/`SM_RUSHKUNG(7)`/`SM_BUTCH(637)`）。同属「本 tick 动作段」，
         // 先于 AOI 出现帧/战斗下行（oracle 在 `CharPushed`/`DoMotaebo`/`ClientGetButchItem` 内即时发）。
         drain_action_downlink(&rec, &world, &displays, &online, &gates);
+        // **车道 B1（buff 系统）**：本 tick 的 buff 状态帧（`SM_CHARSTATUSCHANGED(657)`）与
+        // 毒伤帧（`SM_HEALTHSPELLCHANGED(53)`）。同属「本 tick 帧面」，紧随动作下行。
+        drain_buff_downlink(
+            &rec,
+            &world,
+            &mut displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            enter_cfg.ref_msg_range,
+        );
         // **接线批 A**：TransMap 簇（`SM_CLEAROBJECTS(633)`/`SM_CHANGEMAP(634)`/[`SM_SPACEMOVE_SHOW(801)`]）。
         // oracle 在 `SpaceMove`/`EnterAnotherMap` 内**同步**发；本宿主在世界侧落地后由本段 drain。
         drain_map_change(&mut world, &online, &gates, &displays, registry.as_ref());
@@ -10003,6 +10090,100 @@ mod tests {
     /// 旧实现把两者都归 `DealTryTarget::NotPlayer` ⇒ 空打也回 FAIL（与 oracle 不等）。
     ///
     /// 红检：把 `deal_try_target_of` 的 `None` 支改回 `NotPlayer` ⇒ ① 断言必红。
+    /// **车道 B1（buff 系统）**：`drain_buff_downlink` 的出帧面 —— `StatusChanged()` ⇒
+    /// `SM_CHARSTATUSCHANGED(657)`（`PlayObject.Message.cs:1845-1846`：`(Recog=ActorId,
+    /// Param=LoWord(CharStatus), Tag=HiWord(CharStatus), Series=HitSpeed)`），毒伤 ⇒
+    /// `SM_HEALTHSPELLCHANGED(53)`；且 `displays.status` 被刷新（后续走/跑/转向帧尾 `CharDesc.Status`）。
+    ///
+    /// 红检：把 `drain_buff_downlink` 的 657 支删掉（或不刷 `displays.status`）⇒ 对应断言必红。
+    #[test]
+    fn drain_buff_downlink_emits_charstatuschanged_and_healthspellchanged() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = world.add_entity(mir2_world::Entity::new(1, "hero", 10, 10));
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, b"hero".to_vec()),
+        );
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("hero".into(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // 造一条 tick 记录：一个状态变化（CharStatus = 0x8000_0002）+ 一次毒伤（HP 90 / MP 85）。
+        let status: i32 = 0x8000_0002u32 as i32;
+        let mut rec = mir2_world::TickRecord::default();
+        rec.buff_status_changes.push((hero, status));
+        rec.buff_health_changes.push((hero, 90, 85));
+
+        drain_buff_downlink(
+            &rec,
+            &world,
+            &mut displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            12,
+        );
+
+        let mut frames: Vec<Vec<u8>> = Vec::new();
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = m {
+                frames.push(body);
+            }
+        }
+        let msgs: Vec<mir2_protocol::frame::CommandMessage> = frames
+            .iter()
+            .map(|b| mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap())
+            .collect();
+        let cs: Vec<&mir2_protocol::frame::CommandMessage> = msgs
+            .iter()
+            .filter(|m| m.ident == mir2_protocol::messages::SM_CHARSTATUSCHANGED)
+            .collect();
+        assert_eq!(
+            cs.len(),
+            1,
+            "恰一条 SM_CHARSTATUSCHANGED(657)；实得 {msgs:?}"
+        );
+        assert_eq!(cs[0].recog, hero, "Recog = ActorId");
+        assert_eq!(
+            cs[0].param,
+            (status as u32 & 0xFFFF) as u16,
+            "Param = LoWord(CharStatus)"
+        );
+        assert_eq!(
+            cs[0].tag,
+            ((status as u32 >> 16) & 0xFFFF) as u16,
+            "Tag = HiWord(CharStatus)"
+        );
+        assert_eq!(cs[0].series, 0, "Series = HitSpeed（未建模加成 ⇒ 0）");
+        assert!(
+            msgs.iter()
+                .any(|m| m.ident == mir2_protocol::messages::SM_HEALTHSPELLCHANGED),
+            "毒伤 ⇒ SM_HEALTHSPELLCHANGED(53)"
+        );
+        // 展示表 status 已刷新（帧尾 CharDesc.Status 的源）。
+        assert_eq!(
+            displays.get(hero).unwrap().status,
+            status,
+            "drain 应把新 CharStatus 写进展示表"
+        );
+    }
+
     #[test]
     fn deal_try_target_distinguishes_absent_from_non_player() {
         use mir2_world::{Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
