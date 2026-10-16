@@ -1345,8 +1345,8 @@ namespace BotSrv.Player
         private int _dropExpLevel;
         /// <summary>本次击杀窗口内收到的帧 JSON 串（仅 44）。</summary>
         private readonly List<string> _dropExpKillFrames = new List<string>();
-        /// <summary>本次击杀窗口内收到的掉落出现帧名（仅 610）。</summary>
-        private readonly List<string> _dropExpDropNames = new List<string>();
+        /// <summary>本次击杀窗口内收到的掉落出现帧（仅 610；T-57 扩采收集面 = 帧原样字段 + 槽位序）。</summary>
+        private readonly List<MShare.DropExpDropInfo> _dropExpDrops = new List<MShare.DropExpDropInfo>();
         /// <summary>`drop_exp_raw.jsonl` 写出器（路径空 / 打不开 ⇒ null，不阻塞驱动）。</summary>
         private System.IO.StreamWriter _dropExpWriter;
 
@@ -1366,8 +1366,11 @@ namespace BotSrv.Player
             _dropExpSent = 0;
             _dropExpK = 0;
             _dropExpKillFrames.Clear();
-            _dropExpDropNames.Clear();
+            _dropExpDrops.Clear();
             _dropExpLevel = DropExpOwnLevel();
+            // T-57 采集面加固：显式开关（默认关 ⇒ 逐字节不变）。与 rng-hook 同款 fail-closed 解析。
+            MShare.g_boDropExpExtFields = MShare.ParseDropExpExtFieldsEnv(
+                System.Environment.GetEnvironmentVariable("MIR2_DROPEXP_EXT_FIELDS"));
             _dropExpNextTick = MShare.GetTickCount() + MShare.g_nDropExpStartDelayMs;
             if (!string.IsNullOrEmpty(MShare.g_sDropExpOut))
             {
@@ -1472,12 +1475,22 @@ namespace BotSrv.Player
                 _dropExpLevel = b;
                 return;
             }
-            if (sm == 610)  // SM_ITEMSHOW：地面物出现（oracle 本代码库恒不发）
+            if (sm == 610)  // SM_ITEMSHOW：地面物出现（oracle 本代码库恒不发；T-57 扩采面）
             {
                 string name = string.IsNullOrEmpty(body) ? string.Empty : EDCode.DeCodeString(body);
                 if (!string.IsNullOrEmpty(name))
                 {
-                    _dropExpDropNames.Add(name);
+                    // 帧语义（oracle BaseObject.cs:570/:752 → PlayObject.Message.cs:1744-1745 RM→SM 直转）：
+                    // a=Recog=Looks、b=Param=ItemId、c=Tag=dx、d=Series=dy、body=Name。序 = 出现序（槽位序）。
+                    _dropExpDrops.Add(new MShare.DropExpDropInfo
+                    {
+                        Name = name,
+                        Ordinal = _dropExpDrops.Count,
+                        Looks = a,
+                        ItemId = b,
+                        X = c,
+                        Y = d,
+                    });
                 }
                 return;
             }
@@ -1490,7 +1503,9 @@ namespace BotSrv.Player
             int k = _dropExpK;
             int? total = MShare.ExtractDropExpTotal(_dropExpKillFrames);
             int? delta = MShare.ExtractDropExpDelta(_dropExpKillFrames);
-            string dropsJson = MShare.BuildDropExpDropsJson(_dropExpDropNames);
+            string dropsJson = MShare.g_boDropExpExtFields
+                ? MShare.BuildDropExpDropsJsonEx(_dropExpDrops)
+                : MShare.BuildDropExpDropsJson(MShare.DropExpDropNames(_dropExpDrops));
             string branch = MShare.ClassifyDropExpFrames(_dropExpKillFrames);
             if (total.HasValue && delta.HasValue)
             {
@@ -1507,7 +1522,7 @@ namespace BotSrv.Player
                     + ",\"branch\":\"" + branch + "\"}");
             }
             _dropExpKillFrames.Clear();
-            _dropExpDropNames.Clear();
+            _dropExpDrops.Clear();
             if (_dropExpK >= MShare.g_nDropExpKills)
             {
                 MainOutMessage("M3DROPEXPSEQ {\"phase\":\"complete\",\"kills\":" + _dropExpK + "}");
@@ -7497,9 +7512,18 @@ namespace BotSrv.Player
             return message == null ? null : message.Replace("{", "{{").Replace("}", "}}");
         }
 
+        /// <summary>夹具日志出口出口行的**唯一组装点**（生产 `MainOutMessage` 与自检共用）。
+        /// 前缀 + 消息经 `SerilogTemplateLiteral` 字面量化后返回。抽出来是为了让自检能**直接钉住
+        /// 生产出口**（改坏 = 去掉 `SerilogTemplateLiteral` ⇒ 自检 `logexit-production-exit` 必 RED），
+        /// 而不是只钉底层纯函数。默认行为与内联前逐字节相同。</summary>
+        internal static string MarkerExitLine(string chrName, string msg)
+        {
+            return SerilogTemplateLiteral("机器人:[" + (chrName ?? string.Empty) + "] " + msg);
+        }
+
         private void MainOutMessage(string msg)
         {
-            LogService.Info(SerilogTemplateLiteral($"机器人:[{ChrName}] {msg}"));
+            LogService.Info(MarkerExitLine(ChrName, msg));
         }
 
         private void MainOutErrorMessage(string msg)

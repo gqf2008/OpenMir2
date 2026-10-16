@@ -34,6 +34,21 @@
     }
 
 退出码：0 = GREEN（逐项相同）；1 = RED（有差异）；2 = PREREQ（缺件/坏件，fail-closed）。
+
+采集面（T-57，判据加固 §2-2；BotSrv 侧扩采）：
+
+  BotSrv 真机 `drops` 的**可采集上限** = `SM_ITEMSHOW(610)` 帧携带的字段 + 槽位序。该帧
+  （oracle `BaseObject.cs:570`/`:752` → `PlayObject.Message.cs:1744-1745` RM→SM 直转）
+  **只带** `Looks/ItemId/dx/dy/Name`，**不带** `MakeIndex/Dura/DuraMax`（地面物耐久客户端不可见）。
+
+  * 扩采**关**（默认，`MIR2_DROPEXP_EXT_FIELDS` 未设/0/false/off/no）⇒ 每件 `{"name":..,"count":1}`
+    （逐字节与既有输出相同）。此口径下「掉落逐项相同」= **名称多重集 + 槽位顺序**（**显式降格声明**，
+    不再是隐式）。
+  * 扩采**开** ⇒ 每件五字段 `{"name":..,"index":<槽位序>,"count":1,"dura":null,"dura_max":null}`
+    （`index` = 槽位序；`dura/dura_max` = `null`，如实「未采集」，**绝不伪造成值**）。
+
+  本比较器把 `null` 当「该侧未采集」：两侧都 `null` ⇒ 相等；一侧 `null`、一侧有真值 ⇒ **RED**
+  （不得把「未采集」当「相等」）。`drop_key` = `(name,index,count,dura,dura_max)` 五字段全进多重集/逐槽位比。
 """
 
 import argparse
@@ -357,6 +372,37 @@ def cmd_selftest(args):
         with open(rs_bad, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("{not json\n")
         case("invalid-json-prereq", 2, lambda: _run_diff(cs0, rs_bad))
+
+        # T-57 扩采（五字段 + 槽位序 index）：两侧相同（含 dura/dura_max=null）⇒ 绿
+        def _ex_records(dura=None, idx=(0, 1)):
+            r = _base_records()
+            r[0]["drops"] = [
+                {"name": "金币", "index": idx[0], "count": 1, "dura": None, "dura_max": None},
+                {"name": "木剑", "index": idx[1], "count": 1, "dura": dura, "dura_max": None},
+            ]
+            return r
+        cs_ex = os.path.join(tmp, "cs_ex.jsonl")
+        rs_ex = os.path.join(tmp, "rs_ex.jsonl")
+        _write_jsonl(cs_ex, _ex_records())
+        _write_jsonl(rs_ex, _ex_records())
+        case("ext-fields-null-green", 0, lambda: _run_diff(cs_ex, rs_ex))
+
+        # 扩采：一侧 dura=null（未采集）对一侧 dura=13（真值）⇒ 必红（不得把「未采集」当「相等」）
+        rs_exv = os.path.join(tmp, "rs_exv.jsonl")
+        _write_jsonl(rs_exv, _ex_records(dura=13))
+        case("ext-null-vs-value-red", 1, lambda: _run_diff(cs_ex, rs_exv))
+
+        # 扩采：槽位序 index 不同 ⇒ 必红（index 进 drop_key）
+        rs_exi = os.path.join(tmp, "rs_exi.jsonl")
+        _write_jsonl(rs_exi, _ex_records(idx=(9, 1)))
+        case("ext-index-mismatch-red", 1, lambda: _run_diff(cs_ex, rs_exi))
+
+        # 扩采 vs legacy（name/count 同、index 缺席）⇒ 必红（字段面不同不可当同）
+        rs_leg = os.path.join(tmp, "rs_leg.jsonl")
+        rl = _base_records()
+        rl[0]["drops"] = [{"name": "金币", "count": 1}, {"name": "木剑", "count": 1}]
+        _write_jsonl(rs_leg, rl)
+        case("ext-vs-legacy-red", 1, lambda: _run_diff(cs_ex, rs_leg))
 
         # PREREQ：k 不连续
         rs_gap = os.path.join(tmp, "rs_gap.jsonl")

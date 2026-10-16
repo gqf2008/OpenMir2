@@ -258,6 +258,26 @@ if ($SelfCheckNoStack) {
     $stOk = ($stRc -eq 0) -and $stMatch.Success -and ($stMatch.Groups[1].Value -eq $stMatch.Groups[2].Value)
     Add-Result 'comparator-selftest' $stOk ("rc=$stRc")
     if (-not $stOk) { Write-Output $stOut }
+    # ②″ 任务态生产者（构造级，T-58）：selftest 必须 GREEN；emit 出 construct_level:true。
+    $prod = Join-Path $Here 'quest_state_producer.py'
+    $prodOut = ''
+    $ErrorActionPreference = 'Continue'
+    $prodOut = (& python -I $prod selftest 2>&1 | Out-String)
+    $prodRc = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    $prodOk = ($prodRc -eq 0) -and ($prodOut -match 'SELFTEST ok=')
+    Add-Result 'producer-selftest' $prodOk ("rc=$prodRc")
+    if (-not $prodOk) { Write-Output $prodOut }
+
+    $prodState = Join-Path $tmpRoot 'quest_state_construct.jsonl'
+    $prodEmit = ''
+    $ErrorActionPreference = 'Continue'
+    $prodEmit = (& python -I $prod emit --scenario (Join-Path $Here 'quest_scenario.json') --case quest_accept --out $prodState 2>&1 | Out-String)
+    $prodEmitRc = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    $prodEmitOk = ($prodEmitRc -eq 0) -and ($prodEmit -match 'construct_level=true') -and (Test-Path $prodState)
+    Add-Result 'producer-emit-construct' $prodEmitOk ("rc=$prodEmitRc")
+
 
     # ②′ 场景锚门（quest_anchor_gate.py）：oracle_anchors 覆盖面 + 每条冻结 oracle 锚的
     # 行点对冻结面（⑥ 场景锚此前无人行级复核；oracle「任务态不落库」的缺陷本体 token 一并锁死）。
