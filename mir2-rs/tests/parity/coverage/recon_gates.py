@@ -16,7 +16,7 @@
 判红口径（缺一即不红）
 ----------------------
   content : oracle 有该 Load 调用 ∧ 部署有该内容文件 ∧ Rust 无实现 ∧ 无卡  ⇒ RED
-  dispatch: oracle 有 case ∧ **该帧可达** ∧ Rust 无派发臂/编码器 ∧ 无卡   ⇒ RED
+  dispatch: oracle 有 case ∧ **该帧可达** ∧ Rust 无派发臂 / 无编码器调用点（或编码器调用值被丢）∧ 无卡   ⇒ RED
 
 「无卡」= `coverage/cards.json` 的 `assignments` 未给该缺口指派一个存在于 `known_cards` 的卡 id。
 「Rust 实现」= 内容：**同一 src 文件里同时出现文件名字面量与「真装载调用」标记**（内容，见下）；
@@ -31,17 +31,35 @@
   为何不止认 ①（`=>` 臂）？语料里多条入站帧经 **if-else 判等链**派发（`main.rs:3084`
   `if cmd.ident == mir2_protocol::messages::CM_QUERYUSERNAME {`，同形见 `main.rs:3106`/`3110`/`7791`/`7801`）；
   只认臂头会把它们全判成假 RED（实测 16 条，见 selftest 组1）。
-「出站生产发射点」（派发·出站，卡 `openmir2-gate-outbound-producer-dimension`）= 出站 ident 只有在该
-  ident 的**生产发射点**存在时才算「已实现」：ident 整词出现在（去注释/去字符串的）生产行里，且该行落在
-  **生产活跃函数**内（从任一 `*/bins/*/src` 的 `main` 经名字调用图可达；`#[cfg(test)]` 模块整体剔除）。
+「出站生产发射点」（派发·出站，卡 `openmir2-gate-outbound-callsite-dimension`，片118 收紧）= 出站 ident 只有在该
+  ident 的**生产发射点**存在时才算「已实现」。发射点**优先取证「生产活跃函数里对编码器函数的调用点」**
+  （`…::sm_x(…)` 那一行），并按证据形态在 `emit` 列标注 `kind`：
+    · `call_site`      —— 命中了**编码器函数**（签名返回帧 `-> …Vec<u8>…`，且体内以**值位**烘焙该 ident）
+                          的**生产调用点**；证据行 = 该调用点（非编码器定义体）；
+    · `inline`         —— 帧**就地**构造（ident 作派发臂 / 帧构造调用实参 / 结构体字段值），无独立编码器可查
+                          （如 `downlink.rs::move_frame` 的移动簇、`shop.rs` 的 `frames.push(frame(messages::SM_X,…))`、
+                          `pickwire.rs::immediate_frame` 的臂）⇒ **不算 RED**；
+    · `definition_only`—— ident 仅出现在编码器定义体内、其生产调用点不可文本定位（动态派发等），退回旧口径证据。
+  **调用值未丢弃**（对称入站 no-op 臂，片118 新增）：对 `call_site` 另查**该调用点的返回值是否被使用**——
+  **拒绝** ① 裸语句 `sm_x(…);`（值被丢）、② 绑定 `_` 前缀**且调用点之后（同行剩余 + 本函数后续行）从未再被引用**的变量
+  （`let _ = sm_x(…)` / `let (d, _f) = …`；`let _body = sm_x(…); gates_send(_body);` **不拒**——值确被使用）；
+  命中 ⇒ **不判 implemented**（落 tracked/RED）并在 `emit` 列标注 `value_dropped`。返回值进 `send(…)` /
+  `push(…)` 进 Vec / `broadcast_*` / 结构体字段（`body: sm_x(…)`）/ `Some(…)` / `match` / `if let` / 返回式
+  等都算**正当使用**（判据**不**用「必须紧贴某函数名」这种窄口径——入站那次教训：过窄造 10 条假 RED）。
   ⇒ **编码器函数存在 / 常量定义 / 名表 / doc 注释都不算**；编码器自身的**未被调用**定义也不算——修掉
-  红名单 v2 §4.1「编码器一落地，无论有无生产发射都计 implemented」这一整层假绿。
-  **已知不对称（2026-10-17 登记；判据不放宽）**：与入站「生产派发点」相比，出站的「生产发射点」判据**更弱**——
-  只要求 ident 整词出现在某个生产活跃函数的**行**里，**不要求该行是调用点**。实测后果：证据列（`rust_at`）
-  常落在**编码器函数体**（例：`smframe_ext.rs` 里 `messages::SM_WHISPER,` 那行）而非调用点。**潜在假绿面**：
-  若某编码器被生产函数调用但其返回值被丢弃 / 未下发（`let _ = sm_x(...)`，或返回值未进任何出帧路径），
-  门仍判 **implemented**。⇒ 若要收紧，须把判据改为「ident 出现在**产生出帧的调用点**」——**另开片**；
-  本片只如实登记该不对称，**不修改判据**（保持与既有基线的可比性）。
+  红名单 v2 §4.1「编码器一落地，无论有无生产发射都计 implemented」这一整层假绿，并进一步修掉
+  「编码器被调用但调用值被丢弃」这层（片118 前门仍判 implemented）。
+  **残余（如实登记；判据不放宽）**：① **宏生成**的发射点（`macro_rules!` 展开的帧构造）在源码文本里不可静态
+  定位；② **跨 crate 动态派发**（trait object / 函数指针）的编码器调用点不可文本定位 ⇒ 落 `definition_only`
+  （仍计 implemented，非假绿方向）；③ 返回值经**结构体字段中转**（`Foo { body: sm_x(…) }`）在本判据里算「已使用」
+  （字段值即使用面）——若该字段实际从未被读取则不判（残余假绿面，需运行期断言，非本门职责）；④ **多行裸语句**
+  调用（`sm_x(` 换行续参）的值丢弃形态只在**单行**可判，多行形态落 `used`（漏判方向）；⑤ 裸语句臂另有
+  「本行须以 `;`/`(` 收尾」的条件（`fn dump() { sm_za(1); }` / `if c { sm_za(1); }` 这类同行尾随记号形态落
+  `used`，漏判方向，非假绿）；⑥ `definition_only` 在真实语料计数为 **0**（仅自测夹具触发），其形态之一是
+  「编码器嵌套在活跃函数内却从未被调用，被名图宽度优先当成调用边」⇒ 判 implemented —— 该面在片118 **前**
+  同样判 implemented（本片未引入、亦未修）；⑦ 元组形态仍按「`_` 前缀分量之后未被引用」拒，
+  `let (f, _len) = sm_x(1); gates_send(f);` 仍判丢值（保守误伤，0 真实语料命中，修它需要新增判据维度）。
+  ⇒ 片116 登记的「证据常落编码器函数体而非调用点」这一不对称**已在本片修复**（证据列现指调用点）。
 「可达」（派发·出站） = 触发该 SM 帧的**任一 `RM_*`** 在 `src/**/*.cs` 里有**生产者用法**（见下）
   ⇒ 可达。`RM_*` 全仓**每一处**出现都只是 `const` 定义或 `case` 标签（即确证无任何生产者）⇒ oracle
   死支 ⇒ 该帧永不发出 ⇒ 不判 RED（豁免 `n/a-unreachable`）。这修掉 SM_41/SM_43/SM_PASSWORDSTATUS
@@ -67,6 +85,7 @@ import json
 import re
 import subprocess
 import sys
+from collections import namedtuple
 from pathlib import Path
 
 BS = chr(92)   # backslash
@@ -760,10 +779,12 @@ def parse_dispatch(text: str):
 
 
 def dispatch_item_status(kind: str, name: str, rust: bool, cards: dict, reachable=None, noop=False) -> str:
-    """缺口状态。reachable：出站帧触发 RM 的可达性（True/False/None=不可判）；noop：入站臂是否恒假/恒空。
+    """缺口状态。reachable：出站帧触发 RM 的可达性（True/False/None=不可判）；noop：入站臂是否恒假/恒空
+    （出站侧复用同一位传 `value_dropped`——片118：编码器调用点返回值被丢 ⇒ 与入站 no-op 臂同一条降级路径）。
 
-    次序：oracle-no-op → 已实现（且非 no-op 臂）→ 已卡(tracked) → 豁免(不可达/人工登记) → RED。
-    `noop=True`（片 D1-②：臂在但不干活——恒零出帧 / 恒走 FAIL 支）⇒ **不判 implemented**，落回 tracked/RED。
+    次序：oracle-no-op → 已实现（且非 no-op 臂/非值丢弃）→ 已卡(tracked) → 豁免(不可达/人工登记) → RED。
+    `noop=True`（片 D1-②：入站臂在但不干活——恒零出帧 / 恒走 FAIL 支；片118：出站编码器调用值被丢）⇒
+    **不判 implemented**，落回 tracked/RED。
     `reachable is False`（触发 RM 每一个都是确证死支）或人工豁免登记 ⇒ `n/a-unreachable`（不判 RED）。
     `reachable is None`（无触发 RM）**不豁免**——保守按可达处理。
     """
@@ -906,15 +927,19 @@ def outbound_reachability(rm_users, rm_producers) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 出站「生产发射点」判据（卡 `openmir2-gate-outbound-producer-dimension`，tier=L）
+# 出站「生产发射点」判据（卡 `openmir2-gate-outbound-callsite-dimension`，tier=L；片118 收紧证据面）
 #
-# 旧口径：出站 ident 只要常量在语料里出现（`corpus.find(sm)`）即计 implemented
-#   ⇒ 编码器函数一落地就绿，掩盖「有编码器、无发射」整层（红名单 v2 §4.1）。
-# 新口径：ident 只有在**生产发射点**存在时才算 implemented。
-#   发射点 = 该 ident 的（去注释/去字符串）生产出现，且**所在函数生产活跃**
-#   （从任一 `*/bins/*/src` 的 `main` 经名字调用图可达）。编码器自身的**未被调用**定义
-#   不活跃 ⇒ 不是发射点；被调用的包装 / 内联发射（`move_frame`、`shop.rs` 内联）算。
-# 机判、无手工黑名单：不识别「哪些函数是编码器」，只问「这行是否在生产活跃函数里」。
+# 旧口径（片118 改前）：出站 ident 只要在**生产活跃函数**的行里出现即计 emitted，证据行 = **首个**这样的行
+#   —— 常落在**编码器函数体**（ident 被烘焙进帧的那一行）而非**调用点**（片116 登记的不对称）。
+# 新口径（片118）：
+#   ① **证据=调用点**：优先取证「生产活跃函数里对**编码器函数**的调用点」。编码器函数 = 某生产活跃函数 F，
+#      其体里以**值位**（非 match 臂模式）出现该 ident，**且** F 的签名返回帧（`-> …Vec<u8>…`）
+#      —— 故纯 ident 映射（`sm_ident_for_rm` 返回 u16）**不算**编码器。
+#      找不到调用点时退回旧口径（ident 的生产行），并按 `kind` 区分 `call_site` / `inline` / `definition_only`。
+#   ② **调用值未丢弃**：对 `call_site` 检查调用点的返回值是否被使用（拒绝裸语句 `sm_x(…);` 与
+#      `let _ = …` / `let (d, _f) = …`；`_` 前缀绑定若在调用点**之后（同行剩余 / 本函数后续行）仍被引用** ⇒ 视为已使用，不拒）；
+#      命中 ⇒ 不判 implemented 并标注 `value_dropped`。
+# 机判、无手工黑名单：不识别「哪些函数是编码器」的白名单，只看签名返回类型 + 用法位置（值位 vs 臂模式）。
 # ---------------------------------------------------------------------------
 _RE_FN_DEF = re.compile(r"(?<![A-Za-z0-9_])fn\s+([A-Za-z0-9_]+)")
 _RE_CALL_TOK = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(")
@@ -1016,25 +1041,198 @@ def _live_span_for(spans_by_file, path, line_no):
     return hit
 
 
-def outbound_emit_at(corpus, ident, live=None, spans=None):
-    """ident 的**生产发射点** `(path, line)`，无则 `None`。
+class Emit(namedtuple("Emit", "path line kind used encoder")):
+    """[`outbound_emit_at`] 的结果：`(path, line, kind, used, encoder)`。
 
-    发射点 = ident 整词出现在（去注释/去字符串的）生产行里，且该行**落在某个生产活跃函数内**
-    （`live`，由 [`production_live_functions`] 从 `bins/*` 的 `main` 可达而得）。函数外的出现
-    （顶层 `const`/`use`/静态表）与不活跃函数内的出现（如**未被调用**的编码器自身定义）都不算。
+    兼容旧用法：`emit[0]`=path、`emit[1]`=line、`bool(emit)`=True、`emit is None`=无发点。
+    `kind` ∈ {"call_site","inline","definition_only"}；`used` 仅在 `call_site` 有意义（None=不适用）；
+    `encoder` = 命中的编码器函数名（诊断用）。
+    """
+    __slots__ = ()
+
+
+# 出站 ident 的整词 token（只索引 `SM_*`，与 [`outbound_emit_at`] 的调用面一致）。
+_RE_SM_TOKEN = re.compile(r"(?<![A-Za-z0-9_])SM_[A-Za-z0-9_]+(?![A-Za-z0-9_])")
+
+
+def _is_dispatch_occurrence(ident, code):
+    """该行是否把 ident 用作**派发选择子**（match 臂模式：`…::SM_X =>`、`| …::SM_X`、裸路径臂行）⇒ inline。
+
+    与入站「生产派发点」同形；用于把 `downlink.rs::move_frame` 这类**就地派发**的帧归类 `inline`（不判 RED）。
+    """
+    i = re.escape(ident)
+    if re.search(r"^\s*(?:\|\s*)?" + _RE_ARM_PATH + i + r"\s*(\||=>|$)", code):
+        return True
+    return bool(re.search(r"\|\s*" + _RE_ARM_PATH + i + r"\s*(\||=>|$)", code))
+
+
+def _fn_returns_frame(lines, sp):
+    """生产函数 `sp` 的签名是否返回帧（`-> … Vec<u8> …`）：**编码器函数**的机判特征。
+
+    ident 映射（`sm_ident_for_rm` 返回 u16）不算编码器 ⇒ 其调用点不作「发射点」证据。
+    """
+    seg = []
+    ls = lines[sp["file"]]
+    for i in range(sp["start"], min(sp["start"] + 12, sp["end"] + 1, len(ls))):
+        seg.append(ls[i])
+        if "{" in ls[i]:
+            break
+    sig = re.sub(r"\s+", "", " ".join(seg).split("{")[0])
+    return ("->" in sig) and ("Vec<u8>" in sig)
+
+
+def _call_value_dropped(code, callee, prev_line="", later_text=None):
+    """调用所在的行里 `callee(...)` 的返回值是否被**丢弃**。True ⇒ 命中「值被丢」形态。
+
+    命中（dropped）：① `let _ = …` / `let _x = …`（**本语句**前缀，非仅行首——`fn f() { let _ = sm_x(1); }` 亦算；
+    但 `_x` 若在调用点之后（同行剩余 / 本函数后续行）仍被引用 ⇒ 值确被使用 ⇒ **不**命中）；
+    ② `let (a, _b) = …`（元组含 `_` 前缀分量，同样要求该分量在调用点之后未被引用）；
+    ③ 裸语句 `… sm_x(…);`（本表达式即语句、前面无赋值/字段/实参上下文）——**仅当本行以 `;`/`(` 收尾**才有牙，
+    同行尾随记号形态（`fn dump() { sm_za(1); }`）落 `used`（漏判方向，非假绿，见残余⑤）。
+    `prev_line`：上一行（用于排除**跨行赋值** `let x =\\n  sm_x(…)`——上一行以 `=`/`(` 收尾 ⇒ 视为续行 ⇒ 正当使用）。
+    其余（进 `send(…)`/`push(…)`/结构体字段/`Some(…)`/`return`/`match`/`if let` 等）= **正当使用**。
+    """
+    m = re.search(r"(?<![A-Za-z0-9_])" + re.escape(callee) + r"\s*\(", code)
+    if not m:
+        return False
+    i = m.start()
+    while i > 0 and (code[i - 1].isalnum() or code[i - 1] in "_:"):   # 向左吞 `path::` 前缀
+        i -= 1
+    seg = re.split(r"[{;]", code[:i].rstrip())[-1].strip()            # 本表达式所在语句的前缀
+
+    def _never_used(name):
+        """`_` 前缀绑定在**调用点之后（同行剩余 + 本函数后续行）**是否再未被引用。`_` = 无绑定名（永不使用）。"""
+        if name == "_":
+            return True
+        probe = code[i:]
+        if later_text:
+            probe = probe + chr(10) + later_text
+        return re.search(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", probe) is None
+
+    m1 = re.fullmatch(r"let\s+(_\w*)\s*=", seg)                       # `let _ = ` / `let _x = `
+    if m1 and _never_used(m1.group(1)):                              # `_x` 之后仍被引用 ⇒ 值确被使用 ⇒ 不判丢
+        return True
+    mt = re.fullmatch(r"let\s*\(([^)]*)\)\s*=", seg)                  # `let (a, _b) = `
+    if mt:
+        comps = [c.strip() for c in mt.group(1).split(",") if c.strip()]
+        if any(c.startswith("_") and _never_used(c) for c in comps):
+            return True
+    if seg == "":                                                     # 裸语句调用
+        if prev_line.strip().endswith(("=", "(", ",")):               # 上一行续参/续赋值 ⇒ 非语句
+            return False
+        return code.rstrip().endswith(";") or code.rstrip().endswith("(")
+    return False
+
+
+_EMIT_INDEX_CACHE = {}
+
+
+def _build_emit_index(corpus, spans):
+    """出站发射点查询索引（**一次**扫描语料；片118 因新增「调用点搜索」而必须缓存，否则逐 ident 全扫太慢）。"""
+    lines = _file_code_lines(corpus)
+    by_file = {}
+    span_by_name = {}
+    enc_sig = {}
+    for sp in spans:
+        by_file.setdefault(sp["file"], []).append(sp)
+        span_by_name.setdefault(sp["name"], []).append(sp)
+        enc_sig[sp["name"]] = enc_sig.get(sp["name"], False) or _fn_returns_frame(lines, sp)
+    fn_names = set(span_by_name)
+    sm_lines, call_lines = {}, {}
+    for path, no, code in corpus.code:
+        for tok in _RE_SM_TOKEN.findall(code):
+            sm_lines.setdefault(tok, []).append((path, no, code))
+        for nm in _RE_CALL_TOK.findall(code):
+            if nm in fn_names:
+                call_lines.setdefault(nm, []).append((path, no, code))
+    return dict(lines=lines, by_file=by_file, span_by_name=span_by_name, enc_sig=enc_sig,
+                sm_lines=sm_lines, call_lines=call_lines, spans=spans)
+
+
+def _emit_index(corpus, spans):
+    """按 (corpus, spans) 缓存 [`_build_emit_index`]；`spans` 引用被保留以免 id 复用造成陈旧命中。"""
+    ent = _EMIT_INDEX_CACHE.get(id(corpus))
+    if ent is None or ent["corpus"] is not corpus:
+        ent = {"corpus": corpus, "by_spans": {}}
+        _EMIT_INDEX_CACHE[id(corpus)] = ent
+    idx = ent["by_spans"].get(id(spans))
+    if idx is None or idx["spans"] is not spans:
+        idx = _build_emit_index(corpus, spans)
+        ent["by_spans"][id(spans)] = idx
+    return idx
+
+
+def outbound_emit_at(corpus, ident, live=None, spans=None):
+    """ident 的**生产发射点** `Emit`（`(path, line, kind, used, encoder)`），无则 `None`。
+
+    发射点**优先**取「生产活跃函数里对**编码器函数**的调用点」（`kind="call_site"`，见模块头「出站生产发射点」）；
+    找不到调用点时退回旧口径（ident 的生产行），并按形态归 `inline`（就地构造 / 派发臂）或 `definition_only`
+    （仅在编码器定义体内、调用点不可文本定位）。函数外的出现（顶层 `const`/`use`/静态表）与**不活跃函数**内的
+    出现（如**未被调用**的编码器自身定义）都不算。
     """
     if live is None or spans is None:
         live, spans = production_live_functions(corpus)
-    pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(ident) + r"(?![A-Za-z0-9_])")
-    by_file = {}
-    for sp in spans:
-        by_file.setdefault(sp["file"], []).append(sp)
-    for path, no, code in corpus.code:
-        if not pat.search(code):
-            continue
+    idx = _emit_index(corpus, spans)
+    by_file = idx["by_file"]
+
+    if ident.startswith("SM_"):
+        occ_rows = idx["sm_lines"].get(ident, [])
+    else:  # 非 SM_ ident（本门不产；保守兜底）
+        pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(ident) + r"(?![A-Za-z0-9_])")
+        occ_rows = [(p, n, c) for p, n, c in corpus.code if pat.search(c)]
+
+    occ = []
+    for path, no, code in occ_rows:
         hit = _live_span_for(by_file, path, no)
         if hit is not None and hit["name"] in live:
-            return (path, no)
+            occ.append((path, no, code, hit["name"]))
+    if not occ:
+        return None
+
+    def _live_call_sites(fnname):
+        defpat = re.compile(r"(?<![A-Za-z0-9_])fn\s+" + re.escape(fnname) + r"(?![A-Za-z0-9_])")
+        out = []
+        for path, no, code in idx["call_lines"].get(fnname, ()):
+            if defpat.search(code):        # `fn fnname(…)` 定义行不算调用点
+                continue
+            hit = _live_span_for(by_file, path, no)
+            if hit is not None and hit["name"] in live:
+                file_lines = idx["lines"].get(path, [])
+                prev = file_lines[no - 2] if (no >= 2 and no - 2 < len(file_lines)) else ""
+                out.append((path, no, code, hit["name"], prev))
+        return out
+
+    used_cs, dropped_cs, inline_occ, def_occ = [], [], [], []
+    for path, no, code, host in occ:
+        if _is_dispatch_occurrence(ident, code):     # 派发臂 ⇒ 就地发射 ⇒ inline
+            inline_occ.append((path, no, code, host))
+            continue
+        if idx["enc_sig"].get(host):                 # 编码器函数体（值位）⇒ 找其生产调用点
+            cs = _live_call_sites(host)
+            if cs:
+                for (cpath, cno, ccode, chost, cprev) in cs:
+                    _fl = idx["lines"].get(cpath, [])                 # 本函数内、调用行之后的文本（判 `_x` 是否仍被引用）
+                    _sp = _live_span_for(by_file, cpath, cno)
+                    _end = min((_sp["end"] + 1) if _sp else cno, len(_fl))
+                    _later = chr(10).join(_fl[cno:_end])
+                    (dropped_cs if _call_value_dropped(ccode, host, cprev, _later) else used_cs).append(
+                        (cpath, cno, ccode, host))
+                continue
+            def_occ.append((path, no, code, host))   # 编码器活跃但调用点不可文本定位（动态派发等）
+            continue
+        inline_occ.append((path, no, code, host))    # 非编码器宿主（就地构造帧 / ident 映射 / 就地派发）
+    if used_cs:
+        p = used_cs[0]
+        return Emit(p[0], p[1], "call_site", True, p[3])
+    if dropped_cs:
+        p = dropped_cs[0]
+        return Emit(p[0], p[1], "call_site", False, p[3])
+    if inline_occ:
+        p = inline_occ[0]
+        return Emit(p[0], p[1], "inline", None, p[3])
+    if def_occ:
+        p = def_occ[0]
+        return Emit(p[0], p[1], "definition_only", None, p[3])
     return None
 
 
@@ -1148,6 +1346,7 @@ def build_dispatch_rows(repo: Path, cards: dict):
                          oracle=f"Message.cs:{line}",
                          rust=("yes" if site else "no"),
                          rust_at=(f"{_rel_repo_path(site[0], repo)}:{site[1]}" if site else "-"),
+                         emit="-",
                          status=dispatch_item_status("inbound", name, bool(site), cards, noop=noop),
                          card=card_for(cards, "inbound:" + name),
                          reach="-",
@@ -1157,10 +1356,15 @@ def build_dispatch_rows(repo: Path, cards: dict):
         emit = outbound_emit_at(corpus, sm, live, spans)
         rm_users = sorted(r for r, s in rm_groups.items() if sm in s)
         reach = outbound_reachability(rm_users, rm_producers)
+        # 片118：`call_site` 且**调用值被丢** ⇒ 沿入站 no-op 同一条降级路径不判 implemented，并标注 value_dropped。
+        dropped = bool(emit) and emit.kind == "call_site" and emit.used is False
         rows.append(dict(bucket="outbound", key="outbound:" + sm, name=sm,
                          oracle="(RM→SM)", rust=("yes" if emit else "no"),
-                         rust_at=(f"{_rel_repo_path(emit[0], repo)}:{emit[1]}" if emit else "-"),
-                         status=dispatch_item_status("outbound", sm, bool(emit), cards, reachable=reach),
+                         rust_at=(f"{_rel_repo_path(emit.path, repo)}:{emit.line}" if emit else "-"),
+                         emit=("-" if emit is None else
+                               (emit.kind + ("!value_dropped" if dropped else ""))),
+                         status=dispatch_item_status("outbound", sm, bool(emit), cards,
+                                                     reachable=reach, noop=dropped),
                          card=card_for(cards, "outbound:" + sm),
                          reach=("yes" if reach else ("no" if reach is False else "-")),
                          emitted_by=",".join(rm_users[:4]) + ("…" if len(rm_users) > 4 else "")))
@@ -1242,7 +1446,7 @@ def cmd_dispatch(args):
           f"src/** 生产者 RM 数={len(rm_producers)}）")
     print(f"cards={args.cards}")
     print()
-    print_table(rows, ["bucket", "name", "oracle", "rust", "rust_at", "reach", "noop", "status", "card", "emitted_by"])
+    print_table(rows, ["bucket", "name", "oracle", "rust", "rust_at", "emit", "reach", "noop", "status", "card", "emitted_by"])
     if args.show_rm:
         print()
         print("-- RM→SM 映射（advisory，供 R2 定点；← 死支 = 全仓每一处出现都只是 const 定义/case 标签）--")
@@ -1470,9 +1674,10 @@ def selftest():
     check("teeth：确证死支帧 SM_ZZDEAD2 ⇒ n/a-unreachable（不红）",
           _st_dyn.get("SM_ZZDEAD2") == "n/a-unreachable")
 
-    # ---- 组0（卡 openmir2-gate-outbound-producer-dimension）：出站「生产发射点」判据 ----
-    # 旧口径（常量出现即 implemented）会把「有编码器、无生产调用」的 orphan 判绿；新判据要求
-    # ident 出现在**生产活跃函数**内。下面两向牙：orphan 必非 implemented、接上发射点必绿。
+    # ---- 组0（卡 openmir2-gate-outbound-callsite-dimension）：出站「生产发射点」证据=调用点 + 调用值未丢弃 ----
+    # 片118：证据行优先指**编码器函数的生产调用点**（非编码器定义体）；`call_site` 另查**调用值是否被使用**
+    #   （拒绝裸语句 `sm_x(…);` 与 `let _ = sm_x(…)`）。三向牙：orphan 必非 implemented、接上发射点必绿
+    #   且证据指**调用点**、生产调用但**值被丢**必非 implemented。
     _tmp_emit = Path(tempfile.mkdtemp(prefix="recon-emit-"))
     try:
         (_tmp_emit / "src/M2Server/Player").mkdir(parents=True)
@@ -1482,22 +1687,41 @@ def selftest():
             "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZORPHAN, 0, 0, 0, 0); break;",
             "  case Messages.RM_ZZWIRED:",
             "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZWIRED, 0, 0, 0, 0); break;",
+            "  case Messages.RM_ZZDROP:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZDROP, 0, 0, 0, 0); break;",
+            "  case Messages.RM_ZZUNDER:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZUNDER, 0, 0, 0, 0); break;",
+            "  case Messages.RM_ZZXLINE:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZXLINE, 0, 0, 0, 0); break;",
             "}",
         ]) + NL, encoding="utf-8")
         (_tmp_emit / "src/M2Server/Other.cs").write_text(
             "p.SendMsg(Messages.RM_ZZORPHAN, 0, 0, 0, 0);" + NL
-            + "p.SendMsg(Messages.RM_ZZWIRED, 0, 0, 0, 0);" + NL, encoding="utf-8")
+            + "p.SendMsg(Messages.RM_ZZWIRED, 0, 0, 0, 0);" + NL
+            + "p.SendMsg(Messages.RM_ZZDROP, 0, 0, 0, 0);" + NL
+            + "p.SendMsg(Messages.RM_ZZUNDER, 0, 0, 0, 0);" + NL
+            + "p.SendMsg(Messages.RM_ZZXLINE, 0, 0, 0, 0);" + NL, encoding="utf-8")
         _esrc = _tmp_emit / "mir2-rs/bins/game-svr/src"
         _esrc.mkdir(parents=True, exist_ok=True)
         (_esrc / "main.rs").write_text(NL.join([
-            "async fn main() { produce(); }",
-            "fn produce() { let _ = sm_wired(1); }",
+            "async fn main() { deliver(); dump(); relay(); relay2(); }",
+            "fn deliver() { let body = sm_wired(1); gates_send(body); }",   # 值送发送口 ⇒ 正当使用
+            "fn dump() { let _ = sm_drop(1); }",                            # 值被丢 ⇒ 非 implemented
+            "fn relay() { let _frame = sm_under(1); gates_send(_frame); }",  # `_` 前缀绑定但**之后被用** ⇒ 正当使用
+            "fn relay2() { let _frame2 = sm_xline(1);",                      # 跨行形态：绑定后**下一行**才被用
+            "    gates_send(_frame2); }",
         ]) + NL, encoding="utf-8")
         (_esrc / "enc.rs").write_text(NL.join([
             "pub const SM_ZZORPHAN: u16 = 9001;",
             "pub const SM_ZZWIRED: u16 = 9002;",
+            "pub const SM_ZZDROP: u16 = 9003;",
+            "pub const SM_ZZUNDER: u16 = 9004;",
+            "pub const SM_ZZXLINE: u16 = 9005;",
             "pub fn sm_orphan(a: i32) -> Vec<u8> { let _ = SM_ZZORPHAN; Vec::new() }",
             "pub fn sm_wired(a: i32) -> Vec<u8> { let _ = SM_ZZWIRED; Vec::new() }",
+            "pub fn sm_drop(a: i32) -> Vec<u8> { let _ = SM_ZZDROP; Vec::new() }",
+            "pub fn sm_under(a: i32) -> Vec<u8> { let _ = SM_ZZUNDER; Vec::new() }",
+            "pub fn sm_xline(a: i32) -> Vec<u8> { let _ = SM_ZZXLINE; Vec::new() }",
             "#[cfg(test)]",
             "mod tests {",
             "    #[test]",
@@ -1506,17 +1730,99 @@ def selftest():
         ]) + NL, encoding="utf-8")
         _ecorpus = RustCorpus(rust_source_dirs(_tmp_emit, exclude=DISPATCH_EXCLUDE))
         _rows_e, _, _, _, _ = build_dispatch_rows(_tmp_emit, {"known_cards": [], "assignments": {}})
+        _rows_e_by = {r["name"]: r for r in _rows_e}
         _st_e = {r["name"]: (r["status"], r["rust"]) for r in _rows_e}
         _old_orphan = _ecorpus.find("SM_ZZORPHAN")   # 旧口径探针：常量出现 ⇒ 旧判据会判绿
         _new_orphan = outbound_emit_at(_ecorpus, "SM_ZZORPHAN")
+        _emit_wired = outbound_emit_at(_ecorpus, "SM_ZZWIRED")
+        _emit_under = outbound_emit_at(_ecorpus, "SM_ZZUNDER")
+        _emit_xline = outbound_emit_at(_ecorpus, "SM_ZZXLINE")
     finally:
         shutil.rmtree(_tmp_emit, ignore_errors=True)
     check("teeth（组0）：编码器有定义+常量，但生产路径无调用（仅测试调用）⇒ 非 implemented（RED）",
           _st_e.get("SM_ZZORPHAN") == ("RED", "no"))
     check("teeth（组0）反向对照：该 orphan 的常量**确实出现**（旧口径会误判 implemented ⇒ 改坏必红）",
           bool(_old_orphan) and _new_orphan is None)
-    check("teeth（组0）：接上生产发射点（main→produce→sm_wired）⇒ implemented",
+    check("teeth（组0）：接上生产发射点（main→deliver→encoder，值进发送口）⇒ implemented",
           _st_e.get("SM_ZZWIRED") == ("implemented", "yes"))
+    # 片118 牙①：证据列（rust_at）必须指**调用点**（`main.rs` 的 `sm_wired(…)` 那一行），而非**编码器定义体**
+    #   （`enc.rs` 的 `pub fn sm_wired` / `let _ = SM_ZZWIRED;`）。旧口径（片118 前）会落 enc.rs。
+    check("teeth（组0·片118 ①）：implemented 行证据列指**调用点**（main.rs 调 sm_wired），非编码器定义（enc.rs）",
+          _emit_wired is not None and _emit_wired.kind == "call_site"
+          and _rows_e_by["SM_ZZWIRED"]["rust_at"].endswith("main.rs:2")
+          and "enc.rs" not in _rows_e_by["SM_ZZWIRED"]["rust_at"]
+          and _rows_e_by["SM_ZZWIRED"]["emit"] == "call_site")
+    # 片118 复验（收窄牙）：值绑到 `_` 前缀变量（`_frame`）但**之后确实送去发送口** ⇒ 必须 implemented
+    #   （片118 初版把 `let _x =` 一律判丢 ⇒ 此处假 RED；本牙反向锁住收窄，改回「一律判丢」必红）。
+    check("teeth（组0·片118 收窄）：`let _frame = sm_under(1); gates_send(_frame);` ⇒ implemented（不误伤）",
+          _st_e.get("SM_ZZUNDER") == ("implemented", "yes")
+          and _emit_under is not None and _emit_under.kind == "call_site"
+          and _rows_e_by["SM_ZZUNDER"]["emit"] == "call_site")
+    # 片118 复验（跨行牙）：绑定在**下一行**才被使用（`let _frame2 = sm_xline(1);` / 次行 `gates_send(_frame2)`）
+    #   ⇒ 探针须覆盖**本函数后续行**（只看同一行会误判丢值）；改窄探针必红。
+    check("teeth（组0·片118 收窄·跨行）：次行才使用绑定 ⇒ implemented（探针覆盖本函数后续行）",
+          _st_e.get("SM_ZZXLINE") == ("implemented", "yes")
+          and _emit_xline is not None and _emit_xline.kind == "call_site"
+          and _rows_e_by["SM_ZZXLINE"]["emit"] == "call_site")
+    # 片118 牙②：编码器被生产调用但**返回值被丢**（`let _ = sm_drop(…)`）⇒ 必须**非 implemented**（RED），
+    #   并在 `emit` 列标注 `value_dropped`（对称入站 no-op 臂）。
+    check("teeth（组0·片118 ②）：编码器被生产调用但返回值被丢（`let _ = sm_drop(…)`）⇒ 非 implemented（RED）",
+          _st_e.get("SM_ZZDROP") == ("RED", "yes")
+          and _rows_e_by["SM_ZZDROP"]["emit"] == "call_site!value_dropped")
+    # 片118 牙②（单元）：`_call_value_dropped` 逐形态——裸语句丢、`let _ =` 丢、元组含 `_` 分量丢；
+    #   送发送口 / 绑定具名变量 / 进 `Some(…)` 不丢（**防窄口径误伤**，参入站那次教训）。
+    check("teeth（组0·片118 ②·单元）：值被丢三形态必丢、正当使用三形态不丢",
+          _call_value_dropped("sm_x(1);", "sm_x")
+          and _call_value_dropped("let _ = sm_x(1);", "sm_x")
+          and _call_value_dropped("let (_a, _b) = sm_x(1);", "sm_x")
+          and not _call_value_dropped("gates.send(sm_x(1));", "sm_x")
+          and not _call_value_dropped("let body = sm_x(1);", "sm_x")
+          # 片118 复验收窄：`_` 前缀绑定在**本行之后仍被引用** ⇒ 值确被使用 ⇒ 不判丢（修「`let _x =` 一律判丢」误伤）
+          and not _call_value_dropped("let _body = sm_x(1);", "sm_x", "", "gates_send(_body);")
+          and not _call_value_dropped("let (_f, _g) = sm_x(1);", "sm_x", "", "gates_send(_f); gates_send(_g);")
+          and _call_value_dropped("let _body = sm_x(1);", "sm_x", "", "let z = 1;")
+          and not _call_value_dropped("Some(sm_x(1))", "sm_x"))
+
+    # 片118 牙③：三形态归类的**机器可判**——`inline`（就地派发 / 就地构造）与 `definition_only`（仅在编码器
+    #   定义体内、调用点不可文本定位）各归其类，且都**不算 RED**（退回旧口径证据，与 `call_site` 区分）。
+    _tmp_kind = Path(tempfile.mkdtemp(prefix="recon-emit-kind-"))
+    try:
+        (_tmp_kind / "src/M2Server/Player").mkdir(parents=True)
+        (_tmp_kind / ORACLE_DISPATCH).write_text(NL.join([
+            "switch (w) {",
+            "  case Messages.RM_ZZINLINE:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZINLINE, 0, 0, 0, 0); break;",
+            "  case Messages.RM_ZZDEFONLY:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZDEFONLY, 0, 0, 0, 0); break;",
+            "}",
+        ]) + NL, encoding="utf-8")
+        (_tmp_kind / "src/M2Server/Other.cs").write_text(
+            "p.SendMsg(Messages.RM_ZZINLINE, 0, 0, 0, 0);" + NL
+            + "p.SendMsg(Messages.RM_ZZDEFONLY, 0, 0, 0, 0);" + NL, encoding="utf-8")
+        _ksrc = _tmp_kind / "mir2-rs/bins/game-svr/src"
+        _ksrc.mkdir(parents=True, exist_ok=True)
+        (_ksrc / "main.rs").write_text(NL.join([
+            "async fn main() { dispatch(0); }",
+            "fn dispatch(ident: u16) {",
+            "    match ident {",                       # 就地派发臂 ⇒ SM_ZZINLINE 归 inline
+            "        messages::SM_ZZINLINE => {}",
+            "        _ => {}",
+            "    }",
+            "    fn sm_defonly(a: i32) -> Vec<u8> { let _ = SM_ZZDEFONLY; Vec::new() }",  # 仅定义体、无调用点
+            "}",
+        ]) + NL, encoding="utf-8")
+        _kc = RustCorpus(rust_source_dirs(_tmp_kind, exclude=DISPATCH_EXCLUDE))
+        _krows = {r["name"]: r for r in build_dispatch_rows(_tmp_kind, {"known_cards": [], "assignments": {}})[0]}
+        _e_inline = outbound_emit_at(_kc, "SM_ZZINLINE")
+        _e_defonly = outbound_emit_at(_kc, "SM_ZZDEFONLY")
+    finally:
+        shutil.rmtree(_tmp_kind, ignore_errors=True)
+    check("teeth（组0·片118 ③）：就地派发臂 ⇒ kind=inline 且不算 RED（implemented）",
+          _e_inline is not None and _e_inline.kind == "inline"
+          and _krows["SM_ZZINLINE"]["status"] == "implemented")
+    check("teeth（组0·片118 ③）：仅编码器定义体、调用点不可定位 ⇒ kind=definition_only 且不算 RED（implemented）",
+          _e_defonly is not None and _e_defonly.kind == "definition_only"
+          and _krows["SM_ZZDEFONLY"]["status"] == "implemented")
 
     # ---- 组1（卡 openmir2-gate-inbound-producer-dimension）：入站「生产派发点」判据 ----
     # 旧口径（`corpus.find`：标识符在去注释代码里出现即 implemented）会把「只有 const 定义 / 测试臂 /
@@ -1941,9 +2247,11 @@ def cmd_mutate(args):
     finally:
         shutil.rmtree(_tmp_m4d, ignore_errors=True)
 
-    # M6 —— 组0：出站「生产发射点」判据（卡 openmir2-gate-outbound-producer-dimension）。
-    #   同一合成输入做**两向**变异：① 编码器有定义+常量但无生产调用 ⇒ 非 implemented（RED）；
-    #   ② 接上一个生产调用点（main→…→encoder）⇒ implemented。旧口径（常量出现即绿）在 ① 会失败。
+    # M6 —— 组0：出站「生产发射点」判据（卡 `openmir2-gate-outbound-callsite-dimension`）。
+    #   同一合成输入做**四向**变异：① 编码器有定义+常量但无生产调用 ⇒ 非 implemented（RED）；
+    #   ② 接上一个生产调用点（main→…→encoder）且**值进发送口** ⇒ implemented 且证据指**调用点**；
+    #   ③ 编码器被生产调用但**返回值被丢**（`let _ = sm_drop(…)`）⇒ 非 implemented（RED）；
+    #   ④ 对照：同一 ident 把值送发送口 ⇒ implemented。旧口径（常量出现即绿 / 不查调用值）在 ①③ 会失败。
     _tmp_m6 = Path(tempfile.mkdtemp(prefix="recon-emit-mut-"))
     _m6_common = dict(
         dispatch=[
@@ -1952,15 +2260,20 @@ def cmd_mutate(args):
             "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZORPHAN, 0, 0, 0, 0); break;",
             "  case Messages.RM_ZZWIRED:",
             "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZWIRED, 0, 0, 0, 0); break;",
+            "  case Messages.RM_ZZDROP:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZDROP, 0, 0, 0, 0); break;",
             "}",
         ],
         other="p.SendMsg(Messages.RM_ZZORPHAN, 0, 0, 0, 0);" + NL
-              + "p.SendMsg(Messages.RM_ZZWIRED, 0, 0, 0, 0);" + NL,
+              + "p.SendMsg(Messages.RM_ZZWIRED, 0, 0, 0, 0);" + NL
+              + "p.SendMsg(Messages.RM_ZZDROP, 0, 0, 0, 0);" + NL,
         enc=[
             "pub const SM_ZZORPHAN: u16 = 9001;",
             "pub const SM_ZZWIRED: u16 = 9002;",
+            "pub const SM_ZZDROP: u16 = 9003;",
             "pub fn sm_orphan(a: i32) -> Vec<u8> { let _ = SM_ZZORPHAN; Vec::new() }",
             "pub fn sm_wired(a: i32) -> Vec<u8> { let _ = SM_ZZWIRED; Vec::new() }",
+            "pub fn sm_drop(a: i32) -> Vec<u8> { let _ = SM_ZZDROP; Vec::new() }",
             "#[cfg(test)]",
             "mod tests {",
             "    #[test]",
@@ -1980,19 +2293,38 @@ def cmd_mutate(args):
         (_s / "main.rs").write_text(NL.join(main_body) + NL, encoding="utf-8")
         (_s / "enc.rs").write_text(NL.join(_m6_common["enc"]) + NL, encoding="utf-8")
         _r, _, _, _, _ = build_dispatch_rows(_tmp_m6, {"known_cards": [], "assignments": {}})
-        return {x["name"]: (x["status"], x["rust"]) for x in _r}
+        return {x["name"]: x for x in _r}, RustCorpus(rust_source_dirs(_tmp_m6, exclude=DISPATCH_EXCLUDE))
+
+    def _st_row(row):
+        return (row["status"], row["rust"]) if row else None
 
     try:
         # ① 生产路径无调用（编码器只被测试调用）⇒ 非 implemented；常量确实出现（旧口径会绿）
-        _st_m6a = _m6_build(["async fn main() { let _ = 0; }"])
-        _c_m6 = RustCorpus(rust_source_dirs(_tmp_m6, exclude=DISPATCH_EXCLUDE))
+        _m6a, _c_m6 = _m6_build(["async fn main() { let _ = 0; }"])
         add("M6a 编码器有定义+常量、生产路径无调用 ⇒ 非 implemented（RED，旧口径假绿）",
-            _st_m6a.get("SM_ZZORPHAN") == ("RED", "no") and bool(_c_m6.find("SM_ZZORPHAN")))
-        # ② 接上生产发射点 ⇒ implemented（绿）
-        _st_m6b = _m6_build(["async fn main() { produce(); }",
-                             "fn produce() { let _ = sm_orphan(1); }"])
-        add("M6b 接上生产发射点（main→produce→sm_orphan）⇒ implemented",
-            _st_m6b.get("SM_ZZORPHAN") == ("implemented", "yes"))
+            _st_row(_m6a.get("SM_ZZORPHAN")) == ("RED", "no") and bool(_c_m6.find("SM_ZZORPHAN")))
+        # ② 接上生产发射点且值进发送口 ⇒ implemented（绿）；证据列须指**调用点**（main.rs 第 2 行），非 enc.rs
+        _m6b, _c_m6b = _m6_build(["async fn main() { produce(); }",
+                                  "fn produce() { let body = sm_orphan(1); gates_send(body); }"])
+        _m6b_emit = outbound_emit_at(_c_m6b, "SM_ZZORPHAN")
+        add("M6b 接上生产发射点（main→produce→sm_orphan，值进发送口）⇒ implemented",
+            _st_row(_m6b.get("SM_ZZORPHAN")) == ("implemented", "yes"))
+        add("M6b' 证据列指**调用点**（main.rs 调 sm_orphan）非编码器定义（enc.rs）且 emit=call_site",
+            _m6b_emit is not None and _m6b_emit.kind == "call_site"
+            and _m6b["SM_ZZORPHAN"]["rust_at"].endswith("main.rs:2")
+            and "enc.rs" not in _m6b["SM_ZZORPHAN"]["rust_at"]
+            and _m6b["SM_ZZORPHAN"]["emit"] == "call_site")
+        # ③ 编码器被生产调用但**返回值被丢** ⇒ 非 implemented（RED），emit 列标注 value_dropped
+        _m6d, _ = _m6_build(["async fn main() { produce(); }",
+                             "fn produce() { let _ = sm_drop(1); }"])
+        add("M6c 编码器被生产调用但返回值被丢（`let _ = sm_drop(…)`）⇒ 非 implemented（RED，旧口径假绿）",
+            _st_row(_m6d.get("SM_ZZDROP")) == ("RED", "yes")
+            and _m6d["SM_ZZDROP"]["emit"] == "call_site!value_dropped")
+        # ④ 对照：同一 ident（SM_ZZDROP）把值送发送口 ⇒ implemented（证明 ③ 的红来自**丢值**本身）
+        _m6e, _ = _m6_build(["async fn main() { produce(); }",
+                             "fn produce() { let body = sm_drop(1); gates_send(body); }"])
+        add("M6d 对照：同一 ident 把值送发送口 ⇒ implemented（证明 ③ 的红来自丢值本身）",
+            _st_row(_m6e.get("SM_ZZDROP")) == ("implemented", "yes"))
     finally:
         shutil.rmtree(_tmp_m6, ignore_errors=True)
 
