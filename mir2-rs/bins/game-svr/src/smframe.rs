@@ -886,6 +886,230 @@ pub fn sm_death(ident: u16, actor_id: i32, x: u16, y: u16, dir: u8, char_desc: &
     gm_data_body(header, &edcode::encode(char_desc))
 }
 
+/// `SM_MOVEFAIL`(28) 的 **oracle 逐字节布局**（`PlayObject.Message.cs:1468-1474` 的
+/// `RM_MOVEFAIL` 支）：
+///
+/// ```text
+/// ClientMsg = MakeMessage(SM_MOVEFAIL, ActorId, CurrX, CurrY, Dir);
+/// CharDesc movefailmessage = default;
+/// movefailmessage.Feature = baseObject.GetFeatureToLong();
+/// movefailmessage.Status  = baseObject.CharStatus;
+/// SendSocket(ClientMsg, EDCode.EncodePacket(movefailmessage));
+/// ```
+///
+/// 头 = `(Recog=ActorId, Param=CurrX, Tag=CurrY, Series=Dir)`；
+/// 尾 = `Encode(8B CharDesc{Feature:i32, Status:i32})`
+/// （`src/OpenMir2/Packets/ClientPackets/CharDesc.cs`：`public int Feature; public int Status;` ⇒ 8B，
+/// 与同文件的 `sm_death` 尾同结构）。
+///
+/// # 字段归属（易错点·观察者集合）
+///
+/// `Operate`（`PlayObject.Message.cs:768-776`）先把 `baseObject = SystemShare.ActorMgr.Get(processMsg.ActorId)`
+/// —— 即 **发送者**（`SendRefMsg` 经 `SendMsg(this, …)` 把 `SendMessage.ActorId` 置成发送者，
+/// `BaseObject.Message.cs:98-158/383-476`）。于是本 `case` 里：
+///
+/// - **头** 的 `ActorId`/`CurrX`/`CurrY`/`Dir` 是 **收件人自己**（`this`）——同一 `RM_MOVEFAIL`
+///   发给每个观察者，各自产出的帧头都不同（都是「自己的 ActorId + 自己的坐标/朝向」）；
+/// - **尾** 的 `Feature`/`Status` 取自 **`baseObject` = 发送者**（`GetFeatureToLong()` / `CharStatus`），
+///   与帧头 **不同源**。
+///
+/// 生产选路见 [`sm_movefail_frame`]（**默认走本函数**）；本函数也是跨侧逐字节对拍口径。
+///
+/// 发射点：`ClientChangeDir`/`ClientWalkXY`/`ClientRunXY`/`ClientHorseRunXY` 的失败/超速支
+/// （`PlayObject.Message.cs:850/1018/1038/1069/1089/1099/1128/1148/1176/1196/1202…`，
+/// 均为 `SendRefMsg(RM_MOVEFAIL, 0, 0, 0, 0, "")`）。**本层未接线**（登记项，见 rationale）。
+#[must_use]
+pub fn sm_movefail(actor_id: i32, x: u16, y: u16, dir: u8, feature: i32, status: i32) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_MOVEFAIL, x, y, u16::from(dir));
+    // `CharDesc`：`Feature(i32 LE) + Status(i32 LE)` = 8B（与 `sm_death`/`SM_WALK` 同结构）。
+    let mut desc = [0u8; 8];
+    desc[0..4].copy_from_slice(&feature.to_le_bytes());
+    desc[4..8].copy_from_slice(&status.to_le_bytes());
+    gm_data_body(header, &edcode::encode(&desc))
+}
+
+/// `SM_MOVEFAIL`(28) 的 **冻结客户端布局**：与 oracle 只差 **尾** —— `Encode(12B TCharDesc)`。
+///
+/// 冻结客户端 `Source/MirClient/ClMain.pas:9939-9949` 的 `SM_MOVEFAIL` 支：
+///
+/// ```pascal
+/// SM_MOVEFAIL:
+///   begin
+///     ActionFailed;
+///     ActionLock := False;
+///     frmMain.RecalcAutoMovePath();
+///     DecodeBuffer(body, @desc, SizeOf(TCharDesc));   // 12B
+///     ActionFailLock := False;
+///     g_PlayScene.SendMsg(SM_TURN, msg.Recog, msg.param { x } , msg.tag { y } ,
+///       msg.series { dir } , desc.Feature, desc.Status, '', desc.StatusEx);
+///   end;
+/// ```
+///
+/// `TCharDesc = packed record Feature: Integer; Status: Integer; StatusEx: Integer; end;`
+/// （`Source/Common/Grobal2.pas:3515`）⇒ 客户端从尾按 **12B** 解码
+/// （`DecodeBuffer`，`Source/Common/EDcode.pas:894-903`：`DeCodeBuf(...)` 后 `Move(EncBuf, buf^, bufsize)`）。
+///
+/// # 何时才需要它（与 D-9 家族的边界 —— 默认 **不用**）
+///
+/// 28 **不是** D-9 家族成员：`tests/parity/whitelist.md` 的 D-9 只含 52/53/31/1103，依据是客户端
+/// `{$IF HIGHHP}` 站点 10225/10269/10338/10365（`Grobal2.pas:39 = HIGHHP True`）——
+/// `SM_MOVEFAIL` 支（`ClMain.pas:9939`）**不在** `{$IF HIGHHP}` 内，不受 `HIGHHP` 支配。
+///
+/// 客户端读 12B，但 oracle 的 8B 尾恰好覆盖客户端真正消费的两个字段：
+/// `DeCodeBuf` 把 8B 解出后 `Move(..., 12)` 再抄 4B（越界读到的旧栈），灌进 `desc.StatusEx`；
+/// 而 `desc.Feature`/`desc.Status`（`SM_TURN` 的 Feature/State）**正确**，`desc.StatusEx` 只被当作
+/// `IPInfo` → `Actor.m_nIPowerLvl`（`PlayScn.pas:3675-3677`，9th 实参）。⇒ **功能面不要求 12B**。
+///
+/// 故 28 生产默认 = oracle（见 [`sm_movefail_frame`]）；本函数只在显式开关
+/// `MIR2_CLIENT_MOVEFAIL_LAYOUT`（默认关）打开时参与选路，偏离登记 **D-10**。
+///
+/// `status_ex` = 客户端 `StatusEx`（本仓 buff/状态扩展位未移植 ⇒ 调用方传 0）。
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn sm_movefail_client(
+    actor_id: i32,
+    x: u16,
+    y: u16,
+    dir: u8,
+    feature: i32,
+    status: i32,
+    status_ex: i32,
+) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_MOVEFAIL, x, y, u16::from(dir));
+    // `TCharDesc`（`Grobal2.pas:3515`）：`[Feature:i32][Status:i32][StatusEx:i32]` = 12B。
+    let mut desc = [0u8; 12];
+    desc[0..4].copy_from_slice(&feature.to_le_bytes());
+    desc[4..8].copy_from_slice(&status.to_le_bytes());
+    desc[8..12].copy_from_slice(&status_ex.to_le_bytes());
+    gm_data_body(header, &edcode::encode(&desc))
+}
+
+/// `MIR2_CLIENT_MOVEFAIL_LAYOUT` 的 **纯解析（吃 env 原文、不读 env）**：
+/// `Some("1"|"true"|"TRUE"|"True")` ⇒ `true`；`None`（未设）/其它 ⇒ `false`
+/// —— **「开关未设 ⇒ oracle」这个默认值的唯一真源**。
+///
+/// 把「开关读取」与「选路」[`movefail_route`] 解耦成纯函数，正是为了让**默认值**可被
+/// **无 env、确定性** 地钉住（默认被翻成 `true` ⇒ 断言必红，不受测试线程并发影响）。
+#[must_use]
+fn movefail_layout_flag(raw: Option<&str>) -> bool {
+    matches!(raw, Some("1") | Some("true") | Some("TRUE") | Some("True"))
+}
+
+/// `MIR2_CLIENT_MOVEFAIL_LAYOUT`（**默认关**）：`1|true|TRUE|True` ⇒ 28 生产帧走冻结客户端 12B
+/// [`sm_movefail_client`]（偏离登记 D-10）；未设/其它 ⇒ oracle 逐字节 [`sm_movefail`]（**默认**）。
+///
+/// **env 读取隔离在本层**（本开关唯一读 env 之处）；解析 [`movefail_layout_flag`] 与选路
+/// [`movefail_route`] 都是纯函数。
+///
+/// **不并入 D-9 的 `MIR2_CLIENT_ABILITY_LAYOUT`**：28 不在 D-9 家族（见 [`sm_movefail_client`]），
+/// 复用同一开关 = 把 28 的生产默认绑到 D-9 口径上（正是 v4 判阻塞的点）。
+#[must_use]
+pub fn client_movefail_layout_enabled() -> bool {
+    movefail_layout_flag(std::env::var("MIR2_CLIENT_MOVEFAIL_LAYOUT").ok().as_deref())
+}
+
+/// 28 帧选路的 **纯函数接缝**（吃 `bool`、**不读 env**）：生产入口 [`sm_movefail_frame`] 与
+/// 单向牙测试共用。目的是让「默认走错布局 / 两支对调」可被 **确定性** 变异杀死（不依赖进程 env，
+/// 不受测试线程并发影响）。
+#[allow(clippy::too_many_arguments)]
+fn movefail_route(
+    client_layout: bool,
+    actor_id: i32,
+    x: u16,
+    y: u16,
+    dir: u8,
+    feature: i32,
+    status: i32,
+    status_ex: i32,
+) -> Vec<u8> {
+    if client_layout {
+        sm_movefail_client(actor_id, x, y, dir, feature, status, status_ex)
+    } else {
+        sm_movefail(actor_id, x, y, dir, feature, status)
+    }
+}
+
+/// 28 帧的 **生产选路**：**默认 = oracle 逐字节** [`sm_movefail`]（8B `CharDesc` 尾）。
+/// 仅当显式打开 `MIR2_CLIENT_MOVEFAIL_LAYOUT`（默认关）才走冻结客户端 12B [`sm_movefail_client`]。
+///
+/// （v4 对抗验证判阻塞项：本函数此前默认走客户端布局，越出 D-9 家族且未登记 ⇒ 默认已回 oracle。）
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn sm_movefail_frame(
+    actor_id: i32,
+    x: u16,
+    y: u16,
+    dir: u8,
+    feature: i32,
+    status: i32,
+    status_ex: i32,
+) -> Vec<u8> {
+    movefail_route(
+        client_movefail_layout_enabled(),
+        actor_id,
+        x,
+        y,
+        dir,
+        feature,
+        status,
+        status_ex,
+    )
+}
+
+/// `SM_DISAPPEAR`(30)（`PlayObject.Message.cs:1651-1654` 的 `RM_DISAPPEAR` 支）：
+///
+/// ```text
+/// ClientMsg = MakeMessage(SM_DISAPPEAR, processMsg.ActorId, 0, 0, 0);
+/// SendSocket(ClientMsg);      // 无尾
+/// ```
+///
+/// 头 = `(Recog=消失对象 ActorId, Param=0, Tag=0, Series=0)`，**无尾**。
+///
+/// 两个发射点，**观察者集合都归到「消失对象的 ActorId」**：
+/// - `PlayObject.Run` 的 `VisibleFlag.Hidden` 支（`PlayObject.cs:3210-3219`）——
+///   `SendMsg(baseObject, RM_DISAPPEAR, 0, 0, 0, 0)`；`SendMsg(IActor baseObject, …)`
+///   （`BaseObject.Message.cs:98-158`）把 `SendMessage.ActorId` 置为 `baseObject.ActorId`
+///   ⇒ 观察者自己的会话产出该帧，`Recog` = 消失对象；
+/// - `BaseObject.DisappearA`（`BaseObject.cs:1521-1524`）——`SendRefMsg(RM_DISAPPEAR, 0, 0, 0, 0, "")`
+///   广播给同图观察者，收件人 `case` 用 `processMsg.ActorId` ⇒ 同样 `Recog` = 消失对象。
+///
+/// 守卫：前者仅 `!baseObject.FixedHideMode && !baseObject.Ghost` 才发（防重复占带宽）。
+/// 客户端（`ClMain.pas:10534-10539`）把 30 与 `SM_HIDE`/`SM_GHOST` 同支处理：**不读尾**，
+/// `msg.Recog == 自己` 时忽略。⇒ oracle 与冻结客户端布局 **一致**，无需双分支。
+/// 金标准 `c-line-baseline-c2-20261010` 的 15 条 30 帧（全 `Recog != 0`、`param/tag/series=0`、
+/// `body_len=0`）逐字节锚在本模块测试里。
+#[must_use]
+pub fn sm_disappear(actor_id: i32) -> Vec<u8> {
+    gm_data_body(
+        command_header(actor_id, messages::SM_DISAPPEAR, 0, 0, 0),
+        &[],
+    )
+}
+
+/// `SM_CLEAROBJECTS`(633)（`PlayObject.Message.cs:1765-1773` 的 `RM_CLEAROBJECTS` 支）：
+///
+/// ```text
+/// VisibleEvents.Clear();
+/// for (int i = 0; i < VisibleItems.Count; i++) VisibleItems[i] = null;
+/// VisibleItems.Clear();
+/// SendDefMessage(SM_CLEAROBJECTS, 0, 0, 0, 0);   // 无尾
+/// ```
+///
+/// 头 = `(Recog=0, Param=0, Tag=0, Series=0)`，**无尾**。
+///
+/// 发射点（**自己发给自己**，进图/切图清屏；两个点都用 5 参 `SendMsg(int wIdent, …)` ⇒
+/// `SendMessage.ActorId = this.ActorId`，`BaseObject.Message.cs:34-95`）：
+/// - `PlayObject.cs:3772`（`SpaceMove`/换图，清 `VisibleItems/Events/Actors` 后）；
+/// - `BaseObject.cs:1133`（`SpaceMoveGet`，`AddMapObject` 后）。
+///
+/// 前置清空动作（`VisibleEvents`/`VisibleItems`/`VisibleActors`）是 **观察者侧视图清理**，
+/// 属世界/会话状态，不在编码层。客户端（`ClMain.pas:10845-10849`）只置 `g_boMapMoving := True`
+/// ⇒ 不读任何字段；oracle 与冻结客户端布局 **一致**，无需双分支。
+#[must_use]
+pub fn sm_clearobjects() -> Vec<u8> {
+    gm_data_body(command_header(0, messages::SM_CLEAROBJECTS, 0, 0, 0), &[])
+}
+
 /// `SM_ADJUST_BONUS`(811) 的三段能力模板 `(BonusPoint, A, B, C)`（各自 `EncodeMessage` 后用 `/` 拼）。
 pub type AdjustBonusParts = (i32, Vec<u8>, Vec<u8>, Vec<u8>);
 
@@ -1789,5 +2013,216 @@ mod tests {
         assert_eq!((cm.param, cm.tag, cm.series), (0, 0, 1), "Series=1");
         // 尾 = `EDCode.EncodeBuffer(clientItem)`，本层原样透传（不在本函数编码）。
         assert_eq!(&body[12..], &tail, "尾原样透传");
+    }
+
+    /// **T4/R2 出站编码器**：`SM_MOVEFAIL`(28) 的 **oracle 逐字节布局**
+    /// （`PlayObject.Message.cs:1468-1474`）：头 `(Recog=ActorId, Param=CurrX, Tag=CurrY, Series=Dir)`
+    /// + 尾 `Encode(8B CharDesc{Feature,Status})`。
+    ///
+    /// 红检（改坏必红）：① `dir` 从 `Series` 挪到 `Param`/`Tag` ⇒ 头断言必红；
+    /// ② 尾从 8B 改 12B ⇒ `desc.len() == 8` 必红；③ `Feature`/`Status` 写反 ⇒ 尾回读必红。
+    #[test]
+    fn sm_movefail_oracle_layout_is_8b_chardesc() {
+        let body = sm_movefail(0x0000_1234, 287, 618, 5, 0x0002_00AB, 0x0000_0077);
+        assert_eq!(i32at(&body, 0), 0x0000_1234, "Recog = ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_MOVEFAIL);
+        assert_eq!(u16at12(&body, 6), 287, "Param = CurrX");
+        assert_eq!(u16at12(&body, 8), 618, "Tag = CurrY");
+        assert_eq!(u16at12(&body, 10), 5, "Series = Dir");
+        let desc = edcode::decode(&body[12..]);
+        assert_eq!(desc.len(), 8, "oracle 尾 = Encode(8B CharDesc)");
+        assert_eq!(i32at(&desc, 0), 0x0002_00AB, "Feature = GetFeatureToLong()");
+        assert_eq!(i32at(&desc, 4), 0x0000_0077, "Status = CharStatus");
+    }
+
+    /// **T4/R2 出站编码器**：`SM_MOVEFAIL`(28) 的 **冻结客户端布局**——尾 `Encode(12B TCharDesc)`。
+    /// 冻结客户端 `ClMain.pas:9944` `DecodeBuffer(body, @desc, SizeOf(TCharDesc))` ⇒ 12B
+    /// （`Grobal2.pas:3515`：`Feature/Status/StatusEx`）。
+    ///
+    /// 红检（改坏必红）：① 尾退回 8B ⇒ `desc.len() == 12` 必红；
+    /// ② `status_ex` 塞进 `Status` 位 ⇒ 尾回读断言必红；③ `sm_movefail_frame` 两支互换 ⇒ 见路由用例。
+    #[test]
+    fn sm_movefail_client_carries_tchardesc_tail() {
+        let body = sm_movefail_client(0x0000_1234, 287, 618, 5, 0x0002_00AB, 0x0000_0077, 0x99);
+        assert_eq!(i32at(&body, 0), 0x0000_1234, "Recog = ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_MOVEFAIL);
+        assert_eq!(u16at12(&body, 6), 287, "Param = CurrX");
+        assert_eq!(u16at12(&body, 8), 618, "Tag = CurrY");
+        assert_eq!(u16at12(&body, 10), 5, "Series = Dir");
+        let desc = edcode::decode(&body[12..]);
+        assert_eq!(desc.len(), 12, "TCharDesc = 3 × Integer = 12B");
+        assert_eq!(i32at(&desc, 0), 0x0002_00AB, "Feature");
+        assert_eq!(i32at(&desc, 4), 0x0000_0077, "Status");
+        assert_eq!(i32at(&desc, 8), 0x99, "StatusEx");
+
+        // oracle 路径仍 8B（并存，不改）。
+        assert_eq!(
+            sm_movefail(0x0000_1234, 287, 618, 5, 0x0002_00AB, 0x0000_0077).len(),
+            12 + edcode::encoded_len(8)
+        );
+    }
+
+    /// 测试期临时清空/改写一个进程 env 变量，`Drop` 时恢复
+    /// （断言失败 panic 也不污染同进程其它用例；仅用于本文件**唯一**读该 env 的用例）。
+    struct EnvGuard {
+        key: &'static str,
+        saved: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, val: Option<&str>) -> Self {
+            let saved = std::env::var_os(key);
+            match val {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+            Self { key, saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.saved.take() {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    /// **T4/R2 默认路由牙（v4 阻塞项；v5 修对照 v2 的 Important）**：
+    /// 28 的生产默认 **必须 = oracle 8B**（28 不在 D-9 家族）。
+    ///
+    /// 三向：
+    /// - 纯接缝 [`movefail_route`]：`false ⇒ oracle`、`true ⇒ client`（**对调两支 ⇒ 必红**）；
+    /// - 纯解析 [`movefail_layout_flag`]：`None`（开关未设）⇒ `false`（**默认翻成 true ⇒ 必红**，
+    ///   不读 env、不受测试线程并发影响）；
+    /// - 生产入口 [`sm_movefail_frame`]：**清空 env** 后**无条件**断言字节 == oracle golden
+    ///   （**把开关默认改成 true ⇒ 必红**）。
+    ///
+    /// # v5 修（对抗验证 v2 判 Important）
+    ///
+    /// 旧版把「生产入口 == oracle」断言门控在 `if !client_movefail_layout_enabled()` 里 ——
+    /// 正好门控在它**本要防的那个开关自己身上**：默认被改成 `true` 时该 `if` 直接跳过、用例静默变绿
+    /// （实测变异 MB1 全绿）。现改为：断言**不依赖开关函数**——先**清空该 env** 再无条件断言生产入口字节。
+    #[test]
+    fn sm_movefail_frame_defaults_to_oracle_layout() {
+        let oracle = sm_movefail(0x0000_1234, 287, 618, 5, 0x0002_00AB, 0x0000_0077);
+        let client = sm_movefail_client(0x0000_1234, 287, 618, 5, 0x0002_00AB, 0x0000_0077, 0x99);
+        assert_ne!(oracle, client, "两支布局必须可区分（否则判据无牙）");
+        assert_ne!(oracle.len(), client.len(), "8B vs 12B 尾长可区分");
+
+        // 纯接缝（不读 env ⇒ 确定性）：分支对调/写错必红。
+        assert_eq!(
+            movefail_route(
+                false,
+                0x0000_1234,
+                287,
+                618,
+                5,
+                0x0002_00AB,
+                0x0000_0077,
+                0x99
+            ),
+            oracle,
+            "client_layout=false ⇒ oracle 8B"
+        );
+        assert_eq!(
+            movefail_route(
+                true,
+                0x0000_1234,
+                287,
+                618,
+                5,
+                0x0002_00AB,
+                0x0000_0077,
+                0x99
+            ),
+            client,
+            "client_layout=true ⇒ client 12B"
+        );
+
+        // 纯解析：开关未设（None）⇒ 默认关（oracle）。把默认翻成 true ⇒ 必红（无 env、无并发）。
+        assert!(
+            !movefail_layout_flag(None),
+            "28 开关未设 ⇒ 默认关（oracle）"
+        );
+        assert!(movefail_layout_flag(Some("1")), "显式 1 ⇒ 开");
+
+        // 生产入口 · 默认向：**清空 env** 后**无条件**断言 == oracle golden
+        // （不再用 `if !client_movefail_layout_enabled()` 门控 ⇒ 开关默认改成 true 时静默跳过）。
+        {
+            let _g = EnvGuard::set("MIR2_CLIENT_MOVEFAIL_LAYOUT", None);
+            assert_eq!(
+                sm_movefail_frame(0x0000_1234, 287, 618, 5, 0x0002_00AB, 0x0000_0077, 0x99),
+                oracle,
+                "28 生产默认（开关未设）必须 = oracle 8B（把开关默认改成 true ⇒ 必红）"
+            );
+        }
+
+        // 生产入口 · 反向：显式打开开关 ⇒ 走 client 12B（证明开关活、两支经入口都可达）。
+        {
+            let _g = EnvGuard::set("MIR2_CLIENT_MOVEFAIL_LAYOUT", Some("1"));
+            assert_eq!(
+                sm_movefail_frame(0x0000_1234, 287, 618, 5, 0x0002_00AB, 0x0000_0077, 0x99),
+                client,
+                "开关=1 ⇒ 生产入口走 client 12B"
+            );
+        }
+    }
+
+    /// **T4/R2 出站编码器**：`SM_DISAPPEAR`(30) 与金标准 `c-line-baseline-c2-20261010`
+    /// **帧 30 逐字节相等**（15 条样本之一的真字节，含 `#`/`!`）。
+    /// 头 = `(Recog=消失对象 ActorId, Param/Tag/Series=0)`，无尾。
+    ///
+    /// 红检（改坏必红）：① 给 `Param` 塞值 ⇒ 逐字节必红；② 加任意尾 ⇒ 逐字节必红；
+    /// ③ `Recog` 写成 0 或写反 ⇒ 逐字节必红。
+    #[test]
+    fn sm_disappear_matches_golden_frame_30() {
+        // 金标准帧 30（`tests/golden/c-line-baseline-c2-20261010.jsonl`，seq=74，ident=30）：
+        // recog=1558452193 / param=tag=series=0 / body_len=0。
+        let body = sm_disappear(1558452193);
+        assert_eq!(i32at(&body, 0), 1558452193, "Recog = 消失对象 ActorId");
+        assert_eq!(u16at12(&body, 4), messages::SM_DISAPPEAR);
+        assert_eq!(&body[6..12], &[0u8; 6], "Param/Tag/Series 全 0");
+        assert_eq!(body.len(), 12, "无尾");
+        assert_eq!(
+            client_frame(&body),
+            hex("234d6b445a786a685c6464686b6464686b21"),
+            "客户端线缆 = '#' + Encode(12B 头) + '' + '!'（金标准 raw_hex 原样）"
+        );
+    }
+
+    /// **T4/R2 出站编码器**：`SM_CLEAROBJECTS`(633) 头-only
+    /// （`PlayObject.Message.cs:1765-1773`）：`(Recog=0, Param=0, Tag=0, Series=0)`，无尾。
+    ///
+    /// 红检（改坏必红）：① `Recog` 从 0 改成非 0 ⇒ 断言必红；② 尾非空 ⇒ 断言必红。
+    #[test]
+    fn sm_clearobjects_is_header_only_all_zero() {
+        let body = sm_clearobjects();
+        assert_eq!(body.len(), 12, "SendDefMessage 5 参重载 ⇒ 无尾");
+        assert_eq!(i32at(&body, 0), 0, "Recog = 0");
+        assert_eq!(u16at12(&body, 4), messages::SM_CLEAROBJECTS);
+        assert_eq!(&body[6..12], &[0u8; 6], "Param/Tag/Series 全 0");
+        let wire = client_frame(&body);
+        assert_eq!(wire.first(), Some(&b'#'));
+        assert_eq!(wire.last(), Some(&b'!'));
+        assert_eq!(wire.len(), 1 + edcode::encoded_len(12) + 1);
+    }
+
+    /// 反向牙：`SM_DISAPPEAR` 若把 `Recog` 写错（0 或写死），金标准帧 30 的逐字节比对必红；
+    /// 此处显式构造「错的帧」证明该断言有分辨力（无牙的判据不算判据）。
+    #[test]
+    fn sm_disappear_recog_must_be_target_not_zero() {
+        let good = client_frame(&sm_disappear(1558452193));
+        let wrong = client_frame(&sm_disappear(0));
+        assert_ne!(
+            good, wrong,
+            "Recog=0 与 Recog=目标 必须可区分（否则判据无牙）"
+        );
+        assert_eq!(
+            good,
+            hex("234d6b445a786a685c6464686b6464686b21"),
+            "仅 Recog=目标 的帧等于金标准"
+        );
     }
 }
