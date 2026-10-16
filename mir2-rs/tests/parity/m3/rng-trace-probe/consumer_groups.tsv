@@ -74,3 +74,4 @@ startup	rust	bins/game-svr/src/main\.rs:	bins/game-svr/src/main.rs	宿主启动�
 # `groupdiff --fold --strict` 的 `GROUP_SET_DIFF` + DoD② 的 `MISSING_EXPECTED_GROUPS(spawn)`
 # 双红（会在与 ④ 共用的独占窗口里空转一轮）。机判见 `rng_consumer_groups.py selftest`（含删行必红）。
 spawn	rust	bins/game-svr/src/mongen\.rs:	bins/game-svr/src/mongen.rs	宿主生成期构造抽数（create_monster_oracle/draw_monster_construct）；R-6 折叠后 C# construct → Rust spawn，与 drop_exp_consumers.tsv 的 setup 行同口径
+npc_ai	rust	crates/world/src/npc\.rs:	crates/world/src/npc.rs	固定 NPC Run（WorldServer.ProcessNpcs 驱动；GuildOfficial.Run / Merchant.Run 两类 body，RNG 抽数逐次同一 site）；卡 openmir2-world-tick-expansion

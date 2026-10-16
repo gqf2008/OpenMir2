@@ -834,7 +834,12 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
 /// 两次取数（站点归 `merchant` 组），然后落点。
 ///
 /// `SpaceMove` 不查阻挡（`ignore_block = true`）；不改 `Dir`。
-fn map_random_move(world: &mut World, actor_id: i32) {
+///
+/// **`pub(crate)`**：`Merchant.Run`（`merchant.rs`）与固定 NPC 的 `Merchant` 类 Run
+/// （`npc.rs::merchant_body_run`，`CastleOfficial : Merchant`）**共用**本函数。固定 NPC 经
+/// `Npcs.txt` 装载 `BoCanMove` 恒 `false` ⇒ 该支不可达（登记）；若将来可达，取数站点仍记
+/// 本文件 ⇒ `merchant` 组。
+pub(crate) fn map_random_move(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };

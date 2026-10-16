@@ -119,6 +119,14 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 
 > **编号连号**：T-59（M3 RNG 场景驱动器）→ **T-60**（`NoClearMonList` 排除查询 no-op）→ **T-61**（`GameLogItemNameList` 日志调用体注释）→ **T-62**（`DisableSendMsgList` 装载/查询注释）→ **T-63**（`DenyChrNameList` 装载/查询注释）。
 
+## 世界 tick 扩容（固定 NPC tick）登记（卡片 `openmir2-world-tick-expansion`，2026-10-16）
+
+| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
+| --- | --- | --- | --- |
+| T-64 | **固定 NPC `ProcessNpcs` 丢 `NpcLimit` 墙钟预算（本片交付，`openmir2-worker-5`）**：oracle `WorldServer.ProcessNpcs`（`src/GameSrv/Word/WorldServer.Merchant.cs:118-160`）每 pass 用墙钟预算 `(HUtil32.GetTickCount() - dwRunTick) > M2Share.NpcLimit`（= `5`，`src/M2Server/M2Share.cs:178` / `src/Modules/SystemModule/SystemShare.cs:161`）到点即把 `NpcPosition` 存为断点、下一 pass 从该位续跑（`:147-151`）；Rust `World::npc_tick`（`mir2-rs/crates/world/src/npc.rs:234-286`）单线程确定性 tick 不建模墙钟 ⇒ **丢掉预算分支**，改成「一趟扫到底、扫完 `npc_position = 0`」（`:285`）。 | **不是行为差异，是墙钟消费者未建模**（与 **T-42** 同族同口径；T-42 = 商人 tick 的同一预算，本片把该预算同样从 `ProcessNpcs` 侧丢掉）：预算只改变「某个该跑的 NPC 落在哪一 pass」（抖动量 ≤ 一个 200ms pass 的 sim 时间），**不改变** `Run()` 是否执行，也**不改变同一 pass 内**的相对次序（两侧都是 `NpcPosition` 正序 = `QuestNpcList`/`Npcs.txt` 文件序）。判据按 **per-NPC-run 粒度**比（同 pass 内次序 = 列表序），**跨 pass 交错显式不在判据内**。纯度门 `m3/rng-trace-probe/consumer_groups.tsv` 增 `npc_ai` 组，与既有 `merchant` 组同批同窗口对拍。 | 作者登记（`openmir2-worker-5`）；**待独立 principal 复核** |
+
+> **编号连号**：T-63（`DenyChrNameList` 装载/查询注释）→ **T-64**（固定 NPC `ProcessNpcs` 丢 `NpcLimit` 墙钟预算；与 T-42 同族）。
+
 ## S1 登记（oracle 缺陷修复；owner 2026-10-10 决策"修"，见设计文档 §15）
 
 > 纪律（卡片 `openmir2-s1-oracle-defects`）：oracle 已修 ⇒ **Rust 侧默认复刻旧行为**做对拍，

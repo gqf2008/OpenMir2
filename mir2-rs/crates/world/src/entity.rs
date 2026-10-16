@@ -417,7 +417,8 @@ pub struct Entity {
     pub merchant: Option<crate::merchant::MerchantState>,
     /// 固定管理 NPC 状态（`NormNpc` 字段子集 + ctor 抽数，卡 `openmir2-npcs-fixed-loading`）。
     /// `Some(_)` ⇒ 本实体是 `Envir/Npcs.txt` 的固定 NPC（Merchant/GuildOfficial/CastleOfficial）：
-    /// [`crate::monai::monster_ai_tick`] 显式跳过它（NPC 由 oracle `ProcessNpcs` 驱动，本仓未建模）；
+    /// [`crate::monai::monster_ai_tick`] 显式跳过它（固定 NPC 由 [`crate::World::npc_tick`]
+    /// 驱动，即 oracle `ProcessNpcs` 的建模；`monster_ai_tick` 与 `npc_tick` 不得双驱）；
     /// [`crate::World::merchant_tick`] 只认 `merchant.is_some()` ⇒ 也跳过。
     pub npc: Option<crate::npc::NpcState>,
     /// C# `PlayObject.AllowGroup`（`PlayObject.cs:106` 声明、`:902` 构造初值 `false`）——

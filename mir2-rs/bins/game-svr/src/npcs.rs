@@ -28,7 +28,10 @@
 //!   当前只吃 `MapQuest_def` 口径的 `QuestNpcRecord`（`file_path`/`script_name`）⇒ 固定 NPC 的
 //!   `Npc_def/<ChrName>-<MapName>` 脚本装载**不在本片**（属 NPC 对话/点击行为卡，
 //!   见 `openmir2-m3-quest-dialog-wiring`）。本片交付的是**世界面可见性**（P0 判据）。
-//! - **NPC 的 `Run()`/`ProcessNpcs` 未建模**：见 `crates/world/src/npc.rs` 模块头。
+//! - **NPC 的 `Run()`/`ProcessNpcs` 已建模**（**世界 tick 扩容首批 T3**，卡
+//!   `openmir2-world-tick-expansion`）：`crates/world/src/npc.rs` 的 `World::npc_tick`/`npc_run`（固定 NPC
+//!   `GuildOfficial.Run` / `Merchant.Run`），由宿主 `sim_loop` 起世界时 `enable_npc_tick()`。仍差：
+//!   `NpcLimit` 墙钟预算（`whitelist.md` T-64）与 `RM_TURN`/`RM_HIT` 帧面（B-4）。
 
 use mir2_envir::npcs::NpcInfo;
 use mir2_envir::paths::envir_file_path;
@@ -63,6 +66,9 @@ pub fn to_spawn(info: &NpcInfo, map_id: usize) -> NpcSpawn {
             // ctor 抽数留空，由 `World::insert_npc` 按 oracle 次序落定。
             run_tick_delta: 0,
             base_search_time: 0,
+            // 固定 NPC 经 `Npcs.txt` 装载**无** `BoCanMove`/`MoveTime` 列（`LocalDB.LoadNpcs`
+            // 不置它们）⇒ 恒缺省（`Merchant.Run` 的随机移动支不可达）。
+            ..NpcState::default()
         },
     }
 }

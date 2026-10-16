@@ -103,6 +103,14 @@ pub struct TickRecord {
     pub merchant_space_moves: Vec<i32>,
     /// 本 tick 被 Ghost 60s 门移除的商人 id。
     pub merchant_removed: Vec<i32>,
+    /// **世界 tick 扩容首批（T3）**：本 tick 的固定 NPC `ProcessNpcs` 结果。
+    pub npcs_run: Vec<i32>,
+    /// 本 tick NPC `Run` 的 `TurnTo`：`(npc_id, dir)`（`RM_TURN`；帧面归 B-4）。
+    pub npc_turns: Vec<(i32, u8)>,
+    /// 本 tick NPC `RM_HIT` 的 id。
+    pub npc_hits: Vec<i32>,
+    /// 本 tick 被 Ghost 60s 门移除的 NPC id。
+    pub npc_removed: Vec<i32>,
     /// **M3⑦-实现 2 F-1**：本 tick 死亡触发的组队帧。
     ///
     /// oracle `PlayObject.Die()`（`src/M2Server/Player/PlayObject.cs:1964-1978`）在置 `Death` 之后、
@@ -186,7 +194,7 @@ pub struct World {
     /// [`World::enable_monster_ai`]；`openmir2-m3-monster-ai-tick` 的宿主接线为后续分片。
     ai_enabled: bool,
     /// **M3⑤-实现 2 第②片**：是否在 [`World::tick`] 里驱动商人 tick
-    /// （[`crate::merchant::World::merchant_tick`]，oracle `MerchantProcessor` 的单线程等价物）。
+    /// （[`crate::World::merchant_tick`]，oracle `MerchantProcessor` 的单线程等价物）。
     ///
     /// **缺省 `false`**：合成 golden 场景不含 oracle 的商人 200ms 线程；由 `bins/game-svr` 的 sim
     /// 循环在起世界时 `enable_merchant_tick()`（生产路径）。
@@ -198,6 +206,27 @@ pub struct World {
     pub merchant_position: usize,
     /// 上一趟 `ProcessMerchants` 的 sim 时钟（200ms 节奏门）。
     pub merchant_pass_tick: i64,
+    /// **世界 tick 扩容首批（T3）**：是否在 [`World::tick`] 里驱动固定 NPC 的 `ProcessNpcs`
+    /// （[`crate::World::npc_tick`]）。
+    ///
+    /// **缺省 `false`**：合成 golden 场景不含 oracle 的 `MerchantProcessor` 200ms 线程；由
+    /// `bins/game-svr` 的 sim 循环在起世界时 `enable_npc_tick()`（生产路径）。
+    /// oracle `MerchantProcessor.ExecuteInternal`（`MerchantProcessor.cs:28-32`）**先**
+    /// `ProcessNpcs()` **后** `ProcessMerchants()` ⇒ 本字段驱动的 `npc_tick` 在
+    /// [`World::tick`] 里排在 `merchant_tick` **之前**（RNG 消费者次序，见 `World::tick` 注释）。
+    npc_enabled: bool,
+    /// `NpcPosition`（`WorldServer.Merchant.cs:120`）：本 pass 的起始索引。
+    ///
+    /// 本片丢掉墙钟预算（`NpcLimit`）分支 ⇒ 一趟扫到底、扫完归 0（照 [`World::merchant_position`]）。
+    pub npc_position: usize,
+    /// 上一趟 `ProcessNpcs` 的 sim 时钟（200ms 节奏门）。
+    pub npc_pass_tick: i64,
+    /// oracle `M2Share.GameTime`（`M2Share.cs:182`）——**世界级单值**的世界时钟桶值
+    /// （`1`=白天 `2`=日落 `0`=日出 `3`=夜晚）。
+    ///
+    /// 由宿主按 `SystemProcessor.GetGameTime`（`SystemProcessor.cs:98-134`）的**本地小时桶**
+    /// 口径经 [`World::refresh_game_time`] 周期刷新（原缺省 `0` = oracle `M2Share.GameTime` 初值）。
+    pub game_time: u8,
     /// 物品目录（掉落生成按名查 `StdItem`）
     pub item_catalog: Vec<StdItem>,
     /// 怪物极品掉落几率（`Config.MonRandomAddValue`）
@@ -303,6 +332,10 @@ impl World {
             merchant_enabled: false,
             merchant_position: 0,
             merchant_pass_tick: i64::MIN,
+            npc_enabled: false,
+            npc_position: 0,
+            npc_pass_tick: i64::MIN,
+            game_time: 0,
             item_catalog: Vec::new(),
             mon_random_add_value: 40,
             need_exps: vec![0; 1000],
@@ -392,6 +425,38 @@ impl World {
     #[must_use]
     pub fn merchant_tick_enabled(&self) -> bool {
         self.merchant_enabled
+    }
+
+    /// 开启固定 NPC tick 驱动（缺省关闭；见 `npc_enabled` 字段说明）。
+    ///
+    /// 幂等：生产路径由 `bins/game-svr` 的 sim 循环在起世界时调用；合成 golden 场景保持关闭
+    /// ⇒ 既有 `tests/parity/world` 逐字节不变。
+    pub fn enable_npc_tick(&mut self) {
+        self.npc_enabled = true;
+    }
+
+    /// 固定 NPC tick 驱动是否开启（自证/测试用）。
+    #[must_use]
+    pub fn npc_tick_enabled(&self) -> bool {
+        self.npc_enabled
+    }
+
+    /// oracle `SystemProcessor.GetGameTime`（`SystemProcessor.cs:48/98-134`）的周期刷新等价物。
+    ///
+    /// 入参 `bucket` = 宿主按本地小时桶算出的桶值（`1`/`2`/`0`/`3`；生产路径走
+    /// `enter::game_time_from_hour(chrono::Local::now().hour())`，**同一份换算**，不复制第二份）。
+    /// 返回**是否发生变化**——oracle `PlayObject.Base.cs:824-830` 的
+    /// `if (Bright != M2Share.GameTime)` 门；宿主据此对**每个**在线会话（各自缓存 `Bright`）
+    /// 重发 `RM_DAYCHANGING`（`SM_DAYCHANGING(46)`）。
+    ///
+    /// **节奏口径**：oracle 每 50ms 重算一次；本骨架世界 tick 固定 200ms（`TICK_INTERVAL_MS`）
+    /// ⇒ 宿主每 tick 调一次（U-A2/U-C3 的 50ms vs 200ms 适配，登记 `whitelist`）。因桶值只随
+    /// **真实本地小时**翻页，200ms 与 50ms 的重算在**小时桶上等价**（错过的只是一个桶内无变化的
+    /// 重算，不影响任何出帧时刻）。
+    pub fn refresh_game_time(&mut self, bucket: u8) -> bool {
+        let changed = bucket != self.game_time;
+        self.game_time = bucket;
+        changed
     }
 
     /// **M3⑨ 主人死/幽灵自投递**（卡 `openmir2-m3-pet-slave-masterdie-wire`）：开启
@@ -544,6 +609,10 @@ impl World {
             merchant_hits: Vec::new(),
             merchant_space_moves: Vec::new(),
             merchant_removed: Vec::new(),
+            npcs_run: Vec::new(),
+            npc_turns: Vec::new(),
+            npc_hits: Vec::new(),
+            npc_removed: Vec::new(),
             party_events: Vec::new(),
             slave_self_deliveries: Vec::new(),
             pushes: Vec::new(),
@@ -683,6 +752,25 @@ impl World {
         // 命令的攻击**同一份**记录，宿主 `drain_combat_downlink` ① 据它出 `SM_STRUCK`。
         // 关闭 AI 时 `pending_ai_attacks` 恒空 ⇒ 既有 golden 逐字节不变。
         record.attacks.append(&mut self.pending_ai_attacks);
+
+        // **世界 tick 扩容首批（T3）· ① NPC Run**：固定 NPC tick（oracle `MerchantProcessor` 的
+        // `ProcessNpcs()`，200ms 线程单线程等价物）。
+        //
+        // **消费者次序（RNG 账本合同，必须固定）**：oracle `MerchantProcessor.ExecuteInternal`
+        // （`MerchantProcessor.cs:28-32`）**先** `ProcessNpcs()` **后** `ProcessMerchants()`
+        // ⇒ 本 `npc_tick` 排在 `merchant_tick` **之前**（U-B6 裁决：照 oracle 先后）。
+        // `npc_run` 每次都从全服共享 `world.rng` 抽数 ⇒ 该次序决定共享 RNG 流的逐次序列
+        // （B-R1 的「同窗口批次前提」）。整条线性化消费者序：
+        //   命令 FIFO → 命中者过期 → 死亡结算 → 宝宝自投递 → 宝宝清表 → monster_ai_tick
+        //   → **npc_tick** → merchant_tick → AOI。
+        // 缺省 `npc_enabled=false`（合成 golden 不含 oracle 的 NPC 线程）⇒ 既有对拍逐字节不变。
+        if self.npc_enabled {
+            let n = self.npc_tick();
+            record.npcs_run = n.ran;
+            record.npc_turns = n.turns;
+            record.npc_hits = n.hits;
+            record.npc_removed = n.removed;
+        }
 
         // **M3⑤-实现 2 第②片**：商人 tick（oracle `MerchantProcessor` 的 200ms 线程单线程等价物）。
         // 单线程串行：在怪物 AI 之后、AOI 刷新之前（与 oracle 同 tick 内的显式定序；oracle 里是两个
@@ -1843,6 +1931,154 @@ pub struct FloorItemView {
 mod tests {
     use super::*;
     use crate::entity::{Entity, MonsterCtorDraws, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+
+    /// **世界 tick 扩容首批（T3）· ② 世界时钟（C-L2）**：`refresh_game_time` 只在桶值**变化**时
+    /// 返回 `true`（oracle `PlayObject.Base.cs:826` 的 `Bright != M2Share.GameTime` 门）；
+    /// 同值重复调用 ⇒ `false`（不发帧）。改坏必红：把 `!=` 写成 `==`、或恒返回 `true` ⇒ 红。
+    #[test]
+    fn refresh_game_time_reports_change_only_on_difference() {
+        let mut w = World::new(8, 8);
+        // 初值 = oracle `M2Share.GameTime = 0`。
+        assert_eq!(w.game_time, 0);
+        // 桶值 1（白天）：0→1 变化。
+        assert!(w.refresh_game_time(1), "0→1 应报变化");
+        assert_eq!(w.game_time, 1);
+        // 同值：不变。
+        assert!(!w.refresh_game_time(1), "同值不得报变化");
+        assert_eq!(w.game_time, 1);
+        // 跨桶：1→2（日落）。
+        assert!(w.refresh_game_time(2), "1→2 应报变化");
+        assert_eq!(w.game_time, 2);
+        // 回到初值桶 0：变化（oracle 同样会发）。
+        assert!(w.refresh_game_time(0), "2→0 应报变化");
+        assert_eq!(w.game_time, 0);
+    }
+
+    /// **C-L3（跨桶）**：把一个「小时」映射为桶值（复用 `enter::game_time_from_hour` 的同口径
+    /// 公式在此以字面量表达）后断言跨小时边界 `10:59 → 11:00` 使桶 `1 → 2`、`refresh_game_time`
+    /// 报变化（⇒ 宿主出 1 帧 46）。这是 oracle `GetGameTime` 的桶切换。
+    ///
+    /// 注：本测试只钉 `refresh_game_time` 的**变化检测**；`hour→bucket` 映射的 24 值全覆盖在
+    /// `bins/game-svr/src/enter.rs` 的 `C-L1`（唯一真源，不在此复制）。
+    #[test]
+    fn refresh_game_time_crosses_hour_bucket() {
+        let mut w = World::new(8, 8);
+        // 10 点 = 白天(1)（`GetGameTime`：`5..=10 | 16..=19 | 21 ⇒ 1`）。
+        assert!(w.refresh_game_time(1));
+        // 11 点 = 日落(2)（`11 | 20 | 23 ⇒ 2`）⇒ 跨小时边界翻桶。
+        assert!(w.refresh_game_time(2), "10:59→11:00 应翻桶");
+        // 11 点内不再变。
+        assert!(!w.refresh_game_time(2));
+    }
+
+    /// **T3·①（本批最重要的判据）：`world.tick` 内 `npc_tick` 必先于 `merchant_tick`
+    /// 消费共享 RNG**（oracle `MerchantProcessor.ExecuteInternal` 先 `ProcessNpcs()` 后
+    /// `ProcessMerchants()`，`MerchantProcessor.cs:28-32`）。
+    ///
+    /// 同一 tick 内让一个固定 NPC（`GuildOfficial`）与一个商人（`Merchant`）**都过 Run 门**，
+    /// 再以一个同种子独立流按**字面量 oracle 参数**复算合并后的抽数序列：先 NPC 体
+    /// （`Random(40)` → [`RandomByte(8)` | `Random(30)`]），后商人体
+    /// （`Random(50)` → [`RandomByte(8)` | `Random(50)`]）。
+    ///
+    /// **牙**：把 `world.rs` 里 `if self.npc_enabled {…}` 与 `if self.merchant_enabled {…}`
+    /// 两块**对调**（RNG 消费序反转）⇒ 期望序列错位 ⇒ 必红。扫 **20000** 种子
+    /// （`40/30/50` 模数 ±1 的区分窗口 ~1/1600/seed ⇒ 须大样本才咬得住）。
+    #[test]
+    fn world_tick_consumes_rng_npc_before_merchant() {
+        use crate::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        use crate::npc::{NpcSpawn, NpcState, NPC_TYPE_GUILD_OFFICIAL};
+
+        // 世界/两实体建一次；每轮重播种共享流并把两块 tick 的门都拨到「必跑」。
+        let mut w = World::with_maps(vec![(20, 20)]);
+        w.enable_npc_tick();
+        w.enable_merchant_tick();
+        let npc = w
+            .spawn_npc(NpcSpawn {
+                name: "比奇国王".to_string(),
+                x: 3,
+                y: 3,
+                map_id: 0,
+                state: NpcState {
+                    npc_type: NPC_TYPE_GUILD_OFFICIAL,
+                    ..NpcState::default()
+                },
+            })
+            .expect("NPC 挂图成功");
+        let mer = w
+            .spawn_merchant(MerchantSpawn {
+                name: "老人".to_string(),
+                x: 4,
+                y: 4,
+                map_id: 0,
+                state: MerchantState::new(
+                    String::new(),
+                    String::new(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    MerchantFlags::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("商人挂图成功");
+
+        for seed in 0..20_000i32 {
+            // 重播种共享流（无需复算 ctor 抽数：重播种抹掉 ctor 已消费的那几抽）。
+            w.rng = RandomNumber::with_seed(seed);
+            let mut exp = RandomNumber::with_seed(seed);
+            if let Some(n) = w.entities.get_mut(npc).and_then(|e| e.npc.as_mut()) {
+                n.run_tick = 0;
+            }
+            if let Some(s) = w.entities.get_mut(mer).and_then(|e| e.merchant.as_mut()) {
+                s.run_tick = 0;
+            }
+            w.npc_pass_tick = i64::MIN;
+            w.merchant_pass_tick = i64::MIN;
+            w.clock_ms = 10_000;
+            let rec = w.tick();
+
+            // 期望（**字面量 oracle 参数**）：先 NPC 体 40→[8|30]，后商人体 50→[8|50]。
+            let npc_expect = if exp.random_below(40) == 0 {
+                (Some(exp.random_byte(8)), false)
+            } else {
+                (None, exp.random_below(30) == 0)
+            };
+            let mer_expect = if exp.random_below(50) == 0 {
+                (Some(exp.random_byte(8)), false)
+            } else {
+                (None, exp.random_below(50) == 0)
+            };
+
+            assert_eq!(rec.npcs_run, vec![npc], "seed={seed}: NPC 先过 Run 门");
+            assert_eq!(rec.merchants_run, vec![mer], "seed={seed}: 商人后过 Run 门");
+            assert_eq!(
+                (
+                    rec.npc_turns.first().map(|t| t.1),
+                    rec.npc_hits.contains(&npc)
+                ),
+                npc_expect,
+                "seed={seed}: NPC 体先抽（40→[8|30]）"
+            );
+            assert_eq!(
+                (
+                    rec.merchant_turns.first().map(|t| t.1),
+                    rec.merchant_hits.contains(&mer)
+                ),
+                mer_expect,
+                "seed={seed}: 商人体后抽（50→[8|50]）"
+            );
+            assert_eq!(
+                w.rng.random(),
+                exp.random(),
+                "seed={seed}: 合并抽数次序/次数"
+            );
+        }
+    }
 
     fn world_with(entities: &[(i32, i32, i32)]) -> World {
         let mut w = World::new(64, 64);

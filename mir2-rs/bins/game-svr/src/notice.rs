@@ -182,9 +182,11 @@ pub fn parse_line_notice(text: &str) -> Vec<String> {
 /// 文件不存在/读失败 ⇒ 空 `Vec`（oracle `File.Exists` 假 ⇒ 返回 `false`、不装载）。
 /// 编码走 `StringList.LoadFromFile` 的判定（GBK 缺省，BOM 覆盖）——与 [`load_notice`] 同口径。
 ///
-/// 消费点（**不在本片**，登记）：`WorldServer.cs:669-696` 的逐玩家定时滚动公告
-/// （`ShowLineNoticeTick` + `ShowLineNoticeTime` + `GetLineVariableText` + `SysMsg(MsgType.Notice)`
-/// 的 `R/G/B` 颜色前缀分支）——涉及未实现的逐 tick 公告帧，登记不做。
+/// 消费点（**世界 tick 扩容首批 T3 · ③ 已接线**）：`WorldServer.cs:669-696` 的逐玩家定时滚动公告
+/// —— `line_notice::roll` 按 per-session `ShowLineNoticeTick`/`ShowLineNoticeIdx` 推进，
+/// 经 `BaseObject.SysMsg(sMsg, color, MsgType.Notice)` 的 `[`/`<`/`{`/`R`/`G`/`B` 分支出帧；
+/// 宿主 `sim_loop` 每 tick 调 `drain_line_notice`（`ShowLineNoticeTime` 门 + `Idx` 回绕）。
+/// `GetLineVariableText` 的 `<$…>` 变量替换未建模（登记见 `line_notice` 模块头）。
 #[must_use]
 pub fn load_line_notice(base: &Path, notice_dir: &str) -> Vec<String> {
     let path = base.join(notice_dir).join(LINE_NOTICE_FILE);

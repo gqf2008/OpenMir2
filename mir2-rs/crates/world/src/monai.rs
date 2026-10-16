@@ -865,8 +865,9 @@ pub fn monster_ai_tick(world: &mut World) {
         // `race > Play` 会把交易商人也命中（`ActorRace.Merchant == Animal == 50`）⇒
         // 显式排除 `merchant.is_some()` 的实体（M3⑤-实现 2：商人由自己的 tick 驱动）。
         // 固定管理 NPC（`Envir/Npcs.txt`，race = `ActorRace.NPC`）同样排除：oracle 由
-        // `ProcessNpcs`（`WorldServer.Merchant.cs:118`）驱动，本仓未建模 ⇒ 不跑怪物 AI
-        // （否则会用与 oracle 不同的取数路径污染 RNG 流）。
+        // `ProcessNpcs`（`WorldServer.Merchant.cs:118`）驱动，本仓已由 `World::npc_tick`
+        // 建模（同一次序）；此处必须不跑怪物 AI（否则会用与 oracle 不同的取数路径污染
+        // RNG 流，且与 `npc_tick` 双驱固定 NPC）。
         .filter(|e| {
             e.race > ACTOR_RACE_PLAY
                 && e.merchant.is_none()

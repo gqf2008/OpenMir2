@@ -189,6 +189,20 @@ pub struct GateConfig {
     /// `ServerConf.cs:153` 的 `ReadWriteInteger("Setup", "SpellFillTime", …)`）——
     /// `BaseObject.Run()`（`BaseObject.Base.cs:52/78`）的魔力点回蓝阈值。
     pub spell_fill_time: i32,
+    /// `[Setup] ShowLineNoticeTime`（oracle `GameSvrConf.cs:340/1440`，缺省 `5*60*1000`；
+    /// `ServerConf.cs:587` 的 `ReadWriteInteger("Setup", "ShowLineNoticeTime", …)`）——
+    /// 逐玩家滚动公告的周期（`WorldServer.cs:669` 的 `(now - ShowLineNoticeTick) > ShowLineNoticeTime`）。
+    /// 现网 `Server.conf:335` = `300000`。
+    pub show_line_notice_time: i32,
+    /// `[Setup] LineNoticeColor`（oracle `GameSvrConf.cs:341/1441`，缺省 `2`=Blue；
+    /// `ServerConf.cs:588` 的 `ReadWriteByte("Setup", "LineNoticeColor", …)`）——
+    /// 无 `R`/`G`/`B` 前缀的公告行所用 `MsgColor`（`MsgColor`：`Red=0/Green=1/Blue=2/White=3`）。
+    /// 现网 `Server.conf:336` = `0`（红）。
+    pub line_notice_color: u8,
+    /// `[Setup] ShowPreFixMsg`（oracle `GameSvrConf.cs:1751` 缺省 `false`；
+    /// `ServerConf.cs:529` 的 `ReadWriteBool("Setup", "ShowPreFixMsg", …)`）——为真时公告前拼接
+    /// `Config.LineNoticePreFix`。现网 `Server.conf:778` = `0`（假 ⇒ 前缀支不可达）。
+    pub show_pre_fix_msg: bool,
     /// `[Setup] MonsterPowerRate`（oracle `GameSvrConf.cs:391/1476`，缺省 `10`；
     /// `ServerConf.cs:560` 的 `ReadWriteInteger("Setup", "MonsterPowerRate", …)`）——
     /// `load_monster_db` 的怪物能力缩放（`monitems::load_monsters` 的入参）。
@@ -280,6 +294,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut save_human_rcd_time: Option<i32> = None;
     let mut health_fill_time: Option<i32> = None;
     let mut spell_fill_time: Option<i32> = None;
+    let mut show_line_notice_time: Option<i32> = None;
+    let mut line_notice_color: Option<u8> = None;
+    let mut show_pre_fix_msg: Option<bool> = None;
     let mut monster_power_rate: Option<i32> = None;
     let mut script_goto_count_limit: Option<i32> = None;
     let mut ids_addr: Option<String> = None;
@@ -574,6 +591,27 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("SpellFillTime 不是合法整数：{v:?}"))?,
                     );
                 }
+                // 滚动公告周期（`ServerConf.cs:587`；`GameSvrConf.cs:1440` 缺省 5 分钟）。
+                "SHOWLINENOTICETIME" => {
+                    show_line_notice_time = Some(
+                        v.parse()
+                            .with_context(|| format!("ShowLineNoticeTime 不是合法整数：{v:?}"))?,
+                    );
+                }
+                // 公告缺省颜色（`ServerConf.cs:588`；`GameSvrConf.cs:1441` 缺省 2=Blue）。
+                "LINENOTICECOLOR" => {
+                    line_notice_color = Some(
+                        v.parse()
+                            .with_context(|| format!("LineNoticeColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                // 公告前缀开关（`ServerConf.cs:529`；`GameSvrConf.cs:1751` 缺省 false）。
+                "SHOWPREFIXMSG" => {
+                    show_pre_fix_msg = Some(matches!(
+                        v.to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    ));
+                }
                 // 怪物能力缩放（`ServerConf.cs:560`；现网 `Server.conf:377` 写 `=10`）。
                 "MONSTERPOWERRATE" => {
                     monster_power_rate = Some(
@@ -715,6 +753,11 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`GameSvrConf.cs:1323-1324` 的 `HealthFillTime = 300` / `SpellFillTime = 800`）。
         health_fill_time: health_fill_time.unwrap_or(300),
         spell_fill_time: spell_fill_time.unwrap_or(800),
+        // oracle 缺省值（`GameSvrConf.cs:1440-1441` / `:1751`）：公告周期 5 分钟、缺省色 2、
+        // 前缀关。缺 `[Setup]` 键不算错。
+        show_line_notice_time: show_line_notice_time.unwrap_or(5 * 60 * 1000),
+        line_notice_color: line_notice_color.unwrap_or(2),
+        show_pre_fix_msg: show_pre_fix_msg.unwrap_or(false),
         // oracle 缺省值（`GameSvrConf.cs:1476` 的 `MonsterPowerRate = 10`）。
         monster_power_rate: monster_power_rate.unwrap_or(10),
         // oracle 缺省值（`GameSvrConf.cs:1527` 的 `ScriptGotoCountLimit = 30`）。

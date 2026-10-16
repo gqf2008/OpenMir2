@@ -32,6 +32,7 @@ mod homemap;
 mod hutil;
 mod ids;
 mod items;
+mod line_notice;
 mod load;
 mod magicwire;
 mod mapwire;
@@ -777,6 +778,15 @@ async fn main() -> Result<()> {
                     minimap,
                     make_items,
                     line_notice,
+                    line_notice_cfg: line_notice::LineNoticeCfg {
+                        interval_ms: i64::from(cfg.show_line_notice_time),
+                        default_color: cfg.line_notice_color,
+                        show_pre_fix_msg: cfg.show_pre_fix_msg,
+                        pre_fix: line_notice::LINE_NOTICE_PRE_FIX_DEFAULT.to_string(),
+                        red: (cfg.red_msg_f_color, cfg.red_msg_b_color),
+                        green: (cfg.green_msg_f_color, cfg.green_msg_b_color),
+                        blue: (cfg.blue_msg_f_color, cfg.blue_msg_b_color),
+                    },
                     npcs,
                     loader: Some(envir_loader),
                     script_goto_count_limit: cfg.script_goto_count_limit,
@@ -5993,6 +6003,101 @@ fn drain_action_downlink(
 /// **登记（未做项）**：触发本事件的**玩法路径**（地图链接格 `MapRoute` / 传送技能换图支）尚未移植
 /// 到 sim 宿主 ⇒ 真机上 `switch_map` 暂无调用者（parity harness 里有调用，sim 宿主没有）。**登记（未做项）**：
 /// `RM_CHANGEMAP` 观测点随后还有 `RefUserState()`/`SendMapDescription()`/`SendServerConfig()` 三帧（另一族、不在本卡帧集）。
+/// **世界 tick 扩容首批（T3）· ② 世界时钟（跨桶重发）**。
+///
+/// oracle 链：`WorldServer.cs:665-666`（`ProcessPlayObjectData` 的 `SearchTime` 门到点后
+/// `SearchViewRange(); GameTimeChanged();`）→ `PlayObject.Base.cs:824-830`
+/// （`if (Bright != M2Share.GameTime) { Bright = M2Share.GameTime; SendMsg(RM_DAYCHANGING,…); }`
+/// ）→ `PlayObject.Message.cs:1741` 出 `SM_DAYCHANGING(46) = (0, Bright, DayBright(), 0)`。
+///
+/// ⇒ **每个在线玩家各自**发一条（不是广播一条）：本函数按 `online` 登记序逐会话，
+/// 取其实体 `map_id` → `registry.flag_of` → [`enter::day_bright`]（可含
+/// `DayLight`/`boDarkness` 覆盖），经该玩家的网关线发回自己。
+/// 调用点已在 `world.refresh_game_time(..)` 返回 `true`（桶值变化）时触发 ⇒ 不会再发重复帧
+/// （oracle 的 `Bright != GameTime` 门由「只在变化时调用」等价实现）。
+///
+/// **登记（未做项）**：oracle 的 per-player `SearchTime` 门（`Random(2000)+2000` ms，各玩家
+/// 自己的节奏）未建模 ⇒ 本骨架在**桶变化的那一 tick** 立即发（≈ 跨小时时刻 +≤1 tick）；
+/// 逐玩家门对齐（U-C2）作为 `window_required` 项登记。无 `registry`/`flag` ⇒ 跳过并记 WRN。
+fn broadcast_day_changing(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    registry: Option<&mir2_envir::MapRegistry>,
+) {
+    let bright = world.game_time;
+    let mut sent = 0usize;
+    for e in online.iter() {
+        let Some(ent) = world.entities.get(e.actor_id) else {
+            continue;
+        };
+        let Some(reg) = registry else {
+            glog!(
+                "WRN",
+                "世界时钟变化：无地图注册表 ⇒ 无法算 DayBright，跳过 actor={}（登记）",
+                e.actor_id
+            );
+            continue;
+        };
+        let Some(flag) = reg.flag_of(ent.map_id) else {
+            glog!(
+                "WRN",
+                "世界时钟变化：map_id={} 无 Flag ⇒ 跳过 actor={}（登记）",
+                ent.map_id,
+                e.actor_id
+            );
+            continue;
+        };
+        let Some(day) = enter::day_bright(flag, Some(bright)) else {
+            continue;
+        };
+        let body = smframe::sm_daychanging(u16::from(bright), day);
+        let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "世界时钟变化下行")
+        else {
+            continue;
+        };
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: e.socket,
+            body,
+        });
+        sent += 1;
+    }
+    glog!(
+        "INF",
+        "世界时钟变化：Bright={bright} ⇒ 向 {sent} 个在线玩家各发一条 SM_DAYCHANGING(46)"
+    );
+}
+
+/// **T3 · ③ 滚动公告**的逐会话推进（`WorldServer.cs:669-696`）。
+///
+/// 按 `online` 登记序逐会话：取/惰性建其 [`line_notice::LineNoticeState`]（`ShowLineNoticeTick`/
+/// `Idx`），调 [`line_notice::roll`]（含 `ShowLineNoticeTime` 门 + `Idx` 递增回绕），若出帧则
+/// 经该玩家网关线发回**自己**（`SysMsg` = `SendMsg`，仅自己）。
+fn drain_line_notice(
+    now_ms: i64,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    states: &mut std::collections::HashMap<String, line_notice::LineNoticeState>,
+    cfg: &line_notice::LineNoticeCfg,
+    lines: &[String],
+) {
+    for e in online.iter() {
+        let st = states
+            .entry(e.chr_name.clone())
+            .or_insert_with(|| line_notice::LineNoticeState::new(now_ms));
+        let Some(body) = line_notice::roll(now_ms, st, cfg, lines, e.actor_id) else {
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "滚动公告下行") else {
+            continue;
+        };
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: e.socket,
+            body,
+        });
+    }
+}
+
 fn drain_map_change(
     world: &mut mir2_world::World,
     online: &OnlineRegistry,
@@ -7269,8 +7374,11 @@ struct EnterConfig {
     /// （`CM_USERMAKEDRUGITEM` → `Merchant.ClientMakeDrugCheckNeedItem`）属 R1 ⇒ 暂只登记。
     make_items: Option<mir2_envir::makeitem::MakeItemRegistry>,
     /// **R0-4**：`Notice/LineNotice.txt` 解析出的逐行滚动公告（`notice::load_line_notice`）。
-    /// 消费点（`WorldServer.cs:669-696` 的逐玩家定时公告）涉及未实现的逐 tick 公告帧 ⇒ 暂只登记。
+    /// 消费点 = `WorldServer.cs:669-696` 的逐玩家定时公告（**世界 tick 扩容首批（T3）· ③** 已接线）。
     line_notice: Vec<String>,
+    /// **T3 · ③**：滚动公告配置（`[Setup] ShowLineNoticeTime/LineNoticeColor/ShowPreFixMsg`
+    /// + 三色提示色），供 [`line_notice::roll`] 消费。
+    line_notice_cfg: line_notice::LineNoticeCfg,
     /// **固定管理 NPC 加载半（R0-1 `openmir2-npcs-fixed-loading`）**：`Envir/Npcs.txt` 解析出的
     /// 记录（主线程装载，`game_svr::npcs::load_npcs_file`）；`None` = 无文件 / 读失败 ⇒ 不放置。
     /// 建实体（ctor 抽数）+ 挂图在 sim 线程起世界后（`game_svr::npcs::{build_npc_spawns,place_npcs}`）。
@@ -7489,6 +7597,16 @@ fn sim_loop(
         "INF",
         "商人 tick 已启用（生产宿主）EnableMerchantTick=true（200ms sim 节奏；whitelist T-42 登记丢 NpcLimit 墙钟预算）"
     );
+    // **世界 tick 扩容首批（T3）· ① NPC Run**：生产宿主启用固定 NPC tick（oracle
+    // `MerchantProcessor.ProcessNpcs` 的 200ms 线程单线程等价物）。`World::tick` 在
+    // `merchant_tick` **之前**驱动 `npc_tick`（oracle 次序 `ProcessNpcs` → `ProcessMerchants`，
+    // `MerchantProcessor.cs:28-32`），RNG 取数走共享 `world.rng`。合成 golden 场景不经本函数
+    // ⇒ 仍缺省关闭，逐字节不变。
+    world.enable_npc_tick();
+    glog!(
+        "INF",
+        "固定 NPC tick 已启用（生产宿主）EnableNpcTick=true（200ms sim 节奏；whitelist T-42 登记丢 NpcLimit 墙钟预算）"
+    );
     // **M3⑨ 主人死/幽灵自投递**（卡 `openmir2-m3-pet-slave-masterdie-wire`）：生产宿主启用
     // 「自身延时消息」驱动并灌入宝宝配置（oracle `PlayObject.Die()` 尾
     // `SendSelfDelayMsg(RM_MASTERDIEMUTINY, …, 1000)`（`PlayObject.cs:1996`）→ 1s 后
@@ -7640,8 +7758,9 @@ fn sim_loop(
     let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
         std::collections::HashMap::new();
     // **R0-2/R0-3/R0-4 内容装载红名单**：主线程装载的注册表随 `EnterConfig` 到 sim 线程。
-    // 三者的消费点（MiniMap 下发帧 / 制药合成 / 滚动公告）都属 R1 入站红名单、未实现
-    // ⇒ 此处只「取用 + 登记」（保留读数，不静默丢字段）。
+    // 消费点：MiniMap 下发帧（`CM_WANTMINIMAP`）**仍未实现** ⇒ 只「取用 + 登记」（保留读数，
+    // 不静默丢字段）；制药合成（`CM_USERMAKEDRUGITEM`，WB 片）与滚动公告（`LineNotice`，T3·③）
+    // **已接线**（见下）。
     if let Some(mm) = enter_cfg.minimap.take() {
         glog!(
             "INF",
@@ -7663,13 +7782,21 @@ fn sim_loop(
             "无 Envir/MakeItem.txt ⇒ 制药配方表空（CM_USERMAKEDRUGITEM 的 ClientMakeDrugCheckNeedItem 恒 false ⇒ n14=4）"
         ),
     }
+    // **T3 · ③ 滚动公告**：不再丢弃注册表 —— 交给每 tick 的逐会话滚行下发
+    // （`WorldServer.cs:669-696`）。per-session `ShowLineNoticeTick`/`Idx` 态由
+    // [`line_notice_states`] 承载（chr_name → 态）。
+    let line_notice_lines = std::mem::take(&mut enter_cfg.line_notice);
+    let line_notice_cfg = enter_cfg.line_notice_cfg.clone();
+    let mut line_notice_states: std::collections::HashMap<String, line_notice::LineNoticeState> =
+        std::collections::HashMap::new();
     {
-        let line_notice = std::mem::take(&mut enter_cfg.line_notice);
-        if !line_notice.is_empty() {
+        if !line_notice_lines.is_empty() {
             glog!(
                 "INF",
-                "LineNotice 注册表就绪：{} 行（滚动公告未实现 ⇒ 登记）",
-                line_notice.len()
+                "LineNotice 注册表就绪：{} 行（逐玩家滚动公告已接线；周期 {}ms、缺省色 {}）",
+                line_notice_lines.len(),
+                line_notice_cfg.interval_ms,
+                line_notice_cfg.default_color
             );
         }
     }
@@ -9047,6 +9174,32 @@ fn sim_loop(
                     i32::try_from(online.len()).unwrap_or(i32::MAX),
                 );
             }
+        }
+        // **世界 tick 扩容首批（T3）· ② 世界时钟**：周期刷新 `M2Share.GameTime`
+        // （oracle `SystemProcessor.GetGameTime`，`SystemProcessor.cs:12/48/98-134` 每 50ms；
+        // 本骨架每 tick 一次 —— 200ms vs 50ms 适配登记 `whitelist`，因桶值只随**真实本地小时**
+        // 翻页，二者在小时桶上等价）。桶值经**同一份** `enter::game_time_from_hour` 换算（不复制）。
+        // 变化时（oracle `PlayObject.Base.cs:824-830` 的 `Bright != M2Share.GameTime` 门）给
+        // **每个在线玩家各自**发一条 `SM_DAYCHANGING(46)`（oracle `WorldServer.cs:665-666` 的
+        // `SearchViewRange/GameTimeChanged`，per-player，不是广播一条）。
+        {
+            let hour = chrono::Timelike::hour(&chrono::Local::now());
+            if world.refresh_game_time(enter::game_time_from_hour(hour)) {
+                broadcast_day_changing(&world, &online, &gates, registry.as_ref());
+            }
+        }
+        // **T3 · ③ 滚动公告**：逐玩家滚行（oracle `WorldServer.cs:669-696`，在玩家自己的
+        // `RunTick/RunTime` 门内）。per-session `ShowLineNoticeTick/Idx` 态惰性建立（该会话
+        // **首次进入本段**起算 —— oracle 在 `PlayObject` ctor 起算，见模块头登记的差异）。
+        if !line_notice_lines.is_empty() {
+            drain_line_notice(
+                now_ms(),
+                &online,
+                &gates,
+                &mut line_notice_states,
+                &line_notice_cfg,
+                &line_notice_lines,
+            );
         }
         let rec = world.tick();
         // **M3⑦-实现 2 F-1**：死亡退组（oracle `Die()`→`DelMember`）帧——在本 tick 的
