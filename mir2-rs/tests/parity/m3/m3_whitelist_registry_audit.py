@@ -34,6 +34,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,8 +78,10 @@ def audit_text(text, tokens, classify=None, strict=False, min_num=36):
             where = ",".join("L{0}".format(r["line"]) for r in rows)
             findings.append("DUPLICATE T-{0} × {1} @ {2}（全局唯一编号约定被破坏）".format(
                 num, len(rows), where))
-            if strict:
-                reds.append("DUPLICATE T-{0} @ {1}".format(num, where))
+            # **恒判红**（不再只在 --strict 下）：撞号本身就是缺陷，非 strict 下也必须
+            # 让 rc≠0（旧行为——非 strict 打了 FINDING DUPLICATE 仍打 GREEN、rc=0——是
+            # 缺陷；见 2026-10-17 卡 `openmir2-m3-whitelist-anchor-drift` 的订正）。
+            reds.append("DUPLICATE T-{0} @ {1}".format(num, where))
 
     resolved = []
     for tk in tokens:
@@ -96,8 +99,8 @@ def audit_text(text, tokens, classify=None, strict=False, min_num=36):
             findings.append("TOKEN_MULTI {0} {1}：token {2} 解析到 {3} 行（L{4}）".format(
                 tk["key"], tk["system"], t, len(rows),
                 ",".join(str(r["line"]) for r in rows)))
-            if strict:
-                reds.append("TOKEN_MULTI {0}={1}".format(t, len(rows)))
+            # 同 DUPLICATE：token 解析到多行 = 引用方无法判定的缺陷，**恒判红**。
+            reds.append("TOKEN_MULTI {0}={1}".format(t, len(rows)))
         elif len(rows) == 0:
             hard = strict and status == "READY"
             findings.append("{0} {1} {2}：token {3} 在 whitelist 里不存在（{4}）".format(
@@ -151,6 +154,10 @@ def cmd_audit(args):
         print("  FINDING {0}".format(f))
     if reds:
         print("WHITELIST_REGISTRY_RED {0}：{1}".format(len(reds), "; ".join(reds)))
+        if report["duplicates"] and not args.strict:
+            print("  NOTE 撞号（{0}）在**非 strict** 下也判红（rc=1）：见卡 "
+                  "`openmir2-m3-whitelist-anchor-drift` 的订正——旧行为打了 "
+                  "FINDING DUPLICATE 仍打 GREEN/rc=0 是缺陷。".format(report["duplicates"]))
         rc = 1
     else:
         print("WHITELIST_REGISTRY GREEN（无重复编号；夹具 token 解析唯一或不可用）")
@@ -201,9 +208,30 @@ def cmd_selftest(_args):
     expect("--strict 下重复必红（改坏必红）", any("DUPLICATE T-42" in x for x in reds2) and reds2)
     expect("--strict 下 READY 缺 token 判红", any("TOKEN_MISSING" in x for x in reds2))
 
-    # 非 strict：重复只报不红（审计语义）
+    # **订正（2026-10-17）**：非 strict 下**有重号即判红**（旧行为：打印 FINDING DUPLICATE
+    # 却仍打 GREEN、rc=0 —— 是缺陷）。本项即「改回旧行为 ⇒ 自检必红」的牙：
+    # 谁把 DUPLICATE 的 `reds.append` 挪回 `if strict:`，本断言立即失败。
     _e3, r3, reds3 = audit_text(dup, tokens, classify=lambda k: "READY", strict=False)
-    expect("非 strict 只报告不判红", r3["duplicates"] == [42] and reds3 == [])
+    expect("非 strict 有重号 ⇒ duplicates 被点名", r3["duplicates"] == [42])
+    expect("非 strict 有重号 ⇒ 必判红（DUPLICATE 在 reds 里，rc≠0）",
+           any("DUPLICATE T-42" in x for x in reds3))
+    _e4, r4, reds4 = audit_text(good, tokens, classify=lambda k: "READY", strict=False)
+    expect("无重号的正常表 ⇒ 非 strict 不判红", r4["duplicates"] == [] and reds4 == [])
+
+    # 相邻锚点门（`whitelist_anchor_gate.py`）：挂在旁边 + 在本 selftest 里常跑 ⇒ 借
+    # `fixture_chain_gate.SHARED_CHECKS` 对 `whitelist_registry_selftest` 的既有登记，
+    # **免改共享注册表**即可让「白名单锚点保鲜门」进入共享管线（在场却坏 ⇒ 恒 RED）。
+    gate = os.path.join(HERE, "whitelist_anchor_gate.py")
+    if os.path.isfile(gate):
+        proc = subprocess.run([sys.executable, "-I", gate, "check"],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace")
+        expect("相邻锚点门 whitelist_anchor_gate check 绿（entail 接入共享管线）",
+               proc.returncode == 0)
+        if proc.returncode != 0:
+            print("    gate 输出：%s" % ((proc.stdout or "") + (proc.stderr or "")).strip()[:400])
+    else:
+        expect("相邻锚点门 whitelist_anchor_gate.py 在场（缺失即 PREREQ，不静默）", False)
 
     print("SELFTEST {0} {1}/{2}".format("GREEN" if ok == total else "RED", ok, total))
     return 0 if ok == total else 1
