@@ -477,6 +477,39 @@ fn npc_run_body(world: &mut World, npc_type: i32) -> NpcRunOutcome;
 `bins/game-svr/src/npcs.rs::base_animal_ctor_chain_matches_oracle_on_all_three_paths`
 （含构造后**流位置**比对）钉住 4 抽——是构造段**已对齐的全部**；其余 **10 处**（`MobNpcCommand.cs:36` 源码已注释 ⇒ 待处置 **9 处**）为未对齐窗口项。
 
+#### 4.4.2 九处未建模构造点逐条处置（2026-10-17 独立实读 oracle 复核）
+
+> 本小节**独立实读** oracle（起点 `grep -rn "new Merchant" src/`，逐处跟到 `new` 之后的用法），
+> **不照抄 §4.4.1 的粗判**；与 §4.4.1 不一致处集中写在末段「表差异」。
+> 处置词定义：**M** = 建模（建世界实体 + 按序抽 4）；**F** = fold（**不建实体**，只把该处 4 抽按 oracle 次序落进构造账本，实体缺口另立条目）；**N/A** = 两侧都不抽 / 该路径不可达。
+
+**共同事实（先钉死，本节所有"抽 4"均据此）**：`Merchant : NormNpc : AnimalObject : BaseObject` 的 ctor 公共链**恒抽 4 个数**——`BaseObject()`：`RunTick = GetTickCount()+Random(1500)`、`SearchTime = Random(2000)+2000`（`BaseObject.cs:439/441`）；`AnimalObject()`：`AttackTick = …-Random(3000)`、`WalkTick = …-Random(3000)`（`AnimalObject.cs:76/77`）。`NormNpc()` ctor 体（`NormNpc.cs:39-52`）、`Merchant()` ctor 体（`Merchant.cs:82-110`）、`ActorEntity()` 均**不加抽**（逐行实读）。⇒ **每一处 `new Merchant{…}`（对象初始化器不改变参数无关 ctor 的调用）都抽 4**，与随后是否入列表无关。
+
+**启动期次序（决定账本位置，实读 `GameApp`）**：**`GameApp` ctor 体的头部（`:40-58`）先于 `InitializeSystem()`**——其中 `:55 GameCommandSystem` / `:56 AuthenticationService` / `:57 ScriptEngine` 实读**均不抽数**（`CommandSystem.cs:19-22` 只 new `GameCmdConf`；`AuthenticationService.cs:15-20` 只 new `TcpClient`/`List`；`ScriptEngine.cs:30-36` 只装两张字典）；但 **`:58 M2Share.AutoBot = new RobotManage()`** 的 ctor 会跑 `LoadRobot()`（`RobotManage.cs:8-12/21-49`），对 **`Robot.txt` 每一行** `new RobotObject()`（`:48`）⇒ 每个对象走 `RobotObject : PlayObject : CharacterObject : AnimalObject : BaseObject` 公共链**抽 4**（`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`；`RobotObject.cs:13-18`、`CharacterObject.cs:81-89` 的 ctor 自身不抽）⇒ **`Robot.txt` 非空时全局构造账本头 = 行数 × 4 个 RobotObject 抽数**（部署有该文件：内容门 `RobotManage.cs:25` 行由 `GameApp.cs:58 new RobotManage()` 触发、`Robot.txt` 在列）。**⇒「`seq=0` = G1」只在 `new Merchant` 家族子账本内成立；全局账本头属 RobotObject。**
+`GameApp` ctor `InitializeSystem()`（`GameApp.cs:59`→`:62`）建 **G1–G3**（`:85-87`）；随后 `Map.LoadMapInfo()`（`:124`，地图文件解析 ⇒ **M2** `CHECKQUEST`）；再 `LocalDb.LoadMapQuest()`（`:184` ⇒ **M1** 循环 + 尾 **L2/L1/L3**）；然后 `LoadMerchant()`（`:227` ⇒ **L4**）、`LoadNpcs()`（`:229` ⇒ **L5**）；**L6** 不在启动链（见下表）。
+
+| 站点 | ① oracle 建了什么（读 `new` 之后的用法） | ② 抽 4？ | ③ Rust 现状 | ④ 建议处置（给 owner 一句话） | ⑤ 对「构造段 seq=0 对齐」影响 |
+| --- | --- | --- | --- | --- | --- |
+| **G1** `GameApp.cs:85`（`SystemShare.ManageNPC`） | 裸 `new Merchant()`（无初始化器），**仅赋值静态字段**；**不入任何列表**（无 `AddMerchant`/`AddQuestNpc`/`AddObject`）；随即被 `LocalDB.QMangeNpc()`（`:268`）**覆盖** ⇒ 该对象成**孤儿**，唯一可观测效应 = ctor 4 抽 | **是**（孤儿，抽 4） | **完全没有**（Rust 只按记录判 `NpcHost::has_manage_npc`，`npc.rs:218-222`） | **F**：启动账本首部按序 **drain 4**、不建实体 | 以 **`new Merchant` 家族子账本**计：G1 = 该子账本首项（`Random(1500)`）；**全局** `seq=0` 属 RobotObject（见上「启动期次序」，行数 × 4）⇒ 未登记时全局第一项即分歧 ⇒ 谈「`seq=0` 对齐」须先把 RobotObject 与 `Robot.txt` 行数纳入「须一并核」清单 |
+| **G2** `GameApp.cs:86`（`SystemShare.RobotNPC`） | 同 G1（裸 `new Merchant()`、孤儿、被 `RobotNpc()` `:312` 覆盖） | **是**（抽 4） | **完全没有** | **F**：按序 drain 4 | 同上（**该子账本内**第 5-8 项） |
+| **G3** `GameApp.cs:87`（`SystemShare.FunctionNPC`） | 同 G1（孤儿、被 `QFunctionNpc()` `:210` 覆盖） | **是**（抽 4） | **完全没有** | **F**：按序 drain 4 | 同上（**该子账本内**第 9-12 项） |
+| **L1** `LocalDB.cs:210`（`QFunctionNpc`） | `new Merchant{MapName="0",ChrName="QFunction",IsHide=true,…}` + **`AddMerchant`**（`:223`）⇒ 进 **`MerchantList`**（世界实体，`CurrX=CurrY=0`、隐藏；**未设 `ActorId`**——由实体基类 `GetNextIdentity()` 按序分配；原稿「ActorId 0」系与 `CurrX/CurrY=0` 混淆，已订正）；脚本文件不存在时走 `else` ⇒ `SystemShare.FunctionNPC = null`（`:227-233`）——**不是**"只挂 ScriptManager" | **是**（抽 4） | **只作记录**：`envir/src/mapquest.rs` `HIDDEN_NPCS[QFunction]`→`MapQuestLoad.merchants`（`:266`）→`NpcHost` defs（`script_name=Some("QFunction")`）；**不入世界 `MerchantList`、不建实体、无 ctor 抽**（只在 `NpcHost::load` 抽脚本重名 `rename_rand`） | **F**（构造抽）+ **实体缺口另立条目**：drain 4；"QFunction 是否进世界 `MerchantList` 被 `ProcessMerchants` 驱动"记入 M3⑤/B | 登记后可对齐；否则 oracle 在 `LoadMapQuest` 尾多 4 抽 |
+| **L2** `LocalDB.cs:268`（`QMangeNpc`） | `new Merchant{ChrName="QManage",…}` + **`AddQuestNpc`**（`:280`）⇒ 进 **`QuestNpcList`**（世界实体；`@Login` 靠它） | **是**（抽 4） | **只作记录**：`mapquest.rs` `HIDDEN_NPCS[QManage]`→`MapQuestLoad.quest_npcs`（`:264`）→`NpcHost`（`has_manage_npc`）；不入 `QuestNpcList`、无 ctor 抽 | **F** + 登记"QManage 作为 `QuestNpcList` 实体"缺口 | 登记后可对齐 |
+| **L3** `LocalDB.cs:312`（`RobotNpc`） | `new Merchant{ChrName="RobotManage",…}` + **`AddQuestNpc`**（`:324`）⇒ 进 **`QuestNpcList`** | **是**（抽 4） | **只作记录**（`mapquest.rs`→`quest_npcs`） | **F** | 登记后可对齐 |
+| **L6** `LocalDB.cs:1067`（`ReLoadMerchants`） | `new Merchant{MapName=…}`，**仅当** Merchant.txt 某行 `(map,x,y)` 在 `MerchantList` 无匹配时；随即 `MerchantList.Add(merchant)`（`:1093`）+ `merchant.Initialize()`（`:1094`）⇒ 世界实体 | **是**（抽 4/**新行**） | **完全没有**（Rust 无 `ReLoadMerchants`） | **N/A（对构造段，不可达）**：唯一调用者 `ReloadNpcCommand.cs:24` **整段源码已注释**（`Execute` 体全注释）⇒ 启动期与当前发布命令集**都不可达** ⇒ 构造段抽 0；与 §4.4.1 的"列进窗口项"应**降级** | **不构成窗口阻塞项**（非"oracle 侧不抽"，而是"该路径不可达"）；将来实现重载命令时改 **M**（4/新行） |
+| **M1** `MapQuestManager.cs:40`（`CreateQuest`） | `new Merchant{ChrName=sQuest,FilePath="MapQuest_def",IsHide=true,IsQuest=false}` + **`AddQuestNpc`**（`:52`）+ `mapQuest.NPC=questMerchant`（`:53`）⇒ 进 **`QuestNpcList`**；**每个有效 MapQuest.txt 行一个**（循环 `LocalDB.cs:358-398`，仅 `:386` 调用点） | **是**（抽 4/**有效行**） | **只作记录**：`mapquest.rs::create_quest`（`:127`）→`QuestNpcRecord`→`MapQuestLoad.quest_npcs`；不入 `QuestNpcList`、无 ctor 抽 | **F**：按有效行**逐行** drain 4 + 登记"quest NPC 作为 `QuestNpcList` 实体" | 登记后可对齐；抽数 = **有效行数 × 4**（非固定 4） |
+| **M2** `Maps.cs:454`（`LoadMapQuest`） | `new Merchant{ChrName=sName,FilePath="MapQuest_def",…}` + **`AddQuestNpc`**（`:466`）+ `return`；调用点 = `Maps.cs:137` 的 `CHECKQUEST` 图命令（MapInfo/*.txt 解析期，每个 `CHECKQUEST(x)` 行一次）⇒ 进 **`QuestNpcList`** | **是**（抽 4/**CHECKQUEST 行**） | **未建模**：`envir/src/mapinfo.rs:306` **识别** `CHECKQUEST` 但显式「本层不建 NPC（集成点由 M2 车道做）」⇒ 不建实体、无 ctor 抽 | **F**：按 `CHECKQUEST` 行逐行 drain 4（M2 车道集成实体时升 **M**） | 登记后可对齐；行数 = 地图文件 `CHECKQUEST` 出现次数 |
+
+**⇒ 一句话结论（给 owner）**：9 处中 **G1–G3 / L1–L3 / M1 / M2 共 8 处**建议按 **F（fold：只把该处 4 抽按 oracle 次序落进构造账本、不建实体；实体缺口另立条目）** 处置——它们全是**启动期无条件或按文件行可达**的 `new Merchant`，每处 4 抽**必须**按 oracle 次序进同一本账本，否则构造段永远对不上（本表 8 处的 4 抽是**账本中的一段**，不是账本头——头部见上「启动期次序」）；**唯一例外 L6** 降为 **N/A（不可达，唯一调用者源码已注释）**。补 F 后 **`new Merchant` 家族子账本首可对齐**（G1–G3 打头、随后 M2/M1/L2/L1/L3），但**全局构造段仍不可达**——独立复核把这一点**加强**了：账本头另有更早的 RNG 消费者 `RobotManage → RobotObject`（`GameApp.cs:58`，`Robot.txt` 行数 × 4，见上「启动期次序」），此外 `SystemShare.*`/`WorldServer`/`MapManager` 等 ctor 不在本表范围，均须一并核。owner 只需先拍「8 处按 F 还是 M」这一刀。
+
+**表差异（推翻 / 细化 §4.4.1 的行，逐条）**：
+
+- **细化 L1**：§4.4.1 把 L1–L3 并作"只作脚本宿主标签…未建世界实体 ⇒ 不抽"。oracle 里 **L1（QFunction）走 `AddMerchant` → `MerchantList`**，**L2/L3 走 `AddQuestNpc` → `QuestNpcList`**——是**两个不同列表**（Rust `mapquest.rs` 亦已分 `merchants`/`quest_npcs` 两 vec）。"同一处置"需写明**列表归属不同**，且 oracle 侧**三个都抽 4**（"⇒ 不抽"只是 Rust 侧事实，勿与 oracle 混读）。
+- **推翻/降级 L6**：§4.4.1 记"列进窗口项"。实读 `ReloadNpcCommand.cs` 的 `[ExecuteCommand] Execute` 体**整段注释**，唯一入口不可达 ⇒ **L6 应从"窗口项"降级为 N/A（不可达）**，不计入构造段抽数、不作阻塞项。
+- **细化 G1–G3**：§4.4.1 只写"未建模"，未点明 oracle 对象**不入任何列表、被后续 `LocalDB` 覆盖成孤儿** ⇒ 处置是 **F（只补抽）**，**不是**"建实体"。
+- **细化 M1/M2**：§4.4.1 只写"只作记录 / 未建模"，未点明 oracle 侧**每个有效 MapQuest.txt 行 / 每个 `CHECKQUEST` 行各建一个实体、各抽 4** ⇒ 抽数是 **行数 × 4**，不是固定 4。
+- **补注（越出本表、提醒 §4.4）**：`QuestNpcList` 的**运行期成员序** = `[MapQuest quest npc…, QManage, RobotManage]`（`GameApp.cs:184` `LoadMapQuest` 先）**再**追加 `Npcs.txt` 固定 NPC（`GameApp.cs:229` `LoadNpcs` 后）；且 `ProcessNpcs`（`WorldServer.Merchant.cs:120`）循环头**只查 `Ghost`/`RunTick` 门、无 Envir 门** ⇒ §4.4 的 `k0`（"首个满足 `RunTime` 门被 `ProcessNpcs` 触发的 NPC"）**须含 `QuestNpcList` 全部成员**，不只是 `Npcs.txt` 固定 NPC。留待 B 车道连同 `npc_tick` 复核。
+
 ### 4.5 判据
 
 **离线可判（构造级）**
