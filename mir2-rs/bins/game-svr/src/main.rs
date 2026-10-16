@@ -4921,6 +4921,49 @@ fn handle_hit_cmd(
     true
 }
 
+/// `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）在 `CM_SPELL`
+/// `default` 支里的**唯一落点**（oracle `PlayObject.Attack.cs:1272-1277`）。
+///
+/// oracle 结构：
+/// ```text
+/// PlayObject.Attack.cs:1271  IActor spellObject = null;
+/// PlayObject.Attack.cs:1272  if (CretInNearXy(targetObject, nTargetX, nTargetY)) {
+/// PlayObject.Attack.cs:1274    spellObject = targetObject;
+/// PlayObject.Attack.cs:1275    nTargetX = spellObject.CurrX; nTargetY = spellObject.CurrY; }  ← 就地改写
+/// PlayObject.Attack.cs:1278  DoSpell(UserMagic, nTargetX, nTargetY, spellObject)              ← 读改写后的值
+/// ```
+/// ⇒ 命中：`spellObject = targetObject` 且坐标改成目标实际坐标；未命中：`spellObject = null`、
+/// 坐标保持原始点击值。
+///
+/// **命中判定必须走 [`queryuser::cetin_near_xy`]**（逐格扫**本方图**的 3×3，格越界/非 `Walk`
+/// （被 `SetMapXyFlag` 掩码）即跳过）。**不得**退化成「实体坐标 ±1 比较」：目标站在被掩码的格上时
+/// oracle **不** snap，而行内比较会 snap ⇒ 距离门读到的 `tx/ty` 不同 ⇒ RNG 流水不同（R 级差异，
+/// 片 `openmir2-snap-cell-fidelity`）。
+///
+/// `self_map` = 施法者当前图（oracle `this.Envir`）；`target_*` = 客户端报的点击格
+/// （= `CretInNearXy` 的 `nX/nY`）。
+///
+/// 返回 `(tx, ty, hit)`：`hit=true` ⇒ `tx/ty` = 目标实体的实际坐标（`spellObject.CurrX/CurrY`）；
+/// `hit=false` ⇒ `tx/ty` = 原始点击坐标。
+#[must_use]
+fn spell_snap_target(
+    world: &mir2_world::World,
+    self_map: usize,
+    target_actor_id: i32,
+    target_x: i32,
+    target_y: i32,
+) -> (i32, i32, bool) {
+    if !queryuser::cetin_near_xy(world, self_map, target_x, target_y, target_actor_id) {
+        return (target_x, target_y, false);
+    }
+    // `CretInNearXy` 命中 ⇒ 目标必在 `world.entities`（命中条件之一即
+    // `world.entities.get(cell_obj_id)` 存在且非 Ghost）；缺项时保守保留原始坐标。
+    world
+        .entities
+        .get(target_actor_id)
+        .map_or((target_x, target_y, true), |t| (t.x, t.y, true))
+}
+
 /// **`openmir2-m3-attack-magic-wiring`（第二片）**、**`openmir2-m3-pet-slave-summon`（第②片）**
 /// 与 **`openmir2-default-arm-spell-surface`（帧面片）** 三片共同的入口：
 /// `CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790` → `PlayObject.Message.cs:1339-1400`）。
@@ -4975,6 +5018,10 @@ fn handle_spell_cmd(
         return;
     };
     let (cur_x, cur_y) = (e.x, e.y);
+    // 本方（施法者）当前图 —— oracle `CretInNearXy` 扫的是 `this.Envir`（`PlayObject.Base.cs:991`）。
+    // 取法与既有生产调用点一致（`main.rs:2624` `let self_map = se.map_id;` /
+    // `main.rs:2716` 同句，服务 `CM_QUERYUSERNAME` / `CM_QUERYUSERSTATE`）。
+    let self_map = e.map_id;
     let is_dead = e.death;
     let caster_abil_level = e.level;
     let req = magicwire::parse_spell(recog, tag, param, series);
@@ -5025,8 +5072,9 @@ fn handle_spell_cmd(
     // PlayObject.Attack.cs:1278  if (!DoSpell(UserMagic, nTargetX, nTargetY, spellObject)) ...
     // MagicManager.cs:151        if (IsWarrSkill(userMagic.MagIdx)) → :153 return false  ← 战士：发帧前退出
     // MagicManager.cs:155        |CurrX-nTargetX|/|CurrY-nTargetY| > MagicAttackRage → :157 return false
-    //                            （**语句在 :155**；本仓 A-5 三块与界定件把同一门的区块写作
-    //                             `:152-155`/`:154`，指的都是这一处，不是另一处门）
+    //                            ← **门 = 这一条单语句 `:155`**（`:152` 是 `if (IsWarrSkill)` 的 `{`、
+    //                             `:153` 是 `return false;`、`:154` 是 `}` ⇒ 都不属于本门）。
+    //                             仓内原把本门写作 `:152-155`/`:154` 的引用已在本片一并订正为 `:155`。
     // MagicManager.cs:159        SendRefMsg(RM_SPELL, Magic.Effect, nTargetX, nTargetY, Magic.MagicId, "")
     //                            ← **无条件、恰一条**（本片的位置）
     // MagicManager.cs:160-163    targetObject.Death ⇒ targetObject = null           （效果体层，本片不做）
@@ -5060,18 +5108,18 @@ fn handle_spell_cmd(
     // `MySqlDB.LoadMagicDB`）。表里无该魔号 ⇒ 造不出帧（oracle 侧等价于 `userMagic.Magic == null`，
     // 那会在 `:159` 直接 NPE ⇒ 现实中不可达）⇒ 降级为**不发帧**并记日志（保守方向，非 fail-open）。
     if default_arm && !magic::is_warr_skill(i32::from(req.magic_id)) {
-        // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：目标在
-        // `(nTargetX,nTargetY)` 的 1×1 邻域内 ⇒ `spellObject = targetObject` 且 snap 到目标实际坐标。
-        let (mut tx, mut ty) = (req.target_x, req.target_y);
-        if let Some(t) = world
-            .entities
-            .get(req.target_actor_id)
-            .filter(|t| !t.ghost && (t.x - tx).abs() <= 1 && (t.y - ty).abs() <= 1)
-        {
-            tx = t.x;
-            ty = t.y;
-        }
-        // `DoSpell` 距离门（`MagicManager.cs:152-155`，用 **snap 后**坐标）。
+        // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：
+        // **命中判定 = [`queryuser::cetin_near_xy`]**（见 [`spell_snap_target`]：逐格扫**本方图**
+        // 的 3×3，格越界/被掩码即跳过）。命中 ⇒ `spellObject = targetObject` 且 snap 到目标实际坐标。
+        // 原为行内「实体坐标 ±1 比较」（不走格子层）⇒ 与 oracle 不等价（本片修复，tier=R）。
+        let (tx, ty, _hit) = spell_snap_target(
+            world,
+            self_map,
+            req.target_actor_id,
+            req.target_x,
+            req.target_y,
+        );
+        // `DoSpell` 距离门（`MagicManager.cs:155`，用 **snap 后**坐标）。
         if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
             match magic_table.get(req.magic_id) {
                 Some(magic) => {
@@ -5112,7 +5160,7 @@ fn handle_spell_cmd(
         });
         let magic_level = matched.as_ref().map_or(0, |m| m.level);
         // **F-1（独立复验 2026-10-17）**：`DoSpell` 的**距离门**
-        // （`src/M2Server/Magic/MagicManager.cs:152-155`）——
+        // （`src/M2Server/Magic/MagicManager.cs:155`）——
         // `Math.Abs(playObject.CurrX - nTargetX) > SystemShare.Config.MagicAttackRage
         //  || Math.Abs(playObject.CurrY - nTargetY) > SystemShare.Config.MagicAttackRage`
         // ⇒ `return false`：**越界 = 一个随机数都不抽、也不施放**。技能 14/15/31 同属 `DoSpell`
@@ -5139,17 +5187,16 @@ fn handle_spell_cmd(
         // 的门本片同步改用同一 i32 口径（同一逻辑变更）。
         //
         // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：
-        // 目标在 `(nTargetX,nTargetY)` 的 1×1 邻域内 ⇒ snap 到目标实际坐标。
+        // **命中判定 = [`queryuser::cetin_near_xy`]**（见 [`spell_snap_target`]；与上方无条件广播块、
+        // 与下方召唤/诱惑/分身三块**同一个写法**）。命中 ⇒ snap 到目标实际坐标。
         // （`spellObject` 本身在 14/15/31 的效果体里不被使用 ⇒ 只取坐标，与兄弟块同判据。）
-        let (mut tx, mut ty) = (req.target_x, req.target_y);
-        if let Some(t) = world
-            .entities
-            .get(req.target_actor_id)
-            .filter(|t| !t.ghost && (t.x - tx).abs() <= 1 && (t.y - ty).abs() <= 1)
-        {
-            tx = t.x;
-            ty = t.y;
-        }
+        let (tx, ty, _hit) = spell_snap_target(
+            world,
+            self_map,
+            req.target_actor_id,
+            req.target_x,
+            req.target_y,
+        );
         if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
             match req.magic_id {
                 // `SKILL_SHIELD(31)`：`MagBubbleDefenceUp(level, GetPower(GetRPow(MC) + 15))`（`:475`）
@@ -5203,17 +5250,18 @@ fn handle_spell_cmd(
     ) {
         if let (Some(magic), Some(reg)) = (magic_table.get(req.magic_id), registry) {
             // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：
-            // 目标在 `(nTargetX,nTargetY)` 的 1×1 邻域内 ⇒ `spellObject = targetObject` 且
-            // snap 坐标到目标实际坐标。
-            let (mut tx, mut ty) = (req.target_x, req.target_y);
-            let target_id = match world.entities.get(req.target_actor_id) {
-                Some(t) if !t.ghost && (t.x - tx).abs() <= 1 && (t.y - ty).abs() <= 1 => {
-                    tx = t.x;
-                    ty = t.y;
-                    Some(req.target_actor_id)
-                }
-                _ => None,
-            };
+            // 命中判定走 [`queryuser::cetin_near_xy`]（见 [`spell_snap_target`]）⇒
+            // 命中才 `spellObject = targetObject` 且 snap 坐标到目标实际坐标。
+            let (tx, ty, hit) = spell_snap_target(
+                world,
+                self_map,
+                req.target_actor_id,
+                req.target_x,
+                req.target_y,
+            );
+            // oracle `:1271` `IActor spellObject = null;` + `:1274` 只在命中时赋 `targetObject`
+            // ⇒ 未命中 = `spellObject == null`（`DoSpell` 的第四参）。
+            let target_id = if hit { Some(req.target_actor_id) } else { None };
             // `DoSpell` 距离门（`MagicManager.cs:155`，`SystemShare.Config.MagicAttackRage`）。
             // i32 域比较（登记订正 4）：弃用 `i16::try_from(..).unwrap_or(0)` 的 fail-open 折 0，
             // 见 [`mir2_world::magic::spell_in_range_i32`]。
@@ -5336,18 +5384,20 @@ fn handle_spell_cmd(
     // （`PlayObject.Attack.cs:1268-1278` → `MagicManager.cs:394-397` → `MagTamming` `:704-825`）。
     if req.magic_id == mir2_world::slave::SKILL_TAMMING {
         if let Some(magic) = magic_table.get(req.magic_id) {
-            // `CretInNearXy(targetObject, nTargetX, nTargetY)`：与召唤面同口径，
-            // 目标在 1×1 邻域内 ⇒ 修正到目标实际坐标并作为 `spellObject`。
-            let (mut tx, mut ty) = (req.target_x, req.target_y);
-            let target_id = match world.entities.get(req.target_actor_id) {
-                Some(t) if !t.ghost && (t.x - tx).abs() <= 1 && (t.y - ty).abs() <= 1 => {
-                    tx = t.x;
-                    ty = t.y;
-                    Some(req.target_actor_id)
-                }
-                _ => None,
-            };
-            // `DoSpell` 的距离门（`MagicManager.cs:154`）。
+            // `CretInNearXy(targetObject, nTargetX, nTargetY)`：与召唤面**同一写法**
+            // （[`spell_snap_target`] ⇒ [`queryuser::cetin_near_xy`]）⇒ 命中才修正到目标实际坐标并
+            // 作为 `spellObject`。
+            let (tx, ty, hit) = spell_snap_target(
+                world,
+                self_map,
+                req.target_actor_id,
+                req.target_x,
+                req.target_y,
+            );
+            // oracle `:1271` `IActor spellObject = null;` + `:1274` 只在命中时赋 `targetObject`
+            // ⇒ 未命中 = `spellObject == null`（`DoSpell` 的第四参）。
+            let target_id = if hit { Some(req.target_actor_id) } else { None };
+            // `DoSpell` 的距离门（`MagicManager.cs:155`）。
             // i32 域比较（登记订正 4）：弃用 `i16::try_from(..).unwrap_or(0)` 的 fail-open 折 0，
             // 见 [`mir2_world::magic::spell_in_range_i32`]。
             if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
@@ -5422,17 +5472,19 @@ fn handle_spell_cmd(
     if req.magic_id == mir2_world::slave::SKILL_46 {
         if let Some(magic) = magic_table.get(req.magic_id) {
             // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：
-            // 与召唤/诱惑面同口径，目标在 1×1 邻域内 ⇒ 修正到目标实际坐标并作为 `spellObject`。
-            let (mut tx, mut ty) = (req.target_x, req.target_y);
-            let target_id = match world.entities.get(req.target_actor_id) {
-                Some(t) if !t.ghost && (t.x - tx).abs() <= 1 && (t.y - ty).abs() <= 1 => {
-                    tx = t.x;
-                    ty = t.y;
-                    Some(req.target_actor_id)
-                }
-                _ => None,
-            };
-            // `DoSpell` 的距离门（`MagicManager.cs:152-155`，`SystemShare.Config.MagicAttackRage`）。
+            // 与召唤/诱惑面**同一写法**（[`spell_snap_target`] ⇒ [`queryuser::cetin_near_xy`]）⇒
+            // 命中才修正到目标实际坐标并作为 `spellObject`。
+            let (tx, ty, hit) = spell_snap_target(
+                world,
+                self_map,
+                req.target_actor_id,
+                req.target_x,
+                req.target_y,
+            );
+            // oracle `:1271` `IActor spellObject = null;` + `:1274` 只在命中时赋 `targetObject`
+            // ⇒ 未命中 = `spellObject == null`（`DoSpell` 的第四参）。
+            let target_id = if hit { Some(req.target_actor_id) } else { None };
+            // `DoSpell` 的距离门（`MagicManager.cs:155`，`SystemShare.Config.MagicAttackRage`）。
             // i32 域比较（登记订正 4）：弃用 `i16::try_from(..).unwrap_or(0)` 的 fail-open 折 0，
             // 见 [`mir2_world::magic::spell_in_range_i32`]。
             if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
@@ -15963,7 +16015,7 @@ mod tests {
     /// 在 buff tick 开启时把技能 15（`SKILL_DEJIWONHO` → `DefenceUp`）落到目标身上。
     ///
     /// 布置：施法者 (10,10)、目标 (12,12)，`|Δx| = |Δy| = 2 <= MagicAttackRage = 8` ⇒ 过
-    /// `DoSpell` 距离门（`src/M2Server/Magic/MagicManager.cs:152-155`）。
+    /// `DoSpell` 距离门（`src/M2Server/Magic/MagicManager.cs:155`）。
     ///
     /// 断言：① 世界侧可观测的 `World::buffs`（`BuffSystem::has_buff`）在 `(target, DefensePower)` 上为真
     /// （`MagMakeDefenceArea(..., btState = 0)` ⇒ `DefenceUp`）；② 世界 RNG **确有**推进
@@ -16029,7 +16081,7 @@ mod tests {
     }
 
     /// **片 A-5 主机层牙②（F-1 越界门，R 级）**：**同一布置**但目标坐标超出 `MagicAttackRage`（传 8）
-    /// ⇒ `DoSpell` 的距离门（`MagicManager.cs:152-155`）**直接 `return false`**：
+    /// ⇒ `DoSpell` 的距离门（`MagicManager.cs:155`）**直接 `return false`**：
     /// ① 目标**不得获得任何 buff**、`MagicShield` 不得置位；② 世界 RNG **一次都不抽**；
     /// ③ 不得有 `SM_CHARSTATUSCHANGED(657)` 下行帧（含本 tick `drain_buff_downlink` 的真实出帧面）。
     ///
@@ -16147,7 +16199,7 @@ mod tests {
     /// ⇒ 用**原始坐标**过门）、**目标实体在 (19,10)**（落在点击点的 1×1 邻域内 ⇒ `CretInNearXy`
     /// 命中 ⇒ snap 成 (19,10) ⇒ `|Δx| = 9 > 8` **越界**）。
     /// oracle `default` 支先 snap（`PlayObject.Attack.cs:1272-1277` **就地改写** `nTargetX/nTargetY`）
-    /// 再把改写后的值交给 `DoSpell`（`:1278`）⇒ `MagicManager.cs:152-155` 的门读的是 **snap 后的坐标**
+    /// 再把改写后的值交给 `DoSpell`（`:1278`）⇒ `MagicManager.cs:155` 的门读的是 **snap 后的坐标**
     /// ⇒ 直接 `return false`：**世界 RNG 抽取数 == 0**、目标/施法者三种 buff 全无。
     ///
     /// 覆盖差异：现有三条用例的点击点恒等于目标实体坐标（snap 是恒等变换）⇒ 覆盖不到本差异；
@@ -16305,6 +16357,159 @@ mod tests {
                 ),
             }
             let _ = a5_take_idents(&mut rx0);
+        }
+    }
+
+    /// 片 `openmir2-snap-cell-fidelity` 两条牙共用的一次施法（走**生产入口** `handle_spell_cmd`）。
+    ///
+    /// `mask = Some((mx,my))` 时先把该格掩码（`MapGrid::set_map_xy_flag(mx, my, false)`
+    /// ⇒ `CellAttribute::LowWall`，生产侧唯一写掩码的口是 `crates/world/src/castle.rs:591`
+    /// `apply_structure_events` 的城门/城墙 `SetMapXyFlag`）——被掩码格
+    /// `MapCellInfo::valid() == false` ⇒ `get_cell_info` 返回 `success=false` ⇒ oracle
+    /// `CretInNearXy` 的 `if (cellSuccess && cellInfo.IsAvailable)` 跳过该格。
+    ///
+    /// 返回 `(世界 RNG 推进步数, 施法者 MagicShield, 目标 DefencePower/MagDefencePower)`。
+    #[allow(clippy::type_complexity)]
+    fn snap_fidelity_cast(
+        magic_id: u16,
+        target_x: i32,
+        target_y: i32,
+        click: (u16, u16),
+        mask: Option<(i32, i32)>,
+    ) -> (usize, bool, bool) {
+        let (
+            mut world,
+            caster,
+            target,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = a5_spell_rig(magic_id, target_x, target_y);
+        if let Some((mx, my)) = mask {
+            assert!(
+                world.maps[0].set_map_xy_flag(mx, my, false),
+                "掩码格 ({mx},{my}) 须在界且当前 Valid（否则该格不会被置成 LowWall）"
+            );
+        }
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        let rng_before = world.rng.clone();
+        handle_spell_cmd(
+            game_svr::feature::make_long(click.0, click.1),
+            magic_id,
+            u16::try_from(target).unwrap_or(0),
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+        );
+        let _ = a5_take_idents(&mut rx0);
+        (
+            draws_between(&rng_before, &world.rng),
+            world
+                .buffs
+                .has_buff(caster, mir2_world::BuffType::MagicShield),
+            world
+                .buffs
+                .has_buff(target, mir2_world::BuffType::DefensePower)
+                || world
+                    .buffs
+                    .has_buff(target, mir2_world::BuffType::MagicDefensePower),
+        )
+    }
+
+    /// **片 `openmir2-snap-cell-fidelity` 本体牙（格不可用 ⇒ 不 snap，tier=R）**：
+    /// 目标**在点击点的 1×1 窗口内**，但它站的格**被掩码**（不可用）⇒ oracle `CretInNearXy`
+    /// 逐格扫时跳过该格 ⇒ **不** snap ⇒ `tx/ty` 保持原始点击坐标 ⇒ 用 (18,10) 过门
+    /// （`|Δx| = 8 <= MagicAttackRage = 8`）⇒ **照常施放**。
+    ///
+    /// 布置：施法者 (10,10)、点击 **(18,10)**、目标实体 **(19,10)**（`|Δx| = 1 <= 1`，行内
+    /// 「实体坐标 ±1 比较」会 snap）、格 (19,10) 置 `LowWall`。
+    ///
+    /// **本片修复前后**：行内实现会 snap 成 (19,10) ⇒ `|Δx| = 9 > 8` ⇒ 距离门零抽数、零施放；
+    /// 忠实镜像（[`queryuser::cetin_near_xy`]）不 snap ⇒ 抽数 > 0、技能 31 的 `MagicShield` 落地。
+    ///
+    /// 断言：① 世界 RNG **必须前进**（走到 `power_*` 取数）；② 技能 31 ⇒ 施法者获 `MagicShield`；
+    /// ③ 技能 14/15 ⇒ 目标**不得**获 buff——oracle `MagMakeDefenceArea` 的已知 bug 只对
+    /// **中心格** `(nX,nY) = 点击格 (18,10)` 施加（`crates/world/src/world.rs:671` 逐行复刻），
+    /// 目标在 (19,10) ⇒ 中心格无人 ⇒ 零命中（这一条同时钉住「不 snap」本身：若坐标被改成目标格，
+    /// 目标就会获 buff ⇒ 断言 ③ 必红）。
+    ///
+    /// 红检（变异牙，实测见补丁说明）：把 [`spell_snap_target`] 里的 `cetin_near_xy` 换回行内
+    /// 「实体坐标 ±1 比较」⇒ ① 必红（零抽数）、② 必红；牙 b 仍绿（两条牙各司其职）。
+    #[test]
+    fn spell_cmd_snap_masked_cell_does_not_snap() {
+        for magic_id in [31u16, 15, 14] {
+            let (draws, shield, defence) =
+                snap_fidelity_cast(magic_id, 19, 10, (18, 10), Some((19, 10)));
+            assert!(
+                draws > 0,
+                "[魔号 {magic_id}] 目标站在**被掩码**的格 (19,10) 上 ⇒ `CretInNearXy` 跳过该格                  ⇒ 不 snap ⇒ 原始 (18,10) 过门（|Δx|=8 ≤ 8）⇒ 世界 RNG 必须前进"
+            );
+            if magic_id == 31 {
+                assert!(
+                    shield,
+                    "不 snap ⇒ 在界 ⇒ 技能 31 `MagBubbleDefenceUp` 作用于施法者自身 ⇒ MagicShield 落地"
+                );
+            } else {
+                assert!(
+                    !defence,
+                    "[魔号 {magic_id}] 不 snap ⇒ `MagMakeDefenceArea` 的中心格 = 点击格 (18,10)                      （无人）⇒ 目标 (19,10) 不得获任何防御系 buff"
+                );
+            }
+        }
+    }
+
+    /// **片 `openmir2-snap-cell-fidelity` 牙 b（窗口宽度上界，tier=R）**：目标在点击点
+    /// **2 格**外（`|Δx| = 2`）⇒ `CretInNearXy` 的 3×3 窗口**不含**它 ⇒ **不** snap
+    /// ⇒ `tx/ty` = 原始点击 (18,10)（`|Δx| = 8 <= 8`）⇒ 照常施放。
+    ///
+    /// 与本体牙的分工：本体牙钉「格不可用 ⇒ 不 snap」（同一窗口内的目标），本牙钉「**窗口上界 = ±1**」
+    /// （可用的格、但坐标超出窗口）。下界（±0 时必红）已由 `spell_cmd_a5_snap_pushes_click_out_of_range`
+    /// / `spell_cmd_a5_snap_pulls_click_into_range` 覆盖。
+    ///
+    /// 断言：① 世界 RNG **必须前进**；② 技能 31 ⇒ 施法者获 `MagicShield`；③ 技能 14/15 ⇒ 目标无 buff
+    /// （同本体牙 ③ 的口径）。
+    ///
+    /// 红检（变异牙，实测见补丁说明）：把 [`queryuser::cetin_near_xy`] 的 `(x-1)..=(x+1)` 改成
+    /// `(x-2)..=(x+2)`（窗口 ±2）⇒ snap 到 (20,10) ⇒ `|Δx| = 10 > 8` ⇒ 零抽数 ⇒ ① 必红。
+    #[test]
+    fn spell_cmd_snap_window_width_upper_bound() {
+        for magic_id in [31u16, 15, 14] {
+            let (draws, shield, defence) = snap_fidelity_cast(magic_id, 20, 10, (18, 10), None);
+            assert!(
+                draws > 0,
+                "[魔号 {magic_id}] 目标在点击点 (18,10) 的 ±2 格 ⇒ 出 3×3 窗口 ⇒ 不 snap                  ⇒ 原始坐标过门（|Δx|=8 ≤ 8）⇒ 世界 RNG 必须前进（窗口若被改成 ±2 则必红）"
+            );
+            if magic_id == 31 {
+                assert!(
+                    shield,
+                    "不 snap ⇒ 在界 ⇒ 技能 31 `MagBubbleDefenceUp` 作用于施法者自身 ⇒ MagicShield 落地"
+                );
+            } else {
+                assert!(
+                    !defence,
+                    "[魔号 {magic_id}] 不 snap ⇒ 中心格 = 点击格 (18,10)（无人）                     ⇒ 目标 (20,10) 不得获任何防御系 buff"
+                );
+            }
         }
     }
 
@@ -21579,7 +21784,7 @@ mod tests {
         );
     }
 
-    /// **J5**：距离门（`MagicManager.cs:152-155`）越界 ⇒ **0 帧**。两个子类：
+    /// **J5**：距离门（`MagicManager.cs:155`）越界 ⇒ **0 帧**。两个子类：
     /// ① 原始点击越界（(20,10)，|Δx|=10 > 8）；② **snap 后**越界（点击 (18,10) 在界、目标实体在
     /// (19,10) 邻域内 ⇒ snap 成 (19,10) ⇒ |Δx|=9 > 8）——口径 = A-5 修好的「门读 snap 后坐标」。
     ///

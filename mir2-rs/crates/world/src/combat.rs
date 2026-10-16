@@ -582,7 +582,7 @@ pub fn paralysis_from_ring_shapes(shapes: impl IntoIterator<Item = Option<u8>>) 
 /// ——**方向说反了**，本处更正。逐条核实：
 ///
 /// ① **`PlayObject.Attack.cs:755-817` 那三段是玩家目标路径上的死代码**（省略**不产生偏差**）：
-///    该 `IsProperFriend` override 先 `bool result = IsProperIsFriend(targetObject)`（`:756`），
+///    该 `IsProperFriend` override 先 `bool result = IsProperIsFriend(targetObject)`（`:759`），
 ///    其 `:757` 判 `targetObject.Race == ActorRace.Play`，紧接 **`:760 if (targetObject.Race <
 ///    ActorRace.Animal) return result;`**；而 `ActorRace.Play = 0`（`src/OpenMir2/Enums/Race.cs:8`）、
 ///    `Animal = 50`（同文件 `:24`）⇒ `0 < 50` **恒成立** ⇒ `:764-817` 的
