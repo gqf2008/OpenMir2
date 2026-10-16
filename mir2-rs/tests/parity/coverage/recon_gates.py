@@ -21,6 +21,11 @@
 「无卡」= `coverage/cards.json` 的 `assignments` 未给该缺口指派一个存在于 `known_cards` 的卡 id。
 「Rust 实现」= 在 Rust 语料（去注释/去字符串字面量后）里出现该标识符（派发）
               / **同一 src 文件里同时出现文件名字面量与「真装载调用」标记**（内容，见下）。
+「出站生产发射点」（派发·出站，卡 `openmir2-gate-outbound-producer-dimension`）= 出站 ident 只有在该
+  ident 的**生产发射点**存在时才算「已实现」：ident 整词出现在（去注释/去字符串的）生产行里，且该行落在
+  **生产活跃函数**内（从任一 `*/bins/*/src` 的 `main` 经名字调用图可达；`#[cfg(test)]` 模块整体剔除）。
+  ⇒ **编码器函数存在 / 常量定义 / 名表 / doc 注释都不算**；编码器自身的**未被调用**定义也不算——修掉
+  红名单 v2 §4.1「编码器一落地，无论有无生产发射都计 implemented」这一整层假绿。
 「可达」（派发·出站） = 触发该 SM 帧的**任一 `RM_*`** 在 `src/**/*.cs` 里有**生产者用法**（见下）
   ⇒ 可达。`RM_*` 全仓**每一处**出现都只是 `const` 定义或 `case` 标签（即确证无任何生产者）⇒ oracle
   死支 ⇒ 该帧永不发出 ⇒ 不判 RED（豁免 `n/a-unreachable`）。这修掉 SM_41/SM_43/SM_PASSWORDSTATUS
@@ -839,6 +844,130 @@ def outbound_reachability(rm_users, rm_producers) -> bool:
     return any(r in rm_producers for r in rms)
 
 
+# ---------------------------------------------------------------------------
+# 出站「生产发射点」判据（卡 `openmir2-gate-outbound-producer-dimension`，tier=L）
+#
+# 旧口径：出站 ident 只要常量在语料里出现（`corpus.find(sm)`）即计 implemented
+#   ⇒ 编码器函数一落地就绿，掩盖「有编码器、无发射」整层（红名单 v2 §4.1）。
+# 新口径：ident 只有在**生产发射点**存在时才算 implemented。
+#   发射点 = 该 ident 的（去注释/去字符串）生产出现，且**所在函数生产活跃**
+#   （从任一 `*/bins/*/src` 的 `main` 经名字调用图可达）。编码器自身的**未被调用**定义
+#   不活跃 ⇒ 不是发射点；被调用的包装 / 内联发射（`move_frame`、`shop.rs` 内联）算。
+# 机判、无手工黑名单：不识别「哪些函数是编码器」，只问「这行是否在生产活跃函数里」。
+# ---------------------------------------------------------------------------
+_RE_FN_DEF = re.compile(r"(?<![A-Za-z0-9_])fn\s+([A-Za-z0-9_]+)")
+_RE_CALL_TOK = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+
+
+def _brace_delta(s):
+    return s.count("{") - s.count("}")
+
+
+def _cfg_test_regions(lines):
+    """{path: [(start,end)]}（1-based 闭区间）：`#[cfg(test)]` 模块体范围（整块剔除用）。"""
+    regions = {}
+    for p, ls in lines.items():
+        regs = []
+        for i, l in enumerate(ls):
+            if "#[cfg(test)]" not in l:
+                continue
+            j = i
+            while j < len(ls) and "mod " not in ls[j] and "{" not in ls[j]:
+                j += 1
+            depth, started, k = 0, False, j
+            while k < len(ls):
+                depth += _brace_delta(ls[k])
+                if "{" in ls[k]:
+                    started = True
+                if started and depth <= 0:
+                    break
+                k += 1
+            regs.append((i + 1, k + 1))
+        regions[p] = regs
+    return regions
+
+
+def _function_spans(lines, test_regions):
+    """[{file,line,name,start,end}]（start/end 0-based 下标、闭区间）：生产函数体范围
+    （落在 `#[cfg(test)]` 区内的函数整体剔除）。"""
+    spans = []
+    for p, ls in lines.items():
+        regs = test_regions.get(p, [])
+        for i, l in enumerate(ls):
+            m = _RE_FN_DEF.search(l)
+            if not m:
+                continue
+            if any(a <= i + 1 <= b for a, b in regs):
+                continue
+            depth, started, k = 0, False, i
+            while k < len(ls):
+                depth += _brace_delta(ls[k])
+                if "{" in ls[k]:
+                    started = True
+                if started and depth <= 0:
+                    break
+                k += 1
+                if k - i > 20000:
+                    break
+            spans.append(dict(file=p, line=i + 1, name=m.group(1), start=i, end=k))
+    return spans
+
+
+def production_live_functions(corpus):
+    """返回 (live, spans)：live = 从任一 `*/bins/*/src` 的 `main` 经名字调用图可达的函数名集合
+    （测试模块不参与）；spans = [`_function_spans`] 结果，供 [`outbound_emit_at`] 复用。
+
+    调用图口径（**名字级、宽进**）：函数体（去注释/去字符串）里出现 `NAME(` 且 NAME 是已知函数名
+    ⇒ 一条 F→NAME 边。对可达性只作**过近似**（同名方法会合并）；实测该近似与更严的「唯一名 +
+    显式 `::` 限定」口径**不改变任一 ident 的出站判定**（见 selftest 对照牙）。
+    """
+    lines = _file_code_lines(corpus)
+    test_regions = _cfg_test_regions(lines)
+    spans = _function_spans(lines, test_regions)
+    names = {s["name"] for s in spans}
+    edges = {}
+    for s in spans:
+        body = NL.join(lines[s["file"]][s["start"]:s["end"] + 1])
+        callees = {nm for nm in _RE_CALL_TOK.findall(body) if nm in names and nm != s["name"]}
+        edges.setdefault(s["name"], set()).update(callees)
+    roots = {s["name"] for s in spans if s["name"] == "main" and "bins" in Path(s["file"]).parts}
+    live = set(roots)
+    work = list(roots)
+    while work:
+        cur = work.pop()
+        for c in edges.get(cur, ()):
+            if c not in live:
+                live.add(c)
+                work.append(c)
+    return live, spans
+
+
+def outbound_emit_at(corpus, ident, live=None, spans=None):
+    """ident 的**生产发射点** `(path, line)`，无则 `None`。
+
+    发射点 = ident 整词出现在（去注释/去字符串的）生产行里，且该行**落在某个生产活跃函数内**
+    （`live`，由 [`production_live_functions`] 从 `bins/*` 的 `main` 可达而得）。函数外的出现
+    （顶层 `const`/`use`/静态表）与不活跃函数内的出现（如**未被调用**的编码器自身定义）都不算。
+    """
+    if live is None or spans is None:
+        live, spans = production_live_functions(corpus)
+    pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(ident) + r"(?![A-Za-z0-9_])")
+    by_file = {}
+    for sp in spans:
+        by_file.setdefault(sp["file"], []).append(sp)
+    for path, no, code in corpus.code:
+        if not pat.search(code):
+            continue
+        hit = None
+        for sp in by_file.get(path, ()):
+            if sp["start"] + 1 <= no <= sp["end"] + 1:
+                if hit is None or (sp["end"] - sp["start"]) < (hit["end"] - hit["start"]):
+                    hit = sp
+        if hit is not None and hit["name"] in live:
+            return (path, no)
+    return None
+
+
 def build_dispatch_rows(repo: Path, cards: dict):
     oracle = repo / ORACLE_DISPATCH
     corpus = RustCorpus(rust_source_dirs(repo, exclude=DISPATCH_EXCLUDE))
@@ -847,6 +976,7 @@ def build_dispatch_rows(repo: Path, cards: dict):
 
     rows = []
     arms = extract_cm_arms(corpus)
+    live, spans = production_live_functions(corpus)
     for name, line in sorted(cm.items()):
         rust = corpus.find(name)
         noop = inbound_arm_noop(corpus, name, arms)
@@ -860,13 +990,13 @@ def build_dispatch_rows(repo: Path, cards: dict):
                          noop=("noop" if noop else "-"),
                          emitted_by="-"))
     for sm in sorted(sm_all):
-        rust = corpus.find(sm)
+        emit = outbound_emit_at(corpus, sm, live, spans)
         rm_users = sorted(r for r, s in rm_groups.items() if sm in s)
         reach = outbound_reachability(rm_users, rm_producers)
         rows.append(dict(bucket="outbound", key="outbound:" + sm, name=sm,
-                         oracle="(RM→SM)", rust=("yes" if rust else "no"),
-                         rust_at=(f"{Path(rust[0]).name}:{rust[1]}" if rust else "-"),
-                         status=dispatch_item_status("outbound", sm, bool(rust), cards, reachable=reach),
+                         oracle="(RM→SM)", rust=("yes" if emit else "no"),
+                         rust_at=(f"{Path(emit[0]).name}:{emit[1]}" if emit else "-"),
+                         status=dispatch_item_status("outbound", sm, bool(emit), cards, reachable=reach),
                          card=card_for(cards, "outbound:" + sm),
                          reach=("yes" if reach else ("no" if reach is False else "-")),
                          emitted_by=",".join(rm_users[:4]) + ("…" if len(rm_users) > 4 else "")))
@@ -1175,6 +1305,54 @@ def selftest():
           _st_dyn.get("SM_ZZHIT") == "RED")
     check("teeth：确证死支帧 SM_ZZDEAD2 ⇒ n/a-unreachable（不红）",
           _st_dyn.get("SM_ZZDEAD2") == "n/a-unreachable")
+
+    # ---- 组0（卡 openmir2-gate-outbound-producer-dimension）：出站「生产发射点」判据 ----
+    # 旧口径（常量出现即 implemented）会把「有编码器、无生产调用」的 orphan 判绿；新判据要求
+    # ident 出现在**生产活跃函数**内。下面两向牙：orphan 必非 implemented、接上发射点必绿。
+    _tmp_emit = Path(tempfile.mkdtemp(prefix="recon-emit-"))
+    try:
+        (_tmp_emit / "src/M2Server/Player").mkdir(parents=True)
+        (_tmp_emit / ORACLE_DISPATCH).write_text(NL.join([
+            "switch (w) {",
+            "  case Messages.RM_ZZORPHAN:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZORPHAN, 0, 0, 0, 0); break;",
+            "  case Messages.RM_ZZWIRED:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZWIRED, 0, 0, 0, 0); break;",
+            "}",
+        ]) + NL, encoding="utf-8")
+        (_tmp_emit / "src/M2Server/Other.cs").write_text(
+            "p.SendMsg(Messages.RM_ZZORPHAN, 0, 0, 0, 0);" + NL
+            + "p.SendMsg(Messages.RM_ZZWIRED, 0, 0, 0, 0);" + NL, encoding="utf-8")
+        _esrc = _tmp_emit / "mir2-rs/bins/game-svr/src"
+        _esrc.mkdir(parents=True, exist_ok=True)
+        (_esrc / "main.rs").write_text(NL.join([
+            "async fn main() { produce(); }",
+            "fn produce() { let _ = sm_wired(1); }",
+        ]) + NL, encoding="utf-8")
+        (_esrc / "enc.rs").write_text(NL.join([
+            "pub const SM_ZZORPHAN: u16 = 9001;",
+            "pub const SM_ZZWIRED: u16 = 9002;",
+            "pub fn sm_orphan(a: i32) -> Vec<u8> { let _ = SM_ZZORPHAN; Vec::new() }",
+            "pub fn sm_wired(a: i32) -> Vec<u8> { let _ = SM_ZZWIRED; Vec::new() }",
+            "#[cfg(test)]",
+            "mod tests {",
+            "    #[test]",
+            "    fn t() { let _ = sm_orphan(0); }",
+            "}",
+        ]) + NL, encoding="utf-8")
+        _ecorpus = RustCorpus(rust_source_dirs(_tmp_emit, exclude=DISPATCH_EXCLUDE))
+        _rows_e, _, _, _, _ = build_dispatch_rows(_tmp_emit, {"known_cards": [], "assignments": {}})
+        _st_e = {r["name"]: (r["status"], r["rust"]) for r in _rows_e}
+        _old_orphan = _ecorpus.find("SM_ZZORPHAN")   # 旧口径探针：常量出现 ⇒ 旧判据会判绿
+        _new_orphan = outbound_emit_at(_ecorpus, "SM_ZZORPHAN")
+    finally:
+        shutil.rmtree(_tmp_emit, ignore_errors=True)
+    check("teeth（组0）：编码器有定义+常量，但生产路径无调用（仅测试调用）⇒ 非 implemented（RED）",
+          _st_e.get("SM_ZZORPHAN") == ("RED", "no"))
+    check("teeth（组0）反向对照：该 orphan 的常量**确实出现**（旧口径会误判 implemented ⇒ 改坏必红）",
+          bool(_old_orphan) and _new_orphan is None)
+    check("teeth（组0）：接上生产发射点（main→produce→sm_wired）⇒ implemented",
+          _st_e.get("SM_ZZWIRED") == ("implemented", "yes"))
 
     # ---- content: 「真装载调用」判据（收紧旧「文件名串出现」口径；片 D1-① 加死注册表牙）----
     _tmp_ct = Path(tempfile.mkdtemp(prefix="recon-content-"))
@@ -1490,6 +1668,112 @@ def cmd_mutate(args):
             "RM_ZZDEAD2" not in _prod_m4d and _st_m4d.get("SM_ZZDEAD2") == "n/a-unreachable")
     finally:
         shutil.rmtree(_tmp_m4d, ignore_errors=True)
+
+    # M6 —— 组0：出站「生产发射点」判据（卡 openmir2-gate-outbound-producer-dimension）。
+    #   同一合成输入做**两向**变异：① 编码器有定义+常量但无生产调用 ⇒ 非 implemented（RED）；
+    #   ② 接上一个生产调用点（main→…→encoder）⇒ implemented。旧口径（常量出现即绿）在 ① 会失败。
+    _tmp_m6 = Path(tempfile.mkdtemp(prefix="recon-emit-mut-"))
+    _m6_common = dict(
+        dispatch=[
+            "switch (w) {",
+            "  case Messages.RM_ZZORPHAN:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZORPHAN, 0, 0, 0, 0); break;",
+            "  case Messages.RM_ZZWIRED:",
+            "    ClientMsg = Messages.MakeMessage(Messages.SM_ZZWIRED, 0, 0, 0, 0); break;",
+            "}",
+        ],
+        other="p.SendMsg(Messages.RM_ZZORPHAN, 0, 0, 0, 0);" + NL
+              + "p.SendMsg(Messages.RM_ZZWIRED, 0, 0, 0, 0);" + NL,
+        enc=[
+            "pub const SM_ZZORPHAN: u16 = 9001;",
+            "pub const SM_ZZWIRED: u16 = 9002;",
+            "pub fn sm_orphan(a: i32) -> Vec<u8> { let _ = SM_ZZORPHAN; Vec::new() }",
+            "pub fn sm_wired(a: i32) -> Vec<u8> { let _ = SM_ZZWIRED; Vec::new() }",
+            "#[cfg(test)]",
+            "mod tests {",
+            "    #[test]",
+            "    fn t() { let _ = sm_orphan(0); }",
+            "}",
+        ],
+    )
+
+    def _m6_build(main_body):
+        import shutil as _sh
+        _sh.rmtree(_tmp_m6, ignore_errors=True)
+        (_tmp_m6 / "src/M2Server/Player").mkdir(parents=True)
+        (_tmp_m6 / ORACLE_DISPATCH).write_text(NL.join(_m6_common["dispatch"]) + NL, encoding="utf-8")
+        (_tmp_m6 / "src/M2Server/Other.cs").write_text(_m6_common["other"], encoding="utf-8")
+        _s = _tmp_m6 / "mir2-rs/bins/game-svr/src"
+        _s.mkdir(parents=True, exist_ok=True)
+        (_s / "main.rs").write_text(NL.join(main_body) + NL, encoding="utf-8")
+        (_s / "enc.rs").write_text(NL.join(_m6_common["enc"]) + NL, encoding="utf-8")
+        _r, _, _, _, _ = build_dispatch_rows(_tmp_m6, {"known_cards": [], "assignments": {}})
+        return {x["name"]: (x["status"], x["rust"]) for x in _r}
+
+    try:
+        # ① 生产路径无调用（编码器只被测试调用）⇒ 非 implemented；常量确实出现（旧口径会绿）
+        _st_m6a = _m6_build(["async fn main() { let _ = 0; }"])
+        _c_m6 = RustCorpus(rust_source_dirs(_tmp_m6, exclude=DISPATCH_EXCLUDE))
+        add("M6a 编码器有定义+常量、生产路径无调用 ⇒ 非 implemented（RED，旧口径假绿）",
+            _st_m6a.get("SM_ZZORPHAN") == ("RED", "no") and bool(_c_m6.find("SM_ZZORPHAN")))
+        # ② 接上生产发射点 ⇒ implemented（绿）
+        _st_m6b = _m6_build(["async fn main() { produce(); }",
+                             "fn produce() { let _ = sm_orphan(1); }"])
+        add("M6b 接上生产发射点（main→produce→sm_orphan）⇒ implemented",
+            _st_m6b.get("SM_ZZORPHAN") == ("implemented", "yes"))
+    finally:
+        shutil.rmtree(_tmp_m6, ignore_errors=True)
+
+    # M6c —— 真语料回归：报告 §3 的 30 个 orphan ident 必须**全无生产发射点**（旧口径全绿）。
+    _rep_corpus = RustCorpus(rust_source_dirs(repo, exclude=DISPATCH_EXCLUDE))
+    _live_w, _spans_w = production_live_functions(_rep_corpus)
+    _r3 = ["SM_DISAPPEAR", "SM_SPACEMOVE_HIDE", "SM_SPACEMOVE_HIDE2", "SM_SKELETON", "SM_ALIVE",
+           "SM_DIGUP", "SM_DIGDOWN", "SM_FLYAXE", "SM_LIGHTING", "SM_CLOSEHEALTH", "SM_OPENHEALTH",
+           "SM_INSTANCEHEALGUAGE", "SM_CHARSTATUSCHANGED", "SM_BREAKWEAPON", "SM_LAMPCHANGEDURA",
+           "SM_MOVEMESSAGE", "SM_HIDEEVENT", "SM_SHOWEVENT", "SM_OPENDOOR_OK", "SM_CLOSEDOOR",
+           "SM_WHISPER", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL", "SM_QUERYYBSELL", "SM_716",
+           "SM_RECONNECT", "SM_CHANGEFACE", "SM_MAGICFIRE_FAIL", "SM_PLAYDICE", "SM_ITEMSHOW"]
+    _still_green = [sm for sm in _r3 if outbound_emit_at(_rep_corpus, sm, _live_w, _spans_w) is not None]
+    add("M6c 真语料：报告 §3 全 30 个 orphan ident 均无生产发射点（漏判=%s）" % (_still_green or "无"),
+        not _still_green)
+
+    # M6d —— 可达性口径鲁棒性（防过近似制造假绿）：名字级宽进图 vs「唯一名 + 显式 `::` 限定」图，
+    #         在真语料上必须给出**相同的 outbound 判定集**（同一组非 implemented）。
+    def _orphans_under(strict):
+        _lines = _file_code_lines(_rep_corpus)
+        _tr = _cfg_test_regions(_lines)
+        _sp = _function_spans(_lines, _tr)
+        _cnt = {}
+        for x in _sp:
+            _cnt[x["name"]] = _cnt.get(x["name"], 0) + 1
+        _uniq = {n for n, c in _cnt.items() if c == 1}
+        _re_qual = re.compile(r"::\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+        _ed = {}
+        for x in _sp:
+            _body = NL.join(_lines[x["file"]][x["start"]:x["end"] + 1])
+            _q = set(_re_qual.findall(_body))
+            for nm in _RE_CALL_TOK.findall(_body):
+                if strict and not (nm in _uniq or nm in _q):
+                    continue
+                if nm != x["name"]:
+                    _ed.setdefault(x["name"], set()).add(nm)
+        _roots = {x["name"] for x in _sp if x["name"] == "main" and "bins" in Path(x["file"]).parts}
+        _lv = set(_roots)
+        _wk = list(_roots)
+        while _wk:
+            _cur = _wk.pop()
+            for _c in _ed.get(_cur, ()):
+                if _c not in _lv:
+                    _lv.add(_c); _wk.append(_c)
+        _smalls = parse_dispatch(read_text(repo / ORACLE_DISPATCH))[2]
+        return {sm for sm in _smalls
+                if outbound_emit_at(_rep_corpus, sm, _lv, _sp) is None}
+
+    _orph_wide = _orphans_under(False)
+    _orph_strict = _orphans_under(True)
+    add("M6d 真语料：宽进图与「唯一名+`::`」图判定的非-implemented 集相同（差=%s）"
+        % (sorted(_orph_wide ^ _orph_strict) or "无"),
+        _orph_wide == _orph_strict)
 
     # M5 —— 内容门「真装载调用」收紧：文件名串出现但无装载调用 ⇒ 必红（旧「文件名串出现」口径会假绿）；
     #        且装载点必须被 bins 接线（死注册表不算实现，片 D1-①）。
