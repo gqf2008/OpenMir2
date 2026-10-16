@@ -19,8 +19,18 @@
   dispatch: oracle 有 case ∧ **该帧可达** ∧ Rust 无派发臂/编码器 ∧ 无卡   ⇒ RED
 
 「无卡」= `coverage/cards.json` 的 `assignments` 未给该缺口指派一个存在于 `known_cards` 的卡 id。
-「Rust 实现」= 在 Rust 语料（去注释/去字符串字面量后）里出现该标识符（派发）
-              / **同一 src 文件里同时出现文件名字面量与「真装载调用」标记**（内容，见下）。
+「Rust 实现」= 内容：**同一 src 文件里同时出现文件名字面量与「真装载调用」标记**（内容，见下）；
+              派发：见下两条「生产发射点 / 生产派发点」判据（**标识符出现本身不再算实现**）。
+「入站生产派发点」（派发·入站，卡 `openmir2-gate-inbound-producer-dimension`，tier=L）= 入站 ident 只有在该
+  ident 的**生产派发点**存在时才算「已实现」：ident 在（去注释/去字符串的）代码里充当**派发选择子**
+  —— ① match 臂头/联合臂成员（`…::CM_X =>`、`…::CM_X |`、`| …::CM_X`）或 ② 判等选择子
+  （`ident == …::CM_X` / `…::CM_X == ident` / `!=`）—— 且**该行落在生产活跃函数内**
+  （函数集由 [`production_live_functions`] 从任一 `*/bins/*/src` 的 `main` 可达而得；`#[cfg(test)]` 剔除）。
+  ⇒ 顶层 `const` 定义（`pub const CM_PICKUP: u16 = …`）、名表数组、`#[cfg(test)]` 内的臂、
+  **未被调用**函数里的臂都不算 —— 修掉旧口径「标识符在去注释代码里出现即 implemented」这一整层假绿。
+  为何不止认 ①（`=>` 臂）？语料里多条入站帧经 **if-else 判等链**派发（`main.rs:3084`
+  `if cmd.ident == mir2_protocol::messages::CM_QUERYUSERNAME {`，同形见 `main.rs:3106`/`3110`/`7791`/`7801`）；
+  只认臂头会把它们全判成假 RED（实测 16 条，见 selftest 组1）。
 「出站生产发射点」（派发·出站，卡 `openmir2-gate-outbound-producer-dimension`）= 出站 ident 只有在该
   ident 的**生产发射点**存在时才算「已实现」：ident 整词出现在（去注释/去字符串的）生产行里，且该行落在
   **生产活跃函数**内（从任一 `*/bins/*/src` 的 `main` 经名字调用图可达；`#[cfg(test)]` 模块整体剔除）。
@@ -599,6 +609,23 @@ def content_rust_implemented(corpus, filename: str) -> bool:
     return False
 
 
+def content_card_display(spec: dict, key: str, cards: dict, status: str):
+    """内容行 `card` 列（**人读展示**；不参与判据）。
+
+    生效卡（`card_for` 解析出且在看板上存在）优先。`spec["card"]` 只是 CONTENT_MAP 里的**建议卡**；
+    行为 `RED` 时它**未生效**（RED 的定义即「无卡覆盖」），故**不显示**它 —— 否则读者会误以为
+    「RED 行已有卡」（对抗复核 J1-②）。RED 行改为显式标注 `(!)spec卡未生效:<id>`；无建议卡则为 `None`。
+    非 RED 行保持原口径（显示解析结果，缺则显示 CONTENT_MAP 建议卡）。
+    """
+    resolved = card_for(cards, key)
+    if resolved:
+        return resolved
+    spec_card = spec.get("card")
+    if status == "RED" and spec_card:
+        return "(!)spec卡未生效:" + spec_card
+    return spec_card
+
+
 def content_row_status(spec: dict, deployed: bool, rust: bool, cards: dict, empty: bool = False,
                        dead: bool = False, key: str = None) -> str:
     kind = spec.get("kind")
@@ -676,7 +703,7 @@ def _make_content_row(repo, envir_dir, notice_dir, corpus, cards, spec, oracle_a
     return dict(key=key, oracle=oracle_anchor, file=name or "-", kind=kind,
                 deployed=("yes" if deployed else "no") + ("(empty)" if empty else ""),
                 rust=("yes" if rust else "no"), status=status,
-                card=(card_for(cards, key) or spec.get("card")),
+                card=content_card_display(spec, key, cards, status),
                 anchor=spec.get("anchor", ""))
 
 
@@ -762,17 +789,17 @@ def _file_code_lines(corpus):
     return out
 
 
-def extract_cm_arms(corpus):
-    """返回 {CM_name: [arm_body_text, …]}：从 Rust 语料抽取 `messages::CM_X => { … }` 匹配臂体。"""
-    arms = {}
-    for _p, lines in _file_code_lines(corpus).items():
+def _cm_arms_with_site(corpus):
+    """{CM_name: [(path, arm_head_line, body_text), …]}：`messages::CM_X => { … }` 臂体 + 臂头位置。"""
+    out = {}
+    for path, lines in _file_code_lines(corpus).items():
         for i, line in enumerate(lines):
             m = RE_ARM_HEAD.match(line)
             if not m:
                 continue
             name = m.group(1)
             if "{" not in line:
-                arms.setdefault(name, []).append(line.strip())
+                out.setdefault(name, []).append((path, i + 1, line.strip()))
                 continue
             depth, started, body = 0, False, []
             for j in range(i, min(i + 200, len(lines))):
@@ -782,8 +809,36 @@ def extract_cm_arms(corpus):
                     started = True
                 if started and depth <= 0:
                     break
-            arms.setdefault(name, []).append(" ".join(body))
-    return arms
+            out.setdefault(name, []).append((path, i + 1, " ".join(body)))
+    return out
+
+
+def extract_cm_arms(corpus):
+    """返回 {CM_name: [arm_body_text, …]}：从 Rust 语料抽取 `messages::CM_X => { … }` 匹配臂体。"""
+    return {n: [b for _p, _l, b in sites] for n, sites in _cm_arms_with_site(corpus).items()}
+
+
+def production_cm_arms(corpus, live=None, spans=None):
+    """返回 {CM_name: [arm_body_text, …]}：**仅落在生产活跃函数内**的 `messages::CM_X =>` 臂体。
+
+    入站 no-op 判据（片 D1-②）只该看**生产臂**：`#[cfg(test)]` 内的臂 / **未被调用**函数里的臂
+    不是生产行为（旧写法把全部臂一起喂进 noop 形态判据）。
+    """
+    if live is None or spans is None:
+        live, spans = production_live_functions(corpus)
+    by_file = {}
+    for sp in spans:
+        by_file.setdefault(sp["file"], []).append(sp)
+    out = {}
+    for name, sites in _cm_arms_with_site(corpus).items():
+        keep = []
+        for path, line, body in sites:
+            hit = _live_span_for(by_file, path, line)
+            if hit is not None and hit["name"] in live:
+                keep.append(body)
+        if keep:
+            out[name] = keep
+    return out
 
 
 def inbound_arm_noop(corpus, name: str, arms: dict = None) -> bool:
@@ -942,6 +997,19 @@ def production_live_functions(corpus):
     return live, spans
 
 
+def _live_span_for(spans_by_file, path, line_no):
+    """覆盖 (path, 1-based `line_no`) 的**最短**生产函数 span；`None` = 该行不在任何生产活跃函数内。
+
+    最短优先（同 `outbound_emit_at` 原口径）：闭包 / 嵌套 `fn` 时取内层。
+    """
+    hit = None
+    for sp in spans_by_file.get(path, ()):
+        if sp["start"] + 1 <= line_no <= sp["end"] + 1:
+            if hit is None or (sp["end"] - sp["start"]) < (hit["end"] - hit["start"]):
+                hit = sp
+    return hit
+
+
 def outbound_emit_at(corpus, ident, live=None, spans=None):
     """ident 的**生产发射点** `(path, line)`，无则 `None`。
 
@@ -958,11 +1026,56 @@ def outbound_emit_at(corpus, ident, live=None, spans=None):
     for path, no, code in corpus.code:
         if not pat.search(code):
             continue
-        hit = None
-        for sp in by_file.get(path, ()):
-            if sp["start"] + 1 <= no <= sp["end"] + 1:
-                if hit is None or (sp["end"] - sp["start"]) < (hit["end"] - hit["start"]):
-                    hit = sp
+        hit = _live_span_for(by_file, path, no)
+        if hit is not None and hit["name"] in live:
+            return (path, no)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 入站「生产派发点」判据（卡 `openmir2-gate-inbound-producer-dimension`，tier=L）
+#
+# 旧口径：入站 ident 只要在语料（去注释）里出现即 implemented（`corpus.find`）⇒ 顶层 `const` 定义
+#   （`pub const CM_PICKUP: u16 = …`）、名表数组、`#[cfg(test)]` 测试臂都算，掩盖「无生产派发」整层。
+# 新口径（与出站「生产发射点」**对称**复用 `production_live_functions` 那套）：ident 必须充当**派发
+#   选择子**且该行**落在生产活跃函数内**。
+#   派发选择子 = ① match 臂头/联合臂成员（`…::CM_X =>`、`…::CM_X |`、`| …::CM_X`）
+#                ② 判等选择子（`ident == …::CM_X` / `…::CM_X == ident` / `!=`）。
+#   ⇒ 常量定义 / 名表 / 测试代码 / **未接线**函数里的臂都不算。
+# 为何不止 ①：语料里多条入站帧经 **if-else 判等链**派发（`main.rs:3084`/`3106`/`3110`、`7791`、`7801`，
+#   以及 `bag.rs`/`ground.rs`/`chat.rs` 常量 + `magicwire.rs` 判等接缝），只认 `=>` 臂会把它们全判成
+#   假 RED（实测 16 条；selftest 有「if-else 判等派发 ⇒ implemented」牙守住）。判等选择子同样要求
+#   「生产活跃函数内的行」，故**不退回**「任意出现」。
+# ---------------------------------------------------------------------------
+_RE_ARM_PATH = r"(?:[A-Za-z_][A-Za-z0-9_]*::)*"
+
+
+def _inbound_dispatch_patterns(name):
+    """入站 ident 的**派发选择子**行级正则 `(arm, eq)`（整词由边界 / 行首锚定保证）。"""
+    ident = re.escape(name)
+    arm = re.compile(r"^\s*(?:\|\s*)?" + _RE_ARM_PATH + ident + r"\s*(?:\||=>)")
+    eq = re.compile(r"(?:(?:==|!=)\s*" + _RE_ARM_PATH + ident + r"(?![A-Za-z0-9_])"
+                    r"|(?<![A-Za-z0-9_])" + _RE_ARM_PATH + ident + r"\s*(?:==|!=))")
+    return arm, eq
+
+
+def inbound_dispatch_at(corpus, name, live=None, spans=None):
+    """入站 ident 的**生产派发点** `(path, line)`，无则 `None`。
+
+    派发点 = ident 在（去注释/去字符串的）生产行里充当**派发选择子**（见上「入站生产派发点」），
+    且该行**落在生产活跃函数内**（`live`，由 [`production_live_functions`] 从 `bins/*` 的 `main`
+    可达而得）。顶层 `const` 定义、名表数组、`#[cfg(test)]` 内的臂、**未被调用**函数里的臂都不算。
+    """
+    if live is None or spans is None:
+        live, spans = production_live_functions(corpus)
+    by_file = {}
+    for sp in spans:
+        by_file.setdefault(sp["file"], []).append(sp)
+    arm, eq = _inbound_dispatch_patterns(name)
+    for path, no, code in corpus.code:
+        if not (arm.search(code) or eq.search(code)):
+            continue
+        hit = _live_span_for(by_file, path, no)
         if hit is not None and hit["name"] in live:
             return (path, no)
     return None
@@ -975,16 +1088,17 @@ def build_dispatch_rows(repo: Path, cards: dict):
     rm_producers = oracle_rm_producers(repo)
 
     rows = []
-    arms = extract_cm_arms(corpus)
     live, spans = production_live_functions(corpus)
+    # 入站 no-op 只看**生产臂**（测试臂 / 未接线函数里的臂不是生产行为）。
+    prod_arms = production_cm_arms(corpus, live, spans)
     for name, line in sorted(cm.items()):
-        rust = corpus.find(name)
-        noop = inbound_arm_noop(corpus, name, arms)
+        site = inbound_dispatch_at(corpus, name, live, spans)
+        noop = inbound_arm_noop(corpus, name, prod_arms)
         rows.append(dict(bucket="inbound", key="inbound:" + name, name=name,
                          oracle=f"Message.cs:{line}",
-                         rust=("yes" if rust else "no"),
-                         rust_at=(f"{Path(rust[0]).name}:{rust[1]}" if rust else "-"),
-                         status=dispatch_item_status("inbound", name, bool(rust), cards, noop=noop),
+                         rust=("yes" if site else "no"),
+                         rust_at=(f"{Path(site[0]).name}:{site[1]}" if site else "-"),
+                         status=dispatch_item_status("inbound", name, bool(site), cards, noop=noop),
                          card=card_for(cards, "inbound:" + name),
                          reach="-",
                          noop=("noop" if noop else "-"),
@@ -1354,6 +1468,91 @@ def selftest():
     check("teeth（组0）：接上生产发射点（main→produce→sm_wired）⇒ implemented",
           _st_e.get("SM_ZZWIRED") == ("implemented", "yes"))
 
+    # ---- 组1（卡 openmir2-gate-inbound-producer-dimension）：入站「生产派发点」判据 ----
+    # 旧口径（`corpus.find`：标识符在去注释代码里出现即 implemented）会把「只有 const 定义 / 测试臂 /
+    # 非派发引用」的假 ident 判绿；新判据要求 ident 充当**派发选择子**且落在**生产活跃函数**内。
+    # 牙：const-only / 测试臂 / 生产函数内非派发引用 / 不可达函数里的臂 ⇒ 非 implemented；
+    #     接上生产派发臂、或 if-else 判等派发 ⇒ implemented。
+    _tmp_inb = Path(tempfile.mkdtemp(prefix="recon-inbound-"))
+    try:
+        (_tmp_inb / "src/M2Server/Player").mkdir(parents=True)
+        (_tmp_inb / ORACLE_DISPATCH).write_text(NL.join([
+            "switch (processMsg.wIdent)",
+            "{",
+            "  case Messages.CM_ZZCONSTONLY: break;",
+            "  case Messages.CM_ZZTESTONLY: break;",
+            "  case Messages.CM_ZZINLIVEFN: break;",
+            "  case Messages.CM_ZZDEADFN: break;",
+            "  case Messages.CM_ZZARM: break;",
+            "  case Messages.CM_ZZELSEIF: break;",
+            "}",
+        ]) + NL, encoding="utf-8")
+        _isrc = _tmp_inb / "mir2-rs/bins/game-svr/src"
+        _isrc.mkdir(parents=True, exist_ok=True)
+        (_isrc / "main.rs").write_text(NL.join([
+            "async fn main() {",
+            "    dispatch(0);",
+            "    let _c: u16 = CM_ZZINLIVEFN;",
+            "}",
+            "fn dispatch(ident: u16) {",
+            "    match ident {",
+            "        messages::CM_ZZARM => { let _ = 1; }",
+            "        _ => {}",
+            "    }",
+            "    if ident == messages::CM_ZZELSEIF { let _ = 2; }",
+            "}",
+            "fn dead_helper(ident: u16) {",
+            "    match ident {",
+            "        messages::CM_ZZDEADFN => { let _ = 3; }",
+            "        _ => {}",
+            "    }",
+            "}",
+        ]) + NL, encoding="utf-8")
+        (_isrc / "enc.rs").write_text(NL.join([
+            "pub const CM_ZZCONSTONLY: u16 = 1001;",
+            "pub const CM_ZZTESTONLY: u16 = 1002;",
+            "pub const CM_ZZINLIVEFN: u16 = 1003;",
+            "pub const CM_ZZDEADFN: u16 = 1004;",
+            "pub const CM_ZZARM: u16 = 1005;",
+            "pub const CM_ZZELSEIF: u16 = 1006;",
+            "#[cfg(test)]",
+            "mod tests {",
+            "    #[test]",
+            "    fn t() {",
+            "        match 0u16 {",
+            "            messages::CM_ZZTESTONLY => {}",
+            "            _ => {}",
+            "        }",
+            "    }",
+            "}",
+        ]) + NL, encoding="utf-8")
+        _ic = RustCorpus(rust_source_dirs(_tmp_inb, exclude=DISPATCH_EXCLUDE))
+        _rows_i, _, _, _, _ = build_dispatch_rows(_tmp_inb, {"known_cards": [], "assignments": {}})
+        _st_i = {r["name"]: (r["status"], r["rust"]) for r in _rows_i}
+        _old_i = {n: bool(_ic.find(n)) for n in ("CM_ZZCONSTONLY", "CM_ZZTESTONLY",
+                                                "CM_ZZINLIVEFN", "CM_ZZDEADFN")}
+        _new_i = {n: inbound_dispatch_at(_ic, n) for n in ("CM_ZZCONSTONLY", "CM_ZZTESTONLY",
+                                                          "CM_ZZINLIVEFN", "CM_ZZDEADFN")}
+    finally:
+        shutil.rmtree(_tmp_inb, ignore_errors=True)
+    check("teeth（组1）：只有顶层 `const` 定义（无派发点）⇒ 非 implemented（旧口径 `corpus.find` 假绿）",
+          _st_i.get("CM_ZZCONSTONLY") == ("RED", "no") and _old_i["CM_ZZCONSTONLY"]
+          and _new_i["CM_ZZCONSTONLY"] is None)
+    check("teeth（组1）：只有 `#[cfg(test)]` 内的臂（无生产派发点）⇒ 非 implemented（RED）",
+          _st_i.get("CM_ZZTESTONLY") == ("RED", "no") and _old_i["CM_ZZTESTONLY"]
+          and _new_i["CM_ZZTESTONLY"] is None)
+    check("teeth（组1）：生产活跃函数内的**非派发**引用（`let _c = X`）⇒ 非 implemented（不是任意出现）",
+          _st_i.get("CM_ZZINLIVEFN") == ("RED", "no") and _old_i["CM_ZZINLIVEFN"]
+          and _new_i["CM_ZZINLIVEFN"] is None)
+    check("teeth（组1）：臂落在**未被调用**函数内 ⇒ 非 implemented（RED）",
+          _st_i.get("CM_ZZDEADFN") == ("RED", "no") and _old_i["CM_ZZDEADFN"]
+          and _new_i["CM_ZZDEADFN"] is None)
+    check("teeth（组1）反向对照：接上生产派发臂（main→dispatch→match）⇒ implemented",
+          _st_i.get("CM_ZZARM") == ("implemented", "yes"))
+    check("teeth（组1）反向对照：if-else 判等派发（`ident == messages::CM_ZZELSEIF`）⇒ implemented"
+          "（防「只认 `=>` 臂」造成的假 RED）",
+          _st_i.get("CM_ZZELSEIF") == ("implemented", "yes"))
+
     # ---- content: 「真装载调用」判据（收紧旧「文件名串出现」口径；片 D1-① 加死注册表牙）----
     _tmp_ct = Path(tempfile.mkdtemp(prefix="recon-content-"))
     try:
@@ -1516,6 +1715,29 @@ def selftest():
                                  {"known_cards": [], "assignments": {}}, _map_door, "MapManager.cs:182")
     check("teeth（片D1-④ 接线）：整表路径 —— Rust 有 probe_ident ⇒ implemented（不误报）",
           _row_yes["status"] == "implemented")
+
+    # ---- 组2（对抗复核 J1-②）：content 门 `card` 列 —— RED 行不得显示未生效的 spec 卡 ----
+    _tmp_card = Path(tempfile.mkdtemp(prefix="recon-cardcol-"))
+    try:
+        _cen = _tmp_card / "Envir"
+        _cen.mkdir()
+        (_cen / "XList.txt").write_text("a" + NL, encoding="utf-8")
+        _spec_card = dict(kind="envir", file="XList.txt", anchor="x",
+                          probe_ident="add_x_list", card="openmir2-envir-redlist-batch")
+        _r_red = _make_content_row(_tmp_card, _cen, _tmp_card, _StubCorpus(False),
+                                   {"known_cards": ["openmir2-envir-redlist-batch"], "assignments": {}},
+                                   _spec_card, "GameApp.cs:1")
+        _r_trk = _make_content_row(_tmp_card, _cen, _tmp_card, _StubCorpus(False),
+                                   {"known_cards": ["openmir2-envir-redlist-batch"],
+                                    "assignments": {"content:XList.txt": "openmir2-envir-redlist-batch"}},
+                                   _spec_card, "GameApp.cs:1")
+    finally:
+        shutil.rmtree(_tmp_card, ignore_errors=True)
+    check("teeth（组2）：RED 行 card 列**不显示**未生效的 spec 卡（改前会原样显示 ⇒ 读者误以为已有卡）",
+          _r_red["status"] == "RED" and _r_red["card"] != _spec_card["card"]
+          and "(!)spec卡未生效:" in str(_r_red["card"]))
+    check("对照（组2）：tracked 行 card 列显示**生效卡**（解析结果优先）",
+          _r_trk["status"] == "tracked" and _r_trk["card"] == "openmir2-envir-redlist-batch")
 
     # ---- 片 D1-③：cards.json 引用看板上不存在的卡 ⇒ RED + 点名 ----
     _cards_bogus = {"known_cards": ["openmir2-real-zzz", "openmir2-bogus-zzz"],
@@ -1868,6 +2090,70 @@ def cmd_mutate(args):
             bool(_gr5b) and _gr5b[0]["status"] == "implemented")
     finally:
         shutil.rmtree(_tmp_m5, ignore_errors=True)
+
+
+    # M7 —— 入站「生产派发点」判据（卡 openmir2-gate-inbound-producer-dimension）两向变异：
+    #   ① 只有 const 定义 + 测试臂 ⇒ 非 implemented（RED；旧口径 `corpus.find` 假绿）；
+    #   ② 接上生产派发臂 ⇒ implemented，且 const-only 项仍非 implemented。
+    _tmp_m7 = Path(tempfile.mkdtemp(prefix="recon-inbound-mut-"))
+    try:
+        (_tmp_m7 / "src/M2Server/Player").mkdir(parents=True)
+        (_tmp_m7 / ORACLE_DISPATCH).write_text(NL.join([
+            "switch (w) {",
+            "  case Messages.CM_ZZINBCONST: break;",
+            "  case Messages.CM_ZZINBARM: break;",
+            "}",
+        ]) + NL, encoding="utf-8")
+        _s7 = _tmp_m7 / "mir2-rs/bins/game-svr/src"
+        _s7.mkdir(parents=True, exist_ok=True)
+        (_s7 / "enc.rs").write_text(NL.join([
+            "pub const CM_ZZINBCONST: u16 = 1001;",
+            "pub const CM_ZZINBARM: u16 = 1002;",
+            "#[cfg(test)]",
+            "mod tests {",
+            "    #[test]",
+            "    fn t() { match 0u16 { messages::CM_ZZINBCONST => {} _ => {} } }",
+            "}",
+        ]) + NL, encoding="utf-8")
+        (_s7 / "main.rs").write_text("async fn main() { let _ = 0; }" + NL, encoding="utf-8")
+        _r7a, _, _, _, _ = build_dispatch_rows(_tmp_m7, {"known_cards": [], "assignments": {}})
+        _st7a = {r["name"]: (r["status"], r["rust"]) for r in _r7a}
+        _c7 = RustCorpus(rust_source_dirs(_tmp_m7, exclude=DISPATCH_EXCLUDE))
+        add("M7a 入站 ident 只有 const 定义 + 测试臂 ⇒ 非 implemented（RED，旧口径假绿）",
+            _st7a.get("CM_ZZINBCONST") == ("RED", "no") and bool(_c7.find("CM_ZZINBCONST")))
+        add("M7b 对照：该 ident 的**生产派发点**确实不存在（判据两向，改坏必红）",
+            inbound_dispatch_at(_c7, "CM_ZZINBCONST") is None)
+        (_s7 / "main.rs").write_text(NL.join([
+            "async fn main() { dispatch(0); }",
+            "fn dispatch(ident: u16) {",
+            "    match ident {",
+            "        messages::CM_ZZINBARM => { let _ = 1; }",
+            "        _ => {}",
+            "    }",
+            "}",
+        ]) + NL, encoding="utf-8")
+        _r7b, _, _, _, _ = build_dispatch_rows(_tmp_m7, {"known_cards": [], "assignments": {}})
+        _st7b = {r["name"]: (r["status"], r["rust"]) for r in _r7b}
+        add("M7c 接上生产派发臂（main→dispatch→match）⇒ CM_ZZINBARM implemented",
+            _st7b.get("CM_ZZINBARM") == ("implemented", "yes"))
+        add("M7d 接线后 CM_ZZINBCONST 仍非 implemented（const/测试不算派发）",
+            _st7b.get("CM_ZZINBCONST") == ("RED", "no"))
+    finally:
+        shutil.rmtree(_tmp_m7, ignore_errors=True)
+
+    # M8 —— content 门 `card` 列（对抗复核 J1-②）：撤卡造 RED ⇒ 不再显示未生效 spec 卡；有卡 ⇒ tracked 且显示卡。
+    _spec_m8 = dict(kind="envir", file="AdminList.txt", anchor="x", card="openmir2-envir-redlist-batch")
+    _cards_m8 = json.loads(json.dumps(cards))
+    _cards_m8["assignments"].pop("content:AdminList.txt", None)
+    _row_m8 = _make_content_row(repo, Path(args.envir_dir), Path(args.notice_dir), corpus,
+                                _cards_m8, _spec_m8, "GameApp.cs:209")
+    _row_m8b = _make_content_row(repo, Path(args.envir_dir), Path(args.notice_dir), corpus,
+                                 cards, _spec_m8, "GameApp.cs:209")
+    add("M8 撤卡 ⇒ RED 行 card 列不显示未生效的 spec 卡（改前会原样显示 openmir2-envir-redlist-batch）",
+        _row_m8["status"] == "RED" and _row_m8["card"] != _spec_m8["card"]
+        and "(!)spec卡未生效:" in str(_row_m8["card"]))
+    add("M8 对照：有卡 ⇒ tracked 且 card 列显示生效卡",
+        _row_m8b["status"] == "tracked" and _row_m8b["card"] == "openmir2-envir-redlist-batch")
 
     print("== recon_gates mutate（变异实测：构造缺陷必红）==")
     for name, passed in results:
