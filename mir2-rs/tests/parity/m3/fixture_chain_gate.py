@@ -129,6 +129,12 @@ SHARED_CHECKS = [
     #   接入共享管线后不看矩阵状态、独立常跑（在场却坏 ⇒ 恒 RED）。
     ("rng_scene_anchor_selftest", "mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py", ["selftest"]),
     ("rng_scene_anchor_check", "mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py", ["check"]),
+    # 场景驱动器卡（`openmir2-m3-rng-scene-driver`）的**严格账本校验器** `rng-scene/rng_trace_diff.py`
+    #   必须常驻共享管线（selftest 向）：它把「流水形状本身是否可信」（头种子 / seq 1..N 连续 /
+    #   5 列 / site 非空）钉成 fail-closed —— 既有 `rng_ledger_diff.parse_trace` 对断号/重复 seq
+    #   **完全不看**（只作 key），是「组集合相等」变成假绿的静默通道。接入共享管线后不看矩阵状态、
+    #   独立常跑（在场却坏 ⇒ 恒 RED）。py-3 纯离线、零端口、无 dotnet（比锚门更轻）。
+    ("rng_scene_driver_tracediff_selftest", "mir2-rs/tests/parity/m3/rng-scene/rng_trace_diff.py", ["selftest"]),
 ]
 
 RUNNER_PREREQ_RC = 2  # 各驱动约定的「前置未到，fail-closed」退出码
@@ -410,6 +416,11 @@ def cmd_selftest(_args):
     _sa_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("rng-trace-scene/check_anchors.py")]
     expect("RNG 场景锚门已接入共享管线（防回退）",
            ["selftest"] in _sa_gate and ["check"] in _sa_gate)
+    # 本片防回退牙：场景驱动器卡的严格账本校验器（`rng-scene/rng_trace_diff.py`）必须常驻共享管线
+    #   （selftest 向）。它此前不存在 ⇒ 流水断号/重复 seq/缺 site 列/头异种子是**静默通道**
+    #   （既有比较器不看 seq），「组集合相等」会假绿。
+    _td_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("rng-scene/rng_trace_diff.py")]
+    expect("场景驱动器严格账本校验器 selftest 已接入共享管线（防回退）", ["selftest"] in _td_gate)
     expect("主机门（.py）登记项 ≥23（castle + 行会/攻城 + 英雄/宠物 + 元宝寄售 + 任务 + 组队/交易 + markers 前缀 + 宝宝登记 + 白名单审计 + 行会战怪行为登记 + RNG 场景锚 + fmt 证据 各 selftest[/check]）",
            sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 23)
     expect("共享管线登记名唯一（防重复注册偷懒）",

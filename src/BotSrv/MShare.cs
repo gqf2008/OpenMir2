@@ -896,6 +896,137 @@ namespace BotSrv
         }
 
         /// <summary>
+        /// M3 RNG 场景驱动器（卡 `openmir2-m3-rng-scene-driver`；白名单 **T-59**）：
+        /// 固定图（0137）+ 固定怪（稻草人 @ (18,20) dir=0 ×1）+ 固定走位 + 固定待机 ticks，
+        /// 供「同场景 / 同起点 / 同种子」两相 RNG trace（`mir2-rs/tests/parity/m3/rng-scene/`）。
+        /// 默认 false = 原行为（**不新增任何发送/日志/文件**）；仅在显式开关下生效。
+        /// 注：把假人送进 0137 并 pin 出单只固定怪（C# 侧 spawn + 描述件 dump）在承接卡写集
+        /// （crates/world + bins/game-svr + src）里；本片只落**纯函数**（步骤解析 / 固定怪 key /
+        /// 描述件行组装）+ `--selftest-sceneseq` 无栈自检，供 real wiring 调用，默认关。
+        /// </summary>
+        public static bool g_boSceneSequence = false;
+        public static int g_nSceneTicks = 600;
+        public static string g_sSceneMap = "";
+        public static string g_sSceneSteps = "";
+        public static string g_sSceneOut = "";
+
+        private static readonly string[] SceneAllowedOps = { "pin_monster", "player_pose", "idle" };
+
+        /// <summary>M3 场景驱动器：解析步骤串 `op|param;...`（保留顺序）。
+        /// 字段数 != 2 / 空 op / 未知 op ⇒ 一律丢弃（fail-closed：宁可少走一步，也不走不认识的动作）。
+        /// 纯函数（不依赖实例），供 `--selftest-sceneseq` 与 real wiring 共用。</summary>
+        public static string[] ParseSceneSteps(string raw)
+        {
+            var outList = new List<string>();
+            if (string.IsNullOrEmpty(raw))
+            {
+                return outList.ToArray();
+            }
+            foreach (string part in raw.Split(';'))
+            {
+                string step = part.Trim();
+                if (step.Length == 0)
+                {
+                    continue;
+                }
+                string[] cols = step.Split('|');
+                if (cols.Length != 2)
+                {
+                    continue;
+                }
+                string op = cols[0].Trim().ToLowerInvariant();
+                if (Array.IndexOf(SceneAllowedOps, op) < 0)
+                {
+                    continue;
+                }
+                outList.Add(op + "|" + cols[1].Trim());
+            }
+            return outList.ToArray();
+        }
+
+        /// <summary>M3 场景驱动器：取步骤的 op（`op|param` 的 op；坏串/空 ⇒ 空串）。纯函数。</summary>
+        public static string SceneStepOp(string step)
+        {
+            if (string.IsNullOrEmpty(step))
+            {
+                return string.Empty;
+            }
+            string[] cols = step.Split('|');
+            return cols.Length >= 1 ? cols[0].Trim() : string.Empty;
+        }
+
+        /// <summary>M3 场景驱动器：取步骤的 param（`op|param` 的 param；缺 ⇒ 空串）。纯函数。</summary>
+        public static string SceneStepParam(string step)
+        {
+            if (string.IsNullOrEmpty(step))
+            {
+                return string.Empty;
+            }
+            string[] cols = step.Split('|');
+            return cols.Length >= 2 ? cols[1].Trim() : string.Empty;
+        }
+
+        /// <summary>M3 场景驱动器：固定怪的规范化 key（`name@x,y,dir`）—— 两侧场景描述件
+        /// `monsters` 多重集的键（rng_scene_gate 按 `(name,x,y,dir)` 多重集判两侧同口径）。
+        /// 纯函数。</summary>
+        public static string SceneMonsterKey(string name, int x, int y, int dir)
+        {
+            return (name ?? string.Empty) + "@" + x + "," + y + "," + dir;
+        }
+
+        /// <summary>M3 场景驱动器：场景描述件 `monsters` 数组的**单个条目** JSON
+        /// （`{"name":..,"x":..,"y":..,"dir":..,"count":..}`；名字走 `SceneEsc`）。纯函数。</summary>
+        public static string BuildSceneMonsterEntry(string name, int x, int y, int dir, int count)
+        {
+            return "{\"name\":\"" + SceneEsc(name) + "\",\"x\":" + x + ",\"y\":" + y
+                + ",\"dir\":" + dir + ",\"count\":" + count + "}";
+        }
+
+        /// <summary>M3 场景驱动器：把若干 `BuildSceneMonsterEntry` 结果拼成 `monsters` 数组。
+        /// 空/缺 ⇒ `[]`（与场景描述件的空怪集合同形）。纯函数。</summary>
+        public static string BuildSceneMonstersJson(IList<string> entries)
+        {
+            var parts = new List<string>();
+            if (entries != null)
+            {
+                foreach (string e in entries)
+                {
+                    if (!string.IsNullOrEmpty(e))
+                    {
+                        parts.Add(e);
+                    }
+                }
+            }
+            return "[" + string.Join(",", parts) + "]";
+        }
+
+        /// <summary>M3 场景驱动器：组装场景描述件的一行 JSON（canon `m3-rng-scene-descriptor-v1`）。
+        /// `side` ∈ {csharp, rust}；`mongen_rows` 缺省 `[]`（0137 冻结件零行）。纯函数，
+        /// 供 C# 侧 real wiring dump `<side>-scene.json` 与 `--selftest-sceneseq` 共用。</summary>
+        public static string BuildSceneDescriptorLine(string side, string map, int seed, int px, int py, int pdir,
+            string monstersJson)
+        {
+            return "{\"canon\":\"m3-rng-scene-descriptor-v1\",\"side\":\"" + SceneEsc(side)
+                + "\",\"map\":\"" + SceneEsc(map) + "\",\"seed\":" + seed
+                + ",\"start_pose\":{\"x\":" + px + ",\"y\":" + py + ",\"dir\":" + pdir + "}"
+                + ",\"mongen_rows\":[]"
+                + ",\"monsters\":" + (string.IsNullOrEmpty(monstersJson) ? "[]" : monstersJson) + "}";
+        }
+
+        /// <summary>M3 场景驱动器 JSON 字符串转义（同 `DropExpEsc`/`QuestEsc` 口径：字面 `<`/`>` →
+        /// `\u003c`/`\u003e`，另转义 `\r`/`\n`/`\t`/`\`/`"`）。纯函数。</summary>
+        public static string SceneEsc(string s)
+        {
+            if (string.IsNullOrEmpty(s))
+            {
+                return string.Empty;
+            }
+            return s.Replace("\\", "\\\\").Replace("\"", "\\\"")
+                .Replace("\r", "\\r").Replace("\n", "\\n").Replace("\t", "\\t")
+                .Replace("<", "\\u003c").Replace(">", "\\u003e");
+        }
+
+        /// <summary>
         /// M3⑦ 夹具（卡 openmir2-m3-party-trade-fixture-botsrv；白名单 T-43 家族扩展）：
         /// 两个假人按固定步骤串发组队/交易动作。
         /// 默认 false = 原行为（不新增任何发送/日志）。见 RobotPlayer.PairTradeSequenceTick。

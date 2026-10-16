@@ -50,6 +50,12 @@ namespace BotSrv
             {
                 System.Environment.Exit(SellOffSeqSelfCheck.Run());
             }
+            // M3 RNG 场景驱动器（T-59 家族扩展）：固定动作序列解析 / 固定怪 key / 场景描述件行组装
+            // 纯函数的无栈自检（不启动服务/不连端口）。
+            if (args.Length > 0 && args[0] == "--selftest-sceneseq")
+            {
+                System.Environment.Exit(SceneSeqSelfCheck.Run());
+            }
             GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
             GCSettings.LatencyMode = GCSettings.IsServerGC ? GCLatencyMode.Batch : GCLatencyMode.Interactive;
             AppServer serviceRunner = new AppServer();

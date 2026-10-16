@@ -1,0 +1,61 @@
+{
+  "canon": "m3-rng-scene-driver-v1",
+  "status": "skeleton-window-pending",
+  "card": "openmir2-m3-rng-scene-driver",
+  "seed": 42,
+  "map": "0137",
+  "start_pose": { "x": 17, "y": 20, "dir": 2 },
+  "monsters": [
+    { "name": "稻草人", "x": 18, "y": 20, "dir": 0, "count": 1 }
+  ],
+  "ticks": 600,
+  "scene_source": {
+    "path": "../rng-trace-scene/rng_trace_scenario.json",
+    "canon": "m3-rng-trace-scene-v1",
+    "comment": "本驱动器的场景固定输入（map/seed/start_pose/monsters）以 rng-trace-scene 的 scenario 为**唯一真源**，不另抄一份（防两个 scenario 漂移）。runner 自检 `scene-source-consistent` 机判本文件与源逐字段相等。"
+  },
+  "actions": {
+    "comment": "固定动作序列（单只固定怪 / 固定走位 / 固定待机）——两侧必须逐项同序执行；驱动器把它作为「固定动作序列」的声明，机判 = 两侧场景描述件的 monsters 多重集必须等于本声明（rng_scene_gate 已机判），且 tick 数一致。",
+    "steps": [
+      { "op": "pin_monster", "name": "稻草人", "x": 18, "y": 20, "dir": 0, "count": 1 },
+      { "op": "player_pose", "x": 17, "y": 20, "dir": 2, "steps": 0 },
+      { "op": "idle", "ticks": 600 }
+    ]
+  },
+  "artifacts": {
+    "csharp_scene": "<session>/csharp-scene.json",
+    "csharp_stream": "<session>/csharp-rng-stream.tsv",
+    "rust_scene": "<session>/rust-scene.json",
+    "rust_stream": "<session>/rust-rng-stream.tsv",
+    "scene_descriptor_canon": "m3-rng-scene-descriptor-v1",
+    "stream_format": "5 列 TSV `seq \\t kind \\t max \\t result \\t site`；头行 `INJECT_OK <seed>` + `SEED_PROBE ...`"
+  },
+  "env": {
+    "comment": "两侧同种子注入口（runner 自检 `inject-env-declared` 机判本字段与脚本里设的变量同名同值）。",
+    "csharp": {
+      "MIR2_RNG_SEED": "42",
+      "MIR2_RNG_LOG": "<session>/csharp-rng-stream.tsv",
+      "MIR2_RNG_SITE": "1",
+      "DOTNET_STARTUP_HOOKS": "<shadow>/RngSeedHook.dll"
+    },
+    "rust": {
+      "MIR2_RNG_SEED": "42",
+      "MIR2_RNG_LOG": "<session>/rust-rng-stream.tsv",
+      "MIR2_RNG_SITE": "1"
+    }
+  },
+  "trace": {
+    "canon": "m3-rng-trace-v1",
+    "ticks": 600,
+    "min_monster_ai_draws": 1,
+    "groups_expected": ["monster_ai", "spawn", "drop"],
+    "fold": { "construct": "spawn" },
+    "criterion": "① rng_trace_diff check（每侧严格：头 INJECT_OK == seed / seq 1..N 连续 / 5 列 / site 非空）② rng_scene_gate gate（同场景：map/seed/pose/monsters/mongen + 制品级同种子）③ rng_ledger_diff groupdiff --fold --strict --scenario（组集合 + R-6 折叠计数 + 共享组相对次序；DoD② 声明组必须真出现）。"
+  },
+  "runner": "rng-scene/run_rng_scene_pair.ps1 -Go -Side <csharp|rust> -PinScene -PeerSession <session>",
+  "notes": [
+    "本驱动器是卡 `openmir2-m3-rng-scene-driver`（R3 承接卡）的交付骨架：两侧『场景描述件 + 全场景抽数流水』的生产者此前不存在（`rng-trace-scene/DRIVER-CONTRACT.md` §0/§7），其写集在 crates/world + bins/game-svr + src（C# spawn/dump）里。本片在写集内（tools/** + src/BotSrv/** + mir2-rs/tests/parity/**）交付：① 严格账本校验器 `rng_trace_diff.py`（断号/缺件/头种子/site 列 fail-closed）② 驱动器编排骨架 `run_rng_scene_pair.ps1`（离线自检 + 单一入口委托 + real-run fail-closed）③ BotSrv 侧固定场景序列（T-59 式白名单登记，默认关）。",
+    "真机两侧项（两侧各跑一次落账本）= W9 窗（RNG 序列 R 级）：需 owner 发放窗口 + 两侧 spawn/dump 接线（crates/world + bins/game-svr，本片外）。未获 -Go ⇒ real-run fail-closed（exit 2），绝不静默起栈。",
+    "runner 参数名（-Go/-Side/-PinScene/-PeerSession/-Seed/-Prefix）必须都在 run_rng_scene_pair.ps1 的 param() 里声明；自检 `scenario-runner-params-declared` 机判本文件的 trace.runner 做改坏必红。"
+  ]
+}
