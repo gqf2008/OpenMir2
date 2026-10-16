@@ -391,3 +391,22 @@ awk 'NR>=165 && NR<=170 {print NR": "$0}' src/M2Server/Magic/MagicManager.cs
   2. 未做真机对拍（§5.1 的 R 级窗口判据**待 owner 排窗口**）；
   3. **未实现任何发射逻辑**（本卡只登记与界定）；
   4. 未覆盖 `RobotPlayer`/`BotSrv` 的机器人选技路径（审计报告 §6.3 同口径）。
+
+---
+
+## 8. `DoSpell` 帧面的**两条旁路**（2026-10-17 登记；卡 `openmir2-spell-frame-bypass-paths`）
+
+戏路之外的调用面（两条都**绕过**玩家 `default` 支那条链），本仓当前**不可达/未建模**，但必须入册，
+以免将来接上时**静默漏帧**：
+
+| # | oracle 位置 | 形态 | 与玩家路径的差别 | 本仓现状（机判） |
+| --- | --- | --- | --- | --- |
+| ① | `src/GameSrv/Robots/RobotPlayer.cs:1846`（派发）/ `:1856` `AutoSpell` | 直调 `MagicManager.DoSpell`，**绕过外层 `switch (UserMagic.MagIdx)`**（`PlayObject.Attack.cs:1118`） | ⇒ 对机器人而言，连 `SKILL_43(43)`/`SKILL_REDBANWOL(56)` 这类**独立 case** 魔号**也会**发 `RM_SPELL`（触发集合与玩家不同）；失败支发 `RM_MAGICFIREFAIL`（`:1848`） | **不可达**：`RobotProcessor` 未移植（`bins/game-svr/src/main.rs:7092` 已登记「本宿主不建机器人会话」） |
+| ② | `src/M2Server/Monsters/*/FireballMonster.cs:39` | **硬编码** `SendRefMsg(RM_SPELL, 48, TargetCret.CurrX, TargetCret.CurrY, 48, "")`（不走 `DoSpell` 的通用发帧） | 怪物施法帧，与 `Effect/MagicId` 无关；随后 `:40` 另发 `RM_MAGICFIRE`、`:41` `SendStruckDelayMsg(RM_DELAYMAGIC,…)` | **未建模**：`mongen.rs:445-446` 只建模了该类 ctor 的抽数，**没有**该帧面 |
+
+**解冻条件**：① 当「机器人会话 / `RobotProcessor`」被排进里程碑（或 `CM_*` 机器人面开工）时，
+必须回来补「机器人路径的触发集合（= 不走外层 default 过滤）」这一条，并加构装级用例；
+② 当「怪物施法帧」面开工（MagicMonster/FireballMonster 族 AI 接线）时，必须补该硬编码帧与
+`RM_MAGICFIRE`/`DELAYMAGIC` 的帧序。⇒ 在此之前，任何「帧面缺口已全清」的结论都**不覆盖**这两条。
+
+**登记锚**：本节即锚；`cards.json` 无需指派（这两条不对应 coverage 门的行）。
