@@ -320,12 +320,166 @@ python -I -B check_attack_observability.py `
 - **③b 攻击步**：两侧**必须钉同一 `(x,y)`**（每趟起栈前 `UPDATE characters SET MapName='0', CX=…, CY=…`，全程不让其漂移）；
   动作序列 = 先 `CM_TURN(dirToMonster)` 再 `CM_HIT(MakeLong(自x,自y), tag=dirToMonster)`——真客户端空地攻击**不先发** `CM_TURN`，
   单发换向环点每一击都用「上一动作遗留朝向」取前方格 ⇒ 必打空（Rust 与 oracle 同构，见 README §68）。
-  快捷键：`-AttackRing` 给**全同单向**且方向 = 上一步走步方向。
+  快捷键：**`-AttackTurn "dx,dy"`** 一步到位（`mir_flow.ps1`，左键攻击前先**右键相邻格格心**触发 `CM_TURN`；
+  `dx,dy`=指向怪的相邻格偏移『`1,0`东/`-1,0`西/`0,-1`北/`0,1`南/对角』，`|dx|,|dy|≤1`，`(0,0)` 非法）；
+  或 `-AttackRing` 给**全同单向**且方向 = 上一步走步方向。**（`-AttackTurn` 已合入，W0 统一用它——见 §2d W0-1/2。）**
 - **③b 第一步 = 阳性对照（C# 侧）**：两侧至今没有任何「玩家→怪」伤害帧 ⇒ 先在 **C#（oracle）** 侧打出
   **victim=怪** 的 `SM_STRUCK`，把 GREEN 定义钉在实拍足迹上，再比 Rust。
 - **③b 判据**：`check_attack_observability.py`（已带 victim 过滤，出站 = victim ≠ 自己）。**旧版**会把「玩家被怪围殴」读成「玩家造成伤害」。
 - **探针（未决项）**：玩家贴怪旁静止 ~10s，看 Rust 侧有无 **victim=自己** 的 `SM_STRUCK`（怪打玩家）。无 ⇒ 另立卡查怪物 AI 攻击支。
+  ⚠ **缺口警告（既有事实）**：Rust 怪物 AI 当前**只有「被击反击」**（被打才还手），**主动索敌/游走攻击未实现** ⇒
+  若测试点怪属**主动族**，探针**可能仍空转**；判读前须先确认 oracle 侧该怪是否主动攻击（详见 §2d W0-5）。
 - **③a 反向点**：不得再用 `(291,666)`（`GuardList` 卫士 `(281,661)` d=10 污染）；先过
   `check_reverse_point_clean.py --point <x,y> --map 0 --vr 12`（fail-closed，缺源文件即 RED），
   **建议 `(311,666)`**（最近确定性对象 d=30）。
+  ⚠ **更新（2026-10-16，GuardList 已实现）**：Rust 现已加载 `GuardList.txt`（`crates/envir/src/guardlist.rs` +
+  `bins/game-svr/src/guardlist.rs`，白名单 T-56 对应卡已落）⇒ `(291,666)` 上卫士 `(281,661)` 现**两侧都应有**
+  （片68 时是『C# 有、Rust 无』的**对称性已修复**态）。故 `(291,666)` **仍不可**当反向点（仍污染），但它现在正好是
+  **GuardList 帧一致的验证点**（两侧对称出帧，见 §2d W0-4）。
 - **客户端驱动**：`mir_flow.ps1 … -CenterY 259`（角色屏幕中心；默认 `384` 会把命中环整体偏下 ~2 格）。
+
+## §2d W0 单窗收口流程（2026-10-16）
+
+> **W0 = 一个独占窗口内串行收口五件事**：③b「玩家→怪造成伤害」、③a 反向点、GuardList 帧一致、
+> 「怪→玩家」探针、RNG 双侧账本。**顺序不可换**：② 阳性对照必须**最先**跑，它的产出是后续各项的 GREEN 定义。
+> 车道自身不起栈（m2-svr 纪律），窗口由 root/owner 开。以下命令「就位即可照抄」，含期望值与失败分叉。
+
+### W0-0 前提（任一不满足即停手；全程零副作用）
+
+1. **十端口实拍**（含共享 3306）：`powershell -File E:\MirServer\port-status.ps1`
+   期望：**九个游戏端口 5000/5100/5500/5600/5700/6000/7000/7100/7200 全 DOWN**（报告里列为「缺失端口」），
+   仅 **3306 可 UP**（MySQL 共享）。任一游戏端口 UP ⇒ 有泄漏栈，先做 W0-0.2。
+2. **无泄漏栈（R8）**：`bash mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt guard`
+   期望 rc=0、打 `WINDOW_GUARD_OK`；R8 RED ⇒ **照抄它打印的 `PREFLIGHT_STOP_CMD:`**（＝
+   `start_rust_stack.ps1 -LogDir <持有 pid 的目录> -Stop`）。**起/停必须用同一个 `-LogDir`**（历史 21h 卡窗根因，见 `docs/交接-OpenMir2编排与联调-20261015.md` §1.2）。
+3. **车队已停确认**：窗口脚本 `start` 第 1 步即 `lanes-pause.sh`（暂停车队＝其它 agent 车道的在跑实例）。
+   人工开窗的等价动作＝确认无残留 BotSrv/game-svr/cargo/rustc（`Get-Process`）＋ 车队已 pause。
+4. **角色摆位 SQL（两侧必须逐字同一坐标）**——每趟起栈前重跑（形态见 §2）：
+   ```powershell
+   $mysql='D:/mysql/mariadb-10.11.19-winx64/bin/mysql.exe'
+   $margs=@('-h','127.0.0.1','-P','3306','-u','root','--password=','--batch','--skip-column-names')
+   & $mysql @margs -e "SELECT MapName,CX,CY FROM mir2_db.characters WHERE ChrName='aaa';"                 # before（还原用）
+   & $mysql @margs -e "UPDATE mir2_db.characters SET MapName='0', CX=605, CY=578 WHERE ChrName='aaa';"   # ③b 有怪点（片⑯ 最密）
+   ```
+   ⚠ 列名是 `MapName/CX/CY`（**没有** `x/y`，片㉗），且必钉 `MapName='0'`；跑完还原到 before。
+   另按 **§2b 压血**（`Hp=MaxHP-2`）——本窗口**仍要**覆盖 ①②（53 帧 T1/T2/T3）。
+5. **二进制身份留证**：`guard` 通过即 R7 出处一致（`window-provenance.json`）；把该清单＋六件 exe 的 sha256 落证据。
+   ⚠ `--record-provenance` 只把当前 `--ref` **盖上**、**不校验** exe 真由该 ref 编出 ⇒ 录制必须跟在 `cargo build`
+   成功之后（§1b 的 `&&` 链）——否则「编译失败也录制」会把旧件洗成新源、R7 假绿。
+
+### W0-1 第一步：阳性对照（**C# 侧先打出** victim=怪 的 `SM_STRUCK`）
+
+> **为什么最先**：至今**两侧都没有过「玩家→怪」伤害帧**（两侧 `SM_STRUCK` 里 victim≠自己 的条数都是 **0**，见 README §68）。
+> ⇒「能攻击造成伤害」的 GREEN **尚无实拍样本**：先把 GREEN 钉在 C#（oracle）的实拍足迹上，**此前任何「两侧 GREEN」结论都不得引用**。
+> 采到样本 = 「判据校准完成」；校准完成前比 Rust = 无基准。
+
+- 起 C# 栈（真 LoginGate/SelGate ＋ 影子 game-gate 7600 ＋ 代理占 7200，见 §4.0/§4.1）；进世界后把角色钉到
+  **与某只怪相邻**的格（用 capture 里怪的帧坐标或截图 `06_attack.png` 判定相邻格，再用 W0-0.4 摆位钉住）。
+- 驱动（**同一 `MirClinet.exe` / 同一账号 `mir2test` / 角色 `aaa`**）：
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
+    -Account mir2test -Password mir2pass -OutDir E:/tmp/window/cliente2e/csharp/shots `
+    -WalkClicks 0 -AutoPlaySec 12 -AttackClicks 1 -AttackTurn "dx,dy" -CenterY 259 `
+    -SkipReenter -SkipLogout -SkipTalk
+  ```
+  - `-AttackTurn "dx,dy"` = **指向怪的相邻格偏移**（`"1,0"`东/`"-1,0"`西/`"0,-1"`北/`"0,1"`南/对角；`|dx|,|dy|≤1`，`(0,0)` 非法）：
+    每次左键攻击前先**右键该相邻格格心**触发 `CM_TURN(dirToMonster)`，再左键攻击（取目标 = 新朝向的正前方格）。
+  - `-CenterY 259` = 真机角色屏幕中心（默认 `384` 偏下 ~2 格、命中环整体错位，片67 受此影响）。
+- 期望足迹（C# raw capture）：c2s `CM_TURN(3010)≥1` ＋ `CM_HIT(3014)≥1`；s2c **出站** `SM_STRUCK(31)`
+  （victim=怪，`recog≠自己`）**≥1**（或其 `SM_NOWDEATH(34)`）。
+- **失败分叉**：
+  - 只有 `CM_HIT`、无出站伤害帧 ⇒ 没贴到邻怪（格不同/未朝向）⇒ 用截图/`-WalkPath` 重新贴近再试；
+  - 出站有帧但判据 `PREREQ_RED`（探测不到 self）⇒ 显式给 `--self-recog <SM_LOGON 的 ActorId>`；
+  - 无论如何都打不出 ⇒ 记录实际足迹，**不得**跳过阳性对照直接比 Rust。
+
+### W0-2 第二步：Rust 侧同流程（同 (x,y)、先 `CM_TURN` 后 `CM_HIT`）
+
+- 起 Rust 栈（§3.1/§3.2），把角色钉到**与 W0-1 完全相同的 (x,y)**（重跑摆位 SQL），同 `-AttackTurn "dx,dy"` ＋ `-CenterY 259`。
+- 判据（Rust 单侧先自证，再两侧对照）：
+  ```powershell
+  python -I -B check_attack_observability.py --capture E:/tmp/window/cliente2e/rust/s2c/capture.jsonl --expect any --min-hits 1
+  # 两侧：--left <rust> --right <csharp> --expect any --min-hits 1（两侧各按同一 --expect 判）
+  ```
+  `--expect damage` 只认**出站** `SM_STRUCK`；`any` 接受出站 struck 或击杀；**入站（victim=自己）一律不计入出站**。
+
+### W0-3 第三步：③a 反向点 `(311,666)`（先过净空判据）
+
+```powershell
+python -I -B check_reverse_point_clean.py --point 311,666 --map 0 --vr 12
+# 期望：CLEAN（四源 MonGen/GuardList/Merchant/Npcs 距该点全 > vr=12；最近确定性对象 d=30）
+```
+- **先过判据再起栈**（fail-closed，缺源文件即 RED）。`(291,666)` 现为 **NOT_CLEAN**（卫士 `(281,661)` d=10）⇒ **不得**用作反向点。
+- 角色钉 `(311,666)`，两侧各跑一趟，`aoi_visibility_pair.py --expect none` 期望**两侧都 0 对**。
+- **失败分叉**：仍非 0 对 ⇒ **先看是否卫士/NPC**：本窗口 GuardList 已实现，两侧应**对称**有该 actor ⇒
+  两侧同 actor 出帧 = 「点不净」（换净空点，用 `check_reverse_point_clean.py --scan-box`）；只一侧出帧 = 实现差异，登记 RED。
+
+### W0-4 第四步：GuardList 帧一致（新实现，两侧应**对称**）
+
+> **新事实（GuardList 已实现）**：`crates/envir/src/guardlist.rs` ＋ `bins/game-svr/src/guardlist.rs` 已落地
+> （白名单 T-56 对应卡 `openmir2-guardlist-guards-loading`）⇒ **Rust 世界现在也放守卫**。于是 `(291,666)`
+> （卫士 `(281,661)` d=10 ≤ vr=12）**两侧都应出现卫士在其视野内**——与片67/§2c「C# 有、Rust 无」的旧态相反。
+
+- 点位：`(291,666)`（视野内确定性卫士 `(281,661)` dir=5 = `Envir/GuardList.txt` 第 28 行「卫士 0 281, 661 : 5」）。
+- 两侧各跑一趟，对照出现帧：期望**两侧都有**该卫士的 `SM_APPEAR`/`SM_TURN`（`param=281` / `tag=661`）⇒ 帧一致。
+- **失败分叉**：Rust 侧仍 0 帧 ⇒ 查 GuardList 接线（`[Server] VentureServer` 门 ＋ 宿主调用点，见 `bins/game-svr/src/guardlist.rs` 头注）；
+  两侧都有但 Dir/位置不一致 ⇒ 逐字段 diff、登记。
+
+### W0-5 第五步：怪打玩家探针（victim=自己 的 `SM_STRUCK`）
+
+> **⚠ 缺口警告（先读）**：Rust 怪物 AI 当前**只有「被击反击」**（被打才还手），**主动索敌/游走攻击未实现**。
+> ⇒ 若测试点怪属**主动族**，玩家贴怪静止时探针**可能仍空转**（不出现 victim=自己的 `SM_STRUCK`）。
+> **判读口径**：探针为空**不**自动等于缺陷——须先确认 oracle 侧该怪是否主动攻击；**两侧同点位对照**才有意义。
+
+- 动作：把玩家贴到怪旁**静止** ~10s，采 Rust 侧 **victim=自己** 的 `SM_STRUCK`：
+  ```powershell
+  python -I -B check_attack_observability.py --capture <rust capture> --expect any --allow-unknown-self
+  # 报告行分列出站/入站；本步看「入站」栏（victim=自己）是否 ≥1
+  ```
+- 期望：**C# 侧**（同点位）应出现入站 `SM_STRUCK`（片68 已证 C# 同窗被怪围殴致死）；**Rust 侧**按上面口径判读。
+- **失败分叉**：Rust 入站 0 且 **C# 也 0** ⇒ 该怪非主动族，换主动族怪重试；**C# 有、Rust 无** ⇒ 另立卡查 `crates/world` 的怪物 AI 攻击支（`monai` 目标选择）。
+
+### W0-6 第六步：RNG 双侧账本（`rng-scene` 驱动器）
+
+> 驱动器已在 master（`mir2-rs/tests/parity/m3/rng-trace-scene/`：`run_rng_trace_pair.ps1` ＋ `rng_scene_gate.py`）；
+> 场景 `rng_trace_scenario.json`：**图 `0137`（竞技场，MonGen 0 行）＋ 固定怪（稻草人 @ (18,20) dir=0 ×1）＋
+> 起点 `(17,20) dir=2` ＋ 种子 `42` ＋ 600 ticks**。真机两相 trace **须占窗口**（可与 ④ 100 杀同图同起点同种子、**同批串行**）。
+
+```powershell
+# 1) 窗口期两侧各采两相 trace（-Go 必须 owner 显式授权；-PinScene 钉含怪场景）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1 `
+  -Go -Side csharp -PinScene -PeerSession <session>
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1 `
+  -Go -Side rust   -PinScene -PeerSession <session>
+# 2) DoD① 单一入口：先场景前置门（GREEN）才 groupdiff --fold --strict
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1 -SceneGroupDiff `
+  -AScene <csharp-scene.json> -BScene <rust-scene.json> -AStream <csharp-rng-stream.tsv> -BStream <rust-rng-stream.tsv>
+```
+- **口径**：**两侧场景前置门**（map/seed/start_pose ＋ MonGen 冻结件 ＋ Monster 集合同口径 ＋ 制品级 `INJECT_OK <seed>`）
+  **全 GREEN** 才跑 `groupdiff --fold --strict`（C# `construct` 折叠到 Rust `spawn`：组集合 ＋ 折叠计数 ＋ 共享组相对次序全等）；
+  **非 GREEN ⇒ 拒比**（`REFUSED`，绝不输出 groupdiff 结论）。
+- **失败分叉**：门 RED（场景漂移/缺件/种子不符）⇒ fail-closed **拒比**，**不是**实现差异，查明后再跑；
+  门 GREEN 但 `groupdiff` rc=1（`GROUP_SET_DIFF`/`MISSING_EXPECTED_GROUPS`/`MIN_GROUP_DRAWS`）⇒ **真账本分歧**，逐组 diff 登记。
+
+### W0-7 收窗（缺一不算收）
+
+1. **停栈（同 `-LogDir`）**：`start_rust_stack.ps1 -LogDir <本趟 LogDir> -Stop`；C# 侧按既有 `-Stop`。
+   ⚠ **起/停必须同一 `-LogDir`**（否则 9 端口泄漏、R8 从此 RED）。
+2. **十端口实拍回落**：`powershell -File E:\MirServer\port-status.ps1` ⇒ 九个游戏端口回 DOWN（仅 3306 可 UP）。
+3. **DB 还原**：把 W0-0.4/§2b 的 before（`MapName/CX/CY` 与 `Hp/MaxHP`）写回 `aaa`。
+4. **恢复车队**：`lanes-resume.sh`（窗口脚本 `stop` 末步）。
+5. **证据落点与命名**：命令 ＋ 输出 ＋ 路径 ＋ sha256（按 LF/git-blob 口径用
+   `python -I tools/evidence-hash/verify_sha256sums.py write <dir>` 生成并 `verify` 自检）；
+   capture/日志/截图入 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/`，命名 `w0-<步>-<侧>-<件>`。
+6. 卡上 `patch`（base=跑前 master、head=你的提交）＋ `status`（work 逐条写 ③a/③b/GuardList/探针/RNG 结论）。
+
+### W0-8 判据与失败分叉速查
+
+| 步 | 判据命令 | GREEN | RED 分叉 |
+| --- | --- | --- | --- |
+| ③b-阳性 | `check_attack_observability.py --capture <csharp> --expect any` | 出站 struck/击杀 ≥1 | 未贴邻怪/未朝向 ⇒ 重贴 |
+| ③b-Rust | 同上 `--capture <rust>` | 出站 ≥1 | 探测 self 失败 ⇒ `--self-recog` |
+| ③b-两侧 | `--left <rust> --right <csharp> --expect any` | 两侧各 ≥1 | 单侧 0 ⇒ 登记 RED |
+| ③a | `check_reverse_point_clean.py --point 311,666` ＋ `aoi_visibility_pair.py --expect none` | CLEAN ＋ 两侧 0 对 | 非 0 对 ⇒ 换净点/看是否对称 |
+| GuardList | 出现帧对照 `(291,666)` | 两侧对称有卫士帧 | 单侧无 ⇒ 查接线 |
+| 探针 | 入站 `SM_STRUCK`（victim=自己） | 按 oracle 主动族口径 | C# 有 Rust 无 ⇒ 立卡 |
+| RNG | `-SceneGroupDiff` | 门 GREEN ＋ `VERDICT IDENTICAL` | 门 RED ⇒ 拒比（非实现差异） |
