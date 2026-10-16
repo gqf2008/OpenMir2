@@ -40,8 +40,11 @@
 //! 其中 `switch` 的 8 条独立 `case`（`:1120/1136/1152/1168/1187/1218/1234/1253`，魔号见
 //! [`EXPLICIT_CASE_MAG_IDX`]）**不走 `default`** ⇒ Rust 侧只对这些之外的魔号套用 `Dir`。
 //! `DoSpell` 开头的 `IsWarrSkill`/`MagicAttackRage` 门与
-//! `SendRefMsg(RM_SPELL, Effect, x, y, MagicId, "")`（`MagicManager.cs:151-159`）**都未接** ——
-//! 本片不产出 `SM_SPELL(17)`，失败支的 `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)` 亦未接。
+//! `SendRefMsg(RM_SPELL, Effect, x, y, MagicId, "")`（`MagicManager.cs:151-159`）**已接**
+//! （片 `openmir2-default-arm-spell-surface`，2026-10-17：宿主 `handle_spell_cmd` 在这三条门之后
+//! **无条件**广播一帧 `SM_SPELL(17)` —— 任何非战士魔号一律恰一条，与是否有 `case`/是否 `>80` 无关；
+//! 逐行依据见 `main.rs` 该片的块注释）⇒ 原「本片不产出 `SM_SPELL(17)`」一句作废。
+//! 失败支的 `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)` 仍**未接**。
 //! 技能效果面的向量与用例在 `openmir2-m3-combat-skills-align`（m3cs）的离线片，其接口就绪后再接这一层。
 //!
 //! **`LateDelivery`**：Rust 的入帧路径没有延时重投（`command` 直投）⇒ 恒按 `false` 处理；oracle 此时

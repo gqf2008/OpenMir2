@@ -4921,8 +4921,14 @@ fn handle_hit_cmd(
     true
 }
 
-/// **`openmir2-m3-attack-magic-wiring`（第二片）** + **`openmir2-m3-pet-slave-summon`（第②片）**：
+/// **`openmir2-m3-attack-magic-wiring`（第二片）**、**`openmir2-m3-pet-slave-summon`（第②片）**
+/// 与 **`openmir2-default-arm-spell-surface`（帧面片）** 三片共同的入口：
 /// `CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790` → `PlayObject.Message.cs:1339-1400`）。
+///
+/// **帧面片**把 `DoSpell` 的**无条件** `RM_SPELL`（`MagicManager.cs:159`）接在这个函数开头
+/// （`default` 支 ∧ 非 `IsWarrSkill`(`:151`) ∧ 距离门(`:155`) 之后、版本门(`:167`) 之前）——
+/// **任何**魔号（含未建模者与 `>80` 者）一律广播**恰好一条**；三个效果体块里原先各自的
+/// `sm_spell` 已移除（防双发/错序）。界定件：`tests/parity/m3/design-default-arm-spell-frames-20261017.md`。
 ///
 /// 守卫 + 成功后 `+GD` ack 沿用第二片；**第②片**接上 `DoSpell` 的**召唤面**（17/30/41）
 /// 效果体：`default` 支的 `CretInNearXy` 目标修正 → `MagicAttackRage` 距离门 →
@@ -4994,12 +5000,98 @@ fn handle_spell_cmd(
     // （`PlayObject.Attack.cs:1269-1270`；原注误写 :1256，已按 reviewer-5 `1de8fca5` 的 F-1 订正）；
     // **F-2 收口**（reviewer-5 `1de8fca5`）：该句只在 `default` 支执行，
     // `switch` 的 8 条独立 `case`（12/25/26/27/34/38/43/56）**不执行** ⇒ 只有非这 8 个魔号才改展示方向。
-    if matched
+    let default_arm = matched
         .as_ref()
-        .is_some_and(|m| magicwire::takes_default_dir(i32::from(m.mag_idx)))
-    {
+        .is_some_and(|m| magicwire::takes_default_dir(i32::from(m.mag_idx)));
+    if default_arm {
         let dir = movewire::next_direction(cur_x, cur_y, req.target_x, req.target_y);
         set_display_dir(displays, actor_id, dir);
+    }
+    // **片 `openmir2-default-arm-spell-surface`（帧面）：`DoSpell` 的**无条件** `RM_SPELL` 广播。**
+    //
+    // 界定件 `tests/parity/m3/design-default-arm-spell-frames-20261017.md`（§1 oracle 清单 / §5.1 判据
+    // J1–J8）；范围按编排侧**宽口径**裁决（卡上 comment `e6d8e8353ebb6f9a64013a1ec88110c450b10a7d`）：
+    // 任何**非战士**技能、在 `MagicAttackRage` 内的施法都广播**恰好一条** `RM_SPELL`。
+    //
+    // oracle 结构（逐行）：
+    // ```text
+    // PlayObject.Attack.cs:1118-1119  switch (UserMagic.MagIdx)（`switch` 在 :1118、`{` 在 :1119；
+    //                            本仓 `magicwire::EXPLICIT_CASE_MAG_IDX` 与界定件按 :1119 记）
+    //                            —— 8 条独立 case（:1120/1136/1152/1168/1187/1218/1234/1253 =
+    //                            12/25/56/26/27/34/38/43）**不进 default** ⇒ DoSpell 根本不被调用
+    // PlayObject.Attack.cs:1269  default: Dir = M2Share.GetNextDirection(...)      （上面那条）
+    // PlayObject.Attack.cs:1272  if (CretInNearXy(targetObject, nTargetX, nTargetY)) {
+    // PlayObject.Attack.cs:1275    nTargetX = spellObject.CurrX; nTargetY = ... }  ← **就地 snap**
+    // PlayObject.Attack.cs:1278  if (!DoSpell(UserMagic, nTargetX, nTargetY, spellObject)) ...
+    // MagicManager.cs:151        if (IsWarrSkill(userMagic.MagIdx)) → :153 return false  ← 战士：发帧前退出
+    // MagicManager.cs:155        |CurrX-nTargetX|/|CurrY-nTargetY| > MagicAttackRage → :157 return false
+    //                            （**语句在 :155**；本仓 A-5 三块与界定件把同一门的区块写作
+    //                             `:152-155`/`:154`，指的都是这一处，不是另一处门）
+    // MagicManager.cs:159        SendRefMsg(RM_SPELL, Magic.Effect, nTargetX, nTargetY, Magic.MagicId, "")
+    //                            ← **无条件、恰一条**（本片的位置）
+    // MagicManager.cs:160-163    targetObject.Death ⇒ targetObject = null           （效果体层，本片不做）
+    // MagicManager.cs:167        (SoftVersionDateEx==0 && ClientTick==0) || MagicId>80 ⇒ return false
+    //                            ← **版本门在 :159 之后**
+    // MagicManager.cs:172-643    switch (MagicId) { 45 条 case }                   （效果体层，本片不做）
+    // MagicManager.cs:644-670    共享尾：RM_MAGICFIRE / 训练尾 / return true        （效果体层，本片不做）
+    // ```
+    // ⇒ 三条门（`default` 支 ∧ 非 `IsWarrSkill` ∧ 距离门）之后**无条件**发一帧，与魔号是否有 `case`、
+    //    是否 `> 80`、是否已建模**全部无关**。
+    //
+    // **坐标 = snap 后的 `tx`/`ty`**：`Attack.cs:1275-1276` 把 `nTargetX/nTargetY` **就地改写**成目标
+    // 实际坐标后才交给 `DoSpell`（`:1278`）⇒ `:155` 的门与 `:159` 的帧参读的**都是 snap 值**
+    // （与 A-5 修好的口径一致：`68b0730df` + `ffac59d1b`；三个兄弟块下方同口径）。
+    //
+    // **收件人 = [`broadcast_ref_msg`]（排除施法者自己）**：接收侧 `PlayObject.Message.cs:1455` 的
+    // `case RM_SPELL:` 首句 `if (processMsg.ActorId != ActorId)` ⇒ 自己那条连接**不收** `SM_SPELL`
+    // （`RM_MAGICFIRE` 的处理器 `:1788-1793` **无**该守卫 ⇒ 那帧用 [`broadcast_ref_msg_with_self`]；
+    // 两者**不可互换**，见两函数各自的注释）。范围 = ±`SendRefMsgRange` 内 `Race==Play && !Ghost`
+    // （`BaseObject.Message.cs:383-445` ⇒ `chat::hear_targets`）。
+    //
+    // **登记（本片不做，效果体层）**：`:160-163` 死亡归一、`:167` 版本门（本仓
+    // [`mir2_world::magic::spell_version_gate`] **无生产调用点**——效果体层未接，故本条广播天然落在
+    // 「版本门之前」；**反面牙**：把它挪到版本门之后 ⇒ `magic_id > 80`（如 81）必丢帧）、
+    // `:172-643` 的 45 条 `case` 效果体、`:648-658` `RM_MAGICFIRE`、`:659-668` 训练尾（含 RNG 抽数
+    // + `MagicList` 落库）、`PlayObject.Base.cs:1510-1522` 的 `GetSpellPoint`/`DamageSpell`/
+    // `HealthSpellChanged`（**MP 扣减 / `RM_HEALTHSPELLCHANGED`**）、`Attack.cs:1280` 的
+    // `RM_MAGICFIREFAIL`。逐行见界定件 §5.2。
+    //
+    // **`userMagic.Magic.Effect` 的来源**：本仓 `magic_table`（`magics::load_magics`，oracle
+    // `MySqlDB.LoadMagicDB`）。表里无该魔号 ⇒ 造不出帧（oracle 侧等价于 `userMagic.Magic == null`，
+    // 那会在 `:159` 直接 NPE ⇒ 现实中不可达）⇒ 降级为**不发帧**并记日志（保守方向，非 fail-open）。
+    if default_arm && !magic::is_warr_skill(i32::from(req.magic_id)) {
+        // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：目标在
+        // `(nTargetX,nTargetY)` 的 1×1 邻域内 ⇒ `spellObject = targetObject` 且 snap 到目标实际坐标。
+        let (mut tx, mut ty) = (req.target_x, req.target_y);
+        if let Some(t) = world
+            .entities
+            .get(req.target_actor_id)
+            .filter(|t| !t.ghost && (t.x - tx).abs() <= 1 && (t.y - ty).abs() <= 1)
+        {
+            tx = t.x;
+            ty = t.y;
+        }
+        // `DoSpell` 距离门（`MagicManager.cs:152-155`，用 **snap 后**坐标）。
+        if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
+            match magic_table.get(req.magic_id) {
+                Some(magic) => {
+                    // `SendRefMsg(RM_SPELL, Magic.Effect, nTargetX, nTargetY, Magic.MagicId, "")`（`:159`）。
+                    let rm = smframe::sm_spell(
+                        actor_id,
+                        wire_coord(tx),
+                        wire_coord(ty),
+                        magic.effect,
+                        req.magic_id,
+                    );
+                    broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                }
+                None => glog!(
+                    "DBG",
+                    "CM_SPELL：魔号 {} 无 MagicInfo ⇒ `Magic.Effect` 不可得，RM_SPELL 不接（登记；等价降级）",
+                    req.magic_id
+                ),
+            }
+        }
     }
     // **片 A-5（buff 生产者接线）**：技能 14/15/31 的加点 buff 生产链
     // （`MagicManager.cs:352-366` 的 `SKILL_HANGMAJINBUB`/`SKILL_DEJIWONHO` 支与 `:472-478` 的
@@ -5007,11 +5099,13 @@ fn handle_spell_cmd(
     // **仅当 buff tick 开启**（`World::buff_tick_enabled`）时生效：关闭时完全不碰这条路径 ⇒
     // 既有 golden 逐字节不变（与 `World::enable_buff_tick` 的缺省关闭口径一致）。
     //
-    // **登记（残余，独立复验 2026-10-17，未实现）**：oracle `DoSpell:159` 在**过门之后**先发
+    // **订正（`openmir2-default-arm-spell-surface` 帧面片，2026-10-17，已接）**：oracle `DoSpell:159` 的
     // `SendRefMsg(RM_SPELL, userMagic.Magic.Effect, nTargetX, nTargetY, userMagic.Magic.MagicId, "")`
-    // ——本仓**魔号 14/15/31 上仍无该帧的生产者**（三个 `sm_spell` 发射点只覆盖 17/30/41、20、46；
-    // 属「`default` 支通用效果体」的整面缺口）⇒ 本支**不发 `SM_SPELL`**。本片**未引入、亦未修**，
-    // 另立片处理（帧面缺口，与 `RM_MAGICFIRE`/`RM_MAGIC_LVEXP` 的 `boTrain` 尾同批）。
+    // 现由**本函数开头那条无条件广播**发出（三条门：`default` 支 ∧ 非 `IsWarrSkill` ∧ 距离门；
+    // 位置在版本门之前）。魔号 14/15/31 原先「无该帧的生产者」的缺口**一并收口**（原登记作废）。
+    // **本支（A-5 buff 生产者）自身不发帧**：帧序 = 无条件 `SM_SPELL` 在前（:159）、
+    // 本支落的 buff 状态帧（`drain_buff_downlink` 的 657）在后——与 oracle「`:159` 先于 case 效果体」同序。
+    // 仍未接者：`RM_MAGICFIRE`（`:648-658`）与 `boTrain` 尾（`:659-668`），登记见 `magicwire` 模块头。
     if world.buff_tick_enabled() {
         let (mc, sc) = ground_sessions.get(chr_name).map_or((0, 0), |sg| {
             (i32::from(sg.state.wabil.mc), i32::from(sg.state.wabil.sc))
@@ -5124,15 +5218,9 @@ fn handle_spell_cmd(
             // i32 域比较（登记订正 4）：弃用 `i16::try_from(..).unwrap_or(0)` 的 fail-open 折 0，
             // 见 [`mir2_world::magic::spell_in_range_i32`]。
             if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
-                // `SendRefMsg(RM_SPELL, Magic.Effect, nTargetX, nTargetY, Magic.MagicId, "")`（`:159`）。
-                let rm = smframe::sm_spell(
-                    actor_id,
-                    wire_coord(tx),
-                    wire_coord(ty),
-                    magic.effect,
-                    req.magic_id,
-                );
-                broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                // **帧序（`openmir2-default-arm-spell-surface`）**：本魔号（17/30/41）的 `RM_SPELL`
+                // 已由**本函数开头的无条件广播**发出（`:159`，位置先于本支）⇒ 这里**不再发**，
+                // 以免**双发**或让帧落到效果体之后（oracle：`:159` 在 `switch` 体之前）。
                 // 护身符门（`CheckAmulet`）用的本会话 `UseItems[ArmRingl/Bujuk]`。
                 let armringl = amulet_slot(
                     ground_sessions.get(chr_name),
@@ -5263,15 +5351,8 @@ fn handle_spell_cmd(
             // i32 域比较（登记订正 4）：弃用 `i16::try_from(..).unwrap_or(0)` 的 fail-open 折 0，
             // 见 [`mir2_world::magic::spell_in_range_i32`]。
             if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
-                // `DoSpell` 顶部的 `SendRefMsg(RM_SPELL, Effect, nTargetX, nTargetY, MagicId, "")`（`:159`）。
-                let rm = smframe::sm_spell(
-                    actor_id,
-                    wire_coord(tx),
-                    wire_coord(ty),
-                    magic.effect,
-                    req.magic_id,
-                );
-                broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                // **帧序（`openmir2-default-arm-spell-surface`）**：20 的 `RM_SPELL` 已由**本函数开头的
+                // 无条件广播**发出（`:159`，位置先于本支）⇒ 这里**不再发**（否则双发/错序）。
                 // `UserMagic` 的内存态（尾里用；与召唤面同一口径）。
                 let mut train = magic::SkillTrainState {
                     magic_id: req.magic_id,
@@ -5355,15 +5436,8 @@ fn handle_spell_cmd(
             // i32 域比较（登记订正 4）：弃用 `i16::try_from(..).unwrap_or(0)` 的 fail-open 折 0，
             // 见 [`mir2_world::magic::spell_in_range_i32`]。
             if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
-                // `DoSpell` 顶部 `SendRefMsg(RM_SPELL, Effect, nTargetX, nTargetY, MagicId, "")`（`:159`）。
-                let rm = smframe::sm_spell(
-                    actor_id,
-                    wire_coord(tx),
-                    wire_coord(ty),
-                    magic.effect,
-                    req.magic_id,
-                );
-                broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                // **帧序（`openmir2-default-arm-spell-surface`）**：46 的 `RM_SPELL` 已由**本函数开头的
+                // 无条件广播**发出（`:159`，位置先于本支）⇒ 这里**不再发**（否则双发/错序）。
                 // `UserMagic` 的内存态（尾里被 `TrainSkill`/`CheckMagicLevelUp` 改）。
                 let mut train = magic::SkillTrainState {
                     magic_id: req.magic_id,
@@ -21151,5 +21225,482 @@ mod tests {
             i_clear < i_walk,
             "oracle 序：换图簇(633) 先于移动帧(SM_WALK)，实际 {seq:?}"
         );
+    }
+
+    // ==========================================================================
+    // 片 `openmir2-default-arm-spell-surface`（帧面）：`DoSpell` **无条件** `RM_SPELL` 的牙
+    // ==========================================================================
+    //
+    // 界定件 `tests/parity/m3/design-default-arm-spell-frames-20261017.md` §5.1（J1–J8）；
+    // 范围 = 编排侧**宽口径**裁决（卡上 comment `e6d8e8353ebb6f9a64013a1ec88110c450b10a7d`）。
+    // 全部走**生产入口** `handle_spell_cmd`（不直调 `World::cast_*`、不碰派生路径）。
+
+    /// 帧面片的共用夹具：施法者 `caster`(10,10)/socket 911、若干观察者（名, x, y, Ghost, socket）、
+    /// 存档里学会的魔号、魔法模板表（逐 `(魔号, Effect)`），以及 `ArmRingl` 槽里的护身符
+    /// （`dura = 600` ⇒ `Round(600/100) = 6`，满足 `CheckAmulet` 三档需求 1/5/2）。
+    struct SpellFrameRig {
+        world: mir2_world::World,
+        caster: i32,
+        online: OnlineRegistry,
+        saves: std::collections::HashMap<String, SavedHuman>,
+        ground_sessions: std::collections::HashMap<String, SessionGround>,
+        magic_table: magics::MagicTable,
+        displays: downlink::DisplayTable,
+        gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+    }
+
+    impl SpellFrameRig {
+        fn new(
+            learned: u16,
+            table: &[(u16, u8)],
+            observers: &[(&str, i32, i32, bool, i32)],
+        ) -> Self {
+            use std::collections::HashMap;
+            let mut world = mir2_world::World::new(64, 64);
+            let caster = world.add_entity(new_player_entity("caster".to_string(), 10, 10));
+            let mut displays = downlink::DisplayTable::new();
+            displays.set(
+                caster,
+                downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
+            );
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "uc".into(),
+                    chr_name: "caster".into(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 911,
+                    actor_id: caster,
+                },
+            );
+            for (i, o) in observers.iter().enumerate() {
+                let (name, x, y, ghost, socket): (&str, i32, i32, bool, i32) = *o;
+                let id = world.add_entity(new_player_entity(name.to_string(), x, y));
+                if ghost {
+                    world.entities.get_mut(id).unwrap().ghost = true;
+                }
+                displays.set(
+                    id,
+                    downlink::ActorDisplay::new(
+                        4,
+                        0,
+                        112 + i32::try_from(i).unwrap_or(0),
+                        0,
+                        0,
+                        255,
+                        name.as_bytes().to_vec(),
+                    ),
+                );
+                online_set(
+                    &mut online,
+                    OnlineEntry {
+                        account: format!("u{i}"),
+                        chr_name: name.to_string(),
+                        session_id: 10 + i32::try_from(i).unwrap_or(0),
+                        gate_idx: 0,
+                        socket,
+                        actor_id: id,
+                    },
+                );
+            }
+            world.tick();
+            let (tx0, rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx0);
+            let mut record = stage6_record();
+            record.data.magic = Some(vec![Some(record::MagicRcd {
+                mag_idx: learned,
+                level: 1,
+                magic_key: u16::from(b'm'),
+                tran_point: 0,
+            })]);
+            let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+            saves.insert(
+                "caster".into(),
+                SavedHuman {
+                    account: "uc".into(),
+                    record,
+                    enter_map: "0".into(),
+                },
+            );
+            let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+            let mut sg = test_session_ground(caster);
+            sg.use_items[game_svr::ability::SLOT_ARMRING_L] = Some(game_svr::bag::BagItem {
+                make_index: 1,
+                index: 1,
+                dura: 600,
+                dura_max: 1000,
+                desc: [0; 14],
+            });
+            ground_sessions.insert("caster".into(), sg);
+            let magic_table = magics::MagicTable::new(
+                table
+                    .iter()
+                    .map(|(id, eff)| mir2_data::MagicInfo {
+                        magic_id: *id,
+                        effect: *eff,
+                        effect_type: 4,
+                        train_lv: 3,
+                        ..mir2_data::MagicInfo::default()
+                    })
+                    .collect(),
+            );
+            Self {
+                world,
+                caster,
+                online,
+                saves,
+                ground_sessions,
+                magic_table,
+                displays,
+                gates,
+                rx,
+            }
+        }
+
+        /// 走一次生产入口。`click` = 客户端报的点击格（`Recog` 的低/高字）；
+        /// `target_actor_id` = `MakeLong(Param, Series)`（0 = 无目标对象）。
+        /// `magic_attack_rage` 传 8（oracle `SystemShare.Config.MagicAttackRage` 探针默认值，
+        /// 与既有 `spell_cmd_*` 用例同）。
+        fn cast(&mut self, magic_id: u16, click: (i32, i32), target_actor_id: i32) {
+            let mut catalog = game_svr::ability::StdItemCatalog::new();
+            catalog.insert(
+                1,
+                mir2_data::StdItem {
+                    name: "护身符".into(),
+                    std_mode: 25,
+                    shape: 5,
+                    ..mir2_data::StdItem::default()
+                },
+            );
+            let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+            let table = game_svr::mongen::MonsterTable::new(Vec::new());
+            let registry = mir2_envir::MapRegistry::from_entries(
+                mir2_envir::MapLoader::new(".", "map", "envir"),
+                Vec::new(),
+            );
+            handle_spell_cmd(
+                game_svr::feature::make_long(
+                    u16::try_from(click.0).unwrap_or(0),
+                    u16::try_from(click.1).unwrap_or(0),
+                ),
+                magic_id,
+                u16::try_from(target_actor_id).unwrap_or(0),
+                0,
+                "caster",
+                911,
+                &self.online,
+                &mut self.world,
+                &mut self.saves,
+                &mut self.ground_sessions,
+                &catalog,
+                &self.magic_table,
+                &pet_cfg,
+                8,
+                Some(&registry),
+                &table,
+                &mut self.displays,
+                &self.gates,
+            );
+        }
+
+        /// 取空 gate 通道：`(SM_* 帧体, `SendRaw` 短包/`+GD` ack)`。
+        fn drain(&mut self) -> (Vec<SfFrame>, Vec<SfFrame>) {
+            let mut frames = Vec::new();
+            let mut raws = Vec::new();
+            while let Ok(m) = self.rx.try_recv() {
+                match m {
+                    SimToGate::SendFrame { socket, body } => frames.push((socket, body)),
+                    SimToGate::SendRaw { socket, payload } => raws.push((socket, payload)),
+                    other => panic!("意外的下行：{other:?}"),
+                }
+            }
+            (frames, raws)
+        }
+    }
+
+    /// gate 通道上取到的一条下行：`(socket, 帧体 / `SendRaw` 短包字节)`。
+    type SfFrame = (i32, Vec<u8>);
+
+    /// 帧体的 `Ident`（`body[4..6]`；与文件末既有用例同口径）。
+    fn sf_ident(b: &[u8]) -> u16 {
+        mir2_protocol::frame::CommandMessage::from_bytes(b)
+            .unwrap()
+            .ident
+    }
+
+    fn sf_count(frames: &[SfFrame], socket: i32, ident: u16) -> usize {
+        frames
+            .iter()
+            .filter(|(s, b)| *s == socket && sf_ident(b) == ident)
+            .count()
+    }
+
+    /// 某连接上的 `Ident` 序列（**到达序** = 该连接的帧序）。
+    fn sf_seq(frames: &[SfFrame], socket: i32) -> Vec<u16> {
+        frames
+            .iter()
+            .filter(|(s, _)| *s == socket)
+            .map(|(_, b)| sf_ident(b))
+            .collect()
+    }
+
+    /// **J1**：**未建模**魔号也必须广播**恰好一条** `SM_SPELL`。取两个子类：
+    /// 55 = 字面 `default`（`MagicManager.cs:172-643` 里无 `case`，≤80，落 `:644` 共享尾）；
+    /// 81 = `:167` 版本门（`MagicId > 80` 早退）——**门在 `:159` 之后**，故 oracle 同样已发帧。
+    ///
+    /// 红检：① 去掉 `handle_spell_cmd` 里那条无条件广播 ⇒ 必红；② 把它挪到版本门之后 ⇒
+    /// 81 子类必红（55 子类仍绿）。
+    #[test]
+    fn spell_frame_unmodeled_magic_broadcasts_exactly_one() {
+        for (magic_id, effect) in [(55u16, 9u8), (81, 11)] {
+            let mut rig = SpellFrameRig::new(
+                magic_id,
+                &[(magic_id, effect)],
+                &[("obs", 12, 12, false, 912)],
+            );
+            rig.cast(magic_id, (12, 12), 0);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL),
+                1,
+                "[魔号 {magic_id}] 未建模魔号也必须广播**恰好一条** SM_SPELL；实得 {:?}",
+                sf_seq(&frames, 912)
+            );
+        }
+    }
+
+    /// **J2**：逐字段 = oracle `PlayObject.Message.cs:1457-1458` 的
+    /// `MakeMessage(SM_SPELL, ActorId, nParam1, nParam2, wParam)` + 尾 `nParam3.ToString()`：
+    /// `Recog`=施法者、`Param`=`nParam1`=`snap 后`的 x、`Tag`=`nParam2`=snap 后的 y、
+    /// `Series`=`wParam`=`Magic.Effect`、**尾 = `MagicId` 的 ASCII**。
+    ///
+    /// 布置：点击 (12,10)、目标实体在 (13,10) 的 1×1 邻域内 ⇒ `CretInNearXy` 命中 ⇒ snap 成 (13,10)
+    /// （`PlayObject.Attack.cs:1272-1277` 就地改写）⇒ 帧参必须是 **13/10** 而不是 12/10。
+    /// `Effect = 9 ≠ MagicId = 55` ⇒ 红检「把 `Effect` 与 `MagicId` 对调」必红。
+    #[test]
+    fn spell_frame_fields_match_oracle_layout() {
+        let mut rig = SpellFrameRig::new(55, &[(55, 9)], &[("target", 13, 10, false, 912)]);
+        let target = rig
+            .online
+            .iter()
+            .find(|e| e.chr_name == "target")
+            .unwrap()
+            .actor_id;
+        rig.cast(55, (12, 10), target);
+        let (frames, _raws) = rig.drain();
+        let got: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|(s, b)| *s == 912 && sf_ident(b) == mir2_protocol::messages::SM_SPELL)
+            .map(|(_, b)| b)
+            .collect();
+        assert_eq!(got.len(), 1, "观察者应收恰 1 帧 SM_SPELL；实得 {got:?}");
+        let cmd = mir2_protocol::frame::CommandMessage::from_bytes(got[0]).unwrap();
+        assert_eq!(cmd.recog, rig.caster, "Recog = ActorId（施法者）");
+        assert_eq!(
+            cmd.param, 13,
+            "nParam1 = snap 后的 nTargetX（13，不是点击格 12）"
+        );
+        assert_eq!(cmd.tag, 10, "nParam2 = snap 后的 nTargetY");
+        assert_eq!(
+            cmd.series, 9,
+            "wParam = Magic.Effect（=9，不是 MagicId 55）"
+        );
+        assert_eq!(got[0].len(), 12 + 2, "12B 头 + 尾（`\"55\"`）");
+        assert_eq!(&got[0][12..], b"55", "尾 = MagicId 的 ASCII（不是 Effect）");
+    }
+
+    /// **J3**：施法者**自己那条连接不收** `SM_SPELL`
+    /// （`PlayObject.Message.cs:1455` 的 `if (processMsg.ActorId != ActorId)` 守卫）；
+    /// 但仍收 `+GD` ack（`PlayObject.Message.cs:1339-1400` 成功支）。
+    ///
+    /// 红检：把 `broadcast_ref_msg` 换成 `broadcast_ref_msg_with_self`（`RM_MAGICFIRE` 的口径）
+    /// ⇒ 必红。
+    #[test]
+    fn spell_frame_never_reaches_caster_connection() {
+        let mut rig = SpellFrameRig::new(55, &[(55, 9)], &[("obs", 12, 12, false, 912)]);
+        rig.cast(55, (12, 12), 0);
+        let (frames, raws) = rig.drain();
+        assert_eq!(
+            sf_count(&frames, 911, mir2_protocol::messages::SM_SPELL),
+            0,
+            "施法者自身不得收 SM_SPELL；实得 {:?}",
+            sf_seq(&frames, 911)
+        );
+        assert!(
+            raws.iter()
+                .any(|(s, p)| *s == 911 && p.starts_with(b"+GD/")),
+            "施法者仍应收 +GD ack；实得 {raws:?}"
+        );
+        assert_eq!(
+            sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL),
+            1,
+            "阳性对照：观察者收恰 1 帧 SM_SPELL"
+        );
+    }
+
+    /// **J4**：广播范围 = ±`SendRefMsgRange`(=12) 内 `Race==Play && !Ghost` 的**其它**玩家
+    /// （`BaseObject.Message.cs:383-445` ⇒ `chat::hear_targets`）——
+    /// 近处非 Ghost 观察者收 1 帧；远处（|Δy|=30 > 12）与 Ghost 观察者**都不收**。
+    ///
+    /// 红检：把广播改成全图（不按 AOI 过滤 / 不过滤 `ghost`）⇒ 必红。
+    #[test]
+    fn spell_frame_aoi_range_and_ghost_filter() {
+        let mut rig = SpellFrameRig::new(
+            55,
+            &[(55, 9)],
+            &[
+                ("near", 12, 11, false, 912),
+                ("far", 10, 40, false, 913),
+                ("ghost", 11, 11, true, 914),
+            ],
+        );
+        rig.cast(55, (12, 12), 0);
+        let (frames, _raws) = rig.drain();
+        assert_eq!(
+            sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL),
+            1,
+            "AOI 内非 Ghost 观察者收 1 帧"
+        );
+        assert_eq!(
+            sf_count(&frames, 913, mir2_protocol::messages::SM_SPELL),
+            0,
+            "AOI 外（|Δy|=30 > SendRefMsgRange=12）观察者不得收；实得 {:?}",
+            sf_seq(&frames, 913)
+        );
+        assert_eq!(
+            sf_count(&frames, 914, mir2_protocol::messages::SM_SPELL),
+            0,
+            "Ghost 观察者不得收；实得 {:?}",
+            sf_seq(&frames, 914)
+        );
+    }
+
+    /// **J5**：距离门（`MagicManager.cs:152-155`）越界 ⇒ **0 帧**。两个子类：
+    /// ① 原始点击越界（(20,10)，|Δx|=10 > 8）；② **snap 后**越界（点击 (18,10) 在界、目标实体在
+    /// (19,10) 邻域内 ⇒ snap 成 (19,10) ⇒ |Δx|=9 > 8）——口径 = A-5 修好的「门读 snap 后坐标」。
+    ///
+    /// 红检：把门换回**原始**坐标 ⇒ ② 必红；去掉门 ⇒ ① 必红。
+    #[test]
+    fn spell_frame_out_of_range_sends_nothing() {
+        // ① 原始坐标越界（无目标对象 ⇒ 无 snap）。
+        let mut rig = SpellFrameRig::new(55, &[(55, 9)], &[("obs", 12, 12, false, 912)]);
+        rig.cast(55, (20, 10), 0);
+        let (frames, _raws) = rig.drain();
+        assert_eq!(
+            sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL),
+            0,
+            "|Δx|=10 > MagicAttackRage=8 ⇒ 0 帧；实得 {:?}",
+            sf_seq(&frames, 912)
+        );
+
+        // ② snap 后越界：点击在界、目标实体把坐标推到界外。
+        let mut rig = SpellFrameRig::new(55, &[(55, 9)], &[("target", 19, 10, false, 912)]);
+        let target = rig
+            .online
+            .iter()
+            .find(|e| e.chr_name == "target")
+            .unwrap()
+            .actor_id;
+        rig.cast(55, (18, 10), target);
+        let (frames, _raws) = rig.drain();
+        assert_eq!(
+            sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL),
+            0,
+            "snap 后 |Δx|=9 > 8 ⇒ 0 帧（门读 snap 后坐标）；实得 {:?}",
+            sf_seq(&frames, 912)
+        );
+    }
+
+    /// **J6**：帧序 —— `SM_SPELL` 早于 `SM_MAGICFIRE`（oracle `MagicManager.cs:159` 早于 `:648`）。
+    /// 取建模面 17（`SKILL_SKELLETON`，带护身符 ⇒ `boSpellFire` 真）。
+    ///
+    /// 红检：把无条件广播挪到三个效果体块**之后** ⇒ 必红。
+    #[test]
+    fn spell_frame_spell_precedes_magicfire() {
+        let mut rig = SpellFrameRig::new(17, &[(17, 3)], &[("obs", 11, 10, false, 912)]);
+        rig.cast(17, (11, 10), 0);
+        let (frames, _raws) = rig.drain();
+        let seq = sf_seq(&frames, 912);
+        let i_spell = seq
+            .iter()
+            .position(|id| *id == mir2_protocol::messages::SM_SPELL)
+            .unwrap_or_else(|| panic!("观察者应收 SM_SPELL；实得 {seq:?}"));
+        let i_fire = seq
+            .iter()
+            .position(|id| *id == mir2_protocol::messages::SM_MAGICFIRE)
+            .unwrap_or_else(|| panic!("观察者应收 SM_MAGICFIRE；实得 {seq:?}"));
+        assert!(
+            i_spell < i_fire,
+            "oracle 序：`:159` 的 SM_SPELL 先于 `:648` 的 SM_MAGICFIRE；实得 {seq:?}"
+        );
+    }
+
+    /// **J7**：战士技能 ⇒ **0 帧**。两个子类：
+    /// ① 12（`SKILL_ERGUM`）——`ClientSpellXY` 的独立 `case`（不进 `default`）**且** `IsWarrSkill`
+    ///    命中（两道门各挡一次）；② 7（`SKILL_YEDO`）——**进 `default`**（不在 8 条独立 `case` 里）
+    ///    却命中 `IsWarrSkill`（`MagicManager.cs:82-100` 的 9 个魔号之一）⇒ 只有
+    ///    `MagicManager.cs:151` 那道门挡得住 ⇒ 该子类**只**锁 `IsWarrSkill` 门。
+    ///
+    /// 红检：去掉 `!magic::is_warr_skill(..)` 门 ⇒ ② 必红（12 仍被独立 case 门挡住）。
+    #[test]
+    fn spell_frame_warr_skill_sends_nothing() {
+        for magic_id in [12u16, 7] {
+            let mut rig =
+                SpellFrameRig::new(magic_id, &[(magic_id, 3)], &[("obs", 12, 12, false, 912)]);
+            rig.cast(magic_id, (12, 12), 0);
+            let (frames, raws) = rig.drain();
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL),
+                0,
+                "[魔号 {magic_id}] 战士技能 ⇒ 0 帧（MagicManager.cs:151）；实得 {:?}",
+                sf_seq(&frames, 912)
+            );
+            assert!(
+                raws.iter()
+                    .any(|(s, p)| *s == 911 && p.starts_with(b"+GD/")),
+                "[魔号 {magic_id}] 战士技能仍走完 ClientSpellXY ⇒ 自身收 +GD"
+            );
+        }
+    }
+
+    /// **回归牙（本片独有风险）**：17/20/30/41/46 各一次施法 —— 观察者收**恰一条** `SM_SPELL`
+    /// （防「块内发 + 头上发」**双发**），且该魔号原有的后续帧 `SM_MAGICFIRE` 仍在（防错序/发漏）。
+    ///
+    /// 红检：恢复成「块内发」而不删块内发 ⇒ 计数变 2 必红；把广播挪到效果体之后 ⇒ 序断言必红。
+    #[test]
+    fn spell_frame_modeled_ids_single_spell_and_followup() {
+        for magic_id in [17u16, 20, 30, 41, 46] {
+            let mut rig =
+                SpellFrameRig::new(magic_id, &[(magic_id, 3)], &[("obs", 11, 10, false, 912)]);
+            rig.cast(magic_id, (11, 10), 0);
+            let (frames, _raws) = rig.drain();
+            let seq = sf_seq(&frames, 912);
+            println!("SPELLFRAME_REGRESSION magic_id={magic_id} obs_seq={seq:?}");
+            assert_eq!(
+                seq.iter()
+                    .filter(|id| **id == mir2_protocol::messages::SM_SPELL)
+                    .count(),
+                1,
+                "[魔号 {magic_id}] 一次施法恰一条 SM_SPELL（防双发）；实得 {seq:?}"
+            );
+            let i_spell = seq
+                .iter()
+                .position(|id| *id == mir2_protocol::messages::SM_SPELL)
+                .expect("应收 SM_SPELL");
+            let i_fire = seq
+                .iter()
+                .position(|id| *id == mir2_protocol::messages::SM_MAGICFIRE)
+                .unwrap_or_else(|| {
+                    panic!("[魔号 {magic_id}] 后续帧 SM_MAGICFIRE 不得丢；实得 {seq:?}")
+                });
+            assert!(
+                i_spell < i_fire,
+                "[魔号 {magic_id}] SM_SPELL 必须仍排在 SM_MAGICFIRE 之前；实得 {seq:?}"
+            );
+        }
     }
 }
