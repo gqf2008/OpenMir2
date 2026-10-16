@@ -51,16 +51,40 @@ impl Session {
     }
 }
 
+/// **TransMap 簇出帧（接线批 A）**：一次成功的切图落地（oracle `BaseObject.SpaceMove`
+/// `src/M2Server/Actor/BaseObject.cs:1130-1144` 与 `PlayObject.EnterAnotherMap`
+/// `src/M2Server/Player/PlayObject.cs:3772-3778` 的共同落地动作）产生的事件。
+///
+/// `switch_map` 成功后记一条；宿主（`bins/game-svr`）在下一个下行段 drain 并连发
+/// `SM_CLEAROBJECTS(633)` → `SM_CHANGEMAP(634)`（+ `SM_SPACEMOVE_SHOW(801)`/`SHOW2(807)`）。
+///
+/// - `space_move_show`：`None` = `EnterAnotherMap`（无 show 帧）；`Some(show2)` = `SpaceMove`
+///   的随机落点支（`nInt == 1` ⇒ `RM_SPACEMOVE_SHOW2` → `show2 == true`，否则 `RM_SPACEMOVE_SHOW`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapChange {
+    /// 落地者 `ActorId`（`SM_CHANGEMAP` 的 `Recog`、`SM_SPACEMOVE_SHOW` 的 `Recog`）。
+    pub actor_id: i32,
+    /// 落地后的图（宿主据此查地图文件名 + `DayBright`）。
+    pub map_id: usize,
+    /// 落地后的坐标（`SM_CHANGEMAP` 的 `Param`/`Tag`）。
+    pub x: i32,
+    pub y: i32,
+    pub space_move_show: Option<bool>,
+}
+
 /// 世界侧会话管理（`World` 的一部分）。
 #[derive(Clone, Debug, Default)]
 pub struct SessionRegistry {
     sessions: Vec<Session>,
+    /// **接线批 A**：本 tick 内成功的切图事件（`World::switch_map` 记，宿主 drain）。保序。
+    map_changes: Vec<MapChange>,
 }
 
 impl SessionRegistry {
     pub fn new() -> Self {
         SessionRegistry {
             sessions: Vec::new(),
+            map_changes: Vec::new(),
         }
     }
 
@@ -82,6 +106,16 @@ impl SessionRegistry {
 
     pub fn is_empty(&self) -> bool {
         self.sessions.is_empty()
+    }
+
+    /// **接线批 A**：取走本 tick 已记的切图事件（保序，取走即清）。
+    pub fn drain_map_changes(&mut self) -> Vec<MapChange> {
+        std::mem::take(&mut self.map_changes)
+    }
+
+    /// **接线批 A**：只读查看待 drain 的切图事件（诊断/用例断言用；不消费）。
+    pub fn map_changes(&self) -> &[MapChange] {
+        &self.map_changes
     }
 }
 
@@ -146,12 +180,40 @@ impl World {
     }
 
     /// 切图（对应地图链接/传送的落地动作）：旧图摘除 → 新图登记 → 视野列表整体失效。
+    ///
+    /// = `PlayObject.EnterAnotherMap` 的落地（无 `SM_SPACEMOVE_SHOW` 尾帧）。记一条
+    /// [`MapChange`]（`space_move_show = None`）。
     pub fn switch_map(
         &mut self,
         chr_name: &str,
         map_id: usize,
         x: i32,
         y: i32,
+    ) -> Result<(), SessionError> {
+        self.switch_map_inner(chr_name, map_id, x, y, None)
+    }
+
+    /// **接线批 A**：`BaseObject.SpaceMove`（随机落点切图）的落地。与 [`World::switch_map`]
+    /// 同一落地动作，但成功后在 `SM_CHANGEMAP` 之后追加 `SM_SPACEMOVE_SHOW2`(`show2==true`)/
+    /// `SM_SPACEMOVE_SHOW`(`false`)（oracle `BaseObject.cs:1137/1141` 的 `nInt` 分叉）。
+    pub fn switch_map_space(
+        &mut self,
+        chr_name: &str,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        show2: bool,
+    ) -> Result<(), SessionError> {
+        self.switch_map_inner(chr_name, map_id, x, y, Some(show2))
+    }
+
+    fn switch_map_inner(
+        &mut self,
+        chr_name: &str,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        space_move_show: Option<bool>,
     ) -> Result<(), SessionError> {
         let Some(sess) = self.sessions.get(chr_name) else {
             return Err(SessionError::NoSession);
@@ -184,6 +246,14 @@ impl World {
         }
         let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
         sess.map_id = map_id;
+        // **接线批 A**：成功落地 ⇒ 记一条切图事件（宿主按 oracle 序连发 CLEAROBJECTS/CHANGEMAP/[SHOW]）。
+        self.sessions.map_changes.push(MapChange {
+            actor_id,
+            map_id,
+            x,
+            y,
+            space_move_show,
+        });
         Ok(())
     }
 
