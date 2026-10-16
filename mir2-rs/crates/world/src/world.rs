@@ -8,7 +8,7 @@
 //!   `RandomNumber`（与 C# 侧按同一调用顺序消费）；
 //! - 不实现 M1 的边界服务（登录/网关/DBSrv），只做世界内的 tick/实体/地图/AOI/会话/战斗。
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::thread::ThreadId;
 
 use mir2_data::models::{MonsterDropItem, StdItem, STRING_GOLD_NAME};
@@ -22,8 +22,8 @@ use crate::buff::{
     BUFF_PASS_INTERVAL_MS, MAX_STATUS_ATTRIBUTE,
 };
 use crate::combat::{
-    attack_dir_grouped, generate_drops, swing_power, win_exp, AttackOutcome, AttackPowerMode,
-    CombatConfig,
+    attack_dir_grouped_poison, generate_drops, swing_power, win_exp, AttackOutcome,
+    AttackPoisonState, AttackPowerMode, CombatConfig,
 };
 use crate::entity::{Entity, EntityStore};
 use crate::map::{CellType, FloorItemKind, MapGrid, MapRouteSpec};
@@ -31,6 +31,16 @@ use crate::session::SessionRegistry;
 
 /// C# `ProcessHumans` 的节拍（毫秒）。
 pub const TICK_INTERVAL_MS: i64 = 200;
+
+/// `MagicConst.SKILL_HANGMAJINBUB`（`src/Modules/SystemModule/Const/MagicConst.cs:60`）——幽灵盾。
+/// 效果体走 `MagMakeDefenceArea(..., btState = 1)` ⇒ `MagDefenceUp`（`MagicManager.cs:352-357`）。
+pub const SKILL_HANGMAJINBUB: u16 = 14;
+/// `MagicConst.SKILL_DEJIWONHO`（`MagicConst.cs:64`）——神圣战甲术。
+/// 效果体走 `MagMakeDefenceArea(..., btState = 0)` ⇒ `DefenceUp`（`MagicManager.cs:359-365`）。
+pub const SKILL_DEJIWONHO: u16 = 15;
+/// `MagicConst.SKILL_SHIELD`（`MagicConst.cs:128`）——魔法盾。
+/// 效果体走 `MagBubbleDefenceUp` ⇒ `MagicShield`（`MagicManager.cs:472-478`）。
+pub const SKILL_SHIELD: u16 = 31;
 
 /// 世界 tick 里排队执行的命令。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -330,6 +340,13 @@ pub struct World {
     ///
     /// 只在 `ai_enabled` 时被写入 ⇒ 关闭时恒空、既有 golden 一字不改。
     pub(crate) pending_ai_attacks: Vec<(i32, i32, AttackOutcome)>,
+    /// **片 A-5（buff 生产者接线）**：攻击命中中毒门（`PlayObject.Attack.cs:221`）的**攻/守双方**
+    /// 运行态（`Paralysis` / `UnParalysis` / `AntiPoison`），按 actor id 挂世界侧。
+    ///
+    /// 与 [`World::buffs`] 同体例（`Entity` 里没有这三个字段的本仓，先挂世界表；由宿主
+    /// `bins/game-svr` 在攻击派发前用 [`World::set_attack_poison`] 灌入）。**缺省空表** ⇒ 无任何
+    /// actor 有麻痹态 ⇒ [`World::attack_once`] 的毒门短路（不抽），既有 golden 逐字节不变。
+    pub attack_poison: HashMap<i32, AttackPoisonState>,
 }
 
 impl World {
@@ -393,6 +410,7 @@ impl World {
             last_tick: TickRecord::default(),
             by_map_scratch: Vec::new(),
             pending_ai_attacks: Vec::new(),
+            attack_poison: HashMap::new(),
         };
         // **M3②③ 隔离口径**：`MIR2_RNG_ISOLATE_ATTACK` 开启时按 `MIR2_RNG_SEED` 派生专用流
         // （缺省未设 ⇒ `None`，`isolate_attack` 保持 `false`，一字不改）。读 env 的 fail-closed
@@ -541,11 +559,16 @@ impl World {
     /// （`:1943` 的首门）；否则**无条件 `return true`**（`:1966`）——与 `CharStatus` 是否变化**无关**。
     ///
     /// **登记（帧面 deferred，A-5）**：oracle 尾 `if (nOldCharStatus != CharStatus) StatusChanged();`
-    /// （⇒ `RM_CHARSTATUSCHANGED`）与 `Race==Play` 的 `SysMsg` 未接（帧面归接线层）；`MakePosion`
-    /// 无生产调用者 ⇒ 该两支当前运行期不可达。
+    /// （⇒ `RM_CHARSTATUSCHANGED`）与 `Race==Play` 的 `SysMsg` 未接（帧面归接线层）。
     ///
-    /// **消费方（生产链接线，A-5，deferred）**：玩家攻击 `MakePosion(STONE, …)`
-    /// （`PlayObject.Attack.cs:223`）与怪物 7 处（`CentipedeKingMonster.cs:74` 等）。
+    /// **消费方（A-5 接线后的口径确认，独立复验 2026-10-17）**：本函数在本仓**唯一可达的生产入口 =
+    /// 玩家攻击路径**——`PlayObject.Attack.cs:223` 的麻痹戒指命中（宿主 `bins/game-svr` 的
+    /// `handle_hit_cmd` → `World::attack_once` 的 `attack_dir_grouped_poison` 那一次
+    /// `make_posion(STONE, AttackPosionTime, 0)`）。
+    /// **6 个怪物种类的 `MakePosion` 调用点在本仓不可接线**：`monai.rs` 只建模「通用族」AI、
+    /// `mongen.rs` 不按怪物名分派 ⇒ 没有可挂的按名调用点。⇒ **原任务文本「怪物命中玩家施毒」
+    /// 与 oracle 的接线口径不符**（oracle 那 6 处是**按怪物类**写的），需编排侧确认后再决定
+    /// 是否为这 6 处单开片；本片**未引入、亦未修**。
     ///
     /// 前置：`actor_id` 须是已落图的实体（oracle 里 `this` 恒有效）；`nType` 的 `from_index` 在
     /// `n_type < MAX_STATUS_ATTRIBUTE` 后恒 `Some`（12 值全覆盖）。
@@ -604,6 +627,140 @@ impl World {
         if let Some(e) = self.entities.get_mut(actor_id) {
             e.magic_shield = true;
         }
+    }
+
+    /// **片 A-5（buff 生产者接线）**：写入某 actor 的攻击命中中毒门运行态
+    /// （[`crate::combat::AttackPoisonState`]）。宿主 `bins/game-svr` 在攻击派发前灌入；幂等（覆盖）。
+    ///
+    /// 与 [`World::attack_poison`] 表、[`crate::combat::attack_dir_grouped_poison`] 同源。
+    pub fn set_attack_poison(&mut self, actor_id: i32, state: crate::combat::AttackPoisonState) {
+        self.attack_poison.insert(actor_id, state);
+    }
+
+    /// 清某 actor 的攻击中毒门运行态（离场/卸麻痹戒指）。幂等。
+    pub fn clear_attack_poison(&mut self, actor_id: i32) {
+        self.attack_poison.remove(&actor_id);
+    }
+
+    /// **片 A-5（buff 生产者接线）**：`BaseObject.MagMakeDefenceArea`
+    /// （`BaseObject.cs:2094-2132`）——技能 14/15 的 `DefenceUp`/`MagDefenceUp` 生产入口。
+    ///
+    /// **1:1 复刻 oracle 的一处 bug（不许"修正"）**：oracle 的双层循环虽有 `cX`/`cY`，但
+    /// `ref Envir.GetCellInfo(nX, nY, out …)` 传的是**函数入参** `nX/nY`（`BaseObject.cs:2108`），
+    /// **不是** `cX/cY` ⇒ `(2*range+1)^2` 个迭代**全部读中心格 `(nX,nY)`** ⇒ 效果等同
+    /// 「中心格的每个友军各加 `(2*range+1)^2` 次 buff，周围格一个不加」。
+    ///
+    /// `bt_state == 0` ⇒ `baseObject.DefenceUp(nSec)`；否则 ⇒ `baseObject.MagDefenceUp(nSec)`
+    /// （`BaseObject.cs:2117-2125`）。友军门 = [`crate::combat::is_proper_friend`]（`IsProperFriend`）；
+    /// `Ghost` 目标跳过（oracle `!baseObject.Ghost`）。返回 `result`（命中次数求和，供 `boTrain` 的 `> 0` 门）。
+    ///
+    /// **登记**：oracle 的格 `ObjList` 只含**地图落格对象**（本仓 actors 不落格）⇒ 这里按
+    /// 「世界内坐标 == `(nX,nY)` 且 `Race` 属 `Play`/`Monster`」的实体（槽位序）代替格列表；
+    /// `cellSuccess`/`IsAvailable` 两支由「格内无实体 ⇒ 无命中」自然覆盖（登记）。
+    pub fn mag_make_defence_area(
+        &mut self,
+        caster_id: i32,
+        n_x: i32,
+        n_y: i32,
+        n_range: i32,
+        n_sec: i32,
+        bt_state: u8,
+    ) -> i32 {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return 0;
+        };
+        let map_id = caster.map_id;
+        let group_members: Vec<i32> = if caster.group_owner != 0 {
+            self.entities
+                .get(caster.group_owner)
+                .map(|e| e.group_members.clone())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let mut result = 0;
+        for _c_x in (n_x - n_range)..=(n_x + n_range) {
+            for _c_y in (n_y - n_range)..=(n_y + n_range) {
+                // oracle bug：读的是中心格 `(nX,nY)`（见方法文档）。
+                let ids: Vec<i32> = self
+                    .entities
+                    .iter()
+                    .filter(|e| {
+                        e.map_id == map_id
+                            && e.x == n_x
+                            && e.y == n_y
+                            && (e.race == crate::entity::ACTOR_RACE_PLAY
+                                || e.race >= crate::entity::ACTOR_RACE_ANIMAL)
+                    })
+                    .map(|e| e.id)
+                    .collect();
+                for id in ids {
+                    let Some(obj) = self.entities.get(id).cloned() else {
+                        continue;
+                    };
+                    if obj.ghost {
+                        continue;
+                    }
+                    let in_group = caster.group_owner != 0 && group_members.contains(&id);
+                    if !crate::combat::is_proper_friend(&caster, &obj, in_group) {
+                        continue;
+                    }
+                    if bt_state == 0 {
+                        self.defence_up(id, n_sec);
+                    } else {
+                        self.mag_defence_up(id, n_sec);
+                    }
+                    result += 1;
+                }
+            }
+        }
+        result
+    }
+
+    /// **片 A-5（buff 生产者接线）**：技能 31（`SKILL_SHIELD` 魔法盾）的生产入口
+    /// （`MagicManager.cs:472-478` 的 `SKILL_SHIELD` 支 → `CharacterObject.MagBubbleDefenceUp`
+    /// `CharacterObject.cs:96-110`）。
+    ///
+    /// `nSec = GetPower(GetRPow(MC) + 15)`（取数顺序：`GetRPow(MC)` → `GetPower`，见
+    /// [`crate::magic::power_shield`]）；随后 `AddBuff(MagicShield, nSec, nSec)` + 置 `MagicShield`。
+    /// 返回 `nSec`（供 `boTrain`/测试）。`MagBubbleDefenceUp` 的 `StatusTimeArr[BubbleDefenceUP] != 0`
+    /// 早退门读的是**旧机制**（本骨架未建模 ⇒ 恒 0 ⇒ 不早退，登记）。
+    pub fn cast_shield_spell(
+        &mut self,
+        actor_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        mc: i32,
+    ) -> i32 {
+        let n_sec = crate::magic::power_shield(&mut self.rng, magic, level, mc);
+        self.magic_shield_on(actor_id, n_sec);
+        n_sec
+    }
+
+    /// **片 A-5（buff 生产者接线）**：技能 14/15（`SKILL_HANGMAJINBUB`/`SKILL_DEJIWONHO`）的生产入口
+    /// （`MagicManager.cs:352-366` 的 `SKILL_HANGMAJINBUB`/`SKILL_DEJIWONHO` 支）。
+    ///
+    /// `nPower = GetAttackPower(GetPower13(userMagic, 60) + Lo(SC)*10, ΔSC + 1)`（取数顺序：
+    /// `GetPower13` → `GetAttackPower`；玩家 `GetAttackPower` override 若 `Luck <= 0` 多抽一次
+    /// `Random(10)`）；随后 `MagMakeDefenceArea(nTargetX, nTargetY, 3, nPower, btState)`
+    /// （`btState == 0` ⇒ `DefenceUp`；否则 ⇒ `MagDefenceUp`）。返回 `result`（供 `boTrain` 的 `> 0` 门）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn cast_defence_area_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        sc: i32,
+        n_target_x: i32,
+        n_target_y: i32,
+        bt_state: u8,
+    ) -> i32 {
+        let atk = self
+            .entities
+            .get(caster_id)
+            .map_or(AttackPowerMode::Base, AttackPowerMode::for_attacker);
+        let n_power = crate::magic::power_defence_area(&mut self.rng, magic, level, sc, atk);
+        self.mag_make_defence_area(caster_id, n_target_x, n_target_y, 3, n_power, bt_state)
     }
 
     /// oracle `SystemProcessor.GetGameTime`（`SystemProcessor.cs:48/98-134`）的周期刷新等价物。
@@ -1537,13 +1694,36 @@ impl World {
         } else {
             Vec::new()
         };
-        let outcome = attack_dir_grouped(
+        // **片 A-5（buff 生产者接线）**：攻击命中中毒门（`PlayObject.Attack.cs:221-224`）的运行态。
+        // 每个 actor 的表项存**自身**的三个属性（`Paralysis` 作攻方 + `UnParalysis`/`AntiPoison`
+        // 作守方）；门取**攻方**的 `Paralysis` 与**守方**的另两项。buff 关闭时传 `None` ⇒ 与
+        // [`attack_dir_grouped`] 逐取数等价（既有 golden 不变）；开启且攻方有麻痹态时，在
+        // `Random(5)` **之前**插一次 `Random(AntiPoison + AttackPosionRate)`（oracle 取数次序）。
+        let poison = if self.buff_enabled {
+            self.attack_poison
+                .get(&actor_id)
+                .map(|a| AttackPoisonState {
+                    paralysis: a.paralysis,
+                    un_paralysis: self
+                        .attack_poison
+                        .get(&target_id)
+                        .is_some_and(|t| t.un_paralysis),
+                    anti_poison: self
+                        .attack_poison
+                        .get(&target_id)
+                        .map_or(0, |t| t.anti_poison),
+                })
+        } else {
+            None
+        };
+        let (outcome, poisoned) = attack_dir_grouped_poison(
             self.attack_rng(),
             &mut attacker,
             &mut target,
             last_hitter,
             &cfg,
             &attacker_group_members,
+            poison,
         );
         let now = self.clock_ms;
         if let Some(e) = self.entities.get_mut(target_id) {
@@ -1561,6 +1741,19 @@ impl World {
                     e.ai.pending_struck.push(actor_id);
                 }
             }
+        }
+        // `targetObject.MakePosion(PoisonState.STONE, SystemShare.Config.AttackPosionTime, 0)`
+        // （`PlayObject.Attack.cs:223`）：命中中毒门过了 ⇒ 给**目标**上石化毒 buff。
+        // `STONE = 5` 与 `BuffType::Paralysis` 数值对齐（见 [`crate::buff`] 的索引表）。
+        // `MakePosion` 不抽数 ⇒ 取数账本不受影响（那一次抽取已在
+        // [`attack_dir_grouped_poison`] 里按 oracle 的位置、`&&` 短路口径发生）。
+        if poisoned {
+            self.make_posion(
+                target_id,
+                BuffType::Paralysis as u8,
+                cfg.attack_poison_time,
+                0,
+            );
         }
         Some(outcome)
     }
@@ -3691,5 +3884,222 @@ mod tests {
             (1, 2)
         );
         assert_eq!(w.sessions.map_changes().len(), 1);
+    }
+
+    // ================= 片 A-5（buff 生产者接线）: 攻击中毒门 =================
+
+    fn ent(id: i32, name: &str, x: i32, y: i32, race: u8) -> Entity {
+        let mut e = Entity::new(id, name, x, y);
+        e.race = race;
+        e
+    }
+
+    /// **A-5 端到端（攻击 → `make_posion` → 657）**：玩家戴麻痹戒指攻击一个玩家目标，中毒门命中
+    /// （`Random(AntiPoison + AttackPosionRate) == 0`）⇒ `World::attack_once` 调
+    /// `make_posion(STONE, AttackPosionTime, 0)` ⇒ 目标获得 `Paralysis` buff（`CharStatus` 置位）；
+    /// buff 递减到 0 时 `Operate` 的 `boChg` 支 ⇒ `TickRecord.buff_status_changes` 非空
+    /// （宿主 `drain_buff_downlink` 出 `SM_CHARSTATUSCHANGED(657)`）。
+    #[test]
+    fn attack_poison_end_to_end_yields_char_status_change() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 100_000;
+        w.enable_buff_tick();
+        // `Random(rate) == 0` 必中：把 rate 压到 1（`random_below(1)` 恒 0）。
+        w.combat_config.attack_poison_rate = 1;
+        w.combat_config.attack_poison_time = 5;
+        w.add_entity(ent(1, "hero", 10, 10, ACTOR_RACE_PLAY));
+        w.add_entity(ent(2, "foe", 11, 10, ACTOR_RACE_PLAY));
+        // 攻方持麻痹态（`set_attack_poison` = 宿主灌入 `PlayObject.Paralysis`）。
+        w.set_attack_poison(
+            1,
+            AttackPoisonState {
+                paralysis: true,
+                un_paralysis: false,
+                anti_poison: 0,
+            },
+        );
+        w.attack_cmd(1, 2);
+        w.tick();
+        assert!(
+            w.buffs.has_buff(2, BuffType::Paralysis),
+            "中毒门命中 ⇒ 目标上石化毒 buff（`STONE = 5`）"
+        );
+        assert_ne!(
+            w.entities.get(2).unwrap().char_status,
+            0,
+            "`MakePosion` 写 `CharStatus`（含 Paralysis 位）"
+        );
+        // 推进到 buff 过期（state_tick 5，每 tick 4 pass ⇒ 2 tick 内到 0）。
+        let mut saw_change = false;
+        for _ in 0..4 {
+            w.tick();
+            if w.last_tick
+                .buff_status_changes
+                .iter()
+                .any(|(id, _)| *id == 2)
+            {
+                saw_change = true;
+                break;
+            }
+        }
+        assert!(
+            saw_change,
+            "buff 过期 ⇒ buff_status_changes 记目标（宿主出 657）"
+        );
+        // 红检（变异牙）：① 去掉 `attack_once` 里的 `make_posion` 调用 ⇒ 首个 `has_buff` 断言必红；
+        // ② 不接线（`poisoned` 恒 false）⇒ 同上；③ 把 `if self.buff_enabled` 去掉成恒读表 ⇒
+        // `attack_poison_caller_absent_when_buff_disabled` 必红。
+    }
+
+    /// **A-5 关闭语义**：`buff_enabled == false` 时**不接线**——即使攻方有麻痹态且 rate=1，也不上毒
+    /// （既有 golden 逐字节不变）。
+    #[test]
+    fn attack_poison_caller_absent_when_buff_disabled() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 100_000;
+        // 不 `enable_buff_tick`。
+        w.combat_config.attack_poison_rate = 1;
+        w.add_entity(ent(1, "hero", 10, 10, ACTOR_RACE_PLAY));
+        w.add_entity(ent(2, "foe", 11, 10, ACTOR_RACE_PLAY));
+        w.set_attack_poison(
+            1,
+            AttackPoisonState {
+                paralysis: true,
+                un_paralysis: false,
+                anti_poison: 0,
+            },
+        );
+        w.attack_cmd(1, 2);
+        w.tick();
+        assert!(
+            !w.buffs.has_buff(2, BuffType::Paralysis),
+            "buff 关闭 ⇒ 不接线、不上毒"
+        );
+    }
+
+    /// **A-5 攻方无麻痹态 ⇒ 不抽不上毒**（oracle `PlayObject.Attack.cs:221` 的 `&&` 短路 + `Paralysis` 门）。
+    #[test]
+    fn attack_poison_requires_paralysis_flag() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 100_000;
+        w.enable_buff_tick();
+        w.combat_config.attack_poison_rate = 1;
+        w.add_entity(ent(1, "hero", 10, 10, ACTOR_RACE_PLAY));
+        w.add_entity(ent(2, "foe", 11, 10, ACTOR_RACE_PLAY));
+        w.set_attack_poison(
+            1,
+            AttackPoisonState {
+                paralysis: false,
+                un_paralysis: false,
+                anti_poison: 0,
+            },
+        );
+        w.attack_cmd(1, 2);
+        w.tick();
+        assert!(
+            !w.buffs.has_buff(2, BuffType::Paralysis),
+            "无麻痹态 ⇒ 不上毒"
+        );
+    }
+
+    // ================= 片 A-5: 技能生产链（14/15/31） =================
+
+    fn magic(magic_id: u16) -> mir2_data::MagicInfo {
+        mir2_data::MagicInfo {
+            magic_id,
+            def_max_power: 1, // `GetPower` 的 `random_below(def_max_power - def_power)` 分界 > 0
+            ..Default::default()
+        }
+    }
+
+    /// **A-5 技能 15（`SKILL_DEJIWONHO`）→ `defence_up` + oracle 的中心格 bug**：
+    /// `MagMakeDefenceArea` 的 `(2*3+1)^2 = 49` 个迭代全读**中心格** ⇒ 中心格的唯一友军被
+    /// `DefenceUp` 49 次（`hits == 49`），邻格友军一次都不加。
+    #[test]
+    fn skill_dejiwonho_defence_up_follows_oracle_center_cell_bug() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 100_000;
+        w.enable_buff_tick();
+        w.add_entity(ent(1, "caster", 10, 10, ACTOR_RACE_PLAY));
+        w.add_entity(ent(2, "friend", 12, 12, ACTOR_RACE_PLAY));
+        w.add_entity(ent(3, "bystander", 11, 10, ACTOR_RACE_PLAY));
+        let m = magic(SKILL_DEJIWONHO);
+        let hits = w.cast_defence_area_spell(1, &m, 0, 0, 12, 12, 0);
+        assert_eq!(
+            hits, 49,
+            "中心格友军各 49 次（oracle `GetCellInfo(nX,nY)` 未用循环变量的 bug）"
+        );
+        assert!(
+            w.buffs.has_buff(2, BuffType::DefensePower),
+            "中心格友军获 `DefencePower`"
+        );
+        assert!(
+            !w.buffs.has_buff(3, BuffType::DefensePower),
+            "邻格（非中心）一次都不加"
+        );
+        // 红检（变异牙）：把 `GetCellInfo(nX,nY)` 的 bug「修正」成按 `(cX,cY)` 遍历 ⇒ `hits` 变 **3**
+        // （**订正 F3**，独立复验 2026-10-17：车道自述里的「49→1」**不实**——按 `(cX,cY)` 遍历时，
+        // 中心格 `(12,12)` 的友军 1 次，邻格 `(11,10)` 的旁观者 1 次，**外加施法者自己 `(10,10)`**
+        // （落在这 7×7 窗内，且缺省 `HAM_ALL` 下也是自己的友军）1 次 ⇒ **恰 3**）⇒ 上面的
+        // `hits == 49` 断言（以及 `bystander` 的 `!has_buff` 断言）必红。
+    }
+
+    /// **A-5 技能 14（`SKILL_HANGMAJINBUB`）→ `mag_defence_up`**：同一中心格 bug，加的是
+    /// `MagicDefensePower`（`btState == 1`）。
+    #[test]
+    fn skill_hangmajinbub_mag_defence_up() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 100_000;
+        w.enable_buff_tick();
+        w.add_entity(ent(1, "caster", 10, 10, ACTOR_RACE_PLAY));
+        w.add_entity(ent(2, "friend", 12, 12, ACTOR_RACE_PLAY));
+        let m = magic(SKILL_HANGMAJINBUB);
+        let hits = w.cast_defence_area_spell(1, &m, 0, 0, 12, 12, 1);
+        assert_eq!(hits, 49, "中心格友军各 49 次");
+        assert!(w.buffs.has_buff(2, BuffType::MagicDefensePower));
+        assert!(
+            !w.buffs.has_buff(2, BuffType::DefensePower),
+            "btState=1 ⇒ 走 MagDefenceUp"
+        );
+    }
+
+    /// **A-5 技能 31（`SKILL_SHIELD`）→ `magic_shield_on`**：加 `MagicShield` buff + 置实体
+    /// `magic_shield`（`DamageHealth` 的 MP 抵扣门，`BaseObject.cs:779`）。
+    #[test]
+    fn skill_shield_adds_magic_shield_buff_and_flag() {
+        let mut w = World::new(8, 8);
+        w.clock_ms = 100_000;
+        w.enable_buff_tick();
+        w.add_entity(ent(1, "hero", 5, 5, ACTOR_RACE_PLAY));
+        let m = magic(SKILL_SHIELD);
+        let n_sec = w.cast_shield_spell(1, &m, 0, 0);
+        assert!(n_sec >= 0);
+        assert!(
+            w.buffs.has_buff(1, BuffType::MagicShield),
+            "魔法盾 buff 已加"
+        );
+        assert!(
+            w.entities.get(1).unwrap().magic_shield,
+            "`MagicShield` 置位（DamageHealth 抵扣门）"
+        );
+        // 红检（变异牙）：去掉 `mag_make_defence_area` 的 `self.defence_up/mag_defence_up` 调用、
+        // 或去掉 `magic_shield_on` 的 `add_buff` ⇒ 上述 `has_buff` 断言必红。
+    }
+
+    /// **A-5 友军门**：`HAM_DEAR`（只保护配偶）下，非配偶友军**不**被加点 ⇒ `hits == 0`。
+    #[test]
+    fn skill_defence_area_respects_attack_mode_friend_gate() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 100_000;
+        w.enable_buff_tick();
+        let mut caster = ent(1, "caster", 10, 10, ACTOR_RACE_PLAY);
+        caster.attack_mode = crate::combat::ATTACK_MODE_HAM_DEAR;
+        caster.dear_human = Some(99); // 配偶不是 (12,12) 的那位
+        w.add_entity(caster);
+        w.add_entity(ent(2, "stranger", 12, 12, ACTOR_RACE_PLAY));
+        let m = magic(SKILL_DEJIWONHO);
+        let hits = w.cast_defence_area_spell(1, &m, 0, 0, 12, 12, 0);
+        assert_eq!(hits, 0, "HAM_DEAR ⇒ 非配偶友军不被加点");
+        assert!(!w.buffs.has_buff(2, BuffType::DefensePower));
     }
 }

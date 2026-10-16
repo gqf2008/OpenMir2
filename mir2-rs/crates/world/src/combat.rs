@@ -547,6 +547,97 @@ pub fn is_attack_target_player_grouped(
     result
 }
 
+/// `ItemLocation.Ringl` / `Ringr`（`src/OpenMir2/Enums/ItemLocation.cs`）——戒指两格
+/// （下标与 `bins/game-svr/src/ability.rs` 的 `SLOT_RING_L`/`SLOT_RING_R` 同源）。
+pub const ITEM_LOCATION_RING_L: usize = 7;
+pub const ITEM_LOCATION_RING_R: usize = 8;
+
+/// `ItemShapeConst.RING_MAKESTONE_ITEM`（`src/M2Server/Actor/ActorConst.cs:60`）——麻痹戒指的 Shape。
+/// oracle 是 `byte` ⇒ 与 `StdItem.Shape`（`crates/data/src/models.rs:13`，`u8`）同型。
+pub const RING_MAKESTONE_ITEM: u8 = 113;
+
+/// 攻方是否戴了麻痹戒指（`PlayObject.cs:2230-2239`：`Case ItemLocation.Ringl/Ringr` 的
+/// `switch (stdItem.Shape)` 命中 `RING_MAKESTONE_ITEM` ⇒ `Paralysis = true`）。
+///
+/// 入参 = 两枚戒指的 `StdItem.Shape`（缺槽 / `Index == 0` / 模板缺 ⇒ `None`）；任一为
+/// `RING_MAKESTONE_ITEM` 即 `true`。宿主 `bins/game-svr` 从会话 `UseItems[Ringl/Ringr]` 查模板得 Shape
+/// （与 [`crate::world::World::set_attack_poison`] 同址灌入）。
+#[must_use]
+pub fn paralysis_from_ring_shapes(shapes: impl IntoIterator<Item = Option<u8>>) -> bool {
+    shapes
+        .into_iter()
+        .flatten()
+        .any(|s| s == RING_MAKESTONE_ITEM)
+}
+
+/// `PlayObject.IsProperIsFriend`（`PlayObject.cs:4202-4296`）——玩家对玩家的「友军」判定。
+///
+/// 逐 `AttatckMode`（`Entity::attack_mode`）分派；`HAM_MASTER` 的 `MasterList`（师徒）与
+/// `HAM_GUILD` 的 `MyGuild`/`GuildWarArea`（行会）本骨架未建模 ⇒ 只保留 `self == cret`
+/// 支（登记，与 [`is_attack_target_player_grouped`] 的行会/师徒登记同源）。
+/// `is_group_member` 由调用方按 oracle `IsGroupMember` 解析（`GroupOwner != 0` 且成员表含 `cret`）。
+///
+/// **登记 F2（独立复验 2026-10-17，`openmir2-buff-producer-wiring`，未实现）**：本函数**只**建模到
+/// `AttatckMode` 分派 + Master/Guild **名单**这一层；oracle `IsProperIsFriend` 在 `IsProperIsFriend`
+/// 判完之后还有三段**未建模**：
+/// ① **PK 值保护**（`PlayObject.cs` 里按 `PKLevel`/`PkPoint` 决定「红名不保护 / 白名保护」的支）；
+/// ② **`target.Master` 链**（目标是别人宝宝 ⇒ 走其主人的友军判定，而非目标自身）；
+/// ③ **`MapMoveTick` 3 秒窗**（刚换图 3 秒内不视为友军）。
+/// ⇒ 本函数的 `true` 是**上界**（比 oracle 宽松）；本片只把该缺口**登记**在案，**未引入、亦未修**。
+/// 影响面：A-5 的 `MagMakeDefenceArea` 友军门可能多加点（保守方向：多加点 ≠ 漏取数）。
+#[must_use]
+pub fn is_proper_is_friend(caster: &Entity, cret: &Entity, is_group_member: bool) -> bool {
+    if cret.race != ACTOR_RACE_PLAY {
+        return false;
+    }
+    match caster.attack_mode {
+        ATTACK_MODE_HAM_ALL | ATTACK_MODE_HAM_PEACE => true,
+        ATTACK_MODE_HAM_DEAR => caster.id == cret.id || caster.dear_human == Some(cret.id),
+        ATTACK_MODE_HAM_MASTER => caster.id == cret.id,
+        ATTACK_MODE_HAM_GROUP => caster.id == cret.id || is_group_member,
+        ATTACK_MODE_HAM_GUILD => caster.id == cret.id,
+        ATTACK_MODE_HAM_PKATTACK => {
+            if caster.id == cret.id {
+                true
+            } else {
+                let caster_pvp = (caster.pk_point / 100) as u8;
+                let target_pvp = (cret.pk_point / 100) as u8;
+                if caster_pvp >= 2 {
+                    target_pvp < 2
+                } else {
+                    target_pvp >= 2
+                }
+            }
+        }
+        _ => false,
+    }
+}
+
+/// `BaseObject.IsProperFriend`（`BaseObject.Base.cs:588-606`）——**基版**（非玩家攻方，或玩家版回落）。
+#[must_use]
+pub fn base_is_proper_friend(caster: &Entity, target: &Entity) -> bool {
+    if caster.race >= ACTOR_RACE_ANIMAL {
+        let mut result = target.race >= ACTOR_RACE_ANIMAL;
+        if target.master.is_some() {
+            result = false;
+        }
+        return result;
+    }
+    false
+}
+
+/// `IsProperFriend` 虚调用分派（`BaseObject.Base.cs:588` + `PlayObject.Attack.cs:755`）。
+///
+/// 玩家施法者：目标是玩家 ⇒ [`is_proper_is_friend`]；否则回落基版（玩家施法者的基版恒 `false`
+/// —— `Race(0) < Animal` ⇒ 只保护玩家友军）。`is_group_member` 仅在目标是玩家且 `HAM_GROUP` 时被消费。
+#[must_use]
+pub fn is_proper_friend(caster: &Entity, target: &Entity, is_group_member: bool) -> bool {
+    if caster.race == ACTOR_RACE_PLAY && target.race == ACTOR_RACE_PLAY {
+        return is_proper_is_friend(caster, target, is_group_member);
+    }
+    base_is_proper_friend(caster, target)
+}
+
 /// `PlayObject.IsProperTarget`（`PlayObject.cs:1929`）——**玩家攻方**的判定链。
 /// 带组队注册表的 [`is_proper_target_play`]（M3⑦-实现 4）。
 fn is_proper_target_play_grouped(
@@ -934,6 +1025,59 @@ pub fn attack_dir_grouped(
     config: &CombatConfig,
     attacker_group_members: &[i32],
 ) -> AttackOutcome {
+    attack_dir_grouped_poison(
+        rng,
+        attacker,
+        target,
+        last_hitter,
+        config,
+        attacker_group_members,
+        None,
+    )
+    .0
+}
+
+/// `PlayObject.AttackSuccess`（`PlayObject.Attack.cs:215-225`）的**攻击命中中毒门**运行态：
+/// `:221` 的 `!targetObject.UnParalysis && Paralysis` 两项（`target.AntiPoison` 与
+/// `Config.AttackPosionRate` 由 [`attack_dir_grouped_poison`] 的其余入参给出）。
+///
+/// oracle 里 `Paralysis` 是 `PlayObject` 的属性（`PlayObject.cs:474`；`PlayObject.cs:2238` 由
+/// `RING_MAKESTONE_ITEM` 戒指置位），`UnParalysis`/`AntiPoison` 是 `BaseObject` 的属性
+/// （`BaseObject.cs:85/109`）。本片把这组**攻/守双方**的写实放进
+/// [`crate::world::World::attack_poison`]（与 `World::buffs` 同为「按 actor id 挂世界侧」的表），
+/// 由宿主 `bins/game-svr` 在攻击派发前灌入（见 [`crate::world::World::set_attack_poison`]）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AttackPoisonState {
+    /// `PlayObject.Paralysis`（攻方麻痹戒指）。
+    pub paralysis: bool,
+    /// `BaseObject.UnParalysis`（守方免疫石化）。
+    pub un_paralysis: bool,
+    /// `BaseObject.AntiPoison`（守方抗毒）。
+    pub anti_poison: u16,
+}
+
+/// [`attack_dir_grouped`] 的**中毒门感知**版本（本片 `buff-producer-wiring` 新增）。
+///
+/// 与 [`attack_dir_grouped`] 的差别**只在末尾的取数插入位置**：oracle `AttackSuccess` 里
+/// `:221-224` 的麻痹中毒门（`Random(target.AntiPoison + Config.AttackPosionRate) == 0` ⇒
+/// `targetObject.MakePosion(PoisonState.STONE, Config.AttackPosionTime, 0)`）**先于** `:225` 的
+/// `Random(5)`。本函数按此序插入一次抽取并把「是否中毒」回给调用方（用于 `World::make_posion`）。
+///
+/// **短路口径照 oracle**：`!targetObject.UnParalysis && Paralysis && (Random(...) == 0)`——
+/// `UnParalysis` 或 `!Paralysis` 时**不抽**（C# 的 `&&` 短路）；只有两项都过才抽一次。`poison`
+/// 传 `None`（buff 关 / 无该 actor 的运行态）⇒ 与 [`attack_dir_grouped`] **逐取数等价**（不抽）。
+///
+/// 只对**玩家攻方**（`AttackPowerMode::Player`）生效——`AttackSuccess` 是 `PlayObject` 的私有方法，
+/// 怪物/召唤物的 `BaseObject` 攻击路径不调它（见 [`attack_dir`] 注释）。
+pub fn attack_dir_grouped_poison(
+    rng: &mut impl RandomSource,
+    attacker: &mut Entity,
+    target: &mut Entity,
+    last_hitter: Option<LastHitter>,
+    config: &CombatConfig,
+    attacker_group_members: &[i32],
+    poison: Option<AttackPoisonState>,
+) -> (AttackOutcome, bool) {
     let mode = AttackPowerMode::for_attacker(attacker);
     let outcome = attack_with_grouped(
         rng,
@@ -944,11 +1088,23 @@ pub fn attack_dir_grouped(
         mode,
         attacker_group_members,
     );
+    let mut poisoned = false;
     if matches!(mode, AttackPowerMode::Player { .. }) {
+        // `if (!targetObject.UnParalysis && Paralysis && (Random(targetObject.AntiPoison +
+        //  SystemShare.Config.AttackPosionRate) == 0))`（`PlayObject.Attack.cs:221`）——
+        // `&&` 短路：两项门都过才抽。
+        if let Some(p) = poison {
+            if !p.un_paralysis
+                && p.paralysis
+                && rng.random_below(i32::from(p.anti_poison) + config.attack_poison_rate) == 0
+            {
+                poisoned = true;
+            }
+        }
         // `AttackSuccess(..., targetObject)`：目标非空 ⇒ 抽 `Random(5)`（`PlayObject.Attack.cs:225`）。
         let _ = attack_success_weapon_damage(rng);
     }
-    outcome
+    (outcome, poisoned)
 }
 
 /// 无目标挥砍（`PlayObject.AttackDir(targetObject = null)`）的**唯一**取数：攻击力。
@@ -980,6 +1136,13 @@ pub struct CombatConfig {
     pub kill_mon_exp_multiple: i32,
     pub mn_kill_mon_exp_multiple: i32,
     pub kill_mon_exp_rate: i32,
+    /// `SystemShare.Config.AttackPosionRate`（`GameSvrConf.cs:796/1723` 缺省 5；
+    /// `ServerConf.cs:501` 读 `[Setup] AttackPosionRate`）——玩家攻击命中中毒门的抽样上界
+    /// （`PlayObject.Attack.cs:221` 的 `Random(target.AntiPoison + AttackPosionRate) == 0`）。
+    pub attack_poison_rate: i32,
+    /// `SystemShare.Config.AttackPosionTime`（`GameSvrConf.cs:800/1724` 缺省 5）——命中中毒时
+    /// 石化毒的 `nTime`（`PlayObject.Attack.cs:223` 的 `MakePosion(PoisonState.STONE, …, 0)`）。
+    pub attack_poison_time: i32,
 }
 
 impl Default for CombatConfig {
@@ -993,6 +1156,8 @@ impl Default for CombatConfig {
             kill_mon_exp_multiple: 1,
             mn_kill_mon_exp_multiple: 1,
             kill_mon_exp_rate: 100,
+            attack_poison_rate: 5, // GameSvrConf.cs:1723
+            attack_poison_time: 5, // GameSvrConf.cs:1724
         }
     }
 }
@@ -1164,7 +1329,9 @@ pub fn catalog(items: &[StdItem]) -> ItemCatalogImpl<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::race_is_animal;
+    use super::*;
+    use crate::entity::{Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+    use mir2_shared::rng::{RandomNumber, RandomSource};
 
     /// `Animal` 构造期置真的 race 集合（`MonsterInfo`/各 ctor 的 oracle 事实）。
     #[test]
@@ -1176,5 +1343,198 @@ mod tests {
         for r in [80_u8, 81, 83, 101, 100, 10, 50, 0, 54] {
             assert!(!race_is_animal(r), "race {r} 不应为 Animal");
         }
+    }
+
+    // ================= 片 A-5（buff 生产者接线） =================
+
+    /// 计数随机源：委托同种子 [`RandomNumber`]，记录每次 `random_below` 的入参（取数**次序 + 参数**）。
+    struct CountingRng {
+        inner: RandomNumber,
+        below: Vec<i32>,
+    }
+
+    impl CountingRng {
+        fn new(seed: i32) -> Self {
+            Self {
+                inner: RandomNumber::with_seed(seed),
+                below: Vec::new(),
+            }
+        }
+    }
+
+    impl RandomSource for CountingRng {
+        fn random(&mut self) -> i32 {
+            self.inner.random()
+        }
+        fn random_below(&mut self, value: i32) -> i32 {
+            self.below.push(value);
+            self.inner.random_below(value)
+        }
+        fn random_range(&mut self, min_value: i32, max_value: i32) -> i32 {
+            self.inner.random_range(min_value, max_value)
+        }
+        fn next_double(&mut self) -> f64 {
+            self.inner.next_double()
+        }
+    }
+
+    /// **A-5**：麻痹戒指的 `StdItem.Shape` 判定（`PlayObject.cs:2230-2239`）。
+    #[test]
+    fn paralysis_from_ring_shapes_matches_ring_shape() {
+        assert!(paralysis_from_ring_shapes([
+            Some(RING_MAKESTONE_ITEM),
+            None
+        ]));
+        assert!(paralysis_from_ring_shapes([
+            None,
+            Some(RING_MAKESTONE_ITEM)
+        ]));
+        assert!(!paralysis_from_ring_shapes([None, Some(0)]));
+        assert!(!paralysis_from_ring_shapes([None, None]));
+        // 红检（变异牙）：把 `s == RING_MAKESTONE_ITEM` 改成恒 `true` ⇒ 上面两条 `!` 断言必红。
+    }
+
+    /// **A-5**：中毒门的抽取**插在** `AttackSuccess` 的 `Random(5)` **之前**（oracle `:221` < `:225`），
+    /// 且 `&&` 短路（`UnParalysis` / `!Paralysis` ⇒ 不抽）。
+    #[test]
+    fn poison_gate_draws_before_weapon_damage_and_shortcircuits() {
+        // `attack_poison_rate = 1` ⇒ `random_below(1)` 恒 0 ⇒ 门开时必中毒。
+        let cfg = CombatConfig {
+            attack_poison_rate: 1,
+            attack_poison_time: 5,
+            ..CombatConfig::default()
+        };
+        let mk_attacker = || {
+            let mut e = Entity::new(1, "a", 0, 0);
+            e.race = ACTOR_RACE_PLAY;
+            e.dc = 20;
+            e.luck = 0;
+            e.power_rate = 100;
+            e
+        };
+        let mk_target = || {
+            let mut e = Entity::new(2, "t", 0, 0);
+            e.race = ACTOR_RACE_MONSTER;
+            e.hit_point = 0; // 命中门不抽
+            e.speed_point = 10;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        };
+        let open = AttackPoisonState {
+            paralysis: true,
+            un_paralysis: false,
+            anti_poison: 0,
+        };
+
+        let mut rng_open = CountingRng::new(7);
+        let (_, poisoned) = attack_dir_grouped_poison(
+            &mut rng_open,
+            &mut mk_attacker(),
+            &mut mk_target(),
+            None,
+            &cfg,
+            &[],
+            Some(open),
+        );
+        assert!(poisoned, "rate=1 ⇒ 中毒门必中");
+
+        let mut rng_none = CountingRng::new(7);
+        let _ = attack_dir_grouped_poison(
+            &mut rng_none,
+            &mut mk_attacker(),
+            &mut mk_target(),
+            None,
+            &cfg,
+            &[],
+            None,
+        );
+        // 门开 ⇒ 恰好多一次抽取，且该抽取紧邻末抽（`Random(5)`）之前。
+        assert_eq!(
+            rng_open.below.len(),
+            rng_none.below.len() + 1,
+            "门开恰好多一次 `Random(AntiPoison + rate)`"
+        );
+        let n = rng_open.below.len();
+        assert_eq!(
+            rng_open.below[n - 1],
+            5,
+            "末抽 = `AttackSuccess` 的 `Random(5)`"
+        );
+        assert_eq!(
+            rng_open.below[n - 2],
+            1,
+            "中毒抽样紧接 `Random(5)` 之前（oracle `:221` 先于 `:225`）"
+        );
+
+        // `paralysis=false` ⇒ 短路，逐取数等价（与 `None` 完全一致）。
+        let mut rng_shut = CountingRng::new(7);
+        let (_, p2) = attack_dir_grouped_poison(
+            &mut rng_shut,
+            &mut mk_attacker(),
+            &mut mk_target(),
+            None,
+            &cfg,
+            &[],
+            Some(AttackPoisonState {
+                paralysis: false,
+                ..open
+            }),
+        );
+        assert!(!p2);
+        assert_eq!(
+            rng_shut.below, rng_none.below,
+            "!Paralysis ⇒ 短路，逐取数等价"
+        );
+
+        // `un_paralysis=true`（守方免疫）⇒ 短路。
+        let mut rng_imm = CountingRng::new(7);
+        let (_, p3) = attack_dir_grouped_poison(
+            &mut rng_imm,
+            &mut mk_attacker(),
+            &mut mk_target(),
+            None,
+            &cfg,
+            &[],
+            Some(AttackPoisonState {
+                un_paralysis: true,
+                ..open
+            }),
+        );
+        assert!(!p3);
+        assert_eq!(
+            rng_imm.below, rng_none.below,
+            "UnParalysis ⇒ 短路，逐取数等价"
+        );
+        // 红检（变异牙）：把中毒门的两条 `&&` 判断去掉、或把抽样挪到 `Random(5)` 之后 ⇒ 上面断言必红。
+    }
+
+    /// **A-5**：`IsProperFriend` 的基版（怪→怪）与玩家版（玩家→玩家按 `AttatckMode`）。
+    #[test]
+    fn is_proper_friend_base_and_player() {
+        // 基版：怪施法者只认怪目标（且目标无 master）。
+        let mut mon = Entity::new(1, "m", 0, 0);
+        mon.race = ACTOR_RACE_MONSTER;
+        let mut mon2 = Entity::new(2, "m2", 0, 0);
+        mon2.race = ACTOR_RACE_MONSTER;
+        assert!(is_proper_friend(&mon, &mon2, false));
+        // 目标有 master ⇒ 剔除。
+        mon2.master = Some(9);
+        assert!(!is_proper_friend(&mon, &mon2, false));
+        // 玩家施法者：基版回落 ⇒ 怪目标 false。
+        let mut ply = Entity::new(3, "p", 0, 0);
+        ply.race = ACTOR_RACE_PLAY;
+        assert!(!is_proper_friend(&ply, &mon, false));
+        // 玩家→玩家：HAM_ALL/HAM_PEACE ⇒ true；HAM_DEAR ⇒ 仅配偶/自己。
+        let mut p2 = Entity::new(4, "p2", 0, 0);
+        p2.race = ACTOR_RACE_PLAY;
+        assert!(is_proper_friend(&ply, &p2, false), "HAM_ALL 默认 ⇒ 友军");
+        ply.attack_mode = ATTACK_MODE_HAM_DEAR;
+        assert!(
+            !is_proper_friend(&ply, &p2, false),
+            "HAM_DEAR 非配偶 ⇒ 非友军"
+        );
+        ply.dear_human = Some(4);
+        assert!(is_proper_friend(&ply, &p2, false), "HAM_DEAR 配偶 ⇒ 友军");
     }
 }

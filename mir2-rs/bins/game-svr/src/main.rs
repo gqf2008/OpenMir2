@@ -4797,6 +4797,7 @@ fn handle_hit_cmd(
     displays: &mut downlink::DisplayTable,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
 ) -> bool {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -4859,6 +4860,13 @@ fn handle_hit_cmd(
         front_target(world, actor_id, map_id, fx, fy)
     };
     if let Some(tid) = target_id {
+        // **片 A-5（buff 生产者接线）**：攻击命中中毒门（`PlayObject.Attack.cs:221-224`）的攻/守双方
+        // 运行态灌进世界（吸收于下一次 world tick 的 [`mir2_world::World::attack_once`]）。
+        // 攻方条目带 `Paralysis`（麻痹戒指 `RING_MAKESTONE_ITEM` 置位，`PlayObject.cs:2230-2239`）；
+        // 守方条目带 `UnParalysis`/`AntiPoison`。buff 关闭（`buff_enabled` false）时 `attack_once`
+        // 不读该表 ⇒ 既有 golden 逐字节不变。
+        set_actor_poison_state(world, sessions, catalog, actor_id);
+        set_actor_poison_state(world, sessions, catalog, tid);
         world.attack_cmd(actor_id, tid);
     } else {
         // oracle `PlayObject.AttackDir(targetObject = null)`（`PlayObject.Attack.cs:25`）：
@@ -4992,6 +5000,81 @@ fn handle_spell_cmd(
     {
         let dir = movewire::next_direction(cur_x, cur_y, req.target_x, req.target_y);
         set_display_dir(displays, actor_id, dir);
+    }
+    // **片 A-5（buff 生产者接线）**：技能 14/15/31 的加点 buff 生产链
+    // （`MagicManager.cs:352-366` 的 `SKILL_HANGMAJINBUB`/`SKILL_DEJIWONHO` 支与 `:472-478` 的
+    // `SKILL_SHIELD` 支）——把 `mag_defence_up`/`defence_up`/`magic_shield_on` 三个生产者接上。
+    // **仅当 buff tick 开启**（`World::buff_tick_enabled`）时生效：关闭时完全不碰这条路径 ⇒
+    // 既有 golden 逐字节不变（与 `World::enable_buff_tick` 的缺省关闭口径一致）。
+    //
+    // **登记（残余，独立复验 2026-10-17，未实现）**：oracle `DoSpell:159` 在**过门之后**先发
+    // `SendRefMsg(RM_SPELL, userMagic.Magic.Effect, nTargetX, nTargetY, userMagic.Magic.MagicId, "")`
+    // ——本仓**魔号 14/15/31 上仍无该帧的生产者**（三个 `sm_spell` 发射点只覆盖 17/30/41、20、46；
+    // 属「`default` 支通用效果体」的整面缺口）⇒ 本支**不发 `SM_SPELL`**。本片**未引入、亦未修**，
+    // 另立片处理（帧面缺口，与 `RM_MAGICFIRE`/`RM_MAGIC_LVEXP` 的 `boTrain` 尾同批）。
+    if world.buff_tick_enabled() {
+        let (mc, sc) = ground_sessions.get(chr_name).map_or((0, 0), |sg| {
+            (i32::from(sg.state.wabil.mc), i32::from(sg.state.wabil.sc))
+        });
+        let magic_level = matched.as_ref().map_or(0, |m| m.level);
+        // **F-1（独立复验 2026-10-17 阻塞项）**：`DoSpell` 的**距离门**
+        // （`src/M2Server/Magic/MagicManager.cs:152-155`）——
+        // `Math.Abs(playObject.CurrX - nTargetX) > SystemShare.Config.MagicAttackRage
+        //  || Math.Abs(playObject.CurrY - nTargetY) > SystemShare.Config.MagicAttackRage`
+        // ⇒ `return false`：**越界 = 一个随机数都不抽、也不施放**。技能 14/15/31 同属 `DoSpell`
+        // 的 `switch` 支，而该门在 `switch` **之前**（`:152`）⇒ 必须先过门。
+        // **坐标取原始 `req.target_x`/`req.target_y`**：oracle 这一句用的是**入参** `nTargetX`/`nTargetY`，
+        // 不是 `CretInNearXy` 之后的 snap 值 ⇒ 与下方召唤面（17/30/41）用 `tx`/`ty` 的兄弟块**不同**，
+        // 不得照抄（照抄会把 in-range 的 snap 目标误判成越界）。
+        // 漏此门 ⇒ 越界施放会抽世界 RNG 并落下 DefenceUp/MagDefenceUp/MagicShield
+        // ⇒ 破坏 RNG 流水等价（R 级，见 `docs/Rust重写设计文档.md` §17.1 判据分级）。
+        if magic::spell_in_range(
+            i16::try_from(cur_x).unwrap_or(0),
+            i16::try_from(cur_y).unwrap_or(0),
+            i16::try_from(req.target_x).unwrap_or(0),
+            i16::try_from(req.target_y).unwrap_or(0),
+            magic_attack_rage,
+        ) {
+            match req.magic_id {
+                // `SKILL_SHIELD(31)`：`MagBubbleDefenceUp(level, GetPower(GetRPow(MC) + 15))`（`:475`）。
+                mir2_world::world::SKILL_SHIELD => {
+                    if let Some(magic) = magic_table.get(req.magic_id) {
+                        let _ = world.cast_shield_spell(actor_id, magic, magic_level, mc);
+                    }
+                }
+                // `SKILL_HANGMAJINBUB(14)`：`MagMakeDefenceArea(nTargetX, nTargetY, 3, nPower, 1)`
+                // ⇒ `MagDefenceUp`（`:352-357`）。
+                mir2_world::world::SKILL_HANGMAJINBUB => {
+                    if let Some(magic) = magic_table.get(req.magic_id) {
+                        let _ = world.cast_defence_area_spell(
+                            actor_id,
+                            magic,
+                            magic_level,
+                            sc,
+                            req.target_x,
+                            req.target_y,
+                            1,
+                        );
+                    }
+                }
+                // `SKILL_DEJIWONHO(15)`：`MagMakeDefenceArea(nTargetX, nTargetY, 3, nPower, 0)`
+                // ⇒ `DefenceUp`（`:359-365`）。
+                mir2_world::world::SKILL_DEJIWONHO => {
+                    if let Some(magic) = magic_table.get(req.magic_id) {
+                        let _ = world.cast_defence_area_spell(
+                            actor_id,
+                            magic,
+                            magic_level,
+                            sc,
+                            req.target_x,
+                            req.target_y,
+                            0,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
     }
     // **第②片**：召唤面（17/30/41）的 `default` 支效果体（`PlayObject.Attack.cs:1271-1279` + `MagicManager.cs:145-670`）。
     if matches!(
@@ -5346,6 +5429,59 @@ fn handle_spell_cmd(
     }
     // `ClientSpellXY` 全分支 `result = true` ⇒ 调用方 `ActionTick = GetTickCount(); SendSocket(GetGoodTick)`。
     send_good_tick(online, gates, chr_name);
+}
+
+/// `PlayObject.cs:2230-2239`：从会话 `UseItems[Ringl/Ringr]` 查模板 `StdItem.Shape`，
+/// 命中 `ItemShapeConst.RING_MAKESTONE_ITEM(113)` ⇒ `Paralysis = true`（攻击命中中毒门的攻方态）。
+///
+/// 缺槽 / `Index == 0` / 模板缺 ⇒ `None`（oracle `GetStdItem != null` 的门）。
+fn ring_paralysis(
+    sg: Option<&SessionGround>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) -> bool {
+    let shape_of = |slot: usize| -> Option<u8> {
+        let it = sg?.use_items.get(slot)?.as_ref()?;
+        if it.index == 0 {
+            return None;
+        }
+        game_svr::ability::ItemCatalog::get(catalog, it.index).map(|s| s.shape)
+    };
+    mir2_world::combat::paralysis_from_ring_shapes([
+        shape_of(game_svr::ability::SLOT_RING_L),
+        shape_of(game_svr::ability::SLOT_RING_R),
+    ])
+}
+
+/// **片 A-5（buff 生产者接线）**：把某 actor 的**自身**攻击中毒门运行态灌进世界
+/// （[`mir2_world::World::set_attack_poison`]）。
+///
+/// - `paralysis`：麻痹戒指（`RING_MAKESTONE_ITEM`）⇒ `PlayObject.Paralysis`（`PlayObject.cs:2230-2239`）；
+/// - `anti_poison`：`BaseObject.AntiPoison`（= `AddAbil.AntiPoison`，`BaseObject.Abil.cs:66`）。
+///   **登记**：本骨架的会话态只留 `WAbil`（`Ability`）不含 `AddAbil` ⇒ 恒 `0`（未建模守方抗毒，
+///   接线待会话态扩 `AddAbil` 面）；
+/// - `un_paralysis`：本骨架未建模（无对应的卸盾/免疫戒指面）⇒ 常 `false`（登记）。
+///
+/// 目标不在场 / 无会话（怪物）⇒ 不写（[`mir2_world::World::attack_once`] 对缺席守方取缺省 `false`/`0`）。
+fn set_actor_poison_state(
+    world: &mut mir2_world::World,
+    sessions: &std::collections::HashMap<String, SessionGround>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    actor_id: i32,
+) {
+    let Some(name) = world.entities.get(actor_id).map(|e| e.name.clone()) else {
+        return;
+    };
+    let Some(sg) = sessions.get(&name) else {
+        return;
+    };
+    world.set_attack_poison(
+        actor_id,
+        mir2_world::combat::AttackPoisonState {
+            paralysis: ring_paralysis(Some(sg), catalog),
+            un_paralysis: false,
+            anti_poison: 0,
+        },
+    );
 }
 
 /// `MagicBase.CheckAmulet`（`MagicBase.cs:47-105`）的**宿主侧查表**：把 `UseItems[slot]`
@@ -8296,6 +8432,7 @@ fn sim_loop(
                             &mut displays,
                             &mut ground_sessions,
                             &gates,
+                            &enter_cfg.catalog,
                         );
                         if attacked {
                             state_log.record(&world, &displays, registry.as_ref());
@@ -15114,6 +15251,7 @@ mod tests {
             &mut displays,
             &mut sessions,
             &gates,
+            &game_svr::ability::StdItemCatalog::new(),
         );
         assert!(rx0.try_recv().is_err(), "目标≠自身 ⇒ 不得回 ack / 发帧");
         assert!(
@@ -15134,6 +15272,7 @@ mod tests {
             &mut displays,
             &mut sessions,
             &gates,
+            &game_svr::ability::StdItemCatalog::new(),
         );
         let (mut frames, mut ack) = (Vec::new(), None);
         while let Ok(m) = rx0.try_recv() {
@@ -15200,6 +15339,7 @@ mod tests {
             &mut displays,
             &mut sessions,
             &gates,
+            &game_svr::ability::StdItemCatalog::new(),
         );
         let mut heavy = None;
         while let Ok(m) = rx0.try_recv() {
@@ -15227,6 +15367,7 @@ mod tests {
             &mut displays,
             &mut sessions,
             &gates,
+            &game_svr::ability::StdItemCatalog::new(),
         );
         assert!(rx0.try_recv().is_err(), "Death ⇒ 不得发帧/回 ack");
     }
@@ -15332,6 +15473,7 @@ mod tests {
             &mut displays,
             &mut sessions,
             &gates,
+            &game_svr::ability::StdItemCatalog::new(),
         );
         // 改后读数：无目标一击 = 玩家 `GetBaseAttackPoewr` **恰 2 抽**（= 账本的一段）；
         // 改回「只记日志」⇒ 此值为 0（红检实测见证据 `05-redcheck-remove-swing.txt`）。
@@ -15357,6 +15499,7 @@ mod tests {
                 &mut displays,
                 &mut sessions,
                 &gates,
+                &game_svr::ability::StdItemCatalog::new(),
             );
         }
         let seq = draws_between(&before_seq, &world.rng);
@@ -15607,6 +15750,376 @@ mod tests {
         );
     }
 
+    /// **片 A-5 主机层牙**的共用布置（fixture）：buff tick 开启的 64×64 世界 + 施法者 `caster`(10,10)
+    /// + 一名目标玩家 `target`（坐标由入参给）+ 在线登记 / 会话 / gate 通道 / 含 `magic_id` 的存档与魔法表。
+    ///
+    /// 返回 `(world, caster, target, online, saves, magic_table, displays, gates, rx0)`。
+    /// `world.enable_buff_tick()` 对应生产宿主 `main.rs:7823`（A-5 路径的运行前提）。
+    #[allow(clippy::type_complexity)]
+    fn a5_spell_rig(
+        magic_id: u16,
+        target_x: i32,
+        target_y: i32,
+    ) -> (
+        mir2_world::World,
+        i32,
+        i32,
+        OnlineRegistry,
+        std::collections::HashMap<String, SavedHuman>,
+        magics::MagicTable,
+        downlink::DisplayTable,
+        std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+    ) {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        // 生产宿主 `main.rs:7823` 的 `world.enable_buff_tick()` —— A-5 支的运行前提。
+        // 缺省（关闭）时 A-5 支整段不执行（与既有 golden 逐字节不变的口径一致）。
+        world.enable_buff_tick();
+        let caster = world.add_entity(new_player_entity("caster".to_string(), 10, 10));
+        let target = world.add_entity(new_player_entity("target".to_string(), target_x, target_y));
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            caster,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
+        );
+        displays.set(
+            target,
+            downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"target".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uc".into(),
+                chr_name: "caster".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 911,
+                actor_id: caster,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ut".into(),
+                chr_name: "target".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 912,
+                actor_id: target,
+            },
+        );
+        let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        let mut record = stage6_record();
+        record.data.magic = Some(vec![Some(record::MagicRcd {
+            mag_idx: magic_id,
+            level: 1,
+            magic_key: u16::from(b'm'),
+            tran_point: 0,
+        })]);
+        saves.insert(
+            "caster".into(),
+            SavedHuman {
+                account: "uc".into(),
+                record,
+                enter_map: "0".into(),
+            },
+        );
+        // `GetMagicInfo(魔法号)` 的表项（A-5 支取 `magic_table.get(req.magic_id)`）。
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id,
+            effect: 3,
+            effect_type: 4,
+            train_lv: 3,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        (
+            world,
+            caster,
+            target,
+            online,
+            saves,
+            magic_table,
+            displays,
+            gates,
+            rx0,
+        )
+    }
+
+    /// 把 gate 通道上的帧全部取空，返回各帧的 `ident`（`body[4..6]`，与文件末既有用例同口径；
+    /// 非 `SendFrame` 的 `SendRaw`（`+GD` ack）不计入）。
+    fn a5_take_idents(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<u16> {
+        let mut ids = Vec::new();
+        while let Ok(m) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = m {
+                ids.push(u16::from_le_bytes([body[4], body[5]]));
+            }
+        }
+        ids
+    }
+
+    /// **片 A-5 主机层牙①（in-range 对照）**：`handle_spell_cmd`（**生产入口**，不直调 `World::cast_*`）
+    /// 在 buff tick 开启时把技能 15（`SKILL_DEJIWONHO` → `DefenceUp`）落到目标身上。
+    ///
+    /// 布置：施法者 (10,10)、目标 (12,12)，`|Δx| = |Δy| = 2 <= MagicAttackRage = 8` ⇒ 过
+    /// `DoSpell` 距离门（`src/M2Server/Magic/MagicManager.cs:152-155`）。
+    ///
+    /// 断言：① 世界侧可观测的 `World::buffs`（`BuffSystem::has_buff`）在 `(target, DefensePower)` 上为真
+    /// （`MagMakeDefenceArea(..., btState = 0)` ⇒ `DefenceUp`）；② 世界 RNG **确有**推进
+    /// （`power_defence_area` 的取数：`GetPower13` → `GetAttackPower`）——两者合起来证明 A-5 生产链
+    /// 真的从宿主走通到世界。
+    ///
+    /// 红检（变异牙）：把 A-5 块的 `world.cast_defence_area_spell(...)` 调用去掉 ⇒ ① 必红。
+    /// **距离门本身的变异牙**在越界那条（`spell_cmd_a5_defence_area_blocked_out_of_range`）。
+    #[test]
+    fn spell_cmd_a5_defence_area_buffs_target_in_range() {
+        let (
+            mut world,
+            caster,
+            target,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = a5_spell_rig(15, 12, 12);
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        let rng_before = world.rng.clone();
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 12),
+            15,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+        );
+        assert!(
+            world
+                .buffs
+                .has_buff(target, mir2_world::BuffType::DefensePower),
+            "in-range（|Δ|=2 ≤ MagicAttackRage=8）⇒ 目标获 `DefencePower`（技能 15 → `DefenceUp`）"
+        );
+        assert!(
+            draws_between(&rng_before, &world.rng) > 0,
+            "过门 ⇒ `power_defence_area` 抽数（世界 RNG 前进）"
+        );
+        assert!(
+            !a5_take_idents(&mut rx0).contains(&mir2_protocol::messages::SM_CHARSTATUSCHANGED),
+            "A-5 支不自行发 657（帧面走 `drain_buff_downlink` 读 `TickRecord`，见登记）"
+        );
+    }
+
+    /// **片 A-5 主机层牙②（F-1 越界门，R 级）**：**同一布置**但目标坐标超出 `MagicAttackRage`（传 8）
+    /// ⇒ `DoSpell` 的距离门（`MagicManager.cs:152-155`）**直接 `return false`**：
+    /// ① 目标**不得获得任何 buff**、`MagicShield` 不得置位；② 世界 RNG **一次都不抽**；
+    /// ③ 不得有 `SM_CHARSTATUSCHANGED(657)` 下行帧（含本 tick `drain_buff_downlink` 的真实出帧面）。
+    ///
+    /// 布置上目标实体**确实落在** `(25,25)`（= 施法请求的原始目标坐标）⇒ 若距离门被去掉，
+    /// `MagMakeDefenceArea` 的 `(2*3+1)^2 = 49` 次迭代会真的给它加 `DefenceUp`、
+    /// `MagBubbleDefenceUp` 会真的给施法者置 `MagicShield` ⇒ ① ② 必红（变异实测见补丁说明）。
+    ///
+    /// 三个魔号各跑一遍（14/15 走 `MagMakeDefenceArea`；31 走 `MagBubbleDefenceUp` ⇒ 目标是**施法者**
+    /// 自己）⇒ 覆盖 A-5 支里全部三个生产者。
+    ///
+    /// 红检（变异牙）：注释掉 A-5 块里新加的 `magic::spell_in_range(...)` 门 ⇒ ① ② 必红。
+    #[test]
+    fn spell_cmd_a5_defence_area_blocked_out_of_range() {
+        // |Δ| = 15 > MagicAttackRage = 8 ⇒ 过不了门。
+        const FAR: u16 = 25;
+        for magic_id in [14u16, 15, 31] {
+            let (
+                mut world,
+                caster,
+                target,
+                online,
+                mut saves,
+                magic_table,
+                mut displays,
+                gates,
+                mut rx0,
+            ) = a5_spell_rig(magic_id, i32::from(FAR), i32::from(FAR));
+            let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+                std::collections::HashMap::new();
+            ground_sessions.insert("caster".into(), test_session_ground(caster));
+            let catalog = game_svr::ability::StdItemCatalog::new();
+            let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+            let table = game_svr::mongen::MonsterTable::new(Vec::new());
+            let rng_before = world.rng.clone();
+            let status_before = (world.get_char_status(caster), world.get_char_status(target));
+            handle_spell_cmd(
+                game_svr::feature::make_long(FAR, FAR),
+                magic_id,
+                0,
+                0,
+                "caster",
+                911,
+                &online,
+                &mut world,
+                &mut saves,
+                &mut ground_sessions,
+                &catalog,
+                &magic_table,
+                &pet_cfg,
+                8,
+                None,
+                &table,
+                &mut displays,
+                &gates,
+            );
+
+            // ① 任何 buff 都不得落（三个生产者对应的三种 buff 全查；目标与施法者都查）。
+            for (who, id) in [("target", target), ("caster", caster)] {
+                assert!(
+                    !world.buffs.has_buff(id, mir2_world::BuffType::DefensePower),
+                    "[魔号 {magic_id}] 越界（|Δ|=15 > 8）⇒ {who} 不得获 `DefencePower`（不抽数不施放）"
+                );
+                assert!(
+                    !world
+                        .buffs
+                        .has_buff(id, mir2_world::BuffType::MagicDefensePower),
+                    "[魔号 {magic_id}] 越界 ⇒ {who} 不得获 `MagicDefensePower`"
+                );
+                assert!(
+                    !world.buffs.has_buff(id, mir2_world::BuffType::MagicShield),
+                    "[魔号 {magic_id}] 越界 ⇒ {who} 不得获 `MagicShield` buff"
+                );
+                assert!(
+                    !world.entities.get(id).unwrap().magic_shield,
+                    "[魔号 {magic_id}] 越界 ⇒ {who} 的 `MagicShield` 不得置位"
+                );
+            }
+            // ② 一个随机数都不抽（oracle `return false` 在任何取数之前）。
+            assert_eq!(
+                draws_between(&rng_before, &world.rng),
+                0,
+                "[魔号 {magic_id}] 越界 ⇒ 距离门在取数之前返回 false ⇒ 世界 RNG 零推进"
+            );
+            // ③ `SM_CHARSTATUSCHANGED(657)` 的**载荷位**（`CharStatus`）不得变：本仓 657 由
+            //    `drain_buff_downlink` 读 `TickRecord.buff_status_changes` 出帧，帧体即 `(ActorId, CharStatus)`。
+            assert_eq!(
+                (world.get_char_status(caster), world.get_char_status(target)),
+                status_before,
+                "[魔号 {magic_id}] 越界 ⇒ `GetCharStatus()` 不得变（657 的载荷位）"
+            );
+            // ③b 走一遍**真实出帧面**（世界 tick → `drain_buff_downlink`）⇒ 线上不得出现 657。
+            //     阳性对照见 `spell_cmd_a5_defence_area_buff_frame_reaches_wire_in_range`。
+            world.tick();
+            drain_buff_downlink(
+                &world.last_tick,
+                &world,
+                &mut displays,
+                &online,
+                &mut ground_sessions,
+                &gates,
+                12,
+            );
+            let wire = a5_take_idents(&mut rx0);
+            assert!(
+                !wire.contains(&mir2_protocol::messages::SM_CHARSTATUSCHANGED),
+                "[魔号 {magic_id}] 越界 ⇒ 不得有任何 SM_CHARSTATUSCHANGED(657) 下行帧，实得 {wire:?}"
+            );
+        }
+    }
+
+    /// **对照牙（越界那条 ③b 的阳性对照）**：同一布置 + in-range ⇒ 加完 buff 后把 buff 递减到
+    /// **到期**（`StateTick → 0` 触发 `Operate` 的 `boChg`）⇒ `TickRecord.buff_status_changes` 非空
+    /// ⇒ `drain_buff_downlink` **确实**在线上发出 `SM_CHARSTATUSCHANGED(657)`。
+    ///
+    /// 作用：证明越界用例里「零 657」不是「drain 面根本不工作」造成的假绿。
+    #[test]
+    fn spell_cmd_a5_defence_area_buff_frame_reaches_wire_in_range() {
+        let (
+            mut world,
+            caster,
+            target,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = a5_spell_rig(15, 12, 12);
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 12),
+            15,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+        );
+        assert!(
+            world
+                .buffs
+                .has_buff(target, mir2_world::BuffType::DefensePower),
+            "前置：in-range ⇒ 目标已获 `DefencePower`"
+        );
+        let _ = a5_take_idents(&mut rx0);
+        // 推到 buff 到期（`Operate` 的 `d.state_tick == 0` 支 ⇒ `bo_chg`）。
+        let mut seen = false;
+        for _ in 0..400 {
+            world.clock_ms += mir2_world::BUFF_STATE_TICK_GATE_MS;
+            world.tick();
+            drain_buff_downlink(
+                &world.last_tick,
+                &world,
+                &mut displays,
+                &online,
+                &mut ground_sessions,
+                &gates,
+                12,
+            );
+            if a5_take_idents(&mut rx0).contains(&mir2_protocol::messages::SM_CHARSTATUSCHANGED) {
+                seen = true;
+                break;
+            }
+        }
+        assert!(
+            seen,
+            "阳性对照：in-range 加了 buff 后递减到期 ⇒ drain 面**确实**发 657 \
+             （证明越界用例的「零 657」是真绿，不是 drain 不工作）"
+        );
+    }
     /// **`openmir2-m3-pet-slave-summon`（第②片）**：`CM_SPELL(17 召唤骷髅)` 效果体接线——
     /// 护身符门过 ⇒ 扣耐久 + 自身 `SM_DURACHANGE`；对观察者广播 `SM_SPELL`/`SM_MAGICFIRE`；
     /// 自身收 `+GD`。空怪表 ⇒ 造怪失败，但仍走完帧面（oracle `ClientSpellXY` 恒 `result=true`）。

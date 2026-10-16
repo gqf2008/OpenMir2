@@ -2392,22 +2392,13 @@ def cmd_mutate(args):
     #     · 任一 API 在语料里**根本不存在**（拼写错/被改名）⇒ RED `WIRED_NO_PRODUCER_UNKNOWN_API`
     #       （防「用不存在的 API 名糊过去」）。
     #   ⚠ **不得**用它把 blocked 帧"洗"成 wired —— 成员必须**已在 `_wired_now`**（断言）。
-    _wired_no_producer = {
-        # 片112（buff 系统）A-5 deferred：`Operate` 的 boChg 支 ⇒ `StatusChanged()` ⇒ drain 发 657，
-        #   但唯一能加 buff 的生产 API 除本体单测外 0 生产调用者 ⇒ `TickRecord.buff_status_changes`
-        #   恒空 ⇒ 657 运行期永不发。
-        "SM_CHARSTATUSCHANGED": {
-            "apis": ["make_posion", "defence_up", "mag_defence_up", "magic_shield_on"],
-            "root": ("世界侧**唯一**能落 `TickRecord.buff_status_changes` 的生产 API——只有这四个会"
-                     "加 buff（`world.rs:552/572/588/600`）；除本体单测外无生产调用者 ⇒ "
-                     "`buff_status_changes` 恒空 ⇒ drain_buff_downlink 的 657 支运行期永不发。"),
-            "evidence": ("发射点锚（证明**有**发射点，非无编码器）："
-                         "mir2-rs/bins/game-svr/src/smframe_ext.rs:131（657 编码器定义）"
-                         " + mir2-rs/bins/game-svr/src/main.rs:6024（drain_buff_downlink 内调"
-                         " sm_charstatuschanged） + main.rs:9323（drain_buff_downlink 在 tick 循环的生产调用）。"
-                         "承接：卡 openmir2-world-tick-expansion 的 A-5 deferred（消费方接线批）。"),
-        },
-    }
+    #
+    #   **片 A-5（buff 生产者接线，卡 `openmir2-buff-producer-wiring`）后本表为空**：`make_posion` /
+    #   `defence_up` / `mag_defence_up` / `magic_shield_on` 已在生产链接上调用者（`world.rs` 的
+    #   `attack_once` / `mag_make_defence_area` / `magic_shield_on`），`SM_CHARSTATUSCHANGED(657)` 的
+    #   `buff_status_changes` 运行期可达 ⇒ 原 `SM_CHARSTATUSCHANGED` 条目已陈旧，按门规移出（自失效）。
+    #   注释面机制的牙⑦-⑫ 改用**合成条目**（见 `cmd_mutate` 的 `_wnp_synth`）作夹具。
+    _wired_no_producer = {}
 
 
     def _m6c_wnp_failures(wired, blocked, wired_no_producer, corpus):
@@ -2508,13 +2499,9 @@ def cmd_mutate(args):
         bool(_m6c_failures(_wired_now, _blocked,
                            dict(_wired_no_producer,
                                 SM_WHISPER={"apis": ["make_posion"], "root": "r", "evidence": ""}))))
-    add("M6c 牙⑦ 把已接线的 SM_WHISPER 加进注释面（声明一个**确无生产调用者**的 API）⇒ 允许"
-        "（注释面本身**不构成** blocked 豁免；门只按声明咬真伪）",
-        not _m6c_failures(_wired_now, _blocked,
-                          dict(_wired_no_producer,
-                               SM_WHISPER={"apis": ["mag_defence_up"], "root": "r", "evidence": "a.rs:1"})))
-
-    # M6c 牙⑧-⑫ —— 注释面**自失效**牙（片114 升级）：门在（隔离副本）语料上 grep 声明的生产 API 的调用者，
+    # M6c 牙⑦-⑫ —— 注释面**自失效**牙（片114 升级；**片 A-5 后改用合成条目**作夹具：真语料的
+    #   `SM_CHARSTATUSCHANGED` 条目已随 `make_posion`/`defence_up`/`mag_defence_up`/`magic_shield_on`
+    #   的生产接线清空，不能再当夹具）。门在（隔离副本）语料上 grep 声明的生产 API 的调用者：
     #   ① 加生产调用者 ⇒ STALE 必红；② 删调用者 ⇒ 不红（对照，证明红来自调用者本身）；
     #   ③ apis 改不存在名 ⇒ UNKNOWN_API 必红；④ 注释面 ident 不在 wired ⇒ 必红；⑤ 结构牙。
     _tmp_wnp = Path(tempfile.mkdtemp(prefix="recon-wnp-mut-"))
@@ -2534,39 +2521,54 @@ def cmd_mutate(args):
         (_d / "lib.rs").write_text(NL.join(_defs + list(extra_lines)) + NL, encoding="utf-8")
         return RustCorpus(rust_source_dirs(_root, exclude=DISPATCH_EXCLUDE))
 
+    # **合成**注释面条目（片 A-5 后真语料的注释面为空，牙⑦-⑫ 用它作夹具）：ident 取 `_wired_now`
+    #   里的 `SM_CHARSTATUSCHANGED`，唯一生产 API = `make_posion`（隔离副本里定义）。
+    _wnp_synth = {
+        "SM_CHARSTATUSCHANGED": {
+            "apis": ["make_posion"],
+            "root": "牙用合成条目（唯一生产 API = make_posion）",
+            "evidence": "zz-buff/src/lib.rs:1",
+        },
+    }
+
     try:
+        # ⑦ 注释面允许承载「语料里**确无**生产调用者」的 API（隔离副本无调用者 ⇒ 不 STALE）——
+        #    证明注释面本身不构成 blocked 豁免，门只按声明咬真伪。
+        _iso_nocall = _wnp_iso([], "nocall")
+        add("M6c 牙⑦ 注释面承载无生产调用者的 API ⇒ 允许（不误红）",
+            not _m6c_wnp_failures(_wired_now, _blocked, _wnp_synth, _iso_nocall))
         # ⑧ 给声明的 API（make_posion）加一个**生产调用者** ⇒ 注释陈旧 STALE 必红（门真读语料）
         _iso_stale = _wnp_iso(["pub fn zz_wire() { let _ = make_posion(1); }"], "stale")
-        _f_stale = _m6c_wnp_failures(_wired_now, _blocked, _wired_no_producer, _iso_stale)
+        _f_stale = _m6c_wnp_failures(_wired_now, _blocked, _wnp_synth, _iso_stale)
         add("M6c 牙⑧ 隔离副本给 make_posion 加生产调用者 ⇒ WIRED_NO_PRODUCER_STALE 必红",
             any("WIRED_NO_PRODUCER_STALE" in f for f in _f_stale))
         # ⑨ 对照：同副本**去掉**该调用者 ⇒ 无 STALE（证明 ⑧ 的红来自调用者本身，非别的副作用）
         _iso_ok = _wnp_iso([], "ok")
         add("M6c 牙⑨ 对照：同副本去掉生产调用者 ⇒ 无 STALE（不误红）",
-            not _m6c_wnp_failures(_wired_now, _blocked, _wired_no_producer, _iso_ok))
+            not _m6c_wnp_failures(_wired_now, _blocked, _wnp_synth, _iso_ok))
         # ⑩ 把某条声明的 apis 改成**不存在**的名字 ⇒ UNKNOWN_API 必红（防用假名糊过去）
         _wnp_unknown = {"SM_CHARSTATUSCHANGED":
-                        dict(_wired_no_producer["SM_CHARSTATUSCHANGED"], apis=["zz_no_such_api_zz"])}
+                        dict(_wnp_synth["SM_CHARSTATUSCHANGED"], apis=["zz_no_such_api_zz"])}
         add("M6c 牙⑩ 声明 apis 改为不存在的名字 ⇒ WIRED_NO_PRODUCER_UNKNOWN_API 必红",
             any("WIRED_NO_PRODUCER_UNKNOWN_API" in f
                 for f in _m6c_failures(_wired_now, _blocked, _wnp_unknown)))
         # ⑪ 把该条从 `_wired_now` 删（注释面不在 wired）⇒ 必红
         add("M6c 牙⑪ 注释面 ident 不在 _wired_now ⇒ 必红（不得借注释面豁免/悬空）",
             any("不在 wired" in f
-                for f in _m6c_failures(_wired_now - {"SM_CHARSTATUSCHANGED"}, _blocked)))
+                for f in _m6c_failures(_wired_now - {"SM_CHARSTATUSCHANGED"}, _blocked, _wnp_synth)))
         # ⑫ 结构牙：apis 置空 / evidence 无 file:line / 值非 dict ⇒ 均必红
         add("M6c 牙⑫ 结构牙：apis 空 / evidence 无 file:line / 值非 dict ⇒ 必红",
             any("apis 须为非空" in f for f in _m6c_failures(
                 _wired_now, _blocked,
-                dict(_wired_no_producer, SM_CHARSTATUSCHANGED=dict(
-                    _wired_no_producer["SM_CHARSTATUSCHANGED"], apis=[]))))
+                dict(_wnp_synth, SM_CHARSTATUSCHANGED=dict(
+                    _wnp_synth["SM_CHARSTATUSCHANGED"], apis=[]))))
             and any("证据不合法" in f for f in _m6c_failures(
                 _wired_now, _blocked,
-                dict(_wired_no_producer, SM_CHARSTATUSCHANGED=dict(
-                    _wired_no_producer["SM_CHARSTATUSCHANGED"], evidence="no line here"))))
+                dict(_wnp_synth, SM_CHARSTATUSCHANGED=dict(
+                    _wnp_synth["SM_CHARSTATUSCHANGED"], evidence="no line here"))))
             and any("结构非法" in f for f in _m6c_failures(
                 _wired_now, _blocked,
-                dict(_wired_no_producer, SM_CHARSTATUSCHANGED="legacy-string"))))
+                dict(_wnp_synth, SM_CHARSTATUSCHANGED="legacy-string"))))
     finally:
         shutil.rmtree(_tmp_wnp, ignore_errors=True)
 
