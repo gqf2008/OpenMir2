@@ -113,6 +113,30 @@ pub const fn hi_word(value: i32) -> i32 {
     ((value >> 16) as u16) as i32
 }
 
+// ──────────────────── CM_LOGINNOTICEOK(1018) / `ClientTick` ────────────────────
+
+/// `CM_LOGINNOTICEOK(1018)` 的**唯一语义**：把线上 `Recog` 写进 `PlayObject.ClientTick`。
+///
+/// oracle 逐行（`src/M2Server/Player/PlayObject.cs:1106-1115` 的 `RunNotice`）：
+/// ```text
+/// :1109  if (msg.wIdent == Messages.CM_LOGINNOTICEOK)
+/// :1111      LoginNoticeOk = true;
+/// :1112      ClientTick = (short)msg.nParam1;   // nParam1 = Recog（WorldServer.cs:856-858 default）
+/// :1113      SysMsg(ClientTick.ToString(), MsgColor.Red, MsgType.Notice);
+/// ```
+/// 本函数只复刻 `:1112` 的**取值/截断**（C# `(int → short)` 截断 = `as i16`）。
+///
+/// 为什么**不**发 `:1113` 的 `SysMsg`：oracle 自己的 `while (GetMessage(ref msg))`
+/// （`:1106-1115`）会把刚入队的 `RM_SYSMESSAGE` 在下一轮取出并丢弃（`BaseObject.Message.cs:334-355`）
+/// ⇒ 线上**不存在**该帧（三份 oracle 捕获均无 `Param=14591`/正文 `"0"`；设计件
+/// `tests/parity/m3/design-login-notice-and-clienttick-20261017.md` §1.4/§1.8）。
+/// 回帧（B2）是帧面偏离，已否决。
+#[must_use]
+pub fn client_login_notice_ok(recog: i32) -> i16 {
+    // C# `(short)msg.nParam1`：截断低 16 位并保号（65541 → 5、-1 → -1）。
+    recog as i16
+}
+
 // ───────────────────────────── CM_TEST(1017) ─────────────────────────────
 
 /// `CM_TEST(1017)`：`PlayObject.Message.cs:909-911` → `SendDefMessage(1, 0, 0, 0, 0);`。
@@ -813,6 +837,22 @@ pub fn process_client_password(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── CM_LOGINNOTICEOK(1018) ──
+    /// `ClientTick = (short)nParam1`：C# 截断语义（正数/负数/超 16 位）。
+    #[test]
+    fn cm_login_notice_ok_truncates_to_short() {
+        assert_eq!(client_login_notice_ok(1234), 1234);
+        assert_eq!(client_login_notice_ok(0), 0);
+        assert_eq!(client_login_notice_ok(32767), 32767);
+        // 0x0001_0005 = 65541 ⇒ (short)5。
+        assert_eq!(client_login_notice_ok(65541), 5);
+        // 0x0000_8000 = 32768 ⇒ (short)-32768。
+        assert_eq!(client_login_notice_ok(32768), i16::MIN);
+        assert_eq!(client_login_notice_ok(-1), -1);
+        // 线上消息号就是 1018（`Messages.cs`；常量由 msgcodegen 门禁守）。
+        assert_eq!(messages::CM_LOGINNOTICEOK, 1018);
+    }
 
     // ── CM_TEST ──
     #[test]

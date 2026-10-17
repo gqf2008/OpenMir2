@@ -3166,6 +3166,45 @@ fn dispatch_inbound_p0(
     }
 }
 
+/// `CM_LOGINNOTICEOK(1018)` 的**生产派发臂**（B1；设计件
+/// `tests/parity/m3/design-login-notice-and-clienttick-20261017.md` §3.2/§3.4）：
+/// 只把 `(short)Recog` 写进会话的 `SessionGround.client_tick`（oracle `PlayObject.cs:1112`），
+/// **零出帧 / 零世界副作用**。
+///
+/// 返回 `true` = 本 ident 属本臂（`sim_loop` 的 `else if` 链据此短路）。
+///
+/// - 线缆映射：`nParam1 = Recog`（`WorldServer.cs:856-858` 的 default 支）⇒ 读 `cmd.recog`；
+///   **不读 `Series`**（冻结客户端把 46 放在 Series，oracle 不读它）。
+/// - 截断：C# `(short)msg.nParam1` ⇒ [`game_svr::inbound::client_login_notice_ok`]（`as i16`）。
+/// - **不发帧**：oracle 的 `SysMsg(ClientTick.ToString(), …)`（`:1113`）会被 `RunNotice`
+///   自身的 `while (GetMessage)`（`:1106-1115`）在下一轮取出并丢弃（`BaseObject.Message.cs:334-355`）
+///   ⇒ 线上不存在该 `SM_SYSMESSAGE`；照字面回帧（B2）已被否决。
+/// - **无会话**（1018 早于进世界/未认证）：WRN 丢弃。宿主不阻塞进世界 ⇒ 1018 到达前
+///   `client_tick` 恒 0，这是 B1 的「1018 前施法窗口」（登记 `T-73`；1018 前的 `CM_SPELL`
+///   按 `client_tick == 0` 判门，设计件 §3.2/§5.10 选项 (a)）。
+///
+/// `_online`/`_gates` 与本文件其它 `*_cmd` 派发臂同形，并让「零出帧」判据能在**不改调用点**
+/// 的情况下被单测/变异牙直接驱动（见 `login_notice_ok_*` 用例）。
+fn handle_login_notice_ok_cmd(
+    cmd: &CommandMessage,
+    chr_name: &str,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    _online: &OnlineRegistry,
+    _gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) -> bool {
+    if cmd.ident != mir2_protocol::messages::CM_LOGINNOTICEOK {
+        return false;
+    }
+    match sessions.get_mut(chr_name) {
+        Some(sg) => sg.client_tick = game_svr::inbound::client_login_notice_ok(cmd.recog),
+        None => glog!(
+            "WRN",
+            "CM_LOGINNOTICEOK(1018)：ChrName={chr_name} 无地面会话 ⇒ 丢弃（B1 非阻塞窗口，登记 T-73）"
+        ),
+    }
+    true
+}
+
 /// 商店会话态读助手：取 `PlayObject.ScriptLable`（未写过 ⇒ 空串）。
 fn shop_script_lable(
     sessions: &std::collections::HashMap<String, ShopSession>,
@@ -5279,9 +5318,11 @@ fn handle_spell_cmd(
     // 两者**不可互换**，见两函数各自的注释）。范围 = ±`SendRefMsgRange` 内 `Race==Play && !Ghost`
     // （`BaseObject.Message.cs:383-445` ⇒ `chat::hear_targets`）。
     //
-    // **登记（本片不做，效果体层）**：`:160-163` 死亡归一、`:167` 版本门（本仓
-    // [`mir2_world::magic::spell_version_gate`] **无生产调用点**——效果体层未接，故本条广播天然落在
-    // 「版本门之前」；**反面牙**：把它挪到版本门之后 ⇒ `magic_id > 80`（如 81）必丢帧）、
+    // **登记（效果体层）**：`:160-163` 死亡归一（各效果体各自归一）。
+    // **已接（2026-10-17，卡 `openmir2-gateb1-loginnotice-versiongate`）**：`:167` 版本/魔号门
+    // （[`mir2_world::magic::spell_version_gate`]，调用点 = 本块 `Some(magic)` 分支内、
+    // 无条件广播**之后**、效果体之前；失败恰发一条 639 并提前返回）。因此本条广播仍天然落在
+    // 「版本门之前」；**反面牙**：把它挪到版本门之后 ⇒ `magic_id > 80`（如 81）必丢帧。
     // `:172-643` 的 45 条 `case` 效果体、`:648-658` `RM_MAGICFIRE`、`:659-668` 训练尾（含 RNG 抽数
     // + `MagicList` 落库）。逐行见界定件 §5.2。
     //
@@ -5298,7 +5339,8 @@ fn handle_spell_cmd(
     // 本函数上方 `default_arm && is_warr_skill` 块：3/4/7 等走 default 的战士魔号，
     // **无 MP 扣减/无 53/无 SM_SPELL**），以及 `:644-647 if (boSpellFail) return false`
     // 在**已建模**召唤面（17/30/41）上的 639（下方召唤块的 `!outcome.accepted` 支）。
-    // 仍未接：`:167` 版本门，以及 8 个显式 MagIdx case 各自的 MP 逻辑。
+    // 仍未接：8 个显式 MagIdx case 各自的 MP 逻辑（`:167` 版本门已于 2026-10-17 接线，
+    // 见下方 `Some(magic)` 分支）。
     //
     // **`userMagic.Magic.Effect` 的来源**：本仓 `magic_table`（`magics::load_magics`，oracle
     // `MySqlDB.LoadMagicDB`）。表里无该魔号 ⇒ 造不出帧（oracle 侧等价于 `userMagic.Magic == null`，
@@ -5328,6 +5370,40 @@ fn handle_spell_cmd(
                         req.magic_id,
                     );
                     broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                    // **版本/魔号门**（`MagicManager.cs:167`，B1；设计件
+                    // `tests/parity/m3/design-login-notice-and-clienttick-20261017.md` §3.2）：
+                    // ```text
+                    // :167  if (SoftVersionDateEx == 0 && ClientTick == 0 || Magic.MagicId > 80)
+                    // :168      return false;
+                    // ```
+                    // **位次**：在 `:159` 的**无条件** `RM_SPELL` 广播**之后**（反面牙：门不得挡住 17），
+                    // 在 `:172-643` 的 `switch` 效果体与 `:644-670` 共享尾**之前**（失败 ⇒ 无效果体、
+                    // 无尾、零抽）。MP 包装层（`:1505-1531`）已在本块上方先扣 MP / 先发 53，不得回退。
+                    // 失败 ⇒ 调用方 `Attack.cs:1279-1281` 的 `RM_MAGICFIREFAIL` ⇒
+                    // `SM_MAGICFIRE_FAIL(639)`；处理器无 self 守卫 ⇒ [`broadcast_ref_msg_with_self`]。
+                    // `ClientSpellXY` 的 `default` 支恒 `result = true`（`Attack.cs:1282`）⇒ 仍回 `+GD`。
+                    let (soft_version_date, client_tick) = match ground_sessions.get(chr_name) {
+                        Some(sg) => (sg.soft_version_date, sg.client_tick),
+                        None => {
+                            // oracle 必有 `PlayObject`；缺失属宿主内部不一致 ⇒ **按双 0 fail-closed**
+                            // （与 `SessionGround` 缺失时 MP 包装层 WRN 跳过同口径，方向相反：门拒）。
+                            glog!(
+                                "WRN",
+                                "CM_SPELL：ChrName={chr_name} 无地面会话 ⇒ 版本门按双 0 判（fail-closed）"
+                            );
+                            (0, 0)
+                        }
+                    };
+                    if !mir2_world::magic::spell_version_gate(
+                        soft_version_date,
+                        client_tick,
+                        i32::from(req.magic_id),
+                    ) {
+                        let fail = smframe_ext::sm_magicfire_fail(actor_id);
+                        broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
+                        send_good_tick(online, gates, chr_name);
+                        return;
+                    }
                 }
                 None => glog!(
                     "DBG",
@@ -6019,9 +6095,9 @@ fn handle_spell_cmd(
     //   ② `!IsWarrSkill`（`MagicManager.cs:151`，`:159` 之前早退）；
     //   ③ 距离门（`:155`，**用 snap 后**坐标）。越界时本块**不执行**尾：`RM_SPELL` 块的 `else`
     //      已按 `Attack.cs:1279-1281` 发**恰好一条** `SM_MAGICFIRE_FAIL(639)`（不得双发）。
-    // 版本/魔号门（`:167`）的 `MagicId > 80` 硬半边由 [`spell_tail_bo_train`] 的**显式 id 集合**
-    // 保证（集合上界 80）；`(SoftVersionDateEx==0 && ClientTick==0)` 半边尚未建模（G0 登记，
-    // 见设计件 §4），与本片同口径不引入。
+    // 版本/魔号门（`:167`）已由上方 `Some(magic)` 分支的生产调用点整体接线（含
+    // `(SoftVersionDateEx==0 && ClientTick==0)` 与 `MagicId > 80` 两半；失败已提前返回 ⇒
+    // 本块不可达该情形）。[`spell_tail_bo_train`] 的显式 id 集合（上界 80）是第二道防线。
     //
     // 尾参数（oracle 定值）：
     // - `bo_spell_fail=false`（无 case 置 true）、`bo_spell_fire=true`（无 case 置 false）；
@@ -8144,6 +8220,10 @@ struct SessionGround {
     /// `SendGoldInfo` 的 `== 0 ⇒ 不发` 门（`PlayObject.Base.cs:930`）——元宝寄售的
     /// `SM_GAMEGOLDNAME` 与登录帧 5008 走同一条门。
     soft_version_date: i32,
+    /// `PlayObject.ClientTick`（`PlayObject.cs:810`，`short`，初值 0；**唯一写点**是
+    /// `CM_LOGINNOTICEOK(1018)` 的 `ClientTick = (short)msg.nParam1`，`:1112`）。
+    /// **唯一读点**是 `DoSpell` 的版本门（`MagicManager.cs:167`）。
+    client_tick: i16,
     /// `BaseObject.GamePoint`（`SM_GAMEGOLDNAME` 的 LoWord/HiWord）。
     game_point: i32,
     /// `MessageSettings.CanotPickUpItem` 的 GBK 原文（缺则 `RM_SYSMESSAGE` 不产出）。
@@ -9283,6 +9363,15 @@ fn sim_loop(
                             &mut displays,
                             &gates,
                         );
+                    } else if handle_login_notice_ok_cmd(
+                        &cmd,
+                        &chr_name,
+                        &mut ground_sessions,
+                        &online,
+                        &gates,
+                    ) {
+                        // `CM_LOGINNOTICEOK(1018)`：只写 `SessionGround.client_tick`，
+                        // **零出帧**（设计件 §3.2 B1；oracle 的 SysMsg 被 RunNotice drain 吞掉）。
                     } else if game_svr::inbound::INBOUND_IDENTS.contains(&cmd.ident) {
                         // R1 入站派发余 10 条（Task C / 片 76）：`game_svr::inbound` 纯函数 + 接线臂。
                         handle_inbound_cmd(
@@ -9886,6 +9975,9 @@ fn sim_loop(
                                                             // `PlayObject.SoftVersionDateEx`（= `LoadDBInfo.SoftVersionDate`）：
                                                             // `SendGoldInfo` 的 `== 0 ⇒ 不发` 门（`PlayObject.Base.cs:930`）。
                                                             soft_version_date,
+                                                            // `PlayObject.ClientTick`（`PlayObject.cs:810`）：进世界初值 0，
+                                                            // 只由 `CM_LOGINNOTICEOK(1018)` 写（`PlayObject.cs:1112`）。
+                                                            client_tick: 0,
                                                             // `BaseObject.GamePoint`（`SM_GAMEGOLDNAME` 的 LoWord/HiWord）。
                                                             game_point: data.map_or(0, |d| d.game_point),
                                                             sys_msg: Some(enter::gbk(
@@ -13118,6 +13210,7 @@ mod tests {
             actor_id,
             game_gold: 0,
             soft_version_date: 0,
+            client_tick: 0,
             game_point: 0,
             sys_msg: None,
             use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
@@ -13142,6 +13235,16 @@ mod tests {
             mnm_val: vec![0; 100],
             save_rcd_tick: 0,
         }
+    }
+
+    /// **施法用例**的会话态：真冻结客户端的 `PlayObject.SoftVersionDateEx != 0`
+    /// （11029/5008 已发；`cert::CertParse::client_version` 实测 120020522），
+    /// `ClientTick = 0`（客户端 1018 的 `Recog=0`，设计件 §1.8）。
+    /// ⇒ `DoSpell` 的版本门（`MagicManager.cs:167`）「双 0」子句**不成立**，与基线帧面一致。
+    fn spell_session_ground(actor_id: i32) -> SessionGround {
+        let mut sg = test_session_ground(actor_id);
+        sg.soft_version_date = 120_020_522;
+        sg
     }
 
     /// **M3⑥-实现 3 第②片**：`emit_npc_says` 按 oracle `MsgQueue` 出队序（`High` 先）落
@@ -13284,6 +13387,7 @@ mod tests {
             actor_id: 1,
             game_gold: 77,
             soft_version_date: 0,
+            client_tick: 0,
             game_point: 0,
             sys_msg: None,
             use_items,
@@ -14117,6 +14221,7 @@ mod tests {
                 actor_id: p,
                 game_gold: 0,
                 soft_version_date: 0,
+                client_tick: 0,
                 game_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
@@ -14292,6 +14397,7 @@ mod tests {
                 actor_id: 42,
                 game_gold: 0,
                 soft_version_date: 0,
+                client_tick: 0,
                 game_point: 0,
                 sys_msg: None,
                 use_items,
@@ -14458,6 +14564,7 @@ mod tests {
                 actor_id: 42,
                 game_gold: 0,
                 soft_version_date: 0,
+                client_tick: 0,
                 game_point: 0,
                 sys_msg: None,
                 use_items,
@@ -14595,6 +14702,7 @@ mod tests {
                 actor_id: hero,
                 game_gold: 0,
                 soft_version_date: 0,
+                client_tick: 0,
                 game_point: 0,
                 sys_msg: None,
                 use_items,
@@ -15415,6 +15523,7 @@ mod tests {
                 actor_id: 7,
                 game_gold: 0,
                 soft_version_date: 0,
+                client_tick: 0,
                 game_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
@@ -15571,6 +15680,7 @@ mod tests {
                 actor_id: hid,
                 game_gold: 0,
                 soft_version_date: 0,
+                client_tick: 0,
                 game_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
@@ -16161,6 +16271,7 @@ mod tests {
                 actor_id: 7,
                 game_gold: 0,
                 soft_version_date: 0,
+                client_tick: 0,
                 game_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
@@ -16968,7 +17079,7 @@ mod tests {
         ) = a5_spell_rig(15, 12, 12);
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        ground_sessions.insert("caster".into(), spell_session_ground(caster));
         let catalog = game_svr::ability::StdItemCatalog::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
@@ -17040,7 +17151,7 @@ mod tests {
             ) = a5_spell_rig(magic_id, i32::from(FAR), i32::from(FAR));
             let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
                 std::collections::HashMap::new();
-            ground_sessions.insert("caster".into(), test_session_ground(caster));
+            ground_sessions.insert("caster".into(), spell_session_ground(caster));
             let catalog = game_svr::ability::StdItemCatalog::new();
             let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
             let table = game_svr::mongen::MonsterTable::new(Vec::new());
@@ -17152,7 +17263,7 @@ mod tests {
             ) = a5_spell_rig(magic_id, 19, 10); // 目标实体在 (19,10)
             let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
                 std::collections::HashMap::new();
-            ground_sessions.insert("caster".into(), test_session_ground(caster));
+            ground_sessions.insert("caster".into(), spell_session_ground(caster));
             let catalog = game_svr::ability::StdItemCatalog::new();
             let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
             let table = game_svr::mongen::MonsterTable::new(Vec::new());
@@ -17235,7 +17346,7 @@ mod tests {
             ) = a5_spell_rig(magic_id, 18, 10); // 目标实体在 (18,10)
             let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
                 std::collections::HashMap::new();
-            ground_sessions.insert("caster".into(), test_session_ground(caster));
+            ground_sessions.insert("caster".into(), spell_session_ground(caster));
             let catalog = game_svr::ability::StdItemCatalog::new();
             let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
             let table = game_svr::mongen::MonsterTable::new(Vec::new());
@@ -17325,7 +17436,7 @@ mod tests {
         }
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        ground_sessions.insert("caster".into(), spell_session_ground(caster));
         let catalog = game_svr::ability::StdItemCatalog::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
@@ -17462,7 +17573,7 @@ mod tests {
         ) = a5_spell_rig(15, 12, 12);
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        ground_sessions.insert("caster".into(), spell_session_ground(caster));
         let catalog = game_svr::ability::StdItemCatalog::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
@@ -17588,7 +17699,7 @@ mod tests {
             },
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
-        let mut sg = test_session_ground(caster);
+        let mut sg = spell_session_ground(caster);
         sg.use_items[game_svr::ability::SLOT_ARMRING_L] = Some(game_svr::bag::BagItem {
             make_index: 1,
             index: 1,
@@ -17758,7 +17869,7 @@ mod tests {
             },
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
-        let mut sg = test_session_ground(caster);
+        let mut sg = spell_session_ground(caster);
         // 17 的护身符需求 = `CheckAmulet(1,1)`：`round(Dura/100) >= 1` ⇒ Dura=100 过门，
         // 且 `Dura > 100` 为假 ⇒ 走 else（扣光删除）支。
         sg.use_items[game_svr::ability::SLOT_ARMRING_L] = Some(game_svr::bag::BagItem {
@@ -17942,6 +18053,8 @@ mod tests {
             },
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        // 真客户端会话（`SoftVersionDateEx != 0`）⇒ 版本门「双 0」子句不成立，46 正常施放。
+        ground_sessions.insert("caster".into(), spell_session_ground(caster));
         let catalog = game_svr::ability::StdItemCatalog::new();
         let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
             magic_id: 46,
@@ -19171,6 +19284,7 @@ mod tests {
                 actor_id: hero,
                 game_gold: 0,
                 soft_version_date: 0,
+                client_tick: 0,
                 game_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
@@ -19330,6 +19444,7 @@ mod tests {
                 actor_id: 42,
                 game_gold: 0,
                 soft_version_date: 0,
+                client_tick: 0,
                 game_point: 0,
                 sys_msg: None,
                 use_items,
@@ -19455,6 +19570,7 @@ mod tests {
                 actor_id: hero,
                 game_gold: 0,
                 soft_version_date: 0,
+                client_tick: 0,
                 game_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
@@ -22461,7 +22577,7 @@ mod tests {
                 },
             );
             let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
-            let mut sg = test_session_ground(caster);
+            let mut sg = spell_session_ground(caster);
             sg.use_items[game_svr::ability::SLOT_ARMRING_L] = Some(game_svr::bag::BagItem {
                 make_index: 1,
                 index: 1,
@@ -23161,7 +23277,7 @@ mod tests {
             ..mir2_data::MagicInfo::default()
         }]);
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
-        let mut sg = test_session_ground(caster);
+        let mut sg = spell_session_ground(caster);
         sg.state.wabil.hp = 30;
         sg.state.wabil.mp = caster_mp;
         sg.state.wabil.max_hp = 100;
@@ -23475,7 +23591,7 @@ mod tests {
             ..mir2_data::MagicInfo::default()
         }]);
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
-        let mut sg = test_session_ground(caster);
+        let mut sg = spell_session_ground(caster);
         sg.state.wabil.hp = 30;
         sg.state.wabil.mp = caster_mp;
         sg.state.wabil.max_hp = 100;
@@ -23966,7 +24082,7 @@ mod tests {
 
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        ground_sessions.insert("caster".into(), spell_session_ground(caster));
         let catalog = game_svr::ability::StdItemCatalog::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
@@ -24086,7 +24202,7 @@ mod tests {
         let before = world.rng.clone();
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        ground_sessions.insert("caster".into(), spell_session_ground(caster));
         let catalog = game_svr::ability::StdItemCatalog::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
@@ -24156,7 +24272,7 @@ mod tests {
 
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        ground_sessions.insert("caster".into(), spell_session_ground(caster));
         let catalog = game_svr::ability::StdItemCatalog::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
@@ -24271,7 +24387,7 @@ mod tests {
         );
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        ground_sessions.insert("caster".into(), spell_session_ground(caster));
         let catalog = game_svr::ability::StdItemCatalog::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
@@ -24358,7 +24474,7 @@ mod tests {
         );
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        ground_sessions.insert("caster".into(), spell_session_ground(caster));
         let catalog = game_svr::ability::StdItemCatalog::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
@@ -24430,7 +24546,7 @@ mod tests {
         );
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        ground_sessions.insert("caster".into(), spell_session_ground(caster));
         let catalog = game_svr::ability::StdItemCatalog::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
@@ -24566,7 +24682,7 @@ mod tests {
     ) {
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        ground_sessions.insert("caster".into(), spell_session_ground(caster));
         let catalog = game_svr::ability::StdItemCatalog::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
@@ -25369,5 +25485,424 @@ mod tests {
         mir2_envir::MapLoader::new(dir, "Map", "Envir")
             .load_registry()
             .expect("合成注册表")
+    }
+    // ═════════════════ 卡 `openmir2-gateb1-loginnotice-versiongate` ═════════════════
+    // 设计件 `tests/parity/m3/design-login-notice-and-clienttick-20261017.md`（方案 B1）：
+    // ① `CM_LOGINNOTICEOK(1018)` 只写 `SessionGround.client_tick`（零出帧）；
+    // ② `handle_spell_cmd` 在无条件 `SM_SPELL` 之后、效果体之前过 `MagicManager.cs:167` 版本门。
+
+    /// 把 `SimToGate` 流排空成 `(socket, ident)` 列表（忽略 `SendRaw` 的 `+GD`）。
+    fn take_wire(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, u16)> {
+        let mut out = Vec::new();
+        while let Ok(m) = rx.try_recv() {
+            if let SimToGate::SendFrame { socket, body } = m {
+                out.push((socket, u16::from_le_bytes([body[4], body[5]])));
+            }
+        }
+        out
+    }
+
+    /// `CM_LOGINNOTICEOK(1018)`（J1/J2）：写 `(short)Recog`、**零出帧**、世界 RNG 零抽。
+    ///
+    /// 牙：① 去掉 1018 臂 ⇒ `client_tick` 仍 0 ⇒ 红；② 误用 `Series`（本例 46）⇒ tick=46 ⇒ 红；
+    /// ③ 写成 i32/饱和 ⇒ `recog=65541` 断言 5 失败 ⇒ 红；④ 回一帧（B2）⇒ `take_wire` 非空 ⇒ 红。
+    #[test]
+    fn login_notice_ok_writes_client_tick_zero_frames_truncates() {
+        use std::collections::HashMap;
+        const CM_SAY: u16 = mir2_protocol::messages::CM_SAY;
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uc".into(),
+                chr_name: "caster".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 911,
+                actor_id: 7,
+            },
+        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("caster".into(), spell_session_ground(7));
+        assert_eq!(
+            sessions["caster"].client_tick, 0,
+            "初值 0（PlayObject.cs:810）"
+        );
+        let world = mir2_world::World::new(32, 32);
+
+        let mut cmd = CommandMessage {
+            recog: 1234,
+            ident: mir2_protocol::messages::CM_LOGINNOTICEOK,
+            param: 0,
+            tag: 0,
+            // 冻结客户端的真实 Series=46——oracle **不读**它（WorldServer.cs:856-858 取 Recog）。
+            series: 46,
+        };
+        let rng_before = world.rng.clone();
+        assert!(
+            handle_login_notice_ok_cmd(&cmd, "caster", &mut sessions, &online, &gates),
+            "ident=1018 ⇒ 本臂命中"
+        );
+        assert_eq!(
+            sessions["caster"].client_tick, 1234,
+            "ClientTick = (short)Recog"
+        );
+        assert!(
+            take_wire(&mut rx).is_empty(),
+            "1018 零出帧（oracle 的 SysMsg 被 RunNotice drain 吞掉；B2 否决）"
+        );
+        assert_eq!(
+            draws_between(&rng_before, &world.rng),
+            0,
+            "1018 不碰世界 RNG"
+        );
+
+        // C# `(short)` 截断：0x0001_0005 = 65541 ⇒ 5。
+        cmd.recog = 65541;
+        assert!(handle_login_notice_ok_cmd(
+            &cmd,
+            "caster",
+            &mut sessions,
+            &online,
+            &gates
+        ));
+        assert_eq!(sessions["caster"].client_tick, 5, "(short)65541 = 5");
+        assert!(take_wire(&mut rx).is_empty());
+
+        // 负数：`(short)-1 = -1`。
+        cmd.recog = -1;
+        assert!(handle_login_notice_ok_cmd(
+            &cmd,
+            "caster",
+            &mut sessions,
+            &online,
+            &gates
+        ));
+        assert_eq!(sessions["caster"].client_tick, -1);
+        assert!(take_wire(&mut rx).is_empty());
+
+        // 非 1018 ⇒ 不属本臂，不改状态。
+        cmd.ident = CM_SAY;
+        assert!(
+            !handle_login_notice_ok_cmd(&cmd, "caster", &mut sessions, &online, &gates),
+            "其它 ident 必须返回 false（交给后续派发臂）"
+        );
+        assert_eq!(sessions["caster"].client_tick, -1, "非本臂不得改 tick");
+
+        // 无会话 ⇒ WRN 丢弃（不是 panic、更不是出帧）。
+        cmd.ident = mir2_protocol::messages::CM_LOGINNOTICEOK;
+        assert!(handle_login_notice_ok_cmd(
+            &cmd,
+            "ghost",
+            &mut sessions,
+            &online,
+            &gates
+        ));
+        assert!(take_wire(&mut rx).is_empty(), "无会话也不得回帧");
+    }
+
+    /// 接线牙：`sim_loop` 里必须有独立的 1018 臂，且位于 R1 入站批（`INBOUND_IDENTS`）**之前**
+    /// （否则 `INBOUND_IDENTS` 不含 1018 ⇒ 静默落空）。
+    #[test]
+    fn login_notice_ok_arm_is_wired_in_sim_loop_before_inbound_batch() {
+        let src = include_str!("main.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let hits: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.trim() == "} else if handle_login_notice_ok_cmd(")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(hits.len(), 1, "1018 臂必须恰有一处生产调用（{hits:?}）");
+        let call = hits[0];
+        let sim_loop = lines
+            .iter()
+            .position(|l| l.trim() == "fn sim_loop(")
+            .expect("`fn sim_loop(` 定义行");
+        assert!(call > sim_loop, "1018 臂必须在 `fn sim_loop(` 体内");
+        let inbound = lines
+            .iter()
+            .position(|l| l.contains("INBOUND_IDENTS.contains(&cmd.ident)"))
+            .expect("R1 入站批派发行");
+        assert!(
+            call < inbound,
+            "1018 臂必须在 R1 批量臂之前（否则 1018 落空）"
+        );
+    }
+
+    /// J4（`MagicId > 80`）：**先**恰一条 `SM_SPELL`（广播不被门挡），**随后**恰一条 639/收件人；
+    /// 无效果体/无尾/LVEXP；世界 RNG 零抽；MP 仍由包装层先扣、53 在 639 之前。
+    ///
+    /// 牙：① 去掉版本门 ⇒ 本用例无 639 ⇒ 红；② 门挪到广播之前 ⇒ 观察者无 `SM_SPELL` ⇒ 红；
+    /// ③ 距离门失败也发 639（双发）⇒ 既有距离门用例的「恰一条」断言红。
+    #[test]
+    fn spell_cmd_version_gate_magic_over_80_after_spell_broadcast() {
+        use std::collections::HashMap;
+        let (
+            mut world,
+            caster,
+            _target,
+            online,
+            mut saves,
+            _old_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = a5_spell_rig(81, 12, 12);
+        // 魔表里**有** 81 行（否则 `:159` 的 Effect 不可得、广播不接）；`spell: 8` 让 MP 包装层
+        // 算出一个正的 `nSpellPoint`（Round(8/4*(1+1)) = 4）。
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 81,
+            effect: 3,
+            effect_type: 4,
+            spell: 8,
+            train_lv: 3,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        let mut sg = spell_session_ground(caster);
+        sg.state.wabil.mp = 50;
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("caster".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        let rng_before = world.rng.clone();
+
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 12),
+            81,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+        );
+
+        // 包一层：MP 扣减 + 53（自己）→ SM_SPELL（仅观察者，Recog=施法者）→ 639（施法者 + 观察者）。
+        let frames = take_wire(&mut rx0);
+        assert_eq!(
+            frames,
+            vec![
+                (911, mir2_protocol::messages::SM_HEALTHSPELLCHANGED),
+                (912, mir2_protocol::messages::SM_SPELL),
+                (911, mir2_protocol::messages::SM_MAGICFIRE_FAIL),
+                (912, mir2_protocol::messages::SM_MAGICFIRE_FAIL),
+            ],
+            "帧序 = 53(自身) → 17(观察者) → 639(自身+观察者)；先 17 后 639 证明门在广播之后"
+        );
+        assert_eq!(
+            ground_sessions["caster"].state.wabil.mp, 46,
+            "MP 仍按包装层先扣 4（get_spell_point(8, level 1)）"
+        );
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|(_, id)| *id == mir2_protocol::messages::SM_MAGICFIRE_FAIL)
+                .count(),
+            2,
+            "639 恰一条/收件人（施法者 1 + 观察者 1）"
+        );
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|(_, id)| *id == mir2_protocol::messages::SM_SPELL)
+                .count(),
+            1,
+            "SM_SPELL 恰一条且只给观察者（:159 在 :167 之前）"
+        );
+        assert!(
+            !frames
+                .iter()
+                .any(|(_, id)| *id == mir2_protocol::messages::SM_MAGICFIRE
+                    || *id == mir2_protocol::messages::SM_MAGIC_LVEXP),
+            "版本门失败 ⇒ 无效果体/无共享尾/LVEXP"
+        );
+        assert_eq!(
+            draws_between(&rng_before, &world.rng),
+            0,
+            "版本门失败 ⇒ 世界 RNG 零抽（连续 3 抽对照亦为 0）"
+        );
+        assert!(
+            !world
+                .buffs
+                .has_buff(caster, mir2_world::BuffType::DefensePower),
+            "无效果体落 buff"
+        );
+    }
+
+    /// J5（「双 0」子句 + 1018 恢复）：`soft=0 && tick=0` ⇒ 门拒（639）；派发 1018 `recog=1`
+    /// 后同一魔号门过（正常施放、无 639）。
+    ///
+    /// 牙：删掉 `soft==0 && tick==0` 子句（= 方案 C）⇒ 第一次施法无 639 ⇒ 红。
+    #[test]
+    fn spell_cmd_version_gate_double_zero_then_1018_recovers() {
+        use std::collections::HashMap;
+        let (
+            mut world,
+            caster,
+            _target,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = a5_spell_rig(1, 12, 12);
+        // `test_session_ground` 的 `soft=0` 正是「双 0」构造；`client_tick` 初值 0。
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        let rng_before = world.rng.clone();
+
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 12),
+            1,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+        );
+        let frames = take_wire(&mut rx0);
+        assert_eq!(
+            frames,
+            vec![
+                (912, mir2_protocol::messages::SM_SPELL),
+                (911, mir2_protocol::messages::SM_MAGICFIRE_FAIL),
+                (912, mir2_protocol::messages::SM_MAGICFIRE_FAIL),
+            ],
+            "soft=0 && tick=0 ⇒ 广播后门拒（639），无效果体/尾"
+        );
+        assert_eq!(
+            draws_between(&rng_before, &world.rng),
+            0,
+            "双 0 门拒 ⇒ 零抽"
+        );
+
+        // 1018 到达：`ClientTick = (short)Recog = 1`。
+        let cmd = CommandMessage {
+            recog: 1,
+            ident: mir2_protocol::messages::CM_LOGINNOTICEOK,
+            param: 0,
+            tag: 0,
+            series: 46,
+        };
+        assert!(handle_login_notice_ok_cmd(
+            &cmd,
+            "caster",
+            &mut ground_sessions,
+            &online,
+            &gates
+        ));
+        assert_eq!(ground_sessions["caster"].client_tick, 1);
+        assert!(take_wire(&mut rx0).is_empty(), "1018 零出帧");
+
+        let rng_before = world.rng.clone();
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 12),
+            1,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+        );
+        let frames = take_wire(&mut rx0);
+        assert_eq!(
+            frames,
+            vec![(912, mir2_protocol::messages::SM_SPELL)],
+            "1018 后同魔号门过：无 639（正常施放）"
+        );
+        assert_eq!(
+            draws_between(&rng_before, &world.rng),
+            0,
+            "魔号 1 无效果体（效果体层未接）⇒ 零抽；门已放行"
+        );
+    }
+
+    /// 阴性对照（J4 反面）：`soft != 0`（真客户端）、`magic_id <= 80` ⇒ 门过，帧面与基线相同（无 639）。
+    #[test]
+    fn spell_cmd_version_gate_passes_real_client_fixture() {
+        use std::collections::HashMap;
+        let (
+            mut world,
+            caster,
+            _target,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = a5_spell_rig(1, 12, 12);
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("caster".into(), spell_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 12),
+            1,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+        );
+        assert_eq!(
+            take_wire(&mut rx0),
+            vec![(912, mir2_protocol::messages::SM_SPELL)],
+            "真客户端（soft=120020522, tick=0）+ 魔号 1 ⇒ 门过、无 639、无多帧"
+        );
     }
 }
