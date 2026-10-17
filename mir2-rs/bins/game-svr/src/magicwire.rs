@@ -47,8 +47,12 @@
 //! **已接（2026-10-17，default 支的 `PlayObject.DoSpell` 包装层）**：`GetSpellPoint`/
 //! `DamageSpell`/`HealthSpellChanged`（`PlayObject.Base.cs:1505-1531`）与蓝不足早退的
 //! `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`（宿主 `main.rs::handle_spell_cmd`）。
+//! **已接（2026-10-17，卡 `openmir2-spell-distance-fail`）**：`MagicManager.DoSpell` 的**距离门**
+//! （`MagicManager.cs:155-157`）失败回帧（`RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`；宿主
+//! `handle_spell_cmd` 的 `default` 支 `else`，只此一处）。
 //! **仍未接**：8 条显式 `case` 各自的 MP 逻辑（12/25/26/27/34/38/43/56），以及
-//! `MagicManager.DoSpell` 的战士门/距离门失败回帧（`RM_MAGICFIREFAIL`）。
+//! `MagicManager.DoSpell` 的**战士门**（`:151-153`）失败回帧（default 支已按 `!is_warr_skill`
+//! 过滤 ⇒ 只在战士魔号走 default 时缺，登记）。
 //! 技能效果面的向量与用例在 `openmir2-m3-combat-skills-align`（m3cs）的离线片，其接口就绪后再接这一层。
 //!
 //! **`LateDelivery`**：Rust 的入帧路径没有延时重投（`command` 直投）⇒ 恒按 `false` 处理；oracle 此时

@@ -5234,8 +5234,12 @@ fn handle_spell_cmd(
     // `PlayObject.Base.cs:1505-1531` 的 MP 包装层——`GetSpellPoint`/`DamageSpell`/
     // `HealthSpellChanged`（`RM_HEALTHSPELLCHANGED`=53，先于 `:159` 的 `RM_SPELL`）与蓝不足
     // 早退 + `RM_MAGICFIREFAIL`（→ `SM_MAGICFIRE_FAIL(639)`）。故**不再**列在下方未做项里。
-    // 仍未接：`MagicManager.DoSpell` 战士门（`:151`）/距离门（`:155`）失败时的
-    // `RM_MAGICFIREFAIL`，以及 8 个显式 MagIdx case 各自的 MP 逻辑。
+    // **已接（2026-10-17，卡 `openmir2-spell-distance-fail`）**：`MagicManager.DoSpell` 的
+    // **距离门**（`:155-157`）失败时的 `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`（本函数
+    // 下方 `default` 支的 `else` 分支，只此一处）。
+    // 仍未接：`IsWarrSkill` 战士门（`:151-153`）失败时的 `RM_MAGICFIREFAIL`（default 支入口已按
+    // `!is_warr_skill` 过滤 ⇒ 战士魔号 3/4/7 等走 default 者的 639 仍缺，登记），
+    // `:167` 版本门，以及 8 个显式 MagIdx case 各自的 MP 逻辑。
     //
     // **`userMagic.Magic.Effect` 的来源**：本仓 `magic_table`（`magics::load_magics`，oracle
     // `MySqlDB.LoadMagicDB`）。表里无该魔号 ⇒ 造不出帧（oracle 侧等价于 `userMagic.Magic == null`，
@@ -5272,6 +5276,28 @@ fn handle_spell_cmd(
                     req.magic_id
                 ),
             }
+        } else {
+            // `if (!DoSpell(...)) SendRefMsg(RM_MAGICFIREFAIL, 0, 0, 0, 0, "")`
+            // （`PlayObject.Attack.cs:1279-1281`）——`DoSpell` 的**距离门**单语句
+            // `MagicManager.cs:155-157` 失败时 `return false` ⇒ 调用方回一帧。
+            //
+            // **只此一处**：本块是 `default` 支 `DoSpell` 的唯一调用面；14/15/31、8/21/37、
+            // 17/30/41、20、46 等效果体块各自的 `spell_in_range_i32` 门在越界时同样不过，
+            // 但**不得**再各发一次 639（oracle 一次 `DoSpell` 失败只回**一帧**）⇒ 只在本 else 发。
+            //
+            // **时点**：MP 包装层（本块**上方**）已按 oracle `PlayObject.Base.cs:1505-1531`
+            // 先扣 MP + 发 `SM_HEALTHSPELLCHANGED(53)`（wrapper 先于 `MagicManager.DoSpell`）
+            // ⇒ 越界时也扣 MP、53 先于 639。
+            //
+            // **收件人**：`RM_MAGICFIREFAIL` 的处理器（`PlayObject.Message.cs:1794-1800`）**无**
+            // `ActorId != this.ActorId` 守卫（与 `RM_SPELL` 的 `:1455` 不同）⇒ `SendRefMsg`
+            // 也给自己回帧 ⇒ 用 [`broadcast_ref_msg_with_self`]（不可用 [`broadcast_ref_msg`]）。
+            //
+            // **未接（登记）**：`DoSpell:151` 的 `IsWarrSkill` 战士门失败回帧 —— 本块入口已按
+            // `!is_warr_skill` 过滤 ⇒ 战士魔号（3/4/7 等走 `default` 支者）的 639 仍缺；
+            // 与 `:167` 版本门同属后续登记项。
+            let fail = smframe_ext::sm_magicfire_fail(actor_id);
+            broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
         }
     }
     // **片 A-5（buff 生产者接线）**：技能 14/15/31 的加点 buff 生产链
@@ -23078,6 +23104,282 @@ mod tests {
         );
     }
 
+    /// **距离门失败测试台**（`MagicManager.cs:155-157` ⇒ 调用方
+    /// `PlayObject.Attack.cs:1279-1281` 回 `RM_MAGICFIREFAIL`）：
+    /// 施法者 (10,10)/等级 20；**只有施法者自己在线**（无观察者 ⇒ 捕获队列里
+    /// `SM_MAGICFIRE_FAIL` 恰一条，且能直接核对「处理器无 `ActorId != ActorId` 守卫」）；
+    /// 点击点由入参给、且不建目标实体（`target_actor_id = 0` ⇒ `CretInNearXy` 不命中、
+    /// 不做 snap，距离门读的就是点击点）。
+    /// `magic_spell`/`magic_def_spell` 决定 `GetSpellPoint`，`caster_mp` 是 `WAbil.MP`。
+    #[allow(clippy::type_complexity)]
+    fn distfail_run(
+        magic_id: u16,
+        magic_spell: u16,
+        magic_def_spell: u8,
+        caster_mp: u16,
+        target_x: u16,
+        target_y: u16,
+        seed: i32,
+    ) -> (
+        Vec<(i32, Vec<u8>)>,
+        Vec<(i32, Vec<u8>)>,
+        mir2_world::World,
+        std::collections::HashMap<String, SessionGround>,
+        i32,
+    ) {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        world.maps.push(mir2_world::MapGrid::new(64, 64));
+        world.open_session("caster");
+        let mut e = new_player_entity("caster".to_string(), 10, 10);
+        e.level = 20;
+        let caster = world.enter_map("caster", e, 0).expect("进图");
+        world.tick();
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            caster,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uc".into(),
+                chr_name: "caster".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 911,
+                actor_id: caster,
+            },
+        );
+        let (tx0, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut record = stage6_record();
+        record.data.magic = Some(vec![Some(record::MagicRcd {
+            mag_idx: magic_id,
+            level: 1,
+            magic_key: u16::from(b'm'),
+            tran_point: 0,
+        })]);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert(
+            "caster".into(),
+            SavedHuman {
+                account: "uc".into(),
+                record,
+                enter_map: "0".into(),
+            },
+        );
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id,
+            effect: 3,
+            effect_type: 4,
+            spell: magic_spell,
+            def_spell: magic_def_spell,
+            train_lv: 3,
+            train_level: [255; 4],
+            ..mir2_data::MagicInfo::default()
+        }]);
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(caster);
+        sg.state.wabil.hp = 30;
+        sg.state.wabil.mp = caster_mp;
+        sg.state.wabil.max_hp = 100;
+        sg.state.wabil.max_mp = 100;
+        sg.show_hp = false;
+        ground_sessions.insert("caster".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(target_x, target_y),
+            magic_id,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+        );
+        let mut frames = Vec::new();
+        let mut raws = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                SimToGate::SendFrame { socket, body } => frames.push((socket, body)),
+                SimToGate::SendRaw { socket, payload } => raws.push((socket, payload)),
+                _ => {}
+            }
+        }
+        (frames, raws, world, ground_sessions, caster)
+    }
+
+    /// **判据①（距离门失败 ⇒ 639，生产入口 `handle_spell_cmd`）**：越界施法
+    /// （点击 (25,25)，|Δ| = 15 > `MagicAttackRage` = 8）⇒ 捕获队列里**恰一条**
+    /// `SM_MAGICFIRE_FAIL(639)`（Recog = 施法者、字节 == [`smframe_ext::sm_magicfire_fail`]）；
+    /// **无** `SM_SPELL`、无任何效果体帧；世界 RNG **零抽数**（随后连续三抽与参照流逐项相同）。
+    /// 魔号 14（A-5 buff 生产者）与 8（`default` 支效果体）各跑一遍。
+    ///
+    /// 红检（变异牙，实测见补丁说明）：① 去掉 `else` 里的 639 ⇒ 本用例红；② 在效果体块里
+    /// 再发一次 639 ⇒「恰一条」红。
+    #[test]
+    fn spell_cmd_distance_gate_failure_emits_exactly_one_639() {
+        use mir2_shared::rng::RandomNumber;
+        for magic_id in [
+            mir2_world::world::SKILL_HANGMAJINBUB,
+            mir2_world::magic::SKILL_FIREWIND,
+        ] {
+            let seed = 7;
+            let (frames, raws, world, sessions, caster) =
+                distfail_run(magic_id, 0, 0, 50, 25, 25, seed);
+            assert_eq!(
+                frames.len(),
+                1,
+                "[魔号 {magic_id}] 越界 ⇒ 捕获队列恰 1 帧；实得 {frames:?}"
+            );
+            let (sock, body) = &frames[0];
+            assert_eq!(*sock, 911, "[魔号 {magic_id}] 唯一的帧发给施法者自己");
+            assert_eq!(
+                mp_ident(body),
+                mir2_protocol::messages::SM_MAGICFIRE_FAIL,
+                "[魔号 {magic_id}] 越界 ⇒ 唯一帧是 639；实得 {body:?}"
+            );
+            assert_eq!(
+                body,
+                &smframe_ext::sm_magicfire_fail(caster),
+                "[魔号 {magic_id}] 639 逐字节 = header-only + Recog=施法者"
+            );
+            assert!(
+                !frames
+                    .iter()
+                    .any(|(_, b)| mp_ident(b) == mir2_protocol::messages::SM_SPELL),
+                "[魔号 {magic_id}] 越界 ⇒ 不得有 SM_SPELL"
+            );
+            assert!(
+                !frames
+                    .iter()
+                    .any(|(_, b)| mp_ident(b) == mir2_protocol::messages::SM_HEALTHSPELLCHANGED),
+                "[魔号 {magic_id}] spell=0 ⇒ 无 53"
+            );
+            assert_eq!(sessions["caster"].state.wabil.mp, 50, "spell=0 ⇒ MP 不变");
+            // 世界 RNG 零抽数：状态 == 全新同 seed 流；随后连续三抽也与参照流逐项相同。
+            let fresh = RandomNumber::with_seed(seed);
+            assert_eq!(
+                draws_between(&fresh, &world.rng),
+                0,
+                "[魔号 {magic_id}] 越界 ⇒ 距离门在任何取数之前 return false"
+            );
+            let mut probe = fresh.clone();
+            let mut got = world.rng.clone();
+            for k in 0..3 {
+                assert_eq!(
+                    got.random_below(10),
+                    probe.random_below(10),
+                    "[魔号 {magic_id}] 阴性对照第 {k} 抽 = 参照流（世界 RNG 未被消费）"
+                );
+            }
+            // 调用方 `Attack.cs:1282` 的 `result = true` ⇒ 越界仍回 `+GD`。
+            assert_eq!(
+                raws.iter()
+                    .filter(|(s, p)| *s == 911 && p.starts_with(b"+GD/"))
+                    .count(),
+                1,
+                "[魔号 {magic_id}] 越界仍须给施法者回 +GD（ClientSpellXY default 支恒 result=true）"
+            );
+        }
+    }
+
+    /// **判据②（越界仍扣 MP，且 53 先于 639）**：MP 包装层在 `DoSpell` **之前**
+    /// （`PlayObject.Base.cs:1518-1521`）⇒ 越界同样按 `GetSpellPoint` 扣减并发 53；
+    /// 随后距离门失败回 639。magic 8 / spell 8 / def 2 / level 1 / MP 50 ⇒ MP 44。
+    #[test]
+    fn spell_cmd_distance_gate_failure_deducts_mp_before_639() {
+        let magic_id = mir2_world::magic::SKILL_FIREWIND;
+        let (frames, raws, _world, sessions, caster) = distfail_run(magic_id, 8, 2, 50, 25, 25, 1);
+        assert_eq!(
+            sessions["caster"].state.wabil.mp, 44,
+            "Round(8/4*2)+2 = 6 ⇒ 越界也扣 MP（wrapper 先于 DoSpell）"
+        );
+        let ids: Vec<u16> = frames.iter().map(|(_, b)| mp_ident(b)).collect();
+        assert_eq!(
+            ids.iter()
+                .filter(|id| **id == mir2_protocol::messages::SM_HEALTHSPELLCHANGED)
+                .count(),
+            1,
+            "越界 ⇒ 53 照发（恰一条，只给自己）；实得 {ids:?}"
+        );
+        assert_eq!(
+            ids.iter()
+                .filter(|id| **id == mir2_protocol::messages::SM_MAGICFIRE_FAIL)
+                .count(),
+            1,
+            "越界 ⇒ 恰一条 639；实得 {ids:?}"
+        );
+        let i_53 = ids
+            .iter()
+            .position(|id| *id == mir2_protocol::messages::SM_HEALTHSPELLCHANGED)
+            .expect("53 必发");
+        let i_639 = ids
+            .iter()
+            .position(|id| *id == mir2_protocol::messages::SM_MAGICFIRE_FAIL)
+            .expect("639 必发");
+        assert!(
+            i_53 < i_639,
+            "oracle 序：HealthSpellChanged（:1519）先于 DoSpell 失败回帧（Attack.cs:1279）；实得 {ids:?}"
+        );
+        let b53 = &frames[i_53].1;
+        assert_eq!(u16::from_le_bytes([b53[6], b53[7]]), 30, "53.HP");
+        assert_eq!(u16::from_le_bytes([b53[8], b53[9]]), 44, "53.MP = 扣后值");
+        assert_eq!(u16::from_le_bytes([b53[10], b53[11]]), 100, "53.MaxHP");
+        assert_eq!(
+            &frames[i_639].1,
+            &smframe_ext::sm_magicfire_fail(caster),
+            "639 逐字节 = Recog 施法者"
+        );
+        assert!(
+            !ids.contains(&mir2_protocol::messages::SM_SPELL),
+            "越界 ⇒ 无 SM_SPELL；实得 {ids:?}"
+        );
+        assert_eq!(
+            raws.iter()
+                .filter(|(s, p)| *s == 911 && p.starts_with(b"+GD/"))
+                .count(),
+            1,
+            "越界仍回 +GD"
+        );
+    }
+
+    /// **判据③（阴性对照：in-range）**：同一生产入口、目标在门内（施法者 (10,10)、
+    /// 点击 (11,10)，|Δ| = 1 ≤ 8）⇒ 恰一条 `SM_SPELL`，**无** 639。
+    #[test]
+    fn spell_cmd_distance_gate_in_range_has_no_639() {
+        let (frames, _raws, _world, _sessions, _caster, _target) =
+            mp_wrap_run(mir2_world::magic::SKILL_FIREWIND, 8, 2, 50, false, 1);
+        let ids: Vec<u16> = frames.iter().map(|(_, b)| mp_ident(b)).collect();
+        assert_eq!(
+            ids.iter()
+                .filter(|id| **id == mir2_protocol::messages::SM_SPELL)
+                .count(),
+            1,
+            "门内 ⇒ 恰一条 SM_SPELL；实得 {ids:?}"
+        );
+        assert!(
+            !ids.contains(&mir2_protocol::messages::SM_MAGICFIRE_FAIL),
+            "门内 ⇒ 不得有 639；实得 {ids:?}"
+        );
+    }
+
     /// **魔号 8 正例（生产入口 `handle_spell_cmd`）**：效果体被进入、取数逐项等于 oracle 期望、
     /// 位移与 oracle 一致、帧序 `SM_SPELL < SM_BACKSTEP* < SM_MAGICFIRE`。
     ///
@@ -23979,10 +24281,24 @@ mod tests {
         let e = world.entities.get(target).unwrap();
         assert_eq!((e.x, e.y), (20, 10), "距离门外 ⇒ 不位移");
         let frames = effect_bodies(&mut rx);
+        // 越界只允许「调用方回帧」：`Attack.cs:1279-1281` 的 `RM_MAGICFIREFAIL`
+        // ⇒ `SM_MAGICFIRE_FAIL(639)`。效果体/共享尾帧（`SM_SPELL`/`SM_BACKSTEP`/`SM_MAGICFIRE`）全无。
         assert!(
-            frames.is_empty(),
-            "距离门外 ⇒ 无 SM_SPELL/效果体/共享尾帧；实得 {frames:?}"
+            frames
+                .iter()
+                .all(|(_, b)| body_ident(b) == mir2_protocol::messages::SM_MAGICFIRE_FAIL),
+            "距离门外 ⇒ 只允许 639（无 SM_SPELL/效果体/共享尾帧）；实得 {frames:?}"
         );
+        let mut socks: Vec<i32> = frames.iter().map(|(s, _)| *s).collect();
+        socks.sort_unstable();
+        assert_eq!(
+            socks,
+            vec![911, 912, 913],
+            "639 的收件人 = 自己 + 同图观察者（处理器无 ActorId 守卫）"
+        );
+        for (_, b) in &frames {
+            assert_eq!(b[0..4], caster.to_le_bytes(), "639 的 Recog = 施法者");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
