@@ -176,6 +176,17 @@ pub struct GateConfig {
     /// `[Setup] ClothsWoman`（`GameSvrConf.cs:1302`，缺省 `"布衣(女)"`）。
     pub cloths_woman: String,
     /// `[Setup] ItemNumber`（oracle `GameSvrConf.cs:1699`，缺省 `0`）——`M2Share.GetItemNumber()` 的计数器初值。
+    ///
+    /// **本侧只读、不写回（与 oracle 一致）**：oracle 的 60s 定时器确实调
+    /// `ServerConf.SaveVariable()`（`src/GameSrv/TimedService.cs:73/76/255-258`），但
+    /// `SaveVariable`（`src/Modules/SystemModule/Conf/ServerConf.cs:668-680`）只对 10 个键调
+    /// `ConfigFile.WriteInteger`（`src/OpenMir2/Common/ConfigFile.cs:419-434`）——那只是**内存缓存**
+    /// `iniCahce` 赋值；真正落盘的 `ConfigFile.Save()`（同文件 `:348-381`）**没有任何调用点落在 `ServerConf` 实例上**
+    /// （其它 `ConfigFile` 子类如 GameGate/LoginGate/CastleConf 确有调用点，与本判定无关；`ServerConf` 自身无 `Save()`、
+    /// `ServerConf.` 全仓仅 2 处引用且均不落盘）⇒ oracle 跨重启**不保留** `ItemNumber`/`ItemNumberEx` 的累积
+    /// （每次启动都从 conf 静态值重来，再各加屏障 A 的 1 抽）。⇒ 本侧同语义：`load()` 只读，不产写。
+    /// 判据与可复跑证据见 `docs/itemnumber-persist-writeback-判据-20261017.md`
+    /// （卡 `openmir2-itemnumber-persist-writeback`，2026-10-17 判定「前提不成立」）。
     pub item_number: i32,
     /// `[Setup] SaveHumanRcdTime`（oracle `GameSvrConf.cs:423/1484`，缺省 `10*60*1000`，**毫秒**；
     /// `ServerConf.cs:566` 的 `ReadWriteInteger("Setup", "SaveHumanRcdTime", …)`）——
