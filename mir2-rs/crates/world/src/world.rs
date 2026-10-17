@@ -1991,7 +1991,7 @@ impl World {
     /// **失败契约（照 oracle）**：落点格是 `MapRoute` 但 `EnterAnotherMap` 门失败（目标格非
     /// `CellValid`）⇒ oracle `Walk()` 返回 `false`（`PlayObject.cs:1878`）⇒ 上游 `BaseObject.WalkTo`
     /// 把坐标**回滚到走前格**（`BaseObject.cs:685-688`）⇒ 因 `if (result)` 不成立而**不发移动帧**
-    /// （`PlayObject.cs:1909-1911`）。本方法据此返回 `moved == false` 并回滚，宿主因此不发 `SM_WALK`。
+    /// （`PlayObject.cs:1911-1913`）。本方法据此返回 `moved == false` 并回滚，宿主因此不发 `SM_WALK`。
     ///
     /// 只对**玩家**触发（`PlayObject.Walk` 覆写专属）；怪物 AI 的 `monai::walk_to` 也走 `try_step_now`，
     /// 但非玩家在 `try_step_now` 即被**非玩家 `MapRoute` 阻挡**拦下（`BaseObject.cs:1548` 的
@@ -2166,11 +2166,16 @@ impl World {
             else {
                 continue;
             };
-            if self
-                .switch_map(&chr_name, hop.dst_map_id, hop.dst_x, hop.dst_y)
-                .is_ok()
-            {
-                switched = true;
+            // oracle `PlayObject.cs:1878-1881`：`if (!EnterAnotherMap(...)) { result = false; }`
+            // ⇒ **任何** `EnterAnotherMap` 失败都必须置 `result=false`，不只看前置门。
+            // 目标越界时 `CellValid` 返回 **true**（`Envirnoment.cs:307-314`）⇒ 前置门放行，
+            // 由 `AddMapObject` 的 `CellMatch` 失败返回 false（`PlayObject.cs:3779-3791`）
+            // ⇒ 本仓对应 `switch_map` 的 `Err(CellRejected)`（已在其中回滚旧图旧格，`df5a260ea`）。
+            // `NoSuchMap`/`NotInWorld` 是 Rust 独有护栏（oracle `EnterAnotherMap` 无对应错误；
+            // 目标图由 route 表校验、会话由宿主建立）⇒ 按「失败」保守处理，与 `result=false` 同支。
+            match self.switch_map(&chr_name, hop.dst_map_id, hop.dst_x, hop.dst_y) {
+                Ok(()) => switched = true,
+                Err(_) => failed = true,
             }
         }
         // oracle `if (result)`：任一 `EnterAnotherMap` 失败 ⇒ result=false（即便另一条成功过，
@@ -4066,12 +4071,12 @@ mod tests {
 
     /// `EnterAnotherMap` 的 `CellValid` 门：目标格不可走（墙）⇒ **换图失败** ⇒ 照 oracle
     /// `PlayObject.Walk()==false`（`PlayObject.cs:1878`）上游 `WalkTo` **回滚坐标到走前格**
-    /// （`BaseObject.cs:685-688`），因 `if (result)` 不成立而**不发移动帧**（`:1909-1911`）
+    /// （`BaseObject.cs:685-688`），因 `if (result)` 不成立而**不发移动帧**（`:1911-1913`）
     /// ⇒ 本方法返回 `moved == false`。
     ///
     /// **为何原先写反了**：旧断言写 `moved == true`（"走一格仍成功"），是把 `step_with_route`
     /// 当成"移动与路线检查互不影响"来看——漏了 oracle 的 `Walk()` 返回值是**整条走命令的结果**，
-    /// 失败会连同位移一起回滚。验证者给的真实证据（`BaseObject.cs:666-673` 的回滚三步 + `:1909-1911`
+    /// 失败会连同位移一起回滚。验证者给的真实证据（`BaseObject.cs:666-673` 的回滚三步 + `:1911-1913`
     /// 的 `if (result)` 才发帧）推翻了旧断言。
     ///
     /// 红检（变异牙）：把 `step_with_route` 的 `RouteOutcome::Failed` 支里的 `rollback_move` 删掉
@@ -4102,6 +4107,54 @@ mod tests {
         let e = w.entities.get(hero).unwrap();
         assert_eq!((e.map_id, e.x, e.y), (0, 5, 4), "坐标回滚到走前格");
         // 格子簿记也回滚：源格 (5,4) 重新登记玩家、目标格 (5,5) 只剩 route cell。
+        assert_eq!(w.map(0).cell(5, 4).count(), 1, "源格重新登记玩家");
+        assert_eq!(
+            w.map(0).cell(5, 5).count(),
+            1,
+            "目标格 (5,5) 只剩 route cell"
+        );
+        assert!(w.sessions.map_changes().is_empty(), "失败不发换图簇");
+    }
+
+    /// **`EnterAnotherMap` 对越界目标坐标的行为**：`Envirnoment.CellValid` 对**越界返回 true**
+    /// （`Envirnoment.cs:307-314`）⇒ oracle 仍进 `EnterAnotherMap`，由 `AddMapObject` 的 `CellMatch`
+    /// 失败返回 false（`PlayObject.cs:3779-3791`）⇒ `PlayObject.Walk` 的 `result=false`
+    /// （`:1878-1881`）⇒ 上游 `WalkTo` 回滚坐标（`BaseObject.cs:685-688`）、不发移动帧
+    /// （`:1911-1913`）。本仓对应 `switch_map` 的 `Err(CellRejected)`；本片修的是「该 `Err` 必须
+    /// 置 `failed`」——否则会被误判成 `Skipped`（`moved=true`、不回滚），与 oracle 分叉。
+    ///
+    /// 红检（变异牙 ①）：把 `switch_map` 结果分支改回 `is_ok() { switched = true }`（`Err` 不置
+    /// `failed`）⇒ 本测 `moved`/坐标/`MapChange` 断言必红（越界被当成正常走位）。
+    #[test]
+    fn step_with_route_out_of_bounds_dest_rolls_back() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 99, // 越界：cell_valid 返回 true，落地 CellMatch 失败
+            },
+        }]);
+        assert!(
+            w.map(1).cell_valid(7, 99),
+            "oracle CellValid 对越界返回 true（Envirnoment.cs:307-314）"
+        );
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(
+            !out.moved,
+            "EnterAnotherMap 失败 ⇒ Walk()=false ⇒ 位移回滚、不发移动帧"
+        );
+        assert!(!out.changed_map, "越界目标落格失败 ⇒ 不换图");
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 4), "坐标回滚到走前格");
         assert_eq!(w.map(0).cell(5, 4).count(), 1, "源格重新登记玩家");
         assert_eq!(
             w.map(0).cell(5, 5).count(),
