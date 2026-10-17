@@ -398,6 +398,12 @@ pub struct Entity {
     /// 消费方（P3-B4）：50 的 `playObject.SetPkFlag(targetObject)`（`MagicManager.cs:1249`）与
     /// `RM_POISON` 投递的 `((IPlayerActor)this).SetPkFlag(caster)`（`BaseObject.Base.cs:749`）。
     pub pvp_flag: bool,
+    /// C# `PlayObject.PvpNameColorTick`（`PlayObject.cs:243`；接口声明 `IPlayerActor.cs:257`）——`SetPkFlag` 置位时刻
+    /// （`PlayObject.cs:4333` 的 `targetObject.PvpNameColorTick = GetTickCount()`）。
+    /// `CheckPkStatus`（`:4359`）用 `now - PvpNameColorTick > Config.dwPKFlagTime` 判过期。
+    ///
+    /// **重复置位也刷新**（oracle 赋值在 `if (!targetObject.PvpFlag)` **之前**）。
+    pub pvp_name_color_tick: i64,
     /// C# `PlayObject.Luck`（`PlayObject.cs:62`，`RecalcAbilitys` 里 `Luck = 0 + AddAbil.Luck - AddAbil.UnLuck`）。
     /// 玩家攻方的 [`crate::combat::get_attack_power_player`] override 用它决定取数次数。
     pub luck: i32,
@@ -617,6 +623,7 @@ impl Entity {
             dear_human: None,
             pk_point: 0,
             pvp_flag: false,
+            pvp_name_color_tick: 0,
             // `BaseObject.cs:385`：ctor 初值 `NameColor = 255`。
             name_color: 255,
             // `PlayObject.cs:62/943`：新角色 `Luck` 由 `RecalcAbilitys` 置 0（无 `AddAbil`），

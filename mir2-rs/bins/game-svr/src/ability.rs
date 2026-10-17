@@ -315,6 +315,9 @@ pub struct AddAbility {
     pub poison_recover: u16,
     pub health_recover: u16,
     pub spell_recover: u16,
+    /// `AddAbil.HitSpeed`（`PlayObject.RecalcAbilitys` 尾部 `HitSpeed = AddAbil.HitSpeed`，
+    /// `PlayObject.cs:2899`）。来源 = `ApplyItemParameters` 的各 `StdMode` 支。
+    pub hit_speed: u16,
 }
 
 /// `752 SM_SUBABILITY` 的 7 个字段（类型照 oracle：`AntiMagic/PoisonRecover/HealthRecover/SpellRecover`
@@ -396,6 +399,9 @@ pub struct RecalcOutput {
     pub sub: SubAbility,
     /// `AddAbil`（调试/红检用；不进载荷）。
     pub add: AddAbility,
+    /// `PlayObject.HitSpeed`（`PlayObject.cs:2899` 的 `HitSpeed = AddAbil.HitSpeed`）——
+    /// 657 `SM_CHARSTATUSCHANGED` 末参的**收件人自己**的值（`PlayObject.Message.cs:1846`）。
+    pub hit_speed: u16,
 }
 
 /// `PlayObject.RecalcLevelAbilitys()`（`PlayObject.cs:5254-5317`）的落库等价物：按 `Job` + `Abil.Level`
@@ -569,7 +575,17 @@ pub fn recalc_abilitys_with_prior(
         ..base
     };
 
-    RecalcOutput { wabil, sub, add }
+    // `PlayObject.cs:2899` `HitSpeed = AddAbil.HitSpeed;`（在 `RecalcAbilitys` 尾部）。
+    // 注意 `BaseObject.Abil.cs:55-63` 对 `AddAbil.HitSpeed` 的 `/2` + `MIN(15, …)` 发生在
+    // `base.RecalcAbilitys()` 返回**之前**、物品槽循环**之前**（此时 `AddAbil` 刚被重置为 0：
+    // `BaseObject.Abil.cs:17`）⇒ 该段对终值无可观测影响（oracle 原样，不复制死代码）。
+    let hit_speed = add.hit_speed;
+    RecalcOutput {
+        wabil,
+        sub,
+        add,
+        hit_speed,
+    }
 }
 
 /// **P3-B5**：`RecalcAbilitys()` 尾部的 `ExtraAbil` 应用（`PlayObject.cs:2815-2846`）。
@@ -698,6 +714,8 @@ pub fn apply_item_parameters(add: &mut AddAbility, item: &StdItem) {
     match item.std_mode {
         5 | 6 => {
             add.hit = add.hit.wrapping_add(u16::from(hi_byte(item.ac)));
+            // `PlayObject.cs:4419` `AddAbil.HitSpeed += RealAttackSpeed(HiByte(Item.MAC))`。
+            add_hit_speed(add, real_attack_speed(i32::from(hi_byte(item.mac))));
         }
         10 | 11 => {
             add.ac = word_add_raw(add.ac, item.ac);
@@ -719,22 +737,32 @@ pub fn apply_item_parameters(add: &mut AddAbility, item: &StdItem) {
         }
         19 => {
             add.anti_magic = add.anti_magic.wrapping_add(u16::from(hi_byte(item.ac)));
+            // `PlayObject.cs:4520`。
+            add_hit_speed(add, i32::from(item.atk_spd));
             add.hit = add.hit.wrapping_add(u16::from(item.accurate));
         }
         20 => {
             add.hit = add.hit.wrapping_add(u16::from(hi_byte(item.ac)));
             add.speed = add.speed.wrapping_add(u16::from(hi_byte(item.mac)));
+            // `PlayObject.cs:4528`。
+            add_hit_speed(add, i32::from(item.atk_spd));
             add.anti_magic = add.anti_magic.wrapping_add(u16::from(item.mg_avoid));
         }
         21 => {
             add.health_recover = add.health_recover.wrapping_add(u16::from(hi_byte(item.ac)));
             add.spell_recover = add.spell_recover.wrapping_add(u16::from(hi_byte(item.mac)));
+            // `PlayObject.cs:4536-4538`：`+Lo(AC) -Lo(MAC) +AtkSpd`，每步按 `ushort` 回绕。
+            add_hit_speed(add, i32::from(lo_byte(item.ac)));
+            add_hit_speed(add, -i32::from(lo_byte(item.mac)));
+            add_hit_speed(add, i32::from(item.atk_spd));
             add.hit = add.hit.wrapping_add(u16::from(item.accurate));
             add.anti_magic = add.anti_magic.wrapping_add(u16::from(item.mg_avoid));
         }
         22 => {
             add.ac = word_add_raw(add.ac, item.ac);
             add.mac = word_add_raw(add.mac, item.mac);
+            // `PlayObject.cs:4547`。
+            add_hit_speed(add, i32::from(item.atk_spd));
             add.hit = add.hit.wrapping_add(u16::from(item.accurate));
             add.hp = add.hp.wrapping_add(item.hp_add as u16);
         }
@@ -743,6 +771,10 @@ pub fn apply_item_parameters(add: &mut AddAbility, item: &StdItem) {
             add.poison_recover = add
                 .poison_recover
                 .wrapping_add(u16::from(hi_byte(item.mac)));
+            // `PlayObject.cs:4556-4558`：`+Lo(AC) -Lo(MAC) +AtkSpd`。
+            add_hit_speed(add, i32::from(lo_byte(item.ac)));
+            add_hit_speed(add, -i32::from(lo_byte(item.mac)));
+            add_hit_speed(add, i32::from(item.atk_spd));
         }
         24 => {
             add.hit = add.hit.wrapping_add(u16::from(hi_byte(item.ac)));
@@ -780,6 +812,21 @@ pub fn apply_item_parameters(add: &mut AddAbility, item: &StdItem) {
     add.dc = add_word_capped(add.dc, item.dc);
     add.mc = add_word_capped(add.mc, item.mc);
     add.sc = add_word_capped(add.sc, item.sc);
+}
+
+/// `GameItemSystem.RealAttackSpeed(short)`（`GameItemSystem.cs:1140-1152`）：
+/// `<= 10 ⇒ -v`，否则 `v - 10`。oracle 的调用点传入 `byte`（0..=255），返回 `int`。
+const fn real_attack_speed(w_atk_spd: i32) -> i32 {
+    if w_atk_spd <= 10 {
+        -w_atk_spd
+    } else {
+        w_atk_spd - 10
+    }
+}
+
+/// `AddAbil.HitSpeed = (ushort)(AddAbil.HitSpeed + v)` 的逐次回绕（oracle 每步都转 `ushort`）。
+const fn add_hit_speed(add: &mut AddAbility, v: i32) {
+    add.hit_speed = add.hit_speed.wrapping_add(v as u16);
 }
 
 /// `ApplyItemParameters` 尾部的 DC/MC/SC 相加：高字节 `_MIN(255, …)`。

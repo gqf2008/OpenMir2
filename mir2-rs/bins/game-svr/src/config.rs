@@ -148,6 +148,14 @@ pub struct GateConfig {
     pub snow_wind_range: u8,
     /// `[Setup] ElecBlizzardRange`（`GameSvrConf.cs:908/1772` 缺省 2）—— P3-B2 的 24（地狱雷光）半径。
     pub elec_blizzard_range: u8,
+    /// `[Setup] MagTurnUndeadLevel`（`GameSvrConf.cs:1773` 缺省 `50`；
+    /// `ServerConf.cs:530` 的 `ReadWriteInteger`）—— P3-B3 的 32（圣言术）等级门
+    /// `target.Level < Config.MagTurnUndeadLevel`（`MagicManager.cs:842-853`）。
+    pub mag_turn_undead_level: i32,
+    /// `[Setup] PKFlagTime`（`GameSvrConf.cs:1395` 缺省 `60 * 1000`；
+    /// `ServerConf.cs:156` 的 `ReadWriteInteger("Setup", "PKFlagTime", …)`）——
+    /// `PlayObject.CheckPkStatus`（`PlayObject.cs:4357-4364`）的 `PvpFlag` 过期门。
+    pub pk_flag_time: i32,
     /// `[Setup] MabMabeHitRandRate`（`GameSvrConf.cs:1778` 缺省 100）—— P3-B4 的 50 第三道成功率门。
     pub mab_mabe_hit_rand_rate: i32,
     /// `[Setup] MabMabeHitMinLvLimit`（`GameSvrConf.cs:1779` 缺省 10）。
@@ -311,6 +319,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut fire_boom_rage: Option<u8> = None;
     let mut snow_wind_range: Option<u8> = None;
     let mut elec_blizzard_range: Option<u8> = None;
+    let mut mag_turn_undead_level: Option<i32> = None;
+    let mut pk_flag_time: Option<i32> = None;
     let mut mab_mabe_hit_rand_rate: Option<i32> = None;
     let mut mab_mabe_hit_min_lv_limit: Option<i32> = None;
     let mut mab_mabe_hit_sucess_rate: Option<i32> = None;
@@ -367,6 +377,21 @@ pub fn load(path: &Path) -> Result<GateConfig> {
             script_goto_count_limit = Some(
                 v.parse()
                     .with_context(|| format!("ScriptGotoCountLimit 不是合法整数：{v:?}"))?,
+            );
+        }
+        // **P3 收尾残余**：`ServerConf.cs:530` / `:156`。放在 `"SETUP"` match 之前的原因同
+        // `ScriptGotoCountLimit`：给共享大 match 加臂会让 rustfmt 把整臂折成块（无谓 diff）。
+        // 空值 ⇒ 保持 `None` ⇒ 回落 oracle 缺省（任务口径）。
+        if section == "SETUP" && k == "MAGTURNUNDEADLEVEL" && !v.is_empty() {
+            mag_turn_undead_level = Some(
+                v.parse()
+                    .with_context(|| format!("MagTurnUndeadLevel 不是合法整数：{v:?}"))?,
+            );
+        }
+        if section == "SETUP" && k == "PKFLAGTIME" && !v.is_empty() {
+            pk_flag_time = Some(
+                v.parse()
+                    .with_context(|| format!("PKFlagTime 不是合法整数：{v:?}"))?,
             );
         }
         match section.as_str() {
@@ -827,6 +852,10 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         fire_boom_rage: fire_boom_rage.unwrap_or(1),
         snow_wind_range: snow_wind_range.unwrap_or(1),
         elec_blizzard_range: elec_blizzard_range.unwrap_or(2),
+        // oracle 缺省值（`GameSvrConf.cs:1773`）：`MagTurnUndeadLevel = 50`。
+        mag_turn_undead_level: mag_turn_undead_level.unwrap_or(50),
+        // oracle 缺省值（`GameSvrConf.cs:1395`）：`PKFlagTime = 60 * 1000`。
+        pk_flag_time: pk_flag_time.unwrap_or(60 * 1000),
         // oracle 缺省值（`GameSvrConf.cs:1763/1778-1781`）。
         mab_mabe_hit_rand_rate: mab_mabe_hit_rand_rate.unwrap_or(100),
         mab_mabe_hit_min_lv_limit: mab_mabe_hit_min_lv_limit.unwrap_or(10),
@@ -965,6 +994,51 @@ mod tests {
             c.notice_dir, "Notice",
             "缺 [Share] NoticeDir 时用 oracle 缺省值（GameSvrConf.cs:1297）"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **P3 收尾残余 1**：`[Setup] MagTurnUndeadLevel`（oracle 缺省 50）与
+    /// `[Setup] PKFlagTime`（oracle 缺省 60*1000）的装载。判据三档：
+    /// 键=50 / 键=30 / 缺键 / 空值 ⇒ 缺键与空值都必须回落 oracle 缺省（不静默给 0）。
+    ///
+    /// 牙：删掉 `MAGTURNUNDEADLEVEL` 解析臂 ⇒ 键=30 用例读成 50 ⇒ 必红。
+    #[test]
+    fn mag_turn_undead_level_and_pk_flag_time_read_with_defaults() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-p3res-{}", std::process::id()));
+        let nl = "\n";
+        let base = format!(
+            "[Server]{nl}GateAddr=127.0.0.1{nl}GatePort=5000{nl}CheckBlock=12288{nl}\
+             IDSAddr=127.0.0.1{nl}IDSPort=5600{nl}DBAddr=127.0.0.1{nl}DBPort=6000{nl}"
+        );
+        // 键=50（oracle 缺省值也写出来时取文件值）。
+        let p = write(
+            &dir,
+            &format!("{base}[Setup]{nl}MagTurnUndeadLevel=50{nl}PKFlagTime=60000{nl}"),
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.mag_turn_undead_level, 50);
+        assert_eq!(c.pk_flag_time, 60_000);
+        // 键=30 / 1200：文件值覆盖缺省。
+        let p = write(
+            &dir,
+            &format!("{base}[Setup]{nl}MagTurnUndeadLevel=30{nl}PKFlagTime=1200{nl}"),
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.mag_turn_undead_level, 30, "键=30 必须取文件值");
+        assert_eq!(c.pk_flag_time, 1200);
+        // 缺键：oracle 源码缺省（GameSvrConf.cs:1773 / :1395）。
+        let p = write(&dir, &format!("{base}[Setup]{nl}ShowRankLevelName=1{nl}"));
+        let c = load(&p).unwrap();
+        assert_eq!(c.mag_turn_undead_level, 50, "缺键 ⇒ 缺省 50");
+        assert_eq!(c.pk_flag_time, 60_000, "缺键 ⇒ 缺省 60s");
+        // 空值：同样回落缺省（任务口径；空串不得当成 0）。
+        let p = write(
+            &dir,
+            &format!("{base}[Setup]{nl}MagTurnUndeadLevel={nl}PKFlagTime={nl}"),
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.mag_turn_undead_level, 50, "空值 ⇒ 缺省 50");
+        assert_eq!(c.pk_flag_time, 60_000, "空值 ⇒ 缺省 60s");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -619,6 +619,21 @@ pub struct World {
     /// **P3-B5**：22/36 的配置项（`DisableInSafeZoneFireCross` + 两对 `SysMsg` 颜色）。
     /// 宿主 `bins/game-svr` 用 [`World::set_b5_config`] 从 `Server.conf` 灌入。
     pub b5_cfg: crate::magic_effect::B5Config,
+    /// **P3 收尾残余**：`SystemShare.Config.MagTurnUndeadLevel`（`GameSvrConf.cs:1773` 缺省 `50`）。
+    ///
+    /// `MagicManager.cs:842-853` 的 `targetObject.Abil.Level < Config.MagTurnUndeadLevel` 门。
+    /// 宿主 `bins/game-svr` 用 [`World::set_mag_turn_undead_level`] 从 `Server.conf` 灌入；
+    /// 缺省 = oracle 源码缺省（既有 golden 路径不变）。
+    pub mag_turn_undead_level: i32,
+    /// **P3 收尾残余**：`SystemShare.Config.dwPKFlagTime`（`GameSvrConf.cs:1395` 缺省 `60 * 1000`）
+    /// —— [`World::check_pk_status`] 的 `PvpFlag` 过期门（`PlayObject.cs:4359`）。
+    pub pk_flag_time_ms: i64,
+    /// `SystemShare.Config.DecLightItemDrugTime`（`GameSvrConf.cs:1398` 缺省 `500`）——
+    /// oracle 里 `CheckPkStatus()` 挂在玩家 `Run()` 的该周期块内（`PlayObject.Message.cs:257-262`）。
+    /// 本骨架按同一周期在 [`World::check_pk_status`] 内节流。
+    pub dec_light_item_drug_time_ms: i64,
+    /// 上一趟 `CheckPkStatus` 的 sim 时钟（oracle `DecLightItemDrugTick`）。
+    pub pk_check_tick: i64,
     /// `SystemShare.Config.HealthFillTime` / `SpellFillTime`（`GameSvrConf.cs:1323-1324` 缺省
     /// `300` / `800`；`ServerConf.cs:152-153` 可覆盖）。
     ///
@@ -771,6 +786,10 @@ impl World {
             party_cfg: crate::party::PartyConfig::default(),
             b4_cfg: crate::magic_effect::MabMabeConfig::default(),
             b5_cfg: crate::magic_effect::B5Config::default(),
+            mag_turn_undead_level: 50,
+            pk_flag_time_ms: 60 * 1000,
+            dec_light_item_drug_time_ms: 500,
+            pk_check_tick: 0,
             health_fill_time: 300,
             spell_fill_time: 800,
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
@@ -1035,6 +1054,67 @@ impl World {
 
     pub fn set_b4_config(&mut self, cfg: crate::magic_effect::MabMabeConfig) {
         self.b4_cfg = cfg;
+    }
+
+    /// **P3 收尾残余**：灌入 `SystemShare.Config.MagTurnUndeadLevel`（`Server.conf [Setup]`）。
+    /// 缺省已经是 oracle 源码缺省 50；宿主仅在配置层读到键时调用。
+    pub fn set_mag_turn_undead_level(&mut self, level: i32) {
+        self.mag_turn_undead_level = level;
+    }
+
+    /// **P3 收尾残余**：灌入 `PKFlagTime` / `DecLightItemDrugTime`（`Server.conf [Setup]`）。
+    ///
+    /// `pk_flag_time_ms` = `Config.dwPKFlagTime`（缺省 60_000）；
+    /// `dec_light_item_drug_time_ms` = `Config.DecLightItemDrugTime`（缺省 500，`CheckPkStatus`
+    /// 的调用周期）。
+    pub fn set_pk_flag_config(&mut self, pk_flag_time_ms: i64, dec_light_item_drug_time_ms: i64) {
+        self.pk_flag_time_ms = pk_flag_time_ms;
+        self.dec_light_item_drug_time_ms = dec_light_item_drug_time_ms;
+    }
+
+    /// `PlayObject.CheckPkStatus()`（`PlayObject.cs:4357-4364`）的**全世界**等价物。
+    ///
+    /// 调度口径：oracle 把它挂在玩家 `Run()` 的 `DecLightItemDrugTime` 周期块里
+    /// （`PlayObject.Message.cs:257-262`，缺省 500ms，`DecLightItemDrugTick += 周期`），
+    /// 本骨架在同一方法内按 [`World::dec_light_item_drug_time_ms`] 节流；宿主每 world tick
+    /// 调一次即可（200ms 量化与 oracle 的真实墙钟 tick 差异登记）。
+    ///
+    /// ```text
+    /// :4359 if (PvpFlag && ((GetTickCount() - PvpNameColorTick) > Config.dwPKFlagTime))
+    /// :4361   PvpFlag = false;
+    /// :4362   RefNameColor();
+    /// ```
+    ///
+    /// 返回 `RefNameColor` 的观察值（`RM_CHANGENAMECOLOR` 的宿主侧载荷）：色 = 清位后
+    /// `GetChrColor`（玩家 ⇒ `NameColor`，本骨架 ctor = 255）。
+    pub fn check_pk_status(&mut self) -> Vec<crate::slave::NameColorDelivery> {
+        if self.clock_ms - self.pk_check_tick <= self.dec_light_item_drug_time_ms {
+            return Vec::new();
+        }
+        self.pk_check_tick += self.dec_light_item_drug_time_ms;
+        let now = self.clock_ms;
+        let mut out = Vec::new();
+        for id in self.entities.ids_sorted() {
+            let Some(e) = self.entities.get(id) else {
+                continue;
+            };
+            if e.race != crate::entity::ACTOR_RACE_PLAY {
+                continue;
+            }
+            if !e.pvp_flag || now - e.pvp_name_color_tick <= self.pk_flag_time_ms {
+                continue;
+            }
+            let Some(t) = self.entities.get_mut(id) else {
+                continue;
+            };
+            t.pvp_flag = false;
+            let color = crate::slave::get_chr_color(t, &[], 0);
+            out.push(crate::slave::NameColorDelivery {
+                target_id: id,
+                color,
+            });
+        }
+        out
     }
 
     /// 清某 actor 的攻击中毒门运行态（离场/卸麻痹戒指）。幂等。
@@ -1396,6 +1476,7 @@ impl World {
     /// :4328 if (baseObject.Race == Play)
     /// :4331   if (PvpLevel() < 2 && targetObject.PvpLevel() < 2
     ///            && !Envir.Flag.FightZone && !Envir.Flag.Fight3Zone && !PvpFlag)
+    /// :4333     targetObject.PvpNameColorTick = GetTickCount();
     /// :4336     if (!targetObject.PvpFlag) { targetObject.PvpFlag = true; targetObject.RefNameColor(); }
     /// ```
     ///
@@ -1407,17 +1488,33 @@ impl World {
         this_id: i32,
         target_id: i32,
     ) -> Option<crate::slave::NameColorDelivery> {
-        let this = self.entities.get(this_id)?;
-        let target = self.entities.get(target_id)?;
+        // oracle 的判据全在 `this`/`target` 的只读字段上；先取值再释放借用（供下面写计时）。
+        let (this_level, this_flagged, target_level, target_race, target_flagged) = {
+            let this = self.entities.get(this_id)?;
+            let target = self.entities.get(target_id)?;
+            (
+                Self::pvp_level(this),
+                this.pvp_flag,
+                Self::pvp_level(target),
+                target.race,
+                target.pvp_flag,
+            )
+        };
         // `baseObject.Race == ActorRace.Play`
-        if target.race != crate::entity::ACTOR_RACE_PLAY {
+        if target_race != crate::entity::ACTOR_RACE_PLAY {
             return None;
         }
         // `PvpLevel() < 2 && targetObject.PvpLevel() < 2 && !PvpFlag`
-        if Self::pvp_level(this) >= 2 || Self::pvp_level(target) >= 2 || this.pvp_flag {
+        if this_level >= 2 || target_level >= 2 || this_flagged {
             return None;
         }
-        if target.pvp_flag {
+        // `:4333` 计时**无条件刷新**（在 `if (!targetObject.PvpFlag)` 之前）：目标已带 flag 时
+        // 再来一次 `SetPkFlag` 不产帧，但会把过期时刻推后（oracle 原样，不许「顺手」改成早退）。
+        let now = self.clock_ms;
+        if let Some(t) = self.entities.get_mut(target_id) {
+            t.pvp_name_color_tick = now;
+        }
+        if target_flagged {
             return None;
         }
         if let Some(t) = self.entities.get_mut(target_id) {

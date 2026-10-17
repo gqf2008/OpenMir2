@@ -778,6 +778,8 @@ async fn main() -> Result<()> {
                     fire_boom_rage: i32::from(cfg.fire_boom_rage),
                     snow_wind_range: i32::from(cfg.snow_wind_range),
                     elec_blizzard_range: i32::from(cfg.elec_blizzard_range),
+                    mag_turn_undead_level: cfg.mag_turn_undead_level,
+                    pk_flag_time: cfg.pk_flag_time,
                     b4: mir2_world::magic_effect::MabMabeConfig {
                         hit_rand_rate: cfg.mab_mabe_hit_rand_rate,
                         hit_min_lv_limit: cfg.mab_mabe_hit_min_lv_limit,
@@ -2324,7 +2326,7 @@ fn handle_bag_cmd(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
-    world: &mir2_world::World,
+    world: &mut mir2_world::World,
     displays: &mut downlink::DisplayTable,
     ref_msg_range: i32,
     dealing: bool,
@@ -2393,6 +2395,11 @@ fn handle_bag_cmd(
     if out.recalc {
         let extra_abil = world.entities.get(sg.actor_id).map(|e| e.extra_abil);
         recalc_session_ability(sg, catalog, extra_abil.as_ref());
+        // `PlayObject.cs:2899`：换装重算后 `HitSpeed = AddAbil.HitSpeed` 也要落到世界实体
+        // （657 末参读 `Entity.hit_speed`）。其余 `WAbil` 字段的实体同步仍属既有缺口（登记）。
+        if let Some(e) = world.entities.get_mut(sg.actor_id) {
+            e.hit_speed = sg.hit_speed;
+        }
     }
 
     let Some(tx) = route_to_gate(gates, gate_idx, socket, "装备/卸下回帧") else {
@@ -4785,6 +4792,7 @@ fn apply_ability_to_entity(
     e: &mut mir2_world::Entity,
     wabil: &game_svr::ability::Ability,
     sub: &game_svr::ability::SubAbility,
+    hit_speed: u16,
 ) {
     e.dc = i32::from(wabil.dc);
     e.ac = i32::from(wabil.ac);
@@ -4798,6 +4806,9 @@ fn apply_ability_to_entity(
     // `WAbil.MAC = MakeWord(MIN(255, Lo(AddAbil.MAC)+Lo(Abil.MAC)), …Hi…)`
     // （`PlayObject.cs:2903`）——P3-B2 的 `GetMagStruckDamage` 唯一读点。
     e.mac = wabil.mac;
+    // `PlayObject.RecalcAbilitys` 尾部 `HitSpeed = AddAbil.HitSpeed`（`PlayObject.cs:2899`）。
+    // 657 的末参读**收件人自己**的 `Entity.hit_speed`（`PlayObject.Message.cs:1846`）。
+    e.hit_speed = hit_speed;
 }
 
 /// `RecalcLevelAbilitys()` + `RecalcAbilitys()` 的**单一实现**（登录/升级/装备/卸下四处共用）：
@@ -4840,6 +4851,8 @@ fn recalc_session_ability(
     let recalc = game_svr::ability::recalc_abilitys_with_prior(catalog, &inputs, &sg.sub);
     sg.state.wabil = recalc.wabil;
     sg.sub = recalc.sub;
+    // `PlayObject.cs:2899` `HitSpeed = AddAbil.HitSpeed;`。
+    sg.hit_speed = recalc.hit_speed;
     // `RecalcAbilitys()` 尾部的 `ExtraAbil` 应用（`PlayObject.cs:2815-2846`）。
     game_svr::ability::apply_extra_abil(&mut sg.state.wabil, extra_abil.unwrap_or(&[0u16; 7]));
 }
@@ -5464,11 +5477,6 @@ fn finish_spell_tail_with(
     // ⇒ `AbilSeeHealGauge = true`。宿主据返回值写 `SessionGround.abil_see_heal_gauge`。
     tail.train.see_heal_gauge
 }
-
-/// **P3-B3**：`GameSvrConf.MagTurnUndeadLevel` 的缺省值（`GameSvrConf.cs:1773`，= 50）。
-///
-/// 生产入口 `handle_spell_cmd` 尚未传 `Server.conf` 的该键 ⇒ 用 oracle 缺省常量（登记）。
-const MAG_TURN_UNDEAD_LEVEL: i32 = 50;
 
 /// **P3-B3**：13..=19 共享组的护身符门 + 消耗（`MagicManager.cs:322-325` / `MagicBase.cs:47-127`）。
 ///
@@ -7304,7 +7312,7 @@ fn handle_spell_cmd(
                                 magic,
                                 magic_level,
                                 base_target,
-                                MAG_TURN_UNDEAD_LEVEL,
+                                world.mag_turn_undead_level,
                             );
                             if out.invalid_cast {
                                 // `PlayObject.Base.cs:1525-1529` 吞掉 `InvalidCastException`
@@ -8043,6 +8051,10 @@ fn handle_spell_cmd(
                                         world.entities.get(out.target).map(|e| e.extra_abil);
                                     if let Some(sg) = ground_sessions.get_mut(&entry.chr_name) {
                                         recalc_session_ability(sg, catalog, extra.as_ref());
+                                        // `HitSpeed = AddAbil.HitSpeed` 落到世界实体（657 末参）。
+                                        if let Some(e) = world.entities.get_mut(out.target) {
+                                            e.hit_speed = sg.hit_speed;
+                                        }
                                         let body = smframe::sm_ability(
                                             sg.state.gold,
                                             sg.equip.job,
@@ -9484,7 +9496,7 @@ fn drain_levelup_healthspell(
         };
         // ③ 世界实体（战斗权威值）同步
         if let Some(e) = world.entities.get_mut(*winner) {
-            apply_ability_to_entity(e, &sg.state.wabil, &sg.sub);
+            apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
         }
         // ④ `RM_HEALTHSPELLCHANGED` 入队后按优先级 68 出队 ⇒ 线上**先于** 44
         // 布局：默认冻结客户端（`TCharDesc` 尾），`MIR2_CLIENT_ABILITY_LAYOUT=0` ⇒ oracle header-only。
@@ -10030,6 +10042,28 @@ fn push_name_color_self(
     );
 }
 
+/// **P3 收尾残余**：`PlayObject.CheckPkStatus()`（`PlayObject.cs:4357-4364`）的宿主出帧。
+///
+/// 世界侧 [`mir2_world::World::check_pk_status`] 按 `DecLightItemDrugTime` 周期（缺省 500ms）
+/// 清 `PvpFlag` 并返回 `RefNameColor` 观察值；这里按 oracle 的 `SendRefMsg(RM_CHANGENAMECOLOR)`
+/// 语义出 `SM_CHANGENAMECOLOR(656)`（优先级字节 154，**含发送者自己**：`RefNameColor` 的
+/// `SendRefMsg` 对同格玩家自己同样投递，且 `RM_CHANGENAMECOLOR` 处理器无自守卫）。
+fn drain_pk_flag_downlink(
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    let expiries = world.check_pk_status();
+    if expiries.is_empty() {
+        return;
+    }
+    let mut buf = SpellFrameBuf::new();
+    for d in expiries {
+        push_name_color_self(&mut buf, world, online, d.target_id, d.color);
+    }
+    buf.flush(online, gates);
+}
+
 /// **P3-B3**：`MakeOpenHealth()` 的 `RM_OPENHEALTH` ⇒ `SM_OPENHEALTH(1100)`
 /// （`PlayObject.Message.cs:2009-2011`）。收件人 = 目标 ±12 的玩家，含目标自己（若为玩家）。
 /// 优先级 `(byte)RM_OPENHEALTH = 170`。
@@ -10521,6 +10555,10 @@ struct SessionGround {
     use_items: Vec<Option<game_svr::bag::BagItem>>,
     /// **调用前的** `SubAbility`（752 的 7 项）——`RecalcAbilitys` 的 `prior`（`T-18` 调用点接线）。
     sub: game_svr::ability::SubAbility,
+    /// `PlayObject.HitSpeed`（`PlayObject.cs:2899` 的 `HitSpeed = AddAbil.HitSpeed`）——
+    /// 657 `SM_CHARSTATUSCHANGED` 末参（`PlayObject.Message.cs:1846` 读**收件人自己**的该值）。
+    /// 由 [`recalc_session_ability`] 从 [`game_svr::ability::RecalcOutput::hit_speed`] 写入。
+    hit_speed: u16,
     /// 装备/卸下重算的静态输入（进世界时从 `CharacterData` + `Server.conf` 建立）。
     equip: EquipInputs,
     /// `CharacterObject.IncHealth/IncSpell/IncHealing` + `Per*` + `IncHealthSpellTick`
@@ -10642,6 +10680,13 @@ struct EnterConfig {
     snow_wind_range: i32,
     /// **P3-B2**：`[Setup] ElecBlizzardRange`（缺省 2）—— 24 的半径。
     elec_blizzard_range: i32,
+    /// **P3 收尾残余**：`[Setup] MagTurnUndeadLevel`（`GameSvrConf.cs:1773` 缺省 50）——
+    /// 32 圣言术的 `target.Level < cfg` 门（`MagicManager.cs:842-853`）。
+    mag_turn_undead_level: i32,
+    /// **P3 收尾残余**：`[Setup] PKFlagTime`（缺省 60_000）——`PvpFlag` 过期门
+    /// （`PlayObject.cs:4359`）；`DecLightItemDrugTime` 仍取 oracle 缺省 500
+    /// （本仓未解析该键，登记）。
+    pk_flag_time: i32,
     /// **P3-B4**：`[Setup]` 的 `MabMabe*` / `AmyOunsulPoint`（缺省 = oracle 缺省）。
     b4: mir2_world::magic_effect::MabMabeConfig,
     /// `CM_PICKUP`/`CM_DROPITEM` 的 `[Setup]` 输入。
@@ -10746,6 +10791,8 @@ impl EnterConfig {
             fire_boom_rage: 1,
             snow_wind_range: 1,
             elec_blizzard_range: 2,
+            mag_turn_undead_level: 50,
+            pk_flag_time: 60_000,
             b4: mir2_world::magic_effect::MabMabeConfig::default(),
             ground: GroundCfg {
                 human_max_gold: 5_000_000,
@@ -11018,6 +11065,12 @@ fn sim_loop(
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = mir2_world::World::with_maps(map_sizes);
+    // **P3 收尾残余**：`MagTurnUndeadLevel` + `PKFlagTime`（`Server.conf [Setup]`）。
+    world.set_mag_turn_undead_level(enter_cfg.mag_turn_undead_level);
+    world.set_pk_flag_config(
+        i64::from(enter_cfg.pk_flag_time),
+        500, // `DecLightItemDrugTime` 缺省（`GameSvrConf.cs:1398`；本仓未解析该键，登记）。
+    );
     // **P3-B4**：`[Setup]` 的 `MabMabe*` / `AmyOunsulPoint` 灌进世界（缺省 = oracle 缺省）。
     world.set_b4_config(enter_cfg.b4);
     // **P3-B5**：22/36 的配置项（安全区门 + 两对 `SysMsg` 颜色）。
@@ -11666,7 +11719,7 @@ fn sim_loop(
                             &mut ground_sessions,
                             &gates,
                             &enter_cfg.catalog,
-                            &world,
+                            &mut world,
                             &mut displays,
                             enter_cfg.ref_msg_range,
                             // `PlayObject.Dealing`（M3⑦-实现 4）：交易中禁穿装/卸装。
@@ -12458,7 +12511,7 @@ fn sim_loop(
                                                     // M3②③ k=2 收口：同一份 `RecalcAbilitys` 输出**同时**写进世界实体
                                                     // （此前只喂 52/752 帧，实体属性仍是 `Entity::new` 的空值）。
                                                     if let Some(e) = world.entities.get_mut(id) {
-                                                        apply_ability_to_entity(e, &out.wabil, &out.sub);
+                                                        apply_ability_to_entity(e, &out.wabil, &out.sub, out.hit_speed);
                                                     } else {
                                                         glog!(
                                                             "WRN",
@@ -12499,6 +12552,7 @@ fn sim_loop(
                                                             // `RecalcAbilitys` 的 **prior**：登录时首次重算的
                                                             // `SubAbility`（后续装备/卸下重算在此之上累加，T-18）。
                                                             sub: out.sub,
+                                                            hit_speed: out.hit_speed,
                                                             equip: EquipInputs {
                                                                 job: d.job,
                                                                 gender: d.sex,
@@ -12918,6 +12972,10 @@ fn sim_loop(
             );
         }
         let rec = world.tick();
+        // **P3 收尾残余**：`PvpFlag` 过期（`CheckPkStatus`）⇒ 656。oracle 在玩家 `Run()` 的
+        // `DecLightItemDrugTime` 周期块里调用（`PlayObject.Message.cs:257-262`）；本骨架在
+        // world tick 之后按同一周期节流（见 `World::check_pk_status`）。
+        drain_pk_flag_downlink(&mut world, &online, &gates);
         // **M3⑦-实现 2 F-1**：死亡退组（oracle `Die()`→`DelMember`）帧——在本 tick 的
         // `settle_deaths` 里已按 oracle 序算好事件，这里只负责回帧（死亡者仍在线，自身帧照发）。
         // 放在 `party_run_tick()` 之前：oracle `Run()` 的组队段（`PlayObject.Message.cs:704-719`）
@@ -13652,7 +13710,7 @@ mod tests {
             speed_point: 15,
             ..game_svr::ability::SubAbility::default()
         };
-        apply_ability_to_entity(&mut e, &wabil, &sub);
+        apply_ability_to_entity(&mut e, &wabil, &sub, 7);
         assert_eq!(
             e.dc, 0x0101,
             "攻方 DC ← WAbil.DC（GetBaseAttackPoewr 取 LoByte=1，不是 0）"
@@ -15756,6 +15814,7 @@ mod tests {
             sys_msg: None,
             use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
             sub: game_svr::ability::SubAbility::first_call(),
+            hit_speed: 0,
             equip: test_equip_inputs(),
             recovery: game_svr::recover::Recovery::new(0),
             stamina: game_svr::stamina::Stamina::new(0),
@@ -15934,6 +15993,7 @@ mod tests {
             sys_msg: None,
             use_items,
             sub: game_svr::ability::SubAbility::first_call(),
+            hit_speed: 0,
             equip: test_equip_inputs(),
             recovery: game_svr::recover::Recovery {
                 inc_health: 3,
@@ -16769,6 +16829,7 @@ mod tests {
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
+                hit_speed: 0,
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
@@ -16955,6 +17016,7 @@ mod tests {
                     health_recover: 0,
                     spell_recover: 0,
                 },
+                hit_speed: 0,
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
@@ -16994,7 +17056,7 @@ mod tests {
         gates.insert(0, tx0);
 
         // actor 42 不在世界里 ⇒ `FeatureChanged()` 广播无收件人（本用例只断言 52/752 以前的出帧序）。
-        let world = mir2_world::World::new(8, 8);
+        let mut world = mir2_world::World::new(8, 8);
         let mut displays = downlink::DisplayTable::new();
 
         // `recog=60001`（物品 `MakeIndex`）、`param=0`（槽位）、`tag` 未用、`name` 尾（C-1）。
@@ -17010,7 +17072,7 @@ mod tests {
             &mut sessions,
             &gates,
             &catalog,
-            &world,
+            &mut world,
             &mut displays,
             12,
             false,
@@ -17114,6 +17176,7 @@ mod tests {
                 sys_msg: None,
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
+                hit_speed: 0,
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
@@ -17151,7 +17214,7 @@ mod tests {
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let world = mir2_world::World::new(8, 8);
+        let mut world = mir2_world::World::new(8, 8);
         let mut displays = downlink::DisplayTable::new();
 
         // recog=60001（MakeIndex）、param=0（真槽位）、tag=7（诱饵，oracle 不读）。
@@ -17167,7 +17230,7 @@ mod tests {
             &mut sessions,
             &gates,
             &catalog,
-            &world,
+            &mut world,
             &mut displays,
             12,
             false,
@@ -17253,6 +17316,7 @@ mod tests {
                 sys_msg: None,
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
+                hit_speed: 0,
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
@@ -17325,7 +17389,7 @@ mod tests {
             &mut sessions,
             &gates,
             &catalog,
-            &world,
+            &mut world,
             &mut displays,
             12,
             false,
@@ -18075,6 +18139,7 @@ mod tests {
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
+                hit_speed: 0,
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
@@ -18233,6 +18298,7 @@ mod tests {
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
+                hit_speed: 0,
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
@@ -18825,6 +18891,7 @@ mod tests {
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
+                hit_speed: 0,
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
@@ -22631,6 +22698,7 @@ mod tests {
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
+                hit_speed: 0,
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
@@ -22792,6 +22860,7 @@ mod tests {
                 sys_msg: None,
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
+                hit_speed: 0,
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
@@ -22829,7 +22898,7 @@ mod tests {
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let world = mir2_world::World::new(8, 8);
+        let mut world = mir2_world::World::new(8, 8);
         let mut displays = downlink::DisplayTable::new();
 
         // `recog=60001`（MakeIndex）、`param=0`（槽位）、`dealing=true`。
@@ -22845,7 +22914,7 @@ mod tests {
             &mut sessions,
             &gates,
             &catalog,
-            &world,
+            &mut world,
             &mut displays,
             12,
             true,
@@ -22919,6 +22988,7 @@ mod tests {
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
+                hit_speed: 0,
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
@@ -25697,7 +25767,7 @@ mod tests {
             &mut sessions,
             &gates,
             &catalog,
-            &world,
+            &mut world,
             &mut displays,
             12,
             false,
@@ -31535,6 +31605,385 @@ mod tests {
         assert_eq!(b3_count(&f, 911, SM_640), 0);
     }
 
+    /// **P3 收尾残余 1 生产入口**：32 圣言术的等级门读 `World::mag_turn_undead_level`
+    /// （`Config.MagTurnUndeadLevel`），不再是硬编码 50。
+    ///
+    /// 同一夹具（目标 Lv=40、施法者 Lv=60、固定 `B3_SEED`）：
+    /// - 配置 30 ⇒ `target.Level < 30` 假 ⇒ **不抽**尾 R(100)、HP 保持 100；
+    /// - 配置 50 ⇒ 门真 ⇒ 抽 R(100)=32 < 49 ⇒ HP 归零。
+    ///
+    /// 牙：把 `world.mag_turn_undead_level` 换回常量 50 ⇒ 第一段 HP≠0 断言必红。
+    #[test]
+    fn p3res_spell_32_turn_undead_uses_configured_level_gate() {
+        const SM_53: u16 = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        const SM_638: u16 = mir2_protocol::messages::SM_MAGICFIRE;
+
+        // 配置 30：目标 Lv=40 被 `target.Level < 30` 挡下（仍走 Struck：R(300)）。
+        let mut rig = B3Rig::new(32, 2, true);
+        rig.world.set_mag_turn_undead_level(30);
+        let target = rig.add_monster("u", 11, 10, 80, true, 40, 1, 100, None, None);
+        let before = rig.world.rng.clone();
+        rig.cast(32, (11, 10), target);
+        let frames = rig.drain();
+        assert_eq!(
+            b3_ledger(&before, &rig.world.rng, &[300, 2]),
+            vec![(300, 269), (2, 0)],
+            "cfg=30：等级门失败 ⇒ 无尾 R(100)；boTrain=false ⇒ 训练尾 R(3) 也不抽"
+        );
+        assert_eq!(b3_seq(&frames, 911), vec![SM_53, SM_638]);
+        assert_eq!(
+            rig.world.entities.get(target).unwrap().hp,
+            100,
+            "cfg=30 时 target.Lv=40 不被圣言 ⇒ HP 不变"
+        );
+
+        // 配置 50（oracle 缺省）：同夹具 ⇒ 门真，R(100)=32 命中 ⇒ HP=0。
+        let mut rig = B3Rig::new(32, 2, true);
+        rig.world.set_mag_turn_undead_level(50);
+        let target = rig.add_monster("u", 11, 10, 80, true, 40, 1, 100, None, None);
+        let before = rig.world.rng.clone();
+        rig.cast(32, (11, 10), target);
+        let frames = rig.drain();
+        assert_eq!(
+            b3_ledger(&before, &rig.world.rng, &[300, 2, 100, 3]),
+            vec![(300, 269), (2, 0), (100, 32), (3, 1)],
+            "cfg=50：尾 R(100) 照抽"
+        );
+        assert_eq!(b3_seq(&frames, 911), vec![SM_53, SM_638]);
+        assert_eq!(
+            rig.world.entities.get(target).unwrap().hp,
+            0,
+            "cfg=50 时 target.Lv=40 < 50 ⇒ 圣言即死"
+        );
+    }
+
+    /// **P3 收尾残余 2 端到端**：`HitSpeed` 的生产写点 = `recalc_session_ability` →
+    /// `apply_ability_to_entity`（oracle `PlayObject.cs:2899` `HitSpeed = AddAbil.HitSpeed`）。
+    ///
+    /// 两个收件人装备不同武器（StdMode 5，`Hi(MAC)` 13/15 ⇒ `RealAttackSpeed` = 3/5），
+    /// 走 `RecalcAbilitys` 的 `ApplyItemParameters`（`PlayObject.cs:4419`）得到各自的
+    /// `AddAbil.HitSpeed`，写进 `Entity.hit_speed`；随后施放 18 隐身 ⇒ 657 的
+    /// `Series` 末参 = **每个收件人自己的** HitSpeed（`PlayObject.Message.cs:1846`）。
+    ///
+    /// 牙：删掉 `apply_ability_to_entity` 的 `e.hit_speed = hit_speed` ⇒ 两个实体仍是 0
+    /// ⇒ 下面的 3/5 断言必红（既有 B3-18 用例是手工写 `hit_speed`，盖不住这个缺口）。
+    #[test]
+    fn p3res_hit_speed_written_from_recalc_drives_657_tail() {
+        const SM_657: u16 = mir2_protocol::messages::SM_CHARSTATUSCHANGED;
+
+        fn weapon_item(index: u16) -> game_svr::bag::BagItem {
+            let mut it = game_svr::bag::BagItem::new(i32::from(index), index);
+            it.dura = 100;
+            it
+        }
+
+        let mut rig = B3Rig::new(18, 2, true);
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        for (index, hi_mac) in [(7101u16, 13u16), (7102u16, 15u16)] {
+            catalog.insert(
+                index,
+                mir2_data::StdItem {
+                    name: format!("w{hi_mac}"),
+                    std_mode: 5,
+                    mac: hi_mac << 8,
+                    ..mir2_data::StdItem::default()
+                },
+            );
+        }
+
+        // 收件人 A（施法者自己）：+3。
+        let mut cg = rig.ground_sessions.remove("caster").unwrap();
+        cg.use_items[game_svr::ability::SLOT_WEAPON] = Some(weapon_item(7101));
+        recalc_session_ability(&mut cg, &catalog, None);
+        assert_eq!(
+            cg.hit_speed, 3,
+            "StdMode 5 + Hi(MAC)=13 ⇒ RealAttackSpeed=3"
+        );
+        apply_ability_to_entity(
+            rig.world.entities.get_mut(rig.caster).unwrap(),
+            &cg.state.wabil,
+            &cg.sub,
+            cg.hit_speed,
+        );
+        rig.ground_sessions.insert("caster".into(), cg);
+        assert_eq!(rig.world.entities.get(rig.caster).unwrap().hit_speed, 3);
+
+        // 收件人 B（观察者）：+5。
+        let mut og = spell_session_ground(rig.observer);
+        og.use_items[game_svr::ability::SLOT_WEAPON] = Some(weapon_item(7102));
+        recalc_session_ability(&mut og, &catalog, None);
+        assert_eq!(
+            og.hit_speed, 5,
+            "StdMode 5 + Hi(MAC)=15 ⇒ RealAttackSpeed=5"
+        );
+        apply_ability_to_entity(
+            rig.world.entities.get_mut(rig.observer).unwrap(),
+            &og.state.wabil,
+            &og.sub,
+            og.hit_speed,
+        );
+        assert_eq!(rig.world.entities.get(rig.observer).unwrap().hit_speed, 5);
+
+        // 18 隐身的 657 收件人集合 = 自身 + 观察者（F18-A 同夹具）。
+        let caster_id = rig.caster;
+        let observer_id = rig.observer;
+        let _m1 = rig.add_monster("m1", 11, 10, 50, true, 30, 0, 0, Some(caster_id), None);
+        let _m2 = rig.add_monster("m2", 15, 10, 50, true, 30, 0, 0, Some(caster_id), None);
+        let _m3 = rig.add_monster("m3", 10, 11, 50, true, 30, 0, 0, Some(observer_id), None);
+        rig.cast(18, (10, 10), 0);
+        let frames = rig.drain();
+        for (socket, want) in [(911i32, 3u16), (912i32, 5u16)] {
+            let body = frames
+                .iter()
+                .find(|(s, b)| *s == socket && sf_ident(b) == SM_657)
+                .map(|(_, b)| b)
+                .unwrap_or_else(|| panic!("socket={socket} 未收到 657"));
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(body).unwrap();
+            assert_eq!(
+                cm.series, want,
+                "socket={socket} 的 657 末参必须是自己的 HitSpeed"
+            );
+        }
+    }
+
+    /// **P3 收尾残余 1 生产入口（bag）**：`handle_bag_cmd` 的两处 `HitSpeed` 生产写点——
+    /// `CM_TAKEONITEM` 成功后 `RecalcAbilitys` 的 `HitSpeed = AddAbil.HitSpeed`
+    /// （oracle `PlayObject.cs:2899`）必须落到 `Entity.hit_speed`（657 末参来源）；
+    /// `CM_TAKEOFFITEM` 卸下后必须回落 `0`。
+    ///
+    /// 夹具：StdMode 5 武器 `Hi(MAC)=13` ⇒ `RealAttackSpeed(13)=3`。
+    ///
+    /// 牙：把 `handle_bag_cmd` 里 `e.hit_speed = sg.hit_speed` 改成 `let _ = sg.hit_speed`
+    /// ⇒ 穿上后实体仍是 `0`（`left 0 / right 3`）⇒ 本用例必红。
+    #[test]
+    fn p3res_bag_take_on_off_syncs_hit_speed_to_entity() {
+        use std::collections::HashMap;
+        const SLOT_WEAPON_U16: u16 = game_svr::ability::SLOT_WEAPON as u16;
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            7101,
+            mir2_data::StdItem {
+                name: "w13".into(),
+                std_mode: 5,
+                weight: 0,
+                mac: 13 << 8,
+                ..mir2_data::StdItem::default()
+            },
+        );
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(42);
+        sg.state.item_list = vec![game_svr::bag::BagItem {
+            make_index: 60001,
+            index: 7101,
+            dura: 100,
+            dura_max: 100,
+            desc: [0u8; 14],
+        }];
+        sessions.insert("hero".into(), sg);
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 42,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut world = mir2_world::World::new(8, 8);
+        world.add_entity(mir2_world::Entity::new(42, "hero", 3, 3));
+        let mut displays = downlink::DisplayTable::new();
+
+        // 穿上：`RecalcAbilitys` 的 `AddAbil.HitSpeed = RealAttackSpeed(Hi(MAC)=13) = 3`。
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEONITEM,
+            60001,
+            SLOT_WEAPON_U16,
+            0,
+            Some("w13"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &mut displays,
+            12,
+            false,
+            false,
+        );
+        assert!(
+            sessions["hero"].use_items[game_svr::ability::SLOT_WEAPON].is_some(),
+            "穿装必须成功（否则本用例无判别力）"
+        );
+        assert_eq!(sessions["hero"].hit_speed, 3, "会话态 HitSpeed = 3");
+        assert_eq!(
+            world.entities.get(42).unwrap().hit_speed,
+            3,
+            "穿装重算后必须同步 Entity.hit_speed（657 末参的来源）"
+        );
+        while rx0.try_recv().is_ok() {}
+
+        // 卸下：HitSpeed 回落 0。
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEOFFITEM,
+            60001,
+            SLOT_WEAPON_U16,
+            0,
+            Some("w13"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &mut displays,
+            12,
+            false,
+            false,
+        );
+        assert!(
+            sessions["hero"].use_items[game_svr::ability::SLOT_WEAPON].is_none(),
+            "卸装必须成功（否则本用例无判别力）"
+        );
+        assert_eq!(sessions["hero"].hit_speed, 0, "会话态 HitSpeed 回落 0");
+        assert_eq!(
+            world.entities.get(42).unwrap().hit_speed,
+            0,
+            "卸装重算后必须同步回落（657 末参的来源）"
+        );
+    }
+
+    /// **P3 收尾残余 1 生产入口（36）**：36 无极真气的目标重算后
+    /// `RecalcAbilitys` 的 `HitSpeed = AddAbil.HitSpeed`（`PlayObject.cs:2899`）必须落到
+    /// **目标**的 `Entity.hit_speed`（657 末参来源）。
+    ///
+    /// 夹具：目标（obs=912）装 StdMode 5 武器 `Hi(MAC)=15` ⇒ `AddAbil.HitSpeed=5`。
+    /// 施法前把目标实体的 `hit_speed` 预置 `99`（哨兵）⇒ 只有生产写点会把它变成 `5`。
+    ///
+    /// 牙：删掉 36 支里 `e.hit_speed = sg.hit_speed` ⇒ 实体仍是 `99` ⇒ 本用例必红。
+    #[test]
+    fn p3res_spell_36_target_recalc_syncs_hit_speed_to_entity() {
+        const SM_52: u16 = mir2_protocol::messages::SM_ABILITY;
+
+        let mut rig = B5Rig::new(b5_magic_info(36), 2, Some(600));
+        rig.seed(0);
+        // 把目标的武器换成 Hi(MAC)=15 的 StdMode 5（RealAttackSpeed(15)=5）。
+        rig.catalog.insert(
+            3,
+            mir2_data::StdItem {
+                name: "w15".into(),
+                std_mode: 5,
+                weight: 0,
+                dc: 0x0400,
+                mac: 15 << 8,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        rig.ground_sessions.get_mut("obs").unwrap().use_items[game_svr::ability::SLOT_WEAPON] =
+            Some(game_svr::bag::BagItem {
+                make_index: 2,
+                index: 3,
+                dura: 1000,
+                dura_max: 1000,
+                desc: [0; 14],
+            });
+        rig.world.entities.get_mut(rig.observer).unwrap().hit_speed = 99;
+        rig.cast(36, (11, 9), rig.observer);
+        let frames = rig.drain();
+        assert_eq!(
+            sf_count(&frames, 912, SM_52),
+            1,
+            "36 目标必须收到 52（证明目标重算真的发生了）"
+        );
+        assert_eq!(
+            rig.world.entities.get(rig.observer).unwrap().hit_speed,
+            5,
+            "36 目标重算后的 HitSpeed 必须同步到实体（哨兵 99 被替换）"
+        );
+    }
+
+    /// **P3 收尾残余 3 端到端**：`CheckPkStatus` 的过期口径（`PlayObject.cs:4357-4364`）：
+    /// 59s 不清、61s 清 **且每个可见观察者恰一条 656**（含自己）；重复 `SetPkFlag`
+    /// 刷新 `PvpNameColorTick`（oracle 赋值在 `if (!PvpFlag)` 之前）。
+    ///
+    /// 牙：把 `check_pk_status` 的过期支删成「永不清位」⇒ 61s 的 `pvp_flag == false` 与
+    /// 656 断言必红。
+    #[test]
+    fn p3res_pk_flag_expiry_59s_61s_one_656_and_refresh() {
+        const SM_656: u16 = mir2_protocol::messages::SM_CHANGENAMECOLOR;
+
+        let mut rig = B3Rig::new(18, 2, true);
+        rig.world.clock_ms = 0;
+        rig.world.pk_check_tick = 0;
+        let caster_id = rig.caster;
+        // `SetPkFlag(this=observer, target=caster)`（observer 为攻击者，caster 被置位）。
+        assert!(rig.world.set_pk_flag(rig.observer, caster_id).is_some());
+        assert!(rig.world.entities.get(caster_id).unwrap().pvp_flag);
+
+        // 59s：未过期 ⇒ 零 656、flag 仍在。
+        rig.world.clock_ms = 59_000;
+        drain_pk_flag_downlink(&mut rig.world, &rig.online, &rig.gates);
+        let frames = rig.drain();
+        assert_eq!(b3_count(&frames, 911, SM_656), 0, "59s 不清");
+        assert!(
+            rig.world.entities.get(caster_id).unwrap().pvp_flag,
+            "59s PvpFlag 仍为 true"
+        );
+
+        // 61s：过期 ⇒ flag 清 + 656（caster 自己 911、观察者 912 各恰一条；远处 914 零）。
+        rig.world.clock_ms = 61_000;
+        drain_pk_flag_downlink(&mut rig.world, &rig.online, &rig.gates);
+        let frames = rig.drain();
+        assert_eq!(b3_count(&frames, 911, SM_656), 1, "自己恰一条 656");
+        assert_eq!(b3_count(&frames, 912, SM_656), 1, "观察者恰一条 656");
+        assert_eq!(b3_count(&frames, 914, SM_656), 0, "范围外不投递");
+        assert!(
+            !rig.world.entities.get(caster_id).unwrap().pvp_flag,
+            "61s PvpFlag 被清"
+        );
+        let body = frames
+            .iter()
+            .find(|(s, b)| *s == 911 && sf_ident(b) == SM_656)
+            .map(|(_, b)| b)
+            .unwrap();
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(body).unwrap();
+        assert_eq!(cm.recog, caster_id, "656 Recog = 被清位者");
+        assert_eq!(cm.param, 255u16, "清位后色 = NameColor（ctor 255）");
+
+        // 重复置位刷新计时：61s 重新置位；91s 再置一次（已带 flag ⇒ 零帧但刷新 tick）。
+        rig.world.clock_ms = 61_000;
+        assert!(rig.world.set_pk_flag(rig.observer, caster_id).is_some());
+        rig.world.clock_ms = 91_000;
+        assert!(
+            rig.world.set_pk_flag(rig.observer, caster_id).is_none(),
+            "已带 flag ⇒ 不再产 RefNameColor"
+        );
+        // 91 + 59 = 150s：未过期。
+        rig.world.clock_ms = 150_000;
+        drain_pk_flag_downlink(&mut rig.world, &rig.online, &rig.gates);
+        let frames = rig.drain();
+        assert_eq!(b3_count(&frames, 911, SM_656), 0, "刷新后 59s 不清");
+        assert!(rig.world.entities.get(caster_id).unwrap().pvp_flag);
+        // 91 + 61 = 152s：过期。
+        rig.world.clock_ms = 152_000;
+        drain_pk_flag_downlink(&mut rig.world, &rig.online, &rig.gates);
+        let frames = rig.drain();
+        assert_eq!(b3_count(&frames, 911, SM_656), 1, "刷新后 61s 清");
+        assert_eq!(b3_count(&frames, 912, SM_656), 1);
+        assert!(!rig.world.entities.get(caster_id).unwrap().pvp_flag);
+    }
+
     /// **40 F40-A/B/C/D**：无目标回落自己、`IsProperFriend` 门、`R(7)` 门、三个计时器
     /// `!=0 ⇒ 置 1`（不是清 0）、boTrain（B3-40-1/2/3/4）。
     #[test]
@@ -32856,6 +33305,77 @@ mod tests {
             "time=0 ⇒ StateTick=0 ⇒ 无 657"
         );
         assert_eq!(b4_count(&f, 911, SM_100) + b4_count(&f, 912, SM_100), 0);
+    }
+
+    /// **P3 收尾残余 4**：50 的 `Level=0` / `R(nLevel=0)`（`p3-b4-contract` §6-7）。
+    ///
+    /// .NET `Random(0)` 仍调用一次 `Sample()`（值恒 0）；Rust `random_below(0)` 同口径。
+    /// 夹具同 F50-D2（玩家目标），只把 `MagicRcd.level` 由 2 改成 0：施法 tick 的抽数
+    /// `[0,0,7,10,10,2,100,21,1,0,3]` —— 第 10 抽 `R(nLevel=0)` **照抽一次且恒 0**，
+    /// 其后训练尾 `R(3)` 的位置不变。
+    ///
+    /// 牙：把 `cast_mab_mabe_spell` 的 `R(nLevel)` 改成「`level==0` 跳过」⇒ RNG 末态少一抽，
+    /// `b4_ledger` 必红（多抽/少抽断言）。
+    #[test]
+    fn spell_p3b4_50_mab_mabe_level_zero_advances_r_zero_once() {
+        const SM_17: u16 = mir2_protocol::messages::SM_SPELL;
+        const SM_53: u16 = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        const SM_638: u16 = mir2_protocol::messages::SM_MAGICFIRE;
+        const SM_656: u16 = mir2_protocol::messages::SM_CHANGENAMECOLOR;
+
+        let mut rig = B4Rig::new(b4_magic_info(50, "50"), 0, None);
+        let _m = rig.add_monster("dummy", 11, 12, 80, 10, 0, 0, 0);
+        let p = rig.add_player("target", 12, 11, 913);
+        rig.world.set_attack_poison(
+            p,
+            mir2_world::combat::AttackPoisonState {
+                un_paralysis: false,
+                anti_poison: 0,
+                paralysis: false,
+            },
+        );
+        // seed=4：与 F50-D2 同流；Level=0 只改 `GetPower` 的等级缩放，不改抽数 max 序。
+        rig.seed(4);
+        let before = rig.world.rng.clone();
+        rig.cast(50, (12, 11), p);
+        let frames = rig.drain();
+        assert_eq!(
+            b4_ledger(
+                &before,
+                &rig.world.rng,
+                &[0, 0, 7, 10, 10, 2, 100, 21, 1, 0, 3]
+            ),
+            vec![
+                (0, 0),
+                (0, 0),
+                (7, 1),
+                (10, 6),
+                (10, 1),
+                (2, 1),
+                (100, 4),
+                (21, 2),
+                (1, 0),
+                (0, 0),
+                (3, 2)
+            ],
+            "Level=0：R(nLevel) 仍恰推进一次且值恒 0（第 10 抽）"
+        );
+        assert_eq!(b4_seq(&frames, 913), vec![SM_17, SM_638, SM_656]);
+        assert_eq!(
+            b4_seq(&frames, 911),
+            vec![SM_53, SM_638, SM_656],
+            "656 由 target 的 SetPkFlag 发出，观察者（含施法者）各收一条"
+        );
+        assert_eq!(b4_count(&frames, 911, SM_656), 1);
+        assert!(rig.world.entities.get(p).unwrap().pvp_flag);
+        let poison = rig.delay_msgs(mir2_world::slave::RM_POISON);
+        assert_eq!(
+            poison.len(),
+            1,
+            "R(nLevel)=0 ⇒ time 仍按 nPower/20 + 0 投递"
+        );
+        assert_eq!(poison[0].actor_id, p, "RM_POISON 投递目标是玩家自己");
+        assert_eq!(poison[0].n_param3, 0, "nPoint = Level = 0");
     }
 
     /// **F42-A/B/C/C2**：群体雷电术。null 目标 NPE→639；helper 638 循环前；716 在骰门外；
