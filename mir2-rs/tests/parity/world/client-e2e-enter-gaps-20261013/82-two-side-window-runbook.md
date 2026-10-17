@@ -872,6 +872,8 @@ cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/route-census-target \
 | A15 | **M3 总验收**：DoD② **300 假人 24h 长跑** + DoD④ 真机 `run_pair` + `scoped_diff --canonical` diff=0（`M3-report.md:281` 明写「24h 长跑为 R 级窗口项」；A10 是 M5 的 72h，**不能替代**） | `openmir2-m3-final-acceptance` | 未覆盖 |
 | A16 | **GuardList 真机窗口项**：③a 反向点两侧出帧一致 + `MIR2_RNG_SEED` 双侧 `site/order` 账本 | `openmir2-guardlist-guards-loading` | **§W0-4 / §W0-8 部分** |
 | A17 | **交易门**：交易中发 `CM_USERBUYITEM`/`CM_USERGETDETAILITEM` ⇒ **零帧 + characters/gold 不变**（`openmir2-m3-shop-dealing-gate`）；**仓库 50 槽** `characters_storageitem` **字段级 diff**（`M3⑤-实现 4`，tier=R 持久化判据） | `openmir2-m3-shop-dealing-gate`、`M3⑤-实现 4` | 未覆盖（仅 A2 的失败分支泛化） |
+| A18 | **魔号 37（能量排斥）推挤**：oracle 与魔号 8 函数体逐字相同（`MagicManager.cs:601-606` == `:259-264`，`MagPushArround`）⇒ 真机核「37 与 8 同场景出帧/抽数一致」：`Random(20)`/`Random(2)` 逐项、逐格 `SM_BACKSTEP(9)` 条数/顺序/收件人。**GREEN**：两侧账本 `IDENTICAL` 且 37/8 帧序列逐字节相同（离线已钉：`cargo test -p game-svr --bin game-svr spell_cmd_energyrepulsor_`）。**RED**：多抽/少抽、帧多/漏、收件人不同 | 窗口场景：可并入 8/21 同图同种子批次 | 卡 `openmir2-magic-8-21-wiring`；`318bd1d81`；`m3/audit-valid-consumers-reachability-20261017.md` §1.1/§1.2 订正块 | 未覆盖 |
+| A19 | **切图失败回滚（switch_map / route_enter）**：目标落格失败（越界/墙）⇒ oracle `EnterAnotherMap` false ⇒ `Walk` 回滚旧图旧格、不发移动帧（`PlayObject.cs:1878-1881`/`:1911-1913`；`BaseObject.cs:685-688`）。**GREEN**：两侧一致表现为「角色留旧图旧格 + 坐标回滚 + 无 `SM_WALK` + 格表登记恢复」；route 目标越界 ⇒ `Failed` 而非静默 `Skipped`。**RED**：角色悬空（两图都不在格表）、坐标未回滚、仍发移动帧。**登记残差**：oracle 失败前已发 `RM_CLEAROBJECTS`/`RM_CHANGEMAP`（帧面未建模）；多 route「一成功一失败」的回滚落图差异（真实数据不可达） | 宿主构造（越界 route hop / 落格失败）；当前生产无直接 `switch_map` 调用者 ⇒ 真机可达性低 | 卡 `openmir2-enter-map-cell-rejected-vs-oracle`、`openmir2-route-enter-failed-classification`；`ed9ab035d`、`df5a260ea`、`35e3cf468` | 未覆盖 |
 
 ### 0.4 本表维护约定
 
