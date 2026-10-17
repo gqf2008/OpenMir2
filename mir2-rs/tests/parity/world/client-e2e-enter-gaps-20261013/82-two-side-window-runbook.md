@@ -585,5 +585,69 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene
   → `SpaceMove`（`:1103-1166`）→ `SpaceMoveGetRandXY`（`:1040-1096`）在落点不可走时**进移位环、继续抽
   `Random(Width)`/`Random(Height)`**，最后 `AddMapObject`。⇒ **落点与 RNG 流水都会分歧**（不是同构！
   原稿引的 `Envirnoment.cs:380` 属 `MoveToMovingObject`，不是这条路径 —— 独立复验 2026-10-17 否掉）。
-- **判级：R**（RNG 抽数会变 + 移动结果会变）。**这是真缺口，不只是窗口项** ⇒ 已立卡
-  `openmir2-map-random-move-shift-loop` 承接实现；本片只登记、不实现。
+- **判级：R**（RNG 抽数会变 + 移动结果会变）。~~这是真缺口，不只是窗口项 ⇒ 已立卡承接实现；本片只登记、不实现。~~
+  **2026-10-17 订正**：该缺口**已由 `047709a9b` 实现**（复用 `space_move.rs` 的 `SpaceMoveGetRandXY`；复验 CONFIRMED，见总表 #5），
+  窗口按「已实现、必核」读；201 轮回滚语义与出帧面仍未建模（见 #5 的 RED 栏）。
+
+## §2f. 窗口必核项总表（2026-10-17 收敛；**编号避开既有 §0「要证的三件事」**）
+
+> **指针 / 用法**：本节是**追加在文件末尾的总索引**，不重排、不改写任何既有小节（故 §1–§2e 的节号与既有引用不变）。
+> 执行步骤一律以 §1–§2e 为准；本表只回答四件事：**开窗前必须核哪些 R 级项、GREEN/RED 怎么判、依赖什么、出处与既有覆盖在哪**。
+> 收敛基线：`2fa749471`（master tip，2026-10-17）。卡片状态见 `walgit collab board`（下列卡片均 `in-progress`，按 tier=R **不 closed**）。
+
+### 0.1 开窗前的前置（三项，缺一不开窗）
+
+1. **本机 mysqld 在听 3306**（基线服务，不是游戏端口）。`mir2-rs/tests/parity/m3/fixture_chain_gate.py check` 的**战斗 runner** 依赖 DB；未听时它会以 `ERROR 2002 ... (10061)` 报 `rc=1`——那是**环境未就绪**，不是代码红；先按本机 mysqld 配方（datadir `D:\mysql\data`、3306）恢复再跑门。来源：本文件 §1 第 6 条（`82-two-side-window-runbook.md:48`）。
+2. **先跑内存测试（或短程压测）再开窗**。本机近 **60 天崩溃 42 次**，其中含 `FAULTY_HARDWARE_CORRUPTED_PAGE`（内存/页损坏类）⇒ 独占窗口 + 长跑前先做内存自检；窗口内若出现无法归因的随机 FAIL，先怀疑宿主内存再怀疑代码。来源：**编排侧环境事实（本任务书）**——仓内无对应锚点，故本条**不冒充**代码/文档证据。
+3. **两侧同种子 + 先「重取基线」，再比 `seq=0`**。默认 RNG 流水已被构造段补齐改变（见下表 #12）：任何**旧基线**（`9a175a66f` 之前）与新树比都会自构造段起分歧；窗口内必须两侧各自用**当前树**、同一 `MIR2_RNG_SEED` 重采，先落 `INJECT_OK <seed>` 并通过 `rng-scene/rng_trace_diff.py check` 的 5 条 fail-closed，再逐项比 `seq=1` 起（1-based）。来源：`9a175a66f`、`e6105f011`、`78416a932`；本文件 §W0-6。
+
+> 另：§1 / §1b / §W0-0 的既有前置门（十端口全 DOWN、`guard` = `WINDOW_GUARD_OK`、车队 pause、`start/stop` 同一 `-LogDir`）仍**全部适用**，本表不重复。
+
+### 0.2 R 级必核项总表
+
+| # | 必核项 | 判据（GREEN / RED） | 依赖（如 mapcell 装载 / 构造段基线） | 来源（卡 id / 文档 / commit） | 是否已被现有 runbook 覆盖（节号） |
+| --- | --- | --- | --- | --- | --- |
+| 1 | **构造段账本（`seq=0` 起逐项）**：RobotObject 头（`Robot.txt` 有效行数×4）→ G1/G2/G3 孤儿商人 → **屏障 A**（`ItemNumber += Random(10000)`，**恰 1 抽**）→ M2 → M1 → L2/L1/L3 → L4/L5；部署件 **69 抽 / 18 站点** | **GREEN**：两侧同种子 `MIR2_RNG_LOG` **自首个数据行 `seq=1` 起**（日志 `seq` 是 1-based：`rng_trace.rs` 先 `fetch_add(1)+1`）`site/kind/arg/result` 逐项相等；Rust 侧构造段 **69 抽/18 站点**；屏障 A 位于**第 17 条**（1-based，`seq==17`；零基下标 16）；`relay::starts_without_worldmaps_when_envir_present` **13 行**（前 12 行与父提交逐行相同，末行 = 屏障 A）。**窗口前先实测 `Robot.txt` 有效行数**（账本头 = 行数×4）。**RED**：首项即分歧；**抽数 ≠ 69 或站点数 ≠ 18**；屏障 A 不在第 17 条（`seq≠17`）；`Robot.txt` 行数 ≠ 账本头假设；用旧基线（68/17）比对 | **构造段基线（已变，须重取）**；oracle `new Merchant` 12 处中另 **9 处**未处置（实体缺口另立条目） | 卡 `openmir2-ctor-barrier-a-draw` / `openmir2-ctor-draws-fold` / `openmir2-npc-ctor-draws`；`9a175a66f`、`0a34719c9`、`e6105f011`、`78416a932`、`8b73f2a51`、`f1cffd3f1`；`m3/design-buff-and-tick-20261016.md:446,450,488-493` | **未覆盖**（§W0-6 只覆盖场景账本；构造段 `seq=0` 未列） |
+| 2 | **route 落格 `added=1649`**（真注册表 1658 条中 9 条落墙格被 `AddMapRoute` 门丢弃：**7 HighWall + 2 LowWall**） | **GREEN**：**Rust 侧**启动日志 `INF 地图格子属性已灌入` 且 `routes=1658 / unresolved=0 / added=1649`；**C# 侧无同类日志/计数器**（`src/` 冻结面里没有这些打印）⇒ C# 侧用**只读复算**口径（`MapInfo.txt` + `.map` 二进制解出 route 落格，方法见 `mapwire.rs` 的 `#[ignore]` 普查）比对。**RED**：`added=1658`（装载未生效）或 `1648`（**旧判据，永远不可能绿**）；`unresolved>0`（`h006` 大小写敏感复发的征兆） | **mapcell 装载**（`2ff02ac0e` / `b192bd9f3`） | 卡 `openmir2-mapcell-attributes-loading`；`b192bd9f3`（订正 `2ff02ac0e` 的 1657→1648 为 1658→1649）；`m3/audit-valid-consumers-20261017.md` §1A #8、§3 #4 | **未覆盖**（§W0-6 只提装载，未列计数） |
+| 3 | **刷怪位置 + RNG**（MonGen 地形移位环）：`Envir/MonGen.txt` **2827 条里 1072 条**声明出生格是墙格（755 LowWall / 306 HighWall / 11 越界），其中 **40 条首轮即进边界支**（`Random(Width/2)` / `Random(Height/2)`） | **GREEN**：两侧**出生坐标逐点一致**；冻结件至少含 **1 个「墙格出生点」MonGen 框**（或逐条列 MonGen 行并两侧同口径）；构造级 `cargo test -p game-svr --lib -- terrain_` 绿（6 条）；RNG 账本 `spawn` 组 `IDENTICAL`。**RED**：坐标分歧；抽数分歧 ⇒ 先核 mapcell 装载与 `mongen.rs:499-536` 地形环 | **mapcell 装载**（`2ff02ac0e`/`b192bd9f3`）；真机 Envir 语料 | 卡 `openmir2-mongen-terrain-loop-live`；`b192bd9f3`；`649924131`；本文件 §W0-6 必核项、§W0-8 末行 | **§W0-6 + §W0-8**（2026-10-17 已列） |
+| 4 | **召唤回落 RNG**（魔号 30；宝宝满 或 spawn 失败 **且主人正前方是墙** ⇒ 进 `SpaceMoveGetRandXY` 移位支） | **GREEN**：两侧 RNG 账本 `VERDICT IDENTICAL` **且回召落点同坐标**；构造级 `cargo test -p mir2-world --lib recall_` 6 条绿（阳性落点 `(6,1)`、随后三抽 `[1,5,1]`；阴性对照零抽、随后三抽 `[6,1,1]`）。**RED**：RNG 门 RED ⇒ 拒比；落点不同而 RNG 相同 ⇒ 核 `CanWalk` 口径；抽数不同 ⇒ 先核移位支分段/上限（`n18`/`n1C`/201）与取数次序（**先 `Random(Width)` 再 `Random(Height)`**） | **mapcell 装载**；宝宝数达 `nMaxMob`（现网 `DragonCount=1`）；朝向钉死 | 卡 `openmir2-recall-slave-shift-live`；`49fe49f05`；`m3/audit-valid-consumers-reachability-20261017.md` §1.4、§2 #1；本文件 §2e | **§2e**（完整覆盖） |
+| 5 | **商人随机移动移位环**（`merchant_run` → `map_random_move` → `SpaceMove` → `SpaceMoveGetRandXY`）：首两抽 `Random(W-nEgdey-1)+nEgdey` / `Random(H-nEgdey-1)+nEgdey`，落点不可走则进环继续抽（至多 201） | **GREEN**：两侧**落点同坐标 + RNG 流水 `IDENTICAL`**；可走落点 = 恰 2 抽（阴性对照）。**RED**：落点/抽数分歧；201 轮**耗尽回滚**语义（Rust 现只 `return`，oracle 的 `DeleteFromMap`/`AddMapObject` 语义**未建模**）、落格 `CellType`、`SpaceMove` 出帧面（`RM_SPACEMOVE_SHOW2` 等）不在本层 | **mapcell 装载**；DB `CanMove!=0 && MoveTime>0`；`npc_run` 该支**不可达**（固定 NPC `BoCanMove` 恒 false），只 `merchant_run` 条件可达 | 卡 `openmir2-map-random-move-shift-loop`；`047709a9b`、`0f8390dbb`、`8e9244388`；`m3/audit-valid-consumers-reachability-20261017.md` §2 附表；本文件 §2e「同窗登记」 | **§2e 末段（部分）**——该段写「只登记、不实现」，**须按 `047709a9b` 读作「已实现、窗口必核」** |
+| 6 | **进图前移位环**（`WorldServer.cs:375-394`：出生格不可走 ⇒ 每次 `CurrX = CurrX-3+Random(6)` / `CurrY = CurrY-3+Random(6)`、**至多 5 轮**、仍不可走回落 `[Setup] HomeMap/HomeX/HomeY`（`:388-394`）） | **GREEN**：墙格出生 ⇒ 进环、两轴各一抽、命停；5 轮耗尽 ⇒ 回落 `HomeMap`；**阴性对照：出生格可走 ⇒ 零抽、坐标不动**（用随后连续三抽断言）；构造级 3 用例绿（seed=42 前六抽 `[4,0,0,3,1,1]`）。**RED**：抽数/落点不符；`HomeMap` 不可解析分支（Rust 返回 `home_fallback_error`，oracle `goto ReGetMap` **未建模**，当前部署不可达）；「墙格出生不可达」依赖 `HomeMap=3 (839,668)` 为 Walk（实测成立） | **mapcell 装载**；`[Setup] HomeMap` 可解析且落点可走 | 卡 `openmir2-enter-shift-loop`；`2fa749471`；`m3/audit-valid-consumers-20261017.md` §3 #5、§5 | **未覆盖** |
+| 7 | **Enter 落格**（墙格出生 ⇒ oracle 同形：**进世界但不入格表**，不移除角色） | **GREEN**：`enter_map` 返回 Ok、实体仍在、`add_to_mapped=false`、格计数 0、会话 `InWorld`；两侧一致表现为「他人 AOI 隐身 + 自身扫描/tick 继续」。**RED**：角色被移除/拒绝进图（旧 Rust 行为）；仅一侧隐身/一侧可见 | 宿主路径的墙格出生已由 #6 判为不可达；**切图缩图** / 直接调 `World::enter_map` 仍可产生该态；`switch_map_inner` 的 `CellRejected` 属既有、另行跟踪 | 卡 `openmir2-enter-map-cell-rejected-vs-oracle`；`ed9ab035d`；`m3/audit-valid-consumers-20261017.md` #23/#31、§3 #5、§5 | **未覆盖** |
+| 8 | **走位/推/冲刺帧面 + NPC/商人出现帧**（mapcell 装载让 `Valid==Walk` 真机生效） | **GREEN**：贴墙格同点同方向朝墙走 ⇒ **坐标不动 + 不发 `SM_WALK` + 不回 `+GD` + 源格登记不 orphan**；冲刺（`can_walk_ignore_objects`）同口径；`Envir/Npcs.txt` **3** 条 / `Merchant.txt` **131** 条**落墙格各 0** ⇒ 无静默移除、两侧出现帧对称。**RED**：出帧/坐标分歧；将来语料落墙格 >0 ⇒ 升为「被移除 NPC/商人清单」必核。**注意**：推人 `Command::Push` / 魔号 21 `mag_sace_move` 目前**无生产者**（不可达）⇒ 不得用它们判 GREEN，接线后升为必核；`move_object` 的 `cells[0]` 耦合（322 图中 (0,0) 为墙 317 / Walk 5）与 oracle 同形，生产走位先拒墙 ⇒ 不触发 | **mapcell 装载**；`cell_free` 属性门；`crates/envir/tests/real_maps.rs::deployment_wall_census`（`#[ignore]`）复核 | 卡 `openmir2-mapcell-consumer-teeth`；`34af5b4ff`；`m3/audit-valid-consumers-20261017.md` §3 #2/#3、§4；本文件 §W0-6 第二个必核项 | **§W0-6**（已列；推/冲刺的生产可达性需按本表口径收窄） |
+| 9 | **default 支 `RM_SPELL` 帧面 + 缺 53 的帧序**（`DoSpell:159` 无条件广播；宽口径缺口 **93 行 / 80 魔号**已接线） | **GREEN**：未建模魔号（55 字面 default / 81 `>80` 各一）⇒ 观察者**恰 1 帧** `SM_SPELL`；逐字段（尾 = `MagicId` ASCII、坐标 = **snap 后**的 `tx/ty`）；施法者自己**不收**；AOI 内非 Ghost 才收；`SM_SPELL` **早于** `SM_MAGICFIRE`；战士技能 0 帧；距离门越界 0 帧。**RED**：缺帧/双发/顺序反了/收件人集合不同。**帧序残差**：MP 扣减 + `RM_HEALTHSPELLCHANGED`（**53**）未实现 ⇒ oracle 在 `SM_SPELL` **之前**还有 53，Rust 侧仍**缺这一帧**（相对序前移）；`SM_MAGICFIRE` / 训练尾 `Random(3)` + 落库 / `RM_MAGICFIREFAIL` 同样未接。**旁路**：机器人 `AutoSpell`（触发集合不同）、怪物硬编码 `RM_SPELL(48)`（`FireballMonster.cs:39`）均未建模 ⇒ 接上之前**不得**判「帧面缺口已全清」 | `RM_HEALTHSPELLCHANGED` 生产者（缺）；两条旁路的解冻条件见界定件 §8 | 卡 `openmir2-default-arm-spell-surface` / `openmir2-spell-frame-bypass-paths`；`9e59246c7`、`888180c07`、`b65feca68`；`m3/design-default-arm-spell-frames-20261017.md` §5.1、§5.2、§8 | **部分**（§0 只覆盖 53 帧 HUD 前置与 §2b 压血；default 支帧面/帧序未列） |
+| 10 | **A-5 buff（麻痹/防御系）与越界零抽**（技能 14/15/31 的 `DoSpell` 距离门 `MagicAttackRage`） | **GREEN**：in-range ⇒ 目标获 `DefensePower`/`MagicDefensePower`/`magic_shield` 且世界 RNG 确被推进；**越界（\|Δ\|>8）⇒ 无任何 buff、`magic_shield` 不置位、`draws_between == 0`（一个随机数都不抽）、`get_char_status` 不变、drain 后 gate 零 657**；阳性对照（buff 到期 ⇒ 657 确实发）证明「零 657」非假绿。**RED**：越界仍抽数/上 buff；`HAM_MASTER(3)`/`HAM_GUILD(5)` 友军面比 oracle **窄** ⇒ **漏加友军 buff**（方向已订正，不是「多加点」）；`AntiPoison` 恒 0 ⇒ 流水位置不漂但**抽样参数不同**（`Random(5)` vs `Random(AntiPoison+5)`）⇒ value 账本会红 | buff tick（生产已开）；麻痹戒指 `RING_MAKESTONE_ITEM(113)`；线上 `attack_mode` 可达 3/5 | 卡 `openmir2-buff-producer-wiring` / `openmir2-buff-system`；`68b0730df`、`ffac59d1b`、`2369d8ca3`；**判据锚 = `cargo test -p game-svr --bin game-svr spell_cmd_a5_`（5 条：in-range / 越界零抽 / 阳性对照）**；`ffac59d1b` 的复核 `review` 条目（`m3/audit-valid-consumers-20261017.md` §1B #35 指向 `slave.rs:657 recall_slave`，**与本行无关，勿引**）| **未覆盖** |
+| 11 | **spell snap 的掩码格 / 窗口上界**（5 处 spell 块全部改走忠实镜像 `cetin_near_xy`） | **GREEN**：目标站在**被掩码格**上 ⇒ **不 snap**（用原始点击坐标过门 ⇒ 世界 RNG 必须前进）；点击与目标 \|Δ\|=2（出 3×3 窗口）⇒ 不 snap；**异图同坐标** ⇒ 不 snap（按施法者图过滤）；正常命中路径**仍 snap**（t1/t2 牙防「永不 snap」）。**RED**：多抽数/漏施放；窗口 ±1 改 ±2 逃逸 | **mapcell 装载**（掩码 = `set_map_xy_flag`，生产唯一写口是城门/城墙）；`queryuser.rs:29` 镜像不得改 | 卡 `openmir2-snap-cell-fidelity`；`befd3ad7c`；`m3/audit-valid-consumers-reachability-20261017.md` §1.7（`spell_snap_target` 5 处） | **未覆盖** |
+| 12 | **基线重取要求**（默认 RNG 流水**已变**：构造段 **68→69 抽 / 17→18 站点**；屏障 A 插在第 17 条；`relay` **12→13**，此前 fold 已把它 **0→12**） | **GREEN**：窗口前两侧各自用**当前树**（≥ `2fa749471`）重采；构造段 69/18；屏障 A 第 17 条（`seq==17`）；场景账本头 `INJECT_OK <seed>` 两侧同、`seq` 1..N 连续无缺无重（`rng-scene/rng_trace_diff.py check` 5 条 fail-closed，**与 DoD① 的 `rng-trace-scene/` 是两个目录**）。**RED**：拿旧基线比 ⇒ 68/17 与 relay-12 基线自**第 17 条**起必红；**relay-0（fold 前）基线自第 1 条构造抽即分歧**；两侧种子不同/未落 `INJECT_OK` | **构造段基线**；严格校验器；`MIR2_RNG_SEED` 注入 | `9a175a66f`（68→69、relay 12→13）、`e6105f011`（relay 0→12、分歧自第 17 条）、`78416a932`（可复现事实：13 行、末行 = 屏障 A、前 12 行与父提交逐行相同）；本文件 §W0-6 | **部分**（§W0-6 有严格校验器/拒比；**「先重取基线」一句未写**） |
+
+### 0.3 其它 R 级窗口项（按卡片归并，不逐条展开）
+
+> 下列卡片同样按 tier=R **不 closed**，其窗口项不在本批 mapcell/ctor/帧面簇内，另行排窗；列此以保证「总表」不漏项。
+
+| # | 必核项（判据要点） | 来源卡（看板 id） | runbook 覆盖 |
+| --- | --- | --- | --- |
+| A1 | 掉落/经验：固定种子 **100 杀**两相窗口（掉落列表逐项相同；经验曲线含英雄逐级相同，**不得 i32 截断**）；quest 真机窗口 | `M3④-实现 D…`、`M3④ 掉落/经验动作序列夹具…`、`M3 逐系统对齐 ④` | 未覆盖 |
+| A2 | NPC/商店：买/卖/修理/仓库价格与库存变化 + 钱不够/负重满等失败分支两侧一致 | `M3⑤-实现 6`、`M3 逐系统对齐 ⑤`、`M3⑤ 商店夹具…` | 未覆盖 |
+| A3 | 任务：接/交/条件判定 + **任务态不落库**语义（oracle 口径） | `M3⑥-实现 4/5`、`M3 逐系统对齐 ⑥` | 未覆盖（该卡现被 marker 前缀 / frame JSON / quest_state 生产者三重阻断） |
+| A4 | 组队/交易：归属/分配/取消/掉线中断结果一致；`GainExp` 组队缺态吞错口径 | `M3⑦-实现 4/5`、`M3⑦-3`、`M3 逐系统对齐 ⑦` | 未覆盖 |
+| A5 | 公会/攻城：建会/宣战费用时限/城门状态/税收金库/攻城状态机 + **两侧可注入时钟** | `M3⑧-实现 5/6/7/8/9/10`、`M3⑧ 横切前置…`、`M3 逐系统对齐 ⑧` | 未覆盖 |
+| A6 | 宝宝/英雄：生命周期、叛变到期、主人死幽灵、46 分身 `RM_TURN`、诱惑 20 | `M3⑨-实现 2/3/5`、`M3⑨-2 残余`、`openmir2-m3-pet-slave-*`、`M3 逐系统对齐 ⑨` | **§2e 只覆盖魔号 30 召唤回落**；其余未覆盖 |
+| A7 | 邮件/拍卖/元宝寄售：DB **字段级 diff=0** + 全部帧 | `M3⑩-实现 1/2/3`、`M3 逐系统对齐 ⑩` | 未覆盖 |
+| A8 | 怪物主动索敌（ATMonster 族）：主动族点怪 Rust **应出** victim=自己的 `SM_STRUCK`（空转 = 缺陷）；子类 `Run` 覆写 / SuperGuard / ArcherGuard 未建模 | `怪物主动索敌（ATMonster 族…）—— W0 联调窗硬阻塞` | **§2d W0-5**（已列，含 2026-10-16 收紧口径） |
+| A9 | 入站派发 R1（16 条派发臂）/ 出站编码器 R2（`RM_*→SM_*` 缺失族）：制药抽数流水 + 帧序 + `MYSTATUS` 派生落库 | `入站派发红名单…（R1）`、`出站编码器红名单…（R2）` | 未覆盖 |
+| A10 | M5 收敛：72h 长跑 / mem-probe 内存斜率 / 三档压测曲线 / 灰度-回滚演练 / 灰度前后 DB 快照 | `M5 收敛/压测/灰度收口…` | 未覆盖（另档期；本表不排期） |
+| A11 | Claim B 全服 RNG 消费者：**同场景/同起点/同种子**含怪两相 trace → `groupdiff` 组序；`construct→spawn` folded 规则**折叠后计数与相对次序必须相等**；另含 **BotSrv real wiring**（0137/pin 怪/dump 的窗口项） | `全服 RNG 消费者结构一致性（Claim B）…`、`M3 RNG 站点组同场景两侧 trace…`、`openmir2-m3-rng-scene-driver` | **§W0-6 部分**（账本机制），组序判据与 BotSrv wiring 未展开 |
+| A12 | world-tick 扩展（RNG/时钟/公告节拍）；transmap/maptrigger（**1658 条 route 逐字节** + 落格 + 踩格换图） | `openmir2-world-tick-expansion`、`openmir2-transmap-maptrigger`、`openmir2-maptrigger-monster-and-door` | 未覆盖 |
+| A13 | 编码器孤儿接线 / 窗口采集前置：两侧种子交叉断言、C# `site` 列、前置门生产路径不误拦 | `openmir2-orphan-encoder-wiring`、`openmir2-window-collector-preflight` | **§1b / §W0-0 部分** |
+
+| A14 | **M3②③ F-2：真机隔离两相 `scoped_diff`** —— 攻方 `characters_ablity.Hp` C#=20663 / Rust=20658（时序量化，stamina 回收率 47.9/s vs 40.0/s），`M3-report.md:306`（§4）已登记为**已知 RED** | `openmir2-m3-scoped-diff-ability` | 未覆盖 |
+| A15 | **M3 总验收**：DoD② **300 假人 24h 长跑** + DoD④ 真机 `run_pair` + `scoped_diff --canonical` diff=0（`M3-report.md:281` 明写「24h 长跑为 R 级窗口项」；A10 是 M5 的 72h，**不能替代**） | `openmir2-m3-final-acceptance` | 未覆盖 |
+| A16 | **GuardList 真机窗口项**：③a 反向点两侧出帧一致 + `MIR2_RNG_SEED` 双侧 `site/order` 账本 | `openmir2-guardlist-guards-loading` | **§W0-4 / §W0-8 部分** |
+| A17 | **交易门**：交易中发 `CM_USERBUYITEM`/`CM_USERGETDETAILITEM` ⇒ **零帧 + characters/gold 不变**（`openmir2-m3-shop-dealing-gate`）；**仓库 50 槽** `characters_storageitem` **字段级 diff**（`M3⑤-实现 4`，tier=R 持久化判据） | `openmir2-m3-shop-dealing-gate`、`M3⑤-实现 4` | 未覆盖（仅 A2 的失败分支泛化） |
+
+### 0.4 本表维护约定
+
+- **新增 R 级窗口项 ⇒ 先在 §0.2 / §0.3 加一行，再去改执行步骤**；不要只把判据写在卡片或提交信息里。
+- 行内数字**只有两类可写**：① 有 `file:line` / 提交 / 文档锚的；② 明确标「编排侧环境事实」。禁止口语化「大概/应该」。
+- 每行 GREEN 必须能由**已入库的命令或构造级用例**判；不能只靠肉眼。RED 分叉必须写「先怀疑哪一片」。
+- 卡片 `closed` 前先删/改本表对应行的「未覆盖」状态；**R 级卡 `merge_result` 后保持 `in-progress`**，本表不因合并而删行。
