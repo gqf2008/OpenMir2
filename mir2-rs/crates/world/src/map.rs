@@ -364,6 +364,39 @@ impl MapGrid {
         self.add_cell_object(x, y, cell_type, cell_obj_id, None, add_time)
     }
 
+    /// **P3-B5**：`Envirnoment.AddMapEvent`（`:220-246`）的格子面。
+    ///
+    /// 追加 `CellObject { CellType = Event, CellObjId = mapEvent.Id, ActorObject = false,
+    /// AddTime = now }`。`MapEvent.Id` 是 `readonly int` 且赋值行被注释 ⇒ **恒 0**
+    /// （BUG-REPLICA 1）。`Envir.AddMapEvent` 只在 `CellMatch && success && Valid` 时追加 ⇒
+    /// 越界/墙格返回 `false`（事件仍进全局表，见 `World::cast_fire_wall_spell`）。
+    pub fn add_event_cell(&mut self, x: i32, y: i32, add_time: i64) -> bool {
+        if !self.cell_match(x, y) {
+            return false;
+        }
+        let (cell, success) = self.get_cell_info_mut(x, y);
+        if success && cell.valid() {
+            cell.add(CellObject {
+                cell_obj_id: 0,
+                cell_type: CellType::Event,
+                actor_object: false,
+                add_time,
+                item: None,
+            });
+            true
+        } else {
+            false
+        }
+    }
+
+    /// **P3-B5**：`Envirnoment.GetEvent`（`:1344-1360`）的格子门——
+    /// 该格 `ObjList` 里是否有 `CellType::Event` 对象（不看它是否在 `CellObjectMgr` 里）。
+    #[must_use]
+    pub fn has_event_cell(&self, x: i32, y: i32) -> bool {
+        let (cell, success) = self.get_cell_info(x, y);
+        success && cell.obj_list.iter().any(|o| o.cell_type == CellType::Event)
+    }
+
     /// 地面物品落格（`CellType::Item`）——与 `add_map_object` 同一格子语义，额外记账
     /// [`FloorItemMeta`]（world 侧只读分片，owner §25.1 (A)）。
     pub fn add_floor_item(

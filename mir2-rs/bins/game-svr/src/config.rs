@@ -50,6 +50,9 @@ pub struct GateConfig {
     pub green_msg_f_color: u8,
     /// `[Setup] GreenMsgBColor`（oracle `GameSvrConf.cs:1537` 缺省 `0xFF`）——同上，背景色。现网 `=255`。
     pub green_msg_b_color: u8,
+    /// `[Setup] DisableInSafeZoneFireCross`（oracle `GameSvrConf.cs:1764` 缺省 `false`；
+    /// **现网 `Server.conf:854` = 1**）——22 火墙的安全区门（`MagicManager.cs:1066`）。
+    pub disable_in_safe_zone_fire_cross: bool,
     /// `[Setup] TryDealTime`（oracle `GameSvrConf.cs:1515` 缺省 `3000`）——
     /// `CM_DEALTRY` 的「稍后再试」时间门（`PlayObject.Operate.cs:922`）。
     pub try_deal_time: i32,
@@ -281,6 +284,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut red_msg_b_color: Option<u8> = None;
     let mut green_msg_f_color: Option<u8> = None;
     let mut green_msg_b_color: Option<u8> = None;
+    let mut disable_in_safe_zone_fire_cross: Option<bool> = None;
     let mut try_deal_time: Option<i32> = None;
     let mut deal_ok_time: Option<i32> = None;
     let mut can_not_get_back_deal: Option<bool> = None;
@@ -438,6 +442,12 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                         v.parse()
                             .with_context(|| format!("GreenMsgBColor 不是合法字节：{v:?}"))?,
                     );
+                }
+                // 22 火墙安全区门（`GameSvrConf.cs:1764` 的 `ReadWriteBool`，源码缺省 false）。
+                // `ReadBool` 口径（`ConfigFile.cs:188-203`）：大写后仅 `是`/`YES`/`1`/`TRUE`
+                // 为真；空 ⇒ 缺省 false；其余（含 `False`/`no`/`off`/垃圾）一律 false。
+                "DISABLEINSAFEZONEFIRECROSS" => {
+                    disable_in_safe_zone_fire_cross = Some(read_bool_or_false(v));
                 }
                 // 元宝寄售 `SysMsg(..., Blue, ...)` 的颜色（`ServerConf.cs:331-332` 的 `ReadWriteByte`）。
                 "BLUEMSGFCOLOR" => {
@@ -780,6 +790,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`GameSvrConf.cs:1536-1537/1515-1518`）：`[Setup]` 里没写不算错。
         green_msg_f_color: green_msg_f_color.unwrap_or(0xDB),
         green_msg_b_color: green_msg_b_color.unwrap_or(0xFF),
+        // oracle 缺省 `false`（`GameSvrConf.cs:1764`）。
+        disable_in_safe_zone_fire_cross: disable_in_safe_zone_fire_cross.unwrap_or(false),
         // oracle 缺省值（`GameSvrConf.cs:1538-1539`）：`[Setup]` 里没写不算错。
         blue_msg_f_color: blue_msg_f_color.unwrap_or(0xFF),
         blue_msg_b_color: blue_msg_b_color.unwrap_or(0xFC),
@@ -859,6 +871,18 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         db_port,
         db_conn_string,
     })
+}
+
+/// oracle `ConfigFile.cs:188-203` 的 `ReadBool` 语义（`ServerConf.ReadWriteBool` 走这里）：
+/// 去空白并 `ToUpper` 后**仅** `是`/`YES`/`1`/`TRUE` 为真；空与其余值一律假。
+///
+/// 与 [`parse_bool`] 的区别：后者对未识别值报错（用于必须写明的键）；本函数面向
+/// oracle 的 `ReadWriteBool` 键——**未识别值不报错、静默取 false**（fail-closed）。
+fn read_bool_or_false(v: &str) -> bool {
+    matches!(
+        v.trim().to_uppercase().as_str(),
+        "是" | "YES" | "1" | "TRUE"
+    )
 }
 
 /// `ReadWriteBool` 口径（`ConfigFile.cs` 的布尔读法）：`0/1` + `true/false`（大小写不敏感），其余报错。
@@ -1282,6 +1306,55 @@ mod tests {
             "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nWorldMaps=10x0\n",
         );
         assert!(load(&p3).is_err(), "地图尺寸非正必须报错");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **P3-B5 must-fix**：`DisableInSafeZoneFireCross` 的布尔解析要按 oracle
+    /// `ConfigFile.cs:188-203` 的 `ReadBool`：大写后仅 `是`/`YES`/`1`/`TRUE` 为真；
+    /// 空 ⇒ 缺省 false；其余（含 `False`/`no`/`off`/垃圾）一律 false。
+    /// 旧实现 `!matches!(v, "0"|"false"|"FALSE"|"")` 对 `False`/`no`/`off`/垃圾 fail-open。
+    #[test]
+    fn disable_in_safe_zone_fire_cross_read_bool() {
+        for v in ["是", "YES", "yes", "1", "TRUE", "true", " 1 ", " Yes "] {
+            assert!(read_bool_or_false(v), "{v:?} ⇒ oracle ReadBool 为真");
+        }
+        for v in [
+            "False", "false", "FALSE", "no", "NO", "off", "OFF", "垃圾", "0", "", "  ",
+        ] {
+            assert!(
+                !read_bool_or_false(v),
+                "{v:?} ⇒ oracle ReadBool 为假（fail-closed）"
+            );
+        }
+        // 键缺失 ⇒ 缺省 false；键存在且为 `False` 也必须是 false（不看缺省口径）。
+        let dir = std::env::temp_dir().join(format!("gs-bool-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nIDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        let p_missing = write(&dir, base);
+        assert!(
+            !load(&p_missing).unwrap().disable_in_safe_zone_fire_cross,
+            "缺键 ⇒ oracle 缺省 false"
+        );
+        for (v, want) in [
+            ("1", true),
+            ("是", true),
+            ("YES", true),
+            ("TRUE", true),
+            ("False", false),
+            ("no", false),
+            ("off", false),
+            ("垃圾", false),
+            ("", false),
+        ] {
+            let p = write(
+                &dir,
+                &format!("{base}[Setup]\nDisableInSafeZoneFireCross={v}\n"),
+            );
+            assert_eq!(
+                load(&p).unwrap().disable_in_safe_zone_fire_cross,
+                want,
+                "DisableInSafeZoneFireCross={v:?}"
+            );
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 }

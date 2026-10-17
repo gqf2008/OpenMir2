@@ -168,6 +168,45 @@ pub fn single_hit_power_sc(
     )
 }
 
+/// **P3-B5**：10 的 `undeadAttack=true` 复合放大（`BaseObject.cs:908-911`）：
+/// `magPwr = HUtil32.Round(magPwr * 1.5)`。
+///
+/// **不是「只打不死」**：oracle 在 `MagPassThroughMagic` 内对**每个骰门通过的命中**无条件调用，
+/// 且 `magPwr` 是同一个局部变量 ⇒ **逐击复合**（第一击 ×1.5，第二击在放大值上再 ×1.5）。
+#[must_use]
+pub fn scale_undead_attack(power: i32) -> i32 {
+    hutil::round(f64::from(power) * 1.5)
+}
+
+/// **P3-B5**：36 `SKILL_UENHANCER` 的两抽（`MagicManager.cs:623-624`）。
+///
+/// ```text
+/// nPower = (ushort)(Level + 1 + Random(Level));          // Level == 0 也推进一次 Random(0)
+/// nTime  = GetAttackPower(GetPower13(userMagic, 60) + Lo(SC)*10, Δ(SC)+1);
+/// ```
+/// ⇒ 取数次序固定：`R(Level)` → `GetPower13`（其内 1 抽 `R(0)`）→ `GetAttackPower`
+/// （玩家 `Luck <= 0` 时 `R(range+1)` + `R(10)`）。
+#[must_use]
+pub fn power_uenhancer(
+    rng: &mut impl RandomSource,
+    magic: &MagicInfo,
+    level: u8,
+    sc: i32,
+    atk: AttackPowerMode,
+) -> (i32, i32) {
+    // `:623` `(ushort)(Level + 1 + M2Share.RandomNumber.Random(Level))`；`Random(0)` 仍推进。
+    let n_power = i32::from(level) + 1 + rng.random_below(i32::from(level));
+    // `:624` `GetPower13(userMagic, 60) + Lo(SC)*10` → `GetAttackPower(..., ΔSC+1)`。
+    let base = get_power13(rng, magic, level, 60) + i32::from(lo_byte(sc)) * 10;
+    let n_time = atk_power(
+        rng,
+        base,
+        i32::from(hi_byte(sc)) - i32::from(lo_byte(sc)) + 1,
+        atk,
+    );
+    (n_power, n_time)
+}
+
 /// `MagicManager.MagHbFireBall`（`MagicManager.cs:1020-1064`）的推挤两抽（魔号 44）。
 ///
 /// oracle 顺序（**在威力之后**）：
@@ -435,6 +474,34 @@ pub fn poison_point(level: u8, n_power: i32, amy_ounsul_point: i32) -> i32 {
 ///
 /// **source-cited**（常量，未单独成方法）。
 pub const LA_UNDEAD: u8 = 1;
+
+/// **P3-B5**：22/36 的配置项（`GameSvrConf.cs:1764` 的 `DisableInSafeZoneFireCross` +
+/// `SysMsg` 的颜色对；部署值取自 `Server.conf`，本仓由宿主灌入）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct B5Config {
+    /// `[Setup] DisableInSafeZoneFireCross`（源码缺省 `false`；**现网 `Server.conf:854` = 1**）。
+    pub disable_in_safe_zone_fire_cross: bool,
+    /// `[Setup] RedMsgFColor` / `RedMsgBColor`（22 安全区提示，`MsgColor.Red` + `MsgType.Notice`）。
+    pub red_msg_f_color: u8,
+    pub red_msg_b_color: u8,
+    /// `[Setup] GreenMsgFColor` / `GreenMsgBColor`（36 的 `AttPowerUp` 提示，`MsgColor.Green`）。
+    pub green_msg_f_color: u8,
+    pub green_msg_b_color: u8,
+}
+
+impl Default for B5Config {
+    fn default() -> Self {
+        // 源码缺省 `DisableInSafeZoneFireCross=false`（`GameSvrConf.cs:1764`）、颜色缺省
+        // `0xFF/0x38/0xDB/0xFF`（`GameSvrConf.cs:1536-1540`）。
+        Self {
+            disable_in_safe_zone_fire_cross: false,
+            red_msg_f_color: 0xFF,
+            red_msg_b_color: 0x38,
+            green_msg_f_color: 0xDB,
+            green_msg_b_color: 0xFF,
+        }
+    }
+}
 
 /// `MagicManager.MagTurnUndead`（`src/M2Server/Magic/MagicManager.cs:827-856`）的完整口径。
 ///

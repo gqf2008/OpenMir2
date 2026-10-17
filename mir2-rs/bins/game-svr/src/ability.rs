@@ -572,6 +572,60 @@ pub fn recalc_abilitys_with_prior(
     RecalcOutput { wabil, sub, add }
 }
 
+/// **P3-B5**：`RecalcAbilitys()` 尾部的 `ExtraAbil` 应用（`PlayObject.cs:2815-2846`）。
+///
+/// 只对 `ExtraAbil[i] > 0` 的槽生效：
+/// - `EABIL_DCUP(0)/MCUP(1)/SCUP(2)` ⇒ `MakeWord(Lo, (ushort)(Hi + extra))`
+///   （`HUtil32.MakeWord(ushort,ushort)` ⇒ 高字节 **mod 256 截断**，不是饱和）；
+/// - `EABIL_HITSPEEDUP(3)` ⇒ `HitSpeed`（本函数只回 `WAbil`；调用方无该字段，登记）；
+/// - `EABIL_HPUP(4)/MPUP(5)` ⇒ `MaxHP/MaxMP` 的 `ushort` 回绕加；
+/// - `EABIL_PWRRATE(6)` ⇒ DC/MC/SC 的逐字节 `(byte * rate) / 100`。
+///
+/// **位置语义**：oracle 在 `RecalcAbilitys()` 的尾部、`Race == Play` 的附加段之前；
+/// 本仓的单一实现 [`recalc_abilitys_with_prior`] 不持有 `ExtraAbil`（它在 `PlayObject` 上），
+/// 由宿主在调用后立即应用（`recalc_session_ability`）。
+pub fn apply_extra_abil(wabil: &mut Ability, extra: &[u16; 7]) {
+    if extra[0] > 0 {
+        wabil.dc = make_word_u16(
+            u16::from(lo_byte(wabil.dc)),
+            u16::from(hi_byte(wabil.dc)).wrapping_add(extra[0]),
+        );
+    }
+    if extra[1] > 0 {
+        wabil.mc = make_word_u16(
+            u16::from(lo_byte(wabil.mc)),
+            u16::from(hi_byte(wabil.mc)).wrapping_add(extra[1]),
+        );
+    }
+    if extra[2] > 0 {
+        wabil.sc = make_word_u16(
+            u16::from(lo_byte(wabil.sc)),
+            u16::from(hi_byte(wabil.sc)).wrapping_add(extra[2]),
+        );
+    }
+    if extra[4] > 0 {
+        wabil.max_hp = wabil.max_hp.wrapping_add(extra[4]);
+    }
+    if extra[5] > 0 {
+        wabil.max_mp = wabil.max_mp.wrapping_add(extra[5]);
+    }
+    if extra[6] > 0 {
+        let r = extra[6];
+        wabil.dc = make_word_u16(
+            (u16::from(lo_byte(wabil.dc)) * r) / 100,
+            (u16::from(hi_byte(wabil.dc)) * r) / 100,
+        );
+        wabil.mc = make_word_u16(
+            (u16::from(lo_byte(wabil.mc)) * r) / 100,
+            (u16::from(hi_byte(wabil.mc)) * r) / 100,
+        );
+        wabil.sc = make_word_u16(
+            (u16::from(lo_byte(wabil.sc)) * r) / 100,
+            (u16::from(hi_byte(wabil.sc)) * r) / 100,
+        );
+    }
+}
+
 /// 尾部合成的 word 相加（byte 重载：两侧都夹 255）。
 const fn word_add(a: u16, b: u16) -> u16 {
     let low = clamp_u8((lo_byte(a) as u16) + (lo_byte(b) as u16));

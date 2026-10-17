@@ -64,9 +64,9 @@ pub use combat::{
     attack, attack_dir, attack_dir_grouped, attack_success_weapon_damage, attack_with,
     attack_with_grouped, get_attack_power_hit, is_attack_target, is_attack_target_base,
     is_attack_target_player, is_attack_target_player_grouped, is_proper_target,
-    is_proper_target_grouped, is_protect_target, recalc_hit_speed, win_exp, AttackHitState,
-    AttackOutcome, AttackPowerMode, CombatConfig, HitSpeedInput, HitSpeedOutcome,
-    ACTOR_RACE_ANIMAL, ACTOR_RACE_NPC, ACTOR_RACE_PEACE_NPC, ATTACK_MODE_HAM_ALL,
+    is_proper_target_grouped, is_proper_target_grouped_direct, is_protect_target, recalc_hit_speed,
+    win_exp, AttackHitState, AttackOutcome, AttackPowerMode, CombatConfig, HitSpeedInput,
+    HitSpeedOutcome, ACTOR_RACE_ANIMAL, ACTOR_RACE_NPC, ACTOR_RACE_PEACE_NPC, ATTACK_MODE_HAM_ALL,
     ATTACK_MODE_HAM_DEAR, ATTACK_MODE_HAM_GROUP, ATTACK_MODE_HAM_GUILD, ATTACK_MODE_HAM_MASTER,
     ATTACK_MODE_HAM_PEACE, ATTACK_MODE_HAM_PKATTACK,
 };
@@ -118,6 +118,7 @@ pub use slave::{
     PLAYER_VIEW_RANGE, SKILL_46, SKILL_ANGEL, SKILL_SINSU, SKILL_SKELLETON, SKILL_TAMMING,
 };
 pub use world::{
-    Command, EntitySnapshot, FloorItemView, SpaceMoveCastOutcome, TickRecord, World,
-    TICK_INTERVAL_MS,
+    Command, EntitySnapshot, ExtraAbilEventKind, ExtraAbilExpiry, FireBurnEvent, FireWallOutcome,
+    FloorItemView, PassThroughHit, PassThroughOutcome, SpaceMoveCastOutcome, TickRecord,
+    UEnhancerOutcome, World, TICK_INTERVAL_MS,
 };

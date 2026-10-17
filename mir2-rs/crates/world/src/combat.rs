@@ -718,6 +718,32 @@ pub fn is_proper_target_grouped(
     is_attack_target_base(attacker, target)
 }
 
+/// **P3-B5**：oracle `PlayObject.IsProperTarget`（`PlayObject.cs:1924-1965`）**不读 `Invisible`**
+/// ——[`is_proper_target_grouped`] 顶部折入的 `target.invisible` 是既有攻击调用点（`_Attack` 的
+/// `SearchTarget` 下游）的口径，不是本函数。
+///
+/// 9/10 的 `MagPassThroughMagic` 逐格对象（`GetMovingObject(...,true)` 已过滤 Ghost/Death）与
+/// 22 的事件格对象（`GetBaseObjects(...,true)` 已过滤 Death）都走本函数。
+/// **登记 T-B5-1**：与折入版的唯一差异就是「隐身目标是否可被范围魔法命中」；oracle 可命中。
+#[must_use]
+pub fn is_proper_target_grouped_direct(
+    attacker: &Entity,
+    target: &Entity,
+    attacker_group_members: &[i32],
+) -> bool {
+    if attacker.id == target.id {
+        return false;
+    }
+    // **不折入 `death/ghost/invisible`**：oracle `PlayObject.IsProperTarget`（`PlayObject.cs:1924`）
+    // 只做 `ActorId` 相等门 + `IsAttackTarget`/`IsProtectTarget`；Death/Ghost 由枚举面
+    // （`GetMovingObject(...,true)` 的 `!Ghost && !Death`、`GetBaseObjects(...,true)` 的 `!Death`）负责。
+    // 折进来会让「枚举面漏掉 Death 过滤」的改坏不可见（B5-9-2 牙）。
+    if attacker.race == ACTOR_RACE_PLAY {
+        return is_proper_target_play_grouped(attacker, target, attacker_group_members);
+    }
+    is_attack_target_base(attacker, target)
+}
+
 /// 兼容别名：`crates/world` 旧调用点与既有用例用的名字（现与 [`is_proper_target`] 同义）。
 pub fn is_attack_target(attacker: &Entity, target: &Entity) -> bool {
     is_proper_target(attacker, target)

@@ -105,6 +105,10 @@ pub const RM_DELAYMAGIC: u16 = 8021;
 /// 目标自有延时消息：`BaseObject.Base.cs:740-759`。载荷
 /// `wParam = PoisonState, nParam1 = nTime, nParam2 = caster.ActorId, nParam3 = nPoint`。
 pub const RM_POISON: u16 = 8037;
+/// **P3-B5** `Messages.RM_MAGSTRUCK`（`crates/protocol/src/messages.rs`；8044，`(byte)8044 = 108`）。
+/// 9/10 穿透命中：`SendStruckDelayMsg(caster.ActorId, RM_MAGSTRUCK, 0, magPwr, 0, 0, "", 600)`
+/// （`BaseObject.cs:912`、`BaseObject.Message.cs:234-252`）。
+pub const RM_MAGSTRUCK: u16 = 8044;
 
 pub const RM_MASTERDIEMUTINY: u16 = 60003;
 /// `Messages.RM_MASTERDIEGHOST`（`Messages.cs:840`）：主人幽灵 1s 后自投递（→ `ProcessSlaveGhost`）。
@@ -997,6 +1001,10 @@ pub struct SelfDelayMsg {
     /// `SendMessage.Msg`（`BaseObject.Message.cs:188-206` 的 `string strMsg`）。
     /// B4 的 `RM_POISON`/`RM_DELAYMAGIC` 都传 `""`；保留字段以与 oracle 结构同形（合同 §2.6）。
     pub msg: String,
+    /// `SendMessage.ActorId`（`BaseObject.Message.cs:234-252` 的显式 actorId 重载）：
+    /// `RM_MAGSTRUCK` 用它传**施法者** id（投递段 `SendRefMsg(RM_STRUCK_MAG, …, ActorId)` 的 `ActorId`）。
+    /// 其余自投递恒 0。**P3-B5 新增**。
+    pub actor_ref: i32,
     /// 到点时刻（sim 毫秒）。
     pub deliver_at_ms: i64,
 }
@@ -1163,6 +1171,35 @@ impl World {
             n_param2,
             n_param3,
             msg: String::new(),
+            actor_ref: 0,
+            deliver_at_ms,
+        });
+    }
+
+    /// **P3-B5**：`BaseObject.SendStruckDelayMsg` 的显式 actorId 重载
+    /// （`BaseObject.Message.cs:234-252`）——入**被击中者自己**的队列，`DeliveryTime = now+600`、
+    /// 优先级 `Lowest`，`Ghost` 门在被击中者上。9/10 的穿透命中用它。
+    pub fn send_struck_delay_msg(
+        &mut self,
+        target_id: i32,
+        caster_id: i32,
+        power: i32,
+        delay_ms: i64,
+    ) {
+        let ghost = self.entities.get(target_id).is_some_and(|e| e.ghost);
+        if ghost || self.entities.get(target_id).is_none() {
+            return;
+        }
+        let deliver_at_ms = self.clock_ms + delay_ms;
+        self.self_delay_msgs.push(SelfDelayMsg {
+            actor_id: target_id,
+            ident: RM_MAGSTRUCK,
+            w_param: 0,
+            n_param1: power,
+            n_param2: 0,
+            n_param3: 0,
+            msg: String::new(),
+            actor_ref: caster_id,
             deliver_at_ms,
         });
     }
@@ -1228,6 +1265,7 @@ impl World {
             n_param2,
             n_param3,
             msg: String::new(),
+            actor_ref: 0,
             deliver_at_ms: self.clock_ms,
         });
     }
@@ -1378,6 +1416,23 @@ impl World {
                         ..SelfDelayOutcome::default()
                     });
                 }
+                // **P3-B5**：`RM_MAGSTRUCK` 到点 ⇒ 进入本对象的 `RM_MAGSTRUCK` 处理器
+                // （`BaseObject.Base.cs:618-686`）。本层只负责「入队 → 到点」；处理器主体
+                // （`R(1000)` + MSD + `StruckDamage`）由宿主随后调 `World::deliver_mag_struck`。
+                RM_MAGSTRUCK => {
+                    self.pending_mag_struck
+                        .push(crate::world::PendingMagStruck {
+                            target_id: msg.actor_id,
+                            caster_id: msg.actor_ref,
+                            power: msg.n_param1,
+                            mine: false,
+                        });
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        ..SelfDelayOutcome::default()
+                    });
+                }
                 // 本层只承载这些自投递（登记：其他 `RM_*` 自投递未建模）。
                 _ => {}
             }
@@ -1437,6 +1492,7 @@ impl World {
                         target_id,
                         caster_id: msg.actor_id,
                         power,
+                        mine: false,
                     });
                 out.struck = true;
             }
@@ -2700,6 +2756,7 @@ mod tests {
             n_param2: 0,
             n_param3: 0,
             msg: String::new(),
+            actor_ref: 0,
             deliver_at_ms: w.clock_ms,
         });
         let r = w.tick();

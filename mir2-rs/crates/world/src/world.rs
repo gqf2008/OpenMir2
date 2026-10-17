@@ -146,6 +146,8 @@ pub struct TickRecord {
     /// 帧面（`RefNameColor` ⇒ `RM_CHANGENAMECOLOR` / `RefShowName` ⇒ `RM_USERNAME`）不在
     /// `crates/world` 层（见 `crate::slave` 模块头），宿主据本记录出帧或登记 `not_verified`。
     pub slave_self_deliveries: Vec<crate::slave::SelfDelayOutcome>,
+    /// **P3-B5**：本 tick 的 `ExtraAbil` 过期/到期前 10s 事件（`PlayObject.Message.cs:163-227`）。
+    pub extra_abil_expiries: Vec<ExtraAbilExpiry>,
     /// **出站接线片 W2**：本 tick 的 `RM_PUSH` 族（`SM_BACKSTEP(9)`）——`CharPushed` 每推进一格一条，保序。
     pub pushes: Vec<crate::action::PushEvent>,
     /// **出站接线片 W2**：本 tick 的 `RM_RUSH`/`RM_RUSHKUNG` 族（`SM_RUSH(6)`/`SM_RUSHKUNG(7)`）——
@@ -233,6 +235,12 @@ pub struct PendingMagStruck {
     pub caster_id: i32,
     /// `RM_MAGSTRUCK.nParam1` = 施法者算出的 `nPower`（24 的非不死目标已 `/10`）。
     pub power: i32,
+    /// **P3-B5**：`true` = `RM_MAGSTRUCK_MINE`（22 火墙事件），`false` = `RM_MAGSTRUCK`
+    /// （9/10 穿透延迟帧 / 11/45 / B4 延迟魔法）。
+    ///
+    /// 两者共用处理器（`BaseObject.Base.cs:618-686`），唯一差别 = `Random(1000)` 只对
+    /// `RM_MAGSTRUCK` 生效（`:620` 的 `wIdent == RM_MAGSTRUCK` 门）。
+    pub mine: bool,
 }
 
 /// **P3-B2**：一条 `RM_MAGSTRUCK` 交付段处理后的观察值（`BaseObject.Base.cs:618-686`）。
@@ -419,6 +427,101 @@ pub struct UnamyounsulOutcome {
     pub bo_train: bool,
 }
 
+/// **P3-B5**：一次穿透命中（`MagPassThroughMagic`，`BaseObject.cs:896-931`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PassThroughHit {
+    pub target_id: i32,
+    /// 本次命中投递的 `magPwr`（10 的 `undeadAttack` 会**逐击复合** ×1.5）。
+    pub power: i32,
+}
+
+/// **P3-B5**：9/10 穿透效果体结果（`MagicManager.cs:265-288`）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PassThroughOutcome {
+    /// `MagPassThroughMagic(...) > 0`（`boTrain`）。
+    pub bo_train: bool,
+    /// 命中序（延迟帧的入队序；每项进被击中者自己的队列）。
+    pub hits: Vec<PassThroughHit>,
+    /// `nTargetX/nTargetY` 的终点（步长 5 = 9 / 8 = 10；共享尾 638 用它）。
+    pub end_x: i32,
+    pub end_y: i32,
+}
+
+/// **P3-B5**：22 火墙效果体结果（`MagicManager.cs:412-417` + `:1064-1098`）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FireWallOutcome {
+    /// `MagMakeFireCross(...)` 的返回值（安全区门失败 ⇒ false ⇒ 无训练抽）。
+    pub bo_train: bool,
+    /// 安全区门失败（`DisableInSafeZoneFireCross && InSafeZone`）——调用方据此发 `SM_SYSMESSAGE(100)`。
+    pub safe_zone_blocked: bool,
+}
+
+/// **P3-B5**：36 无极真气效果体结果（`MagicManager.cs:610-630`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UEnhancerOutcome {
+    /// `IsProperFriend(target)` 门（false ⇒ 零抽、`boSpellFail` 保持 true ⇒ 恰一条 639）。
+    pub allowed: bool,
+    /// `:612-617` 归一后的目标（`targetObject == null ⇒ this`）。
+    pub target: i32,
+    /// `(ushort)(Level + 1 + Random(Level))`。
+    pub n_power: u16,
+    /// `GetAttackPower(GetPower13(60) + Lo(SC)*10, ΔSC+1)`。
+    pub n_time: i32,
+    /// `(IPlayerActor)targetObject` 的防御臂（当前玩家入口不可达）：oracle 抛
+    /// `InvalidCastException` 被 `PlayObject.Base.cs:1525-1529` 吞掉 ⇒ 639、无尾；
+    /// **但 `UseAmulet` 已消耗、抽数已发生**。
+    pub invalid_cast: bool,
+}
+
+/// **P3-B5**：`ExtraAbil[i]` 过期的观察值（`PlayObject.Message.cs:163-227`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExtraAbilEventKind {
+    /// `now > ExtraAbilTimes[i]` ⇒ 清零 + `SysMsg("…恢复正常。")` + 循环后 `HealthSpellChanged()`。
+    Restored(u8),
+    /// `ExtraAbilFlag[i] == 0 && now > ExtraAbilTimes[i] - 10000` ⇒ 置 1 + `SysMsg("…10秒后恢复正常。")`。
+    TenSecondsBefore(u8),
+}
+
+/// **P3-B5**：一个 actor 一批过期检查的结果。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExtraAbilExpiry {
+    pub actor_id: i32,
+    pub events: Vec<ExtraAbilEventKind>,
+    /// 任一槽过期 ⇒ `boNeedRecalc` ⇒ 只 `HealthSpellChanged()`（**不 recalc、不发 52**）。
+    pub health_changed: bool,
+}
+
+/// **P3-B5**：一格火墙事件（`MapEvent` + `FireBurnEvent` 的最小字段集）。
+///
+/// **BUG-REPLICA 1**：`MapEvent.Id` 恒 0（赋值行被注释）⇒ `CellObjectMgr.TryAdd(0, …)`
+/// 第一条胜；`Envir.GetEvent` 返回管理器里的第一条，不是当前格对象。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FireBurnEvent {
+    /// `OwnBaseObject`（施法者）；`Ghost || Death` 后置 `None`（oracle `MapEvent.Run` 尾）。
+    pub owner_id: Option<i32>,
+    /// `MapEvent.Envirnoment` 的图下标（`AddMapEvent` 落在施法者当前图）。
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+    /// `EventType`：`Grobal2.ET_FIRE = 1`。
+    pub event_type: i32,
+    pub damage: i32,
+    pub open_start_ms: i64,
+    pub continue_ms: i32,
+    pub run_start_ms: i64,
+    pub run_tick_ms: i64,
+    /// `FireBurnEvent.FireRunTick`（初值 0 ⇒ uptime > 3000ms 时第一次 Run 就造成伤害）。
+    pub fire_run_tick_ms: i64,
+    pub closed: bool,
+    pub visible: bool,
+    pub active: bool,
+    /// **P3-B5（must_fix）**：该事件是否成功进入格子的 `CellObjectMgr`（`CellType::Event` 格对象
+    /// 从 `map.add_event_cell` 返回 true）。oracle 里只有**第一条**注册成功的事件能被
+    /// `GetEvent` 取到；越界/不可走格子的事件只进全局表（BUG-REPLICA 3）⇒ 不能作为
+    /// `event_at` 的返回值。字段名对应合同 §2.8 的 `first_registered_event`。
+    pub registered: bool,
+}
+
 pub struct World {
     /// 地图表（下标 = `map_id`）；`World::new` 建一张 0 号图。
     pub maps: Vec<MapGrid>,
@@ -513,6 +616,9 @@ pub struct World {
     /// `hit_mabe_time_rate=20`/`amy_ounsul_point=10`）；宿主 `bins/game-svr` 用
     /// [`World::set_b4_config`] 从 `Server.conf` 的 `[Setup]` 灌入。
     pub b4_cfg: crate::magic_effect::MabMabeConfig,
+    /// **P3-B5**：22/36 的配置项（`DisableInSafeZoneFireCross` + 两对 `SysMsg` 颜色）。
+    /// 宿主 `bins/game-svr` 用 [`World::set_b5_config`] 从 `Server.conf` 灌入。
+    pub b5_cfg: crate::magic_effect::B5Config,
     /// `SystemShare.Config.HealthFillTime` / `SpellFillTime`（`GameSvrConf.cs:1323-1324` 缺省
     /// `300` / `800`；`ServerConf.cs:152-153` 可覆盖）。
     ///
@@ -547,6 +653,17 @@ pub struct World {
     /// 由效果体（23/24/33/47）入队，宿主调 `World::deliver_mag_struck` 逐目标处理
     /// （`R(1000)` → `MSD` → `nDamage>0` 链）。队列为空时零行为变化。
     pub pending_mag_struck: Vec<PendingMagStruck>,
+    /// **P3-B5**：`SystemShare.EventMgr.Events` 的火墙事件表（插入序 = `EventMgr.AddEvent` 序）。
+    ///
+    /// `EventProcessor.ExecuteInternal`（`:31-48`）逆插入序遍历、每事件 `RunTick=500ms` 门；
+    /// `Closed` 的事件留在表里但不再 `Run`（oracle 移到 `ClosedEvents`，语义等价）。
+    /// 缺省空表 ⇒ 既有 golden 逐字节不变。
+    pub fire_burn_events: Vec<FireBurnEvent>,
+    /// **P3-B5**：`CellObjectMgr` 里是否已有 `CellObjId = 0` 的事件（`TryAdd` 第一条胜）。
+    ///
+    /// `Envir.GetEvent(x,y)` 的判据 = 「该格有 `CellType::Event` 对象」**且**本标记为真
+    /// （`:1344-1360` 先找格对象，再 `CellObjectMgr.Get<MapEvent>(0)`）。
+    pub event_registered: bool,
     /// 自身延时消息队列（oracle `BaseObject.MsgQueue` 的延时子集，**插入序**）。
     ///
     /// oracle 的完整 `MsgQueue` 是「优先级 + 插入序」的优先队列（`SendSelfDelayMsg` 一律
@@ -653,6 +770,7 @@ impl World {
             combat_config: CombatConfig::default(),
             party_cfg: crate::party::PartyConfig::default(),
             b4_cfg: crate::magic_effect::MabMabeConfig::default(),
+            b5_cfg: crate::magic_effect::B5Config::default(),
             health_fill_time: 300,
             spell_fill_time: 800,
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
@@ -660,6 +778,8 @@ impl World {
             spirit_mutiny_tick: 0,
             slave_self_delay_enabled: false,
             pending_mag_struck: Vec::new(),
+            fire_burn_events: Vec::new(),
+            event_registered: false,
             self_delay_msgs: Vec::new(),
             pet_slave_cfg: mir2_data::pet_slave::PetSlaveConfig::default(),
             pending: VecDeque::new(),
@@ -908,6 +1028,11 @@ impl World {
     }
 
     /// **P3-B4**：灌入 `MabMabe`/施毒术配置（`Server.conf` 的 `[Setup]`）。
+    /// **P3-B5**：灌入 22/36 的配置项（缺省 = oracle 源码缺省；宿主从 `Server.conf` 覆盖）。
+    pub fn set_b5_config(&mut self, cfg: crate::magic_effect::B5Config) {
+        self.b5_cfg = cfg;
+    }
+
     pub fn set_b4_config(&mut self, cfg: crate::magic_effect::MabMabeConfig) {
         self.b4_cfg = cfg;
     }
@@ -1894,6 +2019,7 @@ impl World {
                 target_id: tid,
                 caster_id,
                 power,
+                mine: false,
             });
         }
         // `SetTargetCreat` 逐目标覆盖；末值 = 最后一个 proper target（oracle 同）。
@@ -1956,6 +2082,7 @@ impl World {
                 target_id: tid,
                 caster_id,
                 power: power_point,
+                mine: false,
             });
         }
         out
@@ -1986,8 +2113,9 @@ impl World {
                 continue;
             };
             let is_monster = t.race >= crate::entity::ACTOR_RACE_ANIMAL;
-            // `:620-623` —— 只对怪物条件取 `Random(1000)`（与伤害无关）。
-            if is_monster && t.level < 50 {
+            // `:620-623` —— 只对怪物的 `RM_MAGSTRUCK`（**不是** `RM_MAGSTRUCK_MINE`）取
+            // `Random(1000)`（与伤害无关）；`!RushMode` 是 P3-B5 补上的第三道门。
+            if !msg.mine && is_monster && !t.rush_mode && t.level < 50 {
                 let draw = crate::magic_effect::mag_struck_walk_draw(&mut self.rng);
                 t.ai.walk_tick += 800 + i64::from(draw);
             }
@@ -2516,6 +2644,7 @@ impl World {
                 out.bo_train = true;
             }
         }
+
         out
     }
     #[allow(clippy::too_many_arguments)]
@@ -2536,6 +2665,441 @@ impl World {
             .map_or(AttackPowerMode::Base, AttackPowerMode::for_attacker);
         let n_power = crate::magic::power_defence_area(&mut self.rng, magic, level, sc, atk);
         self.mag_make_defence_area(caster_id, n_target_x, n_target_y, 3, n_power, bt_state)
+    }
+
+    // ======================================================================================
+    // **P3-B5**（魔号 9 / 10 / 22 / 36）
+    // ======================================================================================
+
+    /// `Envirnoment.GetMovingObject(nX, nY, boFlag)`（`Envirnoment.cs:1203-1240`）逐行移植。
+    ///
+    /// 按格子 `ObjList` 的**插入序**找第一个 `CellObjId > 0 && ActorObject`、实体存在、
+    /// `!Ghost`、且（`boFlag=true` 时）`!Death` 的对象。**不得**用实体表/`HashMap` 序。
+    #[must_use]
+    pub fn moving_object_at(
+        &self,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        exclude_dead: bool,
+    ) -> Option<i32> {
+        let map = self.maps.get(map_id)?;
+        let (cell, success) = map.get_cell_info(x, y);
+        if !success || !cell.is_available() {
+            return None;
+        }
+        for o in &cell.obj_list {
+            if o.cell_obj_id > 0 && o.actor_object {
+                if let Some(e) = self.entities.get(o.cell_obj_id) {
+                    if !e.ghost && (!exclude_dead || !e.death) {
+                        return Some(o.cell_obj_id);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// `Envirnoment.GetBaseObjects(nX, nY, boFlag=true, ref list)`（`Envirnoment.cs:1311-1342`）。
+    ///
+    /// `boFlag=true` 时判据按 C# 的 `(!Ghost && !boFlag) || !Death` 化简为 **`!Death`**
+    /// （存活但 `Ghost` 的对象仍会被收集——oracle 的运算符优先级怪行为，照搬）。
+    fn base_objects_at(&self, map_id: usize, x: i32, y: i32) -> Vec<i32> {
+        let Some(map) = self.maps.get(map_id) else {
+            return Vec::new();
+        };
+        let (cell, success) = map.get_cell_info(x, y);
+        if !success || !cell.is_available() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for o in &cell.obj_list {
+            if o.cell_obj_id > 0 && o.actor_object {
+                if let Some(e) = self.entities.get(o.cell_obj_id) {
+                    if !e.death {
+                        out.push(o.cell_obj_id);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// `Envirnoment.GetEvent(nX, nY)`（`:1344-1360`）的格子 + 管理器双层门。
+    ///
+    /// **BUG-REPLICA 1**：`MapEvent.Id` 恒 0，`CellObjectMgr.Add` 是 `ConcurrentDictionary.TryAdd`
+    /// ⇒ 管理器只保留**第一条**注册成功的事件；`GetEvent` 返回它，**不是**当前格的事件对象。
+    /// 只放格对象而管理器无 id=0 时仍返回 `None`（该格会被重复新建）。
+    ///
+    /// **P3-B5（must_fix）**：返回**第一条已注册**的事件（`registered == true` 且属于本图），
+    /// 不是全局表的 `first()`——首建事件格非法（`AddMapEvent` no-op）但后续事件注册成功时，
+    /// `first()` 会错误地返回那条**未注册**的事件。`CellObjectMgr` 是 per-`Environment` 的，
+    /// 故另加 `map_id` 过滤。
+    #[must_use]
+    pub fn event_at(&self, map_id: usize, x: i32, y: i32) -> Option<&FireBurnEvent> {
+        let map = self.maps.get(map_id)?;
+        if !map.has_event_cell(x, y) {
+            return None;
+        }
+        self.fire_burn_events
+            .iter()
+            .find(|e| e.registered && e.map_id == map_id)
+    }
+
+    /// `MagMakeFireCross` 的 `new FireBurnEvent(...) + EventMgr.AddEvent(...)` 等价物。
+    ///
+    /// `pub` 供夹具按 oracle「ctor + AddMapEvent」预置事件（F22-C 的中心格占用）。
+    pub fn add_fire_burn_event(
+        &mut self,
+        owner_id: i32,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        damage: i32,
+        continue_ms: i32,
+    ) {
+        let now = self.clock_ms;
+        self.fire_burn_events.push(FireBurnEvent {
+            owner_id: Some(owner_id),
+            map_id,
+            x,
+            y,
+            event_type: 1, // `Grobal2.ET_FIRE`
+            damage,
+            open_start_ms: now,
+            continue_ms,
+            run_start_ms: now,
+            run_tick_ms: 500,
+            fire_run_tick_ms: 0,
+            closed: false,
+            visible: true,
+            active: true,
+            registered: false,
+        });
+        // **BUG-REPLICA 3**：越界/不可走的格子 `AddMapEvent` no-op，但事件仍进全局表；
+        // 只有格子真正追加成功时 `CellObjectMgr.Add(0, event)` 才执行（第一条胜）。
+        let added = self
+            .maps
+            .get_mut(map_id)
+            .is_some_and(|m| m.add_event_cell(x, y, now));
+        if added {
+            if let Some(evt) = self.fire_burn_events.last_mut() {
+                evt.registered = true;
+            }
+            self.event_registered = true;
+        }
+    }
+
+    /// **P3-B5**：9/10 穿透效果体（`MagicManager.cs:265-288` + `BaseObject.cs:896-931`）。
+    ///
+    /// 有序门与取数：
+    /// 1. `GetNextPosition(CurrX,CurrY,nextDir,1)` 失败 ⇒ **零抽**、无效果体
+    ///    （共享尾仍用点击坐标发 638）；
+    /// 2. `GetNextPosition(CurrX,CurrY,nextDir,steps)`（5 = 9 / 8 = 10）求终点；
+    /// 3. `nPower = GetAttackPower(GetPower(MPow)+Lo(MC), ΔMC+1)`（4 抽）；
+    /// 4. 逐格（≤12 次）：`GetMovingObject(sx,sy,true)` → `IsProperTarget` → `R(10) >= AntiMagic`
+    ///    →（10）`magPwr = Round(magPwr*1.5)` → `SendStruckDelayMsg(..., 600)`。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_pass_through_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        click_x: i32,
+        click_y: i32,
+        mc: i32,
+        steps: i32,
+        undead_attack: bool,
+    ) -> PassThroughOutcome {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return PassThroughOutcome {
+                end_x: click_x,
+                end_y: click_y,
+                ..PassThroughOutcome::default()
+            };
+        };
+        let map_id = caster.map_id;
+        let next_dir = crate::magic::next_direction(caster.x, caster.y, click_x, click_y);
+        // `:267` `if (Envir.GetNextPosition(CurrX, CurrY, nextDir, 1, ref n14, ref n18))`
+        let Some((mut sx, mut sy)) = self
+            .maps
+            .get(map_id)
+            .and_then(|m| m.get_next_position(caster.x, caster.y, next_dir, 1))
+        else {
+            return PassThroughOutcome {
+                end_x: click_x,
+                end_y: click_y,
+                ..PassThroughOutcome::default()
+            };
+        };
+        // `:269/:281` 终点；`GetNextPosition` 先写 `snx=sx` ⇒ 未变时 = 施法者坐标。
+        let (end_x, end_y) = self
+            .maps
+            .get(map_id)
+            .and_then(|m| m.get_next_position(caster.x, caster.y, next_dir, steps))
+            .unwrap_or((caster.x, caster.y));
+        // `:270/:282` 威力（4 抽；按施法者分派 `GetAttackPower` override）。
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let mut mag_pwr =
+            crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk);
+        let group = self.attacker_group_members(&caster);
+        let mut hits = Vec::new();
+        for _ in 0..12 {
+            if let Some(obj_id) = self.moving_object_at(map_id, sx, sy, true) {
+                let proper = self.entities.get(obj_id).is_some_and(|t| {
+                    crate::combat::is_proper_target_grouped_direct(&caster, t, &group)
+                });
+                if proper {
+                    let anti = self
+                        .entities
+                        .get(obj_id)
+                        .map_or(0, |t| i32::from(t.anti_magic));
+                    if crate::magic_effect::anti_magic_roll(&mut self.rng, anti) {
+                        if undead_attack {
+                            mag_pwr = crate::magic_effect::scale_undead_attack(mag_pwr);
+                        }
+                        self.send_struck_delay_msg(obj_id, caster_id, mag_pwr, 600);
+                        hits.push(PassThroughHit {
+                            target_id: obj_id,
+                            power: mag_pwr,
+                        });
+                    }
+                }
+            }
+            if sx == end_x && sy == end_y {
+                break;
+            }
+            let nd = crate::magic::next_direction(sx, sy, end_x, end_y);
+            let Some((nx, ny)) = self
+                .maps
+                .get(map_id)
+                .and_then(|m| m.get_next_position(sx, sy, nd, 1))
+            else {
+                break;
+            };
+            sx = nx;
+            sy = ny;
+        }
+        PassThroughOutcome {
+            bo_train: !hits.is_empty(),
+            hits,
+            end_x,
+            end_y,
+        }
+    }
+
+    /// **P3-B5**：22 火墙效果体（`MagicManager.cs:412-417` + `:1064-1098`）。
+    ///
+    /// **取数在安全区门之前**（C# 实参先求值）：`nDamage = GetAttackPower(GetPower(MPow)+Lo(MC), ΔMC+1)`
+    /// （4 抽）→ `time = GetPower(10) + (GetRPow(MC) >> 1)`（1 + 0/1 抽）。
+    /// 安全区门失败 ⇒ `SysMsg(..., Red, Notice)` + `return false`（调用方发 100），**事件零落地**。
+    /// 否则按固定顺序 上/左/中/右/下 逐格 `GetEvent == null` 才建事件；`boTrain = true`
+    /// （与是否真的新建了事件**无关**）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_fire_wall_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        click_x: i32,
+        click_y: i32,
+        mc: i32,
+        disable_in_safe_zone: bool,
+    ) -> FireWallOutcome {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return FireWallOutcome::default();
+        };
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let (damage, time) = crate::magic::power_fire_wall(&mut self.rng, magic, level, mc, atk);
+        // `:1066-1070`：`DisableInSafeZoneFireCross && InSafeZone(Envir, nX, nY)`。
+        // 夹具/生产用施法者实体的 `in_safe_zone`（= `Envir.Flag.SafeArea` 的第 1 步）。
+        if disable_in_safe_zone && caster.in_safe_zone {
+            return FireWallOutcome {
+                bo_train: false,
+                safe_zone_blocked: true,
+            };
+        }
+        let map_id = caster.map_id;
+        for (x, y) in [
+            (click_x, click_y - 1),
+            (click_x - 1, click_y),
+            (click_x, click_y),
+            (click_x + 1, click_y),
+            (click_x, click_y + 1),
+        ] {
+            if self.event_at(map_id, x, y).is_none() {
+                self.add_fire_burn_event(caster_id, map_id, x, y, damage, time * 1000);
+            }
+        }
+        FireWallOutcome {
+            bo_train: true,
+            safe_zone_blocked: false,
+        }
+    }
+
+    /// `EventProcessor.ExecuteInternal`（`EventProcessor.cs:31-48`）的单线程等价物：
+    /// 逆插入序遍历，`Active && now - RunStart > RunTick(500ms)` 才 `RunStart = now; Run()`；
+    /// `Run()` 造成的 `RM_MAGSTRUCK_MINE` 进入各目标自己的队列（`pending_mag_struck.mine=true`），
+    /// 由宿主随后 [`World::deliver_mag_struck`] 处理（MSD 照抽、**无** `R(1000)`）。
+    ///
+    /// `FireBurnEvent.Run`（`FireBurnEvent.cs:23-43`）：`now - FireRunTick > 3000` 才结算；
+    /// `MapEvent.Run` 尾：`now - OpenStartTick > ContinueTime`（严格大于）⇒ `Closed`。
+    pub fn run_map_events(&mut self) {
+        let now = self.clock_ms;
+        let len = self.fire_burn_events.len();
+        for i in (0..len).rev() {
+            let ev = &self.fire_burn_events[i];
+            if ev.closed || !ev.active || now - ev.run_start_ms <= ev.run_tick_ms {
+                continue;
+            }
+            self.fire_burn_events[i].run_start_ms = now;
+            let (map_id, x, y, damage, owner_id) = {
+                let ev = &self.fire_burn_events[i];
+                (ev.map_id, ev.x, ev.y, ev.damage, ev.owner_id)
+            };
+            if now - self.fire_burn_events[i].fire_run_tick_ms > 3000 {
+                self.fire_burn_events[i].fire_run_tick_ms = now;
+                let owner = owner_id
+                    .and_then(|id| self.entities.get(id).cloned())
+                    .filter(|e| !e.ghost && !e.death);
+                if let Some(o) = owner {
+                    let group = self.attacker_group_members(&o);
+                    for tid in self.base_objects_at(map_id, x, y) {
+                        let proper = self.entities.get(tid).is_some_and(|t| {
+                            crate::combat::is_proper_target_grouped_direct(&o, t, &group)
+                        });
+                        if proper {
+                            self.pending_mag_struck.push(PendingMagStruck {
+                                target_id: tid,
+                                caster_id: o.id,
+                                power: damage,
+                                mine: true,
+                            });
+                        }
+                    }
+                }
+            }
+            // `base.Run()` 的关闭门（严格大于）与 `OwnBaseObject` 的 Ghost/Death 归一。
+            let (open_start, continue_ms) = {
+                let ev = &self.fire_burn_events[i];
+                (ev.open_start_ms, i64::from(ev.continue_ms))
+            };
+            if now - open_start > continue_ms {
+                self.fire_burn_events[i].closed = true;
+                self.fire_burn_events[i].visible = false;
+            }
+            let still_alive = owner_id
+                .is_some_and(|id| self.entities.get(id).is_some_and(|e| !e.ghost && !e.death));
+            if !still_alive {
+                self.fire_burn_events[i].owner_id = None;
+            }
+        }
+    }
+
+    /// **P3-B5**：36 无极真气效果体（`MagicManager.cs:610-630` 的 `:612-625`）。
+    ///
+    /// 前置（`IsProperFriend` / `CheckAmulet` / `UseAmulet`）由调用方完成；本函数从
+    /// 「目标归一 + 友方门」开始，到抽数为止（`AttPowerUp` 由宿主在 recalc 后落地）。
+    ///
+    /// - `targetObject == null ⇒ this`（`target = caster_id`）；
+    /// - `IsProperFriend`：玩家施法者只放行 `Race == Play`（`PlayObject.Attack.cs:755-822`），
+    ///   非玩家目标 ⇒ false（零抽；`boSpellFail` 保持 true ⇒ 恰一条 639、无尾）；
+    /// - 抽数：`R(Level)`（`Level == 0` 也推进）→ `GP13` → `AP`；
+    /// - 防御臂：目标非玩家（当前入口不可达）⇒ `invalid_cast = true`（抽数已发生）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_uenhancer_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        sc: i32,
+    ) -> UEnhancerOutcome {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return UEnhancerOutcome::default();
+        };
+        let tid = target.unwrap_or(caster_id);
+        let Some(t) = self.entities.get(tid).cloned() else {
+            return UEnhancerOutcome {
+                target: tid,
+                ..UEnhancerOutcome::default()
+            };
+        };
+        let in_group = self.attacker_group_members(&caster).contains(&tid);
+        if !crate::combat::is_proper_friend(&caster, &t, in_group) {
+            return UEnhancerOutcome {
+                allowed: false,
+                target: tid,
+                ..UEnhancerOutcome::default()
+            };
+        }
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let (n_power, n_time) =
+            crate::magic_effect::power_uenhancer(&mut self.rng, magic, level, sc, atk);
+        UEnhancerOutcome {
+            allowed: true,
+            target: tid,
+            n_power: n_power as u16,
+            n_time,
+            // `(IPlayerActor)targetObject`：`Race != Play` 时抛 `InvalidCastException`。
+            invalid_cast: t.race != crate::entity::ACTOR_RACE_PLAY,
+        }
+    }
+
+    /// **P3-B5**：`PlayObject.AttPowerUp`（`PlayObject.cs:5323-5330`）的状态面。
+    ///
+    /// 只写 `ExtraAbil[0]/ExtraAbilTimes[0]`；`SysMsg` / `RecalcAbilitys` / `RM_ABILITY`
+    /// 由宿主完成（`RecalcAbilitys` 需要 `record.data` 与目录）。
+    pub fn att_power_up(&mut self, target_id: i32, n_power: u16, n_time: i32) {
+        let now = self.clock_ms;
+        if let Some(e) = self.entities.get_mut(target_id) {
+            e.extra_abil[0] = n_power;
+            e.extra_abil_times[0] = now + i64::from(n_time) * 1000;
+        }
+    }
+
+    /// **P3-B5**：`ExtraAbil` 过期/到期前 10s 检查（`PlayObject.Message.cs:163-227`）。
+    ///
+    /// 节拍：宿主在每个 world tick 调一次（oracle 在每个 `PlayObject.Run` 的消息泵里；
+    /// 相位差登记 T-B5-2）。**过期不 recalc、不发 52**——只 `HealthSpellChanged()`（53）。
+    #[must_use]
+    pub fn expire_extra_abil(&mut self) -> Vec<ExtraAbilExpiry> {
+        let now = self.clock_ms;
+        let mut out = Vec::new();
+        for id in self.entities.order_index() {
+            let Some(e) = self.entities.get_mut(id) else {
+                continue;
+            };
+            let mut expiry = ExtraAbilExpiry {
+                actor_id: id,
+                ..ExtraAbilExpiry::default()
+            };
+            for i in 0..7usize {
+                if e.extra_abil[i] == 0 {
+                    continue;
+                }
+                if now > e.extra_abil_times[i] {
+                    e.extra_abil[i] = 0;
+                    e.extra_abil_flag[i] = 0;
+                    expiry.health_changed = true;
+                    expiry
+                        .events
+                        .push(ExtraAbilEventKind::Restored(u8::try_from(i).unwrap_or(0)));
+                } else if e.extra_abil_flag[i] == 0 && now > e.extra_abil_times[i] - 10_000 {
+                    e.extra_abil_flag[i] = 1;
+                    expiry.events.push(ExtraAbilEventKind::TenSecondsBefore(
+                        u8::try_from(i).unwrap_or(0),
+                    ));
+                }
+            }
+            if !expiry.events.is_empty() {
+                out.push(expiry);
+            }
+        }
+        out
     }
 
     /// **魔号 8（`SKILL_FIREWIND` 抗拒火环）/ 37（`SKILL_ENERGYREPULSOR` 气功波）效果体**：
@@ -2906,6 +3470,7 @@ impl World {
             npc_removed: Vec::new(),
             party_events: Vec::new(),
             slave_self_deliveries: Vec::new(),
+            extra_abil_expiries: Vec::new(),
             pushes: Vec::new(),
             rushes: Vec::new(),
             butches: Vec::new(),
@@ -3030,6 +3595,11 @@ impl World {
         // P3-B2：`RM_MAGHEALING`（治疗）不依赖该开关；主人死族在 `deliver_self_delay_msgs`
         // 内部仍按 `slave_self_delay_enabled` 过滤（关闭时保持入队）。
         record.slave_self_deliveries = self.deliver_self_delay_msgs();
+        // **P3-B5**：`ExtraAbil` 过期检查（oracle 在 `PlayObject.Run` 的消息泵；
+        // 本骨架每 world tick 一次，相位差登记 T-B5-2）与地图事件处理器
+        // （`EventProcessor.ExecuteInternal` 的 20ms 周期 / 每事件 500ms `RunTick` 门）。
+        record.extra_abil_expiries = self.expire_extra_abil();
+        self.run_map_events();
 
         // **M3⑨-实现 3**：`BaseObject.Run` 的宝宝列表清理（`BaseObject.Base.cs:208-217`）。
         // oracle 里这跑在每个主人（玩家）自己的 `Run()` 里；本骨架玩家无 `Run` ⇒ 在死亡结算后

@@ -149,7 +149,7 @@ magic_effect	rust	crates/world/src/magic_effect\.rs:	crates/world/src/magic_effe
 # 组支）同式；Rust 只有一套（2026-10-17 起落 `magic_effect.rs` 的 `mpow`/`get_power`/
 # `get_power13`/`get_rpow`），故 4 个 Rust 站点 ↔ 8 个 C# 站点名。
 # `DoSpell` 行已由 m821fix 提供（方法级，覆盖 :623 无极真气与 :663 共享尾）。
-magic_effect	rust	crates/world/src/combat\.rs:(1383|1408)$	crates/world/src/combat.rs:1383	方案 C 搬迁（2026-10-17）：`power_uenhancer` 的 `Random(Level)`（:1383，oracle `MagicManager.cs:623`）与 `group_melee_damage` 的 `Random(SpeedPoint)`（:1408，oracle `MagicManager.cs:957`）从 `magic.rs` **等价搬入** `combat.rs`。二者都不是近战攻击路径（C# 对侧不匹配 `CSHARP_ATTACK_RE`）⇒ 精确行归 `magic_effect`，**不**加入 `RUST_ATTACK_RE`（否则 `--no-attack` 下静默消失，重现历史漂移）；行号漂移 ⇒ 本行失配 ⇒ `other` RED（漂移信号）
+magic_effect	rust	crates/world/src/combat\.rs:(1442|1467)$	crates/world/src/combat.rs:1442	方案 C 搬迁（2026-10-17）：`power_uenhancer` 的 `Random(Level)`（:1383，oracle `MagicManager.cs:623`）与 `group_melee_damage` 的 `Random(SpeedPoint)`（:1408，oracle `MagicManager.cs:957`）从 `magic.rs` **等价搬入** `combat.rs`。二者都不是近战攻击路径（C# 对侧不匹配 `CSHARP_ATTACK_RE`）⇒ 精确行归 `magic_effect`，**不**加入 `RUST_ATTACK_RE`（否则 `--no-attack` 下静默消失，重现历史漂移）；行号漂移 ⇒ 本行失配 ⇒ `other` RED（漂移信号）
 magic_effect	csharp	MagicManager\.MPow@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:104	MPow：`Random(MaxPower-Power)`（:104；单目标 DoSpell 支）
 magic_effect	csharp	MagicManager\.GetPower@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:110	GetPower：`Random(DefMaxPower-DefPower)`（:110）
 magic_effect	csharp	MagicManager\.GetPower13@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:117	GetPower13：`Random(DefMaxPower-DefPower)`（:117）
@@ -187,6 +187,6 @@ monster_ai	csharp	AnimalObject\.Struck@AnimalObject\.cs:342$	src/M2Server/Actor/
 # 不是攻击方 `_Attack` 的伤害账本 ⇒ 不进 `RUST_ATTACK_RE`/`CSHARP_ATTACK_RE`）。
 magic_effect	csharp	BaseObject\.GetMagStruckDamage@BaseObject\.Base\.cs:	src/M2Server/Actor/BaseObject.Base.cs:814	`GetMagStruckDamage` 的 MAC 骰 `Random(|Hi(MAC)-Lo(MAC)|+1)`（:814）；`baseObject != null` 才加 `AddAbil.UndeadPower`（`RM_MAGSTRUCK` 处理器传 null ⇒ 不生效）
 magic_effect	csharp	PlayObject\.StruckDamage@PlayObject\.cs:	src/M2Server/Player/PlayObject.cs:2957	玩家受击耐久 `Random(10)`（:2957）与逐格 `Random(8)`（:3000）
-magic_effect	rust	crates/world/src/combat\.rs:776$	crates/world/src/combat.rs:776	`get_mag_struck_damage` 的 `Random(|Hi-Lo|+1)`（P3-B2；精确行 = 漂移信号）
-magic_effect	rust	crates/world/src/combat\.rs:796$	crates/world/src/combat.rs:796	`struck_damage_durability` 的 `Random(10)`（P3-B2 首次触达；精确行）
-magic_effect	rust	crates/world/src/combat\.rs:804$	crates/world/src/combat.rs:804	`struck_damage_durability` 的逐格 `Random(8)`（P3-B2 首次触达；精确行）
+magic_effect	rust	crates/world/src/combat\.rs:802$	crates/world/src/combat.rs:802	`get_mag_struck_damage` 的 `Random(|Hi-Lo|+1)`（P3-B2；精确行 = 漂移信号）
+magic_effect	rust	crates/world/src/combat\.rs:822$	crates/world/src/combat.rs:822	`struck_damage_durability` 的 `Random(10)`（P3-B2 首次触达；精确行）
+magic_effect	rust	crates/world/src/combat\.rs:830$	crates/world/src/combat.rs:830	`struck_damage_durability` 的逐格 `Random(8)`（P3-B2 首次触达；精确行）

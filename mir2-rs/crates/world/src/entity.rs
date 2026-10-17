@@ -509,6 +509,19 @@ pub struct Entity {
     /// `Lo(MAC) + Random(|Hi(MAC)-Lo(MAC)|+1)`，再从 `nDamage` 里扣。
     /// 普通 `MonGen` 怪走 ctor 缺省 0（与 `anti_magic` 同口径，生成路径不调 `RecalcAbilitys`）。
     pub mac: u16,
+    /// C# `BaseObject.RushMode`——`RM_MAGSTRUCK` 的 `Random(1000)` 门
+    /// （`BaseObject.Base.cs:620`：`!RushMode` 才 `WalkTick += 800 + Random(1000)`）。
+    ///
+    /// **P3-B5 新增**（`crates/world` 接口变更，须按 §12.4 通知并行车道）：
+    /// ctor 缺省 `false`（oracle 构造缺省）；本骨架无写入点（冲锋态未建模）⇒ 生产恒 false。
+    pub rush_mode: bool,
+    /// C# `PlayObject.ExtraAbil[7]`（`PlayObject.cs:201`）——`AttPowerUp` 写槽 0
+    /// （`EABIL_DCUP`，`ActorConst.cs:26`）。**P3-B5 新增**。
+    pub extra_abil: [u16; 7],
+    /// C# `PlayObject.ExtraAbilTimes[7]`（`PlayObject.cs:202`）——到期时刻（sim 毫秒）。
+    pub extra_abil_times: [i64; 7],
+    /// C# `PlayObject.ExtraAbilFlag[7]`（`PlayObject.cs:203`）——「到期前 10s 提示已发」标记。
+    pub extra_abil_flag: [u8; 7],
     /// `Job`（0 战 / 1 法 / 2 道）
     pub job: u8,
     /// `LifeAttrib`（1 = `LA_UNDEAD` 不死系）
@@ -654,6 +667,12 @@ impl Entity {
             anti_magic: 0,
             // `BaseObject.WAbil.MAC` 构造缺省 0（`RecalcAbilitys` 才写 `Abil.MAC + AddAbil.MAC`）。
             mac: 0,
+            // `BaseObject.RushMode` 构造缺省 false（`BaseObject.cs` ctor）。
+            rush_mode: false,
+            // `PlayObject.cs:201-203`：三个 7 槽数组构造缺省全 0。
+            extra_abil: [0; 7],
+            extra_abil_times: [0; 7],
+            extra_abil_flag: [0; 7],
             job: 0,
             life_attrib: 0,
             level: 1,

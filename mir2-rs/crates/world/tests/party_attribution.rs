@@ -298,6 +298,7 @@ fn poison_delay(target: i32, caster: i32) -> SelfDelayMsg {
         n_param2: caster,
         n_param3: 1,
         msg: String::new(),
+        actor_ref: 0,
         deliver_at_ms: 0,
     }
 }
