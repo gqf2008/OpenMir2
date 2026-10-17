@@ -479,6 +479,16 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene
 > `python -I -B mir2-rs/tests/parity/m3/rng-scene/rng_trace_diff.py check <side>-rng-stream.tsv --side <csharp|rust> --seed 42`
 > （5 条 fail-closed：头 `INJECT_OK <seed>` 必须存在且 == `--seed`（与 `MIR2_RNG_SEED` 注入同源）/ seq 必须 1..N 连续无缺无重 / 列数=5 / site 非空 / 无数据行 ⇒ PREREQ）；
 > **任一侧 check 不 GREEN ⇒ 拒比**（不得调用比较器、不得输出结论行）；两侧都 GREEN 才 `-SceneGroupDiff`。
+> **必核项（2026-10-17 起，卡 `openmir2-mongen-terrain-loop-live`）：刷怪位置 + RNG 流水 —— 依赖 mapcell 装载（`2ff02ac0e`/`b192bd9f3`）。**
+> `.map` 格子属性此前未灌进 `world.maps`（每格皆 `Walk`）⇒ 刷怪的地形移位环（oracle `WorldServer.MonGen.cs:750-802`
+> 的 31 次 `CanWalk` 环）由 `bins/game-svr/src/mongen.rs` 的 `cell_walkable_ignore_actors`/`can_walk`（读
+> `get_cell_info(...).1`）驱动，门**恒假**、**环从不进入**。装载后真机可达：`Envir/MonGen.txt` **2827 条里 1072 条**
+> 声明出生格是墙格（755 LowWall / 306 HighWall / 11 越界），其中 **40 条首轮即走边界支**
+> （`Random(Width/2)`/`Random(Height/2)`）⇒ **刷怪位置与 RNG 流水都会变**。⇒ 本步对账除现有场景外，**必须**
+> 至少含一个「墙格出生点」的 MonGen 框（或冻结件逐条列出 MonGen 行并在两侧同口径），并把**两侧出生坐标**一并
+> 落账本；出生点 / RNG 若分歧，先核这一片的门（构造级已由 `bins/game-svr` 的 `mongen::tests::terrain_*`
+> 把「环被进入 / 首轮即走边界支 / 抽数逐项 == oracle 期望表」钉死；真机仍需本窗口复核）。
+
 ### W0-7 收窗（缺一不算收）
 
 1. **停栈（同 `-LogDir`）**：`start_rust_stack.ps1 -LogDir <本趟 LogDir> -Stop`；C# 侧按既有 `-Stop`。
@@ -502,3 +512,4 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene
 | GuardList | 出现帧对照 `(291,666)` | 两侧对称有卫士帧 | 单侧无 ⇒ 查接线 |
 | 探针 | 入站 `SM_STRUCK`（victim=自己） | 主动族点怪 Rust 侧应出（片88 已补主动索敌）；空转 = 缺陷 | C# 有 Rust 无 ⇒ 立卡 |
 | RNG | `-SceneGroupDiff` | 门 GREEN ＋ `VERDICT IDENTICAL` | 门 RED ⇒ 拒比（非实现差异） |
+| 刷怪地形 | 两侧出生坐标（冻结件含 ≥1 墙格出生点框）逐点一致 ＋ `cargo test -p game-svr --lib -- terrain_` 绿 | 两侧坐标一致、构造级 6 用例绿 | 分歧 ⇒ 先核 mapcell 装载（`2ff02ac0e`/`b192bd9f3`）＋ `mongen.rs:499-536` 地形环 |

@@ -997,6 +997,178 @@ mod tests {
         assert_eq!(a.random(), b.random());
     }
 
+    // ================= 地形移位环「活栈」判据（卡 `openmir2-mongen-terrain-loop-live`）=================
+    //
+    // ## 逐条对照：oracle `src/GameSrv/Word/WorldServer.MonGen.cs` ↔ `create_monster_oracle`（本文件）
+    //
+    // | oracle（行号，实读） | Rust（本文件，行号，实读） | 判定 |
+    // | --- | --- | --- |
+    // | `:751` `if (cert.AddtoMapSuccess)`——`Initialize()`（`BaseObject.Base.cs:17-21`）置真当且仅当
+    //   `Envir.CanWalk(x,y,true)` 为假；`AddToMap()`（`BaseObject.cs:1370`）⇔ `AddMapObject`
+    //   （`Envirnoment.cs:252-294`，界内且 `Valid`）与 `CanWalk(...,true)`（`Envirnoment.cs:442-451`）
+    //   同条件 ⇒ `AddtoMapSuccess == !CanWalk(x,y,true)` | `:499` `if !sink.cell_walkable_ignore_actors(map_name, cx, cy)`；
+    //   sink 侧 `cell_walkable(...,true)`（`:645-663`）= `get_cell_info(x,y).1` = 界内且 `Valid` | 同构 |
+    // | `:754` `n20 = Width < 50 ? 2 : 3` | `:500` `if width < 50 { 2 } else { 3 }` | 同构 |
+    // | `:755-763` `n24 = Height < 250 ? (Height < 30 ? 2 : 20) : 50` | `:501-509` 同式 | 同构 |
+    // | `:764` `int n1C = 0;` | `:511` `let mut attempts = 0;` | 同构 |
+    // | `:767` 环首 `if (!cert.Envir.CanWalk(x,y,false))` | `:513` `if !sink.can_walk(map_name, cx, cy)` | 同构 |
+    // | `:769-771` X 非边界 `if ((Width - n24 - 1) > x) x += n20;` | `:514-515` 同式 | 同构 |
+    // | `:775` X 边界支 `x = Random(Width / 2) + n24;`（**在环内**） | `:517` `cx = rng.random_below(width / 2) + n24;`（在环内） | 同构 |
+    // | `:776-778` Y 非边界 `if (Height - n24 - 1 > y) y += n20;` | `:518-519` 同式 | 同构 |
+    // | `:782` Y 边界支 `y = Random(Height / 2) + n24;`（**只在上一条为假时**） | `:521` 同式（同一嵌套） | 同构 |
+    // | `:788-789` 可走 ⇒ `outofrange = AddMapObject(...); break;` | `:526` `out_of_range = true; break;`（`can_walk` 真 ⇒ 界内且 `Valid` ⇒ `AddMapObject` 必真） | 同构 |
+    // | `:791-795` `n1C++; if (n1C >= 31) break;` | `:529-531` `attempts += 1; if attempts >= 31 { break; }` | 同构 |
+    // | `:797-801` 31 次仍不可走 ⇒ `if (!outofrange) return null;` | `:534-535` `if !out_of_range { return None; }` | 同构 |
+    //
+    // **差异点：无**——边界支取数式在环内、X 抽先于 Y 抽、Y 抽只在 `Height - n24 - 1 <= y` 时发生、
+    // 31 计数在移位之后。逐行同构（已含「门/环体/计数/返回」全路径）。下面的活栈用例把
+    // 「环被进入 / 首轮即走边界支 / `world.rng` 抽数逐项 == oracle 期望表」钉死。
+
+    /// **判据 15a（活栈 · 双轴边界支）**：初始格是墙（忽略占位也不可站）⇒ 进入环；**首轮** X 在边界
+    /// （`x >= Width - n24 - 1`）⇒ 抽 `Random(Width/2)`；Y 也在边界 ⇒ 再抽 `Random(Height/2)`。
+    ///
+    /// oracle 期望表（独立 Python 复刻 .NET `System.Random` legacy 减法算法算得；seed=12345，
+    /// 地图 100×100 ⇒ `n20=3`、`n24=20`；起点 (85,85) ⇒ `Width-n24-1=79 > 85` 假、`79 > 85` 假）：
+    /// 构造链 5 抽 `[100,140,2324,1533,1594]` → `Dir=RandomByte(8)=6` → `CoolEye=Random(100)=16`
+    /// → 边界支 `Random(50)=36`（X）→ `Random(50)=13`（Y）⇒ 落格 `(36+20, 13+20) = (56, 33)`。
+    #[test]
+    fn terrain_boundary_both_axes_draws_oracle_expected() {
+        let table = MonsterTable::new(vec![info("稻草人", 80, 0, None)]);
+        let mut sink = RecordingSink::with_size(100, 100);
+        sink.set_cell(85, 85, false, false); // 墙格出生点（忽略占位也不可站）
+        sink.set_cell(56, 33, true, true); // 边界支算出的落点（可站 ⇒ 环第 2 轮即登记）
+        let mut a = RandomNumber::with_seed(12345);
+        let id = create_monster_oracle(&mut a, &mut sink, &table, "0", 85, 85, 80, "稻草人");
+        assert_eq!(id, Some(100), "环进入并在第 2 轮登记成功");
+        assert_eq!(sink.spawns.len(), 1);
+        // ① 环被进入（坐标从出生点移开）；② 首轮即走边界支 ⇒ 落格 = 边界支取数式结果。
+        assert_eq!(
+            (sink.spawns[0].x, sink.spawns[0].y),
+            (56, 33),
+            "x = Random(Width/2)+n24、y = Random(Height/2)+n24"
+        );
+        // ③ world.rng 抽数逐项等于 oracle 期望表（在独立流上重放同一序列）。
+        let mut b = RandomNumber::with_seed(12345);
+        for m in [1500, 2000, 3000, 3000, 2000] {
+            let _ = b.random_below(m);
+        }
+        let _ = b.random_byte(8);
+        let _ = b.random_below(100);
+        assert_eq!(b.random_below(100 / 2), 36, "边界支 X 抽 = Random(Width/2)");
+        assert_eq!(
+            b.random_below(100 / 2),
+            13,
+            "边界支 Y 抽 = Random(Height/2)"
+        );
+        assert_eq!(a.random(), b.random(), "取数序列与 oracle 期望表逐项一致");
+    }
+
+    /// **判据 15b（活栈 · 仅 X 边界支）**：首轮 X 在边界但 Y 不在（`Height-n24-1 > y` 真）⇒
+    /// **只抽 X**（`Random(Width/2)`），Y 走 `y += n20` **不抽数**——钉死「Y 抽挂在 `:776` 的假支」。
+    ///
+    /// 期望表（seed=12345；起点 (85,10)）:构造链 5 抽 + `Dir` + `CoolEye` → `Random(50)=36` ⇒
+    /// 落格 `(36+20, 10+3) = (56, 13)`（`n20=3`、`n24=20`），**无第二抽**。
+    #[test]
+    fn terrain_boundary_x_only_draws_one() {
+        let table = MonsterTable::new(vec![info("稻草人", 80, 0, None)]);
+        let mut sink = RecordingSink::with_size(100, 100);
+        sink.set_cell(85, 10, false, false);
+        sink.set_cell(56, 13, true, true);
+        let mut a = RandomNumber::with_seed(12345);
+        let _ = create_monster_oracle(&mut a, &mut sink, &table, "0", 85, 10, 80, "稻草人");
+        assert_eq!(
+            (sink.spawns[0].x, sink.spawns[0].y),
+            (56, 13),
+            "x 抽 Random(50)、y 走 +n20（不抽数）"
+        );
+        let mut b = RandomNumber::with_seed(12345);
+        for m in [1500, 2000, 3000, 3000, 2000] {
+            let _ = b.random_below(m);
+        }
+        let _ = b.random_byte(8);
+        let _ = b.random_below(100);
+        assert_eq!(b.random_below(100 / 2), 36, "只有 X 抽");
+        assert_eq!(a.random(), b.random(), "Y 不得抽数（否则流位置差 1）");
+    }
+
+    /// **判据 15c（活栈 · 31 次计数）**：15×40 小图令 X 恒在边界（`Width-n24-1 = -6 < x`）、
+    /// Y 恒在边界（Y 重置落 [20,40) ⇒ `Height-n24-1 = 19 ≤ y` 恒假）且全格不可走 ⇒ 每轮**恰 2 抽**，
+    /// 走满 31 轮仍不可走 ⇒ `return None`，共 `31×2 = 62` 抽（钉死 `:792` 的 `>= 31`）。
+    #[test]
+    fn terrain_all_wall_runs_exactly_31_rounds_then_none() {
+        let table = MonsterTable::new(vec![info("稻草人", 80, 0, None)]);
+        let mut sink = RecordingSink::with_size(15, 40); // 全格默认不可走
+        let mut a = RandomNumber::with_seed(12345);
+        let id = create_monster_oracle(&mut a, &mut sink, &table, "0", 5, 30, 80, "稻草人");
+        assert_eq!(id, None, "31 轮仍不可走 ⇒ oracle `!outofrange ⇒ null`");
+        assert!(sink.spawns.is_empty());
+        let mut b = RandomNumber::with_seed(12345);
+        for m in [1500, 2000, 3000, 3000, 2000] {
+            let _ = b.random_below(m);
+        }
+        let _ = b.random_byte(8);
+        let _ = b.random_below(100);
+        // 31 轮 × (X 抽 `Random(Width/2)=random_below(7)`，Y 抽 `Random(Height/2)=random_below(20)`)
+        for _ in 0..31 {
+            let _ = b.random_below(15 / 2);
+            let _ = b.random_below(40 / 2);
+        }
+        assert_eq!(a.random(), b.random(), "必须恰 62 抽（31 轮 × 2）");
+    }
+
+    /// **判据 15d（阴性对照）**：初始格可站 ⇒ 门为假 ⇒ **环不进入**（坐标不动、抽数为 0）。
+    #[test]
+    fn terrain_loop_not_entered_when_start_walkable() {
+        let table = MonsterTable::new(vec![info("稻草人", 80, 0, None)]);
+        let mut sink = RecordingSink::with_size(100, 100);
+        sink.set_cell(85, 85, true, true); // 出生格可站 ⇒ 不进环
+        let mut a = RandomNumber::with_seed(12345);
+        let _ = create_monster_oracle(&mut a, &mut sink, &table, "0", 85, 85, 80, "稻草人");
+        assert_eq!(
+            (sink.spawns[0].x, sink.spawns[0].y),
+            (85, 85),
+            "可站 ⇒ 原地落格（不移位）"
+        );
+        let mut b = RandomNumber::with_seed(12345);
+        for m in [1500, 2000, 3000, 3000, 2000] {
+            let _ = b.random_below(m);
+        }
+        let _ = b.random_byte(8);
+        let _ = b.random_below(100);
+        assert_eq!(a.random(), b.random(), "环不进入 ⇒ 地形支不抽任何数");
+    }
+
+    /// **判据 15e（活栈 · 宽 ≠ 高，钉死 X 用 `Width/2`、Y 用 `Height/2` 不可对调）**：15c 的全墙场景下
+    /// `random_below(max)` 的**消耗采样数**与 `max` 无关（`max` 只缩放返回值，`internal_sample` 每次恰 1），
+    /// 故对调 `Width/2`/`Height/2` 不改流位置——必须在**宽 ≠ 高**时用**位置断言**才钉得住。
+    ///
+    /// 期望表（seed=12345，race 80，地图 100×60 ⇒ `n20=3`、`n24=20`；起点 (85,45)）：
+    /// 构造链 5 抽 `[100,140,2324,1533,1594]` + `Dir=6` + `CoolEye=16` → `Random(Width/2=50)=36`（X）
+    /// → `Random(Height/2=30)=7`（Y）⇒ 落格 `(36+20, 7+20) = (56, 27)`；X/Y 对调则落 `(42, 33)`。
+    #[test]
+    fn terrain_boundary_uses_width_for_x_height_for_y() {
+        let table = MonsterTable::new(vec![info("稻草人", 80, 0, None)]);
+        let mut sink = RecordingSink::with_size(100, 60);
+        sink.set_cell(85, 45, false, false);
+        sink.set_cell(56, 27, true, true);
+        let mut a = RandomNumber::with_seed(12345);
+        let _ = create_monster_oracle(&mut a, &mut sink, &table, "0", 85, 45, 80, "稻草人");
+        assert_eq!(
+            (sink.spawns[0].x, sink.spawns[0].y),
+            (56, 27),
+            "X 抽 Random(Width/2)、Y 抽 Random(Height/2)（对调则 (42,33)）"
+        );
+        let mut b = RandomNumber::with_seed(12345);
+        for m in [1500, 2000, 3000, 3000, 2000] {
+            let _ = b.random_below(m);
+        }
+        let _ = b.random_byte(8);
+        let _ = b.random_below(100);
+        assert_eq!(b.random_below(100 / 2), 36, "X 抽 = Random(Width/2)");
+        assert_eq!(b.random_below(60 / 2), 7, "Y 抽 = Random(Height/2)");
+        assert_eq!(a.random(), b.random(), "取数序列逐项一致");
+    }
+
     /// **判据 13（逐 race 构造抽数）**：每条 race 的构造链总抽数（含公共链
     /// `BaseObject`+`AnimalObject`）与 oracle 逐行数出的一致；不在 switch 内的 race 不抽任何数。
     /// （race 96 因 ctor 内条件抽数（`Random(3)==0`）不在此表，由判据 14 的两支覆盖。）
