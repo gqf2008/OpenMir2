@@ -32,6 +32,7 @@ pub mod npc;
 pub mod party;
 pub mod session;
 pub mod slave;
+pub mod space_move;
 pub mod world;
 
 pub use action::{ButchEvent, PushEvent, RushEvent, RushFrame};

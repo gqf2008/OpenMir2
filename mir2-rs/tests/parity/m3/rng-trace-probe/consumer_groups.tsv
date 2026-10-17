@@ -78,3 +78,19 @@ startup	rust	bins/game-svr/src/main\.rs:	bins/game-svr/src/main.rs	宿主启动�
 # 双红（会在与 ④ 共用的独占窗口里空转一轮）。机判见 `rng_consumer_groups.py selftest`（含删行必红）。
 spawn	rust	bins/game-svr/src/mongen\.rs:	bins/game-svr/src/mongen.rs	宿主生成期构造抽数（create_monster_oracle/draw_monster_construct）；R-6 折叠后 C# construct → Rust spawn，与 drop_exp_consumers.tsv 的 setup 行同口径
 npc_ai	rust	crates/world/src/npc\.rs:	crates/world/src/npc.rs	固定 NPC Run（WorldServer.ProcessNpcs 驱动；GuildOfficial.Run / Merchant.Run 两类 body，RNG 抽数逐次同一 site）；构造抽已迁 entity.rs（construct 组）⇒ 本行现只承 Run 段；卡 openmir2-world-tick-expansion
+
+# ---- 2026-10-17 追加：`space_move` / `slave_mutiny` 两组（来源：RNG 分组核查的门红 MF-1）----
+#
+# `BaseObject.SpaceMoveGetRandXY`（BaseObject.cs:1040-1096）被**两个** oracle 函数共用：
+#   * `BaseObject.RecallSlave`（:1850，魔号 30 宝宝满/造怪失败的回召移位）
+#   * `BaseObject.MapRandomMove`（:1214，商人随机移动）
+# ⇒ 归 **space_move** 组。Rust 侧原先该取数在 `crates/world/src/slave.rs`，但同文件还住着**另一个**
+# oracle 函数 `PlayObject.ProcessSlaveMutiny`（PlayObject.Base.cs:331，抽在 :344）⇒ 整文件归组会把两者
+# 吞进同一组、在叛变场景与 C# 侧分组不一致（假红）。故 2026-10-17 把该取数**移入独立模块**
+# `crates/world/src/space_move.rs`（`slave.rs` 用 `pub use` 再导出，公开 API 未变），实现站点按**函数**对齐：
+#   space_move   = crates/world/src/space_move.rs（两侧共用同一取数）
+#   slave_mutiny = crates/world/src/slave.rs（只剩主人死亡叛变抽样）
+space_move	csharp	BaseObject\.SpaceMoveGetRandXY@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:1040	SpaceMoveGetRandXY：召回落（RecallSlave）与商人随机移动（MapRandomMove）共用的移位环取数（Random(Width)/Random(Height)，至多 201 次）；2026-10-17 由 groups --require-closed 的 UNCLASSIFIED 暴露后补登记
+space_move	rust	crates/world/src/space_move\.rs:	crates/world/src/space_move.rs	同上的 Rust 实现（2026-10-17 从 slave.rs 单独成模块，以与 oracle 函数对齐；slave.rs 里 pub use 再导出）
+slave_mutiny	csharp	PlayObject\.ProcessSlaveMutiny@PlayObject\.Base\.cs:	src/M2Server/Player/PlayObject.Base.cs:344	主人死亡叛变抽样 Random(MasterDieMutinyRate)（方法在 :331，抽在 :344）
+slave_mutiny	rust	crates/world/src/slave\.rs:	crates/world/src/slave.rs	同上（process_slave_mutiny，由 deliver_self_delay_msgs 驱动，slave.rs:1082）

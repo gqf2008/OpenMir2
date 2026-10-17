@@ -35,7 +35,7 @@ REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", ".."))
 # owner 点名的四组：怪物 AI / 掉落 / 商人 / 刷怪（全服非攻击消费者的绝对主体）。
 CORE_GROUPS = ("monster_ai", "drop", "merchant", "spawn")
 # 同族构造期/宿主组（C# 侧有独立站点的）。
-AUX_GROUPS = ("construct", "npc_ai", "revive", "homemap", "startup")
+AUX_GROUPS = ("construct", "npc_ai", "revive", "homemap", "startup", "space_move", "slave_mutiny")
 KNOWN_GROUPS = CORE_GROUPS + AUX_GROUPS
 KNOWN_SIDES = ("csharp", "rust")
 

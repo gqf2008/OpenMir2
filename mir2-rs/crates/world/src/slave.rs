@@ -385,57 +385,10 @@ fn eq_ordinal_ignore_case(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
-/// `BaseObject.SpaceMoveGetRandXY`（`BaseObject.cs:1040-1096`）：从 `(x, y)` 起找可走格；
-/// 不可走时**按 oracle 的分段步进/随机跳点**推进，最多 201 次尝试（`n14 >= 201` 即放弃）。
-///
-/// `n18 = Width < 80 ? 3 : 10`；`n1C = Height < 150 ? (Height < 50 ? 2 : 15) : 50`。
-/// `can_walk(x, y)` = oracle `Envir.CanWalk(x, y, true)`（`cellSuccess && Valid`）。
-///
-/// **取数次序是 Claim B 账本输入**：只有进入 `else` 分支（`x` 已到 `Width-n1C-1` 之后）才抽
-/// `Random(Width)` / `Random(Height)`，本函数逐字保留分支位置。
-pub fn space_move_get_rand_xy<F>(
-    rng: &mut RandomNumber,
-    width: i32,
-    height: i32,
-    mut x: i32,
-    mut y: i32,
-    mut can_walk: F,
-) -> Option<(i32, i32)>
-where
-    F: FnMut(i32, i32) -> bool,
-{
-    let n18 = if width < 80 { 3 } else { 10 };
-    let n1c = if height < 150 {
-        if height < 50 {
-            2
-        } else {
-            15
-        }
-    } else {
-        50
-    };
-    let mut attempts = 0;
-    loop {
-        if can_walk(x, y) {
-            return Some((x, y));
-        }
-        if x < (width - n1c - 1) {
-            x += n18;
-        } else {
-            x = rng.random_below(width);
-            if y < (height - n1c - 1) {
-                y += n18;
-            } else {
-                y = rng.random_below(height);
-            }
-        }
-        attempts += 1;
-        if attempts >= 201 {
-            break;
-        }
-    }
-    None
-}
+/// `BaseObject.SpaceMoveGetRandXY`：**已移入 [`crate::space_move`]**（独立模块——理由见该文件头：
+/// 该取数被召回落与商人随机移动两个 oracle 函数共用，按站点归组需要函数对齐；本文件只剩
+/// `PlayObject.ProcessSlaveMutiny` 的抽数 ⇒ 归 `slave_mutiny` 组）。
+pub use crate::space_move::space_move_get_rand_xy;
 
 /// `HUtil32.MakeWord(ushort bLow, ushort bHigh)`（`src/OpenMir2/HUtil32.cs:66-69`）：
 /// `(ushort)(bLow | bHigh << 8)` —— 先按 `int` 左移再截 16 位 ⇒ `bHigh` 只有低 8 位生效。
