@@ -18,7 +18,7 @@
 | 1c | `magic.rs::mag_sace_move` | **不可达**（无生产者） | 经 `space_move_get_rand_xy` ⇒ 若接线会变（R 级） | 唯一调用者在 `crates/world/tests/map_effect_vectors.rs:294`（测试） |
 | 1d | `magic.rs::mag_make_clone` | **可达** | 读 `cell.valid()` ⇒ **条件变**（施法者格非 Valid 才变，生产不可达） | `handle_spell_cmd`(main.rs:5024)→`cast_clone_spell`(5549)→`spawn_clone`(bins/.../slave.rs:529→crates/world/slave.rs:1176)→`mag_make_clone`(magic.rs:1259) |
 | 2 | `slave.rs::World::recall_slave` | **可达（条件）** | 读 `get_cell_info().1` ⇒ **会变（R 级：RNG 流水）** | `handle_spell_cmd`→`cast_slave_spell`(5346)→`summon_from_spell`(bins/.../slave.rs:187)→`summon_slave`(crates/world/slave.rs:152)→`recall_slave`(slave.rs:202) |
-| 3 | `ground.rs::put_item`（独立模型） | **可达** | **不变（零影响）** | `put_item`(bins/.../ground.rs:263) 只走 `idx()`(206) 界内判定；与 `world.maps` 唯一共享是 `width/height`（`pickwire.rs:142 build_ground_map`），不读任何属性 |
+| 3 | `ground.rs::put_item`（独立模型） | **可达** | **不变（零影响）** | `put_item`(bins/.../ground.rs:263) 只走 `idx()`(206) 界内判定；与 `world.maps` 唯一共享是 `width/height`（`pickwire.rs:141 build_ground_map`），不读任何属性 |
 | 4 | `aoi.rs::search_view_range(_death)`（`BaseObject.ViewRange`） | **可达** | `ok` **恒真→按属性**（墙格跳过）⇒ **输出不变** | `aoi.rs:91`（`search_view_range`）/`:211`（`..._death`）；世界 tick 调用于 `world.rs:1190`/`:1180` |
 | 5 | `cetin_near_xy` 生产调用点 | **可达** | `!ok` 掩码支「恒不进→按属性」⇒ **结果不变** | 定义 `queryuser.rs:29`（`!ok` 在 `:36`）；调用点 main.rs `2672`/`2768`/`4995`（+`spell_snap_target` 内 5 处 5154/5232/5294/5429/5516） |
 
@@ -46,7 +46,7 @@
 
 - `char_pushed` 每步读 `get_cell_info(nx,ny).1`（`magic.rs:1018`）：装载前界内恒 `true` ⇒ 永不因墙 `break`；
   装载后目标格是墙 ⇒ `break`（推进步数变少）。
-- `push_now`（生产同族）用 `self.cell_free(map_id, nx, ny, actor_id)`（`world.rs:2175`）；`cell_free` 读
+- `push_now`（生产同族）用 `self.cell_free(map_id, nx, ny, actor_id)`（`world.rs:2164`）；`cell_free` 读
   `get_cell_info(...).1` + `valid/is_available`（`world.rs:2064-2072`）⇒ 同样按属性变。
 
 **复核命令**
@@ -171,7 +171,7 @@ sed -n '5505,5555p' bins/game-svr/src/main.rs
   仅在 `MakeSlave` 返回 null 且 `magic_id == SKILL_SINSU` 的 else 支）。
 - `summon_slave` 唯一非测试调用者：`bins/game-svr/src/slave.rs:187`（`summon_from_spell`，定义 `:171`）。
 - `summon_from_spell` 唯一非测试调用者：`bins/game-svr/src/slave.rs:280`（`cast_slave_spell`，定义 `:254`）。
-- `cast_slave_spell` 唯一非测试调用者：`main.rs:5346`（`handle_spell_cmd` 的 17/30/41 支，`main.rs:5263`）。
+- `cast_slave_spell` 唯一非测试调用者：`main.rs:5346`（`handle_spell_cmd` 的 17/30/41 支，`main.rs:5284`（`matches!`；`SKILL_SKELLETON` 在 `5286`））。
 - 格子读取：`slave.rs:656-657` 闭包 `|x, y| map.get_cell_info(x, y).1`（喂给 `space_move_get_rand_xy`，`slave.rs:396`）。
 
 **具体调用链（file:line → …）**
@@ -180,7 +180,7 @@ sed -n '5505,5555p' bins/game-svr/src/main.rs
 main.rs:7895 fn sim_loop
   → main.rs:8729 handle_spell_cmd(...)                 // CM_SPELL(3017)
   → main.rs:5024 handle_spell_cmd
-  → main.rs:5263 支 SKILL_SKELLETON|SKILL_SINSU|SKILL_ANGEL
+  → main.rs:5284（`matches!`）支 SKILL_SKELLETON(5286)|SKILL_SINSU|SKILL_ANGEL
   → main.rs:5346 game_svr::slave::cast_slave_spell(...)
   → bins/game-svr/src/slave.rs:254 cast_slave_spell
   → bins/game-svr/src/slave.rs:280 summon_from_spell(...)
@@ -229,7 +229,7 @@ sed -n '396,445p' crates/world/src/slave.rs
 - `put_item`（`ground.rs:263`）：`item_id==0 ⇒ false`；否则 `match self.idx(x, y)`——`idx()`（`ground.rs:206`）
   **只做界内判定**（`x∈[0,width) && y∈[0,height)`）；界内 ⇒ `push` 并 `true`。
 - `cell_match`（`ground.rs:216`）= `self.idx(x,y).is_some()`（纯几何）。
-- 与 `world.maps` 的**唯一**连接点：`bins/game-svr/src/pickwire.rs:142 build_ground_map(view, map_id, width, height, catalog)`
+- 与 `world.maps` 的**唯一**连接点：`bins/game-svr/src/pickwire.rs:141 build_ground_map(view, map_id, width, height, catalog)`
   ——`width/height` 取自 `World::maps[map_id]`（**尺寸**），物品来自 `FloorItemView`（world 的**只读地面视图**），
   逐项 `map.put_item(v.x, v.y, item)`。⇒ 共享的只有**尺寸**与**物品清单**，**没有属性**。
 
@@ -368,15 +368,18 @@ sed -n '659,705p' bins/game-svr/src/mapwire.rs
 | 4 | `mag_sace_move`（魔号 21） | **不可达**（无生产者） | 读 `ok` ⇒ 若接线会变（RNG） | （未接线） | `magic.rs:1177-1178,1196` |
 | 5 | `aoi.rs::search_view_range(_death)` | 可达（每 tick） | `ok` 恒真→按属性 ⇒ **输出不变** | L | `aoi.rs:91,211`；`world.rs:1180,1190` |
 | 6 | `cetin_near_xy`（2 条查询指令 + spell snap ×5） | 可达 | `!ok` 恒不进→按属性 ⇒ **输出不变** | L | `queryuser.rs:35-36`；`main.rs:2672,2768,4995` |
-| 7 | `ground.rs::put_item` | 可达 | **不变（零影响）** | L | `ground.rs:206,263`；`pickwire.rs:142` |
-| 附 | `merchant_run`/`npc_run` →（`map_random_move` → `move_object` → `cell.valid`） | **可达**（`main.rs:8049 enable_merchant_tick` / `:8059 enable_npc_tick`） | 读 `move_object` 的 `cell.valid()` ⇒ 随机落点若为墙 ⇒ 早退（**不移动**） | R（2 抽已发生，变化在「是否移动」） | `merchant.rs:584,748,854`；`map.rs move_object`；`world.rs:1149` |
+| 7 | `ground.rs::put_item` | 可达 | **不变（零影响）** | L | `ground.rs:206,263`；`pickwire.rs:141` |
+| 附 | `merchant_run` →（`map_random_move` → `move_object` → `cell.valid`）**（`npc_run` 不可达：固定 NPC `BoCanMove` 恒 false）** | **可达（条件）**（`main.rs:8049 enable_merchant_tick`；商人 DB `CanMove!=0 && MoveTime>0`） | 读 `move_object` 的 `cell.valid()` ⇒ 落点为墙 ⇒ 早退（**不移动/不再抽数**）；**oracle 则进移位环继续抽数** ⇒ **不同构** | **R（真缺口：落点 + RNG 流水双分歧）** | `merchant.rs:584,748,854,873`；`map.rs move_object`；`world.rs:1149`；oracle `BaseObject.cs:1214/1103/1040` |
 
-**附表（附行）说明**：`merchant_run`（`merchant.rs:661`）→ `map_random_move`（`:748`/`:854`）已抽 2 次
-`random_below`，随后 `move_object(ignore_block=true)`。装载后若落点是墙，`move_object` 的
-`if !cell.valid() { return false }`（`map.rs`，与 oracle `Envirnoment.cs:380` 同形）⇒ **不移动**；
-装载前每格 `Valid` ⇒ 恒移动。**注意**：RNG 抽数（2 次）不变，变的是「是否移动」；且**与 oracle 同构**。
-**归因**：上游报告未把 `map_random_move` 单独列为消费点（它是 §1A #9 `move_object` 的间接下游）。
-本卡只标出；**判级建议 = R**（保守：RNG 抽数不变，但「是否移动」改变真机可见状态；按 tier 策略「判不准 ⇒ R」）——最终判级交 M3⑤ / owner。已在卡 `openmir2-recall-slave-shift-live` 登记（窗口项见 `82-two-side-window-runbook.md` §2e）。
+**附表（附行）说明（2026-10-17 独立复验**否掉**原「同构」判定）**：`merchant_run`（`merchant.rs:661`）→
+`map_random_move`（`:748`/`:854`）已抽 2 次 `random_below`，随后 `move_object(ignore_block=true)`：装载后若落点是墙，
+`move_object` 的 `if !cell.valid() { return false }` ⇒ **不移动、不再抽数**。而 oracle 的 `MapRandomMove`
+（`BaseObject.cs:1214-1237`）→ `SpaceMove`（`:1103-1166`）→ `SpaceMoveGetRandXY`（`:1040-1096`）在落点不可走时
+**进移位环、继续抽 `Random(Width)`/`Random(Height)`**，最后 `AddMapObject`。⇒ **落点与 RNG 流水都会分歧**（原稿引的
+`Envirnoment.cs:380` 属 `MoveToMovingObject`（`:337`），**不是**这条路径）。**这是真缺口而非「同构」**：已立卡
+`openmir2-map-random-move-shift-loop`（R）承接实现；本片只登记（窗口项见 `82-two-side-window-runbook.md` §2e）。
+**可达性收窄**：`npc_run` 的该支**不可达**（固定 NPC `BoCanMove` 恒 false，`npc.rs` 已登记），只有 `merchant_run`
+条件可达（DB `CanMove!=0 && MoveTime>0`）。
 
 ---
 
@@ -384,11 +387,11 @@ sed -n '659,705p' bins/game-svr/src/mapwire.rs
 
 | 条目 | 为何不可确证（静态） | 需要什么 |
 |---|---|---|
-| 魔号 8（抗拒火环）/ 魔号 21（瞬息移动）是否「待接线」而非「永不接线」 | `handle_spell_cmd`（`main.rs:5024`）静态只处理 14/15/17/20/30/31/41/46；magic 表的**运行期内容**（`load_magics`）不在静态面内 | 真机跑一次 / 查 `E:/MirServer` Magic 表确认 8/21 是否存在、是否可学；或断点 `handle_spell_cmd` |
+| ~~魔号 8/21 是否「待接线」而非「永不接线」~~ **（已确证，2026-10-17）** | **静态可证**（原稿判「不可确证」是深度不足）：`MagicConst.cs:36 SKILL_FIREWIND=8`、`:88 SKILL_SPACEMOVE=21`；oracle `MagicManager.cs:259`（及 `:602` ENERGYREPULSOR）`case SKILL_FIREWIND`→`MagPushArround`、`:403 case SKILL_SPACEMOVE`→`MagSaceMove` ⇒ **oracle 有生产分支**，本仓 `handle_spell_cmd` 缺 8/21 属**待接线** | 仅剩「玩家能否学到」属数据面（真机/查 Magic 表） |
 | `recall_slave` 的触发频率（宝宝满 + 主人正前方墙） | 需真机玩家态（宝宝数 `nMaxMob`、朝向、地图墙分布） | 真机造场景：主人站墙前 + 宝宝数满；或进程级对拍 |
 | ~~`mag_make_clone` 是否会在「施法者格非 Valid」时被触发~~ **（已关闭，2026-10-17）** | 上游那条差异**已修**：`session.rs::enter_map` 改为 oracle 同形（不移除角色）⇒ 病态存档（墙格出生）/切图缩图下角色可「在世界上但不入格表」⇒ 该支 **边缘可达**；常态（新角色默认出生点全 Walk）仍不可达 | — |
-| `map_random_move` 消费点的**级别**（R/L） | 本卡只证「可达 + 与 oracle 同构」，未判级 | 交 M3⑤ / owner 判级（若料窗口则按 R） |
-| 各图 `(0,0)` 是否 Walk（决定 `move_object` 的 cell0 耦合分支） | 上游 §6 R8 已给方法；本卡未逐图解二进制 | 上游 §6 R8 命令（`python -I -c` 逐图读 cell0） |
+| ~~`map_random_move` 消费点的级别~~ **（已定级，2026-10-17）** | 独立复验**否掉**「与 oracle 同构」：本仓 `move_object` 早退、oracle 进 `SpaceMoveGetRandXY` 移位环继续抽数 ⇒ **落点 + RNG 双分歧** | **R**，已立卡 `openmir2-map-random-move-shift-loop` |
+| ~~各图 `(0,0)` 是否 Walk~~ **（已确证，2026-10-17）** | **静态可解**：`.map` 二进制逐图读 cell0 即可（`b192bd9f3` 的复验者已示范解原始二进制）。**已解**：322 注册图中 `(0,0)` 为墙 **317**、为 Walk **5**（清单与复核命令见 `mapwire.rs` 模块头「真机静态普查」段与 `audit-valid-consumers-20261017.md` §6 R8 的更正） | — |
 
 **未用「大概/应该」**：以上凡静态确证不到的，一律标「不可确证 + 需要 X」。
 
