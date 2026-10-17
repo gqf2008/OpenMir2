@@ -5003,6 +5003,38 @@ fn spell_snap_target(
         .map_or((target_x, target_y, true), |t| (t.x, t.y, true))
 }
 
+/// **P1（`openmir2-spell-shared-tail-p1`）**：`MagicManager.cs:644-669` 共享尾在 `default` 支上的
+/// 两类魔号 ⇒ 返回 `Some(bo_train)`；**不在本片范围 ⇒ `None`**。
+///
+/// 设计件 `tests/parity/m3/design-spell-shared-tail-20261017.md` §5.2/§5.3（P1）：
+///
+/// - **A 类 = NoSwitchCase**（17 个可达 id）：oracle `switch (MagicId)`（`:172-643`）**无**该魔号的
+///   `case` ⇒ `switch` 体零执行 ⇒ `boSpellFail=false`（`:165`）、`boSpellFire=true`（`:166`）、
+///   `boTrain=false`（`:164`）⇒ 过 `:151`/`:155`/`:167` 后**恰一条** `RM_MAGICFIRE`、**零训练抽**、
+///   无 `RM_MAGIC_LVEXP`。`56` 不在集合内：`PlayObject.Attack.cs:1152` 显式 `case` ⇒ 玩家路径不调
+///   `DoSpell`；`66`/`71` 各两行魔表但 `FindMagic` 首行胜，按魔号只算一次。
+/// - **B 类 = NoEffectCase**（5 个 id）：`case` 体只置 `boTrain = true`（49 `:608`、51 `:632`、
+///   52 `:635`、53 `:638`、54 `:641`）⇒ 恰一条 `RM_MAGICFIRE` + 门内（`Level<3 &&
+///   TrainLevel[Level] <= Abil.Level`）**恰一次** `Random(3)+1` + `RM_MAGIC_LVEXP`。
+///
+/// **严格 id 集合，禁止外延 catch-all**：43（显式 `case`、玩家路径不可达）、56、8/21/37、17/30/41、
+/// 20、46，以及全部 `DeferredCase`（含 `>80` 的 81-103/500/501）都**不得**命中本函数；新增魔号必须
+/// 回到设计件重新分期，不能用 `_ => Some(..)` 兜底。
+fn spell_tail_bo_train(magic_id: u16) -> Option<bool> {
+    // A 类（`dospell_class = no_switch_case` 的玩家可达 17 个 MagID；56 显式排除）。
+    if matches!(
+        magic_id,
+        55 | 57 | 58 | 59 | 66 | 67 | 68 | 69 | 71 | 72 | 74 | 75 | 76 | 77 | 78 | 79 | 80
+    ) {
+        return Some(false);
+    }
+    // B 类（`dospell_class = no_effect_case`，`boTrain` 恒 true；43 显式排除）。
+    if matches!(magic_id, 49 | 51 | 52 | 53 | 54) {
+        return Some(true);
+    }
+    None
+}
+
 /// **`openmir2-m3-attack-magic-wiring`（第二片）**、**`openmir2-m3-pet-slave-summon`（第②片）**
 /// 与 **`openmir2-default-arm-spell-surface`（帧面片）** 三片共同的入口：
 /// `CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790` → `PlayObject.Message.cs:1339-1400`）。
@@ -5976,6 +6008,115 @@ fn handle_spell_cmd(
                 "DBG",
                 "CM_SPELL：分身魔号 46 无 MagicInfo ⇒ 效果体不接（登记）"
             );
+        }
+    }
+    // **P1（`openmir2-spell-shared-tail-p1`）**：`MagicManager.cs:644-669` 共享尾 —— `default` 支的
+    // A 类（NoSwitchCase）/ B 类（NoEffectCase）魔号。
+    //
+    // 位置（设计件 §5.2）：**所有效果体块之后、`send_good_tick` 之前**；oracle 里尾在 `switch`
+    // （`:172-643`）之后。三门前置（此处显式复核，缺一不可）：
+    //   ① `default_arm`（`Attack.cs:1269` 的 `switch` 非 8 条显式 case ⇒ 才调用 `DoSpell`）；
+    //   ② `!IsWarrSkill`（`MagicManager.cs:151`，`:159` 之前早退）；
+    //   ③ 距离门（`:155`，**用 snap 后**坐标）。越界时本块**不执行**尾：`RM_SPELL` 块的 `else`
+    //      已按 `Attack.cs:1279-1281` 发**恰好一条** `SM_MAGICFIRE_FAIL(639)`（不得双发）。
+    // 版本/魔号门（`:167`）的 `MagicId > 80` 硬半边由 [`spell_tail_bo_train`] 的**显式 id 集合**
+    // 保证（集合上界 80）；`(SoftVersionDateEx==0 && ClientTick==0)` 半边尚未建模（G0 登记，
+    // 见设计件 §4），与本片同口径不引入。
+    //
+    // 尾参数（oracle 定值）：
+    // - `bo_spell_fail=false`（无 case 置 true）、`bo_spell_fire=true`（无 case 置 false）；
+    // - `bo_train`：A 类恒 `false`（零抽），B 类恒 `true`（门内恰一次 `Random(3)+1`）；
+    // - `FastTrain` 未装载 ⇒ `false`（与 8/21/37、17/30/41、20、46 同口径登记）；
+    // - 目标 = `:160-163` **死亡归一后**的 `targetObject`（死 ⇒ `ActorId=0`）；坐标 = snap 后 `tx/ty`。
+    //
+    // 帧序（oracle）：`:159 SM_SPELL`（本函数开头已发）→ `:648 SM_MAGICFIRE`（含施法者自己：
+    // 处理器 `PlayObject.Message.cs:1788-1793` 无自守卫 ⇒ `broadcast_ref_msg_with_self`）→
+    // `:659 SM_MAGIC_LVEXP`（`send_self_frame`）。中间禁止插任何 `world.rng` 取数。
+    if default_arm && !magic::is_warr_skill(i32::from(req.magic_id)) {
+        if let Some(bo_train) = spell_tail_bo_train(req.magic_id) {
+            if let Some(magic) = magic_table.get(req.magic_id) {
+                // `CretInNearXy` snap（与兄弟块同一写法）：命中才把坐标改成目标实际坐标。
+                let (tx, ty, hit) = spell_snap_target(
+                    world,
+                    self_map,
+                    req.target_actor_id,
+                    req.target_x,
+                    req.target_y,
+                );
+                if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
+                    // `MagicManager.cs:160-163`：`if (targetObject != null && targetObject.Death)
+                    // targetObject = null;` —— 尾帧的 ActorId 读归一后的值。
+                    let target_id = if hit {
+                        world
+                            .entities
+                            .get(req.target_actor_id)
+                            .filter(|t| !t.death)
+                            .map(|t| t.id)
+                    } else {
+                        None
+                    };
+                    let mut train = magic::SkillTrainState {
+                        magic_id: req.magic_id,
+                        level: matched.as_ref().map_or(0, |m| m.level),
+                        tran_point: matched.as_ref().map_or(0, |m| m.tran_point),
+                        train_lv: magic.train_lv,
+                        train_level: magic.train_level,
+                        max_train: magic.max_train,
+                    };
+                    // 共享尾（唯一取数点：`bo_train` 门内恰一次 `Random(3)+1`）。
+                    let tail = {
+                        let rng = &mut world.rng;
+                        magic::do_spell_tail(
+                            false,
+                            true,
+                            bo_train,
+                            // `PlayObject.FastTrain` 未装载（登记，同既有四处）。
+                            false,
+                            caster_abil_level,
+                            rng,
+                            &mut train,
+                        )
+                    };
+                    // 熟练度回写存档记录（`MakeSaveRcd` 的 `MagicList` 同源；与兄弟块同口径）。
+                    if let Some(rcd) = saves
+                        .get_mut(chr_name)
+                        .and_then(|s| s.record.data.magic.as_mut())
+                        .and_then(|list| {
+                            list.iter_mut()
+                                .flatten()
+                                .find(|m| m.mag_idx == req.magic_id)
+                        })
+                    {
+                        rcd.level = train.level;
+                        rcd.tran_point = train.tran_point;
+                    }
+                    // `:648-658` `boSpellFire => RM_MAGICFIRE`（A/B 两类恒 true）。
+                    if tail.magic_fire {
+                        let body = smframe::sm_magicfire(
+                            actor_id,
+                            wire_coord(tx),
+                            wire_coord(ty),
+                            magic.effect_type,
+                            magic.effect,
+                            target_id.unwrap_or(0),
+                        );
+                        broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+                    }
+                    // `:659-669` 训练尾帧 `RM_MAGIC_LVEXP`（本仓立即发，延迟面既有全局登记）。
+                    if tail.train.levelup_msg {
+                        let body =
+                            smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
+                        send_self_frame(online, gates, chr_name, body);
+                    }
+                    let _ = tail.returned;
+                }
+            } else {
+                glog!(
+                    "DBG",
+                    "CM_SPELL：共享尾魔号 {} 无 MagicInfo ⇒ 尾不接（登记；等价降级）",
+                    req.magic_id
+                );
+            }
         }
     }
     // `ClientSpellXY` 全分支 `result = true` ⇒ 调用方 `ActionTick = GetTickCount(); SendSocket(GetGoodTick)`。
@@ -24716,6 +24857,511 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ==========================================================================
+    // P1（`openmir2-spell-shared-tail-p1`）：`MagicManager.cs:644-669` 共享尾
+    //   A 类 = NoSwitchCase（17 个可达 id，零抽）/ B 类 = NoEffectCase（5 个 id，恰一次抽）
+    // ==========================================================================
+    //
+    // 全部走**生产入口** `handle_spell_cmd`，种子固定；「抽数」既用
+    // [`draws_between`]（状态差 = 精确抽取次数）核，也用其后连续 3 抽与同种子对照流核，
+    // **不用单抽**做判据。设计件 §6 J1–J3/J6。
+
+    /// `SM_MAGICFIRE` 尾（`PlayObject.Message.cs:1788-1793`）= EDCode(4B LE ActorId)。
+    fn sf_magicfire_target_id(b: &[u8]) -> i32 {
+        let raw = mir2_protocol::edcode::decode(&b[12..]);
+        assert_eq!(raw.len(), 4, "SM_MAGICFIRE 尾必须是 4B 的 EDCode");
+        i32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]])
+    }
+
+    /// 取某连接上第一条指定 ident 的帧体。
+    fn sf_first(frames: &[SfFrame], socket: i32, ident: u16) -> &[u8] {
+        frames
+            .iter()
+            .find(|(s, b)| *s == socket && sf_ident(b) == ident)
+            .map(|(_, b)| b.as_slice())
+            .unwrap_or_else(|| {
+                panic!(
+                    "socket {socket} 上没有 ident {ident}；实得 {:?}",
+                    sf_seq(frames, socket)
+                )
+            })
+    }
+
+    /// 断言 `world.rng` 从 `before` 起**零抽**，且其后连续 3 抽与同种子对照流逐项相同。
+    fn assert_zero_draws_then_matches(
+        before: &mir2_shared::rng::RandomNumber,
+        rig: &mut SpellFrameRig,
+        seed: i32,
+        why: &str,
+    ) {
+        assert_eq!(
+            draws_between(before, &rig.world.rng),
+            0,
+            "[{why}] 世界 RNG 必须零抽"
+        );
+        let mut control = mir2_shared::rng::RandomNumber::with_seed(seed);
+        for k in 0..3 {
+            assert_eq!(
+                rig.world.rng.random(),
+                control.random(),
+                "[{why}] 阴性对照第 {k} 抽必须等于同种子未施法流"
+            );
+        }
+    }
+
+    /// **① A 类（NoSwitchCase）**：55/66/71 in-range ⇒ `SM_SPELL → SM_MAGICFIRE` 各恰 1 条；
+    /// 收件人含自己 + 观察者；**世界 RNG 零抽**（A 类 `boTrain=false`）；无 `SM_MAGIC_LVEXP`。
+    ///
+    /// 红检：删掉 A 类尾调用 ⇒ 观察者 `SM_MAGICFIRE` 变 0 ⇒ 红；把 `bo_train` 传 true ⇒
+    /// 多抽一次 ⇒ `draws_between` + 3 抽对照红。
+    #[test]
+    fn spell_tail_p1_no_switch_fire_only_zero_draws() {
+        for magic_id in [55u16, 66, 71] {
+            let seed = 7100 + i32::from(magic_id);
+            let mut rig =
+                SpellFrameRig::new(magic_id, &[(magic_id, 9)], &[("obs", 12, 11, false, 912)]);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let before = rig.world.rng.clone();
+            rig.cast(magic_id, (12, 11), 0);
+            let (frames, _raws) = rig.drain();
+
+            let obs = sf_seq(&frames, 912);
+            assert_eq!(
+                obs.iter()
+                    .filter(|id| **id == mir2_protocol::messages::SM_SPELL)
+                    .count(),
+                1,
+                "[魔号 {magic_id}] A 类恰一条 SM_SPELL；实得 {obs:?}"
+            );
+            assert_eq!(
+                obs.iter()
+                    .filter(|id| **id == mir2_protocol::messages::SM_MAGICFIRE)
+                    .count(),
+                1,
+                "[魔号 {magic_id}] A 类恰一条 SM_MAGICFIRE；实得 {obs:?}"
+            );
+            let i_spell = obs
+                .iter()
+                .position(|id| *id == mir2_protocol::messages::SM_SPELL)
+                .expect("观察者应收 SM_SPELL");
+            let i_fire = obs
+                .iter()
+                .position(|id| *id == mir2_protocol::messages::SM_MAGICFIRE)
+                .expect("观察者应收 SM_MAGICFIRE");
+            assert!(
+                i_spell < i_fire,
+                "[魔号 {magic_id}] oracle 序必须 SM_SPELL → SM_MAGICFIRE；实得 {obs:?}"
+            );
+            // `RM_MAGICFIRE` 无自守卫 ⇒ 施法者自己也收；`RM_SPELL` 有守卫 ⇒ 自己不收。
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGICFIRE),
+                1,
+                "[魔号 {magic_id}] 施法者自己收恰 1 条 SM_MAGICFIRE；实得 {:?}",
+                sf_seq(&frames, 911)
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_SPELL),
+                0,
+                "[魔号 {magic_id}] 施法者自己不得收 SM_SPELL"
+            );
+            // A 类零训练抽 ⇒ 无 LVEXP（自己/观察者都不得有）。
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0,
+                "[魔号 {magic_id}] A 类不得发 SM_MAGIC_LVEXP"
+            );
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0
+            );
+            // 帧参数：无目标 ⇒ ActorId=0；坐标 = snap 后 (12,11)。
+            let fire = sf_first(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE);
+            assert_eq!(
+                sf_magicfire_target_id(fire),
+                0,
+                "[魔号 {magic_id}] 无目标 ⇒ ActorId=0"
+            );
+            let cmd = mir2_protocol::frame::CommandMessage::from_bytes(fire).unwrap();
+            assert_eq!(
+                (cmd.param, cmd.tag),
+                (12, 11),
+                "[魔号 {magic_id}] SM_MAGICFIRE 坐标 = snap 后的 tx/ty"
+            );
+            assert_zero_draws_then_matches(&before, &mut rig, seed, &format!("魔号 {magic_id}"));
+            // `TranPoint` 不变（A 类无训练尾）。
+            let rcd = rig.saves["caster"].record.data.magic.as_ref().unwrap()[0]
+                .as_ref()
+                .unwrap();
+            assert_eq!(rcd.tran_point, 0, "[魔号 {magic_id}] A 类不得改 TranPoint");
+            assert_eq!(rcd.level, 1);
+        }
+    }
+
+    /// **①（续）/ 红线 3**：`RM_MAGICFIRE` 的 ActorId 读 `:160-163` **死亡归一后**的 target；
+    /// 坐标读 snap 后的 `tx/ty`。
+    ///
+    /// 红检：去掉 `.filter(|t| !t.death)` ⇒ 死目标用例 ActorId = 死者 id ⇒ 红。
+    #[test]
+    fn spell_tail_p1_no_switch_uses_snapped_coords_and_death_normalized_target() {
+        // 活目标：ActorId = 目标 id，坐标 snap 到目标实际坐标 (11,10)。
+        let mut rig = SpellFrameRig::new(55, &[(55, 9)], &[("target", 11, 10, false, 912)]);
+        let target = rig
+            .online
+            .iter()
+            .find(|e| e.chr_name == "target")
+            .unwrap()
+            .actor_id;
+        rig.cast(55, (12, 10), target);
+        let (frames, _raws) = rig.drain();
+        let fire = sf_first(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE);
+        assert_eq!(
+            sf_magicfire_target_id(fire),
+            target,
+            "活目标 ⇒ ActorId = 目标 id"
+        );
+        let cmd = mir2_protocol::frame::CommandMessage::from_bytes(fire).unwrap();
+        assert_eq!(
+            (cmd.param, cmd.tag),
+            (11, 10),
+            "坐标必须 snap 到目标实际坐标（不是点击格 12,10）"
+        );
+
+        // 死目标：`:160-163` ⇒ targetObject = null ⇒ ActorId = 0（坐标仍 snap）。
+        let mut rig = SpellFrameRig::new(55, &[(55, 9)], &[("target", 11, 10, false, 912)]);
+        let target = rig
+            .online
+            .iter()
+            .find(|e| e.chr_name == "target")
+            .unwrap()
+            .actor_id;
+        rig.world.entities.get_mut(target).unwrap().death = true;
+        rig.cast(55, (12, 10), target);
+        let (frames, _raws) = rig.drain();
+        let fire = sf_first(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE);
+        assert_eq!(
+            sf_magicfire_target_id(fire),
+            0,
+            "死目标 ⇒ 死亡归一 ⇒ ActorId=0"
+        );
+    }
+
+    /// **② B 类（NoEffectCase）**：49/51/52/53/54 在
+    /// `Level<3 && TrainLevel[Level] <= Abil.Level` 下 ⇒ **恰好 1 次** `Random(3)+1`
+    /// （`draws_between == 1` 且其后 3 抽 == 跳过 1 抽的对照流）、`SM_MAGIC_LVEXP` 恰 1 条、
+    /// `TranPoint` 回写 = 该抽 + 1。
+    ///
+    /// 红检：把 49 的 `bo_train` 写死 false ⇒ `draws_between == 0`、无 LVEXP、TranPoint 不动 ⇒ 红。
+    #[test]
+    fn spell_tail_p1_no_effect_draws_once_and_levels_exp() {
+        for magic_id in [49u16, 51, 52, 53, 54] {
+            let seed = 7200 + i32::from(magic_id);
+            let mut rig =
+                SpellFrameRig::new(magic_id, &[(magic_id, 9)], &[("obs", 12, 11, false, 912)]);
+            // `max_train` 拉高 ⇒ `CheckMagicLevelUp` 不升级，便于精确断言 TranPoint 回写。
+            rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+                magic_id,
+                effect: 9,
+                effect_type: 4,
+                train_lv: 3,
+                train_level: [0; 4],
+                max_train: [1000; 4],
+                ..mir2_data::MagicInfo::default()
+            }]);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let before = rig.world.rng.clone();
+            let mut expect_rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let expected_points = expect_rng.random_below(3) + 1;
+
+            rig.cast(magic_id, (12, 11), 0);
+            let (frames, _raws) = rig.drain();
+
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                1,
+                "[魔号 {magic_id}] B 类必须恰抽一次 Random(3)+1"
+            );
+            for k in 0..3 {
+                assert_eq!(
+                    rig.world.rng.random(),
+                    expect_rng.random(),
+                    "[魔号 {magic_id}] 抽数位置第 {k} 抽：必须等于对照流跳过 1 抽"
+                );
+            }
+            // TranPoint 回写存档 = Random(3)+1。
+            let rcd = rig.saves["caster"].record.data.magic.as_ref().unwrap()[0]
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                rcd.tran_point, expected_points,
+                "[魔号 {magic_id}] TranPoint 回写 = Random(3)+1"
+            );
+            assert_eq!(rcd.level, 1, "max_train 拉高 ⇒ 不升级");
+            // 帧面：观察者 SM_SPELL + SM_MAGICFIRE 各 1；自己 SM_MAGICFIRE + LVEXP 各 1。
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL),
+                1,
+                "[魔号 {magic_id}] 观察者恰 1 条 SM_SPELL"
+            );
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE),
+                1,
+                "[魔号 {magic_id}] 观察者恰 1 条 SM_MAGICFIRE"
+            );
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0,
+                "[魔号 {magic_id}] LVEXP 是 SendSelfDelayMsg ⇒ 观察者不收"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGICFIRE),
+                1,
+                "[魔号 {magic_id}] 自己收恰 1 条 SM_MAGICFIRE"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                1,
+                "[魔号 {magic_id}] 自己恰 1 条 SM_MAGIC_LVEXP"
+            );
+            // LVEXP 字段 = `(MagicId, Level, TranPoint)`；自身帧序 MAGICFIRE 先于 LVEXP。
+            let lv = sf_first(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP);
+            let cmd = mir2_protocol::frame::CommandMessage::from_bytes(lv).unwrap();
+            assert_eq!(cmd.recog, i32::from(magic_id), "Recog = MagicId");
+            assert_eq!(cmd.param, 1, "Param = Level");
+            assert_eq!(
+                i32::from(cmd.tag) | (i32::from(cmd.series) << 16),
+                expected_points,
+                "Tag/Series = TranPoint 的低/高字"
+            );
+            let self_seq = sf_seq(&frames, 911);
+            assert!(
+                self_seq
+                    .iter()
+                    .position(|id| *id == mir2_protocol::messages::SM_MAGICFIRE)
+                    .unwrap()
+                    < self_seq
+                        .iter()
+                        .position(|id| *id == mir2_protocol::messages::SM_MAGIC_LVEXP)
+                        .unwrap(),
+                "[魔号 {magic_id}] oracle 序：RM_MAGICFIRE(:648) 先于 RM_MAGIC_LVEXP(:659)；实得 {self_seq:?}"
+            );
+        }
+    }
+
+    /// **②（阴性）**：训练门不满足（`Level=3` 或 `TrainLevel[Level] > Abil.Level`）⇒
+    /// **零抽**、无 `SM_MAGIC_LVEXP`；`SM_MAGICFIRE` 仍恰 1 条（尾本身照发）。
+    #[test]
+    fn spell_tail_p1_no_effect_gate_closed_zero_draws() {
+        // 子类 1：`Level < 3` 假（Level=3）。
+        {
+            let mut rig = SpellFrameRig::new(49, &[(49, 9)], &[("obs", 12, 11, false, 912)]);
+            rig.saves
+                .get_mut("caster")
+                .unwrap()
+                .record
+                .data
+                .magic
+                .as_mut()
+                .unwrap()[0]
+                .as_mut()
+                .unwrap()
+                .level = 3;
+            let seed = 7301;
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let before = rig.world.rng.clone();
+            rig.cast(49, (12, 11), 0);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0,
+                "[Level=3] 门不过 ⇒ 无 LVEXP"
+            );
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE),
+                1,
+                "[Level=3] 尾的 RM_MAGICFIRE 仍恰 1 条"
+            );
+            assert_zero_draws_then_matches(&before, &mut rig, seed, "Level=3");
+        }
+        // 子类 2：`TrainLevel[Level] <= Abil.Level` 假（TrainLevel[1]=2 > Abil.Level=1）。
+        {
+            let mut rig = SpellFrameRig::new(49, &[(49, 9)], &[("obs", 12, 11, false, 912)]);
+            rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+                magic_id: 49,
+                effect: 9,
+                effect_type: 4,
+                train_lv: 3,
+                train_level: [0, 2, 0, 0],
+                max_train: [1000; 4],
+                ..mir2_data::MagicInfo::default()
+            }]);
+            let seed = 7302;
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let before = rig.world.rng.clone();
+            rig.cast(49, (12, 11), 0);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0,
+                "[TrainLevel>Abil] 门不过 ⇒ 无 LVEXP"
+            );
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE),
+                1,
+                "[TrainLevel>Abil] 尾的 RM_MAGICFIRE 仍恰 1 条"
+            );
+            assert_zero_draws_then_matches(&before, &mut rig, seed, "TrainLevel>Abil");
+        }
+    }
+
+    /// **③ 越界**：A/B 两类越界（|Δx|=10 > rage=8）⇒ **只有 639**（自己 + 观察者各一条），
+    /// 无 `SM_MAGICFIRE`、无 `SM_MAGIC_LVEXP`，世界 RNG 零抽。
+    ///
+    /// 红检：尾块不判距离门 ⇒ 越界时获得 `SM_MAGICFIRE`/LVEXP ⇒ 红。
+    #[test]
+    fn spell_tail_p1_out_of_range_sends_only_639() {
+        for magic_id in [55u16, 49] {
+            let seed = 7400 + i32::from(magic_id);
+            let mut rig =
+                SpellFrameRig::new(magic_id, &[(magic_id, 9)], &[("obs", 12, 11, false, 912)]);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let before = rig.world.rng.clone();
+            rig.cast(magic_id, (20, 10), 0); // |Δx| = 10 > MagicAttackRage = 8
+            let (frames, _raws) = rig.drain();
+            for socket in [911, 912] {
+                assert_eq!(
+                    sf_count(&frames, socket, mir2_protocol::messages::SM_MAGICFIRE),
+                    0,
+                    "[魔号 {magic_id}] 越界 ⇒ socket {socket} 不得收 SM_MAGICFIRE；实得 {:?}",
+                    sf_seq(&frames, socket)
+                );
+                assert_eq!(
+                    sf_count(&frames, socket, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                    0,
+                    "[魔号 {magic_id}] 越界 ⇒ socket {socket} 不得收 SM_MAGIC_LVEXP"
+                );
+                assert_eq!(
+                    sf_count(&frames, socket, mir2_protocol::messages::SM_MAGICFIRE_FAIL),
+                    1,
+                    "[魔号 {magic_id}] 越界 ⇒ socket {socket} 恰一条 639"
+                );
+            }
+            assert_zero_draws_then_matches(&before, &mut rig, seed, &format!("越界 {magic_id}"));
+        }
+    }
+
+    /// **④ 排除面**：43/56（显式 case）与 DeferredCase（1/3/14/36）在 in-range 下**不得**因本片
+    /// 多发 `SM_MAGICFIRE`/`SM_MAGIC_LVEXP`；17 的既有尾仍恰 1 条（本片未改）；`>80` 不得命中。
+    ///
+    /// 红检：把匹配集合扩到 DeferredCase（含 1）⇒ 本测试的 `SM_MAGICFIRE == 0` 断言红。
+    #[test]
+    fn spell_tail_p1_excluded_magic_ids_unchanged() {
+        // 显式 case（43/56）：`default_arm=false` ⇒ 连 `SM_SPELL` 都没有。
+        for magic_id in [43u16, 56] {
+            let mut rig =
+                SpellFrameRig::new(magic_id, &[(magic_id, 9)], &[("obs", 12, 11, false, 912)]);
+            rig.cast(magic_id, (12, 11), 0);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL),
+                0,
+                "[魔号 {magic_id}] 显式 case 不进 default ⇒ 不得有 SM_SPELL"
+            );
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE),
+                0,
+                "[魔号 {magic_id}] 显式 case 不得进共享尾"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0
+            );
+        }
+        // DeferredCase / 战士：本片不得新增尾帧（1/14/36 无既有尾；3 是战士门）。
+        for magic_id in [1u16, 3, 14, 36] {
+            let mut rig =
+                SpellFrameRig::new(magic_id, &[(magic_id, 9)], &[("obs", 12, 11, false, 912)]);
+            rig.cast(magic_id, (12, 11), 0);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE),
+                0,
+                "[魔号 {magic_id}] 非 P1 集合 ⇒ 不得新增 SM_MAGICFIRE；实得 {:?}",
+                sf_seq(&frames, 912)
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0,
+                "[魔号 {magic_id}] 非 P1 集合 ⇒ 不得新增 LVEXP"
+            );
+        }
+        // 17（既有已接尾）：基线恰 1 条，本片不得改变。
+        {
+            let mut rig = SpellFrameRig::new(17, &[(17, 9)], &[("obs", 12, 11, false, 912)]);
+            rig.cast(17, (12, 11), 0);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE),
+                1,
+                "17 的既有尾仍恰 1 条（本片不改）；实得 {:?}",
+                sf_seq(&frames, 912)
+            );
+        }
+        // `:167` 版本/魔号门的硬半边：`MagicId > 80` 不进 P1 集合 ⇒ 无尾帧。
+        for magic_id in [81u16, 103, 500, 501] {
+            let mut rig =
+                SpellFrameRig::new(magic_id, &[(magic_id, 9)], &[("obs", 12, 11, false, 912)]);
+            rig.cast(magic_id, (12, 11), 0);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE),
+                0,
+                "[魔号 {magic_id}] > 80 ⇒ 版本门硬半边 ⇒ 不得有 SM_MAGICFIRE"
+            );
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL),
+                1,
+                "[魔号 {magic_id}] :159 的 SM_SPELL 仍在版本门之前"
+            );
+        }
+    }
+
+    /// 集合单元判据：P1 恰好 A 类 17 + B 类 5，且所有排除面（显式 case / 已接效果体 / DeferredCase /
+    /// `>80`）都返回 `None`；**禁止外延 catch-all**。
+    #[test]
+    fn spell_tail_p1_id_set_is_strict() {
+        let a = [
+            55u16, 57, 58, 59, 66, 67, 68, 69, 71, 72, 74, 75, 76, 77, 78, 79, 80,
+        ];
+        let b = [49u16, 51, 52, 53, 54];
+        assert_eq!(a.len(), 17, "A 类 = 17 个玩家可达 no_switch_case MagID");
+        assert_eq!(b.len(), 5, "B 类 = 5 个 no_effect_case MagID");
+        for id in a {
+            assert_eq!(
+                spell_tail_bo_train(id),
+                Some(false),
+                "A 类 {id} ⇒ bo_train=false"
+            );
+        }
+        for id in b {
+            assert_eq!(
+                spell_tail_bo_train(id),
+                Some(true),
+                "B 类 {id} ⇒ bo_train=true"
+            );
+        }
+        for id in [
+            1u16, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+            46, 47, 48, 50, 56, 81, 103, 500, 501,
+        ] {
+            assert_eq!(
+                spell_tail_bo_train(id),
+                None,
+                "魔号 {id} 不得进入 P1 共享尾（严格集合，无 catch-all）"
+            );
+        }
     }
 
     /// 临时注册表（与 `effect_rig` 同目录约定）：`[0|f0]` / `[home|f1]` ⇒ `id_of("home") == 1`。
