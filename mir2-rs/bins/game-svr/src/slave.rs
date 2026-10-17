@@ -366,7 +366,13 @@ fn tamming_input(world: &World, input: &TammingCastInput<'_>) -> Option<magic::T
     let target_id = input.target_id?;
     let caster = world.entities.get(input.caster_id)?;
     let target = world.entities.get(target_id)?;
-    if !mir2_world::combat::is_proper_target_grouped(caster, target, &caster.group_members) {
+    // `IsGroupMember` 读的是**团长**（`caster.GroupOwner`）的成员表（`PlayObject.cs:5158-5175`）；
+    // 非团长施法者自身的 `group_members` 恒空（`party.rs` 的 `JoinGroup` 只写 `group_owner`）。
+    if !mir2_world::combat::is_proper_target_grouped(
+        caster,
+        target,
+        &world.attacker_group_members(caster),
+    ) {
         return None;
     }
     if mir2_world::combat::race_is_animal(target.race) {

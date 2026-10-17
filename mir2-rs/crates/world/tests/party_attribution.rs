@@ -279,3 +279,187 @@ fn group_owner_missing_matches_oracle_npe() {
     );
     assert_eq!(w.entities.get(a).unwrap().exp, 280, "a 的经验不得增长");
 }
+
+// ═════════ HAM_GROUP 团长表统一（跨批收口）═════════
+//
+// oracle `IsGroupMember`（`PlayObject.cs:5158-5175`）读**团长**（`GroupOwner`）的
+// `GroupMembers`；`GroupOwner == 0` ⇒ false。本仓真实布局：团长实体持成员表，
+// 成员自身 `group_members` 恒空（`party.rs` 的 `JoinGroup` 只写 `group_owner`）。
+// 以下用例钉死统一入口 `World::attacker_group_members` 与 `RM_POISON` 投递点的读取对象。
+
+use mir2_world::slave::{SelfDelayMsg, RM_POISON};
+
+fn poison_delay(target: i32, caster: i32) -> SelfDelayMsg {
+    SelfDelayMsg {
+        actor_id: target,
+        ident: RM_POISON,
+        w_param: 0, // PoisonState.DECHEALTH（绿毒）
+        n_param1: 10,
+        n_param2: caster,
+        n_param3: 1,
+        msg: String::new(),
+        deliver_at_ms: 0,
+    }
+}
+
+/// `World::attacker_group_members` = **团长表**；`GroupOwner == 0` ⇒ 空表。
+///
+/// 牙：把函数改成恒返回空表 ⇒ 所有同组用例（本文件 + `bins/game-svr` 的 B1/B2/
+/// firewind/tamming 用例）红。
+#[test]
+fn attacker_group_members_reads_leader_table_and_empty_when_solo() {
+    let (mut w, l, a, b) = setup_group();
+    // 成员（A）的 GroupOwner 指向团长 L，自身表为空（真实布局）。
+    assert_eq!(w.entities.get(a).unwrap().group_owner, l);
+    assert!(
+        w.entities.get(a).unwrap().group_members.is_empty(),
+        "非团长自身表必须为空"
+    );
+    assert_eq!(
+        w.attacker_group_members(w.entities.get(a).unwrap()),
+        vec![l, a, b],
+        "必须读团长的 GroupMembers"
+    );
+    // 团长 GroupOwner = 自己（oracle `JoinGroup(this)`）⇒ 读到的仍是自己的表。
+    assert_eq!(w.entities.get(l).unwrap().group_owner, l);
+    assert_eq!(
+        w.attacker_group_members(w.entities.get(l).unwrap()),
+        vec![l, a, b]
+    );
+    // 未组队：GroupOwner == 0 ⇒ 空表（`IsGroupMember` 第一步即 false）。
+    let solo = w.add_entity(Entity::new(0, "solo", 5, 5));
+    assert!(w
+        .attacker_group_members(w.entities.get(solo).unwrap())
+        .is_empty());
+}
+
+/// `RM_POISON` 到点投递的 `IsProperTarget(caster)`（`BaseObject.Base.cs:740-759`）以
+/// **中毒目标**为 `this` ⇒ 必须读**目标自己的团长**表；同组 caster 不得 `SetTargetCreat`/
+/// `SetLastHiter`/`SetPkFlag`（但 `MakePosion` 在门之外，照常执行）。
+///
+/// 牙：改回 `&t.group_members`（非团长恒空）⇒ 同组 caster 被误判 proper ⇒ 三处断言红。
+#[test]
+fn poison_delivery_group_gate_reads_poisoned_targets_leader_table() {
+    // 同组：B（中毒目标）与 A（报文里的 caster）同属团长 L。
+    let (mut w, _l, a, b) = setup_group();
+    {
+        let t = w.entities.get_mut(b).unwrap();
+        t.attack_mode = ATTACK_MODE_HAM_GROUP;
+    }
+    assert!(
+        w.entities.get(b).unwrap().group_members.is_empty(),
+        "真实布局：中毒目标非团长，自身表为空"
+    );
+    w.self_delay_msgs.push(poison_delay(b, a));
+    let outs = w.deliver_self_delay_msgs();
+    assert_eq!(outs.len(), 1, "恰一条 RM_POISON 投递");
+    let p = outs[0].poison.as_ref().expect("RM_POISON 投递记录");
+    assert_eq!(
+        w.entities.get(b).unwrap().ai.target_creature,
+        None,
+        "同组 ⇒ 不得 SetTargetCreat"
+    );
+    assert_eq!(
+        w.entities.get(b).unwrap().last_hiter,
+        None,
+        "同组 ⇒ 不得 SetLastHiter"
+    );
+    assert_eq!(p.name_color, None, "同组 ⇒ 不得 SetPkFlag（无 656）");
+    assert_eq!(p.target_id, b);
+    assert_eq!(p.time, 10, "MakePosion 在 proper 门之外，仍执行");
+
+    // 控制：B 离组（GroupOwner=0）⇒ IsGroupMember false ⇒ A 是合法目标。
+    let (mut w, _l, a, b) = setup_group();
+    {
+        let t = w.entities.get_mut(b).unwrap();
+        t.attack_mode = ATTACK_MODE_HAM_GROUP;
+        t.group_owner = 0;
+    }
+    w.self_delay_msgs.push(poison_delay(b, a));
+    let outs = w.deliver_self_delay_msgs();
+    assert_eq!(
+        w.entities.get(b).unwrap().ai.target_creature,
+        Some(a),
+        "离组 ⇒ 照常 SetTargetCreat"
+    );
+    assert_eq!(
+        w.entities.get(b).unwrap().last_hiter,
+        Some(a),
+        "离组 ⇒ 照常 SetLastHiter"
+    );
+    assert!(
+        outs[0].poison.as_ref().unwrap().name_color.is_some(),
+        "离组 ⇒ SetPkFlag 生效"
+    );
+}
+
+/// **`IsProperFriend` 的组队面**（2/14/15/19/29/40）：非团长施法者必须读团长表，
+/// 否则同组成员会被判成非友军（治疗/群体隐身/防御系 buff 全部漏发）。
+///
+/// 牙：把这些点改回 `caster.group_members.contains(..)`（非团长恒空）⇒ 对应断言红；
+/// `attacker_group_members` 恒空 ⇒ 同样红。
+#[test]
+fn friend_sites_read_leader_group_table() {
+    let (mut w, l, a, b) = setup_group();
+    {
+        let c = w.entities.get_mut(a).unwrap();
+        c.attack_mode = ATTACK_MODE_HAM_GROUP;
+        assert_eq!(c.group_owner, l, "A 是团长 L 的成员");
+        assert!(c.group_members.is_empty(), "非团长自身表为空");
+    }
+    {
+        let t = w.entities.get_mut(b).unwrap();
+        t.hp = 10;
+        t.max_hp = 100;
+    }
+    let magic = |id: u16| mir2_data::MagicInfo {
+        magic_id: id,
+        power: 0,
+        max_power: 1,
+        def_power: 0,
+        def_max_power: 1,
+        train_lv: 3,
+        ..mir2_data::MagicInfo::default()
+    };
+
+    // 14/15 `MagMakeDefenceArea`：中心格友军（同组成员）必须被 buff（range=0 ⇒ 只中心格）。
+    {
+        let t = w.entities.get_mut(b).unwrap();
+        t.x = 11;
+        t.y = 11;
+    }
+    assert_eq!(
+        w.mag_make_defence_area(a, 11, 11, 0, 5, 0),
+        1,
+        "同组成员是 proper friend（读团长表）"
+    );
+
+    // 2 治愈术：门通过 ⇒ allowed + gauge。
+    let h = w.cast_healing_spell(a, &magic(2), 1, Some(b), 12, 10, 0);
+    assert!(h.allowed, "2 的 IsProperFriend 必须承认同组成员");
+    assert!(h.gauges.contains(&b), "gauge 发给同组成员");
+
+    // 29/19 走 `GetMapBaseObjects`（格表）⇒ 先把 B 放回 (12,10) 并 tick 落格。
+    {
+        let t = w.entities.get_mut(b).unwrap();
+        t.x = 12;
+        t.y = 10;
+    }
+    w.tick();
+
+    // 29 群体治疗：3×3 枚举里的同组成员必须有 gauge。
+    let bh = w.cast_big_healing_spell(a, &magic(29), 1, Some(b), 12, 10, 0);
+    assert!(bh.gauges.contains(&b), "29 的 proper friend 必须含同组成员");
+
+    // 19 群体隐身：同组成员必须收到 RM_TRANSPARENT。
+    let gt = w.cast_group_transparent_spell(a, &magic(19), 1, 0, 12, 10);
+    assert!(
+        gt.friends.contains(&b),
+        "19 必须把同组成员算作友军（读团长表）"
+    );
+
+    // 40 解毒术：门通过才抽 R(7)。
+    w.entities.get_mut(b).unwrap().status_time[mir2_world::entity::POISON_DECHEALTH] = 5;
+    let ua = w.cast_unamyounsul_spell(a, 1, Some(b));
+    assert!(ua.allowed, "40 的 IsProperFriend 必须承认同组成员");
+}

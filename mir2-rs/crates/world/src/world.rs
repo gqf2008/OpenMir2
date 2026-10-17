@@ -945,14 +945,7 @@ impl World {
             return 0;
         };
         let map_id = caster.map_id;
-        let group_members: Vec<i32> = if caster.group_owner != 0 {
-            self.entities
-                .get(caster.group_owner)
-                .map(|e| e.group_members.clone())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let group_members = self.attacker_group_members(&caster);
         let mut result = 0;
         for _c_x in (n_x - n_range)..=(n_x + n_range) {
             for _c_y in (n_y - n_range)..=(n_y + n_range) {
@@ -976,7 +969,7 @@ impl World {
                     if obj.ghost {
                         continue;
                     }
-                    let in_group = caster.group_owner != 0 && group_members.contains(&id);
+                    let in_group = group_members.contains(&id);
                     if !crate::combat::is_proper_friend(&caster, &obj, in_group) {
                         continue;
                     }
@@ -1044,7 +1037,11 @@ impl World {
         if !self.spell_can_hit(&caster, &t) {
             return SpellStrikeOutcome::default();
         }
-        if !crate::combat::is_proper_target_grouped(&caster, &t, &caster.group_members) {
+        if !crate::combat::is_proper_target_grouped(
+            &caster,
+            &t,
+            &self.attacker_group_members(&caster),
+        ) {
             return SpellStrikeOutcome::default();
         }
         // `:180 targetObject.AntiMagic <= Random(10)`；失败 ⇒ `targetObject = null`。
@@ -1093,7 +1090,11 @@ impl World {
         let Some((caster, t, tid)) = self.spell_strike_targets(caster_id, target) else {
             return SpellStrikeOutcome::default();
         };
-        if !crate::combat::is_proper_target_grouped(&caster, &t, &caster.group_members) {
+        if !crate::combat::is_proper_target_grouped(
+            &caster,
+            &t,
+            &self.attacker_group_members(&caster),
+        ) {
             return SpellStrikeOutcome::default();
         }
         if !crate::magic_effect::anti_magic_roll(&mut self.rng, anti_magic) {
@@ -1157,7 +1158,11 @@ impl World {
             target: Some(tid),
             ..SpellStrikeOutcome::default()
         };
-        if !crate::combat::is_proper_target_grouped(&caster, &t, &caster.group_members) {
+        if !crate::combat::is_proper_target_grouped(
+            &caster,
+            &t,
+            &self.attacker_group_members(&caster),
+        ) {
             return stayed;
         }
         if !crate::magic_effect::anti_magic_roll(&mut self.rng, anti_magic) {
@@ -1215,7 +1220,11 @@ impl World {
         if !self.spell_can_hit(&caster, &t) {
             return SpellStrikeOutcome::default();
         }
-        if !crate::combat::is_proper_target_grouped(&caster, &t, &caster.group_members) {
+        if !crate::combat::is_proper_target_grouped(
+            &caster,
+            &t,
+            &self.attacker_group_members(&caster),
+        ) {
             return SpellStrikeOutcome::default();
         }
         // `:1032 targetObject.AntiMagic > Random(10) || ...`（短路口径与
@@ -1768,11 +1777,7 @@ impl World {
             ty,
             ..HealingSpellOutcome::default()
         };
-        let in_group = caster.group_owner != 0
-            && self
-                .entities
-                .get(caster.group_owner)
-                .is_some_and(|g| g.group_members.contains(&tid));
+        let in_group = self.attacker_group_members(&caster).contains(&tid);
         // `:211` —— 门在**抽数之前**；失败 => `allowed=false`、`target` 保留（尾仍带该 id）。
         if !crate::combat::is_proper_friend(&caster, &t, in_group) {
             return out;
@@ -1819,19 +1824,12 @@ impl World {
             power,
             ..HealingSpellOutcome::default()
         };
-        let group_members: Vec<i32> = if caster.group_owner != 0 {
-            self.entities
-                .get(caster.group_owner)
-                .map(|g| g.group_members.clone())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let group_members = self.attacker_group_members(&caster);
         for tid in self.mag_objects_in_range(caster.map_id, n_x, n_y, 1) {
             let Some(t) = self.entities.get(tid).cloned() else {
                 continue;
             };
-            let in_group = caster.group_owner != 0 && group_members.contains(&tid);
+            let in_group = group_members.contains(&tid);
             if !crate::combat::is_proper_friend(&caster, &t, in_group) {
                 continue;
             }
@@ -1880,14 +1878,7 @@ impl World {
             power,
             ..AreaSpellOutcome::default()
         };
-        let group_members: Vec<i32> = if caster.group_owner != 0 {
-            self.entities
-                .get(caster.group_owner)
-                .map(|g| g.group_members.clone())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let group_members = self.attacker_group_members(&caster);
         let mut last_target = None;
         for tid in self.mag_objects_in_range(caster.map_id, n_x, n_y, range) {
             let Some(t) = self.entities.get(tid).cloned() else {
@@ -1946,14 +1937,7 @@ impl World {
             power,
             ..AreaSpellOutcome::default()
         };
-        let group_members: Vec<i32> = if caster.group_owner != 0 {
-            self.entities
-                .get(caster.group_owner)
-                .map(|g| g.group_members.clone())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let group_members = self.attacker_group_members(&caster);
         for tid in self.mag_objects_in_range(caster.map_id, caster.x, caster.y, range) {
             let Some(t) = self.entities.get(tid).cloned() else {
                 continue;
@@ -2272,11 +2256,7 @@ impl World {
             let Some(obj) = self.entities.get(id).cloned() else {
                 continue;
             };
-            let in_group = caster.group_owner != 0
-                && self
-                    .entities
-                    .get(caster.group_owner)
-                    .is_some_and(|g| g.group_members.contains(&id));
+            let in_group = self.attacker_group_members(&caster).contains(&id);
             if crate::combat::is_proper_friend(&caster, &obj, in_group)
                 && obj.status_time[crate::entity::POISON_STATETRANSPARENT] == 0
             {
@@ -2511,11 +2491,7 @@ impl World {
         let Some(t) = self.entities.get(tid).cloned() else {
             return UnamyounsulOutcome::default();
         };
-        let in_group = caster.group_owner != 0
-            && self
-                .entities
-                .get(caster.group_owner)
-                .is_some_and(|g| g.group_members.contains(&tid));
+        let in_group = self.attacker_group_members(&caster).contains(&tid);
         let mut out = UnamyounsulOutcome::default();
         if !crate::combat::is_proper_friend(&caster, &t, in_group) {
             return out;
@@ -2598,6 +2574,7 @@ impl World {
         };
         // oracle `VisibleActors` 的迭代序即列表序（本骨架 `Entity::visible_actors` 同源）。
         let visible: Vec<i32> = caster.visible_actors.iter().map(|v| v.target).collect();
+        let group_members = self.attacker_group_members(&caster);
         let mut result = 0;
         let mut events = Vec::new();
         for target_id in visible {
@@ -2620,7 +2597,7 @@ impl World {
             }
             // `PlayObject.IsProperTarget`：组队成员按 `HAM_GROUP` 剔除（oracle 读内存里的
             // `GroupOwner/GroupMembers`；本骨架同源字段在 `Entity::{group_owner,group_members}`）。
-            if !crate::combat::is_proper_target_grouped(&caster, &target, &caster.group_members) {
+            if !crate::combat::is_proper_target_grouped(&caster, &target, &group_members) {
                 continue;
             }
             let push = crate::magic_effect::push_steps(&mut self.rng, push_level);
@@ -3678,14 +3655,7 @@ impl World {
         // 怪物攻方无这条（`AttackSuccess` 是 `PlayObject` 私有方法）。
         // `HAM_GROUP` 的 `IsGroupMember(target)`（`PlayObject.Attack.cs:671-677`）需要攻方所在
         // 组团长的成员表；`GroupOwner == 0` ⇒ 空表（`IsGroupMember` 第一步即 `false`）。
-        let attacker_group_members: Vec<i32> = if attacker.group_owner != 0 {
-            self.entities
-                .get(attacker.group_owner)
-                .map(|e| e.group_members.clone())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let attacker_group_members = self.attacker_group_members(&attacker);
         // **片 A-5（buff 生产者接线）**：攻击命中中毒门（`PlayObject.Attack.cs:221-224`）的运行态。
         // 每个 actor 的表项存**自身**的三个属性（`Paralysis` 作攻方 + `UnParalysis`/`AntiPoison`
         // 作守方）；门取**攻方**的 `Paralysis` 与**守方**的另两项。buff 关闭时传 `None` ⇒ 与

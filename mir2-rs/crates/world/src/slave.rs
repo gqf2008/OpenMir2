@@ -1475,7 +1475,9 @@ impl World {
         let target = self.entities.get(target_id).cloned();
         let caster = self.entities.get(caster_id).cloned();
         if let (Some(t), Some(c)) = (target.as_ref(), caster.as_ref()) {
-            if crate::combat::is_proper_target_grouped(t, c, &t.group_members) {
+            // `IsProperTarget` 的 `this` 是**中毒目标** t ⇒ `IsGroupMember` 读 **t 的团长**
+            // （`PlayObject.cs:5158-5175`）的成员表，不是 t 自己的 `group_members`（非团长恒空）。
+            if crate::combat::is_proper_target_grouped(t, c, &self.attacker_group_members(t)) {
                 if let Some(tm) = self.entities.get_mut(target_id) {
                     tm.ai.target_creature = Some(caster_id);
                 }

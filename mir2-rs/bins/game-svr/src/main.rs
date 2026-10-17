@@ -32597,4 +32597,268 @@ mod tests {
         // nPower = 7 ⇒ Round(7*1.5)=11；投递 MSD(11)=11（MAC=0），/1.2 = Round(9.17)=9。
         assert_eq!(b4_cmd(&struck[0]).series, 9, "不死 ×1.5 后的 31 伤害");
     }
+
+    // ═════════ HAM_GROUP 团长表统一（跨批收口：B1/B2/firewind/tamming）═════════
+    //
+    // oracle `IsGroupMember`（`PlayObject.cs:5158-5175`）读的是**团长**（`GroupOwner`）的
+    // `GroupMembers`；`GroupOwner == 0` ⇒ false。本仓 `party_create_group` 只把成员表挂在
+    // 团长实体（`party.rs:542-544`），`JoinGroup` 只给成员写 `group_owner`（`party.rs:321-323`）
+    // ⇒ **非团长施法者自身的 `group_members` 恒空**。若任一调用点仍传 `&caster.group_members`，
+    // 同组玩家会被误判为合法目标：多抽骰门/威力、白扣护身符、多发延迟帧/伤害。
+    //
+    // 以下用例全部走**生产入口** `handle_spell_cmd`，布局 = 真实布局（施法者非团长、团长实体持表）。
+
+    /// 真实布局：施法者挂到团长 `leader` 名下（自身表清空），团长表 = `members` 且
+    /// `group_owner` 指向自己（oracle `JoinGroup(this)`，`PlayObject.Operate.cs:837`）。
+    fn install_ham_group(rig: &mut SpellFrameRig, leader: i32, members: &[i32]) {
+        let caster = rig.caster;
+        {
+            let c = rig.world.entities.get_mut(caster).unwrap();
+            c.attack_mode = mir2_world::combat::ATTACK_MODE_HAM_GROUP;
+            c.group_owner = leader;
+            c.group_members.clear();
+            assert!(
+                c.group_members.is_empty(),
+                "非团长自身表必须为空（真实布局）"
+            );
+        }
+        let l = rig.world.entities.get_mut(leader).unwrap();
+        l.group_owner = leader;
+        l.group_members = members.to_vec();
+    }
+
+    /// **B1（1/5/11/13/44/45）**：同组玩家目标 ⇒ `IsProperTarget` 直接拒绝 ⇒ **零抽**、
+    /// 不投 `RM_DELAYMAGIC`、无训练尾；13 的护身符门在 `IsProperTarget` **之前**（oracle
+    /// `:322-325`）照常消耗，共享尾 638 的 ActorId 保留目标（oracle `:332-341` 非对称）。
+    ///
+    /// 牙：任一支改回 `&caster.group_members`（空表）⇒ 骰门/威力多抽 ⇒ 本用例红；
+    /// `attacker_group_members` 改成恒空表 ⇒ 同样红。
+    #[test]
+    fn ham_group_owner_table_b1_sites_exclude_same_group_player() {
+        const SM_SPELL: u16 = mir2_protocol::messages::SM_SPELL;
+        const SM_MAGICFIRE: u16 = mir2_protocol::messages::SM_MAGICFIRE;
+        const SM_MAGIC_LVEXP: u16 = mir2_protocol::messages::SM_MAGIC_LVEXP;
+
+        for magic_id in [1u16, 5, 11, 13, 44, 45] {
+            let mut rig = b1_rig(magic_id, 9);
+            let ally = b1_player(&mut rig, 11, 10, 1, 0);
+            let leader = b1_player(&mut rig, 20, 20, 60, 0);
+            let caster = rig.caster;
+            install_ham_group(&mut rig, leader, &[leader, caster, ally]);
+
+            let seed = b1_seed(0, None);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let before = rig.world.rng.clone();
+            rig.cast(magic_id, (11, 10), ally);
+            let (frames, _raws) = rig.drain();
+
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                0,
+                "[{magic_id}] 同组玩家 ⇒ IsProperTarget 拒绝 ⇒ 零抽（多抽即读错表）"
+            );
+            assert!(
+                rig.world.self_delay_msgs.is_empty(),
+                "[{magic_id}] 不得投 RM_DELAYMAGIC/RM_DELAYPUSHED"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, SM_MAGIC_LVEXP),
+                0,
+                "[{magic_id}] boTrain=false ⇒ 无训练尾"
+            );
+            assert_eq!(
+                sf_seq(&frames, 912),
+                vec![SM_SPELL, SM_MAGICFIRE],
+                "[{magic_id}] 观察者恰 SM_SPELL → SM_MAGICFIRE"
+            );
+            let fire = sf_first(&frames, 912, SM_MAGICFIRE);
+            // 13 的 IsProperTarget 失败支**保留** targetObject（oracle `:332-341` 无 else）；
+            // 1/5/11/44/45 失败支把它置 null（共享尾 ActorId=0）。
+            let want_target = if magic_id == 13 { ally } else { 0 };
+            assert_eq!(
+                sf_magicfire_target_id(fire),
+                want_target,
+                "[{magic_id}] 共享尾 638 的 ActorId"
+            );
+        }
+    }
+
+    /// **B2（23/24/33/47）**：同组玩家目标不被计入逐目标伤害；范围内怪物照常受击。
+    ///
+    /// 施法者侧 4 抽无条件（oracle 实参求值序）；每只怪交付段 `R(1000)+MSD(+R(300))`。
+    /// 牙：改回 `&caster.group_members` 或把团长表解析成空表 ⇒ 玩家也被交付（多抽 + 53/31）
+    /// ⇒ 抽数、HP、帧面三重红。
+    #[test]
+    fn ham_group_owner_table_b2_sites_exclude_same_group_player() {
+        const SM_53: u16 = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        const SM_31: u16 = mir2_protocol::messages::SM_STRUCK;
+        const SM_656: u16 = mir2_protocol::messages::SM_CHANGENAMECOLOR;
+
+        for magic_id in [23u16, 24, 33, 47] {
+            let mut rig = b2_rig(magic_id, 21, &[("obs", 10, 13, false, 912)]);
+            let ally = b2_add_player(&mut rig, "ally", 11, 10, 50, 1000, 921);
+            let mon = b2_add_monster(&mut rig, "m1", 11, 11, 0);
+            let leader = b2_add_player(&mut rig, "leader", 20, 20, 100, 100, 922);
+            let caster = rig.caster;
+            install_ham_group(&mut rig, leader, &[leader, caster, ally]);
+
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(42);
+            let before = rig.world.rng.clone();
+            rig.cast(magic_id, (11, 10), ally);
+            let (frames, _raws) = rig.drain();
+
+            assert!(
+                draws_between(&before, &rig.world.rng) <= 7,
+                "[{magic_id}] 只该有 4 施法者抽 + 怪物交付（<=3）；同组玩家不得被交付"
+            );
+            assert_eq!(
+                rig.world.entities.get(ally).unwrap().hp,
+                50,
+                "[{magic_id}] 同组玩家不得掉血"
+            );
+            assert!(
+                rig.world.entities.get(mon).unwrap().hp < 1000,
+                "[{magic_id}] 范围内怪物照常受击（控制组）"
+            );
+            // 921 仍会收到广播的 SM_SPELL/SM_MAGICFIRE（视野内玩家），但**不得有任何伤害帧**。
+            let ally_seq = b2_seq(&frames, 921);
+            assert_eq!(
+                ally_seq
+                    .iter()
+                    .filter(|(id, recog)| matches!(*id, SM_53 | SM_31 | SM_656) && *recog == ally)
+                    .count(),
+                0,
+                "[{magic_id}] 同组玩家自身不得成为受击者（53/31/656 recog=ally）；实得 {ally_seq:?}"
+            );
+        }
+    }
+
+    /// **firewind 8/37**：`MagPushArround` 的 `IsProperTarget` 在 `Random(20)` 门之后、
+    /// `Random(2)` 步数之前（`MagicManager.cs:37-41`）⇒ 同组玩家恰消耗 1 抽、不被推。
+    ///
+    /// 牙：改回施法者自己的空表 ⇒ 多 1 抽步数并产生 `SM_BACKSTEP` ⇒ 红。
+    #[test]
+    fn ham_group_owner_table_firewind_excludes_same_group_player() {
+        const SM_BACKSTEP: u16 = mir2_protocol::messages::SM_BACKSTEP;
+
+        let mut rig = SpellFrameRig::new(
+            mir2_world::magic::SKILL_FIREWIND,
+            &[(mir2_world::magic::SKILL_FIREWIND, 3)],
+            &[("obs", 12, 11, false, 912)],
+        );
+        rig.world.entities.get_mut(rig.caster).unwrap().level = 20;
+        let ally = b1_player(&mut rig, 11, 10, 15, 0);
+        let leader = b1_player(&mut rig, 20, 20, 60, 0);
+        let caster = rig.caster;
+        install_ham_group(&mut rig, leader, &[leader, caster, ally]);
+        // 显式可见集：只含同组玩家（oracle `VisibleActors` 顺序）。
+        rig.world
+            .entities
+            .get_mut(rig.caster)
+            .unwrap()
+            .visible_actors = vec![mir2_world::entity::VisibleBaseObject {
+            target: ally,
+            flag: mir2_world::entity::VisibleFlag::Show,
+        }];
+
+        let seed = 1; // 既有正例同 seed：chance 门必过（gap=5, push_level=1 ⇒ 阈值 14）
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let before = rig.world.rng.clone();
+        rig.cast(mir2_world::magic::SKILL_FIREWIND, (11, 10), 0);
+        let (frames, _raws) = rig.drain();
+
+        assert_eq!(
+            draws_between(&before, &rig.world.rng),
+            1,
+            "只消耗 Random(20) 门；IsProperTarget 拒绝后不得再抽 Random(2)"
+        );
+        assert_eq!(
+            sf_count(&frames, 911, SM_BACKSTEP) + sf_count(&frames, 912, SM_BACKSTEP),
+            0,
+            "同组玩家不得被推（无 SM_BACKSTEP）"
+        );
+        let (ax, ay) = {
+            let a = rig.world.entities.get(ally).unwrap();
+            (a.x, a.y)
+        };
+        assert_eq!((ax, ay), (11, 10), "同组玩家坐标不变");
+    }
+
+    /// **tamming 20**：`IsProperTarget(targetObject) && !Animal`（`MagicManager.cs:394-397`）；
+    /// 客户端可把同组玩家的 ActorId 当目标发来 ⇒ 必须在 `MagTamming` 前拒绝（零抽）。
+    ///
+    /// 牙：改回 `&caster.group_members` ⇒ 进入 `MagTamming` 抽数（`R(2)` + 尾）⇒ 红。
+    #[test]
+    fn ham_group_owner_table_tamming_excludes_same_group_player() {
+        let mut rig = SpellFrameRig::new(
+            mir2_world::slave::SKILL_TAMMING,
+            &[(mir2_world::slave::SKILL_TAMMING, 3)],
+            &[("obs", 12, 11, false, 912)],
+        );
+        let ally = b1_player(&mut rig, 11, 10, 1, 0);
+        let leader = b1_player(&mut rig, 20, 20, 60, 0);
+        let caster = rig.caster;
+        install_ham_group(&mut rig, leader, &[leader, caster, ally]);
+
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        let before = rig.world.rng.clone();
+        rig.cast(mir2_world::slave::SKILL_TAMMING, (11, 10), ally);
+        let (frames, _raws) = rig.drain();
+
+        assert_eq!(
+            draws_between(&before, &rig.world.rng),
+            0,
+            "同组玩家 ⇒ 不进 MagTamming（零抽）"
+        );
+        assert_eq!(
+            rig.world.entities.get(ally).unwrap().master,
+            None,
+            "不得受奴"
+        );
+        assert_eq!(
+            sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+            0,
+            "boTrain=false ⇒ 无训练尾"
+        );
+    }
+
+    /// **团长施法 / 非组队不变**：
+    /// - 团长自己施法：`group_owner == 自己`（oracle `JoinGroup(this)`），自身的 `group_members`
+    ///   就是成员表 ⇒ 修正前后同组玩家仍被剔除（零抽）；
+    /// - 非组队：普通目标照旧走完 6 抽 + `RM_DELAYMAGIC`（与既有 B1 用例一致）。
+    #[test]
+    fn ham_group_owner_table_leader_and_solo_unchanged() {
+        // 团长 = 施法者自己。
+        let mut rig = b1_rig(1, 9);
+        let ally = b1_player(&mut rig, 11, 10, 1, 0);
+        {
+            let c = rig.world.entities.get_mut(rig.caster).unwrap();
+            c.attack_mode = mir2_world::combat::ATTACK_MODE_HAM_GROUP;
+            c.group_owner = rig.caster;
+            c.group_members = vec![rig.caster, ally];
+        }
+        let seed = b1_seed(0, None);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let before = rig.world.rng.clone();
+        rig.cast(1, (11, 10), ally);
+        let (_frames, _raws) = rig.drain();
+        assert_eq!(
+            draws_between(&before, &rig.world.rng),
+            0,
+            "团长自己施法 ⇒ 同组玩家仍被剔除（修正前后一致）"
+        );
+
+        // 非组队：普通怪 ⇒ 6 抽 + 恰 1 条 RM_DELAYMAGIC。
+        let mut rig = b1_rig(1, 9);
+        let mon = b1_monster(&mut rig, 11, 10, 1, 0);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let before = rig.world.rng.clone();
+        rig.cast(1, (11, 10), mon);
+        let _ = rig.drain();
+        assert_eq!(
+            draws_between(&before, &rig.world.rng),
+            6,
+            "非组队 ⇒ 既有 1/5 取数序不变（含训练尾；RM_DELAYMAGIC 在 B1 仅回报载荷，不入队）"
+        );
+    }
 }
