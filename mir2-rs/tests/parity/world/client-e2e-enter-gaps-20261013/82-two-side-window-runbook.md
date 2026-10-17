@@ -489,6 +489,22 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene
 > 落账本；出生点 / RNG 若分歧，先核这一片的门（构造级已由 `bins/game-svr` 的 `mongen::tests::terrain_*`
 > 把「环被进入 / 首轮即走边界支 / 抽数逐项 == oracle 期望表」钉死；真机仍需本窗口复核）。
 
+> **必核项（2026-10-17 起，卡 `openmir2-mapcell-consumer-teeth`）：走位/推/冲刺帧面 + NPC/商人出现帧 —— 同依赖 mapcell 装载（`2ff02ac0e`/`b192bd9f3`）。**
+> mapcell 装载让 `Valid==Walk` 真机生效（此前每格皆 `Walk`）⇒ **玩家走位碰撞**由
+> `crates/world/src/world.rs::cell_free`（oracle `Envirnoment.CanWalk`，`Envirnoment.cs:442-486`）驱动，
+> 目标格是墙 ⇒ **不移动 + 不发 `SM_WALK` + 不回 `+GD`**（此前恒可走）。构造级已由 `bins/game-svr` 的
+> `tests::move_cmd_blocked_by_wall_cell_sends_no_move_frame`（走生产入口 `handle_move_cmd`）钉死：
+> 摘 `cell_free` 的属性门 ⇒ 源格登记被 orphan 必红；`MapCellInfo::valid()` 恒真 ⇒ 走上墙格必红。
+> ⇒ 窗口必核：两侧同点同方向**朝墙走**一次，比对「Rust 侧无 `SM_WALK` / 坐标不动」与 C# 侧一致
+> （选**贴墙**格：出生点邻域墙格用 `crates/envir/tests/real_maps.rs` 的 `deployment_wall_census` 复核确认）；
+> 推（`CharPushed`）/冲刺（`Rush` 的 `CanWalk(...,true)`）同族同口径。
+> **NPC / 商人出现帧**：本片已用 `mir2_envir` 解析器普查真机（`crates/envir/tests/real_maps.rs::deployment_wall_census`）：
+> `Envir/Npcs.txt` **3** 条、`Envir/Merchant.txt` **131** 条，**落墙格各 0 条** ⇒ 装载后真机**不发生任何
+> 「静默移除」**（oracle `BaseObject.Initialize` 的 `CanWalk && AddToMap` 失败 ⇒ `RemoveAt`；Rust
+> `attach_merchant_to_map`/`attach_npc_to_map` 同构），故本步**无需**比对「被移除清单」；两侧 NPC 出现帧 /
+> 商人可交互性照常核。**若将来语料出现落墙格条，本项升为必核「被移除 NPC/商人清单」**（复核命令见
+> `bins/game-svr/src/mapwire.rs` 模块头）。
+
 ### W0-7 收窗（缺一不算收）
 
 1. **停栈（同 `-LogDir`）**：`start_rust_stack.ps1 -LogDir <本趟 LogDir> -Stop`；C# 侧按既有 `-Stop`。

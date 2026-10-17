@@ -15,6 +15,55 @@
 //! - 其余同族消费点：进图/落格（`add_map_object`）、地面物品（`AddItemToMap`）、AOI 视距
 //!   （`BaseObject.ViewRange`）、`CanWalk(...,true)` 冲刺、`cetin_near_xy`（spell 路径 snap）。
 //!
+//! ## 真机静态普查（2026-10-17，卡 `openmir2-mapcell-consumer-teeth`；**只读部署件**）
+//!
+//! 用 `mir2_envir` 解析器（`MapLoader`/`MapRegistry`/`MapFile::attribute`/`npcs`/`merchant`）普查
+//! `E:/MirServer/M2GameSvr`。复核命令 = `crates/envir/tests/real_maps.rs` 的 `deployment_wall_census`（`#[ignore]` **只读**
+//! 工具，不进常驻测试）：
+//! `cargo test -p mir2-envir --test real_maps -- --ignored --nocapture`（`MIR2_MAP_DIR` 默认 `E:/MirServer/M2GameSvr/Map`）。
+//! 独立复核（python 裸读 `.map`、无 cargo）：见审计报告
+//! `tests/parity/m3/audit-valid-consumers-20261017.md` §6 R8。⚠ R8 的 glob 扫 `Map/` 全部
+//! **572** 张 `.map`；**322** 条 section 指向 **314** 张不同文件（8 条是 `a|b` 别名）、
+//! 其余 **258** 张未注册、不进世界 ⇒ R8 的「Walk cell0」是 **14** 张 = 本表 **5** 张注册图 +
+//! **9** 张未注册图（`613`/`T1361`/`T1362`/`T2362`/`T3361`/`T3362`/`W0`/`W1`/`W2`），不是分歧。
+//!
+//! ### ① `(0,0)` 属性普查 —— 防把 `move_object` 的 cell0 耦合误读为回归
+//!
+//! 真机 `MapInfo.txt` 注册 **322** 张图：`(0,0)` 为**墙** **317** 张，为 `Walk` 仅 **5** 张
+//! （`T2361` id=13 / `E702` 118 / `D10031` 226 / `4` 236 / `H009` 300；含字面 `0.map`=id26 ⇒ `HighWall`，
+//! 与 `b192bd9f3` 正文④的锚一致）。Rust `MapGrid` 列主序 `index(0,0)==0` ⇒ `get_cell_info` 失败回落的
+//! `cells[0]` **就是** `(0,0)`。`map.rs::move_object` 的
+//! `let (cell,_) = get_cell_info(to_x,to_y); if !cell.valid() { return false; }` 与 oracle
+//! `Envirnoment.MoveToMovingObject` 的 `if (canMove && cellInfo.Valid)`（`Envirnoment.cs:380`，
+//! 目标非 `Valid` 时 `cellInfo` 同为 `CellArray[0]`）**逐行同形** ⇒
+//! - `(0,0)` 是墙（317/322）：目标墙格 ⇒ `cells[0].valid()==false` ⇒ 早退、**不摘源格**；
+//! - `(0,0)` 是 `Walk`（5/322）：目标墙格 ⇒ 摘源格、不落目标格（`add_map_object` 因墙返回 `false`，
+//!   `move_object` 整体仍返回 `false`）。
+//!
+//! **两种都与 oracle 同形；且真机走位路径都够不到该分支**：生产走位 `handle_move_cmd` 走
+//! `World::step_with_route`→`try_step_now`→`cell_free`（`world.rs`：墙目标在 `cell_free` 即被拒），
+//! 无门控的 `Command::Walk`→`try_step`（`world.rs`）**生产无调用方**（`World::walk` 只被测试用）。
+//! ⇒ 真机不触发；此段登记以免后人误读为 mapcell 片引入的回归。
+//!
+//! ### ② NPC / 商人「配置格是墙 ⇒ 静默移除」的逐条普查
+//!
+//! 真机 `Envir/Npcs.txt` **3** 条、落墙格 **0** 条；`Envir/Merchant.txt`（盘上 `MerChant.txt`）
+//! **131** 条、落墙格 **0** 条 ⇒ **真机不发生任何移除**。Rust `World::attach_merchant_to_map` /
+//! `attach_npc_to_map`（`merchant.rs`/`npc.rs`）与 oracle `BaseObject.Initialize`
+//! （`BaseObject.Base.cs:13-21` 的 `CanWalk(CurrX,CurrY,true) && AddToMap()`）以及
+//! `MerchantInitialize`/`NpCinitialize`（`WorldServer.Merchant.cs`）的静默 `RemoveAt` **逐条同形**。
+//! **登记一处潜在日志差异（真机 0 移除 ⇒ 两侧都无该日志、当前不可观测）**：oracle 逐条
+//! `LogService.Warn("Merchant/Npc Initalize fail..."+名+图+坐标)`；宿主只打**一条** `INF` 汇总
+//! （`bins/game-svr/src/main.rs` 的「挂图失败 {} 条」），**无逐条 WRN**。语料若变化须复核本行。
+//!
+//! ### ③ 走位碰撞牙（进程级）
+//!
+//! 装载让 `Valid==Walk` 真机生效 ⇒ 玩家走位碰撞（`world.rs::cell_free`，oracle `Envirnoment.CanWalk`）
+//! 对墙格由「恒可走」变「不可走」。构造级钉死：`bins/game-svr` 的
+//! `tests::move_cmd_blocked_by_wall_cell_sends_no_move_frame`（走生产入口 `handle_move_cmd`；
+//! 两条变异牙：摘 `cell_free` 属性门 ⇒ 源格 orphan 必红；`MapCellInfo::valid()` 恒真 ⇒ 走上墙格必红）。
+//! 窗口必核项见 W0 runbook。
+//!
 //! oracle 路径：`M2Share.BasePath`（可执行体目录）+ `Server.conf` 的 `[Share] EnvirDir`/`MapDir`
 //! （`GameSvrConf.EnvirDir/MapDir` 的默认值分别是 `Envir`/`Map`，`GameSvrConf.cs:1295-1296`）
 //! → `Envir/MapInfo.txt` 的 section 先后顺序就是 `map_id`（见 `mir2_envir::MapRegistry` 的头注释）。

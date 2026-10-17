@@ -13300,6 +13300,165 @@ mod tests {
         );
     }
 
+    /// **卡 `openmir2-mapcell-consumer-teeth` ① 走位碰撞牙（进程级）**：mapcell 装载让
+    /// `Valid == (Attribute == Walk)` 在真机首次生效 ⇒ `world.rs::cell_free` 的
+    /// `get_cell_info(...).1`（对应 oracle `Envirnoment.CanWalk`，`Envirnoment.cs:442-486`）
+    /// 对**墙格**由「恒真」变「假」。本用例走**生产入口** `handle_move_cmd`（不是直调叶子）：
+    /// 同一条 `CM_WALK`，目标格是 `Walk` ⇒ 走一步 + 广播 `SM_WALK` + 回 `+GD`；目标格是**墙** ⇒
+    /// **不移动 + 不发移动帧 + 不回 ack + 源格登记不被摘**。两段用同一 mover、只在中间把目标格
+    /// 置成 `HighWall`（⇒ 唯一差别就是那格属性）。
+    ///
+    /// **红检（变异牙，两条都被实测过）**：
+    /// - **牙①**：去掉 `world.rs::cell_free` 里 `let (cell, ok) = map.get_cell_info(tx, ty);` 之后的
+    ///   `if !ok { return false; }`（只认 `ObjList` 活体阻挡、不再看格子属性）⇒ `cell_free` 对墙格返回
+    ///   `true` ⇒ 越过 `cell_free` 直接进 `try_step`：`move_object` 摘掉源格对象后 `add_map_object`
+    ///   又因墙失败 ⇒ **坐标不动但源格登记被摘**（orphan）⇒ 第三段「源格登记仍在」断言**必红**
+    ///   （坐标/帧断言此时仍绿——第二层 `move_object`/`add_map_object` 也查属性，所以只摘 `cell_free`
+    ///   这一层不改坐标，这一点正是本牙要钉出来的：属性门是**两层**，缺一层就 orphan）。
+    /// - **牙②**：把 `crates/world/src/map.rs::MapCellInfo::valid()` 改成恒 `true`（等价于「装载没生效 /
+    ///   属性门全失效」）⇒ `cell_free`/`move_object`/`add_map_object` 三处一起放行 ⇒ mover 直接走上
+    ///   墙格 ⇒ 坐标 + 帧断言**必红**。实测：先命中前置断言 `cell_valid(12,10)==false`
+    ///   （`assert!(left: true)`）；把该前置一并去掉后，坐标断言 `(e.x,e.y)==(11,10)` 命中
+    ///   `left: (12,10)`——两条都红，证明本用例确实吃到「属性门失效」。
+    #[test]
+    fn move_cmd_blocked_by_wall_cell_sends_no_move_frame() {
+        use mir2_protocol::messages::{CM_WALK, SM_WALK};
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let mover = {
+            let mut e = mir2_world::Entity::new(0, "mover".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let observer = {
+            let mut e = mir2_world::Entity::new(0, "obs".to_string(), 12, 12);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick(); // Enter 落格（10,10）
+
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            mover,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"mover".to_vec()),
+        );
+        displays.set(
+            observer,
+            downlink::ActorDisplay::new(0, 0, 222, 0, 0, 255, b"obs".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "mover".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: mover,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "obs".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: observer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // ① 正向对照：目标格 (11,10) 是 Walk ⇒ 走一步 + SM_WALK + +GD。
+        handle_move_cmd(
+            CM_WALK,
+            game_svr::feature::make_long(11, 10),
+            0,
+            "mover",
+            901,
+            &online,
+            &mut std::collections::HashMap::new(),
+            &mut world,
+            &mut displays,
+            &gates,
+            None,
+        );
+        {
+            let e = world.entities.get(mover).unwrap();
+            assert_eq!((e.x, e.y), (11, 10), "Walk 目标格 ⇒ 必须走一步");
+        }
+        assert_eq!(
+            world.map(0).cell(11, 10).count(),
+            1,
+            "Walk 目标格 ⇒ mover 登记在 (11,10)"
+        );
+        let mut walk = None;
+        let mut ack = None;
+        while let Ok(m) = rx0.try_recv() {
+            match m {
+                SimToGate::SendFrame { socket, body } => {
+                    assert_eq!(socket, 902, "移动帧只给观察者");
+                    walk = Some(body);
+                }
+                SimToGate::SendRaw { payload, .. } => ack = Some(payload),
+                other => panic!("意外 sim→gate 命令：{other:?}"),
+            }
+        }
+        let walk = walk.expect("Walk 目标格 ⇒ 观察者必须收 SM_WALK");
+        assert_eq!(
+            &walk[..12],
+            &smframe::command_header(mover, SM_WALK, 11, 10, game_svr::feature::make_word(2, 0))
+        );
+        assert!(ack.expect("Walk 目标格 ⇒ 必须回 +GD").starts_with(b"+GD/"));
+
+        // 装载后的等价物：把下一目标格 (12,10) 置成墙（生产由 `apply_map_cells` 灌 `.map` 属性）。
+        // 注意：此刻 (12,10) 仍是 `Walk` ⇒ `get_cell_info_mut` 返回真格（非 `cells[0]`），选择器有效。
+        world.maps[0]
+            .get_cell_info_mut(12, 10)
+            .0
+            .set_attribute(mir2_world::CellAttribute::HighWall);
+        assert!(
+            !world.maps[0].cell_valid(12, 10),
+            "前置：目标格 (12,10) 必须是墙（cell_valid==false）"
+        );
+
+        // ② 目标格是墙 ⇒ 不移动、不发移动帧、不回 ack（`cell_free` 的 `get_cell_info().1` 门）。
+        handle_move_cmd(
+            CM_WALK,
+            game_svr::feature::make_long(12, 10),
+            0,
+            "mover",
+            901,
+            &online,
+            &mut std::collections::HashMap::new(),
+            &mut world,
+            &mut displays,
+            &gates,
+            None,
+        );
+        {
+            let e = world.entities.get(mover).unwrap();
+            assert_eq!(
+                (e.x, e.y),
+                (11, 10),
+                "目标格是墙 ⇒ 不得移动（oracle CanWalk 挡住）"
+            );
+        }
+        assert!(
+            rx0.try_recv().is_err(),
+            "目标格是墙 ⇒ 不得发 SM_WALK / 不得回 +GD（整条 sim→gate 队列须空）"
+        );
+        assert_eq!(
+            world.map(0).cell(11, 10).count(),
+            1,
+            "目标格是墙 ⇒ 源格登记不得被摘（牙①：只摘 cell_free 属性门会 orphan 掉这一条）"
+        );
+    }
+
     /// **owner §26（sim 循环对接）**：`CM_PICKUP` 派发到 `ground::pick_up` + `pickwire`，
     /// 经该角色的 `[GateIdx,Socket]` 回 `SM_GOLDCHANGED`，并把金币写进会话态 `GroundState`。
     ///

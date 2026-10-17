@@ -11,10 +11,14 @@
 //! dotnet E:\tmp\openmir2-gamegate-imp\mapgen\bin\Release\net9.0\mapgen.dll probe E:\MirServer\M2GameSvr\Map\0.map
 //! ```
 //! 环境变量缺失时**不静默 skip**：直接报错，提醒这是需要真机数据的门禁。
+//!
+//! `deployment_wall_census`（卡 `openmir2-mapcell-consumer-teeth`）另读 `Envir/Npcs.txt` /
+//! `Envir/Merchant.txt` 做落墙格普查；数字登记在 `bins/game-svr/src/mapwire.rs`。跑法同上（名称过滤可选）：
+//! `cargo test -p mir2-envir --test real_maps -- --ignored --nocapture`
 
 use std::path::PathBuf;
 
-use mir2_envir::{CellAttribute, MapFile, MapLoader};
+use mir2_envir::{CellAttribute, MapFile, MapLoader, MapRegistry};
 
 fn map_dir() -> PathBuf {
     std::env::var("MIR2_MAP_DIR").map_or_else(
@@ -110,4 +114,87 @@ fn map_0_cell_zero_attribute_is_consistent() {
         CellAttribute::Walk
     };
     assert_eq!(m.attribute(0, 0), expected);
+}
+
+/// **卡 `openmir2-mapcell-consumer-teeth` 真机普查**（依赖 mapcell 装载）：为
+/// `bins/game-svr/src/mapwire.rs` 模块头登记的两个真机数字提供可复跑命令——
+/// ① 各**注册**图 `(0,0)`（= `MapGrid` 的 `cells[0]`）属性；② `Envir/Npcs.txt` /
+/// `Envir/Merchant.txt` 里**配置格落在墙格**的条数（oracle `BaseObject.Initialize` 的
+/// `CanWalk(CurrX,CurrY,true)` 失败 ⇒ `MerchantInitialize`/`NpCinitialize` 静默 `RemoveAt`）。
+///
+/// 数字本身不硬编码断言（本文件是**普查工具**；判据在审查侧）——只做「部署件/路径对」的结构检查。
+/// 2026-10-17 实测（`M2GameSvr`）：注册图 **322**（`(0,0)` 为墙 **317**、为 `Walk` **5**：
+/// `T2361`/`E702`/`D10031`/`4`/`H009`）；`Npcs.txt` **3** 条 / 落墙 **0**；`Merchant.txt` **131** 条 / 落墙 **0**。
+#[test]
+#[ignore = "读真机 E:\\MirServer（仓外）；MIR2_MAP_DIR 显式跑"]
+fn deployment_wall_census() {
+    let map_dir = map_dir();
+    assert!(map_dir.is_dir(), "真图目录不存在：{}", map_dir.display());
+    // `MapLoader` 的 base = `M2GameSvr`（`Map` 的父目录），`Envir` 在其下。
+    let base = map_dir
+        .parent()
+        .expect("Map 目录应有父目录（M2GameSvr 根）")
+        .to_path_buf();
+    let loader = MapLoader::new(base.clone(), "Map", "Envir");
+    let entries = loader
+        .load_map_info_entries()
+        .expect("读 Envir/MapInfo.txt 失败");
+    let reg = MapRegistry::from_entries(loader, entries);
+
+    // ① 各注册图 (0,0) 属性（`index(0,0)==0` ⇒ 就是 `cells[0]`）。
+    let cell0_walk: Vec<(usize, String)> = reg
+        .maps()
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.attribute(0, 0) == CellAttribute::Walk)
+        .map(|(i, _)| (i, reg.entries()[i].map_file_name.clone()))
+        .collect();
+    eprintln!(
+        "[census] maps_registered={} cell0_walk={} cell0_nonwalk={} cell0_walk_list={cell0_walk:?}",
+        reg.maps().len(),
+        cell0_walk.len(),
+        reg.maps().len() - cell0_walk.len()
+    );
+
+    // ② Npcs.txt / Merchant.txt 落墙格。
+    let npc_bytes = std::fs::read(base.join("Envir/Npcs.txt")).expect("读 Envir/Npcs.txt 失败");
+    let npcs = mir2_envir::npcs::load_npcs(&mir2_envir::decode_text(&npc_bytes))
+        .expect("解析 Npcs.txt 失败");
+    let mut npc_wall: Vec<String> = Vec::new();
+    for n in &npcs {
+        let a = reg
+            .id_of(&n.map_name)
+            .map(|id| reg.maps()[id].attribute(i32::from(n.x), i32::from(n.y)));
+        if a != Some(CellAttribute::Walk) {
+            npc_wall.push(format!(
+                "{} @{} ({},{}) => {a:?}",
+                n.chr_name, n.map_name, n.x, n.y
+            ));
+        }
+    }
+    let m_bytes =
+        std::fs::read(base.join("Envir/MerChant.txt")).expect("读 Envir/MerChant.txt 失败");
+    let m_text = mir2_envir::decode_text(&m_bytes);
+    let mut m_total = 0usize;
+    let mut m_wall: Vec<String> = Vec::new();
+    for line in m_text.lines() {
+        if let Some(r) = mir2_envir::merchant::parse_merchant_line(line) {
+            m_total += 1;
+            let a = reg
+                .id_of(&r.map_name)
+                .map(|id| reg.maps()[id].attribute(i32::from(r.x), i32::from(r.y)));
+            if a != Some(CellAttribute::Walk) {
+                m_wall.push(format!(
+                    "{} @{} ({},{}) => {a:?}",
+                    r.chr_name, r.map_name, r.x, r.y
+                ));
+            }
+        }
+    }
+    eprintln!("[census] npcs_total={} npcs_wall={npc_wall:?}", npcs.len());
+    eprintln!("[census] merchant_total={m_total} merchant_wall={m_wall:?}");
+
+    assert!(!reg.maps().is_empty(), "注册表为空 ⇒ 部署件/路径不对");
+    assert!(!npcs.is_empty(), "Npcs.txt 解析为 0 条 ⇒ 部署件/路径不对");
+    assert!(m_total > 0, "Merchant.txt 解析为 0 条 ⇒ 部署件/路径不对");
 }
