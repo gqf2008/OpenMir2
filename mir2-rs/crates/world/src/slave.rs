@@ -1730,10 +1730,10 @@ mod tests {
     //
     // | oracle | 语义 | Rust（`crates/world/src/slave.rs`） |
     // |---|---|---|
-    // | `BaseObject.RecallSlave`（`BaseObject.cs:1850-1876`） | `GetFrontPosition` → `nFlag=(sSlaveName==Config.Dragon, OrdinalIgnoreCase)?1:-1` → 从 `SlaveList` **末尾往前**找（Dragon 模式匹配 `Dragon`/`Dragon1`，普通名匹配 `sSlaveName`）→ `SpaceMove(Envir.MapName, nX, nY, 1)` | `World::recall_slave`（`:631-685`）+ `recall_slave_target`（`:362-380`）|
+    // | `BaseObject.RecallSlave`（`BaseObject.cs:1850-1876`） | `GetFrontPosition` → `nFlag=(sSlaveName==Config.Dragon, OrdinalIgnoreCase)?1:-1` → 从 `SlaveList` **末尾往前**找（Dragon 模式匹配 `Dragon`/`Dragon1`，普通名匹配 `sSlaveName`）→ `SpaceMove(Envir.MapName, nX, nY, 1)` | `World::recall_slave`（`slave.rs:584`）+ `recall_slave_target`（`:362`）|
     // | `BaseObject.GetFrontPosition`（`:977-1038`） | 按 `Dir` 取前一格；越界时**原样保留**（clamp） | `magic::front_position`（`crates/world/src/magic.rs:963-989`）|
     // | `BaseObject.SpaceMove`（`:1103-1166`）本地图支 | `tempX/tempY = 正前方`；`SpaceMoveGetRandXY(Envir, ref tempX, ref tempY)` 成功 ⇒ `CurrX/Y = tempX/tempY` + `AddMapObject`；失败 ⇒ 回滚 | `recall_slave`（`:653-684`）：`found?`（失败 ⇒ `None`）；成功才 `move_object` 并回填实体 `x/y/map_id` |
-    // | `BaseObject.SpaceMoveGetRandXY`（`:1040-1096`） | `n18 = Width<80 ? 3 : 10`；`n1C = Height<150 ? (Height<50 ? 2 : 15) : 50`；循环首行 `CanWalk(nX,nY,true)` 命中即返回；`nX < Width-n1C-1` ⇒ `nX += n18`，否则 `nX = Random(Width)`，且 `nY` 同段推进/`Random(Height)`；`n14++ >= 201` 放弃 | `space_move_get_rand_xy`（`:396-438`）逐句同构（含**自增后**判 201）|
+    // | `BaseObject.SpaceMoveGetRandXY`（`:1040-1096`） | `n18 = Width<80 ? 3 : 10`；`n1C = Height<150 ? (Height<50 ? 2 : 15) : 50`；循环首行 `CanWalk(nX,nY,true)` 命中即返回；`nX < Width-n1C-1` ⇒ `nX += n18`，否则 `nX = Random(Width)`，且 `nY` 同段推进/`Random(Height)`；`n14++ >= 201` 放弃 | `crate::space_move::space_move_get_rand_xy`（`crates/world/src/space_move.rs:23`）逐句同构（含**自增后**判 201；2026-10-17 由 slave.rs 迁入独立模块）|
     // | `Envirnoment.CanWalk(x,y,true)`（`Envirnoment.cs:442-486`） | `cellSuccess && cellInfo.Valid`（`boFlag=true` 不查格上对象） | `map.get_cell_info(x,y).1`（`map.rs:331-339`）：**界内且 `valid()`** 才返回 `true`，与 oracle 的 `success` 同义 |
     //
     // 取数式：oracle `M2Share.RandomNumber.Random(Width/Height)` = `.NET Random.Next(int)` =

@@ -93,4 +93,17 @@ npc_ai	rust	crates/world/src/npc\.rs:	crates/world/src/npc.rs	固定 NPC Run（W
 space_move	csharp	BaseObject\.SpaceMoveGetRandXY@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:1040	SpaceMoveGetRandXY：召回落（RecallSlave）与商人随机移动（MapRandomMove）共用的移位环取数（Random(Width)/Random(Height)，至多 201 次）；2026-10-17 由 groups --require-closed 的 UNCLASSIFIED 暴露后补登记
 space_move	rust	crates/world/src/space_move\.rs:	crates/world/src/space_move.rs	同上的 Rust 实现（2026-10-17 从 slave.rs 单独成模块，以与 oracle 函数对齐；slave.rs 里 pub use 再导出）
 slave_mutiny	csharp	PlayObject\.ProcessSlaveMutiny@PlayObject\.Base\.cs:	src/M2Server/Player/PlayObject.Base.cs:344	主人死亡叛变抽样 Random(MasterDieMutinyRate)（方法在 :331，抽在 :344）
-slave_mutiny	rust	crates/world/src/slave\.rs:	crates/world/src/slave.rs	同上（process_slave_mutiny，由 deliver_self_delay_msgs 驱动，slave.rs:1082）
+slave_mutiny	rust	crates/world/src/slave\.rs:	crates/world/src/slave.rs	同上（process_slave_mutiny，由 deliver_self_delay_msgs 驱动；方法在 slave.rs:882、抽在 :898、调用点 :1035——行号为 2026-10-17 搬迁后实测）
+
+# ---- 2026-10-17 追加（复验 surviving）：C# `MapRandomMove` 自身的两抽补登记 ----
+# oracle `BaseObject.MapRandomMove`（BaseObject.cs:1214-1237）的两次初始取数在 :1235/:1236
+# （`Random(Width-nEgdey-1)`/`Random(Height-nEgdey-1)`）；Rust 同两抽在 `merchant.rs:875/876`，已归 `merchant`。
+# 登记前 `groups --side csharp --require-closed` 对该站点会报 UNCLASSIFIED（两侧 vocabulary 不对称）⇒ 补一行。
+# 注：MapRandomMove 内部进 `SpaceMove` 后的移位环取数归 `space_move` 组（见上），不重复登记。
+merchant	csharp	BaseObject\.MapRandomMove@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:1214	商人随机移动到点的两次初始取数（:1235/:1236）；Rust 对应 merchant.rs:875/876（同组 merchant）
+#
+# 另一处同类、**当前不可达**（登记备查）：`crates/world/src/magic.rs` 仍有一份**私有** `space_move_get_rand_xy` 副本
+#（`mag_sace_move` 用，魔号 21 未接线 ⇒ 仅测试可达）。将来接 8/21 时应改为复用 `crate::space_move`，
+# 否则其站点会落 `magic.rs` ⇒ `other`。
+#
+# 顺带更正：`consumer_groups.tsv` 第 96 行的 `slave.rs:` 行号按搬迁后实测为 :882/:898/:1035（原写 :1082）。

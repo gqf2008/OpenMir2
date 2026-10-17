@@ -45,6 +45,7 @@ python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mon
 3. `git fetch origin && git reset --hard origin/master`（窗口基 = 跑前 master oid，写进证据）。
 4. 抓包栈一律**不用管道**：起栈命令 `... > <log> 2>&1`（禁 `| tee/tail/head/grep`，会把调用挂死）。
 5. `characters_ablity.Hp < MaxHP`（§2b；否则本窗口场景下 53 永不发，①② 覆盖不到片㊴）。
+6. **本机 mysqld 在听 3306**（这是**基线服务**、不是游戏端口）：`mir2-rs/tests/parity/m3/fixture_chain_gate.py check` 的**战斗 runner** 依赖 DB，未听时它会以 `ERROR 2002 ... (10061)` 报 `rc=1`——那是**环境未就绪**，不是代码红；先按本机 mysqld 配方（datadir `D:\mysql\data`、3306）恢复再跑门。
 
 ## 1b. 开窗前的前置门（`check_rust_window_preflight.py` R1..R8）与 **RED 恢复**（片64）
 
