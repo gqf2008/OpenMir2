@@ -3315,6 +3315,177 @@ mod tests {
         assert_eq!(w.map(1).cell(7, 9).count(), 1);
     }
 
+    /// **切图成功语义**（oracle `PlayObject.EnterAnotherMap` 的正向支，`PlayObject.cs:3772-3783`）：
+    /// 目标格可走 ⇒ 旧图摘除、新图落格、`add_to_mapped` 保持 true、`Session.map_id` 更新、
+    /// 记一条 `MapChange`（`space_move_show == None`）。
+    ///
+    /// 红检（变异牙）：把 `switch_map_inner` 的成功支改成不记 `MapChange` ⇒ 本测必红；
+    /// 把旧图摘除删掉 ⇒ 旧格计数断言必红。
+    #[test]
+    fn switch_map_success_lands_new_map_and_reports_map_change() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        assert_eq!(w.map(0).cell(5, 4).count(), 1, "进图先落旧格");
+
+        w.switch_map("hero", 1, 7, 9).expect("目标格可走 ⇒ 成功");
+
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (1, 7, 9), "实体字段切到新图新坐标");
+        assert!(e.add_to_mapped, "成功落格 ⇒ add_to_mapped = true");
+        assert!(
+            e.visible_actors.is_empty(),
+            "切图后视野列表整体失效（oracle 清 Visible*）"
+        );
+        assert_eq!(w.map(0).cell(5, 4).count(), 0, "旧图格已摘除");
+        assert!(
+            w.map(1)
+                .cell(7, 9)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == hero),
+            "新图格登记了该玩家"
+        );
+        assert_eq!(w.session("hero").unwrap().map_id, 1, "会话 map_id 更新");
+        let ch = w.sessions.map_changes();
+        assert_eq!(ch.len(), 1, "成功恰记一条 MapChange");
+        assert_eq!(
+            (
+                ch[0].actor_id,
+                ch[0].map_id,
+                ch[0].x,
+                ch[0].y,
+                ch[0].space_move_show
+            ),
+            (hero, 1, 7, 9, None)
+        );
+    }
+
+    /// **切图失败语义 · 目标格墙**（oracle `PlayObject.EnterAnotherMap` 失败支，
+    /// `PlayObject.cs:3787-3791`）：`AddToMap()` 返回 false ⇒
+    /// `Envir = oldEnvir; CurrX = nOldX; CurrY = nOldY; Envir.AddMapObject(...)`。
+    /// 断言重点是**旧图格登记真的恢复**（只把实体字段改回去不算数）：
+    /// 实体仍在旧图旧坐标、`add_to_mapped == true`、旧格 `ObjList` 里能找回该玩家，
+    /// 且不记 `MapChange`（本仓只在成功落地时记）。
+    ///
+    /// 红检（变异牙 ①）：把失败支改回直接 `return Err(CellRejected)`（不回滚）⇒
+    /// `map_id/坐标` 与旧格登记断言必红；
+    /// 红检（变异牙 ②）：只回滚实体字段、不调旧图 `add_map_object` ⇒ 旧格登记断言必红。
+    #[test]
+    fn switch_map_wall_cell_rolls_back_to_old_map_and_cell() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        // 目标图 (7,9) → LowWall（oracle CellValid 失败 ⇒ AddToMap 失败）。
+        assert!(w.maps[1].set_map_xy_flag(7, 9, false));
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        assert_eq!(w.map(0).cell(5, 4).count(), 1);
+
+        let err = w.switch_map("hero", 1, 7, 9).unwrap_err();
+        assert_eq!(
+            err,
+            crate::session::SessionError::CellRejected,
+            "oracle 返回 false；本仓用 CellRejected 表达（返回前已回滚）"
+        );
+
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!(
+            (e.map_id, e.x, e.y),
+            (0, 5, 4),
+            "回滚旧图旧坐标（oracle :3788-3789）"
+        );
+        assert!(e.add_to_mapped, "旧格重新落格 ⇒ add_to_mapped 恢复 true");
+        assert_eq!(w.session("hero").unwrap().map_id, 0, "会话 map_id 仍是旧图");
+        assert!(
+            w.map(0)
+                .cell(5, 4)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == hero),
+            "**旧图格登记必须恢复**（oracle `Envir.AddMapObject`，:3790）"
+        );
+        assert_eq!(
+            w.map(0).cell(5, 4).count(),
+            1,
+            "旧格恰一个对象（无重复登记）"
+        );
+        assert!(
+            !w.map(1)
+                .cell(7, 9)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == hero),
+            "目标墙格不得留下玩家登记"
+        );
+        assert!(w.sessions.map_changes().is_empty(), "失败不发换图簇");
+    }
+
+    /// 同上，目标坐标**越界**：oracle `CellValid` 对越界返回 `true`（`Envirnoment.cs:307-314`
+    /// 的方向）⇒ `EnterAnotherMap` 的门放行，随后 `AddMapObject` 的 `CellMatch` 失败
+    /// （`Envirnoment.cs:258-261`）⇒ 走**同一回滚支**（旧图旧坐标 + 重落旧格）。
+    ///
+    /// 红检（变异牙）：失败支不回滚 ⇒ 旧格登记与坐标断言必红。
+    #[test]
+    fn switch_map_out_of_bounds_cell_rolls_back_to_old_map_and_cell() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .unwrap();
+
+        let err = w.switch_map("hero", 1, 99, 99).unwrap_err();
+        assert_eq!(
+            err,
+            crate::session::SessionError::CellRejected,
+            "越界落格失败 = oracle AddMapObject false"
+        );
+
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 4), "回滚旧图旧坐标");
+        assert!(e.add_to_mapped, "重落旧格");
+        assert!(
+            w.map(0)
+                .cell(5, 4)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == hero),
+            "旧图格登记必须恢复"
+        );
+        assert!(w.sessions.map_changes().is_empty());
+    }
+
+    /// 目标**图**不存在：`Env` 模型里没有此分支（oracle 的 `envir` 恒有效），这是本仓护栏。
+    /// 它在**任何状态变更之前**返回 `NoSuchMap` ⇒ 角色仍留在旧图旧格（旧格登记不丢）。
+    ///
+    /// 红检（变异牙）：把 `map_id >= maps.len()` 检查移到旧图摘除之后 ⇒ 本测旧格/坐标断言必红。
+    #[test]
+    fn switch_map_unknown_map_leaves_actor_in_old_cell() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .unwrap();
+
+        let err = w.switch_map("hero", 2, 3, 3).unwrap_err();
+        assert_eq!(err, crate::session::SessionError::NoSuchMap);
+
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 4), "未动旧图旧坐标");
+        assert!(e.add_to_mapped);
+        assert!(
+            w.map(0)
+                .cell(5, 4)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == hero),
+            "旧图格登记保持不变"
+        );
+        assert!(w.sessions.map_changes().is_empty());
+    }
+
     /// **卡 `openmir2-enter-map-cell-rejected-vs-oracle`·墙格进图**：进图落在**墙格**时，
     /// oracle `BaseObject.Base.cs:14-23` `Initialize()` 只「不进格表」而**不摘除角色**
     ///（`AddtoMapSuccess` 保持 `true` = 未落图；`PlayObject.UserLogon` 之后无条件继续）⇒

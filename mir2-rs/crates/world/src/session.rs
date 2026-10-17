@@ -217,8 +217,12 @@ impl World {
 
     /// 切图（对应地图链接/传送的落地动作）：旧图摘除 → 新图登记 → 视野列表整体失效。
     ///
-    /// = `PlayObject.EnterAnotherMap` 的落地（无 `SM_SPACEMOVE_SHOW` 尾帧）。记一条
+    /// = `PlayObject.EnterAnotherMap` 的落地（无 `SM_SPACEMOVE_SHOW` 尾帧）。成功记一条
     /// [`MapChange`]（`space_move_show = None`）。
+    ///
+    /// **失败语义**（oracle `PlayObject.cs:3787-3790`）：目标格落格失败 ⇒
+    /// **回滚旧图旧坐标并重新落旧格**，返回 [`SessionError::CellRejected`]（oracle 返回
+    /// `false`）；角色不会出现「两张图都不在格表」的中间态。
     pub fn switch_map(
         &mut self,
         chr_name: &str,
@@ -262,7 +266,17 @@ impl World {
         }
         let actor_id = sess.actor_id.ok_or(SessionError::NotInWorld)?;
         let old_map = sess.map_id;
-        // 旧图摘除
+        // oracle `EnterAnotherMap` 先保存 `oldEnvir/nOldX/nOldY`（`PlayObject.cs:3756-3758`），
+        // 失败回滚支（`:3787-3790`）要用；坐标必须在旧图摘除前取。
+        let (old_x, old_y) = {
+            let e = self
+                .entities
+                .get(actor_id)
+                .ok_or(SessionError::NotInWorld)?;
+            (e.x, e.y)
+        };
+        // 旧图摘除（oracle `DisappearA` → `Envir.DeleteFromMap`，`BaseObject.cs:1519-1522`；
+        // `DeleteFromMap` 同时把 `AddToMaped` 置 false，`Envirnoment.cs:660-661`）。
         self.remove_from_map(actor_id, old_map);
         // 新图登记（先改坐标再登记，否则格子登记到旧坐标）
         if let Some(e) = self.entities.get_mut(actor_id) {
@@ -275,6 +289,27 @@ impl World {
         }
         let now = self.clock_ms;
         if !self.maps[map_id].add_map_object(x, y, CellType::Play, actor_id, now) {
+            // oracle `EnterAnotherMap` 失败支（`PlayObject.cs:3787-3791`）：
+            //   `Envir = oldEnvir; CurrX = nOldX; CurrY = nOldY;
+            //    Envir.AddMapObject(CurrX, CurrY, CellType, this.ActorId, this);`
+            // ⇒ **回滚旧图旧坐标并重新落旧格**（`AddMapObject` 在旧格可用时置
+            // `AddToMaped=true` 并 `AddObject`，`Envirnoment.cs:279-283`；该位已被
+            // `DeleteFromMap` 于旧图摘除时清零）。不回滚的话角色既不在旧图也不在新图
+            // （两张图的格表都没有它），对应 oracle 绝不出现的中间态。
+            // 视野列表保持清空——oracle 同样只清不回填（`PlayObject.cs:3760-3771`）。
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.map_id = old_map;
+                e.x = old_x;
+                e.y = old_y;
+                e.add_to_mapped = false;
+            }
+            let relanded = self
+                .maps
+                .get_mut(old_map)
+                .is_some_and(|m| m.add_map_object(old_x, old_y, CellType::Play, actor_id, now));
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.add_to_mapped = relanded;
+            }
             return Err(SessionError::CellRejected);
         }
         if let Some(e) = self.entities.get_mut(actor_id) {
@@ -387,7 +422,12 @@ pub enum SessionError {
     AlreadyInWorld,
     NotInWorld,
     NoSuchMap,
-    /// 目标格不可用（越界或不可走）——对应 C# `AddMapObject` 返回 false。
+    /// 目标格不可用（越界或不可走）——对应 C# `EnterAnotherMap` 返回 `false`
+    ///（`AddToMap` → `AddMapObject` 返回 false，`PlayObject.cs:3779-3791`）。
+    ///
+    /// **返回前已完成 oracle 的回滚**：旧图旧坐标已恢复、旧格已重新登记
+    ///（`PlayObject.cs:3787-3790`）；调用方看到的只是「这次切图没成功」，世界状态仍是
+    /// 切图前的样子。
     ///
     /// 仅由 `switch_map_inner`（切图）产生；`enter_map`（进图）**不再**产生它——
     /// oracle `Initialize`（`BaseObject.Base.cs:14-23`）落格失败只「不进格表」，不移除角色。
