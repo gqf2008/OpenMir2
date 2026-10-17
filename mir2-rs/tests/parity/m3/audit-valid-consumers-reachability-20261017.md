@@ -376,7 +376,7 @@ sed -n '659,705p' bins/game-svr/src/mapwire.rs
 `if !cell.valid() { return false }`（`map.rs`，与 oracle `Envirnoment.cs:380` 同形）⇒ **不移动**；
 装载前每格 `Valid` ⇒ 恒移动。**注意**：RNG 抽数（2 次）不变，变的是「是否移动」；且**与 oracle 同构**。
 **归因**：上游报告未把 `map_random_move` 单独列为消费点（它是 §1A #9 `move_object` 的间接下游）。
-本卡只标出、**未判级**；判级建议交 M3⑤ / owner。
+本卡只标出；**判级建议 = R**（保守：RNG 抽数不变，但「是否移动」改变真机可见状态；按 tier 策略「判不准 ⇒ R」）——最终判级交 M3⑤ / owner。已在卡 `openmir2-recall-slave-shift-live` 登记（窗口项见 `82-two-side-window-runbook.md` §2e）。
 
 ---
 

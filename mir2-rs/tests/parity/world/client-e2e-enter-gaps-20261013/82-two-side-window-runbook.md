@@ -529,3 +529,60 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene
 | 探针 | 入站 `SM_STRUCK`（victim=自己） | 主动族点怪 Rust 侧应出（片88 已补主动索敌）；空转 = 缺陷 | C# 有 Rust 无 ⇒ 立卡 |
 | RNG | `-SceneGroupDiff` | 门 GREEN ＋ `VERDICT IDENTICAL` | 门 RED ⇒ 拒比（非实现差异） |
 | 刷怪地形 | 两侧出生坐标（冻结件含 ≥1 墙格出生点框）逐点一致 ＋ `cargo test -p game-svr --lib -- terrain_` 绿 | 两侧坐标一致、构造级 6 用例绿 | 分歧 ⇒ 先核 mapcell 装载（`2ff02ac0e`/`b192bd9f3`）＋ `mongen.rs:499-536` 地形环 |
+
+---
+
+## §2e W0 必核追加（2026-10-17）：召唤神兽回落 + 宝宝满 + 朝墙（R 级：RNG 流水）
+
+> 本节为**独立追加**小节（另一条车道在同文件追加「走位碰撞」；本节不重排/不改写任何既有小节）。
+> 卡：`openmir2-recall-slave-shift-live`。依据：`mir2-rs/tests/parity/m3/audit-valid-consumers-reachability-20261017.md` §2 第 1 条。
+
+**为什么必核**：`.map` 格子属性灌进 `world.maps`（`2ff02ac0e` / `b192bd9f3`）后，`World::recall_slave`
+的 `SpaceMoveGetRandXY` 从「每格皆 Walk、首轮即返回、**零抽数**」变成「正前方是墙 ⇒ 进移位支 ⇒
+`world.rng` 抽数 + 落点变」。这是**真机可达**且**改 RNG 流水**的路径 ⇒ 按 R 级占用窗口必核。
+
+**触发条件（与 oracle 同构，逐行锚）**
+
+1. 魔号 30（`SKILL_SINSU` 召唤神兽）：`main.rs:5346 cast_slave_spell` → `bins/game-svr/src/slave.rs:280 summon_from_spell`
+   → `crates/world/src/slave.rs:152 summon_slave`（`:202` 是它内部对 `World::recall_slave` 的调用点；`recall_slave` 定义在 `:631`）。
+2. `MakeSlave` 返回 null：宝宝数已满（`SlaveList.Count >= nMaxMob`，`gate_ok == false`）**或**
+   `RegenMonsterByName` 失败；oracle **只有神兽支**走 `RecallSlave`（`MagicManager.cs:1300-1304`）。
+3. 主人正前方 `(fx,fy)` 是墙格（`GetFrontPosition`，`BaseObject.cs:977-1038`）。
+4. `BaseObject.RecallSlave`（`:1850-1876`）→ `SpaceMove`（`:1103-1166`）→ `SpaceMoveGetRandXY`（`:1040-1096`）；
+   Rust 对应 `World::recall_slave`（`slave.rs:631-685`）→ `space_move_get_rand_xy`（`:396-438`）。
+   **首轮 `CanWalk(fx,fy,true)` 命中 ⇒ 不进移位支、零抽数**；未命中 ⇒ `Random(Width)` / `Random(Height)`。
+   `CanWalk(x,y,true)` = `cellSuccess && Valid`（`Envirnoment.cs:442-486`）= Rust `get_cell_info(x,y).1`。
+
+**窗口动作（造场景）**
+
+1. 站位：让 `aaa` 站到某图**墙格正前方**且面朝该墙（朝向由 `CM_TURN` 钉住；两侧同坐标/同朝向）。
+2. 宝宝：先召唤一只神兽（魔号 30）并确认 `SlaveList.Count == nMaxMob`（现网默认 `DragonCount=1`）⇒
+   第二次施放魔号 30 时 `MakeSlave` 必返回 null ⇒ 走回召。
+3. 记录两侧 RNG 流水（`rng-scene` 驱动器，见 §2d W0-6）与**回召落点**。
+
+**判据（GREEN / RED）**
+
+- 构造级（已入库，离线可复跑，零端口）：`cargo test -p mir2-world --lib recall_` ⇒ 6 条全绿，其中
+  - `recall_shift_when_front_wall_and_slave_list_full`：宝宝满 + 朝墙 ⇒ **移位支被进入**，
+    `world.rng` 抽数逐项 = oracle 期望（seed=42、10x10 图：`Next(10)` 前两项 = `[6, 1]`），落点 `(6,1)`，
+    随后连续三抽 = `[1, 5, 1]`（证明**恰好** 2 抽；只断第 3 抽 = 1 不具判别力 —— seed=42 的 `Next(10)` 在多个索引上都是 1）；
+  - `recall_shift_when_front_wall_and_spawn_fails`：造怪失败触发同一支，期望同上；
+  - `recall_first_round_walkable_consumes_zero_draws`：**阴性对照**（正前方可走 ⇒ 首轮成功、零抽数）。
+- 真机：两侧 RNG 账本（`-SceneGroupDiff`）**门 GREEN 且 `VERDICT IDENTICAL`**，且**回召落点同坐标**。
+  RED 分叉：RNG 门 RED ⇒ 拒比（先修注入/门）；落点不同而 RNG 相同 ⇒ 核 `CanWalk` 的格子属性口径
+  （`.map` 装载 `2ff02ac0e`/`b192bd9f3`）；RNG 抽数不同 ⇒ 先核移位支的分段/上限（`n18`/`n1C`/201）
+  与取数次序（**先 `Random(Width)`，再 `Random(Height)`**）。
+
+**同窗登记（不实现）**：`merchant_run` → `map_random_move` → `move_object`（**与 oracle 不同构，R 级**）
+
+- 链（仅**商人**条件可达）：`main.rs:8049 enable_merchant_tick` → `merchant.rs:661 merchant_run`
+  → `map_random_move`（`:748`/`:854`）→ `world.rs:1149` / `map.rs move_object`。
+  **固定 NPC 不可达**：`npc_run` 的 `map_random_move` 受 `can_move` 门，`Npcs.txt` 装载的 `NormNpc` 的
+  `BoCanMove` 恒 false（`npc.rs` 模块注释已登记）。
+- 装载后变化：本仓 `merchant.rs:873-874` 抽 **2 次**后 `move_object(ignore_block=true)`，若落点是墙则
+  `if !cell.valid() { return false }` ⇒ **不移动、不再抽数**；而 oracle `MapRandomMove`（`BaseObject.cs:1214-1237`）
+  → `SpaceMove`（`:1103-1166`）→ `SpaceMoveGetRandXY`（`:1040-1096`）在落点不可走时**进移位环、继续抽
+  `Random(Width)`/`Random(Height)`**，最后 `AddMapObject`。⇒ **落点与 RNG 流水都会分歧**（不是同构！
+  原稿引的 `Envirnoment.cs:380` 属 `MoveToMovingObject`，不是这条路径 —— 独立复验 2026-10-17 否掉）。
+- **判级：R**（RNG 抽数会变 + 移动结果会变）。**这是真缺口，不只是窗口项** ⇒ 已立卡
+  `openmir2-map-random-move-shift-loop` 承接实现；本片只登记、不实现。

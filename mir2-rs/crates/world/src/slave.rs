@@ -1766,6 +1766,181 @@ mod tests {
         assert_eq!((s.x, s.y), (11, 10), "回召到主人前排");
     }
 
+    // ---- 装载后**新增可达**路径：`RecallSlave` → `SpaceMoveGetRandXY` 移位支（R 级：RNG 流水） ----
+    //
+    // 触发条件（oracle 与 Rust 同构）：魔号 30（`SKILL_SINSU`）且 `MakeSlave` 返回 null
+    // （宝宝数已满 `SlaveList.Count >= nMaxMob`，或宿主 `RegenMonsterByName` 失败）**且**
+    // 主人正前方 `(fx,fy)` 是墙格。装载前每格皆 `Walk` ⇒ `CanWalk(fx,fy,true)` 恒真 ⇒
+    // **首轮返回、零抽数**；装载后进移位支 ⇒ 消耗 `world.rng` 且落点变。
+    //
+    // 逐行同构核对（本次在 9121f5936 上复读行号）：
+    //
+    // | oracle | 语义 | Rust（`crates/world/src/slave.rs`） |
+    // |---|---|---|
+    // | `BaseObject.RecallSlave`（`BaseObject.cs:1850-1876`） | `GetFrontPosition` → `nFlag=(sSlaveName==Config.Dragon, OrdinalIgnoreCase)?1:-1` → 从 `SlaveList` **末尾往前**找（Dragon 模式匹配 `Dragon`/`Dragon1`，普通名匹配 `sSlaveName`）→ `SpaceMove(Envir.MapName, nX, nY, 1)` | `World::recall_slave`（`:631-685`）+ `recall_slave_target`（`:362-380`）|
+    // | `BaseObject.GetFrontPosition`（`:977-1038`） | 按 `Dir` 取前一格；越界时**原样保留**（clamp） | `magic::front_position`（`crates/world/src/magic.rs:963-989`）|
+    // | `BaseObject.SpaceMove`（`:1103-1166`）本地图支 | `tempX/tempY = 正前方`；`SpaceMoveGetRandXY(Envir, ref tempX, ref tempY)` 成功 ⇒ `CurrX/Y = tempX/tempY` + `AddMapObject`；失败 ⇒ 回滚 | `recall_slave`（`:653-684`）：`found?`（失败 ⇒ `None`）；成功才 `move_object` 并回填实体 `x/y/map_id` |
+    // | `BaseObject.SpaceMoveGetRandXY`（`:1040-1096`） | `n18 = Width<80 ? 3 : 10`；`n1C = Height<150 ? (Height<50 ? 2 : 15) : 50`；循环首行 `CanWalk(nX,nY,true)` 命中即返回；`nX < Width-n1C-1` ⇒ `nX += n18`，否则 `nX = Random(Width)`，且 `nY` 同段推进/`Random(Height)`；`n14++ >= 201` 放弃 | `space_move_get_rand_xy`（`:396-438`）逐句同构（含**自增后**判 201）|
+    // | `Envirnoment.CanWalk(x,y,true)`（`Envirnoment.cs:442-486`） | `cellSuccess && cellInfo.Valid`（`boFlag=true` 不查格上对象） | `map.get_cell_info(x,y).1`（`map.rs:331-339`）：**界内且 `valid()`** 才返回 `true`，与 oracle 的 `success` 同义 |
+    //
+    // 取数式：oracle `M2Share.RandomNumber.Random(Width/Height)` = `.NET Random.Next(int)` =
+    // Rust `RandomNumber::random_below(width/height)`。
+    // **首轮成功 ⇒ 不进移位支**：两边都是循环首行判 `CanWalk`，命中即返回 ⇒ 零抽数。
+    //
+    // 期望值**独立复算**（不引用实现）：按 .NET Framework `System.Random(int)` 的
+    // Knuth 减法算法 + 上述 oracle 顺序，seed=42 的 `Next(10)` 序列 = `[6, 1, 1, 5, …]`。
+    // ⇒ 10x10 图（`n18=3`、`n1C=2`）从 `(2,8)` 起、`(2,8)/(5,8)/(8,8)` 为墙时：
+    //   probe (2,8) 墙 → x=5；probe (5,8) 墙 → x=8；probe (8,8) 墙 →
+    //   `8 < 10-2-1=7` 假 ⇒ `x = Next(10) = 6`（第 1 抽）；`8 < 7` 假 ⇒ `y = Next(10) = 1`（第 2 抽）；
+    //   probe (6,1) 可走 ⇒ 落点 `(6,1)`；第 3 抽 = `1`（序列第 3 项）。
+
+    /// 10x10 世界：主人 `(1,8)`（面朝右 ⇒ 正前方 `(2,8)`）+ 已在 `SlaveList` 的神兽宝宝 `(0,0)`。
+    /// `walls` 中的格子置 `LowWall`，其余保持默认 `Walk`。
+    fn wall_recall_world(walls: &[(i32, i32)]) -> (World, i32, i32) {
+        let mut w = World::new(10, 10);
+        let caster = {
+            let mut e = Entity::new(0, "主人".to_string(), 1, 8);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.level = 20;
+            w.add_entity(e)
+        };
+        let slave = {
+            let mut e = Entity::new(0, "神兽".to_string(), 0, 0);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            w.add_entity(e)
+        };
+        w.entities.get_mut(caster).unwrap().slave_list.push(slave);
+        for &(x, y) in walls {
+            assert!(
+                w.maps[0].set_map_xy_flag(x, y, false),
+                "置墙角失败 ({x},{y})"
+            );
+        }
+        (w, caster, slave)
+    }
+
+    /// **阳性（宝宝数已满）**：`gate_ok == false` ⇒ `MakeSlave` 返回 null ⇒ 神兽回召；
+    /// 主人正前方是墙 ⇒ **进入移位支**，`world.rng` 逐项抽数为 oracle 期望 `[6, 1]`，落点 `(6,1)`。
+    #[test]
+    fn recall_shift_when_front_wall_and_slave_list_full() {
+        let (mut w, caster, slave) = wall_recall_world(&[(2, 8), (5, 8), (8, 8)]);
+        assert!(
+            !w.maps[0].get_cell_info(2, 8).1,
+            "前置：主人正前方 (2,8) 必须是墙格（否则首轮即返回）"
+        );
+        // `PetSlaveConfig::default()`：dragon=神兽、dragon_count=1；已有 1 只 ⇒ 门拒。
+        let cfg = PetSlaveConfig::default();
+        let mut sp = MockSpawner::default();
+        let out = summon_slave(
+            &mut w,
+            caster,
+            crate::magic::DIR_RIGHT,
+            SKILL_SINSU,
+            1,
+            &cfg,
+            &mut sp,
+        );
+        assert_eq!(
+            out,
+            SummonOutcome::Recalled(Some(slave)),
+            "宝宝满 ⇒ MakeSlave null ⇒ RecallSlave"
+        );
+        assert!(sp.last.is_none(), "门拒 ⇒ 不调 RegenMonsterByName");
+        let s = w.entities.get(slave).unwrap();
+        assert_eq!(
+            (s.x, s.y),
+            (6, 1),
+            "oracle 期望落点 = (Next(10)=6, Next(10)=1)"
+        );
+        // 前两抽已由落点逐项核过。**证「恰好 2 抽」必须看随后连续三抽**：只断第 3 抽 = 1 **不具判别力**
+        // （seed=42 的 `Next(10)` 在索引 1/2/4/8/21/28/32 上都是 1 ⇒ 多抽 2 次 / 多抽 6 次的实现仍会通过；
+        // 独立复验用变异实测过：落点不变、共 4 抽时旧断言全绿）。
+        // `Next(10)` 序列：[6, 1, **1, 5, 1**, …] ⇒ 已耗 2 抽 ⇒ 随后三抽 = [1, 5, 1]。
+        assert_eq!(
+            (
+                w.rng.random_below(10),
+                w.rng.random_below(10),
+                w.rng.random_below(10)
+            ),
+            (1, 5, 1),
+            "恰好 2 抽：随后三抽 = [1,5,1]"
+        );
+    }
+
+    /// **阳性（造怪失败）**：门放行（1 < 2）但宿主 spawner 失败 ⇒ 同样走神兽回召；
+    /// `MockSpawner` 失败不抽数 ⇒ 期望与阳性①完全一致（`[6, 1]`、落点 `(6,1)`）。
+    #[test]
+    fn recall_shift_when_front_wall_and_spawn_fails() {
+        let (mut w, caster, slave) = wall_recall_world(&[(2, 8), (5, 8), (8, 8)]);
+        let cfg = pet_cfg(|c| c.dragon_count = 2); // 1 < 2 ⇒ 门放行，走到 spawner
+        let mut fail = MockSpawner {
+            fail: true,
+            ..Default::default()
+        };
+        let out = summon_slave(
+            &mut w,
+            caster,
+            crate::magic::DIR_RIGHT,
+            SKILL_SINSU,
+            1,
+            &cfg,
+            &mut fail,
+        );
+        assert_eq!(
+            out,
+            SummonOutcome::Recalled(Some(slave)),
+            "spawn 失败 ⇒ MakeSlave null ⇒ RecallSlave"
+        );
+        assert!(
+            fail.last.is_some(),
+            "spawner 确实被调用（证明是失败支而非门拒）"
+        );
+        let s = w.entities.get(slave).unwrap();
+        assert_eq!((s.x, s.y), (6, 1), "期望落点 (Next(10)=6, Next(10)=1)");
+        // 同阳性①：随后三抽 = [1,5,1]（只断第 3 抽不具判别力，见上）。
+        assert_eq!(
+            (
+                w.rng.random_below(10),
+                w.rng.random_below(10),
+                w.rng.random_below(10)
+            ),
+            (1, 5, 1),
+            "恰好 2 抽：随后三抽 = [1,5,1]"
+        );
+    }
+
+    /// **阴性对照**：正前方可走 ⇒ oracle `SpaceMoveGetRandXY` 首轮命中、**不进移位支、零抽数**。
+    /// 落点 = 正前方 `(2,8)`；下一抽仍是 seed=42 的第 1 抽 `6`（未被消耗）。
+    #[test]
+    fn recall_first_round_walkable_consumes_zero_draws() {
+        let (mut w, caster, slave) = wall_recall_world(&[]);
+        assert!(w.maps[0].get_cell_info(2, 8).1, "前置：正前方可走");
+        let cfg = PetSlaveConfig::default();
+        let mut sp = MockSpawner::default();
+        let out = summon_slave(
+            &mut w,
+            caster,
+            crate::magic::DIR_RIGHT,
+            SKILL_SINSU,
+            1,
+            &cfg,
+            &mut sp,
+        );
+        assert_eq!(out, SummonOutcome::Recalled(Some(slave)));
+        let s = w.entities.get(slave).unwrap();
+        assert_eq!((s.x, s.y), (2, 8), "首轮 CanWalk 真 ⇒ 落点 = 正前方");
+        // 零抽数 ⇒ 随后三抽 = seed=42 `Next(10)` 的最初三项 [6, 1, 1]（比只断第 1 项更有判别力）。
+        assert_eq!(
+            (
+                w.rng.random_below(10),
+                w.rng.random_below(10),
+                w.rng.random_below(10)
+            ),
+            (6, 1, 1),
+            "零抽数 ⇒ 随后三抽 = [6,1,1]"
+        );
+    }
+
     /// 非召唤技能 ⇒ `NotSummonSkill`（不抽数、不造怪）。
     #[test]
     fn summon_slave_ignores_other_skills() {
