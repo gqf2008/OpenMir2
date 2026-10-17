@@ -128,3 +128,33 @@ magic_effect	csharp	MagicManager\.MagPushArround@MagicManager\.cs:	src/M2Server/
 magic_effect	csharp	MagicManager\.MagSaceMove@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:879	MagSaceMove：施放门 `Random(11) < nLevel*2+4`（:879）
 magic_effect	csharp	MagicManager\.DoSpell@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:663	共享尾训练点 `Random(3)+1`（:663；`Level < 3 && boTrain && TrainLevel[Level] <= Abil.Level` 门内才抽）；Rust 对应 magic_effect.rs 的 `spell_train_points`（留在 `magic.rs` 会被 RUST_ATTACK_RE 整文件吞成 attack）
 magic_effect	rust	crates/world/src/magic_effect\.rs:	crates/world/src/magic_effect.rs	push_chance/push_steps/sace_move_gate/spell_train_points（唯一抽数点；`#[track_caller]` 站点落本文件）
+#
+# ---- 2026-10-17 追加（卡 openmir2-rng-attack-narrow）：magic.rs 非攻击抽数**登记**（不是豁免）----
+#
+# 背景（审计 `/e/tmp/attack-re-audit-20261017.md`，CONFIRMED）：`RUST_ATTACK_RE` 曾含整文件
+# `|magic\.rs:` ⇒ `classify()` 先判 attack，29/29（m821fix 落地后 21/21）个 magic.rs 抽数在
+# `--no-attack` 下静默消失且仍报 `GROUP_COVERAGE closed`；而 C# 侧同类站点不在
+# `CSHARP_ATTACK_RE` ⇒ 两侧口径不对称。收窄（两处同源正则各删 `|magic\.rs:`）后这些站点
+# 落 `other` ⇒ RED；本节把两侧按**同一语义组** `magic_effect` 登记回 closed。
+#
+# 口径：`magic.rs` 的抽数是魔法/技能效果语义（威力公式/无极真气/圣言/诱惑/群体物理命中门），
+# 不属近战攻击路径（`combat.rs`）。C# 对侧同名 draw 在 `MagicManager`/`MagicBase`/
+# `AnimalObject.Struck`，均不匹配 `CSHARP_ATTACK_RE`。**若将来把近战攻击抽数写进 magic.rs，
+# 必须移入 combat.rs**——本行按文件归 `magic_effect`，不再给 attack 豁免。
+#
+# 两套 helper：oracle 的 `MagicManager.*`（private，单目标 DoSpell 支）与 `MagicBase.*`（public，
+# 组支）同式；Rust 只有一套（magic.rs:60/70/80/91），故 4 个 Rust 站点 ↔ 8 个 C# 站点名。
+# `DoSpell` 行已由 m821fix 提供（方法级，覆盖 :623 无极真气与 :663 共享尾）。
+magic_effect	rust	crates/world/src/magic\.rs:	crates/world/src/magic.rs	mpow/get_power/get_power13/get_rpow/power_uenhancer/group_melee_damage/mag_turn_undead/mag_tamming 的 21 个 random_below（#[track_caller] 站点落本文件）；文件级登记 = 魔法语义整组，非攻击豁免
+magic_effect	csharp	MagicManager\.MPow@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:104	MPow：`Random(MaxPower-Power)`（:104；单目标 DoSpell 支）
+magic_effect	csharp	MagicManager\.GetPower@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:110	GetPower：`Random(DefMaxPower-DefPower)`（:110）
+magic_effect	csharp	MagicManager\.GetPower13@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:117	GetPower13：`Random(DefMaxPower-DefPower)`（:117）
+magic_effect	csharp	MagicManager\.GetRPow@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:126	GetRPow：`Hi>Lo` 时 `Random(Hi-Lo+1)`（:126；else 不抽）
+magic_effect	csharp	MagicBase\.MPow@MagicBase\.cs:	src/M2Server/Magic/MagicBase.cs:14	MPow（组支共用版）：`Random(MaxPower-Power)`（:14）
+magic_effect	csharp	MagicBase\.GetPower@MagicBase\.cs:	src/M2Server/Magic/MagicBase.cs:19	GetPower（组支）：`Random(DefMaxPower-DefPower)`（:19）
+magic_effect	csharp	MagicBase\.GetPower13@MagicBase\.cs:	src/M2Server/Magic/MagicBase.cs:26	GetPower13（组支）：`Random(DefMaxPower-DefPower)`（:26）
+magic_effect	csharp	MagicBase\.GetRPow@MagicBase\.cs:	src/M2Server/Magic/MagicBase.cs:34	GetRPow（组支）：`Hi>Lo` 时 `Random(Hi-Lo+1)`（:34）
+magic_effect	csharp	MagicManager\.MagTamming@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:707	MagTamming 的 12 抽（:707/:717/:721/:723/:736/:759/:779/:787/:795/:797/:805/:819）；Rust 对应 magic.rs 的 mag_tamming
+magic_effect	csharp	MagicManager\.MagTurnUndead@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:842	MagTurnUndead：`Random(2)`/`Random(100)`（:842/:847）；Rust 对应 magic.rs 的 mag_turn_undead
+magic_effect	csharp	MagicManager\.MagGroupDeDing@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:957	MagGroupDeDing 单目标命中门 `Random(SpeedPoint) >= HitPoint`（:957）；Rust 对应 magic.rs 的 group_melee_damage
+magic_effect	csharp	AnimalObject\.Struck@AnimalObject\.cs:352$	src/M2Server/Actor/AnimalObject.cs:352	Struck 的 `Animal` 支 `Random(300)`（MeatQuality，:352）；**精确行**，不吞 :342 的攻击方向 `Random(6)`（后者不在本片范围）

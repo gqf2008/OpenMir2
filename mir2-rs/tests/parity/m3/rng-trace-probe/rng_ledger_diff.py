@@ -51,7 +51,7 @@ CSHARP_ATTACK_RE = re.compile(
     r"BaseObject\.GetHitStruckDamage@|PlayObject\.AttackSuccess@|PlayObject\.AttackDir@|"
     r"BaseObject\.GetAttackPower@)")
 # Rust 站点（世界层调用点）。
-RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|109|111|250|579|587|601|606|608|609|628|630|736|758|831)|magic\.rs:")
+RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|109|111|250|579|587|601|606|608|609|628|630|736|758|831)")
 
 CSHARP_MARKER = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
 RUST_MARKER = r"crates\world\src\combat.rs:109"
