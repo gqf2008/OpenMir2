@@ -87,6 +87,15 @@ pub const SKILL_46: u16 = 46;
 ///
 /// P3-B2：载荷 `nParam1 = nPower`（`PlayObject.Message.cs:1619-1629` 累加 `IncHealing`）。
 pub const RM_MAGHEALING: u16 = 8034;
+/// `Messages.RM_DOOPENHEALTH`（`crates/protocol/src/messages.rs:518`；28 的 1500ms 自投递）。
+/// 与 protocol 同值（本层不依赖 `mir2-protocol`）。
+pub const RM_DOOPENHEALTH: u16 = 8040;
+/// `Messages.RM_TRANSPARENT`（`crates/protocol/src/messages.rs:523`；19 的 800ms 自投递）。
+pub const RM_TRANSPARENT: u16 = 8045;
+/// `Messages.RM_MAGIC_LVEXP`（`crates/protocol/src/messages.rs:446`；共享尾的 1000ms 自投递）。
+pub const RM_MAGIC_LVEXP: u16 = 10123;
+/// `Messages.RM_MAKEHOLYSEIZEMODE`（`crates/protocol/src/messages.rs:581`；16 的目标自有队列）。
+pub const RM_MAKEHOLYSEIZEMODE: u16 = 60005;
 
 pub const RM_MASTERDIEMUTINY: u16 = 60003;
 /// `Messages.RM_MASTERDIEGHOST`（`Messages.cs:840`）：主人幽灵 1s 后自投递（→ `ProcessSlaveGhost`）。
@@ -969,8 +978,13 @@ pub struct SelfDelayMsg {
     pub ident: u16,
     /// `SendMessage.wParam`（B2 扩载荷；当前生产仅 `RM_MAGHEALING` 用 0）。
     pub w_param: i32,
-    /// `SendMessage.nParam1`（B2 扩载荷：`RM_MAGHEALING` 的 `nPower`）。
+    /// `SendMessage.nParam1`（B2 扩载荷：`RM_MAGHEALING` 的 `nPower`；B3 的 `RM_TRANSPARENT`
+    /// 用它传 `nHTime`）。
     pub n_param1: i32,
+    /// `SendMessage.nParam2`（B3：`RM_MAGIC_LVEXP` 的 `Level`）。
+    pub n_param2: i32,
+    /// `SendMessage.nParam3`（B3：`RM_MAGIC_LVEXP` 的 `TranPoint`）。
+    pub n_param3: i32,
     /// 到点时刻（sim 毫秒）。
     pub deliver_at_ms: i64,
 }
@@ -979,7 +993,7 @@ pub struct SelfDelayMsg {
 ///
 /// 帧面（`RefNameColor` ⇒ `RM_CHANGENAMECOLOR` / `RefShowName` ⇒ `RM_USERNAME`）不在本层，
 /// 由宿主据本记录出帧（登记）。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SelfDelayOutcome {
     /// 收件人 id。
     pub actor_id: i32,
@@ -995,6 +1009,52 @@ pub struct SelfDelayOutcome {
     /// `if (IncHealing + n < 300) { IncHealing += n; PerHealing = 5; } else { IncHealing = 300; }`
     /// （`PerHealing = 5` **只在 if 分支**）。
     pub mag_healing: Option<i32>,
+    /// `RM_TRANSPARENT` 到点投递的 `MagMakePrivateTransparent` 结果（非该支 `None`）。
+    pub transparent: Option<TransparentDelivery>,
+    /// `RM_DOOPENHEALTH` 到点投递的 `MakeOpenHealth` 结果（非该支 `None`）。
+    pub open_health: Option<OpenHealthDelivery>,
+    /// `RM_MAGIC_LVEXP` 到点投递的载荷（非该支 `None`）。
+    pub magic_lvexp: Option<MagicLvExpDelivery>,
+    /// `RM_MAKEHOLYSEIZEMODE` 到点投递的 `RefNameColor` 结果（非该支 `None`）。
+    pub name_color: Option<NameColorDelivery>,
+}
+
+/// `RM_TRANSPARENT` 的投递结果（`MagicManager.cs:673-699` 的 `MagMakePrivateTransparent`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TransparentDelivery {
+    pub target_id: i32,
+    /// helper 是否走到收尾（`StatusTimeArr[STATETRANSPARENT] > 0` ⇒ 早退 ⇒ **无 657**）。
+    pub status_changed: bool,
+    /// `GetCharStatus()`（657 的 `nParam1`；本仓不读 `StatusTimeArr` ⇒ 通常不变）。
+    pub status: i32,
+    /// `RM_TRANSPARENT.nParam1`（投递时按 `(ushort)` 截断）。
+    pub n_h_time: u16,
+}
+
+/// `RM_DOOPENHEALTH` 的投递结果（`BaseObject.cs:944-950` 的 `MakeOpenHealth`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OpenHealthDelivery {
+    pub target_id: i32,
+    pub hp: u16,
+    pub max_hp: u16,
+}
+
+/// `RM_MAGIC_LVEXP` 的投递载荷（`MagicManager.cs:666` 的 `SendSelfDelayMsg`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MagicLvExpDelivery {
+    pub magic_id: u16,
+    pub level: u8,
+    pub tran_point: i32,
+}
+
+/// `RM_MAKEHOLYSEIZEMODE` 的投递结果（`AnimalObject.cs:322-328`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NameColorDelivery {
+    pub target_id: i32,
+    /// 接收者侧 `PlayObject.GetChrColor(baseObject)`（`BaseObject.GetChrColor` ⇒ `GetNameColor()`，
+    /// 怪的 `name_color` 构造缺省 255）。**不是** `MonsterObject.GetChrColor` 的 0x7D 覆写
+    /// （该分支只在怪物自己算色时可达，见 `World::open_holy_seize_mode` 注释）。
+    pub color: u8,
 }
 
 impl World {
@@ -1019,6 +1079,24 @@ impl World {
         n_param1: i32,
         delay_ms: i64,
     ) {
+        self.send_self_delay_msg_full(actor_id, ident, w_param, n_param1, 0, 0, delay_ms);
+    }
+
+    /// **P3-B3**：带 `nParam2`/`nParam3` 的 `SendSelfDelayMsg`（`RM_MAGIC_LVEXP` 需要
+    /// `nParam1=MagicId, nParam2=Level, nParam3=TranPoint`，`MagicManager.cs:666`）。
+    ///
+    /// oracle `!Ghost` 门照旧（`BaseObject.Message.cs:190`）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_self_delay_msg_full(
+        &mut self,
+        actor_id: i32,
+        ident: u16,
+        w_param: i32,
+        n_param1: i32,
+        n_param2: i32,
+        n_param3: i32,
+        delay_ms: i64,
+    ) {
         let ghost = self.entities.get(actor_id).is_some_and(|e| e.ghost);
         if ghost {
             return;
@@ -1029,7 +1107,73 @@ impl World {
             ident,
             w_param,
             n_param1,
+            n_param2,
+            n_param3,
             deliver_at_ms,
+        });
+    }
+
+    /// **P3-B3**：`BaseObject.UpdateDelayMsg`（`BaseObject.Message.cs:257-278`）的等价物。
+    ///
+    /// oracle 先遍历 `MsgQueue` 删除 `wIdent == ident && nParam1 == lParam1` 的待投递项，
+    /// 再 `SendStruckDelayMsg(..., dwDelay)`（末行 `MsgQueue.Enqueue(..., Lowest)`）。
+    /// 本骨架的延迟队列按插入序保存 ⇒ 等价的「删除同 `(actor, ident, nParam1)` 待投递项」。
+    ///
+    /// **登记**：oracle 的循环只在**队首**（最小优先级）连续匹配时删除；队首不匹配即退出该次
+    /// 扫描（`i` 自增到 `Count` 结束），因此它是「删队首连续同键」而非「删全队列同键」。
+    /// 本骨架未建模跨对象的整条优先级堆，按任务口径直接删除全部同键待投递项。
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_self_delay_msg_full(
+        &mut self,
+        actor_id: i32,
+        ident: u16,
+        w_param: i32,
+        n_param1: i32,
+        n_param2: i32,
+        n_param3: i32,
+        delay_ms: i64,
+    ) {
+        self.self_delay_msgs
+            .retain(|m| !(m.actor_id == actor_id && m.ident == ident && m.n_param1 == n_param1));
+        self.send_self_delay_msg_full(
+            actor_id, ident, w_param, n_param1, n_param2, n_param3, delay_ms,
+        );
+    }
+
+    /// **P3-B3**：`BaseObject.SendMsg(int wIdent, int wParam, …)`（`BaseObject.Message.cs:34-96`）
+    /// 的**即时入队**等价物。
+    ///
+    /// `:80` 的 `if (boSend && !Ghost)` 与 `SendSelfDelayMsg`（`:190`）、`SendMsg(IActor)`
+    /// （`:144`）同门 ⇒ **Ghost 实体不入队**（P3-B3 must_fix：原注释「无 `!Ghost` 门」有误；
+    /// 只是 16 的调用面前置了 `mag_objects_in_range` 的 `!ghost`，把它掩盖了）。
+    ///
+    /// 16 的 `targetObject.SendMsg(RM_MAKEHOLYSEIZEMODE, nPower*1000, 0,0,0)`（`MagicManager.cs:1168`）
+    /// 用它落到目标自己的队列（投递时刻 = 当前时钟，按插入序）。
+    pub fn send_msg_now(
+        &mut self,
+        actor_id: i32,
+        ident: u16,
+        w_param: i32,
+        n_param1: i32,
+        n_param2: i32,
+        n_param3: i32,
+    ) {
+        // `:80` `boSend && !Ghost`；实体缺失（oracle 不可达）按不入队处理。
+        let blocked = match self.entities.get(actor_id) {
+            None => true,
+            Some(e) => e.ghost,
+        };
+        if blocked {
+            return;
+        }
+        self.self_delay_msgs.push(SelfDelayMsg {
+            actor_id,
+            ident,
+            w_param,
+            n_param1,
+            n_param2,
+            n_param3,
+            deliver_at_ms: self.clock_ms,
         });
     }
 
@@ -1085,6 +1229,7 @@ impl World {
                         mutinied: Vec::new(),
                         ghosted: Vec::new(),
                         mag_healing: Some(msg.n_param1),
+                        ..SelfDelayOutcome::default()
                     });
                 }
                 RM_MASTERDIEMUTINY => {
@@ -1097,6 +1242,7 @@ impl World {
                         mutinied,
                         ghosted: Vec::new(),
                         mag_healing: None,
+                        ..SelfDelayOutcome::default()
                     });
                 }
                 RM_MASTERDIEGHOST => {
@@ -1107,9 +1253,54 @@ impl World {
                         mutinied: Vec::new(),
                         ghosted,
                         mag_healing: None,
+                        ..SelfDelayOutcome::default()
                     });
                 }
-                // 本层只承载这一族自投递（登记：其他 `RM_*` 自投递未建模）。
+                // **P3-B3**：19 的 800ms 投递——投递时才重读 `StatusTimeArr[8]` 并逐怪抽 `R(2)`。
+                RM_TRANSPARENT => {
+                    let d = self.mag_make_private_transparent(msg.actor_id, msg.n_param1 as u16);
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        transparent: Some(d),
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                // **P3-B3**：28 的 1500ms 投递——`MakeOpenHealth()`。
+                RM_DOOPENHEALTH => {
+                    let h = self.make_open_health(msg.actor_id);
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        open_health: Some(h),
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                // **P3-B3**：共享尾的 1000ms 训练帧
+                // （`nParam1=MagicId, nParam2=Level, nParam3=TranPoint`）。
+                RM_MAGIC_LVEXP => {
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        magic_lvexp: Some(MagicLvExpDelivery {
+                            magic_id: u16::try_from(msg.n_param1).unwrap_or(0),
+                            level: u8::try_from(msg.n_param2).unwrap_or(0),
+                            tran_point: msg.n_param3,
+                        }),
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                // **P3-B3**：16 的 `RM_MAKEHOLYSEIZEMODE`（`wParam = nPower*1000`）。
+                RM_MAKEHOLYSEIZEMODE => {
+                    let n = self.open_holy_seize_mode(msg.actor_id, msg.w_param);
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        name_color: Some(n),
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                // 本层只承载这些自投递（登记：其他 `RM_*` 自投递未建模）。
                 _ => {}
             }
         }
@@ -2309,12 +2500,30 @@ mod tests {
             ident: RM_MASTERDIEGHOST,
             w_param: 0,
             n_param1: 0,
+            n_param2: 0,
+            n_param3: 0,
             deliver_at_ms: w.clock_ms,
         });
         let r = w.tick();
         assert_eq!(r.slave_self_deliveries.len(), 1);
         assert_eq!(r.slave_self_deliveries[0].ghosted, vec![slave]);
         assert!(w.entities.get(slave).unwrap().ghost);
+    }
+
+    /// **P3-B3 must_fix 6**：`BaseObject.Message.cs:80` 的 `SendMsg` 同样有 `if (boSend && !Ghost)`
+    /// ⇒ [`World::send_msg_now`]（即时入队）对 Ghost 实体不入队（与 `SendSelfDelayMsg` 的 `:190` 同门）。
+    #[test]
+    fn send_msg_now_is_blocked_by_ghost_gate() {
+        let (mut w, _master, slave) = slave_world(100);
+        w.entities.get_mut(slave).unwrap().ghost = true;
+        w.send_msg_now(slave, RM_MAKEHOLYSEIZEMODE, 1000, 0, 0, 0);
+        assert!(w.self_delay_msgs.is_empty(), "Ghost 实体不入队（`:80`）");
+        // 对照：非 Ghost 照常入队（投递时刻 = 当前时钟）。
+        w.entities.get_mut(slave).unwrap().ghost = false;
+        w.send_msg_now(slave, RM_MAKEHOLYSEIZEMODE, 1000, 0, 0, 0);
+        assert_eq!(w.self_delay_msgs.len(), 1);
+        assert_eq!(w.self_delay_msgs[0].deliver_at_ms, w.clock_ms);
+        assert_eq!(w.self_delay_msgs[0].w_param, 1000);
     }
 
     /// 诱惑受奴落尾（`MagicManager.cs:753-770`）。

@@ -289,26 +289,63 @@ pub fn power_magic_attack(
 // `MagMakeClone`）体内部走 `Envir`/`GetMapBaseObjects`/`MakeSlave`，本片只登记可达性。
 // 向量来源：`mir2-rs/tests/parity/m3/magic-effect-probe`（反射直调真身，记录 System.Random 取数账本）。
 
+// ---- P3-B3：状态/辅助/不死六魔号的取数站点 ------------------------------------------------
+//
+// 六个魔号的取数必须落在本文件（`consumer_groups.tsv` 的 `magic_effect` 组）；留在
+// `crates/world/src/magic.rs` 会被 `RUST_ATTACK_RE` 整文件误归 `attack` 组。
+
+/// `MagMakeHolyCurtain` 的逐对象抽：`Random(4)`（`MagicManager.cs:1166`）。
+///
+/// 只在 `targetObject.Race >= ActorRace.Animal` **之后**抽（C# `&&` 短路）：`Race` 不合格或
+/// `Master != null` 的判定次序见 [`crate::world::World::cast_holy_curtain_spell`]。
+#[must_use]
+pub fn holy_curtain_draw(rng: &mut impl RandomSource) -> i32 {
+    rng.random_below(4)
+}
+
+/// `MagMakePrivateTransparent` 的逐对象抽：`Random(2)`（`MagicManager.cs:686`）。
+///
+/// 只在 `|dx| <= 1 && |dy| <= 1` 之后抽（短路次序：`|dx|>1` ⇒ 不抽，`|dy|>1` ⇒ 不抽）。
+#[must_use]
+pub fn private_transparent_draw(rng: &mut impl RandomSource) -> i32 {
+    rng.random_below(2)
+}
+
+/// 心灵启示（28）的门：`Random(6) <= userMagic.Level + 3`（`MagicManager.cs:434`）。
+#[must_use]
+pub fn show_hp_gate_draw(rng: &mut impl RandomSource) -> i32 {
+    rng.random_below(6)
+}
+
+/// 解毒术常量（40）：`Random(7) - (userMagic.Level + 1) < 0`（`MagicManager.cs:504`）。
+#[must_use]
+pub fn unamyounsul_gate_draw(rng: &mut impl RandomSource) -> i32 {
+    rng.random_below(7)
+}
+
 /// `Grobal2.LA_UNDEAD`（`src/OpenMir2/Grobal2.cs:66`）。
 ///
 /// **source-cited**（常量，未单独成方法）。
 pub const LA_UNDEAD: u8 = 1;
 
-/// `MagicManager.MagTurnUndead`（`src/M2Server/Magic/MagicManager.cs:827-856`）的**探针口径**。
+/// `MagicManager.MagTurnUndead`（`src/M2Server/Magic/MagicManager.cs:827-856`）的完整口径。
 ///
-/// 逐字移植：
+/// 逐字移植（`:834` 的 `Struck` 见 [`TurnUndeadInput::target_creature_present`]）：
 /// 1. `if (target.SuperMan || target.LifeAttrib != LA_UNDEAD) return false;`
-/// 2. `((AnimalObject)target).Struck(playObject)` —— 本口径下目标进入时 `TargetCret == null`
-///    且 `IsProperTarget(施法者)` 为真 ⇒ **不抽** `Random(6)`、`target.TargetCret = 施法者`；
-///    `Animal` 为真时 `MeatQuality -= Random(300)`（oracle 无条件抽这一次）。
-/// 3. `if (target.TargetCret == null) { RunAwayMode = true; … }` —— 因第 2 步已写 `TargetCret`，本口径**不进**。
+/// 2. `((AnimalObject)target).Struck(playObject)`（`AnimalObject.cs:336-359`）：
+///    - `TargetCret == null` ⇒ **不抽** `Random(6)`（短路第一支）；否则 `GetAttackDir(TargetCret)`
+///      为真也**不抽**（短路第二支）；否则抽 `Random(6)`，`==0` 才进内层；
+///    - 进内层且 `IsProperTarget(hiter)` ⇒ `SetTargetCreat(hiter)`；
+///    - `Animal` ⇒ **无条件**抽 `Random(300)`（`MeatQuality` 的 `ushort` 回绕由调用方落）；
+///    - `AttackTick += 150 - MIN(130, Abil.Level*4)`。
+/// 3. `if (target.TargetCret == null) { RunAwayMode = true; … }`（读第 2 步之后的值）。
 /// 4. `playObject.SetTargetCreat(target)`。
 /// 5. `if (Random(2) + (caster.Lv - 1) > target.Lv)` 且 `target.Lv < cfg`：
 ///    `level = caster.Lv - target.Lv`，再 `if (Random(100) < (magicLevel << 3) - magicLevel + 15 + level)`
 ///    ⇒ `target.WAbil.HP = 0; result = true;`。
 ///
-/// 未覆盖（承接攻击/魔法接线批次，需地图与朝向）：`TargetCret != null` 时 `Struck` 的
-/// `GetAttackDir`/`Random(6)` 分支、`RunAwayMode` 分支、`SetLastHiter` 的其它副作用。
+/// 类型面（`(AnimalObject)target` 的 `InvalidCastException`）在调用方判：
+/// [`TurnUndeadInput::target_is_animal_object`] 为假 ⇒ 本函数**不得**被调用（oracle 会抛异常）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TurnUndeadOutcome {
     pub result: bool,
@@ -316,9 +353,13 @@ pub struct TurnUndeadOutcome {
     pub target_targeted_by_caster: bool,
     pub target_run_away: bool,
     pub caster_target_is_target: bool,
+    /// `Struck` 的 `Random(300)` 结果（`Animal` 为真时恰一次；否则 `None`）。
+    pub meat_draw: Option<i32>,
+    /// `Struck` 尾 `AttackTick += 150 - MIN(130, Abil.Level * 4)`（目标 `Abil.Level` 决定）。
+    pub attack_tick_delta: i32,
 }
 
-/// `MagicManager.MagTurnUndead`（`MagicManager.cs:827-856`）的入参（探针口径）。
+/// `MagicManager.MagTurnUndead`（`MagicManager.cs:827-856`）的入参。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TurnUndeadInput {
     pub super_man: bool,
@@ -330,21 +371,47 @@ pub struct TurnUndeadInput {
     pub magic_level: u8,
     /// `SystemShare.Config.MagTurnUndeadLevel`。
     pub mag_turn_undead_level: i32,
+    /// 进入 `Struck` 时 `target.TargetCret != null`（决定是否可能抽 `Random(6)`）。
+    pub target_creature_present: bool,
+    /// `GetAttackDir(TargetCret, ref dir)` 为真（目标当前目标在其相邻 8 格内）——
+    /// 仅在 `target_creature_present` 为真时有意义；为真 ⇒ **不抽** `Random(6)`。
+    pub attack_dir_ok: bool,
+    /// `IsProperTarget(hiter)`（目标视角的施法者）；决定短路命中后是否 `SetTargetCreat`。
+    pub caster_is_proper_target: bool,
+    /// 目标是否 `AnimalObject`（`Race != ActorRace.Play`）。为假 ⇒ oracle 抛 `InvalidCastException`，
+    /// 调用方不得调用本函数（`TurnUndeadOutcome` 全默认）。
+    pub target_is_animal_object: bool,
 }
 
-/// 见 [`TurnUndeadInput`]/[`TurnUndeadOutcome`]（`MagicManager.cs:827-856`，探针口径）。
+/// 见 [`TurnUndeadInput`]/[`TurnUndeadOutcome`]（`MagicManager.cs:827-856`）。
 pub fn mag_turn_undead(rng: &mut impl RandomSource, inp: &TurnUndeadInput) -> TurnUndeadOutcome {
     let mut out = TurnUndeadOutcome::default();
-    if inp.super_man || inp.life_attrib != LA_UNDEAD {
+    if inp.super_man || inp.life_attrib != LA_UNDEAD || !inp.target_is_animal_object {
         return out;
     }
-    // `((AnimalObject)target).Struck(playObject)` —— 探针口径（TargetCret 为空 ⇒ 短路）。
-    if inp.animal {
-        rng.random_below(300);
+    // `:834` `((AnimalObject)target).Struck(playObject)`（`AnimalObject.cs:336-359`）。
+    // `:342` `TargetCret == null || GetAttackDir(...) || Random(6) == 0` —— C# `||` 短路。
+    let struck_branch = if !inp.target_creature_present || inp.attack_dir_ok {
+        true
+    } else {
+        rng.random_below(6) == 0
+    };
+    if struck_branch && inp.caster_is_proper_target {
+        // `:344-347` `SetTargetCreat(hiter)`。
+        out.target_targeted_by_caster = true;
     }
-    out.target_targeted_by_caster = true;
-    // `playObject.SetTargetCreat(targetObject)`（无条件，在早退之后）。
+    // `:350-356` `if (Animal) MeatQuality = (ushort)(MeatQuality - Random(300))`（无条件抽）。
+    if inp.animal {
+        out.meat_draw = Some(rng.random_below(300));
+    }
+    // `:358` `AttackTick = AttackTick + (150 - MIN(130, Abil.Level * 4))`。
+    out.attack_tick_delta = 150 - 130.min(inp.target_level * 4);
+    // `:835-840` Struck 之后重读 `TargetCret == null`（短路未命中且未写目标 ⇒ 逃跑）。
+    let target_present_after = inp.target_creature_present || out.target_targeted_by_caster;
+    out.target_run_away = !target_present_after;
+    // `:841` `playObject.SetTargetCreat(targetObject)`（无条件）。
     out.caster_target_is_target = true;
+    // `:842-853`。
     if rng.random_below(2) + (inp.caster_level - 1) > inp.target_level
         && inp.target_level < inp.mag_turn_undead_level
     {

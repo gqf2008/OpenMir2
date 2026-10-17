@@ -121,6 +121,10 @@ fn turn_mismatches(cases: &[TurnCase]) -> Vec<String> {
                 target_level: c.target_level,
                 magic_level: c.magic_level,
                 mag_turn_undead_level: c.cfg_level,
+                target_creature_present: false,
+                attack_dir_ok: false,
+                caster_is_proper_target: true,
+                target_is_animal_object: true,
             },
         );
         let want = TurnUndeadOutcome {
@@ -129,6 +133,7 @@ fn turn_mismatches(cases: &[TurnCase]) -> Vec<String> {
             target_targeted_by_caster: c.target_targeted,
             target_run_away: c.runaway,
             caster_target_is_target: c.caster_targets,
+            ..TurnUndeadOutcome::default()
         };
         for d in rng.divergences() {
             out.push(format!("turn[{n}] 取数分歧: {d}"));
@@ -136,8 +141,25 @@ fn turn_mismatches(cases: &[TurnCase]) -> Vec<String> {
         if rng.remaining() != 0 {
             out.push(format!("turn[{n}] 取数未消费完: 剩 {}", rng.remaining()));
         }
-        if got != want {
-            out.push(format!("turn[{n}] 输出不等: got={got:?} want={want:?}"));
+        // 新字段（B3 补全的 `Struck` 面）不在旧 oracle 向量里 ⇒ 先按等价类单独判，
+        // 再把它们掩掉后逐字段比较旧五元组。
+        let struck_reached = !c.super_man && c.life_attrib == 1;
+        if struck_reached {
+            assert!(got.meat_draw.is_some() == c.animal, "turn[{n}] meat 抽门");
+            assert_eq!(
+                got.attack_tick_delta,
+                150 - (c.target_level * 4).min(130),
+                "turn[{n}] AttackTick 增量"
+            );
+        } else {
+            assert!(got.meat_draw.is_none(), "turn[{n}] 早退不得抽 meat");
+            assert_eq!(got.attack_tick_delta, 0, "turn[{n}] 早退不得改 AttackTick");
+        }
+        let mut got_cmp = got;
+        got_cmp.meat_draw = None;
+        got_cmp.attack_tick_delta = 0;
+        if got_cmp != want {
+            out.push(format!("turn[{n}] 输出不等: got={got_cmp:?} want={want:?}"));
         }
     }
     out

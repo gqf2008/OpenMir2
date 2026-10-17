@@ -2373,6 +2373,12 @@ def cmd_mutate(args):
         # （`smframe_ext::sm_instancehealguage_frame` → `SpellFrameBuf` → gate），收件人 = 施法者，
         # ActorId/HP/MaxHP 取目标值（合同 §5-C1）⇒ 按门规移出 blocked。
         "SM_INSTANCEHEALGUAGE",
+        # 卡 `openmir2-spell-shared-tail-p3b3`（2026-10-17）：魔号 28 心灵启示的
+        # `RM_DOOPENHEALTH` 到点投递 → `MakeOpenHealth()` → `RM_OPENHEALTH` 已在
+        # `bins/game-svr/src/main.rs` 的 `broadcast_open_health` 接生产发射点
+        # （`smframe_ext::sm_openhealth_frame`），触发者 = 28 的 1500ms 延迟消息
+        # （合同 §3.5）⇒ 按门规移出 blocked。
+        "SM_OPENHEALTH",
     }
     # 仍 blocked（编码器已落地、生产路径无发射点）；各自 blocked_by 与出处（红名单 v2 §3 finding）：
     #   · 传送簇（切图/TransMap：HIDE 侧随切图簇；对照 SHOW(801)/SHOW2(807) 经
@@ -2382,7 +2388,8 @@ def cmd_mutate(args):
     #     —— SM_SKELETON(33)（V2-03）/ SM_ALIVE(27)（V2-04）/ SM_DIGUP(20)/SM_DIGDOWN(21)/SM_FLYAXE(22)/
     #        SM_LIGHTING(23)（V2-05）。
     #   · buff / 状态效果簇（HP 量条 + 状态位 + 武器破碎 + 照明耐久；随 world-tick-expansion buff 批）
-    #     —— SM_OPENHEALTH(1100)/SM_CLOSEHEALTH(1101)/SM_INSTANCEHEALGUAGE(1103)（V2-06）/
+    #     —— SM_CLOSEHEALTH(1101)（V2-06；1100 已随 B3 魔号 28 移入 `_wired_now`，
+    #        SM_INSTANCEHEALGUAGE(1103) 已随 B2 治疗族移入）/
     #        SM_CHARSTATUSCHANGED(657)（V2-07）/ SM_BREAKWEAPON(1102)（V2-08）/ SM_LAMPCHANGEDURA(655)（V2-09）。
     #   · NPC Run / 脚本事件簇（脚本/事件驱动的机关显隐；world-tick-expansion NPC Run 批）
     #     —— SM_HIDEEVENT(805)/SM_SHOWEVENT(804)（V2-11）。
@@ -2396,7 +2403,7 @@ def cmd_mutate(args):
     #     （SM_MAGICFIRE_FAIL(639) 原列本簇；卡 `openmir2-spell-mp-wrapper` 接线后已移入
     #      `_wired_now`，见上。）
     _blocked = {"SM_SPACEMOVE_HIDE", "SM_SKELETON", "SM_ALIVE",
-                "SM_DIGUP", "SM_DIGDOWN", "SM_FLYAXE", "SM_LIGHTING", "SM_OPENHEALTH",
+                "SM_DIGUP", "SM_DIGDOWN", "SM_FLYAXE", "SM_LIGHTING",
                 "SM_CLOSEHEALTH", "SM_BREAKWEAPON",
                 "SM_LAMPCHANGEDURA", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL",
                 "SM_QUERYYBSELL", "SM_716", "SM_RECONNECT", "SM_CHANGEFACE",

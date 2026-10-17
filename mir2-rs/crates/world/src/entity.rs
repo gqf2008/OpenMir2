@@ -21,6 +21,18 @@ pub const ACTOR_RACE_ELF_MONSTER: u8 = 113;
 /// `ActorRace.ElfWarriormon = 114`（`Race.cs:63`）—— 神兽攻击形态，`RecalcAbilitys` 覆写改速度。
 pub const ACTOR_RACE_ELF_WARRIORMON: u8 = 114;
 
+/// `src/OpenMir2/Consts/PoisonState.cs`：`StatusTimeArr` 的下标常量子集（B3 用到的五个）。
+///
+/// `BaseObject.StatusTimeArr` 是 `ushort[15]`（`BaseObject.cs:81`，ctor `:394` 置 0）。
+/// oracle 里逐个计时器的递减循环整段被注释（`BaseObject.Base.cs:249-315`）⇒ **不要**实现「每秒减 1」。
+pub const POISON_DECHEALTH: usize = 0;
+pub const POISON_DAMAGEARMOR: usize = 1;
+pub const POISON_STONE: usize = 5;
+/// `PoisonState.STATETRANSPARENT = 8`（隐身术/集体隐身术的门，`MagicManager.cs:675/693/1219`）。
+pub const POISON_STATETRANSPARENT: usize = 8;
+/// `PoisonState.OPENHEATH = 0x2`（`MakeOpenHealth` 置入 `CharStatusEx`，`BaseObject.cs:947`）。
+pub const POISON_OPENHEATH: i32 = 0x2;
+
 /// `CharacterObject.UseItems` 的佩戴位数量（`CharacterObject.cs:89`：`UseItems = new UserItem[13]`）。
 pub const USE_ITEM_SLOTS: usize = 13;
 
@@ -434,6 +446,29 @@ pub struct Entity {
     pub char_status: i32,
     /// C# `BaseObject.CharStatusEx`（`BaseObject.cs:57`，ctor `:393` 置 0）——低 16 位并入 `GetCharStatus`。
     pub char_status_ex: i32,
+    /// C# `BaseObject.StatusTimeArr`（`BaseObject.cs:81`，ctor `:394` 置 15 个 0）。
+    ///
+    /// **P3-B3 新增（`crates/world` 接口变更，须按 §12.4 通知并行车道）**：
+    /// 18/19 的隐身门、40 的三个计时器读写、以及 16/18/19 之外的写点（移动破隐 / 透明戒指 /
+    /// `Disappear` / `GasMoth` / `FrostTiger` / `Abil`）都落在这一份存储上。
+    /// 递减循环被注释（`BaseObject.Base.cs:249-315`）⇒ 只有写入点，没有周期衰减。
+    pub status_time: [u16; 15],
+    /// C# `BaseObject.Transparent`（`BaseObject.cs:259`；18/19 的 `MagMakePrivateTransparent` 收尾置 true）。
+    pub transparent: bool,
+    /// C# `BaseObject.ShowHp`（28 心灵启示的 `MakeOpenHealth` 置 true）。
+    pub show_hp: bool,
+    /// C# `BaseObject.ShowHpTick`（`MagicManager.cs:436` 置当前 tick）。
+    pub show_hp_tick: i64,
+    /// C# `BaseObject.ShowHpInterval`（`MagicManager.cs:437`：`GetPower13(...) * 1000`）。
+    pub show_hp_interval: i32,
+    /// C# `BaseObject.SuperMan`（32 圣言术的首门 `target.SuperMan`）。
+    pub super_man: bool,
+    /// C# `CharacterObject.HitSpeed`（`PlayObject.Message.cs:1846` 的 `SM_CHARSTATUSCHANGED` 末参
+    /// 取**收件人自己**的 `this.HitSpeed`）。
+    ///
+    /// **P3-B3 新增**：`RecalcAbilitys` 的写入点尚未接到实体（登记），普通路径恒 0；
+    /// 657 帧改为逐收件人读本字段构造（不再用一条 `hit_speed=0` 的 body 广播）。
+    pub hit_speed: u16,
     /// C# `PlayObject.MagicShield`（`PlayObject.cs:490`）——`DamageHealth` 的 MP 抵扣门（`BaseObject.cs:779`）。
     pub magic_shield: bool,
     /// C# `PlayObject.UnMagicShield`（`PlayObject.cs:494`）——`DamageHealth` 首行守卫（`BaseObject.cs:777`）。
@@ -591,6 +626,16 @@ impl Entity {
             green_poisoning_point: 0,
             char_status: 0,
             char_status_ex: 0,
+            // `BaseObject.cs:81/394`：`StatusTimeArr = new ushort[15]`（全 0）；
+            // `Transparent`/`ShowHp`/`ShowHpTick`/`ShowHpInterval`/`SuperMan` 构造缺省。
+            status_time: [0; 15],
+            transparent: false,
+            show_hp: false,
+            show_hp_tick: 0,
+            show_hp_interval: 0,
+            super_man: false,
+            // `CharacterObject.HitSpeed`（`RecalcAbilitys` 才赋值）⇒ ctor 缺省 0。
+            hit_speed: 0,
             // `PlayObject.cs:490/494`：`MagicShield`/`UnMagicShield` 构造缺省 `false`。
             magic_shield: false,
             un_magic_shield: false,

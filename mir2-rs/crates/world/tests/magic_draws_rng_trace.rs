@@ -101,6 +101,11 @@ fn magic_draws_land_outside_magic_rs() {
             target_level: 1,
             magic_level: 3,
             mag_turn_undead_level: 100,
+            // 探针口径（旧向量）：进入 `Struck` 时 TargetCret == null；施法者是 proper target。
+            target_creature_present: false,
+            attack_dir_ok: false,
+            caster_is_proper_target: true,
+            target_is_animal_object: true,
         },
     );
     assert!(turn.target_targeted_by_caster, "圣言命中路径");

@@ -42,6 +42,14 @@ pub const SKILL_DEJIWONHO: u16 = 15;
 /// 效果体走 `MagBubbleDefenceUp` ⇒ `MagicShield`（`MagicManager.cs:472-478`）。
 pub const SKILL_SHIELD: u16 = 31;
 
+/// **P3-B3** 六魔号（按 `MagicConst.cs` 的 ID 钉死；中文名见合同 §1.1）。
+pub const SKILL_HOLYSHIELD: u16 = 16; // `MagicConst.cs:68` 捆魔咒（部署名「困魔咒」）
+pub const SKILL_CLOAK: u16 = 18; // `MagicConst.cs:76` 隐身术
+pub const SKILL_BIGCLOAK: u16 = 19; // `MagicConst.cs:80` 集体隐身术
+pub const SKILL_SHOWHP: u16 = 28; // `MagicConst.cs:116` 心灵启示
+pub const SKILL_KILLUNDEAD: u16 = 32; // `MagicConst.cs:132` 圣言术
+pub const SKILL_UNAMYOUNSUL: u16 = 40; // `MagicConst.cs:140` 解毒术常量（部署行「十方斩」）
+
 /// 世界 tick 里排队执行的命令。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -275,6 +283,78 @@ pub struct AreaSpellOutcome {
     pub power: i32,
     /// `RM_MAGSTRUCK` 的目标（枚举序）。
     pub targets: Vec<i32>,
+}
+
+/// **P3-B3**：16 `MagMakeHolyCurtain` 的结果（`MagicManager.cs:1146-1207`）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HolyCurtainOutcome {
+    /// 共享尾 `RM_MAGICFIRE` 的坐标（= snap 后的点击点）。
+    pub tx: i32,
+    pub ty: i32,
+    /// 已求值的 `nPower`（`GetPower13(40) + GetRPow(SC)*3`；`*1000` 后作为 `wParam`）。
+    pub power: i32,
+    /// `Envir.CanWalk(tx,ty,true)` 是否通过（失败 ⇒ `result=0` 且零 helper 抽）。
+    pub can_walk: bool,
+    /// 收到 `RM_MAKEHOLYSEIZEMODE` 的对象（枚举序）。
+    pub eligible: Vec<i32>,
+    /// `result`（**最后一段连续合格对象**的数量；任一不合格对象会把已累计值归零）。
+    pub result: i32,
+}
+
+/// **P3-B3**：18 `MagMakePrivateTransparent` 的结果（`MagicManager.cs:673-699`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PrivateTransparentOutcome {
+    /// helper 是否走到收尾（`StatusTimeArr[8] > 0` ⇒ 早退 ⇒ **无 657**）。
+    pub status_changed: bool,
+    /// `GetCharStatus()`（657 的 `nParam1`）。
+    pub status: i32,
+    /// `StatusTimeArr[8] = (ushort)nHTime` 之后的值。
+    pub status_time: u16,
+}
+
+/// **P3-B3**：19 `MagMakeGroupTransparent` 的结果（`MagicManager.cs:1209-1228`）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupTransparentOutcome {
+    pub n_h_time: i32,
+    /// 收到 `RM_TRANSPARENT`（800ms）的友方（枚举序）。
+    pub friends: Vec<i32>,
+    /// helper 返回值（至少一个合格友方 ⇒ true）。
+    pub result: bool,
+}
+
+/// **P3-B3**：28 `SKILL_SHOWHP` 的结果（`MagicManager.cs:431-442`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShowHpOutcome {
+    /// `targetObject != null && !ShowHp` 门是否通过（false ⇒ 零抽、无 1100/640）。
+    pub gate_passed: bool,
+    /// `Random(6) <= Level + 3` 是否通过。
+    pub roll_passed: bool,
+    /// `boTrain`（门 + 骰都过才 true）。
+    pub bo_train: bool,
+}
+
+/// **P3-B3**：32 `MagTurnUndead` 的结果（`MagicManager.cs:827-856`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TurnUndeadSpellOutcome {
+    /// `(AnimalObject)target` 抛 `InvalidCastException`（target 是 `PlayObject` 且
+    /// `LA_UNDEAD`）——oracle 被 `PlayObject.Base.cs:1525-1529` 吞掉 ⇒ `DoSpell` 返回 false
+    /// ⇒ 恰一条 `SM_MAGICFIRE_FAIL(639)`、**无共享尾**。
+    pub invalid_cast: bool,
+    /// `boTrain`（`MagTurnUndead` 返回 true = `target.WAbil.HP = 0`）。
+    pub bo_train: bool,
+    /// `target.WAbil.HP == 0` 已被写入。
+    pub hp_zeroed: bool,
+}
+
+/// **P3-B3**：40 常量名解毒术（部署行「十方斩」）的结果（`MagicManager.cs:495-523`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnamyounsulOutcome {
+    /// `IsProperFriend` 门是否通过（false ⇒ 零抽）。
+    pub allowed: bool,
+    /// `Random(7) - (Level + 1) < 0` 是否通过。
+    pub roll_passed: bool,
+    /// 任一计时器非 0 且置 1（`boTrain`）。
+    pub bo_train: bool,
 }
 
 pub struct World {
@@ -1522,7 +1602,461 @@ impl World {
     /// `GetPower13` → `GetAttackPower`；玩家 `GetAttackPower` override 若 `Luck <= 0` 多抽一次
     /// `Random(10)`）；随后 `MagMakeDefenceArea(nTargetX, nTargetY, 3, nPower, btState)`
     /// （`btState == 0` ⇒ `DefenceUp`；否则 ⇒ `MagDefenceUp`）。返回 `result`（供 `boTrain` 的 `> 0` 门）。
+    /// **P3-B3**：16 `MagMakeHolyCurtain`（`MagicManager.cs:1146-1207`）。
+    ///
+    /// 取数次序：先求实参 `GetPower13(40)`（1 抽 `R(0)`）→ `GetRPow(SC)`（0/1 抽），**再**进
+    /// helper。helper 内：
+    /// 1. `Envir.CanWalk(tx,ty,true)` 失败 ⇒ `result=0`（零 helper 抽）；
+    /// 2. `GetMapBaseObjects(..., 1, ...)` 为空 ⇒ 0；
+    /// 3. 逐对象：`Race >= Animal`（false ⇒ 不抽、直接 else）⇒ **必抽 `R(4)`** ⇒
+    ///    `R(4)+caster.Level-1 > obj.Level` 且 `obj.Master == null` ⇒
+    ///    `SendMsg(RM_MAKEHOLYSEIZEMODE, nPower*1000)`、`result++`；否则 `result = 0`。
+    ///    ⇒ 最终 `result` = **最后一段连续合格对象**的数量（已发帧不回滚）。
+    #[must_use]
+    pub fn cast_holy_curtain_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        sc: i32,
+        tx: i32,
+        ty: i32,
+    ) -> HolyCurtainOutcome {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return HolyCurtainOutcome::default();
+        };
+        // C# 实参求值先于调用：`GetPower13(userMagic, 40) + GetRPow(WAbil.SC) * 3`。
+        let power = crate::magic_effect::get_power13(&mut self.rng, magic, level, 40)
+            + i32::from(crate::magic_effect::get_rpow(&mut self.rng, sc)) * 3;
+        let mut out = HolyCurtainOutcome {
+            tx,
+            ty,
+            power,
+            ..HolyCurtainOutcome::default()
+        };
+        // `baseObject.Envir.CanWalk(nX, nY, true)`（`Envirnoment.cs:442-451`）：
+        // `cellSuccess && cellInfo.Valid`；`get_cell_info` 的 `success` 已同时含 Valid。
+        let can_walk = self
+            .maps
+            .get(caster.map_id)
+            .is_some_and(|m| m.get_cell_info(tx, ty).1);
+        out.can_walk = can_walk;
+        if !can_walk {
+            return out;
+        }
+        let objects = self.mag_objects_in_range(caster.map_id, tx, ty, 1);
+        if objects.is_empty() {
+            return out;
+        }
+        let caster_level = i32::from(caster.level);
+        let mut result = 0i32;
+        for id in objects {
+            let Some(obj) = self.entities.get(id).cloned() else {
+                continue;
+            };
+            if obj.race >= crate::entity::ACTOR_RACE_ANIMAL {
+                // C# `&&` 从左到右：Race 过了就**必抽** `Random(4)`（即使 Master 非空）。
+                let draw = crate::magic_effect::holy_curtain_draw(&mut self.rng);
+                if draw + (caster_level - 1) > i32::from(obj.level) && obj.master.is_none() {
+                    self.send_msg_now(
+                        id,
+                        crate::slave::RM_MAKEHOLYSEIZEMODE,
+                        power * 1000,
+                        0,
+                        0,
+                        0,
+                    );
+                    out.eligible.push(id);
+                    result += 1;
+                } else {
+                    result = 0;
+                }
+            } else {
+                result = 0;
+            }
+        }
+        out.result = result;
+        out
+    }
+
+    /// **P3-B3**：`MagMakePrivateTransparent`（`MagicManager.cs:673-699`）的**投递时**执行体。
+    ///
+    /// 18 在施法 tick 直接调用；19 在 `RM_TRANSPARENT` 的 800ms 到点投递时调用（重读
+    /// `StatusTimeArr[8]`）。helper 内零前置抽；只有「`Race>=Animal && TargetCret==目标` 且
+    /// `|dx|<=1 && |dy|<=1`」的对象各抽一次 `R(2)`（坐标不合格 ⇒ 短路不抽）。
+    pub fn mag_make_private_transparent(
+        &mut self,
+        target_id: i32,
+        n_h_time: u16,
+    ) -> crate::slave::TransparentDelivery {
+        let mut d = crate::slave::TransparentDelivery {
+            target_id,
+            n_h_time,
+            ..crate::slave::TransparentDelivery::default()
+        };
+        let Some(base) = self.entities.get(target_id).cloned() else {
+            return d;
+        };
+        if base.status_time[crate::entity::POISON_STATETRANSPARENT] > 0 {
+            return d;
+        }
+        let objects = self.mag_objects_in_range(base.map_id, base.x, base.y, 9);
+        for id in objects {
+            let Some(obj) = self.entities.get(id).cloned() else {
+                continue;
+            };
+            if obj.race >= crate::entity::ACTOR_RACE_ANIMAL
+                && obj.ai.target_creature == Some(target_id)
+            {
+                let dx = (obj.x - base.x).abs();
+                let dy = (obj.y - base.y).abs();
+                let clear = if dx > 1 || dy > 1 {
+                    true
+                } else {
+                    crate::magic_effect::private_transparent_draw(&mut self.rng) == 0
+                };
+                if clear {
+                    if let Some(e) = self.entities.get_mut(id) {
+                        e.ai.target_creature = None;
+                    }
+                }
+            }
+        }
+        let status = crate::buff::get_char_status(self, target_id);
+        if let Some(e) = self.entities.get_mut(target_id) {
+            e.status_time[crate::entity::POISON_STATETRANSPARENT] = n_h_time;
+            e.char_status = status;
+            e.hide_mode = true;
+            e.transparent = true;
+        }
+        d.status_changed = true;
+        d.status = status;
+        d
+    }
+
+    /// **P3-B3**：18 `SKILL_CLOAK`（`MagicManager.cs:378-383`）。
+    ///
+    /// 实参 `(ushort)(GetPower13(30) + GetRPow(SC)*3)` **先求值**（即使 helper 因
+    /// `StatusTimeArr[8] > 0` 早退，这两抽也已发生）。
+    #[must_use]
+    pub fn cast_private_transparent_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        sc: i32,
+    ) -> PrivateTransparentOutcome {
+        let n_h_time = (crate::magic_effect::get_power13(&mut self.rng, magic, level, 30)
+            + i32::from(crate::magic_effect::get_rpow(&mut self.rng, sc)) * 3)
+            as u16;
+        let d = self.mag_make_private_transparent(caster_id, n_h_time);
+        PrivateTransparentOutcome {
+            status_changed: d.status_changed,
+            status: d.status,
+            status_time: n_h_time,
+        }
+    }
+
+    /// **P3-B3**：19 `SKILL_BIGCLOAK`（`MagicManager.cs:384-389` + `:1209-1228`）。
+    ///
+    /// 实参先求值（`GetPower13(30) + GetRPow(SC)*3`，**int** 不 cast）；helper 内零 RNG：
+    /// 3×3 有序枚举（中心 = snap 后的点击点），`IsProperFriend && StatusTimeArr[8] == 0`
+    /// ⇒ `SendSelfDelayMsg(RM_TRANSPARENT, 0, nHTime, 0, 0, "", 800)`。
+    #[must_use]
+    pub fn cast_group_transparent_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        sc: i32,
+        tx: i32,
+        ty: i32,
+    ) -> GroupTransparentOutcome {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return GroupTransparentOutcome::default();
+        };
+        let n_h_time = crate::magic_effect::get_power13(&mut self.rng, magic, level, 30)
+            + i32::from(crate::magic_effect::get_rpow(&mut self.rng, sc)) * 3;
+        let mut out = GroupTransparentOutcome {
+            n_h_time,
+            ..GroupTransparentOutcome::default()
+        };
+        for id in self.mag_objects_in_range(caster.map_id, tx, ty, 1) {
+            let Some(obj) = self.entities.get(id).cloned() else {
+                continue;
+            };
+            let in_group = caster.group_owner != 0
+                && self
+                    .entities
+                    .get(caster.group_owner)
+                    .is_some_and(|g| g.group_members.contains(&id));
+            if crate::combat::is_proper_friend(&caster, &obj, in_group)
+                && obj.status_time[crate::entity::POISON_STATETRANSPARENT] == 0
+            {
+                self.send_self_delay_msg_full(
+                    id,
+                    crate::slave::RM_TRANSPARENT,
+                    0,
+                    n_h_time,
+                    0,
+                    0,
+                    800,
+                );
+                out.friends.push(id);
+                out.result = true;
+            }
+        }
+        out
+    }
+
+    /// **P3-B3**：28 `SKILL_SHOWHP`（`MagicManager.cs:431-442`）。
+    ///
+    /// 门：`target != null && !ShowHp`（false ⇒ **零抽**）。`R(6) <= Level+3` 过门后：
+    /// `ShowHpTick/ShowHpInterval` 落目标、`SendSelfDelayMsg(RM_DOOPENHEALTH, …, 1500)`、
+    /// `boTrain = true`。取数顺序：`R(6)` → `GetRPow(SC)` → `GetPower13(RP*2+30)`。
+    #[must_use]
+    pub fn cast_show_hp_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        sc: i32,
+        target: Option<i32>,
+    ) -> ShowHpOutcome {
+        let Some(tid) = target else {
+            return ShowHpOutcome::default();
+        };
+        let Some(t) = self.entities.get(tid).cloned() else {
+            return ShowHpOutcome::default();
+        };
+        let _ = caster_id;
+        if t.show_hp {
+            return ShowHpOutcome::default();
+        }
+        let mut out = ShowHpOutcome {
+            gate_passed: true,
+            ..ShowHpOutcome::default()
+        };
+        let roll = crate::magic_effect::show_hp_gate_draw(&mut self.rng);
+        if roll > i32::from(level) + 3 {
+            return out;
+        }
+        out.roll_passed = true;
+        out.bo_train = true;
+        let interval = crate::magic::power_show_hp_interval(&mut self.rng, magic, level, sc);
+        if let Some(e) = self.entities.get_mut(tid) {
+            e.show_hp_tick = self.clock_ms;
+            e.show_hp_interval = interval;
+        }
+        // 立即把 1500ms 自投递排到**目标自己**的队列。
+        self.send_self_delay_msg_full(tid, crate::slave::RM_DOOPENHEALTH, 0, 0, 0, 0, 1500);
+        out
+    }
+
+    /// **P3-B3**：`MakeOpenHealth`（`BaseObject.cs:944-950`）——`RM_DOOPENHEALTH` 的到点投递。
+    pub fn make_open_health(&mut self, target_id: i32) -> crate::slave::OpenHealthDelivery {
+        let Some(e) = self.entities.get(target_id).cloned() else {
+            return crate::slave::OpenHealthDelivery::default();
+        };
+        let status_ex = e.char_status_ex | crate::entity::POISON_OPENHEATH;
+        let mut d = crate::slave::OpenHealthDelivery {
+            target_id,
+            hp: e.hp,
+            max_hp: e.max_hp,
+        };
+        let status =
+            crate::buff::get_char_status(self, target_id) | crate::entity::POISON_OPENHEATH;
+        if let Some(e) = self.entities.get_mut(target_id) {
+            e.show_hp = true;
+            e.char_status_ex = status_ex;
+            e.char_status = status;
+        }
+        d.hp = self.entities.get(target_id).map_or(d.hp, |e| e.hp);
+        d.max_hp = self.entities.get(target_id).map_or(d.max_hp, |e| e.max_hp);
+        d
+    }
+
+    /// **P3-B3**：`OpenHolySeizeMode(dwInterval)`（`AnimalObject.cs:322-328`）+ `RefNameColor`。
+    ///
+    /// **656 的颜色不是 `MonsterObject.GetChrColor` 的 `HolySeize ⇒ 0x7D` 覆写**：
+    /// `RM_CHANGENAMECOLOR` 由**接收者**处理（`PlayObject.Message.cs:1677-1679`）——
+    /// `PlayObject.GetChrColor(baseObject)`（`PlayObject.cs:3585-3656`）走
+    /// `BaseObject.GetChrColor`（`BaseObject.Base.cs:869-883/904-907`）⇒ 非 NPC/非宝宝的
+    /// 怪取 `GetNameColor()`，即构造置 255 的 `BaseObject.cs:385 name_color`。
+    /// `MonsterObject.GetChrColor`（`MonsterObject.cs:482-492`）的 HolySeize 分支只在怪物
+    /// **自己**计算颜色时可达，本处理器（接收者是玩家）不可达。
+    pub fn open_holy_seize_mode(
+        &mut self,
+        target_id: i32,
+        interval: i32,
+    ) -> crate::slave::NameColorDelivery {
+        let now = self.clock_ms;
+        let Some(color) = self
+            .entities
+            .get(target_id)
+            .map(|e| crate::slave::get_chr_color(e, &[], 0))
+        else {
+            return crate::slave::NameColorDelivery::default();
+        };
+        if let Some(e) = self.entities.get_mut(target_id) {
+            e.ai.holy_seize = true;
+            e.ai.holy_seize_tick = now;
+            e.ai.holy_seize_interval = i64::from(interval);
+        }
+        crate::slave::NameColorDelivery { target_id, color }
+    }
+
+    /// **P3-B3**：32 `MagTurnUndead`（`MagicManager.cs:827-856`）。
+    ///
+    /// `IsProperTarget` 由宿主在死亡归一后判（false ⇒ 零抽）；本函数从
+    /// `SuperMan || LifeAttrib != LA_UNDEAD` 开始。目标为玩家（`Race == Play`）时 oracle 的
+    /// `(AnimalObject)target` 抛 `InvalidCastException` ⇒ [outcome.invalid_cast]（**无尾**）。
+    #[must_use]
+    pub fn cast_turn_undead_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        cfg_turn_undead_level: i32,
+    ) -> TurnUndeadSpellOutcome {
+        let _ = magic;
+        let Some(tid) = target else {
+            return TurnUndeadSpellOutcome::default();
+        };
+        let (Some(caster), Some(t)) = (
+            self.entities.get(caster_id).cloned(),
+            self.entities.get(tid).cloned(),
+        ) else {
+            return TurnUndeadSpellOutcome::default();
+        };
+        // `:830-833` `target.SuperMan || target.LifeAttrib != LA_UNDEAD` ⇒ false（零抽）。
+        if t.super_man || t.life_attrib != crate::magic_effect::LA_UNDEAD {
+            return TurnUndeadSpellOutcome::default();
+        }
+        // `:834` `((AnimalObject)targetObject).Struck(playObject)` —— 玩家不是 AnimalObject。
+        if t.race == crate::entity::ACTOR_RACE_PLAY {
+            return TurnUndeadSpellOutcome {
+                invalid_cast: true,
+                ..TurnUndeadSpellOutcome::default()
+            };
+        }
+        let target_creature_present = t.ai.target_creature.is_some();
+        let attack_dir_ok =
+            t.ai.target_creature
+                .is_some_and(|tc| crate::monai::get_attack_dir(self, tid, tc).is_some());
+        let caster_is_proper_target = crate::combat::is_proper_target(&t, &caster);
+        let inp = crate::magic_effect::TurnUndeadInput {
+            super_man: t.super_man,
+            life_attrib: t.life_attrib,
+            animal: t.ai.animal,
+            caster_level: i32::from(caster.level),
+            target_level: i32::from(t.level),
+            magic_level: level,
+            mag_turn_undead_level: cfg_turn_undead_level,
+            target_creature_present,
+            attack_dir_ok,
+            caster_is_proper_target,
+            target_is_animal_object: true,
+        };
+        let out = crate::magic_effect::mag_turn_undead(&mut self.rng, &inp);
+        let now = self.clock_ms;
+        if let Some(e) = self.entities.get_mut(tid) {
+            e.ai.struck_tick = now;
+            if out.target_targeted_by_caster {
+                e.ai.target_creature = Some(caster_id);
+                e.ai.target_focus_tick = now;
+            }
+            if let Some(draw) = out.meat_draw {
+                // BUG-REPLICA（合同 §3.4 B3-32-3）：`MeatQuality` 是 `ushort`，赋值先截断，
+                // oracle 的 `if (MeatQuality < 0)` 恒 false ⇒ **按 16 位回绕**，不钳 0。
+                e.ai.meat_quality =
+                    e.ai.meat_quality
+                        .wrapping_sub(u16::try_from(draw).unwrap_or(0));
+            }
+            e.ai.attack_tick += i64::from(out.attack_tick_delta);
+        }
+        if out.target_run_away {
+            if let Some(e) = self.entities.get_mut(tid) {
+                e.ai.run_away_mode = true;
+                e.ai.run_away_start = now;
+                e.ai.run_away_time = 10 * 1000;
+            }
+        }
+        if out.result {
+            // `targetObject.SetLastHiter(playObject); targetObject.WAbil.HP = 0;`
+            if let Some(e) = self.entities.get_mut(tid) {
+                e.set_last_hiter(caster_id, now);
+                e.hp = 0;
+            }
+        }
+        // `MagicManager.cs:841` `playObject.SetTargetCreat(targetObject)`（**无条件**，Struck 之后）：
+        // 写**施法者**的 `TargetCret + TargetFocusTick`（`BaseObject.Base.cs:557-561`）。
+        // 与 [`World::cast_big_explosion_spell`] 的「逐目标覆盖、末值胜」同口径（本处仅一个目标）。
+        if out.caster_target_is_target {
+            if let Some(e) = self.entities.get_mut(caster_id) {
+                e.ai.target_creature = Some(tid);
+                e.ai.target_focus_tick = now;
+            }
+        }
+        TurnUndeadSpellOutcome {
+            invalid_cast: false,
+            bo_train: out.result,
+            hp_zeroed: out.target_hp_zeroed,
+        }
+    }
+
+    /// **P3-B3**：40 `SKILL_UNAMYOUNSUL`（常量名解毒术；部署行「十方斩」= `MagicManager.cs:495-523`）。
+    ///
+    /// `IsProperFriend` 失败 ⇒ 零抽。`R(7) - (Level+1) < 0` 过门后：三个计时器
+    /// `DECHEALTH/DAMAGEARMOR/STONE` 各自 `!= 0 ⇒ 置 1` 并 `boTrain = true`（**不是清 0**）。
+    #[must_use]
+    pub fn cast_unamyounsul_spell(
+        &mut self,
+        caster_id: i32,
+        level: u8,
+        target: Option<i32>,
+    ) -> UnamyounsulOutcome {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return UnamyounsulOutcome::default();
+        };
+        let tid = target.unwrap_or(caster_id);
+        let Some(t) = self.entities.get(tid).cloned() else {
+            return UnamyounsulOutcome::default();
+        };
+        let in_group = caster.group_owner != 0
+            && self
+                .entities
+                .get(caster.group_owner)
+                .is_some_and(|g| g.group_members.contains(&tid));
+        let mut out = UnamyounsulOutcome::default();
+        if !crate::combat::is_proper_friend(&caster, &t, in_group) {
+            return out;
+        }
+        out.allowed = true;
+        let roll = crate::magic_effect::unamyounsul_gate_draw(&mut self.rng);
+        if roll - (i32::from(level) + 1) >= 0 {
+            return out;
+        }
+        out.roll_passed = true;
+        if let Some(e) = self.entities.get_mut(tid) {
+            if e.status_time[crate::entity::POISON_DECHEALTH] != 0 {
+                e.status_time[crate::entity::POISON_DECHEALTH] = 1;
+                out.bo_train = true;
+            }
+            if e.status_time[crate::entity::POISON_DAMAGEARMOR] != 0 {
+                e.status_time[crate::entity::POISON_DAMAGEARMOR] = 1;
+                out.bo_train = true;
+            }
+            if e.status_time[crate::entity::POISON_STONE] != 0 {
+                e.status_time[crate::entity::POISON_STONE] = 1;
+                out.bo_train = true;
+            }
+        }
+        out
+    }
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn cast_defence_area_spell(
         &mut self,
         caster_id: i32,
