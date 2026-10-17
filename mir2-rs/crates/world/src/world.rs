@@ -214,6 +214,69 @@ pub struct SpellStrikeOutcome {
     pub push: Option<u8>,
 }
 
+/// **P3-B2**：一条已入目标队列、尚未处理的 `RM_MAGSTRUCK(8044)`（`MagicManager.cs:1111/1138`）。
+///
+/// oracle 的 `targetObject.SendMsg(baseObject, RM_MAGSTRUCK, 0, nPower, 0, 0)` 进的是**目标自己的**
+/// `MsgQueue`（优先级 `(byte)8044 = 108`）；本仓记录后由宿主 `World::deliver_mag_struck` 按
+/// **入队序**逐目标完整处理（构造级判据口径，见合同 §4.2）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingMagStruck {
+    pub target_id: i32,
+    pub caster_id: i32,
+    /// `RM_MAGSTRUCK.nParam1` = 施法者算出的 `nPower`（24 的非不死目标已 `/10`）。
+    pub power: i32,
+}
+
+/// **P3-B2**：一条 `RM_MAGSTRUCK` 交付段处理后的观察值（`BaseObject.Base.cs:618-686`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MagStruckOutcome {
+    pub target_id: i32,
+    pub caster_id: i32,
+    /// `StruckDamage` 后的实际扣血（`nDamage > 0` 才非 0）。
+    pub damage: i32,
+    pub hp_after: u16,
+    pub max_hp: u16,
+    /// 目标 `Race == ActorRace.Play`（决定 53 帧是否发）。
+    pub is_player: bool,
+    /// 受击怪物自消息链是否产生 `RM_CHANGENAMECOLOR`（`!ObMode && !FixedHideMode`）。
+    pub name_color: bool,
+    /// `GetChrColor`（656 的 Param）。
+    pub chr_color: u8,
+}
+
+/// **P3-B2**：治疗族（2/29）效果体返回值。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HealingSpellOutcome {
+    /// 共享尾 `RM_MAGICFIRE` 的 ActorId 来源（2 的「目标为空/死亡 ⇒ 自己」已在此回落）。
+    pub target: Option<i32>,
+    /// 共享尾坐标（2 的死亡/空目标回落会把坐标改写为施法者坐标）。
+    pub tx: i32,
+    pub ty: i32,
+    /// `boTrain`：2 = `IsProperFriend && HP<MaxHP`；29 = 至少一个 `HP<MaxHP` 的 proper friend。
+    pub bo_train: bool,
+    /// `nPower`（`ceil(nPower/5)` 条恢复 53 的来源）。
+    pub power: i32,
+    /// 2 的 `IsProperFriend` 门是否通过（false ⇒ 0 抽、无 case 帧）。
+    pub allowed: bool,
+    /// 收到 `RM_MAGHEALING`（延迟 800）的目标（枚举序）。
+    pub healed: Vec<i32>,
+    /// 收到 `RM_ABILSEEHEALGAUGE` 的目标（2 单目标 / 29 全部 proper friend，不看 HP；枚举序）。
+    pub gauges: Vec<i32>,
+}
+
+/// **P3-B2**：AoE 族（23/24/33/47）效果体返回值。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AreaSpellOutcome {
+    /// 共享尾 `RM_MAGICFIRE` 的 ActorId 来源（死亡归一后的点击目标）。
+    pub target: Option<i32>,
+    /// 至少一个 `IsProperTarget`（与 `MSD` 后的伤害无关）。
+    pub bo_train: bool,
+    /// 施法者侧 `nPower`（24 的每目标 `/10` 在交付消息载荷里）。
+    pub power: i32,
+    /// `RM_MAGSTRUCK` 的目标（枚举序）。
+    pub targets: Vec<i32>,
+}
+
 pub struct World {
     /// 地图表（下标 = `map_id`）；`World::new` 建一张 0 号图。
     pub maps: Vec<MapGrid>,
@@ -331,6 +394,11 @@ pub struct World {
     /// （`bins/game-svr` 的 sim 循环）起世界时用 [`World::enable_slave_self_delay`] 打开。
     /// 关闭时 `settle_deaths` 不入队、`tick` 不投递 ⇒ 既有对拍逐字节不变。
     slave_self_delay_enabled: bool,
+    /// **P3-B2**：待处理的 `RM_MAGSTRUCK`（目标自有队列的插入序等价物）。
+    ///
+    /// 由效果体（23/24/33/47）入队，宿主调 `World::deliver_mag_struck` 逐目标处理
+    /// （`R(1000)` → `MSD` → `nDamage>0` 链）。队列为空时零行为变化。
+    pub pending_mag_struck: Vec<PendingMagStruck>,
     /// 自身延时消息队列（oracle `BaseObject.MsgQueue` 的延时子集，**插入序**）。
     ///
     /// oracle 的完整 `MsgQueue` 是「优先级 + 插入序」的优先队列（`SendSelfDelayMsg` 一律
@@ -442,6 +510,7 @@ impl World {
             map_exp_rate: vec![None; maps_len],
             spirit_mutiny_tick: 0,
             slave_self_delay_enabled: false,
+            pending_mag_struck: Vec::new(),
             self_delay_msgs: Vec::new(),
             pet_slave_cfg: mir2_data::pet_slave::PetSlaveConfig::default(),
             pending: VecDeque::new(),
@@ -1046,6 +1115,406 @@ impl World {
         )
     }
 
+    // ====================== P3-B2（治疗/爆炸 AoE：2/29/23/24/33/47）======================
+
+    /// `BaseObject.GetMapBaseObjects`（`BaseObject.cs:2808-2844`）的**有序**等价物（合同 §1.4）。
+    ///
+    /// ```text
+    /// :2817  for (x = nX-range; x <= nX+range; x++)           外层升序
+    /// :2819    for (y = nY-range; y <= nY+range; y++)         内层升序
+    /// :2821      cellInfo = GetCellInfo(x, y, out cellSuccess)  只在 Valid(Walk) 时 success
+    /// :2822      if (cellSuccess && cellInfo.IsAvailable)
+    /// :2824        for (i = 0; i < cellInfo.ObjList.Count; i++) 格内 **ObjList 插入序**
+    /// :2827          if (cellObject.CellObjId > 0 && cellObject.ActorObject)
+    /// :2830            if (baseObject != null && !baseObject.Death && !baseObject.Ghost)
+    /// ```
+    ///
+    /// **不得**用 `EntityStore::iter` 的槽位序（槽复用会换位）。
+    #[must_use]
+    pub fn mag_objects_in_range(&self, map_id: usize, n_x: i32, n_y: i32, range: i32) -> Vec<i32> {
+        let Some(map) = self.maps.get(map_id) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for x in (n_x - range)..=(n_x + range) {
+            for y in (n_y - range)..=(n_y + range) {
+                let (cell, success) = map.get_cell_info(x, y);
+                if !success || !cell.is_available() {
+                    continue;
+                }
+                for obj in &cell.obj_list {
+                    if obj.cell_obj_id <= 0 || !obj.actor_object {
+                        continue;
+                    }
+                    if let Some(e) = self.entities.get(obj.cell_obj_id) {
+                        if !e.death && !e.ghost {
+                            out.push(e.id);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// `SKILL_HEALLING(2)` 效果体（`MagicManager.cs:204-224`）。
+    ///
+    /// ```text
+    /// :205-210  target == null => target = self, nTargetX/nTargetY = CurrX/CurrY
+    /// :211      if (IsProperFriend(target)) {                       <- 失败 => 0 抽 / 0 case 帧
+    /// :213        nPower = GetAttackPower(GetPower(MPow) + Lo(SC)*2, (Hi-Lo)*2+1)  <- 4 抽
+    /// :214        if (target.HP < target.MaxHP) {
+    /// :216          target.SendSelfDelayMsg(RM_MAGHEALING, 0, nPower, 0,0,"",800)
+    /// :217          boTrain = true }
+    /// :219-222    if (AbilSeeHealGauge) playObject.SendMsg(target, RM_ABILSEEHEALGAUGE, ...)
+    /// ```
+    ///
+    /// 宿主负责 `AbilSeeHealGauge` 门与 1103 帧（本函数只返回 gauge 目标）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_healing_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        target_x: i32,
+        target_y: i32,
+        sc: i32,
+    ) -> HealingSpellOutcome {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return HealingSpellOutcome::default();
+        };
+        // `:160-163` 死亡归一在宿主已完成；这里再兜一次（直调用例）。
+        let target = target.filter(|id| self.entities.get(*id).is_some_and(|e| !e.death));
+        let (tid, tx, ty) = match target {
+            Some(id) => (id, target_x, target_y),
+            // `:205-210` 目标为空 => 治疗自己并**改写尾帧坐标**。
+            None => (caster.id, caster.x, caster.y),
+        };
+        let Some(t) = self.entities.get(tid).cloned() else {
+            return HealingSpellOutcome::default();
+        };
+        let mut out = HealingSpellOutcome {
+            target: Some(tid),
+            tx,
+            ty,
+            ..HealingSpellOutcome::default()
+        };
+        let in_group = caster.group_owner != 0
+            && self
+                .entities
+                .get(caster.group_owner)
+                .is_some_and(|g| g.group_members.contains(&tid));
+        // `:211` —— 门在**抽数之前**；失败 => `allowed=false`、`target` 保留（尾仍带该 id）。
+        if !crate::combat::is_proper_friend(&caster, &t, in_group) {
+            return out;
+        }
+        out.allowed = true;
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::power_healing(&mut self.rng, magic, level, sc, atk);
+        out.power = power;
+        if t.hp < t.max_hp {
+            self.send_self_delay_msg_with(tid, crate::slave::RM_MAGHEALING, 0, power, 800);
+            out.bo_train = true;
+            out.healed.push(tid);
+        }
+        // `:219-222`：对**每个** proper friend 都发（不看 HP）。
+        out.gauges.push(tid);
+        out
+    }
+
+    /// `SKILL_BIGHEALLING(29)` 效果体 + `MagBigHealing`（`MagicManager.cs:443-449` / `:54-76`）。
+    ///
+    /// 施法者侧恒 4 抽（**无前置门**）；helper 内 0 抽。枚举 = `GetMapBaseObjects(..., 1, ...)`
+    /// 的 3x3 有序集；只治 `IsProperFriend && HP<MaxHP` 的玩家；gauge 对所有 proper friend。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_big_healing_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        n_x: i32,
+        n_y: i32,
+        sc: i32,
+    ) -> HealingSpellOutcome {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return HealingSpellOutcome::default();
+        };
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::power_healing(&mut self.rng, magic, level, sc, atk);
+        let mut out = HealingSpellOutcome {
+            target,
+            tx: n_x,
+            ty: n_y,
+            power,
+            ..HealingSpellOutcome::default()
+        };
+        let group_members: Vec<i32> = if caster.group_owner != 0 {
+            self.entities
+                .get(caster.group_owner)
+                .map(|g| g.group_members.clone())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        for tid in self.mag_objects_in_range(caster.map_id, n_x, n_y, 1) {
+            let Some(t) = self.entities.get(tid).cloned() else {
+                continue;
+            };
+            let in_group = caster.group_owner != 0 && group_members.contains(&tid);
+            if !crate::combat::is_proper_friend(&caster, &t, in_group) {
+                continue;
+            }
+            // `:69-72` gauge **不看 HP**。
+            out.gauges.push(tid);
+            if t.hp < t.max_hp {
+                self.send_self_delay_msg_with(tid, crate::slave::RM_MAGHEALING, 0, power, 800);
+                out.bo_train = true;
+                out.healed.push(tid);
+            }
+        }
+        out
+    }
+
+    /// `MagicManager.MagBigExplosion`（`MagicManager.cs:1100-1117`）——
+    /// `SKILL_FIREBOOM(23)` / `SKILL_SNOWWIND(33)` / `SKILL_47(47)` 共用。
+    ///
+    /// ```text
+    /// :1104  GetMapBaseObjects(envir, nX, nY, nRage, ...)          有序枚举（合同 §1.4）
+    /// :1108  baseObject.IsProperTarget(targetObject)               纯门（不取数）
+    /// :1110  baseObject.SetTargetCreat(targetObject)               只改**施法者**的 TargetCret
+    /// :1111  targetObject.SendMsg(baseObject, RM_MAGSTRUCK, 0, nPower, 0, 0)
+    /// ```
+    ///
+    /// 施法者侧 4 抽先于枚举（oracle 是实参求值序）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_big_explosion_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        n_x: i32,
+        n_y: i32,
+        range: i32,
+        mc: i32,
+    ) -> AreaSpellOutcome {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return AreaSpellOutcome::default();
+        };
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::power_magic_attack(&mut self.rng, magic, level, mc, atk);
+        let mut out = AreaSpellOutcome {
+            target,
+            power,
+            ..AreaSpellOutcome::default()
+        };
+        let group_members: Vec<i32> = if caster.group_owner != 0 {
+            self.entities
+                .get(caster.group_owner)
+                .map(|g| g.group_members.clone())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let mut last_target = None;
+        for tid in self.mag_objects_in_range(caster.map_id, n_x, n_y, range) {
+            let Some(t) = self.entities.get(tid).cloned() else {
+                continue;
+            };
+            if !crate::combat::is_proper_target_grouped(&caster, &t, &group_members) {
+                continue;
+            }
+            last_target = Some(tid);
+            out.targets.push(tid);
+            out.bo_train = true;
+            self.pending_mag_struck.push(PendingMagStruck {
+                target_id: tid,
+                caster_id,
+                power,
+            });
+        }
+        // `SetTargetCreat` 逐目标覆盖；末值 = 最后一个 proper target（oracle 同）。
+        if let (Some(tid), Some(e)) = (last_target, self.entities.get_mut(caster_id)) {
+            e.ai.target_creature = Some(tid);
+            e.ai.target_focus_tick = self.clock_ms;
+        }
+        out
+    }
+
+    /// `MagicManager.MagElecBlizzard`（`MagicManager.cs:1119-1144`）——`SKILL_LIGHTFLOWER(24)`。
+    ///
+    /// ```text
+    /// :1123  GetMapBaseObjects(envir, baseObject.CurrX, baseObject.CurrY, ElecBlizzardRange)
+    ///        —— 中心是**施法者坐标**，不是点击坐标（合同 §5-C5）
+    /// :1128  if (target.LifeAttrib != LA_UNDEAD) nPowerPoint = nPower / 10  （整除）
+    /// :1134  else                               nPowerPoint = nPower
+    /// :1136  if (baseObject.IsProperTarget(targetObject))
+    /// :1138    targetObject.SendMsg(baseObject, RM_MAGSTRUCK, 0, nPowerPoint, 0, 0)
+    /// ```
+    ///
+    /// `nPowerPoint` 在 `IsProperTarget` **之前**算（无抽数）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_elec_blizzard_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        range: i32,
+        mc: i32,
+    ) -> AreaSpellOutcome {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return AreaSpellOutcome::default();
+        };
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::power_magic_attack(&mut self.rng, magic, level, mc, atk);
+        let mut out = AreaSpellOutcome {
+            target,
+            power,
+            ..AreaSpellOutcome::default()
+        };
+        let group_members: Vec<i32> = if caster.group_owner != 0 {
+            self.entities
+                .get(caster.group_owner)
+                .map(|g| g.group_members.clone())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        for tid in self.mag_objects_in_range(caster.map_id, caster.x, caster.y, range) {
+            let Some(t) = self.entities.get(tid).cloned() else {
+                continue;
+            };
+            let power_point = if t.life_attrib != crate::magic_effect::LA_UNDEAD {
+                power / 10
+            } else {
+                power
+            };
+            if !crate::combat::is_proper_target_grouped(&caster, &t, &group_members) {
+                continue;
+            }
+            out.targets.push(tid);
+            out.bo_train = true;
+            self.pending_mag_struck.push(PendingMagStruck {
+                target_id: tid,
+                caster_id,
+                power: power_point,
+            });
+        }
+        out
+    }
+
+    /// **P3-B2**：`RM_MAGSTRUCK` 交付处理器（`BaseObject.Base.cs:618-686`）的**有序**批量版。
+    ///
+    /// 逐目标（入队序）：
+    /// ```text
+    /// :620-623  if (Race >= Animal && !RushMode && Level < 50) WalkTick += 800 + Random(1000)
+    /// :624      nDamage = GetMagStruckDamage(null, nParam1)          <- MSD 1 抽（undead 项不生效）
+    /// :625      if (nDamage > 0) {
+    /// :627        StruckDamage(nDamage)                               玩家：STD（R(10)+每格 R(8)）
+    /// :628        HealthSpellChanged()                               仅玩家出 53（宿主）
+    /// :629        SendRefMsg(RM_STRUCK_MAG, ...)                     31（宿主）
+    /// :672-679    if (Race > Play) { MeatQuality -= nDamage*1000; SendMsg(RM_STRUCK) }
+    ///             -- AnimalObject.Operate：SetLastHiter -> Struck（TargetCret!=null 且
+    ///                GetAttackDir 失败抽 R(6)）-> Animal 抽 R(300) -> BreakHolySeizeMode（656）
+    /// ```
+    ///
+    /// `RushMode` 本骨架无字段 => 恒 false（合同 §3.1 的夹具 pin；登记）。
+    /// `MonDelHptoExp`/`MonSayMsg`/`Disable*Struck` 缺省 false（合同 §3.1），不建模其支。
+    pub fn deliver_mag_struck(&mut self) -> Vec<MagStruckOutcome> {
+        let msgs = std::mem::take(&mut self.pending_mag_struck);
+        let mut out = Vec::new();
+        for msg in msgs {
+            let Some(mut t) = self.entities.get(msg.target_id).cloned() else {
+                continue;
+            };
+            let is_monster = t.race >= crate::entity::ACTOR_RACE_ANIMAL;
+            // `:620-623` —— 只对怪物条件取 `Random(1000)`（与伤害无关）。
+            if is_monster && t.level < 50 {
+                let draw = crate::magic_effect::mag_struck_walk_draw(&mut self.rng);
+                t.ai.walk_tick += 800 + i64::from(draw);
+            }
+            // `:624` — `GetMagStruckDamage(null, nPower)`：`baseObject == null` => 无 undead 加项。
+            let damage =
+                crate::combat::get_mag_struck_damage(&mut self.rng, t.mac, msg.power, None);
+            let mut name_color = false;
+            let mut chr_color = 0u8;
+            if damage > 0 {
+                // `base.StruckDamage`（`:827-851`）：本夹具配置倍率均缺省 10 => 数值不变；
+                // `LastHiter` 缩放面未在本层复刻（合同 §3.1 pin `LastHiter=null`，登记）。
+                t.hp = if damage >= i32::from(t.hp) {
+                    0
+                } else {
+                    t.hp - u16::try_from(damage).unwrap_or(u16::MAX)
+                };
+                if is_monster {
+                    // `:672-679` `SendMsg(RM_STRUCK)` -> `AnimalObject.Operate`（`AnimalObject.cs:118-133`）。
+                    t.set_last_hiter(msg.caster_id, self.clock_ms);
+                    // `Struck`（`AnimalObject.cs:336-358`）。
+                    let mut set_target = false;
+                    match t.ai.target_creature {
+                        None => set_target = true, // 短路：不抽 `Random(6)`
+                        Some(tc) => {
+                            let dir_ok = self.entities.get(tc).is_some_and(|o| {
+                                (t.x - o.x).abs() <= 1
+                                    && (t.y - o.y).abs() <= 1
+                                    && !(t.x == o.x && t.y == o.y)
+                            });
+                            if dir_ok
+                                || crate::magic_effect::mag_struck_attack_dir_roll(&mut self.rng)
+                            {
+                                set_target = true;
+                            }
+                        }
+                    }
+                    if set_target {
+                        if let Some(c) = self.entities.get(msg.caster_id) {
+                            if crate::combat::is_proper_target(&t, c) {
+                                t.ai.target_creature = Some(msg.caster_id);
+                                t.ai.target_focus_tick = self.clock_ms;
+                            }
+                        }
+                    }
+                    if t.ai.animal {
+                        let draw = crate::magic_effect::mag_struck_meat_roll(&mut self.rng);
+                        t.ai.meat_quality = (i32::from(t.ai.meat_quality) - draw).max(0) as u16;
+                    }
+                    // `:672` `MeatQuality -= nDamage * 1000`（无抽数，值面）。
+                    t.ai.meat_quality =
+                        (i32::from(t.ai.meat_quality) - damage * 1000).max(0) as u16;
+                    // `BreakHolySeizeMode`（`:125`）-> `RefNameColor`（`BaseObject.cs:730-733`）。
+                    name_color = !t.ob_mode && !t.fixed_hide_mode;
+                    chr_color = crate::slave::get_chr_color(&t, &[], 0);
+                } else {
+                    // `PlayObject.StruckDamage` 的 RNG 段（`PlayObject.cs:2957/3000`）。
+                    crate::combat::struck_damage_durability(&mut self.rng, &mut t);
+                }
+            }
+            let (hp_after, max_hp) = (t.hp, t.max_hp);
+            let is_player = t.race == crate::entity::ACTOR_RACE_PLAY;
+            if let Some(e) = self.entities.get_mut(msg.target_id) {
+                *e = t;
+            }
+            out.push(MagStruckOutcome {
+                target_id: msg.target_id,
+                caster_id: msg.caster_id,
+                damage,
+                hp_after,
+                max_hp,
+                is_player,
+                name_color,
+                chr_color,
+            });
+        }
+        out
+    }
+
     /// **片 A-5（buff 生产者接线）**：技能 14/15（`SKILL_HANGMAJINBUB`/`SKILL_DEJIWONHO`）的生产入口
     /// （`MagicManager.cs:352-366` 的 `SKILL_HANGMAJINBUB`/`SKILL_DEJIWONHO` 支）。
     ///
@@ -1560,9 +2029,9 @@ impl World {
         // 先跑 `while (GetMessage(GetMessageTick, ...)) Operate(...)` 消息段 ⇒ 自投递的
         // `ProcessSlaveMutiny` / `ProcessSlaveGhost`（`PlayObject.Message.cs:2116-2121`）
         // **先于** `BaseObject.Run` 的宝宝清表（`BaseObject.Base.cs:208-217`）。同序放置。
-        if self.slave_self_delay_enabled {
-            record.slave_self_deliveries = self.deliver_self_delay_msgs();
-        }
+        // P3-B2：`RM_MAGHEALING`（治疗）不依赖该开关；主人死族在 `deliver_self_delay_msgs`
+        // 内部仍按 `slave_self_delay_enabled` 过滤（关闭时保持入队）。
+        record.slave_self_deliveries = self.deliver_self_delay_msgs();
 
         // **M3⑨-实现 3**：`BaseObject.Run` 的宝宝列表清理（`BaseObject.Base.cs:208-217`）。
         // oracle 里这跑在每个主人（玩家）自己的 `Run()` 里；本骨架玩家无 `Run` ⇒ 在死亡结算后
@@ -4868,6 +5337,74 @@ mod tests {
         assert_eq!(hits, 0, "HAM_DEAR ⇒ 非配偶友军不被加点");
         assert!(!w.buffs.has_buff(2, BuffType::DefensePower));
     }
+    /// **B2-1**：`mag_objects_in_range` 的顺序契约 = x 外层升序 → y 内层升序 → 格内
+    /// **ObjList 插入序**（`BaseObject.cs:2817-2832`）；过滤 `Death`/`Ghost`，且只认
+    /// `CellObjId>0 && ActorObject`。
+    ///
+    /// 红检：把内层/外层循环互换、或改用 `EntityStore::iter` 槽位序 ⇒ 断言必红。
+    #[test]
+    fn p3b2_mag_objects_in_range_order_is_x_then_y_then_objlist() {
+        let mut w = World::new(32, 32);
+        let mut mk = |name: &str, x: i32, y: i32, race: u8, ghost: bool, death: bool| {
+            let mut e = Entity::new(0, name.to_string(), x, y);
+            e.race = race;
+            e.ghost = ghost;
+            e.death = death;
+            w.add_entity(e)
+        };
+        // 同格双对象：插入序必须可观测。
+        let a = mk("a", 10, 10, ACTOR_RACE_PLAY, false, false);
+        let b = mk("b", 10, 10, ACTOR_RACE_MONSTER, false, false);
+        // y 更大的格子（x 相同时按 y 升序）。
+        let c = mk("c", 10, 11, ACTOR_RACE_PLAY, false, false);
+        // x 更小的格子（内层 y 走完才轮到下一个 x）。
+        let d = mk("d", 9, 11, ACTOR_RACE_PLAY, false, false);
+        let dead = mk("dead", 9, 9, ACTOR_RACE_MONSTER, false, true);
+        let ghost = mk("ghost", 11, 9, ACTOR_RACE_MONSTER, true, false);
+        w.tick(); // Enter 落格（cell.obj_list 插入序 = add_entity 序）
+        let got = w.mag_objects_in_range(0, 10, 10, 1);
+        assert_eq!(
+            got,
+            vec![d, a, b, c],
+            "x=9 的 d 先于 x=10 的 a/b/c；同格 a 先于 b；dead/ghost 被过滤"
+        );
+        assert!(!got.contains(&dead) && !got.contains(&ghost));
+    }
+
+    /// **B2-2**：`get_mag_struck_damage` = `MAX(0, nPower - (Lo(MAC)+Random(Δ+1)))`；
+    /// `baseObject == null`（`RM_MAGSTRUCK` 的真实调用）不加 undead 项；`Some` 才加。
+    ///
+    /// 红检：把 `Random(Δ+1)` 写成 `Random(Δ)`（Δ=0 时不抽）⇒ 对照流状态不等。
+    #[test]
+    fn p3b2_get_mag_struck_damage_mac_roll_and_null_undead() {
+        use mir2_shared::rng::RandomNumber;
+        let mac: u16 = 0x0A00; // Lo=0, Hi=10 ⇒ Random(11)
+        let seed = 42;
+        let mut rng = RandomNumber::with_seed(seed);
+        let draw = rng.random_below(11);
+        let want = (20 - draw).max(0);
+        let mut rng2 = RandomNumber::with_seed(seed);
+        assert_eq!(
+            crate::combat::get_mag_struck_damage(&mut rng2, mac, 20, None),
+            want
+        );
+        assert_eq!(
+            format!("{rng2:?}"),
+            format!("{:?}", {
+                let mut r = RandomNumber::with_seed(seed);
+                let _ = r.random_below(11);
+                r
+            }),
+            "MSD 恰 1 抽 R(11)"
+        );
+        // undead 项只在 baseObject != null（Some）时生效。
+        let mut rng3 = RandomNumber::with_seed(seed);
+        assert_eq!(
+            crate::combat::get_mag_struck_damage(&mut rng3, mac, 20, Some(7)),
+            want + 7
+        );
+    }
+
     /// **B1**：`SKILL_LIGHTENING(11)` 的不死系 ×1.5（`MagicManager.cs:296`）。
     /// 期望值 = **手写推导**：`MPow` → `GetPower` → `GetAttackPower`（玩家 override）→ `Round(x*1.5)`。
     /// 同时钉住返回值口径（`bo_train = Race >= Animal`、`delay_ms = 600`、target 保留）。

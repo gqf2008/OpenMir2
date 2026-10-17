@@ -460,6 +460,14 @@ pub struct Entity {
     /// slave 面（`MakeClone`/`GainSlaveExp`）尚未建模 ⇒ 这些路径保持 0（登记）。
     /// 设计锚：`mir2-rs/tests/parity/m3/design-monster-run-overrides-20261017.md` §4.1.2-5 / §5-2。
     pub anti_magic: u16,
+    /// `WAbil.MAC`（`BaseObject` 构造 ctor 缺省 **0**；`RecalcAbilitys` 后 = `Abil.MAC + AddAbil.MAC`
+    /// 的逐字节 `MakeWord` 合成，见 `bins/game-svr` 的 `apply_ability_to_entity`）。
+    ///
+    /// **P3-B2 新增（`crates/world` 接口变更，须按 §12.4 通知并行车道）**：`RM_MAGSTRUCK` 交付段的
+    /// `GetMagStruckDamage`（`BaseObject.Base.cs:812-821`）唯一读点：
+    /// `Lo(MAC) + Random(|Hi(MAC)-Lo(MAC)|+1)`，再从 `nDamage` 里扣。
+    /// 普通 `MonGen` 怪走 ctor 缺省 0（与 `anti_magic` 同口径，生成路径不调 `RecalcAbilitys`）。
+    pub mac: u16,
     /// `Job`（0 战 / 1 法 / 2 道）
     pub job: u8,
     /// `LifeAttrib`（1 = `LA_UNDEAD` 不死系）
@@ -592,6 +600,8 @@ impl Entity {
             speed_point: 0,
             // `BaseObject.cs:390`：ctor 置 `AntiMagic = 0`（普通生成路径不调 `RecalcAbilitys`）。
             anti_magic: 0,
+            // `BaseObject.WAbil.MAC` 构造缺省 0（`RecalcAbilitys` 才写 `Abil.MAC + AddAbil.MAC`）。
+            mac: 0,
             job: 0,
             life_attrib: 0,
             level: 1,

@@ -2368,6 +2368,11 @@ def cmd_mutate(args):
         # `SM_MAGICFIRE_FAIL(639)`（处理器 `PlayObject.Message.cs:1794-1800` 无 ActorId 守卫 ⇒ 含自己）。
         # ⇒ 按门规移出 blocked（自失效断言）。
         "SM_MAGICFIRE_FAIL",
+        # 卡 `openmir2-spell-shared-tail-p3b2`（2026-10-17）：治疗族（2/29）的
+        # `RM_ABILSEEHEALGAUGE` 处理器已在 `bins/game-svr/src/main.rs` 的 B2 支接生产发射点
+        # （`smframe_ext::sm_instancehealguage_frame` → `SpellFrameBuf` → gate），收件人 = 施法者，
+        # ActorId/HP/MaxHP 取目标值（合同 §5-C1）⇒ 按门规移出 blocked。
+        "SM_INSTANCEHEALGUAGE",
     }
     # 仍 blocked（编码器已落地、生产路径无发射点）；各自 blocked_by 与出处（红名单 v2 §3 finding）：
     #   · 传送簇（切图/TransMap：HIDE 侧随切图簇；对照 SHOW(801)/SHOW2(807) 经
@@ -2392,7 +2397,7 @@ def cmd_mutate(args):
     #      `_wired_now`，见上。）
     _blocked = {"SM_SPACEMOVE_HIDE", "SM_SKELETON", "SM_ALIVE",
                 "SM_DIGUP", "SM_DIGDOWN", "SM_FLYAXE", "SM_LIGHTING", "SM_OPENHEALTH",
-                "SM_CLOSEHEALTH", "SM_INSTANCEHEALGUAGE", "SM_BREAKWEAPON",
+                "SM_CLOSEHEALTH", "SM_BREAKWEAPON",
                 "SM_LAMPCHANGEDURA", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL",
                 "SM_QUERYYBSELL", "SM_716", "SM_RECONNECT", "SM_CHANGEFACE",
                 "SM_PLAYDICE", "SM_ITEMSHOW", "SM_HIDEEVENT", "SM_SHOWEVENT", "SM_OPENDOOR_OK",

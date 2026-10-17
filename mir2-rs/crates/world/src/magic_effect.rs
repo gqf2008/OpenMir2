@@ -219,6 +219,68 @@ pub fn power_defence_area(
     )
 }
 
+/// **P3-B2（`RM_MAGSTRUCK` 交付段）**：`WalkTick += 800 + Random(1000)`
+/// （`BaseObject.Base.cs:620-623`，只对 `Race>=Animal && !RushMode && Level<50`）。
+#[must_use]
+pub fn mag_struck_walk_draw(rng: &mut impl RandomSource) -> i32 {
+    rng.random_below(1000)
+}
+
+/// **P3-B2**：`AnimalObject.Struck` 的 `GetAttackDir` 失败骰 `Random(6) == 0`
+/// （`AnimalObject.cs:342`；只在 `TargetCret != null` 且方向门失败时抽）。
+#[must_use]
+pub fn mag_struck_attack_dir_roll(rng: &mut impl RandomSource) -> bool {
+    rng.random_below(6) == 0
+}
+
+/// **P3-B2**：`AnimalObject.Struck` 的 `Random(300)`（`AnimalObject.cs:352`，`Animal=true`）。
+#[must_use]
+pub fn mag_struck_meat_roll(rng: &mut impl RandomSource) -> i32 {
+    rng.random_below(300)
+}
+
+/// **P3-B2（治疗族 2/29）**：`GetAttackPower(GetPower(MPow) + Lo(SC) * 2, (Hi(SC)-Lo(SC))*2+1)`
+/// （`MagicManager.cs:213` / `:444`）。
+///
+/// 取数次序（C# 实参从左到右）：`MPow` 的 `Random(MaxPower-Power)` → `GetPower` 的
+/// `Random(DefMaxPower-DefPower)`（`R(0)` 也推进）→ `GetAttackPower` 内
+/// `Random((Δ)*2+1 + 1)` → `R(10 - MAX(0,-Luck))`（玩家 Luck=0 时即 `R(10)`）。
+pub fn power_healing(
+    rng: &mut impl RandomSource,
+    magic: &MagicInfo,
+    level: u8,
+    sc: i32,
+    atk: AttackPowerMode,
+) -> i32 {
+    let mp = mpow(rng, magic);
+    let base = get_power(rng, magic, level, mp) + i32::from(lo_byte(sc)) * 2;
+    atk_power(
+        rng,
+        base,
+        (i32::from(hi_byte(sc)) - i32::from(lo_byte(sc))) * 2 + 1,
+        atk,
+    )
+}
+
+/// **P3-B2（爆炸/雷光/冰咆哮/地狱烈焰 23/24/33/47）**：
+/// `GetAttackPower(GetPower(MPow) + Lo(MC), Hi(MC)-Lo(MC)+1)`（`MagicManager.cs:419/425/490/596`）。
+pub fn power_magic_attack(
+    rng: &mut impl RandomSource,
+    magic: &MagicInfo,
+    level: u8,
+    mc: i32,
+    atk: AttackPowerMode,
+) -> i32 {
+    let mp = mpow(rng, magic);
+    let base = get_power(rng, magic, level, mp) + i32::from(lo_byte(mc));
+    atk_power(
+        rng,
+        base,
+        i32::from(hi_byte(mc)) - i32::from(lo_byte(mc)) + 1,
+        atk,
+    )
+}
+
 // ---- context_required 效果：独立可调方法（第七片真身向量）------------------------------------
 //
 // 这两条是 `DoSpell` 的 `case` 体里**唯一**不需要地图/可见集/召唤的独立方法：

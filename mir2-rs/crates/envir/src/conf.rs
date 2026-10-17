@@ -62,6 +62,13 @@ pub struct GameSvrConf {
     pub naked_abil_wizard: NakedAbility,
     /// 帧 811 的职业 C 段模板（`[Setup] NakedAbilofTaos*`）。
     pub naked_abil_taos: NakedAbility,
+    /// `[Setup] FireBoomRage`（`GameSvrConf.cs:903/1770`，缺省 1）——
+    /// 23（爆裂火焰）/47（地狱烈焰）的 `MagBigExplosion` 半径。
+    pub fire_boom_rage: u8,
+    /// `[Setup] SnowWindRange`（`GameSvrConf.cs:904/1771`，缺省 1）—— 33（冰咆哮）的半径。
+    pub snow_wind_range: u8,
+    /// `[Setup] ElecBlizzardRange`（`GameSvrConf.cs:908/1772`，缺省 2）—— 24（地狱雷光）的半径。
+    pub elec_blizzard_range: u8,
 }
 
 /// `src/OpenMir2/Packets/ClientPackets/ClientConf.cs:6-24`（17 个 `bool`，声明序即序列化序）。
@@ -214,6 +221,10 @@ impl GameSvrConf {
             naked_abil_warr: read_ability(ini, "NakedAbilofWarr", &nw),
             naked_abil_wizard: read_ability(ini, "NakedAbilofWizard", &nwz),
             naked_abil_taos: read_ability(ini, "NakedAbilofTaos", &nt),
+            // `ServerConf.cs:548-550`：`ReadWriteByte("Setup", <key>, <default>)`。
+            fire_boom_rage: ini.read_integer("Setup", "FireBoomRage", 1) as u8,
+            snow_wind_range: ini.read_integer("Setup", "SnowWindRange", 1) as u8,
+            elec_blizzard_range: ini.read_integer("Setup", "ElecBlizzardRange", 2) as u8,
         }
     }
 

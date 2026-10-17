@@ -748,6 +748,39 @@ fn wear_durability(slot: &mut UseItemSlot, n_dam: u16) {
     }
 }
 
+/// `BaseObject.GetMagStruckDamage(IActor baseObject, int nDamage)`
+/// （`src/M2Server/Actor/BaseObject.Base.cs:812-821`）——`RM_MAGSTRUCK` 交付段的唯一骰。
+///
+/// 逐行：
+/// ```text
+/// :814  n14 = LoByte(WAbil.MAC) + Random(|HiByte(WAbil.MAC) - LoByte(WAbil.MAC)| + 1)
+/// :815  nDamage = (ushort)MAX(0, nDamage - n14)
+/// :816  if (LifeAttrib == LA_UNDEAD && baseObject != null) nDamage += AddAbil.UndeadPower
+/// ```
+///
+/// **`baseObject` 条件**：`RM_MAGSTRUCK` 的处理器传的是 `null`
+/// （`BaseObject.Base.cs:624` 的 `GetMagStruckDamage(null, processMsg.nParam1)`）⇒ undead 加项
+/// **不生效**。`Some(power)` 只给将来会传真实攻方的调用面（`MonDelHptoExp` 支等）。
+///
+/// `MAC` 是 `WAbil.MAC` 的 `ushort`；`Random` 参数用**绝对值+1**（Hi<Lo 时不 panic）。
+/// 返回值按 oracle 的 `int`（`BaseObject.GetMagStruckDamage` 返回 `int`，不是 `ushort`）。
+#[must_use]
+pub fn get_mag_struck_damage(
+    rng: &mut impl RandomSource,
+    mac: u16,
+    n_power: i32,
+    undead_power: Option<i32>,
+) -> i32 {
+    let lo = i32::from(lo_byte(i32::from(mac)));
+    let hi = i32::from(hi_byte(i32::from(mac)));
+    let n14 = lo + rng.random_below((hi - lo).abs() + 1);
+    let mut damage = hutil::max_i32(0, n_power - n14);
+    if let Some(power) = undead_power {
+        damage += power;
+    }
+    damage
+}
+
 /// `PlayObject.StruckDamage`（`PlayObject.cs:2954-3036`）在 `base.StruckDamage` 之后、
 /// 只与**耐久与取数**有关的那一部分（`nDam` 抽取 + 衣服位特判 + 逐格循环）。
 ///

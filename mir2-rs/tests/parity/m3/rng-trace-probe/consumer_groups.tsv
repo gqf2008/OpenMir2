@@ -172,3 +172,21 @@ magic_effect	csharp	AnimalObject\.Struck@AnimalObject\.cs:352$	src/M2Server/Acto
 # 的 `Random(6)`（文件级已归 `monster_ai`）对称。用**精确行**登记，避免吞掉同方法 :352 的 `Random(300)`
 # （后者已归 `magic_effect`，见上）。
 monster_ai	csharp	AnimalObject\.Struck@AnimalObject\.cs:342$	src/M2Server/Actor/AnimalObject.cs:342	Struck 的攻击方向骰 `Random(6)`（:342，仅 `TargetCret != null` 且 `!GetAttackDir` 时抽）；**不是攻击路径**（受害者 AI 重选目标，`Operate(RM_STRUCK)` 在受害者消息段执行）⇒ 不加入 `CSHARP_ATTACK_RE`；Rust 对侧 `crates/world/src/monai.rs::animal_struck`（同组 monster_ai）
+
+# ---- 2026-10-17 追加（卡 P3-B2）：`RM_MAGSTRUCK` 交付段的 MSD/STD 取数 --------------------
+#
+# `MagicManager.cs` 的 2/29/23/24/33/47 效果体首次让**交付段**取数可达：
+#   * `BaseObject.GetMagStruckDamage(IActor, int)`（`BaseObject.Base.cs:814`）—— `RM_MAGSTRUCK`
+#     处理器（`:624`）唯一骰：`Lo(MAC) + Random(|Hi-Lo|+1)`。Rust 落
+#     `crates/world/src/combat.rs` 的 `get_mag_struck_damage`（**精确行**，行号漂移即 RED）。
+#   * `PlayObject.StruckDamage`（`PlayObject.cs:2957` 的 `Random(10)`、`:3000` 的逐格 `Random(8)`）
+#     —— 玩家受击耐久磨损。Rust 落 `crates/world/src/combat.rs` 的 `struck_damage_durability`
+#     （既有函数；此前无 trace 触达 ⇒ 未登记）。
+#
+# 归 `magic_effect` 组（与 `AnimalObject.Struck@:352$` 的 `Random(300)` 同族：由法术交付驱动，
+# 不是攻击方 `_Attack` 的伤害账本 ⇒ 不进 `RUST_ATTACK_RE`/`CSHARP_ATTACK_RE`）。
+magic_effect	csharp	BaseObject\.GetMagStruckDamage@BaseObject\.Base\.cs:	src/M2Server/Actor/BaseObject.Base.cs:814	`GetMagStruckDamage` 的 MAC 骰 `Random(|Hi(MAC)-Lo(MAC)|+1)`（:814）；`baseObject != null` 才加 `AddAbil.UndeadPower`（`RM_MAGSTRUCK` 处理器传 null ⇒ 不生效）
+magic_effect	csharp	PlayObject\.StruckDamage@PlayObject\.cs:	src/M2Server/Player/PlayObject.cs:2957	玩家受击耐久 `Random(10)`（:2957）与逐格 `Random(8)`（:3000）
+magic_effect	rust	crates/world/src/combat\.rs:776$	crates/world/src/combat.rs:776	`get_mag_struck_damage` 的 `Random(|Hi-Lo|+1)`（P3-B2；精确行 = 漂移信号）
+magic_effect	rust	crates/world/src/combat\.rs:796$	crates/world/src/combat.rs:796	`struck_damage_durability` 的 `Random(10)`（P3-B2 首次触达；精确行）
+magic_effect	rust	crates/world/src/combat\.rs:804$	crates/world/src/combat.rs:804	`struck_damage_durability` 的逐格 `Random(8)`（P3-B2 首次触达；精确行）

@@ -138,6 +138,13 @@ pub struct GateConfig {
     /// `ServerConf.cs:539` 的 `ReadWriteByte("Setup", "MagicAttackRage", …)`）——
     /// `DoSpell` 施法距离门（`MagicManager.cs:155`）：`|CurrX-nTargetX| > rage` 或 y 同理 ⇒ 直接失败。
     pub magic_attack_rage: u8,
+    /// `[Setup] FireBoomRage`（`GameSvrConf.cs:903/1770` 缺省 1，`ServerConf.cs:548`）——
+    /// P3-B2 的 23（爆裂火焰）/ 47（地狱烈焰）`MagBigExplosion` 半径。
+    pub fire_boom_rage: u8,
+    /// `[Setup] SnowWindRange`（`GameSvrConf.cs:904/1771` 缺省 1）—— P3-B2 的 33（冰咆哮）半径。
+    pub snow_wind_range: u8,
+    /// `[Setup] ElecBlizzardRange`（`GameSvrConf.cs:908/1772` 缺省 2）—— P3-B2 的 24（地狱雷光）半径。
+    pub elec_blizzard_range: u8,
     /// `[Setup] SuperRepairPriceRate`（`ServerConf.cs:487`，缺省 `3`）——特殊修理价格倍数
     /// （`Merchant.cs:1573/1619`）。
     pub super_repair_price_rate: i32,
@@ -287,6 +294,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut drop_item_rage: Option<u8> = None;
     let mut send_ref_msg_range: Option<u8> = None;
     let mut magic_attack_rage: Option<u8> = None;
+    let mut fire_boom_rage: Option<u8> = None;
+    let mut snow_wind_range: Option<u8> = None;
+    let mut elec_blizzard_range: Option<u8> = None;
     let mut super_repair_price_rate: Option<i32> = None;
     let mut repair_item_dec_dura: Option<i32> = None;
     let mut make_durg_price: Option<i32> = None;
@@ -547,6 +557,24 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("MagicAttackRage 不是合法字节：{v:?}"))?,
                     );
                 }
+                "FIREBOOMRAGE" => {
+                    fire_boom_rage = Some(
+                        v.parse()
+                            .with_context(|| format!("FireBoomRage 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "SNOWWINDRANGE" => {
+                    snow_wind_range = Some(
+                        v.parse()
+                            .with_context(|| format!("SnowWindRange 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "ELECBLIZZARDRANGE" => {
+                    elec_blizzard_range = Some(
+                        v.parse()
+                            .with_context(|| format!("ElecBlizzardRange 不是合法字节：{v:?}"))?,
+                    );
+                }
                 // 出生点回落（`WorldServer.cs:250-260` 的 `GetHomeInfo`）：现网 `Server.conf`
                 // 写 `HomeMap=3`/`HomeX=839`/`HomeY=668`/`StartPointSize=2`。
                 "STARTPOINTSIZE" => {
@@ -741,6 +769,10 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         send_ref_msg_range: send_ref_msg_range.unwrap_or(12),
         // oracle 缺省值（`GameSvrConf.cs:1752`）：`[Setup]` 里没写不算错。
         magic_attack_rage: magic_attack_rage.unwrap_or(8),
+        // oracle 缺省值（`GameSvrConf.cs:1770-1772`）。
+        fire_boom_rage: fire_boom_rage.unwrap_or(1),
+        snow_wind_range: snow_wind_range.unwrap_or(1),
+        elec_blizzard_range: elec_blizzard_range.unwrap_or(2),
         super_repair_price_rate: super_repair_price_rate.unwrap_or(3),
         repair_item_dec_dura: repair_item_dec_dura.unwrap_or(30),
         // oracle 缺省值（`GameSvrConf.cs:1450`）：`[Setup]` 里没写不算错。

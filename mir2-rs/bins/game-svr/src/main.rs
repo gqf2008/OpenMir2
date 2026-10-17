@@ -775,6 +775,9 @@ async fn main() -> Result<()> {
                     magic_table,
                     pet_cfg,
                     magic_attack_rage: i32::from(cfg.magic_attack_rage),
+                    fire_boom_rage: i32::from(cfg.fire_boom_rage),
+                    snow_wind_range: i32::from(cfg.snow_wind_range),
+                    elec_blizzard_range: i32::from(cfg.elec_blizzard_range),
                     ground: GroundCfg {
                         human_max_gold: cfg.human_max_gold,
                         floor_item_can_pick_up_time: cfg.floor_item_can_pick_up_time,
@@ -4779,6 +4782,9 @@ fn apply_ability_to_entity(
     e.level = wabil.level;
     // `RecalcAbilitys` 的 `AntiMagic = 1 + AddAbil.AntiMagic`（`BaseObject.Abil.cs:30/67`）。
     e.anti_magic = sub.anti_magic;
+    // `WAbil.MAC = MakeWord(MIN(255, Lo(AddAbil.MAC)+Lo(Abil.MAC)), …Hi…)`
+    // （`PlayObject.cs:2903`）——P3-B2 的 `GetMagStruckDamage` 唯一读点。
+    e.mac = wabil.mac;
 }
 
 /// `RecalcLevelAbilitys()` + `RecalcAbilitys()` 的**单一实现**（登录/升级/装备/卸下四处共用）：
@@ -5105,6 +5111,147 @@ fn spell_tail_bo_train(magic_id: u16) -> Option<bool> {
     None
 }
 
+/// **P3-B2**：一次施法的待发帧缓冲。
+///
+/// oracle 的每个对象有自己的 `PriorityQueue<SendMessage, byte>`，出队按**优先级字节升序**
+/// （`ActorEntity.cs:16`、`BaseObject.Message.cs:181`、`PriorityQueue` 数值升序）。本仓多数下行
+/// 直接发帧、不建模该队列；B2 的帧集合跨多个优先级（53=68 / 638=136 / 656=154 / 31=167 /
+/// 1103=174 / 640=255），直接按调用序发会把 `1103` 发到 `638` 之前（与 oracle 相反）。
+///
+/// 因此 B2 单次施法的**全部**尾/交付帧先入本缓冲，`flush` 时按优先级**稳定**排序后发。
+/// **同优先级内部**按入队序（oracle 是 4 叉堆序，合同 §1.6 允许「只断言同优先级集合 +
+/// 不同优先级相对序」，登记为 `not_verified`）。
+struct SpellFrameBuf {
+    /// `(socket, priority, body)`。
+    frames: Vec<(i32, u8, Vec<u8>)>,
+}
+
+impl SpellFrameBuf {
+    fn new() -> Self {
+        Self { frames: Vec::new() }
+    }
+
+    /// 按 oracle `RM_*` 的 `(byte)wIdent` 入队（ident 已由调用方映射成优先级）。
+    fn push_socket(&mut self, socket: i32, priority: u8, body: Vec<u8>) {
+        self.frames.push((socket, priority, body));
+    }
+
+    /// `SendRefMsg` 收件人集合（±`SendRefMsgRange` 的 `Race==Play && !Ghost`）中在线者。
+    fn push_broadcast(
+        &mut self,
+        world: &mir2_world::World,
+        online: &OnlineRegistry,
+        actor_id: i32,
+        include_self: bool,
+        priority: u8,
+        body: &[u8],
+    ) {
+        for target_id in chat::hear_targets(world, actor_id, chat::SEND_REF_MSG_RANGE) {
+            if !include_self && target_id == actor_id {
+                continue;
+            }
+            let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+                continue;
+            };
+            self.push_socket(t.socket, priority, body.to_vec());
+        }
+    }
+
+    /// 单个 actor 的自身帧（`SendMsg(this)` / `SendSelfDelayMsg`）。
+    fn push_actor(&mut self, online: &OnlineRegistry, actor_id: i32, priority: u8, body: Vec<u8>) {
+        if let Some(t) = online.iter().find(|e| e.actor_id == actor_id) {
+            self.push_socket(t.socket, priority, body);
+        }
+    }
+
+    /// 按优先级稳定排序后逐条经门回送。
+    fn flush(
+        self,
+        online: &OnlineRegistry,
+        gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    ) {
+        let mut frames = self.frames;
+        frames.sort_by_key(|f| f.1);
+        for (socket, _priority, body) in frames {
+            let Some(entry) = online.iter().find(|e| e.socket == socket) else {
+                continue;
+            };
+            let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "B2 帧") else {
+                continue;
+            };
+            let _ = tx.send(SimToGate::SendFrame { socket, body });
+        }
+    }
+}
+
+/// **P3-B2**：`RM_MAGSTRUCK` 交付段的宿主角（世界抽数 → 帧入 B2 缓冲）。
+///
+/// 世界 [`mir2_world::World::deliver_mag_struck`] 逐目标（入队序）完成
+/// `R(1000)` → `MSD` → `nDamage>0` 链（含玩家 `STD`、怪物 `R(6)`/`R(300)`），返回观察值；
+/// 本函数只按 oracle 把帧放进缓冲（优先级取自 `RM_*` 的低字节）：
+/// - 受击玩家 `HealthSpellChanged` ⇒ `SM_HEALTHSPELLCHANGED(53)`（优先级 68）仅自己（+`ShowHp` 广播）；
+/// - `SendRefMsg(RM_STRUCK_MAG)` ⇒ `SM_STRUCK(31)`（167）发给受击者视野内玩家（含受击者自己，
+///   若它是玩家；怪物无连接）；
+/// - 受击怪物自消息链 `BreakHolySeizeMode → RefNameColor` ⇒ `SM_CHANGENAMECOLOR(656)`（154）
+///   每条命中怪物一条（`ObMode || FixedHideMode` 时抑制）。
+///
+/// `nDamage == 0` 的目标整段跳过（合同 §2.3(b)：无 53/31/656、不抽 `R(300)`）。
+fn drain_mag_struck_b2(
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    displays: &downlink::DisplayTable,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    buf: &mut SpellFrameBuf,
+) {
+    const P_HEALTH: u8 = (mir2_protocol::messages::RM_HEALTHSPELLCHANGED & 0xFF) as u8;
+    const P_CHANGENAME: u8 = (mir2_protocol::messages::RM_CHANGENAMECOLOR & 0xFF) as u8;
+    const P_STRUCKMAG: u8 = (mir2_protocol::messages::RM_STRUCK_MAG & 0xFF) as u8;
+    for o in world.deliver_mag_struck() {
+        if o.damage <= 0 {
+            continue;
+        }
+        if o.is_player {
+            if let Some(entry) = online.iter().find(|e| e.actor_id == o.target_id) {
+                // 世界实体是本宿主战斗权威值；同步回会话（oracle 只有一份 `WAbil`）。
+                let mut mp = 0u16;
+                let mut max_hp = o.max_hp;
+                let mut show_hp = false;
+                if let Some(sg) = sessions.get_mut(&entry.chr_name) {
+                    sg.state.wabil.hp = o.hp_after;
+                    mp = sg.state.wabil.mp;
+                    max_hp = sg.state.wabil.max_hp;
+                    show_hp = sg.show_hp;
+                }
+                let body =
+                    smframe::sm_healthspellchanged_frame(o.target_id, o.hp_after, mp, max_hp);
+                buf.push_actor(online, o.target_id, P_HEALTH, body.clone());
+                if show_hp {
+                    buf.push_broadcast(world, online, o.target_id, true, P_HEALTH, &body);
+                }
+            }
+        }
+        let Some(d) = displays.get(o.target_id) else {
+            // 无展示表 ⇒ 造不出 `SM_STRUCK` 的 `Feature/Status`（保守跳过；怪物生产路径已登记）。
+            continue;
+        };
+        let body = smframe::sm_struck_frame(
+            o.target_id,
+            o.hp_after,
+            o.max_hp,
+            u16::try_from(o.damage).unwrap_or(u16::MAX),
+            d.feature,
+            d.status,
+            o.caster_id,
+            true,
+        );
+        buf.push_broadcast(world, online, o.target_id, true, P_STRUCKMAG, &body);
+        if o.name_color {
+            let body = smframe::sm_changenamecolor(o.target_id, o.chr_color);
+            buf.push_broadcast(world, online, o.target_id, true, P_CHANGENAME, &body);
+        }
+    }
+}
+
 /// **P2（`openmir2-spell-shared-tail-p2`）**：14/15/31 的 `DoSpell` 共享尾
 /// （`MagicManager.cs:644-669`）。
 ///
@@ -5139,6 +5286,8 @@ fn finish_spell_tail(
     tx: i32,
     ty: i32,
     target_actor_id: i32,
+    // P3-B2：`Some` ⇒ 帧入缓冲（按 oracle 优先级 flush）；`None` ⇒ 既有直发行为。
+    mut buf: Option<&mut SpellFrameBuf>,
 ) {
     let mut train = magic::SkillTrainState {
         magic_id,
@@ -5180,12 +5329,30 @@ fn finish_spell_tail(
             magic.effect,
             target_actor_id,
         );
-        broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+        match buf.as_mut() {
+            Some(buf) => buf.push_broadcast(
+                world,
+                online,
+                actor_id,
+                true,
+                (mir2_protocol::messages::RM_MAGICFIRE & 0xFF) as u8,
+                &body,
+            ),
+            None => broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]),
+        }
     }
     // `:659-669` 训练尾帧 `RM_MAGIC_LVEXP`（本仓立即发，延迟面既有全局登记）。
     if tail.train.levelup_msg {
         let body = smframe::sm_magic_lvexp(magic_id, train.level, train.tran_point);
-        send_self_frame(online, gates, chr_name, body);
+        match buf.as_mut() {
+            Some(buf) => {
+                // `RM_MAGIC_LVEXP` 走 `SendSelfDelayMsg`（优先级 `Lowest = 255`）。
+                if let Some(me) = online.iter().find(|e| e.chr_name == chr_name) {
+                    buf.push_socket(me.socket, 255, body);
+                }
+            }
+            None => send_self_frame(online, gates, chr_name, body),
+        }
     }
     let _ = tail.returned;
 }
@@ -5227,6 +5394,11 @@ fn handle_spell_cmd(
     table: &game_svr::mongen::MonsterTable,
     displays: &mut downlink::DisplayTable,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    // **P3-B2**：`[Setup]` 的三个 AoE 半径（23/47 = FireBoomRage、33 = SnowWindRange、
+    // 24 = ElecBlizzardRange）。传参而不是常量，夹具才能区分「读错配置键」。
+    fire_boom_rage: i32,
+    snow_wind_range: i32,
+    elec_blizzard_range: i32,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -5646,6 +5818,7 @@ fn handle_spell_cmd(
                             tx,
                             ty,
                             target_id.unwrap_or(0),
+                            None,
                         );
                     }
                 }
@@ -5745,6 +5918,7 @@ fn handle_spell_cmd(
                                 tx,
                                 ty,
                                 target_id.unwrap_or(0),
+                                None,
                             );
                         } else {
                             // `boSpellFail` 保持 true ⇒ `:644-647 return false` ⇒ 调用方
@@ -6492,6 +6666,7 @@ fn handle_spell_cmd(
                         tx,
                         ty,
                         outcome.target.unwrap_or(0),
+                        None,
                     );
                 }
             }
@@ -6499,6 +6674,165 @@ fn handle_spell_cmd(
             glog!(
                 "DBG",
                 "CM_SPELL：B1 魔号 {} 无 MagicInfo ⇒ 效果体不接（登记）",
+                req.magic_id
+            );
+        }
+    }
+
+    // **P3-B2（`openmir2-spell-shared-tail-p3b2`）**：治疗/爆炸 AoE 六魔号
+    // **2（治愈术）/ 29（群体治疗术）/ 23（爆裂火焰）/ 24（地狱雷光）/ 33（冰咆哮）/ 47（地狱烈焰）**。
+    //
+    // oracle：`MagicManager.cs:204-224/443-449/418-423/424-430/489-494/595-600` +
+    // helper `:54-76`（29 的 `MagBigHealing`）/ `:1100-1117`（23/33/47 的 `MagBigExplosion`）/
+    // `:1119-1144`（24 的 `MagElecBlizzard`）。取数、门序、帧序逐条见合同 §2。
+    //
+    // 位置：全部效果体块之后、P1 兜底尾之前；本块内**恰调一次** `finish_spell_tail`。
+    // 帧面：oracle 每对象 `MsgQueue` 按 `(byte)RM_ident` 升序出队 ⇒ 本块把尾/交付帧收进
+    // [`SpellFrameBuf`] 后按优先级稳定排序再发（53=68 → 638=136 → 656=154 → 31=167 →
+    // 1103=174 → 640=255）。`SM_SPELL(17)` 已在本函数开头的无条件广播发出（最早）。
+    if default_arm
+        && !magic::is_warr_skill(i32::from(req.magic_id))
+        && matches!(req.magic_id, 2 | 23 | 24 | 29 | 33 | 47)
+    {
+        if let Some(magic) = magic_table.get(req.magic_id) {
+            // `CretInNearXy` snap（与 8/21/37、17/30/41、B1 同口径）。
+            let (tx, ty, hit) = spell_snap_target(
+                world,
+                self_map,
+                req.target_actor_id,
+                req.target_x,
+                req.target_y,
+            );
+            if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
+                // `MagicManager.cs:160-163`：`targetObject != null && Death ⇒ null`。
+                let base_target = if hit {
+                    world
+                        .entities
+                        .get(req.target_actor_id)
+                        .filter(|t| !t.death)
+                        .map(|t| t.id)
+                } else {
+                    None
+                };
+                let magic_level = matched.as_ref().map_or(0, |m| m.level);
+                let (mc, sc) = ground_sessions.get(chr_name).map_or((0, 0), |sg| {
+                    (i32::from(sg.state.wabil.mc), i32::from(sg.state.wabil.sc))
+                });
+                let gauge = ground_sessions
+                    .get(chr_name)
+                    .is_some_and(|sg| sg.abil_see_heal_gauge);
+                let mut buf = SpellFrameBuf::new();
+                // gauge 帧（`RM_ABILSEEHEALGAUGE` → `SM_INSTANCEHEALGUAGE(1103)`，优先级 174）
+                // 的**收件人是施法者**（合同 §5-C1：`playObject.SendMsg(target, …)` 入的是施法者
+                // 自己的队列；处理器 `PlayObject.Message.cs:2018-2020` 把帧发给施法者客户端，
+                // ActorId/HP/MaxHP 取目标值）。
+                let push_gauges =
+                    |world: &mir2_world::World, buf: &mut SpellFrameBuf, targets: &[i32]| {
+                        if !gauge {
+                            return;
+                        }
+                        for tid in targets {
+                            if let Some(t) = world.entities.get(*tid) {
+                                let body =
+                                    smframe_ext::sm_instancehealguage_frame(*tid, t.hp, t.max_hp);
+                                buf.push_actor(
+                                    online,
+                                    actor_id,
+                                    (mir2_protocol::messages::RM_ABILSEEHEALGAUGE & 0xFF) as u8,
+                                    body,
+                                );
+                            }
+                        }
+                    };
+                let (tail_tx, tail_ty, tail_target, bo_train) = match req.magic_id {
+                    // ---- 2 治愈术（`MagicManager.cs:204-224`）----
+                    2 => {
+                        let out = world.cast_healing_spell(
+                            actor_id,
+                            magic,
+                            magic_level,
+                            base_target,
+                            tx,
+                            ty,
+                            sc,
+                        );
+                        push_gauges(world, &mut buf, &out.gauges);
+                        (out.tx, out.ty, out.target.unwrap_or(0), out.bo_train)
+                    }
+                    // ---- 29 群体治疗术（`:443-449` + `:54-76`）----
+                    29 => {
+                        let out = world.cast_big_healing_spell(
+                            actor_id,
+                            magic,
+                            magic_level,
+                            base_target,
+                            tx,
+                            ty,
+                            sc,
+                        );
+                        push_gauges(world, &mut buf, &out.gauges);
+                        (tx, ty, out.target.unwrap_or(0), out.bo_train)
+                    }
+                    // ---- 23 爆裂火焰 / 33 冰咆哮 / 47 地狱烈焰（`:1100-1117`）----
+                    23 | 33 | 47 => {
+                        let range = if req.magic_id == 33 {
+                            snow_wind_range
+                        } else {
+                            fire_boom_rage
+                        };
+                        let out = world.cast_big_explosion_spell(
+                            actor_id,
+                            magic,
+                            magic_level,
+                            base_target,
+                            tx,
+                            ty,
+                            range,
+                            mc,
+                        );
+                        (tx, ty, out.target.unwrap_or(0), out.bo_train)
+                    }
+                    // ---- 24 地狱雷光（`:1119-1144`；中心 = 施法者坐标）----
+                    24 => {
+                        let out = world.cast_elec_blizzard_spell(
+                            actor_id,
+                            magic,
+                            magic_level,
+                            base_target,
+                            elec_blizzard_range,
+                            mc,
+                        );
+                        (tx, ty, out.target.unwrap_or(0), out.bo_train)
+                    }
+                    _ => unreachable!("B2 集合已由外层 matches! 限定"),
+                };
+                // 共享尾（`MagicManager.cs:644-669`）：唯一一次 `Random(3)+1`（门内）+ 638/640。
+                finish_spell_tail(
+                    world,
+                    online,
+                    gates,
+                    saves,
+                    chr_name,
+                    actor_id,
+                    magic,
+                    req.magic_id,
+                    magic_level,
+                    matched.as_ref().map_or(0, |m| m.tran_point),
+                    bo_train,
+                    caster_abil_level,
+                    tail_tx,
+                    tail_ty,
+                    tail_target,
+                    Some(&mut buf),
+                );
+                // `RM_MAGSTRUCK` 交付段（世界抽数 + 帧），全部入同一优先级缓冲。
+                drain_mag_struck_b2(world, online, displays, ground_sessions, &mut buf);
+                buf.flush(online, gates);
+            }
+        } else {
+            glog!(
+                "DBG",
+                "CM_SPELL：B2 魔号 {} 无 MagicInfo ⇒ 效果体不接（登记）",
                 req.magic_id
             );
         }
@@ -8191,6 +8525,41 @@ fn drain_run_downlinks(
     aoi_frames
 }
 
+/// **P3-B2**：`RM_MAGHEALING` 到点投递的宿主副作用（`PlayObject.Message.cs:1619-1629`）。
+///
+/// oracle：`if ((IncHealing + nParam1) < 300) { IncHealing += (ushort)nParam1; PerHealing = 5; }
+/// else { IncHealing = 300; }` —— `PerHealing = 5` **只在 if 分支**；`else` 只封顶。
+/// `RM_MAGHEALING` 本身**无线上帧**；恢复期每 tick 最多消费 `PerHealing` 点并由
+/// [`drain_recovery`] 各发一条 `SM_HEALTHSPELLCHANGED(53)`（`ceil(nPower/5)` 条）。
+///
+/// 位置：oracle 属目标的 `Run()` 消息段（在恢复段之前）⇒ 本函数在 `drain_recovery` 之前调用。
+fn drain_mag_healing_delivery(
+    rec: &mir2_world::TickRecord,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+) {
+    for outcome in &rec.slave_self_deliveries {
+        let Some(n) = outcome.mag_healing else {
+            continue;
+        };
+        let Some(entry) = online.iter().find(|e| e.actor_id == outcome.actor_id) else {
+            continue;
+        };
+        let Some(sg) = sessions.get_mut(&entry.chr_name) else {
+            continue;
+        };
+        if i32::from(sg.recovery.inc_healing) + n < 300 {
+            sg.recovery.inc_healing = sg
+                .recovery
+                .inc_healing
+                .wrapping_add(u16::try_from(n).unwrap_or(u16::MAX));
+            sg.recovery.per_healing = 5;
+        } else {
+            sg.recovery.inc_healing = 300;
+        }
+    }
+}
+
 /// 每 tick 的**周期存档**（oracle `WorldServer.cs:698-703`，卡 `openmir2-m3-periodic-save`）。
 ///
 /// 对**每个在线角色**复用既有三处触发的同一口径（[`save_human_rcd`] ⇒ `MakeSaveRcd` 逐字段 +
@@ -8663,6 +9032,12 @@ struct SessionGround {
     /// `BaseObject.ShowHp`（`MakeOpenHealth()` 置位，`BaseObject.cs:944`）；发点是技能「心灵启示」
     /// （`MagicManager.cs:438`）⇒ 技能层未移植，生产路径恒 `false`（登记）。
     show_hp: bool,
+    /// `PlayObject.AbilSeeHealGauge`（`PlayObject.cs:390`；唯一生产者是心灵启示 28 升到 2 级，
+    /// `PlayObject.cs:5231-5240`，本仓技能层未移植 ⇒ 生产恒 `false`）。
+    ///
+    /// **P3-B2** 的 `RM_ABILSEEHEALGAUGE` 门（`MagicManager.cs:219/69`）：为 true 时对每个 proper
+    /// friend 发 `SM_INSTANCEHEALGUAGE(1103)`（收件人是**施法者**，ActorId=目标，见合同 §5-C1）。
+    abil_see_heal_gauge: bool,
     /// `CharacterObject.UserUnLockDurg`（`CM_EAT` 的 `StdMode 0 Shape 2` 置 true）。
     user_unlock_durg: bool,
     /// `PlayObject.HungerStatus`（`CM_EAT` 的 `StdMode 1`：`+= DuraMax/10`，上限 5000）。
@@ -8759,6 +9134,12 @@ struct EnterConfig {
     /// **M3⑨-实现 2 第②片**：`[Setup] MagicAttackRage`（`GameSvrConf.cs:873/1752` 缺省 8）——
     /// `DoSpell` 施法距离门。
     magic_attack_rage: i32,
+    /// **P3-B2**：`[Setup] FireBoomRage`（缺省 1）—— 23/47 的 `MagBigExplosion` 半径。
+    fire_boom_rage: i32,
+    /// **P3-B2**：`[Setup] SnowWindRange`（缺省 1）—— 33 的半径（与 47 的配置键区分）。
+    snow_wind_range: i32,
+    /// **P3-B2**：`[Setup] ElecBlizzardRange`（缺省 2）—— 24 的半径。
+    elec_blizzard_range: i32,
     /// `CM_PICKUP`/`CM_DROPITEM` 的 `[Setup]` 输入。
     ground: GroundCfg,
     /// `CM_*` 商店动作的 `[Setup]` 输入（⑤-4 第①片）。
@@ -9780,6 +10161,9 @@ fn sim_loop(
                             &enter_cfg.mon_gen.table,
                             &mut displays,
                             &gates,
+                            enter_cfg.fire_boom_rage,
+                            enter_cfg.snow_wind_range,
+                            enter_cfg.elec_blizzard_range,
                         );
                     } else if handle_login_notice_ok_cmd(
                         &cmd,
@@ -10435,6 +10819,7 @@ fn sim_loop(
                                                             stamina: game_svr::stamina::Stamina::new(now_ms()),
                                                             // `ShowHp` 由技能「心灵启示」置位（未移植）⇒ 初生 false。
                                                             show_hp: false,
+                                                            abil_see_heal_gauge: false,
                                                             // `UserUnLockDurg` 不在角色记录里（会话初生 false；
                                                             // 与 `CM_EAT` 的 Shape 2 同一状态变）：登记为未建模。
                                                             user_unlock_durg: false,
@@ -10862,6 +11247,8 @@ fn sim_loop(
             &enter_cfg.pet_cfg,
             enter_cfg.ref_msg_range,
         );
+        // **P3-B2**：`RM_MAGHEALING` 到点 ⇒ 累加目标 `IncHealing`（无帧；恢复段出 53）。
+        drain_mag_healing_delivery(&rec, &online, &mut ground_sessions);
         // `openmir2-m3-party-group-state`：`PlayObject.Run()` 的组队段（`PlayObject.Message.cs:704-719`）
         // 在同一 tick 的恢复段之前（`base.Run()` 在 `:765`，晚于组队段）。
         world.party_run_tick();
@@ -13642,6 +14029,7 @@ mod tests {
             recovery: game_svr::recover::Recovery::new(0),
             stamina: game_svr::stamina::Stamina::new(0),
             show_hp: false,
+            abil_see_heal_gauge: false,
             user_unlock_durg: false,
             hunger_status: 0,
             query_bag_items_tick: None,
@@ -13823,6 +14211,7 @@ mod tests {
             },
             stamina: game_svr::stamina::Stamina::new(0),
             show_hp: false,
+            abil_see_heal_gauge: false,
             user_unlock_durg: false,
             hunger_status: 55,
             query_bag_items_tick: None,
@@ -14653,6 +15042,7 @@ mod tests {
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
+                abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -14838,6 +15228,7 @@ mod tests {
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
+                abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -14996,6 +15387,7 @@ mod tests {
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
+                abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -15134,6 +15526,7 @@ mod tests {
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
+                abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -15955,6 +16348,7 @@ mod tests {
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
+                abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -16112,6 +16506,7 @@ mod tests {
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: true,
+                abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -16703,6 +17098,7 @@ mod tests {
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
+                abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -17205,6 +17601,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         assert!(rx0.try_recv().is_err(), "未知魔法号 ⇒ 不回 ack / 无帧");
 
@@ -17228,6 +17627,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         match rx0.try_recv() {
             Ok(SimToGate::SendRaw { socket, payload }) => {
@@ -17267,6 +17669,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         assert!(rx0.try_recv().is_err(), "Death ⇒ 不回 ack");
         world.entities.get_mut(caster).unwrap().death = false;
@@ -17343,6 +17748,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         match rx0.try_recv() {
             Ok(SimToGate::SendRaw { socket, payload }) => {
@@ -17655,6 +18063,9 @@ mod tests {
                 &table,
                 &mut self.displays,
                 &self.gates,
+                1,
+                1,
+                2,
             );
         }
 
@@ -18264,6 +18675,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         assert!(
             world
@@ -18337,6 +18751,9 @@ mod tests {
                 &table,
                 &mut displays,
                 &gates,
+                1,
+                1,
+                2,
             );
 
             // ① 任何 buff 都不得落（三个生产者对应的三种 buff 全查；目标与施法者都查）。
@@ -18448,6 +18865,9 @@ mod tests {
                 &table,
                 &mut displays,
                 &gates,
+                1,
+                1,
+                2,
             );
             // ① snap 成 (19,10) ⇒ |Δx| = 9 > 8 ⇒ 距离门在任何取数之前 `return false`。
             assert_eq!(
@@ -18533,6 +18953,9 @@ mod tests {
                 &table,
                 &mut displays,
                 &gates,
+                1,
+                1,
+                2,
             );
             assert!(
                 draws_between(&rng_before, &world.rng) > 0,
@@ -18626,6 +19049,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         let _ = a5_take_idents(&mut rx0);
         (
@@ -18765,6 +19191,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         assert!(
             world
@@ -18920,6 +19349,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
 
         let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
@@ -19090,6 +19522,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
 
         let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
@@ -19256,6 +19691,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
 
         let (clone_id, cx, cy, cray, cslaves) = {
@@ -19770,6 +20208,7 @@ mod tests {
                 ident: mir2_world::slave::RM_MASTERDIEMUTINY,
                 mutinied: vec![slave],
                 ghosted: Vec::new(),
+                mag_healing: None,
             }],
             ..Default::default()
         };
@@ -19862,6 +20301,7 @@ mod tests {
                 ident: mir2_world::slave::RM_MASTERDIEMUTINY,
                 mutinied: vec![slaves[1], slaves[0]],
                 ghosted: Vec::new(),
+                mag_healing: None,
             }],
             ..Default::default()
         };
@@ -20462,6 +20902,7 @@ mod tests {
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
+                abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -20622,6 +21063,7 @@ mod tests {
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
+                abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -20748,6 +21190,7 @@ mod tests {
                 recovery: game_svr::recover::Recovery::new(0),
                 stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
+                abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -23667,6 +24110,10 @@ mod tests {
         displays: downlink::DisplayTable,
         gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         rx: mpsc::UnboundedReceiver<SimToGate>,
+        /// **P3-B2**：`[Setup]` 三个 AoE 半径（缺省 = oracle `GameSvrConf.cs:1770-1772`）。
+        fire_boom_rage: i32,
+        snow_wind_range: i32,
+        elec_blizzard_range: i32,
     }
 
     impl SpellFrameRig {
@@ -23777,6 +24224,9 @@ mod tests {
                 displays,
                 gates,
                 rx,
+                fire_boom_rage: 1,
+                snow_wind_range: 1,
+                elec_blizzard_range: 2,
             }
         }
 
@@ -23823,6 +24273,9 @@ mod tests {
                 &table,
                 &mut self.displays,
                 &self.gates,
+                self.fire_boom_rage,
+                self.snow_wind_range,
+                self.elec_blizzard_range,
             );
         }
 
@@ -24475,6 +24928,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         let mut frames = Vec::new();
         let mut raws = Vec::new();
@@ -24789,6 +25245,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         let mut frames = Vec::new();
         let mut raws = Vec::new();
@@ -25277,6 +25736,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         // ① 取数：恰好 2 抽（`Random(20)` + `Random(2)`；训练尾被 train_level=255 挡住）。
         assert_eq!(
@@ -25399,6 +25861,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         assert_eq!(
             draws_between(&before, &world.rng),
@@ -25469,6 +25934,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         // ① 取数：门 + 两次 `MapRandomMove`；全走格 ⇒ 移位环 0 抽。恰 3 抽。
         assert_eq!(
@@ -25584,6 +26052,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         // 施法者确实换到 1 号图（否则「次序」变异无法被收件人集合暴露）。
         assert_eq!(
@@ -25671,6 +26142,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         // oracle `:879` 的门本身**恒抽一次** `Random(11)`；门不过时**不再**抽 `MapRandomMove`
         // 的两抽、也不进移位环 ⇒ 恰好 1 抽。
@@ -25743,6 +26217,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         assert_eq!(
             draws_between(&before, &world.rng),
@@ -25879,6 +26356,9 @@ mod tests {
             &table,
             displays,
             gates,
+            1,
+            1,
+            2,
         );
     }
 
@@ -27491,6 +27971,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
 
         // 包一层：MP 扣减 + 53（自己）→ SM_SPELL（仅观察者，Recog=施法者）→ 639（施法者 + 观察者）。
@@ -27590,6 +28073,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         let frames = take_wire(&mut rx0);
         assert_eq!(
@@ -27645,6 +28131,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         let frames = take_wire(&mut rx0);
         assert_eq!(
@@ -27703,6 +28192,9 @@ mod tests {
             &table,
             &mut displays,
             &gates,
+            1,
+            1,
+            2,
         );
         assert_eq!(
             take_wire(&mut rx0),
@@ -27713,5 +28205,649 @@ mod tests {
             ],
             "真客户端（soft=120020522, tick=0）+ 魔号 1 ⇒ 门过、无 639；P3-B1 尾帧照发"
         );
+    }
+
+    // ======================================================================
+    // 卡 P3-B2（2/29/23/24/33/47）：治疗/爆炸 AoE 效果体 + RM_MAGSTRUCK 交付链
+    // ======================================================================
+    //
+    // 全部走**生产入口** `handle_spell_cmd`（default 支 ∧ 非战士 ∧ 距离门 ⇒ `:159 SM_SPELL`）；
+    // 取数断言 = 手写 oracle 调用序的对照流逐状态相等（不调用生产 helper 生成期望）。
+    // 夹具 = 合同 §3.1 F-B2（seed 42 / 20261017）。
+
+    fn b2_magic_info(id: u16, effect: u8) -> mir2_data::MagicInfo {
+        // 合同 §4.3 的真实魔表行（spell 供 MP 包装层出 53；power 组决定 4 抽的 max）。
+        let (spell, power, max_power, def_spell, def_power, def_max_power) = match id {
+            2 => (7u16, 14u16, 20u16, 0u8, 0u8, 0u8),
+            29 => (12, 10, 10, 25, 4, 4),
+            23 => (15, 8, 8, 10, 6, 6),
+            24 => (35, 10, 30, 20, 10, 30),
+            33 => (12, 12, 12, 30, 12, 12),
+            47 => (32, 10, 30, 16, 10, 30),
+            _ => unreachable!("B2 六魔号"),
+        };
+        mir2_data::MagicInfo {
+            magic_id: id,
+            effect,
+            effect_type: 2,
+            spell,
+            power,
+            max_power,
+            def_spell,
+            def_power,
+            def_max_power,
+            train_lv: 3,
+            train_level: [0; 4],
+            max_train: [1000; 4],
+            ..mir2_data::MagicInfo::default()
+        }
+    }
+
+    fn b2_rig(id: u16, effect: u8, observers: &[(&str, i32, i32, bool, i32)]) -> SpellFrameRig {
+        let mut rig = SpellFrameRig::new(id, &[(id, effect)], observers);
+        rig.magic_table = magics::MagicTable::new(vec![b2_magic_info(id, effect)]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.level = 50;
+            e.luck = 0;
+            e.power_rate = 100;
+            e.hp = 500;
+            e.max_hp = 500;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.state.wabil.level = 50;
+            sg.state.wabil.mc = 0x0F05;
+            sg.state.wabil.sc = 0x0C04;
+            sg.state.wabil.mp = 500;
+            sg.state.wabil.max_mp = 500;
+            sg.state.wabil.hp = 500;
+            sg.state.wabil.max_hp = 500;
+        }
+        // F-B2：`userMagic.Level = 3` ⇒ 训练门关（无第 5 抽、无 640）。
+        rig.saves
+            .get_mut("caster")
+            .unwrap()
+            .record
+            .data
+            .magic
+            .as_mut()
+            .unwrap()[0]
+            .as_mut()
+            .unwrap()
+            .level = 3;
+        rig
+    }
+
+    fn b2_add_player(
+        rig: &mut SpellFrameRig,
+        name: &str,
+        x: i32,
+        y: i32,
+        hp: u16,
+        max_hp: u16,
+        socket: i32,
+    ) -> i32 {
+        let mut e = new_player_entity(name.to_string(), x, y);
+        e.level = 30;
+        e.hp = hp;
+        e.max_hp = max_hp;
+        e.mp = 500;
+        e.max_mp = 500;
+        e.anti_magic = 255;
+        let id = rig.world.add_entity(e);
+        rig.world.tick();
+        rig.displays.set(
+            id,
+            downlink::ActorDisplay::new(4, 0, 200, 0, 0, 255, name.as_bytes().to_vec()),
+        );
+        online_set(
+            &mut rig.online,
+            OnlineEntry {
+                account: name.into(),
+                chr_name: name.into(),
+                session_id: socket,
+                gate_idx: 0,
+                socket,
+                actor_id: id,
+            },
+        );
+        id
+    }
+
+    fn b2_add_monster(rig: &mut SpellFrameRig, name: &str, x: i32, y: i32, mac: u16) -> i32 {
+        let mut e = mir2_world::Entity::new(0, name.to_string(), x, y);
+        e.race = mir2_world::ACTOR_RACE_ANIMAL;
+        e.level = 30;
+        e.hp = 1000;
+        e.max_hp = 1000;
+        e.mac = mac;
+        e.anti_magic = 255;
+        e.ai.animal = true;
+        e.ai.target_creature = None;
+        let id = rig.world.add_entity(e);
+        rig.world.tick();
+        rig.displays.set(
+            id,
+            downlink::ActorDisplay::new(4, 0, 220, 0, 0, 255, name.as_bytes().to_vec()),
+        );
+        id
+    }
+
+    /// 取某连接上的 `(ident, recog)` 序列。
+    fn b2_seq(frames: &[SfFrame], socket: i32) -> Vec<(u16, i32)> {
+        frames
+            .iter()
+            .filter(|(s, _)| *s == socket)
+            .map(|(_, b)| {
+                let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
+                (cm.ident, cm.recog)
+            })
+            .collect()
+    }
+
+    fn b2_delay_targets(rig: &SpellFrameRig) -> Vec<(i32, i32)> {
+        rig.world
+            .self_delay_msgs
+            .iter()
+            .filter(|m| m.ident == mir2_world::slave::RM_MAGHEALING)
+            .map(|m| (m.actor_id, m.n_param1))
+            .collect()
+    }
+
+    /// **B2-2（治愈术）**：施法者侧恰 4 抽（`R(6)/R(0)/R(18)/R(10)`，seed42 ⇒ nPower=28）；
+    /// `IsProperFriend` 门在抽数**之前**；`RM_MAGHEALING` 延迟 800 且只给 `HP<MaxHP` 的目标；
+    /// `RM_ABILSEEHEALGAUGE` 的 1103 **发给施法者**且排在 638 之后（优先级 174 > 136）。
+    ///
+    /// 红检：① 把 Ap 移到 friend 门之前 ⇒ 非友方场景多 4 抽；② 满血时提前 return ⇒ 抽数 0；
+    /// ③ 1103 直发目标/排到 638 前 ⇒ 收件人/帧序断言红；④ 死亡目标不回落 ⇒ 尾坐标/id 红。
+    #[test]
+    fn spell_p3b2_healing_draws_gate_and_gauge_order() {
+        const SM_53: u16 = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        const SM_638: u16 = mir2_protocol::messages::SM_MAGICFIRE;
+        const SM_1103: u16 = mir2_protocol::messages::SM_INSTANCEHEALGUAGE;
+        // ① 正常友方（HP<MaxHP）⇒ 4 抽 + 延迟治疗 + 尾。
+        {
+            let mut rig = b2_rig(2, 2, &[("obs", 12, 11, false, 912)]);
+            let target = b2_add_player(&mut rig, "t", 12, 12, 50, 1000, 921);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(42);
+            let before = rig.world.rng.clone();
+            rig.cast(2, (12, 12), target);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                4,
+                "2 施法者侧恰 4 抽"
+            );
+            let mut c = mir2_shared::rng::RandomNumber::with_seed(42);
+            let _ = c.random_below(6);
+            let _ = c.random_below(0);
+            let _ = c.random_below(18);
+            let _ = c.random_below(10);
+            assert_eq!(
+                format!("{:?}", rig.world.rng),
+                format!("{c:?}"),
+                "2 取数序 = MPow(R6) → GetPower(R0) → AP(R18,R10)"
+            );
+            let fire = sf_first(&frames, 912, SM_638);
+            assert_eq!(sf_magicfire_target_id(fire), target, "尾目标 = 治疗对象");
+            let cmd = mir2_protocol::frame::CommandMessage::from_bytes(fire).unwrap();
+            assert_eq!((cmd.param, cmd.tag), (12, 12), "尾坐标 = snap 后点击格");
+            // 施法者：MP 包装层 53 先于 638；无 1103（gauge 关）。
+            let self_seq: Vec<u16> = sf_seq(&frames, 911);
+            assert_eq!(self_seq, vec![SM_53, SM_638], "caster 帧序 53 → 638");
+            assert_eq!(
+                b2_delay_targets(&rig),
+                vec![(target, 28)],
+                "RM_MAGHEALING(target, nPower=28)，seed42"
+            );
+            // 恢复期：nPower=28 ⇒ ceil(28/5)=6 条 53（合同 §2.1(b)）。
+            rig.world.clock_ms += 800;
+            let delivered = rig.world.deliver_self_delay_msgs();
+            let n = delivered[0].mag_healing.expect("RM_MAGHEALING");
+            assert_eq!(n, 28);
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            // 治疗的收件人是目标（这里用会话模拟目标恢复：t 不是 caster，单独建状态）。
+            let mut rec = game_svr::recover::Recovery::new(0);
+            let mut wabil = game_svr::ability::Ability {
+                level: 30,
+                hp: 50,
+                max_hp: 1000,
+                mp: 500,
+                max_mp: 500,
+                ..sg.state.wabil
+            };
+            if i32::from(rec.inc_healing) + n < 300 {
+                rec.inc_healing += u16::try_from(n).unwrap();
+                rec.per_healing = 5;
+            } else {
+                rec.inc_healing = 300;
+            }
+            let mut health_frames = 0;
+            for _ in 0..40 {
+                rig.world.clock_ms += 200;
+                if game_svr::recover::recovery_tick(&mut rec, &mut wabil, false, rig.world.clock_ms)
+                {
+                    health_frames += 1;
+                }
+                if rec.inc_healing == 0 {
+                    break;
+                }
+            }
+            assert_eq!(health_frames, 6, "ceil(28/5)=6 条恢复 53");
+            assert_eq!(wabil.hp, 78, "50 + 28");
+        }
+        // ② gauge=true ⇒ 施法者帧序 53 → 638 → 1103，且 1103 的 Recog=目标。
+        {
+            let mut rig = b2_rig(2, 2, &[]);
+            let target = b2_add_player(&mut rig, "t", 12, 12, 50, 1000, 921);
+            rig.ground_sessions
+                .get_mut("caster")
+                .unwrap()
+                .abil_see_heal_gauge = true;
+            rig.cast(2, (12, 12), target);
+            let (frames, _raws) = rig.drain();
+            let seq: Vec<u16> = sf_seq(&frames, 911);
+            assert_eq!(seq, vec![SM_53, SM_638, SM_1103], "1103 在 638 之后");
+            let gauge = sf_first(&frames, 911, SM_1103);
+            assert_eq!(
+                mir2_protocol::frame::CommandMessage::from_bytes(gauge)
+                    .unwrap()
+                    .recog,
+                target,
+                "1103 的 ActorId = 目标（收件人仍是施法者）"
+            );
+            assert_eq!(
+                sf_count(&frames, 921, SM_1103),
+                0,
+                "**不得**把 1103 发给目标（合同 §5-C1）"
+            );
+        }
+        // ③ 满血友方 ⇒ 仍 4 抽、无 RM_MAGHEALING。
+        {
+            let mut rig = b2_rig(2, 2, &[]);
+            let target = b2_add_player(&mut rig, "t", 12, 12, 1000, 1000, 921);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(42);
+            let before = rig.world.rng.clone();
+            rig.cast(2, (12, 12), target);
+            assert_eq!(draws_between(&before, &rig.world.rng), 4, "满血仍 4 抽");
+            assert!(b2_delay_targets(&rig).is_empty());
+        }
+        // ④ 死亡目标 ⇒ 回落为自己并改写尾坐标/id。
+        {
+            let mut rig = b2_rig(2, 2, &[]);
+            let target = b2_add_player(&mut rig, "t", 12, 12, 50, 1000, 921);
+            rig.world.entities.get_mut(target).unwrap().death = true;
+            rig.world.entities.get_mut(rig.caster).unwrap().hp = 100;
+            rig.cast(2, (12, 12), target);
+            let (frames, _raws) = rig.drain();
+            let fire = sf_first(&frames, 911, SM_638);
+            assert_eq!(
+                sf_magicfire_target_id(fire),
+                rig.caster,
+                "死亡目标 ⇒ 尾 id = 施法者（合同 §5-C7）"
+            );
+            let cmd = mir2_protocol::frame::CommandMessage::from_bytes(fire).unwrap();
+            assert_eq!((cmd.param, cmd.tag), (10, 10), "死亡目标 ⇒ 尾坐标 = 施法者");
+            assert_eq!(
+                b2_delay_targets(&rig),
+                vec![(rig.caster, 28)],
+                "治疗对象 = 施法者"
+            );
+        }
+    }
+
+    /// **B2-29（群体治疗术）**：恒 4 抽；3×3 有序枚举；只治 `HP<MaxHP` 的 proper friend；
+    /// 同格双友方按 `ObjList` 插入序；gauge 不看 HP 且 1103 只发施法者。
+    ///
+    /// 红检：① 中心用施法者坐标 ⇒ 收件人集合红；② 用槽位序 ⇒ P6/P7 顺序红；
+    /// ③ 漏 `HP<MaxHP` ⇒ 满血友方也收 RM_MAGHEALING；④ boTrain 恒 true ⇒ 空集场景多 640。
+    #[test]
+    fn spell_p3b2_big_healing_ordered_enumeration_and_gauge() {
+        let build = |gauge: bool| {
+            let mut rig = b2_rig(29, 27, &[]);
+            let p1 = b2_add_player(&mut rig, "p1", 12, 12, 50, 1000, 921);
+            let _p2 = b2_add_player(&mut rig, "p2", 11, 12, 1000, 1000, 922);
+            let p6 = b2_add_player(&mut rig, "p6", 12, 11, 10, 1000, 923);
+            let p7 = b2_add_player(&mut rig, "p7", 12, 11, 10, 1000, 924);
+            let _m1 = b2_add_monster(&mut rig, "m1", 13, 12, 0);
+            let p4 = b2_add_player(&mut rig, "p4", 11, 11, 10, 1000, 925);
+            rig.world.entities.get_mut(p4).unwrap().death = true;
+            let p5 = b2_add_player(&mut rig, "p5", 13, 13, 10, 1000, 926);
+            rig.world.entities.get_mut(p5).unwrap().ghost = true;
+            let _p3 = b2_add_player(&mut rig, "p3", 14, 12, 10, 1000, 927);
+            if gauge {
+                rig.ground_sessions
+                    .get_mut("caster")
+                    .unwrap()
+                    .abil_see_heal_gauge = true;
+            }
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(42);
+            (rig, p1, p6, p7)
+        };
+        {
+            let (mut rig, p1, p6, p7) = build(false);
+            let before = rig.world.rng.clone();
+            rig.cast(29, (12, 12), p1);
+            assert_eq!(draws_between(&before, &rig.world.rng), 4, "29 恒 4 抽");
+            assert_eq!(
+                b2_delay_targets(&rig),
+                vec![(p6, 24), (p7, 24), (p1, 24)],
+                "枚举序 = x→y→格内插入序；P2 满血不发；M1 非友方"
+            );
+        }
+        {
+            let (mut rig, p1, _p6, _p7) = build(true);
+            rig.cast(29, (12, 12), p1);
+            let (frames, _raws) = rig.drain();
+            let gauges: Vec<(u16, i32)> = b2_seq(&frames, 911)
+                .into_iter()
+                .filter(|(id, _)| *id == mir2_protocol::messages::SM_INSTANCEHEALGUAGE)
+                .collect();
+            assert_eq!(gauges.len(), 4, "gauge 目标 = P2,P6,P7,P1（不看 HP）");
+            for socket in [921, 922, 923, 924] {
+                assert_eq!(
+                    sf_count(
+                        &frames,
+                        socket,
+                        mir2_protocol::messages::SM_INSTANCEHEALGUAGE
+                    ),
+                    0,
+                    "1103 不得发给目标"
+                );
+            }
+        }
+    }
+
+    /// **B2-23（爆裂火焰）**：4 抽 + 交付段逐目标账本（怪物 `R(1000)`+`MSD`+`R(300)`；
+    /// 玩家 `MSD`+`STD R(10)`）；帧序 `638 → 656×3 → 31×4`，受击玩家 `53` 在 `638` 前。
+    ///
+    /// 红检：① 漏 `R(1000)`/`R(300)` ⇒ 对照流状态不等；② 用 `IsProperFriend` 冒充
+    /// `IsProperTarget` ⇒ 怪物全漏；③ 无目标仍 `boTrain=true` ⇒ 训练抽多；④ `nDamage==0`
+    /// 仍抽 `R(300)`/发 31/656 ⇒ 零伤害变体红。
+    #[test]
+    fn spell_p3b2_fireboom_delivery_ledger_and_frames() {
+        const SM_53: u16 = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        const SM_638: u16 = mir2_protocol::messages::SM_MAGICFIRE;
+        const SM_656: u16 = mir2_protocol::messages::SM_CHANGENAMECOLOR;
+        const SM_31: u16 = mir2_protocol::messages::SM_STRUCK;
+        let build = |m3_mac: u16| {
+            let mut rig = b2_rig(23, 21, &[("obs", 10, 13, false, 912)]);
+            let m1 = b2_add_monster(&mut rig, "m1", 11, 11, 0x0A00);
+            let m2 = b2_add_monster(&mut rig, "m2", 12, 12, 0x0500);
+            let p1 = b2_add_player(&mut rig, "p1", 13, 11, 50, 1000, 921);
+            rig.world.entities.get_mut(p1).unwrap().mac = 0x0C00;
+            let m3 = b2_add_monster(&mut rig, "m3", 13, 13, m3_mac);
+            let m4 = b2_add_monster(&mut rig, "m4", 12, 11, 0);
+            rig.world.entities.get_mut(m4).unwrap().death = true;
+            let m5 = b2_add_monster(&mut rig, "m5", 11, 13, 0);
+            rig.world.entities.get_mut(m5).unwrap().ghost = true;
+            let _m6 = b2_add_monster(&mut rig, "m6", 14, 12, 0);
+            let p2 = b2_add_player(&mut rig, "p2", 12, 13, 50, 1000, 922);
+            rig.world.entities.get_mut(p2).unwrap().in_safe_zone = true;
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(42);
+            (rig, m1, m2, p1, m3)
+        };
+        // ① 正常：nPower=20；M1/M2/P1/M3 按枚举序完整处理。
+        {
+            let (mut rig, m1, m2, p1, m3) = build(0x0000);
+            let before = rig.world.rng.clone();
+            rig.cast(23, (12, 12), m2);
+            let (frames, _raws) = rig.drain();
+            // 4 施法者抽 + M1(1000,MSD,300) + M2 + P1(MSD,STD) + M3。
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                15,
+                "23 = 4 + 3*3（怪）+ 2（玩家）"
+            );
+            let mut c = mir2_shared::rng::RandomNumber::with_seed(42);
+            let _ = c.random_below(0);
+            let _ = c.random_below(0);
+            let _ = c.random_below(12);
+            let _ = c.random_below(10);
+            // 精确重放（M1 R11、M2 R6、M3 R1）。
+            let mut c = mir2_shared::rng::RandomNumber::with_seed(42);
+            let _ = c.random_below(0);
+            let _ = c.random_below(0);
+            let _ = c.random_below(12);
+            let _ = c.random_below(10);
+            let _ = c.random_below(1000);
+            let _ = c.random_below(11);
+            let _ = c.random_below(300);
+            let _ = c.random_below(1000);
+            let _ = c.random_below(6);
+            let _ = c.random_below(300);
+            let _ = c.random_below(13);
+            let _ = c.random_below(10);
+            let _ = c.random_below(1000);
+            let _ = c.random_below(1);
+            let _ = c.random_below(300);
+            assert_eq!(
+                format!("{:?}", rig.world.rng),
+                format!("{c:?}"),
+                "交付段逐目标抽数序（合同 §3.3 账本）"
+            );
+            // HP：M1 18 / M2 19 / P1 17 / M3 20。
+            assert_eq!(rig.world.entities.get(m1).unwrap().hp, 982);
+            assert_eq!(rig.world.entities.get(m2).unwrap().hp, 981);
+            assert_eq!(rig.world.entities.get(p1).unwrap().hp, 33);
+            assert_eq!(rig.world.entities.get(m3).unwrap().hp, 980);
+            // 帧序（不同优先级）：施法者/观察者 638 → 656×3 → 31×4；P1 53 在 638 前。
+            for socket in [911, 912] {
+                let seq: Vec<u16> = sf_seq(&frames, socket);
+                let i638 = seq.iter().position(|x| *x == SM_638).unwrap();
+                let i656: Vec<usize> = seq
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, x)| **x == SM_656)
+                    .map(|(i, _)| i)
+                    .collect();
+                let i31: Vec<usize> = seq
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, x)| **x == SM_31)
+                    .map(|(i, _)| i)
+                    .collect();
+                assert_eq!(i656.len(), 3, "M1/M2/M3 各一条 656；实得 {seq:?}");
+                assert_eq!(i31.len(), 4, "31 给 4 个受击者；实得 {seq:?}");
+                assert!(i656.iter().all(|i| *i > i638) && i31.iter().all(|i| *i > i638));
+                assert!(i656.iter().max().unwrap() < i31.iter().min().unwrap());
+            }
+            let p1_seq = sf_seq(&frames, 921);
+            let i53 = p1_seq.iter().position(|x| *x == SM_53).unwrap();
+            let i638 = p1_seq.iter().position(|x| *x == SM_638).unwrap();
+            assert!(i53 < i638, "受击玩家 53 先于 638；实得 {p1_seq:?}");
+            // 31 的 Recog = 受击者，顺序 = 枚举序 M1/M2/P1/M3（同优先级按入队序）。
+            let struck: Vec<i32> = b2_seq(&frames, 912)
+                .into_iter()
+                .filter(|(id, _)| *id == SM_31)
+                .map(|(_, r)| r)
+                .collect();
+            assert_eq!(struck, vec![m1, m2, p1, m3]);
+        }
+        // ② nDamage==0 变体：M3 MAC=0x0014 ⇒ 只有 R(1000)+MSD，无 31/656、无 R(300)。
+        {
+            let (mut rig, _m1, m2, _p1, _m3) = build(0x0014);
+            let before = rig.world.rng.clone();
+            rig.cast(23, (12, 12), m2);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                14,
+                "零伤害怪物不抽 R(300)（4+3+3+2+2）"
+            );
+            let seq: Vec<u16> = sf_seq(&frames, 912);
+            assert_eq!(
+                seq.iter().filter(|x| **x == SM_656).count(),
+                2,
+                "零伤害怪物不产生 656；实得 {seq:?}"
+            );
+            assert_eq!(
+                seq.iter().filter(|x| **x == SM_31).count(),
+                3,
+                "零伤害怪物不产生 31；实得 {seq:?}"
+            );
+        }
+    }
+
+    /// **B2-24（地狱雷光）**：AoE 中心 = **施法者坐标**（点击 (12,12) 只影响尾帧），
+    /// 非不死 `nPower/10`（整除）、不死原值；self 靠 `IsProperTarget` 排除。
+    ///
+    /// 红检：① 中心用点击坐标 ⇒ 受击集合/顺序红；② 漏 `/10` ⇒ M2/P1 扣血 41 而非 4；
+    /// ③ self 被命中 ⇒ 施法者掉血。
+    #[test]
+    fn spell_p3b2_lightflower_center_self_and_undead_division() {
+        const SM_638: u16 = mir2_protocol::messages::SM_MAGICFIRE;
+        let mut rig = b2_rig(24, 22, &[]);
+        let m2 = b2_add_monster(&mut rig, "m2", 8, 8, 0);
+        let m1 = b2_add_monster(&mut rig, "m1", 11, 11, 0);
+        let m3 = b2_add_monster(&mut rig, "m3", 12, 8, 0);
+        let p1 = b2_add_player(&mut rig, "p1", 12, 12, 50, 1000, 921);
+        let _p2 = b2_add_player(&mut rig, "p2", 13, 10, 50, 1000, 922);
+        rig.world.entities.get_mut(m1).unwrap().life_attrib = 1;
+        rig.world.entities.get_mut(m3).unwrap().life_attrib = 1;
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(42);
+        let before = rig.world.rng.clone();
+        rig.cast(24, (12, 12), p1);
+        let (frames, _raws) = rig.drain();
+        assert_eq!(draws_between(&before, &rig.world.rng), 15);
+        // nPower=41：非不死（M2/P1）受 4，不死（M1/M3）受 41。
+        assert_eq!(rig.world.entities.get(m2).unwrap().hp, 996);
+        assert_eq!(rig.world.entities.get(p1).unwrap().hp, 46);
+        assert_eq!(rig.world.entities.get(m1).unwrap().hp, 959);
+        assert_eq!(rig.world.entities.get(m3).unwrap().hp, 959);
+        assert_eq!(
+            rig.world.entities.get(rig.caster).unwrap().hp,
+            500,
+            "self 不得掉血"
+        );
+        // 尾帧坐标仍是点击 (12,12)，不是 AoE 中心 (10,10)。
+        let cmd = mir2_protocol::frame::CommandMessage::from_bytes(sf_first(&frames, 911, SM_638))
+            .unwrap();
+        assert_eq!((cmd.param, cmd.tag), (12, 12), "共享尾用点击坐标");
+        // 31 的顺序 = 以施法者 (10,10) 为中心的 x→y：M2(8,8) → M1(11,11) → M3(12,8) → P1(12,12)。
+        let struck: Vec<i32> = b2_seq(&frames, 911)
+            .into_iter()
+            .filter(|(id, _)| *id == mir2_protocol::messages::SM_STRUCK)
+            .map(|(_, r)| r)
+            .collect();
+        assert_eq!(struck, vec![m2, m1, m3, p1]);
+    }
+
+    /// **B2-33/47 半径来源**：33 读 `SnowWindRange`、47 读 `FireBoomRage`（二者缺省都是 1，
+    /// 夹具故意一 2 一 1）；47 的死亡点击目标在共享尾做死亡归一（尾 id=0）。
+    ///
+    /// 红检：交换配置键 ⇒ (14,14) 命中集合红；47 尾 id 不归一 ⇒ 红。
+    #[test]
+    fn spell_p3b2_snowwind_fireboom_radius_source_and_death_norm() {
+        let run = |id: u16, effect: u8, fire: i32, snow: i32, dead_click: bool| {
+            let mut rig = b2_rig(id, effect, &[]);
+            let m2 = b2_add_monster(&mut rig, "m2", 12, 12, 0);
+            let probe = b2_add_monster(&mut rig, "probe", 14, 14, 0);
+            if dead_click {
+                rig.world.entities.get_mut(m2).unwrap().death = true;
+            }
+            rig.fire_boom_rage = fire;
+            rig.snow_wind_range = snow;
+            rig.cast(id, (12, 12), m2);
+            let (frames, _raws) = rig.drain();
+            let hp = rig.world.entities.get(probe).unwrap().hp;
+            let tail = sf_magicfire_target_id(sf_first(
+                &frames,
+                911,
+                mir2_protocol::messages::SM_MAGICFIRE,
+            ));
+            (hp, tail)
+        };
+        // 33：SnowWindRange=2 ⇒ (14,14) 在窗口内；FireBoomRage 被故意设 1（读错则漏）。
+        assert!(run(33, 31, 1, 2, false).0 < 1000, "33 必须读 SnowWindRange");
+        assert_eq!(run(33, 31, 2, 1, false).0, 1000, "33 半径 1 ⇒ (14,14) 圈外");
+        // 47：FireBoomRage=2 ⇒ (14,14) 命中；SnowWindRange=1（读错则漏）。
+        assert!(run(47, 65, 2, 1, false).0 < 1000, "47 必须读 FireBoomRage");
+        assert_eq!(run(47, 65, 1, 2, false).0, 1000, "47 半径 1 ⇒ (14,14) 圈外");
+        // 死亡点击 ⇒ 共享尾目标 id 归零（合同 §2.6(f)）。
+        assert_eq!(run(47, 65, 2, 1, true).1, 0, "死亡点击 ⇒ 尾目标 id=0");
+    }
+    /// **B2 逐魔号抽数表（两个种子）**：施法者侧 4 抽的 max 序列按合同 §3.4；
+    /// 单目标交付段（怪物 `R(1000)`+`MSD`+`R(300)`）逐项对拍。
+    ///
+    /// 红检：任何取数式/max 写错（如 AP 用 `R(17)`/`R(11)`、MPow 参数取反）⇒ 对照流状态不等。
+    #[test]
+    fn spell_p3b2_all_six_draw_sequences_match_contract_tables() {
+        for seed in [42i32, 2026_1017] {
+            // 2 / 29：治疗族（player friend；无交付抽）。
+            for (id, effect, mpow_max, gp_max, ap_max, want_power) in [
+                (
+                    2u16,
+                    2u8,
+                    6i32,
+                    0i32,
+                    18i32,
+                    if seed == 42 { 28 } else { 32 },
+                ),
+                (29, 27, 0, 0, 18, if seed == 42 { 24 } else { 27 }),
+            ] {
+                let mut rig = b2_rig(id, effect, &[]);
+                let t = b2_add_player(&mut rig, "t", 12, 12, 50, 1000, 921);
+                rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+                let mut c = mir2_shared::rng::RandomNumber::with_seed(seed);
+                let _ = c.random_below(mpow_max);
+                let _ = c.random_below(gp_max);
+                let _ = c.random_below(ap_max);
+                let _ = c.random_below(10);
+                rig.cast(id, (12, 12), t);
+                assert_eq!(
+                    format!("{:?}", rig.world.rng),
+                    format!("{c:?}"),
+                    "[{id}] seed={seed} 治疗族 4 抽"
+                );
+                assert_eq!(
+                    b2_delay_targets(&rig),
+                    vec![(t, want_power)],
+                    "[{id}] seed={seed} nPower"
+                );
+            }
+            // 23 / 33 / 47：AoE（单怪物目标 ⇒ +R(1000)+MSD(R1)+R(300)）。
+            for (id, effect, mpow_max, gp_max, ap_max, undead, want_power) in [
+                (
+                    23u16,
+                    21u8,
+                    0i32,
+                    0i32,
+                    12i32,
+                    false,
+                    if seed == 42 { 20 } else { 22 },
+                ),
+                (24, 22, 20, 20, 12, true, if seed == 42 { 41 } else { 53 }),
+                (33, 31, 0, 0, 12, false, if seed == 42 { 30 } else { 32 }),
+                (47, 65, 20, 20, 12, false, if seed == 42 { 41 } else { 53 }),
+            ] {
+                let mut rig = b2_rig(id, effect, &[]);
+                let t = b2_add_monster(&mut rig, "m", 12, 12, 0);
+                if undead {
+                    rig.world.entities.get_mut(t).unwrap().life_attrib = 1;
+                }
+                rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+                let mut c = mir2_shared::rng::RandomNumber::with_seed(seed);
+                let _ = c.random_below(mpow_max);
+                let _ = c.random_below(gp_max);
+                let _ = c.random_below(ap_max);
+                let _ = c.random_below(10);
+                let _ = c.random_below(1000);
+                let _ = c.random_below(1); // MAC=0 ⇒ R(|0-0|+1)
+                let _ = c.random_below(300);
+                rig.cast(id, (12, 12), t);
+                assert_eq!(
+                    format!("{:?}", rig.world.rng),
+                    format!("{c:?}"),
+                    "[{id}] seed={seed} 施法者 4 抽 + 单怪交付 3 抽"
+                );
+                assert_eq!(
+                    rig.world.entities.get(t).unwrap().hp,
+                    1000 - want_power,
+                    "[{id}] seed={seed} 伤害 = nPower（MAC=0）"
+                );
+            }
+        }
     }
 }

@@ -82,6 +82,12 @@ pub const SKILL_46: u16 = 46;
 /// `Messages.RM_MASTERDIEMUTINY`（`src/OpenMir2/Messages.cs:836`）：主人死 1s 后自投递
 /// （`PlayObject.Die`/`KickException` 发，`PlayObject.Operate` 收 → `ProcessSlaveMutiny`）。
 /// 与 `crates/protocol/src/messages.rs:577` 同值（本层不依赖 `mir2-protocol`，登记数值同源）。
+/// `Messages.RM_MAGHEALING`（`src/OpenMir2/Grobal2.cs`；`(byte)8034 = 98`）——
+/// 治疗术的**目标自有延时**消息（`MagicManager.cs:216/:66`：`SendSelfDelayMsg(..., nPower, ..., 800)`）。
+///
+/// P3-B2：载荷 `nParam1 = nPower`（`PlayObject.Message.cs:1619-1629` 累加 `IncHealing`）。
+pub const RM_MAGHEALING: u16 = 8034;
+
 pub const RM_MASTERDIEMUTINY: u16 = 60003;
 /// `Messages.RM_MASTERDIEGHOST`（`Messages.cs:840`）：主人幽灵 1s 后自投递（→ `ProcessSlaveGhost`）。
 /// 与 `crates/protocol/src/messages.rs:579` 同值。
@@ -959,8 +965,12 @@ pub fn process_slave_ghost(world: &mut World, master_id: i32) -> Vec<i32> {
 pub struct SelfDelayMsg {
     /// 收件人（自投递 ⇒ 发件人本人）的 actor id（oracle `SendMessage.ActorId`）。
     pub actor_id: i32,
-    /// `SendMessage.wIdent`（本层只承载 `RM_MASTERDIEMUTINY` / `RM_MASTERDIEGHOST`）。
+    /// `SendMessage.wIdent`（`RM_MASTERDIEMUTINY` / `RM_MASTERDIEGHOST` / `RM_MAGHEALING`）。
     pub ident: u16,
+    /// `SendMessage.wParam`（B2 扩载荷；当前生产仅 `RM_MAGHEALING` 用 0）。
+    pub w_param: i32,
+    /// `SendMessage.nParam1`（B2 扩载荷：`RM_MAGHEALING` 的 `nPower`）。
+    pub n_param1: i32,
     /// 到点时刻（sim 毫秒）。
     pub deliver_at_ms: i64,
 }
@@ -979,6 +989,12 @@ pub struct SelfDelayOutcome {
     pub mutinied: Vec<i32>,
     /// `ProcessSlaveGhost` 置 Ghost 的宝宝 id（末尾往前序；非该支恒空）。
     pub ghosted: Vec<i32>,
+    /// `RM_MAGHEALING` 的 `nParam1`（`nPower`；非该支恒 `None`）。
+    ///
+    /// 宿主据它执行 `PlayObject.Message.cs:1619-1629` 的
+    /// `if (IncHealing + n < 300) { IncHealing += n; PerHealing = 5; } else { IncHealing = 300; }`
+    /// （`PerHealing = 5` **只在 if 分支**）。
+    pub mag_healing: Option<i32>,
 }
 
 impl World {
@@ -988,6 +1004,21 @@ impl World {
     ///
     /// 入队优先级一律 `MessagePriority.Lowest`（`:204`）；本骨架以**插入序**代替优先队列。
     pub fn send_self_delay_msg(&mut self, actor_id: i32, ident: u16, delay_ms: i64) {
+        self.send_self_delay_msg_with(actor_id, ident, 0, 0, delay_ms);
+    }
+
+    /// 带 `wParam`/`nParam1` 载荷的 [`World::send_self_delay_msg`]（P3-B2 扩载荷）：
+    /// `RM_MAGHEALING` 需要 `nParam1 = nPower`（`MagicManager.cs:216/:66`）。
+    ///
+    /// oracle `BaseObject.Message.cs:188-206` 的 `!Ghost` 门照旧。
+    pub fn send_self_delay_msg_with(
+        &mut self,
+        actor_id: i32,
+        ident: u16,
+        w_param: i32,
+        n_param1: i32,
+        delay_ms: i64,
+    ) {
         let ghost = self.entities.get(actor_id).is_some_and(|e| e.ghost);
         if ghost {
             return;
@@ -996,6 +1027,8 @@ impl World {
         self.self_delay_msgs.push(SelfDelayMsg {
             actor_id,
             ident,
+            w_param,
+            n_param1,
             deliver_at_ms,
         });
     }
@@ -1033,7 +1066,27 @@ impl World {
                 continue;
             }
             let msg = self.self_delay_msgs.remove(i);
+            // B2：`RM_MAGHEALING` 不受「宝宝自投递」开关影响（它由治疗效果体入队）；
+            // 两个主人死族消息仍按 `slave_self_delay_enabled` 门（关闭时保持入队）。
+            if matches!(msg.ident, RM_MASTERDIEMUTINY | RM_MASTERDIEGHOST)
+                && !self.slave_self_delay_enabled()
+            {
+                self.self_delay_msgs.insert(i, msg);
+                i += 1;
+                continue;
+            }
             match msg.ident {
+                RM_MAGHEALING => {
+                    // `PlayObject.Message.cs:1619-1629`：交付段 0 抽，只把 `nPower` 交宿主累加
+                    // `IncHealing`（`SessionGround.recovery`）。
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        mutinied: Vec::new(),
+                        ghosted: Vec::new(),
+                        mag_healing: Some(msg.n_param1),
+                    });
+                }
                 RM_MASTERDIEMUTINY => {
                     // 只在真正有到点的叛变消息时才克隆配置（避免每 tick 无谓 clone）。
                     let cfg = self.pet_slave_cfg.clone();
@@ -1043,6 +1096,7 @@ impl World {
                         ident: msg.ident,
                         mutinied,
                         ghosted: Vec::new(),
+                        mag_healing: None,
                     });
                 }
                 RM_MASTERDIEGHOST => {
@@ -1052,6 +1106,7 @@ impl World {
                         ident: msg.ident,
                         mutinied: Vec::new(),
                         ghosted,
+                        mag_healing: None,
                     });
                 }
                 // 本层只承载这一族自投递（登记：其他 `RM_*` 自投递未建模）。
@@ -2252,6 +2307,8 @@ mod tests {
         w.self_delay_msgs.push(SelfDelayMsg {
             actor_id: master,
             ident: RM_MASTERDIEGHOST,
+            w_param: 0,
+            n_param1: 0,
             deliver_at_ms: w.clock_ms,
         });
         let r = w.tick();
