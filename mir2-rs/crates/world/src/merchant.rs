@@ -843,14 +843,34 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
 }
 
 /// `BaseObject.MapRandomMove`（`BaseObject.cs:1214-1237`）：`Random(Width-nEgdey-1)+nEgdey`
-/// 两次取数（站点归 `merchant` 组），然后落点。
+/// 两次取数（站点归 `merchant` 组），然后 `SpaceMove`（`BaseObject.cs:1103-1172`）——
+/// **落点不可走时进 `SpaceMoveGetRandXY` 移位环继续取数**（至多 201 轮）。
 ///
-/// `SpaceMove` 不查阻挡（`ignore_block = true`）；不改 `Dir`。
+/// 逐行对照（本片 2026-10-17）：
 ///
+/// | oracle | 本仓 |
+/// | --- | --- |
+/// | `MapRandomMove` 首两抽 `Random(Width-nEgdey-1)` / `Random(Height-nEgdey-1)`（`:1235-1236`） | 同（`nEdgeY` 分段见下） |
+/// | `SpaceMove` 同服分支：删旧格 → `CurrX/CurrY = nX/nY` → `SpaceMoveGetRandXY`（`:1128`） | [`crate::slave::space_move_get_rand_xy`]（与 `RecallSlave` **同一** oracle 函数，不复制第二份） |
+/// | `CanWalk(x, y, true)`（`Envirnoment.cs:442-485`）：只判 `cellSuccess && Valid`，忽略格上活体 | `get_cell_info(x, y).1` |
+/// | 不可走：`x < Width-n1C-1 ⇒ x += n18`，否则 `x = Random(Width)`；`y` 同段推进 / `Random(Height)`；`n14++ >= 201` 放弃（`:1067-1094`） | 复用的函数逐句同构 |
+/// | 201 轮仍不可走 ⇒ 回滚旧坐标（`:1147-1153`） | 直接返回（坐标不动；取数流水已推进）——见下「未建模」 |
+/// | 落点可走 ⇒ `AddMapObject`（`ignore_block`，且 `SpaceMoveGetRandXY` 已保证 `Valid`） | [`crate::map::MapGrid::move_object`]（`ignore_block = true`） |
+///
+/// 不改 `Dir`。
+///
+/// **取数站点归组**：`space_move_get_rand_xy` 标了 `#[track_caller]` ⇒ 本函数调用时环内
+/// `random_below` 的 site 记在**本文件**（`merchant` 组），不会漂到 `slave.rs`（`other`）。
+///
+/// **可达性（收窄）**：只有 `merchant_run`（DB `CanMove != 0 && MoveTime > 0`）可达。
+/// `npc_run` 的该支**不可达**——固定 NPC 经 `Npcs.txt` 装载 `BoCanMove` 恒 `false`
+/// （`npc.rs` 已登记）⇒ 不改 NPC 面。
+///
+/// **未建模（登记）**：201 轮失败时 oracle 先 `DeleteFromMap` 再回滚 `AddMapObject`（`BaseObject.cs:1114/1150`）。
+/// 本仓不预删，故失败时**坐标/取数/RNG 流水完全一致**，仅当旧格 `Valid` 且同格还有其它对象时
+/// oracle 会把本对象挪到 `obj_list` 末尾（格内顺序）——位置与可达行为无差。
 /// **`pub(crate)`**：`Merchant.Run`（`merchant.rs`）与固定 NPC 的 `Merchant` 类 Run
-/// （`npc.rs::merchant_body_run`，`CastleOfficial : Merchant`）**共用**本函数。固定 NPC 经
-/// `Npcs.txt` 装载 `BoCanMove` 恒 `false` ⇒ 该支不可达（登记）；若将来可达，取数站点仍记
-/// 本文件 ⇒ `merchant` 组。
+/// （`npc.rs::merchant_body_run`，`CastleOfficial : Merchant`）**共用**本函数。
 pub(crate) fn map_random_move(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
@@ -872,6 +892,18 @@ pub(crate) fn map_random_move(world: &mut World, actor_id: i32) {
     let (w, h) = (map.width, map.height);
     let nx = world.rng.random_below(w - n_edge_y - 1) + n_edge_y;
     let ny = world.rng.random_below(h - n_edge_y - 1) + n_edge_y;
+    // `SpaceMove`（`BaseObject.cs:1128`）：以 `(nX, nY)` 为起点找可走格；起点即墙时
+    // `SpaceMoveGetRandXY` 进移位环继续抽数（201 轮上限）。
+    let found = {
+        let map = &world.maps[map_id];
+        crate::slave::space_move_get_rand_xy(&mut world.rng, w, h, nx, ny, |x, y| {
+            map.get_cell_info(x, y).1
+        })
+    };
+    let Some((nx, ny)) = found else {
+        // oracle 回滚到旧坐标（`BaseObject.cs:1147-1153`）：坐标不动。
+        return;
+    };
     let now = world.clock_ms;
     let moved = world.maps[map_id].move_object(
         MoveRequest {
@@ -904,6 +936,7 @@ fn equals_ordinal_ignore_case(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::map::CellAttribute;
     use mir2_data::models::StdItem;
 
     fn sample_state() -> MerchantState {
@@ -1333,5 +1366,379 @@ mod tests {
         // oracle `<` 支不 `return`（继续循环）⇒ `refilled` 为 false，库存被删到目标 5。
         let _ = merchant_run(&mut w, id);
         assert_eq!(w.merchant_goods_count(id, 1), 5, "删到目标 5 件");
+    }
+
+    // ---------------------------------------------------------------------------------
+    // `MapRandomMove` 移位环（卡 `openmir2-map-random-move-shift-loop`，tier=R）
+    //
+    // 期望表的**独立复算**：下面自写 .NET Framework legacy `System.Random`（Knuth 减法）
+    // 与 oracle `MapRandomMove` / `SpaceMoveGetRandXY` 环体；**不复用**本仓的
+    // `space_move_get_rand_xy` / `DotNetRandom`（否则期望与实现同源，改坏必绿）。
+    // ---------------------------------------------------------------------------------
+
+    /// .NET `System.Random` 常量（`MBIG`/`MSEED`）。
+    const ORACLE_MBIG: i32 = i32::MAX;
+    const ORACLE_MSEED: i32 = 161_803_398;
+
+    /// .NET Framework legacy `System.Random`（Knuth 减法滞后斐波那契）的独立复刻。
+    struct OracleRandom {
+        seed_array: [i32; 56],
+        inext: usize,
+        inextp: usize,
+    }
+
+    impl OracleRandom {
+        fn new(seed: i32) -> Self {
+            let mut seed_array = [0i32; 56];
+            // `Random(int Seed)`：`subtraction = Seed == Int32.MinValue ? Int32.MaxValue : Abs(Seed)`。
+            let subtraction = if seed == i32::MIN {
+                i32::MAX
+            } else {
+                seed.abs()
+            };
+            let mut mj = ORACLE_MSEED - subtraction;
+            seed_array[55] = mj;
+            let mut mk = 1i32;
+            for i in 1..55usize {
+                let ii = (21 * i) % 55;
+                seed_array[ii] = mk;
+                mk = mj - mk;
+                if mk < 0 {
+                    mk += ORACLE_MBIG;
+                }
+                mj = seed_array[ii];
+            }
+            for _ in 1..5 {
+                for i in 1..56usize {
+                    seed_array[i] -= seed_array[1 + (i + 30) % 55];
+                    if seed_array[i] < 0 {
+                        seed_array[i] += ORACLE_MBIG;
+                    }
+                }
+            }
+            OracleRandom {
+                seed_array,
+                inext: 0,
+                inextp: 21,
+            }
+        }
+
+        fn internal_sample(&mut self) -> i32 {
+            let mut loc_inext = self.inext + 1;
+            let mut loc_inextp = self.inextp + 1;
+            if loc_inext >= 56 {
+                loc_inext = 1;
+            }
+            if loc_inextp >= 56 {
+                loc_inextp = 1;
+            }
+            let mut ret_val = self.seed_array[loc_inext] - self.seed_array[loc_inextp];
+            if ret_val == ORACLE_MBIG {
+                ret_val -= 1;
+            }
+            if ret_val < 0 {
+                ret_val += ORACLE_MBIG;
+            }
+            self.seed_array[loc_inext] = ret_val;
+            self.inext = loc_inext;
+            self.inextp = loc_inextp;
+            ret_val
+        }
+
+        /// `Next()`（后续流水比对用）。
+        fn next_value(&mut self) -> i32 {
+            self.internal_sample()
+        }
+
+        /// `Next(int maxValue)` = `(int)(Sample() * maxValue)`，`Sample() = InternalSample()/MBIG`。
+        fn next_max(&mut self, max_value: i32) -> i32 {
+            assert!(max_value >= 0);
+            (self.internal_sample() as f64 * (1.0 / f64::from(ORACLE_MBIG)) * f64::from(max_value))
+                as i32
+        }
+    }
+
+    /// oracle `SpaceMoveGetRandXY`（`BaseObject.cs:1040-1101`）的独立环体复刻。
+    /// 返回 `(成功?, 终点x, 终点y, 逐抽 (参数, 结果), 迭代数)`。
+    fn oracle_space_move_get_rand_xy<F>(
+        rng: &mut OracleRandom,
+        width: i32,
+        height: i32,
+        mut x: i32,
+        mut y: i32,
+        mut can_walk: F,
+    ) -> (bool, i32, i32, Vec<(i32, i32)>, i32)
+    where
+        F: FnMut(i32, i32) -> bool,
+    {
+        let n18 = if width < 80 { 3 } else { 10 };
+        let n1c = if height < 150 {
+            if height < 50 {
+                2
+            } else {
+                15
+            }
+        } else {
+            50
+        };
+        let mut draws = Vec::new();
+        let mut n14 = 0;
+        loop {
+            if can_walk(x, y) {
+                return (true, x, y, draws, n14);
+            }
+            if x < (width - n1c - 1) {
+                x += n18;
+            } else {
+                x = rng.next_max(width);
+                draws.push((width, x));
+                if y < (height - n1c - 1) {
+                    y += n18;
+                } else {
+                    y = rng.next_max(height);
+                    draws.push((height, y));
+                }
+            }
+            n14 += 1;
+            if n14 >= 201 {
+                break;
+            }
+        }
+        (false, x, y, draws, n14)
+    }
+
+    /// oracle `MapRandomMove`（`BaseObject.cs:1214-1237`）+ `SpaceMove` 的独立复刻。
+    /// 返回 `(SpaceMoveGetRandXY 成功?, 首两抽落点, 终点, 逐抽 (参数, 结果), 移位环迭代数)`。
+    #[allow(clippy::type_complexity)]
+    fn oracle_map_random_move<F>(
+        rng: &mut OracleRandom,
+        width: i32,
+        height: i32,
+        can_walk: F,
+    ) -> (bool, (i32, i32), (i32, i32), Vec<(i32, i32)>, i32)
+    where
+        F: FnMut(i32, i32) -> bool,
+    {
+        let n_edge_y = if height < 150 {
+            if height < 30 {
+                2
+            } else {
+                20
+            }
+        } else {
+            50
+        };
+        let mut draws = Vec::new();
+        let nx = rng.next_max(width - n_edge_y - 1) + n_edge_y;
+        draws.push((width - n_edge_y - 1, nx - n_edge_y));
+        let ny = rng.next_max(height - n_edge_y - 1) + n_edge_y;
+        draws.push((height - n_edge_y - 1, ny - n_edge_y));
+        let (ok, fx, fy, shift, iters) =
+            oracle_space_move_get_rand_xy(rng, width, height, nx, ny, can_walk);
+        draws.extend(shift);
+        (ok, (nx, ny), (fx, fy), draws, iters)
+    }
+
+    /// 把 map 0 上满足 `pred` 的格置为 `LowWall`（`Valid == false`）。
+    fn block_cells(w: &mut World, pred: impl Fn(i32, i32) -> bool) {
+        let map = &mut w.maps[0];
+        let (width, height) = (map.width, map.height);
+        for x in 0..width {
+            for y in 0..height {
+                if pred(x, y) {
+                    let (cell, ok) = map.get_cell_info_mut(x, y);
+                    assert!(ok, "({x},{y}) 应为合法格");
+                    cell.set_attribute(CellAttribute::LowWall);
+                }
+            }
+        }
+    }
+
+    /// `spawn_merchant` 走 [`BaseAnimalCtorDraws::draw`] 的 4 抽（`entity.rs:80/104-112`）；
+    /// 独立流必须同样前移，才能从 `MapRandomMove` 的**首抽**开始对表。
+    fn oracle_after_ctor(seed: i32) -> OracleRandom {
+        let mut rng = OracleRandom::new(seed);
+        for m in crate::entity::BASE_ANIMAL_CTOR_DRAW_MODS {
+            let _ = rng.next_max(m);
+        }
+        rng
+    }
+
+    /// 逐项核对期望表：同一 seed 的 `world.rng` 类型逐抽产出表中值
+    /// （参数/结果任一项不符即红；前 4 抽为商人 ctor 公共链）。
+    fn assert_draw_table_replay(seed: i32, table: &[(i32, i32)]) {
+        let mut probe = RandomNumber::with_seed(seed);
+        for m in crate::entity::BASE_ANIMAL_CTOR_DRAW_MODS {
+            let _ = probe.random_below(m);
+        }
+        for (i, &(arg, want)) in table.iter().enumerate() {
+            assert_eq!(probe.random_below(arg), want, "第 {i} 抽（Random({arg})）");
+        }
+    }
+
+    /// **阴性对照**：落点可走 ⇒ **恰好 2 抽**、落点 = 首次抽到的格。
+    ///
+    /// 「恰好 2 抽」用**随后连续三抽**断言（单抽不具判别力：`Next(10)` 在多索引上常同值）。
+    #[test]
+    fn map_random_move_walkable_landing_draws_exactly_twice() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(12_345);
+        let id = w.spawn_merchant(spawn_at(10, 10)).expect("挂图成功");
+        let mut oracle = oracle_after_ctor(12_345);
+        let (ok, init, final_xy, table, iters) =
+            oracle_map_random_move(&mut oracle, 64, 64, |_, _| true);
+        assert!(ok);
+        assert_eq!(init, (54, 55), "独立复算：首两抽落点");
+        assert_eq!(final_xy, (54, 55), "独立复算：落点可走 ⇒ 不自移位");
+        assert_eq!(table, vec![(43, 34), (43, 35)], "独立复算：恰好 2 抽");
+        assert_eq!(iters, 0, "未进入移位环");
+        assert_draw_table_replay(12_345, &table);
+
+        map_random_move(&mut w, id);
+        let e = w.entities.get(id).expect("实体在");
+        assert_eq!((e.x, e.y), final_xy, "落点 = 首次抽到的格");
+        // 随后连续三抽：与只消费了 2 抽的独立流逐项一致 ⇒ 实现没有多抽。
+        for i in 0..3 {
+            assert_eq!(
+                w.rng.random(),
+                oracle.next_value(),
+                "随后第 {i} 抽：落点可走时不得有多余取数"
+            );
+        }
+    }
+
+    /// **主判据**：随机落点为墙 ⇒ 进移位环继续抽数，逐抽与独立 oracle 期望一致，
+    /// 终点也一致（64×64：`n18=3`、`n1C=15`，`x≥48` 后走 `Random(Width)`/`Random(Height)`）。
+    #[test]
+    fn map_random_move_wall_landing_enters_shift_loop_and_matches_oracle() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(5);
+        let id = w.spawn_merchant(spawn_at(10, 10)).expect("挂图成功");
+        // 最小语料：只有最右两列/最下两行可走。
+        block_cells(&mut w, |x, y| !(x >= 60 || y >= 60));
+
+        let mut oracle = oracle_after_ctor(5);
+        let (ok, init, final_xy, table, iters) =
+            oracle_map_random_move(&mut oracle, 64, 64, |x, y| x >= 60 || y >= 60);
+        assert!(ok);
+        assert_eq!(init, (39, 59));
+        assert!(
+            !(init.0 >= 60 || init.1 >= 60),
+            "语料前提：首抽落点必须是墙"
+        );
+        assert_eq!(
+            table,
+            vec![(43, 19), (43, 39), (64, 9), (64, 60)],
+            "移位环逐抽独立表（含 2 次随机跳点）"
+        );
+        assert_eq!(iters, 4, "3 次 `x += 3` 后进随机跳点支");
+        assert_eq!(final_xy, (9, 60), "独立复算终点");
+        assert_draw_table_replay(5, &table);
+
+        map_random_move(&mut w, id);
+        let e = w.entities.get(id).expect("实体在");
+        assert_eq!((e.x, e.y), final_xy, "落点与 oracle 一致");
+        for i in 0..3 {
+            assert_eq!(
+                w.rng.random(),
+                oracle.next_value(),
+                "移位环后第 {i} 个后续抽"
+            );
+        }
+    }
+
+    /// **上限判据**：201 轮全不可走 ⇒ 放弃并回滚旧坐标；取数在水位处截断。
+    ///
+    /// 语料：整图 `LowWall`。独立流共 35 抽（表 31 项 = 2 初始 + 29 环内；含 ctor 4 抽），末抽发生在**第 201 轮**（`n14 == 200`）
+    /// ⇒ 环上限改成 200 时该抽消失、随后流水必错（本用例红）。
+    #[test]
+    fn map_random_move_shift_loop_stops_at_201_and_rolls_back() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(3);
+        let id = w.spawn_merchant(spawn_at(10, 10)).expect("挂图成功");
+        block_cells(&mut w, |_, _| true);
+
+        let mut oracle = oracle_after_ctor(3);
+        let (ok, init, _last_try, table, iters) =
+            oracle_map_random_move(&mut oracle, 64, 64, |_, _| false);
+        assert!(!ok, "全墙 ⇒ 201 轮后放弃");
+        assert_eq!(init, (44, 27));
+        assert_eq!(iters, 201, "环上限 201（自增后判）");
+        assert_eq!(
+            table,
+            vec![
+                (43, 24),
+                (43, 7),
+                (64, 16),
+                (64, 60),
+                (64, 22),
+                (64, 24),
+                (64, 32),
+                (64, 51),
+                (64, 44),
+                (64, 1),
+                (64, 5),
+                (64, 57),
+                (64, 7),
+                (64, 54),
+                (64, 48),
+                (64, 30),
+                (64, 13),
+                (64, 37),
+                (64, 31),
+                (64, 5),
+                (64, 63),
+                (64, 29),
+                (64, 32),
+                (64, 34),
+                (64, 24),
+                (64, 31),
+                (64, 18),
+                (64, 15),
+                (64, 32),
+                (64, 4),
+                (64, 44),
+            ],
+            "201 轮内逐抽独立表（末项 = 第 201 轮的 Random(64)）"
+        );
+        assert_draw_table_replay(3, &table);
+
+        map_random_move(&mut w, id);
+        let e = w.entities.get(id).expect("实体在");
+        assert_eq!((e.x, e.y), (10, 10), "放弃后回滚旧坐标");
+        for i in 0..3 {
+            assert_eq!(w.rng.random(), oracle.next_value(), "第 {i} 个后续抽");
+        }
+    }
+
+    /// **分段判据**（大图）：`Width >= 80 ⇒ n18 = 10`、`Height >= 150 ⇒ n1C = 50`，
+    /// 且 `x`/`y` 两条随机跳点支都在集成路径上被走到。
+    #[test]
+    fn map_random_move_large_map_uses_width80_height150_segments() {
+        let mut w = World::new(200, 300);
+        w.rng = RandomNumber::with_seed(7);
+        let id = w.spawn_merchant(spawn_at(10, 10)).expect("挂图成功");
+        block_cells(&mut w, |x, y| !(x >= 190 || y >= 290));
+
+        let mut oracle = oracle_after_ctor(7);
+        let (ok, init, final_xy, table, iters) =
+            oracle_map_random_move(&mut oracle, 200, 300, |x, y| x >= 190 || y >= 290);
+        assert!(ok);
+        assert_eq!(init, (104, 218));
+        assert_eq!(
+            table,
+            vec![(149, 54), (249, 168), (200, 8), (200, 190)],
+            "n18=10 步进到 `Width-n1C-1` 后：Random(200)"
+        );
+        assert_eq!(iters, 22);
+        assert_eq!(final_xy, (190, 238));
+        assert_draw_table_replay(7, &table);
+
+        map_random_move(&mut w, id);
+        let e = w.entities.get(id).expect("实体在");
+        assert_eq!((e.x, e.y), final_xy);
+        for i in 0..3 {
+            assert_eq!(w.rng.random(), oracle.next_value(), "第 {i} 个后续抽");
+        }
     }
 }
