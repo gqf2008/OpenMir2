@@ -4758,7 +4758,9 @@ fn handle_move_cmd(
 ///   `GetBaseAttackPoewr`；`BaseObject.Base.cs:789` 的 `GetHitStruckDamage`）；
 /// - `Entity.hit_point`/`speed_point` ← `SubAbility.HitPoint`/`SpeedPoint`
 ///   （`BaseObject.Attack.cs:41` 的命中门 `HitPoint < RandomByte(target.SpeedPoint)`）；
-/// - `Entity.hp`/`max_hp` ← `WAbil.HP`/`MaxHP`；`Entity.level` ← `WAbil.Level`。
+/// - `Entity.hp`/`max_hp` ← `WAbil.HP`/`MaxHP`；`Entity.level` ← `WAbil.Level`；
+/// - `Entity.anti_magic` ← `SubAbility.AntiMagic`（`BaseObject.Abil.cs:30/67` 的
+///   `1 + AddAbil.AntiMagic`；普通 `MonGen` 怪不调 `RecalcAbilitys` ⇒ 保持 ctor 的 0）。
 ///
 /// 此前这三组只喂了 52/752/50/41 帧，实体仍是 `Entity::new` 的空属性
 /// （`dc/ac/hit_point/speed_point=0`、`hp/max_hp=100`）⇒ 攻方攻击力恒 0，且
@@ -4775,6 +4777,8 @@ fn apply_ability_to_entity(
     e.hp = wabil.hp;
     e.max_hp = wabil.max_hp;
     e.level = wabil.level;
+    // `RecalcAbilitys` 的 `AntiMagic = 1 + AddAbil.AntiMagic`（`BaseObject.Abil.cs:30/67`）。
+    e.anti_magic = sub.anti_magic;
 }
 
 /// `RecalcLevelAbilitys()` + `RecalcAbilitys()` 的**单一实现**（登录/升级/装备/卸下四处共用）：
@@ -5040,6 +5044,33 @@ fn spell_snap_target(
         .entities
         .get(target_actor_id)
         .map_or((target_x, target_y, true), |t| (t.x, t.y, true))
+}
+
+/// **P3-B1**：目标 `BaseObject.AntiMagic`（魔法骰门 `Random(10) >= AntiMagic` 的右操作数，
+/// `BaseObject.cs:113`）。
+///
+/// oracle 的读点是**目标对象**的 `AntiMagic`，取值面只有两个来源：
+/// - ctor `BaseObject.cs:390` 置 **0**；
+/// - `BaseObject.RecalcAbilitys`（`BaseObject.Abil.cs:30` 置 1、`:67` 累加 `AddAbil.AntiMagic`）
+///   ⇒ `1 + AddAbil.AntiMagic`。**普通 `MonGen` 生成路径不调用 `RecalcAbilitys`** ⇒ 普通怪恒为 0。
+///
+/// 本仓读目标实体的 [`mir2_world::Entity::anti_magic`]：
+/// - 玩家目标 ⇒ 登录/升级时由 [`apply_ability_to_entity`] 写入 `SubAbility.anti_magic`
+///   （同一份 `RecalcAbilitys` 输出，= `1 + AddAbil.AntiMagic`）；
+/// - 普通 `MonGen` 怪 ⇒ **0** ⇒ `Random(10) >= 0` 恒真（骰门**永不失败**，与 oracle 一致）；
+/// - 宝宝 ⇒ 召唤时 [`mir2_world::World::make_slave_adopt`] 按 `BaseObject.cs:1198` 的
+///   `RecalcAbilitys` 置 1。
+///
+/// 目标不在世界（`CretInNearXy` 未命中 ⇒ `targetObject == null`）⇒ 0；此时各效果体先短路。
+///
+/// **登记**：复活（`BaseObject.cs:2739`）、怪物 `MakeClone`/`GainSlaveExp` 等
+/// `RecalcAbilitys` 面，以及装备/卸下后的实体同步尚未建模 ⇒ 这些路径上实体保持 0
+/// （B1 报告 §5；设计锚 `design-monster-run-overrides-20261017.md` §4.1.2-5 / §5-2）。
+fn spell_target_anti_magic(world: &mir2_world::World, target_id: i32) -> i32 {
+    world
+        .entities
+        .get(target_id)
+        .map_or(0, |t| i32::from(t.anti_magic))
 }
 
 /// **P1（`openmir2-spell-shared-tail-p1`）**：`MagicManager.cs:644-669` 共享尾在 `default` 支上的
@@ -6280,6 +6311,199 @@ fn handle_spell_cmd(
             );
         }
     }
+    // **P3-B1（`openmir2-spell-shared-tail-p3b1`）**：单体直击 / 骰门族
+    // **1（火球术）/ 5（大火球）/ 11（雷电术）/ 13（灵魂火符）/ 44（魔血火球）/ 45**。
+    //
+    // 设计锚（`src/M2Server/Magic/MagicManager.cs`）：
+    // - 1/5 `:174-203`：`MagCanHitTarget` → `IsProperTarget` → `AntiMagic <= Random(10)` →
+    //   距离 ≤1 → `GetAttackPower(GetPower(MPow)+Lo(MC), ΔMC+1)` → `RM_DELAYMAGIC(600)`；
+    //   `Race >= Animal ⇒ boTrain = true`；任一失败支把 `targetObject = null`。
+    // - 11/45 `:289-314` / `:563-588`（两句逐字相同）：**无 `MagCanHitTarget`** →
+    //   `IsProperTarget` → `Random(10) >= AntiMagic` → 威力（不死系 ×1.5）→
+    //   `RM_DELAYMAGIC(600)`；`Race >= Animal ⇒ boTrain`；失败支置 null。
+    // - 13 `:328-351`（`13..=19` 外块）：`:322 boSpellFail=true` → `:323 CheckAmulet(1,1)` →
+    //   过则 `:325 UseAmulet` → `MagCanHitTarget`（**只有它失败才置 null**）→ `IsProperTarget`
+    //   → `Random(10) >= AntiMagic` → 距离 ≤1 → 威力（SC 口径）→ `RM_DELAYMAGIC(1200)`；
+    //   `:391 boSpellFail=false`。门不过 ⇒ 无效果体/零抽/无尾 + 恰一条 639。
+    // - 44 `:557-562` → `MagHbFireBall` `:1020-1064`：门序同 1/5，威力后另有推挤两抽
+    //   （`Random(20)`、`Random(Level)`），**`boTrain` 只看 `Race >= Animal`**。
+    //
+    // 位置：oracle `switch` 在 `:159 SM_SPELL` 与 `:167` 版本门之后、`:644` 共享尾之前。
+    // 本函数里 `SM_SPELL` 已由开头的无条件广播发出；版本门失败已提前返回（打不到本块）。
+    // 本块只做：距离门 → snap/死亡归一 → （13 的护身符门）→ 效果体取数 → 共享尾。
+    //
+    // 帧序：`SM_SPELL`（前）→ `SM_MAGICFIRE(638，含自己，处理器无自守卫)` →
+    // `SM_MAGIC_LVEXP(640，仅自己)`。`RM_DELAYMAGIC`/`RM_DELAYPUSHED` 是**服务端自延迟队列**
+    // （`SendSelfDelayMsg`），不是线上帧 ⇒ 本仓只登记载荷（`SpellStrikeOutcome::{power,push}`），
+    // 延迟结算（`GetMagStruckDamage`/`RM_MAGSTRUCK`/`CharPushed`）**未建模**（登记）。
+    if matches!(req.magic_id, 1 | 5 | 11 | 13 | 44 | 45) {
+        if let Some(magic) = magic_table.get(req.magic_id) {
+            // `CretInNearXy` snap（与 8/21/37、17/30/41、20、46、P1 同口径）。
+            let (tx, ty, hit) = spell_snap_target(
+                world,
+                self_map,
+                req.target_actor_id,
+                req.target_x,
+                req.target_y,
+            );
+            if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
+                // `MagicManager.cs:160-163`：`targetObject != null && Death ⇒ null`。
+                // 未 snap 命中（`spellObject == null`）⇒ 目标为 null（DoSpell 第四参）。
+                let target_id = if hit {
+                    world
+                        .entities
+                        .get(req.target_actor_id)
+                        .filter(|t| !t.death)
+                        .map(|t| t.id)
+                } else {
+                    None
+                };
+                let magic_level = matched.as_ref().map_or(0, |m| m.level);
+                let (mc, sc) = ground_sessions.get(chr_name).map_or((0, 0), |sg| {
+                    (i32::from(sg.state.wabil.mc), i32::from(sg.state.wabil.sc))
+                });
+                // `targetObject.AntiMagic`（骰门右操作数）。目标为 null 时不会被读（各门先短路）。
+                let anti_magic = spell_target_anti_magic(world, req.target_actor_id);
+                // 13 的 `boSpellFail`（oracle `:322`）：默认 false（1/5/11/44/45 无该站点）。
+                let mut bo_spell_fail = false;
+                if req.magic_id == 13 {
+                    // `:322 boSpellFail = true` → `:323 MagicBase.CheckAmulet(playObject, 1, 1, ref nAmuletIdx)`。
+                    // 与 14/15（P2）**同一套** `amulet_slot`/`check_amulet`/`use_amulet` 与耐久帧。
+                    let gate = magic::amulet_requirement(i32::from(req.magic_id)).and_then(
+                        |(count, amulet_type)| {
+                            let armringl = amulet_slot(
+                                ground_sessions.get(chr_name),
+                                game_svr::ability::SLOT_ARMRING_L,
+                                catalog,
+                            );
+                            let bujuk = amulet_slot(
+                                ground_sessions.get(chr_name),
+                                game_svr::ability::SLOT_BUJUK,
+                                catalog,
+                            );
+                            magic::check_amulet(armringl, bujuk, count, amulet_type)
+                                .map(|slot| (slot, count, armringl, bujuk))
+                        },
+                    );
+                    match gate {
+                        Some((slot, count, armringl, bujuk)) => {
+                            // `MagicBase.UseAmulet`（`MagicBase.cs:109-127`）——先于效果体（`:325`）。
+                            let dura = match slot {
+                                magic::ITEM_LOCATION_ARM_RINGL => armringl.map(|s| s.dura),
+                                magic::ITEM_LOCATION_BUJUK => bujuk.map(|s| s.dura),
+                                _ => None,
+                            }
+                            .unwrap_or(0);
+                            let used = magic::use_amulet(dura, count);
+                            if used.deleted {
+                                // `Dura = 0; SendDelItems(item); Index = 0;`（`:121-126`）。
+                                let body = ground_sessions
+                                    .get(chr_name)
+                                    .and_then(|sg| sg.use_items.get(usize::from(slot)))
+                                    .and_then(Option::as_ref)
+                                    .and_then(|it| {
+                                        game_svr::slave::deleted_amulet_body(actor_id, it, catalog)
+                                    });
+                                apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                                if let Some(body) = body {
+                                    send_self_frame(online, gates, chr_name, body);
+                                }
+                            } else {
+                                // `Dura -= nCount*100; SendMsg(RM_DURACHANGE, idx, Dura, DuraMax, 0)`
+                                apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                                if let Some(it) = ground_sessions
+                                    .get(chr_name)
+                                    .and_then(|sg| sg.use_items.get(usize::from(slot)))
+                                    .and_then(Option::as_ref)
+                                {
+                                    let body = smframe::sm_durachange(it.dura, slot, it.dura_max);
+                                    send_self_frame(online, gates, chr_name, body);
+                                }
+                            }
+                        }
+                        None => {
+                            // `boSpellFail` 保持 true ⇒ `:644-647 return false` ⇒ 调用方
+                            // `Attack.cs:1279-1281` 补**恰一条** `SM_MAGICFIRE_FAIL(639)`；
+                            // 无效果体、零抽、无 `RM_MAGICFIRE`/LVEXP（`SM_SPELL` 已在更早处发）。
+                            bo_spell_fail = true;
+                        }
+                    }
+                }
+                if bo_spell_fail {
+                    let fail = smframe_ext::sm_magicfire_fail(actor_id);
+                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
+                } else {
+                    let outcome = match req.magic_id {
+                        1 | 5 => world.cast_fireball_spell(
+                            actor_id,
+                            magic,
+                            magic_level,
+                            target_id,
+                            tx,
+                            ty,
+                            anti_magic,
+                            mc,
+                        ),
+                        11 | 45 => world.cast_lightening_spell(
+                            actor_id,
+                            magic,
+                            magic_level,
+                            target_id,
+                            anti_magic,
+                            mc,
+                        ),
+                        13 => world.cast_firecharm_spell(
+                            actor_id,
+                            magic,
+                            magic_level,
+                            target_id,
+                            tx,
+                            ty,
+                            anti_magic,
+                            sc,
+                        ),
+                        44 => world.cast_hb_fireball_spell(
+                            actor_id,
+                            magic,
+                            magic_level,
+                            target_id,
+                            tx,
+                            ty,
+                            anti_magic,
+                            mc,
+                        ),
+                        _ => unreachable!("B1 集合已由外层 matches! 限定"),
+                    };
+                    // 共享尾（`MagicManager.cs:644-669`）：`bo_train` 来自 oracle 返回值；
+                    // `RM_MAGICFIRE` 的 ActorId = case 之后（可能再次置 null）的 target。
+                    finish_spell_tail(
+                        world,
+                        online,
+                        gates,
+                        saves,
+                        chr_name,
+                        actor_id,
+                        magic,
+                        req.magic_id,
+                        magic_level,
+                        matched.as_ref().map_or(0, |m| m.tran_point),
+                        outcome.bo_train,
+                        caster_abil_level,
+                        tx,
+                        ty,
+                        outcome.target.unwrap_or(0),
+                    );
+                }
+            }
+        } else {
+            glog!(
+                "DBG",
+                "CM_SPELL：B1 魔号 {} 无 MagicInfo ⇒ 效果体不接（登记）",
+                req.magic_id
+            );
+        }
+    }
+
     // **P1（`openmir2-spell-shared-tail-p1`）**：`MagicManager.cs:644-669` 共享尾 —— `default` 支的
     // A 类（NoSwitchCase）/ B 类（NoEffectCase）魔号。
     //
@@ -11305,6 +11529,7 @@ mod tests {
             max_hand_weight: 12,
         };
         let sub = game_svr::ability::SubAbility {
+            anti_magic: 3,
             hit_point: 5,
             speed_point: 15,
             ..game_svr::ability::SubAbility::default()
@@ -11324,6 +11549,10 @@ mod tests {
             (e.hp, e.max_hp, e.level),
             (18, 19, 1),
             "HP/MaxHP/Level ← WAbil"
+        );
+        assert_eq!(
+            e.anti_magic, 3,
+            "AntiMagic ← SubAbility（RecalcAbilitys 的 1 + AddAbil.AntiMagic）"
         );
     }
 
@@ -26339,8 +26568,10 @@ mod tests {
                 0
             );
         }
-        // DeferredCase / 战士：本片不得新增尾帧（1/14/36 无既有尾；3 是战士门）。
-        for magic_id in [1u16, 3, 14, 36] {
+        // DeferredCase / 战士：P1 本片不得新增尾帧（14/36 无既有尾；3 是战士门）。
+        // **1 已由 P3-B1（openmir2-spell-shared-tail-p3b1）接线** ⇒ 不再属于「被排除面」；
+        // 其帧面/取数由下方 B1 用例断言。
+        for magic_id in [3u16, 14, 36] {
             let mut rig =
                 SpellFrameRig::new(magic_id, &[(magic_id, 9)], &[("obs", 12, 11, false, 912)]);
             rig.cast(magic_id, (12, 11), 0);
@@ -26421,6 +26652,631 @@ mod tests {
                 spell_tail_bo_train(id),
                 None,
                 "魔号 {id} 不得进入 P1 共享尾（严格集合，无 catch-all）"
+            );
+        }
+    }
+
+    // ═════════════════ 卡 `openmir2-spell-shared-tail-p3b1`（B1：1/5/11/13/44/45）═════════════════
+    //
+    // 全部走**生产入口** `handle_spell_cmd`（default 支 ∧ 非战士 ∧ 距离门 ⇒ `:159 SM_SPELL` →
+    // 效果体 → `:648 SM_MAGICFIRE` → `:659 SM_MAGIC_LVEXP`）。取数断言 = **手写 oracle 调用序**
+    // 的对照流逐状态相等（不调用生产 helper 生成期望），而不是只看单抽/总数。
+
+    /// B1 专用夹具：`SpellFrameRig` + 可预测的威力参数。
+    /// `power=5,max_power=10,def_power=2,def_max_power=8,train_lv=3`；
+    /// `train_level=[0;4]`（门开）、`max_train=[1000;4]`（不升级，TranPoint 可精确断言）。
+    fn b1_rig(magic_id: u16, effect: u8) -> SpellFrameRig {
+        let mut rig = SpellFrameRig::new(
+            magic_id,
+            &[(magic_id, effect)],
+            &[("obs", 12, 11, false, 912)],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id,
+            effect,
+            effect_type: 4,
+            power: 5,
+            max_power: 10,
+            def_power: 2,
+            def_max_power: 8,
+            train_lv: 3,
+            train_level: [0; 4],
+            max_train: [1000; 4],
+            ..mir2_data::MagicInfo::default()
+        }]);
+        rig
+    }
+
+    /// 往 B1 夹具里加一个**普通怪**目标（`Race >= Animal` ⇒ `boTrain` 可为真）。
+    ///
+    /// `anti_magic` 保持 `Entity::new` 的 0 = oracle ctor（`BaseObject.cs:390`）；普通
+    /// `MonGen` 生成路径**不调用** `RecalcAbilitys` ⇒ `Random(10) >= 0` **恒真**，骰门永不失败。
+    /// 返回 `(actor_id)`；`world.tick()` 让它落格（`cetin_near_xy` 走格表）。
+    fn b1_monster(rig: &mut SpellFrameRig, x: i32, y: i32, level: u8, life: u8) -> i32 {
+        let mut e = mir2_world::Entity::new(0, "mob".to_string(), x, y);
+        e.race = mir2_world::ACTOR_RACE_ANIMAL;
+        e.level = level;
+        e.life_attrib = life;
+        let id = rig.world.add_entity(e);
+        rig.world.tick();
+        id
+    }
+
+    /// 往 B1 夹具里加一个**玩家**目标：`anti_magic = 1` = `RecalcAbilitys` 的
+    /// `1 + AddAbil.AntiMagic`（`BaseObject.Abil.cs:30/67`，= 会话 `SubAbility.anti_magic`）。
+    ///
+    /// 骰门**失败支**必须用它：普通怪 `anti_magic = 0` 时 `Random(10) >= 0` 恒真，
+    /// 构造不出 `Random(10) < AntiMagic`（oracle 的普通怪同样永不失败）。
+    fn b1_player(rig: &mut SpellFrameRig, x: i32, y: i32, level: u8, life: u8) -> i32 {
+        let mut e = mir2_world::Entity::new(0, "player".to_string(), x, y);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        e.level = level;
+        e.life_attrib = life;
+        e.anti_magic = 1;
+        let id = rig.world.add_entity(e);
+        rig.world.tick();
+        id
+    }
+
+    /// 找第一个满足 `Random(10)` 关系的种子（`eq` 给定时精确相等；否则 `>= lo`）。
+    ///
+    /// 普通怪目标 `anti_magic = 0` ⇒ 传 `lo = 0`（骰门恒过）；失败支传 `eq = Some(0)`
+    /// 并配 `b1_player`（`anti_magic = 1`）。
+    fn b1_seed(lo: i32, eq: Option<i32>) -> i32 {
+        (9000..100000)
+            .find(|s| {
+                let roll = mir2_shared::rng::RandomNumber::with_seed(*s).random_below(10);
+                eq.map_or(roll >= lo, |v| roll == v)
+            })
+            .expect("seed")
+    }
+
+    /// 手写 oracle 取数序（独立于生产 helper）：返回「恰好走完这条序」的对照流。
+    ///
+    /// 每项按 `MagicManager.cs` 的表达式求值序：
+    /// `Random(10)` → `MPow` → `GetPower` → `GetAttackPower`（玩家 override：
+    /// `Random(range+1)` + `Luck<=0` 的 `Random(10)`）→（44 的推挤两支）→ 尾 `Random(3)`。
+    /// `stat` = MC 或 SC（`WAbil` 的机器字，低/高字节各一）。
+    fn b1_replay(
+        seed: i32,
+        magic: &mir2_data::MagicInfo,
+        stat: i32,
+        push: bool,
+        tail: bool,
+    ) -> mir2_shared::rng::RandomNumber {
+        let mut c = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let _dice = c.random_below(10);
+        let _mpow = c.random_below(i32::from(magic.max_power) - i32::from(magic.power));
+        let _get_power =
+            c.random_below(i32::from(magic.def_max_power) - i32::from(magic.def_power));
+        let lo = i32::from((stat & 0xff) as u8);
+        let hi = i32::from(((stat >> 8) & 0xff) as u8);
+        // `GetAttackPower(..., Hi-Lo+1)` 内部再 `Random(nPower + 1)` ⇒ 参数是 `Δ+2`。
+        let _atk = c.random_below(hi - lo + 2);
+        let _luck = c.random_below(10);
+        if push {
+            let _p20 = c.random_below(20);
+            let _plv = c.random_below(1); // 本夹具 magic level = 1
+        }
+        if tail {
+            let _tail = c.random_below(3);
+        }
+        c
+    }
+
+    fn b1_rcd(rig: &SpellFrameRig) -> (u8, i32) {
+        let rcd = rig.saves["caster"].record.data.magic.as_ref().unwrap()[0]
+            .as_ref()
+            .unwrap();
+        (rcd.level, rcd.tran_point)
+    }
+
+    /// **B1-T1（魔号 1/5，火球/大火球）**：门序 `MagCanHitTarget → IsProperTarget →
+    /// AntiMagic <= Random(10) → 距离 → 威力`；帧面 `SM_SPELL → SM_MAGICFIRE`（观察者），
+    /// `SM_MAGICFIRE → SM_MAGIC_LVEXP`（自己）；取数序 = 手写对照流。
+    ///
+    /// 红检：① 去掉效果体 ⇒ 取数 6→0、MAGICFIRE ActorId 变 0 ⇒ 红；
+    /// ② 把 `bo_train` 写死 false ⇒ 尾少 1 抽、无 LVEXP ⇒ 红；
+    /// ③ 把骰门挪到 `IsProperTarget` 之前（对不可攻击目标也抽）⇒ 不可攻击用例红（见 T6）。
+    #[test]
+    fn spell_p3b1_fireball_family_draw_order_and_frames() {
+        for magic_id in [1u16, 5] {
+            let seed = b1_seed(0, None); // 普通怪 anti_magic=0 ⇒ 骰门恒过（`Random(10) >= 0`）
+            let mut rig = b1_rig(magic_id, 9);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let target = b1_monster(&mut rig, 11, 10, 1, 0);
+            let before = rig.world.rng.clone();
+            rig.cast(magic_id, (11, 10), target);
+            let (frames, _raws) = rig.drain();
+
+            let obs = sf_seq(&frames, 912);
+            assert_eq!(
+                obs.iter()
+                    .filter(|id| **id == mir2_protocol::messages::SM_SPELL)
+                    .count(),
+                1,
+                "[{magic_id}] 观察者恰 1 条 SM_SPELL；实得 {obs:?}"
+            );
+            assert_eq!(
+                obs.iter()
+                    .filter(|id| **id == mir2_protocol::messages::SM_MAGICFIRE)
+                    .count(),
+                1,
+                "[{magic_id}] 观察者恰 1 条 SM_MAGICFIRE；实得 {obs:?}"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGICFIRE),
+                1,
+                "[{magic_id}] 施法者自己也收 SM_MAGICFIRE（处理器无自守卫）"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                1,
+                "[{magic_id}] 训练门开口 ⇒ 恰 1 条 LVEXP（仅自己）"
+            );
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0
+            );
+            // `RM_MAGICFIRE` 的 ActorId = 命中目标；坐标 = snap 后 (11,10)。
+            let fire = sf_first(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE);
+            assert_eq!(sf_magicfire_target_id(fire), target);
+            let cmd = mir2_protocol::frame::CommandMessage::from_bytes(fire).unwrap();
+            assert_eq!((cmd.param, cmd.tag), (11, 10));
+            // 取数序：6 抽（骰 + MPow + GetPower + atk + luck + 尾）。
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                6,
+                "[{magic_id}] 1/5 取数须恰 6 抽"
+            );
+            let magic = rig.magic_table.get(magic_id).unwrap().clone();
+            let control = b1_replay(seed, &magic, 0, false, true);
+            assert_eq!(
+                format!("{:?}", rig.world.rng),
+                format!("{control:?}"),
+                "[{magic_id}] 取数序列必须逐项 = 手写 oracle 序"
+            );
+            // 尾抽 = 对照流最后一步；TranPoint 回写 = `Random(3)+1`。
+            let mut seq = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let _ = seq.random_below(10);
+            let _ = seq.random_below(5);
+            let _ = seq.random_below(6);
+            let _ = seq.random_below(2); // `Random(ΔMC + 2)`，MC=0
+            let _ = seq.random_below(10);
+            let want_tp = seq.random_below(3) + 1;
+            let (level, tran) = b1_rcd(&rig);
+            assert_eq!(tran, want_tp, "[{magic_id}] TranPoint = Random(3)+1");
+            assert_eq!(level, 1, "max_train 拉高 ⇒ 不升级");
+        }
+    }
+
+    /// **B1-T2（魔号 11/45，雷电/同类骰门支）**：无 `MagCanHitTarget` 门；
+    /// `IsProperTarget → Random(10) >= AntiMagic → 威力（不死 ×1.5）`。
+    /// 取数序同 1/5（6 抽），目标 = 不死系怪物。
+    ///
+    /// 红检：① 把 `MagCanHitTarget` 误加给 11/45（oracle 没有）⇒ 现有几何仍过，不红；
+    /// 但把 `IsProperTarget` 挪到骰后 ⇒ 不可攻击目标会多抽 1 次 ⇒ T6 红；
+    /// ② 去掉不死 ×1.5（纯数值）由 `crates/world` 的 `lightening_undead_multiplier` 直调用例兜底。
+    #[test]
+    fn spell_p3b1_lightening_family_draw_order_and_frames() {
+        for magic_id in [11u16, 45] {
+            let seed = b1_seed(0, None); // 普通怪 anti_magic=0 ⇒ 骰门恒过
+            let mut rig = b1_rig(magic_id, 9);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let target = b1_monster(&mut rig, 11, 10, 1, mir2_world::magic_effect::LA_UNDEAD);
+            let _ = target;
+            let before = rig.world.rng.clone();
+            rig.cast(magic_id, (11, 10), target);
+            let (frames, _raws) = rig.drain();
+
+            let obs = sf_seq(&frames, 912);
+            assert_eq!(
+                obs.iter()
+                    .filter(|id| **id == mir2_protocol::messages::SM_MAGICFIRE)
+                    .count(),
+                1,
+                "[{magic_id}] 观察者恰 1 条 SM_MAGICFIRE；实得 {obs:?}"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                1,
+                "[{magic_id}] 训练尾恰 1 条 LVEXP"
+            );
+            let fire = sf_first(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE);
+            assert_eq!(sf_magicfire_target_id(fire), target);
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                6,
+                "[{magic_id}] 11/45 取数须恰 6 抽（骰+MPow+GetPower+atk+luck+尾）"
+            );
+            let magic = rig.magic_table.get(magic_id).unwrap().clone();
+            let control = b1_replay(seed, &magic, 0, false, true);
+            assert_eq!(
+                format!("{:?}", rig.world.rng),
+                format!("{control:?}"),
+                "[{magic_id}] 取数序列必须逐项 = 手写 oracle 序"
+            );
+        }
+    }
+
+    /// **B1-T3（魔号 13，灵魂火符）**：护身符门（`CheckAmulet(1,1)`/`UseAmulet(1,1)`）先于效果体；
+    /// 过门 ⇒ 耐久帧 → 效果体取数 → 共享尾。**`boSpellFail` 失败支：恰一条 639、零抽、无尾**。
+    ///
+    /// 红检：① 去掉护身符门 ⇒ 无护身符用例的零抽/639 断言红；② 把 `UseAmulet` 挪到效果体之后
+    /// ⇒ 自己帧序 `SM_DURACHANGE` 不再先于 `SM_MAGICFIRE` ⇒ 红；③ 把骰门挪到 `MagCanHitTarget`
+    /// 之前 ⇒ 不可攻击目标多 1 抽（见本条第三段）⇒ 红。
+    #[test]
+    fn spell_p3b1_firecharm_amulet_gate_tail_and_asymmetry() {
+        const SM_DURACHANGE: u16 = mir2_protocol::messages::SM_DURACHANGE;
+
+        // ① 有护身符、目标可攻击 ⇒ 6 抽 + 耐久帧 + 尾。
+        {
+            let seed = b1_seed(0, None); // 普通怪 anti_magic=0 ⇒ 骰门恒过
+            let mut rig = b1_rig(13, 9);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let target = b1_monster(&mut rig, 11, 10, 1, 0);
+            let before = rig.world.rng.clone();
+            rig.cast(13, (11, 10), target);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(draws_between(&before, &rig.world.rng), 6, "13 取数恰 6 抽");
+            let magic = rig.magic_table.get(13).unwrap().clone();
+            let control = b1_replay(seed, &magic, 0, false, true);
+            assert_eq!(
+                format!("{:?}", rig.world.rng),
+                format!("{control:?}"),
+                "13 取数序列 = 手写 oracle 序（SC 口径同形）"
+            );
+            let self_seq = sf_seq(&frames, 911);
+            let i_dura = self_seq
+                .iter()
+                .position(|id| *id == SM_DURACHANGE)
+                .expect("UseAmulet ⇒ 自己收 SM_DURACHANGE");
+            let i_fire = self_seq
+                .iter()
+                .position(|id| *id == mir2_protocol::messages::SM_MAGICFIRE)
+                .expect("自己收 SM_MAGICFIRE");
+            assert!(
+                i_dura < i_fire,
+                "UseAmulet 先于效果体/尾；实得 {self_seq:?}"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                1
+            );
+            let slot = game_svr::ability::SLOT_ARMRING_L;
+            let dura = rig.ground_sessions["caster"].use_items[slot]
+                .as_ref()
+                .unwrap()
+                .dura;
+            assert_eq!(dura, 500, "Dura 600 - 1*100 = 500");
+        }
+
+        // ② 无护身符 ⇒ boSpellFail：恰一条 639（自己+观察者）、零抽、无 MAGICFIRE/LVEXP。
+        {
+            let seed = b1_seed(0, None); // 普通怪 anti_magic=0 ⇒ 骰门恒过
+            let mut rig = b1_rig(13, 9);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            rig.ground_sessions.get_mut("caster").unwrap().use_items
+                [game_svr::ability::SLOT_ARMRING_L] = None;
+            let target = b1_monster(&mut rig, 11, 10, 1, 0);
+            let before = rig.world.rng.clone();
+            rig.cast(13, (11, 10), target);
+            let (frames, _raws) = rig.drain();
+            for socket in [911, 912] {
+                assert_eq!(
+                    sf_count(&frames, socket, mir2_protocol::messages::SM_MAGICFIRE_FAIL),
+                    1,
+                    "无护身符 ⇒ socket {socket} 恰一条 639；实得 {:?}",
+                    sf_seq(&frames, socket)
+                );
+                assert_eq!(
+                    sf_count(&frames, socket, mir2_protocol::messages::SM_MAGICFIRE),
+                    0
+                );
+                assert_eq!(
+                    sf_count(&frames, socket, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                    0
+                );
+            }
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL),
+                1,
+                ":159 的 SM_SPELL 已发（护身符门在 switch 内）"
+            );
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                0,
+                "护身符门不过 ⇒ 世界 RNG 零抽"
+            );
+        }
+
+        // ③ 有护身符、但目标不可攻击（invisible）：`MagCanHitTarget` 过 → `IsProperTarget` 失败
+        //    ⇒ **零抽**、target **仍保留**（oracle 只有 MagCanHitTarget 失败才置 null）⇒
+        //    `SM_MAGICFIRE` ActorId = 目标；无 LVEXP（boTrain=false）；耐久仍扣。
+        {
+            let seed = b1_seed(0, None); // 普通怪 anti_magic=0 ⇒ 骰门恒过
+            let mut rig = b1_rig(13, 9);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let target = b1_monster(&mut rig, 11, 10, 1, 0);
+            rig.world.entities.get_mut(target).unwrap().invisible = true;
+            let before = rig.world.rng.clone();
+            rig.cast(13, (11, 10), target);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                0,
+                "IsProperTarget 失败 ⇒ 零抽（骰在它之后）"
+            );
+            let fire = sf_first(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE);
+            assert_eq!(
+                sf_magicfire_target_id(fire),
+                target,
+                "13 的 IsProperTarget 失败**不**置 null ⇒ 尾仍带目标 id"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0
+            );
+            assert_eq!(
+                sf_count(&frames, 911, SM_DURACHANGE),
+                1,
+                "UseAmulet 在内层 switch 之前 ⇒ 无条件消耗"
+            );
+        }
+    }
+
+    /// **B1-T4（魔号 44，魔血火球）**：威力之后另有推挤两抽
+    /// （`Random(20)`、`Random(Level)`）；`boTrain` 只看 `Race >= Animal`（与推挤无关）。
+    ///
+    /// 红检：① 删掉推挤两抽 ⇒ 8→6 ⇒ 红；② 把推挤抽挪到威力之前 ⇒ 对照流状态不等 ⇒ 红；
+    /// ③ 用推挤结果当 `boTrain` ⇒ 弱目标用例的 LVEXP 计数红。
+    #[test]
+    fn spell_p3b1_hb_fireball_push_draws_follow_power() {
+        // ① 施法者 5 级 > 目标 1 级 ⇒ 推挤门开 ⇒ +2 抽（共 8）。
+        {
+            let seed = b1_seed(0, None); // 普通怪 anti_magic=0 ⇒ 骰门恒过
+            let mut rig = b1_rig(44, 9);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            rig.world.entities.get_mut(rig.caster).unwrap().level = 5;
+            let target = b1_monster(&mut rig, 11, 10, 1, 0);
+            let before = rig.world.rng.clone();
+            rig.cast(44, (11, 10), target);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                8,
+                "44 推挤门开 ⇒ 骰+MPow+GetPower+atk+luck+Random(20)+Random(Level)+尾"
+            );
+            let magic = rig.magic_table.get(44).unwrap().clone();
+            let control = b1_replay(seed, &magic, 0, true, true);
+            assert_eq!(
+                format!("{:?}", rig.world.rng),
+                format!("{control:?}"),
+                "推挤两抽必须在威力之后、尾之前"
+            );
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE),
+                1
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                1
+            );
+        }
+        // ② 同级（1 vs 1）⇒ 推挤门关 ⇒ 只 6 抽；尾仍发（boTrain 由 Race 决定）。
+        {
+            let seed = b1_seed(0, None); // 普通怪 anti_magic=0 ⇒ 骰门恒过
+            let mut rig = b1_rig(44, 9);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let target = b1_monster(&mut rig, 11, 10, 1, 0);
+            let before = rig.world.rng.clone();
+            rig.cast(44, (11, 10), target);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(draws_between(&before, &rig.world.rng), 6);
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                1,
+                "race >= Animal ⇒ boTrain=true（不依赖推挤）"
+            );
+        }
+    }
+
+    /// **B1-T5（训练尾，六个魔号）**：门开（`train_level[Level]=0`）与门关（`=255`）**恰差 1 抽**；
+    /// 门开回写 `TranPoint = Random(3)+1`、发恰 1 条 LVEXP；门关 TranPoint 不变、无 LVEXP；
+    /// 两种情况 `SM_MAGICFIRE` 都恰 1 条（尾本身不受训练门影响）。
+    ///
+    /// 红检：① 尾不放 `bo_train` 门内（无条件抽）⇒ 门关多 1 抽 ⇒ 红；
+    /// ② 尾提前到效果体之前 ⇒ 对照流状态不等 ⇒ 红；③ 不回写 `saves` ⇒ TranPoint 断言红。
+    #[test]
+    fn spell_p3b1_training_gate_differs_by_exactly_one_draw() {
+        for magic_id in [1u16, 5, 11, 13, 44, 45] {
+            let seed = b1_seed(0, None); // 普通怪 anti_magic=0 ⇒ 骰门恒过
+            let target_xy = (11, 10);
+            // 门开
+            let mut open = b1_rig(magic_id, 9);
+            open.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let target = b1_monster(&mut open, target_xy.0, target_xy.1, 1, 0);
+            let before = open.world.rng.clone();
+            open.cast(magic_id, target_xy, target);
+            let (open_frames, _raws) = open.drain();
+            let open_draws = draws_between(&before, &open.world.rng);
+            let (open_level, open_tp) = b1_rcd(&open);
+            assert_eq!(
+                sf_count(&open_frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                1,
+                "[{magic_id}] 门开 ⇒ 恰 1 条 LVEXP"
+            );
+            assert_eq!(open_level, 1, "[{magic_id}] max_train 拉高 ⇒ 不升级");
+            assert!(
+                (1..=3).contains(&open_tp),
+                "[{magic_id}] TranPoint = Random(3)+1；实得 {open_tp}"
+            );
+            // 门关
+            let mut closed = b1_rig(magic_id, 9);
+            closed.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+                magic_id,
+                effect: 9,
+                effect_type: 4,
+                power: 5,
+                max_power: 10,
+                def_power: 2,
+                def_max_power: 8,
+                train_lv: 3,
+                train_level: [255; 4],
+                max_train: [1000; 4],
+                ..mir2_data::MagicInfo::default()
+            }]);
+            closed.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let target = b1_monster(&mut closed, target_xy.0, target_xy.1, 1, 0);
+            let before = closed.world.rng.clone();
+            closed.cast(magic_id, target_xy, target);
+            let (closed_frames, _raws) = closed.drain();
+            let closed_draws = draws_between(&before, &closed.world.rng);
+            let (closed_level, closed_tp) = b1_rcd(&closed);
+            assert_eq!(
+                open_draws,
+                closed_draws + 1,
+                "[{magic_id}] 训练门开/关必须恰差 1 抽（开 {open_draws} / 关 {closed_draws}）"
+            );
+            assert_eq!(
+                sf_count(&closed_frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0,
+                "[{magic_id}] 门关 ⇒ 无 LVEXP"
+            );
+            assert_eq!(closed_tp, 0, "[{magic_id}] 门关 ⇒ TranPoint 不变");
+            assert_eq!(closed_level, 1);
+            for (tag, frames) in [("开", &open_frames), ("关", &closed_frames)] {
+                assert_eq!(
+                    sf_count(frames, 912, mir2_protocol::messages::SM_MAGICFIRE),
+                    1,
+                    "[{magic_id}] 训练门{tag} ⇒ SM_MAGICFIRE 仍恰 1 条"
+                );
+                assert_eq!(
+                    sf_count(frames, 911, mir2_protocol::messages::SM_MAGICFIRE),
+                    1
+                );
+            }
+        }
+    }
+
+    /// **B1-T6（失败支/门序牙）**：
+    /// - 骰失败（`Random(10) = 0 < AntiMagic=1`）：**目标必须是 `anti_magic >= 1` 的玩家/宝宝**——
+    ///   普通怪 ctor 的 `AntiMagic = 0`（`BaseObject.cs:390`）且生成路径不调 `RecalcAbilitys`
+    ///   ⇒ `Random(10) >= 0` 恒真，构造不出失败支。用 [`b1_player`]（`SubAbility.anti_magic = 1`）：
+    ///   1/5/11/44/45 恰 **1 抽**、target 置 null ⇒ `SM_MAGICFIRE` ActorId=0、无 LVEXP；
+    ///   13 骰失败 target **保留** ⇒ ActorId=目标、仍 1 抽。
+    /// - 不可攻击目标（invisible）：`IsProperTarget` 在骰之前 ⇒ **零抽**；1/5/11/44/45 置 null、
+    ///   13 保留（后者见 T3）。
+    /// - 死目标：`:160-163` 先归一 ⇒ targetObject=null ⇒ 六者**零抽**、ActorId=0。
+    ///
+    /// 红检：① 骰门挪到 `IsProperTarget` 之前 ⇒ 不可攻击目标多 1 抽 ⇒ 红；② 骰失败不置 null
+    /// ⇒ ActorId 断言红；③ 去掉 `:160-163` 死亡归一 ⇒ 死目标 ActorId=死者 id ⇒ 红。
+    #[test]
+    fn spell_p3b1_failure_branches_null_rules_and_zero_draws() {
+        let fail_seed = b1_seed(0, Some(0));
+        // ⓪ 普通怪目标 `anti_magic = 0`（ctor，`BaseObject.cs:390`；生成路径不调
+        //    `RecalcAbilitys`）：即使 `Random(10) = 0`，骰门 `0 >= 0` 也**通过** ⇒ 走完整
+        //    6 抽、目标保留。**牙**：若把普通怪回落改回 1（旧实现），本段只剩 1 抽且 ActorId=0 ⇒ 红。
+        for magic_id in [1u16, 5, 11, 44, 45] {
+            let mut rig = b1_rig(magic_id, 9);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(fail_seed);
+            let target = b1_monster(&mut rig, 11, 10, 1, 0);
+            let before = rig.world.rng.clone();
+            rig.cast(magic_id, (11, 10), target);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                6,
+                "[{magic_id}] 普通怪 anti_magic=0 ⇒ 骰门 0>=0 通过（回落 1 会只抽 1）"
+            );
+            let fire = sf_first(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE);
+            assert_eq!(
+                sf_magicfire_target_id(fire),
+                target,
+                "[{magic_id}] 普通怪目标骰门通过 ⇒ 尾带目标 ActorId"
+            );
+        }
+        // ① 骰失败：目标 = 玩家（`anti_magic = 1`）；普通怪 `anti_magic = 0` 时骰门恒过。
+        for magic_id in [1u16, 5, 11, 44, 45] {
+            let mut rig = b1_rig(magic_id, 9);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(fail_seed);
+            let target = b1_player(&mut rig, 11, 10, 1, 0);
+            let before = rig.world.rng.clone();
+            rig.cast(magic_id, (11, 10), target);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                1,
+                "[{magic_id}] 骰失败只抽 Random(10) 一次"
+            );
+            let fire = sf_first(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE);
+            assert_eq!(
+                sf_magicfire_target_id(fire),
+                0,
+                "[{magic_id}] 骰失败 ⇒ targetObject=null ⇒ ActorId=0"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0,
+                "[{magic_id}] 骰失败 ⇒ boTrain=false ⇒ 无 LVEXP"
+            );
+        }
+        // 13 骰失败：target 保留（`:334` 无 else）；同样用 `anti_magic = 1` 的玩家目标。
+        {
+            let mut rig = b1_rig(13, 9);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(fail_seed);
+            let target = b1_player(&mut rig, 11, 10, 1, 0);
+            let before = rig.world.rng.clone();
+            rig.cast(13, (11, 10), target);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(draws_between(&before, &rig.world.rng), 1);
+            let fire = sf_first(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE);
+            assert_eq!(
+                sf_magicfire_target_id(fire),
+                target,
+                "13 骰失败**不**置 null（oracle 非对称）"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0
+            );
+        }
+        // ② 不可攻击目标（invisible）⇒ 零抽；1/5/11/44/45 置 null。
+        for magic_id in [1u16, 5, 11, 44, 45] {
+            let mut rig = b1_rig(magic_id, 9);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(fail_seed);
+            let target = b1_monster(&mut rig, 11, 10, 1, 0);
+            rig.world.entities.get_mut(target).unwrap().invisible = true;
+            let before = rig.world.rng.clone();
+            rig.cast(magic_id, (11, 10), target);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                0,
+                "[{magic_id}] IsProperTarget 失败在骰之前 ⇒ 零抽"
+            );
+            let fire = sf_first(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE);
+            assert_eq!(sf_magicfire_target_id(fire), 0);
+        }
+        // ③ 死目标：六者都零抽 + ActorId=0（13 的 `MagCanHitTarget(null)` 也会置 null）。
+        for magic_id in [1u16, 5, 11, 13, 44, 45] {
+            let mut rig = b1_rig(magic_id, 9);
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(fail_seed);
+            let target = b1_monster(&mut rig, 11, 10, 1, 0);
+            rig.world.entities.get_mut(target).unwrap().death = true;
+            let before = rig.world.rng.clone();
+            rig.cast(magic_id, (11, 10), target);
+            let (frames, _raws) = rig.drain();
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                0,
+                "[{magic_id}] 死目标在 case 之前已归一 ⇒ 零抽"
+            );
+            let fire = sf_first(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE);
+            assert_eq!(
+                sf_magicfire_target_id(fire),
+                0,
+                "[{magic_id}] 死目标 ⇒ ActorId=0"
             );
         }
     }
@@ -26793,13 +27649,17 @@ mod tests {
         let frames = take_wire(&mut rx0);
         assert_eq!(
             frames,
-            vec![(912, mir2_protocol::messages::SM_SPELL)],
-            "1018 后同魔号门过：无 639（正常施放）"
+            vec![
+                (912, mir2_protocol::messages::SM_SPELL),
+                (911, mir2_protocol::messages::SM_MAGICFIRE),
+                (912, mir2_protocol::messages::SM_MAGICFIRE),
+            ],
+            "1018 后同魔号门过：无 639（正常施放：SM_SPELL → 共享尾 MAGICFIRE）"
         );
         assert_eq!(
             draws_between(&rng_before, &world.rng),
             0,
-            "魔号 1 无效果体（效果体层未接）⇒ 零抽；门已放行"
+            "魔号 1 无目标 ⇒ 效果体零抽；门已放行、尾帧照发"
         );
     }
 
@@ -26846,8 +27706,12 @@ mod tests {
         );
         assert_eq!(
             take_wire(&mut rx0),
-            vec![(912, mir2_protocol::messages::SM_SPELL)],
-            "真客户端（soft=120020522, tick=0）+ 魔号 1 ⇒ 门过、无 639、无多帧"
+            vec![
+                (912, mir2_protocol::messages::SM_SPELL),
+                (911, mir2_protocol::messages::SM_MAGICFIRE),
+                (912, mir2_protocol::messages::SM_MAGICFIRE),
+            ],
+            "真客户端（soft=120020522, tick=0）+ 魔号 1 ⇒ 门过、无 639；P3-B1 尾帧照发"
         );
     }
 }

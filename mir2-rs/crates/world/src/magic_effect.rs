@@ -105,6 +105,103 @@ pub fn get_rpow(rng: &mut impl RandomSource, w_int: i32) -> u16 {
     }
 }
 
+/// **P3-B1（单体直击/骰门族）**：抗魔骰 `Random(10) >= AntiMagic` 的一抽。
+///
+/// oracle 三处同式：
+/// - `SKILL_FIREBALL`/`SKILL_FIREBALL2`（`MagicManager.cs:180`：`AntiMagic <= Random(10)`）；
+/// - `SKILL_LIGHTENING`（`:292`：`Random(10) >= AntiMagic`）；
+/// - `SKILL_45`（`:566`：同 11）；
+/// - `SKILL_FIRECHARM`（`:334`：`Random(10) >= AntiMagic`）。
+///
+/// 返回 `true` = 骰门**通过**（后续才取威力）；`false` = 失败（oracle 置 `targetObject = null`）。
+/// **注意**：本函数只负责**这一抽**；`MagCanHitTarget`/`IsProperTarget` 是纯门、必须先过。
+#[must_use]
+pub fn anti_magic_roll(rng: &mut impl RandomSource, anti_magic: i32) -> bool {
+    rng.random_below(10) >= anti_magic
+}
+
+/// 单体直击的 MC 口径威力：`GetAttackPower(GetPower(MPow(magic)) + Lo(MC), ΔMC + 1)`。
+///
+/// 取数序（逐项，按 oracle 表达式求值序）：
+/// 1. `MPow`（`:104`）：`Random(MaxPower - Power)`；
+/// 2. `GetPower`（`:110`）：`Random(DefMaxPower - DefPower)`；
+/// 3. `GetAttackPower`（玩家 `PlayObject.cs:2909` override）：`Random(power + 1)`，
+///    `Luck <= 0` 时再 `Random(10)`。
+///
+/// 对应 `SKILL_FIREBALL(1)`/`SKILL_FIREBALL2(5)`（`MagicManager.cs:182`）、
+/// `SKILL_LIGHTENING(11)`（`:294`）、`SKILL_45(45)`（`:568`）。
+pub fn single_hit_power_mc(
+    rng: &mut impl RandomSource,
+    magic: &MagicInfo,
+    level: u8,
+    mc: i32,
+    atk: AttackPowerMode,
+) -> i32 {
+    let mp = mpow(rng, magic);
+    let base = get_power(rng, magic, level, mp) + i32::from(lo_byte(mc));
+    atk_power(
+        rng,
+        base,
+        i32::from(hi_byte(mc)) - i32::from(lo_byte(mc)) + 1,
+        atk,
+    )
+}
+
+/// 灵魂火符（`SKILL_FIRECHARM(13)`，`MagicManager.cs:337`）的 SC 口径威力：
+/// `GetAttackPower(GetPower(MPow(magic)) + Lo(SC), ΔSC + 1)`。
+///
+/// 取数序与 [`single_hit_power_mc`] 相同，只把 MC 换成 SC。
+pub fn single_hit_power_sc(
+    rng: &mut impl RandomSource,
+    magic: &MagicInfo,
+    level: u8,
+    sc: i32,
+    atk: AttackPowerMode,
+) -> i32 {
+    let mp = mpow(rng, magic);
+    let base = get_power(rng, magic, level, mp) + i32::from(lo_byte(sc));
+    atk_power(
+        rng,
+        base,
+        i32::from(hi_byte(sc)) - i32::from(lo_byte(sc)) + 1,
+        atk,
+    )
+}
+
+/// `MagicManager.MagHbFireBall`（`MagicManager.cs:1020-1064`）的推挤两抽（魔号 44）。
+///
+/// oracle 顺序（**在威力之后**）：
+/// ```text
+/// :1048 if (playObject.Abil.Level > targetObject.Abil.Level && !targetObject.StickMode)
+/// :1050   levelgap = playObject.Abil.Level - targetObject.Abil.Level
+/// :1051   if (Random(20) < 6 + userMagic.Level * 3 + levelgap)
+/// :1053     push = Random(userMagic.Level) - 1;
+/// ```
+/// `Random(0)`（`userMagic.Level == 0`）在 .NET 里仍调一次 `Sample()` ⇒ **照抽一次**再返回 0。
+///
+/// 返回 `Some(push)` 表示 oracle 会发 `RM_DELAYPUSHED`（`push > 0`）；`None` 不等于"没抽"。
+/// `StickMode` 本骨架无字段 ⇒ 调用方恒传 `false`（登记）。
+#[must_use]
+pub fn hb_fireball_push(
+    rng: &mut impl RandomSource,
+    magic_level: u8,
+    caster_level: u8,
+    target_level: u8,
+    target_stick_mode: bool,
+) -> Option<u8> {
+    if !(caster_level > target_level && !target_stick_mode) {
+        return None;
+    }
+    let level_gap = i32::from(caster_level) - i32::from(target_level);
+    if rng.random_below(20) < 6 + i32::from(magic_level) * 3 + level_gap {
+        let push = rng.random_below(i32::from(magic_level)) - 1;
+        if push > 0 {
+            return Some(push as u8);
+        }
+    }
+    None
+}
+
 /// 幽灵盾/神圣战甲术：`GetAttackPower(GetPower13(60) + Lo(SC) * 10, Hi(SC) - Lo(SC) + 1)`。
 pub fn power_defence_area(
     rng: &mut impl RandomSource,
@@ -364,5 +461,54 @@ mod tests {
             }
         }
         assert!(diff, "错式必须与正确式出现分歧（牙不成立）");
+    }
+    /// **B1**：抗魔骰 = `Random(10) >= AntiMagic`（一抽；与 `AntiMagic <= Random(10)` 同式）。
+    #[test]
+    fn anti_magic_roll_is_one_draw_and_matches_oracle_comparison() {
+        for seed in [1, 7, 42, 20261017] {
+            let mut a = RandomNumber::with_seed(seed);
+            let mut b = RandomNumber::with_seed(seed);
+            let want = b.random_below(10) >= 1;
+            assert_eq!(anti_magic_roll(&mut a, 1), want);
+            // 恰好消费 1 个样本。
+            assert_eq!(a.random(), b.random());
+        }
+        // `AntiMagic >= 10` ⇒ 恒失败（`Random(10) ∈ [0,9]`）。
+        let mut c = RandomNumber::with_seed(9);
+        assert!(!anti_magic_roll(&mut c, 10));
+        // `AntiMagic <= 0` ⇒ 恒通过。
+        let mut d = RandomNumber::with_seed(9);
+        assert!(anti_magic_roll(&mut d, 0));
+    }
+
+    /// **B1（44）**：`MagHbFireBall` 推挤门 —— 门关**零抽**；门开恰抽 `Random(20)`，
+    /// 通过后再抽 `Random(Level)`（`Level=0` 也抽，.NET `Next(0)` 仍调 `Sample()`）。
+    #[test]
+    fn hb_fireball_push_draw_order_and_gates() {
+        // 门关（caster 等级不高于目标）：零抽。
+        let mut a = RandomNumber::with_seed(5);
+        let mut b = RandomNumber::with_seed(5);
+        assert_eq!(hb_fireball_push(&mut a, 1, 1, 1, false), None);
+        assert_eq!(a.random(), b.random(), "门关不得抽任何数");
+
+        // 门开：先 Random(20)，再 Random(Level=1)。
+        let mut c = RandomNumber::with_seed(11);
+        let mut d = RandomNumber::with_seed(11);
+        let got = hb_fireball_push(&mut c, 1, 5, 1, false);
+        let p20 = d.random_below(20);
+        if p20 < 6 + 3 + 4 {
+            let plevel = d.random_below(1);
+            let push = plevel - 1;
+            assert_eq!(got, if push > 0 { Some(push as u8) } else { None });
+        } else {
+            assert_eq!(got, None, "Random(20) 未过门 ⇒ 不再抽 Random(Level)");
+        }
+        assert_eq!(format!("{c:?}"), format!("{d:?}"), "两抽次序固定");
+
+        // `StickMode = true` ⇒ 门关（本骨架无该字段，保留参数口径）。
+        let mut e = RandomNumber::with_seed(13);
+        let mut f = RandomNumber::with_seed(13);
+        assert_eq!(hb_fireball_push(&mut e, 1, 5, 1, true), None);
+        assert_eq!(e.random(), f.random());
     }
 }

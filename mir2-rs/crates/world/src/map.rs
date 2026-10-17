@@ -617,6 +617,67 @@ impl MapGrid {
     pub fn cell(&self, x: i32, y: i32) -> &MapCellInfo {
         self.get_cell_info(x, y).0
     }
+
+    /// `Envirnoment.GetNextPosition`（`src/M2Server/Maps/Envirnoment.cs:1097-1158`）逐行移植。
+    ///
+    /// 返回 `Some((nx, ny))` 表示位置实际改变（oracle 返回值 = 坐标是否变化）；
+    /// **按 oracle 的边界判断照抄**——含 `Down` 支用 `Width`（而不是 `Height`）这一处怪行为：
+    /// ```text
+    /// Up        sny > nFlag - 1
+    /// Down      sny < Width  - nFlag
+    /// Left      snx > nFlag - 1
+    /// Right     snx < Width  - nFlag
+    /// UpLeft    snx > nFlag - 1 && sny > nFlag - 1
+    /// UpRight   snx > nFlag - 1 && sny < Height - nFlag
+    /// DownLeft  snx < Width - nFlag && sny > nFlag - 1
+    /// DownRight snx < Width - nFlag && sny < Height - nFlag
+    /// ```
+    #[must_use]
+    pub fn get_next_position(&self, sx: i32, sy: i32, ndir: u8, n_flag: i32) -> Option<(i32, i32)> {
+        let (mut snx, mut sny) = (sx, sy);
+        match ndir {
+            crate::magic::DIR_UP if sny > n_flag - 1 => sny -= n_flag,
+            crate::magic::DIR_DOWN if sny < self.width - n_flag => sny += n_flag,
+            crate::magic::DIR_LEFT if snx > n_flag - 1 => snx -= n_flag,
+            crate::magic::DIR_RIGHT if snx < self.width - n_flag => snx += n_flag,
+            crate::magic::DIR_UP_LEFT if snx > n_flag - 1 && sny > n_flag - 1 => {
+                snx -= n_flag;
+                sny -= n_flag;
+            }
+            crate::magic::DIR_UP_RIGHT if snx > n_flag - 1 && sny < self.height - n_flag => {
+                snx += n_flag;
+                sny -= n_flag;
+            }
+            crate::magic::DIR_DOWN_LEFT if snx < self.width - n_flag && sny > n_flag - 1 => {
+                snx -= n_flag;
+                sny += n_flag;
+            }
+            crate::magic::DIR_DOWN_RIGHT
+                if snx < self.width - n_flag && sny < self.height - n_flag =>
+            {
+                snx += n_flag;
+                sny += n_flag;
+            }
+            _ => {}
+        }
+        if snx == sx && sny == sy {
+            None
+        } else {
+            Some((snx, sny))
+        }
+    }
+
+    /// `Envirnoment.IsValidCell`（`src/M2Server/Maps/Envirnoment.cs:1422-1430`）逐行移植。
+    ///
+    /// oracle 原式：`GetCellInfo(...); if (cellSuccess && Attribute == LowWall) return false;
+    /// return true;`。由于 `MapCellInfo.Valid` 恰是 `Attribute == Walk`，而 `GetCellInfo` 只在
+    /// `Valid` 时 `success = true` ⇒ `success && LowWall` **恒假** ⇒ 本函数**恒返回 true**
+    /// （越界/墙格都不拦）。这是 oracle 的既有怪行为，照搬（不"修正"）。
+    #[must_use]
+    pub fn is_valid_cell(&self, x: i32, y: i32) -> bool {
+        let (cell, success) = self.get_cell_info(x, y);
+        !(success && cell.attribute == CellAttribute::LowWall)
+    }
 }
 
 #[cfg(test)]
@@ -648,6 +709,52 @@ mod tests {
         assert!(!success);
         assert_eq!(cell.count(), 1, "失败时应返回第 0 格（含其对象）");
         assert_eq!(cell.obj_list[0].cell_obj_id, 999);
+    }
+
+    #[test]
+    fn get_next_position_matches_oracle_bounds_and_width_quirk() {
+        // 图 10×4（Width=10, Height=4）。
+        let g = MapGrid::new(10, 4);
+        // 上/左/左上边界：坐标不变 ⇒ None。
+        assert_eq!(g.get_next_position(0, 0, crate::magic::DIR_UP, 1), None);
+        assert_eq!(g.get_next_position(0, 0, crate::magic::DIR_LEFT, 1), None);
+        assert_eq!(
+            g.get_next_position(0, 0, crate::magic::DIR_UP_LEFT, 1),
+            None
+        );
+        assert_eq!(
+            g.get_next_position(5, 0, crate::magic::DIR_DOWN, 1),
+            Some((5, 1))
+        );
+        // oracle 怪行为：`Down` 的边界判断用 **Width**（10），不是 Height（4）⇒ y=3 仍可下走。
+        assert_eq!(
+            g.get_next_position(5, 3, crate::magic::DIR_DOWN, 1),
+            Some((5, 4))
+        );
+        // Right 用 Width；9 是最后一列 ⇒ 不移动。
+        assert_eq!(g.get_next_position(9, 0, crate::magic::DIR_RIGHT, 1), None);
+        assert_eq!(
+            g.get_next_position(8, 0, crate::magic::DIR_RIGHT, 1),
+            Some((9, 0))
+        );
+        // UpRight 的 y 用 Height：y=3 是最后一行的边界 ⇒ 不能右上。
+        assert_eq!(
+            g.get_next_position(5, 3, crate::magic::DIR_UP_RIGHT, 1),
+            None
+        );
+    }
+
+    #[test]
+    fn is_valid_cell_replicates_always_true_quirk() {
+        // oracle `IsValidCell` = `!(success && Attribute == LowWall)`；而
+        // `success = Valid = (Attribute == Walk)` ⇒ 合取恒假 ⇒ **恒 true**（越界/墙格都不拦）。
+        let mut g = MapGrid::new(4, 4);
+        g.get_cell_info_mut(1, 1)
+            .0
+            .set_attribute(CellAttribute::LowWall);
+        assert!(g.is_valid_cell(1, 1), "LowWall 时 success=false ⇒ 仍 true");
+        assert!(g.is_valid_cell(99, 99), "越界 ⇒ success=false ⇒ true");
+        assert!(g.is_valid_cell(0, 0));
     }
 
     #[test]

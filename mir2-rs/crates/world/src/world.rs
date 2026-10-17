@@ -194,6 +194,26 @@ enum RouteOutcome {
     Failed,
 }
 
+/// **P3-B1（单体直击/骰门族）**：`DoSpell` 单个目标效果体的返回值（供共享尾与用例观察）。
+///
+/// `target` = oracle `:160-163` 死亡归一 + case 内可能再次置 null 之后，共享尾
+/// `RM_MAGICFIRE` 读的 `targetObject.ActorId`（`None ⇒ 0`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpellStrikeOutcome {
+    /// 共享尾 `RM_MAGICFIRE` 的 ActorId 来源（`None ⇒ 0`）。
+    pub target: Option<i32>,
+    /// `boTrain`（`true` 才可能在共享尾抽 `Random(3)+1`）。
+    pub bo_train: bool,
+    /// `RM_DELAYMAGIC` 的威力（本仓不建延迟队列，只登记载荷）。
+    pub power: i32,
+    /// 是否排入 `RM_DELAYMAGIC`（`SendSelfDelayMsg`）。
+    pub delayed: bool,
+    /// `RM_DELAYMAGIC` 的延迟毫秒（600 / 13 的 1200）。
+    pub delay_ms: i32,
+    /// 44 的 `RM_DELAYPUSHED` 推挤格数（`push > 0` 时 oracle 才发）。
+    pub push: Option<u8>,
+}
+
 pub struct World {
     /// 地图表（下标 = `map_id`）；`World::new` 建一张 0 号图。
     pub maps: Vec<MapGrid>,
@@ -767,6 +787,263 @@ impl World {
         let n_sec = crate::magic::power_shield(&mut self.rng, magic, level, mc);
         self.magic_shield_on(actor_id, n_sec);
         n_sec
+    }
+
+    /// `SKILL_FIREBALL(1)` / `SKILL_FIREBALL2(5)` 效果体（`MagicManager.cs:174-203`）。
+    ///
+    /// 逐行顺序（**取数序即 oracle 表达式序**）：
+    /// ```text
+    /// :176 MagCanHitTarget(CurrX, CurrY, target)                       纯门
+    /// :178 IsProperTarget(target)                                      纯门
+    /// :180 target.AntiMagic <= Random(10)                              ← 第 1 抽
+    /// :180 |target.CurrX - nTargetX| <= 1 && |...Y| <= 1               纯门
+    /// :182 nPower = GetAttackPower(GetPower(MPow) + Lo(MC), ΔMC+1)     ← 第 2..5 抽
+    /// :183 SendSelfDelayMsg(RM_DELAYMAGIC, nPower, MakeLong(tx,ty), 2, target.ActorId, "", 600)
+    /// :184 if (target.Race >= Animal) boTrain = true
+    /// else 各失败支 ⇒ targetObject = null（共享尾 ActorId=0）
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_fireball_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        target_x: i32,
+        target_y: i32,
+        anti_magic: i32,
+        mc: i32,
+    ) -> SpellStrikeOutcome {
+        let Some((caster, t, tid)) = self.spell_strike_targets(caster_id, target) else {
+            return SpellStrikeOutcome::default();
+        };
+        if !self.spell_can_hit(&caster, &t) {
+            return SpellStrikeOutcome::default();
+        }
+        if !crate::combat::is_proper_target_grouped(&caster, &t, &caster.group_members) {
+            return SpellStrikeOutcome::default();
+        }
+        // `:180 targetObject.AntiMagic <= Random(10)`；失败 ⇒ `targetObject = null`。
+        if !crate::magic_effect::anti_magic_roll(&mut self.rng, anti_magic) {
+            return SpellStrikeOutcome::default();
+        }
+        if (t.x - target_x).abs() > 1 || (t.y - target_y).abs() > 1 {
+            return SpellStrikeOutcome::default();
+        }
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk);
+        SpellStrikeOutcome {
+            target: Some(tid),
+            bo_train: t.race >= crate::entity::ACTOR_RACE_ANIMAL,
+            power,
+            delayed: true,
+            delay_ms: 600,
+            push: None,
+        }
+    }
+
+    /// `SKILL_LIGHTENING(11)` / `SKILL_45(45)` 效果体（`MagicManager.cs:289-314` / `:563-588`）。
+    ///
+    /// 两个 case 的语句逐字相同（`:289-314` 与 `:563-588`）：
+    /// ```text
+    /// :291 IsProperTarget(target)                                      纯门
+    /// :292 Random(10) >= target.AntiMagic                              ← 第 1 抽
+    /// :294 nPower = GetAttackPower(GetPower(MPow) + Lo(MC), ΔMC+1)     ← 第 2..5 抽
+    /// :296 if (target.LifeAttrib == LA_UNDEAD) nPower = Round(nPower * 1.5)
+    /// :299 SendSelfDelayMsg(RM_DELAYMAGIC, nPower, MakeLong(tx,ty), 2, target.ActorId, "", 600)
+    /// :300 if (target.Race >= Animal) boTrain = true
+    /// else 各失败支 ⇒ targetObject = null
+    /// ```
+    /// **注意**：11/45 **没有** `MagCanHitTarget` 门（与 1/5 不同）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_lightening_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        anti_magic: i32,
+        mc: i32,
+    ) -> SpellStrikeOutcome {
+        let Some((caster, t, tid)) = self.spell_strike_targets(caster_id, target) else {
+            return SpellStrikeOutcome::default();
+        };
+        if !crate::combat::is_proper_target_grouped(&caster, &t, &caster.group_members) {
+            return SpellStrikeOutcome::default();
+        }
+        if !crate::magic_effect::anti_magic_roll(&mut self.rng, anti_magic) {
+            return SpellStrikeOutcome::default();
+        }
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let mut power =
+            crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk);
+        if t.life_attrib == crate::magic_effect::LA_UNDEAD {
+            // `nPower = (ushort)HUtil32.Round(nPower * 1.5)`（`:296`）。
+            power = mir2_shared::hutil::round(f64::from(power) * 1.5);
+        }
+        SpellStrikeOutcome {
+            target: Some(tid),
+            bo_train: t.race >= crate::entity::ACTOR_RACE_ANIMAL,
+            power,
+            delayed: true,
+            delay_ms: 600,
+            push: None,
+        }
+    }
+
+    /// `SKILL_FIRECHARM(13)` 效果体（`MagicManager.cs:328-351`）。
+    ///
+    /// 护身符门（`:322-325` `CheckAmulet`/`UseAmulet`）由**调用方**（宿主会话层）完成；
+    /// 门不过时 oracle `boSpellFail` 保持 true ⇒ 不调用本函数（无效果体、零抽、尾不发）。
+    ///
+    /// 逐行顺序：
+    /// ```text
+    /// :330 MagCanHitTarget(CurrX, CurrY, target)     纯门；**失败 ⇒ targetObject = null**
+    /// :332 IsProperTarget(target)                    纯门；失败 ⇒ target 保持（不置 null）
+    /// :334 Random(10) >= target.AntiMagic            ← 第 1 抽；失败 ⇒ target 保持
+    /// :336 |target.CurrX - nTargetX| <= 1 && |...Y| <= 1   纯门；失败 ⇒ target 保持
+    /// :337 nPower = GetAttackPower(GetPower(MPow) + Lo(SC), ΔSC+1)  ← 第 2..5 抽
+    /// :338 SendSelfDelayMsg(RM_DELAYMAGIC, nPower, MakeLong(tx,ty), 2, target.ActorId, "", 1200)
+    /// :339 if (target.Race >= Animal) boTrain = true
+    /// ```
+    /// ⇒ **只有 `MagCanHitTarget` 失败才把 target 置 null**；其余失败支目标保留，
+    /// 共享尾 `RM_MAGICFIRE` 仍带该 ActorId（oracle 的非对称行为，必须照抄）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_firecharm_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        target_x: i32,
+        target_y: i32,
+        anti_magic: i32,
+        sc: i32,
+    ) -> SpellStrikeOutcome {
+        let Some((caster, t, tid)) = self.spell_strike_targets(caster_id, target) else {
+            return SpellStrikeOutcome::default();
+        };
+        if !self.spell_can_hit(&caster, &t) {
+            return SpellStrikeOutcome::default();
+        }
+        // 以下失败支**保持** targetObject（`MagicManager.cs:332-341` 无 else）。
+        let stayed = SpellStrikeOutcome {
+            target: Some(tid),
+            ..SpellStrikeOutcome::default()
+        };
+        if !crate::combat::is_proper_target_grouped(&caster, &t, &caster.group_members) {
+            return stayed;
+        }
+        if !crate::magic_effect::anti_magic_roll(&mut self.rng, anti_magic) {
+            return stayed;
+        }
+        if (t.x - target_x).abs() > 1 || (t.y - target_y).abs() > 1 {
+            return stayed;
+        }
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::single_hit_power_sc(&mut self.rng, magic, level, sc, atk);
+        SpellStrikeOutcome {
+            target: Some(tid),
+            bo_train: t.race >= crate::entity::ACTOR_RACE_ANIMAL,
+            power,
+            delayed: true,
+            delay_ms: 1200,
+            push: None,
+        }
+    }
+
+    /// `SKILL_44(44)` 效果体 —— `MagicManager.MagHbFireBall`（`MagicManager.cs:1020-1064`）
+    /// 的调用点 `case SKILL_44`（`:557-562`）。
+    ///
+    /// 逐行顺序：
+    /// ```text
+    /// :1023 MagCanHitTarget(CurrX, CurrY, target)            纯门；失败 ⇒ target = null、return false
+    /// :1028 IsProperTarget(target)                           纯门；失败 ⇒ target = null、return false
+    /// :1032 target.AntiMagic > Random(10) || |Δx|>1 || |Δy|>1  ← 第 1 抽；失败 ⇒ target = null
+    /// :1038 nPower = GetAttackPower(GetPower(MPow) + Lo(MC), ΔMC+1)  ← 第 2..5 抽
+    /// :1039 SendSelfDelayMsg(RM_DELAYMAGIC, nPower, ..., target.ActorId, "", 600)
+    /// :1040 if (target.Race >= Animal) result = true
+    /// :1044 if (caster.Abil.Level > target.Abil.Level && !target.StickMode)
+    /// :1047   if (Random(20) < 6 + Level*3 + levelgap)        ← 第 6 抽
+    /// :1049     push = Random(Level) - 1                      ← 第 7 抽（Level=0 也抽）
+    /// :1050     if (push > 0) SendSelfDelayMsg(RM_DELAYPUSHED, ...)
+    /// ```
+    /// `boTrain` = `result`（只看 `Race >= Animal`，与推挤是否命中无关）。
+    /// `StickMode` 本骨架无字段 ⇒ 恒 `false`（登记）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_hb_fireball_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        target_x: i32,
+        target_y: i32,
+        anti_magic: i32,
+        mc: i32,
+    ) -> SpellStrikeOutcome {
+        let Some((caster, t, tid)) = self.spell_strike_targets(caster_id, target) else {
+            return SpellStrikeOutcome::default();
+        };
+        if !self.spell_can_hit(&caster, &t) {
+            return SpellStrikeOutcome::default();
+        }
+        if !crate::combat::is_proper_target_grouped(&caster, &t, &caster.group_members) {
+            return SpellStrikeOutcome::default();
+        }
+        // `:1032 targetObject.AntiMagic > Random(10) || ...`（短路口径与
+        // `Random(10) >= AntiMagic` 失败等价；距离检查纯量）。
+        if !crate::magic_effect::anti_magic_roll(&mut self.rng, anti_magic) {
+            return SpellStrikeOutcome::default();
+        }
+        if (t.x - target_x).abs() > 1 || (t.y - target_y).abs() > 1 {
+            return SpellStrikeOutcome::default();
+        }
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk);
+        let push = crate::magic_effect::hb_fireball_push(
+            &mut self.rng,
+            level,
+            caster.level,
+            t.level,
+            false, // `StickMode` 未建模（登记）
+        );
+        SpellStrikeOutcome {
+            target: Some(tid),
+            bo_train: t.race >= crate::entity::ACTOR_RACE_ANIMAL,
+            power,
+            delayed: true,
+            delay_ms: 600,
+            push,
+        }
+    }
+
+    /// 取 `(施法者, 目标, 目标 id)`（均 clone ⇒ 后续可安全 `&mut self.rng`）。
+    /// `target` 为 `None` / 实体不存在 ⇒ `None`（oracle 的 `targetObject == null`）。
+    fn spell_strike_targets(
+        &self,
+        caster_id: i32,
+        target: Option<i32>,
+    ) -> Option<(Entity, Entity, i32)> {
+        let caster = self.entities.get(caster_id)?.clone();
+        let tid = target?;
+        let t = self.entities.get(tid)?.clone();
+        Some((caster, t, tid))
+    }
+
+    /// `BaseObject.MagCanHitTarget` 的世界层调用（图 = 施法者当前图；目标坐标 = 实体坐标）。
+    fn spell_can_hit(&self, caster: &Entity, target: &Entity) -> bool {
+        crate::magic::mag_can_hit_target(
+            self.map(caster.map_id),
+            caster.x,
+            caster.y,
+            target.x,
+            target.y,
+        )
     }
 
     /// **片 A-5（buff 生产者接线）**：技能 14/15（`SKILL_HANGMAJINBUB`/`SKILL_DEJIWONHO`）的生产入口
@@ -4590,5 +4867,62 @@ mod tests {
         let hits = w.cast_defence_area_spell(1, &m, 0, 0, 12, 12, 0);
         assert_eq!(hits, 0, "HAM_DEAR ⇒ 非配偶友军不被加点");
         assert!(!w.buffs.has_buff(2, BuffType::DefensePower));
+    }
+    /// **B1**：`SKILL_LIGHTENING(11)` 的不死系 ×1.5（`MagicManager.cs:296`）。
+    /// 期望值 = **手写推导**：`MPow` → `GetPower` → `GetAttackPower`（玩家 override）→ `Round(x*1.5)`。
+    /// 同时钉住返回值口径（`bo_train = Race >= Animal`、`delay_ms = 600`、target 保留）。
+    #[test]
+    fn p3b1_lightening_undead_multiplier() {
+        let mut w = World::new(32, 32);
+        let mut c = Entity::new(0, "c".to_string(), 10, 10);
+        c.race = ACTOR_RACE_PLAY;
+        c.level = 5;
+        let caster = w.add_entity(c);
+        let mut t = Entity::new(0, "t".to_string(), 11, 10);
+        t.race = ACTOR_RACE_MONSTER;
+        t.level = 1;
+        t.life_attrib = crate::magic_effect::LA_UNDEAD;
+        let target = w.add_entity(t);
+        w.tick();
+        let magic = mir2_data::MagicInfo {
+            power: 5,
+            max_power: 10,
+            def_power: 2,
+            def_max_power: 8,
+            train_lv: 3,
+            ..Default::default()
+        };
+        // 骰门（AntiMagic=1）通过的固定种子。
+        let seed = (1..1000)
+            .find(|s| RandomNumber::with_seed(*s).random_below(10) >= 1)
+            .unwrap();
+        let mut control = RandomNumber::with_seed(seed);
+        let _ = control.random_below(10);
+        let mp_draw = control.random_below(5);
+        let gp_draw = control.random_below(6);
+        // `GetAttackPower(..., Hi-Lo+1)` 内部 `Random(nPower + 1)` ⇒ `Random(0+2)`。
+        let atk_draw = control.random_below(2);
+        let luck_draw = control.random_below(10);
+        let mpow = 5 + mp_draw;
+        let base = mir2_shared::hutil::round(f64::from(mpow) / 4.0 * 2.0) + 2 + gp_draw;
+        // `Luck <= 0` 且 `Random(10)==0` ⇒ `result = nBasePower`（不再加 atk 抽）。
+        let power = if luck_draw == 0 {
+            base
+        } else {
+            base + atk_draw
+        };
+        let want = mir2_shared::hutil::round(f64::from(power) * 1.5);
+        w.rng = RandomNumber::with_seed(seed);
+        let out = w.cast_lightening_spell(caster, &magic, 1, Some(target), 1, 0);
+        let mut probe = RandomNumber::with_seed(seed);
+        let _ = probe.random_below(10);
+        assert_eq!(
+            out.power, want,
+            "不死系威力 = Round(GetAttackPower(...) * 1.5)"
+        );
+        assert!(out.bo_train, "Race >= Animal ⇒ boTrain");
+        assert_eq!(out.target, Some(target), "成功支保留目标");
+        assert!(out.delayed);
+        assert_eq!(out.delay_ms, 600);
     }
 }

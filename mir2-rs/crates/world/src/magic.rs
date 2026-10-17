@@ -647,6 +647,41 @@ pub fn next_direction(sx: i32, sy: i32, dx: i32, dy: i32) -> u8 {
     }
 }
 
+/// `BaseObject.MagCanHitTarget`（`src/M2Server/Actor/BaseObject.cs:2059-2091`）逐行移植。
+///
+/// 从 `(n_x, n_y)`（施法者坐标）出发，每步用 `M2Share.GetNextDirection` 朝目标走 1 格，
+/// 至多 13 步：
+/// - 走到目标格 ⇒ `true`；
+/// - 某一步后曼哈顿距离**变大** ⇒ `true`（oracle 的"越走越远也算能打中"怪分支）；
+/// - `GetNextPosition` 未改变坐标（边界 clamp）或 `IsValidCell` 为假 ⇒ `false`。
+///
+/// 无 RNG；`targetObject == null` 由调用方折叠成 `None`（oracle 首句 `return false`）。
+#[must_use]
+pub fn mag_can_hit_target(map: &MapGrid, n_x: i32, n_y: i32, target_x: i32, target_y: i32) -> bool {
+    let n20 = (n_x - target_x).abs() + (n_y - target_y).abs();
+    let (mut x, mut y) = (n_x, n_y);
+    let mut n14 = 0;
+    while n14 < 13 {
+        let dir = next_direction(x, y, target_x, target_y);
+        match map.get_next_position(x, y, dir, 1) {
+            Some((nx, ny)) if map.is_valid_cell(nx, ny) => {
+                x = nx;
+                y = ny;
+                if x == target_x && y == target_y {
+                    return true;
+                }
+                let n1c = (x - target_x).abs() + (y - target_y).abs();
+                if n1c > n20 {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        n14 += 1;
+    }
+    false
+}
+
 /// `BaseObject.GetBackDir`（`src/M2Server/Actor/BaseObject.cs:820-853`）。
 pub fn back_dir(n_dir: u8) -> u8 {
     match n_dir {
@@ -934,8 +969,8 @@ pub fn mag_make_clone(map: &mut MapGrid, inp: &MakeCloneInput) -> MakeCloneOutco
 }
 
 #[cfg(test)]
-mod amulet_use_tests {
-    use super::use_amulet;
+mod tests {
+    use super::*;
 
     /// `MagicBase.UseAmulet`（`MagicBase.cs:109-127`）：`Dura > nCount*100` ⇒ 扣；
     /// 否则（含 `==`）`Dura = 0; Index = 0`（清槽）。边界逐点钉死。
@@ -954,5 +989,15 @@ mod amulet_use_tests {
         let e = use_amulet(501, 5); // 501 > 500 ⇒ 扣
         assert_eq!(e.dura_after, 1);
         assert!(!e.deleted);
+    }
+    /// `MagCanHitTarget`（`BaseObject.cs:2059-2091`）：朝目标走 1 格、至多 13 步。
+    /// 13 步内到达 ⇒ true；14 步 ⇒ false（第 13 步后仍未到、距离未变大 ⇒ 循环结束）。
+    #[test]
+    fn mag_can_hit_target_walks_at_most_13_steps() {
+        let g = MapGrid::new(64, 64);
+        assert!(mag_can_hit_target(&g, 10, 10, 23, 10), "13 步恰好到达");
+        assert!(!mag_can_hit_target(&g, 10, 10, 24, 10), "14 步 ⇒ false");
+        assert!(mag_can_hit_target(&g, 10, 10, 20, 20), "对角 10 步");
+        assert!(mag_can_hit_target(&g, 10, 10, 11, 10), "相邻");
     }
 }

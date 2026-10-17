@@ -559,6 +559,11 @@ impl World {
         //    `ApplySlaveLevelAbilitys`）→ 派生覆写速度。顺序与 oracle 一致。
         apply_slave_level_abilitys(mon);
         apply_derived_slave_recalc(mon, now);
+        // `BaseObject.RecalcAbilitys`（`BaseObject.Abil.cs:30` 置 1、`:67` 累加
+        // `AddAbil.AntiMagic`）：宝宝/召唤物在此刻才离开 ctor 的 0，变成 `1 + AddAbil.AntiMagic`。
+        // 怪物 `AddAbil` 在本骨架内为空 ⇒ **1**。普通 `MonGen` 生成路径不调 `RecalcAbilitys`
+        // ⇒ 那边保持 0（`BaseObject.cs:390`）。
+        mon.anti_magic = 1;
         // 6. `if (monObj.WAbil.HP < monObj.WAbil.MaxHP) HP += (MaxHP - HP) / 2;`（`:1198-1201`）。
         if mon.hp < mon.max_hp {
             let delta = (i32::from(mon.max_hp) - i32::from(mon.hp)) / 2;
@@ -1340,6 +1345,8 @@ mod tests {
         assert_eq!(m.slave_make_level, 3);
         assert_eq!(m.slave_exp_level, 4);
         assert_eq!(m.master_royalty_tick, 5_000 + 86_400_000);
+        // `RecalcAbilitys`（`BaseObject.Abil.cs:30/67`）：宝宝离开 ctor 的 0 ⇒ 1（AddAbil 空）。
+        assert_eq!(m.anti_magic, 1, "宝宝召唤走 RecalcAbilitys ⇒ anti_magic=1");
         // `ApplySlaveLevelAbilitys`（race=80、exp=4）：
         // `MaxHP = _MIN(100 + 60*4, 100 + round(100*0.15)*4) = _MIN(340, 160) = 160`
         // ⇒ HP 补半 `30 + (160-30)/2 = 95`（旧实现按 no-op 会给 65）。

@@ -445,6 +445,21 @@ pub struct Entity {
     /// `HitPoint` / `SpeedPoint`（命中/敏捷，命中判定用）
     pub hit_point: u8,
     pub speed_point: u8,
+    /// C# `BaseObject.AntiMagic`（`BaseObject.cs:113`；ctor `:390` 置 **0**）——
+    /// 魔法骰门 `Random(10) >= AntiMagic` 的右操作数（`MagicManager.cs:180/292/334/566/1033`）。
+    ///
+    /// **普通 `MonGen` 生成路径保持 0**：oracle 只有 `RecalcAbilitys` 会把它置成
+    /// `1 + AddAbil.AntiMagic`（`BaseObject.Abil.cs:30` 置 1、`:67` 累加），而普通生成的怪
+    /// **不调用** `RecalcAbilitys`；`ElfMonster`/`WhiteSkeleton` 等覆写也不改 `AntiMagic`。
+    /// ⇒ 普通怪目标下 `Random(10) >= 0` 恒真，骰门永不失败。
+    ///
+    /// 本仓的等价 `RecalcAbilitys` 写入点：玩家登录/升级
+    /// （`bins/game-svr` 的 `apply_ability_to_entity`）与宝宝召唤
+    /// （[`crate::World::make_slave_adopt`]，`BaseObject.cs:1198`），均置 `1 + AddAbil.AntiMagic`
+    /// （怪物/玩家的 `AddAbil` 在本骨架内为 0 ⇒ 1）。复活（`BaseObject.cs:2739`）与其余
+    /// slave 面（`MakeClone`/`GainSlaveExp`）尚未建模 ⇒ 这些路径保持 0（登记）。
+    /// 设计锚：`mir2-rs/tests/parity/m3/design-monster-run-overrides-20261017.md` §4.1.2-5 / §5-2。
+    pub anti_magic: u16,
     /// `Job`（0 战 / 1 法 / 2 道）
     pub job: u8,
     /// `LifeAttrib`（1 = `LA_UNDEAD` 不死系）
@@ -575,6 +590,8 @@ impl Entity {
             ac: 0,
             hit_point: 0,
             speed_point: 0,
+            // `BaseObject.cs:390`：ctor 置 `AntiMagic = 0`（普通生成路径不调 `RecalcAbilitys`）。
+            anti_magic: 0,
             job: 0,
             life_attrib: 0,
             level: 1,
