@@ -484,6 +484,10 @@ python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_csh
   - `-AttackTurn "dx,dy"` = **指向怪的相邻格偏移**（`"1,0"`东/`"-1,0"`西/`"0,-1"`北/`"0,1"`南/对角；`|dx|,|dy|≤1`，`(0,0)` 非法）：
     每次左键攻击前先**右键该相邻格格心**触发 `CM_TURN(dirToMonster)`，再左键攻击（取目标 = 新朝向的正前方格）。
   - `-CenterY 259` = 真机角色屏幕中心（默认 `384` 偏下 ~2 格、命中环整体错位，片67 受此影响）。
+  - **订正（2026-10-18 缩窗实测）**：给 `-AttackTurn` 而**不给** `-AttackRing` 时，`mir_flow` 的左键现改为
+    点在**转向目标格中心**（格心锚 `512/304` + 偏移×`48/32`）。旧实现会按默认环第 1 项（北侧 -40px）点，
+    于是"转向朝南、点在北/地面" ⇒ `CM_WALK/RUN`，这也是 2026-10-18 缩窗 W0-1 五次尝试拿不到出站
+    `SM_STRUCK` 的直接原因（一次拿到 `CM_TURN+CM_HIT` 但点空）。显式给 `-AttackRing` 仍按旧像素口径（逐字节不变）。
 - 期望足迹（C# raw capture）：c2s `CM_TURN(3010)≥1` ＋ `CM_HIT(3014)≥1`；s2c **出站** `SM_STRUCK(31)`
   （victim=怪，`recog≠自己`）**≥1**（或其 `SM_NOWDEATH(34)`）。
 - **失败分叉**：

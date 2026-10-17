@@ -472,7 +472,18 @@ if ($AttackClicks -gt 0) {
       Start-Sleep -Milliseconds 400
     }
     Stage ("attack_" + ($i + 1))
-    Send-Click ($CenterX + $d[0]) ($CenterY + $d[1]) 1
+    # F-W0A（2026-10-18，缩窗 W0-1 实测订正）：给了 -AttackTurn 且**未显式给 -AttackRing** 时，
+    # 左键必须点在**转向的目标格中心**（格心锚 512/304 + 偏移×48/32）——否则仍按旧环位置点
+    # （默认环第 1 项 = 北侧 -40px），会点空/点地（CM_WALK/RUN），永远打不到刚转向的怪。
+    # 显式 -AttackRing 仍按调用方给的像素偏移（高级用法，逐字节不变）。
+    if ($turnCell -and $AttackRing -eq "") {
+      $clickX = $TurnCellCx + $turnCell[0] * 48
+      $clickY = $TurnCellCy + $turnCell[1] * 32
+    } else {
+      $clickX = $CenterX + $d[0]
+      $clickY = $CenterY + $d[1]
+    }
+    Send-Click $clickX $clickY 1
     Start-Sleep -Milliseconds 900
   }
   Shot "06_attack.png"
