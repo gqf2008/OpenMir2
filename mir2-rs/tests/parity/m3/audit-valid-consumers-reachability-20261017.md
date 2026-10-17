@@ -140,6 +140,10 @@ main.rs:7895 fn sim_loop
 - 装载前：施法者界内 ⇒ `created=true` 恒；装载后：仅当**施法者那格是墙**才 `created=false`。
 - 玩家只能站 Valid 格（`cell_free` 挡墙 + `session.rs enter_map` 的 `CellRejected`）⇒
   **施法者格必 Valid ⇒ `created=true` 不变**。
+  **2026-10-17 订正（本提交）**：`session.rs::enter_map` 已改为 **oracle 同形**（落格失败**不移除角色**，
+  角色进世界但不入格表；见同批提交与 oracle `BaseObject.Base.cs:14-23`）⇒ 上述「必 Valid」前提在
+  **病态存档（存档 `CurX/CurY` 指向墙格）/ 切图缩图** 场景**不再成立**：`mag_make_clone` 的 `created=false`
+  支从「不可达」升为 **边缘可达**（仍与 oracle 同构 —— oracle 该支也不校验返回值，见 §2 #19）。
 - 与 oracle 的差异（上游 §2 #19 已登记）：oracle `MagMakeClone` 恒返回 `true`、**不看** `AddMapObject`
   返回值；本仓把「格子能否放下」落成 `created`，`spawn_clone` 用它置 `e.add_to_mapped`（`slave.rs:1194`）。
   ⇒ 差异**仅在施法者格非 Valid 时**可见（生产不可达），**与装载无关**（同一门）。
@@ -382,7 +386,7 @@ sed -n '659,705p' bins/game-svr/src/mapwire.rs
 |---|---|---|
 | 魔号 8（抗拒火环）/ 魔号 21（瞬息移动）是否「待接线」而非「永不接线」 | `handle_spell_cmd`（`main.rs:5024`）静态只处理 14/15/17/20/30/31/41/46；magic 表的**运行期内容**（`load_magics`）不在静态面内 | 真机跑一次 / 查 `E:/MirServer` Magic 表确认 8/21 是否存在、是否可学；或断点 `handle_spell_cmd` |
 | `recall_slave` 的触发频率（宝宝满 + 主人正前方墙） | 需真机玩家态（宝宝数 `nMaxMob`、朝向、地图墙分布） | 真机造场景：主人站墙前 + 宝宝数满；或进程级对拍 |
-| `mag_make_clone` 是否会在「施法者格非 Valid」时被触发 | 依赖 `session.rs enter_map` 的病态态（上游 §5 未登记差异）是否真机可达 | 需上游那条差异的结论（本卡不重复判） |
+| ~~`mag_make_clone` 是否会在「施法者格非 Valid」时被触发~~ **（已关闭，2026-10-17）** | 上游那条差异**已修**：`session.rs::enter_map` 改为 oracle 同形（不移除角色）⇒ 病态存档（墙格出生）/切图缩图下角色可「在世界上但不入格表」⇒ 该支 **边缘可达**；常态（新角色默认出生点全 Walk）仍不可达 | — |
 | `map_random_move` 消费点的**级别**（R/L） | 本卡只证「可达 + 与 oracle 同构」，未判级 | 交 M3⑤ / owner 判级（若料窗口则按 R） |
 | 各图 `(0,0)` 是否 Walk（决定 `move_object` 的 cell0 耦合分支） | 上游 §6 R8 已给方法；本卡未逐图解二进制 | 上游 §6 R8 命令（`python -I -c` 逐图读 cell0） |
 

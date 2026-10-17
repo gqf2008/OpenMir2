@@ -3122,6 +3122,65 @@ mod tests {
         assert_eq!(w.map(1).cell(7, 9).count(), 1);
     }
 
+    /// **卡 `openmir2-enter-map-cell-rejected-vs-oracle`·墙格进图**：进图落在**墙格**时，
+    /// oracle `BaseObject.Base.cs:14-23` `Initialize()` 只「不进格表」而**不摘除角色**
+    ///（`AddtoMapSuccess` 保持 `true` = 未落图；`PlayObject.UserLogon` 之后无条件继续）⇒
+    /// `enter_map` 必须返回 `Ok`（**不是** `Err(CellRejected)`）、保留实体、`add_to_mapped == false`、
+    /// 会话照常进世界。
+    ///
+    /// 红检：把 `enter_map` 的落格失败支改回 `entities.remove(id) + Err(CellRejected)` ⇒ 本用例必红。
+    #[test]
+    fn enter_map_wall_cell_keeps_actor_unmapped() {
+        let mut w = World::with_maps(vec![(16, 16)]);
+        // 只把 (3,3) 置成 `HighWall`（`set_cell_attributes` 列主序 `x*H+y`、fail-closed）。
+        let mut attrs = vec![crate::map::CellAttribute::Walk; 16 * 16];
+        attrs[3 * 16 + 3] = crate::map::CellAttribute::HighWall;
+        assert_eq!(w.maps[0].set_cell_attributes(&attrs), 16 * 16);
+        assert_eq!(
+            w.maps[0].cell_attribute(3, 3),
+            Some(crate::map::CellAttribute::HighWall)
+        );
+
+        w.open_session("hero");
+        let mut e = Entity::new(0, "hero", 3, 3);
+        e.race = ACTOR_RACE_PLAY;
+        let id = w
+            .enter_map("hero", e, 0)
+            .expect("墙格进图 = oracle Initialize 语义（保留角色，不进格表），不是 Err");
+
+        assert!(
+            w.entities.get(id).is_some(),
+            "oracle Initialize 落格失败不移除角色 ⇒ 实体必须还在"
+        );
+        assert!(
+            !w.entities.get(id).unwrap().add_to_mapped,
+            "未进格表 ⇒ add_to_mapped 必须为 false"
+        );
+        assert_eq!(w.map(0).cell(3, 3).count(), 0, "墙格不得落对象");
+        let sess = w.session("hero").unwrap();
+        assert_eq!(sess.stage, crate::session::WorldStage::InWorld);
+        assert_eq!(sess.actor_id, Some(id));
+    }
+
+    /// 同上，坐标**越界**：oracle `CanWalk(x,y,true)`（经 `GetCellInfo`）对越界同样返回 `false`
+    /// ⇒ `Initialize()` 同样只「不落图」不移除角色 ⇒ `enter_map` 返回 `Ok`、实体保留、`add_to_mapped=false`。
+    #[test]
+    fn enter_map_out_of_bounds_keeps_actor_unmapped() {
+        let mut w = World::with_maps(vec![(16, 16)]);
+        w.open_session("hero");
+        let mut e = Entity::new(0, "hero", 99, 99);
+        e.race = ACTOR_RACE_PLAY;
+        let id = w
+            .enter_map("hero", e, 0)
+            .expect("越界落格 = oracle Initialize 语义（保留角色），不是 Err");
+        assert!(w.entities.get(id).is_some(), "越界落格不移除角色");
+        assert!(!w.entities.get(id).unwrap().add_to_mapped, "越界不入格表");
+        assert_eq!(
+            w.session("hero").unwrap().stage,
+            crate::session::WorldStage::InWorld
+        );
+    }
+
     /// `spawn_monster_precomputed`（M3④-实现 B 第 ③ 片的新 API）：掉落/朝向/构造抽已在回调里
     /// 按 oracle 次序预算完，本方法**不再取任何随机数**；构造抽结果随实体落库。
     ///

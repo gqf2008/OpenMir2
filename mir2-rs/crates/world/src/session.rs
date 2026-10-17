@@ -186,13 +186,21 @@ impl World {
             (e.x, e.y)
         };
         let now = self.clock_ms;
-        if !self.maps[map_id].add_map_object(x, y, CellType::Play, id, now) {
-            // 格子不可用（越界/不可走）：按 C# 语义进图失败
-            self.entities.remove(id);
-            return Err(SessionError::CellRejected);
-        }
-        if let Some(e) = self.entities.get_mut(id) {
-            e.add_to_mapped = true;
+        // oracle `BaseObject.Base.cs:14-23` `Initialize()`：
+        //   `AddtoMapSuccess = true; if (Envir.CanWalk(CurrX, CurrY, true) && AddToMap()) AddtoMapSuccess = false;`
+        // 落格失败（目标格越界 / 非 `Valid`）时 **不摘除角色**：`AddtoMapSuccess` 保持 `true`
+        //（该字段方向是反的——`true` = 未落图；`WorldServer.Merchant.cs:18` 正是拿它当失败日志）。
+        // 角色只是**不进格表**（`Envirnoment.AddMapObject` 早退，`AddObject` 也不执行）。
+        // 玩家侧调用点 `PlayObject.UserLogon`（`Player/PlayObject.cs:1152`）在 `Initialize()`（`:1175`）
+        // 之后**无条件**继续（`:1176` 发 `RM_LOGON`；另见 `WorldServer.cs:659` 调 `UserLogon`）⇒
+        // 会话照常进世界，仅 `entity.add_to_mapped == false`。
+        // 故这里**绝不** `entities.remove` / 提前 `Err(CellRejected)`。
+        // 红检：改回 `entities.remove(id) + Err(CellRejected)` ⇒
+        // `enter_map_wall_cell_keeps_actor_unmapped` / `enter_map_out_of_bounds_keeps_actor_unmapped` 必红。
+        if self.maps[map_id].add_map_object(x, y, CellType::Play, id, now) {
+            if let Some(e) = self.entities.get_mut(id) {
+                e.add_to_mapped = true;
+            }
         }
         let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
         sess.actor_id = Some(id);
@@ -373,6 +381,9 @@ pub enum SessionError {
     AlreadyInWorld,
     NotInWorld,
     NoSuchMap,
-    /// 目标格不可用（越界或不可走）——对应 C# `AddMapObject` 返回 false
+    /// 目标格不可用（越界或不可走）——对应 C# `AddMapObject` 返回 false。
+    ///
+    /// 仅由 `switch_map_inner`（切图）产生；`enter_map`（进图）**不再**产生它——
+    /// oracle `Initialize`（`BaseObject.Base.cs:14-23`）落格失败只「不进格表」，不移除角色。
     CellRejected,
 }

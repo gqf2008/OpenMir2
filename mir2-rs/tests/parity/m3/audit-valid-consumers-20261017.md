@@ -15,6 +15,8 @@
 - **装载后真机可达、且为 oracle 对齐的新行为**（非回归）：**6 类**（玩家走位碰撞、刷怪移位+RNG、NPC/商人落格、
   route 落格 1658→1649、敌人计数/AOI、cetin_near_xy）。全部与 oracle **同构**。
 - **未登记差异**：**1 条**（`session.rs:189 enter_map` 的 CellRejected 处置与 oracle 不等价）——见 §3 与 §5。
+  **2026-10-17 已修（本提交）**：`enter_map` 改为 oracle 同形（落格失败**不移除角色**、进世界但不入格表）⇒
+  本条**关闭**；连带更新本文件 #23/#31、§2 #19、§3 表 #5、§5 的「不可达」标注（见各处 2026-10-17 注）。
 - **「装载后反而恒假」**：**0 条**（逐条见 §4；`set_cell_attributes` 只写 `Attribute`、不碰 `ObjList`，不具备该机理）。
 - 关键证据（独立复核）：真机 `E:\MirServer\M2GameSvr\Map\0.map`（700×700，5880052 B）的**新角色出生格**
   `(289,618)`/`(650,631)` 及其 ±2 邻域**全部 `Walk`**（`bk=fr=0`），故 §3 的「登录被拒」风险在新角色默认路径上**不可达**。
@@ -57,7 +59,7 @@
 | 20 | `world.rs:2188 can_walk_ignore_objects` | `get_cell_info().1`（`CanWalk(...,true)`） | 恒真 | 墙格→`false`（冲刺被挡帧 `RushKung` 分支可达） |
 | 21 | `world.rs:2270 floor_items_sorted` | 全图扫 `CellType::Item`（**对拍用**） | 扫全图 | 扫过墙格但跳过（无物品，输出不变） |
 | 22 | `world.rs:2297 floor_items_view_sorted` | 同 21（**生产只读视图**） | 扫全图 | 同上，输出不变（生产掉落从不落格） |
-| 23 | `session.rs:189 enter_map` | 进图 `add_map_object` | 恒成功 | **墙格→`CellRejected`（进图失败）** ← §3/§5 的关注点 |
+| 23 | `session.rs:189 enter_map` | 进图 `add_map_object` | 恒成功 | **墙格→`CellRejected`（进图失败）** ← §3/§5 的关注点。**2026-10-17 已修**：改为 oracle 同形 —— 墙格 ⇒ 进世界但 `add_to_mapped=false`（不入格表、对他人 AOI 隐身），**不再拒绝进图** |
 | 24 | `session.rs:263 switch_map_inner` | 切图 `add_map_object` | 恒成功 | 目标格墙→`CellRejected`（生产仅经 route 路径，已前置 `cell_valid`；见 §4） |
 | 25 | `session.rs:357 remove_from_map` | `get_cell_info_mut` 摘除 | 恒真 | 坐标是墙格→静默 no-op（同 12） |
 | 26 | `aoi.rs:91-136 search_view_range` | 视距窗内 `get_cell_info` 门 | 窗内恒进入 | **墙格跳过**（无对象，`visible_actors` 不变） |
@@ -65,7 +67,7 @@
 | 28 | `magic.rs:993 can_walk_ignore_objects` | `get_cell_info().1` | 恒真 | 墙→`false` |
 | 29 | `magic.rs:1018 char_pushed` | `get_cell_info().1` 先判 | 恒真 | 墙→`break` |
 | 30 | `magic.rs:1178 space_move_get_rand_xy` | 经 28 | 201 抽内恒首轮命中 | 墙→进入移位/RNG 支 |
-| 31 | `magic.rs:1261 mag_make_clone` | `add_map_object` 结果→`created` | 恒 `true` | 施法者格墙→`false`（不可达：施法者必在 Valid 格） |
+| 31 | `magic.rs:1261 mag_make_clone` | `add_map_object` 结果→`created` | 恒 `true` | 施法者格墙→`false`（**2026-10-17 订正：边缘可达**——`enter_map` 改同形后，病态存档/切图缩图下施法者可在非 Valid 格；仍与 oracle 同构） |
 | 32 | `merchant.rs:323-324` 商人落格 | `cell_match && cell_valid` + `add_map_object` | 恒成功 | **配置格墙→`add_to_map_success`⇒若非 hide 被移除** |
 | 33 | `npc.rs:195-197` NPC 落格 | 同 32 | 恒成功 | 同 32 |
 | 34 | `monai.rs:107 count_at_cell` | `get_cell_info`+`is_available` 数活体 | 恒可数 | 墙格→0（同 `GetXYObjCount`，与属性解耦） |
@@ -112,7 +114,7 @@
 | 16 | `magic.rs:1178 space_move_get_rand_xy` | `BaseObject.cs:1040-1084` | **同构** |
 | 17 | `slave.rs:657 recall_slave` 的 `SpaceMoveGetRandXY` | `BaseObject.cs:1072/1128` | **同构** |
 | 18 | `magic.rs:1018 char_pushed` | `BaseObject.cs:854-901 CharPushed`（`CanWalk(nx,ny,false)` 先判） | **同构** |
-| 19 | `magic.rs:1261 mag_make_clone` | `MagicManager.cs:1337-1341 MagMakeClone` | 结果值语义**同构**（`add_map_object` 的 `created`）；**注**：oracle 该方法本身**不校验**返回值，本仓把「格子能否放下」落成 `created` —— 差异仅在施法者格非 Valid 时可见（不可达） |
+| 19 | `magic.rs:1261 mag_make_clone` | `MagicManager.cs:1337-1341 MagMakeClone` | 结果值语义**同构**（`add_map_object` 的 `created`）；**注**：oracle 该方法本身**不校验**返回值，本仓把「格子能否放下」落成 `created` —— 差异仅在施法者格非 Valid 时可见（**2026-10-17 订正：边缘可达**，见 #23 注；仍同构） |
 | 20 | `merchant.rs:323 / npc.rs:195` | `BaseObject.Base.cs:13-21 Initialize`（`CanWalk(x,y,true) && AddToMap()`）+ `WorldServer.Merchant.cs:18/47`（`AddtoMapSuccess && !IsHide` → 移除） | **同构** |
 | 21 | `monai.rs:107 count_at_cell` | `Envirnoment.cs:1062-1093 GetXYObjCount` | **同构** |
 | 22 | `mongen.rs:645-695` + `:480-540` 移位环 | `WorldServer.MonGen.cs:730-800`（`:751 AddtoMapSuccess`、`:765 !CanWalk(...,false)`、`:787 AddMapObject`） | **同构**（含「`CanWalk(true) && AddToMap()` 短路 ⇒ 进环 ⟺ `!CanWalk(true)`」的推理，见 §4） |
@@ -135,7 +137,7 @@
 | **2** | **`world.rs:2068-2075 cell_free` 玩家走位碰撞** | **是**（100% 走位） | **帧面**（走位/推/冲刺）、几何 | oracle 同构 | **立窗口必核项**（`mapwire.rs` 模块头的「其余同族消费点」已列，但权重应提升为与刷怪同级；建议补一条 walk-block 进程级对拍） |
 | **3** | **`merchant.rs:323` / `npc.rs:195` NPC·商人落格** | **是**（启动加载 NPC/商人表） | **内容面**（配置格是墙的 NPC 被**静默移除**） | oracle 同构 | **立卡/登记**：统计真机 `Envir/Npc.txt`、`Merchant.txt` 中落在墙格的条数；若 >0 则列入窗口「被移除 NPC 清单」 |
 | **4** | **`map.rs:390`/`world.rs:1785` route 落格 1658→1649** | **是** | **几何/换图面**（9 条连接点消失：7 HighWall + 2 LowWall） | oracle 同构 | **已登记**（`b192bd9f3` 正文 + `mapwire.rs`）——无需新动作，窗口核 `added=1649` |
-| **5** | **`session.rs:189 enter_map` CellRejected** | **边缘**（新角色默认出生格经独立复核为 `Walk`；仅当存档 `CurX/CurY` 指向墙格时可达） | **登录被拒**（角色进不了世界） | **差异**（oracle 保留角色、只是不落图） | **立卡**（或先在 `mapwire.rs` 登记）；见 §5 |
+| **5** | **`session.rs:189 enter_map` CellRejected** | **边缘**（新角色默认出生格经独立复核为 `Walk`；仅当存档 `CurX/CurY` 指向墙格时可达） | **登录被拒**（角色进不了世界） | **差异**（oracle 保留角色、只是不落图） | **2026-10-17 已修**：改为 oracle 同形（进世界但不入格表）⇒ 本条关闭；宿主缺 oracle 的**进图前移位环**（`WorldServer.cs:375-394`，至多 5 次 `Random(6)` + `HomeMap` 回落，R 级）仍另立卡 |
 
 ---
 
@@ -186,7 +188,7 @@
 
 | 条目 | 原因 | 已知/建议 |
 |---|---|---|
-| **本仓 `session.rs:189 enter_map` 拒绝进图 vs oracle 保留角色** | 无法在本卡约束下**实跑**登录链验证；需追溯 oracle「`AddToMap()` 失败后角色去向」的完整调用链（`WorldServer.cs` 登录支 + `PlayObject.Initialize` 调用点） | 静态对读结论：oracle `BaseObject.Base.cs:13-21` 为 `AddtoMapSuccess=true; if (CanWalk && AddToMap()) AddtoMapSuccess=false;`，**拒绝时不移除角色**；本仓 `enter_map` 失败即 `entities.remove(id)` + `Err`（`session.rs:188-192`），生产 `main.rs:9576-9578` 只记 `WRN` 不落图。**这是本仓自造的失败处置，与 oracle 不等价**。真机可达性：**新角色默认出生格经独立复核为 `Walk`（不可达）**；仅「存档 `CurX/CurY` 落在墙格」（DB 直改/旧图版本差异）可达。**未登记** |
+| ~~**本仓 `session.rs:189 enter_map` 拒绝进图 vs oracle 保留角色**~~ **（已关闭，2026-10-17）** | 已按 oracle 同形修正（见 #23 注）；原「无法实跑登录链」的边界仍在，但 oracle 侧结论已由独立复验读到行（`BaseObject.Base.cs:14-23` + `PlayObject.cs:1152/1175/1176` 的无条件 `RM_LOGON`） | 原缺口： 无法在本卡约束下**实跑**登录链验证；需追溯 oracle「`AddToMap()` 失败后角色去向」的完整调用链（`WorldServer.cs` 登录支 + `PlayObject.Initialize` 调用点） | 静态对读结论：oracle `BaseObject.Base.cs:13-21` 为 `AddtoMapSuccess=true; if (CanWalk && AddToMap()) AddtoMapSuccess=false;`，**拒绝时不移除角色**；本仓 `enter_map` 失败即 `entities.remove(id)` + `Err`（`session.rs:188-192`），生产 `main.rs:9576-9578` 只记 `WRN` 不落图。**这是本仓自造的失败处置，与 oracle 不等价**。真机可达性：**新角色默认出生格经独立复核为 `Walk`（不可达）**；仅「存档 `CurX/CurY` 落在墙格」（DB 直改/旧图版本差异）可达。**未登记** |
 | `magic.rs` 的 `char_pushed`/`mag_sace_move`/`mag_make_clone` 的**生产可达性** | 未逐一追 `DoSpell`/`MagMakeClone` 在 `bins/game-svr` 的接线（`slave::spawn_clone` 已确认生产用；`char_pushed` 只见 `magic.rs:1109` 内部与测试） | 门形已判**同构**；可达性属另一维度，建议由 `M3` 施法批确认 |
 | `slave.rs:657 recall_slave` 的生产可达性 | `game-svr` 未直接调 `recall_slave`（可能经 `cast_slave_spell`） | 门形同构；建议由 `M3` 召唤批确认 |
 | 真机 `Npc.txt`/`Merchant.txt` 中「配置格是墙」的**条数** | 需解析 `E:/MirServer/M2GameSvr/Envir/*.txt` 并逐格查 `.map`（可行但超出本次静态范围，且涉及多图） | **建议立卡**：与 `MonGen.txt` 同法统计，作为窗口「被移除 NPC 清单」 |
