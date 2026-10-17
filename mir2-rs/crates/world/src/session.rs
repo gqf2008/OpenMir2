@@ -197,6 +197,12 @@ impl World {
         // 故这里**绝不** `entities.remove` / 提前 `Err(CellRejected)`。
         // 红检：改回 `entities.remove(id) + Err(CellRejected)` ⇒
         // `enter_map_wall_cell_keeps_actor_unmapped` / `enter_map_out_of_bounds_keeps_actor_unmapped` 必红。
+        // **2026-10-17 后续片 `openmir2-enter-shift-loop`**：宿主进图路径（`bins/game-svr` 读档 →
+        // 本函数）已先按 oracle `WorldServer.cs:371-395` 跑**地形移位环**（墙格逐轮
+        // `-3+Random(6)`、至多 5 轮；仍不可走 ⇒ 回落 `[Setup] HomeMap/HomeX/HomeY`，`mapwire.rs`
+        // 的 `shift_enter_position`）⇒ 经宿主登录**不存在「墙格出生」**，「进世界但不入格表」在该
+        // 路径**不可达**（oracle 同因，`ProcessHumansMakeNewHuman` 先移位再落图）。本函数的 oracle
+        // 同形语义仍保留给直接调用方（测试/非宿主路径），不是死代码。
         if self.maps[map_id].add_map_object(x, y, CellType::Play, id, now) {
             if let Some(e) = self.entities.get_mut(id) {
                 e.add_to_mapped = true;

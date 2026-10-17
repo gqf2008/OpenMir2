@@ -9079,6 +9079,56 @@ fn sim_loop(
                                             );
                                         } else {
                                         // 进世界：`World::open_session` + `enter_map`
+                                        // oracle `WorldServer.cs:371-395` 进图前的**地形移位环**：
+                                        // 出生/存档格是墙 ⇒ 每轮 `-3+Random(6)`（X 先 Y 后），至多 5 轮；
+                                        // 环用尽仍不可走 ⇒ 回落 `[Setup] HomeMap/HomeX/HomeY`。
+                                        // 不接这段时墙格出生会「进世界但不入格表」（对他人 AOI 隐身），
+                                        // 而 oracle 先移到邻近可走格再落图。
+                                        // 抽数走**同一条** `world.rng`；`shift_enter_position` 带
+                                        // `#[track_caller]` ⇒ trace 站点落在本文件（`startup` 组，见
+                                        // `tests/parity/m3/rng-trace-probe/consumer_groups.tsv`）。
+                                        let home_id = mapwire::resolve_map_id(
+                                            registry.as_ref(),
+                                            &enter_cfg.home.home_map,
+                                        )
+                                        .ok();
+                                        let shift = mapwire::shift_enter_position(
+                                            &mut world,
+                                            mapwire::EnterTarget {
+                                                map_name: &final_map_name,
+                                                map_id,
+                                                x: i32::from(enter_x),
+                                                y: i32::from(enter_y),
+                                            },
+                                            mapwire::HomePoint {
+                                                map_name: &enter_cfg.home.home_map,
+                                                map_id: home_id,
+                                                x: i32::from(enter_cfg.home.home_x),
+                                                y: i32::from(enter_cfg.home.home_y),
+                                            },
+                                        );
+                                        if shift.home_fallback {
+                                            glog!(
+                                                "WRN",
+                                                "进图落格失败，回落 HomeMap ChrName:{} CurMap:{} -> {} ({},{})（oracle WorldServer.cs:388-395）",
+                                                head.chr_name,
+                                                final_map_name,
+                                                shift.map_name,
+                                                shift.x,
+                                                shift.y
+                                            );
+                                        }
+                                        if let Some(e) = &shift.home_fallback_error {
+                                            glog!(
+                                                "ERR",
+                                                "进图回落 HomeMap 解析失败 ChrName:{}：{e}（oracle PEnvir = nil 支）",
+                                                head.chr_name
+                                            );
+                                        }
+                                        let (final_map_name, map_id) =
+                                            (shift.map_name, shift.map_id);
+                                        let (enter_x, enter_y) =
+                                            (shift.x as i16, shift.y as i16);
                                         let _ = world.open_session(&head.chr_name);
                                         let ent = new_player_entity(
                                             head.chr_name.clone(),

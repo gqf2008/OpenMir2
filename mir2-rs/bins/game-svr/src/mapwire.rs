@@ -270,6 +270,128 @@ pub fn placeholder_sizes(maps: &[(i32, i32)]) -> Result<Vec<(i32, i32)>, String>
     Ok(maps.to_vec())
 }
 
+/// 进图移位环的输入：地图解析后的落点（`CurMap` → `map_id`）。
+#[derive(Clone, Copy, Debug)]
+pub struct EnterTarget<'a> {
+    pub map_name: &'a str,
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+}
+
+/// `[Setup] HomeMap/HomeX/HomeY` 的回落点（oracle `SystemShare.Config.*`）。
+///
+/// `map_id = None` 对应 oracle `MapMgr.FindMap(Config.HomeMap) == null`（`envir == null`）：
+/// 真机正常配置不会命中；命中时本函数**不移动**（保留环用尽后的地图/坐标）并把错误交给调用方，
+/// 由调用方按 oracle `sErrorEnvirIsNil` 支记日志（不伪造回落）。
+#[derive(Clone, Copy, Debug)]
+pub struct HomePoint<'a> {
+    pub map_name: &'a str,
+    pub map_id: Option<usize>,
+    pub x: i32,
+    pub y: i32,
+}
+
+/// 进图移位环的结果。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnterShift {
+    pub map_name: String,
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+    /// 实际移位轮数（oracle `nC`）：0 = 首格可走（**零抽**）；上限 5（至多 10 抽）。
+    pub attempts: u32,
+    /// 环用尽仍不可走 ⇒ 已回落到 `HomeMap/HomeX/HomeY`（oracle `WorldServer.cs:388-395`）。
+    pub home_fallback: bool,
+    /// 回落时 `HomeMap` 解析失败（oracle `envir == null` 支）；`None` = 正常。
+    pub home_fallback_error: Option<String>,
+}
+
+/// oracle `WorldServer.cs:371-395`：进图前的**地形移位环** + `HomeMap` 回落。
+///
+/// ```csharp
+/// int nC = 0;
+/// while (true) {
+///     if (envir.CanWalk(playObject.CurrX, playObject.CurrY, true)) break;
+///     playObject.CurrX = (short)(playObject.CurrX - 3 + M2Share.RandomNumber.Random(6));
+///     playObject.CurrY = (short)(playObject.CurrY - 3 + M2Share.RandomNumber.Random(6));
+///     nC++;
+///     if (nC >= 5) break;
+/// }
+/// if (!envir.CanWalk(playObject.CurrX, playObject.CurrY, true)) { /* HomeMap/HomeX/HomeY */ }
+/// ```
+///
+/// - `CanWalk(..., true)` = [`MapGrid::get_cell_info`] 的 `success`（界内且 `Valid`；`true` 忽略活体阻挡，
+///   与 `Envirnoment.cs:442-486` 的 `boFlag` 支同构）。
+/// - 取数走传入的 `world.rng`（oracle `M2Share.RandomNumber` 的同一全局流）：每轮**先 X 后 Y**
+///   各 1×`Random(6)`，偏移 `-3..=2`；首格可走 ⇒ **0 抽**；上限 5 轮 ⇒ 至多 10 抽。
+///   坐标按 oracle 的 `(short)` 截断写回。
+/// - 回落**不再判** `CanWalk`、**不再抽数**（oracle 同形：`Config.HomeX/HomeY` 原样落点）。
+///
+/// `#[track_caller]`：RNG trace 站点归组见 `tests/parity/m3/rng-trace-probe/consumer_groups.tsv`
+/// 的 `startup` 组（Rust 侧登记为 `bins/game-svr/src/main.rs:`）。本函数由宿主 `sim_loop` 调用，
+/// 传播调用点后站点落在 `main.rs`，**不新增未登记组**（与 `crates/world` 的 `#[track_caller]` 先例同法）。
+#[must_use]
+#[track_caller]
+pub fn shift_enter_position(
+    world: &mut World,
+    target: EnterTarget<'_>,
+    home: HomePoint<'_>,
+) -> EnterShift {
+    let mut x = target.x;
+    let mut y = target.y;
+    let mut attempts = 0u32;
+    // `map_id` 已由 `resolve_enter_map` 校验；越界时原样返回，交给 `enter_map` 的 `NoSuchMap`。
+    if let Some(map) = world.maps.get(target.map_id) {
+        // oracle 循环首行判 `CanWalk` ⇒ 首格可走时**一次都不抽**。
+        while !map.get_cell_info(x, y).1 {
+            let dx = world.rng.random_below(6);
+            x = i32::from((x - 3 + dx) as i16);
+            let dy = world.rng.random_below(6);
+            y = i32::from((y - 3 + dy) as i16);
+            attempts += 1;
+            if attempts >= 5 {
+                break;
+            }
+        }
+        if !map.get_cell_info(x, y).1 {
+            if let Some(home_id) = home.map_id.filter(|id| *id < world.maps.len()) {
+                return EnterShift {
+                    map_name: home.map_name.to_string(),
+                    map_id: home_id,
+                    x: home.x,
+                    y: home.y,
+                    attempts,
+                    home_fallback: true,
+                    home_fallback_error: None,
+                };
+            }
+            return EnterShift {
+                map_name: target.map_name.to_string(),
+                map_id: target.map_id,
+                x,
+                y,
+                attempts,
+                home_fallback: false,
+                home_fallback_error: Some(
+                    "HomeMap 不在地图注册表内（oracle MapMgr.FindMap(Config.HomeMap) == null \
+                     ⇒ PEnvir = nil）"
+                        .to_string(),
+                ),
+            };
+        }
+    }
+    EnterShift {
+        map_name: target.map_name.to_string(),
+        map_id: target.map_id,
+        x,
+        y,
+        attempts,
+        home_fallback: false,
+        home_fallback_error: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1007,5 +1129,140 @@ mod tests {
             t0.elapsed()
         );
         assert_eq!(walk + low + high, cells, "三态计数之和 == 总格数");
+    }
+
+    // ---- 进图移位环（oracle `WorldServer.cs:371-395`，本片 `openmir2-enter-shift-loop`）----
+    //
+    // **期望表独立复算**（不调用 Rust 取数器）：按 .NET `System.Random(seed)` legacy 减法滞后
+    // 斐波那契算法（Knuth；与 `crates/shared/src/rng.rs` 头注释同源）逐项算出 `Next(6)`。
+    // seed=42 的前 16 抽 = [4, 0, 0, 3, 1, 1, 4, 3, 1, 4, 1, 1, 3, 1, 2, 1]。
+    // 偏移 `-3 + draw` ∈ [-3, 2]。
+    const SHIFT_SEED: i32 = 42;
+    const SHIFT_DRAWS: [i32; 16] = [4, 0, 0, 3, 1, 1, 4, 3, 1, 4, 1, 1, 3, 1, 2, 1];
+
+    /// 构造一张全 `HighWall`、仅指定格 `Walk` 的图。
+    fn wall_map_with_walk_cells(world: &mut World, map_id: usize, walk: &[(i32, i32)]) {
+        let (w, h) = {
+            let m = &world.maps[map_id];
+            (m.width, m.height)
+        };
+        let mut attrs = vec![CellAttribute::HighWall; (w * h) as usize];
+        for &(x, y) in walk {
+            attrs[(x * h + y) as usize] = CellAttribute::Walk;
+        }
+        assert_eq!(
+            world.maps[map_id].set_cell_attributes(&attrs),
+            (w * h) as usize
+        );
+    }
+
+    fn next_three(rng: &mut mir2_shared::rng::RandomNumber) -> Vec<i32> {
+        (0..3).map(|_| rng.random_below(6)).collect()
+    }
+
+    /// 构造级判据（① 环被进入；③ 落点；② 抽数逐项）：
+    /// 出生格 = 墙、全图仅第 3 轮落点可走 ⇒ 第 3 轮命中。
+    ///
+    /// 期望（独立复算）：前 6 抽 [4,0,0,3,1,1] ⇒ 偏移 [1,-3,-3,0,-2,-2]
+    /// ⇒ (8,8) → (9,5) → (6,5) → (4,3)。随后三抽 [4,3,1]（第 7..9 抽）。
+    #[test]
+    fn shift_enter_position_wall_spawn_matches_oracle_draws() {
+        let mut world = World::with_maps(vec![(16, 16)]);
+        wall_map_with_walk_cells(&mut world, 0, &[(4, 3)]);
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(SHIFT_SEED);
+
+        let out = shift_enter_position(
+            &mut world,
+            EnterTarget {
+                map_name: "0",
+                map_id: 0,
+                x: 8,
+                y: 8,
+            },
+            HomePoint {
+                map_name: "3",
+                map_id: None,
+                x: 0,
+                y: 0,
+            },
+        );
+
+        assert_eq!(out.attempts, 3, "① 前两轮落点仍是墙 ⇒ 必须进入移位环 3 轮");
+        assert_eq!((out.x, out.y), (4, 3), "③ 落点 = oracle 同序抽数结果");
+        assert_eq!((out.map_id, out.home_fallback), (0, false));
+        // ② 坐标/轮数已被上式钉死；再用**随后连续三抽**证明恰好吃掉前 6 抽。
+        // （若少抽/多抽/换序，RNG 游标错位 ⇒ 下面三抽必不等于独立复算的第 7..9 抽。）
+        assert_eq!(next_three(&mut world.rng), SHIFT_DRAWS[6..9].to_vec());
+    }
+
+    /// ④ 环用尽（5 轮 = 10 抽）仍不可走 ⇒ 回落 `HomeMap/HomeX/HomeY`（不再判 CanWalk、不再抽数）。
+    ///
+    /// 期望（独立复算）：前 10 抽 [4,0,0,3,1,1,4,3,1,4]；随后三抽 = 第 11..13 抽 [1,1,3]。
+    #[test]
+    fn shift_enter_position_falls_back_to_home_after_five_rounds() {
+        let mut world = World::with_maps(vec![(16, 16), (16, 16)]);
+        wall_map_with_walk_cells(&mut world, 0, &[]); // 全墙
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(SHIFT_SEED);
+
+        let out = shift_enter_position(
+            &mut world,
+            EnterTarget {
+                map_name: "0",
+                map_id: 0,
+                x: 4,
+                y: 4,
+            },
+            HomePoint {
+                map_name: "3",
+                map_id: Some(1),
+                x: 2,
+                y: 3,
+            },
+        );
+
+        assert_eq!(out.attempts, 5, "次数上限 5 轮（至多 10 抽）");
+        assert!(out.home_fallback, "环用尽仍不可走 ⇒ 必须回落 HomeMap");
+        assert_eq!(
+            (out.map_name.as_str(), out.map_id, out.x, out.y),
+            ("3", 1, 2, 3),
+            "回落 = Config.HomeMap/HomeX/HomeY 原样（oracle 不复查 CanWalk）"
+        );
+        assert_eq!(out.home_fallback_error, None);
+        // 恰好 10 抽：随后三抽 = 第 11..13 抽（独立复算 [1, 1, 3]）。
+        assert_eq!(next_three(&mut world.rng), SHIFT_DRAWS[10..13].to_vec());
+    }
+
+    /// 阴性对照：出生格可走 ⇒ **零抽**、坐标不动。
+    ///
+    /// 用随后**连续三抽**断零抽：若移位环偷抽一次，游标后移 ⇒ 三抽 = [0,0,3] 而非 [4,0,0]（独立复算 seed=42 前六抽 = [4,0,0,3,1,1]；原写 [0,3,1] 是错的，断言本身正确）。
+    #[test]
+    fn shift_enter_position_walk_spawn_consumes_no_draws() {
+        let mut world = World::with_maps(vec![(16, 16)]);
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(SHIFT_SEED);
+
+        let out = shift_enter_position(
+            &mut world,
+            EnterTarget {
+                map_name: "0",
+                map_id: 0,
+                x: 8,
+                y: 8,
+            },
+            HomePoint {
+                map_name: "3",
+                map_id: None,
+                x: 2,
+                y: 3,
+            },
+        );
+
+        assert_eq!(out.attempts, 0, "首格可走 ⇒ 不进移位环");
+        assert_eq!((out.x, out.y), (8, 8), "坐标不动");
+        assert!(!out.home_fallback);
+        assert_eq!(
+            next_three(&mut world.rng),
+            SHIFT_DRAWS[0..3].to_vec(),
+            "零抽"
+        );
     }
 }

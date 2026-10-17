@@ -17,6 +17,8 @@
 - **未登记差异**：**1 条**（`session.rs:189 enter_map` 的 CellRejected 处置与 oracle 不等价）——见 §3 与 §5。
   **2026-10-17 已修（本提交）**：`enter_map` 改为 oracle 同形（落格失败**不移除角色**、进世界但不入格表）⇒
   本条**关闭**；连带更新本文件 #23/#31、§2 #19、§3 表 #5、§5 的「不可达」标注（见各处 2026-10-17 注）。
+  **同日后续片 `openmir2-enter-shift-loop`**：宿主进图路径接入 oracle `WorldServer.cs:371-395` 的
+  地形移位环 ⇒ 「墙格出生」在宿主路径**不可达**（oracle 同因）；`enter_map` 的同形语义保留给直接调用方。
 - **「装载后反而恒假」**：**0 条**（逐条见 §4；`set_cell_attributes` 只写 `Attribute`、不碰 `ObjList`，不具备该机理）。
 - 关键证据（独立复核）：真机 `E:\MirServer\M2GameSvr\Map\0.map`（700×700，5880052 B）的**新角色出生格**
   `(289,618)`/`(650,631)` 及其 ±2 邻域**全部 `Walk`**（`bk=fr=0`），故 §3 的「登录被拒」风险在新角色默认路径上**不可达**。
@@ -67,7 +69,7 @@
 | 28 | `magic.rs:993 can_walk_ignore_objects` | `get_cell_info().1` | 恒真 | 墙→`false` |
 | 29 | `magic.rs:1018 char_pushed` | `get_cell_info().1` 先判 | 恒真 | 墙→`break` |
 | 30 | `magic.rs:1178 space_move_get_rand_xy` | 经 28 | 201 抽内恒首轮命中 | 墙→进入移位/RNG 支 |
-| 31 | `magic.rs:1261 mag_make_clone` | `add_map_object` 结果→`created` | 恒 `true` | 施法者格墙→`false`（**2026-10-17 订正：边缘可达**——`enter_map` 改同形后，病态存档/切图缩图下施法者可在非 Valid 格；仍与 oracle 同构） |
+| 31 | `magic.rs:1261 mag_make_clone` | `add_map_object` 结果→`created` | 恒 `true` | 施法者格墙→`false`（**2026-10-17 订正**：`enter_map` 同形后该支曾升为「边缘可达」；同日后续片 `openmir2-enter-shift-loop` 在宿主进图路径接入 oracle `WorldServer.cs:371-395` 移位环 ⇒ **墙格出生在宿主路径不可达**（oracle 同因）；该支仍可由**切图缩图**（`World::switch_map` 目标格非 Valid）与直接调用 `World::enter_map` 的路径产生，但**不再由登录出生**产生；仍与 oracle 同构） |
 | 32 | `merchant.rs:323-324` 商人落格 | `cell_match && cell_valid` + `add_map_object` | 恒成功 | **配置格墙→`add_to_map_success`⇒若非 hide 被移除** |
 | 33 | `npc.rs:195-197` NPC 落格 | 同 32 | 恒成功 | 同 32 |
 | 34 | `monai.rs:107 count_at_cell` | `get_cell_info`+`is_available` 数活体 | 恒可数 | 墙格→0（同 `GetXYObjCount`，与属性解耦） |
@@ -114,7 +116,7 @@
 | 16 | `magic.rs:1178 space_move_get_rand_xy` | `BaseObject.cs:1040-1084` | **同构** |
 | 17 | `slave.rs:657 recall_slave` 的 `SpaceMoveGetRandXY` | `BaseObject.cs:1072/1128` | **同构** |
 | 18 | `magic.rs:1018 char_pushed` | `BaseObject.cs:854-901 CharPushed`（`CanWalk(nx,ny,false)` 先判） | **同构** |
-| 19 | `magic.rs:1261 mag_make_clone` | `MagicManager.cs:1337-1341 MagMakeClone` | 结果值语义**同构**（`add_map_object` 的 `created`）；**注**：oracle 该方法本身**不校验**返回值，本仓把「格子能否放下」落成 `created` —— 差异仅在施法者格非 Valid 时可见（**2026-10-17 订正：边缘可达**，见 #23 注；仍同构） |
+| 19 | `magic.rs:1261 mag_make_clone` | `MagicManager.cs:1337-1341 MagMakeClone` | 结果值语义**同构**（`add_map_object` 的 `created`）；**注**：oracle 该方法本身**不校验**返回值，本仓把「格子能否放下」落成 `created` —— 差异仅在施法者格非 Valid 时可见（**2026-10-17 订正**：曾因 `enter_map` 同形升为「边缘可达」；同日后续片 `openmir2-enter-shift-loop` 接入 oracle `WorldServer.cs:371-395` 移位环后，**宿主进图路径的「墙格出生」不可达**（oracle 同因）；该支仍可由切图缩图/直接调用 `World::enter_map` 产生，登录出生不再产生；仍同构） |
 | 20 | `merchant.rs:323 / npc.rs:195` | `BaseObject.Base.cs:13-21 Initialize`（`CanWalk(x,y,true) && AddToMap()`）+ `WorldServer.Merchant.cs:18/47`（`AddtoMapSuccess && !IsHide` → 移除） | **同构** |
 | 21 | `monai.rs:107 count_at_cell` | `Envirnoment.cs:1062-1093 GetXYObjCount` | **同构** |
 | 22 | `mongen.rs:645-695` + `:480-540` 移位环 | `WorldServer.MonGen.cs:730-800`（`:751 AddtoMapSuccess`、`:765 !CanWalk(...,false)`、`:787 AddMapObject`） | **同构**（含「`CanWalk(true) && AddToMap()` 短路 ⇒ 进环 ⟺ `!CanWalk(true)`」的推理，见 §4） |

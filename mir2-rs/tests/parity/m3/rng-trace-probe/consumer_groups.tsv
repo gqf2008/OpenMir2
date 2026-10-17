@@ -107,3 +107,10 @@ merchant	csharp	BaseObject\.MapRandomMove@BaseObject\.cs:	src/M2Server/Actor/Bas
 # 否则其站点会落 `magic.rs` ⇒ `other`。
 #
 # 顺带更正：`consumer_groups.tsv` 第 96 行的 `slave.rs:` 行号按搬迁后实测为 :882/:898/:1035（原写 :1082）。
+
+# ---- 2026-10-17 追加（entershif 复验 must_fix②）：C# 进图前移位环的两抽补登记 ----
+# oracle `WorldServer.ProcessHumansMakeNewHuman`（WorldServer.cs:221；移位环 :375-387）在出生格不可走时
+# 每次 `CurrX = CurrX-3+Random(6)` / `CurrY = CurrY-3+Random(6)`（:380/:381）、至多 5 次，仍不可走则回落
+# `Config.HomeMap/HomeX/HomeY`。Rust 侧同两抽落 `bins/game-svr/src/main.rs`（已归 `startup`）；C# 侧原先无行
+# ⇒ `groups --side csharp --require-closed` 在「墙格出生登录」trace 上会报 UNCLASSIFIED。补一行归同组 `startup`。
+startup	csharp	WorldServer\.ProcessHumansMakeNewHuman@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:380	进图前移位环的两抽（:380/:381，至多 5 次；回落 HomeMap）；Rust 对应 main.rs 的 shift_enter_position（同组 startup）

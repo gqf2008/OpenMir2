@@ -143,7 +143,11 @@ main.rs:7895 fn sim_loop
   **2026-10-17 订正（本提交）**：`session.rs::enter_map` 已改为 **oracle 同形**（落格失败**不移除角色**，
   角色进世界但不入格表；见同批提交与 oracle `BaseObject.Base.cs:14-23`）⇒ 上述「必 Valid」前提在
   **病态存档（存档 `CurX/CurY` 指向墙格）/ 切图缩图** 场景**不再成立**：`mag_make_clone` 的 `created=false`
-  支从「不可达」升为 **边缘可达**（仍与 oracle 同构 —— oracle 该支也不校验返回值，见 §2 #19）。
+  支从「不可达」曾升为 **边缘可达**（仍与 oracle 同构 —— oracle 该支也不校验返回值，见 §2 #19）。
+  **同日后续片 `openmir2-enter-shift-loop` 再收窄**：宿主进图路径已按 oracle `WorldServer.cs:371-395`
+  跑地形移位环（墙格逐轮 `-3+Random(6)`、至多 5 轮；仍不可走 ⇒ 回落 `[Setup] HomeMap/HomeX/HomeY`）
+  ⇒ **「墙格出生」在宿主路径不可达**（oracle 同因），上述「边缘可达」的来源收窄为**切图缩图**
+  （`World::switch_map` 目标格非 Valid）等非登录路径；登录出生不再产生；仍与 oracle 同构。
 - 与 oracle 的差异（上游 §2 #19 已登记）：oracle `MagMakeClone` 恒返回 `true`、**不看** `AddMapObject`
   返回值；本仓把「格子能否放下」落成 `created`，`spawn_clone` 用它置 `e.add_to_mapped`（`slave.rs:1194`）。
   ⇒ 差异**仅在施法者格非 Valid 时**可见（生产不可达），**与装载无关**（同一门）。
@@ -389,7 +393,7 @@ sed -n '659,705p' bins/game-svr/src/mapwire.rs
 |---|---|---|
 | ~~魔号 8/21 是否「待接线」而非「永不接线」~~ **（已确证，2026-10-17）** | **静态可证**（原稿判「不可确证」是深度不足）：`MagicConst.cs:36 SKILL_FIREWIND=8`、`:88 SKILL_SPACEMOVE=21`；oracle `MagicManager.cs:259`（及 `:602` ENERGYREPULSOR）`case SKILL_FIREWIND`→`MagPushArround`、`:403 case SKILL_SPACEMOVE`→`MagSaceMove` ⇒ **oracle 有生产分支**，本仓 `handle_spell_cmd` 缺 8/21 属**待接线** | 仅剩「玩家能否学到」属数据面（真机/查 Magic 表） |
 | `recall_slave` 的触发频率（宝宝满 + 主人正前方墙） | 需真机玩家态（宝宝数 `nMaxMob`、朝向、地图墙分布） | 真机造场景：主人站墙前 + 宝宝数满；或进程级对拍 |
-| ~~`mag_make_clone` 是否会在「施法者格非 Valid」时被触发~~ **（已关闭，2026-10-17）** | 上游那条差异**已修**：`session.rs::enter_map` 改为 oracle 同形（不移除角色）⇒ 病态存档（墙格出生）/切图缩图下角色可「在世界上但不入格表」⇒ 该支 **边缘可达**；常态（新角色默认出生点全 Walk）仍不可达 | — |
+| ~~`mag_make_clone` 是否会在「施法者格非 Valid」时被触发~~ **（已关闭，2026-10-17）** | 上游那条差异**已修**：`session.rs::enter_map` 改为 oracle 同形（不移除角色）⇒ 病态存档（墙格出生）/切图缩图下角色可「在世界上但不入格表」⇒ 该支曾 **边缘可达**。**同日后续片 `openmir2-enter-shift-loop`** 在宿主进图路径接入 oracle `WorldServer.cs:371-395` 移位环 ⇒ **宿主路径的「墙格出生」不可达**（oracle 同因）；该支仍可由切图缩图/直接调用 `World::enter_map` 产生，登录出生不再产生 | — |
 | ~~`map_random_move` 消费点的级别~~ **（已定级，2026-10-17）** | 独立复验**否掉**「与 oracle 同构」：本仓 `move_object` 早退、oracle 进 `SpaceMoveGetRandXY` 移位环继续抽数 ⇒ **落点 + RNG 双分歧** | **R**，已立卡 `openmir2-map-random-move-shift-loop` |
 | ~~各图 `(0,0)` 是否 Walk~~ **（已确证，2026-10-17）** | **静态可解**：`.map` 二进制逐图读 cell0 即可（`b192bd9f3` 的复验者已示范解原始二进制）。**已解**：322 注册图中 `(0,0)` 为墙 **317**、为 Walk **5**（清单与复核命令见 `mapwire.rs` 模块头「真机静态普查」段与 `audit-valid-consumers-20261017.md` §6 R8 的更正） | — |
 
