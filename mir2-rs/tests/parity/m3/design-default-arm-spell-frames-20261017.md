@@ -23,6 +23,9 @@
 | 5 | **缺口**：走 default 且 Rust 不发 `RM_SPELL` | **55 行 / 43 个魔号**（其中 1 个 `56` 另有攻击路径分派器）| **成立**（§3）|
 | 6 | 更宽的缺口（oracle 会发、Rust 不发） | 108 行 − 11（战士门 9 ∪ 外层 `switch (MagIdx)` 独立 case 8 的**并集**）− 5 已接 = **93 行 / 80 个魔号** | **成立**（§3.2；**2026-10-17 订正**：原写 95/82，漏扣外层独立 case `SKILL_43(43)` 与 `SKILL_REDBANWOL(56)`——这两号 `DoSpell` 根本不被调用 ⇒ 不发帧）|
 
+> **2026-10-17 订正（来源 `9e59246c7` / `e7d432189`）**：第 4 行原文「**恰 3 处块 / 5 个魔号：17、30、41、20、46**」「`main.rs:4997/5025`、`:5146/5168`、`:5242/5264`」已过期——现值「**恰 1 处调用**（`main.rs:5166`，对应 oracle `MagicManager.cs:159` 的无条件 `RM_SPELL`），位于 `default_arm && !magic::is_warr_skill(...)`（`main.rs:5149`）与 `spell_in_range_i32`（`main.rs:5162`）之后；原三处效果体块（召唤/诱惑/分身）里的 `sm_spell` 已移除（防双发/错序）」；理由 帧面实现片落地。复核：`grep -c "sm_spell(" mir2-rs/bins/game-svr/src/main.rs` ⇒ 期望 `1`。
+> **2026-10-17 订正（来源 `9e59246c7`）**：第 5/6 行原文缺口「**55 行 / 43 个魔号**」「**93 行 / 80 个魔号**」是写作时（`95eacf185`）的**界定快照**——现值「帧面缺口已由 `9e59246c7` 关闭（上述全集均广播恰 1 帧；`>80` 与未建模魔号同样发帧，与 oracle `:159` 在版本门/效果体之前一致）」；93/80 的 oracle 侧算术仍成立，但**不再表示当前 Rust 缺口**；理由 同实现片。复核：`grep -n "sm_spell(" mir2-rs/bins/game-svr/src/main.rs` ⇒ 期望仅 `5166`。
+
 > **一句话**：oracle 对**任何**非战士技能、在 `MagicAttackRage` 内的施法**都会广播 `RM_SPELL`**；
 > Rust 目前只对 5 个魔号（17/20/30/41/46）广播，其余 **103 行**不发。其中 8 行是战士技能（oracle 也不发，无缺口），
 > 剩下 **93 行**是**真实帧面缺口**（2026-10-17 订正：原写 95）。
@@ -134,6 +137,8 @@ MagicManager.cs:644   共享尾（boSpellFail / boSpellFire -> RM_MAGICFIRE / �
 
 ## 2. Rust 侧清单（`sm_spell(` 发射点，逐处读条件）
 
+> **2026-10-17 订正（来源 `9e59246c7` / `e7d432189`）**：本节原文「`grep … ⇒ **恰 3 处调用**」及下表三块已过期——现值「`main.rs` 只有 **1 处** `sm_spell(` 调用（`:5166`），位于 `default_arm && !magic::is_warr_skill(…)`（`:5149`）与 `spell_in_range_i32`（`:5162`）之后，作为 oracle `MagicManager.cs:159` 的无条件广播；下表 ①②③ 是**历史接线点**（召唤/诱惑/分身效果体仍在，但不再各自发 `RM_SPELL`）」；理由 帧面实现片把三处合并到入口。另：本节其余行号亦已平移——`handle_spell_cmd` 定义 `main.rs:5024`（原 `4928`）、`spell_reject` 守卫 `:5076`（原 `4976`）、`takes_default_dir` `:5091`（原 `4991`）、`broadcast_ref_msg` 定义 `:5960`（原 `5454`）。复核：`grep -n "sm_spell(" mir2-rs/bins/game-svr/src/main.rs` ⇒ 期望仅 `5166`（`smframe.rs:690` 为定义、`:2157` 为单测）。
+
 `grep -n "sm_spell(" mir2-rs/bins/game-svr/src/main.rs` ⇒ **恰 3 处调用**（生产路径；其余命中是 `smframe.rs` 的定义/单测与注释）。
 
 | 块 | 条件行 | **条件读法（覆盖魔号）** | 调用行 | 帧参 |
@@ -164,6 +169,8 @@ MagicManager.cs:644   共享尾（boSpellFail / boSpellFire -> RM_MAGICFIRE / �
 
 **缺口 = 43 个魔号 / 55 行**（Rust 覆盖的 5 个魔号**全部**在 `case` 侧，与 default 集**不相交** ⇒ 差集 = default 集本身）。
 
+> **2026-10-17 订正（来源 `9e59246c7`）**：本节「Rust 为何不发」「缺口 = 43 个魔号 / 55 行」已过期——现值「Rust 已对 default 支全集发帧，帧面缺口 = **0 行**」；表内 55/57/58/59/66…80、81–103/500/501 的 `RM_SPELL` 现已发出（其**效果体**仍未建模，属 §5.2 ②）；理由 帧面实现片。复核：`grep -c "sm_spell(" mir2-rs/bins/game-svr/src/main.rs` ⇒ 期望 `1`。
+
 | 魔号 | oracle case 行号 | 为什么是 default | Rust 为何不发 | 现状说明 |
 | --- | --- | --- | --- | --- |
 | **55** | **无**（`:172`–`:643` 内无 `case MagicConst.SKILL_55`）| 落 `:644` 共享尾 → `:670 return true` | `handle_spell_cmd` 无对应块 | 审计桶 `no_switch_case`；魔表 1 行 |
@@ -184,6 +191,9 @@ oracle **会发 `RM_SPELL`** 的魔表行 = 108 − **11** = **98 行 / 85 个�
 ② 外层 `switch (UserMagic.MagIdx)`（`PlayObject.Attack.cs:1118`）的独立 case = `{12,25,26,27,34,38,43,56}`
 （行号 `:1120/1136/1152/1168/1187/1218/1234/1253`）——**这两号 `DoSpell` 不被调用 ⇒ 不发帧**。
 ⇒ 并集 = `{3,4,7,12,25,26,27,34,38,43,56}`（11 值）。Rust 已发 5 ⇒ **宽缺口 = 93 行 / 80 个不同魔号**。
+
+> **2026-10-17 订正（来源 `9e59246c7`）**：原文「Rust 已发 5 ⇒ **宽缺口 = 93 行 / 80 个不同魔号**」的**Rust 侧**已过期——现值「Rust 已发全集（帧面缺口 = 0）；93/80 仅保留为 `95eacf185` 界定快照 / oracle 侧算术」；理由 帧面实现片。复核：`grep -n "broadcast_ref_msg(world, online, gates, actor_id, &\[rm\])" mir2-rs/bins/game-svr/src/main.rs` ⇒ 期望 `5173`。
+
 > **2026-10-17 订正**：本段原按「108 − 8 战士 = 100 ⇒ 缺口 95/82」计算，**漏扣 ②**（`56` 虽在 §1.2 A' 被点明「效果路径不在 DoSpell」，此处却未扣；`43` 全文未提）。订正后 98/85、缺口 93/80，与实现侧口径一致（实现条件 = 不进外层 default ∧ 非战士 ⇒ 集合逐 id 相等）。
 
 > **对「只补帧」片的建议范围**：以宽口径 **93 行 / 80 个魔号**为准（**帧面与是否有 `case` 无关**——
@@ -225,6 +235,8 @@ oracle **会发 `RM_SPELL`** 的魔表行 = 108 − **11** = **98 行 / 85 个�
 ## 5. 两级范围（分开写）
 
 ### 5.1 ① 只补帧（无条件广播 `RM_SPELL`；效果体仍不建模）
+
+> **2026-10-17 订正（来源 `9e59246c7`）**：本节是**实现前**的范围与判据预判——现值「该实现已落地（`9e59246c7`）：无条件广播位于 `handle_spell_cmd` 的 `default_arm && !magic::is_warr_skill`（`main.rs:5149`）与 `spell_in_range_i32`（`:5162`）之后（`main.rs:5166` `sm_spell` / `:5173` `broadcast_ref_msg`）；`93 行 / 80 魔号` 作为**范围**仍准确（oracle 侧），作为**当前缺口**不再成立」；理由 同实现片。复核：`sed -n '5149,5173p' mir2-rs/bins/game-svr/src/main.rs` ⇒ 期望 `default_arm && !magic::is_warr_skill` 与单处 `smframe::sm_spell(`。
 
 **范围**：宽口径 **93 行 / 80 个魔号**（§3.2 订正后），或在 `MagicId <= 80` 内取字面 default + 有 `case` 未接者的并集。
 **行为**：在 `handle_spell_cmd` 的 `magicwire::spell_reject` 守卫之后、`takes_default_dir` 附近，
@@ -377,6 +389,8 @@ awk 'NR>=165 && NR<=170 {print NR": "$0}' src/M2Server/Magic/MagicManager.cs
 #         168 { / 169 return false; / 170 }
 ```
 
+> **2026-10-17 订正（来源 `9e59246c7` / `e7d432189`）**：C4 的期望「恰 3 行 = 5025 / 5168 / 5264」「`sed -n '4997,5001p;5146p;5242p'`」已过期——现值「`grep -n "sm_spell(" mir2-rs/bins/game-svr/src/main.rs` ⇒ 恰 1 行 = `5166`（`smframe.rs:690` 为定义、`:2157` 为单测）；三处历史块的入口现为 `matches!` @ `main.rs:5468-5472`（17/30/41）、`:5607`（20）、`:5694`（46），但均不再各自发帧」。C5 的 `gap_rows 93 / gap_distinct 80` 仍可按 oracle 侧复算，但**不代表当前 Rust 缺口**（现值 0）。理由 帧面实现片。
+
 ---
 
 ## 8. 残留物清单（§14.3）
@@ -403,6 +417,8 @@ awk 'NR>=165 && NR<=170 {print NR": "$0}' src/M2Server/Magic/MagicManager.cs
 | --- | --- | --- | --- | --- |
 | ① | `src/GameSrv/Robots/RobotPlayer.cs:1846`（派发）/ `:1856` `AutoSpell` | 直调 `MagicManager.DoSpell`，**绕过外层 `switch (UserMagic.MagIdx)`**（`PlayObject.Attack.cs:1118`） | ⇒ 对机器人而言，连 `SKILL_43(43)`/`SKILL_REDBANWOL(56)` 这类**独立 case** 魔号**也会**发 `RM_SPELL`（触发集合与玩家不同）；失败支发 `RM_MAGICFIREFAIL`（`:1848`） | **不可达**：`RobotProcessor` 未移植（`bins/game-svr/src/main.rs:7092` 已登记「本宿主不建机器人会话」） |
 | ② | `src/M2Server/Monsters/*/FireballMonster.cs:39` | **硬编码** `SendRefMsg(RM_SPELL, 48, TargetCret.CurrX, TargetCret.CurrY, 48, "")`（不走 `DoSpell` 的通用发帧） | 怪物施法帧，与 `Effect/MagicId` 无关；随后 `:40` 另发 `RM_MAGICFIRE`、`:41` `SendStruckDelayMsg(RM_DELAYMAGIC,…)` | **未建模**：`mongen.rs:445-446` 只建模了该类 ctor 的抽数，**没有**该帧面 |
+
+> **2026-10-17 订正（来源 `b65feca68` 路径复读 / `e7d432189` 复测）**：本表 oracle 路径原文「`src/GameSrv/Robots/RobotPlayer.cs:1846`」「`src/M2Server/Monsters/*/FireballMonster.cs:39`」已过期（文件路径不存在）——现值「机器人旁路实为 `src/Modules/RobotSystem/Services/RobotPlayer.cs:1846/1848/1856`（`DoSpell` 在 `:1870`）；怪物旁路实为 `src/M2Server/Monster/Monsters/FireballMonster.cs:39-41`」；理由 实际仓库布局是 `Monster/Monsters/`、机器人实现位于 `Modules/RobotSystem/`，**行号与内容不变**。实质结论（两条旁路本仓未建模/不可达）不变。另：本表①「本仓现状」原文「`bins/game-svr/src/main.rs:7092` 已登记」已过期——现值 `main.rs:7388`（「本宿主不建机器人会话（`RobotProcessor` 未移植）」）。复核：`grep -n "AutoSpell\|RM_MAGICFIREFAIL" src/Modules/RobotSystem/Services/RobotPlayer.cs` ⇒ 期望 `1846`/`1848`/`1856`（另 `1876` 为日志）；`grep -n "RM_SPELL" src/M2Server/Monster/Monsters/FireballMonster.cs` ⇒ 期望 `39`；`grep -n "不建机器人会话" mir2-rs/bins/game-svr/src/main.rs` ⇒ 期望 `7388`。
 
 **解冻条件**：① 当「机器人会话 / `RobotProcessor`」被排进里程碑（或 `CM_*` 机器人面开工）时，
 必须回来补「机器人路径的触发集合（= 不走外层 default 过滤）」这一条，并加构装级用例；

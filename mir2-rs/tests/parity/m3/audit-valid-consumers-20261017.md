@@ -12,6 +12,12 @@
 
 - **消费点总数（生产路径，去测试）**：**43 处**（world 36 + game-svr 7；另 1 处 envir 侧非生产 + 1 处 game-svr 独立模型）。
   上一位复验者只抽核约 10 处，**缺口 30+ 处已在本报告补齐**。
+  > **2026-10-17 订正（来源 `77dee0813` / `8e9244388` / `e7d432189`）**：原文「**43 处**」是 `b192bd9f3` 快照，已过期——现值「**43 处**（world 36 + game-svr 7），由 `b192bd9f3` 的 43 处**重算**而来：
+  > ① §1B 第 28 行 `magic.rs:993 can_walk_ignore_objects` 的私有副本已被 `77dee0813` 删除 ⇒ **第 28 行移除（−1）**；
+  > ② 新增 1 处生产消费点 `world.rs:951`（`cast_space_move_spell_with` 的 `space_move_get_rand_xy` 闭包读 `get_cell_info(x, y).1`）⇒ **+1**；
+  > 故 world 36 = 36 − 1 + 1，总数仍是 **43**。**必须显式入账 −1 与 +1，不能笼统写总数未变**。」；
+  > 另：**方案 C（`e7d432189`）后 `crates/world/src/magic.rs` 的取数 = 0**（21 个 `random_below` 已按语义等价迁至 `magic_effect.rs` / `combat.rs`，`magic.rs` 仅 `pub use` 再导出）。
+  > 理由 接线提交去重副本 + 新增魔号 21 生产路径 + 方案 C 搬迁。复核：`grep -n "fn can_walk_ignore_objects" mir2-rs/crates/world/src/*.rs` ⇒ 期望仅 `world.rs:2378`（`magic.rs` 副本已无）；`grep -n "map.get_cell_info(x, y).1" mir2-rs/crates/world/src/world.rs` ⇒ 期望 `951`；`grep -c "random_below" mir2-rs/crates/world/src/magic.rs` ⇒ 期望 `0`。
 - **装载后真机可达、且为 oracle 对齐的新行为**（非回归）：**6 类**（玩家走位碰撞、刷怪移位+RNG、NPC/商人落格、
   route 落格 1658→1649、敌人计数/AOI、cetin_near_xy）。全部与 oracle **同构**。
 - **未登记差异**：**1 条**（`session.rs:189 enter_map` 的 CellRejected 处置与 oracle 不等价）——见 §3 与 §5。
@@ -76,6 +82,8 @@
 | 35 | `slave.rs:657 recall_slave` | `SpaceMoveGetRandXY` 的 `can_walk` 闭包 | 恒真 | 墙→继续移位/RNG |
 | 36 | `castle.rs:591 apply_structure_events` | `set_map_xy_flag` 运行期城门掩码 | 恒可改 | 墙格改不动（**无生产调用方**，零影响） |
 
+> **2026-10-17 订正（来源 `77dee0813` / `8e9244388` / `e7d432189`）**：§1B 第 28/29/30/31 行原文「`magic.rs:993 can_walk_ignore_objects`」「`magic.rs:1018 char_pushed`」「`magic.rs:1178 space_move_get_rand_xy`」「`magic.rs:1261 mag_make_clone`」已过期——现值「**第 28 行已移除（−1）**：`magic.rs` 的私有 `can_walk_ignore_objects` 副本由 `77dee0813` 删除，改由 `world.rs:2378` 自有版本承接；第 29 行 = `magic.rs:707 char_pushed`（定义 `magic.rs:690`）；第 30 行 = `crates/world/src/space_move.rs:23 space_move_get_rand_xy`（`magic.rs:873` 调用点、`:879` 闭包读格）；第 31 行 = `magic.rs:918 mag_make_clone`（定义 `magic.rs:916`）」。理由 接线去重 + 方案 C 搬迁。复核：`grep -n "pub fn char_pushed\|pub fn mag_push_arround\|pub fn mag_sace_move\|pub fn mag_make_clone" mir2-rs/crates/world/src/magic.rs` ⇒ 期望 `690`/`778`/`853`/`916`；`grep -n "add_map_object" mir2-rs/crates/world/src/magic.rs` ⇒ 期望 `918`；`grep -n "fn space_move_get_rand_xy" mir2-rs/crates/world/src/*.rs` ⇒ 期望仅 `space_move.rs:23`。
+
 ### 1C. 宿主消费点（`bins/game-svr/src/**`）
 
 | # | 调用者（file:line 函数） | 语义 | 装载前 | 装载后 |
@@ -125,6 +133,8 @@
 | 25 | `ground.rs:259 put_item` | `Envirnoment.cs:88-165 AddItemToMap` | **差异**（oracle 有 `cellSuccess && cellInfo.Valid` 门，本仓独立模型**无 attribute 字段**、不建模该门）。**但**：① 该模型与 `world.maps` 无共享 ⇒ **装载不改变它**；② 生产 `MapItem.ItemId` 恒 0 ⇒ oracle 首行即 `false` ⇒ 该门不可观测；③ 金币合并/容量上限分支亦标未建模（`ground.rs:106`）。⇒ **装载引入的差异 = 0**，属既有简化（**已在 `ground.rs:105-106` 登记**）。 |
 | 26 | `castle.rs:591 apply_structure_events` | `Envirnoment.cs:1362 SetMapXyFlag`（运行期城门） | **同构**，但**无生产调用方**（归卡 `M3⑧`，`mapwire.rs:661-666` 已登记） |
 | 27 | `envir/mapfile.rs:193 to_grid` | oracle 无对应 gameplay 路径 | **oracle 无对应**（本仓自造；登记「生产不得使用」，`mapwire.rs` 模块头） |
+
+> **2026-10-17 订正（来源 `77dee0813` / `8e9244388` / `e7d432189`）**：§2 #11 原文「`world.rs:2188` / `magic.rs:993` `can_walk_ignore_objects`」已过期——现值「`world.rs:2378` 单一定义（`magic.rs` 副本已由 `77dee0813` 删除）」；#16 原文「`magic.rs:1178 space_move_get_rand_xy`」已过期——现值「`crates/world/src/space_move.rs:23`（调用点 `magic.rs:873`、`world.rs:950`、`slave.rs:609`）」，oracle `BaseObject.cs:1040-1084` 不变；#18 原文「`magic.rs:1018 char_pushed`」已过期——现值「`magic.rs:707`（定义 `:690`）」；#19 原文「`magic.rs:1261 mag_make_clone`」已过期——现值「`magic.rs:918`（定义 `:916`）」。判定「同构」全部不变。理由 接线去重 + 方案 C 搬迁。复核：`grep -n "fn can_walk_ignore_objects" mir2-rs/crates/world/src/*.rs` ⇒ 仅 `world.rs:2378`；`grep -n "space_move_get_rand_xy" mir2-rs/crates/world/src/space_move.rs` ⇒ `23`；`grep -n "if !map.get_cell_info(nx, ny).1" mir2-rs/crates/world/src/magic.rs` ⇒ `707`。
 
 **小结**：装载后真机可达的**行为变化面 6 类**（消费点 18/42、37、32/33、8/#13、26/27、23/38）**全部 oracle 同构**；
 **唯一未登记差异**是消费点 23 的**失败处置**（见 §3、§5）。
@@ -195,6 +205,8 @@
 | `slave.rs:657 recall_slave` 的生产可达性 | `game-svr` 未直接调 `recall_slave`（可能经 `cast_slave_spell`） | 门形同构；建议由 `M3` 召唤批确认 |
 | 真机 `Npc.txt`/`Merchant.txt` 中「配置格是墙」的**条数** | 需解析 `E:/MirServer/M2GameSvr/Envir/*.txt` 并逐格查 `.map`（可行但超出本次静态范围，且涉及多图） | **建议立卡**：与 `MonGen.txt` 同法统计，作为窗口「被移除 NPC 清单」 |
 | `0.map` 之外各图 `(0,0)` 是否 `Walk`（决定 §4-1 的行为分支） | 未逐图解二进制 | 可一键复核：见 §6 命令 R8 |
+
+> **2026-10-17 订正（来源 `77dee0813` / `e7d432189`）**：本表 `magic.rs` 的 `char_pushed` / `mag_sace_move` / `mag_make_clone` 生产可达性行原文「`char_pushed` 只见 `magic.rs:1109` 内部与测试」「建议由 `M3` 施法批确认」已过期——现值「M3 施法批已接线：`char_pushed` 的生产对应物是 `World::push_now`（`world.rs:2344`，经魔号 8 `cast_firewind_spell` 于 `world.rs:859` 直调）；`char_pushed` 本体的唯一非测试调用者是 `mag_push_arround` 内 `magic.rs:801`（定义 `magic.rs:778`）；`mag_sace_move` 的魔号 21 效果体经 `cast_space_move_spell_with`（`world.rs:909`）可达；`mag_make_clone` 经魔号 46 `cast_clone_spell` 可达」。理由 接线提交。复核：`grep -n "let steps = char_pushed" mir2-rs/crates/world/src/magic.rs` ⇒ `801`；`grep -n "fn push_now" mir2-rs/crates/world/src/world.rs` ⇒ `2344`；`grep -n "SKILL_FIREWIND | mir2_world::magic::SKILL_SPACEMOVE" mir2-rs/bins/game-svr/src/main.rs` ⇒ `5294`。
 
 ---
 

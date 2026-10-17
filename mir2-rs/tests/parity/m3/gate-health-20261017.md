@@ -126,6 +126,8 @@ python -I check_anchors.py selftest → SELFTEST GREEN: check_anchors selftest 1
 | rng_scene_gate.py | gate | 2 | 2 | N/A-INPUT（需 `--scenario/--a/--b`） |
 | rng_scene_gate.py | selftest | 0 | 0 | GREEN |
 
+> **2026-10-17 订正（来源 `6c2e5d9a2` / `e7d432189`）**：原 §3 清单编于 `a18586f39`，**未含** `rng-trace-probe/`（`rng_ledger_diff.py` / `rng_consumer_groups.py` / `analyze_rng_trace.py`）与 `attack_rng_ledger.py` 的 `selftest`；清单其余脚本**均在范围内**（含 `m3_whitelist_registry_audit.py`、`check_evidence_counts.py` / `check_evidence_head.py`、`check_window_batch.py`）。理由 清单范围遗漏，非门红。现值见 §7 末四行，均在 `e7d432189` 上实跑 rc=0。
+
 ### 3.1 两类标记
 
 - **基线就红（既存债）**：`check_anchors.py` 的 `check` / `selftest`（**1 个根因**，本片已修）。
@@ -166,3 +168,39 @@ python -I check_anchors.py selftest → SELFTEST GREEN: check_anchors selftest 1
 
 残留物：`/e/tmp/impl-fcg`（本片 worktree）、`/e/tmp/fcg-baseline`（基线 detached worktree）、
 `/e/tmp/fcg-target`（`CARGO_TARGET_DIR`）。均为本片专属，收尾按白名单删除。
+
+---
+
+## 7. 2026-10-17 追加：新增 rng 门与自检（基线 `e7d432189`）
+
+> 本节在 `e7d432189`（master，含收窄 `6c2e5d9a2` + 方案 C `e7d432189`）上实跑；命令 cwd=`mir2-rs/tests/parity/m3`，`python -I`。
+
+| # | 命令 | rc | 读数（`e7d432189`） |
+| --- | --- | --- | --- |
+| 1 | `python -I rng-trace-probe/rng_ledger_diff.py selftest` | 0 | `SELFTEST GREEN: rng_ledger_diff selftest 37/37` |
+| 2 | `python -I rng-trace-probe/rng_consumer_groups.py selftest` | 0 | `SELFTEST GREEN: rng_consumer_groups selftest 20/20` |
+| 3 | `python -I attack_rng_ledger.py selftest` | 0 | `SELFTEST GREEN: attack_rng_ledger selftest 51/51` |
+| 4 | `python -I rng-trace-probe/analyze_rng_trace.py selftest` | 0 | `SELFTEST GREEN: analyze_rng_trace selftest 5/5` |
+| 5 | `python -I rng-trace-scene/check_anchors.py check` | 0 | `GREEN: check_anchors 7/7 锚点保鲜` |
+| 6 | `python -I rng-trace-scene/check_anchors.py selftest` | 0 | `SELFTEST GREEN: check_anchors selftest 17/17（含 16 条改坏必红）` |
+
+### 7.1 `magic.rs` 取数已清零、`RUST_ATTACK_RE` 已收窄（基线 `e7d432189`）
+
+- **事实（`6c2e5d9a2`）**：两处 `RUST_ATTACK_RE`（`rng-trace-probe/rng_ledger_diff.py:56`、`attack_rng_ledger.py:58-60`）同步删除 `|magic\.rs:` 片段，恢复逐字节同表；`e7d432189` 再补齐活栈行至 **24 个 combat.rs 行号**，并新增 `attack_rng_ledger.py:413` 的 selftest `rust-attack-re-identical-both-files`（只改单侧必红）。
+- **事实（`e7d432189`，方案 C）**：`crates/world/src/magic.rs` 的 **21** 个 `random_below` 已按语义等价全部迁出 ⇒ 现 **0**；取数落 `magic_effect.rs`（`mpow`/`get_power`/`get_power13`/`get_rpow`/`power_defence_area`/`mag_turn_undead`/`mag_tamming`）与 `combat.rs`（`power_uenhancer` `:1383`、`group_melee_damage` `:1408`）。
+- **事实（`e7d432189`）**：`consumer_groups.tsv` 的**文件级**死行 `magic_effect rust crates/world/src/magic\.rs:` 已删除，替换为精确行 `magic_effect rust crates/world/src/combat\.rs:(1383|1408)$`（`tsv:152`）。`magic_effect` 组行数仍为 17（删 1 + 加 1）。
+- **未放宽判据**：`KNOWN_GROUPS`/`AUX_GROUPS` 未扩写；无 `known_false`/白名单改动；两处正则只删该片段、只补活栈行。
+
+复核（cwd=`mir2-rs/tests/parity/m3`）：
+
+```sh
+grep -n "RUST_ATTACK_RE = re.compile" -A2 rng-trace-probe/rng_ledger_diff.py attack_rng_ledger.py
+#   期望：两处 pattern 逐字相同 = combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|831|936|1018|1126)
+#         （24 个行号；无 |magic\.rs:）
+grep -c "random_below" ../../../crates/world/src/magic.rs
+#   期望：0（方案 C 后取数全部迁出）
+grep -c "^magic_effect" rng-trace-probe/consumer_groups.tsv
+#   期望：17（原 4 + 6c2e5d9a2 追加 13；e7d432189 把其中 1 条 magic\.rs 文件级行换成 combat\.rs 精确行，净数不变）
+grep -nF 'combat\.rs:(1383|1408)' rng-trace-probe/consumer_groups.tsv
+#   期望：命中 tsv:152（精确行登记；文件级 magic\.rs 数据行已无）
+```
