@@ -429,3 +429,25 @@ python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_csh
     `src/BotSrv/bin/Release/BotSrv.{exe,dll}` 刷新到 2026-10-17 12:48（bin 为忽略目录）。
   - `git status --porcelain` 复核 = 0 行（仓库干净）。
 - 未删除任何文件；未起任何服务/客户端/假人；未写 DB。
+
+
+---
+
+## 7. 后续进展（2026-10-17 晚；本报告之后）
+
+> 本节只追加事实，不改上文与复验订正块的结论。
+
+- **硬阻塞①（窗口前置 R6/R7）已解除**：mirror `/e/tmp/m2svr-window-origin` 已对齐到 `18c7ffe56`
+  （== `origin/master`），六件离线构建 + `window-provenance.json` 重录（source_head=18c7ffe56），
+  `client-e2e-window.fixed.sh.txt guard` ⇒ `R1..R8 全 OK / WINDOW_GUARD_OK`（九端口全 DOWN）。
+  **注意**：任何**生产代码**落地都会让 R6/R7 再次转红（本轮 `e7d432189` 落地后实测复现）；
+  纯文档落地不影响。开窗前**最后一次**生产落地之后必须重跑 M1+M2（runbook §1b 已登记）。
+- **硬阻塞②（RNG 两侧账本驱动）**：选型设计件已入库
+  `mir2-rs/tests/parity/m3/design-rng-scene-pin-path-20261017.md`（`ec6e1eb4f`），推荐 **P11 双侧启动期 pin**；
+  **承接实现未开**——需 owner 先裁决 O1–O7（T-* 白名单改 `src/GameSrv/**`、`dir` 覆盖、时钟注入、
+  影子 Envir、是否需真实会话、与 ④ 同窗编排、C# 描述件 producer）。`-Go -PinScene` 仍 fail-closed。
+- ⇒ **整包 W0 仍 NO-GO**（两条阻塞中仅①解除）；缩窗 W0-1..W0-5 的前置（M1–M4、M7–M10）现已齐备。
+- 期间其它落地（窗口基线请以**最新树**为准，旧基线不得再用于判定）：
+  `e7d432189`（方案 C：magic.rs 取数 21→0）、`df5a260ea`（switch_map 失败回滚）、
+  `318bd1d81`（魔号 37）、`35e3cf468`（route_enter 失败分类）、
+  `18c7ffe56`（DoSpell MP 包装层：MP 数值、53 帧先于 `SM_SPELL`、蓝不足 639——**默认流水在这些帧面/数值上有变化**）。
