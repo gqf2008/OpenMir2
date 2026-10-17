@@ -33,7 +33,7 @@
 //!
 //! **`ClientSpellXY` 的技能效果体**（`PlayObject.Attack.cs:1071-1275`）整个 `switch (UserMagic.MagIdx)` 未接：
 //! 限速（`CheckActionStatus` + `MagicAttackTick`/`MagicAttackInterval`/`MagicAttackCount`/`OverSpeedCount`/`BoEmergencyClose`）、
-//! `SpellTick -= 450`、`GetSpellPoint`/`DamageSpell`、战士技切换
+//! `SpellTick -= 450`、战士技切换
 //! （`ThrustingOnOff`/`HalfMoonOnOff`/`RedHalfMoonOnOff`/`SkillCrsOnOff`/`Skill43OnOff` 与
 //! `SendSocket("+LNG"/"+ULNG"/"+WID"/"+UWID"/"+FIR"/"+CRS"/"+UCRS"/"+TWN"/"+CID"/"+UCID")`），
 //! 以及 `default` 支的 `Dir = GetNextDirection`（`:1269-1270`）+ `CretInNearXy` + `DoSpell`（`MagicManager.cs:145-…`）。
@@ -44,7 +44,11 @@
 //! （片 `openmir2-default-arm-spell-surface`，2026-10-17：宿主 `handle_spell_cmd` 在这三条门之后
 //! **无条件**广播一帧 `SM_SPELL(17)` —— 任何非战士魔号一律恰一条，与是否有 `case`/是否 `>80` 无关；
 //! 逐行依据见 `main.rs` 该片的块注释）⇒ 原「本片不产出 `SM_SPELL(17)`」一句作废。
-//! 失败支的 `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)` 仍**未接**。
+//! **已接（2026-10-17，default 支的 `PlayObject.DoSpell` 包装层）**：`GetSpellPoint`/
+//! `DamageSpell`/`HealthSpellChanged`（`PlayObject.Base.cs:1505-1531`）与蓝不足早退的
+//! `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`（宿主 `main.rs::handle_spell_cmd`）。
+//! **仍未接**：8 条显式 `case` 各自的 MP 逻辑（12/25/26/27/34/38/43/56），以及
+//! `MagicManager.DoSpell` 的战士门/距离门失败回帧（`RM_MAGICFIREFAIL`）。
 //! 技能效果面的向量与用例在 `openmir2-m3-combat-skills-align`（m3cs）的离线片，其接口就绪后再接这一层。
 //!
 //! **`LateDelivery`**：Rust 的入帧路径没有延时重投（`command` 直投）⇒ 恒按 `false` 处理；oracle 此时

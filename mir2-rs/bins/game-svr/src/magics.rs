@@ -38,8 +38,10 @@ pub async fn load_magics(conn: &str) -> Result<Vec<MagicInfo>, String> {
 /// `M2Share.MagicList` 的查表面：`MagicId → MagicInfo`。
 ///
 /// oracle `GetMagicInfo(int nMagicId)` 线性扫 `UserMagic` 列表比 `Magic.MagicId`（`PlayObject.cs:4174-4185`，
-/// 返回**首个**匹配）；本表以 `MagicId` 为键。`MagicId` 在表内唯一（DDL 主键）⇒ 首匹配与键查等价；
-/// 若真要造重复行，oracle 取**首个**、本 HashMap 为后者覆盖 ⇒ 有分歧（不可达，登记）。
+/// 返回**首个**匹配）；`M2Share.MagicList` 按装表序构造（`WorldServer.cs:1193-1211`），
+/// `WorldServer.FindMagic`（`:1430-1443`）亦取首个 ⇒ 重复 `MagicId` 必须**首行胜**。
+/// **真魔表确有重复 MagID**（13 个；其中 48 的 `Spell/DefSpell` 不同：idx38 群体施毒术 12/30、
+/// idx48 气功波 8/0）⇒ 表格构造按首行胜（旧实现 `insert` 后者覆盖会与 oracle 分歧，R 级数值差）。
 #[derive(Debug, Clone, Default)]
 pub struct MagicTable {
     by_id: HashMap<u16, MagicInfo>,
@@ -50,7 +52,8 @@ impl MagicTable {
     pub fn new(list: Vec<MagicInfo>) -> Self {
         let mut by_id = HashMap::with_capacity(list.len());
         for m in list {
-            by_id.insert(m.magic_id, m);
+            // 首行胜（oracle `FindMagic` 线性首匹配；装表序 = `M2Share.MagicList` 序）。
+            by_id.entry(m.magic_id).or_insert(m);
         }
         Self { by_id }
     }
@@ -96,5 +99,33 @@ mod tests {
         assert_eq!(t.get(20).map(|m| m.effect_type), Some(0));
         assert_eq!(t.get(99), None);
         assert!(MagicTable::default().is_empty());
+    }
+
+    /// 重复 `MagicId` 必须**首行胜**：oracle `WorldServer.FindMagic`（`WorldServer.cs:1430-1443`）
+    /// 线性扫 `MagicList`（按装表序，`:1193-1211`）取首个匹配。真魔表 48 号有两条且
+    /// `Spell/DefSpell` 不同（idx38 群体施毒术 12/30、idx48 气功波 8/0）⇒ MP 包装层的
+    /// `GetSpellPoint` 必须用首行，否则 MP 数值/失败门（R 级）分歧。
+    #[test]
+    fn duplicate_magic_id_first_row_wins() {
+        let t = MagicTable::new(vec![
+            MagicInfo {
+                magic_id: 48,
+                magic_name: "群体施毒术".into(),
+                spell: 12,
+                def_spell: 30,
+                ..MagicInfo::default()
+            },
+            MagicInfo {
+                magic_id: 48,
+                magic_name: "气功波".into(),
+                spell: 8,
+                def_spell: 0,
+                ..MagicInfo::default()
+            },
+        ]);
+        assert_eq!(t.len(), 1, "同 MagicId 只留一条");
+        let m = t.get(48).expect("48 必须在表内");
+        assert_eq!(m.magic_name, "群体施毒术", "oracle FindMagic 首匹配");
+        assert_eq!((m.spell, m.def_spell), (12, 30), "首行 Spell/DefSpell");
     }
 }

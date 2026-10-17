@@ -5093,6 +5093,95 @@ fn handle_spell_cmd(
         let dir = movewire::next_direction(cur_x, cur_y, req.target_x, req.target_y);
         set_display_dir(displays, actor_id, dir);
     }
+    // **`PlayObject.DoSpell` 包装层**（`src/M2Server/Player/PlayObject.Base.cs:1505-1531`；本片接线）。
+    // 当前宿主此前完全缺失这一层。
+    //
+    // oracle 结构（逐行）：
+    // ```text
+    // PlayObject.Base.cs:1509  if (!MagicManager.IsWarrSkill(userMagic.MagIdx))
+    // PlayObject.Base.cs:1511    ushort nSpellPoint = GetSpellPoint(userMagic);
+    //   GetSpellPoint（:1369-1372）= (ushort)(Round(Magic.Spell / 4.0 * (Level + 1)) + Magic.DefSpell)
+    // PlayObject.Base.cs:1512    if (nSpellPoint > 0)
+    // PlayObject.Base.cs:1514      if (WAbil.MP < nSpellPoint) return false;
+    //                              ⇒ 调用方 Attack.cs:1279-1281 发 RM_MAGICFIREFAIL；此时**尚未**发
+    //                                RM_SPELL、未扣 MP、无任何效果体、世界 RNG 零抽数
+    // PlayObject.Base.cs:1518      DamageSpell(nSpellPoint);   // BaseObject.cs:1383：MP -= n
+    // PlayObject.Base.cs:1519      HealthSpellChanged();      // BaseObject.cs:700-709：53 帧
+    // PlayObject.Base.cs:1521    result = MagicManager.DoSpell(...);  // :151 战士门 / :155 距离门 /
+    //                                                                // :159 RM_SPELL / :167 版本门 / switch
+    // ```
+    // ⇒ **位置**：`default` 支的 `Dir = GetNextDirection(...)` 之后、`MagicManager.DoSpell` 的
+    // 距离门与 `RM_SPELL` 之前（扣 MP 与 53 帧先于 `:159`）。
+    //
+    // **MP 权威存储**：oracle 只有一份 `BaseObject.WAbil`；本宿主运行期权威是
+    // `SessionGround.state.wabil`（存档 `build_save_record` 的 `characters_ablity` 从它取，
+    // `saves[..].record.data.abil` 只是读档快照、从不回写）⇒ **本块只改 `sg.state.wabil.mp`**。
+    // 注意：世界 `Entity` **确有** `mp/max_mp`（`entity.rs:421-422`），但其唯一生产写入者是毒伤
+    // `buff::damage_health`（`buff.rs:503-520`，唯一调用方 `make_posion` 当前无生产调用者）
+    // ⇒ 现在无需镜像；将来接毒/魔法盾消耗时必须把 `wabil.mp` 同步进 `entity.mp`
+    // （HP 已有镜像先例：`main.rs` 的 `e.health` 同步），否则会出现第二份 MP（复验 surviving）。
+    //
+    // **`HealthSpellChanged` 收件人**（`BaseObject.cs:700-709`）：`Race == Play` ⇒ `SendUpdateMsg`
+    // （`BaseObject.Message.cs:283-305` 的 `SendMsg(this)` ⇒ 仅自己）；`ShowHp` ⇒ 再 `SendRefMsg`
+    // （`:383-445` ⇒ ±`SendRefMsgRange` 的同图 `Play`，**含自己**）。既有
+    // [`broadcast_healthspellchanged`]（同图 ±range 的在线玩家、含自己）与后者同形 ⇒ 复用之。
+    //
+    // **`RM_MAGICFIREFAIL` 收件人**：处理器（`PlayObject.Message.cs:1794-1800`）**无**
+    // `ActorId != ActorId` 守卫（与 `RM_SPELL` 的 `:1455` 不同）⇒ `SendRefMsg` 也给自己回帧
+    // ⇒ 用 [`broadcast_ref_msg_with_self`]（**不可**用 `broadcast_ref_msg`）。
+    //
+    // **适用面**：`default` 支（[`default_arm`]）+ 非战士技；8 个显式 `case`
+    // （12/25/26/27/34/38/43/56）各有自己的 MP 逻辑、不进 `default` ⇒ 本块不碰。
+    // `nSpellPoint == 0` ⇒ 不扣、不发 53、正常施放。
+    if default_arm && !magic::is_warr_skill(i32::from(req.magic_id)) {
+        if let Some(magic) = magic_table.get(req.magic_id) {
+            let magic_level = matched.as_ref().map_or(0, |m| m.level);
+            let n_spell_point = magic::get_spell_point(magic, magic_level);
+            if n_spell_point > 0 {
+                if let Some(sg) = ground_sessions.get_mut(chr_name) {
+                    // `if (WAbil.MP < nSpellPoint) return false;`（`:1514`）——早退：
+                    // 不发 RM_SPELL、不扣 MP、零效果体/零抽数；调用方回 RM_MAGICFIREFAIL。
+                    if sg.state.wabil.mp < n_spell_point {
+                        let fail = smframe_ext::sm_magicfire_fail(actor_id);
+                        broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
+                        // 调用方（`PlayObject.Message.cs:1339-1344`）在 `ClientSpellXY` 返回 true 后
+                        // 仍 `SendSocket(GetGoodTick)`；default 支即使 `DoSpell` 失败也 `result = true`
+                        // （`Attack.cs:1282`）⇒ 蓝不足也必须回 `+GD`，不能直接丢下链路。
+                        send_good_tick(online, gates, chr_name);
+                        return;
+                    }
+                    // `DamageSpell(nSpellPoint)`（`BaseObject.cs:1383`）：`MP - n > 0 ? MP - n : 0`
+                    // ⇒ 本支已保证 `MP >= n` ⇒ 等价于饱和减。
+                    sg.state.wabil.mp = sg.state.wabil.mp.saturating_sub(n_spell_point);
+                    // `HealthSpellChanged()`（`BaseObject.cs:700-709`）：
+                    // ① `SendUpdateMsg` ⇒ 只给自己；② `ShowHp` ⇒ 再 `SendRefMsg`（含自己 + 观察者）。
+                    let body = smframe::sm_healthspellchanged_frame(
+                        sg.actor_id,
+                        sg.state.wabil.hp,
+                        sg.state.wabil.mp,
+                        sg.state.wabil.max_hp,
+                    );
+                    let show_hp = sg.show_hp;
+                    send_self_frame(online, gates, chr_name, body.clone());
+                    if show_hp {
+                        broadcast_healthspellchanged(
+                            world,
+                            online,
+                            gates,
+                            actor_id,
+                            &body,
+                            chat::SEND_REF_MSG_RANGE,
+                        );
+                    }
+                } else {
+                    glog!(
+                        "WRN",
+                        "CM_SPELL：ChrName={chr_name} 无地面会话 ⇒ 无 WAbil，MP 包装层跳过（oracle 必有 PlayObject）"
+                    );
+                }
+            }
+        }
+    }
     // **片 `openmir2-default-arm-spell-surface`（帧面）：`DoSpell` 的**无条件** `RM_SPELL` 广播。**
     //
     // 界定件 `tests/parity/m3/design-default-arm-spell-frames-20261017.md`（§1 oracle 清单 / §5.1 判据
@@ -5139,9 +5228,14 @@ fn handle_spell_cmd(
     // [`mir2_world::magic::spell_version_gate`] **无生产调用点**——效果体层未接，故本条广播天然落在
     // 「版本门之前」；**反面牙**：把它挪到版本门之后 ⇒ `magic_id > 80`（如 81）必丢帧）、
     // `:172-643` 的 45 条 `case` 效果体、`:648-658` `RM_MAGICFIRE`、`:659-668` 训练尾（含 RNG 抽数
-    // + `MagicList` 落库）、`PlayObject.Base.cs:1510-1522` 的 `GetSpellPoint`/`DamageSpell`/
-    // `HealthSpellChanged`（**MP 扣减 / `RM_HEALTHSPELLCHANGED`**）、`Attack.cs:1280` 的
-    // `RM_MAGICFIREFAIL`。逐行见界定件 §5.2。
+    // + `MagicList` 落库）。逐行见界定件 §5.2。
+    //
+    // **已接线（2026-10-17，卡 `openmir2-spell-mp-wrapper`，**在本块之上**）**：
+    // `PlayObject.Base.cs:1505-1531` 的 MP 包装层——`GetSpellPoint`/`DamageSpell`/
+    // `HealthSpellChanged`（`RM_HEALTHSPELLCHANGED`=53，先于 `:159` 的 `RM_SPELL`）与蓝不足
+    // 早退 + `RM_MAGICFIREFAIL`（→ `SM_MAGICFIRE_FAIL(639)`）。故**不再**列在下方未做项里。
+    // 仍未接：`MagicManager.DoSpell` 战士门（`:151`）/距离门（`:155`）失败时的
+    // `RM_MAGICFIREFAIL`，以及 8 个显式 MagIdx case 各自的 MP 逻辑。
     //
     // **`userMagic.Magic.Effect` 的来源**：本仓 `magic_table`（`magics::load_magics`，oracle
     // `MySqlDB.LoadMagicDB`）。表里无该魔号 ⇒ 造不出帧（oracle 侧等价于 `userMagic.Magic == null`，
@@ -22645,6 +22739,343 @@ mod tests {
             .find(|(s, _)| *s == socket)
             .map(|(_, ids)| ids.clone())
             .unwrap_or_default()
+    }
+
+    /// **MP 包装层测试台**（`PlayObject.DoSpell`，`PlayObject.Base.cs:1505-1531`）：
+    /// 施法者 (10,10)/等级 20、目标 (11,10)/等级 1（`SKILL_FIREWIND` 的推挤需要）；
+    /// `magic_spell`/`magic_def_spell` 决定 `GetSpellPoint`，`caster_mp` 是 `WAbil.MP`。
+    /// 返回 `(SendFrame（按发送序）, SendRaw, world, ground_sessions, caster, target)`。
+    #[allow(clippy::type_complexity)]
+    fn mp_wrap_run(
+        magic_id: u16,
+        magic_spell: u16,
+        magic_def_spell: u8,
+        caster_mp: u16,
+        show_hp: bool,
+        seed: i32,
+    ) -> (
+        Vec<(i32, Vec<u8>)>,
+        Vec<(i32, Vec<u8>)>,
+        mir2_world::World,
+        std::collections::HashMap<String, SessionGround>,
+        i32,
+        i32,
+    ) {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        world.maps.push(mir2_world::MapGrid::new(64, 64));
+        world.open_session("caster");
+        let mut e = new_player_entity("caster".to_string(), 10, 10);
+        e.level = 20;
+        let caster = world.enter_map("caster", e, 0).expect("进图");
+        let target = {
+            let mut t = new_player_entity("target".to_string(), 11, 10);
+            t.level = 1;
+            world.add_entity(t)
+        };
+        world.tick();
+        world.entities.get_mut(caster).unwrap().visible_actors =
+            vec![mir2_world::entity::VisibleBaseObject {
+                target,
+                flag: mir2_world::entity::VisibleFlag::Show,
+            }];
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            caster,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
+        );
+        displays.set(
+            target,
+            downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"target".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uc".into(),
+                chr_name: "caster".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 911,
+                actor_id: caster,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ut".into(),
+                chr_name: "target".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 912,
+                actor_id: target,
+            },
+        );
+        let (tx0, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut record = stage6_record();
+        record.data.magic = Some(vec![Some(record::MagicRcd {
+            mag_idx: magic_id,
+            level: 1,
+            magic_key: u16::from(b'm'),
+            tran_point: 0,
+        })]);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert(
+            "caster".into(),
+            SavedHuman {
+                account: "uc".into(),
+                record,
+                enter_map: "0".into(),
+            },
+        );
+        // `train_level = 255` ⇒ 训练尾 `TrainLevel[Level] <= Abil.Level` 恒假（不混入尾抽数）。
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id,
+            effect: 3,
+            effect_type: 4,
+            spell: magic_spell,
+            def_spell: magic_def_spell,
+            train_lv: 3,
+            train_level: [255; 4],
+            ..mir2_data::MagicInfo::default()
+        }]);
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(caster);
+        sg.state.wabil.hp = 30;
+        sg.state.wabil.mp = caster_mp;
+        sg.state.wabil.max_hp = 100;
+        sg.state.wabil.max_mp = 100;
+        sg.show_hp = show_hp;
+        ground_sessions.insert("caster".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(11, 10),
+            magic_id,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+        );
+        let mut frames = Vec::new();
+        let mut raws = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                SimToGate::SendFrame { socket, body } => frames.push((socket, body)),
+                SimToGate::SendRaw { socket, payload } => raws.push((socket, payload)),
+                _ => {}
+            }
+        }
+        (frames, raws, world, ground_sessions, caster, target)
+    }
+
+    fn mp_ident(body: &[u8]) -> u16 {
+        u16::from_le_bytes([body[4], body[5]])
+    }
+
+    /// **判据①（MP 包装层，生产入口 `handle_spell_cmd`）**：蓝足 ⇒ MP 恰减 `GetSpellPoint`
+    /// （= `Round(Spell/4*(Level+1)) + DefSpell` = `Round(8/4*2)+2 = 6`）；
+    /// `SM_HEALTHSPELLCHANGED(53)` 在 `SM_SPELL(17)` **之前**，且 53 的 `(hp, mp)` = 扣后值；
+    /// `SM_SPELL` 与效果体帧与「`spell=0` 对照 run」逐字节相同。
+    ///
+    /// 红检（变异牙）：① 去掉「蓝不足早退」⇒ 判据②红；② 把 53 移到 `SM_SPELL` 之后 ⇒ 本用例红；
+    /// ③ 扣减公式改 `+1` ⇒ 本用例红（实测记录见补丁说明）。
+    #[test]
+    fn spell_cmd_mp_wrapper_deducts_and_health_frame_precedes_spell() {
+        let magic_id = mir2_world::magic::SKILL_FIREWIND;
+        let (frames, _raws, _world, sessions, caster, _target) =
+            mp_wrap_run(magic_id, 8, 2, 50, false, 1);
+        let want = mir2_world::magic::get_spell_point(
+            &mir2_data::MagicInfo {
+                spell: 8,
+                def_spell: 2,
+                ..mir2_data::MagicInfo::default()
+            },
+            1,
+        );
+        assert_eq!(want, 6, "期望表自洽：Round(8/4*2)+2 = 6");
+        assert_eq!(
+            sessions["caster"].state.wabil.mp,
+            50 - want,
+            "oracle DamageSpell：MP 恰减 GetSpellPoint"
+        );
+
+        // 53 只给自己（ShowHp=false ⇒ 无 SendRefMsg 支），且先于 SM_SPELL。
+        let i_53 = frames
+            .iter()
+            .position(|(s, b)| {
+                *s == 911 && mp_ident(b) == mir2_protocol::messages::SM_HEALTHSPELLCHANGED
+            })
+            .expect("蓝足 ⇒ HealthSpellChanged 必发 53 给自己");
+        let i_spell = frames
+            .iter()
+            .position(|(_, b)| mp_ident(b) == mir2_protocol::messages::SM_SPELL)
+            .expect("效果层 RM_SPELL ⇒ SM_SPELL");
+        assert!(
+            i_53 < i_spell,
+            "oracle 序：DamageSpell/HealthSpellChanged（:1518-1519）先于 RM_SPELL（:159）；实得序 {frames:?}"
+        );
+        // 53 的 header 字段 = 扣后值（param=HP、tag=MP、series=MaxHP）。
+        let b53 = &frames[i_53].1;
+        assert_eq!(
+            b53[0..4],
+            caster.to_le_bytes(),
+            "53 的 Recog = 施法者 ActorId"
+        );
+        assert_eq!(u16::from_le_bytes([b53[6], b53[7]]), 30, "53.HP = 扣后 HP");
+        assert_eq!(
+            u16::from_le_bytes([b53[8], b53[9]]),
+            44,
+            "53.MP = 扣后 MP（50-6）"
+        );
+        assert_eq!(u16::from_le_bytes([b53[10], b53[11]]), 100, "53.MaxHP");
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|(_, b)| mp_ident(b) == mir2_protocol::messages::SM_HEALTHSPELLCHANGED)
+                .count(),
+            1,
+            "ShowHp=false ⇒ 仅 SendUpdateMsg 一条（无 SendRefMsg 支）"
+        );
+
+        // 效果体帧不受扣 MP 影响：与 spell=0 的对照 run 逐字节相同（滤掉 53）。
+        let (ctrl_frames, _craws, _w, _cs, _c, _t) = mp_wrap_run(magic_id, 0, 0, 50, false, 1);
+        let a: Vec<_> = frames
+            .iter()
+            .filter(|(_, b)| mp_ident(b) != mir2_protocol::messages::SM_HEALTHSPELLCHANGED)
+            .cloned()
+            .collect();
+        assert_eq!(
+            a, ctrl_frames,
+            "SM_SPELL 与效果体帧须与 spell=0 对照逐字节相同"
+        );
+        assert!(
+            ctrl_frames
+                .iter()
+                .any(|(_, b)| mp_ident(b) == mir2_protocol::messages::SM_BACKSTEP),
+            "前提：效果体确实跑起来（有 SM_BACKSTEP）"
+        );
+    }
+
+    /// **判据②（蓝不足早退）**：`MP(5) < nSpellPoint(6)` ⇒ `DoSpell` 包装层 `return false`：
+    /// 零 `SM_SPELL`/效果体帧/`SM_BACKSTEP`；世界 RNG 零抽数（随后连续三抽对照）；MP 不变；
+    /// 恰一条逻辑 `SM_MAGICFIRE_FAIL(639)`，ActorId = 施法者，收件人 = `RM_MAGICFIREFAIL` 的
+    /// `SendRefMsg` 集合（含自己 + 同图观察者；处理器无 `ActorId != ActorId` 守卫）。
+    #[test]
+    fn spell_cmd_mp_wrapper_insufficient_mp_fails_without_frames_or_draws() {
+        use mir2_shared::rng::RandomNumber;
+        let seed = 7;
+        let magic_id = mir2_world::magic::SKILL_FIREWIND;
+        let (frames, raws, world, sessions, caster, _target) =
+            mp_wrap_run(magic_id, 8, 2, 5, false, seed);
+
+        assert_eq!(
+            sessions["caster"].state.wabil.mp, 5,
+            "蓝不足 ⇒ 不扣 MP（早退在 DamageSpell 之前）"
+        );
+        let ids: Vec<u16> = frames.iter().map(|(_, b)| mp_ident(b)).collect();
+        for forbidden in [
+            mir2_protocol::messages::SM_SPELL,
+            mir2_protocol::messages::SM_BACKSTEP,
+            mir2_protocol::messages::SM_MAGICFIRE,
+            mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+        ] {
+            assert!(
+                !ids.contains(&forbidden),
+                "蓝不足 ⇒ 不得有 ident {forbidden}；实得 {ids:?}"
+            );
+        }
+        // 世界 RNG 零抽数：状态 == 全新同 seed 流；随后连续三抽也与参照流逐项相同。
+        let fresh = RandomNumber::with_seed(seed);
+        assert_eq!(
+            draws_between(&fresh, &world.rng),
+            0,
+            "蓝不足 ⇒ 一个随机数都不抽（早退在效果体/尾之前）"
+        );
+        let mut probe = fresh.clone();
+        let mut got = world.rng.clone();
+        for k in 0..3 {
+            assert_eq!(
+                got.random_below(10),
+                probe.random_below(10),
+                "阴性对照第 {k} 抽 = 参照流（世界 RNG 未被消费）"
+            );
+        }
+        // 恰一条逻辑 639：`RM_MAGICFIREFAIL` 的 SendRefMsg 收件人 = 自己 + 同图观察者。
+        let fails: Vec<&(i32, Vec<u8>)> = frames
+            .iter()
+            .filter(|(_, b)| mp_ident(b) == mir2_protocol::messages::SM_MAGICFIRE_FAIL)
+            .collect();
+        assert_eq!(fails.len(), 2, "含自己（911）+ 同图观察者（912）各一条");
+        for (_sock, body) in &fails {
+            assert_eq!(body[0..4], caster.to_le_bytes(), "639 的 Recog = 施法者");
+        }
+        assert!(
+            frames.iter().filter(|(s, _)| *s == 912).count() == 1,
+            "观察者恰好收到一条 639"
+        );
+        assert!(
+            fails.iter().any(|(s, _)| *s == 911),
+            "施法者自己也收到（无 ActorId 守卫）"
+        );
+        assert!(fails.iter().any(|(s, _)| *s == 912), "同图观察者收到");
+        // 调用方 `Attack.cs:1282` 的 `result = true` ⇒ 蓝不足仍回 `+GD`（`PlayObject.Message.cs:1343`）。
+        assert_eq!(
+            raws.iter()
+                .filter(|(s, p)| *s == 911 && p.starts_with(b"+GD/"))
+                .count(),
+            1,
+            "蓝不足仍须给施法者回 +GD（ClientSpellXY default 支恒 result=true）"
+        );
+    }
+
+    /// **判据③（`nSpellPoint == 0`）**：`spell = def_spell = 0` ⇒ 不扣 MP、不发 53、正常施放
+    /// （`SM_SPELL` + 效果体照常）。
+    #[test]
+    fn spell_cmd_mp_wrapper_zero_spell_point_is_transparent() {
+        let magic_id = mir2_world::magic::SKILL_FIREWIND;
+        let (frames, raws, _world, sessions, _caster, _target) =
+            mp_wrap_run(magic_id, 0, 0, 50, false, 3);
+        assert_eq!(
+            sessions["caster"].state.wabil.mp, 50,
+            "nSpellPoint=0 ⇒ 不扣 MP"
+        );
+        let ids: Vec<u16> = frames.iter().map(|(_, b)| mp_ident(b)).collect();
+        assert!(
+            !ids.contains(&mir2_protocol::messages::SM_HEALTHSPELLCHANGED),
+            "nSpellPoint=0 ⇒ 不发 53"
+        );
+        assert!(
+            ids.contains(&mir2_protocol::messages::SM_SPELL),
+            "正常施放 SM_SPELL"
+        );
+        assert!(
+            ids.contains(&mir2_protocol::messages::SM_BACKSTEP),
+            "效果体照常（8 推挤目标）"
+        );
+        assert_eq!(
+            raws.iter()
+                .filter(|(s, p)| *s == 911 && p.starts_with(b"+GD/"))
+                .count(),
+            1,
+            "正常施放同样回 +GD"
+        );
     }
 
     /// **魔号 8 正例（生产入口 `handle_spell_cmd`）**：效果体被进入、取数逐项等于 oracle 期望、
