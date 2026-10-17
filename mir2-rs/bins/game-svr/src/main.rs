@@ -5074,6 +5074,91 @@ fn spell_tail_bo_train(magic_id: u16) -> Option<bool> {
     None
 }
 
+/// **P2（`openmir2-spell-shared-tail-p2`）**：14/15/31 的 `DoSpell` 共享尾
+/// （`MagicManager.cs:644-669`）。
+///
+/// 与 P1 块、8/21/37、17/30/41、20、46 各块的尾是**同一条** oracle 语句；参数按各 case 定值：
+/// - `bo_spell_fail = false`：14/15 只有护身符门通过才调用本函数（门不过走调用方的 639 支）；
+///   31 的 `case` 根本不置 `boSpellFail`（`MagicManager.cs:474-479`）；
+/// - `bo_spell_fire = true`：三个 case 都不置 false；
+/// - `bo_train`：14/15 = `MagMakeDefenceArea(...) > 0`（case 内实际命中数）；
+///   31 = **true**——`CharacterObject.cs:96-114` 的 `MagBubbleDefenceUp` 在
+///   `StatusTimeArr[BubbleDefenceUP] == 0` 时恒返回 `true`，而本骨架未建模该状态（恒 0）。
+///   用 `cast_shield_spell` 的 `n_sec` 当 `bo_train` 会在 `n_sec == 0` 时漏掉训练抽；
+/// - 目标 ActorId 读 `:160-163` **死亡归一**后的值；坐标为 snap 后的 `tx/ty`；
+/// - `FastTrain` 未装载 ⇒ `false`（与既有四处同口径登记）。
+///
+/// 帧序：`RM_MAGICFIRE`（含施法者自己：`PlayObject.Message.cs:1788-1793` 无自守卫 ⇒
+/// `broadcast_ref_msg_with_self`）→ `RM_MAGIC_LVEXP`（`send_self_frame`）。调用方必须已经
+/// 完成该 case 的**全部**效果体取数：本函数是这些 case 上唯一且最后一次 `Random(3)+1`。
+#[allow(clippy::too_many_arguments)]
+fn finish_spell_tail(
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    chr_name: &str,
+    actor_id: i32,
+    magic: &mir2_data::MagicInfo,
+    magic_id: u16,
+    magic_level: u8,
+    tran_point: i32,
+    bo_train: bool,
+    caster_abil_level: u8,
+    tx: i32,
+    ty: i32,
+    target_actor_id: i32,
+) {
+    let mut train = magic::SkillTrainState {
+        magic_id,
+        level: magic_level,
+        tran_point,
+        train_lv: magic.train_lv,
+        train_level: magic.train_level,
+        max_train: magic.max_train,
+    };
+    // 共享尾（唯一取数点：`bo_train` 门内恰一次 `Random(3)+1`）。
+    let tail = {
+        let rng = &mut world.rng;
+        magic::do_spell_tail(
+            false,
+            true,
+            bo_train,
+            false,
+            caster_abil_level,
+            rng,
+            &mut train,
+        )
+    };
+    // 熟练度回写存档记录（`MakeSaveRcd` 的 `MagicList` 同源；与兄弟块同口径）。
+    if let Some(rcd) = saves
+        .get_mut(chr_name)
+        .and_then(|s| s.record.data.magic.as_mut())
+        .and_then(|list| list.iter_mut().flatten().find(|m| m.mag_idx == magic_id))
+    {
+        rcd.level = train.level;
+        rcd.tran_point = train.tran_point;
+    }
+    // `:648-658` `boSpellFire => RM_MAGICFIRE`（坐标/目标读 snap 与死亡归一后的值）。
+    if tail.magic_fire {
+        let body = smframe::sm_magicfire(
+            actor_id,
+            wire_coord(tx),
+            wire_coord(ty),
+            magic.effect_type,
+            magic.effect,
+            target_actor_id,
+        );
+        broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+    }
+    // `:659-669` 训练尾帧 `RM_MAGIC_LVEXP`（本仓立即发，延迟面既有全局登记）。
+    if tail.train.levelup_msg {
+        let body = smframe::sm_magic_lvexp(magic_id, train.level, train.tran_point);
+        send_self_frame(online, gates, chr_name, body);
+    }
+    let _ = tail.returned;
+}
+
 /// **`openmir2-m3-attack-magic-wiring`（第二片）**、**`openmir2-m3-pet-slave-summon`（第②片）**
 /// 与 **`openmir2-default-arm-spell-surface`（帧面片）** 三片共同的入口：
 /// `CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790` → `PlayObject.Message.cs:1339-1400`）。
@@ -5446,7 +5531,9 @@ fn handle_spell_cmd(
     // 位置在版本门之前）。魔号 14/15/31 原先「无该帧的生产者」的缺口**一并收口**（原登记作废）。
     // **本支（A-5 buff 生产者）自身不发帧**：帧序 = 无条件 `SM_SPELL` 在前（:159）、
     // 本支落的 buff 状态帧（`drain_buff_downlink` 的 657）在后——与 oracle「`:159` 先于 case 效果体」同序。
-    // 仍未接者：`RM_MAGICFIRE`（`:648-658`）与 `boTrain` 尾（`:659-668`），登记见 `magicwire` 模块头。
+    // **已接（2026-10-17，`openmir2-spell-shared-tail-p2`）**：`RM_MAGICFIRE`（`:648-658`）与
+    // `boTrain` 训练尾（`:659-668`）——14/15 的护身符门（`CheckAmulet`/`UseAmulet`）与 31 的无门
+    // 路径都在本块内；尾统一走 [`finish_spell_tail`]。门不过 ⇒ 恰一条 639（见下方 14/15 支）。
     if world.buff_tick_enabled() {
         let (mc, sc) = ground_sessions.get(chr_name).map_or((0, 0), |sg| {
             (i32::from(sg.state.wabil.mc), i32::from(sg.state.wabil.sc))
@@ -5483,7 +5570,7 @@ fn handle_spell_cmd(
         // **命中判定 = [`queryuser::cetin_near_xy`]**（见 [`spell_snap_target`]；与上方无条件广播块、
         // 与下方召唤/诱惑/分身三块**同一个写法**）。命中 ⇒ snap 到目标实际坐标。
         // （`spellObject` 本身在 14/15/31 的效果体里不被使用 ⇒ 只取坐标，与兄弟块同判据。）
-        let (tx, ty, _hit) = spell_snap_target(
+        let (tx, ty, hit) = spell_snap_target(
             world,
             self_map,
             req.target_actor_id,
@@ -5491,43 +5578,150 @@ fn handle_spell_cmd(
             req.target_y,
         );
         if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
+            // `MagicManager.cs:160-163`：`targetObject != null && targetObject.Death ⇒ null`。
+            // 三个 case 的共享尾 `RM_MAGICFIRE` 的 ActorId 都读这个归一后的目标。
+            let target_id = if hit {
+                world
+                    .entities
+                    .get(req.target_actor_id)
+                    .filter(|t| !t.death)
+                    .map(|t| t.id)
+            } else {
+                None
+            };
             match req.magic_id {
                 // `SKILL_SHIELD(31)`：`MagBubbleDefenceUp(level, GetPower(GetRPow(MC) + 15))`（`:475`）
                 // ——作用于**施法者自身**（不读目标坐标）⇒ 坐标口径对 31 无影响。
+                // oracle 该 case **不调 `CheckAmulet`**、不置 `boSpellFail`（`:474-479`）
+                // ⇒ 无护身符也可施放（与 14/15 的 13..=19 组不同）。
                 mir2_world::world::SKILL_SHIELD => {
                     if let Some(magic) = magic_table.get(req.magic_id) {
                         let _ = world.cast_shield_spell(actor_id, magic, magic_level, mc);
-                    }
-                }
-                // `SKILL_HANGMAJINBUB(14)`：`MagMakeDefenceArea(nTargetX, nTargetY, 3, nPower, 1)`
-                // ⇒ `MagDefenceUp`（`:352-357`）。**中心坐标 = snap 后的 `tx`/`ty`**——oracle 的
-                // `MagMakeDefenceArea` 收的就是被 `:1275-1276` 改写后的局部变量。
-                mir2_world::world::SKILL_HANGMAJINBUB => {
-                    if let Some(magic) = magic_table.get(req.magic_id) {
-                        let _ = world.cast_defence_area_spell(
+                        // `bo_train = true`：见 [`finish_spell_tail`] 的文档（`MagBubbleDefenceUp`
+                        // 在 `BubbleDefenceUP == 0` 时恒 true ⇒ 不能拿 `n_sec` 判）。
+                        finish_spell_tail(
+                            world,
+                            online,
+                            gates,
+                            saves,
+                            chr_name,
                             actor_id,
                             magic,
+                            req.magic_id,
                             magic_level,
-                            sc,
+                            matched.as_ref().map_or(0, |m| m.tran_point),
+                            true,
+                            caster_abil_level,
                             tx,
                             ty,
-                            1,
+                            target_id.unwrap_or(0),
                         );
                     }
                 }
-                // `SKILL_DEJIWONHO(15)`：`MagMakeDefenceArea(nTargetX, nTargetY, 3, nPower, 0)`
-                // ⇒ `DefenceUp`（`:359-365`）。中心坐标同上 = snap 后的 `tx`/`ty`。
-                mir2_world::world::SKILL_DEJIWONHO => {
+                // 14/15 属于 oracle 的 13..=19 共享组（`MagicManager.cs:315-393`）：
+                // `:322 boSpellFail = true` → `:323 CheckAmulet(1,1)`（`MagicBase.cs:47-105`）→
+                // 过则 `:325 UseAmulet(1,1)` → case 效果 → `:391 boSpellFail = false`。
+                // **门不过 ⇒ 不上 buff、不走尾** ⇒ `:644-647 return false` ⇒ 调用方
+                // `Attack.cs:1279-1281` 补**恰一条** `SM_MAGICFIRE_FAIL(639)`；包装层的 MP/53 与
+                // `:159` 的 `SM_SPELL` 发生在更早处，不回退。
+                mir2_world::world::SKILL_HANGMAJINBUB | mir2_world::world::SKILL_DEJIWONHO => {
                     if let Some(magic) = magic_table.get(req.magic_id) {
-                        let _ = world.cast_defence_area_spell(
-                            actor_id,
-                            magic,
-                            magic_level,
-                            sc,
-                            tx,
-                            ty,
-                            0,
+                        let gate = magic::amulet_requirement(i32::from(req.magic_id)).and_then(
+                            |(count, amulet_type)| {
+                                // `CheckAmulet` 先查 `ArmRingl`(5)、不匹配再查 `Bujuk`(9)。
+                                let armringl = amulet_slot(
+                                    ground_sessions.get(chr_name),
+                                    game_svr::ability::SLOT_ARMRING_L,
+                                    catalog,
+                                );
+                                let bujuk = amulet_slot(
+                                    ground_sessions.get(chr_name),
+                                    game_svr::ability::SLOT_BUJUK,
+                                    catalog,
+                                );
+                                magic::check_amulet(armringl, bujuk, count, amulet_type)
+                                    .map(|slot| (slot, count, armringl, bujuk))
+                            },
                         );
+                        if let Some((slot, count, armringl, bujuk)) = gate {
+                            // `MagicBase.UseAmulet`（`MagicBase.cs:109-127`）——**先于**效果体
+                            // （oracle `:325` 在 `:326-390` 的内层 switch 之前）。
+                            let dura = match slot {
+                                magic::ITEM_LOCATION_ARM_RINGL => armringl.map(|s| s.dura),
+                                magic::ITEM_LOCATION_BUJUK => bujuk.map(|s| s.dura),
+                                _ => None,
+                            }
+                            .unwrap_or(0);
+                            let used = magic::use_amulet(dura, count);
+                            if used.deleted {
+                                // `Dura = 0; SendDelItems(item); Index = 0;`（`:121-126`）。
+                                // 清槽前取件（`apply_amulet_use` 会把 `UseItems[slot]` 置 None）。
+                                let body = ground_sessions
+                                    .get(chr_name)
+                                    .and_then(|sg| sg.use_items.get(usize::from(slot)))
+                                    .and_then(Option::as_ref)
+                                    .and_then(|it| {
+                                        game_svr::slave::deleted_amulet_body(actor_id, it, catalog)
+                                    });
+                                apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                                if let Some(body) = body {
+                                    send_self_frame(online, gates, chr_name, body);
+                                }
+                            } else {
+                                // `Dura -= nCount*100; SendMsg(RM_DURACHANGE, idx, Dura, DuraMax, 0)`
+                                // ——`SendMsg(this)` ⇒ 仅自己（`SM_DURACHANGE`）。
+                                apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                                if let Some(it) = ground_sessions
+                                    .get(chr_name)
+                                    .and_then(|sg| sg.use_items.get(usize::from(slot)))
+                                    .and_then(Option::as_ref)
+                                {
+                                    let body = smframe::sm_durachange(it.dura, slot, it.dura_max);
+                                    send_self_frame(online, gates, chr_name, body);
+                                }
+                            }
+                            // case 效果（`:352-365`）：`btState == 1` ⇒ `MagDefenceUp`（14）；
+                            // `0` ⇒ `DefenceUp`（15）。中心坐标 = snap 后的 `tx`/`ty`；
+                            // `bo_train` = `MagMakeDefenceArea(...) > 0`（实际命中数）。
+                            let bt_state = if req.magic_id == mir2_world::world::SKILL_HANGMAJINBUB
+                            {
+                                1
+                            } else {
+                                0
+                            };
+                            let hits = world.cast_defence_area_spell(
+                                actor_id,
+                                magic,
+                                magic_level,
+                                sc,
+                                tx,
+                                ty,
+                                bt_state,
+                            );
+                            finish_spell_tail(
+                                world,
+                                online,
+                                gates,
+                                saves,
+                                chr_name,
+                                actor_id,
+                                magic,
+                                req.magic_id,
+                                magic_level,
+                                matched.as_ref().map_or(0, |m| m.tran_point),
+                                hits > 0,
+                                caster_abil_level,
+                                tx,
+                                ty,
+                                target_id.unwrap_or(0),
+                            );
+                        } else {
+                            // `boSpellFail` 保持 true ⇒ `:644-647 return false` ⇒ 调用方
+                            // `Attack.cs:1279-1281` 发 `RM_MAGICFIREFAIL`（恰一条/收件人；
+                            // 处理器无自守卫 ⇒ [`broadcast_ref_msg_with_self`]）。
+                            let fail = smframe_ext::sm_magicfire_fail(actor_id);
+                            broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
+                        }
                     }
                 }
                 _ => {}
@@ -17051,6 +17245,741 @@ mod tests {
         ids
     }
 
+    // ==========================================================================
+    // P2（`openmir2-spell-shared-tail-p2`）：14/15 护身符门 + 14/15/31 共享尾
+    // ==========================================================================
+    //
+    // 全部走**生产入口** `handle_spell_cmd`（`world.enable_buff_tick()` = A-5 支的运行前提）。
+    // oracle 锚：`MagicManager.cs:315-393`（13..=19 组：`:322 boSpellFail=true` →
+    // `CheckAmulet(1,1)` → `UseAmulet(1,1)` → 各 case 效果 → `:391 boSpellFail=false`）、
+    // `:474-479`（31 无护身符/不置 boSpellFail）、`:644-669`（共享尾）、
+    // `MagicBase.cs:47-127`（CheckAmulet/UseAmulet）、`CharacterObject.cs:96-114`
+    // （`MagBubbleDefenceUp`：`BubbleDefenceUP == 0` ⇒ 恒 true）。
+
+    /// A-5 的**护身符目录**（`CheckAmulet` 的 `StdMode == 25 && Shape == 5` 两门）。
+    fn a5_amulet_catalog() -> game_svr::ability::StdItemCatalog {
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "护身符".into(),
+                std_mode: 25,
+                shape: 5,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        catalog
+    }
+
+    /// A-5 会话态 + `ArmRingl`（槽 5）护身符（`MakeIndex = Index = 1`）。
+    fn a5_session_with_amulet(caster: i32, dura: u16) -> SessionGround {
+        let mut sg = spell_session_ground(caster);
+        sg.use_items[game_svr::ability::SLOT_ARMRING_L] = Some(game_svr::bag::BagItem {
+            make_index: 1,
+            index: 1,
+            dura,
+            dura_max: 1000,
+            desc: [0; 14],
+        });
+        sg
+    }
+
+    /// P2 专用夹具：buff tick 开启 + 施法者 `caster`(10,10) + 目标 `target`(x,y) +
+    /// 可选 `ArmRingl` 护身符 + 可配训练门（`TrainLevel`/`MaxTrain`）。
+    ///
+    /// 与 [`a5_spell_rig`] 的差别：本夹具接受 seed / 训练门 / 护身符耐久，便于在同一测试里
+    /// 跑「门开」与「门关」两条**同种子**对照流（断言必须比较整段流水，不用单抽）。
+    struct P2Rig {
+        world: mir2_world::World,
+        caster: i32,
+        target: i32,
+        online: OnlineRegistry,
+        saves: std::collections::HashMap<String, SavedHuman>,
+        ground_sessions: std::collections::HashMap<String, SessionGround>,
+        magic_table: magics::MagicTable,
+        displays: downlink::DisplayTable,
+        gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        catalog: game_svr::ability::StdItemCatalog,
+    }
+
+    impl P2Rig {
+        #[allow(clippy::too_many_arguments)]
+        fn new(
+            magic_id: u16,
+            target_x: i32,
+            target_y: i32,
+            amulet_dura: Option<u16>,
+            train_level: [u8; 4],
+            max_train: [i32; 4],
+            seed: i32,
+        ) -> Self {
+            use std::collections::HashMap;
+            let mut world = mir2_world::World::new(64, 64);
+            world.enable_buff_tick();
+            let caster = world.add_entity(new_player_entity("caster".to_string(), 10, 10));
+            let target =
+                world.add_entity(new_player_entity("target".to_string(), target_x, target_y));
+            world.tick();
+            let mut displays = downlink::DisplayTable::new();
+            displays.set(
+                caster,
+                downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
+            );
+            displays.set(
+                target,
+                downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"target".to_vec()),
+            );
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "uc".into(),
+                    chr_name: "caster".into(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 911,
+                    actor_id: caster,
+                },
+            );
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ut".into(),
+                    chr_name: "target".into(),
+                    session_id: 2,
+                    gate_idx: 0,
+                    socket: 912,
+                    actor_id: target,
+                },
+            );
+            let (tx0, rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx0);
+            let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+            let mut record = stage6_record();
+            record.data.magic = Some(vec![Some(record::MagicRcd {
+                mag_idx: magic_id,
+                level: 1,
+                magic_key: u16::from(b'm'),
+                tran_point: 0,
+            })]);
+            saves.insert(
+                "caster".into(),
+                SavedHuman {
+                    account: "uc".into(),
+                    record,
+                    enter_map: "0".into(),
+                },
+            );
+            let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+                magic_id,
+                effect: 3,
+                effect_type: 4,
+                train_lv: 3,
+                train_level,
+                max_train,
+                ..mir2_data::MagicInfo::default()
+            }]);
+            let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+            let sg = match amulet_dura {
+                Some(dura) => a5_session_with_amulet(caster, dura),
+                None => spell_session_ground(caster),
+            };
+            ground_sessions.insert("caster".into(), sg);
+            let mut world = world;
+            world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            Self {
+                world,
+                caster,
+                target,
+                online,
+                saves,
+                ground_sessions,
+                magic_table,
+                displays,
+                gates,
+                rx,
+                catalog: a5_amulet_catalog(),
+            }
+        }
+
+        fn cast(&mut self, magic_id: u16, click: (u16, u16), target_actor_id: u16) {
+            let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+            let table = game_svr::mongen::MonsterTable::new(Vec::new());
+            handle_spell_cmd(
+                game_svr::feature::make_long(click.0, click.1),
+                magic_id,
+                target_actor_id,
+                0,
+                "caster",
+                911,
+                &self.online,
+                &mut self.world,
+                &mut self.saves,
+                &mut self.ground_sessions,
+                &self.catalog,
+                &self.magic_table,
+                &pet_cfg,
+                8,
+                None,
+                &table,
+                &mut self.displays,
+                &self.gates,
+            );
+        }
+
+        fn drain_frames(&mut self) -> Vec<SfFrame> {
+            let mut frames = Vec::new();
+            while let Ok(m) = self.rx.try_recv() {
+                if let SimToGate::SendFrame { socket, body } = m {
+                    frames.push((socket, body));
+                }
+            }
+            frames
+        }
+
+        fn amulet_dura(&self) -> Option<u16> {
+            self.ground_sessions
+                .get("caster")
+                .and_then(|sg| sg.use_items[game_svr::ability::SLOT_ARMRING_L].as_ref())
+                .map(|it| it.dura)
+        }
+
+        fn tran_point(&self) -> i32 {
+            self.saves["caster"].record.data.magic.as_ref().unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .tran_point
+        }
+
+        fn tran_level(&self) -> u8 {
+            self.saves["caster"].record.data.magic.as_ref().unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .level
+        }
+    }
+
+    /// `SM_DURACHANGE(642)` 的载荷：`(Dura, Slot, DuraMax)`。
+    fn p2_durachange_fields(b: &[u8]) -> (i32, u16, u16) {
+        let cmd = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
+        (cmd.recog, cmd.param, cmd.tag)
+    }
+
+    /// 全局发送序（同一 gate 通道 = 同一次 `handle_spell_cmd` 的发送调用序）。
+    fn p2_seq(frames: &[SfFrame]) -> Vec<u16> {
+        frames.iter().map(|(_, b)| sf_ident(b)).collect()
+    }
+
+    fn p2_pos(seq: &[u16], ident: u16, why: &str) -> usize {
+        seq.iter()
+            .position(|x| *x == ident)
+            .unwrap_or_else(|| panic!("{why}：序列里没有 ident {ident}；实得 {seq:?}"))
+    }
+
+    /// **P2-① 护身符消耗 + 共享尾（14/15）**：`Dura=600` ⇒ 恰减 100（→500）+ **仅自己**一条
+    /// `SM_DURACHANGE(642)`；buff 生效；`SM_SPELL`→`SM_DURACHANGE`→`SM_MAGICFIRE`→`SM_MAGIC_LVEXP`
+    /// 的发送序；训练门开 ⇒ 比同种子「门关」流**恰多一次** `Random(3)+1`，`TranPoint` 回写 = 该抽。
+    ///
+    /// 红检（实测见补丁说明）：③ 去掉尾调用 ⇒ 观察者 `SM_MAGICFIRE` 变 0、无 LVEXP ⇒ 红；
+    /// ④ 把尾挪到护身符门之前 ⇒ 无护身符用例的零抽/无 MAGICFIRE 断言红。
+    #[test]
+    fn spell_tail_p2_defence_amulet_consumed_and_tail_fires() {
+        for magic_id in [14u16, 15] {
+            let seed = 8100 + i32::from(magic_id);
+            let mut rig = P2Rig::new(
+                magic_id,
+                12,
+                12,
+                Some(600),
+                [0; 4],
+                [0, 1000, 1000, 1000],
+                seed,
+            );
+            let before = rig.world.rng.clone();
+            let target = u16::try_from(rig.target).unwrap();
+            rig.cast(magic_id, (12, 12), target);
+            let frames = rig.drain_frames();
+
+            // 护身符：600 > 1*100 ⇒ 500 + SM_DURACHANGE（仅自己）。
+            assert_eq!(
+                rig.amulet_dura(),
+                Some(500),
+                "[魔号 {magic_id}] UseAmulet(1,1) ⇒ Dura 恰减 100"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_DURACHANGE),
+                1,
+                "[魔号 {magic_id}] 施法者恰 1 条 SM_DURACHANGE"
+            );
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_DURACHANGE),
+                0,
+                "[魔号 {magic_id}] `SendMsg(this, RM_DURACHANGE)` ⇒ 观察者不收"
+            );
+            let dc = sf_first(&frames, 911, mir2_protocol::messages::SM_DURACHANGE);
+            assert_eq!(
+                p2_durachange_fields(dc),
+                (
+                    500,
+                    u16::from(game_svr::ability::SLOT_ARMRING_L as u8),
+                    1000
+                ),
+                "[魔号 {magic_id}] SM_DURACHANGE = (Dura, idx, DuraMax)"
+            );
+
+            // buff 生效（14 ⇒ MagDefenceUp；15 ⇒ DefenceUp）。
+            match magic_id {
+                14 => assert!(
+                    rig.world
+                        .buffs
+                        .has_buff(rig.target, mir2_world::BuffType::MagicDefensePower),
+                    "14 `MagMakeDefenceArea(..., btState=1)` ⇒ 目标获 MagicDefensePower"
+                ),
+                _ => assert!(
+                    rig.world
+                        .buffs
+                        .has_buff(rig.target, mir2_world::BuffType::DefensePower),
+                    "15 `MagMakeDefenceArea(..., btState=0)` ⇒ 目标获 DefensePower"
+                ),
+            }
+
+            // 帧面：广播 SM_SPELL 排除自己；SM_MAGICFIRE 含自己；LVEXP 仅自己。
+            assert_eq!(sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL), 1);
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_SPELL),
+                0,
+                "RM_SPELL 有自守卫 ⇒ 自己不收"
+            );
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE),
+                1,
+                "[魔号 {magic_id}] 观察者恰 1 条 SM_MAGICFIRE"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGICFIRE),
+                1,
+                "[魔号 {magic_id}] 自己恰 1 条 SM_MAGICFIRE（处理器无自守卫）"
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                1,
+                "[魔号 {magic_id}] 训练门开 ⇒ 恰 1 条 SM_MAGIC_LVEXP"
+            );
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0
+            );
+            let fire = sf_first(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE);
+            assert_eq!(
+                sf_magicfire_target_id(fire),
+                rig.target,
+                "[魔号 {magic_id}] 活目标 ⇒ RM_MAGICFIRE ActorId = 目标 id"
+            );
+
+            // 发送序：SM_SPELL → SM_DURACHANGE → SM_MAGICFIRE → SM_MAGIC_LVEXP。
+            let seq = p2_seq(&frames);
+            let i_spell = p2_pos(&seq, mir2_protocol::messages::SM_SPELL, "SM_SPELL");
+            let i_dura = p2_pos(
+                &seq,
+                mir2_protocol::messages::SM_DURACHANGE,
+                "SM_DURACHANGE",
+            );
+            let i_fire = p2_pos(&seq, mir2_protocol::messages::SM_MAGICFIRE, "SM_MAGICFIRE");
+            let i_lv = p2_pos(
+                &seq,
+                mir2_protocol::messages::SM_MAGIC_LVEXP,
+                "SM_MAGIC_LVEXP",
+            );
+            assert!(
+                i_spell < i_dura && i_dura < i_fire && i_fire < i_lv,
+                "[魔号 {magic_id}] 帧序必须 SM_SPELL < SM_DURACHANGE < SM_MAGICFIRE < SM_MAGIC_LVEXP；实得 {seq:?}"
+            );
+
+            // 训练尾：门开 vs 同种子门关（`TrainLevel[1]=255 > Abil.Level`）恰多一次抽。
+            let draws_open = draws_between(&before, &rig.world.rng);
+            let tp = rig.tran_point();
+            assert!(
+                (1..=3).contains(&tp),
+                "[魔号 {magic_id}] TranPoint 增量 = Random(3)+1 ∈ [1,3]；实得 {tp}"
+            );
+            let mut closed = P2Rig::new(
+                magic_id,
+                12,
+                12,
+                Some(600),
+                [0, 255, 0, 0],
+                [0, 1000, 1000, 1000],
+                seed,
+            );
+            let before_c = closed.world.rng.clone();
+            closed.cast(magic_id, (12, 12), target);
+            let frames_c = closed.drain_frames();
+            let draws_closed = draws_between(&before_c, &closed.world.rng);
+            assert_eq!(
+                draws_open,
+                draws_closed + 1,
+                "[魔号 {magic_id}] 训练门开 ⇒ 比门关流恰多一次 Random(3)+1"
+            );
+            assert_eq!(closed.tran_point(), 0, "门关 ⇒ TranPoint 不变");
+            assert_eq!(
+                sf_count(&frames_c, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0,
+                "门关 ⇒ 无 LVEXP"
+            );
+            assert_eq!(
+                sf_count(&frames_c, 912, mir2_protocol::messages::SM_MAGICFIRE),
+                1,
+                "训练门不影响尾的 RM_MAGICFIRE"
+            );
+            // 完整流水：同种子跳过效果体取数后，下一次恰是 Random(3)+1。
+            let mut ctl = mir2_shared::rng::RandomNumber::with_seed(seed);
+            for _ in 0..draws_closed {
+                ctl.random();
+            }
+            assert_eq!(
+                tp,
+                ctl.random_below(3) + 1,
+                "[魔号 {magic_id}] TranPoint = 门内 Random(3)+1（整段流水位置正确）"
+            );
+            for k in 0..3 {
+                assert_eq!(
+                    rig.world.rng.random(),
+                    ctl.random(),
+                    "[魔号 {magic_id}] 尾后第 {k} 抽必须与对照流一致（禁止错位）"
+                );
+            }
+            // `max_train[1] = 1000` ⇒ 不升级，LVEXP 载荷 = (MagicId, Level=1, TranPoint)。
+            assert_eq!(rig.tran_level(), 1, "[魔号 {magic_id}] 点数不足 ⇒ 不升级");
+            let lv = sf_first(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP);
+            let cmd = mir2_protocol::frame::CommandMessage::from_bytes(lv).unwrap();
+            assert_eq!(cmd.recog, i32::from(magic_id), "LVEXP Recog = MagicId");
+            assert_eq!(cmd.param, 1, "LVEXP Param = Level");
+            assert_eq!(
+                i32::from(cmd.tag) | (i32::from(cmd.series) << 16),
+                tp,
+                "LVEXP Tag/Series = TranPoint"
+            );
+        }
+    }
+
+    /// **P2-② 护身符的两处边界（Round 与 UseAmulet 的 else 支）**。
+    ///
+    /// oracle `CheckAmulet` 用 `HUtil32.Round(Dura / 100.0) >= 1`，而 `HUtil32.Round`
+    /// （`src/OpenMir2/HUtil32.cs:131-134`）是 `MidpointRounding.AwayFromZero` ⇒
+    /// **Dura=50 ⇒ Round(0.5)=1 ⇒ 门过**（不是 0）；Dura=49 ⇒ 0 ⇒ 门不过。
+    /// `UseAmulet`（`MagicBase.cs:116-126`）的边界是 `Dura > 100`：Dura=50/100 都走
+    /// **else 支**（`Dura=0` + `SendDelItems` + `Index=0`），Dura=101 走扣减支（→1）。
+    ///
+    /// 红检（实测见补丁说明）：① 去掉护身符门 ⇒ Dura=49 用例「无 buff/639」红。
+    #[test]
+    fn spell_tail_p2_amulet_rounding_and_delete_boundaries() {
+        // (Dura, 门是否通过)
+        for (dura, passes) in [(49u16, false), (50, true), (100, true), (101, true)] {
+            let magic_id = 15u16;
+            let seed = 8200 + i32::from(dura);
+            let mut rig = P2Rig::new(
+                magic_id,
+                12,
+                12,
+                Some(dura),
+                [0; 4],
+                [0, 1000, 1000, 1000],
+                seed,
+            );
+            let before = rig.world.rng.clone();
+            let target = u16::try_from(rig.target).unwrap();
+            rig.cast(magic_id, (12, 12), target);
+            let frames = rig.drain_frames();
+
+            if !passes {
+                assert_eq!(
+                    rig.amulet_dura(),
+                    Some(49),
+                    "[Dura=49] 门不过 ⇒ 不得扣耐久/清槽"
+                );
+                assert_eq!(
+                    draws_between(&before, &rig.world.rng),
+                    0,
+                    "[Dura=49] 门不过 ⇒ 世界 RNG 零抽（不上 buff、不走尾）"
+                );
+                assert!(
+                    !rig.world
+                        .buffs
+                        .has_buff(rig.target, mir2_world::BuffType::DefensePower),
+                    "[Dura=49] 门不过 ⇒ 目标不得获 buff"
+                );
+                for socket in [911, 912] {
+                    assert_eq!(
+                        sf_count(&frames, socket, mir2_protocol::messages::SM_MAGICFIRE_FAIL),
+                        1,
+                        "[Dura=49] socket {socket} 恰一条 639"
+                    );
+                    assert_eq!(
+                        sf_count(&frames, socket, mir2_protocol::messages::SM_MAGICFIRE),
+                        0,
+                        "[Dura=49] 不得发 SM_MAGICFIRE"
+                    );
+                    assert_eq!(
+                        sf_count(&frames, socket, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                        0
+                    );
+                }
+                // `SM_SPELL`（:159）先于护身符门 ⇒ 观察者仍收到恰 1 条；自己在 639 之前不收。
+                assert_eq!(sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL), 1);
+                continue;
+            }
+
+            // 门过：buff + 尾。
+            assert!(
+                rig.world
+                    .buffs
+                    .has_buff(rig.target, mir2_world::BuffType::DefensePower),
+                "[Dura={dura}] 门过 ⇒ buff 生效"
+            );
+            assert!(
+                draws_between(&before, &rig.world.rng) > 0,
+                "[Dura={dura}] 门过 ⇒ 效果体取数"
+            );
+            assert_eq!(
+                sf_count(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE),
+                1
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                1
+            );
+            assert_eq!(
+                sf_count(&frames, 911, mir2_protocol::messages::SM_MAGICFIRE_FAIL),
+                0,
+                "[Dura={dura}] 门过 ⇒ 无 639"
+            );
+            if dura > 100 {
+                // 扣减支：101 → 1，并发 SM_DURACHANGE。
+                assert_eq!(rig.amulet_dura(), Some(dura - 100));
+                assert_eq!(
+                    sf_count(&frames, 911, mir2_protocol::messages::SM_DURACHANGE),
+                    1
+                );
+                assert_eq!(
+                    sf_count(&frames, 911, mir2_protocol::messages::SM_DELITEM),
+                    0
+                );
+                let dc = sf_first(&frames, 911, mir2_protocol::messages::SM_DURACHANGE);
+                assert_eq!(
+                    p2_durachange_fields(dc),
+                    (
+                        i32::from(dura - 100),
+                        u16::from(game_svr::ability::SLOT_ARMRING_L as u8),
+                        1000
+                    )
+                );
+            } else {
+                // else 支：Dura=0 + SendDelItems + Index=0 ⇒ SM_DELITEM(202) 仅自己。
+                assert_eq!(
+                    rig.amulet_dura(),
+                    None,
+                    "[Dura={dura}] `Dura > 100` 假 ⇒ 清槽（Index=0 ⇒ 槽 None）"
+                );
+                assert_eq!(
+                    sf_count(&frames, 911, mir2_protocol::messages::SM_DELITEM),
+                    1,
+                    "[Dura={dura}] 恰一条 SM_DELITEM"
+                );
+                assert_eq!(
+                    sf_count(&frames, 912, mir2_protocol::messages::SM_DELITEM),
+                    0
+                );
+                assert_eq!(
+                    sf_count(&frames, 911, mir2_protocol::messages::SM_DURACHANGE),
+                    0,
+                    "[Dura={dura}] else 支不发 SM_DURACHANGE"
+                );
+            }
+        }
+    }
+
+    /// **P2-③ 14/15 无护身符**：不上 buff、不走尾（零抽、无 `SM_MAGICFIRE`/`SM_MAGIC_LVEXP`）、
+    /// 每收件人**恰一条** `SM_MAGICFIRE_FAIL(639)`；`SM_SPELL` 已在更早处（`:159`）发出。
+    ///
+    /// 红检（实测见补丁说明）：① 去掉护身符门 ⇒ buff/尾/零抽断言红。
+    #[test]
+    fn spell_tail_p2_no_amulet_blocks_buff_and_tail() {
+        for magic_id in [14u16, 15] {
+            let seed = 8300 + i32::from(magic_id);
+            let mut rig = P2Rig::new(magic_id, 12, 12, None, [0; 4], [0, 1000, 1000, 1000], seed);
+            let before = rig.world.rng.clone();
+            let target = u16::try_from(rig.target).unwrap();
+            rig.cast(magic_id, (12, 12), target);
+            let frames = rig.drain_frames();
+
+            for (who, id) in [("target", rig.target), ("caster", rig.caster)] {
+                assert!(
+                    !rig.world
+                        .buffs
+                        .has_buff(id, mir2_world::BuffType::DefensePower),
+                    "[魔号 {magic_id}] 无护身符 ⇒ {who} 不得获 DefensePower"
+                );
+                assert!(
+                    !rig.world
+                        .buffs
+                        .has_buff(id, mir2_world::BuffType::MagicDefensePower),
+                    "[魔号 {magic_id}] 无护身符 ⇒ {who} 不得获 MagicDefensePower"
+                );
+            }
+            assert_eq!(
+                draws_between(&before, &rig.world.rng),
+                0,
+                "[魔号 {magic_id}] 无护身符 ⇒ 零抽（buff 效果体与训练尾都不得执行）"
+            );
+            let mut ctl = mir2_shared::rng::RandomNumber::with_seed(seed);
+            for k in 0..3 {
+                assert_eq!(
+                    rig.world.rng.random(),
+                    ctl.random(),
+                    "[魔号 {magic_id}] 其后第 {k} 抽 == 同种子未施法对照流"
+                );
+            }
+            for socket in [911, 912] {
+                assert_eq!(
+                    sf_count(&frames, socket, mir2_protocol::messages::SM_MAGICFIRE_FAIL),
+                    1,
+                    "[魔号 {magic_id}] socket {socket} 恰一条 639"
+                );
+                assert_eq!(
+                    sf_count(&frames, socket, mir2_protocol::messages::SM_MAGICFIRE),
+                    0,
+                    "[魔号 {magic_id}] 无护身符 ⇒ 无 SM_MAGICFIRE"
+                );
+                assert_eq!(
+                    sf_count(&frames, socket, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                    0
+                );
+                assert_eq!(
+                    sf_count(&frames, socket, mir2_protocol::messages::SM_DURACHANGE),
+                    0
+                );
+                assert_eq!(
+                    sf_count(&frames, socket, mir2_protocol::messages::SM_DELITEM),
+                    0
+                );
+            }
+            // 观察者序：SM_SPELL 先于 639。
+            let obs = sf_seq(&frames, 912);
+            let i_spell = p2_pos(&obs, mir2_protocol::messages::SM_SPELL, "SM_SPELL");
+            let i_fail = p2_pos(
+                &obs,
+                mir2_protocol::messages::SM_MAGICFIRE_FAIL,
+                "SM_MAGICFIRE_FAIL",
+            );
+            assert!(
+                i_spell < i_fail,
+                "[魔号 {magic_id}] oracle 序：`:159 SM_SPELL` 先于护身符门失败后的 639；实得 {obs:?}"
+            );
+            assert_eq!(
+                rig.tran_point(),
+                0,
+                "[魔号 {magic_id}] 无训练尾 ⇒ TranPoint 不变"
+            );
+            assert_eq!(rig.tran_level(), 1);
+        }
+    }
+
+    /// **P2-④ 31（魔法盾）无护身符也施放；`bo_train` 恒 true**：
+    /// `MagBubbleDefenceUp` 在 `BubbleDefenceUP == 0` 时恒返回 true（`CharacterObject.cs:96-114`）
+    /// ⇒ 即使 `n_sec` 为 0 也必须走训练抽；尾帧 `SM_MAGICFIRE` 必发（`boSpellFire=true`）。
+    ///
+    /// 红检（实测见补丁说明）：② 把 31 的 `bo_train` 写死 `false` ⇒ 本用例「多一次抽/LVEXP」红。
+    #[test]
+    fn spell_tail_p2_shield_without_amulet_always_trains() {
+        let magic_id = 31u16;
+        let seed = 8400;
+        let mut open = P2Rig::new(magic_id, 12, 12, None, [0; 4], [0, 1000, 1000, 1000], seed);
+        let before = open.world.rng.clone();
+        let target = u16::try_from(open.target).unwrap();
+        open.cast(magic_id, (12, 12), target);
+        let frames = open.drain_frames();
+
+        // bubble 效果与现状一致（目标是施法者自己）。
+        assert!(
+            open.world
+                .buffs
+                .has_buff(open.caster, mir2_world::BuffType::MagicShield),
+            "31 ⇒ 施法者获 MagicShield buff"
+        );
+        assert!(
+            open.world.entities.get(open.caster).unwrap().magic_shield,
+            "31 ⇒ `MagicShield` 标志置位"
+        );
+        assert_eq!(
+            sf_count(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE),
+            1,
+            "31 无护身符门 ⇒ 尾必发恰 1 条 SM_MAGICFIRE（观察者）"
+        );
+        assert_eq!(
+            sf_count(&frames, 911, mir2_protocol::messages::SM_MAGICFIRE),
+            1,
+            "含施法者自己"
+        );
+        assert_eq!(
+            sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+            1,
+            "训练门开 ⇒ 恰 1 条 LVEXP"
+        );
+        let tp = open.tran_point();
+        assert!((1..=3).contains(&tp), "TranPoint = Random(3)+1；实得 {tp}");
+        let seq = p2_seq(&frames);
+        assert!(
+            p2_pos(&seq, mir2_protocol::messages::SM_SPELL, "SM_SPELL")
+                < p2_pos(&seq, mir2_protocol::messages::SM_MAGICFIRE, "SM_MAGICFIRE"),
+            "帧序 SM_SPELL → SM_MAGICFIRE；实得 {seq:?}"
+        );
+
+        // 同种子门关（`TrainLevel[1]=255`）⇒ 恰少一次抽、无 LVEXP；尾帧仍发。
+        let mut closed = P2Rig::new(
+            magic_id,
+            12,
+            12,
+            None,
+            [0, 255, 0, 0],
+            [0, 1000, 1000, 1000],
+            seed,
+        );
+        let before_c = closed.world.rng.clone();
+        closed.cast(magic_id, (12, 12), target);
+        let frames_c = closed.drain_frames();
+        let draws_open = draws_between(&before, &open.world.rng);
+        let draws_closed = draws_between(&before_c, &closed.world.rng);
+        assert_eq!(
+            draws_open,
+            draws_closed + 1,
+            "31 的训练尾在门内恰多一次 Random(3)+1（不许拿 n_sec 当 bo_train）"
+        );
+        assert_eq!(closed.tran_point(), 0);
+        assert_eq!(
+            sf_count(&frames_c, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+            0
+        );
+        assert_eq!(
+            sf_count(&frames_c, 912, mir2_protocol::messages::SM_MAGICFIRE),
+            1
+        );
+        // 完整流水位置：跳过效果体取数后恰是 Random(3)+1。
+        let mut ctl = mir2_shared::rng::RandomNumber::with_seed(seed);
+        for _ in 0..draws_closed {
+            ctl.random();
+        }
+        assert_eq!(tp, ctl.random_below(3) + 1);
+        for k in 0..3 {
+            assert_eq!(
+                open.world.rng.random(),
+                ctl.random(),
+                "尾后第 {k} 抽必须与对照流一致"
+            );
+        }
+    }
+
     /// **片 A-5 主机层牙①（in-range 对照）**：`handle_spell_cmd`（**生产入口**，不直调 `World::cast_*`）
     /// 在 buff tick 开启时把技能 15（`SKILL_DEJIWONHO` → `DefenceUp`）落到目标身上。
     ///
@@ -17079,8 +18008,11 @@ mod tests {
         ) = a5_spell_rig(15, 12, 12);
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), spell_session_ground(caster));
-        let catalog = game_svr::ability::StdItemCatalog::new();
+        // **牙的布置修正（P2，设计件 §7-10）**：14/15 补 `CheckAmulet(1,1)` 后，夹具必须同时有
+        // `ArmRingl` 槽与 catalog 模板（`index=1`、`std_mode=25`、`shape=5`、`dura=600`）；
+        // 只加槽不加模板 ⇒ `amulet_slot` 返回 None ⇒ 门不过。
+        ground_sessions.insert("caster".into(), a5_session_with_amulet(caster, 600));
+        let catalog = a5_amulet_catalog();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
         let rng_before = world.rng.clone();
@@ -17346,8 +18278,10 @@ mod tests {
             ) = a5_spell_rig(magic_id, 18, 10); // 目标实体在 (18,10)
             let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
                 std::collections::HashMap::new();
-            ground_sessions.insert("caster".into(), spell_session_ground(caster));
-            let catalog = game_svr::ability::StdItemCatalog::new();
+            // **牙的布置修正（P2，设计件 §7-10）**：14/15 补 `CheckAmulet(1,1)` 后，夹具必须同时有
+            // `ArmRingl` 槽与 catalog 模板（`index=1`、`std_mode=25`、`shape=5`、`dura=600`）。
+            ground_sessions.insert("caster".into(), a5_session_with_amulet(caster, 600));
+            let catalog = a5_amulet_catalog();
             let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
             let table = game_svr::mongen::MonsterTable::new(Vec::new());
             let rng_before = world.rng.clone();
@@ -17436,8 +18370,11 @@ mod tests {
         }
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), spell_session_ground(caster));
-        let catalog = game_svr::ability::StdItemCatalog::new();
+        // **牙的布置修正（P2，设计件 §7-10）**：14/15 补 `CheckAmulet(1,1)` 后，夹具必须同时有
+        // `ArmRingl` 槽与 catalog 模板（`index=1`、`std_mode=25`、`shape=5`、`dura=600`）；
+        // 只加槽不加模板 ⇒ `amulet_slot` 返回 None ⇒ 门不过。
+        ground_sessions.insert("caster".into(), a5_session_with_amulet(caster, 600));
+        let catalog = a5_amulet_catalog();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
         let rng_before = world.rng.clone();
@@ -17573,8 +18510,11 @@ mod tests {
         ) = a5_spell_rig(15, 12, 12);
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), spell_session_ground(caster));
-        let catalog = game_svr::ability::StdItemCatalog::new();
+        // **牙的布置修正（P2，设计件 §7-10）**：14/15 补 `CheckAmulet(1,1)` 后，夹具必须同时有
+        // `ArmRingl` 槽与 catalog 模板（`index=1`、`std_mode=25`、`shape=5`、`dura=600`）；
+        // 只加槽不加模板 ⇒ `amulet_slot` 返回 None ⇒ 门不过。
+        ground_sessions.insert("caster".into(), a5_session_with_amulet(caster, 600));
+        let catalog = a5_amulet_catalog();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
         handle_spell_cmd(
@@ -24082,8 +25022,11 @@ mod tests {
 
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), spell_session_ground(caster));
-        let catalog = game_svr::ability::StdItemCatalog::new();
+        // **牙的布置修正（P2，设计件 §7-10）**：14/15 补 `CheckAmulet(1,1)` 后，夹具必须同时有
+        // `ArmRingl` 槽与 catalog 模板（`index=1`、`std_mode=25`、`shape=5`、`dura=600`）；
+        // 只加槽不加模板 ⇒ `amulet_slot` 返回 None ⇒ 门不过。
+        ground_sessions.insert("caster".into(), a5_session_with_amulet(caster, 600));
+        let catalog = a5_amulet_catalog();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
         handle_spell_cmd(
@@ -24202,8 +25145,10 @@ mod tests {
         let before = world.rng.clone();
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
-        ground_sessions.insert("caster".into(), spell_session_ground(caster));
-        let catalog = game_svr::ability::StdItemCatalog::new();
+        // **牙的布置修正（P2，设计件 §7-10）**：14/15 补 `CheckAmulet(1,1)` 后，夹具必须同时有
+        // `ArmRingl` 槽与 catalog 模板（`index=1`、`std_mode=25`、`shape=5`、`dura=600`）。
+        ground_sessions.insert("caster".into(), a5_session_with_amulet(caster, 600));
+        let catalog = a5_amulet_catalog();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
         handle_spell_cmd(

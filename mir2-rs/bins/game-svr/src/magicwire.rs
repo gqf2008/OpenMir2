@@ -55,8 +55,9 @@
 //! 且无 MP/53/`SM_SPELL`），以及 `:644-647 if (boSpellFail) return false` 在**已建模**召唤面
 //! （17/30/41，护身符门不过）上的 639。20/46 无 `boSpellFail` 站点 ⇒ 不接（登记）。
 //! **仍未接**：8 条显式 `case` 各自的 MP 逻辑（12/25/26/27/34/38/43/56）、`:167` 版本门，
-//! 以及未建模 `boSpellFail` 站点（6/13/14/15/16/18/19/36 —— 本仓没有对应效果体/护身符门，
-//! 见 `main.rs::handle_spell_cmd` 的登记）。
+//! 以及未建模 `boSpellFail` 站点（6/13/16/18/19/36 —— 本仓没有对应效果体/护身符门，
+//! 见 `main.rs::handle_spell_cmd` 的登记）。**14/15 已建模**（2026-10-17，
+//! `openmir2-spell-shared-tail-p2`：`CheckAmulet(1,1)`/`UseAmulet(1,1)` + 共享尾）。
 //! 技能效果面的向量与用例在 `openmir2-m3-combat-skills-align`（m3cs）的离线片，其接口就绪后再接这一层。
 //!
 //! **`LateDelivery`**：Rust 的入帧路径没有延时重投（`command` 直投）⇒ 恒按 `false` 处理；oracle 此时
