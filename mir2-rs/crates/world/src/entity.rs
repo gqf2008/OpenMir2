@@ -392,6 +392,12 @@ pub struct Entity {
     /// C# `PlayObject.PkPoint`——`PlayObject.PvpLevel()`（`PlayObject.cs:4352`）= `PkPoint / 100`。
     /// `HAM_PKATTACK` 支用它做红名/白名判定。
     pub pk_point: i32,
+    /// C# `PlayObject.PvpFlag`（`PlayObject.cs:4336`）——PK 标记；`SetPkFlag` 置位并触发
+    /// `RefNameColor`（⇒ `SM_CHANGENAMECOLOR(656)`）。ctor 缺省 `false`。
+    ///
+    /// 消费方（P3-B4）：50 的 `playObject.SetPkFlag(targetObject)`（`MagicManager.cs:1249`）与
+    /// `RM_POISON` 投递的 `((IPlayerActor)this).SetPkFlag(caster)`（`BaseObject.Base.cs:749`）。
+    pub pvp_flag: bool,
     /// C# `PlayObject.Luck`（`PlayObject.cs:62`，`RecalcAbilitys` 里 `Luck = 0 + AddAbil.Luck - AddAbil.UnLuck`）。
     /// 玩家攻方的 [`crate::combat::get_attack_power_player`] override 用它决定取数次数。
     pub luck: i32,
@@ -597,6 +603,7 @@ impl Entity {
             stone_mode: false,
             dear_human: None,
             pk_point: 0,
+            pvp_flag: false,
             // `BaseObject.cs:385`：ctor 初值 `NameColor = 255`。
             name_color: 255,
             // `PlayObject.cs:62/943`：新角色 `Luck` 由 `RecalcAbilitys` 置 0（无 `AddAbil`），

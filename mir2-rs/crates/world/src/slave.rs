@@ -58,6 +58,7 @@
 //!   `WAbil.MaxHP` 两支与三派生类速度覆写**已落**（见 [`World::make_slave_adopt`] 第 5 步）。
 
 use mir2_data::pet_slave::{PetSlaveConfig, SLAVE_MAX_LEVEL};
+use mir2_shared::hutil;
 use mir2_shared::rng::RandomNumber;
 
 use crate::combat::{hi_byte, lo_byte};
@@ -96,6 +97,14 @@ pub const RM_TRANSPARENT: u16 = 8045;
 pub const RM_MAGIC_LVEXP: u16 = 10123;
 /// `Messages.RM_MAKEHOLYSEIZEMODE`（`crates/protocol/src/messages.rs:581`；16 的目标自有队列）。
 pub const RM_MAKEHOLYSEIZEMODE: u16 = 60005;
+/// **P3-B4** `Messages.RM_DELAYMAGIC`（`crates/protocol/src/messages.rs:510`；8021）。
+/// 施法者自有延时消息：`BaseObject.Base.cs:711-729`。载荷
+/// `wParam = nPower, nParam1 = MakeLong(tx,ty), nParam2 = rage, nParam3 = target.ActorId`。
+pub const RM_DELAYMAGIC: u16 = 8021;
+/// **P3-B4** `Messages.RM_POISON`（`crates/protocol/src/messages.rs:517`；8037）。
+/// 目标自有延时消息：`BaseObject.Base.cs:740-759`。载荷
+/// `wParam = PoisonState, nParam1 = nTime, nParam2 = caster.ActorId, nParam3 = nPoint`。
+pub const RM_POISON: u16 = 8037;
 
 pub const RM_MASTERDIEMUTINY: u16 = 60003;
 /// `Messages.RM_MASTERDIEGHOST`（`Messages.cs:840`）：主人幽灵 1s 后自投递（→ `ProcessSlaveGhost`）。
@@ -970,7 +979,7 @@ pub fn process_slave_ghost(world: &mut World, master_id: i32) -> Vec<i32> {
 /// `deliver_at_ms` = oracle 的 `DeliveryTime = GetTickCount() + dwDelay`；`BaseObject.GetMessage`
 /// （`:334-352`）在 `GetTickCount() < DeliveryTime` 时重新入队，`now >= DeliveryTime` 时投递
 /// ⇒ 本骨架的到点门为 `world.clock_ms >= deliver_at_ms`（同一个 `>=` 边界）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SelfDelayMsg {
     /// 收件人（自投递 ⇒ 发件人本人）的 actor id（oracle `SendMessage.ActorId`）。
     pub actor_id: i32,
@@ -983,8 +992,11 @@ pub struct SelfDelayMsg {
     pub n_param1: i32,
     /// `SendMessage.nParam2`（B3：`RM_MAGIC_LVEXP` 的 `Level`）。
     pub n_param2: i32,
-    /// `SendMessage.nParam3`（B3：`RM_MAGIC_LVEXP` 的 `TranPoint`）。
+    /// `SendMessage.nParam3`（B3：`RM_MAGIC_LVEXP` 的 `TranPoint`；B4：`RM_POISON` 的 `nPoint`）。
     pub n_param3: i32,
+    /// `SendMessage.Msg`（`BaseObject.Message.cs:188-206` 的 `string strMsg`）。
+    /// B4 的 `RM_POISON`/`RM_DELAYMAGIC` 都传 `""`；保留字段以与 oracle 结构同形（合同 §2.6）。
+    pub msg: String,
     /// 到点时刻（sim 毫秒）。
     pub deliver_at_ms: i64,
 }
@@ -1016,6 +1028,47 @@ pub struct SelfDelayOutcome {
     /// `RM_MAGIC_LVEXP` 到点投递的载荷（非该支 `None`）。
     pub magic_lvexp: Option<MagicLvExpDelivery>,
     /// `RM_MAKEHOLYSEIZEMODE` 到点投递的 `RefNameColor` 结果（非该支 `None`）。
+    pub name_color: Option<NameColorDelivery>,
+    /// **P3-B4**：`RM_DELAYMAGIC` 到点投递的观察值（非该支 `None`）。
+    pub delay_magic: Option<DelayMagicDelivery>,
+    /// **P3-B4**：`RM_POISON` 到点投递的观察值（非该支 `None`）。
+    pub poison: Option<PoisonDelivery>,
+}
+
+/// **P3-B4**：`RM_DELAYMAGIC` 投递（`BaseObject.Base.cs:711-729`）的观察值。
+///
+/// 投递后目标收到的 `RM_MAGSTRUCK` 只**入** [`crate::world::World::pending_mag_struck`]，
+/// 由宿主随后调 `World::deliver_mag_struck` 完整处理（目标侧 `R(1000)`/MSD/`StruckDamage`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DelayMagicDelivery {
+    /// 处理该延时消息的 actor（oracle 的 `this` = `processMsg.ActorId`）。
+    pub caster_id: i32,
+    pub target_id: i32,
+    /// `(ushort)wParam`（`nPower` 初值）。
+    pub power: i32,
+    /// 投递者侧 `GetMagStruckDamage(this, nPower)` 的结果（`<= 0` ⇒ 不投递）。
+    pub msd: i32,
+    /// 是否向目标投递了 `RM_MAGSTRUCK`（距离门 + MSD>0）。
+    pub struck: bool,
+}
+
+/// **P3-B4**：`RM_POISON` 投递（`BaseObject.Base.cs:740-759` → `BaseObject.cs:1941-1973`）的观察值。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PoisonDelivery {
+    pub target_id: i32,
+    /// `wParam`（`PoisonState`：0=绿毒、1=红毒、5=STONE）。
+    pub poison_type: u8,
+    /// `(ushort)nParam1`（`MakePosion` 的 `nTime` —— 注意这是**时长**，不是中毒点）。
+    pub time: i32,
+    /// `nParam3`（`MakePosion` 的 `nPoint`）。
+    pub point: i32,
+    /// `nOldCharStatus != CharStatus` ⇒ `StatusChanged()`（⇒ 657）。
+    pub status_changed: bool,
+    /// 投递后的 `GetCharStatus()`（657 的 `nParam1`）。
+    pub status: i32,
+    /// 目标 `Race == ActorRace.Play` ⇒ `SysMsg(YouPoisoned)`（⇒ 100）。
+    pub is_player: bool,
+    /// `SetPkFlag(caster)` 是否触发 `RefNameColor`（⇒ 656，由 **caster** 发）。
     pub name_color: Option<NameColorDelivery>,
 }
 
@@ -1109,6 +1162,7 @@ impl World {
             n_param1,
             n_param2,
             n_param3,
+            msg: String::new(),
             deliver_at_ms,
         });
     }
@@ -1173,6 +1227,7 @@ impl World {
             n_param1,
             n_param2,
             n_param3,
+            msg: String::new(),
             deliver_at_ms: self.clock_ms,
         });
     }
@@ -1300,10 +1355,150 @@ impl World {
                         ..SelfDelayOutcome::default()
                     });
                 }
+                // **P3-B4**：`RM_DELAYMAGIC`（`BaseObject.Base.cs:711-729`）——施法者侧
+                // 1 抽 MSD，命中则把 `RM_MAGSTRUCK` 入**目标**队列（由宿主随后
+                // `World::deliver_mag_struck` 完整处理）。
+                RM_DELAYMAGIC => {
+                    let d = self.deliver_delay_magic(&msg);
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        delay_magic: Some(d),
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                // **P3-B4**：`RM_POISON`（`BaseObject.Base.cs:740-759` → `MakePosion`）。
+                // 投毒本身**零 RNG**；只落 buff / CharStatus / 帧事件。
+                RM_POISON => {
+                    let d = self.deliver_poison(&msg);
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        poison: Some(d),
+                        ..SelfDelayOutcome::default()
+                    });
+                }
                 // 本层只承载这些自投递（登记：其他 `RM_*` 自投递未建模）。
                 _ => {}
             }
         }
+        out
+    }
+
+    /// **P3-B4**：`RM_DELAYMAGIC` 到点投递（`BaseObject.Base.cs:711-729`）。
+    ///
+    /// 逐行：
+    /// ```text
+    /// :712 nPower = (ushort)wParam; tx = LoWord(nParam1); ty = HiWord(nParam1); rage = nParam2
+    /// :716 target = ActorMgr.Get(nParam3)
+    /// :717 if (target != null && target.GetMagStruckDamage(this, nPower) > 0)   ← 1 抽
+    /// :719   SetTargetCreat(target)
+    /// :720   if (target.Race >= Animal) nPower = Round(nPower / 1.2)
+    /// :724   if (|tx-target.CurrX| <= rage && |ty-target.CurrY| <= rage)
+    /// :726     target.SendMsg(this, RM_MAGSTRUCK, 0, nPower, 0, 0)
+    /// ```
+    ///
+    /// **`GetMagStruckDamage(this, …)`** 的 `baseObject` 是 `this`（施法者）⇒ 不死系加成生效
+    /// （`BaseObject.Base.cs:816`）。与目标处理 `RM_MAGSTRUCK` 时传 `null` 的那一抽不同。
+    fn deliver_delay_magic(&mut self, msg: &SelfDelayMsg) -> DelayMagicDelivery {
+        let n_power = i32::from(msg.w_param as u16);
+        let tx = i32::from((msg.n_param1 & 0xFFFF) as u16 as i16);
+        let ty = i32::from(((msg.n_param1 >> 16) & 0xFFFF) as u16 as i16);
+        let rage = msg.n_param2;
+        let target_id = msg.n_param3;
+        let mut out = DelayMagicDelivery {
+            caster_id: msg.actor_id,
+            target_id,
+            power: n_power,
+            msd: 0,
+            struck: false,
+        };
+        let Some(t) = self.entities.get(target_id).cloned() else {
+            return out;
+        };
+        // `this` 在 oracle 里恒存在；缺失时按 0 处理（不改变取数次数）。
+        let undead = self
+            .entities
+            .get(msg.actor_id)
+            .map_or(0, |c| c.undead_power);
+        let msd = crate::combat::get_mag_struck_damage(&mut self.rng, t.mac, n_power, Some(undead));
+        out.msd = msd;
+        if msd > 0 {
+            if let Some(c) = self.entities.get_mut(msg.actor_id) {
+                c.ai.target_creature = Some(target_id);
+            }
+            let mut power = n_power;
+            if t.race >= crate::entity::ACTOR_RACE_ANIMAL {
+                power = hutil::round(f64::from(power) / 1.2);
+            }
+            if (tx - t.x).abs() <= rage && (ty - t.y).abs() <= rage {
+                self.pending_mag_struck
+                    .push(crate::world::PendingMagStruck {
+                        target_id,
+                        caster_id: msg.actor_id,
+                        power,
+                    });
+                out.struck = true;
+            }
+        }
+        out
+    }
+
+    /// **P3-B4**：`RM_POISON` 到点投递（`BaseObject.Base.cs:740-759` + `MakePosion`
+    /// `BaseObject.cs:1941-1973`）。
+    ///
+    /// ```text
+    /// :741 caster = ActorMgr.Get(nParam2)
+    /// :742 if (caster != null) {
+    /// :744   if (IsProperTarget(caster)) { SetTargetCreat(caster);
+    /// :747     if (this.Race==Play && caster.Race==Play) SetPkFlag(caster);  // ⇒ 656（由 caster 发）
+    /// :751     SetLastHiter(caster); }
+    /// :753   MakePosion(wParam, (ushort)nParam1, nParam3);
+    /// :757 } else MakePosion(...)
+    /// ```
+    ///
+    /// **零 RNG**。`nOldCharStatus != CharStatus` ⇒ `StatusChanged()`（⇒ 657）；
+    /// `Race == Play` ⇒ `SysMsg(YouPoisoned)`（⇒ 100）。两者都由宿主据本记录出帧。
+    fn deliver_poison(&mut self, msg: &SelfDelayMsg) -> PoisonDelivery {
+        let target_id = msg.actor_id;
+        let caster_id = msg.n_param2;
+        let poison_type = msg.w_param as u8;
+        let time = i32::from((msg.n_param1 & 0xFFFF) as u16);
+        let point = msg.n_param3;
+        let mut out = PoisonDelivery {
+            target_id,
+            poison_type,
+            time,
+            point,
+            ..PoisonDelivery::default()
+        };
+        let target = self.entities.get(target_id).cloned();
+        let caster = self.entities.get(caster_id).cloned();
+        if let (Some(t), Some(c)) = (target.as_ref(), caster.as_ref()) {
+            if crate::combat::is_proper_target_grouped(t, c, &t.group_members) {
+                if let Some(tm) = self.entities.get_mut(target_id) {
+                    tm.ai.target_creature = Some(caster_id);
+                }
+                if t.race == crate::entity::ACTOR_RACE_PLAY
+                    && c.race == crate::entity::ACTOR_RACE_PLAY
+                {
+                    out.name_color = self.set_pk_flag(target_id, caster_id);
+                }
+                let now = self.clock_ms;
+                if let Some(tm) = self.entities.get_mut(target_id) {
+                    tm.set_last_hiter(caster_id, now);
+                }
+            }
+        }
+        let Some(t) = target else {
+            return out;
+        };
+        let old = self.get_char_status(target_id);
+        let ok = self.make_posion(target_id, poison_type, time, point);
+        let new = self.get_char_status(target_id);
+        out.status = new;
+        out.status_changed = ok && old != new;
+        out.is_player = t.race == crate::entity::ACTOR_RACE_PLAY;
         out
     }
 }
@@ -2502,6 +2697,7 @@ mod tests {
             n_param1: 0,
             n_param2: 0,
             n_param3: 0,
+            msg: String::new(),
             deliver_at_ms: w.clock_ms,
         });
         let r = w.tick();

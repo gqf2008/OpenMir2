@@ -323,6 +323,114 @@ pub fn unamyounsul_gate_draw(rng: &mut impl RandomSource) -> i32 {
     rng.random_below(7)
 }
 
+// ---- P3-B4（群体列表 / 毒族：6/48/50/42）----------------------------------------------
+
+/// 施毒术族的抗毒骰：`Random(target.AntiPoison + 7) <= 6`
+/// （`MagicManager.cs:235`（6）/ `:914`（48））。
+///
+/// `n == 0` 也**照抽一次**（oracle `Random(0)` 走 `Next(0)`，推进 `Sample`）。
+/// 返回 `true` = 骰门通过（后续才取 `GP13`/`RP` 并投毒）。
+#[must_use]
+pub fn poison_dice(rng: &mut impl RandomSource, anti_poison: i32) -> bool {
+    rng.random_below(anti_poison + 7) <= 6
+}
+
+/// `GameSvrConf` 里 `MabMabe` / 施毒术用到的配置项（`GameSvrConf.cs:1778-1781` /
+/// `:1763`）。缺省值即 oracle 缺省。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MabMabeConfig {
+    pub hit_rand_rate: i32,
+    pub hit_min_lv_limit: i32,
+    pub hit_success_rate: i32,
+    pub hit_mabe_time_rate: i32,
+    /// `AmyOunsulPoint`（6/48 的毒 `point` 公式分母）。
+    pub amy_ounsul_point: i32,
+}
+
+impl Default for MabMabeConfig {
+    fn default() -> Self {
+        Self {
+            hit_rand_rate: 100,
+            hit_min_lv_limit: 10,
+            hit_success_rate: 21,
+            hit_mabe_time_rate: 20,
+            amy_ounsul_point: 10,
+        }
+    }
+}
+
+/// `MagicManager.MabMabe`（`MagicManager.cs:1237-1245`）的门与逐抽结果。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MabMabeGates {
+    /// `target.AntiMagic <= Random(10)`（第 1 抽；失败 ⇒ 其余门都不执行、不再抽）。
+    pub anti_magic_pass: bool,
+    /// `|target.CurrX - nTargetX| <= 1 && |target.CurrY - nTargetY| <= 1`。
+    /// 与 `R(10)` 在 oracle **同一个 `&&` 条件**里 ⇒ 距离失败时 `R(2)` 也不抽。
+    pub in_range: bool,
+    /// `Random(2) + (caster.Level - 1) > target.Level`（第 2 抽）。
+    pub level_gate_pass: bool,
+    /// `caster.Level - target.Level`（仅 `level_gate_pass` 时有意义）。
+    pub n_lv: i32,
+    /// `Random(MabMabeHitRandRate) < MAX(MabMabeHitMinLvLimit, nLevel*8 - nLevel + 15 + nLv)`。
+    pub rand_gate_pass: bool,
+    /// `Random(MabMabeHitSucessRate) < nLevel*2 + 4`。
+    pub success_gate_pass: bool,
+}
+
+/// `MagicManager.MabMabe`（`MagicManager.cs:1233-1245`）的**纯骰门**部分。
+///
+/// `MagCanHitTarget` / `IsProperTarget` / 坐标距离门是调用方的纯门（零抽），必须在调用本函数
+/// **之前**过完（oracle `:1233/:1235/:1237` 的 `&&` 短路次序）。
+///
+/// 逐抽次序（合同 §3.3）：
+/// 1. `R(10)`（`AntiMagic <= Random(10)`）；距离门与它同条件（`in_range` 为假 ⇒ 到此为止）；
+/// 2. `R(2) + (caster_level - 1) > target_level`；
+/// 3. `R(hit_rand_rate) < MAX(hit_min_lv_limit, magic_level*8 - magic_level + 15 + nLv)`；
+/// 4. `R(hit_success_rate) < magic_level*2 + 4`。
+pub fn mab_mabe_gates(
+    rng: &mut impl RandomSource,
+    anti_magic: i32,
+    in_range: bool,
+    caster_level: i32,
+    target_level: i32,
+    magic_level: u8,
+    cfg: &MabMabeConfig,
+) -> MabMabeGates {
+    // `:1237 targetObject.AntiMagic <= Random(10) && |Δx| <= 1 && |Δy| <= 1`
+    let mut out = MabMabeGates {
+        anti_magic_pass: anti_magic_roll(rng, anti_magic),
+        in_range,
+        ..MabMabeGates::default()
+    };
+    if !out.anti_magic_pass || !in_range {
+        return out;
+    }
+    // `:1240 Random(2) + (playObject.Abil.Level - 1) > targetObject.Abil.Level`
+    if rng.random_below(2) + (caster_level - 1) > target_level {
+        out.level_gate_pass = true;
+        let n_lv = caster_level - target_level;
+        out.n_lv = n_lv;
+        let level = i32::from(magic_level);
+        // `:1243 Random(MabMabeHitRandRate) < MAX(MabMabeHitMinLvLimit, nLevel*8 - nLevel + 15 + nLv)`
+        let threshold = hutil::max_i32(cfg.hit_min_lv_limit, level * 8 - level + 15 + n_lv);
+        if rng.random_below(cfg.hit_rand_rate) < threshold {
+            out.rand_gate_pass = true;
+            // `:1245 Random(MabMabeHitSucessRate) < nLevel*2 + 4`
+            if rng.random_below(cfg.hit_success_rate) < level * 2 + 4 {
+                out.success_gate_pass = true;
+            }
+        }
+    }
+    out
+}
+
+/// 施毒术毒 `point`：`Round(userMagic.Level / 3.0 * (nPower / (double)AmyOunsulPoint))`
+/// （`MagicManager.cs:241/245/921/925`）。
+#[must_use]
+pub fn poison_point(level: u8, n_power: i32, amy_ounsul_point: i32) -> i32 {
+    hutil::round(f64::from(level) / 3.0 * (f64::from(n_power) / f64::from(amy_ounsul_point)))
+}
+
 /// `Grobal2.LA_UNDEAD`（`src/OpenMir2/Grobal2.cs:66`）。
 ///
 /// **source-cited**（常量，未单独成方法）。

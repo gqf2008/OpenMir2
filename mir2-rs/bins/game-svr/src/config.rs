@@ -145,6 +145,16 @@ pub struct GateConfig {
     pub snow_wind_range: u8,
     /// `[Setup] ElecBlizzardRange`（`GameSvrConf.cs:908/1772` 缺省 2）—— P3-B2 的 24（地狱雷光）半径。
     pub elec_blizzard_range: u8,
+    /// `[Setup] MabMabeHitRandRate`（`GameSvrConf.cs:1778` 缺省 100）—— P3-B4 的 50 第三道成功率门。
+    pub mab_mabe_hit_rand_rate: i32,
+    /// `[Setup] MabMabeHitMinLvLimit`（`GameSvrConf.cs:1779` 缺省 10）。
+    pub mab_mabe_hit_min_lv_limit: i32,
+    /// `[Setup] MabMabeHitSucessRate`（`GameSvrConf.cs:1780` 缺省 21；键名照 oracle 拼写）。
+    pub mab_mabe_hit_sucess_rate: i32,
+    /// `[Setup] MabMabeHitMabeTimeRate`（`GameSvrConf.cs:1781` 缺省 20）。
+    pub mab_mabe_hit_mabe_time_rate: i32,
+    /// `[Setup] AmyOunsulPoint`（`GameSvrConf.cs:1763` 缺省 10）—— 6/48 毒 `point` 分母。
+    pub amy_ounsul_point: i32,
     /// `[Setup] SuperRepairPriceRate`（`ServerConf.cs:487`，缺省 `3`）——特殊修理价格倍数
     /// （`Merchant.cs:1573/1619`）。
     pub super_repair_price_rate: i32,
@@ -297,6 +307,11 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut fire_boom_rage: Option<u8> = None;
     let mut snow_wind_range: Option<u8> = None;
     let mut elec_blizzard_range: Option<u8> = None;
+    let mut mab_mabe_hit_rand_rate: Option<i32> = None;
+    let mut mab_mabe_hit_min_lv_limit: Option<i32> = None;
+    let mut mab_mabe_hit_sucess_rate: Option<i32> = None;
+    let mut mab_mabe_hit_mabe_time_rate: Option<i32> = None;
+    let mut amy_ounsul_point: Option<i32> = None;
     let mut super_repair_price_rate: Option<i32> = None;
     let mut repair_item_dec_dura: Option<i32> = None;
     let mut make_durg_price: Option<i32> = None;
@@ -663,6 +678,33 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                     // 上面共享 `[Setup]` 大 match 的既有臂（rustfmt 会因臂数增长把整臂折成块 ⇒
                     // 在共享文件里制造无谓 diff）。
                     match k.as_str() {
+                        // **P3-B4**：`MabMabe*` / `AmyOunsulPoint`（`ServerConf.cs:535-541`）。
+                        "MABMABEHITRANDRATE" => {
+                            mab_mabe_hit_rand_rate = Some(v.parse().with_context(|| {
+                                format!("MabMabeHitRandRate 不是合法整数：{v:?}")
+                            })?);
+                        }
+                        "MABMABEHITMINLVLIMIT" => {
+                            mab_mabe_hit_min_lv_limit = Some(v.parse().with_context(|| {
+                                format!("MabMabeHitMinLvLimit 不是合法整数：{v:?}")
+                            })?);
+                        }
+                        "MABMABEHITSUCESSRATE" => {
+                            mab_mabe_hit_sucess_rate = Some(v.parse().with_context(|| {
+                                format!("MabMabeHitSucessRate 不是合法整数：{v:?}")
+                            })?);
+                        }
+                        "MABMABEHITMABETIMERATE" => {
+                            mab_mabe_hit_mabe_time_rate = Some(v.parse().with_context(|| {
+                                format!("MabMabeHitMabeTimeRate 不是合法整数：{v:?}")
+                            })?);
+                        }
+                        "AMYOUNSULPOINT" => {
+                            amy_ounsul_point =
+                                Some(v.parse().with_context(|| {
+                                    format!("AmyOunsulPoint 不是合法整数：{v:?}")
+                                })?);
+                        }
                         "SUPERREPAIRPRICERATE" => {
                             super_repair_price_rate = Some(v.parse().with_context(|| {
                                 format!("SuperRepairPriceRate 不是合法整数：{v:?}")
@@ -773,6 +815,12 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         fire_boom_rage: fire_boom_rage.unwrap_or(1),
         snow_wind_range: snow_wind_range.unwrap_or(1),
         elec_blizzard_range: elec_blizzard_range.unwrap_or(2),
+        // oracle 缺省值（`GameSvrConf.cs:1763/1778-1781`）。
+        mab_mabe_hit_rand_rate: mab_mabe_hit_rand_rate.unwrap_or(100),
+        mab_mabe_hit_min_lv_limit: mab_mabe_hit_min_lv_limit.unwrap_or(10),
+        mab_mabe_hit_sucess_rate: mab_mabe_hit_sucess_rate.unwrap_or(21),
+        mab_mabe_hit_mabe_time_rate: mab_mabe_hit_mabe_time_rate.unwrap_or(20),
+        amy_ounsul_point: amy_ounsul_point.unwrap_or(10),
         super_repair_price_rate: super_repair_price_rate.unwrap_or(3),
         repair_item_dec_dura: repair_item_dec_dura.unwrap_or(30),
         // oracle 缺省值（`GameSvrConf.cs:1450`）：`[Setup]` 里没写不算错。

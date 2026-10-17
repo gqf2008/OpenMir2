@@ -10,7 +10,7 @@
 //!   故本模块对**缺文件**返回「全默认」，不当错误（调用方记 WRN）。
 //! - 缺键：用 `MessageSettings` 源码默认值（`src/Modules/SystemModule/MessageSettings.cs:228-237`）。
 //!
-//! 只读帧 42 用到的 9 个键（`[String]` 段），不做通用 INI。
+//! 只读帧 42 与 B4 `YouPoisoned` 用到的 10 个键（`[String]` 段），不做通用 INI。
 
 use std::path::Path;
 
@@ -37,6 +37,11 @@ pub const DEFAULT_NO_MASTER_NAME: &str = "{0}的徒弟";
 /// oracle `MessageSettings.CanotPickUpItem`（`MessageSettings.cs:221`）——`ClientPickUpItem` 里
 /// “别人（或未过保护期）掉落物不可拾”的提示文本（`PlayObject.Base.cs:73`）。
 pub const DEFAULT_CANOT_PICK_UP_ITEM: &str = "在一定时间以内无法捡起此物品!!!";
+/// oracle `MessageSettings.YouPoisoned`（`MessageSettings.cs:64`）——**源码默认值**。
+/// 现网四份 `String.conf` 均为 `YouPoisoned=您中毒了!!!`（`M2GameSvr/String.conf:31`），
+/// 经 `StringConf.cs:76`（`GameShare.cs:91`）读入后覆盖本默认 ⇒ 线上体字节
+/// `c4fad6d0b6bec1cb212121`（`SM_SYSMESSAGE(100)`，魔号 6/48 与 50-D2 的 STY 帧）。
+pub const DEFAULT_YOU_POISONED: &str = "中毒了!!!";
 
 /// `[String]` 段里帧 42 用到的键（键名照 `StringConf.cs`，**不发明**）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -51,6 +56,7 @@ pub struct StringConf {
     master_name: Option<String>,
     no_master_name: Option<String>,
     canot_pick_up_item: Option<String>,
+    you_poisoned: Option<String>,
 }
 
 impl StringConf {
@@ -137,6 +143,12 @@ impl StringConf {
             .as_deref()
             .unwrap_or(DEFAULT_CANOT_PICK_UP_ITEM)
     }
+
+    /// `[String] YouPoisoned`（`SysMsg(YouPoisoned, Red, Hint)` 的文本）。
+    #[must_use]
+    pub fn you_poisoned(&self) -> &str {
+        self.you_poisoned.as_deref().unwrap_or(DEFAULT_YOU_POISONED)
+    }
 }
 
 /// 读 `String.conf` 并解析 `[String]` 段。
@@ -207,6 +219,7 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             "MASTERNAME" => &mut conf.master_name,
             "NOMASTERNAME" => &mut conf.no_master_name,
             "CANOTPICKUPITEM" => &mut conf.canot_pick_up_item,
+            "YOUPOISONED" => &mut conf.you_poisoned,
             _ => continue,
         };
         if slot.is_none() {
@@ -244,6 +257,18 @@ mod tests {
         let c = parse(bytes);
         assert_eq!(c.human_show_name(), "A");
         assert_eq!(c.rank_level_name(), "B ; ; not-comment", "只认连续的 ;;");
+    }
+
+    /// 现网 `YouPoisoned=您中毒了!!!`（`M2GameSvr/String.conf:31`，GBK 字节
+    /// `c4fa d6d0 b6be c1cb 2121 21`）⇒ 取值为中文；缺键回落 `MessageSettings.cs:64`
+    /// 源码默认「中毒了!!!」。
+    #[test]
+    fn parses_deployed_you_poisoned_and_falls_back_to_message_default() {
+        let c = parse(b"[String]\nYouPoisoned=\xc4\xfa\xd6\xd0\xb6\xbe\xc1\xcb!!!\n");
+        assert_eq!(c.you_poisoned(), "您中毒了!!!");
+        let d = parse(b"[String]\n");
+        assert_eq!(d.you_poisoned(), DEFAULT_YOU_POISONED);
+        assert_eq!(d.you_poisoned(), "中毒了!!!");
     }
 
     /// 红检：把 `[String]` 段判定改坏（`sec.eq_ignore_ascii_case` → `sec == "String"`）

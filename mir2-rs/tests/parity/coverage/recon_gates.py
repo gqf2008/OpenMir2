@@ -2379,6 +2379,12 @@ def cmd_mutate(args):
         # （`smframe_ext::sm_openhealth_frame`），触发者 = 28 的 1500ms 延迟消息
         # （合同 §3.5）⇒ 按门规移出 blocked。
         "SM_OPENHEALTH",
+        # 卡 `openmir2-spell-shared-tail-p3b4`（2026-10-17）：魔号 42 的
+        # `MagGroupLightening`（`MagicManager.cs:1010-1013`）的 `RM_10205` ⇒ `SM_716(716)`
+        # 已在 `bins/game-svr/src/main.rs` 的 B4 支接生产发射点
+        # （`smframe_ext::sm_716(actor_id, CurrX, CurrY, 4)` → `SpellFrameBuf` → gate；
+        # 条件 `CurrX/Y != nTargetX/Y`、骰门之外）⇒ 按门规移出 blocked（自失效断言）。
+        "SM_716",
     }
     # 仍 blocked（编码器已落地、生产路径无发射点）；各自 blocked_by 与出处（红名单 v2 §3 finding）：
     #   · 传送簇（切图/TransMap：HIDE 侧随切图簇；对照 SHOW(801)/SHOW2(807) 经
@@ -2397,7 +2403,9 @@ def cmd_mutate(args):
     #      本注释块曾与集合成员矛盾，2026-10-17 订正为一致。）
     #   · 门与事件系统（门显隐 612/614；随门系统进 MapGrid，见门设计件）—— SM_OPENDOOR_OK(612)/SM_CLOSEDOOR(614)（V2-11）。
     #   · 商人脚本簇（商人/公务员/元宝寄售对话）—— SM_MERCHANTDLGCLOSE(644)/SM_QUERYYBDEAL(23023)/
-    #     SM_QUERYYBSELL(23021)/SM_716(716)（V2-13）。
+    #     SM_QUERYYBSELL(23021)（V2-13）。
+    #     （SM_716(716) 原列本簇；卡 `openmir2-spell-shared-tail-p3b4` 接线 42 的 `RM_10205`
+    #      后已移入 `_wired_now`，见上。）
     #   · 重连 / 换脸 / 掷骰 / 地面物品簇（杂项）—— SM_RECONNECT(802)/SM_CHANGEFACE(1104)/
     #     SM_PLAYDICE(8001)/SM_ITEMSHOW(610)（V2-14）。
     #     （SM_MAGICFIRE_FAIL(639) 原列本簇；卡 `openmir2-spell-mp-wrapper` 接线后已移入
@@ -2406,7 +2414,7 @@ def cmd_mutate(args):
                 "SM_DIGUP", "SM_DIGDOWN", "SM_FLYAXE", "SM_LIGHTING",
                 "SM_CLOSEHEALTH", "SM_BREAKWEAPON",
                 "SM_LAMPCHANGEDURA", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL",
-                "SM_QUERYYBSELL", "SM_716", "SM_RECONNECT", "SM_CHANGEFACE",
+                "SM_QUERYYBSELL", "SM_RECONNECT", "SM_CHANGEFACE",
                 "SM_PLAYDICE", "SM_ITEMSHOW", "SM_HIDEEVENT", "SM_SHOWEVENT", "SM_OPENDOOR_OK",
                 "SM_CLOSEDOOR"}
 

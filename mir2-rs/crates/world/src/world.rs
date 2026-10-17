@@ -285,6 +285,68 @@ pub struct AreaSpellOutcome {
     pub targets: Vec<i32>,
 }
 
+/// **P3-B4**：6/48 的单目标施毒结果（`MagicManager.cs:235-252` / `:914-932`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PoisonStrikeOutcome {
+    /// 共享尾 `RM_MAGICFIRE` 的 ActorId 来源（proper 目标）。
+    pub target: Option<i32>,
+    /// 骰门通过且形状为 1/2（`Race == Play || >= Animal`）。
+    pub bo_train: bool,
+    /// 是否投了 `RM_POISON`。
+    pub poisoned: bool,
+    /// `nPower`（= `RM_POISON` 的 `nParam1`/时间）。
+    pub power: i32,
+    /// `PoisonState`（0=DECHEALTH 绿毒、1=DAMAGEARMOR 红毒）。
+    pub poison_type: u8,
+    /// `RM_POISON.nParam1`（时长 = `nPower`）。
+    pub time: i32,
+    /// `RM_POISON.nParam3`（中毒点）。
+    pub point: i32,
+}
+
+/// **P3-B4**：48 群体施毒的逐目标结果（枚举序）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupPoisonOutcome {
+    pub bo_train: bool,
+    pub targets: Vec<PoisonStrikeOutcome>,
+}
+
+/// **P3-B4**：50 `MabMabe` 的效果结果。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MabMabeSpellOutcome {
+    /// 共享尾 `RM_MAGICFIRE` 的 ActorId 来源。
+    pub target: Option<i32>,
+    /// `boTrain = MabMabe(...)`（完整成功臂才为 true）。
+    pub bo_train: bool,
+    /// case 级 4 抽算出的 `nPower`。
+    pub power: i32,
+    /// 成功臂 `GetMagStruckDamage` 后的 `nPower`（未成功臂为 0）。
+    pub msd_power: i32,
+    /// 玩家目标的 `SetPkFlag` ⇒ 656（由目标发，cast tick）。
+    pub name_color: Option<crate::slave::NameColorDelivery>,
+}
+
+/// **P3-B4**：42 `MagGroupLightening` 的逐目标载荷。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GroupLighteningTarget {
+    pub target_id: i32,
+    /// `RM_DELAYMAGIC` 的 `wParam`（不死系已 ×1.5）。
+    pub power: i32,
+}
+
+/// **P3-B4**：42 `MagGroupLightening` 的结果。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupLighteningOutcome {
+    /// helper `:987` 的 `RM_MAGICFIRE`（638）的 ActorId（= `targetObject.ActorId`）。
+    pub fire_target: i32,
+    /// 任一目标 `Race >= Animal`（`:1005-1008`）。
+    pub bo_train: bool,
+    /// 命中骰门并排入 `RM_DELAYMAGIC` 的目标（枚举序）。
+    pub targets: Vec<GroupLighteningTarget>,
+    /// `RM_10205` ⇒ `SM_716` 的坐标（每个非中心 proper 目标一条，枚举序）。
+    pub icons_716: Vec<(i32, i32)>,
+}
+
 /// **P3-B3**：16 `MagMakeHolyCurtain` 的结果（`MagicManager.cs:1146-1207`）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HolyCurtainOutcome {
@@ -445,6 +507,12 @@ pub struct World {
     /// 由宿主在起世界时用与 4 条 `CM_*` 组队派发**同一份** [`crate::party::PartyConfig`] 灌入
     /// （缺省 = 常量默认值，与 `Server.conf` 缺键口径一致）。
     pub party_cfg: crate::party::PartyConfig,
+    /// **P3-B4**：`MabMabe` / 施毒术的配置项（`GameSvrConf.cs:1763/1778-1781`）。
+    ///
+    /// 缺省 = oracle 缺省（`hit_rand_rate=100`/`hit_min_lv_limit=10`/`hit_success_rate=21`/
+    /// `hit_mabe_time_rate=20`/`amy_ounsul_point=10`）；宿主 `bins/game-svr` 用
+    /// [`World::set_b4_config`] 从 `Server.conf` 的 `[Setup]` 灌入。
+    pub b4_cfg: crate::magic_effect::MabMabeConfig,
     /// `SystemShare.Config.HealthFillTime` / `SpellFillTime`（`GameSvrConf.cs:1323-1324` 缺省
     /// `300` / `800`；`ServerConf.cs:152-153` 可覆盖）。
     ///
@@ -584,6 +652,7 @@ impl World {
             need_exps: vec![0; 1000],
             combat_config: CombatConfig::default(),
             party_cfg: crate::party::PartyConfig::default(),
+            b4_cfg: crate::magic_effect::MabMabeConfig::default(),
             health_fill_time: 300,
             spell_fill_time: 800,
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
@@ -836,6 +905,11 @@ impl World {
     /// 与 [`World::attack_poison`] 表、[`crate::combat::attack_dir_grouped_poison`] 同源。
     pub fn set_attack_poison(&mut self, actor_id: i32, state: crate::combat::AttackPoisonState) {
         self.attack_poison.insert(actor_id, state);
+    }
+
+    /// **P3-B4**：灌入 `MabMabe`/施毒术配置（`Server.conf` 的 `[Setup]`）。
+    pub fn set_b4_config(&mut self, cfg: crate::magic_effect::MabMabeConfig) {
+        self.b4_cfg = cfg;
     }
 
     /// 清某 actor 的攻击中毒门运行态（离场/卸麻痹戒指）。幂等。
@@ -1169,6 +1243,419 @@ impl World {
             delay_ms: 600,
             push,
         }
+    }
+
+    // ====================== P3-B4（毒族 / 群体列表：6/48/50/42）======================
+
+    /// `PlayObject.PvpLevel()`（`PlayObject.cs:4352`）：`(byte)(PkPoint / 100)`。
+    #[must_use]
+    pub fn pvp_level(e: &Entity) -> u8 {
+        u8::try_from(e.pk_point / 100).unwrap_or(0)
+    }
+
+    /// `GameSvrConf.PKFlagNameColor`（`GameSvrConf.cs:1731` 缺省 `0x2F`）。
+    pub const PK_FLAG_NAME_COLOR: u8 = 0x2F;
+
+    /// `PlayObject.SetPkFlag(IActor)`（`PlayObject.cs:4326-4341`）。
+    ///
+    /// ```text
+    /// :4328 if (baseObject.Race == Play)
+    /// :4331   if (PvpLevel() < 2 && targetObject.PvpLevel() < 2
+    ///            && !Envir.Flag.FightZone && !Envir.Flag.Fight3Zone && !PvpFlag)
+    /// :4336     if (!targetObject.PvpFlag) { targetObject.PvpFlag = true; targetObject.RefNameColor(); }
+    /// ```
+    ///
+    /// 本仓 `FightZone`/`Fight3Zone` 未建模 ⇒ 恒 `false`（不阻塞置位）。
+    /// 返回 `RefNameColor` 的观察值（由 **`target_id`** 发出；颜色按接收侧
+    /// `PlayObject.GetChrColor` 的 `PvpFlag` 支 = `PKFlagNameColor`）。
+    pub fn set_pk_flag(
+        &mut self,
+        this_id: i32,
+        target_id: i32,
+    ) -> Option<crate::slave::NameColorDelivery> {
+        let this = self.entities.get(this_id)?;
+        let target = self.entities.get(target_id)?;
+        // `baseObject.Race == ActorRace.Play`
+        if target.race != crate::entity::ACTOR_RACE_PLAY {
+            return None;
+        }
+        // `PvpLevel() < 2 && targetObject.PvpLevel() < 2 && !PvpFlag`
+        if Self::pvp_level(this) >= 2 || Self::pvp_level(target) >= 2 || this.pvp_flag {
+            return None;
+        }
+        if target.pvp_flag {
+            return None;
+        }
+        if let Some(t) = self.entities.get_mut(target_id) {
+            t.pvp_flag = true;
+        }
+        Some(crate::slave::NameColorDelivery {
+            target_id,
+            color: Self::PK_FLAG_NAME_COLOR,
+        })
+    }
+
+    /// 目标的 `AntiPoison`（`BaseObject.cs:109`）。唯一注入面 = [`World::attack_poison`]；
+    /// 未注入 ⇒ 0（普通 `MonGen` 怪与 oracle 普通生成路径同）。
+    #[must_use]
+    pub fn target_anti_poison(&self, target_id: i32) -> i32 {
+        self.attack_poison
+            .get(&target_id)
+            .map_or(0, |s| i32::from(s.anti_poison))
+    }
+
+    /// 目标的 `UnParalysis`（`BaseObject.cs:85`）。注入面同 [`World::target_anti_poison`]；
+    /// oracle 全仓无赋值点 ⇒ 恒 `false`。
+    #[must_use]
+    pub fn target_un_paralysis(&self, target_id: i32) -> bool {
+        self.attack_poison
+            .get(&target_id)
+            .is_some_and(|s| s.un_paralysis)
+    }
+
+    /// `SKILL_AMYOUNSUL(6)` / `SKILL_GROUPAMYOUNSUL(48)` 的**单目标效果体**
+    /// （`MagicManager.cs:235-252` / `:914-932`）。
+    ///
+    /// 护身符门（`CheckAmulet`/`UseAmulet`）与 `SetTargetCreat` 在宿主侧完成（需要会话 `UseItems`）；
+    /// 本函数承接骰门之后的**取数与投毒**：
+    /// ```text
+    /// :235/:914 if (Random(antiPoison + 7) <= 6) {
+    /// :237/:917   switch (stdItem.Shape)
+    ///               case 1: nPower = GP13(40) + RP(SC)*2; RM_POISON(DECHEALTH, nPower, caster, point, 1000)
+    ///               case 2: nPower = GP13(30) + RP(SC)*2; RM_POISON(DAMAGEARMOR, ...)
+    /// :248/:928   if (Race == Play || Race >= Animal) boTrain = true
+    /// ```
+    /// `shape` 来自 `UseItems[nAmuletIdx].Index` 的 `StdItem.Shape`（同一确定性表；见合同 §2.5）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_poison_on_target(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target_id: i32,
+        sc: i32,
+        shape: u8,
+        cfg: &crate::magic_effect::MabMabeConfig,
+    ) -> PoisonStrikeOutcome {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return PoisonStrikeOutcome::default();
+        };
+        let Some(target) = self.entities.get(target_id).cloned() else {
+            return PoisonStrikeOutcome::default();
+        };
+        let _ = caster;
+        let anti_poison = self.target_anti_poison(target_id);
+        let mut out = PoisonStrikeOutcome {
+            target: Some(target_id),
+            ..PoisonStrikeOutcome::default()
+        };
+        // `:235/:914 Random(AntiPoison + 7) <= 6`（失败 ⇒ 不抽 GP13/RP）。
+        if !crate::magic_effect::poison_dice(&mut self.rng, anti_poison) {
+            return out;
+        }
+        // `:237/:917 switch (stdItem.Shape)`——只有 1/2 两支可达（合同 §2.5）。
+        let (n_int, poison_type) = match shape {
+            1 => (40, 0u8), // DECHEALTH
+            2 => (30, 1u8), // DAMAGEARMOR
+            _ => return out,
+        };
+        let power = crate::magic::power_poison(&mut self.rng, magic, level, sc, n_int);
+        let point = crate::magic_effect::poison_point(level, power, cfg.amy_ounsul_point);
+        // `SendSelfDelayMsg(RM_POISON, type, nPower, caster, point, "", 1000)`
+        // ⇒ wParam=type、nParam1(时间)=nPower、nParam2=caster、nParam3=point。
+        self.send_self_delay_msg_full(
+            target_id,
+            crate::slave::RM_POISON,
+            i32::from(poison_type),
+            power,
+            caster_id,
+            point,
+            1000,
+        );
+        out.poisoned = true;
+        out.power = power;
+        out.poison_type = poison_type;
+        out.time = power;
+        out.point = point;
+        out.bo_train = target.race == crate::entity::ACTOR_RACE_PLAY
+            || target.race >= crate::entity::ACTOR_RACE_ANIMAL;
+        out
+    }
+
+    /// `SKILL_GROUPAMYOUNSUL(48)` 的**逐目标循环**（`MagicManager.cs:893-940`）。
+    ///
+    /// `use_amulet(target_id)` 由宿主实现：执行 `CheckAmulet` + `UseAmulet`（帧面 642/202 也由
+    /// 宿主出），成功返回 `Some(StdItem.Shape)`，失败返回 `None`（⇒ 该目标**零抽**且
+    /// **不** `SetTargetCreat`）。回调按枚举序（`x→y→格内 ObjList 插入序`）逐目标调用，
+    /// 因此护身符消耗/帧面与 oracle 的循环体同序。
+    ///
+    /// 本函数返回 `boTrain`（任一目标命中 `Race == Play || >= Animal`）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn cast_group_poison_spell<F>(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target_x: i32,
+        target_y: i32,
+        sc: i32,
+        cfg: &crate::magic_effect::MabMabeConfig,
+        mut use_amulet: F,
+    ) -> GroupPoisonOutcome
+    where
+        F: FnMut(i32) -> Option<u8>,
+    {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return GroupPoisonOutcome::default();
+        };
+        let range = i32::from(level).max(1);
+        let mut out = GroupPoisonOutcome::default();
+        for tid in self.mag_objects_in_range(caster.map_id, target_x, target_y, range) {
+            if tid == caster_id {
+                continue;
+            }
+            let Some(t) = self.entities.get(tid).cloned() else {
+                continue;
+            };
+            if t.death || t.ghost {
+                continue;
+            }
+            if !crate::combat::is_proper_target_grouped(
+                &caster,
+                &t,
+                &self.attacker_group_members(&caster),
+            ) {
+                continue;
+            }
+            let Some(shape) = use_amulet(tid) else {
+                continue;
+            };
+            // `:934 playObject.SetTargetCreat(baseObject);`（在 `if (CheckAmulet)` 内）。
+            if let Some(c) = self.entities.get_mut(caster_id) {
+                c.ai.target_creature = Some(tid);
+            }
+            let one = self.cast_poison_on_target(caster_id, magic, level, tid, sc, shape, cfg);
+            out.bo_train |= one.bo_train;
+            out.targets.push(one);
+        }
+        out
+    }
+
+    /// `SKILL_MABE(50)` 效果体 —— `case` `MagicManager.cs:530-536` + helper `:1230-1267`。
+    ///
+    /// **case 级的 4 抽无条件发生**（`targetObject == null` 也抽）：
+    /// `nPower = GetAttackPower(GetPower(MPow) + Lo(MC), ΔMC + 1)`
+    /// （`MPow` → `GetPower` → `GetAttackPower`）。
+    ///
+    /// helper 的门序（短路，逐抽见合同 §3.3）：
+    /// `MagCanHitTarget` → `IsProperTarget` → `R(10)` 抗魔门 → 距离 ≤1 →
+    /// **入队第一条 `RM_DELAYMAGIC(nPower/3, ..., 600)`** → `R(2)` 等级门 →
+    /// `R(hit_rand_rate)` → `R(hit_success_rate)` → 成功臂 `GetMagStruckDamage`（第 9 抽）→
+    /// 入队第二条 `RM_DELAYMAGIC(post-MSD nPower, ..., 600)` → 玩家且 `!UnParalysis` 再
+    /// `R(nLevel)` 并投 `RM_POISON(STONE, ..., 650)`。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_mab_mabe_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        target_x: i32,
+        target_y: i32,
+        mc: i32,
+        cfg: &crate::magic_effect::MabMabeConfig,
+    ) -> MabMabeSpellOutcome {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return MabMabeSpellOutcome::default();
+        };
+        let atk = AttackPowerMode::for_attacker(&caster);
+        // `:531` —— 4 抽无条件。
+        let power = crate::magic::power_get_power_plus_mc(&mut self.rng, magic, level, mc, atk);
+        let mut out = MabMabeSpellOutcome {
+            target,
+            power,
+            ..MabMabeSpellOutcome::default()
+        };
+        let Some(tid) = target else {
+            return out;
+        };
+        let Some(t) = self.entities.get(tid).cloned() else {
+            return out;
+        };
+        // `:1233 MagCanHitTarget` / `:1235 IsProperTarget`（纯门、零抽）。
+        if !self.spell_can_hit(&caster, &t)
+            || !crate::combat::is_proper_target_grouped(
+                &caster,
+                &t,
+                &self.attacker_group_members(&caster),
+            )
+        {
+            return out;
+        }
+        // `:1237` 的 `&&` 里距离门与 R(10) 同一条件（距离失败 ⇒ 不抽 R(2)）。
+        let in_range = (t.x - target_x).abs() <= 1 && (t.y - target_y).abs() <= 1;
+        let gates = crate::magic_effect::mab_mabe_gates(
+            &mut self.rng,
+            i32::from(t.anti_magic),
+            in_range,
+            i32::from(caster.level),
+            i32::from(t.level),
+            level,
+            cfg,
+        );
+        if !gates.anti_magic_pass || !in_range {
+            return out;
+        }
+        // `:1239` 第一条 RM_DELAYMAGIC（**先于** `:1240` 的等级门）。
+        self.send_self_delay_msg_full(
+            caster_id,
+            crate::slave::RM_DELAYMAGIC,
+            power / 3,
+            mir2_shared::hutil::make_long_unsigned(target_x as u16, target_y as u16),
+            2,
+            tid,
+            600,
+        );
+        if !gates.level_gate_pass || !gates.rand_gate_pass || !gates.success_gate_pass {
+            return out;
+        }
+        // `:1247-1251`：玩家目标 ⇒ `SetPkFlag`（⇒ 656，由 target 发）+ `SetTargetCreat`。
+        if t.race == crate::entity::ACTOR_RACE_PLAY {
+            out.name_color = self.set_pk_flag(caster_id, tid);
+            if let Some(c) = self.entities.get_mut(caster_id) {
+                c.ai.target_creature = Some(tid);
+            }
+        }
+        // `:1252 targetObject.SetLastHiter(playObject)`
+        let now = self.clock_ms;
+        if let Some(tm) = self.entities.get_mut(tid) {
+            tm.set_last_hiter(caster_id, now);
+        }
+        // `:1253 nPower = targetObject.GetMagStruckDamage(playObject, nPower)`（第 9 抽）。
+        let n_power = crate::combat::get_mag_struck_damage(
+            &mut self.rng,
+            t.mac,
+            power,
+            Some(caster.undead_power),
+        );
+        out.msd_power = n_power;
+        // `:1254` 第二条 RM_DELAYMAGIC。
+        self.send_self_delay_msg_full(
+            caster_id,
+            crate::slave::RM_DELAYMAGIC,
+            n_power,
+            mir2_shared::hutil::make_long_unsigned(target_x as u16, target_y as u16),
+            2,
+            tid,
+            600,
+        );
+        // `:1255-1258`：玩家且 `!UnParalysis` ⇒ `R(nLevel)` 后投 STONE（650ms）。
+        if t.race == crate::entity::ACTOR_RACE_PLAY && !self.target_un_paralysis(tid) {
+            let time = n_power / cfg.hit_mabe_time_rate + self.rng.random_below(i32::from(level));
+            self.send_self_delay_msg_full(
+                tid,
+                crate::slave::RM_POISON,
+                5, // PoisonState.STONE
+                time,
+                caster_id,
+                i32::from(level),
+                650,
+            );
+        }
+        out.bo_train = true;
+        out
+    }
+
+    /// `SKILL_GROUPLIGHTENING(42)` 效果体 —— `MagGroupLightening`（`MagicManager.cs:981-1018`）。
+    ///
+    /// **调用前提**：`targetObject != null`（helper 在 `:987` 直接读 `targetObject.ActorId`；
+    /// null ⇒ NPE ⇒ 639 失败臂，由宿主处理，不调用本函数）。
+    ///
+    /// 逐目标（`x→y→格内 ObjList 插入序`）：
+    /// ```text
+    /// :995  IsProperTarget（纯门；失败 ⇒ 零抽）
+    /// :997  Random(10) >= AntiMagic                   ← 1 抽
+    /// :999  nPower = AP(GP(MPow)+Lo(MC), ΔMC+1)        ← 4 抽
+    /// :1000 LA_UNDEAD ⇒ Round(*1.5)
+    /// :1004 RM_DELAYMAGIC(nPower, MakeLong(obj.CurrX,obj.CurrY), 2, obj.ActorId, 600)
+    /// :1005 Race >= Animal ⇒ result = true
+    /// :1010 obj.CurrX/Y != nTargetX/Y ⇒ RM_10205（716，**骰门之外**）
+    /// ```
+    /// `boSpellFire = false` 由 `case` 的 `ref` 置（`:984`），宿主据返回值不再发共享尾 638。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_group_lightening_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target_id: i32,
+        target_x: i32,
+        target_y: i32,
+        mc: i32,
+    ) -> GroupLighteningOutcome {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return GroupLighteningOutcome::default();
+        };
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let range = i32::from(level).max(1);
+        let mut out = GroupLighteningOutcome {
+            fire_target: target_id,
+            ..GroupLighteningOutcome::default()
+        };
+        for tid in self.mag_objects_in_range(caster.map_id, target_x, target_y, range) {
+            if tid == caster_id {
+                continue;
+            }
+            let Some(t) = self.entities.get(tid).cloned() else {
+                continue;
+            };
+            if t.death || t.ghost {
+                continue;
+            }
+            if !crate::combat::is_proper_target_grouped(
+                &caster,
+                &t,
+                &self.attacker_group_members(&caster),
+            ) {
+                continue;
+            }
+            // `:997 Random(10) >= AntiMagic`
+            if crate::magic_effect::anti_magic_roll(&mut self.rng, i32::from(t.anti_magic)) {
+                // `:999`
+                let mut power =
+                    crate::magic::power_get_power_plus_mc(&mut self.rng, magic, level, mc, atk);
+                // `:1000-1003`
+                if t.life_attrib == crate::magic_effect::LA_UNDEAD {
+                    power = mir2_shared::hutil::round(f64::from(power) * 1.5);
+                }
+                // `:1004`
+                self.send_self_delay_msg_full(
+                    caster_id,
+                    crate::slave::RM_DELAYMAGIC,
+                    power,
+                    mir2_shared::hutil::make_long_unsigned(t.x as u16, t.y as u16),
+                    2,
+                    tid,
+                    600,
+                );
+                // `:1005-1008 if (baseObject.Race >= ActorRace.Animal) result = true;`
+                if t.race >= crate::entity::ACTOR_RACE_ANIMAL {
+                    out.bo_train = true;
+                }
+                out.targets.push(GroupLighteningTarget {
+                    target_id: tid,
+                    power,
+                });
+            }
+            // `:1010-1013`（骰门之外）。
+            if t.x != target_x || t.y != target_y {
+                out.icons_716.push((t.x, t.y));
+            }
+        }
+        out
     }
 
     /// 取 `(施法者, 目标, 目标 id)`（均 clone ⇒ 后续可安全 `&mut self.rng`）。
@@ -3142,6 +3629,25 @@ impl World {
     }
 
     /// 一次攻击结算（`_Attack`）。
+    /// `PlayObject.IsGroupMember`（`PlayObject.cs:5158-5175`）的注册表源：**团长**
+    /// （`GroupOwner`）实体持有的 `GroupMembers`；`GroupOwner == 0` ⇒ 空表。
+    ///
+    /// 本仓只有团长 Entity 持成员表（`party.rs:542-544/624`；`JoinGroup` 只给加入者写
+    /// `group_owner`，`party.rs:322`）⇒ **非团长施法者自身的 `group_members` 恒空**。
+    /// `HAM_GROUP` 的 `IsProperTarget` 必须读这张表（`PlayObject.Attack.cs:686-697` 调
+    /// `IsGroupMember`），不能读施法者自己的——否则同组玩家会被误判为合法目标
+    /// （多抽、白扣护身符、638/642 而非恰 1 条 639）。
+    #[must_use]
+    pub fn attacker_group_members(&self, attacker: &Entity) -> Vec<i32> {
+        if attacker.group_owner == 0 {
+            return Vec::new();
+        }
+        self.entities
+            .get(attacker.group_owner)
+            .map(|e| e.group_members.clone())
+            .unwrap_or_default()
+    }
+
     pub(crate) fn attack_once(&mut self, actor_id: i32, target_id: i32) -> Option<AttackOutcome> {
         if self.entities.get(actor_id).is_none() || self.entities.get(target_id).is_none() {
             return None;
