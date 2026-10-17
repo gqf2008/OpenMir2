@@ -4,6 +4,12 @@
 #   start: guard → 暂停车队 → 增量构建全链 → 起 Rust 栈（+ C# DBSrv/LoginSrv）→ preflight → 起客户端（可见窗口，指向 127.0.0.1:7000）
 #   stop [LogDir]: 停栈（缺省 E:\tmp\client-e2e\stack）→ 关客户端 → 校验十端口回落 → 恢复车队
 #
+# ⚠ 安装副本 ≠ 本入库件：`/e/tmp/openmir2-watch/client-e2e-window.sh`（2026-10-13）无 `guard`、
+#   `repo=` 指共享主检出、`tgt=` 指 `E:\tmp\openmir2-merge-target`、`stop` 不接 `LogDir`，
+#   且它 `start` 的收窗提示指向旧脚本。**以本文件为唯一真源**：安装副本的 `start`/`stop` 都把 logdir 硬编码
+#   为 `E:\tmp\client-e2e\stack`，传 `-LogDir` 会被静默忽略 ⇒ **不要用安装副本起/停窗**（只可做差异核对）。
+#   起/停必须同一份脚本、同一 `-LogDir`。
+#
 # 2026-10-15（片63，收口 root 15:0x「假回归」）：15:0x 那次实测是在**修复前的源/旧 exe + 被泄漏栈占着端口**
 # 上起的窗口 —— 复现出的 HUD 0/0 + CM_RUN=0 是 53 帧布局缺陷（`c61b9627a`），不是 52/752 的回归，且已随
 # `c61b9627a`/`6cadc9fbf`/`fd68e037d` 修掉。⇒ `start` 前**必须**过前置门：RED 就拒绝起窗（一个字节都不构建、
@@ -57,7 +63,7 @@ start)
   "$ps" -NoProfile -ExecutionPolicy Bypass -File "$repo/tools/m2-acceptance/preflight.ps1" | tail -5
   echo "== 5) 起客户端（可见）"
   "$ps" -NoProfile -Command "Start-Process -FilePath 'D:\\MirClient-run\\run-release.cmd' -WorkingDirectory 'D:\\MirClient-run'"
-  echo "WINDOW_OPEN_OK  (收窗口请跑： bash $w/client-e2e-window.sh stop)"
+  echo "WINDOW_OPEN_OK  (收窗口请跑同一份入库件的 stop： bash \"$here/client-e2e-window.fixed.sh.txt\" stop \"$logdir\")"
   ;;
 stop)
   [ -n "${2:-}" ] && logdir=$2

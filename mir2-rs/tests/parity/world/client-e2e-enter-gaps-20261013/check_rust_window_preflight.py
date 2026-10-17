@@ -1314,7 +1314,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--provenance",
         default="",
-        help=f"R7 出处清单 JSON（默认 <target-dir>/{PROVENANCE_NAME}；空 = 跳过 R7）",
+        help=f"R7 出处清单 JSON（显式给 <target-dir>/{PROVENANCE_NAME}；**无默认，空 = 跳过 R7**）",
     )
     ap.add_argument(
         "--record-provenance",

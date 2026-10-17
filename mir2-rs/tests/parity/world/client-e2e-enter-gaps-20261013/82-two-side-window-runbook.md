@@ -90,6 +90,62 @@ PREFLIGHT_RECORD_CMD: cd "<源>/mir2-rs" && CARGO_TARGET_DIR="<target-dir>" \
   再喂给本工具自己的 argparse，不再只是子串断言）。
 - **别用固定的 `E:/tmp/client-e2e/stack2` 当停栈目录**（片63）：`-LogDir` 必须是**持有占用端口那些 pid
   的** `rust-stack.pid.json` 所在目录（R8 会校验后才打印可照抄的命令；不持有则打 `<持有这些 pid 的目录>`）。
+- **R6/R7 随每次落地转红**（2026-10-17 实测）：任何新提交都会让基线 `origin/master` 前移、已编 exe 的出处
+  过期 ⇒ M1（对齐 mirror）+ M2（重编六件 + 重录清单）**不是一次性成就**。开窗前**最后一次**落地之后必须
+  重跑二者，否则 guard RED（`R6: 构建源落后基线` / `R7: 出处清单 ↔ exe 不一致`）。
+
+## 1c. 安装副本 ≠ 入库件（M4）与「真暂停」人工核对
+
+**唯一真源 = 本仓库的入库件**：`mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt`
+（`guard` / `start` / `stop [LogDir]` 三子命令；`start` 在 `run_guard || exit 1` 处 fail-closed）。
+
+| 维度 | 入库件（真源） | 安装副本 `/e/tmp/openmir2-watch/client-e2e-window.sh`（旧，2026-10-13） |
+| --- | --- | --- |
+| `guard` | **有**（R1..R8，零副作用） | **无**（可绕过前置门起窗） |
+| `repo=` | `/e/tmp/m2svr-window-origin`（窗口 mirror） | `/e/Users/gxh/Documents/GitHub/OpenMir2`（**共享主检出**） |
+| `tgt=` | `E:\tmp\m2svr-window-target` | `E:\tmp\openmir2-merge-target`（另一份 target） |
+| `stop` | `stop [LogDir]`，与 `start` 同一 `repo`/`LogDir`（`stop` 不读 `tgt`） | **不接 `LogDir`**（起/停都硬编码 `E:\tmp\client-e2e\stack`） |
+| `start` 收窗提示 | 指向**同一份入库件**的 `stop`（本片已改） | 指向旧脚本自身 |
+
+**规则**
+
+1. 起窗、收窗都用入库件，且**起/停同一 `-LogDir`**（R8 的 pid 文件目录；见 §1b / §W0-7）。
+2. **不要用安装副本起/停窗**：它的 `start` 与 `stop` 都把 logdir 硬编码为 `E:\tmp\client-e2e\stack`
+   （`start` 无 `$2` 分支、`stop` 无 `[ -n "${2:-}" ]`）⇒ 传 `-LogDir` 会被**静默忽略**，正是 21h 卡窗的根因。
+   要用安装副本，先自行给它补 `LogDir` 支持；或只拿它做差异核对（下表命令）。同步它是 owner 动作，
+   不在本 lane 写集；安装副本属 `/e/tmp` 运行副本，不得把它当判据。
+3. **本方实测与镜像一致性（可复跑，只读）**：
+
+```bash
+REPO="$(git rev-parse --show-toplevel)/mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt"
+INST=/e/tmp/openmir2-watch/client-e2e-window.sh
+sha256sum "$REPO" "$INST"
+grep -nE '^w=|^repo=|^tgt=|^logdir=' "$REPO" "$INST"
+diff -u --strip-trailing-cr "$REPO" "$INST" | head -120   # --strip-trailing-cr：两侧 CRLF/LF 不同不算漂移
+# 入库件自身的收窗提示必须指向入库件（判据行，不能指向 $w/client-e2e-window.sh）：
+grep -n "WINDOW_OPEN_OK" "$REPO"
+```
+
+判读：`sha256sum` 两值**不必相等**（两个文件本来就不同）；判据是 `grep` 的 `repo=`/`tgt=` 行是否符合上表、
+`diff` 是否只剩已知差异（`guard` 整段缺失、`repo=`/`tgt=`、`stop` 分支、提示行、2026-10-17 新增的 5 行
+「安装副本 ≠ 入库件」注释；出现其它 hunk ⇒ 安装副本已漂移），以及 `WINDOW_OPEN_OK` 那行引用的是
+`$here/client-e2e-window.fixed.sh.txt`。若 `INST` 不存在 ⇒ `No such file or directory`，视为「未安装」，
+仍以入库件为准。
+
+**「暂停车队」不等于「停掉所有写手」（当前编排差异）**
+
+- `lanes-pause.sh` 只对 **`node.exe` 且命令行含 `Tag: <tag>`** 的进程做 `Stop-Process`；
+- 本机当前编排是 **`claude.exe`**（不是 node），并会拉起 `cargo`/`rustc` 构建；`lanes.conf` 最后修改
+  2026-10-14，活动车道标签也可能不含在跑的车道；
+- ⇒ 窗口前必须**人工核对并停掉 `cargo` / `rustc` / `claude` 写手**（以及任何 `game-svr`/`GameSvr`/`BotSrv`），
+  再复查端口；**不能**只凭 `lanes-pause` 返回就判定「车队已停」：
+
+```powershell
+Get-CimInstance Win32_Process |
+  ? { $_.Name -match 'claude|node|cargo|rustc|GameSvr|game-svr|DBSrv|BotSrv' } |
+  Select-Object ProcessId,ParentProcessId,Name,CreationDate,CommandLine | Format-Table -Auto
+# 判据：开工时该表只剩本窗口自己的进程 / 必要基础服务（mysqld）；有 cargo/rustc/claude 写手 ⇒ 先停。
+```
 
 ## 2. 站位（两侧必须逐字节同一坐标）
 
@@ -163,8 +219,13 @@ python -I -B check_healthspellchanged_trigger.py `
 
 ```powershell
 # 3.1 整栈（Rust game-svr 5000 + Rust 三网关 7000/7100/7200 + C# DBSrv/LoginSrv + MySQL 3306）
+# ⚠ target 唯一真源 = E:/tmp/m2svr-window-target（与入库窗口脚本的 tgt、window_handoff.py 的默认
+#   --target-dir、R7 的 window-provenance.json 同路径）。**check_rust_window_preflight.py 本身无默认**：
+#   入库窗口脚本的 preflight_cmd 会显式传 --target-dir/--provenance；手跑不传时 R7 只打印 INFO 跳过、
+#   该门自身不判红（其余门绿时末尾仍是 `RESULT: GREEN`；假绿陷阱）——手跑必须显式带这两个参数。
+#   旧文里的另一条 target 名（与本真源不同）是笔误，已删；不要再另建第二份 target。
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
-  -RustBinDir E:/tmp/openmir2-window-target/debug -Seed 42 -LogDir E:/tmp/window/cliente2e/rust/stack
+  -RustBinDir E:/tmp/m2svr-window-target/debug -Seed 42 -LogDir E:/tmp/window/cliente2e/rust/stack
 
 # 3.2 把真 game-gate(7200) 停掉，起**影子** game-gate(7600)（conf 造法见 §4.0：拷 `RunGate/config.conf`、
 #     用 cp936 原样只改 Count/GatePort1 两个数字（逐字节只差 2 字节）；Rust 侧镜像同一份 conf）
@@ -351,6 +412,32 @@ python -I -B check_attack_observability.py `
 > 「怪→玩家」探针、RNG 双侧账本。**顺序不可换**：② 阳性对照必须**最先**跑，它的产出是后续各项的 GREEN 定义。
 > 车道自身不起栈（m2-svr 纪律），窗口由 root/owner 开。以下命令「就位即可照抄」，含期望值与失败分叉。
 
+### W0-00 开窗首步三连（M10：端口 → guard → C# 抓包前置；顺序不可换）
+
+> 只读、零起栈；三条全绿才进入 W0-0/W0-1。命令在**仓库根**执行（`check_csharp_capture_preflight.py`
+> 的仓内路径按仓库根写；`--repo` 显式给当前检出，别用已不存在的旧 worktree 路径）。
+
+```powershell
+# ① 十端口基线：九个游戏端口 DOWN，仅 3306 UP
+powershell -NoProfile -ExecutionPolicy Bypass -File E:/MirServer/port-status.ps1
+# 期望：报告「缺失端口」= 5000,5100,5500,5600,5700,6000,7000,7100,7200；
+#       进程表只有 mysqld ... port=3306（以及本步自己的 powershell）。
+
+# ② Rust 窗口前置门（R1..R8；只读、零端口）
+bash mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt guard
+# 期望 rc=0，末行 WINDOW_GUARD_OK。RED ⇒ 按 §1b 的 R1..R8 表恢复；
+#       绝不允许绕过 guard 改用安装副本起窗（§1c）。
+
+# ③ C# 抓包前置（含影子网关 conf；离线、零端口、fail-closed）
+python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_csharp_capture_preflight.py `
+  --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --mirserver E:/MirServer `
+  --shadow-config E:/tmp/window/cliente2e/shadow/run-gate/config.conf
+# 期望 rc=0 且 RESULT: GREEN（当前已 GREEN）。
+```
+
+**判定**：① 端口表 9 DOWN / 3306 UP；② 打印 `WINDOW_GUARD_OK`；③ 打印 `RESULT: GREEN`。
+任一不满足 ⇒ **停手**，不要进入 W0-0（失败分叉见 §1b / §4.0）。
+
 ### W0-0 前提（任一不满足即停手；全程零副作用）
 
 1. **十端口实拍**（含共享 3306）：`powershell -File E:\MirServer\port-status.ps1`
@@ -359,8 +446,13 @@ python -I -B check_attack_observability.py `
 2. **无泄漏栈（R8）**：`bash mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt guard`
    期望 rc=0、打 `WINDOW_GUARD_OK`；R8 RED ⇒ **照抄它打印的 `PREFLIGHT_STOP_CMD:`**（＝
    `start_rust_stack.ps1 -LogDir <持有 pid 的目录> -Stop`）。**起/停必须用同一个 `-LogDir`**（历史 21h 卡窗根因，见 `docs/交接-OpenMir2编排与联调-20261015.md` §1.2）。
-3. **车队已停确认**：窗口脚本 `start` 第 1 步即 `lanes-pause.sh`（暂停车队＝其它 agent 车道的在跑实例）。
-   人工开窗的等价动作＝确认无残留 BotSrv/game-svr/cargo/rustc（`Get-Process`）＋ 车队已 pause。
+3. **车队已停确认（不能只信 `lanes-pause`）**：窗口脚本 `start` 第 1 步即 `lanes-pause.sh`
+   （暂停车队＝其它 agent 车道的在跑实例）。
+   ⚠ 当前 `lanes-pause.sh` **只杀 `node.exe`（且命令行含 `Tag:`）**；本机编排是 **`claude.exe`** +
+   其拉起的 `cargo`/`rustc`，且 `lanes.conf`（最后修改 2026-10-14）可能不含在跑车道 ⇒
+   `lanes-pause` 返回**不等于**写手已停。人工开窗的等价动作＝
+   ① 按 §1c 的 `Get-CimInstance` 清单核对并停掉 `cargo`/`rustc`/`claude` 写手与残留 `BotSrv`/`game-svr`；
+   ② 再跑 `port-status.ps1` 确认 9 个游戏端口 DOWN；③ 确认没有别的车道在写 `mir2_db`。
 4. **角色摆位 SQL（两侧必须逐字同一坐标）**——每趟起栈前重跑（形态见 §2）：
    ```powershell
    $mysql='D:/mysql/mariadb-10.11.19-winx64/bin/mysql.exe'
@@ -452,6 +544,9 @@ python -I -B check_reverse_point_clean.py --point 311,666 --map 0 --vr 12
 > 驱动器已在 master（`mir2-rs/tests/parity/m3/rng-trace-scene/`：`run_rng_trace_pair.ps1` ＋ `rng_scene_gate.py`）；
 > 场景 `rng_trace_scenario.json`：**图 `0137`（竞技场，MonGen 0 行）＋ 固定怪（稻草人 @ (18,20) dir=0 ×1）＋
 > 起点 `(17,20) dir=2` ＋ 种子 `42` ＋ 600 ticks**。真机两相 trace **须占窗口**（可与 ④ 100 杀同图同起点同种子、**同批串行**）。
+>
+> **构造段基线（与场景账本分开，先重取）**：按 §2f 0.1b 采集并判定——部署件 **69 抽 / 18 站点**、
+> 屏障 A = **第 17 条数据行**（1-based `seq==17`）、`Robot.txt` 有效行数 ×4 = 账本头、route `added=1649`。
 
 ```powershell
 # 1) 窗口期两侧各采两相 trace（-Go 必须 owner 显式授权；-PinScene 钉含怪场景）
@@ -599,7 +694,140 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene
 
 1. **本机 mysqld 在听 3306**（基线服务，不是游戏端口）。`mir2-rs/tests/parity/m3/fixture_chain_gate.py check` 的**战斗 runner** 依赖 DB；未听时它会以 `ERROR 2002 ... (10061)` 报 `rc=1`——那是**环境未就绪**，不是代码红；先按本机 mysqld 配方（datadir `D:\mysql\data`、3306）恢复再跑门。来源：本文件 §1 第 6 条（`82-two-side-window-runbook.md:48`）。
 2. **先跑内存测试（或短程压测）再开窗**。本机近 **60 天崩溃 42 次**，其中含 `FAULTY_HARDWARE_CORRUPTED_PAGE`（内存/页损坏类）⇒ 独占窗口 + 长跑前先做内存自检；窗口内若出现无法归因的随机 FAIL，先怀疑宿主内存再怀疑代码。来源：**编排侧环境事实（本任务书）**——仓内无对应锚点，故本条**不冒充**代码/文档证据。
-3. **两侧同种子 + 先「重取基线」，再比 `seq=0`**。默认 RNG 流水已被构造段补齐改变（见下表 #12）：任何**旧基线**（`9a175a66f` 之前）与新树比都会自构造段起分歧；窗口内必须两侧各自用**当前树**、同一 `MIR2_RNG_SEED` 重采，先落 `INJECT_OK <seed>` 并通过 `rng-scene/rng_trace_diff.py check` 的 5 条 fail-closed，再逐项比 `seq=1` 起（1-based）。来源：`9a175a66f`、`e6105f011`、`78416a932`；本文件 §W0-6。
+3. **两侧同种子 + 先「重取基线」，再比 `seq=1`（1-based）**。默认 RNG 流水已被构造段补齐改变（见下表 #12）：任何**旧基线**（`9a175a66f` 之前）与新树比都会自构造段起分歧；窗口内必须两侧各自用**当前树**、同一 `MIR2_RNG_SEED` 重采，先落 `INJECT_OK <seed>` 并通过 `rng-scene/rng_trace_diff.py check` 的 5 条 fail-closed，再逐项比 `seq=1` 起（1-based）。命令级采集 / 判定值见 **§0.1b**；来源：`9a175a66f`、`e6105f011`、`78416a932`；本文件 §W0-6。
+
+### 0.1b 「重取基线」命令级步骤（M7）
+
+> 适用：构造段 / route / RNG 相关窗口项在**比对之前**。任何**旧基线**（`9a175a66f` 之前）都不得再用于判定；
+> 两侧必须用**当前树**（≥ `2fa749471`）与**同一** `MIR2_RNG_SEED` 重采。判据是「重取后的两侧账本」，
+> 不是任何历史制品（§0.2 #1/#2/#12 的判定值以本小节为准）。
+
+**0) 落盘目录（先建；`start_rust_stack.ps1 -RngLog` 对父目录不存在会 fail-closed）**
+
+```bash
+mkdir -p E:/tmp/window/cliente2e/ledger
+```
+
+**1) 构造段输入实测（部署件；决定账本头与总抽数）**
+
+```bash
+# Robot.txt 有效行数：skip 空行 / `;` 注释；必须两列；分隔符 = 空格 / TAB / '/'
+awk 'BEGIN{FS="[ \t/]+"} {sub(/\r$/,"")} $0!="" && substr($0,1,1)!=";" && NF>=2 {n++} END{print "robot_valid_lines=" n ", ledger_head_draws=" n*4}' \
+  E:/MirServer/M2GameSvr/Envir/Robot.txt
+# 期望：robot_valid_lines=1, ledger_head_draws=4
+
+# 段②：CHECKQUEST 条数（每条 = 1 站点 × 4 抽）
+grep -o "CHECKQUEST" E:/MirServer/M2GameSvr/Envir/MapInfo.txt | wc -l
+# 期望：9 ⇒ 36 抽
+
+# 段③ M1：MapQuest.txt 有效行数（skip 空行 / `;`；三列非空）
+awk 'BEGIN{FS="[ \t]+"} {sub(/\r$/,"")} $0!="" && substr($0,1,1)!=";" && NF>=3 {n++} END{print "mapquest_valid_rows=" n ", draws=" n*4}' \
+  E:/MirServer/M2GameSvr/Envir/MapQuest.txt
+# 期望：1 ⇒ 4 抽
+
+# 段③ L2/L1/L3：隐藏 NPC 三件都在 ⇒ 3 站点 × 4 = 12 抽
+ls -d E:/MirServer/M2GameSvr/Envir/MapQuest_def/QManage.txt \
+      E:/MirServer/M2GameSvr/Envir/Market_Def/QFunction-0.txt \
+      E:/MirServer/M2GameSvr/Envir/Robot_def
+# 期望：三行都存在（Robot_def 是目录）
+```
+
+**判定值（部署件，2026-10-17 复验口径）**：
+`4（Robot.txt 1 行×4） + 12（G1–G3 孤儿） + 1（屏障 A） + 36（CHECKQUEST 9×4） + 4（M1 1×4） + 12（L2/L1/L3 3×4） = 69 抽`
+⇒ **站点数 = 1 + 3 + 1 + 9 + 1 + 3 = 18**。屏障 A 是**第 17 条数据行**（1-based `seq==17`；前 16 条 = 段① 4 站点 × 4 抽）。
+
+**2) 两侧同种子采集（各起一次；端口互斥，不可同时起）**
+
+Rust（`start_rust_stack.ps1 -RngLog` 会把 `MIR2_RNG_LOG` 注入 `game-svr`；父目录必须先存在）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+  -RustBinDir E:/tmp/m2svr-window-target/debug -Seed 42 `
+  -RngLog E:/tmp/window/cliente2e/ledger/rust-ctor.tsv `
+  -LogDir E:/tmp/window/cliente2e/rust/stack
+# 期望启动输出含：RUST_RNG_LOG_INJECTED=E:/tmp/window/cliente2e/ledger/rust-ctor.tsv
+```
+
+C#（`start-csharp-hook.ps1` 把流水写到 `<LogDir>/rng-stream.tsv`，头 = `INJECT_OK 42` + `SEED_PROBE`）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/start-csharp-hook.ps1 `
+  -Seed 42 -LogDir E:/tmp/window/cliente2e/ledger/csharp-ctor
+# 产物：E:/tmp/window/cliente2e/ledger/csharp-ctor/rng-stream.tsv
+```
+
+**3) 机判（两侧各跑一次；`seq` 是 1-based，头部 `INJECT_OK` 行不是数据行）**
+
+```bash
+# 3a) 头行种子自证：两侧首行都必须是 `1<TAB>INJECT_OK<TAB>42<TAB>0`
+head -1 E:/tmp/window/cliente2e/ledger/rust-ctor.tsv | tr '\t' ' '; echo
+head -1 E:/tmp/window/cliente2e/ledger/csharp-ctor/rng-stream.tsv | tr '\t' ' '; echo
+
+# 3b) 构造段形状（前 69 条数据行）：
+#     - 第 17 条 seq==17 且 kind=Next(max) / arg=10000（屏障 A）
+#     - 其余 68 条，每 4 条一组的 arg 依次为 [1500,2000,3000,3000]（ctor 公共链）
+#     - 站点数 = arg==1500 的条数（17 个 ctor 站点） + arg==10000 的条数（1） = 18
+awk -F'\t' '
+  $2=="INJECT_OK" || $2=="SEED_PROBE" || $1 !~ /^[0-9]+$/ {next}
+  {n++
+   if (n<=69) {
+     if (n==17) { if ($1!=17 || $2!="Next(max)" || $3!=10000) bad_barrier=1; barrier++ }
+     else {
+       if (n<17) p=(n-1)%4; else p=(n-18)%4
+       want=(p==0?1500:(p==1?2000:3000))
+       if ($3!=want) bad_shape=1
+       if ($3==1500) ctor_sites++
+     }
+   }}
+  END {printf "data_rows_total=%d ctor_sites=%d barrier=%d bad_barrier=%d bad_shape=%d\n",
+        n, ctor_sites, barrier, bad_barrier+0, bad_shape+0;
+       exit (bad_barrier+0 || bad_shape+0 || ctor_sites!=17 || barrier!=1)}
+' E:/tmp/window/cliente2e/ledger/rust-ctor.tsv
+# 期望：data_rows_total>=69 ctor_sites=17 barrier=1 bad_barrier=0 bad_shape=0（rc=0）
+# C# 侧同一条命令把路径换成 csharp-ctor/rng-stream.tsv；期望相同。
+
+# 3c) 两侧构造段逐项比对（seq 1..69；site 列形态不同，先比 kind/arg/result）
+diff -u \
+  <(awk -F'\t' '$1~/^[0-9]+$/ && $2!="INJECT_OK" && $2!="SEED_PROBE" && $1<=69 {print $1"\t"$2"\t"$3"\t"$4}' E:/tmp/window/cliente2e/ledger/rust-ctor.tsv) \
+  <(awk -F'\t' '$1~/^[0-9]+$/ && $2!="INJECT_OK" && $2!="SEED_PROBE" && $1<=69 {print $1"\t"$2"\t"$3"\t"$4}' E:/tmp/window/cliente2e/ledger/csharp-ctor/rng-stream.tsv)
+# 期望：无输出、rc=0。有输出 ⇒ 真账本分歧，按首差 seq 定位：
+#   seq≈17 ⇒ 先查屏障 A（`ServerConf.cs:114` 的位置/`+=`）；seq 1..16 ⇒ 查 Robot.txt 行数与 G1–G3。
+```
+
+> ⚠ `seq` 1-based 的根据：Rust `crates/shared/src/rng_trace.rs` 的 `SEQ.fetch_add(1)+1`；头部
+> `1<TAB>INJECT_OK…` 是**声明行**（字面 1），不是取数行 ⇒ 机判必须先剔 `INJECT_OK`/`SEED_PROBE` 再谈 `seq`。
+> ⚠ 两侧 `site` 列**不是同一字符串**（Rust 记 `crates\world\src\entity.rs:…`，C# 依赖 PDB）⇒ 3c 先比
+> `kind/arg/result`；site 对齐用 `m3/rng-trace-probe/consumer_groups.tsv` 的组映射（DoD① 的
+> `groupdiff --fold --strict`）。
+
+**4) route 落格 `added=1649`**
+
+```powershell
+# Rust 生产日志（起栈后；日志可能是 GBK/UTF-8，用 -SimpleMatch 避免正则元字符）：
+Select-String -Path E:/tmp/window/cliente2e/rust/stack/game-svr.out.log -SimpleMatch '地图格子属性已灌入'
+Select-String -Path E:/tmp/window/cliente2e/rust/stack/game-svr.out.log -SimpleMatch '地图连接点已灌入（MapRoute）'
+# 期望：routes=1658 unresolved=0 added=1649
+```
+
+离线等价复算（**零端口、无需起栈**；本仓 `#[ignore]` 普查，真机部署件向量）：
+
+```bash
+# CARGO_TARGET_DIR 用一次性测试目录：本命令只跑 #[ignore] 普查，不产出窗口栈二进制、
+# 不影响 E:/tmp/m2svr-window-target 的出处核验；勿把测试 target 当窗口 target。
+cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/route-census-target \
+  cargo test -p game-svr --bin game-svr -- --ignored --nocapture real_registry_route_cells_on_wall
+# 期望末行：route 总数=1658 落在墙格=9 源图不可解析/未加载=0 ⇒ 生产 added 应为 1649（父提交 = 1658）
+```
+
+**5) 判定值汇总（写进证据；不绿即 RED，不许用「语义等价」盖过）**
+
+| 对象 | GREEN | RED |
+| --- | --- | --- |
+| `Robot.txt` 有效行 | **1**（⇒ 账本头 4 抽） | 0 / >1，或与账本头不符 |
+| 构造段 | **69 抽 / 18 站点**；屏障 A `seq==17` 且 `arg=10000` | 68/17（旧基线）、`seq≠17`、站点数 ≠18 |
+| 场景账本头 | 两侧 `INJECT_OK 42`；`rng-scene/rng_trace_diff.py check` 5 条 fail-closed 全 GREEN | 缺头 / 种子异值 / 断号 / 重复 |
+| route | `routes=1658 unresolved=0 added=1649` | `added=1658`（装载未生效）/ `1648`（旧判据）/ `unresolved>0` |
+| 两侧比对 | `seq=1..69` 的 `kind/arg/result` 逐项相等 | 首个分歧 seq 即定位起点（17 附近先查屏障 A） |
 
 > 另：§1 / §1b / §W0-0 的既有前置门（十端口全 DOWN、`guard` = `WINDOW_GUARD_OK`、车队 pause、`start/stop` 同一 `-LogDir`）仍**全部适用**，本表不重复。
 
@@ -607,8 +835,8 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene
 
 | # | 必核项 | 判据（GREEN / RED） | 依赖（如 mapcell 装载 / 构造段基线） | 来源（卡 id / 文档 / commit） | 是否已被现有 runbook 覆盖（节号） |
 | --- | --- | --- | --- | --- | --- |
-| 1 | **构造段账本（`seq=0` 起逐项）**：RobotObject 头（`Robot.txt` 有效行数×4）→ G1/G2/G3 孤儿商人 → **屏障 A**（`ItemNumber += Random(10000)`，**恰 1 抽**）→ M2 → M1 → L2/L1/L3 → L4/L5；部署件 **69 抽 / 18 站点** | **GREEN**：两侧同种子 `MIR2_RNG_LOG` **自首个数据行 `seq=1` 起**（日志 `seq` 是 1-based：`rng_trace.rs` 先 `fetch_add(1)+1`）`site/kind/arg/result` 逐项相等；Rust 侧构造段 **69 抽/18 站点**；屏障 A 位于**第 17 条**（1-based，`seq==17`；零基下标 16）；`relay::starts_without_worldmaps_when_envir_present` **13 行**（前 12 行与父提交逐行相同，末行 = 屏障 A）。**窗口前先实测 `Robot.txt` 有效行数**（账本头 = 行数×4）。**RED**：首项即分歧；**抽数 ≠ 69 或站点数 ≠ 18**；屏障 A 不在第 17 条（`seq≠17`）；`Robot.txt` 行数 ≠ 账本头假设；用旧基线（68/17）比对 | **构造段基线（已变，须重取）**；oracle `new Merchant` 12 处中另 **9 处**未处置（实体缺口另立条目） | 卡 `openmir2-ctor-barrier-a-draw` / `openmir2-ctor-draws-fold` / `openmir2-npc-ctor-draws`；`9a175a66f`、`0a34719c9`、`e6105f011`、`78416a932`、`8b73f2a51`、`f1cffd3f1`；`m3/design-buff-and-tick-20261016.md:446,450,488-493` | **未覆盖**（§W0-6 只覆盖场景账本；构造段 `seq=0` 未列） |
-| 2 | **route 落格 `added=1649`**（真注册表 1658 条中 9 条落墙格被 `AddMapRoute` 门丢弃：**7 HighWall + 2 LowWall**） | **GREEN**：**Rust 侧**启动日志 `INF 地图格子属性已灌入` 且 `routes=1658 / unresolved=0 / added=1649`；**C# 侧无同类日志/计数器**（`src/` 冻结面里没有这些打印）⇒ C# 侧用**只读复算**口径（`MapInfo.txt` + `.map` 二进制解出 route 落格，方法见 `mapwire.rs` 的 `#[ignore]` 普查）比对。**RED**：`added=1658`（装载未生效）或 `1648`（**旧判据，永远不可能绿**）；`unresolved>0`（`h006` 大小写敏感复发的征兆） | **mapcell 装载**（`2ff02ac0e` / `b192bd9f3`） | 卡 `openmir2-mapcell-attributes-loading`；`b192bd9f3`（订正 `2ff02ac0e` 的 1657→1648 为 1658→1649）；`m3/audit-valid-consumers-20261017.md` §1A #8、§3 #4 | **未覆盖**（§W0-6 只提装载，未列计数） |
+| 1 | **构造段账本（`seq=1` 起逐项，1-based）**：RobotObject 头（`Robot.txt` 有效行数×4）→ G1/G2/G3 孤儿商人 → **屏障 A**（`ItemNumber += Random(10000)`，**恰 1 抽**）→ M2 → M1 → L2/L1/L3 → L4/L5；部署件 **69 抽 / 18 站点** | **GREEN**：两侧同种子 `MIR2_RNG_LOG` **自首个数据行 `seq=1` 起**（日志 `seq` 是 1-based：`rng_trace.rs` 先 `fetch_add(1)+1`）`site/kind/arg/result` 逐项相等；Rust 侧构造段 **69 抽/18 站点**；屏障 A 位于**第 17 条**（1-based，`seq==17`；零基下标 16）；`relay::starts_without_worldmaps_when_envir_present` **13 行**（前 12 行与父提交逐行相同，末行 = 屏障 A）。**窗口前先实测 `Robot.txt` 有效行数**（账本头 = 行数×4）。**RED**：首项即分歧；**抽数 ≠ 69 或站点数 ≠ 18**；屏障 A 不在第 17 条（`seq≠17`）；`Robot.txt` 行数 ≠ 账本头假设；用旧基线（68/17）比对 | **构造段基线（已变，须重取）**；oracle `new Merchant` 12 处中另 **9 处**未处置（实体缺口另立条目） | 卡 `openmir2-ctor-barrier-a-draw` / `openmir2-ctor-draws-fold` / `openmir2-npc-ctor-draws`；`9a175a66f`、`0a34719c9`、`e6105f011`、`78416a932`、`8b73f2a51`、`f1cffd3f1`；`m3/design-buff-and-tick-20261016.md:446,450,488-493` | **§2f 0.1b**（2026-10-17 已落命令级与判定值） |
+| 2 | **route 落格 `added=1649`**（真注册表 1658 条中 9 条落墙格被 `AddMapRoute` 门丢弃：**7 HighWall + 2 LowWall**） | **GREEN**：**Rust 侧**启动日志 `INF 地图格子属性已灌入` 且 `routes=1658 / unresolved=0 / added=1649`；**C# 侧无同类日志/计数器**（`src/` 冻结面里没有这些打印）⇒ C# 侧用**只读复算**口径（`MapInfo.txt` + `.map` 二进制解出 route 落格，方法见 `mapwire.rs` 的 `#[ignore]` 普查）比对。**RED**：`added=1658`（装载未生效）或 `1648`（**旧判据，永远不可能绿**）；`unresolved>0`（`h006` 大小写敏感复发的征兆） | **mapcell 装载**（`2ff02ac0e` / `b192bd9f3`） | 卡 `openmir2-mapcell-attributes-loading`；`b192bd9f3`（订正 `2ff02ac0e` 的 1657→1648 为 1658→1649）；`m3/audit-valid-consumers-20261017.md` §1A #8、§3 #4 | **§2f 0.1b**（已落命令级：日志 + `#[ignore]` 离线复算） |
 | 3 | **刷怪位置 + RNG**（MonGen 地形移位环）：`Envir/MonGen.txt` **2827 条里 1072 条**声明出生格是墙格（755 LowWall / 306 HighWall / 11 越界），其中 **40 条首轮即进边界支**（`Random(Width/2)` / `Random(Height/2)`） | **GREEN**：两侧**出生坐标逐点一致**；冻结件至少含 **1 个「墙格出生点」MonGen 框**（或逐条列 MonGen 行并两侧同口径）；构造级 `cargo test -p game-svr --lib -- terrain_` 绿（6 条）；RNG 账本 `spawn` 组 `IDENTICAL`。**RED**：坐标分歧；抽数分歧 ⇒ 先核 mapcell 装载与 `mongen.rs:499-536` 地形环 | **mapcell 装载**（`2ff02ac0e`/`b192bd9f3`）；真机 Envir 语料 | 卡 `openmir2-mongen-terrain-loop-live`；`b192bd9f3`；`649924131`；本文件 §W0-6 必核项、§W0-8 末行 | **§W0-6 + §W0-8**（2026-10-17 已列） |
 | 4 | **召唤回落 RNG**（魔号 30；宝宝满 或 spawn 失败 **且主人正前方是墙** ⇒ 进 `SpaceMoveGetRandXY` 移位支） | **GREEN**：两侧 RNG 账本 `VERDICT IDENTICAL` **且回召落点同坐标**；构造级 `cargo test -p mir2-world --lib recall_` 6 条绿（阳性落点 `(6,1)`、随后三抽 `[1,5,1]`；阴性对照零抽、随后三抽 `[6,1,1]`）。**RED**：RNG 门 RED ⇒ 拒比；落点不同而 RNG 相同 ⇒ 核 `CanWalk` 口径；抽数不同 ⇒ 先核移位支分段/上限（`n18`/`n1C`/201）与取数次序（**先 `Random(Width)` 再 `Random(Height)`**） | **mapcell 装载**；宝宝数达 `nMaxMob`（现网 `DragonCount=1`）；朝向钉死 | 卡 `openmir2-recall-slave-shift-live`；`49fe49f05`；`m3/audit-valid-consumers-reachability-20261017.md` §1.4、§2 #1；本文件 §2e | **§2e**（完整覆盖） |
 | 5 | **商人随机移动移位环**（`merchant_run` → `map_random_move` → `SpaceMove` → `SpaceMoveGetRandXY`）：首两抽 `Random(W-nEgdey-1)+nEgdey` / `Random(H-nEgdey-1)+nEgdey`，落点不可走则进环继续抽（至多 201） | **GREEN**：两侧**落点同坐标 + RNG 流水 `IDENTICAL`**；可走落点 = 恰 2 抽（阴性对照）。**RED**：落点/抽数分歧；201 轮**耗尽回滚**语义（Rust 现只 `return`，oracle 的 `DeleteFromMap`/`AddMapObject` 语义**未建模**）、落格 `CellType`、`SpaceMove` 出帧面（`RM_SPACEMOVE_SHOW2` 等）不在本层 | **mapcell 装载**；DB `CanMove!=0 && MoveTime>0`；`npc_run` 该支**不可达**（固定 NPC `BoCanMove` 恒 false），只 `merchant_run` 条件可达 | 卡 `openmir2-map-random-move-shift-loop`；`047709a9b`、`0f8390dbb`、`8e9244388`；`m3/audit-valid-consumers-reachability-20261017.md` §2 附表；本文件 §2e「同窗登记」 | **§2e 末段（部分）**——该段写「只登记、不实现」，**须按 `047709a9b` 读作「已实现、窗口必核」** |
@@ -618,7 +846,7 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene
 | 9 | **default 支 `RM_SPELL` 帧面 + 缺 53 的帧序**（`DoSpell:159` 无条件广播；宽口径缺口 **93 行 / 80 魔号**已接线） | **GREEN**：未建模魔号（55 字面 default / 81 `>80` 各一）⇒ 观察者**恰 1 帧** `SM_SPELL`；逐字段（尾 = `MagicId` ASCII、坐标 = **snap 后**的 `tx/ty`）；施法者自己**不收**；AOI 内非 Ghost 才收；`SM_SPELL` **早于** `SM_MAGICFIRE`；战士技能 0 帧；距离门越界 0 帧。**RED**：缺帧/双发/顺序反了/收件人集合不同。**帧序残差**：MP 扣减 + `RM_HEALTHSPELLCHANGED`（**53**）未实现 ⇒ oracle 在 `SM_SPELL` **之前**还有 53，Rust 侧仍**缺这一帧**（相对序前移）；`SM_MAGICFIRE` / 训练尾 `Random(3)` + 落库 / `RM_MAGICFIREFAIL` 同样未接。**旁路**：机器人 `AutoSpell`（触发集合不同）、怪物硬编码 `RM_SPELL(48)`（`FireballMonster.cs:39`）均未建模 ⇒ 接上之前**不得**判「帧面缺口已全清」 | `RM_HEALTHSPELLCHANGED` 生产者（缺）；两条旁路的解冻条件见界定件 §8 | 卡 `openmir2-default-arm-spell-surface` / `openmir2-spell-frame-bypass-paths`；`9e59246c7`、`888180c07`、`b65feca68`；`m3/design-default-arm-spell-frames-20261017.md` §5.1、§5.2、§8 | **部分**（§0 只覆盖 53 帧 HUD 前置与 §2b 压血；default 支帧面/帧序未列） |
 | 10 | **A-5 buff（麻痹/防御系）与越界零抽**（技能 14/15/31 的 `DoSpell` 距离门 `MagicAttackRage`） | **GREEN**：in-range ⇒ 目标获 `DefensePower`/`MagicDefensePower`/`magic_shield` 且世界 RNG 确被推进；**越界（\|Δ\|>8）⇒ 无任何 buff、`magic_shield` 不置位、`draws_between == 0`（一个随机数都不抽）、`get_char_status` 不变、drain 后 gate 零 657**；阳性对照（buff 到期 ⇒ 657 确实发）证明「零 657」非假绿。**RED**：越界仍抽数/上 buff；`HAM_MASTER(3)`/`HAM_GUILD(5)` 友军面比 oracle **窄** ⇒ **漏加友军 buff**（方向已订正，不是「多加点」）；`AntiPoison` 恒 0 ⇒ 流水位置不漂但**抽样参数不同**（`Random(5)` vs `Random(AntiPoison+5)`）⇒ value 账本会红 | buff tick（生产已开）；麻痹戒指 `RING_MAKESTONE_ITEM(113)`；线上 `attack_mode` 可达 3/5 | 卡 `openmir2-buff-producer-wiring` / `openmir2-buff-system`；`68b0730df`、`ffac59d1b`、`2369d8ca3`；**判据锚 = `cargo test -p game-svr --bin game-svr spell_cmd_a5_`（5 条：in-range / 越界零抽 / 阳性对照）**；`ffac59d1b` 的复核 `review` 条目（`m3/audit-valid-consumers-20261017.md` §1B #35 指向 `slave.rs:657 recall_slave`，**与本行无关，勿引**）| **未覆盖** |
 | 11 | **spell snap 的掩码格 / 窗口上界**（5 处 spell 块全部改走忠实镜像 `cetin_near_xy`） | **GREEN**：目标站在**被掩码格**上 ⇒ **不 snap**（用原始点击坐标过门 ⇒ 世界 RNG 必须前进）；点击与目标 \|Δ\|=2（出 3×3 窗口）⇒ 不 snap；**异图同坐标** ⇒ 不 snap（按施法者图过滤）；正常命中路径**仍 snap**（t1/t2 牙防「永不 snap」）。**RED**：多抽数/漏施放；窗口 ±1 改 ±2 逃逸 | **mapcell 装载**（掩码 = `set_map_xy_flag`，生产唯一写口是城门/城墙）；`queryuser.rs:29` 镜像不得改 | 卡 `openmir2-snap-cell-fidelity`；`befd3ad7c`；`m3/audit-valid-consumers-reachability-20261017.md` §1.7（`spell_snap_target` 5 处） | **未覆盖** |
-| 12 | **基线重取要求**（默认 RNG 流水**已变**：构造段 **68→69 抽 / 17→18 站点**；屏障 A 插在第 17 条；`relay` **12→13**，此前 fold 已把它 **0→12**） | **GREEN**：窗口前两侧各自用**当前树**（≥ `2fa749471`）重采；构造段 69/18；屏障 A 第 17 条（`seq==17`）；场景账本头 `INJECT_OK <seed>` 两侧同、`seq` 1..N 连续无缺无重（`rng-scene/rng_trace_diff.py check` 5 条 fail-closed，**与 DoD① 的 `rng-trace-scene/` 是两个目录**）。**RED**：拿旧基线比 ⇒ 68/17 与 relay-12 基线自**第 17 条**起必红；**relay-0（fold 前）基线自第 1 条构造抽即分歧**；两侧种子不同/未落 `INJECT_OK` | **构造段基线**；严格校验器；`MIR2_RNG_SEED` 注入 | `9a175a66f`（68→69、relay 12→13）、`e6105f011`（relay 0→12、分歧自第 17 条）、`78416a932`（可复现事实：13 行、末行 = 屏障 A、前 12 行与父提交逐行相同）；本文件 §W0-6 | **部分**（§W0-6 有严格校验器/拒比；**「先重取基线」一句未写**） |
+| 12 | **基线重取要求**（默认 RNG 流水**已变**：构造段 **68→69 抽 / 17→18 站点**；屏障 A 插在第 17 条；`relay` **12→13**，此前 fold 已把它 **0→12**） | **GREEN**：窗口前两侧各自用**当前树**（≥ `2fa749471`）重采；构造段 69/18；屏障 A 第 17 条（`seq==17`）；场景账本头 `INJECT_OK <seed>` 两侧同、`seq` 1..N 连续无缺无重（`rng-scene/rng_trace_diff.py check` 5 条 fail-closed，**与 DoD① 的 `rng-trace-scene/` 是两个目录**）。**RED**：拿旧基线比 ⇒ 68/17 与 relay-12 基线自**第 17 条**起必红；**relay-0（fold 前）基线自第 1 条构造抽即分歧**；两侧种子不同/未落 `INJECT_OK` | **构造段基线**；严格校验器；`MIR2_RNG_SEED` 注入 | `9a175a66f`（68→69、relay 12→13）、`e6105f011`（relay 0→12、分歧自第 17 条）、`78416a932`（可复现事实：13 行、末行 = 屏障 A、前 12 行与父提交逐行相同）；本文件 §W0-6 | **§2f 0.1b / §W0-6**（重取基线已落命令级） |
 
 ### 0.3 其它 R 级窗口项（按卡片归并，不逐条展开）
 
