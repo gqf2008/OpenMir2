@@ -5093,12 +5093,35 @@ fn handle_spell_cmd(
         let dir = movewire::next_direction(cur_x, cur_y, req.target_x, req.target_y);
         set_display_dir(displays, actor_id, dir);
     }
+    // **战士门的 `RM_MAGICFIREFAIL`**：oracle `PlayObject.Base.cs:1510` 的
+    // `if (!MagicManager.IsWarrSkill(userMagic.MagIdx))` 把 MP 扣减**和** `MagicManager.DoSpell`
+    // 调用**一起跳过** ⇒ 包装层 `result` 保持初值 `false`（`RobotPlayer.AutoSpell` 同样先过
+    // `!IsWarrSkill` 才调用；故 `MagicManager.cs:151-153` 的同名门在 oracle 里是等价第二道防线）。
+    // 调用方 `ClientSpellXY` 的 `default` 支随后回 `RM_MAGICFIREFAIL`
+    // （`PlayObject.Attack.cs:1279-1281`）⇒ **恰一条** `SM_MAGICFIRE_FAIL(639)`。
+    //
+    // 行为面（与 639 的「蓝不足支」逐项对照）：**无 `SM_SPELL`**（`:159` 未到）、**无 53**
+    // （包装层跳过）、**MP 不变**、无 `RM_MAGICFIRE`/无训练尾（`:644-670` 未到）、**世界 RNG 零抽**。
+    // 距离门（`:155`）在战士门**之后** ⇒ 越界与否都只发这一帧（不会与下方距离门 `else` 双发：
+    // 那个 `else` 属于 `!is_warr_skill` 的块）。
+    //
+    // 可达面：`is_warr_skill` 的 9 个魔号中只有 **3/4/7** 进 `default` 支
+    // （12/25/26/27/34/38 是 `ClientSpellXY` 的 8 条独立 `case` 之一 ⇒ 根本不调用 `DoSpell`，
+    // `magicwire::EXPLICIT_CASE_MAG_IDX`）；因此本块对它们天然不触发、无 639（oracle 同）。
+    //
+    // 收件人：`RM_MAGICFIREFAIL` 的处理器（`PlayObject.Message.cs:1794-1800`）**无**
+    // `ActorId != this.ActorId` 守卫 ⇒ `SendRefMsg` 也给自己回帧 ⇒ 用
+    // [`broadcast_ref_msg_with_self`]（**不可**用 [`broadcast_ref_msg`]）。
+    if default_arm && magic::is_warr_skill(i32::from(req.magic_id)) {
+        let fail = smframe_ext::sm_magicfire_fail(actor_id);
+        broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
+    }
     // **`PlayObject.DoSpell` 包装层**（`src/M2Server/Player/PlayObject.Base.cs:1505-1531`；本片接线）。
     // 当前宿主此前完全缺失这一层。
     //
     // oracle 结构（逐行）：
     // ```text
-    // PlayObject.Base.cs:1509  if (!MagicManager.IsWarrSkill(userMagic.MagIdx))
+    // PlayObject.Base.cs:1510  if (!MagicManager.IsWarrSkill(userMagic.MagIdx))
     // PlayObject.Base.cs:1511    ushort nSpellPoint = GetSpellPoint(userMagic);
     //   GetSpellPoint（:1369-1372）= (ushort)(Round(Magic.Spell / 4.0 * (Level + 1)) + Magic.DefSpell)
     // PlayObject.Base.cs:1512    if (nSpellPoint > 0)
@@ -5237,9 +5260,13 @@ fn handle_spell_cmd(
     // **已接（2026-10-17，卡 `openmir2-spell-distance-fail`）**：`MagicManager.DoSpell` 的
     // **距离门**（`:155-157`）失败时的 `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`（本函数
     // 下方 `default` 支的 `else` 分支，只此一处）。
-    // 仍未接：`IsWarrSkill` 战士门（`:151-153`）失败时的 `RM_MAGICFIREFAIL`（default 支入口已按
-    // `!is_warr_skill` 过滤 ⇒ 战士魔号 3/4/7 等走 default 者的 639 仍缺，登记），
-    // `:167` 版本门，以及 8 个显式 MagIdx case 各自的 MP 逻辑。
+    // **已接（2026-10-17，卡 `openmir2-spell-dospell-fail-rest`）**：`IsWarrSkill` **战士门**
+    // 失败时的 `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`（oracle 由
+    // `PlayObject.Base.cs:1510` 的 `if (!IsWarrSkill)` 跳过调用、包装层返回 false；
+    // 本函数上方 `default_arm && is_warr_skill` 块：3/4/7 等走 default 的战士魔号，
+    // **无 MP 扣减/无 53/无 SM_SPELL**），以及 `:644-647 if (boSpellFail) return false`
+    // 在**已建模**召唤面（17/30/41）上的 639（下方召唤块的 `!outcome.accepted` 支）。
+    // 仍未接：`:167` 版本门，以及 8 个显式 MagIdx case 各自的 MP 逻辑。
     //
     // **`userMagic.Magic.Effect` 的来源**：本仓 `magic_table`（`magics::load_magics`，oracle
     // `MySqlDB.LoadMagicDB`）。表里无该魔号 ⇒ 造不出帧（oracle 侧等价于 `userMagic.Magic == null`，
@@ -5293,9 +5320,8 @@ fn handle_spell_cmd(
             // `ActorId != this.ActorId` 守卫（与 `RM_SPELL` 的 `:1455` 不同）⇒ `SendRefMsg`
             // 也给自己回帧 ⇒ 用 [`broadcast_ref_msg_with_self`]（不可用 [`broadcast_ref_msg`]）。
             //
-            // **未接（登记）**：`DoSpell:151` 的 `IsWarrSkill` 战士门失败回帧 —— 本块入口已按
-            // `!is_warr_skill` 过滤 ⇒ 战士魔号（3/4/7 等走 `default` 支者）的 639 仍缺；
-            // 与 `:167` 版本门同属后续登记项。
+            // **战士门（`:151-153`）**：已由本函数上方的 `default_arm && is_warr_skill` 块发出
+            // （`!is_warr_skill` 过滤 ⇒ 本块不会与它双发）。仍未接（登记）：`:167` 版本门。
             let fail = smframe_ext::sm_magicfire_fail(actor_id);
             broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
         }
@@ -5719,7 +5745,33 @@ fn handle_spell_cmd(
                     let body = smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
                     send_self_frame(online, gates, chr_name, body);
                 }
-                let _ = outcome.accepted; // oracle `ClientSpellXY` 恒 `result = true`（失败只多一帧 RM_MAGICFIREFAIL，未接）。
+                // `if (boSpellFail) return false;`（`MagicManager.cs:644-647`）—— **在共享尾之前**
+                // ⇒ `DoSpell` 返回 false ⇒ 调用方（`PlayObject.Attack.cs:1279-1281`）回
+                // `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`。
+                //
+                // 对齐依据（逐项核 oracle 站点，不看字段名）：
+                // - 17（`SKILL_SKELLETON`）落在 `:322` 的 13..=19 分组：`:322 boSpellFail = true`，
+                //   只有 `CheckAmulet(1,1)` **通过**才在 `:391 boSpellFail = false`；
+                // - 30（`SKILL_SINSU`）：`:451 boSpellFail = true`，`:459` 仅在 `CheckAmulet(5,1)`
+                //   通过后置 false；
+                // - 41（`SKILL_ANGEL`）：`:463 boSpellFail = true`，`:471` 仅在 `CheckAmulet(2,1)`
+                //   通过后置 false。
+                // ⇒ Rust [`game_svr::slave::cast_slave_spell`] 的 `bo_spell_fail` 初值 true、
+                // `CheckAmulet` 通过即置 false（**不看召唤结果** —— oracle 的 `MagMakeSlave` 只影响
+                // `boTrain`）⇒ `outcome.accepted == false` ⇔ **护身符门不过**（缺护身符 / 型别不对 /
+                // 耐久不足）。这正是 oracle 唯一的 false 路径，不是别的返回值。
+                //
+                // 尾面（本片**必须**同时成立，`do_spell_tail` 已按 `:644-647` 早退）：
+                // - **不发** `RM_MAGICFIRE`（`outcome.magic_fire == false`，下方 `if` 自然不发）；
+                // - **不抽**训练尾 `Random(3)+1`、不发 `RM_MAGIC_LVEXP`
+                //   （`outcome.train.levelup_msg == false`，下方 `if` 自然不发）；
+                // - `:159` 的 `RM_SPELL` **已发**（本函数开头的无条件广播；oracle 同样先发 :159）。
+                //
+                // 收件人同 [`broadcast_ref_msg_with_self`]（处理器无自守卫）。
+                if !outcome.accepted {
+                    let fail = smframe_ext::sm_magicfire_fail(actor_id);
+                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
+                }
             }
         } else {
             glog!(
@@ -5804,6 +5856,13 @@ fn handle_spell_cmd(
                 }
                 // 帧面未接（登记）：`RM_MAKEHOLYSEIZEMODE`（`:712/797`）无编码器；
                 // 狂暴态/时长（`OpenCrazyMode`）本骨架无字段。状态落尾已由 `cast_tamming_spell` 完成。
+                //
+                // **不接 639（逐项核过，不是遗漏）**：oracle `case SKILL_TAMMING`
+                // （`MagicManager.cs:394-397`）**没有** `boSpellFail = true` 站点（全仓仅
+                // `:226/:322/:451/:463/:611` 五处，均不在 20 支）⇒ 20 的 `DoSpell` 恒返回 `true`
+                // （门不过只跳过 `MagTamming`，尾仍按 `boSpellFail=false` 走）⇒
+                // [`game_svr::slave::cast_tamming_spell`] 的 `accepted` 由
+                // `do_spell_tail(false, …)` 产生、**恒 true**。故本支没有可达的 639。
                 let _ = outcome.accepted;
             }
         } else {
@@ -5905,6 +5964,11 @@ fn handle_spell_cmd(
                     let body = smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
                     send_self_frame(online, gates, chr_name, body);
                 }
+                // **不接 639（逐项核过，不是遗漏）**：oracle `case SKILL_46`
+                // （`MagicManager.cs:589-592`）**没有** `boSpellFail` 站点（全仓五处
+                // `:226/:322/:451/:463/:611` 均不在 46 支）⇒ `DoSpell` 恒返回 `true`；
+                // [`game_svr::slave::cast_clone_spell`] 的 `accepted` 由
+                // `do_spell_tail(false, …)` 产生、**恒 true** ⇒ 本支没有可达的 639。
                 let _ = outcome.accepted;
             }
         } else {
@@ -22568,30 +22632,117 @@ mod tests {
         );
     }
 
-    /// **J7**：战士技能 ⇒ **0 帧**。两个子类：
+    /// **J7**：战士技能分两类。
     /// ① 12（`SKILL_ERGUM`）——`ClientSpellXY` 的独立 `case`（不进 `default`）**且** `IsWarrSkill`
-    ///    命中（两道门各挡一次）；② 7（`SKILL_YEDO`）——**进 `default`**（不在 8 条独立 `case` 里）
-    ///    却命中 `IsWarrSkill`（`MagicManager.cs:82-100` 的 9 个魔号之一）⇒ 只有
-    ///    `MagicManager.cs:151` 那道门挡得住 ⇒ 该子类**只**锁 `IsWarrSkill` 门。
+    ///    命中（两道门各挡一次）⇒ 连 `DoSpell` 都不调用 ⇒ **0 帧**（无 `SM_SPELL`、无 639）。
+    /// ② 3/4/7（如 `SKILL_YEDO`）——**进 `default`**（不在 8 条独立 `case` 里）却命中
+    ///    `IsWarrSkill`（`MagicManager.cs:82-100` 的 9 个魔号之一）⇒ `MagicManager.cs:151`
+    ///    `return false` 在 `:159` 的 `RM_SPELL` **之前** ⇒ 调用方 `Attack.cs:1279-1281` 回
+    ///    `RM_MAGICFIREFAIL` ⇒ **恰一条 639**（含自己），且无 `SM_SPELL`/无 MP 扣减/无 53。
     ///
-    /// 红检：去掉 `!magic::is_warr_skill(..)` 门 ⇒ ② 必红（12 仍被独立 case 门挡住）。
+    /// 红检：① 去掉本片新加的 `default_arm && is_warr_skill` 发帧块 ⇒ ② 的 639 计数红；
+    /// ② 把战士门挪到 `SM_SPELL` 之后（或从 `!is_warr_skill` 的 RM_SPELL 块里漏过）⇒ ② 的
+    /// `SM_SPELL == 0` 断言红。
     #[test]
-    fn spell_frame_warr_skill_sends_nothing() {
-        for magic_id in [12u16, 7] {
+    fn spell_frame_warr_skill_explicit_case_sends_nothing_and_default_arm_gets_639() {
+        // ① 显式 case（12）：两道门都挡 ⇒ 0 帧。
+        let mut rig = SpellFrameRig::new(12, &[(12, 3)], &[("obs", 12, 12, false, 912)]);
+        rig.cast(12, (12, 12), 0);
+        let (frames, raws) = rig.drain();
+        assert_eq!(
+            sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL),
+            0,
+            "显式 case（12）不进 default ⇒ 无 SM_SPELL；实得 {:?}",
+            sf_seq(&frames, 912)
+        );
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|(_, b)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE_FAIL)
+                .count(),
+            0,
+            "显式 case 不调用 DoSpell ⇒ 无 639；实得 {:?}",
+            sf_seq(&frames, 912)
+        );
+        assert!(
+            raws.iter()
+                .any(|(s, p)| *s == 911 && p.starts_with(b"+GD/")),
+            "显式 case 仍走完 ClientSpellXY ⇒ 自身收 +GD"
+        );
+
+        // ② 走 default 的战士魔号（3/4/7）：恰一条 639，无 SM_SPELL。
+        for magic_id in [3u16, 4, 7] {
             let mut rig =
-                SpellFrameRig::new(magic_id, &[(magic_id, 3)], &[("obs", 12, 12, false, 912)]);
-            rig.cast(magic_id, (12, 12), 0);
+                SpellFrameRig::new(magic_id, &[(magic_id, 3)], &[("obs", 11, 10, false, 912)]);
+            rig.ground_sessions
+                .get_mut("caster")
+                .expect("caster 会话")
+                .state
+                .wabil
+                .mp = 50;
+            let seed = 11;
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let fresh = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let caster = rig.caster;
+            rig.cast(magic_id, (11, 10), 0);
             let (frames, raws) = rig.drain();
+            let fails: Vec<&(i32, Vec<u8>)> = frames
+                .iter()
+                .filter(|(_, b)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE_FAIL)
+                .collect();
             assert_eq!(
-                sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL),
-                0,
-                "[魔号 {magic_id}] 战士技能 ⇒ 0 帧（MagicManager.cs:151）；实得 {:?}",
+                fails.len(),
+                2,
+                "[魔号 {magic_id}] 战士门失败 ⇒ 自己 + 同图观察者各一条 639；实得 {:?}",
                 sf_seq(&frames, 912)
             );
             assert!(
+                fails.iter().any(|(s, _)| *s == 911) && fails.iter().any(|(s, _)| *s == 912),
+                "[魔号 {magic_id}] 639 收件人须含自己（无 ActorId 守卫）+ 同图观察者"
+            );
+            for (_, body) in &fails {
+                assert_eq!(
+                    *body,
+                    smframe_ext::sm_magicfire_fail(caster),
+                    "[魔号 {magic_id}] 639 逐字节 = header-only + Recog=施法者"
+                );
+            }
+            for forbidden in [
+                mir2_protocol::messages::SM_SPELL,
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                mir2_protocol::messages::SM_MAGICFIRE,
+                mir2_protocol::messages::SM_MAGIC_LVEXP,
+            ] {
+                assert!(
+                    !frames.iter().any(|(_, b)| sf_ident(b) == forbidden),
+                    "[魔号 {magic_id}] 战士门在 :159/:644 之前 ⇒ 不得有 ident {forbidden}；实得 {:?}",
+                    sf_seq(&frames, 912)
+                );
+            }
+            assert_eq!(
+                rig.ground_sessions["caster"].state.wabil.mp, 50,
+                "[魔号 {magic_id}] IsWarrSkill ⇒ 包装层跳过 ⇒ MP 不变（与蓝不足支对照）"
+            );
+            assert_eq!(
+                draws_between(&fresh, &rig.world.rng),
+                0,
+                "[魔号 {magic_id}] 战士门 ⇒ 世界 RNG 零抽"
+            );
+            let mut probe = fresh.clone();
+            let mut got = rig.world.rng.clone();
+            for k in 0..3 {
+                assert_eq!(
+                    got.random_below(10),
+                    probe.random_below(10),
+                    "[魔号 {magic_id}] 阴性对照第 {k} 抽 = 参照流"
+                );
+            }
+            assert_eq!(
                 raws.iter()
-                    .any(|(s, p)| *s == 911 && p.starts_with(b"+GD/")),
-                "[魔号 {magic_id}] 战士技能仍走完 ClientSpellXY ⇒ 自身收 +GD"
+                    .filter(|(s, p)| *s == 911 && p.starts_with(b"+GD/"))
+                    .count(),
+                1,
+                "[魔号 {magic_id}] 失败仍回 +GD（ClientSpellXY default 支恒 result=true）"
             );
         }
     }
@@ -23378,6 +23529,211 @@ mod tests {
             !ids.contains(&mir2_protocol::messages::SM_MAGICFIRE_FAIL),
             "门内 ⇒ 不得有 639；实得 {ids:?}"
         );
+    }
+
+    // ---- 片 `openmir2-spell-dospell-fail-rest`：`DoSpell` 其余 false 路径的 639 ----
+    //
+    // oracle：`MagicManager.DoSpell` 的 `:151-153` 战士门与 `:644-647 if (boSpellFail) return false`
+    // 都 `return false` ⇒ `ClientSpellXY` 的 default 支回 `RM_MAGICFIREFAIL`
+    // （`PlayObject.Attack.cs:1279-1281`）⇒ `SM_MAGICFIRE_FAIL(639)`。全部用例走**生产入口**
+    // `handle_spell_cmd`，断言一律「恰一条 / 不含某 ident / 逐字节 / 零抽」，不用单抽。
+
+    /// **召唤面（17/30/41）护身符门失败 ⇒ 恰一条 639**（`MagicManager.cs:322/451/463` 的
+    /// `boSpellFail = true` 保持到 `:644-647`）。
+    ///
+    /// 布置：施法者 (10,10)/socket 911、同图观察者 (11,10)/socket 912；`ArmRingl` 槽**清空**
+    /// （三档需求 1/5/2 全部不满足）⇒ `CheckAmulet` 不过。`spell = def_spell = 0` ⇒ MP 包装层
+    /// 透明（无 53，便于把 639 之外的帧面收窄到 `:159` 的 `SM_SPELL`）。
+    ///
+    /// oracle 帧面：`:159 SM_SPELL`（观察者收；施法者那条连接因 `RmSpell` 的自守卫不收）→
+    /// `:644-647 return false` → 调用方 639（**含自己**，处理器无自守卫）。
+    /// **不得**有 `SM_MAGICFIRE`（`:648` 在 return 之后）或 `SM_MAGIC_LVEXP`（`:659` 同）。
+    ///
+    /// 牙（实测后复原）：① 去掉召唤块的 `!outcome.accepted` 发帧 ⇒ 本用例红（639 计数 0）；
+    /// ② 在成功支也发 639 ⇒ [`spell_cmd_slave_amulet_gate_success_has_no_639`] 红；
+    /// ③ 让失败支仍走尾（`bo_spell_fail=false`）⇒ 本用例的 `SM_MAGICFIRE`/尾帧/RNG 断言红。
+    #[test]
+    fn spell_cmd_slave_amulet_gate_failure_emits_exactly_one_639() {
+        use mir2_shared::rng::RandomNumber;
+        for magic_id in [17u16, 30, 41] {
+            let mut rig =
+                SpellFrameRig::new(magic_id, &[(magic_id, 3)], &[("obs", 11, 10, false, 912)]);
+            // `CheckAmulet`：ArmRingl / Bujuk 都查；这里把 ArmRingl 清空（Bujuk 本就 None）。
+            rig.ground_sessions
+                .get_mut("caster")
+                .expect("caster 会话")
+                .use_items[game_svr::ability::SLOT_ARMRING_L] = None;
+            rig.ground_sessions
+                .get_mut("caster")
+                .expect("caster 会话")
+                .state
+                .wabil
+                .mp = 50;
+            let seed = 23;
+            rig.world.rng = RandomNumber::with_seed(seed);
+            let fresh = RandomNumber::with_seed(seed);
+            let caster = rig.caster;
+            rig.cast(magic_id, (11, 10), 0);
+            let (frames, raws) = rig.drain();
+
+            // 恰一条 639 给自己 + 一条给同图观察者，Recog = 施法者，字节 = 编码器输出。
+            let fails: Vec<&(i32, Vec<u8>)> = frames
+                .iter()
+                .filter(|(_, b)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE_FAIL)
+                .collect();
+            assert_eq!(
+                fails.len(),
+                2,
+                "[魔号 {magic_id}] 护身符门失败 ⇒ 自己 + 同图观察者各一条 639；实得 {:?}",
+                sf_seq(&frames, 912)
+            );
+            assert!(
+                fails.iter().any(|(s, _)| *s == 911) && fails.iter().any(|(s, _)| *s == 912),
+                "[魔号 {magic_id}] 639 收件人须含自己 + 同图观察者"
+            );
+            for (_, body) in &fails {
+                assert_eq!(
+                    *body,
+                    smframe_ext::sm_magicfire_fail(caster),
+                    "[魔号 {magic_id}] 639 逐字节 = header-only + Recog=施法者"
+                );
+            }
+
+            // `:159` 的 SM_SPELL：观察者恰 1 条；施法者自己那条连接不收（RM_SPELL 有自守卫）。
+            let obs_seq = sf_seq(&frames, 912);
+            let self_seq = sf_seq(&frames, 911);
+            assert_eq!(
+                obs_seq
+                    .iter()
+                    .filter(|id| **id == mir2_protocol::messages::SM_SPELL)
+                    .count(),
+                1,
+                "[魔号 {magic_id}] oracle 在 :159 先发 SM_SPELL（失败在 :644 之后才发生）⇒ 观察者恰 1 条；实得 {obs_seq:?}"
+            );
+            assert_eq!(
+                self_seq
+                    .iter()
+                    .filter(|id| **id == mir2_protocol::messages::SM_SPELL)
+                    .count(),
+                0,
+                "[魔号 {magic_id}] 施法者连接不收 SM_SPELL（RM_SPELL 自守卫）；实得 {self_seq:?}"
+            );
+            // 帧序：SM_SPELL（:159）先于 639（:644 之后）。
+            let i_spell = obs_seq
+                .iter()
+                .position(|id| *id == mir2_protocol::messages::SM_SPELL)
+                .expect("观察者收 SM_SPELL");
+            let i_fail = obs_seq
+                .iter()
+                .position(|id| *id == mir2_protocol::messages::SM_MAGICFIRE_FAIL)
+                .expect("观察者收 639");
+            assert!(
+                i_spell < i_fail,
+                "[魔号 {magic_id}] oracle 序 :159 的 SM_SPELL 先于失败回帧；实得 {obs_seq:?}"
+            );
+
+            // 失败在共享尾之前 ⇒ 无 RM_MAGICFIRE、无训练尾、无 53。
+            for forbidden in [
+                mir2_protocol::messages::SM_MAGICFIRE,
+                mir2_protocol::messages::SM_MAGIC_LVEXP,
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+            ] {
+                assert!(
+                    !frames.iter().any(|(_, b)| sf_ident(b) == forbidden),
+                    "[魔号 {magic_id}] boSpellFail ⇒ 不得有 ident {forbidden}；实得 {obs_seq:?}"
+                );
+            }
+            assert_eq!(
+                rig.ground_sessions["caster"].state.wabil.mp, 50,
+                "[魔号 {magic_id}] spell=def_spell=0 ⇒ MP 包装层透明"
+            );
+
+            // 世界 RNG 零抽：护身符门/共享尾都在任何取数之前返回。
+            assert_eq!(
+                draws_between(&fresh, &rig.world.rng),
+                0,
+                "[魔号 {magic_id}] boSpellFail ⇒ 世界 RNG 零抽"
+            );
+            let mut probe = fresh.clone();
+            let mut got = rig.world.rng.clone();
+            for k in 0..3 {
+                assert_eq!(
+                    got.random_below(10),
+                    probe.random_below(10),
+                    "[魔号 {magic_id}] 阴性对照第 {k} 抽 = 参照流"
+                );
+            }
+            assert_eq!(
+                raws.iter()
+                    .filter(|(s, p)| *s == 911 && p.starts_with(b"+GD/"))
+                    .count(),
+                1,
+                "[魔号 {magic_id}] 失败仍回 +GD（ClientSpellXY default 支恒 result=true）"
+            );
+        }
+    }
+
+    /// **成功支对照（阳性）**：护身符门通过 ⇒ `accepted == true` ⇒ **无 639**、
+    /// `SM_SPELL`（`:159`）+ `SM_MAGICFIRE`（`:648`）+ 训练尾取数照旧。
+    ///
+    /// 与 [`spell_cmd_slave_amulet_gate_failure_emits_exactly_one_639`] 同一夹具，唯一差别 =
+    /// `ArmRingl` 里有耐久 600 的护身符（`Round(600/100)=6` ≥ 三档需求 1/5/2）。
+    /// 红检：本片若在 `accepted == true` 时也发 639 ⇒ 本用例红。
+    #[test]
+    fn spell_cmd_slave_amulet_gate_success_has_no_639() {
+        use mir2_shared::rng::RandomNumber;
+        for magic_id in [17u16, 30, 41] {
+            let mut rig =
+                SpellFrameRig::new(magic_id, &[(magic_id, 3)], &[("obs", 11, 10, false, 912)]);
+            let seed = 5;
+            rig.world.rng = RandomNumber::with_seed(seed);
+            let fresh = RandomNumber::with_seed(seed);
+            rig.cast(magic_id, (11, 10), 0);
+            let (frames, _raws) = rig.drain();
+            let obs_seq = sf_seq(&frames, 912);
+            assert_eq!(
+                obs_seq
+                    .iter()
+                    .filter(|id| **id == mir2_protocol::messages::SM_MAGICFIRE_FAIL)
+                    .count(),
+                0,
+                "[魔号 {magic_id}] accepted=true ⇒ 不得有 639；实得 {obs_seq:?}"
+            );
+            assert_eq!(
+                obs_seq
+                    .iter()
+                    .filter(|id| **id == mir2_protocol::messages::SM_SPELL)
+                    .count(),
+                1,
+                "[魔号 {magic_id}] 成功支仍恰 1 条 SM_SPELL；实得 {obs_seq:?}"
+            );
+            assert_eq!(
+                obs_seq
+                    .iter()
+                    .filter(|id| **id == mir2_protocol::messages::SM_MAGICFIRE)
+                    .count(),
+                1,
+                "[魔号 {magic_id}] 成功支共享尾 :648 ⇒ 观察者恰 1 条 SM_MAGICFIRE；实得 {obs_seq:?}"
+            );
+            // 帧面与现状逐项相同：观察者恰 `[SM_SPELL, SM_MAGICFIRE]`（`:159` 先于 `:648`），
+            // 本片新增的 `!accepted` 支不得插入任何帧。
+            assert_eq!(
+                obs_seq,
+                vec![
+                    mir2_protocol::messages::SM_SPELL,
+                    mir2_protocol::messages::SM_MAGICFIRE
+                ],
+                "[魔号 {magic_id}] 成功支帧序须与现状一致（SM_SPELL → SM_MAGICFIRE）"
+            );
+            // 取数与现状相同：本夹具的 `MonsterTable`/`MapRegistry` 皆空 ⇒ 召唤不 `Spawned`
+            // ⇒ `boTrain=false` ⇒ `:659` 训练尾门不过 ⇒ **0 抽**（现状如此；召唤成功支的
+            // `Random(3)+1` 次序由 `crates/world::slave` 的既有用例覆盖）。本片不碰成功路径。
+            assert_eq!(
+                draws_between(&fresh, &rig.world.rng),
+                0,
+                "[魔号 {magic_id}] 成功支取数须与现状相同（本夹具 boTrain=false ⇒ 0 抽）"
+            );
+        }
     }
 
     /// **魔号 8 正例（生产入口 `handle_spell_cmd`）**：效果体被进入、取数逐项等于 oracle 期望、
