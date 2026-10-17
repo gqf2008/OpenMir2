@@ -53,8 +53,10 @@ CSHARP_ATTACK_RE = re.compile(
 # （`evidence-rng-trace-20261012/00-commands.txt` §5），保证两侧「攻击路径」同口径。
 # m3cs tick22 F2：旧表漏 758/628/630/601/609/831/250 ⇒ 同一条 Rust 流水把攻击路径取数
 # 算成噪声、报 attack=2/段；本表由 selftest 钉住（新站点必须分类为 attack）。
+# 2026-10-17（magic-draws-move）：再补当前活栈实际取数行 103/106/763/771/790/792/936/1018/1126；
+# 旧行号保留为旧 trace 别名。两处 `RUST_ATTACK_RE` 由 selftest 钉成**逐字同一张表**。
 RUST_ATTACK_RE = re.compile(
-    r"combat\.rs:(67|109|111|250|579|587|601|606|608|609|628|630|736|758|831)"
+    r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|831|936|1018|1126)"
 )
 
 # 每侧缺省：分段锚（每次攻击恰调用一次的站点）+ 攻击路径正则。
@@ -389,7 +391,11 @@ def cmd_selftest(args):
     check("unknown-side-failclosed", out[0] == 2, "rc=%d" % out[0])
 
     # ---- F2（m3cs tick22）：Rust 攻击路径站点表必须含当前活栈站点（旧表漏 758/628/630/601/609/831/250）
-    for line in ("758", "628", "630", "601", "609", "831", "250"):
+    for line in (
+        "758", "628", "630", "601", "609", "831", "250",
+        # 2026-10-17 当前活栈实际取数行（magic-draws-move 补齐）
+        "103", "106", "763", "771", "790", "792", "936", "1018", "1126",
+    ):
         site = "crates\\world\\src\\combat.rs:" + line
         check("rust-site-%s-is-attack" % line, bool(RUST_ATTACK_RE.search(site)), site)
     check("rust-nonsite-not-attack",
@@ -399,6 +405,29 @@ def cmd_selftest(args):
     check("csharp-atk-power-base-is-attack",
           bool(CSHARP_ATTACK_RE.search(
               "M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892")))
+
+    # ---- 2026-10-17（卡 openmir2-magic-draws-move）：两处 `RUST_ATTACK_RE` **同表**自检 ----
+    # 两文件各自维护同一张表（本文件 + `rng-trace-probe/rng_ledger_diff.py`）；只改单侧
+    # 会让「攻击路径」口径在 groups / segment / diff 之间漂移。正文（`re.Pattern.pattern`）
+    # 必须逐字相等 —— 改任一侧 ⇒ 本条红。
+    check("rust-attack-re-identical-both-files",
+          RUST_ATTACK_RE.pattern == rld.RUST_ATTACK_RE.pattern,
+          "attack_rng_ledger=%r rng_ledger_diff=%r"
+          % (RUST_ATTACK_RE.pattern, rld.RUST_ATTACK_RE.pattern))
+
+    # ---- C# `AnimalObject.Struck@AnimalObject.cs:342` 的定位（2026-10-17）----
+    # 它是**受害者**在 `Struck` 里重选目标的 `Random(6)`（`Operate(RM_STRUCK)` 在受害者消息段），
+    # 不是攻方 `_Attack`/`GetAttackPower` 的伤害账本 ⇒ 不得匹配 `CSHARP_ATTACK_RE`；
+    # 由 consumer_groups.tsv 的**精确行**归 `monster_ai`，保证含 :342 的 C# trace 不会
+    # 成为无解释的 RED（与 Rust 侧 `monai.rs::animal_struck` 同组）。
+    struck342 = "M2Server.Actor.AnimalObject.Struck@AnimalObject.cs:342"
+    check("csharp-struck-342-not-attack",
+          not bool(CSHARP_ATTACK_RE.search(struck342)),
+          "AnimalObject.Struck@:342 不得匹配 CSHARP_ATTACK_RE")
+    _tbl342 = rld._load_groups("")
+    check("csharp-struck-342-group-monster_ai",
+          _tbl342 is not None and _tbl342.group_of(struck342, "csharp") == "monster_ai",
+          "AnimalObject.Struck@:342 应归 monster_ai")
 
     # ---- Claim B（owner 2026-10-13 09:35）：非攻击站点组口径（groups 子命令，与 rng_ledger_diff 同源）----
     RW = r"crates\world\src\monai.rs:164"
@@ -472,7 +501,7 @@ def cmd_selftest(args):
     if failures:
         print("SELFTEST RED: %d/%d 未过: %s" % (len(failures), len(checks), ", ".join(failures)))
         return 1
-    print("SELFTEST GREEN: attack_rng_ledger selftest %d/%d（C#+Rust 两侧：同账本绿 + 多抽/少抽必红且定位 + 段数不等必红 + 未知 side fail-closed + F2 站点表同表：新站点分类为 attack / 非站点为 noise + Claim B 站点组：closed 绿 / 未归类必红 / 行级覆盖 rows_dropped fail-closed（O-1））"
+    print("SELFTEST GREEN: attack_rng_ledger selftest %d/%d（C#+Rust 两侧：同账本绿 + 多抽/少抽必红且定位 + 段数不等必红 + 未知 side fail-closed + F2 站点表同表：新站点分类为 attack / 非站点为 noise + Claim B 站点组：closed 绿 / 未归类必红 / 行级覆盖 rows_dropped fail-closed（O-1）+ 两处 RUST_ATTACK_RE 逐字同表（改单侧必红）+ C# AnimalObject.Struck@:342 非攻击且归 monster_ai）"
           % (len(checks), len(checks)))
     return 0
 

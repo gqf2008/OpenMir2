@@ -129,23 +129,27 @@ magic_effect	csharp	MagicManager\.MagSaceMove@MagicManager\.cs:	src/M2Server/Mag
 magic_effect	csharp	MagicManager\.DoSpell@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:663	共享尾训练点 `Random(3)+1`（:663；`Level < 3 && boTrain && TrainLevel[Level] <= Abil.Level` 门内才抽）；Rust 对应 magic_effect.rs 的 `spell_train_points`（留在 `magic.rs` 会被 RUST_ATTACK_RE 整文件吞成 attack）
 magic_effect	rust	crates/world/src/magic_effect\.rs:	crates/world/src/magic_effect.rs	push_chance/push_steps/sace_move_gate/spell_train_points（唯一抽数点；`#[track_caller]` 站点落本文件）
 #
-# ---- 2026-10-17 追加（卡 openmir2-rng-attack-narrow）：magic.rs 非攻击抽数**登记**（不是豁免）----
+# ---- 2026-10-17 追加（卡 openmir2-rng-attack-narrow）+ 方案 C 收口（卡 openmir2-magic-draws-move）----
 #
 # 背景（审计 `/e/tmp/attack-re-audit-20261017.md`，CONFIRMED）：`RUST_ATTACK_RE` 曾含整文件
 # `|magic\.rs:` ⇒ `classify()` 先判 attack，29/29（m821fix 落地后 21/21）个 magic.rs 抽数在
 # `--no-attack` 下静默消失且仍报 `GROUP_COVERAGE closed`；而 C# 侧同类站点不在
 # `CSHARP_ATTACK_RE` ⇒ 两侧口径不对称。收窄（两处同源正则各删 `|magic\.rs:`）后这些站点
-# 落 `other` ⇒ RED；本节把两侧按**同一语义组** `magic_effect` 登记回 closed。
+# 落 `other` ⇒ RED；其后按文件登记 `magic_effect` 恢复 closed。
 #
-# 口径：`magic.rs` 的抽数是魔法/技能效果语义（威力公式/无极真气/圣言/诱惑/群体物理命中门），
-# 不属近战攻击路径（`combat.rs`）。C# 对侧同名 draw 在 `MagicManager`/`MagicBase`/
-# `AnimalObject.Struck`，均不匹配 `CSHARP_ATTACK_RE`。**若将来把近战攻击抽数写进 magic.rs，
-# 必须移入 combat.rs**——本行按文件归 `magic_effect`，不再给 attack 豁免。
+# **现状态（方案 C）**：`magic.rs` 已**不再含任何取数**（21 个 `random_below` 已按语义等价迁出）：
+#   · `magic_effect.rs` ← `MPow`/`GetPower`/`GetPower13`/`GetRPow`、`power_defence_area`、
+#     `mag_turn_undead`、`mag_tamming`（文件级行已覆盖）；
+#   · `combat.rs`       ← `power_uenhancer` / `group_melee_damage`（站点仍归 `magic_effect`，
+#     精确行见下；**不**加进 `RUST_ATTACK_RE`，否则 `--no-attack` 会静默剔除它们）。
+# `magic.rs` 若重新出现取数，`crates/world/tests/magic_draws_rng_trace.rs` 的静态断言会红；
+# **不得**再用「整文件 `magic\.rs:` 归 attack」或「整文件归 magic_effect」的豁免式口径。
 #
 # 两套 helper：oracle 的 `MagicManager.*`（private，单目标 DoSpell 支）与 `MagicBase.*`（public，
-# 组支）同式；Rust 只有一套（magic.rs:60/70/80/91），故 4 个 Rust 站点 ↔ 8 个 C# 站点名。
+# 组支）同式；Rust 只有一套（2026-10-17 起落 `magic_effect.rs` 的 `mpow`/`get_power`/
+# `get_power13`/`get_rpow`），故 4 个 Rust 站点 ↔ 8 个 C# 站点名。
 # `DoSpell` 行已由 m821fix 提供（方法级，覆盖 :623 无极真气与 :663 共享尾）。
-magic_effect	rust	crates/world/src/magic\.rs:	crates/world/src/magic.rs	mpow/get_power/get_power13/get_rpow/power_uenhancer/group_melee_damage/mag_turn_undead/mag_tamming 的 21 个 random_below（#[track_caller] 站点落本文件）；文件级登记 = 魔法语义整组，非攻击豁免
+magic_effect	rust	crates/world/src/combat\.rs:(1383|1408)$	crates/world/src/combat.rs:1383	方案 C 搬迁（2026-10-17）：`power_uenhancer` 的 `Random(Level)`（:1383，oracle `MagicManager.cs:623`）与 `group_melee_damage` 的 `Random(SpeedPoint)`（:1408，oracle `MagicManager.cs:957`）从 `magic.rs` **等价搬入** `combat.rs`。二者都不是近战攻击路径（C# 对侧不匹配 `CSHARP_ATTACK_RE`）⇒ 精确行归 `magic_effect`，**不**加入 `RUST_ATTACK_RE`（否则 `--no-attack` 下静默消失，重现历史漂移）；行号漂移 ⇒ 本行失配 ⇒ `other` RED（漂移信号）
 magic_effect	csharp	MagicManager\.MPow@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:104	MPow：`Random(MaxPower-Power)`（:104；单目标 DoSpell 支）
 magic_effect	csharp	MagicManager\.GetPower@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:110	GetPower：`Random(DefMaxPower-DefPower)`（:110）
 magic_effect	csharp	MagicManager\.GetPower13@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:117	GetPower13：`Random(DefMaxPower-DefPower)`（:117）
@@ -154,7 +158,17 @@ magic_effect	csharp	MagicBase\.MPow@MagicBase\.cs:	src/M2Server/Magic/MagicBase.
 magic_effect	csharp	MagicBase\.GetPower@MagicBase\.cs:	src/M2Server/Magic/MagicBase.cs:19	GetPower（组支）：`Random(DefMaxPower-DefPower)`（:19）
 magic_effect	csharp	MagicBase\.GetPower13@MagicBase\.cs:	src/M2Server/Magic/MagicBase.cs:26	GetPower13（组支）：`Random(DefMaxPower-DefPower)`（:26）
 magic_effect	csharp	MagicBase\.GetRPow@MagicBase\.cs:	src/M2Server/Magic/MagicBase.cs:34	GetRPow（组支）：`Hi>Lo` 时 `Random(Hi-Lo+1)`（:34）
-magic_effect	csharp	MagicManager\.MagTamming@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:707	MagTamming 的 12 抽（:707/:717/:721/:723/:736/:759/:779/:787/:795/:797/:805/:819）；Rust 对应 magic.rs 的 mag_tamming
-magic_effect	csharp	MagicManager\.MagTurnUndead@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:842	MagTurnUndead：`Random(2)`/`Random(100)`（:842/:847）；Rust 对应 magic.rs 的 mag_turn_undead
-magic_effect	csharp	MagicManager\.MagGroupDeDing@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:957	MagGroupDeDing 单目标命中门 `Random(SpeedPoint) >= HitPoint`（:957）；Rust 对应 magic.rs 的 group_melee_damage
-magic_effect	csharp	AnimalObject\.Struck@AnimalObject\.cs:352$	src/M2Server/Actor/AnimalObject.cs:352	Struck 的 `Animal` 支 `Random(300)`（MeatQuality，:352）；**精确行**，不吞 :342 的攻击方向 `Random(6)`（后者不在本片范围）
+magic_effect	csharp	MagicManager\.MagTamming@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:707	MagTamming 的 12 抽（:707/:717/:721/:723/:736/:759/:779/:787/:795/:797/:805/:819）；Rust 对应 magic_effect.rs 的 mag_tamming
+magic_effect	csharp	MagicManager\.MagTurnUndead@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:842	MagTurnUndead：`Random(2)`/`Random(100)`（:842/:847）；Rust 对应 magic_effect.rs 的 mag_turn_undead
+magic_effect	csharp	MagicManager\.MagGroupDeDing@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:957	MagGroupDeDing 单目标命中门 `Random(SpeedPoint) >= HitPoint`（:957）；Rust 对应 combat.rs 的 group_melee_damage（站点归 magic_effect）
+magic_effect	csharp	AnimalObject\.Struck@AnimalObject\.cs:352$	src/M2Server/Actor/AnimalObject.cs:352	Struck 的 `Animal` 支 `Random(300)`（MeatQuality，:352）；**精确行**，不吞 :342 的攻击方向 `Random(6)`（后者由下方 `monster_ai` 精确行登记）
+#
+# ---- 2026-10-17 追加（卡 openmir2-magic-draws-move）：C# `AnimalObject.Struck@:342` 的定位 ----
+#
+# `AnimalObject.cs:342` = `if (TargetCret == null || GetAttackDir(...) || Random(6) == 0)`，是**被击动物**
+# 在 `Struck`（由 `Operate(RM_STRUCK)` 在它自己的消息段调用）里重选目标的骰子，不是攻方
+# `_Attack`/`GetAttackPower` 的伤害账本 ⇒ **不**纳入 `CSHARP_ATTACK_RE`（纳入会把受害者 tick 的抽数
+# 塞进「每次攻击恰一次」的分段锚，破坏逐 k 对齐）。它属于怪物 AI，与 Rust 侧 `monai.rs::animal_struck`
+# 的 `Random(6)`（文件级已归 `monster_ai`）对称。用**精确行**登记，避免吞掉同方法 :352 的 `Random(300)`
+# （后者已归 `magic_effect`，见上）。
+monster_ai	csharp	AnimalObject\.Struck@AnimalObject\.cs:342$	src/M2Server/Actor/AnimalObject.cs:342	Struck 的攻击方向骰 `Random(6)`（:342，仅 `TargetCret != null` 且 `!GetAttackDir` 时抽）；**不是攻击路径**（受害者 AI 重选目标，`Operate(RM_STRUCK)` 在受害者消息段执行）⇒ 不加入 `CSHARP_ATTACK_RE`；Rust 对侧 `crates/world/src/monai.rs::animal_struck`（同组 monster_ai）

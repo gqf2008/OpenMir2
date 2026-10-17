@@ -51,7 +51,9 @@ CSHARP_ATTACK_RE = re.compile(
     r"BaseObject\.GetHitStruckDamage@|PlayObject\.AttackSuccess@|PlayObject\.AttackDir@|"
     r"BaseObject\.GetAttackPower@)")
 # Rust 站点（世界层调用点）。
-RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|109|111|250|579|587|601|606|608|609|628|630|736|758|831)")
+# 2026-10-17（magic-draws-move）：按当前活栈补齐实际取数行 103/106/763/771/790/792/936/1018/1126；
+# 旧表里的 579/587/601/606/608/609/628/630/736/758/831 保留为旧 trace 行号别名（不误伤新流水）。
+RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|831|936|1018|1126)")
 
 CSHARP_MARKER = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
 RUST_MARKER = r"crates\world\src\combat.rs:109"

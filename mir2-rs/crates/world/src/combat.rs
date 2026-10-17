@@ -1354,6 +1354,97 @@ pub fn catalog(items: &[StdItem]) -> ItemCatalogImpl<'_> {
     ItemCatalogImpl { items }
 }
 
+// ---- 魔法/技能里的**攻击语义**取数（2026-10-17 从 `magic.rs` 等价搬入）--------------------
+//
+// 搬迁只移动文件位置：函数体 / 取数式 / 次序 / 门逐字不变；`crate::magic` 侧用
+// `pub use crate::combat::{group_melee_damage, power_uenhancer};` 保持既有对外路径。
+//
+// 站点归组（`tests/parity/m3/rng-trace-probe/consumer_groups.tsv`）：这两个函数里的
+// `random_below` **不是**近战攻击路径——C# 对侧分别在 `MagicManager.cs:623`（无极真气
+// `Random(Level)`）与 `:957`（`MagGroupDeDing` 的 `Random(SpeedPoint)`），均不匹配
+// `CSHARP_ATTACK_RE`。因此按**精确行**归 `magic_effect`，**不**加进 `RUST_ATTACK_RE`
+// （加进去会让 `groups --no-attack` 把它们静默剔除，重现历史语义漂移）。
+use crate::magic_effect::power_defence_area;
+use mir2_data::models::MagicInfo;
+
+/// 无极真气分支（`SKILL_UENHANCER = 36`；数据行名为「火焰冰」——oracle 按魔号分派，本实现照搬）：
+/// `MagicManager.cs:625-626`。
+///
+/// `power = (ushort)(Level + 1 + Random(Level))`；
+/// `time  = GetAttackPower(GetPower13(60) + Lo(SC) * 10, ΔSC + 1)`（与 [`power_defence_area`] 同式）。
+/// 取数顺序：`Random(Level)` → time。
+pub fn power_uenhancer(
+    rng: &mut impl RandomSource,
+    magic: &MagicInfo,
+    level: u8,
+    sc: i32,
+    atk: AttackPowerMode,
+) -> (i32, i32) {
+    let power = i32::from(level) + 1 + rng.random_below(i32::from(level));
+    let time = power_defence_area(rng, magic, level, sc, atk);
+    (power, time)
+}
+
+/// `MagicManager.MagGroupDeDing`（函数起于 `MagicManager.cs:942`，逐目标结算体 `:956-963`）的**单目标**结算（39 `SKILL_GROUPDEDING`）。
+///
+/// 逐字照抄循环体（取数顺序勿改）：
+/// 1. `nPower = playObject.GetAttackPower(LoByte(DC), HiByte(DC) - LoByte(DC))`
+///    —— 注意与普攻 `GetBaseAttackPoewr` 不同：这里第二参**不做 sbyte 强转、也不 +1**；
+/// 2. `if (Random(baseObject.SpeedPoint) >= playObject.HitPoint) nPower = 0;`
+///    —— **无条件**抽一次 `Random(SpeedPoint)`（在攻击力之后）；
+/// 3. `if (nPower > 0) nPower = baseObject.GetHitStruckDamage(playObject, nPower);`
+///
+/// 返回 `(闪避前的 power, 护甲减免后的 damage)`。
+/// 遍历可见集 / `StruckDamage` 倍率 / `RM_DELAYMAGIC` 回帧由调用方承接（需地图与目标态）。
+pub fn group_melee_damage(
+    rng: &mut impl RandomSource,
+    attacker: &Entity,
+    target: &Entity,
+    atk: AttackPowerMode,
+) -> (i32, u16) {
+    let dc_lo = i32::from(lo_byte(attacker.dc));
+    let dc_diff = i32::from(hi_byte(attacker.dc)) - dc_lo;
+    let mut power = atk_power(rng, dc_lo, dc_diff, atk);
+    if rng.random_below(i32::from(target.speed_point)) >= i32::from(attacker.hit_point) {
+        power = 0;
+    }
+    let damage = if power > 0 {
+        get_hit_struck_damage(rng, target, attacker, power)
+    } else {
+        0
+    };
+    (power, damage)
+}
+
+/// 攻方攻击力口径（`GetAttackPower`）：`DoSpell` 的施法者是 `PlayObject`，
+/// 走 `PlayObject.GetAttackPower` override（`PlayObject.cs:2909`）——**取数次数与 Base 版不同**
+/// （`Luck == 0` 时多一次 `Random(10)`），因此不能拿 [`AttackPowerMode::Base`] 代替，
+/// 否则当威力之后还有取数（如火墙的 `time`）时序列会错位。
+pub(crate) fn atk_power(
+    rng: &mut impl RandomSource,
+    base: i32,
+    range: i32,
+    atk: AttackPowerMode,
+) -> i32 {
+    match atk {
+        AttackPowerMode::Base => get_attack_power(rng, base, range),
+        AttackPowerMode::Player {
+            luck,
+            power_rate,
+            bo_power_item,
+            power_item,
+        } => get_attack_power_player(
+            rng,
+            base,
+            range,
+            luck,
+            power_rate,
+            bo_power_item,
+            power_item,
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
