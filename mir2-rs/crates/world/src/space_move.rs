@@ -10,7 +10,7 @@
 //!
 //! 公开 API 未变：`crate::slave::space_move_get_rand_xy` 仍可用（`slave.rs` 里 `pub use` 再导出）。
 
-use mir2_shared::rng::RandomNumber;
+use mir2_shared::rng::RandomSource;
 
 /// `BaseObject.SpaceMoveGetRandXY`（`BaseObject.cs:1040-1096`）：从 `(x, y)` 起找可走格；
 /// 不可走时**按 oracle 的分段步进/随机跳点**推进，最多 201 次尝试（`n14 >= 201` 即放弃）。
@@ -21,7 +21,7 @@ use mir2_shared::rng::RandomNumber;
 /// **取数次序是 Claim B 账本输入**：只有进入 `else` 分支（`x` 已到 `Width-n1C-1` 之后）才抽
 /// `Random(Width)` / `Random(Height)`，本函数逐字保留分支位置。
 pub fn space_move_get_rand_xy<F>(
-    rng: &mut RandomNumber,
+    rng: &mut impl RandomSource,
     width: i32,
     height: i32,
     mut x: i32,

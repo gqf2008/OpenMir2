@@ -24,6 +24,7 @@ pub mod ctor_fold;
 pub mod entity;
 pub mod guild;
 pub mod magic;
+pub mod magic_effect;
 pub mod map;
 pub mod merchant;
 pub mod monai;
@@ -116,4 +117,7 @@ pub use slave::{
     summon_slave, CloneSpawn, MakeSlavePlan, SlaveSpawner, SummonOutcome, CLONE_NAME,
     PLAYER_VIEW_RANGE, SKILL_46, SKILL_ANGEL, SKILL_SINSU, SKILL_SKELLETON, SKILL_TAMMING,
 };
-pub use world::{Command, EntitySnapshot, FloorItemView, TickRecord, World, TICK_INTERVAL_MS};
+pub use world::{
+    Command, EntitySnapshot, FloorItemView, SpaceMoveCastOutcome, TickRecord, World,
+    TICK_INTERVAL_MS,
+};

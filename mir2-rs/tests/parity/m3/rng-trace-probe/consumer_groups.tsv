@@ -97,14 +97,13 @@ slave_mutiny	rust	crates/world/src/slave\.rs:	crates/world/src/slave.rs	同上�
 
 # ---- 2026-10-17 追加（复验 surviving）：C# `MapRandomMove` 自身的两抽补登记 ----
 # oracle `BaseObject.MapRandomMove`（BaseObject.cs:1214-1237）的两次初始取数在 :1235/:1236
-# （`Random(Width-nEgdey-1)`/`Random(Height-nEgdey-1)`）；Rust 同两抽在 `merchant.rs:875/876`，已归 `merchant`。
+# （`Random(Width-nEgdey-1)`/`Random(Height-nEgdey-1)`）；Rust 同两抽在 `merchant.rs:869/870`（`map_random_move_xy`，2026-10-17 patch 后实测），已归 `merchant`。
 # 登记前 `groups --side csharp --require-closed` 对该站点会报 UNCLASSIFIED（两侧 vocabulary 不对称）⇒ 补一行。
 # 注：MapRandomMove 内部进 `SpaceMove` 后的移位环取数归 `space_move` 组（见上），不重复登记。
-merchant	csharp	BaseObject\.MapRandomMove@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:1214	商人随机移动到点的两次初始取数（:1235/:1236）；Rust 对应 merchant.rs:875/876（同组 merchant）
+merchant	csharp	BaseObject\.MapRandomMove@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:1214	商人随机移动到点的两次初始取数（:1235/:1236）；Rust 对应 merchant.rs:869/870（同组 merchant；行号为 2026-10-17 patch 后实测：`map_random_move_xy` 的两抽）
 #
-# 另一处同类、**当前不可达**（登记备查）：`crates/world/src/magic.rs` 仍有一份**私有** `space_move_get_rand_xy` 副本
-#（`mag_sace_move` 用，魔号 21 未接线 ⇒ 仅测试可达）。将来接 8/21 时应改为复用 `crate::space_move`，
-# 否则其站点会落 `magic.rs` ⇒ `other`。
+# （2026-10-17 订正，卡 openmir2-m3-firewind-spacemove-wire）：`crates/world/src/magic.rs` 的**私有**
+# `space_move_get_rand_xy` 副本已删除；`mag_sace_move` 与生产入口都复用 `crate::space_move`。
 #
 # 顺带更正：`consumer_groups.tsv` 第 96 行的 `slave.rs:` 行号按搬迁后实测为 :882/:898/:1035（原写 :1082）。
 
@@ -114,3 +113,18 @@ merchant	csharp	BaseObject\.MapRandomMove@BaseObject\.cs:	src/M2Server/Actor/Bas
 # `Config.HomeMap/HomeX/HomeY`。Rust 侧同两抽落 `bins/game-svr/src/main.rs`（已归 `startup`）；C# 侧原先无行
 # ⇒ `groups --side csharp --require-closed` 在「墙格出生登录」trace 上会报 UNCLASSIFIED。补一行归同组 `startup`。
 startup	csharp	WorldServer\.ProcessHumansMakeNewHuman@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:380	进图前移位环的两抽（:380/:381，至多 5 次；回落 HomeMap）；Rust 对应 main.rs 的 shift_enter_position（同组 startup）
+
+# ---- 2026-10-17 追加：`magic_effect` 组（魔号 8/21 效果体接线）----------------------------
+#
+# 背景：魔号 8（`SKILL_FIREWIND`）与 21（`SKILL_SPACEMOVE`）的效果体在本卡接线后才首次产生
+# 生产取数。取数若留在 `crates/world/src/magic.rs`，会被 `rng_ledger_diff.py` 的
+# `RUST_ATTACK_RE`（整文件 `magic\.rs:`）误归 `attack` 组 —— 那是历史语义漂移，**不要依赖**。
+# 因此新增独立模块 `crates/world/src/magic_effect.rs`，两侧按**函数**对齐：
+#   magic_effect = MagicManager.MagPushArround（:37/:41）+ MagSaceMove（:879）
+# 其余两处取数沿用既有组，不重复登记：
+#   merchant   = BaseObject.MapRandomMove（:1235/:1236；调用者是 MagSaceMove 时 site 不变）
+#   space_move = BaseObject.SpaceMoveGetRandXY（:1040）
+magic_effect	csharp	MagicManager\.MagPushArround@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:37	MagPushArround：`Random(20)`（:37）与 `Random(2)`（:41）——`IsProperTarget` 只作门、不抽数
+magic_effect	csharp	MagicManager\.MagSaceMove@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:879	MagSaceMove：施放门 `Random(11) < nLevel*2+4`（:879）
+magic_effect	csharp	MagicManager\.DoSpell@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:663	共享尾训练点 `Random(3)+1`（:663；`Level < 3 && boTrain && TrainLevel[Level] <= Abil.Level` 门内才抽）；Rust 对应 magic_effect.rs 的 `spell_train_points`（留在 `magic.rs` 会被 RUST_ATTACK_RE 整文件吞成 attack）
+magic_effect	rust	crates/world/src/magic_effect\.rs:	crates/world/src/magic_effect.rs	push_chance/push_steps/sace_move_gate/spell_train_points（唯一抽数点；`#[track_caller]` 站点落本文件）

@@ -349,6 +349,27 @@ pub struct World {
     pub attack_poison: HashMap<i32, AttackPoisonState>,
 }
 
+/// [`World::cast_space_move_spell`] 的可观测结果（魔号 21 `MagSaceMove` `MagicManager.cs:876-891`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpaceMoveCastOutcome {
+    /// oracle `MagSaceMove` 的返回值（`Random(11)` 门通过即 `true`，与是否找到 HomeMap/是否落地无关）。
+    pub result: bool,
+    /// `MapRandomMove` 找到了 HomeMap（`MapMgr.FindMap(HomeMap) != null`）。
+    pub map_found: bool,
+    /// `SpaceMoveGetRandXY` 找到落点并 `AddMapObject` 成功。
+    pub moved: bool,
+    /// 落地后的坐标（未移动时 = 调用前坐标）。
+    pub x: i32,
+    pub y: i32,
+    /// 落地后的 `map_id`（未移动时 = 调用前 `map_id`）。
+    pub map_id: usize,
+    /// oracle `SpaceMoved = true`（仅成功落地）。
+    pub space_moved: bool,
+    /// oracle `if (envir != playObject.Envir && Race == ActorRace.Play) IsTimeRecall = false;`
+    /// —— 本骨架无 `IsTimeRecall` 字段（登记）；这里只回报「是否跨图」供宿主/测试判读。
+    pub cross_map: bool,
+}
+
 impl World {
     /// 单地图世界（与 M2 上半程的 `World::new` 语义一致）。
     pub fn new(width: i32, height: i32) -> Self {
@@ -772,6 +793,178 @@ impl World {
             .map_or(AttackPowerMode::Base, AttackPowerMode::for_attacker);
         let n_power = crate::magic::power_defence_area(&mut self.rng, magic, level, sc, atk);
         self.mag_make_defence_area(caster_id, n_target_x, n_target_y, 3, n_power, bt_state)
+    }
+
+    /// **魔号 8（`SKILL_FIREWIND` 抗拒火环）效果体**：`MagicManager.MagPushArround`
+    /// （`src/M2Server/Magic/MagicManager.cs:24-52`）的生产入口。
+    ///
+    /// 逐行口径（`VisibleActors` 顺序 = 施法者 `visible_actors` 列表序，两侧同源）：
+    /// ```text
+    /// :27  for i in VisibleActors
+    /// :30  |Cx-Tx| <= 1 && |Cy-Ty| <= 1
+    /// :32  !Death && target != playObject
+    /// :34  playObject.Abil.Level > target.Abil.Level && !target.StickMode
+    /// :36  levelgap = ...
+    /// :37  Random(20) < 6 + nPushLevel*3 + levelgap     <- magic_effect::push_chance
+    /// :39  IsProperTarget(target)
+    /// :41  push = 1 + MAX(0, nPushLevel-1) + Random(2)  <- magic_effect::push_steps
+    /// :42  nDir = GetNextDirection(...)
+    /// :43  target.CharPushed(nDir, push); result++     <- 本仓 push_now（逐格 RM_PUSH 事件）
+    /// ```
+    ///
+    /// 返回 `(oracle result, 逐格推挤事件)`。**`result` 是「调用了 `CharPushed` 的目标数」**，
+    /// 与 `CharPushed` 实际推进几格无关（oracle 不看其返回值）——训练尾 `boTrain` 的判据。
+    ///
+    /// **登记（本卡不实现）**：`target.StickMode` 本骨架无该字段 => 恒按 `false`；`CharPushed` 的
+    /// `WalkTick += 800`（`Race >= Animal` 支）本骨架未建模；`IsProperTarget` 用
+    /// [`crate::combat::is_proper_target_grouped`]（组队成员表 = `Entity::group_members`）。
+    #[must_use]
+    pub fn cast_firewind_spell(
+        &mut self,
+        actor_id: i32,
+        push_level: i32,
+    ) -> (i32, Vec<crate::action::PushEvent>) {
+        let Some(caster) = self.entities.get(actor_id).cloned() else {
+            return (0, Vec::new());
+        };
+        // oracle `VisibleActors` 的迭代序即列表序（本骨架 `Entity::visible_actors` 同源）。
+        let visible: Vec<i32> = caster.visible_actors.iter().map(|v| v.target).collect();
+        let mut result = 0;
+        let mut events = Vec::new();
+        for target_id in visible {
+            let Some(target) = self.entities.get(target_id).cloned() else {
+                continue;
+            };
+            if (caster.x - target.x).abs() > 1 || (caster.y - target.y).abs() > 1 {
+                continue;
+            }
+            if target.death || target_id == actor_id {
+                continue;
+            }
+            if caster.level <= target.level {
+                continue;
+            }
+            // `!target.StickMode`：本骨架无该字段 => 恒过（登记）。
+            let level_gap = i32::from(caster.level) - i32::from(target.level);
+            if !crate::magic_effect::push_chance(&mut self.rng, push_level, level_gap) {
+                continue;
+            }
+            // `PlayObject.IsProperTarget`：组队成员按 `HAM_GROUP` 剔除（oracle 读内存里的
+            // `GroupOwner/GroupMembers`；本骨架同源字段在 `Entity::{group_owner,group_members}`）。
+            if !crate::combat::is_proper_target_grouped(&caster, &target, &caster.group_members) {
+                continue;
+            }
+            let push = crate::magic_effect::push_steps(&mut self.rng, push_level);
+            let n_dir = crate::magic::next_direction(caster.x, caster.y, target.x, target.y);
+            let pushed = self.push_now(target_id, n_dir, push);
+            // oracle `CharPushed`：循环内 `Dir = nDir`，收尾 `Dir = nBackDir`（`result > 0`）或旧值
+            // （`result == 0`）。本骨架 `push_now` 不改 `Dir` => 在此按 oracle 收尾语义补写。
+            if !pushed.is_empty() {
+                if let Some(e) = self.entities.get_mut(target_id) {
+                    e.ai.dir = crate::magic::back_dir(n_dir);
+                }
+            }
+            events.extend(pushed);
+            // oracle `result++` 在 `CharPushed` 调用之后、**不看**其返回值。
+            result += 1;
+        }
+        (result, events)
+    }
+
+    /// **魔号 21（`SKILL_SPACEMOVE` 瞬息移动）效果体**：`MagicManager.MagSaceMove`
+    /// （`MagicManager.cs:876-891`）+ `BaseObject.MapRandomMove`（`:1214-1237`）+
+    /// `BaseObject.SpaceMove`（`:1103-1168`，同服支）的生产入口。
+    ///
+    /// 取数次序（与 oracle 逐条同序）：
+    /// 1. `Random(11) < nLevel*2 + 4`（`:879`，站点 `magic_effect`）；门不过 => **一个数都不多抽**；
+    /// 2. `MapRandomMove` 两次初始取数（`:1235/1236`，站点 `merchant`）；**只有 `home_map` 解析成功才抽**；
+    /// 3. `SpaceMoveGetRandXY` 的移位环（`BaseObject.cs:1040-1096`，站点 `space_move`）。
+    ///
+    /// `home_map` = 宿主用 `MapRegistry::id_of(CharacterData.HomeMap)` 解析的结果（`None` =>
+    /// oracle `FindMap == null` => 不抽、不移动）。落地用 [`World::switch_map_space`]（记一条
+    /// [`crate::session::MapChange`]，`space_move_show = Some(true)` = oracle `nInt == 1` 的
+    /// `RM_SPACEMOVE_SHOW2`）。
+    ///
+    /// **失败支（oracle `if (!moveSuccess)` 回滚）**：本实现在**落地前**算完 `SpaceMoveGetRandXY`，
+    /// 未找到落点 => 一个格子都不动（等价于 oracle 的「恢复旧 `Envir/CurrX/CurrY` + 重新
+    /// `AddMapObject`」；oracle 那一步在可观测状态上恒等于「没动」）。
+    ///
+    /// **登记（本卡不实现）**：`IsTimeRecall = false`（无该字段，仅回报 `cross_map`）、
+    /// `OnEnvirnomentChanged()`、`VisibleHumanList.Clear()`、`SpaceMoved` 字段。
+    pub fn cast_space_move_spell(
+        &mut self,
+        chr_name: &str,
+        actor_id: i32,
+        level: i32,
+        home_map: Option<usize>,
+    ) -> SpaceMoveCastOutcome {
+        self.cast_space_move_spell_with(chr_name, actor_id, level, home_map, |_| {})
+    }
+
+    /// [`World::cast_space_move_spell`] 的宿主挂钩版：`after_gate` 在 `Random(11)` 门**通过后、
+    /// `MapRandomMove` 之前**调用（oracle `MagicManager.cs:881` 的
+    /// `SendRefMsg(RM_SPACEMOVE_FIRE2, …)` 恰在这个位置——收件人必须按**施法前**的旧图/旧坐标算）。
+    ///
+    /// 不传钩子的调用方用 [`World::cast_space_move_spell`]（行为与取数次序逐字节不变）。
+    pub fn cast_space_move_spell_with<F>(
+        &mut self,
+        chr_name: &str,
+        actor_id: i32,
+        level: i32,
+        home_map: Option<usize>,
+        after_gate: F,
+    ) -> SpaceMoveCastOutcome
+    where
+        F: FnOnce(&World),
+    {
+        let mut out = SpaceMoveCastOutcome::default();
+        let Some(e) = self.entities.get(actor_id) else {
+            return out;
+        };
+        out.x = e.x;
+        out.y = e.y;
+        out.map_id = e.map_id;
+        if !crate::magic_effect::sace_move_gate(&mut self.rng, level) {
+            return out;
+        }
+        out.result = true;
+        // oracle `:881 SendRefMsg(RM_SPACEMOVE_FIRE2, …)`：在 `MapRandomMove` **之前**。
+        after_gate(&*self);
+        let Some(dst) = home_map else {
+            return out;
+        };
+        if dst >= self.maps.len() {
+            return out;
+        }
+        out.map_found = true;
+        let (w, h) = {
+            let map = &self.maps[dst];
+            (map.width, map.height)
+        };
+        // `MapRandomMove` 的两次初始取数（`merchant` 组）。
+        let (nx, ny) = crate::merchant::map_random_move_xy(&mut self.rng, w, h);
+        // `SpaceMove` 的移位环（`space_move` 组）；`can_walk` = `CanWalk(x,y,true)`（`cellSuccess && Valid`）。
+        let found = {
+            let rng = &mut self.rng;
+            let map = &self.maps[dst];
+            crate::space_move::space_move_get_rand_xy(rng, w, h, nx, ny, |x, y| {
+                map.get_cell_info(x, y).1
+            })
+        };
+        let Some((fx, fy)) = found else {
+            return out;
+        };
+        // `BaseObject.SpaceMove` 同服支：旧图摘除 -> 新图登记 -> 记 `MapChange`（宿主出 633/634/SHOW2）。
+        if self.switch_map_space(chr_name, dst, fx, fy, true).is_err() {
+            return out;
+        }
+        out.moved = true;
+        out.space_moved = true;
+        out.cross_map = dst != out.map_id;
+        out.x = fx;
+        out.y = fy;
+        out.map_id = dst;
+        out
     }
 
     /// oracle `SystemProcessor.GetGameTime`（`SystemProcessor.cs:48/98-134`）的周期刷新等价物。

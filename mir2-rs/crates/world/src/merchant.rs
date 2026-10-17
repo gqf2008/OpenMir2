@@ -842,6 +842,35 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
     false
 }
 
+/// `BaseObject.MapRandomMove`（`BaseObject.cs:1235-1236`）的**两次初始取数**：
+/// `Random(Width-nEgdey-1)+nEgdey`、`Random(Height-nEgdey-1)+nEgdey`。
+///
+/// `nEgdey` 只看**目标图高**（`BaseObject.cs:1218-1229`）：`Height < 150` ⇒（`< 30` ⇒ 2，否则 20），
+/// 否则 50。
+///
+/// **站点归 `merchant` 组**：C# 侧这两抽的 site 恒为 `BaseObject.MapRandomMove@BaseObject.cs:…`
+/// （无论调用者是 `Merchant.Run` 还是魔号 21 的 `MagSaceMove`）⇒ `consumer_groups.tsv` 把该 site
+/// 归 `merchant`。Rust 侧唯一抽数点放在本文件，保证两侧**组 vocabulary 对称**（魔号 21 接线卡）。
+#[must_use]
+pub(crate) fn map_random_move_xy(
+    rng: &mut impl mir2_shared::rng::RandomSource,
+    width: i32,
+    height: i32,
+) -> (i32, i32) {
+    let n_edge_y = if height < 150 {
+        if height < 30 {
+            2
+        } else {
+            20
+        }
+    } else {
+        50
+    };
+    let nx = rng.random_below(width - n_edge_y - 1) + n_edge_y;
+    let ny = rng.random_below(height - n_edge_y - 1) + n_edge_y;
+    (nx, ny)
+}
+
 /// `BaseObject.MapRandomMove`（`BaseObject.cs:1214-1237`）：`Random(Width-nEgdey-1)+nEgdey`
 /// 两次取数（站点归 `merchant` 组），然后 `SpaceMove`（`BaseObject.cs:1103-1172`）——
 /// **落点不可走时进 `SpaceMoveGetRandXY` 移位环继续取数**（至多 201 轮）。
@@ -859,8 +888,10 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
 ///
 /// 不改 `Dir`。
 ///
-/// **取数站点归组**：`space_move_get_rand_xy` 标了 `#[track_caller]` ⇒ 本函数调用时环内
-/// `random_below` 的 site 记在**本文件**（`merchant` 组），不会漂到 `slave.rs`（`other`）。
+/// **取数站点归组**：首两抽在 `map_random_move_xy`（本文件 ⇒ `merchant` 组，与 C# 的
+/// `BaseObject.MapRandomMove@BaseObject.cs:` 对齐）；环内 `Random(Width)`/`Random(Height)` 落在
+/// `crates/world/src/space_move.rs`（**`space_move` 组**，与 C# 的 `BaseObject.SpaceMoveGetRandXY@BaseObject.cs:`
+/// 对齐）——**刻意不加 `#[track_caller]`**：加了会让 Rust 侧归 `merchant` 而 C# 侧归 `space_move`，破坏对称。
 ///
 /// **可达性（收窄）**：只有 `merchant_run`（DB `CanMove != 0 && MoveTime > 0`）可达。
 /// `npc_run` 的该支**不可达**——固定 NPC 经 `Npcs.txt` 装载 `BoCanMove` 恒 `false`
@@ -879,19 +910,9 @@ pub(crate) fn map_random_move(world: &mut World, actor_id: i32) {
     let Some(map) = world.maps.get(map_id) else {
         return;
     };
-    // `BaseObject.cs:1218-1229`：`Height < 150` ⇒（`< 30` ⇒ 2，否则 20），否则 50。
-    let n_edge_y = if map.height < 150 {
-        if map.height < 30 {
-            2
-        } else {
-            20
-        }
-    } else {
-        50
-    };
     let (w, h) = (map.width, map.height);
-    let nx = world.rng.random_below(w - n_edge_y - 1) + n_edge_y;
-    let ny = world.rng.random_below(h - n_edge_y - 1) + n_edge_y;
+    // 首两抽（oracle `BaseObject.cs:1235-1236`）——与魔号 21 共用同一抽数点。
+    let (nx, ny) = map_random_move_xy(&mut world.rng, w, h);
     // `SpaceMove`（`BaseObject.cs:1128`）：以 `(nX, nY)` 为起点找可走格；起点即墙时
     // `SpaceMoveGetRandXY` 进移位环继续抽数（201 轮上限）。
     let found = {

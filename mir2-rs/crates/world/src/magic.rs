@@ -369,6 +369,17 @@ pub fn is_warr_skill(mag_idx: i32) -> bool {
     matches!(mag_idx, 3 | 4 | 7 | 12 | 25 | 26 | 27 | 34 | 38)
 }
 
+/// `MagicConst.SKILL_FIREWIND`（`src/Modules/SystemModule/Const/MagicConst.cs:36`）：抗拒火环。
+///
+/// `DoSpell` 的 `case SKILL_FIREWIND`（`MagicManager.cs:259-264`）⇒ `MagPushArround(...)`。
+pub const SKILL_FIREWIND: u16 = 8;
+
+/// `MagicConst.SKILL_SPACEMOVE`（`MagicConst.cs:88`）：瞬息移动。
+///
+/// `DoSpell` 的 `case SKILL_SPACEMOVE`（`MagicManager.cs:403-410`）：先发 `RM_MAGICFIRE`
+/// （`boSpellFire = false`）⇒ `MagSaceMove(...)`。
+pub const SKILL_SPACEMOVE: u16 = 21;
+
 /// `ItemLocation.ArmRingl` / `ItemLocation.Bujuk`（`src/OpenMir2/Enums/ItemLocation.cs:28,44`）。
 pub const ITEM_LOCATION_ARM_RINGL: u8 = 5;
 pub const ITEM_LOCATION_BUJUK: u8 = 9;
@@ -874,8 +885,9 @@ pub fn do_spell_tail(
     // oracle :648-658
     out.magic_fire = bo_spell_fire;
     if bo_train && state.level < 3 && state.train_level[state.level as usize] <= abil_level {
-        // oracle :663 `Random(3) + 1`（门内才抽）。
-        let n_tran_point = rng.random_below(3) + 1;
+        // oracle :663 `Random(3) + 1`（门内才抽）。取数站点在 `crate::magic_effect`
+        // （留在 `magic.rs` 会被 `RUST_ATTACK_RE` 整文件误归 attack 组）。
+        let n_tran_point = crate::magic_effect::spell_train_points(rng);
         state.tran_point += train_skill(fast_train, n_tran_point);
         out.train.trained = true;
         let up = check_magic_level_up(state);
@@ -988,12 +1000,6 @@ pub fn front_position(x: i32, y: i32, dir: u8, width: i32, height: i32) -> (i32,
     (nx, ny)
 }
 
-/// `Envirnoment.CanWalk(nX, nY, boFlag)`（`src/M2Server/Maps/Envirnoment.cs:442-486`）的
-/// **boFlag=true** 子集：只判 `cellSuccess && Valid`（不查格上对象）。
-fn can_walk_ignore_objects(map: &MapGrid, x: i32, y: i32) -> bool {
-    map.get_cell_info(x, y).1
-}
-
 /// `BaseObject.CharPushed`（`src/M2Server/Actor/BaseObject.cs:854-901`）的**格子簿记等价实现**。
 ///
 /// 无 RNG。目标自身不在格上（探针场景），故 `MoveToMovingObject` 的源格摘除不命中；
@@ -1103,8 +1109,11 @@ pub fn mag_push_arround(
         let adj = (inp.caster_x - t.x).abs() <= 1 && (inp.caster_y - t.y).abs() <= 1;
         if adj && !t.death && inp.caster_level > t.level && !t.stick_mode {
             let levelgap = i32::from(inp.caster_level) - i32::from(t.level);
-            if rng.random_below(20) < 6 + inp.push_level * 3 + levelgap && t.proper_target {
-                let push = 1 + 0.max(inp.push_level - 1) + rng.random_below(2);
+            // 两抽的**次序**与 oracle 一致：`:37` 先抽 20；`IsProperTarget` 只作门（不抽数），
+            // 通过后才在 `:41` 抽 2。取数站点在 `crate::magic_effect`（非 `magic.rs`，防被
+            // `RUST_ATTACK_RE` 误归 attack 组）。
+            if crate::magic_effect::push_chance(rng, inp.push_level, levelgap) && t.proper_target {
+                let push = crate::magic_effect::push_steps(rng, inp.push_level);
                 let n_dir = next_direction(inp.caster_x, inp.caster_y, t.x, t.y);
                 let steps = char_pushed(
                     map,
@@ -1112,7 +1121,7 @@ pub fn mag_push_arround(
                     &mut oc.y,
                     &mut oc.dir,
                     n_dir,
-                    push as u8,
+                    push,
                     t.actor_id,
                 );
                 oc.push_count = steps;
@@ -1157,41 +1166,6 @@ pub struct SaceMoveOutcome {
     pub is_time_recall: bool,
 }
 
-/// `BaseObject.SpaceMoveGetRandXY`（`src/M2Server/Actor/BaseObject.cs:1040-1084`）逐字移植。
-fn space_move_get_rand_xy(
-    rng: &mut impl RandomSource,
-    map: &MapGrid,
-    x: &mut i32,
-    y: &mut i32,
-) -> bool {
-    let n18 = if map.width < 80 { 3 } else { 10 };
-    let n1c = if map.height < 150 {
-        if map.height < 50 {
-            2
-        } else {
-            15
-        }
-    } else {
-        50
-    };
-    for _ in 0..201 {
-        if can_walk_ignore_objects(map, *x, *y) {
-            return true;
-        }
-        if *x < map.width - n1c - 1 {
-            *x += n18;
-        } else {
-            *x = rng.random_below(map.width);
-            if *y < map.height - n1c - 1 {
-                *y += n18;
-            } else {
-                *y = rng.random_below(map.height);
-            }
-        }
-    }
-    false
-}
-
 /// 见 [`SaceMoveInput`]/[`SaceMoveOutcome`]（`MagicManager.cs:876-891` + `MapRandomMove` + `SpaceMove`）。
 pub fn mag_sace_move(
     rng: &mut impl RandomSource,
@@ -1204,23 +1178,23 @@ pub fn mag_sace_move(
         is_time_recall: inp.is_time_recall,
         ..Default::default()
     };
-    if rng.random_below(11) < inp.level * 2 + 4 {
+    if crate::magic_effect::sace_move_gate(rng, inp.level) {
         out.result = true;
         if inp.map_found {
-            // `BaseObject.MapRandomMove`（`BaseObject.cs:1214-1241`）：nEgdey 由目标图高决定。
-            let n_egdey = if inp.map_height < 150 {
-                if inp.map_height < 30 {
-                    2
-                } else {
-                    20
-                }
-            } else {
-                50
-            };
-            let mut nx = rng.random_below(inp.map_width - n_egdey - 1) + n_egdey;
-            let mut ny = rng.random_below(inp.map_height - n_egdey - 1) + n_egdey;
+            // `BaseObject.MapRandomMove`（`BaseObject.cs:1214-1241`）：两次初始取数（站点 `merchant`）。
+            let (nx0, ny0) =
+                crate::merchant::map_random_move_xy(rng, inp.map_width, inp.map_height);
             // `BaseObject.SpaceMove`（`BaseObject.cs:1103-1168`）同服分支：目标图尺寸即本图尺寸。
-            if space_move_get_rand_xy(rng, map, &mut nx, &mut ny) {
+            // 移位环取数**复用** `crate::space_move::space_move_get_rand_xy`（站点 `space_move`），
+            // 不在此保留私有副本（魔号 21 接线卡硬要求）。
+            if let Some((nx, ny)) = crate::space_move::space_move_get_rand_xy(
+                rng,
+                map.width,
+                map.height,
+                nx0,
+                ny0,
+                |x, y| map.get_cell_info(x, y).1,
+            ) {
                 out.x = nx;
                 out.y = ny;
                 out.space_moved = true;

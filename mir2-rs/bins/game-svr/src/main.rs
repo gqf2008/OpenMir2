@@ -5280,6 +5280,189 @@ fn handle_spell_cmd(
             }
         }
     }
+    // **魔号 8（`SKILL_FIREWIND` 抗拒火环）/ 21（`SKILL_SPACEMOVE` 瞬息移动）效果体**
+    // （卡 `openmir2-m3-firewind-spacemove-wire`）。oracle 锚：
+    // - `DoSpell` 的 `case SKILL_FIREWIND`（`MagicManager.cs:259-264`）=> `MagPushArround(playObject, level)`，
+    //   `result > 0 => boTrain = true`；**无 in-case 帧**（`RM_MAGICFIRE` 由共享尾 `:648-658` 发）。
+    // - `case SKILL_SPACEMOVE`（`:403-409`）：先 `SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType,Effect),
+    //   MakeLong(nTargetX,nTargetY), targerActors, "")`（`targerActors = targetObject?.ActorId ?? 0`）、
+    //   `boSpellFire = false`，再 `MagSaceMove(...)`（`:876-891`）；`true => boTrain = true`。
+    // - 帧序：`:159` 的 `RM_SPELL` 已由本函数开头的无条件广播发出（先于本支）=> 这里**不再发**。
+    //   效果体内部的帧（21 的 `RM_MAGICFIRE`、`RM_SPACEMOVE_FIRE2`、逐格 `RM_PUSH`）在本支按 oracle 序发。
+    if matches!(
+        req.magic_id,
+        mir2_world::magic::SKILL_FIREWIND | mir2_world::magic::SKILL_SPACEMOVE
+    ) {
+        if let Some(magic) = magic_table.get(req.magic_id) {
+            // `CretInNearXy` 的 snap（与 17/30/41、20、46 同口径）：命中才把坐标改成目标实际坐标。
+            let (tx, ty, hit) = spell_snap_target(
+                world,
+                self_map,
+                req.target_actor_id,
+                req.target_x,
+                req.target_y,
+            );
+            // `DoSpell` 距离门（`MagicManager.cs:155`，用 snap 后坐标；i32 域，同兄弟块）。
+            if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
+                // `MagicManager.cs:160-163`：`if (targetObject != null && targetObject.Death)
+                // targetObject = null;` —— 21 的 `targerActors` 与 8 的共享尾都读归一后的值。
+                let target_id = if hit {
+                    world
+                        .entities
+                        .get(req.target_actor_id)
+                        .filter(|t| !t.death)
+                        .map(|t| t.id)
+                } else {
+                    None
+                };
+                let magic_level = matched.as_ref().map_or(0, |m| m.level);
+                // `boSpellFire`：8 保持 `true`（共享尾发帧）；21 在 case 内发帧后置 `false`。
+                let mut bo_spell_fire = true;
+                let bo_train: bool;
+                if req.magic_id == mir2_world::magic::SKILL_SPACEMOVE {
+                    // `:406` `RM_MAGICFIRE`（在 `MagSaceMove` **之前**）。处理器无「排除自己」守卫
+                    // （`PlayObject.Message.cs:1788-1793`）=> 收件人含施法者自己。
+                    let body = smframe::sm_magicfire(
+                        actor_id,
+                        wire_coord(tx),
+                        wire_coord(ty),
+                        magic.effect_type,
+                        magic.effect,
+                        target_id.unwrap_or(0),
+                    );
+                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+                    bo_spell_fire = false;
+                    // `MapRandomMove(playObject.HomeMap, 1)`：`HomeMap` 是存档 `CharacterData.HomeMap`，
+                    // 经注册表解析成 `map_id`（`None` = oracle `FindMap == null`）。
+                    let home_map_name = saves
+                        .get(chr_name)
+                        .and_then(|s| s.record.data.home_map.clone());
+                    let home_map = home_map_name
+                        .as_deref()
+                        .and_then(|n| registry.and_then(|r| r.id_of(n)));
+                    // `:881` `SendRefMsg(RM_SPACEMOVE_FIRE2, 0,0,0,0,"")` ⇒ 每个接收端
+                    // `SM_SPACEMOVE_HIDE2(806)`（`PlayObject.Message.cs:1956-1965` 走 `SendSocket`）。
+                    // `SendRefMsg` 的收件人 = 施法者所在格 ±12 内全部 `Race==Play` 玩家（**含自己**）
+                    // （`BaseObject.Message.cs:383-449`）⇒ 用带自身的广播，**不是** `send_self_frame`。
+                    // 次序：oracle 在 `MapRandomMove` **之前**发 ⇒ 必须挂在 `after_gate`（旧图/旧坐标），
+                    // 否则换图后会按新图的收件人集结算（旧图观察者会漏收）。
+                    let out = world.cast_space_move_spell_with(
+                        chr_name,
+                        actor_id,
+                        i32::from(magic_level),
+                        home_map,
+                        |w| {
+                            let body = smframe::sm_spacemove_hide(
+                                mir2_protocol::messages::SM_SPACEMOVE_HIDE2,
+                                actor_id,
+                            );
+                            broadcast_ref_msg_with_self(w, online, gates, actor_id, &[body]);
+                        },
+                    );
+                    // oracle `MagSaceMove` 的返回值 = `Random(11)` 门是否通过（与落地无关）。
+                    bo_train = out.result;
+                    // 登记（本卡不做）：`IsTimeRecall = false`（无该字段；`out.cross_map` 仅回报换图与否）、
+                    // `OnEnvirnomentChanged()`、`VisibleHumanList.Clear()`；换图簇 633/634/807 由
+                    // `drain_map_change` 于本 tick 下行段发出。
+                } else {
+                    // `case SKILL_FIREWIND`：`MagPushArround(playObject, userMagic.Level)`。
+                    let (pushed, events) =
+                        world.cast_firewind_spell(actor_id, i32::from(magic_level));
+                    // oracle `result > 0` = 至少对一个目标调用了 `CharPushed`（不看实际推进格数）。
+                    bo_train = pushed > 0;
+                    // `CharPushed` 内部的 `RM_PUSH` => `SM_BACKSTEP(9)`，**逐格一条**、保序。
+                    // 收件人含受推者自己（`PlayObject.Message.cs:1527` 的复合条件恒真）。
+                    for ev in &events {
+                        let Some(d) = displays.get(ev.actor_id).cloned() else {
+                            glog!(
+                                "WRN",
+                                "抗拒火环推挤：actor={} 无展示表 => 跳过 SM_BACKSTEP（登记）",
+                                ev.actor_id
+                            );
+                            continue;
+                        };
+                        if let Some(body) = downlink::backstep_frame(ev, &d) {
+                            // oracle `CharPushed` **每推进一格**立即 `SendRefMsg(RM_PUSH)` ⇒ 收件人
+                            // 按该步坐标（`ev.x/ev.y`）算，而不是整段推挤后的最终坐标。
+                            let map_id = world.entities.get(ev.actor_id).map_or(0, |e| e.map_id);
+                            broadcast_ref_msg_with_self_at(
+                                world,
+                                online,
+                                gates,
+                                ev.actor_id,
+                                (map_id, ev.x, ev.y),
+                                &[body],
+                            );
+                        }
+                        // `CharPushed` 收尾把 `Dir` 置为 `nBackDir`（推进 > 0）=> 展示表同步。
+                        if let Some(e) = world.entities.get(ev.actor_id) {
+                            set_display_dir(displays, ev.actor_id, e.dir());
+                        }
+                    }
+                }
+                // 共享尾（`MagicManager.cs:644-669`）：`boSpellFire => RM_MAGICFIRE`；
+                // `Level < 3 && boTrain && TrainLevel[Level] <= Abil.Level => Random(3)+1` 熟练度。
+                let mut train = magic::SkillTrainState {
+                    magic_id: req.magic_id,
+                    level: magic_level,
+                    tran_point: matched.as_ref().map_or(0, |m| m.tran_point),
+                    train_lv: magic.train_lv,
+                    train_level: magic.train_level,
+                    max_train: magic.max_train,
+                };
+                let tail = {
+                    let rng = &mut world.rng;
+                    magic::do_spell_tail(
+                        false,
+                        bo_spell_fire,
+                        bo_train,
+                        // `PlayObject.FastTrain` 未装载 => false（登记，同召唤/诱惑/分身面）。
+                        false,
+                        caster_abil_level,
+                        rng,
+                        &mut train,
+                    )
+                };
+                // 熟练度回写存档记录（`MakeSaveRcd` 的 `MagicList` 同源）。
+                if let Some(rcd) = saves
+                    .get_mut(chr_name)
+                    .and_then(|s| s.record.data.magic.as_mut())
+                    .and_then(|list| {
+                        list.iter_mut()
+                            .flatten()
+                            .find(|m| m.mag_idx == req.magic_id)
+                    })
+                {
+                    rcd.level = train.level;
+                    rcd.tran_point = train.tran_point;
+                }
+                // `:648-658` `boSpellFire => RM_MAGICFIRE`（8 的帧；21 已在 case 内发过、门为 false）。
+                if tail.magic_fire {
+                    let body = smframe::sm_magicfire(
+                        actor_id,
+                        wire_coord(tx),
+                        wire_coord(ty),
+                        magic.effect_type,
+                        magic.effect,
+                        target_id.unwrap_or(0),
+                    );
+                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+                }
+                // `:659-669` 熟练度尾帧 `RM_MAGIC_LVEXP`。
+                if tail.train.levelup_msg {
+                    let body = smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
+                    send_self_frame(online, gates, chr_name, body);
+                }
+                let _ = tail.returned;
+            }
+        } else {
+            glog!(
+                "DBG",
+                "CM_SPELL：魔号 {} 无 MagicInfo => 8/21 效果体不接（登记）",
+                req.magic_id
+            );
+        }
+    }
     // **第②片**：召唤面（17/30/41）的 `default` 支效果体（`PlayObject.Attack.cs:1271-1279` + `MagicManager.cs:145-670`）。
     if matches!(
         req.magic_id,
@@ -5781,7 +5964,7 @@ fn broadcast_ref_msg(
     actor_id: i32,
     bodies: &[Vec<u8>],
 ) {
-    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, false);
+    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, false, None);
 }
 
 /// `RM_MAGICFIRE` 口径（`PlayObject.Message.cs:1788-1793` 无 `ActorId != ActorId` 守卫）：
@@ -5793,7 +5976,22 @@ fn broadcast_ref_msg_with_self(
     actor_id: i32,
     bodies: &[Vec<u8>],
 ) {
-    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, true);
+    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, true, None);
+}
+
+/// [`broadcast_ref_msg_with_self`] 的**显式坐标**版：收件人按 `(map_id, x, y)` 算（不含实体当前坐标）。
+///
+/// `CharPushed` 的逐格 `RM_PUSH` 用它：oracle 每推进一格立即发（`BaseObject.cs:871`），
+/// 收件人按**该步**的 `CurrX/CurrY` 计算，而不是整段推挤结束后的最终坐标。
+fn broadcast_ref_msg_with_self_at(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    at: (usize, i32, i32),
+    bodies: &[Vec<u8>],
+) {
+    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, true, Some(at));
 }
 
 /// [`broadcast_ref_msg`] / [`broadcast_ref_msg_with_self`] 的公共体。
@@ -5804,8 +6002,15 @@ fn broadcast_ref_msg_opt(
     actor_id: i32,
     bodies: &[Vec<u8>],
     include_self: bool,
+    at: Option<(usize, i32, i32)>,
 ) {
-    for target_id in chat::hear_targets(world, actor_id, chat::SEND_REF_MSG_RANGE) {
+    let targets = match at {
+        Some((map_id, x, y)) => {
+            chat::hear_targets_at(world, actor_id, map_id, x, y, chat::SEND_REF_MSG_RANGE)
+        }
+        None => chat::hear_targets(world, actor_id, chat::SEND_REF_MSG_RANGE),
+    };
+    for target_id in targets {
         if !include_self && target_id == actor_id {
             continue;
         }
@@ -22299,5 +22504,742 @@ mod tests {
                 "[魔号 {magic_id}] SM_SPELL 必须仍排在 SM_MAGICFIRE 之前；实得 {seq:?}"
             );
         }
+    }
+
+    // ---- 魔号 8（SKILL_FIREWIND）/ 21（SKILL_SPACEMOVE）效果体接线（卡 openmir2-m3-firewind-spacemove-wire）----
+
+    /// 8/21 专用布置的公共件：世界 + 施法者 + 0 号图 / 1 号 Home 图 + 合成注册表 + 会话。
+    ///
+    /// 注册表用临时目录造两张 64×64 全走格 `.map`（`[0|f0]` / `[home|f1]`）⇒ `id_of("home") == 1`，
+    /// 与 `world.maps[1]` 同下标（宿主生产路径同一口径，见 `enter::set_world_map` 的 `/ 1` 约定）。
+    #[allow(clippy::type_complexity)]
+    fn effect_rig(
+        caster_level: u8,
+        magic_id: u16,
+        home_map: Option<&str>,
+        tag: &str,
+    ) -> (
+        mir2_world::World,
+        i32,
+        OnlineRegistry,
+        std::collections::HashMap<String, SavedHuman>,
+        magics::MagicTable,
+        downlink::DisplayTable,
+        std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        std::path::PathBuf,
+    ) {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        world.maps.push(mir2_world::MapGrid::new(64, 64));
+        world.open_session("caster");
+        let mut e = new_player_entity("caster".to_string(), 10, 10);
+        e.level = caster_level;
+        let caster = world.enter_map("caster", e, 0).expect("进图");
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            caster,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uc".into(),
+                chr_name: "caster".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 911,
+                actor_id: caster,
+            },
+        );
+        let (tx0, rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut record = stage6_record();
+        record.data.magic = Some(vec![Some(record::MagicRcd {
+            mag_idx: magic_id,
+            level: 1,
+            magic_key: u16::from(b'm'),
+            tran_point: 0,
+        })]);
+        record.data.home_map = home_map.map(str::to_string);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert(
+            "caster".into(),
+            SavedHuman {
+                account: "uc".into(),
+                record,
+                enter_map: "0".into(),
+            },
+        );
+        // `train_level` 全部拉高 ⇒ 训练尾 `TrainLevel[Level] <= Abil.Level` 恒假 ⇒ 尾**不抽**
+        // （本用例只验证效果体的取数，不把共享尾的 `Random(3)` 混进来）。
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id,
+            effect: 3,
+            effect_type: 4,
+            train_lv: 3,
+            train_level: [255; 4],
+            ..mir2_data::MagicInfo::default()
+        }]);
+        let dir = std::env::temp_dir().join(format!("mir2-m821-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Envir")).expect("建 Envir");
+        std::fs::create_dir_all(dir.join("Map")).expect("建 Map");
+        let synth = |w: u16, h: u16| {
+            let mut buf = vec![
+                0u8;
+                mir2_envir::HEADER_BYTES
+                    + usize::from(w) * usize::from(h) * mir2_envir::CELL_BYTES
+            ];
+            buf[0..2].copy_from_slice(&w.to_le_bytes());
+            buf[2..4].copy_from_slice(&h.to_le_bytes());
+            buf
+        };
+        std::fs::write(dir.join("Map").join("f0.map"), synth(64, 64)).expect("写 f0");
+        std::fs::write(dir.join("Map").join("f1.map"), synth(64, 64)).expect("写 f1");
+        std::fs::write(dir.join("Envir").join("MapInfo.txt"), "[0|f0]\n[home|f1]\n")
+            .expect("写 MapInfo");
+        (
+            world,
+            caster,
+            online,
+            saves,
+            magic_table,
+            displays,
+            gates,
+            rx,
+            dir,
+        )
+    }
+
+    /// 取一次施法在 gate 通道上产生的帧 `(socket, ident 序列)`（`SendFrame` only）。
+    fn effect_drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, Vec<u16>)> {
+        let mut out: Vec<(i32, Vec<u16>)> = Vec::new();
+        while let Ok(m) = rx.try_recv() {
+            if let SimToGate::SendFrame { socket, body } = m {
+                if body.len() < 6 {
+                    continue;
+                }
+                let ident = u16::from_le_bytes([body[4], body[5]]);
+                match out.iter_mut().find(|(s, _)| *s == socket) {
+                    Some((_, ids)) => ids.push(ident),
+                    None => out.push((socket, vec![ident])),
+                }
+            }
+        }
+        out
+    }
+
+    fn effect_seq(frames: &[(i32, Vec<u16>)], socket: i32) -> Vec<u16> {
+        frames
+            .iter()
+            .find(|(s, _)| *s == socket)
+            .map(|(_, ids)| ids.clone())
+            .unwrap_or_default()
+    }
+
+    /// **魔号 8 正例（生产入口 `handle_spell_cmd`）**：效果体被进入、取数逐项等于 oracle 期望、
+    /// 位移与 oracle 一致、帧序 `SM_SPELL < SM_BACKSTEP* < SM_MAGICFIRE`。
+    ///
+    /// 期望表**独立复算**：另起一条同 seed 的 `RandomNumber`，按 `MagicManager.cs:37/41` 的
+    /// 字面式重算 `Random(20)` 门与 `Random(2)` 步数；落点用**已验收**的
+    /// [`mir2_world::magic::char_pushed`]（对拍向量覆盖）在同一初始格上复算。
+    #[test]
+    fn spell_cmd_firewind_enters_effect_draws_and_pushes() {
+        use mir2_shared::rng::RandomNumber;
+        let (
+            mut world,
+            caster,
+            mut online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx,
+            dir,
+        ) = effect_rig(20, mir2_world::magic::SKILL_FIREWIND, None, "fw");
+        // 目标：相邻（11,10）、等级 15；远端（20,20）也在 VisibleActors 里（应被 |Δ|<=1 门挡掉）。
+        let target = {
+            let mut e = new_player_entity("target".to_string(), 11, 10);
+            e.level = 15;
+            world.add_entity(e)
+        };
+        let far = {
+            let mut e = new_player_entity("far".to_string(), 20, 20);
+            e.level = 15;
+            world.add_entity(e)
+        };
+        world.tick();
+        displays.set(
+            target,
+            downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"target".to_vec()),
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ut".into(),
+                chr_name: "target".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 912,
+                actor_id: target,
+            },
+        );
+        world.entities.get_mut(caster).unwrap().visible_actors = vec![
+            mir2_world::entity::VisibleBaseObject {
+                target: far,
+                flag: mir2_world::entity::VisibleFlag::Show,
+            },
+            mir2_world::entity::VisibleBaseObject {
+                target,
+                flag: mir2_world::entity::VisibleFlag::Show,
+            },
+        ];
+        let seed = 1;
+        world.rng = RandomNumber::with_seed(seed);
+        let before = world.rng.clone();
+        // ---- 期望表（独立复算）----
+        let mut exp = RandomNumber::with_seed(seed);
+        let gap = 20 - 15;
+        let push_level = 1;
+        let want_chance = exp.random_below(20) < 6 + push_level * 3 + gap;
+        let want_steps = if want_chance {
+            1 + exp.random_below(2)
+        } else {
+            0
+        };
+        assert!(want_chance, "本 seed 必须让门通过，否则正例无判别力");
+        let mut probe_map = mir2_world::MapGrid::new(64, 64);
+        let (mut px, mut py, mut pdir) = (11_i32, 10_i32, 0_u8);
+        let want_moved = mir2_world::magic::char_pushed(
+            &mut probe_map,
+            &mut px,
+            &mut py,
+            &mut pdir,
+            mir2_world::magic::next_direction(10, 10, 11, 10),
+            u8::try_from(want_steps).unwrap(),
+            target,
+        );
+        assert_eq!(
+            want_moved, want_steps,
+            "期望表自洽：全走格下步数 = 推进格数"
+        );
+
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(11, 10),
+            mir2_world::magic::SKILL_FIREWIND,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+        );
+        // ① 取数：恰好 2 抽（`Random(20)` + `Random(2)`；训练尾被 train_level=255 挡住）。
+        assert_eq!(
+            draws_between(&before, &world.rng),
+            2,
+            "8 的效果体必须恰抽 2 次（门 20 + 步数 2）"
+        );
+        // ② 位移：与 oracle 独立复算一致。
+        let e = world.entities.get(target).unwrap();
+        assert_eq!((e.x, e.y), (px, py), "落点必须等于 oracle 复算");
+        assert_eq!(
+            e.dir(),
+            mir2_world::magic::back_dir(2),
+            "CharPushed 收尾 Dir = nBackDir"
+        );
+        // ③ 帧序：SM_SPELL 先；逐格 SM_BACKSTEP；SM_MAGICFIRE 在共享尾最后。
+        let seq = effect_seq(&effect_drain(&mut rx), 912);
+        println!("FIREWIND_SEQ {seq:?}");
+        assert_eq!(
+            seq.iter()
+                .filter(|id| **id == mir2_protocol::messages::SM_SPELL)
+                .count(),
+            1
+        );
+        assert_eq!(
+            seq.iter()
+                .filter(|id| **id == mir2_protocol::messages::SM_BACKSTEP)
+                .count(),
+            want_steps as usize,
+            "每推进一格一条 SM_BACKSTEP"
+        );
+        let i_spell = seq
+            .iter()
+            .position(|id| *id == mir2_protocol::messages::SM_SPELL)
+            .unwrap();
+        let i_fire = seq
+            .iter()
+            .position(|id| *id == mir2_protocol::messages::SM_MAGICFIRE)
+            .expect("共享尾必发 SM_MAGICFIRE");
+        let i_push = seq
+            .iter()
+            .position(|id| *id == mir2_protocol::messages::SM_BACKSTEP)
+            .expect("应至少一条 SM_BACKSTEP");
+        assert!(
+            i_spell < i_push && i_push < i_fire,
+            "oracle 帧序 159 -> CharPushed -> 尾"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **魔号 8 阴性对照**：`Abil.Level > target.Level` 门不过 ⇒ **零抽数、零位移、零 SM_BACKSTEP**；
+    /// 断言用**随后连续三抽**（单抽在 seed=42 下多个索引同为 1，判别力不足）。
+    #[test]
+    fn spell_cmd_firewind_level_gate_blocks_all_draws() {
+        use mir2_shared::rng::RandomNumber;
+        let (
+            mut world,
+            caster,
+            mut online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx,
+            dir,
+        ) = effect_rig(15, mir2_world::magic::SKILL_FIREWIND, None, "fw-neg");
+        let target = {
+            let mut e = new_player_entity("target".to_string(), 11, 10);
+            e.level = 15;
+            world.add_entity(e)
+        };
+        world.tick();
+        displays.set(
+            target,
+            downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"target".to_vec()),
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ut".into(),
+                chr_name: "target".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 912,
+                actor_id: target,
+            },
+        );
+        world.entities.get_mut(caster).unwrap().visible_actors =
+            vec![mir2_world::entity::VisibleBaseObject {
+                target,
+                flag: mir2_world::entity::VisibleFlag::Show,
+            }];
+        let seed = 1;
+        world.rng = RandomNumber::with_seed(seed);
+        let before = world.rng.clone();
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(11, 10),
+            mir2_world::magic::SKILL_FIREWIND,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+        );
+        assert_eq!(
+            draws_between(&before, &world.rng),
+            0,
+            "等级门不过 ⇒ 一个随机数都不抽"
+        );
+        let e = world.entities.get(target).unwrap();
+        assert_eq!((e.x, e.y), (11, 10), "等级门不过 ⇒ 不位移");
+        let seq = effect_seq(&effect_drain(&mut rx), 912);
+        assert!(
+            !seq.contains(&mir2_protocol::messages::SM_BACKSTEP),
+            "无推挤帧；实得 {seq:?}"
+        );
+        // 随后连续三抽：与「未被消费的参照流」逐项相同。
+        let mut control = before.clone();
+        for k in 0..3 {
+            assert_eq!(
+                world.rng.random_below(10),
+                control.random_below(10),
+                "阴性对照第 {k} 抽必须等于参照流"
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **魔号 21 正例（生产入口 `handle_spell_cmd`）**：门通过 ⇒ 取数逐项等于 oracle 期望
+    /// （门下 11 + `MapRandomMove` 两抽，全走格 ⇒ `SpaceMoveGetRandXY` 首查即中、不再抽）；
+    /// 落点/换图与 `MapRandomMove` 期望一致；帧 `SM_MAGICFIRE` → `SM_SPACEMOVE_HIDE2`；
+    /// `SessionRegistry` 记一条 `space_move_show = Some(true)` 的换图事件（宿主出 633/634/807）。
+    #[test]
+    fn spell_cmd_spacemove_enters_effect_draws_and_moves_home() {
+        use mir2_shared::rng::RandomNumber;
+        let (mut world, caster, online, mut saves, magic_table, mut displays, gates, mut rx, dir) =
+            effect_rig(50, mir2_world::magic::SKILL_SPACEMOVE, Some("home"), "sm");
+        let seed = 1;
+        world.rng = RandomNumber::with_seed(seed);
+        let before = world.rng.clone();
+        // ---- 期望表（独立复算）：`Random(11)` 门 → `Random(43)+20` 两次（高 64 ∈ [30,150) ⇒ nEgdey=20）----
+        let mut exp = RandomNumber::with_seed(seed);
+        let magic_level = 1;
+        let want_gate = exp.random_below(11) < magic_level * 2 + 4;
+        assert!(want_gate, "本 seed 必须让 21 的门通过，否则正例无判别力");
+        let want_x = exp.random_below(64 - 20 - 1) + 20;
+        let want_y = exp.random_below(64 - 20 - 1) + 20;
+
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(10, 10),
+            mir2_world::magic::SKILL_SPACEMOVE,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            Some(&registry_for(&dir)),
+            &table,
+            &mut displays,
+            &gates,
+        );
+        // ① 取数：门 + 两次 `MapRandomMove`；全走格 ⇒ 移位环 0 抽。恰 3 抽。
+        assert_eq!(
+            draws_between(&before, &world.rng),
+            3,
+            "21 正例：Random(11) + MapRandomMove 两抽，移位环首查即中"
+        );
+        // ② 落点 = 独立复算；跨图 ⇒ map_id 1。
+        let e = world.entities.get(caster).unwrap();
+        assert_eq!(
+            (e.x, e.y, e.map_id),
+            (want_x, want_y, 1),
+            "落点必须等于 oracle 复算"
+        );
+        // ③ 换图事件：`space_move_show = Some(true)` ⇒ SM_SPACEMOVE_SHOW2（oracle nInt == 1）。
+        let changes = world.sessions.map_changes();
+        assert_eq!(changes.len(), 1, "成功落地恰一条 MapChange");
+        assert_eq!(changes[0].map_id, 1);
+        assert_eq!((changes[0].x, changes[0].y), (want_x, want_y));
+        assert_eq!(changes[0].space_move_show, Some(true));
+        // ④ 帧：`RM_MAGICFIRE`（case 内、先）→ `RM_SPACEMOVE_FIRE2` ⇒ `SM_SPACEMOVE_HIDE2`。
+        let seq = effect_seq(&effect_drain(&mut rx), 911);
+        println!("SPACEMOVE_SEQ {seq:?}");
+        let i_fire = seq
+            .iter()
+            .position(|id| *id == mir2_protocol::messages::SM_MAGICFIRE)
+            .expect("case 内 RM_MAGICFIRE");
+        let i_hide = seq
+            .iter()
+            .position(|id| *id == mir2_protocol::messages::SM_SPACEMOVE_HIDE2)
+            .expect("门通过 ⇒ RM_SPACEMOVE_FIRE2 -> SM_SPACEMOVE_HIDE2");
+        assert!(
+            i_fire < i_hide,
+            "oracle 序：:406 的 RM_MAGICFIRE 先于 :881 的 FIRE2"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **魔号 21 `SM_SPACEMOVE_HIDE2(806)` 的收件人与发送次序牙**：oracle `MagicManager.cs:881`
+    /// 的 `SendRefMsg(RM_SPACEMOVE_FIRE2, …)` 送达施法者所在格 ±12 内**全部玩家（含自己）**
+    /// （`BaseObject.Message.cs:383-449`；每个接收端 `PlayObject.Message.cs:1956-1965` 各自发 806），
+    /// 且发生在 `MapRandomMove` **之前** ⇒ 收件人按**旧图/旧坐标**算。
+    ///
+    /// 布置：观察者 `obs` 在旧图 (11,10)（socket 913，与施法者 (10,10) 相邻）；HomeMap 是 1 号图。
+    /// 断言：施法者 socket 911 与观察者 socket 913 **各**收到恰好一条 806。
+    /// 变异牙：改回 `send_self_frame` ⇒ 913 一条都收不到；把发送挪到换图之后 ⇒ 施法者已到
+    /// 1 号图，旧图上的 913 不在 `hear_targets`（`map_id` 不同）⇒ 913 的断言同样必红。
+    #[test]
+    fn spell_cmd_spacemove_hide2_reaches_old_map_observers() {
+        use mir2_shared::rng::RandomNumber;
+        let (
+            mut world,
+            caster,
+            mut online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx,
+            dir,
+        ) = effect_rig(
+            50,
+            mir2_world::magic::SKILL_SPACEMOVE,
+            Some("home"),
+            "sm-obs",
+        );
+        // 旧图观察者：与施法者 (10,10) 相邻，±12 内且 Race==Play（`new_player_entity` 已置）。
+        let obs = {
+            let mut e = new_player_entity("obs".to_string(), 11, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uo".into(),
+                chr_name: "obs".into(),
+                session_id: 3,
+                gate_idx: 0,
+                socket: 913,
+                actor_id: obs,
+            },
+        );
+        world.tick();
+        let seed = 1;
+        world.rng = RandomNumber::with_seed(seed);
+        assert!(
+            RandomNumber::with_seed(seed).random_below(11) < 2 + 4,
+            "本 seed 必须让 21 的门通过"
+        );
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(10, 10),
+            mir2_world::magic::SKILL_SPACEMOVE,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            Some(&registry_for(&dir)),
+            &table,
+            &mut displays,
+            &gates,
+        );
+        // 施法者确实换到 1 号图（否则「次序」变异无法被收件人集合暴露）。
+        assert_eq!(
+            world.entities.get(caster).unwrap().map_id,
+            1,
+            "成功落地应换图"
+        );
+        assert_eq!(world.entities.get(obs).unwrap().map_id, 0, "观察者仍在旧图");
+        let frames = effect_drain(&mut rx);
+        let caster_seq = effect_seq(&frames, 911);
+        let obs_seq = effect_seq(&frames, 913);
+        println!("SPACEMOVE_OBS caster={caster_seq:?} obs={obs_seq:?}");
+        let count = |seq: &[u16]| {
+            seq.iter()
+                .filter(|id| **id == mir2_protocol::messages::SM_SPACEMOVE_HIDE2)
+                .count()
+        };
+        assert_eq!(
+            count(&caster_seq),
+            1,
+            "施法者自己恰收一条 806；实得 {caster_seq:?}"
+        );
+        assert_eq!(
+            count(&obs_seq),
+            1,
+            "旧图观察者恰收一条 806（SendRefMsg ±12 含旁观者）；实得 {obs_seq:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **魔号 21 阴性对照**：`Random(11)` 门不过 ⇒ **零抽数、零位移、无几换图事件、无 HIDE2**；
+    /// 随后连续三抽与参照流逐项相同。
+    #[test]
+    fn spell_cmd_spacemove_gate_blocks_all_draws() {
+        use mir2_shared::rng::RandomNumber;
+        let (mut world, caster, online, mut saves, magic_table, mut displays, gates, mut rx, dir) =
+            effect_rig(
+                0,
+                mir2_world::magic::SKILL_SPACEMOVE,
+                Some("home"),
+                "sm-neg",
+            );
+        // 把 `UserMagic.Level` 降到 0（`effect_rig` 缺省 1）⇒ 门 = `Random(11) < 4`。
+        // 固定 seed=7：首抽 = 4，`4 < 4` ⇒ 假（门不过）。
+        saves
+            .get_mut("caster")
+            .unwrap()
+            .record
+            .data
+            .magic
+            .as_mut()
+            .unwrap()[0]
+            .as_mut()
+            .unwrap()
+            .level = 0;
+        let seed = 7;
+        world.rng = RandomNumber::with_seed(seed);
+        let before = world.rng.clone();
+        assert!(
+            RandomNumber::with_seed(seed).random_below(11) >= 4,
+            "负数对照的 seed 必须让门失败"
+        );
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(10, 10),
+            mir2_world::magic::SKILL_SPACEMOVE,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            Some(&registry_for(&dir)),
+            &table,
+            &mut displays,
+            &gates,
+        );
+        // oracle `:879` 的门本身**恒抽一次** `Random(11)`；门不过时**不再**抽 `MapRandomMove`
+        // 的两抽、也不进移位环 ⇒ 恰好 1 抽。
+        assert_eq!(
+            draws_between(&before, &world.rng),
+            1,
+            "门不过 ⇒ 只有 Random(11) 一抽，不抽 MapRandomMove"
+        );
+        let e = world.entities.get(caster).unwrap();
+        assert_eq!((e.x, e.y, e.map_id), (10, 10, 0), "门不过 ⇒ 不位移");
+        assert!(
+            world.sessions.map_changes().is_empty(),
+            "门不过 ⇒ 无换图事件"
+        );
+        let seq = effect_seq(&effect_drain(&mut rx), 911);
+        assert!(
+            !seq.contains(&mir2_protocol::messages::SM_SPACEMOVE_HIDE2),
+            "门不过 ⇒ 不发 RM_SPACEMOVE_FIRE2；实得 {seq:?}"
+        );
+        // 随后连续三抽：参照流先复现门的那一抽，再逐项比。
+        let mut control = before.clone();
+        let _ = control.random_below(11);
+        for k in 0..3 {
+            assert_eq!(
+                world.rng.random_below(10),
+                control.random_below(10),
+                "阴性对照第 {k} 抽必须等于参照流"
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **魔号 21 次生登记牙**：`HomeMap` 解析不到（`FindMap == null`）⇒ 门通过仍返回 `result=true`
+    /// 且**照发** `RM_SPACEMOVE_FIRE2`，但 `MapRandomMove` 的两次抽数**不发生**、不位移。
+    #[test]
+    fn spell_cmd_spacemove_missing_home_map_gate_still_fires() {
+        use mir2_shared::rng::RandomNumber;
+        let (mut world, caster, online, mut saves, magic_table, mut displays, gates, mut rx, dir) =
+            effect_rig(50, mir2_world::magic::SKILL_SPACEMOVE, None, "sm-nohome");
+        let seed = 1;
+        let magic_level = 1;
+        world.rng = RandomNumber::with_seed(seed);
+        let before = world.rng.clone();
+        assert!(
+            RandomNumber::with_seed(seed).random_below(11) < magic_level * 2 + 4,
+            "本 seed 门通过"
+        );
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(10, 10),
+            mir2_world::magic::SKILL_SPACEMOVE,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            Some(&registry_for(&dir)),
+            &table,
+            &mut displays,
+            &gates,
+        );
+        assert_eq!(
+            draws_between(&before, &world.rng),
+            1,
+            "只有 Random(11) 一抽"
+        );
+        assert_eq!(
+            world.entities.get(caster).unwrap().map_id,
+            0,
+            "无 HomeMap ⇒ 不换图"
+        );
+        assert!(world.sessions.map_changes().is_empty());
+        let seq = effect_seq(&effect_drain(&mut rx), 911);
+        assert!(
+            seq.contains(&mir2_protocol::messages::SM_SPACEMOVE_HIDE2),
+            "oracle :881 在 FindMap 之前 ⇒ 仍发 FIRE2；实得 {seq:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 临时注册表（与 `effect_rig` 同目录约定）：`[0|f0]` / `[home|f1]` ⇒ `id_of("home") == 1`。
+    fn registry_for(dir: &std::path::Path) -> mir2_envir::MapRegistry {
+        mir2_envir::MapLoader::new(dir, "Map", "Envir")
+            .load_registry()
+            .expect("合成注册表")
     }
 }

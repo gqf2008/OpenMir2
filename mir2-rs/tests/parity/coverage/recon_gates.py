@@ -2353,10 +2353,19 @@ def cmd_mutate(args):
         # `bins/game-svr/src/main.rs` 的 `drain_buff_downlink` 生产调用）⇒ 归 wired；其**生产者缺位**
         # 登记在下方注释面 `_wired_no_producer`（不豁免 blocked）。
         "SM_CHARSTATUSCHANGED",
+        # 卡 `openmir2-m3-firewind-spacemove-wire`（2026-10-17）：魔号 21 `MagSaceMove` 的
+        # `SendRefMsg(RM_SPACEMOVE_FIRE2,…)`（oracle `MagicManager.cs:881`）已接生产发射点
+        # （`bins/game-svr/src/main.rs` 的 `broadcast_ref_msg_with_self(w, online, gates, actor_id,
+        #  &[smframe::sm_spacemove_hide(SM_SPACEMOVE_HIDE2, …) body])`，挂在
+        #  `cast_space_move_spell_with` 的 after_gate 钩子上、`MapRandomMove` 之前）
+        # ⇒ 按门规移出 blocked（自失效断言）。
+        # 同族的 `SM_SPACEMOVE_HIDE(800)`（`RM_SPACEMOVE_FIRE`）仍无发射点，留在 blocked。
+        "SM_SPACEMOVE_HIDE2",
     }
     # 仍 blocked（编码器已落地、生产路径无发射点）；各自 blocked_by 与出处（红名单 v2 §3 finding）：
     #   · 传送簇（切图/TransMap：HIDE 侧随切图簇；对照 SHOW(801)/SHOW2(807) 经
-    #     sessionwire::map_change_frames 已接）—— SM_SPACEMOVE_HIDE(800)/SM_SPACEMOVE_HIDE2(806)（V2-02）。
+    #     sessionwire::map_change_frames 已接）—— SM_SPACEMOVE_HIDE(800)（V2-02）；
+    #     HIDE2(806) 已随魔号 21 `MagSaceMove` 接线（`MagicManager.cs:881`）移入 `_wired_now`。
     #   · 怪物模型/形态簇（Entity 缺 skeleton 等形态字段 ⇒ 怪物动作帧发不出）
     #     —— SM_SKELETON(33)（V2-03）/ SM_ALIVE(27)（V2-04）/ SM_DIGUP(20)/SM_DIGDOWN(21)/SM_FLYAXE(22)/
     #        SM_LIGHTING(23)（V2-05）。
@@ -2372,7 +2381,7 @@ def cmd_mutate(args):
     #     SM_QUERYYBSELL(23021)/SM_716(716)（V2-13）。
     #   · 重连 / 换脸 / 掷骰 / 地面物品簇（杂项）—— SM_RECONNECT(802)/SM_CHANGEFACE(1104)/SM_MAGICFIRE_FAIL(639)/
     #     SM_PLAYDICE(8001)/SM_ITEMSHOW(610)（V2-14）。
-    _blocked = {"SM_SPACEMOVE_HIDE", "SM_SPACEMOVE_HIDE2", "SM_SKELETON", "SM_ALIVE",
+    _blocked = {"SM_SPACEMOVE_HIDE", "SM_SKELETON", "SM_ALIVE",
                 "SM_DIGUP", "SM_DIGDOWN", "SM_FLYAXE", "SM_LIGHTING", "SM_OPENHEALTH",
                 "SM_CLOSEHEALTH", "SM_INSTANCEHEALGUAGE", "SM_BREAKWEAPON",
                 "SM_LAMPCHANGEDURA", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL",

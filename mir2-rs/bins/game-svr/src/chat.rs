@@ -91,19 +91,44 @@ pub fn hear_targets(world: &World, speaker_id: i32, range: i32) -> Vec<i32> {
     let Some(speaker) = world.entities.get(speaker_id) else {
         return Vec::new();
     };
+    hear_targets_at(
+        world,
+        speaker_id,
+        speaker.map_id,
+        speaker.x,
+        speaker.y,
+        range,
+    )
+}
+
+/// [`hear_targets`] 的**显式坐标**版：收件人按传入的 `(map_id, x, y)` 计算，而不是实体的当前坐标。
+///
+/// 用于「实体坐标还没写回、但帧必须按该步位置发」的场合——典型是 `CharPushed` 的逐格
+/// `SendRefMsg(RM_PUSH, …)`（`BaseObject.cs:871`，oracle 每推进一格立即发，收件人按**该格**算）。
+#[must_use]
+pub fn hear_targets_at(
+    world: &World,
+    speaker_id: i32,
+    map_id: usize,
+    x: i32,
+    y: i32,
+    range: i32,
+) -> Vec<i32> {
+    let Some(speaker) = world.entities.get(speaker_id) else {
+        return Vec::new();
+    };
     if speaker.ob_mode || speaker.fixed_hide_mode {
         return vec![speaker_id];
     }
-    let (sx, sy, map) = (speaker.x, speaker.y, speaker.map_id);
     let mut out: Vec<i32> = world
         .entities
         .iter()
         .filter(|e| {
-            e.map_id == map
+            e.map_id == map_id
                 && e.race == ACTOR_RACE_PLAY
                 && !e.ghost
-                && (e.x - sx).abs() <= range
-                && (e.y - sy).abs() <= range
+                && (e.x - x).abs() <= range
+                && (e.y - y).abs() <= range
         })
         .map(|e| e.id)
         .collect();
@@ -192,6 +217,31 @@ mod tests {
         // ObMode ⇒ 只发自己（`Message.cs:390-394`）
         world.entities.get_mut(a).unwrap().ob_mode = true;
         assert_eq!(hear_targets(&world, a, SEND_REF_MSG_RANGE), vec![a]);
+    }
+
+    /// 显式坐标版：收件人按传入的 `(map_id,x,y)` 算，不看实体当前坐标。
+    /// `CharPushed` 逐格发 `RM_PUSH` 时实体坐标尚未写回最终值，必须用该步坐标。
+    #[test]
+    fn hear_targets_at_uses_given_coords_not_entity_position() {
+        let mut world = World::new(64, 64);
+        let speaker = put(&mut world, "speaker", 10, 10);
+        let observer = put(&mut world, "observer", 22, 10); // 距实体坐标 (10,10) 恰 12
+        assert_eq!(
+            hear_targets(&world, speaker, SEND_REF_MSG_RANGE),
+            vec![speaker, observer],
+            "实体坐标口径：observer 在 ±12 边界内"
+        );
+        // 显式坐标 (9,10)：observer 距离 13 ⇒ 出界（实体仍在 (10,10)，证明没有读实体坐标）。
+        assert_eq!(
+            hear_targets_at(&world, speaker, 0, 9, 10, SEND_REF_MSG_RANGE),
+            vec![speaker],
+            "显式坐标口径：observer 出界必须被剔除"
+        );
+        // 显式坐标 (11,10)：observer 距离 11 ⇒ 仍在（且含自己）。
+        assert_eq!(
+            hear_targets_at(&world, speaker, 0, 11, 10, SEND_REF_MSG_RANGE),
+            vec![speaker, observer]
+        );
     }
 
     #[test]
