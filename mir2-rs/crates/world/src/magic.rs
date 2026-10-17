@@ -250,6 +250,15 @@ pub fn is_warr_skill(mag_idx: i32) -> bool {
 /// `DoSpell` 的 `case SKILL_FIREWIND`（`MagicManager.cs:259-264`）⇒ `MagPushArround(...)`。
 pub const SKILL_FIREWIND: u16 = 8;
 
+/// `MagicConst.SKILL_ENERGYREPULSOR`（`src/Modules/SystemModule/Const/MagicConst.cs:183`）：气功波。
+///
+/// `DoSpell` 的 `case SKILL_ENERGYREPULSOR`（`MagicManager.cs:601-606`）与
+/// `case SKILL_FIREWIND`（同文件 `:259-264`）**函数体逐字相同**：
+/// `if (MagPushArround(playObject, userMagic.Level) > 0) { boTrain = true; } break;`
+/// （`MagPushArround` 定义在 `:24-52`）。37 不在 `IsWarrSkill` 的 9 个魔号内（`:82-100`）
+/// ⇒ 与 8 一样走 `DoSpell` 的非战士路径（`:151` 门通过），效果体/帧面完全一致。
+pub const SKILL_ENERGYREPULSOR: u16 = 37;
+
 /// `MagicConst.SKILL_SPACEMOVE`（`MagicConst.cs:88`）：瞬息移动。
 ///
 /// `DoSpell` 的 `case SKILL_SPACEMOVE`（`MagicManager.cs:403-410`）：先发 `RM_MAGICFIRE`

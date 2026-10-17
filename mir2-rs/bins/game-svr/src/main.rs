@@ -5280,10 +5280,14 @@ fn handle_spell_cmd(
             }
         }
     }
-    // **魔号 8（`SKILL_FIREWIND` 抗拒火环）/ 21（`SKILL_SPACEMOVE` 瞬息移动）效果体**
-    // （卡 `openmir2-m3-firewind-spacemove-wire`）。oracle 锚：
+    // **魔号 8（`SKILL_FIREWIND` 抗拒火环）/ 21（`SKILL_SPACEMOVE` 瞬息移动）/
+    // 37（`SKILL_ENERGYREPULSOR` 气功波）效果体**
+    // （卡 `openmir2-m3-firewind-spacemove-wire`；37 于本卡接线）。oracle 锚：
     // - `DoSpell` 的 `case SKILL_FIREWIND`（`MagicManager.cs:259-264`）=> `MagPushArround(playObject, level)`，
     //   `result > 0 => boTrain = true`；**无 in-case 帧**（`RM_MAGICFIRE` 由共享尾 `:648-658` 发）。
+    // - `case SKILL_ENERGYREPULSOR`（`:601-606`）与上一支**函数体逐字相同**（同 `MagPushArround`、
+    //   同 `boTrain` 门、无 in-case 帧，且 37 不在 `IsWarrSkill` 的 9 个魔号内）
+    //   ⇒ 37 与 8 的效果体/帧面完全一致。
     // - `case SKILL_SPACEMOVE`（`:403-409`）：先 `SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType,Effect),
     //   MakeLong(nTargetX,nTargetY), targerActors, "")`（`targerActors = targetObject?.ActorId ?? 0`）、
     //   `boSpellFire = false`，再 `MagSaceMove(...)`（`:876-891`）；`true => boTrain = true`。
@@ -5291,7 +5295,9 @@ fn handle_spell_cmd(
     //   效果体内部的帧（21 的 `RM_MAGICFIRE`、`RM_SPACEMOVE_FIRE2`、逐格 `RM_PUSH`）在本支按 oracle 序发。
     if matches!(
         req.magic_id,
-        mir2_world::magic::SKILL_FIREWIND | mir2_world::magic::SKILL_SPACEMOVE
+        mir2_world::magic::SKILL_FIREWIND
+            | mir2_world::magic::SKILL_ENERGYREPULSOR
+            | mir2_world::magic::SKILL_SPACEMOVE
     ) {
         if let Some(magic) = magic_table.get(req.magic_id) {
             // `CretInNearXy` 的 snap（与 17/30/41、20、46 同口径）：命中才把坐标改成目标实际坐标。
@@ -5365,7 +5371,8 @@ fn handle_spell_cmd(
                     // `OnEnvirnomentChanged()`、`VisibleHumanList.Clear()`；换图簇 633/634/807 由
                     // `drain_map_change` 于本 tick 下行段发出。
                 } else {
-                    // `case SKILL_FIREWIND`：`MagPushArround(playObject, userMagic.Level)`。
+                    // `case SKILL_FIREWIND`（`:259-264`）/ `case SKILL_ENERGYREPULSOR`（`:601-606`；
+                    // 两处函数体逐字相同）：`MagPushArround(playObject, userMagic.Level)`。
                     let (pushed, events) =
                         world.cast_firewind_spell(actor_id, i32::from(magic_level));
                     // oracle `result > 0` = 至少对一个目标调用了 `CharPushed`（不看实际推进格数）。
@@ -5458,7 +5465,7 @@ fn handle_spell_cmd(
         } else {
             glog!(
                 "DBG",
-                "CM_SPELL：魔号 {} 无 MagicInfo => 8/21 效果体不接（登记）",
+                "CM_SPELL：魔号 {} 无 MagicInfo => 8/21/37 效果体不接（登记）",
                 req.magic_id
             );
         }
@@ -23233,6 +23240,378 @@ mod tests {
             seq.contains(&mir2_protocol::messages::SM_SPACEMOVE_HIDE2),
             "oracle :881 在 FindMap 之前 ⇒ 仍发 FIRE2；实得 {seq:?}"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- 魔号 37（`SKILL_ENERGYREPULSOR` 气功波）：与魔号 8 共用同一效果体的对拍 ----
+    //
+    // oracle 事实：`MagicManager.cs:601-606` 的 `case SKILL_ENERGYREPULSOR` 与 `:259-264` 的
+    // `case SKILL_FIREWIND` **函数体逐字相同**（`MagPushArround(playObject, userMagic.Level)`）；
+    // `IsWarrSkill`（`:82-100`）的 9 个魔号不含 37 ⇒ 同样走非战士路径。故 37 的效果体、取数、
+    // 帧面必须与 8 完全一致（唯一差异是 `SM_SPELL` 尾的魔号字段）。
+
+    /// 37/8 对拍场景：施法者(10,10)/20 级；可推目标 `target`(11,10)/15 级；远端 `far`(20,20)/15 级
+    /// （远端只用于证明 `MagPushArround` 的 |Δ|<=1 门不因图里多一个实体而改变）。
+    #[allow(clippy::type_complexity)]
+    fn push_scene(
+        magic_id: u16,
+        tag: &str,
+    ) -> (
+        mir2_world::World,
+        i32,
+        OnlineRegistry,
+        std::collections::HashMap<String, SavedHuman>,
+        magics::MagicTable,
+        downlink::DisplayTable,
+        std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        std::path::PathBuf,
+        i32,
+    ) {
+        let (mut world, caster, mut online, saves, magic_table, mut displays, gates, rx, dir) =
+            effect_rig(20, magic_id, None, tag);
+        let target = {
+            let mut e = new_player_entity("target".to_string(), 11, 10);
+            e.level = 15;
+            world.add_entity(e)
+        };
+        let far = {
+            let mut e = new_player_entity("far".to_string(), 20, 20);
+            e.level = 15;
+            world.add_entity(e)
+        };
+        world.tick();
+        displays.set(
+            target,
+            downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"target".to_vec()),
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ut".into(),
+                chr_name: "target".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 912,
+                actor_id: target,
+            },
+        );
+        world.entities.get_mut(caster).unwrap().visible_actors = vec![
+            mir2_world::entity::VisibleBaseObject {
+                target: far,
+                flag: mir2_world::entity::VisibleFlag::Show,
+            },
+            mir2_world::entity::VisibleBaseObject {
+                target,
+                flag: mir2_world::entity::VisibleFlag::Show,
+            },
+        ];
+        (
+            world,
+            caster,
+            online,
+            saves,
+            magic_table,
+            displays,
+            gates,
+            rx,
+            dir,
+            target,
+        )
+    }
+
+    /// 走**生产入口** `handle_spell_cmd` 施放 8/37（`magic_attack_rage = 8`，与既有 8/21 用例同口径）。
+    #[allow(clippy::too_many_arguments)]
+    fn cast_push_magic(
+        world: &mut mir2_world::World,
+        caster: i32,
+        online: &OnlineRegistry,
+        saves: &mut std::collections::HashMap<String, SavedHuman>,
+        magic_table: &magics::MagicTable,
+        displays: &mut downlink::DisplayTable,
+        gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        magic_id: u16,
+        target_x: u16,
+        target_y: u16,
+    ) {
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(target_x, target_y),
+            magic_id,
+            0,
+            0,
+            "caster",
+            911,
+            online,
+            world,
+            saves,
+            &mut ground_sessions,
+            &catalog,
+            magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            displays,
+            gates,
+        );
+    }
+
+    /// 取全部 `SendFrame` 的（socket, 原始 body），**保序**。
+    fn effect_bodies(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, Vec<u8>)> {
+        let mut out = Vec::new();
+        while let Ok(m) = rx.try_recv() {
+            if let SimToGate::SendFrame { socket, body } = m {
+                out.push((socket, body));
+            }
+        }
+        out
+    }
+
+    fn body_ident(body: &[u8]) -> u16 {
+        u16::from_le_bytes([body[4], body[5]])
+    }
+
+    /// **魔号 37 正例（生产入口 `handle_spell_cmd`）与魔号 8 逐帧对拍**：
+    /// 同一场景、同一 seed ⇒ 取数序列逐项相同（世界 RNG 终态逐字节相同 = 恰 2 抽），
+    /// 出帧序列的**效果体帧逐字节相同**（`SM_BACKSTEP` 条数/顺序/收件人/坐标/编码全同）；
+    /// 唯一差异是 `SM_SPELL` 尾的魔号字段（`"8"` vs `"37"`），命令头 12B 与其它帧逐字节相同。
+    #[test]
+    fn spell_cmd_energyrepulsor_matches_firewind_byte_for_byte() {
+        use mir2_shared::rng::RandomNumber;
+        let (mut w8, c8, on8, mut sv8, mt8, mut dp8, g8, mut rx8, dir8, t8) =
+            push_scene(mir2_world::magic::SKILL_FIREWIND, "fw37-a");
+        let (mut w37, c37, on37, mut sv37, mt37, mut dp37, g37, mut rx37, dir37, t37) =
+            push_scene(mir2_world::magic::SKILL_ENERGYREPULSOR, "fw37-b");
+        assert_eq!(
+            c8, c37,
+            "两 rig 的实体 id 分配必须相同（跨 rig 逐字节对拍前提）"
+        );
+        let seed = 1;
+        w8.rng = RandomNumber::with_seed(seed);
+        w37.rng = RandomNumber::with_seed(seed);
+        let before8 = w8.rng.clone();
+        let before37 = w37.rng.clone();
+        cast_push_magic(
+            &mut w8,
+            c8,
+            &on8,
+            &mut sv8,
+            &mt8,
+            &mut dp8,
+            &g8,
+            mir2_world::magic::SKILL_FIREWIND,
+            11,
+            10,
+        );
+        cast_push_magic(
+            &mut w37,
+            c37,
+            &on37,
+            &mut sv37,
+            &mt37,
+            &mut dp37,
+            &g37,
+            mir2_world::magic::SKILL_ENERGYREPULSOR,
+            11,
+            10,
+        );
+        // ① 抽数序列：各恰 2 抽（Random(20) 门 + Random(2) 步数），且 RNG 终态逐字节相同。
+        assert_eq!(draws_between(&before8, &w8.rng), 2, "8 的效果体恰抽 2 次");
+        assert_eq!(
+            draws_between(&before37, &w37.rng),
+            2,
+            "37 必须复用同一效果体、恰抽 2 次（无额外取数）"
+        );
+        assert_eq!(
+            format!("{:?}", w8.rng),
+            format!("{:?}", w37.rng),
+            "固定种子下 37 与 8 的 RNG 终态必须逐字节相同"
+        );
+        // 逐项抽数：终态相同的直观佐证（后续四抽逐项对拍）。
+        let mut s8 = w8.rng.clone();
+        let mut s37 = w37.rng.clone();
+        for k in 0..4 {
+            assert_eq!(s8.random(), s37.random(), "后续第 {k} 抽必须逐项相同");
+        }
+        // ② 位移与朝向。
+        let e8 = w8.entities.get(t8).unwrap();
+        let e37 = w37.entities.get(t37).unwrap();
+        assert_eq!((e37.x, e37.y), (e8.x, e8.y), "落点必须与 8 相同");
+        assert_eq!(e37.dir(), e8.dir(), "`CharPushed` 收尾 Dir 必须与 8 相同");
+        // ③ 帧面：条数/顺序/收件人相同；效果体帧逐字节相同。
+        let f8 = effect_bodies(&mut rx8);
+        let f37 = effect_bodies(&mut rx37);
+        assert_eq!(
+            f8.len(),
+            f37.len(),
+            "帧条数必须与 8 相同；8={f8:?} 37={f37:?}"
+        );
+        assert!(!f8.is_empty(), "正例必须有帧");
+        let mut push_frames = 0usize;
+        for (i, ((s8f, b8), (s37f, b37))) in f8.iter().zip(f37.iter()).enumerate() {
+            assert_eq!(s8f, s37f, "第 {i} 帧收件人 socket 必须相同");
+            let id8 = body_ident(b8);
+            assert_eq!(id8, body_ident(b37), "第 {i} 帧 ident 必须相同");
+            if id8 == mir2_protocol::messages::SM_SPELL {
+                assert_eq!(&b8[..12], &b37[..12], "SM_SPELL 命令头 12B 必须相同");
+                assert_eq!(&b8[12..], b"8", "8 的 SM_SPELL 尾 = 魔号 8");
+                assert_eq!(&b37[12..], b"37", "37 的 SM_SPELL 尾 = 魔号 37");
+            } else {
+                assert_eq!(b8, b37, "第 {i} 帧（ident={id8}）必须逐字节相同");
+                if id8 == mir2_protocol::messages::SM_BACKSTEP {
+                    push_frames += 1;
+                }
+            }
+        }
+        assert!(push_frames > 0, "37 必须产生与 8 相同的 SM_BACKSTEP 帧");
+        assert_eq!(
+            f8.iter()
+                .filter(|(_, b)| body_ident(b) == mir2_protocol::messages::SM_BACKSTEP)
+                .count(),
+            push_frames,
+            "8 的 SM_BACKSTEP 条数必须与 37 相同"
+        );
+        let _ = std::fs::remove_dir_all(dir8);
+        let _ = std::fs::remove_dir_all(dir37);
+    }
+
+    /// **魔号 37 距离门阴性对照**（`MagicManager.cs:155`）：目标在 `MagicAttackRage` 之外 ⇒
+    /// `DoSpell` 在 `:159` 之前早退：零抽数、零位移、无 `SM_SPELL`/`SM_BACKSTEP`/`SM_MAGICFIRE`。
+    #[test]
+    fn spell_cmd_energyrepulsor_out_of_range_has_no_effect() {
+        use mir2_shared::rng::RandomNumber;
+        let (
+            mut world,
+            caster,
+            mut online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx,
+            dir,
+            _,
+        ) = push_scene(mir2_world::magic::SKILL_ENERGYREPULSOR, "er-range");
+        // 目标放到 10 格外（施法者 10,10 -> 目标 20,10 ⇒ |Δx|=10 > 8）。
+        let target = {
+            let mut e = new_player_entity("target2".to_string(), 20, 10);
+            e.level = 15;
+            world.add_entity(e)
+        };
+        world.tick();
+        displays.set(
+            target,
+            downlink::ActorDisplay::new(4, 0, 113, 0, 0, 255, b"target2".to_vec()),
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ut2".into(),
+                chr_name: "target2".into(),
+                session_id: 3,
+                gate_idx: 0,
+                socket: 913,
+                actor_id: target,
+            },
+        );
+        world.entities.get_mut(caster).unwrap().visible_actors =
+            vec![mir2_world::entity::VisibleBaseObject {
+                target,
+                flag: mir2_world::entity::VisibleFlag::Show,
+            }];
+        let seed = 1;
+        world.rng = RandomNumber::with_seed(seed);
+        let before = world.rng.clone();
+        cast_push_magic(
+            &mut world,
+            caster,
+            &online,
+            &mut saves,
+            &magic_table,
+            &mut displays,
+            &gates,
+            mir2_world::magic::SKILL_ENERGYREPULSOR,
+            20,
+            10,
+        );
+        assert_eq!(
+            draws_between(&before, &world.rng),
+            0,
+            "距离门外 ⇒ 一个随机数都不抽"
+        );
+        let e = world.entities.get(target).unwrap();
+        assert_eq!((e.x, e.y), (20, 10), "距离门外 ⇒ 不位移");
+        let frames = effect_bodies(&mut rx);
+        assert!(
+            frames.is_empty(),
+            "距离门外 ⇒ 无 SM_SPELL/效果体/共享尾帧；实得 {frames:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **魔号 37 等级门阴性对照**（`MagicManager.cs:34`）：施法者等级不高于目标 ⇒ `MagPushArround`
+    /// 的等级门不过：零抽数、零推挤、无 `SM_BACKSTEP`；随后连续三抽与参照流逐项相同。
+    #[test]
+    fn spell_cmd_energyrepulsor_level_gate_blocks_all_draws() {
+        use mir2_shared::rng::RandomNumber;
+        let (
+            mut world,
+            caster,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx,
+            dir,
+            target,
+        ) = push_scene(mir2_world::magic::SKILL_ENERGYREPULSOR, "er-level");
+        // `push_scene` 的施法者 20 级 / 目标 15 级；降到与目标同级 ⇒ 等级门不过。
+        world.entities.get_mut(caster).unwrap().level = 15;
+        let seed = 1;
+        world.rng = RandomNumber::with_seed(seed);
+        let before = world.rng.clone();
+        cast_push_magic(
+            &mut world,
+            caster,
+            &online,
+            &mut saves,
+            &magic_table,
+            &mut displays,
+            &gates,
+            mir2_world::magic::SKILL_ENERGYREPULSOR,
+            11,
+            10,
+        );
+        assert_eq!(
+            draws_between(&before, &world.rng),
+            0,
+            "等级门不过 ⇒ 一个随机数都不抽"
+        );
+        let e = world.entities.get(target).unwrap();
+        assert_eq!((e.x, e.y), (11, 10), "等级门不过 ⇒ 不位移");
+        let frames = effect_bodies(&mut rx);
+        assert!(
+            !frames
+                .iter()
+                .any(|(_, b)| body_ident(b) == mir2_protocol::messages::SM_BACKSTEP),
+            "无推挤帧；实得 {frames:?}"
+        );
+        // 随后连续三抽：与「未被消费的参照流」逐项相同。
+        let mut control = before.clone();
+        for k in 0..3 {
+            assert_eq!(
+                world.rng.random_below(10),
+                control.random_below(10),
+                "阴性对照第 {k} 抽必须等于参照流"
+            );
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

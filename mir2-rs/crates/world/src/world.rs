@@ -795,8 +795,10 @@ impl World {
         self.mag_make_defence_area(caster_id, n_target_x, n_target_y, 3, n_power, bt_state)
     }
 
-    /// **魔号 8（`SKILL_FIREWIND` 抗拒火环）效果体**：`MagicManager.MagPushArround`
-    /// （`src/M2Server/Magic/MagicManager.cs:24-52`）的生产入口。
+    /// **魔号 8（`SKILL_FIREWIND` 抗拒火环）/ 37（`SKILL_ENERGYREPULSOR` 气功波）效果体**：
+    /// `MagicManager.MagPushArround`（`src/M2Server/Magic/MagicManager.cs:24-52`）的生产入口。
+    /// oracle 两处 `case` 的函数体逐字相同：`:259-264`（8）与 `:601-606`（37），
+    /// 都是 `if (MagPushArround(playObject, userMagic.Level) > 0) boTrain = true;`。
     ///
     /// 逐行口径（`VisibleActors` 顺序 = 施法者 `visible_actors` 列表序，两侧同源）：
     /// ```text
