@@ -29,7 +29,7 @@ client-e2e 两次合并而行号增长，`enable_production_monster_ai` 调用�
    `literal` / `path` **全等**；只有显式 `basename_ok=True` 的锚点才接受裸 basename
    （`monai.rs` / `mongen.rs`）。旧口径用 `token.endswith("/" + literal)` ⇒
    **别的目录下的同名文件**会被误判 COVERED，既非 `UNGUARDED_ANCHOR` 也不 `ANCHOR_DRIFT`（静默）。
-7. **同行裸续引用** `:NN`（例：`…consumer_groups.tsv:35`（折叠理由）、`:53`（spawn 行））
+7. **同行裸续引用** `:NN`（例：`…consumer_groups.tsv:38`（折叠理由）、`:56`（spawn 行））
    归到**同一物理行里前一个**完整引用，并按锚点 `also` 逐条校验：
    未登记 ⇒ `BARE_REF_UNDECLARED`；越界 ⇒ `BARE_REF_OUT_OF_RANGE`；
    行内容不匹配 ⇒ `BARE_REF_DRIFT`；归属的文件不存在 ⇒ `BARE_REF_FILE_MISSING`。
@@ -127,7 +127,7 @@ ANCHORS = (
          rx=r"FOLD_RULES = \{construct: spawn\}",
          why="站点表的 R-6 折叠理由行",
          # 同一 literal 的**同行裸续引用**必须在此登记（旧口径不校验裸 :NN ⇒ 可静默漂移）。
-         also=(dict(line=53,
+         also=(dict(line=56,
                     rx=r"^spawn\trust\tcrates/world/src/mongen",
                     why="Rust spawn 行（表内唯一 rust spawn 站点；固定场景唯一 spawn 来源）"),)),
 )
@@ -445,13 +445,13 @@ def selftest():
                any("UNGUARDED_ANCHOR" in p and "foo/monai.rs" in p for p in bad6),
                "; ".join(bad6))
 
-    # ⑧ 改坏必红⑦（reviewer-6 M-1 收口）：同行裸续引用 `:53` 改成未登记的 `:54`
+    # ⑧ 改坏必红⑦（reviewer-6 M-1 收口）：同行裸续引用 `:56` 改成未登记的 `:57`
     #    ⇒ `BARE_REF_UNDECLARED` 必红（裸 `:NN` 不登记 = 静默漂移通道）。
-    assert text.count("`:53`") == 1, "文档里应恰有一处裸续引用 `:53`（自检前置被破坏）"
-    bare_drift = text.replace("`:53`", "`:54`")
+    assert text.count("`:56`") == 1, "文档里应恰有一处裸续引用 `:56`（自检前置被破坏）"
+    bare_drift = text.replace("`:56`", "`:57`")
     bad7 = check_doc_text(bare_drift)
     check_case("mutation-bare-ref-undeclared-red",
-               any("BARE_REF_UNDECLARED" in p and ":54" in p for p in bad7),
+               any("BARE_REF_UNDECLARED" in p and ":57" in p for p in bad7),
                "; ".join(bad7))
 
     # ⑨ 改坏必红⑧：裸续引用已登记，但**目标行内容**漂移 ⇒ `BARE_REF_DRIFT` 必红
@@ -459,7 +459,7 @@ def selftest():
     bad_anchors = []
     for a in ANCHORS:
         if a["literal"].endswith("consumer_groups.tsv"):
-            a = dict(a, also=(dict(line=53, rx=r"^NOPE_THIS_ROW_IS_NOT_SPAWN",
+            a = dict(a, also=(dict(line=56, rx=r"^NOPE_THIS_ROW_IS_NOT_SPAWN",
                                    why="改坏：内容牙"),))
         bad_anchors.append(a)
     bad8 = check_doc_text(text, anchors=tuple(bad_anchors))
@@ -503,7 +503,7 @@ def selftest():
         if a["literal"].endswith("consumer_groups.tsv"):
             a = dict(a, also=(dict(line=99999, rx=r".", why="改坏：登记行号越界"),))
         oor_anchors.append(a)
-    bad12 = check_doc_text(text.replace("`:53`", "`:99999`"), anchors=tuple(oor_anchors))
+    bad12 = check_doc_text(text.replace("`:56`", "`:99999`"), anchors=tuple(oor_anchors))
     check_case("mutation-bare-ref-out-of-range-red",
                any("BARE_REF_OUT_OF_RANGE" in p for p in bad12),
                "; ".join(bad12))
