@@ -113,7 +113,7 @@ pub use party::{
     PARTY_GROUP_MSG_F_COLOR_DEFAULT, PARTY_GROUP_MSG_PREFIX_DEFAULT, PARTY_JOIN_GROUP_MSG_DEFAULT,
     PARTY_LEADER_CLOSE_MSG,
 };
-pub use session::{Session, SessionError, WorldStage};
+pub use session::{send_ref_msg_targets_at, Session, SessionError, WorldStage, SEND_REF_MSG_RANGE};
 pub use slave::{
     check_server_make_slave, is_slave, mag_make_angel_slave_plan, mag_make_sinsu_slave_plan,
     mag_make_slave_plan, make_slave_gate, recall_slave_target, space_move_get_rand_xy, spawn_clone,

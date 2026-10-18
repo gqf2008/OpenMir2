@@ -8799,9 +8799,12 @@ fn drain_aoi_disappear(
 /// ⇒ `Recog` = 离开者。即：**观察者收 `SM_DISAPPEAR(离开者)`**（与 [`drain_aoi_disappear`] 同帧面，
 /// 差别在触发时机：这里不依赖观察者当轮 `SearchViewRange`）。
 ///
-/// 世界侧收件人集合 = 「`visible_actors` 里含离开者」的 Play 实体，由
+/// 世界侧收件人集合 = **离开时刻的 ±12 格扫结果**（`mir2_world::send_ref_msg_targets_at`：
+/// `CellMatch` / `GetCellInfo` / `ActorObject` / `!Ghost` / `Race==Play`；与 oracle
+/// `SendRefMsg` 冷路径同口径，**不再依赖观察者的 `visible_actors`**——后者按
+/// `SearchTime=1000` 节流，会把上次扫描后才进入 ±12 的玩家漏掉），由
 /// [`mir2_world::World::drain_departs`] 取走（`(观察者, 离开者)`，保序）；本函数按观察者的
-/// `[GateIdx, Socket]` 逐条路由回**观察者自己**。离世者自身不在集合里（实体已从世界移除）。
+/// `[GateIdx, Socket]` 逐条路由回**观察者自己**。离世者自身不在集合里（格扫按 `ActorId` 排除；oracle 此时已 `Ghost=true`）。
 fn drain_depart_frames(
     world: &mut mir2_world::World,
     online: &OnlineRegistry,
@@ -15929,8 +15932,8 @@ mod tests {
     /// `MakeGhost` 在掉线/小退/顶号时调用（`PlayObject.Message.cs:367-398`）。本仓等价路径 =
     /// `world.disconnect`/`world.soft_close`。
     ///
-    /// 口子：`a` 与 `b` 互相可见；`b` **掉线** ⇒ 世界侧 `leave_world_inner` 采「能看到 `b`」的观察者
-    /// `(a, b)` 进 `drain_departs` ⇒ [`drain_depart_frames`] 给观察者 `a` 发 `SM_DISAPPEAR(b)`
+    /// 口子：`a` 与 `b` 互相可见；`b` **掉线** ⇒ 世界侧 `leave_world_inner` 按离开时刻
+    /// ±12 格扫采观察者 `(a, b)` 进 `drain_departs` ⇒ [`drain_depart_frames`] 给观察者 `a` 发 `SM_DISAPPEAR(b)`
     /// （`Recog = b`）；离开者 `b` 自身收 **0** 条。修复前该路径**零发帧**（红线 V2-01
     /// 「掉线残留幽灵精灵」未消——观察者的 AOI 只删条目、不告知客户端）。
     ///
@@ -15994,8 +15997,8 @@ mod tests {
     /// 看不见离开者）与离开者自身都收不到。口径对齐
     /// `aoi_disappear_reachable_through_drain_run_downlinks`（**生产入口级**，非直调叶子）。
     ///
-    /// 口子：`a` 与 `b` 互相可见、`c` 远在同图另一端（看不见 `b`）；`b` **掉线**
-    /// ⇒ 世界侧 `leave_world_inner` 采「能看到 `b`」的观察者 `(a, b)` 进 `world.drain_departs`
+    /// 口子：`a` 与 `b` 互相可见、`c` 远在同图另一端（±12 外）；`b` **掉线**
+    /// ⇒ 世界侧 `leave_world_inner` 按离开时刻 ±12 格扫采观察者 `(a, b)` 进 `world.drain_departs`
     /// ⇒ [`drain_depart_downlink`] 内部的**生产发射点**给观察者 `a` 发 `SM_DISAPPEAR(30)`
     /// （`Recog = b`）；离开者 `b` 自身与无关观察者 `c` 各收 **0** 条。
     ///

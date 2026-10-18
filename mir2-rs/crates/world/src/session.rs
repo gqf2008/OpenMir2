@@ -17,6 +17,82 @@ use crate::entity::{Entity, ACTOR_RACE_PLAY};
 use crate::map::{CellType, MapGrid};
 use crate::world::World;
 
+/// `[Setup] SendRefMsgRange`（oracle `GameSvrConf.cs:1503` 缺省 12；现网 `Server.conf` 同为 12；
+/// 宿主 `bins/game-svr` 从配置读同名键并缺省 12）。
+///
+/// `SendRefMsg` 冷路径方格半径（`BaseObject.Message.cs:391-395` 的 `CurrX ± SendRefMsgRange`）。
+pub const SEND_REF_MSG_RANGE: i32 = 12;
+
+/// `BaseObject.Message.cs:385-444` **`SendRefMsg` 冷路径**的收件人集合（格扫口径）。
+///
+/// 以发送者 `(map_id, x, y)` 为中心逐格扫 ±`range`（`for nCx = nLx..=nHx { for nCy = nLy..=nHy }`
+/// 的 **X 外层升序、Y 内层升序**，每格 `ObjList` 下标升序 —— 与 oracle 同序，故调用方按返回序
+/// 入队即得 oracle 的发送次序）：
+/// - `CellMatch` 越界 ⇒ 跳过（`Envirnoment.cs` 的 `CellMatch`）；
+/// - `GetCellInfo` 的 `success`（= 格 `Valid`）且 `IsAvailable`（`ObjList.Count > 0`）；
+/// - 格对象必须 `ActorObject`；反查实体存在、`!Ghost`、`Race == Play`。
+///
+/// **为什么 `sender_id` 要显式排除**：oracle 的离开者在 `DisappearA` 之前已被 `MakeGhost`
+/// 置 `Ghost = true`（`BaseObject.Base.cs:484-497`），格扫的 `!targetObject.Ghost` 自然跳过它；
+/// 本骨架 `disconnect`/`soft_close` 不建模 `MakeGhost` 的字段写入（实体随即移除），故在此按
+/// `ActorId` 等价排除。
+///
+/// **恒冷路径**：oracle `SendRefMsg` 有 500ms `VisibleHumanList` 缓存（`Message.cs:392-394`）；
+/// 本仓既有约定是不接该缓存、恒走冷路径（`bins/game-svr/src/chat.rs` 模块头已登记同一取舍），
+/// 本函数沿用该约定。
+///
+/// **与 `bins/game-svr/src/chat.rs::hear_targets_at` 的关系**：同一 `SendRefMsg` 谓词
+/// （±range、`Race == Play`、`!Ghost`），但**不能直接复用**——① 依赖方向是
+/// `world ← bins/game-svr`，世界 crate 不能调宿主；② 那条是实体表迭代（含说话者自己，
+/// 且 `ObMode || FixedHideMode` ⇒ 只发自己），本函数是 oracle 格扫（受 `ActorObject` 登记约束，
+/// 未落格实体不发），并排除发送者。生产路径上实体都已落格，两者收件人集合相同。
+///
+/// 非玩家 `WantRefMsg` 支（`RM_STRUCK`/`RM_HEAR`/`RM_DEATH`）不在此建模——`RM_DISAPPEAR` 只走
+/// `Race == Play` 支（`BaseObject.Message.cs:421-444`）。
+#[must_use]
+pub fn send_ref_msg_targets_at(
+    world: &World,
+    sender_id: i32,
+    map_id: usize,
+    x: i32,
+    y: i32,
+    range: i32,
+) -> Vec<i32> {
+    let Some(map) = world.maps.get(map_id) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for cx in (x - range)..=(x + range) {
+        for cy in (y - range)..=(y + range) {
+            // oracle `if (!Envir.CellMatch(nCx, nCy)) continue;`
+            if !map.cell_match(cx, cy) {
+                continue;
+            }
+            let (cell, success) = map.get_cell_info(cx, cy);
+            if !success || !cell.is_available() {
+                continue;
+            }
+            for obj in &cell.obj_list {
+                if !obj.actor_object {
+                    continue;
+                }
+                let id = obj.cell_obj_id;
+                // oracle 此时离开者已 `Ghost=true` ⇒ 被下面的 `!Ghost` 跳过；本骨架显式排除。
+                if id == sender_id {
+                    continue;
+                }
+                let Some(e) = world.entities.get(id) else {
+                    continue;
+                };
+                if e.race == ACTOR_RACE_PLAY && !e.ghost {
+                    out.push(id);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// 世界侧会话阶段（世界能观测到的子集）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorldStage {
@@ -366,25 +442,38 @@ impl World {
         // **orphan 接线第二批**（oracle `BaseObject.DisappearA`，`BaseObject.cs:1519-1524`）：
         // 掉线/小退/顶号 ⇒ `PlayObject.MakeGhost`（`BaseObject.Base.cs:484-497`，玩家 `CanReAlive=false`
         // ⇒ `Ghost=true`）⇒ `DisappearA()` ⇒ `SendRefMsg(RM_DISAPPEAR, 0,0,0,0,"")`（`:1519-1524`）
-        // ⇒ `SendRefMsg`（`BaseObject.Message.cs:385-482`）把 `RM_DISAPPEAR` **广播**给同图
-        // ±`SendRefMsgRange`(=12) 格内 `Race==Play` 且 `!Ghost` 的可见玩家。
+        // ⇒ `SendRefMsg`（`BaseObject.Message.cs:385-444`）把 `RM_DISAPPEAR` **广播**给同图
+        // ±`SendRefMsgRange`(=12) 格内 `Race==Play` 且 `!Ghost` 的玩家。
         //
-        // 本骨架的收件人集合 = 「`visible_actors` 里含 `actor_id` 的 Play 实体」（谁当前看得见它；
-        // 与 oracle 的 ±12 扫描集在 ViewRange≤12 时一致，差别只在观察者视野已失效的边界）。
+        // **收件人 = 离开时刻的格扫结果**（`send_ref_msg_targets_at`，与 oracle 的
+        // `CellMatch`/`GetCellInfo`/`ActorObject` 逐格扫同口径），**不再依据观察者的
+        // `visible_actors`**：`SearchViewRange` 按 `SearchTime=1000` 节流（world tick 200ms ⇒
+        // 约 1200ms 一次），用视野近似会把「观察者上次扫描之后才进入 ±12」的玩家漏掉，
+        // 使其收不到消失帧（客户端留残影）。格扫在离开时刻实时计算，无此误差窗口。
+        // 恒走冷路径（本仓不接 `SendRefMsgTick` 的 500ms `VisibleHumanList` 缓存；同
+        // `bins/game-svr/src/chat.rs` 模块头约定）。
+        //
         // `ObMode || FixedHideMode` 的离开者 oracle 只发自己（`:389-392`）⇒ 无广播。
-        // **必须在 `entities.remove` 之前采集**，否则实体已消失、反查不到观察者。
+        // **必须在 `entities.remove` / `remove_from_map` 之前采集**：格扫要读离开者所在格
+        // （含同格其它对象）与其实体坐标。
+        let (actor_x, actor_y) = self
+            .entities
+            .get(actor_id)
+            .map(|e| (e.x, e.y))
+            .ok_or(SessionError::NotInWorld)?;
         let self_only = self
             .entities
             .get(actor_id)
             .is_some_and(|e| e.ob_mode || e.fixed_hide_mode);
         if !self_only {
-            let observers: Vec<i32> = self
-                .entities
-                .iter()
-                .filter(|e| e.id != actor_id && e.race == ACTOR_RACE_PLAY && !e.ghost)
-                .filter(|e| e.visible_actors.iter().any(|v| v.target == actor_id))
-                .map(|e| e.id)
-                .collect();
+            let observers = send_ref_msg_targets_at(
+                self,
+                actor_id,
+                map_id,
+                actor_x,
+                actor_y,
+                SEND_REF_MSG_RANGE,
+            );
             for o in observers {
                 self.sessions.departs.push((o, actor_id));
             }
@@ -440,4 +529,146 @@ pub enum SessionError {
     /// 仅由 `switch_map_inner`（切图）产生；`enter_map`（进图）**不再**产生它——
     /// oracle `Initialize`（`BaseObject.Base.cs:14-23`）落格失败只「不进格表」，不移除角色。
     CellRejected,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::Entity;
+
+    fn player(name: &str, x: i32, y: i32) -> Entity {
+        let mut e = Entity::new(0, name.to_string(), x, y);
+        e.race = ACTOR_RACE_PLAY;
+        e.view_range = 12;
+        e.want_ref_msg = true;
+        e
+    }
+
+    fn enter(world: &mut World, name: &str, map: usize, x: i32, y: i32) -> i32 {
+        world.open_session(name);
+        world
+            .enter_map(name, player(name, x, y), map)
+            .expect("进图应成功")
+    }
+
+    fn departs_sorted(world: &mut World) -> Vec<(i32, i32)> {
+        let mut d = world.drain_departs();
+        d.sort_unstable();
+        d
+    }
+
+    /// 判据 a（牙①的反面）：**观察者 last-scan 之后**才进入 ±12 的玩家仍收到 depart。
+    ///
+    /// `late` 进图后不再 tick ⇒ 它的 `visible_actors` 为空（从未扫到离开者），旧实现
+    /// （「`visible_actors` 含离开者」）会漏发；oracle 的离开时刻格扫必须仍把它算作收件人。
+    #[test]
+    fn depart_reaches_player_entered_after_last_scan() {
+        let mut w = World::new(64, 64);
+        let obs = enter(&mut w, "obs", 0, 10, 10);
+        let leaver = enter(&mut w, "leaver", 0, 20, 10);
+        // 第一次（也是最后一次）玩家 AOI 扫描：`SearchTime=1000` ⇒ 第 6 tick（1200ms）。
+        for _ in 0..6 {
+            w.tick();
+        }
+        assert!(
+            w.entities
+                .get(obs)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == leaver),
+            "前提：obs 在最后一次扫描里看见 leaver"
+        );
+        // 扫描之后进入 ±12（距离开者 4 格），且之后不再扫描 ⇒ visible 恒空。
+        let late = enter(&mut w, "late", 0, 16, 10);
+        assert!(
+            w.entities.get(late).unwrap().visible_actors.is_empty(),
+            "前提：late 进入后没有扫过任何视野"
+        );
+        w.disconnect("leaver").expect("离开世界");
+        assert_eq!(
+            departs_sorted(&mut w),
+            vec![(obs, leaver), (late, leaver)],
+            "离开时刻格扫：last-scan 后进入 ±12 的 late 也必须收到"
+        );
+    }
+
+    /// 判据 b（牙②的反面）：半径**恰为 12**（切比雪夫），12 收、13 不收。
+    #[test]
+    fn depart_range_is_exactly_twelve_cells() {
+        let mut w = World::new(80, 80);
+        let in_dx = enter(&mut w, "in_dx", 0, 22, 10); // dx=12
+        let in_dy = enter(&mut w, "in_dy", 0, 10, 22); // dy=12
+        let in_diag = enter(&mut w, "in_diag", 0, 22, 22); // dx=dy=12
+        let _out_dx = enter(&mut w, "out_dx", 0, 23, 10); // dx=13
+        let _out_dy = enter(&mut w, "out_dy", 0, 10, 23); // dy=13
+        let _out_diag = enter(&mut w, "out_diag", 0, 23, 22); // dx=13
+        let _leaver = enter(&mut w, "leaver", 0, 10, 10);
+        w.disconnect("leaver").expect("离开世界");
+        let got: Vec<i32> = departs_sorted(&mut w).into_iter().map(|(o, _)| o).collect();
+        let mut want = vec![in_dx, in_dy, in_diag];
+        want.sort_unstable();
+        assert_eq!(got, want, "±12 边界内收；13 格（含对角）不收");
+    }
+
+    /// 判据 c（牙③的反面）：Ghost 玩家**不收到**；Ghost 离开者（oracle `MakeGhost` 后状态）
+    /// **仍向非 Ghost 观察者广播**，且不收自己的帧。
+    #[test]
+    fn depart_skips_ghost_recipients_but_ghost_sender_still_broadcasts() {
+        let mut w = World::new(64, 64);
+        let live = enter(&mut w, "live", 0, 10, 10);
+        let ghost = enter(&mut w, "ghost", 0, 12, 10);
+        // 接收者 Ghost：`!targetObject.Ghost` 跳过。
+        w.entities.get_mut(ghost).unwrap().ghost = true;
+        let leaver = enter(&mut w, "leaver", 0, 14, 10);
+        // 发送者 Ghost（`MakeGhost` 在 `DisappearA` 之前置位）：广播照发。
+        w.entities.get_mut(leaver).unwrap().ghost = true;
+        w.disconnect("leaver").expect("离开世界");
+        assert_eq!(
+            departs_sorted(&mut w),
+            vec![(live, leaver)],
+            "Ghost 接收者不收；离开者自身（Ghost）不收自己"
+        );
+    }
+
+    /// 判据 d：**跨图不收到**（格扫只在离开者所在图的格表里进行），同图收。
+    #[test]
+    fn depart_is_same_map_only() {
+        let mut w = World::with_maps(vec![(64, 64), (64, 64)]);
+        let same = enter(&mut w, "same", 0, 12, 10);
+        let _other = enter(&mut w, "other", 1, 12, 10); // 坐标在 ±12 内，但换了一张图
+        let leaver = enter(&mut w, "leaver", 0, 10, 10);
+        w.disconnect("leaver").expect("离开世界");
+        assert_eq!(
+            departs_sorted(&mut w),
+            vec![(same, leaver)],
+            "同图 ±12 收；异图（即使坐标相同）不收"
+        );
+    }
+
+    /// 判据 e：场景回放 —— **先扫一次 → 再移动 → 再离开**，收件集合必须与离开时刻的
+    /// 格扫结果逐项一致（不随后任何 `visible_actors` 变化漂移）。
+    #[test]
+    fn depart_recipients_match_grid_scan_after_scan_then_move() {
+        let mut w = World::with_maps(vec![(80, 80)]);
+        let a = enter(&mut w, "a", 0, 10, 10);
+        let b = enter(&mut w, "b", 0, 40, 40); // 初始在远处，扫不到离开者
+        let leaver = enter(&mut w, "leaver", 0, 12, 10);
+        for _ in 0..6 {
+            w.tick(); // 扫描一次：a 看见 leaver；b 太远
+        }
+        // `b` 在最后一次扫描之后移到离开者附近（同图切图落点；视野列表整体失效）。
+        w.switch_map("b", 0, 20, 10).expect("同图落点");
+        assert!(
+            w.entities.get(b).unwrap().visible_actors.is_empty(),
+            "前提：移动后 b 的视野列表已失效（没有新的扫描）"
+        );
+        let expected = send_ref_msg_targets_at(&w, leaver, 0, 12, 10, SEND_REF_MSG_RANGE);
+        assert_eq!(expected, vec![a, b], "格扫口径（X 外层升序）：a 先于 b");
+        w.disconnect("leaver").expect("离开世界");
+        let got: Vec<i32> = departs_sorted(&mut w).into_iter().map(|(o, _)| o).collect();
+        let mut want = expected;
+        want.sort_unstable();
+        assert_eq!(got, want, "depart 收件集合 == 离开时刻格扫结果");
+    }
 }
