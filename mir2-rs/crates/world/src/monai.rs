@@ -114,7 +114,7 @@ pub fn walk_to(world: &mut World, actor_id: i32, dir: u8) -> bool {
 
 /// `Envirnoment.GetXYObjCount`（`src/M2Server/Maps/Envirnoment.cs:1062-1093`）的 actor 计数子集：
 /// 统计 `(x, y)` 格上 `!Ghost && !Death && !FixedHideMode && !ObMode` 的 actor 对象数。
-fn count_at_cell(world: &World, map_id: usize, x: i32, y: i32) -> i32 {
+pub(crate) fn count_at_cell(world: &World, map_id: usize, x: i32, y: i32) -> i32 {
     let Some(map) = world.maps.get(map_id) else {
         return 0;
     };

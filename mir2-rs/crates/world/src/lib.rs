@@ -31,6 +31,7 @@ pub mod monai;
 pub mod mongen;
 pub mod npc;
 pub mod party;
+pub mod run_gap;
 pub mod session;
 pub mod slave;
 pub mod space_move;

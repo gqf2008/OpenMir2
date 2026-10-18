@@ -487,6 +487,18 @@ pub struct Entity {
     /// （**无** `SysMsg`）。写入点同 [`Entity::fire_hit_skill`] 登记（技能层未移植）。
     pub twin_hit_skill: bool,
     pub latest_twin_hit_tick: i64,
+    /// C# `PlayObject.BoDuplication` / `DupStartTick` / `CheckDupObjTick`
+    /// （`PlayObject.cs:94/98/258`）——`PlayObject.Run` 的**重叠推挤**状态
+    /// （`PlayObject.Message.cs:263-285`，[`crate::World::check_dup_obj`]）：
+    ///
+    /// - `check_dup_obj_tick`：上一次重叠检查的时刻；ctor `CheckDupObjTick = GetTickCount()`
+    ///   （`PlayObject.cs:913`）。本骨架 ctor 等价物（[`Entity::new`]）拿不到世界时钟 ⇒ 由落图点
+    ///   （`World::add_entity` / `SessionRegistry::enter_map`）按 `clock_ms` 重盖（同 `verify_tick`）。
+    /// - `bo_duplication` / `dup_start_tick`：本格对象数 `>= 2` 的**首次**观测标记与时刻；对象数
+    ///   掉回 `< 2` 只清 `bo_duplication`，**不**复位 `dup_start_tick`（照 oracle）。
+    pub bo_duplication: bool,
+    pub dup_start_tick: i64,
+    pub check_dup_obj_tick: i64,
     /// C# `CharacterObject.UseItems`（`CharacterObject.cs:40`，13 格，`CharacterObject.cs:89` 初始化）。
     /// `PlayObject.StruckDamage` 的耐久循环按它取数。
     pub use_items: [UseItemSlot; USE_ITEM_SLOTS],
@@ -722,6 +734,12 @@ impl Entity {
             latest_fire_hit_tick: 0,
             twin_hit_skill: false,
             latest_twin_hit_tick: 0,
+            // `PlayObject.cs:94/98`：ctor 缺省 `BoDuplication=false` / `DupStartTick=0`；
+            // `CheckDupObjTick` 由 `World::add_entity` / `SessionRegistry::enter_map` 按落图时钟重盖
+            // （`PlayObject.cs:913` 的 `GetTickCount()`）。
+            bo_duplication: false,
+            dup_start_tick: 0,
+            check_dup_obj_tick: 0,
             // `CharacterObject.cs:89`：13 个空位（`Index = 0`）。
             use_items: [UseItemSlot::default(); USE_ITEM_SLOTS],
             want_ref_msg: false,

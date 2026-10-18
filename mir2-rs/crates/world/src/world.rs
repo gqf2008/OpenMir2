@@ -165,6 +165,9 @@ pub struct TickRecord {
     /// **P3-B5**：本 tick 的 `ExtraAbil` 过期/到期前 10s 事件（`PlayObject.Message.cs:163-227`）。
     pub extra_abil_expiries: Vec<ExtraAbilExpiry>,
     /// **出站接线片 W2**：本 tick 的 `RM_PUSH` 族（`SM_BACKSTEP(9)`）——`CharPushed` 每推进一格一条，保序。
+    ///
+    /// 两个来源共用本表（顺序 = 先命令 FIFO、后玩家 `Run` 的重叠推挤段）：
+    /// ① `Command::Push`（`World::push_now`）；② `World::check_dup_obj`（`PlayObject.Message.cs:283`）。
     pub pushes: Vec<crate::action::PushEvent>,
     /// **出站接线片 W2**：本 tick 的 `RM_RUSH`/`RM_RUSHKUNG` 族（`SM_RUSH(6)`/`SM_RUSHKUNG(7)`）——
     /// `DoMotaebo` 每成功推进一格一条 `Rush`，末尾若有则追加一条 `RushKung`，保序。
@@ -3561,6 +3564,8 @@ impl World {
         // `PlayObject.cs:901` 置一次）：ctor 等价物拿不到世界时钟 ⇒ 按落图时刻重盖。
         // 之后 `World::tick` 的玩家 scanner 按 `now - SearchTick > SearchTime(=1000)` 节流。
         entity.ai.search_tick = self.clock_ms;
+        // `PlayObject.cs:913` ctor `CheckDupObjTick = GetTickCount()`（重叠推挤的 3s 门从落图时刻起算）。
+        entity.check_dup_obj_tick = self.clock_ms;
         let id = self.entities.insert(entity);
         self.enqueue(Command::Enter { actor_id: id });
         id
@@ -3855,6 +3860,13 @@ impl World {
         // 名义 300ms 一次、本骨架每个 world tick（200ms）一次——相位差与既有玩家散段同口径登记。
         record.run_state_expiries = self.expire_player_run_state();
 
+        // **`PlayObject.Run` 的重叠推挤段**（`PlayObject.Message.cs:263-285`）：
+        // 3s 周期门内 `GetXYObjCount`；`>=2` 记 `BoDuplication/DupStartTick`；
+        // `>=3 且 >3s` / `==2 且 >10s` 且 `<20s` ⇒ `CharPushed(RandomByte(8), 1)`。
+        // 位置照 oracle：在 FireHit/TwinHit 到期段之后、`base.Run` 的 VerifyMapTime 之前。
+        // 只有三处门全部通过才取数（`crate::run_gap::dup_push_dir`）；事件进 `record.pushes`。
+        record.pushes.extend(self.check_dup_obj());
+
         // **玩家 `BaseObject.Run` 的 VerifyMapTime 段**（oracle `WorldServer.cs:697` 每 ~200ms
         // 驱动一次 `playObject.Run()`，末尾无条件 `base.Run()`）——必须在 AOI 扫描之前刷新
         // 静止玩家的格子时间（`BaseObject.Base.cs:223-228`）。30s 门在 `verify_map_time` 内。
@@ -4050,6 +4062,233 @@ impl World {
             }
         }
         events
+    }
+
+    /// `Envirnoment.GetXYObjCount`（`src/M2Server/Maps/Envirnoment.cs:1062-1093`）的世界侧入口：
+    /// 统计 `(x, y)` 格上 `!Ghost && !Death && !FixedHideMode && !ObMode` 的 actor 对象数。
+    ///
+    /// **建模差异（登记）**：`CastleDoor` 的 `HoldPlace` 支（门建筑只有在 `HoldPlace && !Ghost &&
+    /// !Death && !FixedHideMode && !ObMode` 时计数）未建模——本仓的城门/城墙不在 `EntityStore`
+    /// （见 `crate::castle` 的独立结构体），故走普通 actor 支。
+    #[must_use]
+    pub fn xy_obj_count(&self, map_id: usize, x: i32, y: i32) -> i32 {
+        crate::monai::count_at_cell(self, map_id, x, y)
+    }
+
+    /// `PlayObject.Run` 的重叠推挤段（`PlayObject.Message.cs:263-285`），按玩家槽位顺序。
+    ///
+    /// 逐行口径（三处门都以 `>` 严格比较，照 oracle 原式）：
+    ///
+    /// ```text
+    /// :263 if ((now - CheckDupObjTick) > 3000) {
+    /// :265   CheckDupObjTick = now;
+    /// :266   GetStartPoint();
+    /// :267   tObjCount = Envir.GetXYObjCount(CurrX, CurrY);
+    /// :268   if (tObjCount >= 2) { if (!BoDuplication) { BoDuplication = true; DupStartTick = now; } }
+    /// :276   else { BoDuplication = false; }
+    /// :280   if ((tObjCount >= 3 && now - DupStartTick > 3000 || tObjCount == 2 && now - DupStartTick > 10000)
+    /// :281       && (now - DupStartTick < 20000))
+    /// :283     CharPushed(RandomNumber.RandomByte(8), 1);
+    /// ```
+    ///
+    /// **`GetStartPoint()` 处置（登记）**：`PlayObject.Base.cs:704-723` 的它只写
+    /// `HomeMap/HomeX/HomeY`——`PvpLevel() >= 2` ⇒ `Config.RedHome*`，否则按当前 `Envir.MapName`
+    /// 在 `M2Share.StartPointList` 里顺序查（`OrdinalIgnoreCase`）；**零取数**，且不参与
+    /// `tObjCount`/推挤门。本仓的落点由**宿主**解析（`bins/game-svr/src/homemap.rs` +
+    /// `MapRegistry::id_of(CharacterData.HomeMap)`，登录/回城时一次性给 `MapRandomMove`），
+    /// 世界侧没有 per-entity `HomeMap` 状态 ⇒ 本段**不建模**（不影响本函数判据）。
+    ///
+    /// **取数**：只有三处门全部通过才调用 [`crate::run_gap::dup_push_dir`]（= C# `RandomByte(8)`，
+    /// `random.Next(8)` **恰一次**、值域 `0..=7`）；随后 [`World::char_pushed_now`] 逐格发
+    /// `RM_PUSH`。玩家选取 = `Race == Play && !Ghost`（oracle `PlayObjectList` 不含幽灵）。
+    pub fn check_dup_obj(&mut self) -> Vec<crate::action::PushEvent> {
+        let now = self.clock_ms;
+        let ids: Vec<i32> = self
+            .entities
+            .iter()
+            .filter(|e| e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost)
+            .map(|e| e.id)
+            .collect();
+        let mut pushes = Vec::new();
+        for id in ids {
+            let Some((map_id, x, y, last)) = self
+                .entities
+                .get(id)
+                .map(|e| (e.map_id, e.x, e.y, e.check_dup_obj_tick))
+            else {
+                continue;
+            };
+            // `:263` 严格 `>`：恰 3000ms 不检查。
+            if now - last <= 3000 {
+                continue;
+            }
+            // `:265` `CheckDupObjTick = GetTickCount()`（本 tick 内同一 `now`）。
+            if let Some(e) = self.entities.get_mut(id) {
+                e.check_dup_obj_tick = now;
+            }
+            // `:266` `GetStartPoint()`：见本函数文档「处置（登记）」。
+            // `:267` `tObjCount = Envir.GetXYObjCount(CurrX, CurrY)`（含自己）。
+            let t_obj_count = self.xy_obj_count(map_id, x, y);
+            // `:268-279`：`>=2` 首次置位；`<2` 清 `BoDuplication`（`DupStartTick` 不复位）。
+            let elapsed = {
+                let Some(e) = self.entities.get_mut(id) else {
+                    continue;
+                };
+                if t_obj_count >= 2 {
+                    if !e.bo_duplication {
+                        e.bo_duplication = true;
+                        e.dup_start_tick = now;
+                    }
+                } else {
+                    e.bo_duplication = false;
+                }
+                now - e.dup_start_tick
+            };
+            // `:280-281`：C# 原式 `(A && B || C && D) && E`（`&&` 优先于 `||`）。
+            let should_push = ((t_obj_count >= 3 && elapsed > 3000)
+                || (t_obj_count == 2 && elapsed > 10000))
+                && elapsed < 20000;
+            if should_push {
+                // `:283` 实参求值顺序：先取数，再 `CharPushed`。
+                let dir = crate::run_gap::dup_push_dir(&mut self.rng);
+                pushes.extend(self.char_pushed_now(id, dir, 1));
+            }
+        }
+        pushes
+    }
+
+    /// 目标格是否可走（`Envirnoment.CanWalk(nX, nY, false)`）：**包含自身**——
+    /// 与 [`World::cell_free`]（排除 `self_id`）不同：oracle `CanWalk` 不看 `cert`，同格 clamp 时
+    /// 当前格上的自己也会挡住 `CharPushed`（`GetFrontPosition` 在边界原样返回当前格）。
+    fn can_walk_cell(&self, map_id: usize, x: i32, y: i32) -> bool {
+        let Some(map) = self.maps.get(map_id) else {
+            return false;
+        };
+        if !map.cell_match(x, y) {
+            return false;
+        }
+        let (cell, ok) = map.get_cell_info(x, y);
+        // C# `if (cellSuccess && cellInfo.Valid)`；`get_cell_info` 的 `ok` 已含 `valid()`。
+        if !ok {
+            return false;
+        }
+        if !cell.is_available() {
+            return true;
+        }
+        !cell.obj_list.iter().any(|o| {
+            o.actor_object
+                && self
+                    .entities
+                    .get(o.cell_obj_id)
+                    .is_some_and(|e| !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode)
+        })
+    }
+
+    /// `BaseObject.CharPushed(nDir, nPushCount)`（`src/M2Server/Actor/BaseObject.cs:854-897`）的
+    /// 世界侧**逐句**实现（`Command::Push` 与重叠推挤共用）。
+    ///
+    /// 逐句：
+    ///
+    /// ```text
+    /// :857 Dir = nDir;
+    /// :858 nBackDir = GetBackDir(nDir);
+    /// :859 for i in 0..nPushCount {
+    /// :861   GetFrontPosition(ref nx, ref ny)                  // 用当前 Dir(= nDir) 与 CurrX/Y
+    /// :862   if (Envir.CanWalk(nx, ny, false)) {
+    /// :864     if (Envir.MoveToMovingObject(CurrX,CurrY,this,nx,ny,false)) {
+    /// :866       CurrX = nx; CurrY = ny;
+    /// :871       SendRefMsg(RM_PUSH, nBackDir, CurrX, CurrY, 0, "");
+    /// :873       result++;
+    /// :874       if (Race >= ActorRace.Animal) WalkTick = WalkTick + 800;
+    /// :878     } else break; :882 } else break;
+    /// :890 Dir = nBackDir;
+    /// :891 if (result == 0) Dir = olddir;
+    /// ```
+    ///
+    /// `MoveToMovingObject` 的阻挡集合与 `CanWalk` 同源（`!Ghost && !Death && !FixedHideMode &&
+    /// !ObMode`），故 `CanWalk` 通过后格子簿记必成功；这里仍走 `MapGrid::move_object`（源格摘除 +
+    /// 目标格追加），**不**经 `try_step`（后者额外挡非玩家 `MapRoute`，而 oracle
+    /// `MoveToMovingObject` 不挡——照抄）。
+    ///
+    /// **建模差异（登记）**：`CastleDoor.HoldPlace` 阻挡支不建模（城门不在 `EntityStore`）。
+    fn char_pushed_now(
+        &mut self,
+        actor_id: i32,
+        n_dir: u8,
+        n_push_count: u8,
+    ) -> Vec<crate::action::PushEvent> {
+        let Some(e) = self.entities.get(actor_id) else {
+            return Vec::new();
+        };
+        let old_dir = e.ai.dir;
+        let (mut x, mut y, map_id, race) = (e.x, e.y, e.map_id, e.race);
+        let Some((w, h)) = self.maps.get(map_id).map(|m| (m.width, m.height)) else {
+            return Vec::new();
+        };
+        // `:857 Dir = nDir;`（先落，末尾按 result 决定是否复原）。
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.ai.dir = n_dir;
+        }
+        let back = crate::magic::back_dir(n_dir);
+        let mut out = Vec::new();
+        for _ in 0..n_push_count {
+            let (nx, ny) = crate::magic::front_position(x, y, n_dir, w, h);
+            // `:862 Envir.CanWalk(nx, ny, false)`（含自身；不可走即 break）。
+            if !self.can_walk_cell(map_id, nx, ny) {
+                break;
+            }
+            // `:864 Envir.MoveToMovingObject(CurrX, CurrY, this, nx, ny, false)`。
+            let moved = {
+                let (maps, entities) = (&mut self.maps, &self.entities);
+                let Some(map) = maps.get_mut(map_id) else {
+                    break;
+                };
+                map.move_object(
+                    crate::map::MoveRequest {
+                        from_x: x,
+                        from_y: y,
+                        actor_id,
+                        to_x: nx,
+                        to_y: ny,
+                        ignore_block: false,
+                        add_time: self.clock_ms,
+                        // `CheckDupObj` 只对玩家生效 ⇒ cert 的 `CellType` 恒 `Play`。
+                        cert_cell_type: crate::map::CellType::Play,
+                    },
+                    |cid| {
+                        entities.get(cid).is_some_and(|o| {
+                            !o.ghost && !o.death && !o.fixed_hide_mode && !o.ob_mode
+                        })
+                    },
+                )
+            };
+            if !moved {
+                break;
+            }
+            x = nx;
+            y = ny;
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.x = x;
+                e.y = y;
+                // `:874-877 if (Race >= ActorRace.Animal) WalkTick = WalkTick + 800;`
+                if race >= crate::entity::ACTOR_RACE_ANIMAL {
+                    e.ai.walk_tick += 800;
+                }
+            }
+            // `:871 SendRefMsg(RM_PUSH, nBackDir, CurrX, CurrY, 0, "")` —— 逐格一条。
+            out.push(crate::action::PushEvent {
+                actor_id,
+                dir: back,
+                x,
+                y,
+            });
+        }
+        // `:890-895 Dir = nBackDir; if (result == 0) Dir = olddir;`
+        let final_dir = if out.is_empty() { old_dir } else { back };
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.ai.dir = final_dir;
+        }
+        out
     }
 
     /// 玩家 `BaseObject.Run` 的等价路径：`PlayObject.Run()` 末尾无条件 `base.Run()`
@@ -5290,47 +5529,11 @@ impl World {
         moved
     }
 
-    /// **出站接线片 W2**：`BaseObject.CharPushed`（`src/M2Server/Actor/BaseObject.cs:854-901`）的
-    /// **世界侧**转发（帧面在宿主）。
-    ///
-    /// 逐格照 oracle 的 `for` 循环：`GetFrontPosition(Dir = nDir)` → `CanWalk(nx, ny, false)`
-    /// （= [`World::cell_free`]，含越界/墙/活体阻挡）→ 走一格 → 记一条
-    /// [`crate::action::PushEvent`]（`dir = nBackDir`、位置 = 走**后**的 `CurrX/CurrY`）。
-    /// 任一步不可走即 `break`（oracle 的 `break`）。返回的事件表**逐格一条、保序**，
-    /// `len` = oracle `CharPushed` 的返回值 `result`。
-    ///
-    /// **不建模**（登记）：`if (Race >= ActorRace.Animal) WalkTick += 800`（`WalkTick` 不在本骨架）、
-    /// 以及 `Dir` 的落盘（`CharPushed` 会把 `Dir` 改成 `nBackDir`/`olddir`——本骨架 `Dir` 属宿主展示表，
-    /// 帧值用的是 `nBackDir` 本身，故不影响帧字节）。
+    /// **出站接线片 W2**：`Command::Push` → `BaseObject.CharPushed`
+    /// （`src/M2Server/Actor/BaseObject.cs:854-897`）——委托给逐句实现
+    /// [`World::char_pushed_now`]（含 `Dir` 复原与 `WalkTick += 800`；帧面在宿主）。
     fn push_now(&mut self, actor_id: i32, n_dir: u8, count: u8) -> Vec<crate::action::PushEvent> {
-        let Some(e) = self.entities.get(actor_id) else {
-            return Vec::new();
-        };
-        let (mut x, mut y, map_id) = (e.x, e.y, e.map_id);
-        let Some((w, h)) = self.maps.get(map_id).map(|m| (m.width, m.height)) else {
-            return Vec::new();
-        };
-        let back = crate::magic::back_dir(n_dir);
-        let mut out = Vec::new();
-        for _ in 0..count {
-            let (nx, ny) = crate::magic::front_position(x, y, n_dir, w, h);
-            // oracle `CanWalk(nx, ny, false)`：越界/墙/活体皆不可走 ⇒ break。
-            if !self.cell_free(map_id, nx, ny, actor_id) {
-                break;
-            }
-            if !self.try_step(actor_id, nx - x, ny - y) {
-                break;
-            }
-            x = nx;
-            y = ny;
-            out.push(crate::action::PushEvent {
-                actor_id,
-                dir: back,
-                x,
-                y,
-            });
-        }
-        out
+        self.char_pushed_now(actor_id, n_dir, count)
     }
 
     /// `Envirnoment.CanWalk(nx, ny, true)` 的 `cellSuccess` 子集（`Envirnoment.cs:442-486` 的

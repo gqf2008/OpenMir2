@@ -186,6 +186,8 @@ impl World {
         // `BaseObject.cs:442` / `PlayObject.cs:901` ctor `SearchTick = GetTickCount()`：
         // 玩家 `SearchViewRange` 的 1000ms 节拍从**构造/进图时刻**起算（同 `verify_tick` 口径）。
         entity.ai.search_tick = self.clock_ms;
+        // `PlayObject.cs:913` ctor `CheckDupObjTick = GetTickCount()`：重叠推挤的 3s 门从落图时刻起算。
+        entity.check_dup_obj_tick = self.clock_ms;
         let id = self.entities.insert(entity);
         let (x, y) = {
             let e = self.entities.get(id).expect("刚插入");
