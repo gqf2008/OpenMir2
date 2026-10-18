@@ -67,6 +67,17 @@
 - 证据：`E:/tmp/window/cliente2e/{csharp,rust}/{proxy*,s2c*,shots*}`（保留）。
 - 挂起：`p3-residuals` 车道在开窗前暂停（其 patch 在 `/e/tmp/p3res.patch`），窗口后再验收。
 
+## 4b. 后续定位（2026-10-18 审计与修复）
+
+- **W0-4 卫士无帧的根因已定位（真缺陷）**：Rust 未移植 oracle `BaseObject.Run` 的 30s `VerifyTick/VerifyMapTime`
+  ⇒ 卫士/商人/固定 NPC 的 `CellObject.add_time=0` 在 60s 后被 AOI 扫描逐出、永久不可见。
+  审计件 `mir2-rs/tests/parity/m3/audit-aoi-guard-visibility-20261018.md`；修复卡 `openmir2-aoi-verify-maptime`。
+  修复落地后 **W0-4 需在下一窗口重跑**。
+- **W0-1 的自动化点击根因已修**：`mir_flow -AttackTurn` 左键改为点转向格中心（`d8d3f6144`）；
+  下一窗口可直接重试 W0-1 → W0-2。
+- 日志内 `nearest<=vr` 但 `vis=0` 的采样同样由该缺陷解释（另有玩家 viewer 不应做 60s 过期的第二处偏差）。
+  诊断脚本的 `af` 跨会话继承与 `nearest` 口径造成假绿，修复片将加 `--strict-window`。
+
 ## 5. 下次窗口的最小后续（按优先级）
 
 1. **W0-1 人工点怪**：登录后先在截图里确认怪在相邻格，再右键该格 + 左键该格（或给 `mir_flow` 补
