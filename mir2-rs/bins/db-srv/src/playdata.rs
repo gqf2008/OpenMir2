@@ -12,7 +12,9 @@
 //!   `UpdateItemAttr`/`ClearItemAttr`/`SaveMagics` 走 C# 的**字符串拼 SQL**（整数内联），
 //!   这里同样拼文本后逐条执行（同一事务内等价于 C# 的多语句批处理）；
 //! - `QueryItemAttr` 的 `userItems[nPosition].Desc[nPosition] = VALUE{nPosition}` 既有 bug 照搬。
-//! - `Add` 的 `CreateCharacters` 与 5100 面的建角不同：它把完整 `CharacterData` 字段写进主表。
+//! - `Add` 的 `CreateCharacters` 与 5100 面的建角不同：它把完整 `CharacterData` 字段写进主表；
+//!   `CreateAblity` 是 **INSERT**（`Add.cs:157-193`）——旧 Rust 实现误用 UPDATE，新角色无行
+//!   ⇒ 整表永不落库（G-20，本批按 oracle 改回 INSERT）。
 //!
 //! 一处必要差异：C# `dr.GetByte/GetInt16/GetUInt16` 在列值越界时抛异常（被上层 catch）；
 //! 这里同样用 `try_from` 报错并让调用方按「取档失败」处理，不静默截断。
@@ -484,6 +486,40 @@ async fn save_ablity(conn: &mut MySqlConnection, player_id: i64, abil: &Ability)
     Ok(())
 }
 
+/// C# `PlayDataStorage.CreateAblity`（`Add.cs:157-193`）：**INSERT** 一行 `characters_ablity`。
+///
+/// 与 [`save_ablity`] 同列、同值（含 `Ac = Level` 的既有 bug），只是语句形态为 INSERT ——
+/// `Add` 兜底建角路径旧实现误用 UPDATE，新角色没有行 ⇒ 影响 0 行，整表字段永不落库（G-20）。
+async fn create_ablity(conn: &mut MySqlConnection, player_id: i64, abil: &Ability) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO characters_ablity (PlayerId, Level, Ac, Mac, Dc, Mc, Sc, Hp, Mp, MaxHP, MAxMP, Exp, MaxExp, Weight, MaxWeight, WearWeight,MaxWearWeight, HandWeight, MaxHandWeight) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(player_id)
+    .bind(i16::from(abil.level))
+    // 既有 bug：`@Ac` 绑的是 `Abil.Level`（与 `save_ablity` 同口径）。
+    .bind(i16::from(abil.level))
+    .bind(i32::from(abil.mac))
+    .bind(i32::from(abil.dc))
+    .bind(i32::from(abil.mc))
+    .bind(i32::from(abil.sc))
+    .bind(i32::from(abil.hp))
+    .bind(i32::from(abil.mp))
+    .bind(i32::from(abil.max_hp))
+    .bind(i32::from(abil.max_mp))
+    .bind(abil.exp)
+    .bind(abil.max_exp)
+    .bind(i32::from(abil.weight))
+    .bind(i32::from(abil.max_weight))
+    .bind(i16::from(abil.wear_weight))
+    .bind(i16::from(abil.max_wear_weight))
+    .bind(i16::from(abil.hand_weight))
+    .bind(i16::from(abil.max_hand_weight))
+    .execute(&mut *conn)
+    .await
+    .context("插入 characters_ablity 失败")?;
+    Ok(())
+}
+
 /// `ComparerUserItem` 的差量结果：`(要改的槽, 要删的槽)`。
 type ItemDiff = (Vec<Option<ServerUserItem>>, Vec<Option<ServerUserItem>>);
 
@@ -853,7 +889,7 @@ async fn create_ablity_status(
     player_id: i64,
     d: &CharacterData,
 ) -> Result<()> {
-    if let Err(e) = save_ablity(conn, player_id, &d.abil.clone().unwrap_or_default()).await {
+    if let Err(e) = create_ablity(conn, player_id, &d.abil.clone().unwrap_or_default()).await {
         log::error(&format!("[Exception] PlayDataStorage.CreateAblity: {e:#}"));
     }
     if let Err(e) = sqlx::query(

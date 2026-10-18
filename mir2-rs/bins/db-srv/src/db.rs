@@ -454,9 +454,17 @@ impl Db {
         Ok(Some((name.unwrap_or_default(), map.unwrap_or_default())))
     }
 
-    /// C# `PlayDataStorage.Add`：建角写 `characters` + 五张附属表（同一事务）。
+    /// C# `PlayDataStorage.Add`：建角写 `characters` + 六张附属表（同一事务）。
     ///
     /// 附属表的失败在 C# 里各自 `catch` 吞掉（只打日志、不回滚），这里同样只记日志。
+    ///
+    /// 早退守卫复刻 `Add → CheckChrExists(_NameQuickMap)`：同名已在 `characters` 即返回
+    /// `None`，整条事务不开始（含附属表），与 oracle `Add` 的重复判定**等价**。
+    ///
+    /// **不建 `characters_bonusability` 行**：oracle `PlayDataStorage.Add`/`AddRecord` 同样
+    /// **没有** `CreateBonusAbility`（全仓该表只有 `SELECT` 与 `UPDATE`）⇒ 本仓照抄。
+    /// 审计件的 G-03 原判「Rust 缺 INSERT」**不成立**——两侧同为「奖励属性永不落库」，
+    /// 属 oracle 既有行为（硬约束③：先照搬，不在此批修）。
     ///
     /// Errors: 主表插入失败、事务失败时返回错误。
     pub async fn data_add(
@@ -467,6 +475,11 @@ impl Db {
         job: u8,
         hair: u8,
     ) -> Result<Option<i64>> {
+        // C# `PlayDataStorage.Add` → `CheckChrExists(_NameQuickMap)`：同名已在 `characters`
+        // （启动时载入 + 本进程内新建）即返回 false，后续 INSERT 一条都不执行。
+        if self.name_quick.contains_key(&fold_key(name_gbk)) {
+            return Ok(None);
+        }
         let mut tx = self.pool.begin().await.context("开启事务失败")?;
         let player_id = create_character(&mut tx, name_gbk, account_text, sex, job, hair).await?;
         if player_id <= 0 {
@@ -561,4 +574,311 @@ async fn create_character(
     .context("插入 characters 失败")?;
     #[allow(clippy::cast_possible_wrap)]
     Ok(res.last_insert_id() as i64)
+}
+
+#[cfg(test)]
+mod create_rows_tests {
+    use super::{int_col, Db};
+    use mir2_storage::playerdata::{Ability, CharacterDataInfo};
+    use mir2_storage::LegacyDsn;
+    use sqlx::{Connection, MySqlConnection, Row};
+
+    const DEFAULT_DSN: &str = "server=127.0.0.1;uid=root;pwd=;database=mir2_test_pcrow_rows;";
+    /// 建角涉及的 8 张表（DDL 从冻结的 `sql/mir2_db.sql` 原样抽取）。
+    const TABLES: [&str; 8] = [
+        "characters_indexes",
+        "characters",
+        "characters_ablity",
+        "characters_bonusability",
+        "characters_item",
+        "characters_bagitem",
+        "characters_storageitem",
+        "characters_status",
+    ];
+    const ABLITY_COLS: [&str; 18] = [
+        "Level",
+        "Ac",
+        "Mac",
+        "Dc",
+        "Mc",
+        "Sc",
+        "Hp",
+        "Mp",
+        "MaxHP",
+        "MAxMP",
+        "Exp",
+        "MaxExp",
+        "Weight",
+        "MaxWeight",
+        "WearWeight",
+        "MaxWearWeight",
+        "HandWeight",
+        "MaxHandWeight",
+    ];
+
+    fn ddl_for(dump: &str, table: &str) -> String {
+        let marker = format!("CREATE TABLE `{table}` ");
+        let start = dump
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{table} 建表语句缺失"));
+        let rest = &dump[start..];
+        let engine = rest.find(") ENGINE").expect("建表语句缺 ENGINE 尾");
+        let semi = rest[engine..].find(';').expect("建表语句缺分号");
+        rest[..=engine + semi].to_string()
+    }
+
+    async fn setup(dsn: &LegacyDsn) {
+        let admin = LegacyDsn {
+            database: "mysql".to_string(),
+            ..dsn.clone()
+        };
+        let mut conn = MySqlConnection::connect(&admin.to_sqlx_url())
+            .await
+            .expect("连测试 MySQL 失败（本测试需本机 MySQL）");
+        sqlx::query(&format!("DROP DATABASE IF EXISTS `{}`", dsn.database))
+            .execute(&mut conn)
+            .await
+            .expect("删测试库失败");
+        sqlx::query(&format!(
+            "CREATE DATABASE `{}` CHARACTER SET utf8 COLLATE utf8_general_ci",
+            dsn.database
+        ))
+        .execute(&mut conn)
+        .await
+        .expect("建测试库失败");
+        let dump = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../sql/mir2_db.sql"
+        ))
+        .expect("读 sql/mir2_db.sql 失败");
+        let mut conn = MySqlConnection::connect(&dsn.to_sqlx_url())
+            .await
+            .expect("连测试库失败");
+        for table in TABLES {
+            let ddl = ddl_for(&dump, table);
+            sqlx::query(&ddl)
+                .execute(&mut conn)
+                .await
+                .unwrap_or_else(|e| panic!("建表 {table} 失败: {e}"));
+        }
+    }
+
+    async fn row_ints(conn: &mut MySqlConnection, sql: &str, id: i64, cols: &[&str]) -> Vec<i64> {
+        let row = sqlx::query(sql)
+            .bind(id)
+            .fetch_one(&mut *conn)
+            .await
+            .expect("期望的行不存在");
+        cols.iter()
+            .map(|c| int_col(&row, c).expect("整数列"))
+            .collect()
+    }
+
+    async fn count(conn: &mut MySqlConnection, sql: &str, id: i64) -> i64 {
+        let row = sqlx::query(sql)
+            .bind(id)
+            .fetch_one(&mut *conn)
+            .await
+            .expect("计数查询失败");
+        int_col(&row, "c").expect("计数列")
+    }
+
+    async fn count_str(conn: &mut MySqlConnection, sql: &str, name: &str) -> i64 {
+        let row = sqlx::query(sql)
+            .bind(name)
+            .fetch_one(&mut *conn)
+            .await
+            .expect("计数查询失败");
+        int_col(&row, "c").expect("计数列")
+    }
+
+    /// 构造级验收（G-20；G-03 已证伪——oracle 同样不建 `characters_bonusability` 行）：
+    /// a) 正常建角后 `characters`/`characters_ablity` 各 1 行（ablity 18 列全 0），
+    ///    **`characters_bonusability` 0 行**（与 oracle `Add` 一样不建）；
+    /// b) 索引缺失触发的 `play_data_add` 兜底路径必须建出 `characters_ablity` 行，值 = `hd.Abil`
+    ///    （`Ac = Level` 的既有 bug 照搬）；
+    /// c) 二次建角（同名）不产生任何重复行（oracle `Add → CheckChrExists` 语义）。
+    ///
+    /// 跑法（需本机 MySQL；默认 `root` 空口令、库名 `mir2_test_pcrow_rows`，测试自建自删）：
+    /// `cargo test -p db-srv --bins create_rows_tests -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；MIR2_TEST_DB_DSN 可覆盖，库名必须以 mir2_test_ 开头"]
+    #[allow(clippy::too_many_lines)]
+    async fn normal_and_fallback_creation_write_oracle_default_rows() {
+        let text = std::env::var("MIR2_TEST_DB_DSN").unwrap_or_else(|_| DEFAULT_DSN.to_string());
+        let dsn = LegacyDsn::parse(&text).expect("测试 DSN 非法");
+        assert!(
+            dsn.database.starts_with("mir2_test_"),
+            "拒绝写非测试库：{}",
+            dsn.database
+        );
+        setup(&dsn).await;
+
+        let mut db = Db::connect(&dsn).await.expect("连测试库失败");
+        db.load_quick_lists().await.expect("载入索引失败");
+
+        // ---- a) 正常建角（handler.rs → data_add） ----
+        let id = db
+            .data_add(b"pcrow_a", "pcrow_acct", 1, 2, 3)
+            .await
+            .expect("data_add 失败")
+            .expect("首次建角应成功");
+        let mut conn = MySqlConnection::connect(&dsn.to_sqlx_url())
+            .await
+            .expect("连测试库失败");
+        assert_eq!(
+            count(
+                &mut conn,
+                "SELECT COUNT(*) AS c FROM characters WHERE Id=?",
+                id
+            )
+            .await,
+            1,
+            "characters 应恰 1 行"
+        );
+        let abl = row_ints(
+            &mut conn,
+            "SELECT * FROM characters_ablity WHERE PlayerId=?",
+            id,
+            &ABLITY_COLS,
+        )
+        .await;
+        assert_eq!(abl.len(), 18);
+        assert!(abl.iter().all(|v| *v == 0), "ablity 列值必须全 0: {abl:?}");
+        // G-03 证伪：oracle `PlayDataStorage.Add` 没有 `CreateBonusAbility`，全仓该表只有
+        // SELECT/UPDATE ⇒ 正常建角**不得**出现该行（照抄 oracle 既有行为）。
+        assert_eq!(
+            count(
+                &mut conn,
+                "SELECT COUNT(*) AS c FROM characters_bonusability WHERE PlayerId=?",
+                id
+            )
+            .await,
+            0,
+            "oracle 不建 bonusability 行，Rust 必须照抄"
+        );
+        assert_eq!(
+            count(
+                &mut conn,
+                "SELECT COUNT(*) AS c FROM characters_status WHERE PlayerId=?",
+                id
+            )
+            .await,
+            1
+        );
+
+        // ---- b) 兜底建角（data.rs::save_human_rcd → play_data_add） ----
+        let mut info = CharacterDataInfo::csharp_new();
+        info.header.name = Some("pcrow_b".to_string());
+        info.header.s_account = Some("pcrow_acct".to_string());
+        let d = info.data.as_mut().expect("csharp_new 的 Data 非空");
+        d.chr_name = Some("pcrow_b".to_string());
+        d.account = Some("pcrow_acct".to_string());
+        d.abil = Some(Ability {
+            level: 7,
+            ac: 99, // 必须被忽略：oracle CreateAblity 的 @Ac 绑的是 Level
+            mac: 1,
+            dc: 2,
+            mc: 3,
+            sc: 4,
+            hp: 5,
+            mp: 6,
+            max_hp: 8,
+            max_mp: 9,
+            exp: 10,
+            max_exp: 11,
+            weight: 12,
+            max_weight: 13,
+            wear_weight: 14,
+            max_wear_weight: 15,
+            hand_weight: 16,
+            max_hand_weight: 17,
+            ..Ability::default()
+        });
+        assert!(db.play_data_add(&info).await.expect("play_data_add 失败"));
+        let row = sqlx::query("SELECT Id FROM characters WHERE ChrName=?")
+            .bind("pcrow_b")
+            .fetch_one(&mut conn)
+            .await
+            .expect("兜底建角未写 characters");
+        let id_b: i64 = row.try_get("Id").expect("Id 列");
+        assert_eq!(
+            count(
+                &mut conn,
+                "SELECT COUNT(*) AS c FROM characters_ablity WHERE PlayerId=?",
+                id_b
+            )
+            .await,
+            1,
+            "兜底路径必须建出 characters_ablity 行（G-20）"
+        );
+        let abl_b = row_ints(
+            &mut conn,
+            "SELECT * FROM characters_ablity WHERE PlayerId=?",
+            id_b,
+            &ABLITY_COLS,
+        )
+        .await;
+        assert_eq!(
+            abl_b,
+            vec![7, 7, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+            "兜底建角 ablity 值必须 = hd.Abil（Ac = Level）"
+        );
+
+        // ---- c) 二次建角：同名不重复插入（oracle Add 的重复判定） ----
+        assert!(!db
+            .play_data_add(&info)
+            .await
+            .expect("二次 play_data_add 失败"));
+        assert_eq!(
+            count_str(
+                &mut conn,
+                "SELECT COUNT(*) AS c FROM characters WHERE ChrName=?",
+                "pcrow_b"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            count(
+                &mut conn,
+                "SELECT COUNT(*) AS c FROM characters_ablity WHERE PlayerId=?",
+                id_b
+            )
+            .await,
+            1
+        );
+        assert!(
+            db.data_add(b"pcrow_a", "pcrow_acct", 0, 0, 0)
+                .await
+                .expect("二次 data_add 失败")
+                .is_none(),
+            "同名二次 data_add 必须返回 None"
+        );
+        assert_eq!(
+            count_str(
+                &mut conn,
+                "SELECT COUNT(*) AS c FROM characters WHERE ChrName=?",
+                "pcrow_a"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            count(
+                &mut conn,
+                "SELECT COUNT(*) AS c FROM characters_bonusability WHERE PlayerId=?",
+                id
+            )
+            .await,
+            0,
+            "二次建角后仍不得出现 bonusability 行（oracle 从不建）"
+        );
+
+        drop(db);
+        sqlx::query(&format!("DROP DATABASE IF EXISTS `{}`", dsn.database))
+            .execute(&mut conn)
+            .await
+            .expect("清理测试库失败");
+    }
 }

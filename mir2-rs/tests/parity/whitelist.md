@@ -416,10 +416,12 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 | --- | --- | --- | --- |
 | T-70 | **隐藏脚本 NPC 的「存在」判据是代理判据**：oracle `LoadMapQuest` 尾的三只隐藏 NPC 在 `File.Exists` **之前**会**缺件先建**（`LocalDB.cs` 的 `QFunctionNpc` / `QMangeNpc` / `RobotNpc`：缺目录 `CreateDirectory`、缺文件 `SaveToFile` 占位），故「存在」在 oracle 实质**恒真**；Rust 侧 `MapQuestLoad::hidden_npcs`（`mir2-rs/crates/envir/src/mapquest.rs`）用 `present = 文件存在或目录存在` 作代理判据 ⇒ 仅当**文件与其所在目录同时缺失**时二者分歧（oracle 会建件 + 抽 4，Rust 抽 0）。 | **不是「实现得不同」而是判据近似**：分歧只在「双缺」语料上显形；部署件三个目录都在（`Robot_def/` 有目录无 `RobotManage.txt`）⇒ 两侧都是 **3**（实测）。影响面仅限构造段抽数（R 级窗口项）⇒ 真机对拍若出现该形态，须先按 oracle 补建语义再比账本。 | 作者登记（`openmir2-orchestrator`，`openmir2-ctor-draws-fold`）；**待独立 principal 复核** |
 | T-71 | **`Robot.txt` 行尾切分口径**：Rust `parse_robot_lines`（`mir2-rs/crates/envir/src/robot.rs`）用 `split('
-')` + 去尾 `` ⇒ 只认 `LF`/`CRLF`；oracle `RobotManage.LoadRobot` 走 `StringList.LoadFromFile` → `StreamReader.ReadLine`，它还把**孤立 `CR`** 当换行 ⇒ 某行以孤立 `CR` 结尾时 oracle 会多切出一行（可能多一个 `new RobotObject()` ⇒ 多抽 4），Rust 少切。 | **口径缺口、当前不可达**：部署件 `od -c` 实读 43 字节为 `;…
+')` + 去尾 `
+` ⇒ 只认 `LF`/`CRLF`；oracle `RobotManage.LoadRobot` 走 `StringList.LoadFromFile` → `StreamReader.ReadLine`，它还把**孤立 `CR`** 当换行 ⇒ 某行以孤立 `CR` 结尾时 oracle 会多切出一行（可能多一个 `new RobotObject()` ⇒ 多抽 4），Rust 少切。 | **口径缺口、当前不可达**：部署件 `od -c` 实读 43 字节为 `;…
 系统控制 AutoRunRobot`（无孤立 `CR`）⇒ 两侧有效行都是 **1**。仅当语料含孤立 `CR` 时显形；修法 = 按 `ReadLine` 语义切分（`
 `/`
-`/`` 三态），另开片。 | 作者登记（`openmir2-orchestrator`，`openmir2-ctor-draws-fold`）；**待独立 principal 复核** |
+`/`
+` 三态），另开片。 | 作者登记（`openmir2-orchestrator`，`openmir2-ctor-draws-fold`）；**待独立 principal 复核** |
 
 ## 登录公告 / ClientTick 与 DoSpell 版本门登记（卡 `openmir2-gateb1-loginnotice-versiongate`，2026-10-17）
 
