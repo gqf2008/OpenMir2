@@ -27750,6 +27750,7 @@ mod tests {
             mir2_world::magic::next_direction(10, 10, 11, 10),
             u8::try_from(want_steps).unwrap(),
             target,
+            mir2_world::map::CellType::Play,
         );
         assert_eq!(
             want_moved, want_steps,

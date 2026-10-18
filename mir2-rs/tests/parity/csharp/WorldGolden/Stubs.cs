@@ -109,6 +109,10 @@ namespace WorldGolden
         public int CurrY;
         public byte ViewRange = 5; // BaseObject.cs:383
         public byte Race = 0;      // ActorRace.Play
+        // `BaseObject.CellType`（`BaseObject.cs:97`；PlayObject.cs:1034 = Play、
+        // AnimalObject.cs:86 = Monster、NormNpc.cs:50 = Merchant）。只在
+        // `MoveToMovingObject` 的 `moveObject.CellObjId == 0` 支被读。
+        public CellType CellType;
         // `BaseObject.SearchTime/SearchTick`（`BaseObject.cs:271/275`；ctor `:441-442`）。
         // 玩家 `PlayObject` ctor 覆盖为常量 `SearchTime = 1000`、`SearchTick = GetTickCount()`
         // （`PlayObject.cs:899-901`）；世界循环按 `(now - SearchTick) > SearchTime` 节流
@@ -449,12 +453,18 @@ namespace WorldGolden
             }
             if (canMove && cellInfo.Valid)
             {
+                // **oracle 怪癖照抄（Envirnoment.cs:383-424）**：`moveObject` 是源格 `for`
+                // 循环的**循环变量**（不是"被移动的 cert"）。命中 cert 并 `RemoveAt(i)` 后，
+                // `Count > 0` 时的 `continue` 走 `for` 的 `i++`，跳过前移进 `i` 的元素；
+                // 循环结束时目标格追加的是"最后一次赋值"的那个 CellObject（同一 id 可能
+                // 仍在源格）。勿"修正"为 AddMapObject(cert)。
+                CellObject moveObject = default;
                 MapCellInfo oldCellInfo = GetCellInfo(nCx, nCy, out bool oldSuccess);
                 if (oldSuccess && oldCellInfo.IsAvailable)
                 {
                     for (int i = 0; i < oldCellInfo.ObjList.Count; i++)
                     {
-                        CellObject moveObject = oldCellInfo.ObjList[i];
+                        moveObject = oldCellInfo.ObjList[i];
                         if (moveObject.CellObjId == cert.ActorId && moveObject.ActorObject)
                         {
                             oldCellInfo.Remove(i);
@@ -467,8 +477,28 @@ namespace WorldGolden
                         }
                     }
                 }
-                AddMapObject(nX, nY, CellType.Play, cert.ActorId, cert);
-                result = true;
+                if (cellSuccess)
+                {
+                    if (moveObject.CellObjId == 0)
+                    {
+                        moveObject.CellType = cert.CellType;
+                        moveObject.CellObjId = cert.ActorId;
+                        switch (cert.CellType)
+                        {
+                            case CellType.Play:
+                            case CellType.Monster:
+                            case CellType.Merchant:
+                                moveObject.ActorObject = true;
+                                break;
+                            default:
+                                moveObject.ActorObject = false;
+                                break;
+                        }
+                    }
+                    moveObject.AddTime = HUtil32.GetTickCount();
+                    cellInfo.Add(moveObject);
+                    result = true;
+                }
             }
             return result;
         }

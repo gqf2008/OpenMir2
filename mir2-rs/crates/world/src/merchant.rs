@@ -914,6 +914,7 @@ pub(crate) fn map_random_move(world: &mut World, actor_id: i32) {
         return;
     };
     let (map_id, from_x, from_y) = (e.map_id, e.x, e.y);
+    let cert_cell_type = crate::world::entity_cell_type(e);
     let Some(map) = world.maps.get(map_id) else {
         return;
     };
@@ -938,6 +939,7 @@ pub(crate) fn map_random_move(world: &mut World, actor_id: i32) {
             from_x,
             from_y,
             actor_id,
+            cert_cell_type,
             to_x: nx,
             to_y: ny,
             ignore_block: true,

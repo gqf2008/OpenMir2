@@ -155,6 +155,9 @@ pub struct MoveRequest {
     pub from_x: i32,
     pub from_y: i32,
     pub actor_id: i32,
+    /// 对应 oracle `cert.CellType`。只在 `moveObject.CellObjId == 0` 的初始化支被读
+    /// （见 [`MapGrid::move_object`]），其余分支忽略。
+    pub cert_cell_type: CellType,
     pub to_x: i32,
     pub to_y: i32,
     /// 对应 C# 的 `boFlag`：true 时跳过阻挡判定
@@ -585,9 +588,13 @@ impl MapGrid {
     /// 对应 `Envirnoment.MoveToMovingObject(nCx, nCy, cert, nX, nY, boFlag)` 的
     /// **格子簿记部分**（不含 `Walk` 回调与坐标更新，那在 `crate::world`）。
     ///
-    /// 语义：目标格有任意"非 Ghost/非 Death/非 FixedHideMode/非 ObMode"的活体 ⇒ 不可移动
-    ///（门另见 `CastleDoor.HoldPlace`，本骨架不含门对象，保留分支位置注释）。
-    /// 可移动时把 `actor_id` 从源格摘除、追加到目标格。
+    /// **oracle 怪癖（`src/M2Server/Maps/Envirnoment.cs:383-424`，勿修）**：
+    /// `moveObject` 是源格 `for` 循环里的**循环变量**，不是"被移动的 cert"。找到 cert 后
+    /// `RemoveAt(i)`；若源格仍有对象，oracle `continue` 交给 `for` 的 `i++`，于是
+    /// **跳过前移进 `i` 的那个元素**继续扫。循环结束时 `moveObject` 里留的是"最后一次赋值的
+    /// 元素"（通常不是 cert，而是源格靠后的某个元素），目标格追加的就是它——于是同一
+    /// `CellObjId` 可能同时出现在源格与目标格。只有 `moveObject.CellObjId == 0`
+    /// （循环从未执行/最后读到的对象 id 为 0）才按 `cert` 初始化。
     ///
     /// 返回 `true` = 格子簿记完成（调用方再更新坐标）。
     pub fn move_object(&mut self, req: MoveRequest, is_blocking: impl Fn(i32) -> bool) -> bool {
@@ -595,6 +602,7 @@ impl MapGrid {
             from_x,
             from_y,
             actor_id,
+            cert_cell_type,
             to_x,
             to_y,
             ignore_block,
@@ -604,9 +612,13 @@ impl MapGrid {
             return false;
         }
         let mut can_move = true;
+        let cell_success;
+        let cell_valid;
         {
-            let (cell, cell_success) = self.get_cell_info(to_x, to_y);
-            if !ignore_block && cell_success {
+            let (cell, success) = self.get_cell_info(to_x, to_y);
+            cell_success = success;
+            cell_valid = cell.valid();
+            if !ignore_block && success {
                 if cell.valid() && cell.is_available() {
                     for obj in &cell.obj_list {
                         if obj.actor_object && is_blocking(obj.cell_obj_id) {
@@ -620,30 +632,56 @@ impl MapGrid {
                 }
             }
         }
-        if !can_move {
+        if !can_move || !cell_valid {
             return false;
         }
-        let (cell, _) = self.get_cell_info(to_x, to_y);
-        if !cell.valid() {
-            return false;
-        }
-        // 从源格摘除（C# 按 CellObjId 匹配，命中即 RemoveAt 并处理 Count 归零的 Clear 分支）
+        // `CellObject moveObject = default;`。C# 的 `default(CellType)` 是 0（无枚举项）；
+        // 本仓枚举没有 0 值，用 `Event` 占位——只有 `CellObjId == 0` 的初始化支会读
+        // `cell_type`，而该支立即用 `cert_cell_type` 覆盖它，故占位值不可观测。
+        let mut move_object = CellObject {
+            cell_obj_id: 0,
+            cell_type: CellType::Event,
+            actor_object: false,
+            add_time: 0,
+            item: None,
+        };
+        // 源格循环：**逐字复刻** `Envirnoment.cs:387-401`（含 `i++` 跳过前移项）。
         {
             let (old, old_success) = self.get_cell_info_mut(from_x, from_y);
             if old_success && old.is_available() {
-                if let Some(pos) = old
-                    .obj_list
-                    .iter()
-                    .position(|o| o.cell_obj_id == actor_id && o.actor_object)
-                {
-                    old.remove_at(pos);
-                    if old.count() == 0 {
+                let mut i = 0usize;
+                while i < old.obj_list.len() {
+                    move_object = old.obj_list[i];
+                    if move_object.cell_obj_id == actor_id && move_object.actor_object {
+                        old.remove_at(i);
+                        if old.count() > 0 {
+                            // C# `continue` → for 的 `i++`：跳过已前移到 `i` 的元素。
+                            i += 1;
+                            continue;
+                        }
                         old.clear();
+                        break;
                     }
+                    i += 1;
                 }
             }
         }
-        self.add_map_object(to_x, to_y, CellType::Play, actor_id, add_time)
+        // `if (cellSuccess)`：目标格不可用 ⇒ 源格已删（oracle 先删后判）。
+        if !cell_success {
+            return false;
+        }
+        let (cell, _) = self.get_cell_info_mut(to_x, to_y);
+        if move_object.cell_obj_id == 0 {
+            move_object.cell_type = cert_cell_type;
+            move_object.cell_obj_id = actor_id;
+            move_object.actor_object = matches!(
+                cert_cell_type,
+                CellType::Play | CellType::Monster | CellType::Merchant
+            );
+        }
+        move_object.add_time = add_time;
+        cell.add(move_object);
+        true
     }
 
     /// 只读遍历辅助（AOI 扫描需要按 X 外/Y 内访问格子）。
@@ -801,6 +839,7 @@ mod tests {
                 from_x: 2,
                 from_y: 2,
                 actor_id: 1,
+                cert_cell_type: CellType::Play,
                 to_x: 3,
                 to_y: 2,
                 ignore_block: false,
@@ -824,6 +863,7 @@ mod tests {
                 from_x: 2,
                 from_y: 2,
                 actor_id: 1,
+                cert_cell_type: CellType::Play,
                 to_x: 3,
                 to_y: 2,
                 ignore_block: true,
@@ -833,6 +873,189 @@ mod tests {
         );
         assert!(moved, "boFlag=true 时跳过阻挡判定");
         assert_eq!(g.cell(3, 2).count(), 2);
+    }
+
+    // ==== `MoveToMovingObject` oracle 怪癖（`Envirnoment.cs:383-424`）构造级判据 ====
+    //
+    // 目标格追加的是源格 `for` 循环**最后一次赋值**的 CellObject（通常不是 cert），
+    // 源格只删 cert；`Count > 0` 时 `continue` 走 `i++`，跳过前移进 `i` 的元素。
+
+    fn seed(g: &mut MapGrid, x: i32, y: i32, ids: &[i32]) {
+        for id in ids {
+            g.add_map_object(x, y, CellType::Play, *id, 0);
+        }
+    }
+
+    fn ids(g: &MapGrid, x: i32, y: i32) -> Vec<i32> {
+        g.cell(x, y)
+            .obj_list
+            .iter()
+            .map(|o| o.cell_obj_id)
+            .collect()
+    }
+
+    fn req(
+        from: (i32, i32),
+        to: (i32, i32),
+        actor_id: i32,
+        cert_cell_type: CellType,
+    ) -> MoveRequest {
+        MoveRequest {
+            from_x: from.0,
+            from_y: from.1,
+            actor_id,
+            cert_cell_type,
+            to_x: to.0,
+            to_y: to.1,
+            ignore_block: true,
+            add_time: 7,
+        }
+    }
+
+    #[test]
+    fn mto_quirk_one_object_moves_cert() {
+        let mut g = MapGrid::new(8, 8);
+        seed(&mut g, 2, 2, &[1]);
+        assert!(g.move_object(req((2, 2), (3, 2), 1, CellType::Play), |_| false));
+        assert_eq!(ids(&g, 2, 2), Vec::<i32>::new(), "源格清空");
+        assert_eq!(ids(&g, 3, 2), vec![1], "目标格 = cert 副本");
+    }
+
+    #[test]
+    fn mto_quirk_two_objects_cert_last_is_equivalence_path() {
+        let mut g = MapGrid::new(8, 8);
+        seed(&mut g, 2, 2, &[1, 2]);
+        assert!(g.move_object(req((2, 2), (3, 2), 2, CellType::Play), |_| false));
+        assert_eq!(ids(&g, 2, 2), vec![1], "源格删 cert");
+        assert_eq!(ids(&g, 3, 2), vec![2], "cert 在末 ⇒ 循环变量仍是 cert");
+    }
+
+    #[test]
+    fn mto_quirk_three_objects_cert_first_duplicates_last() {
+        let mut g = MapGrid::new(8, 8);
+        seed(&mut g, 2, 2, &[1, 2, 3]);
+        assert!(g.move_object(req((2, 2), (3, 2), 1, CellType::Play), |_| false));
+        assert_eq!(ids(&g, 2, 2), vec![2, 3]);
+        assert_eq!(
+            ids(&g, 3, 2),
+            vec![3],
+            "跳过前移的 2，最终读到 3 ⇒ 3 同时在两格"
+        );
+    }
+
+    #[test]
+    fn mto_quirk_three_objects_cert_middle_keeps_cert() {
+        let mut g = MapGrid::new(8, 8);
+        seed(&mut g, 2, 2, &[1, 2, 3]);
+        assert!(g.move_object(req((2, 2), (3, 2), 2, CellType::Play), |_| false));
+        assert_eq!(ids(&g, 2, 2), vec![1, 3]);
+        assert_eq!(ids(&g, 3, 2), vec![2], "i++ 后越界 ⇒ moveObject 仍为 cert");
+    }
+
+    #[test]
+    fn mto_quirk_three_objects_cert_last_keeps_cert() {
+        let mut g = MapGrid::new(8, 8);
+        seed(&mut g, 2, 2, &[1, 2, 3]);
+        assert!(g.move_object(req((2, 2), (3, 2), 3, CellType::Play), |_| false));
+        assert_eq!(ids(&g, 2, 2), vec![1, 2]);
+        assert_eq!(ids(&g, 3, 2), vec![3]);
+    }
+
+    #[test]
+    fn mto_quirk_four_objects_cert_first_duplicates_last() {
+        let mut g = MapGrid::new(8, 8);
+        seed(&mut g, 2, 2, &[1, 2, 3, 4]);
+        assert!(g.move_object(req((2, 2), (3, 2), 1, CellType::Play), |_| false));
+        assert_eq!(ids(&g, 2, 2), vec![2, 3, 4]);
+        assert_eq!(ids(&g, 3, 2), vec![4]);
+    }
+
+    #[test]
+    fn mto_quirk_four_objects_cert_middle_duplicates_last() {
+        let mut g = MapGrid::new(8, 8);
+        seed(&mut g, 2, 2, &[1, 2, 3, 4]);
+        assert!(g.move_object(req((2, 2), (3, 2), 2, CellType::Play), |_| false));
+        assert_eq!(ids(&g, 2, 2), vec![1, 3, 4]);
+        assert_eq!(ids(&g, 3, 2), vec![4], "跳过前移的 3，读到 4");
+    }
+
+    #[test]
+    fn mto_quirk_four_objects_cert_last_keeps_cert() {
+        let mut g = MapGrid::new(8, 8);
+        seed(&mut g, 2, 2, &[1, 2, 3, 4]);
+        assert!(g.move_object(req((2, 2), (3, 2), 4, CellType::Play), |_| false));
+        assert_eq!(ids(&g, 2, 2), vec![1, 2, 3]);
+        assert_eq!(ids(&g, 3, 2), vec![4]);
+    }
+
+    #[test]
+    fn mto_quirk_copies_source_celltype_actor_and_refreshes_addtime() {
+        let mut g = MapGrid::new(8, 8);
+        for id in [1, 2, 3] {
+            // 源格对象是怪（Monster）——非 0 的 moveObject 必须沿用源对象的 CellType，
+            // 而不是旧的「恒 Play」。
+            g.add_map_object(2, 2, CellType::Monster, id, 0);
+        }
+        assert!(g.move_object(req((2, 2), (3, 2), 1, CellType::Play), |_| false));
+        let copied = g.cell(3, 2).obj_list[0];
+        assert_eq!(copied.cell_obj_id, 3);
+        assert_eq!(copied.cell_type, CellType::Monster, "沿用源对象 CellType");
+        assert!(copied.actor_object, "沿用源对象 ActorObject");
+        assert_eq!(copied.add_time, 7, "副本 AddTime 刷成 now");
+        assert_eq!(
+            g.cell(2, 2).obj_list[1].add_time,
+            0,
+            "源格里的同一对象不被改 AddTime（moveObject 是值拷贝）"
+        );
+    }
+
+    #[test]
+    fn mto_quirk_cell_success_false_removes_source_but_adds_nothing() {
+        let mut g = MapGrid::new(8, 8);
+        seed(&mut g, 2, 2, &[1]);
+        g.get_cell_info_mut(3, 2)
+            .0
+            .set_attribute(CellAttribute::LowWall);
+        assert!(!g.move_object(req((2, 2), (3, 2), 1, CellType::Play), |_| false));
+        assert_eq!(
+            ids(&g, 2, 2),
+            Vec::<i32>::new(),
+            "oracle 先删源格再判 cellSuccess"
+        );
+        assert_eq!(ids(&g, 3, 2), Vec::<i32>::new(), "目标格不变");
+    }
+
+    #[test]
+    fn mto_quirk_old_success_false_initializes_from_cert() {
+        let mut g = MapGrid::new(8, 8);
+        assert!(g.move_object(req((-1, 2), (3, 2), 9, CellType::Monster), |_| false));
+        assert_eq!(ids(&g, 3, 2), vec![9]);
+        let o = g.cell(3, 2).obj_list[0];
+        assert_eq!(
+            o.cell_type,
+            CellType::Monster,
+            "CellObjId==0 ⇒ CellType=cert.CellType"
+        );
+        assert!(o.actor_object, "Monster ⇒ ActorObject=true");
+        assert_eq!(o.add_time, 7, "AddTime 刷成 now");
+    }
+
+    #[test]
+    fn mto_quirk_last_read_id_zero_initializes_from_cert() {
+        let mut g = MapGrid::new(8, 8);
+        seed(&mut g, 2, 2, &[1, 2]);
+        assert!(
+            g.add_event_cell(2, 2, 0),
+            "事件 CellObjId=0（oracle MapEvent.Id 恒 0）"
+        );
+        // 源格 [1,2,0]；cert=1 ⇒ 删 1 后 continue 跳过 2，最后读到 id=0 的事件。
+        assert!(g.move_object(req((2, 2), (3, 2), 1, CellType::Play), |_| false));
+        assert_eq!(ids(&g, 2, 2), vec![2, 0]);
+        assert_eq!(
+            ids(&g, 3, 2),
+            vec![1],
+            "moveObject.CellObjId==0 ⇒ 按 cert 初始化"
+        );
     }
 
     /// **L1 TransMap 世界侧落格**：`AddMapRoute` 的 `cell.valid` 门照抄——

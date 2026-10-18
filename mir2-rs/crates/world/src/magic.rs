@@ -731,6 +731,8 @@ pub fn front_position(x: i32, y: i32, dir: u8, width: i32, height: i32) -> (i32,
 ///
 /// 无 RNG。目标自身不在格上（探针场景），故 `MoveToMovingObject` 的源格摘除不命中；
 /// 目标位置随成功步数前进；`Dir`：`result>0` 取反方向，否则回到初值。
+// 参数与 oracle `CharPushed` + cert 的 `CellType` 一一对应（探针 API；不再拆结构体）。
+#[allow(clippy::too_many_arguments)]
 pub fn char_pushed(
     map: &mut MapGrid,
     x: &mut i32,
@@ -739,6 +741,7 @@ pub fn char_pushed(
     n_dir: u8,
     push_count: u8,
     actor_id: i32,
+    cert_cell_type: CellType,
 ) -> i32 {
     let old_dir = *dir;
     *dir = n_dir;
@@ -756,6 +759,7 @@ pub fn char_pushed(
                 from_x: *x,
                 from_y: *y,
                 actor_id,
+                cert_cell_type,
                 to_x: nx,
                 to_y: ny,
                 ignore_block: false,
@@ -850,6 +854,9 @@ pub fn mag_push_arround(
                     n_dir,
                     push,
                     t.actor_id,
+                    // 探针口径：`PushTarget` 不建模 CellType；该值只在源格无目标时写进
+                    // 目标格副本（oracle `moveObject.CellObjId == 0` 支），不影响 x/y/dir。
+                    CellType::Play,
                 );
                 oc.push_count = steps;
                 oc.pushed = true;

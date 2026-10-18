@@ -643,14 +643,19 @@ impl World {
             map.get_cell_info(x, y).1
         });
         let (nx, ny) = found?;
+        let (from_x, from_y, cert_cell_type) = {
+            let e = self.entities.get(target)?;
+            (e.x, e.y, crate::world::entity_cell_type(e))
+        };
         // `Envir.DeleteFromMap` + `Envir.AddMapObject`（`BaseObject.cs:1114/1132`）。
         let moved = {
             let map = self.maps.get_mut(map_id)?;
             map.move_object(
                 crate::map::MoveRequest {
-                    from_x: self.entities.get(target)?.x,
-                    from_y: self.entities.get(target)?.y,
+                    from_x,
+                    from_y,
                     actor_id: target,
+                    cert_cell_type,
                     to_x: nx,
                     to_y: ny,
                     ignore_block: true,

@@ -784,7 +784,7 @@ pub const VERIFY_MAP_TIME_MS: i64 = 30 * 1000;
 
 /// `BaseObject.CellType` 的等价物（`PlayObject.cs:1034` = Play、`AnimalObject.cs:86` = Monster、
 /// `NormNpc.cs:50` = Merchant）；`verify_map_time` 重新登记时用它保持落格类型。
-fn entity_cell_type(e: &Entity) -> CellType {
+pub(crate) fn entity_cell_type(e: &Entity) -> CellType {
     if e.merchant.is_some() || e.npc.is_some() {
         CellType::Merchant
     } else if e.race == crate::entity::ACTOR_RACE_PLAY {
@@ -5243,6 +5243,7 @@ impl World {
             return false;
         };
         let (fx, fy, map_id) = (e.x, e.y, e.map_id);
+        let cert_cell_type = entity_cell_type(e);
         let (tx, ty) = (fx + dx, fy + dy);
         let Some(map) = self.maps.get_mut(map_id) else {
             return false;
@@ -5272,6 +5273,7 @@ impl World {
                 from_x: fx,
                 from_y: fy,
                 actor_id,
+                cert_cell_type,
                 to_x: tx,
                 to_y: ty,
                 ignore_block: false,
@@ -6993,6 +6995,7 @@ mod tests {
             crate::magic::DIR_UP,
             4,
             1,
+            crate::map::CellType::Play,
         );
 
         assert_eq!(res, steps, "成功步数 = 事件数");
