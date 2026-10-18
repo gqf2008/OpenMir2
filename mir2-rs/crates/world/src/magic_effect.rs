@@ -641,6 +641,11 @@ pub struct TammingOutcome {
     pub walk_speed: i32,
     pub next_hit_time: i32,
     pub crazy_mode: bool,
+    /// `OpenCrazyMode(Random(20) + 10)` 的**秒数**参数（`MagicManager.cs:797/805`）：
+    /// `Random(20)` 抽数 + 10。抽数已在 `mag_tamming` 内按 oracle 位置消费（RNG 账本不变），
+    /// 这里把值表面积化，供调用方 `World::open_crazy_mode` 落 `CrazyModeInterval = 秒 * 1000`。
+    /// 非狂暴支为 0（不抽数）。
+    pub crazy_interval: i32,
     /// 受奴成功时 oracle 抽的 `Random(caster.Lv * 2)`（`MagicManager.cs:770`）——
     /// `MasterRoyaltyTick = (draw + (magicLevel<<2)*5 + 20)*60_000 + GetTickCount()`。
     /// 未受奴时为 0（不抽数）。调用方把它交给 `World::tame_adopt` / `tame_royalty_tick`。
@@ -700,12 +705,14 @@ pub fn mag_tamming(rng: &mut impl RandomSource, inp: &TammingInput) -> TammingOu
                             out.target_hp = 0;
                         }
                     } else if inp.target_life_attrib != LA_UNDEAD && rng.random_below(20) == 0 {
-                        rng.random_below(20);
-                        out.crazy_mode = true; // OpenCrazyMode(Random(20) + 10)
+                        // `OpenCrazyMode(Random(20) + 10)`：抽数位置/次数与 oracle 相同，只把值留存。
+                        out.crazy_interval = rng.random_below(20) + 10;
+                        out.crazy_mode = true;
                     }
                 } else if inp.target_life_attrib != LA_UNDEAD {
-                    rng.random_below(20);
-                    out.crazy_mode = true; // OpenCrazyMode(Random(20) + 10)
+                    // `OpenCrazyMode(Random(20) + 10)`（`MagicManager.cs:805` 的「变红」支）。
+                    out.crazy_interval = rng.random_below(20) + 10;
+                    out.crazy_mode = true;
                 }
             }
             out.result = true;

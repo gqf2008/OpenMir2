@@ -230,6 +230,13 @@ pub struct AnimalState {
     pub holy_seize: bool,
     pub holy_seize_tick: i64,
     pub holy_seize_interval: i64,
+    /// `MonsterObject.CrazyMode` 系列（`MonsterObject.cs:49-57`：`CrazyMode`/`CrazyModeTick`/
+    /// `CrazyModeInterval`）。由 [`crate::monai::open_crazy_mode`] 写入（生产路径 = 20 诱惑之光的
+    /// `OpenCrazyMode(Random(20)+10)`），由 [`crate::monai::animal_run`] 尾部的
+    /// `CrazyMode` 到期段清除（`MonsterObject.cs:353-356`，严格 `>`）。
+    pub crazy_mode: bool,
+    pub crazy_mode_tick: i64,
+    pub crazy_mode_interval: i64,
     /// `AnimalObject.RunAwayMode` 系列。
     pub run_away_mode: bool,
     pub run_away_start: i64,
@@ -326,6 +333,9 @@ impl Default for AnimalState {
             holy_seize: false,
             holy_seize_tick: 0,
             holy_seize_interval: 0,
+            crazy_mode: false,
+            crazy_mode_tick: 0,
+            crazy_mode_interval: 0,
             run_away_mode: false,
             run_away_start: 0,
             run_away_time: 0,
@@ -432,6 +442,21 @@ pub struct Entity {
     pub bo_power_item: bool,
     /// C# `PlayObject.PowerItem`（`PlayObject.cs:199`）。
     pub power_item: u8,
+    /// C# `PlayObject.FireHitSkill` / `LatestFireHitTick`（`PlayObject.cs:181/194`）——
+    /// 烈火剑法待发标志与最近一次置位时刻。`PlayObject.Run` 的到期段
+    /// （`PlayObject.Message.cs:54-58`）严格 `(now - LatestFireHitTick) > 20*1000` ⇒ 清标志 +
+    /// `SpiritsGone` + `SendSocket("+UFIR")`（[`crate::World::expire_player_run_state`]）。
+    ///
+    /// **写入点登记**：oracle 的 `AllowFireHitSkill`（`PlayObject.Base.cs:653-663`，施放 26 时置位）
+    /// 与攻击命中清标志（`PlayObject.Attack.cs:591-593/614-616`）依赖尚未移植的技能层；
+    /// 本骨架的生产路径暂无写入者（恒 `false`）⇒ 到期段零动作。字段/到期先落地，接线时无需再改。
+    pub fire_hit_skill: bool,
+    pub latest_fire_hit_tick: i64,
+    /// C# `PlayObject.TwinHitSkill` / `LatestTwinHitTick`（`PlayObject.cs:185/195`）——双龙斩。
+    /// 到期段 `PlayObject.Message.cs:60-64`：严格 `> 60*1000` ⇒ 清标志 + `SendSocket("+UTWN")`
+    /// （**无** `SysMsg`）。写入点同 [`Entity::fire_hit_skill`] 登记（技能层未移植）。
+    pub twin_hit_skill: bool,
+    pub latest_twin_hit_tick: i64,
     /// C# `CharacterObject.UseItems`（`CharacterObject.cs:40`，13 格，`CharacterObject.cs:89` 初始化）。
     /// `PlayObject.StruckDamage` 的耐久循环按它取数。
     pub use_items: [UseItemSlot; USE_ITEM_SLOTS],
@@ -654,6 +679,12 @@ impl Entity {
             power_rate: 100,
             bo_power_item: false,
             power_item: 0,
+            // `PlayObject.cs:181/185/194/195`：ctor 缺省 `FireHitSkill/TwinHitSkill = false`、
+            // 两个 tick 为 0（C# `int` 缺省）；真实置位来自技能层（未移植，见字段文档）。
+            fire_hit_skill: false,
+            latest_fire_hit_tick: 0,
+            twin_hit_skill: false,
+            latest_twin_hit_tick: 0,
             // `CharacterObject.cs:89`：13 个空位（`Index = 0`）。
             use_items: [UseItemSlot::default(); USE_ITEM_SLOTS],
             want_ref_msg: false,

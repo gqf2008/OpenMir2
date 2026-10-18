@@ -11084,6 +11084,58 @@ fn drain_b5_self_deliveries(
     struck.flush(online, gates);
 }
 
+/// `PlayObject.Run` 的状态到期帧（`PlayObject.Message.cs:54-64`）。
+///
+/// - `SpiritsGone`（烈火 20s 到期）⇒ `SysMsg(MessageSettings.SpiritsGone, MsgColor.Red,
+///   MsgType.Hint)` ⇒ `SM_SYSMESSAGE(100)`，**仅该玩家自己**（`Red` 配色取 `[Setup]` 的
+///   `RedMsgFColor/RedMsgBColor`）。
+/// - `SendSocket("+UFIR")` / `SendSocket("+UTWN")` ⇒ 短包 `SendRaw`（网关侧 `'#'+正文+'!'`，
+///   oracle `PlayObject.Socket.cs:48-71` 的 `PackLength=-len` 支）。
+///
+/// 事件序 = oracle 的发出序（烈火先 `SysMsg` 后 `+UFIR`）。事件已在 `World::tick` 里按
+/// actor 槽位顺序生成，本函数逐条同步投递到同一网关 mpsc ⇒ 顺序保持。
+fn drain_run_state_expiries(
+    rec: &mir2_world::TickRecord,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    red_f_color: u8,
+    red_b_color: u8,
+) {
+    // `MessageSettings.SpiritsGone` = "召唤烈火结束!!!"（GBK 15B）。
+    const SPIRITS_GONE_GBK: &[u8] = b"\xd5\xd9\xbb\xbd\xc1\xd2\xbb\xf0\xbd\xe1\xca\xf8!!!";
+    for (actor_id, ev) in &rec.run_state_expiries {
+        let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "Run 状态到期帧")
+        else {
+            continue;
+        };
+        match ev {
+            mir2_world::RunStateExpiry::SpiritsGone => {
+                let body =
+                    smframe::sm_sysmessage(*actor_id, red_f_color, red_b_color, SPIRITS_GONE_GBK);
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: entry.socket,
+                    body,
+                });
+            }
+            mir2_world::RunStateExpiry::FireHitSocket => {
+                let _ = tx.send(SimToGate::SendRaw {
+                    socket: entry.socket,
+                    payload: b"+UFIR".to_vec(),
+                });
+            }
+            mir2_world::RunStateExpiry::TwinHitSocket => {
+                let _ = tx.send(SimToGate::SendRaw {
+                    socket: entry.socket,
+                    payload: b"+UTWN".to_vec(),
+                });
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
@@ -13009,6 +13061,16 @@ fn sim_loop(
             );
         }
         let rec = world.tick();
+        // **run-gap 状态到期**：`PlayObject.Run` 的烈火 20s / 双龙 60s（`PlayObject.Message.cs:54-64`）
+        // ⇒ `SpiritsGone` 的 `SM_SYSMESSAGE(100)` + `+UFIR`/`+UTWN` 短包。oracle 在玩家自己的
+        // `Run()` 内即时发；本宿主在世界 tick 后按记录出帧。
+        drain_run_state_expiries(
+            &rec,
+            &online,
+            &gates,
+            enter_cfg.red_msg_f_color,
+            enter_cfg.red_msg_b_color,
+        );
         // **P3 收尾残余**：`PvpFlag` 过期（`CheckPkStatus`）⇒ 656。oracle 在玩家 `Run()` 的
         // `DecLightItemDrugTime` 周期块里调用（`PlayObject.Message.cs:257-262`）；本骨架在
         // world tick 之后按同一周期节流（见 `World::check_pk_status`）。
@@ -13701,6 +13763,77 @@ mod tests {
                 return rec;
             }
         }
+    }
+
+    /// **run-gap 状态到期帧面**（`PlayObject.Message.cs:54-64`）：
+    /// `SpiritsGone` ⇒ `SM_SYSMESSAGE(100)`（仅自己、Red 配色、GBK 文本）；
+    /// `+UFIR`/`+UTWN` ⇒ `SendRaw` 短包（网关侧 `'#'+正文+'!'`）。
+    #[test]
+    fn run_state_expiry_frames_and_socket_payloads() {
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "p1".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 7,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let rec = mir2_world::TickRecord {
+            run_state_expiries: vec![
+                (7, mir2_world::RunStateExpiry::SpiritsGone),
+                (7, mir2_world::RunStateExpiry::FireHitSocket),
+                (7, mir2_world::RunStateExpiry::TwinHitSocket),
+            ],
+            ..Default::default()
+        };
+        drain_run_state_expiries(&rec, &online, &gates, 1, 2);
+        // ① `SysMsg(SpiritsGone, Red, Hint)`：只给 actor 自己（socket 901）。
+        match rx0.try_recv().expect("SpiritsGone 帧") {
+            SimToGate::SendFrame { socket, body } => {
+                assert_eq!(socket, 901, "SysMsg 只发自己");
+                let cm = CommandMessage::from_bytes(&body).expect("12B 头");
+                assert_eq!(cm.ident, mir2_protocol::messages::SM_SYSMESSAGE);
+                assert_eq!(cm.recog, 7);
+                // `MakeWord(f_color, b_color)` = 1 | (2 << 8)。
+                assert_eq!(cm.param, 1 | (2 << 8), "Red 配色取自 [Setup]");
+                assert_eq!(cm.tag, 0);
+                assert_eq!(cm.series, 1);
+                // 尾 = EDCode(GBK("召唤烈火结束!!!"))；解码后逐字节比对（不转 UTF-8）。
+                let text = mir2_protocol::edcode::decode(
+                    &body[mir2_protocol::frame::CommandMessage::SIZE..],
+                );
+                assert_eq!(
+                    text,
+                    b"\xd5\xd9\xbb\xbd\xc1\xd2\xbb\xf0\xbd\xe1\xca\xf8!!!".to_vec(),
+                    "SpiritsGone 文本（GBK 原文）"
+                );
+            }
+            other => panic!("期望 SendFrame，得到 {other:?}"),
+        }
+        // ② 烈火短包。
+        match rx0.try_recv().expect("+UFIR") {
+            SimToGate::SendRaw { socket, payload } => {
+                assert_eq!(socket, 901);
+                assert_eq!(payload, b"+UFIR");
+            }
+            other => panic!("期望 SendRaw(+UFIR)，得到 {other:?}"),
+        }
+        // ③ 双龙短包。
+        match rx0.try_recv().expect("+UTWN") {
+            SimToGate::SendRaw { socket, payload } => {
+                assert_eq!(socket, 901);
+                assert_eq!(payload, b"+UTWN");
+            }
+            other => panic!("期望 SendRaw(+UTWN)，得到 {other:?}"),
+        }
+        assert!(rx0.try_recv().is_err(), "事件耗尽");
     }
 
     /// **M2 RNG trace 纯度**：`seed_probe_text` 必须

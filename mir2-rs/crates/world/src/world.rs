@@ -92,6 +92,22 @@ pub enum Command {
     Butch { actor_id: i32, dir: u8 },
 }
 
+/// `PlayObject.Run` 状态到期事件（`PlayObject.Message.cs:54-64`）。
+///
+/// 事件按 oracle 的**发出顺序**记录：烈火到期 = `SysMsg(SpiritsGone)` → `SendSocket("+UFIR")`；
+/// 双龙到期 = `SendSocket("+UTWN")`。`SendSocket(string)` 走短包（`'#' + 正文 + '!'`，
+/// 见 `mir2_protocol::frame`）；帧面由宿主 `bins/game-svr` 按本记录出。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunStateExpiry {
+    /// `SysMsg(MessageSettings.SpiritsGone, MsgColor.Red, MsgType.Hint)`（`:56`）——
+    /// `SpiritsGone = "召唤烈火结束!!!"`（`SystemModule/MessageSettings.cs:60`）。
+    SpiritsGone,
+    /// `SendSocket("+UFIR")`（`:58`）。
+    FireHitSocket,
+    /// `SendSocket("+UTWN")`（`:63`）。
+    TwinHitSocket,
+}
+
 /// 一个 tick 的处理记录（判据①：断言"谁、按什么顺序"被处理）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TickRecord {
@@ -178,6 +194,9 @@ pub struct TickRecord {
     pub buff_recalcs: Vec<i32>,
     /// 本 tick buff 毒伤段每次 `HealthSpellChanged()`：`(actor_id, hp_after, mp_after)`，保序。
     pub buff_health_changes: Vec<(i32, u16, u16)>,
+    /// 本 tick `PlayObject.Run` 的烈火/双龙到期事件（`PlayObject.Message.cs:54-64`）：
+    /// `(actor_id, 事件)`，按玩家槽位顺序、每个玩家内按 oracle 发出顺序（见 [`RunStateExpiry`]）。
+    pub run_state_expiries: Vec<(i32, RunStateExpiry)>,
 }
 
 /// **L1 TransMap 触发**：`World::step_with_route` 的结果（供宿主排帧序）。
@@ -3616,6 +3635,7 @@ impl World {
             buff_sysmsgs: Vec::new(),
             buff_recalcs: Vec::new(),
             buff_health_changes: Vec::new(),
+            run_state_expiries: Vec::new(),
         };
 
         // 命令 FIFO
@@ -3800,6 +3820,11 @@ impl World {
             record.merchant_removed = m.removed;
         }
 
+        // **`PlayObject.Run` 的状态到期段**（`PlayObject.Message.cs:54-64`）：烈火 20s / 双龙 60s。
+        // 在玩家 `base.Run`（VerifyMapTime 段）之前；两者都不抽随机数。oracle 的玩家 `Run`
+        // 名义 300ms 一次、本骨架每个 world tick（200ms）一次——相位差与既有玩家散段同口径登记。
+        record.run_state_expiries = self.expire_player_run_state();
+
         // **玩家 `BaseObject.Run` 的 VerifyMapTime 段**（oracle `WorldServer.cs:697` 每 ~200ms
         // 驱动一次 `playObject.Run()`，末尾无条件 `base.Run()`）——必须在 AOI 扫描之前刷新
         // 静止玩家的格子时间（`BaseObject.Base.cs:223-228`）。30s 门在 `verify_map_time` 内。
@@ -3956,6 +3981,45 @@ impl World {
             }
         }
         true
+    }
+
+    /// `PlayObject.Run` 的烈火/双龙到期段（`PlayObject.Message.cs:54-64`），按玩家槽位顺序。
+    ///
+    /// 逐行口径（**严格大于**）：
+    /// - `FireHitSkill && (now - LatestFireHitTick) > 20*1000` ⇒ `FireHitSkill = false`；
+    ///   `SysMsg(SpiritsGone, Red, Hint)`；`SendSocket("+UFIR")`；
+    /// - `TwinHitSkill && (now - LatestTwinHitTick) > 60*1000` ⇒ `TwinHitSkill = false`；`SendSocket("+UTWN")`
+    ///   （**无** `SysMsg`）。
+    ///
+    /// 不消费随机数。玩家选取 = `Race == ActorRace::Play && !Ghost`（与
+    /// [`World::verify_players_map_time`] 同口径；oracle 的 `PlayObjectList` 不含幽灵）。
+    /// 状态写入点（技能层）尚未移植 ⇒ 生产路径恒 `false`，本段零动作（登记见 `Entity::fire_hit_skill`）。
+    pub fn expire_player_run_state(&mut self) -> Vec<(i32, RunStateExpiry)> {
+        let now = self.clock_ms;
+        let ids: Vec<i32> = self
+            .entities
+            .iter()
+            .filter(|e| e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost)
+            .map(|e| e.id)
+            .collect();
+        let mut events = Vec::new();
+        for id in ids {
+            let Some(e) = self.entities.get_mut(id) else {
+                continue;
+            };
+            // `PlayObject.Message.cs:54-58`：先 `SysMsg` 再 `SendSocket("+UFIR")`。
+            if e.fire_hit_skill && (now - e.latest_fire_hit_tick) > 20 * 1000 {
+                e.fire_hit_skill = false;
+                events.push((id, RunStateExpiry::SpiritsGone));
+                events.push((id, RunStateExpiry::FireHitSocket));
+            }
+            // `:60-64`：仅 `SendSocket("+UTWN")`。
+            if e.twin_hit_skill && (now - e.latest_twin_hit_tick) > 60 * 1000 {
+                e.twin_hit_skill = false;
+                events.push((id, RunStateExpiry::TwinHitSocket));
+            }
+        }
+        events
     }
 
     /// 玩家 `BaseObject.Run` 的等价路径：`PlayObject.Run()` 末尾无条件 `base.Run()`

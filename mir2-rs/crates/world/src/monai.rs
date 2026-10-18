@@ -47,8 +47,16 @@
 //!   `Entity.ctor_draws`（[`MonsterCtorDraws`]），AI 在宿主接线时只**消费**（
 //!   [`AnimalState::seed_from_spawn`](crate::entity::AnimalState::seed_from_spawn)），**不重抽**。
 //! - **专用怪子类**（`ATMonster`/`BeeQueen`/... 在各自 `Run()` 里调 `SearchTarget`）与
-//!   `Mission`/`RunAway`/`Master`/`CrazyMode`/`CheckRoyalty` 分支**未建模**：默认值下它们
+//!   `Mission`/`RunAway`/`Master`/`CheckRoyalty` 分支**未建模**：默认值下它们
 //!   恒不命中，与「普通 `MonsterObject`、无 master、无任务」的 oracle 执行路径一致。
+//! - **`CrazyMode`（`MonsterObject.cs:49-57/353-356/465-480`）**：状态与到期已建模
+//!   （[`open_crazy_mode`]/[`break_crazy_mode`]/[`crazy_mode_expiry`]）；生产写入点 =
+//!   20 诱惑之光的 `OpenCrazyMode(Random(20)+10)`（`MagicManager.cs:797/805`，抽数先由
+//!   [`crate::magic_effect::mag_tamming`] 按同序消费并把值随 `crazy_interval` 返回，
+//!   宿主 `cast_tamming_spell` 落状态）。`GetChrColor` 的 `crazy_mode ⇒ 0xF9` 色支仍登记未实现。
+//! - **`AnimalObject.Run` 的 HolySeize 到期**（`AnimalObject.cs:142-149`）已建模为
+//!   [`animal_run`]（严格 `>`），由 [`monster_ai_tick`] 在 `monster_run` 之后、`base.Run` 之前调用
+//!   （= oracle 的 `MonsterObject.Run` 尾 `base.Run()` → `AnimalObject.Run`）。`RefNameColor` 帧不在此层。
 
 use crate::combat::is_proper_target;
 use crate::entity::{Entity, ACTOR_RACE_PLAY};
@@ -594,6 +602,69 @@ pub fn is_guard_race(race: u8) -> bool {
     matches!(race, 11 | 12 | 20 | 112)
 }
 
+/// `MonsterObject.OpenCrazyMode(int nTime)`（`MonsterObject.cs:465-471`）——
+/// `CrazyMode = true; CrazyModeTick = now; CrazyModeInterval = nTime * 1000; RefNameColor();`
+/// （`RefNameColor` 是帧面，不在 world 层；`GetChrColor` 的 0xF9 支仍登记未实现）。
+pub fn open_crazy_mode(world: &mut World, actor_id: i32, interval_seconds: i32) {
+    let now = world.clock_ms;
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.crazy_mode = true;
+        e.ai.crazy_mode_tick = now;
+        // C# `int * int` 在 int 上计算；正常取值（`Random(20)+10`）远不溢出。
+        e.ai.crazy_mode_interval = i64::from(interval_seconds) * 1000;
+    }
+}
+
+/// `MonsterObject.BreakCrazyMode()`（`MonsterObject.cs:473-480`）：**只有** `CrazyMode` 为真才清
+/// （`RefNameColor` 同属帧面，world 层不产帧）。
+pub fn break_crazy_mode(world: &mut World, actor_id: i32) {
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        if e.ai.crazy_mode {
+            e.ai.crazy_mode = false;
+        }
+    }
+}
+
+/// `AnimalObject.BreakHolySeizeMode()`（`AnimalObject.cs:330-334`）：置 `HolySeize = false`
+/// （`RefNameColor` 帧面不在 world 层；与既有 `attack_target`/`tame_adopt` 的写法同口径）。
+pub fn break_holy_seize_mode(world: &mut World, actor_id: i32) {
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.holy_seize = false;
+    }
+}
+
+/// `MonsterObject.Run` 尾的 `CrazyMode` 到期段（`MonsterObject.cs:353-356`）。
+///
+/// **严格大于**：`(now - CrazyModeTick) > CrazyModeInterval`（等于不清）。只在 oracle 落到
+/// `if (CanMove() && ...)` **之后**的路径上调用（`Think()`/`AttackTarget()` 的提前返回
+/// 会 `base.Run(); return;` ⇒ 跳过本段，见 [`monster_run`]）。
+fn crazy_mode_expiry(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let expired = world.entities.get(actor_id).is_some_and(|e| {
+        e.ai.crazy_mode && (now - e.ai.crazy_mode_tick) > e.ai.crazy_mode_interval
+    });
+    if expired {
+        break_crazy_mode(world, actor_id);
+    }
+}
+
+/// `AnimalObject.Run()`（`AnimalObject.cs:142-149`）的到期段：
+/// `if (HolySeize && (now - HolySeizeTick) > HolySeizeInterval) BreakHolySeizeMode();` 再 `base.Run()`。
+///
+/// **严格大于**（等于不清）。oracle 里 `MonsterObject.Run` 的每个出口都调 `base.Run()`
+/// （= `AnimalObject.Run`），因此 [`monster_ai_tick`] 对每只怪在 [`monster_run`] 之后、
+/// [`base_object_run_monster`] 之前调用本函数（顺序 = `CrazyMode` 到期 → HolySeize 到期 → `BaseObject.Run`）。
+/// `NormNpc.Run`（守卫等）同样 `base.Run()` 进 `AnimalObject.Run` ⇒ 守卫分支也调用本函数。
+pub fn animal_run(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let expired = world.entities.get(actor_id).is_some_and(|e| {
+        e.ai.holy_seize && (now - e.ai.holy_seize_tick) > e.ai.holy_seize_interval
+    });
+    if expired {
+        break_holy_seize_mode(world, actor_id);
+    }
+}
+
 /// `MonsterObject.Run`（`MonsterObject.cs:251-360`）的**普通怪路径**（无 master/任务/逃跑/狂暴）。
 ///
 /// 只做 AI；`BaseObject.Run` 的恢复/死亡/过期段由 `World` 统一处理（见模块头）。
@@ -622,8 +693,10 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
         return;
     };
     if !(can_move(e) && !e.fixed_hide_mode && !e.stone_mode) {
-        // oracle：外层 `if (CanMove() && ...)` 为假 ⇒ 落到函数尾的 `CheckRoyalty()`（`MonsterObject.cs:352`）。
+        // oracle：外层 `if (CanMove() && ...)` 为假 ⇒ 落到函数尾的 `CheckRoyalty()`
+        // （`MonsterObject.cs:352`）与 `CrazyMode` 到期（`:353-356`）。
         crate::slave::check_royalty(world, actor_id);
+        crazy_mode_expiry(world, actor_id);
         return;
     }
     if think(world, actor_id) {
@@ -650,8 +723,10 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
         .get(actor_id)
         .is_some_and(|e| !e.ai.walk_wait_locked && (now - e.ai.walk_tick) > e.ai.walk_speed);
     if !walk_due {
-        // oracle：`if (!WalkWaitLocked && (now - WalkTick) > WalkSpeed)` 为假 ⇒ 落到 `CheckRoyalty()`。
+        // oracle：`if (!WalkWaitLocked && (now - WalkTick) > WalkSpeed)` 为假 ⇒ 落到
+        // `CheckRoyalty()` 与 `CrazyMode` 到期（`MonsterObject.cs:352-356`）。
         crate::slave::check_royalty(world, actor_id);
+        crazy_mode_expiry(world, actor_id);
         return;
     }
     if let Some(e) = world.entities.get_mut(actor_id) {
@@ -723,6 +798,8 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
     // 会 `base.Run(); return;` 跳过本调用；本骨架未建模 `Master.SlaveRelax` 分支
     // （见模块头「未建模」），攻击支的提前返回保持跳过（与 oracle 同）。
     crate::slave::check_royalty(world, actor_id);
+    // `MonsterObject.cs:353-356`：CrazyMode 到期（在 `CheckRoyalty()` 之后、`base.Run()` 之前）。
+    crazy_mode_expiry(world, actor_id);
 }
 
 /// `BaseObject.Run()`（`BaseObject.Base.cs:24-316`）的**怪侧公共段**：恢复 / 体力点 / `TargetCret` 清理。
@@ -887,11 +964,16 @@ pub fn monster_ai_tick(world: &mut World) {
         // （`GuardUnit:NormNpc`，`NormNpc.Run` 只是「清 master + `base.Run()`」）⇒ **不游走/不索敌**，
         // 但仍要跑自己的 `base.Run()` 段（`BaseObject.Run` 的恢复/`RM_STRUCK` 出队/`TargetCret` 清理）。
         if is_guard_race(world.entities.get(id).map_or(0, |e| e.race)) {
+            // `NormNpc.Run`（`NormNpc.cs:1604-1611`）→ `base.Run()` = `AnimalObject.Run`
+            // （HolySeize 到期）→ `BaseObject.Run`。
+            animal_run(world, id);
             base_object_run_monster(world, id);
             continue;
         }
         monster_run(world, id);
-        // `MonsterObject.Run` 的末尾 `base.Run()`（`MonsterObject.cs:255/359`）。
+        // `MonsterObject.Run` 的末尾 `base.Run()`（`MonsterObject.cs:255/359`）：
+        // `AnimalObject.Run`（HolySeize 到期）→ `BaseObject.Run`。
+        animal_run(world, id);
         base_object_run_monster(world, id);
     }
 }

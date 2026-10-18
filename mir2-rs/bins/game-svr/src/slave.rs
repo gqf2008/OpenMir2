@@ -350,9 +350,12 @@ pub struct TammingCastOutcome {
     /// 本次**非受奴支**改写到的目标 HP（`None` = 未改；受奴支的 `/10` 由
     /// [`World::tame_adopt`] 落，不在本字段重复）。
     pub target_hp: Option<u16>,
-    /// `OpenCrazyMode(Random(20)+10)` 支（`MagicManager.cs:795/802`）——抽数已在
-    /// [`magic::mag_tamming`] 内消费，**狂暴态/时长未建模**（本骨架无 `CrazyMode` 字段，登记）。
+    /// `OpenCrazyMode(Random(20)+10)` 支（`MagicManager.cs:797/805`）——抽数已在
+    /// [`magic::mag_tamming`] 内消费；状态由本函数调 [`mir2_world::monai::open_crazy_mode`] 落
+    /// （`CrazyModeInterval = 秒 * 1000`）。
     pub crazy_mode: bool,
+    /// 随 `crazy_mode` 的 `Random(20)+10` 秒数（非狂暴支为 0）。
+    pub crazy_interval: i32,
     /// 熟练度尾结算（[`SkillTrainState`] 已就地更新）。
     pub train: magic::SkillProficiencyOutcome,
 }
@@ -419,8 +422,10 @@ fn tamming_input(world: &World, input: &TammingCastInput<'_>) -> Option<magic::T
 /// # 未建模（登记，别按常识补）
 /// - `SendMsg(RM_MAKEHOLYSEIZEMODE, …)`（`:712/797` 两支：调用前 `Master == 施法者`；
 ///   `Random(2) != 0`）——该帧无编码器，登记；状态面无副作用。
-/// - `BreakCrazyMode()` / `OpenCrazyMode()` 的狂暴态与时长（`:754/796/803`）：本骨架无 `CrazyMode`
-///   字段；`mag_tamming` 已把对应抽数消费掉（账本不变），状态登记不实现。
+/// - `BreakCrazyMode()` / `OpenCrazyMode()` 的狂暴态与时长（`:738/797/805`）：`mag_tamming` 已把
+///   对应抽数消费掉（账本不变）并返回 `crazy_mode`/`crazy_interval`；本函数按 oracle 分支落
+///   [`mir2_world::monai::break_crazy_mode`]（受奴成功支）或
+///   [`mir2_world::monai::open_crazy_mode`]（`Random(20)+10` 秒）。
 /// - `CanReAlive` / `MonGen.ActiveCount`（`:761-770`）：同 ⑨-3 登记（`MonGen` 未建模）。
 pub fn cast_tamming_spell(
     world: &mut World,
@@ -431,6 +436,7 @@ pub fn cast_tamming_spell(
     let mut tamed = false;
     let mut target_hp = None;
     let mut crazy_mode = false;
+    let mut crazy_interval = 0;
     // oracle `if (IsProperTarget(targetObject) && !targetObject.Animal) { if (MagTamming(...)) boTrain = true; }`
     // —— 门不过 ⇒ 连 `MagTamming` 都不进（`boTrain=false`、不抽数），但尾仍跑（`boSpellFire=true`）。
     if let Some(tin) = tamming_input(world, input) {
@@ -456,6 +462,8 @@ pub fn cast_tamming_spell(
                 input.magic_level,
                 out.royalty_draw,
             );
+            // 受奴成功支的 `targetObject.BreakCrazyMode()`（`MagicManager.cs:738`）。
+            mir2_world::monai::break_crazy_mode(world, target_id);
         } else if out.target_hp != tin.target_hp {
             // 非受奴支的 `targetObject.WAbil.HP = 0`（`:783/790`）。
             let hp = u16::try_from(out.target_hp.max(0)).unwrap_or(0);
@@ -465,6 +473,11 @@ pub fn cast_tamming_spell(
             target_hp = Some(hp);
         }
         crazy_mode = out.crazy_mode;
+        crazy_interval = out.crazy_interval;
+        // 非受奴支的 `targetObject.OpenCrazyMode(Random(20)+10)`（`MagicManager.cs:797/805`）。
+        if crazy_mode {
+            mir2_world::monai::open_crazy_mode(world, target_id, out.crazy_interval);
+        }
         bo_train = out.result;
     }
     // 共享尾（`MagicManager.cs:644-669`）。
@@ -485,6 +498,7 @@ pub fn cast_tamming_spell(
         tamed,
         target_hp,
         crazy_mode,
+        crazy_interval,
         train: tail.train,
     }
 }
@@ -851,6 +865,66 @@ mod tests {
             }
         }
         assert!(hit, "5000 个种子里应至少有一次进入早退支");
+    }
+
+    /// **run-gap 接线**：`MagTamming` 的 `OpenCrazyMode(Random(20)+10)` 支
+    /// （`MagicManager.cs:797/805`）⇒ 目标实体 `CrazyMode=true`、`CrazyModeTick=now`、
+    /// `CrazyModeInterval=(抽值+10)*1000`。抽数已在 [`magic::mag_tamming`] 内按 oracle 位置消费
+    /// （本用例不改 RNG 账本，只验证状态落点）。
+    #[test]
+    fn tamming_crazy_branch_sets_entity_state() {
+        let cfg = PetSlaveConfig::default();
+        let magic = tamming_magic();
+        let mut hit = None;
+        for seed in 0..50_000 {
+            let (mut w, caster, target) =
+                tamming_world(seed, mir2_world::ACTOR_RACE_MONSTER, 30, 1);
+            let mut train = tamming_train();
+            let input = tamming_cast(caster, Some(target), &cfg, &magic);
+            let out = cast_tamming_spell(&mut w, &input, &mut train);
+            if out.crazy_mode {
+                hit = Some((w, target, out));
+                break;
+            }
+        }
+        let (w, target, out) = hit.expect("50000 个种子里应至少一次进狂暴支");
+        assert!((10..=29).contains(&out.crazy_interval), "Random(20)+10");
+        let t = w.entities.get(target).unwrap();
+        assert!(t.ai.crazy_mode, "OpenCrazyMode 落态");
+        assert_eq!(t.ai.crazy_mode_tick, 5_000, "CrazyModeTick = now");
+        assert_eq!(
+            t.ai.crazy_mode_interval,
+            i64::from(out.crazy_interval) * 1_000,
+            "nTime * 1000"
+        );
+    }
+
+    /// **run-gap 接线**：受奴成功支的 `targetObject.BreakCrazyMode()`（`MagicManager.cs:738`）
+    /// ⇒ 即使目标此前处于狂暴态，受奴后必须清除。
+    #[test]
+    fn tamming_adopt_breaks_crazy_mode() {
+        let cfg = PetSlaveConfig::default();
+        let magic = tamming_magic();
+        let mut hit = None;
+        for seed in 0..50_000 {
+            let (mut w, caster, target) =
+                tamming_world(seed, mir2_world::ACTOR_RACE_MONSTER, 30, 1);
+            {
+                let t = w.entities.get_mut(target).unwrap();
+                t.ai.crazy_mode = true;
+                t.ai.crazy_mode_tick = 1_000;
+                t.ai.crazy_mode_interval = 10_000;
+            }
+            let mut train = tamming_train();
+            let input = tamming_cast(caster, Some(target), &cfg, &magic);
+            let out = cast_tamming_spell(&mut w, &input, &mut train);
+            if out.tamed {
+                hit = Some((w, target));
+                break;
+            }
+        }
+        let (w, target) = hit.expect("50000 个种子里应至少一次受奴");
+        assert!(!w.entities.get(target).unwrap().ai.crazy_mode, "受奴清狂暴");
     }
 
     /// **⑨-2 残余判据（46 分身）**：`cast_clone_spell` 造克隆体 + 走共享尾（`boTrain=true`）。

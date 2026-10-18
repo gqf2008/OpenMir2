@@ -119,6 +119,6 @@ pub use slave::{
 };
 pub use world::{
     Command, EntitySnapshot, ExtraAbilEventKind, ExtraAbilExpiry, FireBurnEvent, FireWallOutcome,
-    FloorItemView, PassThroughHit, PassThroughOutcome, SpaceMoveCastOutcome, TickRecord,
-    UEnhancerOutcome, World, TICK_INTERVAL_MS,
+    FloorItemView, PassThroughHit, PassThroughOutcome, RunStateExpiry, SpaceMoveCastOutcome,
+    TickRecord, UEnhancerOutcome, World, TICK_INTERVAL_MS,
 };

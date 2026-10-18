@@ -287,12 +287,15 @@ fn tamming_mismatches(cases: &[TammingCase]) -> Vec<String> {
             walk_speed: c.walk_speed,
             next_hit_time: c.next_hit_time,
             crazy_mode: c.crazy_mode,
+            crazy_interval: 0,
             royalty_draw: 0,
         };
-        // `royalty_draw`（`MagicManager.cs:770` 的 `Random(caster.Lv*2)`）不在这批探针 TSV 的
-        // 记录列里；它是**取数账本的一部分**，已由下面 `rng.divergences()`/`rng.remaining()` 的
+        // `royalty_draw`（`MagicManager.cs:770` 的 `Random(caster.Lv*2)`）与
+        // `crazy_interval`（`:797/805` 的 `Random(20)+10`）不在这批探针 TSV 的记录列里；
+        // 它们是**取数账本的一部分**，已由下面 `rng.divergences()`/`rng.remaining()` 的
         // 逐次对拍钉死（值 = 该次抽数），故此处只对齐其余字段。
         want.royalty_draw = got.royalty_draw;
+        want.crazy_interval = got.crazy_interval;
         for d in rng.divergences() {
             out.push(format!("tamming[{n}] 取数分歧: {d}"));
         }
