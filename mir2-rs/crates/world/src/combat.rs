@@ -997,7 +997,12 @@ pub fn attack_with_grouped(
     let mut n_power = power;
     let mut hit = false;
 
-    if is_proper_target_grouped(attacker, target, attacker_group_members) {
+    // `_Attack`（`BaseObject.Attack.cs:37`）调**虚函数** `IsProperTarget`：怪物 = 基版
+    // `IsAttackTarget`（`BaseObject.Base.cs:470-473`），玩家 = `PlayObject` override
+    // （`PlayObject.cs:1924-1962`）——**都不查 Death/Ghost/Invisible**（审计 G09）。
+    // 用直通版以恢复 `RandomByte(target.SpeedPoint)` 与后续 `GetHitStruckDamage` 抽数；
+    // 折入版 [`is_proper_target_grouped`] 仅供枚举/显示型调用点使用。
+    if is_proper_target_grouped_direct(attacker, target, attacker_group_members) {
         // `if (targetObject.HitPoint > 0) { if (HitPoint < RandomByte(targetObject.SpeedPoint)) nPower = 0; }`
         if target.hit_point > 0 && attacker.hit_point < rng.random_byte(target.speed_point) {
             n_power = 0;
@@ -1777,5 +1782,108 @@ mod tests {
         );
         ply.dear_human = Some(4);
         assert!(is_proper_friend(&ply, &p2, false), "HAM_DEAR 配偶 ⇒ 友军");
+    }
+
+    /// 审计 G09 / MCS-A10：`_Attack`（`BaseObject.Attack.cs:37`）走虚函数 `IsProperTarget`
+    /// ——oracle 的基版（`BaseObject.Base.cs:470-473`）与玩家版（`PlayObject.cs:1924-1962`）
+    /// **都不查 `Death/Ghost/Invisible`**。折入版会提前把 `nPower = 0`，导致漏掉
+    /// `RandomByte(target.SpeedPoint)` 与后续 `GetHitStruckDamage` 的伤害抽数。
+    ///
+    /// 改坏必红：把 `attack_with_grouped` 改回 [`is_proper_target_grouped`] ⇒ 三态
+    /// `rng.below` 均为空、`damage == 0`。
+    #[test]
+    fn attack_path_uses_direct_proper_target_and_restores_draws() {
+        let cfg = CombatConfig::default();
+        for flag in ["death", "ghost", "invisible"] {
+            let mut attacker = Entity::new(1, "a", 0, 0);
+            attacker.race = ACTOR_RACE_MONSTER; // 怪物攻方走基版 IsAttackTarget
+            attacker.dc = 0x0A0A; // Lo=Hi=10 ⇒ 攻击力抽 1 次（不记录在 below）
+            attacker.hit_point = 100;
+            let mut target = Entity::new(2, "t", 0, 0);
+            target.race = ACTOR_RACE_PLAY;
+            target.hp = 100;
+            target.max_hp = 100;
+            target.hit_point = 10; // 准确度非 0 ⇒ 命中骰照抽
+            target.speed_point = 10;
+            target.ac = 0;
+            match flag {
+                "death" => target.death = true,
+                "ghost" => target.ghost = true,
+                _ => target.invisible = true,
+            }
+            // 折入版（显示/枚举路径）仍拒；直通版（_Attack）照 true。
+            assert!(
+                !is_proper_target_grouped(&attacker, &target, &[]),
+                "{flag}: 折入版应拒"
+            );
+            assert!(
+                is_proper_target_grouped_direct(&attacker, &target, &[]),
+                "{flag}: 直通版 = oracle IsProperTarget 应接受"
+            );
+
+            let mut rng = CountingRng::new(7);
+            let out = attack_with_grouped(
+                &mut rng,
+                &mut attacker,
+                &mut target,
+                None,
+                &cfg,
+                AttackPowerMode::Base,
+                &[],
+            );
+            assert!(out.hit, "{flag}: 命中骰必须被抽（hit=true）");
+            assert!(out.damage > 0, "{flag}: 必须走伤害结算");
+            assert_eq!(
+                rng.below.first(),
+                Some(&10),
+                "{flag}: 第 1 次记录抽必须是 `RandomByte(SpeedPoint=10)`"
+            );
+            assert!(
+                rng.below.len() >= 2,
+                "{flag}: 后续 `GetHitStruckDamage`/耐久抽数必须恢复（实际 {:?}）",
+                rng.below
+            );
+        }
+    }
+
+    /// 反向对照：仍被折入版判真的正常目标与三态目标的**取数流水完全一致**（除目标状态外
+    /// 没有其它门），证明差异只来自 fold。
+    #[test]
+    fn attack_draw_ledger_is_identical_for_normal_and_folded_flags() {
+        fn run(flag: Option<&str>) -> (Vec<i32>, i32, bool) {
+            let cfg = CombatConfig::default();
+            let mut attacker = Entity::new(1, "a", 0, 0);
+            attacker.race = ACTOR_RACE_MONSTER;
+            attacker.dc = 0x0A0A;
+            attacker.hit_point = 100;
+            let mut target = Entity::new(2, "t", 0, 0);
+            target.race = ACTOR_RACE_PLAY;
+            target.hp = 100;
+            target.max_hp = 100;
+            target.hit_point = 10;
+            target.speed_point = 10;
+            target.ac = 0;
+            match flag {
+                Some("death") => target.death = true,
+                Some("ghost") => target.ghost = true,
+                Some("invisible") => target.invisible = true,
+                _ => {}
+            }
+            let mut rng = CountingRng::new(11);
+            let out = attack_with_grouped(
+                &mut rng,
+                &mut attacker,
+                &mut target,
+                None,
+                &cfg,
+                AttackPowerMode::Base,
+                &[],
+            );
+            (rng.below, i32::from(out.damage), out.hit)
+        }
+        let normal = run(None);
+        for flag in ["death", "ghost", "invisible"] {
+            assert_eq!(run(Some(flag)), normal, "{flag}: 取数流水应与正常目标一致");
+        }
     }
 }

@@ -297,14 +297,15 @@ namespace WorldGolden
             _ = ParityGolden.M2Share.RandomNumber.Random(5) + 2;
         }
 
-        /// <summary>攻击合法性子集（与 Rust `is_attack_target` 同口径）。</summary>
+        /// <summary>
+        /// 攻击合法性子集（与 Rust `is_proper_target_grouped_direct` 同口径）。
+        /// oracle `BaseObject.IsProperTarget`（`BaseObject.Base.cs:470-473`）= `IsAttackTarget`，
+        /// **不查 `Death/Ghost/Invisible`**（审计 G09）。旧桩在此折入三查，与 oracle 不符：
+        /// 会让「攻击已死目标」漏抽 `RandomByte(target.SpeedPoint)`，整条 RNG 流水错位。
+        /// </summary>
         public bool IsProperTarget(ActorStub target)
         {
             if (target == null || ReferenceEquals(target, this))
-            {
-                return false;
-            }
-            if (target.Death || target.Ghost || target.Invisible)
             {
                 return false;
             }

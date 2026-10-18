@@ -64,7 +64,7 @@
 //!   [`animal_run`]（严格 `>`），由 [`monster_ai_tick`] 在 `monster_run` 之后、`base.Run` 之前调用
 //!   （= oracle 的 `MonsterObject.Run` 尾 `base.Run()` → `AnimalObject.Run`）。`RefNameColor` 帧不在此层。
 
-use crate::combat::is_proper_target;
+use crate::combat::{is_proper_target, is_proper_target_grouped_direct};
 use crate::entity::{Entity, ACTOR_RACE_PLAY};
 use crate::magic::{
     front_position, DIR_DOWN, DIR_DOWN_LEFT, DIR_DOWN_RIGHT, DIR_LEFT, DIR_RIGHT, DIR_UP,
@@ -225,20 +225,23 @@ pub fn wondering(world: &mut World, actor_id: i32) {
     }
 }
 
-/// `AnimalObject.SearchTarget`（`AnimalObject.cs:388-423`）。
+/// `AnimalObject.SearchTarget`（`AnimalObject.cs:388-416`）。
 ///
-/// 遍历 `VisibleActors`（oracle 的插入序），逐项：死亡/隐身/异图/`|Δx|>15`/`|Δy|>15`
-/// ⇒ `ClearTargetCreat`（从可见集移除）；否则 `IsProperTarget && (!HideMode || CoolEye)` 且
-/// 曼哈顿距离更近者被选中。最后 `SetTargetCreat(最近者)`。
+/// 逐句复刻 oracle 的 `for` + `ClearTargetCreat`（`BaseObject.Base.cs:568-585`）：
+/// 无效项分支先从可见集**删首个匹配项**再 `DelTargetCreat()`（`TargetCret = null`、
+/// `TargetX/Y = -1`），然后 `continue` ⇒ C# `for` 尾的 `i++` **跳过**因 `RemoveAt`
+/// 前移的下一项。该跳项是 oracle 的真实怪癖（硬约束③：照抄，不当 bug 修）：
+/// 初始无目标、列表 `[无效, 合法]` ⇒ 合法项被跳过，收尾 `searchTarget == null` ⇒
+/// **保持无目标**。末尾 `if (searchTarget != null) SetTargetCreat(searchTarget)`。
+///
+/// 目标有效性用**直通版** `IsProperTarget`（`BaseObject.Base.cs:470-473` = `IsAttackTarget`）：
+/// 死亡/幽灵已由上面的无效项分支排除，`Invisible` oracle 不查（审计 G09），
+/// 因此这里**不能**用折入 death/ghost/invisible 的 [`is_proper_target`]。
 pub fn search_target(world: &mut World, actor_id: i32) {
-    let visible: Vec<i32> = match world.entities.get(actor_id) {
-        Some(e) => e.visible_actors.iter().map(|v| v.target).collect(),
-        None => return,
-    };
-    let Some((cx, cy, map_id, cool_eye)) = world
+    let Some((cx, cy, map_id, cool_eye, mut visible)) = world
         .entities
         .get(actor_id)
-        .map(|e| (e.x, e.y, e.map_id, e.ai.cool_eye))
+        .map(|e| (e.x, e.y, e.map_id, e.ai.cool_eye, e.visible_actors.clone()))
     else {
         return;
     };
@@ -246,41 +249,59 @@ pub fn search_target(world: &mut World, actor_id: i32) {
     // （±15 窗口内曼哈顿距离上限 30，不可达，但按 1:1 保留该初值）。
     let mut n10 = 999;
     let mut best: Option<i32> = None;
-    let mut to_clear: Vec<i32> = Vec::new();
-    for target_id in visible {
-        let Some(t) = world.entities.get(target_id) else {
-            to_clear.push(target_id);
-            continue;
+    let mut cleared_target = false;
+    // `for (int i = 0; i < VisibleActors.Count; i++)`：条件每轮重取（列表会被 `RemoveAt`
+    // 缩短）；无效项分支的 `i += 1` 对应 C# 的 `continue` ⇒ `for` 尾 `i++`。
+    let mut i = 0;
+    while i < visible.len() {
+        let target_id = visible[i].target;
+        // `baseObject.Death || baseObject.Ghost || baseObject.Envir != Envir ||
+        //  |Δx| > 15 || |Δy| > 15`
+        let invalid = match world.entities.get(target_id) {
+            None => true,
+            Some(t) => {
+                t.death
+                    || t.ghost
+                    || t.map_id != map_id
+                    || (t.x - cx).abs() > 15
+                    || (t.y - cy).abs() > 15
+            }
         };
-        if t.death
-            || t.ghost
-            || t.map_id != map_id
-            || (t.x - cx).abs() > 15
-            || (t.y - cy).abs() > 15
-        {
-            to_clear.push(target_id);
+        if invalid {
+            // `ClearTargetCreat(baseObject)`：`VisibleActors` 里删**首个** `BaseObject == 目标`
+            // 的项（`VisibleActors.RemoveAt(i); break;`），随后 `DelTargetCreat()`。
+            if let Some(pos) = visible.iter().position(|v| v.target == target_id) {
+                visible.remove(pos);
+            }
+            cleared_target = true;
+            i += 1;
             continue;
         }
-        // oracle 在 `ClearTargetCreat` 之后还写了一遍 `if (!baseObject.Death)`（`AnimalObject.cs:402`）：
+        // oracle 在 `ClearTargetCreat` 之后还写了一遍 `if (!baseObject.Death)`（`AnimalObject.cs:400`）：
         // 上面的 `baseObject.Death` 已 `continue` ⇒ 该层不可达（照搬时省略，行为等价）。
         // 隐藏门读的是 `HideMode`（**不是** `FixedHideMode`，后者只用于 `GetXYObjCount`/`Run`）。
-        let proper = world
-            .entities
-            .get(actor_id)
-            .is_some_and(|a| is_proper_target(a, t) && (!t.hide_mode || cool_eye));
-        if proper {
-            let dist = (cx - t.x).abs() + (cy - t.y).abs();
-            if dist < n10 {
-                n10 = dist;
-                best = Some(target_id);
+        if let (Some(a), Some(t)) = (world.entities.get(actor_id), world.entities.get(target_id)) {
+            if is_proper_target_grouped_direct(a, t, &[]) && (!t.hide_mode || cool_eye) {
+                let dist = (cx - t.x).abs() + (cy - t.y).abs();
+                if dist < n10 {
+                    n10 = dist;
+                    best = Some(target_id);
+                }
             }
         }
+        i += 1;
     }
-    if !to_clear.is_empty() {
+    if cleared_target {
         if let Some(e) = world.entities.get_mut(actor_id) {
-            // `BaseObject.ClearTargetCreat`（`BaseObject.ViewRange.cs`）：把该目标从可见集移除。
-            e.visible_actors.retain(|v| !to_clear.contains(&v.target));
+            // `ClearTargetCreat` 的尾部 `DelTargetCreat()`（`AnimalObject.DelTargetCreat`
+            // 额外把 `TargetX/TargetY` 置 -1）。多次无效项只影响最终态，逐次调用等价。
+            e.ai.target_creature = None;
+            e.ai.target_x = -1;
+            e.ai.target_y = -1;
         }
+    }
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.visible_actors = visible;
     }
     if let Some(target_id) = best {
         set_target_creature(world, actor_id, target_id);
@@ -417,7 +438,7 @@ pub fn think(world: &mut World, actor_id: i32) -> bool {
                 .entities
                 .get(actor_id)
                 .zip(world.entities.get(t))
-                .is_some_and(|(a, b)| is_proper_target(a, b));
+                .is_some_and(|(a, b)| is_proper_target_grouped_direct(a, b, &[]));
             if !proper {
                 if let Some(e) = world.entities.get_mut(actor_id) {
                     e.ai.target_creature = None;
@@ -558,7 +579,7 @@ pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
             .entities
             .get(victim_id)
             .zip(world.entities.get(hiter_id))
-            .is_some_and(|(a, b)| is_proper_target(a, b));
+            .is_some_and(|(a, b)| is_proper_target_grouped_direct(a, b, &[]));
         if proper {
             set_target_creature(world, victim_id, hiter_id);
         }
@@ -592,15 +613,36 @@ pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
 /// - 本体：`53`（`AnimalWolf`=`new AtMonster`）、`81`/`86`/`88`/`89`（`new AtMonster`）；
 /// - `83`（`new SlowAtMonster`，`SlowATMonster.cs:3` `: AtMonster` 无覆写）。
 ///
-/// **不在此列（登记，本片不建模）**：覆写 `Run` 的 `ATMonster` 派生（`90`/`91`/`92`/`96`/`97`/
-/// `100`/`105`/`107`/`114`/`130`/`132` 等，见模块头「未建模」；**MB-3b F2**：105 的 `base.Run()` 段
-/// 已由 [`monster_run`] 单独补门，本集合仍只表示「未覆写 `Run` 的直派生」），以及非 `ATMonster` 家族
-/// 但自实现同样索敌门的类（`BoneKing`/`Clone`/`DigOutZombi`/`Sculture`/`LightingZombi`/…）。
+/// 审计 `audit-attack-search-coverage-20261018.md` G08：原集合 `{53,81,83,86,88,89}` 漏了
+/// **继承 `ATMonster.Run` 但未覆写 `Run`** 的 9 个 race。逐 race 实读 `CreateMonster`
+/// （`WorldServer.MonGen.cs:566-690`）+ 类继承链确认：
+///
+/// | race | 类 | 继承链 | 覆写 `Run`？ | 数据可达 |
+/// | ---: | --- | --- | --- | --- |
+/// | 82 | `SpitSpider` | `AtMonster` | 否 | 是（10 条） |
+/// | 84 | `Scorpion` | `AtMonster` | 否 | 是 |
+/// | 90 | `GasAttackMonster` | `AtMonster` | 否 | 是（25 条） |
+/// | 91 | `MagCowMonster` | `AtMonster` | 否 | 是（18 条） |
+/// | 97 | `CowMonster` | `AtMonster` | 否 | 是（2 条） |
+/// | 106 | `GasDungMonster` | `GasAttackMonster` | 否 | 是（2 条） |
+/// | 118 | `HighRiskSpider` | `SpitSpider` | 否 | **否**（部署无 MonGen/库行；仍补，数据不可达 ≠ 不补） |
+/// | 119 | `BigPoisionSpider` | `SpitSpider` | 否 | 是（31 条） |
+/// | 130 | `DoubleCriticalMonster` | `AtMonster` | 否 | **否**（部署无 MonGen/库行） |
+///
+/// 这些类的 `AttackTarget` 覆写尚未建模（另有卡），但**索敌节拍本身**与基类一致，必须进本集合。
+///
+/// **不在此列（登记）**：覆写 `Run` 的 `ATMonster` 派生（`92`/`96`/`100`/`105`/`107`/`114`/
+/// `132` 等，见模块头「未建模」；**MB-3b F2**：105 的 `base.Run()` 段已由 [`monster_run`]
+/// 单独补门 `|| race == 105`，本集合仍只表示「未覆写 `Run` 的直派生」），以及非 `ATMonster`
+/// 家族但自实现同样索敌门的类（`BoneKing`/`Clone`/`DigOutZombi`/`Sculture`/`LightingZombi`/…）。
 ///
 /// 改坏必红：去掉本门 ⇒ `active_seek_race_*` 用例里 race 81/83 的怪不再发现玩家。
 #[must_use]
 pub fn is_active_seek_race(race: u8) -> bool {
-    matches!(race, 53 | 81 | 83 | 86 | 88 | 89)
+    matches!(
+        race,
+        53 | 81 | 82 | 83 | 84 | 86 | 88 | 89 | 90 | 91 | 97 | 106 | 118 | 119 | 130
+    )
 }
 
 /// `AnimalObject.Struck` 的 `if (Animal)` 门（`AnimalObject.cs:350-357`）所读 `BaseObject.Animal`
@@ -3673,6 +3715,247 @@ mod tests {
         assert_eq!(picked, Some(target), "CoolEye 破 HideMode");
     }
 
+    /// 审计 G05/G20 / MCS-A1+A2：`ClearTargetCreat` 的 `RemoveAt` + `continue`（⇒ `i++`）
+    /// 跳项怪癖：四种组合 + 连续无效项 + 「跳过后选中更远者」。
+    ///
+    /// oracle `AnimalObject.SearchTarget`（`:392-416`）：无效项 ⇒ `ClearTargetCreat`
+    /// （删**首个**匹配项 + `DelTargetCreat`）⇒ `continue` ⇒ C# `for` 尾 `i++` **跳过**
+    /// 因删除而前移的下一项；收尾只有 `searchTarget != null` 才 `SetTargetCreat`。
+    /// **照抄怪癖**（硬约束③）。
+    ///
+    /// 改坏必红：把删除改回 `retain`/`while` 重扫 ⇒「[无效, 合法] 保持 None」「连续无效项
+    /// 第二个仍留在列表」「跳过后选中更远者」三组断言全红。
+    #[test]
+    fn search_target_clear_target_quirk_four_combinations() {
+        // 返回 (最终目标, 剩余可见集, target_x, target_y, 合法者 id)。
+        fn case(has_initial: bool, invalid_first: bool) -> (Option<i32>, Vec<i32>, i32, i32, i32) {
+            let mut world = World::new(60, 60);
+            let mid = monster(&mut world, 10, 10);
+            let dead = player(&mut world, 11, 10);
+            world.entities.get_mut(dead).unwrap().death = true;
+            let legal = player(&mut world, 12, 10);
+            let old = player(&mut world, 13, 10);
+            let order: [i32; 2] = if invalid_first {
+                [dead, legal]
+            } else {
+                [legal, dead]
+            };
+            world.entities.get_mut(mid).unwrap().visible_actors = order
+                .iter()
+                .map(|&target| VisibleBaseObject {
+                    target,
+                    flag: VisibleFlag::Show,
+                })
+                .collect();
+            if has_initial {
+                set_target_creature(&mut world, mid, old);
+                let e = world.entities.get_mut(mid).unwrap();
+                e.ai.target_x = 42;
+                e.ai.target_y = 43;
+            }
+            search_target(&mut world, mid);
+            let e = world.entities.get(mid).unwrap();
+            (
+                e.ai.target_creature,
+                e.visible_actors.iter().map(|v| v.target).collect(),
+                e.ai.target_x,
+                e.ai.target_y,
+                legal,
+            )
+        }
+
+        // ① 初始无目标 + `[无效, 合法]` ⇒ 无效项删掉后 `i++` 跳过合法项 ⇒ 保持 None。
+        let (target, vis, _, _, legal) = case(false, true);
+        assert_eq!(
+            target, None,
+            "[无效, 合法] + 初始无目标 ⇒ oracle 跳项后保持无目标"
+        );
+        assert_eq!(vis, vec![legal], "无效项仍被 ClearTargetCreat 移出可见集");
+
+        // ② 初始无目标 + `[合法, 无效]` ⇒ 合法者已入选，收尾 SetTargetCreat ⇒ Some(合法)。
+        let (target, vis, tx, ty, legal) = case(false, false);
+        assert_eq!(target, Some(legal), "[合法, 无效] ⇒ 收尾仍置合法目标");
+        assert_eq!(vis, vec![legal]);
+        assert_eq!((tx, ty), (-1, -1), "无效项触发过 DelTargetCreat ⇒ x/y=-1");
+
+        // ③ 初始有目标 + `[无效, 合法]` ⇒ 无效项清掉旧目标，合法项被跳过 ⇒ None。
+        let (target, _, tx, ty, _) = case(true, true);
+        assert_eq!(
+            target, None,
+            "初始有目标也会被无效项的 DelTargetCreat 清掉，且合法项仍被跳过"
+        );
+        assert_eq!((tx, ty), (-1, -1));
+
+        // ④ 初始有目标 + `[合法, 无效]` ⇒ 旧目标先被清、收尾置合法 ⇒ Some(合法)。
+        let (target, _, tx, ty, legal) = case(true, false);
+        assert_eq!(target, Some(legal));
+        assert_eq!((tx, ty), (-1, -1));
+    }
+
+    /// G20：连续无效项时 `RemoveAt(pos)` 后 `i++` 只跳过一项 ⇒ 第二个无效项**留在**列表。
+    /// 另证「被跳过的合法项不会被选中」：`[无效, 近合法, 远合法]` ⇒ 选远者。
+    #[test]
+    fn search_target_remove_at_skips_shifted_item() {
+        // `[无效A, 无效B, 合法]` ⇒ A 删后跳过已前移的 B。
+        let mut world = World::new(60, 60);
+        let mid = monster(&mut world, 10, 10);
+        let dead_a = player(&mut world, 11, 10);
+        let dead_b = player(&mut world, 12, 10);
+        let legal = player(&mut world, 13, 10);
+        for id in [dead_a, dead_b] {
+            world.entities.get_mut(id).unwrap().death = true;
+        }
+        world.entities.get_mut(mid).unwrap().visible_actors = vec![
+            VisibleBaseObject {
+                target: dead_a,
+                flag: VisibleFlag::Show,
+            },
+            VisibleBaseObject {
+                target: dead_b,
+                flag: VisibleFlag::Show,
+            },
+            VisibleBaseObject {
+                target: legal,
+                flag: VisibleFlag::Show,
+            },
+        ];
+        search_target(&mut world, mid);
+        let e = world.entities.get(mid).unwrap();
+        assert_eq!(e.ai.target_creature, Some(legal));
+        assert_eq!(
+            e.visible_actors
+                .iter()
+                .map(|v| v.target)
+                .collect::<Vec<_>>(),
+            vec![dead_b, legal],
+            "删 index 0 后 i++ ⇒ 第二个无效项被跳过并留在列表（oracle 怪癖）"
+        );
+
+        // 同一个无效目标在列表中出现两次：`ClearTargetCreat` 的 `RemoveAt(i); break;`
+        // **只删首个匹配**。`[死, 死, 合法]` ⇒ 删 index 0 后 i++ 跳过剩下的死项 ⇒
+        // 选中合法者且列表仍留一个死项（`retain` 会全删 ⇒ target=None，必红）。
+        let mut world = World::new(60, 60);
+        let mid = monster(&mut world, 10, 10);
+        let dead = player(&mut world, 11, 10);
+        world.entities.get_mut(dead).unwrap().death = true;
+        let legal = player(&mut world, 12, 10);
+        world.entities.get_mut(mid).unwrap().visible_actors = vec![
+            VisibleBaseObject {
+                target: dead,
+                flag: VisibleFlag::Show,
+            },
+            VisibleBaseObject {
+                target: dead,
+                flag: VisibleFlag::Show,
+            },
+            VisibleBaseObject {
+                target: legal,
+                flag: VisibleFlag::Show,
+            },
+        ];
+        search_target(&mut world, mid);
+        let e = world.entities.get(mid).unwrap();
+        assert_eq!(e.ai.target_creature, Some(legal));
+        assert_eq!(
+            e.visible_actors
+                .iter()
+                .map(|v| v.target)
+                .collect::<Vec<_>>(),
+            vec![dead, legal],
+            "RemoveAt 只删首个匹配 ⇒ 剩余一个死项"
+        );
+
+        // `[无效, 近合法, 远合法]` ⇒ 近合法被跳过，选远合法。
+        let mut world = World::new(60, 60);
+        let mid = monster(&mut world, 10, 10);
+        let dead = player(&mut world, 11, 10);
+        world.entities.get_mut(dead).unwrap().death = true;
+        let near = player(&mut world, 12, 10);
+        let far = player(&mut world, 20, 10);
+        world.entities.get_mut(mid).unwrap().visible_actors = vec![
+            VisibleBaseObject {
+                target: dead,
+                flag: VisibleFlag::Show,
+            },
+            VisibleBaseObject {
+                target: near,
+                flag: VisibleFlag::Show,
+            },
+            VisibleBaseObject {
+                target: far,
+                flag: VisibleFlag::Show,
+            },
+        ];
+        search_target(&mut world, mid);
+        let e = world.entities.get(mid).unwrap();
+        assert_eq!(
+            e.ai.target_creature,
+            Some(far),
+            "删无效项后 i++ 跳过已前移的 near ⇒ 选中 far（照抄怪癖）"
+        );
+    }
+
+    /// G09：索敌路径用**直通版** `IsProperTarget` —— 隐身（且非 HideMode）目标可被选中；
+    /// 折入版 [`crate::combat::is_proper_target_grouped`] 仍保留给枚举/显示型调用点。
+    #[test]
+    fn search_target_uses_direct_proper_target_and_keeps_invisible() {
+        let mut world = World::new(60, 60);
+        let mid = monster(&mut world, 10, 10);
+        let target = player(&mut world, 12, 10);
+        world.entities.get_mut(target).unwrap().invisible = true;
+        world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+            target,
+            flag: VisibleFlag::Show,
+        }];
+        assert!(
+            !crate::combat::is_proper_target_grouped(
+                world.entities.get(mid).unwrap(),
+                world.entities.get(target).unwrap(),
+                &[]
+            ),
+            "折入版（显示路径）仍拒隐身目标"
+        );
+        search_target(&mut world, mid);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            Some(target),
+            "oracle SearchTarget → IsProperTarget 不查 Invisible ⇒ 必须选中"
+        );
+    }
+
+    /// G09/G25：`MonsterObject.Think` 的目标有效性刷新用**直通版** —— 隐身目标不被清。
+    #[test]
+    fn think_keeps_invisible_target_like_oracle_is_proper_target() {
+        let mut world = World::new(60, 60);
+        let mid = monster(&mut world, 10, 10);
+        let target = player(&mut world, 12, 10);
+        world.entities.get_mut(target).unwrap().invisible = true;
+        set_target_creature(&mut world, mid, target);
+        world.clock_ms = 4000; // `now - ThinkTick(0) > 3000`
+        let _ = think(&mut world, mid);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            Some(target),
+            "oracle Think → IsProperTarget 不查 Invisible ⇒ 不得清目标"
+        );
+    }
+
+    /// G09：`AnimalObject.Struck` 的 `IsProperTarget(hiter)` 用**直通版** —— 隐身命中者
+    /// 仍会被登记为目标（初始无目标 ⇒ `take` 短路为真）。
+    #[test]
+    fn animal_struck_accepts_invisible_hitter() {
+        let mut world = World::new(30, 30);
+        let mid = race_monster(&mut world, 80, 10, 10);
+        let hiter = player(&mut world, 20, 20);
+        world.entities.get_mut(hiter).unwrap().invisible = true;
+        animal_struck(&mut world, mid, hiter);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            Some(hiter),
+            "oracle Struck → IsProperTarget 不查 Invisible ⇒ 仍登记命中者"
+        );
+    }
+
     /// `GotoTargetXY`：进函数先 `WalkTo(主方向)`，**无条件**抽一次 `Random(3)`；
     /// 移动成功 ⇒ 不再走重试循环（`AnimalObject.cs:174-249`）。
     #[test]
@@ -4087,24 +4370,39 @@ mod tests {
         );
     }
 
-    /// W4-D：`IsProperTarget(hiter)` 门（`AnimalObject.cs:344-347`）——已死命中者不得被认领。
-    /// 改坏必红：删掉 `is_proper_target` 门 ⇒ 断言红。
+    /// W4-D + G09：`IsProperTarget(hiter)` 门（`AnimalObject.cs:344-347`）——oracle
+    /// `BaseObject.IsAttackTarget`（`BaseObject.Base.cs:382-385`）只拒 `AdminMode/StoneMode`，
+    /// **不拒 `Death/Ghost/Invisible`**（审计 G09）。
+    /// 改坏必红：删掉直通门 ⇒ AdminMode 断言红；改回折入版 ⇒ Death 断言红。
     #[test]
-    fn animal_struck_rejects_improper_hitter() {
+    fn animal_struck_proper_target_gate_matches_oracle() {
+        // `AdminMode` 命中者 ⇒ `IsAttackTarget` false ⇒ 不认领（照旧）。
+        let mut world = World::new(30, 30);
+        let mid = monster(&mut world, 10, 10);
+        let admin = player(&mut world, 11, 10);
+        world.entities.get_mut(admin).unwrap().admin_mode = true;
+        world.rng = RandomNumber::with_seed(3);
+        let mut probe = RandomNumber::with_seed(3);
+        let probe_next = probe.random();
+        animal_struck(&mut world, mid, admin);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            None,
+            "AdminMode 命中者不得被认领"
+        );
+        assert_eq!(world.rng.random(), probe_next, "TargetCret==null 支不抽数");
+
+        // `Death` 命中者 ⇒ oracle `IsProperTarget` 仍为 true ⇒ **认领**（G09）。
         let mut world = World::new(30, 30);
         let mid = monster(&mut world, 10, 10);
         let dead = player(&mut world, 11, 10);
         world.entities.get_mut(dead).unwrap().death = true;
-        world.rng = RandomNumber::with_seed(3);
-        let mut probe = RandomNumber::with_seed(3);
-        let probe_next = probe.random();
         animal_struck(&mut world, mid, dead);
         assert_eq!(
             world.entities.get(mid).unwrap().ai.target_creature,
-            None,
-            "已死命中者不得被认领"
+            Some(dead),
+            "oracle IsProperTarget 不查 Death ⇒ 仍认领（折入版会误拒）"
         );
-        assert_eq!(world.rng.random(), probe_next, "TargetCret==null 支不抽数");
     }
 
     /// W4-E：`RM_STRUCK` 队列（`AnimalState::pending_struck`）在怪物自己的 `base.Run()`
@@ -4338,15 +4636,46 @@ mod tests {
         );
     }
 
-    /// ①-C：`is_active_seek_race` 的分类（含 `AtMonster` 本体 + `SlowAtMonster`；排除覆写 `Run` 的派生）。
+    /// ①-C：`is_active_seek_race` 的分类（`AtMonster` 本体 + 全部「未覆写 `Run`」直/间派生；
+    /// 排除覆写 `Run` 的派生）。审计 G08 的 9 个 race 必须全部在列（含数据不可达的 118/130）。
     #[test]
     fn active_seek_race_classification_matches_oracle() {
-        for r in [53u8, 81, 83, 86, 88, 89] {
+        for r in [
+            53u8, 81, 82, 83, 84, 86, 88, 89, 90, 91, 97, 106, 118, 119, 130,
+        ] {
             assert!(is_active_seek_race(r), "race {r} 应为主动索敌族");
         }
-        // race 80（MonsterObject）与覆写 Run 的派生（82/84/90/105/107/114/132）不在本片族内。
-        for r in [80u8, 82, 84, 85, 90, 105, 106, 107, 114, 118, 119, 132] {
+        // race 50/80（非 ATMonster.Run）与覆写 Run 的派生（85/87/92/94/95/96/100/101/
+        // 105/107/114/115/132）不在本集合内。
+        for r in [
+            50u8, 80, 85, 87, 92, 94, 95, 96, 100, 101, 105, 107, 114, 115, 132,
+        ] {
             assert!(!is_active_seek_race(r), "race {r} 不应为主动索敌族");
+        }
+    }
+
+    /// 审计 G08 / MCS-A3：9 个「继承 `ATMonster.Run` 而未覆写 `Run`」的 race 在固定时钟
+    /// `>8000ms` 门到点后必须认领 5 格内玩家。逐 race 各跑一个独立世界（互不污染）。
+    ///
+    /// 改坏必红：任一 race 漏出 [`is_active_seek_race`] ⇒ 该轮 `target_creature == None`。
+    #[test]
+    fn active_seek_race_inherits_at_monster_run_for_nine_races() {
+        for r in [82u8, 84, 90, 91, 97, 106, 118, 119, 130] {
+            let mut world = World::new(60, 60);
+            let mid = race_monster(&mut world, r, 10, 10);
+            let pid = player(&mut world, 15, 10);
+            world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+                target: pid,
+                flag: VisibleFlag::Show,
+            }];
+            world.clock_ms = 8001;
+            world.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 0;
+            monster_run(&mut world, mid);
+            assert_eq!(
+                world.entities.get(mid).unwrap().ai.target_creature,
+                Some(pid),
+                "race {r} 必须继承 ATMonster.Run 的 `(now - SearchEnemyTick) > 8000` 索敌门"
+            );
         }
     }
 
