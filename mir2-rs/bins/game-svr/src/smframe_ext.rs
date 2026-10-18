@@ -301,12 +301,12 @@ pub fn sm_merchantdlgclose(n_param1: i32) -> Vec<u8> {
 /// `MakeMessage(SM_MOVEMESSAGE, ActorId, MakeWord(nParam1, nParam2), nParam3, wParam)`
 /// 追加尾 `EDCode.EncodeString(Msg)`（同 `RM_HEAR` 家族共用 `SendSocket(ClientMsg, EncodeString(Msg))`，`:1731`）。
 ///
-/// `MakeWord` 取**颜色字节**（`(byte)` 语义，同 [`crate::smframe::sm_hear`] 的既定口径）。
+/// `MakeWord` 是 `ushort` 重载（`(ushort)(nParam1 | nParam2<<8)`，G-9）。
 #[must_use]
 pub fn sm_movemessage(
     actor_id: i32,
-    n_param1: u8,
-    n_param2: u8,
+    n_param1: u16,
+    n_param2: u16,
     n_param3: i32,
     w_param: i32,
     msg: &[u8],
@@ -314,7 +314,8 @@ pub fn sm_movemessage(
     let header = command_header(
         actor_id,
         messages::SM_MOVEMESSAGE,
-        make_word(n_param1, n_param2),
+        // G-9：oracle 的 `MakeWord(ushort, ushort)`（`(ushort)(f | b<<8)`）。
+        crate::smframe::make_word16(n_param1, n_param2),
         n_param3 as u16,
         w_param as u16,
     );

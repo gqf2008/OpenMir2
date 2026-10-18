@@ -60,10 +60,18 @@ pub struct WireSession {
 }
 
 /// 把一条立即帧（[`Frame`]）翻成 `SM_*` body；未知 ident ⇒ `None`（调用方记 WRN）。
+///
+/// `SM_ADDITEM` 需要**实际入包的物品**（G-1：`SendAddItem` 的 `ClientItem` 尾）；
+/// `add_item`/`catalog` 为 `None` 时该帧不产出（不静默退化成 header-only）。
 #[must_use]
-pub fn immediate_frame(frame: &Frame, drop_msg: &[u8]) -> Option<Vec<u8>> {
+pub fn immediate_frame(
+    frame: &Frame,
+    drop_msg: &[u8],
+    add_item: Option<&BagItem>,
+    catalog: &dyn ItemCatalog,
+) -> Option<Vec<u8>> {
     match frame.ident {
-        SM_ADDITEM => Some(smframe::sm_additem(frame.recog)),
+        SM_ADDITEM => crate::trade::send_add_item_body(frame.recog, add_item?, catalog),
         SM_DROPITEM_SUCCESS => Some(smframe::sm_dropitem_reply(true, frame.recog, drop_msg)),
         SM_DROPITEM_FAIL => Some(smframe::sm_dropitem_reply(false, frame.recog, drop_msg)),
         _ => None,
@@ -95,8 +103,9 @@ pub fn notice_frame(n: &QueuedNotice, session: &WireSession) -> Option<Vec<u8>> 
         RM_SYSMESSAGE => session.sys_msg.as_deref().map(|msg| {
             smframe::sm_sysmessage(
                 session.actor_id,
-                u8::try_from(n.n_param1).unwrap_or(0),
-                u8::try_from(n.n_param2).unwrap_or(0),
+                // `MakeWord((ushort)nParam1, (ushort)nParam2)`：低 16 位（G-9）。
+                u16::try_from(n.n_param1 & 0xFFFF).unwrap_or(0),
+                u16::try_from(n.n_param2 & 0xFFFF).unwrap_or(0),
                 msg,
             )
         }),
@@ -118,10 +127,12 @@ pub fn outcome_frames(
     notices: &[QueuedNotice],
     session: &WireSession,
     drop_msg: &[u8],
+    add_item: Option<&BagItem>,
+    catalog: &dyn ItemCatalog,
 ) -> Vec<Vec<u8>> {
     let mut out = Vec::with_capacity(immediate.len() + notices.len());
     for f in immediate {
-        if let Some(b) = immediate_frame(f, drop_msg) {
+        if let Some(b) = immediate_frame(f, drop_msg, add_item, catalog) {
             out.push(b);
         }
     }
@@ -277,14 +288,34 @@ mod tests {
         v
     }
 
-    /// 立即帧：`SM_DROPITEM_SUCCESS/FAIL`（尾 = `EncodeString(Msg)`）；`SM_ADDITEM` 当前为
-    /// **header-only（已知缺失 T-24）**——oracle `SendAddItem`（`PlayObject.Base.cs:225-227`）
-    /// 会追加 `EncodeBuffer(clientItem)` 尾，本函数不产该尾（物品展示层未移植）。本用例
-    /// **把当前 header-only 钉住**，避免后续真机 pickup 把缺尾误当 parity。
+    /// 立即帧：`SM_DROPITEM_SUCCESS/FAIL`（尾 = `EncodeString(Msg)`）；`SM_ADDITEM` 的尾 =
+    /// `EncodeBuffer(ClientItem 124B)`（G-1：`PlayObject.Base.cs:225-227`）。
     ///
-    /// 红检：把 `sm_additem` 的 `series` 从 1 改成 0 ⇒ `add` 断言必红。
+    /// 红检：把 `sm_additem` 的 `series` 从 1 改成 0，或去掉尾 ⇒ `add` 断言必红。
     #[test]
     fn immediate_frames_map_to_oracle_bytes() {
+        let doc = fixture();
+        let catalog = catalog_from(&doc);
+        let item = BagItem {
+            make_index: 7,
+            index: 3001,
+            dura: 10,
+            dura_max: 20,
+            desc: [0; 14],
+        };
+        // 期望尾独立走 `itemwire::encode_client_item`（124B 编码器自己的单测在 itemwire）。
+        let ci = crate::itemwire::ClientItem {
+            tpl: catalog.get(3001).expect("模板 3001"),
+            name: "ring".to_string(),
+            make_index: 7,
+            dura: 10,
+            dura_max: 20,
+            desc: [0; 14],
+        };
+        let tail = edcode::encode(&crate::itemwire::encode_client_item(&ci));
+        assert_eq!(tail.len(), 166, "encode_len(124) = 166");
+        let mut expect_add = header(0x1234, 200, 0, 0, 1);
+        expect_add.extend_from_slice(&tail);
         let add = immediate_frame(
             &Frame {
                 ident: SM_ADDITEM,
@@ -294,9 +325,27 @@ mod tests {
                 series: 1,
             },
             b"",
+            Some(&item),
+            &catalog,
         )
-        .expect("SM_ADDITEM 必须可映射");
-        assert_eq!(add, header(0x1234, 200, 0, 0, 1));
+        .expect("SM_ADDITEM 必须可映射（带物品）");
+        assert_eq!(add, expect_add);
+        assert!(
+            immediate_frame(
+                &Frame {
+                    ident: SM_ADDITEM,
+                    recog: 0x1234,
+                    param: 0,
+                    tag: 0,
+                    series: 1,
+                },
+                b"",
+                None,
+                &catalog,
+            )
+            .is_none(),
+            "缺物品输入 ⇒ 不产出（不许静默 header-only）"
+        );
 
         let msg = b"ring";
         let mut expect_fail = header(70001, 601, 0, 0, 0);
@@ -310,6 +359,8 @@ mod tests {
                 series: 0,
             },
             msg,
+            None,
+            &catalog,
         )
         .expect("SM_DROPITEM_FAIL 必须可映射");
         assert_eq!(fail, expect_fail);
@@ -325,6 +376,8 @@ mod tests {
                 series: 0,
             },
             msg,
+            None,
+            &catalog,
         )
         .unwrap();
         assert_eq!(ok, expect_ok);

@@ -40,7 +40,7 @@
 
 use mir2_envir::{GameSvrConf, MapInfoFlag, NakedAbility as ConfNakedAbility};
 
-use crate::record::{Ability, NakedAbility, ServerUserItem};
+use crate::record::{Ability, MagicRcd, NakedAbility, ServerUserItem};
 use crate::strings::StringConf;
 use game_svr::ability::{self, ItemCatalog, ItemInstance, RecalcInputs};
 use game_svr::feature::{feature_ex, human_feature, make_long, make_word};
@@ -102,6 +102,10 @@ pub struct AbilityInputs<'a> {
     pub use_items: Option<&'a [Option<ServerUserItem>]>,
     /// 背包物品（角色记录 `bag_items`；只用于 `WAbil.Weight`）。
     pub bag_items: Option<&'a [Option<ServerUserItem>]>,
+    /// `PlayObject.MagicList`（角色记录 `magic`）：`SM_SENDMYMAGIC(211)` 的逐条输入。
+    pub magics: Option<&'a [Option<MagicRcd>]>,
+    /// `M2Share.MagicList` 查表面（`magics::load_magics`）：`ClientMagic.Def` 的模板。
+    pub magic_table: Option<&'a game_svr::magics::MagicTable>,
     /// `Gold`（`SM_ABILITY` 的 `Recog`）。
     pub gold: i32,
     /// 帧 52 尾的布局：`true` ⇒ 冻结客户端的 58B `TAbility`（`HIGHHP=True`，
@@ -511,6 +515,96 @@ pub fn adjust_bonus_parts(
     Some((a.to_bytes(), conf_naked(player).to_bytes(), c.to_bytes()))
 }
 
+/// `PlayObject.SendUseItems()`（`PlayObject.Base.cs:1019-1050`）的尾：
+/// 逐槽 `i + '/' + EncodeBuffer(ClientItem) + '/'`（`i` = 槽位十进制 ASCII）；
+/// `GetUpgradeStdItem` 的 desc 升级差量未建模（同 T-24；desc=0 时逐字节等价）。
+/// 服装槽（`ItemLocation.Dress = 0`）先 `ChangeItemWithLevel`，随后所有物品
+/// `ChangeItemByJob`（顺序照 `Base.cs:1036-1040`）。
+/// `Ok(None)` = 没有可发项（oracle 的 `if (!string.IsNullOrEmpty(sSendMsg))` 门）。
+fn send_use_items_tail(a: &AbilityInputs<'_>, job: u8) -> Result<Option<Vec<u8>>, String> {
+    let Some(items) = a.use_items else {
+        return Ok(None);
+    };
+    let mut tail: Vec<u8> = Vec::new();
+    for (i, slot) in items
+        .iter()
+        .enumerate()
+        .take(game_svr::downlink::USE_ITEM_SLOTS)
+    {
+        let Some(it) = slot else { continue };
+        if it.index == 0 {
+            continue;
+        }
+        let Some(tpl) = a.catalog.get(it.index) else {
+            continue;
+        };
+        let mut owned = tpl.clone();
+        game_svr::itemwire::change_item_with_level(&mut owned, a.abil.level);
+        game_svr::itemwire::change_item_by_job(&mut owned, job);
+        let mut desc = [0u8; game_svr::itemwire::ITEM_NAME_LEN];
+        if let Some(d) = &it.desc {
+            for (j, b) in d.iter().take(desc.len()).enumerate() {
+                desc[j] = *b;
+            }
+        }
+        let bag_item = game_svr::bag::BagItem {
+            make_index: it.make_index,
+            index: it.index,
+            dura: it.dura,
+            dura_max: it.dura_max,
+            desc,
+        };
+        let name = game_svr::bag::item_display_name(a.catalog, &bag_item);
+        let ci = game_svr::itemwire::ClientItem {
+            tpl: &owned,
+            name,
+            make_index: it.make_index,
+            dura: it.dura,
+            dura_max: it.dura_max,
+            desc,
+        };
+        tail.extend_from_slice(format!("{i}/").as_bytes());
+        tail.extend_from_slice(&mir2_protocol::edcode::encode(
+            &game_svr::itemwire::encode_client_item(&ci),
+        ));
+        tail.push(b'/');
+    }
+    if tail.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(tail))
+    }
+}
+
+/// `PlayObject.SendUseMagic()`（`PlayObject.Base.cs:1052-1073`）的 `(count, 尾)`：
+/// 逐条 `EncodeBuffer(ClientMagic) + '/'`；`count = MagicList.Count`。
+/// 魔表缺项（`magics` 表装载失败）⇒ 无法构造 `ClientMagic.Def`，返回 `Err` 登记（不编造）。
+fn send_my_magic(a: &AbilityInputs<'_>) -> Result<Option<(u16, Vec<u8>)>, String> {
+    let (Some(magics), Some(table)) = (a.magics, a.magic_table) else {
+        return Ok(None);
+    };
+    let mut tail: Vec<u8> = Vec::new();
+    let mut count: u16 = 0;
+    for m in magics.iter().flatten() {
+        let Some(def) = table.get(m.mag_idx) else {
+            return Err(format!(
+                "帧 211 输入不足：MagicList 的 MagIdx={} 不在 magics 表 ⇒ 跳过整条 211（登记）",
+                m.mag_idx
+            ));
+        };
+        tail.extend_from_slice(&mir2_protocol::edcode::encode(
+            &game_svr::itemwire::encode_client_magic(m.magic_key, m.level, m.tran_point, def),
+        ));
+        tail.push(b'/');
+        count = count.saturating_add(1);
+    }
+    if tail.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some((count, tail)))
+    }
+}
+
 /// 把 [`WorldFrameInputs`] 装配进 `base`（`base` 里 `notice`/`map_file_name`/`actor_id`/坐标/方向
 /// 由 `main.rs` 从网关链路与角色记录填好）。**只填**本片有输入的那几条；其余保持 `None`。
 ///
@@ -574,6 +668,13 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
             base.logon_body_wl = Some((feature, l.char_status, tag1, 0));
             base.feature = Some((feature, feature_ex));
             base.attack_mode = Some(l.attack_mode);
+            // `RM_LOGON` 里排队的 `SendMsg(RM_CHANGELIGHT, 0,0,0,0)`（`Message.cs:1682`）⇒
+            // `SM_CHANGELIGHT(654)`：`Recog=ActorId`、`Param=Light`、`Tag=Config.nClientKey`
+            // （`Message.cs:1840`）。金标准实测 `param=0`（该角色无光源）、`tag=500`。
+            base.changelight = Some((
+                base.light,
+                game_svr::sessionwire::N_CLIENT_KEY_DEFAULT,
+            ));
         }
         None => warns.push(
             "帧 50/41/213 输入不足（未解析出角色记录全字段 GetFeatureToLong/CharStatus/AttatckMode）\
@@ -619,7 +720,8 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
         Some(a) => {
             let out = recalc_for_session(&a, wx.job);
             // 52：`MakeMessage(SM_ABILITY, Gold, MakeWord((byte)Job, 99), LoWord(GameGold), HiWord(GameGold))`
-            // 尾 = `EncodeMessage(WAbil)`（`Message.cs:1732-1734`）。`Job` 在原头的高字节、99 在低字节。
+            // 尾 = `EncodeMessage(WAbil)`（`Message.cs:1732-1734`）。`MakeWord(low, high)` ⇒
+            // `Job` 在**低字节**、99 在**高字节**（G-12：旧注释写反了，字节值以代码为准）。
             // `client_ability_layout`（`MIR2_CLIENT_ABILITY_LAYOUT`，**默认开** = 冻结客户端 58B）
             // 为 `false` 时用 oracle 的 40B `EncodeMessage(WAbil)`（逐字节对拍）。
             let wabil_tail = if a.client_ability_layout {
@@ -630,6 +732,29 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
             base.ability = Some((a.gold, wx.job, wx.game_gold, wabil_tail));
             // 752：7 个字段全在头（`Message.cs:1935`）。
             base.sub_ability = Some(out.sub.to_frame_bytes());
+            // 621 `SM_SENDUSEITEMS` / 211 `SM_SENDMYMAGIC`（`PlayObject.cs:1389-1390`）。
+            // 两条都有「尾为空 ⇒ 不发」门（`Base.cs:1046/1065`）。
+            match send_use_items_tail(&a, wx.job) {
+                Ok(tail) => base.use_items_tail = tail,
+                Err(w) => warns.push(w),
+            }
+            match send_my_magic(&a) {
+                Ok(m) => base.magic = m,
+                Err(w) => warns.push(w),
+            }
+            // `BaseObject.Light` / `PlayObject.GetMyLight()`：装备（右手火把等，`Index>0 &&
+            // Dura>0`）的 `StdItem.Light` 最大值；`Level >= EFFECTIVE_HIGHLEVEL` 时基线 1。
+            // `SM_LOGON` 的 `MakeWord(Dir, Light)` 与 `SM_CHANGELIGHT` 的 `Param` 都用它。
+            if let Some(items) = a.use_items {
+                let pairs: Vec<(u16, u16)> = items
+                    .iter()
+                    .map(|s| s.as_ref().map_or((0, 0), |it| (it.index, it.dura)))
+                    .collect();
+                base.light = game_svr::downlink::my_light(a.abil.level, &pairs, a.catalog);
+                if let Some((_, key)) = base.changelight {
+                    base.changelight = Some((base.light, key));
+                }
+            }
         }
         None => warns.push(
             "帧 52/752 输入不足（角色 Abil/BonusAbil 或 stditems 目录缺失）⇒ 两条同组跳过（登记）"
@@ -1206,7 +1331,19 @@ mod tests {
         assert_eq!(base.attack_mode, Some(2));
 
         let frames = base.frames();
-        assert_eq!(idents(&frames), vec![658, 50, 41, 213], "同组三条 + 658");
+        assert_eq!(
+            idents(&frames),
+            vec![658, 50, 41, 213, 654],
+            "同组三条 + 658 + RM_LOGON 排队的 654"
+        );
+        // 654：`Recog=ActorId(7)`、`Param=Light(1)`、`Tag=500`、`Series=0`、无尾。
+        let mut expect_654 = Vec::new();
+        expect_654.extend_from_slice(&7i32.to_le_bytes());
+        expect_654.extend_from_slice(&654u16.to_le_bytes());
+        expect_654.extend_from_slice(&1u16.to_le_bytes()); // param = Light
+        expect_654.extend_from_slice(&500u16.to_le_bytes()); // tag = nClientKey
+        expect_654.extend_from_slice(&0u16.to_le_bytes());
+        assert_eq!(frames[4], expect_654, "654 逐字节");
         // 帧 50 尾 = `EncodePacket(MessageBodyWL 16B)`。
         let wl = edcode::decode(&frames[1][12..]);
         assert_eq!(wl.len(), 16);
@@ -1302,8 +1439,8 @@ mod tests {
         );
         assert_eq!(base.feature, Some((0x0002_0000, 0)));
         let frames = base.frames();
-        // 658 恒发（R1-1：空尾也发 header-only），随后同组 50/41/213。
-        assert_eq!(idents(&frames), vec![658, 50, 41, 213]);
+        // 658 恒发（R1-1：空尾也发 header-only），随后同组 50/41/213，最后 RM_LOGON 的 654。
+        assert_eq!(idents(&frames), vec![658, 50, 41, 213, 654]);
         // 金标准 seq18：41 的 `Param/Tag/Series = Lo/HiWord(feature)/featureEx = 0/2/0`。
         let cm41 = CommandMessage::from_bytes(&frames[2]).unwrap();
         assert_eq!((cm41.param, cm41.tag, cm41.series), (0, 2, 0));
@@ -1436,6 +1573,8 @@ mod tests {
             bonus_tick_speed: 35,
             use_items: Some(&use_items),
             bag_items: Some(&bag),
+            magics: None,
+            magic_table: None,
             gold: 1234,
             client_ability_layout: false,
         };
@@ -1490,8 +1629,8 @@ mod tests {
         );
         assert_eq!(
             idents(&base.frames()),
-            vec![658, 52, 752],
-            "52 在 752 前（`PlayObject.cs:1385-1386`）"
+            vec![658, 752, 52],
+            "模型 C：752 先于 52 出队（入队序仍是 52 先；堆序非 FIFO，见卡 openmir2-login-frame-order）"
         );
 
         // `MIR2_CLIENT_ABILITY_LAYOUT`：冻结客户端 58B 布局（`HIGHHP=True`）——同一 `WAbil`、
@@ -1530,5 +1669,259 @@ mod tests {
             i32::from(out.wabil.hp),
             "客户端从 offset 22 读到的 HP 必须等于重算后的 HP"
         );
+    }
+
+    /// **G-3**：`SM_SENDUSEITEMS(621)` / `SM_SENDMYMAGIC(211)` 的装配（逐槽/逐条 + 顺序）。
+    ///
+    /// 逐字节判据（固定输入 → 期望尾）：
+    /// - 621 尾 = `"0/" + EncodeBuffer(ClientItem[slot0]) + "/" + "5/" + EncodeBuffer(ClientItem[slot5]) + "/"`；
+    /// - 211 = `(count=1, EncodeBuffer(ClientMagic) + "/")`；
+    /// - `frames()` 序在 46 之后、654 之前：`658, 621, 211, 654`。
+    #[test]
+    fn send_use_items_and_magic_tails_follow_oracle_layout() {
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            3001,
+            StdItem {
+                name: "ring".into(),
+                std_mode: 23,
+                dura_max: 0,
+                // 右手火把类光源：验证 654 的 `Param` 来自 `GetMyLight()`（不是恒 0）。
+                light: 3,
+                ..StdItem::default()
+            },
+        );
+        catalog.insert(
+            3002,
+            StdItem {
+                name: "dress".into(),
+                std_mode: 10,
+                shape: 0,
+                dura_max: 30,
+                ..StdItem::default()
+            },
+        );
+        let abil = Ability {
+            level: 45,
+            ..Ability::default()
+        };
+        let bonus = NakedAbility {
+            dc: 0,
+            mc: 0,
+            sc: 0,
+            ac: 0,
+            mac: 0,
+            hp: 0,
+            mp: 0,
+            hit: 0,
+            speed: 35,
+            reserved: 0,
+        };
+        let mut use_items = vec![None; 13];
+        use_items[0] = Some(ServerUserItem {
+            make_index: 11,
+            index: 3002,
+            dura: 20,
+            dura_max: 30,
+            desc: None,
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        });
+        use_items[5] = Some(ServerUserItem {
+            make_index: 7,
+            index: 3001,
+            dura: 1,
+            dura_max: 2,
+            desc: None,
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        });
+        let magic = mir2_data::MagicInfo {
+            magic_id: 17,
+            magic_name: "heal".into(),
+            ..mir2_data::MagicInfo::default()
+        };
+        let table = game_svr::magics::MagicTable::new(vec![magic.clone()]);
+        let magics = vec![Some(MagicRcd {
+            mag_idx: 17,
+            level: 2,
+            magic_key: 0x41,
+            tran_point: 100,
+        })];
+        let a = AbilityInputs {
+            catalog: &catalog,
+            abil: &abil,
+            bonus_abil: &bonus,
+            bonus_tick_hit: 20,
+            bonus_tick_speed: 35,
+            use_items: Some(&use_items),
+            bag_items: None,
+            magics: Some(&magics),
+            magic_table: Some(&table),
+            gold: 0,
+            client_ability_layout: false,
+        };
+        let use_tail = send_use_items_tail(&a, 0).unwrap().expect("621 有尾");
+        let item0 = game_svr::itemwire::ClientItem {
+            tpl: catalog.get(3002).unwrap(),
+            name: "dress".into(),
+            make_index: 11,
+            dura: 20,
+            dura_max: 30,
+            desc: [0; 14],
+        };
+        let item5 = game_svr::itemwire::ClientItem {
+            tpl: catalog.get(3001).unwrap(),
+            name: "ring".into(),
+            make_index: 7,
+            dura: 1,
+            dura_max: 2,
+            desc: [0; 14],
+        };
+        let mut expect = Vec::new();
+        expect.extend_from_slice(b"0/");
+        expect.extend_from_slice(&edcode::encode(&game_svr::itemwire::encode_client_item(
+            &item0,
+        )));
+        expect.extend_from_slice(b"/5/");
+        expect.extend_from_slice(&edcode::encode(&game_svr::itemwire::encode_client_item(
+            &item5,
+        )));
+        expect.push(b'/');
+        assert_eq!(
+            use_tail, expect,
+            "621 逐槽 i + '/' + EncodeBuffer(ClientItem) + '/'"
+        );
+
+        let (count, magic_tail) = send_my_magic(&a).unwrap().expect("211 有尾");
+        assert_eq!(count, 1, "series = MagicList.Count");
+        let mut expect_magic = edcode::encode(&game_svr::itemwire::encode_client_magic(
+            0x41, 2, 100, &magic,
+        ));
+        expect_magic.push(b'/');
+        assert_eq!(magic_tail, expect_magic);
+
+        let base = EnterWorldInputs {
+            actor_id: 7,
+            use_items_tail: Some(use_tail),
+            magic: Some((count, magic_tail)),
+            changelight: Some((0, game_svr::sessionwire::N_CLIENT_KEY_DEFAULT)),
+            ..EnterWorldInputs::default()
+        };
+        assert_eq!(
+            idents(&base.frames()),
+            vec![658, 621, 211, 654],
+            "order: 46 后 621→211，654 收尾"
+        );
+    }
+
+    /// **G-7**：`apply` 用装备的 `StdItem.Light` 算 `BaseObject.Light`，同时喂
+    /// `SM_LOGON` 的 `HiByte(series)` 与 `SM_CHANGELIGHT(654).Param`。
+    #[test]
+    fn apply_light_feeds_logon_series_and_654_param() {
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            3001,
+            StdItem {
+                name: "torch".into(),
+                std_mode: 3,
+                light: 3,
+                ..StdItem::default()
+            },
+        );
+        let abil = Ability {
+            level: 10,
+            ..Ability::default()
+        };
+        let bonus = NakedAbility {
+            dc: 0,
+            mc: 0,
+            sc: 0,
+            ac: 0,
+            mac: 0,
+            hp: 0,
+            mp: 0,
+            hit: 0,
+            speed: 35,
+            reserved: 0,
+        };
+        let mut use_items = vec![None; 13];
+        use_items[2] = Some(ServerUserItem {
+            make_index: 7,
+            index: 3001,
+            dura: 1,
+            dura_max: 2,
+            desc: None,
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        });
+        let a = AbilityInputs {
+            catalog: &catalog,
+            abil: &abil,
+            bonus_abil: &bonus,
+            bonus_tick_hit: 20,
+            bonus_tick_speed: 35,
+            use_items: Some(&use_items),
+            bag_items: None,
+            magics: None,
+            magic_table: None,
+            gold: 0,
+            client_ability_layout: false,
+        };
+        let mut base = EnterWorldInputs {
+            actor_id: 7,
+            dir: 4,
+            ..EnterWorldInputs::default()
+        };
+        let wx = WorldFrameInputs {
+            flag: None,
+            map_desc: None,
+            conf: None,
+            bonus_abil: None,
+            soft_version_date: 0,
+            game_gold: 0,
+            game_point: 0,
+            job: 0,
+            bonus_point: 0,
+            game_time: None,
+            strings: None,
+            show_name: None,
+            logon: Some(LogonInputs::default()),
+            ability: Some(a),
+        };
+        let _ = apply(&mut base, &wx);
+        assert_eq!(base.light, 3, "右手火把 Light=3");
+        assert_eq!(
+            base.changelight,
+            Some((3, game_svr::sessionwire::N_CLIENT_KEY_DEFAULT))
+        );
+        let frames = base.frames();
+        let cm50 = CommandMessage::from_bytes(&frames[1]).unwrap();
+        assert_eq!(cm50.series >> 8, 3, "SM_LOGON 的 HiByte(series)=Light");
+        let cm654 = CommandMessage::from_bytes(frames.last().unwrap()).unwrap();
+        assert_eq!(cm654.ident, 654);
+        assert_eq!(
+            (cm654.param, cm654.tag),
+            (3, 500),
+            "654 Param=Light/Tag=500"
+        );
+    }
+
+    /// **G-11**：地图文件名走 GBK 字节（`EDCode.EncodeString` 对 `HUtil32.GetBytes(gb2312)`）。
+    #[test]
+    fn map_file_name_uses_gbk_not_utf8() {
+        assert_eq!(gbk("地图"), vec![0xB5, 0xD8, 0xCD, 0xBC]);
+        assert_ne!(
+            gbk("地图"),
+            "地图".as_bytes().to_vec(),
+            "UTF-8 字节不是 oracle 口径"
+        );
+        assert_eq!(gbk("0"), b"0".to_vec(), "现网 ASCII 地图名不变");
     }
 }

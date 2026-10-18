@@ -76,6 +76,9 @@ pub struct SayMsg {
     pub text: String,
     /// `true` = `SendPriorityMsg(..., High)`（`:993`）；`false` = `SendMsg`（`:997`）。
     pub priority: bool,
+    /// 说这句话的 NPC 的 `ActorId`（`baseObject.ActorId`，`BaseObject.Message.cs:154`）。
+    /// 非 priority 支的 `SM_MERCHANTSAY.Recog` 用它（G-4：旧实现恒 0）。
+    pub npc_actor_id: i32,
 }
 
 /// oracle `MsgQueue` 的**出队序**（`BaseObject.Base.cs:25-32` 的 `while (GetMessage(...))` +
@@ -129,6 +132,12 @@ pub struct NpcDef {
     pub scripts: Vec<ScriptInfo>,
     /// 脚本文件是否实际存在（oracle `File.Exists` 口径；缺 ⇒ 不解析、不报错、`ScriptList` 为空）。
     pub loaded: bool,
+    /// `BaseObject.ActorId`（`ActorEntity()` 构造时的 `ActorMgr.GetNextIdentity()`）。
+    ///
+    /// 本宿主按装载序赋稳定正整数（1..），**不复刻** oracle 的全局 ActorMgr 流水号：
+    /// 那需要整个世界（怪物/商人/玩家）的构造序；客户端只用它关联说话 NPC（`g_nCurMerchant`），
+    /// 只要非 0 且稳定即可（G-4；精确数值登记为口径差）。
+    pub actor_id: i32,
 }
 
 /// NPC 脚本运行时宿主。
@@ -162,7 +171,7 @@ impl NpcHost {
         let mut defs: Vec<NpcDef> = Vec::new();
         let mut failures: Vec<NpcLoadFailure> = Vec::new();
         // oracle 装载序：`MapQuestManager` 的 `AddQuestNpc` 记录先，`AddMerchant`（QFunction）后。
-        for record in quest_npcs.iter().chain(merchants.iter()) {
+        for (idx, record) in quest_npcs.iter().chain(merchants.iter()).enumerate() {
             // `Merchant`（ScriptName 非空）走 `LoadScriptFile(..., boFlag=true)`；其余 `LoadScript` ⇒ false。
             let bo_flag = record.script_name.is_some();
             let script_name = record
@@ -197,6 +206,8 @@ impl NpcHost {
                 is_quest: record.is_quest,
                 scripts,
                 loaded,
+                // 稳定非 0（见字段文档；oracle 的精确流水号不复刻，登记）。
+                actor_id: i32::try_from(idx + 1).unwrap_or(i32::MAX),
             });
         }
         NpcHost {
@@ -307,6 +318,7 @@ impl ScriptNpc for HostNpc<'_> {
             raw_msg: msg.to_string(),
             text: merchant_say_text(&self.def.chr_name, msg),
             priority,
+            npc_actor_id: self.def.actor_id,
         });
     }
     fn script_goto_count_limit(&self) -> i32 {
@@ -581,6 +593,7 @@ mod tests {
             is_quest: false,
             scripts: vec![script_with(label, say)],
             loaded: true,
+            actor_id: 1,
         }
     }
 
@@ -746,6 +759,7 @@ mod tests {
             raw_msg: m.to_string(),
             text: merchant_say_text("QManage", m),
             priority,
+            npc_actor_id: 1,
         };
         let says = vec![
             say("a", false),

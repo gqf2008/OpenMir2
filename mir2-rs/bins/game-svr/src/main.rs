@@ -2058,7 +2058,7 @@ fn handle_ground_cmd(
     // 先跑纯函数（会**原地改** `sg.state`），再按**改后**的会话态组 `WireSession`
     // ——oracle 的 `GoldChanged()`/`WeightChanged()` 都在 `Gold +=`/`AddItemToBag` **之后**发
     // （`PlayObject.Base.cs:79-84`），故 `SM_GOLDCHANGED`/`SM_WEIGHTCHANGED` 用新值。
-    let (immediate, notices, drop_msg) = if ident == game_svr::ground::CM_PICKUP {
+    let (immediate, notices, drop_msg, added_item) = if ident == game_svr::ground::CM_PICKUP {
         // oracle 位置门：不满足 ⇒ 不进 `ClientPickUpItem`。
         if !game_svr::pickwire::pickup_position_ok(cx, cy, i32::from(param), i32::from(tag)) {
             glog!(
@@ -2097,7 +2097,13 @@ fn handle_ground_cmd(
             red_msg_b_color: u16::from(colors.red_b),
         };
         let out = game_svr::ground::pick_up(&ctx, &mut map, &mut sg.state);
-        (out.immediate_frames, out.notices, Vec::new())
+        // G-1：`SM_ADDITEM` 的 `ClientItem` 尾需要实际入包的 `UserItem`。
+        (
+            out.immediate_frames,
+            out.notices,
+            Vec::new(),
+            out.added_item,
+        )
     } else {
         // `CM_DROPITEM`：`Msg` = `processMsg.Msg`（EDCode 解码后的 GBK 文本）；
         // `SendDefMessage(..., Msg)` 会 `EncodeString(Msg)` ⇒ 这里传**未编码的 GBK 字节**。
@@ -2123,7 +2129,12 @@ fn handle_ground_cmd(
             drop_item_rage: cfg.drop_item_rage,
         };
         let out = game_svr::ground::drop_item(&ctx, &mut map, &mut sg.state);
-        (out.immediate_frames, out.notices, enter::gbk(item_name))
+        (
+            out.immediate_frames,
+            out.notices,
+            enter::gbk(item_name),
+            None,
+        )
     };
     let wire = game_svr::pickwire::WireSession {
         actor_id,
@@ -2133,7 +2144,14 @@ fn handle_ground_cmd(
         sys_msg: sg.sys_msg.clone(),
         hunger_status: sg.hunger_status,
     };
-    let bodies = game_svr::pickwire::outcome_frames(&immediate, &notices, &wire, &drop_msg);
+    let bodies = game_svr::pickwire::outcome_frames(
+        &immediate,
+        &notices,
+        &wire,
+        &drop_msg,
+        added_item.as_ref(),
+        catalog,
+    );
     if let Some(tx) = route_to_gate(gates, gate_idx, socket, "拾取/丢弃回帧") {
         for body in bodies {
             let _ = tx.send(SimToGate::SendFrame { socket, body });
@@ -2581,11 +2599,21 @@ fn handle_bag_cmd(
         return;
     };
     // oracle：换下的旧物品 `SendAddItem` 在 OK/FAIL 帧之前（`Operate.cs:455`/`:539`）。
-    if out.swapped_out.is_some() {
-        let _ = tx.send(SimToGate::SendFrame {
-            socket,
-            body: game_svr::smframe::sm_additem(sg.actor_id),
-        });
+    // G-1：尾 = `EncodeBuffer(ClientItem 124B)`（`PlayObject.Base.cs:225-227`）。
+    if let Some(item) = &out.swapped_out {
+        match game_svr::trade::add_item_tail(item, catalog) {
+            Some(tail) => {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket,
+                    body: game_svr::smframe::sm_additem(sg.actor_id, &tail),
+                });
+            }
+            None => glog!(
+                "WRN",
+                "换装：SM_ADDITEM 的物品模板缺失（index={}）⇒ 跳过该帧（登记）",
+                item.index
+            ),
+        }
     }
     for f in &out.frames {
         let body = game_svr::smframe::gm_data_body(
@@ -2593,6 +2621,36 @@ fn handle_bag_cmd(
             &[],
         );
         let _ = tx.send(SimToGate::SendFrame { socket, body });
+    }
+    // G-2：`SM_UPDATEITEM(203)`（`Operate.cs:462-478`）：成功穿上**衣服**（`StdMode 10/11`）后
+    // 按 `Shape` 选 `SendUpdateItem(WithLevel/ByJob)`。oracle 是立即帧，排在 `SM_TAKEON_OK` 之后、
+    // 队列里的 52/752/41 之前。武器升级路径（`PlayObject.cs:4131`）本仓未建模 ⇒ 登记。
+    if let Some(item) = &out.update_item {
+        if let Some(tpl) = catalog.get(item.index) {
+            let mut owned = tpl.clone();
+            let mut name = game_svr::bag::item_display_name(catalog, item);
+            if owned.std_mode == 50 {
+                name = format!("{name} #{}", item.dura);
+            }
+            if owned.shape == 9 {
+                game_svr::itemwire::change_item_with_level(&mut owned, sg.equip.abil.level);
+            } else if owned.shape == 10 || owned.shape == 11 {
+                game_svr::itemwire::change_item_by_job(&mut owned, sg.equip.job);
+            }
+            let ci = game_svr::itemwire::ClientItem {
+                tpl: &owned,
+                name,
+                make_index: item.make_index,
+                dura: item.dura,
+                dura_max: item.dura_max,
+                desc: item.desc,
+            };
+            let tail = mir2_protocol::edcode::encode(&game_svr::itemwire::encode_client_item(&ci));
+            let _ = tx.send(SimToGate::SendFrame {
+                socket,
+                body: game_svr::smframe::sm_updateitem(sg.actor_id, &tail),
+            });
+        }
     }
     // 成功重算后的 52 `SM_ABILITY` / 752 `SM_SUBABILITY`
     // （oracle `SendMsg(RM_ABILITY/RM_SUBABILITY)`，`Operate.cs:459-460`/`:548-549`）。
@@ -2609,7 +2667,15 @@ fn handle_bag_cmd(
         let sb = sg.sub.to_frame_bytes();
         let _ = tx.send(SimToGate::SendFrame {
             socket,
-            body: game_svr::smframe::sm_subability(sb[0], sb[1], sb[2], sb[3], sb[4], sb[5], sb[6]),
+            body: game_svr::smframe::sm_subability(
+                sb[0],
+                u8::try_from(sb[1]).unwrap_or(0),
+                u8::try_from(sb[2]).unwrap_or(0),
+                u8::try_from(sb[3]).unwrap_or(0),
+                u8::try_from(sb[4]).unwrap_or(0),
+                u8::try_from(sb[5]).unwrap_or(0),
+                u8::try_from(sb[6]).unwrap_or(0),
+            ),
         });
     }
     // oracle `FeatureChanged()`（`PlayObject.Operate.cs:459`/`:548` ⇒ `BaseObject.cs:1509`
@@ -4235,7 +4301,15 @@ fn emit_npc_says(
 ) -> usize {
     let mut sent = 0usize;
     for s in game_svr::npc::dequeue_order(says) {
-        let recog = if s.priority { player_actor_id } else { 0 };
+        // `ScriptEngine.cs:993/997` → `BaseObject.Message.cs:154`：`Recog = baseObject.ActorId`。
+        // priority 支的 `SendPriorityMsg` 也把 ActorId 置为 NPC（`baseObject.Message.cs:26`），
+        // 但金标准/现有真机语义里该支用玩家自己（保持原行为）；非 priority 支必须是 NPC 的 ActorId
+        // （G-4：旧实现恒 0）。
+        let recog = if s.priority {
+            player_actor_id
+        } else {
+            s.npc_actor_id
+        };
         let wire = game_svr::npc::merchant_say_gbk(&s.npc_name, &s.raw_msg);
         let body = smframe::sm_merchantsay(recog, 0, 0, &wire);
         let _ = tx.send(SimToGate::SendFrame { socket, body });
@@ -5437,6 +5511,7 @@ fn handle_hit_cmd(
             wire_coord(cur_x),
             wire_coord(cur_y),
             dir,
+            &[],
         );
         broadcast_ref_msg(world, online, gates, actor_id, &[body]);
         let _ = d;
@@ -5683,7 +5758,8 @@ fn drain_mag_struck_b2(
             o.target_id,
             o.hp_after,
             o.max_hp,
-            u16::try_from(o.damage).unwrap_or(u16::MAX),
+            // `(ushort)processMsg.wParam`：回绕（G-10；旧实现饱和到 u16::MAX）。
+            wire_damage(o.damage),
             d.feature,
             d.status,
             o.caster_id,
@@ -8406,8 +8482,8 @@ fn handle_spell_cmd(
                             // **BUG-REPLICA**：`MsgType.Notice` 的 default 支仍走 RedMsgF/BColor。
                             let body = smframe::sm_sysmessage(
                                 actor_id,
-                                b5_cfg.red_msg_f_color,
-                                b5_cfg.red_msg_b_color,
+                                u16::from(b5_cfg.red_msg_f_color),
+                                u16::from(b5_cfg.red_msg_b_color),
                                 B5_SAFE_ZONE_FIRE_CROSS,
                             );
                             buf.push_actor(
@@ -8508,8 +8584,8 @@ fn handle_spell_cmd(
                                 text.extend_from_slice(B5_ATT_POWER_UP_SECOND);
                                 let body = smframe::sm_sysmessage(
                                     out.target,
-                                    b5_cfg.green_msg_f_color,
-                                    b5_cfg.green_msg_b_color,
+                                    u16::from(b5_cfg.green_msg_f_color),
+                                    u16::from(b5_cfg.green_msg_b_color),
                                     &text,
                                 );
                                 buf.push_actor(
@@ -9003,7 +9079,14 @@ fn set_display_dir(displays: &mut downlink::DisplayTable, actor_id: i32, dir: u8
 
 /// 坐标进帧的 u16 写法与 `drain_aoi_downlink` 一致（保留 `i16` 位模式）。
 fn wire_coord(v: i32) -> u16 {
-    u16::from_ne_bytes(i16::try_from(v).unwrap_or(0).to_ne_bytes())
+    // `(ushort)v`：低 16 位/二补数。旧实现 `i16::try_from(...).unwrap_or(0)` 对越界值归 0
+    // （G-8，地图坐标不可达；这里完全等同 oracle 的截断语义）。
+    v as u16
+}
+
+/// `(ushort)processMsg.wParam` 的伤害打包（G-10：回绕，不是饱和）。
+fn wire_damage(v: i32) -> u16 {
+    v as u16
 }
 
 /// `SendSocket(M2Share.GetGoodTick)`：给**动作发起者自己**回一条 `+GD/<tick>` 短包。
@@ -10108,7 +10191,13 @@ fn drain_levelup_downlink(
         ));
         let sb = sg.sub.to_frame_bytes();
         send(game_svr::smframe::sm_subability(
-            sb[0], sb[1], sb[2], sb[3], sb[4], sb[5], sb[6],
+            sb[0],
+            u8::try_from(sb[1]).unwrap_or(0),
+            u8::try_from(sb[2]).unwrap_or(0),
+            u8::try_from(sb[3]).unwrap_or(0),
+            u8::try_from(sb[4]).unwrap_or(0),
+            u8::try_from(sb[5]).unwrap_or(0),
+            u8::try_from(sb[6]).unwrap_or(0),
         ));
     }
 }
@@ -10718,8 +10807,12 @@ fn drain_b4_self_deliveries(
                 // ——格式串无占位符 ⇒ 文本恒为 `String.conf` 的 `YouPoisoned`
                 // （`StringConf.cs:76`/`GameShare.cs:91`；现网值「您中毒了!!!」，不是
                 // `MessageSettings.cs:64` 的源码默认——配置覆盖）。
-                let body =
-                    smframe::sm_sysmessage(p.target_id, red_f_color, red_b_color, you_poisoned);
+                let body = smframe::sm_sysmessage(
+                    p.target_id,
+                    u16::from(red_f_color),
+                    u16::from(red_b_color),
+                    you_poisoned,
+                );
                 buf.push_actor(
                     online,
                     p.target_id,
@@ -10956,7 +11049,12 @@ fn handle_kick_account(
         if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "账号级顶号提示") {
             let _ = tx.send(SimToGate::SendFrame {
                 socket: e.socket,
-                body: smframe::sm_sysmessage(e.actor_id, colors.red_f, colors.red_b, KICK_USER_MSG),
+                body: smframe::sm_sysmessage(
+                    e.actor_id,
+                    u16::from(colors.red_f),
+                    u16::from(colors.red_b),
+                    KICK_USER_MSG,
+                ),
             });
         }
         if !soft_close_pending.iter().any(|n| n == &e.chr_name) {
@@ -11563,6 +11661,7 @@ fn drain_special_ref_msgs(
             wire_coord(m.x),
             wire_coord(m.y),
             m.dir,
+            &[],
         );
         broadcast_ref_msg_opt(
             world,
@@ -11609,6 +11708,7 @@ fn drain_monster_ref_msgs(
                 wire_coord(m.x),
                 wire_coord(m.y),
                 m.dir,
+                &[],
             ),
             mir2_world::monai::RM_DIGUP => {
                 let (feature, light) = displays
@@ -11805,8 +11905,8 @@ fn drain_b5_self_deliveries(
             }
             let body = smframe::sm_sysmessage(
                 exp.actor_id,
-                cfg.green_msg_f_color,
-                cfg.green_msg_b_color,
+                u16::from(cfg.green_msg_f_color),
+                u16::from(cfg.green_msg_b_color),
                 text,
             );
             buf.push_actor(online, exp.actor_id, P_SYSMSG, body);
@@ -11867,8 +11967,12 @@ fn drain_run_state_expiries(
         };
         match ev {
             mir2_world::RunStateExpiry::SpiritsGone => {
-                let body =
-                    smframe::sm_sysmessage(*actor_id, red_f_color, red_b_color, SPIRITS_GONE_GBK);
+                let body = smframe::sm_sysmessage(
+                    *actor_id,
+                    u16::from(red_f_color),
+                    u16::from(red_b_color),
+                    SPIRITS_GONE_GBK,
+                );
                 let _ = tx.send(SimToGate::SendFrame {
                     socket: entry.socket,
                     body,
@@ -13242,9 +13346,9 @@ fn sim_loop(
                                                     // 在 `SendLogon` **之前**下发（金标准 #1 在 #2 前），
                                                     // `EnterWorldInputs::frames()` 的序已把它放第一位。
                                                     notice: notice.clone(),
-                                                    map_file_name: Some(
-                                                        final_map_name.as_bytes().to_vec(),
-                                                    ),
+                                                    // G-11：oracle 走 `EDCode.EncodeString(MapFileName)`
+                                                    // = GB2312 字节；旧实现用 UTF-8（现网地图名 ASCII 无差）。
+                                                    map_file_name: Some(enter::gbk(&final_map_name)),
                                                     ..smframe::EnterWorldInputs::default()
                                                 };
                                                 // oracle `WorldServer.cs:262-275` 的新角色 `Abil` 初始化 +
@@ -13336,6 +13440,9 @@ fn sim_loop(
                                                             bonus_tick_speed: speed,
                                                             use_items: d.hum_items.as_deref(),
                                                             bag_items: d.bag_items.as_deref(),
+                                                            // 621/211：同一份角色记录 + 已装载魔表。
+                                                            magics: d.magic.as_deref(),
+                                                            magic_table: Some(&enter_cfg.magic_table),
                                                             gold: d.gold,
                                                             // 帧 52 尾的冻结客户端 58B `TAbility` 布局；
                                                             // 默认开（未设 = client-58；`MIR2_CLIENT_ABILITY_LAYOUT=0`
@@ -15596,6 +15703,7 @@ mod tests {
                 is_hide: false,
                 is_quest: false,
                 loaded: true,
+                actor_id: 1,
                 scripts: vec![ScriptInfo {
                     is_quest: false,
                     quest_info: Default::default(),
@@ -16890,6 +16998,8 @@ mod tests {
             raw_msg: m.to_string(),
             text: format!("QManage/{m}"),
             priority,
+            // G-4：非 priority 支的 `Recog` = NPC 的 ActorId（固定输入 0x11223344）。
+            npc_actor_id: 0x1122_3344,
         };
         let says = vec![say("a", false), say("b", true)];
         assert_eq!(emit_npc_says(&tx, 7, 4242, &says), 2);
@@ -16911,9 +17021,13 @@ mod tests {
         );
         assert_eq!(
             i32::from_le_bytes(frames[1].1[0..4].try_into().unwrap()),
-            0,
-            "SendMsg(normNpc) 路径 ⇒ recog = NPC ActorId（隐藏 NPC 恒 0）"
+            0x1122_3344,
+            "SendMsg(normNpc) 路径 ⇒ recog = NPC ActorId（G-4）"
         );
+        // 逐字节：`44332211 8302 0000 0000 0100` + EncodeString("QManage/a")。
+        let mut expect_npc = vec![0x44, 0x33, 0x22, 0x11, 0x83, 0x02, 0, 0, 0, 0, 1, 0];
+        expect_npc.extend_from_slice(&mir2_protocol::edcode::encode(b"QManage/a"));
+        assert_eq!(frames[1].1, expect_npc, "643 头字段逐字节（非 priority）");
         assert_eq!(
             frames[0].1,
             smframe::sm_merchantsay(4242, 0, 0, b"QManage/b"),
@@ -27846,7 +27960,7 @@ mod tests {
                         0,
                         0,
                         255,
-                        name.as_bytes().to_vec(),
+                        enter::gbk(name),
                     ),
                 );
                 online_set(
@@ -37415,7 +37529,7 @@ mod tests {
         assert_eq!(bodies[1], smframe::sm_digdown(mid, 10, 10));
         assert_eq!(
             bodies[2],
-            smframe::sm_action_hit(mir2_protocol::messages::SM_HIT, mid, 10, 10, 2)
+            smframe::sm_action_hit(mir2_protocol::messages::SM_HIT, mid, 10, 10, 2, &[])
         );
         assert_eq!(bodies[3], smframe_ext::sm_716(mid, 11, 10, 1));
         assert!(
@@ -37609,5 +37723,18 @@ mod tests {
             }
         }
         assert_eq!(frames, 1, "sender 已隐藏也必须按发帧快照送达（复验 F1）");
+    }
+
+    /// **G-8 / G-10**：坐标与伤害都按 `(ushort)` **截断/回绕**（旧实现分别归 0 / 饱和）。
+    #[test]
+    fn wire_coord_and_damage_truncate_like_ushort() {
+        assert_eq!(wire_coord(287), 287);
+        assert_eq!(wire_coord(618), 618);
+        assert_eq!(wire_coord(-1), 0xFFFF, "负坐标 = 二补数低 16 位");
+        assert_eq!(wire_coord(40000), 40000, "i16 越界不再归 0（G-8）");
+        assert_eq!(wire_coord(70000), 4464, "低 16 位截断");
+        assert_eq!(wire_damage(70000), 4464, "伤害回绕到 4464（G-10）");
+        assert_eq!(wire_damage(65535), 65535);
+        assert_eq!(wire_damage(-1), 0xFFFF);
     }
 }

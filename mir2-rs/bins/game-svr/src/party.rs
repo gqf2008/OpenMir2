@@ -87,7 +87,7 @@ pub fn event_body(ev: &PartyEvent) -> Option<(i32, Vec<u8>)> {
             text,
         } => Some((
             *target,
-            smframe::sm_sysmessage(*recog, *f_color, *b_color, &gbk(text)),
+            smframe::sm_sysmessage(*recog, u16::from(*f_color), u16::from(*b_color), &gbk(text)),
         )),
     }
 }

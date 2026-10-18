@@ -337,7 +337,8 @@ pub fn move_frame(ident: u16, target: i32, x: u16, y: u16, d: &ActorDisplay) -> 
 /// oracle 的坐标 u16 线缆写法（`i16` 位模式回填；与 `main.rs::wire_coord` 同口径，本模块自持一份
 /// 以免 lib 依赖 bin）。
 fn wire_coord(v: i32) -> u16 {
-    u16::from_ne_bytes(i16::try_from(v).unwrap_or(0).to_ne_bytes())
+    // `(ushort)v`：低 16 位/二补数（G-8；越界不再归 0）。
+    v as u16
 }
 
 /// **出站接线片 W2**：世界 [`mir2_world::action::PushEvent`]（`RM_PUSH`）→ `SM_BACKSTEP(9)`。
@@ -394,6 +395,7 @@ pub fn butch_frame(ev: &mir2_world::action::ButchEvent) -> Vec<u8> {
         wire_coord(ev.x),
         wire_coord(ev.y),
         ev.dir,
+        &[],
     )
 }
 

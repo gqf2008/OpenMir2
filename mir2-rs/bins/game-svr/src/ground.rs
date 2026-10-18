@@ -327,6 +327,9 @@ pub struct PickUpContext<'a> {
 pub struct PickUpOutcome {
     /// 立即下发的帧（普通物品成功且 `Race==Play` ⇒ 1 条 `SM_ADDITEM`；否则 0 条）。
     pub immediate_frames: Vec<Frame>,
+    /// 成功拾取并入包的物品（`SM_ADDITEM` 的 `ClientItem` 尾输入）。
+    /// `None` = 非普通物品成功路径（金币/失败/放回）。
+    pub added_item: Option<BagItem>,
     /// 进 `MsgQueue` 的延时通知（**按出队序**，见模块头）。
     pub notices: Vec<QueuedNotice>,
 }
@@ -411,11 +414,13 @@ pub fn pick_up(
 ) -> PickUpOutcome {
     let mut notices: Vec<QueuedNotice> = Vec::new();
     let mut immediate_frames: Vec<Frame> = Vec::new();
+    let mut added_item: Option<BagItem> = None;
 
     if ctx.dealing {
         return PickUpOutcome {
             immediate_frames,
             notices,
+            added_item: None,
         };
     }
 
@@ -423,6 +428,7 @@ pub fn pick_up(
         return PickUpOutcome {
             immediate_frames,
             notices,
+            added_item: None,
         };
     };
 
@@ -447,6 +453,7 @@ pub fn pick_up(
         return PickUpOutcome {
             immediate_frames,
             notices: dequeue_order(notices),
+            added_item: None,
         };
     }
 
@@ -463,6 +470,7 @@ pub fn pick_up(
         return PickUpOutcome {
             immediate_frames,
             notices: dequeue_order(notices),
+            added_item: None,
         };
     }
 
@@ -488,6 +496,10 @@ pub fn pick_up(
             ));
             // `AddItemToBag`：满包不追加、也不 WeightChanged；本分支已过 `IsEnoughBag`。
             if state.item_list.len() < MAX_BAG_ITEM {
+                // `SendAddItem(userItem)` 的尾需要**实际入包**的 `UserItem`（G-1）。
+                if ctx.race_is_play {
+                    added_item = Some(u.clone());
+                }
                 state.item_list.push(u);
                 state.wabil.weight = recalc_bag_weight(ctx.catalog, &state.item_list);
                 update(&mut notices, RM_WEIGHTCHANGED);
@@ -509,6 +521,7 @@ pub fn pick_up(
     PickUpOutcome {
         immediate_frames,
         notices: dequeue_order(notices),
+        added_item,
     }
 }
 

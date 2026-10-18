@@ -277,6 +277,8 @@ pub struct EquipOutcome {
     pub frames: Vec<Frame>,
     /// 换下并回背包的旧物品（非空 ⇒ 接线层应发 `SM_ADDITEM`）。
     pub swapped_out: Option<BagItem>,
+    /// 成功穿上的**衣服**（`StdMode 10/11`）⇒ 接线层应发 `SM_UPDATEITEM(203)`（G-2）。
+    pub update_item: Option<BagItem>,
     /// 成功时需要重算能力（oracle 在成功分支调用 `RecalcAbilitys()`）。
     pub recalc: bool,
 }
@@ -500,6 +502,13 @@ pub fn take_on(
                                 state.item_list.push(out);
                             }
                         }
+                        // `Operate.cs:460-478`：只有衣服（`StdMode 10/11`）在成功后发
+                        // `SM_UPDATEITEM`（按 `Shape` 选 plain/WithLevel/ByJob）。
+                        let update_item = if std.std_mode == 10 || std.std_mode == 11 {
+                            Some(user_item.clone())
+                        } else {
+                            None
+                        };
                         state.use_items[slot_idx] = Some(user_item);
                         n18 = 1;
                         let f = feature_to_long(ctx, state);
@@ -513,6 +522,7 @@ pub fn take_on(
                                 series: 0,
                             }],
                             swapped_out,
+                            update_item,
                             recalc: true,
                         };
                     }
@@ -584,6 +594,7 @@ pub fn take_off(
                         },
                     ],
                     swapped_out: Some(existing),
+                    update_item: None,
                     recalc: true,
                 };
             }
@@ -609,6 +620,7 @@ fn fail(ident: u16, code: i32) -> EquipOutcome {
             series: 0,
         }],
         swapped_out: None,
+        update_item: None,
         recalc: false,
     }
 }
@@ -958,5 +970,92 @@ mod tests {
         assert!(check_user_items(7, 22));
         assert!(check_user_items(8, 23));
         assert!(!check_user_items(13, 10));
+    }
+
+    /// **G-2**：穿上衣服（`StdMode 10/11`）后 `EquipOutcome.update_item` 必须非空（接线层据此发
+    /// `SM_UPDATEITEM(203)`）；非衣服槽（头盔 `15`）必须为空。
+    #[test]
+    fn take_on_dress_sets_update_item_only_for_dress_std_modes() {
+        let mut cat = crate::ability::StdItemCatalog::new();
+        cat.insert(
+            100,
+            mir2_data::StdItem {
+                name: "dress".into(),
+                std_mode: 10,
+                shape: 0,
+                weight: 1,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        cat.insert(
+            101,
+            mir2_data::StdItem {
+                name: "helmet".into(),
+                std_mode: 15,
+                shape: 0,
+                weight: 1,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let wabil = Ability {
+            max_hand_weight: 100,
+            max_wear_weight: 100,
+            ..Ability::default()
+        };
+        let ctx = TakeOnContext {
+            catalog: &cat,
+            job: 0,
+            gender: 0,
+            hair: 0,
+            abil_level: 10,
+            re_level: 0,
+            credit_point: 0,
+            member_type: 0,
+            member_level: 0,
+            has_guild: false,
+            guild_rank_no: 0,
+            is_castle_member: false,
+            user_unlock_durg: false,
+            dealing: false,
+            disable_take_off_keys: &[],
+            on_horse: false,
+            horse_type: 0,
+            dress_eff_type: 0,
+            wabil: &wabil,
+        };
+        let mut state = EquipState {
+            use_items: vec![None; USE_ITEMS_LEN],
+            item_list: vec![BagItem {
+                make_index: 7,
+                index: 100,
+                dura: 1,
+                dura_max: 2,
+                desc: [0; 14],
+            }],
+        };
+        let out = take_on(&mut state, &ctx, 0, 7, "dress");
+        assert_eq!(out.code, 1, "衣服穿上成功");
+        assert_eq!(
+            out.update_item.as_ref().map(|i| i.make_index),
+            Some(7),
+            "衣服 ⇒ SM_UPDATEITEM 输入"
+        );
+
+        let mut state2 = EquipState {
+            use_items: vec![None; USE_ITEMS_LEN],
+            item_list: vec![BagItem {
+                make_index: 8,
+                index: 101,
+                dura: 1,
+                dura_max: 2,
+                desc: [0; 14],
+            }],
+        };
+        let out2 = take_on(&mut state2, &ctx, 4, 8, "helmet");
+        assert_eq!(out2.code, 1, "头盔穿上成功");
+        assert!(
+            out2.update_item.is_none(),
+            "非衣服（StdMode 15）不产 SM_UPDATEITEM"
+        );
     }
 }

@@ -1167,7 +1167,12 @@ pub fn selloff_event_body(ev: &SellOffEvent, catalog: &dyn ItemCatalog) -> Optio
                 text,
             } => Some((
                 *target,
-                smframe::sm_sysmessage(*recog, *f_color, *b_color, &gbk(text)),
+                smframe::sm_sysmessage(
+                    *recog,
+                    u16::from(*f_color),
+                    u16::from(*b_color),
+                    &gbk(text),
+                ),
             )),
             SellOffFrame::GameGoldChanged {
                 target,

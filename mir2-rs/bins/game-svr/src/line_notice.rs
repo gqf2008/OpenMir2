@@ -146,8 +146,8 @@ fn sys_msg_notice(s: &str, color: u8, cfg: &LineNoticeCfg, actor_id: i32) -> Opt
             // `bColor = GetValidStrCap(str, ref fColor, ',')`：按 ',' 切，前段入 fColor。
             let (f_s, b_s) = get_valid_str_cap_comma(&inner);
             let text = prefix_or(&rest, cfg);
-            let f = str_to_uint16(&f_s, 255) as u8;
-            let b = str_to_uint16(&b_s, 255) as u8;
+            let f = str_to_uint16(&f_s, 255);
+            let b = str_to_uint16(&b_s, 255);
             // `SendMsg(RM_MOVEMESSAGE, 0, fColor, bColor, 0, sMsg)` ⇒
             // `MakeMessage(SM_MOVEMESSAGE, ActorId, MakeWord(f,b), 0, 0)`。
             Some(smframe_ext::sm_movemessage(
@@ -165,8 +165,8 @@ fn sys_msg_notice(s: &str, color: u8, cfg: &LineNoticeCfg, actor_id: i32) -> Opt
             let inner = arrest_value(inner);
             let (f_s, b_s) = get_valid_str_cap_comma(&inner);
             let text = prefix_or(&rest, cfg);
-            let f = str_to_uint16(&f_s, 255) as u8;
-            let b = str_to_uint16(&b_s, 255) as u8;
+            let f = str_to_uint16(&f_s, 255);
+            let b = str_to_uint16(&b_s, 255);
             Some(smframe::sm_sysmessage(
                 actor_id,
                 f,
@@ -182,8 +182,8 @@ fn sys_msg_notice(s: &str, color: u8, cfg: &LineNoticeCfg, actor_id: i32) -> Opt
             let (b_s, t2) = get_valid_str_cap_comma(&t1);
             let (n_s, _) = get_valid_str_cap_comma(&t2);
             let text = prefix_or(&rest, cfg);
-            let f = str_to_uint16(&f_s, 255) as u8;
-            let b = str_to_uint16(&b_s, 255) as u8;
+            let f = str_to_uint16(&f_s, 255);
+            let b = str_to_uint16(&b_s, 255);
             let n = str_to_uint16(&n_s, 0);
             // `SendMsg(RM_MOVEMESSAGE, 1, fColor, bColor, nTime, sMsg)` ⇒
             // `MakeMessage(SM_MOVEMESSAGE, ActorId, MakeWord(f,b), nTime, 1)`。
@@ -200,20 +200,20 @@ fn sys_msg_notice(s: &str, color: u8, cfg: &LineNoticeCfg, actor_id: i32) -> Opt
         _ => match color {
             0 => Some(smframe::sm_sysmessage(
                 actor_id,
-                cfg.red.0,
-                cfg.red.1,
+                u16::from(cfg.red.0),
+                u16::from(cfg.red.1),
                 &crate::enter::gbk(s),
             )),
             1 => Some(smframe::sm_sysmessage(
                 actor_id,
-                cfg.green.0,
-                cfg.green.1,
+                u16::from(cfg.green.0),
+                u16::from(cfg.green.1),
                 &crate::enter::gbk(s),
             )),
             2 => Some(smframe::sm_sysmessage(
                 actor_id,
-                cfg.blue.0,
-                cfg.blue.1,
+                u16::from(cfg.blue.0),
+                u16::from(cfg.blue.1),
                 &crate::enter::gbk(s),
             )),
             // `MsgColor.White`（3）在 oracle 的 `switch(msgColor)` 里**无 case** ⇒ 不发帧。

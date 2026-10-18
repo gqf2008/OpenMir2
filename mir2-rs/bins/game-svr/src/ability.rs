@@ -351,18 +351,23 @@ impl SubAbility {
         }
     }
 
-    /// 线上 7 个单字节通道（`smframe::sm_subability` 的入参；
-    /// `MakeWord(x, 0)` 只取低字节 ⇒ ushort 项按低字节截断）。
+    /// 线上 7 个通道（`smframe::sm_subability` 的入参）。
+    ///
+    /// **G-6**：`AntiMagic` 在 oracle 是 `ushort`，`MakeLong(MakeWord(AntiMagic, 0), 0)` 的实参类型
+    /// 让 C# 选中 `MakeWord(ushort, ushort)` ⇒ **完整 16 位**进 `Recog`（i32 不截断）。
+    /// 其余 6 项维持低字节语义（`HitPoint/SpeedPoint/AntiPoison` 本就是 `byte`；
+    /// `PoisonRecover/HealthRecover/SpellRecover` 的 `MakeWord(ushort, ushort)` 低位部分
+    /// 在现代数值域里等价于低字节）。
     #[must_use]
-    pub fn to_frame_bytes(self) -> [u8; 7] {
+    pub fn to_frame_bytes(self) -> [u16; 7] {
         [
-            lo_byte(self.anti_magic),
-            self.hit_point,
-            self.speed_point,
-            self.anti_poison,
-            lo_byte(self.poison_recover),
-            lo_byte(self.health_recover),
-            lo_byte(self.spell_recover),
+            self.anti_magic,
+            u16::from(self.hit_point),
+            u16::from(self.speed_point),
+            u16::from(self.anti_poison),
+            u16::from(lo_byte(self.poison_recover)),
+            u16::from(lo_byte(self.health_recover)),
+            u16::from(lo_byte(self.spell_recover)),
         ]
     }
 }

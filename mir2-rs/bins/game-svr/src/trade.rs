@@ -925,6 +925,18 @@ pub(crate) fn send_add_item_body(
     item: &BagItem,
     catalog: &dyn ItemCatalog,
 ) -> Option<Vec<u8>> {
+    Some(smframe::sm_additem(
+        recipient,
+        &add_item_tail(item, catalog)?,
+    ))
+}
+
+/// `SendAddItem` 的**已编码尾** = `EDCode.EncodeBuffer(ClientItem)`（`Base.cs:225-227`）。
+///
+/// 供 `SM_ADDITEM` 的多个发射点复用（卸下/换装、商店购买/打造/取回、地面拾取）；
+/// 规则与 [`send_add_item_body`] 相同：`StdMode==50` 名称加 `" #Dura"`、
+/// `M2Share.StdModeMap` 的 `Desc[8]`⇒`Shape` 0/130。
+pub fn add_item_tail(item: &BagItem, catalog: &dyn ItemCatalog) -> Option<Vec<u8>> {
     let tpl = catalog.get(item.index)?;
     let mut owned = tpl.clone();
     let mut name = item_display_name(catalog, item);
@@ -944,11 +956,7 @@ pub(crate) fn send_add_item_body(
         dura_max: item.dura_max,
         desc: item.desc,
     };
-    let tail = edcode::encode(&itemwire::encode_client_item(&ci));
-    Some(smframe::gm_data_body(
-        smframe::command_header(recipient, messages::SM_ADDITEM, 0, 0, 1),
-        &tail,
-    ))
+    Some(edcode::encode(&itemwire::encode_client_item(&ci)))
 }
 
 /// `SendSocket(MakeMessage(SM_DEALREMOTEADDITEM/…, ActorId, 0, 0, 1), EncodeBuffer(clientItem))`。
@@ -1017,7 +1025,7 @@ pub fn deal_event_body(
             text,
         } => Some((
             *target,
-            smframe::sm_sysmessage(*recog, *f_color, *b_color, &gbk(text)),
+            smframe::sm_sysmessage(*recog, u16::from(*f_color), u16::from(*b_color), &gbk(text)),
         )),
         DealEvent::MenuOk {
             target,

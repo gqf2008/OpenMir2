@@ -33,12 +33,22 @@
 //! 生产路径当前下发 `658`（公告，见 `notice.rs`）+ 输入齐备的 `SM_NEWMAP`（见 `main.rs`）；
 //! 其余帧由 [`EnterWorldInputs::frames`] 在输入补齐后按同一顺序产出。
 
+use crate::msgqueue::NetPriorityQueue;
 use mir2_protocol::{edcode, messages};
 
 /// `HUtil32.MakeWord(low, high)`（`src/OpenMir2/HUtil32.cs:61-64`）：`(high << 8) | low`。
 #[must_use]
 pub fn make_word(low: u8, high: u8) -> u16 {
     (u16::from(high) << 8) | u16::from(low)
+}
+
+/// `HUtil32.MakeWord(ushort low, ushort high)`（`HUtil32.cs:66-69`）：`(ushort)(low | (high << 8))`。
+///
+/// C# 重载解析：实参是 `ushort`/`int` 时选**这个**重载（`ushort -> byte` 无隐式转换），
+/// 低位字节的第 8 位会串进高字节（如 `MakeWord(0x0190, 0x0002) == 0x0390`）。
+#[must_use]
+pub fn make_word16(low: u16, high: u16) -> u16 {
+    low | (high << 8)
 }
 
 /// `CommandMessage`（`ClientMesaagePacket.cs:11-24`）的 12B 解码态布局：
@@ -155,11 +165,11 @@ pub fn sm_attackmode(mode: u8) -> Vec<u8> {
 /// 逐条口径（oracle 行号见 `## pickup/drop 接线` 的作者 comment `d552d2a2`）：
 /// - `SM_ADDITEM`（`PlayObject.Base.cs:225-227`）：头 = `MakeMessage(SM_ADDITEM, ActorId, 0, 0, 1)`；
 ///   oracle 随后 `SendSocket(ClientMsg, EDCode.EncodeBuffer(clientItem))`——**带一条 `ClientItem` 尾**。
-///   ⚠️ 本函数当前只产 **header-only**：`ClientItem` 的构造（`GetUpgradeStdItem` /
-///   `CustomItemSystem.GetItemName` / `MakeIndex·Dura·DuraMax` / `StdMode==50` 的名称 ` #Dura` 后缀 /
-///   `StdModeMap` 的 `Desc[8]`⇒Shape 0/130）属物品**展示层**，尚未移植 ⇒ **已登记为已知缺失
-///   T-24**（`mir2-rs/tests/parity/whitelist.md`）。接线层 `pickwire::immediate_frame` 对“拾取普通
-///   物品成功”恒交 header-only；**在其实现前不得把真机 `SM_ADDITEM` 字节对拍判 GREEN**。
+///   `tail` = `EDCode.EncodeBuffer(ClientItem)` 的**线上字节**（原样追加，不再 `EncodeString`）；
+///   构造在 `trade::add_item_tail`（`GetUpgradeStdItem`/`GetItemName`/`MakeIndex·Dura·DuraMax`/
+///   `StdMode==50` 的 ` #Dura` / `StdModeMap` 的 `Desc[8]`⇒Shape 0/130）。
+///   G-1 起全部发射点（卸下/换装、商店购买/打造/取回、地面拾取）都带尾；T-24 已收敛（残留
+///   `GetUpgradeStdItem` 的 desc 差量与自定义名未建模，desc=0 时逐字节等价）。
 /// - `SM_ITEMHIDE`（`PlayObject.Message.cs:1748`）：`SendDefMessage(SM_ITEMHIDE, nParam1, nParam2, nParam3, 0)`
 ///   ⇒ `Recog=nParam1`(=物品 `ItemId`)、`Param=nParam2`(=x)、`Tag=nParam3`(=y)、`Series=0`。
 /// - `SM_WEIGHTCHANGED`（`:1760`）：`SendDefMessage(SM_WEIGHTCHANGED, WAbil.Weight, WAbil.WearWeight, WAbil.HandWeight, chk)`
@@ -170,9 +180,9 @@ pub fn sm_attackmode(mode: u8) -> Vec<u8> {
 /// - `SM_DROPITEM_SUCCESS/FAIL`（`PlayObject.Message.cs:801-810`）：
 ///   `SendDefMessage(ident, nParam1, 0, 0, 0, processMsg.Msg)` ⇒ 尾 = `EncodeString(请求的 Msg)`。
 #[must_use]
-pub fn sm_additem(actor_id: i32) -> Vec<u8> {
+pub fn sm_additem(actor_id: i32, tail: &[u8]) -> Vec<u8> {
     let header = command_header(actor_id, messages::SM_ADDITEM, 0, 0, 1);
-    gm_data_body(header, &[])
+    gm_data_body(header, tail)
 }
 
 /// `PlayObject.SendDelItems(UserItem)`（`PlayObject.Base.cs:1648-1665`）：
@@ -184,6 +194,39 @@ pub fn sm_additem(actor_id: i32) -> Vec<u8> {
 #[must_use]
 pub fn sm_delitem(actor_id: i32, tail: &[u8]) -> Vec<u8> {
     let header = command_header(actor_id, messages::SM_DELITEM, 0, 0, 1);
+    gm_data_body(header, tail)
+}
+
+/// `PlayObject.SendUpdateItem/WithLevel/ByJob`（`PlayObject.Base.cs:1683/1704/1725`）：
+/// `MakeMessage(SM_UPDATEITEM(203), ActorId, 0, 0, 1)` + 尾 `EDCode.EncodeBuffer(clientItem)`。
+///
+/// 与 [`sm_delitem`] 同形；差别只有 ident。oracle 发点：
+/// - `Operate.cs:462-478`：穿上衣服（`StdMode 10/11`）后按 `Shape` 选
+///   `SendUpdateItem`（其它）/`SendUpdateItemWithLevel`（`Shape==9`）/
+///   `SendUpdateItemByJob`（`Shape==10/11` 龙袍/王袍）；
+/// - `PlayObject.cs:4131`：武器升级成功（`CheckWeaponUpgrade`，本仓未建模 ⇒ 登记）。
+#[must_use]
+pub fn sm_updateitem(actor_id: i32, tail: &[u8]) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_UPDATEITEM, 0, 0, 1);
+    gm_data_body(header, tail)
+}
+
+/// `PlayObject.SendUseItems()`（`PlayObject.Base.cs:1019-1050`）：
+/// `MakeMessage(SM_SENDUSEITEMS(621), 0, 0, 0, 0)` + 尾 `i + '/' + EncodeBuffer(ClientItem) + '/'`（逐槽）。
+///
+/// oracle 有 `if (!string.IsNullOrEmpty(sSendMsg))` 门 ⇒ 空尾时**一帧都不发**（调用点判空）。
+#[must_use]
+pub fn sm_senduseitems(tail: &[u8]) -> Vec<u8> {
+    let header = command_header(0, messages::SM_SENDUSEITEMS, 0, 0, 0);
+    gm_data_body(header, tail)
+}
+
+/// `PlayObject.SendUseMagic()`（`PlayObject.Base.cs:1052-1073`）：
+/// `MakeMessage(SM_SENDMYMAGIC(211), 0, 0, 0, (short)MagicList.Count)` +
+/// 尾 `EncodeBuffer(ClientMagic) + '/'`（逐条）。空列表 ⇒ 一帧都不发。
+#[must_use]
+pub fn sm_sendmymagic(count: u16, tail: &[u8]) -> Vec<u8> {
+    let header = command_header(0, messages::SM_SENDMYMAGIC, 0, 0, count);
     gm_data_body(header, tail)
 }
 
@@ -419,11 +462,11 @@ pub fn sm_sendnotice(notice: &[u8]) -> Vec<u8> {
 ///
 /// 场景（`openmir2-m2-session-lifecycle`）：账号级顶号（`TCPNetChannel.KickUser`，`TCPNetChannel.cs:229/262`）。
 #[must_use]
-pub fn sm_sysmessage(recog: i32, f_color: u8, b_color: u8, msg: &[u8]) -> Vec<u8> {
+pub fn sm_sysmessage(recog: i32, f_color: u16, b_color: u16, msg: &[u8]) -> Vec<u8> {
     let header = command_header(
         recog,
         messages::SM_SYSMESSAGE,
-        make_word(f_color, b_color),
+        make_word16(f_color, b_color),
         0,
         1,
     );
@@ -550,7 +593,7 @@ pub fn sm_ability(gold: i32, job: u8, game_gold: i32, wabil: &[u8]) -> Vec<u8> {
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn sm_subability(
-    anti_magic: u8,
+    anti_magic: u16,
     hit_point: u8,
     speed_point: u8,
     anti_poison: u8,
@@ -558,7 +601,9 @@ pub fn sm_subability(
     health_recover: u8,
     spell_recover: u8,
 ) -> Vec<u8> {
-    // `Recog = MakeLong(MakeWord(anti_magic, 0), 0)`（`MakeLong(low, high) = (high << 16) | low`）
+    // `Recog = MakeLong(MakeWord(anti_magic, 0), 0)`（`MakeLong(low, high) = (high << 16) | low`）。
+    // `AntiMagic` 是 `ushort` ⇒ C# 重载解析选 `MakeWord(ushort, ushort)`，**完整 16 位**保留
+    // （`Recog` 是 i32 不截断）；旧实现的 `lo_byte` 会丢高字节（G-6）。
     let header = command_header(
         i32::from(anti_magic),
         messages::SM_SUBABILITY,
@@ -668,12 +713,13 @@ pub fn sm_horserun(actor_id: i32, x: u16, y: u16, dir: u8, light: u8, char_desc:
 /// `SM_HIT`(14)/`SM_HEAVYHIT`(15)/`SM_BIGHIT`(16)/`SM_POWERHIT`(18)/`SM_LONGHIT`(19)/
 /// `SM_WIDEHIT`(24)/`SM_CRSHIT`(25)/`SM_TWINHIT`(26)/`SM_FIREHIT`(8) 共用一条形状：
 /// `MakeMessage(SM_*, processMsg.ActorId, nParam1 /*= 攻方 CurrX */, nParam2 /*= 攻方 CurrY */, wParam /*= Dir */)`，
-/// **无尾**（`SendSocket(ClientMsg)`；`SM_HEAVYHIT` 的尾 = `processMsg.Msg`，而攻击路径的
-/// `SendRefMsg(..., "")` 恒空 ⇒ 本函数不产尾）。
+/// **尾**（`SendSocket(ClientMsg, processMsg.Msg)`）：普通攻击的 `SendRefMsg(..., "")` 恒空；
+/// `SM_HEAVYHIT` 由挖矿（`PlayObject.Base.cs:1586` 的 `PileStones`）命中时 `s1C = "1"` ⇒ 尾 `b"1"`。
+/// 本仓世界侧尚未建模 `PileStones`（登记为不可达）；编码器/`tail` 参数先按 oracle 留口。
 #[must_use]
-pub fn sm_action_hit(ident: u16, actor_id: i32, x: u16, y: u16, dir: u8) -> Vec<u8> {
+pub fn sm_action_hit(ident: u16, actor_id: i32, x: u16, y: u16, dir: u8, tail: &[u8]) -> Vec<u8> {
     let header = command_header(actor_id, ident, x, y, u16::from(dir));
-    gm_data_body(header, &[])
+    gm_data_body(header, tail)
 }
 
 /// **`openmir2-m3-pet-slave-summon`（第②片）**：`RM_SPELL` → `SM_SPELL(17)`
@@ -1189,19 +1235,90 @@ pub struct EnterWorldInputs {
     /// `SM_ABILITY` = `(Gold, Job, GameGold, WAbil 序列化原文)`。
     pub ability: Option<(i32, u8, i32, Vec<u8>)>,
     /// `SM_SUBABILITY` = `(AntiMagic, HitPoint, SpeedPoint, AntiPoison, PoisonRecover, HealthRecover, SpellRecover)`。
-    pub sub_ability: Option<[u8; 7]>,
+    /// `AntiMagic` 保留完整 16 位（G-6）；其余 6 项是低字节语义。
+    pub sub_ability: Option<[u16; 7]>,
     /// `SM_ADJUST_BONUS` = `(BonusPoint, A, B, C)`（三段能力模板）。
     pub adjust_bonus: Option<AdjustBonusParts>,
     /// `SM_DAYCHANGING` = `(Bright, DayBright)`。
     pub day_changing: Option<(u16, u16)>,
     /// `SM_TURN` = `(ActorId, X, Y, Dir, Light, CharDesc 序列化原文, msg)`。
     pub turn: Option<TurnFrame>,
+    /// `SM_SENDUSEITEMS(621)` 的**已编码尾** `i + '/' + EncodeBuffer(ClientItem) + '/'`（逐槽）。
+    /// `None`/空 = oracle 的 `if (!string.IsNullOrEmpty(sSendMsg))` 门 ⇒ 不产帧。
+    pub use_items_tail: Option<Vec<u8>>,
+    /// `SM_SENDMYMAGIC(211)` = `(MagicList.Count, 已编码尾 EncodeBuffer(ClientMagic)+'/')`。
+    /// `None`/空 = 不产帧。
+    pub magic: Option<(u16, Vec<u8>)>,
+    /// `SM_CHANGELIGHT(654)` = `(Light, Config.nClientKey)`（`Message.cs:1840`；`Recog=ActorId`）。
+    /// 来自 `RM_LOGON` 里排队的 `SendMsg(RM_CHANGELIGHT, 0,0,0,0)`（`Message.cs:1682`）。
+    /// `None` ⇒ 跳过并登记（等待世界时钟/AOI 侧的 654 另有通路）。
+    pub changelight: Option<(u8, i32)>,
 }
 
+/// 登录消息泵里的排队条目（`PlayObject.UserLogon` 的全部 `MsgQueue.Enqueue` 点）。
+///
+/// 变体的**声明/入队序 = oracle 调用序**（不是出队序）：`RM_LOGON`（`PlayObject.cs:1176`）→
+/// 三条 `SysMsg`（`:1320-1383`）→ 六条 `SendPriorityMsg`（`:1385-1390`）。
+/// `RM_CHANGELIGHT` 不在这里，它在 `RM_LOGON` 被**出队处理**时才入队
+/// （`PlayObject.Message.cs:1683`，见 [`EnterWorldInputs::frames`]）。
+#[derive(Debug, Clone, Copy)]
+enum LoginQueued {
+    /// `RM_LOGON`：`SendPriorityMsg(..., MessagePriority.High)` ⇒ 优先级 0。
+    Logon,
+    /// 登录 `SysMsg(..., MsgColor, MsgType.Hint)` ⇒ `BaseObject.SysMsg` 走 `SendMsg(RM_SYSMESSAGE)`
+    /// ⇒ 优先级 `(byte)RM_SYSMESSAGE = 252`。三条：攻击模式文案 / `StartChangeAttackModeHelp` /
+    /// `StartNoticeMsg`（`PlayObject.cs:1342-1383`）。正文/颜色依赖 `MessageSettings` 与
+    /// `Config.TestServer`，本输入集未建模 ⇒ 只占堆位、不产帧（登记 `openmir2-login-frame-order`）。
+    SysMsg,
+    /// `RM_ABILITY(52)`：`SendPriorityMsg(..., High)` ⇒ 0。
+    Ability,
+    /// `RM_SUBABILITY(752)`：`SendPriorityMsg(..., High)` ⇒ 0。
+    SubAbility,
+    /// `RM_ADJUST_BONUS(811)`：`SendPriorityMsg(..., Normal)` ⇒ 1。
+    AdjustBonus,
+    /// `RM_DAYCHANGING(46)`：`SendPriorityMsg(..., Normal)` ⇒ 1。
+    DayChanging,
+    /// `RM_SENDUSEITEMS(621)`：`SendPriorityMsg(..., High)` ⇒ 0。
+    SendUseItems,
+    /// `RM_SENDMYMAGIC(211)`：`SendPriorityMsg(..., High)` ⇒ 0。
+    SendMyMagic,
+    /// `RM_CHANGELIGHT(654)`：`SendMsg` ⇒ 优先级 `(byte)RM_CHANGELIGHT = 153`。
+    ChangeLight,
+}
+
+/// `MessagePriority.High`（`src/OpenMir2/Enums/MessagePriority.cs:16`）= 0。
+const PRIORITY_HIGH: u8 = 0;
+/// `MessagePriority.Normal`（`src/OpenMir2/Enums/MessagePriority.cs:12`）= 1。
+const PRIORITY_NORMAL: u8 = 1;
+
 impl EnterWorldInputs {
-    /// 按 **M0 金标准的入图序**产出帧（缺输入的帧跳过，已产出的相对顺序不变）。
+    /// 按 oracle 的登录消息队列（.NET 8 `PriorityQueue<SendMessage, byte>`，**四叉最小堆**）
+    /// 模拟完整入队/出队过程后产出帧序（模型 C）。
     ///
-    /// 序：`658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46, 10`。
+    /// # 入队（oracle 调用序）
+    ///
+    /// `RM_LOGON(High=0)` → 三条 `SysMsg((byte)RM_SYSMESSAGE=252)` → 六条
+    /// `52(High)`, `752(High)`, `811(Normal)`, `46(Normal)`, `621(High)`, `211(High)`
+    /// （`PlayObject.cs:1176` / `:1320-1383` / `:1385-1390`）。
+    /// `RM_LOGON` 出队处理时再入 `RM_CHANGELIGHT(654)`（`Message.cs:1682`，优先级
+    /// `(byte)RM_CHANGELIGHT = (byte)10137 = 153`）。
+    ///
+    /// # 出队（net8.0 实测的模型 C）
+    ///
+    /// 六条 + 654 的相对序 = `752, 621, 211, 52, 811, 46, 654`。**High 组内不是 FIFO**：
+    /// `52` 最先入队却最后出（同优先级出队序取决于堆数组布局，`NetPriorityQueue` 逐操作复刻
+    /// 了 .NET 的 sift 规则）。三条 `SysMsg`（252）在 654 之后出队，不产帧。
+    ///
+    /// # 空槽仍占位
+    ///
+    /// 缺输入的六条**无条件入队**（oracle 的消息一定入队，本层只是缺编码输入）；空槽会改变
+    /// 堆布局，故绝不能跳过入队。621/211 的「尾为空则不發」门只在出队时决定是否产帧。
+    ///
+    /// # 非队列帧
+    ///
+    /// `SM_TURN(10)` 属 AOI/出现帧路径（`PlayObject.cs:3240` 的 `RM_TURN`），不是登录队列成员；
+    /// 金标准 capture 里它早于 654（seq 30 vs 62），故在 654 出队前插入。`658` 由
+    /// `SendNotice` 在消息泵之前直发，恒第一条。
     #[must_use]
     pub fn frames(&self) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
@@ -1209,68 +1326,146 @@ impl EnterWorldInputs {
         // `sNoticeMsg` 为空也照发 header-only 658（`SendDefMessage` 的 `if (!string.IsNullOrEmpty)`
         // 只决定是否追加尾，空时走 `else SendSocket(ClientMsg)`）。故这里**不**用 `if let`。
         out.push(sm_sendnotice(&self.notice));
-        if let Some(name) = &self.map_file_name {
-            out.push(sm_newmap(
-                self.actor_id,
-                self.cur_x,
-                self.cur_y,
-                self.day_bright,
-                name,
-            ));
+
+        // ---- 入队：按 oracle 调用序把 9 条消息压进四叉最小堆 ----
+        let mut queue: NetPriorityQueue<LoginQueued> = NetPriorityQueue::new();
+        queue.enqueue(LoginQueued::Logon, PRIORITY_HIGH);
+        // 三条 SysMsg（`PlayObject.cs:1342-1383`）：`SendMsg` 以 `(byte)wIdent` 为优先级。
+        for _ in 0..3 {
+            queue.enqueue(LoginQueued::SysMsg, (messages::RM_SYSMESSAGE & 0xFF) as u8);
         }
-        if let Some((p1, p2, t1, t2)) = self.logon_body_wl {
-            let mut wl = [0u8; 16];
-            wl[0..4].copy_from_slice(&p1.to_le_bytes());
-            wl[4..8].copy_from_slice(&p2.to_le_bytes());
-            wl[8..12].copy_from_slice(&t1.to_le_bytes());
-            wl[12..16].copy_from_slice(&t2.to_le_bytes());
-            out.push(sm_logon(
-                self.actor_id,
-                self.cur_x,
-                self.cur_y,
-                self.dir,
-                self.light,
-                wl,
-            ));
-        }
-        if let Some((n, ex)) = self.feature {
-            out.push(sm_featurechanged(self.actor_id, n, ex));
-        }
-        if let Some(mode) = self.attack_mode {
-            out.push(sm_attackmode(mode));
-        }
-        if let Some(cfg) = &self.client_conf {
-            out.push(sm_serverconfig(cfg));
-        }
-        if let Some((id, color, name)) = &self.username {
-            out.push(sm_username(*id, *color, name));
-        }
-        if let Some(n8) = self.area_state {
-            out.push(sm_areastate(n8));
-        }
-        if let Some((music, desc)) = &self.map_description {
-            out.push(sm_mapdescription(*music, desc));
-        }
-        if let Some((gold, point, msg)) = &self.game_gold_name {
-            out.push(sm_gamegoldname(*gold, *point, msg));
-        }
-        if let Some((crc1, crc2)) = self.version_fail {
-            out.push(sm_version_fail(crc1, crc2));
-        }
-        if let Some((gold, job, game_gold, wabil)) = &self.ability {
-            out.push(sm_ability(*gold, *job, *game_gold, wabil));
-        }
-        if let Some([m, hp, sp, ap, pr, hr, sr]) = self.sub_ability {
-            out.push(sm_subability(m, hp, sp, ap, pr, hr, sr));
-        }
-        if let Some((bonus, a, b, c)) = &self.adjust_bonus {
-            out.push(sm_adjust_bonus(*bonus, a, b, c));
-        }
-        if let Some((bright, day)) = self.day_changing {
-            out.push(sm_daychanging(bright, day));
-        }
-        if let Some((id, x, y, d, light, desc, msg)) = &self.turn {
-            out.push(sm_turn(*id, *x, *y, *d, *light, desc, msg));
+        queue.enqueue(LoginQueued::Ability, PRIORITY_HIGH); // 52
+        queue.enqueue(LoginQueued::SubAbility, PRIORITY_HIGH); // 752
+        queue.enqueue(LoginQueued::AdjustBonus, PRIORITY_NORMAL); // 811
+        queue.enqueue(LoginQueued::DayChanging, PRIORITY_NORMAL); // 46
+        queue.enqueue(LoginQueued::SendUseItems, PRIORITY_HIGH); // 621
+        queue.enqueue(LoginQueued::SendMyMagic, PRIORITY_HIGH); // 211
+
+        // ---- 出队：逐条按堆序处理 ----
+        while let Some(item) = queue.dequeue() {
+            match item {
+                LoginQueued::Logon => {
+                    // `RM_LOGON` 支（`PlayObject.Message.cs:1680-1692`）在**出队处理时**
+                    // 直接 `SendSocket/SendDefMessage` 的帧，按 handler 内调用序产出。
+                    if let Some(name) = &self.map_file_name {
+                        out.push(sm_newmap(
+                            self.actor_id,
+                            self.cur_x,
+                            self.cur_y,
+                            self.day_bright,
+                            name,
+                        ));
+                    }
+                    if let Some((p1, p2, t1, t2)) = self.logon_body_wl {
+                        let mut wl = [0u8; 16];
+                        wl[0..4].copy_from_slice(&p1.to_le_bytes());
+                        wl[4..8].copy_from_slice(&p2.to_le_bytes());
+                        wl[8..12].copy_from_slice(&t1.to_le_bytes());
+                        wl[12..16].copy_from_slice(&t2.to_le_bytes());
+                        out.push(sm_logon(
+                            self.actor_id,
+                            self.cur_x,
+                            self.cur_y,
+                            self.dir,
+                            self.light,
+                            wl,
+                        ));
+                    }
+                    if let Some((n, ex)) = self.feature {
+                        out.push(sm_featurechanged(self.actor_id, n, ex));
+                    }
+                    if let Some(mode) = self.attack_mode {
+                        out.push(sm_attackmode(mode));
+                    }
+                    if let Some(cfg) = &self.client_conf {
+                        out.push(sm_serverconfig(cfg));
+                    }
+                    if let Some((id, color, name)) = &self.username {
+                        out.push(sm_username(*id, *color, name));
+                    }
+                    if let Some(n8) = self.area_state {
+                        out.push(sm_areastate(n8));
+                    }
+                    if let Some((music, desc)) = &self.map_description {
+                        out.push(sm_mapdescription(*music, desc));
+                    }
+                    if let Some((gold, point, msg)) = &self.game_gold_name {
+                        out.push(sm_gamegoldname(*gold, *point, msg));
+                    }
+                    if let Some((crc1, crc2)) = self.version_fail {
+                        out.push(sm_version_fail(crc1, crc2));
+                    }
+                    // `PlayObject.Message.cs:1683`：`SendMsg(RM_CHANGELIGHT, 0,0,0,0)` 在
+                    // **LOGON 处理点**入队（不是 `UserLogon` 的调用序里）⇒ 优先级 153。
+                    queue.enqueue(
+                        LoginQueued::ChangeLight,
+                        (messages::RM_CHANGELIGHT & 0xFF) as u8,
+                    );
+                }
+                LoginQueued::Ability => {
+                    if let Some((gold, job, game_gold, wabil)) = &self.ability {
+                        out.push(sm_ability(*gold, *job, *game_gold, wabil));
+                    }
+                }
+                LoginQueued::SubAbility => {
+                    if let Some([m, hp, sp, ap, pr, hr, sr]) = self.sub_ability {
+                        // 其余 6 项是 `MakeWord(byte, byte)` 语义（低字节）；数组里已是低字节值。
+                        out.push(sm_subability(
+                            m,
+                            u8::try_from(hp).unwrap_or(0),
+                            u8::try_from(sp).unwrap_or(0),
+                            u8::try_from(ap).unwrap_or(0),
+                            u8::try_from(pr).unwrap_or(0),
+                            u8::try_from(hr).unwrap_or(0),
+                            u8::try_from(sr).unwrap_or(0),
+                        ));
+                    }
+                }
+                LoginQueued::AdjustBonus => {
+                    if let Some((bonus, a, b, c)) = &self.adjust_bonus {
+                        out.push(sm_adjust_bonus(*bonus, a, b, c));
+                    }
+                }
+                LoginQueued::DayChanging => {
+                    if let Some((bright, day)) = self.day_changing {
+                        out.push(sm_daychanging(bright, day));
+                    }
+                }
+                LoginQueued::SendUseItems => {
+                    // `PlayObject.cs:1389`（`UserLogon`）：`RM_SENDUSEITEMS`；oracle 的
+                    // 「尾为空则不發」门（`Base.cs:1046`）在出队时判定。
+                    if let Some(tail) = &self.use_items_tail {
+                        if !tail.is_empty() {
+                            out.push(sm_senduseitems(tail));
+                        }
+                    }
+                }
+                LoginQueued::SendMyMagic => {
+                    // `PlayObject.cs:1390`（`UserLogon`）：`RM_SENDMYMAGIC`；空尾门同 `Base.cs:1065`。
+                    if let Some((count, tail)) = &self.magic {
+                        if !tail.is_empty() {
+                            out.push(sm_sendmymagic(*count, tail));
+                        }
+                    }
+                }
+                LoginQueued::ChangeLight => {
+                    // `SM_TURN(10)` 属 AOI/出现帧路径（`PlayObject.cs:3240`），不是队列成员；
+                    // 金标准 capture 里 10 早于 654（seq 30 vs 62）⇒ 在 654 出队前插入。
+                    if let Some((id, x, y, d, light, desc, msg)) = &self.turn {
+                        out.push(sm_turn(*id, *x, *y, *d, *light, desc, msg));
+                    }
+                    // `Message.cs:1840`：`SendDefMessage(SM_CHANGELIGHT, ActorId, Light, nClientKey, 0)`。
+                    if let Some((light, client_key)) = self.changelight {
+                        out.push(crate::smframe_ext::sm_changelight(
+                            self.actor_id,
+                            light,
+                            client_key,
+                        ));
+                    }
+                }
+                // 三条 SysMsg 只占堆位：正文/颜色未在本输入集建模（登记 `openmir2-login-frame-order`）。
+                LoginQueued::SysMsg => {}
+            }
         }
         out
     }
@@ -1907,8 +2102,8 @@ mod tests {
         );
         // 从金标准头里取出 f/b（低字节/高字节），用它们重建：必须与金标准的 头+尾 逐字节相等。
         let param = u16at(&head, 6);
-        let f = u8::try_from(param & 0xFF).unwrap();
-        let b = u8::try_from(param >> 8).unwrap();
+        let f = param & 0xFF;
+        let b = param >> 8;
         let got = sm_sysmessage(recog(&head), f, b, &msg);
         let mut want = head.to_vec();
         want.extend_from_slice(&wire_tail);
@@ -2006,13 +2201,14 @@ mod tests {
                 edcode::decode(&t11),
             )),
             sub_ability: Some([
-                u8::try_from(recog(&h12)).unwrap(),
-                u8::try_from(u16at(&h12, 6) & 0xFF).unwrap(),
-                u8::try_from(u16at(&h12, 6) >> 8).unwrap(),
-                u8::try_from(u16at(&h12, 8) & 0xFF).unwrap(),
-                u8::try_from(u16at(&h12, 8) >> 8).unwrap(),
-                u8::try_from(u16at(&h12, 10) & 0xFF).unwrap(),
-                u8::try_from(u16at(&h12, 10) >> 8).unwrap(),
+                // `AntiMagic` = `Recog` 的完整 i32；其值域是 `ushort`（G-6）。
+                u16::try_from(recog(&h12) & 0xFFFF).unwrap(),
+                u16::from(u8::try_from(u16at(&h12, 6) & 0xFF).unwrap()),
+                u16::from(u8::try_from(u16at(&h12, 6) >> 8).unwrap()),
+                u16::from(u8::try_from(u16at(&h12, 8) & 0xFF).unwrap()),
+                u16::from(u8::try_from(u16at(&h12, 8) >> 8).unwrap()),
+                u16::from(u8::try_from(u16at(&h12, 10) & 0xFF).unwrap()),
+                u16::from(u8::try_from(u16at(&h12, 10) >> 8).unwrap()),
             ]),
             adjust_bonus: Some((
                 recog(&h13),
@@ -2030,32 +2226,60 @@ mod tests {
                 edcode::decode(&t15[..11]),
                 edcode::decode(&t15[11..]),
             )),
+            // 金标准人物无装备/无技能 ⇒ 621/211 的 oracle 门（尾为空不发）不产帧。
+            use_items_tail: None,
+            magic: None,
+            // `RM_CHANGELIGHT`（capture seq 62）：`param=0`（= frame 50 的 `HiByte(series)`），
+            // `tag=500`（`Config.nClientKey`）。
+            changelight: Some((
+                u8::try_from(u16at(&h2, 10) >> 8).unwrap(),
+                crate::sessionwire::N_CLIENT_KEY_DEFAULT,
+            )),
         }
     }
 
-    /// 顺序判据②：入图序到 `SM_TURN` 与金标准**同序**，且每条**逐字节相等**（含长度）。
+    /// 顺序判据②（**模型 C**）：登录消息按 oracle 四叉堆出队；每条帧的**字节**仍逐字节等于金标准。
+    ///
+    /// 绝对序由模型 C 给出（`openmir2-login-frame-order`，R 级窗口项：最终须由「有装备/有技能
+    /// 角色的真机登录抓包」裁定）。与 2026-10-10 capture 的差别只有 52/752 的先后：capture 是
+    /// `52,752`，模型 C 是 `752,52`（复验者以部署 DLL 的 IL + net8.0 穷举确认入队序与堆算法）。
+    /// 本片按模型 C；**capture 里出现的每一条帧字节不变**（按 ident 逐条比对金标准原始线缆）。
     #[test]
-    fn enter_world_sequence_matches_golden_order_and_bytes() {
+    fn enter_world_sequence_matches_model_c_and_golden_bytes() {
         let golden = golden_s2c(16);
         let built = golden_inputs().frames();
         let got_idents: Vec<u16> = built
             .iter()
             .map(|b| u16::from_le_bytes([b[4], b[5]]))
             .collect();
-        let want_idents: Vec<u16> = golden.iter().map(|(id, _)| *id).collect();
+        // 模型 C：六条 + 654 的出队序 = 752, 621, 211, 52, 811, 46, 654
+        // （金标准角色无装备/无技能 ⇒ 621/211 的门关，不产帧，但槽位仍参与堆布局）。
         assert_eq!(
-            want_idents,
-            vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46, 10],
-            "金标准前 16 条的 ident 序（本判据的期望值）"
+            got_idents,
+            vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 752, 52, 811, 46, 10, 654],
+            "模型 C 的逐帧 ident 序（含 High 组内非 FIFO：752 在 52 前）"
         );
-        assert_eq!(got_idents, want_idents, "Rust 侧产出的入图序必须同序");
-        assert_eq!(built.len(), golden.len());
-        for (i, (body, (ident, raw))) in built.iter().zip(&golden).enumerate() {
+        // capture 前 16 条 + 654：按 ident 取原始线缆，逐条比字节（顺序按模型 C，字节不变）。
+        let mut capture_by_ident: Vec<(u16, &Vec<u8>)> =
+            golden.iter().map(|(id, raw)| (*id, raw)).collect();
+        let cl = golden_s2c_ident(messages::SM_CHANGELIGHT);
+        capture_by_ident.push((messages::SM_CHANGELIGHT, &cl));
+        assert_eq!(
+            got_idents.len(),
+            capture_by_ident.len(),
+            "模型 C 产出的帧数 = capture 可见帧数（17）"
+        );
+        for body in &built {
+            let ident = u16::from_le_bytes([body[4], body[5]]);
+            let want = capture_by_ident
+                .iter()
+                .find(|(id, _)| *id == ident)
+                .unwrap_or_else(|| panic!("金标准里没有 ident={ident}"))
+                .1;
             assert_eq!(
-                client_frame(body),
-                *raw,
-                "第 {} 条 ident={ident} 必须逐字节等于金标准（长度 {}）",
-                i + 1,
+                &client_frame(body),
+                want,
+                "ident={ident} 必须逐字节等于金标准（长度 {}）",
                 body.len()
             );
         }
@@ -2096,11 +2320,13 @@ mod tests {
     }
 
     /// 新增 11 条的**逐条**定位断言（失败时能直接看出是哪条）。
+    ///
+    /// `built` 的次序按模型 C（52/752 与 capture 相反），故按 **ident** 取金标准帧，不按 capture 下标。
     #[test]
     fn remaining_eleven_encoders_match_golden_frames() {
         let f = golden_s2c(16);
         let built = golden_inputs().frames();
-        for (idx, ident) in [
+        for (capture_idx, ident) in [
             (0usize, 658u16),
             (5, 11029),
             (6, 42),
@@ -2113,13 +2339,78 @@ mod tests {
             (14, 46),
             (15, 10),
         ] {
-            assert_eq!(f[idx].0, ident, "金标准 #{idx} 的 ident");
+            assert_eq!(f[capture_idx].0, ident, "金标准 #{capture_idx} 的 ident");
+            let want = f
+                .iter()
+                .find(|(id, _)| *id == ident)
+                .map(|(_, raw)| raw)
+                .expect("金标准里有该 ident");
+            let got = built
+                .iter()
+                .find(|b| u16::from_le_bytes([b[4], b[5]]) == ident)
+                .expect("模型 C 产出里有该 ident");
             assert_eq!(
-                client_frame(&built[idx]),
-                f[idx].1,
+                &client_frame(got),
+                want,
                 "ident={ident} 的编码必须逐字节等于金标准"
             );
         }
+    }
+
+    /// **模型 C 全量顺序**（卡 `openmir2-login-frame-order`）：六条全部有输入时，
+    /// 逐帧 ident 必须等于 oracle 四叉堆的出队序 `752, 621, 211, 52, 811, 46, 654`。
+    ///
+    /// 红检（三条牙，任一都让本用例红）：
+    /// ① 去掉 `RM_LOGON` 入队（`frames()` 不再 `enqueue(LoginQueued::Logon, ...)`）⇒ 51/50/...
+    ///    整组消失、654 也不再入队；
+    /// ② 把 `RM_CHANGELIGHT` 改回「最先入队」（在 `RM_LOGON` 之前 `enqueue`）⇒ 优先级 153 提前
+    ///    参与 sift，High 组布局改变（实测出队首条变成 211）；
+    /// ③ 六条改成手写 FIFO（`52,752,811,46,621,211`）⇒ 与堆序不符。
+    #[test]
+    fn login_frame_order_is_model_c_quaternary_heap() {
+        let inputs = EnterWorldInputs {
+            actor_id: 7,
+            cur_x: 1,
+            cur_y: 2,
+            dir: 3,
+            light: 4,
+            day_bright: 5,
+            notice: b"N".to_vec(),
+            map_file_name: Some(b"0".to_vec()),
+            logon_body_wl: Some((1, 2, 3, 0)),
+            feature: Some((1, 2)),
+            attack_mode: Some(0),
+            client_conf: Some(b"cfg".to_vec()),
+            username: Some((7, 255, b"name".to_vec())),
+            area_state: Some(0),
+            map_description: Some((-1, b"desc".to_vec())),
+            game_gold_name: Some((0, 0, b"gold".to_vec())),
+            version_fail: Some((0, 0)),
+            ability: Some((0, 0, 0, b"wabil".to_vec())),
+            sub_ability: Some([0; 7]),
+            adjust_bonus: Some((0, b"a".to_vec(), b"b".to_vec(), b"c".to_vec())),
+            day_changing: Some((1, 0)),
+            turn: Some((7, 1, 2, 3, 4, b"12345678".to_vec(), b"x".to_vec())),
+            use_items_tail: Some(b"0/abc/".to_vec()),
+            magic: Some((1, b"magic/".to_vec())),
+            changelight: Some((4, 500)),
+        };
+        let got: Vec<u16> = inputs
+            .frames()
+            .iter()
+            .map(|b| u16::from_le_bytes([b[4], b[5]]))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008,
+                1106, // 直发 + RM_LOGON handler
+                752, 621, 211, 52, 811,
+                46, // 六条的堆序（High: 752,621,211,52；Normal: 811,46）
+                10, 654, // 非队列 SM_TURN，随后 CHANGELIGHT
+            ],
+            "模型 C：High 组非 FIFO（入队 52,752,621,211 → 出队 752,621,211,52）"
+        );
     }
 
     /// `SM_ATTACKMODE` 的模式在 **`Recog`**（oracle `Messages.cs:846-857` 的参序）；
@@ -2707,5 +2998,90 @@ mod tests {
             "尾 = 两段各自 Encode 后相接"
         );
         assert_eq!(client_frame(&body3), hex(G_R2_SPACEMOVE_SHOW_NAME));
+    }
+
+    // ---- 帧面审计 2026-10-18（G-1/G-2/G-3/G-5/G-6/G-9）----
+
+    /// **G-1**：`SM_ADDITEM` 头 = `Recog=ActorId, Param/Tag=0, Series=1`，尾 = `EncodeBuffer(ClientItem)`。
+    ///
+    /// 红检：把 `sm_additem` 的 `tail` 参数去掉（回到 header-only）或 `series` 改 0 ⇒ 必红。
+    #[test]
+    fn sm_additem_header_and_client_item_tail() {
+        let tail = vec![0xAAu8; 166]; // encode_len(124)=166；本用例只锁透传/字段位
+        let body = sm_additem(0x0102_0304, &tail);
+        assert_eq!(
+            &body[..12],
+            &command_header(0x0102_0304, messages::SM_ADDITEM, 0, 0, 1)
+        );
+        assert_eq!(body.len(), 12 + 166);
+        assert_eq!(&body[12..], tail.as_slice());
+    }
+
+    /// **G-2**：`SM_UPDATEITEM(203)` = `sm_delitem` 同形（ident 203, series=1）+ `ClientItem` 尾。
+    #[test]
+    fn sm_updateitem_is_delitem_shape_with_ident_203() {
+        let tail = vec![0x5Au8; 166];
+        let body = sm_updateitem(0x1122_3344, &tail);
+        assert_eq!(
+            &body[..12],
+            &command_header(0x1122_3344, messages::SM_UPDATEITEM, 0, 0, 1)
+        );
+        assert_eq!(&body[12..], tail.as_slice());
+        // 与 202 只差 ident。
+        let del = sm_delitem(0x1122_3344, &tail);
+        assert_eq!(&body[6..], &del[6..]);
+        assert_ne!(&body[4..6], &del[4..6]);
+    }
+
+    /// **G-3**：`SM_SENDUSEITEMS(621)` 头全 0；`SM_SENDMYMAGIC(211)` 的 `series=count`。
+    #[test]
+    fn sm_senduseitems_and_sendmymagic_headers() {
+        let tail = b"0/xx/5/yy/";
+        let b621 = sm_senduseitems(tail);
+        assert_eq!(
+            &b621[..12],
+            &command_header(0, messages::SM_SENDUSEITEMS, 0, 0, 0)
+        );
+        assert_eq!(&b621[12..], tail.as_slice());
+
+        let b211 = sm_sendmymagic(3, tail);
+        assert_eq!(
+            &b211[..12],
+            &command_header(0, messages::SM_SENDMYMAGIC, 0, 0, 3)
+        );
+        assert_eq!(&b211[12..], tail.as_slice());
+    }
+
+    /// **G-5**：`SM_HEAVYHIT(15)` 的尾 = `processMsg.Msg` **原样**（挖矿命中 `"1"` ⇒ `31`）。
+    #[test]
+    fn sm_action_hit_heavyhit_tail_passthrough() {
+        let body = sm_action_hit(messages::SM_HEAVYHIT, 1, 2, 3, 4, b"1");
+        assert_eq!(body, vec![1, 0, 0, 0, 0x0F, 0x00, 2, 0, 3, 0, 4, 0, b'1']);
+        assert_eq!(body.len(), 13);
+        // 普通攻击（空尾）仍是 12B。
+        assert_eq!(sm_action_hit(messages::SM_HIT, 1, 2, 3, 4, &[]).len(), 12);
+    }
+
+    /// **G-6**：`AntiMagic=300`（0x012C）必须完整进 `Recog`（旧实现 `lo_byte` ⇒ 44）。
+    #[test]
+    fn sm_subability_anti_magic_keeps_high_byte() {
+        let body = sm_subability(300, 17, 15, 0, 0, 0, 0);
+        // recog = 0x0000012C；ident=752(0x02F0)；param = MakeWord(17,15)=0x0F11。
+        assert_eq!(
+            body,
+            vec![0x2C, 0x01, 0, 0, 0xF0, 0x02, 0x11, 0x0F, 0, 0, 0, 0]
+        );
+        // 回归：`AntiMagic<=255` 与旧值一致（金标准 #13 recog=1）。
+        assert_eq!(&sm_subability(1, 5, 15, 0, 0, 0, 0)[..4], &[1, 0, 0, 0]);
+    }
+
+    /// **G-9**：`SM_SYSMESSAGE` 的颜色是 `MakeWord(ushort, ushort)`：`f` 的第 8 位会串进高字节。
+    #[test]
+    fn sm_sysmessage_color_u16_spills_like_oracle() {
+        // MakeWord(0x0190, 0x0002) = 0x0190 | 0x0200 = 0x0390。
+        let body = sm_sysmessage(1, 0x0190, 0x0002, &[]);
+        assert_eq!(u16at12(&body, 6), 0x0390);
+        // 配置色（<=255）不变：MakeWord(0xDB, 0xFF) = 0xFFDB（金标准）。
+        assert_eq!(u16at12(&sm_sysmessage(1, 0xDB, 0xFF, &[]), 6), 0xFFDB);
     }
 }

@@ -498,18 +498,21 @@ pub fn make_drug_item(
                 }
                 // `AddItemToBag`（`BaseObject.cs:1241`）：`ItemList.Count >= MaxBagItem(46)` ⇒ false。
                 if state.item_list.len() < MAX_BAG_ITEM {
+                    // `SendAddItem`（`PlayObject.Base.cs:198-227`）⇒ `SM_ADDITEM(Recog=ActorId, Series=1)`
+                    // + 尾 `EncodeBuffer(clientItem)`（G-1：复用 `trade::add_item_tail`）。
+                    let add_tail =
+                        crate::trade::add_item_tail(&user_item, ctx.catalog).unwrap_or_default();
                     state.item_list.push(user_item);
                     // `WeightChanged()`（T-47 ⑤ 未发 `SM_WEIGHTCHANGED`，与 `buy_item` 同口径）。
                     state.gold -= ctx.make_durg_price;
-                    // `SendAddItem`（`PlayObject.Base.cs:198-227`）⇒ `SM_ADDITEM(Recog=ActorId, Series=1)`
-                    //（尾 `EncodeBuffer(clientItem)` 未建模，T-24；与 `buy_item` 同）。
-                    frames.push(frame(
+                    // 尾已是 `EDCode.EncodeBuffer(ClientItem)` ⇒ 不能再 `EncodeString`。
+                    frames.push(frame_encoded(
                         mir2_protocol::messages::SM_ADDITEM,
                         ctx.player_actor_id,
                         0,
                         0,
                         1,
-                        Vec::new(),
+                        add_tail,
                     ));
                     if !deleted.is_empty() {
                         frames.push(del_items_frame(&deleted));
@@ -800,17 +803,20 @@ pub fn take_back_storage_item(
             if is_add_weight_available(&state.wabil, std_weight) {
                 if merchant_allows {
                     if state.item_list.len() < MAX_BAG_ITEM {
+                        let moved = storage_items.remove(i);
                         // `AddItemToBag`（`BaseObject.cs:1241`）：先入包（内含 WeightChanged）。
-                        // `SendAddItem`（`BaseObject.cs:225`）：`SM_ADDITEM(ActorId,0,0,1)` 头（尾归 T-24）。
-                        frames.push(frame(
+                        // `SendAddItem`（`BaseObject.cs:225`）：`SM_ADDITEM(ActorId,0,0,1)`
+                        // + 尾 `EncodeBuffer(clientItem)`（G-1）。
+                        let add_tail =
+                            crate::trade::add_item_tail(&moved, ctx.catalog).unwrap_or_default();
+                        frames.push(frame_encoded(
                             mir2_protocol::messages::SM_ADDITEM,
                             ctx.player_actor_id,
                             0,
                             0,
                             1,
-                            Vec::new(),
+                            add_tail,
                         ));
-                        let moved = storage_items.remove(i);
                         state.item_list.push(moved);
                         state.wabil.weight = recalc_weight(ctx.catalog, &state.item_list);
                         // `SM_TAKEBACKSTORAGEITEM_OK(Recog=nItemIdx)`。
@@ -1032,15 +1038,18 @@ pub fn buy_item(
                                 // `AddItemToBag` 成功：金币/税/出包 + 从库存移除。
                                 state.gold -= n_price;
                                 let _tax = m.castle_merchant || ctx.get_all_npc_tax;
-                                frames.push(frame(
+                                let bought = to_bag(&price_item);
+                                let add_tail = crate::trade::add_item_tail(&bought, ctx.catalog)
+                                    .unwrap_or_default();
+                                frames.push(frame_encoded(
                                     mir2_protocol::messages::SM_ADDITEM,
                                     ctx.player_actor_id,
                                     0,
                                     0,
                                     1,
-                                    Vec::new(),
+                                    add_tail,
                                 ));
-                                state.item_list.push(to_bag(&price_item));
+                                state.item_list.push(bought);
                                 state.wabil.weight = recalc_weight(ctx.catalog, &state.item_list);
                                 let g = &mut goods[i];
                                 g.remove(j);
@@ -1460,7 +1469,29 @@ mod tests {
         state.gold = 500;
         let r = buy_item(&m, &mut state, &mut goods, "金创药(小量)", 0, &c);
         assert!(r.ok);
-        assert!(r.frames.iter().any(|f| f.ident == 200));
+        let add = r
+            .frames
+            .iter()
+            .find(|f| f.ident == 200)
+            .expect("成功购买必须发 SM_ADDITEM");
+        assert!(
+            add.tail_encoded,
+            "ClientItem 尾已编码 ⇒ 不得再 EncodeString"
+        );
+        let ci = crate::itemwire::ClientItem {
+            tpl: cat.get(1).expect("模板 1"),
+            name: "金创药(小量)".to_string(),
+            make_index: 7,
+            dura: 10,
+            dura_max: 10,
+            desc: [0; 14],
+        };
+        assert_eq!(
+            add.tail,
+            mir2_protocol::edcode::encode(&crate::itemwire::encode_client_item(&ci)),
+            "G-1：尾 = EncodeBuffer(ClientItem 124B)"
+        );
+        assert_eq!(add.tail.len(), 166, "encode_len(124)=166");
         assert_eq!(r.frames.last().unwrap().ident, 650);
         assert_eq!(state.gold, 400);
         assert_eq!(state.item_list.len(), 1);
