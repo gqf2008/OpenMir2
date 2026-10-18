@@ -78,6 +78,18 @@
 - 日志内 `nearest<=vr` 但 `vis=0` 的采样同样由该缺陷解释（另有玩家 viewer 不应做 60s 过期的第二处偏差）。
   诊断脚本的 `af` 跨会话继承与 `nearest` 口径造成假绿，修复片将加 `--strict-window`。
 
+## 4c. 修复已落地（2026-10-18 10:2x，`8b4f5df5e`）
+
+- `openmir2-aoi-verify-maptime` 已合并（tier=R，卡保持 `in-progress`）：`Entity.verify_tick` + `World::verify_map_time`
+  （30s 严格大于门、按 oracle `Envirnoment.cs:858-897` 语义）+ 玩家 viewer 跳过 60s 过期 + AOI 诊断口径
+  （`nearest` 过滤、`af` 按登录清账、`--strict-window`）。
+- 窗口前置已按新基线重跑：M1（mirror → `8b4f5df5e`）+ M2（六件重编 + `--record-provenance`）⇒
+  `guard` = **`WINDOW_GUARD_OK`**（R1..R8 全 OK，九游戏端口全 DOWN、仅既有 mysqld:3306）。
+- **下一次窗口的判读变化**：W0-4 不再预期「卫士无帧」，而应出**恰 1 对** `SM_TURN(281,661,dir=5)` +
+  `SM_FEATURECHANGED`；若仍无帧，则是新缺陷而非本缺陷复现。
+- 尚未开窗的原因：玩家/怪物的 `SearchViewRange` 节拍对齐（卡 `openmir2-player-searchviewrange-cadence`）
+  与 `BaseObject.Run` 覆盖审计仍在进行，AOI 语义可能再变一次 ⇒ **等这两项落地后一次性开窗**，避免证据作废。
+
 ## 5. 下次窗口的最小后续（按优先级）
 
 1. **W0-1 人工点怪**：登录后先在截图里确认怪在相邻格，再右键该格 + 左键该格（或给 `mir_flow` 补
