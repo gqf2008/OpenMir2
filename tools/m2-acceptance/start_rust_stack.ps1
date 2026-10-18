@@ -168,6 +168,28 @@ function Show-Status {
   }
 }
 
+function Stop-Gracefully([int]$procId, [string]$name) {
+  # game-svr 的优雅关服（卡 `openmir2-save-on-shutdown`）：连它的关服命名管道
+  # `\.\pipe\openmir2-gamesvr-shutdown-<pid>` 写 `SHUTDOWN`，让进程先存档再退出。
+  # 其它进程没有这条通道 ⇒ 直接回 $false（调用方走 Force）。
+  # 8s 上限：game-svr 内部存档等待上限 5s + 收尾余量；超时仍活着 ⇒ Force。
+  if ($name -ne 'game-svr') { return $false }
+  try {
+    $client = [System.IO.Pipes.NamedPipeClientStream]::new(
+      '.', ("openmir2-gamesvr-shutdown-{0}" -f $procId), [System.IO.Pipes.PipeDirection]::Out)
+    $client.Connect(1000)
+    $bytes = [System.Text.Encoding]::ASCII.GetBytes('SHUTDOWN')
+    $client.Write($bytes, 0, $bytes.Length)
+    $client.Flush()
+    $client.Dispose()
+  } catch {
+    return $false
+  }
+  $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+  if ($p) { $null = $p.WaitForExit(8000) }
+  return -not [bool](Get-Process -Id $procId -ErrorAction SilentlyContinue)
+}
+
 if ($Stop) {
   if (-not (Test-Path $PidFile)) { Write-Output 'NOTHING_TO_STOP (无 pid 文件)'; exit 0 }
   $saved = Get-Content $PidFile -Raw | ConvertFrom-Json
@@ -177,7 +199,14 @@ if ($Stop) {
   foreach ($g in ($entries | Sort-Object { [int]$_.stop_order })) {
     if (-not $g -or $null -eq $g.pid) { continue }
     $p = Get-Process -Id $g.pid -ErrorAction SilentlyContinue
-    if ($p) { Stop-Process -Id $g.pid -Force; Write-Output ("STOPPED {0} pid={1}" -f $g.name, $g.pid) }
+    if ($p) {
+      if (Stop-Gracefully $g.pid $g.name) {
+        Write-Output ("STOPPED {0} pid={1} graceful" -f $g.name, $g.pid)
+      } else {
+        Stop-Process -Id $g.pid -Force
+        Write-Output ("STOPPED {0} pid={1} force" -f $g.name, $g.pid)
+      }
+    }
     else { Write-Output ("ALREADY_GONE {0} pid={1}" -f $g.name, $g.pid) }
   }
   Start-Sleep -Seconds 2

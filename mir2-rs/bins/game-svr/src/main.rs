@@ -218,6 +218,122 @@ fn ability_tail(wabil: &game_svr::ability::Ability, client_layout: bool) -> Vec<
     }
 }
 
+/// 等待关服信号。信号语义（卡 `openmir2-save-on-shutdown` 的 R 级入口）：
+///
+/// - **Unix**：`SIGINT`（Ctrl+C）/ `SIGTERM`；
+/// - **Windows**：`CTRL_C_EVENT` / `CTRL_BREAK_EVENT` / `CTRL_CLOSE_EVENT` / `CTRL_SHUTDOWN_EVENT`
+///   （控制台窗口关闭 / 注销 / 关机；`CTRL_CLOSE_EVENT` 由 OS 给约 5s 收尾）；
+/// - `start_rust_stack.ps1 -Stop` 的 `Stop-Process -Force` 是 `TerminateProcess`，用户态**无法拦截**，
+///   该脚本因此改为先走 [`spawn_shutdown_pipe_listener`] 的命名管道，8s 后进程仍在才回退 `-Force`。
+///
+/// 只负责"叫醒"，保存动作在 sim 线程的 tick 边界执行（存档体只能在那里合成）。
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+            }
+            Err(e) => {
+                glog!("WRN", "注册 SIGTERM 失败（{e}）⇒ 只等 Ctrl+C");
+                tokio::signal::ctrl_c().await.ok();
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows::{ctrl_break, ctrl_close, ctrl_shutdown};
+        let mut brk = ctrl_break().ok();
+        let mut close = ctrl_close().ok();
+        let mut shutdown = ctrl_shutdown().ok();
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = async {
+                match brk.as_mut() {
+                    Some(s) => { s.recv().await; }
+                    None => std::future::pending::<()>().await,
+                }
+            } => {}
+            _ = async {
+                match close.as_mut() {
+                    Some(s) => { s.recv().await; }
+                    None => std::future::pending::<()>().await,
+                }
+            } => {}
+            _ = async {
+                match shutdown.as_mut() {
+                    Some(s) => { s.recv().await; }
+                    None => std::future::pending::<()>().await,
+                }
+            } => {}
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        tokio::signal::ctrl_c().await.ok();
+    }
+}
+
+/// Windows 关服命名管道：`\\.\pipe\openmir2-gamesvr-shutdown-<pid>`。
+///
+/// 为什么需要它：`start_rust_stack.ps1 -Stop` 走 `Stop-Process -Force` = `TerminateProcess`，
+/// 用户态没有任何钩子；`Start-Process` 起的子进程也不在本脚本的进程组里，`GenerateConsoleCtrlEvent`
+/// 送不进去。命名管道给脚本一条**进程级**的优雅通道：连上并写 `SHUTDOWN`（8B）即请求关服。
+/// **不占 TCP 端口、不读文件、不增加 tick 开销**（阻塞在独立 tokio 任务里）。
+#[cfg(windows)]
+fn spawn_shutdown_pipe_listener(
+    tx: std::sync::mpsc::Sender<()>,
+    notify: std::sync::Arc<tokio::sync::Notify>,
+) {
+    use tokio::io::AsyncReadExt;
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    let name = format!(r"\\.\pipe\openmir2-gamesvr-shutdown-{}", std::process::id());
+    tokio::spawn(async move {
+        let mut server = match ServerOptions::new().first_pipe_instance(true).create(&name) {
+            Ok(s) => s,
+            Err(e) => {
+                glog!(
+                    "WRN",
+                    "关服命名管道创建失败（{name}）：{e} ⇒ 只支持 Ctrl+C/控制台关闭"
+                );
+                return;
+            }
+        };
+        glog!("INF", "关服命名管道已就绪：{name}");
+        if let Err(e) = server.connect().await {
+            glog!("WRN", "关服命名管道等待连接失败：{e}");
+            return;
+        }
+        let mut buf = [0u8; 8];
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            server.read_exact(&mut buf),
+        )
+        .await;
+        match read {
+            Ok(Ok(_)) if &buf == b"SHUTDOWN" => {
+                glog!("INF", "关服命名管道收到 SHUTDOWN 请求");
+                let _ = tx.send(());
+                notify.notify_one();
+            }
+            Ok(Ok(_)) => glog!("WRN", "关服命名管道收到未知请求（忽略）"),
+            Ok(Err(e)) => glog!("WRN", "关服命名管道读取失败：{e}"),
+            Err(_) => glog!("WRN", "关服命名管道读请求超时（忽略）"),
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn spawn_shutdown_pipe_listener(
+    _tx: std::sync::mpsc::Sender<()>,
+    _notify: std::sync::Arc<tokio::sync::Notify>,
+) {
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let conf = std::env::args()
@@ -758,6 +874,11 @@ async fn main() -> Result<()> {
             game_svr::ctor_fold::minimal_plan()
         }
     };
+    // 关服通道：进程级触发器（信号/控制台关闭/关服命名管道）→ sim 线程；sim → 主线程回传读数。
+    // 正常运行时 sim 侧每个 tick 只多做一次 `try_recv`；**不发任何存档请求**（零额外存档调用）。
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
+    let (shutdown_done_tx, mut shutdown_done_rx) =
+        tokio::sync::mpsc::unbounded_channel::<ShutdownSaveSummary>();
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -880,10 +1001,30 @@ async fn main() -> Result<()> {
                     cfg.red_msg_b_color,
                 ),
                 ev_rx,
+                shutdown_rx,
+                shutdown_done_tx,
                 Some(db),
             )
         })
         .context("起 sim 线程失败")?;
+
+    // 关服触发器：收到信号/管道请求后先唤醒 accept 循环，再让 sim 线程在 tick 边界存档。
+    // `Notify` 会保存一个 permit ⇒ 即使请求发生在 select 之前也不会丢。
+    let shutdown_signal = std::sync::Arc::new(tokio::sync::Notify::new());
+    {
+        let shutdown_tx = shutdown_tx.clone();
+        let notify = std::sync::Arc::clone(&shutdown_signal);
+        tokio::spawn(async move {
+            wait_for_shutdown_signal().await;
+            glog!(
+                "INF",
+                "收到关服信号：停止接受新连接，转交 sim 线程保存在册会话"
+            );
+            let _ = shutdown_tx.send(());
+            notify.notify_one();
+        });
+    }
+    spawn_shutdown_pipe_listener(shutdown_tx.clone(), std::sync::Arc::clone(&shutdown_signal));
 
     // 登录服务器（IDS）链路：oracle 是 TcpClient 主动连它（`AuthenticationService.cs:22-34`），
     // 会话通知（SS_OPENSESSION/SS_CLOSESESSION）填/删准入表 ⇒ 认证链靠它
@@ -919,7 +1060,13 @@ async fn main() -> Result<()> {
     let slots: Arc<std::sync::Mutex<GateSlots>> =
         Arc::new(std::sync::Mutex::new(GateSlots::default()));
     loop {
-        let (sock, peer) = listener.accept().await.context("accept 失败")?;
+        let (sock, peer) = tokio::select! {
+            r = listener.accept() => r.context("accept 失败")?,
+            _ = shutdown_signal.notified() => {
+                glog!("INF", "关服：停止接受新的网关连接");
+                break;
+            }
+        };
         sock.set_nodelay(true).ok();
         glog!("INF", "游戏网关连接：{peer}");
         let service_id = {
@@ -950,6 +1097,31 @@ async fn main() -> Result<()> {
             glog!("DBG", "sim: 网关线号 {service_id} 已释放");
         });
     }
+
+    // 关服收尾：存档动作在 sim 线程（它独占 World），主线程只做**有界**等待。
+    // sim 侧的 `shutdown_save_all` 自带超时 ⇒ 这里超时只可能发生在 sim 自身卡死时；
+    // 无论哪条支路都返回 `Ok(())`，进程**不会**挂在"等一个永远不来的应答"上（判据 4d）。
+    match tokio::time::timeout(SHUTDOWN_JOIN_TIMEOUT, shutdown_done_rx.recv()).await {
+        Ok(Some(summary)) => glog!(
+            "INF",
+            "关服完成：在册 {} / 发起 {} / 应答 {} / 超时 {} / 耗时 {}ms",
+            summary.sessions,
+            summary.fired,
+            summary.replied,
+            summary.timed_out,
+            summary.elapsed.as_millis()
+        ),
+        Ok(None) => glog!(
+            "WRN",
+            "关服：sim 线程未回传存档读数（通道已关闭）⇒ 进程退出"
+        ),
+        Err(_) => glog!(
+            "WRN",
+            "关服等待超时（{}ms）：sim 线程未在期限内完成存档 ⇒ 进程仍退出（不挂死）",
+            SHUTDOWN_JOIN_TIMEOUT.as_millis()
+        ),
+    }
+    Ok(())
 }
 
 /// sim 线程：建世界 → 按 `TICK_INTERVAL_MS` tick → 消费 I/O 侧事件。
@@ -4719,6 +4891,125 @@ fn save_human_rcd(
             );
             None
         }
+    }
+}
+
+/// 关服存档的**有界等待**上限。
+///
+/// oracle `OnShutdown`（`AppService.cs:206-210`）调 `SavePlayer`（`:133-145`）后**不显式等待**，
+/// 但随后的 `StopService` 有 `5s + 5s + 0.5s` 的停服延迟，`CharacterDataProcessor`（每 500ms）
+/// 正好在这段时间里把队列写完。Rust 进程退出得比 oracle 快，这里把 oracle 的"隐式等待"显式化：
+/// 关服存档发出后最多等这么久，收齐应答即返回，绝不把在途请求截断在进程退出瞬间。
+const SHUTDOWN_SAVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// 主线程等待 sim 线程完成关服存档的**总**上限（存档上限 + 收尾余量）。
+/// sim 自己的等待有界 ⇒ 正常路径用不到它；它是"DB 怎么卡都不挂死"的最后一道闸。
+const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(7);
+
+/// 关服存档读数（日志 + 用例）：在册会话数 / 实际发起数 / 超时前应答数 / 是否超时 / 耗时。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ShutdownSaveSummary {
+    sessions: usize,
+    fired: usize,
+    replied: usize,
+    timed_out: bool,
+    elapsed: std::time::Duration,
+}
+
+/// **关服存档**（oracle `AppService.OnShutdown` → `SavePlayer`，`AppService.cs:133-145`）。
+///
+/// 口径：
+/// - **存档哪些玩家** = `WorldEngine.GetPlayObjects()`（`PlayObjectList`）的在册角色。本仓同口径 =
+///   [`SessionGround`] 表（进世界建立、断线/小退/顶号移除），与周期存档 [`drain_periodic_save`] 同源；
+/// - **怎么存** = 逐个走既有 [`save_human_rcd`]（与周期/断线/软关**同一条**请求路径与编码器），
+///   不另造存档体（`MakeSaveRcd` 立即快照，oracle `WorldServer.cs:1090`）；
+/// - **不重置** `save_rcd_tick`、**不查** `InSaveRcdList`（oracle `SaveHumanRcd` 两者都不做）；
+/// - **失败处理**：链路未连接时 [`save_human_rcd`] 记 WRN 并跳过，与 oracle `IsConnected` 支同形；
+/// - **有界等待**：只等本次关服发起的请求（顺带收掉在途周期存档应答），超时后返回，由调用方退出；
+/// - **无玩家时不发起**：空表 ⇒ `fired = 0`、立即返回。
+///
+/// 与断线路径的差异（照 oracle）：关服**不**做 `DealCancelA`、不 `MakeGhost`、不关用户——
+/// 只是把在线角色的当前实时态写进库，随后进程退出。
+fn shutdown_save_all(
+    sessions: &std::collections::HashMap<String, SessionGround>,
+    saves: &std::collections::HashMap<String, SavedHuman>,
+    world: &mir2_world::World,
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    registry: Option<&mir2_envir::MapRegistry>,
+    timeout: std::time::Duration,
+) -> ShutdownSaveSummary {
+    let started = std::time::Instant::now();
+    // 排序只为请求/日志顺序可复现（oracle 的 `PlayObjectList` 是插入序；各存档请求彼此独立，
+    // 落库结果与次序无关）。周期存档同样按名字排序。
+    let mut names: Vec<String> = sessions.keys().cloned().collect();
+    names.sort();
+    let total = names.len();
+    let mut fired_qids = std::collections::HashSet::new();
+    for name in names {
+        let Some(sg) = sessions.get(&name) else {
+            continue;
+        };
+        // 与周期存档同口径：没有登入记录底稿就无法合成存档体（正常进世界必有）。
+        let Some(saved) = saves.get(&name) else {
+            glog!(
+                "WRN",
+                "关服存档：ChrName={name} 无登入记录底稿 ⇒ 跳过（登记；不计入发起数）"
+            );
+            continue;
+        };
+        if let Some(qid) = save_human_rcd(db, engine, saved, &name, world, sg, registry) {
+            fired_qids.insert(qid);
+            glog!("INF", "关服存档触发 ChrName:{name} queryId={qid}");
+        }
+    }
+    let fired = fired_qids.len();
+    let mut replied = 0usize;
+    let mut timed_out = false;
+    if fired > 0 {
+        // 等待上限从**所有请求发完之后**起算（枚举/编码耗时不计入有界等待）。
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Some(w) = db.as_mut() {
+                let replies = std::sync::Arc::clone(&w.replies);
+                let mut r = replies.lock().expect("DB 应答表锁被毒化");
+                let mut still = Vec::new();
+                // 与周期存档的收侧同口径：任何应答都出队；成功应答（1102 recog=1）才复位 in-save。
+                for (qid, chr) in std::mem::take(&mut w.save_outstanding) {
+                    match r.take(qid) {
+                        Some(reply) => {
+                            let (ident, recog) =
+                                dbclient::parse_reply_message(&reply.message).unwrap_or((0, 0));
+                            glog!(
+                                "INF",
+                                "关服存档应答 queryId={qid} ChrName={chr} Ident={ident} Recog={recog}"
+                            );
+                            apply_save_reply(engine, &chr, ident, recog);
+                            if fired_qids.remove(&qid) {
+                                replied += 1;
+                            }
+                        }
+                        None => still.push((qid, chr)),
+                    }
+                }
+                w.save_outstanding = still;
+            }
+            if fired_qids.is_empty() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                timed_out = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    ShutdownSaveSummary {
+        sessions: total,
+        fired,
+        replied,
+        timed_out,
+        elapsed: started.elapsed(),
     }
 }
 
@@ -11595,6 +11886,8 @@ fn sim_loop(
     colors: MsgColors,
     party_cfg: mir2_world::PartyConfig,
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
+    shutdown_rx: std::sync::mpsc::Receiver<()>,
+    shutdown_done_tx: tokio::sync::mpsc::UnboundedSender<ShutdownSaveSummary>,
     mut db: Option<DbWiring>,
 ) {
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
@@ -12138,6 +12431,37 @@ fn sim_loop(
     let mut aoi_frames_total: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     loop {
+        // **关服分支**（oracle `AppService.OnShutdown` → `SavePlayer`）：只在收到进程级关服请求时进入。
+        // 正常 tick 的额外成本 = 一次通道探测，**不**发起任何存档（判据 4e）。
+        // 位置在 tick 边界：先不消费本 tick 的事件，直接以**当前实时态**合成存档体并退出。
+        if shutdown_rx.try_recv().is_ok() {
+            glog!(
+                "INF",
+                "收到关服请求：保存全部在册会话（{} 个；有界等待 {}ms）",
+                ground_sessions.len(),
+                SHUTDOWN_SAVE_TIMEOUT.as_millis()
+            );
+            let summary = shutdown_save_all(
+                &ground_sessions,
+                &saves,
+                &world,
+                &mut db,
+                &mut engine,
+                registry.as_ref(),
+                SHUTDOWN_SAVE_TIMEOUT,
+            );
+            glog!(
+                "INF",
+                "关服存档收尾：在册 {} / 发起 {} / 应答 {} / 超时 {} / 耗时 {}ms",
+                summary.sessions,
+                summary.fired,
+                summary.replied,
+                summary.timed_out,
+                summary.elapsed.as_millis()
+            );
+            let _ = shutdown_done_tx.send(summary);
+            return;
+        }
         let next = std::time::Instant::now() + tick;
         while let Ok(ev) = ev_rx.try_recv() {
             match ev {
@@ -17375,6 +17699,379 @@ mod tests {
         }
         // 计时器已推进到第二次触发时刻（重置写回了会话态）。
         assert_eq!(sessions.get("hero").unwrap().save_rcd_tick, 11_002);
+    }
+
+    /// 用例用已连接 DB 链路：请求落到 `rx`，应答表交给调用方/喂数线程。
+    fn shutdown_db_for_test() -> (DbWiring, mpsc::UnboundedReceiver<Vec<u8>>) {
+        let state = dbclient::DbLinkState::new();
+        state.mark_connected();
+        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        (
+            DbWiring {
+                state,
+                req_tx: tx,
+                next_query_id: Arc::new(std::sync::atomic::AtomicI32::new(0)),
+                replies: Arc::new(std::sync::Mutex::new(dbclient::DbReplies::new())),
+                outstanding: Vec::new(),
+                save_outstanding: Vec::new(),
+            },
+            rx,
+        )
+    }
+
+    /// `DB_SAVEHUMANRCD` 请求帧 → `EDCode(SaveCharacterData)` 的**明文**记录体。
+    ///
+    /// 帧布局见 `dbclient` 模块头：6B `ServerDataPacket`、1B 成员数、4B QueryId，
+    /// 随后是 `i32 Message.len + Message` 与 `i32 Packet.len + Packet`。
+    /// QueryId 每次递增 ⇒ 比对时只比 `Packet`（存档体）本身，QueryId/信封不参与。
+    fn save_packet_of(frame: &[u8]) -> Vec<u8> {
+        let mut p = 11;
+        let mlen = i32::from_le_bytes(frame[p..p + 4].try_into().expect("msg len")) as usize;
+        p += 4 + mlen;
+        let plen = i32::from_le_bytes(frame[p..p + 4].try_into().expect("packet len")) as usize;
+        p += 4;
+        frame[p..p + plen].to_vec()
+    }
+
+    /// 请求帧 → `(ChrName, EDCode 解码后的存档体字节)`（DBSvr 侧用同一类型解回）。
+    fn save_record_of(frame: &[u8]) -> (String, Vec<u8>) {
+        use mir2_storage::MemPack;
+        let raw = mir2_protocol::edcode::decode(&save_packet_of(frame));
+        let rec =
+            mir2_storage::SaveCharacterData::from_bytes(&raw).expect("DBSvr 侧必须能解关服存档体");
+        (rec.chr_name.expect("chr_name"), raw)
+    }
+
+    fn two_player_world() -> (
+        mir2_world::World,
+        std::collections::HashMap<String, SessionGround>,
+        std::collections::HashMap<String, SavedHuman>,
+    ) {
+        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        let mut sessions = std::collections::HashMap::new();
+        let mut saves = std::collections::HashMap::new();
+        for (name, x, y, gold, account) in [
+            ("alpha", 11, 22, 649, "acct-a"),
+            ("beta", 33, 44, 1300, "acct-b"),
+        ] {
+            world.open_session(name);
+            let actor_id = world
+                .enter_map(name, mir2_world::Entity::new(0, name, x, y), 0)
+                .expect("进世界");
+            let mut sg = test_session_ground(actor_id);
+            sg.state.gold = gold;
+            sg.save_rcd_tick = 1_000;
+            sessions.insert(name.to_string(), sg);
+            saves.insert(
+                name.to_string(),
+                SavedHuman {
+                    account: account.into(),
+                    record: stage6_record(),
+                    enter_map: "0".into(),
+                },
+            );
+        }
+        (world, sessions, saves)
+    }
+
+    /// **卡 `openmir2-save-on-shutdown` 判据 a/b**（oracle `AppService.SavePlayer` `:133-145`）：
+    /// 关服时对**每个在册会话各发起一次** `DB_SAVEHUMANRCD`，且存档体与周期存档**逐字节一致**
+    /// （同一编码器/同一实时态；QueryId 不同不参与比对）。
+    ///
+    /// 红检（改坏 ⇒ 必红，每次跑完立即还原）：
+    /// - 把 `shutdown_save_all` 的发送循环删掉/恒不调用 `save_human_rcd` ⇒ `fired == 0`/请求数 0 必红；
+    /// - 只保存第一个会话（`break`）⇒ 请求数 1 必红；
+    /// - 把存档体换成原始 `saved.record`（不走实时态）⇒ 周期/关服记录仍相同（这条不咬），
+    ///   故本用例同时断言 `gold`/坐标，改坏 `build_save_record` 的实时字段也会红。
+    #[test]
+    fn shutdown_saves_every_session_once_with_periodic_identical_payload() {
+        use mir2_storage::MemPack;
+
+        let (world, mut sessions, saves) = two_player_world();
+        let mut engine = load::FrontEngine::new();
+
+        // ① 周期存档基线：同一实时态、同一编码器。
+        let (periodic_db, mut periodic_rx) = shutdown_db_for_test();
+        let mut periodic_db = Some(periodic_db);
+        let periodic_fired = drain_periodic_save(
+            &mut sessions,
+            &saves,
+            &world,
+            &mut periodic_db,
+            &mut engine,
+            None,
+            5_000,
+            6_001,
+        );
+        assert_eq!(periodic_fired, 2, "两个会话都到期 ⇒ 周期存档发起 2 次");
+        let mut periodic = std::collections::HashMap::new();
+        while let Ok(frame) = periodic_rx.try_recv() {
+            let (chr, raw) = save_record_of(&frame);
+            periodic.insert(chr, raw);
+        }
+        assert_eq!(periodic.len(), 2);
+
+        // ② 关服存档：不重置 tick、不查 in-save，直接按当前态各存一次。
+        let (shutdown_db, mut shutdown_rx) = shutdown_db_for_test();
+        let mut shutdown_db = Some(shutdown_db);
+        let summary = shutdown_save_all(
+            &sessions,
+            &saves,
+            &world,
+            &mut shutdown_db,
+            &mut engine,
+            None,
+            std::time::Duration::from_millis(30),
+        );
+        assert_eq!(summary.sessions, 2, "在册会话数 = 2");
+        assert_eq!(summary.fired, 2, "判据 a：每个在册玩家各发起一次");
+        assert_eq!(summary.replied, 0, "测试未投应答 ⇒ 有界等待后超时");
+        assert!(
+            summary.timed_out,
+            "无应答 ⇒ 必须在超时后返回（判据 d 的构造面）"
+        );
+
+        let mut shutdown = std::collections::HashMap::new();
+        while let Ok(frame) = shutdown_rx.try_recv() {
+            let (chr, raw) = save_record_of(&frame);
+            shutdown.insert(chr, raw);
+        }
+        assert_eq!(shutdown.len(), 2, "判据 a：关服请求数 = 在册会话数");
+        for name in ["alpha", "beta"] {
+            // 判据 b：**逐字节**一致的存档体（字段级比对 = 同一明文记录）。
+            assert_eq!(
+                shutdown.get(name),
+                periodic.get(name),
+                "关服存档体必须与周期存档逐字节一致 ChrName={name}"
+            );
+            // 再用 DBSvr 侧类型解回，钉住关键实时字段（防「两边一起错」）。
+            let rec = mir2_storage::SaveCharacterData::from_bytes(shutdown.get(name).unwrap())
+                .expect("关服存档体必须可解");
+            let d = rec.character_data.unwrap().data.unwrap();
+            let (x, y, gold) = match name {
+                "alpha" => (11, 22, 649),
+                _ => (33, 44, 1300),
+            };
+            assert_eq!((d.cur_x, d.cur_y), (x, y), "实时坐标 ChrName={name}");
+            assert_eq!(d.gold, gold, "实时 Gold ChrName={name}");
+        }
+    }
+
+    /// **判据 c（无玩家时不发起）**：空会话表 ⇒ 0 次请求、不等待、不走超时支；in-save 表不变。
+    #[test]
+    fn shutdown_with_no_sessions_fires_nothing() {
+        let world = mir2_world::World::with_maps(vec![(100, 100)]);
+        let sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
+        let mut engine = load::FrontEngine::new();
+        let (db, mut rx) = shutdown_db_for_test();
+        let mut db = Some(db);
+
+        let started = std::time::Instant::now();
+        let summary = shutdown_save_all(
+            &sessions,
+            &saves,
+            &world,
+            &mut db,
+            &mut engine,
+            None,
+            std::time::Duration::from_millis(200),
+        );
+        assert_eq!(summary.sessions, 0);
+        assert_eq!(summary.fired, 0);
+        assert_eq!(summary.replied, 0);
+        assert!(!summary.timed_out, "无玩家 ⇒ 不进入等待/超时支");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(150),
+            "无玩家时不得进入等待（更不得等满 200ms）"
+        );
+        assert!(rx.try_recv().is_err(), "无玩家 ⇒ 零个 DB_SAVEHUMANRCD 请求");
+        assert!(!engine.in_save_rcd_list("alpha"));
+    }
+
+    /// **判据 d（有界等待真的在等）**：应答晚到（120ms）⇒ 关服存档必须等它并计数
+    /// `replied=1`、`timed_out=false`。
+    ///
+    /// 红检：删掉 `shutdown_save_all` 的等待循环（发完即返回）⇒ `replied=0` 且 `elapsed < 120ms` 必红。
+    #[test]
+    fn shutdown_waits_for_in_flight_save_reply() {
+        let (world, mut sessions, saves) = two_player_world();
+        sessions.retain(|name, _| name == "alpha");
+        let mut engine = load::FrontEngine::new();
+        let (db, mut rx) = shutdown_db_for_test();
+        let replies = std::sync::Arc::clone(&db.replies);
+        let mut db = Some(db);
+
+        // 喂数线程：取到请求帧 → 120ms 后把应答放进共享应答表（模拟 DBSvr 落库完成）。
+        let feeder = std::thread::spawn(move || {
+            let frame = rx.blocking_recv().expect("必须收到一条关服存档请求");
+            // 6B 头 + 1B 成员数 = 7；QueryId 在 7..11。
+            let qid = i32::from_le_bytes(frame[7..11].try_into().expect("query id"));
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            replies.lock().expect("DB 应答表锁被毒化").insert_for_test(
+                qid,
+                dbclient::Reply {
+                    query_id: qid,
+                    message: Vec::new(),
+                    packet: Vec::new(),
+                    sign: Vec::new(),
+                },
+            );
+        });
+
+        let summary = shutdown_save_all(
+            &sessions,
+            &saves,
+            &world,
+            &mut db,
+            &mut engine,
+            None,
+            std::time::Duration::from_secs(2),
+        );
+        feeder.join().expect("喂数线程");
+        assert_eq!(summary.fired, 1);
+        assert_eq!(summary.replied, 1, "判据 d：应答到达必须被收掉");
+        assert!(!summary.timed_out, "应答在期限内到达 ⇒ 不得报超时");
+        assert!(
+            summary.elapsed >= std::time::Duration::from_millis(120),
+            "必须真的等到应答（实测 {}ms）",
+            summary.elapsed.as_millis()
+        );
+    }
+
+    /// **判据 d（超时后仍退出，不挂死）**：DB 永不应答 ⇒ 有界等待在 `timeout` 处返回
+    /// `timed_out=true`，且总耗时远小于测试兜底上限。
+    ///
+    /// 红检：把 `timeout` 改成「等所有应答」（无限等待）⇒ 本用例的 `recv_timeout(3s)` 必红
+    /// （线程不返回；测试进程退出时被回收）。
+    #[test]
+    fn shutdown_times_out_and_does_not_hang() {
+        let (world, sessions, saves) = two_player_world();
+        let mut engine = load::FrontEngine::new();
+        let (db, _rx) = shutdown_db_for_test();
+        let mut db = Some(db);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let timeout = std::time::Duration::from_millis(60);
+        let worker = std::thread::spawn(move || {
+            let summary = shutdown_save_all(
+                &sessions,
+                &saves,
+                &world,
+                &mut db,
+                &mut engine,
+                None,
+                timeout,
+            );
+            let _ = done_tx.send(summary);
+        });
+        let summary = done_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("关服存档必须在有界时间内返回（超时改成无限 ⇒ 此处红）");
+        worker.join().expect("关服存档线程");
+        assert!(summary.timed_out, "DB 无应答 ⇒ 必须报超时");
+        assert_eq!(summary.fired, 2);
+        assert_eq!(summary.replied, 0);
+        assert!(
+            summary.elapsed >= timeout,
+            "最少等满超时（{}ms），实测 {}ms",
+            timeout.as_millis(),
+            summary.elapsed.as_millis()
+        );
+        assert!(
+            summary.elapsed < std::time::Duration::from_secs(3),
+            "不得挂死"
+        );
+    }
+
+    /// **判据 e（正常运行时零额外调用）**：没有关服请求 ⇒ 周期存档按原计时触发/不触发，
+    /// 关服路径的代码只有 sim 循环里那一次 `try_recv`（不是存档调用）。
+    ///
+    /// 这里用源码锚点钉住「关服存档只在 `shutdown_rx.try_recv()` 支内调用」——把调用挪到
+    /// tick 正常路径（或删掉守卫）⇒ 必红。
+    #[test]
+    fn shutdown_save_is_only_reachable_from_shutdown_branch() {
+        let src = include_str!("main.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let guard = lines
+            .iter()
+            .position(|l| l.trim() == "if shutdown_rx.try_recv().is_ok() {")
+            .expect("sim 循环里的关服守卫行");
+        let call = lines
+            .iter()
+            .position(|l| l.trim() == "let summary = shutdown_save_all(")
+            .expect("关服存档调用行");
+        assert!(
+            call > guard,
+            "关服存档调用必须在 `shutdown_rx.try_recv()` 守卫支内"
+        );
+        // 生产代码里 `shutdown_save_all(` 的**调用**（非定义/注释）只此一处；
+        // 扫描范围截止 `mod tests {`（用例自身也调用它，不能计入生产面）。
+        let tests_start = lines
+            .iter()
+            .position(|l| l.trim() == "mod tests {")
+            .expect("`mod tests {` 行");
+        let calls = lines
+            .iter()
+            .enumerate()
+            .filter(|(i, l)| {
+                *i < tests_start
+                    && (l.trim() == "let summary = shutdown_save_all("
+                        || (l.trim().starts_with("shutdown_save_all(")
+                            && !l.trim_start().starts_with("fn ")))
+            })
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls.len(),
+            1,
+            "正常 tick 路径不得出现额外关服存档调用：{calls:?}"
+        );
+    }
+
+    /// **`-Stop` 的优雅通道（Windows）**：命名管道写 `SHUTDOWN` ⇒ 进程级关服请求 + accept 唤醒。
+    ///
+    /// 红检：把 `spawn_shutdown_pipe_listener` 里的 `tx.send(())` 删掉 ⇒ 本用例必红。
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_pipe_listener_requests_shutdown_once() {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let notify = std::sync::Arc::new(tokio::sync::Notify::new());
+        spawn_shutdown_pipe_listener(tx, std::sync::Arc::clone(&notify));
+        let bs = char::from(92u8);
+        let name = format!(
+            "{0}{0}.{0}pipe{0}openmir2-gamesvr-shutdown-{1}",
+            bs,
+            std::process::id()
+        );
+        // 管道由后台任务创建 ⇒ 重试连接（最多 1s）。
+        let mut file = None;
+        for _ in 0..100 {
+            match std::fs::OpenOptions::new().write(true).open(&name) {
+                Ok(f) => {
+                    file = Some(f);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            }
+        }
+        use std::io::Write;
+        let mut f = file.expect("关服命名管道必须可连接（-Stop 的优雅通道）");
+        f.write_all(b"SHUTDOWN").expect("写 SHUTDOWN");
+        f.flush().expect("flush");
+        drop(f);
+        let mut got = false;
+        for _ in 0..200 {
+            if rx.try_recv().is_ok() {
+                got = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            got,
+            "写 SHUTDOWN ⇒ 必须发出关服请求（管道路径无牙 = -Stop 不存档）"
+        );
     }
 
     /// **`openmir2-m3-move-wiring` ①–③（移动接线）**：`CM_TURN` **只在**目标=当前位置时改朝向、

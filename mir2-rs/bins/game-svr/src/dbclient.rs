@@ -370,6 +370,13 @@ impl DbReplies {
     pub fn take(&mut self, query_id: i32) -> Option<Reply> {
         self.map.remove(&query_id)
     }
+
+    /// 用例专用：直接投一条应答进表（不经过签名校验/分帧），用于驱动「关服存档有界等待」的
+    /// 应答到达时刻（生产唯一入口是 [`Self::feed`]）。
+    #[cfg(test)]
+    pub(crate) fn insert_for_test(&mut self, query_id: i32, reply: Reply) {
+        self.map.insert(query_id, reply);
+    }
 }
 
 /// 起 DB 链路（照 `DataQueryServer` 的 `Start` `:35-53`：连不上**只记日志、不退出**；
