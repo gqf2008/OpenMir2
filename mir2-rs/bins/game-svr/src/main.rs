@@ -11019,6 +11019,87 @@ fn step_mon_gen(
     );
 }
 
+/// **卡 `openmir2-run-gap-monster-specials`（F1）**：`SendRefMsg(RM_HIT, …)` 的出帧半。
+///
+/// oracle `BeeQueen.MakeChildBee` / `SpiderHouseMonster.GenBb`（`BeeQueen.cs:29` /
+/// `SpiderHouseMonster.cs:27`）在产仔时发 `SendRefMsg(RM_HIT, Dir, CurrX, CurrY, 0, "")`；
+/// 收件人 `PlayObject.Message.cs:1433-1438`：
+///
+/// ```text
+/// case Messages.RM_HIT:
+///   if (processMsg.ActorId != ActorId)
+///     ClientMsg = MakeMessage(SM_HIT, processMsg.ActorId, nParam1, nParam2, wParam);
+///     SendSocket(ClientMsg);        // 无尾
+/// ```
+///
+/// 即 `SM_HIT`、**排除自己**、收件人按**发帧时刻**的 `(CurrX±12, CurrY±12)` 现算
+/// （`SendRefMsg` 的 `Envir.GetCellInfo` 扫描；本仓用 [`chat::hear_targets_at`] 的等价窗口）。
+/// 事件带 `map_id` 与发帧坐标，避免 drain 时实体已移动。
+fn drain_special_ref_msgs(
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    for m in world.take_special_ref_msgs() {
+        // 本卡只产 `RM_HIT`；未知 ident 不猜映射（登记为余量）。
+        if m.ident != mir2_world::special_monster::RM_HIT {
+            continue;
+        }
+        let body = smframe::sm_action_hit(
+            mir2_protocol::messages::SM_HIT,
+            m.actor_id,
+            wire_coord(m.x),
+            wire_coord(m.y),
+            m.dir,
+        );
+        broadcast_ref_msg_opt(
+            world,
+            online,
+            gates,
+            m.actor_id,
+            &[body],
+            false,
+            Some((m.map_id, m.x, m.y)),
+        );
+    }
+}
+
+/// **卡 `openmir2-run-gap-monster-specials`（F1）**：`world.tick()` + 专用怪的两条排水。
+///
+/// 1. **产仔排水**：`World::tick` 的消息段把到点的 `RM_ZEN_BEE` 放进
+///    [`mir2_world::World::pending_special_spawns`]（无 spawner 路径）；这里用生产
+///    [`game_svr::mongen::WorldSpecialSpawner`] 逐条 `RegenMonsterByName`。
+///    不排水 ⇒ 有目标的 BeeQueen/SpiderHouse 每 2s 追加一条、永不释放（无界增长）。
+/// 2. **`RM_HIT` 出帧**：`MakeChildBee`/`GenBb` 的 `SendRefMsg` 事件在
+///    [`mir2_world::World::pending_special_ref_msgs`]；这里按 RM_HIT 口径出 `SM_HIT`。
+///
+/// 宿主（`sim_loop`）与回归用例走**同一个**函数 ⇒ 删任一条排水都会让「队列有界 /
+/// 产仔」用例变红。
+fn tick_world_with_specials(
+    world: &mut mir2_world::World,
+    host: Option<&mut game_svr::mongen::MonGenHost>,
+    table: &game_svr::mongen::MonsterTable,
+    registry: Option<&mir2_envir::MapRegistry>,
+    displays: &mut downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) -> mir2_world::TickRecord {
+    let rec = world.tick();
+    // oracle `Operate(RM_ZEN_BEE)` 的 `RegenMonsterByName`：与本 tick 其它怪物/商人取数
+    // 同一条 `world.rng`（`flush_special_spawns` 内部移出/移入）。
+    if let (Some(host), Some(reg)) = (host, registry) {
+        let mut spawner = game_svr::mongen::WorldSpecialSpawner {
+            registry: reg,
+            table,
+            state: &mut host.state,
+            displays,
+        };
+        let _ = world.flush_special_spawns(&mut spawner);
+    }
+    drain_special_ref_msgs(world, online, gates);
+    rec
+}
+
 /// **P3-B4 生产接线**：把 [`EnterConfig`] 的 `[Setup] RedMsg*` 与 `[String] YouPoisoned`
 /// 交给 [`drain_b4_self_deliveries`]。抽成独立函数是为了让单测**走与 `sim_loop` 同一条**
 /// `EnterConfig` 参数路径（删掉参数或改回 `MessageSettings` 源码默认文本即红），而不是由
@@ -13108,7 +13189,18 @@ fn sim_loop(
                 &line_notice_lines,
             );
         }
-        let rec = world.tick();
+        // **卡 `openmir2-run-gap-monster-specials`（F1）**：专有怪的两条排水与本 tick 同点——
+        // `RM_ZEN_BEE` 的 `RegenMonsterByName`（生产 `SpecialSpawner`）与 `RM_HIT` 的
+        // `SM_HIT` 出帧。宿主与回归用例走同一函数（见 `tick_world_with_specials`）。
+        let rec = tick_world_with_specials(
+            &mut world,
+            mon_gen_host.as_mut(),
+            &enter_cfg.mon_gen.table,
+            registry.as_ref(),
+            &mut displays,
+            &online,
+            &gates,
+        );
         // **run-gap 状态到期**：`PlayObject.Run` 的烈火 20s / 双龙 60s（`PlayObject.Message.cs:54-64`）
         // ⇒ `SpiritsGone` 的 `SM_SYSMESSAGE(100)` + `+UFIR`/`+UTWN` 短包。oracle 在玩家自己的
         // `Run()` 内即时发；本宿主在世界 tick 后按记录出帧。
@@ -35529,5 +35621,158 @@ mod tests {
             cell.obj_list.clear();
         }
         assert_eq!(near(&world), -1, "不在格子索引的实体不得计入 nearest");
+    }
+    /// **F1（复验 Important）回归**：有目标的 `BeeQueen` 持续产仔时，两条队列必须**每 tick 有界**。
+    ///
+    /// 走**生产路径** [`tick_world_with_specials`]（`sim_loop` 同款）：`world.tick()` 把到点的
+    /// `RM_ZEN_BEE` 排进 `pending_special_spawns`，函数用
+    /// [`game_svr::mongen::WorldSpecialSpawner`]（= `WorldEngine.RegenMonsterByName`）排水造怪；
+    /// `RM_HIT` 由 [`drain_special_ref_msgs`] 出 `SM_HIT`（排除自己、按发帧坐标算窗口）。
+    ///
+    /// 红检：
+    /// - 删掉 `take_special_ref_msgs` 排水 ⇒ `pending_special_ref_msgs` 随 tick 线性增长 ⇒ 红；
+    /// - 删掉 `flush_special_spawns` 排水 ⇒ `pending_special_spawns` 线性增长、`special_children`
+    ///   恒 0 ⇒ 红。
+    #[test]
+    fn special_monster_queues_stay_bounded_on_production_path() {
+        use mir2_world::entity::{Entity, ACTOR_RACE_PLAY};
+        use mir2_world::mongen::MonGenEntry;
+        use std::collections::HashMap;
+
+        // 32×32 全零地形（与 `mongen` 的单测同口径：`parse_map_bytes` 只要求尺寸/字节数）。
+        let base = std::env::temp_dir().join(format!(
+            "gs-special-f1-{}-{}",
+            std::process::id(),
+            "bounded"
+        ));
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&32_i16.to_le_bytes());
+        bytes[2..4].copy_from_slice(&32_i16.to_le_bytes());
+        bytes.resize(
+            mir2_envir::HEADER_BYTES + 32 * 32 * mir2_envir::CELL_BYTES,
+            0,
+        );
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
+        let loader = mir2_envir::MapLoader::new(base.clone(), "Map", "Envir");
+        let registry = mir2_envir::MapRegistry::from_entries(
+            loader,
+            vec![mir2_envir::MapInfoEntry {
+                map_name: "0".to_string(),
+                map_file_name: "0".to_string(),
+                desc: String::new(),
+                server_index: 0,
+                flag: mir2_envir::MapInfoFlag::default(),
+            }],
+        );
+        assert_eq!(registry.id_of("0"), Some(0));
+
+        // `Config.Bee` 缺省名 "蝙蝠"（DB race 81，`CreateMonster` switch 可生成）。
+        let table = game_svr::mongen::MonsterTable::new(vec![mir2_data::models::MonsterInfo {
+            name: "蝙蝠".to_string(),
+            race: 81,
+            level: 1,
+            hp: 10,
+            ..mir2_data::models::MonsterInfo::default()
+        }]);
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        let mut host = game_svr::mongen::MonGenHost::start(
+            vec![MonGenEntry {
+                map_name: "0".to_string(),
+                x: 10,
+                y: 10,
+                mon_name: "蝙蝠".to_string(),
+                range: 0,
+                count: 1,
+                active_count: 0,
+                zen_time: 0,
+                mission_gen_rate: 0,
+                race: 81,
+                start_tick: 0,
+                cert_list: Vec::new(),
+                thread_id: 0,
+            }],
+            &table,
+            false,
+            mir2_world::mongen::MonGenConfig::default(),
+            &mut rng,
+        );
+
+        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        world.enable_monster_ai();
+        let mut queen = Entity::new(0, "蜂后".to_string(), 10, 10);
+        queen.race = 103;
+        queen.hp = 100;
+        queen.max_hp = 100;
+        // `NextHitTime` 保持 oracle 缺省 2000（`BaseObject` ctor）：产仔间隔 2s ≫ 500ms 自投递，
+        // 因此 `BeeList.Count >= 15` 门能真正生效（不会有多条在飞的 `RM_ZEN_BEE` 越过门）。
+        // `WalkSpeed = 0` 只放开走时钟门（不影响产仔节奏）。
+        queen.ai.walk_speed = 0;
+        queen.ai.next_hit_time = 2000;
+        let qid = world.add_entity(queen);
+        let mut player = Entity::new(0, "P".to_string(), 11, 10);
+        player.race = ACTOR_RACE_PLAY;
+        let pid = world.add_entity(player);
+        world.entities.get_mut(qid).unwrap().ai.target_creature = Some(pid);
+        world.entities.get_mut(qid).unwrap().ai.walk_tick = 0;
+        world.entities.get_mut(qid).unwrap().ai.attack_tick = 0;
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".to_string(),
+            chr_name: "P".to_string(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 5,
+            actor_id: pid,
+        }];
+        let mut displays = downlink::DisplayTable::new();
+
+        let mut max_children = 0usize;
+        // 170 tick = 34s：2s 一轮产仔 + 500ms 自投递，足够触到 15 只上限并继续多轮。
+        for tick in 0..170 {
+            let _rec = tick_world_with_specials(
+                &mut world,
+                Some(&mut host),
+                &table,
+                Some(&registry),
+                &mut displays,
+                &online,
+                &gates,
+            );
+            assert!(
+                world.pending_special_ref_msgs.is_empty(),
+                "tick {tick}: RM_HIT 帧队列必须每 tick 排空（否则无界增长）"
+            );
+            assert!(
+                world.pending_special_spawns.is_empty(),
+                "tick {tick}: RM_ZEN_BEE 产仔队列必须每 tick 排空（否则无界增长）"
+            );
+            max_children =
+                max_children.max(world.entities.get(qid).unwrap().special_children.len());
+        }
+
+        assert!(max_children > 0, "生产 spawner 未接通 ⇒ 一只宝宝都没造出来");
+        assert_eq!(
+            max_children,
+            mir2_world::special_monster::CHILD_LIMIT,
+            "宝宝数必须受 BeeList.Count >= 15 门约束并达到上限"
+        );
+
+        let mut hit_frames = 0usize;
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                if u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_HIT {
+                    hit_frames += 1;
+                }
+            }
+        }
+        assert!(
+            hit_frames > 0,
+            "RM_HIT 未接到出帧路径 ⇒ 观察者收不到 SM_HIT"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

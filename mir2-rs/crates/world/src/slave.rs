@@ -1046,6 +1046,11 @@ pub struct SelfDelayOutcome {
     pub delay_magic: Option<DelayMagicDelivery>,
     /// **P3-B4**：`RM_POISON` 到点投递的观察值（非该支 `None`）。
     pub poison: Option<PoisonDelivery>,
+    /// **卡 `openmir2-run-gap-monster-specials`**：`RM_ZEN_BEE` 到点投递的产仔请求
+    /// （`BeeQueen`/`SpiderHouseMonster`；非该支 `None`）。宿主未接 `SpecialSpawner` 时
+    /// 同一条请求也已进 [`crate::world::World::pending_special_spawns`]，可用
+    /// [`crate::world::World::flush_special_spawns`] 排水。
+    pub zen_bee: Option<crate::special_monster::SpecialSpawnRequest>,
 }
 
 /// **P3-B4**：`RM_DELAYMAGIC` 投递（`BaseObject.Base.cs:711-729`）的观察值。
@@ -1299,6 +1304,20 @@ impl World {
     /// [`process_slave_mutiny`]，`RM_MASTERDIEGHOST` ⇒ [`process_slave_ghost`]。未到点的项**保留**
     /// 在队里（oracle `GetMessage` 重新入队等价）。
     pub fn deliver_self_delay_msgs(&mut self) -> Vec<SelfDelayOutcome> {
+        self.deliver_self_delay_msgs_with(None)
+    }
+
+    /// [`World::deliver_self_delay_msgs`] 的宿主接缝版本：给出 `spawner` 时，`RM_ZEN_BEE`
+    /// 在投递点**同步**执行 `Operate` 的 `RegenMonsterByName`（oracle 同点同次抽）；不给时
+    /// 只把请求放进 [`crate::world::World::pending_special_spawns`]。
+    ///
+    /// `RM_ZEN_BEE` 的投递门：oracle 的延时消息只在 actor 自己的 `Run()` 里泵出，`Ghost` 的怪
+    /// 被 `ProcessMonsters` 整只跳过 ⇒ 消息永不投递。本骨架同样把 Ghost actor 的该消息**保留**
+    /// 在队列（其它 ident 的既有语义不变）。
+    pub fn deliver_self_delay_msgs_with(
+        &mut self,
+        mut spawner: Option<&mut dyn crate::special_monster::SpecialSpawner>,
+    ) -> Vec<SelfDelayOutcome> {
         let now = self.clock_ms;
         let mut out = Vec::new();
         let mut i = 0;
@@ -1308,6 +1327,70 @@ impl World {
                 continue;
             }
             let msg = self.self_delay_msgs.remove(i);
+            // `CloneMonster.Operate`（`Clone.cs:14-30`）：**任意** `wIdent` 都 `return false`
+            // ⇒ `base.Operate` 的**全部**投递效果对 Clone 不生效（`RM_POISON` 的中毒、
+            // `RM_MAKEHOLYSEIZEMODE` 的神圣、`RM_DOOPENHEALTH` 的开血、`RM_MAGHEALING`、
+            // `RM_TRANSPARENT`、`RM_MAGIC_LVEXP`、`RM_DELAYMAGIC`、`RM_MAGSTRUCK`、
+            // `RM_REFMESSAGE`（→ `RM_STRUCK`）、`RM_RANDOMSPACEMOVE`、`RM_DELAYPUSHED` …）。
+            // 只有 `RM_STRUCK`/`RM_MAGSTRUCK`/`RM_SPELL` 的 `Master.WAbil.MP` 支生效——
+            // 统一走 [`crate::special_monster::clone_operate`]（非这三条 ident 是纯 no-op）。
+            if self
+                .entities
+                .get(msg.actor_id)
+                .is_some_and(|e| e.race == crate::special_monster::RACE_CLONE_MONSTER)
+            {
+                crate::special_monster::clone_operate(
+                    self,
+                    msg.actor_id,
+                    msg.ident,
+                    msg.w_param,
+                    msg.n_param3,
+                );
+                out.push(SelfDelayOutcome {
+                    actor_id: msg.actor_id,
+                    ident: msg.ident,
+                    ..SelfDelayOutcome::default()
+                });
+                continue;
+            }
+            // `RM_ZEN_BEE`（`BeeQueen.cs:30` / `SpiderHouseMonster.cs:28`）：投递点 =
+            // `Operate`；Ghost actor 的消息保留在队列（见本方法文档）。
+            if msg.ident == crate::special_monster::RM_ZEN_BEE {
+                let deliverable = self.entities.get(msg.actor_id).is_some_and(|e| !e.ghost);
+                if !deliverable {
+                    self.self_delay_msgs.insert(i, msg);
+                    i += 1;
+                    continue;
+                }
+                let zen_bee = match spawner.as_mut() {
+                    Some(sp) => {
+                        // oracle `Operate(RM_ZEN_BEE)` 同步 `RegenMonsterByName`。
+                        crate::special_monster::operate_special(
+                            self,
+                            &mut **sp,
+                            msg.actor_id,
+                            msg.ident,
+                            0,
+                            0,
+                        );
+                        None
+                    }
+                    None => {
+                        let req = crate::special_monster::special_spawn_request(self, msg.actor_id);
+                        if let Some(req) = req.clone() {
+                            self.pending_special_spawns.push(req);
+                        }
+                        req
+                    }
+                };
+                out.push(SelfDelayOutcome {
+                    actor_id: msg.actor_id,
+                    ident: msg.ident,
+                    zen_bee,
+                    ..SelfDelayOutcome::default()
+                });
+                continue;
+            }
             // B2：`RM_MAGHEALING` 不受「宝宝自投递」开关影响（它由治疗效果体入队）；
             // 两个主人死族消息仍按 `slave_self_delay_enabled` 门（关闭时保持入队）。
             if matches!(msg.ident, RM_MASTERDIEMUTINY | RM_MASTERDIEGHOST)

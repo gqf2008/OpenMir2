@@ -35,6 +35,7 @@ pub mod run_gap;
 pub mod session;
 pub mod slave;
 pub mod space_move;
+pub mod special_monster;
 pub mod world;
 
 pub use action::{ButchEvent, PushEvent, RushEvent, RushFrame};
@@ -118,6 +119,12 @@ pub use slave::{
     mag_make_slave_plan, make_slave_gate, recall_slave_target, space_move_get_rand_xy, spawn_clone,
     summon_slave, CloneSpawn, MakeSlavePlan, SlaveSpawner, SummonOutcome, CLONE_NAME,
     PLAYER_VIEW_RANGE, SKILL_46, SKILL_ANGEL, SKILL_SINSU, SKILL_SKELLETON, SKILL_TAMMING,
+};
+pub use special_monster::{
+    adopt_special_child, apply_ctor_fields, clone_operate, operate_special, special_monster_run,
+    special_spawn_request, SpecialKind, SpecialRefMsg, SpecialSpawnOutcome, SpecialSpawnRequest,
+    SpecialSpawner, CHILD_LIMIT, RACE_BEE_QUEEN, RACE_CLONE_MONSTER, RACE_SPIDER_HOUSE,
+    RM_MAGSTRUCK, RM_MAGSTRUCK_MINE, RM_SPELL, RM_STRUCK, RM_ZEN_BEE, ZEN_BEE_DELAY_MS,
 };
 pub use world::{
     Command, EntitySnapshot, ExtraAbilEventKind, ExtraAbilExpiry, FireBurnEvent, FireWallOutcome,

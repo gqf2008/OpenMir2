@@ -800,6 +800,48 @@ impl MonsterSink for WorldMonsterSink<'_> {
     }
 }
 
+/// **卡 `openmir2-run-gap-monster-specials`（F1）**：`SpecialSpawner` 的**生产实现**。
+///
+/// oracle `BeeQueen.Operate` / `SpiderHouseMonster.Operate` 的 `RM_ZEN_BEE` 支调用
+/// `SystemShare.WorldEngine.RegenMonsterByName(Envir.MapName, x, y, Config.Bee/Spider)`
+/// （`BeeQueen.cs:35`、`SpiderHouseMonster.cs:35`）。本实现把
+/// [`crate::guardlist::regen_monster_by_name`]（同一 `CreateMonster` 取数链）接到宿主：
+/// 地图 `id` → 逻辑名（`MapRegistry::name_of`）、宿主展示表登记、`MonGenState` 与
+/// MonGen 同一份（oracle 的合成 `MonGenInfo` 也追加到线程表）。
+///
+/// RNG：调用方（`World::flush_special_spawns` / `deliver_self_delay_msgs_with`）传入
+/// **同一条** `world.rng`，本实现不额外抽数。
+pub struct WorldSpecialSpawner<'a> {
+    pub registry: &'a MapRegistry,
+    pub table: &'a MonsterTable,
+    pub state: &'a mut MonGenState,
+    pub displays: &'a mut downlink::DisplayTable,
+}
+
+impl mir2_world::SpecialSpawner for WorldSpecialSpawner<'_> {
+    fn regen_monster_by_name(
+        &mut self,
+        world: &mut mir2_world::World,
+        rng: &mut RandomNumber,
+        map_id: usize,
+        name: &str,
+        x: i16,
+        y: i16,
+    ) -> Option<i32> {
+        // oracle `Envir.MapName`：本仓 `map_id` 的注册名；未注册 ⇒ `FindMap == null` ⇒ null。
+        let map_name = self.registry.name_of(map_id)?.to_string();
+        let mut sink = WorldMonsterSink {
+            world,
+            registry: self.registry,
+            table: self.table,
+            displays: self.displays,
+        };
+        crate::guardlist::regen_monster_by_name(
+            rng, &mut sink, self.table, self.state, &map_name, x, y, name,
+        )
+    }
+}
+
 /// `[Server] VentureServer` 的缺省常量（供调用方/测试对照）。
 #[must_use]
 pub fn venture_server_default_is_false() -> bool {
@@ -1293,6 +1335,46 @@ mod tests {
             let mut b = RandomNumber::with_seed(24680);
             assert_eq!(a.random(), b.random(), "race {race} 不应抽任何数");
         }
+    }
+
+    /// **卡 `openmir2-run-gap-monster-specials`（RNG 判据）**：三种专用怪的 ctor
+    /// `Random(1500)` 与 oracle **同点同次**抽。
+    ///
+    /// - `BeeQueen : AnimalObject`（`BeeQueen.cs:9`）：Base 2 抽 + Animal 2 抽 → 派生
+    ///   `SearchTime = Random(1500) + 2500`（`BeeQueen.cs:17`）。
+    /// - `SpiderHouseMonster : AnimalObject`（`SpiderHouseMonster.cs:9`）：同序、同式（`:17`）。
+    /// - `CloneMonster : MonsterObject`（`Clone.cs:7`）：Base 2 + Animal 2 + MonsterObject 1
+    ///   → 派生 `SearchTime = Random(1500) + 1500`（`Clone.cs:11`）。
+    #[test]
+    fn special_monster_ctor_draws_match_oracle_order() {
+        // 103 / 116：第 5 抽（索引 4）是派生 ctor 的 `Random(1500)`。
+        for race in [103i16, 116] {
+            let mut a = RandomNumber::with_seed(777);
+            let d = draw_monster_construct(&mut a, race);
+            let mut b = RandomNumber::with_seed(777);
+            let _run_tick = b.random_below(1500); // BaseObject.cs:439
+            let _base_search = b.random_below(2000) + 2000; // BaseObject.cs:441
+            let _attack = b.random_below(3000); // AnimalObject.cs:76
+            let _walk = b.random_below(3000); // AnimalObject.cs:77
+            let expected = b.random_below(1500) + 2500; // BeeQueen.cs:17 / SpiderHouse:17
+            assert_eq!(
+                d.search_time, expected,
+                "race {race} 的派生 SearchTime 位置/基值"
+            );
+            assert_eq!(a.random(), b.random(), "race {race} 之后不得再抽/少抽");
+        }
+        // 201：Base 2 + Animal 2 + MonsterObject 1 → 派生 `Random(1500) + 1500`。
+        let mut a = RandomNumber::with_seed(777);
+        let d = draw_monster_construct(&mut a, 201);
+        let mut b = RandomNumber::with_seed(777);
+        let _run_tick = b.random_below(1500);
+        let _base_search = b.random_below(2000) + 2000;
+        let _attack = b.random_below(3000);
+        let _walk = b.random_below(3000);
+        let _monster_search = b.random_below(2000) + 3000; // MonsterObject.cs:65
+        let expected = b.random_below(1500) + 1500; // Clone.cs:11
+        assert_eq!(d.search_time, expected, "Clone 的派生 SearchTime 位置/基值");
+        assert_eq!(a.random(), b.random(), "Clone 之后不得再抽/少抽");
     }
 
     /// **判据 14（构造抽值逐抽钉死）**：`MonsterCtorDraws` 的每个字段都对应 oracle 具体 ctor 的那一抽。

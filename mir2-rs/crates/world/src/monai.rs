@@ -959,14 +959,31 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
     // `BaseObject.Run` 的**消息段**（`BaseObject.Base.cs:26-30`）：先把入队的 `RM_STRUCK` 出队，
     // 逐个 `Operate(RM_STRUCK) → Struck`（`AnimalObject.cs:118-124`）。本骨架用
     // [`crate::entity::AnimalState::pending_struck`] 承载队列（入队处 = `World::attack_once`）。
-    let pending: Vec<i32> = match world.entities.get_mut(actor_id) {
+    let pending: Vec<crate::entity::StruckMsg> = match world.entities.get_mut(actor_id) {
         Some(e) => std::mem::take(&mut e.ai.pending_struck),
         None => return,
     };
-    for hiter in pending {
+    // `CloneMonster.Operate` 覆写了 `Operate(RM_STRUCK)`（`Clone.cs:14-30`）：
+    // 恒 `return false` ⇒ `AnimalObject.Operate` 的 `SetLastHiter`/`Struck` 都不执行；
+    // 只做 `Master.WAbil.MP -= (ushort)wParam`。普通怪照旧。
+    let is_clone = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| e.race == crate::special_monster::RACE_CLONE_MONSTER);
+    for msg in pending {
+        if is_clone {
+            crate::special_monster::clone_operate(
+                world,
+                actor_id,
+                crate::special_monster::RM_STRUCK,
+                msg.w_param,
+                0,
+            );
+            continue;
+        }
         // oracle `if (processMsg.ActorId == ActorId && struckObject != null)`：命中者已不在场 ⇒ 跳过。
-        if world.entities.get(hiter).is_some() {
-            animal_struck(world, actor_id, hiter);
+        if world.entities.get(msg.hiter).is_some() {
+            animal_struck(world, actor_id, msg.hiter);
         }
     }
     let now = world.clock_ms;
@@ -1175,6 +1192,15 @@ pub fn monster_ai_tick(world: &mut World) {
         if is_guard_race(world.entities.get(id).map_or(0, |e| e.race)) {
             // `NormNpc.Run`（`NormNpc.cs:1604-1611`）→ `base.Run()` = `AnimalObject.Run`
             // （HolySeize 到期）→ `BaseObject.Run`。
+            animal_run(world, id);
+            base_object_run_monster(world, id);
+            continue;
+        }
+        // 专用怪 `BeeQueen`/`SpiderHouseMonster` 覆写 `Run`（`BeeQueen.cs:51-79` /
+        // `SpiderHouseMonster.cs:45-73`）：只有 `CanMove`/`WalkTick`/`AttackTick` 三段 +
+        // `base.Run()`，**不**走 `MonsterObject.Run` 的 Think/AttackTarget/GotoTargetXY/
+        // Wondering/CheckRoyalty/CrazyMode 段。
+        if crate::special_monster::special_monster_run(world, id) {
             animal_run(world, id);
             base_object_run_monster(world, id);
             continue;
@@ -1841,7 +1867,16 @@ mod tests {
         let gone = player(&mut world, 12, 10);
         let live = player(&mut world, 11, 10);
         world.entities.remove(gone);
-        world.entities.get_mut(mid).unwrap().ai.pending_struck = vec![gone, live];
+        world.entities.get_mut(mid).unwrap().ai.pending_struck = vec![
+            crate::entity::StruckMsg {
+                hiter: gone,
+                w_param: 0,
+            },
+            crate::entity::StruckMsg {
+                hiter: live,
+                w_param: 0,
+            },
+        ];
         base_object_run_monster(&mut world, mid);
         let e = world.entities.get(mid).unwrap();
         assert!(e.ai.pending_struck.is_empty(), "队列应被出队清空");
@@ -2189,7 +2224,10 @@ mod tests {
         let mut world = World::new(30, 30);
         let gid = race_monster(&mut world, 11, 10, 10);
         let hitter = player(&mut world, 11, 10);
-        world.entities.get_mut(gid).unwrap().ai.pending_struck = vec![hitter];
+        world.entities.get_mut(gid).unwrap().ai.pending_struck = vec![crate::entity::StruckMsg {
+            hiter: hitter,
+            w_param: 0,
+        }];
         world.clock_ms = 200;
         monster_ai_tick(&mut world);
         let e = world.entities.get(gid).unwrap();

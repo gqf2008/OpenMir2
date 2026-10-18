@@ -259,7 +259,7 @@ pub struct AnimalState {
     /// [`crate::monai::base_object_run_monster`]（= 怪物自己的 `base.Run()`）在开头出队处理，
     /// 使 `Struck` 的取数落在「怪自己的 `base.Run`」这个 site（与 oracle 同），
     /// 而不是攻击方的结算处。
-    pub pending_struck: Vec<i32>,
+    pub pending_struck: Vec<StruckMsg>,
     /// `BaseObject.StruckTick`（`AnimalObject.cs:336` 的 `StruckTick = GetTickCount()`）。
     pub struck_tick: i64,
     /// `BaseObject.Animal`（`BaseObject.cs:161`，构造缺省 `false`；`BaseObject.cs:2602` 的
@@ -350,6 +350,19 @@ impl Default for AnimalState {
     }
 }
 
+/// `RM_STRUCK` 的入队载荷（oracle `SendMsg(target, RM_STRUCK, nPower, …, ActorId)`）。
+///
+/// `w_param` = `nPower`（`BaseObject.Attack.cs:61-64`：护甲减免后的实际伤害；未命中/非法目标 = 0）。
+/// `CloneMonster.Operate` 的 `Master.WAbil.MP -= (ushort)wParam` 读它
+/// （`Clone.cs:24-27`）；普通怪走 `AnimalObject.Operate`（只用 `ActorId` 找命中者）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StruckMsg {
+    /// `ProcessMessage.ActorId`（命中者）。
+    pub hiter: i32,
+    /// `ProcessMessage.wParam`（= `nPower`）。
+    pub w_param: i32,
+}
+
 /// `BaseObject` 中参与本骨架（tick / AOI / 移动）的字段子集。
 ///
 /// S1 起 `Entity` 直接就是 bevy 的**组件**（每个实体一个组件），由
@@ -378,6 +391,18 @@ pub struct Entity {
     ///
     /// 归 `openmir2-m3-pet-slave-summon`（⑨-2）建立、`openmir2-m3-pet-slave-lifecycle`（⑨-3）清理。
     pub slave_list: Vec<i32>,
+    /// C# `BaseObject.StickMode`（`BaseObject.cs:173`；ctor `:403` 置 `false`）。
+    ///
+    /// `BeeQueen`/`SpiderHouseMonster` ctor 显式置 `true`（`BeeQueen.cs:19`、
+    /// `SpiderHouseMonster.cs:19`），由 [`crate::special_monster::apply_ctor_fields`] 落字段。
+    /// 消费点：44 火焰球的推挤门 `!target.StickMode`（`MagicManager.cs:1048`）。
+    pub stick_mode: bool,
+    /// C# `BeeQueen.BeeList` / `SpiderHouseMonster._bbList`（`BeeQueen.cs:11` /
+    /// `SpiderHouseMonster.cs:11`）——产出的宝宝 actor id 列表（**插入序**）。
+    ///
+    /// oracle 是 `IList<IActor>` 强引用；本骨架存 id，实体已不在仓库时按「已不可达」
+    /// 处理（清理段等价于 `Death || Ghost`）。
+    pub special_children: Vec<i32>,
     /// C# `AnimalObject.IsSlave`（`AnimalObject.cs:54`）。
     pub is_slave: bool,
     /// C# `AnimalObject.SlaveExpLevel`（`AnimalObject.cs:27`）——宝宝等级（召唤时/跨服时设定；
@@ -693,6 +718,9 @@ impl Entity {
             master: None,
             slave_relax: false,
             slave_list: Vec::new(),
+            // `BaseObject.cs:403`：ctor `StickMode = false`；两类虫后由 ctor 等价点置 true。
+            stick_mode: false,
+            special_children: Vec::new(),
             is_slave: false,
             slave_exp_level: 0,
             slave_make_level: 0,

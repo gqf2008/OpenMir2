@@ -709,6 +709,16 @@ pub struct World {
     /// 由效果体（23/24/33/47）入队，宿主调 `World::deliver_mag_struck` 逐目标处理
     /// （`R(1000)` → `MSD` → `nDamage>0` 链）。队列为空时零行为变化。
     pub pending_mag_struck: Vec<PendingMagStruck>,
+    /// **卡 `openmir2-run-gap-monster-specials`**：待执行的 `Operate(RM_ZEN_BEE)`
+    /// （`BeeQueen`/`SpiderHouseMonster` 产仔），由 [`crate::slave::World::deliver_self_delay_msgs`]
+    /// 在 500ms 自投递到点时入队；宿主用 [`World::flush_special_spawns`] 在同一条 `rng` 上造怪。
+    pub pending_special_spawns: Vec<crate::special_monster::SpecialSpawnRequest>,
+    /// 专用怪 `SendRefMsg(RM_HIT, …)` 的帧事件（宿主出 `SM_HIT`；保序）。
+    pub pending_special_ref_msgs: Vec<crate::special_monster::SpecialRefMsg>,
+    /// `GameSvrConf.Bee`（`GameSvrConf.cs:1316` 缺省 `"蝙蝠"`；`ServerConf.cs:100` 读 `[Names] Bee`）。
+    pub bee_name: String,
+    /// `GameSvrConf.Spider`（`GameSvrConf.cs:1317` 缺省 `"爆裂蜘蛛"`；`ServerConf.cs:101` 读 `[Names] Spider`）。
+    pub spider_name: String,
     /// **P3-B5**：`SystemShare.EventMgr.Events` 的火墙事件表（插入序 = `EventMgr.AddEvent` 序）。
     ///
     /// `EventProcessor.ExecuteInternal`（`:31-48`）逆插入序遍历、每事件 `RunTick=500ms` 门；
@@ -860,6 +870,10 @@ impl World {
             spirit_mutiny_tick: 0,
             slave_self_delay_enabled: false,
             pending_mag_struck: Vec::new(),
+            pending_special_spawns: Vec::new(),
+            pending_special_ref_msgs: Vec::new(),
+            bee_name: crate::special_monster::DEFAULT_BEE_NAME.to_string(),
+            spider_name: crate::special_monster::DEFAULT_SPIDER_NAME.to_string(),
             fire_burn_events: Vec::new(),
             event_registered: false,
             self_delay_msgs: Vec::new(),
@@ -1533,7 +1547,7 @@ impl World {
             level,
             caster.level,
             t.level,
-            false, // `StickMode` 未建模（登记）
+            t.stick_mode, // `BaseObject.StickMode`（`BeeQueen`/`SpiderHouseMonster` ctor 置 true）
         );
         SpellStrikeOutcome {
             target: Some(tid),
@@ -2295,6 +2309,35 @@ impl World {
             let Some(mut t) = self.entities.get(msg.target_id).cloned() else {
                 continue;
             };
+            // `CloneMonster.Operate`（`Clone.cs:14-30`）吞掉 `RM_MAGSTRUCK`（以及
+            // `RM_MAGSTRUCK_MINE` 等一切消息）⇒ **不**跑 `BaseObject.Base.cs:618-686`
+            // 的 `R(1000)`/MSD/`StruckDamage` 段；只做 `Master.MP -= (ushort)wParam`。
+            // 已知的所有发送点 `wParam` 都是 0（`MagicManager.cs:1111/1138`、
+            // `BaseObject.Base.cs:726`）⇒ 数值上 MP 不变，但 `MP <= 0 ⇒ HP = 0` 仍生效。
+            if t.race == crate::special_monster::RACE_CLONE_MONSTER {
+                let ident = if msg.mine {
+                    crate::special_monster::RM_MAGSTRUCK_MINE
+                } else {
+                    crate::special_monster::RM_MAGSTRUCK
+                };
+                let clone_id = msg.target_id;
+                crate::special_monster::clone_operate(self, clone_id, ident, 0, 0);
+                let (hp_after, max_hp) = self
+                    .entities
+                    .get(clone_id)
+                    .map_or((t.hp, t.max_hp), |e| (e.hp, e.max_hp));
+                out.push(MagStruckOutcome {
+                    target_id: clone_id,
+                    caster_id: msg.caster_id,
+                    damage: 0,
+                    hp_after,
+                    max_hp,
+                    is_player: false,
+                    name_color: false,
+                    chr_color: 0,
+                });
+                continue;
+            }
             let is_monster = t.race >= crate::entity::ACTOR_RACE_ANIMAL;
             // `:620-623` —— 只对怪物的 `RM_MAGSTRUCK`（**不是** `RM_MAGSTRUCK_MINE`）取
             // `Random(1000)`（与伤害无关）；`!RushMode` 是 P3-B5 补上的第三道门。
@@ -4775,6 +4818,9 @@ impl World {
         e.ctor_draws = ctor;
         // 生成期取数已全部完成（本函数不再抽随机数）；把结果写进 AI 初始态。
         e.ai.seed_from_spawn(dir, cool_eye, &ctor, self.clock_ms);
+        // 专用怪 ctor 的非抽数字段（`ViewRange`/`SearchTick`/`StickMode`；
+        // `BeeQueen.cs:13-21`、`SpiderHouseMonster.cs:13-21`、`Clone.cs:9-12`）。
+        crate::special_monster::apply_ctor_fields(&mut e, self.clock_ms);
         // `BaseObject` ctor `AutoRecoveryTick = GetTickCount()`（`BaseObject.cs:445`）：
         // 恢复段从实体落库那一刻起算。
         e.auto_recovery_tick = self.clock_ms;
@@ -5130,12 +5176,21 @@ impl World {
             // `SetLastHiter(攻击方)`（`AnimalObject.cs:118-124`）。这里在结算之后立刻登记：
             // 本次 `_Attack` 期间的 `StruckDamage` 仍看到旧的 `LastHiter`，与 C# 同序。
             if target.race > crate::entity::ACTOR_RACE_PLAY {
-                e.set_last_hiter(actor_id, now);
-                // `targetObject.SendMsg(targetObject, RM_STRUCK, …)`（`BaseObject.Attack.cs:61-64`）
+                // `CloneMonster.Operate` 覆盖了 `RM_STRUCK` 的 `base.Operate`
+                // （`Clone.cs:14-30` 恒 `return false`）⇒ `AnimalObject.Operate` 的
+                // `SetLastHiter` 不会执行。普通怪照旧。
+                if target.race != crate::special_monster::RACE_CLONE_MONSTER {
+                    e.set_last_hiter(actor_id, now);
+                }
+                // `targetObject.SendMsg(targetObject, RM_STRUCK, nPower, …)`（`BaseObject.Attack.cs:61-64`）
                 // 的**入队等价物**：`SendMsg` 只在 `!Ghost` 时入队（`BaseObject.Message.cs:152-183`）。
+                // `wParam = nPower`（护甲减免后的实际伤害）随队携带，供 `CloneMonster` 扣主人 MP。
                 // 出队处理在目标的 `base.Run`（[`crate::monai::base_object_run_monster`]）。
                 if !e.ghost {
-                    e.ai.pending_struck.push(actor_id);
+                    e.ai.pending_struck.push(crate::entity::StruckMsg {
+                        hiter: actor_id,
+                        w_param: i32::from(outcome.damage),
+                    });
                 }
             }
         }

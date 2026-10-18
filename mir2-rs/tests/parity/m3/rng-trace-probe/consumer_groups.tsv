@@ -199,3 +199,12 @@ magic_effect	rust	crates/world/src/combat\.rs:830$	crates/world/src/combat.rs:83
 # `RecallSlave`/`MapRandomMove` 增加 `MonsterObject.Run`，同一 oracle 函数 ⇒ 同组）。
 player_run	csharp	PlayObject\.Run@PlayObject\.Message\.cs:	src/M2Server/Player/PlayObject.Message.cs:283	CheckDupObj 的 `RandomByte(8)`（:283；三处门 3s/10s/20s 全过才抽，含 `<20000` 上限）
 player_run	rust	crates/world/src/run_gap\.rs:	crates/world/src/run_gap.rs	dup_push_dir（CheckDupObj 推挤方向；独立文件避免 world.rs 宽 pattern 误吞 MabMabe/攻击站点）
+
+# ---- 2026-10-18 追加（卡 openmir2-run-gap-monster-specials）--------------------------------
+# BeeQueen(103)/SpiderHouseMonster(116) 的派生 ctor `SearchTime = Random(1500) + 2500` 与
+# CloneMonster(201) 的 `Random(1500) + 1500` 已在 `bins/game-svr/src/mongen.rs` 的
+# `draw_monster_construct` 里按 oracle 同点同次抽（公共链 BaseObject/AnimalObject/[MonsterObject]
+# 之后、`cert.Dir` 之前）；沿用上方 `spawn rust bins/game-svr/src/mongen\.rs:` 行
+# （R-6 折叠 construct → spawn），**不新增站点/组**。
+# 机判：`mongen::tests::special_monster_ctor_draws_match_oracle_order`。
+# `Run`/`Operate` 本身零 RNG（SearchTarget / SendRefMsg / SendSelfDelayMsg / MP 扣减都不抽）。
