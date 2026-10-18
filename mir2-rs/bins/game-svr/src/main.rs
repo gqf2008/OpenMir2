@@ -2391,6 +2391,9 @@ fn handle_bag_cmd(
     // 状态迁移写回会话（`bag::*` 只在成功分支改集合；失败分支原样返回）。
     sg.use_items = state.use_items;
     sg.state.item_list = state.item_list;
+    // **G-06**：穿/脱改变 `PlayObject.UseItems` ⇒ 世界实体槽必须同帧跟上，否则后续
+    // `StruckDamage` 的 `Random(8)` 格子集合（`Index > 0` 的槽数）与 oracle 不同。
+    sync_use_items_to_entity(world, sg);
 
     if out.recalc {
         let extra_abil = world.entities.get(sg.actor_id).map(|e| e.extra_abil);
@@ -4427,6 +4430,95 @@ fn bag_items_for_save(item_list: &[game_svr::bag::BagItem]) -> Vec<Option<record
     out
 }
 
+/// 会话 `PlayObject.UseItems`（13 槽 `BagItem`）→ 世界实体 `Entity.use_items` 的**整表装载**。
+///
+/// G-06（`openmir2-persist-useitems-wiring`）：oracle 的 `PlayObject.StruckDamage`
+/// （`PlayObject.cs:2954-3036`）按 `UseItems[i] != null && Index > 0` 抽 `Random(8)` 并扣 `Dura`；
+/// Rust 实体槽此前从未装载（恒全零）⇒ 耐久永不下降、存档 Dura 是假值，且攻击路径少抽。
+///
+/// 逐字段搬运 `index/dura/dura_max/desc`（`None` = oracle 的 `null` 槽 ⇒ 默认全零槽）。
+fn apply_use_items_to_entity(
+    entity: &mut mir2_world::Entity,
+    use_items: &[Option<game_svr::bag::BagItem>],
+) {
+    for (i, slot) in entity.use_items.iter_mut().enumerate() {
+        *slot = use_items.get(i).and_then(Option::as_ref).map_or_else(
+            mir2_world::entity::UseItemSlot::default,
+            |it| mir2_world::entity::UseItemSlot {
+                index: it.index,
+                dura: it.dura,
+                dura_max: it.dura_max,
+                desc: it.desc,
+            },
+        );
+    }
+}
+
+/// 会话 → 实体：整表同步（进世界装载 / 穿脱后）。
+fn sync_use_items_to_entity(world: &mut mir2_world::World, sg: &SessionGround) {
+    if let Some(entity) = world.entities.get_mut(sg.actor_id) {
+        apply_use_items_to_entity(entity, &sg.use_items);
+    }
+}
+
+/// 会话 → 实体：单槽同步（护身符消耗只动一格，不整表覆盖，避免抹掉同 tick 的磨损）。
+fn sync_use_item_slot_to_entity(world: &mut mir2_world::World, sg: &SessionGround, slot: usize) {
+    if slot >= mir2_world::entity::USE_ITEM_SLOTS {
+        return;
+    }
+    if let Some(entity) = world.entities.get_mut(sg.actor_id) {
+        entity.use_items[slot] = sg.use_items.get(slot).and_then(Option::as_ref).map_or_else(
+            mir2_world::entity::UseItemSlot::default,
+            |it| mir2_world::entity::UseItemSlot {
+                index: it.index,
+                dura: it.dura,
+                dura_max: it.dura_max,
+                desc: it.desc,
+            },
+        );
+    }
+}
+
+/// 实体 → 会话：把世界侧磨损后的耐久面写回 `PlayObject.UseItems`。
+///
+/// oracle 的 `StruckDamage` 直接改 `UseItems[i]` 对象本身（`:2971-2986` 的 `Dura -= nDam`；
+/// 破零 `Index = 0; Dura = 0`）⇒ `MakeSaveRcd` 读到的就是磨损后的值。Rust 侧实体是磨损的
+/// 权威存储、会话是存档读取源 ⇒ 每 tick 攻击/受击排水之后必须回写。破零槽保留
+/// `MakeIndex/DuraMax/Desc`（oracle 只清 `Index`/`Dura`，对象仍在 `UseItems[i]` 里）。
+fn sync_use_items_to_session(world: &mir2_world::World, sg: &mut SessionGround) {
+    let Some(entity) = world.entities.get(sg.actor_id) else {
+        return;
+    };
+    for (i, cell) in sg
+        .use_items
+        .iter_mut()
+        .enumerate()
+        .take(mir2_world::entity::USE_ITEM_SLOTS)
+    {
+        let src = &entity.use_items[i];
+        match cell {
+            Some(it) => {
+                it.index = src.index;
+                it.dura = src.dura;
+                it.dura_max = src.dura_max;
+                it.desc = src.desc;
+            }
+            None => {
+                // 兜底：实体持有物品而会话缺槽（只在穿装同步缺失时出现）。正常路径不会走到。
+                if src.index > 0 {
+                    *cell = Some(game_svr::bag::BagItem {
+                        make_index: 0,
+                        index: src.index,
+                        dura: src.dura,
+                        dura_max: src.dura_max,
+                        desc: src.desc,
+                    });
+                }
+            }
+        }
+    }
+}
+
 /// `WorldServer.cs:262-275` 的新角色 `Abil` 初始化（**逐字段照抄**）：
 /// `Level=1`、`AC=MAC=0`、`DC=MC=SC=(ushort)MakeLong(1,2)=1`、`HP=MP=MaxHP=MaxMP=15`、
 /// `Exp=0`、`MaxExp=100`、`Weight=0`、`MaxWeight=30`。
@@ -4529,7 +4621,36 @@ fn build_save_record(
         hand_weight: w.hand_weight,
         max_hand_weight: w.max_hand_weight,
     });
-    rec.data.hum_items = Some(human_items_for_save(&sg.use_items));
+    // **G-06 存档耐久面**：磨损写在实体 `Entity.use_items` 上（`openmir2-persist-useitems-wiring`）。
+    // 会话回写发生在每 tick 的排水段，但断线/顶号存档可能落在回写之前 ⇒ 存档以实体为权威，
+    // 覆盖 `Index/Dura` 两列；`MakeIndex/DuraMax/Desc` 仍取会话对象（oracle 是同一个 `UserItem`
+    // 实例，破零只清 `Index`/`Dura`，其余字段原样写回）。
+    let mut save_use_items = sg.use_items.clone();
+    if let Some(e) = world
+        .session(chr_name)
+        .and_then(|s| s.actor_id)
+        .and_then(|id| world.entities.get(id))
+    {
+        // 只有「实体确实装载过装备」时才以实体为权威：全零实体 = 本路径从未同步（单测/旧路径），
+        // 此时会话是唯一真源。有任一非零槽（含破零后保留的 `DuraMax/Desc`）即视为已装载。
+        let loaded = e
+            .use_items
+            .iter()
+            .any(|s| s.index > 0 || s.dura_max != 0 || s.desc != [0u8; 14]);
+        if loaded {
+            for (i, cell) in save_use_items
+                .iter_mut()
+                .enumerate()
+                .take(mir2_world::entity::USE_ITEM_SLOTS)
+            {
+                if let Some(it) = cell {
+                    it.index = e.use_items[i].index;
+                    it.dura = e.use_items[i].dura;
+                }
+            }
+        }
+    }
+    rec.data.hum_items = Some(human_items_for_save(&save_use_items));
     rec.data.bag_items = Some(bag_items_for_save(&sg.state.item_list));
     // `MakeSaveRcd` 的 `StorageItems`（`WorldServer.cs:1359-1376`）：会话仓库 → 新建 50 槽数组
     // （尾槽填 `DelfautItem`），DBSvr 侧写 `characters_storageitem`（`PlayDataStorage.Save.cs:360`）。
@@ -5490,6 +5611,7 @@ fn finish_spell_tail_with(
 /// 不经过队列 ⇒ 保持直发。
 #[allow(clippy::too_many_arguments)]
 fn consume_b3_amulet(
+    world: &mut mir2_world::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -5531,12 +5653,12 @@ fn consume_b3_amulet(
             .and_then(|sg| sg.use_items.get(usize::from(slot)))
             .and_then(Option::as_ref)
             .and_then(|it| game_svr::slave::deleted_amulet_body(actor_id, it, catalog));
-        apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+        apply_amulet_use_in_world(world, ground_sessions.get_mut(chr_name), slot, used);
         if let Some(body) = body {
             send_self_frame(online, gates, chr_name, body);
         }
     } else {
-        apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+        apply_amulet_use_in_world(world, ground_sessions.get_mut(chr_name), slot, used);
         if let Some(it) = ground_sessions
             .get(chr_name)
             .and_then(|sg| sg.use_items.get(usize::from(slot)))
@@ -6102,14 +6224,24 @@ fn handle_spell_cmd(
                                     .and_then(|it| {
                                         game_svr::slave::deleted_amulet_body(actor_id, it, catalog)
                                     });
-                                apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                                apply_amulet_use_in_world(
+                                    world,
+                                    ground_sessions.get_mut(chr_name),
+                                    slot,
+                                    used,
+                                );
                                 if let Some(body) = body {
                                     send_self_frame(online, gates, chr_name, body);
                                 }
                             } else {
                                 // `Dura -= nCount*100; SendMsg(RM_DURACHANGE, idx, Dura, DuraMax, 0)`
                                 // ——`SendMsg(this)` ⇒ 仅自己（`SM_DURACHANGE`）。
-                                apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                                apply_amulet_use_in_world(
+                                    world,
+                                    ground_sessions.get_mut(chr_name),
+                                    slot,
+                                    used,
+                                );
                                 if let Some(it) = ground_sessions
                                     .get(chr_name)
                                     .and_then(|sg| sg.use_items.get(usize::from(slot)))
@@ -6454,12 +6586,22 @@ fn handle_spell_cmd(
                             .and_then(|it| {
                                 game_svr::slave::deleted_amulet_body(actor_id, it, catalog)
                             });
-                        apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                        apply_amulet_use_in_world(
+                            world,
+                            ground_sessions.get_mut(chr_name),
+                            slot,
+                            used,
+                        );
                         if let Some(body) = body {
                             send_self_frame(online, gates, chr_name, body);
                         }
                     } else {
-                        apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                        apply_amulet_use_in_world(
+                            world,
+                            ground_sessions.get_mut(chr_name),
+                            slot,
+                            used,
+                        );
                         if let Some(it) = ground_sessions
                             .get(chr_name)
                             .and_then(|sg| sg.use_items.get(usize::from(slot)))
@@ -6815,13 +6957,23 @@ fn handle_spell_cmd(
                                     .and_then(|it| {
                                         game_svr::slave::deleted_amulet_body(actor_id, it, catalog)
                                     });
-                                apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                                apply_amulet_use_in_world(
+                                    world,
+                                    ground_sessions.get_mut(chr_name),
+                                    slot,
+                                    used,
+                                );
                                 if let Some(body) = body {
                                     send_self_frame(online, gates, chr_name, body);
                                 }
                             } else {
                                 // `Dura -= nCount*100; SendMsg(RM_DURACHANGE, idx, Dura, DuraMax, 0)`
-                                apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                                apply_amulet_use_in_world(
+                                    world,
+                                    ground_sessions.get_mut(chr_name),
+                                    slot,
+                                    used,
+                                );
                                 if let Some(it) = ground_sessions
                                     .get(chr_name)
                                     .and_then(|sg| sg.use_items.get(usize::from(slot)))
@@ -7143,6 +7295,7 @@ fn handle_spell_cmd(
                         // `:322 boSpellFail = true` → `:323 CheckAmulet(1,1)` → `:325 UseAmulet(1,1)`；
                         // 门不过 ⇒ `:644-647 return false` ⇒ 恰好一条 639（无效果体、无尾、零抽）。
                         if consume_b3_amulet(
+                            world,
                             online,
                             gates,
                             ground_sessions,
@@ -7520,12 +7673,22 @@ fn handle_spell_cmd(
                                                 actor_id, it, catalog,
                                             )
                                         });
-                                    apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                                    apply_amulet_use_in_world(
+                                        world,
+                                        ground_sessions.get_mut(chr_name),
+                                        slot,
+                                        used,
+                                    );
                                     if let Some(body) = body {
                                         send_self_frame(online, gates, chr_name, body);
                                     }
                                 } else {
-                                    apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                                    apply_amulet_use_in_world(
+                                        world,
+                                        ground_sessions.get_mut(chr_name),
+                                        slot,
+                                        used,
+                                    );
                                     if let Some(it) = ground_sessions
                                         .get(chr_name)
                                         .and_then(|sg| sg.use_items.get(usize::from(slot)))
@@ -7608,6 +7771,8 @@ fn handle_spell_cmd(
                         let spec = magic::amulet_requirement(48);
                         // 每个 proper 目标各自 `CheckAmulet`/`UseAmulet`（`:908/:913`），
                         // 202 直发、642 入缓冲；回调顺序 = 目标枚举序（x→y→格内插入序）。
+                        // G-06：回调里 `world` 被外借 ⇒ 记录触动的 `UseItems` 槽，返回后同步。
+                        let mut amulet_slots_touched: Vec<usize> = Vec::new();
                         let out = world.cast_group_poison_spell(
                             actor_id,
                             magic,
@@ -7650,12 +7815,24 @@ fn handle_spell_cmd(
                                                 actor_id, it, catalog,
                                             )
                                         });
-                                    apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                                    if let Some(idx) = apply_amulet_use(
+                                        ground_sessions.get_mut(chr_name),
+                                        slot,
+                                        used,
+                                    ) {
+                                        amulet_slots_touched.push(idx);
+                                    }
                                     if let Some(body) = body {
                                         send_self_frame(online, gates, chr_name, body);
                                     }
                                 } else {
-                                    apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                                    if let Some(idx) = apply_amulet_use(
+                                        ground_sessions.get_mut(chr_name),
+                                        slot,
+                                        used,
+                                    ) {
+                                        amulet_slots_touched.push(idx);
+                                    }
                                     if let Some(it) = ground_sessions
                                         .get(chr_name)
                                         .and_then(|sg| sg.use_items.get(usize::from(slot)))
@@ -7675,6 +7852,12 @@ fn handle_spell_cmd(
                                 shape
                             },
                         );
+                        // G-06：把回调里消耗的护身符槽同步回世界实体（回调内无法借 `world`）。
+                        for idx in amulet_slots_touched {
+                            if let Some(sg) = ground_sessions.get(chr_name) {
+                                sync_use_item_slot_to_entity(world, sg, idx);
+                            }
+                        }
                         // `boTrain` = 任一目标 `Race == Play || >= Animal`。
                         emit_deferred_health(
                             world,
@@ -7979,6 +8162,7 @@ fn handle_spell_cmd(
                         // `:620 CheckAmulet(1,1)` → `:622 UseAmulet`：642/202 入缓冲/直发。
                         let amulet_ok = friend_ok
                             && consume_b3_amulet(
+                                world,
                                 online,
                                 gates,
                                 ground_sessions,
@@ -8328,17 +8512,38 @@ fn amulet_slot(
 /// `MagicBase.UseAmulet`（`MagicBase.cs:109-127`）的**宿主副作用**：按 [`mir2_world::magic::AmuletUse`]
 /// 扣耐久或清槽（oracle `Dura -= …` / `Dura = 0; Index = 0`）。
 /// 帧面（`RM_DURACHANGE` / `RM_DELITEMS`）由调用方发。
-fn apply_amulet_use(sg: Option<&mut SessionGround>, slot: u8, used: mir2_world::magic::AmuletUse) {
-    let Some(sg) = sg else { return };
+fn apply_amulet_use(
+    sg: Option<&mut SessionGround>,
+    slot: u8,
+    used: mir2_world::magic::AmuletUse,
+) -> Option<usize> {
+    let sg = sg?;
     let idx = usize::from(slot);
     if idx >= game_svr::ability::USE_ITEMS_LEN {
-        return;
+        return None;
     }
     if used.deleted {
         // oracle `UseItems[idx].Dura = 0; SendDelItems(item); UseItems[idx].Index = 0;`。
         sg.use_items[idx] = None;
     } else if let Some(it) = sg.use_items[idx].as_mut() {
         it.dura = u16::try_from(used.dura_after).unwrap_or(0);
+    }
+    Some(idx)
+}
+
+/// `apply_amulet_use` + **G-06 单槽同步**：护身符是 `PlayObject.UseItems` 成员 ⇒ 磨损循环的
+/// `Index > 0` 集合与 `Dura` 都读世界实体槽；消耗只动这一格，单槽同步（整表同步会覆盖同 tick
+/// 其它格的世界侧磨损）。`cast_group_poison_spell` 的回调里 `world` 被外借 ⇒ 那里改用
+/// [`apply_amulet_use`] 收集槽号、调用返回后统一同步。
+fn apply_amulet_use_in_world(
+    world: &mut mir2_world::World,
+    sg: Option<&mut SessionGround>,
+    slot: u8,
+    used: mir2_world::magic::AmuletUse,
+) {
+    let Some(sg) = sg else { return };
+    if let Some(idx) = apply_amulet_use(Some(&mut *sg), slot, used) {
+        sync_use_item_slot_to_entity(world, sg, idx);
     }
 }
 
@@ -12857,6 +13062,23 @@ fn sim_loop(
                                                             "进世界后找不到 actor_id={id} 的实体 ⇒ 攻击/命中属性未装载（登记）"
                                                         );
                                                     }
+                                                    // **G-06（`openmir2-persist-useitems-wiring`）**：
+                                                    // 会话 `PlayObject.UseItems` 同时装载进世界实体槽
+                                                    // （`PlayObject.cs:1163-1176` 的 `GetHumData` 之后的
+                                                    // 对象同一性）——耐久循环读的是实体槽，不装载就恒全零。
+                                                    let session_use_items =
+                                                        use_items_from(d.hum_items.as_deref());
+                                                    if let Some(e) = world.entities.get_mut(id) {
+                                                        apply_use_items_to_entity(
+                                                            e,
+                                                            &session_use_items,
+                                                        );
+                                                    } else {
+                                                        glog!(
+                                                            "WRN",
+                                                            "进世界后找不到 actor_id={id} 的实体 ⇒ 装备槽未装载（登记）"
+                                                        );
+                                                    }
                                                     ground_sessions.insert(
                                                         head.chr_name.clone(),
                                                         SessionGround {
@@ -12885,9 +13107,7 @@ fn sim_loop(
                                                                 enter_cfg.string_conf.canot_pick_up_item(),
                                                             )),
                                                             // `PlayObject.UseItems`（13 槽，保位）。
-                                                            use_items: use_items_from(
-                                                                d.hum_items.as_deref(),
-                                                            ),
+                                                            use_items: session_use_items,
                                                             // `RecalcAbilitys` 的 **prior**：登录时首次重算的
                                                             // `SubAbility`（后续装备/卸下重算在此之上累加，T-18）。
                                                             sub: out.sub,
@@ -13460,6 +13680,13 @@ fn sim_loop(
         );
         for (chr, n) in aoi_frames_this_tick {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
+        }
+        // **G-06 耐久回写（`openmir2-persist-useitems-wiring`）**：本 tick 的攻击/受击路径
+        // （`PlayObject.StruckDamage` 的耐久段）只改世界实体 `Entity.use_items`；oracle 改的是
+        // 会话 `PlayObject.UseItems` 对象本身。这里在全部战斗/术法排水之后、周期存档之前整表回写，
+        // 保证同 tick 的 `DB_SAVEHUMANRCD` 读到磨损后的 `Dura`（无抽数、无帧面）。
+        for sg in ground_sessions.values_mut() {
+            sync_use_items_to_session(&world, sg);
         }
         // 周期存档（oracle `WorldServer.cs:698-703` / `ProcessHumans`）：oracle 在
         // `playObject.Run()` **之后**才查 `SaveRcdTick` ⇒ 本段必须在 [`drain_run_downlinks`] 之后，
@@ -16595,6 +16822,351 @@ mod tests {
             "尾槽 = 默认物品（Index 0）"
         );
         assert_eq!(stor[49].as_ref().unwrap().make_index, 0);
+    }
+
+    // ============ G-06（`openmir2-persist-useitems-wiring`）：装备耐久装载/磨损/回写/存档 ============
+
+    /// 记账随机源：耐久段唯一取数入口是 `random_below`；逐次记下上界并返回脚本值。
+    ///
+    /// 用途是证明**取数次数与顺序**（`Random(10)` 一次、每个 `Index > 0` 槽一次 `Random(8)`），
+    /// 而不是复刻种子序列（种子序列由 `struck_durability_vectors` 的真身账本覆盖）。
+    struct LedgerRandom {
+        draws: Vec<i32>,
+        values: std::collections::VecDeque<i32>,
+    }
+
+    impl LedgerRandom {
+        fn new(values: Vec<i32>) -> Self {
+            Self {
+                draws: Vec::new(),
+                values: values.into(),
+            }
+        }
+    }
+
+    impl mir2_shared::rng::RandomSource for LedgerRandom {
+        fn random(&mut self) -> i32 {
+            unreachable!("耐久段不调 Random()")
+        }
+        fn random_below(&mut self, value: i32) -> i32 {
+            self.draws.push(value);
+            self.values.pop_front().expect("取数超出脚本：多抽了一次")
+        }
+        fn random_range(&mut self, _min_value: i32, _max_value: i32) -> i32 {
+            unreachable!("耐久段不调 Random(min,max)")
+        }
+        fn next_double(&mut self) -> f64 {
+            unreachable!("耐久段不调 NextDouble()")
+        }
+    }
+
+    fn use_slot(
+        index: u16,
+        dura: u16,
+        dura_max: u16,
+        desc: [u8; 14],
+    ) -> mir2_world::entity::UseItemSlot {
+        mir2_world::entity::UseItemSlot {
+            index,
+            dura,
+            dura_max,
+            desc,
+        }
+    }
+
+    /// 玩家目标（耐久段只对 `Race == ActorRace.Play` 生效，`:2954` 的 override）。
+    fn durability_player(items: &[(usize, u16, u16)]) -> mir2_world::Entity {
+        let mut e = mir2_world::Entity::new(0, "hero", 10, 10);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        e.hp = 30_000;
+        e.max_hp = 30_000;
+        for &(slot, index, dura) in items {
+            e.use_items[slot] = use_slot(index, dura, dura, [0; 14]);
+        }
+        e
+    }
+
+    fn old_user_item(
+        make_index: i32,
+        index: u16,
+        dura: u16,
+        dura_max: u16,
+        desc: u8,
+    ) -> record::ServerUserItem {
+        record::ServerUserItem {
+            make_index,
+            index,
+            dura,
+            dura_max,
+            desc: Some(vec![desc; 14]),
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        }
+    }
+
+    /// 判据①：登录/进世界把会话装备槽（`index/dura/dura_max/Desc`）装载进实体，且沿用
+    /// `GetHumData` 的 Helmet/Necklace 交换口径。
+    ///
+    /// 牙：删掉 [`apply_use_items_to_entity`] 的逐槽赋值（或漏掉 `desc/dura_max`）⇒ 必红。
+    #[test]
+    fn enter_loads_session_use_items_into_entity() {
+        use game_svr::ability::{SLOT_DRESS, SLOT_HELMET, SLOT_NECKLACE, SLOT_WEAPON};
+        let mut rec = vec![Some(default_server_item()); game_svr::ability::USE_ITEMS_LEN];
+        rec[SLOT_DRESS] = Some(old_user_item(7001, 11, 100, 200, 7));
+        // 记录 `HumItems[Helmet]` → `UseItems[Necklace]`；`HumItems[Necklace]` → `UseItems[Helmet]`
+        // （`WorldServer.cs:1163-1176` 的交换）。
+        rec[SLOT_HELMET] = Some(old_user_item(7002, 22, 33, 44, 2));
+        rec[SLOT_NECKLACE] = Some(old_user_item(7003, 55, 66, 77, 3));
+
+        let session_items = use_items_from(Some(&rec));
+        assert_eq!(
+            session_items[SLOT_NECKLACE].as_ref().unwrap().index,
+            22,
+            "GetHumData：HumItems[Helmet] 落到 UseItems[Necklace]"
+        );
+        assert_eq!(
+            session_items[SLOT_HELMET].as_ref().unwrap().index,
+            55,
+            "GetHumData：HumItems[Necklace] 落到 UseItems[Helmet]"
+        );
+
+        let mut entity = mir2_world::Entity::new(0, "hero", 10, 10);
+        apply_use_items_to_entity(&mut entity, &session_items);
+        assert_eq!(
+            entity.use_items[SLOT_DRESS],
+            use_slot(11, 100, 200, [7; 14]),
+            "衣服槽逐字段装载（index/dura/dura_max/desc）"
+        );
+        assert_eq!(
+            entity.use_items[SLOT_NECKLACE],
+            use_slot(22, 33, 44, [2; 14])
+        );
+        assert_eq!(entity.use_items[SLOT_HELMET], use_slot(55, 66, 77, [3; 14]));
+        assert_eq!(
+            entity.use_items[SLOT_WEAPON],
+            mir2_world::entity::UseItemSlot::default(),
+            "空槽 = oracle 的 null/Index 0"
+        );
+    }
+
+    /// 判据②：攻击命中后衣服位耐久下降，且**实体写回**生效（`attack_once` 若只回写 `hp` ⇒ 必红）。
+    /// 随后实体 → 会话回写，会话 `UseItems` 的 `Dura` 与实体一致（存档读它）。
+    #[test]
+    fn attack_hit_wears_dress_durability_and_syncs_to_session() {
+        use game_svr::ability::SLOT_DRESS;
+        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        world.clock_ms = 100_000;
+
+        let mut hero = durability_player(&[(SLOT_DRESS, 11, 60_000)]);
+        hero.use_items[SLOT_DRESS].dura_max = 60_000;
+        let hero_id = world.add_entity(hero);
+
+        let mut foe = mir2_world::Entity::new(0, "foe", 11, 10);
+        foe.race = mir2_world::ACTOR_RACE_MONSTER;
+        // LoByte == HiByte == 10 ⇒ 攻击力恰为 10（`get_attack_power` 的 `random_range(0,1)` 返回 0）。
+        foe.dc = 10 | (10 << 8);
+        let foe_id = world.add_entity(foe);
+
+        world.attack_cmd(foe_id, hero_id);
+        world.tick();
+
+        let dura_after =
+            world.entities.get(hero_id).expect("目标仍在世界").use_items[SLOT_DRESS].dura;
+        assert!(
+            (59_986..=59_995).contains(&dura_after),
+            "命中 ⇒ 衣服位扣 `Random(10)+5`（5..=14），实得 {dura_after}"
+        );
+
+        let mut sg = test_session_ground(hero_id);
+        sg.use_items[SLOT_DRESS] = Some(game_svr::bag::BagItem {
+            make_index: 7001,
+            index: 11,
+            dura: 60_000,
+            dura_max: 60_000,
+            desc: [7; 14],
+        });
+        sync_use_items_to_session(&world, &mut sg);
+        let saved = sg.use_items[SLOT_DRESS].as_ref().expect("仍装备");
+        assert_eq!(saved.dura, dura_after, "实体磨损回写会话（存档源）");
+        assert_eq!(saved.make_index, 7001, "回写只动耐久面，不动 MakeIndex");
+    }
+
+    /// 判据③：耐久到 0 的 oracle 行为（`PlayObject.cs:2970-2986` 实测：**不是 `RemoveItem`**）：
+    /// 衣服位特判里 `nDura == nDam` ⇒ `SendDelItems` + `Index = 0` + `Dura = 0`（对象仍在槽位，
+    /// `DuraMax/Desc` 保留），并且**同一击的逐格循环少抽一次** `Random(8)`。
+    ///
+    /// 取数脚本：`Random(10)=0` ⇒ `nDam=5`；`Random(8)=1` ⇒ 武器不磨损。总抽数 = 2。
+    #[test]
+    fn durability_break_matches_oracle_and_skips_that_slots_random8() {
+        use game_svr::ability::{SLOT_DRESS, SLOT_WEAPON};
+        let mut hero = durability_player(&[(SLOT_DRESS, 11, 5), (SLOT_WEAPON, 22, 500)]);
+        hero.use_items[SLOT_DRESS].dura_max = 6000;
+        hero.use_items[SLOT_DRESS].desc = [7; 14];
+        let mut rng = LedgerRandom::new(vec![0, 1]);
+        mir2_world::combat::struck_damage_durability(&mut rng, &mut hero);
+
+        assert_eq!(
+            rng.draws,
+            vec![10, 8],
+            "衣服位破零后清 Index ⇒ 循环里只剩武器抽一次 Random(8)"
+        );
+        assert_eq!(hero.use_items[SLOT_DRESS].index, 0, "破零清 Index");
+        assert_eq!(hero.use_items[SLOT_DRESS].dura, 0, "破零清 Dura");
+        assert_eq!(
+            hero.use_items[SLOT_DRESS].dura_max, 6000,
+            "oracle 不清 DuraMax（对象仍在 UseItems[i]）"
+        );
+        assert_eq!(
+            hero.use_items[SLOT_DRESS].desc, [7; 14],
+            "oracle 不清 Desc（存档 ToServerItem 原样写回）"
+        );
+        assert_eq!(
+            hero.use_items[SLOT_WEAPON].dura, 500,
+            "Random(8)=1 ⇒ 不磨损"
+        );
+    }
+
+    /// 判据④：`Random(8)` 次数与顺序（固定脚本）：`Random(10)` 一次 → 按**槽位升序**对每个
+    /// `Index > 0` 的槽各一次 `Random(8)`；衣服位特判不抽数但会扣耐久。
+    #[test]
+    fn random8_draws_are_per_equipped_slot_in_slot_order() {
+        use game_svr::ability::{SLOT_DRESS, SLOT_RING_L, SLOT_WEAPON};
+        // 槽 0（衣服）/1（武器）/7（左戒指）已装备。
+        let mut hero = durability_player(&[
+            (SLOT_DRESS, 11, 100),
+            (SLOT_WEAPON, 22, 100),
+            (SLOT_RING_L, 33, 100),
+        ]);
+        // 脚本：Random(10)=0 ⇒ nDam=5；Random(8) 依次 1（槽0 不再磨损）、0（槽1 磨损）、2（槽7 不磨损）。
+        let mut rng = LedgerRandom::new(vec![0, 1, 0, 2]);
+        mir2_world::combat::struck_damage_durability(&mut rng, &mut hero);
+
+        assert_eq!(
+            rng.draws,
+            vec![10, 8, 8, 8],
+            "取数次序 = Random(10) → slot0/1/7 各一次 Random(8)"
+        );
+        assert_eq!(hero.use_items[SLOT_DRESS].dura, 95, "衣服位特判无条件扣 5");
+        assert_eq!(
+            hero.use_items[SLOT_WEAPON].dura, 95,
+            "槽1 的 Random(8)=0 ⇒ 再扣 5"
+        );
+        assert_eq!(
+            hero.use_items[SLOT_RING_L].dura, 100,
+            "槽7 的 Random(8)=2 ⇒ 不扣"
+        );
+    }
+
+    /// 判据⑤：存档写回 `Dura` 以实体为准（会话可能滞后一个排水段），并保留 13 槽
+    /// Helmet/Necklace 交换：破零槽写 `Index=0` 但保留 `MakeIndex`（oracle 的对象语义）。
+    #[test]
+    fn save_record_takes_durability_from_entity() {
+        use game_svr::ability::{SLOT_HELMET, SLOT_NECKLACE, SLOT_WEAPON};
+        use mir2_storage::MemPack;
+        let saved = SavedHuman {
+            account: "acct".into(),
+            record: stage6_record(),
+            enter_map: "0".into(),
+        };
+        let mut sg = test_session_ground(1);
+        sg.use_items[SLOT_WEAPON] = Some(game_svr::bag::BagItem {
+            make_index: 9001,
+            index: 207,
+            dura: 4000,
+            dura_max: 4000,
+            desc: [0; 14],
+        });
+        sg.use_items[SLOT_NECKLACE] = Some(game_svr::bag::BagItem::new(9002, 88));
+        sg.use_items[SLOT_HELMET] = Some(game_svr::bag::BagItem::new(9003, 99));
+
+        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        world.open_session("hero");
+        world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 11, 22), 0)
+            .expect("进世界");
+        let id = world
+            .session("hero")
+            .and_then(|s| s.actor_id)
+            .expect("会话有 actor_id");
+        {
+            let e = world.entities.get_mut(id).expect("实体在场");
+            apply_use_items_to_entity(e, &sg.use_items);
+            e.use_items[SLOT_WEAPON].dura = 1234; // 世界侧磨损
+            e.use_items[SLOT_HELMET].index = 0; // 世界侧破零
+            e.use_items[SLOT_HELMET].dura = 0;
+        }
+
+        let rec = build_save_record(&saved, "hero", &world, &sg, None);
+        let parsed = mir2_storage::SaveCharacterData::from_bytes(
+            &record::encode_save_character_data(&saved.account, "hero", &rec),
+        )
+        .expect("DBSvr 侧必须能解存档体");
+        let d = parsed.character_data.unwrap().data.unwrap();
+        let hum = d.hum_items.as_ref().expect("hum_items 非 null");
+        assert_eq!(
+            hum[SLOT_WEAPON].as_ref().unwrap().dura,
+            1234,
+            "存档 Dura 取实体（会话仍是 4000）"
+        );
+        assert_eq!(hum[SLOT_WEAPON].as_ref().unwrap().index, 207);
+        assert_eq!(
+            hum[SLOT_HELMET].as_ref().unwrap().index,
+            88,
+            "HumItems[Helmet] = UseItems[Necklace]（交换保持）"
+        );
+        let broken = hum[SLOT_NECKLACE].as_ref().expect("破零槽对象仍存在");
+        assert_eq!(broken.index, 0, "破零：Index 写 0");
+        assert_eq!(broken.dura, 0, "破零：Dura 写 0");
+        assert_eq!(
+            broken.make_index, 9003,
+            "破零保留 MakeIndex（oracle 对象语义）"
+        );
+    }
+
+    /// 判据⑥：阴性对照——无装备的玩家目标**零 `Random(8)`**（oracle `:2957` 的无条件
+    /// `Random(10)` 仍在，且槽位全零不动）。牙：把循环改成无条件抽 `Random(8)` ⇒ 必红。
+    #[test]
+    fn no_equipment_draws_zero_random8() {
+        let mut hero = durability_player(&[]);
+        let mut rng = LedgerRandom::new(vec![0]);
+        mir2_world::combat::struck_damage_durability(&mut rng, &mut hero);
+        assert_eq!(
+            rng.draws,
+            vec![10],
+            "无装备 ⇒ 零 Random(8)；Random(10) 是无条件抽（漏掉它会让全局流错位）"
+        );
+        assert!(
+            hero.use_items
+                .iter()
+                .all(|s| *s == mir2_world::entity::UseItemSlot::default()),
+            "无装备 ⇒ 槽位零动作"
+        );
+    }
+
+    /// 判据⑦（穿脱夹持）：会话 `UseItems` 的变更（穿/脱/护身符消耗走同一夹持）必须同帧同步到
+    /// 实体槽。牙：把 [`sync_use_items_to_entity`] 改成空实现（或错槽 +1）⇒ 必红。
+    #[test]
+    fn session_equipment_changes_propagate_to_entity() {
+        use game_svr::ability::SLOT_WEAPON;
+        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        let id = world.add_entity(new_player_entity("hero".to_string(), 10, 10));
+        let mut sg = test_session_ground(id);
+        sg.use_items[SLOT_WEAPON] = Some(game_svr::bag::BagItem::new(9001, 207));
+        sync_use_items_to_entity(&mut world, &sg);
+        assert_eq!(
+            world.entities.get(id).unwrap().use_items[SLOT_WEAPON].index,
+            207,
+            "穿装 ⇒ 实体槽同帧装载"
+        );
+        sg.use_items[SLOT_WEAPON] = None;
+        sync_use_items_to_entity(&mut world, &sg);
+        assert_eq!(
+            world.entities.get(id).unwrap().use_items[SLOT_WEAPON].index,
+            0,
+            "卸装 ⇒ 实体槽清空（否则磨损仍会抽这一格的 Random(8)）"
+        );
     }
 
     /// `WorldServer.cs:1213-1227`：进世界的仓库会话态从记录 `StorageItems` 读出（跳过 `null` 槽与

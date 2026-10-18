@@ -51,14 +51,22 @@ pub const USE_ITEM_SLOTS: usize = 13;
 
 /// `UserItem` 的战斗子集（`src/OpenMir2/Packets/ClientPackets/ClientUserItem.cs:14`）。
 ///
-/// 本骨架只用到 `PlayObject.StruckDamage`（`PlayObject.cs:3003-3039`）的耐久循环：
-/// 每格 `Index > 0`（= 已装备）各抽一次 `Random(8)`。`Dura` 只做减法，无消息面。
+/// 本骨架用到 `PlayObject.StruckDamage`（`PlayObject.cs:2954-3036`）的耐久面：
+/// 每格 `Index > 0`（= 已装备）各抽一次 `Random(8)`，衣服位先做特判；`Dura` 只做减法。
+///
+/// **G-06 装载面（`openmir2-persist-useitems-wiring`）**：`DuraMax`/`Desc[14]` 也随槽承载
+/// （oracle 的 `UserItem` 是同一个对象，磨损/破零只改 `Index`/`Dura`）。装载源 = 会话
+/// `PlayObject.UseItems`，写回目标同源；存档（`MakeSaveRcd`）读 `ToServerItem()` 的耐久字段。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UseItemSlot {
     /// `UserItem.Index`（0 = 空位）
     pub index: u16,
     /// `UserItem.Dura`
     pub dura: u16,
+    /// `UserItem.DuraMax`（破零时 oracle **不**清零该字段）
+    pub dura_max: u16,
+    /// `UserItem.Desc[14]`（破零时 oracle 保留原值；存档 `ToServerItem()` 原样写回）
+    pub desc: [u8; 14],
 }
 
 /// `src/Modules/SystemModule/Enums/VisibleFlag.cs`。

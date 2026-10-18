@@ -5424,6 +5424,11 @@ impl World {
         let now = self.clock_ms;
         if let Some(e) = self.entities.get_mut(target_id) {
             e.hp = target.hp;
+            // **G-06 耐久面回写（`openmir2-persist-useitems-wiring`）**：`attack_dir_grouped_poison`
+            // 在 `target` 的副本上跑 `PlayObject.StruckDamage` 的耐久段（`PlayObject.cs:2954-3036`），
+            // 只回写 `hp` 会把磨损/破零整段丢掉（实体槽永远停在受击前）。oracle 改的是会话
+            // `UseItems` 对象本身 ⇒ 这里必须把 `use_items` 一并写回实体。
+            e.use_items = target.use_items;
             // 命中者登记的**折叠**：C# 在 `_Attack` 里对 `Race > ActorRace.Play` 的目标
             // `SendMsg(RM_STRUCK)`（`BaseObject.Attack.cs:61-64`），由目标在自己的 `Run()` 里
             // `SetLastHiter(攻击方)`（`AnimalObject.cs:118-124`）。这里在结算之后立刻登记：

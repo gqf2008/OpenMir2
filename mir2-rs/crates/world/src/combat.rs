@@ -760,7 +760,7 @@ pub const ITEM_LOCATION_DRESS: usize = 0;
 ///      `CheckForOverflowUnderflow=false`，`Directory.Build.targets` 未开启 checked）
 ///      ⇒ `Dura < nDam` 时结果是**大正数**，**不破零**；
 ///   2. `if (nDura <= 0)` 对 `ushort` 等价于 `nDura == 0` ⇒ 只有 `Dura` **恰好等于** `nDam`
-///      才破零；破零后 `Index = 0`（`:2982`/`:3008`）+ `Dura = 0`（`:2985`/`:3012`）。
+///      才破零；破零后 `Index = 0`（`:2982`/`:3014`/`:3016`）+ `Dura = 0`（`:2985`/`:3017`）。
 ///
 /// 为什么必须逐字：破零清 `Index` 会改变**同一击**里逐格循环是否给该格抽 `Random(8)`
 /// （衣服位特判在循环之前跑），从而让全局 RNG 流错位。
