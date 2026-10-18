@@ -774,7 +774,9 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
     };
     if e.death {
         // 死亡分支（`BaseObject.Run` 的 else：`MakeGhost`，`:86-101`）未建模⇒直接返回；
-        // 死亡实体也不再回血（oracle 同行）。
+        // 死亡实体也不再回血（oracle 同行）。oracle 的 VerifyTick 段在 `if (!Death)` **之外** ⇒
+        // 死者同样刷新格子时间（`BaseObject.Base.cs:220-228`）。
+        world.verify_map_time(actor_id);
         return;
     }
     let health_fill_time = world.health_fill_time;
@@ -827,6 +829,9 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
         e.auto_recovery_tick = now;
     }
     target_cret_cleanup(world, actor_id, now);
+    // `BaseObject.Base.cs:223-228`：`(now - VerifyTick) > 30s` ⇒ `Envir.VerifyMapTime(...)`
+    // 刷新本格 `CellObject.AddTime`（静止怪/卫士/NPC 不被 60s 过期逐出）。不抽随机数。
+    world.verify_map_time(actor_id);
 }
 
 /// `BaseObject.Run()` 的 `TargetCret` 清理段（`BaseObject.Base.cs:111-118`）。

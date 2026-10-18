@@ -450,6 +450,15 @@ pub struct Entity {
     /// [`crate::world::World::add_entity`] 按 `clock_ms + BUFF_EPOCH_MS` 精确重盖，与 oracle ctor
     /// 「对象建立那一刻」取 `GetTickCount()` 对齐。
     pub poisoning_tick: i64,
+    /// C# `BaseObject.VerifyTick`（`BaseObject.cs:302`；ctor `:444` 置 `GetTickCount()`）——
+    /// `BaseObject.Run` 的 30s 门 `(now - VerifyTick) > 30*1000` 命中时刷新，并调用
+    /// `Envir.VerifyMapTime(CurrX, CurrY, this)`（`BaseObject.Base.cs:223-228`）刷新本格
+    /// `CellObject.AddTime`，避免静止 actor 的格子项被 60s 过期逐出（`Envirnoment.cs:858-897`）。
+    ///
+    /// 与 `poisoning_tick` 同口径：ctor 等价物 [`Entity::new`] 拿不到 `World` 时钟 ⇒ 先置 0，
+    /// 由落图/生成时刻（`World::add_entity` / `enter_map` / `spawn_monster_*` / `insert_merchant` /
+    /// `insert_npc` / 克隆体）按 `clock_ms` 精确重盖。
+    pub verify_tick: i64,
     /// C# `BaseObject.GreenPoisoningPoint`（`BaseObject.cs:117`，`MakePosion` `:1963` 置 `(byte)nPoint`）。
     /// DoT 扣血量 = `GreenPoisoningPoint + 1`（`ActorBuffSystem.cs:252`）。
     pub green_poisoning_point: u8,
@@ -650,6 +659,8 @@ impl Entity {
             // `CharStatus` 未显式赋值 ⇒ int 缺省 0；`PoisoningTick` ctor 置 `GetTickCount()`
             // （本骨架用模拟开机基 `BUFF_EPOCH_MS`；精确落图时刻由 `World::add_entity` 重盖）。
             poisoning_tick: crate::buff::BUFF_EPOCH_MS,
+            // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：落图时刻由 `World` 重盖。
+            verify_tick: 0,
             green_poisoning_point: 0,
             char_status: 0,
             char_status_ex: 0,

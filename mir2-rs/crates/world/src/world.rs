@@ -16,7 +16,7 @@ use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
 use mir2_shared::rng::RandomNumber;
 use mir2_world_bevy::{advance_clock_system, TickClock, TickOwnerThread, TickRunner};
 
-use crate::aoi::{search_view_range, search_view_range_death};
+use crate::aoi::{search_view_range, search_view_range_death, CELL_OBJECT_EXPIRE_MS};
 use crate::buff::{
     BuffSysMsg, BuffSystem, BuffTickOutcome, BuffType, BUFF_EPOCH_MS, BUFF_PASSES_PER_TICK,
     BUFF_PASS_INTERVAL_MS, MAX_STATUS_ATTRIBUTE,
@@ -744,6 +744,24 @@ pub struct SpaceMoveCastOutcome {
     /// oracle `if (envir != playObject.Envir && Race == ActorRace.Play) IsTimeRecall = false;`
     /// —— 本骨架无 `IsTimeRecall` 字段（登记）；这里只回报「是否跨图」供宿主/测试判读。
     pub cross_map: bool,
+}
+
+/// `BaseObject.Run` 的 `VerifyTick` 30s 门（`BaseObject.Base.cs:223`：`> 30 * 1000`）。
+///
+/// 命中后 `Envir.VerifyMapTime` 刷新本格 `CellObject.AddTime`（`Envirnoment.cs:858-897`），
+/// 静止 actor（卫士 / 固定 NPC / 停走怪）因此不会在 60s 后被 AOI 扫描当作过期项逐出。
+pub const VERIFY_MAP_TIME_MS: i64 = 30 * 1000;
+
+/// `BaseObject.CellType` 的等价物（`PlayObject.cs:1034` = Play、`AnimalObject.cs:86` = Monster、
+/// `NormNpc.cs:50` = Merchant）；`verify_map_time` 重新登记时用它保持落格类型。
+fn entity_cell_type(e: &Entity) -> CellType {
+    if e.merchant.is_some() || e.npc.is_some() {
+        CellType::Merchant
+    } else if e.race == crate::entity::ACTOR_RACE_PLAY {
+        CellType::Play
+    } else {
+        CellType::Monster
+    }
 }
 
 impl World {
@@ -3488,6 +3506,8 @@ impl World {
         // 从**实体落图那一刻**起算（buff 轴 = `clock_ms + BUFF_EPOCH_MS`，与 `buff_tick`/`make_posion` 同基）。
         // `Entity::new`（ctor 等价物）拿不到 `World` 时钟 ⇒ 在此按落图时刻精确重盖（同 `auto_recovery_tick`）。
         entity.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
+        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：按落图时刻重盖。
+        entity.verify_tick = self.clock_ms;
         let id = self.entities.insert(entity);
         self.enqueue(Command::Enter { actor_id: id });
         id
@@ -3776,6 +3796,11 @@ impl World {
             record.merchant_removed = m.removed;
         }
 
+        // **玩家 `BaseObject.Run` 的 VerifyMapTime 段**（oracle `WorldServer.cs:697` 每 ~200ms
+        // 驱动一次 `playObject.Run()`，末尾无条件 `base.Run()`）——必须在 AOI 扫描之前刷新
+        // 静止玩家的格子时间（`BaseObject.Base.cs:223-228`）。30s 门在 `verify_map_time` 内。
+        self.verify_players_map_time();
+
         // AOI 刷新：按地图、地图内按槽位顺序（顺序来自 ECS 内核的**显式槽位索引**，
         // `EcsStore::iter` 不迭代 `Query` 求顺序）；AOI 的扫描/过滤语义仍归 S2。
         let ids: Vec<(i32, usize)> = self.entities.iter().map(|e| (e.id, e.map_id)).collect();
@@ -3821,6 +3846,101 @@ impl World {
 
         self.last_tick = record.clone();
         record
+    }
+
+    /// `Envirnoment.VerifyMapTime`（`Envirnoment.cs:858-897`）的等价物 + `BaseObject.Run` 的
+    /// 30s 门（`BaseObject.Base.cs:223-228`）。
+    ///
+    /// 语义逐条照抄：
+    /// 1. `(now - VerifyTick) > 30*1000` 才动作（严格大于；命中先 `VerifyTick = now`）；
+    /// 2. 在本格 `ObjList` 中按**下标升序**扫描：`now - AddTime >= 60s` 的项**先删除**；
+    ///    C# 是 `for (i = 0; i < Count; i++)` 里的 `continue` ⇒ 删除后 `i++` **会跳过**被前移的
+    ///    下一项（照抄该怪癖，不"修"）；
+    /// 3. 未过期的项里若 `ActorObject && CellObjId == ActorId` ⇒ `AddTime = now` 并停止；
+    /// 4. 循环结束仍未命中（`boVerify == false`）⇒ `AddMapObject` 重新登记（`AddMapObject`
+    ///    同时置 `AddToMaped`/`AddObject`）。
+    ///
+    /// `DenyRefStatus` 本仓未建模（oracle ctor `:453` 恒 false、全仓无写点）⇒ 恒执行刷新。
+    /// **不消费随机数**（纯状态演进），因此五批 RNG trace / golden 逐字节不变。
+    ///
+    /// 返回 `true` = 本次过了 30s 门并执行了刷新；`false` = 未到门 / actor 不存在。
+    pub fn verify_map_time(&mut self, actor_id: i32) -> bool {
+        let now = self.clock_ms;
+        let Some(e) = self.entities.get(actor_id) else {
+            return false;
+        };
+        // `BaseObject.Base.cs:223`：`(HUtil32.GetTickCount() - VerifyTick) > 30 * 1000`。
+        if now - e.verify_tick <= VERIFY_MAP_TIME_MS {
+            return false;
+        }
+        let (x, y, map_id) = (e.x, e.y, e.map_id);
+        // `baseObject.CellType`：`PlayObject` = Play、`AnimalObject` = Monster、`NormNpc` = Merchant。
+        let cell_type = entity_cell_type(e);
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.verify_tick = now;
+        }
+        let Some(map) = self.maps.get_mut(map_id) else {
+            return true;
+        };
+        let mut bo_verify = false;
+        {
+            let (cell, cell_success) = map.get_cell_info_mut(x, y);
+            if cell_success && cell.is_available() {
+                let mut i = 0usize;
+                while i < cell.count() {
+                    let obj = cell.obj_list[i];
+                    if now - obj.add_time >= CELL_OBJECT_EXPIRE_MS {
+                        // `boVerify = true; cellInfo.Remove(i);`
+                        bo_verify = true;
+                        cell.remove_at(i);
+                        if cell.count() > 0 {
+                            // C# `for` 的 `continue` 仍执行 `i++` ⇒ 跳过前移后的下一项。
+                            i += 1;
+                            continue;
+                        }
+                        cell.clear();
+                        break;
+                    }
+                    if obj.actor_object && obj.cell_obj_id == actor_id {
+                        // `cellInfo.Update(i, ref cellObject)` ⇒ `AddTime = GetTickCount()`。
+                        cell.obj_list[i].add_time = now;
+                        bo_verify = true;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+        }
+        if !bo_verify {
+            // `AddMapObject`（`Envirnoment.cs:252-296`）：成功时置 `AddToMaped`/`AddObject`。
+            if map.add_map_object(x, y, cell_type, actor_id, now) {
+                if let Some(e) = self.entities.get_mut(actor_id) {
+                    e.add_to_mapped = true;
+                }
+            }
+        }
+        true
+    }
+
+    /// 玩家 `BaseObject.Run` 的等价路径：`PlayObject.Run()` 末尾无条件 `base.Run()`
+    /// （`PlayObject.Message.cs:765`），其中的 `VerifyTick` 段
+    /// （`BaseObject.Base.cs:223-228`）对每个在场玩家每 30s 调一次
+    /// [`World::verify_map_time`]。
+    ///
+    /// oracle 的玩家 `Run` 由 `WorldServer.cs:697` 每 ~200ms 驱动；本骨架玩家没有独立的
+    /// `Run` 方法 ⇒ 在 [`World::tick`] 的 AOI 段之前补这一趟（`race == Play && !Ghost`，
+    /// `Ghost` 玩家已从 `PlayObjectList` 移除、不再 Run，见 `WorldServer.cs:708-711`）。
+    /// 30s 门在 [`World::verify_map_time`] 内 ⇒ 常态每 tick 只是一次整数比较。
+    fn verify_players_map_time(&mut self) {
+        let ids: Vec<i32> = self
+            .entities
+            .iter()
+            .filter(|e| e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost)
+            .map(|e| e.id)
+            .collect();
+        for id in ids {
+            self.verify_map_time(id);
+        }
     }
 
     /// 进图：实体落进 `map_id` 的格子（对应 `Envirnoment.AddMapObject`）。
@@ -3935,6 +4055,8 @@ impl World {
         e.drop_items = items;
         // `BaseObject.cs:443` ctor `PoisoningTick = GetTickCount()`：按落图时刻重盖（buff 轴）。
         e.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
+        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
+        e.verify_tick = self.clock_ms;
         let id = self.entities.insert(e);
         self.enter_world(id)
     }
@@ -4032,6 +4154,8 @@ impl World {
         e.auto_recovery_tick = self.clock_ms;
         // `BaseObject.cs:443` ctor `PoisoningTick = GetTickCount()`：同上，按落图时刻重盖（buff 轴）。
         e.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
+        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：同上。
+        e.verify_tick = self.clock_ms;
         let id = self.entities.insert(e);
         if !self.enter_world(id) {
             self.entities.remove(id);
@@ -7260,5 +7384,83 @@ mod tests {
 
         // 再调：不重复投递。
         assert!(w.check_pk_status().is_empty(), "656 不得重复");
+    }
+
+    /// `World::verify_map_time` 的 30s 门与刷新（`BaseObject.Base.cs:223-228` +
+    /// `Envirnoment.cs:858-897`）。
+    ///
+    /// 红检：删掉 30s 门（无条件刷新）⇒ 第一次 `assert!(!w.verify_map_time(id))` 红；
+    /// 删掉 `cell.obj_list[i].add_time = now` ⇒ 第二次后的 `add_time` 断言红。
+    #[test]
+    fn verify_map_time_gate_refreshes_cell_add_time() {
+        let mut w = World::new(64, 64);
+        let mut e = Entity::new(0, "mon", 10, 10);
+        e.race = crate::entity::ACTOR_RACE_MONSTER;
+        let id = w.add_entity(e);
+        w.tick(); // clock=200，Enter 落格（add_time=200）；verify_tick 在 add_entity 时=0
+        assert_eq!(w.clock_ms, 200);
+        let cell_add = |w: &World| {
+            w.maps[0]
+                .cell(10, 10)
+                .obj_list
+                .iter()
+                .find(|o| o.actor_object && o.cell_obj_id == id)
+                .expect("格子项存在")
+                .add_time
+        };
+        assert_eq!(cell_add(&w), 200);
+        // 严格大于：`now - verify_tick == 30_000` 不动。
+        w.clock_ms = 30_000;
+        assert!(!w.verify_map_time(id), "等于 30s 不刷新（oracle 严格大于）");
+        assert_eq!(cell_add(&w), 200);
+        // > 30s ⇒ 刷新（`add_time = now`）。
+        w.clock_ms = 30_200;
+        assert!(w.verify_map_time(id));
+        assert_eq!(cell_add(&w), 30_200);
+        assert_eq!(w.entities.get(id).unwrap().verify_tick, 30_200);
+        // 再过 200ms 仍不到下一个 30s 门。
+        w.clock_ms = 30_400;
+        assert!(!w.verify_map_time(id));
+        assert_eq!(cell_add(&w), 30_200);
+    }
+
+    /// 找不到自己的 `CellObject` ⇒ `AddMapObject` 重新登记（`Envirnoment.cs:894`），
+    /// 并按 `baseObject.CellType` 落格（`AnimalObject.cs:86` = Monster）。
+    ///
+    /// 红检：删掉 `if !bo_verify { map.add_map_object(...) }` 支 ⇒ 格子项数断言红。
+    #[test]
+    fn verify_map_time_reinserts_missing_cell_entry() {
+        let mut w = World::new(64, 64);
+        let mut e = Entity::new(0, "mon", 10, 10);
+        e.race = crate::entity::ACTOR_RACE_MONSTER;
+        let id = w.add_entity(e);
+        w.tick();
+        {
+            let (cell, _) = w.maps[0].get_cell_info_mut(10, 10);
+            cell.obj_list.clear();
+        }
+        w.entities.get_mut(id).unwrap().add_to_mapped = false;
+        w.clock_ms = 30_200;
+        assert!(w.verify_map_time(id));
+        let cell = w.maps[0].cell(10, 10);
+        assert_eq!(cell.count(), 1, "找不到自己 ⇒ 重新 AddMapObject");
+        let obj = cell.obj_list[0];
+        assert_eq!(obj.cell_obj_id, id);
+        assert_eq!(obj.cell_type, crate::map::CellType::Monster);
+        assert_eq!(obj.add_time, 30_200);
+        assert!(w.entities.get(id).unwrap().add_to_mapped);
+    }
+
+    /// `Entity.verify_tick` 在落图/生成时 = 当时的 `clock_ms`（`BaseObject.cs:444`）。
+    ///
+    /// 红检：把 `entity.verify_tick = self.clock_ms;` 从 `add_entity` 删掉 ⇒ 恒 0 ⇒ 时钟
+    /// 从 0 直接跳到 30_200 的用例会按「已过门」刷新；本用例钉住落图时刻值。
+    #[test]
+    fn entity_verify_tick_stamped_at_enter_time() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 5_000;
+        let e = Entity::new(0, "p", 10, 10);
+        let id = w.add_entity(e);
+        assert_eq!(w.entities.get(id).unwrap().verify_tick, 5_000);
     }
 }

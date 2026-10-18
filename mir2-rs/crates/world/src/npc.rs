@@ -166,6 +166,8 @@ impl World {
         // `NormNpc.cs:42` `Race = ActorRace.NPC`（=10）；`Merchant` 继承它（只设 `RaceImg`）。
         e.race = ACTOR_RACE_NPC;
         e.map_id = spawn.map_id;
+        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
+        e.verify_tick = self.clock_ms;
         e.npc = Some(state);
         Some(self.entities.insert(e))
     }
@@ -337,6 +339,9 @@ pub fn npc_run(world: &mut World, actor_id: i32) -> NpcRunOutcome {
         // oracle `switch` 只产 0/1/2（其余 `npc = null` 整行跳过）⇒ 其余值不可达。
         Some(_) => {}
     }
+    // `NormNpc.Run`（`NormNpc.cs:1604-1611`）末尾 `base.Run()`：VerifyMapTime 段
+    // （`BaseObject.Base.cs:223-228`）——固定 NPC 静止不动，必须靠它刷新格子时间。
+    world.verify_map_time(actor_id);
     outcome
 }
 

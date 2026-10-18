@@ -8693,6 +8693,16 @@ fn world_aoi_diag(
                 continue;
             }
             same_map += 1;
+            // `nearest` 口径（本批订正）：排除不可见/已死/隐身/固定隐身/OB 模式，且要求该实体
+            // **仍在格子索引里**（`CellObject` 未被 60s 过期逐出）。否则「窗口内却 vis=0」
+            // 会被尸体/隐身/已过期实体污染（审计 §4.4：`tick #1900` 的 `nearest=1` 就是口径差）。
+            // `same_map` 保持旧口径（同图实体总数），避免改变既有读数含义。
+            if o.death || o.ghost || o.invisible || o.fixed_hide_mode || o.ob_mode {
+                continue;
+            }
+            if !entity_in_cell_index(world, o) {
+                continue;
+            }
             let d = (o.x - e.x).abs().max((o.y - e.y).abs());
             if d < nearest {
                 nearest = d;
@@ -8715,6 +8725,18 @@ fn world_aoi_diag(
         displays: displays.len(),
         sessions,
     }
+}
+
+/// 实体是否仍在格子索引里（`MapGrid` 对应格的 `ObjList` 有 `ActorObject` 且 id 匹配）。
+///
+/// AOI 诊断 `nearest` 的新口径要求（审计 §4.4：`nearest` 不能统计已被 60s 过期逐出的实体）。
+fn entity_in_cell_index(world: &mir2_world::World, e: &mir2_world::Entity) -> bool {
+    world.maps.get(e.map_id).is_some_and(|m| {
+        m.cell(e.x, e.y)
+            .obj_list
+            .iter()
+            .any(|o| o.actor_object && o.cell_obj_id == e.id)
+    })
 }
 
 /// **orphan 编码器接线首批**：本 tick 的 AOI **消失帧**（oracle `PlayObject.Run()` 的
@@ -12325,6 +12347,10 @@ fn sim_loop(
                                         );
                                         match world.enter_map(&head.chr_name, ent, map_id) {
                                             Ok(id) => {
+                                                // **诊断口径（审计 §4.4）**：`aoi_frames_total` 按
+                                                // 会话/actor 重置——同名角色重新登录时清掉上一会话
+                                                // 的累计值，避免 `af` 跨登录继承造成假绿。
+                                                aoi_frames_total.remove(&head.chr_name);
                                                 // 在线登记（`PlayObject.GateIdx`/`SocketId`）：断线、重复进世界
                                                 // （踢旧）与账号级顶号都要靠它找回该角色当前的网关连接。
                                                 online_set(
@@ -13638,6 +13664,7 @@ async fn send_raw(tx: &Arc<Mutex<OwnedWriteHalf>>, wire: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     /// **M2 RNG trace 纯度**：`seed_probe_text` 必须
     /// ① 与 C# 钩子实测的 seed=42 参照序列逐项相同（自我标尺）；
@@ -34917,5 +34944,371 @@ mod tests {
             "proper + 玩家 ⇒ InvalidCast 防御臂 ⇒ 639、无尾"
         );
         assert_eq!(sf_count(&frames, 911, SM_638), 0);
+    }
+    // ==== 本批（AOI 卫士可见性 / VerifyMapTime）判据 ====
+
+    /// 生成一只**静止**卫士（race 11；`is_guard_race` ⇒ `monster_ai_tick` 只跑
+    /// `base_object_run_monster`，不游走/不索敌）。`spawn_monster_precomputed` 在**首个 tick 前**
+    /// 直接落格（`CellObject.add_time = clock_ms`），复刻 Guardian 装载时机。
+    fn spawn_static_guard(world: &mut mir2_world::World, x: i32, y: i32, dir: u8) -> i32 {
+        world
+            .spawn_monster_precomputed(
+                "guard",
+                x,
+                y,
+                0,
+                11,
+                10,
+                0,
+                100,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                Vec::new(),
+                mir2_world::MonsterCtorDraws::default(),
+                dir,
+                false,
+            )
+            .expect("卫士生成/落格成功")
+    }
+
+    fn collect_frames(
+        rx: &mut mpsc::UnboundedReceiver<SimToGate>,
+        out: &mut Vec<(i32, u16, u16, u16, u16)>,
+    ) {
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body)
+                .expect("SM_* body 至少 12B");
+            out.push((cm.recog, cm.ident, cm.param, cm.tag, cm.series));
+        }
+    }
+
+    fn test_online_gates(
+        chr_name: &str,
+        actor_id: i32,
+    ) -> (
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+    ) {
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "up".into(),
+                chr_name: chr_name.into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id,
+            },
+        );
+        let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        (online, gates, rx0)
+    }
+
+    /// **判据① + ②**：静态卫士 `(281,661)` + 玩家 `(291,666)`（Chebyshev 10 ≤ vr 12），
+    /// 推进 400 tick × 200ms（80s，跨过两个 30s VerifyMapTime 刷新点）：
+    /// - 卫士的 `CellObject` 仍在 `(281,661)` 格内；
+    /// - 玩家可见集仍含卫士（`Show | Invisible`）；
+    /// - 恰好**一对** `SM_TURN(recog=guard, param=281, tag=661)` + `SM_FEATURECHANGED(recog=guard)`，
+    ///   且**没有** `SM_WALK`（卫士未移动）。
+    ///
+    /// 红检（本批牙①②）：删掉 `base_object_run_monster` 末尾的 `verify_map_time` ⇒ 60s 时卫士自己的
+    /// AOI 扫描（非玩家 viewer）把过期格子项删掉 ⇒ 格子项断言/可见集断言必红；把
+    /// `aoi.rs` 的 `!viewer_is_play &&` 改回去不会直接触发本条（verify 刷新使 add_time 不过期），
+    /// 由 `aoi::tests::player_viewer_skips_cell_expiry` 单独钉住。
+    #[test]
+    fn vmt_static_guard_stays_visible_beyond_60s_one_appearance_pair() {
+        let mut world = mir2_world::World::new(700, 700);
+        world.enable_monster_ai();
+        let guard = spawn_static_guard(&mut world, 281, 661, 5);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 291, 666), 0)
+            .expect("玩家进图");
+        assert_eq!(
+            world.entities.get(guard).map(|e| (e.x, e.y)),
+            Some((281, 661))
+        );
+
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            guard,
+            downlink::monster_display(5, &mir2_data::models::MonsterInfo::default()),
+        );
+        let (online, gates, mut rx) = test_online_gates("p", p);
+
+        let mut frames: Vec<(i32, u16, u16, u16, u16)> = Vec::new();
+        for _ in 0..400 {
+            world.tick();
+            let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
+            collect_frames(&mut rx, &mut frames);
+        }
+        assert_eq!(world.clock_ms, 80_000, "400 × 200ms");
+
+        // ①-1 卫士格子项仍在（未被 60s 过期逐出）。
+        let cell = world.map(0).cell(281, 661);
+        assert!(
+            cell.obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == guard),
+            "80s 后卫士 CellObject 必须仍在 (281,661)：{cell:?}"
+        );
+        // ①-2 玩家可见集仍含卫士。
+        let vis = world
+            .entities
+            .get(p)
+            .expect("玩家存在")
+            .visible_actors
+            .iter()
+            .any(|v| v.target == guard && v.flag != mir2_world::VisibleFlag::Hidden);
+        assert!(vis, "玩家 visible_actors 必须仍含卫士");
+
+        // ①-3 恰好一对出现帧；且没有 SM_WALK。
+        let turn: Vec<_> = frames
+            .iter()
+            .filter(|f| f.0 == guard && f.1 == mir2_protocol::messages::SM_TURN)
+            .collect();
+        let feat: Vec<_> = frames
+            .iter()
+            .filter(|f| f.0 == guard && f.1 == mir2_protocol::messages::SM_FEATURECHANGED)
+            .collect();
+        assert_eq!(turn.len(), 1, "恰好一条 SM_TURN：{frames:?}");
+        assert_eq!(feat.len(), 1, "恰好一条 SM_FEATURECHANGED：{frames:?}");
+        assert_eq!(turn[0].2, 281, "SM_TURN.param = x");
+        assert_eq!(turn[0].3, 661, "SM_TURN.tag = y");
+        assert_eq!(turn[0].4 & 0xFF, 5, "SM_TURN.series 低字节 = dir");
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|f| f.0 == guard && f.1 == mir2_protocol::messages::SM_WALK)
+                .count(),
+            0,
+            "卫士静止，不得有 SM_WALK"
+        );
+    }
+
+    /// **判据② 阴性对照**：到第 149 tick（29.8s）时还没过 30s 门 ⇒ `verify_tick`/`add_time`
+    /// 均保持落格初值 0，且**不重复发**出现对（整段只有 1 对）。
+    ///
+    /// 红检：把 `verify_map_time` 的 `> VERIFY_MAP_TIME_MS` 改成 `>= 0`（每 tick 刷新）⇒ 本用例
+    /// `verify_tick == 0` / `add_time == 0` 断言红（刷新本身不重复出帧，但时序口径错）。
+    #[test]
+    fn vmt_no_duplicate_appearance_before_30s_refresh() {
+        let mut world = mir2_world::World::new(700, 700);
+        world.enable_monster_ai();
+        let guard = spawn_static_guard(&mut world, 281, 661, 5);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 291, 666), 0)
+            .expect("玩家进图");
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            guard,
+            downlink::monster_display(5, &mir2_data::models::MonsterInfo::default()),
+        );
+        let (online, gates, mut rx) = test_online_gates("p", p);
+
+        let mut frames: Vec<(i32, u16, u16, u16, u16)> = Vec::new();
+        for _ in 0..149 {
+            world.tick();
+            let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
+            collect_frames(&mut rx, &mut frames);
+        }
+        assert_eq!(world.clock_ms, 29_800, "149 × 200ms");
+        assert_eq!(
+            world.entities.get(guard).unwrap().verify_tick,
+            0,
+            "未到 30s 门不得刷新 VerifyTick"
+        );
+        let add_time = world
+            .map(0)
+            .cell(281, 661)
+            .obj_list
+            .iter()
+            .find(|o| o.actor_object && o.cell_obj_id == guard)
+            .expect("格子项")
+            .add_time;
+        assert_eq!(add_time, 0, "未到 30s 门不得刷新 AddTime");
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|f| f.0 == guard && f.1 == mir2_protocol::messages::SM_TURN)
+                .count(),
+            1,
+            "29.8s 内只发一次出现帧：{frames:?}"
+        );
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|f| f.0 == guard && f.1 == mir2_protocol::messages::SM_FEATURECHANGED)
+                .count(),
+            1
+        );
+    }
+
+    /// **判据③**：固定 NPC（`NormNpc.Run` → `base.Run()`）与商人（`Merchant.Run` → `base.Run()`）
+    /// 同机制——static actor 80s 后格子项仍在、玩家可见集仍含它。
+    ///
+    /// 红检：删掉 `npc.rs::npc_run` / `merchant.rs::merchant_run` 末尾的 `verify_map_time` ⇒
+    /// 对应实体 60s 后被子 AOI 扫描逐出 ⇒ 格子项/可见集断言必红。
+    #[test]
+    fn vmt_static_npc_and_merchant_stay_visible_beyond_60s() {
+        // ---- 固定 NPC ----
+        {
+            let mut world = mir2_world::World::new(700, 700);
+            world.enable_npc_tick();
+            let npc = world
+                .insert_npc(mir2_world::NpcSpawn {
+                    name: "npc".into(),
+                    x: 281,
+                    y: 661,
+                    map_id: 0,
+                    state: mir2_world::NpcState::default(),
+                })
+                .expect("NPC 入世界");
+            assert!(world.attach_npc_to_map(npc), "NPC 落格");
+            world.open_session("p");
+            let p = world
+                .enter_map("p", new_player_entity("p".to_string(), 291, 666), 0)
+                .expect("玩家进图");
+            for _ in 0..400 {
+                world.tick();
+            }
+            assert_eq!(world.clock_ms, 80_000);
+            let cell = world.map(0).cell(281, 661);
+            assert!(
+                cell.obj_list
+                    .iter()
+                    .any(|o| o.actor_object && o.cell_obj_id == npc),
+                "80s 后固定 NPC 格子项必须仍在：{cell:?}"
+            );
+            assert!(
+                world
+                    .entities
+                    .get(p)
+                    .unwrap()
+                    .visible_actors
+                    .iter()
+                    .any(|v| v.target == npc && v.flag != mir2_world::VisibleFlag::Hidden),
+                "玩家必须仍看得见固定 NPC"
+            );
+        }
+        // ---- 商人 ----
+        {
+            let mut world = mir2_world::World::new(700, 700);
+            world.enable_merchant_tick();
+            let merchant = world
+                .insert_merchant(mir2_world::MerchantSpawn {
+                    name: "merchant".into(),
+                    x: 281,
+                    y: 661,
+                    map_id: 0,
+                    state: mir2_world::MerchantState::new(
+                        "merchant".into(),
+                        "0".into(),
+                        0,
+                        0,
+                        100,
+                        false,
+                        false,
+                        0,
+                        mir2_world::MerchantFlags::default(),
+                        Vec::new(),
+                        Vec::new(),
+                        0,
+                    ),
+                })
+                .expect("商人入世界");
+            assert!(world.attach_merchant_to_map(merchant), "商人落格");
+            world.open_session("p");
+            let p = world
+                .enter_map("p", new_player_entity("p".to_string(), 291, 666), 0)
+                .expect("玩家进图");
+            for _ in 0..400 {
+                world.tick();
+            }
+            assert_eq!(world.clock_ms, 80_000);
+            let cell = world.map(0).cell(281, 661);
+            assert!(
+                cell.obj_list
+                    .iter()
+                    .any(|o| o.actor_object && o.cell_obj_id == merchant),
+                "80s 后商人格子项必须仍在：{cell:?}"
+            );
+            assert!(
+                world
+                    .entities
+                    .get(p)
+                    .unwrap()
+                    .visible_actors
+                    .iter()
+                    .any(|v| v.target == merchant && v.flag != mir2_world::VisibleFlag::Hidden),
+                "玩家必须仍看得见商人"
+            );
+        }
+    }
+
+    /// **诊断口径**（审计 §4.4）：`nearest` 排除 death/ghost/invisible/fixed_hide_mode/ob_mode，
+    /// 且要求实体仍在格子索引。红检：删掉任一过滤 ⇒ 对应阶段的 `nearest` 断言红。
+    #[test]
+    fn world_aoi_diag_nearest_excludes_dead_ghost_and_expired() {
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        let mut m = mir2_world::Entity::new(0, "m", 12, 10);
+        m.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mon = world.add_entity(m);
+        world.tick();
+        let displays = downlink::DisplayTable::new();
+        let near = |w: &mir2_world::World| {
+            let n = world_aoi_diag(w, &displays, &std::collections::HashMap::new())
+                .sessions
+                .iter()
+                .find(|s| s.actor_id == p)
+                .expect("玩家会话")
+                .nearest;
+            if n == i32::MAX {
+                -1
+            } else {
+                n
+            }
+        };
+        assert_eq!(near(&world), 2, "活着的怪在格内 ⇒ nearest=2");
+
+        world.entities.get_mut(mon).unwrap().death = true;
+        assert_eq!(near(&world), -1, "death 不得计入 nearest");
+
+        let e = world.entities.get_mut(mon).unwrap();
+        e.death = false;
+        e.ghost = true;
+        assert_eq!(near(&world), -1, "ghost 不得计入 nearest");
+
+        for set in [0u8, 1, 2] {
+            let e = world.entities.get_mut(mon).unwrap();
+            e.ghost = false;
+            e.invisible = set == 0;
+            e.fixed_hide_mode = set == 1;
+            e.ob_mode = set == 2;
+            assert_eq!(near(&world), -1, "set={set} 不得计入 nearest");
+        }
+        let e = world.entities.get_mut(mon).unwrap();
+        e.invisible = false;
+        e.fixed_hide_mode = false;
+        e.ob_mode = false;
+
+        {
+            let (cell, _) = world.maps[0].get_cell_info_mut(12, 10);
+            cell.obj_list.clear();
+        }
+        assert_eq!(near(&world), -1, "不在格子索引的实体不得计入 nearest");
     }
 }

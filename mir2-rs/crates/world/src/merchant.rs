@@ -287,6 +287,8 @@ impl World {
         e.id = self.entities.alloc_id();
         e.race = ACTOR_RACE_MERCHANT;
         e.map_id = map_id;
+        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
+        e.verify_tick = now;
         e.merchant = Some(state);
         Some(self.entities.insert(e))
     }
@@ -748,6 +750,9 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
         map_random_move(world, actor_id);
         outcome.space_moved = true;
     }
+    // `Merchant.cs:170` 末尾 `base.Run()`：`BaseObject.Run` 的 VerifyMapTime 段
+    // （`BaseObject.Base.cs:223-228`）——刷新本格 `CellObject.AddTime`，防 60s 过期。
+    world.verify_map_time(actor_id);
     outcome
 }
 

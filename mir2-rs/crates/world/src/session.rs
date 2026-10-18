@@ -180,6 +180,9 @@ impl World {
             entity.id = self.entities.alloc_id();
         }
         entity.map_id = map_id;
+        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：ctor 等价物拿不到 `World` 时钟
+        // ⇒ 落图时刻重盖（同 `poisoning_tick` 的口径）。
+        entity.verify_tick = self.clock_ms;
         let id = self.entities.insert(entity);
         let (x, y) = {
             let e = self.entities.get(id).expect("刚插入");

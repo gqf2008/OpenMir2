@@ -1643,6 +1643,8 @@ pub fn spawn_clone(world: &mut World, caster_id: i32, caster_dir: u8) -> Option<
     e.id = clone_id;
     e.race = ACTOR_RACE_PLAY;
     e.map_id = map_id;
+    // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`（克隆体走 PlayObject ctor）。
+    e.verify_tick = world.clock_ms;
     e.view_range = PLAYER_VIEW_RANGE;
     // `PlayObject` 构造器置 `WantRefMsg = true`（`PlayObject.cs:889`）。
     e.want_ref_msg = true;

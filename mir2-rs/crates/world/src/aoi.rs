@@ -3,8 +3,11 @@
 //! 规则要点（判据① 钉住的顺序与边界）：
 //! 1. `SearchViewRange` 以 `CurrX/CurrY` 为中心扫 **边长 2*ViewRange+1 的正方形**，
 //!    **X 外层升序、Y 内层升序**；
-//! 2. 每格按 `ObjList` 下标升序；遇到"过期对象"（`GetTickCount()-AddTime >= 60s`，仅 `ActorObject`）
-//!    先删该下标，且删后若格内仍有对象则**不递增下标**（C# 的 `continue`），归零则 `Clear(); break;`
+//! 2. 每格按 `ObjList` 下标升序；**非玩家观察者**遇到"过期对象"
+//!    （`GetTickCount()-AddTime >= 60s`，仅 `ActorObject`）先删该下标，且删后若格内仍有对象则
+//!    **不递增下标**（C# 的 `continue`），归零则 `Clear(); break;`。玩家观察者
+//!    （`Race == Play`）**跳过**过期块——oracle `PlayObject.SearchViewRange` 把该块注释掉了
+//!    （`PlayObject.cs:3114-3123`）；
 //! 3. 过滤器（全部满足才可见）：`!Death && !Invisible && !Ghost && !FixedHideMode && !ObMode`
 //!    且（观察者 `Master != null || NastyMode || WantRefMsg`，或被观察者 `Master != null` 且
 //!    距离 ≤3，或被观察者 `Race == Play`）；
@@ -72,6 +75,10 @@ pub fn search_view_range(
     let viewer_master = viewer.master;
     let viewer_nasty = viewer.nasty_mode;
     let viewer_want_ref = viewer.want_ref_msg;
+    // **viewer 分流（oracle 同形）**：`PlayObject.SearchViewRange`（`PlayObject.cs:3073`）把基类
+    // 的 60s 过期块**整段注释掉**（`:3114-3123`）⇒ 玩家观察者**不删格子项**；基类
+    // `BaseObject.SearchViewRange`（`BaseObject.ViewRange.cs:95`）与 `GuardUnit`（`:155`）仍保留。
+    let viewer_is_play = viewer.race == ACTOR_RACE_PLAY;
 
     // 置位与打标（C#：IsVisibleActive=false；所有 VisibleActors 标 Hidden）
     {
@@ -102,7 +109,7 @@ pub fn search_view_range(
                 };
                 let Some(obj) = obj else { break };
                 if obj.actor_object {
-                    if now_ms - obj.add_time >= CELL_OBJECT_EXPIRE_MS {
+                    if !viewer_is_play && now_ms - obj.add_time >= CELL_OBJECT_EXPIRE_MS {
                         // C#：Remove(nIdx)；Count>0 ⇒ continue（不递增下标），否则 Clear + break
                         let (cell, _) = map.get_cell_info_mut(x, y);
                         cell.remove_at(idx);
@@ -268,4 +275,70 @@ pub fn visible_snapshot(store: &EntityStore, id: i32) -> Vec<(i32, u8)> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::{Entity, EntityStore};
+
+    fn put(map: &mut MapGrid, id: i32, x: i32, y: i32, add_time: i64) {
+        assert!(map.add_map_object(x, y, CellType::Play, id, add_time));
+    }
+
+    /// **判据④ 牙①**：玩家观察者**不执行** 60s 过期（oracle `PlayObject.cs:3114-3123` 注释块）。
+    ///
+    /// 格子项已过期（`now - add_time >= 60s`），但 viewer 是玩家 ⇒ 项仍在、仍可见。
+    /// 红检：把 `!viewer_is_play &&` 去掉（恢复基类过期）⇒ 本用例必红（格子被清、可见集空）。
+    #[test]
+    fn player_viewer_skips_cell_expiry() {
+        let mut map = MapGrid::new(32, 32);
+        let mut store = EntityStore::new();
+        let mut viewer = Entity::new(1, "p", 10, 10);
+        viewer.race = ACTOR_RACE_PLAY;
+        viewer.want_ref_msg = true;
+        viewer.view_range = 5;
+        store.insert(viewer);
+        put(&mut map, 1, 10, 10, 60_000);
+        let mut target = Entity::new(2, "guard", 11, 10);
+        target.race = ACTOR_RACE_MONSTER;
+        store.insert(target);
+        put(&mut map, 2, 11, 10, 0); // 过期（now - 0 >= 60s）
+
+        let _ = search_view_range(&mut map, &mut store, 1, 60_000);
+
+        assert_eq!(
+            map.cell(11, 10).count(),
+            1,
+            "玩家 viewer 不得删除过期格子项（oracle 注释块）"
+        );
+        let snap = visible_snapshot(&store, 1);
+        assert!(
+            snap.contains(&(2, VisibleFlag::Show as u8)),
+            "过期项仍应进入玩家可见集：{snap:?}"
+        );
+    }
+
+    /// 非玩家观察者（怪物/守卫/NPC）**保留**基类的 60s 过期（`BaseObject.ViewRange.cs:95`，
+    /// `GuardUnit.cs:155`）。红检：把 `!viewer_is_play` 去掉后玩家分支也会清理 ⇒ 本用例不受影响；
+    /// 把过期块整段删掉 ⇒ 本用例红（格子项未被删）。
+    #[test]
+    fn non_player_viewer_still_expires_cell_objects() {
+        let mut map = MapGrid::new(32, 32);
+        let mut store = EntityStore::new();
+        let mut viewer = Entity::new(1, "guard", 10, 10);
+        viewer.race = ACTOR_RACE_MONSTER;
+        viewer.view_range = 5;
+        store.insert(viewer);
+        put(&mut map, 1, 10, 10, 60_000);
+        let mut target = Entity::new(2, "stale", 11, 10);
+        target.race = ACTOR_RACE_MONSTER;
+        store.insert(target);
+        put(&mut map, 2, 11, 10, 0);
+
+        let _ = search_view_range(&mut map, &mut store, 1, 60_000);
+
+        assert_eq!(map.cell(11, 10).count(), 0, "非玩家 viewer 必须删除过期项");
+        assert!(visible_snapshot(&store, 1).is_empty());
+    }
 }

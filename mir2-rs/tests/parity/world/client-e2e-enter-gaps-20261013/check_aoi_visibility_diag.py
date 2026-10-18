@@ -24,6 +24,11 @@
   ④ 内部一致性：`new <= vis`、`vis <= same_map + 1`（self 最多 +1），违反 ⇒ RED。
   ⑤ 对每个采样打印 `nearest` vs `vr` 的窗口判读（`nearest > vr` ⇒ 窗口外 ⇒ `vis=0` 自洽），
      便于人/机复核「无怪」结论。
+  ⑥ `--strict-window`（本批新增；**默认不启用，不改变既有行为**）：若存在
+     `vis == 0 && nearest <= vr`（`nearest != -1`）⇒ **RED**。`nearest` 的新口径已排除
+     death/ghost/invisible/fixed_hide_mode/ob_mode 且要求仍在格子索引（审计
+     `audit-aoi-guard-visibility-20261018.md` §4.4）⇒ `nearest <= vr` 即「窗口内确有存活且在格的
+     最近实体」，此时 `vis==0` 就是真相机不可见缺陷，不能再只打 INFO。
 
 退出码：`0` = GREEN / `1` = RED / `2` = PREREQ_RED（缺输入或版式不达标；绝不静默通过）。
 `--selftest` 不依赖外部件（合成 fixture：none/visible 各自的绿与红、老版式 ⇒ 2、`new>vis` ⇒ 1）。
@@ -82,7 +87,9 @@ def parse_log(text: str) -> tuple[list[dict], list[dict]]:
     return samples, enters
 
 
-def check(samples: list[dict], expect: str, min_vis: int) -> tuple[int, list[str]]:
+def check(
+    samples: list[dict], expect: str, min_vis: int, strict_window: bool = False
+) -> tuple[int, list[str]]:
     msgs: list[str] = []
     if not samples:
         return 2, [
@@ -125,6 +132,29 @@ def check(samples: list[dict], expect: str, min_vis: int) -> tuple[int, list[str
     bad = [s for s in samples if s["new"] > s["vis"] or s["vis"] > s["same_map"] + 1]
     if bad:
         msgs.append(f"RED ④ 采样内部不一致（new<=vis、vis<=same_map+1 必须成立）：{bad[:3]}")
+
+    # ⑥ `--strict-window`：窗口内确有存活且在格的最近实体，却 `vis==0` ⇒ RED。
+    if strict_window:
+        window_red = [
+            s for s in samples if s["vis"] == 0 and s["nearest"] != -1 and s["nearest"] <= s["vr"]
+        ]
+        if window_red:
+            first = window_red[0]
+            msgs.append(
+                "RED ⑥ --strict-window：{} 条采样 vis==0 且 nearest<=vr（窗口内；"
+                "最近实体已按新口径排除死亡/隐身/过期）⇒ 不可见。首条 {name}({aid}) "
+                "nearest={near}<=vr={vr}".format(
+                    len(window_red),
+                    name=first["name"],
+                    aid=first["actor_id"],
+                    near=first["nearest"],
+                    vr=first["vr"],
+                )
+            )
+        else:
+            msgs.append(
+                f"OK  ⑥ --strict-window：{len(samples)} 条采样均无「vis==0 且 nearest<=vr」"
+            )
 
     # ② / ③ 模式门。
     if expect == "none":
@@ -169,18 +199,19 @@ def _line(name: str, aid: int, m: int, vr: int, vis: int, new: int, af: int, sam
 
 def selftest() -> int:
     cases = [
-        # name, log-text, expect, min_vis, want_rc
-        ("none-green", _line("aaa", 7, 26, 12, 0, 0, 0, 1726, 23), "none", 1, 0),
-        ("none-red-seen", _line("aaa", 7, 26, 12, 13, 13, 26, 1726, 2), "none", 1, 1),
-        ("none-red-af", _line("aaa", 7, 26, 12, 0, 0, 2, 1726, 23), "none", 1, 1),
-        ("visible-green", _line("aaa", 7, 26, 12, 13, 13, 26, 1726, 2), "visible", 1, 0),
-        ("visible-red-empty", _line("aaa", 7, 26, 12, 0, 0, 0, 1726, 23), "visible", 1, 1),
+        # name, log-text, expect, min_vis, want_rc, strict_window
+        ("none-green", _line("aaa", 7, 26, 12, 0, 0, 0, 1726, 23), "none", 1, 0, False),
+        ("none-red-seen", _line("aaa", 7, 26, 12, 13, 13, 26, 1726, 2), "none", 1, 1, False),
+        ("none-red-af", _line("aaa", 7, 26, 12, 0, 0, 2, 1726, 23), "none", 1, 1, False),
+        ("visible-green", _line("aaa", 7, 26, 12, 13, 13, 26, 1726, 2), "visible", 1, 0, False),
+        ("visible-red-empty", _line("aaa", 7, 26, 12, 0, 0, 0, 1726, 23), "visible", 1, 1, False),
         (
             "visible-red-no-frames",
             _line("aaa", 7, 26, 12, 3, 0, 0, 1726, 4),
             "visible",
             1,
             1,
+            False,
         ),
         (
             "prereq-old-format",
@@ -189,14 +220,20 @@ def selftest() -> int:
             "none",
             1,
             2,
+            False,
         ),
-        ("inconsistent-new-gt-vis", _line("aaa", 7, 26, 12, 1, 3, 3, 1726, 4), "report", 1, 1),
-        ("report-green", _line("aaa", 7, 26, 12, 5, 0, 10, 1726, 4), "report", 1, 0),
+        ("inconsistent-new-gt-vis", _line("aaa", 7, 26, 12, 1, 3, 3, 1726, 4), "report", 1, 1, False),
+        ("report-green", _line("aaa", 7, 26, 12, 5, 0, 10, 1726, 4), "report", 1, 0, False),
+        # ⑥ `--strict-window`：默认关闭时同一输入必须是绿（行为不变）；打开后窗口内 vis==0 必红。
+        ("strict-off-window-zero-green", _line("aaa", 7, 26, 12, 0, 0, 0, 1726, 3), "report", 1, 0, False),
+        ("strict-on-window-zero-red", _line("aaa", 7, 26, 12, 0, 0, 0, 1726, 3), "report", 1, 1, True),
+        ("strict-on-outside-zero-green", _line("aaa", 7, 26, 12, 0, 0, 0, 1726, 23), "report", 1, 0, True),
+        ("strict-on-visible-green", _line("aaa", 7, 26, 12, 2, 0, 4, 1726, 3), "report", 1, 0, True),
     ]
     bad = 0
-    for name, text, expect, min_vis, want_rc in cases:
+    for name, text, expect, min_vis, want_rc, strict_window in cases:
         samples, _ = parse_log(text)
-        rc, msgs = check(samples, expect, min_vis)
+        rc, msgs = check(samples, expect, min_vis, strict_window)
         ok = rc == want_rc
         if not ok:
             bad += 1
@@ -212,6 +249,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--log", default="", help="game-svr.out.log 路径")
     ap.add_argument("--expect", choices=["report", "none", "visible"], default="report")
     ap.add_argument("--min-vis", type=int, default=1, help="--expect visible 时的最小可见集大小")
+    ap.add_argument(
+        "--strict-window",
+        action="store_true",
+        help="窗口内（nearest<=vr）出现 vis==0 ⇒ RED（默认关闭，行为不变）",
+    )
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
@@ -233,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     samples, enters = parse_log(text)
-    rc, msgs = check(samples, args.expect, args.min_vis)
+    rc, msgs = check(samples, args.expect, args.min_vis, args.strict_window)
     if args.json:
         print(json.dumps({"rc": rc, "samples": samples, "enters": enters, "msgs": msgs}, ensure_ascii=False))
     else:
