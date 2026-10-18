@@ -134,25 +134,54 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
         }
         // `ZilKinZombi` ctor（`ZilKinZombi.cs:14`）：`ViewRange = 6`。
         96 => entity.view_range = 6,
-        // `CentipedeKingMonster` 覆盖（`CentipedeKingMonster.cs:14-15`）。
+        // `CentipedeKingMonster`（`: StickMonster`）ctor（`CentipedeKingMonster.cs:11-18`）：
+        // 先继承 `StickMonster` 的 `ViewRange=7/FixedHideMode=true/StickMode=true/Animal=true`
+        // 与 `ComeOutValue=4/AttackRange=4`，再覆盖为 `ViewRange=6/ComeOutValue=4/AttackRange=6/
+        // Animal=false`；`_attackTick = GetTickCount()`。
         107 => {
             entity.come_out_value = 4;
             entity.attack_range = 6;
+            entity.view_range = 6;
+            entity.fixed_hide_mode = true;
+            entity.stick_mode = true;
+            entity.ai.animal = false;
+            entity.class_attack_tick = now;
+        }
+        // `GasMothMonster`（`: GasAttackMonster`）ctor（`GasMothMonster.cs:9-12`）：
+        // 基类 `GasAttackMonster.cs:11-12` 已 `Animal=true`，本类 `ViewRange=7`。
+        105 => {
+            entity.view_range = 7;
+            entity.ai.animal = true;
+        }
+        // `ScultureKingMonster` ctor（`ScultureKingMonster.cs:14-23`）：
+        // `ViewRange=8`、`StoneMode=true`、`CharStatusEx=PoisonState.STONEMODE`、`Dir=5`、
+        // `_mNDangerLevel=5`（`SearchTime` 是抽数字段，已由构造链落定；`_mSlaveObjectList` 空表）。
+        102 => {
+            entity.danger_level = 5;
+            entity.view_range = 8;
+            entity.stone_mode = true;
+            entity.char_status_ex = 0x0000_0001; // PoisonState.STONEMODE
+            entity.ai.dir = 5;
         }
         // `SandMobObject` 只覆盖 ComeOutValue（`SandMobObject.cs:11`；基类 AttackRange=4）。
         132 => {
             entity.come_out_value = 8;
             entity.attack_range = 4;
         }
-        // `BoneKingMonster.cs:17` / `ScultureKingMonster.cs:21`。
-        134 | 102 => entity.danger_level = 5,
+        // `BoneKingMonster.cs:17`（`ScultureKingMonster` 已在上面的 102 支一并落定）。
+        134 => entity.danger_level = 5,
         // `MagicMonObject.cs:15` / `ElectronicScolpionMon.cs:12`：显式落 ctor 值
         // （与字段缺省同值，保留以钉住“类 ctor 有此赋值”这一事实）。
         133 | 200 => entity.use_magic = false,
         // `SoccerBall.cs:15`。
         120 => entity.n550 = 0,
-        // `ArcherGuard.cs:17`；`ArcherPolice`（race 20）继承。
-        20 | 112 => entity.guard_direction = -1,
+        // `ArcherGuard` ctor（`ArcherGuard.cs:12-19`）：`ViewRange=12`、`WantRefMsg=true`、
+        // `GuardDirection=-1`、`Castle=null`（字段缺省）；`ArcherPolice`（race 20）继承同一 ctor。
+        20 | 112 => {
+            entity.view_range = 12;
+            entity.want_ref_msg = true;
+            entity.guard_direction = -1;
+        }
         // `CowKingMonster` ctor + `Initialize()`。
         92 => {
             entity.jump_time = now;

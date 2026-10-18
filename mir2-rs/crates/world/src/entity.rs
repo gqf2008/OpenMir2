@@ -753,6 +753,15 @@ pub struct Entity {
     ///
     /// 消费方：MB-8（SoccerBall R36；`Struck` `:83` 写、`Run` `:24/:70` 读写）。
     pub n550: i32,
+    /// **MB-3（R07）**：`CentipedeKingMonster._attackTick`（`CentipedeKingMonster.cs:9`）——
+    /// 类私有攻击节拍，**不是** `WAbil.AttackTick`（后者是 `ai.attack_tick`）。
+    /// ctor `:17` 置 `GetTickCount()`，由装载钩子按 `World::clock_ms` 落定；运行期在
+    /// `Run`/`AttackTarget` 里刷新（10s/3s 两道门都读它）。
+    pub class_attack_tick: i64,
+    /// **MB-3（R34）**：`ScultureKingMonster._mSlaveObjectList`（`ScultureKingMonster.cs:12`）——
+    /// `CallSlave` 生成成功即入表；`Run` 尾倒序移除 `Death || Ghost` 的子怪。
+    /// 与 BeeQueen 的 `special_children`（`BeeList`）是不同 C# 字段，不合并。
+    pub class_slave_list: Vec<i32>,
     /// C# `GuardUnit.GuardDirection`（`sbyte`，`GuardUnit.cs:16`，无显式初值 ⇒ 0）；
     /// `ArcherGuard` ctor `ArcherGuard.cs:17` 置 **-1**（`ArcherPolice` 继承）。
     /// 运行期城堡守卫由 `UserCastle.cs:187` 改 3（未建模，登记）。
@@ -948,6 +957,8 @@ impl Entity {
             drop_items: Vec::new(),
             death_settled: false,
             ctor_draws: MonsterCtorDraws::default(),
+            class_attack_tick: 0,
+            class_slave_list: Vec::new(),
             // 专用怪 ctor 类常量（PR-2）：`Entity` 是 C# 各怪物类的公共载体，这里落
             // **C# 字段缺省**（`int`/`sbyte` 0、`bool` false）；派生类 ctor 的实际常量
             // （StickMonster 4/4、CentipedeKing 4/6、SandMob 8/4、BoneKing/ScultureKing 5、

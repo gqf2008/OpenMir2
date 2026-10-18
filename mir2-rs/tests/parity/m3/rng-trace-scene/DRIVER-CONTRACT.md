@@ -62,7 +62,7 @@
   `5229 → 5440 → 5488 → 5598 → 5665 → 5795`，全是别的车道插代码推平 ⇒ 改由「符号存在且唯一」
   机判保鲜，见 §6）
   → `mongen.rs:61 pub fn enable_production_monster_ai` → `world.enable_monster_ai()`
-  ⇒ 只要场上有活怪，`World::tick` 就按槽位驱动 `crates/world/src/monai.rs:2395 monster_ai_tick`；
+  ⇒ 只要场上有活怪，`World::tick` 就按槽位驱动 `crates/world/src/monai.rs:3323 monster_ai_tick`；
   无目标且 walk 到点时 `monai.rs:203 wondering` **至少抽 1 次 `Random(20)`**
   （oracle 锚 `src/M2Server/Actor/AnimalObject.cs:425`）。
 

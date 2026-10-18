@@ -1001,41 +1001,11 @@ pub fn attack_with_grouped(
         n_power = 0;
     }
 
-    let mut damage: u16 = 0;
-    let mut killed = false;
-    if n_power > 0 {
-        let reduced = get_hit_struck_damage(rng, target, attacker, n_power);
-        if reduced > 0 {
-            // `StruckDamage`：职业对怪倍率 / 主从对人倍率，然后 `DamageHealth`
-            let per10 = struck_damage_multiplier(
-                target,
-                last_hitter,
-                config.warr_mon,
-                config.wizard_mon,
-                config.taos_mon,
-                config.mon_hum,
-            );
-            let final_damage = (i32::from(reduced) * per10 / 10).max(0) as u16;
-            damage = final_damage;
-            // `DamageHealth`：HP 扣减（护盾分支需要 MP 状态，本骨架未启用）
-            if i32::from(target.hp) - i32::from(final_damage) > 0 {
-                target.hp -= final_damage;
-            } else {
-                target.hp = 0;
-            }
-            if target.hp == 0 {
-                killed = true;
-            }
-            // `PlayObject.StruckDamage`（`PlayObject.cs:2954`）在 `base.StruckDamage` 之后的作用：
-            //   1. `:2957` **无条件**抽一次 `Random(10)`（护甲耐久磨损点数 `nDam = Random(10)+5`）；
-            //   2. `:2965-2996` 衣服位（`UseItems[ItemLocation.Dress=0]`）特判——**不抽数**，只扣耐久，
-            //      但破零会先清 `Index`（`:2982`），使逐格循环跳过该格的 `Random(8)`；
-            //   3. `:2998-3039` 逐格循环：`Index > 0`（已装备）的每格**各抽一次 `Random(8)`**。
-            // 玩家目标走这个 override，怪物走 `BaseObject.StruckDamage`（无随机数）。
-            // 漏掉任一条都会让同种子跨侧取数账本从第一次命中起整体错位。
-            struck_damage_durability(rng, target);
-        }
-    }
+    let (damage, killed) = if n_power > 0 {
+        apply_struck_damage(rng, attacker, target, n_power, last_hitter, config)
+    } else {
+        (0, false)
+    };
     // 注意：`_Attack` 里**没有** `LastHiter` 赋值（C# 原文如此）。命中者的登记走
     // `RM_STRUCK` 消息路径，由调用方在攻击结算之后调用 `Entity::set_last_hiter`。
     AttackOutcome {
@@ -1045,6 +1015,71 @@ pub fn attack_with_grouped(
         killed,
         target_hp_after: target.hp,
     }
+}
+
+/// `StruckDamage` + `DamageHealth` 的伤害落体（`attack_with_grouped` 与 MB-3 的
+/// `HitMagAttackTarget`/`ArcherGuard.AttackTarger` 共用）。
+///
+/// **取数次序（oracle 同序，勿改）**：`GetHitStruckDamage`（AC 骰 1~2 抽）→ `StruckDamage`
+/// 倍率 → `PlayObject.StruckDamage` 的耐久磨损（玩家目标：`Random(10)` + 逐格 `Random(8)`）。
+/// 返回 `(damage, killed)`；`damage == 0` ⇒ 调用方不得 `SendStruckDelayMsg`。
+pub fn apply_struck_damage(
+    rng: &mut impl RandomSource,
+    attacker: &Entity,
+    target: &mut Entity,
+    n_power: i32,
+    last_hitter: Option<LastHitter>,
+    config: &CombatConfig,
+) -> (u16, bool) {
+    let reduced = get_hit_struck_damage(rng, target, attacker, n_power);
+    if reduced == 0 {
+        return (0, false);
+    }
+    struck_damage_apply(rng, target, i32::from(reduced), last_hitter, config)
+}
+
+/// [`apply_struck_damage`] 的「已过 `GetHitStruckDamage`」半边：MB-3 的
+/// `GasAttackMonster.GasAttack`（`GetMagStruckDamage` 之后 `StruckDamage`）与
+/// `ScultureKingMonster.Attack`（两段之和）需要在**不同的减伤入口**之后复用同一段
+/// `StruckDamage`/`DamageHealth`。
+///
+/// `reduced` = 已减伤后的伤害（oracle 调用点里就是 `GetHitStruckDamage`/
+/// `GetMagStruckDamage` 的返回值之和）；`reduced <= 0` ⇒ 调用方不得调用（oracle 有 `> 0` 门）。
+pub fn struck_damage_apply(
+    rng: &mut impl RandomSource,
+    target: &mut Entity,
+    reduced: i32,
+    last_hitter: Option<LastHitter>,
+    config: &CombatConfig,
+) -> (u16, bool) {
+    if reduced <= 0 {
+        return (0, false);
+    }
+    // `StruckDamage`：职业对怪倍率 / 主从对人倍率，然后 `DamageHealth`
+    let per10 = struck_damage_multiplier(
+        target,
+        last_hitter,
+        config.warr_mon,
+        config.wizard_mon,
+        config.taos_mon,
+        config.mon_hum,
+    );
+    let final_damage = (reduced * per10 / 10).max(0) as u16;
+    if i32::from(target.hp) - i32::from(final_damage) > 0 {
+        target.hp -= final_damage;
+    } else {
+        target.hp = 0;
+    }
+    let killed = target.hp == 0;
+    // `PlayObject.StruckDamage`（`PlayObject.cs:2954`）在 `base.StruckDamage` 之后的作用：
+    //   1. `:2957` **无条件**抽一次 `Random(10)`（护甲耐久磨损点数 `nDam = Random(10)+5`）；
+    //   2. `:2965-2996` 衣服位（`UseItems[ItemLocation.Dress=0]`）特判——**不抽数**，只扣耐久，
+    //      但破零会先清 `Index`（`:2982`），使逐格循环跳过该格的 `Random(8)`；
+    //   3. `:2998-3039` 逐格循环：`Index > 0`（已装备）的每格**各抽一次 `Random(8)`**。
+    // 玩家目标走这个 override，怪物走 `BaseObject.StruckDamage`（无随机数）。
+    // 漏掉任一条都会让同种子跨侧取数账本从第一次命中起整体错位。
+    struck_damage_durability(rng, target);
+    (final_damage, killed)
 }
 
 /// `PlayObject.AttackSuccess`（`PlayObject.Attack.cs:215`）里与**取数**有关的那一部分。

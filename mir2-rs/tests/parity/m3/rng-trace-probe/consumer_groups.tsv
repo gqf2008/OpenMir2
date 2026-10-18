@@ -215,3 +215,16 @@ monster_ai	csharp	DualAxeMonster\.FlyAxeAttack@DualAxeMonster\.cs:	src/M2Server/
 monster_ai	csharp	LightingZombi\.Run@LightingZombi\.cs:	src/M2Server/Monster/Monsters/LightingZombi.cs:43	MB-2 R24：`Random(3)`（<=2 支的 base.Run 早退门）
 monster_ai	csharp	LightingZombi\.LightingAttack@LightingZombi\.cs:	src/M2Server/Monster/Monsters/LightingZombi.cs:26	MB-2 R24：`Random(|Hi(DC)-Lo(DC)|+1)`
 monster_ai	csharp	ZilKinZombi\.Die@ZilKinZombi\.cs:	src/M2Server/Monster/Monsters/ZilKinZombi.cs:30	MB-2 R43：`(Random(20)+4)*1000` 复生延迟（ZilKillCount>0 门内）
+
+# ---- 2026-10-18 追加（MB-3：R07/R21/R34/R02）------------------------------------------
+# 怪物侧抽数站点（oracle 行号实测：`CentipedeKingMonster.cs`/`GasMothMonster.cs`/
+# `ScultureKingMonster.cs`/`ArcherGuard.cs`）。Rust 世界层站点均在
+# `crates/world/src/monai.rs`（上面的文件级 `monster_ai rust` 行已覆盖），
+# 宿主侧的 `Random(4)`/造怪构造抽在 `bins/game-svr/src/mongen.rs`（上面的 `spawn rust` 行已覆盖）。
+monster_ai	csharp	CentipedeKingMonster\.AttackTarget@CentipedeKingMonster\.cs:	src/M2Server/Monster/Monsters/CentipedeKingMonster.cs:52	MB-3 R07：`Random(|Hi(DC)-Lo(DC)|+1)`（`:52`，无条件）+ `Random(4)`（`:66`）+ `Random(3)`（`:68`）；Rust `monai.rs::centipede_king_attack_target`
+monster_ai	csharp	GasMothMonster\.GasAttack@GasMothMonster\.cs:	src/M2Server/Monster/Monsters/GasMothMonster.cs:17	MB-3 R21：`Random(3)`（`:17`，`baseObject != null` 后**先抽**再判 `HideMode`）；Rust `monai.rs::gas_attack`（`transparent_on_hit`）
+monster_ai	csharp	GasAttackMonster\.GasAttack@GasAttackMonster\.cs:	src/M2Server/Monster/Monsters/GasAttackMonster.cs:19	MB-3 R21：`GasAttack` 基版 `Random(|Hi(DC)-Lo(DC)|+1)`（`:19`）/ `Random(SpeedPoint)`（`:24`）/ `Random(AntiPoison+20)`（`:31`）；Rust `monai.rs::gas_attack`
+monster_ai	csharp	ScultureKingMonster\.Attack@ScultureKingMonster\.cs:	src/M2Server/Monster/Monsters/ScultureKingMonster.cs:57	MB-3 R34：`GetAttackPower(Lo(DC), |Hi-Lo|)`（`:57`）→ `HitMagAttackTarget`；Rust `monai.rs::sculture_king_attack`
+monster_ai	csharp	ScultureKingMonster\.CallSlave@ScultureKingMonster\.cs:39$	src/M2Server/Monster/Monsters/ScultureKingMonster.cs:39	MB-3 R34：`Random(6) + 6`（`:39`，召唤次数）；Rust `monai.rs::sculture_king_call_slave`
+monster_ai	csharp	ScultureKingMonster\.CallSlave@ScultureKingMonster\.cs:47$	src/M2Server/Monster/Monsters/ScultureKingMonster.cs:47	MB-3 R34（MB-3b F3 订正）：`Config.Zuma[Random(4)]`（`:47`）是 **AI 取数**；Rust 站点在 `crates/world/src/monai.rs::flush_sculture_spawns`（`RandomNumber::random_below` 的 `#[track_caller]` 站点落 monai.rs）⇒ 归 `monster_ai`（此前误登 `spawn`）。同点的 `RegenMonsterByName` **构造抽**由 `Monsters.\w+..ctor@` 按 oracle 归 `construct`→折叠 `spawn`；`spawn` 只覆盖那部分构造抽
+monster_ai	csharp	ArcherGuard\.AttackTarger@ArcherGuard\.cs:	src/M2Server/Monster/Monsters/ArcherGuard.cs:24	MB-3 R02：`Random(|Hi(DC)-Lo(DC)|+1)`（`:24`，方法名 oracle 拼写 `AttackTarger`）；Rust `monai.rs::archer_guard_attack_targer`

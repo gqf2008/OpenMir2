@@ -566,6 +566,12 @@ _SELFTEST_CASES = (
     ("rust", "bins/game-svr/src/main.rs:2884", False, "startup"),
     ("rust", "crates/world/src/combat.rs:758", True, "attack"),
     ("rust", "bins/game-svr/src/not_in_table.rs:1", False, OTHER_GROUP),   # 未登记 ⇒ other（漂移信号）
+    # MB-3b F3：`ScultureKingMonster.CallSlave` 的 `Random(4)`（:47）是 **AI 取数**（Rust 站点
+    # `monai.rs::flush_sculture_spawns`，`#[track_caller]`）⇒ 必须归 `monster_ai`；同方法 :39 的
+    # `Random(6)+6` 同组。旧表误登 `spawn`（`spawn` 只覆盖 `RegenMonsterByName` 的构造抽）。
+    # 改回 `spawn` ⇒ 本自检 RED（组门牙，MB-3b F3）。
+    ("csharp", "ScultureKingMonster.CallSlave@ScultureKingMonster.cs:39", False, "monster_ai"),
+    ("csharp", "ScultureKingMonster.CallSlave@ScultureKingMonster.cs:47", False, "monster_ai"),
 )
 
 _HOST_ROW_PATTERN = "bins/game-svr/src/mongen\\.rs:"

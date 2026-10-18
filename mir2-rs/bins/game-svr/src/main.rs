@@ -11430,6 +11430,9 @@ fn tick_world_with_specials(
             displays,
         };
         let _ = world.flush_special_spawns(&mut spawner);
+        // **MB-3（R34）**：`ScultureKingMonster.CallSlave` 的 `Random(4)` + `RegenMonsterByName`
+        // 排水（与 `flush_special_spawns` 同一条 `world.rng`）。
+        let _ = world.flush_sculture_spawns(&mut spawner);
     }
     drain_special_ref_msgs(world, online, gates);
     // **MB-1**：怪物 `Run` 覆写的出帧（`SM_DIGUP`/`SM_DIGDOWN`/`SM_HIT`/`SM_716`）。
@@ -11865,6 +11868,11 @@ fn sim_loop(
         enter_cfg.mon_gen.config.user_full,
         enter_cfg.mon_gen.config.zen_fast_step,
     );
+    // **MB-3（R34）**：`Config.Zuma[4]`（`[Names] Zuma1..4`）——`ScultureKingMonster.CallSlave`
+    // 的 `Random(4)` 怪名表。配置层读不到时保持 oracle 构造缺省（部署件同值）。
+    if let Some(conf) = enter_cfg.game_conf.as_ref() {
+        world.set_zuma_names(&conf.zuma);
+    }
     // **构造段 fold · 段③**（`openmir2-ctor-draws-fold`）：`GameApp.cs:184`（`LocalDB.LoadMapQuest`
     // 的 `MapQuest.txt` 每有效行的 `new Merchant`（M1）+ 尾 `:403/404/405` 的 `QMangeNpc`/
     // `QFunctionNpc`/`RobotNpc` 三只隐藏 `new Merchant`（L2/L1/L3））—— **必须晚于**

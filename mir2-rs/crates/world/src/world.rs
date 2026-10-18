@@ -751,6 +751,13 @@ pub struct World {
     pub bee_name: String,
     /// `GameSvrConf.Spider`（`GameSvrConf.cs:1317` 缺省 `"爆裂蜘蛛"`；`ServerConf.cs:101` 读 `[Names] Spider`）。
     pub spider_name: String,
+    /// **MB-3（R34）**：`GameSvrConf.Zuma[4]`（`GameSvrConf.cs:159/1315`；`ServerConf.cs:96-99`
+    /// 读 `[Names] Zuma1..4`）——`ScultureKingMonster.CallSlave` 的
+    /// `Config.Zuma[Random(4)]` 怪名表。缺省 = oracle 构造缺省（部署件同值）。
+    pub zuma_names: [String; 4],
+    /// **MB-3（R34）**：待执行的 `RegenMonsterByName` 请求（`ScultureKingMonster.CallSlave`）。
+    /// 宿主用 [`crate::monai::World::flush_sculture_spawns`]（或同签名方法）在 `world.rng` 上排水。
+    pub pending_sculture_spawns: Vec<crate::monai::ScultureSpawnRequest>,
     /// **P3-B5**：`SystemShare.EventMgr.Events` 的火墙事件表（插入序 = `EventMgr.AddEvent` 序）。
     ///
     /// `EventProcessor.ExecuteInternal`（`:31-48`）逆插入序遍历、每事件 `RunTick=500ms` 门；
@@ -933,6 +940,13 @@ impl World {
             pending_monster_ref_msgs: Vec::new(),
             bee_name: crate::special_monster::DEFAULT_BEE_NAME.to_string(),
             spider_name: crate::special_monster::DEFAULT_SPIDER_NAME.to_string(),
+            zuma_names: [
+                "祖玛卫士".to_string(),
+                "祖玛雕像".to_string(),
+                "祖玛弓箭手".to_string(),
+                "楔蛾".to_string(),
+            ],
+            pending_sculture_spawns: Vec::new(),
             fire_burn_events: Vec::new(),
             dig_out_events: Vec::new(),
             event_registered: false,
@@ -2999,7 +3013,7 @@ impl World {
     ///
     /// `boFlag=true` 时判据按 C# 的 `(!Ghost && !boFlag) || !Death` 化简为 **`!Death`**
     /// （存活但 `Ghost` 的对象仍会被收集——oracle 的运算符优先级怪行为，照搬）。
-    fn base_objects_at(&self, map_id: usize, x: i32, y: i32) -> Vec<i32> {
+    pub(crate) fn base_objects_at(&self, map_id: usize, x: i32, y: i32) -> Vec<i32> {
         let Some(map) = self.maps.get(map_id) else {
             return Vec::new();
         };
@@ -3012,6 +3026,39 @@ impl World {
             if o.cell_obj_id > 0 && o.actor_object {
                 if let Some(e) = self.entities.get(o.cell_obj_id) {
                     if !e.death {
+                        out.push(o.cell_obj_id);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// `Envirnoment.GetBaseObjects(nX, nY, boFlag=false, ref list)`（`Envirnoment.cs:1311-1342`）。
+    ///
+    /// `boFlag=false` 的 oracle 判据是 `(!Ghost && !boFlag) || !Death` = **`!Ghost || !Death`**
+    /// （非城堡门支；`base_objects_at` 是 `boFlag=true` = `!Death` 口径）。差别只有一类：
+    /// **已死但尚未 `Ghost`** 的同格对象——`HitMagAttackTarget`（`AnimalObject.cs:365`）用本口径。
+    ///
+    /// 登记（MB-3b F4）：本口径只修「枚举面」；命中判定仍走 [`crate::combat::is_proper_target`]，
+    /// 该函数顶部折入 `death/ghost/invisible`（既有缺口 **G09**，见
+    /// `tests/parity/m3/audit-attack-search-coverage-20261018.md`）⇒ 死对象此处仍会被拒绝，
+    /// 与 oracle `IsAttackTarget`（`BaseObject.Base.cs:377-466`，不判 `Death/Ghost`）的**剩余**
+    /// 差异归属 G09，不在本卡扩大修复范围。
+    pub(crate) fn base_objects_at_including_dead(&self, map_id: usize, x: i32, y: i32) -> Vec<i32> {
+        let Some(map) = self.maps.get(map_id) else {
+            return Vec::new();
+        };
+        let (cell, success) = map.get_cell_info(x, y);
+        if !success || !cell.is_available() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for o in &cell.obj_list {
+            if o.cell_obj_id > 0 && o.actor_object {
+                if let Some(e) = self.entities.get(o.cell_obj_id) {
+                    // `!Ghost || !Death`（oracle 的 `(!Ghost && !boFlag) || !Death`，boFlag=false）。
+                    if !e.ghost || !e.death {
                         out.push(o.cell_obj_id);
                     }
                 }
@@ -3093,14 +3140,32 @@ impl World {
     /// `CellObjectMgr` 是简化模型，混入 dig-out 格会让火墙判据串味 ⇒ 这里只维护
     /// `EventMgr.Events` 注册表（NEEDHOLE 门的唯一消费面），不落格子对象。
     pub fn add_dig_out_event(&mut self, map_id: usize, x: i32, y: i32) {
+        self.add_map_event_at(map_id, x, y, 1, 5 * 60 * 1000); // ET_DIGOUTZOMBI
+    }
+
+    /// **MB-3**：`new MapEvent(Envir, X, Y, nType, dwETime, true) + EventMgr.AddEvent`
+    /// （`MapEvent.cs:60-79` + `EventManager.cs`）的事件表落点。
+    ///
+    /// `event_type`：`Grobal2.ET_DIGOUTZOMBI=1`（`DigOutZombi.Turned`）、
+    /// `ET_SCULPEICE=6`（`ScultureKingMonster.MeltStone`，`ScultureKingMonster.cs:31-32`）。
+    /// 与 [`Self::add_dig_out_event`] 共用同一条 `EventMgr.Events` 表与 500ms `RunTick` 关闭门
+    /// （`EventProcessor.ExecuteInternal`）；NEEDHOLE 门只读 `event_type == 1`，不会误命中。
+    pub fn add_map_event_at(
+        &mut self,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        event_type: i32,
+        continue_ms: i64,
+    ) {
         let now = self.clock_ms;
         self.dig_out_events.push(DigOutEvent {
             map_id,
             x,
             y,
-            event_type: 1, // `Grobal2.ET_DIGOUTZOMBI`
+            event_type,
             open_start_ms: now,
-            continue_ms: 5 * 60 * 1000,
+            continue_ms,
             run_start_ms: now,
             run_tick_ms: 500,
             closed: false,

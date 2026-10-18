@@ -581,8 +581,9 @@ pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
 /// - `83`（`new SlowAtMonster`，`SlowATMonster.cs:3` `: AtMonster` 无覆写）。
 ///
 /// **不在此列（登记，本片不建模）**：覆写 `Run` 的 `ATMonster` 派生（`90`/`91`/`92`/`96`/`97`/
-/// `100`/`105`/`107`/`114`/`130`/`132` 等，见模块头「未建模」），以及非 `ATMonster` 家族但自实现
-/// 同样索敌门的类（`BoneKing`/`Clone`/`DigOutZombi`/`Sculture`/`LightingZombi`/…）。
+/// `100`/`105`/`107`/`114`/`130`/`132` 等，见模块头「未建模」；**MB-3b F2**：105 的 `base.Run()` 段
+/// 已由 [`monster_run`] 单独补门，本集合仍只表示「未覆写 `Run` 的直派生」），以及非 `ATMonster` 家族
+/// 但自实现同样索敌门的类（`BoneKing`/`Clone`/`DigOutZombi`/`Sculture`/`LightingZombi`/…）。
 ///
 /// 改坏必红：去掉本门 ⇒ `active_seek_race_*` 用例里 race 81/83 的怪不再发现玩家。
 #[must_use]
@@ -832,6 +833,22 @@ pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBas
             zil_kin_zombi_run(world, actor_id);
             Some(ClassRunBase::Monster)
         }
+        // **MB-3**：`CentipedeKingMonster`（`StickMonster` 派生；`base.Run` 的
+        // `StickMonster.Run` 在 `WalkTick` 已刷新后必然早退 ⇒ 等价于 `Animal` 续跑）。
+        107 => {
+            centipede_king_run(world, actor_id);
+            Some(ClassRunBase::Animal)
+        }
+        // `GasMothMonster`（`base.Run` = `ATMonster.Run` → `MonsterObject.Run`）。
+        105 => {
+            gas_moth_monster_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        // `ScultureKingMonster`（`base.Run` = `MonsterObject.Run`）。
+        102 => {
+            sculture_king_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
         _ => None,
     }
 }
@@ -876,8 +893,8 @@ fn stick_find_attack_target(world: &mut World, actor_id: i32) {
         Some(e) => (e.ai.dir, e.x, e.y),
         None => return,
     };
-    send_ref_msg(world, actor_id, RM_DIGUP, 0, x, y, 0);
-    let _ = dir;
+    // oracle `SendRefMsg(RM_DIGUP, Dir, CurrX, CurrY, 0, "")`（wParam = Dir）。
+    send_ref_msg(world, actor_id, RM_DIGUP, dir as i32, x, y, 0);
 }
 
 /// `StickMonster.ComeDown`（`StickMonster.cs:60-68`）：`RM_DIGDOWN` → 清可见集 → `FixedHideMode=true`。
@@ -886,13 +903,12 @@ fn stick_come_down(world: &mut World, actor_id: i32) {
         Some(e) => (e.ai.dir, e.x, e.y),
         None => return,
     };
-    send_ref_msg(world, actor_id, RM_DIGDOWN, 0, x, y, 0);
+    send_ref_msg(world, actor_id, RM_DIGDOWN, dir as i32, x, y, 0);
     if let Some(e) = world.entities.get_mut(actor_id) {
         // oracle `Dispose(VisibleActors[i])` 是 `obj = null` 的无副作用空操作。
         e.visible_actors.clear();
         e.fixed_hide_mode = true;
     }
-    let _ = dir;
 }
 
 /// `StickMonster.AttackTarget`（`StickMonster.cs:25-52`）。
@@ -1083,7 +1099,60 @@ fn big_heart_monster_run(world: &mut World, actor_id: i32) {
 fn monster_attack_target(world: &mut World, actor_id: i32) -> bool {
     match world.entities.get(actor_id).map(|e| e.race) {
         Some(87 | 93 | 104) => dual_axe_attack_target(world, actor_id),
+        // **MB-3**：`GasAttackMonster.AttackTarget`（90/105/106 继承）。
+        Some(90 | 105 | 106) => gas_attack_monster_attack_target(world, actor_id),
+        // `CentipedeKingMonster.AttackTarget`（107）。
+        Some(107) => centipede_king_attack_target(world, actor_id),
+        // `ScultureKingMonster` 用的是基版 `MonsterObject.AttackTarget`，但虚调用 `Attack`
+        // 被覆写为 `HitMagAttackTarget`（102）。
+        Some(102) => sculture_king_attack_target(world, actor_id),
         _ => attack_target(world, actor_id),
+    }
+}
+
+/// `MonsterObject.AttackTarget` 的 race 102 版本：与 [`attack_target`] 同门/同状态写点，
+/// 仅把到点后的虚调用 `Attack(target, btDir)` 换成 [`sculture_king_attack`]。
+fn sculture_king_attack_target(world: &mut World, actor_id: i32) -> bool {
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return false;
+    };
+    let now = world.clock_ms;
+    if let Some(bt_dir) = get_attack_dir(world, actor_id, target_id) {
+        let due = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
+        if due {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.attack_tick = now;
+                e.ai.target_focus_tick = now;
+                e.ai.holy_seize = false;
+            }
+            turn_to(world, actor_id, bt_dir);
+            sculture_king_attack(world, actor_id, target_id);
+        }
+        true
+    } else {
+        let (same_map, tx, ty) = match (
+            world.entities.get(actor_id).map(|e| e.map_id),
+            world.entities.get(target_id).map(|t| (t.map_id, t.x, t.y)),
+        ) {
+            (Some(am), Some((tm, tx, ty))) => (am == tm, tx, ty),
+            _ => (false, 0, 0),
+        };
+        if same_map {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.target_x = tx;
+                e.ai.target_y = ty;
+            }
+        } else {
+            del_target_creature(world, actor_id);
+        }
+        false
     }
 }
 
@@ -1649,8 +1718,9 @@ fn dig_out_zombi_turned(world: &mut World, actor_id: i32) {
     if let Some(e) = world.entities.get_mut(actor_id) {
         e.fixed_hide_mode = false;
     }
-    // `MapEvent.Id` 恒 0（`readonly` 且赋值行被注释）⇒ `nParam3 = 0`。
-    send_ref_msg(world, actor_id, RM_DIGUP, 0, x, y, 0);
+    // `MapEvent.Id` 恒 0（`readonly` 且赋值行被注释）⇒ `nParam3 = 0`；wParam = `Dir`。
+    let dir = world.entities.get(actor_id).map_or(0, |e| e.ai.dir);
+    send_ref_msg(world, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
 }
 
 /// `DigOutZombi.Run`（`DigOutZombi.cs:18-55`）。
@@ -1714,8 +1784,8 @@ fn sculture_melt_stone(world: &mut World, actor_id: i32) {
         Some(e) => (e.ai.dir, e.x, e.y),
         None => return,
     };
-    send_ref_msg(world, actor_id, RM_DIGUP, 0, x, y, 0);
-    let _ = dir;
+    // oracle `SendRefMsg(RM_DIGUP, Dir, CurrX, CurrY, 0, "")`（wParam = Dir）。
+    send_ref_msg(world, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
     if let Some(e) = world.entities.get_mut(actor_id) {
         e.stone_mode = false;
     }
@@ -1806,6 +1876,857 @@ fn sculture_monster_run(world: &mut World, actor_id: i32) {
             e.ai.search_enemy_tick = now;
         }
         search_target(world, actor_id);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// **MB-3**（R07/R21/R34/R02）——延迟消息 / 毒 / 守卫。
+// ---------------------------------------------------------------------------
+
+/// 一条待执行的 `ScultureKingMonster.CallSlave`（`ScultureKingMonster.cs:35-53`）生成批次。
+///
+/// `count` = `Random(6) + 6`（在 `Run` 的调用点**同点同次**抽出，`ScultureKingMonster.cs:39`）；
+/// `Random(4)`（`:47`）与 `RegenMonsterByName` 的构造抽由宿主
+/// [`World::flush_sculture_spawns`] 在**同一条** `world.rng` 上按 oracle 序执行
+/// （这样 `_mSlaveObjectList.Count >= 30` 的门与每次 `Random(4)` 的次数才与成功次数一致）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScultureSpawnRequest {
+    pub owner_id: i32,
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+    pub count: i32,
+}
+
+impl World {
+    /// `GameSvrConf.Zuma[4]`（`[Names] Zuma1..4`）的接缝。
+    pub fn set_zuma_names(&mut self, names: &[String; 4]) {
+        self.zuma_names = names.clone();
+    }
+
+    /// `ScultureKingMonster.CallSlave` 的宿主排水（oracle 同步 `RegenMonsterByName` 的等价物）。
+    ///
+    /// 逐字：先判 `_mSlaveObjectList.Count >= 30` ⇒ break；再抽 `Random(4)` 选
+    /// `Config.Zuma[idx]`；`RegenMonsterByName(MapName, nX, nY, name)` 成功 ⇒ 入表。
+    ///
+    /// **次序登记**（与 `flush_special_spawns` 同口径）：oracle 在 `ScultureKing.Run()` 内同步造怪；
+    /// 本仓在 `world.tick()` 之后排水 ⇒ 构造抽相对其它 AI 抽数的位置不同。无 `CallSlave` 的 tick
+    /// 零抽数（五批 trace 逐字节不变）；有 ScultureKing 的场景需真机窗口核次序（R 级余量）。
+    pub fn flush_sculture_spawns<S: crate::special_monster::SpecialSpawner + ?Sized>(
+        &mut self,
+        spawner: &mut S,
+    ) -> Vec<i32> {
+        let reqs = std::mem::take(&mut self.pending_sculture_spawns);
+        let mut out = Vec::new();
+        for req in reqs {
+            for _ in 0..req.count {
+                let list_len = self
+                    .entities
+                    .get(req.owner_id)
+                    .map_or(0, |e| e.class_slave_list.len());
+                if list_len >= 30 {
+                    break;
+                }
+                let idx = self.rng.random_below(4) as usize;
+                let name = self
+                    .zuma_names
+                    .get(idx)
+                    .cloned()
+                    .unwrap_or_else(|| self.zuma_names[0].clone());
+                let mut rng =
+                    std::mem::replace(&mut self.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+                let child = spawner.regen_monster_by_name(
+                    self,
+                    &mut rng,
+                    req.map_id,
+                    &name,
+                    req.x as i16,
+                    req.y as i16,
+                );
+                self.rng = rng;
+                if let Some(child) = child {
+                    out.push(child);
+                    if let Some(e) = self.entities.get_mut(req.owner_id) {
+                        e.class_slave_list.push(child);
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+/// `CentipedeKingMonster.CheckAttackTarget`（`CentipedeKingMonster.cs:20-40`）：
+/// 死怪跳过；`IsProperTarget` 且**两轴 `<= ViewRange`**。
+fn centipede_king_check_attack_target(world: &World, actor_id: i32) -> bool {
+    let Some(e) = world.entities.get(actor_id) else {
+        return false;
+    };
+    let (cx, cy, view_range) = (e.x, e.y, e.view_range);
+    let visible: Vec<i32> = e.visible_actors.iter().map(|v| v.target).collect();
+    for target_id in visible {
+        let Some(t) = world.entities.get(target_id) else {
+            continue;
+        };
+        if t.death {
+            continue;
+        }
+        let proper = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|a| is_proper_target(a, t));
+        if proper && (cx - t.x).abs() <= view_range && (cy - t.y).abs() <= view_range {
+            return true;
+        }
+    }
+    false
+}
+
+/// `CentipedeKingMonster.FindAttackTarget`（`:85-89`）：`StickMonster.FindAttackTarget` + HP 回满。
+fn centipede_king_find_attack_target(world: &mut World, actor_id: i32) {
+    stick_find_attack_target(world, actor_id);
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.hp = e.max_hp;
+    }
+}
+
+/// `CentipedeKingMonster.AttackTarget`（`:42-83`）。
+///
+/// 取数次序（勿改）：命中门 `(now - AttackTick) > NextHitTime` → `Random(|Hi(DC)-Lo(DC)|+1)`
+/// （**无条件**）→ 逐可见目标 `< ViewRange`：`Random(4)`；`==0` 时再抽 `Random(3)`
+/// （`!=0` ⇒ `DECHEALTH,60,3`；`==0` ⇒ `STONE,5,0`）并 `TargetCret = baseObject`。
+fn centipede_king_attack_target(world: &mut World, actor_id: i32) -> bool {
+    if !centipede_king_check_attack_target(world, actor_id) {
+        return false;
+    }
+    let now = world.clock_ms;
+    let due = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
+    if !due {
+        return true;
+    }
+    let (dir, x, y, dc, view_range) = match world.entities.get(actor_id) {
+        Some(e) => (e.ai.dir, e.x, e.y, e.dc, e.view_range),
+        None => return false,
+    };
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.attack_tick = now;
+    }
+    // `SendAttackMsg(RM_HIT, Dir, CurrX, CurrY)`（`BaseObject.Attack.cs:173` ⇒ `SendRefMsg`）。
+    send_ref_msg(world, actor_id, RM_HIT, dir as i32, x, y, 0);
+    let lo = i32::from(crate::combat::lo_byte(dc));
+    let hi = i32::from(crate::combat::hi_byte(dc));
+    let n_power = i32::max(0, lo + world.rng.random_below((hi - lo).abs() + 1));
+    let visible: Vec<i32> = world
+        .entities
+        .get(actor_id)
+        .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
+        .unwrap_or_default();
+    for target_id in visible {
+        let Some(t) = world.entities.get(target_id) else {
+            continue;
+        };
+        if t.death {
+            continue;
+        }
+        let proper = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|a| is_proper_target(a, t));
+        if !(proper && (x - t.x).abs() < view_range && (y - t.y).abs() < view_range) {
+            continue;
+        }
+        let (tx, ty) = (t.x, t.y);
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.target_focus_tick = now;
+        }
+        // `SendSelfDelayMsg(RM_DELAYMAGIC, nPower, MakeLong(x,y), 2, ActorId, "", 600)`。
+        world.send_self_delay_msg_full(
+            actor_id,
+            crate::slave::RM_DELAYMAGIC,
+            n_power,
+            make_long(tx, ty),
+            2,
+            target_id,
+            600,
+        );
+        if world.rng.random_below(4) == 0 {
+            if world.rng.random_below(3) != 0 {
+                world.make_posion(target_id, crate::entity::POISON_DECHEALTH as u8, 60, 3);
+            } else {
+                world.make_posion(target_id, crate::entity::POISON_STONE as u8, 5, 0);
+            }
+            set_target_creature(world, actor_id, target_id);
+        }
+    }
+    true
+}
+
+/// `CentipedeKingMonster.Run`（`:91-143`）。
+///
+/// `base.Run()` 是 `StickMonster.Run`；其顶部门与本函数同为
+/// `(now - WalkTick) > WalkSpeed` 且 `WalkTick` 已被刷新 ⇒ 该次 `base.Run` 在
+/// `StickMonster.Run` 内必然早退，只落到 `AnimalObject.Run`+`BaseObject.Run`
+/// ⇒ 调用方按 [`ClassRunBase::Animal`] 续跑即可（与 oracle 等价）。
+fn centipede_king_run(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !(can_move(e) && (now - e.ai.walk_tick) > e.ai.walk_speed) {
+        return;
+    }
+    let (cx, cy, cool_eye, fixed_hide) = (e.x, e.y, e.ai.cool_eye, e.fixed_hide_mode);
+    let class_tick = e.class_attack_tick;
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.walk_tick = now;
+    }
+    if fixed_hide {
+        if now - class_tick > 10_000 {
+            let come_out = world.entities.get(actor_id).map_or(0, |e| e.come_out_value);
+            let visible: Vec<i32> = world
+                .entities
+                .get(actor_id)
+                .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
+                .unwrap_or_default();
+            for target_id in visible {
+                let Some(t) = world.entities.get(target_id) else {
+                    continue;
+                };
+                if t.death {
+                    continue;
+                }
+                let proper = world
+                    .entities
+                    .get(actor_id)
+                    .is_some_and(|a| is_proper_target(a, t));
+                if proper
+                    && (!t.hide_mode || cool_eye)
+                    && (cx - t.x).abs() < come_out
+                    && (cy - t.y).abs() < come_out
+                {
+                    centipede_king_find_attack_target(world, actor_id);
+                    if let Some(e) = world.entities.get_mut(actor_id) {
+                        e.class_attack_tick = now;
+                    }
+                    break;
+                }
+            }
+        }
+        return;
+    }
+    if now - class_tick > 3_000 {
+        if centipede_king_attack_target(world, actor_id) {
+            return;
+        }
+        if now - class_tick > 10_000 {
+            stick_come_down(world, actor_id);
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.class_attack_tick = now;
+            }
+        }
+    }
+}
+
+/// `GasMothMonster.GasMothAttack`（`GasMothMonster.cs:37-66`）：
+/// 曼哈顿最近 proper（**不**判隐藏/超距），有候选才 `SetTargetCreat`（否则不动原目标）。
+fn gas_moth_attack(world: &mut World, actor_id: i32) {
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    let (cx, cy) = (e.x, e.y);
+    let visible: Vec<i32> = e.visible_actors.iter().map(|v| v.target).collect();
+    let mut n10 = 999;
+    let mut best = None;
+    for target_id in visible {
+        let Some(t) = world.entities.get(target_id) else {
+            continue;
+        };
+        if t.death {
+            continue;
+        }
+        let proper = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|a| is_proper_target(a, t));
+        if !proper {
+            continue;
+        }
+        let n_c = (cx - t.x).abs() + (cy - t.y).abs();
+        if n_c >= n10 {
+            continue;
+        }
+        n10 = n_c;
+        best = Some(target_id);
+    }
+    if let Some(target_id) = best {
+        set_target_creature(world, actor_id, target_id);
+    }
+}
+
+/// `GasMothMonster.Run`（`GasMothMonster.cs:24-35`）。`Run` 本身**零抽数**；
+/// `base.Run()` = `ATMonster.Run`（同一索敌门已被刷新 ⇒ 早退）→ `MonsterObject.Run`。
+fn gas_moth_monster_run(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !(can_move(e) && now - e.ai.walk_tick >= e.ai.walk_speed) {
+        return;
+    }
+    let enemy_tick = e.ai.search_enemy_tick;
+    let has_target = e.ai.target_creature.is_some();
+    if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.search_enemy_tick = now;
+        }
+        gas_moth_attack(world, actor_id);
+    }
+}
+
+/// `GasAttackMonster.GasAttack(bt05)`（`GasAttackMonster.cs:15-40`）。
+///
+/// 取数次序（勿改）：`Random(|Hi(DC)-Lo(DC)|+1)` →（`nPower > 0`）`GetPoseCreate` →
+/// `Random(target.SpeedPoint)` → `GetMagStruckDamage`（1 抽）→（`nPower > 0`）
+/// `Random(target.AntiPoison + 20)`。
+///
+/// `transparent_on_hit` = `GasMothMonster.GasAttack` override（`GasMothMonster.cs:14-22`）：
+/// `baseObject != null` 后**先抽** `Random(3)`，`==0` **再判** `HideMode` ⇒ 置
+/// `StatusTimeArr[STATETRANSPARENT] = 1`。
+fn gas_attack(
+    world: &mut World,
+    actor_id: i32,
+    bt_dir: u8,
+    transparent_on_hit: bool,
+) -> Option<i32> {
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = bt_dir;
+    }
+    let e = world.entities.get(actor_id)?;
+    let (x, y, dc, hit_point, map_id, undead) =
+        (e.x, e.y, e.dc, e.hit_point, e.map_id, e.undead_power);
+    let lo = i32::from(crate::combat::lo_byte(dc));
+    let hi = i32::from(crate::combat::hi_byte(dc));
+    let mut n_power = lo + world.rng.random_below((hi - lo).abs() + 1);
+    let mut result = None;
+    if n_power > 0 {
+        send_ref_msg(world, actor_id, RM_HIT, i32::from(bt_dir), x, y, 0);
+        let pose = front_of(world, actor_id, bt_dir, map_id)
+            .and_then(|(fx, fy)| world.moving_object_at(map_id, fx, fy, true));
+        if let Some(target_id) = pose {
+            let proper = world
+                .entities
+                .get(actor_id)
+                .zip(world.entities.get(target_id))
+                .is_some_and(|(a, t)| is_proper_target(a, t));
+            if proper {
+                let speed_point = world
+                    .entities
+                    .get(target_id)
+                    .map_or(0, |t| i32::from(t.speed_point));
+                if world.rng.random_below(speed_point) < i32::from(hit_point) {
+                    let mac = world.entities.get(target_id).map_or(0, |t| t.mac);
+                    n_power = crate::combat::get_mag_struck_damage(
+                        &mut world.rng,
+                        mac,
+                        n_power,
+                        Some(undead),
+                    );
+                    if n_power > 0 {
+                        let _ = class_struck_apply(world, actor_id, target_id, n_power, n_power);
+                        let anti_poison = world.target_anti_poison(target_id);
+                        if world.rng.random_below(anti_poison + 20) == 0 {
+                            world.make_posion(target_id, crate::entity::POISON_STONE as u8, 5, 0);
+                        }
+                        result = Some(target_id);
+                    }
+                }
+            }
+        }
+    }
+    if transparent_on_hit {
+        if let Some(target_id) = result {
+            if world.rng.random_below(3) == 0 {
+                let hidden = world.entities.get(target_id).is_some_and(|t| t.hide_mode);
+                if hidden {
+                    if let Some(t) = world.entities.get_mut(target_id) {
+                        t.status_time[crate::entity::POISON_STATETRANSPARENT] = 1;
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
+/// `GasAttackMonster.AttackTarget`（`GasAttackMonster.cs:42-73`）：
+/// 邻接 ⇒ 到点（**严格 `>`**）则 `GasAttack(btDir)` + `BreakHolySeizeMode`，恒 `true`；
+/// 不邻接 ⇒ 同图写 `TargetX/Y`，异图 `DelTargetCreat`，返回 `false`。
+fn gas_attack_monster_attack_target(world: &mut World, actor_id: i32) -> bool {
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return false;
+    };
+    let now = world.clock_ms;
+    if let Some(bt_dir) = get_attack_dir(world, actor_id, target_id) {
+        let due = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
+        if due {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.attack_tick = now;
+                e.ai.target_focus_tick = now;
+            }
+            let transparent = world.entities.get(actor_id).is_some_and(|e| e.race == 105);
+            gas_attack(world, actor_id, bt_dir, transparent);
+            break_holy_seize_mode(world, actor_id);
+        }
+        true
+    } else {
+        let (same_map, tx, ty) = match (
+            world.entities.get(actor_id).map(|e| e.map_id),
+            world.entities.get(target_id).map(|t| (t.map_id, t.x, t.y)),
+        ) {
+            (Some(am), Some((tm, tx, ty))) => (am == tm, tx, ty),
+            _ => (false, 0, 0),
+        };
+        if same_map {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.target_x = tx;
+                e.ai.target_y = ty;
+            }
+        } else {
+            del_target_creature(world, actor_id);
+        }
+        false
+    }
+}
+
+/// 取目标当下的 `LastHiter` 子集（`StruckDamage` 倍率用；与 `World::attack_once` 同口径）。
+fn current_last_hitter(world: &World, target_id: i32) -> Option<crate::combat::LastHitter> {
+    world
+        .entities
+        .get(target_id)
+        .and_then(|t| t.last_hiter)
+        .and_then(|id| world.entities.get(id))
+        .map(|h| crate::combat::LastHitter {
+            race: h.race,
+            job: h.job,
+            has_master: h.master.is_some(),
+        })
+}
+
+/// MB-3 三类攻击（`GasAttack`/`ScultureKing.Attack`/`ArcherGuard.AttackTarger`）共用的
+/// `StruckDamage` + `DamageHealth` + 耐久段；返回 `None` = 目标不在场。
+///
+/// **不发 `RM_STRUCK`、不写 `LastHiter`**（MB-3b F1）：这三条 oracle 路径
+/// （`GasAttackMonster.GasAttack` `:15-40`、`HitMagAttackTarget` `AnimalObject.cs:361-381`、
+/// `ArcherGuard.AttackTarger` `:21-37`）都只调 `StruckDamage`，**没有** `_Attack`
+/// （`BaseObject.Attack.cs:61-64`）的 `SendMsg(target, RM_STRUCK, …)`。折叠进这里会在目标
+/// 自己的 `base.Run()` 多出 `Struck`（`Random(6)`/`Random(300)`）并改写 `TargetCret`/`ExpHitter`。
+/// `ArcherGuard` 的同步 `SetLastHiter`/`ExpHitter=null` 由调用方在**本函数之前**落（oracle 顺序）。
+fn class_struck_apply(
+    world: &mut World,
+    attacker_id: i32,
+    target_id: i32,
+    reduced: i32,
+    power: i32,
+) -> Option<crate::combat::AttackOutcome> {
+    let target = world.entities.get(target_id)?.clone();
+    let last_hitter = current_last_hitter(world, target_id);
+    let cfg = world.combat_config;
+    let per10 = crate::combat::struck_damage_multiplier(
+        &target,
+        last_hitter,
+        cfg.warr_mon,
+        cfg.wizard_mon,
+        cfg.taos_mon,
+        cfg.mon_hum,
+    );
+    let final_damage = (reduced * per10 / 10).max(0) as u16;
+    let last_hiter_id = target.last_hiter;
+    crate::buff::damage_health(world, target_id, i32::from(final_damage), last_hiter_id);
+    if let Some(t) = world.entities.get_mut(target_id) {
+        crate::combat::struck_damage_durability(&mut world.rng, t);
+    }
+    let (hp, killed) = world
+        .entities
+        .get(target_id)
+        .map_or((0, false), |e| (e.hp, e.hp == 0));
+    let outcome = crate::combat::AttackOutcome {
+        power,
+        hit: true,
+        damage: final_damage,
+        killed,
+        target_hp_after: hp,
+    };
+    world
+        .pending_ai_attacks
+        .push((attacker_id, target_id, outcome));
+    Some(outcome)
+}
+
+/// `ScultureKingMonster.MeltStone`（`ScultureKingMonster.cs:25-33`）：
+/// `ScultureMonster.MeltStone` 四步 + `MapEvent(..., ET_SCULPEICE=6, 5min, true)` 注册。
+fn sculture_king_melt_stone(world: &mut World, actor_id: i32) {
+    sculture_melt_stone(world, actor_id);
+    let (map_id, x, y) = match world.entities.get(actor_id) {
+        Some(e) => (e.map_id, e.x, e.y),
+        None => return,
+    };
+    world.add_map_event_at(map_id, x, y, 6, 5 * 60 * 1000);
+}
+
+/// `ScultureKingMonster.CallSlave`（`:35-53`）的**抽点**：`Random(6) + 6` 与 `GetFrontPosition`。
+/// `Random(4)` 与造怪在宿主排水 [`World::flush_sculture_spawns`] 内按 oracle 序执行。
+fn sculture_king_call_slave(world: &mut World, actor_id: i32) {
+    let Some((map_id, x, y, dir)) = world
+        .entities
+        .get(actor_id)
+        .map(|e| (e.map_id, e.x, e.y, e.ai.dir))
+    else {
+        return;
+    };
+    let count = world.rng.random_below(6) + 6;
+    let (nx, ny) = front_of(world, actor_id, dir, map_id).unwrap_or((x, y));
+    world.pending_sculture_spawns.push(ScultureSpawnRequest {
+        owner_id: actor_id,
+        map_id,
+        x: nx,
+        y: ny,
+        count,
+    });
+}
+
+/// `ScultureKingMonster.Attack`（`:55-59`）：
+/// `nPower = GetAttackPower(Lo(DC), |Hi(DC)-Lo(DC)|)`（1 抽）→ `HitMagAttackTarget(target, 0,
+/// nPower, true)`：对**目标格**每个 proper 对象抽 `GetHitStruckDamage(this, 0)`（1~2 抽）与
+/// `GetMagStruckDamage(this, nPower)`（1 抽），`sum > 0` ⇒ `StruckDamage(sum)` +
+/// `SendStruckDelayMsg(RM_REFMESSAGE, …, 200)`；最后 `SendRefMsg(RM_HIT, …)`。
+fn sculture_king_attack(world: &mut World, actor_id: i32, target_id: i32) {
+    let Some((cx, cy, dc)) = world.entities.get(actor_id).map(|e| (e.x, e.y, e.dc)) else {
+        return;
+    };
+    let lo = i32::from(crate::combat::lo_byte(dc));
+    let hi = i32::from(crate::combat::hi_byte(dc));
+    let n_power = crate::combat::get_attack_power(&mut world.rng, lo, (hi - lo).abs());
+    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+        return;
+    };
+    // `Dir = GetNextDirection(CurrX, CurrY, target.CurrX, target.CurrY)`。
+    let dir = crate::magic::next_direction(cx, cy, tx, ty);
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = dir;
+    }
+    let map_id = world.entities.get(actor_id).map_or(0, |e| e.map_id);
+    let undead = world.entities.get(actor_id).map_or(0, |e| e.undead_power);
+    // `Envir.GetBaseObjects(target.CurrX, target.CurrY, false, ...)`：**boFlag=false** 口径
+    // （含「死但未 Ghost」；`base_objects_at` 是 true 口径）。MB-3b F4；与 G09 的关系见方法文档。
+    for tid in world.base_objects_at_including_dead(map_id, tx, ty) {
+        let proper = world
+            .entities
+            .get(actor_id)
+            .zip(world.entities.get(tid))
+            .is_some_and(|(a, t)| is_proper_target(a, t));
+        if !proper {
+            continue;
+        }
+        let mac = world.entities.get(tid).map_or(0, |t| t.mac);
+        // `GetHitStruckDamage(this, 0)`：AC 骰照抽（`0 - nArmor` ⇒ 0），随后
+        // `GetMagStruckDamage(this, nPower)`。
+        let hit = {
+            let target = world.entities.get(tid).expect("target exists");
+            let attacker = world.entities.get(actor_id).expect("attacker exists");
+            crate::combat::get_hit_struck_damage(&mut world.rng, target, attacker, 0)
+        };
+        let mag = crate::combat::get_mag_struck_damage(&mut world.rng, mac, n_power, Some(undead));
+        let n_damage = i32::from(hit) + mag;
+        if n_damage > 0 {
+            let _ = class_struck_apply(world, actor_id, tid, n_damage, n_power);
+        }
+    }
+    let (dir, x, y) = match world.entities.get(actor_id) {
+        Some(e) => (e.ai.dir, e.x, e.y),
+        None => return,
+    };
+    send_ref_msg(world, actor_id, RM_HIT, i32::from(dir), x, y, 0);
+}
+
+/// `ScultureKingMonster.Run`（`:61-115`）。`base.Run()` = `MonsterObject.Run`。
+fn sculture_king_run(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !(can_move(e) && now - e.ai.walk_tick >= e.ai.walk_speed) {
+        return;
+    }
+    if e.stone_mode {
+        let (cx, cy, cool_eye) = (e.x, e.y, e.ai.cool_eye);
+        let visible: Vec<i32> = e.visible_actors.iter().map(|v| v.target).collect();
+        for target_id in visible {
+            let Some(t) = world.entities.get(target_id) else {
+                continue;
+            };
+            if t.death {
+                continue;
+            }
+            let proper = world
+                .entities
+                .get(actor_id)
+                .is_some_and(|a| is_proper_target(a, t));
+            if proper
+                && (!t.hide_mode || cool_eye)
+                && (cx - t.x).abs() <= 2
+                && (cy - t.y).abs() <= 2
+            {
+                sculture_king_melt_stone(world, actor_id);
+                break;
+            }
+        }
+        // 融化之后 oracle 仍走 `_mSlaveObjectList` 清理（在 `if (StoneMode)` 之外）。
+        cleanup_sculture_slaves(world, actor_id);
+        return;
+    }
+    let (enemy_tick, has_target) = (e.ai.search_enemy_tick, e.ai.target_creature.is_some());
+    if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.search_enemy_tick = now;
+        }
+        search_target(world, actor_id);
+        // **C# `int / int` 整数除法**：`HP < MaxHP ⇒ HP/MaxHP = 0 ⇒ 阈值 0`（仅满血得 5）。
+        let (danger, hp, max_hp) = world
+            .entities
+            .get(actor_id)
+            .map_or((0, 0, 0), |e| (e.danger_level, e.hp, e.max_hp));
+        let ratio = i32::from(hp) / i32::from(max_hp).max(1);
+        if danger > ratio * 5 && danger > 0 {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.danger_level -= 1;
+            }
+            sculture_king_call_slave(world, actor_id);
+        }
+        let (hp_now, max_hp_now) = world
+            .entities
+            .get(actor_id)
+            .map_or((0, 0), |e| (e.hp, e.max_hp));
+        if hp_now == max_hp_now {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.danger_level = 5;
+            }
+        }
+    }
+    cleanup_sculture_slaves(world, actor_id);
+}
+
+/// `ScultureKingMonster.Run` 尾的 `_mSlaveObjectList` 倒序清理（`:105-112`）。
+fn cleanup_sculture_slaves(world: &mut World, actor_id: i32) {
+    let Some(mut list) = world
+        .entities
+        .get(actor_id)
+        .map(|e| e.class_slave_list.clone())
+    else {
+        return;
+    };
+    if list.is_empty() {
+        return;
+    }
+    for i in (0..list.len()).rev() {
+        let remove = match world.entities.get(list[i]) {
+            Some(child) => child.death || child.ghost,
+            None => true,
+        };
+        if remove {
+            list.remove(i);
+        }
+    }
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.class_slave_list = list;
+    }
+}
+
+/// `GuardUnit.IsProperTarget`（`GuardUnit.cs:35-125`，`Castle == null` 分支）——
+/// ArcherGuard 的 proper 判定。与 [`is_proper_target`] 的差异：不看 `Ghost/Invisible`、
+/// `LastHiter` 恒为目标、`TargetCret` 是弓箭守卫时也成立、末尾对一切（除自己/石化/管理员）返回 true。
+fn guard_unit_is_proper_target(world: &World, actor_id: i32, target_id: i32) -> bool {
+    let (Some(a), Some(t)) = (world.entities.get(actor_id), world.entities.get(target_id)) else {
+        return false;
+    };
+    if a.id == t.id {
+        return false;
+    }
+    if a.last_hiter == Some(target_id) {
+        return true;
+    }
+    if let Some(tc) = t.ai.target_creature {
+        if world.entities.get(tc).is_some_and(|x| x.race == 112) {
+            return true;
+        }
+    }
+    if t.race == ACTOR_RACE_PLAY {
+        if t.admin_mode {
+            return false;
+        }
+        if t.pk_point / 100 >= 2 {
+            return true;
+        }
+    }
+    if t.stone_mode {
+        return false;
+    }
+    true
+}
+
+/// `ArcherGuard.AttackTarger`（`ArcherGuard.cs:21-37`）。
+fn archer_guard_attack_targer(world: &mut World, actor_id: i32, target_id: i32) {
+    let (cx, cy, dc) = match world.entities.get(actor_id) {
+        Some(e) => (e.x, e.y, e.dc),
+        None => return,
+    };
+    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+        return;
+    };
+    let dir = crate::magic::next_direction(cx, cy, tx, ty);
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = dir;
+    }
+    let lo = i32::from(crate::combat::lo_byte(dc));
+    let hi = i32::from(crate::combat::hi_byte(dc));
+    let mut n_damage = lo + world.rng.random_below((hi - lo).abs() + 1);
+    if n_damage > 0 {
+        let (Some(target), Some(attacker)) = (
+            world.entities.get(target_id).cloned(),
+            world.entities.get(actor_id).cloned(),
+        ) else {
+            return;
+        };
+        n_damage = i32::from(crate::combat::get_hit_struck_damage(
+            &mut world.rng,
+            &target,
+            &attacker,
+            n_damage,
+        ));
+    }
+    if n_damage > 0 {
+        // `targetObject.SetLastHiter(this); targetObject.ExpHitter = null;`（`ArcherGuard.cs:31-32`）
+        // ——**在 `StruckDamage` 之前**（`:33`）：`StruckDamage` 的 `WarrMon`/`WizardMon`/`TaosMon`
+        // 倍率读的是**当下**的 `LastHiter`，顺序反了会读到旧命中者（MB-3b F1b）。
+        // 不发 `RM_STRUCK`（oracle 本路径没有 `_Attack` 的 `SendMsg`）。
+        let now = world.clock_ms;
+        if let Some(t) = world.entities.get_mut(target_id) {
+            t.set_last_hiter(actor_id, now);
+            t.exp_hitter = None;
+        }
+        let _ = class_struck_apply(world, actor_id, target_id, n_damage, n_damage);
+        // `SendStruckDelayMsg(RM_REFMESSAGE, …, max(|Δx|,|Δy|)*50 + 600)`：延迟值与
+        // player attack 的 200ms 同口径由宿主即时出帧（登记：oracle 经 MsgQueue 延时投递）。
+        let _delay = (cx - tx).abs().max((cy - ty).abs()) * 50 + 600;
+    }
+    // `SendRefMsg(RM_FLYAXE, Dir, CurrX, CurrY, targetObject.ActorId, "")`。
+    send_ref_msg_with_target(
+        world,
+        actor_id,
+        RM_FLYAXE,
+        i32::from(dir),
+        cx,
+        cy,
+        target_id,
+        Some(target_id),
+    );
+}
+
+/// `ArcherGuard.Run`（`ArcherGuard.cs:39-91`）。`base.Run()` = `NormNpc.Run`
+/// （清 Master）→ `AnimalObject.Run` → `BaseObject.Run`；调用方按
+/// [`ClassRunBase::Animal`] 续跑，本函数在末尾清 Master。
+fn archer_guard_run(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if can_move(e) && now - e.ai.walk_tick >= e.ai.walk_speed {
+        let (cx, cy) = (e.x, e.y);
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.walk_tick = now;
+        }
+        let visible: Vec<i32> = world
+            .entities
+            .get(actor_id)
+            .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
+            .unwrap_or_default();
+        let mut n_rage = 9999;
+        let mut best = None;
+        for target_id in visible {
+            let Some(t) = world.entities.get(target_id) else {
+                continue;
+            };
+            if t.death {
+                continue;
+            }
+            if !guard_unit_is_proper_target(world, actor_id, target_id) {
+                continue;
+            }
+            let n_abs = (cx - t.x).abs() + (cy - t.y).abs();
+            if n_abs < n_rage {
+                n_rage = n_abs;
+                best = Some(target_id);
+            }
+        }
+        if let Some(target_id) = best {
+            set_target_creature(world, actor_id, target_id);
+        } else {
+            del_target_creature(world, actor_id);
+        }
+    }
+    // `ArcherGuard.Run` 的攻击/转向段仍在 `if (CanMove())` 内（只是不在 `WalkTick` 门内）。
+    let can_move_now = world.entities.get(actor_id).is_some_and(can_move);
+    let target = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature);
+    if !can_move_now {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            if e.master.is_some() {
+                e.master = None;
+            }
+        }
+        return;
+    }
+    match target {
+        Some(target_id) => {
+            let due = world
+                .entities
+                .get(actor_id)
+                .is_some_and(|e| now - e.ai.attack_tick >= e.ai.next_hit_time);
+            if due {
+                if let Some(e) = world.entities.get_mut(actor_id) {
+                    e.ai.attack_tick = now;
+                }
+                archer_guard_attack_targer(world, actor_id, target_id);
+            }
+        }
+        None => {
+            let guard_dir = world
+                .entities
+                .get(actor_id)
+                .map_or(0, |e| e.guard_direction);
+            let dir = world.entities.get(actor_id).map_or(0, |e| e.ai.dir);
+            // `TurnTo` 的 `RM_TURN` 帧沿用本层 `turn_to` 口径（只落朝向，帧面登记未接）。
+            if guard_dir > 0 && dir != guard_dir as u8 {
+                turn_to(world, actor_id, guard_dir as u8);
+            }
+        }
+    }
+    // `NormNpc.Run`：`if (Master != null) Master = null;`（不进怪物 AI 的宝宝表）。
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        if e.master.is_some() {
+            e.master = None;
+        }
     }
 }
 
@@ -1942,7 +2863,14 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
     // （= `MonsterObject.Run`，本函数余下部分）之前先按时钟门索敌。外层门是 `CanMove()`
     // （`AnimalObject.cs:162-165`，= [`can_move`]）；门未到 ⇒ 不搜不抽。
     // `SearchTarget` 本身**不消费随机数**（见其文档）⇒ 只改目标态、不移位 RNG 流水。
-    if is_active_seek_race(e.race) && can_move(e) {
+    //
+    // **MB-3b F2**：`GasMothMonster`(105) `: GasAttackMonster : AtMonster` 覆写了 `Run`
+    // （`GasMothMonster.cs:26-36`：自己的 `GasMothAttack` 后 `base.Run()`），故不能进
+    // [`is_active_seek_race`] 集合（那代表「未覆写 `Run`、直接由本函数驱动」的怪），但它的
+    // `base.Run()` = `ATMonster.Run`，**这道 8s/1s 索敌门同样存在**。外层 `GasMothMonster.Run`
+    // 过门时会先把 `SearchEnemyTick` 刷成 now ⇒ 本段随后自然为假；只有 WalkSpeed 门挡住外层
+    // 时才由本段补跑 `SearchTarget`（与 oracle 同点同次）。最小改法：条件里显式加 105。
+    if (is_active_seek_race(e.race) || e.race == 105) && can_move(e) {
         let now = world.clock_ms;
         let enemy_tick = e.ai.search_enemy_tick;
         let has_target = e.ai.target_creature.is_some();
@@ -2442,6 +3370,16 @@ pub fn monster_ai_tick(world: &mut World) {
         // `GuardList` 放置的守卫（race 11/12/20/112）不继承 `MonsterObject.Run`
         // （`GuardUnit:NormNpc`，`NormNpc.Run` 只是「清 master + `base.Run()`」）⇒ **不游走/不索敌**，
         // 但仍要跑自己的 `base.Run()` 段（`BaseObject.Run` 的恢复/`RM_STRUCK` 出队/`TargetCret` 清理）。
+        // **MB-3（R02）**：`ArcherGuard`(112) / `ArcherPolice`(20) 覆写 `Run`
+        // （`ArcherGuard.cs:39-91`），虽然仍在 `GuardUnit : NormNpc : AnimalObject` 链上，
+        // 但它有自己的索敌/射击逻辑，**不能**走下面「静止守卫」的等价支。
+        if matches!(world.entities.get(id).map_or(0, |e| e.race), 20 | 112) {
+            archer_guard_run(world, id);
+            // `NormNpc.Run` 的 `base.Run()` = `AnimalObject.Run` → `BaseObject.Run`。
+            animal_run(world, id);
+            base_object_run_monster(world, id);
+            continue;
+        }
         if is_guard_race(world.entities.get(id).map_or(0, |e| e.race)) {
             // `NormNpc.Run`（`NormNpc.cs:1604-1611`）→ `base.Run()` = `AnimalObject.Run`
             // （HolySeize 到期）→ `BaseObject.Run`。
@@ -5036,5 +5974,757 @@ mod tests {
         world.enable_monster_ai();
         monster_ai_tick(&mut world);
         assert!(!world.entities.get(id).unwrap().death, "死怪分支驱动复生");
+    }
+
+    // ------------------------------------------------------------------
+    // **MB-3**（R07/R21/R34/R02）构造级用例 + 改坏必红。
+    // ------------------------------------------------------------------
+
+    /// MB-3 专用怪：按 race 落 ctor 常量（`apply_monster_class_constants`）。
+    fn class_monster(world: &mut World, race: u8, x: i32, y: i32) -> i32 {
+        let mut e = Entity::new(0, "mb3", x, y);
+        e.race = race;
+        e.hp = 1000;
+        e.max_hp = 1000;
+        e.dc = 5 | (5 << 8); // Lo=5, Hi=5 ⇒ `Random(1)`（仍抽一次）
+        crate::mongen::apply_monster_class_constants(&mut e, i16::from(race), world.clock_ms);
+        world.add_entity(e)
+    }
+
+    fn link_visible(world: &mut World, viewer: i32, target: i32) {
+        let vb = VisibleBaseObject {
+            target,
+            flag: VisibleFlag::Show,
+        };
+        world
+            .entities
+            .get_mut(viewer)
+            .expect("viewer")
+            .visible_actors
+            .push(vb);
+    }
+
+    fn seed_where(mut pred: impl FnMut(&mut RandomNumber) -> bool) -> i32 {
+        for seed in 0..200_000 {
+            let mut r = RandomNumber::with_seed(seed);
+            if pred(&mut r) {
+                return seed;
+            }
+        }
+        unreachable!("应能在 20 万种子里找到目标抽数序列");
+    }
+
+    /// R07 牙（门）：非隐藏支的 **3s 门**。2999ms 不调 `AttackTarget`（不抽数、`AttackTick` 不变）；
+    /// 3001ms 才调。把 3000 改成 10000（或把 3s/10s 门互换）⇒ 本用例红。
+    #[test]
+    fn centipede_king_uses_3s_attack_gate_not_10s() {
+        for (ago, should_fire) in [(2_999_i64, false), (3_001_i64, true)] {
+            let mut world = World::new(30, 30);
+            world.clock_ms = 100_000;
+            let id = class_monster(&mut world, 107, 10, 10);
+            let p = player(&mut world, 11, 10);
+            link_visible(&mut world, id, p);
+            {
+                let e = world.entities.get_mut(id).unwrap();
+                e.fixed_hide_mode = false;
+                e.ai.walk_speed = 0;
+                e.ai.walk_tick = 99_999;
+                e.ai.next_hit_time = 0;
+                e.ai.attack_tick = 99_999;
+                e.class_attack_tick = 100_000 - ago;
+            }
+            let seed = 7;
+            world.rng = RandomNumber::with_seed(seed);
+            centipede_king_run(&mut world, id);
+            let e = world.entities.get(id).unwrap();
+            if should_fire {
+                assert_eq!(e.ai.attack_tick, 100_000, "3001ms ⇒ AttackTarget 被调用");
+            } else {
+                assert_eq!(
+                    e.ai.attack_tick, 99_999,
+                    "2999ms ⇒ 3s 门未到，不得调 AttackTarget"
+                );
+                assert_eq!(
+                    world.rng.random(),
+                    RandomNumber::with_seed(seed).random(),
+                    "门未到 ⇒ 零抽数"
+                );
+            }
+        }
+    }
+
+    /// R07 牙（抽数序）：`Random(4) != 0` ⇒ **不抽** `Random(3)`；
+    /// `==0` 且 `Random(3) != 0` ⇒ `DECHEALTH,60,3`；`==0` 且 `Random(3)==0` ⇒ `STONE,5,0`。
+    #[test]
+    fn centipede_king_attack_target_draws_and_poison_branches() {
+        // 分支 1：Random(4) != 0（2 抽）。
+        let seed1 = seed_where(|r| {
+            let _ = r.random_below(1);
+            r.random_below(4) != 0
+        });
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 107, 10, 10);
+        let p = player(&mut world, 11, 10);
+        link_visible(&mut world, id, p);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.next_hit_time = 0;
+            e.ai.attack_tick = 99_999;
+        }
+        world.rng = RandomNumber::with_seed(seed1);
+        let mut expect = RandomNumber::with_seed(seed1);
+        let _ = expect.random_below(1);
+        let r4 = expect.random_below(4);
+        assert_ne!(r4, 0);
+        assert!(centipede_king_attack_target(&mut world, id));
+        assert_eq!(
+            world.rng.random(),
+            expect.random(),
+            "Random(4)!=0 ⇒ 只抽 Random(DC)+Random(4)，不得抽 Random(3)"
+        );
+        assert_eq!(world.entities.get(id).unwrap().ai.target_creature, None);
+
+        // 分支 2：Random(4)==0 且 Random(3)!=0 ⇒ 绿毒（3 抽）。
+        let seed2 = seed_where(|r| {
+            let _ = r.random_below(1);
+            r.random_below(4) == 0 && r.random_below(3) != 0
+        });
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 107, 10, 10);
+        let p = player(&mut world, 11, 10);
+        link_visible(&mut world, id, p);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.next_hit_time = 0;
+            e.ai.attack_tick = 99_999;
+        }
+        world.rng = RandomNumber::with_seed(seed2);
+        let mut expect = RandomNumber::with_seed(seed2);
+        let _ = expect.random_below(1);
+        assert_eq!(expect.random_below(4), 0);
+        assert_ne!(expect.random_below(3), 0);
+        assert!(centipede_king_attack_target(&mut world, id));
+        assert_eq!(world.rng.random(), expect.random(), "绿毒支 3 抽");
+        assert!(world.buffs.list(p).is_some_and(|l| l
+            .iter()
+            .any(|b| b.buff_type == crate::buff::BuffType::GreenPoison)));
+        assert_eq!(world.entities.get(id).unwrap().ai.target_creature, Some(p));
+
+        // 分支 3：Random(4)==0 且 Random(3)==0 ⇒ 石化（3 抽）。
+        let seed3 = seed_where(|r| {
+            let _ = r.random_below(1);
+            r.random_below(4) == 0 && r.random_below(3) == 0
+        });
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 107, 10, 10);
+        let p = player(&mut world, 11, 10);
+        link_visible(&mut world, id, p);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.next_hit_time = 0;
+            e.ai.attack_tick = 99_999;
+        }
+        world.rng = RandomNumber::with_seed(seed3);
+        let mut expect = RandomNumber::with_seed(seed3);
+        let _ = expect.random_below(1);
+        assert_eq!(expect.random_below(4), 0);
+        assert_eq!(expect.random_below(3), 0);
+        assert!(centipede_king_attack_target(&mut world, id));
+        assert_eq!(world.rng.random(), expect.random(), "石化支 3 抽");
+        assert!(world.buffs.list(p).is_some_and(|l| l
+            .iter()
+            .any(|b| b.buff_type == crate::buff::BuffType::Paralysis)));
+    }
+
+    /// R07 牙：隐藏支 10s 门 ⇒ `FindAttackTarget`（HP 回满）+ `_attackTick = now`；
+    /// 非隐藏支未命中且 10s 门 ⇒ `ComeDown()` + `_attackTick = now`。
+    #[test]
+    fn centipede_king_find_attack_target_refills_hp_and_come_down_resets_tick() {
+        // 隐藏支。
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 107, 10, 10);
+        let p = player(&mut world, 12, 12); // 两轴 < ComeOutValue(4)
+        link_visible(&mut world, id, p);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.fixed_hide_mode = true;
+            e.hp = 1;
+            e.ai.walk_speed = 0;
+            e.ai.walk_tick = 99_999;
+            e.class_attack_tick = 89_999; // 10s 门过
+        }
+        centipede_king_run(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert!(!e.fixed_hide_mode, "FindAttackTarget ⇒ FixedHideMode=false");
+        assert_eq!(e.hp, e.max_hp, "FindAttackTarget 覆写把 HP 回满");
+        assert_eq!(e.class_attack_tick, 100_000, "_attackTick = now");
+
+        // 非隐藏支：可见集为空 ⇒ AttackTarget=false；**10s 未到**（仅 3001ms）⇒ 不 ComeDown。
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 107, 10, 10);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.fixed_hide_mode = false;
+            e.ai.walk_speed = 0;
+            e.ai.walk_tick = 99_999;
+            e.class_attack_tick = 96_999; // 3001ms < 10000ms
+        }
+        centipede_king_run(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert!(!e.fixed_hide_mode, "10s 未到不得 ComeDown");
+        assert_eq!(e.class_attack_tick, 96_999, "10s 未到不得刷新 _attackTick");
+
+        // 非隐藏支：可见集为空 ⇒ AttackTarget=false ⇒ 10s 门 ⇒ ComeDown。
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 107, 10, 10);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.fixed_hide_mode = false;
+            e.ai.walk_speed = 0;
+            e.ai.walk_tick = 99_999;
+            e.class_attack_tick = 89_999;
+        }
+        centipede_king_run(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert!(e.fixed_hide_mode, "ComeDown ⇒ FixedHideMode=true");
+        assert_eq!(e.class_attack_tick, 100_000, "ComeDown 后 _attackTick=now");
+        assert!(world
+            .pending_monster_ref_msgs
+            .iter()
+            .any(|m| m.ident == RM_DIGDOWN));
+    }
+
+    /// R21 牙（取数序）：`GasAttack` 在 `baseObject != null` 后**先抽** `Random(3)`，
+    /// `==0` 才判 `HideMode`；隐藏目标 ⇒ `StatusTimeArr[STATETRANSPARENT]=1`。
+    #[test]
+    fn gas_moth_gas_attack_draws_random3_before_hide_mode() {
+        for (hide, want_status) in [(true, true), (false, false)] {
+            let seed = seed_where(|r| {
+                let _ = r.random_below(1); // DC
+                let _ = r.random_below(0); // Random(SpeedPoint=0)
+                let _ = r.random_below(1); // MAC
+                let _ = r.random_below(10); // 玩家耐久
+                let _ = r.random_below(20); // AntiPoison+20
+                r.random_below(3) == 0
+            });
+            let mut world = World::new(30, 30);
+            world.clock_ms = 100_000;
+            let id = class_monster(&mut world, 105, 10, 10);
+            let p = player(&mut world, 11, 10);
+            link_visible(&mut world, id, p);
+            // `GetPoseCreate` 走 `Envir.GetMovingObject`（格子 ObjList）⇒ 目标必须真正落图。
+            assert!(world.enter_world(p));
+            {
+                let e = world.entities.get_mut(id).unwrap();
+                e.ai.dir = crate::magic::DIR_RIGHT;
+                e.hit_point = 1;
+                e.ai.next_hit_time = 0;
+                e.ai.attack_tick = 99_999;
+                e.ai.target_creature = Some(p);
+            }
+            {
+                let t = world.entities.get_mut(p).unwrap();
+                t.speed_point = 0;
+                t.hide_mode = hide;
+            }
+            world.rng = RandomNumber::with_seed(seed);
+            let mut expect = RandomNumber::with_seed(seed);
+            let _ = expect.random_below(1);
+            let _ = expect.random_below(0);
+            let _ = expect.random_below(1);
+            let _ = expect.random_below(10);
+            let _ = expect.random_below(20);
+            assert_eq!(expect.random_below(3), 0);
+            assert!(gas_attack_monster_attack_target(&mut world, id));
+            assert_eq!(
+                world.rng.random(),
+                expect.random(),
+                "GasAttack 取数序：DC→SpeedPoint→MAC→耐久→AntiPoison→Random(3)"
+            );
+            let t = world.entities.get(p).unwrap();
+            assert_eq!(
+                t.status_time[crate::entity::POISON_STATETRANSPARENT] == 1,
+                want_status,
+                "Random(3)==0 且 HideMode ⇒ 透明 1"
+            );
+            assert!(world.entities.get(p).unwrap().hp < 100, "命中扣血");
+        }
+    }
+
+    /// R21 牙（Run）：`GasMothMonster.Run` 只索敌、**零抽数**；选曼哈顿最近 proper。
+    #[test]
+    fn gas_moth_run_selects_nearest_without_rng() {
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 105, 10, 10);
+        let far = player(&mut world, 14, 10);
+        let near = player(&mut world, 11, 12);
+        link_visible(&mut world, id, far);
+        link_visible(&mut world, id, near);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.walk_speed = 0;
+            e.ai.walk_tick = 99_999;
+            e.ai.search_enemy_tick = 90_000;
+        }
+        let seed = 12345;
+        world.rng = RandomNumber::with_seed(seed);
+        gas_moth_monster_run(&mut world, id);
+        assert_eq!(
+            world.entities.get(id).unwrap().ai.target_creature,
+            Some(near),
+            "曼哈顿最近（|1|+|2|=3 < |4|+|0|=4）"
+        );
+        assert_eq!(
+            world.rng.random(),
+            RandomNumber::with_seed(seed).random(),
+            "Run 只索敌、零抽数"
+        );
+    }
+
+    /// R34 牙（整数除法）：`_mNDangerLevel > HP/MaxHP*5` 是 **C# `int/int`** ⇒
+    /// `HP=MaxHP` 不召唤；`HP=MaxHP-1` 阈值为 0 ⇒ 召唤并递减。改成浮点 ⇒ `HP=MaxHP-1`
+    /// 阈值为 4.995 ⇒ `5 > 4.995` 仍召唤（巧合通过），但 `HP=MaxHP*4/5` 会分叉；
+    /// 本用例同时钉住「满血复位 5」。
+    #[test]
+    fn sculture_king_danger_level_uses_integer_division() {
+        let seed = seed_where(|r| {
+            let _ = r.random_below(6);
+            true
+        });
+        // 满血：阈值为 5，5 > 5 不成立 ⇒ 不召唤。
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 102, 10, 10);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.stone_mode = false;
+            e.hp = 1000;
+            e.danger_level = 5;
+            e.ai.walk_speed = 0;
+            e.ai.walk_tick = 99_999;
+            e.ai.search_enemy_tick = 89_000; // >1000 且无目标 ⇒ 过门
+            e.ai.target_creature = None;
+        }
+        world.rng = RandomNumber::with_seed(seed);
+        sculture_king_run(&mut world, id);
+        assert_eq!(world.entities.get(id).unwrap().danger_level, 5);
+        assert!(world.pending_sculture_spawns.is_empty(), "满血不召唤");
+
+        // HP=MaxHP-1：整数除法 ⇒ 阈值 0；5 > 0 ⇒ 召唤 + 递减到 4。
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 102, 10, 10);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.stone_mode = false;
+            e.hp = 999;
+            e.danger_level = 5;
+            e.ai.walk_speed = 0;
+            e.ai.walk_tick = 99_999;
+            e.ai.search_enemy_tick = 89_000;
+            e.ai.target_creature = None;
+        }
+        world.rng = RandomNumber::with_seed(seed);
+        let mut expect = RandomNumber::with_seed(seed);
+        let count = expect.random_below(6) + 6;
+        sculture_king_run(&mut world, id);
+        assert_eq!(
+            world.entities.get(id).unwrap().danger_level,
+            4,
+            "整数除法阈值 0"
+        );
+        assert_eq!(world.pending_sculture_spawns.len(), 1);
+        assert_eq!(world.pending_sculture_spawns[0].count, count, "Random(6)+6");
+        assert_eq!(world.pending_sculture_spawns[0].x, 9);
+        assert_eq!(world.pending_sculture_spawns[0].y, 11); // Dir=5(DownLeft) ⇒ 左下
+        assert_eq!(
+            world.rng.random(),
+            expect.random(),
+            "CallSlave 抽数只此一次"
+        );
+
+        // **整数除法 vs 浮点的判别用例**：danger 已被递减到 4、HP=999 时，
+        // `int/int` 阈值 = 0 ⇒ `4 > 0` **召唤**；浮点阈值 = 4.995 ⇒ `4 > 4.995` **不召唤**。
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 102, 10, 10);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.stone_mode = false;
+            e.hp = 999;
+            e.danger_level = 4;
+            e.ai.walk_speed = 0;
+            e.ai.walk_tick = 99_999;
+            e.ai.search_enemy_tick = 89_000;
+            e.ai.target_creature = None;
+        }
+        world.rng = RandomNumber::with_seed(seed);
+        sculture_king_run(&mut world, id);
+        assert_eq!(
+            world.entities.get(id).unwrap().danger_level,
+            3,
+            "整数除法的阈值 0：danger=4 > 0 ⇒ 召唤并递减（浮点实现会停在 4）"
+        );
+        assert_eq!(world.pending_sculture_spawns.len(), 1);
+
+        // 满血复位：danger 已 4，HP==MaxHP ⇒ 回到 5。
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.hp = 1000;
+            e.ai.search_enemy_tick = 89_000;
+        }
+        sculture_king_run(&mut world, id);
+        assert_eq!(world.entities.get(id).unwrap().danger_level, 5);
+    }
+
+    /// R34 牙（MeltStone）：`StoneMode` + 目标 ≤2 ⇒ 融化：
+    /// `CharStatusEx=0`、`StoneMode=false`、`RM_DIGUP`、**`ET_SCULPEICE` 5 分钟 MapEvent 注册**。
+    #[test]
+    fn sculture_king_melt_stone_registers_map_event() {
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 102, 10, 10);
+        let p = player(&mut world, 12, 11); // 两轴 ≤2
+        link_visible(&mut world, id, p);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.stone_mode = true; // ctor 值
+            e.ai.walk_speed = 0;
+            e.ai.walk_tick = 99_999;
+            e.char_status_ex = 0x1;
+        }
+        sculture_king_run(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert!(!e.stone_mode, "MeltStone ⇒ StoneMode=false");
+        assert_eq!(e.char_status_ex, 0, "CharStatusEx = 0");
+        assert!(world
+            .pending_monster_ref_msgs
+            .iter()
+            .any(|m| m.ident == RM_DIGUP));
+        assert!(
+            world.dig_out_events.iter().any(|ev| ev.event_type == 6
+                && ev.x == 10
+                && ev.y == 10
+                && ev.continue_ms == 5 * 60 * 1000),
+            "MeltStone 必须注册 ET_SCULPEICE 5min MapEvent（删掉必红）"
+        );
+    }
+
+    /// R34 牙（生成链）：`flush_sculture_spawns` 按 `Random(4)` 逐次选 `Zuma[idx]` 造怪，
+    /// 并在 `_mSlaveObjectList.Count >= 30` 时 **先判后抽**（不抽第 30+ 次）。
+    #[test]
+    fn sculture_king_flush_uses_zuma_names_and_count_gate() {
+        struct RecordingSpawner {
+            names: Vec<String>,
+            draws: Vec<i32>,
+        }
+        impl crate::special_monster::SpecialSpawner for RecordingSpawner {
+            fn regen_monster_by_name(
+                &mut self,
+                world: &mut World,
+                rng: &mut RandomNumber,
+                _map_id: usize,
+                name: &str,
+                x: i16,
+                y: i16,
+            ) -> Option<i32> {
+                self.names.push(name.to_string());
+                // 模拟 `CreateMonster` 的构造抽（记录与 Random(4) 的相对次序）。
+                self.draws.push(rng.random_below(1));
+                let e = Entity::new(0, name.to_string(), i32::from(x), i32::from(y));
+                Some(world.add_entity(e))
+            }
+        }
+
+        // 空表 + count=3 ⇒ 3 次 Random(4)，怪名逐个 = Zuma[抽值]。
+        let seed = 4242;
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 102, 10, 10);
+        world.rng = RandomNumber::with_seed(seed);
+        world.pending_sculture_spawns.push(ScultureSpawnRequest {
+            owner_id: id,
+            map_id: 0,
+            x: 10,
+            y: 11,
+            count: 3,
+        });
+        let mut spawner = RecordingSpawner {
+            names: Vec::new(),
+            draws: Vec::new(),
+        };
+        let mut expect = RandomNumber::with_seed(seed);
+        let mut expected_names: Vec<String> = Vec::new();
+        // `Random(4)` 与构造抽交错的次序：Random(4)→Random(1)→…
+        for _ in 0..3 {
+            expected_names.push(world.zuma_names[expect.random_below(4) as usize].clone());
+            let _ = expect.random_below(1);
+        }
+        let spawned = world.flush_sculture_spawns(&mut spawner);
+        assert_eq!(spawned.len(), 3);
+        assert_eq!(spawner.names, expected_names, "每次 Random(4) 选 Zuma[idx]");
+        assert_eq!(world.entities.get(id).unwrap().class_slave_list.len(), 3);
+        assert_eq!(
+            world.rng.random(),
+            expect.random(),
+            "Random(4) 与构造抽次序"
+        );
+
+        // 表内已有 29 只 ⇒ count=11 也只能再造 1 只（先判 `>=30` 再抽）。
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 102, 10, 10);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.class_slave_list = (1..=29).collect();
+        }
+        world.rng = RandomNumber::with_seed(seed);
+        world.pending_sculture_spawns.push(ScultureSpawnRequest {
+            owner_id: id,
+            map_id: 0,
+            x: 10,
+            y: 11,
+            count: 11,
+        });
+        let mut spawner = RecordingSpawner {
+            names: Vec::new(),
+            draws: Vec::new(),
+        };
+        let spawned = world.flush_sculture_spawns(&mut spawner);
+        assert_eq!(spawned.len(), 1, "29+1 ⇒ 到 30 即停");
+        assert_eq!(spawner.names.len(), 1, "第 2 次起先判 >=30 不抽 Random(4)");
+        assert_eq!(world.entities.get(id).unwrap().class_slave_list.len(), 30);
+    }
+
+    /// R02 牙：`ArcherGuard.Run` 曼哈顿最近 proper 选择 + 到点攻击（`Random(DC)` +
+    /// `GetHitStruckDamage` + `RM_FLYAXE`）；无目标且 `GuardDirection>0` ⇒ 转向。
+    #[test]
+    fn archer_guard_run_picks_nearest_and_fires_flyaxe() {
+        let seed = seed_where(|r| {
+            let _ = r.random_below(1); // DC（Lo=Hi=5）
+            true
+        });
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 112, 10, 10);
+        let far = player(&mut world, 14, 10); // 距离 4
+        let near = player(&mut world, 11, 12); // 距离 3
+        link_visible(&mut world, id, far);
+        link_visible(&mut world, id, near);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.walk_speed = 0;
+            e.ai.walk_tick = 99_999;
+            e.ai.attack_tick = 90_000;
+            e.ai.next_hit_time = 0;
+        }
+        world.rng = RandomNumber::with_seed(seed);
+        archer_guard_run(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert_eq!(e.ai.target_creature, Some(near), "曼哈顿最近");
+        // `AttackTarger`：Random(DC) → GetHitStruckDamage(AC 骰) → 玩家耐久 Random(10)
+        let mut expect = RandomNumber::with_seed(seed);
+        let _ = expect.random_below(1);
+        let _ = expect.random_below(1);
+        let _ = expect.random_below(10);
+        assert_eq!(world.rng.random(), expect.random(), "AtackTarger 取数序");
+        assert!(world
+            .pending_monster_ref_msgs
+            .iter()
+            .any(|m| m.ident == RM_FLYAXE && m.n_param3 == near));
+        assert!(world
+            .pending_ai_attacks
+            .iter()
+            .any(|(a, t, _)| *a == id && *t == near));
+
+        // 无目标 + GuardDirection>0 ⇒ TurnTo。
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 112, 10, 10);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.dir = 0;
+            e.guard_direction = 3;
+            e.ai.walk_speed = 0;
+            e.ai.walk_tick = 99_999;
+        }
+        archer_guard_run(&mut world, id);
+        assert_eq!(
+            world.entities.get(id).unwrap().ai.dir,
+            3,
+            "TurnTo(GuardDirection)"
+        );
+    }
+
+    /// MB-3b F1 牙：`class_struck_apply` 的三条非 `_Attack` 路径**不发 `RM_STRUCK`、
+    /// 不写 `LastHiter`**。把折叠块（`SetLastHiter` + `pending_struck.push`）恢复 ⇒ 红。
+    #[test]
+    fn mb3b_sculture_king_attack_does_not_emit_rm_struck() {
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 102, 10, 10);
+        let master = player(&mut world, 20, 20);
+        let mut target = Entity::new(0, "slave", 11, 10);
+        target.race = ACTOR_RACE_MONSTER;
+        target.hp = 1000;
+        target.max_hp = 1000;
+        target.ac = 0;
+        target.mac = 0;
+        target.master = Some(master); // `IsAttackTarget` 的 `target.Master != null` ⇒ proper
+        let t = world.add_entity(target);
+        assert!(
+            world.enter_world(t),
+            "目标必须落格（HitMagAttackTarget 枚举格对象）"
+        );
+        let before = world.entities.get(t).unwrap().hp;
+        sculture_king_attack(&mut world, id, t);
+        assert!(
+            world.entities.get(t).unwrap().hp < before,
+            "命中扣血（伤害 > 0）"
+        );
+        let t = world.entities.get(t).unwrap();
+        assert!(t.last_hiter.is_none(), "HitMagAttackTarget 不 SetLastHiter");
+        assert!(t.exp_hitter.is_none(), "ExpHitter 不被改写");
+        assert!(
+            t.ai.pending_struck.is_empty(),
+            "不发 RM_STRUCK：恢复折叠块 ⇒ 目标 base.Run 多抽 Random(6)/Random(300)"
+        );
+    }
+
+    /// MB-3b F1 牙（Gas 路径）：`GasAttackMonster.GasAttack` 同样只 `StruckDamage`。
+    #[test]
+    fn mb3b_gas_attack_does_not_emit_rm_struck() {
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 90, 10, 10);
+        let master = player(&mut world, 20, 20);
+        let mut target = Entity::new(0, "slave", 11, 10);
+        target.race = ACTOR_RACE_MONSTER;
+        target.hp = 1000;
+        target.max_hp = 1000;
+        target.ac = 0;
+        target.mac = 0;
+        target.speed_point = 0;
+        target.master = Some(master);
+        let t = world.add_entity(target);
+        assert!(world.enter_world(t));
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.dir = crate::magic::DIR_RIGHT;
+            e.hit_point = 1;
+            e.ai.next_hit_time = 0;
+            e.ai.attack_tick = 0;
+            e.ai.target_creature = Some(t);
+        }
+        let before = world.entities.get(t).unwrap().hp;
+        assert!(gas_attack_monster_attack_target(&mut world, id));
+        let t = world.entities.get(t).unwrap();
+        assert!(t.hp < before, "命中扣血");
+        assert!(t.last_hiter.is_none(), "GasAttack 不 SetLastHiter");
+        assert!(t.exp_hitter.is_none());
+        assert!(t.ai.pending_struck.is_empty(), "GasAttack 不发 RM_STRUCK");
+    }
+
+    /// MB-3b F1b 牙：`ArcherGuard` 是**先 `SetLastHiter` 再 `StruckDamage`**（`ArcherGuard.cs:31-33`）。
+    /// 顺序反了 ⇒ `StruckDamage` 的 `WarrMon` 倍率读到旧 LastHiter（本用例旧命中者 = 战士）。
+    #[test]
+    fn mb3b_archer_guard_sets_last_hiter_before_struck_damage() {
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        world.combat_config.warr_mon = 20;
+        let id = class_monster(&mut world, 112, 10, 10); // DC=5/5 ⇒ Random(1)
+        let old_hitter = player(&mut world, 20, 20);
+        world.entities.get_mut(old_hitter).unwrap().job = 0; // Warrior
+        let mut target = Entity::new(0, "target", 11, 10);
+        target.race = ACTOR_RACE_MONSTER;
+        target.hp = 100;
+        target.max_hp = 100;
+        target.ac = 0;
+        target.mac = 0;
+        target.last_hiter = Some(old_hitter);
+        target.last_hiter_tick = 100_000;
+        let t = world.add_entity(target);
+        archer_guard_attack_targer(&mut world, id, t);
+        let t = world.entities.get(t).unwrap();
+        assert_eq!(
+            t.hp, 95,
+            "先 SetLastHiter ⇒ StruckDamage 读弓箭手（非旧战士）⇒ WarrMon 不生效；顺序反了扣 10"
+        );
+        assert_eq!(t.last_hiter, Some(id), "SetLastHiter(弓箭手)");
+        assert!(t.exp_hitter.is_none(), "ExpHitter = null");
+        assert!(t.ai.pending_struck.is_empty(), "ArcherGuard 不发 RM_STRUCK");
+        assert!(world
+            .pending_monster_ref_msgs
+            .iter()
+            .any(|m| m.ident == RM_FLYAXE));
+    }
+
+    /// MB-3b F2 牙：105（`GasMothMonster : GasAttackMonster : AtMonster`）的 `base.Run()` =
+    /// `ATMonster.Run` 的 8s/1s 索敌门。外层 `GasMothMonster.Run` 的 WalkSpeed 门挡住时，
+    /// 该门仍必须补跑 `SearchTarget`。去掉 `|| e.race == 105` ⇒ 本用例红。
+    #[test]
+    fn mb3b_gas_moth_base_run_keeps_at_monster_search_gate() {
+        let mut world = World::new(30, 30);
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 105, 10, 10);
+        let p = player(&mut world, 11, 10);
+        link_visible(&mut world, id, p);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.walk_speed = 1000;
+            e.ai.walk_tick = 99_999; // GasMothMonster.Run 外层门不过（1 < 1000）
+            e.ai.search_enemy_tick = 90_000; // 10s > 8s ⇒ ATMonster 门过
+            e.ai.think_tick = 100_000; // 跳过 Think 的额外路径
+        }
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        // 调用方对 `ClassRunBase::Monster` 的续跑 = oracle `base.Run()`。
+        monster_run(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert_eq!(e.ai.search_enemy_tick, 100_000, "ATMonster.Run 索敌门刷新");
+        assert_eq!(e.ai.target_creature, Some(p), "SearchTarget 选中玩家");
+    }
+
+    /// MB-3b F4 牙：同格「死但未 Ghost」对象在 `boFlag=false` 枚举里（`base_objects_at` 的
+    /// `boFlag=true` 口径漏掉它）。命中判定仍受 G09 折入版 `is_proper_target` 限制（登记）。
+    #[test]
+    fn mb3b_base_objects_bo_false_includes_dead_non_ghost() {
+        let mut world = World::new(30, 30);
+        let live = monster(&mut world, 11, 10);
+        let dead = monster(&mut world, 11, 10);
+        world.entities.get_mut(dead).unwrap().death = true;
+        let ghost_dead = monster(&mut world, 11, 10);
+        {
+            let g = world.entities.get_mut(ghost_dead).unwrap();
+            g.death = true;
+            g.ghost = true;
+        }
+        assert!(world.enter_world(live));
+        assert!(world.enter_world(dead));
+        assert_eq!(
+            world.base_objects_at_including_dead(0, 11, 10),
+            vec![live, dead],
+            "boFlag=false ⇒ !Ghost || !Death：含死但未 Ghost，排除 Ghost+Death"
+        );
+        assert_eq!(
+            world.base_objects_at(0, 11, 10),
+            vec![live],
+            "既有 true 口径不含死对象"
+        );
+        let attacker = world.entities.get(live).cloned().unwrap();
+        let dead_e = world.entities.get(dead).cloned().unwrap();
+        assert!(
+            !crate::combat::is_proper_target(&attacker, &dead_e),
+            "G09 登记：死目标仍被折入版 is_proper_target 拒绝"
+        );
     }
 }

@@ -36,6 +36,10 @@ pub struct GameSvrConf {
     pub game_gold_name: String,
     /// `[Names] GamePoint`（帧 5008 的金币名）。
     pub game_point_name: String,
+    /// **MB-3（R34）**：`[Names] Zuma1..4`（`ServerConf.cs:96-99`；`GameSvrConf.cs:159/1315`
+    /// 缺省 `祖玛卫士/祖玛雕像/祖玛弓箭手/楔蛾`）——`ScultureKingMonster.CallSlave` 的
+    /// `Config.Zuma[Random(4)]` 怪名表。
+    pub zuma: [String; 4],
     /// `[Setup] ClientFile1`（帧 1106 的 `ClientFile1_CRC` 来源文件；见模块头）。
     pub client_file1: String,
     /// `[Setup] ClientFile2`。
@@ -205,6 +209,12 @@ impl GameSvrConf {
         GameSvrConf {
             game_gold_name: ini.read_string("Names", "GameGold", "元宝").to_string(),
             game_point_name: ini.read_string("Names", "GamePoint", "游戏点").to_string(),
+            zuma: [
+                ini.read_string("Names", "Zuma1", "祖玛卫士").to_string(),
+                ini.read_string("Names", "Zuma2", "祖玛雕像").to_string(),
+                ini.read_string("Names", "Zuma3", "祖玛弓箭手").to_string(),
+                ini.read_string("Names", "Zuma4", "楔蛾").to_string(),
+            ],
             client_file1: ini.read_string("Setup", "ClientFile1", "mir.1").to_string(),
             client_file2: ini
                 .read_string("Setup", "ClientFile2", "mir.Dat")
