@@ -10133,7 +10133,7 @@ fn push_open_health(
 /// 顺序：同一 tick 的全部出帧先入 [`SpellFrameBuf`]，flush 时按 `(byte)RM_*` **稳定**升序
 /// 发（oracle 每收件人的 `PriorityQueue<SendMessage, byte>` + 每 tick 连续排空
 /// `GetMessage`）：656=154 → 657=155 → 1100=170 → 640(Lowest)=255。
-/// 同优先级保持插入序（`deliver_self_delay_msgs` 的插入序）。
+/// 同优先级帧保持入缓冲序（队列侧 `SelfDelayQueue` 是四叉堆 `Arity=4`，不是插入序）。
 fn drain_b3_self_deliveries(
     rec: &mir2_world::TickRecord,
     world: &mir2_world::World,
@@ -33545,21 +33545,26 @@ mod tests {
             "第一条 = nPower/3 = 2"
         );
         assert_eq!(delays[1].w_param, 7, "第二条 = post-MSD nPower = 7");
-        // 投递 tick（承接同一流）：caster MSD ×2 → 目标 R(1000)+MSD ×2。
+        // 投递 tick（承接同一流）：本 tick 只投第一条 RM_DELAYMAGIC ⇒ caster MSD ×1 →
+        // 目标 R(1000)+MSD ×1；第二条与 lvexp 一起留到 t=1000。
         let before = rig.world.rng.clone();
         let f = rig.deliver(600);
+        // **oracle 队列实测**（net8.0）：同 actor 两条 `RM_DELAYMAGIC`(600) 后还有一条
+        // `RM_MAGIC_LVEXP`(1000)；出队第一条后 .NET 堆把**末元素**（lvexp）移到根，
+        // 它未到点 ⇒ 本次泵停——第二条**虽已到点**也不在本 tick 投递。故本 tick 只有
+        // 第一条的 3 抽 [1,1000,1]；第二条留到 t=1000 与 lvexp 一起投。
         assert_eq!(
-            b4_ledger(&before, &rig.world.rng, &[1, 1, 1000, 1, 1000, 1]),
-            vec![(1, 0), (1, 0), (1000, 128), (1, 0), (1000, 235), (1, 0)],
-            "F50-A2 投递 tick 逐抽"
+            b4_ledger(&before, &rig.world.rng, &[1, 1000, 1]),
+            vec![(1, 0), (1000, 527), (1, 0)],
+            "F50-A2 投递 tick 逐抽（仅第一条 RM_DELAYMAGIC）"
         );
-        assert_eq!(b4_seq(&f, 911), vec![SM_656, SM_656, SM_31, SM_31]);
-        assert_eq!(b4_seq(&f, 912), vec![SM_656, SM_656, SM_31, SM_31]);
+        assert_eq!(b4_seq(&f, 911), vec![SM_656, SM_31]);
+        assert_eq!(b4_seq(&f, 912), vec![SM_656, SM_31]);
         let struck = b4_all(&f, 911, SM_31);
         assert_eq!(
             struck.iter().map(|b| b4_cmd(b).series).collect::<Vec<_>>(),
-            vec![2, 6],
-            "31 的 damage = Round(2/1.2)=2、Round(7/1.2)=6"
+            vec![2],
+            "31 的 damage = Round(2/1.2)=2（第二条在 t=1000）"
         );
         let f = rig.deliver(400);
         assert_eq!(b4_count(&f, 911, SM_640), 1);
@@ -33651,20 +33656,18 @@ mod tests {
             "T 收自己的 656"
         );
         assert!(rig.world.entities.get(p).unwrap().pvp_flag, "SetPkFlag");
-        // +600ms：两条 RM_DELAYMAGIC → 两条 RM_MAGSTRUCK（玩家目标：每条 MSD + `StruckDamage` R(10)）。
+        // +600ms：两条 RM_DELAYMAGIC 中只有第一条在本 tick 投递（第二条被 lvexp 堆根阻塞到
+        // t=1000）；玩家目标：MSD + `StruckDamage` R(10)。
         let before = rig.world.rng.clone();
         let f = rig.deliver(600);
         assert_eq!(
-            b4_ledger(&before, &rig.world.rng, &[1, 1, 1, 10, 1, 10]),
-            vec![(1, 0), (1, 0), (1, 0), (10, 2), (1, 0), (10, 0)],
-            "F50-D2 投递 tick（玩家目标无 R(1000)；每条命中再抽 STD R(10)）"
+            b4_ledger(&before, &rig.world.rng, &[1, 1, 10]),
+            vec![(1, 0), (1, 0), (10, 9)],
+            "F50-D2 投递 tick（仅第一条 RM_DELAYMAGIC；玩家目标无 R(1000)，STD R(10)）"
         );
-        // **合同订正（以 oracle 为准）**：两条 `RM_MAGSTRUCK`（`(byte)8044 = 108`）在目标队列里
-        // 先于各自由它们派生的 `RM_STRUCK_MAG`（`(byte)8103 = 167`），而 `RM_HEALTHSPELLCHANGED`
-        // 的 `(byte)10052 = 68` 又先于这两条 ⇒ 实际逐 socket 序 = `53 → 53 → 31 → 31`。
-        // 合同 §4.3 的 `T: 53 → 31 → 53 → 31` 是按「逐消息处理完再下一条」写的，未计优先级
-        // （`538` 行/§6-4 的同优先级告警不覆盖跨优先级）。实现照 oracle 优先级队列。
-        assert_eq!(b4_seq(&f, 913), vec![SM_53, SM_53, SM_31, SM_31]);
+        // **oracle 队列实测**：t=600 只投第一条 `RM_DELAYMAGIC`（第二条被 lvexp 的
+        // 堆根阻塞到 t=1000）⇒ 目标侧本 tick 只有 `53 → 31` 这一对。
+        assert_eq!(b4_seq(&f, 913), vec![SM_53, SM_31]);
         assert_eq!(
             b4_count(&f, 913, SM_656),
             0,
@@ -33839,17 +33842,20 @@ mod tests {
         assert_eq!(rig.delay_msgs(mir2_world::slave::RM_DELAYMAGIC).len(), 2);
         let before = rig.world.rng.clone();
         let f = rig.deliver(600);
+        // **oracle 队列实测**（net8.0）：两条 `RM_DELAYMAGIC`(600) 之后还有一条
+        // `RM_MAGIC_LVEXP`(1000)；第一条出队后根变成未到点的 lvexp ⇒ 本次泵停，
+        // 第二条留到 t=1000。本 tick 只有第一条的 3 抽 [1,1000,1]。
         assert_eq!(
-            b4_ledger(&before, &rig.world.rng, &[1, 1, 1000, 1, 1000, 1]),
-            vec![(1, 0), (1, 0), (1000, 324), (1, 0), (1000, 527), (1, 0)],
-            "F42-B 投递 tick"
+            b4_ledger(&before, &rig.world.rng, &[1, 1000, 1]),
+            vec![(1, 0), (1000, 222), (1, 0)],
+            "F42-B 投递 tick（仅第一条 RM_DELAYMAGIC）"
         );
-        assert_eq!(b4_seq(&f, 911), vec![SM_656, SM_656, SM_31, SM_31]);
+        assert_eq!(b4_seq(&f, 911), vec![SM_656, SM_31]);
         let struck = b4_all(&f, 911, SM_31);
         assert_eq!(
             struck.iter().map(|b| b4_cmd(b).series).collect::<Vec<_>>(),
-            vec![6, 5],
-            "31 damage = Round(7/1.2)=6、Round(6/1.2)=5"
+            vec![6],
+            "31 damage = Round(7/1.2)=6（第二条在 t=1000）"
         );
         let f = rig.deliver(400);
         assert_eq!(b4_count(&f, 911, SM_640), 1);

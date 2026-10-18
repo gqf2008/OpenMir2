@@ -748,6 +748,65 @@ fn ghost_owner_zen_bee_message_stays_queued() {
     assert!(w.pending_special_spawns.is_empty());
 }
 
+/// **PR-1（net8 实测表）**：`RM_ZEN_BEE`(+500) 先入队、`RM_MAGHEALING`(0ms) 后入队，
+/// 同一 actor ⇒ `tick1（now=5000）不投；tick2 投 RM_MAGHEALING；tick3 不投；
+/// t=5500 投 RM_ZEN_BEE`（.NET `PriorityQueue` 不稳定：重入队后根变成 0ms 项）。
+#[test]
+fn zen_bee_500ms_tail_delivered_on_next_pump() {
+    let mut w = World::new(32, 32);
+    let bee = special_owner(&mut w, RACE_BEE_QUEEN, 5, 5);
+    let target = plain_child(&mut w, 7, 5);
+    {
+        let e = w.entities.get_mut(bee).unwrap();
+        e.ai.target_creature = Some(target);
+        e.ai.walk_tick = 0;
+        e.ai.attack_tick = 0;
+        e.ai.walk_speed = 1400;
+        e.ai.next_hit_time = 2000;
+    }
+    w.clock_ms = 5000;
+    special_monster_run(&mut w, bee);
+    assert_eq!(
+        w.self_delay_msgs.len(),
+        1,
+        "MakeChildBee 入队 RM_ZEN_BEE(+500)"
+    );
+    assert_eq!(w.self_delay_msgs.first().unwrap().ident, RM_ZEN_BEE);
+    assert_eq!(w.self_delay_msgs.first().unwrap().deliver_at_ms, 5500);
+
+    // 同一 actor 后入队一条立即到点的消息（`SendSelfDelayMsg` 0ms）。
+    w.send_self_delay_msg_with(bee, mir2_world::slave::RM_MAGHEALING, 0, 7, 0);
+    assert_eq!(w.self_delay_msgs.len(), 2);
+
+    // tick1（now=5000）：根 RM_ZEN_BEE 未到点 ⇒ 出队、重入队、本次泵停；
+    // 0ms 项不得在本 tick 被投。
+    let outs = w.deliver_self_delay_msgs();
+    assert!(outs.is_empty(), "tick1：未到点 ⇒ 本次泵不投");
+    assert_eq!(w.self_delay_msgs.len(), 2, "两条都保留在队列");
+    assert_eq!(
+        w.self_delay_msgs.first().unwrap().ident,
+        mir2_world::slave::RM_MAGHEALING,
+        "重入队后堆根是 0ms 项（不是 RM_ZEN_BEE）"
+    );
+
+    // tick2（同一时钟）：根是已到点的 RM_MAGHEALING ⇒ 投它。
+    let outs = w.deliver_self_delay_msgs();
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].ident, mir2_world::slave::RM_MAGHEALING);
+    assert_eq!(outs[0].mag_healing, Some(7));
+
+    // tick3：只剩未到点的 RM_ZEN_BEE。
+    assert!(w.deliver_self_delay_msgs().is_empty(), "tick3 不投");
+
+    // t=5500：RM_ZEN_BEE 到点。
+    w.clock_ms = 5500;
+    let outs = w.deliver_self_delay_msgs();
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].ident, RM_ZEN_BEE);
+    assert_eq!(outs[0].actor_id, bee);
+    assert!(w.self_delay_msgs.is_empty());
+}
+
 /// 世界默认 `Config.Bee/Spider` 与 `[Names]` 覆盖。
 #[test]
 fn special_names_default_and_override() {

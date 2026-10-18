@@ -37,12 +37,17 @@
 //! ## 自投递（`RM_ZEN_BEE`，500ms）
 //!
 //! `SendSelfDelayMsg` 走本仓既有的 [`crate::slave::World::send_self_delay_msg`] 队列
-//! （`slave::SelfDelayMsg`，`DeliveryTime = now + 500`）。本仓 `deliver_self_delay_msgs`
-//! 的语义是「**跳过未到点项、继续扫描后续项**」；oracle `BaseObject.GetMessage`
-//! （`BaseObject.Message.cs:334-355`）在**队头**未到点时重新以 `Lowest` 入队并返回
-//! `false`（本轮消息段结束）。二者在「延时消息为 `Lowest` 优先级、其它消息先出队」的
-//! 生产路径上等价；本卡的 `RM_ZEN_BEE` 是唯一在队的消息时行为相同。**登记**：本仓不做
-//! 优先级队列，未到点项不阻塞其它已到点项（既有语义，非本卡新增）。
+//! （`slave::SelfDelayMsg`，`DeliveryTime = now + 500`）。PR-1 起队列是
+//! [`crate::slave::SelfDelayQueue`]——**四叉堆（.NET 8 `Arity=4`）**，与
+//! `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:21`）逐操作等价的每 actor 队列；
+//! `deliver_self_delay_msgs` 逐字复刻
+//! `BaseObject.GetMessage`（`BaseObject.Message.cs:334-378`）：`TryDequeue` 取堆根，未到点 ⇒
+//! 以 `Lowest` **重新入队**并 `return false`（只结束**本次**泵，没有跨调用状态）。由于 .NET
+//! 堆**不稳定**，重入队后该项不再位于根，下一次泵会先投递同 actor 的其它已到点项；不同
+//! actor 的队列互相独立。`RM_ZEN_BEE` 的 500ms 自投递即按此逐 tick 调度
+//! （tick1 不投、tick2 投后入队的 0ms 项、t=+500 投 `RM_ZEN_BEE`）。
+//! **登记**：本层只建模 `SendSelfDelayMsg` / `SendStruckDelayMsg`（一律 `Lowest`）与
+//! `SendMsg`（`(byte)wIdent`）；oracle 队列里其它优先级的消息族仍未进入本层。
 //!
 //! ## 建模差异（登记，不忽略）
 //!

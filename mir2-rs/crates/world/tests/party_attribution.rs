@@ -300,6 +300,9 @@ fn poison_delay(target: i32, caster: i32) -> SelfDelayMsg {
         msg: String::new(),
         actor_ref: 0,
         deliver_at_ms: 0,
+        enqueue_seq: 0,
+        // `BaseObject.SendSelfDelayMsg`：`MessagePriority.Lowest`。
+        priority: mir2_world::slave::MESSAGE_PRIORITY_LOWEST,
     }
 }
 

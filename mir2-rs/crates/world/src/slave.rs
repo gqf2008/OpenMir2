@@ -983,6 +983,163 @@ pub fn process_slave_ghost(world: &mut World, master_id: i32) -> Vec<i32> {
     out
 }
 
+/// oracle `MessagePriority.Lowest`（`src/OpenMir2/Enums/MessagePriority.cs:7`，`= 255`）。
+pub const MESSAGE_PRIORITY_LOWEST: u8 = 255;
+
+/// **四叉堆（.NET 8 `Arity=4`）**：与 .NET 8 `PriorityQueue<TElement, byte>`
+/// （`System.Collections.Generic`）逐操作等价的单 actor 消息优先队列。`Enqueue` = 尾插 +
+/// sift-up（父节点 `(i-1) >> 2`，**严格小于**才上移）；`Dequeue` = 取根 + **末元素移根** +
+/// sift-down（首子 `(i << 2) + 1`，最多四个子中取**首个**严格最小者；相等不上移/不下移）。
+///
+/// 这套规则产生 oracle 的**不稳定**调度（复验者在 net8.0 实测，见
+/// `/e/tmp/pr1-oracle-sim/Program.cs`）：等优先级时重入队的项不再位于根，下一次泵会先
+/// 投递堆中的其它已到点项。逐 tick 对表证据见 `slave::tests::pr1_*`。
+///
+/// 每个 actor 一把（oracle `ActorEntity.MsgQueue`，`ActorEntity.cs:21`）。[`Self::iter`]
+/// 按 actor **首次入队序**展开、每 actor 内部按堆数组序（= .NET `UnorderedItems` 序），
+/// 只供诊断/断言；投递语义只由 [`Self::peek`] / [`Self::dequeue`] / [`Self::enqueue`] 定义。
+#[derive(Clone, Debug, Default)]
+pub struct SelfDelayQueue {
+    /// 有消息 actor 的首次入队序（保证跨 actor 的诊断顺序确定）。
+    order: Vec<i32>,
+    /// actor → 四叉堆数组（`.NET PriorityQueue._nodes`，`Arity=4`）。
+    queues: std::collections::BTreeMap<i32, Vec<SelfDelayMsg>>,
+}
+
+impl SelfDelayQueue {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `.NET PriorityQueue.Enqueue`（`PriorityQueue.cs` 的 `Enqueue`）：数组尾插后
+    /// sift-up；父节点为 `(i-1) >> 2`（四叉堆），父节点**严格大于**自己才交换（相等不动）。
+    pub fn enqueue(&mut self, msg: SelfDelayMsg) {
+        let actor_id = msg.actor_id;
+        if !self.queues.contains_key(&actor_id) {
+            self.order.push(actor_id);
+        }
+        let heap = self.queues.entry(actor_id).or_default();
+        heap.push(msg);
+        let mut i = heap.len() - 1;
+        while i > 0 {
+            let parent = (i - 1) >> 2;
+            if heap[i].priority >= heap[parent].priority {
+                break;
+            }
+            heap.swap(i, parent);
+            i = parent;
+        }
+    }
+
+    /// [`Self::enqueue`] 的别名（保留旧 `Vec::push` 调用面）。
+    pub fn push(&mut self, msg: SelfDelayMsg) {
+        self.enqueue(msg);
+    }
+
+    pub fn len(&self) -> usize {
+        self.queues.values().map(Vec::len).sum()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.queues.values().all(Vec::is_empty)
+    }
+
+    /// 当前有消息的 actor id，按首次入队序（泵按此快照逐个 actor 推进）。
+    pub fn actor_ids(&self) -> Vec<i32> {
+        self.order.clone()
+    }
+
+    /// 该 actor 的队首（堆根）。
+    pub fn peek(&self, actor_id: i32) -> Option<&SelfDelayMsg> {
+        self.queues.get(&actor_id).and_then(|h| h.first())
+    }
+
+    /// `.NET PriorityQueue.Dequeue`：取根；**末元素移到根**；然后 sift-down——首子为
+    /// `(i << 2) + 1`，在最多四个子中取**首个**严格最小者（相等保留先出现者）；该子只有
+    /// **严格小于**当前节点才上移（当前节点 `<=` 最小子即停）。
+    pub fn dequeue(&mut self, actor_id: i32) -> Option<SelfDelayMsg> {
+        let heap = self.queues.get_mut(&actor_id)?;
+        if heap.is_empty() {
+            return None;
+        }
+        // `swap_remove(0)`：返回根，并把末元素移到根（= .NET 的 last→root）。
+        let root = heap.swap_remove(0);
+        let n = heap.len();
+        let mut i = 0;
+        loop {
+            let first_child = (i << 2) + 1;
+            if first_child >= n {
+                break;
+            }
+            let mut smallest = first_child;
+            let mut smallest_priority = heap[first_child].priority;
+            let upper = core::cmp::min(first_child + 4, n);
+            let mut child = first_child + 1;
+            while child < upper {
+                // 严格小于才换 ⇒ 并列时保留**首个**最小子（.NET `MoveDownDefaultComparer`）。
+                if heap[child].priority < smallest_priority {
+                    smallest_priority = heap[child].priority;
+                    smallest = child;
+                }
+                child += 1;
+            }
+            if heap[i].priority <= smallest_priority {
+                break;
+            }
+            heap.swap(i, smallest);
+            i = smallest;
+        }
+        if heap.is_empty() {
+            self.queues.remove(&actor_id);
+            self.order.retain(|&x| x != actor_id);
+        }
+        Some(root)
+    }
+
+    /// 诊断用：按 [`Self::iter`] 序的第一条。
+    pub fn first(&self) -> Option<&SelfDelayMsg> {
+        self.iter().next()
+    }
+
+    /// 诊断/断言用展开：actor 首次入队序 → 每 actor 的堆数组序。
+    pub fn iter(&self) -> impl Iterator<Item = &SelfDelayMsg> {
+        self.order
+            .iter()
+            .filter_map(move |id| self.queues.get(id))
+            .flatten()
+    }
+
+    /// oracle `UpdateDelayMsg`（`BaseObject.Message.cs:257-278`）的删除段：循环 `TryPeek`
+    /// 队首，**只有队首**匹配 `(wIdent, nParam1)` 才 `TryDequeue`；首个不匹配即停
+    /// （`i` 自增到 `Count` 后退出）。返回删除条数。
+    pub fn remove_head_matching(&mut self, actor_id: i32, ident: u16, n_param1: i32) -> usize {
+        let mut removed = 0;
+        while let Some(head) = self.peek(actor_id) {
+            if head.ident != ident || head.n_param1 != n_param1 {
+                break;
+            }
+            self.dequeue(actor_id);
+            removed += 1;
+        }
+        removed
+    }
+}
+
+impl std::ops::Index<usize> for SelfDelayQueue {
+    type Output = SelfDelayMsg;
+
+    fn index(&self, mut index: usize) -> &SelfDelayMsg {
+        for id in &self.order {
+            let heap = &self.queues[id];
+            if index < heap.len() {
+                return &heap[index];
+            }
+            index -= heap.len();
+        }
+        panic!("SelfDelayQueue index out of range");
+    }
+}
+
 /// `BaseObject.SendSelfDelayMsg`（`BaseObject.Message.cs:188-206`）入队的一条自身延时消息。
 ///
 /// `deliver_at_ms` = oracle 的 `DeliveryTime = GetTickCount() + dwDelay`；`BaseObject.GetMessage`
@@ -1012,6 +1169,18 @@ pub struct SelfDelayMsg {
     pub actor_ref: i32,
     /// 到点时刻（sim 毫秒）。
     pub deliver_at_ms: i64,
+    /// **消息创建序**（`World::next_msg_order`）：首次入队时分配，未到点重入队**不重发**。
+    /// 仅用于宿主按创建序排水 `pending_mag_struck`（`RM_MAGSTRUCK` 在 oracle 里进的是
+    /// 目标自己的队列，宿主这一批处理的顺序不受队列语义约束；钉创建序以保持五批 RNG
+    /// trace 基线逐字节不变）。不参与堆比较。
+    pub enqueue_seq: u64,
+    /// oracle 优先队列的优先级（`ActorEntity.MsgQueue` 的 `byte` 键，`ActorEntity.cs:21`）。
+    ///
+    /// `SendSelfDelayMsg` / `SendStruckDelayMsg` 一律 [`MESSAGE_PRIORITY_LOWEST`]（255，
+    /// `BaseObject.Message.cs:204/:222/:243`）；即时 `SendMsg(int…)` 用 **`(byte)wIdent`**
+    /// （`BaseObject.Message.cs:80`），即消息号低 8 位。`GetMessage` 未到点重入队时**强制
+    /// 改回 `Lowest`**（`:344/:369`）——泵实现照做。
+    pub priority: u8,
 }
 
 /// 一条自身延时消息**到点投递**（`PlayObject.Operate`）的效果记录。
@@ -1133,7 +1302,8 @@ impl World {
     /// `Ghost == true` 的实体不入队（见「生命周期」节 BUG-REPLICA 第 4 条：`RM_MASTERDIEGHOST`
     /// 恒不可达）。
     ///
-    /// 入队优先级一律 `MessagePriority.Lowest`（`:204`）；本骨架以**插入序**代替优先队列。
+    /// 入队优先级一律 `MessagePriority.Lowest`（`:204`）；队列为四叉堆（.NET 8 `Arity=4`），
+    /// 同优先级**不是**插入序——出队序由堆的 sift 结果决定。
     pub fn send_self_delay_msg(&mut self, actor_id: i32, ident: u16, delay_ms: i64) {
         self.send_self_delay_msg_with(actor_id, ident, 0, 0, delay_ms);
     }
@@ -1173,6 +1343,7 @@ impl World {
             return;
         }
         let deliver_at_ms = self.clock_ms + delay_ms;
+        let enqueue_seq = self.next_msg_order();
         self.self_delay_msgs.push(SelfDelayMsg {
             actor_id,
             ident,
@@ -1183,12 +1354,22 @@ impl World {
             msg: String::new(),
             actor_ref: 0,
             deliver_at_ms,
+            enqueue_seq,
+            priority: MESSAGE_PRIORITY_LOWEST,
         });
     }
 
     /// **P3-B5**：`BaseObject.SendStruckDelayMsg` 的显式 actorId 重载
     /// （`BaseObject.Message.cs:234-252`）——入**被击中者自己**的队列，`DeliveryTime = now+600`、
     /// 优先级 `Lowest`，`Ghost` 门在被击中者上。9/10 的穿透命中用它。
+    ///
+    /// 与 [`World::send_self_delay_msg`] **共用同一队列**（oracle 同为 `MsgQueue` + `Lowest`）
+    /// ⇒ 同样受 [`World::deliver_self_delay_msgs`] 的队列语义约束。
+    ///
+    /// **R19 订正**：`FireballMonster.cs:41` 的真实生产路径是 **7 参**
+    /// `SendStruckDelayMsg(RM_DELAYMAGIC, …, 600)`——入**怪自己**的队列（`this`），
+    /// 不是本入口（8 参、目标队列、`RM_MAGSTRUCK`，对应 `BaseObject.cs:912` 等调用点）。
+    /// 生产者接线归 **MB-9**；本层只保证队列时序一致。
     pub fn send_struck_delay_msg(
         &mut self,
         target_id: i32,
@@ -1201,6 +1382,7 @@ impl World {
             return;
         }
         let deliver_at_ms = self.clock_ms + delay_ms;
+        let enqueue_seq = self.next_msg_order();
         self.self_delay_msgs.push(SelfDelayMsg {
             actor_id: target_id,
             ident: RM_MAGSTRUCK,
@@ -1211,18 +1393,18 @@ impl World {
             msg: String::new(),
             actor_ref: caster_id,
             deliver_at_ms,
+            enqueue_seq,
+            priority: MESSAGE_PRIORITY_LOWEST,
         });
     }
 
     /// **P3-B3**：`BaseObject.UpdateDelayMsg`（`BaseObject.Message.cs:257-278`）的等价物。
     ///
-    /// oracle 先遍历 `MsgQueue` 删除 `wIdent == ident && nParam1 == lParam1` 的待投递项，
-    /// 再 `SendStruckDelayMsg(..., dwDelay)`（末行 `MsgQueue.Enqueue(..., Lowest)`）。
-    /// 本骨架的延迟队列按插入序保存 ⇒ 等价的「删除同 `(actor, ident, nParam1)` 待投递项」。
-    ///
-    /// **登记**：oracle 的循环只在**队首**（最小优先级）连续匹配时删除；队首不匹配即退出该次
-    /// 扫描（`i` 自增到 `Count` 结束），因此它是「删队首连续同键」而非「删全队列同键」。
-    /// 本骨架未建模跨对象的整条优先级堆，按任务口径直接删除全部同键待投递项。
+    /// oracle 先删队列里的同名项，再 `SendStruckDelayMsg(..., dwDelay)`（末行
+    /// `MsgQueue.Enqueue(..., Lowest)`）。删除段逐字照搬 `:257-278` 的循环：反复 `TryPeek`
+    /// **队首**，只有 `wIdent == ident && nParam1 == lParam1` 才 `TryDequeue`；队首一旦不匹配
+    /// 就退出（循环里的 `i` 自增到 `Count` 后结束）⇒ 实际是「删**队首连续**同键」，
+    /// 不是「删全队列同键」。本骨架用 [`SelfDelayQueue::remove_head_matching`] 同构实现。
     #[allow(clippy::too_many_arguments)]
     pub fn update_self_delay_msg_full(
         &mut self,
@@ -1235,7 +1417,7 @@ impl World {
         delay_ms: i64,
     ) {
         self.self_delay_msgs
-            .retain(|m| !(m.actor_id == actor_id && m.ident == ident && m.n_param1 == n_param1));
+            .remove_head_matching(actor_id, ident, n_param1);
         self.send_self_delay_msg_full(
             actor_id, ident, w_param, n_param1, n_param2, n_param3, delay_ms,
         );
@@ -1249,7 +1431,8 @@ impl World {
     /// 只是 16 的调用面前置了 `mag_objects_in_range` 的 `!ghost`，把它掩盖了）。
     ///
     /// 16 的 `targetObject.SendMsg(RM_MAKEHOLYSEIZEMODE, nPower*1000, 0,0,0)`（`MagicManager.cs:1168`）
-    /// 用它落到目标自己的队列（投递时刻 = 当前时钟，按插入序）。
+    /// 用它落到目标自己的队列：`DeliveryTime = 0`（即时），优先级 **`(byte)wIdent`**
+    /// （`BaseObject.Message.cs:80`），不是 `Lowest`。
     pub fn send_msg_now(
         &mut self,
         actor_id: i32,
@@ -1267,6 +1450,7 @@ impl World {
         if blocked {
             return;
         }
+        let enqueue_seq = self.next_msg_order();
         self.self_delay_msgs.push(SelfDelayMsg {
             actor_id,
             ident,
@@ -1277,6 +1461,9 @@ impl World {
             msg: String::new(),
             actor_ref: 0,
             deliver_at_ms: self.clock_ms,
+            enqueue_seq,
+            // `BaseObject.Message.cs:80`：`MsgQueue.Enqueue(sendMessage, (byte)wIdent)`。
+            priority: ident as u8,
         });
     }
 
@@ -1297,232 +1484,271 @@ impl World {
         self.send_self_delay_msg(master_id, RM_MASTERDIEGHOST, MASTER_DIE_SELF_DELAY_MS);
     }
 
-    /// 到点投递自身延时消息（oracle `PlayObject.Message.cs:360-364` 的消息段）：按**插入序**扫描，
-    /// 对 `clock_ms >= deliver_at_ms` 的项出队并按 `ident` 调生产效果体。
-    ///
-    /// 借道 oracle `Operate`（`PlayObject.Message.cs:2116-2121`）：`RM_MASTERDIEMUTINY` ⇒
-    /// [`process_slave_mutiny`]，`RM_MASTERDIEGHOST` ⇒ [`process_slave_ghost`]。未到点的项**保留**
-    /// 在队里（oracle `GetMessage` 重新入队等价）。
+    /// 分配一个消息创建序（[`SelfDelayMsg::enqueue_seq`] / [`crate::world::PendingMagStruck::order`]）。
+    fn next_msg_order(&mut self) -> u64 {
+        let order = self.msg_order;
+        self.msg_order += 1;
+        order
+    }
+
+    /// [`World::deliver_self_delay_msgs_with`] 的无 `spawner` 版本（`RM_ZEN_BEE` 只入
+    /// [`crate::world::World::pending_special_spawns`]）。
     pub fn deliver_self_delay_msgs(&mut self) -> Vec<SelfDelayOutcome> {
         self.deliver_self_delay_msgs_with(None)
     }
 
-    /// [`World::deliver_self_delay_msgs`] 的宿主接缝版本：给出 `spawner` 时，`RM_ZEN_BEE`
-    /// 在投递点**同步**执行 `Operate` 的 `RegenMonsterByName`（oracle 同点同次抽）；不给时
-    /// 只把请求放进 [`crate::world::World::pending_special_spawns`]。
+    /// 到点投递自身延时消息（oracle `PlayObject.Message.cs:360-364` 的消息段）：对每个
+    /// 有消息的 actor，按 [`SelfDelayQueue`]（四叉堆，.NET 8 `Arity=4`）**逐条泵出**并按
+    /// `ident` 调生产效果体。
     ///
-    /// `RM_ZEN_BEE` 的投递门：oracle 的延时消息只在 actor 自己的 `Run()` 里泵出，`Ghost` 的怪
-    /// 被 `ProcessMonsters` 整只跳过 ⇒ 消息永不投递。本骨架同样把 Ghost actor 的该消息**保留**
-    /// 在队列（其它 ident 的既有语义不变）。
+    /// **泵的逐字语义**（`BaseObject.GetMessage`，`BaseObject.Message.cs:334-378`）：
+    /// ```text
+    /// while (TryDequeue(out msg)) {
+    ///     if (msg.DeliveryTime > 0 && now < msg.DeliveryTime) {
+    ///         MsgQueue.Enqueue(msg, Lowest);   // 重新入队
+    ///         return false;                    // 只结束本次泵
+    ///     }
+    ///     deliver(msg);
+    /// }
+    /// ```
+    /// 关键点（复验实测，见 `/e/tmp/pr1-oracle-sim`）：
+    /// - 「重新入队 + `return false`」只结束**本次**调用，**没有跨调用的 blocked 状态**；
+    /// - `.NET PriorityQueue` **不稳定**：重入队后该项不再位于根，**下一次**泵会先投递堆中
+    ///   其它已到点项（两项场景 tick2 投次项、到点才投首项）；
+    /// - `MsgQueue` 每 actor 一把（`ActorEntity.cs:21`），一个 actor 的未到点队首不影响其它 actor。
+    ///
+    /// 借道 oracle `Operate`（`PlayObject.Message.cs:2116-2121`）：`RM_MASTERDIEMUTINY` ⇒
+    /// [`process_slave_mutiny`]，`RM_MASTERDIEGHOST` ⇒ [`process_slave_ghost`]。
     pub fn deliver_self_delay_msgs_with(
         &mut self,
         mut spawner: Option<&mut dyn crate::special_monster::SpecialSpawner>,
     ) -> Vec<SelfDelayOutcome> {
         let now = self.clock_ms;
         let mut out = Vec::new();
-        let mut i = 0;
-        while i < self.self_delay_msgs.len() {
-            if self.self_delay_msgs[i].deliver_at_ms > now {
-                i += 1;
-                continue;
-            }
-            let msg = self.self_delay_msgs.remove(i);
-            // `CloneMonster.Operate`（`Clone.cs:14-30`）：**任意** `wIdent` 都 `return false`
-            // ⇒ `base.Operate` 的**全部**投递效果对 Clone 不生效（`RM_POISON` 的中毒、
-            // `RM_MAKEHOLYSEIZEMODE` 的神圣、`RM_DOOPENHEALTH` 的开血、`RM_MAGHEALING`、
-            // `RM_TRANSPARENT`、`RM_MAGIC_LVEXP`、`RM_DELAYMAGIC`、`RM_MAGSTRUCK`、
-            // `RM_REFMESSAGE`（→ `RM_STRUCK`）、`RM_RANDOMSPACEMOVE`、`RM_DELAYPUSHED` …）。
-            // 只有 `RM_STRUCK`/`RM_MAGSTRUCK`/`RM_SPELL` 的 `Master.WAbil.MP` 支生效——
-            // 统一走 [`crate::special_monster::clone_operate`]（非这三条 ident 是纯 no-op）。
-            if self
-                .entities
-                .get(msg.actor_id)
-                .is_some_and(|e| e.race == crate::special_monster::RACE_CLONE_MONSTER)
-            {
-                crate::special_monster::clone_operate(
-                    self,
-                    msg.actor_id,
-                    msg.ident,
-                    msg.w_param,
-                    msg.n_param3,
-                );
-                out.push(SelfDelayOutcome {
-                    actor_id: msg.actor_id,
-                    ident: msg.ident,
-                    ..SelfDelayOutcome::default()
-                });
-                continue;
-            }
-            // `RM_ZEN_BEE`（`BeeQueen.cs:30` / `SpiderHouseMonster.cs:28`）：投递点 =
-            // `Operate`；Ghost actor 的消息保留在队列（见本方法文档）。
-            if msg.ident == crate::special_monster::RM_ZEN_BEE {
-                let deliverable = self.entities.get(msg.actor_id).is_some_and(|e| !e.ghost);
-                if !deliverable {
-                    self.self_delay_msgs.insert(i, msg);
-                    i += 1;
+        // 每 actor 独立队列；按 actor 首次入队序泵（oracle 每个 actor 的 `Run()` 各泵自己的）。
+        // `actors` 只是**本轮起点的快照**：本轮投递中新入队的消息留到下一次调用
+        // （oracle 同一 actor 的 `Run()` 一轮只泵一次）。
+        let actors = self.self_delay_msgs.actor_ids();
+        for actor_id in actors {
+            while let Some(head) = self.self_delay_msgs.peek(actor_id) {
+                let ident = head.ident;
+                // Rust 侧登记门（oracle 没有对应的泵调用/开关）：
+                // - Ghost actor 的 `RM_ZEN_BEE`：oracle `ProcessMonsters` 整只跳过 Ghost ⇒
+                //   其消息泵根本不跑 ⇒ 消息保留。
+                // - `slave_self_delay_enabled == false` 的主人死族：Rust 侧开关（oracle 无此门），
+                //   消息保留。
+                if ident == crate::special_monster::RM_ZEN_BEE
+                    && !self.entities.get(actor_id).is_some_and(|e| !e.ghost)
+                {
+                    break;
+                }
+                if matches!(ident, RM_MASTERDIEMUTINY | RM_MASTERDIEGHOST)
+                    && !self.slave_self_delay_enabled()
+                {
+                    break;
+                }
+                if head.deliver_at_ms > now {
+                    // oracle `GetMessage`：`TryDequeue` 后发现未到点 ⇒ **以 `Lowest` 重新入队**
+                    // 并 `return false`。必须真做「出队 + 入队」：.NET 堆布局因此改变（末元素
+                    // 移到根、sift-down），下一次泵才能先投递其它已到点项。
+                    let mut msg = self
+                        .self_delay_msgs
+                        .dequeue(actor_id)
+                        .expect("peek 成功 ⇒ 队非空");
+                    msg.priority = MESSAGE_PRIORITY_LOWEST;
+                    self.self_delay_msgs.enqueue(msg);
+                    break;
+                }
+                let msg = self
+                    .self_delay_msgs
+                    .dequeue(actor_id)
+                    .expect("peek 成功 ⇒ 队非空");
+                // `CloneMonster.Operate`（`Clone.cs:14-30`）：**任意** `wIdent` 都 `return false`
+                // ⇒ `base.Operate` 的**全部**投递效果对 Clone 不生效（`RM_POISON` 的中毒、
+                // `RM_MAKEHOLYSEIZEMODE` 的神圣、`RM_DOOPENHEALTH` 的开血、`RM_MAGHEALING`、
+                // `RM_TRANSPARENT`、`RM_MAGIC_LVEXP`、`RM_DELAYMAGIC`、`RM_MAGSTRUCK`、
+                // `RM_REFMESSAGE`（→ `RM_STRUCK`）、`RM_RANDOMSPACEMOVE`、`RM_DELAYPUSHED` …）。
+                // 只有 `RM_STRUCK`/`RM_MAGSTRUCK`/`RM_SPELL` 的 `Master.WAbil.MP` 支生效——
+                // 统一走 [`crate::special_monster::clone_operate`]（非这三条 ident 是纯 no-op）。
+                if self
+                    .entities
+                    .get(msg.actor_id)
+                    .is_some_and(|e| e.race == crate::special_monster::RACE_CLONE_MONSTER)
+                {
+                    crate::special_monster::clone_operate(
+                        self,
+                        msg.actor_id,
+                        msg.ident,
+                        msg.w_param,
+                        msg.n_param3,
+                    );
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        ..SelfDelayOutcome::default()
+                    });
                     continue;
                 }
-                let zen_bee = match spawner.as_mut() {
-                    Some(sp) => {
-                        // oracle `Operate(RM_ZEN_BEE)` 同步 `RegenMonsterByName`。
-                        crate::special_monster::operate_special(
-                            self,
-                            &mut **sp,
-                            msg.actor_id,
-                            msg.ident,
-                            0,
-                            0,
-                        );
-                        None
-                    }
-                    None => {
-                        let req = crate::special_monster::special_spawn_request(self, msg.actor_id);
-                        if let Some(req) = req.clone() {
-                            self.pending_special_spawns.push(req);
+                // `RM_ZEN_BEE`（`BeeQueen.cs:30` / `SpiderHouseMonster.cs:28`）：投递点 =
+                // `Operate`。Ghost actor 的分支已在出队前处理（整泵不跑 ⇒ 保留）。
+                if msg.ident == crate::special_monster::RM_ZEN_BEE {
+                    let zen_bee = match spawner.as_mut() {
+                        Some(sp) => {
+                            // oracle `Operate(RM_ZEN_BEE)` 同步 `RegenMonsterByName`。
+                            crate::special_monster::operate_special(
+                                self,
+                                &mut **sp,
+                                msg.actor_id,
+                                msg.ident,
+                                0,
+                                0,
+                            );
+                            None
                         }
-                        req
-                    }
-                };
-                out.push(SelfDelayOutcome {
-                    actor_id: msg.actor_id,
-                    ident: msg.ident,
-                    zen_bee,
-                    ..SelfDelayOutcome::default()
-                });
-                continue;
-            }
-            // B2：`RM_MAGHEALING` 不受「宝宝自投递」开关影响（它由治疗效果体入队）；
-            // 两个主人死族消息仍按 `slave_self_delay_enabled` 门（关闭时保持入队）。
-            if matches!(msg.ident, RM_MASTERDIEMUTINY | RM_MASTERDIEGHOST)
-                && !self.slave_self_delay_enabled()
-            {
-                self.self_delay_msgs.insert(i, msg);
-                i += 1;
-                continue;
-            }
-            match msg.ident {
-                RM_MAGHEALING => {
-                    // `PlayObject.Message.cs:1619-1629`：交付段 0 抽，只把 `nPower` 交宿主累加
-                    // `IncHealing`（`SessionGround.recovery`）。
+                        None => {
+                            let req =
+                                crate::special_monster::special_spawn_request(self, msg.actor_id);
+                            if let Some(req) = req.clone() {
+                                self.pending_special_spawns.push(req);
+                            }
+                            req
+                        }
+                    };
                     out.push(SelfDelayOutcome {
                         actor_id: msg.actor_id,
                         ident: msg.ident,
-                        mutinied: Vec::new(),
-                        ghosted: Vec::new(),
-                        mag_healing: Some(msg.n_param1),
+                        zen_bee,
                         ..SelfDelayOutcome::default()
                     });
+                    continue;
                 }
-                RM_MASTERDIEMUTINY => {
-                    // 只在真正有到点的叛变消息时才克隆配置（避免每 tick 无谓 clone）。
-                    let cfg = self.pet_slave_cfg.clone();
-                    let mutinied = process_slave_mutiny(self, msg.actor_id, &cfg);
-                    out.push(SelfDelayOutcome {
-                        actor_id: msg.actor_id,
-                        ident: msg.ident,
-                        mutinied,
-                        ghosted: Vec::new(),
-                        mag_healing: None,
-                        ..SelfDelayOutcome::default()
-                    });
-                }
-                RM_MASTERDIEGHOST => {
-                    let ghosted = process_slave_ghost(self, msg.actor_id);
-                    out.push(SelfDelayOutcome {
-                        actor_id: msg.actor_id,
-                        ident: msg.ident,
-                        mutinied: Vec::new(),
-                        ghosted,
-                        mag_healing: None,
-                        ..SelfDelayOutcome::default()
-                    });
-                }
-                // **P3-B3**：19 的 800ms 投递——投递时才重读 `StatusTimeArr[8]` 并逐怪抽 `R(2)`。
-                RM_TRANSPARENT => {
-                    let d = self.mag_make_private_transparent(msg.actor_id, msg.n_param1 as u16);
-                    out.push(SelfDelayOutcome {
-                        actor_id: msg.actor_id,
-                        ident: msg.ident,
-                        transparent: Some(d),
-                        ..SelfDelayOutcome::default()
-                    });
-                }
-                // **P3-B3**：28 的 1500ms 投递——`MakeOpenHealth()`。
-                RM_DOOPENHEALTH => {
-                    let h = self.make_open_health(msg.actor_id);
-                    out.push(SelfDelayOutcome {
-                        actor_id: msg.actor_id,
-                        ident: msg.ident,
-                        open_health: Some(h),
-                        ..SelfDelayOutcome::default()
-                    });
-                }
-                // **P3-B3**：共享尾的 1000ms 训练帧
-                // （`nParam1=MagicId, nParam2=Level, nParam3=TranPoint`）。
-                RM_MAGIC_LVEXP => {
-                    out.push(SelfDelayOutcome {
-                        actor_id: msg.actor_id,
-                        ident: msg.ident,
-                        magic_lvexp: Some(MagicLvExpDelivery {
-                            magic_id: u16::try_from(msg.n_param1).unwrap_or(0),
-                            level: u8::try_from(msg.n_param2).unwrap_or(0),
-                            tran_point: msg.n_param3,
-                        }),
-                        ..SelfDelayOutcome::default()
-                    });
-                }
-                // **P3-B3**：16 的 `RM_MAKEHOLYSEIZEMODE`（`wParam = nPower*1000`）。
-                RM_MAKEHOLYSEIZEMODE => {
-                    let n = self.open_holy_seize_mode(msg.actor_id, msg.w_param);
-                    out.push(SelfDelayOutcome {
-                        actor_id: msg.actor_id,
-                        ident: msg.ident,
-                        name_color: Some(n),
-                        ..SelfDelayOutcome::default()
-                    });
-                }
-                // **P3-B4**：`RM_DELAYMAGIC`（`BaseObject.Base.cs:711-729`）——施法者侧
-                // 1 抽 MSD，命中则把 `RM_MAGSTRUCK` 入**目标**队列（由宿主随后
-                // `World::deliver_mag_struck` 完整处理）。
-                RM_DELAYMAGIC => {
-                    let d = self.deliver_delay_magic(&msg);
-                    out.push(SelfDelayOutcome {
-                        actor_id: msg.actor_id,
-                        ident: msg.ident,
-                        delay_magic: Some(d),
-                        ..SelfDelayOutcome::default()
-                    });
-                }
-                // **P3-B4**：`RM_POISON`（`BaseObject.Base.cs:740-759` → `MakePosion`）。
-                // 投毒本身**零 RNG**；只落 buff / CharStatus / 帧事件。
-                RM_POISON => {
-                    let d = self.deliver_poison(&msg);
-                    out.push(SelfDelayOutcome {
-                        actor_id: msg.actor_id,
-                        ident: msg.ident,
-                        poison: Some(d),
-                        ..SelfDelayOutcome::default()
-                    });
-                }
-                // **P3-B5**：`RM_MAGSTRUCK` 到点 ⇒ 进入本对象的 `RM_MAGSTRUCK` 处理器
-                // （`BaseObject.Base.cs:618-686`）。本层只负责「入队 → 到点」；处理器主体
-                // （`R(1000)` + MSD + `StruckDamage`）由宿主随后调 `World::deliver_mag_struck`。
-                RM_MAGSTRUCK => {
-                    self.pending_mag_struck
-                        .push(crate::world::PendingMagStruck {
-                            target_id: msg.actor_id,
-                            caster_id: msg.actor_ref,
-                            power: msg.n_param1,
-                            mine: false,
+
+                match msg.ident {
+                    RM_MAGHEALING => {
+                        // `PlayObject.Message.cs:1619-1629`：交付段 0 抽，只把 `nPower` 交宿主累加
+                        // `IncHealing`（`SessionGround.recovery`）。
+                        out.push(SelfDelayOutcome {
+                            actor_id: msg.actor_id,
+                            ident: msg.ident,
+                            mutinied: Vec::new(),
+                            ghosted: Vec::new(),
+                            mag_healing: Some(msg.n_param1),
+                            ..SelfDelayOutcome::default()
                         });
-                    out.push(SelfDelayOutcome {
-                        actor_id: msg.actor_id,
-                        ident: msg.ident,
-                        ..SelfDelayOutcome::default()
-                    });
+                    }
+                    RM_MASTERDIEMUTINY => {
+                        // 只在真正有到点的叛变消息时才克隆配置（避免每 tick 无谓 clone）。
+                        let cfg = self.pet_slave_cfg.clone();
+                        let mutinied = process_slave_mutiny(self, msg.actor_id, &cfg);
+                        out.push(SelfDelayOutcome {
+                            actor_id: msg.actor_id,
+                            ident: msg.ident,
+                            mutinied,
+                            ghosted: Vec::new(),
+                            mag_healing: None,
+                            ..SelfDelayOutcome::default()
+                        });
+                    }
+                    RM_MASTERDIEGHOST => {
+                        let ghosted = process_slave_ghost(self, msg.actor_id);
+                        out.push(SelfDelayOutcome {
+                            actor_id: msg.actor_id,
+                            ident: msg.ident,
+                            mutinied: Vec::new(),
+                            ghosted,
+                            mag_healing: None,
+                            ..SelfDelayOutcome::default()
+                        });
+                    }
+                    // **P3-B3**：19 的 800ms 投递——投递时才重读 `StatusTimeArr[8]` 并逐怪抽 `R(2)`。
+                    RM_TRANSPARENT => {
+                        let d =
+                            self.mag_make_private_transparent(msg.actor_id, msg.n_param1 as u16);
+                        out.push(SelfDelayOutcome {
+                            actor_id: msg.actor_id,
+                            ident: msg.ident,
+                            transparent: Some(d),
+                            ..SelfDelayOutcome::default()
+                        });
+                    }
+                    // **P3-B3**：28 的 1500ms 投递——`MakeOpenHealth()`。
+                    RM_DOOPENHEALTH => {
+                        let h = self.make_open_health(msg.actor_id);
+                        out.push(SelfDelayOutcome {
+                            actor_id: msg.actor_id,
+                            ident: msg.ident,
+                            open_health: Some(h),
+                            ..SelfDelayOutcome::default()
+                        });
+                    }
+                    // **P3-B3**：共享尾的 1000ms 训练帧
+                    // （`nParam1=MagicId, nParam2=Level, nParam3=TranPoint`）。
+                    RM_MAGIC_LVEXP => {
+                        out.push(SelfDelayOutcome {
+                            actor_id: msg.actor_id,
+                            ident: msg.ident,
+                            magic_lvexp: Some(MagicLvExpDelivery {
+                                magic_id: u16::try_from(msg.n_param1).unwrap_or(0),
+                                level: u8::try_from(msg.n_param2).unwrap_or(0),
+                                tran_point: msg.n_param3,
+                            }),
+                            ..SelfDelayOutcome::default()
+                        });
+                    }
+                    // **P3-B3**：16 的 `RM_MAKEHOLYSEIZEMODE`（`wParam = nPower*1000`）。
+                    RM_MAKEHOLYSEIZEMODE => {
+                        let n = self.open_holy_seize_mode(msg.actor_id, msg.w_param);
+                        out.push(SelfDelayOutcome {
+                            actor_id: msg.actor_id,
+                            ident: msg.ident,
+                            name_color: Some(n),
+                            ..SelfDelayOutcome::default()
+                        });
+                    }
+                    // **P3-B4**：`RM_DELAYMAGIC`（`BaseObject.Base.cs:711-729`）——施法者侧
+                    // 1 抽 MSD，命中则把 `RM_MAGSTRUCK` 入**目标**队列（由宿主随后
+                    // `World::deliver_mag_struck` 完整处理）。
+                    RM_DELAYMAGIC => {
+                        let d = self.deliver_delay_magic(&msg);
+                        out.push(SelfDelayOutcome {
+                            actor_id: msg.actor_id,
+                            ident: msg.ident,
+                            delay_magic: Some(d),
+                            ..SelfDelayOutcome::default()
+                        });
+                    }
+                    // **P3-B4**：`RM_POISON`（`BaseObject.Base.cs:740-759` → `MakePosion`）。
+                    // 投毒本身**零 RNG**；只落 buff / CharStatus / 帧事件。
+                    RM_POISON => {
+                        let d = self.deliver_poison(&msg);
+                        out.push(SelfDelayOutcome {
+                            actor_id: msg.actor_id,
+                            ident: msg.ident,
+                            poison: Some(d),
+                            ..SelfDelayOutcome::default()
+                        });
+                    }
+                    // **P3-B5**：`RM_MAGSTRUCK` 到点 ⇒ 进入本对象的 `RM_MAGSTRUCK` 处理器
+                    // （`BaseObject.Base.cs:618-686`）。本层只负责「入队 → 到点」；处理器主体
+                    // （`R(1000)` + MSD + `StruckDamage`）由宿主随后调 `World::deliver_mag_struck`。
+                    RM_MAGSTRUCK => {
+                        self.pending_mag_struck
+                            .push(crate::world::PendingMagStruck {
+                                target_id: msg.actor_id,
+                                caster_id: msg.actor_ref,
+                                power: msg.n_param1,
+                                mine: false,
+                                order: msg.enqueue_seq,
+                            });
+                        out.push(SelfDelayOutcome {
+                            actor_id: msg.actor_id,
+                            ident: msg.ident,
+                            ..SelfDelayOutcome::default()
+                        });
+                    }
+                    // 本层只承载这些自投递（登记：其他 `RM_*` 自投递未建模）。
+                    _ => {}
                 }
-                // 本层只承载这些自投递（登记：其他 `RM_*` 自投递未建模）。
-                _ => {}
             }
         }
         out
@@ -1581,6 +1807,7 @@ impl World {
                         caster_id: msg.actor_id,
                         power,
                         mine: false,
+                        order: msg.enqueue_seq,
                     });
                 out.struck = true;
             }
@@ -2852,6 +3079,8 @@ mod tests {
             msg: String::new(),
             actor_ref: 0,
             deliver_at_ms: w.clock_ms,
+            enqueue_seq: 0,
+            priority: MESSAGE_PRIORITY_LOWEST,
         });
         let r = w.tick();
         assert_eq!(r.slave_self_deliveries.len(), 1);
@@ -2873,6 +3102,430 @@ mod tests {
         assert_eq!(w.self_delay_msgs.len(), 1);
         assert_eq!(w.self_delay_msgs[0].deliver_at_ms, w.clock_ms);
         assert_eq!(w.self_delay_msgs[0].w_param, 1000);
+    }
+
+    // ═════ PR-1：自延时泵的 oracle 语义（`GetMessage` + .NET `PriorityQueue`，每 actor 独立）═════
+    //
+    // oracle `BaseObject.Message.cs:334-378`：`TryDequeue` 取堆根；未到点 ⇒ 以 `Lowest`
+    // **重新入队**并 `return false`（只结束本次泵）。队列是**四叉堆（.NET 8 `Arity=4`）**；
+    // 堆**不稳定**：重入队
+    // 后该项不再位于根，下一次泵会先投递堆中其它已到点项。`MsgQueue` 每 actor 一把
+    // （`ActorEntity.cs:21`）。以下逐 tick 期望来自 net8.0 实测（`/e/tmp/pr1-oracle-sim/Program.cs`，
+    // runtime 8.0.26）；每个用例头部的「实测」行即模拟器输出。
+
+    fn delay_entity(w: &mut World, name: &str) -> i32 {
+        let mut e = Entity::new(0, name.to_string(), 10, 10);
+        e.race = crate::entity::ACTOR_RACE_MONSTER;
+        w.add_entity(e)
+    }
+
+    /// 某 actor 当前**堆数组序**的 `n_param1`（诊断；= .NET `UnorderedItems` 序）。
+    fn queue_order(w: &World, actor_id: i32) -> Vec<i32> {
+        w.self_delay_msgs
+            .iter()
+            .filter(|m| m.actor_id == actor_id)
+            .map(|m| m.n_param1)
+            .collect()
+    }
+
+    /// 某 actor 当前堆数组序的到点时刻（用延时区分各项）。
+    fn queue_due(w: &World, actor_id: i32) -> Vec<i64> {
+        w.self_delay_msgs
+            .iter()
+            .filter(|m| m.actor_id == actor_id)
+            .map(|m| m.deliver_at_ms)
+            .collect()
+    }
+
+    /// 实测（两项，入队序 A(+1000)、B(0)）：
+    /// `tick1 不投，remaining B,A；tick2 投 B；tick3 不投；t=1000 投 A`。
+    ///
+    /// tick1 的「不投」是**本次泵**内遇未到点即停；B 在 tick2 被投是 .NET 堆重排的结果，
+    /// **不是**跨 tick 的持久阻塞。
+    #[test]
+    fn pr1_a_head_not_due_blocks_later_due_item() {
+        let mut w = World::new(16, 16);
+        let a = delay_entity(&mut w, "a");
+        w.clock_ms = 0;
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 1, 1000);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 2, 0);
+        // tick1：根 A 未到点 ⇒ 出队、以 Lowest 重入队、结束本次泵。
+        let outs = w.deliver_self_delay_msgs();
+        assert!(outs.is_empty(), "tick1：未到点 ⇒ 本次泵不投任何消息");
+        assert_eq!(w.self_delay_msgs.len(), 2, "两项都还在队列");
+        assert_eq!(
+            queue_order(&w, a),
+            vec![2, 1],
+            ".NET 堆：重入队后 A 不再位于根（remaining B,A）"
+        );
+        // tick2：根已是 B（已到点）⇒ 投 B；A 仍未到点 ⇒ 再停。
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(
+            outs.len(),
+            1,
+            "tick2 必须投 B（跨 tick 持久阻塞是错误语义）"
+        );
+        assert_eq!(outs[0].mag_healing, Some(2));
+        // tick3：只剩未到点的 A ⇒ 不投。
+        assert!(w.deliver_self_delay_msgs().is_empty(), "tick3 不投");
+        // t=1000：A 到点。
+        w.clock_ms = 1000;
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1);
+        assert_eq!(outs[0].mag_healing, Some(1), "t=1000 投 A");
+        assert!(w.self_delay_msgs.is_empty());
+    }
+
+    /// 实测（两项）：tick2 投**尾项** B。
+    #[test]
+    fn pr1_two_items_tick2_delivers_tail() {
+        let mut w = World::new(16, 16);
+        let a = delay_entity(&mut w, "a");
+        w.clock_ms = 0;
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 1, 1000);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 2, 0);
+        let seq: Vec<Vec<i32>> = (0..3)
+            .map(|_| {
+                w.deliver_self_delay_msgs()
+                    .into_iter()
+                    .map(|o| o.mag_healing.unwrap())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(seq, vec![vec![], vec![2], vec![]], "tick1/2/3");
+        assert_eq!(queue_order(&w, a), vec![1], "tick3 后只剩 A");
+        w.clock_ms = 1000;
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1);
+        assert_eq!(outs[0].mag_healing, Some(1));
+    }
+
+    /// 实测（三项 A(+1000)、B(0)、C(0)）：`tick1 不投，remaining C,B,A；tick2 投 C；
+    /// tick3 投 B；tick4 不投；t=1000 投 A`——**堆序，不是插入序**。
+    #[test]
+    fn pr1_three_items_heap_order() {
+        let mut w = World::new(16, 16);
+        let a = delay_entity(&mut w, "a");
+        w.clock_ms = 0;
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 1, 1000);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 2, 0);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 3, 0);
+        assert!(w.deliver_self_delay_msgs().is_empty(), "tick1 不投");
+        assert_eq!(queue_order(&w, a), vec![3, 2, 1], "remaining C,B,A");
+        let tick = |w: &mut World| -> Vec<i32> {
+            w.deliver_self_delay_msgs()
+                .into_iter()
+                .map(|o| o.mag_healing.unwrap())
+                .collect()
+        };
+        assert_eq!(tick(&mut w), vec![3], "tick2 投 C");
+        assert_eq!(queue_order(&w, a), vec![2, 1]);
+        assert_eq!(tick(&mut w), vec![2], "tick3 投 B");
+        assert_eq!(queue_order(&w, a), vec![1]);
+        assert!(w.deliver_self_delay_msgs().is_empty(), "tick4 不投");
+        w.clock_ms = 1000;
+        assert_eq!(tick(&mut w), vec![1], "t=1000 投 A");
+    }
+
+    /// PR-1c：混合优先级四叉堆（net8.0.26 实测，模拟器 `/e/tmp/impl-pr1c-oracle`）。
+    ///
+    /// 入队序：A/B/C = `SendSelfDelayMsg(RM_MAGHEALING, 1/2/3, 1000ms)`（`Lowest` = 255），
+    /// D = `SendMsg(RM_MAKEHOLYSEIZEMODE)`（`(byte)60005 = 101`，即时）。
+    /// net8 数组序 `D,B,C,A`；`pump(0) = [D]`；`pump(1000) = [C,A,B]`。
+    /// 旧 2 叉实现同输入会给 `pump(1000) = [C,B,A]` ⇒ 本用例即**叉数判据**。
+    #[test]
+    fn pr1_mixed_priority_quaternary_heap_order() {
+        let mut w = World::new(16, 16);
+        let a = delay_entity(&mut w, "a");
+        w.clock_ms = 0;
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 1, 1000);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 2, 1000);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 3, 1000);
+        w.send_msg_now(a, RM_MAKEHOLYSEIZEMODE, 1000, 0, 0, 0);
+        assert_eq!(queue_order(&w, a), vec![0, 2, 3, 1], "net8 数组序 D,B,C,A");
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1);
+        assert_eq!(outs[0].ident, RM_MAKEHOLYSEIZEMODE, "pump(0) 只投即时 D");
+        assert_eq!(
+            queue_order(&w, a),
+            vec![3, 2, 1],
+            "重入队后 net8 remaining C,B,A"
+        );
+        w.clock_ms = 1000;
+        let seq: Vec<i32> = w
+            .deliver_self_delay_msgs()
+            .into_iter()
+            .filter_map(|o| o.mag_healing)
+            .collect();
+        assert_eq!(seq, vec![3, 1, 2], "net8: pump(1000) = C,A,B");
+        assert!(w.self_delay_msgs.is_empty());
+    }
+
+    /// PR-1c：≥5 条混合优先级堆序（net8.0.26 实测）。
+    ///
+    /// 入队序：A = `RM_DELAYMAGIC` 即时（`(byte)8021 = 85`；目标缺失 ⇒ 零效果）、
+    /// B = `RM_MAGHEALING` 0ms（255）、C = `RM_MAKEHOLYSEIZEMODE` 即时（101）、
+    /// D = `RM_MAGHEALING` 0ms（255）、E = `RM_MAGHEALING` 1000ms（255）。
+    /// net8 数组序 `A,B,C,D,E`；`pump(0) = [A,C,D]`，remaining `B,E`；
+    /// `pump(1000) = [B,E]`。若**相等也上浮**，重入队后堆变为 `E,B` ⇒ 本用例必红。
+    #[test]
+    fn pr1_five_item_mixed_priority_heap_order() {
+        let mut w = World::new(16, 16);
+        let a = delay_entity(&mut w, "a");
+        w.clock_ms = 0;
+        w.send_msg_now(a, RM_DELAYMAGIC, 1, 1, 0, 9999);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 2, 0);
+        w.send_msg_now(a, RM_MAKEHOLYSEIZEMODE, 3, 0, 0, 0);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 4, 0);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 5, 1000);
+        assert_eq!(
+            queue_order(&w, a),
+            vec![1, 2, 0, 4, 5],
+            "net8 数组序 A,B,C,D,E"
+        );
+        let seq: Vec<(u16, Option<i32>)> = w
+            .deliver_self_delay_msgs()
+            .iter()
+            .map(|o| (o.ident, o.mag_healing))
+            .collect();
+        assert_eq!(
+            seq,
+            vec![
+                (RM_DELAYMAGIC, None),
+                (RM_MAKEHOLYSEIZEMODE, None),
+                (RM_MAGHEALING, Some(4)),
+            ],
+            "net8: pump(0) = A,C,D"
+        );
+        assert_eq!(queue_order(&w, a), vec![2, 5], "net8 remaining B,E");
+        w.clock_ms = 1000;
+        let seq: Vec<i32> = w
+            .deliver_self_delay_msgs()
+            .into_iter()
+            .filter_map(|o| o.mag_healing)
+            .collect();
+        assert_eq!(seq, vec![2, 5], "net8: pump(1000) = B,E");
+        assert!(w.self_delay_msgs.is_empty());
+    }
+
+    /// PR-1c：sift-down 在最多四个子中取**首个**严格最小者（net8.0.26 实测）。
+    ///
+    /// 入队序：A = `RM_DELAYMAGIC` 即时（85）、B = `RM_MAKEHOLYSEIZEMODE` 即时（101）、
+    /// C = `RM_POISON` 即时（`(byte)8037 = 101`）、D = `RM_MAGHEALING` 1000ms（n=4）、
+    /// E = `RM_MAGHEALING` 0ms（n=5）、F = `RM_MAGHEALING` 1000ms（n=6）。
+    /// 出 A 后根的子为 `101(B)、101(C)、255(D)、255(E)`：net8 取**首个**最小 B ⇒
+    /// `pump(0) = [A,B,C]`；若取**最后**最小则 `pump(0) = [A,C,B]`（本用例必红）。
+    /// `pump(1000) = [E,D,F]`（net8 remaining `E,F,D`）。
+    #[test]
+    fn pr1_six_item_sift_down_first_min_tie() {
+        let mut w = World::new(16, 16);
+        let a = delay_entity(&mut w, "a");
+        w.clock_ms = 0;
+        w.send_msg_now(a, RM_DELAYMAGIC, 1, 1, 0, 9999);
+        w.send_msg_now(a, RM_MAKEHOLYSEIZEMODE, 2, 0, 0, 0);
+        w.send_msg_now(a, RM_POISON, 0, 0, 0, 0);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 4, 1000);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 5, 0);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 6, 1000);
+        assert_eq!(
+            queue_order(&w, a),
+            vec![1, 0, 0, 4, 5, 6],
+            "net8 数组序 A,B,C,D,E,F"
+        );
+        let idents: Vec<u16> = w
+            .deliver_self_delay_msgs()
+            .iter()
+            .map(|o| o.ident)
+            .collect();
+        assert_eq!(
+            idents,
+            vec![RM_DELAYMAGIC, RM_MAKEHOLYSEIZEMODE, RM_POISON],
+            "net8: pump(0) = A,B,C（并列 101 取首个 B）"
+        );
+        assert_eq!(queue_order(&w, a), vec![5, 6, 4], "net8 remaining E,F,D");
+        w.clock_ms = 1000;
+        let seq: Vec<i32> = w
+            .deliver_self_delay_msgs()
+            .into_iter()
+            .filter_map(|o| o.mag_healing)
+            .collect();
+        assert_eq!(seq, vec![5, 4, 6], "net8: pump(1000) = E,D,F");
+        assert!(w.self_delay_msgs.is_empty());
+    }
+
+    /// 两项：tick1（now=0）不投；直接推进到 t=1000 ⇒ 两项都到点，按**堆序**先 B 后 A
+    /// （实测 remaining 在 tick1 后是 B,A）。
+    #[test]
+    fn pr1_b_advance_to_head_due_processes_both_in_order() {
+        let mut w = World::new(16, 16);
+        let a = delay_entity(&mut w, "a");
+        w.clock_ms = 0;
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 1, 1000);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 2, 0);
+        assert!(w.deliver_self_delay_msgs().is_empty(), "tick1 不投");
+        w.clock_ms = 1000;
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 2, "两项都到点");
+        assert_eq!(outs[0].mag_healing, Some(2), "堆根 B 先投");
+        assert_eq!(outs[1].mag_healing, Some(1), "再投 A");
+        assert!(w.self_delay_msgs.is_empty());
+    }
+
+    /// 到点项先投，随后未到点项成为根 ⇒ 本次泵停（它等到点后下一次泵再投）。
+    #[test]
+    fn pr1_c_due_head_processed_then_stop_before_not_due_tail() {
+        let mut w = World::new(16, 16);
+        let a = delay_entity(&mut w, "a");
+        w.clock_ms = 0;
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 5, 0);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 6, 1000);
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1, "只投到点的 5");
+        assert_eq!(outs[0].mag_healing, Some(5));
+        assert_eq!(w.self_delay_msgs.len(), 1, "6 未到点 ⇒ 保留");
+        assert_eq!(w.self_delay_msgs.first().unwrap().n_param1, 6);
+        w.clock_ms = 1000;
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1);
+        assert_eq!(outs[0].mag_healing, Some(6));
+        assert!(w.self_delay_msgs.is_empty());
+    }
+
+    /// 每 actor 独立队列：A 的未到点根不影响 B 的到点项；A 自己到点后按堆序投
+    /// （tick1 后 A 的队列是 B,A ⇒ 先 2 后 1）。
+    #[test]
+    fn pr1_d_head_block_is_per_actor() {
+        let mut w = World::new(16, 16);
+        let a = delay_entity(&mut w, "a");
+        let b = delay_entity(&mut w, "b");
+        w.clock_ms = 0;
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 1, 1000);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 2, 0);
+        w.send_self_delay_msg_with(b, RM_MAGHEALING, 0, 3, 0);
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1, "只有 B 的到点项被投");
+        assert_eq!((outs[0].actor_id, outs[0].mag_healing), (b, Some(3)));
+        assert_eq!(w.self_delay_msgs.len(), 2, "A 的两项都保留");
+        assert!(w.self_delay_msgs.iter().all(|m| m.actor_id == a));
+        w.clock_ms = 1000;
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 2);
+        assert_eq!(outs[0].mag_healing, Some(2), "A 的堆根 2 先投");
+        assert_eq!(outs[1].mag_healing, Some(1));
+        assert!(w.self_delay_msgs.is_empty());
+    }
+
+    /// 空队列零动作（任意时钟、重复调用都不产出、不改变状态）。
+    #[test]
+    fn pr1_e_empty_queue_is_noop() {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 123_456;
+        assert!(w.deliver_self_delay_msgs().is_empty());
+        assert!(w.deliver_self_delay_msgs_with(None).is_empty());
+        assert!(w.self_delay_msgs.is_empty());
+        assert!(w.pending_special_spawns.is_empty());
+    }
+
+    /// 实测（四生产者、同一 actor、入队序 D200,Z500,D600,R700）：
+    /// `now=0 不投；now=200 不投；now=500 投 D200；now=600 投 D600；
+    ///  now=700 投 Z500 与 R700`。
+    #[test]
+    fn pr1_four_producers_schedule() {
+        let mut w = World::new(16, 16);
+        let bee = {
+            let mut e = Entity::new(0, "bee".to_string(), 3, 3);
+            e.race = crate::special_monster::RACE_BEE_QUEEN;
+            e.hp = 100;
+            e.max_hp = 100;
+            w.add_entity(e)
+        };
+        w.clock_ms = 0;
+        // R04（BigHeartMonster）：RM_DELAYMAGIC 200ms（目标不存在 ⇒ 零效果）。
+        w.send_self_delay_msg_full(bee, RM_DELAYMAGIC, 200, 0, 0, 9999, 200);
+        // BeeQueen/SpiderHouse：RM_ZEN_BEE 500ms。
+        w.send_self_delay_msg(bee, crate::special_monster::RM_ZEN_BEE, 500);
+        // R07（CentipedeKingMonster）：RM_DELAYMAGIC 600ms。
+        w.send_self_delay_msg_full(bee, RM_DELAYMAGIC, 600, 0, 0, 9999, 600);
+        // R17（ExplosionSpider）：RM_REFMESSAGE 700ms。
+        w.send_self_delay_msg_full(bee, crate::special_monster::RM_REFMESSAGE, 0, 0, 0, 0, 700);
+
+        // now=0：根 D200 未到点 ⇒ 本次泵停；堆重排为 R700,Z500,D600,D200。
+        assert!(w.deliver_self_delay_msgs().is_empty(), "now=0 不投");
+        assert_eq!(w.self_delay_msgs.len(), 4);
+        assert_eq!(queue_due(&w, bee), vec![700, 500, 600, 200]);
+        // now=200：根是 R700（未到点）⇒ 仍不投；堆恢复为 D200,Z500,D600,R700。
+        w.clock_ms = 200;
+        assert!(w.deliver_self_delay_msgs().is_empty(), "now=200 不投");
+        assert_eq!(queue_due(&w, bee), vec![200, 500, 600, 700]);
+        // now=500：投 D200。
+        w.clock_ms = 500;
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1);
+        assert_eq!(outs[0].ident, RM_DELAYMAGIC);
+        assert_eq!(outs[0].delay_magic.map(|d| d.power), Some(200));
+        // now=600：投 D600。
+        w.clock_ms = 600;
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1);
+        assert_eq!(outs[0].delay_magic.map(|d| d.power), Some(600));
+        // now=700：Z500 与 R700 都到点（堆序）；`RM_REFMESSAGE` 本层无投递效果体
+        // （`_ => {}`，归 MB-6），故 outcome 只有 ZEN_BEE，但两项都必须出队。
+        w.clock_ms = 700;
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1);
+        assert_eq!(outs[0].ident, crate::special_monster::RM_ZEN_BEE);
+        assert!(w.self_delay_msgs.is_empty(), "Z500 与 R700 都出队");
+    }
+
+    /// 没有跨调用状态：tick1 停泵后，**同一时钟**的 tick2 必须投 B；再加一个只含
+    /// 已到点项的 actor 也不受影响。
+    #[test]
+    fn pr1_no_cross_call_blocking() {
+        let mut w = World::new(16, 16);
+        let a = delay_entity(&mut w, "a");
+        w.clock_ms = 0;
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 1, 1000);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 2, 0);
+        assert!(w.deliver_self_delay_msgs().is_empty(), "tick1 停泵");
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1, "tick2 必须投 B（无跨调用 blocked）");
+        assert_eq!(outs[0].mag_healing, Some(2));
+        assert!(w.deliver_self_delay_msgs().is_empty(), "tick3 不投");
+        let b = delay_entity(&mut w, "b");
+        w.send_self_delay_msg_with(b, RM_MAGHEALING, 0, 3, 0);
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1);
+        assert_eq!((outs[0].actor_id, outs[0].mag_healing), (b, Some(3)));
+    }
+
+    /// R19（`FireballMonster`）：真实生产路径是 `FireballMonster.cs:41` 的 **7 参**
+    /// `SendStruckDelayMsg(RM_DELAYMAGIC, …, 600)`——入**怪自己**的队列（`this`），优先级
+    /// `Lowest`。8 参目标队列重载（`BaseObject.cs:912` → `RM_MAGSTRUCK`）由
+    /// [`World::send_struck_delay_msg`] 建模，二者队列语义相同；**生产者接线归 MB-9**。
+    /// 本用例只钉 600ms 自延时与 0ms 项的逐 tick 调度（实测：tick1 不投、tick2 投 0ms 项、
+    /// tick3 不投、t=600 投 600ms 项）。
+    #[test]
+    fn pr1_r19_struck_delay_600_self_queue_schedule() {
+        let mut w = World::new(16, 16);
+        let monster = delay_entity(&mut w, "fireball");
+        w.clock_ms = 0;
+        // 7 参重载的等价物：入 `this` 的队列，ident = RM_DELAYMAGIC，600ms。
+        w.send_self_delay_msg_full(monster, RM_DELAYMAGIC, 33, 0, 0, 9999, 600);
+        w.send_self_delay_msg_with(monster, RM_MAGHEALING, 0, 9, 0);
+        assert!(w.deliver_self_delay_msgs().is_empty(), "tick1 不投");
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1);
+        assert_eq!(outs[0].ident, RM_MAGHEALING, "tick2 投 0ms 项");
+        assert!(w.deliver_self_delay_msgs().is_empty(), "tick3 不投");
+        w.clock_ms = 600;
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1);
+        assert_eq!(outs[0].ident, RM_DELAYMAGIC, "t=600 投 600ms 项");
+        assert_eq!(outs[0].delay_magic.map(|d| d.power), Some(33));
+        assert!(
+            w.pending_mag_struck.is_empty(),
+            "7 参重载投的是 RM_DELAYMAGIC，不直接产 RM_MAGSTRUCK"
+        );
     }
 
     /// 诱惑受奴落尾（`MagicManager.cs:753-770`）。

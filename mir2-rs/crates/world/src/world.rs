@@ -263,6 +263,11 @@ pub struct PendingMagStruck {
     /// 两者共用处理器（`BaseObject.Base.cs:618-686`），唯一差别 = `Random(1000)` 只对
     /// `RM_MAGSTRUCK` 生效（`:620` 的 `wIdent == RM_MAGSTRUCK` 门）。
     pub mine: bool,
+    /// **宿主排水序**（消息创建序，`World::next_msg_order`）：oracle 的 `RM_MAGSTRUCK`
+    /// 进的是**目标自己的** `MsgQueue`，由 `ProcessMonsters` 的目标顺序泵出；本仓用一条
+    /// 批次列表替代，故把批内顺序**钉在创建序**（= 五批 RNG trace 基线的口径）。
+    /// **不参与**任何队列/战斗语义。
+    pub order: u64,
 }
 
 /// **P3-B2**：一条 `RM_MAGSTRUCK` 交付段处理后的观察值（`BaseObject.Base.cs:618-686`）。
@@ -730,12 +735,33 @@ pub struct World {
     /// `Envir.GetEvent(x,y)` 的判据 = 「该格有 `CellType::Event` 对象」**且**本标记为真
     /// （`:1344-1360` 先找格对象，再 `CellObjectMgr.Get<MapEvent>(0)`）。
     pub event_registered: bool,
-    /// 自身延时消息队列（oracle `BaseObject.MsgQueue` 的延时子集，**插入序**）。
+    /// 自身延时消息队列（oracle `BaseObject.MsgQueue` 的已建模子集，**每 actor 一把**）。
     ///
-    /// oracle 的完整 `MsgQueue` 是「优先级 + 插入序」的优先队列（`SendSelfDelayMsg` 一律
-    /// `MessagePriority.Lowest`）；本骨架只承载这一族自投递（`RM_MASTERDIEMUTINY` /
-    /// `RM_MASTERDIEGHOST`）⇒ 按插入序扫描（登记：多产者/其他优先级的交织未建模）。
-    pub self_delay_msgs: Vec<crate::slave::SelfDelayMsg>,
+    /// [`crate::slave::SelfDelayQueue`] 是**四叉堆（.NET 8 `Arity=4`）**，与
+    /// `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:21`）逐操作等价：
+    /// `Enqueue` sift-up（父 `(i-1) >> 2`）/ `Dequeue`「末元素移根 + sift-down」
+    /// （首子 `(i << 2) + 1`，四子取首个严格最小）、比较为**严格小于**。
+    /// 因此等优先级时堆是**不稳定**的，
+    /// 未到点重入队（`GetMessage`，`BaseObject.Message.cs:334-378`）后下一次泵会先投递
+    /// 其它已到点项——必须照搬，不能退回插入序/FIFO。
+    ///
+    /// 投递语义见 [`crate::slave::World::deliver_self_delay_msgs`]：泵 = `peek → 未到点则
+    /// 出队并以 `Lowest` 重入队 + 结束本次调用`；**没有跨调用的 blocked 状态**；不同 actor
+    /// 的队列互不阻塞。
+    /// 优先级：`SendSelfDelayMsg` / `SendStruckDelayMsg` 一律 `Lowest`(255)；即时
+    /// `SendMsg(int…)` 用 `(byte)wIdent`（本层只建模 `RM_MAKEHOLYSEIZEMODE` 的 `send_msg_now`）。
+    /// 产者：`RM_MASTERDIEMUTINY`/`RM_MASTERDIEGHOST`（玩家 1000ms）、`RM_MAGHEALING` 800ms、
+    /// `RM_TRANSPARENT` 800ms、`RM_DOOPENHEALTH` 1500ms、`RM_MAGIC_LVEXP` 800/1000ms、
+    /// `RM_MAKEHOLYSEIZEMODE`（即时）、`RM_DELAYMAGIC`/`RM_POISON`、`RM_MAGSTRUCK` 600ms
+    /// （8 参 `SendStruckDelayMsg`，目标队列）、`RM_ZEN_BEE` 500ms（BeeQueen/SpiderHouse）。
+    /// R19 的真实生产路径是 `FireballMonster.cs:41` 的 **7 参** `SendStruckDelayMsg`
+    /// （入怪**自己**的队列，ident = `RM_DELAYMAGIC`），生产者接线归 MB-9。
+    pub self_delay_msgs: crate::slave::SelfDelayQueue,
+    /// 消息创建序计数器（自投递入队与即时 `pending_mag_struck` 入列共用）。
+    ///
+    /// 只用于宿主按创建序排水 [`PendingMagStruck`]（见其 `order` 字段），不参与队列比较、
+    /// 战斗数值或落库。
+    pub(crate) msg_order: u64,
     /// `Server.conf` 的宝宝配置（`ProcessSlaveMutiny` 的 `Config.MasterDieMutiny*` 输入）；
     /// 由宿主 [`World::enable_slave_self_delay`] 灌入。缺省 = [`PetSlaveConfig::default`]。
     pub pet_slave_cfg: mir2_data::pet_slave::PetSlaveConfig,
@@ -876,7 +902,8 @@ impl World {
             spider_name: crate::special_monster::DEFAULT_SPIDER_NAME.to_string(),
             fire_burn_events: Vec::new(),
             event_registered: false,
-            self_delay_msgs: Vec::new(),
+            self_delay_msgs: crate::slave::SelfDelayQueue::new(),
+            msg_order: 0,
             pet_slave_cfg: mir2_data::pet_slave::PetSlaveConfig::default(),
             pending: VecDeque::new(),
             owner_thread: None,
@@ -2212,11 +2239,14 @@ impl World {
             last_target = Some(tid);
             out.targets.push(tid);
             out.bo_train = true;
+            let order = self.msg_order;
+            self.msg_order += 1;
             self.pending_mag_struck.push(PendingMagStruck {
                 target_id: tid,
                 caster_id,
                 power,
                 mine: false,
+                order,
             });
         }
         // `SetTargetCreat` 逐目标覆盖；末值 = 最后一个 proper target（oracle 同）。
@@ -2275,11 +2305,14 @@ impl World {
             }
             out.targets.push(tid);
             out.bo_train = true;
+            let order = self.msg_order;
+            self.msg_order += 1;
             self.pending_mag_struck.push(PendingMagStruck {
                 target_id: tid,
                 caster_id,
                 power: power_point,
                 mine: false,
+                order,
             });
         }
         out
@@ -2303,7 +2336,9 @@ impl World {
     /// `RushMode` 本骨架无字段 => 恒 false（合同 §3.1 的夹具 pin；登记）。
     /// `MonDelHptoExp`/`MonSayMsg`/`Disable*Struck` 缺省 false（合同 §3.1），不建模其支。
     pub fn deliver_mag_struck(&mut self) -> Vec<MagStruckOutcome> {
-        let msgs = std::mem::take(&mut self.pending_mag_struck);
+        let mut msgs = std::mem::take(&mut self.pending_mag_struck);
+        // 宿主排水序 = 消息创建序（见 `PendingMagStruck::order`）；稳定排序。
+        msgs.sort_by_key(|m| m.order);
         let mut out = Vec::new();
         for msg in msgs {
             let Some(mut t) = self.entities.get(msg.target_id).cloned() else {
@@ -3197,11 +3232,14 @@ impl World {
                             crate::combat::is_proper_target_grouped_direct(&o, t, &group)
                         });
                         if proper {
+                            let order = self.msg_order;
+                            self.msg_order += 1;
                             self.pending_mag_struck.push(PendingMagStruck {
                                 target_id: tid,
                                 caster_id: o.id,
                                 power: damage,
                                 mine: true,
+                                order,
                             });
                         }
                     }
