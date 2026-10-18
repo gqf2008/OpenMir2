@@ -336,6 +336,29 @@ async fn query_chr(
     }
 }
 
+/// oracle `NewChrData`（`UserService.cs:259-280`）的可观测出口。
+///
+/// **G4 / 硬约束③（照抄 oracle）**：`_playDataStorage.Add(chrRecord)` 的返回值被**忽略**
+/// （`:278-279`）——`PlayDataStorage.Add` 内部 catch 吞掉 SQL 异常返回 false，但
+/// `NewChrData` 仍 `return true` ⇒ `nCode = 1` + `SM_NEWCHR_SUCCESS`（索引留成孤儿）。
+/// 唯一走到 Delete 支的是 `Index(sChrName) != -1`（`:261-264`）：`NewChrData` 返回 false
+/// ⇒ `_playRecordStorage.Delete(sChrName)`，其 `_quickIdList.DelRecord` 抛
+/// `KeyNotFoundException` 冒泡 ⇒ **不回包**。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NewChrDataOutcome {
+    /// `Add` 成功**或抛错**（oracle 两条都 `return true`）。
+    Success,
+    /// `Index != -1` ⇒ `NewChrData` 返回 false ⇒ Delete 异常路径。
+    IndexExists,
+}
+
+fn new_chr_data_outcome(add: &Result<Option<i64>>) -> NewChrDataOutcome {
+    match add {
+        Ok(Some(_)) | Err(_) => NewChrDataOutcome::Success,
+        Ok(None) => NewChrDataOutcome::IndexExists,
+    }
+}
+
 /// C# `NewChr`：建角（前置校验 → 插索引 → 插存档 → `SM_NEWCHR_SUCCESS[_FAIL(code)]`）。
 async fn new_chr(
     server: &Arc<Server>,
@@ -378,16 +401,31 @@ async fn new_chr(
                 let sex = byte_cast(str_to_int(&req.sex, 0));
                 let job = byte_cast(str_to_int(&req.job, 0));
                 let hair = byte_cast(str_to_int(&req.hair, 0));
-                if db
-                    .data_add(&name, &account, sex, job, hair)
-                    .await?
-                    .is_some()
-                {
-                    ncode = 1;
-                } else {
-                    // C#：`_playRecordStorage.Delete(sChrName)` 回滚索引（软删 IsDeleted=2）
-                    db.record_soft_delete(&name).await?;
-                    ncode = 4;
+                // **G4（照抄 oracle；硬约束③）**：`NewChrData`（`UserService.cs:259-280`）
+                // ① 先 `if (_playDataStorage.Index(sChrName) != -1) return false;`
+                // ② 否则 `_playDataStorage.Add(chrRecord); return true;` —— **忽略 Add 返回值**。
+                let add = db.data_add(&name, &account, sex, job, hair).await;
+                if let Err(e) = &add {
+                    log::error(&format!(
+                        "创建角色[{}]数据失败（C# 同场景吞异常并回成功）: {e:#}",
+                        show(&name)
+                    ));
+                }
+                match new_chr_data_outcome(&add) {
+                    NewChrDataOutcome::Success => ncode = 1,
+                    NewChrDataOutcome::IndexExists => {
+                        // ①：`NewChrData` 返回 false ⇒ `_playRecordStorage.Delete(sChrName)`
+                        // （`:645`）先写 `IsDeleted=2`；随后 `Delete` 里的
+                        // `_quickIdList.DelRecord` 用角色名查 account 键表抛
+                        // `KeyNotFoundException`，异常从 `NewChr`（调用点无 catch）冒泡
+                        // ⇒ **不回包**。Rust 的 `record_soft_delete` 不抛，故显式 `bail!`
+                        // 让上层只记日志（`process_server_msg` 的 Err 支），保持同一可观测语义。
+                        db.record_soft_delete(&name).await?;
+                        bail!(
+                            "创建角色[{}]：NewChrData 返回 false（Index != -1）⇒ 照 oracle Delete 异常路径，不回包",
+                            show(&name)
+                        );
+                    }
                 }
             }
         }
@@ -549,4 +587,36 @@ fn pick(count: usize) -> usize {
     #[allow(clippy::cast_possible_truncation)]
     let v = s as usize;
     v % count
+}
+
+#[cfg(test)]
+mod new_chr_g4_tests {
+    use super::{new_chr_data_outcome, NewChrDataOutcome};
+    use anyhow::anyhow;
+
+    /// **G4（照抄 oracle `NewChrData`，硬约束③）**：
+    /// - `Add` 抛错 ⇒ oracle 内部 catch 吞掉、`NewChrData` 忽略返回值仍返回 true
+    ///   ⇒ `nCode = 1`（成功应答 + `characters_indexes` 孤儿）。
+    /// - `Ok(None)`（`Index(sChrName) != -1`）⇒ `NewChrData` 返回 false ⇒ Delete 异常路径
+    ///   （不软删前的写入 + 不回包）。
+    ///
+    /// 红检：把 `Err(_)` 归到 `IndexExists` 支 ⇒ 第一条断言必红（这会退回“未照抄 oracle bug”
+    /// 的旧实现：失败码/无回包）。
+    #[test]
+    fn new_chr_data_swallows_add_failure_like_oracle() {
+        assert_eq!(
+            new_chr_data_outcome(&Ok(Some(42))),
+            NewChrDataOutcome::Success
+        );
+        assert_eq!(
+            new_chr_data_outcome(&Err(anyhow!("db down"))),
+            NewChrDataOutcome::Success,
+            "Add 抛错在 oracle 里被吞成 false 且返回值被忽略 ⇒ 仍算成功"
+        );
+        assert_eq!(
+            new_chr_data_outcome(&Ok(None)),
+            NewChrDataOutcome::IndexExists,
+            "Index != -1 ⇒ NewChrData false ⇒ Delete 异常路径"
+        );
+    }
 }

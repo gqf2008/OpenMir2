@@ -463,3 +463,20 @@ cargo run -p msgcodegen -- --check
   - 组队/行会/邮件等全局服务的落库（不在角色存档链）；
   - `BoReconnection` 换线重连路径（依赖换服 G11）。
 - 残留物：仅本 md；worktree `/e/tmp/impl-txnaudit` 内一次提交（不 push）；无临时库/进程/端口占用。
+
+---
+
+## 10. 实施状态（2026-10-19，卡 `openmir2-db-error-reply` / `openmir2-save-misc-gaps`）
+
+| 缺口 | oracle 证据 | 实施 | 判据（含失败注入） |
+|---|---|---|---|
+| **G2** DB acquire/begin/Update 失败不回包 | `DataService.cs:207-257`：`Update` 的返回值被忽略（`:234`）；`SaveRecord` 的 `Open` 失败返回 false（`PlayDataStorage.Save.cs:50-53`）、`Commit` 失败返回 false（`:66-74`） | `data.rs::store_human_rcd` 捕获 `play_data_add`/`play_data_update` 的 `Err`（记日志），`bo21` 只在「索引缺失」时为 true ⇒ `save_reply(false)` = `DBR_SAVEHUMANRCD recog=1`。GameSvr `apply_save_reply` 据此 `end_save`（清 in-save） | `save_reply_matches_oracle_failure_paths`；`update_failure_still_answers_success_for_in_save_release`（关闭连接池注入） |
+| **G3** 6000 自动建档错误不回包 | `DataService.cs:225-230`：`Add` 返回值被忽略，再 `Index`；仍 `<0` ⇒ `:248` 回 `DBR_LOADHUMANRCD recog=0` | `store_human_rcd` 把 `play_data_add` 的 `Err` 降级为「索引仍缺失」⇒ `save_reply(true)` = `DBR_LOADHUMANRCD recog=0`（有应答，结束请求） | `add_failure_still_answers_failure`（关闭连接池注入） |
+| **G5**（已按 oracle 修正为「逐角色路径**不查** in-save」） | 逐角色 `WorldServer.cs:698-703`：**无** `InSaveRcdList` 检查、到点先重置 `SaveRcdTick` 再 `SaveHumanRcd`；`InSaveRcdList` 门属于**另一个全局 10 分钟触发器**（`TimedService.cs:90-93/234-237`，本仓未建模、登记） | `drain_periodic_save` **不查** `in_save_rcd_list`，`periodic_save_due` 先重置 tick 再发（复验 F2 订正） | `periodic_save_ignores_in_save_list_and_resets_tick` |
+| **G6** `play_data_add` 不更新 `name_quick` | `PlayDataStorage.Add` 成功后 `_NameQuickMap.Add`（`Add.cs:42-47`）⇒ 立刻对 5100 面可见 | `play_data_add` 结束事务后 `name_quick.insert(fold_key(gbk_bytes(name)), player_id)`（GBK 键口径与 `load_chars` 相同） | `db::create_rows_tests` 增 `data_index(gbk) == Some(id)` |
+| **G7** 物品表读失败整表放弃 | `Query.cs:375-458` 的 `try { while (dr.Read()) …; QueryItemAttr } catch` —— 已读行保留、`QueryItemAttr` 跳过、随后照常进 `ComparerUserItem` | `get_item_slots` 改为**逐行流式读**（`futures_util::TryStreamExt::try_next`）：任一行/游标错误 ⇒ 记日志、保留已读槽位、跳过 `QueryItemAttr`；`save_item_table` 不再因读失败返回 Err（G7） | `item_read_failure_keeps_table_in_play`（删除物品表注入） |
+| **G11** 无 `SwitchData` 换服存档门 | `WorldServer.cs:592-610`：`SwitchData && RcdSaved` → `SendSwitchData`（`WorldServer.Switch.cs:94-103`，恒 true）或 `WriteChgDataErrCount > 20` → `SwitchDataOk/Sended` + `ChgDataWritedTick`；`> 100ms` → `SendChangeServer` | `SwitchDataState` 原样承载字段；`process_switch_data` 实现状态机（发送端以闭包注入）；`save_human_rcd` 成功后经 `drain_periodic_save` 置 `RcdSaved`。**登记**：`ChangeSpaceMove`/`.shr` 序列化/`SendServerGroupMsg` 未移植 ⇒ 生产 `send_switch_data` 返回 false、`switch_data` 恒 false（单区无路径） | `switch_data_gate_matches_oracle_state_machine`（含 100ms 严格 `>` 与 `>20` 退避） |
+| **G4** 建角失败语义（必须照抄） | `UserService.cs:259-280`：`NewChrData` 忽略 `_playDataStorage.Add` 返回值恒 true（`:278-279`）；仅 `Index != -1` 时返回 false → `:645` `Delete(sChrName)`，其 `_quickIdList.DelRecord` 抛 `KeyNotFoundException` 冒泡 ⇒ 不回包 | `handler.rs::new_chr`：`Ok(Some)`/`Err` ⇒ `Success`（成功应答 + 孤儿索引）；`Ok(None)` ⇒ `record_soft_delete` 后 `bail!`（不回包）。登记 **`T-Oracle-NewChrData`**（照抄 bug，硬约束③） | `new_chr_data_swallows_add_failure_like_oracle` |
+
+**未在本批做**：G1 关服存档已由 `296155f4e` 落地；G8（oracle `RollBack` 条件写反）保持登记；
+G9（≤500ms 快照时点）与 G10（并发序）为对齐夹具事项，不改代码；G12/G13 死代码继续登记。

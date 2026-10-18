@@ -18,6 +18,9 @@ mir2-storage = { path = "../../crates/storage" }
 sqlx = { version = "0.8", features = ["runtime-tokio", "mysql"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "signal", "time"] }
 anyhow = "1"
+# `get_item_slots` 用 `TryStreamExt::try_next` 逐行读（复刻 C# `while (dr.Read())` 的
+# 「读失败保留已读行」语义；G7 物品表读失败不整表放弃）。
+futures-util = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time", "process"] }

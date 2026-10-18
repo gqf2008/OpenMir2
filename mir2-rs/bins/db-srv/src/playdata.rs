@@ -20,6 +20,7 @@
 //! 这里同样用 `try_from` 报错并让调用方按「取档失败」处理，不静默截断。
 
 use anyhow::{Context, Result};
+use futures_util::TryStreamExt;
 use mir2_storage::playerdata::{
     Ability, CharacterData, CharacterDataInfo, MagicRcd, NakedAbility, ServerUserItem,
 };
@@ -28,6 +29,7 @@ use sqlx::{Connection, MySqlConnection, Row};
 use std::fmt::Write as _;
 
 use crate::db::{int_col, resolve_col, Db};
+use crate::gbk::fold_key;
 use crate::log;
 
 /// 存档物品槽位数（C# `CharacterData` 构造函数）。
@@ -248,36 +250,60 @@ async fn get_item_slots(
     player_id: i64,
     table: &str,
     slots: usize,
-) -> Result<Vec<Option<ServerUserItem>>> {
+) -> Vec<Option<ServerUserItem>> {
+    // C# `GetItemRecord/GetBagItemRecord/GetStorageRecord` 的 `try { while (dr.Read()) …;
+    // QueryItemAttr(…); } catch { LogService.Error(…); }`：**逐行**读，任何一行失败
+    // （`GetInt32` 类型错、`array[pos]` 越界、网络/游标错误）都跳进 catch —— 已读入的槽位
+    // **保留**，且**不再**执行 `QueryItemAttr`。旧实现用 `fetch_all(...).await?` 一次取完、
+    // 失败即整表放弃（G7）；这里改成流式读 + 吞错，和 oracle 的「部分填充 + 继续」同口径。
     let sql = format!("SELECT * FROM {table} WHERE PlayerId=?");
-    let rows = sqlx::query(&sql)
-        .bind(player_id)
-        .fetch_all(&mut *conn)
-        .await
-        .with_context(|| format!("查询 {table} 失败"))?;
     let mut items: Vec<Option<ServerUserItem>> = vec![None; slots];
-    for row in &rows {
-        let pos = i32::try_from(int_col(row, "Position")?).context("Position 越界")?;
-        let Ok(idx) = usize::try_from(pos) else {
-            log::error(&format!("[Exception] {table} Position={pos} 为负"));
-            break;
-        };
-        let Some(slot) = items.get_mut(idx) else {
-            // C# `array[pos]` 越界 → 抛异常（被 catch，已填部分保留，且不再走 QueryItemAttr）。
-            log::error(&format!(
-                "[Exception] {table} Position={pos} 超出 {slots} 槽（C# 同场景抛异常）"
-            ));
-            return Ok(items);
-        };
-        let mut item = ServerUserItem::csharp_new();
-        item.make_index = i32::try_from(int_col(row, "MakeIndex")?).context("MakeIndex 越界")?;
-        item.index = word_col(row, "StdIndex")?;
-        item.dura = word_col(row, "Dura")?;
-        item.dura_max = word_col(row, "DuraMax")?;
-        *slot = Some(item);
+    let mut read_failed = false;
+    {
+        let mut rows = sqlx::query(&sql).bind(player_id).fetch(&mut *conn);
+        loop {
+            let row = match rows.try_next().await {
+                Ok(Some(row)) => row,
+                Ok(None) => break,
+                Err(e) => {
+                    log::error(&format!("[Exception] PlayDataStorage.Get({table}): {e:#}"));
+                    read_failed = true;
+                    break;
+                }
+            };
+            let parsed = (|| -> Result<usize> {
+                let pos = i32::try_from(int_col(&row, "Position")?).context("Position 越界")?;
+                let idx =
+                    usize::try_from(pos).with_context(|| format!("{table} Position={pos} 为负"))?;
+                if idx >= slots {
+                    anyhow::bail!("{table} Position={pos} 超出 {slots} 槽（C# 同场景抛异常）");
+                }
+                let mut item = ServerUserItem::csharp_new();
+                item.make_index =
+                    i32::try_from(int_col(&row, "MakeIndex")?).context("MakeIndex 越界")?;
+                item.index = word_col(&row, "StdIndex")?;
+                item.dura = word_col(&row, "Dura")?;
+                item.dura_max = word_col(&row, "DuraMax")?;
+                items[idx] = Some(item);
+                Ok(idx)
+            })();
+            if let Err(e) = parsed {
+                log::error(&format!("[Exception] PlayDataStorage.Get({table}): {e:#}"));
+                read_failed = true;
+                break;
+            }
+        }
     }
-    query_item_attr(conn, player_id, &mut items).await?;
-    Ok(items)
+    if read_failed {
+        // C# catch：已填部分保留，`QueryItemAttr` 不执行。
+        return items;
+    }
+    if let Err(e) = query_item_attr(conn, player_id, &mut items).await {
+        log::error(&format!(
+            "[Exception] PlayDataStorage.QueryItemAttr({table}): {e:#}"
+        ));
+    }
+    items
 }
 
 /// C# `PlayDataStorage.QueryItemAttr`（**照搬既有 bug**）：
@@ -361,10 +387,9 @@ async fn get_record(
     data.abil = Some(get_abil_record(conn, player_id).await?);
     get_bonus_abil_record(conn, player_id, &mut data).await?;
     get_magic_record(conn, player_id, &mut data).await?;
-    data.hum_items =
-        Some(get_item_slots(conn, player_id, "characters_item", HUM_ITEM_SLOTS).await?);
+    data.hum_items = Some(get_item_slots(conn, player_id, "characters_item", HUM_ITEM_SLOTS).await);
     data.bag_items =
-        Some(get_item_slots(conn, player_id, "characters_bagitem", BAG_ITEM_SLOTS).await?);
+        Some(get_item_slots(conn, player_id, "characters_bagitem", BAG_ITEM_SLOTS).await);
     data.storage_items = Some(
         get_item_slots(
             conn,
@@ -372,7 +397,7 @@ async fn get_record(
             "characters_storageitem",
             STORAGE_ITEM_SLOTS,
         )
-        .await?,
+        .await,
     );
     get_player_status(conn, player_id, &mut data).await?;
     info.data = Some(data);
@@ -604,7 +629,9 @@ async fn save_item_table(
     new_items: &[Option<ServerUserItem>],
     slots: usize,
 ) -> Result<()> {
-    let old_items = get_item_slots(conn, player_id, table, slots).await?;
+    // C# `SaveItem`/`SaveBagItem`/`SaveStorageItem` 先 `Get*ItemRecord`（内部 `try/catch`）：
+    // 读失败只留下部分/空 `oldItems`，随后**照常**进 `ComparerUserItem` 与写循环。
+    let old_items = get_item_slots(conn, player_id, table, slots).await;
     let (chg, del) = comparer_user_item(new_items, &old_items)?;
     // 删除循环
     for (i, d) in del.iter().enumerate() {
@@ -1038,6 +1065,14 @@ impl Db {
         if self.name_text.contains_key(&name.to_lowercase()) {
             return Ok(false);
         }
+        // C# `PlayDataStorage` 只有一份字符串键的 `_NameQuickMap`（`PlayDataStorage.Query.cs:16-23`），
+        // `Add` 成功即 `_NameQuickMap.Add(sChrName, playerId)`（`Add.cs:42-47`）⇒ 6000 面新建的
+        // 角色**立刻**对 5100 面的 `Index/Query/Select` 可见（G6）。Rust 的 5100 面读的是 GBK
+        // 字节键的 [`Db::name_quick`]，故这里按同一口径转 GBK（`add` 后不再查库，只写内存索引）。
+        let name_gbk = self
+            .gbk_bytes(&name)
+            .await
+            .context("角色名 GBK 转换失败（play_data_add 更新 name_quick 用）")?;
         let Some(d) = info.data.as_ref() else {
             return Ok(false);
         };
@@ -1053,6 +1088,7 @@ impl Db {
         create_empty_items(&mut tx, player_id, "characters_storageitem", 50).await?;
         tx.commit().await.context("提交建角事务失败")?;
         self.name_text.insert(name.to_lowercase(), player_id);
+        self.name_quick.insert(fold_key(&name_gbk), player_id);
         self.char_ids.insert(player_id);
         Ok(true)
     }
@@ -1321,9 +1357,7 @@ mod item_attr_tests {
             vec![desc_values(&d_saved)],
             "存档必须 UPDATE 全部 14 列"
         );
-        let loaded = get_item_slots(&mut conn, pid_d, "characters_item", 13)
-            .await
-            .expect("get_item_slots 失败");
+        let loaded = get_item_slots(&mut conn, pid_d, "characters_item", 13).await;
         assert_eq!(loaded[0].as_ref().unwrap().make_index, 101);
         let ld = loaded[0].as_ref().unwrap().desc.clone().unwrap();
         assert_eq!(ld[0], 40, "oracle 只把 VALUE0 写回 Desc[0]");
@@ -1332,6 +1366,279 @@ mod item_attr_tests {
             "oracle 的行序双索引不写 Desc[1..]: {ld:?}"
         );
 
+        sqlx::query(&format!("DROP DATABASE IF EXISTS `{}`", dsn.database))
+            .execute(&mut conn)
+            .await
+            .expect("清理测试库失败");
+    }
+}
+
+#[cfg(test)]
+mod single_sided_column_tests {
+    //! **卡 `openmir2-persist-single-sided-columns`（R）**：逐字段收口 oracle 的「单边」列
+    //! （读↔写不对称）与 Rust-only 缺口（G-09/G-10/G-19 的库侧往返）。
+    //!
+    //! - `AllowGroup`：oracle UPDATE 清单没有该列（只读不写）⇒ 存档后列值必须**保持原值**；
+    //! - `AllowGroupReCall`：oracle 把 `hd.AllowGroup` 绑到它（列映射错位，照抄）；
+    //! - `PkPoint`/`MarryCount`：oracle 写、**载入不读** ⇒ 落库值正确但 `get_record` 读出 0；
+    //! - `ServerIndex`/`Dir`/`IncHealing`：本批补的 Rust-only 落库字段（仍照 oracle 载入口径，
+    //!   `ServerIndex` 读回 0）；
+    //! - `characters_ablity`：`Ac = Level`、`Hp/Mp` 只写低字（不写 AC/MAC 高字）——照抄。
+    //!
+    //! 跑法（需本机 MySQL；库名 `mir2_test_single_sided`，自建自删）：
+    //! `cargo test -p db-srv --bins single_sided_column_tests -- --ignored --nocapture`
+
+    use super::{create_ablity_status, create_characters, get_record, save_record};
+    use mir2_storage::playerdata::{Ability, CharacterDataInfo};
+    use mir2_storage::LegacyDsn;
+    use sqlx::mysql::MySqlConnection;
+    use sqlx::Connection;
+
+    const TABLES: [&str; 9] = [
+        "characters",
+        "characters_ablity",
+        "characters_bonusability",
+        "characters_item",
+        "characters_bagitem",
+        "characters_storageitem",
+        "characters_item_attr",
+        "characters_magic",
+        "characters_status",
+    ];
+
+    fn ddl_for(dump: &str, table: &str) -> String {
+        let marker = format!("CREATE TABLE `{table}` ");
+        let start = dump
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{table} 建表语句缺失"));
+        let rest = &dump[start..];
+        let engine = rest.find(") ENGINE").expect("建表语句缺 ENGINE 尾");
+        let semi = rest[engine..].find(';').expect("建表语句缺分号");
+        rest[..=engine + semi].to_string()
+    }
+
+    async fn setup(database: &str) -> (LegacyDsn, MySqlConnection) {
+        let dsn = LegacyDsn::parse(&format!(
+            "server=127.0.0.1;uid=root;pwd=;database={database};"
+        ))
+        .expect("测试 DSN 非法");
+        assert!(
+            dsn.database.starts_with("mir2_test_"),
+            "拒绝写非测试库：{}",
+            dsn.database
+        );
+        let admin = LegacyDsn {
+            database: "mysql".to_string(),
+            ..dsn.clone()
+        };
+        let mut conn = MySqlConnection::connect(&admin.to_sqlx_url())
+            .await
+            .expect("连测试 MySQL 失败（本测试需本机 MySQL）");
+        sqlx::query(&format!("DROP DATABASE IF EXISTS `{}`", dsn.database))
+            .execute(&mut conn)
+            .await
+            .expect("删测试库失败");
+        sqlx::query(&format!(
+            "CREATE DATABASE `{}` CHARACTER SET utf8 COLLATE utf8_general_ci",
+            dsn.database
+        ))
+        .execute(&mut conn)
+        .await
+        .expect("建测试库失败");
+        let dump = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../sql/mir2_db.sql"
+        ))
+        .expect("读 sql/mir2_db.sql 失败");
+        let mut conn = MySqlConnection::connect(&dsn.to_sqlx_url())
+            .await
+            .expect("连测试库失败");
+        for table in TABLES {
+            let ddl = ddl_for(&dump, table);
+            sqlx::query(&ddl)
+                .execute(&mut conn)
+                .await
+                .unwrap_or_else(|e| panic!("建表 {table} 失败: {e}"));
+        }
+        (dsn, conn)
+    }
+
+    fn info() -> CharacterDataInfo {
+        let mut v = CharacterDataInfo::csharp_new();
+        v.header.set_name(Some("sidhero".to_string()));
+        let d = v.data.as_mut().expect("csharp_new 的 Data 非空");
+        d.chr_name = Some("sidhero".to_string());
+        d.account = Some("sid_acct".to_string());
+        d.abil = Some(Ability {
+            level: 1,
+            hp: 10,
+            ..Ability::default()
+        });
+        v
+    }
+
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_single_sided（自建自删）"]
+    #[allow(clippy::too_many_lines)]
+    async fn single_sided_columns_and_rust_only_gaps_roundtrip() {
+        let (dsn, mut conn) = setup("mir2_test_single_sided").await;
+        let mut info = info();
+        let id = create_characters(&mut conn, &info)
+            .await
+            .expect("create_characters 失败");
+        assert!(id > 0);
+        // 正常建角路径（`db.rs::data_add`）在 `create_character` 之后写 ablity/status；
+        // 这里直接调 `create_characters`，补同一条 INSERT（否则 `save_ablity` 是 0 行 UPDATE）。
+        create_ablity_status(&mut conn, id, info.data.as_ref().expect("Data 非空"))
+            .await
+            .expect("create_ablity_status 失败");
+
+        // 建角 INSERT 不含 `AllowGroup`（oracle `CreateCharacters` 同）⇒ 手工置 1，用于验证
+        // 「存档 UPDATE 永不更新该列」。
+        sqlx::query("UPDATE characters SET AllowGroup=1 WHERE Id=?")
+            .bind(id)
+            .execute(&mut conn)
+            .await
+            .expect("置 AllowGroup=1 失败");
+
+        // ---- 存档：与建角值全部不同 ----
+        {
+            let d = info.data.as_mut().unwrap();
+            d.allow_group = 0; // 若 UPDATE 含该列，落库会变 0
+            d.allow_group_re_call = true; // oracle 错绑 ⇒ 列值应当 = allow_group = 0
+            d.pk_point = 77;
+            d.marry_count = 3;
+            d.dir = 5;
+            d.server_index = 4;
+            d.inc_healing = 44;
+            d.abil = Some(Ability {
+                level: 7,
+                ac: 99, // 必须被忽略：`Ac` 列绑的是 Level
+                mac: 3,
+                dc: 4,
+                mc: 5,
+                sc: 6,
+                hp: 0x1234, // 只写低 16 位（AC 高字不写）
+                mp: 0x5678,
+                max_hp: 9,
+                max_mp: 10,
+                exp: 11,
+                max_exp: 12,
+                weight: 13,
+                max_weight: 14,
+                wear_weight: 15,
+                max_wear_weight: 16,
+                hand_weight: 17,
+                max_hand_weight: 18,
+                ..Ability::default()
+            });
+        }
+        save_record(&mut conn, id, &info)
+            .await
+            .expect("save_record 失败");
+
+        // ---- characters 列 ----
+        let row = sqlx::query(
+            "SELECT ServerIndex, Dir, IncHealing, PkPoint, MarryCount, AllowGroup, AllowGroupReCall \
+             FROM characters WHERE Id=?",
+        )
+        .bind(id)
+        .fetch_one(&mut conn)
+        .await
+        .expect("读 characters 失败");
+        let col = |n: &str| -> i64 { super::int_col(&row, n).expect(n) };
+        assert_eq!(col("ServerIndex"), 4, "G-10：ServerIndex 必须落库");
+        assert_eq!(col("Dir"), 5, "G-09：Dir 必须落当前朝向");
+        assert_eq!(col("IncHealing"), 44, "G-19：IncHealing 必须落库");
+        assert_eq!(col("PkPoint"), 77, "PkPoint 写侧保留（载入不读）");
+        assert_eq!(col("MarryCount"), 3, "MarryCount 写侧保留（载入不读）");
+        assert_eq!(
+            col("AllowGroup"),
+            1,
+            "oracle UPDATE 清单没有 AllowGroup ⇒ 必须保持原值（单边：只读不写）"
+        );
+        assert_eq!(
+            col("AllowGroupReCall"),
+            0,
+            "oracle 把 hd.AllowGroup 绑到 @AllowGroupReCall ⇒ 列 = 0（不是 true）"
+        );
+
+        // ---- characters_ablity：Ac = Level、Hp/Mp 只写低字 ----
+        let arow = sqlx::query(
+            "SELECT Level, Ac, Mac, Dc, Mc, Sc, Hp, Mp, MaxHP, MAxMP, Exp, MaxExp \
+             FROM characters_ablity WHERE PlayerId=?",
+        )
+        .bind(id)
+        .fetch_one(&mut conn)
+        .await
+        .expect("读 characters_ablity 失败");
+        let acol = |n: &str| -> i64 { super::int_col(&arow, n).expect(n) };
+        assert_eq!(acol("Level"), 7);
+        assert_eq!(
+            acol("Ac"),
+            7,
+            "oracle 既有 bug：Ac 绑 Abil.Level（不是 AC=99）"
+        );
+        assert_eq!(acol("Hp"), 0x1234, "Hp 只写 Abil.HP（低 16 位）");
+        assert_eq!(acol("Mp"), 0x5678, "Mp 只写 Abil.MP（低 16 位）");
+        assert_eq!(acol("Mac"), 3);
+        assert_eq!(acol("Dc"), 4);
+        assert_eq!(acol("MaxHP"), 9);
+        assert_eq!(acol("MAxMP"), 10);
+
+        // ---- 载入：oracle 不读 PkPoint/MarryCount/ServerIndex；其余逐字段回来 ----
+        let loaded = get_record(&mut conn, id)
+            .await
+            .expect("get_record 失败")
+            .expect("记录应存在")
+            .data
+            .expect("Data 非空");
+        assert_eq!(loaded.pk_point, 0, "PkPoint 只写不读（oracle 单边）");
+        assert_eq!(loaded.marry_count, 0, "MarryCount 只写不读（oracle 单边）");
+        assert_eq!(loaded.server_index, 0, "ServerIndex 载入不读（oracle 同）");
+        assert_eq!(loaded.dir, 5, "Dir 载入读取");
+        assert_eq!(loaded.inc_healing, 44, "IncHealing 载入读取");
+        assert_eq!(loaded.allow_group, 1, "AllowGroup 载入读取");
+        assert!(!loaded.allow_group_re_call, "列值为 0 ⇒ false（错绑照抄）");
+        let abil = loaded.abil.expect("Abil 非空");
+        assert_eq!(abil.level, 7);
+        assert_eq!(abil.hp, 0x1234, "HP 低字往返");
+        assert_eq!(abil.ac, 0, "AC 高字从未写入 ⇒ 重登 0（oracle 同）");
+
+        sqlx::query(&format!("DROP DATABASE IF EXISTS `{}`", dsn.database))
+            .execute(&mut conn)
+            .await
+            .expect("清理测试库失败");
+    }
+
+    /// **G7**：物品表**读失败不整表放弃**——oracle `GetItemRecord` 一类 `try/catch` 吞错后
+    /// `oldItems` 为空/部分，仍继续 `ComparerUserItem` 与写循环；旧 Rust 实现 `fetch_all(...)?`
+    /// 直接把整张表交给 `save_record` 记日志跳过。
+    ///
+    /// 失败注入：删掉 `characters_bagitem` 表 ⇒ `get_item_slots` 必须返回 46 个空槽（**不 panic、
+    /// 不 Err**），`save_item_table` 必须继续走到差量逻辑并正常返回。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_item_readfail（自建自删）"]
+    async fn item_read_failure_keeps_table_in_play() {
+        use super::{get_item_slots, save_item_table};
+        use mir2_storage::playerdata::ServerUserItem;
+        let (dsn, mut conn) = setup("mir2_test_item_readfail").await;
+        sqlx::query("DROP TABLE characters_bagitem")
+            .execute(&mut conn)
+            .await
+            .expect("删 characters_bagitem 失败（失败注入）");
+        let slots = get_item_slots(&mut conn, 1, "characters_bagitem", 46).await;
+        assert_eq!(slots.len(), 46, "槽位数不因读失败而变");
+        assert!(
+            slots.iter().all(Option::is_none),
+            "读失败 ⇒ 已读行保留（此例 0 行）⇒ 全空，且不返回 Err"
+        );
+        let new_items: Vec<Option<ServerUserItem>> = (0..46)
+            .map(|_| Some(ServerUserItem::csharp_new()))
+            .collect();
+        save_item_table(&mut conn, 1, "characters_bagitem", &new_items, 46)
+            .await
+            .expect("读失败后 save_item_table 不得整表放弃");
         sqlx::query(&format!("DROP DATABASE IF EXISTS `{}`", dsn.database))
             .execute(&mut conn)
             .await

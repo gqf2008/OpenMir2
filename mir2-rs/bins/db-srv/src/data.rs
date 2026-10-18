@@ -34,6 +34,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 
+use crate::cache::CacheStore;
 use crate::db::Db;
 use crate::log;
 use crate::server::Server;
@@ -239,7 +240,7 @@ async fn load_human_rcd(
     query_id: i32,
     s_data: &[u8],
 ) -> Result<()> {
-    // \`ProcessServerMsg\` 传来的 \`s_data\` 已经是 EDCode 解好的体（C# 同）；这里直接反序列化。
+    // `ProcessServerMsg` 传来的 `s_data` 已经是 EDCode 解好的体（C# 同）；这里直接反序列化。
     let Ok(req) = LoadCharacterData::from_bytes(s_data) else {
         log::error(&format!(
             "解析 LoadCharacterData 失败（体 {}B）",
@@ -318,7 +319,7 @@ async fn save_human_rcd(
     query_id: i32,
     s_data: &[u8],
 ) -> Result<()> {
-    // \`ProcessServerMsg\` 传来的 \`s_data\` 已经是 EDCode 解好的体（C# 同）。
+    // `ProcessServerMsg` 传来的 `s_data` 已经是 EDCode 解好的体（C# 同）。
     let Ok(save) = SaveCharacterData::from_bytes(s_data) else {
         log::error("保存玩家数据出错.");
         return Ok(());
@@ -326,45 +327,75 @@ async fn save_human_rcd(
     let s_user_id = save.account.clone().unwrap_or_default();
     let s_chr_name = save.chr_name.clone().unwrap_or_default();
     let Some(mut rcd) = save.character_data else {
-        // C# `bo21 = humanRcd == null` ⇒ 失败回包用的是 `DBR_LOADHUMANRCD` (C# 原样)。
-        send_request_plain(
-            tx,
-            query_id,
-            ServerRequestMessage::new(DBR_LOADHUMANRCD, 0, 0, 0, 0),
-        );
+        // C# `bo21 = humanRcd == null` ⇒ 直接走失败应答（`DBR_LOADHUMANRCD recog=0`）。
+        send_request_plain(tx, query_id, save_reply(true));
         return Ok(());
     };
-    let mut bo21 = true;
     rcd.header.set_name(Some(s_chr_name.clone()));
-    {
-        let mut db = db.lock().await;
-        let mut n_index = db.play_data_index_text(&s_chr_name);
-        if n_index.is_none() {
-            let _ = db.play_data_add(&rcd).await?;
-            n_index = db.play_data_index_text(&s_chr_name);
-        }
-        if n_index.is_some() {
-            server
-                .cache
-                .lock()
-                .await
-                .add(s_chr_name.as_bytes(), rcd.clone());
-            let _ = db.play_data_update(&s_chr_name, &rcd).await?;
-            bo21 = false;
-        }
-    }
+    // oracle `DataService.cs:225-234` + `:237`：库侧处置（吞掉 Add/Update 的失败），随后
+    // **只要 humanRcd 非 null** 就 `SetSessionSaveRcd`（与是否落库成功无关）。
+    let bo21 = store_human_rcd(db, &server.cache, &s_chr_name, &rcd).await;
     server
         .login
         .lock()
         .await
         .set_session_save_rcd(s_user_id.as_bytes());
-    let message = if bo21 {
+    send_request_plain(tx, query_id, save_reply(bo21));
+    Ok(())
+}
+
+/// oracle `DataService.cs:225-234` 的库侧处置，返回 `bo21`。
+///
+/// `bo21 = true` ⇒ 索引仍缺失（应答 `DBR_LOADHUMANRCD recog=0`）；`false` ⇒ 已进入
+/// `Update`（应答 `DBR_SAVEHUMANRCD recog=1`，**与 `Update` 是否成功无关** —— oracle 忽略
+/// `_playDataStorage.Update` 的返回值，`DataService.cs:234`）。
+///
+/// 失败路径（G2/G3）逐条照 oracle：
+/// - `Add` 失败：`PlayDataStorage.Add` 内部 `catch` 吞 SQL 异常并返回 false（`Add.cs:78-82`），
+///   `DataService.cs:228` **忽略返回值** → `:229` 再 `Index` 仍 <0 ⇒ `bo21` 保持 true；
+/// - `Update` 失败：`PlayDataStorage.SaveRecord` 的 `Open` 失败返回 false / `Commit` 抛异常返回
+///   false（`PlayDataStorage.Save.cs:50-53/66-74`），`DataService.cs:234` **忽略返回值** ⇒
+///   `bo21 = false`（成功应答，GameSvr 侧据此清 in-save）。
+///
+/// 旧实现两处都用 `?` 上抛 ⇒ 不回包、`save_outstanding`/`begin_save` 永不清（角色永久 in-save）。
+async fn store_human_rcd(
+    db: &Arc<Mutex<Db>>,
+    cache: &Arc<Mutex<CacheStore>>,
+    name: &str,
+    rcd: &CharacterDataInfo,
+) -> bool {
+    let mut db = db.lock().await;
+    let mut n_index = db.play_data_index_text(name);
+    if n_index.is_none() {
+        // oracle `DataService.cs:228`：`_playDataStorage.Add(humanRcd)` 的返回值被忽略。
+        if let Err(e) = db.play_data_add(rcd).await {
+            log::error(&format!(
+                "保存玩家数据出错（自动建档，C# 同场景吞异常）: {e:#}"
+            ));
+        }
+        n_index = db.play_data_index_text(name);
+    }
+    let Some(_n_index) = n_index else {
+        return true;
+    };
+    // oracle 顺序：先 `_cacheStorage.Add`（`:233`）再 `Update`（`:234`）。
+    cache.lock().await.add(name.as_bytes(), rcd.clone());
+    if let Err(e) = db.play_data_update(name, rcd).await {
+        log::error(&format!(
+            "保存玩家数据出错（Update 失败被吞，C# 同口径仍回成功应答）: {e:#}"
+        ));
+    }
+    false
+}
+
+/// oracle `DataService.cs:242/248` 的应答选择：
+/// `bo21 == false` ⇒ `DBR_SAVEHUMANRCD recog=1`；否则 `DBR_LOADHUMANRCD recog=0`。
+fn save_reply(bo21: bool) -> ServerRequestMessage {
+    if bo21 {
         ServerRequestMessage::new(DBR_LOADHUMANRCD, 0, 0, 0, 0)
     } else {
         ServerRequestMessage::new(DBR_SAVEHUMANRCD, 1, 0, 0, 0)
-    };
-    send_request_plain(tx, query_id, message);
-    Ok(())
+    }
 }
 
 // ==== 信封编解码（C# `SendRequest`/`SendRequest<T>`/`GetCheckCode`/`SendMessage`） ====
@@ -549,6 +580,23 @@ mod tests {
         assert_eq!(msg.ident, DBR_FAIL);
     }
 
+    /// **卡 `openmir2-db-error-reply`（G2/G3）构造级判据**：失败路径必须**有应答**，且
+    /// `Update` 失败走成功应答（GameSvr `apply_save_reply` 只在 `1102 && recog==1` 时清 in-save）。
+    #[test]
+    fn save_reply_matches_oracle_failure_paths() {
+        // G2：`Update` 的 Err（acquire/begin 失败）在 oracle 里被忽略（`DataService.cs:234`）
+        // ⇒ `bo21 = false` ⇒ 成功应答。GameSvr 收到后 `end_save`（清 in-save）。
+        let ok = save_reply(false);
+        assert_eq!(ok.ident, DBR_SAVEHUMANRCD);
+        assert_eq!(ok.recog, 1, "G2：Update 失败仍回成功应答");
+
+        // G3：`Add` 失败后 `Index` 仍 <0 ⇒ `bo21 = true` ⇒ 失败应答
+        // （oracle `DataService.cs:248`：`DBR_LOADHUMANRCD recog=0`）。
+        let fail = save_reply(true);
+        assert_eq!(fail.ident, DBR_LOADHUMANRCD);
+        assert_eq!(fail.recog, 0, "G3：自动建档失败回失败应答");
+    }
+
     /// 请求侧信封：`Message`/`Packet` 都经 EDCode 往返后仍能解出原结构（回归测试里的“解析 LoadCharacterData 失败”）。
     #[test]
     fn request_envelope_roundtrips_load_character_data() {
@@ -579,5 +627,201 @@ mod tests {
         );
         let l2 = LoadCharacterData::from_bytes(&s_data).expect("LoadCharacterData 解不出");
         assert_eq!(l2, load);
+    }
+}
+
+#[cfg(test)]
+mod save_failure_tests {
+    //! 失败注入（G2/G3）：用**关闭连接池**制造 `acquire`/`begin` 失败——这正是 oracle
+    //! `StorageContext.Open` 失败/`Update` 抛异常的可达场景（MySQL 瞬断/池耗尽/死锁）。
+    //!
+    //! 跑法（需本机 MySQL；三个用例各用独立 `mir2_test_*` 库，自建自删）：
+    //! `cargo test -p db-srv --bins save_failure_tests -- --ignored --nocapture`
+
+    use super::{save_reply, store_human_rcd, Db, DBR_LOADHUMANRCD, DBR_SAVEHUMANRCD};
+    use crate::cache::CacheStore;
+    use mir2_storage::playerdata::CharacterDataInfo;
+    use mir2_storage::LegacyDsn;
+    use sqlx::mysql::MySqlConnection;
+    use sqlx::Connection;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    const TABLES: [&str; 10] = [
+        "characters_indexes",
+        "characters",
+        "characters_ablity",
+        "characters_bonusability",
+        "characters_item",
+        "characters_bagitem",
+        "characters_storageitem",
+        "characters_item_attr",
+        "characters_magic",
+        "characters_status",
+    ];
+
+    fn ddl_for(dump: &str, table: &str) -> String {
+        let marker = format!("CREATE TABLE `{table}` ");
+        let start = dump
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{table} 建表语句缺失"));
+        let rest = &dump[start..];
+        let engine = rest.find(") ENGINE").expect("建表语句缺 ENGINE 尾");
+        let semi = rest[engine..].find(';').expect("建表语句缺分号");
+        rest[..=engine + semi].to_string()
+    }
+
+    async fn setup(database: &str) -> LegacyDsn {
+        let dsn = LegacyDsn::parse(&format!(
+            "server=127.0.0.1;uid=root;pwd=;database={database};"
+        ))
+        .expect("测试 DSN 非法");
+        assert!(
+            dsn.database.starts_with("mir2_test_"),
+            "拒绝写非测试库：{}",
+            dsn.database
+        );
+        let admin = LegacyDsn {
+            database: "mysql".to_string(),
+            ..dsn.clone()
+        };
+        let mut conn = MySqlConnection::connect(&admin.to_sqlx_url())
+            .await
+            .expect("连测试 MySQL 失败（本测试需本机 MySQL）");
+        sqlx::query(&format!("DROP DATABASE IF EXISTS `{}`", dsn.database))
+            .execute(&mut conn)
+            .await
+            .expect("删测试库失败");
+        sqlx::query(&format!(
+            "CREATE DATABASE `{}` CHARACTER SET utf8 COLLATE utf8_general_ci",
+            dsn.database
+        ))
+        .execute(&mut conn)
+        .await
+        .expect("建测试库失败");
+        let dump = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../sql/mir2_db.sql"
+        ))
+        .expect("读 sql/mir2_db.sql 失败");
+        let mut conn = MySqlConnection::connect(&dsn.to_sqlx_url())
+            .await
+            .expect("连测试库失败");
+        for table in TABLES {
+            let ddl = ddl_for(&dump, table);
+            sqlx::query(&ddl)
+                .execute(&mut conn)
+                .await
+                .unwrap_or_else(|e| panic!("建表 {table} 失败: {e}"));
+        }
+        dsn
+    }
+
+    fn info(name: &str) -> CharacterDataInfo {
+        let mut v = CharacterDataInfo::csharp_new();
+        v.header.set_name(Some(name.to_string()));
+        if let Some(d) = v.data.as_mut() {
+            d.chr_name = Some(name.to_string());
+        }
+        v
+    }
+
+    async fn insert_character(dsn: &LegacyDsn, name: &str) -> i64 {
+        let mut conn = MySqlConnection::connect(&dsn.to_sqlx_url())
+            .await
+            .expect("连测试库失败");
+        let res =
+            sqlx::query("INSERT INTO characters (LoginID, ChrName, Deleted) VALUES ('acct', ?, 0)")
+                .bind(name)
+                .execute(&mut conn)
+                .await
+                .expect("插入 characters 失败");
+        #[allow(clippy::cast_possible_wrap)]
+        let id = res.last_insert_id() as i64;
+        id
+    }
+
+    /// G2：索引命中 ⇒ `play_data_update` 的 `acquire` 失败被吞 ⇒ `bo21=false`（成功应答）。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_savefail_g2（自建自删）"]
+    async fn update_failure_still_answers_success_for_in_save_release() {
+        let dsn = setup("mir2_test_savefail_g2").await;
+        insert_character(&dsn, "g2hero").await;
+        let mut db = Db::connect(&dsn).await.expect("连测试库失败");
+        db.load_quick_lists().await.expect("载入索引失败");
+        assert!(db.play_data_index_text("g2hero").is_some(), "索引必须命中");
+        // 失败注入：关闭连接池 ⇒ `play_data_update` 的 `pool.acquire()` 返回 Err。
+        db.pool.close().await;
+        let db = Arc::new(Mutex::new(db));
+        let cache = Arc::new(Mutex::new(CacheStore::default()));
+        let bo21 = store_human_rcd(&db, &cache, "g2hero", &info("g2hero")).await;
+        assert!(!bo21, "G2：Update 失败必须按 oracle 口径视为已进入 Update");
+        let m = save_reply(bo21);
+        assert_eq!((m.ident, m.recog), (DBR_SAVEHUMANRCD, 1));
+        let mut conn = MySqlConnection::connect(&dsn.to_sqlx_url())
+            .await
+            .expect("连测试库失败");
+        sqlx::query("DROP DATABASE IF EXISTS `mir2_test_savefail_g2`")
+            .execute(&mut conn)
+            .await
+            .expect("清理测试库失败");
+    }
+
+    /// G3：索引缺失 + `Add` 失败（池关闭）⇒ `bo21=true`（失败应答，但**有应答**）。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_savefail_g3（自建自删）"]
+    async fn add_failure_still_answers_failure() {
+        let dsn = setup("mir2_test_savefail_g3").await;
+        let mut db = Db::connect(&dsn).await.expect("连测试库失败");
+        db.load_quick_lists().await.expect("载入索引失败");
+        assert!(db.play_data_index_text("g3hero").is_none());
+        db.pool.close().await;
+        let db = Arc::new(Mutex::new(db));
+        let cache = Arc::new(Mutex::new(CacheStore::default()));
+        let bo21 = store_human_rcd(&db, &cache, "g3hero", &info("g3hero")).await;
+        assert!(bo21, "G3：Add 失败后索引仍缺失");
+        let m = save_reply(bo21);
+        assert_eq!((m.ident, m.recog), (DBR_LOADHUMANRCD, 0));
+        let mut conn = MySqlConnection::connect(&dsn.to_sqlx_url())
+            .await
+            .expect("连测试库失败");
+        sqlx::query("DROP DATABASE IF EXISTS `mir2_test_savefail_g3`")
+            .execute(&mut conn)
+            .await
+            .expect("清理测试库失败");
+    }
+
+    /// 成功路径不变：索引命中、库可用 ⇒ `bo21=false`，且 `Update` 真的落库。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_savefail_ok（自建自删）"]
+    async fn success_path_still_updates_and_answers_success() {
+        let dsn = setup("mir2_test_savefail_ok").await;
+        let id = insert_character(&dsn, "okhero").await;
+        let mut db = Db::connect(&dsn).await.expect("连测试库失败");
+        db.load_quick_lists().await.expect("载入索引失败");
+        let db = Arc::new(Mutex::new(db));
+        let cache = Arc::new(Mutex::new(CacheStore::default()));
+        let mut rcd = info("okhero");
+        if let Some(d) = rcd.data.as_mut() {
+            d.gold = 321;
+            d.allow_group = 1;
+        }
+        let bo21 = store_human_rcd(&db, &cache, "okhero", &rcd).await;
+        assert!(!bo21);
+        assert_eq!(save_reply(bo21).ident, DBR_SAVEHUMANRCD);
+        let mut conn = MySqlConnection::connect(&dsn.to_sqlx_url())
+            .await
+            .expect("连测试库失败");
+        let row = sqlx::query("SELECT Gold FROM characters WHERE Id=?")
+            .bind(id)
+            .fetch_one(&mut conn)
+            .await
+            .expect("读 characters 失败");
+        let gold: i64 = sqlx::Row::try_get(&row, "Gold").expect("Gold 列");
+        assert_eq!(gold, 321, "成功路径必须真的落库");
+        sqlx::query("DROP DATABASE IF EXISTS `mir2_test_savefail_ok`")
+            .execute(&mut conn)
+            .await
+            .expect("清理测试库失败");
     }
 }

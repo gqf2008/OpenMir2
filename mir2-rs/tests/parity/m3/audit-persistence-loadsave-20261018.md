@@ -504,3 +504,25 @@ CharacterDataProcessor.ProcessSaveStorage()            CharacterDataProcessor.cs
 - `src/GameSrv/TimedService.cs`：230-243；`src/GameSrv/AppService.cs`：`SavePlayer` 133-145
 - `src/M2Server/Player/PlayObject.Base.cs`：`ClientAdjustBonus` 1156-1180（`BonusPoint = nPoint` 1162；`BonusAbil.* += 0`）
 - `src/OpenMir2/Enums/ItemLocation.cs`：Dress 0 / Weapon 1 / RighThand 2 / Necklace 3 / Helmet 4 / … / Charm 12
+
+---
+
+## 9. 实施状态（2026-10-19，卡 `openmir2-persist-single-sided-columns`）
+
+> 落地口径 = **照抄 oracle**：单边（只读不写 / 只写不读 / 列映射错位）**保持单边并在此登记**；
+> Rust-only 缺口（G-09/G-10/G-19）补齐。所有 oracle 行号为本次在 `27d22a9f3` 树上复测。
+
+| 字段 | oracle 证据 | Rust 处理 | 判据 |
+|---|---|---|---|
+| `characters.AllowGroup` | 存档 UPDATE 清单无此列（`PlayDataStorage.Save.cs:85-88`）；载入 `Query.cs:245` | **保持单边（只读不写）**。`SAVE_CHARACTERS_SQL` 不含该列；`@AllowGroupReCall` 仍绑 `hd.AllowGroup`（`Save.cs:121`，错位照抄） | `playdata::single_sided_column_tests`：存档后 `AllowGroup` 保持原值 1、`AllowGroupReCall` = 0 |
+| `characters.PkPoint` | 写 `Save.cs:107`；载入 `GetChrRecord`（`Query.cs:192-266`）无该列 | **保持单边（只写不读）** | 同上：落库 77、`get_record` 读回 0 |
+| `characters.MarryCount` | 写 `Save.cs:120`；载入无该列 | **保持单边（只写不读）** | 同上：落库 3、读回 0 |
+| `characters.Dir` | `MakeSaveRcd` `WorldServer.cs:1241` 写 `playObject.Dir`；载入 `Query.cs:213` | **补齐（G-09，Rust-only）**：进世界用记录 `dir` 初始化 `Entity.ai.dir`；`CM_TURN`/走跑成功同步实体；`build_save_record` 写 `rec.data.dir = e.dir()` | `save_record_carries_dir_server_index_and_inc_healing`、`move_cmd_dispatches_turn_walk_ack_and_aoi` |
+| `characters.ServerIndex` | `MakeSaveRcd` `WorldServer.cs:1236` 写 `M2Share.ServerIndex`；配置 `ServerConf.cs:17` 的 `ReadWriteByte("Server","ServerIndex",0)`；载入不读 | **补齐（G-10，Rust-only）**：`config::load` 解析 `[Server] ServerIndex`（byte，缺省 0，非法报错）；`SessionGround.server_index` 固化；`build_save_record` 写入 | `server_index_parses_with_oracle_default`、`save_record_carries_…` |
+| `characters_ablity.Ac` / `Hp` / `Mp` | `SaveAblity` `Save.cs:146`：`@Ac` 绑 `Abil.Level`；`:151-152` 只写 `Abil.HP/MP` 低 16 位；载入 `Query.cs:280-285` 用 `LoWord/HiWord` | **照抄保留（列映射错位）**：`save_ablity` 的 `Ac = Level`、`Hp/Mp` 只写低字；不在本批“修 bug” | 同上：`Ac` 列 = 7（Level），`Hp` 列 = `0x1234`，载入 `AC = HiWord = 0` |
+| `characters.IncHealing` | 存档 `WorldServer.cs:1281` `(byte)playObject.IncHealing`；登录恢复 `WorldServer.cs:1151`；运行期累加 `PlayObject.Message.cs:1619-1628` | **补齐（G-19，Rust-only）**：会话初始化 `inc_healing: u16::from(d.inc_healing)`；`build_save_record` 写 `(sg.recovery.inc_healing & 0xFF)` | `save_record_carries_…`（300 ⇒ 44）、单边列往返（44） |
+
+**未在本卡修、保持原样的 oracle 既有行为**（不属于“单边”，另行登记）：
+`characters_item_attr` 无 INSERT 路径（G-01，已由 `71f4baa48` 建角门照抄）、
+`characters_bonusability` 无建行（G-03，复核证伪：oracle 同样不建）、
+`GameGold` 与 `Gold` 共列（G-02，`71f4baa48` 登记）。

@@ -892,6 +892,7 @@ async fn main() -> Result<()> {
                     game_conf,
                     string_conf,
                     show_rank_level_name,
+                    server_index: cfg.server_index,
                     catalog: item_catalog,
                     magic_table,
                     pet_cfg,
@@ -4799,6 +4800,24 @@ fn new_human_ability() -> record::Ability {
     }
 }
 
+/// `WorldServer.GetHumData`（`:1100-1229`）的恢复计数器登录初始化。
+///
+/// - `:1151`：`playObject.IncHealing = humanRcd.Data.IncHealing`（**G-19**：旧实现漏拷 ⇒
+///   治疗术累积值登录不恢复、下次存档写 0）；
+/// - `IncHealth/IncSpell` 同源（`GetHumData` 的 `CharacterObject` 字段直拷）；
+/// - 其余 `Recovery` 字段取 `CharacterObject()` 构造初值（`Per* = 5`、
+///   `IncHealthSpellTick = GetTickCount()`，`CharacterObject.cs:83-86`）。
+///
+/// 抽成函数便于构造级判据（`session_recovery_restores_inc_healing`）。
+fn recovery_from_record(d: &record::CharacterData, now: i64) -> game_svr::recover::Recovery {
+    game_svr::recover::Recovery {
+        inc_health: u16::from(d.inc_health),
+        inc_spell: u16::from(d.inc_spell),
+        inc_healing: u16::from(d.inc_healing),
+        ..game_svr::recover::Recovery::new(now)
+    }
+}
+
 /// `WorldServer.MakeSaveRcd`（`:1231-1360`）的 `CharacterData`：原始记录 + 会话实时增量。
 ///
 /// 实时值取自 `SessionGround`（Gold/Abil/物品族表）与 `World` 的实体坐标；其余字段（magic/
@@ -4828,11 +4847,22 @@ fn build_save_record(
     {
         rec.data.cur_x = i16::try_from(e.x).unwrap_or(rec.data.cur_x);
         rec.data.cur_y = i16::try_from(e.y).unwrap_or(rec.data.cur_y);
+        // `MakeSaveRcd` `:1241`：`playerInfo.Dir = playObject.Dir`（**当前**朝向）。
+        // 实体 `dir` 在所有会改 oracle `Dir` 的落点同步：`CM_TURN`、`CM_WALK/RUN/HORSERUN`
+        // （**判定前**，失败也保留尝试方向）、9 条攻击命令（含挥空）、`CM_SPELL` default 支。
+        // 旧实现只改显示表，存档写的是载入值（G-09 / F1）。
+        rec.data.dir = e.dir();
     }
     rec.data.gold = sg.state.gold;
     rec.data.game_gold = sg.game_gold;
+    // `MakeSaveRcd` `:1236`：`playerInfo.ServerIndex = M2Share.ServerIndex`。
+    rec.data.server_index = sg.server_index;
     rec.data.inc_health = u8::try_from(sg.recovery.inc_health & 0x00FF).unwrap_or(0);
     rec.data.inc_spell = u8::try_from(sg.recovery.inc_spell & 0x00FF).unwrap_or(0);
+    // `MakeSaveRcd` `:1281`：`playerInfo.IncHealing = (byte)playObject.IncHealing`
+    // （G-19：旧实现漏写 ⇒ 治疗术累积值不落库；运行期 `sg.recovery.inc_healing` 已在
+    // `drain_mag_healing_delivery`/恢复段维护）。
+    rec.data.inc_healing = u8::try_from(sg.recovery.inc_healing & 0x00FF).unwrap_or(0);
     rec.data.hunger_status = sg.hunger_status;
     // `PlayObject.BodyLuck`（`PlayObject.cs:520`）⇒ `characters.BodyLuck`（`MakeSaveRcd` 读 `BodyLuck`）。
     rec.data.body_luck = sg.equip.body_luck;
@@ -5164,6 +5194,10 @@ fn handle_move_cmd(
                 return;
             }
             set_display_dir(displays, actor_id, n_dir);
+            // 实体 `dir` 与展示表同步（`MakeSaveRcd` 读 `playObject.Dir`；G-09）。
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.dir = n_dir;
+            }
             // **L1 TransMap**：oracle `ClientChangeDir` 原地转身也调 `Walk(RM_TURN)`
             // （`PlayObject.Operate.cs:334`）⇒ 转身前在**当前格**做路线检查（命中 MapRoute ⇒ 换图）。
             if world.walk_route_check(actor_id) {
@@ -5195,6 +5229,13 @@ fn handle_move_cmd(
             let dir = movewire::next_direction(cur_x, cur_y, nx, ny);
             let (ddx, ddy) = movewire::direction_delta(dir);
             let steps = movewire::steps_for(ident);
+            // oracle `WalkTo`/`RunTo` 在**判定之前**就 `Dir = btDir`（`BaseObject.cs:609` /
+            // `PlayObject.Base.cs:400` 的 `Dir = btDir;` 在 `CanWalk*` 之前），被挡/越界
+            // **不回滚** ⇒ 实体朝向记**尝试**方向。`MakeSaveRcd` 读 `playObject.Dir`（G-09）
+            // ⇒ 必须在 `step_with_route` 之前同步；失败支（下面 `!outcome.moved` 早退）也保留。
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.dir = dir;
+            }
             let outcome = world.step_with_route(actor_id, ddx, ddy, steps);
             if !outcome.moved {
                 glog!(
@@ -5209,6 +5250,7 @@ fn handle_move_cmd(
             if outcome.changed_map {
                 drain_map_change(world, online, gates, displays, registry);
             }
+            // 实体 `dir` 已在判定前同步（走跑失败也保留尝试方向）；这里只更新展示表。
             set_display_dir(displays, actor_id, dir);
             // 体力/魔力点（`PlayObject.Attack.cs:1424` 走路 `HealthTick -= 10`；
             // `:1352-1356`/`:1041-1045` 跑步/骑跑 `HealthTick -= 60; SpellTick -= 10;
@@ -5449,9 +5491,10 @@ fn handle_hit_cmd(
     // `PlayObject.Attack.cs:26` 的 `attackTarget = targetObject ?? GetPoseCreate()` 发生在
     // `BaseObject.Attack.cs:12` 的 `Dir = nDir` **之前**；`nDir` 只影响此后的动作帧
     // （`PlayObject.Attack.cs:76` 的 `SendAttackMsg(..., Dir, ...)`）与后续朝向。
-    // `Dir` 由 bin 侧 `DisplayTable` 承载（`crates/world` 的 `Entity` 无 `dir` 字段；
-    // 进世界时用 `record.dir` 初始化，`set_display_dir` 维护）。展示表缺失时退回本帧 dir
-    // （等价旧行为；生产路径进世界必登记展示表）。
+    // 取目标读 bin 侧 `DisplayTable` 的朝向（生产路径进世界必登记展示表；缺失时退回本帧 dir，
+    // 等价旧行为）。实体 `Entity.ai.dir` 同步作为**存档**权威（`MakeSaveRcd` 读 `playObject.Dir`），
+    // 本片不改取目标读取面：走/跑失败时 oracle 的 `Dir` 已改成尝试方向而展示表仍停在旧值，
+    // 属取目标口径的既有偏差（登记，未在本片扩大）。
     let pose_dir = displays.get(actor_id).map_or(dir, |d| d.dir);
     // 取目标：`GetPoseCreate()` = 前方格首个 `!Ghost && !Death` 的对象。
     let (width, height) = world
@@ -5461,6 +5504,12 @@ fn handle_hit_cmd(
     let (fx, fy) = game_svr::attackwire::front_position(pose_dir, cur_x, cur_y, width, height);
     // `BaseObject.AttackDir` 开头 `Dir = nDir`（`BaseObject.Attack.cs:12`）——取目标**之后**才更新。
     set_display_dir(displays, actor_id, dir);
+    // 同一句在 oracle 里**无条件**执行：物理命中与**挥空**（`attackTarget == null`，
+    // `_Attack` 返回 false）都改 `Dir` ⇒ 实体朝向也必须无条件同步（`MakeSaveRcd` 读
+    // `playObject.Dir`；G-09 的失败支）。
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = dir;
+    }
     let target_id = if (fx, fy) == (cur_x, cur_y) {
         None
     } else {
@@ -6148,6 +6197,11 @@ fn handle_spell_cmd(
     if default_arm {
         let dir = movewire::next_direction(cur_x, cur_y, req.target_x, req.target_y);
         set_display_dir(displays, actor_id, dir);
+        // oracle `PlayObject.Attack.cs:1270` 的 `Dir = GetNextDirection(...)` 同样改的是
+        // `playObject.Dir`（不只是展示态）⇒ 实体同步（`MakeSaveRcd` 读它）。
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.dir = dir;
+        }
     }
     // **战士门的 `RM_MAGICFIREFAIL`**：oracle `PlayObject.Base.cs:1510` 的
     // `if (!MagicManager.IsWarrSkill(userMagic.MagIdx))` 把 MP 扣减**和** `MagicManager.DoSpell`
@@ -10500,6 +10554,12 @@ fn drain_mag_healing_delivery(
 /// - **门**：`!IsFull()`（恒真，见 [`periodic_save_due`]）+ oracle 只在 `LoginNoticeOk && BoReadyRun` 的
 ///   最内层 `else` 里查（`:685-698`）。本宿主 `SessionGround` 在入图帧全部下发后才建 ⇒ 建即已就绪；
 ///   构造 → 就绪之间的亚秒窗口与「10 分钟」量级无关，登记不影响判据。
+/// - **不查 `InSaveRcdList`**：`WorldServer.cs:698-703` 的逐角色周期触发**没有** in-save 门，
+///   到点即先重置 `SaveRcdTick` 再 `SaveHumanRcd`。`InSaveRcdList` 只属于**另一个**全局
+///   10 分钟触发器 `TimedService.cs:234-237`（它也不碰 `SaveRcdTick`）。旧实现把该门接到本路径
+///   ⇒ ① 在途存档一完成，下一 tick 立刻重发（tick 在 in-save 期间没重置）；② `save_list`
+///   泄漏会让该角色**永久**停掉周期存档。两条都与 oracle 不符，本片按 oracle 修正。
+///   **登记**：`TimedService` 的全局 10 分钟触发器尚未单独建模（本仓只有逐角色触发这一条）。
 ///
 /// # 登记（未建模，不静默）
 ///
@@ -10528,6 +10588,10 @@ fn drain_periodic_save(
     names.sort();
     let mut fired = 0usize;
     for name in names {
+        // **F2**：oracle `WorldServer.cs:698-703` 的逐角色周期存档**不查** `InSaveRcdList`
+        // （那是 `TimedService.cs:234-237` 另一个全局触发器的门）。到点就「先重置 tick、
+        // 再 SaveHumanRcd」⇒ 即便角色在途存档未完成也照发、且 tick 照常重置
+        //（`periodic_save_due` 内重置）；`save_list` 泄漏也不会永久停掉本角色。
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
         };
@@ -10543,6 +10607,10 @@ fn drain_periodic_save(
             continue;
         };
         if save_human_rcd(db, engine, saved, &name, world, sg, registry).is_some() {
+            // oracle `CharacterDataProcessor.cs:85-88`：`SendRequest` 成功后 `RcdSaved = true`
+            // ⇒ `WorldServer.cs:592` 的换服门（G11）。周期存档是唯一会保留会话的成功发送路径
+            // （断线/小退/顶号随后即删会话）。
+            sg.switch_state.rcd_saved = true;
             fired += 1;
             glog!(
                 "INF",
@@ -11256,6 +11324,85 @@ struct SessionGround {
     /// 与 [`now_ms`] 同源）。进世界时起算（= oracle `new PlayObject()`），每次周期触发时
     /// **先重置**再发 `DB_SAVEHUMANRCD`（`WorldServer.cs:698-703`）；见 [`drain_periodic_save`]。
     save_rcd_tick: i64,
+    /// `[Server] ServerIndex`（oracle `M2Share.ServerIndex`）：`MakeSaveRcd` 写
+    /// `characters.ServerIndex`（`WorldServer.cs:1236`）；或 `characters` 主键关联的
+    /// 多机部署标识。进世界时从配置固化（oracle 是进程级常量）。
+    server_index: u8,
+    /// oracle `PlayObject` 的换服状态（`RcdSaved`/`SwitchData`/…；`WorldServer.cs:592-610`，G11）。
+    switch_state: SwitchDataState,
+}
+
+/// oracle `IPlayerActor`/`PlayObject` 的换服字段（`WorldServer.cs:592-610`，卡 G11）。
+///
+/// 现仓**没有** `ChangeSpaceMove`（跨服搬家）与 `SendServerGroupMsg`/`.shr` 序列化，
+/// 所以 `switch_data` 在生产路径上恒 false（见 [`process_switch_data`] 的生产闭合）。
+/// 这里把 oracle 的状态机与存档门 **原样**建好，供换服层接入时直接复用；判据只覆盖
+/// 状态机本身（构造级）。
+#[derive(Debug, Clone, Default)]
+struct SwitchDataState {
+    /// `PlayObject.RcdSaved`（`PlayObject.cs:377`，初生 false `:890`）：本会话的存档请求
+    /// 已发出（oracle `CharacterDataProcessor.cs:87` 在 `SendRequest` 成功后置 true）。
+    rcd_saved: bool,
+    /// `PlayObject.SwitchData`（`PlayObject.Base.cs:902` 的 `ChangeSpaceMove` 置 true）。
+    switch_data: bool,
+    /// `PlayObject.SwitchDataOk`（`WorldServer.cs:597`/`:904`）。
+    switch_data_ok: bool,
+    /// `PlayObject.SwitchDataSended`（`WorldServer.cs:598`/`:608`）。
+    switch_data_sended: bool,
+    /// `PlayObject.SwitchDataTempFile`（`WorldServer.Switch.cs:99`）。
+    switch_data_temp_file: String,
+    /// `PlayObject.ChgDataWritedTick`（`WorldServer.cs:598`/`:606`，毫秒）。
+    chg_data_writed_tick: i64,
+    /// `PlayObject.WriteChgDataErrCount`（`WorldServer.cs:594`/`:605`）。
+    write_chg_data_err_count: u32,
+}
+
+/// oracle `WorldServer.cs:592-610` 的换服存档门（每个 `RunNotice` 轮询一次）。
+///
+/// 逐行：
+/// ```text
+/// if (SwitchData && RcdSaved) {
+///     if (SendSwitchData(...) || WriteChgDataErrCount > 20) {
+///         SwitchData = false; SwitchDataOk = true; SwitchDataSended = true;
+///         ChgDataWritedTick = now;
+///     } else WriteChgDataErrCount++;
+/// }
+/// if (SwitchDataSended && now - ChgDataWritedTick > 100) {
+///     SwitchDataSended = false;
+///     SendChangeServer(...);
+/// }
+/// ```
+/// `SendSwitchData`/`SendChangeServer` 通过闭包注入：生产闭合见调用点（未移植 ⇒ 返回 false，
+/// 与 oracle `WriteChgDataErrCount > 20` 的错误退避同构）。
+fn process_switch_data(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    now: i64,
+    mut send_switch_data: impl FnMut(&mut SwitchDataState, &str) -> bool,
+    mut send_change_server: impl FnMut(&mut SwitchDataState, &str),
+) {
+    let mut names: Vec<String> = sessions.keys().cloned().collect();
+    names.sort();
+    for name in names {
+        let Some(sg) = sessions.get_mut(&name) else {
+            continue;
+        };
+        let st = &mut sg.switch_state;
+        if st.switch_data && st.rcd_saved {
+            let sent = send_switch_data(st, &name);
+            if sent || st.write_chg_data_err_count > 20 {
+                st.switch_data = false;
+                st.switch_data_ok = true;
+                st.switch_data_sended = true;
+                st.chg_data_writed_tick = now;
+            } else {
+                st.write_chg_data_err_count = st.write_chg_data_err_count.saturating_add(1);
+            }
+        }
+        if st.switch_data_sended && now - st.chg_data_writed_tick > 100 {
+            st.switch_data_sended = false;
+            send_change_server(st, &name);
+        }
+    }
 }
 
 /// 一次 `RecalcAbilitys()` 的静态输入（不含随动作变化的 `UseItems`/`ItemList`/`WAbil`）。
@@ -11306,6 +11453,9 @@ struct EnterConfig {
     game_conf: Option<mir2_envir::GameSvrConf>,
     string_conf: crate::strings::StringConf,
     show_rank_level_name: bool,
+    /// `[Server] ServerIndex`（`SystemShare.ServerIndex`）：`MakeSaveRcd` 写
+    /// `characters.ServerIndex`（`WorldServer.cs:1236`）。
+    server_index: u8,
     /// `stditems` 物品目录（`game_svr::ability::StdItemCatalog`，**1-based** 查表，见 `crate::items`）；
     /// 空目录 = 未加载/无配置。帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
     catalog: game_svr::ability::StdItemCatalog,
@@ -11427,6 +11577,7 @@ impl EnterConfig {
             game_conf: None,
             string_conf,
             show_rank_level_name: false,
+            server_index: 0,
             catalog: game_svr::ability::StdItemCatalog::new(),
             magic_table: magics::MagicTable::new(Vec::new()),
             pet_cfg: mir2_data::pet_slave::PetSlaveConfig::default(),
@@ -13295,11 +13446,15 @@ fn sim_loop(
                                         let (enter_x, enter_y) =
                                             (shift.x as i16, shift.y as i16);
                                         let _ = world.open_session(&head.chr_name);
-                                        let ent = new_player_entity(
+                                        let mut ent = new_player_entity(
                                             head.chr_name.clone(),
                                             i32::from(enter_x),
                                             i32::from(enter_y),
                                         );
+                                        // oracle `PlayObject.Dir` 从记录载入（`WorldServer.GetHumData`
+                                        // `:1113-1125` 之外的 `CharacterData.Dir` 直接赋给实体）；
+                                        // 旧实现不装载 ⇒ `MakeSaveRcd` 只能写回载入值（G-09）。
+                                        ent.ai.dir = full.as_ref().map_or(0, |r| r.data.dir);
                                         match world.enter_map(&head.chr_name, ent, map_id) {
                                             Ok(id) => {
                                                 // **诊断口径（审计 §4.4）**：`aoi_frames_total` 按
@@ -13567,13 +13722,7 @@ fn sim_loop(
                                                                 body_luck: d.body_luck,
                                                                 body_luck_level: body_luck_level_of(d.body_luck),
                                                             },
-                                                            recovery: game_svr::recover::Recovery {
-                                                                inc_health: u16::from(d.inc_health),
-                                                                inc_spell: u16::from(d.inc_spell),
-                                                                // `CharacterObject()` 初值：Per*=5、
-                                                                // tick = GetTickCount()（`CharacterObject.cs:83-86`）。
-                                                                ..game_svr::recover::Recovery::new(now_ms())
-                                                            },
+                                                            recovery: recovery_from_record(d, now_ms()),
                                                             // 体力/魔力点（`BaseObject.cs:445-448`：HealthTick/SpellTick=0、
                                                             // AutoRecoveryTick=GetTickCount()）。
                                                             stamina: game_svr::stamina::Stamina::new(now_ms()),
@@ -13601,6 +13750,8 @@ fn sim_loop(
                                                             // `GetTickCount()`（每次登入都新建对象，`WorldServer.cs:234`），
                                                             // 与本宿主「`SessionGround` 随进世界建」同生命周期。
                                                             save_rcd_tick: now_ms(),
+                                                            server_index: enter_cfg.server_index,
+                                                            switch_state: SwitchDataState::default(),
                                                         },
                                                     );
                                                     // 存档用：留下原始记录 + 进图逻辑名（断线/`MakeGhost` 时用它合成）。
@@ -14140,6 +14291,30 @@ fn sim_loop(
             registry.as_ref(),
             enter_cfg.save_human_rcd_time,
             now_ms(),
+        );
+        // oracle `WorldServer.cs:592-610` 的换服轮询（G11）。生产闭合：跨服搬家
+        // （`ChangeSpaceMove`）、`.shr` 序列化与 `SendServerGroupMsg` 均未移植 ⇒
+        // `send_switch_data` 返回 false（不假装 `.shr` 已写），由 oracle 的
+        // `WriteChgDataErrCount > 20` 错误退避兜底；`send_change_server` 只登记。
+        // 生产路径上 `switch_state.switch_data` 恒 false（无 `ChangeSpaceMove`）⇒ 本段零行为。
+        process_switch_data(
+            &mut ground_sessions,
+            now_ms(),
+            |st, name| {
+                let _ = st;
+                glog!(
+                    "WRN",
+                    "换服：SendSwitchData 未移植（G11 登记；.shr 未写）ChrName={name}"
+                );
+                false
+            },
+            |st, name| {
+                glog!(
+                    "WRN",
+                    "换服：SendChangeServer 未移植（G11 登记；temp={}）ChrName={name}",
+                    st.switch_data_temp_file
+                );
+            },
         );
         if ticks.is_multiple_of(50) {
             let diag = world_aoi_diag(&world, &displays, &aoi_frames_total);
@@ -16972,6 +17147,8 @@ mod tests {
             mns_val: vec![String::new(); 100],
             mnm_val: vec![0; 100],
             save_rcd_tick: 0,
+            server_index: 0,
+            switch_state: SwitchDataState::default(),
         }
     }
 
@@ -17161,6 +17338,8 @@ mod tests {
             mns_val: vec![String::new(); 100],
             mnm_val: vec![0; 100],
             save_rcd_tick: 0,
+            server_index: 0,
+            switch_state: SwitchDataState::default(),
         };
         let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
@@ -17211,6 +17390,387 @@ mod tests {
             99,
             "HumItems[Necklace] = UseItems[Helmet]（oracle 交换）"
         );
+    }
+
+    /// **G-19 登录侧**：`recovery_from_record` 必须把 `IncHealing` 从记录拷进会话
+    /// （`WorldServer.cs:1151`）。红检：删掉 `inc_healing: u16::from(d.inc_healing)` ⇒ 必红。
+    #[test]
+    fn session_recovery_restores_inc_healing() {
+        let mut d = stage6_record().data;
+        d.inc_health = 3;
+        d.inc_spell = 4;
+        d.inc_healing = 244;
+        let r = recovery_from_record(&d, 1_234);
+        assert_eq!(
+            (r.inc_health, r.inc_spell, r.inc_healing),
+            (3, 4, 244),
+            "IncHealing 必须从记录恢复（否则登录恒 0）"
+        );
+        assert_eq!(r.per_health, 5, "CharacterObject 构造初值 Per*=5");
+        assert_eq!(r.inc_health_spell_tick, 1_234);
+    }
+
+    /// **卡 `openmir2-persist-single-sided-columns`（G-09/G-10/G-19，Rust-only 缺口）**：
+    /// `build_save_record` 必须从实体会话态写 `Dir`、从 `[Server] ServerIndex` 写
+    /// `characters.ServerIndex`、从 `sg.recovery.inc_healing` 写 `IncHealing`（`(byte)` 截断）。
+    ///
+    /// 红检：删掉 `rec.data.dir = e.dir` / `rec.data.server_index = sg.server_index` /
+    /// `rec.data.inc_healing = …` 任一行 ⇒ 对应断言必红。
+    #[test]
+    fn save_record_carries_dir_server_index_and_inc_healing() {
+        use mir2_storage::MemPack;
+        let saved = SavedHuman {
+            account: "acct".into(),
+            record: stage6_record(),
+            enter_map: "0".into(),
+        };
+        let mut sg = test_session_ground(1);
+        sg.recovery.inc_healing = 300;
+        sg.server_index = 7;
+        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        world.open_session("hero");
+        let mut ent = mir2_world::Entity::new(0, "hero", 11, 22);
+        ent.ai.dir = 5;
+        world.enter_map("hero", ent, 0).expect("进世界");
+        let rec = build_save_record(&saved, "hero", &world, &sg, None);
+        assert_eq!(rec.data.dir, 5, "G-09：Dir 取实体当前朝向");
+        assert_eq!(rec.data.server_index, 7, "G-10：ServerIndex 取配置值");
+        assert_eq!(rec.data.inc_healing, 44, "G-19：(byte)300 = 44（&0xFF）");
+        let parsed = mir2_storage::SaveCharacterData::from_bytes(
+            &record::encode_save_character_data(&saved.account, "hero", &rec),
+        )
+        .expect("DBSvr 侧必须能解存档体");
+        let d = parsed.character_data.unwrap().data.unwrap();
+        assert_eq!(
+            (d.dir, d.server_index, d.inc_healing),
+            (5, 7, 44),
+            "三个字段必须原样进存档体"
+        );
+    }
+
+    /// **F1（`openmir2-persist-f1f2-fix`）· 攻击支**：`BaseObject.AttackDir` 的 `Dir = nDir`
+    /// （`BaseObject.Attack.cs:12`）**无条件**执行——命中与挥空（`attackTarget == null`，
+    /// `_Attack` 返回 false）都改朝向；随后 `MakeSaveRcd` 读 `playObject.Dir` ⇒ 存档必须是
+    /// **尝试**方向。
+    ///
+    /// 牙：删掉 `handle_hit_cmd` 里的 `e.ai.dir = dir`（只留展示表）⇒ 两条 `rec.data.dir`
+    /// 断言必红；把它挪进 `if let Some(tid) = target_id`（只有命中才同步）⇒ 挥空支必红。
+    #[test]
+    fn attack_syncs_entity_dir_on_hit_and_whiff_for_save() {
+        use mir2_protocol::messages::CM_HIT;
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("atk");
+        let mut atk_ent = mir2_world::Entity::new(0, "atk".to_string(), 10, 10);
+        atk_ent.race = mir2_world::ACTOR_RACE_PLAY;
+        let attacker = world.enter_map("atk", atk_ent, 0).expect("进世界");
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            attacker,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"atk".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "atk".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: attacker,
+            },
+        );
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("atk".into(), test_session_ground(attacker));
+        let saved = SavedHuman {
+            account: "ua".into(),
+            record: stage6_record(),
+            enter_map: "0".into(),
+        };
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        // ① 挥空：展示朝向 0（上）的前方格 (10,9) 无目标 ⇒ `_Attack(null)` 返回 false，
+        //    但 `BaseObject.Attack.cs:12` 的 `Dir = nDir` 已执行 ⇒ 实体/存档朝向 = 4（下）。
+        assert!(
+            handle_hit_cmd(
+                CM_HIT,
+                game_svr::feature::make_long(10, 10),
+                4,
+                "atk",
+                901,
+                &online,
+                &mut world,
+                &mut displays,
+                &mut sessions,
+                &gates,
+                &catalog,
+            ),
+            "进入攻击路径"
+        );
+        assert!(
+            world.entities.get(attacker).unwrap().ai.dir == 4,
+            "F1：挥空也必须 Dir = nDir"
+        );
+        let rec = build_save_record(&saved, "atk", &world, &sessions["atk"], None);
+        assert_eq!(rec.data.dir, 4, "F1：挥空后立刻存档 ⇒ Dir = 尝试方向（下）");
+
+        // ② 命中：展示朝向已被上一击改成 4（下）⇒ 前方格 (10,11) 放一只怪；
+        //    本帧 dir=2（右）⇒ 取目标用状态化朝向（下）命中，但 Dir 改为 2。
+        let monster = {
+            let mut e = mir2_world::Entity::new(0, "mon".to_string(), 10, 11);
+            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            e.hp = 200;
+            e.max_hp = 200;
+            world.add_entity(e)
+        };
+        assert!(
+            handle_hit_cmd(
+                CM_HIT,
+                game_svr::feature::make_long(10, 10),
+                2,
+                "atk",
+                901,
+                &online,
+                &mut world,
+                &mut displays,
+                &mut sessions,
+                &gates,
+                &catalog,
+            ),
+            "进入攻击路径"
+        );
+        assert!(world.entities.get(monster).is_some());
+        assert!(
+            world.entities.get(attacker).unwrap().ai.dir == 2,
+            "F1：命中同样 Dir = nDir（= 本次尝试方向）"
+        );
+        let rec = build_save_record(&saved, "atk", &world, &sessions["atk"], None);
+        assert_eq!(rec.data.dir, 2, "F1：命中后立刻存档 ⇒ Dir = 尝试方向（右）");
+    }
+
+    /// **F1（`openmir2-persist-f1f2-fix`）· `CM_SPELL` default 支**：
+    /// `PlayObject.Attack.cs:1270` 的 `Dir = M2Share.GetNextDirection(CurrX, CurrY, nTargetX,
+    /// nTargetY)` 改的是 `playObject.Dir` ⇒ 实体同步，`MakeSaveRcd` 落库的是目标方向。
+    ///
+    /// 牙：删掉 `handle_spell_cmd` 的 `if default_arm { … e.ai.dir = dir }` ⇒ 必红。
+    #[test]
+    fn default_spell_syncs_entity_dir_for_save() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("caster");
+        let mut caster_ent = mir2_world::Entity::new(0, "caster".to_string(), 10, 10);
+        caster_ent.race = mir2_world::ACTOR_RACE_PLAY;
+        let caster = world.enter_map("caster", caster_ent, 0).expect("进世界");
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            caster,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"caster".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uc".into(),
+                chr_name: "caster".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 911,
+                actor_id: caster,
+            },
+        );
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        let mut record = stage6_record();
+        record.data.magic = Some(vec![Some(record::MagicRcd {
+            mag_idx: 1, // FireBall：非 8 个显式 case ⇒ 走 default 支
+            level: 1,
+            magic_key: u16::from(b'm'),
+            tran_point: 0,
+        })]);
+        saves.insert(
+            "caster".into(),
+            SavedHuman {
+                account: "uc".into(),
+                record,
+                enter_map: "0".into(),
+            },
+        );
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("caster".into(), test_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let magic_table = magics::MagicTable::default();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+
+        // 目标在右 (12,10) ⇒ `GetNextDirection` = 2。
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 10),
+            1,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+            1,
+            1,
+            2,
+        );
+        assert_eq!(
+            world.entities.get(caster).unwrap().ai.dir,
+            game_svr::movewire::DIR_RIGHT,
+            "F1：default 支必须同步实体朝向（目标方向）"
+        );
+        let rec = build_save_record(
+            &saves["caster"],
+            "caster",
+            &world,
+            &ground_sessions["caster"],
+            None,
+        );
+        assert_eq!(
+            rec.data.dir,
+            game_svr::movewire::DIR_RIGHT,
+            "F1：default 法术施放后立刻存档 ⇒ Dir = 目标方向"
+        );
+    }
+
+    /// **F1（`openmir2-persist-f1f2-fix`）· 走/跑被挡支**：oracle `WalkTo`
+    /// （`BaseObject.cs:609`）/`RunTo`（`PlayObject.Base.cs:400`）在 `CanWalk*` **判定之前**
+    /// 就 `Dir = btDir`，被挡/失败**不回滚** ⇒ 实体朝向往存档里是**尝试**方向。
+    ///
+    /// 牙：把 `handle_move_cmd` 的实体 `e.ai.dir = dir` 挪到 `!outcome.moved` 早退**之后**
+    /// （即只有走成功才同步，或失败回滚）⇒ 下面两条 `rec.data.dir` 断言必红。
+    #[test]
+    fn blocked_walk_and_run_keep_attempted_dir_for_save() {
+        use mir2_protocol::messages::{CM_RUN, CM_WALK};
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("mover");
+        let mut mover_ent = mir2_world::Entity::new(0, "mover".to_string(), 10, 10);
+        mover_ent.race = mir2_world::ACTOR_RACE_PLAY;
+        let mover = world.enter_map("mover", mover_ent, 0).expect("进世界");
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            mover,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"mover".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "mover".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: mover,
+            },
+        );
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("mover".into(), test_session_ground(mover));
+        let saved = SavedHuman {
+            account: "ua".into(),
+            record: stage6_record(),
+            enter_map: "0".into(),
+        };
+
+        // 前置：先成功向右走一步到 (11,10)（Dir 2）。这样后面的失败支与「起始朝向」
+        // 不同，失败回滚/只在成功时同步的实现在两条断言上都会红。
+        handle_move_cmd(
+            CM_WALK,
+            game_svr::feature::make_long(11, 10),
+            0,
+            "mover",
+            901,
+            &online,
+            &mut sessions,
+            &mut world,
+            &mut displays,
+            &gates,
+            None,
+        );
+        {
+            let e = world.entities.get(mover).unwrap();
+            assert_eq!((e.x, e.y), (11, 10), "前置：成功走一步");
+            assert_eq!(e.ai.dir, 2, "前置：成功走一步 Dir=右");
+        }
+
+        // ① 走：目标 (11,9) = 上（Dir 0），该格是墙 ⇒ 不移动，但 Dir 仍改为 0。
+        world.maps[0]
+            .get_cell_info_mut(11, 9)
+            .0
+            .set_attribute(mir2_world::CellAttribute::HighWall);
+        assert!(!world.maps[0].cell_valid(11, 9), "前置：(11,9) 必须是墙");
+        handle_move_cmd(
+            CM_WALK,
+            game_svr::feature::make_long(11, 9),
+            0,
+            "mover",
+            901,
+            &online,
+            &mut sessions,
+            &mut world,
+            &mut displays,
+            &gates,
+            None,
+        );
+        {
+            let e = world.entities.get(mover).unwrap();
+            assert_eq!((e.x, e.y), (11, 10), "被挡 ⇒ 不移动");
+            assert_eq!(e.ai.dir, 0, "F1：走失败也保留尝试方向（上）");
+        }
+        let rec = build_save_record(&saved, "mover", &world, &sessions["mover"], None);
+        assert_eq!(rec.data.dir, 0, "F1：被挡走一步后立刻存档 ⇒ Dir = 尝试方向");
+
+        // ② 跑：目标 (11,11) = 下（Dir 4），该格是墙 ⇒ 不移动，但 Dir 仍改为 4。
+        world.maps[0]
+            .get_cell_info_mut(11, 11)
+            .0
+            .set_attribute(mir2_world::CellAttribute::HighWall);
+        assert!(!world.maps[0].cell_valid(11, 11), "前置：(11,11) 必须是墙");
+        handle_move_cmd(
+            CM_RUN,
+            game_svr::feature::make_long(11, 11),
+            0,
+            "mover",
+            901,
+            &online,
+            &mut sessions,
+            &mut world,
+            &mut displays,
+            &gates,
+            None,
+        );
+        {
+            let e = world.entities.get(mover).unwrap();
+            assert_eq!((e.x, e.y), (11, 10), "被挡 ⇒ 不移动");
+            assert_eq!(e.ai.dir, 4, "F1：跑失败也保留尝试方向（下）");
+        }
+        let rec = build_save_record(&saved, "mover", &world, &sessions["mover"], None);
+        assert_eq!(rec.data.dir, 4, "F1：被挡跑一步后立刻存档 ⇒ Dir = 尝试方向");
     }
 
     /// `MakeSaveRcd` 的 `StorageItems`（`WorldServer.cs:1359-1376`）：会话仓库 → **新建 50 槽**
@@ -17721,6 +18281,174 @@ mod tests {
         assert!(periodic_save_due(&mut tick, save_time, 11_002));
     }
 
+    /// **卡 `openmir2-save-misc-gaps`（G11）**：oracle `WorldServer.cs:592-610` 的换服存档门
+    /// + 100ms 发送延迟。状态机逐条：
+    /// - `SwitchData && RcdSaved` 才尝试 `SendSwitchData`；
+    /// - 成功（或 `WriteChgDataErrCount > 20`）⇒ `SwitchData=false / Ok=true / Sended=true /
+    ///   ChgDataWritedTick=now`；
+    /// - 失败 ⇒ `WriteChgDataErrCount++`；
+    /// - `Sended && now - tick > 100` ⇒ `Sended=false` + `SendChangeServer`。
+    ///
+    /// 红检：把 100 改成 `>= 100` ⇒ 第三条断言（恰好 100ms 不发）必红；把
+    /// `|| write_chg_data_err_count > 20` 去掉 ⇒ 第 4 段必红。
+    #[test]
+    fn switch_data_gate_matches_oracle_state_machine() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("hero".to_string(), test_session_ground(1));
+
+        // 1) 未存档（RcdSaved=false）⇒ 门不开。
+        sessions.get_mut("hero").unwrap().switch_state.switch_data = true;
+        let attempts = AtomicUsize::new(0);
+        process_switch_data(
+            &mut sessions,
+            1_000,
+            |_, _| {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                true
+            },
+            |_, _| panic!("未过门不得 SendChangeServer"),
+        );
+        assert_eq!(attempts.load(Ordering::Relaxed), 0, "RcdSaved=false ⇒ 不发");
+
+        // 2) 存档已发出 ⇒ SendSwitchData 成功，进入 100ms 延迟窗口。
+        sessions.get_mut("hero").unwrap().switch_state.rcd_saved = true;
+        process_switch_data(
+            &mut sessions,
+            2_000,
+            |_, _| true,
+            |_, _| panic!("刚进入窗口不得立刻 SendChangeServer"),
+        );
+        let st = &sessions["hero"].switch_state;
+        assert!(!st.switch_data && st.switch_data_ok && st.switch_data_sended);
+        assert_eq!(st.chg_data_writed_tick, 2_000);
+
+        // 3) 恰好 100ms：严格 `>` ⇒ 不发；101ms ⇒ 发一次并清 Sended。
+        process_switch_data(
+            &mut sessions,
+            2_100,
+            |_, _| true,
+            |_, _| panic!("严格 > 100 才发（相等不发）"),
+        );
+        let mut sent = 0usize;
+        process_switch_data(&mut sessions, 2_101, |_, _| true, |_, _| sent += 1);
+        assert_eq!(sent, 1, "101ms 后必须 SendChangeServer 一次");
+        assert!(!sessions["hero"].switch_state.switch_data_sended);
+
+        // 4) SendSwitchData 失败时靠 WriteChgDataErrCount > 20 兜底推进（oracle 既有行为）。
+        {
+            let st = &mut sessions.get_mut("hero").unwrap().switch_state;
+            st.switch_data = true;
+            st.rcd_saved = true;
+            st.write_chg_data_err_count = 21;
+            st.switch_data_sended = false;
+        }
+        process_switch_data(&mut sessions, 3_000, |_, _| false, |_, _| {});
+        let st = &sessions["hero"].switch_state;
+        assert!(
+            !st.switch_data && st.switch_data_sended,
+            "ErrorCount > 20 ⇒ 即便 SendSwitchData 返回 false 也推进"
+        );
+    }
+
+    /// **F2（`openmir2-persist-f1f2-fix`）**：周期存档**不查** `InSaveRcdList`，且到点先重置
+    /// `SaveRcdTick` 再存档（oracle `WorldServer.cs:698-703`）。
+    ///
+    /// 旧用例 `periodic_save_skips_in_save_list` 固化了**错误**语义（把 `TimedService.cs:234-237`
+    /// 那个**全局 10 分钟触发器**的 in-save 门接到了逐角色路径），已改向：
+    /// - in-save 存在时**仍发** `DB_SAVEHUMANRCD`，且 `save_rcd_tick` 立即重置为 `now`
+    ///   （旧实现：in-save 期间不重置 => 应答一清空下一 tick 立即重发）；
+    /// - in-save **泄漏**（永不清空）也不会永久停掉该角色：再过一整个周期仍照发。
+    ///
+    /// 红检：把 `drain_periodic_save` 里恢复 `engine.in_save_rcd_list(&name)` 门 => 第一条
+    /// `fired == 1` 与帧断言必红（`fired == 0`、队列空）；把 tick 重置挪到 in-save 门之后
+    /// 同理会红。
+    #[test]
+    fn periodic_save_ignores_in_save_list_and_resets_tick() {
+        use std::sync::atomic::AtomicI32;
+        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        world.open_session("hero");
+        let actor_id = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 11, 22), 0)
+            .expect("进世界");
+        let mut sg = test_session_ground(actor_id);
+        sg.save_rcd_tick = 1_000; // 到期：now - tick > 5_000
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("hero".to_string(), sg);
+        let mut saves = std::collections::HashMap::new();
+        saves.insert(
+            "hero".to_string(),
+            SavedHuman {
+                account: "acct".into(),
+                record: stage6_record(),
+                enter_map: "0".into(),
+            },
+        );
+        let state = dbclient::DbLinkState::new();
+        state.mark_connected();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let mut db = Some(DbWiring {
+            state,
+            req_tx: tx,
+            next_query_id: Arc::new(AtomicI32::new(0)),
+            replies: Arc::new(std::sync::Mutex::new(dbclient::DbReplies::new())),
+            outstanding: Vec::new(),
+            save_outstanding: Vec::new(),
+        });
+        let mut engine = load::FrontEngine::new();
+        engine.begin_save("hero");
+        assert!(
+            engine.in_save_rcd_list("hero"),
+            "前置：角色在 in-save 名单里"
+        );
+
+        // ① in-save 存在 ⇒ 仍发；tick 先重置为 now。
+        let fired = drain_periodic_save(
+            &mut sessions,
+            &saves,
+            &world,
+            &mut db,
+            &mut engine,
+            None,
+            5_000,
+            6_001,
+        );
+        assert_eq!(
+            fired, 1,
+            "in-save 角色仍必须发起周期存档（oracle 逐角色路径无该门）"
+        );
+        assert!(
+            rx.try_recv().is_ok(),
+            "in-save 存在时必须发出 DB_SAVEHUMANRCD 帧"
+        );
+        assert_eq!(
+            sessions["hero"].save_rcd_tick, 6_001,
+            "到点必须先重置 SaveRcdTick（WorldServer.cs:700）"
+        );
+        assert!(
+            engine.in_save_rcd_list("hero"),
+            "周期存档自身不改 in-save 名单（由 DBSvr 应答清）"
+        );
+
+        // ② 泄漏场景：in-save 永不清空，再过一整个周期仍照发（不得永久停掉）。
+        let fired2 = drain_periodic_save(
+            &mut sessions,
+            &saves,
+            &world,
+            &mut db,
+            &mut engine,
+            None,
+            5_000,
+            11_002,
+        );
+        assert_eq!(
+            fired2, 1,
+            "in-save 泄漏不得永久停掉该角色的周期存档（旧实现 fired=0）"
+        );
+        assert!(rx.try_recv().is_ok(), "第二个周期仍必须发出存档帧");
+        assert_eq!(sessions["hero"].save_rcd_tick, 11_002, "tick 再次重置");
+    }
+
     /// **卡 `openmir2-m3-periodic-save`（DoD ③）**：把 `SaveHumanRcdTime` 调到秒级 ⇒ 一个会话上
     /// **观测 ≥2 次**周期 `DB_SAVEHUMANRCD` 请求；请求体用 **DBSvr 侧同一类型**
     /// `mir2_storage::SaveCharacterData` 解回，逐字段核对（不按公式重推）。
@@ -17783,6 +18511,16 @@ mod tests {
                 None,
                 5_000,
                 now,
+            );
+            // 现实链路里 DBSvr 的成功应答（`DBR_SAVEHUMANRCD recog=1`）会清掉
+            // `InSaveRcdList`；本用例保持这一现实配对。注意 F2 之后周期存档本身**不依赖**
+            // in-save 门，即便不补应答也照常触发（见
+            // `periodic_save_ignores_in_save_list_and_resets_tick`）。
+            apply_save_reply(
+                &mut engine,
+                "hero",
+                mir2_protocol::messages::DBR_SAVEHUMANRCD,
+                1,
             );
         }
         assert_eq!(fired, 2, "秒级周期参数下必须观测到 ≥2 次周期请求");
@@ -18296,6 +19034,12 @@ mod tests {
             2,
             "目标=自身 ⇒ Dir = (byte)Tag"
         );
+        // G-09：实体 `dir` 必须同步（`MakeSaveRcd` 读 `playObject.Dir`，存档写的是实体值）。
+        assert_eq!(
+            world.entities.get(mover).unwrap().dir(),
+            2,
+            "CM_TURN 必须同步实体 Dir（否则存档写载入值）"
+        );
         let (mut turn, mut ack) = (Vec::new(), None);
         while let Ok(m) = rx0.try_recv() {
             match m {
@@ -18355,6 +19099,8 @@ mod tests {
         {
             let e = world.entities.get(mover).unwrap();
             assert_eq!((e.x, e.y), (11, 10), "走一步后坐标");
+            // G-09：走/跑成功也把方向写进实体（旧实现只改展示表）。
+            assert_eq!(e.dir(), 2, "CM_WALK 必须同步实体 Dir");
         }
         assert_eq!(
             displays.get(mover).unwrap().dir,
@@ -18711,6 +19457,8 @@ mod tests {
                 mns_val: vec![String::new(); 100],
                 mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
+                server_index: 0,
+                switch_state: SwitchDataState::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -18898,6 +19646,8 @@ mod tests {
                 mns_val: vec![String::new(); 100],
                 mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
+                server_index: 0,
+                switch_state: SwitchDataState::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -19058,6 +19808,8 @@ mod tests {
                 mns_val: vec![String::new(); 100],
                 mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
+                server_index: 0,
+                switch_state: SwitchDataState::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -19198,6 +19950,8 @@ mod tests {
                 mns_val: vec![String::new(); 100],
                 mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
+                server_index: 0,
+                switch_state: SwitchDataState::default(),
             },
         );
 
@@ -20021,6 +20775,8 @@ mod tests {
                 mns_val: vec![String::new(); 100],
                 mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
+                server_index: 0,
+                switch_state: SwitchDataState::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -20180,6 +20936,8 @@ mod tests {
                 mns_val: vec![String::new(); 100],
                 mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
+                server_index: 0,
+                switch_state: SwitchDataState::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -20773,6 +21531,8 @@ mod tests {
                 mns_val: vec![String::new(); 100],
                 mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
+                server_index: 0,
+                switch_state: SwitchDataState::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -24719,6 +25479,8 @@ mod tests {
                 mns_val: vec![String::new(); 100],
                 mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
+                server_index: 0,
+                switch_state: SwitchDataState::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -24881,6 +25643,8 @@ mod tests {
                 mns_val: vec![String::new(); 100],
                 mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
+                server_index: 0,
+                switch_state: SwitchDataState::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -25009,6 +25773,8 @@ mod tests {
                 mns_val: vec![String::new(); 100],
                 mnm_val: vec![0; 100],
                 save_rcd_tick: 0,
+                server_index: 0,
+                switch_state: SwitchDataState::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();

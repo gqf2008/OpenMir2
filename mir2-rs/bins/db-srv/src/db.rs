@@ -466,6 +466,18 @@ impl Db {
     /// 审计件的 G-03 原判「Rust 缺 INSERT」**不成立**——两侧同为「奖励属性永不落库」，
     /// 属 oracle 既有行为（硬约束③：先照搬，不在此批修）。
     ///
+    /// **F4 登记（本片不展开）**：`Ok(None)` 同时承载两种 **oracle 语义不同**的情形——
+    /// ① `name_quick` 命中（C# `CheckChrExists` => `Add` 返回 false，**不建角**）；
+    /// ② `create_character` 返回 `id <= 0`（C# `CreateCharacters`/`AddRecord` 失败 =>
+    ///    上一条 INSERT 已执行、事务被回滚，返回 false）。
+    /// 两者在 oracle 的对外行为不同：①「名字已存在」⇒ `NewChrData` 返 false（`UserService.cs:261-265`，
+    /// 调用方随后走 `Delete` 的异常路径、**不回包**）；②「建角失败」⇒ `Add` 返 false 被忽略、
+    /// `NewChrData` 恒 true ⇒ **回成功**。本仓 ① 已由 `IndexExists` 分支 `record_soft_delete + bail!`
+    /// 对齐（不回包）；② 在 Rust 由 `Err` 传播（与 oracle 吞异常同口径），`Ok(None)` 的 `id<=0`
+    /// 支近乎不可达、若触发则与 oracle 不一致（**未覆盖**）。后续若要把两者映射成不同应答/日志级别，
+    /// 必须先在此处拆分返回类型（如 `enum DataAddOutcome { Added(i64), NameExists, CreateFailed }`），
+    /// 而不是继续用 `Option`。拆分点：本函数的 `Ok(None)` 两处 + `handler.rs` 的 `Ok(None)` 匹配臂。
+    ///
     /// Errors: 主表插入失败、事务失败时返回错误。
     pub async fn data_add(
         &mut self,
@@ -818,6 +830,15 @@ mod create_rows_tests {
             .await
             .expect("兜底建角未写 characters");
         let id_b: i64 = row.try_get("Id").expect("Id 列");
+        // **G6**：oracle `Add` 成功后立即 `_NameQuickMap.Add(sChrName, playerId)`
+        // （`Add.cs:42-47`）⇒ 6000 面新建的角色必须立刻对 5100 面可见。Rust 的 5100 面
+        // `data_index` 读 GBK 字节键 ⇒ `play_data_add` 也必须更新 `name_quick`。
+        let gbk_b = db.gbk_bytes("pcrow_b").await.expect("GBK 转换失败");
+        assert_eq!(
+            db.data_index(&gbk_b),
+            Some(id_b),
+            "G6：play_data_add 必须更新 name_quick（否则 5100 面看不到该角色）"
+        );
         assert_eq!(
             count(
                 &mut conn,

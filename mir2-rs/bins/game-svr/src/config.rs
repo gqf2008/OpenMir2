@@ -24,6 +24,11 @@ pub struct GateConfig {
     pub gate_port: u16,
     /// `[Server] CheckBlock`（现网 12288）：`ChannelMessageHandler.cs:74` 的阻塞阈值。
     pub check_block: usize,
+    /// `[Server] ServerIndex`（oracle `ServerConf.cs:17` 的 `ReadWriteByte`，缺省 0）——
+    /// `MakeSaveRcd` 写 `characters.ServerIndex`（`WorldServer.cs:1236`）的来源。
+    ///
+    /// oracle 是 `byte`（`SystemShare.ServerIndex`，`SystemShare.cs:45`）⇒ 越界/非整数报错。
+    pub server_index: u8,
     /// S1 占位：世界地图尺寸列表（有 Envir 真地图注册表时被其尺寸取代；无 Envir 时才用）。
     ///
     /// **可选键**：配置里没有 `WorldMaps` ⇒ 空表。空表**不是**错误，但"空表 + 没有 Envir"
@@ -284,6 +289,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut gate_addr: Option<String> = None;
     let mut gate_port: Option<u16> = None;
     let mut check_block: Option<usize> = None;
+    let mut server_index: Option<u8> = None;
     let mut maps: Option<Vec<(i32, i32)>> = None;
     let mut envir_dir: Option<String> = None;
     let mut map_dir: Option<String> = None;
@@ -409,6 +415,17 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                         v.parse()
                             .with_context(|| format!("CheckBlock 不是合法整数：{v:?}"))?,
                     );
+                }
+                "SERVERINDEX" => {
+                    // oracle `ReadWriteByte` -> `Read<byte>`：键存在但值为**空串**时
+                    // `string.IsNullOrEmpty(str)` => 返回缺省 `defValue`（0，`ConfigFile.cs:131-133`）。
+                    // 缺键同样回落 0（下面 `unwrap_or`）；只有非法值按 byte 解析口径报错。
+                    server_index = Some(if v.is_empty() {
+                        0
+                    } else {
+                        v.parse()
+                            .with_context(|| format!("ServerIndex 不是合法字节：{v:?}"))?
+                    });
                 }
                 "WORLDMAPS" => maps = Some(parse_maps(v)?),
                 "IDSADDR" => ids_addr = Some(v.to_string()),
@@ -804,6 +821,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         gate_addr,
         gate_port,
         check_block,
+        // oracle 缺省值（`SystemShare.cs:45` 的 `ServerIndex = 0`）：缺键不算错。
+        server_index: server_index.unwrap_or(0),
         maps,
         // oracle 缺省值（`GameSvrConf.cs:1295-1296`）：缺 `[Share]` 键不算错。
         envir_dir: envir_dir.unwrap_or_else(|| "Envir".to_string()),
@@ -1188,6 +1207,33 @@ mod tests {
         );
         let p3 = write(&dir, &format!("{base}[Setup]\nScriptGotoCountLimit=abc\n"));
         assert!(load(&p3).is_err(), "ScriptGotoCountLimit 非整数 ⇒ 必须报错");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **卡 `openmir2-persist-single-sided-columns`（G-10）**：`[Server] ServerIndex` 必须解析，
+    /// 缺键回落 oracle 缺省 0，非法值报错（oracle `ReadWriteByte("Server","ServerIndex",…)`）。
+    /// **F3**：空值（`ServerIndex=`）也按 oracle `Read<byte>` 的 `IsNullOrEmpty => defValue`
+    /// 返回 0（旧实现 `v.parse()` 对空串报错）。红检：删掉 `v.is_empty()` 支 => 必红。
+    #[test]
+    fn server_index_parses_with_oracle_default() {
+        let dir = std::env::temp_dir().join(format!("gs-svridx-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nIDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        let p = write(&dir, base);
+        assert_eq!(
+            load(&p).unwrap().server_index,
+            0,
+            "缺 ServerIndex ⇒ oracle 缺省 0"
+        );
+        let p2 = write(&dir, &format!("{base}ServerIndex=7\n"));
+        assert_eq!(load(&p2).unwrap().server_index, 7, "现网多机配置");
+        let p3 = write(&dir, &format!("{base}ServerIndex=999\n"));
+        assert!(load(&p3).is_err(), "ServerIndex 是 byte，999 必须报错");
+        let p4 = write(&dir, &format!("{base}ServerIndex=\n"));
+        assert_eq!(
+            load(&p4).unwrap().server_index,
+            0,
+            "F3：空串 => oracle Read<byte> 缺省 0（不得报错）"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
