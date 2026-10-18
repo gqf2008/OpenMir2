@@ -42,6 +42,7 @@
 monster_ai	csharp	AnimalObject\.Wondering@AnimalObject\.cs:	src/M2Server/Actor/AnimalObject.cs:427	Wondering 的 Random(20)/Random(4)/RandomByte(8)
 monster_ai	csharp	AnimalObject\.GotoTargetXY@AnimalObject\.cs:	src/M2Server/Actor/AnimalObject.cs:222	游走目标格
 monster_ai	csharp	MonsterObject\.Think@MonsterObject\.cs:	src/M2Server/Monster/MonsterObject.cs:208	MonsterObject.Run/Think
+monster_ai	csharp	BigHeartMonster\.AttackTarget@BigHeartMonster\.cs:	src/M2Server/Monster/Monsters/BigHeartMonster.cs:22	MB-1 R04：Random(|Hi(DC)-Lo(DC)|+1)（唯一取数点）
 monster_ai	rust	crates/world/src/monai\.rs:	crates/world/src/monai.rs	Wondering/SearchTarget 世界层调用点（#[track_caller]）
 drop	csharp	MonGetRandomItems@WorldServer\.MonGen\.cs:	src/GameSrv/Word/WorldServer.MonGen.cs:440	掉落在地图生成怪物时预算
 drop	csharp	GameItemSystem\.GetUpgrade@GameItemSystem\.cs:	src/M2Server/Items/GameItemSystem.cs:142	升级随机（GetUpgrade）

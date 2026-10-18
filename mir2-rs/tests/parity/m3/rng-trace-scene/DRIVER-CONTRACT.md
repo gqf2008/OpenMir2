@@ -62,8 +62,8 @@
   `5229 → 5440 → 5488 → 5598 → 5665 → 5795`，全是别的车道插代码推平 ⇒ 改由「符号存在且唯一」
   机判保鲜，见 §6）
   → `mongen.rs:61 pub fn enable_production_monster_ai` → `world.enable_monster_ai()`
-  ⇒ 只要场上有活怪，`World::tick` 就按槽位驱动 `crates/world/src/monai.rs:1161 monster_ai_tick`；
-  无目标且 walk 到点时 `monai.rs:185 wondering` **至少抽 1 次 `Random(20)`**
+  ⇒ 只要场上有活怪，`World::tick` 就按槽位驱动 `crates/world/src/monai.rs:1707 monster_ai_tick`；
+  无目标且 walk 到点时 `monai.rs:194 wondering` **至少抽 1 次 `Random(20)`**
   （oracle 锚 `src/M2Server/Actor/AnimalObject.cs:425`）。
 
 ⇒ **承接卡必须提供【可切换的宿主 AI 模式】**：本卡跑「AI 开」（默认生产宿主即可），
@@ -95,7 +95,7 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
   `FOLDED_COUNT_DIFF` / `MISSING_EXPECTED_GROUPS` / `MIN_GROUP_DRAWS` / `ROW_COVERAGE_DRIFT` 全无。
 - **改坏必红**（承接卡须自带）：描述件 monster 集合漂移 / 流水头种子不符 / 删一组 ⇒ 门或 `groupdiff` 必红。
 - R-6 折叠口径（owner 2026-10-13 裁决）：`rng_consumer_groups.FOLD_RULES = {"construct": "spawn"}`
-  （定义 = `rng-trace-probe/rng_consumer_groups.py:57`；说明/站点 = `rng-trace-probe/consumer_groups.tsv:38`（折叠理由）、`:56`（Rust `spawn` 行））；
+  （定义 = `rng-trace-probe/rng_consumer_groups.py:57`；说明/站点 = `rng-trace-probe/consumer_groups.tsv:38`（折叠理由）、`:57`（Rust `spawn` 行））；
   折叠后**计数与相对次序必须相等**。
 - **表侧补登记（2026-10-13 窗口前置审计）**：宿主 `bins/game-svr/src/mongen.rs`
   （`create_monster_oracle` / `draw_monster_construct`）也抽同一批构造期随机数 ⇒ 同归 `spawn`

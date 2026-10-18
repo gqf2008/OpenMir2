@@ -72,6 +72,15 @@ use crate::magic::{
 };
 use crate::world::World;
 
+/// `Messages.RM_HIT`（`src/OpenMir2/Messages.cs:554`）——`AnimalObject.Attack` 的攻击动作帧。
+pub const RM_HIT: u16 = 10004;
+/// `Messages.RM_DIGUP`（`src/OpenMir2/Messages.cs:614`）——出土帧（`SM_DIGUP`）。
+pub const RM_DIGUP: u16 = 10200;
+/// `Messages.RM_DIGDOWN`（`src/OpenMir2/Messages.cs:615`）——入土帧（`SM_DIGDOWN`）。
+pub const RM_DIGDOWN: u16 = 10201;
+/// `Messages.RM_10205`（`src/OpenMir2/Messages.cs:618`）——`SM_716` 帧。
+pub const RM_10205: u16 = 10205;
+
 /// `BaseObject.WalkTo` 的 `Dir → (dx, dy)`（`BaseObject.cs:601-...` 的 switch）。
 ///
 /// 与 oracle 同构：越界由调用方（`World::try_step_now` 的格子校验）拒绝，本函数只给增量。
@@ -354,10 +363,12 @@ pub fn goto_target_xy(world: &mut World, actor_id: i32) {
 
 /// `AnimalObject.CanMove`（`AnimalObject.cs:157-160`）：`!Ghost && !Death && Stone == 0`。
 ///
-/// 本骨架用 [`Entity::stone_mode`]（`StatusTimeArr[PoisonState.STONE]` 的折叠）替代石化计时。
+/// `Stone` 读的是 `StatusTimeArr[PoisonState.STONE]`（`Entity::status_time[POISON_STONE]`），
+/// **不是** `BaseObject.StoneMode`：`ScultureMonster` ctor 置 `StoneMode = true` 而
+/// `StatusTimeArr[STONE]` 仍为 0 ⇒ `CanMove()` 为真（`ScultureMonster.cs:43` 的 `Run` 门）。
 #[must_use]
 pub fn can_move(e: &Entity) -> bool {
-    !e.ghost && !e.death && !e.stone_mode
+    !e.ghost && !e.death && e.status_time[crate::entity::POISON_STONE] == 0
 }
 
 /// `MonsterObject.Think`（`MonsterObject.cs:187-215`）：3s 一次的 `DupMode`/目标有效性刷新，
@@ -606,6 +617,541 @@ pub fn is_animal_race(race: u8) -> bool {
 #[must_use]
 pub fn is_guard_race(race: u8) -> bool {
     matches!(race, 11 | 12 | 20 | 112)
+}
+
+/// `MonsterObject.Run` 之后 `base.Run()` 的落点（见 [`monster_class_run`]）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClassRunBase {
+    /// `StickMonster`/`BigHeartMonster : AnimalObject` ⇒ `base.Run()` = `AnimalObject.Run`
+    /// （HolySeize 到期）→ `BaseObject.Run`。
+    Animal,
+    /// `DigOutZombi`/`ScultureMonster : MonsterObject` ⇒ `base.Run()` = `MonsterObject.Run`
+    /// → `AnimalObject.Run` → `BaseObject.Run`。
+    Monster,
+}
+
+/// `SendRefMsg(...)`（`BaseObject.Message.cs:383-445`）在怪物 AI 里产生的帧事件。
+///
+/// 只登记**需要出帧**的调用；收件人集合在**发帧时刻**快照（±12、仅 `Race==Play`，见
+/// [`MonsterRefMsg::recipients`]），宿主排水时直接用快照、不再重算。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MonsterRefMsg {
+    pub actor_id: i32,
+    pub ident: u16,
+    pub w_param: i32,
+    pub n_param1: i32,
+    pub n_param2: i32,
+    pub n_param3: i32,
+    pub dir: u8,
+    pub x: i32,
+    pub y: i32,
+    pub map_id: usize,
+    /// 发帧时刻的 `BaseObject.CharStatus`（`RM_DIGUP` 尾的 `Status` 字段读它）。
+    pub status: i32,
+    /// `ObMode || FixedHideMode`：oracle `SendRefMsg` 只 `SendMsg` 给自己（怪物无客户端 ⇒ 不产帧）。
+    pub self_only: bool,
+    /// **发帧时刻**的收件人快照（玩家 actor_id）。
+    ///
+    /// oracle `SendRefMsg` 在**调用时刻**就把消息投进各玩家的队列（`BaseObject.Message.cs:383-444`
+    /// 的 ±12 格扫）；本仓宿主在 `world.tick()` 之后才排水，若那时再按实体状态重算，会漏掉
+    /// 「发帧后立刻改状态」的帧（如 `StickMonster.ComeDown` 先发 `RM_DIGDOWN` 再置
+    /// `FixedHideMode=true` ⇒ 排水时 sender 已隐藏、重算收件人为空 ⇒ 整帧丢失）。
+    /// 因此在入队时就快照收件人（`SEND_REF_MSG_RANGE` 格扫、排除自己、`Race==Play && !Ghost`）。
+    pub recipients: Vec<i32>,
+}
+
+/// 只读快照 `(dir, x, y, map_id, char_status, hidden)`。
+fn ref_snapshot(world: &World, actor_id: i32) -> Option<(u8, i32, i32, usize, i32, bool)> {
+    world.entities.get(actor_id).map(|e| {
+        (
+            e.ai.dir,
+            e.x,
+            e.y,
+            e.map_id,
+            e.char_status,
+            e.ob_mode || e.fixed_hide_mode,
+        )
+    })
+}
+
+/// `BaseObject.SendRefMsg(wIdent, wParam, nParam1, nParam2, nParam3, sMsg)`（`BaseObject.Message.cs:383`）。
+fn send_ref_msg(
+    world: &mut World,
+    actor_id: i32,
+    ident: u16,
+    w_param: i32,
+    n_param1: i32,
+    n_param2: i32,
+    n_param3: i32,
+) {
+    let Some((dir, x, y, map_id, status, self_only)) = ref_snapshot(world, actor_id) else {
+        return;
+    };
+    // 收件人**在发帧时刻**快照（oracle `SendRefMsg` 同点）；`self_only` 恒无收件人。
+    let recipients = if self_only {
+        Vec::new()
+    } else {
+        crate::session::send_ref_msg_targets_at(world, actor_id, map_id, x, y, 12)
+    };
+    world.pending_monster_ref_msgs.push(MonsterRefMsg {
+        actor_id,
+        ident,
+        w_param,
+        n_param1,
+        n_param2,
+        n_param3,
+        dir,
+        x,
+        y,
+        map_id,
+        status,
+        self_only,
+        recipients,
+    });
+}
+
+/// MB-1 四个专用怪的 `Run` 覆写分派（`CreateMonster` 的 race → 类映射）。
+///
+/// 返回 `None` = 非本批类，调用方继续走通用 [`monster_run`]；否则按 [`ClassRunBase`]
+/// 决定 oracle `base.Run()` 的落点。
+pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBase> {
+    let race = world.entities.get(actor_id)?.race;
+    match race {
+        // `StickMonster.Run`（`StickMonster.cs:101-149`）。
+        85 => {
+            stick_monster_run(world, actor_id);
+            Some(ClassRunBase::Animal)
+        }
+        // `DigOutZombi.Run`（`DigOutZombi.cs:18-55`）。
+        95 => {
+            dig_out_zombi_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        // `ScultureMonster.Run`（`ScultureMonster.cs:43-79`）。
+        101 => {
+            sculture_monster_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        // `BigHeartMonster.Run`（`BigHeartMonster.cs:44-54`）。
+        115 => {
+            big_heart_monster_run(world, actor_id);
+            Some(ClassRunBase::Animal)
+        }
+        _ => None,
+    }
+}
+
+/// `StickMonster.CheckComeOut`（`StickMonster.cs:84-104`）：严格 `<` 两轴、`Death` 跳过，
+/// `IsProperTarget && (!HideMode || CoolEye)`。
+fn stick_check_come_out(world: &World, actor_id: i32) -> bool {
+    let Some(e) = world.entities.get(actor_id) else {
+        return false;
+    };
+    let (cx, cy, come_out, cool_eye) = (e.x, e.y, e.come_out_value, e.ai.cool_eye);
+    let visible: Vec<i32> = e.visible_actors.iter().map(|v| v.target).collect();
+    for target_id in visible {
+        let Some(t) = world.entities.get(target_id) else {
+            continue;
+        };
+        if t.death {
+            continue;
+        }
+        let proper = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|a| is_proper_target(a, t));
+        if proper
+            && (!t.hide_mode || cool_eye)
+            && (cx - t.x).abs() < come_out
+            && (cy - t.y).abs() < come_out
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// `StickMonster.FindAttackTarget`（`StickMonster.cs:54-58`）：
+/// 先 `FixedHideMode = false`，再 `SendRefMsg(RM_DIGUP, Dir, CurrX, CurrY, 0, "")`。
+fn stick_find_attack_target(world: &mut World, actor_id: i32) {
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.fixed_hide_mode = false;
+    }
+    let (dir, x, y) = match world.entities.get(actor_id) {
+        Some(e) => (e.ai.dir, e.x, e.y),
+        None => return,
+    };
+    send_ref_msg(world, actor_id, RM_DIGUP, 0, x, y, 0);
+    let _ = dir;
+}
+
+/// `StickMonster.ComeDown`（`StickMonster.cs:60-68`）：`RM_DIGDOWN` → 清可见集 → `FixedHideMode=true`。
+fn stick_come_down(world: &mut World, actor_id: i32) {
+    let (dir, x, y) = match world.entities.get(actor_id) {
+        Some(e) => (e.ai.dir, e.x, e.y),
+        None => return,
+    };
+    send_ref_msg(world, actor_id, RM_DIGDOWN, 0, x, y, 0);
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        // oracle `Dispose(VisibleActors[i])` 是 `obj = null` 的无副作用空操作。
+        e.visible_actors.clear();
+        e.fixed_hide_mode = true;
+    }
+    let _ = dir;
+}
+
+/// `StickMonster.AttackTarget`（`StickMonster.cs:25-52`）。
+///
+/// 与 `MonsterObject.AttackTarget` 的差异：**不**调 `BreakHolySeizeMode()`。
+fn stick_attack_target(world: &mut World, actor_id: i32) -> bool {
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return false;
+    };
+    let now = world.clock_ms;
+    if let Some(bt_dir) = get_attack_dir(world, actor_id, target_id) {
+        let due = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
+        if due {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.attack_tick = now;
+                e.ai.target_focus_tick = now;
+            }
+            turn_to(world, actor_id, bt_dir);
+            // `AnimalObject.Attack`：`GetBaseAttackPoewr()`（`World::attack_once` 等价）
+            // → `AttackDir`（置 `Dir` + `_Attack`）→ `SendAttackMsg(RM_HIT, Dir, CurrX, CurrY)`。
+            if let Some(outcome) = world.attack_once(actor_id, target_id) {
+                world
+                    .pending_ai_attacks
+                    .push((actor_id, target_id, outcome));
+            }
+            let (dir, x, y) = match world.entities.get(actor_id) {
+                Some(e) => (e.ai.dir, e.x, e.y),
+                None => return true,
+            };
+            send_ref_msg(world, actor_id, RM_HIT, dir as i32, x, y, 0);
+        }
+        true
+    } else {
+        let same_map = world
+            .entities
+            .get(actor_id)
+            .zip(world.entities.get(target_id))
+            .is_some_and(|(a, t)| a.map_id == t.map_id);
+        if same_map {
+            let (tx, ty) = world.entities.get(target_id).map_or((0, 0), |t| (t.x, t.y));
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.target_x = tx;
+                e.ai.target_y = ty;
+            }
+        } else {
+            del_target_creature(world, actor_id);
+        }
+        false
+    }
+}
+
+/// `StickMonster.Run`（`StickMonster.cs:106-149`）。`base.Run()` 由调用方跑（= `AnimalObject.Run`）。
+fn stick_monster_run(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !(can_move(e) && (now - e.ai.walk_tick) > e.ai.walk_speed) {
+        return;
+    }
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.walk_tick = now;
+    }
+    if world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| e.fixed_hide_mode)
+    {
+        if stick_check_come_out(world, actor_id) {
+            stick_find_attack_target(world, actor_id);
+        }
+        return;
+    }
+    let attack_due = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
+    if attack_due {
+        search_target(world, actor_id);
+    }
+    let bo05 = match (
+        world.entities.get(actor_id),
+        world
+            .entities
+            .get(actor_id)
+            .and_then(|e| e.ai.target_creature)
+            .and_then(|t| world.entities.get(t)),
+    ) {
+        (Some(a), Some(t)) => {
+            (t.x - a.x).abs() > a.attack_range || (t.y - a.y).abs() > a.attack_range
+        }
+        _ => true,
+    };
+    if bo05 {
+        stick_come_down(world, actor_id);
+    } else {
+        let _ = stick_attack_target(world, actor_id);
+    }
+}
+
+/// `BigHeartMonster.AttackTarget`（`BigHeartMonster.cs:17-42`）。
+///
+/// 唯一取数点：`Random(Math.Abs(Hi(DC)-Lo(DC)) + 1)`（`:22`）——**先于**可见目标循环，
+/// 即使没有收件人也抽一次。
+pub fn big_heart_attack_target(world: &mut World, actor_id: i32) -> bool {
+    let now = world.clock_ms;
+    let due = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
+    if !due {
+        return false;
+    }
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.attack_tick = now;
+    }
+    let (dir, x, y, dc, view_range) = match world.entities.get(actor_id) {
+        Some(e) => (e.ai.dir, e.x, e.y, e.dc, e.view_range),
+        None => return false,
+    };
+    // `SendRefMsg(RM_HIT, Dir, CurrX, CurrY, 0, "")`（`:20`）——在取数之前。
+    send_ref_msg(world, actor_id, RM_HIT, dir as i32, x, y, 0);
+    let lo = i32::from(crate::combat::lo_byte(dc));
+    let hi = i32::from(crate::combat::hi_byte(dc));
+    let n_power = i32::max(0, lo + world.rng.random_below((hi - lo).abs() + 1));
+    let visible: Vec<i32> = world
+        .entities
+        .get(actor_id)
+        .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
+        .unwrap_or_default();
+    for target_id in visible {
+        let Some(t) = world.entities.get(target_id) else {
+            continue;
+        };
+        if t.death {
+            continue;
+        }
+        let proper = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|a| is_proper_target(a, t));
+        if !(proper && (x - t.x).abs() <= view_range && (y - t.y).abs() <= view_range) {
+            continue;
+        }
+        let (tx, ty) = (t.x, t.y);
+        // `SendSelfDelayMsg(RM_DELAYMAGIC, nPower, MakeLong(x, y), 1, ActorId, "", 200)`。
+        world.send_self_delay_msg_full(
+            actor_id,
+            crate::slave::RM_DELAYMAGIC,
+            n_power,
+            make_long(tx, ty),
+            1,
+            target_id,
+            200,
+        );
+        // `SendRefMsg(RM_10205, 0, baseObject.CurrX, baseObject.CurrY, 1, "")`。
+        send_ref_msg(world, actor_id, RM_10205, 0, tx, ty, 1);
+    }
+    true
+}
+
+/// `BigHeartMonster.Run`（`BigHeartMonster.cs:44-54`）。
+fn big_heart_monster_run(world: &mut World, actor_id: i32) {
+    let ok = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| can_move(e) && !e.visible_actors.is_empty());
+    if ok {
+        let _ = big_heart_attack_target(world, actor_id);
+    }
+}
+
+/// `HUtil32.MakeLong(short low, short high)`（`src/OpenMir2/HUtil32.cs:51-54`）。
+#[must_use]
+pub fn make_long(low: i32, high: i32) -> i32 {
+    (low as u16 as i32) | (high << 16)
+}
+
+/// `DigOutZombi.Turned`（`DigOutZombi.cs:57-64`）：`MapEvent(ET_DIGOUTZOMBI, 5min)`
+/// → `FixedHideMode = false` → `SendRefMsg(RM_DIGUP, Dir, X, Y, event.Id, "")`。
+fn dig_out_zombi_turned(world: &mut World, actor_id: i32) {
+    let (map_id, x, y) = match world.entities.get(actor_id) {
+        Some(e) => (e.map_id, e.x, e.y),
+        None => return,
+    };
+    world.add_dig_out_event(map_id, x, y);
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.fixed_hide_mode = false;
+    }
+    // `MapEvent.Id` 恒 0（`readonly` 且赋值行被注释）⇒ `nParam3 = 0`。
+    send_ref_msg(world, actor_id, RM_DIGUP, 0, x, y, 0);
+}
+
+/// `DigOutZombi.Run`（`DigOutZombi.cs:18-55`）。
+fn dig_out_zombi_run(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !(can_move(e) && (now - e.ai.walk_tick) > e.ai.walk_speed) {
+        return;
+    }
+    if e.fixed_hide_mode {
+        let (cx, cy, cool_eye) = (e.x, e.y, e.ai.cool_eye);
+        let visible: Vec<i32> = e.visible_actors.iter().map(|v| v.target).collect();
+        for target_id in visible {
+            let Some(t) = world.entities.get(target_id) else {
+                continue;
+            };
+            if t.death {
+                continue;
+            }
+            let proper = world
+                .entities
+                .get(actor_id)
+                .is_some_and(|a| is_proper_target(a, t));
+            if proper
+                && (!t.hide_mode || cool_eye)
+                && (cx - t.x).abs() <= 3
+                && (cy - t.y).abs() <= 3
+            {
+                dig_out_zombi_turned(world, actor_id);
+                if let Some(e) = world.entities.get_mut(actor_id) {
+                    e.ai.walk_tick = now + 1000;
+                }
+                break;
+            }
+        }
+        return;
+    }
+    let enemy_tick = e.ai.search_enemy_tick;
+    let has_target = e.ai.target_creature.is_some();
+    if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.search_enemy_tick = now;
+        }
+        search_target(world, actor_id);
+    }
+}
+
+/// `ScultureMonster.MeltStone`（`ScultureMonster.cs:18-24`）：
+/// `CharStatusEx = 0` → `CharStatus = GetCharStatus()` → `RM_DIGUP` → `StoneMode = false`。
+fn sculture_melt_stone(world: &mut World, actor_id: i32) {
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.char_status_ex = 0;
+    }
+    let status = world.get_char_status(actor_id);
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.char_status = status;
+    }
+    let (dir, x, y) = match world.entities.get(actor_id) {
+        Some(e) => (e.ai.dir, e.x, e.y),
+        None => return,
+    };
+    send_ref_msg(world, actor_id, RM_DIGUP, 0, x, y, 0);
+    let _ = dir;
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.stone_mode = false;
+    }
+}
+
+/// `ScultureMonster.MeltStoneAll`（`ScultureMonster.cs:26-42`）：
+/// 先融自己，再 `GetMapBaseObjects(Envir, X, Y, 7)`（x 外、y 内、格内 `ObjList` 序；
+/// 过滤 `Death`/`Ghost`）对每个 `StoneMode && is ScultureMonster` 融化。
+fn sculture_melt_stone_all(world: &mut World, actor_id: i32) {
+    sculture_melt_stone(world, actor_id);
+    let (map_id, x, y) = match world.entities.get(actor_id) {
+        Some(e) => (e.map_id, e.x, e.y),
+        None => return,
+    };
+    let mut object_list = Vec::new();
+    if let Some(map) = world.maps.get(map_id) {
+        for sx in (x - 7)..=(x + 7) {
+            for sy in (y - 7)..=(y + 7) {
+                let (cell, ok) = map.get_cell_info(sx, sy);
+                if !(ok && cell.is_available()) {
+                    continue;
+                }
+                for o in &cell.obj_list {
+                    if o.cell_obj_id <= 0 || !o.actor_object {
+                        continue;
+                    }
+                    if world
+                        .entities
+                        .get(o.cell_obj_id)
+                        .is_some_and(|e| !e.death && !e.ghost)
+                    {
+                        object_list.push(o.cell_obj_id);
+                    }
+                }
+            }
+        }
+    }
+    for id in object_list {
+        let hit = world
+            .entities
+            .get(id)
+            .is_some_and(|e| e.stone_mode && e.race == 101);
+        if hit {
+            sculture_melt_stone(world, id);
+        }
+    }
+}
+
+/// `ScultureMonster.Run`（`ScultureMonster.cs:43-79`）。注意门是 `>=`（不是 `>`），
+/// 且 `StoneMode` 支**不刷新** `WalkTick`。
+fn sculture_monster_run(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !(can_move(e) && (now - e.ai.walk_tick) >= e.ai.walk_speed) {
+        return;
+    }
+    if e.stone_mode {
+        let (cx, cy, cool_eye) = (e.x, e.y, e.ai.cool_eye);
+        let visible: Vec<i32> = e.visible_actors.iter().map(|v| v.target).collect();
+        for target_id in visible {
+            let Some(t) = world.entities.get(target_id) else {
+                continue;
+            };
+            if t.death {
+                continue;
+            }
+            let proper = world
+                .entities
+                .get(actor_id)
+                .is_some_and(|a| is_proper_target(a, t));
+            if proper
+                && (!t.hide_mode || cool_eye)
+                && (cx - t.x).abs() <= 2
+                && (cy - t.y).abs() <= 2
+            {
+                sculture_melt_stone_all(world, actor_id);
+                break;
+            }
+        }
+        return;
+    }
+    let enemy_tick = e.ai.search_enemy_tick;
+    let has_target = e.ai.target_creature.is_some();
+    if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.search_enemy_tick = now;
+        }
+        search_target(world, actor_id);
+    }
 }
 
 /// `MonsterObject.OpenCrazyMode(int nTime)`（`MonsterObject.cs:465-471`）——
@@ -1203,6 +1749,26 @@ pub fn monster_ai_tick(world: &mut World) {
         if crate::special_monster::special_monster_run(world, id) {
             animal_run(world, id);
             base_object_run_monster(world, id);
+            continue;
+        }
+        // **MB-1**：四个专用怪的 `Run` 覆写（`StickMonster`/`DigOutZombi`/
+        // `ScultureMonster`/`BigHeartMonster`）。先跑各自 `Run`，再按 [ClassRunBase]
+        // 跑 oracle 的 `base.Run()` 链。
+        if let Some(base) = monster_class_run(world, id) {
+            match base {
+                // `AnimalObject` 直派生：`base.Run()` = `AnimalObject.Run` → `BaseObject.Run`。
+                ClassRunBase::Animal => {
+                    animal_run(world, id);
+                    base_object_run_monster(world, id);
+                }
+                // `MonsterObject` 派生：`base.Run()` = `MonsterObject.Run` →
+                // `AnimalObject.Run` → `BaseObject.Run`。
+                ClassRunBase::Monster => {
+                    monster_run(world, id);
+                    animal_run(world, id);
+                    base_object_run_monster(world, id);
+                }
+            }
             continue;
         }
         monster_run(world, id);
@@ -2842,5 +3408,430 @@ mod tests {
             (0, 8, 5),
             "有目标时 SpaceMove 门仍生效（TargetX/Y = 目标格）"
         );
+    }
+    // ------------------------------------------------------------------
+    // **MB-1**（R38/R12/R35/R04）——四个专用怪 `Run` 覆写的构造级用例。
+    // ------------------------------------------------------------------
+
+    /// 造一只本批专用怪（race 决定类；不抽数）。
+    fn mb1_monster(world: &mut World, race: u8, x: i32, y: i32) -> i32 {
+        let mut e = Entity::new(0, "mb1", x, y);
+        e.race = race;
+        e.hp = 200;
+        e.max_hp = 200;
+        e.ai.walk_speed = 0;
+        e.ai.walk_tick = 0;
+        e.ai.attack_tick = 0;
+        e.ai.next_hit_time = 2000;
+        crate::mongen::apply_monster_class_constants(&mut e, i16::from(race), 0);
+        world.add_entity(e)
+    }
+
+    fn mb1_see(world: &mut World, viewer: i32, target: i32) {
+        world.entities.get_mut(viewer).unwrap().visible_actors = vec![VisibleBaseObject {
+            target,
+            flag: VisibleFlag::Show,
+        }];
+    }
+
+    fn mb1_players(world: &mut World, x: i32, y: i32) -> i32 {
+        let mut e = Entity::new(0, "P", x, y);
+        e.hp = 500;
+        e.max_hp = 500;
+        world.add_entity(e)
+    }
+
+    /// 真正**落图**的玩家（`race == Play` + `enter_world`）：`send_ref_msg_targets_at` 是格扫，
+    /// 只认格表里的 `actor_object` 玩家（oracle `SendRefMsg` 同口径）。
+    fn mb1_real_player(world: &mut World, x: i32, y: i32) -> i32 {
+        let mut e = Entity::new(0, "R", x, y);
+        e.race = crate::entity::ACTOR_RACE_PLAY;
+        e.hp = 500;
+        e.max_hp = 500;
+        let id = world.add_entity(e);
+        assert!(world.enter_world(id), "玩家落图");
+        id
+    }
+
+    /// R38 边界①：`CheckComeOut` 两轴**严格 `< ComeOutValue(4)`**，且 `HideMode` 需 `CoolEye`
+    /// 破门；命中后 `FindAttackTarget` 置 `FixedHideMode=false` 并出 `RM_DIGUP`。
+    ///
+    /// 牙①：把 `<` 改成 `<=` ⇒ Δ=4 的用例红；去掉 `CoolEye` 门 ⇒ 隐藏目标用例红。
+    #[test]
+    fn mb1_stick_come_out_is_strict_and_honours_cool_eye() {
+        let run = |hide_mode: bool, cool_eye: bool, dx: i32| {
+            let mut world = World::new(32, 32);
+            let id = mb1_monster(&mut world, 85, 10, 10);
+            world.entities.get_mut(id).unwrap().ai.cool_eye = cool_eye;
+            let p = mb1_players(&mut world, 10 + dx, 10);
+            world.entities.get_mut(p).unwrap().hide_mode = hide_mode;
+            mb1_see(&mut world, id, p);
+            world.clock_ms = 100_000;
+            assert_eq!(
+                monster_class_run(&mut world, id),
+                Some(ClassRunBase::Animal)
+            );
+            let e = world.entities.get(id).unwrap();
+            (
+                e.fixed_hide_mode,
+                world.pending_monster_ref_msgs.clone(),
+                e.ai.walk_tick,
+            )
+        };
+        // Δx=3 < 4 ⇒ 出土。
+        let (hidden, refs, walk_tick) = run(false, false, 3);
+        assert!(!hidden, "命中 CheckComeOut ⇒ FixedHideMode=false");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].ident, RM_DIGUP);
+        assert_eq!((refs[0].x, refs[0].y), (10, 10));
+        assert_eq!(walk_tick, 100_000, "WalkTick 刷新");
+        // Δx=4 **不** <4 ⇒ 不出土（严格 `<`）。
+        let (hidden, refs, _) = run(false, false, 4);
+        assert!(hidden && refs.is_empty(), "Δ=4 必须被严格 < 挡住");
+        // 隐藏目标 + CoolEye=false ⇒ 不出土。
+        let (hidden, refs, _) = run(true, false, 1);
+        assert!(hidden && refs.is_empty(), "HideMode 需 CoolEye");
+        // 隐藏目标 + CoolEye=true ⇒ 出土。
+        let (hidden, refs, _) = run(true, true, 1);
+        assert!(!hidden && refs.len() == 1, "CoolEye 破 HideMode");
+    }
+
+    /// R38 边界②：非隐藏支——目标为空/超 `AttackRange` ⇒ `ComeDown`（`RM_DIGDOWN` + 清可见集
+    /// + `FixedHideMode=true`）；相邻目标 ⇒ `AttackTarget` 命中一次（`RM_HIT`）。
+    ///
+    /// 牙②：把 `bo05` 的任一轴判据删掉 ⇒ 超距用例红。
+    #[test]
+    fn mb1_stick_come_down_and_attack_target() {
+        // 超距（Δx=5 > AttackRange=4）⇒ ComeDown。
+        let mut world = World::new(32, 32);
+        let id = mb1_monster(&mut world, 85, 10, 10);
+        let p = mb1_players(&mut world, 15, 10);
+        // 另放一个**真正落图**的玩家在 ±12 内，用于钉住「发帧时刻快照」。
+        let rp = mb1_real_player(&mut world, 12, 10);
+        mb1_see(&mut world, id, p);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.fixed_hide_mode = false;
+            e.ai.target_creature = Some(p);
+        }
+        world.clock_ms = 100_000;
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Animal)
+        );
+        let e = world.entities.get(id).unwrap();
+        assert!(e.fixed_hide_mode, "ComeDown ⇒ FixedHideMode=true");
+        assert!(e.visible_actors.is_empty(), "ComeDown 清 VisibleActors");
+        let refs = &world.pending_monster_ref_msgs;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].ident, RM_DIGDOWN);
+        // **复验 MB-1 F1 回归**：收件人在**发帧时刻**快照（此时 sender 尚未隐藏）。
+        // 若改成排水时现算，`ComeDown` 之后 `fixed_hide_mode=true` ⇒ 会丢帧。
+        assert!(!refs[0].self_only, "发帧时未隐藏 ⇒ 不是 self_only");
+        assert_eq!(
+            refs[0].recipients,
+            vec![rp],
+            "±12 内落图的玩家必须被快照为收件人（否则客户端看不到缩回地下动画）"
+        );
+
+        // 相邻（Δx=1 ≤4）⇒ AttackTarget：受击 + RM_HIT + AttackTick 刷新。
+        let mut world = World::new(32, 32);
+        let id = mb1_monster(&mut world, 85, 10, 10);
+        let p = mb1_players(&mut world, 11, 10);
+        mb1_see(&mut world, id, p);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.fixed_hide_mode = false;
+            e.ai.target_creature = Some(p);
+            // 攻击力确定化：DC = MakeWord(10, 10)（`GetBaseAttackPoewr` = 10）。
+            e.dc = (10 << 8) | 10;
+            e.hit_point = 10;
+            e.speed_point = 0;
+        }
+        world.entities.get_mut(p).unwrap().speed_point = 0;
+        world.clock_ms = 100_000;
+        let before = world.entities.get(p).unwrap().hp;
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Animal)
+        );
+        let e = world.entities.get(id).unwrap();
+        assert_eq!(e.ai.attack_tick, 100_000, "AttackTick 刷新");
+        assert_eq!(e.ai.dir, DIR_RIGHT, "AttackDir 置朝向");
+        assert!(
+            world.entities.get(p).unwrap().hp < before,
+            "相邻目标必须被命中"
+        );
+        assert_eq!(world.pending_monster_ref_msgs.len(), 1);
+        assert_eq!(world.pending_monster_ref_msgs[0].ident, RM_HIT);
+        assert_eq!(world.pending_ai_attacks.len(), 1, "仅一次攻击结算");
+    }
+
+    /// R12 边界：Δ≤3 且可见 ⇒ `Turned` 一次、`WalkTick == now + 1000`（精确）、
+    /// `ET_DIGOUTZOMBI` 事件注册、`RM_DIGUP` 出帧；Δ=4 / 隐藏未破 ⇒ 不触发。
+    ///
+    /// 牙③：把 `<= 3` 改成 `< 3` ⇒ Δ=3 用例红；把 `now + 1000` 改成 `now` ⇒ 精确断言红。
+    #[test]
+    fn mb1_dig_out_zombi_turned_boundaries() {
+        let run = |hide_mode: bool, cool_eye: bool, dx: i32| {
+            let mut world = World::new(32, 32);
+            let id = mb1_monster(&mut world, 95, 10, 10);
+            world.entities.get_mut(id).unwrap().ai.cool_eye = cool_eye;
+            let p = mb1_players(&mut world, 10 + dx, 10);
+            world.entities.get_mut(p).unwrap().hide_mode = hide_mode;
+            mb1_see(&mut world, id, p);
+            world.clock_ms = 100_000;
+            assert_eq!(
+                monster_class_run(&mut world, id),
+                Some(ClassRunBase::Monster)
+            );
+            let e = world.entities.get(id).unwrap();
+            (
+                e.fixed_hide_mode,
+                e.ai.walk_tick,
+                world.dig_out_event_at(0, 10, 10),
+                world.pending_monster_ref_msgs.len(),
+            )
+        };
+        let (hidden, walk_tick, event, refs) = run(false, false, 3);
+        assert!(!hidden, "Turned ⇒ FixedHideMode=false");
+        assert_eq!(walk_tick, 101_000, "WalkTick = now + 1000");
+        assert!(event, "ET_DIGOUTZOMBI 事件注册");
+        assert_eq!(refs, 1);
+        let (hidden, _, event, refs) = run(false, false, 4);
+        assert!(hidden && !event && refs == 0, "Δ=4 不触发");
+        let (hidden, _, _, refs) = run(true, false, 1);
+        assert!(hidden && refs == 0, "HideMode + CoolEye=false ⇒ 不触发");
+        let (hidden, _, _, refs) = run(true, true, 1);
+        assert!(!hidden && refs == 1, "CoolEye 破 HideMode");
+    }
+
+    /// R35 边界：`StoneMode` + 目标两轴 ≤2 ⇒ `MeltStoneAll`：
+    /// 自身 `StoneMode=false`/`CharStatusEx=0`/`CharStatus` 重算/`RM_DIGUP`；
+    /// `GetMapBaseObjects(...,7)` 内**每个** `StoneMode && ScultureMonster` 都融化，
+    /// 7 格外与非 Sculture 不融化；Δ=3 不触发。
+    ///
+    /// 牙④：把扫描半径 7 改成 6 ⇒ Δ7 的邻接石像断言红；把 `<= 2` 改成 `< 2` ⇒ Δ=2 红。
+    #[test]
+    fn mb1_sculture_melts_self_and_neighbours_within_seven() {
+        let mut world = World::new(40, 40);
+        let id = mb1_monster(&mut world, 101, 10, 10);
+        let near = mb1_monster(&mut world, 101, 17, 17); // Δ7（边界内）
+        let far = mb1_monster(&mut world, 101, 18, 10); // Δ8（边界外）
+        let other_stone = mb1_monster(&mut world, 80, 12, 12); // 非 Sculture
+        let p = mb1_players(&mut world, 12, 10); // Δ2（边界）
+        for e in [id, near, far, other_stone, p] {
+            assert!(world.enter_world(e), "落格");
+        }
+        world.entities.get_mut(other_stone).unwrap().stone_mode = true;
+        world.entities.get_mut(id).unwrap().char_status = 0x1234;
+        mb1_see(&mut world, id, p);
+        world.clock_ms = 100_000;
+
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        let self_e = world.entities.get(id).unwrap();
+        assert!(!self_e.stone_mode, "自身 StoneMode=false");
+        assert_eq!(self_e.char_status_ex, 0, "CharStatusEx=0");
+        assert_eq!(
+            self_e.char_status,
+            world.get_char_status(id),
+            "CharStatus = GetCharStatus()"
+        );
+        assert!(!world.entities.get(near).unwrap().stone_mode, "Δ7 邻接融化");
+        assert!(
+            world.entities.get(far).unwrap().stone_mode,
+            "Δ8 不融化（7 格边界）"
+        );
+        assert!(
+            world.entities.get(other_stone).unwrap().stone_mode,
+            "非 ScultureMonster 不融化"
+        );
+        let digups: Vec<i32> = world
+            .pending_monster_ref_msgs
+            .iter()
+            .filter(|m| m.ident == RM_DIGUP)
+            .map(|m| m.actor_id)
+            .collect();
+        assert!(digups.contains(&id) && digups.contains(&near));
+        assert!(!digups.contains(&far) && !digups.contains(&other_stone));
+
+        // Δ=3 ⇒ 不触发，走索敌（>1000ms 且无目标 ⇒ SearchTarget）。
+        let mut world = World::new(32, 32);
+        let id = mb1_monster(&mut world, 101, 10, 10);
+        let p = mb1_players(&mut world, 13, 10);
+        mb1_see(&mut world, id, p);
+        world.clock_ms = 100_000;
+        world.entities.get_mut(id).unwrap().ai.search_enemy_tick = 90_000;
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        let e = world.entities.get(id).unwrap();
+        assert!(e.stone_mode, "Δ=3 不得融化");
+        // oracle `Run` 的 `else` 属于 `if (StoneMode)` ⇒ 石化态下**不**走索敌。
+        assert_eq!(e.ai.target_creature, None, "StoneMode 支不索敌");
+        // 融化后（`StoneMode=false`）同一时钟门 ⇒ `SearchTarget` 选目标。
+        world.entities.get_mut(id).unwrap().stone_mode = false;
+        world.entities.get_mut(id).unwrap().ai.search_enemy_tick = 90_000;
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        assert_eq!(
+            world.entities.get(id).unwrap().ai.target_creature,
+            Some(p),
+            "StoneMode=false ⇒ 8s/1s 索敌"
+        );
+    }
+
+    /// R35 门是 `>=`（`ScultureMonster.cs:45`），恰等 `WalkSpeed` 就进函数体。
+    /// 牙⑤：把 `>=` 改成 `>` ⇒ 本用例红。
+    #[test]
+    fn mb1_sculture_run_gate_is_inclusive() {
+        let mut world = World::new(32, 32);
+        let id = mb1_monster(&mut world, 101, 10, 10);
+        let p = mb1_players(&mut world, 10, 10 - 1);
+        mb1_see(&mut world, id, p);
+        world.clock_ms = 100_000;
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.walk_speed = 500;
+            e.ai.walk_tick = 99_500; // now - walk_tick == 500 == WalkSpeed
+        }
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        assert!(!world.entities.get(id).unwrap().stone_mode, ">= 门放行");
+    }
+
+    /// R04：`NextHitTime` 门；`Random(|Hi(DC)-Lo(DC)|+1)` **同点同次**；
+    /// `RM_DELAYMAGIC` 200ms + `RM_10205`；`ViewRange` 边界；到点前不投递。
+    ///
+    /// 牙⑥：把 `Random(|Hi-Lo|+1)` 改成 `Random(Hi-Lo)` ⇒ 取数参数/载荷断言红；
+    /// 把 200ms 改成 100ms ⇒ 到点断言红。
+    #[test]
+    fn mb1_big_heart_attack_target_draws_once_and_delivers_after_200ms() {
+        // 门未到：零抽、零帧。
+        let mut world = World::new(40, 40);
+        let id = mb1_monster(&mut world, 115, 10, 10);
+        let p = mb1_players(&mut world, 12, 10);
+        mb1_see(&mut world, id, p);
+        world.clock_ms = 100_000;
+        world.rng = RandomNumber::with_seed(777);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.attack_tick = 99_000; // now - attack_tick == 1000 <= NextHitTime(2000)
+        }
+        let mut probe = RandomNumber::with_seed(777);
+        assert!(!big_heart_attack_target(&mut world, id));
+        assert!(world.self_delay_msgs.is_empty(), "门未到 ⇒ 不入队");
+        assert!(world.pending_monster_ref_msgs.is_empty(), "门未到 ⇒ 无帧");
+        assert_eq!(
+            world.rng.random(),
+            probe.random(),
+            "门未到 ⇒ 零取数（随机流不前进）"
+        );
+
+        // 门到：恰一次 `Random(param)`，参数 = |Hi-Lo|+1。
+        let (lo, hi) = (5i32, 9i32);
+        let param = (hi - lo).abs() + 1;
+        let seed = (0..100_000)
+            .find(|candidate| {
+                let v = RandomNumber::with_seed(*candidate).random_below(param);
+                let v_lo = RandomNumber::with_seed(*candidate).random_below(param - 1);
+                let v_hi = RandomNumber::with_seed(*candidate).random_below(param + 1);
+                v != v_lo && v != v_hi
+            })
+            .expect("找不到能分辨参数漂移的种子");
+        let mut world = World::new(40, 40);
+        let id = mb1_monster(&mut world, 115, 10, 10);
+        world.entities.get_mut(id).unwrap().dc = (hi << 8) | lo;
+        let p = mb1_players(&mut world, 12, 10); // Δ2 ≤ ViewRange(16)
+        let outside = mb1_players(&mut world, 10 + 17, 10); // Δ17 > 16
+        for e in [id, p, outside] {
+            assert!(world.enter_world(e));
+        }
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.visible_actors = vec![
+                VisibleBaseObject {
+                    target: p,
+                    flag: VisibleFlag::Show,
+                },
+                VisibleBaseObject {
+                    target: outside,
+                    flag: VisibleFlag::Show,
+                },
+            ];
+        }
+        world.clock_ms = 100_000;
+        world.rng = RandomNumber::with_seed(seed);
+        let mut expect = RandomNumber::with_seed(seed);
+        let draw = expect.random_below(param);
+        assert!(big_heart_attack_target(&mut world, id));
+        assert_eq!(
+            world.rng.random(),
+            expect.random(),
+            "恰一次取数（同点同次）"
+        );
+        let msg = world.self_delay_msgs.peek(id).expect("RM_DELAYMAGIC 入队");
+        assert_eq!(msg.ident, crate::slave::RM_DELAYMAGIC);
+        assert_eq!(
+            msg.w_param,
+            i32::max(0, lo + draw),
+            "nPower = MAX(0, Lo+draw)"
+        );
+        assert_eq!(msg.n_param1, make_long(12, 10), "MakeLong(x, y)");
+        assert_eq!(msg.n_param2, 1, "nRage=1");
+        assert_eq!(msg.n_param3, p, "nParam3=目标 ActorId");
+        assert_eq!(msg.deliver_at_ms, 100_200, "200ms 自延时");
+        let refs = world.pending_monster_ref_msgs.clone();
+        assert_eq!(
+            refs.len(),
+            2,
+            "RM_HIT + 一条 RM_10205（Δ17 被 ViewRange 挡）"
+        );
+        assert_eq!(refs[0].ident, RM_HIT, "RM_HIT 先于循环");
+        assert_eq!(refs[1].ident, RM_10205);
+        assert_eq!((refs[1].n_param1, refs[1].n_param2), (12, 10));
+        assert_eq!(refs[1].n_param3, 1);
+
+        // 200ms 前不投递、到点投递一次。
+        world.clock_ms = 100_199;
+        assert!(world.deliver_self_delay_msgs().is_empty(), "199ms 不得到点");
+        world.clock_ms = 100_200;
+        let out = world.deliver_self_delay_msgs();
+        assert_eq!(out.len(), 1, "200ms 到点投递一次");
+        assert_eq!(out[0].ident, crate::slave::RM_DELAYMAGIC);
+    }
+
+    /// R04 边界：`VisibleActors` 为空 ⇒ 不调用 helper（Run 的门），且 `CanMove=false` 同样不调用。
+    #[test]
+    fn mb1_big_heart_run_gates() {
+        let mut world = World::new(32, 32);
+        let id = mb1_monster(&mut world, 115, 10, 10);
+        world.clock_ms = 100_000;
+        world.rng = RandomNumber::with_seed(9);
+        let mut probe = RandomNumber::with_seed(9);
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Animal)
+        );
+        assert!(world.self_delay_msgs.is_empty(), "无可见目标 ⇒ 不攻击");
+        assert_eq!(world.rng.random(), probe.random(), "零抽");
+        // 有目标但 CanMove=false（Ghost/Death/STONE）⇒ 不进 helper。
+        let p = mb1_players(&mut world, 12, 10);
+        mb1_see(&mut world, id, p);
+        world.entities.get_mut(id).unwrap().ai.attack_tick = 0;
+        world.entities.get_mut(id).unwrap().death = true;
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Animal)
+        );
+        assert!(world.self_delay_msgs.is_empty(), "Death ⇒ 不攻击");
     }
 }

@@ -100,10 +100,33 @@ pub type MonsterCreator<'a> =
 /// 超出 PR-2「零行为改动」；留待 MB-4 连 `Run` 一起接（登记）。
 pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
     match race {
-        // `StickMonster` 基类 ctor（`StickMonster.cs:19-20`）。
+        // `StickMonster` 基类 ctor（`StickMonster.cs:14-23`）：`ViewRange = 7`、
+        // `FixedHideMode = true`、`StickMode = true`、`Animal = true`；`:19-20` 的
+        // `ComeOutValue = 4` / `AttackRange = 4`（PR-2 已落）。
         85 => {
             entity.come_out_value = 4;
             entity.attack_range = 4;
+            entity.view_range = 7;
+            entity.fixed_hide_mode = true;
+            entity.stick_mode = true;
+            entity.ai.animal = true;
+        }
+        // `DigOutZombi` ctor（`DigOutZombi.cs:12-16`）：`ViewRange = 7`、`FixedHideMode = true`。
+        95 => {
+            entity.view_range = 7;
+            entity.fixed_hide_mode = true;
+        }
+        // `ScultureMonster` ctor（`ScultureMonster.cs:11-16`）：`ViewRange = 7`、
+        // `StoneMode = true`、`CharStatusEx = PoisonState.STONEMODE (0x1)`。
+        101 => {
+            entity.view_range = 7;
+            entity.stone_mode = true;
+            entity.char_status_ex = 0x0000_0001;
+        }
+        // `BigHeartMonster` ctor（`BigHeartMonster.cs:11-15`）：`ViewRange = 16`、`Animal = false`。
+        115 => {
+            entity.view_range = 16;
+            entity.ai.animal = false;
         }
         // `CentipedeKingMonster` 覆盖（`CentipedeKingMonster.cs:14-15`）。
         107 => {
@@ -947,6 +970,25 @@ mod tests {
 
         let stick = mk(85, 0);
         assert_eq!((stick.come_out_value, stick.attack_range), (4, 4));
+        // **MB-1**：`StickMonster.cs:14-23` 的 ctor 常量。
+        assert_eq!(stick.view_range, 7, "StickMonster ViewRange=7");
+        assert!(stick.fixed_hide_mode, "StickMonster FixedHideMode=true");
+        assert!(stick.stick_mode, "StickMonster StickMode=true");
+        assert!(stick.ai.animal, "StickMonster Animal=true");
+        let dig = mk(95, 0);
+        assert_eq!(dig.view_range, 7, "DigOutZombi ViewRange=7");
+        assert!(dig.fixed_hide_mode, "DigOutZombi FixedHideMode=true");
+        assert!(!dig.stone_mode, "DigOutZombi 非石像");
+        let sculture = mk(101, 0);
+        assert_eq!(sculture.view_range, 7, "ScultureMonster ViewRange=7");
+        assert!(sculture.stone_mode, "ScultureMonster StoneMode=true");
+        assert_eq!(
+            sculture.char_status_ex, 0x1,
+            "ScultureMonster CharStatusEx=STONEMODE"
+        );
+        let heart = mk(115, 0);
+        assert_eq!(heart.view_range, 16, "BigHeartMonster ViewRange=16");
+        assert!(!heart.ai.animal, "BigHeartMonster Animal=false");
         let centipede = mk(107, 0);
         assert_eq!((centipede.come_out_value, centipede.attack_range), (4, 6));
         let sand = mk(132, 0);

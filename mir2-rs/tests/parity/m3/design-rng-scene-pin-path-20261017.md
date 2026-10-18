@@ -249,7 +249,7 @@ C# 侧**没有** `MIR2_CLOCK_MS` 注入（`clock.rs` 模块头自陈「C# 半仍
   `RegenMonstersTime=200` ⇒ 首轮约 200ms 后）；`RegenMonsters` `:811-878`。
 - RNG：`InitializeMonster` 每怪名 `Random(limit)` + `MonsterList.Values` 每模板 `Random(limit)`
   （`:66`/`:94`，部署 `limit=1` 仍推进流）；每只再 `Random(range*2+1)`×2（`:849-850`）→ 生成期。
-- 折叠：位置 2 抽登记在 `spawn`（`consumer_groups.tsv:56`），理论可折；
+- 折叠：位置 2 抽登记在 `spawn`（`consumer_groups.tsv:57`），理论可折；
   **但** 场景门要求两侧 `mongen_rows` 逐行等于冻结件 **0 行**（`rng_scene_gate.py` 的
   `mongen-equal:{a,b}-vs-fixture`）⇒ 加行即 RED。
 - **不可选**：内容冻结 + 场景门直接 RED + `Dir` 仍随机。

@@ -11067,6 +11067,83 @@ fn drain_special_ref_msgs(
     }
 }
 
+/// **MB-1**：怪物 `Run` 覆写的 `SendRefMsg(...)` 出帧
+/// （`StickMonster`/`DigOutZombi`/`ScultureMonster`/`BigHeartMonster`）。
+///
+/// 逐 ident 的口径（`PlayObject.Message.cs`）：
+/// - `RM_HIT`（`:1610`）⇒ `SM_HIT`（`AnimalObject.Attack` 的 `SendAttackMsg` / BigHeart `:20`）；
+/// - `RM_DIGUP`（`:1890-1899`）⇒ `SM_DIGUP`（`GetFeature(this)` + `CharStatus` 尾）；
+/// - `RM_DIGDOWN`（`:1900-1903`）⇒ `SM_DIGDOWN`（header-only）；
+/// - `RM_10205`（`:1929`）⇒ `SM_716`（header-only，参数原样）。
+///
+/// `self_only`（`ObMode || FixedHideMode`）时 oracle 只把消息投进**自己**的队列
+/// （`BaseObject.Message.cs:390-393`）；怪物没有客户端 ⇒ 不产帧。
+///
+/// `#[allow(clippy::let_and_return)]`：`RM_DIGUP` 支必须把 `sm_digup(…)` 的返回值绑到
+/// `let` 再作为块尾返回——对账门 `recon_gates.py` 的 `_call_value_dropped` 会把「调用点
+/// 即裸块尾且签名行以 `(` 收尾」误判为 `value_dropped`（`SM_DIGUP` 会从 implemented 降级）。
+#[allow(clippy::let_and_return)]
+fn drain_monster_ref_msgs(
+    world: &mut mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    for m in world.take_monster_ref_msgs() {
+        if m.self_only {
+            continue;
+        }
+        let body = match m.ident {
+            mir2_world::monai::RM_HIT => smframe::sm_action_hit(
+                mir2_protocol::messages::SM_HIT,
+                m.actor_id,
+                wire_coord(m.x),
+                wire_coord(m.y),
+                m.dir,
+            ),
+            mir2_world::monai::RM_DIGUP => {
+                let (feature, light) = displays
+                    .get(m.actor_id)
+                    .map_or((0, 0), |d| (d.feature, d.light));
+                let digup = smframe::sm_digup(
+                    m.actor_id,
+                    wire_coord(m.x),
+                    wire_coord(m.y),
+                    m.dir,
+                    light,
+                    feature,
+                    m.status,
+                );
+                digup
+            }
+            mir2_world::monai::RM_DIGDOWN => {
+                smframe::sm_digdown(m.actor_id, wire_coord(m.x), wire_coord(m.y))
+            }
+            mir2_world::monai::RM_10205 => {
+                smframe_ext::sm_716(m.actor_id, m.n_param1, m.n_param2, m.n_param3)
+            }
+            // 未建模 ident：不猜映射（登记为余量）。
+            _ => continue,
+        };
+        // 收件人用**发帧时刻**的快照（`MonsterRefMsg::recipients`），不在此刻重算：
+        // oracle `SendRefMsg` 在调用时就已投递；`StickMonster.ComeDown` 先发 `RM_DIGDOWN`
+        // 再置 `FixedHideMode=true` ⇒ 排水时按 `hear_targets_at` 重算会因 sender 已隐藏而丢帧（复验 MB-1 F1）。
+        for target_id in &m.recipients {
+            let Some(t) = online.iter().find(|e| e.actor_id == *target_id) else {
+                continue;
+            };
+            let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "怪物参照帧下行")
+            else {
+                continue;
+            };
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: t.socket,
+                body: body.clone(),
+            });
+        }
+    }
+}
+
 /// **卡 `openmir2-run-gap-monster-specials`（F1）**：`world.tick()` + 专用怪的两条排水。
 ///
 /// 1. **产仔排水**：`World::tick` 的消息段把到点的 `RM_ZEN_BEE` 放进
@@ -11100,6 +11177,8 @@ fn tick_world_with_specials(
         let _ = world.flush_special_spawns(&mut spawner);
     }
     drain_special_ref_msgs(world, online, gates);
+    // **MB-1**：怪物 `Run` 覆写的出帧（`SM_DIGUP`/`SM_DIGDOWN`/`SM_HIT`/`SM_716`）。
+    drain_monster_ref_msgs(world, displays, online, gates);
     rec
 }
 
@@ -35783,5 +35862,161 @@ mod tests {
             "RM_HIT 未接到出帧路径 ⇒ 观察者收不到 SM_HIT"
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+    /// **MB-1 帧面**：`drain_monster_ref_msgs` 按既有 `smframe` 口径出
+    /// `SM_DIGUP`/`SM_DIGDOWN`/`SM_HIT`/`SM_716`，收件人按发帧坐标 ±12 且仅玩家；
+    /// `self_only`（`ObMode || FixedHideMode`）不产帧。
+    ///
+    /// 牙⑦：把 `RM_DIGUP` 的 `status` 尾改成 0 ⇒ 首帧逐字节断言红。
+    #[test]
+    fn mb1_monster_ref_msgs_encode_frames_on_production_drain() {
+        use mir2_world::Entity;
+        let mut world = mir2_world::World::new(64, 64);
+        let mut p = Entity::new(0, "P".to_string(), 11, 10);
+        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let pid = world.add_entity(p);
+        let mut m = Entity::new(0, "石像".to_string(), 10, 10);
+        m.race = 101;
+        let mid = world.add_entity(m);
+        world.tick(); // Enter 落格
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".to_string(),
+            chr_name: "P".to_string(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 5,
+            actor_id: pid,
+        }];
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            mid,
+            downlink::ActorDisplay::new(2, 0, 0x0033_4455, 0, 0x2, 255, b"s".to_vec()),
+        );
+
+        let msg = |ident: u16, n1: i32, n2: i32, n3: i32| mir2_world::MonsterRefMsg {
+            actor_id: mid,
+            ident,
+            w_param: 0,
+            n_param1: n1,
+            n_param2: n2,
+            n_param3: n3,
+            dir: 2,
+            x: 10,
+            y: 10,
+            map_id: 0,
+            status: 0x2,
+            self_only: false,
+            // 发帧时刻快照：测试里的玩家 `pid` 在 ±12 内。
+            recipients: vec![pid],
+        };
+        world
+            .pending_monster_ref_msgs
+            .push(msg(mir2_world::monai::RM_DIGUP, 10, 10, 0));
+        world
+            .pending_monster_ref_msgs
+            .push(msg(mir2_world::monai::RM_DIGDOWN, 10, 10, 0));
+        world
+            .pending_monster_ref_msgs
+            .push(msg(mir2_world::monai::RM_HIT, 10, 10, 0));
+        world
+            .pending_monster_ref_msgs
+            .push(msg(mir2_world::monai::RM_10205, 11, 10, 1));
+        let mut hidden = msg(mir2_world::monai::RM_DIGUP, 10, 10, 0);
+        hidden.self_only = true;
+        world.pending_monster_ref_msgs.push(hidden);
+
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+        let mut bodies = Vec::new();
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, socket } = ev {
+                assert_eq!(socket, 5, "只发给在线玩家");
+                bodies.push(body);
+            }
+        }
+        assert_eq!(bodies.len(), 4, "self_only 不产帧");
+        assert_eq!(
+            bodies[0],
+            smframe::sm_digup(mid, 10, 10, 2, 0, 0x0033_4455, 0x2),
+            "SM_DIGUP：GetFeature + CharStatus 尾"
+        );
+        assert_eq!(bodies[1], smframe::sm_digdown(mid, 10, 10));
+        assert_eq!(
+            bodies[2],
+            smframe::sm_action_hit(mir2_protocol::messages::SM_HIT, mid, 10, 10, 2)
+        );
+        assert_eq!(bodies[3], smframe_ext::sm_716(mid, 11, 10, 1));
+        assert!(
+            world.pending_monster_ref_msgs.is_empty(),
+            "排空后队列必须为空（否则无界增长）"
+        );
+    }
+
+    /// **复验 MB-1 F1 回归**：`ComeDown` 先发 `RM_DIGDOWN` 再置 `FixedHideMode=true`；
+    /// 宿主排水必须用**发帧时刻**的收件人快照，否则按此刻的 hide 状态重算会整帧丢失。
+    ///
+    /// **牙**：把排水改回 `broadcast_ref_msg_opt`（此刻重算）⇒ 本用例红（0 帧）。
+    #[test]
+    fn mb1_digdown_survives_come_down_hide_state() {
+        use mir2_world::Entity;
+        let mut world = mir2_world::World::new(64, 64);
+        let mut p = Entity::new(0, "P".to_string(), 11, 10);
+        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let pid = world.add_entity(p);
+        let mut m = Entity::new(0, "钉怪".to_string(), 10, 10);
+        m.race = 85;
+        // `ComeDown` 之后的状态：已隐藏。
+        m.fixed_hide_mode = true;
+        let mid = world.add_entity(m);
+
+        let displays = downlink::DisplayTable::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "P".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: pid,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        gates.insert(0, tx0);
+
+        world
+            .pending_monster_ref_msgs
+            .push(mir2_world::MonsterRefMsg {
+                actor_id: mid,
+                ident: mir2_world::monai::RM_DIGDOWN,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+                dir: 2,
+                x: 10,
+                y: 10,
+                map_id: 0,
+                status: 0,
+                self_only: false,
+                // 发帧时刻（尚未隐藏）快照到玩家。
+                recipients: vec![pid],
+            });
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+        let mut frames = 0;
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, socket } = ev {
+                assert_eq!(socket, 5);
+                assert_eq!(body, smframe::sm_digdown(mid, 10, 10));
+                frames += 1;
+            }
+        }
+        assert_eq!(frames, 1, "sender 已隐藏也必须按发帧快照送达（复验 F1）");
     }
 }

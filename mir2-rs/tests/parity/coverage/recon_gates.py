@@ -2385,6 +2385,12 @@ def cmd_mutate(args):
         # （`smframe_ext::sm_716(actor_id, CurrX, CurrY, 4)` → `SpellFrameBuf` → gate；
         # 条件 `CurrX/Y != nTargetX/Y`、骰门之外）⇒ 按门规移出 blocked（自失效断言）。
         "SM_716",
+        # 卡 `openmir2-run-gap-mb1-dig-out-stone`（2026-10-18）：MB-1 的
+        # `StickMonster`/`DigOutZombi`/`ScultureMonster` 的 `RM_DIGUP` 与 `StickMonster.ComeDown`
+        # 的 `RM_DIGDOWN` 已在 `bins/game-svr/src/main.rs` 的 `drain_monster_ref_msgs` 接生产发射点
+        # （`smframe::sm_digup`/`smframe::sm_digdown`）⇒ 按门规移出 blocked（自失效断言）。
+        "SM_DIGUP",
+        "SM_DIGDOWN",
     }
     # 仍 blocked（编码器已落地、生产路径无发射点）；各自 blocked_by 与出处（红名单 v2 §3 finding）：
     #   · 传送簇（切图/TransMap：HIDE 侧随切图簇；对照 SHOW(801)/SHOW2(807) 经
@@ -2411,7 +2417,7 @@ def cmd_mutate(args):
     #     （SM_MAGICFIRE_FAIL(639) 原列本簇；卡 `openmir2-spell-mp-wrapper` 接线后已移入
     #      `_wired_now`，见上。）
     _blocked = {"SM_SPACEMOVE_HIDE", "SM_SKELETON", "SM_ALIVE",
-                "SM_DIGUP", "SM_DIGDOWN", "SM_FLYAXE", "SM_LIGHTING",
+                "SM_FLYAXE", "SM_LIGHTING",
                 "SM_CLOSEHEALTH", "SM_BREAKWEAPON",
                 "SM_LAMPCHANGEDURA", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL",
                 "SM_QUERYYBSELL", "SM_RECONNECT", "SM_CHANGEFACE",

@@ -549,6 +549,29 @@ pub struct FireBurnEvent {
     pub registered: bool,
 }
 
+/// `MapEvent`（`src/Modules/SystemModule/MagicEvent/MapEvent.cs`）的最小等价物——
+/// 只承载 `DigOutZombi.Turned` 的 `ET_DIGOUTZOMBI` 洞穴事件（`DigOutZombi.cs:59`）。
+///
+/// 消费点：`PlayObject.Walk` 的 NEEDHOLE 门
+/// （`PlayObject.cs:1874`：`EventMgr.GetEvent(Envir, CurrX, CurrY, ET_DIGOUTZOMBI) != null`）。
+/// `EventManager.GetEvent`（`src/M2Server/Event/EventManager.cs:29-42`）逆插入序找**首个**
+/// 同 `EventType/Envir/nX/nY` 的事件；`EventProcessor.ExecuteInternal`（`:31-48`）每
+/// `RunTick(500ms)` 跑一次 `MapEvent.Run`，`now - OpenStartTick > ContinueTime` 即移出
+/// `Events`（`Closed` 后下一轮进 `ClosedEvents`，`GetEvent` 便再也取不到）。
+#[derive(Clone, Copy, Debug)]
+pub struct DigOutEvent {
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+    /// `Grobal2.ET_DIGOUTZOMBI = 1`（`src/OpenMir2/Grobal2.cs:41`）。
+    pub event_type: i32,
+    pub open_start_ms: i64,
+    pub continue_ms: i64,
+    pub run_start_ms: i64,
+    pub run_tick_ms: i64,
+    pub closed: bool,
+}
+
 pub struct World {
     /// 地图表（下标 = `map_id`）；`World::new` 建一张 0 号图。
     pub maps: Vec<MapGrid>,
@@ -720,6 +743,10 @@ pub struct World {
     pub pending_special_spawns: Vec<crate::special_monster::SpecialSpawnRequest>,
     /// 专用怪 `SendRefMsg(RM_HIT, …)` 的帧事件（宿主出 `SM_HIT`；保序）。
     pub pending_special_ref_msgs: Vec<crate::special_monster::SpecialRefMsg>,
+    /// **MB-1**：怪物 `Run` 覆写里的 `SendRefMsg(...)` 帧事件（`StickMonster`/
+    /// `DigOutZombi`/`ScultureMonster`/`BigHeartMonster`），宿主按 ident 出
+    /// `SM_DIGUP`/`SM_DIGDOWN`/`SM_HIT`/`SM_716`（保序；见 [`crate::monai::MonsterRefMsg`]）。
+    pub pending_monster_ref_msgs: Vec<crate::monai::MonsterRefMsg>,
     /// `GameSvrConf.Bee`（`GameSvrConf.cs:1316` 缺省 `"蝙蝠"`；`ServerConf.cs:100` 读 `[Names] Bee`）。
     pub bee_name: String,
     /// `GameSvrConf.Spider`（`GameSvrConf.cs:1317` 缺省 `"爆裂蜘蛛"`；`ServerConf.cs:101` 读 `[Names] Spider`）。
@@ -730,6 +757,11 @@ pub struct World {
     /// `Closed` 的事件留在表里但不再 `Run`（oracle 移到 `ClosedEvents`，语义等价）。
     /// 缺省空表 ⇒ 既有 golden 逐字节不变。
     pub fire_burn_events: Vec<FireBurnEvent>,
+    /// **MB-1**：`EventMgr.Events` 里 `ET_DIGOUTZOMBI` 事件的最小表（插入序）。
+    ///
+    /// 只由 `DigOutZombi.Turned` 写入（5 分钟 `ContinueTime`），由 [`World::run_map_events`]
+    /// 按 `RunTick=500ms` 门到期移除；`PlayObject.Walk` 的 NEEDHOLE 门读它。
+    pub dig_out_events: Vec<DigOutEvent>,
     /// **P3-B5**：`CellObjectMgr` 里是否已有 `CellObjId = 0` 的事件（`TryAdd` 第一条胜）。
     ///
     /// `Envir.GetEvent(x,y)` 的判据 = 「该格有 `CellType::Event` 对象」**且**本标记为真
@@ -898,9 +930,11 @@ impl World {
             pending_mag_struck: Vec::new(),
             pending_special_spawns: Vec::new(),
             pending_special_ref_msgs: Vec::new(),
+            pending_monster_ref_msgs: Vec::new(),
             bee_name: crate::special_monster::DEFAULT_BEE_NAME.to_string(),
             spider_name: crate::special_monster::DEFAULT_SPIDER_NAME.to_string(),
             fire_burn_events: Vec::new(),
+            dig_out_events: Vec::new(),
             event_registered: false,
             self_delay_msgs: crate::slave::SelfDelayQueue::new(),
             msg_order: 0,
@@ -3051,6 +3085,43 @@ impl World {
         }
     }
 
+    /// **MB-1**：`new MapEvent(Envir, X, Y, ET_DIGOUTZOMBI, 5*60*1000, true) + EventMgr.AddEvent`
+    /// （`DigOutZombi.cs:59-60`）。
+    ///
+    /// **建模差异（登记）**：oracle ctor 的 `Envir.AddMapEvent` 还会在该格追加一个
+    /// `CellType.Event`、`CellObjId=0` 的格子对象；本仓的 `event_at`（火墙）与
+    /// `CellObjectMgr` 是简化模型，混入 dig-out 格会让火墙判据串味 ⇒ 这里只维护
+    /// `EventMgr.Events` 注册表（NEEDHOLE 门的唯一消费面），不落格子对象。
+    pub fn add_dig_out_event(&mut self, map_id: usize, x: i32, y: i32) {
+        let now = self.clock_ms;
+        self.dig_out_events.push(DigOutEvent {
+            map_id,
+            x,
+            y,
+            event_type: 1, // `Grobal2.ET_DIGOUTZOMBI`
+            open_start_ms: now,
+            continue_ms: 5 * 60 * 1000,
+            run_start_ms: now,
+            run_tick_ms: 500,
+            closed: false,
+        });
+    }
+
+    /// `EventMgr.GetEvent(envir, nX, nY, ET_DIGOUTZOMBI) != null`（`EventManager.cs:29-42`：
+    /// **逆插入序**找首个匹配；`Closed` 的事件已移出 `Events`）。
+    #[must_use]
+    pub fn dig_out_event_at(&self, map_id: usize, x: i32, y: i32) -> bool {
+        self.dig_out_events
+            .iter()
+            .rev()
+            .any(|e| !e.closed && e.event_type == 1 && e.map_id == map_id && e.x == x && e.y == y)
+    }
+
+    /// 取走本 tick 的怪物 `SendRefMsg` 帧事件（保序）。
+    pub fn take_monster_ref_msgs(&mut self) -> Vec<crate::monai::MonsterRefMsg> {
+        std::mem::take(&mut self.pending_monster_ref_msgs)
+    }
+
     /// **P3-B5**：9/10 穿透效果体（`MagicManager.cs:265-288` + `BaseObject.cs:896-931`）。
     ///
     /// 有序门与取数：
@@ -3259,6 +3330,21 @@ impl World {
             if !still_alive {
                 self.fire_burn_events[i].owner_id = None;
             }
+        }
+        // **MB-1**：`EventProcessor` 对 `ET_DIGOUTZOMBI` 事件的 `RunTick=500ms` 门与
+        // `MapEvent.Run` 的关闭门（`now - OpenStartTick > ContinueTime`，严格大于）。
+        // `Closed` 后 `EventProcessor` 立即移出 `Events`（`EventProcessor.cs:40-44`）⇒ retain。
+        if !self.dig_out_events.is_empty() {
+            for ev in &mut self.dig_out_events {
+                if ev.closed || now - ev.run_start_ms <= ev.run_tick_ms {
+                    continue;
+                }
+                ev.run_start_ms = now;
+                if now - ev.open_start_ms > ev.continue_ms {
+                    ev.closed = true;
+                }
+            }
+            self.dig_out_events.retain(|e| !e.closed);
         }
     }
 
@@ -5429,7 +5515,12 @@ impl World {
             // route 以它们为目标**（`D402(138,107|138,108|137,107|137,108)→Q004(14,14)`、
             // `D717(80,28)→R001(162,169)`、`H006(83,25)→H007(161,172)`、`h006(80,28)→H106(163,169)`）
             // ⇒ 踩这些源格在 oracle **不换图**（moved 正常、changed_map=false）。
-            if self.maps.get(hop.dst_map_id).is_some_and(|m| m.need_hole()) {
+            // **MB-1**：`(!mapRoute.Envir.Flag.boNEEDHOLE) ||
+            // EventMgr.GetEvent(Envir, CurrX, CurrY, ET_DIGOUTZOMBI) != null`——事件查的是
+            // **玩家当前图/当前格**（`Envir`/`CurrX/CurrY`），不是目标图/目标格。
+            if self.maps.get(hop.dst_map_id).is_some_and(|m| m.need_hole())
+                && !self.dig_out_event_at(map_id, x, y)
+            {
                 continue;
             }
             // `!envir.CellValid(nDMapX, nDMapY)` ⇒ `EnterAnotherMap` 返回 false。
