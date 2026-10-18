@@ -180,7 +180,42 @@ impl MapFile {
             .count()
     }
 
-    /// 转成 `crates/world` 的 `MapGrid`（属性 + 空对象表）。
+    /// 把本图已解析的门表逐字段搬成 `crates/world` 的镜像结构（`MapDoor`/`DoorStatus`）。
+    ///
+    /// 逐字段同型、**保序**且**保留 `status_id` 身份**（同组门共享同一 `DoorStatus`），供
+    /// `MapGrid::set_doors` 使用。oracle `Envirnoment.LoadMapData` 加载即建 `DoorList`
+    /// （`Envirnoment.cs:934-991`）；`MapManager.LoadMapDoor`（`MapManager.cs:182-189`）只是把
+    /// 已解出的门 `AddDoorToMap`，**不是独立内容件**（见 `recon_gates.py` 的 `kind="derived"`）。
+    #[must_use]
+    pub fn door_tables(
+        &self,
+    ) -> (
+        Vec<mir2_world::map::MapDoor>,
+        Vec<mir2_world::map::DoorStatus>,
+    ) {
+        let doors = self
+            .doors
+            .iter()
+            .map(|d| mir2_world::map::MapDoor {
+                x: d.x,
+                y: d.y,
+                n08: d.n08,
+                door_id: d.door_id,
+                status_id: d.status_id,
+            })
+            .collect();
+        let status = self
+            .door_status
+            .iter()
+            .map(|s| mir2_world::map::DoorStatus {
+                opened: s.opened,
+                open_tick: s.open_tick,
+            })
+            .collect();
+        (doors, status)
+    }
+
+    /// 转成 `crates/world` 的 `MapGrid`（属性 + 门表 + 空对象表）。
     ///
     /// **对象表处置**：`MapGrid` 每格恒有一个空 `Vec`，不带 `Option`——见模块头第 8 条，
     /// null 与空表在可观测层面等价。`MapGrid::new` 要求 W/H 均为正（本模块已保证 > 1）。
@@ -196,6 +231,9 @@ impl MapFile {
                 cell.set_attribute(attr);
             }
         }
+        // 门表随图一起进 `MapGrid`（oracle 加载即建 `DoorList`；无门图 ⇒ 空表）。
+        let (doors, status) = self.door_tables();
+        grid.set_doors(doors, status);
         grid
     }
 }

@@ -183,7 +183,7 @@ CONTENT_MAP = {
     "LoadQuestDiary":            dict(kind="dir", file="QuestDiary", anchor="LocalDB.cs:733-744"),
     "LoadLineNotice":            dict(kind="notice", file="LineNotice.txt", anchor="GameApp.cs:204", card="openmir2-envir-redlist-batch"),
     "LoadAdminList":             dict(kind="envir", file="AdminList.txt", anchor="LocalDB.cs:16-28", card="openmir2-envir-redlist-batch"),
-    "LoadMapDoor":               dict(kind="derived", anchor="MapManager.cs:182（随地图文件，非独立内容件）", probe_ident="add_map_door"),
+    "LoadMapDoor":               dict(kind="derived", anchor="MapManager.cs:182（随地图文件，非独立内容件）", probe_ident="apply_map_doors"),
     "LoadMerchant":              dict(kind="envir", file="Merchant.txt", anchor="LocalDB.cs:412-424"),
     "LoadNpcs":                  dict(kind="envir", file="Npcs.txt", anchor="LocalDB.cs:655-664", card="openmir2-npcs-fixed-loading"),
     "LoadMakeItem":              dict(kind="envir", file="MakeItem.txt", anchor="LocalDB.cs:149-158", card="openmir2-envir-redlist-batch"),
@@ -2062,7 +2062,7 @@ def selftest():
 
     _map_door = CONTENT_MAP["LoadMapDoor"]
     check("teeth（片D1-④ 接线）：CONTENT_MAP['LoadMapDoor'] 注册为 derived + probe_ident",
-          _map_door.get("kind") == "derived" and _map_door.get("probe_ident") == "add_map_door")
+          _map_door.get("kind") == "derived" and _map_door.get("probe_ident") == "apply_map_doors")
     _row_no = _make_content_row(Path("."), Path("."), Path("."), _StubCorpus(False),
                                 {"known_cards": [], "assignments": {}}, _map_door, "MapManager.cs:182")
     check("teeth（片D1-④ 接线）：整表路径 —— Rust 无 probe_ident ⇒ RED（部署恒真）",

@@ -12012,35 +12012,13 @@ fn sim_loop(
             reg.unresolved_routes().len(),
             added
         );
-        // **门数据接线**（片 R1 `openmir2-maptrigger-monster-and-door`）：把注册表每图的门表搬进
+        // **门数据接线**（卡 `openmir2-mapdoor-derive-plumbing`）：把注册表每图的门表搬进
         // `MapGrid`（oracle `Envirnoment` 加载即建 `DoorList`，`Envirnoment.cs:934-991`），供
-        // `PlayObject.cs:1872` 的 `Envir.ArroundDoorOpened` 消费。oracle 门恒未开（`CM_OPENDOOR`
+        // `PlayObject.cs:1872` 的 `Envir.ArroundDoorOpened` 消费。搬运/逐字段镜像见
+        // [`game_svr::mapdoor`]（生产与测试共用同一函数）。oracle 门恒未开（`CM_OPENDOOR`
         // 结构性 no-op，见 `tests/parity/m3/design-door-and-mapevent-20261016.md` §2.2）⇒ 与门相邻（±1）
-        // 的 route 格**恒被挡**（不换图）。`mir2_envir::mapfile` → `mir2_world::map` 逐字段搬运。
-        let mut door_total = 0usize;
-        for (map_id, f) in reg.maps().iter().enumerate() {
-            let doors: Vec<mir2_world::map::MapDoor> = f
-                .doors
-                .iter()
-                .map(|d| mir2_world::map::MapDoor {
-                    x: d.x,
-                    y: d.y,
-                    n08: d.n08,
-                    door_id: d.door_id,
-                    status_id: d.status_id,
-                })
-                .collect();
-            let status: Vec<mir2_world::map::DoorStatus> = f
-                .door_status
-                .iter()
-                .map(|st| mir2_world::map::DoorStatus {
-                    opened: st.opened,
-                    open_tick: st.open_tick,
-                })
-                .collect();
-            door_total += doors.len();
-            world.set_map_doors(map_id, doors, status);
-        }
+        // 的 route 格**恒被挡**（不换图）。
+        let door_total = game_svr::mapdoor::apply_map_doors(reg, &mut world);
         glog!("INF", "地图门数据已灌入（MapDoor）doors={door_total}");
     }
     // **M3④-实现 C 第 ② 片**：生产宿主启用怪物 AI（oracle `ProcessMonsters` 线程的单线程等价物）。

@@ -518,6 +518,24 @@ impl MapGrid {
         self.door_status = status;
     }
 
+    /// 只读门表（`Envirnoment.DoorList`，`:48`/`:64`）。顺序 = `.map` 文件序。
+    #[must_use]
+    pub fn doors(&self) -> &[MapDoor] {
+        &self.doors
+    }
+
+    /// 按 `MapDoor.status_id` 读门状态（C# 的 `MapDoor.Status.Opened/OpenTick`）；越界 ⇒ `None`。
+    #[must_use]
+    pub fn door_status(&self, status_id: usize) -> Option<DoorStatus> {
+        self.door_status.get(status_id).copied()
+    }
+
+    /// `DoorStatus` 实例数（同组门共享后；oracle 的「不同 StatusRef 数」）。
+    #[must_use]
+    pub fn door_status_len(&self) -> usize {
+        self.door_status.len()
+    }
+
     /// `Envirnoment.GetDoor(nX, nY, ref door)`（`Envirnoment.cs:1241-1254`）：坐标**精确**匹配。
     #[must_use]
     pub fn get_door(&self, x: i32, y: i32) -> Option<MapDoor> {

@@ -22,6 +22,7 @@ pub mod guardlist;
 pub mod inbound;
 pub mod itemwire;
 pub mod magics;
+pub mod mapdoor;
 pub mod merchant;
 pub mod mongen;
 pub mod monitems;
