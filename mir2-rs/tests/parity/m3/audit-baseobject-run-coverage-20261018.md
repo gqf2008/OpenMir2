@@ -6,6 +6,7 @@
 - 方法：只读源码实读（`src/**`、`mir2-rs/crates/**`、`mir2-rs/bins/**`）+ 既有证据包复核；**未改 `src/**`、`sql/**`、`MirClient/`、`crates/{protocol,storage}/**`、`E:/MirServer/**`；未起服务、未占端口、未写库、未删文件**。
 - 引用纪律：**oracle 行号逐条实测**——本次修订在 `d3e09228e` 基线上用 `sed -n` 逐条重量，并由自检脚本（见 §6）对全文所有 `文件:起-止` 区间校验「起止在文件行数内 + 首/末行与描述对得上 + 函数体区间与花括号配对一致」；**Rust 侧只引符号/文件路径，不写 `:行号`**。
 - 判级：按 `AGENTS.md`「判据分级」；判不准一律按 **R**。
+- 状态回写（2026-10-18，`58da49071`）：**A01 / M11 / P03 / P04 已实现**（本审计是时点文档，正文行保留审计时的判定，此处统一标注最新状态）。另两处 oracle 订正：`BreakHolySeizeMode`（`AnimalObject.cs:330-334`）只置 `HolySeize=false` + `RefNameColor()`、**不复位** tick/interval；FireHit 到期实际在 `PlayObject.Message.cs:54-59`、TwinHit 在 `:60-64`。
 
 ---
 
@@ -241,7 +242,7 @@
 
 | ID | oracle（行/语义） | Rust 符号/文件 | 状态 | 可观测后果 | 级 |
 |---|---|---|---|---|---|
-| A01 | `AnimalObject.cs:142-149` `HolySeize` 到点 `BreakHolySeizeMode()` | `entity.rs` 有 `holy_seize*` 字段，`world.rs` 只写；**无到期清除**（`monai.rs` 仅在攻击命中时清） | 缺失 | 被定身的怪若无人攻击则**永久不动**（不 `Wondering`/不攻击）⇒ AI 帧与 RNG 流长期停摆 | R |
+| A01 | `AnimalObject.cs:142-149` `HolySeize` 到点 `BreakHolySeizeMode()` | `entity.rs` 有 `holy_seize*` 字段；**已实现（`58da49071`）**：`monai.rs::animal_run` 到期清除（严格 `>`） | 已实现 | 被定身的怪若无人攻击则**永久不动**（不 `Wondering`/不攻击）⇒ AI 帧与 RNG 流长期停摆 | R |
 | A02 | `AnimalObject.cs:114-140` `Operate`：`RM_STRUCK` / `RM_MAKEHOLYSEIZEMODE` | `monai.rs::animal_struck`（struck 已实现）；`world.rs` 直接写 holy 字段 | 部分 | struck 等价；定身消息的效果体在但到期缺失（见 A01） | R |
 | M01 | `MonsterObject.cs:253` 外层 `CanMove() && !FixedHideMode && !StoneMode` | `monai.rs::monster_run` + `can_move` | 已实现 | — | — |
 | M02 | `255-258` `Think()` 真 ⇒ `base.Run(); return` | `monai.rs::think` + `monster_run` 提前返回 | 已实现 | `DupMode` 的 `RandomByte(8)` 取数次序对齐；`CheckRoyalty` 跳过也对齐 | R |
@@ -253,7 +254,7 @@
 | M08 | `334-338` `Master.SlaveRelax` ⇒ `base.Run(); return` | 无 | 缺失 | 与 M06 同族；`SlaveRelax` 下 AI 应整段跳过 | R |
 | M09 | `339-349` `TargetX!=-1 ⇒ GotoTargetXY`，否则 `TargetCret==null ⇒ Wondering` | `monai.rs::goto_target_xy` / `wondering` | 已实现 | 取数次序见 monai 模块头（`Random(3)` 无条件、`Random(20)`→`Random(4)`） | R |
 | M10 | `352` `CheckRoyalty()` | `slave.rs::check_royalty`（各出口按 oracle 调/跳过） | 已实现 | — | R |
-| M11 | `353-356` `CrazyMode` 到点 `BreakCrazyMode()` | 无实体级 `crazy_mode` 状态（`magic_effect.rs` 只输出纯值，宿主不落字段） | 缺失 | **狂暴态永不进入**（`OpenCrazyMode` 落状态缺失）⇒ 攻速/伤害不会进入狂暴修正 | R |
+| M11 | `353-356` `CrazyMode` 到点 `BreakCrazyMode()` | **已实现（`58da49071`）**：`entity.rs` 新增实体级 `crazy_mode/tick/interval`，`monai.rs::crazy_mode_expiry` 接三处非提前返回出口 | 已实现 | **狂暴态永不进入**（`OpenCrazyMode` 落状态缺失）⇒ 攻速/伤害不会进入狂暴修正 | R |
 | M12 | `357` `base.Run()` | `monster_ai_tick` 在 `monster_run` 后调 `base_object_run_monster` | 已实现 | 所有出口都跑一次，与 oracle 同 | — |
 | M13 | `280` + `294-299` 每 actor `RunTick/RunTime` + `ProcessRunCount` 降频 | 无（全局 200ms） | 缺失 | 见 D04/D05：AI/`Think`/`CheckRoyalty` 评估频率 ~1.25×/~3.75×；`Wondering` 抽数 ≤2.5/s（oracle 可见怪 ~4/s，Rust 更慢） | R |
 
@@ -329,8 +330,8 @@ Rust 侧没有按 race 分派专用类的机制：`monster_ai_tick` 只把 `is_a
 |---|---|---|---|---|---|
 | P01 | `30-36` 交易取消 | `bins/game-svr/src/main.rs::drain_deal_tick` | 已实现 | 每 tick 跑一次（oracle 名义每 300ms）；抖动不改变结论 | L |
 | P02 | `37-51` 计费 `PayMentMode==3` | 无 | 不适用 | 生产配置非 3 | — |
-| P03 | `54-59` `FireHitSkill` 20s 过期 | `combat.rs` 有 `fire_hit_skill` 状态，无到期清除 | 缺失 | 烈火加成永不过期 ⇒ 后续伤害数值偏高 | R |
-| P04 | `60-64` `TwinHitSkill` 60s 过期 | `combat.rs` 有 `twin_hit_skill`，无到期清除 | 缺失 | 双龙加成不过期 | R |
+| P03 | `54-59` `FireHitSkill` 20s 过期 | **已实现（`58da49071`）**：`world.rs::expire_player_run_state` 到期清标志 + `SpiritsGone`/`+UFIR` 帧面 | 已实现 | 烈火加成永不过期 ⇒ 后续伤害数值偏高 | R |
+| P04 | `60-64` `TwinHitSkill` 60s 过期 | **已实现（`58da49071`）**：同上，`+UTWN` 短包 | 已实现 | 双龙加成不过期 | R |
 | P05 | `65-69` `IsTimeRecall` 延时回城 | 魔法系统部分（`script`/`world` 有回城技能） | 部分 | 延时回城时点/帧可能缺 | R |
 | P06 | `70-141` 药品恢复 | `bins/game-svr/src/recover.rs::recovery_tick` + `drain_recovery` | 已实现 | 消费节奏/Per* 重算对齐；`IncHealthSpellTick` 初值照 ctor | R |
 | P07 | `143-157` 20 个个人定时器 `@OnTimer` | 无 | 缺失 | 脚本定时器永不触发 ⇒ 任务/活动脚本失效 | R |
