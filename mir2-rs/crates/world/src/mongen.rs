@@ -47,6 +47,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::entity::Entity;
 use mir2_shared::hutil::{max_i32, round};
 use mir2_shared::rng::RandomNumber;
 
@@ -71,6 +72,70 @@ pub const MONSTER_GHOST_EXPIRE_MS: i32 = 5 * 60 * 1000;
 /// （`RandomByte(8)` 的 Dir → `MonGetRandomItems` 预算 → `Random(100)` 的 CoolEye → 地形移位）。
 pub type MonsterCreator<'a> =
     dyn FnMut(&mut RandomNumber, &str, i16, i16, i16, &str) -> Option<i32> + 'a;
+
+/// `CreateMonster`（`WorldServer.MonGen.cs:504-729`）里派生类构造函数设置的
+/// **非抽数类常量**（PR-2）——只写实体字段，**不抽随机数、不驱动任何 AI 行为**。
+///
+/// 类由 `MonsterInfo.Race` 决定（不是怪名：同一 race 的不同怪名共用同一个 C# 类），
+/// 与 oracle 在 `switch` 内 `new Xxx()` 同步执行构造函数的时机对齐。逐 race 出处
+/// （`src/M2Server/Monster/Monsters/*.cs` 实读）：
+///
+/// - 85 `StickMonster`：`StickMonster.cs:19-20` ⇒ `ComeOutValue=4`、`AttackRange=4`；
+/// - 107 `CentipedeKingMonster`：`CentipedeKingMonster.cs:14-15` ⇒ 4 / 6；
+/// - 132 `SandMobObject`：`SandMobObject.cs:11` ⇒ `ComeOutValue=8`（`AttackRange` 继承 4）；
+/// - 134 `BoneKingMonster`：`BoneKingMonster.cs:17` ⇒ `DangerLevel=5`；
+/// - 102 `ScultureKingMonster`：`ScultureKingMonster.cs:21` ⇒ `_mNDangerLevel=5`；
+/// - 133 `MagicMonObject` / 200 `ElectronicScolpionMon`：ctor `UseMagic=false`
+///   （`MagicMonObject.cs:15`、`ElectronicScolpionMon.cs:12`）；
+/// - 120 `SoccerBall`：`SoccerBall.cs:15` ⇒ `N550=0`；
+/// - 20 `ArcherPolice` / 112 `ArcherGuard`：`ArcherGuard.cs:17` ⇒ `GuardDirection=-1`；
+/// - 92 `CowKingMonster`：ctor `CowKingMonster.cs:20-24`（`JumpTime=now`、三个 Crazy 初值）
+///   + `Initialize()` `:35-36`（`oldHitTime=NextHitTime`、`oldWalkTime=WalkSpeed`）。
+///
+/// 表外 race 保持 [`Entity::new`] 的 C# 字段缺省（0/false）。`now` = oracle
+/// `HUtil32.GetTickCount()`（本骨架用 `World::clock_ms` 的确定性注入）。
+///
+/// **不落 `CowKingMonster.ctor` 的 `RushMode = true`**（`CowKingMonster.cs:21`）：
+/// `Entity.rush_mode` 已被 `RM_MAGSTRUCK` 消费（`BaseObject.Base.cs:620`），置位会改变行为，
+/// 超出 PR-2「零行为改动」；留待 MB-4 连 `Run` 一起接（登记）。
+pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
+    match race {
+        // `StickMonster` 基类 ctor（`StickMonster.cs:19-20`）。
+        85 => {
+            entity.come_out_value = 4;
+            entity.attack_range = 4;
+        }
+        // `CentipedeKingMonster` 覆盖（`CentipedeKingMonster.cs:14-15`）。
+        107 => {
+            entity.come_out_value = 4;
+            entity.attack_range = 6;
+        }
+        // `SandMobObject` 只覆盖 ComeOutValue（`SandMobObject.cs:11`；基类 AttackRange=4）。
+        132 => {
+            entity.come_out_value = 8;
+            entity.attack_range = 4;
+        }
+        // `BoneKingMonster.cs:17` / `ScultureKingMonster.cs:21`。
+        134 | 102 => entity.danger_level = 5,
+        // `MagicMonObject.cs:15` / `ElectronicScolpionMon.cs:12`：显式落 ctor 值
+        // （与字段缺省同值，保留以钉住“类 ctor 有此赋值”这一事实）。
+        133 | 200 => entity.use_magic = false,
+        // `SoccerBall.cs:15`。
+        120 => entity.n550 = 0,
+        // `ArcherGuard.cs:17`；`ArcherPolice`（race 20）继承。
+        20 | 112 => entity.guard_direction = -1,
+        // `CowKingMonster` ctor + `Initialize()`。
+        92 => {
+            entity.jump_time = now;
+            entity.crazy_count = 0;
+            entity.crazy_ready_mode = false;
+            entity.crazy_king_mode = false;
+            entity.old_hit_time = entity.ai.next_hit_time;
+            entity.old_walk_time = entity.ai.walk_speed;
+        }
+        _ => {}
+    }
+}
 
 /// `ProcessMonsters` 的 `canCreate` 判定：`!(map == null || (map.Flag.boNOHUMNOMON && map.HumCount <= 0))`。
 pub type MapCanCreate<'a> = dyn FnMut(&str) -> bool + 'a;
@@ -866,6 +931,64 @@ mod tests {
     use super::*;
     use crate::entity::Entity;
     use crate::world::World;
+
+    /// PR-2：装载钩子按 **race（= C# `new Xxx()` 的类）** 落非抽数类常量；
+    /// 表外 race 保持 `Entity::new` 的字段缺省。逐值出处见
+    /// [`apply_monster_class_constants`]。
+    ///
+    /// 牙②：把 race 107 的 `attack_range` 从 6 改成 4（照抄 `StickMonster` 基类）⇒ 本用例红。
+    #[test]
+    fn class_constants_match_oracle_ctors_per_race() {
+        let mk = |race: i16, now: i64| {
+            let mut e = Entity::new(0, "x", 0, 0);
+            apply_monster_class_constants(&mut e, race, now);
+            e
+        };
+
+        let stick = mk(85, 0);
+        assert_eq!((stick.come_out_value, stick.attack_range), (4, 4));
+        let centipede = mk(107, 0);
+        assert_eq!((centipede.come_out_value, centipede.attack_range), (4, 6));
+        let sand = mk(132, 0);
+        assert_eq!((sand.come_out_value, sand.attack_range), (8, 4));
+        assert_eq!(mk(134, 0).danger_level, 5, "BoneKing ctor");
+        assert_eq!(mk(102, 0).danger_level, 5, "ScultureKing ctor");
+        assert!(!mk(133, 0).use_magic, "MagicMonObject ctor");
+        assert!(!mk(200, 0).use_magic, "ElectronicScolpionMon ctor");
+        assert_eq!(mk(120, 0).n550, 0, "SoccerBall ctor");
+        assert_eq!(mk(20, 0).guard_direction, -1, "ArcherPolice ⇒ ArcherGuard");
+        assert_eq!(mk(112, 0).guard_direction, -1, "ArcherGuard ctor");
+
+        let cow = mk(92, 55_000);
+        assert_eq!(cow.jump_time, 55_000, "ctor JumpTime = GetTickCount()");
+        assert!(!cow.crazy_ready_mode, "ctor CrazyReadyMode=false");
+        assert!(!cow.crazy_king_mode, "ctor CrazyKingMode=false");
+        assert_eq!(cow.crazy_count, 0, "ctor CrazyCount=0");
+        assert_eq!((cow.crazy_ready, cow.crazy_time), (0, 0));
+        assert_eq!(
+            cow.old_hit_time, 2000,
+            "Initialize: oldHitTime = NextHitTime"
+        );
+        assert_eq!(
+            cow.old_walk_time, 1400,
+            "Initialize: oldWalkTime = WalkSpeed"
+        );
+        assert_eq!(cow.siege_lock_count, 0, "oracle 无持久字段（现算）");
+
+        let plain = mk(80, 0);
+        assert_eq!(
+            (
+                plain.come_out_value,
+                plain.attack_range,
+                plain.danger_level,
+                plain.n550,
+                plain.guard_direction,
+                plain.jump_time
+            ),
+            (0, 0, 0, 0, 0, 0),
+            "表外 race 不许被类常量污染"
+        );
+    }
 
     fn cfg() -> MonGenConfig {
         MonGenConfig::default()

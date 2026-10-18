@@ -782,6 +782,13 @@ impl MonsterSink for WorldMonsterSink<'_> {
             req.dir,
             req.cool_eye,
         )?;
+        // **PR-2**：`new Xxx()` 的**非抽数类常量**按 race 落到实体（oracle 构造函数位置；
+        // 类由 `MonsterInfo.Race` 决定，与怪名无关）。本写入不消费随机数，也不改 AI 行为；
+        // 逐 race 的 oracle 出处见 `apply_monster_class_constants` 的文档。
+        let now = self.world.clock_ms;
+        if let Some(e) = self.world.entities.get_mut(id) {
+            mir2_world::mongen::apply_monster_class_constants(e, req.race, now);
+        }
         // **C 第 ③ 片**：生成成功即登记怪物展示层。`MonsterList` 未命中时 oracle 的
         // `ApplyMonsterAbility` 不做任何事（`WorldServer.MonGen.cs:880-882`），`cert` 仍被构造；
         // 本仓缺表 ⇒ 无 feature 输入，保持不登记（与玩家的“无展示表 ⇒ 跳过”同口径）。
@@ -1744,6 +1751,96 @@ mod tests {
         assert_eq!(d.status, 0);
         assert_eq!(d.name_color, downlink::MONSTER_NAME_COLOR);
         assert_eq!(d.show_name, downlink::gbk("稻草人"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **PR-2**：`WorldMonsterSink::spawn_monster`（oracle `CreateMonster` 的落库端）必须把
+    /// race 对应的非抽数类常量落到实体——类由 `MonsterInfo.Race` 决定（不是怪名）。
+    ///
+    /// 牙③：删掉 sink 里的 `apply_monster_class_constants` 调用（或把 `req.race` 写死）⇒ 本用例红。
+    #[test]
+    fn world_monster_sink_applies_class_constants_by_race() {
+        let base = std::env::temp_dir().join(format!(
+            "gs-mongen-class-const-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&5_i16.to_le_bytes());
+        bytes[2..4].copy_from_slice(&5_i16.to_le_bytes());
+        bytes.resize(mir2_envir::HEADER_BYTES + 5 * 5 * mir2_envir::CELL_BYTES, 0);
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
+        let loader = MapLoader::new(base.clone(), "Map", "Envir");
+        let registry = MapRegistry::from_entries(
+            loader,
+            vec![mir2_envir::MapInfoEntry {
+                map_name: "0".to_string(),
+                map_file_name: "0".to_string(),
+                desc: String::new(),
+                server_index: 0,
+                flag: mir2_envir::MapInfoFlag::default(),
+            }],
+        );
+        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        world.clock_ms = 12_345;
+        // 表里给同一个 race 两个不同怪名：类常量只认 race，两者必须相同。
+        let table = MonsterTable::new(vec![
+            MonsterInfo {
+                name: "蜈蚣王A".to_string(),
+                race: 107,
+                ..MonsterInfo::default()
+            },
+            MonsterInfo {
+                name: "蜈蚣王B".to_string(),
+                race: 107,
+                ..MonsterInfo::default()
+            },
+            MonsterInfo {
+                name: "牛魔王".to_string(),
+                race: 92,
+                ..MonsterInfo::default()
+            },
+        ]);
+        let mut displays = downlink::DisplayTable::new();
+        let mut spawn = |world: &mut mir2_world::World, name: &str, race: i16| {
+            let req = MonsterSpawnRequest {
+                map_name: "0".to_string(),
+                mon_name: name.to_string(),
+                x: 2,
+                y: 2,
+                race,
+                dir: 0,
+                cool_eye: false,
+                gold: 0,
+                drop_items: Vec::new(),
+                ctor: MonsterCtorDraws::default(),
+            };
+            WorldMonsterSink {
+                world,
+                registry: &registry,
+                table: &table,
+                displays: &mut displays,
+            }
+            .spawn_monster(&req)
+            .expect("生成成功")
+        };
+
+        let a = spawn(&mut world, "蜈蚣王A", 107);
+        let b = spawn(&mut world, "蜈蚣王B", 107);
+        for id in [a, b] {
+            let e = world.entities.get(id).expect("怪物在仓库");
+            assert_eq!(e.come_out_value, 4, "CentipedeKing ComeOutValue=4");
+            assert_eq!(
+                e.attack_range, 6,
+                "CentipedeKing AttackRange=6（非 Stick 基类 4）"
+            );
+        }
+        let cow = spawn(&mut world, "牛魔王", 92);
+        let c = world.entities.get(cow).expect("牛魔王在仓库");
+        assert_eq!(c.jump_time, 12_345, "ctor JumpTime = GetTickCount()");
+        assert_eq!(c.old_hit_time, 2000, "Initialize: oldHitTime = NextHitTime");
+        assert_eq!(c.old_walk_time, 1400, "Initialize: oldWalkTime = WalkSpeed");
         let _ = std::fs::remove_dir_all(&base);
     }
 

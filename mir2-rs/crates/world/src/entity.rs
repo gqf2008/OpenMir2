@@ -681,6 +681,77 @@ pub struct Entity {
     pub death_settled: bool,
     /// 构造函数链抽出的随机数结果（见 [`MonsterCtorDraws`]）；玩家/非 MonGen 路径实体为缺省全零。
     pub ctor_draws: MonsterCtorDraws,
+    /// C# `StickMonster.ComeOutValue`（`StickMonster.cs:10`；ctor `:19` 置 4）。
+    ///
+    /// **类常量**：只有 `StickMonster` 家族有该字段（`CentipedeKingMonster.cs:14` = 4、
+    /// `SandMobObject.cs:11` = 8）。类由 `MonsterInfo.Race` 决定（`WorldServer.MonGen.cs:504-729`
+    /// 的 `new Xxx()`），装载钩子见 [`crate::mongen::apply_monster_class_constants`]。
+    /// `Entity` 是各 C# 类的公共载体，非该家族的怪保持 C# 字段缺省 0。
+    ///
+    /// 消费方：MB-1（`StickMonster.Run` R38）、MB-3（`CentipedeKingMonster.Run` R07）、
+    /// MB-8（`SandMobObject.Run` R33）。
+    pub come_out_value: i32,
+    /// C# `StickMonster.AttackRange`（`StickMonster.cs:11`；ctor `:20` 置 4；
+    /// `CentipedeKingMonster.cs:15` 置 6）。缺省 0（非 `StickMonster` 家族无此字段）。
+    ///
+    /// 消费方：MB-1（R38）、MB-3（R07）、MB-8（R33）。
+    pub attack_range: i32,
+    /// C# `MagicMonObject.UseMagic`（`MagicMonObject.cs:10`，ctor `:15` = `false`）/
+    /// `ElectronicScolpionMon.UseMagic`（`ElectronicScolpionMon.cs:7`，ctor `:12` = `false`）。
+    /// 运行期由各自 `Run` 按血量改写（`MagicMonObject.cs:29/33`、`ElectronicScolpionMon.cs:39/43`）。
+    ///
+    /// 消费方：MB-6（R25 / R14）。
+    pub use_magic: bool,
+    /// C# `BoneKingMonster.DangerLevel`（`short`，`BoneKingMonster.cs:9`；ctor `:17` = 5）/
+    /// `ScultureKingMonster._mNDangerLevel`（`int`，`ScultureKingMonster.cs:11`；ctor `:21` = 5）。
+    /// 装载后按类置 5；运行期递减/回满（`BoneKingMonster.cs:56-63`、`ScultureKingMonster.cs:94-101`）。
+    ///
+    /// 消费方：MB-7（BoneKing R05）、MB-3（ScultureKing R34）。
+    pub danger_level: i32,
+    /// C# `SoccerBall.N550`（`SoccerBall.cs:9`；ctor `:15` = 0）。
+    ///
+    /// 消费方：MB-8（SoccerBall R36；`Struck` `:83` 写、`Run` `:24/:70` 读写）。
+    pub n550: i32,
+    /// C# `GuardUnit.GuardDirection`（`sbyte`，`GuardUnit.cs:16`，无显式初值 ⇒ 0）；
+    /// `ArcherGuard` ctor `ArcherGuard.cs:17` 置 **-1**（`ArcherPolice` 继承）。
+    /// 运行期城堡守卫由 `UserCastle.cs:187` 改 3（未建模，登记）。
+    ///
+    /// 消费方：MB-3（ArcherGuard R02）。
+    pub guard_direction: i8,
+    /// **oracle 无持久字段**：`CowKingMonster.SiegeLockCount()` 是 `Run` 内每次现算的
+    /// 「3×3 邻域不可走格数」（`CowKingMonster.cs:96-118`，`>=5` 门在 `:47`）。
+    ///
+    /// 本字段是 PR-2 按规划落地的**缓存/暂存槽**（无写入点、无读取点 ⇒ 零行为改动）；
+    /// 缺省 0 与 C# `int` 字段缺省一致。MB-4 若选择缓存现算结果再用，可写这里；若逐次现算，
+    /// 本字段保持 0 即可。
+    ///
+    /// 消费方：MB-4（CowKing R10）。
+    pub siege_lock_count: i32,
+    /// C# `CowKingMonster` 的 8 个私有字段（`CowKingMonster.cs:8-15`）——`Run`（`:40-94`）
+    /// 的跳跃/狂暴状态。缺省 = C# 字段缺省（`int`/`bool` 全 0/false），
+    /// ctor（`:17-25`）与 `Initialize()`（`:33-38`）的赋值由装载钩子落定。
+    ///
+    /// **勿与 [`AnimalState::crazy_mode`] 混淆**：后者是 `MonsterObject.CrazyMode`
+    /// （`OpenCrazyMode` 的通用狂暴），本组是 CowKing 专用状态机。
+    ///
+    /// 消费方：MB-4（R10）。
+    ///
+    /// `JumpTime`（`:8`；ctor `:20` = `GetTickCount()`）。
+    pub jump_time: i64,
+    /// `CrazyReadyMode`（`CowKingMonster.cs:9`；ctor `:23` = false）。
+    pub crazy_ready_mode: bool,
+    /// `CrazyKingMode`（`CowKingMonster.cs:10`；ctor `:24` = false）。
+    pub crazy_king_mode: bool,
+    /// `CrazyCount`（`CowKingMonster.cs:11`；ctor `:22` = 0）。
+    pub crazy_count: i32,
+    /// `CrazyReady`（`CowKingMonster.cs:12`，tick；字段缺省 0，进入 ready 时写）。
+    pub crazy_ready: i64,
+    /// `CrazyTime`（`CowKingMonster.cs:13`，tick；字段缺省 0，进入 king 时写）。
+    pub crazy_time: i64,
+    /// `oldHitTime`（`CowKingMonster.cs:14`，tick；字段缺省 0，`Initialize()` `:35` = `NextHitTime`）。
+    pub old_hit_time: i64,
+    /// `oldWalkTime`（`CowKingMonster.cs:15`，tick；字段缺省 0，`Initialize()` `:36` = `WalkSpeed`）。
+    pub old_walk_time: i64,
     /// 怪物/动物 AI 状态（`AnimalObject`/`MonsterObject` 字段子集；玩家不用，保持默认）。
     pub ai: AnimalState,
     /// 商人状态（`Merchant` 字段子集，M3⑤-实现 2 第①片）。`Some(_)` ⇒ 本实体是交易商人：
@@ -836,6 +907,26 @@ impl Entity {
             drop_items: Vec::new(),
             death_settled: false,
             ctor_draws: MonsterCtorDraws::default(),
+            // 专用怪 ctor 类常量（PR-2）：`Entity` 是 C# 各怪物类的公共载体，这里落
+            // **C# 字段缺省**（`int`/`sbyte` 0、`bool` false）；派生类 ctor 的实际常量
+            // （StickMonster 4/4、CentipedeKing 4/6、SandMob 8/4、BoneKing/ScultureKing 5、
+            // ArcherGuard -1 等）由装载钩子 `crate::mongen::apply_monster_class_constants`
+            // 按 race 覆盖（oracle `new Xxx()` 的位置）。无抽数。
+            come_out_value: 0,
+            attack_range: 0,
+            use_magic: false,
+            danger_level: 0,
+            n550: 0,
+            guard_direction: 0,
+            siege_lock_count: 0,
+            jump_time: 0,
+            crazy_ready_mode: false,
+            crazy_king_mode: false,
+            crazy_count: 0,
+            crazy_ready: 0,
+            crazy_time: 0,
+            old_hit_time: 0,
+            old_walk_time: 0,
             // `PlayObject` ctor（`PlayObject.cs:899-901`）在 `BaseObject` ctor 之后立即覆盖
             // `SearchTime = 1000` 与 `SearchTick = GetTickCount()`；本函数是玩家的 ctor
             // 等价物（`race` 缺省 = `ActorRace.Play`），故这里落 1000（常量、不抽数）。
@@ -979,6 +1070,31 @@ impl EntityStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// PR-2：`Entity::new` 是 C# 各怪物类的公共载体——新落的专用怪类常量必须是
+    /// **C# 字段缺省**（`int`/`sbyte` 0、`bool` false）；派生类 ctor 的实际常量由装载钩子
+    /// （[`crate::mongen::apply_monster_class_constants`]）按 race 覆盖。
+    ///
+    /// 牙①：把 `attack_range: 0` 改成 `4`（把 `StickMonster` ctor 常量误当公共缺省）⇒ 本用例红。
+    #[test]
+    fn new_entity_class_constants_default_to_csharp_field_defaults() {
+        let e = Entity::new(1, "x", 0, 0);
+        assert_eq!(e.come_out_value, 0, "ComeOutValue int 缺省");
+        assert_eq!(e.attack_range, 0, "AttackRange int 缺省");
+        assert!(!e.use_magic, "UseMagic bool 缺省");
+        assert_eq!(e.danger_level, 0, "DangerLevel short/int 缺省");
+        assert_eq!(e.n550, 0, "N550 int 缺省");
+        assert_eq!(e.guard_direction, 0, "GuardDirection sbyte 缺省");
+        assert_eq!(e.siege_lock_count, 0, "SiegeLockCount 缓存槽缺省");
+        assert_eq!(e.jump_time, 0, "JumpTime int 缺省");
+        assert!(!e.crazy_ready_mode, "CrazyReadyMode bool 缺省");
+        assert!(!e.crazy_king_mode, "CrazyKingMode bool 缺省");
+        assert_eq!(e.crazy_count, 0, "CrazyCount int 缺省");
+        assert_eq!(e.crazy_ready, 0, "CrazyReady int 缺省");
+        assert_eq!(e.crazy_time, 0, "CrazyTime int 缺省");
+        assert_eq!(e.old_hit_time, 0, "oldHitTime int 缺省");
+        assert_eq!(e.old_walk_time, 0, "oldWalkTime int 缺省");
+    }
 
     #[test]
     fn ids_are_stable_and_order_is_slot_order() {
