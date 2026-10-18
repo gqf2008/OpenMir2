@@ -190,3 +190,10 @@ magic_effect	csharp	PlayObject\.StruckDamage@PlayObject\.cs:	src/M2Server/Player
 magic_effect	rust	crates/world/src/combat\.rs:802$	crates/world/src/combat.rs:802	`get_mag_struck_damage` 的 `Random(|Hi-Lo|+1)`（P3-B2；精确行 = 漂移信号）
 magic_effect	rust	crates/world/src/combat\.rs:822$	crates/world/src/combat.rs:822	`struck_damage_durability` 的 `Random(10)`（P3-B2 首次触达；精确行）
 magic_effect	rust	crates/world/src/combat\.rs:830$	crates/world/src/combat.rs:830	`struck_damage_durability` 的逐格 `Random(8)`（P3-B2 首次触达；精确行）
+
+# ---- 2026-10-18 追加（卡 openmir2-run-gap-monster-master-follow）--------------------------
+# `MonsterObject.Run` 的 Master 跟随段（`MonsterObject.cs:320`）在异图 / 超距时调用
+# `BaseObject.SpaceMove`，其落点移位环复用 `crates/world/src/space_move.rs` 的
+# `space_move_get_rand_xy` ⇒ **取数站点不变、仍归 `space_move` 组**，本卡不新增站点/组。
+# C# 侧的站点仍是 `BaseObject.SpaceMoveGetRandXY@BaseObject.cs:1040`（调用者由
+# `RecallSlave`/`MapRandomMove` 增加 `MonsterObject.Run`，同一 oracle 函数 ⇒ 同组）。

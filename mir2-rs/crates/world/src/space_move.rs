@@ -12,6 +12,9 @@
 
 use mir2_shared::rng::RandomSource;
 
+use crate::map::CellType;
+use crate::world::World;
+
 /// `BaseObject.SpaceMoveGetRandXY`（`BaseObject.cs:1040-1096`）：从 `(x, y)` 起找可走格；
 /// 不可走时**按 oracle 的分段步进/随机跳点**推进，最多 201 次尝试（`n14 >= 201` 即放弃）。
 ///
@@ -62,4 +65,104 @@ where
         }
     }
     None
+}
+
+/// `BaseObject.SpaceMove(sMap, nX, nY, nInt)`（`BaseObject.cs:1103-1180`）的**同服分支**。
+///
+/// 验收形态是「单 GameSvr 单区单 World」⇒ `M2Share.ServerIndex == envir.ServerIndex` 恒真，
+/// 只实现这一支；跨服支（`ChangeSpaceMove`/`KickException`）不建模（登记）。
+///
+/// 逐句对照：
+/// 1. `oldEnvir = Envir; nOldX = CurrX; nOldY = CurrY;`（`:1110-1112`）；
+/// 2. `Envir.DeleteFromMap(CurrX, CurrY, CellType, ActorId, this)` ⇒ [`World::disappear_a`]（只摘格）；
+/// 3. `Envir = envir; MapName = ...; CurrX = nX; CurrY = nY;`（`:1118-1121`）——
+///    **在取数之前**就写落地图/坐标（oracle 同序）；
+/// 4. `SpaceMoveGetRandXY(Envir, ref tempX, ref tempY)`（`:1128`）⇒
+///    [`space_move_get_rand_xy`]（**唯一取数点**；站点仍在本文件 ⇒ `space_move` 组，
+///    与 `BaseObject.SpaceMoveGetRandXY@BaseObject.cs:1040` 对齐）；
+/// 5. 成功 ⇒ 写临时坐标、`AddMapObject`（返回 bool 在 oracle 被忽略）、`SpaceMoved = true`；
+///    失败（201 轮仍不可走）⇒ 回滚 `Envir/CurrX/CurrY` 并 `AddMapObject` 旧格（`:1147-1153`）；
+/// 6. `OnEnvirnomentChanged()`（`:1173`）：`CanReAlive && MonGen.Envir != Envir` ⇒
+///    `CanReAlive = false; MonGen = null; ActiveCount--`（`BaseObject.cs:2747-2760`）。
+///
+/// **登记（未建模）**：
+/// - 出帧面：`SendMsg(RM_CLEAROBJECTS/RM_CHANGEMAP)` + `SendRefMsg(RM_SPACEMOVE_SHOW2|SHOW)`
+///   （怪物无会话；AOI 由下一 tick 视野差集表现，见 `World::disappear_a` 同款登记）；
+/// - 跨服支；
+/// - `OnEnvirnomentChanged` 的 `MonGen.ActiveCount--`：`MonGenState` 归宿主持有、不在 `World` 内
+///   ⇒ 只复刻实体侧可见效果（`can_re_alive=false; mon_gen=None`）。`mon_gen.is_some()` 期间实体
+///   恒在其出生的 MonGen 图上（首次异图移动即清位）⇒ `old_map_id != dest_map_id` 是
+///   `MonGen.Envir != Envir` 的等价判据。
+///
+/// 返回 `SpaceMoved`（落点成功）；`false` 表示已回滚到调用前的地图/坐标。
+pub(crate) fn monster_space_move(
+    world: &mut World,
+    actor_id: i32,
+    dest_map_id: usize,
+    n_x: i32,
+    n_y: i32,
+) -> bool {
+    let Some(dest_map) = world.maps.get(dest_map_id) else {
+        return false;
+    };
+    let (width, height) = (dest_map.width, dest_map.height);
+    let Some((old_map_id, old_x, old_y)) =
+        world.entities.get(actor_id).map(|e| (e.map_id, e.x, e.y))
+    else {
+        return false;
+    };
+
+    // 2. 摘旧格（oracle `DeleteFromMap`）。
+    world.disappear_a(actor_id);
+    // 3. 先写目标图/目标格（oracle 在 `SpaceMoveGetRandXY` 之前写 `CurrX/CurrY`）。
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.map_id = dest_map_id;
+        e.x = n_x;
+        e.y = n_y;
+    }
+
+    // 4. `SpaceMoveGetRandXY(Envir, ref tempX, ref tempY)`——取数点。
+    let found = {
+        let map = &world.maps[dest_map_id];
+        space_move_get_rand_xy(&mut world.rng, width, height, n_x, n_y, |x, y| {
+            map.get_cell_info(x, y).1
+        })
+    };
+
+    let now = world.clock_ms;
+    let space_moved = found.is_some();
+    let added = match found {
+        Some((x, y)) => {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.x = x;
+                e.y = y;
+            }
+            // 5-success. `AddMapObject`（`CellType = Monster`，`AnimalObject.cs:86`）。
+            world.maps[dest_map_id].add_map_object(x, y, CellType::Monster, actor_id, now)
+        }
+        None => {
+            // 5-fail. 回滚 `Envir/CurrX/CurrY` 并把对象重新登记到旧格（`BaseObject.cs:1147-1153`）。
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.map_id = old_map_id;
+                e.x = old_x;
+                e.y = old_y;
+            }
+            world.maps[old_map_id].add_map_object(old_x, old_y, CellType::Monster, actor_id, now)
+        }
+    };
+    // 本仓内部状态位（oracle `AddToMaped` 不在此处语义内）；保持「已落格」不变量。
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.add_to_mapped = added;
+    }
+
+    // 6. `OnEnvirnomentChanged()`（实体侧可见效果；ActiveCount 登记未建模）。
+    if space_moved && old_map_id != dest_map_id {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            if e.can_re_alive && e.mon_gen.is_some() {
+                e.can_re_alive = false;
+                e.mon_gen = None;
+            }
+        }
+    }
+    space_moved
 }

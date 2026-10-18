@@ -185,8 +185,10 @@ pub struct MonsterCtorDraws {
 /// - `CoolEye`（`BaseObject`，`CreateMonster` `:745-747` 按 `Random(100) < CoolEyeCode` 置位）。
 ///
 /// **本片（C 第 ① 片）不建模**：`Mission`/`MissionX/MissionY`（任务怪路径）、`RunAwayMode` 的
-/// 触发点（`RunAway`/`BeeQueen` 等专用怪）、`Master` 宝宝跟随之类；默认值下这些分支恒不命中
+/// 触发点（`RunAway`/`BeeQueen` 等专用怪）；默认值下这些分支恒不命中
 /// （与「普通 `MonsterObject`、无 master、无任务」的 oracle 执行路径一致，见 `monai` 模块头）。
+/// `Master` 宝宝跟随 / `SlaveRelax` 已由卡 `openmir2-run-gap-monster-master-follow` 接入
+/// （见 [`crate::monai::monster_run`] 与 `Entity::slave_relax`）。
 #[derive(Clone, Debug)]
 pub struct AnimalState {
     /// `BaseObject.Dir`。
@@ -365,6 +367,13 @@ pub struct Entity {
     pub race: u8,
     /// C# `Master`（宝宝的主人）
     pub master: Option<i32>,
+    /// C# `BaseObject.SlaveRelax`（`BaseObject.cs:145`）——主人对宝宝的「放松」标志。
+    ///
+    /// `MonsterObject.Run` 的两处消费（`MonsterObject.cs:320/334`）：
+    /// ① 为真时**不**因异图/超距而 `SpaceMove` 追随；② 为真时在 `GotoTargetXY` 之前
+    /// `base.Run(); return;` ⇒ 宝宝**停在原地**（不游走/不攻击）。oracle 源码无写入点
+    /// （属性缺省 `false`，由外部命令/插件置位）；本骨架同样缺省 `false`，只在显式赋值时生效。
+    pub slave_relax: bool,
     /// C# `BaseObject.SlaveList`（`BaseObject.cs:141`，懒建于 `:1183`）——主人的宝宝列表（actor id，保序）。
     ///
     /// 归 `openmir2-m3-pet-slave-summon`（⑨-2）建立、`openmir2-m3-pet-slave-lifecycle`（⑨-3）清理。
@@ -670,6 +679,7 @@ impl Entity {
             view_range: 5, // BaseObject.cs:383
             race: ACTOR_RACE_PLAY,
             master: None,
+            slave_relax: false,
             slave_list: Vec::new(),
             is_slave: false,
             slave_exp_level: 0,

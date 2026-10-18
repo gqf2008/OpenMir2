@@ -34,8 +34,9 @@
 //!     末尾的 `base.Run()`，`MonsterObject.cs:255/359`）；
 //!   - [`crate::world::World`]：`HP==0 ⇒ Die()`（`:70-73`，由 `settle_deaths` 死亡结算等价）、
 //!     `LastHiter` 30s / `ExpHiter` 6s 过期（`:119-132`，由 `expire_hitters`）。
-//! - **仍未建模**（登记）：`SuperMan`（`:35-38`）、`Master` 跟随/`SlaveRelax` 分支（`:133-215`）、
-//!   `ShowHp`/`VerifyTick` 的 `ShowHp` 支（`:217-256`；`VerifyTick` 已接）。死亡支
+//! - **仍未建模**（登记）：`SuperMan`（`:35-38`）、`BaseObject.Run` 的 Master 变色支
+//!   （`:133-215`，与 `MonsterObject.Run` 的跟随支不同）、`ShowHp`/`VerifyTick` 的 `ShowHp` 支
+//!   （`:217-256`；`VerifyTick` 已接）。死亡支
 //!   `MakeGhost`（`:85-101`）已由本片接上（[`make_ghost`]，门见
 //!   [`crate::mongen::monster_death_gate`]）。**⑨-3 已接**：`CheckRoyalty()`（`MonsterObject.cs:352`）
 //!   在 [`monster_run`] 的两个提前返回口之外复刻调用；宝宝列表清表（`BaseObject.Base.cs:208-217`）
@@ -48,8 +49,12 @@
 //!   `Entity.ctor_draws`（[`MonsterCtorDraws`]），AI 在宿主接线时只**消费**（
 //!   [`AnimalState::seed_from_spawn`](crate::entity::AnimalState::seed_from_spawn)），**不重抽**。
 //! - **专用怪子类**（`ATMonster`/`BeeQueen`/... 在各自 `Run()` 里调 `SearchTarget`）与
-//!   `Mission`/`RunAway`/`Master`/`CheckRoyalty` 分支**未建模**：默认值下它们
-//!   恒不命中，与「普通 `MonsterObject`、无 master、无任务」的 oracle 执行路径一致。
+//!   `Mission`/`RunAway` **触发点**未建模：默认值下它们恒不命中，与「普通 `MonsterObject`、
+//!   无任务」的 oracle 执行路径一致。
+//! - **已接（卡 `openmir2-run-gap-monster-master-follow`）**：`MonsterObject.Run` 的
+//!   `Master` 跟随段（`MonsterObject.cs:299-329`）、`Master.SlaveRelax` 早退（`:333-338`）
+//!   与 `RunAwayTime` 到期（`:329-345`）。跟随段在 `TargetCret == null` 支内按 oracle 同点接入
+//!   （[`master_get_back_position`] / `Envir.GetMovingObject` 占位回退 / `SpaceMove` 同服分支）。
 //! - **`CrazyMode`（`MonsterObject.cs:49-57/353-356/465-480`）**：状态与到期已建模
 //!   （[`open_crazy_mode`]/[`break_crazy_mode`]/[`crazy_mode_expiry`]）；生产写入点 =
 //!   20 诱惑之光的 `OpenCrazyMode(Random(20)+10)`（`MagicManager.cs:797/805`，抽数先由
@@ -666,7 +671,48 @@ pub fn animal_run(world: &mut World, actor_id: i32) {
     }
 }
 
-/// `MonsterObject.Run`（`MonsterObject.cs:251-360`）的**普通怪路径**（无 master/任务/逃跑/狂暴）。
+/// `BaseObject.GetBackPosition(ref nX, ref nY)`（`BaseObject.cs:1878-1927`）：按**主人**的
+/// `Dir` 取身后一格，并在主人所在地图的 `Width/Height` 边界内夹取。
+///
+/// 方向语义照 `Direction`（`src/OpenMir2/Enums/Direction.cs`）：
+/// `Up=0` ⇒ `nY++`、`Down=4` ⇒ `nY--`、`Left=6` ⇒ `nX++`、`Right=2` ⇒ `nX--`；
+/// 对角方向**两轴同时**满足边界才一起动（oracle 的 `&&` 门，照抄）。
+/// **无随机数、无移动**。主人不在实体表（悬空 id）⇒ `None`（等价 oracle 的 `Master == null`）。
+fn master_get_back_position(world: &World, master_id: i32) -> Option<(i32, i32)> {
+    let m = world.entities.get(master_id)?;
+    let (mut n_x, mut n_y) = (m.x, m.y);
+    let (w, h) = world
+        .maps
+        .get(m.map_id)
+        .map_or((0, 0), |map| (map.width, map.height));
+    match m.ai.dir {
+        DIR_UP if n_y < h - 1 => n_y += 1,
+        DIR_DOWN if n_y > 0 => n_y -= 1,
+        DIR_LEFT if n_x < w - 1 => n_x += 1,
+        DIR_RIGHT if n_x > 0 => n_x -= 1,
+        DIR_UP_LEFT if n_x < w - 1 && n_y < h - 1 => {
+            n_x += 1;
+            n_y += 1;
+        }
+        DIR_UP_RIGHT if n_x < w - 1 && n_y > 0 => {
+            n_x -= 1;
+            n_y += 1;
+        }
+        DIR_DOWN_LEFT if n_x > 0 && n_y < h - 1 => {
+            n_x += 1;
+            n_y -= 1;
+        }
+        DIR_DOWN_RIGHT if n_x > 0 && n_y > 0 => {
+            n_x -= 1;
+            n_y -= 1;
+        }
+        _ => {}
+    }
+    Some((n_x, n_y))
+}
+
+/// `MonsterObject.Run`（`MonsterObject.cs:251-360`）的**普通怪路径**（任务/逃跑触发点未建模；
+/// `Master` 跟随 / `SlaveRelax` 已接）。
 ///
 /// 只做 AI；`BaseObject.Run` 的恢复/死亡/过期段由 `World` 统一处理（见模块头）。
 pub fn monster_run(world: &mut World, actor_id: i32) {
@@ -767,6 +813,72 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
                 }
             }
         }
+        // `MonsterObject.cs:299-329`：`Master != null` 的跟随段（仍在 `!RunAwayMode` 内）。
+        //
+        // oracle 逐句：
+        //   1. `TargetCret == null` ⇒ `Master.GetBackPosition(ref nX, ref nY)`；若
+        //      `|TargetX-nX| > 1 || |TargetY-nY| > 1` ⇒ `TargetX/TargetY = nX/nY`；
+        //      再若 `|CurrX-nX| <= 2 && |CurrY-nY| <= 2` 且该格 `GetMovingObject(nX,nY,true) != null`
+        //      ⇒ `TargetX/TargetY = CurrX/CurrY`（身后格被占时原地待命）。
+        //   2. `!Master.SlaveRelax && (Envir != Master.Envir || |Δx| > 20 || |Δy| > 20)`
+        //      ⇒ `SpaceMove(Master.Envir.MapName, TargetX, TargetY, 1)`。
+        // `TargetCret` 可能在上一段 `AttackTarget()` 里被 `DelTargetCreat()` 清空 ⇒ **重新读**。
+        let master_id = world.entities.get(actor_id).and_then(|e| e.master);
+        if let Some(master_id) = master_id {
+            let has_target = world
+                .entities
+                .get(actor_id)
+                .is_some_and(|e| e.ai.target_creature.is_some());
+            if !has_target {
+                if let Some((n_x, n_y)) = master_get_back_position(world, master_id) {
+                    let (tx, ty) = world
+                        .entities
+                        .get(actor_id)
+                        .map_or((-1, 0), |e| (e.ai.target_x, e.ai.target_y));
+                    if (tx - n_x).abs() > 1 || (ty - n_y).abs() > 1 {
+                        let (cx, cy, map_id) = world
+                            .entities
+                            .get(actor_id)
+                            .map_or((0, 0, 0), |e| (e.x, e.y, e.map_id));
+                        let mut new_x = n_x;
+                        let mut new_y = n_y;
+                        if (cx - n_x).abs() <= 2 && (cy - n_y).abs() <= 2 {
+                            // `Envir.GetMovingObject(nX, nY, true)`（`Envirnoment.cs:1203`）。
+                            // 本仓 [`World::moving_object_at`] 是其逐行移植（含 `!Ghost`/`!Death`
+                            // 门）；oracle 的 `CastleDoor.HoldPlace` 特例未建模（登记，见报告）。
+                            if world.moving_object_at(map_id, n_x, n_y, true).is_some() {
+                                new_x = cx;
+                                new_y = cy;
+                            }
+                        }
+                        if let Some(e) = world.entities.get_mut(actor_id) {
+                            e.ai.target_x = new_x;
+                            e.ai.target_y = new_y;
+                        }
+                    }
+                }
+            }
+            // `SpaceMove` 的目标图 = `Master.Envir.MapName`（本仓以 `map_id` 表示图）。
+            // oracle 的该门在 `if (TargetCret == null)` **之外** ⇒ 有目标时同样会追随。
+            // `SlaveRelax` 为真时**不**追随（但上面的 TargetX/TargetY 仍照 oracle 更新）。
+            let master = world
+                .entities
+                .get(master_id)
+                .map(|m| (m.map_id, m.x, m.y, m.slave_relax));
+            let own = world
+                .entities
+                .get(actor_id)
+                .map(|e| (e.map_id, e.x, e.y, e.ai.target_x, e.ai.target_y));
+            if let (Some((m_map, m_x, m_y, m_relax)), Some((s_map, s_x, s_y, tx, ty))) =
+                (master, own)
+            {
+                if !m_relax && (s_map != m_map || (s_x - m_x).abs() > 20 || (s_y - m_y).abs() > 20)
+                {
+                    // `SpaceMove(..., nInt=1)` ⇒ `RM_SPACEMOVE_SHOW2`（怪物无会话；出帧面登记）。
+                    let _ = crate::space_move::monster_space_move(world, actor_id, m_map, tx, ty);
+                }
+            }
+        }
     } else {
         let expired = world.entities.get(actor_id).is_some_and(|e| {
             e.ai.run_away_time > 0 && (now - e.ai.run_away_start) > e.ai.run_away_time
@@ -778,7 +890,19 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
             }
         }
     }
-    // `Master` 跟随/`SlaveRelax` 分支未建模（普通怪 master == null ⇒ 恒不命中）。
+    // `MonsterObject.cs:333-338`：`Master != null && Master.SlaveRelax` ⇒ `base.Run(); return;`
+    // —— **跳过** `GotoTargetXY`/`Wondering`、`CheckRoyalty()` 与 `CrazyMode` 到期。
+    // 本骨架的 `base.Run()` 由 [`monster_ai_tick`] 在 [`monster_run`] 之后统一调用
+    // （`animal_run` + `base_object_run_monster`），故这里只需提前返回。
+    let slave_relax = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.master)
+        .and_then(|m| world.entities.get(m))
+        .is_some_and(|m| m.slave_relax);
+    if slave_relax {
+        return;
+    }
     if world
         .entities
         .get(actor_id)
@@ -796,8 +920,7 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
     }
     // `MonsterObject.Run` 尾的 `CheckRoyalty()`（`MonsterObject.cs:352`）。
     // 注：oracle 的 `AttackTarget()` 命中支（`:277-283`）与 `Master.SlaveRelax` 支（`:333-338`）
-    // 会 `base.Run(); return;` 跳过本调用；本骨架未建模 `Master.SlaveRelax` 分支
-    // （见模块头「未建模」），攻击支的提前返回保持跳过（与 oracle 同）。
+    // 会 `base.Run(); return;` 跳过本调用；两条支都已在上面提前返回（与 oracle 同）。
     crate::slave::check_royalty(world, actor_id);
     // `MonsterObject.cs:353-356`：CrazyMode 到期（在 `CheckRoyalty()` 之后、`base.Run()` 之前）。
     crazy_mode_expiry(world, actor_id);
@@ -826,7 +949,7 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
 /// **未建模（登记，见模块头/证据）**：`SuperMan`（`:35-38`）、`HP == 0 ⇒ Die()`（`:70-73`，
 /// 由 [`crate::world::World`] 的 `settle_deaths` 在同一 tick 的死亡结算里等价处理；本段的恢复
 /// 只增 HP、体力点段有 `HP > 1` 门⇒此处 `HP == 0` 不可达）、`MakeGhost`（`:86-101`，需
-/// `MonGen.ZenTime`/`Config.MakeGhostTime`）、`Master` 跟随/`SlaveRelax`（`:133-215`）、
+/// `MonGen.ZenTime`/`Config.MakeGhostTime`）、`BaseObject.Run` 的 Master 变色支（`:133-215`）、
 /// `ShowHp`/`VerifyTick`（`:217-256`）。**⑨-3 已接**：宝宝列表清表（`:208-217`）。
 ///
 /// 锚点复核于 2026-10-13。
@@ -2256,5 +2379,430 @@ mod tests {
         // `tick()` 先推进时钟（+200ms）再结算 ⇒ `DeathTick` = 结算时刻。
         assert_eq!(e.death_tick, world.clock_ms);
         assert_eq!(e.death_tick, 12_545);
+    }
+    // ==================================================================================
+    // 卡 `openmir2-run-gap-monster-master-follow`（oracle `MonsterObject.cs:299-350`）
+    // ==================================================================================
+
+    /// 进入 `monster_run` 的公共前置：把「走路到点 / Think 到点」的计时器压到会通过的值，
+    /// 保证测试观测到的是跟随/逃跑段而不是外层门。
+    fn ready(world: &mut World, id: i32, now: i64) {
+        let e = world.entities.get_mut(id).unwrap();
+        e.ai.walk_tick = 0;
+        e.ai.walk_speed = 1400;
+        e.ai.think_tick = now;
+        e.ai.walk_wait_locked = false;
+        e.ai.walk_wait_tick = now;
+    }
+
+    /// 判据 1：`|Δ| > 20` ⇒ `SpaceMove` 到主人身后格；落点可走 ⇒ `SpaceMoveGetRandXY`
+    /// **不抽数**，且后续 `GotoTargetXY` 因已在目标格而不抽。
+    #[test]
+    fn master_follow_space_move_when_distance_gt_20() {
+        let mut world = World::new(60, 60);
+        let master = player(&mut world, 30, 30);
+        world.entities.get_mut(master).unwrap().ai.dir = DIR_UP; // 身后 = (30,31)
+        assert!(world.enter_world(master));
+        let id = monster(&mut world, 5, 5);
+        assert!(world.enter_world(id));
+        world.entities.get_mut(id).unwrap().master = Some(master);
+        world.clock_ms = 5_000;
+        ready(&mut world, id, 5_000);
+        world.rng = RandomNumber::with_seed(2026);
+        let mut probe = RandomNumber::with_seed(2026);
+
+        monster_run(&mut world, id);
+
+        let e = world.entities.get(id).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 30, 31), ">20 ⇒ 飞到主人身后格");
+        assert_eq!((e.ai.target_x, e.ai.target_y), (30, 31));
+        assert_eq!(world.rng.random(), probe.random(), "可走落点不抽数");
+    }
+
+    /// **复验 F1 回归**：`RunAwayMode` 为真时**不得**跑 Master 跟随段（含 `SpaceMove`）。
+    ///
+    /// oracle `MonsterObject.cs:277` 的 `if (!RunAwayMode)` 包住整段跟随（`:299-324`）；
+    /// 逃跑到点前宝宝必须留在原地（`MagicManager.cs:827-840` 可把无主亡灵宝宝置
+    /// `RunAwayMode=true / RunAwayTime=10s`，玩家对其放圣言术即可命中）。
+    ///
+    /// **牙⑦**：把跟随段移回 `if !run_away_mode` 之外 ⇒ 本用例红（宝宝会 `SpaceMove` 到主人身后）。
+    #[test]
+    fn run_away_mode_skips_master_follow() {
+        let mut world = World::new(60, 60);
+        let master = player(&mut world, 30, 30);
+        world.entities.get_mut(master).unwrap().ai.dir = DIR_UP;
+        assert!(world.enter_world(master));
+        let id = monster(&mut world, 5, 5);
+        assert!(world.enter_world(id));
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.master = Some(master);
+            e.ai.run_away_mode = true;
+            e.ai.run_away_start = 5_000;
+            e.ai.run_away_time = 10_000;
+        }
+        world.clock_ms = 5_000;
+        ready(&mut world, id, 5_000);
+        world.rng = RandomNumber::with_seed(2026);
+
+        monster_run(&mut world, id);
+
+        let e = world.entities.get(id).unwrap();
+        assert!(
+            e.ai.run_away_mode,
+            "未到点仍是逃跑态（严格 > 3000/10000 与本用例无关）"
+        );
+        assert_eq!(
+            (e.map_id, e.x, e.y),
+            (0, 5, 5),
+            "RunAwayMode ⇒ 不跟随、不 SpaceMove"
+        );
+    }
+
+    /// 判据 2：`|Δ| <= 20` 且同图 ⇒ **不** `SpaceMove`；`GotoTargetXY` 只走一格并恰抽 1 次
+    /// `Random(3)`（oracle `AnimalObject.cs:222`）。
+    #[test]
+    fn master_follow_no_space_move_when_within_20() {
+        let mut world = World::new(60, 60);
+        let master = player(&mut world, 15, 15);
+        world.entities.get_mut(master).unwrap().ai.dir = DIR_UP; // 身后 = (15,16)
+        assert!(world.enter_world(master));
+        let id = monster(&mut world, 5, 5);
+        assert!(world.enter_world(id));
+        world.entities.get_mut(id).unwrap().master = Some(master);
+        world.clock_ms = 5_000;
+        ready(&mut world, id, 5_000);
+        world.rng = RandomNumber::with_seed(2026);
+        let mut probe = RandomNumber::with_seed(2026);
+        let _ = probe.random_below(3);
+
+        monster_run(&mut world, id);
+
+        let e = world.entities.get(id).unwrap();
+        assert_eq!(
+            (e.map_id, e.x, e.y),
+            (0, 6, 6),
+            "≤20 ⇒ 只按 GotoTargetXY 走一格"
+        );
+        assert_eq!((e.ai.target_x, e.ai.target_y), (15, 16));
+        assert_eq!(world.rng.random(), probe.random(), "恰一次 Random(3)");
+    }
+
+    /// 判据 3：`Master.SlaveRelax` ⇒ 不 `SpaceMove`，且在 `GotoTargetXY` 之前
+    /// `base.Run(); return;`（连 `CheckRoyalty`/`CrazyMode` 到期都跳过）。
+    #[test]
+    fn slave_relax_skips_space_move_and_early_return() {
+        let mut world = World::new(60, 60);
+        let master = player(&mut world, 30, 30);
+        world.entities.get_mut(master).unwrap().ai.dir = DIR_UP;
+        world.entities.get_mut(master).unwrap().slave_relax = true;
+        assert!(world.enter_world(master));
+        let id = monster(&mut world, 5, 5);
+        assert!(world.enter_world(id));
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.master = Some(master);
+            // 若未早退，末尾的 CrazyMode 到期会清掉它。
+            e.ai.crazy_mode = true;
+            e.ai.crazy_mode_tick = 0;
+            e.ai.crazy_mode_interval = 10;
+        }
+        world.clock_ms = 5_000;
+        ready(&mut world, id, 5_000);
+        world.rng = RandomNumber::with_seed(2026);
+        let mut probe = RandomNumber::with_seed(2026);
+
+        monster_run(&mut world, id);
+
+        let e = world.entities.get(id).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 5), "SlaveRelax ⇒ 原地不动");
+        assert_eq!(
+            (e.ai.target_x, e.ai.target_y),
+            (30, 31),
+            "TargetX/Y 仍照 oracle 更新"
+        );
+        assert!(e.ai.crazy_mode, "早退必须跳过 CrazyMode 到期");
+        assert_eq!(world.rng.random(), probe.random(), "早退路径不抽数");
+    }
+
+    /// 判据 4：`Envir != Master.Envir` ⇒ 即使距离 ≤20 也 `SpaceMove`；并复刻
+    /// `OnEnvirnomentChanged` 的实体侧效果（`CanReAlive=false; MonGen=null`）。
+    #[test]
+    fn master_on_other_map_triggers_space_move() {
+        let mut world = World::with_maps(vec![(60, 60), (60, 60)]);
+        let master = player(&mut world, 10, 10);
+        {
+            let m = world.entities.get_mut(master).unwrap();
+            m.map_id = 1;
+            m.ai.dir = DIR_UP; // 身后 = (10,11)
+        }
+        assert!(world.enter_world(master));
+        let id = monster(&mut world, 10, 10);
+        assert!(world.enter_world(id));
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.master = Some(master);
+            e.can_re_alive = true;
+            e.mon_gen = Some(0);
+        }
+        world.clock_ms = 5_000;
+        ready(&mut world, id, 5_000);
+        world.rng = RandomNumber::with_seed(2026);
+        let mut probe = RandomNumber::with_seed(2026);
+
+        monster_run(&mut world, id);
+
+        let e = world.entities.get(id).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (1, 10, 11), "异图 ⇒ 飞到主人身后格");
+        assert!(
+            !e.can_re_alive && e.mon_gen.is_none(),
+            "OnEnvirnomentChanged 实体侧"
+        );
+        assert_eq!(world.rng.random(), probe.random(), "可走落点不抽数");
+    }
+
+    /// 判据 5：`GetBackPosition` 八方向 + 边界夹取（`BaseObject.cs:1878-1927`）。
+    #[test]
+    fn get_back_position_eight_dirs_and_boundary_clamp() {
+        let mut world = World::new(10, 10);
+        let id = player(&mut world, 5, 5);
+        let cases = [
+            (DIR_UP, (5, 6)),
+            (DIR_UP_RIGHT, (4, 6)),
+            (DIR_RIGHT, (4, 5)),
+            (DIR_DOWN_RIGHT, (4, 4)),
+            (DIR_DOWN, (5, 4)),
+            (DIR_DOWN_LEFT, (6, 4)),
+            (DIR_LEFT, (6, 5)),
+            (DIR_UP_LEFT, (6, 6)),
+        ];
+        for (dir, want) in cases {
+            world.entities.get_mut(id).unwrap().ai.dir = dir;
+            assert_eq!(
+                master_get_back_position(&world, id),
+                Some(want),
+                "dir={dir} 身后格"
+            );
+        }
+        // 左上角夹取：两轴各自的门与对角 `&&` 门。
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.x = 0;
+            e.y = 0;
+        }
+        let corner = [
+            (DIR_UP, (0, 1)),
+            (DIR_DOWN, (0, 0)),
+            (DIR_LEFT, (1, 0)),
+            (DIR_RIGHT, (0, 0)),
+            (DIR_UP_LEFT, (1, 1)),
+            (DIR_UP_RIGHT, (0, 0)),  // nY > 0 不成立
+            (DIR_DOWN_LEFT, (0, 0)), // nX > 0 不成立
+            (DIR_DOWN_RIGHT, (0, 0)),
+        ];
+        for (dir, want) in corner {
+            world.entities.get_mut(id).unwrap().ai.dir = dir;
+            assert_eq!(
+                master_get_back_position(&world, id),
+                Some(want),
+                "(0,0) dir={dir} 夹取"
+            );
+        }
+        // 右下角夹取。
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.x = 9;
+            e.y = 9;
+        }
+        let corner2 = [
+            (DIR_UP, (9, 9)),
+            (DIR_DOWN, (9, 8)),
+            (DIR_LEFT, (9, 9)),
+            (DIR_RIGHT, (8, 9)),
+            (DIR_UP_LEFT, (9, 9)),
+            (DIR_UP_RIGHT, (9, 9)),
+            (DIR_DOWN_LEFT, (9, 9)),
+            (DIR_DOWN_RIGHT, (8, 8)),
+        ];
+        for (dir, want) in corner2 {
+            world.entities.get_mut(id).unwrap().ai.dir = dir;
+            assert_eq!(
+                master_get_back_position(&world, id),
+                Some(want),
+                "(9,9) dir={dir} 夹取"
+            );
+        }
+    }
+
+    /// 判据 6：身后格已有 `GetMovingObject(...,true)` 的活体 ⇒ 目标回退 `CurrX/CurrY`。
+    #[test]
+    fn occupied_back_cell_falls_back_to_current_position() {
+        let mut world = World::new(60, 60);
+        let master = player(&mut world, 10, 10);
+        world.entities.get_mut(master).unwrap().ai.dir = DIR_UP; // 身后 = (10,11)
+        assert!(world.enter_world(master));
+        let blocker = player(&mut world, 10, 11);
+        assert!(world.enter_world(blocker));
+        let id = monster(&mut world, 10, 9);
+        assert!(world.enter_world(id));
+        world.entities.get_mut(id).unwrap().master = Some(master);
+        world.clock_ms = 5_000;
+        ready(&mut world, id, 5_000);
+        world.rng = RandomNumber::with_seed(2026);
+        let mut probe = RandomNumber::with_seed(2026);
+
+        monster_run(&mut world, id);
+
+        let e = world.entities.get(id).unwrap();
+        assert_eq!(
+            (e.ai.target_x, e.ai.target_y),
+            (10, 9),
+            "身后格被占 ⇒ 回退到当前格"
+        );
+        assert_eq!((e.x, e.y), (10, 9), "同图 ≤20 ⇒ 不传送");
+        assert_eq!(world.rng.random(), probe.random(), "回退路径不抽数");
+    }
+
+    /// 判据 7：`RunAwayTime > 0 && (now - RunAwayStart) > RunAwayTime` —— **严格大于**。
+    /// 相等不清、+1ms 才清（`MonsterObject.cs:329-345`）。
+    #[test]
+    fn run_away_expiry_is_strict_greater() {
+        let mut world = World::new(60, 60);
+        let id = monster(&mut world, 10, 10);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.run_away_mode = true;
+            e.ai.run_away_start = 5_000;
+            e.ai.run_away_time = 1_000;
+        }
+        // 恰好到期：`1000 > 1000` 为假 ⇒ 保持。
+        world.clock_ms = 6_000;
+        ready(&mut world, id, 6_000);
+        monster_run(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert!(e.ai.run_away_mode, "相等不得清除（严格 >）");
+        assert_eq!(e.ai.run_away_time, 1_000);
+        // 超 1ms：清除。
+        world.clock_ms = 6_001;
+        ready(&mut world, id, 6_001);
+        monster_run(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert!(!e.ai.run_away_mode, "超期必须清除");
+        assert_eq!(e.ai.run_away_time, 0);
+    }
+
+    /// 判据 8（阴性对照）：`Master == null` 的怪行为不变 —— 仍走 `TargetX = -1` + `Wondering`，
+    /// 且只抽一次 `Random(20)`（非 0 支），不走任何跟随/SpaceMove 路径。
+    #[test]
+    fn no_master_monster_behavior_unchanged() {
+        let seed = seed_with_gate(false, None);
+        let mut world = World::new(60, 60);
+        let id = monster(&mut world, 10, 10);
+        assert!(world.enter_world(id));
+        world.clock_ms = 5_000;
+        ready(&mut world, id, 5_000);
+        world.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        assert_ne!(probe.random_below(20), 0);
+        let probe_next = probe.random();
+
+        monster_run(&mut world, id);
+
+        let e = world.entities.get(id).unwrap();
+        assert!(e.master.is_none());
+        assert_eq!((e.x, e.y), (10, 10), "Wondering 非 0 支不移动");
+        assert_eq!(e.ai.target_x, -1, "无 master ⇒ 目标仍为 -1（无跟随段）");
+        assert_eq!(world.rng.random(), probe_next, "只抽一次 Random(20)");
+    }
+
+    /// 判据 9：`SpaceMove` 的取数点/次数与 oracle 同点 —— 起点可走 0 抽；起点在第
+    /// `Width-n1C-1` 边界之外才 `Random(Width)`（`BaseObject.cs:1067-1094`）。
+    #[test]
+    fn space_move_draw_point_matches_oracle_shift_loop() {
+        // 证据钩子（仅显式设 `M2_MASTER_FOLLOW_TRACE_PATH` 时开启；未设 ⇒ 零行为差）。
+        // 用于机判「本片 SpaceMove 的抽数站点仍归 `space_move` 组」。
+        if let Ok(path) = std::env::var("M2_MASTER_FOLLOW_TRACE_PATH") {
+            let _ = std::fs::remove_file(&path);
+            mir2_shared::rng_trace::enable(std::path::Path::new(&path), 7)
+                .expect("打开 master-follow trace");
+        }
+        let mut world = World::new(60, 60);
+        let id = monster(&mut world, 5, 5);
+        assert!(world.enter_world(id));
+        // n18 = 3（Width < 80）、n1C = 15（50 <= Height < 150）⇒ 阈值 60-15-1 = 44。
+        assert!(world.maps[0].set_map_xy_flag(30, 31, false));
+        world.rng = RandomNumber::with_seed(2026);
+        let mut probe = RandomNumber::with_seed(2026);
+        assert!(crate::space_move::monster_space_move(
+            &mut world, id, 0, 30, 31
+        ));
+        let e = world.entities.get(id).unwrap();
+        assert_eq!((e.x, e.y), (33, 31), "不可走 ⇒ x += n18 后命中可走格");
+        assert_eq!(world.rng.random(), probe.random(), "移位环此支不抽数");
+
+        // 起点 x = 44（>= 阈值）且为墙 ⇒ 首次 `Random(Width)`，随后 y += n18。
+        assert!(world.maps[0].set_map_xy_flag(44, 31, false));
+        world.rng = RandomNumber::with_seed(7);
+        let mut probe = RandomNumber::with_seed(7);
+        let expected_x = probe.random_below(60);
+        assert!(crate::space_move::monster_space_move(
+            &mut world, id, 0, 44, 31
+        ));
+        let e = world.entities.get(id).unwrap();
+        assert_eq!((e.x, e.y), (expected_x, 34));
+        assert_eq!(world.rng.random(), probe.random(), "恰一次 Random(60)");
+    }
+
+    /// 判据 10：201 轮仍不可走 ⇒ 回滚旧图/旧坐标并重新登记旧格（`BaseObject.cs:1147-1153`）。
+    #[test]
+    fn space_move_rolls_back_when_no_walkable_cell() {
+        // 目标图全墙 ⇒ SpaceMoveGetRandXY 201 轮失败；旧图旧格可走 ⇒ 回滚重登记成功。
+        let mut world = World::with_maps(vec![(10, 10), (10, 10)]);
+        let id = monster(&mut world, 5, 5);
+        assert!(world.enter_world(id));
+        for x in 0..10 {
+            for y in 0..10 {
+                assert!(world.maps[1].set_map_xy_flag(x, y, false));
+            }
+        }
+        assert!(!crate::space_move::monster_space_move(
+            &mut world, id, 1, 5, 5
+        ));
+        let e = world.entities.get(id).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 5), "失败必须回滚到旧图旧格");
+        assert!(e.add_to_mapped, "回滚后重新登记旧格");
+        assert!(
+            world.moving_object_at(0, 5, 5, true).is_some(),
+            "旧格簿记恢复"
+        );
+    }
+    /// 判据 11：oracle 的 `SpaceMove` 门在 `if (TargetCret == null)` **之外** ——
+    /// 宝宝有攻击目标、但离主人 >20 时仍会飞到主人身边（落点用 `TargetX/TargetY`，
+    /// 此例由 `AttackTarget()` 设为目标的格子）。
+    #[test]
+    fn master_follow_space_move_also_runs_when_target_present() {
+        let mut world = World::new(60, 60);
+        let master = player(&mut world, 30, 30);
+        assert!(world.enter_world(master));
+        let victim = player(&mut world, 8, 5);
+        assert!(world.enter_world(victim));
+        let id = monster(&mut world, 5, 5);
+        assert!(world.enter_world(id));
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.master = Some(master);
+            e.ai.target_creature = Some(victim);
+        }
+        world.clock_ms = 5_000;
+        ready(&mut world, id, 5_000);
+
+        monster_run(&mut world, id);
+
+        let e = world.entities.get(id).unwrap();
+        assert_eq!(
+            (e.map_id, e.x, e.y),
+            (0, 8, 5),
+            "有目标时 SpaceMove 门仍生效（TargetX/Y = 目标格）"
+        );
     }
 }
