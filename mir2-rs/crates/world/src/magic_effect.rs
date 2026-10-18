@@ -219,7 +219,7 @@ pub fn power_uenhancer(
 /// `Random(0)`（`userMagic.Level == 0`）在 .NET 里仍调一次 `Sample()` ⇒ **照抽一次**再返回 0。
 ///
 /// 返回 `Some(push)` 表示 oracle 会发 `RM_DELAYPUSHED`（`push > 0`）；`None` 不等于"没抽"。
-/// `StickMode` 本骨架无字段 ⇒ 调用方恒传 `false`（登记）。
+/// `StickMode` 由调用方传目标的 `Entity.stick_mode`（特殊怪 ctor 置 true；普通 false）。
 #[must_use]
 pub fn hb_fireball_push(
     rng: &mut impl RandomSource,
@@ -816,7 +816,7 @@ mod tests {
         }
         assert_eq!(format!("{c:?}"), format!("{d:?}"), "两抽次序固定");
 
-        // `StickMode = true` ⇒ 门关（本骨架无该字段，保留参数口径）。
+        // `StickMode = true` ⇒ 门关（参数即目标的 `Entity.stick_mode`）。
         let mut e = RandomNumber::with_seed(13);
         let mut f = RandomNumber::with_seed(13);
         assert_eq!(hb_fireball_push(&mut e, 1, 5, 1, true), None);

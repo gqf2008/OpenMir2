@@ -564,7 +564,7 @@ pub fn make_drug_item(
 /// （**尾已编码** ⇒ `tail_encoded = true`，见 [`ShopFrame`] 口径）。
 ///
 /// `ItemName` 是 `std::string`（GBK 线上）⇒ 拼接后按 GBK 字节编码。
-fn del_items_frame(deleted: &[(String, i32)]) -> ShopFrame {
+pub fn del_items_frame(deleted: &[(String, i32)]) -> ShopFrame {
     let mut s10 = String::new();
     for (name, make_index) in deleted {
         s10.push_str(name);

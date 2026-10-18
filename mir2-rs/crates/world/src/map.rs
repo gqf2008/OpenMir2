@@ -233,6 +233,14 @@ pub struct MapGrid {
     /// `mapRoute.Envir.Flag.boNEEDHOLE`）——本图作为 route 的落地目标时才有意义，故由宿主
     /// （`bins/game-svr`）按注册表逐图灌入；缺省 `false`（合成 golden 场景行为不变）。
     need_hole: bool,
+    /// `Envir.Flag.FightZone`（`MapInfo.txt` 的 `FIGHT` 段）——`DieDropItems`
+    /// （`BaseObject.cs:2452`）的首道地图门。由宿主按注册表逐图灌入；缺省 `false`。
+    fight_zone: bool,
+    /// `Envir.Flag.Fight3Zone`（`MapInfo.txt` 的 `FIGHT3` 段）——同 `DieDropItems` 的地图门。
+    fight3_zone: bool,
+    /// `Envir.Flag.NoDropItem`（`MapInfo.txt` 的 `NODROPITEM` 段）——
+    /// `KillTargetTrigger` 第二段 `!NoItem || !NoDropItem` 的地图侧门。
+    no_drop_item: bool,
     /// 每图门表（`Envirnoment.DoorList`，`:48`/`:64`）。由宿主从注册表
     /// （`MapFile.doors`）灌入；缺省空 ⇒ [`MapGrid::arround_door_opened`] 恒 `true`（改动前行为不变）。
     doors: Vec<MapDoor>,
@@ -257,6 +265,9 @@ impl MapGrid {
             cells,
             routes: Vec::new(),
             need_hole: false,
+            fight_zone: false,
+            fight3_zone: false,
+            no_drop_item: false,
             doors: Vec::new(),
             door_status: Vec::new(),
         }
@@ -271,6 +282,29 @@ impl MapGrid {
     #[must_use]
     pub fn need_hole(&self) -> bool {
         self.need_hole
+    }
+
+    /// 设置 `Envir.Flag.FightZone`/`Fight3Zone`（`DieDropItems` 的地图门；`BaseObject.cs:2452`）。
+    pub fn set_fight_zone(&mut self, fight_zone: bool, fight3_zone: bool) {
+        self.fight_zone = fight_zone;
+        self.fight3_zone = fight3_zone;
+    }
+
+    /// `Envir.Flag.FightZone || Envir.Flag.Fight3Zone`（`DieDropItems` 取反门）。
+    #[must_use]
+    pub fn is_fight_zone(&self) -> bool {
+        self.fight_zone || self.fight3_zone
+    }
+
+    /// 设置 `Envir.Flag.NoDropItem`（`KillTargetTrigger` 第二段的地图门）。
+    pub fn set_no_drop_item(&mut self, no_drop_item: bool) {
+        self.no_drop_item = no_drop_item;
+    }
+
+    /// 读 `Envir.Flag.NoDropItem`。
+    #[must_use]
+    pub fn no_drop_item(&self) -> bool {
+        self.no_drop_item
     }
 
     /// 对应 `CellMatch(nX, nY) => nX >= 0 && nX < Width && nY >= 0 && nY < Height`。

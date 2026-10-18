@@ -134,6 +134,19 @@ pub struct GateConfig {
     /// `[Setup] DropItemRage`（oracle `GameSvrConf.cs:1754` 缺省 `3`，`byte`）——
     /// `ground::DropContext.drop_item_rage`（`PlayObject.Operate.cs:291` 的 `_MIN(...,3)` 散布半径）。
     pub drop_item_rage: u8,
+    /// `[Setup] DieDropUseItemRate`（oracle `GameSvrConf.cs:768/1714` 缺省 `30`，`int`；
+    /// `ServerConf.cs:492`）——玩家死亡 `DropUseItems` 的逐槽骰 `Random(nRate)`
+    /// （`PlayObject.Message.cs:2183`，`PvpLevel() <= 2`）。部署件 `=50`。
+    pub die_drop_use_item_rate: i32,
+    /// `[Setup] DieRedDropUseItemRate`（oracle `GameSvrConf.cs:772/1715` 缺省 `15`）——
+    /// 红名（`PvpLevel() > 2`）支。部署件 `=15`。
+    pub die_red_drop_use_item_rate: i32,
+    /// `[Setup] KillByHumanDropUseItem`（`GameSvrConf.cs:780/1717` 缺省 `false`；
+    /// `ServerConf.cs:495`，部署件 `=1`）——`KillTargetTrigger` 第二段对玩家击杀者。
+    pub kill_by_human_drop_use_item: bool,
+    /// `[Setup] KillByMonstDropUseItem`（`GameSvrConf.cs:784/1718` 缺省 `true`；
+    /// `ServerConf.cs:496`，部署件 `=1`）。
+    pub kill_by_monst_drop_use_item: bool,
     /// `[Setup] SendRefMsgRange`（oracle `GameSvrConf.cs:499`，缺省 `12`，`byte`；
     /// `ServerConf.cs:280` 的 `ReadWriteInteger("Setup", "SendRefMsgRange", …)`）。
     ///
@@ -320,6 +333,10 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut can_drop_price: Option<i32> = None;
     let mut can_drop_gold: Option<i32> = None;
     let mut drop_item_rage: Option<u8> = None;
+    let mut die_drop_use_item_rate: Option<i32> = None;
+    let mut die_red_drop_use_item_rate: Option<i32> = None;
+    let mut kill_by_human_drop_use_item: Option<bool> = None;
+    let mut kill_by_monst_drop_use_item: Option<bool> = None;
     let mut send_ref_msg_range: Option<u8> = None;
     let mut magic_attack_rage: Option<u8> = None;
     let mut fire_boom_rage: Option<u8> = None;
@@ -757,6 +774,22 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                                     format!("AmyOunsulPoint 不是合法整数：{v:?}")
                                 })?);
                         }
+                        "DIEDROPUSEITEMRATE" => {
+                            die_drop_use_item_rate = Some(v.parse().with_context(|| {
+                                format!("DieDropUseItemRate 不是合法整数：{v:?}")
+                            })?);
+                        }
+                        "DIEREDDROPUSEITEMRATE" => {
+                            die_red_drop_use_item_rate = Some(v.parse().with_context(|| {
+                                format!("DieRedDropUseItemRate 不是合法整数：{v:?}")
+                            })?);
+                        }
+                        "KILLBYHUMANDROPUSEITEM" => {
+                            kill_by_human_drop_use_item = Some(read_bool_or_false(v));
+                        }
+                        "KILLBYMONSTDROPUSEITEM" => {
+                            kill_by_monst_drop_use_item = Some(read_bool_or_false(v));
+                        }
                         "SUPERREPAIRPRICERATE" => {
                             super_repair_price_rate = Some(v.parse().with_context(|| {
                                 format!("SuperRepairPriceRate 不是合法整数：{v:?}")
@@ -863,6 +896,12 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         can_drop_price: can_drop_price.unwrap_or(500),
         can_drop_gold: can_drop_gold.unwrap_or(1000),
         drop_item_rage: drop_item_rage.unwrap_or(3),
+        // oracle 缺省值（`GameSvrConf.cs:1714/1715`）。
+        die_drop_use_item_rate: die_drop_use_item_rate.unwrap_or(30),
+        die_red_drop_use_item_rate: die_red_drop_use_item_rate.unwrap_or(15),
+        // oracle 缺省值（`GameSvrConf.cs:1717/1718`）。
+        kill_by_human_drop_use_item: kill_by_human_drop_use_item.unwrap_or(false),
+        kill_by_monst_drop_use_item: kill_by_monst_drop_use_item.unwrap_or(true),
         // oracle 缺省值（`GameSvrConf.cs:1503`）：`[Setup]` 里没写不算错。
         send_ref_msg_range: send_ref_msg_range.unwrap_or(12),
         // oracle 缺省值（`GameSvrConf.cs:1752`）：`[Setup]` 里没写不算错。
@@ -1072,7 +1111,7 @@ mod tests {
         let p = write(
             &dir,
             &format!(
-                "{base}[Setup]\nHumanMaxGold=10000000\nFloorItemCanPickUpTime=120000\nControlDropItem=1\nInSafeDisableDrop=0\nCanDropPrice=500\nDropItemRage=3\nSendRefMsgRange=15\nSaveHumanRcdTime=1200000\n"
+                "{base}[Setup]\nHumanMaxGold=10000000\nFloorItemCanPickUpTime=120000\nControlDropItem=1\nInSafeDisableDrop=0\nCanDropPrice=500\nDropItemRage=3\nDieDropUseItemRate=50\nDieRedDropUseItemRate=15\nKillByHumanDropUseItem=1\nKillByMonstDropUseItem=1\nSendRefMsgRange=15\nSaveHumanRcdTime=1200000\n"
             ),
         );
         let c = load(&p).unwrap();
@@ -1082,6 +1121,19 @@ mod tests {
         assert!(!c.in_safe_disable_drop);
         assert_eq!(c.can_drop_price, 500);
         assert_eq!(c.drop_item_rage, 3);
+        assert_eq!(c.die_drop_use_item_rate, 50, "部署件 DieDropUseItemRate=50");
+        assert_eq!(
+            c.die_red_drop_use_item_rate, 15,
+            "部署件 DieRedDropUseItemRate=15"
+        );
+        assert!(
+            c.kill_by_human_drop_use_item,
+            "部署件 KillByHumanDropUseItem=1"
+        );
+        assert!(
+            c.kill_by_monst_drop_use_item,
+            "部署件 KillByMonstDropUseItem=1"
+        );
         assert_eq!(c.send_ref_msg_range, 15, "[Setup] SendRefMsgRange 实值");
         assert_eq!(
             c.save_human_rcd_time, 1_200_000,
@@ -1097,6 +1149,22 @@ mod tests {
         assert!(!c2.in_safe_disable_drop);
         assert_eq!(c2.can_drop_price, 500);
         assert_eq!(c2.drop_item_rage, 3);
+        assert_eq!(
+            c2.die_drop_use_item_rate, 30,
+            "缺键 ⇒ DieDropUseItemRate 缺省 30"
+        );
+        assert_eq!(
+            c2.die_red_drop_use_item_rate, 15,
+            "缺键 ⇒ DieRedDropUseItemRate 缺省 15"
+        );
+        assert!(
+            !c2.kill_by_human_drop_use_item,
+            "缺键 ⇒ KillByHumanDropUseItem 缺省 false"
+        );
+        assert!(
+            c2.kill_by_monst_drop_use_item,
+            "缺键 ⇒ KillByMonstDropUseItem 缺省 true"
+        );
         assert_eq!(c2.send_ref_msg_range, 12, "缺键 ⇒ SendRefMsgRange 缺省 12");
         assert_eq!(
             c2.save_human_rcd_time, 600_000,

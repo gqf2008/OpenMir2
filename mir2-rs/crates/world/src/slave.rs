@@ -101,6 +101,11 @@ pub const RM_MAKEHOLYSEIZEMODE: u16 = 60005;
 /// 施法者自有延时消息：`BaseObject.Base.cs:711-729`。载荷
 /// `wParam = nPower, nParam1 = MakeLong(tx,ty), nParam2 = rage, nParam3 = target.ActorId`。
 pub const RM_DELAYMAGIC: u16 = 8021;
+/// **`openmir2-rm-delaypushed`** `Messages.RM_DELAYPUSHED`（`crates/protocol/src/messages.rs:520`；8043）。
+/// 施法者自有延时消息（`MagicManager.cs:1053`，仅 44 的推挤门通过且 `push > 0`）：
+/// `wParam = nDir, nParam1 = MakeLong(tx,ty)（不读）, nParam2 = push, nParam3 = target.ActorId`。
+/// 到点 `Operate`（`BaseObject.Base.cs:733-739`）：`target.CharPushed((byte)wParam, (byte)nParam2)`。
+pub const RM_DELAYPUSHED: u16 = 8043;
 /// **P3-B4** `Messages.RM_POISON`（`crates/protocol/src/messages.rs:517`；8037）。
 /// 目标自有延时消息：`BaseObject.Base.cs:740-759`。载荷
 /// `wParam = PoisonState, nParam1 = nTime, nParam2 = caster.ActorId, nParam3 = nPoint`。
@@ -1225,6 +1230,9 @@ pub struct SelfDelayOutcome {
     pub name_color: Option<NameColorDelivery>,
     /// **P3-B4**：`RM_DELAYMAGIC` 到点投递的观察值（非该支 `None`）。
     pub delay_magic: Option<DelayMagicDelivery>,
+    /// **`openmir2-rm-delaypushed`**：`RM_DELAYPUSHED` 到点投递触发的 `RM_PUSH` 事件
+    /// （逐格一条，保序；非该支恒空）。宿主据此出 `SM_BACKSTEP(9)`。
+    pub pushes: Vec<crate::action::PushEvent>,
     /// **P3-B4**：`RM_POISON` 到点投递的观察值（非该支 `None`）。
     pub poison: Option<PoisonDelivery>,
     /// **卡 `openmir2-run-gap-monster-specials`**：`RM_ZEN_BEE` 到点投递的产仔请求
@@ -1878,6 +1886,29 @@ impl World {
                             ..SelfDelayOutcome::default()
                         });
                     }
+                    // **`openmir2-rm-delaypushed`**：`RM_DELAYPUSHED`
+                    // （`BaseObject.Base.cs:733-739`）。
+                    //
+                    // ```text
+                    // :735 targetBaseObject = ActorMgr.Get(processMsg.nParam3);
+                    // :736 if (targetBaseObject != null)
+                    // :738   targetBaseObject.CharPushed((byte)processMsg.wParam, (byte)processMsg.nParam2);
+                    // ```
+                    // `nParam1`（`MakeLong(tx,ty)`）在本支**不读**。`CharPushed` 零 RNG。
+                    RM_DELAYPUSHED => {
+                        let target_id = msg.n_param3;
+                        let pushes = if self.entities.get(target_id).is_some() {
+                            self.char_pushed_now(target_id, msg.w_param as u8, msg.n_param2 as u8)
+                        } else {
+                            Vec::new()
+                        };
+                        out.push(SelfDelayOutcome {
+                            actor_id: msg.actor_id,
+                            ident: msg.ident,
+                            pushes,
+                            ..SelfDelayOutcome::default()
+                        });
+                    }
                     // **P3-B4**：`RM_POISON`（`BaseObject.Base.cs:740-759` → `MakePosion`）。
                     // 投毒本身**零 RNG**；只落 buff / CharStatus / 帧事件。
                     RM_POISON => {
@@ -2063,7 +2094,8 @@ impl World {
             if t.race >= crate::entity::ACTOR_RACE_ANIMAL {
                 power = hutil::round(f64::from(power) / 1.2);
             }
-            if (tx - t.x).abs() <= rage && (ty - t.y).abs() <= rage {
+            // 目标侧 `SendMsg(IActor, …)`（`BaseObject.Message.cs:105-113`）同样有 `!Ghost` 门。
+            if !t.ghost && (tx - t.x).abs() <= rage && (ty - t.y).abs() <= rage {
                 self.pending_mag_struck
                     .push(crate::world::PendingMagStruck {
                         target_id,
@@ -2181,7 +2213,8 @@ pub struct CloneSpawn {
 /// - `ChrName = "Clone"`（`:9`）⇒ [`CLONE_NAME`]；
 /// - `CurrX/CurrY = playObject.CurrX/CurrY`（`:10-11`）⇒ 与主人同格；
 /// - `Dir = GetBackDir(playObject.Dir)`（`:12`）⇒ 取 `caster_dir` 的背面（[`mag_make_clone`]
-///   内的 `back_dir` 落，`GetBackDir` = `(dir + 4) % 8`）；
+///   内的 `back_dir` 落，`GetBackDir` = `(dir + 4) % 8`），并**写进实体** `Entity.ai.dir`
+///   （oracle `PlayCloneObject` 的 `Dir` 就是 `BaseObject.Dir`；AOI 出现帧读实体）；
 /// - `Envir = playObject.Envir`（`:13`）⇒ `map_id` 取主人所在图；
 /// - `Gender`/`Hair = playObject.Gender/Hair`（`:14-15`）：骨架 `Entity` 不存这两个展示层字段
 ///   （它们编码在 `bins/game-svr::downlink::ActorDisplay.feature` 的位域里）⇒ 宿主登记展示时
@@ -2233,6 +2266,9 @@ pub fn spawn_clone(world: &mut World, caster_id: i32, caster_dir: u8) -> Option<
     // oracle `AddMapObject`（`Envirnoment.cs:279-284`）：成功才 `AddObject` + 置 `AddToMaped`；
     // 失败时对象仍在 `ActorMgr`（= 本骨架 `EntityStore`）但不在图上 ⇒ `add_to_mapped` 跟 `created`。
     e.add_to_mapped = out.created;
+    // `PlayCloneObject.cs:12` `Dir = GetBackDir(playObject.Dir)` 写的是**实体** `BaseObject.Dir`
+    // ⇒ `Entity.ai.dir`（AOI 出现帧/后续 `Turn`/存档都读它）；展示表只是投影。
+    e.ai.dir = out.dir;
     world.entities.insert(e);
     Some(CloneSpawn {
         clone_id,
@@ -3900,6 +3936,10 @@ mod tests {
         assert_eq!(c.name, CLONE_NAME);
         assert_eq!(c.race, ACTOR_RACE_PLAY, "玩家型克隆体");
         assert_eq!((c.x, c.y), (7, 9));
+        // `PlayCloneObject.cs:12` 写的是实体 `BaseObject.Dir`（`Entity.ai.dir`）；
+        // 只放进 `CloneSpawn.dir`/展示表会让 AOI 出现帧读实体时方向变 0（I1）。
+        assert_eq!(c.ai.dir, out.dir, "Dir 必须写进实体（= GetBackDir(主人)）");
+        assert_eq!(c.ai.dir, 6);
         assert!(c.add_to_mapped, "格占用成功 ⇒ AddToMaped");
         // `BaseObject.cs:442` ctor `SearchTick = GetTickCount()` + `PlayObject.cs:900` `SearchTime = 1000`：
         // 克隆体绕开 `World::add_entity`，这里必须补同一初始化，否则首扫发生在下一个 tick。

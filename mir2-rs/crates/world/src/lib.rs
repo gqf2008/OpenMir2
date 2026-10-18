@@ -21,6 +21,7 @@ pub mod castle;
 pub mod castle_tax;
 pub mod combat;
 pub mod ctor_fold;
+mod death_drop;
 pub mod entity;
 pub mod guild;
 pub mod magic;

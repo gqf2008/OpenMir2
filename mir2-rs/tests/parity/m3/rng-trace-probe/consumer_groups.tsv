@@ -241,3 +241,12 @@ monster_ai	csharp	SpitSpider\.SpitAttack@SpitSpider\.cs:	src/M2Server/Monster/Mo
 monster_ai	csharp	ExplosionSpider\.DoSelfExplosion@ExplosionSpider\.cs:	src/M2Server/Monster/Monsters/ExplosionSpider.cs:22	DoSelfExplosion：`MAX(0, Lo(DC)+Random(|Hi-Lo|+1))`（`:22`）；逐目标 `GetHitStruckDamage(nPower/2)` + `GetMagStruckDamage(nPower/2)`。Rust `monai.rs::do_self_explosion`
 monster_ai	csharp	MagCowMonster\.MagicAttack@MagCowMonster\.cs:	src/M2Server/Monster/Monsters/MagCowMonster.cs:16	MagicAttack：`Lo(DC)+Random(|Hi-Lo|+1)`（`:16`）+ `GetMagStruckDamage`（无命中率骰；`AntiMagic>=0` 对 ushort 恒真）。Rust `monai.rs::magic_attack`
 monster_ai	csharp	ElfWarriorMonster\.SpitAttack@ElfWarriorMonster\.cs:	src/M2Server/Monster/Monsters/ElfWarriorMonster.cs:45	SpitAttack：**Word** 口径 `LoWord(DC)+Random(|HiWord(DC)-LoWord(DC)|+1)`（`:45`；`HiWord(ushort)==0` ⇒ `DC+Random(DC+1)`）+ `GetMagStruckDamage`；`while(true)` 无 break（G19 登记）。Rust `monai.rs::elf_warrior_spit_attack`（**仅强化形态 Appr 704/706/708**；非强化形态 `base.AttackTarget()` ⇒ `SpitSpider.SpitAttack`，见上一行）
+
+# ---- 2026-10-19 追加（卡 `openmir2-player-drop-useitems`）----------------------------------
+# oracle `PlayObject.DropUseItems`（`PlayObject.Message.cs:2152-2228`）第二段对**全部 13 槽**
+# 逐槽抽 `Random(nRate)`（空槽也抽），命中后再走 `DropItemDown`；`StdMode == 45` 的
+# `M2Share.GetRandomLook`（`M2Share.cs:524-527`）再抽一次 `Random(Shape)`。
+# Rust 唯一取数点 = `crates/world/src/death_drop.rs`（`drop_use_items_on_death`）。
+drop	csharp	PlayObject\.DropUseItems@PlayObject\.Message\.cs:	src/M2Server/Player/PlayObject.Message.cs:2152	死亡逐槽 Random(DieDropUseItemRate / DieRedDropUseItemRate)（:2183/:2185，13 次含空槽）
+drop	csharp	M2Share\.GetRandomLook@M2Share\.cs:	src/M2Server/M2Share.cs:524	DropItemDown 的 StdMode45 Looks 随机：Random(StdItem.Shape)（:526）
+drop	rust	crates/world/src/death_drop\.rs:	crates/world/src/death_drop.rs	drop_use_items_on_death：13×Random(nRate) →（StdMode45）Random(Shape)；文件级行（漂移信号）

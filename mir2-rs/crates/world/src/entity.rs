@@ -59,6 +59,9 @@ pub const USE_ITEM_SLOTS: usize = 13;
 /// `PlayObject.UseItems`，写回目标同源；存档（`MakeSaveRcd`）读 `ToServerItem()` 的耐久字段。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UseItemSlot {
+    /// `UserItem.MakeIndex`（`DropUseItems` 的 `DeleteItem.MakeIndex` 与 `SM_DELITEMS` 取它；
+    /// 清槽时 oracle **只清 `Index`**、保留本字段）。
+    pub make_index: i32,
     /// `UserItem.Index`（0 = 空位）
     pub index: u16,
     /// `UserItem.Dura`
@@ -582,6 +585,20 @@ pub struct Entity {
     /// C# `CharacterObject.UseItems`（`CharacterObject.cs:40`，13 格，`CharacterObject.cs:89` 初始化）。
     /// `PlayObject.StruckDamage` 的耐久循环按它取数。
     pub use_items: [UseItemSlot; USE_ITEM_SLOTS],
+    /// C# `PlayObject.AngryRing`（`PlayObject.cs:2018` 初值 `false`；`RecalcAbilitys` 的
+    /// `RING_ANGERENERGY_ITEM(117)` 支置真）——`DropUseItems` 的**首门**
+    /// （`PlayObject.Message.cs:2156`：`if (AngryRing || NoDropUseItem) return;`）。
+    ///
+    /// **写入点登记**：本骨架的 `RecalcAbilitys` 等价物（`bins/game-svr/src/ability.rs`）尚未
+    /// 建模戒指 Shape 117 ⇒ 生产路径恒 `false`（部署件语料下与 oracle 的差异见 whitelist T-81）。
+    pub angry_ring: bool,
+    /// C# `PlayObject.NoDropUseItem`（脚本/`RobotPlayer.Conf` 可置；真人玩家默认 `false`）。
+    /// 同 `DropUseItems` 首门。本骨架无写者 ⇒ 恒 `false`。
+    pub no_drop_use_item: bool,
+    /// C# `BaseObject.NoItem`（`IPlayerActor.NoDropItem` 的旧名；脚本可置，真人玩家默认
+    /// `false`）——`KillTargetTrigger` 第二段 `!NoItem || !Envir.Flag.NoDropItem` 的实体侧门。
+    /// 本骨架无写者 ⇒ 恒 `false`。
+    pub no_item: bool,
     /// C# `WantRefMsg`
     pub want_ref_msg: bool,
     /// C# `AddToMaped`（首次入图标记）
@@ -906,6 +923,10 @@ impl Entity {
             check_dup_obj_tick: 0,
             // `CharacterObject.cs:89`：13 个空位（`Index = 0`）。
             use_items: [UseItemSlot::default(); USE_ITEM_SLOTS],
+            // `PlayObject.cs:2018`：ctor 缺省 `AngryRing = false`；`NoDropUseItem` 亦无 ctor 赋值。
+            angry_ring: false,
+            no_drop_use_item: false,
+            no_item: false,
             want_ref_msg: false,
             add_to_mapped: false,
             visible_actors: Vec::new(),

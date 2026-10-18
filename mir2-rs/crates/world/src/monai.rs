@@ -6059,6 +6059,28 @@ mod tests {
         assert_eq!(world.rng.random(), probe.random(), "可走落点不抽数");
     }
 
+    /// **`openmir2-player-dir-supply`**：宝宝的 `GetBackPosition` 读**主人实体**的
+    /// `Entity.ai.dir`（玩家转身写入的唯一权威），展示表不参与。
+    #[test]
+    fn player_dir_supply_master_back_position_reads_entity_dir() {
+        let mut world = World::new(10, 10);
+        let master = player(&mut world, 5, 5);
+        let slave = world.add_entity({
+            let mut e = Entity::new(0, "pet".to_string(), 5, 4);
+            e.master = Some(master);
+            e
+        });
+        assert_eq!(world.entities.get(slave).unwrap().master, Some(master));
+        for (dir, want) in [(DIR_RIGHT, (4, 5)), (DIR_LEFT, (6, 5)), (DIR_UP, (5, 6))] {
+            world.entities.get_mut(master).unwrap().ai.dir = dir;
+            assert_eq!(
+                master_get_back_position(&world, master),
+                Some(want),
+                "玩家实体 Dir={dir} ⇒ 宝宝 GetBackPosition"
+            );
+        }
+    }
+
     /// 判据 5：`GetBackPosition` 八方向 + 边界夹取（`BaseObject.cs:1878-1927`）。
     #[test]
     fn get_back_position_eight_dirs_and_boundary_clamp() {

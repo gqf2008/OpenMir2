@@ -894,6 +894,7 @@ async fn main() -> Result<()> {
                     show_rank_level_name,
                     server_index: cfg.server_index,
                     catalog: item_catalog,
+                    world_item_catalog: item_table,
                     magic_table,
                     pet_cfg,
                     magic_attack_rage: i32::from(cfg.magic_attack_rage),
@@ -927,6 +928,10 @@ async fn main() -> Result<()> {
                         human_max_gold: cfg.human_max_gold,
                     },
                     ref_msg_range: i32::from(cfg.send_ref_msg_range),
+                    die_drop_use_item_rate: cfg.die_drop_use_item_rate,
+                    die_red_drop_use_item_rate: cfg.die_red_drop_use_item_rate,
+                    kill_by_human_drop_use_item: cfg.kill_by_human_drop_use_item,
+                    kill_by_monst_drop_use_item: cfg.kill_by_monst_drop_use_item,
                     red_msg_f_color: cfg.red_msg_f_color,
                     red_msg_b_color: cfg.red_msg_b_color,
                     green_msg_f_color: cfg.green_msg_f_color,
@@ -1903,7 +1908,7 @@ fn handle_inbound_cmd(
             // 恒发（`PlayObject.Operate.cs:749`）。`Dir = btDir` 仅在 `|Δ|<=2` 成立时
             // （`Operate.cs:729-747`，`IsValidObject` 只门效果体、不门方向）；否则当前朝向。
             if out.send_butch && actor_id != 0 {
-                let cur_dir = displays.get(actor_id).map_or(0, |d| d.dir);
+                let cur_dir = actor_dir(world, displays, actor_id);
                 let dir = if out.dir_updated { bt_dir } else { cur_dir };
                 world.enqueue(mir2_world::Command::Butch { actor_id, dir });
             }
@@ -2169,7 +2174,7 @@ fn pose_create(
     actor_id: i32,
 ) -> Option<i32> {
     let e = world.entities.get(actor_id)?;
-    let dir = displays.get(actor_id).map_or(0, |d| d.dir);
+    let dir = actor_dir(world, displays, actor_id);
     let (width, height) = world
         .maps
         .get(e.map_id)
@@ -4692,6 +4697,7 @@ fn apply_use_items_to_entity(
         *slot = use_items.get(i).and_then(Option::as_ref).map_or_else(
             mir2_world::entity::UseItemSlot::default,
             |it| mir2_world::entity::UseItemSlot {
+                make_index: it.make_index,
                 index: it.index,
                 dura: it.dura,
                 dura_max: it.dura_max,
@@ -4717,6 +4723,7 @@ fn sync_use_item_slot_to_entity(world: &mut mir2_world::World, sg: &SessionGroun
         entity.use_items[slot] = sg.use_items.get(slot).and_then(Option::as_ref).map_or_else(
             mir2_world::entity::UseItemSlot::default,
             |it| mir2_world::entity::UseItemSlot {
+                make_index: it.make_index,
                 index: it.index,
                 dura: it.dura,
                 dura_max: it.dura_max,
@@ -4745,6 +4752,7 @@ fn sync_use_items_to_session(world: &mir2_world::World, sg: &mut SessionGround) 
         let src = &entity.use_items[i];
         match cell {
             Some(it) => {
+                it.make_index = src.make_index;
                 it.index = src.index;
                 it.dura = src.dura;
                 it.dura_max = src.dura_max;
@@ -4754,7 +4762,7 @@ fn sync_use_items_to_session(world: &mir2_world::World, sg: &mut SessionGround) 
                 // 兜底：实体持有物品而会话缺槽（只在穿装同步缺失时出现）。正常路径不会走到。
                 if src.index > 0 {
                     *cell = Some(game_svr::bag::BagItem {
-                        make_index: 0,
+                        make_index: src.make_index,
                         index: src.index,
                         dura: src.dura,
                         dura_max: src.dura_max,
@@ -5193,11 +5201,12 @@ fn handle_move_cmd(
                 );
                 return;
             }
-            set_display_dir(displays, actor_id, n_dir);
-            // 实体 `dir` 与展示表同步（`MakeSaveRcd` 读 `playObject.Dir`；G-09）。
+            // **单一真源**：先写实体 `Dir`（`MakeSaveRcd` 读 `playObject.Dir`；G-09），
+            // 展示表只是投影。
             if let Some(e) = world.entities.get_mut(actor_id) {
                 e.ai.dir = n_dir;
             }
+            sync_display_dir(world, displays, actor_id);
             // **L1 TransMap**：oracle `ClientChangeDir` 原地转身也调 `Walk(RM_TURN)`
             // （`PlayObject.Operate.cs:334`）⇒ 转身前在**当前格**做路线检查（命中 MapRoute ⇒ 换图）。
             if world.walk_route_check(actor_id) {
@@ -5250,8 +5259,8 @@ fn handle_move_cmd(
             if outcome.changed_map {
                 drain_map_change(world, online, gates, displays, registry);
             }
-            // 实体 `dir` 已在判定前同步（走跑失败也保留尝试方向）；这里只更新展示表。
-            set_display_dir(displays, actor_id, dir);
+            // 实体 `dir` 已在判定前同步（走跑失败也保留尝试方向）；展示表按实体重投影。
+            sync_display_dir(world, displays, actor_id);
             // 体力/魔力点（`PlayObject.Attack.cs:1424` 走路 `HealthTick -= 10`；
             // `:1352-1356`/`:1041-1045` 跑步/骑跑 `HealthTick -= 60; SpellTick -= 10;
             // SpellTick = max(0, SpellTick); PerHealth -= 1; PerSpell -= 1`）。
@@ -5495,7 +5504,7 @@ fn handle_hit_cmd(
     // 等价旧行为）。实体 `Entity.ai.dir` 同步作为**存档**权威（`MakeSaveRcd` 读 `playObject.Dir`），
     // 本片不改取目标读取面：走/跑失败时 oracle 的 `Dir` 已改成尝试方向而展示表仍停在旧值，
     // 属取目标口径的既有偏差（登记，未在本片扩大）。
-    let pose_dir = displays.get(actor_id).map_or(dir, |d| d.dir);
+    let pose_dir = world.entities.get(actor_id).map_or(dir, |e| e.ai.dir);
     // 取目标：`GetPoseCreate()` = 前方格首个 `!Ghost && !Death` 的对象。
     let (width, height) = world
         .maps
@@ -5503,13 +5512,13 @@ fn handle_hit_cmd(
         .map_or((0, 0), |m| (m.width, m.height));
     let (fx, fy) = game_svr::attackwire::front_position(pose_dir, cur_x, cur_y, width, height);
     // `BaseObject.AttackDir` 开头 `Dir = nDir`（`BaseObject.Attack.cs:12`）——取目标**之后**才更新。
-    set_display_dir(displays, actor_id, dir);
     // 同一句在 oracle 里**无条件**执行：物理命中与**挥空**（`attackTarget == null`，
     // `_Attack` 返回 false）都改 `Dir` ⇒ 实体朝向也必须无条件同步（`MakeSaveRcd` 读
-    // `playObject.Dir`；G-09 的失败支）。
+    // `playObject.Dir`；G-09 的失败支）。展示表从实体重投影。
     if let Some(e) = world.entities.get_mut(actor_id) {
         e.ai.dir = dir;
     }
+    sync_display_dir(world, displays, actor_id);
     let target_id = if (fx, fy) == (cur_x, cur_y) {
         None
     } else {
@@ -6196,12 +6205,12 @@ fn handle_spell_cmd(
         .is_some_and(|m| magicwire::takes_default_dir(i32::from(m.mag_idx)));
     if default_arm {
         let dir = movewire::next_direction(cur_x, cur_y, req.target_x, req.target_y);
-        set_display_dir(displays, actor_id, dir);
-        // oracle `PlayObject.Attack.cs:1270` 的 `Dir = GetNextDirection(...)` 同样改的是
-        // `playObject.Dir`（不只是展示态）⇒ 实体同步（`MakeSaveRcd` 读它）。
+        // oracle `PlayObject.Attack.cs:1270` 的 `Dir = GetNextDirection(...)` 改的是
+        // `playObject.Dir`（不只是展示态）⇒ 先写实体，再投影展示表。
         if let Some(e) = world.entities.get_mut(actor_id) {
             e.ai.dir = dir;
         }
+        sync_display_dir(world, displays, actor_id);
     }
     // **战士门的 `RM_MAGICFIREFAIL`**：oracle `PlayObject.Base.cs:1510` 的
     // `if (!MagicManager.IsWarrSkill(userMagic.MagIdx))` 把 MP 扣减**和** `MagicManager.DoSpell`
@@ -6952,7 +6961,7 @@ fn handle_spell_cmd(
                     game_svr::ability::SLOT_BUJUK,
                     catalog,
                 );
-                let caster_dir = displays.get(actor_id).map_or(0, |d| d.dir);
+                let caster_dir = actor_dir(world, displays, actor_id);
                 // `UserMagic` 的内存态（Level/TranPoint 在尾里被 `TrainSkill`/`CheckMagicLevelUp` 改）。
                 let mut train = magic::SkillTrainState {
                     magic_id: req.magic_id,
@@ -7214,7 +7223,7 @@ fn handle_spell_cmd(
                     train_level: magic.train_level,
                     max_train: magic.max_train,
                 };
-                let caster_dir = displays.get(actor_id).map_or(0, |d| d.dir);
+                let caster_dir = actor_dir(world, displays, actor_id);
                 let input = game_svr::slave::CloneCastInput {
                     caster_id: actor_id,
                     caster_dir,
@@ -7458,6 +7467,50 @@ fn handle_spell_cmd(
                         ),
                         _ => unreachable!("B1 集合已由外层 matches! 限定"),
                     };
+                    // **`openmir2-rm-delaymagic-six-ids` / `openmir2-rm-delaypushed`**：
+                    // 六魔号的效果体在 oracle 里把伤害/推挤**自投递**到施法者自己的队列
+                    // （`SendSelfDelayMsg`），不是线上帧。入队必须**先于**共享尾的
+                    // `RM_MAGIC_LVEXP`（同优先级 `Lowest`，.NET 四叉堆按插入序决定布局）。
+                    //
+                    // - `RM_DELAYMAGIC`：`:183/:299/:338/:573/:968/:1004/:1039` 一族；
+                    //   本片六魔号的实参一律 `(nPower, MakeLong(tx,ty), 2, target.ActorId, "", delay)`，
+                    //   其中 1/5/11/45/44 = 600ms，13 = 1200ms（`MagicManager.cs:338`）。
+                    // - `RM_DELAYPUSHED`（仅 44、`push > 0`）：`MagicManager.cs:1050-1055`
+                    //   `(nDir, MakeLong(tx,ty), push, target.ActorId, "", 600)`，
+                    //   `nDir = GetNextDirection(caster.CurrX, caster.CurrY, target.CurrX, target.CurrY)`
+                    //   在**发送时**取（目标仍存活）。
+                    if outcome.delayed {
+                        world.send_self_delay_msg_full(
+                            actor_id,
+                            mir2_world::slave::RM_DELAYMAGIC,
+                            outcome.power,
+                            // `HUtil32.MakeLong(tx, ty)` 收 `ushort`：`(ushort)tx` 保留
+                            // 低 16 位二补数（[`wire_coord`]），越界不归 0。
+                            game_svr::feature::make_long(wire_coord(tx), wire_coord(ty)),
+                            2,
+                            outcome.target.unwrap_or(0),
+                            i64::from(outcome.delay_ms),
+                        );
+                    }
+                    if let Some(push) = outcome.push {
+                        let target = outcome.target.unwrap_or(0);
+                        let dir = world.entities.get(actor_id).map_or(0, |c| {
+                            world.entities.get(target).map_or(0, |t| {
+                                mir2_world::magic::next_direction(c.x, c.y, t.x, t.y)
+                            })
+                        });
+                        world.send_self_delay_msg_full(
+                            actor_id,
+                            mir2_world::slave::RM_DELAYPUSHED,
+                            i32::from(dir),
+                            // `HUtil32.MakeLong(tx, ty)` 收 `ushort`：`(ushort)tx` 保留
+                            // 低 16 位二补数（[`wire_coord`]），越界不归 0。
+                            game_svr::feature::make_long(wire_coord(tx), wire_coord(ty)),
+                            i32::from(push),
+                            target,
+                            600,
+                        );
+                    }
                     // 共享尾（`MagicManager.cs:644-669`）：`bo_train` 来自 oracle 返回值；
                     // `RM_MAGICFIRE` 的 ActorId = case 之后（可能再次置 null）的 target。
                     finish_spell_tail(
@@ -9124,11 +9177,37 @@ fn new_player_entity(chr_name: String, x: i32, y: i32) -> mir2_world::Entity {
 }
 
 /// 帮 `ActorDisplay.dir` 随转向/走步更新（展示字段在 `bins/game-svr` 的展示表里，不进 `crates/world`）。
+///
+/// **`openmir2-player-dir-supply`**：`Entity.ai.dir` 是唯一权威（oracle `BaseObject.Dir`），
+/// 展示表的 `dir` 只是它的**投影**——所有写入点先写实体，再调本函数把实体值抄进展示表。
 fn set_display_dir(displays: &mut downlink::DisplayTable, actor_id: i32, dir: u8) {
     if let Some(mut d) = displays.get(actor_id).cloned() {
         d.dir = dir;
         displays.set(actor_id, d);
     }
+}
+
+/// 把实体 `Entity.ai.dir` 投影到展示表（展示表缺失时不动）。
+fn sync_display_dir(
+    world: &mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    actor_id: i32,
+) {
+    if let Some(e) = world.entities.get(actor_id) {
+        set_display_dir(displays, actor_id, e.ai.dir);
+    }
+}
+
+/// 读朝向的**权威入口**：`Entity.ai.dir`（oracle `BaseObject.Dir`）；实体缺失时才退回展示表。
+///
+/// `GetPoseCreate`/`GetBackPosition`/`CharPushed`/施法方向等所有「读对象当前朝向」的路径
+/// 都必须走这里，不得直接读展示表——展示表是投影，可能在失败支落后于实体（走/跑被挡时
+/// oracle 的 `Dir` 已改成尝试方向）。
+fn actor_dir(world: &mir2_world::World, displays: &downlink::DisplayTable, actor_id: i32) -> u8 {
+    world
+        .entities
+        .get(actor_id)
+        .map_or_else(|| displays.get(actor_id).map_or(0, |d| d.dir), |e| e.ai.dir)
 }
 
 /// 坐标进帧的 u16 写法与 `drain_aoi_downlink` 一致（保留 `i16` 位模式）。
@@ -9555,11 +9634,10 @@ fn drain_aoi_downlink(
             let x = u16::from_ne_bytes(i16::try_from(target.x).unwrap_or(0).to_ne_bytes());
             let y = u16::from_ne_bytes(i16::try_from(target.y).unwrap_or(0).to_ne_bytes());
             let mut frame_display = display.clone();
-            if target.race != mir2_world::ACTOR_RACE_PLAY {
-                // 怪物的 `BaseObject.Dir` 由 AI（`AnimalObject`/`MonsterObject`）写在 `Entity.ai.dir`；
-                // 展示表里的副本是生成时的初值 ⇒ 出现帧用世界**当前**朝向（oracle `SendMsg(…, Dir, …)`）。
-                frame_display.dir = target.ai.dir;
-            }
+            // **`openmir2-player-dir-supply`**：所有实体的 `BaseObject.Dir` 都在
+            // `Entity.ai.dir`（玩家由转身/走/跑/攻击/法术写入；怪物由 AI 写入），展示表副本
+            // 只是投影 ⇒ 出现帧一律用世界**当前**朝向（oracle `SendMsg(…, Dir, …)`）。
+            frame_display.dir = target.ai.dir;
             let bodies = downlink::appear_frames(target.id, x, y, &frame_display, target.death);
             let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "同屏下行")
             else {
@@ -9852,7 +9930,8 @@ fn drain_map_change(
         // 取展示表；**未登记的 show 变体跳过并登记**（不编造）。
         let (dir, light, desc) = match displays.get(ev.actor_id) {
             Some(d) => (
-                d.dir,
+                // `Dir` 取实体（展示表只是投影，可能是生成时的初值）。
+                world.entities.get(ev.actor_id).map_or(d.dir, |e| e.ai.dir),
                 d.light,
                 downlink::char_desc(d.feature, d.status).to_vec(),
             ),
@@ -10029,18 +10108,12 @@ fn drain_combat_downlink(
             glog!("WRN", "死亡下行：actor={dead_id} 无展示表 ⇒ 跳过（登记）");
             continue;
         };
-        // 死者的 `Dir`：玩家用展示表（客户端指令维护），怪物用 `Entity.ai.dir`（AI 维护）。
-        let (x, y, dead_dir) = world.entities.get(dead_id).map_or((0, 0, d.dir), |e| {
-            (
-                e.x,
-                e.y,
-                if e.race == mir2_world::ACTOR_RACE_PLAY {
-                    d.dir
-                } else {
-                    e.ai.dir
-                },
-            )
-        });
+        // 死者的 `Dir`：`Entity.ai.dir` 是唯一权威（玩家由客户端指令写、怪物由 AI 写）；
+        // 展示表只是投影，实体缺失时才回退。
+        let (x, y, dead_dir) = world
+            .entities
+            .get(dead_id)
+            .map_or((0, 0, d.dir), |e| (e.x, e.y, e.ai.dir));
         let body = game_svr::smframe::sm_death(
             mir2_protocol::messages::SM_NOWDEATH,
             dead_id,
@@ -10840,6 +10913,40 @@ fn drain_b3_self_deliveries(
     buf.flush(online, gates);
 }
 
+/// **`openmir2-player-drop-useitems`**：玩家死亡 `DropUseItems` 的 `SM_DELITEMS(709)` 出帧。
+///
+/// oracle 链路：`DropUseItems` 尾 `if (dropItemList.Count > 0) { … SendMsg(RM_SENDDELITEMLIST,
+/// 0, objectId, 0, 0); }`（`PlayObject.Message.cs:2217-2221`）⇒ `Operate` 的
+/// `RM_SENDDELITEMLIST` 支（`:1871-1874`）从 `ActorMgr.GetOhter` 取表并 `SendDelItemList`。
+/// `SendDelItemList`（`PlayObject.Base.cs:1637-1646`）是 `SendSocket` **直发**（不经队列）。
+///
+/// 本函数只出帧；槽清空已由世界侧 `DropUseItems` 完成，`sync_use_items_to_session` 随后把
+/// `Index = 0` 回写进存档会话。
+fn drain_death_use_item_drops(
+    rec: &mir2_world::TickRecord,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    for (actor_id, deleted) in &rec.death_use_item_drops {
+        let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+            glog!(
+                "WRN",
+                "死亡删装：actor={actor_id} 不在在线登记表 ⇒ 跳过 SM_DELITEMS"
+            );
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "死亡删装") else {
+            continue;
+        };
+        let items: Vec<(String, i32)> = deleted
+            .iter()
+            .map(|(_, name, make_index)| (name.clone(), *make_index))
+            .collect();
+        let frame = game_svr::shop::del_items_frame(&items);
+        emit_shop_frames(tx, entry.socket, &[frame]);
+    }
+}
+
 /// **P3-B4**：到点自投递的毒/延迟魔法出帧（`RM_POISON` / `RM_DELAYMAGIC`）。
 ///
 /// - `RM_POISON`：`MakePosion` 的 `StatusChanged()` ⇒ 657（逐收件人 `HitSpeed`）、玩家目标的
@@ -10857,13 +10964,38 @@ fn drain_b4_self_deliveries(
     rec: &mir2_world::TickRecord,
     world: &mut mir2_world::World,
     online: &OnlineRegistry,
-    displays: &downlink::DisplayTable,
+    displays: &mut downlink::DisplayTable,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     red_f_color: u8,
     red_b_color: u8,
     you_poisoned: &[u8],
 ) {
+    // **`openmir2-rm-delaypushed`**：`RM_DELAYPUSHED` 到点 ⇒ `CharPushed` 的逐格
+    // `RM_PUSH` ⇒ `SM_BACKSTEP(9)`。oracle 在 `Operate` 内**即时** `SendRefMsg`，收件人含
+    // 受推者自己（`PlayObject.Message.cs:1527` 的复合条件恒真）。跨 actor 的投递序无契约
+    // （每个 actor 一条队列）⇒ 先按 outcome 序出推挤帧，再走毒/受击缓冲。
+    for o in &rec.slave_self_deliveries {
+        for ev in &o.pushes {
+            let Some(d) = displays.get(ev.actor_id).cloned() else {
+                glog!(
+                    "WRN",
+                    "延迟推挤下行：actor={} 无展示表 ⇒ 跳过 SM_BACKSTEP（登记）",
+                    ev.actor_id
+                );
+                continue;
+            };
+            if let Some(body) = downlink::backstep_frame(ev, &d) {
+                broadcast_ref_msg_with_self(world, online, gates, ev.actor_id, &[body]);
+            }
+        }
+        // `CharPushed` 收尾把实体 `Dir` 置为 `nBackDir`（推进 > 0）⇒ 展示表按实体重投影。
+        if !o.pushes.is_empty() {
+            if let Some(e) = world.entities.get(o.pushes[0].actor_id) {
+                set_display_dir(displays, o.pushes[0].actor_id, e.dir());
+            }
+        }
+    }
     let mut buf = SpellFrameBuf::new();
     for o in &rec.slave_self_deliveries {
         if let Some(p) = o.poison {
@@ -11459,6 +11591,13 @@ struct EnterConfig {
     /// `stditems` 物品目录（`game_svr::ability::StdItemCatalog`，**1-based** 查表，见 `crate::items`）；
     /// 空目录 = 未加载/无配置。帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
     catalog: game_svr::ability::StdItemCatalog,
+    /// 生产宿主喂给 `crates/world` 的**顺序**物品模板表（`items[i]` ⇒ `Index = i + 1`）。
+    ///
+    /// 与 `catalog`（`stditems` 的 `HashMap` 查表，供帧/能力面）**同源同表**：world 侧的
+    /// `VecItemCatalog`（死亡删装/怪物掉落）按 1-based **表内位置**查，必须拿到原始顺序
+    /// （`catalog_from` 会滤掉空名项，不能反推）。由 [`production_world`] 移入
+    /// `World::item_catalog`。
+    world_item_catalog: Vec<mir2_data::StdItem>,
     /// **M3⑨-实现 2 第②片**：`magics` 模板表（`M2Share.MagicList` 的查表面）；
     /// `DoSpell` 效果体/帧参用。空表 = `GetMagicInfo == null`（效果体不接，登记）。
     magic_table: magics::MagicTable,
@@ -11489,6 +11628,16 @@ struct EnterConfig {
     /// `[Setup] SendRefMsgRange`（oracle `GameSvrConf.cs:499`，缺省 12）：
     /// 装备/卸下成功后的 `FeatureChanged()` 广播半径（`BaseObject.SendRefMsg` 的单元格扫描）。
     ref_msg_range: i32,
+    /// `[Setup] DieDropUseItemRate`（oracle 缺省 30，部署件 50）——玩家死亡 `DropUseItems`
+    /// 的逐槽骰（`PlayObject.Message.cs:2183`）。
+    die_drop_use_item_rate: i32,
+    /// `[Setup] DieRedDropUseItemRate`（oracle 缺省 15）——红名（`PvpLevel() > 2`）支。
+    die_red_drop_use_item_rate: i32,
+    /// `[Setup] KillByHumanDropUseItem`（oracle 缺省 false；部署件 1）——
+    /// `KillTargetTrigger` 第二段（PvP 死亡再调一次 `DropUseItems`）。
+    kill_by_human_drop_use_item: bool,
+    /// `[Setup] KillByMonstDropUseItem`（oracle 缺省 true；部署件 1）。
+    kill_by_monst_drop_use_item: bool,
     /// `[Setup] RedMsgFColor`/`RedMsgBColor`（P3-B4 的 `SysMsg(YouPoisoned, Red, Hint)`；
     /// P3-B5 的 22 安全区提示用同一对）。
     red_msg_f_color: u8,
@@ -11579,6 +11728,7 @@ impl EnterConfig {
             show_rank_level_name: false,
             server_index: 0,
             catalog: game_svr::ability::StdItemCatalog::new(),
+            world_item_catalog: Vec::new(),
             magic_table: magics::MagicTable::new(Vec::new()),
             pet_cfg: mir2_data::pet_slave::PetSlaveConfig::default(),
             magic_attack_rage: 8,
@@ -11606,6 +11756,10 @@ impl EnterConfig {
                 human_max_gold: 5_000_000,
             },
             ref_msg_range: 12,
+            die_drop_use_item_rate: 30,
+            die_red_drop_use_item_rate: 15,
+            kill_by_human_drop_use_item: false,
+            kill_by_monst_drop_use_item: true,
             red_msg_f_color: 0xFF,
             red_msg_b_color: 0x38,
             green_msg_f_color: 0xDB,
@@ -12004,7 +12158,7 @@ fn drain_b4_with_enter_cfg(
     rec: &mir2_world::TickRecord,
     world: &mut mir2_world::World,
     online: &OnlineRegistry,
-    displays: &downlink::DisplayTable,
+    displays: &mut downlink::DisplayTable,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     enter_cfg: &EnterConfig,
@@ -12145,6 +12299,21 @@ fn drain_run_state_expiries(
     }
 }
 
+/// 生产式建世界：`World::with_maps` + 物品目录接线（`sim_loop` 与进程级用例共用同一入口）。
+///
+/// `item_catalog` 是 `stditems` 的**顺序表**（`items[i]` ⇒ `Index = i + 1`，与
+/// `items::catalog_from` 的 1-based 口径同源）。`std::mem::take` 把表移进世界，
+/// 避免复制整张模板表；未接线（空表）时 `VecItemCatalog` 查表恒 `None`
+/// ⇒ 玩家死亡 `DropUseItems` 的第一段（`ItemDesc & 8`）永不可达。
+fn production_world(
+    map_sizes: Vec<(i32, i32)>,
+    item_catalog: &mut Vec<mir2_data::StdItem>,
+) -> mir2_world::World {
+    let mut world = mir2_world::World::with_maps(map_sizes);
+    world.set_item_catalog(std::mem::take(item_catalog));
+    world
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
@@ -12160,7 +12329,7 @@ fn sim_loop(
 ) {
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
-    let mut world = mir2_world::World::with_maps(map_sizes);
+    let mut world = production_world(map_sizes, &mut enter_cfg.world_item_catalog);
     // **P3 收尾残余**：`MagTurnUndeadLevel` + `PKFlagTime`（`Server.conf [Setup]`）。
     world.set_mag_turn_undead_level(enter_cfg.mag_turn_undead_level);
     world.set_pk_flag_config(
@@ -12169,6 +12338,19 @@ fn sim_loop(
     );
     // **P3-B4**：`[Setup]` 的 `MabMabe*` / `AmyOunsulPoint` 灌进世界（缺省 = oracle 缺省）。
     world.set_b4_config(enter_cfg.b4);
+    // **`openmir2-player-drop-useitems`**：玩家死亡 `DropUseItems` 的配置
+    // （`Server.conf [Setup] DieDropUseItemRate`/`DieRedDropUseItemRate`/`DropItemRage`；
+    // `Envir/DisableTakeOffList.txt` 在部署件为 0 字节 ⇒ 键表为空，T-81）。
+    world.set_death_drop_config(
+        enter_cfg.die_drop_use_item_rate,
+        enter_cfg.die_red_drop_use_item_rate,
+        i32::from(enter_cfg.ground.drop_item_rage),
+        Vec::new(),
+    );
+    world.set_death_drop_kill_config(
+        enter_cfg.kill_by_human_drop_use_item,
+        enter_cfg.kill_by_monst_drop_use_item,
+    );
     // **P3-B5**：22/36 的配置项（安全区门 + 两对 `SysMsg` 颜色）。
     world.set_b5_config(mir2_world::magic_effect::B5Config {
         disable_in_safe_zone_fire_cross: enter_cfg.disable_in_safe_zone_fire_cross,
@@ -12215,6 +12397,10 @@ fn sim_loop(
                 world.set_map_exp_rate(map_id, f.bo_exprate.then_some(f.exp_rate));
                 // `Envir.Flag.boNEEDHOLE`（route 落地门；`PlayObject.cs:1874` 作为目标图读）。
                 world.set_map_need_hole(map_id, f.bo_needhole);
+                // `Envir.Flag.FightZone`/`Fight3Zone`（`DieDropItems` 的地图门，
+                // `BaseObject.cs:2452`）。
+                world.set_map_fight_zone(map_id, f.fight_zone, f.fight3_zone);
+                world.set_map_no_drop_item(map_id, f.no_drop_item);
             }
         }
         // **片 `openmir2-mapcell-attributes-loading`（静态装载，tier=R）**：把每张 `.map` 的
@@ -14163,6 +14349,9 @@ fn sim_loop(
         // 放在 `party_run_tick()` 之前：oracle `Run()` 的组队段（`PlayObject.Message.cs:704-719`）
         // 晚于 `Die()`，而 `Die()` 已把死亡成员摘出（段内无死成员可清）。
         drain_party_death_events(&rec, &online, &gates);
+        // **`openmir2-player-drop-useitems`**：玩家死亡 `DropUseItems` 的 `SM_DELITEMS(709)`
+        // （`SendSocket` 直发；死亡结算后立即出帧）。
+        drain_death_use_item_drops(&rec, &online, &gates);
         // **出站接线片 W2**：本 tick 的推挤/冲刺/宰杀动作帧（`RM_PUSH`/`RM_RUSH`/`RM_RUSHKUNG`/`RM_BUTCH`
         // ⇒ `SM_BACKSTEP(9)`/`SM_RUSH(6)`/`SM_RUSHKUNG(7)`/`SM_BUTCH(637)`）。同属「本 tick 动作段」，
         // 先于 AOI 出现帧/战斗下行（oracle 在 `CharPushed`/`DoMotaebo`/`ClientGetButchItem` 内即时发）。
@@ -14205,7 +14394,7 @@ fn sim_loop(
             &rec,
             &mut world,
             &online,
-            &displays,
+            &mut displays,
             &mut ground_sessions,
             &gates,
             &enter_cfg,
@@ -15202,6 +15391,7 @@ mod tests {
         let probe = |front: Option<(u8, u8)>| -> (Option<i32>, game_svr::trade::DealTryTarget) {
             let mut world = mir2_world::World::new(32, 32);
             let hero = world.add_entity(Entity::new(1, "hero", 10, 10));
+            world.entities.get_mut(hero).unwrap().ai.dir = 2;
             let mut displays = downlink::DisplayTable::new();
             displays.set(
                 hero,
@@ -15213,6 +15403,7 @@ mod tests {
                     e.race = race;
                     e
                 });
+                world.entities.get_mut(fid).unwrap().ai.dir = peer_dir;
                 displays.set(
                     fid,
                     downlink::ActorDisplay::new(peer_dir, 0, 0, 0, 0, 255, b"front".to_vec()),
@@ -15275,6 +15466,8 @@ mod tests {
             e.race = mir2_world::ACTOR_RACE_PLAY;
             e
         });
+        // dir=2（Right）⇒ 前方格 = (11,10)；实体是权威，展示表只是投影。
+        world.entities.get_mut(hero).unwrap().ai.dir = 2;
         let mut displays = downlink::DisplayTable::new();
         displays.set(
             hero,
@@ -15398,6 +15591,7 @@ mod tests {
                 e.race = mir2_world::ACTOR_RACE_PLAY;
                 e
             });
+            world.entities.get_mut(hero).unwrap().ai.dir = 2;
             let mut displays = downlink::DisplayTable::new();
             // dir=2（Right）⇒ 前方格 = (11,10)（同 `deal_try_target_distinguishes_absent_from_non_player`）。
             displays.set(
@@ -16401,7 +16595,7 @@ mod tests {
     /// 怪物 `ActorId` 为 `Recog` 的 `SM_TURN` + `SM_FEATURECHANGED`；`SM_TURN.Series` 取
     /// **世界当前 `Entity.ai.dir`**（不是登记时的初值）。
     ///
-    /// 红检：删掉 `drain_aoi_downlink` 里对怪物的 `frame_display.dir = target.ai.dir`（退回
+    /// 红检：删掉 `drain_aoi_downlink` 里的 `frame_display.dir = target.ai.dir`（退回
     /// 展示表初值）⇒ `Series & 0xFF == 5` 断言必红；不登记怪物展示（[`downlink::monster_display`]）
     /// ⇒ 帧数 0 ⇒ 必红。
     #[test]
@@ -17868,12 +18062,14 @@ mod tests {
     }
 
     fn use_slot(
+        make_index: i32,
         index: u16,
         dura: u16,
         dura_max: u16,
         desc: [u8; 14],
     ) -> mir2_world::entity::UseItemSlot {
         mir2_world::entity::UseItemSlot {
+            make_index,
             index,
             dura,
             dura_max,
@@ -17888,7 +18084,7 @@ mod tests {
         e.hp = 30_000;
         e.max_hp = 30_000;
         for &(slot, index, dura) in items {
-            e.use_items[slot] = use_slot(index, dura, dura, [0; 14]);
+            e.use_items[slot] = use_slot(0, index, dura, dura, [0; 14]);
         }
         e
     }
@@ -17943,14 +18139,17 @@ mod tests {
         apply_use_items_to_entity(&mut entity, &session_items);
         assert_eq!(
             entity.use_items[SLOT_DRESS],
-            use_slot(11, 100, 200, [7; 14]),
+            use_slot(7001, 11, 100, 200, [7; 14]),
             "衣服槽逐字段装载（index/dura/dura_max/desc）"
         );
         assert_eq!(
             entity.use_items[SLOT_NECKLACE],
-            use_slot(22, 33, 44, [2; 14])
+            use_slot(7002, 22, 33, 44, [2; 14])
         );
-        assert_eq!(entity.use_items[SLOT_HELMET], use_slot(55, 66, 77, [3; 14]));
+        assert_eq!(
+            entity.use_items[SLOT_HELMET],
+            use_slot(7003, 55, 66, 77, [3; 14])
+        );
         assert_eq!(
             entity.use_items[SLOT_WEAPON],
             mir2_world::entity::UseItemSlot::default(),
@@ -17994,6 +18193,9 @@ mod tests {
             dura_max: 60_000,
             desc: [7; 14],
         });
+        // 生产路径里实体槽是从会话装载的（`apply_use_items_to_entity` 含 MakeIndex）；
+        // 本用例直造实体，补齐同一身份字段后再验回写。
+        world.entities.get_mut(hero_id).unwrap().use_items[SLOT_DRESS].make_index = 7001;
         sync_use_items_to_session(&world, &mut sg);
         let saved = sg.use_items[SLOT_DRESS].as_ref().expect("仍装备");
         assert_eq!(saved.dura, dura_after, "实体磨损回写会话（存档源）");
@@ -19375,10 +19577,10 @@ mod tests {
         use std::collections::HashMap;
 
         let mut world = mir2_world::World::new(32, 32);
-        world.item_catalog = vec![mir2_data::StdItem {
+        world.set_item_catalog(vec![mir2_data::StdItem {
             name: "金币".into(),
             ..Default::default()
-        }];
+        }]);
         world.mon_random_add_value = 0;
         let p = world.add_entity({
             let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
@@ -24248,6 +24450,8 @@ mod tests {
             world.add_entity(e)
         };
         world.tick();
+        // 死亡帧的 `Dir` 取实体（权威；展示表只是投影）。
+        world.entities.get_mut(victim).unwrap().ai.dir = 4;
         let mut displays = downlink::DisplayTable::new();
         displays.set(
             victim,
@@ -25408,10 +25612,10 @@ mod tests {
         use std::collections::HashMap;
 
         let mut world = mir2_world::World::new(32, 32);
-        world.item_catalog = vec![mir2_data::StdItem {
+        world.set_item_catalog(vec![mir2_data::StdItem {
             name: "金币".into(),
             ..Default::default()
-        }];
+        }]);
         let hero = world.add_entity({
             let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
             e.race = mir2_world::ACTOR_RACE_PLAY;
@@ -27191,7 +27395,8 @@ mod tests {
             can_drop_gold: 1000,
             drop_item_rage: 3,
         };
-        // 玩家当前朝向 = 2（展示表）。
+        // 玩家当前朝向 = 2（实体权威；展示表只是投影）。
+        world.entities.get_mut(hero).unwrap().ai.dir = 2;
         let mut displays = downlink::DisplayTable::new();
         displays.set(
             hero,
@@ -35323,7 +35528,7 @@ mod tests {
                 &rec,
                 &mut self.world,
                 &self.online,
-                &self.displays,
+                &mut self.displays,
                 &mut self.ground_sessions,
                 &self.gates,
                 &self.enter_cfg,
@@ -35728,7 +35933,7 @@ mod tests {
             &rec,
             &mut rig.world,
             &rig.online,
-            &rig.displays,
+            &mut rig.displays,
             &mut rig.ground_sessions,
             &rig.gates,
             &enter_cfg,
@@ -38502,5 +38707,575 @@ mod tests {
         assert_eq!(wire_damage(70000), 4464, "伤害回绕到 4464（G-10）");
         assert_eq!(wire_damage(65535), 65535);
         assert_eq!(wire_damage(-1), 0xFFFF);
+    }
+
+    // ═════════════ 卡 `openmir2-rm-delaymagic-six-ids` / `openmir2-rm-delaypushed` ═════════════
+    //
+    // 六魔号的效果体在 oracle 里把伤害/推挤**自投递**到施法者队列（`SendSelfDelayMsg`），
+    // 到点由 `Operate(RM_DELAYMAGIC)`/`Operate(RM_DELAYPUSHED)` 结算。本组用例走**生产入口**
+    // `handle_spell_cmd`，断言入队点与投递臂同点同次。
+
+    /// B1 六魔号的魔法模板（`power=5,max_power=10,def_power=2,def_max_power=8,train_lv=3`）。
+    fn b1_six_magic(id: u16) -> mir2_data::MagicInfo {
+        mir2_data::MagicInfo {
+            magic_id: id,
+            effect: 4,
+            effect_type: 4,
+            power: 5,
+            max_power: 10,
+            def_power: 2,
+            def_max_power: 8,
+            train_lv: 3,
+            train_level: [0; 4],
+            max_train: [1000; 4],
+            ..mir2_data::MagicInfo::default()
+        }
+    }
+
+    /// 手写 oracle 取数序（B1 六魔号）：骰门 → MPow → GetPower → GetAttackPower（玩家
+    /// `Luck<=0` 再 `Random(10)`）；返回 `(对照流, nPower)`。
+    fn b1_six_replay(
+        seed: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        stat: i32,
+    ) -> (mir2_shared::rng::RandomNumber, i32) {
+        let mut c = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let _dice = c.random_below(10);
+        let mpow = i32::from(magic.power)
+            + c.random_below(i32::from(magic.max_power) - i32::from(magic.power));
+        let base = mir2_shared::hutil::round(
+            f64::from(mpow) / f64::from(magic.train_lv + 1) * f64::from(level + 1),
+        ) + i32::from(magic.def_power)
+            + c.random_below(i32::from(magic.def_max_power) - i32::from(magic.def_power))
+            + i32::from((stat & 0xff) as u8);
+        let lo = i32::from((stat & 0xff) as u8);
+        let hi = i32::from(((stat >> 8) & 0xff) as u8);
+        let mut power = base + c.random_range(0, hi - lo + 2);
+        if c.random_below(10) == 0 {
+            power = base;
+        }
+        (c, power)
+    }
+
+    /// 六魔号各恰一条 `RM_DELAYMAGIC`：载荷 `(nPower, MakeLong(tx,ty), 2, target, delay)`；
+    /// 未到点不结算，到点后目标侧 `RM_MAGSTRUCK`（31）落地。
+    #[test]
+    fn six_ids_enqueue_delay_magic_and_deliver_only_at_due_time() {
+        const SM_31: u16 = mir2_protocol::messages::SM_STRUCK;
+        for (magic_id, delay_ms, stat) in [
+            (1u16, 600i64, 0x0A05),
+            (5, 600, 0x0A05),
+            (11, 600, 0x0A05),
+            (13, 1200, 0x0A05),
+            (44, 600, 0x0A05),
+            (45, 600, 0x0A05),
+        ] {
+            let magic = b1_six_magic(magic_id);
+            let amulet = (magic_id == 13).then_some(600);
+            let mut rig = B4Rig::new(magic.clone(), 1, amulet);
+            let m = rig.add_monster("m", 11, 10, 80, 10, 0, 0, 0);
+            rig.seed(0);
+            let seed = B4_SEED;
+            rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let (expect_stream, expect_power) = b1_six_replay(seed, &magic, 1, stat);
+            if magic_id == 13 {
+                // 13 的 `CheckAmulet(1, 1)` 要求 `StdMode==25 && Shape==5`（护身符）。
+                let mut catalog = game_svr::ability::StdItemCatalog::new();
+                catalog.insert(
+                    1,
+                    mir2_data::StdItem {
+                        name: "护身符".into(),
+                        std_mode: 25,
+                        shape: 5,
+                        ..mir2_data::StdItem::default()
+                    },
+                );
+                rig.cast_with_catalog(magic_id, (11, 10), m, &catalog);
+            } else {
+                rig.cast(magic_id, (11, 10), m);
+            }
+            let delays = rig.delay_msgs(mir2_world::slave::RM_DELAYMAGIC);
+            assert_eq!(delays.len(), 1, "[{magic_id}] 恰一条 RM_DELAYMAGIC");
+            let d = delays[0];
+            assert_eq!(
+                (d.actor_id, d.w_param, d.n_param1, d.n_param2, d.n_param3),
+                (
+                    rig.caster,
+                    expect_power,
+                    game_svr::feature::make_long(11, 10),
+                    2,
+                    m
+                ),
+                "[{magic_id}] RM_DELAYMAGIC 载荷（nPower/MakeLong/rage/target）"
+            );
+            assert_eq!(
+                d.deliver_at_ms,
+                rig.world.clock_ms + delay_ms,
+                "[{magic_id}] 延时（13=1200ms，其余 600ms）"
+            );
+            // 取数序：效果体 5 抽 + 共享尾 `Random(3)`；推挤门（44）另计，level=1 ⇒ push=-1。
+            let mut trace = expect_stream;
+            let _tail = trace.random_below(3);
+            if magic_id == 44 {
+                let _p20 = trace.random_below(20);
+                let _plv = trace.random_below(1);
+            }
+            assert_eq!(
+                format!("{:?}", rig.world.rng),
+                format!("{:?}", trace),
+                "[{magic_id}] 施法 tick 取数序不变（入队不抽数）"
+            );
+            // 未到点：目标不结算、无 31。
+            let f = rig.deliver(delay_ms - 1);
+            assert_eq!(b4_count(&f, 911, SM_31), 0, "[{magic_id}] 未到点不落地");
+            // 到点：投递者侧 MSD + 目标侧 `R(1000)`/MSD ⇒ 31。
+            let f = rig.deliver(1);
+            assert!(
+                b4_count(&f, 911, SM_31) >= 1,
+                "[{magic_id}] 到点后 RM_MAGSTRUCK(31) 落地"
+            );
+        }
+    }
+
+    /// 找「44 的推挤门与 `Random(5)` 同时通过」的种子（B4Rig 施法前取数序固定）。
+    fn seed_for_hb_push() -> i32 {
+        for seed in 1..100_000 {
+            let magic = b1_six_magic(44);
+            let (mut c, _) = b1_six_replay(seed, &magic, 5, 0x0A05);
+            if c.random_below(20) < 6 + 5 * 3 + 50 && c.random_below(5) - 1 > 0 {
+                return seed;
+            }
+        }
+        panic!("找不到 44 推挤门通过的种子");
+    }
+
+    /// **`openmir2-rm-delaypushed`**：44 的 `push > 0` ⇒ 恰一条 `RM_DELAYPUSHED`
+    /// （`wParam=GetNextDirection`、`nParam2=push`、`nParam3=target`、600ms）；
+    /// 到点前不动，到点后 `CharPushed` 逐格推进并回 `Dir = GetBackDir(nDir)`。
+    #[test]
+    fn hb_fireball_push_delivers_char_pushed_at_due_time() {
+        const SM_BACKSTEP: u16 = mir2_protocol::messages::SM_BACKSTEP;
+        let magic = b1_six_magic(44);
+        let mut rig = B4Rig::new(magic, 5, None);
+        // `StickMode` 读目标实体的 `Entity.stick_mode`（本例缺省 false）；caster 60 > target 10 ⇒ 门开。
+        let m = rig.add_monster("m", 11, 10, 80, 10, 0, 0, 0);
+        rig.seed(0);
+        let seed = seed_for_hb_push();
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        rig.cast(44, (11, 10), m);
+        let delays = rig.delay_msgs(mir2_world::slave::RM_DELAYPUSHED);
+        assert_eq!(delays.len(), 1, "push > 0 ⇒ 恰一条 RM_DELAYPUSHED");
+        let d = delays[0];
+        let dir = mir2_world::magic::next_direction(10, 10, 11, 10);
+        let push = d.n_param2;
+        assert!(push > 0, "push 必须 > 0");
+        assert_eq!(
+            (d.actor_id, d.w_param, d.n_param1, d.n_param3),
+            (
+                rig.caster,
+                i32::from(dir),
+                game_svr::feature::make_long(11, 10),
+                m
+            ),
+            "RM_DELAYPUSHED 载荷（nDir/MakeLong/push/target）"
+        );
+        assert_eq!(d.deliver_at_ms, rig.world.clock_ms + 600);
+        // 到点前：位置不变、无 SM_BACKSTEP。
+        let f = rig.deliver(599);
+        assert_eq!(
+            (
+                rig.world.entities.get(m).unwrap().x,
+                rig.world.entities.get(m).unwrap().y
+            ),
+            (11, 10),
+            "到点前不推"
+        );
+        assert_eq!(b4_count(&f, 911, SM_BACKSTEP), 0);
+        // 到点：逐格推进 `push` 格，方向 = back_dir，帧方向 = back_dir。
+        let f = rig.deliver(1);
+        let back = mir2_world::magic::back_dir(dir);
+        let e = rig.world.entities.get(m).unwrap();
+        assert_eq!(
+            (e.x, e.y, e.dir()),
+            (11 + push, 10, back),
+            "CharPushed 推进 push 格并把 Dir 置为 nBackDir"
+        );
+        let steps = b4_all(&f, 911, SM_BACKSTEP);
+        assert_eq!(steps.len() as i32, push, "逐格一条 SM_BACKSTEP");
+        for b in &steps {
+            assert_eq!(
+                b4_cmd(b).series & 0xFF,
+                u16::from(back),
+                "SM_BACKSTEP 的帧方向 = nBackDir"
+            );
+        }
+    }
+
+    /// 阴性对照：caster 等级不高于目标 ⇒ 推挤两抽都不发生、无 `RM_DELAYPUSHED`
+    /// （但 `RM_DELAYMAGIC` 照常）。
+    #[test]
+    fn hb_fireball_push_gate_closed_draws_nothing_and_enqueues_no_push() {
+        let magic = b1_six_magic(44);
+        let mut rig = B4Rig::new(magic.clone(), 5, None);
+        let m = rig.add_monster("m", 11, 10, 80, 60, 0, 0, 0); // level == caster
+        rig.seed(0);
+        let seed = B4_SEED;
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let (expect_stream, _) = b1_six_replay(seed, &magic, 5, 0x0A05);
+        rig.cast(44, (11, 10), m);
+        assert!(rig.delay_msgs(mir2_world::slave::RM_DELAYPUSHED).is_empty());
+        assert_eq!(
+            rig.delay_msgs(mir2_world::slave::RM_DELAYMAGIC).len(),
+            1,
+            "等级门只关推挤支，不关 RM_DELAYMAGIC"
+        );
+        // magic level=5 ⇒ 共享尾的 `level < 3` 门关，`Random(3)` 不抽。
+        let trace = expect_stream;
+        assert_eq!(
+            format!("{:?}", rig.world.rng),
+            format!("{:?}", trace),
+            "推挤门关 ⇒ 无 Random(20)/Random(Level)"
+        );
+    }
+
+    // ═════════════ 卡 `openmir2-player-dir-supply` ═════════════
+
+    /// `Entity.ai.dir` 是唯一权威：展示表与实体不一致时 `GetPoseCreate`/`actor_dir` 读实体。
+    #[test]
+    fn player_dir_authority_beats_stale_display_table() {
+        use mir2_protocol::messages::CM_TURN;
+        let mut world = mir2_world::World::new(32, 32);
+        let mover = {
+            let mut e = mir2_world::Entity::new(0, "mover".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let target = {
+            let mut e = mir2_world::Entity::new(0, "target".to_string(), 11, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        // 展示表故意停在**错误**方向（西=6），实体（东=2）才是权威。
+        displays.set(
+            mover,
+            downlink::ActorDisplay::new(6, 0, 111, 0, 0, 255, b"mover".to_vec()),
+        );
+        displays.set(
+            target,
+            downlink::ActorDisplay::new(6, 0, 112, 0, 0, 255, b"target".to_vec()),
+        );
+        world.entities.get_mut(mover).unwrap().ai.dir = 2; // 东
+        assert_eq!(actor_dir(&world, &displays, mover), 2, "读实体不读展示表");
+        assert_eq!(
+            pose_create(&world, &displays, mover),
+            Some(target),
+            "GetPoseCreate 用实体 Dir（东格有目标；若读展示表西格为空）"
+        );
+        // 反过来：实体朝西（空）而展示表朝东（有目标）⇒ 必须取不到。
+        world.entities.get_mut(mover).unwrap().ai.dir = 6;
+        assert_eq!(
+            pose_create(&world, &displays, mover),
+            None,
+            "实体朝西 ⇒ 前方无目标（展示表朝东不得生效）"
+        );
+
+        // `CM_TURN`：实体与展示表同时落新值（展示表是投影）。
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "mover".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: mover,
+            },
+        );
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0, tx0);
+        handle_move_cmd(
+            CM_TURN,
+            game_svr::feature::make_long(10, 10),
+            5,
+            "mover",
+            901,
+            &online,
+            &mut std::collections::HashMap::new(),
+            &mut world,
+            &mut displays,
+            &gates,
+            None,
+        );
+        assert_eq!(world.entities.get(mover).unwrap().ai.dir, 5, "转身写实体");
+        assert_eq!(displays.get(mover).unwrap().dir, 5, "展示表按实体投影");
+        // 展示表再次被弄脏 ⇒ 权威读仍取实体（模拟失败支的落后值）。
+        set_display_dir(&mut displays, mover, 1);
+        assert_eq!(
+            actor_dir(&world, &displays, mover),
+            5,
+            "展示表脏值不影响权威读"
+        );
+    }
+
+    // ═════════════ 卡 `openmir2-player-drop-useitems`（宿主帧面）═════════════
+
+    /// 玩家死亡 `DropUseItems` 的 `SM_DELITEMS(709)`：`ItemDesc & 8` 的绑定件被清槽
+    /// 并出 `"/MakeIndex/"` 尾；世界实体与会话两边的 `Index` 都归 0（`MakeIndex` 保留）。
+    #[test]
+    fn player_death_drop_use_items_emits_sm_delitems_and_clears_slots() {
+        use mir2_protocol::messages::SM_DELITEMS;
+        let mut world = mir2_world::World::new(32, 32);
+        let dead = {
+            let mut e = mir2_world::Entity::new(0, "dead".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.hp = 0;
+            e.use_items[0] = mir2_world::entity::UseItemSlot {
+                make_index: 77,
+                index: 1,
+                dura: 500,
+                dura_max: 1000,
+                desc: [0; 14],
+            };
+            world.add_entity(e)
+        };
+        let killer = {
+            let mut e = mir2_world::Entity::new(0, "killer".to_string(), 11, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.entities.get_mut(dead).unwrap().exp_hitter = Some(killer);
+        world.set_item_catalog(vec![mir2_data::StdItem {
+            name: "绑定件".into(),
+            item_desc: 8,
+            ..mir2_data::StdItem::default()
+        }]);
+        world.set_death_drop_config(1, 1, 3, Vec::new());
+        let rec = world.tick();
+        assert_eq!(rec.death_use_item_drops.len(), 1, "死亡结算产出删除列表");
+
+        let mut sg = test_session_ground(dead);
+        sg.use_items[0] = Some(game_svr::bag::BagItem {
+            make_index: 77,
+            index: 1,
+            dura: 500,
+            dura_max: 1000,
+            desc: [0; 14],
+        });
+        let mut ground_sessions = std::collections::HashMap::new();
+        ground_sessions.insert("dead".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ud".into(),
+                chr_name: "dead".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 913,
+                actor_id: dead,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0, tx0);
+        drain_death_use_item_drops(&rec, &online, &gates);
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            frames.push((socket, body));
+        }
+        assert_eq!(frames.len(), 1, "恰一条 SM_DELITEMS");
+        assert_eq!(frames[0].0, 913);
+        let cmd = b4_cmd(&frames[0].1);
+        assert_eq!(cmd.ident, SM_DELITEMS);
+        assert_eq!(cmd.series, 1, "删除件数");
+        assert_eq!(
+            mir2_protocol::edcode::decode(&frames[0].1[12..]),
+            b"/77/".to_vec(),
+            "ItemName 空（第一段只填 MakeIndex）⇒ \"/MakeIndex/\""
+        );
+        // 世界实体与会话两侧的槽都清了 Index、保留 MakeIndex。
+        assert_eq!(world.entities.get(dead).unwrap().use_items[0].index, 0);
+        let sg = ground_sessions.get_mut("dead").unwrap();
+        sync_use_items_to_session(&world, sg);
+        assert_eq!(sg.use_items[0].as_ref().unwrap().index, 0);
+        assert_eq!(sg.use_items[0].as_ref().unwrap().make_index, 77);
+    }
+
+    /// **C1 进程级判据**：生产 `sim_loop` 的建世界入口 [`production_world`] 会把
+    /// `EnterConfig::world_item_catalog` 接进 `World::item_catalog` —— 死亡
+    /// `DropUseItems` 能查到 `ItemDesc & 8` 的模板，清槽并出 `SM_DELITEMS` 的
+    /// `"/MakeIndex/"` 尾。**不手工写 `world.item_catalog`**。
+    ///
+    /// 红检：删掉 `production_world` 里的 `set_item_catalog` 调用（或 `sim_loop`
+    /// 不传表）⇒ `get_std_item` 恒 `None` ⇒ 删除列表为空/无帧 ⇒ 本用例红。
+    #[test]
+    fn production_world_wires_item_catalog_into_death_drop() {
+        use mir2_protocol::messages::SM_DELITEMS;
+        let mut cfg = EnterConfig::for_test(crate::strings::StringConf::defaults());
+        cfg.world_item_catalog = vec![mir2_data::StdItem {
+            name: "绑定件".into(),
+            item_desc: 8,
+            ..mir2_data::StdItem::default()
+        }];
+        // 与 `sim_loop` 同一条生产入口。
+        let mut world = production_world(vec![(32, 32)], &mut cfg.world_item_catalog);
+        assert!(
+            cfg.world_item_catalog.is_empty(),
+            "顺序表已移入世界（生产路径不复制、不手工设字段）"
+        );
+        let dead = {
+            let mut e = mir2_world::Entity::new(0, "dead".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.hp = 0;
+            e.use_items[0] = mir2_world::entity::UseItemSlot {
+                make_index: 77,
+                index: 1,
+                dura: 500,
+                dura_max: 1000,
+                desc: [0; 14],
+            };
+            world.add_entity(e)
+        };
+        let killer = {
+            let mut e = mir2_world::Entity::new(0, "killer".to_string(), 11, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.entities.get_mut(dead).unwrap().exp_hitter = Some(killer);
+        world.set_death_drop_config(1, 1, 3, Vec::new());
+        let rec = world.tick();
+        assert_eq!(
+            rec.death_use_item_drops,
+            vec![(dead, vec![(0usize, String::new(), 77)])],
+            "生产目录查得到模板 ⇒ 第一段清槽并记 DeleteItem"
+        );
+        assert_eq!(world.entities.get(dead).unwrap().use_items[0].index, 0);
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ud".into(),
+                chr_name: "dead".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 914,
+                actor_id: dead,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0, tx0);
+        drain_death_use_item_drops(&rec, &online, &gates);
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            frames.push((socket, body));
+        }
+        assert_eq!(frames.len(), 1, "恰一条 SM_DELITEMS（生产接线可达）");
+        assert_eq!(frames[0].0, 914);
+        let cmd = b4_cmd(&frames[0].1);
+        assert_eq!(cmd.ident, SM_DELITEMS);
+        assert_eq!(cmd.series, 1);
+        assert_eq!(
+            mir2_protocol::edcode::decode(&frames[0].1[12..]),
+            b"/77/".to_vec(),
+            "尾 = 斜杠 MakeIndex 斜杠（ItemName 空）"
+        );
+    }
+
+    /// **I1 判据（克隆体 AOI 出现帧方向）**：`spawn_clone` 把
+    /// `GetBackDir(主人)` 写进**实体** `Entity.ai.dir`；AOI 出现帧读实体 ⇒ 方向 = back-dir，
+    /// 不是 0。展示表登记的是同一值（投影），所以红检必须打实体。
+    ///
+    /// 红检：删掉 `spawn_clone` 的 `e.ai.dir = out.dir` ⇒ 实体方向 0 ⇒ `SM_TURN.Series`
+    /// 断言（6）必红。
+    #[test]
+    fn aoi_show_clone_uses_entity_back_dir() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", mir2_world::Entity::new(0, "p", 10, 10), 0)
+            .expect("玩家进图");
+        world.entities.get_mut(p).unwrap().want_ref_msg = true;
+        // 主人施法方向 2 ⇒ 克隆体 `GetBackDir(2)` = 6。
+        let out =
+            mir2_world::slave::spawn_clone(&mut world, p, 2).expect("主人在世界 ⇒ 应造出克隆体");
+        assert_eq!(out.dir, 6);
+        assert_eq!(
+            world.entities.get(out.clone_id).unwrap().ai.dir,
+            6,
+            "spawn_clone 必须写实体 ai.dir（oracle PlayCloneObject.Dir）"
+        );
+
+        let caster_display =
+            downlink::ActorDisplay::new(2, 0, 0, 0, 0, downlink::PLAYER_NAME_COLOR, Vec::new());
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            out.clone_id,
+            downlink::clone_display(out.dir, &caster_display),
+        );
+        // 观察者的可见集直接钉入克隆体（Show）——出现帧路径只读实体方向。
+        world.entities.get_mut(p).unwrap().visible_actors.push(
+            mir2_world::entity::VisibleBaseObject {
+                target: out.clone_id,
+                flag: mir2_world::VisibleFlag::Show,
+            },
+        );
+        world.entities.get_mut(p).unwrap().ai.search_tick = world.clock_ms;
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "up".into(),
+                chr_name: "p".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: p,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
+
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body)
+                .expect("SM_* body 至少 12B");
+            frames.push((cm.recog, cm.ident, cm.series));
+        }
+        assert_eq!(frames.len(), 2, "出现帧 = SM_TURN + SM_FEATURECHANGED");
+        assert_eq!(frames[0].0, out.clone_id);
+        assert_eq!(frames[0].1, mir2_protocol::messages::SM_TURN);
+        assert_eq!(
+            frames[0].2 & 0xFF,
+            6,
+            "克隆体出现帧方向 = 实体 back-dir（6），不是 0"
+        );
+    }
+
+    /// **M2 判据**：`HUtil32.MakeLong(ushort, ushort)` 的坐标是**低 16 位二补数**，
+    /// 越界/负数不得归 0。
+    ///
+    /// 红检：把 `wire_coord` 换回 `u16::try_from(v).unwrap_or(0)` ⇒ `-1` 归 0 断言必红。
+    #[test]
+    fn make_long_keeps_low_16_bit_twos_complement() {
+        assert_eq!(wire_coord(-1), 0xFFFF, "`(ushort)-1` = 65535");
+        assert_eq!(wire_coord(70_000), 70_000_i32 as u16, "超界保留低 16 位");
+        assert_ne!(wire_coord(-1), 0, "不得归 0");
+        assert_eq!(
+            game_svr::feature::make_long(wire_coord(-1), wire_coord(-2)),
+            0xFFFF | (0xFFFE_i32 << 16),
+            "低/高字都保留二补数"
+        );
     }
 }

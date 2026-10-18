@@ -108,6 +108,11 @@ pub enum RunStateExpiry {
     TwinHitSocket,
 }
 
+/// `DropUseItems` 的一条删除记录：`(装备槽, ItemName, MakeIndex)`。
+///
+/// `ItemName` 在第一段（`ItemDesc & 8`）恒空串（oracle `DeleteItem.ItemName` 缺省 null）。
+pub type UseItemDeletion = (usize, String, i32);
+
 /// 一个 tick 的处理记录（判据①：断言"谁、按什么顺序"被处理）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TickRecord {
@@ -122,6 +127,13 @@ pub struct TickRecord {
     /// 本 tick 的死亡结算：`(死者 id, 掉落物品数, 金币, 经验归属者, 获得经验)`
     /// —— 归属者取 C# `ExpHitter`（不是 `LastHiter`），见 `Entity::exp_hitter`
     pub deaths: Vec<(i32, usize, i32, Option<i32>, i32)>,
+    /// **`openmir2-player-drop-useitems`**：本 tick 玩家死亡 `DropUseItems`
+    /// （`PlayObject.Message.cs:2152-2228`）的删除列表，按死亡结算序：
+    /// `(玩家 id, [(装备槽, 物品名 GBK 字节, MakeIndex)])`。
+    ///
+    /// `ItemName` 只在第一段（`ItemDesc & 8`）为空串——oracle 那里只填 `MakeIndex`
+    /// （`PlayObject.Message.cs:2170`），`SendDelItemList` 拼成 `"/MakeIndex/"`。
+    pub death_use_item_drops: Vec<(i32, Vec<UseItemDeletion>)>,
     /// 本 tick 的**经验归属**（oracle `BaseObject.cs:2429 KillFunc` → `RM_PLAYERKILLMONSTER`
     /// → `PlayObject.cs:1632 KillTargetTrigger`）：
     /// `(获得者 id, 本次获得, 是否进入升级块, 升级后等级)`。
@@ -648,6 +660,29 @@ pub struct World {
     /// 读 `[Setup] PosionDecHealthTime`）——毒伤 DoT 的周期门（`ActorBuffSystem.cs:235`）。
     /// 宿主未解析该键 ⇒ 缺省 2500（= oracle 缺省；接线待 Envir 侧解析，登记）。
     pub poison_dec_health_time: i32,
+    /// `Config.DieDropUseItemRate`（`GameSvrConf.cs:768/1714` 缺省 30；`ServerConf.cs:492`
+    /// 读 `[Setup] DieDropUseItemRate`，部署件 = 50）——玩家死亡 `DropUseItems` 的
+    /// `PvpLevel() <= 2` 支逐槽骰 `Random(nRate)`（`PlayObject.Message.cs:2183`）。
+    pub die_drop_use_item_rate: i32,
+    /// `Config.DieRedDropUseItemRate`（`GameSvrConf.cs:772/1715` 缺省 15；部署件 = 15）——
+    /// `PvpLevel() > 2` 支（红名）。
+    pub die_red_drop_use_item_rate: i32,
+    /// `Config.DropItemRage`（`GameSvrConf.cs:1754` 缺省 3，`Server.conf [Setup]`）——
+    /// `DropUseItems` 的 `dropWide = MIN(DropItemRage, 3)`（`PlayObject.Message.cs:2194`）。
+    pub drop_item_rage: i32,
+    /// `M2Share.DisableTakeOffList` 的键集合（`M2Share.cs:1482`：`ContainsKey(Index - 1)`）——
+    /// `DropUseItems` 的「禁止取下列表」门（`PlayObject.Message.cs:2191`）。
+    ///
+    /// **装载登记**：部署件 `Envir/DisableTakeOffList.txt` 为 **0 字节** ⇒ 真机恒空；
+    /// 本仓未接文件装载（T-81），缺省空与部署件等价。
+    pub disable_take_off_keys: Vec<u16>,
+    /// `Config.KillByHumanDropUseItem`（`GameSvrConf.cs:780/1717` 缺省 `false`；
+    /// `ServerConf.cs:495`，部署件 `=1`）——`KillTargetTrigger` 第二段
+    /// （`PlayObject.cs:1785-1800`）对**玩家**击杀者的 `DropUseItems` 门。
+    pub kill_by_human_drop_use_item: bool,
+    /// `Config.KillByMonstDropUseItem`（`GameSvrConf.cs:784/1718` 缺省 `true`；
+    /// `ServerConf.cs:496`，部署件 `=1`）——同上，对**非玩家**击杀者。
+    pub kill_by_monst_drop_use_item: bool,
     /// 物品目录（掉落生成按名查 `StdItem`）
     pub item_catalog: Vec<StdItem>,
     /// 怪物极品掉落几率（`Config.MonRandomAddValue`）
@@ -929,6 +964,12 @@ impl World {
             buff_enabled: false,
             buff_pass_tick: i64::MIN,
             poison_dec_health_time: 2500,
+            die_drop_use_item_rate: 30,
+            die_red_drop_use_item_rate: 15,
+            drop_item_rage: 3,
+            disable_take_off_keys: Vec::new(),
+            kill_by_human_drop_use_item: false,
+            kill_by_monst_drop_use_item: true,
             item_catalog: Vec::new(),
             mon_random_add_value: 40,
             need_exps: vec![0; 1000],
@@ -1598,7 +1639,7 @@ impl World {
     /// :1050     if (push > 0) SendSelfDelayMsg(RM_DELAYPUSHED, ...)
     /// ```
     /// `boTrain` = `result`（只看 `Race >= Animal`，与推挤是否命中无关）。
-    /// `StickMode` 本骨架无字段 ⇒ 恒 `false`（登记）。
+    /// `StickMode` 读目标实体的 `Entity.stick_mode`（普通目标缺省 false）。
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn cast_hb_fireball_spell(
@@ -3860,6 +3901,62 @@ impl World {
         }
     }
 
+    /// 设置某张地图的 `Envir.Flag.FightZone`/`Fight3Zone`（`DieDropItems` 的地图门，
+    /// `BaseObject.cs:2452`）。越界 `map_id` 静默忽略。幂等。生产宿主在起世界时按注册表逐图灌入。
+    pub fn set_map_fight_zone(&mut self, map_id: usize, fight_zone: bool, fight3_zone: bool) {
+        if let Some(map) = self.maps.get_mut(map_id) {
+            map.set_fight_zone(fight_zone, fight3_zone);
+        }
+    }
+
+    /// **`openmir2-player-drop-useitems`**：灌入玩家死亡 `DropUseItems` 的配置
+    /// （`Server.conf [Setup] DieDropUseItemRate`/`DieRedDropUseItemRate`/`DropItemRage`
+    /// + `Envir/DisableTakeOffList.txt` 的键集合）。缺省 = oracle 缺省（30/15/3/空）。
+    pub fn set_death_drop_config(
+        &mut self,
+        die_drop_use_item_rate: i32,
+        die_red_drop_use_item_rate: i32,
+        drop_item_rage: i32,
+        disable_take_off_keys: Vec<u16>,
+    ) {
+        self.die_drop_use_item_rate = die_drop_use_item_rate;
+        self.die_red_drop_use_item_rate = die_red_drop_use_item_rate;
+        self.drop_item_rage = drop_item_rage;
+        self.disable_take_off_keys = disable_take_off_keys;
+    }
+
+    /// **`openmir2-player-drop-useitems`**：`KillTargetTrigger` 第二段的两个配置门
+    /// （`[Setup] KillByHumanDropUseItem` / `KillByMonstDropUseItem`）。
+    pub fn set_death_drop_kill_config(
+        &mut self,
+        kill_by_human_drop_use_item: bool,
+        kill_by_monst_drop_use_item: bool,
+    ) {
+        self.kill_by_human_drop_use_item = kill_by_human_drop_use_item;
+        self.kill_by_monst_drop_use_item = kill_by_monst_drop_use_item;
+    }
+
+    /// **生产入口**：灌入 `stditems` 的**顺序表**作为物品目录。
+    ///
+    /// `items[i]` 对应 `Index = i + 1`（oracle `GameItemSystem` 的 1-based 口径，
+    /// 同 `bins/game-svr::items::catalog_from`）。目录必须是**原始表顺序**（空名项也占位）：
+    /// `VecItemCatalog::get_std_item` 按 `wrapping_sub(1)` 取下标、空名返回 `None`；
+    /// 未灌入（空向量）时查表恒 `None`。
+    ///
+    /// 消费点：`death_drop::drop_use_items_on_death`、怪物掉落生成等所有走
+    /// `VecItemCatalog` 的路径。宿主 `bins/game-svr` 在建世界时用
+    /// `EnterConfig::world_item_catalog`（与帧/能力面的 `StdItemCatalog` 同源同表）喂入。
+    pub fn set_item_catalog(&mut self, items: Vec<StdItem>) {
+        self.item_catalog = items;
+    }
+
+    /// 设置某张地图的 `Envir.Flag.NoDropItem`（`KillTargetTrigger` 第二段的地图门）。
+    pub fn set_map_no_drop_item(&mut self, map_id: usize, no_drop_item: bool) {
+        if let Some(map) = self.maps.get_mut(map_id) {
+            map.set_no_drop_item(no_drop_item);
+        }
+    }
+
     /// 把注册表 `MapFile.doors`/`door_status` 搬进某图（`Envirnoment.cs:934-991` 加载即建 `DoorList`）。
     /// 越界 `map_id` 静默忽略。幂等（重复调用覆盖）。缺省空 ⇒ `arround_door_opened` 恒 `true`
     /// （改动前行为逐字节不变）。`crates/world` 不依赖 `crates/envir` ⇒ 用本中立结构
@@ -3997,6 +4094,7 @@ impl World {
             aoi_order: Vec::new(),
             attacks: Vec::new(),
             deaths: Vec::new(),
+            death_use_item_drops: Vec::new(),
             exp_awards: Vec::new(),
             merchants_run: Vec::new(),
             merchant_turns: Vec::new(),
@@ -4594,7 +4692,7 @@ impl World {
     /// `MoveToMovingObject` 不挡——照抄）。
     ///
     /// **建模差异（登记）**：`CastleDoor.HoldPlace` 阻挡支不建模（城门不在 `EntityStore`）。
-    fn char_pushed_now(
+    pub(crate) fn char_pushed_now(
         &mut self,
         actor_id: i32,
         n_dir: u8,
@@ -5350,7 +5448,7 @@ impl World {
             let Some(e) = self.entities.get(id) else {
                 continue;
             };
-            let (_map_id, gold, mon_exp, exp_hitter, group_owner, is_play) = (
+            let (map_id, gold, mon_exp, exp_hitter, group_owner, is_play) = (
                 e.map_id,
                 e.gold,
                 e.mon_exp,
@@ -5419,6 +5517,64 @@ impl World {
                     if winner == primary {
                         gained = amount;
                     }
+                }
+            }
+            // **`openmir2-player-drop-useitems`**：玩家死亡 `DropUseItems`
+            // （`PlayObject.Message.cs:2152-2228`）。oracle 的触发链是
+            // `Die()` → `KillFunc()` → `SendMsg(RM_DIEDROPITEM)` → `Operate` →
+            // `DieDropItems`（`BaseObject.cs:2437-2464`）；本骨架在死亡结算点执行
+            // ——同点（死亡结算）、同次（每次死亡恰一次），相位差见 T-81。
+            //
+            // 三道**产生**门（缺一不抽）：
+            // ① `KillFunc` 的 `ExpHitter != null && (ExpHitter.Master != null || ExpHitter.Race == Play)`；
+            // ② `DieDropItems` 的 `!Envir.Flag.FightZone && !Envir.Flag.Fight3Zone`；
+            // ③ `!Animal`（玩家恒 false）。
+            if is_play {
+                let send_diedrop = exp_hitter
+                    .and_then(|h| self.entities.get(h))
+                    .is_some_and(|h| {
+                        h.master.is_some() || h.race == crate::entity::ACTOR_RACE_PLAY
+                    });
+                let fight_zone = self.maps.get(map_id).is_some_and(|m| m.is_fight_zone());
+                let animal = self.entities.get(id).is_some_and(|x| x.ai.animal);
+                if send_diedrop && !fight_zone && !animal {
+                    let deleted = crate::death_drop::drop_use_items_on_death(self, id);
+                    if !deleted.is_empty() {
+                        record.death_use_item_drops.push((id, deleted));
+                    }
+                }
+                // **第二段 `DropUseItems`（oracle `KillTargetTrigger`）**：
+                // 击杀者（`ExpHitter` 或其主人）是玩家时，它处理
+                // `RM_PLAYERKILLMONSTER`（`PlayObject.cs:1632`）的尾部会再调
+                // `killObject.DropUseItems(0)`（`:1787-1798`）。部署件
+                // `KillByHumanDropUseItem=1` ⇒ PvP 死亡**两次**逐槽抽数（第二次的删除列表
+                // 恒空：第一段已把 `ItemDesc&8` 清空）。
+                let killer_is_actor =
+                    exp_hitter
+                        .and_then(|h| self.entities.get(h))
+                        .is_some_and(|h| {
+                            h.master.is_some() || h.race == crate::entity::ACTOR_RACE_PLAY
+                        });
+                // `PlayObject.cs:1787-1793` 的前置与 `!NoItem || !Envir.Flag.NoDropItem`
+                // 都取 **`this`**——即处理 `RM_PLAYERKILLMONSTER` 的 PlayObject：
+                // `ExpHitter.Master` 存在时是主人（`KillFunc` 把消息发给 Master），
+                // 否则是 `ExpHitter` 本人。**不是**死者（`killObject`）。
+                let kill_trigger_id =
+                    exp_hitter.and_then(|h| self.entities.get(h).map(|h| h.master.unwrap_or(h.id)));
+                let kill_trigger = kill_trigger_id.and_then(|k| self.entities.get(k));
+                let no_item = kill_trigger.is_some_and(|k| k.no_item);
+                let killer_map_id = kill_trigger.map(|k| k.map_id);
+                let killer_map = killer_map_id.and_then(|m| self.maps.get(m));
+                let map_no_drop = killer_map.is_some_and(|m| m.no_drop_item());
+                let killer_fight_zone = killer_map.is_some_and(|m| m.is_fight_zone());
+                // 死者是玩家 ⇒ `AttackBaseObject.Race == Play`（`AttackBaseObject` = 死者/
+                // 死者主人）⇒ 只有 human 门。
+                if killer_is_actor
+                    && !killer_fight_zone
+                    && (!no_item || !map_no_drop)
+                    && self.kill_by_human_drop_use_item
+                {
+                    let _ = crate::death_drop::drop_use_items_on_death(self, id);
                 }
             }
             record.deaths.push((id, placed, gold, exp_hitter, gained));
