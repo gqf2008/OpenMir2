@@ -6,6 +6,7 @@
 - 方法：只读源码实读（`src/**`、`mir2-rs/crates/**`、`mir2-rs/bins/**`）+ 既有证据包复核；**未改 `src/**`、`sql/**`、`MirClient/`、`crates/{protocol,storage}/**`、`E:/MirServer/**`；未起服务、未占端口、未写库、未删文件**。
 - 引用纪律：**oracle 行号逐条实测**——本次修订在 `d3e09228e` 基线上用 `sed -n` 逐条重量，并由自检脚本（见 §6）对全文所有 `文件:起-止` 区间校验「起止在文件行数内 + 首/末行与描述对得上 + 函数体区间与花括号配对一致」；**Rust 侧只引符号/文件路径，不写 `:行号`**。
 - 判级：按 `AGENTS.md`「判据分级」；判不准一律按 **R**。
+- 状态回写（2026-10-18 晚，累计）：**B08 → `b12b59ca8`；P16 → `706c95cae`；M06/M08 → `209023120`；O03/O04/O05 → `f46e4f03f`**（另有 PR-2 类常量 `1821078dc`、PR-3 归属 spike `f64d9f241`、分批计划 `32c72c120` 入库）。
 - 状态回写（2026-10-18，`58da49071`）：**A01 / M11 / P03 / P04 已实现**（本审计是时点文档，正文行保留审计时的判定，此处统一标注最新状态）。另两处 oracle 订正：`BreakHolySeizeMode`（`AnimalObject.cs:330-334`）只置 `HolySeize=false` + `RefNameColor()`、**不复位** tick/interval；FireHit 到期实际在 `PlayObject.Message.cs:54-59`、TwinHit 在 `:60-64`。
 
 ---
@@ -227,7 +228,7 @@
 | B05 | `57-69` MP 回填 `MaxMP/18+1` + 53 | 同上 | 已实现 | 同上 | R |
 | B06 | `70-73` `HP==0 ⇒ Die()` | `world.rs::settle_deaths`（同 tick 统一结算） | 部分 | 死亡时点由「下一 Run」提前到「同 tick 末」；死亡帧/经验/退组次序可能提前 ≤300ms | R |
 | B07 | `74-81` 到量归零 | `stamina_tick`、`base_object_run_monster` | 已实现 | — | — |
-| B08 | `83-101` 死亡 `MakeGhost`（`MakeGhostTime=3min`/`ZenTime-20s`/`CanReAlive`） | 无（`world.rs` 只对断线玩家置 Ghost；`mongen.rs::monster_due_for_revive` 只有谓词未接线） | 缺失 | 怪物尸体永不 Ghost/移除；`GhostTick` 5min 清理不可达；`CanReAlive` 复活不可达；AOI 永远保留尸体格项 | R |
+| B08 | `83-101` 死亡 `MakeGhost`（`MakeGhostTime=3min`/`ZenTime-20s`/`CanReAlive`） | **已实现**（见状态回写） | 已实现 | 怪物尸体永不 Ghost/移除；`GhostTick` 5min 清理不可达；`CanReAlive` 复活不可达；AOI 永远保留尸体格项 | R |
 | B09 | `105-110` 体力点负值扣血 | `stamina_tick`、`base_object_run_monster` | 已实现 | — | — |
 | B10 | `112-118` `TargetCret` 清理 | `monai.rs::target_cret_cleanup`（仅怪物/守卫） | 部分 | 玩家 `ai.target_creature` 无 30s/死/距>15 清理 ⇒ 目标态滞留（影响后续攻击方向/技能目标） | L |
 | B11 | `119-124` `LastHiter` 30s | `world.rs::expire_hitters` | 已实现 | 全局每 tick 统一清，等价 | — |
@@ -249,9 +250,9 @@
 | M03 | `260-266` `WalkWaitLocked` 到点释放 | `monster_run` | 已实现 | — | — |
 | M04 | `267-277` `WalkTick/WalkSpeed/WalkCount/WalkStep/WalkWait` | `monster_run` | 已实现 | — | R |
 | M05 | `277-298` `!RunAwayMode` + `!NoAttackMode` + `TargetCret` / `TargetX=-1` / `Mission` | `monster_run`（无 `Mission`） | 部分 | 无目标时 `TargetX=-1` 对齐；`Mission`/任务点未建模 ⇒ 任务怪不走任务点 | L |
-| M06 | `299-324` `Master` 跟随、20 格 `SpaceMove`、`SlaveRelax` | 无（`slave.rs` 只管叛变/清表） | 缺失 | 宝宝不跟随/不回归主人；主人跨图不召唤 ⇒ 位置/帧/时序差 | R |
+| M06 | `299-324` `Master` 跟随、20 格 `SpaceMove`、`SlaveRelax` | **已实现**（见状态回写） | 已实现 | 宝宝不跟随/不回归主人；主人跨图不召唤 ⇒ 位置/帧/时序差 | R |
 | M07 | `326-333` `RunAwayTime` 到点复位 | `monster_run` | 已实现 | — | — |
-| M08 | `334-338` `Master.SlaveRelax` ⇒ `base.Run(); return` | 无 | 缺失 | 与 M06 同族；`SlaveRelax` 下 AI 应整段跳过 | R |
+| M08 | `334-338` `Master.SlaveRelax` ⇒ `base.Run(); return` | **已实现**（见状态回写） | 已实现 | 与 M06 同族；`SlaveRelax` 下 AI 应整段跳过 | R |
 | M09 | `339-349` `TargetX!=-1 ⇒ GotoTargetXY`，否则 `TargetCret==null ⇒ Wondering` | `monai.rs::goto_target_xy` / `wondering` | 已实现 | 取数次序见 monai 模块头（`Random(3)` 无条件、`Random(20)`→`Random(4)`） | R |
 | M10 | `352` `CheckRoyalty()` | `slave.rs::check_royalty`（各出口按 oracle 调/跳过） | 已实现 | — | R |
 | M11 | `353-356` `CrazyMode` 到点 `BreakCrazyMode()` | **已实现（`58da49071`）**：`entity.rs` 新增实体级 `crazy_mode/tick/interval`，`monai.rs::crazy_mode_expiry` 接三处非提前返回出口 | 已实现 | **狂暴态永不进入**（`OpenCrazyMode` 落状态缺失）⇒ 攻速/伤害不会进入狂暴修正 | R |
@@ -314,9 +315,9 @@ Rust 侧没有按 race 分派专用类的机制：`monster_ai_tick` 只把 `is_a
 |---|---|---|---|---|---|
 | O01 | `AnimalObject` `RM_STRUCK`⇒`Struck`；`RM_MAKEHOLYSEIZEMODE`⇒`OpenHolySeizeMode` | `monai.rs::animal_struck`；`world.rs` 写 `holy_seize*` | 已实现 | struck 的动物肉量/反击等价；定身到期见 A01 | R |
 | O02 | `MonsterObject` `RM_UPDATEVIEWRANGE`⇒`UpdateMonsterVisible`（`SearchTime` 门 + `IsVisibleActive`） | `aoi.rs::update_visible_gay` 直接改 `visible_actors`；`is_visible_active` 未被降频消费 | 部分 | 可见集合能建立；但 `SearchTime` 门与 `ProcessRunCount` 联动缺失（D05） | R |
-| O03 | `BeeQueen` `RM_ZEN_BEE` 产小怪 | 无 | 缺失 | 见 R03 | R |
-| O04 | `Clone` 受击扣主人 MP 且恒 `return false` | 无 | 缺失 | 分身不耗蓝；消息泵中断语义缺 | R |
-| O05 | `SpiderHouseMonster` `RM_ZEN_BEE` 产小蜘蛛 | 无 | 缺失 | 见 R37 | R |
+| O03 | `BeeQueen` `RM_ZEN_BEE` 产小怪 | **已实现**（`f46e4f03f`） | 已实现 | 见 R03 | R |
+| O04 | `Clone` 受击扣主人 MP 且恒 `return false` | **已实现**（`f46e4f03f`） | 已实现 | 分身不耗蓝；消息泵中断语义缺 | R |
+| O05 | `SpiderHouseMonster` `RM_ZEN_BEE` 产小蜘蛛 | **已实现**（`f46e4f03f`） | 已实现 | 见 R37 | R |
 | O06 | `StickMonster` 纯 `base.Operate` | 不适用（无专用类） | 不适用 | 普通怪路径已覆盖 | — |
 | O07 | `SuperGuard` 纯 `base.Operate` | 不适用 | 不适用 | 同上 | — |
 | O08 | `PlayCloneObject` 纯 `base.Operate` | `crates/world/src/slave.rs::spawn_clone` 已被 `bins/game-svr/src/slave.rs` 生产调用（静态克隆体、展示/`RM_TURN`、格占用） | **部分** | 缺 `PlayCloneObject.Operate` 的受击转发（扣主人 MP、恒 `return false`）与完整 `Run` | L |
@@ -343,7 +344,7 @@ Rust 侧没有按 race 分派专用类的机制：`monster_ai_tick` 只把 `is_a
 | P13 | `240-248` `IsDelayCall` | `crates/script` 有 `DelayCall` | 部分 | 到点回调可能缺 | L |
 | P14 | `249-256` `DecPkPoint` | 无 | 缺失 | PK 值不随时间下降 ⇒ PK 等级/名字颜色长期偏高 | L |
 | P15 | `257-262` `DecLightItemDrug`：`UseLamp` + `CheckPkStatus` | `world.rs::check_pk_status`（`drain_pk_flag_downlink`）；`UseLamp` 无 | 部分 | PvP 标志 60s 到期有；灯耐久不扣/不掉落/无 `RM_LAMPCHANGEDURA` | L |
-| P16 | `263-285` `CheckDupObj` 重叠推挤 | 无 | 缺失 | 站重叠不推挤；`RandomByte(8)` 少抽 | R |
+| P16 | `263-285` `CheckDupObj` 重叠推挤 | **已实现**（见状态回写） | 已实现 | 站重叠不推挤；`RandomByte(8)` 少抽 | R |
 | P17 | `286-290` 攻城区 `ChangePkStatus(true)` | `castle.rs` 有攻城态；`world.rs` 有 `check_pk_status` | 部分 | 攻城区强制 PK 标志可能缺 | L |
 | P18 | `291-349` 夜间折扣/安全区/攻城获胜/名字颜色 | 零散（`castle.rs` 有 `GetCastle`）；无 1s 聚合门 | 部分 | 安全区变色/半价/攻城结果帧时点差 | L |
 | P19 | `356-365` 200ms 消息泵 | 宿主异步命令 FIFO（tick 边界排空） | 部分 | 命令延迟量化 200ms；无优先级队/延时头阻塞 | R |
