@@ -1368,6 +1368,9 @@ pub struct MonsterRow<'a> {
 pub fn monster_from_row(row: MonsterRow<'_>) -> Entity {
     let mut e = Entity::new(row.id, row.name, row.x, row.y);
     e.race = 80; // ActorRace.Monster
+                 // `Entity::new` 是**玩家** ctor 等价物（`PlayObject.cs:899-901` 覆盖 `SearchTime=1000`）；
+                 // 怪物这里还原非玩家缺省占位值，真实值由生成路径的 ctor 抽/`seed_from_spawn` 落定。
+    e.ai.search_time = crate::entity::BASE_ANIMAL_SEARCH_TIME;
     e.level = row.level;
     e.mon_exp = row.exp;
     e.hp = row.hp;

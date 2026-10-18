@@ -8881,6 +8881,17 @@ fn drain_aoi_downlink(
         let Some(observer) = world.entities.get(observer_id) else {
             continue;
         };
+        // **出现帧只在该观察者「本 tick 实际扫过」时下发**。oracle 的
+        // `SendMsg(RM_TURN / RM_DEATH)` 在 `PlayObject.SearchViewRange` 内部
+        // （`PlayObject.cs:3220-3240`），不是每 200ms 一次的独立下行；玩家的扫描按
+        // `(now - SearchTick) > SearchTime(=1000)` 节流（`WorldServer.cs:663`），
+        // 其间 `VisibleFlag::Show` 会一直保留到下一次扫描才置回 `Invisible` ⇒
+        // 宿主若每 tick 都按 `Show` 出帧，会把同一对出现帧重复发到下一次扫描前。
+        // 玩家：`SearchTick == clock_ms` ⇔ 本 tick 扫过；非玩家 viewer 每 tick 都扫（本片不变）。
+        if observer.race == mir2_world::ACTOR_RACE_PLAY && observer.ai.search_tick != world.clock_ms
+        {
+            continue;
+        }
         let Some(entry) = online.iter().find(|e| e.chr_name == sess.chr_name) else {
             glog!(
                 "WRN",
@@ -13666,6 +13677,32 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    /// 推进世界到**下一次玩家 AOI 扫描**并返回该 tick 的 `TickRecord`。
+    ///
+    /// 卡 `openmir2-player-searchviewrange-cadence`：玩家 `SearchViewRange` 按
+    /// `(now - SearchTick) > SearchTime(=1000)` 节流（`WorldServer.cs:663`、
+    /// `PlayObject.cs:900` 常量覆盖），世界 200ms tick ⇒ 每 6 tick（1200ms）扫一次。
+    /// 依赖「tick 一次就看见」的用例一律改用本函数。
+    fn tick_until_next_player_scan(world: &mut mir2_world::World) -> mir2_world::TickRecord {
+        let mut guard = 0;
+        loop {
+            guard += 1;
+            assert!(
+                guard <= 100,
+                "100 tick 内没有玩家扫描：AOI 节拍实现可能坏了"
+            );
+            let rec = world.tick();
+            let now = world.clock_ms;
+            let scanned = world
+                .entities
+                .iter()
+                .any(|e| e.race == mir2_world::ACTOR_RACE_PLAY && e.ai.search_tick == now);
+            if scanned {
+                return rec;
+            }
+        }
+    }
+
     /// **M2 RNG trace 纯度**：`seed_probe_text` 必须
     /// ① 与 C# 钩子实测的 seed=42 参照序列逐项相同（自我标尺）；
     /// ② 与生产注入的 `RandomNumber::with_seed(seed)` 前 `PROBE_LEN` 项逐项相同（换独立实例不改自证值）。
@@ -14976,8 +15013,8 @@ mod tests {
         let b = world
             .enter_map("b", mir2_world::Entity::new(0, "b", 12, 10), 0)
             .expect("b 进图");
-        // 一个 tick 让 AOI 把彼此标 `VisibleFlag::Show`（闸道世界 tick 每轮都刷新）。
-        world.tick();
+        // 推进到玩家的首次 AOI 扫描（`SearchTime=1000` ⇒ 第 6 tick）让彼此标 `Show`。
+        let _ = tick_until_next_player_scan(&mut world);
 
         let mut displays = downlink::DisplayTable::new();
         displays.set(
@@ -15091,7 +15128,7 @@ mod tests {
         let mut out = mir2_world::Entity::new(0, "out", 23, 10);
         out.race = mir2_world::ACTOR_RACE_MONSTER;
         let out_id = world.add_entity(out);
-        world.tick();
+        let _ = tick_until_next_player_scan(&mut world);
 
         let shown: Vec<i32> = world
             .entities
@@ -15136,7 +15173,7 @@ mod tests {
         let mut mon = mir2_world::Entity::new(0, "稻草人2", 12, 10);
         mon.race = mir2_world::ACTOR_RACE_MONSTER;
         let mon_id = world.add_entity(mon);
-        world.tick();
+        let _ = tick_until_next_player_scan(&mut world);
 
         let info = mir2_data::models::MonsterInfo {
             name: "稻草人2".to_string(),
@@ -15209,7 +15246,7 @@ mod tests {
         let mut far = mir2_world::Entity::new(0, "far", 30, 30);
         far.race = mir2_world::ACTOR_RACE_MONSTER;
         let far_id = world.add_entity(far);
-        world.tick();
+        let _ = tick_until_next_player_scan(&mut world);
 
         let info = mir2_data::models::MonsterInfo::default();
         let mut displays = downlink::DisplayTable::new();
@@ -15283,7 +15320,7 @@ mod tests {
 
         // tick 1：怪物首次出现 ⇒ `new >= 1`，实发 2 帧（SM_TURN + SM_FEATURECHANGED），
         // 累计 `af >= 2`；`vis` 也必须 >= 1。
-        world.tick();
+        let _ = tick_until_next_player_scan(&mut world);
         for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates) {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
         }
@@ -15308,7 +15345,7 @@ mod tests {
 
         // tick 2：怪仍在视野 ⇒ `update_visible_gay` 置 `Invisible` ⇒ `new == 0`，
         // 但当前可见集必须仍 >= 1（旧实现这里恒 0，正是 root 误判的来源）。
-        world.tick();
+        let _ = tick_until_next_player_scan(&mut world);
         for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates) {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
         }
@@ -15392,8 +15429,8 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        // tick 1：互相进入视野 ⇒ 无消失事件、不发消失帧。
-        let rec1 = world.tick();
+        // 首次扫描：互相进入视野 ⇒ 无消失事件、不发消失帧。
+        let rec1 = tick_until_next_player_scan(&mut world);
         assert!(
             rec1.hides.is_empty(),
             "首 tick 互相进入视野 ⇒ 无消失事件：{:?}",
@@ -15404,7 +15441,7 @@ mod tests {
 
         // 让 `b` 走远出 `a` 的视野（世界侧同步移动格子登记；Chebyshev 20 > 12）。
         assert!(world.try_step_now(b, 1, 0, 20), "`b` 应能向东走 20 格");
-        let rec2 = world.tick();
+        let rec2 = tick_until_next_player_scan(&mut world);
         assert!(
             rec2.hides.contains(&(a, b)),
             "`b` 离开 `a` 视野 ⇒ hides 记 (a,b)：{:?}",
@@ -15448,11 +15485,11 @@ mod tests {
         let b = world
             .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
             .expect("b 进图");
-        let _ = world.tick(); // tick1：`b` 非 Ghost ⇒ `a` 看得见它（只入可见集，无消失事件）。
+        let _ = tick_until_next_player_scan(&mut world); // `b` 非 Ghost ⇒ `a` 看得见它。
         world.entities.get_mut(b).unwrap().ghost = true;
-        // tick2：`b` 变 Ghost ⇒ AOI 过滤器（`!other.ghost`）不再看见它 ⇒ 从 `a` 的可见集移除；
-        // 消失帧守卫（`!Ghost`）应把它从 `hides` 里滤掉（**无守卫时这条 hide 会出现**，即红检点）。
-        let rec = world.tick();
+        // 下一次扫描（6 tick 后）：`b` 变 Ghost ⇒ AOI 过滤器（`!other.ghost`）不再看见它
+        // ⇒ 从 `a` 的可见集移除；消失帧守卫（`!Ghost`）应把它从 `hides` 里滤掉。
+        let rec = tick_until_next_player_scan(&mut world);
         assert!(
             !rec.hides.contains(&(a, b)),
             "Ghost 目标不得进 hides：{:?}",
@@ -15504,7 +15541,7 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let rec1 = world.tick(); // `a` 看见 `b`；`b` 看不见 `a`。
+        let rec1 = tick_until_next_player_scan(&mut world); // `a` 看见 `b`；`b` 看不见 `a`。
         assert!(rec1.hides.is_empty(), "首 tick 无离开：{:?}", rec1.hides);
         assert!(
             world
@@ -15518,7 +15555,7 @@ mod tests {
         );
 
         assert!(world.try_step_now(b, 1, 0, 20), "`b` 应能向东走 20 格");
-        let rec2 = world.tick();
+        let rec2 = tick_until_next_player_scan(&mut world);
         assert_eq!(
             rec2.hides,
             vec![(a, b)],
@@ -15639,7 +15676,7 @@ mod tests {
         let b = world
             .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
             .expect("b 进图");
-        let _ = world.tick(); // `a` 看见 `b`（`b` 进 `a` 的可见集）。
+        let _ = tick_until_next_player_scan(&mut world); // `a` 看见 `b`（`b` 进 `a` 的可见集）。
         assert!(
             world
                 .entities
@@ -15708,7 +15745,7 @@ mod tests {
         let c = world
             .enter_map("c", new_player_entity("c".to_string(), 150, 150), 0)
             .expect("c 进图（同图远端）");
-        let _ = world.tick(); // `a` 看见 `b`；`c` 远 ⇒ 看不见 `b`。
+        let _ = tick_until_next_player_scan(&mut world); // `a` 看见 `b`；`c` 远 ⇒ 看不见 `b`。
         assert!(
             world
                 .entities

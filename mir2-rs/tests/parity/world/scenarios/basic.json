@@ -1,7 +1,7 @@
 {
   "width": 64,
   "height": 64,
-  "ticks": 10,
+  "ticks": 13,
   "entities": [
     {"id": 1,  "x": 30, "y": 30, "view_range": 5, "race": 0},
     {"id": 2,  "x": 35, "y": 30, "view_range": 5, "race": 0},

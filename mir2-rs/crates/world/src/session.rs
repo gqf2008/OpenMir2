@@ -183,6 +183,9 @@ impl World {
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：ctor 等价物拿不到 `World` 时钟
         // ⇒ 落图时刻重盖（同 `poisoning_tick` 的口径）。
         entity.verify_tick = self.clock_ms;
+        // `BaseObject.cs:442` / `PlayObject.cs:901` ctor `SearchTick = GetTickCount()`：
+        // 玩家 `SearchViewRange` 的 1000ms 节拍从**构造/进图时刻**起算（同 `verify_tick` 口径）。
+        entity.ai.search_tick = self.clock_ms;
         let id = self.entities.insert(entity);
         let (x, y) = {
             let e = self.entities.get(id).expect("刚插入");

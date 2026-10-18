@@ -165,6 +165,8 @@ impl World {
         e.id = self.entities.alloc_id();
         // `NormNpc.cs:42` `Race = ActorRace.NPC`（=10）；`Merchant` 继承它（只设 `RaceImg`）。
         e.race = ACTOR_RACE_NPC;
+        // `Entity::new` 是玩家 ctor 等价物（SearchTime=1000）⇒ 非玩家还原占位缺省值。
+        e.ai.search_time = crate::entity::BASE_ANIMAL_SEARCH_TIME;
         e.map_id = spawn.map_id;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
         e.verify_tick = self.clock_ms;

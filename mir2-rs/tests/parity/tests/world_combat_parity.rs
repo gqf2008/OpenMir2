@@ -105,10 +105,11 @@ fn kill_exp_does_not_decay_even_when_fix_off() {
         .rev()
         .find(|l| l.starts_with("ent 1 "))
         .unwrap();
-    assert!(
-        hero_line.ends_with(" 500 vis 1:1"),
-        "hero 的经验应记到 500: {hero_line}"
-    );
+    // 行格式：`ent <id> <map> <x> <y> <hp> <level> <exp> vis ...`。
+    // 玩家 `SearchViewRange` 现在按 1000ms 节流（卡 `openmir2-player-searchviewrange-cadence`），
+    // 末 tick 可能没有扫描 ⇒ 不能用 `vis 1:1`（自身 Invisible）当尾锚。
+    let exp_field = hero_line.split_whitespace().nth(7).unwrap_or("");
+    assert_eq!(exp_field, "500", "hero 的经验应记到 500: {hero_line}");
 }
 
 /// 判据（给"命中者 **ghost 化** 后不再认领经验"装牙齿）：场景 `combat_exp_hitter_ghost.json`

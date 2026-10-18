@@ -3508,6 +3508,10 @@ impl World {
         entity.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：按落图时刻重盖。
         entity.verify_tick = self.clock_ms;
+        // `BaseObject.cs:442` ctor `SearchTick = GetTickCount()`（玩家 ctor 又在
+        // `PlayObject.cs:901` 置一次）：ctor 等价物拿不到世界时钟 ⇒ 按落图时刻重盖。
+        // 之后 `World::tick` 的玩家 scanner 按 `now - SearchTick > SearchTime(=1000)` 节流。
+        entity.ai.search_tick = self.clock_ms;
         let id = self.entities.insert(entity);
         self.enqueue(Command::Enter { actor_id: id });
         id
@@ -3832,6 +3836,38 @@ impl World {
                         self.clear_drop_on_floor_item_time,
                     );
                 } else {
+                    // **玩家 `SearchViewRange` 的调用节拍**（oracle `WorldServer.cs:663-667`）：
+                    // `if ((HUtil32.GetTickCount() - playObject.SearchTick) > playObject.SearchTime)`
+                    // `{ SearchTick = now; SearchViewRange(); GameTimeChanged(); }` —— 严格大于，
+                    // 玩家 `SearchTime = 1000` 常量（`PlayObject.cs:900`，覆盖 `BaseObject.cs:441`
+                    // 的 `Random(2000)+2000`）。`SearchTick` 由 ctor 等价点按落图时刻初始化
+                    // （`BaseObject.cs:442`/`PlayObject.cs:901`）。世界的 200ms tick 下 ⇒ 1200ms
+                    // 才命中（`>1000`），即同一窗口内最多扫一次。
+                    //
+                    // Ghost 玩家在 oracle 里已从 `PlayObjectList` 移除（`WorldServer.cs:708-711`），
+                    // 不再 `Run`/`SearchViewRange` ⇒ 本骨架同样不扫。死亡支仍走
+                    // `search_view_range_death`（其语义本片不动）。
+                    //
+                    // **非玩家 viewer（怪/卫士/NPC/商人）本片不动**：仍每 tick 扫描（另一张卡）。
+                    //
+                    // `aoi_order` 仍记录每个实体的处理顺序（它是槽位顺序诊断，不是「实际扫了
+                    // 几次」的计数）；被节流跳过的玩家也入列，保持既有诊断契约逐字节不变。
+                    if let Some(e) = self.entities.get(*id) {
+                        if e.race == crate::entity::ACTOR_RACE_PLAY {
+                            if e.ghost {
+                                record.aoi_order.push(*id);
+                                continue;
+                            }
+                            if self.clock_ms - e.ai.search_tick <= e.ai.search_time {
+                                record.aoi_order.push(*id);
+                                continue;
+                            }
+                            // `playObject.SearchTick = HUtil32.GetTickCount();` —— 先刷新再扫。
+                            if let Some(e) = self.entities.get_mut(*id) {
+                                e.ai.search_tick = self.clock_ms;
+                            }
+                        }
+                    }
                     let (map, entities, clock) =
                         (&mut self.maps, &mut self.entities, self.clock_ms);
                     for target in search_view_range(&mut map[map_id], entities, *id, clock) {
@@ -5332,6 +5368,228 @@ mod tests {
         assert_eq!(r.aoi_order, r2.aoi_order);
     }
 
+    /// **卡 `openmir2-player-searchviewrange-cadence` 判据 (a) + (b) 的严格大于边界**。
+    ///
+    /// oracle 证据：
+    /// - `WorldServer.cs:663-667`：`if ((GetTickCount() - playObject.SearchTick) > playObject.SearchTime)`
+    ///   `{ playObject.SearchTick = GetTickCount(); playObject.SearchViewRange(); }`（严格大于）；
+    /// - `PlayObject.cs:899-901`：ctor 里 `SearchTime = 1000; SearchTick = GetTickCount();`
+    ///   （覆盖 `BaseObject.cs:441` 的 `Random(2000)+2000`）；
+    /// - `BaseObject.cs:442`：ctor `SearchTick = GetTickCount()`。
+    ///
+    /// 世界 tick = 200ms ⇒ 1200ms 才命中（1000ms 不满足 `>`），周期 1200ms。
+    /// 用「离开世界后 `visible_actors` 仍残留」观测**没有重扫**——若每 tick 都扫，
+    /// 残留会在下一 tick 立即消失。
+    #[test]
+    fn player_search_view_range_throttled_and_strictly_greater() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(Entity::new(0, "p", 10, 10));
+        let q = w.add_entity(Entity::new(0, "q", 11, 10));
+
+        // 玩家 ctor 覆盖值：必须是常量 1000（tooth ③ 会打掉这条并在失败信息里打印实际值）。
+        let st = w.entities.get(p).unwrap().ai.search_time;
+        assert_eq!(
+            st, 1000,
+            "玩家 SearchTime 必须是 1000（PlayObject.cs:900），实际 {st}"
+        );
+
+        // (a) 200ms × 5 = 恰好 1000ms —— 严格大于 ⇒ 一次都不扫。
+        for _ in 0..5 {
+            w.tick();
+            assert!(
+                w.entities.get(p).unwrap().visible_actors.is_empty(),
+                "clock={}ms：玩家不得扫描（SearchTime=1000，必须严格大于）",
+                w.clock_ms
+            );
+            assert_eq!(w.entities.get(p).unwrap().ai.search_tick, 0);
+        }
+        // (b) 恰 1000ms：仍不扫。
+        assert_eq!(w.clock_ms, 1000);
+        assert!(
+            w.entities.get(p).unwrap().visible_actors.is_empty(),
+            "恰 1000ms 不满足 `> 1000` ⇒ 不得扫描"
+        );
+
+        // 第 6 tick（1200ms > 1000）⇒ 扫一次，q 进入视野。
+        w.tick();
+        assert_eq!(w.clock_ms, 1200);
+        assert_eq!(
+            w.entities.get(p).unwrap().ai.search_tick,
+            1200,
+            "命中后 SearchTick = now"
+        );
+        assert!(
+            w.entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == q),
+            "1200ms 必须扫到 q"
+        );
+
+        // q 离开世界：1400ms 的 tick 不得重扫 ⇒ p 的可见集仍残留 q。
+        w.leave(q);
+        w.tick(); // 1400ms
+        assert_eq!(w.clock_ms, 1400);
+        assert_eq!(w.entities.get(p).unwrap().ai.search_tick, 1200);
+        assert!(
+            w.entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == q),
+            "1400ms 距上次扫描仅 200ms ⇒ 不得重扫"
+        );
+        // 直到 2200ms（= 1200 + 1000）都不满足 `>` ⇒ 仍不扫。
+        for _ in 0..4 {
+            w.tick();
+            assert!(
+                w.entities
+                    .get(p)
+                    .unwrap()
+                    .visible_actors
+                    .iter()
+                    .any(|v| v.target == q),
+                "clock={}ms：2200ms 之前不得重扫",
+                w.clock_ms
+            );
+        }
+        assert_eq!(w.clock_ms, 2200);
+        // 2400ms（距上次 1200ms > 1000）⇒ 重扫并移除已离开世界的 q。
+        w.tick();
+        assert_eq!(w.clock_ms, 2400);
+        assert_eq!(w.entities.get(p).unwrap().ai.search_tick, 2400);
+        assert!(
+            !w.entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == q),
+            "2400ms 必须重扫（q 已离开世界 ⇒ 从视野移除）"
+        );
+    }
+
+    /// 判据 (c)：同一 `SearchTime` 窗口内的连续 tick 不重复扫（`SearchTick` 只在命中时推进）。
+    #[test]
+    fn player_search_view_range_does_not_rescan_within_window() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(Entity::new(0, "p", 10, 10));
+        w.add_entity(Entity::new(0, "q", 11, 10));
+
+        for _ in 0..6 {
+            w.tick(); // 1200ms 首次命中
+        }
+        assert_eq!(w.entities.get(p).unwrap().ai.search_tick, 1200);
+
+        // 同窗口内重复推进（1400/1600/1800/2000/2200）：SearchTick 不动。
+        for _ in 0..5 {
+            w.tick();
+            assert_eq!(
+                w.entities.get(p).unwrap().ai.search_tick,
+                1200,
+                "clock={}ms：同一 SearchTime 窗口内不得重扫",
+                w.clock_ms
+            );
+        }
+        assert_eq!(w.clock_ms, 2200);
+        // 窗口外的第一 tick（2400ms）才推进。
+        w.tick();
+        assert_eq!(w.entities.get(p).unwrap().ai.search_tick, 2400);
+    }
+
+    /// 判据 (d)：死亡玩家走 `search_view_range_death`（清空视野，不刷新 `SearchTick`），
+    /// ghost 玩家不扫描（oracle `WorldServer.cs:708-711` 已把 Ghost 移出 `PlayObjectList`）。
+    #[test]
+    fn dead_and_ghost_players_do_not_scan() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(Entity::new(0, "p", 10, 10));
+        let q = w.add_entity(Entity::new(0, "q", 11, 10));
+        for _ in 0..6 {
+            w.tick(); // 1200ms 首次命中
+        }
+        assert!(w
+            .entities
+            .get(p)
+            .unwrap()
+            .visible_actors
+            .iter()
+            .any(|v| v.target == q));
+
+        // 死亡：走既有 death 支（清空视野），不是 scan ⇒ SearchTick 保持 1200。
+        w.entities.get_mut(p).unwrap().death = true;
+        w.tick(); // 1400ms
+        assert!(
+            w.entities.get(p).unwrap().visible_actors.is_empty(),
+            "死亡玩家的 search_view_range_death 必须清空 visible_actors（语义不变）"
+        );
+        assert_eq!(
+            w.entities.get(p).unwrap().ai.search_tick,
+            1200,
+            "死亡清空不是扫描，不得刷新 SearchTick"
+        );
+        for _ in 0..10 {
+            w.tick();
+        }
+        assert!(
+            w.entities.get(p).unwrap().visible_actors.is_empty(),
+            "死亡玩家不得扫描"
+        );
+
+        // ghost：从进图起推进 6 tick（>1000ms）也不得扫。
+        let g = w.add_entity(Entity::new(0, "g", 20, 20));
+        let q2 = w.add_entity(Entity::new(0, "q2", 21, 20));
+        w.entities.get_mut(g).unwrap().ghost = true;
+        let g_tick = w.entities.get(g).unwrap().ai.search_tick;
+        for _ in 0..6 {
+            w.tick();
+        }
+        assert!(
+            w.entities.get(g).unwrap().visible_actors.is_empty(),
+            "ghost 玩家不得扫描（clock={}ms）",
+            w.clock_ms
+        );
+        assert_eq!(
+            w.entities.get(g).unwrap().ai.search_tick,
+            g_tick,
+            "ghost 跳过不得刷新 SearchTick"
+        );
+        assert!(
+            w.entities.get(q2).is_some(),
+            "q2 仍在世界（仅是观察者不可见）"
+        );
+    }
+
+    /// 判据 (e)（阴性对照）：**非玩家 viewer 的扫描节拍本片不动**——即使 `ai.search_time`
+    /// 被设成极大值，怪/卫士/NPC/商人仍在每个 tick 扫描（另一张卡处理它们）。
+    #[test]
+    fn non_player_viewer_scan_cadence_unchanged() {
+        let mut w = World::new(32, 32);
+        let mut m = Entity::new(0, "m", 10, 10);
+        m.race = crate::entity::ACTOR_RACE_MONSTER;
+        m.ai.search_time = 999_999;
+        let m = w.add_entity(m);
+        let q = w.add_entity(Entity::new(0, "q", 11, 10));
+
+        w.tick(); // 200ms
+        assert!(
+            w.entities
+                .get(m)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == q),
+            "非玩家 viewer 必须每 tick 扫描（本片不节流）"
+        );
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.search_tick,
+            0,
+            "非玩家路径不写 SearchTick"
+        );
+    }
+
     /// `openmir2-m3-move-wiring`：同步移动（`ClientWalkXY`/`RunTo`/`HorseRunTo` 口径）。
     /// - 1/2/3 格的 `steps` 语义；
     /// - `steps > 1` 时**任一中间格不可走 ⇒ 一格都不动**（oracle `RunTo` 先 `CanWalkEx(cur+1) &&
@@ -5375,7 +5633,10 @@ mod tests {
     #[test]
     fn aoi_boundary_at_view_range() {
         let mut w = world_with(&[(1, 30, 30), (2, 35, 30), (3, 36, 30)]);
-        w.tick();
+        // 玩家 `SearchTime=1000`（`PlayObject.cs:900`）⇒ 200ms tick 下首次扫描在第 6 tick。
+        for _ in 0..6 {
+            w.tick();
+        }
         let vis = crate::aoi::visible_snapshot(&w.entities, 1);
         let targets: Vec<i32> = vis.iter().map(|(t, _)| *t).collect();
         assert!(targets.contains(&2), "dx=ViewRange 必须可见（闭区间）");
@@ -5385,7 +5646,10 @@ mod tests {
     #[test]
     fn aoi_scan_order_is_x_outer_y_inner() {
         let mut w = world_with(&[(1, 30, 30), (10, 33, 32), (11, 34, 31)]);
-        w.tick();
+        // 玩家 `SearchTime=1000` ⇒ 首次扫描在第 6 tick（1200ms，严格大于 1000）。
+        for _ in 0..6 {
+            w.tick();
+        }
         let vis = crate::aoi::visible_snapshot(&w.entities, 1);
         let order: Vec<i32> = vis.iter().map(|(t, _)| *t).collect();
         assert_eq!(

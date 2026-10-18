@@ -286,6 +286,8 @@ impl World {
         // `merchant_ids_sorted` 返回一串 0、`merchant_tick` 会反复 Run 同一个实体。
         e.id = self.entities.alloc_id();
         e.race = ACTOR_RACE_MERCHANT;
+        // `Entity::new` 是玩家 ctor 等价物（SearchTime=1000）⇒ 非玩家还原占位缺省值。
+        e.ai.search_time = crate::entity::BASE_ANIMAL_SEARCH_TIME;
         e.map_id = map_id;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
         e.verify_tick = now;

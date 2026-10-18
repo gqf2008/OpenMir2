@@ -9,6 +9,19 @@
 
 /// `src/OpenMir2/Enums/Race.cs`：`ActorRace.Play = 0`、`ActorRace.NPC = 10`、`ActorRace.Monster = 80`。
 pub const ACTOR_RACE_PLAY: u8 = 0;
+/// **玩家 `SearchViewRange` 节拍**（`PlayObject.cs:900` `SearchTime = 1000`）。
+///
+/// `BaseObject` ctor 先置 `SearchTime = Random(2000)+2000`（`BaseObject.cs:441`），
+/// `PlayObject` ctor 紧接着**常量覆盖**为 1000（`:900`）⇒ 玩家每 `>1000ms` 才扫一次
+/// （`WorldServer.cs:663` 的严格大于门）。怪物的 `SearchTime` 由各自 ctor 覆盖
+/// （`MonsterObject.cs:65` 起），本常量只用于玩家 ctor 等价物。
+pub const PLAYER_SEARCH_TIME: i64 = 1000;
+/// 非玩家实体（怪/商人/NPC）`AnimalState` 的 ctor 缺省 `SearchTime` 占位值。
+///
+/// 真实值由各自构造链落定（`MonsterObject.cs:65` 的 `3000+Random(2000)`、生成路径的
+/// [`MonsterCtorDraws::search_time`]）；本常量只用于让 `Entity::new`（玩家 ctor 等价物）
+/// **不**把玩家的 1000 常量带到非玩家实体上，保持本片之前非玩家字段逐一不变。
+pub const BASE_ANIMAL_SEARCH_TIME: i64 = 3000;
 pub const ACTOR_RACE_NPC: u8 = 10;
 pub const ACTOR_RACE_MONSTER: u8 = 80;
 /// `ActorRace.Animal = 50`（`Race.cs:24`）—— `BaseObject.RecalcAbilitys` 末尾
@@ -306,7 +319,7 @@ impl Default for AnimalState {
             walk_wait_locked: false,
             walk_speed: 1400,
             search_tick: 0,
-            search_time: 3000,
+            search_time: BASE_ANIMAL_SEARCH_TIME,
             search_enemy_tick: 0,
             think_tick: 0,
             dup_mode: false,
@@ -709,7 +722,15 @@ impl Entity {
             drop_items: Vec::new(),
             death_settled: false,
             ctor_draws: MonsterCtorDraws::default(),
-            ai: AnimalState::default(),
+            // `PlayObject` ctor（`PlayObject.cs:899-901`）在 `BaseObject` ctor 之后立即覆盖
+            // `SearchTime = 1000` 与 `SearchTick = GetTickCount()`；本函数是玩家的 ctor
+            // 等价物（`race` 缺省 = `ActorRace.Play`），故这里落 1000（常量、不抽数）。
+            // `SearchTick` 拿不到世界时钟 ⇒ 由落图点（`World::add_entity`/`enter_map`）按
+            // `clock_ms` 重盖（同 `verify_tick` 口径）。
+            ai: AnimalState {
+                search_time: PLAYER_SEARCH_TIME,
+                ..AnimalState::default()
+            },
             merchant: None,
             npc: None,
             // 组队态构造初值：`PlayObject.cs:902` `AllowGroup=false`、`:583` `GroupOwner=0`、

@@ -109,6 +109,13 @@ namespace WorldGolden
         public int CurrY;
         public byte ViewRange = 5; // BaseObject.cs:383
         public byte Race = 0;      // ActorRace.Play
+        // `BaseObject.SearchTime/SearchTick`（`BaseObject.cs:271/275`；ctor `:441-442`）。
+        // 玩家 `PlayObject` ctor 覆盖为常量 `SearchTime = 1000`、`SearchTick = GetTickCount()`
+        // （`PlayObject.cs:899-901`）；世界循环按 `(now - SearchTick) > SearchTime` 节流
+        // （`WorldServer.cs:663`）。本夹具只对 **Race==Play** 建模该节拍（怪/卫士/NPC/商人的
+        // 扫描节拍在 Rust 侧本片不动，故夹具保持每 tick 扫描）。
+        public int SearchTime;
+        public int SearchTick;
         public ActorStub Master;   // C# 里是 IActor
         public bool Death;
         public bool Invisible;

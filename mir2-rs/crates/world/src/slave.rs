@@ -1645,6 +1645,10 @@ pub fn spawn_clone(world: &mut World, caster_id: i32, caster_dir: u8) -> Option<
     e.map_id = map_id;
     // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`（克隆体走 PlayObject ctor）。
     e.verify_tick = world.clock_ms;
+    // `BaseObject.cs:442` ctor `SearchTick = GetTickCount()`（克隆体走 PlayObject ctor）；
+    // 克隆体绕开 `World::add_entity` 直接 `entities.insert`，这里补同点，否则首扫会在下一个 tick 立刻发生
+    // （复验 F-1：oracle 首扫在创建后约一个 `SearchTime`）。
+    e.ai.search_tick = world.clock_ms;
     e.view_range = PLAYER_VIEW_RANGE;
     // `PlayObject` 构造器置 `WantRefMsg = true`（`PlayObject.cs:889`）。
     e.want_ref_msg = true;
@@ -2893,6 +2897,13 @@ mod tests {
         assert_eq!(c.race, ACTOR_RACE_PLAY, "玩家型克隆体");
         assert_eq!((c.x, c.y), (7, 9));
         assert!(c.add_to_mapped, "格占用成功 ⇒ AddToMaped");
+        // `BaseObject.cs:442` ctor `SearchTick = GetTickCount()` + `PlayObject.cs:900` `SearchTime = 1000`：
+        // 克隆体绕开 `World::add_entity`，这里必须补同一初始化，否则首扫发生在下一个 tick。
+        assert_eq!(
+            c.ai.search_tick, w.clock_ms,
+            "克隆体 SearchTick = 创建时刻（ctor 同点）"
+        );
+        assert_eq!(c.ai.search_time, 1000, "玩家型 SearchTime = 1000");
         assert!(c.slave_list.is_empty(), "克隆体不入 SlaveList");
         assert!(
             w.entities.get(caster).unwrap().slave_list.is_empty(),

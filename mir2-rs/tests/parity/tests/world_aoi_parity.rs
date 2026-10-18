@@ -151,14 +151,27 @@ fn assert_scenario_matches_golden(name: &str) {
     }
 }
 
-/// 取金标准里某个实体的第 1 tick 行（`ent <id> ...`）。
-fn golden_first_tick_entity_line(golden: &str, id: i32) -> String {
-    golden
-        .lines()
-        .take_while(|l| !l.starts_with("tick 2 "))
-        .find(|l| l.starts_with(&format!("ent {id} ")))
-        .unwrap_or_else(|| panic!("金标准第 1 tick 里应有 {id} 号实体"))
-        .to_string()
+/// 玩家 `SearchTime = 1000`（`PlayObject.cs:900`）⇒ 200ms tick 下**首次扫描在第 6 tick**
+/// （1200ms，严格大于 1000）。金标准自检要读「首次扫描后」的行，而不是 tick 1。
+const FIRST_PLAYER_SCAN_TICK: usize = 6;
+
+/// 取金标准里某实体在**指定 tick** 的行（`ent <id> ...`）。
+fn golden_entity_line_at_tick(golden: &str, id: i32, tick_no: usize) -> String {
+    let mut current = 0usize;
+    for line in golden.lines() {
+        if let Some(rest) = line.strip_prefix("tick ") {
+            current = rest
+                .split_whitespace()
+                .next()
+                .and_then(|t| t.parse().ok())
+                .unwrap_or(0);
+            continue;
+        }
+        if current == tick_no && line.starts_with(&format!("ent {id} ")) {
+            return line.to_string();
+        }
+    }
+    panic!("金标准第 {tick_no} tick 里应有 {id} 号实体")
 }
 
 #[test]
@@ -190,7 +203,7 @@ fn world_aoi_viewrange12_ring_matches_csharp() {
 #[test]
 fn golden_viewrange12_ring_boundary_is_pinned() {
     let golden = std::fs::read_to_string(parity_dir().join("golden/aoi_viewrange12.txt")).unwrap();
-    let line1 = golden_first_tick_entity_line(&golden, 1);
+    let line1 = golden_entity_line_at_tick(&golden, 1, FIRST_PLAYER_SCAN_TICK);
     for id in [4, 6, 8, 10] {
         assert!(
             line1.contains(&format!(" {id}:2")),
@@ -207,11 +220,11 @@ fn golden_viewrange12_ring_boundary_is_pinned() {
 
 /// 红检（自动）③：把玩家 1 号的 `view_range` 从 **12 压回缺省 5**（= 修复前 `new_player_entity`
 /// 的窗口口径，见 `bins/game-svr/src/main.rs` 的 `new_player_entity`）⇒ Chebyshev 6..12 的怪
-/// 必须从它的可见集消失 ⇒ 与金标准第 1 tick 行必不同，且 3/4 号（距离 7/12）必须不再出现。
+/// 必须从它的可见集消失 ⇒ 与金标准**首次扫描 tick** 行必不同，且 3/4 号（距离 7/12）必须不再出现。
 #[test]
 fn redcheck_viewrange12_ring_collapsed_to_default_must_differ() {
     let golden = std::fs::read_to_string(parity_dir().join("golden/aoi_viewrange12.txt")).unwrap();
-    let golden_line1 = golden_first_tick_entity_line(&golden, 1);
+    let golden_line1 = golden_entity_line_at_tick(&golden, 1, FIRST_PLAYER_SCAN_TICK);
     let text =
         std::fs::read_to_string(parity_dir().join("scenarios/aoi_viewrange12.json")).unwrap();
     let sc: Scenario = serde_json::from_str(&text).unwrap();
@@ -236,7 +249,9 @@ fn redcheck_viewrange12_ring_collapsed_to_default_must_differ() {
         e.want_ref_msg = spec.want_ref_msg;
         world.add_entity(e);
     }
-    world.tick();
+    for _ in 0..FIRST_PLAYER_SCAN_TICK {
+        world.tick();
+    }
     let mine = world
         .snapshot_sorted()
         .into_iter()
@@ -278,7 +293,9 @@ fn redcheck_view_range_change_must_alter_visible_set() {
         };
         world.add_entity(e);
     }
-    world.tick();
+    for _ in 0..FIRST_PLAYER_SCAN_TICK {
+        world.tick();
+    }
     let mine: Vec<String> = world
         .snapshot_sorted()
         .into_iter()
@@ -290,15 +307,14 @@ fn redcheck_view_range_change_must_alter_visible_set() {
             l
         })
         .collect();
-    let golden_tick1: Vec<&str> = golden
-        .lines()
-        .skip(1)
-        .take_while(|l| l.starts_with("ent "))
-        .collect();
-    let mine_line1 = &mine[0];
+    let golden_line = golden_entity_line_at_tick(&golden, 1, FIRST_PLAYER_SCAN_TICK);
+    let mine_line = mine
+        .iter()
+        .find(|l| l.starts_with("ent 1 "))
+        .expect("1 号实体行");
     assert_ne!(
-        mine_line1.as_str(),
-        golden_tick1[0],
+        mine_line.as_str(),
+        golden_line,
         "红检失效：改了 view_range 但 1 号的可见集与金标准相同"
     );
 }

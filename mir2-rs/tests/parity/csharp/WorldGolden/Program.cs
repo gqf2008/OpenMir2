@@ -5,6 +5,10 @@
 //   1. 每 tick：clock += 200 → 应用本 tick 的**会话操作**（enter/switch/softclose/reenter，立即生效）
 //      → 入队本 tick 的**世界命令**（spawn/walk/kill/attack/leave，按场景顺序 FIFO）→ 处理队列
 //      → 死亡结算（掉落落地 + `KillFunc` 发经验）→ 按插入顺序 AOI → 输出；
+//      AOI 段：玩家（Race==Play）按 oracle `WorldServer.cs:663` 的
+//      `(now - SearchTick) > SearchTime`（`SearchTime=1000`，`PlayObject.cs:900`）节流，
+//      Ghost 玩家不扫（`:708-711`）；死亡走 `SearchViewRangeDeath`；非玩家保持每 tick 扫描
+//      （对应 Rust 侧本片不动的怪/卫士/NPC/商人扫描节拍）。
 //   2. 怪物掉落在地图**生成时**预算（`WorldServer.MonGen.cs:440` 的时机）；
 //   3. 死亡时走 oracle `DieDropItems` 的掉落结算：`GetDropPosition` 只做格子扫描，
 //      **不**把物品加进地图（`Envir.AddItemToMap` 首行 `MapItem.ItemId == 0` 门恒真 ⇒ 掉落恒不落地）。
@@ -212,6 +216,13 @@ internal static class Program
                 WantRefMsg = spec.want_ref_msg,
                 Envir = envirs[0],
             };
+            if (a.Race == 0)
+            {
+                // `PlayObject.cs:899-901`：ctor 覆盖 `SearchTime=1000`、`SearchTick=GetTickCount()`。
+                // 静态实体在世界建立时构造（`VirtualClock.Now == 0`）。
+                a.SearchTime = 1000;
+                a.SearchTick = (int)VirtualClock.Now;
+            }
             a.WAbil.HP = 100;
             a.WAbil.MaxHP = 100;
             RegisterActor(actors, envirOf, order, a, 0);
@@ -394,8 +405,19 @@ internal static class Program
                 {
                     a.SearchViewRangeDeath();
                 }
-                else
+                else if (a.Race == 0 && a.Ghost)
                 {
+                    // oracle 的 Ghost 玩家已从 `PlayObjectList` 移除、不再 `Run`
+                    // （`WorldServer.cs:708-711`）⇒ 不做 `SearchViewRange`。
+                }
+                else if (a.Race != 0 || (VirtualClock.Now - a.SearchTick) > a.SearchTime)
+                {
+                    // `WorldServer.cs:663`：玩家严格大于 `SearchTime` 才扫；
+                    // `playObject.SearchTick = HUtil32.GetTickCount();` 先刷新再扫。
+                    if (a.Race == 0)
+                    {
+                        a.SearchTick = (int)VirtualClock.Now;
+                    }
                     a.SearchViewRange();
                 }
             }
@@ -575,6 +597,14 @@ internal static class Program
         a.WAbil.AC = ss.ac;
         a.WAbil.Exp = ss.exp;
         a.WAbil.MaxExp = ss.max_exp;
+        if (a.Race == 0)
+        {
+            // `PlayObject.cs:899-901`：ctor 覆盖 `SearchTime=1000`、`SearchTick=GetTickCount()`。
+            // Rust 侧 `World::enter_map` 在 tick 推进**之前**调用（`common/mod.rs` 的顺序契约：
+            // 会话操作先生效、`world.tick()` 才 `clock += 200`）⇒ 用推进前的时钟对齐。
+            a.SearchTime = 1000;
+            a.SearchTick = (int)VirtualClock.Now - 200;
+        }
         return a;
     }
 
