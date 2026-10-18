@@ -98,10 +98,11 @@ pub use monai::{
     monster_run, search_target, set_target_creature, think, turn_to, walk_to, wondering,
 };
 pub use mongen::{
-    gen_mod_count, get_monsters_zen_time, initialize_monster, monster_due_for_revive,
-    monster_ghost_expired, regen_gate, regen_monsters, should_regen, step_threads, MapCanCreate,
-    MonGenConfig, MonGenEntry, MonGenState, MonGenThread, MonsterCreator, TickClockFn,
-    MON_GEN_THREAD_MON_LIMIT,
+    gen_mod_count, get_monsters_zen_time, initialize_monster, monster_death_gate,
+    monster_due_for_ghost, monster_due_for_revive, monster_ghost_expired, process_cert_lists,
+    regen_gate, regen_monsters, should_regen, step_threads, CertListRecord, MapCanCreate,
+    MonGenConfig, MonGenEntry, MonGenState, MonGenThread, MonsterCreator, ReviveFrame,
+    ReviveOutcome, TickClockFn, MON_GEN_THREAD_MON_LIMIT,
 };
 pub use npc::{NpcSpawn, NpcState, NPC_RUN_DELAY_MAX, NPC_SEARCH_DRAW_MAX};
 pub use party::{

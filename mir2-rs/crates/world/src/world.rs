@@ -669,6 +669,17 @@ pub struct World {
     /// 怪物 AI（`ai_enabled=false`）⇒ 这两个值在既有对拍里不被消费。
     pub health_fill_time: i32,
     pub spell_fill_time: i32,
+    /// `Config.MakeGhostTime`（`GameSvrConf.cs:431`，构造缺省 `:1486` = `3 * 60 * 1000`；
+    /// `ServerConf.cs:567` 读 `[Setup] MakeGhostTime`；部署件 = 90000）。
+    ///
+    /// `BaseObject.Run` 死亡支（`BaseObject.Base.cs:85-101`）的两条门都读它。缺省取 oracle
+    /// 构造值；宿主用 [`World::set_corpse_config`] 灌入 `Server.conf` 的值。
+    pub make_ghost_time: i32,
+    /// `GetMonstersZenTime`（`WorldServer.MonGen.cs:168-190`）用的 `Config.UserFull`。
+    /// 与 [`crate::mongen::MonGenConfig::user_full`] 同源（宿主灌入）。
+    pub mon_gen_user_full: i32,
+    /// `GetMonstersZenTime` 用的 `Config.ZenFastStep`（同 [`Self::mon_gen_user_full`]）。
+    pub mon_gen_zen_fast_step: i32,
     /// C# `Config.ClearDropOnFloorItemTime`
     pub clear_drop_on_floor_item_time: i64,
     /// 每张地图的 `Envir.Flag.boEXPRATE`/`ExpRate`（`PlayObject.Base.cs:143-146`）：
@@ -838,6 +849,9 @@ impl World {
             pk_check_tick_initialized: false,
             health_fill_time: 300,
             spell_fill_time: 800,
+            make_ghost_time: 3 * 60 * 1000,
+            mon_gen_user_full: 5000,
+            mon_gen_zen_fast_step: 300,
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
             map_exp_rate: vec![None; maps_len],
             spirit_mutiny_tick: 0,
@@ -900,6 +914,22 @@ impl World {
     pub fn set_recovery_fill_times(&mut self, health_fill_time: i32, spell_fill_time: i32) {
         self.health_fill_time = health_fill_time;
         self.spell_fill_time = spell_fill_time;
+    }
+
+    /// 灌入尸体/复活面配置（`Config.MakeGhostTime` + `GetMonstersZenTime` 的两项）。
+    ///
+    /// 生产宿主在起世界时用 `Server.conf` 的 `[Setup] MakeGhostTime` 与 `[Server]
+    /// UserFull/ZenFastStep` 调用；合成 golden/单测不调 ⇒ 保持 oracle 构造缺省，
+    /// 既有对拍逐字节不变（本组字段只在死亡支/复活路径被读）。
+    pub fn set_corpse_config(
+        &mut self,
+        make_ghost_time: i32,
+        mon_gen_user_full: i32,
+        mon_gen_zen_fast_step: i32,
+    ) {
+        self.make_ghost_time = make_ghost_time;
+        self.mon_gen_user_full = mon_gen_user_full;
+        self.mon_gen_zen_fast_step = mon_gen_zen_fast_step;
     }
 
     /// `ProcessSpiritSuite`（`PlayObject.Base.cs:322-330`）的尾：把全服宝宝叛变窗口
@@ -4087,6 +4117,263 @@ impl World {
         true
     }
 
+    /// `BaseObject.DisappearA()` 的格子面（`BaseObject.cs:1519-1522`）：
+    /// `Envir.DeleteFromMap(CurrX, CurrY, CellType, ActorId, this)`。
+    ///
+    /// 只摘格、**不删实体**（oracle 对象仍被 `MonGen.CertList` 持有，可复活）。帧面
+    /// `SendRefMsg(RM_DISAPPEAR)` 由 AOI 的视野差集在下一 tick 表现（本函数不产生帧记录）。
+    /// oracle 的 `DisappearA` 不改 `AddToMaped`；本仓用 `add_to_mapped` 表示「已落格」，
+    /// 摘格后同步清位以保持不变量（登记：非逐字段等价，仅本仓内部状态位）。
+    pub fn disappear_a(&mut self, actor_id: i32) -> bool {
+        let Some(e) = self.entities.get(actor_id) else {
+            return false;
+        };
+        let (x, y, map_id) = (e.x, e.y, e.map_id);
+        let Some(map) = self.maps.get_mut(map_id) else {
+            return false;
+        };
+        let (cell, success) = map.get_cell_info_mut(x, y);
+        let mut removed = false;
+        if success {
+            let before = cell.count();
+            cell.obj_list
+                .retain(|o| !(o.actor_object && o.cell_obj_id == actor_id));
+            if cell.count() == 0 {
+                cell.clear();
+            }
+            removed = cell.count() != before;
+        }
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.add_to_mapped = false;
+        }
+        removed
+    }
+
+    /// Ghost 5 分钟门后释放实体（`WorldServer.MonGen.cs:320-333` 的 `CertList.RemoveAt`
+    /// + 对象失引用）：摘格 + 从实体仓库移除。不消费随机数。
+    pub fn release_entity(&mut self, actor_id: i32) -> bool {
+        self.disappear_a(actor_id);
+        self.entities.remove(actor_id).is_some()
+    }
+
+    /// 在指定图/格落位（先摘旧格）。`CellType` 取 [`entity_cell_type`]（怪 = `Monster`）。
+    fn place_actor_at(&mut self, actor_id: i32, x: i32, y: i32, now: i64) -> bool {
+        self.disappear_a(actor_id);
+        let Some(e) = self.entities.get_mut(actor_id) else {
+            return false;
+        };
+        let map_id = e.map_id;
+        let cell_type = entity_cell_type(e);
+        // oracle `CurrX/CurrY` 在 `AddMapObject` 之前就已写入（`BaseObject.cs:2674-2676`）。
+        e.x = x;
+        e.y = y;
+        let Some(map) = self.maps.get_mut(map_id) else {
+            return false;
+        };
+        if !map.add_map_object(x, y, cell_type, actor_id, now) {
+            return false;
+        }
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.add_to_mapped = true;
+        }
+        true
+    }
+
+    /// `Envirnoment.CanWalk(x, y, boFlag)` 的等价物。
+    ///
+    /// `ignore_actors = true`（oracle `boFlag` 支）：只判 `cellSuccess && Valid`；
+    /// `false`：再排除格上的活体（`!Ghost && !Death && !FixedHideMode && !ObMode`）。
+    fn can_walk_at(&self, map_id: usize, x: i32, y: i32, ignore_actors: bool) -> bool {
+        let Some(map) = self.maps.get(map_id) else {
+            return false;
+        };
+        let (cell, success) = map.get_cell_info(x, y);
+        if !success {
+            return false;
+        }
+        if ignore_actors {
+            return true;
+        }
+        for obj in &cell.obj_list {
+            if !obj.actor_object {
+                continue;
+            }
+            if let Some(e) = self.entities.get(obj.cell_obj_id) {
+                if !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// `BaseObject.ReAliveEx(MonGenInfo)`（`BaseObject.cs:2466-2750`）的已建模子集。
+    ///
+    /// 已建模：字段复位（`Gold=0`/`ShowHp=false`/`StoneMode=false`/`FixedHideMode=false`/
+    /// `HP=MaxHP`/`MP=MaxMP`/`Death=false`/`Invisible=false`），`Animal` 的肉质重掷与
+    /// race 51/52/53/95/96/97 的 switch 抽数、race 54 的 `Animal=true`，
+    /// `monGen.X/Range` 位置重抽（2 抽）、`CanWalk(...,true)` + 回退循环（含
+    /// `Random(Width/2)`/`Random(Height/2)` 抽数）、`AddToMap`/`AddMapObject`、
+    /// `RM_TURN` 帧（[`crate::mongen::ReviveOutcome::frames`]）。
+    ///
+    /// **未建模（登记）**：`WAbil=Abil`/`RecalcAbilitys()`（本仓怪属性静态）、`NoItem`/
+    /// `Skeleton`/各专用怪标志复位（`MagicMonster.DupMode`/`WallStructure.SetMapFlaged` 等）、
+    /// `CharStatus/StatusChanged()`、`OnEnvirnomentChanged` 的换图清位（本仓无怪换图路径 ⇒
+    /// 恒不触发）、`MonsterSayMessage(null, MonStatus.MonGen)`（oracle 对
+    /// `monsterObject == null` 直接返回，`AnimalObject.cs:280-283` ⇒ 无帧）、
+    /// `GetFeatureToLong()` 的怪物 `CharDesc`（展示层，本仓怪物帧面未建模）。
+    ///
+    /// 返回 `None`：实体不存在或地图不存在（oracle `if (Envir == null) return false;`）。
+    pub fn revive_monster(
+        &mut self,
+        actor_id: i32,
+        mon_gen_x: i16,
+        mon_gen_y: i16,
+        range: u8,
+        now: i64,
+    ) -> Option<crate::mongen::ReviveOutcome> {
+        let (race, animal_now, map_id) = self.entities.get(actor_id).map(|e| {
+            (
+                e.race,
+                e.ai.animal || crate::monai::is_animal_race(e.race),
+                e.map_id,
+            )
+        })?;
+        let (width, height) = {
+            let map = self.maps.get(map_id)?;
+            (map.width, map.height)
+        };
+        // 1) `if (Animal) { MeatQuality = Random(3500) + 3000; }`（`BaseObject.cs:2568-2570`）。
+        let mut meat_quality = None;
+        if animal_now {
+            meat_quality = Some(self.rng.random_below(3500) + 3000);
+        }
+        // 2) `switch (Race)`（`BaseObject.cs:2572-2620`）的抽数；169/170 只改 StickMode（未建模，无抽）。
+        match race {
+            51 => meat_quality = Some(self.rng.random_below(3500) + 3000),
+            52 => {
+                meat_quality = Some(if self.rng.random_below(30) == 0 {
+                    self.rng.random_below(20000) + 10000
+                } else {
+                    self.rng.random_below(8000) + 8000
+                });
+            }
+            53 => meat_quality = Some(self.rng.random_below(8000) + 8000),
+            95 => {
+                self.rng.random_below(2);
+            }
+            96 => {
+                self.rng.random_below(4);
+            }
+            97 => {
+                self.rng.random_below(2);
+            }
+            _ => {}
+        }
+
+        // 3) 字段复位（`BaseObject.cs:2468-2479` + `:2678-2687`）。
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.death = false;
+            // `BaseObject.Die`（`BaseObject.Base.cs:318-345`）**每次**死亡都无条件置 `Death`/`DeathTick`，
+            // 复活后 `CanReAlive` 仍为 true ⇒ oracle 允许「死→复活→再死」无限循环。本仓的死亡结算是
+            // 一次性闩锁（`settle_deaths` 的 `!death_settled` 过滤），复活必须把它清掉，否则第二次死亡
+            // 永不结算（复验 F1：复活即免死）。
+            e.death_settled = false;
+            e.invisible = false;
+            e.ghost = false;
+            e.hp = e.max_hp;
+            e.mp = e.max_mp;
+            e.gold = 0;
+            e.show_hp = false;
+            e.stone_mode = false;
+            e.fixed_hide_mode = false;
+            e.re_alive_tick = now;
+            if race == 54 {
+                // `case 54: Animal = true; break;`（`BaseObject.cs:2601-2603`）。
+                e.ai.animal = true;
+            }
+            if let Some(q) = meat_quality {
+                e.ai.meat_quality = u16::try_from(q).unwrap_or(u16::MAX);
+            }
+        }
+
+        // 4) 位置重抽（`BaseObject.cs:2640-2641`）。
+        let span = i32::from(range) * 2 + 1;
+        let mut n_x = i32::from(mon_gen_x) - i32::from(range) + self.rng.random_below(span);
+        let mut n_y = i32::from(mon_gen_y) - i32::from(range) + self.rng.random_below(span);
+        let mut frames = Vec::new();
+        let mut error_on_init = true;
+        if self.can_walk_at(map_id, n_x, n_y, true) && self.place_actor_at(actor_id, n_x, n_y, now)
+        {
+            error_on_init = false;
+            // `AddToMap()` 内部的 `RM_TURN`（`BaseObject.cs:1370-1378`；刚清 `FixedHideMode` ⇒ 恒发）。
+            // 注：oracle **无论 `AddMapObject` 成败都发**该帧；本仓只在落位成功时记帧——因
+            // `can_walk_at(...,true)` 成立即蕴含 `cell_match && Valid`（`map.rs`），`AddMapObject`
+            // 失败在此分支不可达（复验 F3），故无行为差。
+            if let Some(e) = self.entities.get(actor_id) {
+                frames.push(crate::mongen::ReviveFrame {
+                    dir: e.ai.dir,
+                    x: e.x,
+                    y: e.y,
+                });
+            }
+        }
+        // `nX2/nY2` 在首次落位尝试**之后**取（`BaseObject.cs:2684-2685`）。
+        let x2 = self.entities.get(actor_id).map_or(0, |e| e.x);
+        let y2 = self.entities.get(actor_id).map_or(0, |e| e.y);
+
+        if error_on_init {
+            let n_range = if width < 50 { 2 } else { 3 };
+            let n_range2 = if height < 250 {
+                if height < 30 {
+                    2
+                } else {
+                    20
+                }
+            } else {
+                50
+            };
+            let mut n_c = 0;
+            let mut add_obj = false;
+            loop {
+                if !self.can_walk_at(map_id, n_x, n_y, false) {
+                    if width - n_range2 - 1 > n_x {
+                        n_x += n_range;
+                    } else {
+                        n_x = self.rng.random_below(width / 2) + n_range2;
+                    }
+                    if height - n_range2 - 1 > n_y {
+                        n_y += n_range;
+                    } else {
+                        n_y = self.rng.random_below(height / 2) + n_range2;
+                    }
+                } else {
+                    // 直接 `Envir.AddMapObject`（不经 `AddToMap` ⇒ 无 `RM_TURN`）。
+                    add_obj = self.place_actor_at(actor_id, n_x, n_y, now);
+                    break;
+                }
+                n_c += 1;
+                if n_c > 46 {
+                    break;
+                }
+            }
+            if !add_obj {
+                // `CurrX = nX2; CurrY = nY2; Envir.AddMapObject(...)`（直接调用 ⇒ 无 `RM_TURN`）。
+                self.place_actor_at(actor_id, x2, y2, now);
+            }
+        }
+
+        // 5) 尾部 `SendRefMsg(RM_TURN, Dir, CurrX, CurrY, GetFeatureToLong(), "")`
+        //    （`BaseObject.cs:2747`）——无条件发一条。
+        let e = self.entities.get(actor_id)?;
+        frames.push(crate::mongen::ReviveFrame {
+            dir: e.ai.dir,
+            x: e.x,
+            y: e.y,
+        });
+        Some(crate::mongen::ReviveOutcome { actor_id, frames })
+    }
+
     /// 生成怪物：入队后由 tick 处理（掉落按 C# 时机在**生成时**预算）。
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_monster(&mut self, cmd: Command) -> bool {
@@ -4442,6 +4729,8 @@ impl World {
             // 死亡标记（C# `Die()` 的 `Death = true`）
             if let Some(e) = self.entities.get_mut(id) {
                 e.death = true;
+                // `BaseObject.cs:323`：`Death = true; DeathTick = HUtil32.GetTickCount();`
+                e.death_tick = self.clock_ms;
                 e.death_settled = true;
             }
             // **M3⑦-实现 2 F-1**：oracle `Die()`（`PlayObject.cs:1964-1978`）在置 `Death` 之后、

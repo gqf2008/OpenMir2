@@ -101,6 +101,8 @@ pub fn mon_gen_config_from_conf(path: &Path) -> Result<MonGenConfig, String> {
         "ProcessMonsterMultiThreadLimit",
         c.process_monster_multi_thread_limit,
     );
+    // `ServerConf.cs:567`：`ReadWriteInteger("Setup", "MakeGhostTime", ...)`；部署件 = 90000。
+    c.make_ghost_time = ini.read_integer("Setup", "MakeGhostTime", c.make_ghost_time);
     // `ServerConf.cs:21`：`string.Compare(读取值, "TRUE", OrdinalIgnoreCase) == 0`。
     c.venture_server = ini
         .read_string("Server", "VentureServer", VENTURE_SERVER_DEFAULT)
@@ -616,6 +618,42 @@ impl MonGenHost {
             &mut create,
         )
     }
+}
+
+/// 把本轮 `RegenMonsters` 新建的怪登记为「可复活」（oracle `WorldServer.MonGen.cs:832-835`
+/// 与 `:854-857` 的 `cert.CanReAlive = true; cert.ReAliveTick = GetTickCount(); cert.MonGen = monGen;`）。
+///
+/// **只登记本轮 regen 追加到 `CertList` 的 id**（`before` = 调用前的各条 `cert_list.len()`）：
+/// oracle 的 `RegenMonsterByName`（GuardList 放置，`:382-432`）**不**置这三个字段 ⇒ 守卫不可复活。
+/// 若按「所有 cert_list 成员」登记会把守卫误标成可复活（行为分叉）。
+///
+/// 本函数不消费随机数。
+pub fn bind_new_certificates(
+    state: &MonGenState,
+    world: &mut mir2_world::World,
+    before: &[usize],
+    now: i64,
+) -> Vec<i32> {
+    let now_i32 = i32::try_from(now).unwrap_or(i32::MAX);
+    let mut bound = Vec::new();
+    for (idx, entry) in state.entries.iter().enumerate() {
+        let start = before.get(idx).copied().unwrap_or(0);
+        for &id in entry.cert_list.iter().skip(start) {
+            let Some(e) = world.entities.get_mut(id) else {
+                continue;
+            };
+            // 已有归属（复活后的怪仍在同一 cert_list）⇒ 不覆盖。
+            if e.mon_gen.is_some() {
+                continue;
+            }
+            e.can_re_alive = true;
+            e.re_alive_tick = i64::from(now_i32);
+            e.mon_gen = Some(idx);
+            e.mon_gen_zen_time = entry.zen_time;
+            bound.push(id);
+        }
+    }
+    bound
 }
 
 /// 生产 sink：把 [`MonsterSpawnRequest`] 落到 `crates/world` 的实体仓库。
@@ -1625,5 +1663,39 @@ mod tests {
         assert_eq!(d.name_color, downlink::MONSTER_NAME_COLOR);
         assert_eq!(d.show_name, downlink::gbk("稻草人"));
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 尸体/复活片：只把**本轮追加**的 cert 登记为可复活（oracle `RegenMonsters` 的三字段），
+    /// 已在 cert_list 里的旧成员（如 GuardList 放置，oracle `RegenMonsterByName` 不置位）保持不动。
+    #[test]
+    fn bind_new_certificates_only_marks_appended_ids() {
+        use mir2_world::{Entity, MonGenEntry, MonGenState, MonGenThread};
+        let mut world = mir2_world::World::new(64, 64);
+        let old = world.add_entity(Entity::new(0, "旧", 5, 5));
+        let new_id = world.add_entity(Entity::new(0, "新", 6, 6));
+
+        let mut state = MonGenState::default();
+        let mut entry = MonGenEntry::new("0", 5, 5, "鸡", 0, 1, 60_000, 0);
+        entry.cert_list = vec![old, new_id];
+        state.entries.push(entry);
+        state.threads.insert(
+            0,
+            MonGenThread {
+                id: 0,
+                entries: vec![0],
+                ..MonGenThread::default()
+            },
+        );
+
+        // before = [1] ⇒ 只登记下标 1 之后追加的 `new_id`。
+        let bound = bind_new_certificates(&state, &mut world, &[1], 1_234);
+        assert_eq!(bound, vec![new_id]);
+        let o = world.entities.get(old).unwrap();
+        assert!(!o.can_re_alive && o.mon_gen.is_none(), "旧成员不得被登记");
+        let n = world.entities.get(new_id).unwrap();
+        assert!(n.can_re_alive);
+        assert_eq!(n.mon_gen, Some(0));
+        assert_eq!(n.mon_gen_zen_time, 60_000);
+        assert_eq!(n.re_alive_tick, 1_234);
     }
 }

@@ -101,6 +101,12 @@ pub struct MonGenConfig {
     pub mon_limit: i32,
     /// `M2Share.ZenLimit`（`M2Share.cs:177`，缺省 5；部署 5）—— `RegenMonsters` 的时间闸门。
     pub zen_limit: i32,
+    /// `Config.MakeGhostTime`（`GameSvrConf.cs:431`，构造缺省 `:1486` = `3 * 60 * 1000`；
+    /// `ServerConf.cs:567` 读 `[Setup] MakeGhostTime`；部署件 = 90000）。
+    ///
+    /// `BaseObject.Run` 死亡支的两条门都用它（`BaseObject.Base.cs:88/99`）：可复活支取
+    /// `min(max(10s, zen-20s), Config.MakeGhostTime)`，普适支直接用它。
+    pub make_ghost_time: i32,
 }
 
 impl Default for MonGenConfig {
@@ -115,6 +121,7 @@ impl Default for MonGenConfig {
             venture_server: false,
             mon_limit: 30,
             zen_limit: 5,
+            make_ghost_time: 3 * 60 * 1000,
         }
     }
 }
@@ -689,9 +696,176 @@ pub fn monster_ghost_expired(ghost_tick: i32, now: i32) -> bool {
     now.wrapping_sub(ghost_tick) > MONSTER_GHOST_EXPIRE_MS
 }
 
+/// `BaseObject.Run` 死亡支的门限值（`BaseObject.Base.cs:85-101`）：
+///
+/// ```csharp
+/// if (CanReAlive && MonGen != null)
+/// {
+///     int makeGhostTime = MAX(10 * 1000, GetMonstersZenTime(MonGen.ZenTime) - 20 * 1000);
+///     if (makeGhostTime > Config.MakeGhostTime) makeGhostTime = Config.MakeGhostTime;
+///     if (GetTickCount() - DeathTick > makeGhostTime) MakeGhost();
+/// }
+/// else
+/// {
+///     if ((GetTickCount() - DeathTick) > Config.MakeGhostTime) MakeGhost();
+/// }
+/// ```
+///
+/// `make_ghost_time` 参数 = `Config.MakeGhostTime`（部署 90000）。
+/// 可复活支的 **MAX(10s) 下限**与 **`Config.MakeGhostTime` 截断**是两步独立运算，顺序照抄：
+/// 先 `max(10s, zen - 20s)`，再 `min(结果, Config.MakeGhostTime)`。
+///
+/// `play_object_count` / `config.user_full` / `config.zen_fast_step` 只喂
+/// [`get_monsters_zen_time`] 的加速档（`WorldServer.MonGen.cs:168-190`）。
+#[must_use]
+pub fn monster_death_gate(
+    can_re_alive: bool,
+    has_mon_gen: bool,
+    mon_gen_zen_time: i32,
+    make_ghost_time: i32,
+    play_object_count: i32,
+    config: &MonGenConfig,
+) -> i32 {
+    if can_re_alive && has_mon_gen {
+        let zen = get_monsters_zen_time(mon_gen_zen_time, play_object_count, config);
+        let mut gate = max_i32(10 * 1000, zen.wrapping_sub(20 * 1000));
+        if gate > make_ghost_time {
+            gate = make_ghost_time;
+        }
+        gate
+    } else {
+        make_ghost_time
+    }
+}
+
+/// 死亡支到点判定：`(now - DeathTick) > gate`（**严格大于**，`BaseObject.Base.cs:90/99`）。
+#[must_use]
+pub fn monster_due_for_ghost(death_tick: i32, gate: i32, now: i32) -> bool {
+    now.wrapping_sub(death_tick) > gate
+}
+
+/// 一次 `ProcessMonsters` 在册怪物段（`WorldServer.MonGen.cs:278-333`）的 `ReAliveEx` 帧面读数。
+///
+/// oracle `ReAliveEx`（`BaseObject.cs:2740-2750`）尾部：
+/// `SendRefMsg(RM_TURN, Dir, CurrX, CurrY, GetFeatureToLong(), "")`，随后
+/// `MonsterSayMessage(null, MonStatus.MonGen)`。`GetFeatureToLong()` 的怪物 `CharDesc`
+/// 属展示层（本仓怪物帧面仍未建模，登记）⇒ 本记录保留 `RM_TURN` 的
+/// `(Dir, CurrX, CurrY)` 三元组。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReviveFrame {
+    /// `RM_TURN` 的 ident（`BaseObject.Dir`）。
+    pub dir: u8,
+    /// `RM_TURN` 的 recog（落位后的 `CurrX`）。
+    pub x: i32,
+    /// `RM_TURN` 的 param（落位后的 `CurrY`）。
+    pub y: i32,
+}
+
+/// 一次 `ReAliveEx` 的读数。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviveOutcome {
+    pub actor_id: i32,
+    /// 本次 `ReAliveEx` 发出的 `RM_TURN` 帧（保序）：
+    /// 1. `AddToMap()` 内部的 `SendRefMsg(RM_TURN, Dir, CurrX, CurrY, 0, "")`
+    ///    （`BaseObject.cs:1370-1378`，首格 `CanWalk(...,true)` + `AddMapObject` 成功时）；
+    /// 2. 函数末尾的 `SendRefMsg(RM_TURN, Dir, CurrX, CurrY, GetFeatureToLong(), "")`
+    ///    （`BaseObject.cs:2747`）。
+    ///
+    /// 注意 `AddMapObject` 在**回退循环**与**恢复旧格**两支里是直接调用、不经 `AddToMap`
+    /// ⇒ 那两支不产生额外 `RM_TURN`（照 oracle）。
+    pub frames: Vec<ReviveFrame>,
+}
+
+/// 一轮在册怪物段的读数。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CertListRecord {
+    /// 真正复活（`ReAliveEx` 返回 true）的怪，按 `CertList` 遍历序。
+    pub revived: Vec<ReviveOutcome>,
+    /// 5 分钟门移除并释放的 Ghost 怪，按遍历序。
+    pub removed: Vec<i32>,
+}
+
+/// `ProcessMonsters` 的**在册怪物段**（`WorldServer.MonGen.cs:278-333`）：
+///
+/// - `!Ghost`：`Death && CanReAlive && Invisible && MonGen != null` 且
+///   `(now - ReAliveTick) > GetMonstersZenTime(MonGen.ZenTime)` ⇒ `ReAliveEx(MonGen)`
+///   （`:283-292`）；
+/// - `Ghost`：`(now - GhostTick) > 5 * 60 * 1000` ⇒ `CertList.RemoveAt` 并释放（`:320-333`）。
+///
+/// **顺序**：thread id 升序 → `thread.entries` 顺序 → `cert_list` 顺序（oracle 的
+/// `MonGenInfoThreadMap` 遍历 + 每条的 `CertList` 遍历）。本仓把 oracle 的
+/// `MonsterThread` 墙钟节拍折叠为「宿主每世界 tick 调一次」（既有登记：`ProcessMonsters`
+/// 的单线程串行等价物），因此这里没有 `MonLimit` 断点续跑与 `RunTime` 门。
+///
+/// **不判 `RunTick`**：oracle 的复活检查在 `if ((currentTick - monster.RunTick) > monster.RunTime)`
+/// 之内（`RunTime = 250`，`BaseObject.cs:440`）。本仓 `monster_ai_tick` 也不做 RunTime 门
+/// （既有建模差异，按世界 tick 200ms 驱动）⇒ 本 pass 与 AI 同相位、每 tick 至多一次判定。
+pub fn process_cert_lists(
+    state: &mut MonGenState,
+    world: &mut crate::world::World,
+    now: i64,
+    play_object_count: i32,
+    config: &MonGenConfig,
+) -> CertListRecord {
+    let mut record = CertListRecord::default();
+    let now_i32 = i32::try_from(now).unwrap_or(i32::MAX);
+    // 先固定遍历序：thread id 升序（BTreeMap）→ 条目顺序。
+    let entry_lists: Vec<Vec<usize>> = state.threads.values().map(|t| t.entries.clone()).collect();
+    for entries in entry_lists {
+        for entry_idx in entries {
+            if entry_idx >= state.entries.len() {
+                continue;
+            }
+            let ids = state.entries[entry_idx].cert_list.clone();
+            for id in ids {
+                let Some(e) = world.entities.get(id) else {
+                    continue;
+                };
+                if !e.ghost {
+                    // oracle 的 `MonGen` 是实体自身引用（不一定等于当前遍历到的条目）。
+                    let mon_gen_idx = e.mon_gen.unwrap_or(entry_idx);
+                    let Some(owner) = state.entries.get(mon_gen_idx) else {
+                        continue;
+                    };
+                    let due = monster_due_for_revive(
+                        e.death,
+                        e.can_re_alive,
+                        e.invisible,
+                        e.mon_gen.is_some(),
+                        i32::try_from(e.re_alive_tick).unwrap_or(i32::MAX),
+                        owner.zen_time,
+                        now_i32,
+                        play_object_count,
+                        config,
+                    );
+                    if due {
+                        let (x, y, range) = (owner.x, owner.y, owner.range);
+                        if let Some(outcome) = world.revive_monster(id, x, y, range, now) {
+                            record.revived.push(outcome);
+                        }
+                    }
+                } else {
+                    let expired = monster_ghost_expired(
+                        i32::try_from(e.ghost_tick).unwrap_or(i32::MAX),
+                        now_i32,
+                    );
+                    if expired {
+                        world.release_entity(id);
+                        state.entries[entry_idx].cert_list.retain(|v| *v != id);
+                        record.removed.push(id);
+                    }
+                }
+            }
+        }
+    }
+    record
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entity::Entity;
+    use crate::world::World;
 
     fn cfg() -> MonGenConfig {
         MonGenConfig::default()
@@ -1339,5 +1513,163 @@ mod tests {
         assert_eq!(state.entries[0].start_tick, 1_000_000);
         assert_eq!(created, 0);
         assert_eq!(rng.random(), fresh.random(), "!can_create 支不抽任何随机数");
+    }
+
+    // ---- 复活 / Ghost 5min 清理（卡 openmir2-run-gap-corpse-ghost-revive） ----------------
+
+    /// 单条 entry + 单线程的 `MonGenState`（`MonGenInfoThreadMap[0] = [entry]`）。
+    fn one_entry_state(zen_time: i32, x: i16, y: i16, range: u8, cert: Vec<i32>) -> MonGenState {
+        let mut state = MonGenState::default();
+        let mut entry = MonGenEntry::new("0", x, y, "鸡", range, 1, zen_time, 0);
+        entry.cert_list = cert;
+        state.entries.push(entry);
+        let thread = MonGenThread {
+            id: 0,
+            entries: vec![0],
+            ..MonGenThread::default()
+        };
+        state.threads.insert(0, thread);
+        state
+    }
+
+    fn revive_corpse(world: &mut World, zen_time: i32, re_alive_tick: i64) -> i32 {
+        let mut e = Entity::new(0, "鸡", 50, 50);
+        e.race = 80;
+        e.max_hp = 60;
+        e.hp = 0;
+        e.max_mp = 10;
+        e.mp = 0;
+        e.death = true;
+        e.invisible = true;
+        e.can_re_alive = true;
+        e.mon_gen = Some(0);
+        e.mon_gen_zen_time = zen_time;
+        e.re_alive_tick = re_alive_tick;
+        e.death_tick = re_alive_tick;
+        e.gold = 7;
+        e.stone_mode = true;
+        e.fixed_hide_mode = true;
+        world.add_entity(e)
+    }
+
+    /// 判据 d：到点后可复活 ⇒ **真正复活**（状态 + 位置 + 帧面）；恰等 ZenTime 不触发。
+    ///
+    /// **牙④**：把 `process_cert_lists` 的 `ReAliveEx` 接线删掉（只判不复活）⇒ 状态断言红。
+    #[test]
+    fn revivable_corpse_is_revived_with_state_position_and_frames() {
+        let mut world = World::new(64, 64);
+        let id = revive_corpse(&mut world, 60_000, 1_000);
+        let mut state = one_entry_state(60_000, 50, 50, 0, vec![id]);
+        let config = cfg();
+
+        // 恰等 `ZenTime`：`(now - ReAliveTick) > zen` 严格大于 ⇒ 不复活。
+        let rec = process_cert_lists(&mut state, &mut world, 61_000, 0, &config);
+        assert!(rec.revived.is_empty(), "恰等 ZenTime 不得复活");
+        let e = world.entities.get(id).unwrap();
+        assert!(e.death && e.invisible, "未到点仍是尸体");
+
+        // +1ms：复活。
+        let rec = process_cert_lists(&mut state, &mut world, 61_001, 0, &config);
+        assert_eq!(rec.revived.len(), 1, "到点必须真正复活");
+        let e = world.entities.get(id).unwrap();
+        assert!(!e.death, "Death=false");
+        assert!(!e.invisible, "Invisible=false");
+        assert!(!e.ghost, "不得变 Ghost");
+        assert_eq!(e.hp, e.max_hp, "HP=MaxHP");
+        assert_eq!(e.mp, e.max_mp, "MP=MaxMP");
+        assert_eq!(e.gold, 0, "Gold=0");
+        assert!(
+            !e.stone_mode && !e.fixed_hide_mode,
+            "StoneMode/FixedHideMode 复位"
+        );
+        assert_eq!(e.re_alive_tick, 61_001, "ReAliveTick 刷新");
+        assert_eq!((e.x, e.y), (50, 50), "range=0 ⇒ 落位 = monGen 坐标");
+        assert!(
+            world.maps[0]
+                .get_cell_info(50, 50)
+                .0
+                .obj_list
+                .iter()
+                .any(|o| { o.actor_object && o.cell_obj_id == id }),
+            "复活必须重新 AddMapObject 落格"
+        );
+        // 帧面：`AddToMap` 的 RM_TURN + 尾部 RM_TURN（`BaseObject.cs:1370-1378/2747`）。
+        let frames = &rec.revived[0].frames;
+        assert_eq!(frames.len(), 2, "复活帧序 = AddToMap 帧 + 尾帧");
+        assert_eq!(
+            frames.last().copied(),
+            Some(ReviveFrame {
+                dir: 0,
+                x: 50,
+                y: 50
+            }),
+            "尾部 RM_TURN(Dir, CurrX, CurrY)"
+        );
+        assert_eq!(
+            frames[0], frames[1],
+            "首格 CanWalk 成功 ⇒ AddToMap 与尾帧同参"
+        );
+    }
+
+    /// **复验 F1 回归**：复活必须清「死亡结算」闩锁，否则第二次死亡永不结算（复活即免死）。
+    ///
+    /// oracle `BaseObject.Die`（`BaseObject.Base.cs:318-345`）**每次**死亡都无条件置 `Death`/`DeathTick`，
+    /// 复活后 `CanReAlive` 仍为 true ⇒ 「死→复活→再死」是合法循环。
+    ///
+    /// **牙⑥**：去掉 `revive_monster` 复位块里的 `e.death_settled = false` ⇒ 第一条断言红；
+    /// 保留的话第二次死亡不会置 `death`（`settle_deaths` 按 `!death_settled` 过滤）。
+    #[test]
+    fn revived_monster_can_die_and_settle_again() {
+        let mut world = World::new(64, 64);
+        let id = revive_corpse(&mut world, 60_000, 1_000);
+        // 首次死亡已结算 ⇒ 闩锁为 true（与生产路径一致）。
+        world.entities.get_mut(id).unwrap().death_settled = true;
+        let mut state = one_entry_state(60_000, 50, 50, 0, vec![id]);
+        let config = cfg();
+
+        let rec = process_cert_lists(&mut state, &mut world, 61_001, 0, &config);
+        assert_eq!(rec.revived.len(), 1, "到点复活");
+        assert!(
+            !world.entities.get(id).unwrap().death_settled,
+            "复活必须清死亡结算闩锁（复验 F1）"
+        );
+
+        // 第二次死亡：HP 归零后 tick 必须重新结算。
+        let before = world.clock_ms;
+        world.entities.get_mut(id).unwrap().hp = 0;
+        world.tick();
+        let e = world.entities.get(id).unwrap();
+        assert!(e.death, "第二次死亡必须重新进入 Death");
+        assert!(e.death_settled, "第二次死亡必须结算");
+        assert!(e.death_tick >= before, "DeathTick 重新落账");
+    }
+
+    /// 判据 e：Ghost 后 `5min-1` 不移除、`5min`（等于）不移除、`+1` 移除并释放。
+    ///
+    /// **牙⑤**：删掉 `monster_ghost_expired` 的门（无条件移除）⇒ 第一条断言红。
+    #[test]
+    fn ghost_is_removed_only_after_five_minutes() {
+        let mut world = World::new(64, 64);
+        let mut e = Entity::new(0, "幽", 40, 40);
+        e.race = 80;
+        e.ghost = true;
+        e.ghost_tick = 10_000;
+        e.mon_gen = Some(0);
+        let id = world.add_entity(e);
+        let mut state = one_entry_state(60_000, 40, 40, 0, vec![id]);
+        let config = cfg();
+
+        let rec = process_cert_lists(&mut state, &mut world, 10_000 + 299_999, 0, &config);
+        assert!(rec.removed.is_empty(), "5min-1 不得移除");
+        assert!(world.entities.get(id).is_some());
+        assert_eq!(state.entries[0].cert_list, vec![id]);
+
+        let rec = process_cert_lists(&mut state, &mut world, 10_000 + 300_000, 0, &config);
+        assert!(rec.removed.is_empty(), "恰等 5min 不得移除（严格 >）");
+
+        let rec = process_cert_lists(&mut state, &mut world, 10_000 + 300_001, 0, &config);
+        assert_eq!(rec.removed, vec![id], "5min+1 必须移除");
+        assert!(world.entities.get(id).is_none(), "实体必须释放");
+        assert!(state.entries[0].cert_list.is_empty(), "CertList.RemoveAt");
     }
 }

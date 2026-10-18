@@ -383,6 +383,27 @@ pub struct Entity {
     pub death: bool,
     pub invisible: bool,
     pub ghost: bool,
+    /// C# `BaseObject.DeathTick`（`BaseObject.cs:204`，`Die()` 在 `:323` 写 `GetTickCount()`）——
+    /// 死亡时刻（毫秒）。`BaseObject.Run` 死亡支的 `now - DeathTick` 门读它
+    /// （`BaseObject.Base.cs:90/99`）。
+    pub death_tick: i64,
+    /// C# `BaseObject.GhostTick`（`BaseObject.cs:207`）——`MakeGhost()` 写（`BaseObject.Base.cs:494`）；
+    /// 幽灵怪 5 分钟清理门 `(now - GhostTick) > 5*60*1000`（`WorldServer.MonGen.cs:302`）。
+    pub ghost_tick: i64,
+    /// C# `BaseObject.CanReAlive`（`BaseObject.cs:220`）——`RegenMonsters` 刷出的怪置 `true`
+    /// （`WorldServer.MonGen.cs:832/854`）；换图/魔法清位（`BaseObject.cs:2749-2756`、
+    /// `MagicManager.cs:743-745`）。决定 `MakeGhost` 走「留尸体可复活」还是「真 Ghost」。
+    pub can_re_alive: bool,
+    /// C# `BaseObject.ReAliveTick`（`BaseObject.cs:224`）——复活冷却起点
+    /// （`WorldServer.MonGen.cs:833/855` 置创建时刻、`:290` 在复活成功后刷新）。
+    pub re_alive_tick: i64,
+    /// C# `BaseObject.MonGen`（`BaseObject.cs` 属性）——本实体所属 `MonGenInfo` 在
+    /// [`crate::mongen::MonGenState::entries`] 里的下标；`None` = oracle `MonGen == null`。
+    pub mon_gen: Option<usize>,
+    /// C# `MonGen.ZenTime` 的缓存（死亡支 `GetMonstersZenTime(MonGen.ZenTime)`，
+    /// `BaseObject.Base.cs:87`）。仅 [`Entity::mon_gen`] 为 `Some` 时有效。
+    /// 缓存不改变语义：`MonGenInfo.ZenTime` 是配置列，运行期不变。
+    pub mon_gen_zen_time: i32,
     /// C# `BaseObject.HideMode`（隐身术/隐身戒指的"完全隐身"）。
     ///
     /// 与 [`Entity::invisible`]（oracle `Invisible`，`is_proper_target` 用）和
@@ -659,6 +680,12 @@ impl Entity {
             invisible: false,
             hide_mode: false,
             ghost: false,
+            death_tick: 0,
+            ghost_tick: 0,
+            can_re_alive: false,
+            re_alive_tick: 0,
+            mon_gen: None,
+            mon_gen_zen_time: 0,
             fixed_hide_mode: false,
             ob_mode: false,
             nasty_mode: false,

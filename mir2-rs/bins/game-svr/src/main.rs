@@ -10968,6 +10968,15 @@ fn step_mon_gen(
     // `ZenLimit` 闸门因此不会因墙钟抖动而提前中断；oracle 的墙钟分支见 `game_svr::mongen` 模块头）。
     let tick_now = now;
     let mut clock = || tick_now;
+    // **尸体/复活片**：`RegenMonsters` 新建的怪要按 oracle 置
+    // `CanReAlive/ReAliveTick/MonGen`（`WorldServer.MonGen.cs:832-835/854-857`）。
+    // 快照各条 `cert_list.len()` ⇒ 只登记本轮的追加项（GuardList 的 cert 不在本轮追加）。
+    let cert_len_before: Vec<usize> = host
+        .state
+        .entries
+        .iter()
+        .map(|e| e.cert_list.len())
+        .collect();
     // 把 `world.rng` 移出：`WorldMonsterSink` 需要 `&mut world` 落库，而取数必须走同一条流。
     let mut rng = std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
     {
@@ -10988,6 +10997,26 @@ fn step_mon_gen(
         );
     }
     world.rng = rng;
+    // oracle `RegenMonsters` 在 `CreateMonster` 之后同步置三字段；本仓在 `step` 返回后按
+    // cert_list 的追加段等价登记（不抽随机数）。
+    let _bound = game_svr::mongen::bind_new_certificates(
+        &host.state,
+        world,
+        &cert_len_before,
+        i64::from(now),
+    );
+    // **尸体/复活片**：`ProcessMonsters` 的在册怪物段（`WorldServer.MonGen.cs:278-333`）——
+    // 复活判定（`ReAliveTick + GetMonstersZenTime`）与 5 分钟 Ghost 清理。
+    // 与 oracle 同一 `SystemShare.RandomNumber`（`world.rng`）⇒ 复活取数（`ReAliveEx`）按
+    // 遍历序接在 regen 取数之后；无到点尸体时零抽数（五批 trace 不变）。
+    let cfg = host.config;
+    let _cert = mir2_world::mongen::process_cert_lists(
+        &mut host.state,
+        world,
+        world.clock_ms,
+        play_object_count,
+        &cfg,
+    );
 }
 
 /// **P3-B4 生产接线**：把 [`EnterConfig`] 的 `[Setup] RedMsg*` 与 `[String] YouPoisoned`
@@ -11410,6 +11439,14 @@ fn sim_loop(
         }
         None => None,
     };
+    // **尸体/复活片**：把 `Config.MakeGhostTime`（`[Setup] MakeGhostTime`，部署 90000）与
+    // `GetMonstersZenTime` 的 `UserFull/ZenFastStep` 灌进世界（`BaseObject.Base.cs:85-101`）。
+    // 合成 golden 场景不经 `sim_loop` ⇒ 世界保持 oracle 构造缺省，逐字节不变。
+    world.set_corpse_config(
+        enter_cfg.mon_gen.config.make_ghost_time,
+        enter_cfg.mon_gen.config.user_full,
+        enter_cfg.mon_gen.config.zen_fast_step,
+    );
     // **构造段 fold · 段③**（`openmir2-ctor-draws-fold`）：`GameApp.cs:184`（`LocalDB.LoadMapQuest`
     // 的 `MapQuest.txt` 每有效行的 `new Merchant`（M1）+ 尾 `:403/404/405` 的 `QMangeNpc`/
     // `QFunctionNpc`/`RobotNpc` 三只隐藏 `new Merchant`（L2/L1/L3））—— **必须晚于**
@@ -13024,13 +13061,24 @@ fn sim_loop(
         // `Entity.ai`（卡 C 第 ② 片）；**怪物帧面**（`SM_TURN`/`SM_FEATURECHANGED`）仍属后续分片。
         if let Some(host) = mon_gen_host.as_mut() {
             if let Some(reg) = registry.as_ref() {
+                // oracle 两条门读**同一个** `WorldEngine.PlayObjectCount`（`WorldServer.cs:99/199`
+                // = `PlayObjectList.Count`）。`MakeGhost` 门（`monai.rs`）数的是 `race == Play` 的实体；
+                // 这里必须同口径，否则下线/顶号窗口里「变尸」与「复活」两处 ZenTime 加速档可能不同（复验 F2）。
+                let play_object_count = i32::try_from(
+                    world
+                        .entities
+                        .iter()
+                        .filter(|e| e.race == mir2_world::ACTOR_RACE_PLAY)
+                        .count(),
+                )
+                .unwrap_or(i32::MAX);
                 step_mon_gen(
                     host,
                     &enter_cfg.mon_gen.table,
                     reg,
                     &mut world,
                     &mut displays,
-                    i32::try_from(online.len()).unwrap_or(i32::MAX),
+                    play_object_count,
                 );
             }
         }

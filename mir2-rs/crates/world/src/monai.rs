@@ -34,9 +34,10 @@
 //!     末尾的 `base.Run()`，`MonsterObject.cs:255/359`）；
 //!   - [`crate::world::World`]：`HP==0 ⇒ Die()`（`:70-73`，由 `settle_deaths` 死亡结算等价）、
 //!     `LastHiter` 30s / `ExpHiter` 6s 过期（`:119-132`，由 `expire_hitters`）。
-//! - **仍未建模**（登记）：`SuperMan`（`:35-38`）、死亡分支 `MakeGhost`（`:86-101`，需
-//!   `MonGen.ZenTime`/`Config.MakeGhostTime`）、`Master` 跟随/`SlaveRelax` 分支（`:133-215`）、
-//!   `ShowHp`/`VerifyTick`（`:217-256`）。**⑨-3 已接**：`CheckRoyalty()`（`MonsterObject.cs:352`）
+//! - **仍未建模**（登记）：`SuperMan`（`:35-38`）、`Master` 跟随/`SlaveRelax` 分支（`:133-215`）、
+//!   `ShowHp`/`VerifyTick` 的 `ShowHp` 支（`:217-256`；`VerifyTick` 已接）。死亡支
+//!   `MakeGhost`（`:85-101`）已由本片接上（[`make_ghost`]，门见
+//!   [`crate::mongen::monster_death_gate`]）。**⑨-3 已接**：`CheckRoyalty()`（`MonsterObject.cs:352`）
 //!   在 [`monster_run`] 的两个提前返回口之外复刻调用；宝宝列表清表（`BaseObject.Base.cs:208-217`）
 //!   在 [`crate::world::World::tick`] 里集中跑（见 [`crate::slave`]）。
 //! - **构造期 RNG**：oracle 在 `new MonsterObject()` 时先抽 `BaseObject` 的 `Random(1500)`+
@@ -846,16 +847,63 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
         }
     }
     let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+    let state = world.entities.get(actor_id).map(|e| {
+        (
+            e.death,
+            e.can_re_alive,
+            e.mon_gen.is_some(),
+            e.mon_gen_zen_time,
+            e.death_tick,
+        )
+    });
+    let Some((is_death, can_re_alive, has_mon_gen, zen_time, death_tick)) = state else {
         return;
     };
-    if e.death {
-        // 死亡分支（`BaseObject.Run` 的 else：`MakeGhost`，`:86-101`）未建模⇒直接返回；
-        // 死亡实体也不再回血（oracle 同行）。oracle 的 VerifyTick 段在 `if (!Death)` **之外** ⇒
+    if is_death {
+        // 死亡分支（`BaseObject.Base.cs:85-101`）：
+        //
+        //   if (CanReAlive && MonGen != null) {
+        //       int makeGhostTime = MAX(10s, GetMonstersZenTime(MonGen.ZenTime) - 20s);
+        //       if (makeGhostTime > Config.MakeGhostTime) makeGhostTime = Config.MakeGhostTime;
+        //       if (GetTickCount() - DeathTick > makeGhostTime) MakeGhost();
+        //   } else {
+        //       if ((GetTickCount() - DeathTick) > Config.MakeGhostTime) MakeGhost();
+        //   }
+        //
+        // 两条门都是**严格 >**。`GetMonstersZenTime` 读全服 `PlayObjectCount`
+        // （`WorldServer.MonGen.cs:168-190`）⇒ 这里数 `race == Play` 的实体（宿主同口径）。
+        let play_object_count = world
+            .entities
+            .iter()
+            .filter(|x| x.race == ACTOR_RACE_PLAY)
+            .count() as i32;
+        // `get_monsters_zen_time` 只读这两项；其余字段用 oracle 构造缺省（不参与计算）。
+        let cfg = crate::mongen::MonGenConfig {
+            user_full: world.mon_gen_user_full,
+            zen_fast_step: world.mon_gen_zen_fast_step,
+            ..crate::mongen::MonGenConfig::default()
+        };
+        let gate = crate::mongen::monster_death_gate(
+            can_re_alive,
+            has_mon_gen,
+            zen_time,
+            world.make_ghost_time,
+            play_object_count,
+            &cfg,
+        );
+        let now_i32 = i32::try_from(now).unwrap_or(i32::MAX);
+        let death_i32 = i32::try_from(death_tick).unwrap_or(i32::MAX);
+        if crate::mongen::monster_due_for_ghost(death_i32, gate, now_i32) {
+            make_ghost(world, actor_id);
+        }
+        // 死亡实体不再回血（oracle 同行）。oracle 的 VerifyTick 段在 `if (!Death)` **之外** ⇒
         // 死者同样刷新格子时间（`BaseObject.Base.cs:220-228`）。
         world.verify_map_time(actor_id);
         return;
     }
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
     let health_fill_time = world.health_fill_time;
     let spell_fill_time = world.spell_fill_time;
     let recovery_tick = ((now - e.auto_recovery_tick) / 20) as i32;
@@ -936,6 +984,36 @@ fn target_cret_cleanup(world: &mut World, actor_id: i32, now: i64) {
     }
 }
 
+/// `BaseObject.MakeGhost()`（`BaseObject.Base.cs:484-496`）：
+///
+/// ```csharp
+/// if (CanReAlive) { Invisible = true; } else { Ghost = true; }
+/// GhostTick = HUtil32.GetTickCount();
+/// DisappearA();
+/// ```
+///
+/// `CanReAlive` 的怪**保留尸体**（`Invisible`，可被 `ReAliveEx` 复活）；其余置 `Ghost`
+/// （5 分钟后由 [`crate::mongen::process_cert_lists`] 释放）。
+/// `DisappearA()` 的格子面 = [`World::disappear_a`]；`RM_DISAPPEAR` 帧由 AOI 视野差集表现。
+///
+/// **oracle 怪癖照抄**：死亡支每跑一次 `base.Run` 且门仍成立就再调一次 `MakeGhost`
+/// （`Invisible` 尸体仍满足 `now - DeathTick > makeGhostTime`）⇒ `GhostTick` 被反复刷新、
+/// `DisappearA` 反复执行。本函数同样重复执行（幂等：已摘格时 `disappear_a` 返回 false）。
+fn make_ghost(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        if e.can_re_alive {
+            // `Invisible = true;`——尸体保留、仍可复活。
+            e.invisible = true;
+        } else {
+            // `Ghost = true;`
+            e.ghost = true;
+        }
+        e.ghost_tick = now;
+    }
+    world.disappear_a(actor_id);
+}
+
 /// 按**实体槽位顺序**对场上所有怪物跑一次 [`monster_run`]（`ProcessMonsters` 的单线程等价物）。
 ///
 /// 顺序契约：来自 `EntityStore` 的显式槽位索引（`iter`），不迭代 Query。
@@ -954,12 +1032,20 @@ pub fn monster_ai_tick(world: &mut World) {
             e.race > ACTOR_RACE_PLAY
                 && e.merchant.is_none()
                 && e.npc.is_none()
-                && !e.death
+                // `Ghost` 怪在 oracle `ProcessMonsters` 里整只跳过（`:320-333` 只做 5min 清理，
+                // 由 [`crate::mongen::process_cert_lists`] 承担）⇒ 本 tick 不再驱动。
+                // **死亡但未 Ghost** 的怪仍要跑 `base.Run`（死亡支 `MakeGhost`，`:85-101`）⇒ 不过滤。
                 && !e.ghost
         })
         .map(|e| e.id)
         .collect();
     for id in ids {
+        // `CanMove()`（`AnimalObject.cs:162-165`）对 `Death` 恒 false ⇒ `MonsterObject.Run`
+        // 的 AI 体（Think/Walk/Attack）整段跳过，只剩 `base.Run()` 的死亡支与 VerifyTick 段。
+        if world.entities.get(id).is_some_and(|e| e.death) {
+            base_object_run_monster(world, id);
+            continue;
+        }
         // `GuardList` 放置的守卫（race 11/12/20/112）不继承 `MonsterObject.Run`
         // （`GuardUnit:NormNpc`，`NormNpc.Run` 只是「清 master + `base.Run()`」）⇒ **不游走/不索敌**，
         // 但仍要跑自己的 `base.Run()` 段（`BaseObject.Run` 的恢复/`RM_STRUCK` 出队/`TargetCret` 清理）。
@@ -2005,5 +2091,170 @@ mod tests {
         for r in [0u8, 10, 50, 80, 81, 83, 110, 111] {
             assert!(!is_guard_race(r), "race {r} 不应为守卫族");
         }
+    }
+
+    // ---- 尸体 / MakeGhost 门（卡 openmir2-run-gap-corpse-ghost-revive） ----------------
+
+    /// 造一只已死怪（race 80 = 普通 `MonsterObject`，非 Animal）。
+    fn corpse(
+        world: &mut World,
+        can_re_alive: bool,
+        has_mon_gen: bool,
+        zen_time: i32,
+        death_tick: i64,
+    ) -> i32 {
+        let mut e = Entity::new(0, "尸体", 10, 10);
+        e.race = 80;
+        e.max_hp = 60;
+        e.hp = 0;
+        e.max_mp = 10;
+        e.mp = 0;
+        e.death = true;
+        e.death_tick = death_tick;
+        e.can_re_alive = can_re_alive;
+        e.mon_gen = if has_mon_gen { Some(0) } else { None };
+        e.mon_gen_zen_time = zen_time;
+        world.add_entity(e)
+    }
+
+    /// 判据 a：`ZenTime` 足够大 ⇒ 门 = `ZenTime - 20s`（未触截断）：
+    /// `DeathTick + gate`（等于）**不** Ghost，`+1` Ghost。两条门都是严格 `>`。
+    ///
+    /// **牙①**：去掉可复活支的 `- 20 * 1000` ⇒ 门变 120000，`+100001` 不 Ghost ⇒ 本用例红。
+    #[test]
+    fn make_ghost_gate_uses_zen_time_minus_20s() {
+        let mut world = World::new(64, 64);
+        world.set_corpse_config(180_000, 5000, 300);
+        // gate = max(10000, 120000 - 20000) = 100000（< MakeGhostTime ⇒ 不截断）。
+        let id = corpse(&mut world, true, true, 120_000, 1_000);
+
+        world.clock_ms = 1_000 + 99_999;
+        base_object_run_monster(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert!(!e.invisible && !e.ghost, "gate-1 不得 MakeGhost");
+
+        world.clock_ms = 1_000 + 100_000;
+        base_object_run_monster(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert!(
+            !e.invisible && !e.ghost,
+            "恰等于 gate 不得 MakeGhost（严格 >）"
+        );
+
+        world.clock_ms = 1_000 + 100_001;
+        base_object_run_monster(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert!(e.invisible, "gate+1 可复活怪 ⇒ Invisible");
+        assert!(!e.ghost, "可复活怪保留尸体，不置 Ghost");
+        assert_eq!(e.ghost_tick, world.clock_ms, "GhostTick = GetTickCount()");
+    }
+
+    /// 判据 b：`ZenTime` 小 ⇒ `MAX(10s)` 下限生效（`25000-20000=5000 ⇒ 10000`）。
+    ///
+    /// **牙②**：去掉 `MAX(10 * 1000, ...)` ⇒ 门变 5000，`+10001` 时仍 Ghost，但
+    /// `+10000` 处就已经 Ghost ⇒ 第一条断言红。
+    #[test]
+    fn make_ghost_gate_floors_at_10s() {
+        let mut world = World::new(64, 64);
+        world.set_corpse_config(180_000, 5000, 300);
+        let id = corpse(&mut world, true, true, 25_000, 1_000);
+
+        world.clock_ms = 1_000 + 10_000;
+        base_object_run_monster(&mut world, id);
+        assert!(
+            !world.entities.get(id).unwrap().invisible,
+            "MAX(10s) 下限：恰等 10000 不 Ghost"
+        );
+        world.clock_ms = 1_000 + 10_001;
+        base_object_run_monster(&mut world, id);
+        assert!(
+            world.entities.get(id).unwrap().invisible,
+            "MAX(10s) 下限：10001 必须 Ghost"
+        );
+    }
+
+    /// 截断步：`ZenTime - 20s > Config.MakeGhostTime` ⇒ 取 `Config.MakeGhostTime`。
+    #[test]
+    fn make_ghost_gate_truncates_to_config_make_ghost_time() {
+        let mut world = World::new(64, 64);
+        world.set_corpse_config(90_000, 5000, 300);
+        // 2_000_000 - 20_000 = 1_980_000 > 90_000 ⇒ 截到 90_000。
+        let id = corpse(&mut world, true, true, 2_000_000, 1_000);
+        world.clock_ms = 1_000 + 90_000;
+        base_object_run_monster(&mut world, id);
+        assert!(
+            !world.entities.get(id).unwrap().invisible,
+            "恰等截断值不 Ghost"
+        );
+        world.clock_ms = 1_000 + 90_001;
+        base_object_run_monster(&mut world, id);
+        assert!(
+            world.entities.get(id).unwrap().invisible,
+            "截断值 +1 必须 Ghost"
+        );
+    }
+
+    /// 判据 c：`CanReAlive=false` ⇒ 走普适支 `Config.MakeGhostTime`（90s）。
+    ///
+    /// **牙③**：把普适支的 `>` 改成 `>=` ⇒ 恰等 90000 时 Ghost ⇒ 第二条断言红。
+    #[test]
+    fn make_ghost_gate_non_revivable_is_config_value() {
+        let mut world = World::new(64, 64);
+        world.set_corpse_config(90_000, 5000, 300);
+        // 即使 `MonGen != null`，`CanReAlive == false` 也必须走普适支。
+        let id = corpse(&mut world, false, true, 120_000, 1_000);
+
+        world.clock_ms = 1_000 + 89_999;
+        base_object_run_monster(&mut world, id);
+        assert!(!world.entities.get(id).unwrap().invisible);
+
+        world.clock_ms = 1_000 + 90_000;
+        base_object_run_monster(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert!(
+            !e.invisible && !e.ghost,
+            "普适支严格 >：恰等 90000 不 Ghost"
+        );
+
+        world.clock_ms = 1_000 + 90_001;
+        base_object_run_monster(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert!(e.ghost, "普适支：90001 ⇒ Ghost=true");
+        assert!(!e.invisible, "普适支不得保留 Invisible 尸体");
+    }
+
+    /// 判据 f（阴性对照）：活怪不受尸体门影响；且死亡怪在门未到前也不改变状态。
+    #[test]
+    fn live_monster_is_not_affected_by_corpse_gates() {
+        let mut world = World::new(64, 64);
+        world.set_corpse_config(10_000, 5000, 300);
+        let id = monster(&mut world, 10, 10);
+        world.clock_ms = 10_000_000;
+        base_object_run_monster(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert!(!e.death && !e.ghost && !e.invisible);
+        assert_eq!(e.ghost_tick, 0, "活怪不得写 GhostTick");
+
+        // 刚死（门未到）的怪同样不动。
+        let now = world.clock_ms;
+        let dead = corpse(&mut world, false, false, 0, now);
+        base_object_run_monster(&mut world, dead);
+        let e = world.entities.get(dead).unwrap();
+        assert!(!e.ghost && !e.invisible, "门未到不得 MakeGhost");
+    }
+
+    /// 死亡时刻由 `settle_deaths` 写 `death_tick`（`BaseObject.cs:323`）。
+    #[test]
+    fn death_settlement_records_death_tick() {
+        let mut world = World::new(32, 32);
+        let id = monster(&mut world, 10, 10);
+        world.clock_ms = 12_345;
+        world.entities.get_mut(id).unwrap().hp = 0;
+        world.tick();
+        let e = world.entities.get(id).unwrap();
+        assert!(e.death);
+        // `tick()` 先推进时钟（+200ms）再结算 ⇒ `DeathTick` = 结算时刻。
+        assert_eq!(e.death_tick, world.clock_ms);
+        assert_eq!(e.death_tick, 12_545);
     }
 }
