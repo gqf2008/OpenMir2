@@ -119,6 +119,34 @@
 - 重复置位刷新：t=61s 重新置位；t=91s 再置一次（已带 flag ⇒ 返回 None、零 656）；
   t=150s（91+59）不清；t=152s（91+61）清且再次恰一条 656/观察者。
 
+### T-78 修复：节流游标惰性初始化（2026-10-18）
+
+**oracle**（`PlayObject.cs:969`）：`DecLightItemDrugTick = HUtil32.GetTickCount();`
+—— **每玩家**构造时以创建时刻的墙钟起算；`PlayObject.Message.cs:257-259` 仅在
+`(GetTickCount() - DecLightItemDrugTick) > Config.DecLightItemDrugTime`（严格 `>`）时进入周期块，
+块内先 `DecLightItemDrugTick += Config.DecLightItemDrugTime` 再调 `CheckPkStatus()`。
+
+**本仓缺陷**：`World::pk_check_tick` 构造时为 `0`。`clock_ms` 从 0 起（未注入）时与 oracle 同构；
+但宿主用 `MIR2_CLOCK_MS` 把 `clock_ms` 注入成墙钟量级（≈1.7e12）后，`clock_ms - 0 > 500` **恒真**
+⇒ 过期检查退化为每 world tick 一次（200ms），500ms 节流失效。
+
+**修法（最小）**：`World::check_pk_status` 首次调用时把 `pk_check_tick` 惰性钉到当时的 `clock_ms`
+（新增内部 `bool` 标志 `pk_check_tick_initialized`；公开字段 `pk_check_tick` 的类型与手工赋值语义
+不变，宿主强制提前检查的写法照旧可用）。之后仍按 oracle 的严格 `>` 门 + `+= 周期` 推进。
+未注入（从 0 起）时首调基线 = 0 ⇒ 与修复前逐位相同；60s 过期判定与 `dwPKFlagTime` 语义未动。
+
+**用例（构造级 + 宿主级）**：
+
+- `world::tests::pk_check_throttle_holds_with_injected_wall_clock`：`clock_ms=1_700_000_000_000`、
+  过期 61s 的 `PvpFlag` —— 首调只建基线（游标 = 1.7e12，不检查、不清位）；+200/+500ms 不检查；
+  +600ms 恰一条 656 载荷并清位。
+- `world::tests::pk_check_throttle_unchanged_when_clock_starts_at_zero`：从 0 起，200/500ms
+  不检查、600ms 恰一条；游标 `0 → 500`（与修复前相同）。
+- `world::tests::pk_check_expiry_boundary_strictly_greater_reports_once`：恰 500ms 不推进游标；
+  恰 60s 不清位；60s+1ms 恰一条 656；再调不重复。
+- `game-svr` `tests::p3res_pk_throttle_holds_under_injected_wall_clock`：同一场景走生产
+  `drain_pk_flag_downlink`，断言 656 帧数为 0/0/1（自己）+1（观察者）+0（范围外）。
+
 ### 登记（计时面）——`window_required: true`（本批未占窗）
 
 oracle 的 `CheckPkStatus` 跑在**真实墙钟**的玩家 `Run()` 周期里（`DecLightItemDrugTick` 是
@@ -126,6 +154,11 @@ oracle 的 `CheckPkStatus` 跑在**真实墙钟**的玩家 `Run()` 周期里（`
 节流（`World::pk_check_tick` 是**全世界单一**游标）⇒ 实际检查点在 600/1200/1600/2200ms…
 （与 oracle 的 500/1000/1500 相差 200ms 量化）。过期判定本身用虚拟毫秒，构造级可稳定复现；
 **真机帧时序**按 R 级窗口另行对拍（本批未占窗口）。
+
+**T-78 修复（2026-10-18）**：上段未列出的「游标从 0 起」在 `MIR2_CLOCK_MS` 注入下使节流恒真，
+已由「首调惰性对齐 `clock_ms`」消除（见上小节）；剩余偏差只有 ① 200ms 虚拟 tick 量化、
+② 全世界单游标 vs 每玩家 `DecLightItemDrugTick`、③ `DecLightItemDrugTime` 键未解析。
+三者都不改变 60s 过期判据与 656 载荷内容。
 
 **R 级判据（`window_required: true`）**：`PvpFlag` 60s 过期与 656 广播的**帧序**属 R 面
 （时序 + 帧字节）。本批只交**构造级**证据，**缺证清单**：
@@ -162,6 +195,8 @@ seed=4，夹具同 F50-D2，仅 `MagicRcd.level: 2 → 0`）：
 | ③ | `check_pk_status` 的过期支改成 `if true { continue; }` | `p3res_pk_flag_expiry_59s_61s_one_656_and_refresh` **FAILED**（61s 自己 656 = 0） | `70345f8c…c5c22743` |
 | ④ | `handle_bag_cmd` 的 `e.hit_speed = sg.hit_speed` 改成 `let _ = (e, sg.hit_speed)` | `p3res_bag_take_on_off_syncs_hit_speed_to_entity` **FAILED**：`穿装重算后必须同步 Entity.hit_speed`（left 0 / right 3） | `f06a45a8f078ca7129ec78fb7341fe0a250f2167b7d4cb79e01a818abcf7724`（备份与还原后逐字节相同） |
 | ⑤ | 删除 36 支里 `e.hit_speed = sg.hit_speed`（改 `let _ = sg.hit_speed`） | `p3res_spell_36_target_recalc_syncs_hit_speed_to_entity` **FAILED**：`36 目标重算后的 HitSpeed 必须同步到实体`（left 99 / right 5） | 同上 `f06a45a8…bcf7724`（还原后逐字节相同） |
+| ⑥ | `check_pk_status` 的惰性初始化块 `if !pk_check_tick_initialized` 改成 `if false`（等价游标从 0 起） | `pk_check_throttle_holds_with_injected_wall_clock` / `pk_check_expiry_boundary_strictly_greater_reports_once` / 宿主 `p3res_pk_throttle_holds_under_injected_wall_clock` **FAILED**（首调即 1 条 656；`pk_check_tick` left 500 / right 1700000000000） | `world.rs` / `main.rs` 还原后 sha256 与改动后相同（`28c55dfe…d6cfed9`） |
+| ⑦ | 节流门 `<=` 改成 `<` | 三条世界用例全 **FAILED**（`T0+500` 即推进游标：left `1700000000500` / right `1700000000000`） | 同上（`28c55dfe…d6cfed9`） |
 
 五处均按原文件字节还原后才进入门禁复跑（④/⑤ 的 `main.rs` 之后仅经 `cargo fmt` 重排测试字面量）。
 
@@ -222,3 +257,55 @@ seed=4，夹具同 F50-D2，仅 `MagicRcd.level: 2 → 0`）：
 - 牙备份：`/e/tmp/p3resb-main.bak`（仅作还原校验；内容不在仓库）。
 - 驱动脚本：`/e/tmp/p3resb-norm.py`、`/e/tmp/p3resb-newtests.txt`、`/e/tmp/p3resb-t78.md`
   （不落库）。
+
+---
+
+## 9. T-78 节流游标修复（2026-10-18，patch `pktick`）
+
+基线 `429c714a4`；实现 worktree `/e/tmp/impl-pktick`，复验 `/e/tmp/verify-pktick`（同基线）。
+本片只动两处：`crates/world/src/world.rs`（惰性初始化 + 3 条世界用例）与
+`bins/game-svr/src/main.rs`（1 条端到端用例）；未动 `src/**`、`sql/**`、`MirClient/`、
+`crates/{protocol,storage}/**`、`E:/MirServer/**`，未起服务、未占端口、未写库。
+
+### oracle 差（修前 → 修后）
+
+| 点 | oracle | 修前本仓 | 修后本仓 |
+| --- | --- | --- | --- |
+| 游标初值 | 每玩家构造时 `GetTickCount()`（`PlayObject.cs:969`） | 全世界单一游标，构造时为 `0` | 全世界单一游标，**首调惰性对齐 `clock_ms`** |
+| 注入 `MIR2_CLOCK_MS`（≈1.7e12） | 不受影响（初值即当时墙钟） | `clock - 0 > 500` 恒真 ⇒ 每 tick 检查 | 500ms 节流成立（首调基线 = 注入时钟） |
+| 未注入（`clock_ms` 从 0 起） | 500ms 周期 | 500ms 周期 | **逐位不变**（首调基线 = 0） |
+| 过期门 | `(now - PvpNameColorTick) > dwPKFlagTime`（严格 `>`） | 同（`<=` 早退） | 未动 |
+| 周期推进 | `DecLightItemDrugTick += 周期` | `pk_check_tick += 周期` | 未动 |
+
+剩余登记（T-78 未修部分）：200ms 虚拟 tick 量化、全世界单游标 vs 每玩家游标、
+`DecLightItemDrugTime` 键未从 `Server.conf` 解析。真机帧序仍 `window_required: true`。
+
+### 门禁读数（cwd=`mir2-rs`，`CARGO_TARGET_DIR=/e/tmp/pktick-target`）
+
+| 门 | 读数 |
+| --- | --- |
+| `cargo fmt --all -- --check` | rc=0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | rc=0 |
+| `cargo test --workspace` | rc=0；112 suites / **1699 passed / 0 failed / 26 ignored**（基线 1695 ⇒ 本片 +4 条用例） |
+| `cargo run -q -p msgcodegen -- --check` | rc=0；604 条常量 |
+| `recon_gates.py content` / `dispatch` / `selftest` / `mutate` | 均 rc=0；路径（+ dispatch 行号）+ 空白归一后与 `/e/tmp/verify-pktick`（429c714a4）**IDENTICAL**（4/4 diff 0 行） |
+| `whitelist_anchor_gate.py check` | rc=0 `RESULT: ALL PASS（176 条锚）` |
+| `m3_whitelist_registry_audit.py audit` | rc=0 `WHITELIST_REGISTRY GREEN` |
+| `fixture_chain_gate.py check` | rc=0 `FIXTURE_CHAIN GREEN: runner_ok=10 prereq_or_skip=0 red=0` |
+| `rng-trace-scene/check_anchors.py check / selftest` | rc=0 `GREEN 7/7` / rc=0 `SELFTEST GREEN 17/17` |
+| RNG selftest ×4 | consumer_groups **20/20**、ledger_diff **37/37**、scene_gate **22/22**、attack_rng_ledger **51/51**；均 rc=0 |
+| 五批 trace `closed` | B1/B2/B3/B4/B5 均 rc=0 `GROUP_COVERAGE closed` + `ROW_COVERAGE closed rows_dropped=0` |
+
+### 牙（逐条注入 → 跑用例 → 字节级还原）
+
+| # | 改坏 | 结果 | 还原校验 |
+| --- | --- | --- | --- |
+| ① | 惰性初始化块改 `if false`（等价游标从 0 起） | 世界 2 条 + 宿主 1 条 **FAILED**（首调即 1 条 656；`pk_check_tick` left 500 / right 1.7e12） | `world.rs` / `main.rs` sha256 与改动后相同 |
+| ② | 节流门 `<=` → `<` | 世界 3 条全 **FAILED**（`T0+500` 推进游标，left `1700000000500` / right `1700000000000`） | 同上 |
+
+### 残留物清单（保留，不删）
+
+- worktree：`/e/tmp/impl-pktick`（实现）、`/e/tmp/verify-pktick`（基线对照）。
+- target：`/e/tmp/pktick-target`（实现；复验树未单独建 target）。
+- 临时日志/备份：`/e/tmp/pktick-test.log`、`/e/tmp/impl-recon-*.txt`、`/e/tmp/verify-recon-*.txt`、
+  `/e/tmp/pktick-world.rs.bak`、`/e/tmp/pktick-main.rs.bak`（牙还原备份）。

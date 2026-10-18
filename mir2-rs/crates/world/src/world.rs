@@ -633,7 +633,15 @@ pub struct World {
     /// 本骨架按同一周期在 [`World::check_pk_status`] 内节流。
     pub dec_light_item_drug_time_ms: i64,
     /// 上一趟 `CheckPkStatus` 的 sim 时钟（oracle `DecLightItemDrugTick`）。
+    ///
+    /// **T-78 修复（惰性初始化）**：oracle 在玩家构造时用 `GetTickCount()` 初始化该游标
+    /// （`PlayObject.cs:969`）；本仓的等价物是**首次调用** [`World::check_pk_status`] 的时刻——
+    /// 首次调用把它钉到当时的 [`World::clock_ms`]，而不是构造时的 0。否则 `clock_ms` 被注入为
+    /// 墙钟量级（`MIR2_CLOCK_MS ≈ 1.7e12`）时 `clock - 0 > 500` 恒真，节流退化为每 tick 一次。
     pub pk_check_tick: i64,
+    /// [`World::pk_check_tick`] 是否已按首次调用时钟惰性初始化（T-78 修复的内部状态）。
+    /// 直接写 `pk_check_tick`（宿主/测试强制提前检查）不改变该标志。
+    pk_check_tick_initialized: bool,
     /// `SystemShare.Config.HealthFillTime` / `SpellFillTime`（`GameSvrConf.cs:1323-1324` 缺省
     /// `300` / `800`；`ServerConf.cs:152-153` 可覆盖）。
     ///
@@ -790,6 +798,7 @@ impl World {
             pk_flag_time_ms: 60 * 1000,
             dec_light_item_drug_time_ms: 500,
             pk_check_tick: 0,
+            pk_check_tick_initialized: false,
             health_fill_time: 300,
             spell_fill_time: 800,
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
@@ -1088,6 +1097,13 @@ impl World {
     /// 返回 `RefNameColor` 的观察值（`RM_CHANGENAMECOLOR` 的宿主侧载荷）：色 = 清位后
     /// `GetChrColor`（玩家 ⇒ `NameColor`，本骨架 ctor = 255）。
     pub fn check_pk_status(&mut self) -> Vec<crate::slave::NameColorDelivery> {
+        // oracle 的 `DecLightItemDrugTick` 在玩家构造时 = `GetTickCount()`（`PlayObject.cs:969`），
+        // 即从「创建时刻」起算；本仓的等价物是**首次调用**时刻。若沿用构造时的 0，注入墙钟
+        // （`MIR2_CLOCK_MS ≈ 1.7e12`）后 `clock - 0 > 500` 恒真 ⇒ 节流失效（T-78）。
+        if !self.pk_check_tick_initialized {
+            self.pk_check_tick = self.clock_ms;
+            self.pk_check_tick_initialized = true;
+        }
         if self.clock_ms - self.pk_check_tick <= self.dec_light_item_drug_time_ms {
             return Vec::new();
         }
@@ -7138,5 +7154,111 @@ mod tests {
         assert_eq!(out.target, Some(target), "成功支保留目标");
         assert!(out.delayed);
         assert_eq!(out.delay_ms, 600);
+    }
+
+    /// **T-78**：构造一个 `PvpFlag = true` 的玩家；`pvp_name_color_tick = clock_ms - expired_by_ms`
+    /// （`expired_by_ms > pk_flag_time_ms` ⇒ 一旦被检查就清位 + 一条 656 载荷）。
+    fn pk_world(clock_ms: i64, expired_by_ms: i64) -> (World, i32) {
+        let mut w = World::new(16, 16);
+        w.clock_ms = clock_ms;
+        let mut e = Entity::new(7, "p7", 10, 10);
+        e.pvp_flag = true;
+        e.pvp_name_color_tick = clock_ms - expired_by_ms;
+        assert_eq!(w.add_entity(e), 7);
+        (w, 7)
+    }
+
+    /// **T-78 修复**：`clock_ms` 被注入成墙钟量级（`MIR2_CLOCK_MS ≈ 1.7e12`）时，
+    /// `pk_check_tick` 必须在**首次调用**时惰性对齐到 `clock_ms`（oracle
+    /// `DecLightItemDrugTick = GetTickCount()`，`PlayObject.cs:969`）；否则
+    /// `clock - 0 > 500` 恒真 ⇒ 过期检查退化为每 tick 一次。
+    ///
+    /// 夹具里的 `PvpFlag` 已过期：若首调就检查，会立刻清位并返回一条 656 载荷。
+    ///
+    /// 牙①：把惰性初始化改回「构造时 0」⇒ 首调即 `out.len() == 1`、flag 被清 ⇒ 红。
+    #[test]
+    fn pk_check_throttle_holds_with_injected_wall_clock() {
+        const T0: i64 = 1_700_000_000_000;
+        let (mut w, id) = pk_world(T0, 61_000);
+
+        // 首调：只建立基线，不检查（过期者仍在）。
+        assert!(w.check_pk_status().is_empty(), "首调不得检查");
+        assert_eq!(
+            w.pk_check_tick, T0,
+            "游标必须惰性初始化到当前 clock_ms（不是 0）"
+        );
+        assert!(w.entities.get(id).unwrap().pvp_flag, "首调不得清位");
+
+        // 500ms 内：不检查。
+        w.clock_ms = T0 + 200;
+        assert!(w.check_pk_status().is_empty());
+        w.clock_ms = T0 + 500;
+        assert!(w.check_pk_status().is_empty(), "500ms 内不得检查");
+        assert!(w.entities.get(id).unwrap().pvp_flag);
+        assert_eq!(w.pk_check_tick, T0);
+
+        // 超过 500ms：检查一次 ⇒ 过期清位、恰一条 656 载荷（宿主 1:1 出帧）。
+        w.clock_ms = T0 + 600;
+        let out = w.check_pk_status();
+        assert_eq!(out.len(), 1, "过期者恰一条 656");
+        assert_eq!(out[0].target_id, id);
+        assert!(!w.entities.get(id).unwrap().pvp_flag, "过期清位");
+        assert_eq!(w.pk_check_tick, T0 + 500);
+        // 同一时刻再调：游标已推进到 T0+500，100ms < 500ms ⇒ 不重复检查。
+        assert!(w.check_pk_status().is_empty());
+    }
+
+    /// **T-78 回归**：未注入时钟（`clock_ms` 从 0 起）时，500ms 节流与修复前逐位一致
+    /// （首调 0 时刻建基线；`clock - tick > 500` 才检查，严格 `>`）。
+    #[test]
+    fn pk_check_throttle_unchanged_when_clock_starts_at_zero() {
+        let (mut w, id) = pk_world(0, 100_000); // pvp_name_color_tick = -100_000（已过期）
+        assert!(w.check_pk_status().is_empty());
+        assert_eq!(w.pk_check_tick, 0, "从 0 起的基线仍是 0");
+        for t in [200_i64, 500] {
+            w.clock_ms = t;
+            assert!(w.check_pk_status().is_empty(), "t={t} 未过 500ms 不得检查");
+            assert!(w.entities.get(id).unwrap().pvp_flag);
+            assert_eq!(w.pk_check_tick, 0);
+        }
+        w.clock_ms = 600;
+        let out = w.check_pk_status();
+        assert_eq!(out.len(), 1, "t=600 首次检查 ⇒ 过期者恰一条 656");
+        assert_eq!(out[0].target_id, id);
+        assert!(!w.entities.get(id).unwrap().pvp_flag);
+        assert_eq!(w.pk_check_tick, 500, "游标 += 周期（oracle 同式）");
+    }
+
+    /// **T-78 边界**：过期门是严格 `>`（oracle `:4359` `(now - PvpNameColorTick) > dwPKFlagTime`）
+    /// ⇒ 恰 60s 不清、60s+1ms 清且**恰一条** 656；节流门同样严格 `>` ⇒ 恰 500ms 不检查。
+    ///
+    /// 牙②：把节流门改 `>=` ⇒ `T0+500` 就检查、游标被推进 ⇒ 本用例红。
+    #[test]
+    fn pk_check_expiry_boundary_strictly_greater_reports_once() {
+        const T0: i64 = 1_700_000_000_000;
+        let (mut w, id) = pk_world(T0, 0); // pvp_name_color_tick = T0
+        assert!(w.check_pk_status().is_empty(), "首调只建基线");
+        assert_eq!(w.pk_check_tick, T0);
+
+        // 恰 500ms：节流门 `>` 严格 ⇒ 不检查、游标不动。
+        w.clock_ms = T0 + 500;
+        assert!(w.check_pk_status().is_empty());
+        assert_eq!(w.pk_check_tick, T0, "恰 500ms 不得推进游标（牙②）");
+
+        // 恰 60s：检查发生，但过期门 `>` 严格 ⇒ 不清位、零 656。
+        w.clock_ms = T0 + 60_000;
+        assert!(w.check_pk_status().is_empty(), "恰 60s 不得过期");
+        assert!(w.entities.get(id).unwrap().pvp_flag);
+        assert_eq!(w.pk_check_tick, T0 + 500, "周期门已过 ⇒ 游标推进");
+
+        // 60s+1ms：过期 ⇒ 恰一条 656、清位。
+        w.clock_ms = T0 + 60_001;
+        let out = w.check_pk_status();
+        assert_eq!(out.len(), 1, "恰在严格 > 后触发一次 656");
+        assert_eq!(out[0].target_id, id);
+        assert!(!w.entities.get(id).unwrap().pvp_flag);
+
+        // 再调：不重复投递。
+        assert!(w.check_pk_status().is_empty(), "656 不得重复");
     }
 }

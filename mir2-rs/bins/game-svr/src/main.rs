@@ -31984,6 +31984,47 @@ mod tests {
         assert!(!rig.world.entities.get(caster_id).unwrap().pvp_flag);
     }
 
+    /// **T-78 修复的端到端牙**：注入墙钟量级 `clock_ms` 且**不**手工重置 `pk_check_tick`
+    /// （模拟 `MIR2_CLOCK_MS` 注入后的真实首调）⇒ 首调建立 500ms 基线，不得立刻检查。
+    ///
+    /// 夹具把 `PvpNameColorTick` 拨到 61s 前（已过期）：若节流失效，首调就会清位并广播 656。
+    #[test]
+    fn p3res_pk_throttle_holds_under_injected_wall_clock() {
+        const SM_656: u16 = mir2_protocol::messages::SM_CHANGENAMECOLOR;
+        const T0: i64 = 1_700_000_000_000;
+
+        let mut rig = B3Rig::new(18, 2, true);
+        rig.world.clock_ms = T0;
+        let caster_id = rig.caster;
+        assert!(rig.world.set_pk_flag(rig.observer, caster_id).is_some());
+        // 已进入过期区间（61s），但节流游标尚未初始化。
+        rig.world
+            .entities
+            .get_mut(caster_id)
+            .unwrap()
+            .pvp_name_color_tick = T0 - 61_000;
+
+        // 首调 + 500ms 内：零 656、flag 仍在。
+        drain_pk_flag_downlink(&mut rig.world, &rig.online, &rig.gates);
+        let frames = rig.drain();
+        assert_eq!(b3_count(&frames, 911, SM_656), 0, "首调不得检查");
+        assert!(rig.world.entities.get(caster_id).unwrap().pvp_flag);
+        rig.world.clock_ms = T0 + 500;
+        drain_pk_flag_downlink(&mut rig.world, &rig.online, &rig.gates);
+        let frames = rig.drain();
+        assert_eq!(b3_count(&frames, 911, SM_656), 0, "500ms 内不得检查");
+        assert!(rig.world.entities.get(caster_id).unwrap().pvp_flag);
+
+        // 600ms：过期 ⇒ 自己与观察者各恰一条 656，范围外零。
+        rig.world.clock_ms = T0 + 600;
+        drain_pk_flag_downlink(&mut rig.world, &rig.online, &rig.gates);
+        let frames = rig.drain();
+        assert_eq!(b3_count(&frames, 911, SM_656), 1, "过期后自己恰一条 656");
+        assert_eq!(b3_count(&frames, 912, SM_656), 1, "观察者恰一条 656");
+        assert_eq!(b3_count(&frames, 914, SM_656), 0, "范围外不投递");
+        assert!(!rig.world.entities.get(caster_id).unwrap().pvp_flag);
+    }
+
     /// **40 F40-A/B/C/D**：无目标回落自己、`IsProperFriend` 门、`R(7)` 门、三个计时器
     /// `!=0 ⇒ 置 1`（不是清 0）、boTrain（B3-40-1/2/3/4）。
     #[test]
