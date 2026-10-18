@@ -251,6 +251,10 @@ pub struct AnimalState {
     pub run_away_mode: bool,
     pub run_away_start: i64,
     pub run_away_time: i64,
+    /// `ExplosionSpider.explosionMakeTime`（`ExplosionSpider.cs:8`）：
+    /// ctor 置 `GetTickCount()`（`:16`），`Run` 每 60s 门刷新（`:83-86`）。
+    /// 只有 race 117 读；所有怪在 [`AnimalState::seed_from_spawn`] 按落图时刻置初值。
+    pub explosion_make_time: i64,
     /// `MonsterObject.CheckRoyaltyTick`（`MonsterObject.cs:45`，ctor `:67` = `GetTickCount()`）
     /// —— `CheckRoyalty`（`MonsterObject.cs:363-397`）的 10s 检查门。
     /// 归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）；由 [`AnimalState::seed_from_spawn`] 置为生成时刻。
@@ -340,6 +344,9 @@ impl AnimalState {
         self.zilkin_die_tick = 0;
         // `MonsterObject` ctor `CheckRoyaltyTick = GetTickCount()`（`MonsterObject.cs:67`）。
         self.check_royalty_tick = now;
+        // `ExplosionSpider` ctor `explosionMakeTime = GetTickCount()`（`ExplosionSpider.cs:16`）。
+        // 只有 race 117 消费；其余怪该字段无读点（写入无害，与「字段缺省」等价）。
+        self.explosion_make_time = now;
     }
 }
 
@@ -378,6 +385,7 @@ impl Default for AnimalState {
             run_away_mode: false,
             run_away_start: 0,
             run_away_time: 0,
+            explosion_make_time: 0,
             check_royalty_tick: 0,
             pending_struck: Vec::new(),
             pending_view_updates: Vec::new(),
@@ -419,6 +427,12 @@ pub struct Entity {
     pub view_range: i32,
     /// C# `Race`
     pub race: u8,
+    /// C# `BaseObject.Appr`（形像代码）。`ApplyMonsterAbility` 从
+    /// `MonsterInfo.Appr` 写入（`WorldServer.MonGen.cs:889`）。
+    ///
+    /// 唯一的**行为**消费点 = `ElfWarriorMonster.AttackTarget` 的
+    /// `Appr == 704/706/708` 形态门（`ElfWarriorMonster.cs:78`）；其余只影响展示层。
+    pub appr: u16,
     /// C# `Master`（宝宝的主人）
     pub master: Option<i32>,
     /// C# `BaseObject.SlaveRelax`（`BaseObject.cs:145`）——主人对宝宝的「放松」标志。
@@ -836,6 +850,7 @@ impl Entity {
             y,
             view_range: 5, // BaseObject.cs:383
             race: ACTOR_RACE_PLAY,
+            appr: 0, // BaseObject ctor 未显式赋值 ⇒ 0（由 ApplyMonsterAbility 覆盖）
             master: None,
             slave_relax: false,
             slave_list: Vec::new(),

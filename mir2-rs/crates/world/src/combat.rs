@@ -788,6 +788,13 @@ fn wear_durability(slot: &mut UseItemSlot, n_dam: u16) {
 /// （`BaseObject.Base.cs:624` 的 `GetMagStruckDamage(null, processMsg.nParam1)`）⇒ undead 加项
 /// **不生效**。`Some(power)` 只给将来会传真实攻方的调用面（`MonDelHptoExp` 支等）。
 ///
+/// **F4（`attacktarget-overrides` 复验登记，不在该片改）**：oracle 的 undead 加项读的是
+/// `this.AddAbil.UndeadPower`（**接收者**），且门是 `LifeAttrib == LA_UNDEAD`；本函数的
+/// `undead_power` 由调用面自选，`monai` 的攻击路径（`spit_attack`/`elf_warrior_spit_attack`
+/// 等）现传**攻方**的 `undead_power`，且函数本身未判 `LifeAttrib`。生产怪物
+/// `undead_power` 恒 0 ⇒ 现网无差异；修正需同时（a）改取接收者、（b）补 `LA_UNDEAD` 门，
+/// 单开后续卡，本片不动。
+///
 /// `MAC` 是 `WAbil.MAC` 的 `ushort`；`Random` 参数用**绝对值+1**（Hi<Lo 时不 panic）。
 /// 返回值按 oracle 的 `int`（`BaseObject.GetMagStruckDamage` 返回 `int`，不是 `ushort`）。
 #[must_use]

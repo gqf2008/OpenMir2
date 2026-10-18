@@ -651,8 +651,9 @@ pub fn is_active_seek_race(race: u8) -> bool {
 /// - 派生类 ctor：`SpitSpider(82)`（`SpitSpider.cs:15`）/`Scorpion(84)`（`Scorpion.cs:7`）/
 ///   `StickMonster(85)`（`StickMonster.cs:23`）/`GasAttackMonster(90)`（`GasAttackMonster.cs:12`）；
 /// - **继承**上述 ctor 且不再覆写 `Animal` 的派生：`105`/`106`（`: GasAttackMonster`）、
-///   `114`/`118`/`119`（`: SpitSpider`）、`132`（`: StickMonster`）。
-///   `CentipedeKingMonster(107)`（`: StickMonster`）ctor 显式 `Animal = false`（`CentipedeKingMonster.cs:17`）⇒ **排除**。
+///   `114`（`: SpitSpider`；`ElfWarriorMonster` ctor 不改 `Animal`）、`132`（`: StickMonster`）。
+///   **显式 `Animal = false` 的派生一律排除**：`107`（`CentipedeKingMonster.cs:17`）、
+///   `118`（`HighRiskSpider.cs:7`）、`119`（`BigPoisionSpider.cs:7`）。
 ///
 /// `BaseObject.ReAliveEx` 的 `case 54`（`BaseObject.cs:2601-2603`）只在**复活**路径置位；本骨架未建模
 /// 复活 ⇒ `54` **不计入**（与 [`crate::combat::race_is_animal`] 口径一致）。这里在
@@ -662,7 +663,9 @@ pub fn is_active_seek_race(race: u8) -> bool {
 /// `animal_struck_no_random300_for_race_51_vs_80` 必红。
 #[must_use]
 pub fn is_animal_race(race: u8) -> bool {
-    crate::combat::race_is_animal(race) || matches!(race, 105 | 106 | 114 | 118 | 119 | 132)
+    // 118/119 的 ctor 显式 `Animal = false`（`HighRiskSpider.cs:7`、`BigPoisionSpider.cs:7`），
+    // 不得继承 `SpitSpider` 的 `Animal = true`。
+    crate::combat::race_is_animal(race) || matches!(race, 105 | 106 | 114 | 132)
 }
 
 /// 🛡️ `GuardList.txt` 放置的守卫 race 集（`CreateMonster` 的守卫族分支，`WorldServer.MonGen.cs:509-516/659-661`）：
@@ -901,6 +904,12 @@ pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBas
         // `ScultureKingMonster`（`base.Run` = `MonsterObject.Run`）。
         102 => {
             sculture_king_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        // **`openmir2-attacktarget-overrides`**：`ExplosionSpider.Run`（60s 自爆段 +
+        // `base.Run()` = `MonsterObject.Run`）。
+        117 => {
+            explosion_spider_run(world, actor_id);
             Some(ClassRunBase::Monster)
         }
         _ => None,
@@ -1160,6 +1169,22 @@ fn monster_attack_target(world: &mut World, actor_id: i32) -> bool {
         // `ScultureKingMonster` 用的是基版 `MonsterObject.AttackTarget`，但虚调用 `Attack`
         // 被覆写为 `HitMagAttackTarget`（102）。
         Some(102) => sculture_king_attack_target(world, actor_id),
+        // **`openmir2-attacktarget-overrides`**：余下 7 类（见上方分区注释）。
+        Some(130) => double_critical_attack_target(world, actor_id),
+        // `SpitSpider`（82）/`HighRiskSpider`（118）/`BigPoisionSpider`（119）继承同一实现，
+        // 但 `UsePoison` 由各自 ctor 决定：82=true（`SpitSpider.cs:16`）、
+        // 118=false（`HighRiskSpider.cs:8`）、119=true（`BigPoisionSpider.cs:8`）。
+        Some(82) => spit_spider_attack_target(world, actor_id, true),
+        Some(118) => spit_spider_attack_target(world, actor_id, false),
+        Some(119) => spit_spider_attack_target(world, actor_id, true),
+        Some(117) => explosion_spider_attack_target(world, actor_id),
+        Some(91) => mag_cow_attack_target(world, actor_id),
+        // `ElfWarriorMonster`（114）：`Appr` 形态门内再分派 base / 强化 spit。
+        Some(114) => elf_warrior_attack_target(world, actor_id),
+        // `FireballMonster`（215）继承 `MagicMonster.AttackTarget`。
+        Some(215) => magic_monster_attack_target(world, actor_id),
+        // `PercentMonster`（死类；ctor 自置 Race=80）：与基类逐行同构。
+        Some(80) => percent_monster_attack_target(world, actor_id),
         _ => attack_target(world, actor_id),
     }
 }
@@ -3513,6 +3538,814 @@ pub fn front_of(world: &World, actor_id: i32, dir: u8, map_id: usize) -> Option<
     Some(front_position(e.x, e.y, dir, map.width, map.height))
 }
 
+// ---------------------------------------------------------------------------
+// **`openmir2-attacktarget-overrides`**（tier=R）——余下 `AttackTarget` 覆写族
+//
+// oracle 清册（`grep "override.*AttackTarget" src/` 的 10 条真覆写）：
+//   DoubleCritical(130) / DualAxe(87，93/104 继承) / ElfWarrior(114) /
+//   ExplosionSpider(117) / GasAttack(90/105/106) / MagCow(91) / MagicMonster(215) /
+//   PercentMonster(80，死类) / SpitSpider(82，118/119 继承) / CentipedeKing(107)。
+// 其中 DualAxe/GasAttack/CentipedeKing 已由 MB-2/MB-3 落地（本片复核后未重复实现），
+// 百分号类见 `percent_monster_attack_target` 的逐行同构说明。
+// ---------------------------------------------------------------------------
+
+/// `Messages.RM_STRUCKEFFECT`（`src/OpenMir2/Messages.cs:658`；10102）——
+/// `ElfWarriorMonster.SpitAttack` 的 `SendStruckDelayMsg` ident（`:65`）。
+pub const RM_STRUCKEFFECT: u16 = 10102;
+
+/// `SendStruckDelayMsg` 的**攻方 HP 快照**版本。
+///
+/// oracle 有三处（`DoubleCriticalMonster.DoubleAttack@:67`、`SpitSpider.SpitAttack@:43`、
+/// `ElfWarriorMonster.SpitAttack@:65`）在**收件人**上调 `SendStruckDelayMsg`，但第 2/3 参写
+/// 的是未限定的 `WAbil.HP` / `WAbil.MaxHP` = **攻方自己的** HP/MaxHP（其余调用点显式写
+/// `baseObject.WAbil.*` 或 `targetObject.WAbil.*`）。此函数按该字面语义取攻方快照。
+fn send_struck_delay_msg_attacker_hp(
+    world: &mut World,
+    receiver_id: i32,
+    hitter_id: i32,
+    ident: u16,
+    damage: i32,
+    delay_ms: i64,
+) {
+    if !world.refmessage_delay_enabled() {
+        return;
+    }
+    let Some((hp, max_hp)) = world
+        .entities
+        .get(hitter_id)
+        .map(|e| (i32::from(e.hp), i32::from(e.max_hp)))
+    else {
+        return;
+    };
+    world.send_struck_delay_msg_7(receiver_id, ident, damage, hp, max_hp, hitter_id, delay_ms);
+}
+
+/// `SystemShare.Config.SpitMap[dir, y, x]`（`GameSvrConf.cs:1332-1371`，8×5×5）。
+///
+/// 索引与 oracle 相同：`[btDir][i][k]`，其中 `i` 是行（y 偏移 `i-2`）、`k` 是列
+/// （x 偏移 `k-2`）。**逐字节照抄**（含 `DR_UP` 两格在 `x=0`、`y=-2/-1` 的形状）。
+const SPIT_MAP: [[[u8; 5]; 5]; 8] = [
+    // DR_UP（0）
+    [
+        [0, 0, 1, 0, 0],
+        [0, 0, 1, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+    ],
+    // DR_UPRIGHT（1）
+    [
+        [0, 0, 0, 0, 1],
+        [0, 0, 0, 1, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+    ],
+    // DR_RIGHT（2）
+    [
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 1, 1],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+    ],
+    // DR_DOWNRIGHT（3）
+    [
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0],
+        [0, 0, 0, 0, 1],
+    ],
+    // DR_DOWN（4）
+    [
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0],
+        [0, 0, 1, 0, 0],
+    ],
+    // DR_DOWNLEFT（5）
+    [
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0],
+        [1, 0, 0, 0, 0],
+    ],
+    // DR_LEFT（6）
+    [
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [1, 1, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+    ],
+    // DR_UPLEFT（7）
+    [
+        [1, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+    ],
+];
+
+/// `BaseObject.TargetInSpitRange(target, ref btDir)`（`BaseObject.cs:1327-1351`）。
+///
+/// 返回 `Some(btDir)` = oracle `true`；`None` = `false`。
+/// - `|Δx| <= 2 && |Δy| <= 2` 才进入；
+/// - `|Δx| <= 1 && |Δy| <= 1` ⇒ 调 `GetAttackDir` 后**无条件 `return true`**
+///   （即使 `GetAttackDir` 失败、`btDir` 保持 0）——照抄；
+/// - 否则 `SpitMap[GetNextDirection(…), Δy+2, Δx+2] == 1`。
+#[must_use]
+pub fn target_in_spit_range(world: &World, actor_id: i32, target_id: i32) -> Option<u8> {
+    let (cx, cy) = world.entities.get(actor_id).map(|e| (e.x, e.y))?;
+    let (tx, ty) = world.entities.get(target_id).map(|t| (t.x, t.y))?;
+    if (tx - cx).abs() > 2 || (ty - cy).abs() > 2 {
+        return None;
+    }
+    let nx = tx - cx;
+    let ny = ty - cy;
+    if nx.abs() <= 1 && ny.abs() <= 1 {
+        return Some(get_attack_dir(world, actor_id, target_id).unwrap_or(0));
+    }
+    let sx = nx + 2;
+    let sy = ny + 2;
+    if (0..=4).contains(&sx) && (0..=4).contains(&sy) {
+        let dir = crate::magic::next_direction(cx, cy, tx, ty);
+        if SPIT_MAP[dir as usize][sy as usize][sx as usize] == 1 {
+            return Some(dir);
+        }
+    }
+    None
+}
+
+/// `MonsterObject.GetLongAttackDirDis(baseObject, dis, ref dir)`（`MonsterObject.cs:399-463`）。
+///
+/// **oracle bug 照搬**：八支里只有 `Left` 支**不 break**，且该支之后块尾的 `dir = 0`
+/// 会执行 ⇒ 目标恰在正左方时返回 `true` 但 `dir == 0`（左向永不返回 6）。
+/// 其余七支命中即 `break`，不会被块尾覆盖。
+#[must_use]
+fn get_long_attack_dir_dis(world: &World, actor_id: i32, target_id: i32, dis: i32) -> Option<u8> {
+    let (cx, cy) = world.entities.get(actor_id).map(|e| (e.x, e.y))?;
+    let (tx, ty) = world.entities.get(target_id).map(|t| (t.x, t.y))?;
+    let mut n_c = 0;
+    let mut found = false;
+    let mut dir = 0u8;
+    loop {
+        if cx - n_c <= tx
+            && cx + n_c >= tx
+            && cy - n_c <= ty
+            && cy + n_c >= ty
+            && (cx != tx || cy != ty)
+        {
+            if cx - n_c == tx && cy == ty {
+                // `Left` 支无 break（照抄）：oracle 写 `dir = Direction.Left` 后继续往下，
+                // 块尾 `dir = 0` 再覆盖 ⇒ 对外只留下 `result = true` / `dir = 0`。
+                found = true;
+            }
+            if cx + n_c == tx && cy == ty {
+                dir = DIR_RIGHT;
+                found = true;
+                break;
+            }
+            if cx == tx && cy - n_c == ty {
+                dir = DIR_UP;
+                found = true;
+                break;
+            }
+            if cx == tx && cy + n_c == ty {
+                dir = DIR_DOWN;
+                found = true;
+                break;
+            }
+            if cx - n_c == tx && cy - n_c == ty {
+                dir = DIR_UP_LEFT;
+                found = true;
+                break;
+            }
+            if cx + n_c == tx && cy - n_c == ty {
+                dir = DIR_UP_RIGHT;
+                found = true;
+                break;
+            }
+            if cx - n_c == tx && cy + n_c == ty {
+                dir = DIR_DOWN_LEFT;
+                found = true;
+                break;
+            }
+            if cx + n_c == tx && cy + n_c == ty {
+                dir = DIR_DOWN_RIGHT;
+                found = true;
+                break;
+            }
+            dir = 0;
+        }
+        n_c += 1;
+        if n_c > dis {
+            break;
+        }
+    }
+    if found {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
+/// 覆写族公共尾：不邻接时 `SetTargetXy(target.CurrX, target.CurrY)`，异图 `DelTargetCreat()`。
+fn sync_target_xy_or_clear(world: &mut World, actor_id: i32, target_id: i32) {
+    let (same_map, tx, ty) = match (
+        world.entities.get(actor_id).map(|e| e.map_id),
+        world.entities.get(target_id).map(|t| (t.map_id, t.x, t.y)),
+    ) {
+        (Some(am), Some((tm, tx, ty))) => (am == tm, tx, ty),
+        _ => (false, 0, 0),
+    };
+    if same_map {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.target_x = tx;
+            e.ai.target_y = ty;
+        }
+    } else {
+        del_target_creature(world, actor_id);
+    }
+}
+
+/// 覆写族的直通 proper 判定（oracle `IsProperTarget` = `IsAttackTarget`，
+/// `BaseObject.Base.cs:470-473`；**不**折入 death/ghost/invisible，与 `GetMovingObject(...,true)`
+/// 自身的 `!Ghost && !Death` 枚举门互补）。
+fn proper_for_override(world: &World, actor_id: i32, target_id: i32) -> bool {
+    world
+        .entities
+        .get(actor_id)
+        .zip(world.entities.get(target_id))
+        .is_some_and(|(a, t)| is_proper_target_grouped_direct(a, t, &[]))
+}
+
+/// `MonsterObject.AttackTarget` 风格的共享骨架：射程判定 → 到点 ⇒ 攻击 → `true`；
+/// 不在射程 ⇒ 同图写 `TargetX/Y`、异图清目标。
+fn override_attack_target_with<F>(
+    world: &mut World,
+    actor_id: i32,
+    in_range: bool,
+    bt_dir: u8,
+    on_due: F,
+) -> bool
+where
+    F: FnOnce(&mut World, u8),
+{
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return false;
+    };
+    if in_range {
+        let now = world.clock_ms;
+        let due = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
+        if due {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.attack_tick = now;
+                e.ai.target_focus_tick = now;
+            }
+            on_due(world, bt_dir);
+        }
+        true
+    } else {
+        sync_target_xy_or_clear(world, actor_id, target_id);
+        false
+    }
+}
+
+/// `DoubleCriticalMonster.AttackTarget`（`DoubleCriticalMonster.cs:14-41`）。
+fn double_critical_attack_target(world: &mut World, actor_id: i32) -> bool {
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return false;
+    };
+    let spit = target_in_spit_range(world, actor_id, target_id);
+    override_attack_target_with(
+        world,
+        actor_id,
+        spit.is_some(),
+        spit.unwrap_or(0),
+        |w, dir| {
+            double_attack(w, actor_id, dir);
+            break_holy_seize_mode(w, actor_id);
+        },
+    )
+}
+
+/// `DoubleCriticalMonster.DoubleAttack(btDir)`（`DoubleCriticalMonster.cs:43-73`）。
+///
+/// 取数次序（勿改）：`Lo(DC)+Random(|Hi-Lo|+1)`（`:46`，`<=0` ⇒ 无帧/无后续）→
+/// `SendRefMsg(RM_HIT)` → 4×4 `SpitMap` 逐格：`Random(target.SpeedPoint)`（`:61`）→
+/// `GetHitStruckDamage`（物理，`nDamage` 跨格**累积改写**）→ `StruckDamage` → 300ms。
+fn double_attack(world: &mut World, actor_id: i32, bt_dir: u8) {
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = bt_dir;
+    }
+    let Some((cx, cy, dc, hit_point, map_id)) = world
+        .entities
+        .get(actor_id)
+        .map(|e| (e.x, e.y, e.dc, e.hit_point, e.map_id))
+    else {
+        return;
+    };
+    let lo = i32::from(crate::combat::lo_byte(dc));
+    let hi = i32::from(crate::combat::hi_byte(dc));
+    let mut n_damage = lo + world.rng.random_below((hi - lo).abs() + 1);
+    if n_damage <= 0 {
+        return;
+    }
+    send_ref_msg(world, actor_id, RM_HIT, i32::from(bt_dir), cx, cy, 0);
+    // 4×4：只扫 `SpitMap[dir][0..4][0..4]`（`i`/`k` 上限 4），偏移 `-2..+1`。
+    for (i, row) in SPIT_MAP[bt_dir as usize].iter().enumerate().take(4) {
+        for (k, cell) in row.iter().enumerate().take(4) {
+            if *cell != 1 {
+                continue;
+            }
+            let nx = cx - 2 + k as i32;
+            let ny = cy - 2 + i as i32;
+            let Some(target_id) = world.moving_object_at(map_id, nx, ny, true) else {
+                continue;
+            };
+            if target_id == actor_id || !proper_for_override(world, actor_id, target_id) {
+                continue;
+            }
+            let speed_point = world
+                .entities
+                .get(target_id)
+                .map_or(0, |t| i32::from(t.speed_point));
+            if world.rng.random_below(speed_point) >= i32::from(hit_point) {
+                continue;
+            }
+            let Some(target) = world.entities.get(target_id).cloned() else {
+                continue;
+            };
+            let Some(attacker) = world.entities.get(actor_id).cloned() else {
+                continue;
+            };
+            n_damage = i32::from(crate::combat::get_hit_struck_damage(
+                &mut world.rng,
+                &target,
+                &attacker,
+                n_damage,
+            ));
+            if n_damage > 0 {
+                let _ = class_struck_apply(world, actor_id, target_id, n_damage, n_damage);
+                send_struck_delay_msg_attacker_hp(
+                    world,
+                    target_id,
+                    actor_id,
+                    crate::slave::RM_REFMESSAGE,
+                    n_damage,
+                    300,
+                );
+            }
+        }
+    }
+}
+
+/// `SpitSpider.AttackTarget`（`SpitSpider.cs:58-85`；118/119 继承同一实现）。
+///
+/// `use_poison` = 该 race ctor 的 `UsePoison`（`SpitSpider.SpitAttack` 的 `:44` 门）：
+/// 82=true、118=false、119=true；`ElfWarriorMonster`（114）的**非强化形态**也走本函数
+/// （`base.AttackTarget()` ⇒ `SpitSpider` 版），其 ctor 置 `UsePoison=false`。
+fn spit_spider_attack_target(world: &mut World, actor_id: i32, use_poison: bool) -> bool {
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return false;
+    };
+    let spit = target_in_spit_range(world, actor_id, target_id);
+    override_attack_target_with(
+        world,
+        actor_id,
+        spit.is_some(),
+        spit.unwrap_or(0),
+        |w, dir| {
+            spit_attack(w, actor_id, dir, use_poison);
+            break_holy_seize_mode(w, actor_id);
+        },
+    )
+}
+
+/// `SpitSpider.SpitAttack(btDir)`（`SpitSpider.cs:19-56`）。
+///
+/// 取数次序（勿改）：`Lo(DC)+Random(|Hi-Lo|+1)`（`:22`，`<=0` ⇒ 无帧/无后续）→
+/// `SendRefMsg(RM_HIT)` → 5×5 `SpitMap` 逐格：`Random(target.SpeedPoint)`（`:37`）→
+/// `GetMagStruckDamage`（魔法，**`nDamage` 跨格累积改写**）→ `StruckDamage` → 300ms →
+/// `UsePoison` 且 `Random(攻方 AntiPoison + 20) == 0` ⇒ `MakePosion(DECHEALTH, 30, 1)`（`:44-49`）。
+///
+/// **注意**：`:46` 的 `AntiPoison` 是**攻方**自己的属性（不是 `baseObject.` 的；与
+/// `GasAttackMonster.cs:31` 的 `baseObject.AntiPoison` 相反）。怪物 ctor 置 0 且不调
+/// `RecalcAbilitys` ⇒ 恒 `Random(20)`。
+fn spit_attack(world: &mut World, actor_id: i32, bt_dir: u8, use_poison: bool) {
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = bt_dir;
+    }
+    let Some((cx, cy, dc, hit_point, map_id)) = world
+        .entities
+        .get(actor_id)
+        .map(|e| (e.x, e.y, e.dc, e.hit_point, e.map_id))
+    else {
+        return;
+    };
+    let lo = i32::from(crate::combat::lo_byte(dc));
+    let hi = i32::from(crate::combat::hi_byte(dc));
+    let mut n_damage = lo + world.rng.random_below((hi - lo).abs() + 1);
+    if n_damage <= 0 {
+        return;
+    }
+    send_ref_msg(world, actor_id, RM_HIT, i32::from(bt_dir), cx, cy, 0);
+    for (i, row) in SPIT_MAP[bt_dir as usize].iter().enumerate() {
+        for (k, cell) in row.iter().enumerate() {
+            if *cell != 1 {
+                continue;
+            }
+            let nx = cx - 2 + k as i32;
+            let ny = cy - 2 + i as i32;
+            let Some(target_id) = world.moving_object_at(map_id, nx, ny, true) else {
+                continue;
+            };
+            if target_id == actor_id || !proper_for_override(world, actor_id, target_id) {
+                continue;
+            }
+            let speed_point = world
+                .entities
+                .get(target_id)
+                .map_or(0, |t| i32::from(t.speed_point));
+            if world.rng.random_below(speed_point) >= i32::from(hit_point) {
+                continue;
+            }
+            let Some(mac) = world.entities.get(target_id).map(|t| t.mac) else {
+                continue;
+            };
+            let undead = world.entities.get(actor_id).map_or(0, |e| e.undead_power);
+            n_damage =
+                crate::combat::get_mag_struck_damage(&mut world.rng, mac, n_damage, Some(undead));
+            if n_damage > 0 {
+                let _ = class_struck_apply(world, actor_id, target_id, n_damage, n_damage);
+                send_struck_delay_msg_attacker_hp(
+                    world,
+                    target_id,
+                    actor_id,
+                    crate::slave::RM_REFMESSAGE,
+                    n_damage,
+                    300,
+                );
+                if use_poison {
+                    // 攻方 `AntiPoison`：ctor 0、怪不调 `RecalcAbilitys` ⇒ 恒 0。
+                    let anti_poison = 0;
+                    if world.rng.random_below(anti_poison + 20) == 0 {
+                        world.make_posion(target_id, crate::entity::POISON_DECHEALTH as u8, 30, 1);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `ExplosionSpider.AttackTarget`（`ExplosionSpider.cs:47-77`）。
+///
+/// 与基类差异：邻接且到点 ⇒ `DoSelfExplosion()`；**不调 `BreakHolySeizeMode`**。
+fn explosion_spider_attack_target(world: &mut World, actor_id: i32) -> bool {
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return false;
+    };
+    let bt_dir = get_attack_dir(world, actor_id, target_id);
+    override_attack_target_with(
+        world,
+        actor_id,
+        bt_dir.is_some(),
+        bt_dir.unwrap_or(0),
+        |w, _| {
+            do_self_explosion(w, actor_id);
+        },
+    )
+}
+
+/// `ExplosionSpider.DoSelfExplosion()`（`ExplosionSpider.cs:19-45`）。
+///
+/// 取数次序（勿改）：`HP=0` → `MAX(0, Lo(DC)+Random(|Hi-Lo|+1))`（`:22`）→
+/// 逐 `VisibleActors`（`Death` 跳过、`IsProperTarget`、两轴 `<=1`）：
+/// `GetHitStruckDamage(nPower/2)` → `GetMagStruckDamage(nPower/2)` → `StruckDamage(damage)` →
+/// `RM_REFMESSAGE` 700ms。
+fn do_self_explosion(world: &mut World, actor_id: i32) {
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.hp = 0;
+    }
+    let Some((cx, cy, dc)) = world.entities.get(actor_id).map(|e| (e.x, e.y, e.dc)) else {
+        return;
+    };
+    let lo = i32::from(crate::combat::lo_byte(dc));
+    let hi = i32::from(crate::combat::hi_byte(dc));
+    let n_power = i32::max(0, lo + world.rng.random_below((hi - lo).abs() + 1));
+    let visible: Vec<i32> = world
+        .entities
+        .get(actor_id)
+        .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
+        .unwrap_or_default();
+    for target_id in visible {
+        let Some(t) = world.entities.get(target_id) else {
+            continue;
+        };
+        if t.death {
+            continue;
+        }
+        let (tx, ty) = (t.x, t.y);
+        if !proper_for_override(world, actor_id, target_id) {
+            continue;
+        }
+        if (cx - tx).abs() > 1 || (cy - ty).abs() > 1 {
+            continue;
+        }
+        let half = n_power / 2;
+        let Some(target) = world.entities.get(target_id).cloned() else {
+            continue;
+        };
+        let Some(attacker) = world.entities.get(actor_id).cloned() else {
+            continue;
+        };
+        let mut damage = i32::from(crate::combat::get_hit_struck_damage(
+            &mut world.rng,
+            &target,
+            &attacker,
+            half,
+        ));
+        damage += crate::combat::get_mag_struck_damage(
+            &mut world.rng,
+            target.mac,
+            half,
+            Some(attacker.undead_power),
+        );
+        if damage > 0 {
+            let _ = class_struck_apply(world, actor_id, target_id, damage, damage);
+            world.send_struck_delay_msg_refmessage(target_id, actor_id, damage, 700);
+        }
+    }
+}
+
+/// `ExplosionSpider.Run()`（`ExplosionSpider.cs:79-90`）：`!Death && !Ghost` 且
+/// `now - explosionMakeTime > 60000` ⇒ 刷新时刻并自爆；随后 `base.Run()`。
+fn explosion_spider_run(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let fire = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| !e.death && !e.ghost && now - e.ai.explosion_make_time > 60 * 1000);
+    if fire {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.explosion_make_time = now;
+        }
+        do_self_explosion(world, actor_id);
+    }
+}
+
+/// `MagCowMonster.AttackTarget`（`MagCowMonster.cs:33-64`）。
+fn mag_cow_attack_target(world: &mut World, actor_id: i32) -> bool {
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return false;
+    };
+    let bt_dir = get_attack_dir(world, actor_id, target_id);
+    override_attack_target_with(
+        world,
+        actor_id,
+        bt_dir.is_some(),
+        bt_dir.unwrap_or(0),
+        |w, dir| {
+            magic_attack(w, actor_id, dir);
+            break_holy_seize_mode(w, actor_id);
+        },
+    )
+}
+
+/// `MagCowMonster.MagicAttack(btDir)`（`MagCowMonster.cs:13-31`）。
+///
+/// 取数次序（勿改）：`Lo(DC)+Random(|Hi-Lo|+1)`（`:16`，`<=0` ⇒ 无帧/无后续）→
+/// `SendRefMsg(RM_HIT)` → `GetPoseCreate()`（前格首个 `!Ghost && !Death`）→
+/// `IsProperTarget` → **`AntiMagic >= 0`**（`ushort` 属性 ⇒ 恒真；不是命中率）→
+/// `GetMagStruckDamage` → `StruckDamage` → 300ms。
+fn magic_attack(world: &mut World, actor_id: i32, bt_dir: u8) {
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = bt_dir;
+    }
+    let Some((cx, cy, dc, map_id, undead)) = world
+        .entities
+        .get(actor_id)
+        .map(|e| (e.x, e.y, e.dc, e.map_id, e.undead_power))
+    else {
+        return;
+    };
+    let lo = i32::from(crate::combat::lo_byte(dc));
+    let hi = i32::from(crate::combat::hi_byte(dc));
+    let mut n_power = lo + world.rng.random_below((hi - lo).abs() + 1);
+    if n_power <= 0 {
+        return;
+    }
+    send_ref_msg(world, actor_id, RM_HIT, i32::from(bt_dir), cx, cy, 0);
+    let pose = front_of(world, actor_id, bt_dir, map_id)
+        .and_then(|(fx, fy)| world.moving_object_at(map_id, fx, fy, true));
+    let Some(target_id) = pose else {
+        return;
+    };
+    if target_id == actor_id || !proper_for_override(world, actor_id, target_id) {
+        return;
+    }
+    // `AntiMagic >= 0`（`BaseObject.cs:113` 的 `ushort`）⇒ **恒真**（不是命中率门）。
+    // 保留 oracle 的字面判据以钉住语义；`absurd_extreme_comparisons` 由局部 allow 放行。
+    #[allow(unused_comparisons, clippy::absurd_extreme_comparisons)]
+    let anti_magic_ok = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| e.anti_magic >= 0);
+    if !anti_magic_ok {
+        return;
+    }
+    let Some(mac) = world.entities.get(target_id).map(|t| t.mac) else {
+        return;
+    };
+    n_power = crate::combat::get_mag_struck_damage(&mut world.rng, mac, n_power, Some(undead));
+    if n_power > 0 {
+        let _ = class_struck_apply(world, actor_id, target_id, n_power, n_power);
+        world.send_struck_delay_msg_refmessage(target_id, actor_id, n_power, 300);
+    }
+}
+
+/// `ElfWarriorMonster.AttackTarget`（`ElfWarriorMonster.cs:72-103`）。
+///
+/// 类链 `ElfWarriorMonster : SpitSpider : AtMonster : MonsterObject` ⇒ `:80` 的
+/// `base.AttackTarget()` 解析到 **`SpitSpider.AttackTarget`**（`SpitSpider.cs:58-85`），
+/// 不是 `MonsterObject` 的物理 `_Attack`。`Appr=171`（部署 `神兽1`，race=114）即是这一形态：
+/// `TargetInSpitRange`（**无** `GetLongAttackDirDis`）→ `SpitSpider.SpitAttack`（**Byte** DC、
+/// 5×5 `SpitMap`、`RM_REFMESSAGE` 300ms），`UsePoison=false`（`ElfWarriorMonster.cs:32`）。
+/// 强化形态（`Appr` 704/706/708）：`TargetInSpitRange || GetLongAttackDirDis(target, 3)`，
+/// 到点 ⇒ `ElfWarriorMonster.SpitAttack(btDir)`（Word DC、`RM_STRUCKEFFECT`）。
+fn elf_warrior_attack_target(world: &mut World, actor_id: i32) -> bool {
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return false;
+    };
+    let appr = world.entities.get(actor_id).map_or(0, |e| e.appr);
+    if appr != 704 && appr != 706 && appr != 708 {
+        // **非强化形态（部署常态）**：`base.AttackTarget()` = `SpitSpider.AttackTarget`。
+        return spit_spider_attack_target(world, actor_id, false);
+    }
+    let dir = target_in_spit_range(world, actor_id, target_id)
+        .or_else(|| get_long_attack_dir_dis(world, actor_id, target_id, 3));
+    override_attack_target_with(world, actor_id, dir.is_some(), dir.unwrap_or(0), |w, d| {
+        elf_warrior_spit_attack(w, actor_id, d);
+        break_holy_seize_mode(w, actor_id);
+    })
+}
+
+/// `ElfWarriorMonster.SpitAttack(dir)`（`ElfWarriorMonster.cs:41-70`）。
+///
+/// 取数次序（勿改）：`LoWord(DC)+Random(|HiWord(DC)-LoWord(DC)|+1)`（`:45`——**Word**
+/// 而不是 Byte：`HiWord(ushort) == 0`、`LoWord(ushort) == DC` ⇒ `DC + Random(DC+1)`）→
+/// `<=0` 无帧 → `SendRefMsg(RM_HIT)` → `nDamage = 1` → `while(true)`。
+///
+/// **G19（登记，不修）**：`while(true)` **无 break、`nDamage` 不递增**（`:54-69`）——
+/// 每轮都用 `nDamage == 1` 取**同一前格**；只要进入本函数（无论前格有无目标/命中与否）
+/// 就**永不返回**（有目标时还会无限重复 `Random(SpeedPoint)`/`GetMagStruckDamage` 抽数）。
+/// 真机 oracle 的等价行为是「挂住线程」，任何可返回的实现都是登记偏离；本实现只执行
+/// **首轮**（`GetNextPosition(...,1)`）后返回。race 114 数据不可达（无 MonGen/库行）。
+fn elf_warrior_spit_attack(world: &mut World, actor_id: i32, dir: u8) {
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = dir;
+    }
+    let Some((dc, hit_point, map_id)) = world
+        .entities
+        .get(actor_id)
+        .map(|e| (e.dc, e.hit_point, e.map_id))
+    else {
+        return;
+    };
+    // `HUtil32.HiWord(ushort)` → 0；`LoWord(ushort)` → DC（C# 重载解析选 `LoWord(int)`）。
+    // `Entity.dc` 是 i32 载体，按 C# `ushort` 口径取低 16 位。
+    let lo_word = dc & 0xFFFF;
+    let hi_word = 0i32;
+    let mut n_damage = lo_word + world.rng.random_below((hi_word - lo_word).abs() + 1);
+    if n_damage <= 0 {
+        return;
+    }
+    let (x, y) = world.entities.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
+    send_ref_msg(world, actor_id, RM_HIT, i32::from(dir), x, y, 0);
+    n_damage = 1;
+    // G19：只跑首轮（oracle 此处 while(true) 永不返回）。
+    let Some((nx, ny)) = front_of(world, actor_id, dir, map_id) else {
+        return;
+    };
+    let Some(target_id) = world.moving_object_at(map_id, nx, ny, true) else {
+        return;
+    };
+    if target_id == actor_id || !proper_for_override(world, actor_id, target_id) {
+        return;
+    }
+    let speed_point = world
+        .entities
+        .get(target_id)
+        .map_or(0, |t| i32::from(t.speed_point));
+    if world.rng.random_below(speed_point) >= i32::from(hit_point) {
+        return;
+    }
+    let Some(mac) = world.entities.get(target_id).map(|t| t.mac) else {
+        return;
+    };
+    let undead = world.entities.get(actor_id).map_or(0, |e| e.undead_power);
+    n_damage = crate::combat::get_mag_struck_damage(&mut world.rng, mac, n_damage, Some(undead));
+    if n_damage > 0 {
+        let _ = class_struck_apply(world, actor_id, target_id, n_damage, n_damage);
+        send_struck_delay_msg_attacker_hp(
+            world,
+            target_id,
+            actor_id,
+            RM_STRUCKEFFECT,
+            n_damage,
+            300,
+        );
+    }
+}
+
+/// `MagicMonster.AttackTarget`（`MagicMonster.cs:47-82`；215 `FireballMonster` 继承）。
+///
+/// 与基类差异：① `TargetCret == Master` ⇒ 直接置 `null`（不走 `DelTargetCreat`）并返回 false；
+/// ② 邻接到点**只刷新 `AttackTick`/`TargetFocusTick`**——无伤害、无 `RM_HIT`、
+/// **不调 `BreakHolySeizeMode`**。
+fn magic_monster_attack_target(world: &mut World, actor_id: i32) -> bool {
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return false;
+    };
+    if world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| e.master == Some(target_id))
+    {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.target_creature = None;
+        }
+        return false;
+    }
+    let now = world.clock_ms;
+    if get_attack_dir(world, actor_id, target_id).is_some() {
+        let due = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
+        if due {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.attack_tick = now;
+                e.ai.target_focus_tick = now;
+            }
+        }
+        true
+    } else {
+        sync_target_xy_or_clear(world, actor_id, target_id);
+        false
+    }
+}
+
+/// `PercentMonster.AttackTarget`（`PercentMonster.cs:47-77`）。
+///
+/// **逐行同构**：`TargetCret == null ⇒ false`；`GetAttackDir` 命中 ⇒
+/// `now - AttackTick > NextHitTime` 时刷新两 tick、`Attack(TargetCret, btDir)`、
+/// `BreakHolySeizeMode()`，返回 `true`；不邻接 ⇒ 同图 `SetTargetXy`、异图 `DelTargetCreat`，
+/// 返回 `false`。与 `MonsterObject.AttackTarget`（`MonsterObject.cs:220-249`）**完全相同**
+/// （`Attack` 的虚调用也只被该基类使用）⇒ 直接复用 [`attack_target`]，不复制一份实现。
+///
+/// 该类是**死类**（全仓无 `new PercentMonster`，`CreateMonster` 亦无 race 80 分支；
+/// 其 ctor 自置 `Race = 80`）⇒ 生产不可达；dispatch 仍显式登记以防未来接类。
+fn percent_monster_attack_target(world: &mut World, actor_id: i32) -> bool {
+    attack_target(world, actor_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4729,6 +5562,52 @@ mod tests {
         );
     }
 
+    /// **F3**：`HighRiskSpider`/`BigPoisionSpider` ctor 显式 `Animal = false`
+    /// （`HighRiskSpider.cs:7`、`BigPoisionSpider.cs:7`）⇒ 118/119 被击**不得**抽
+    /// `Random(300)`；对照 82（`SpitSpider` ctor `Animal = true`）仍恰抽一次。
+    ///
+    /// **可达性**：119（`BigPoisionSpider`）有 31+ 条部署 `MonGen`，旧实现多抽一次 `Random(300)`
+    /// 会污染共享 RNG 流水。
+    ///
+    /// 牙：把 119（或 118）加回 [`is_animal_race`] ⇒ 本用例红。
+    #[test]
+    fn animal_struck_race118_119_do_not_draw_random300() {
+        let run = |race: u8, animal: bool| {
+            let mut world = World::new(30, 30);
+            let mid = race_monster(&mut world, race, 10, 10);
+            world.entities.get_mut(mid).unwrap().ai.meat_quality = 5000;
+            let pid = player(&mut world, 11, 10);
+            world.clock_ms = 100;
+            world.rng = RandomNumber::with_seed(4242);
+            let mut probe = RandomNumber::with_seed(4242);
+            if animal {
+                let draw = probe.random_below(300);
+                animal_struck(&mut world, mid, pid);
+                assert_eq!(
+                    world.entities.get(mid).unwrap().ai.meat_quality,
+                    5000 - draw as u16,
+                    "race {race} 应扣肉质"
+                );
+            } else {
+                let next = probe.random();
+                animal_struck(&mut world, mid, pid);
+                assert_eq!(
+                    world.entities.get(mid).unwrap().ai.meat_quality,
+                    5000,
+                    "race {race} 非 Animal 不扣肉质"
+                );
+                assert_eq!(
+                    world.rng.random(),
+                    next,
+                    "race {race} 非 Animal 不得抽 Random(300)"
+                );
+            }
+        };
+        run(118, false);
+        run(119, false);
+        run(82, true);
+    }
+
     /// ②-C：`MeatQuality` 下限 0（`AnimalObject.cs:353-356`）——`u16` 不得回绕。
     /// 改坏必红：去掉 `< 0 ⇒ 0` 夹取 ⇒ `0u16 - Random(300)` 回绕成 ~65236。
     #[test]
@@ -4746,14 +5625,16 @@ mod tests {
         );
     }
 
-    /// ②-D：`is_animal_race` 分类与 oracle 一致（含 ctor 继承与 `CentipedeKing` 的显式排除）。
+    /// ②-D：`is_animal_race` 分类与 oracle 一致（含 ctor 继承与显式 `Animal=false` 的排除）。
+    ///
+    /// **F3 牙**：把 119（或 118）加回 `is_animal_race` ⇒ 本用例红。
     #[test]
     fn animal_race_classification_matches_oracle() {
-        for r in [51u8, 52, 53, 82, 84, 85, 90, 105, 106, 114, 118, 119, 132] {
+        for r in [51u8, 52, 53, 82, 84, 85, 90, 105, 106, 114, 132] {
             assert!(is_animal_race(r), "race {r} 应为 Animal");
         }
-        // 54（ReAliveEx 才置位，复活未建模）・107（CentipedeKing ctor 显式 false）・非动物。
-        for r in [54u8, 80, 81, 83, 86, 88, 89, 107, 11, 112] {
+        // 54（ReAliveEx 才置位，复活未建模）；107/118/119（ctor 显式 `Animal = false`）；非动物。
+        for r in [54u8, 80, 81, 83, 86, 88, 89, 107, 118, 119, 11, 112] {
             assert!(!is_animal_race(r), "race {r} 不应为 Animal");
         }
     }
@@ -7266,5 +8147,823 @@ mod tests {
             "阴性对照：无命中零抽数"
         );
         assert!(world.pending_refmessage_frames.is_empty(), "无广播帧");
+    }
+
+    // ======================================================================================
+    // **`openmir2-attacktarget-overrides`**（tier=R）——覆写族判据
+    // ======================================================================================
+
+    fn atk_monster(world: &mut World, race: u8, x: i32, y: i32) -> i32 {
+        let mut e = Entity::new(0, "atk", x, y);
+        e.race = race;
+        e.hp = 1000;
+        e.max_hp = 1000;
+        e.dc = 5 | (9 << 8); // Lo=5, Hi=9 ⇒ `Random(5)`
+        e.hit_point = 250;
+        e.ai.next_hit_time = 2000;
+        crate::mongen::apply_monster_class_constants(&mut e, i16::from(race), world.clock_ms);
+        let id = world.add_entity(e);
+        assert!(world.enter_world(id), "怪物落图");
+        id
+    }
+
+    fn atk_player(world: &mut World, x: i32, y: i32, speed_point: u8) -> i32 {
+        let mut e = Entity::new(0, "atkP", x, y);
+        e.race = crate::entity::ACTOR_RACE_PLAY;
+        e.hp = 500;
+        e.max_hp = 500;
+        e.speed_point = speed_point;
+        e.ac = 0;
+        e.mac = 0;
+        let id = world.add_entity(e);
+        assert!(world.enter_world(id), "玩家落图");
+        id
+    }
+
+    fn atk_see(world: &mut World, viewer: i32, target: i32) {
+        world.entities.get_mut(viewer).unwrap().visible_actors = vec![VisibleBaseObject {
+            target,
+            flag: VisibleFlag::Show,
+        }];
+    }
+
+    /// 后续 3 个取值逐一相等 = 取数**次数与相对次序**一致（既有 trace 账本同口径）。
+    fn assert_stream_eq(world: &mut World, expect: &mut RandomNumber, what: &str) {
+        for i in 0..3 {
+            assert_eq!(
+                world.rng.random(),
+                expect.random(),
+                "{what}：后续第 {i} 个取值不同 ⇒ 抽数次数/次序漂移"
+            );
+        }
+    }
+
+    fn assert_stream_untouched(world: &mut World, before: &RandomNumber, what: &str) {
+        assert_eq!(
+            format!("{:?}", world.rng),
+            format!("{before:?}"),
+            "{what}：零抽数（随机流不得前进）"
+        );
+    }
+
+    /// 找种子，使**前 `params.len()` 次** `random_below` 的最后一次为 0。
+    fn seed_with_last_zero(params: &[i32]) -> i32 {
+        for seed in 0..2_000_000 {
+            let mut r = RandomNumber::with_seed(seed);
+            let mut last = 1;
+            for p in params {
+                last = r.random_below(*p);
+            }
+            if last == 0 {
+                return seed;
+            }
+        }
+        unreachable!("应能找到末抽为 0 的种子");
+    }
+
+    // ------------------------------ SpitMap / TargetInSpitRange ------------------------------
+
+    /// A03/G22：`TargetInSpitRange` 逐格复刻 `SpitMap`（8 向 × 5×5），含
+    /// `|Δ|<=1` 的「GetAttackDir 失败也 return true」怪癖。
+    ///
+    /// 牙：把 `SPIT_MAP` 任一格改 0/1 ⇒ 本用例红。
+    #[test]
+    fn atk_target_in_spit_range_replicates_spit_map() {
+        let mut world = World::new(30, 30);
+        let m = atk_monster(&mut world, 130, 10, 10);
+        let p = atk_player(&mut world, 0, 0, 10);
+        for dy in -2i32..=2 {
+            for dx in -2i32..=2 {
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
+                {
+                    let t = world.entities.get_mut(p).unwrap();
+                    t.x = 10 + dx;
+                    t.y = 10 + dy;
+                }
+                let got = target_in_spit_range(&world, m, p);
+                // 表查找方向是 `GetNextDirection(…目标…)`（不是调用者的 btDir），
+                // 与 oracle `TargetInSpitRange` 同点。
+                let d = crate::magic::next_direction(10, 10, 10 + dx, 10 + dy);
+                if dx.abs() <= 1 && dy.abs() <= 1 {
+                    assert_eq!(got, Some(d), "邻接格 Δ=({dx},{dy})");
+                } else {
+                    let hit = SPIT_MAP[d as usize][(dy + 2) as usize][(dx + 2) as usize] == 1;
+                    assert_eq!(got.is_some(), hit, "SpitMap[{d}][{}][{}]", dy + 2, dx + 2);
+                    if hit {
+                        assert_eq!(got, Some(d), "命中格方向应 = GetNextDirection");
+                    }
+                }
+            }
+        }
+    }
+
+    /// `|Δx|<=1 && |Δy|<=1` 支**无条件** `return true`：同格目标（`GetAttackDir` 必失败）也返回
+    /// `Some(0)`（`btDir` 保持调用前值）。
+    #[test]
+    fn atk_target_in_spit_range_returns_true_for_same_cell() {
+        let mut world = World::new(10, 10);
+        let m = atk_monster(&mut world, 130, 5, 5);
+        let p = atk_player(&mut world, 5, 5, 10);
+        assert_eq!(target_in_spit_range(&world, m, p), Some(0));
+        // 超 2 格 ⇒ false。
+        let far = atk_player(&mut world, 8, 5, 10);
+        assert_eq!(target_in_spit_range(&world, m, far), None);
+    }
+
+    /// A02/G21：`GetLongAttackDirDis` 的八格环扩张 + **Left 支不 break** 怪癖
+    /// （正左方 `result=true` 但 `dir` 被块尾 `dir=0` 覆盖）。
+    #[test]
+    fn atk_get_long_attack_dir_dis_has_left_no_break_quirk() {
+        let mut world = World::new(30, 30);
+        let m = atk_monster(&mut world, 114, 10, 10);
+        let at = |world: &mut World, dx: i32, dy: i32| atk_player(world, 10 + dx, 10 + dy, 10);
+        let left3 = at(&mut world, -3, 0);
+        assert_eq!(
+            get_long_attack_dir_dis(&world, m, left3, 3),
+            Some(0),
+            "Left 无 break ⇒ dir=0"
+        );
+        let left1 = at(&mut world, -1, 0);
+        assert_eq!(get_long_attack_dir_dis(&world, m, left1, 3), Some(0));
+        let right3 = at(&mut world, 3, 0);
+        assert_eq!(
+            get_long_attack_dir_dis(&world, m, right3, 3),
+            Some(DIR_RIGHT)
+        );
+        let upleft3 = at(&mut world, -3, -3);
+        assert_eq!(
+            get_long_attack_dir_dis(&world, m, upleft3, 3),
+            Some(DIR_UP_LEFT)
+        );
+        let right4 = at(&mut world, 4, 0);
+        assert_eq!(get_long_attack_dir_dis(&world, m, right4, 3), None);
+        let same = at(&mut world, 0, 0);
+        assert_eq!(get_long_attack_dir_dis(&world, m, same, 3), None);
+    }
+
+    // ------------------------------ DoubleCritical（130） ------------------------------
+
+    /// E01：4×4 `SpitMap` 命中、物理减免、`nDamage` 跨格改写、300ms。
+    ///
+    /// 取数次序：`Random(|Hi-Lo|+1)` → `Random(SpeedPoint)` → `GetHitStruckDamage`
+    /// （AC 骰）→ `StruckDamage`（玩家耐久 `Random(10)`）。
+    #[test]
+    fn atk_double_critical_hits_with_physical_damage_and_exact_draws() {
+        let mut world = World::new(40, 40);
+        world.enable_refmessage_delay();
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 130, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.attack_tick = 90_000;
+        world.entities.get_mut(m).unwrap().ai.holy_seize = true;
+        let p = atk_player(&mut world, 10, 9, 10); // 正上 1 格（SpitMap[UP][1][2]==1）
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+
+        let seed = 424242;
+        world.rng = RandomNumber::with_seed(seed);
+        let mut expect = RandomNumber::with_seed(seed);
+        let d0 = expect.random_below(5);
+        let _speed = expect.random_below(10);
+        let _ac = expect.random_range(0, 1);
+        let _dur = expect.random_below(10);
+
+        assert!(double_critical_attack_target(&mut world, m));
+        assert_stream_eq(&mut world, &mut expect, "DoubleCritical 命中");
+        assert_eq!(
+            world.pending_ai_attacks.len(),
+            1,
+            "恰一次结算（4×4 里只有 UP 一支格命中）"
+        );
+        let outcome = world.pending_ai_attacks[0].2;
+        assert_eq!(outcome.struck_power, (5 + d0) as u16, "nDamage = Lo+抽数");
+        assert!(world.entities.get(p).unwrap().hp < 500, "StruckDamage 落血");
+        assert_eq!(world.entities.get(m).unwrap().ai.attack_tick, 100_000);
+        assert_eq!(world.entities.get(m).unwrap().ai.target_focus_tick, 100_000);
+        assert!(
+            !world.entities.get(m).unwrap().ai.holy_seize,
+            "BreakHolySeize"
+        );
+        let refs = world.pending_monster_ref_msgs.clone();
+        assert_eq!(refs.len(), 1, "仅 RM_HIT（SpitAttack 不发逐目标帧）");
+        assert_eq!(refs[0].ident, RM_HIT);
+        assert_eq!(refs[0].w_param, i32::from(DIR_UP));
+        let msg = world.self_delay_msgs.peek(p).expect("300ms 延时");
+        assert_eq!(msg.ident, crate::slave::RM_REFMESSAGE);
+        assert_eq!(msg.w_param, 5 + d0);
+        assert_eq!(msg.deliver_at_ms, 100_300);
+        // oracle `DoubleCriticalMonster.cs:67` 写**未限定** `WAbil.HP/MaxHP` = 攻方快照。
+        assert_eq!((msg.n_param1, msg.n_param2), (1000, 1000), "攻方 HP/MaxHP");
+    }
+
+    /// E01 未命中：2 格但不在 `SpitMap` 的正下方偏右 ⇒ `SetTargetXy`、false、零抽数。
+    #[test]
+    fn atk_double_critical_out_of_spit_map_sets_target_xy_without_draws() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 130, 10, 10);
+        let p = atk_player(&mut world, 11, 12, 10); // Δ=(1,2) → DR_DOWNRIGHT[4][3]==0
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+        let before = world.rng.clone();
+        assert!(!double_critical_attack_target(&mut world, m));
+        assert_stream_untouched(&mut world, &before, "不在 SpitMap");
+        assert!(world.pending_monster_ref_msgs.is_empty());
+        let e = world.entities.get(m).unwrap();
+        assert_eq!((e.ai.target_x, e.ai.target_y), (11, 12));
+    }
+
+    // ------------------------------ SpitSpider（82/118/119） ------------------------------
+
+    /// E09/G01：5×5 喷吐、魔法减免、300ms、攻方 `AntiPoison+20` 毒门。
+    #[test]
+    fn atk_spit_spider_hits_with_magic_damage_poison_and_exact_draws() {
+        let mut world = World::new(40, 40);
+        world.enable_refmessage_delay();
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 82, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.attack_tick = 90_000;
+        world.entities.get_mut(m).unwrap().ai.holy_seize = true;
+        let p = atk_player(&mut world, 10, 8, 10); // UP 2 格（SpitMap[UP][0][2]==1）
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+
+        let seed = seed_with_last_zero(&[5, 10, 1, 10, 20]);
+        world.rng = RandomNumber::with_seed(seed);
+        let mut expect = RandomNumber::with_seed(seed);
+        let d0 = expect.random_below(5);
+        let _speed = expect.random_below(10);
+        let _mac = expect.random_below(1);
+        let _dur = expect.random_below(10);
+        let poison = expect.random_below(20);
+
+        assert!(spit_spider_attack_target(&mut world, m, true));
+        assert_stream_eq(&mut world, &mut expect, "SpitSpider 命中");
+        assert_eq!(poison, 0, "测试种子须使毒门命中");
+        assert_eq!(world.pending_ai_attacks.len(), 1);
+        assert_eq!(
+            world.pending_ai_attacks[0].2.struck_power,
+            (5 + d0) as u16,
+            "GetMagStruckDamage 后"
+        );
+        assert!(
+            world.buffs.has_buff(p, crate::buff::BuffType::GreenPoison),
+            "Random(20)==0 ⇒ MakePosion(DECHEALTH,30,1)"
+        );
+        assert_eq!(world.entities.get(p).unwrap().green_poisoning_point, 1);
+        assert!(!world.entities.get(m).unwrap().ai.holy_seize);
+        let refs = world.pending_monster_ref_msgs.clone();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].ident, RM_HIT);
+        assert_eq!(refs[0].w_param, i32::from(DIR_UP));
+        let msg = world.self_delay_msgs.peek(p).expect("300ms");
+        assert_eq!(msg.ident, crate::slave::RM_REFMESSAGE);
+        assert_eq!(msg.w_param, 5 + d0);
+        // oracle `SpitSpider.cs:43` 同样写未限定的 `WAbil.HP/MaxHP` = 攻方快照。
+        assert_eq!((msg.n_param1, msg.n_param2), (1000, 1000), "攻方 HP/MaxHP");
+    }
+
+    /// E09 未命中：3 格（超 `|Δ|<=2`）⇒ false + `SetTargetXy` + 零抽数。
+    #[test]
+    fn atk_spit_spider_out_of_range_sets_target_xy_without_draws() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 119, 10, 10);
+        let p = atk_player(&mut world, 13, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+        let before = world.rng.clone();
+        assert!(!spit_spider_attack_target(&mut world, m, true));
+        assert_stream_untouched(&mut world, &before, "超 2 格");
+        assert!(world.pending_monster_ref_msgs.is_empty());
+        assert_eq!(
+            (
+                world.entities.get(m).unwrap().ai.target_x,
+                world.entities.get(m).unwrap().ai.target_y
+            ),
+            (13, 10)
+        );
+    }
+
+    // ------------------------------ ExplosionSpider（117） ------------------------------
+
+    /// E04/G11：邻接 + 到点 ⇒ `HP=0` + 半物理半魔法 AoE + 700ms；**不** `BreakHolySeize`。
+    #[test]
+    fn atk_explosion_spider_self_destructs_with_half_physical_half_magic() {
+        let mut world = World::new(40, 40);
+        world.enable_refmessage_delay();
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 117, 10, 10);
+        world.entities.get_mut(m).unwrap().dc = 2 | (7 << 8); // Random(6)
+        world.entities.get_mut(m).unwrap().ai.attack_tick = 90_000;
+        world.entities.get_mut(m).unwrap().ai.holy_seize = true;
+        let p = atk_player(&mut world, 11, 10, 10);
+        atk_see(&mut world, m, p);
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+
+        let seed = 90210;
+        world.rng = RandomNumber::with_seed(seed);
+        let mut expect = RandomNumber::with_seed(seed);
+        let d0 = expect.random_below(6);
+        let _ac = expect.random_range(0, 1);
+        let _mac = expect.random_below(1);
+        let _dur = expect.random_below(10);
+
+        assert!(explosion_spider_attack_target(&mut world, m));
+        assert_stream_eq(&mut world, &mut expect, "ExplosionSpider 自爆");
+        assert_eq!(
+            world.entities.get(m).unwrap().hp,
+            0,
+            "DoSelfExplosion 置 HP=0"
+        );
+        assert_eq!(world.entities.get(m).unwrap().ai.attack_tick, 100_000);
+        assert_eq!(world.entities.get(m).unwrap().ai.target_focus_tick, 100_000);
+        assert!(
+            world.entities.get(m).unwrap().ai.holy_seize,
+            "本覆写**不**调 BreakHolySeizeMode"
+        );
+        assert!(world.pending_monster_ref_msgs.is_empty(), "自爆不发 RM_HIT");
+        let n_power = 2 + d0;
+        let half = n_power / 2;
+        assert_eq!(world.pending_ai_attacks.len(), 1);
+        assert_eq!(
+            world.pending_ai_attacks[0].2.struck_power,
+            (half * 2) as u16,
+            "GetHit(nPower/2) + GetMag(nPower/2)"
+        );
+        let msg = world.self_delay_msgs.peek(p).expect("700ms");
+        assert_eq!(msg.ident, crate::slave::RM_REFMESSAGE);
+        assert_eq!(msg.w_param, half * 2);
+        assert_eq!(msg.deliver_at_ms, 100_700);
+        // `ExplosionSpider.cs:40` 显式 `baseObject.WAbil.HP/MaxHP` ⇒ 收件人**受击后**快照。
+        assert_eq!(
+            (msg.n_param1, msg.n_param2),
+            (i32::from(world.entities.get(p).unwrap().hp), 500),
+            "收件人 HP/MaxHP"
+        );
+    }
+
+    /// E04 的 `Run` 覆写：`>60000` 严格门；到点一次后刷新，不重复。
+    #[test]
+    fn atk_explosion_spider_run_fires_once_per_60s_strictly() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 117, 10, 10);
+        let p = atk_player(&mut world, 11, 10, 10);
+        atk_see(&mut world, m, p);
+        // 恰 60000 ⇒ 严格 `>` 不成立。
+        world.entities.get_mut(m).unwrap().ai.explosion_make_time = 40_000;
+        let before = world.rng.clone();
+        explosion_spider_run(&mut world, m);
+        assert_eq!(world.entities.get(m).unwrap().hp, 1000, "恰 60000 不自爆");
+        assert_stream_untouched(&mut world, &before, "恰 60000");
+
+        // 60001 ⇒ 自爆一次并刷新时刻。
+        world.entities.get_mut(m).unwrap().ai.explosion_make_time = 39_999;
+        explosion_spider_run(&mut world, m);
+        assert_eq!(world.entities.get(m).unwrap().hp, 0);
+        assert_eq!(
+            world.entities.get(m).unwrap().ai.explosion_make_time,
+            100_000
+        );
+        let draws_after_first = format!("{:?}", world.rng);
+        let pending = world.pending_ai_attacks.len();
+        explosion_spider_run(&mut world, m);
+        assert_eq!(
+            format!("{:?}", world.rng),
+            draws_after_first,
+            "同一时刻第二次 Run 不再自爆"
+        );
+        assert_eq!(world.pending_ai_attacks.len(), pending);
+    }
+
+    // ------------------------------ MagCow（91） ------------------------------
+
+    /// E06/G04：`AntiMagic >= 0`（恒真）门 + 魔法减免 + 300ms；无命中率骰。
+    #[test]
+    fn atk_mag_cow_magic_attack_draws_and_frames() {
+        let mut world = World::new(40, 40);
+        world.enable_refmessage_delay();
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 91, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.attack_tick = 90_000;
+        world.entities.get_mut(m).unwrap().ai.holy_seize = true;
+        let p = atk_player(&mut world, 11, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+
+        let seed = 777001;
+        world.rng = RandomNumber::with_seed(seed);
+        let mut expect = RandomNumber::with_seed(seed);
+        let d0 = expect.random_below(5);
+        let _mac = expect.random_below(1);
+        let _dur = expect.random_below(10);
+
+        assert!(mag_cow_attack_target(&mut world, m));
+        assert_stream_eq(&mut world, &mut expect, "MagCow");
+        assert_eq!(world.pending_ai_attacks.len(), 1);
+        assert_eq!(world.pending_ai_attacks[0].2.struck_power, (5 + d0) as u16);
+        assert!(!world.entities.get(m).unwrap().ai.holy_seize);
+        let refs = world.pending_monster_ref_msgs.clone();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].ident, RM_HIT);
+        assert_eq!(refs[0].w_param, i32::from(DIR_RIGHT));
+        let msg = world.self_delay_msgs.peek(p).expect("300ms");
+        assert_eq!(msg.w_param, 5 + d0);
+        assert_eq!(msg.deliver_at_ms, 100_300, "MagCow 300ms");
+        // `MagCowMonster.cs:27` 显式 `baseObject.WAbil.HP/MaxHP` = **收件人**快照
+        // （与 DoubleCritical/SpitSpider/ElfWarrior 的未限定写法相反）。
+        assert_eq!(
+            (msg.n_param1, msg.n_param2),
+            (i32::from(world.entities.get(p).unwrap().hp), 500),
+            "收件人 HP/MaxHP"
+        );
+    }
+
+    /// E06：`nPower <= 0` ⇒ **不**发帧、不进 `GetPoseCreate`/减免；`AttackTarget` 仍返回 true。
+    #[test]
+    fn atk_mag_cow_zero_power_no_frame_no_further_draws() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 91, 10, 10);
+        world.entities.get_mut(m).unwrap().dc = 0;
+        world.entities.get_mut(m).unwrap().ai.attack_tick = 90_000;
+        let p = atk_player(&mut world, 11, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+        let before = world.rng.clone();
+        assert!(mag_cow_attack_target(&mut world, m));
+        // 只抽 `Random(1)`（Lo=0, Hi=0）一次。
+        let mut expect = before.clone();
+        let _ = expect.random_below(1);
+        assert_stream_eq(&mut world, &mut expect, "nPower<=0");
+        assert!(world.pending_monster_ref_msgs.is_empty());
+        assert!(world.pending_ai_attacks.is_empty());
+        assert_eq!(world.entities.get(p).unwrap().hp, 500);
+        assert!(
+            !world.entities.get(m).unwrap().ai.holy_seize,
+            "仍 BreakHolySeize"
+        );
+    }
+
+    // ------------------------------ MagicMonster（215） ------------------------------
+
+    /// E07：邻接到点**只刷新两 tick**——零抽数、零帧、零伤害、**不** `BreakHolySeize`。
+    #[test]
+    fn atk_magic_monster_refreshes_ticks_without_attack() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 215, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.attack_tick = 90_000;
+        world.entities.get_mut(m).unwrap().ai.holy_seize = true;
+        let p = atk_player(&mut world, 11, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+        let before = world.rng.clone();
+        assert!(magic_monster_attack_target(&mut world, m));
+        assert_stream_untouched(&mut world, &before, "MagicMonster 无取数");
+        assert!(world.pending_monster_ref_msgs.is_empty());
+        assert!(world.pending_ai_attacks.is_empty());
+        assert_eq!(world.entities.get(p).unwrap().hp, 500);
+        assert_eq!(world.entities.get(m).unwrap().ai.attack_tick, 100_000);
+        assert_eq!(world.entities.get(m).unwrap().ai.target_focus_tick, 100_000);
+        assert!(
+            world.entities.get(m).unwrap().ai.holy_seize,
+            "不 BreakHolySeize"
+        );
+    }
+
+    /// E07：`TargetCret == Master` ⇒ 直接清目标（不走 DelTargetCreat，`TargetX/Y` 不动），返回 false。
+    #[test]
+    fn atk_magic_monster_master_target_is_cleared_directly() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 215, 10, 10);
+        let p = atk_player(&mut world, 11, 10, 10);
+        {
+            let e = world.entities.get_mut(m).unwrap();
+            e.master = Some(p);
+            e.ai.target_creature = Some(p);
+            e.ai.target_x = 99;
+            e.ai.target_y = 98;
+        }
+        let before = world.rng.clone();
+        assert!(!magic_monster_attack_target(&mut world, m));
+        assert_stream_untouched(&mut world, &before, "Master 支零取数");
+        let e = world.entities.get(m).unwrap();
+        assert_eq!(e.ai.target_creature, None);
+        assert_eq!(
+            (e.ai.target_x, e.ai.target_y),
+            (99, 98),
+            "不走 DelTargetCreat"
+        );
+    }
+
+    /// E07：不邻接同图 ⇒ `SetTargetXy`；异图 ⇒ `DelTargetCreat`（`TargetX/Y = -1`）。
+    #[test]
+    fn atk_magic_monster_non_adjacent_paths() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 215, 10, 10);
+        let p = atk_player(&mut world, 12, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+        let before = world.rng.clone();
+        assert!(!magic_monster_attack_target(&mut world, m));
+        assert_stream_untouched(&mut world, &before, "不邻接零取数");
+        assert_eq!(
+            (
+                world.entities.get(m).unwrap().ai.target_x,
+                world.entities.get(m).unwrap().ai.target_y
+            ),
+            (12, 10)
+        );
+
+        world.entities.get_mut(p).unwrap().map_id = 999;
+        assert!(!magic_monster_attack_target(&mut world, m));
+        let e = world.entities.get(m).unwrap();
+        assert_eq!(e.ai.target_creature, None);
+        assert_eq!((e.ai.target_x, e.ai.target_y), (-1, -1));
+    }
+
+    // ------------------------------ ElfWarrior（114） ------------------------------
+
+    /// E03/G12：`Appr=704` ⇒ `SpitAttack` 的**Word** 口径取数（`DC + Random(DC+1)`）、
+    /// `RM_STRUCKEFFECT` 300ms。
+    #[test]
+    fn atk_elf_warrior_enhanced_form_uses_word_dc_and_struckeffect() {
+        let mut world = World::new(40, 40);
+        world.enable_refmessage_delay();
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 114, 10, 10);
+        {
+            let e = world.entities.get_mut(m).unwrap();
+            e.appr = 704;
+            e.dc = 7; // Word 口径 ⇒ Random(|0-7|+1) = Random(8)
+            e.ai.attack_tick = 90_000;
+            e.ai.holy_seize = true;
+        }
+        let p = atk_player(&mut world, 11, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+
+        let seed = 31415;
+        world.rng = RandomNumber::with_seed(seed);
+        let mut expect = RandomNumber::with_seed(seed);
+        let _word = expect.random_below(8);
+        let _speed = expect.random_below(10);
+        let _mac = expect.random_below(1);
+        let _dur = expect.random_below(10);
+
+        assert!(elf_warrior_attack_target(&mut world, m));
+        assert_stream_eq(&mut world, &mut expect, "ElfWarrior 强化形态");
+        let refs = world.pending_monster_ref_msgs.clone();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].ident, RM_HIT);
+        assert_eq!(refs[0].w_param, i32::from(DIR_RIGHT));
+        assert_eq!(world.pending_ai_attacks.len(), 1);
+        assert_eq!(
+            world.pending_ai_attacks[0].2.struck_power, 1,
+            "nDamage 先被置 1，再 GetMagStruckDamage(mac=0) ⇒ 1"
+        );
+        assert!(!world.entities.get(m).unwrap().ai.holy_seize);
+        let msg = world.self_delay_msgs.peek(p).expect("300ms");
+        assert_eq!(
+            msg.ident, RM_STRUCKEFFECT,
+            "oracle 用 RM_STRUCKEFFECT 而非 RM_REFMESSAGE"
+        );
+        assert_eq!(msg.deliver_at_ms, 100_300);
+        assert_eq!(msg.w_param, 1);
+        // `ElfWarriorMonster.cs:65` 也是未限定 `WAbil.HP/MaxHP`（攻方快照）。
+        assert_eq!((msg.n_param1, msg.n_param2), (1000, 1000), "攻方 HP/MaxHP");
+    }
+
+    /// E03/G12 + G19：`GetLongAttackDirDis(target,3)` 的 Left 怪癖决定 `SpitAttack` 的 `Dir=0`；
+    /// 正右 3 格则为 `Dir=2`。两者都只抽一次 Word 骰（第二/三轮 G19 无限循环已登记截断）。
+    #[test]
+    fn atk_elf_warrior_long_attack_dir_left_quirk_controls_frame_dir() {
+        let run = |dx: i32| {
+            let mut world = World::new(40, 40);
+            world.clock_ms = 100_000;
+            let m = atk_monster(&mut world, 114, 10, 10);
+            {
+                let e = world.entities.get_mut(m).unwrap();
+                e.appr = 706;
+                e.dc = 7;
+                e.ai.attack_tick = 90_000;
+            }
+            let p = atk_player(&mut world, 10 + dx, 10, 10);
+            world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+            let seed = 2718;
+            world.rng = RandomNumber::with_seed(seed);
+            assert!(elf_warrior_attack_target(&mut world, m));
+            let mut expect = RandomNumber::with_seed(seed);
+            let _ = expect.random_below(8);
+            assert_stream_eq(&mut world, &mut expect, "3 格长刺只抽 Word 骰");
+            assert!(
+                world.pending_ai_attacks.is_empty(),
+                "前格无目标（G19 首轮）"
+            );
+            world.pending_monster_ref_msgs[0].w_param
+        };
+        assert_eq!(run(-3), 0, "Left 支不 break ⇒ 块尾 dir=0");
+        assert_eq!(run(3), i32::from(DIR_RIGHT));
+    }
+
+    /// **F1（Critical）**：`ElfWarriorMonster : SpitSpider` ⇒ 非强化形态（部署 `神兽1`
+    /// `Appr=171` 的常态）的 `base.AttackTarget()` 是 **`SpitSpider.AttackTarget`**，不是
+    /// `MonsterObject` 的物理 `_Attack`。逐项断言 SpitSpider 语义：
+    /// Byte DC 骰 → `RM_HIT` → 5×5 `SpitMap` 命中 → `GetMagStruckDamage` → `RM_REFMESSAGE`
+    /// 300ms → `BreakHolySeizeMode`；`UsePoison=false`（ctor `:32`）⇒ **零** `Random(20)`、
+    /// 无 `MakePosion`、**不**发 `RM_STRUCKEFFECT`。
+    ///
+    /// 牙：把 `:80` 回退改成 [`attack_target`]（旧实现）⇒ 本用例红（无 `RM_REFMESSAGE`/
+    /// 取数序变物理版）。
+    #[test]
+    fn atk_elf_warrior_plain_form_uses_spit_spider_semantics() {
+        let mut world = World::new(40, 40);
+        world.enable_refmessage_delay();
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 114, 10, 10);
+        {
+            let e = world.entities.get_mut(m).unwrap();
+            e.appr = 171; // 部署 `神兽1` 的实际 Appr（非强化形态）
+            e.ai.attack_tick = 90_000;
+            e.ai.holy_seize = true;
+        }
+        let p = atk_player(&mut world, 11, 10, 10); // Δx=1 ⇒ TargetInSpitRange ⇒ DIR_RIGHT
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+
+        let seed = 31415;
+        world.rng = RandomNumber::with_seed(seed);
+        let mut expect = RandomNumber::with_seed(seed);
+        // SpitSpider.SpitAttack（Byte 口径）：LoByte(DC)=5、HiByte(DC)=9 ⇒ Random(5)。
+        let d0 = expect.random_below(5);
+        let _speed = expect.random_below(10); // Random(SpeedPoint)
+        let _mac = expect.random_below(1); // GetMagStruckDamage：MAC=0 ⇒ Random(1)
+        let _dur = expect.random_below(10); // 玩家 StruckDamage 耐久
+
+        // **UsePoison=false ⇒ 此处不得再抽 Random(20)。**
+
+        assert!(elf_warrior_attack_target(&mut world, m));
+        assert_stream_eq(&mut world, &mut expect, "ElfWarrior 非强化形态");
+
+        let refs = world.pending_monster_ref_msgs.clone();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].ident, RM_HIT);
+        assert_eq!(refs[0].w_param, i32::from(DIR_RIGHT));
+        assert_eq!(world.pending_ai_attacks.len(), 1, "SpitSpider 魔法结算");
+        assert_eq!(
+            world.pending_ai_attacks[0].2.struck_power,
+            (5 + d0) as u16,
+            "Byte 口径：LoByte(DC)+Random(|Hi-Lo|+1)"
+        );
+        assert!(!world.entities.get(m).unwrap().ai.holy_seize);
+
+        let msg = world.self_delay_msgs.peek(p).expect("300ms");
+        assert_eq!(
+            msg.ident,
+            crate::slave::RM_REFMESSAGE,
+            "SpitSpider 用 RM_REFMESSAGE（不是强化形态的 RM_STRUCKEFFECT）"
+        );
+        assert_eq!(msg.deliver_at_ms, 100_300);
+        assert_eq!(msg.w_param, 5 + d0);
+        assert!(
+            !world.buffs.has_buff(p, crate::buff::BuffType::GreenPoison),
+            "UsePoison=false ⇒ 无中毒"
+        );
+    }
+
+    /// F2：`UsePoison` 按 race 传——118 命中后**零** `Random(20)`；119 恰一次。
+    ///
+    /// 牙：把 dispatch 的 118 臂改回 `true` ⇒ 118 轮断言红（多抽一次 Random(20)）。
+    #[test]
+    fn atk_spit_spider_use_poison_follows_race_ctor() {
+        let run = |race: u8| {
+            let mut world = World::new(40, 40);
+            world.enable_refmessage_delay();
+            world.clock_ms = 100_000;
+            let m = atk_monster(&mut world, race, 10, 10);
+            world.entities.get_mut(m).unwrap().ai.attack_tick = 90_000;
+            let p = atk_player(&mut world, 10, 8, 10); // UP 2 格（SpitMap[UP][0][2]==1）
+            world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+            let seed = 4242;
+            world.rng = RandomNumber::with_seed(seed);
+            let mut expect = RandomNumber::with_seed(seed);
+            let _d0 = expect.random_below(5);
+            let _speed = expect.random_below(10);
+            let _mac = expect.random_below(1);
+            let _dur = expect.random_below(10);
+            assert!(monster_attack_target(&mut world, m), "race {race} 命中");
+            assert_eq!(world.pending_ai_attacks.len(), 1, "race {race} 命中一次");
+            // 期望流位置：118 到此为止；119 还要抽 Random(20)。
+            let poison_draw = if race == 119 {
+                Some(expect.random_below(20))
+            } else {
+                None
+            };
+            assert_eq!(
+                world.rng.random(),
+                expect.random(),
+                "race {race} 的 Random(20) 抽取次数不符合 UsePoison"
+            );
+            poison_draw
+        };
+        assert_eq!(run(118), None, "HighRiskSpider ctor UsePoison=false");
+        assert!(run(119).is_some(), "BigPoisionSpider ctor UsePoison=true");
+    }
+
+    // ------------------------------ PercentMonster（80，死类） ------------------------------
+
+    /// E08/G14：`PercentMonster.AttackTarget` 与基类逐行同构 ⇒ 走基版（物理 + BreakHolySeize）；
+    /// dispatch 仍显式登记 race 80。
+    #[test]
+    fn atk_percent_monster_dispatches_to_base_identical_semantics() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 80, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.attack_tick = 90_000;
+        world.entities.get_mut(m).unwrap().ai.holy_seize = true;
+        let p = atk_player(&mut world, 11, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+        assert!(monster_attack_target(&mut world, m));
+        assert_eq!(world.pending_ai_attacks.len(), 1, "基版 Attack 结算");
+        assert!(!world.entities.get(m).unwrap().ai.holy_seize);
+        assert_eq!(world.entities.get(m).unwrap().ai.attack_tick, 100_000);
+    }
+
+    // ------------------------------ 分派表（E14/G18） ------------------------------
+
+    /// E14：`monster_run` 的 `AttackTarget` 分派必须按 race 选到各覆写；
+    /// 用「只有对应覆写才会发生的帧/伤害形态」逐族断言。
+    ///
+    /// 牙：删任一 `Some(<race>)` 臂 ⇒ 对应断言红（至少 130/117/215 三条可区分）。
+    #[test]
+    fn atk_dispatch_selects_override_per_race() {
+        // 130：2 格喷吐命中（基版只 SetTargetXy，不攻击）。
+        let mut world = World::new(40, 40);
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 130, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.attack_tick = 90_000;
+        let p = atk_player(&mut world, 10, 9, 10);
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+        assert!(monster_attack_target(&mut world, m));
+        assert!(
+            !world.pending_monster_ref_msgs.is_empty(),
+            "130 喷吐发 RM_HIT"
+        );
+
+        // 117：邻接 ⇒ 自爆置 HP=0。
+        let mut world = World::new(40, 40);
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 117, 10, 10);
+        world.entities.get_mut(m).unwrap().ai.attack_tick = 90_000;
+        let p = atk_player(&mut world, 11, 10, 10);
+        atk_see(&mut world, m, p);
+        world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+        assert!(monster_attack_target(&mut world, m));
+        assert_eq!(world.entities.get(m).unwrap().hp, 0);
+
+        // 215：Master ⇒ 清目标且返回 false（基版会攻击）。
+        let mut world = World::new(40, 40);
+        world.clock_ms = 100_000;
+        let m = atk_monster(&mut world, 215, 10, 10);
+        let p = atk_player(&mut world, 11, 10, 10);
+        {
+            let e = world.entities.get_mut(m).unwrap();
+            e.master = Some(p);
+            e.ai.target_creature = Some(p);
+            e.ai.attack_tick = 90_000;
+        }
+        assert!(!monster_attack_target(&mut world, m));
+        assert_eq!(world.entities.get(m).unwrap().ai.target_creature, None);
+
+        // 82：2 格喷吐；91：邻接魔法；114（默认 Appr=0）走基版。
+        for race in [82u8, 91, 114] {
+            let mut world = World::new(40, 40);
+            world.clock_ms = 100_000;
+            let m = atk_monster(&mut world, race, 10, 10);
+            world.entities.get_mut(m).unwrap().ai.attack_tick = 90_000;
+            let p = if race == 82 {
+                atk_player(&mut world, 10, 8, 10)
+            } else {
+                atk_player(&mut world, 11, 10, 10)
+            };
+            world.entities.get_mut(m).unwrap().ai.target_creature = Some(p);
+            assert!(monster_attack_target(&mut world, m), "race {race}");
+            assert_eq!(world.pending_ai_attacks.len(), 1, "race {race} 结算");
+        }
+    }
+
+    // ------------------------------ ctor 常量（117/215） ------------------------------
+
+    /// `ExplosionSpider` ctor `ViewRange=5`/`SearchTick=0`；`MagicMonster` ctor `ViewRange=8`。
+    #[test]
+    fn atk_class_constants_for_117_and_215() {
+        // `add_entity` 会把 `search_tick` 重盖成落图时刻（ctor 等价物拿不到时钟），
+        // 故这里直接对构造等价物断言 ctor 显式值。
+        let mut e = Entity::new(0, "x", 5, 5);
+        e.ai.search_tick = 999;
+        crate::mongen::apply_monster_class_constants(&mut e, 117, 12_345);
+        assert_eq!(e.view_range, 5, "ExplosionSpider ctor ViewRange=5");
+        assert_eq!(
+            e.ai.search_tick, 0,
+            "ExplosionSpider ctor 显式 SearchTick=0"
+        );
+        let mut e = Entity::new(0, "y", 8, 8);
+        crate::mongen::apply_monster_class_constants(&mut e, 215, 12_345);
+        assert_eq!(e.view_range, 8, "MagicMonster ctor ViewRange=8");
     }
 }

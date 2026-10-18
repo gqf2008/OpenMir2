@@ -132,6 +132,18 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
             entity.view_range = 16;
             entity.ai.animal = false;
         }
+        // `ExplosionSpider` ctor（`ExplosionSpider.cs:10-17`）：`ViewRange = 5`、
+        // `RunTime = 250`（本骨架无逐 actor RunTime 门，S06 登记）、`SearchTime = Random(1500)+2500`
+        // （抽数字段，已在宿主构造链）、**`SearchTick = 0`**（覆盖 `BaseObject ctor = now`）、
+        // `explosionMakeTime = now`（见 `AnimalState::seed_from_spawn`）。
+        117 => {
+            entity.view_range = 5;
+            entity.ai.search_tick = 0;
+        }
+        // `MagicMonster` ctor（`MagicMonster.cs:7-16`）：`ViewRange = 8`、`DupMode = false`、
+        // `ThinkTick/SearchTick = now`（＝字段缺省，由 seed 落定）、`SearchTime = 3000+Random(2000)`
+        // （抽数字段）、`Race = 215`。`FireballMonster` 子类 ctor 不改这些字段。
+        215 => entity.view_range = 8,
         // `ZilKinZombi` ctor（`ZilKinZombi.cs:14`）：`ViewRange = 6`。
         96 => entity.view_range = 6,
         // `CentipedeKingMonster`（`: StickMonster`）ctor（`CentipedeKingMonster.cs:11-18`）：

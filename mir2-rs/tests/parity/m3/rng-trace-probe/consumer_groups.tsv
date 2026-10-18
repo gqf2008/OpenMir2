@@ -188,9 +188,9 @@ monster_ai	csharp	AnimalObject\.Struck@AnimalObject\.cs:342$	src/M2Server/Actor/
 # 不是攻击方 `_Attack` 的伤害账本 ⇒ 不进 `RUST_ATTACK_RE`/`CSHARP_ATTACK_RE`）。
 magic_effect	csharp	BaseObject\.GetMagStruckDamage@BaseObject\.Base\.cs:	src/M2Server/Actor/BaseObject.Base.cs:814	`GetMagStruckDamage` 的 MAC 骰 `Random(|Hi(MAC)-Lo(MAC)|+1)`（:814）；`baseObject != null` 才加 `AddAbil.UndeadPower`（`RM_MAGSTRUCK` 处理器传 null ⇒ 不生效）
 magic_effect	csharp	PlayObject\.StruckDamage@PlayObject\.cs:	src/M2Server/Player/PlayObject.cs:2957	玩家受击耐久 `Random(10)`（:2957）与逐格 `Random(8)`（:3000）
-magic_effect	rust	crates/world/src/combat\.rs:802$	crates/world/src/combat.rs:802	`get_mag_struck_damage` 的 `Random(|Hi-Lo|+1)`（P3-B2；精确行 = 漂移信号）
-magic_effect	rust	crates/world/src/combat\.rs:822$	crates/world/src/combat.rs:822	`struck_damage_durability` 的 `Random(10)`（P3-B2 首次触达；精确行）
-magic_effect	rust	crates/world/src/combat\.rs:830$	crates/world/src/combat.rs:830	`struck_damage_durability` 的逐格 `Random(8)`（P3-B2 首次触达；精确行）
+magic_effect	rust	crates/world/src/combat\.rs:809$	crates/world/src/combat.rs:809	`get_mag_struck_damage` 的 `Random(|Hi-Lo|+1)`（P3-B2；精确行 = 漂移信号）
+magic_effect	rust	crates/world/src/combat\.rs:829$	crates/world/src/combat.rs:829	`struck_damage_durability` 的 `Random(10)`（P3-B2 首次触达；精确行）
+magic_effect	rust	crates/world/src/combat\.rs:838$	crates/world/src/combat.rs:838	`struck_damage_durability` 的逐格 `Random(8)`（P3-B2 首次触达；精确行）
 
 # ---- 2026-10-18 追加（卡 openmir2-run-gap-monster-master-follow）--------------------------
 # `MonsterObject.Run` 的 Master 跟随段（`MonsterObject.cs:320`）在异图 / 超距时调用
@@ -228,3 +228,16 @@ monster_ai	csharp	ScultureKingMonster\.Attack@ScultureKingMonster\.cs:	src/M2Ser
 monster_ai	csharp	ScultureKingMonster\.CallSlave@ScultureKingMonster\.cs:39$	src/M2Server/Monster/Monsters/ScultureKingMonster.cs:39	MB-3 R34：`Random(6) + 6`（`:39`，召唤次数）；Rust `monai.rs::sculture_king_call_slave`
 monster_ai	csharp	ScultureKingMonster\.CallSlave@ScultureKingMonster\.cs:47$	src/M2Server/Monster/Monsters/ScultureKingMonster.cs:47	MB-3 R34（MB-3b F3 订正）：`Config.Zuma[Random(4)]`（`:47`）是 **AI 取数**；Rust 站点在 `crates/world/src/monai.rs::flush_sculture_spawns`（`RandomNumber::random_below` 的 `#[track_caller]` 站点落 monai.rs）⇒ 归 `monster_ai`（此前误登 `spawn`）。同点的 `RegenMonsterByName` **构造抽**由 `Monsters.\w+..ctor@` 按 oracle 归 `construct`→折叠 `spawn`；`spawn` 只覆盖那部分构造抽
 monster_ai	csharp	ArcherGuard\.AttackTarger@ArcherGuard\.cs:	src/M2Server/Monster/Monsters/ArcherGuard.cs:24	MB-3 R02：`Random(|Hi(DC)-Lo(DC)|+1)`（`:24`，方法名 oracle 拼写 `AttackTarger`）；Rust `monai.rs::archer_guard_attack_targer`
+
+# ---- 2026-10-19 追加（卡 `openmir2-attacktarget-overrides`，tier=R）------------------------
+# 余下 `AttackTarget` 覆写族的 oracle 取数站点。Rust 侧全部落 `crates/world/src/monai.rs`
+# （上方文件级 `monster_ai rust` 行已覆盖，**不新增 Rust 行**）；下列 C# 行按方法登记，
+# 供 `groups --side csharp --require-closed` 在真机窗口出现这些怪时归类。
+# 无取数类（`MagicMonster`/`PercentMonster` 的 AttackTarget）不登记（零 RNG）。
+# 注：`SpitSpider.SpitAttack@:46` 的 `Random(AntiPoison+20)` 读的是**攻方** AntiPoison
+# （不是 `baseObject.`）；怪物 ctor 0 且不调 `RecalcAbilitys` ⇒ 恒 `Random(20)`。
+monster_ai	csharp	DoubleCriticalMonster\.DoubleAttack@DoubleCriticalMonster\.cs:	src/M2Server/Monster/Monsters/DoubleCriticalMonster.cs:46	DoubleAttack：`Lo(DC)+Random(|Hi-Lo|+1)`（`:46`，`<=0` 无帧）+ 逐格 `Random(baseObject.SpeedPoint)`（`:61`）；`GetHitStruckDamage` 是 C# 攻击组站点。Rust `monai.rs::double_attack`
+monster_ai	csharp	SpitSpider\.SpitAttack@SpitSpider\.cs:	src/M2Server/Monster/Monsters/SpitSpider.cs:22	SpitAttack：`Lo(DC)+Random(|Hi-Lo|+1)`（`:22`）+ 逐格 `Random(baseObject.SpeedPoint)`（`:37`）+ `Random(攻方 AntiPoison+20)`（`:46`，恒 `Random(20)`）。118/119 继承同实现。Rust `monai.rs::spit_attack`。**UsePoison 按 race**：82/119 `true`、118 `false`（`HighRiskSpider.cs:8`）⇒ 118 命中后**无** `:46` 的 `Random(20)`；114 非强化形态走同一 `SpitSpider.AttackTarget` 但 ctor `UsePoison=false`（`ElfWarriorMonster.cs:32`）
+monster_ai	csharp	ExplosionSpider\.DoSelfExplosion@ExplosionSpider\.cs:	src/M2Server/Monster/Monsters/ExplosionSpider.cs:22	DoSelfExplosion：`MAX(0, Lo(DC)+Random(|Hi-Lo|+1))`（`:22`）；逐目标 `GetHitStruckDamage(nPower/2)` + `GetMagStruckDamage(nPower/2)`。Rust `monai.rs::do_self_explosion`
+monster_ai	csharp	MagCowMonster\.MagicAttack@MagCowMonster\.cs:	src/M2Server/Monster/Monsters/MagCowMonster.cs:16	MagicAttack：`Lo(DC)+Random(|Hi-Lo|+1)`（`:16`）+ `GetMagStruckDamage`（无命中率骰；`AntiMagic>=0` 对 ushort 恒真）。Rust `monai.rs::magic_attack`
+monster_ai	csharp	ElfWarriorMonster\.SpitAttack@ElfWarriorMonster\.cs:	src/M2Server/Monster/Monsters/ElfWarriorMonster.cs:45	SpitAttack：**Word** 口径 `LoWord(DC)+Random(|HiWord(DC)-LoWord(DC)|+1)`（`:45`；`HiWord(ushort)==0` ⇒ `DC+Random(DC+1)`）+ `GetMagStruckDamage`；`while(true)` 无 break（G19 登记）。Rust `monai.rs::elf_warrior_spit_attack`（**仅强化形态 Appr 704/706/708**；非强化形态 `base.AttackTarget()` ⇒ `SpitSpider.SpitAttack`，见上一行）

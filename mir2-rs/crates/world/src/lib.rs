@@ -101,7 +101,7 @@ pub use monai::{
     animal_struck, attack_target, big_heart_attack_target, can_move, del_target_creature,
     dir_delta, get_attack_dir, goto_target_xy, is_active_seek_race, is_animal_race, is_guard_race,
     make_long, monster_ai_tick, monster_class_run, monster_run, search_target, set_target_creature,
-    think, turn_to, walk_to, wondering, ClassRunBase, MonsterRefMsg,
+    target_in_spit_range, think, turn_to, walk_to, wondering, ClassRunBase, MonsterRefMsg,
 };
 pub use mongen::{
     gen_mod_count, get_monsters_zen_time, initialize_monster, monster_death_gate,

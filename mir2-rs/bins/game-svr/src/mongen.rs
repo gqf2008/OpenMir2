@@ -805,6 +805,9 @@ impl MonsterSink for WorldMonsterSink<'_> {
             if let Some(e) = self.world.entities.get_mut(id) {
                 e.mp = 0;
                 e.max_mp = mon.mp;
+                // `ApplyMonsterAbility`（`WorldServer.MonGen.cs:889`）：`Appr = monster.Appr`。
+                // 唯一行为消费点 = `ElfWarriorMonster.AttackTarget` 的 704/706/708 形态门。
+                e.appr = mon.appr;
             }
             self.displays
                 .set(id, downlink::monster_display(req.dir, mon));
@@ -1782,6 +1785,12 @@ mod tests {
         assert_eq!(d.status, 0);
         assert_eq!(d.name_color, downlink::MONSTER_NAME_COLOR);
         assert_eq!(d.show_name, downlink::gbk("稻草人"));
+        // `ApplyMonsterAbility`（`WorldServer.MonGen.cs:889`）：`Appr = monster.Appr`。
+        assert_eq!(
+            world.entities.get(id).unwrap().appr,
+            0x3344,
+            "Appr 必须从 MonsterInfo 落到实体（ElfWarrior 704/706/708 形态门的输入）"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
