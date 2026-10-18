@@ -90,6 +90,18 @@ pub const RM_LIGHTING: u16 = 10204;
 /// （`BaseObject.Base.cs:354-358`；`ZilKinZombi.Run` 的复生；`SM_ALIVE(27)`）。
 pub const RM_ALIVE: u16 = 10153;
 
+/// `_Attack` 的 `SendStruckDelayMsg(RM_REFMESSAGE, …, 200)`（`BaseObject.Attack.cs:57`）。
+/// `AttackDirect` 的 500ms（`:78`）尚无移植调用点（`AttackDirect` 未建模，登记）。
+pub const ATTACK_STRUCK_DELAY_MS: i64 = 200;
+/// `AnimalObject.HitMagAttackTarget` 的 `SendStruckDelayMsg(…, 200)`
+/// （`AnimalObject.cs:379`；ScultureKing 走它）。
+pub const HIT_MAG_STRUCK_DELAY_MS: i64 = 200;
+/// `GasAttackMonster.GasAttack` 的 `SendStruckDelayMsg(…, 300)`（`GasAttackMonster.cs:30`）。
+pub const GAS_STRUCK_DELAY_MS: i64 = 300;
+/// `ArcherGuard.AttackTarger`（`ArcherGuard.cs:34`）/ `DualAxeMonster.FlyAxeAttack`
+/// （`DualAxeMonster.cs:28`）的延时基数：`max(|Δx|,|Δy|)*50 + 600`。
+pub const GUARD_STRUCK_DELAY_BASE_MS: i64 = 600;
+
 /// `BaseObject.WalkTo` 的 `Dir → (dx, dy)`（`BaseObject.cs:601-...` 的 switch）。
 ///
 /// 与 oracle 同构：越界由调用方（`World::try_step_now` 的格子校验）拒绝，本函数只给增量。
@@ -1309,10 +1321,16 @@ fn fly_axe_attack(world: &mut World, actor_id: i32, target_id: i32) {
                     power: n_damage,
                     hit: true,
                     damage: final_damage,
+                    struck_power: reduced,
                     killed,
                     target_hp_after: hp,
                 },
             ));
+            // `target.SendStruckDelayMsg(RM_REFMESSAGE, nDamage, …,
+            //   max(|Δx|,|Δy|)*50+600)`（`DualAxeMonster.cs:26-28`）——与 ArcherGuard 同形。
+            let delay =
+                i64::from((cx - tx).abs().max((cy - ty).abs()) * 50) + GUARD_STRUCK_DELAY_BASE_MS;
+            world.send_struck_delay_msg_refmessage(target_id, actor_id, i32::from(reduced), delay);
         }
     }
     send_ref_msg_with_target(
@@ -2236,6 +2254,15 @@ fn gas_attack(
                     );
                     if n_power > 0 {
                         let _ = class_struck_apply(world, actor_id, target_id, n_power, n_power);
+                        // `baseObject.SendStruckDelayMsg(RM_REFMESSAGE, nPower, …,
+                        //   ActorId, "", 300)`（`GasAttackMonster.cs:30`）——在
+                        // `StruckDamage` 之后、`Random(AntiPoison+20)` 之前（oracle 同序）。
+                        world.send_struck_delay_msg_refmessage(
+                            target_id,
+                            actor_id,
+                            n_power,
+                            GAS_STRUCK_DELAY_MS,
+                        );
                         let anti_poison = world.target_anti_poison(target_id);
                         if world.rng.random_below(anti_poison + 20) == 0 {
                             world.make_posion(target_id, crate::entity::POISON_STONE as u8, 5, 0);
@@ -2363,6 +2390,7 @@ fn class_struck_apply(
         power,
         hit: true,
         damage: final_damage,
+        struck_power: reduced.max(0) as u16,
         killed,
         target_hp_after: hp,
     };
@@ -2449,6 +2477,15 @@ fn sculture_king_attack(world: &mut World, actor_id: i32, target_id: i32) {
         let n_damage = i32::from(hit) + mag;
         if n_damage > 0 {
             let _ = class_struck_apply(world, actor_id, tid, n_damage, n_power);
+            // `baseObject.SendStruckDelayMsg(RM_REFMESSAGE, nDamage, …,
+            //   ActorId, "", 200)`（`AnimalObject.cs:379`，ScultureKing 经
+            //   `HitMagAttackTarget`）——每个 proper 格对象各一条。
+            world.send_struck_delay_msg_refmessage(
+                tid,
+                actor_id,
+                n_damage,
+                HIT_MAG_STRUCK_DELAY_MS,
+            );
         }
     }
     let (dir, x, y) = match world.entities.get(actor_id) {
@@ -2624,9 +2661,11 @@ fn archer_guard_attack_targer(world: &mut World, actor_id: i32, target_id: i32) 
             t.exp_hitter = None;
         }
         let _ = class_struck_apply(world, actor_id, target_id, n_damage, n_damage);
-        // `SendStruckDelayMsg(RM_REFMESSAGE, …, max(|Δx|,|Δy|)*50 + 600)`：延迟值与
-        // player attack 的 200ms 同口径由宿主即时出帧（登记：oracle 经 MsgQueue 延时投递）。
-        let _delay = (cx - tx).abs().max((cy - ty).abs()) * 50 + 600;
+        // `targetObject.SendStruckDelayMsg(RM_REFMESSAGE, nDamage, …,
+        //   ActorId, "", max(|Δx|,|Δy|)*50 + 600)`（`ArcherGuard.cs:34`）。
+        let delay =
+            i64::from((cx - tx).abs().max((cy - ty).abs()) * 50) + GUARD_STRUCK_DELAY_BASE_MS;
+        world.send_struck_delay_msg_refmessage(target_id, actor_id, n_damage, delay);
     }
     // `SendRefMsg(RM_FLYAXE, Dir, CurrX, CurrY, targetObject.ActorId, "")`。
     send_ref_msg_with_target(
@@ -6726,5 +6765,177 @@ mod tests {
             !crate::combat::is_proper_target(&attacker, &dead_e),
             "G09 登记：死目标仍被折入版 is_proper_target 拒绝"
         );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    // 卡 `openmir2-rm-refmessage-delay-layer`（tier=R）：三条生产调用点的端到端。
+    // 每条都钉：7 参载荷 / 延时值 / 到点广播帧 / 到点自投 RM_STRUCK 的效果。
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    /// 受击怪（带主人 ⇒ `IsProperTarget` 成立）准备：`ac=0/mac=0/speed_point=0`。
+    fn refmsg_target(world: &mut World, x: i32, y: i32) -> i32 {
+        let master = player(world, 20, 20);
+        let mut target = Entity::new(0, "refmsg-target", x, y);
+        target.race = ACTOR_RACE_MONSTER;
+        target.hp = 1000;
+        target.max_hp = 1000;
+        target.ac = 0;
+        target.mac = 0;
+        target.speed_point = 0;
+        target.master = Some(master);
+        let t = world.add_entity(target);
+        assert!(world.enter_world(t));
+        t
+    }
+
+    /// **调用点 1**：`GasAttackMonster.GasAttack` ⇒ `SendStruckDelayMsg(…, 300)`
+    /// （`GasAttackMonster.cs:30`）。
+    #[test]
+    fn refmsg_gas_attack_schedules_300ms() {
+        let mut world = World::new(30, 30);
+        world.enable_refmessage_delay();
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 90, 10, 10);
+        let t = refmsg_target(&mut world, 11, 10);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.dir = crate::magic::DIR_RIGHT;
+            e.hit_point = 1;
+            e.ai.next_hit_time = 0;
+            e.ai.attack_tick = 0;
+            e.ai.target_creature = Some(t);
+        }
+        assert!(gas_attack_monster_attack_target(&mut world, id));
+        let m = world
+            .self_delay_msgs
+            .peek(t)
+            .expect("GasAttack 必须入 7 参延时消息");
+        assert_eq!(m.ident, crate::slave::RM_REFMESSAGE);
+        assert_eq!(m.actor_ref, i32::from(crate::slave::RM_STRUCK));
+        assert_eq!(m.w_param, 5, "wParam = GetMagStruckDamage 之后的值");
+        assert_eq!(m.n_param2, 1000, "MaxHP 快照");
+        assert_eq!(m.n_param3, id, "nParam3 = 命中者 ActorId");
+        assert_eq!(m.deliver_at_ms, 100_300, "GasAttack 的延时 = 300ms");
+        let hp_snapshot = world.entities.get(t).unwrap().hp;
+        assert_eq!(m.n_param1, i32::from(hp_snapshot), "HP 快照 = 发送时刻");
+        // 到点：广播 + 自投 RM_STRUCK（SetLastHiter + Struck）。
+        assert!(world.entities.get(t).unwrap().last_hiter.is_none());
+        world.clock_ms = 100_300;
+        let outs = world.deliver_self_delay_msgs();
+        assert_eq!(outs.iter().filter(|o| o.ref_message.is_some()).count(), 1);
+        assert_eq!(
+            world.pending_refmessage_frames.len(),
+            1,
+            "到点产生 1 条 SendRefMsg(RM_STRUCK) 广播"
+        );
+        let f = world.pending_refmessage_frames[0];
+        assert_eq!(f.actor_id, t);
+        assert_eq!(f.ident, crate::slave::RM_STRUCK);
+        assert_eq!(f.w_param, 5);
+        assert_eq!(f.n_param3, id);
+        assert_eq!(
+            world.entities.get(t).unwrap().last_hiter,
+            Some(id),
+            "自投 RM_STRUCK ⇒ SetLastHiter"
+        );
+    }
+
+    /// **调用点 2**：`AnimalObject.HitMagAttackTarget` ⇒ `SendStruckDelayMsg(…, 200)`
+    /// （`AnimalObject.cs:379`，ScultureKing 经它）。
+    #[test]
+    fn refmsg_hit_mag_attack_schedules_200ms() {
+        let mut world = World::new(30, 30);
+        world.enable_refmessage_delay();
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 102, 10, 10);
+        let t = refmsg_target(&mut world, 11, 10);
+        sculture_king_attack(&mut world, id, t);
+        let m = world
+            .self_delay_msgs
+            .peek(t)
+            .expect("HitMagAttackTarget 必须入 7 参延时消息");
+        assert_eq!(m.ident, crate::slave::RM_REFMESSAGE);
+        assert_eq!(m.actor_ref, i32::from(crate::slave::RM_STRUCK));
+        assert_eq!(m.w_param, 5, "wParam = GetHit+GetMag 之和（倍率前）");
+        assert_eq!(m.n_param2, 1000);
+        assert_eq!(m.n_param3, id);
+        assert_eq!(
+            m.deliver_at_ms, 100_200,
+            "HitMagAttackTarget 的延时 = 200ms"
+        );
+        world.clock_ms = 100_200;
+        let outs = world.deliver_self_delay_msgs();
+        assert_eq!(outs.iter().filter(|o| o.ref_message.is_some()).count(), 1);
+        assert_eq!(
+            world.entities.get(t).unwrap().last_hiter,
+            Some(id),
+            "自投 RM_STRUCK ⇒ SetLastHiter"
+        );
+    }
+
+    /// **调用点 3**：`ArcherGuard.AttackTarger` ⇒ `max(|Δx|,|Δy|)*50 + 600`
+    /// （`ArcherGuard.cs:34`）。
+    #[test]
+    fn refmsg_archer_guard_delay_is_chebyshev_times_50_plus_600() {
+        let mut world = World::new(30, 30);
+        world.enable_refmessage_delay();
+        world.clock_ms = 100_000;
+        let id = class_monster(&mut world, 112, 10, 10);
+        let t = refmsg_target(&mut world, 13, 10); // max(3,0)*50+600 = 750
+        archer_guard_attack_targer(&mut world, id, t);
+        let m = world
+            .self_delay_msgs
+            .peek(t)
+            .expect("ArcherGuard 必须入 7 参延时消息");
+        assert_eq!(m.ident, crate::slave::RM_REFMESSAGE);
+        assert_eq!(m.actor_ref, i32::from(crate::slave::RM_STRUCK));
+        assert_eq!(m.n_param3, id);
+        assert_eq!(m.deliver_at_ms, 100_750, "max(|Δx|,|Δy|)*50+600");
+        assert_eq!(m.w_param, 5);
+        world.clock_ms = 100_750;
+        let outs = world.deliver_self_delay_msgs();
+        assert_eq!(outs.iter().filter(|o| o.ref_message.is_some()).count(), 1);
+        assert_eq!(world.pending_refmessage_frames.len(), 1, "到点广播一次");
+    }
+
+    /// **判据 7（阴性对照）**：无命中（`struck_power == 0`）⇒ 不入延时消息、到点零抽数。
+    #[test]
+    fn refmsg_zero_damage_no_enqueue_and_zero_draws() {
+        let mut world = World::new(30, 30);
+        world.enable_refmessage_delay();
+        world.clock_ms = 100_000;
+        let attacker = class_monster(&mut world, 90, 10, 10);
+        {
+            let e = world.entities.get_mut(attacker).unwrap();
+            e.hit_point = 1;
+            e.dc = 1 | (1 << 8); // Lo=Hi=1
+        }
+        let master = player(&mut world, 20, 20);
+        let mut target = Entity::new(0, "armored", 11, 10);
+        target.race = ACTOR_RACE_MONSTER;
+        target.hp = 1000;
+        target.max_hp = 1000;
+        // AC 双字节 0xFFFF ⇒ `GetHitStruckDamage` 必为 0（`n_armor >= 255`）。
+        target.ac = 0xFFFFu16 as i32;
+        target.master = Some(master);
+        let t = world.add_entity(target);
+        let outcome = world.attack_once(attacker, t).expect("结算存在");
+        assert_eq!(outcome.struck_power, 0, "护甲全免 ⇒ nPower = 0");
+        assert!(
+            world.self_delay_msgs.is_empty(),
+            "nPower == 0 ⇒ 不得 SendStruckDelayMsg"
+        );
+        let before = world.rng.clone();
+        world.clock_ms += 200;
+        assert!(
+            world.deliver_self_delay_msgs().is_empty(),
+            "无延时消息 ⇒ 到点无投递"
+        );
+        assert_eq!(
+            format!("{:?}", world.rng),
+            format!("{before:?}"),
+            "阴性对照：无命中零抽数"
+        );
+        assert!(world.pending_refmessage_frames.is_empty(), "无广播帧");
     }
 }

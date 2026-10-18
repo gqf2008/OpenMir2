@@ -732,6 +732,15 @@ pub struct World {
     /// （`bins/game-svr` 的 sim 循环）起世界时用 [`World::enable_slave_self_delay`] 打开。
     /// 关闭时 `settle_deaths` 不入队、`tick` 不投递 ⇒ 既有对拍逐字节不变。
     slave_self_delay_enabled: bool,
+    /// **卡 `openmir2-rm-refmessage-delay-layer`**：是否启用 7 参 `SendStruckDelayMsg`
+    /// （`RM_REFMESSAGE` 延时层，`BaseObject.Message.cs:211-228`）。
+    ///
+    /// **缺省 `false`**：合成 golden 场景（`tests/parity/csharp/WorldGolden`）的 `_Attack`
+    /// 桩是 oracle 的**取数子集**（`StubsCombat.cs:248-284` 只折叠即时 `RM_STRUCK`，
+    /// 不含 `SendStruckDelayMsg`）⇒ 默认开启会把 200ms 后的 `Struck` 抽数插进既有
+    /// golden 的 RNG 序列，破坏 `diff = 0`。生产宿主 `bins/game-svr` 在起世界时
+    /// [`World::enable_refmessage_delay`] 打开（与 `enable_monster_ai` 同口径）。
+    refmessage_delay_enabled: bool,
     /// **P3-B2**：待处理的 `RM_MAGSTRUCK`（目标自有队列的插入序等价物）。
     ///
     /// 由效果体（23/24/33/47）入队，宿主调 `World::deliver_mag_struck` 逐目标处理
@@ -747,6 +756,13 @@ pub struct World {
     /// `DigOutZombi`/`ScultureMonster`/`BigHeartMonster`），宿主按 ident 出
     /// `SM_DIGUP`/`SM_DIGDOWN`/`SM_HIT`/`SM_716`（保序；见 [`crate::monai::MonsterRefMsg`]）。
     pub pending_monster_ref_msgs: Vec<crate::monai::MonsterRefMsg>,
+    /// **卡 `openmir2-rm-refmessage-delay-layer`**：`Operate(RM_REFMESSAGE)`
+    /// （`BaseObject.Base.cs:699-710`）的 `SendRefMsg(RM_STRUCK, …)` 广播事件（保序）。
+    ///
+    /// 入列时刻 = 延时消息**到点**（`World::deliver_self_delay_msgs`），因此宿主从这里出的
+    /// `SM_STRUCK` 天然带 oracle 的 200/300/500ms 广播延时；载荷是发送时刻的
+    /// HP/MaxHP 快照（`SendStruckDelayMsg` 的 `nParam1/nParam2`）。
+    pub pending_refmessage_frames: Vec<crate::slave::RefMessageFrame>,
     /// `GameSvrConf.Bee`（`GameSvrConf.cs:1316` 缺省 `"蝙蝠"`；`ServerConf.cs:100` 读 `[Names] Bee`）。
     pub bee_name: String,
     /// `GameSvrConf.Spider`（`GameSvrConf.cs:1317` 缺省 `"爆裂蜘蛛"`；`ServerConf.cs:101` 读 `[Names] Spider`）。
@@ -937,6 +953,8 @@ impl World {
             pending_mag_struck: Vec::new(),
             pending_special_spawns: Vec::new(),
             pending_special_ref_msgs: Vec::new(),
+            pending_refmessage_frames: Vec::new(),
+            refmessage_delay_enabled: false,
             pending_monster_ref_msgs: Vec::new(),
             bee_name: crate::special_monster::DEFAULT_BEE_NAME.to_string(),
             spider_name: crate::special_monster::DEFAULT_SPIDER_NAME.to_string(),
@@ -3187,6 +3205,11 @@ impl World {
         std::mem::take(&mut self.pending_monster_ref_msgs)
     }
 
+    /// 取走本 tick **到点**的 `RM_REFMESSAGE` 广播事件（保序）。宿主据此出 `SM_STRUCK`。
+    pub fn take_refmessage_frames(&mut self) -> Vec<crate::slave::RefMessageFrame> {
+        std::mem::take(&mut self.pending_refmessage_frames)
+    }
+
     /// **P3-B5**：9/10 穿透效果体（`MagicManager.cs:265-288` + `BaseObject.cs:896-931`）。
     ///
     /// 有序门与取数：
@@ -3801,6 +3824,18 @@ impl World {
     pub fn enable_slave_self_delay(&mut self, cfg: mir2_data::pet_slave::PetSlaveConfig) {
         self.pet_slave_cfg = cfg;
         self.slave_self_delay_enabled = true;
+    }
+
+    /// 开启 7 参 `SendStruckDelayMsg`（`RM_REFMESSAGE`）延时层（缺省关闭；见
+    /// [`World::refmessage_delay_enabled`]）。生产宿主起世界时调用；合成 golden 保持关闭。
+    pub fn enable_refmessage_delay(&mut self) {
+        self.refmessage_delay_enabled = true;
+    }
+
+    /// 7 参 `SendStruckDelayMsg`（`RM_REFMESSAGE`）延时层是否开启。
+    #[must_use]
+    pub fn refmessage_delay_enabled(&self) -> bool {
+        self.refmessage_delay_enabled
     }
 
     /// 自身延时消息驱动是否开启（自证/测试用）。
@@ -5512,10 +5547,27 @@ impl World {
                 if !e.ghost {
                     e.ai.pending_struck.push(crate::entity::StruckMsg {
                         hiter: actor_id,
-                        w_param: i32::from(outcome.damage),
+                        // oracle `SendMsg(target, RM_STRUCK, nPower, …)`（`BaseObject.Attack.cs:61-64`）
+                        // 的 `nPower` = `GetHitStruckDamage` 之后（`struck_power`），不是倍率后的
+                        // `damage`；默认配置下两者相等。
+                        w_param: i32::from(outcome.struck_power),
                     });
                 }
             }
+        }
+        // **卡 `openmir2-rm-refmessage-delay-layer`**：`_Attack` 的
+        // `targetObject.SendStruckDelayMsg(RM_REFMESSAGE, nPower, target.WAbil.HP,
+        // target.WAbil.MaxHP, ActorId, "", 200)`（`BaseObject.Attack.cs:57`）。
+        // `nPower` = `GetHitStruckDamage` 之后（`struck_power`），门为 `> 0`。
+        // 入队零抽数；到点由 `deliver_self_delay_msgs` 的 `RM_REFMESSAGE` 支处理
+        // （广播框架 + `Race != Play` 自投 `RM_STRUCK` → `Struck` 的 `Random(6)`/`Random(300)`）。
+        if outcome.struck_power > 0 {
+            self.send_struck_delay_msg_refmessage(
+                target_id,
+                actor_id,
+                i32::from(outcome.struck_power),
+                crate::monai::ATTACK_STRUCK_DELAY_MS,
+            );
         }
         // `targetObject.MakePosion(PoisonState.STONE, SystemShare.Config.AttackPosionTime, 0)`
         // （`PlayObject.Attack.cs:223`）：命中中毒门过了 ⇒ 给**目标**上石化毒 buff。

@@ -917,6 +917,13 @@ pub struct AttackOutcome {
     pub hit: bool,
     /// 护甲减免后的实际伤害（`GetHitStruckDamage` 之后）
     pub damage: u16,
+    /// **卡 `openmir2-rm-refmessage-delay-layer`**：`_Attack` 传给
+    /// `SendStruckDelayMsg(RM_REFMESSAGE, nPower, …)`（`BaseObject.Attack.cs:57`）的
+    /// `nPower` —— `GetHitStruckDamage` **之后**、`StruckDamage` 倍率**之前**的值。
+    ///
+    /// `damage` 是倍率之后的最终掉血；两者在默认配置（倍率 10/10）相等，但非默认
+    /// `WarrMon/WizardMon/TaosMon/MonHum` 下必须分开（oracle 的延时/自投消息都带 `nPower`）。
+    pub struck_power: u16,
     /// 目标 HP 是否降到 0（本 tick 触发死亡）
     pub killed: bool,
     /// 结算后目标的 `WAbil.HP`（对拍逐行输出用）
@@ -1001,10 +1008,10 @@ pub fn attack_with_grouped(
         n_power = 0;
     }
 
-    let (damage, killed) = if n_power > 0 {
-        apply_struck_damage(rng, attacker, target, n_power, last_hitter, config)
+    let (damage, struck_power, killed) = if n_power > 0 {
+        apply_struck_damage_detail(rng, attacker, target, n_power, last_hitter, config)
     } else {
-        (0, false)
+        (0, 0, false)
     };
     // 注意：`_Attack` 里**没有** `LastHiter` 赋值（C# 原文如此）。命中者的登记走
     // `RM_STRUCK` 消息路径，由调用方在攻击结算之后调用 `Entity::set_last_hiter`。
@@ -1012,6 +1019,7 @@ pub fn attack_with_grouped(
         power,
         hit,
         damage,
+        struck_power,
         killed,
         target_hp_after: target.hp,
     }
@@ -1031,11 +1039,29 @@ pub fn apply_struck_damage(
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
 ) -> (u16, bool) {
+    let (damage, _struck_power, killed) =
+        apply_struck_damage_detail(rng, attacker, target, n_power, last_hitter, config);
+    (damage, killed)
+}
+
+/// [`apply_struck_damage`] 的**三段**版本：额外返回 `GetHitStruckDamage` 之后、倍率之前的
+/// `nPower`（= `_Attack` 传给 `SendStruckDelayMsg` 的值，见
+/// [`AttackOutcome::struck_power`]）。取数次序与两段版逐字相同。
+pub fn apply_struck_damage_detail(
+    rng: &mut impl RandomSource,
+    attacker: &Entity,
+    target: &mut Entity,
+    n_power: i32,
+    last_hitter: Option<LastHitter>,
+    config: &CombatConfig,
+) -> (u16, u16, bool) {
     let reduced = get_hit_struck_damage(rng, target, attacker, n_power);
     if reduced == 0 {
-        return (0, false);
+        return (0, 0, false);
     }
-    struck_damage_apply(rng, target, i32::from(reduced), last_hitter, config)
+    let (damage, killed) =
+        struck_damage_apply(rng, target, i32::from(reduced), last_hitter, config);
+    (damage, reduced, killed)
 }
 
 /// [`apply_struck_damage`] 的「已过 `GetHitStruckDamage`」半边：MB-3 的

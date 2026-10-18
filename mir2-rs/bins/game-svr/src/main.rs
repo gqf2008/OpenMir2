@@ -9807,7 +9807,7 @@ fn body_luck_level_of(body_luck: f64) -> i32 {
 ///   读 `sg.equip.abil`）。
 fn drain_combat_downlink(
     rec: &mir2_world::TickRecord,
-    world: &mir2_world::World,
+    world: &mut mir2_world::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -9822,23 +9822,18 @@ fn drain_combat_downlink(
     // （`PlayObject.Message.cs:1562-1628`）用**受击者**的 `HP/MaxHP/伤害` 回 `SM_STRUCK` 给自己客户端。
     // ⇒ 怪物目标也一样广播（怪物无连接，但视野内玩家收到 ⇒ 客户端能看见掉血/伤害）。
     //
-    // 登记（未 1:1，本次不动）：oracle 的该帧经受击者 `MsgQueue` 以 `LateDelivery=200ms` +
-    // `MessagePriority.Lowest` 延时投递，本实现即时发。
-    for (attacker, target, outcome) in &rec.attacks {
+    // **卡 `openmir2-rm-refmessage-delay-layer`**：oracle 的受击帧不是在 `_Attack` 里同步发出的，
+    // 而是 `SendStruckDelayMsg(RM_REFMESSAGE, …, 200/300/500ms)` 到点后
+    // `Operate(RM_REFMESSAGE)` 的 `SendRefMsg(RM_STRUCK, …)`（`BaseObject.Base.cs:699-705`）。
+    // 世界层在 `deliver_self_delay_msgs` 的 `RM_REFMESSAGE` 支按**到点时刻**把广播事件落进
+    // `World::pending_refmessage_frames`；本函数只负责出帧（帧序 = 到点/入列序）。
+    //
+    // 受害者的会话 HP 同步与体力点清零仍按本 tick 的攻击结算处理：世界权威 HP 在 `_Attack`
+    // 里即时扣减（oracle 同），宿主侧的会话镜像不等 200ms（属宿主状态镜像，非 RNG/帧面）。
+    for (_attacker, target, outcome) in &rec.attacks {
         if outcome.damage == 0 {
-            // oracle `RM_STRUCK` 支只在 `processMsg.wParam > 0` 时回帧（`PlayObject.Message.cs:1563`）。
             continue;
         }
-        let Some(d) = displays.get(*target) else {
-            continue;
-        };
-        let max_hp = world
-            .entities
-            .get(*target)
-            .map_or(outcome.target_hp_after, |e| e.max_hp);
-        // 受击者是**在线玩家**时：世界权威 HP 同步回其会话（供 52/752 与后续帧），并按 oracle
-        // `RM_STRUCK` 处理器开头（`PlayObject.Message.cs:1587-1590`）清零体力/魔力点。
-        // 怪物无会话 ⇒ 无这些副作用（它们只存在于有 `WAbil`/`MsgQueue` 的受击者上）。
         if let Some(victim_entry) = online.iter().find(|e| e.actor_id == *target) {
             if let Some(sg) = sessions.get_mut(&victim_entry.chr_name) {
                 sg.state.wabil.hp = outcome.target_hp_after;
@@ -9848,17 +9843,35 @@ fn drain_combat_downlink(
                 sg.recovery.per_spell = sg.recovery.per_spell.wrapping_sub(1);
             }
         }
+    }
+    for frame in world.take_refmessage_frames() {
+        // 本宿主只建模 `RM_STRUCK` 广播的客户端帧（其他 ident 的 `SendRefMsg` 未建模/登记）。
+        if frame.ident != mir2_protocol::messages::RM_STRUCK {
+            continue;
+        }
+        let Some(d) = displays.get(frame.actor_id) else {
+            continue;
+        };
+        // **复验 F1**：oracle 的 `SM_STRUCK` 帧里 HP/MaxHP 取的是**观察者处理该消息时刻的实时值**
+        // （`PlayObject.Message.cs:1601` 的 `baseObject.WAbil.HP/MaxHP`，`baseObject = ActorMgr.Get(ActorId)`），
+        // 不是消息载荷里的发送时刻快照。这里用实体当前值；实体不存在时回落载荷。
+        let (live_hp, live_max_hp) = world
+            .entities
+            .get(frame.actor_id)
+            .map_or((frame.n_param1, frame.n_param2), |e| {
+                (i32::from(e.hp), i32::from(e.max_hp))
+            });
         let body = game_svr::smframe::sm_struck_frame(
-            *target,
-            outcome.target_hp_after,
-            max_hp,
-            outcome.damage,
+            frame.actor_id,
+            live_hp as u16,
+            live_max_hp as u16,
+            frame.w_param as u16,
             d.feature,
             d.status,
-            *attacker,
+            frame.n_param3,
             false,
         );
-        for observer_id in chat::hear_targets(world, *target, chat::SEND_REF_MSG_RANGE) {
+        for observer_id in chat::hear_targets(world, frame.actor_id, chat::SEND_REF_MSG_RANGE) {
             let Some(observer) = online.iter().find(|e| e.actor_id == observer_id) else {
                 continue;
             };
@@ -12084,6 +12097,16 @@ fn sim_loop(
     glog!(
         "INF",
         "主人死自投递已启用（生产宿主）EnableSlaveSelfDelay=true（1000ms sim 延迟；RM_MASTERDIEGHOST 恒不可达 = BUG-REPLICA）"
+    );
+    // **卡 `openmir2-rm-refmessage-delay-layer`**：生产宿主启用 7 参
+    // `SendStruckDelayMsg(RM_REFMESSAGE, …, dwDelay)` 延时层（`BaseObject.Message.cs:211-228`）：
+    // 受击 200/300/500ms 后 `Operate(RM_REFMESSAGE)`（`BaseObject.Base.cs:699-710`）广播
+    // `SM_STRUCK` 并在 `Race != Play` 时自投 `RM_STRUCK`（`Struck` 取数）。
+    // 合成 golden 的 `_Attack` 桩不含该消息（见 `World::refmessage_delay_enabled`）⇒ 缺省关闭。
+    world.enable_refmessage_delay();
+    glog!(
+        "INF",
+        "受击延时消息已启用（生产宿主）EnableRefMessageDelay=true（RM_REFMESSAGE → RM_STRUCK；200/300/500ms）"
     );
     // **M3④-实现 B 第 ③ 片**：MonGen 刷怪调度宿主（`WorldServer.MonGen.cs:30/192/811`）。
     // `entries=None` ⇒ 无 `Envir/MonGen.txt`，不建宿主；`initialize_monster` 在此消耗一次
@@ -23404,6 +23427,7 @@ mod tests {
                     power: 10,
                     hit: true,
                     damage: 7,
+                    struck_power: 7,
                     killed: true,
                     target_hp_after: 0,
                 },
@@ -23411,7 +23435,25 @@ mod tests {
             deaths: vec![(victim, 0, 0, None, 0)],
             ..Default::default()
         };
-        drain_combat_downlink(&rec, &world, &displays, &online, &mut sessions, &gates);
+        world
+            .pending_refmessage_frames
+            .push(mir2_world::slave::RefMessageFrame {
+                actor_id: victim,
+                ident: mir2_protocol::messages::RM_STRUCK,
+                w_param: 7,
+                n_param1: 0,
+                n_param2: 100,
+                n_param3: attacker,
+                order: 0,
+            });
+        // 复验 F1：帧取**观察者处理时刻的实时 HP**（oracle `PlayObject.Message.cs:1601`），
+        // 故实体必须先有本击后的权威 HP。致命击 ⇒ HP=0。
+        {
+            let e = world.entities.get_mut(victim).unwrap();
+            e.hp = 0;
+            e.max_hp = 100;
+        }
+        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
         let mut bodies = Vec::new();
         while let Ok(m) = rx0.try_recv() {
             if let SimToGate::SendFrame { socket, body } = m {
@@ -23552,13 +23594,31 @@ mod tests {
                     power: 10,
                     hit: true,
                     damage: 7,
+                    struck_power: 7,
                     killed: false,
                     target_hp_after: 12,
                 },
             )],
             ..Default::default()
         };
-        drain_combat_downlink(&rec, &world, &displays, &online, &mut sessions, &gates);
+        world
+            .pending_refmessage_frames
+            .push(mir2_world::slave::RefMessageFrame {
+                actor_id: victim,
+                ident: mir2_protocol::messages::RM_STRUCK,
+                w_param: 7,
+                n_param1: 12,
+                n_param2: 100,
+                n_param3: attacker,
+                order: 0,
+            });
+        // 复验 F1：帧取**实时 HP**（非载荷快照）。
+        {
+            let e = world.entities.get_mut(victim).unwrap();
+            e.hp = 12;
+            e.max_hp = 100;
+        }
+        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
         let mut per_socket: HashMap<i32, Vec<u8>> = HashMap::new();
         while let Ok(m) = rx0.try_recv() {
             if let SimToGate::SendFrame { socket, body } = m {
@@ -23593,6 +23653,90 @@ mod tests {
         assert_eq!(
             sessions["victim"].state.wabil.hp, 12,
             "受击后世界 HP 同步回会话 WAbil"
+        );
+    }
+
+    /// **复验 F1 回归**：`SM_STRUCK` 的 HP/MaxHP 取**观察者处理时刻的实时值**（oracle
+    /// `PlayObject.Message.cs:1601` 的 `baseObject.WAbil.HP/MaxHP`），不是 `SendStruckDelayMsg`
+    /// 载荷里的发送时刻快照。载荷故意与实时值不同（100 vs 80）来钉住这一点。
+    ///
+    /// 牙：把出帧改回用 `frame.n_param1/n_param2` ⇒ 本用例红。
+    #[test]
+    fn combat_downlink_struck_uses_live_hp_not_payload_snapshot() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let victim = {
+            let mut e = mir2_world::Entity::new(0, "victim".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let attacker = {
+            let mut e = mir2_world::Entity::new(0, "atk".to_string(), 11, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        // 实时 HP = 80，但载荷快照 = 100（模拟「两击落在同一 200ms 窗口」）。
+        {
+            let e = world.entities.get_mut(victim).unwrap();
+            e.hp = 80;
+            e.max_hp = 100;
+        }
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            victim,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"victim".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uv".into(),
+                chr_name: "victim".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: victim,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("victim".into(), test_session_ground(victim));
+        let rec = mir2_world::TickRecord::default();
+        world
+            .pending_refmessage_frames
+            .push(mir2_world::slave::RefMessageFrame {
+                actor_id: victim,
+                ident: mir2_protocol::messages::RM_STRUCK,
+                w_param: 7,
+                n_param1: 100, // 发送时刻快照（旧）
+                n_param2: 100,
+                n_param3: attacker,
+                order: 0,
+            });
+        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
+        let body = loop {
+            match rx0.try_recv().expect("必须出受击帧") {
+                SimToGate::SendFrame { socket, body } => {
+                    assert_eq!(socket, 901);
+                    break body;
+                }
+                _ => continue,
+            }
+        };
+        let cm = CommandMessage::from_bytes(&body).expect("12B");
+        assert_eq!(cm.recog, victim);
+        let want_hp = if game_svr::smframe::client_layout_enabled() {
+            (80u16, 0u16) // 客户端 HIGHHP 布局：param=LoWord(HP), tag=HiWord(HP)
+        } else {
+            (80u16, 100u16) // oracle 布局：param=HP, tag=MaxHP
+        };
+        assert_eq!(
+            (cm.param, cm.tag),
+            want_hp,
+            "HP 必须是实时值 80（不是载荷快照 100）"
         );
     }
 
@@ -23652,13 +23796,31 @@ mod tests {
                     power: 30,
                     hit: true,
                     damage: 20,
+                    struck_power: 20,
                     killed: false,
                     target_hp_after: 180,
                 },
             )],
             ..Default::default()
         };
-        drain_combat_downlink(&rec, &world, &displays, &online, &mut sessions, &gates);
+        world
+            .pending_refmessage_frames
+            .push(mir2_world::slave::RefMessageFrame {
+                actor_id: monster,
+                ident: mir2_protocol::messages::RM_STRUCK,
+                w_param: 20,
+                n_param1: 180,
+                n_param2: 200,
+                n_param3: attacker,
+                order: 0,
+            });
+        // 复验 F1：帧取**实时 HP**（非载荷快照）。
+        {
+            let e = world.entities.get_mut(monster).unwrap();
+            e.hp = 180;
+            e.max_hp = 200;
+        }
+        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
         let mut bodies = Vec::new();
         while let Ok(m) = rx0.try_recv() {
             if let SimToGate::SendFrame { socket, body } = m {
@@ -23917,7 +24079,7 @@ mod tests {
             exp_awards: vec![(killer, 0x0001_0203, true, 9)],
             ..Default::default()
         };
-        drain_combat_downlink(&rec, &world, &displays, &online, &mut sessions, &gates);
+        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
         let mut bodies = Vec::new();
         while let Ok(m) = rx0.try_recv() {
             if let SimToGate::SendFrame { socket, body } = m {
@@ -24269,7 +24431,7 @@ mod tests {
             exp_awards: vec![(killer, 2_500_000, false, 11)],
             ..Default::default()
         };
-        drain_combat_downlink(&rec, &world, &displays, &online, &mut sessions, &gates);
+        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
         let sg = sessions.get("killer").unwrap();
         assert_eq!(sg.equip.body_luck, 5000.0, "dwExp*0.002 累加");
         assert_eq!(sg.equip.body_luck_level, 1, "Convert.ToInt32(5000/5000)=1");

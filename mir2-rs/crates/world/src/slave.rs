@@ -109,6 +109,18 @@ pub const RM_POISON: u16 = 8037;
 /// 9/10 穿透命中：`SendStruckDelayMsg(caster.ActorId, RM_MAGSTRUCK, 0, magPwr, 0, 0, "", 600)`
 /// （`BaseObject.cs:912`、`BaseObject.Message.cs:234-252`）。
 pub const RM_MAGSTRUCK: u16 = 8044;
+/// `Messages.RM_STRUCK`（`crates/protocol/src/messages.rs:511`；8018，`(byte)8018 = 82`）。
+///
+/// `SendStruckDelayMsg` 的 7 参重载（`BaseObject.Message.cs:211-228`）把它写进
+/// `SendMessage.ActorId`（`:225`），到点后 `Operate(RM_REFMESSAGE)` 以它判「是否自投
+/// `RM_STRUCK`」（`BaseObject.Base.cs:699-710`）。
+pub const RM_STRUCK: u16 = 8018;
+/// `Messages.RM_REFMESSAGE`（`crates/protocol/src/messages.rs:439`；10101）——
+/// **7 参** `SendStruckDelayMsg` 的 `wIdent`（`BaseObject.Message.cs:211-228`）。
+/// 受击者到点 `Operate` 先 `SendRefMsg(RM_STRUCK, …)` 广播，再在 `Race != Play` 时
+/// 自投 `RM_STRUCK` 跑 `AnimalObject.Operate`（`BaseObject.Base.cs:699-710` +
+/// `AnimalObject.cs:114-127`）。
+pub const RM_REFMESSAGE: u16 = 10101;
 
 pub const RM_MASTERDIEMUTINY: u16 = 60003;
 /// `Messages.RM_MASTERDIEGHOST`（`Messages.cs:840`）：主人幽灵 1s 后自投递（→ `ProcessSlaveGhost`）。
@@ -1220,6 +1232,50 @@ pub struct SelfDelayOutcome {
     /// 同一条请求也已进 [`crate::world::World::pending_special_spawns`]，可用
     /// [`crate::world::World::flush_special_spawns`] 排水。
     pub zen_bee: Option<crate::special_monster::SpecialSpawnRequest>,
+    /// **卡 `openmir2-rm-refmessage-delay-layer`**：`RM_REFMESSAGE` 到点投递
+    /// （`BaseObject.Base.cs:699-710`）的观察值（非该支 `None`）。
+    pub ref_message: Option<RefMessageDelivery>,
+}
+
+/// **卡 `openmir2-rm-refmessage-delay-layer`**：`Operate(RM_REFMESSAGE)`
+/// （`BaseObject.Base.cs:699-710`）到点投递的观察值。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RefMessageDelivery {
+    /// 处理该延时消息的 actor（oracle 的 `this` = 受击者）。
+    pub actor_id: i32,
+    /// `SendMessage.ActorId`（7 参载体恒为 [`RM_STRUCK`]）。
+    pub actor_ref: i32,
+    /// `wParam`（`_Attack` 的 `nPower`：`GetHitStruckDamage` 之后、倍率之前）。
+    pub damage: i32,
+    /// `nParam1`（发送时刻的 `WAbil.HP` 快照）。
+    pub hp: i32,
+    /// `nParam2`（发送时刻的 `WAbil.MaxHP` 快照）。
+    pub max_hp: i32,
+    /// `nParam3`（`_Attack` 的 `ActorId` = 命中者）。
+    pub hitter_id: i32,
+    /// 是否自投 `RM_STRUCK`（`processMsg.ActorId == RM_STRUCK && Race != Play`）。
+    pub self_struck: bool,
+}
+
+/// **卡 `openmir2-rm-refmessage-delay-layer`**：`Operate(RM_REFMESSAGE)` 的
+/// `SendRefMsg(processMsg.ActorId, wParam, nParam1, nParam2, nParam3, Msg)`（`:701`）
+/// 广播事件——宿主据此按**到点时刻**出 `SM_STRUCK`（oracle 的 200/300/500ms 广播延时）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RefMessageFrame {
+    /// 受击者（`this`）actor id。
+    pub actor_id: i32,
+    /// 广播消息号（7 参载体 `ActorId` = [`RM_STRUCK`]）。
+    pub ident: u16,
+    /// `wParam`（伤害）。
+    pub w_param: i32,
+    /// `nParam1`（HP 快照）。
+    pub n_param1: i32,
+    /// `nParam2`（MaxHP 快照）。
+    pub n_param2: i32,
+    /// `nParam3`（命中者）。
+    pub n_param3: i32,
+    /// 消息创建序（诊断/保序）。
+    pub order: u64,
 }
 
 /// **P3-B4**：`RM_DELAYMAGIC` 投递（`BaseObject.Base.cs:711-729`）的观察值。
@@ -1396,6 +1452,111 @@ impl World {
             enqueue_seq,
             priority: MESSAGE_PRIORITY_LOWEST,
         });
+    }
+
+    /// **卡 `openmir2-rm-refmessage-delay-layer`**：`BaseObject.SendStruckDelayMsg` 的
+    /// **7 参**重载（`BaseObject.Message.cs:211-228`）。
+    ///
+    /// 逐行：
+    /// ```text
+    /// :213 if (!Ghost)
+    /// :215   SendMessage { wIdent, wParam, nParam1, nParam2, nParam3,
+    /// :220                   DeliveryTime = GetTickCount() + dwDelay,
+    /// :221                   LateDelivery = true, Buff = sMsg }
+    /// :225   sendMessage.ActorId = Messages.RM_STRUCK      // 语义载体，不是收件人 id
+    /// :228   MsgQueue.Enqueue(sendMessage, (byte)MessagePriority.Lowest)
+    /// ```
+    ///
+    /// **收件队列**是调用方 `this`（`SendStruckDelayMsg` 是 `targetObject.…` 调用的）；
+    /// `ActorId` 固定写 [`RM_STRUCK`]，到点后由 `Operate(RM_REFMESSAGE)` 判「自投」。
+    /// `!Ghost` 门在**收件者**上（与 `SendSelfDelayMsg` 同门）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_struck_delay_msg_7(
+        &mut self,
+        receiver_id: i32,
+        ident: u16,
+        w_param: i32,
+        n_param1: i32,
+        n_param2: i32,
+        n_param3: i32,
+        delay_ms: i64,
+    ) {
+        // `BaseObject.Message.cs:213` `if (!Ghost)`。
+        let blocked = match self.entities.get(receiver_id) {
+            None => true,
+            Some(e) => e.ghost,
+        };
+        if blocked {
+            return;
+        }
+        let deliver_at_ms = self.clock_ms + delay_ms;
+        let enqueue_seq = self.next_msg_order();
+        self.self_delay_msgs.push(SelfDelayMsg {
+            actor_id: receiver_id,
+            ident,
+            w_param,
+            n_param1,
+            n_param2,
+            n_param3,
+            msg: String::new(),
+            // `:225` `sendMessage.ActorId = Messages.RM_STRUCK`。
+            actor_ref: i32::from(RM_STRUCK),
+            deliver_at_ms,
+            enqueue_seq,
+            // `:228` `MessagePriority.Lowest`。
+            priority: MESSAGE_PRIORITY_LOWEST,
+        });
+    }
+
+    /// 7 参 `SendStruckDelayMsg(RM_REFMESSAGE, nPower, target.WAbil.HP,
+    /// target.WAbil.MaxHP, ActorId, "", dwDelay)` 的特化——三条生产调用点
+    /// （`_Attack` 200ms、`GasAttackMonster.GasAttack` 300ms、
+    /// `AnimalObject.HitMagAttackTarget` 200ms、`ArcherGuard.AttackTarger`
+    /// `max(|Δx|,|Δy|)*50+600`）共用。
+    ///
+    /// HP/MaxHP 是**发送时刻的快照**（oracle 在调用行读 `target.WAbil.HP/MaxHP`），
+    /// 到点广播的 `SM_STRUCK` 用的就是它们，不是到点时的实时值。
+    ///
+    /// **oracle 7 参调用点清单**（`src/**` 全扫，2026-10-18）：
+    /// - **已接**：`_Attack` 200ms（`BaseObject.Attack.cs:57`）、
+    ///   `AnimalObject.HitMagAttackTarget` 200ms（`AnimalObject.cs:377`；Rust 侧
+    ///   ScultureKing 已接，BoneKing/CowKing 未移植）、`GasAttackMonster.GasAttack` 300ms
+    ///   （`:30`）、`ArcherGuard.AttackTarger`（`:34`）与 `DualAxeMonster.FlyAxeAttack`
+    ///   （`:27`）的 `max(|Δx|,|Δy|)*50+600`。
+    /// - **登记（未移植/未接）**：`AttackDirect` 500ms（`BaseObject.Attack.cs:78`，函数未建模）、
+    ///   `ExplosionSpider.DoSelfExplosion` 700ms（类未移植）、`DoubleCriticalMonster` 300ms、
+    ///   `ElectronicScolpionMon` 200ms、`MagCowMonster` 300ms、`SpitSpider` 300ms（类未移植）、
+    ///   `FireballMonster.cs:41`（ident = `RM_DELAYMAGIC`，600ms，**MB-9 归属**，未接）。
+    pub fn send_struck_delay_msg_refmessage(
+        &mut self,
+        receiver_id: i32,
+        hitter_id: i32,
+        damage: i32,
+        delay_ms: i64,
+    ) {
+        // 卡开关：合成 golden 的 `_Attack` 桩不含该延时消息（见
+        // [`crate::world::World::refmessage_delay_enabled`]），缺省关闭以保持既有 golden
+        // 逐字节不变；生产宿主显式开启。
+        if !self.refmessage_delay_enabled() {
+            return;
+        }
+        let Some(t) = self.entities.get(receiver_id) else {
+            return;
+        };
+        if t.ghost {
+            return;
+        }
+        let hp = i32::from(t.hp);
+        let max_hp = i32::from(t.max_hp);
+        self.send_struck_delay_msg_7(
+            receiver_id,
+            RM_REFMESSAGE,
+            damage,
+            hp,
+            max_hp,
+            hitter_id,
+            delay_ms,
+        );
     }
 
     /// **P3-B3**：`BaseObject.UpdateDelayMsg`（`BaseObject.Message.cs:257-278`）的等价物。
@@ -1740,6 +1901,108 @@ impl World {
                                 mine: false,
                                 order: msg.enqueue_seq,
                             });
+                        out.push(SelfDelayOutcome {
+                            actor_id: msg.actor_id,
+                            ident: msg.ident,
+                            ..SelfDelayOutcome::default()
+                        });
+                    }
+                    // **卡 `openmir2-rm-refmessage-delay-layer`**：
+                    // `Operate(RM_REFMESSAGE)`（`BaseObject.Base.cs:699-710`）。
+                    //
+                    // ```text
+                    // :701 SendRefMsg(processMsg.ActorId, wParam, nParam1, nParam2, nParam3, Msg);
+                    // :702 if ((processMsg.ActorId == Messages.RM_STRUCK) && (Race != ActorRace.Play))
+                    // :704   SendMsg(processMsg.ActorId, wParam, nParam1, nParam2, nParam3, Msg);
+                    // ```
+                    //
+                    // ① `SendRefMsg` 的广播帧事件按**到点时刻**入
+                    //    [`crate::world::World::pending_refmessage_frames`]（宿主出 `SM_STRUCK`）。
+                    // ② `Race != Play` 时自投 `RM_STRUCK`：`SendMsg(int wIdent, …)`
+                    //    （`BaseObject.Message.cs:34-96`）入**自己**的队列，`DeliveryTime = 0`、
+                    //    优先级 `(byte)wIdent`（`(byte)8018 = 82`）、`ActorId = this.ActorId`。
+                    //    随后由本泵在同一轮里按堆序处理（见下方 `RM_STRUCK` 支）。
+                    RM_REFMESSAGE => {
+                        // 只有 7 参 `SendStruckDelayMsg` 载体（`ActorId == Messages.RM_STRUCK`）
+                        // 是 oracle 的真实生产路径；其它 `actor_ref` 的合成自投保持既有
+                        // `_ => {}` 语义（不产出 outcome，零帧面）。
+                        if msg.actor_ref == i32::from(RM_STRUCK) {
+                            let mut self_struck = false;
+                            if let Some((race, ghost)) =
+                                self.entities.get(msg.actor_id).map(|e| (e.race, e.ghost))
+                            {
+                                // **复验 F2**：oracle 的 `ProcessMonsters`/`ProcessHumans` 对 `Ghost` actor
+                                // **整只跳过**（`WorldServer.MonGen.cs:278`、`WorldServer.cs:648`）⇒ 其队列里的
+                                // `RM_REFMESSAGE` 永不被处理：既不自投、也不广播。这里同口径不产帧。
+                                if !ghost {
+                                    // `:701` `SendRefMsg(RM_STRUCK, wParam, nParam1, nParam2, nParam3, Msg)`。
+                                    self.pending_refmessage_frames.push(RefMessageFrame {
+                                        actor_id: msg.actor_id,
+                                        ident: msg.actor_ref as u16,
+                                        w_param: msg.w_param,
+                                        n_param1: msg.n_param1,
+                                        n_param2: msg.n_param2,
+                                        n_param3: msg.n_param3,
+                                        order: msg.enqueue_seq,
+                                    });
+                                }
+                                // `:702` `ActorId == RM_STRUCK && Race != ActorRace.Play`。
+                                if race != crate::entity::ACTOR_RACE_PLAY && !ghost {
+                                    let enqueue_seq = self.next_msg_order();
+                                    self.self_delay_msgs.push(SelfDelayMsg {
+                                        actor_id: msg.actor_id,
+                                        ident: RM_STRUCK,
+                                        w_param: msg.w_param,
+                                        n_param1: msg.n_param1,
+                                        n_param2: msg.n_param2,
+                                        n_param3: msg.n_param3,
+                                        msg: String::new(),
+                                        // `SendMsg(int)` 的 `ActorId = this.ActorId`。
+                                        actor_ref: msg.actor_id,
+                                        deliver_at_ms: now,
+                                        enqueue_seq,
+                                        // `(byte)wIdent`（`BaseObject.Message.cs:80`）。
+                                        priority: RM_STRUCK as u8,
+                                    });
+                                    self_struck = true;
+                                }
+                            }
+                            out.push(SelfDelayOutcome {
+                                actor_id: msg.actor_id,
+                                ident: msg.ident,
+                                ref_message: Some(RefMessageDelivery {
+                                    actor_id: msg.actor_id,
+                                    actor_ref: msg.actor_ref,
+                                    damage: msg.w_param,
+                                    hp: msg.n_param1,
+                                    max_hp: msg.n_param2,
+                                    hitter_id: msg.n_param3,
+                                    self_struck,
+                                }),
+                                ..SelfDelayOutcome::default()
+                            });
+                        }
+                    }
+                    // **卡 `openmir2-rm-refmessage-delay-layer`**：
+                    // `AnimalObject.Operate(RM_STRUCK)`（`AnimalObject.cs:114-127`）的
+                    // **延时载体**路径（由 `Operate(RM_REFMESSAGE)` 自投；`ActorId == ActorId`
+                    // 校验见 `:118`）。`CloneMonster.Operate` 覆写已在循环头的 Clone 门处理。
+                    //
+                    // `SetLastHiter(struckObject); Struck(struckObject);`（`:121-122`）——
+                    // `Struck` 的 `Random(6)`/`Random(300)` 与既有时序面同点数、同次序。
+                    RM_STRUCK => {
+                        // `if (processMsg.ActorId == ActorId && struckObject != null)`
+                        if msg.actor_ref == msg.actor_id {
+                            let hitter_id = msg.n_param3;
+                            if self.entities.get(msg.actor_id).is_some()
+                                && self.entities.get(hitter_id).is_some()
+                            {
+                                if let Some(v) = self.entities.get_mut(msg.actor_id) {
+                                    v.set_last_hiter(hitter_id, now);
+                                }
+                                crate::monai::animal_struck(self, msg.actor_id, hitter_id);
+                            }
+                        }
                         out.push(SelfDelayOutcome {
                             actor_id: msg.actor_id,
                             ident: msg.ident,
@@ -3668,5 +3931,191 @@ mod tests {
     fn spawn_clone_absent_caster_returns_none() {
         let mut w = World::new(8, 8);
         assert!(spawn_clone(&mut w, 999, 0).is_none());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    // 卡 `openmir2-rm-refmessage-delay-layer`（tier=R）：
+    // 7 参 `SendStruckDelayMsg`（`BaseObject.Message.cs:211-228`）的入队/到点语义。
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    /// 情景：受击怪（`race=90` 动物）+ 命中者 + 一个**不相邻**的当前目标
+    /// （让 `Struck` 的 `TargetCret != null && !GetAttackDir(...)` 门成立，抽 `Random(6)`）。
+    fn refmsg_scene(race: u8) -> (World, i32, i32) {
+        let mut w = World::new(16, 16);
+        w.enable_refmessage_delay();
+        let mut victim = Entity::new(0, "victim".to_string(), 10, 10);
+        victim.race = race;
+        victim.hp = 70;
+        victim.max_hp = 100;
+        let victim_id = w.add_entity(victim);
+        let mut hitter = Entity::new(0, "hitter".to_string(), 11, 10);
+        hitter.race = crate::entity::ACTOR_RACE_PLAY;
+        let hitter_id = w.add_entity(hitter);
+        let mut far = Entity::new(0, "far".to_string(), 15, 15);
+        far.race = crate::entity::ACTOR_RACE_MONSTER;
+        let far_id = w.add_entity(far);
+        w.entities.get_mut(victim_id).unwrap().ai.target_creature = Some(far_id);
+        (w, victim_id, hitter_id)
+    }
+
+    /// RNG 末态回放：从 `before` 按 `maxes` 逐抽取数后应与 `after` 逐字节同态。
+    fn refmsg_replay(before: &mir2_shared::rng::RandomNumber, maxes: &[i32]) -> String {
+        let mut probe = before.clone();
+        for &m in maxes {
+            let _ = probe.random_below(m);
+        }
+        format!("{probe:?}")
+    }
+
+    /// **判据 1**：7 参入队的**参数字段**（ident / ActorId 语义载体 / 5 个载荷 / 到点 / 优先级）。
+    #[test]
+    fn refmsg_7param_enqueue_fields() {
+        let (mut w, victim, hitter) = refmsg_scene(crate::entity::ACTOR_RACE_MONSTER);
+        w.clock_ms = 1000;
+        w.send_struck_delay_msg_7(victim, RM_REFMESSAGE, 9, 70, 100, hitter, 250);
+        let m = w
+            .self_delay_msgs
+            .peek(victim)
+            .expect("7 参 SendStruckDelayMsg 必须入受击者队列");
+        assert_eq!(m.actor_id, victim, "收件队列 = 调用方 this（受击者）");
+        assert_eq!(m.ident, RM_REFMESSAGE, "wIdent = RM_REFMESSAGE");
+        assert_eq!(
+            m.actor_ref,
+            i32::from(RM_STRUCK),
+            "SendMessage.ActorId = Messages.RM_STRUCK（语义载体，不是收件人 id）"
+        );
+        assert_eq!(m.w_param, 9, "wParam = nPower");
+        assert_eq!(m.n_param1, 70, "nParam1 = WAbil.HP 快照");
+        assert_eq!(m.n_param2, 100, "nParam2 = WAbil.MaxHP 快照");
+        assert_eq!(m.n_param3, hitter, "nParam3 = 命中者 ActorId");
+        assert_eq!(m.deliver_at_ms, 1250, "DeliveryTime = now + dwDelay");
+        assert_eq!(
+            m.priority, MESSAGE_PRIORITY_LOWEST,
+            "7 参重载固定 MessagePriority.Lowest"
+        );
+    }
+
+    /// **判据 2**：到点前不投；到点后**自投一次**（`RM_REFMESSAGE → RM_STRUCK`），再投为空。
+    #[test]
+    fn refmsg_not_delivered_before_due_delivers_once() {
+        let (mut w, victim, hitter) = refmsg_scene(crate::entity::ACTOR_RACE_MONSTER);
+        w.clock_ms = 0;
+        w.send_struck_delay_msg_refmessage(victim, hitter, 9, 200);
+        assert!(w.deliver_self_delay_msgs().is_empty(), "t=0 未到点");
+        w.clock_ms = 199;
+        assert!(w.deliver_self_delay_msgs().is_empty(), "t=199 未到点");
+        assert_eq!(w.self_delay_msgs.len(), 1, "未到点 ⇒ 仍在队列");
+        w.clock_ms = 200;
+        let outs = w.deliver_self_delay_msgs();
+        // 一次泵内两条消息：`RM_REFMESSAGE` 本体 + 它自投的即时 `RM_STRUCK`。
+        assert_eq!(outs.len(), 2, "到点：RM_REFMESSAGE + 自投 RM_STRUCK");
+        assert_eq!(
+            outs.iter().filter(|o| o.ref_message.is_some()).count(),
+            1,
+            "RM_REFMESSAGE 只到点一次"
+        );
+        assert_eq!(
+            outs.iter().filter(|o| o.ident == RM_STRUCK).count(),
+            1,
+            "自投 RM_STRUCK 恰好一次"
+        );
+        let d = outs[0].ref_message.expect("RM_REFMESSAGE 投递记录");
+        assert_eq!(d.actor_id, victim);
+        assert_eq!(d.damage, 9);
+        assert_eq!((d.hp, d.max_hp), (70, 100), "HP/MaxHP 是发送时刻快照");
+        assert_eq!(d.hitter_id, hitter);
+        assert!(d.self_struck, "Race != Play ⇒ 自投 RM_STRUCK");
+        assert!(
+            w.deliver_self_delay_msgs().is_empty(),
+            "同一条消息不得二次投递"
+        );
+        assert_eq!(
+            w.entities.get(victim).unwrap().last_hiter,
+            Some(hitter),
+            "自投 RM_STRUCK 必须 SetLastHiter"
+        );
+    }
+
+    /// **判据 3**：`Race == Play` ⇒ 只广播（`SendRefMsg(RM_STRUCK, …)`）**不自投**、不抽数。
+    #[test]
+    fn refmsg_player_target_no_self_struck() {
+        let (mut w, victim, hitter) = refmsg_scene(crate::entity::ACTOR_RACE_PLAY);
+        w.clock_ms = 0;
+        w.send_struck_delay_msg_refmessage(victim, hitter, 9, 200);
+        let before = w.rng.clone();
+        w.clock_ms = 200;
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1);
+        let d = outs[0].ref_message.expect("投递记录");
+        assert!(!d.self_struck, "Race == Play ⇒ 不自投 RM_STRUCK");
+        assert!(w.self_delay_msgs.is_empty(), "不得残留自投消息");
+        assert_eq!(
+            w.pending_refmessage_frames.len(),
+            1,
+            "广播帧事件仍必须产生（SendRefMsg 在判 Race 之前）"
+        );
+        assert_eq!(
+            format!("{:?}", w.rng),
+            format!("{before:?}"),
+            "Race == Play 路径零抽数"
+        );
+        assert_eq!(
+            w.entities.get(victim).unwrap().last_hiter,
+            None,
+            "不自投 ⇒ 不 SetLastHiter"
+        );
+    }
+
+    /// **判据 4**：`Struck` 的抽数次数与顺序（固定种子）——`Random(6)` 后 `Random(300)`。
+    ///
+    /// 场景：`TargetCret` 不相邻（`Random(6)` 门成立）+ `Animal`（race 90）⇒ `Random(300)`。
+    #[test]
+    fn refmsg_struck_draws_random6_then_random300() {
+        let (mut w, victim, hitter) = refmsg_scene(90);
+        w.clock_ms = 0;
+        w.send_struck_delay_msg_refmessage(victim, hitter, 9, 200);
+        let before = w.rng.clone();
+        w.clock_ms = 200;
+        let outs = w.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 2, "RM_REFMESSAGE + 自投 RM_STRUCK");
+        assert!(outs[0].ref_message.unwrap().self_struck);
+        let expect = refmsg_replay(&before, &[6, 300]);
+        assert_eq!(
+            format!("{:?}", w.rng),
+            expect,
+            "Struck 取数序必须是 Random(6) → Random(300)（同点同次）"
+        );
+        // 阴性对照：同场景再抽一次会分叉（证明上面的等式确实钉住了 2 次抽取）。
+        let mut probe = before.clone();
+        let _ = probe.random_below(6);
+        assert_ne!(format!("{probe:?}"), expect, "只抽 Random(6) 不得同态");
+    }
+
+    /// **复验 F2 回归**：入队后、到点前变 Ghost 的 actor —— oracle 的 `ProcessMonsters`/`ProcessHumans`
+    /// 整只跳过 Ghost ⇒ 其队列里的 `RM_REFMESSAGE` 永不被处理，**既不广播也不自投**。
+    ///
+    /// 牙：去掉到点处的 `if !ghost` 门 ⇒ 本用例红。
+    #[test]
+    fn refmsg_ghost_at_due_produces_no_frame() {
+        let (mut w, victim, hitter) = refmsg_scene(crate::entity::ACTOR_RACE_MONSTER);
+        w.send_struck_delay_msg_refmessage(victim, hitter, 9, 200);
+        assert_eq!(w.self_delay_msgs.len(), 1, "入队时未 Ghost ⇒ 正常入队");
+        // 到点前变 Ghost。
+        w.entities.get_mut(victim).unwrap().ghost = true;
+        w.clock_ms += 200;
+        let _ = w.deliver_self_delay_msgs();
+        assert!(
+            w.pending_refmessage_frames.is_empty(),
+            "到点时已 Ghost ⇒ 不得产广播帧（oracle 整只跳过）"
+        );
+    }
+
+    /// **判据 5**：Ghost 收件者不入队（`SendStruckDelayMsg` 的 `if (!Ghost)`）。
+    #[test]
+    fn refmsg_ghost_receiver_not_enqueued() {
+        let (mut w, victim, hitter) = refmsg_scene(crate::entity::ACTOR_RACE_MONSTER);
+        w.entities.get_mut(victim).unwrap().ghost = true;
+        w.send_struck_delay_msg_refmessage(victim, hitter, 9, 200);
+        assert!(w.self_delay_msgs.is_empty(), "Ghost ⇒ 不入队");
     }
 }
