@@ -904,8 +904,49 @@ async fn create_ablity_status(
     Ok(())
 }
 
+/// C# `PlayDataStorage.CreateItemAttr`（`Add.cs::CreateItemAttr`）：建角物品表的属性 INSERT。
+///
+/// **oracle 的门**：`null` 与 `MakeIndex <= 0` 的物品一律跳过；其余逐条 INSERT
+/// `VALUE0..VALUE13 = Desc[0..13]`。三条建角物品路径（`characters_item` /
+/// `characters_bagitem` / `characters_storageitem`）传入的都是 `new UserItem()`
+/// （`MakeIndex=0`）⇒ **一行也不插**。这是 oracle 侧既有缺陷（G-01），本批按等价原则
+/// **照搬门与调用点**，不做 upsert 修正（修正会偏离 oracle，另立批次）。
+pub(crate) async fn create_item_attr(
+    conn: &mut MySqlConnection,
+    player_id: i64,
+    items: &[Option<ServerUserItem>],
+) -> Result<()> {
+    let mut statements = Vec::new();
+    for item in items.iter().flatten() {
+        // C# `if (userItems[i] == null || userItems[i].MakeIndex <= 0) continue;`
+        if item.make_index <= 0 {
+            continue;
+        }
+        let desc = item.desc.clone().unwrap_or_else(|| vec![0; 14]);
+        let v: Vec<u8> = (0..14).map(|i| desc.get(i).copied().unwrap_or(0)).collect();
+        statements.push(format!(
+            "INSERT INTO characters_item_attr (PlayerId,MakeIndex,VALUE0,VALUE1,VALUE2,VALUE3,VALUE4,VALUE5,VALUE6,VALUE7,VALUE8,VALUE9,VALUE10,VALUE11,VALUE12,VALUE13) VALUES ({player_id},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{});",
+            item.make_index, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13]
+        ));
+    }
+    if statements.is_empty() {
+        return Ok(());
+    }
+    // C# 用 string.Join 把多条语句拼成一个多语句命令执行；这里在同一连接/事务上
+    // 逐条按序执行，语句集合与顺序一致（失败时已执行的语句保留，与多语句批处理同口径）。
+    for sql in statements {
+        sqlx::query(&sql)
+            .execute(&mut *conn)
+            .await
+            .context("插入 characters_item_attr 失败")?;
+    }
+    Ok(())
+}
+
 /// C# `CreateUseItem`/`CreateBagItem`/`CreateStorageItem` 在「新角色」下的等价物：
-/// 新角色这些表还没有行 ⇒ `oldItems` 全空 ⇒ 每个槽都插一行全 0；`CreateItemAttr` 因 `MakeIndex=0` 无行。
+/// 新角色这些表还没有行 ⇒ `oldItems` 全空 ⇒ 每个槽都插一行全 0；随后照 oracle 调
+/// `CreateItemAttr(..., addItem)`——`addItem` 全是 `new UserItem()`（`MakeIndex=0`）
+/// ⇒ 同一个门把全部槽位挡掉，**attr 表零行**（G-01，照搬）。
 async fn create_empty_items(
     conn: &mut MySqlConnection,
     player_id: i64,
@@ -915,18 +956,28 @@ async fn create_empty_items(
     let sql = format!(
         "INSERT INTO {table} (PlayerId, Position, MakeIndex, StdIndex, Dura, DuraMax) VALUES (?, ?, 0, 0, 0, 0);"
     );
+    let mut items: Vec<Option<ServerUserItem>> = Vec::new();
     for pos in 0..count {
-        if let Err(e) = sqlx::query(&sql)
+        match sqlx::query(&sql)
             .bind(player_id)
             .bind(pos)
             .execute(&mut *conn)
             .await
         {
-            log::error(&format!(
-                "[Exception] PlayDataStorage.CreateItem({table}): {e:#}"
-            ));
-            break;
+            Ok(_) => items.push(Some(ServerUserItem::csharp_new())),
+            Err(e) => {
+                log::error(&format!(
+                    "[Exception] PlayDataStorage.CreateItem({table}): {e:#}"
+                ));
+                break;
+            }
         }
+    }
+    if let Err(e) = create_item_attr(conn, player_id, &items).await {
+        // C# `CreateItemAttr` 自带 try/catch（调用点外层还有一层）：只打日志、不冒泡。
+        log::error(&format!(
+            "[Exception] PlayDataStorage.CreateItemAttr({table}): {e:#}"
+        ));
     }
     Ok(())
 }
@@ -1053,5 +1104,237 @@ mod tests {
         let old = vec![Some(ServerUserItem::csharp_new())];
         let new = vec![None];
         assert!(comparer_user_item(&new, &old).is_err());
+    }
+}
+
+#[cfg(test)]
+mod item_attr_tests {
+    //! 构造级验收（G-01；卡 `openmir2-persist-item-attr-and-gold`）：
+    //! a) `create_item_attr` 对 `MakeIndex > 0` 的物品按 oracle 门 INSERT，14 列 = `Desc[0..13]`；
+    //! b) `None` / `MakeIndex = 0`（建角全空槽）零插入；
+    //! c) `query_item_attr` 的行序双索引与 oracle 同（第 n 行 → 槽 n 的 `Desc[n]`）；
+    //! d) 存档往返：`save_item_table` 的 `update_item_attr` 更新 14 列，回读按 oracle 映射。
+    //!
+    //! 跑法（需本机 MySQL；默认 `root` 空口令、库名 `mir2_test_pattr`，测试自建自删）：
+    //! `cargo test -p db-srv --bins item_attr_tests -- --ignored --nocapture`
+
+    use super::{
+        byte_col, create_empty_items, create_item_attr, get_item_slots, query_item_attr,
+        save_item_table,
+    };
+    use mir2_storage::playerdata::ServerUserItem;
+    use mir2_storage::LegacyDsn;
+    use sqlx::mysql::MySqlConnection;
+    use sqlx::{Connection, Row};
+
+    const DEFAULT_DSN: &str = "server=127.0.0.1;uid=root;pwd=;database=mir2_test_pattr;";
+
+    fn ddl_for(dump: &str, table: &str) -> String {
+        let marker = format!("CREATE TABLE `{table}` ");
+        let start = dump
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{table} 建表语句缺失"));
+        let rest = &dump[start..];
+        let engine = rest.find(") ENGINE").expect("建表语句缺 ENGINE 尾");
+        let semi = rest[engine..].find(';').expect("建表语句缺分号");
+        rest[..=engine + semi].to_string()
+    }
+
+    async fn setup(dsn: &LegacyDsn) -> MySqlConnection {
+        let admin = LegacyDsn {
+            database: "mysql".to_string(),
+            ..dsn.clone()
+        };
+        let mut conn = MySqlConnection::connect(&admin.to_sqlx_url())
+            .await
+            .expect("连测试 MySQL 失败（本测试需本机 MySQL）");
+        sqlx::query(&format!("DROP DATABASE IF EXISTS `{}`", dsn.database))
+            .execute(&mut conn)
+            .await
+            .expect("删测试库失败");
+        sqlx::query(&format!(
+            "CREATE DATABASE `{}` CHARACTER SET utf8 COLLATE utf8_general_ci",
+            dsn.database
+        ))
+        .execute(&mut conn)
+        .await
+        .expect("建测试库失败");
+        let dump = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../sql/mir2_db.sql"
+        ))
+        .expect("读 sql/mir2_db.sql 失败");
+        let mut conn = MySqlConnection::connect(&dsn.to_sqlx_url())
+            .await
+            .expect("连测试库失败");
+        for table in ["characters_item", "characters_item_attr"] {
+            let ddl = ddl_for(&dump, table);
+            sqlx::query(&ddl)
+                .execute(&mut conn)
+                .await
+                .unwrap_or_else(|e| panic!("建表 {table} 失败: {e}"));
+        }
+        conn
+    }
+
+    fn item(make_index: i32, desc: [u8; 14]) -> ServerUserItem {
+        ServerUserItem {
+            make_index,
+            index: 7,
+            dura: 8,
+            dura_max: 9,
+            desc: Some(desc.to_vec()),
+            ..ServerUserItem::csharp_new()
+        }
+    }
+
+    fn seq(start: u8) -> [u8; 14] {
+        let mut d = [0u8; 14];
+        for (i, v) in d.iter_mut().enumerate() {
+            *v = start + u8::try_from(i).expect("i < 14");
+        }
+        d
+    }
+
+    async fn attr_rows(conn: &mut MySqlConnection, player_id: i64) -> Vec<Vec<i64>> {
+        let rows = sqlx::query("SELECT * FROM characters_item_attr WHERE PlayerId=? ORDER BY Id")
+            .bind(player_id)
+            .fetch_all(&mut *conn)
+            .await
+            .expect("读 characters_item_attr 失败");
+        rows.iter()
+            .map(|r| {
+                (0..14)
+                    .map(|i| i64::from(byte_col(r, &format!("VALUE{i}")).expect("VALUE 列")))
+                    .collect()
+            })
+            .collect()
+    }
+
+    async fn attr_count(conn: &mut MySqlConnection, player_id: i64) -> i64 {
+        let row = sqlx::query("SELECT COUNT(*) AS c FROM characters_item_attr WHERE PlayerId=?")
+            .bind(player_id)
+            .fetch_one(&mut *conn)
+            .await
+            .expect("计数失败");
+        row.try_get::<i64, _>("c").expect("c 列")
+    }
+
+    fn desc_values(desc: &[u8; 14]) -> Vec<i64> {
+        desc.iter().map(|v| i64::from(*v)).collect()
+    }
+
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；MIR2_TEST_DB_DSN 可覆盖，库名必须以 mir2_test_ 开头"]
+    #[allow(clippy::too_many_lines)]
+    async fn create_gate_query_mapping_and_save_roundtrip_match_oracle() {
+        let text = std::env::var("MIR2_TEST_DB_DSN").unwrap_or_else(|_| DEFAULT_DSN.to_string());
+        let dsn = LegacyDsn::parse(&text).expect("测试 DSN 非法");
+        assert!(
+            dsn.database.starts_with("mir2_test_"),
+            "拒绝写非测试库：{}",
+            dsn.database
+        );
+        let mut conn = setup(&dsn).await;
+
+        // ---- a) 有 MakeIndex 的物品：INSERT 行存在，14 列逐列等于 Desc ----
+        let pid_a = 9001;
+        let d_a = seq(10);
+        let items_a = vec![None, Some(item(0, seq(90))), Some(item(101, d_a))];
+        create_item_attr(&mut conn, pid_a, &items_a)
+            .await
+            .expect("create_item_attr 失败");
+        assert_eq!(
+            attr_rows(&mut conn, pid_a).await,
+            vec![desc_values(&d_a)],
+            "14 列必须等于 Desc[0..13]"
+        );
+
+        // ---- b) NULL / MakeIndex=0：与 oracle 的门一致，零插入 ----
+        let pid_b = 9002;
+        let empty = vec![None, Some(ServerUserItem::csharp_new())];
+        create_item_attr(&mut conn, pid_b, &empty)
+            .await
+            .expect("create_item_attr 失败");
+        assert_eq!(
+            attr_count(&mut conn, pid_b).await,
+            0,
+            "空槽/无属性物品不得进表"
+        );
+        // 建角路径（create_empty_items）同样不得产生 attr 行
+        let pid_creation = 9003;
+        create_empty_items(&mut conn, pid_creation, "characters_item", 13)
+            .await
+            .expect("create_empty_items 失败");
+        assert_eq!(
+            attr_count(&mut conn, pid_creation).await,
+            0,
+            "建角全空槽不得产生 attr 行"
+        );
+
+        // ---- c) 行序双索引：第 n 行只写 槽 n 的 Desc[n]（oracle 既有 bug） ----
+        let pid_c = 9004;
+        let rows_c = vec![
+            Some(item(500, seq(10))),
+            Some(item(500, seq(30))),
+            Some(item(500, seq(50))),
+        ];
+        create_item_attr(&mut conn, pid_c, &rows_c)
+            .await
+            .expect("create_item_attr 失败");
+        assert_eq!(attr_count(&mut conn, pid_c).await, 3);
+        // 回写目标槽位必须从全 0 的 Desc 开始（否则分不清「原始值」与「回写值」）。
+        let mut slots: Vec<Option<ServerUserItem>> =
+            (0..3).map(|_| Some(item(500, [0u8; 14]))).collect();
+        query_item_attr(&mut conn, pid_c, &mut slots)
+            .await
+            .expect("query_item_attr 失败");
+        let desc = |i: usize| slots[i].as_ref().unwrap().desc.clone().unwrap();
+        assert_eq!(desc(0)[0], 10, "第 0 行 → 槽 0 的 Desc[0]");
+        assert_eq!(desc(1)[1], 31, "第 1 行 → 槽 1 的 Desc[1]");
+        assert_eq!(desc(2)[2], 52, "第 2 行 → 槽 2 的 Desc[2]");
+        // 证明下标取的是行序而不是「整行 14 列写回同一槽」
+        assert_eq!(desc(0)[1], 0, "槽 0 的 Desc[1] 必须保持 0（oracle 不写）");
+        assert_eq!(desc(1)[0], 0, "槽 1 的 Desc[0] 必须保持 0（oracle 不写）");
+        assert_eq!(desc(2)[13], 0, "槽 2 的 Desc[13] 必须保持 0（oracle 不写）");
+
+        // ---- d) 存档往返：UPDATE 写全部 14 列；回读按 oracle 映射 ----
+        let pid_d = 9005;
+        let d_saved = seq(40);
+        create_empty_items(&mut conn, pid_d, "characters_item", 13)
+            .await
+            .expect("create_empty_items 失败");
+        // 先按 oracle 的 INSERT 门造出一行（模拟「已有 attr 行」）
+        create_item_attr(&mut conn, pid_d, &[Some(item(101, seq(20)))])
+            .await
+            .expect("create_item_attr 失败");
+        // 13 槽全部 Some（C# HumItems 从库里读出来就是 13 个 Some）；槽 0 换成带属性的物品
+        let mut new_items: Vec<Option<ServerUserItem>> = (0..13)
+            .map(|_| Some(ServerUserItem::csharp_new()))
+            .collect();
+        new_items[0] = Some(item(101, d_saved));
+        save_item_table(&mut conn, pid_d, "characters_item", &new_items, 13)
+            .await
+            .expect("save_item_table 失败");
+        assert_eq!(
+            attr_rows(&mut conn, pid_d).await,
+            vec![desc_values(&d_saved)],
+            "存档必须 UPDATE 全部 14 列"
+        );
+        let loaded = get_item_slots(&mut conn, pid_d, "characters_item", 13)
+            .await
+            .expect("get_item_slots 失败");
+        assert_eq!(loaded[0].as_ref().unwrap().make_index, 101);
+        let ld = loaded[0].as_ref().unwrap().desc.clone().unwrap();
+        assert_eq!(ld[0], 40, "oracle 只把 VALUE0 写回 Desc[0]");
+        assert!(
+            ld[1..].iter().all(|v| *v == 0),
+            "oracle 的行序双索引不写 Desc[1..]: {ld:?}"
+        );
+
+        sqlx::query(&format!("DROP DATABASE IF EXISTS `{}`", dsn.database))
+            .execute(&mut conn)
+            .await
+            .expect("清理测试库失败");
     }
 }

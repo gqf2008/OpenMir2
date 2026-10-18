@@ -522,16 +522,32 @@ impl Db {
                 "INSERT INTO {table} (PlayerId, Position, MakeIndex, StdIndex, Dura, DuraMax) \
                  VALUES (?, ?, 0, 0, 0, 0)"
             );
+            let mut items: Vec<Option<mir2_storage::playerdata::ServerUserItem>> = Vec::new();
             for pos in 0..count {
-                if let Err(e) = sqlx::query(&sql)
+                match sqlx::query(&sql)
                     .bind(player_id)
                     .bind(pos)
                     .execute(&mut *tx)
                     .await
                 {
-                    crate::log::warn(&format!("建角附属表 {table} 写入失败（C# 同样吞掉）: {e}"));
-                    break;
+                    Ok(_) => {
+                        items.push(Some(mir2_storage::playerdata::ServerUserItem::csharp_new()));
+                    }
+                    Err(e) => {
+                        crate::log::warn(&format!(
+                            "建角附属表 {table} 写入失败（C# 同样吞掉）: {e}"
+                        ));
+                        break;
+                    }
                 }
+            }
+            // C# `CreateUseItem`/`CreateBagItem`/`CreateStorageItem` 在插完空行后调用
+            // `CreateItemAttr`；`addItem` 全是 `new UserItem()`（`MakeIndex=0`）⇒ 门把它们
+            // 全部挡掉（G-01 的 oracle 既有行为，照搬）。
+            if let Err(e) = crate::playdata::create_item_attr(&mut tx, player_id, &items).await {
+                crate::log::warn(&format!(
+                    "建角附属表 {table} CreateItemAttr 写入失败（C# 同样吞掉）: {e}"
+                ));
             }
         }
         tx.commit().await.context("提交建角事务失败")?;
