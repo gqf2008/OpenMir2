@@ -2,18 +2,18 @@ tick 1 clock 200
 ent 1 0 10 10 200 10 0 vis
 tick 2 clock 400
 ent 1 0 10 10 200 10 0 vis
-ent 2 0 12 10 3 1 0 vis 1:2
+ent 2 0 12 10 3 1 0 vis
 tick 3 clock 600
 ent 1 0 11 10 200 10 0 vis
-ent 2 0 12 10 3 1 0 vis 1:1
+ent 2 0 12 10 3 1 0 vis
 tick 4 clock 800
 ent 1 0 11 10 200 10 0 vis
-ent 2 0 12 10 3 1 0 vis 1:1
+ent 2 0 12 10 3 1 0 vis
 tick 5 clock 1000
 ent 1 0 11 10 200 10 0 vis
-ent 2 0 12 10 3 1 0 vis 1:1
+ent 2 0 12 10 3 1 0 vis
 tick 6 clock 1200
-ent 1 0 11 10 200 10 0 vis 1:2
+ent 1 0 11 10 200 10 0 vis 1:2 2:2
 ent 2 0 12 10 0 1 0 vis
 death 2 0 192 -1 0
 tick 7 clock 1400

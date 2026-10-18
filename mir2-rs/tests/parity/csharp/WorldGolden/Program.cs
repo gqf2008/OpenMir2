@@ -1,4 +1,4 @@
-// M2 下半程金标准驱动：**会话进世界 + 掉落系统 +（本批新增）战斗结算**。
+﻿// M2 下半程金标准驱动：**会话进世界 + 掉落系统 +（本批新增）战斗结算**。
 // 对齐 Rust `crate::world`；场景 `session`（无战斗）与 `combat`（含 `attack`）共用本驱动。
 //
 // 顺序契约（两侧写死）：
@@ -7,8 +7,12 @@
 //      → 死亡结算（掉落落地 + `KillFunc` 发经验）→ 按插入顺序 AOI → 输出；
 //      AOI 段：玩家（Race==Play）按 oracle `WorldServer.cs:663` 的
 //      `(now - SearchTick) > SearchTime`（`SearchTime=1000`，`PlayObject.cs:900`）节流，
-//      Ghost 玩家不扫（`:708-711`）；死亡走 `SearchViewRangeDeath`；非玩家保持每 tick 扫描
-//      （对应 Rust 侧本片不动的怪/卫士/NPC/商人扫描节拍）。
+//      Ghost 玩家不扫（`:708-711`）；死亡走 `SearchViewRangeDeath`；非玩家只有
+//      `IsSlave || Race in {11,112,254}` 自扫（`WorldServer.MonGen.cs:300-313`），
+//      其余怪的视野由玩家的 `RM_UPDATEVIEWRANGE` 投递（`PlayObject.cs:3129-3139`），
+//      节流消费在怪物自己的 `BaseObject.Run()` 里（`MonsterObject.cs:136-185`）。
+//      本夹具与 parity 驱动同样**不启用怪物 AI** ⇒ 投递队列不消费（与 Rust 侧
+//      `World::tick` + `ai_enabled=false` 逐字节一致）。
 //   2. 怪物掉落在地图**生成时**预算（`WorldServer.MonGen.cs:440` 的时机）；
 //   3. 死亡时走 oracle `DieDropItems` 的掉落结算：`GetDropPosition` 只做格子扫描，
 //      **不**把物品加进地图（`Envir.AddItemToMap` 首行 `MapItem.ItemId == 0` 门恒真 ⇒ 掉落恒不落地）。
@@ -288,7 +292,10 @@ internal static class Program
                         if (actors.TryGetValue(cmd.id, out ActorStub ea))
                         {
                             int mapId = envirOf[cmd.id];
-                            envirs[mapId].AddMapObject(ea.CurrX, ea.CurrY, CellType.Play, cmd.id, ea);
+                            // `CellType` 是对象自己的属性（`AnimalObject.cs:86` = Monster、
+                            // `PlayObject` = Play）——oracle `AddToMap()` 用它登记；
+                            // 与 Rust `World::enter_world` 的 `entity_cell_type` 同口径。
+                            envirs[mapId].AddMapObject(ea.CurrX, ea.CurrY, ea.CellType, cmd.id, ea);
                         }
                         break;
                     case "spawn":
@@ -406,19 +413,26 @@ internal static class Program
                 {
                     a.SearchViewRangeDeath();
                 }
-                else if (a.Race == 0 && a.Ghost)
+                else if (a.Race == 0)
                 {
                     // oracle 的 Ghost 玩家已从 `PlayObjectList` 移除、不再 `Run`
                     // （`WorldServer.cs:708-711`）⇒ 不做 `SearchViewRange`。
-                }
-                else if (a.Race != 0 || (VirtualClock.Now - a.SearchTick) > a.SearchTime)
-                {
-                    // `WorldServer.cs:663`：玩家严格大于 `SearchTime` 才扫；
-                    // `playObject.SearchTick = HUtil32.GetTickCount();` 先刷新再扫。
-                    if (a.Race == 0)
+                    if (!a.Ghost && (VirtualClock.Now - a.SearchTick) > a.SearchTime)
                     {
+                        // `WorldServer.cs:663`：玩家严格大于 `SearchTime` 才扫；
+                        // `playObject.SearchTick = HUtil32.GetTickCount();` 先刷新再扫。
                         a.SearchTick = (int)VirtualClock.Now;
+                        a.SearchViewRange();
                     }
+                }
+                else if (!a.Ghost && (a.IsSlave || a.Race == 11 || a.Race == 112 || a.Race == 254)
+                    && (VirtualClock.Now - a.SearchTick) > a.SearchTime)
+                {
+                    // `WorldServer.MonGen.cs:300-313`：非玩家只有
+                    // `IsSlave || Race in {Guard(11), ArcherGuard(112), SlaveMonster(254)}`
+                    // 在 `(now - SearchTick) > SearchTime` 后自扫；其余怪**不主动全扫**
+                    // （被动视野由玩家的 `RM_UPDATEVIEWRANGE` 投递）。
+                    a.SearchTick = (int)VirtualClock.Now;
                     a.SearchViewRange();
                 }
             }
@@ -508,7 +522,8 @@ internal static class Program
         a.SpeedPoint = (byte)ms.speed_point;
         a.FightExp = ms.exp; // `WorldServer.MonGen.cs:893`: monsterActor.FightExp = monster.Exp
         RegisterActor(actors, envirOf, order, a, ms.map);
-        envirs[ms.map].AddMapObject(ms.x, ms.y, CellType.Play, ms.id, a);
+        // `CreateMonster` 显式用 `CellType.Monster`（`WorldServer.MonGen.cs:788`）。
+        envirs[ms.map].AddMapObject(ms.x, ms.y, a.CellType, ms.id, a);
     }
 
     private static void ApplyEnter(List<EnvirnomentStub> envirs, Dictionary<int, ActorStub> actors,

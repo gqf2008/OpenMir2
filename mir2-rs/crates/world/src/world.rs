@@ -16,7 +16,7 @@ use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
 use mir2_shared::rng::RandomNumber;
 use mir2_world_bevy::{advance_clock_system, TickClock, TickOwnerThread, TickRunner};
 
-use crate::aoi::{search_view_range, search_view_range_death, CELL_OBJECT_EXPIRE_MS};
+use crate::aoi::{search_view_range_death, search_view_range_with_updates, CELL_OBJECT_EXPIRE_MS};
 use crate::buff::{
     BuffSysMsg, BuffSystem, BuffTickOutcome, BuffType, BUFF_EPOCH_MS, BUFF_PASSES_PER_TICK,
     BUFF_PASS_INTERVAL_MS, MAX_STATUS_ATTRIBUTE,
@@ -4070,43 +4070,62 @@ impl World {
                         self.clear_drop_on_floor_item_time,
                     );
                 } else {
-                    // **玩家 `SearchViewRange` 的调用节拍**（oracle `WorldServer.cs:663-667`）：
-                    // `if ((HUtil32.GetTickCount() - playObject.SearchTick) > playObject.SearchTime)`
-                    // `{ SearchTick = now; SearchViewRange(); GameTimeChanged(); }` —— 严格大于，
-                    // 玩家 `SearchTime = 1000` 常量（`PlayObject.cs:900`，覆盖 `BaseObject.cs:441`
-                    // 的 `Random(2000)+2000`）。`SearchTick` 由 ctor 等价点按落图时刻初始化
-                    // （`BaseObject.cs:442`/`PlayObject.cs:901`）。世界的 200ms tick 下 ⇒ 1200ms
-                    // 才命中（`>1000`），即同一窗口内最多扫一次。
+                    // **本 tick 是否自扫（oracle 的调用点决定）**：
                     //
-                    // Ghost 玩家在 oracle 里已从 `PlayObjectList` 移除（`WorldServer.cs:708-711`），
-                    // 不再 `Run`/`SearchViewRange` ⇒ 本骨架同样不扫。死亡支仍走
-                    // `search_view_range_death`（其语义本片不动）。
+                    // 1. 玩家（`WorldServer.cs:663-667`）：
+                    //    `if ((GetTickCount() - SearchTick) > SearchTime) { SearchTick = now;
+                    //    SearchViewRange(); GameTimeChanged(); }` —— 严格大于，`SearchTime = 1000`
+                    //    常量（`PlayObject.cs:900`）。200ms tick 下 1200ms 才命中。
+                    //    Ghost 玩家已从 `PlayObjectList` 移除（`WorldServer.cs:708-711`）⇒ 不扫。
+                    // 2. 非玩家只有 `IsSlave || Race in {Guard(11), ArcherGuard(112),
+                    //    SlaveMonster(254)}`（`WorldServer.MonGen.cs:300-313`）在
+                    //    `(currentTick - SearchTick) > SearchTime` 门后自扫；**其余怪物不主动全扫**
+                    //    —— 被动视野由玩家扫描末尾的 `RM_UPDATEVIEWRANGE` 投递
+                    //    （`PlayObject.cs:3130-3139` → `MonsterObject.cs:136-185`）。
+                    //    Ghost 怪在 `ProcessMonsters` 里整只跳过（`WorldServer.MonGen.cs:320-333`）。
+                    // 3. 固定 NPC / 商人：oracle 无 `SearchViewRange` 调用点 ⇒ 不自扫。
                     //
-                    // **非玩家 viewer（怪/卫士/NPC/商人）本片不动**：仍每 tick 扫描（另一张卡）。
+                    // 两个调用点都是「命中门 ⇒ 先 `SearchTick = now` 再扫」。
                     //
                     // `aoi_order` 仍记录每个实体的处理顺序（它是槽位顺序诊断，不是「实际扫了
-                    // 几次」的计数）；被节流跳过的玩家也入列，保持既有诊断契约逐字节不变。
-                    if let Some(e) = self.entities.get(*id) {
-                        if e.race == crate::entity::ACTOR_RACE_PLAY {
-                            if e.ghost {
-                                record.aoi_order.push(*id);
-                                continue;
-                            }
-                            if self.clock_ms - e.ai.search_tick <= e.ai.search_time {
-                                record.aoi_order.push(*id);
-                                continue;
-                            }
-                            // `playObject.SearchTick = HUtil32.GetTickCount();` —— 先刷新再扫。
-                            if let Some(e) = self.entities.get_mut(*id) {
-                                e.ai.search_tick = self.clock_ms;
-                            }
+                    // 几次」的计数）；被节流跳过/不自扫的实体也入列，保持既有诊断契约不变。
+                    let scan = match self.entities.get(*id) {
+                        Some(e) if e.race == crate::entity::ACTOR_RACE_PLAY => {
+                            !e.ghost && self.clock_ms - e.ai.search_tick > e.ai.search_time
                         }
+                        Some(e) if !e.ghost && crate::monai::monster_self_scans(e) => {
+                            self.clock_ms - e.ai.search_tick > e.ai.search_time
+                        }
+                        Some(_) => false,
+                        None => continue,
+                    };
+                    if !scan {
+                        record.aoi_order.push(*id);
+                        continue;
+                    }
+                    if let Some(e) = self.entities.get_mut(*id) {
+                        e.ai.search_tick = self.clock_ms;
                     }
                     let (map, entities, clock) =
                         (&mut self.maps, &mut self.entities, self.clock_ms);
-                    for target in search_view_range(&mut map[map_id], entities, *id, clock) {
+                    let outcome =
+                        search_view_range_with_updates(&mut map[map_id], entities, *id, clock);
+                    for target in outcome.removed {
                         // 观察者 `*id` 收「`target` 离开视野」⇒ `SM_DISAPPEAR(target)`（保序）。
                         record.hides.push((*id, target));
+                    }
+                    // 玩家扫描期间的 `RM_UPDATEVIEWRANGE` 投递（`PlayObject.cs:3136`）：
+                    // 只有 oracle 有该 `Operate` 支的实体才入队（`MonsterObject`，排除
+                    // `GuardUnit`/`CloneMonster`）；目标已消失 ⇒ 丢弃。
+                    for (monster_id, player_id) in outcome.view_updates {
+                        if entities
+                            .get(monster_id)
+                            .is_some_and(crate::monai::consumes_view_range_update)
+                        {
+                            if let Some(monster) = entities.get_mut(monster_id) {
+                                monster.ai.pending_view_updates.push(player_id);
+                            }
+                        }
                     }
                 }
                 record.aoi_order.push(*id);
@@ -4485,11 +4504,18 @@ impl World {
             return false;
         };
         let (x, y, map_id) = (e.x, e.y, e.map_id);
+        // **落格类型按类分派**：`BaseObject.Initialize()`（`BaseObject.Base.cs:18`）调
+        // `AddToMap()`，而 `CellType` 是对象自己的属性（`AnimalObject.cs:86`
+        // `CellType = CellType.Monster`；`PlayObject` = `Play`；`NormNpc/Merchant` = `Merchant`）。
+        // oracle `CreateMonster` 也显式用 `CellType.Monster` 登记（`WorldServer.MonGen.cs:788`）。
+        // 之前这里恒用 `Play` ⇒ 玩家 AOI 的 `baseObject.CellType == CellType.Monster`
+        // 距离门（`PlayObject.cs:3131`）对刚落图的怪永不命中。
+        let cell_type = entity_cell_type(e);
         let Some(map) = self.maps.get_mut(map_id) else {
             return false;
         };
         let now = self.clock_ms;
-        if !map.add_map_object(x, y, CellType::Play, actor_id, now) {
+        if !map.add_map_object(x, y, cell_type, actor_id, now) {
             return false;
         }
         if let Some(e) = self.entities.get_mut(actor_id) {
@@ -6304,32 +6330,378 @@ mod tests {
         );
     }
 
-    /// 判据 (e)（阴性对照）：**非玩家 viewer 的扫描节拍本片不动**——即使 `ai.search_time`
-    /// 被设成极大值，怪/卫士/NPC/商人仍在每个 tick 扫描（另一张卡处理它们）。
-    #[test]
-    fn non_player_viewer_scan_cadence_unchanged() {
-        let mut w = World::new(32, 32);
-        let mut m = Entity::new(0, "m", 10, 10);
-        m.race = crate::entity::ACTOR_RACE_MONSTER;
-        m.ai.search_time = 999_999;
-        let m = w.add_entity(m);
-        let q = w.add_entity(Entity::new(0, "q", 11, 10));
+    // ---------------------------------------------------------------------------------------
+    // 卡 `openmir2-monster-view-throttle`（tier=R）：怪物视野由玩家 `RM_UPDATEVIEWRANGE`
+    // 投递并按 `SearchTime` 节流；非玩家只有 `IsSlave || Race in {11,112,254}` 自扫。
+    // oracle：`PlayObject.cs:3129-3139`、`MonsterObject.cs:136-185`、`WorldServer.MonGen.cs:300-313`。
+    // ---------------------------------------------------------------------------------------
 
-        w.tick(); // 200ms
+    /// **生产口径玩家**：`PlayObject` ctor `WantRefMsg = true`（`PlayObject.cs:889`）。
+    /// `Entity::new` 的缺省 `false` 是构造等价物的空缺，宿主 `new_player_entity` 会置 true。
+    fn mview_player(w: &mut World, x: i32, y: i32, view_range: i32) -> i32 {
+        let mut e = Entity::new(0, "p", x, y);
+        e.race = ACTOR_RACE_PLAY;
+        e.want_ref_msg = true;
+        e.view_range = view_range;
+        w.add_entity(e)
+    }
+
+    /// **普通野怪（被动视野）**：`walk_speed = MAX` 钉住位置，避免 `Wondering` 移动干扰断言。
+    fn mview_monster(w: &mut World, x: i32, y: i32, view_range: i32, search_time: i64) -> i32 {
+        let mut e = Entity::new(0, "m", x, y);
+        e.race = ACTOR_RACE_MONSTER;
+        e.view_range = view_range;
+        e.ai.search_time = search_time;
+        e.ai.walk_speed = i64::MAX;
+        w.add_entity(e)
+    }
+
+    fn mview_visible(w: &World, id: i32) -> Vec<(i32, u8)> {
+        w.entities
+            .get(id)
+            .unwrap()
+            .visible_actors
+            .iter()
+            .map(|v| (v.target, v.flag as u8))
+            .collect()
+    }
+
+    /// **判据①：普通怪不再每 tick 全扫**（oracle `WorldServer.MonGen.cs:300-313`）。
+    ///
+    /// 玩家 `ViewRange(12) - 怪 ViewRange(12) = 0` ⇒ dx=1 不满足距离门 ⇒ 不投递；
+    /// 若怪仍每 tick 全扫，`baseObject.Race == Play` 会让它在第一 tick 就看见玩家。
+    /// 用 `SearchTick` 恒 0 + 可见集恒空断言“从未自扫”。
+    ///
+    /// 牙：恢复 AOI pass 的「所有非玩家每 tick 全扫」⇒ 可见集非空 ⇒ 必红。
+    #[test]
+    fn passive_monster_never_self_scans() {
+        let mut w = World::new(32, 32);
+        let p = mview_player(&mut w, 11, 10, 12);
+        let m = mview_monster(&mut w, 10, 10, 12, 0);
+        for _ in 0..10 {
+            w.tick();
+        }
         assert!(
-            w.entities
-                .get(m)
-                .unwrap()
-                .visible_actors
-                .iter()
-                .any(|v| v.target == q),
-            "非玩家 viewer 必须每 tick 扫描（本片不节流）"
+            w.entities.get(m).unwrap().visible_actors.is_empty(),
+            "普通怪不得自扫：{:?}",
+            mview_visible(&w, m)
         );
         assert_eq!(
             w.entities.get(m).unwrap().ai.search_tick,
             0,
-            "非玩家路径不写 SearchTick"
+            "普通怪的自扫路径不得推进 SearchTick"
         );
+        // 阴性对照：玩家自己的扫描确实跑了（看见怪）——否则本条不构成「怪不自扫」的证据。
+        assert!(
+            w.entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == m),
+            "玩家扫描必须看见怪（want_ref=true）"
+        );
+    }
+
+    /// **判据②+⑦：投递在怪物自己的 `base.Run()` 消费；`SearchTime` 严格大于门。**
+    ///
+    /// 时间线（200ms tick）：玩家 1200ms 首次扫描 ⇒ 入队；怪 1400ms 消费
+    /// （`1400 - 0 > 1000`）⇒ 加入可见集并 `SearchTick = 1400`。玩家下次 2400ms 扫描
+    /// ⇒ 入队；怪 2600ms 消费（`2600 - 1400 = 1200 > 1000`）⇒ 已存在项打 `Invisible`。
+    #[test]
+    fn monster_view_update_consumed_at_search_time_boundary() {
+        let mut w = World::new(32, 32);
+        w.enable_monster_ai();
+        let p = mview_player(&mut w, 11, 10, 12);
+        let m = mview_monster(&mut w, 10, 10, 5, 1000);
+
+        for _ in 0..6 {
+            w.tick(); // 1200ms：玩家扫描末尾投递
+        }
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.pending_view_updates,
+            vec![p],
+            "1200ms：玩家扫描必须投递 RM_UPDATEVIEWRANGE"
+        );
+        assert!(
+            w.entities.get(m).unwrap().visible_actors.is_empty(),
+            "1200ms：怪自己还没 Run，消息不得提前消费"
+        );
+        assert_eq!(w.entities.get(m).unwrap().ai.search_tick, 0);
+
+        w.tick(); // 1400ms：monster_ai_tick 的 base.Run 消息段消费
+        assert!(w
+            .entities
+            .get(m)
+            .unwrap()
+            .ai
+            .pending_view_updates
+            .is_empty());
+        assert_eq!(mview_visible(&w, m), vec![(p, 2)], "Show = 2");
+        assert_eq!(w.entities.get(m).unwrap().ai.search_tick, 1400);
+        assert!(
+            w.entities.get(m).unwrap().is_visible_active,
+            "收到玩家 ⇒ IsVisibleActive = true"
+        );
+
+        for _ in 0..5 {
+            w.tick(); // 2400ms：玩家第二次扫描（2400-1200>1000）
+        }
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.search_tick,
+            1400,
+            "2400ms：怪未到下一次 Run 消费，SearchTick 不动"
+        );
+        w.tick(); // 2600ms
+        assert_eq!(w.entities.get(m).unwrap().ai.search_tick, 2600);
+        assert_eq!(
+            mview_visible(&w, m),
+            vec![(p, 1)],
+            "已在列表 ⇒ UpdateMonsterVisible 打 Invisible(1)，不重复追加"
+        );
+    }
+
+    /// **判据①：节流窗口内的投递被丢弃；窗口外的投递生效。**
+    ///
+    /// `SearchTime = 2000`：1400ms 消费 `1400 - 0 <= 2000` ⇒ 丢弃（`SearchTick` 不推进）；
+    /// 2600ms 消费 `2600 - 0 > 2000` ⇒ 生效。
+    #[test]
+    fn monster_view_update_dropped_within_search_time() {
+        let mut w = World::new(32, 32);
+        w.enable_monster_ai();
+        let p = mview_player(&mut w, 11, 10, 12);
+        let m = mview_monster(&mut w, 10, 10, 5, 2000);
+
+        for _ in 0..6 {
+            w.tick(); // 1200ms 投递
+        }
+        w.tick(); // 1400ms 消费：1400 <= 2000 ⇒ 丢弃
+        assert!(
+            w.entities
+                .get(m)
+                .unwrap()
+                .ai
+                .pending_view_updates
+                .is_empty(),
+            "消息已出队（oracle 先判门再更新）"
+        );
+        assert!(
+            w.entities.get(m).unwrap().visible_actors.is_empty(),
+            "节流窗口内不得更新可见集"
+        );
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.search_tick,
+            0,
+            "节流丢弃时 oracle 不写 SearchTick（return 在赋值之前）"
+        );
+
+        for _ in 0..5 {
+            w.tick(); // 2400ms 玩家再次投递
+        }
+        w.tick(); // 2600ms：2600-0 > 2000 ⇒ 生效
+        assert_eq!(mview_visible(&w, m), vec![(p, 2)]);
+        assert_eq!(w.entities.get(m).unwrap().ai.search_tick, 2600);
+    }
+
+    /// **判据①：同一 tick 的第二个玩家投递被同一 `SearchTime` 窗口丢弃**（oracle 单怪单队列）。
+    ///
+    /// 两个玩家同 tick 扫描 ⇒ 队列 `[p1, p2]`；怪在自己的 Run 里按入队序消费：
+    /// p1 通过并 `SearchTick = now`；p2 随即命中 `<= SearchTime` ⇒ 丢弃。
+    #[test]
+    fn second_player_update_dropped_in_same_tick() {
+        let mut w = World::new(32, 32);
+        w.enable_monster_ai();
+        let p1 = mview_player(&mut w, 11, 10, 12);
+        let p2 = mview_player(&mut w, 9, 10, 12);
+        let m = mview_monster(&mut w, 10, 10, 5, 0);
+
+        for _ in 0..6 {
+            w.tick(); // 1200ms：p1、p2 按槽位序投递
+        }
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.pending_view_updates,
+            vec![p1, p2]
+        );
+        w.tick(); // 1400ms：第一个通过，第二个被 SearchTime=0 丢弃
+        assert_eq!(mview_visible(&w, m), vec![(p1, 2)], "只接受第一个投递");
+        assert_eq!(w.entities.get(m).unwrap().ai.search_tick, 1400);
+    }
+
+    /// **判据③：距离门精确边界（差 1 格）通过侧**——`|Δx| = ViewRange(12) - ViewRange(5) = 7`。
+    /// 失败侧（8 格）在 `aoi.rs::player_scan_view_update_distance_gate_exact_boundary`。
+    #[test]
+    fn player_update_reaches_monster_at_exact_view_range_span() {
+        let mut w = World::new(32, 32);
+        w.enable_monster_ai();
+        let p = mview_player(&mut w, 10, 10, 12);
+        let m = mview_monster(&mut w, 17, 10, 5, 0); // dx = 7 == 12 - 5
+        for _ in 0..6 {
+            w.tick();
+        }
+        assert_eq!(w.entities.get(m).unwrap().ai.pending_view_updates, vec![p]);
+        w.tick(); // 1400ms
+        assert_eq!(
+            mview_visible(&w, m),
+            vec![(p, 2)],
+            "恰好 7 格必须通过距离门"
+        );
+    }
+
+    /// **判据④：`IsVisibleActive` 置位条件**——玩家或宝宝（`Master != null`）触发；
+    /// 普通怪/无主怪不触发（`MonsterObject.cs:145-149`）。
+    ///
+    /// 由 `aoi.rs::monster_view_update_sets_visible_active_for_player_and_baby` 直接钉住
+    /// 消费函数；此处在世界路径上确认玩家投递 ⇒ `true`（见上一条）。
+    ///
+    /// **判据⑤：跨图不投递**——玩家 `SearchViewRange` 只扫自己地图的格子。
+    #[test]
+    fn player_update_does_not_cross_maps() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        let _p = mview_player(&mut w, 10, 10, 12);
+        let mut e = Entity::new(0, "m", 10, 10);
+        e.race = ACTOR_RACE_MONSTER;
+        e.view_range = 5;
+        e.ai.search_time = 0;
+        e.ai.walk_speed = i64::MAX;
+        e.map_id = 1;
+        let m = w.add_entity(e);
+
+        for _ in 0..8 {
+            w.tick();
+        }
+        assert!(
+            w.entities
+                .get(m)
+                .unwrap()
+                .ai
+                .pending_view_updates
+                .is_empty(),
+            "异图不得投递 RM_UPDATEVIEWRANGE"
+        );
+        assert!(w.entities.get(m).unwrap().visible_actors.is_empty());
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.search_tick,
+            0,
+            "普通怪不自扫、无异图投递 ⇒ SearchTick 恒 0"
+        );
+    }
+
+    /// **判据⑥：死亡目标 vs Ghost 目标**。
+    ///
+    /// oracle `PlayObject.SearchViewRange` **没有 `Death` 门**（`PlayObject.cs:3125-3129`）
+    /// ⇒ 尸体仍可见、仍投递 `RM_UPDATEVIEWRANGE`（`:3130-3139`），且死者 `BaseObject.Run`
+    /// 的消息段照常出队（`BaseObject.Base.cs:26-30`）。`Ghost` 则在过滤器里被排除
+    /// （`!baseObject.Ghost`），且 `ProcessMonsters` 整只跳过 Ghost 怪。
+    #[test]
+    fn dead_monster_gets_update_but_ghost_monster_does_not() {
+        // 死亡怪：投递 + 消费。
+        let mut w = World::new(32, 32);
+        w.enable_monster_ai();
+        let p = mview_player(&mut w, 11, 10, 12);
+        let m = mview_monster(&mut w, 10, 10, 5, 0);
+        w.entities.get_mut(m).unwrap().death = true;
+        for _ in 0..6 {
+            w.tick();
+        }
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.pending_view_updates,
+            vec![p],
+            "死亡目标仍应收到 RM_UPDATEVIEWRANGE（PlayObject 无 Death 门）"
+        );
+        w.tick(); // 1400ms：死者 base.Run 消息段照常出队
+                  // 消费证据用 `SearchTick`（`UpdateMonsterVisible` 唯一留下的可观测状态）：本仓死亡支
+                  // 仍在同一 tick 末尾跑 `search_view_range_death`（清空 `visible_actors` 并复位
+                  // `is_visible_active`，既有近似、本片不动）⇒ 列表/标志在 tick 结束时已被清掉。
+        assert!(w
+            .entities
+            .get(m)
+            .unwrap()
+            .ai
+            .pending_view_updates
+            .is_empty());
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.search_tick,
+            1400,
+            "死者收到并消费了 RM_UPDATEVIEWRANGE（SearchTime=0 门通过）"
+        );
+
+        // Ghost 怪：玩家过滤器 `!Ghost` 排除 ⇒ 不投递。
+        let mut w2 = World::new(32, 32);
+        mview_player(&mut w2, 11, 10, 12);
+        let g = mview_monster(&mut w2, 10, 10, 5, 0);
+        w2.entities.get_mut(g).unwrap().ghost = true;
+        for _ in 0..6 {
+            w2.tick();
+        }
+        assert!(
+            w2.entities
+                .get(g)
+                .unwrap()
+                .ai
+                .pending_view_updates
+                .is_empty(),
+            "Ghost 目标不得进入玩家可见集/投递"
+        );
+        assert!(w2.entities.get(g).unwrap().visible_actors.is_empty());
+    }
+
+    /// **判据①：非玩家自扫集合 = `IsSlave || Race in {11,112,254}`**，且用同一
+    /// `SearchTime` 严格大于门（`WorldServer.MonGen.cs:300-313`）。
+    ///
+    /// 卫士（race 11）`SearchTime = 1000`：1000ms 不扫、1200ms 扫；宝宝（`is_slave`）
+    /// `SearchTime = 0`：200ms 即扫。
+    #[test]
+    fn guard_and_slave_self_scan_on_their_own_cadence() {
+        let mut w = World::new(32, 32);
+        let mut e = Entity::new(0, "guard", 10, 10);
+        e.race = 11;
+        e.view_range = 5;
+        e.ai.search_time = 1000;
+        e.ai.walk_speed = i64::MAX;
+        let g = w.add_entity(e);
+        let p = mview_player(&mut w, 11, 10, 12);
+
+        for _ in 0..5 {
+            w.tick(); // 1000ms
+        }
+        assert!(
+            w.entities.get(g).unwrap().visible_actors.is_empty(),
+            "1000ms：1000 - 0 > 1000 不成立 ⇒ 卫士不得自扫"
+        );
+        assert_eq!(w.entities.get(g).unwrap().ai.search_tick, 0);
+        w.tick(); // 1200ms
+        assert!(
+            w.entities
+                .get(g)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == p),
+            "1200ms：1200 - 0 > 1000 ⇒ 卫士自扫看见玩家"
+        );
+        assert_eq!(w.entities.get(g).unwrap().ai.search_tick, 1200);
+
+        // 宝宝（race 80 + is_slave）：200ms 即自扫（SearchTime = 0）。
+        let mut w2 = World::new(32, 32);
+        let mut e = Entity::new(0, "slave", 10, 10);
+        e.race = ACTOR_RACE_MONSTER;
+        e.is_slave = true;
+        e.view_range = 5;
+        e.ai.search_time = 0;
+        e.ai.walk_speed = i64::MAX;
+        let s = w2.add_entity(e);
+        let p2 = mview_player(&mut w2, 11, 10, 12);
+        w2.tick(); // 200ms
+        assert!(
+            w2.entities
+                .get(s)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == p2),
+            "宝宝（is_slave）必须在自己 SearchTime 门后自扫"
+        );
+        assert_eq!(w2.entities.get(s).unwrap().ai.search_tick, 200);
     }
 
     /// `openmir2-m3-move-wiring`：同步移动（`ClientWalkXY`/`RunTo`/`HorseRunTo` 口径）。

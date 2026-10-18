@@ -39,7 +39,10 @@ pub mod special_monster;
 pub mod world;
 
 pub use action::{ButchEvent, PushEvent, RushEvent, RushFrame};
-pub use aoi::{search_view_range, search_view_range_death, update_visible_gay, visible_snapshot};
+pub use aoi::{
+    search_view_range, search_view_range_death, search_view_range_with_updates,
+    update_monster_visible, update_visible_gay, visible_snapshot, SearchViewRangeOutcome,
+};
 pub use bevy_bridge::{collect_tick_order_system, snapshot_from_world};
 pub use buff::{
     damage_health, get_char_status, ActorBuffData, BuffSysMsg, BuffSystem, BuffTickOutcome,

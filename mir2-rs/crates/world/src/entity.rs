@@ -260,6 +260,19 @@ pub struct AnimalState {
     /// 使 `Struck` 的取数落在「怪自己的 `base.Run`」这个 site（与 oracle 同），
     /// 而不是攻击方的结算处。
     pub pending_struck: Vec<StruckMsg>,
+    /// **`RM_UPDATEVIEWRANGE` 消息队列的等价物**（`MonsterObject.cs:136-185`）。
+    ///
+    /// oracle `PlayObject.SearchViewRange`（`PlayObject.cs:3130-3139`）对满足
+    /// `CellType == Monster` 且两轴 `|Δ| <= ViewRange - target.ViewRange` 的怪物
+    /// `SystemShare.ActorMgr.SendMessage(monster.ActorId, RM_UPDATEVIEWRANGE, player.ActorId, …)`
+    /// ⇒ 入怪物自己的 `MsgQueue`。怪物在自己的 `BaseObject.Run()` 消息段
+    /// （`BaseObject.Base.cs:26-30`）出队 → `MonsterObject.Operate`（`MonsterObject.cs:177-185`）
+    /// → `UpdateMonsterVisible`（按 `SearchTime` 节流）。
+    ///
+    /// 本骨架按**入队序**存玩家 actor id；由 [`crate::monai::base_object_run_monster`] 在
+    /// 消息段消费（[`crate::aoi::update_monster_visible`]）。`GuardUnit`/`CloneMonster`
+    /// 没有该 `Operate` 支（oracle 丢弃消息）⇒ 投递侧过滤，不入队。
+    pub pending_view_updates: Vec<i32>,
     /// `BaseObject.StruckTick`（`AnimalObject.cs:336` 的 `StruckTick = GetTickCount()`）。
     pub struck_tick: i64,
     /// `BaseObject.Animal`（`BaseObject.cs:161`，构造缺省 `false`；`BaseObject.cs:2602` 的
@@ -343,6 +356,7 @@ impl Default for AnimalState {
             run_away_time: 0,
             check_royalty_tick: 0,
             pending_struck: Vec::new(),
+            pending_view_updates: Vec::new(),
             struck_tick: 0,
             animal: false,
             meat_quality: 0,

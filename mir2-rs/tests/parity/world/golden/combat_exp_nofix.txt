@@ -2,7 +2,7 @@ tick 1 clock 200
 ent 1 0 10 10 300 25 0 vis
 tick 2 clock 400
 ent 1 0 10 10 300 25 0 vis
-ent 2 0 11 10 6 1 0 vis 1:2
+ent 2 0 11 10 6 1 0 vis
 tick 3 clock 600
 ent 1 0 10 10 300 25 500 vis
 ent 2 0 11 10 0 1 0 vis

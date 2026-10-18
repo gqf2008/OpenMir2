@@ -51,6 +51,94 @@ pub fn update_visible_gay(store: &mut EntityStore, viewer_id: i32, target_id: i3
     });
 }
 
+/// 对应 `MonsterObject.UpdateMonsterVisible(actorId)`（`MonsterObject.cs:136-185`）。
+///
+/// oracle 逐行：
+/// ```text
+/// if ((GetTickCount() - SearchTick) <= SearchTime) return;   // 严格 > 才更新
+/// SearchTick = GetTickCount();
+/// baseObject = ActorMgr.Get(acrotId);
+/// if (baseObject.Race == Play || baseObject.Master != null) IsVisibleActive = true;
+/// 已在本列表 ⇒ flag = Invisible；否则追加 Show。
+/// ```
+///
+/// **投递点**：`PlayObject.SearchViewRange` 末段（`PlayObject.cs:3129-3139`）向满足距离门的
+/// 怪物发 `RM_UPDATEVIEWRANGE`；怪物在自己的 `BaseObject.Run()` 消息段消费
+/// （`MonsterObject.cs:177-185` 的 `Operate`）。本函数 = 消费那一刻的语义。
+///
+/// `viewer_id` = 消息的 `wParam`（玩家 actor id）。oracle 在 `SearchTick = now` **之后**才
+/// `ActorMgr.Get`；目标已消失时 oracle 会 NRE（消息队列仍已被消费）。本骨架在
+/// `SearchTick = now` 之后按「目标不存在 ⇒ 丢弃」返回 `false`（只在玩家扫描后、目标于同 tick
+/// 或下一 tick 前被移除时可达；不外抛 panic）。
+///
+/// 返回 `true` = 过了 `SearchTime` 门并执行了更新（含已存在 ⇒ 打 `Invisible`）。
+#[must_use]
+pub fn update_monster_visible(
+    store: &mut EntityStore,
+    monster_id: i32,
+    viewer_id: i32,
+    now_ms: i64,
+) -> bool {
+    // `if ((HUtil32.GetTickCount() - SearchTick) <= SearchTime) return;`
+    {
+        let Some(monster) = store.get_mut(monster_id) else {
+            return false;
+        };
+        if now_ms - monster.ai.search_tick <= monster.ai.search_time {
+            return false;
+        }
+        monster.ai.search_tick = now_ms;
+    }
+    // `IActor baseObject = SystemShare.ActorMgr.Get(acrotId);`
+    let Some(target) = store.get(viewer_id) else {
+        return false;
+    };
+    let target_is_active = target.race == ACTOR_RACE_PLAY || target.master.is_some();
+    let Some(monster) = store.get_mut(monster_id) else {
+        return false;
+    };
+    if target_is_active {
+        monster.is_visible_active = true;
+    }
+    for v in monster.visible_actors.iter_mut() {
+        if v.target == viewer_id {
+            v.flag = VisibleFlag::Invisible;
+            return true;
+        }
+    }
+    monster.visible_actors.push(VisibleBaseObject {
+        target: viewer_id,
+        flag: VisibleFlag::Show,
+    });
+    true
+}
+
+/// 一趟 `SearchViewRange` 的完整产出。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SearchViewRangeOutcome {
+    /// 本趟离开视野（`Hidden` ⇒ `RemoveAt`）的目标 id（保序）。
+    pub removed: Vec<i32>,
+    /// 本趟玩家扫描向怪物投递的 `RM_UPDATEVIEWRANGE` 事件：`(怪物 id, 玩家 id)`（扫描序）。
+    ///
+    /// oracle 投递点 = `PlayObject.SearchViewRange` 的「进入附近怪物视野」段
+    /// （`PlayObject.cs:3129-3139`）；只由玩家观察者产生。
+    pub view_updates: Vec<(i32, i32)>,
+}
+
+/// [`search_view_range_with_updates`] 的兼容包装：只返回「离开视野」的目标（旧签名）。
+///
+/// 非玩家自我扫描（卫士/宝宝，`BaseObject.SearchViewRange`/`GuardUnit.SearchViewRange`）
+/// 不使用 `view_updates` 面。
+#[must_use]
+pub fn search_view_range(
+    map: &mut MapGrid,
+    store: &mut EntityStore,
+    viewer_id: i32,
+    now_ms: i64,
+) -> Vec<i32> {
+    search_view_range_with_updates(map, store, viewer_id, now_ms).removed
+}
+
 /// 对应 `BaseObject.SearchViewRange`（`BaseObject.ViewRange.cs:57`）。
 ///
 /// `now_ms` 为虚拟时钟（毫秒）。C# 读 `HUtil32.GetTickCount()`；
@@ -62,14 +150,14 @@ pub fn update_visible_gay(store: &mut EntityStore, viewer_id: i32, target_id: i3
 ///
 /// **守卫**（oracle `:3214`）：只返回 `!FixedHideMode && !Ghost` 的目标（这两类不发消失帧，
 /// 防重复占带宽）；`RemoveAt` 本身对全部 Hidden 项照做（与 oracle 同）。
-pub fn search_view_range(
+pub fn search_view_range_with_updates(
     map: &mut MapGrid,
     store: &mut EntityStore,
     viewer_id: i32,
     now_ms: i64,
-) -> Vec<i32> {
+) -> SearchViewRangeOutcome {
     let Some(viewer) = store.get(viewer_id) else {
-        return Vec::new();
+        return SearchViewRangeOutcome::default();
     };
     let (cx, cy, view_range) = (viewer.x, viewer.y, viewer.view_range);
     let viewer_master = viewer.master;
@@ -83,7 +171,7 @@ pub fn search_view_range(
     // 置位与打标（C#：IsVisibleActive=false；所有 VisibleActors 标 Hidden）
     {
         let Some(viewer) = store.get_mut(viewer_id) else {
-            return Vec::new();
+            return SearchViewRangeOutcome::default();
         };
         viewer.is_visible_active = false;
         for v in viewer.visible_actors.iter_mut() {
@@ -92,6 +180,7 @@ pub fn search_view_range(
     }
 
     let mut candidates: Vec<i32> = Vec::new();
+    let mut view_updates: Vec<(i32, i32)> = Vec::new();
     for x in (cx - view_range)..=(cx + view_range) {
         for y in (cy - view_range)..=(cy + view_range) {
             let (cell_len, cell_ok) = {
@@ -120,20 +209,51 @@ pub fn search_view_range(
                         break;
                     }
                     if let Some(other) = store.get(obj.cell_obj_id) {
-                        let visible = !other.death
-                            && !other.invisible
+                        // **viewer 分流（oracle 两份 `SearchViewRange` 的过滤器不同）**：
+                        // - `PlayObject.SearchViewRange`（`PlayObject.cs:3125-3129`）：
+                        //   `!Invisible && !Ghost && !FixedHideMode && !ObMode`，且左项
+                        //   `Race < ActorRace.Animal || Master != null || WantRefMsg` —— 玩家
+                        //   `Race = 0 < Animal(50)` 恒真；**没有 `Death` 门** ⇒ 尸体仍可见，
+                        //   也照走 `RM_UPDATEVIEWRANGE` 投递（`:3130-3139`）与出帧
+                        //   （`SM_DEATH`/`SM_SKELETON`，`:3218-3242`）。
+                        // - `BaseObject.SearchViewRange`（`BaseObject.ViewRange.cs:105-112`）：
+                        //   多一层 `!baseObject.Death`，左项是
+                        //   `Master != null || NastyMode || WantRefMsg`。
+                        // 其余两支（`baseObject.Master != null && 距离 <= 3`、
+                        // `baseObject.Race == Play`）两份相同。
+                        let base_pass = viewer_is_play
+                            || viewer_master.is_some()
+                            || viewer_nasty
+                            || viewer_want_ref;
+                        let visible = !other.invisible
                             && !other.ghost
                             && !other.fixed_hide_mode
                             && !other.ob_mode
-                            && (viewer_master.is_some()
-                                || viewer_nasty
-                                || viewer_want_ref
+                            && (viewer_is_play || !other.death)
+                            && (base_pass
                                 || (other.master.is_some()
                                     && (other.x - cx).abs() <= 3
                                     && (other.y - cy).abs() <= 3)
                                 || other.race == ACTOR_RACE_PLAY);
                         if visible {
                             candidates.push(obj.cell_obj_id);
+                            // **`PlayObject.SearchViewRange` 的「进入附近怪物视野」段**
+                            // （`PlayObject.cs:3130-3139`）：
+                            // ```text
+                            // if (baseObject.CellType == CellType.Monster && !ObMode && !FixedHideMode)
+                            //   if (|Δx| <= (ViewRange - baseObject.ViewRange)
+                            //    && |Δy| <= (ViewRange - baseObject.ViewRange))
+                            //     SendMessage(baseObject.ActorId, RM_UPDATEVIEWRANGE, this.ActorId, …);
+                            // ```
+                            // `ObMode/FixedHideMode` 已在外层可见性过滤里排除了。`CellType` 是
+                            // 格子登记类型（`CellObject.CellType`），不是 `Race`；玩家观察者恒进入
+                            // 该段（`Race(0) < ActorRace.Animal(50)`）。两轴都满足才投递。
+                            if viewer_is_play && obj.cell_type == CellType::Monster {
+                                let span = view_range - other.view_range;
+                                if (other.x - cx).abs() <= span && (other.y - cy).abs() <= span {
+                                    view_updates.push((obj.cell_obj_id, viewer_id));
+                                }
+                            }
                         }
                     }
                 }
@@ -173,14 +293,18 @@ pub fn search_view_range(
             i += 1;
         }
     }
-    removed
+    let removed = removed
         .into_iter()
         .filter(|t| {
             store
                 .get(*t)
                 .is_some_and(|e| !e.fixed_hide_mode && !e.ghost)
         })
-        .collect()
+        .collect();
+    SearchViewRangeOutcome {
+        removed,
+        view_updates,
+    }
 }
 
 /// 对应 `BaseObject.SearchViewRangeDeath`（`BaseObject.ViewRange.cs:159`）。
@@ -340,5 +464,207 @@ mod tests {
 
         assert_eq!(map.cell(11, 10).count(), 0, "非玩家 viewer 必须删除过期项");
         assert!(visible_snapshot(&store, 1).is_empty());
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // 卡 `openmir2-monster-view-throttle`（tier=R）：`RM_UPDATEVIEWRANGE` 投递/消费。
+    // oracle：`PlayObject.cs:3129-3139`、`MonsterObject.cs:136-185`。
+    // ---------------------------------------------------------------------------------------
+
+    fn put_typed(map: &mut MapGrid, id: i32, x: i32, y: i32, t: CellType, add_time: i64) {
+        assert!(map.add_map_object(x, y, t, id, add_time));
+    }
+
+    fn play_viewer(id: i32, x: i32, y: i32, view_range: i32) -> Entity {
+        let mut e = Entity::new(id, "p", x, y);
+        e.race = ACTOR_RACE_PLAY;
+        // `PlayObject` ctor `WantRefMsg = true`（`PlayObject.cs:889`）。
+        e.want_ref_msg = true;
+        e.view_range = view_range;
+        e
+    }
+
+    fn monster_entity(id: i32, x: i32, y: i32, view_range: i32) -> Entity {
+        let mut e = Entity::new(id, "m", x, y);
+        e.race = ACTOR_RACE_MONSTER;
+        e.view_range = view_range;
+        e
+    }
+
+    /// **判据③：距离门 `|Δ| <= ViewRange(玩家) - ViewRange(怪)` 的精确边界（差 1 格）**。
+    ///
+    /// 两轴是**矩形门**（逐轴比较，不是欧氏/Chebyshev 半径）；目标 ViewRange 大于观察者时
+    /// 差为负 ⇒ 同格也不投递。
+    ///
+    /// 牙：把 `<= span` 写成 `< span`（或删掉任一轴）⇒ 7 格通过侧/对角通过侧必红。
+    #[test]
+    fn player_scan_view_update_distance_gate_exact_boundary() {
+        let run = |dx: i32, dy: i32, viewer_range: i32, target_range: i32| {
+            let mut map = MapGrid::new(32, 32);
+            let mut store = EntityStore::new();
+            store.insert(play_viewer(1, 10, 10, viewer_range));
+            store.insert(monster_entity(2, 10 + dx, 10 + dy, target_range));
+            put_typed(&mut map, 2, 10 + dx, 10 + dy, CellType::Monster, 0);
+            search_view_range_with_updates(&mut map, &mut store, 1, 0).view_updates
+        };
+        // `ViewRange(12) - ViewRange(5) = 7`。
+        assert_eq!(run(7, 0, 12, 5), vec![(2, 1)], "x 轴恰好 7 格：通过");
+        assert!(run(8, 0, 12, 5).is_empty(), "x 轴 8 格：超出 1 格");
+        assert_eq!(run(0, 7, 12, 5), vec![(2, 1)], "y 轴恰好 7 格：通过");
+        assert!(run(0, 8, 12, 5).is_empty(), "y 轴 8 格：超出 1 格");
+        assert_eq!(run(7, 7, 12, 5), vec![(2, 1)], "两轴同时恰好 7 格：通过");
+        assert!(run(8, 7, 12, 5).is_empty(), "任一轴超出：不投递");
+        assert!(
+            run(0, 0, 5, 12).is_empty(),
+            "目标 ViewRange > 观察者 ⇒ span 为负 ⇒ 同格也不投递"
+        );
+    }
+
+    /// **判据①/②：`SearchTime` 严格大于门 + 已存在项打 `Invisible`**。
+    ///
+    /// `(now - SearchTick) <= SearchTime` ⇒ 丢弃且**不写** `SearchTick`（oracle return 在赋值前）。
+    ///
+    /// 牙：去掉门 ⇒ 3000ms 那条必红；把 `<=` 改 `<` ⇒ 3000ms 会错误更新。
+    #[test]
+    fn monster_view_update_throttle_strictly_greater() {
+        let mut store = EntityStore::new();
+        store.insert(play_viewer(1, 10, 10, 12));
+        let mut m = monster_entity(2, 10, 11, 5);
+        m.ai.search_tick = 0;
+        m.ai.search_time = 3000;
+        store.insert(m);
+
+        assert!(
+            !update_monster_visible(&mut store, 2, 1, 3000),
+            "3000 - 0 <= 3000 ⇒ 丢弃"
+        );
+        assert_eq!(store.get(2).unwrap().ai.search_tick, 0);
+        assert!(store.get(2).unwrap().visible_actors.is_empty());
+
+        assert!(
+            update_monster_visible(&mut store, 2, 1, 3001),
+            "3001 - 0 > 3000 ⇒ 更新"
+        );
+        assert_eq!(store.get(2).unwrap().ai.search_tick, 3001);
+        assert_eq!(
+            visible_snapshot(&store, 2),
+            vec![(1, VisibleFlag::Show as u8)]
+        );
+
+        assert!(
+            !update_monster_visible(&mut store, 2, 1, 6001),
+            "6001 - 3001 <= 3000 ⇒ 丢弃"
+        );
+        assert_eq!(store.get(2).unwrap().ai.search_tick, 3001);
+        assert!(update_monster_visible(&mut store, 2, 1, 6002));
+        assert_eq!(store.get(2).unwrap().ai.search_tick, 6002);
+        assert_eq!(
+            visible_snapshot(&store, 2),
+            vec![(1, VisibleFlag::Invisible as u8)],
+            "已在列表 ⇒ 只打 Invisible，不重复追加"
+        );
+    }
+
+    /// **判据④：`IsVisibleActive` 置位条件**（`MonsterObject.cs:145-149`）：
+    /// `viewer.Race == Play || viewer.Master != null`。
+    #[test]
+    fn monster_view_update_sets_visible_active_for_player_and_baby() {
+        let mut store = EntityStore::new();
+        store.insert(play_viewer(1, 10, 10, 12));
+        let mut baby = Entity::new(3, "baby", 10, 11);
+        baby.race = ACTOR_RACE_MONSTER;
+        baby.master = Some(1);
+        store.insert(baby);
+        let mut plain = Entity::new(4, "plain", 10, 12);
+        plain.race = ACTOR_RACE_MONSTER;
+        store.insert(plain);
+
+        for id in 5..=7 {
+            let mut m = monster_entity(id, 15, 10, 5);
+            m.ai.search_tick = 0;
+            m.ai.search_time = 0;
+            store.insert(m);
+        }
+        assert!(update_monster_visible(&mut store, 5, 1, 1));
+        assert!(
+            store.get(5).unwrap().is_visible_active,
+            "玩家 ⇒ IsVisibleActive = true"
+        );
+        assert!(update_monster_visible(&mut store, 6, 3, 2));
+        assert!(
+            store.get(6).unwrap().is_visible_active,
+            "宝宝（Master != null）⇒ true"
+        );
+        assert!(update_monster_visible(&mut store, 7, 4, 3));
+        assert!(
+            !store.get(7).unwrap().is_visible_active,
+            "普通怪（无 Master）⇒ false"
+        );
+    }
+
+    /// **判据⑥：死亡目标仍投递（`PlayObject` 无 `Death` 门），Ghost 目标被过滤器排除。**
+    #[test]
+    fn player_scan_updates_dead_monster_but_skips_ghost() {
+        let mut map = MapGrid::new(32, 32);
+        let mut store = EntityStore::new();
+        store.insert(play_viewer(1, 10, 10, 12));
+        let mut dead = monster_entity(2, 11, 10, 5);
+        dead.death = true;
+        store.insert(dead);
+        let mut ghost = monster_entity(3, 9, 10, 5);
+        ghost.ghost = true;
+        store.insert(ghost);
+        put_typed(&mut map, 2, 11, 10, CellType::Monster, 0);
+        put_typed(&mut map, 3, 9, 10, CellType::Monster, 0);
+
+        let out = search_view_range_with_updates(&mut map, &mut store, 1, 0);
+        assert_eq!(
+            out.view_updates,
+            vec![(2, 1)],
+            "死亡怪收到投递；Ghost 怪被 `!Ghost` 过滤"
+        );
+        let snap = visible_snapshot(&store, 1);
+        assert!(snap.iter().any(|(t, _)| *t == 2), "尸体可见：{snap:?}");
+        assert!(!snap.iter().any(|(t, _)| *t == 3), "Ghost 不可见：{snap:?}");
+    }
+
+    /// **投递只由玩家观察者产生**：非玩家自扫（`BaseObject.SearchViewRange`）没有
+    /// `SendMessage(RM_UPDATEVIEWRANGE, …)` 段（`PlayObject.cs:3130-3139` 仅在 override 里）。
+    #[test]
+    fn view_range_update_only_emitted_by_player_viewer() {
+        let mut map = MapGrid::new(32, 32);
+        let mut store = EntityStore::new();
+        let mut guard = Entity::new(1, "g", 10, 10);
+        guard.race = 11;
+        guard.view_range = 5;
+        guard.want_ref_msg = true;
+        store.insert(guard);
+        store.insert(monster_entity(2, 11, 10, 5));
+        put_typed(&mut map, 2, 11, 10, CellType::Monster, 0);
+
+        let out = search_view_range_with_updates(&mut map, &mut store, 1, 0);
+        assert!(out.view_updates.is_empty(), "非玩家观察者不投递");
+        assert!(
+            visible_snapshot(&store, 1).iter().any(|(t, _)| *t == 2),
+            "但其自身可见集照常更新"
+        );
+    }
+
+    /// oracle 在 `SearchTick = now` **之后**才 `ActorMgr.Get`：目标已消失时 `SearchTick`
+    /// 仍被推进（消息已消费），只是不产生可见项。本骨架不抛 NRE，按丢弃处理。
+    #[test]
+    fn update_with_missing_viewer_still_refreshes_search_tick() {
+        let mut store = EntityStore::new();
+        let mut m = monster_entity(2, 10, 11, 5);
+        m.ai.search_tick = 0;
+        m.ai.search_time = 0;
+        store.insert(m);
+        assert!(!update_monster_visible(&mut store, 2, 999, 42));
+        assert_eq!(
+            store.get(2).unwrap().ai.search_tick,
+            42,
+            "oracle 先写 SearchTick 再 ActorMgr.Get"
+        );
+        assert!(store.get(2).unwrap().visible_actors.is_empty());
     }
 }

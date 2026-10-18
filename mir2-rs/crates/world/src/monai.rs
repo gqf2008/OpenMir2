@@ -619,6 +619,42 @@ pub fn is_guard_race(race: u8) -> bool {
     matches!(race, 11 | 12 | 20 | 112)
 }
 
+/// `WorldServer.MonGen.cs:300` 的**非玩家自扫条件**：
+/// `monster.IsSlave || (monster.Race is ActorRace.Guard or ActorRace.ArcherGuard or ActorRace.SlaveMonster)`
+/// ⇒ 只有宝宝与 11/112/254 三类怪在自己的 `SearchTime` 门后调 `SearchViewRange()`；
+/// **其余怪物不主动全扫**，被动视野由玩家的 `RM_UPDATEVIEWRANGE` 投递
+/// （`PlayObject.cs:3130-3139` → `MonsterObject.cs:136-185`）。
+#[must_use]
+pub fn monster_self_scans(e: &Entity) -> bool {
+    e.is_slave || matches!(e.race, 11 | 112 | 254)
+}
+
+/// `GuardUnit` 家族：`CreateMonster`（`WorldServer.MonGen.cs:510-518/660`）里映射到
+/// `SuperGuard(11)` / `PetSuperGuard(12)` / `ArcherPolice(20)` / `CastleDoor(110)` /
+/// `WallStructure(111)` / `ArcherGuard(112)` 的 race。
+///
+/// 它们覆写 `SearchViewRange`（`GuardUnit.cs:127`）且**不继承** `MonsterObject.Operate`
+/// ⇒ 收到 `RM_UPDATEVIEWRANGE` 也不处理（`AnimalObject.Operate` → `BaseObject.Operate` 返回
+/// false，消息被丢弃）。
+#[must_use]
+pub fn is_guard_unit_race(race: u8) -> bool {
+    matches!(race, 11 | 12 | 20 | 110 | 111 | 112)
+}
+
+/// 该实体是否**消费** `RM_UPDATEVIEWRANGE`（= `MonsterObject.Operate` 的
+/// `RM_UPDATEVIEWRANGE` 支存在，`MonsterObject.cs:177-185`）。
+///
+/// 排除：`GuardUnit` 家族（无该支）、`CloneMonster`（`Clone.cs:14-30` 覆写 `Operate` 且
+/// 恒 `return false`，不调 base）、固定 NPC/商人（`entity_cell_type` 本就不会登记成
+/// `CellType::Monster`，此处双保险）。
+#[must_use]
+pub fn consumes_view_range_update(e: &Entity) -> bool {
+    e.merchant.is_none()
+        && e.npc.is_none()
+        && !is_guard_unit_race(e.race)
+        && e.race != crate::special_monster::RACE_CLONE_MONSTER
+}
+
 /// `MonsterObject.Run` 之后 `base.Run()` 的落点（见 [`monster_class_run`]）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClassRunBase {
@@ -1502,7 +1538,20 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
 /// 改坏必红：把 `HealthFillTime` 门（或 `HP > 1` 门）拆掉⇒`base_recovery_*`/
 /// `health_tick_negative_cost_is_clamped` 必红（见 `tests/parity/world/monster-ai-host-20261013`）。
 pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
-    // `BaseObject.Run` 的**消息段**（`BaseObject.Base.cs:26-30`）：先把入队的 `RM_STRUCK` 出队，
+    // `BaseObject.Run` 的**消息段**（`BaseObject.Base.cs:26-30`）按 FIFO 出队。本骨架有两条队列：
+    // `RM_UPDATEVIEWRANGE`（上一 tick 玩家扫描末尾投递）与 `RM_STRUCK`（本 tick 攻击入队）。
+    // oracle 只有一条 `MsgQueue`；view update 的入队时刻严格早于本 tick 的战损消息 ⇒ 先消费
+    // view update 与 oracle FIFO 同序。两者消费都不取随机数，也不读对方写的字段 ⇒ 即使交错也无状态差。
+    let now_ms = world.clock_ms;
+    let pending_views: Vec<i32> = match world.entities.get_mut(actor_id) {
+        Some(e) => std::mem::take(&mut e.ai.pending_view_updates),
+        None => return,
+    };
+    for viewer_id in pending_views {
+        let _ =
+            crate::aoi::update_monster_visible(&mut world.entities, actor_id, viewer_id, now_ms);
+    }
+    // 再把入队的 `RM_STRUCK` 出队，
     // 逐个 `Operate(RM_STRUCK) → Struck`（`AnimalObject.cs:118-124`）。本骨架用
     // [`crate::entity::AnimalState::pending_struck`] 承载队列（入队处 = `World::attack_once`）。
     let pending: Vec<crate::entity::StruckMsg> = match world.entities.get_mut(actor_id) {

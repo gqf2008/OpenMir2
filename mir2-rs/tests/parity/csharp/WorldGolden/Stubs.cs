@@ -1,4 +1,4 @@
-// M2 世界/AOI 金标准：桩类型 + **逐字拷贝**的 oracle 函数体。
+﻿// M2 世界/AOI 金标准：桩类型 + **逐字拷贝**的 oracle 函数体。
 // 拷贝来源与行号标注在各函数上方；函数体一行未改（只把成员外壳换成桩）。
 
 using System;
@@ -128,6 +128,13 @@ namespace WorldGolden
         public bool ObMode;
         public bool NastyMode;
         public bool WantRefMsg;
+        /// <summary>`AnimalObject.IsSlave`（`AnimalObject.cs:54`）。</summary>
+        public bool IsSlave;
+        /// <summary>
+        /// `RM_UPDATEVIEWRANGE` 消息队列（`PlayObject.cs:3136` 入队、`MonsterObject.cs:177-185` 出队）。
+        /// 本夹具与世界侧 parity 驱动一样**不启用怪物 AI / 不消费**消息；队列保留为语义证据。
+        /// </summary>
+        public List<int> PendingViewUpdates = new List<int>();
         public bool AddToMaped;
         public bool IsVisibleActive;
         public List<VisibleBaseObject> VisibleActors = new List<VisibleBaseObject>();
@@ -172,6 +179,18 @@ namespace WorldGolden
 
         // ---------- src/M2Server/Actor/BaseObject.ViewRange.cs:57 逐字拷贝 ----------
         public virtual void SearchViewRange()
+        {
+            // `PlayObject` 覆写 `SearchViewRange`（`PlayObject.cs:3073`），与基类不同；
+            // 夹具按 `Race == Play(0)` 分派（C# 里是虚函数覆写，这里用同一桩按类分派）。
+            if (Race == 0)
+            {
+                SearchViewRangePlay();
+                return;
+            }
+            SearchViewRangeBase();
+        }
+
+        private void SearchViewRangeBase()
         {
             const string sExceptionMsg = "[Exception] TBaseObject::SearchViewRange {0} {1} {2} {3} {4}";
             if (Envir == null)
@@ -270,6 +289,97 @@ namespace WorldGolden
             {
                 LogService.Error(Format(sExceptionMsg, n24, ChrName, MapName, CurrX, CurrY));
                 KickException();
+            }
+        }
+
+        // ---------- src/M2Server/Player/PlayObject.cs:3073-3160 逐字拷贝（扫描段） ----------
+        //
+        // 与基类的差异（oracle 实读）：
+        // 1. `CellType.Play/Monster/Merchant` 的 60s 过期块**整段注释掉**（`:3114-3123`）
+        //    ⇒ 玩家扫描**不删格子项**；
+        // 2. 过滤器**没有 `!baseObject.Death`**（`:3125-3129`）⇒ 尸体仍可见；
+        // 3. 左项是 `Race < ActorRace.Animal`（玩家恒真），不是基类的
+        //    `Master != null || NastyMode || WantRefMsg`；
+        // 4. 命中 `CellType.Monster` 且两轴 `|Δ| <= ViewRange - target.ViewRange` ⇒
+        //    `SendMessage(target.ActorId, RM_UPDATEVIEWRANGE, this.ActorId, …)`（`:3130-3139`）。
+        private void SearchViewRangePlay()
+        {
+            IsVisibleActive = false;
+            for (int i = 0; i < VisibleActors.Count; i++)
+            {
+                VisibleActors[i].VisibleFlag = VisibleFlag.Hidden;
+            }
+            short nStartX = (short)(CurrX - ViewRange);
+            short nEndX = (short)(CurrX + ViewRange);
+            short nStartY = (short)(CurrY - ViewRange);
+            short nEndY = (short)(CurrY + ViewRange);
+            for (short nX = nStartX; nX <= nEndX; nX++)
+            {
+                for (short nY = nStartY; nY <= nEndY; nY++)
+                {
+                    MapCellInfo cellInfo = Envir.GetCellInfo(nX, nY, out bool cellSuccess);
+                    if (!cellSuccess || !cellInfo.IsAvailable)
+                    {
+                        continue;
+                    }
+                    int nIdx = 0;
+                    while (true)
+                    {
+                        if (cellInfo.Count <= nIdx)
+                        {
+                            break;
+                        }
+                        CellObject cellObject = cellInfo.ObjList[nIdx];
+                        switch (cellObject.CellType)
+                        {
+                            case CellType.Play:
+                            case CellType.Monster:
+                            case CellType.Merchant:
+                                // 过期块在 PlayObject 里被注释掉（`:3114-3123`）。
+                                ActorStub baseObject = ActorMgr.Get(cellObject.CellObjId);
+                                if (baseObject != null && !baseObject.Invisible)
+                                {
+                                    if (!baseObject.Ghost && !baseObject.FixedHideMode && !baseObject.ObMode)
+                                    {
+                                        if (Race < 50 || Master != null || WantRefMsg ||
+                                            (baseObject.Master != null &&
+                                             Math.Abs(baseObject.CurrX - CurrX) <= 3 &&
+                                             Math.Abs(baseObject.CurrY - CurrY) <= 3) ||
+                                            baseObject.Race == 0)
+                                        {
+                                            UpdateVisibleGay(baseObject);
+                                            if (baseObject.CellType == CellType.Monster)
+                                            {
+                                                if (Math.Abs(baseObject.CurrX - CurrX) <= (ViewRange - baseObject.ViewRange) &&
+                                                    Math.Abs(baseObject.CurrY - CurrY) <= (ViewRange - baseObject.ViewRange))
+                                                {
+                                                    baseObject.PendingViewUpdates.Add(ActorId);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                break;
+                        }
+                        nIdx++;
+                    }
+                }
+            }
+            int n18 = 0;
+            while (true)
+            {
+                if (VisibleActors.Count <= n18)
+                {
+                    break;
+                }
+                VisibleBaseObject visibleBaseObject = VisibleActors[n18];
+                if (visibleBaseObject.VisibleFlag == VisibleFlag.Hidden)
+                {
+                    VisibleActors.RemoveAt(n18);
+                    Dispose(visibleBaseObject);
+                    continue;
+                }
+                n18++;
             }
         }
 
