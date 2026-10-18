@@ -2391,14 +2391,24 @@ def cmd_mutate(args):
         # （`smframe::sm_digup`/`smframe::sm_digdown`）⇒ 按门规移出 blocked（自失效断言）。
         "SM_DIGUP",
         "SM_DIGDOWN",
+        # 卡 `openmir2-run-gap-mb2-melee-revive`（2026-10-18）：MB-2 的
+        # `DualAxeMonster.FlyAxeAttack` 的 `RM_FLYAXE`（`DualAxeMonster.cs:29`）、
+        # `LightingZombi.LightingAttack` 的 `RM_LIGHTING`（`LightingZombi.cs:22`）、
+        # `BaseObject.ReAlive()` 的 `RM_ALIVE`（`ZilKinZombi.Run` 复生）已在
+        # `bins/game-svr/src/main.rs` 的 `drain_monster_ref_msgs` 接生产发射点
+        # （`smframe::sm_flyaxe`/`sm_lighting`/`sm_alive`）⇒ 按门规移出 blocked（自失效断言）。
+        "SM_FLYAXE",
+        "SM_LIGHTING",
+        "SM_ALIVE",
     }
     # 仍 blocked（编码器已落地、生产路径无发射点）；各自 blocked_by 与出处（红名单 v2 §3 finding）：
     #   · 传送簇（切图/TransMap：HIDE 侧随切图簇；对照 SHOW(801)/SHOW2(807) 经
     #     sessionwire::map_change_frames 已接）—— SM_SPACEMOVE_HIDE(800)（V2-02）；
     #     HIDE2(806) 已随魔号 21 `MagSaceMove` 接线（`MagicManager.cs:881`）移入 `_wired_now`。
     #   · 怪物模型/形态簇（Entity 缺 skeleton 等形态字段 ⇒ 怪物动作帧发不出）
-    #     —— SM_SKELETON(33)（V2-03）/ SM_ALIVE(27)（V2-04）/ SM_DIGUP(20)/SM_DIGDOWN(21)/SM_FLYAXE(22)/
-    #        SM_LIGHTING(23)（V2-05）。
+    #     —— SM_SKELETON(33)（V2-03；MB-2 后仅剩它）。
+    #        （SM_ALIVE(27)/SM_FLYAXE(22)/SM_LIGHTING(23) 已随 MB-2 移入 `_wired_now`；
+    #          SM_DIGUP(20)/SM_DIGDOWN(21) 已在 MB-1 移入。）
     #   · buff / 状态效果簇（HP 量条 + 状态位 + 武器破碎 + 照明耐久；随 world-tick-expansion buff 批）
     #     —— SM_CLOSEHEALTH(1101)（V2-06；1100 已随 B3 魔号 28 移入 `_wired_now`，
     #        SM_INSTANCEHEALGUAGE(1103) 已随 B2 治疗族移入）/
@@ -2416,8 +2426,7 @@ def cmd_mutate(args):
     #     SM_PLAYDICE(8001)/SM_ITEMSHOW(610)（V2-14）。
     #     （SM_MAGICFIRE_FAIL(639) 原列本簇；卡 `openmir2-spell-mp-wrapper` 接线后已移入
     #      `_wired_now`，见上。）
-    _blocked = {"SM_SPACEMOVE_HIDE", "SM_SKELETON", "SM_ALIVE",
-                "SM_FLYAXE", "SM_LIGHTING",
+    _blocked = {"SM_SPACEMOVE_HIDE", "SM_SKELETON",
                 "SM_CLOSEHEALTH", "SM_BREAKWEAPON",
                 "SM_LAMPCHANGEDURA", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL",
                 "SM_QUERYYBSELL", "SM_RECONNECT", "SM_CHANGEFACE",

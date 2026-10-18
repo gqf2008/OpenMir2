@@ -90,7 +90,11 @@ pub type MonsterCreator<'a> =
 /// - 120 `SoccerBall`：`SoccerBall.cs:15` ⇒ `N550=0`；
 /// - 20 `ArcherPolice` / 112 `ArcherGuard`：`ArcherGuard.cs:17` ⇒ `GuardDirection=-1`；
 /// - 92 `CowKingMonster`：ctor `CowKingMonster.cs:20-24`（`JumpTime=now`、三个 Crazy 初值）
-///   + `Initialize()` `:35-36`（`oldHitTime=NextHitTime`、`oldWalkTime=WalkSpeed`）。
+///   + `Initialize()` `:35-36`（`oldHitTime=NextHitTime`、`oldWalkTime=WalkSpeed`）；
+/// - 96 `ZilKinZombi`：ctor `ZilKinZombi.cs:14` ⇒ `ViewRange=6`（`ZilKillCount` 是抽数字段，
+///   由 [`AnimalState::seed_from_spawn`] 消费构造抽，不在此表）；
+/// - 52/87/93/104：ctor `ViewRange=5` 与 `BaseObject` 缺省同值（ChickenDeer.cs:10、
+///   DualAxeMonster.cs:76），无需落字段。
 ///
 /// 表外 race 保持 [`Entity::new`] 的 C# 字段缺省（0/false）。`now` = oracle
 /// `HUtil32.GetTickCount()`（本骨架用 `World::clock_ms` 的确定性注入）。
@@ -128,6 +132,8 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
             entity.view_range = 16;
             entity.ai.animal = false;
         }
+        // `ZilKinZombi` ctor（`ZilKinZombi.cs:14`）：`ViewRange = 6`。
+        96 => entity.view_range = 6,
         // `CentipedeKingMonster` 覆盖（`CentipedeKingMonster.cs:14-15`）。
         107 => {
             entity.come_out_value = 4;

@@ -80,6 +80,15 @@ pub const RM_DIGUP: u16 = 10200;
 pub const RM_DIGDOWN: u16 = 10201;
 /// `Messages.RM_10205`（`src/OpenMir2/Messages.cs:618`）——`SM_716` 帧。
 pub const RM_10205: u16 = 10205;
+/// `Messages.RM_FLYAXE`（`src/OpenMir2/Messages.cs:616`）——`DualAxeMonster.FlyAxeAttack` 的飞斧帧
+/// （`DualAxeMonster.cs:29`；`SM_FLYAXE(22)`）。
+pub const RM_FLYAXE: u16 = 10202;
+/// `Messages.RM_LIGHTING`（`src/OpenMir2/Messages.cs:617`）——`LightingZombi.LightingAttack`
+/// （`LightingZombi.cs:22`；`SM_LIGHTING(23)`）。
+pub const RM_LIGHTING: u16 = 10204;
+/// `Messages.RM_ALIVE`（`src/OpenMir2/Messages.cs:612`）——`BaseObject.ReAlive()`
+/// （`BaseObject.Base.cs:354-358`；`ZilKinZombi.Run` 的复生；`SM_ALIVE(27)`）。
+pub const RM_ALIVE: u16 = 10153;
 
 /// `BaseObject.WalkTo` 的 `Dir → (dx, dy)`（`BaseObject.cs:601-...` 的 switch）。
 ///
@@ -678,6 +687,12 @@ pub struct MonsterRefMsg {
     pub n_param1: i32,
     pub n_param2: i32,
     pub n_param3: i32,
+    /// `RM_FLYAXE`/`RM_LIGHTING` 的**目标坐标快照**（发帧时刻 `target.CurrX/CurrY`）。
+    ///
+    /// oracle 在收件人处理消息时读 `ActorMgr.Get(nParam3).CurrX/CurrY`；本仓在 `world.tick()`
+    /// 之后排水，目标可能已移动 ⇒ 与收件人集合同口径，在**发帧时刻**快照。其它 ident 恒 0。
+    pub target_x: i32,
+    pub target_y: i32,
     pub dir: u8,
     pub x: i32,
     pub y: i32,
@@ -720,9 +735,29 @@ fn send_ref_msg(
     n_param2: i32,
     n_param3: i32,
 ) {
+    send_ref_msg_with_target(
+        world, actor_id, ident, w_param, n_param1, n_param2, n_param3, None,
+    );
+}
+
+/// [`send_ref_msg`] 的带目标版本：额外快照 `target.CurrX/CurrY`（`RM_FLYAXE`/`RM_LIGHTING` 的尾）。
+#[allow(clippy::too_many_arguments)]
+fn send_ref_msg_with_target(
+    world: &mut World,
+    actor_id: i32,
+    ident: u16,
+    w_param: i32,
+    n_param1: i32,
+    n_param2: i32,
+    n_param3: i32,
+    target: Option<i32>,
+) {
     let Some((dir, x, y, map_id, status, self_only)) = ref_snapshot(world, actor_id) else {
         return;
     };
+    let (target_x, target_y) = target
+        .and_then(|id| world.entities.get(id))
+        .map_or((0, 0), |t| (t.x, t.y));
     // 收件人**在发帧时刻**快照（oracle `SendRefMsg` 同点）；`self_only` 恒无收件人。
     let recipients = if self_only {
         Vec::new()
@@ -736,6 +771,8 @@ fn send_ref_msg(
         n_param1,
         n_param2,
         n_param3,
+        target_x,
+        target_y,
         dir,
         x,
         y,
@@ -746,9 +783,13 @@ fn send_ref_msg(
     });
 }
 
-/// MB-1 四个专用怪的 `Run` 覆写分派（`CreateMonster` 的 race → 类映射）。
+/// 专用怪 `Run` 覆写的分派（`CreateMonster` 的 race → 类映射）。
 ///
-/// 返回 `None` = 非本批类，调用方继续走通用 [`monster_run`]；否则按 [`ClassRunBase`]
+/// 已接：MB-1 的 `StickMonster`(85)/`DigOutZombi`(95)/`ScultureMonster`(101)/
+/// `BigHeartMonster`(115)；MB-2 的 `ChickenDeer`(52)/`DualAxeMonster`(87，93/104 继承)/
+/// `LightingZombi`(94)/`ZilKinZombi`(96)。
+///
+/// 返回 `None` = 非上述类，调用方继续走通用 [`monster_run`]；否则按 [`ClassRunBase`]
 /// 决定 oracle `base.Run()` 的落点。
 pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBase> {
     let race = world.entities.get(actor_id)?.race;
@@ -772,6 +813,24 @@ pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBas
         115 => {
             big_heart_monster_run(world, actor_id);
             Some(ClassRunBase::Animal)
+        }
+        // **MB-2**：`ChickenDeer`（52）、`DualAxeMonster` 及 93/104 继承、
+        // `LightingZombi`（94）、`ZilKinZombi`（96）。
+        52 => {
+            chicken_deer_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        87 | 93 | 104 => {
+            dual_axe_monster_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        94 => {
+            lighting_zombi_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        96 => {
+            zil_kin_zombi_run(world, actor_id);
+            Some(ClassRunBase::Monster)
         }
         _ => None,
     }
@@ -1010,6 +1069,566 @@ fn big_heart_monster_run(world: &mut World, actor_id: i32) {
         .is_some_and(|e| can_move(e) && !e.visible_actors.is_empty());
     if ok {
         let _ = big_heart_attack_target(world, actor_id);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// **MB-2**（R13/R24/R08/R43）——近身 RNG 回退 / 复生。
+// ---------------------------------------------------------------------------
+
+/// `MonsterObject.Run` 里的**虚调用** `AttackTarget()`（`MonsterObject.cs:277`）分派。
+///
+/// 本批接 `DualAxeMonster.AttackTarget`（`DualAxeMonster.cs:33-72`，93/104 继承同一实现）；
+/// 其余 race 仍走基版 [`attack_target`]。
+fn monster_attack_target(world: &mut World, actor_id: i32) -> bool {
+    match world.entities.get(actor_id).map(|e| e.race) {
+        Some(87 | 93 | 104) => dual_axe_attack_target(world, actor_id),
+        _ => attack_target(world, actor_id),
+    }
+}
+
+/// `DualAxeMonster.AttackMax` 的 race → 常量映射（`DualAxeMonster.cs:80` =2；
+/// `ThornDarkMonster.cs:7` =3；`ArcherMonster.cs:10` =6）。类常量，不随实例变化。
+fn dual_axe_attack_max(race: u8) -> i32 {
+    match race {
+        93 => 3,
+        104 => 6,
+        _ => 2,
+    }
+}
+
+/// `DualAxeMonster.AttackTarget()`（`DualAxeMonster.cs:33-72`）。
+///
+/// **oracle bug 照搬**：`:42`/`:61` 两处都判 `|CurrX - TargetCret.CurrX|`（`CurrY` 不参与）。
+/// `AttackTick` 在距离判定**之前**刷新（`:41`）；只有 `AttackMax - 1 > _mNAttackCount` 才飞斧，
+/// 否则抽 `Random(5)`（`==0 ⇒ _mNAttackCount = 0`）。
+// oracle `:42`/`:61` 两处都写 `Math.Abs(CurrX - TargetCret.CurrX)`（副本），照抄 ⇒ 显式放行 eq_op。
+#[allow(clippy::eq_op)]
+fn dual_axe_attack_target(world: &mut World, actor_id: i32) -> bool {
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return false;
+    };
+    let now = world.clock_ms;
+    let due = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
+    if !due {
+        return false;
+    }
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.attack_tick = now;
+    }
+    let (cx, race) = match world.entities.get(actor_id) {
+        Some(e) => (e.x, e.race),
+        None => return false,
+    };
+    let Some((tx, ty, t_map, a_map)) = world
+        .entities
+        .get(target_id)
+        .zip(world.entities.get(actor_id))
+        .map(|(t, a)| (t.x, t.y, t.map_id, a.map_id))
+    else {
+        return false;
+    };
+    // `:42`：两处都是 `Math.Abs(CurrX - TargetCret.CurrX) <= 7`（照抄 bug）。
+    let dx = (cx - tx).abs();
+    if dx <= 7 && dx <= 7 {
+        let attack_max = dual_axe_attack_max(race);
+        let count = world
+            .entities
+            .get(actor_id)
+            .map_or(0, |e| e.ai.m_n_attack_count);
+        if attack_max - 1 > count {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.m_n_attack_count += 1;
+                e.ai.target_focus_tick = now;
+            }
+            fly_axe_attack(world, actor_id, target_id);
+        } else if world.rng.random_below(5) == 0 {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.m_n_attack_count = 0;
+            }
+        }
+        return true;
+    }
+    if t_map == a_map {
+        // `:61`：两处都是 `|CurrX - TargetCret.CurrX| <= 11`（照抄 bug）。
+        if dx <= 11 && dx <= 11 {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.target_x = tx;
+                e.ai.target_y = ty;
+            }
+        }
+    } else {
+        del_target_creature(world, actor_id);
+    }
+    false
+}
+
+/// `DualAxeMonster.FlyAxeAttack(IActor target)`（`DualAxeMonster.cs:14-31`）。
+///
+/// 取数序：`CanFly` 门失败 ⇒ **零抽**；通过 ⇒ `Random(|Hi(DC)-Lo(DC)|+1)`（`:19`）→
+/// 目标 `GetHitStruckDamage`（AC 两抽）→ 目标 `StruckDamage`（玩家耐久抽）。
+/// 末尾 `SendRefMsg(RM_FLYAXE, Dir, CurrX, CurrY, target.ActorId, "")`（`:29`）。
+fn fly_axe_attack(world: &mut World, actor_id: i32, target_id: i32) {
+    let Some((cx, cy, map_id)) = world.entities.get(actor_id).map(|e| (e.x, e.y, e.map_id)) else {
+        return;
+    };
+    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+        return;
+    };
+    if !world.can_fly(map_id, cx, cy, tx, ty) {
+        return;
+    }
+    let dir = crate::magic::next_direction(cx, cy, tx, ty);
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = dir;
+    }
+    let dc = world.entities.get(actor_id).map_or(0, |e| e.dc);
+    let lo = i32::from(crate::combat::lo_byte(dc));
+    let hi = i32::from(crate::combat::hi_byte(dc));
+    let n_damage = lo + world.rng.random_below((hi - lo).abs() + 1);
+    if n_damage > 0 {
+        let Some(attacker) = world.entities.get(actor_id).cloned() else {
+            return;
+        };
+        let Some(target) = world.entities.get(target_id).cloned() else {
+            return;
+        };
+        let reduced =
+            crate::combat::get_hit_struck_damage(&mut world.rng, &target, &attacker, n_damage);
+        if reduced > 0 {
+            let last_hitter = target
+                .last_hiter
+                .and_then(|id| world.entities.get(id))
+                .map(|h| crate::combat::LastHitter {
+                    race: h.race,
+                    job: h.job,
+                    has_master: h.master.is_some(),
+                });
+            let cfg = world.combat_config;
+            let per10 = crate::combat::struck_damage_multiplier(
+                &target,
+                last_hitter,
+                cfg.warr_mon,
+                cfg.wizard_mon,
+                cfg.taos_mon,
+                cfg.mon_hum,
+            );
+            let final_damage = (i32::from(reduced) * per10 / 10).max(0) as u16;
+            let last_hiter_id = target.last_hiter;
+            // `BaseObject.StruckDamage` → `DamageHealth`（`BaseObject.Base.cs:827-857`）。
+            crate::buff::damage_health(world, target_id, i32::from(final_damage), last_hiter_id);
+            // `PlayObject.StruckDamage` 在 `base.StruckDamage` **之后**的耐久段
+            // （`PlayObject.cs:2957/2998-3039`）；函数自身对非玩家目标零动作。
+            if let Some(t) = world.entities.get_mut(target_id) {
+                crate::combat::struck_damage_durability(&mut world.rng, t);
+            }
+            let (hp, killed) = world
+                .entities
+                .get(target_id)
+                .map_or((0, false), |e| (e.hp, e.hp == 0));
+            world.pending_ai_attacks.push((
+                actor_id,
+                target_id,
+                crate::combat::AttackOutcome {
+                    power: n_damage,
+                    hit: true,
+                    damage: final_damage,
+                    killed,
+                    target_hp_after: hp,
+                },
+            ));
+        }
+    }
+    send_ref_msg_with_target(
+        world,
+        actor_id,
+        RM_FLYAXE,
+        i32::from(dir),
+        cx,
+        cy,
+        target_id,
+        Some(target_id),
+    );
+}
+
+/// `DualAxeMonster.Run()`（`DualAxeMonster.cs:84-137`）。
+///
+/// 门：`CanMove()`；5s `SearchEnemyTick` 门扫最近 proper（`!HideMode || CoolEye`）⇒ `SetTargetCreat`；
+/// `(now - WalkTick) > WalkSpeed && TargetCret != null`：
+/// `|Δx| <= 4`（**四处都是 CurrX，照抄 bug**）⇒ `|Δx| <= 2` 时 `Random(5)==0` 才回退，
+/// 3-4 格直接回退。`WalkTick` 刷新在 `base.Run()`（= `MonsterObject.Run`）里。
+// oracle `:120/:122` 四处判定全部重复写 `Math.Abs(CurrX - TargetCret.CurrX)`，照抄 ⇒ 放行 eq_op。
+#[allow(clippy::eq_op)]
+fn dual_axe_monster_run(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !can_move(e) {
+        return;
+    }
+    let (cx, cy, cool_eye, walk_tick, walk_speed, enemy_tick) = (
+        e.x,
+        e.y,
+        e.ai.cool_eye,
+        e.ai.walk_tick,
+        e.ai.walk_speed,
+        e.ai.search_enemy_tick,
+    );
+    if now - enemy_tick >= 5000 {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.search_enemy_tick = now;
+        }
+        let visible: Vec<i32> = world
+            .entities
+            .get(actor_id)
+            .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
+            .unwrap_or_default();
+        let mut n_rage = 9999;
+        let mut best: Option<i32> = None;
+        for target_id in visible {
+            let Some(t) = world.entities.get(target_id) else {
+                continue;
+            };
+            if t.death {
+                continue;
+            }
+            let proper = world
+                .entities
+                .get(actor_id)
+                .is_some_and(|a| is_proper_target(a, t));
+            if proper && (!t.hide_mode || cool_eye) {
+                let dist = (cx - t.x).abs() + (cy - t.y).abs();
+                if dist < n_rage {
+                    n_rage = dist;
+                    best = Some(target_id);
+                }
+            }
+        }
+        if let Some(target_id) = best {
+            set_target_creature(world, actor_id, target_id);
+        }
+    }
+    let target = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature);
+    let Some(target_id) = target else {
+        return;
+    };
+    if now - walk_tick <= walk_speed {
+        return;
+    }
+    let Some(tx) = world.entities.get(target_id).map(|t| t.x) else {
+        return;
+    };
+    // `:120`/`:122`：四处判定全部是 `Math.Abs(CurrX - TargetCret.CurrX)`——CurrY 从不参与。
+    let dx = (cx - tx).abs();
+    if dx <= 4 && dx <= 4 {
+        if dx <= 2 && dx <= 2 {
+            if world.rng.random_below(5) == 0 {
+                if let Some((bx, by)) = get_back_position(world, actor_id) {
+                    if let Some(e) = world.entities.get_mut(actor_id) {
+                        e.ai.target_x = bx;
+                        e.ai.target_y = by;
+                    }
+                }
+            }
+        } else if let Some((bx, by)) = get_back_position(world, actor_id) {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.target_x = bx;
+                e.ai.target_y = by;
+            }
+        }
+    }
+}
+
+/// `LightingZombi.LightingAttack(byte nDir)`（`LightingZombi.cs:15-30`）。
+///
+/// `Dir = nDir` → `SendRefMsg(RM_LIGHTING, 1, CurrX, CurrY, TargetCret.ActorId, "")` →
+/// `GetNextPosition(...,1)` 成功才：`GetNextPosition(...,9)` →
+/// `Random(|Hi(DC)-Lo(DC)|+1)` → `MagPassThroughMagic(..., true)` → `BreakHolySeizeMode()`。
+fn lighting_attack(world: &mut World, actor_id: i32, n_dir: u8) {
+    let Some((cx, cy, map_id, target_id)) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature.map(|t| (e.x, e.y, e.map_id, t)))
+    else {
+        return;
+    };
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = n_dir;
+    }
+    send_ref_msg_with_target(
+        world,
+        actor_id,
+        RM_LIGHTING,
+        1,
+        cx,
+        cy,
+        target_id,
+        Some(target_id),
+    );
+    let Some((sx, sy)) = world
+        .maps
+        .get(map_id)
+        .and_then(|m| m.get_next_position(cx, cy, n_dir, 1))
+    else {
+        return;
+    };
+    let (tx, ty) = world
+        .maps
+        .get(map_id)
+        .and_then(|m| m.get_next_position(cx, cy, n_dir, 9))
+        .unwrap_or((cx, cy));
+    let dc = world.entities.get(actor_id).map_or(0, |e| e.dc);
+    let lo = i32::from(crate::combat::lo_byte(dc));
+    let hi = i32::from(crate::combat::hi_byte(dc));
+    let n_power = i32::max(0, lo + world.rng.random_below((hi - lo).abs() + 1));
+    world.mag_pass_through_magic(actor_id, sx, sy, tx, ty, n_dir, n_power, true);
+    break_holy_seize_mode(world, actor_id);
+}
+
+/// `LightingZombi.Run()`（`LightingZombi.cs:32-58`）。
+///
+/// 8s/1s 索敌；`|Δ|<=4` 且 `|Δ|<=2` 时 `Random(3)!=0` ⇒ **`base.Run(); return;`**
+/// （跳过本类的 `LightingAttack` 段——调用方在本函数返回后照常跑 `base.Run()` 链）。
+fn lighting_zombi_run(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !(can_move(e) && now - e.ai.search_enemy_tick > 8000) {
+        return;
+    }
+    let enemy_tick = e.ai.search_enemy_tick;
+    let has_target = e.ai.target_creature.is_some();
+    if now - enemy_tick > 1000 && !has_target {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.search_enemy_tick = now;
+        }
+        search_target(world, actor_id);
+    }
+    let Some((cx, cy, walk_tick, walk_speed, target_id)) = world.entities.get(actor_id).map(|e| {
+        (
+            e.x,
+            e.y,
+            e.ai.walk_tick,
+            e.ai.walk_speed,
+            e.ai.target_creature,
+        )
+    }) else {
+        return;
+    };
+    let Some(target_id) = target_id else {
+        return;
+    };
+    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+        return;
+    };
+    let dx = (cx - tx).abs();
+    let dy = (cy - ty).abs();
+    if now - walk_tick > walk_speed && dx <= 4 && dy <= 4 {
+        if dx <= 2 && dy <= 2 && world.rng.random_below(3) != 0 {
+            // oracle `base.Run(); return;`——跳过下面的 LightningAttack 段。
+            return;
+        }
+        if let Some((bx, by)) = get_back_position(world, actor_id) {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.target_x = bx;
+                e.ai.target_y = by;
+            }
+        }
+    }
+    let due = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
+    if dx < 6 && dy < 6 && due {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.attack_tick = now;
+        }
+        let dir = crate::magic::next_direction(cx, cy, tx, ty);
+        lighting_attack(world, actor_id, dir);
+    }
+}
+
+/// `ChickenDeer.Run()`（`ChickenDeer.cs:13-63`）。
+///
+/// 两处 oracle bug **照搬**：
+/// - `:55` 两个条件都是 `|CurrX - baseObject.CurrX| <= 6`（`Δy` 从不参与）；
+/// - `baseObject` 是扫描循环的**残留变量**（循环结束停在 `VisibleActors` 最后一项，
+///   即使该项 `Death`/非目标），**不是** `TargetCret`。
+///
+/// 第二段与扫描段共用同一个 `(now - WalkTick) >= WalkSpeed` 门 ⇒ 第二段可达时扫描段必已执行，
+/// 残留变量必为「可见表最后一项」（可见表为空时 `RunAwayMode` 刚被清、第二段不可达）。
+// oracle `:55` 两个条件都写 `Math.Abs(CurrX - baseObject.CurrX)`，照抄 ⇒ 放行 eq_op。
+#[allow(clippy::eq_op)]
+fn chicken_deer_run(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !can_move(e) {
+        return;
+    }
+    let (cx, cy, cool_eye, walk_tick, walk_speed) =
+        (e.x, e.y, e.ai.cool_eye, e.ai.walk_tick, e.ai.walk_speed);
+    if now - walk_tick < walk_speed {
+        return;
+    }
+    let visible: Vec<i32> = world
+        .entities
+        .get(actor_id)
+        .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
+        .unwrap_or_default();
+    let mut n10 = 9999;
+    let mut best: Option<i32> = None;
+    let mut residual: Option<i32> = None;
+    for target_id in visible {
+        // `baseObject = VisibleActors[i].BaseObject;`——先赋值，再判 `Death`（残留变量语义）。
+        residual = Some(target_id);
+        let Some(t) = world.entities.get(target_id) else {
+            continue;
+        };
+        if t.death {
+            continue;
+        }
+        let proper = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|a| is_proper_target(a, t));
+        if proper && (!t.hide_mode || cool_eye) {
+            let dist = (cx - t.x).abs() + (cy - t.y).abs();
+            if dist < n10 {
+                n10 = dist;
+                best = Some(target_id);
+            }
+        }
+    }
+    if let Some(target_id) = best {
+        // oracle 直接赋 `RunAwayMode = true; TargetCret = ...`（不走 `SetTargetCreat`，
+        // 因此**不刷新** `TargetFocusTick`）。
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.run_away_mode = true;
+            e.ai.target_creature = Some(target_id);
+        }
+    } else if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.run_away_mode = false;
+        e.ai.target_creature = None;
+    }
+    let (run_away, target_id) = world.entities.get(actor_id).map_or((false, None), |e| {
+        (e.ai.run_away_mode, e.ai.target_creature)
+    });
+    let Some(target_id) = target_id else {
+        return;
+    };
+    if !run_away {
+        return;
+    }
+    let Some(residual_x) = residual.and_then(|id| world.entities.get(id)).map(|r| r.x) else {
+        return;
+    };
+    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+        return;
+    };
+    // `:55`：两个条件都是 `|CurrX - baseObject.CurrX| <= 6`（`Δy` 不参与，照抄 bug）。
+    let dx = (cx - residual_x).abs();
+    if dx <= 6 && dx <= 6 {
+        let dir = crate::magic::next_direction(cx, cy, tx, ty);
+        // `Envir.GetNextPosition(TargetCret.CurrX, TargetCret.CurrY, n14, 5, ...)`——**起点是目标格**。
+        let (nx, ny) = world
+            .maps
+            .get(world.entities.get(actor_id).map_or(0, |e| e.map_id))
+            .and_then(|m| m.get_next_position(tx, ty, dir, 5))
+            .unwrap_or((tx, ty));
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.target_x = nx;
+            e.ai.target_y = ny;
+        }
+    }
+}
+
+/// `ZilKinZombi.Die()`（`ZilKinZombi.cs:24-33`）的覆写段。
+///
+/// `ZilKillCount > 0` ⇒ `ReAliveTick = now; ZilkinDieTick = (Random(20)+4)*1000;`
+/// 随后**无条件** `ZilKillCount -= 1`（`>0` 门只包住前两行）。
+///
+/// 调用点：死亡结算（[`crate::world::World`] 的 `settle_deaths`，等价 oracle `base.Run` 的
+/// `HP==0 ⇒ Die()`）。抽数站点落在本文件（`monster_ai` 组）。
+pub fn zil_kin_zombi_die(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some((race, count)) = world
+        .entities
+        .get(actor_id)
+        .map(|e| (e.race, e.ai.zil_kill_count))
+    else {
+        return;
+    };
+    if race != 96 {
+        return;
+    }
+    if count > 0 {
+        let die_tick = i64::from(world.rng.random_below(20) + 4) * 1000;
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.re_alive_tick = now;
+            e.ai.zilkin_die_tick = die_tick;
+        }
+    }
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.zil_kill_count -= 1;
+    }
+}
+
+/// `BaseObject.ReAlive()`（`BaseObject.Base.cs:354-358`）：`Death = false` + `RM_ALIVE`。
+fn monster_re_alive(world: &mut World, actor_id: i32) {
+    let Some((dir, x, y)) = world.entities.get(actor_id).map(|e| (e.ai.dir, e.x, e.y)) else {
+        return;
+    };
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.death = false;
+        // 本骨架的死亡结算闩锁（oracle 无此字段，等价物）：不清 ⇒ 第二次死亡永不结算。
+        e.death_settled = false;
+    }
+    send_ref_msg(world, actor_id, RM_ALIVE, i32::from(dir), x, y, 0);
+}
+
+/// `ZilKinZombi.Run()`（`ZilKinZombi.cs:35-47`）。
+///
+/// 门：`Death && !Ghost && STONE==0 && ZilKillCount >= 0 && VisibleActors.Count > 0 &&
+/// (now - ReAliveTick) >= ZilkinDieTick`。
+/// 复生：`MaxHP >>= 1`、`FightExp /= 2`、`HP = MaxHP`、`ReAlive()`、`WalkTick = now + 1000`。
+fn zil_kin_zombi_run(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    let revive = e.death
+        && !e.ghost
+        && e.status_time[crate::entity::POISON_STONE] == 0
+        && e.ai.zil_kill_count >= 0
+        && !e.visible_actors.is_empty()
+        && now - e.re_alive_tick >= e.ai.zilkin_die_tick;
+    if !revive {
+        return;
+    }
+    let max_hp = e.max_hp >> 1;
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.max_hp = max_hp;
+        // `FightExp = FightExp / 2`（整数除法）。
+        e.mon_exp /= 2;
+        e.hp = max_hp;
+    }
+    monster_re_alive(world, actor_id);
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.walk_tick = now + 1000;
     }
 }
 
@@ -1262,12 +1881,30 @@ pub fn animal_run(world: &mut World, actor_id: i32) {
 /// **无随机数、无移动**。主人不在实体表（悬空 id）⇒ `None`（等价 oracle 的 `Master == null`）。
 fn master_get_back_position(world: &World, master_id: i32) -> Option<(i32, i32)> {
     let m = world.entities.get(master_id)?;
-    let (mut n_x, mut n_y) = (m.x, m.y);
+    Some(back_position_from(world, m.map_id, m.x, m.y, m.ai.dir))
+}
+
+/// `BaseObject.GetBackPosition(ref nX, ref nY)` 的**自身**版本（`BaseObject.cs:1878-1927`）：
+/// 按自己的 `Dir` 取身后一格，并在自己所在地图的 `Width/Height` 内夹取。
+///
+/// 与 [`master_get_back_position`] 共用同一份方向/边界语义（后者只是「按主人的状态取」）。
+/// MB-2 的 `DualAxeMonster`/`LightingZombi` 用它写 `TargetX/TargetY`（`DualAxeMonster.cs:126/131`、
+/// `LightingZombi.cs:48`）。
+fn get_back_position(world: &World, actor_id: i32) -> Option<(i32, i32)> {
+    let e = world.entities.get(actor_id)?;
+    Some(back_position_from(world, e.map_id, e.x, e.y, e.ai.dir))
+}
+
+/// `GetBackPosition` 的纯函数核心：给定地图/坐标/朝向，返回身后一格（含边界夹取）。
+///
+/// **无随机数、无移动**。对角方向两轴同时满足边界才一起动（oracle 的 `&&` 门，照抄）。
+fn back_position_from(world: &World, map_id: usize, x: i32, y: i32, dir: u8) -> (i32, i32) {
+    let (mut n_x, mut n_y) = (x, y);
     let (w, h) = world
         .maps
-        .get(m.map_id)
+        .get(map_id)
         .map_or((0, 0), |map| (map.width, map.height));
-    match m.ai.dir {
+    match dir {
         DIR_UP if n_y < h - 1 => n_y += 1,
         DIR_DOWN if n_y > 0 => n_y -= 1,
         DIR_LEFT if n_x < w - 1 => n_x += 1,
@@ -1290,7 +1927,7 @@ fn master_get_back_position(world: &World, master_id: i32) -> Option<(i32, i32)>
         }
         _ => {}
     }
-    Some((n_x, n_y))
+    (n_x, n_y)
 }
 
 /// `MonsterObject.Run`（`MonsterObject.cs:251-360`）的**普通怪路径**（任务/逃跑触发点未建模；
@@ -1383,7 +2020,9 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
                 .and_then(|e| e.ai.target_creature);
             match target {
                 Some(_) => {
-                    if attack_target(world, actor_id) {
+                    // `AttackTarget()` 是**虚调用**：MB-2 起按 race 分派
+                    // （`DualAxeMonster` 87/93/104 覆写）。
+                    if monster_attack_target(world, actor_id) {
                         return;
                     }
                 }
@@ -1778,6 +2417,25 @@ pub fn monster_ai_tick(world: &mut World) {
         // `CanMove()`（`AnimalObject.cs:162-165`）对 `Death` 恒 false ⇒ `MonsterObject.Run`
         // 的 AI 体（Think/Walk/Attack）整段跳过，只剩 `base.Run()` 的死亡支与 VerifyTick 段。
         if world.entities.get(id).is_some_and(|e| e.death) {
+            // oracle `ProcessMonsters` 对 `!Ghost` 的怪**照常调 `Run()`**（`WorldServer.MonGen.cs:288`）
+            // ——`ZilKinZombi.Run` 的复活门正是读 `Death`（`ZilKinZombi.cs:37`）。本批只对
+            // race 96 走类覆写；其余死怪维持既有等价（`BaseObject.Run` 的死亡支）。
+            if world.entities.get(id).is_some_and(|e| e.race == 96) {
+                if let Some(base) = monster_class_run(world, id) {
+                    match base {
+                        ClassRunBase::Animal => {
+                            animal_run(world, id);
+                            base_object_run_monster(world, id);
+                        }
+                        ClassRunBase::Monster => {
+                            monster_run(world, id);
+                            animal_run(world, id);
+                            base_object_run_monster(world, id);
+                        }
+                    }
+                    continue;
+                }
+            }
             base_object_run_monster(world, id);
             continue;
         }
@@ -3882,5 +4540,501 @@ mod tests {
             Some(ClassRunBase::Animal)
         );
         assert!(world.self_delay_msgs.is_empty(), "Death ⇒ 不攻击");
+    }
+    // ------------------------------------------------------------------
+    // **MB-2**（R13/R24/R08/R43）——构造级用例。
+    // ------------------------------------------------------------------
+
+    /// 找一个满足 `Random(5)` 指定分支的种子。
+    fn mb2_seed_mod5(want_zero: bool) -> i32 {
+        (0..100_000)
+            .find(|seed| (RandomNumber::with_seed(*seed).random_below(5) == 0) == want_zero)
+            .expect("seed")
+    }
+
+    /// 找一个满足 `Random(3)` 指定分支的种子。
+    fn mb2_seed_mod3(want_zero: bool) -> i32 {
+        (0..100_000)
+            .find(|seed| (RandomNumber::with_seed(*seed).random_below(3) == 0) == want_zero)
+            .expect("seed")
+    }
+
+    /// R13（Run）：`:120/:122` 四处判定**只读 `CurrX`**（`Δy` 完全不参与，照抄 bug）；
+    /// `Random(5)` 只在 `Δx<=2` 支抽一次、参数 5；3-4 格支**零抽**直接 `GetBackPosition`。
+    #[test]
+    fn mb2_r13_run_reads_only_currx_and_draws_random5_in_two_tile_branch() {
+        let zero = mb2_seed_mod5(true);
+        let nonzero = mb2_seed_mod5(false);
+        let run = |seed: i32, tx: i32, ty: i32| -> (i32, i32, usize) {
+            let mut world = World::new(32, 32);
+            let id = mb1_monster(&mut world, 87, 10, 10);
+            let p = mb1_players(&mut world, tx, ty);
+            {
+                let e = world.entities.get_mut(id).unwrap();
+                e.ai.search_enemy_tick = 100_000; // 跳过 5s 扫描
+                e.ai.target_creature = Some(p);
+            }
+            world.clock_ms = 100_000;
+            world.rng = RandomNumber::with_seed(seed);
+            assert_eq!(
+                monster_class_run(&mut world, id),
+                Some(ClassRunBase::Monster)
+            );
+            let e = world.entities.get(id).unwrap();
+            // 统计本函数消耗的取数次数（用独立探针复跑同一路径不现实；这里用
+            // 「Random(5) 是否发生」的两支断言 + 下方零抽支的流对比）。
+            let _ = e;
+            (e.ai.target_x, e.ai.target_y, 0)
+        };
+        // Δx=1, Δy=4：`Δx<=2` 支（随机 0）⇒ GetBackPosition（Dir=Up ⇒ y+1）。
+        let (tx, ty, _) = run(zero, 11, 14);
+        assert_eq!((tx, ty), (10, 11), "Δy 不参与 ⇒ 必须进 ≤2 支并回退");
+        // 随机非 0 ⇒ 不回退。
+        let (tx, ty, _) = run(nonzero, 11, 14);
+        assert_eq!((tx, ty), (-1, 0), "Random(5)!=0 ⇒ 不改 TargetX/Y");
+        // **`Δx=0, Δy=4` 通过 ≤2 门并抽 Random(5)**（判据钉死）。
+        let (tx, ty, _) = run(zero, 10, 14);
+        assert_eq!((tx, ty), (10, 11), "Δx=0,Δy=4 必须进 ≤2 支");
+        let mut world = World::new(32, 32);
+        let id = mb1_monster(&mut world, 87, 10, 10);
+        let p = mb1_players(&mut world, 10, 14);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.search_enemy_tick = 100_000;
+            e.ai.target_creature = Some(p);
+        }
+        world.clock_ms = 100_000;
+        world.rng = RandomNumber::with_seed(zero);
+        let mut probe = RandomNumber::with_seed(zero);
+        let _ = probe.random_below(5);
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        assert_eq!(
+            world.rng.random(),
+            probe.random(),
+            "Δx=0,Δy=4 必须抽一次 Random(5)（修成判 Δy 会走 3-4 支 ⇒ 红）"
+        );
+        // Δx=3（3-4 格支）：直接回退、**零抽**。
+        let mut world = World::new(32, 32);
+        let id = mb1_monster(&mut world, 87, 10, 10);
+        let p = mb1_players(&mut world, 13, 10);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.search_enemy_tick = 100_000;
+            e.ai.target_creature = Some(p);
+        }
+        world.clock_ms = 100_000;
+        world.rng = RandomNumber::with_seed(424242);
+        let mut probe = RandomNumber::with_seed(424242);
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        let e = world.entities.get(id).unwrap();
+        assert_eq!((e.ai.target_x, e.ai.target_y), (10, 11), "3-4 格直接回退");
+        assert_eq!(world.rng.random(), probe.random(), "3-4 格支零抽");
+        // Δx=5：外层 `<=4` 不通过 ⇒ 零抽、不改 TargetX/Y。
+        let mut world = World::new(32, 32);
+        let id = mb1_monster(&mut world, 87, 10, 10);
+        let p = mb1_players(&mut world, 15, 10);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.search_enemy_tick = 100_000;
+            e.ai.target_creature = Some(p);
+        }
+        world.clock_ms = 100_000;
+        world.rng = RandomNumber::with_seed(424242);
+        let mut probe = RandomNumber::with_seed(424242);
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        let e = world.entities.get(id).unwrap();
+        assert_eq!((e.ai.target_x, e.ai.target_y), (-1, 0), "Δx=5 不回退");
+        assert_eq!(world.rng.random(), probe.random(), "Δx=5 零抽");
+        // ≤2 支恰抽一次 `Random(5)`。
+        let mut world = World::new(32, 32);
+        let id = mb1_monster(&mut world, 87, 10, 10);
+        let p = mb1_players(&mut world, 11, 14);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.ai.search_enemy_tick = 100_000;
+            e.ai.target_creature = Some(p);
+        }
+        world.clock_ms = 100_000;
+        world.rng = RandomNumber::with_seed(zero);
+        let mut probe = RandomNumber::with_seed(zero);
+        let _ = probe.random_below(5);
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        assert_eq!(world.rng.random(), probe.random(), "恰一次 Random(5)");
+    }
+
+    /// R13（AttackTarget）：`:42` 两处都判 `CurrX`（`Δy` 不参与，照抄 bug）；
+    /// `AttackMax-1 > _mNAttackCount` 才飞斧（`Random(|Hi(DC)-Lo(DC)|+1)` + AC 两抽），
+    /// 否则只抽 `Random(5)`；`RM_FLYAXE` 帧带目标坐标快照。
+    #[test]
+    fn mb2_r13_attack_target_flyaxe_and_count_random5() {
+        // 计数未耗尽（count=0, AttackMax=2）⇒ FlyAxe。
+        let mut world = World::new(64, 64);
+        let id = mb1_monster(&mut world, 87, 10, 10);
+        let t = monster(&mut world, 11, 10);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.dc = (9 << 8) | 5; // Lo=5, Hi=9 ⇒ Random(5)
+            e.ai.attack_tick = 0;
+            e.ai.target_creature = Some(t);
+            e.ai.m_n_attack_count = 0;
+        }
+        {
+            let t = world.entities.get_mut(t).unwrap();
+            t.ac = 0;
+            t.hp = 60;
+            t.max_hp = 60;
+        }
+        world.clock_ms = 100_000;
+        world.rng = RandomNumber::with_seed(31415);
+        let mut probe = RandomNumber::with_seed(31415);
+        let draw = probe.random_below(5);
+        let _ac = probe.random_range(0, 1);
+        assert!(dual_axe_attack_target(&mut world, id));
+        assert_eq!(world.rng.random(), probe.random(), "Random(5)+AC 两抽");
+        assert_eq!(world.entities.get(id).unwrap().ai.m_n_attack_count, 1);
+        assert_eq!(world.entities.get(id).unwrap().ai.attack_tick, 100_000);
+        assert_eq!(world.entities.get(t).unwrap().hp, 60 - (5 + draw) as u16);
+        assert_eq!(world.pending_ai_attacks.len(), 1);
+        let frames = world.pending_monster_ref_msgs.clone();
+        let fly = frames
+            .iter()
+            .find(|m| m.ident == RM_FLYAXE)
+            .expect("RM_FLYAXE");
+        assert_eq!((fly.n_param1, fly.n_param2), (10, 10), "头 = 施法者坐标");
+        assert_eq!(fly.n_param3, t);
+        assert_eq!((fly.target_x, fly.target_y), (11, 10), "尾 = 目标坐标快照");
+        assert_eq!(fly.dir, DIR_RIGHT, "Dir = GetNextDirection");
+
+        // 计数耗尽（count=1）⇒ 只抽 `Random(5)`，不飞斧。
+        for want_zero in [true, false] {
+            let seed = mb2_seed_mod5(want_zero);
+            let mut world = World::new(64, 64);
+            let id = mb1_monster(&mut world, 87, 10, 10);
+            let t = monster(&mut world, 11, 10);
+            {
+                let e = world.entities.get_mut(id).unwrap();
+                e.ai.attack_tick = 0;
+                e.ai.target_creature = Some(t);
+                e.ai.m_n_attack_count = 1;
+            }
+            world.clock_ms = 100_000;
+            world.rng = RandomNumber::with_seed(seed);
+            let mut probe = RandomNumber::with_seed(seed);
+            let d = probe.random_below(5);
+            assert!(dual_axe_attack_target(&mut world, id));
+            assert_eq!(
+                world.rng.random(),
+                probe.random(),
+                "耗尽 ⇒ 恰一次 Random(5)"
+            );
+            assert_eq!(
+                world.entities.get(id).unwrap().ai.m_n_attack_count,
+                if d == 0 { 0 } else { 1 }
+            );
+            assert!(world.pending_ai_attacks.is_empty(), "不飞斧");
+            assert!(world.pending_monster_ref_msgs.is_empty(), "无 RM_FLYAXE");
+        }
+
+        // **`Δy` 不参与**：Δx=1, Δy=8 ⇒ 仍进 `<=7` 支并飞斧（修成判两轴 ⇒ 本断言红）。
+        let mut world = World::new(64, 64);
+        let id = mb1_monster(&mut world, 87, 10, 10);
+        let t = monster(&mut world, 11, 18);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.dc = (9 << 8) | 5;
+            e.ai.attack_tick = 0;
+            e.ai.target_creature = Some(t);
+        }
+        world.entities.get_mut(t).unwrap().ac = 0;
+        world.clock_ms = 100_000;
+        world.rng = RandomNumber::with_seed(1);
+        assert!(dual_axe_attack_target(&mut world, id), "Δy=8 不得挡住");
+        assert_eq!(world.pending_ai_attacks.len(), 1, "Δy=8 仍飞斧");
+    }
+
+    /// R24：`Random(3)!=0 ⇒ base.Run(); return`（不 LightningAttack）；`==0 ⇒ GetBackPosition`；
+    /// `LightingAttack` 的 `Random(|Hi-Lo|+1)` + 逐格 `Random(10)`、`RM_LIGHTING` 帧、
+    /// 1.5 倍不死复合、`BreakHolySeizeMode`。
+    #[test]
+    fn mb2_r24_lighting_zombi_random3_and_lightning_attack() {
+        let run = |seed: i32, attack_tick: i64| -> (i32, i32, bool, usize, usize) {
+            let mut world = World::new(32, 32);
+            let id = mb1_monster(&mut world, 94, 10, 10);
+            let p = mb1_players(&mut world, 11, 11);
+            {
+                let e = world.entities.get_mut(id).unwrap();
+                e.ai.search_enemy_tick = 90_000;
+                e.ai.target_creature = Some(p);
+                e.ai.attack_tick = attack_tick;
+            }
+            world.clock_ms = 100_000;
+            world.rng = RandomNumber::with_seed(seed);
+            assert_eq!(
+                monster_class_run(&mut world, id),
+                Some(ClassRunBase::Monster)
+            );
+            let e = world.entities.get(id).unwrap();
+            (
+                e.ai.target_x,
+                e.ai.target_y,
+                world
+                    .pending_monster_ref_msgs
+                    .iter()
+                    .any(|m| m.ident == RM_LIGHTING),
+                world.self_delay_msgs.len(),
+                world.pending_ai_attacks.len(),
+            )
+        };
+        // `Random(3)!=0` ⇒ 跳过整段（不回退、不攻击）。
+        let nonzero = mb2_seed_mod3(false);
+        let (tx, ty, lit, delays, attacks) = run(nonzero, 100_000);
+        assert_eq!((tx, ty), (-1, 0), "Random(3)!=0 ⇒ 不回退");
+        assert!(!lit && delays == 0 && attacks == 0, "且不 LightningAttack");
+        // `Random(3)==0` ⇒ GetBackPosition（Dir=Up ⇒ y+1）；攻击门未到 ⇒ 不攻击。
+        let zero = mb2_seed_mod3(true);
+        let (tx, ty, lit, delays, _) = run(zero, 100_000);
+        assert_eq!((tx, ty), (10, 11), "Random(3)==0 ⇒ GetBackPosition");
+        assert!(!lit && delays == 0, "NextHitTime 未到 ⇒ 不攻击");
+
+        // 攻击支：Δx=5（≤4 门不通过）⇒ 直接 LightningAttack。
+        let mut world = World::new(32, 32);
+        let id = mb1_monster(&mut world, 94, 10, 10);
+        let p = mb1_real_player(&mut world, 15, 10);
+        world.entities.get_mut(p).unwrap().anti_magic = 0;
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.dc = (9 << 8) | 5; // Lo=5, Hi=9 ⇒ Random(5)
+            e.ai.search_enemy_tick = 90_000;
+            e.ai.target_creature = Some(p);
+            e.ai.attack_tick = 0;
+            e.ai.holy_seize = true;
+        }
+        world.clock_ms = 100_000;
+        world.rng = RandomNumber::with_seed(2718);
+        let mut probe = RandomNumber::with_seed(2718);
+        let draw = probe.random_below(5);
+        let _anti = probe.random_below(10);
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        assert_eq!(
+            world.rng.random(),
+            probe.random(),
+            "Random(5) + 每格 Random(10)"
+        );
+        let n_power = i32::max(0, 5 + draw);
+        let expected = crate::magic_effect::scale_undead_attack(n_power);
+        let msg = world
+            .self_delay_msgs
+            .peek(p)
+            .expect("RM_MAGSTRUCK 入队（被击中者自己的队列）");
+        assert_eq!(msg.ident, crate::slave::RM_MAGSTRUCK);
+        assert_eq!(msg.n_param1, expected, "MagPassThroughMagic 的 1.5 倍");
+        assert_eq!(msg.actor_ref, id);
+        assert_eq!(msg.deliver_at_ms, 100_600, "600ms");
+        let lit = world
+            .pending_monster_ref_msgs
+            .iter()
+            .find(|m| m.ident == RM_LIGHTING)
+            .expect("RM_LIGHTING");
+        assert_eq!(lit.w_param, 1);
+        assert_eq!((lit.n_param1, lit.n_param2), (10, 10));
+        assert_eq!(lit.n_param3, p);
+        assert_eq!((lit.target_x, lit.target_y), (15, 10), "尾 = 目标坐标快照");
+        assert_eq!(lit.dir, DIR_RIGHT);
+        assert!(
+            !world.entities.get(id).unwrap().ai.holy_seize,
+            "BreakHolySeizeMode"
+        );
+        assert_eq!(world.entities.get(id).unwrap().ai.attack_tick, 100_000);
+    }
+
+    /// R08：`:55` 两次都是 `|CurrX - baseObject.CurrX| <= 6`（`Δy` 不参与，照抄 bug）；
+    /// `baseObject` 是扫描循环的**残留变量**（可见表最后一项），不是 `TargetCret`；
+    /// `GetNextPosition` 起点是**目标格**。
+    #[test]
+    fn mb2_r08_chicken_deer_x_only_and_residual_variable() {
+        let run = |visible: Vec<(i32, i32)>| -> (i32, i32, Option<i32>) {
+            let mut world = World::new(32, 32);
+            let id = mb1_monster(&mut world, 52, 10, 10);
+            let mut ids = Vec::new();
+            for (x, y) in visible {
+                ids.push(mb1_players(&mut world, x, y));
+            }
+            world.entities.get_mut(id).unwrap().visible_actors = ids
+                .iter()
+                .map(|target| VisibleBaseObject {
+                    target: *target,
+                    flag: VisibleFlag::Show,
+                })
+                .collect();
+            world.clock_ms = 100_000;
+            assert_eq!(
+                monster_class_run(&mut world, id),
+                Some(ClassRunBase::Monster)
+            );
+            let e = world.entities.get(id).unwrap();
+            (e.ai.target_x, e.ai.target_y, e.ai.target_creature)
+        };
+        // Δx=6, Δy=12 ⇒ 触发；`GetNextPosition(16,22,DOWN_RIGHT(3),5) = (21,27)`。
+        let (tx, ty, target) = run(vec![(16, 22)]);
+        assert_eq!((tx, ty), (21, 27), "Δx=6 触发；起点是目标格");
+        assert!(target.is_some());
+        // Δx=7 ⇒ 不触发（`<=6`）。
+        let (tx, ty, _) = run(vec![(17, 22)]);
+        assert_eq!((tx, ty), (-1, 0), "Δx=7 不触发");
+        // 残留变量：`TargetCret`=近目标(11,10)，最后一顶在(30,10) ⇒ 用残留的 x 判距 ⇒ 不触发。
+        let (tx, ty, target) = run(vec![(11, 10), (30, 10)]);
+        assert_eq!((tx, ty), (-1, 0), "判的是残留变量而不是 TargetCret");
+        assert!(target.is_some(), "TargetCret 仍是最近的(11,10)");
+    }
+
+    /// R43：`Die()` 在 `ZilKillCount>0` 时置 `ReAliveTick` 并抽 `Random(20)+4`，随后**无条件** `-=1`；
+    /// `Run` 门 `ZilKillCount >= 0`（2→1→0 仍可复活、-1 才停）；复生减半 MaxHP/FightExp、
+    /// `HP=MaxHP`、`RM_ALIVE`、`WalkTick=now+1000`；STONE/Ghost 阻止复活。
+    #[test]
+    fn mb2_r43_zilkin_die_counts_and_revive_gate() {
+        // 构造：ctor 抽数落字段（不重抽）。
+        let mut ai = crate::entity::AnimalState::default();
+        let ctor = crate::entity::MonsterCtorDraws {
+            zil_kill_count: 2,
+            ..crate::entity::MonsterCtorDraws::default()
+        };
+        ai.seed_from_spawn(0, false, &ctor, 1_000);
+        assert_eq!(ai.zil_kill_count, 2);
+        assert_eq!(ai.zilkin_die_tick, 0);
+
+        // Die 三次：2→1（抽）、1→0（抽）、0→-1（**零抽**，且不复位计时器）。
+        let mut world = World::new(32, 32);
+        let id = mb1_monster(&mut world, 96, 10, 10);
+        world.entities.get_mut(id).unwrap().ai.zil_kill_count = 2;
+        world.clock_ms = 50_000;
+        world.rng = RandomNumber::with_seed(777);
+        let mut probe = RandomNumber::with_seed(777);
+        let d1 = probe.random_below(20);
+        zil_kin_zombi_die(&mut world, id);
+        {
+            let e = world.entities.get(id).unwrap();
+            assert_eq!(e.ai.zil_kill_count, 1);
+            assert_eq!(e.re_alive_tick, 50_000);
+            assert_eq!(e.ai.zilkin_die_tick, i64::from(d1 + 4) * 1000);
+        }
+        assert_eq!(
+            world.rng.random(),
+            probe.random(),
+            "Die 恰抽一次 Random(20)"
+        );
+        world.clock_ms = 60_000;
+        let d2 = probe.random_below(20);
+        zil_kin_zombi_die(&mut world, id);
+        {
+            let e = world.entities.get(id).unwrap();
+            assert_eq!(e.ai.zil_kill_count, 0);
+            assert_eq!(e.re_alive_tick, 60_000);
+            assert_eq!(e.ai.zilkin_die_tick, i64::from(d2 + 4) * 1000);
+        }
+        world.clock_ms = 70_000;
+        zil_kin_zombi_die(&mut world, id);
+        {
+            let e = world.entities.get(id).unwrap();
+            assert_eq!(e.ai.zil_kill_count, -1);
+            assert_eq!(e.re_alive_tick, 60_000, "count=0 ⇒ 不重置");
+            assert_eq!(e.ai.zilkin_die_tick, i64::from(d2 + 4) * 1000);
+        }
+        assert_eq!(world.rng.random(), probe.random(), "count=0 ⇒ 零抽");
+
+        // `settle_deaths` 接线：hp=0 的 tick 会调用 Die 覆写。
+        let mut world = World::new(32, 32);
+        let id = mb1_monster(&mut world, 96, 10, 10);
+        world.entities.get_mut(id).unwrap().ai.zil_kill_count = 1;
+        world.entities.get_mut(id).unwrap().hp = 0;
+        world.clock_ms = 10_000;
+        world.rng = RandomNumber::with_seed(9);
+        world.tick();
+        // `World::tick` 每步推进 200ms（本骨架的 tick 相位），Death 时刻取推进后的时钟。
+        let now_after_tick = world.clock_ms;
+        assert_eq!(world.entities.get(id).unwrap().ai.zil_kill_count, 0);
+        assert_eq!(
+            world.entities.get(id).unwrap().re_alive_tick,
+            now_after_tick
+        );
+
+        // 复生门（`>=` 恰等放行）。
+        let setup = |stone: bool, ghost: bool| {
+            let mut world = World::new(32, 32);
+            let id = mb1_monster(&mut world, 96, 10, 10);
+            let p = mb1_players(&mut world, 12, 10);
+            {
+                let e = world.entities.get_mut(id).unwrap();
+                e.death = true;
+                e.ghost = ghost;
+                e.status_time[crate::entity::POISON_STONE] = if stone { 1 } else { 0 };
+                e.max_hp = 200;
+                e.hp = 0;
+                e.mon_exp = 100;
+                e.re_alive_tick = 10_000;
+                e.ai.zilkin_die_tick = 5_000;
+                e.ai.zil_kill_count = 0;
+                e.visible_actors = vec![VisibleBaseObject {
+                    target: p,
+                    flag: VisibleFlag::Show,
+                }];
+            }
+            (world, id)
+        };
+        let (mut world, id) = setup(false, false);
+        world.clock_ms = 14_999; // `now - re_alive_tick = 4999 < 5000`
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        assert!(world.entities.get(id).unwrap().death, "差 1ms 不复生");
+        world.clock_ms = 15_000; // 恰等 ⇒ `>=` 放行
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        {
+            let e = world.entities.get(id).unwrap();
+            assert!(!e.death, "Death=false");
+            assert_eq!(e.max_hp, 100, "MaxHP >>= 1");
+            assert_eq!(e.hp, 100, "HP = MaxHP");
+            assert_eq!(e.mon_exp, 50, "FightExp /= 2");
+            assert_eq!(e.ai.walk_tick, 16_000, "WalkTick = now + 1000");
+            assert!(!e.death_settled, "复活清死亡结算闩锁");
+        }
+        assert!(world
+            .pending_monster_ref_msgs
+            .iter()
+            .any(|m| m.ident == RM_ALIVE));
+        // STONE / Ghost 阻止复活。
+        for (stone, ghost) in [(true, false), (false, true)] {
+            let (mut world, id) = setup(stone, ghost);
+            world.clock_ms = 20_000;
+            assert_eq!(
+                monster_class_run(&mut world, id),
+                Some(ClassRunBase::Monster)
+            );
+            assert!(world.entities.get(id).unwrap().death, "STONE/Ghost 阻止");
+        }
+        // `monster_ai_tick` 的死怪分支必须仍调用 `ZilKinZombi.Run`。
+        let (mut world, id) = setup(false, false);
+        world.clock_ms = 20_000;
+        world.enable_monster_ai();
+        monster_ai_tick(&mut world);
+        assert!(!world.entities.get(id).unwrap().death, "死怪分支驱动复生");
     }
 }

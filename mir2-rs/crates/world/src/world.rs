@@ -3221,6 +3221,87 @@ impl World {
         }
     }
 
+    /// `BaseObject.MagPassThroughMagic(short sx, short sy, short tx, short ty, byte nDir,
+    /// int magPwr, bool undeadAttack)`（`BaseObject.cs:896-925`）的**怪侧**入口。
+    ///
+    /// 与 [`World::cast_pass_through_spell`] 的区别：威力由调用方先算好
+    /// （`LightingZombi.LightingAttack` 的 `Random(|Hi(DC)-Lo(DC)|+1)` 在**调用前**已抽），
+    /// 且 `IsProperTarget` 走**怪**的基版（不带组队表）。逐句：
+    ///
+    /// ```text
+    /// for (i = 0; i < 12; i++) {
+    ///   baseObject = Envir.GetMovingObject(sx, sy, true);
+    ///   if (baseObject != null && IsProperTarget(baseObject)
+    ///       && Random(10) >= baseObject.AntiMagic) {
+    ///       if (undeadAttack) magPwr = Round(magPwr * 1.5);          // 逐次复合
+    ///       baseObject.SendStruckDelayMsg(this.ActorId, RM_MAGSTRUCK, 0, magPwr, 0, 0, "", 600);
+    ///       tcount++;
+    ///   }
+    ///   if (!(sx == tx && sy == ty)) {
+    ///       nDir = GetNextDirection(sx, sy, tx, ty);
+    ///       if (!GetNextPosition(sx, sy, nDir, 1, ref sx, ref sy)) break;
+    ///   } else break;
+    /// }
+    /// ```
+    ///
+    /// 取数：每格最多一次 `Random(10)`（`anti_magic_roll`），**只在**该格有合法目标时抽；
+    /// `undeadAttack` 的 1.5 倍是**原地复合**（命中越多，后续越大）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn mag_pass_through_magic(
+        &mut self,
+        caster_id: i32,
+        sx: i32,
+        sy: i32,
+        tx: i32,
+        ty: i32,
+        _n_dir: u8,
+        mag_pwr: i32,
+        undead_attack: bool,
+    ) -> i32 {
+        let Some(caster) = self.entities.get(caster_id).cloned() else {
+            return 0;
+        };
+        let map_id = caster.map_id;
+        // `nDir` 形参在 oracle 里只作为 `GetNextDirection` 的初值，而循环第一轮必先重算 ⇒ 不读。
+        let (mut sx, mut sy, mut mag_pwr) = (sx, sy, mag_pwr);
+        let mut tcount = 0;
+        for _ in 0..12 {
+            if let Some(obj_id) = self.moving_object_at(map_id, sx, sy, true) {
+                let proper = self
+                    .entities
+                    .get(obj_id)
+                    .is_some_and(|t| crate::combat::is_proper_target(&caster, t));
+                if proper {
+                    let anti = self
+                        .entities
+                        .get(obj_id)
+                        .map_or(0, |t| i32::from(t.anti_magic));
+                    if crate::magic_effect::anti_magic_roll(&mut self.rng, anti) {
+                        if undead_attack {
+                            mag_pwr = crate::magic_effect::scale_undead_attack(mag_pwr);
+                        }
+                        self.send_struck_delay_msg(obj_id, caster_id, mag_pwr, 600);
+                        tcount += 1;
+                    }
+                }
+            }
+            if sx == tx && sy == ty {
+                break;
+            }
+            let n_dir = crate::magic::next_direction(sx, sy, tx, ty);
+            let Some((nx, ny)) = self
+                .maps
+                .get(map_id)
+                .and_then(|m| m.get_next_position(sx, sy, n_dir, 1))
+            else {
+                break;
+            };
+            sx = nx;
+            sy = ny;
+        }
+        tcount
+    }
+
     /// **P3-B5**：22 火墙效果体（`MagicManager.cs:412-417` + `:1064-1098`）。
     ///
     /// **取数在安全区门之前**（C# 实参先求值）：`nDamage = GetAttackPower(GetPower(MPow)+Lo(MC), ΔMC+1)`
@@ -4370,6 +4451,22 @@ impl World {
         })
     }
 
+    /// `Envirnoment.CanFly(nsX, nsY, ndX, ndY)`（`Envirnoment.cs:1371-1393`）。
+    ///
+    /// **oracle 原样照抄（含两处怪行为）**：
+    /// - `r30 = (ndY - ndX) / 10.0`——第二轴减的是 **ndX**（不是 `nsY`），照搬；
+    /// - 循环体里 `nsX/nsY` **从不推进**，10 次迭代检查的是**同一格** ⇒ 首轮失败即失败，
+    ///   首轮通过则后续 9 轮同样通过。判据只看 `CanWalk(flyX, flyY, true)`（忽略角色）。
+    #[must_use]
+    pub fn can_fly(&self, map_id: usize, ns_x: i32, ns_y: i32, nd_x: i32, nd_y: i32) -> bool {
+        let r28 = f64::from(nd_x - ns_x) / 1.0e1;
+        let r30 = f64::from(nd_y - nd_x) / 1.0e1;
+        let fly_x = mir2_shared::hutil::round(f64::from(ns_x) + r28);
+        let fly_y = mir2_shared::hutil::round(f64::from(ns_y) + r30);
+        // `CanWalk(..., boFlag=true)`：`cellSuccess && cellInfo.Valid` ⇒ 忽略角色阻挡。
+        self.can_walk_at(map_id, fly_x, fly_y, true)
+    }
+
     /// `BaseObject.CharPushed(nDir, nPushCount)`（`src/M2Server/Actor/BaseObject.cs:854-897`）的
     /// 世界侧**逐句**实现（`Command::Push` 与重叠推挤共用）。
     ///
@@ -5225,6 +5322,12 @@ impl World {
                 }
             }
             record.deaths.push((id, placed, gold, exp_hitter, gained));
+            // **MB-2（R43）**：`ZilKinZombi.Die()` 覆写（`ZilKinZombi.cs:24-33`）——在 `base.Die()`
+            // 之后、`if (ZilKillCount > 0)` 时抽 `(Random(20)+4)*1000`，随后**无条件** `-= 1`。
+            // 抽数落在 `crates/world/src/monai.rs`（`monster_ai` 组），本处只是调用点。
+            if !is_play {
+                crate::monai::zil_kin_zombi_die(self, id);
+            }
             // **M3⑨ 主人死/幽灵自投递**：oracle `PlayObject.Die()` 尾
             // （`src/M2Server/Player/PlayObject.cs:1993-1996`）在 `base.Die()`（掉落）**之后**
             // `SendSelfDelayMsg(RM_MASTERDIEMUTINY, 0,0,0,0,"",1000)`（玩家 `Race == Play` 的

@@ -11122,6 +11122,56 @@ fn drain_monster_ref_msgs(
             mir2_world::monai::RM_10205 => {
                 smframe_ext::sm_716(m.actor_id, m.n_param1, m.n_param2, m.n_param3)
             }
+            // **MB-2（R13）**：`DualAxeMonster.FlyAxeAttack` 的 `RM_FLYAXE`（`DualAxeMonster.cs:29`）
+            // ⇒ `SM_FLYAXE(22)`。oracle 外层 `ActorMgr.Get(nParam3) != null` 守卫：目标不在场 ⇒ 不发帧。
+            mir2_world::monai::RM_FLYAXE => {
+                if world.entities.get(m.n_param3).is_none() {
+                    continue;
+                }
+                let flyaxe = smframe::sm_flyaxe(
+                    m.actor_id,
+                    wire_coord(m.n_param1),
+                    wire_coord(m.n_param2),
+                    m.dir,
+                    wire_coord(m.target_x),
+                    wire_coord(m.target_y),
+                    m.n_param3,
+                );
+                flyaxe
+            }
+            // **MB-2（R24）**：`LightingZombi.LightingAttack` 的 `RM_LIGHTING`（`LightingZombi.cs:22`）
+            // ⇒ `SM_LIGHTING(23)`；同样有目标存在守卫（`PlayObject.Message.cs:1921`）。
+            mir2_world::monai::RM_LIGHTING => {
+                if world.entities.get(m.n_param3).is_none() {
+                    continue;
+                }
+                let lighting = smframe::sm_lighting(
+                    m.actor_id,
+                    wire_coord(m.n_param1),
+                    wire_coord(m.n_param2),
+                    m.dir,
+                    m.target_x,
+                    m.target_y,
+                    m.n_param3,
+                    m.w_param,
+                );
+                lighting
+            }
+            // **MB-2（R43）**：`BaseObject.ReAlive()` 的 `RM_ALIVE`（`BaseObject.Base.cs:357`）
+            // ⇒ `SM_ALIVE(27)`（头 `(X,Y,Dir)` + 8B `CharDesc`）。
+            mir2_world::monai::RM_ALIVE => {
+                let (feature, status) = displays
+                    .get(m.actor_id)
+                    .map_or((0, 0), |d| (d.feature, d.status));
+                let alive = smframe::sm_alive(
+                    m.actor_id,
+                    wire_coord(m.x),
+                    wire_coord(m.y),
+                    m.dir,
+                    &downlink::char_desc(feature, status),
+                );
+                alive
+            }
             // 未建模 ident：不猜映射（登记为余量）。
             _ => continue,
         };
@@ -35904,6 +35954,8 @@ mod tests {
             n_param1: n1,
             n_param2: n2,
             n_param3: n3,
+            target_x: 0,
+            target_y: 0,
             dir: 2,
             x: 10,
             y: 10,
@@ -35955,6 +36007,126 @@ mod tests {
         );
     }
 
+    /// **MB-2**：`RM_FLYAXE`/`RM_LIGHTING`/`RM_ALIVE` 的生产排水逐字节映射
+    /// （`DualAxeMonster.cs:29` / `LightingZombi.cs:22` / `BaseObject.Base.cs:357`）。
+    ///
+    /// 牙：`RM_FLYAXE` 删掉目标存在守卫 ⇒ 目标缺失的消息也会出帧（本用例断言 3 帧）。
+    #[test]
+    fn mb2_ref_frames_encode_flyaxe_lighting_alive() {
+        use mir2_world::Entity;
+        let mut world = mir2_world::World::new(64, 64);
+        let mut m = Entity::new(0, "斧".to_string(), 10, 10);
+        m.race = 87;
+        let mid = world.add_entity(m);
+        let t = Entity::new(0, "目标".to_string(), 11, 10);
+        let tid = world.add_entity(t);
+        let mut p = Entity::new(0, "P".to_string(), 12, 10);
+        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let pid = world.add_entity(p);
+
+        let displays = downlink::DisplayTable::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "P".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: pid,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        gates.insert(0, tx0);
+
+        let msg = |ident: u16,
+                   w_param: i32,
+                   n1: i32,
+                   n2: i32,
+                   n3: i32,
+                   tx: i32,
+                   ty: i32|
+         -> mir2_world::MonsterRefMsg {
+            mir2_world::MonsterRefMsg {
+                actor_id: mid,
+                ident,
+                w_param,
+                n_param1: n1,
+                n_param2: n2,
+                n_param3: n3,
+                target_x: tx,
+                target_y: ty,
+                dir: 2,
+                x: 10,
+                y: 10,
+                map_id: 0,
+                status: 0x2,
+                self_only: false,
+                recipients: vec![pid],
+            }
+        };
+        world.pending_monster_ref_msgs.push(msg(
+            mir2_world::monai::RM_FLYAXE,
+            2,
+            10,
+            10,
+            tid,
+            11,
+            10,
+        ));
+        world.pending_monster_ref_msgs.push(msg(
+            mir2_world::monai::RM_LIGHTING,
+            1,
+            10,
+            10,
+            tid,
+            11,
+            10,
+        ));
+        world
+            .pending_monster_ref_msgs
+            .push(msg(mir2_world::monai::RM_ALIVE, 2, 10, 10, 0, 0, 0));
+        // 目标不存在 ⇒ oracle `ActorMgr.Get(nParam3) != null` 守卫不发帧。
+        world.pending_monster_ref_msgs.push(msg(
+            mir2_world::monai::RM_FLYAXE,
+            2,
+            10,
+            10,
+            9999,
+            11,
+            10,
+        ));
+
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+        let mut bodies = Vec::new();
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, socket } = ev {
+                assert_eq!(socket, 5);
+                bodies.push(body);
+            }
+        }
+        assert_eq!(bodies.len(), 3, "目标缺失的 RM_FLYAXE 不得出帧");
+        assert_eq!(
+            bodies[0],
+            smframe::sm_flyaxe(mid, 10, 10, 2, 11, 10, tid),
+            "SM_FLYAXE：头(施法者) + 尾(目标坐标/ID)"
+        );
+        assert_eq!(
+            bodies[1],
+            smframe::sm_lighting(mid, 10, 10, 2, 11, 10, tid, 1),
+            "SM_LIGHTING：Series=Dir，尾 Tag2=wParam"
+        );
+        assert_eq!(
+            bodies[2],
+            smframe::sm_alive(mid, 10, 10, 2, &downlink::char_desc(0, 0)),
+            "SM_ALIVE：头(X,Y,Dir) + 8B CharDesc"
+        );
+        assert!(world.pending_monster_ref_msgs.is_empty());
+    }
+
     /// **复验 MB-1 F1 回归**：`ComeDown` 先发 `RM_DIGDOWN` 再置 `FixedHideMode=true`；
     /// 宿主排水必须用**发帧时刻**的收件人快照，否则按此刻的 hide 状态重算会整帧丢失。
     ///
@@ -35999,6 +36171,8 @@ mod tests {
                 n_param1: 0,
                 n_param2: 0,
                 n_param3: 0,
+                target_x: 0,
+                target_y: 0,
                 dir: 2,
                 x: 10,
                 y: 10,

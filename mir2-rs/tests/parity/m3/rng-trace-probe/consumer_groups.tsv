@@ -209,3 +209,9 @@ player_run	rust	crates/world/src/run_gap\.rs:	crates/world/src/run_gap.rs	dup_pu
 # （R-6 折叠 construct → spawn），**不新增站点/组**。
 # 机判：`mongen::tests::special_monster_ctor_draws_match_oracle_order`。
 # `Run`/`Operate` 本身零 RNG（SearchTarget / SendRefMsg / SendSelfDelayMsg / MP 扣减都不抽）。
+monster_ai	csharp	DualAxeMonster\.Run@DualAxeMonster\.cs:	src/M2Server/Monster/Monsters/DualAxeMonster.cs:124	MB-2 R13：`|Δx|<=2` 支的 `Random(5)`（`:120/:122` 两处都只判 CurrX）
+monster_ai	csharp	DualAxeMonster\.AttackTarget@DualAxeMonster\.cs:	src/M2Server/Monster/Monsters/DualAxeMonster.cs:52	MB-2 R13：计数耗尽支的 `Random(5)`（`:42/:61` 两处都只判 CurrX）
+monster_ai	csharp	DualAxeMonster\.FlyAxeAttack@DualAxeMonster\.cs:	src/M2Server/Monster/Monsters/DualAxeMonster.cs:19	MB-2 R13：飞斧伤害 `Random(|Hi(DC)-Lo(DC)|+1)`（CanFly 门内）
+monster_ai	csharp	LightingZombi\.Run@LightingZombi\.cs:	src/M2Server/Monster/Monsters/LightingZombi.cs:43	MB-2 R24：`Random(3)`（<=2 支的 base.Run 早退门）
+monster_ai	csharp	LightingZombi\.LightingAttack@LightingZombi\.cs:	src/M2Server/Monster/Monsters/LightingZombi.cs:26	MB-2 R24：`Random(|Hi(DC)-Lo(DC)|+1)`
+monster_ai	csharp	ZilKinZombi\.Die@ZilKinZombi\.cs:	src/M2Server/Monster/Monsters/ZilKinZombi.cs:30	MB-2 R43：`(Random(20)+4)*1000` 复生延迟（ZilKillCount>0 门内）

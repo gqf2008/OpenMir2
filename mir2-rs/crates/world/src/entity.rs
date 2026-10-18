@@ -283,6 +283,18 @@ pub struct AnimalState {
     /// `AnimalObject.MeatQuality`（`BaseObject.cs:2576` 的 `Random(3500)+3000` 初始化，
     /// `Struck` 里按 `Random(300)` 扣减）。本骨架只落字段与扣减，初始化路径未建模（登记）。
     pub meat_quality: u16,
+    /// `DualAxeMonster._mNAttackCount`（`DualAxeMonster.cs:8`，ctor 置 0）。
+    ///
+    /// 只被 `DualAxeMonster.AttackTarget` 读写（`DualAxeMonster.cs:44-54`）；`AttackMax` 是
+    /// 类常量（87⇒2 / 93⇒3 / 104⇒6），由 [`crate::monai`] 按 race 推导，不落字段。
+    pub m_n_attack_count: i32,
+    /// `ZilKinZombi.ZilKillCount`（`ZilKinZombi.cs:9`）：ctor 抽数由
+    /// [`MonsterCtorDraws::zil_kill_count`] 提供（`seed_from_spawn` 落字段），
+    /// `Die()` 在 `>0` 时抽复活延迟并**无条件** `-= 1`（`ZilKinZombi.cs:27-32`）。
+    pub zil_kill_count: i32,
+    /// `ZilKinZombi.ZilkinDieTick`（`ZilKinZombi.cs:10`）：`Die()` 里
+    /// `(Random(20)+4)*1000`；`Run` 的复活门 `(now - ReAliveTick) >= ZilkinDieTick`。
+    pub zilkin_die_tick: i64,
 }
 
 impl AnimalState {
@@ -296,8 +308,8 @@ impl AnimalState {
     /// `now` = oracle 的 `HUtil32.GetTickCount()`（本骨架用 `World::clock_ms` 的确定性注入）。
     /// 本函数**不抽任何随机数**（抽数已在生成路径完成，见 [`MonsterCtorDraws`]）。
     ///
-    /// 未建模的构造抽：`BaseObject.RunTick`（`run_tick_delta`）、`MeatQuality`、`ZilKillCount`
-    /// 无对应字段（AI tick 不消费它们）——登记，不假造。
+    /// 未建模的构造抽：`BaseObject.RunTick`（`run_tick_delta`）、`MeatQuality`——登记，不假造。
+    /// `ZilKillCount` 自 MB-2 起有对应字段（[`AnimalState::zil_kill_count`]），由本节消费。
     pub fn seed_from_spawn(&mut self, dir: u8, cool_eye: bool, ctor: &MonsterCtorDraws, now: i64) {
         self.dir = dir;
         self.cool_eye = cool_eye;
@@ -314,6 +326,10 @@ impl AnimalState {
         self.think_tick = now;
         self.walk_wait_tick = now;
         self.run_away_start = now;
+        // `ZilKinZombi` ctor 的 `ZilKillCount`（`ZilKinZombi.cs:17-21`）已由生成路径抽好，
+        // 这里只**消费**不重抽（ctor 抽数契约见 `bins/game-svr/src/mongen.rs`）。
+        self.zil_kill_count = ctor.zil_kill_count;
+        self.zilkin_die_tick = 0;
         // `MonsterObject` ctor `CheckRoyaltyTick = GetTickCount()`（`MonsterObject.cs:67`）。
         self.check_royalty_tick = now;
     }
@@ -360,6 +376,9 @@ impl Default for AnimalState {
             struck_tick: 0,
             animal: false,
             meat_quality: 0,
+            m_n_attack_count: 0,
+            zil_kill_count: 0,
+            zilkin_die_tick: 0,
         }
     }
 }

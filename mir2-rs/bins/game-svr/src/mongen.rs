@@ -341,9 +341,15 @@ pub fn draw_monster_construct(rng: &mut RandomNumber, race: i16) -> MonsterCtorD
     match race {
         // `GuardUnit`/`NormNpc`（守卫/练功师/门/墙）：无额外抽。
         11 | 12 | 20 | 55 | 110 | 111 | 112 => {}
-        // `MonsterObject` 本体 + 无 ctor 抽的派生（`DualAxeMonster`/`ThornDarkMonster`/
-        // `ArcherMonster`/`ElfMonster`）。
-        80 | 87 | 93 | 104 | 113 => draw_monster_object(rng, &mut d),
+        // `MonsterObject` 本体 + 无 ctor 抽的派生（`ElfMonster` 等）。
+        80 | 113 => draw_monster_object(rng, &mut d),
+        // `DualAxeMonster` 家族（87 `DualAxeMonster`、93 `ThornDarkMonster`、104 `ArcherMonster`）：
+        // 先走 `MonsterObject` 的 `3000 + Random(2000)`，随后派生类 ctor **常量覆盖**为 3000
+        // （`DualAxeMonster.cs:78`；两个子类继承该 ctor）⇒ 实体的 `SearchTime` 恒 3000（复验 MB-2 F2）。
+        87 | 93 | 104 => {
+            draw_monster_object(rng, &mut d);
+            d.search_time = 3000;
+        }
         // `AnimalObject` 直派生、无额外抽（`BigHeartMonster`/`SoccerBall`）：`SearchTime` 停在 Base 值。
         115 | 120 => {}
         // `AnimalObject` 直派生 + `SearchTime = Random(1500) + 2500`（`StickMonster`/`BeeQueen`/
@@ -1382,6 +1388,31 @@ mod tests {
         let expected = b.random_below(1500) + 1500; // Clone.cs:11
         assert_eq!(d.search_time, expected, "Clone 的派生 SearchTime 位置/基值");
         assert_eq!(a.random(), b.random(), "Clone 之后不得再抽/少抽");
+    }
+
+    /// **复验 MB-2 F2**：`DualAxeMonster` 家族（87/93/104）在 `MonsterObject` 抽
+    /// `3000 + Random(2000)` 之后，派生 ctor **常量覆盖** `SearchTime = 3000`
+    /// （`DualAxeMonster.cs:78`；`ThornDarkMonster`/`ArcherMonster` 继承该 ctor）。
+    ///
+    /// 牙：去掉 `d.search_time = 3000` ⇒ 本用例红（会保留抽出的 3000..4999）。
+    #[test]
+    fn dual_axe_family_overrides_search_time_to_constant() {
+        for race in [87i16, 93, 104] {
+            let mut a = RandomNumber::with_seed(4242);
+            let d = draw_monster_construct(&mut a, race);
+            assert_eq!(
+                d.search_time, 3000,
+                "race {race} 的 SearchTime 必须被 ctor 常量覆盖为 3000"
+            );
+            // 抽数位置不变：Base 2 + Animal 2 + MonsterObject 1 = 5 抽。
+            let mut b = RandomNumber::with_seed(4242);
+            let _run_tick = b.random_below(1500);
+            let _base_search = b.random_below(2000) + 2000;
+            let _attack = b.random_below(3000);
+            let _walk = b.random_below(3000);
+            let _monster_search = b.random_below(2000) + 3000;
+            assert_eq!(a.random(), b.random(), "race {race} 之后不得再抽/少抽");
+        }
     }
 
     /// **判据 14（构造抽值逐抽钉死）**：`MonsterCtorDraws` 的每个字段都对应 oracle 具体 ctor 的那一抽。
