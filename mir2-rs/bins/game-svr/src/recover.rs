@@ -33,8 +33,8 @@
 //! - **`ShowHp`** 的下行广播（`HealthSpellChanged` 的 `if (ShowHp)` 支）在 oracle 里由
 //!   `MakeOpenHealth()`（`BaseObject.cs:944`）置位，而它只被 `RM_DOOPENHEALTH` 驱动
 //!   （`BaseObject.Base.cs:763`），发点是技能「心灵启示」`MagicManager.cs:438`
-//!   ⇒ **技能系统未移植，`ShowHp` 在本宿主恒 false**。本模块照 oracle 保留该支（调用方传
-//!   `show_hp`），生产路径上不可达；一旦技能层接入即可生效。
+//!   ⇒ `SKILL_SHOWHP(28)` 已接线（`sg.show_hp` 可达），本模块照 oracle 保留该支并把
+//!   `show_hp` 交给调用方；自发副本/观察者广播由 `healthspell` 槽模型按 ceil 预算出帧。
 //! - 血石/魔血石（`CharacterObject.cs:160-230` 的 `IncHealth += stoneDura`）、
 //!   `StateTimeArr`/buff、`AutoTimer` 等 `Run()` 的其它段不在本切片（各自另有卡）。
 

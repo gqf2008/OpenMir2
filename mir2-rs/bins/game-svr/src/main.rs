@@ -10229,9 +10229,9 @@ fn drain_combat_downlink(
 /// 因此本函数必须在 [`drain_combat_downlink`]（发 44）**之前**调用；同 tick 内恢复/体力点段若也产生
 /// 53，`SendUpdateMsg` 只保留最后一条（本函数把 HP/MP 补满后，后段不再命中 ⇒ 等价）。
 ///
-/// **登记**：`ShowHp` 的 `SendRefMsg` 广播支恒 false（技能「心灵启示」未移植），与
-/// `drain_recovery`/`drain_stamina` 同口径；`WinExp` 的 `LimitExpLevel` 支生产不可达
-/// （`GameSvrConf.cs:1838` 默认 `LimitExpLevel = 1000 > 255`）。
+/// `ShowHp` 支**已可达**（`SKILL_SHOWHP(28)` 已接线，`sg.show_hp` 由技能设置）；本函数只入槽，
+/// 自发副本与观察者广播统一由 [`healthspell::HealthSpellSlots`] 的 ceil 预算出帧。
+/// `WinExp` 的 `LimitExpLevel` 支生产不可达（`GameSvrConf.cs:1838` 默认 `LimitExpLevel = 1000 > 255`）。
 #[allow(clippy::too_many_arguments)]
 fn drain_levelup_healthspell(
     rec: &mir2_world::TickRecord,
@@ -10738,7 +10738,9 @@ fn drain_run_downlinks(
 /// `IncHealthSpell` ⇒ [`drain_recovery`] 只在 G-A 槽里 mark 一次（同一 `Run` 的多次消费共享
 /// 一条 pending），组边界由 [`flush_healthspell_slots`] 出帧。
 ///
-/// 位置：oracle 属目标的 `Run()` 消息段（在恢复段之前）⇒ 本函数在 `drain_recovery` 之前调用。
+/// 位置：oracle 属目标的 `Run()` **消息段**（在 `base.Run` 的体力/钳制段之前）；本宿主 sim_loop
+/// 的实际序是 `drain_recovery`（P1）→ 本函数 → …（复验 V1/V2/V3 重构后），两者都在 G-A flush
+/// 之前，帧面等价。
 fn drain_mag_healing_delivery(
     rec: &mir2_world::TickRecord,
     online: &OnlineRegistry,
