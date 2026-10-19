@@ -19,7 +19,11 @@
 //!   `HandleLogin = true`，`:1228`）后续帧才按命令转成 `GM_DATA`。登录帧本身**不转发**。
 //!   1 字节 body = 心跳 ⇒ 不转发（`ClientSession.cs:157-160`）。
 //!
-//! **本切片不做**（登记在协议梳理 §6，切片 2/3）：EDCode 解码/重编码与速度规则、`Filters/*`、
+//! **速度/间隔规则已接线**（`rules.rs`，`ClientSession.cs:221-388`）：`CM_WALK`/`CM_RUN`、
+//! 攻击族、`CM_SPELL` 的间隔 + 惩罚支；聊天间隔保持原实现不变。余量：`ItemSpeed`
+//! （下行 `SM_CHARSTATUSCHANGED`）与 `SpeedLimit`（登录 `PunishList`）尚未接线，见 `rules.rs` 模块文档。
+//!
+//! **本切片不做**（登记在协议梳理 §6，切片 2/3）：`Filters/*`、
 //! `Auth/DynamicAuthenticator`(OTP)、`GM_CHECKCLIENT` 周期健康帧、`ClientTimeOutTime` 空闲回收。
 //!
 //! **失败要响**：缺配置键、绑不上端口、连不上 GameSvr —— 明确报错并非零退出。
@@ -85,6 +89,7 @@ async fn main() -> Result<()> {
     let gate_rules = rules::GateRules {
         chat_interval_enabled: cfg.chat_interval_enabled,
         chat_interval_ms: cfg.chat_interval_ms,
+        speed: cfg.speed.clone(),
     };
     glog!(
         "INF",
@@ -144,7 +149,7 @@ async fn main() -> Result<()> {
             sessions,
             indexes,
             down_tx,
-            gate_rules,
+            gate_rules: gate_rules.clone(),
             nom_client_packet_size: cfg.nom_client_packet_size,
         };
         tasks.push(tokio::spawn(accept_loop(listener, gate_ctx)));
@@ -186,7 +191,8 @@ enum Step {
     LoggedIn,
     /// 按 oracle 剔除/关闭该会话（附日志原因）。
     Close(String),
-    /// 静默丢弃（不转发）：聊天间隔未到（`ClientSession.cs:492-495` 的 `return`）。
+    /// 静默丢弃（不转发）：聊天间隔未到（`ClientSession.cs:492-495`）或 move/attack/spell
+    /// 速度规则判丢（`ClientSession.cs:243-262` 等分支的 `return`）。
     Drop,
 }
 
@@ -226,6 +232,8 @@ async fn client_loop(
     ctx.sessions.lock().await.insert(sid, tx);
     // 每会话的间隔计时（C# `ClientSession` 里的 `gameSpeed`）
     let mut chat = rules::ChatThrottle::default();
+    // 三条速度规则的计时状态：三个 tick 的初值 = 会话创建时刻（`SessionSpeedRule()` 构造函数）。
+    let mut speed = rules::SpeedState::new(now_ms());
 
     // 回写任务：把 `server_loop` 已经拼好的**客户端帧**（`#…!`，见 `client_frame`）原样写给客户端
     let writer = tokio::spawn(async move {
@@ -261,7 +269,17 @@ async fn client_loop(
             Ok(0) | Err(_) => break,
             Ok(n) => n,
         };
-        match handle_frame(&buf[..n], logged_in, &mut chat, &ctx, sid, handle).await {
+        match handle_frame(
+            &buf[..n],
+            logged_in,
+            &mut chat,
+            &mut speed,
+            &ctx,
+            sid,
+            handle,
+        )
+        .await
+        {
             Ok(Step::Next | Step::Drop) => {}
             Ok(Step::LoggedIn) => {
                 logged_in = true;
@@ -300,6 +318,7 @@ async fn handle_frame(
     frame: &[u8],
     logged_in: bool,
     chat: &mut rules::ChatThrottle,
+    speed: &mut rules::SpeedState,
     ctx: &GateCtx,
     sid: u16,
     handle: i32,
@@ -344,11 +363,52 @@ async fn handle_frame(
         );
         return Ok(Step::Next);
     }
+    // `ClientSession.cs:206-388` 的 `switch (clientMessage.Ident)`：move/attack/spell 三条速度规则。
+    // 顺序照 oracle：在 `NomClientPacketSize` 之后、转发之前。互斥的 ident 之间先后无影响，
+    // 但惩罚分支的"丢帧/延迟"必须在这里发生（不能让帧先转发出去）。
+    let ident = u16::from_le_bytes([decoded[4], decoded[5]]);
+    let tag = u16::from_le_bytes([decoded[8], decoded[9]]);
+    let verdict = match ident {
+        mir2_protocol::messages::CM_WALK | mir2_protocol::messages::CM_RUN => {
+            speed.on_move(now_ms(), tag, &ctx.gate_rules.speed)
+        }
+        mir2_protocol::messages::CM_HIT
+        | mir2_protocol::messages::CM_HEAVYHIT
+        | mir2_protocol::messages::CM_BIGHIT
+        | mir2_protocol::messages::CM_POWERHIT
+        | mir2_protocol::messages::CM_LONGHIT
+        | mir2_protocol::messages::CM_WIDEHIT
+        | mir2_protocol::messages::CM_CRSHIT
+        | mir2_protocol::messages::CM_FIREHIT => {
+            speed.on_attack(now_ms(), tag, &ctx.gate_rules.speed)
+        }
+        mir2_protocol::messages::CM_SPELL => speed.on_spell(now_ms(), tag, &ctx.gate_rules.speed),
+        _ => rules::Verdict::Forward,
+    };
+    match verdict {
+        rules::Verdict::Forward => {}
+        rules::Verdict::Drop => {
+            glog!(
+                "DBG",
+                "超速/间隔未到，丢弃该帧（Ident={ident} SessionId={sid}）"
+            );
+            return Ok(Step::Drop);
+        }
+        rules::Verdict::DropKick => {
+            // oracle `SendKickMsg(0)` 的发送代码整段被注释（`ClientSession.cs:1030-1046`）：
+            // 只 `LogService.Debug(OverSpeedSendBack)`，**不发帧、不关会话** ⇒ 这里同样只记日志。
+            glog!(
+                "DBG",
+                "超速累计（oracle SendKickMsg(0)，仅日志）：Ident={ident} SessionId={sid}"
+            );
+            return Ok(Step::Drop);
+        }
+    }
     // `CM_SAY` 的间隔门（`:485-497`）：太快的聊天帧**直接丢**（`return`，不转发）。
     // 内容 = 解码后的 `decodeBuff[12..]`；`@` 开头的内容不判间隔；开关与阈值照现网
     // `[Switch] ChatInterval=1` / `[Integer] ChatInterval=800`。
     if ctx.gate_rules.chat_interval_enabled
-        && u16::from_le_bytes([decoded[4], decoded[5]]) == mir2_protocol::messages::CM_SAY
+        && ident == mir2_protocol::messages::CM_SAY
         && !chat.allows(
             now_ms(),
             &decoded[COMMAND_MESSAGE_SIZE..],
