@@ -4682,12 +4682,10 @@ fn use_items_from(
         }
         out[i] = cell.as_ref().map(to_bag_item);
     }
-    // **oracle a84c81aae（2026-10-19）后不再交换**：`WorldServer.GetHumData` 已把
-    // `UseItems[Necklace] = humItems[Necklace]`、`UseItems[Helmet] = humItems[Helmet]` 改回各自本槽
-    // （旧实现交叉取值，随 HumItems 空槽 NRE 一并修掉）。
-    // ⚠ 存档侧 `MakeSaveRcd`（`WorldServer.cs:1320-1321`）**仍是交换**（He lm et ← UseItems[Necklace]、
-    // 反之亦然）⇒ 新 oracle 的「记录 ↔ UseItems」往返**不再保持不变**：一件物品每次登录/存档会在
-    // 槽 3/4 之间来回迁移。照抄该不对称（硬约束③），见 `hum_item_slots_drift_across_login_and_save_like_oracle`。
+    // **oracle a84c81aae + d7ead5b2a（2026-10-19）后两侧都 1:1**：`GetHumData` 与 `MakeSaveRcd`
+    // 都改成「槽位即位置」（`UseItems[i] = humItems[i]`、`HumItems[i] = UseItems[i]`）。
+    // 旧实现两侧同时交叉（往返不变但客户端看到的项链/头盔互换）；只修 load 的中间态会漂移，
+    // 对端随后补了 save 侧。现往返不迁移，见 `hum_item_slots_are_stable_across_login_and_save`。
     out
 }
 
@@ -4734,24 +4732,17 @@ fn server_item_from_bag(it: &game_svr::bag::BagItem) -> record::ServerUserItem {
     }
 }
 
-/// `MakeSaveRcd` 的 `HumItems`（13 槽，`WorldServer.cs:1294-1311`）：每槽 = `UseItems[槽].ToServerItem()`
-/// 或默认物品；**照 oracle 的 Slot3/Slot4（Necklace/Helmet）交换**（`:1320-1321`）。
-/// ⚠ 注意：ora cle 的 load 侧已被 a84c81aae 改为「各取本槽」，而 save 侧仍交换 ⇒ 往返会漂移，照抄。
+/// `MakeSaveRcd` 的 `HumItems`（13 槽，`WorldServer.cs:1294-1327`）：每槽 = `UseItems[同槽].ToServerItem()`
+/// 或默认物品。**槽位即位置（1:1）**：oracle d7ead5b2a（2026-10-19）已把 Necklace/Helmet 的交叉
+/// 写回改掉（此前 load `a84c81aae` 与 save `d7ead5b2a` 各修一半，往返会漂移；现两侧一致）。
 fn human_items_for_save(
     use_items: &[Option<game_svr::bag::BagItem>],
 ) -> Vec<Option<record::ServerUserItem>> {
     let mut out = vec![Some(default_server_item()); game_svr::ability::USE_ITEMS_LEN];
     for (i, slot) in out.iter_mut().enumerate() {
-        let src = if i == game_svr::ability::SLOT_HELMET {
-            game_svr::ability::SLOT_NECKLACE
-        } else if i == game_svr::ability::SLOT_NECKLACE {
-            game_svr::ability::SLOT_HELMET
-        } else {
-            i
-        };
         *slot = Some(
             use_items
-                .get(src)
+                .get(i)
                 .and_then(Option::as_ref)
                 .map_or_else(default_server_item, server_item_from_bag),
         );
@@ -19089,16 +19080,16 @@ mod tests {
         );
         assert_eq!(
             hum[game_svr::ability::SLOT_HELMET].as_ref().unwrap().index,
-            88,
-            "HumItems[Helmet] = UseItems[Necklace]（oracle 交换）"
+            99,
+            "HumItems[Helmet] = UseItems[Helmet]（d7ead5b2a 后 1:1）"
         );
         assert_eq!(
             hum[game_svr::ability::SLOT_NECKLACE]
                 .as_ref()
                 .unwrap()
                 .index,
-            99,
-            "HumItems[Necklace] = UseItems[Helmet]（oracle 交换）"
+            88,
+            "HumItems[Necklace] = UseItems[Necklace]（d7ead5b2a 后 1:1）"
         );
     }
 
@@ -19634,8 +19625,7 @@ mod tests {
         use game_svr::ability::{SLOT_DRESS, SLOT_HELMET, SLOT_NECKLACE, SLOT_WEAPON};
         let mut rec = vec![Some(default_server_item()); game_svr::ability::USE_ITEMS_LEN];
         rec[SLOT_DRESS] = Some(old_user_item(7001, 11, 100, 200, 7));
-        // 记录 `HumItems[Helmet]` → `UseItems[Necklace]`；`HumItems[Necklace]` → `UseItems[Helmet]`
-        // （`WorldServer.cs:1163-1176` 的交换）。
+        // 记录槽 → UseItems 同槽（oracle a84c81aae 起不再交叉）。
         rec[SLOT_HELMET] = Some(old_user_item(7002, 22, 33, 44, 2));
         rec[SLOT_NECKLACE] = Some(old_user_item(7003, 55, 66, 77, 3));
 
@@ -19674,12 +19664,12 @@ mod tests {
         );
     }
 
-    /// **oracle a84c81aae 的往返不对称**：load 各取本槽、save 仍交换 ⇒ 一件装备在槽 3/4 之间
-    /// 每次「登录→存档」迁移一次。这是当前**已部署 oracle 的真实行为**（硬约束③：连 bug 一起搬）。
+    /// **oracle a84c81aae + d7ead5b2a 后两侧 1:1**：load 与 save 都「槽位即位置」⇒
+    /// 记录 ↔ UseItems 往返不迁移槽位。
     ///
-    /// 牙：把 load 的交换加回去（或把 save 的交换删掉）⇒ 本用例红。
+    /// 牙：把任一侧的槽 3/4 交换加回去 ⇒ 本用例红。
     #[test]
-    fn hum_item_slots_drift_across_login_and_save_like_oracle() {
+    fn hum_item_slots_are_stable_across_login_and_save() {
         use game_svr::ability::{SLOT_HELMET, SLOT_NECKLACE};
         // 第一次登录：头盔在记录槽 4。
         let mut rec = vec![Some(default_server_item()); game_svr::ability::USE_ITEMS_LEN];
@@ -19688,31 +19678,31 @@ mod tests {
         assert_eq!(
             loaded[SLOT_HELMET].as_ref().unwrap().index,
             22,
-            "load：各取本槽（a84c81aae 后）"
+            "load：各取本槽"
         );
-        // 存档：save 仍交换 ⇒ 头盔被写到记录槽 3。
+        // 存档：也各取本槽。
         let saved = human_items_for_save(&loaded);
         assert_eq!(
-            saved[SLOT_NECKLACE].as_ref().unwrap().index,
+            saved[SLOT_HELMET].as_ref().unwrap().index,
             22,
-            "save：HumItems[Necklace] = UseItems[Helmet]（oracle 仍是交换）"
+            "save：HumItems[Helmet] = UseItems[Helmet]（1:1）"
         );
         assert_eq!(
-            saved[SLOT_HELMET].as_ref().unwrap().index,
+            saved[SLOT_NECKLACE].as_ref().unwrap().index,
             0,
-            "save：HumItems[Helmet] 取 UseItems[Necklace]（空）"
+            "save：项链槽仍为空，不得被头盔污染"
         );
-        // 第二次登录：从记录槽 3 读回 ⇒ 物品落到 UseItems[Necklace]（漂移）。
+        // 第二次登录：槽位不变。
         let reloaded = use_items_from(Some(&saved));
         assert_eq!(
-            reloaded[SLOT_NECKLACE].as_ref().unwrap().index,
+            reloaded[SLOT_HELMET].as_ref().unwrap().index,
             22,
-            "下一次登录漂移到项链槽（oracle 的不对称往返）"
+            "往返后仍在头盔槽（不迁移）"
         );
         assert_eq!(
-            reloaded[SLOT_HELMET].as_ref().unwrap().index,
+            reloaded[SLOT_NECKLACE].as_ref().unwrap().index,
             0,
-            "头盔槽变空"
+            "项链槽仍为空"
         );
     }
 
