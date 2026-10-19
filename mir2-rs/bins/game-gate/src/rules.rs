@@ -18,6 +18,10 @@
 //! - 延时队列非空 ⇒ 把 tick 推到"当前 + 剩余间隔"，并**丢弃本帧**；队列长度 ≥ 2 时 oracle 调
 //!   `SendKickMsg(0)`，但该函数的发送代码整段被注释（`:993-1046` 只 `LogService.Debug`）⇒ **不发帧**，
 //!   这里也只记日志并丢帧（不关会话）。
+//! - **延时队列模型**：`SendDelayMsg` 的**唯一**调用点是登录验证包（`ClientSession.cs:1252`，
+//!   `DelayTime=1`）；`TimedService.ProcessDelayMsg`（`TimedService.cs:93-97`，10ms `PeriodicTimer`）
+//!   每拍在 `currentTick - ProcessDelayTick > 200` 时 drain。`DelayMsgQueue` 照此实现，
+//!   相位确定化的口径见其文档。
 //! - 其它 `PunishMethod`（TurnPack/DropPack/NullPack）在这三个分支里**什么也不做** ⇒ 本帧照常放行。
 //!
 //! **未接线（登记为余量）**：`SessionSpeedRule.ItemSpeed` 由下行 `SM_CHARSTATUSCHANGED`
@@ -243,7 +247,7 @@ pub struct GateRules {
 }
 
 /// 三条速度规则的配置（`GateConfig` 字段的镜像；缺省值 = `GateConfig()` 构造函数，
-/// `Conf/GateConfig.cs:346-390`）。
+/// `Conf/GateConfig.cs:229-300`）。
 #[derive(Debug, Clone)]
 // oracle 的 `GateConfig` 本身就是一组 bool 开关，拆成枚举反而偏离逐键对应。
 #[allow(clippy::struct_excessive_bools)]
@@ -291,7 +295,7 @@ pub struct SpeedRules {
 }
 
 impl SpeedRules {
-    /// `GateConfig()` 构造函数里的缺省值（`Conf/GateConfig.cs:346-390`）。
+    /// `GateConfig()` 构造函数里的缺省值（`Conf/GateConfig.cs:229-300`）。
     #[must_use]
     pub fn oracle_defaults() -> Self {
         Self {
@@ -330,6 +334,74 @@ pub enum Verdict {
     DropKick,
 }
 
+/// `ClientSession.MsgList` + `TimedService.ProcessDelayMsg` 的最小等价模型。
+///
+/// oracle 的延时队列只被 `SendDelayMsg` 写入，而该方法**唯一**的调用点是登录验证包
+/// （`ClientSession.cs:1252`，`DelayTime = 1`）⇒ 生产路径上队列长度只可能是 0 或 1
+/// （`count >= 2` 只在构造级可达；`SendKickMsg` 支仍照原样保留）。
+///
+/// 时序照 `TimedService`：`PeriodicTimer(10ms)` 每拍检查 `currentTick - ProcessDelayTick > 200`，
+/// 成立时把 `ProcessDelayTick` 推到当前拍并 drain（`TimedService.cs:93-97`）；drain 删除
+/// `DelayTime == 0 || now >= DelayTime` 的条目（`ClientSession.cs:836-846`）。
+///
+/// **相位确定化（有意偏离，登记）**：oracle 的 `ProcessDelayTick` 是**全网关共享**的服务启动
+/// 时刻，每个会话看到的 drain 相位取决于登录落在哪个 10ms 槽（登录条目存活 0–210ms，
+/// 相位不可判）。这里把计时基线挂到**会话创建时刻**（等价于「登录紧接一次 drain」），
+/// 条目固定存活到创建后第一个 `> 200ms` 的 10ms 拍（210ms）⇒ 取 oracle 的**上界**，
+/// 使判据①「登录后 0–210ms 内 move ⇒ 丢帧」可确定地复现。
+#[derive(Debug, Clone)]
+pub struct DelayMsgQueue {
+    /// `TimedService.ProcessDelayTick`（本会话等价）。
+    process_delay_tick: i64,
+    /// `PeriodicTimer(10ms)` 的上一次触发时刻。
+    timer_tick: i64,
+    /// `MsgList` 各条目的 `DelayTime`（`0` = 无延迟）。
+    delay_times: Vec<i64>,
+}
+
+impl DelayMsgQueue {
+    /// 新会话：计时基线 = 会话创建时刻。
+    #[must_use]
+    pub fn new(now_ms: i64) -> Self {
+        Self {
+            process_delay_tick: now_ms,
+            timer_tick: now_ms,
+            delay_times: Vec::new(),
+        }
+    }
+
+    /// `SendDelayMsg(..., delayTime)`（`ClientSession.cs:860-878`）：入队 `DelayTime = now + delayTime`。
+    pub fn send_delay_msg(&mut self, now_ms: i64, delay_time: i64) {
+        self.delay_times.push(now_ms + delay_time);
+    }
+
+    /// `GetDelayMsgCount()`（`ClientSession.cs:823-826`）。
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.delay_times.len()
+    }
+
+    /// 把 10ms 定时器推进到 `now_ms`，按 `ProcessDelayMsg` drain。
+    ///
+    /// 规则帧入口调用即可：drain 只取决于墙上时刻，惰性推进与 oracle 的后台线程推进对
+    /// 「帧到达时看到的 count」等价。
+    pub fn tick(&mut self, now_ms: i64) {
+        while now_ms - self.timer_tick >= 10 {
+            self.timer_tick += 10;
+            if self.timer_tick - self.process_delay_tick > 200 {
+                self.process_delay_tick = self.timer_tick;
+                self.drain(self.timer_tick);
+            }
+        }
+    }
+
+    /// `GetDelayMessage`（`ClientSession.cs:836-846`）：保留 `DelayTime != 0 && now < DelayTime`。
+    fn drain(&mut self, now_ms: i64) {
+        self.delay_times
+            .retain(|&delay_time| delay_time != 0 && now_ms < delay_time);
+    }
+}
+
 /// `SessionSpeedRule` 里本切片用到的计时/动作状态（`Services/SessionSpeedRule.cs`）。
 ///
 /// 构造时把三个 tick 都设为**会话创建时刻**，照 `SessionSpeedRule()` 构造函数
@@ -352,12 +424,12 @@ pub struct SpeedState {
     /// 保留字段是为了把「通过后刷新」的完整状态照搬，后续接 `CM_TURN` 不需改规则。
     #[allow(dead_code)]
     pub last_direction: i32,
-    /// `GetDelayMsgCount()`（`ClientSession.cs:823-826`）的等价输入。
+    /// `ClientSession.MsgList` + `TimedService.ProcessDelayMsg` 的等价模型
+    /// （`GetDelayMsgCount()` 的唯一来源，`ClientSession.cs:823-826`）。
     ///
-    /// oracle 的 `MsgList` 只被 `SendDelayMsg` 写入，而该方法**唯一**的调用点是登录验证包
-    /// （`:1252`，延迟 1ms）；本切片的登录包是同步直接发送、没有延时队列 ⇒ 生产路径恒为 0。
-    /// 仍保留为字段，便于构造级测试覆盖 oracle 的「队列非空 ⇒ 丢帧」分支。
-    pub delay_msg_count: usize,
+    /// 登录包发送时入队 `DelayTime = 1`（`:1252` 的 `SendLoginMessage`）；生产路径上
+    /// 队列长度只可能是 0 或 1（唯一入队点），`count >= 2` 只在构造级可达。
+    pub delays: DelayMsgQueue,
 }
 
 impl SpeedState {
@@ -371,7 +443,7 @@ impl SpeedState {
             item_speed: 0,
             speed_limit: false,
             last_direction: -1,
-            delay_msg_count: 0,
+            delays: DelayMsgQueue::new(now_ms),
         }
     }
 
@@ -383,6 +455,8 @@ impl SpeedState {
         if !cfg.move_interval_enabled {
             return Verdict::Forward;
         }
+        self.delays.tick(now_ms);
+        let delay_msg_count = self.delays.count();
         let need = cfg.move_interval
             + if self.speed_limit {
                 cfg.punish_move_interval
@@ -403,14 +477,14 @@ impl SpeedState {
             // oracle：非 DelaySend 时不进任何分支 ⇒ 本帧照常放行，计时也不动。
             return Verdict::Forward;
         }
-        if self.delay_msg_count == 0 {
+        if delay_msg_count == 0 {
             // `:249-252`：把下一次允许时间推到 `now + dwDelay`，本帧放行。
             self.move_tick = now_ms + punish_delay(cfg, need - elapsed);
             Verdict::Forward
         } else {
             // `:254-262`：队列非空 ⇒ 推到「当前 + 剩余间隔」，丢帧；≥2 时 `SendKickMsg(0)`。
             self.move_tick = now_ms + (need - elapsed);
-            if self.delay_msg_count >= 2 {
+            if delay_msg_count >= 2 {
                 Verdict::DropKick
             } else {
                 Verdict::Drop
@@ -430,6 +504,8 @@ impl SpeedState {
             } else {
                 0
             };
+        self.delays.tick(now_ms);
+        let delay_msg_count = self.delays.count();
         // `HUtil32._MAX(0, (nAttackInterval - Config.MaxItemSpeedRate * gameSpeed.ItemSpeed))`
         let fixed_need = (need - cfg.max_item_speed_rate * self.item_speed).max(0);
         let elapsed = now_ms - self.attack_tick;
@@ -448,12 +524,12 @@ impl SpeedState {
         if cfg.punish_method != PunishMethod::DelaySend {
             return Verdict::Forward;
         }
-        if self.delay_msg_count == 0 {
+        if delay_msg_count == 0 {
             self.attack_tick = now_ms + punish_delay(cfg, fixed_need - elapsed);
             Verdict::Forward
         } else {
             self.attack_tick = now_ms + (fixed_need - elapsed);
-            if self.delay_msg_count >= 2 {
+            if delay_msg_count >= 2 {
                 Verdict::DropKick
             } else {
                 Verdict::Drop
@@ -481,6 +557,8 @@ impl SpeedState {
         if !MAGIC_DELAY_ARRAY[idx] {
             return Verdict::Forward;
         }
+        self.delays.tick(now_ms);
+        let delay_msg_count = self.delays.count();
         let need = cfg.magic_delay_time_list[idx]
             + if self.speed_limit {
                 cfg.punish_spell_interval
@@ -509,10 +587,10 @@ impl SpeedState {
         if cfg.punish_method != PunishMethod::DelaySend {
             return Verdict::Forward;
         }
-        if self.delay_msg_count == 0 {
+        if delay_msg_count == 0 {
             // oracle 在这里算 dwDelay 但不使用（Bug，连同 Bug 一起等价）：放行、不刷新。
             Verdict::Forward
-        } else if self.delay_msg_count >= 2 {
+        } else if delay_msg_count >= 2 {
             Verdict::DropKick
         } else {
             Verdict::Drop
@@ -611,6 +689,12 @@ mod tests {
         }
     }
 
+    /// 构造「队列非空」：入队一条 `DelayTime = now + 1`（oracle 生产路径唯一的入队形态，
+    /// `ClientSession.cs:1252`）。
+    fn enqueue_delay(s: &mut SpeedState, now_ms: i64) {
+        s.delays.send_delay_msg(now_ms, 1);
+    }
+
     // ---------------- move ----------------
 
     /// 判据①②③：首帧（从会话创建的 tick 起算）通过；恰好等于间隔通过（`>=` 而非 `>`）；
@@ -632,7 +716,7 @@ mod tests {
         assert_eq!(s.attack_tick, 366 - 250, "MoveNextAttackCompensate=250");
         assert_eq!(s.last_direction, 1);
         // 通过后立即再来一帧：queue=1 ⇒ 丢（oracle 的 DelaySend 非空队列分支）。
-        s.delay_msg_count = 1;
+        enqueue_delay(&mut s, 367);
         assert_eq!(s.on_move(367, 2, &c), Verdict::Drop);
     }
 
@@ -641,7 +725,7 @@ mod tests {
     fn move_inside_interval_is_dropped() {
         let c = deployed();
         let mut s = SpeedState::new(0);
-        s.delay_msg_count = 1;
+        enqueue_delay(&mut s, 365);
         assert_eq!(s.on_move(365, 0, &c), Verdict::Drop);
         assert_eq!(
             s.move_tick,
@@ -662,7 +746,7 @@ mod tests {
         assert_eq!(s.on_move(500, 0, &c), Verdict::Forward, "空队列 ⇒ 本帧放行");
         assert_eq!(s.move_tick, 752, "500 + 20 + (366-134)");
         // 752 之前（含 751）仍在惩罚窗口内；queue 非空 ⇒ 丢。
-        s.delay_msg_count = 1;
+        enqueue_delay(&mut s, 751);
         assert_eq!(s.on_move(751, 0, &c), Verdict::Drop);
         assert_eq!(s.move_tick, 751 + (366 - (-1)));
     }
@@ -674,7 +758,8 @@ mod tests {
         let c = deployed();
         let mut s = SpeedState::new(0);
         s.move_tick = 1_000;
-        s.delay_msg_count = 2;
+        enqueue_delay(&mut s, 1_100);
+        enqueue_delay(&mut s, 1_100);
         assert_eq!(s.on_move(1_100, 0, &c), Verdict::DropKick);
     }
 
@@ -709,7 +794,7 @@ mod tests {
         assert_eq!(s.move_tick, 300, "500 - AttackNextMoveCompensate(200)");
         assert_eq!(s.spell_tick, 300, "500 - AttackNextSpellCompensate(200)");
         assert_eq!(s.last_direction, 3);
-        s.delay_msg_count = 1;
+        enqueue_delay(&mut s, 501);
         assert_eq!(s.on_attack(501, 0, &c), Verdict::Drop);
     }
 
@@ -776,7 +861,7 @@ mod tests {
         assert_eq!(ok.attack_tick, 500 - 200);
         // 同一配置下 tag3（基本剑术）仍是 1110；queue=1 时 500ms 必须丢。
         let mut other = SpeedState::new(0);
-        other.delay_msg_count = 1;
+        enqueue_delay(&mut other, 500);
         assert_eq!(other.on_spell(500, 3, &c), Verdict::Drop);
         assert_eq!(
             other.on_spell(1_110, 3, &c),
@@ -807,7 +892,7 @@ mod tests {
     fn spell_skips_interval_for_warrior_magics() {
         let c = deployed();
         let mut s = SpeedState::new(0);
-        s.delay_msg_count = 1;
+        enqueue_delay(&mut s, 0);
         assert_eq!(s.on_spell(0, 7, &c), Verdict::Forward);
         assert_eq!(s.on_spell(0, 7, &c), Verdict::Forward, "连续两帧都不判");
         assert_eq!(s.spell_tick, 0);
@@ -831,10 +916,10 @@ mod tests {
     fn spell_dropped_when_delay_queue_nonempty() {
         let c = deployed();
         let mut s = SpeedState::new(0);
-        s.delay_msg_count = 1;
+        enqueue_delay(&mut s, 1_169);
         assert_eq!(s.on_spell(1_169, 1, &c), Verdict::Drop);
         assert_eq!(s.spell_tick, 0);
-        s.delay_msg_count = 2;
+        enqueue_delay(&mut s, 1_169);
         assert_eq!(s.on_spell(1_169, 1, &c), Verdict::DropKick);
     }
 
@@ -842,14 +927,58 @@ mod tests {
 
     /// 牙⑤：三条规则必须**各自**用 MoveTick/AttackTick/SpellTick，不能共用一个计时。
     ///
-    /// 攻击通过会反向补偿 MoveTick（500→300）；共享计时的话 move@666 的 elapsed 只有 166。
+    /// 攻击通过会反向补偿 MoveTick/SpellTick（500→300）；共享计时的话 move@666 的 elapsed
+    /// 只有 166、spell@1470 只有 970。**队列必须非空**才咬得住：空队列走 DelaySend 惩罚支
+    /// 会无条件放行（旧用例因此对「on_move 改用 attack_tick」仍是绿的）。
     #[test]
     fn three_rules_keep_separate_timers() {
         let c = deployed();
         let mut s = SpeedState::new(0);
         assert_eq!(s.on_attack(500, 0, &c), Verdict::Forward);
         assert_eq!(s.move_tick, 300);
+        assert_eq!(s.spell_tick, 300);
+        enqueue_delay(&mut s, 666);
         assert_eq!(s.on_move(666, 1, &c), Verdict::Forward, "666-300 == 366");
+        assert_eq!(s.move_tick, 666);
+
+        // spell 同理：tag1 的表值 1170；用 SpellTick(300) 恰好通过，用 AttackTick(500) 会丢。
+        let mut sp = SpeedState::new(0);
+        assert_eq!(sp.on_attack(500, 0, &c), Verdict::Forward);
+        enqueue_delay(&mut sp, 1_470);
+        assert_eq!(
+            sp.on_spell(1_470, 1, &c),
+            Verdict::Forward,
+            "1470-300 == 1170"
+        );
+        assert_eq!(sp.spell_tick, 1_470);
+    }
+
+    /// F1 判据①/②：登录包入队（`SendDelayMsg(..., 1)`）后，10ms 拍在
+    /// `tick - ProcessDelayTick > 200` 时 drain ⇒ 条目存活到创建后第 210ms 拍。
+    #[test]
+    fn login_delay_message_lives_until_first_210ms_tick() {
+        let mut q = DelayMsgQueue::new(0);
+        assert_eq!(q.count(), 0);
+        q.send_delay_msg(0, 1); // `SendLoginMessage` → `SendDelayMsg(..., 1)`
+        assert_eq!(q.count(), 1);
+        q.tick(209);
+        assert_eq!(q.count(), 1, "200ms 门未过（10ms 拍：200 不 > 200）");
+        q.tick(210);
+        assert_eq!(q.count(), 0, "210ms 拍 drain（DelayTime=1 已到期）");
+    }
+
+    /// F1 判据③登记：`count >= 2` 在 oracle 生产路径**不可达**——唯一入队点是登录包，
+    /// 且 `SendDelayMsg` 没有其它调用者；`DropKick` 支只做构造级覆盖。
+    ///
+    /// 本用例把「生产模型最多 1 条」固化为断言：入队一次后即使时间推进也不增加。
+    #[test]
+    fn production_delay_queue_never_exceeds_one() {
+        let mut q = DelayMsgQueue::new(0);
+        q.send_delay_msg(0, 1);
+        for t in 0..=500 {
+            q.tick(t);
+            assert!(q.count() <= 1, "生产路径只有登录包一个入队点");
+        }
     }
 
     /// `SpeedLimit`（累犯）把 `Punish*Interval` 加到三条规则的间隔上。
@@ -858,7 +987,7 @@ mod tests {
         let c = deployed();
         let mut m = SpeedState::new(0);
         m.speed_limit = true;
-        m.delay_msg_count = 1;
+        enqueue_delay(&mut m, 515);
         assert_eq!(m.on_move(515, 0, &c), Verdict::Drop, "366+150=516");
         let mut m2 = SpeedState::new(0);
         m2.speed_limit = true;
@@ -866,12 +995,12 @@ mod tests {
 
         let mut a = SpeedState::new(0);
         a.speed_limit = true;
-        a.delay_msg_count = 1;
+        enqueue_delay(&mut a, 649);
         assert_eq!(a.on_attack(649, 0, &c), Verdict::Drop, "500+150=650");
 
         let mut sp = SpeedState::new(0);
         sp.speed_limit = true;
-        sp.delay_msg_count = 1;
+        enqueue_delay(&mut sp, 1_319);
         assert_eq!(sp.on_spell(1_319, 1, &c), Verdict::Drop, "1170+150=1320");
     }
 
@@ -881,7 +1010,7 @@ mod tests {
         let mut c = deployed();
         c.punish_method = PunishMethod::DropPack;
         let mut s = SpeedState::new(0);
-        s.delay_msg_count = 1;
+        enqueue_delay(&mut s, 1);
         assert_eq!(s.on_move(1, 0, &c), Verdict::Forward);
         assert_eq!(s.move_tick, 0);
         assert_eq!(s.on_attack(1, 0, &c), Verdict::Forward);
@@ -898,7 +1027,7 @@ mod tests {
         c.attack_interval_enabled = false;
         c.spell_interval_enabled = false;
         let mut s = SpeedState::new(0);
-        s.delay_msg_count = 1;
+        enqueue_delay(&mut s, 0);
         assert_eq!(s.on_move(0, 0, &c), Verdict::Forward);
         assert_eq!(s.on_attack(0, 0, &c), Verdict::Forward);
         assert_eq!(s.on_spell(0, 1, &c), Verdict::Forward);

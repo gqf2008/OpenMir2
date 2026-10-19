@@ -61,7 +61,7 @@ pub struct GateConfig {
     /// `ClientSession.cs:958`）。
     ///
     /// 本切片不解析下行 `SM_CHARSTATUSCHANGED`（登记为余量），该键只读入、不参与规则；
-    /// 保留是为了接线时不再改配置结构。缺省 6（`GateConfig.cs:385`）。
+    /// 保留是为了接线时不再改配置结构。缺省 6（`GateConfig.cs:292`）。
     #[allow(dead_code)]
     pub max_item_speed: i64,
     /// move/attack/spell 三条速度规则的完整配置（键名与缺省见 `rules::SpeedRules`）。
@@ -146,7 +146,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let method = parse_section(&text, "Method");
     let float = parse_section(&text, "Float");
     let magic = parse_section(&text, "MagicInterval");
-    let speed = build_speed_rules(&switch, &integer, &method, &float, &magic);
+    let speed = build_speed_rules(&switch, &integer, &method, &float, &magic)?;
     let max_item_speed = oracle_int(&integer, "MaxItemSpeed", 6);
     Ok(GateConfig {
         endpoints,
@@ -181,10 +181,27 @@ fn oracle_bool(pairs: &[(String, String)], key: &str, default: bool) -> bool {
 }
 
 /// `ReadWriteFloat` 的等价读法（`ConfigFile.cs:140-153`）。
-fn oracle_float(pairs: &[(String, String)], key: &str, default: f64) -> f64 {
+///
+/// oracle 的 `ReadFloat` 是 `double.Parse(str)`，**没有** try/catch ⇒ 非法值在启动时抛
+/// `FormatException`；这里同样返回错误（调用方非零退出），**不**静默回落默认。
+/// 空值走默认（`string.IsNullOrEmpty(str) ⇒ defValue`），缺键走 `ReadWriteFloat` 的
+/// 「写默认并返回默认」。
+///
+/// # Errors
+/// `[Float]` 段里该键存在且非空，但不是合法浮点数。
+fn oracle_float(pairs: &[(String, String)], key: &str, default: f64) -> Result<f64> {
     match pairs.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)) {
-        Some((_, v)) if !v.is_empty() => v.parse::<f64>().unwrap_or(default),
-        _ => default,
+        Some((_, v)) => {
+            if v.is_empty() {
+                return Ok(default);
+            }
+            v.parse::<f64>().map_err(|_| {
+                anyhow::anyhow!(
+                    "配置 [Float] {key} 非法：{v:?}（oracle 的 double.Parse 会抛 FormatException）"
+                )
+            })
+        }
+        None => Ok(default),
     }
 }
 
@@ -199,7 +216,7 @@ fn build_speed_rules(
     method: &[(String, String)],
     float: &[(String, String)],
     magic: &[(String, String)],
-) -> SpeedRules {
+) -> Result<SpeedRules> {
     let mut s = SpeedRules::oracle_defaults();
     s.move_interval_enabled = oracle_bool(switch, "MoveInterval", s.move_interval_enabled);
     s.attack_interval_enabled = oracle_bool(switch, "AttackInterval", s.attack_interval_enabled);
@@ -243,7 +260,7 @@ fn build_speed_rules(
         s.spell_next_attack_compensate,
     );
     s.max_item_speed_rate = oracle_int(integer, "MaxItemSpeedRate", s.max_item_speed_rate);
-    s.punish_interval_rate = oracle_float(float, "PunishIntervalRate", s.punish_interval_rate);
+    s.punish_interval_rate = oracle_float(float, "PunishIntervalRate", s.punish_interval_rate)?;
     // `(PunishMethod)ReadWriteInteger("Method", "OverSpeedPunishMethod", (int)DelaySend)`
     let raw_method = oracle_int(method, "OverSpeedPunishMethod", 3);
     s.punish_method = PunishMethod::from_raw(raw_method);
@@ -264,7 +281,7 @@ fn build_speed_rules(
             s.magic_delay_time_list[idx] = i64::from(n);
         }
     }
-    s
+    Ok(s)
 }
 
 /// 取 `[section]` 下的键值对（大小写不敏感；`;`/`#` 起头为注释；去掉行尾注释）。
@@ -564,6 +581,28 @@ PunishIntervalRate=1.5
             "非法整数 ⇒ 保留默认（int.TryParse 失败），不报错"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// F3：`[Float] PunishIntervalRate` 非法 ⇒ **启动报错**（oracle `double.Parse` 无 try/catch，
+    /// 抛 `FormatException`）；不静默回落默认。
+    #[test]
+    fn invalid_float_is_fatal_like_oracle() {
+        let p = write_conf(
+            "[GameGate]
+Count=1
+ServerAddr1=127.0.0.1
+ServerPort1=5000
+GatePort1=7200
+             [Float]
+PunishIntervalRate=abc
+",
+        );
+        let err = load(&p).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("PunishIntervalRate"),
+            "错误必须点名该键：{err:#}"
+        );
+        std::fs::remove_dir_all(p.parent().unwrap()).ok();
     }
 
     /// **oracle 口径**：`config.conf` 里 UTF-8 写的中文键在 GB2312 流里是乱码 ⇒

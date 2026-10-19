@@ -20,8 +20,11 @@
 //!   1 字节 body = 心跳 ⇒ 不转发（`ClientSession.cs:157-160`）。
 //!
 //! **速度/间隔规则已接线**（`rules.rs`，`ClientSession.cs:221-388`）：`CM_WALK`/`CM_RUN`、
-//! 攻击族、`CM_SPELL` 的间隔 + 惩罚支；聊天间隔保持原实现不变。余量：`ItemSpeed`
-//! （下行 `SM_CHARSTATUSCHANGED`）与 `SpeedLimit`（登录 `PunishList`）尚未接线，见 `rules.rs` 模块文档。
+//! 攻击族、`CM_SPELL` 的间隔 + 惩罚支；聊天间隔保持原实现不变。登录包按 oracle
+//! `SendLoginMessage`（`:1252`）入**延时消息队列**（`DelayTime=1`），三条规则读
+//! `GetDelayMsgCount()` —— 登录后 ~0–210ms 内队列非空，超速帧走「丢帧、不 kick」支。
+//! 余量：`ItemSpeed`（下行 `SM_CHARSTATUSCHANGED`）与 `SpeedLimit`（登录 `PunishList`）
+//! 尚未接线，见 `rules.rs` 模块文档。
 //!
 //! **本切片不做**（登记在协议梳理 §6，切片 2/3）：`Filters/*`、
 //! `Auth/DynamicAuthenticator`(OTP)、`GM_CHECKCLIENT` 周期健康帧、`ClientTimeOutTime` 空闲回收。
@@ -184,6 +187,7 @@ struct GateCtx {
 }
 
 /// 一帧的处置结果（读循环据此决定下一步）。
+#[derive(Debug, PartialEq, Eq)]
 enum Step {
     /// 处理完毕（含已转发），继续读下一帧。
     Next,
@@ -230,10 +234,13 @@ async fn client_loop(
     let (mut rd, mut wr) = sock.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
     ctx.sessions.lock().await.insert(sid, tx);
-    // 每会话的间隔计时（C# `ClientSession` 里的 `gameSpeed`）
-    let mut chat = rules::ChatThrottle::default();
-    // 三条速度规则的计时状态：三个 tick 的初值 = 会话创建时刻（`SessionSpeedRule()` 构造函数）。
-    let mut speed = rules::SpeedState::new(now_ms());
+    // 每会话的规则状态：聊天计时 + 三条速度规则的计时 + 延时消息队列
+    // （C# `ClientSession` 里的 `gameSpeed` / `SayMsgTick` / `MsgList`）。
+    let mut session = SessionRules {
+        chat: rules::ChatThrottle::default(),
+        // 三个 tick 的初值 = 会话创建时刻（`SessionSpeedRule()` 构造函数）。
+        speed: rules::SpeedState::new(now_ms()),
+    };
 
     // 回写任务：把 `server_loop` 已经拼好的**客户端帧**（`#…!`，见 `client_frame`）原样写给客户端
     let writer = tokio::spawn(async move {
@@ -272,11 +279,11 @@ async fn client_loop(
         match handle_frame(
             &buf[..n],
             logged_in,
-            &mut chat,
-            &mut speed,
+            &mut session,
             &ctx,
             sid,
             handle,
+            now_ms(),
         )
         .await
         {
@@ -313,16 +320,76 @@ async fn client_loop(
     closed
 }
 
-/// 处置一帧（分支顺序照 `ClientSession.cs:98-` 的 `ProcessSessionPacket`：先判 `HandleLogin`，再看长度）。
+/// 会话级可变规则状态（聊天计时 + 速度/延时队列），打包以减少函数参数。
+struct SessionRules {
+    /// `CM_SAY` 的间隔计时。
+    chat: rules::ChatThrottle,
+    /// 三条速度规则 + 延时消息队列。
+    speed: rules::SpeedState,
+}
+
+/// 帧的**纯判定结果**：`handle_frame` 据此做 I/O，测试可直接断言（不经网络）。
+#[derive(Debug, PartialEq, Eq)]
+enum Classified {
+    /// 登录帧（长度 ≥ 3）：调用方走 `handle_login`。
+    Login,
+    /// 不转发、会话继续：登录前的短帧（oracle 的越界异常被吞）与 1 字节心跳。
+    Ignore,
+    /// 静默丢弃：超长帧 / 速度规则 Drop / 聊天间隔未到。
+    Drop,
+    /// 速度规则 DropKick（oracle `SendKickMsg(0)` 只记日志）：同样丢帧、**不关会话**。
+    DropKick,
+    /// 异常帧：关会话（附原因）。
+    Close(String),
+    /// 放行：附解码后的命令字节（调用方重建 `GM_DATA` 帧并发送）。
+    Forward(Vec<u8>),
+}
+
+/// 处置一帧：先做**纯判定**（`classify_frame`），再按结果做 I/O
+/// （分支顺序照 `ClientSession.cs:98-` 的 `ProcessSessionPacket`）。
 async fn handle_frame(
     frame: &[u8],
     logged_in: bool,
-    chat: &mut rules::ChatThrottle,
-    speed: &mut rules::SpeedState,
+    session: &mut SessionRules,
     ctx: &GateCtx,
     sid: u16,
     handle: i32,
+    now: i64,
 ) -> Result<Step> {
+    match classify_frame(
+        frame,
+        logged_in,
+        session,
+        &ctx.gate_rules,
+        ctx.nom_client_packet_size,
+        sid,
+        now,
+    ) {
+        Classified::Login => handle_login(frame, ctx, sid, handle, &mut session.speed, now).await,
+        Classified::Ignore => Ok(Step::Next),
+        Classified::Drop | Classified::DropKick => Ok(Step::Drop),
+        Classified::Close(reason) => Ok(Step::Close(reason)),
+        Classified::Forward(decoded) => {
+            let payload = &frame[2..frame.len() - 1]; // = C# 的 `tempBuff`
+            let session_index = *ctx.indexes.lock().await.get(&sid).unwrap_or(&0);
+            let wire = rebuild_command_frame(&decoded, payload, handle, sid, session_index);
+            send_raw(&ctx.down_tx, &wire).await?;
+            Ok(Step::Next)
+        }
+    }
+}
+
+/// `ProcessSessionPacket`（`ClientSession.cs:98-497`）的分支判定：**纯函数、不碰网络**，
+/// 时钟由调用方传入（可测）。
+fn classify_frame(
+    frame: &[u8],
+    logged_in: bool,
+    session: &mut SessionRules,
+    gate_rules: &rules::GateRules,
+    nom_client_packet_size: usize,
+    sid: u16,
+    now: i64,
+) -> Classified {
     if !logged_in {
         // 登录前走 oracle 的 `:671-680` else 分支（直接 `EDCode.DeCodeString`），**没有**
         // 「1 字节 = 心跳」与「< 16 字节 = 异常封包」这两条（那两条在 `HandleLogin` 分支里 `:155-164`）。
@@ -330,38 +397,32 @@ async fn handle_frame(
         // ArgumentOutOfRangeException，被 `ServerManager.cs:238` 的 catch 吞掉（只记日志）
         // ⇒ 帧被丢、**会话存活**；这里照此丢弃（不是剔除）。
         if frame.len() < 3 {
-            return Ok(Step::Next);
+            return Classified::Ignore;
         }
-        return handle_login(frame, ctx, sid, handle).await;
+        return Classified::Login;
     }
     if frame.len() == 1 {
         // 心跳：`ClientSession.cs:157-160` 直接 `return`（不转发）
-        return Ok(Step::Next);
+        return Classified::Ignore;
     }
     if frame.len() < COMMAND_FIXED_LENGTH {
         // 异常消息封包（`:155-162`）：关会话
-        return Ok(Step::Close(format!(
-            "异常消息封包（{} 字节），关闭会话...",
-            frame.len()
-        )));
+        return Classified::Close(format!("异常消息封包（{} 字节），关闭会话...", frame.len()));
     }
     let payload = &frame[2..frame.len() - 1]; // = C# 的 `tempBuff`（去掉 `#1` 与尾 `!`）
     let decoded = mir2_protocol::edcode::decode(payload);
     if decoded.len() < COMMAND_MESSAGE_SIZE {
         // `:170-175`：解码后不足 12 字节 ⇒ 关会话（reviewer-1 的 Minor #3）
-        return Ok(Step::Close(format!(
-            "解析数据包小于12...解析后长度:{}",
-            decoded.len()
-        )));
+        return Classified::Close(format!("解析数据包小于12...解析后长度:{}", decoded.len()));
     }
-    if frame.len() > ctx.nom_client_packet_size {
+    if frame.len() > nom_client_packet_size {
         // `:196-199`：超过 `NomClientPacketSize` **只记日志丢帧**（不是关会话）
         glog!(
             "INF",
             "Kick off user,over nom client packet size: {}",
             frame.len()
         );
-        return Ok(Step::Next);
+        return Classified::Drop;
     }
     // `ClientSession.cs:206-388` 的 `switch (clientMessage.Ident)`：move/attack/spell 三条速度规则。
     // 顺序照 oracle：在 `NomClientPacketSize` 之后、转发之前。互斥的 ident 之间先后无影响，
@@ -370,7 +431,7 @@ async fn handle_frame(
     let tag = u16::from_le_bytes([decoded[8], decoded[9]]);
     let verdict = match ident {
         mir2_protocol::messages::CM_WALK | mir2_protocol::messages::CM_RUN => {
-            speed.on_move(now_ms(), tag, &ctx.gate_rules.speed)
+            session.speed.on_move(now, tag, &gate_rules.speed)
         }
         mir2_protocol::messages::CM_HIT
         | mir2_protocol::messages::CM_HEAVYHIT
@@ -380,9 +441,9 @@ async fn handle_frame(
         | mir2_protocol::messages::CM_WIDEHIT
         | mir2_protocol::messages::CM_CRSHIT
         | mir2_protocol::messages::CM_FIREHIT => {
-            speed.on_attack(now_ms(), tag, &ctx.gate_rules.speed)
+            session.speed.on_attack(now, tag, &gate_rules.speed)
         }
-        mir2_protocol::messages::CM_SPELL => speed.on_spell(now_ms(), tag, &ctx.gate_rules.speed),
+        mir2_protocol::messages::CM_SPELL => session.speed.on_spell(now, tag, &gate_rules.speed),
         _ => rules::Verdict::Forward,
     };
     match verdict {
@@ -392,7 +453,7 @@ async fn handle_frame(
                 "DBG",
                 "超速/间隔未到，丢弃该帧（Ident={ident} SessionId={sid}）"
             );
-            return Ok(Step::Drop);
+            return Classified::Drop;
         }
         rules::Verdict::DropKick => {
             // oracle `SendKickMsg(0)` 的发送代码整段被注释（`ClientSession.cs:1030-1046`）：
@@ -401,37 +462,40 @@ async fn handle_frame(
                 "DBG",
                 "超速累计（oracle SendKickMsg(0)，仅日志）：Ident={ident} SessionId={sid}"
             );
-            return Ok(Step::Drop);
+            return Classified::DropKick;
         }
     }
     // `CM_SAY` 的间隔门（`:485-497`）：太快的聊天帧**直接丢**（`return`，不转发）。
     // 内容 = 解码后的 `decodeBuff[12..]`；`@` 开头的内容不判间隔；开关与阈值照现网
     // `[Switch] ChatInterval=1` / `[Integer] ChatInterval=800`。
-    if ctx.gate_rules.chat_interval_enabled
+    if gate_rules.chat_interval_enabled
         && ident == mir2_protocol::messages::CM_SAY
-        && !chat.allows(
-            now_ms(),
+        && !session.chat.allows(
+            now,
             &decoded[COMMAND_MESSAGE_SIZE..],
-            ctx.gate_rules.chat_interval_ms,
+            gate_rules.chat_interval_ms,
         )
     {
         glog!(
             "DBG",
             "聊天间隔未到（{}ms），丢弃该帧（SessionId={sid}）",
-            ctx.gate_rules.chat_interval_ms
+            gate_rules.chat_interval_ms
         );
-        return Ok(Step::Drop);
+        return Classified::Drop;
     }
-    // 命令路径的出帧重建（照 `ClientSession.cs:646-669`，**不是搬字节**）：口径见 `rebuild_command_frame`。
-    let session_index = *ctx.indexes.lock().await.get(&sid).unwrap_or(&0);
-    let wire = rebuild_command_frame(&decoded, payload, handle, sid, session_index);
-    send_raw(&ctx.down_tx, &wire).await?;
-    Ok(Step::Next)
+    Classified::Forward(decoded)
 }
 
 /// 登录帧（`:673-679` → `ClientLogin`）：校验通过 ⇒ **补发合成登录包**（`:1199-1224`）并置“已登录”；
 /// 失败 ⇒ 剔除（`:677-678` 的 `Kick(1)`）。登录帧本身**不转发**。
-async fn handle_login(body: &[u8], ctx: &GateCtx, sid: u16, handle: i32) -> Result<Step> {
+async fn handle_login(
+    body: &[u8],
+    ctx: &GateCtx,
+    sid: u16,
+    handle: i32,
+    speed: &mut rules::SpeedState,
+    now: i64,
+) -> Result<Step> {
     let text = gbk::decode(&mir2_protocol::edcode::decode(&body[2..body.len() - 1]));
     match login::parse_client_login(&text, body.len()) {
         Err(reason) => Ok(Step::Close(format!(
@@ -449,6 +513,11 @@ async fn handle_login(body: &[u8], ctx: &GateCtx, sid: u16, handle: i32) -> Resu
                 pack_length: i32::try_from(login_body.len()).unwrap_or(i32::MAX),
             };
             send_internal(&ctx.down_tx, head, &login_body).await?;
+            // `ClientSession.cs:1252` 的 `SendLoginMessage` → `SendDelayMsg(..., 1)`：
+            // 登录包入 `MsgList`（`DelayTime = now + 1`），`HandleLogin=true` 之后的三条
+            // 速度规则会看到非空队列（`GetDelayMsgCount()`）。**发送本身仍照当前实现立即完成**
+            // （oracle 实际会推迟到 drain 时才 `ClientThread.Send`；该延迟不在本片范围，见报告登记）。
+            speed.delays.send_delay_msg(now, 1);
             Ok(Step::LoggedIn)
         }
     }
@@ -679,4 +748,134 @@ fn gen_session_id(seed_src: &str) -> u16 {
         digits.push(char::from(b'0' + (rnd ^ hash_lo) % 10));
     }
     digits.parse::<u16>().unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn deployed_speed() -> rules::SpeedRules {
+        rules::SpeedRules {
+            move_interval: 366,
+            attack_interval: 500,
+            ..rules::SpeedRules::oracle_defaults()
+        }
+    }
+
+    fn gate_rules() -> rules::GateRules {
+        rules::GateRules {
+            chat_interval_enabled: true,
+            chat_interval_ms: 800,
+            speed: deployed_speed(),
+        }
+    }
+
+    /// 构造客户端线缆帧：`#1` + Encode(12B CommandMessage) + `!`（客户端 face 无定长头）。
+    fn walk_frame(direction: u16) -> Vec<u8> {
+        let mut cmd = vec![0u8; COMMAND_MESSAGE_SIZE];
+        cmd[4..6].copy_from_slice(&mir2_protocol::messages::CM_WALK.to_le_bytes());
+        cmd[8..10].copy_from_slice(&direction.to_le_bytes());
+        let mut frame = Vec::new();
+        frame.extend_from_slice(b"#1");
+        frame.extend_from_slice(&mir2_protocol::edcode::encode(&cmd));
+        frame.push(b'!');
+        assert!(
+            frame.len() >= COMMAND_FIXED_LENGTH,
+            "编码后必须过 <16 字节门"
+        );
+        frame
+    }
+
+    /// F5：经 relay 的帧判定入口注入 `CM_WALK`。登录包已入队（`DelayTime=1`）⇒ 60ms 处
+    /// 队列非空、间隔未到 ⇒ **丢帧**（不是 DropKick）；drain 后同一会话按正常间隔规则
+    /// （DelaySend 空队列支）**放行**。
+    #[test]
+    fn relay_walk_dropped_while_login_delay_pending_then_forwarded() {
+        let rules = gate_rules();
+        let mut session = SessionRules {
+            chat: rules::ChatThrottle::default(),
+            speed: rules::SpeedState::new(1_000),
+        };
+        session.speed.delays.send_delay_msg(1_000, 1); // = handle_login 的 SendDelayMsg(..., 1)
+        assert_eq!(
+            classify_frame(&walk_frame(1), true, &mut session, &rules, 400, 7, 1_060),
+            Classified::Drop,
+            "登录后 60ms：队列非空 ⇒ 丢帧，且**不** DropKick"
+        );
+        match classify_frame(&walk_frame(2), true, &mut session, &rules, 400, 7, 1_260) {
+            Classified::Forward(decoded) => {
+                assert_eq!(
+                    u16::from_le_bytes([decoded[4], decoded[5]]),
+                    mir2_protocol::messages::CM_WALK
+                );
+                assert_eq!(
+                    u16::from_le_bytes([decoded[8], decoded[9]]),
+                    2,
+                    "转发的是第二帧"
+                );
+            }
+            other => panic!("drain 后应放行，实际 {other:?}"),
+        }
+    }
+
+    /// F5（端到端）：同一帧经 `handle_frame`（relay 的会话入口）注入：首帧被规则丢弃，
+    /// **不向下游写任何字节**；第二帧被转发成 20B `GM_DATA` 头 + 12B 解码命令。
+    #[tokio::test]
+    async fn relay_session_entry_drops_then_forwards_walk_frame() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let downstream = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut head = [0u8; ServerMessage::SIZE];
+            sock.read_exact(&mut head).await.unwrap();
+            let msg = ServerMessage::from_bytes(&head).unwrap();
+            let mut body = vec![0u8; msg.body_len()];
+            sock.read_exact(&mut body).await.unwrap();
+            (msg, body)
+        });
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let (_rd, wr) = stream.into_split();
+        let ctx = GateCtx {
+            gate_addr: "127.0.0.1".into(),
+            gate_port: 0,
+            service_id: 0,
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            indexes: Arc::new(Mutex::new(HashMap::new())),
+            down_tx: Arc::new(Mutex::new(wr)),
+            gate_rules: gate_rules(),
+            nom_client_packet_size: 400,
+        };
+        let mut session = SessionRules {
+            chat: rules::ChatThrottle::default(),
+            speed: rules::SpeedState::new(1_000),
+        };
+        session.speed.delays.send_delay_msg(1_000, 1);
+        assert_eq!(
+            handle_frame(&walk_frame(1), true, &mut session, &ctx, 7, 0x1234, 1_060)
+                .await
+                .unwrap(),
+            Step::Drop,
+            "队列非空 ⇒ 规则丢帧，下游零字节"
+        );
+        assert_eq!(
+            handle_frame(&walk_frame(2), true, &mut session, &ctx, 7, 0x1234, 1_260)
+                .await
+                .unwrap(),
+            Step::Next,
+            "drain 后放行"
+        );
+        let (head, body) = downstream.await.unwrap();
+        assert_eq!(head.session_id, 7);
+        assert_eq!(head.ident, u16::from(grobal2::GM_DATA));
+        assert_eq!(
+            head.pack_length,
+            i32::try_from(COMMAND_MESSAGE_SIZE).unwrap()
+        );
+        assert_eq!(body.len(), COMMAND_MESSAGE_SIZE, "12B 解码态命令");
+        assert_eq!(
+            u16::from_le_bytes([body[8], body[9]]),
+            2,
+            "转发的是第二帧（第一帧必须没写下游）"
+        );
+    }
 }
