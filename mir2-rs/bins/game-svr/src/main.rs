@@ -39094,6 +39094,183 @@ mod tests {
         );
     }
 
+    /// **Lane 1（`openmir2-monster-attack-smhit`）**：怪普攻在**生产 tick 路径**上出
+    /// `SM_HIT(14)`，并与同击的 `SM_STRUCK(31)` 保持 oracle 时序——`RM_HIT` 即时
+    /// （`SendAttackMsg`），`RM_STRUCK` 走 `SendStruckDelayMsg(RM_REFMESSAGE, …, 200ms)`
+    /// ⇒ 后者最早在**下一** tick 到点。
+    ///
+    /// 断言：① 视野内每个玩家各收 1 条 `SM_HIT`，界外玩家 0 条；② 12B 头逐字节
+    /// （Recog=攻方 ActorId、Ident=14、Param=X、Tag=Y、Series=Dir、无尾）；③ tick1 不得有
+    /// `SM_STRUCK`，tick2 才有且序在全部 `SM_HIT` 之后；④ 收件人 = {受击者, 观察者}。
+    ///
+    /// 牙：删 `attack_target` 尾部的 `send_ref_msg` ⇒ `SM_HIT` 计数 0；把 `Dir` 传成 0
+    /// ⇒ Series 断言红；去掉 `RM_REFMESSAGE` 延迟层（或让 SM_STRUCK 在 tick1 出帧）
+    /// ⇒ 「tick1 无 SM_STRUCK / 帧序」断言红。
+    #[test]
+    fn monster_attack_produces_sm_hit_then_struck_on_production_path() {
+        use mir2_world::Entity;
+        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        world.enable_monster_ai();
+        world.enable_refmessage_delay();
+        let mut m = Entity::new(0, "半兽人".to_string(), 10, 12);
+        m.race = 60;
+        m.hp = 60;
+        m.max_hp = 60;
+        m.dc = 10 | (10 << 8);
+        m.ai.walk_speed = 0; // 放开走时钟门（不影响攻击门）
+        m.ai.walk_tick = 0;
+        m.ai.attack_tick = -10_000; // tick1 必到点
+        m.ai.next_hit_time = 2_000;
+        let mid = world.add_entity(m);
+        let mut v = Entity::new(0, "victim".to_string(), 11, 12);
+        v.hp = 100;
+        v.max_hp = 100;
+        let vid = world.add_entity(v);
+        let mut o = Entity::new(0, "obs".to_string(), 13, 12);
+        o.hp = 100;
+        o.max_hp = 100;
+        let oid = world.add_entity(o);
+        let mut f = Entity::new(0, "far".to_string(), 40, 40);
+        f.hp = 100;
+        f.max_hp = 100;
+        let _fid = world.add_entity(f);
+        world.entities.get_mut(mid).unwrap().ai.target_creature = Some(vid);
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".to_string(),
+                chr_name: "victim".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: vid,
+            },
+            OnlineEntry {
+                account: "b".to_string(),
+                chr_name: "obs".to_string(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 6,
+                actor_id: oid,
+            },
+            OnlineEntry {
+                account: "c".to_string(),
+                chr_name: "far".to_string(),
+                session_id: 3,
+                gate_idx: 0,
+                socket: 7,
+                actor_id: _fid,
+            },
+        ];
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            vid,
+            downlink::ActorDisplay::new(4, 0, 0x1234, 0, 0x2, 255, b"victim".to_vec()),
+        );
+        let table =
+            game_svr::mongen::MonsterTable::new(Vec::<mir2_data::models::MonsterInfo>::new());
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+
+        fn take_frames(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, Vec<u8>)> {
+            let mut out = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                if let SimToGate::SendFrame { body, socket } = ev {
+                    out.push((socket, body));
+                }
+            }
+            out
+        }
+
+        // ---- tick1：怪攻击 ⇒ 立即出 SM_HIT（RM_REFMESSAGE 尚未到点）----
+        let rec1 = tick_world_with_specials(
+            &mut world,
+            None,
+            &table,
+            None,
+            &mut displays,
+            &online,
+            &gates,
+        );
+        let hits = take_frames(&mut rx0);
+        assert_eq!(
+            hits.len(),
+            2,
+            "受击者 + 观察者各 1 条 SM_HIT；界外玩家 0 条"
+        );
+        let expect = smframe::sm_action_hit(
+            mir2_protocol::messages::SM_HIT,
+            mid,
+            10,
+            12,
+            2, // `Direction.Right`（C# `Enums/Direction.cs:7`）
+            &[],
+        );
+        assert_eq!(expect.len(), 12, "SM_HIT = 12B 头、无尾");
+        let mut socks: Vec<i32> = hits.iter().map(|(s, _)| *s).collect();
+        socks.sort_unstable();
+        assert_eq!(socks, vec![5, 6], "收件人恰为受击者(5)与观察者(6)");
+        for (_, body) in &hits {
+            assert_eq!(body, &expect, "SM_HIT 逐字节 = smframe 口径");
+            assert_eq!(&body[0..4], &mid.to_le_bytes(), "Recog = 攻方 ActorId");
+            assert_eq!(
+                u16::from_le_bytes([body[4], body[5]]),
+                mir2_protocol::messages::SM_HIT,
+                "Ident = 14"
+            );
+            assert_eq!(u16::from_le_bytes([body[6], body[7]]), 10, "Param = X");
+            assert_eq!(u16::from_le_bytes([body[8], body[9]]), 12, "Tag = Y");
+            assert_eq!(
+                u16::from_le_bytes([body[10], body[11]]),
+                2,
+                "Series = Dir（Direction.Right）"
+            );
+        }
+        // 同击的 SM_STRUCK 在 tick1 必须还没到点。
+        drain_combat_downlink(&rec1, &mut world, &displays, &online, &mut sessions, &gates);
+        let early = take_frames(&mut rx0);
+        assert!(
+            early.is_empty(),
+            "tick1 不得出 SM_STRUCK（RM_REFMESSAGE 200ms 延迟层）"
+        );
+
+        // ---- tick2：延迟到点 ⇒ SM_STRUCK；tick2 不得再有 SM_HIT（攻击间隔门）----
+        let rec2 = tick_world_with_specials(
+            &mut world,
+            None,
+            &table,
+            None,
+            &mut displays,
+            &online,
+            &gates,
+        );
+        let tick2_frames = take_frames(&mut rx0);
+        assert!(
+            tick2_frames.is_empty(),
+            "tick2 攻击间隔门未过 ⇒ 不得多出 SM_HIT（也不得有其它帧）"
+        );
+        drain_combat_downlink(&rec2, &mut world, &displays, &online, &mut sessions, &gates);
+        let struck = take_frames(&mut rx0);
+        assert_eq!(struck.len(), 2, "SM_STRUCK 发给受击者自身 + 观察者");
+        let mut struck_socks: Vec<i32> = struck.iter().map(|(s, _)| *s).collect();
+        struck_socks.sort_unstable();
+        assert_eq!(struck_socks, vec![5, 6]);
+        for (_, body) in &struck {
+            assert_eq!(
+                u16::from_le_bytes([body[4], body[5]]),
+                mir2_protocol::messages::SM_STRUCK,
+                "tick2 = SM_STRUCK"
+            );
+            assert_eq!(
+                i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                vid,
+                "SM_STRUCK Recog = 受击者"
+            );
+        }
+    }
+
     /// **MB-2**：`RM_FLYAXE`/`RM_LIGHTING`/`RM_ALIVE` 的生产排水逐字节映射
     /// （`DualAxeMonster.cs:29` / `LightingZombi.cs:22` / `BaseObject.Base.cs:357`）。
     ///

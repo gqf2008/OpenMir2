@@ -519,6 +519,16 @@ pub fn attack_target(world: &mut World, actor_id: i32) -> bool {
                     .pending_ai_attacks
                     .push((actor_id, target_id, outcome));
             }
+            // **Lane 1（`openmir2-monster-attack-smhit`）**：`AnimalObject.Attack`
+            // （`AnimalObject.cs:167-171`）的第二句 `SendAttackMsg(RM_HIT, Dir, CurrX, CurrY)`
+            // ——在 `AttackDir` **之后无条件**发（`_Attack` 的 `nPower==0` 支、被闪避、
+            // 目标无效都照发；只有 `GetAttackDir` 不邻接时根本不进本分支）。
+            // `AttackDir` 已把 `Dir` 置为 `nDir`（上面的 `turn_to`），坐标取**发帧时刻**的
+            // `CurrX/CurrY`；`SendRefMsg` 的收件人语义由 `send_ref_msg` 在发帧时刻快照
+            // （±12 格、仅 `Race==Play`、排除自己；`ObMode/FixedHideMode` ⇒ `self_only`）。
+            if let Some((dir, x, y)) = world.entities.get(actor_id).map(|e| (e.ai.dir, e.x, e.y)) {
+                send_ref_msg(world, actor_id, RM_HIT, i32::from(dir), x, y, 0);
+            }
         }
         true
     } else {
@@ -5599,6 +5609,176 @@ mod tests {
         );
         assert!(rec[0].2.hit, "怪对玩家的攻击应命中");
         assert!(rec[0].2.damage > 0, "护甲 0 ⇒ 伤害应 > 0（下游才出帧）");
+    }
+
+    // ------------------------------ Lane 1：怪普攻 `RM_HIT` ------------------------------
+
+    /// **Lane 1**：`AnimalObject.Attack`（`AnimalObject.cs:167-171`）的第二句
+    /// `SendAttackMsg(RM_HIT, Dir, CurrX, CurrY)` ⇒ world 层每次「邻接 + 到点」的攻击
+    /// **恰产出一条** `RM_HIT` 事件，宿主 `drain_monster_ref_msgs` 据此出 `SM_HIT(14)`。
+    ///
+    /// 收件人按 oracle `SendRefMsg`（`BaseObject.Message.cs:383-445`）在**发帧时刻**快照：
+    /// ±12 格、仅 `Race==Play`、排除自己（怪物观察者 `WantRefMsg` 只对
+    /// STRUCK/HEAR/DEATH 放行 ⇒ 不收 `RM_HIT`）。
+    ///
+    /// 牙：删掉 `attack_target` 尾部的 `send_ref_msg` ⇒ 首条「恰 1 条」红；把 `wParam`
+    /// 换成 0 或把 x/y 取错 ⇒ 字段断言红；把收件人改成全体实体 ⇒ 集合断言红。
+    #[test]
+    fn monster_attack_emits_one_rm_hit_with_oracle_recipients() {
+        let mut world = World::new(40, 40);
+        let mid = monster(&mut world, 10, 10);
+        let victim = player(&mut world, 11, 10);
+        let observer = player(&mut world, 10, 20); // Δ=10 ⇒ ±12 内
+        let outsider = player(&mut world, 23, 10); // Δ=13 ⇒ 界外
+        let other_mon = monster(&mut world, 10, 11); // 非 Play ⇒ 不收 RM_HIT
+        world.tick(); // 处理 Enter 落格（收件人扫描读 map cell）
+        {
+            let m = world.entities.get_mut(mid).unwrap();
+            m.dc = 10 | (10 << 8);
+            m.level = 1;
+            m.ai.attack_tick = 0;
+        }
+        set_target_creature(&mut world, mid, victim);
+        world.clock_ms = 2_200;
+        assert!(attack_target(&mut world, mid), "邻接 ⇒ 返回 true");
+
+        assert_eq!(
+            world.pending_ai_attacks.len(),
+            1,
+            "恰 1 条攻击结算（SM_STRUCK 数据源）"
+        );
+        let refs = &world.pending_monster_ref_msgs;
+        assert_eq!(refs.len(), 1, "一次攻击恰 1 条 RM_HIT");
+        let r = &refs[0];
+        assert_eq!(r.ident, RM_HIT, "ident = RM_HIT");
+        assert_eq!(
+            r.w_param,
+            i32::from(DIR_RIGHT),
+            "wParam = Dir（`AttackDir` 先置 `Dir = nDir`）"
+        );
+        assert_eq!(
+            (r.n_param1, r.n_param2, r.n_param3),
+            (10, 10, 0),
+            "坐标 = 发帧时刻 CurrX/CurrY，尾 0"
+        );
+        assert_eq!((r.x, r.y, r.map_id), (10, 10, 0), "发帧快照 (x,y,map)");
+        assert_eq!(r.dir, DIR_RIGHT, "方向快照 = AttackDir 后的 Dir");
+        assert!(!r.self_only, "非 ObMode/FixedHideMode ⇒ 正常广播");
+        let mut got = r.recipients.clone();
+        got.sort_unstable();
+        let mut want = vec![victim, observer];
+        want.sort_unstable();
+        assert_eq!(
+            got, want,
+            "收件人 = ±12 内的玩家（受击者 + 观察者）；排除自己/怪物观察者/界外"
+        );
+        assert!(!r.recipients.contains(&mid), "自己不在收件人内");
+        assert!(!r.recipients.contains(&other_mon), "怪物观察者不发 RM_HIT");
+        assert!(!r.recipients.contains(&outsider), "Δ>12 不发");
+    }
+
+    /// **Lane 1**：`RM_HIT` 的发送门严格照 oracle——`Attack` 只在
+    /// `GetAttackDir` 命中（八邻格）且攻击间隔门通过时被调用；一旦被调用，
+    /// `SendAttackMsg` **无条件**发（零伤害/被闪避也发）。
+    ///
+    /// 牙：把零伤害支改成「伤害 > 0 才发」⇒ A 段红；把 `RM_HIT` 挪到邻接判定之外
+    /// ⇒ B/C 段红。
+    #[test]
+    fn monster_attack_hit_send_gate_matches_attack_invocation_gate() {
+        // A) 零伤害（`_Attack` 的 `nPower == 0` 支）仍必须发 RM_HIT。
+        let mut world = World::new(40, 40);
+        let mid = monster(&mut world, 10, 10);
+        let pid = player(&mut world, 11, 10);
+        world.tick();
+        world.entities.get_mut(mid).unwrap().dc = 0; // Lo=Hi=0 ⇒ nPower=0
+        world.entities.get_mut(mid).unwrap().ai.attack_tick = 0;
+        set_target_creature(&mut world, mid, pid);
+        world.clock_ms = 2_200;
+        assert!(attack_target(&mut world, mid));
+        assert_eq!(world.pending_ai_attacks.len(), 1, "结算记录照样产生");
+        assert_eq!(world.pending_ai_attacks[0].2.damage, 0, "零伤害");
+        assert_eq!(
+            world.pending_monster_ref_msgs.len(),
+            1,
+            "零伤害/未命中仍发 RM_HIT（oracle 无条件）"
+        );
+
+        // B) 距离不足（非八邻格）⇒ 不进 `Attack` ⇒ 不发 RM_HIT。
+        let mut world = World::new(40, 40);
+        let mid = monster(&mut world, 10, 10);
+        let pid = player(&mut world, 12, 10);
+        world.tick();
+        world.entities.get_mut(mid).unwrap().dc = 10 | (10 << 8);
+        world.entities.get_mut(mid).unwrap().ai.attack_tick = 0;
+        set_target_creature(&mut world, mid, pid);
+        world.clock_ms = 2_200;
+        assert!(!attack_target(&mut world, mid), "不邻接 ⇒ false");
+        assert!(
+            world.pending_monster_ref_msgs.is_empty(),
+            "距离不足不得发 RM_HIT"
+        );
+        assert!(world.pending_ai_attacks.is_empty());
+
+        // C) 邻接但攻击间隔门未过 ⇒ 不进 `Attack` ⇒ 不发 RM_HIT（也不得多发）。
+        let mut world = World::new(40, 40);
+        let mid = monster(&mut world, 10, 10);
+        let pid = player(&mut world, 11, 10);
+        world.tick();
+        world.entities.get_mut(mid).unwrap().dc = 10 | (10 << 8);
+        {
+            let m = world.entities.get_mut(mid).unwrap();
+            m.ai.attack_tick = 1_200; // now 2_200 - 1_200 = 1_000 <= NextHitTime 2_000
+            m.ai.next_hit_time = 2_000;
+        }
+        set_target_creature(&mut world, mid, pid);
+        world.clock_ms = 2_200;
+        assert!(attack_target(&mut world, mid), "邻接 ⇒ true（只是不打）");
+        assert!(
+            world.pending_monster_ref_msgs.is_empty(),
+            "间隔门未过 ⇒ 不得发 RM_HIT"
+        );
+        assert!(world.pending_ai_attacks.is_empty());
+
+        // D) `ObMode/FixedHideMode`：oracle `SendRefMsg` 只投给自己（怪物无客户端 ⇒ 不产帧）。
+        let mut world = World::new(40, 40);
+        let mid = monster(&mut world, 10, 10);
+        let pid = player(&mut world, 11, 10);
+        world.tick();
+        {
+            let m = world.entities.get_mut(mid).unwrap();
+            m.dc = 10 | (10 << 8);
+            m.ai.attack_tick = 0;
+            m.fixed_hide_mode = true;
+        }
+        set_target_creature(&mut world, mid, pid);
+        world.clock_ms = 2_200;
+        assert!(attack_target(&mut world, mid));
+        let refs = &world.pending_monster_ref_msgs;
+        assert_eq!(refs.len(), 1, "事件仍产生（SendRefMsg 语义）");
+        assert!(refs[0].self_only, "隐藏模式 ⇒ self_only");
+        assert!(refs[0].recipients.is_empty(), "self_only ⇒ 无收件人");
+    }
+
+    /// **Lane 1 回归**：玩家攻击路径不受影响——`CM_HIT`/`Command::Attack` 的
+    /// `SM_HIT` 由玩家攻击接线层出，**不得**流进怪物 AI 的 `pending_monster_ref_msgs`。
+    ///
+    /// 牙：把 `send_ref_msg(RM_HIT)` 误放进 `World::attack_once`（两条路径共用）⇒ 本用例红。
+    #[test]
+    fn player_attack_path_does_not_emit_monster_rm_hit() {
+        let mut world = World::new(40, 40);
+        let pid = player(&mut world, 10, 10);
+        let mid = monster(&mut world, 11, 10);
+        world.tick();
+        world.entities.get_mut(pid).unwrap().dc = 10 | (10 << 8);
+        world.attack_cmd(pid, mid);
+        world.clock_ms = 2_200;
+        let rec = world.tick();
+        assert_eq!(rec.attacks.len(), 1, "玩家攻击照常结算");
+        assert!(
+            world.pending_monster_ref_msgs.is_empty(),
+            "玩家攻击不得产生怪物 RM_HIT 事件"
+        );
+        assert!(world.pending_ai_attacks.is_empty());
     }
 
     /// W4-G（端到端）：玩家打怪 ⇒ 怪被 `RM_STRUCK` ⇒ 怪在后续 AI 里**反击玩家**，
