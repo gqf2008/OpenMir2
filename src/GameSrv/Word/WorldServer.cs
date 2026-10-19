@@ -1317,8 +1317,11 @@ namespace GameSrv.Word
             HumItems[ItemLocation.Dress] = playObject.UseItems[ItemLocation.Dress] == null ? HUtil32.DelfautItem.ToServerItem() : playObject.UseItems[ItemLocation.Dress].ToServerItem();
             HumItems[ItemLocation.Weapon] = playObject.UseItems[ItemLocation.Weapon] == null ? HUtil32.DelfautItem.ToServerItem() : playObject.UseItems[ItemLocation.Weapon].ToServerItem();
             HumItems[ItemLocation.RighThand] = playObject.UseItems[ItemLocation.RighThand] == null ? HUtil32.DelfautItem.ToServerItem() : playObject.UseItems[ItemLocation.RighThand].ToServerItem();
-            HumItems[ItemLocation.Helmet] = playObject.UseItems[ItemLocation.Necklace] == null ? HUtil32.DelfautItem.ToServerItem() : playObject.UseItems[ItemLocation.Necklace].ToServerItem();
-            HumItems[ItemLocation.Necklace] = playObject.UseItems[ItemLocation.Helmet] == null ? HUtil32.DelfautItem.ToServerItem() : playObject.UseItems[ItemLocation.Helmet].ToServerItem();
+            // 与 GetHumData 的读取侧对齐：项链/头盔各取本槽。
+            // 原实现 save 侧与 load 侧同时交叉，往返虽然不变，但客户端看到的
+            // 项链/头盔是互换的；只修 load 会留下"每次登录/存档在槽 3/4 间迁移"的不对称。
+            HumItems[ItemLocation.Helmet] = playObject.UseItems[ItemLocation.Helmet] == null ? HUtil32.DelfautItem.ToServerItem() : playObject.UseItems[ItemLocation.Helmet].ToServerItem();
+            HumItems[ItemLocation.Necklace] = playObject.UseItems[ItemLocation.Necklace] == null ? HUtil32.DelfautItem.ToServerItem() : playObject.UseItems[ItemLocation.Necklace].ToServerItem();
             HumItems[ItemLocation.ArmRingl] = playObject.UseItems[ItemLocation.ArmRingl] == null ? HUtil32.DelfautItem.ToServerItem() : playObject.UseItems[ItemLocation.ArmRingl].ToServerItem();
             HumItems[ItemLocation.ArmRingr] = playObject.UseItems[ItemLocation.ArmRingr] == null ? HUtil32.DelfautItem.ToServerItem() : playObject.UseItems[ItemLocation.ArmRingr].ToServerItem();
             HumItems[ItemLocation.Ringl] = playObject.UseItems[ItemLocation.Ringl] == null ? HUtil32.DelfautItem.ToServerItem() : playObject.UseItems[ItemLocation.Ringl].ToServerItem();
