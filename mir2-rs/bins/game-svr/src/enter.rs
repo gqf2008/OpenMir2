@@ -1627,13 +1627,13 @@ mod tests {
             Some(out.sub.to_frame_bytes()),
             "752 = SubAbility 的 7 个单字节通道"
         );
-        // 两槽约简（只入 752/52）：四叉堆在两元素时退化为 FIFO ⇒ 先入者先出。
-        // 生产全槽序**不是**这个：全槽下 oracle 实拍是 `52,752`（模型 C′，四个 C# 会话一致，
-        // 见 `docs/window-shrink-run-20261019.md` §6 F1 与 `smframe::frames` 的顺序判据）。
+        // 约简输入（`658` 直发；队列里仍有 `Logon + 3×SysMsg + 752 + 52`，621/211/811/46 缺席）：
+        // 四叉堆的 tie-break 仍给出 `52` 先。与真机全槽序一致（模型 C′，四个 C# 会话，
+        // `docs/window-shrink-run-20261019.md` §6 F1；全槽序判据在 `smframe`）。
         assert_eq!(
             idents(&base.frames()),
-            vec![658, 752, 52],
-            "两槽约简的 FIFO 序（入队序 = 752 先、52 后）；生产全槽序见 smframe 顺序判据"
+            vec![658, 52, 752],
+            "约简输入的堆序：52 先于 752（与模型 C′ 一致）；全槽序见 smframe 顺序判据"
         );
 
         // `MIR2_CLIENT_ABILITY_LAYOUT`：冻结客户端 58B 布局（`HIGHHP=True`）——同一 `WAbil`、
