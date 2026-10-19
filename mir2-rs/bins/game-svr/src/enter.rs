@@ -578,19 +578,25 @@ fn send_use_items_tail(a: &AbilityInputs<'_>, job: u8) -> Result<Option<Vec<u8>>
 
 /// `PlayObject.SendUseMagic()`（`PlayObject.Base.cs:1052-1073`）的 `(count, 尾)`：
 /// 逐条 `EncodeBuffer(ClientMagic) + '/'`；`count = MagicList.Count`。
-/// 魔表缺项（`magics` 表装载失败）⇒ 无法构造 `ClientMagic.Def`，返回 `Err` 登记（不编造）。
-fn send_my_magic(a: &AbilityInputs<'_>) -> Result<Option<(u16, Vec<u8>)>, String> {
-    let (Some(magics), Some(table)) = (a.magics, a.magic_table) else {
-        return Ok(None);
-    };
+///
+/// **空槽口径（oracle）**：DBSvr 取档时确实把 `MagicRcd[20]` 全槽填成默认值
+/// （`PlayDataStorage.Query.cs:343-357` 的 `Magic[i] = new MagicRcd()`，`MagIdx = 0`，
+/// 与 `bins/db-srv/src/playdata.rs:206` 一致，属 1:1 照搬），但 `WorldServer.cs:1192-1211`
+/// 把它们装进 `PlayObject.MagicList` 时会 `FindMagic(MagIdx)`：**查不到模板的槽直接丢弃**。
+/// 因此 `MagicList` 只含可解析条目，`count`（`series`）与尾长都只算**有效**条目——
+/// 空槽既不占 `series`，也不产出垃圾条目。查表口径 = `FindMagic`（首行胜，见 [`MagicTable`]）。
+///
+/// 全部槽都无效（或记录/魔表缺失）⇒ `sSendMsg` 为空 ⇒ oracle 的
+/// `if (!string.IsNullOrEmpty(sSendMsg))` 门 ⇒ **一帧都不发**（`None`；真机 `s2c-621b` 无 211）。
+fn send_my_magic(a: &AbilityInputs<'_>) -> Option<(u16, Vec<u8>)> {
+    let (magics, table) = (a.magics?, a.magic_table?);
     let mut tail: Vec<u8> = Vec::new();
     let mut count: u16 = 0;
     for m in magics.iter().flatten() {
+        // oracle 装表门：`FindMagic(MagIdx) == null` 的槽不进 `MagicList`
+        // （空槽 `MagIdx = 0`、真魔表无 0 行，即此支）。
         let Some(def) = table.get(m.mag_idx) else {
-            return Err(format!(
-                "帧 211 输入不足：MagicList 的 MagIdx={} 不在 magics 表 ⇒ 跳过整条 211（登记）",
-                m.mag_idx
-            ));
+            continue;
         };
         tail.extend_from_slice(&mir2_protocol::edcode::encode(
             &game_svr::itemwire::encode_client_magic(m.magic_key, m.level, m.tran_point, def),
@@ -599,9 +605,9 @@ fn send_my_magic(a: &AbilityInputs<'_>) -> Result<Option<(u16, Vec<u8>)>, String
         count = count.saturating_add(1);
     }
     if tail.is_empty() {
-        Ok(None)
+        None
     } else {
-        Ok(Some((count, tail)))
+        Some((count, tail))
     }
 }
 
@@ -738,10 +744,7 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
                 Ok(tail) => base.use_items_tail = tail,
                 Err(w) => warns.push(w),
             }
-            match send_my_magic(&a) {
-                Ok(m) => base.magic = m,
-                Err(w) => warns.push(w),
-            }
+            base.magic = send_my_magic(&a);
             // `BaseObject.Light` / `PlayObject.GetMyLight()`：装备（右手火把等，`Index>0 &&
             // Dura>0`）的 `StdItem.Light` 最大值；`Level >= EFFECTIVE_HIGHLEVEL` 时基线 1。
             // `SM_LOGON` 的 `MakeWord(Dir, Light)` 与 `SM_CHANGELIGHT` 的 `Param` 都用它。
@@ -1800,7 +1803,7 @@ mod tests {
             "621 逐槽 i + '/' + EncodeBuffer(ClientItem) + '/'"
         );
 
-        let (count, magic_tail) = send_my_magic(&a).unwrap().expect("211 有尾");
+        let (count, magic_tail) = send_my_magic(&a).expect("211 有尾");
         assert_eq!(count, 1, "series = MagicList.Count");
         let mut expect_magic = edcode::encode(&game_svr::itemwire::encode_client_magic(
             0x41, 2, 100, &magic,
@@ -1820,6 +1823,269 @@ mod tests {
             vec![658, 621, 211, 654],
             "order: 46 后 621→211，654 收尾"
         );
+    }
+
+    /// 真机 `s2c-621c` 的 211 帧**整帧**（`capture.jsonl` seq=17 的 `raw_hex`）：
+    /// 玩家有 1 个有效技能（`MagicId=3`「基本剑术」、`UseKey='1'`、Level 0、CurTrain 0）。
+    const CAPTURE_621C_211_RAW: &str =
+        "236464686b645b686b6464686b6465686b6164686b6464686b64646b6b6464534951414e43413f624f516468676464686b6464686b6464686b6464676b6768786354646863645c69686464545b6564686b506568676467686b6464686b6464686b6464686b6464686b6464686b6464686b6464686b6464686b6464686b6464686b2f21";
+
+    /// `sql/mir2_data.sql:70` 的 `magics` 第 3 行（`基本剑术`），字段映射 1:1 照
+    /// `mir2_data::loaders::DataLoaders::load_magic_db`（`NeedL3` 复制进 `TrainLevel[3]`、
+    /// `L3Train` 复制进 `MaxTrain[3]`、`TrainLv` 恒 3、`Descr` 为空 ⇒ 空串）。
+    fn magic_3_from_sql() -> mir2_data::MagicInfo {
+        mir2_data::MagicInfo {
+            magic_id: 3,
+            magic_name: "基本剑术".into(),
+            effect_type: 0,
+            effect: 0,
+            spell: 0,
+            power: 0,
+            max_power: 0,
+            job: 0,
+            train_level: [7, 11, 16, 16],
+            max_train: [200, 300, 500, 500],
+            train_lv: 3,
+            delay_time: 0,
+            def_spell: 0,
+            def_power: 0,
+            def_max_power: 0,
+            desc: String::new(),
+        }
+    }
+
+    /// `playdata.rs:206` 的口径：DBSvr 恒填 20 个**非 `None`** 槽，空槽是 `MagicRcd` 的
+    /// `MagIdx=0` 默认值。oracle 装 `MagicList` 时按 `FindMagic(MagIdx)` 过滤，故这些槽既不进
+    /// `series`、也不产生载荷。
+    fn empty_magic_slots() -> Vec<Option<MagicRcd>> {
+        vec![
+            Some(MagicRcd {
+                mag_idx: 0,
+                level: 0,
+                magic_key: 0,
+                tran_point: 0,
+            });
+            20
+        ]
+    }
+
+    fn bonus_none() -> NakedAbility {
+        NakedAbility {
+            dc: 0,
+            mc: 0,
+            sc: 0,
+            ac: 0,
+            mac: 0,
+            hp: 0,
+            mp: 0,
+            hit: 0,
+            speed: 0,
+            reserved: 0,
+        }
+    }
+
+    fn magic_inputs<'a>(
+        slots: &'a [Option<MagicRcd>],
+        table: &'a game_svr::magics::MagicTable,
+        catalog: &'a game_svr::ability::StdItemCatalog,
+        abil: &'a Ability,
+        bonus: &'a NakedAbility,
+    ) -> AbilityInputs<'a> {
+        AbilityInputs {
+            catalog,
+            abil,
+            bonus_abil: bonus,
+            bonus_tick_hit: 20,
+            bonus_tick_speed: 35,
+            use_items: None,
+            bag_items: None,
+            magics: Some(slots),
+            magic_table: Some(table),
+            gold: 0,
+            client_ability_layout: false,
+        }
+    }
+
+    /// 判据 1：有 1 个有效技能 ⇒ 211 出现，且**整帧**逐字节等于真机 621c。
+    #[test]
+    fn one_valid_magic_211_matches_capture_621c_byte_for_byte() {
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = bonus_none();
+        let table = game_svr::magics::MagicTable::new(vec![magic_3_from_sql()]);
+        let mut slots = empty_magic_slots();
+        slots[0] = Some(MagicRcd {
+            mag_idx: 3,
+            level: 0,
+            magic_key: u16::from(b'1'),
+            tran_point: 0,
+        });
+        let a = magic_inputs(&slots, &table, &catalog, &abil, &bonus);
+        let (count, tail) = send_my_magic(&a).expect("1 个有效技能 ⇒ 211 必须发");
+        assert_eq!(count, 1, "series = MagicList.Count（空槽不计）");
+        let frame =
+            game_svr::smframe::client_frame(&game_svr::smframe::sm_sendmymagic(count, &tail));
+        assert_eq!(
+            frame,
+            hex(CAPTURE_621C_211_RAW),
+            "211 整帧（'#' + Encode(头) + Encode(ClientMagic) + '/' + '!'）必须与 621c 逐字节相同"
+        );
+
+        let base = EnterWorldInputs {
+            magic: Some((count, tail)),
+            ..EnterWorldInputs::default()
+        };
+        assert!(
+            idents(&base.frames()).contains(&211),
+            "帧序里必须出现 211（621c 登录序 52,752,621,211,811,46）"
+        );
+    }
+
+    /// 判据 2：无技能（20 个空槽）⇒ 211 不出现（与真机 621b 一致）。
+    #[test]
+    fn no_valid_magic_emits_no_211_like_capture_621b() {
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = bonus_none();
+        let table = game_svr::magics::MagicTable::new(vec![magic_3_from_sql()]);
+        let slots = empty_magic_slots();
+        let a = magic_inputs(&slots, &table, &catalog, &abil, &bonus);
+        assert!(
+            send_my_magic(&a).is_none(),
+            "空槽全部被 FindMagic 门滤掉 ⇒ sSendMsg 空 ⇒ 一帧都不发"
+        );
+
+        let mut base = EnterWorldInputs::default();
+        let wx = WorldFrameInputs {
+            flag: None,
+            map_desc: None,
+            conf: None,
+            bonus_abil: None,
+            soft_version_date: 0,
+            game_gold: 0,
+            game_point: 0,
+            job: 0,
+            bonus_point: 0,
+            game_time: None,
+            strings: None,
+            show_name: None,
+            logon: None,
+            ability: Some(a),
+        };
+        let warns = apply(&mut base, &wx);
+        assert!(base.magic.is_none(), "211 不得进入待发帧");
+        assert!(
+            !idents(&base.frames()).contains(&211),
+            "621b 的 35 条 s2c 无 211 ⇒ 这里也不能有"
+        );
+        assert!(
+            !warns.iter().any(|w| w.contains("211")),
+            "空槽是 oracle 正常路径，不得登记成告警"
+        );
+    }
+
+    /// 判据 3：2 条技能按槽序进载荷，`series=2`。
+    #[test]
+    fn two_magics_keep_slot_order() {
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = bonus_none();
+        let fireball = mir2_data::MagicInfo {
+            magic_id: 1,
+            magic_name: "火球术".into(),
+            effect_type: 1,
+            effect: 1,
+            spell: 4,
+            power: 8,
+            max_power: 8,
+            job: 1,
+            train_level: [7, 11, 16, 16],
+            max_train: [200, 300, 500, 500],
+            train_lv: 3,
+            delay_time: 60,
+            def_spell: 1,
+            def_power: 2,
+            def_max_power: 2,
+            desc: String::new(),
+        };
+        let table = game_svr::magics::MagicTable::new(vec![magic_3_from_sql(), fireball.clone()]);
+        let first = MagicRcd {
+            mag_idx: 3,
+            level: 0,
+            magic_key: u16::from(b'1'),
+            tran_point: 0,
+        };
+        let second = MagicRcd {
+            mag_idx: 1,
+            level: 2,
+            magic_key: u16::from(b'2'),
+            tran_point: 5,
+        };
+        let mut slots = empty_magic_slots();
+        slots[0] = Some(first.clone());
+        slots[1] = Some(second.clone());
+        let a = magic_inputs(&slots, &table, &catalog, &abil, &bonus);
+        let (count, tail) = send_my_magic(&a).expect("2 条技能 ⇒ 211");
+        assert_eq!(count, 2);
+
+        let mut expect = edcode::encode(&game_svr::itemwire::encode_client_magic(
+            first.magic_key,
+            first.level,
+            first.tran_point,
+            &magic_3_from_sql(),
+        ));
+        expect.push(b'/');
+        expect.extend_from_slice(&edcode::encode(&game_svr::itemwire::encode_client_magic(
+            second.magic_key,
+            second.level,
+            second.tran_point,
+            &fireball,
+        )));
+        expect.push(b'/');
+        assert_eq!(tail, expect, "槽序 = 载荷序（MagicList 按槽序装入）");
+    }
+
+    /// 判据 4：空槽混在**中间**不产生垃圾条目；查无模板的有效槽同样被装表门丢弃。
+    #[test]
+    fn empty_slots_in_the_middle_produce_no_garbage() {
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = bonus_none();
+        let table = game_svr::magics::MagicTable::new(vec![magic_3_from_sql()]);
+        let first = MagicRcd {
+            mag_idx: 3,
+            level: 0,
+            magic_key: u16::from(b'1'),
+            tran_point: 0,
+        };
+        let mut slots = empty_magic_slots();
+        slots[7] = Some(first.clone());
+        let a = magic_inputs(&slots, &table, &catalog, &abil, &bonus);
+        let (count, tail) = send_my_magic(&a).expect("中间空槽不得把整帧吞掉");
+        assert_eq!(count, 1, "series 只算有效条目");
+        let mut expect = edcode::encode(&game_svr::itemwire::encode_client_magic(
+            first.magic_key,
+            first.level,
+            first.tran_point,
+            &magic_3_from_sql(),
+        ));
+        expect.push(b'/');
+        assert_eq!(tail, expect, "载荷恰为 1 条有效技能（无 0 号空槽垃圾）");
+        assert_eq!(tail.len(), 113, "1 条技能尾 = enc(84) + '/' = 113");
+
+        // 有效技能 + 魔表查无此项的槽：后者按 oracle 装表门丢弃（不 Err、不占 series）。
+        let mut slots2 = empty_magic_slots();
+        slots2[0] = Some(first);
+        slots2[1] = Some(MagicRcd {
+            mag_idx: 999,
+            level: 1,
+            magic_key: u16::from(b'9'),
+            tran_point: 0,
+        });
+        let a2 = magic_inputs(&slots2, &table, &catalog, &abil, &bonus);
+        let (count2, tail2) = send_my_magic(&a2).expect("有效技能仍在 ⇒ 211");
+        assert_eq!(count2, 1, "查无模板的槽同样不进 MagicList");
+        assert_eq!(tail2, expect);
     }
 
     /// **G-7**：`apply` 用装备的 `StdItem.Light` 算 `BaseObject.Light`，同时喂
