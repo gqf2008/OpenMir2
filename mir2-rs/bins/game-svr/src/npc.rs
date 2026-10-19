@@ -383,6 +383,16 @@ pub struct NpcPlayer<'r> {
     pub power_rate: i32,
     /// `PlayObject.PowerRateTime`（`PlayObject.cs:726`；ctor 0）。
     pub power_rate_time: i32,
+    /// `PlayObject.AutoGetExpTime`（`PlayObject.cs:805`；ctor 0；脚本 `SETAUTOGETEXP`
+    /// 写 `nTime * 1000`）。**P31**：宿主 `SessionGround` 是唯一真源，脚本跑前 seed、跑后写回。
+    pub auto_get_exp_time: i32,
+    /// `PlayObject.AutoGetExpPoint`（`PlayObject.cs:806`；ctor 0）。
+    pub auto_get_exp_point: i32,
+    /// `PlayObject.AutoGetExpEnvir`（`PlayObject.cs:807`；ctor `null`）。C# 存的是
+    /// `IEnvirnoment` 引用，Rust 这里存地图名（宿主再解析成 `map_id` 做同一性比较）。
+    pub auto_get_exp_envir: Option<String>,
+    /// `PlayObject.AutoGetExpInSafeZone`（`PlayObject.cs:808`；ctor false）。
+    pub auto_get_exp_in_safe_zone: bool,
 }
 
 impl NpcPlayer<'_> {
@@ -417,6 +427,12 @@ impl NpcPlayer<'_> {
             kill_mon_exp_rate_time: 0,
             power_rate: 100,
             power_rate_time: 0,
+            // P31：`PlayObject.cs:1009-1012` 的 ctor 初值（Tick 不在本适配器里建模，
+            // 宿主 `SessionGround` 持有；这里只有脚本可写的四个字段）。
+            auto_get_exp_time: 0,
+            auto_get_exp_point: 0,
+            auto_get_exp_envir: None,
+            auto_get_exp_in_safe_zone: false,
         }
     }
 }
@@ -483,6 +499,22 @@ impl ScriptPlayer for NpcPlayer<'_> {
     fn set_power_rate(&mut self, rate: i32, time: i32) {
         self.power_rate = rate;
         self.power_rate_time = time;
+    }
+    fn set_auto_get_exp(
+        &mut self,
+        safe_zone: bool,
+        envir_map: Option<&str>,
+        time_ms: i32,
+        point: i32,
+    ) {
+        // `ExecutionProcessingSys.cs:2707-2710`：四字段按 oracle 次序写入
+        //（InSafeZone → Envir → Time → Point）。`envir_map = None` 对应 oracle 的
+        // `AutoGetExpEnvir = null`（`FindMap` 返回 null 或 `sMap` 非空 —— 后者是
+        // `:2698` 的条件写反导致的既有缺陷，照搬）。
+        self.auto_get_exp_in_safe_zone = safe_zone;
+        self.auto_get_exp_envir = envir_map.map(str::to_string);
+        self.auto_get_exp_time = time_ms;
+        self.auto_get_exp_point = point;
     }
     fn send_msg(
         &mut self,
@@ -846,5 +878,38 @@ mod tests {
         assert_eq!(p.quest_unit_open_status(8), 1);
         assert_eq!(p.quest_unit.as_bytes()[0], 0x01);
         assert_eq!(p.quest_unit_open.as_bytes()[0], 0x01);
+    }
+
+    /// **PL-2 / P31**：`ScriptPlayer::set_auto_get_exp`（oracle `ExecutionProcessingSys.cs:2707-2710`）
+    /// 写四字段；`None` 地图形参 = `AutoGetExpEnvir null`。
+    #[test]
+    fn npc_player_set_auto_get_exp_writes_four_fields() {
+        let mut rng = |_v: i32| 0;
+        let mut p = NpcPlayer::empty(&mut rng);
+        // ctor 缺省（`PlayObject.cs:1009-1012`）。
+        assert_eq!(p.auto_get_exp_time, 0);
+        assert_eq!(p.auto_get_exp_point, 0);
+        assert!(p.auto_get_exp_envir.is_none());
+        assert!(!p.auto_get_exp_in_safe_zone);
+        p.set_auto_get_exp(true, None, 1_400_000, 1);
+        assert_eq!(
+            (
+                p.auto_get_exp_in_safe_zone,
+                p.auto_get_exp_envir.clone(),
+                p.auto_get_exp_time,
+                p.auto_get_exp_point
+            ),
+            (true, None, 1_400_000, 1)
+        );
+        p.set_auto_get_exp(false, Some("A"), 5_000, 20);
+        assert_eq!(
+            (
+                p.auto_get_exp_in_safe_zone,
+                p.auto_get_exp_envir.clone(),
+                p.auto_get_exp_time,
+                p.auto_get_exp_point
+            ),
+            (false, Some("A".to_string()), 5_000, 20)
+        );
     }
 }

@@ -1691,23 +1691,37 @@ fn map_and_timer_actions() {
 #[test]
 fn auto_get_exp_and_offline() {
     let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
-    // 地图号为空 ⇒ FindMap("") 找不到 ⇒ 报错（C# 只在 sMap 为空时才查地图）
+    // 地图号为空 ⇒ `FindMap("")` 找不到 ⇒ ScriptActionError（`ExecutionProcessingSys.cs:2698-2702`）。
+    // 校验在写字段**之前** ⇒ 时/点/图/安全区四字段保持 ctor 缺省（一个都不写）。
     let mut a = act(236, "10", "20", 0, 0);
     a.s_param3 = "A1".into();
     let errors = run_act(&mut npc, &mut player, a.clone());
     assert!(first_script_error(&errors).contains("脚本命令:SetautogetExp"));
-    // 地图号非空 ⇒ 通过（AutoGetExpEnvir 恒 null，C# 原文如此）
+    assert_eq!(player.auto_get_exp, None, "报错支不得写字段");
+    // 地图号非空 ⇒ 通过（C# 原文：`if (string.IsNullOrEmpty(sMap))` 才 FindMap
+    // ⇒ 非空地图形参下 `AutoGetExpEnvir` 恒 null，bug 照搬）。
     a.s_param4 = "0".into();
     let errors = run_act(&mut npc, &mut player, a);
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(player.auto_get_exp, Some((true, None, 10_000, 20)));
-    // 空/单字符 sParam3：C# `sParam3[1]` 抛 IndexOutOfRangeException；Rust 落 false、不崩
-    // （刻意不复刻崩溃，登记见 tests/parity/whitelist.md B-108）
+    // 空/单字符 `sParam3`：C# `sParam3[1]` 抛 IndexOutOfRangeException（`:2696`），
+    // 位置**先于**参数校验 ⇒ 不报 ScriptActionError、不写字段。这里故意同时给空地图：
+    // 若 Rust 先判地图就会报错，可反证语句序。Rust 不 panic（whitelist B-108）。
+    let before = player.auto_get_exp.clone();
     let mut e = act(236, "10", "20", 0, 0);
-    e.s_param4 = "0".into();
+    e.s_param3 = String::new();
+    e.s_param4 = String::new();
+    let errors = run_act(&mut npc, &mut player, e.clone());
+    assert!(
+        errors.is_empty(),
+        "C# 是异常不是 ScriptActionError ⇒ 不能落脚本文本: {errors:?}"
+    );
+    assert_eq!(player.auto_get_exp, before, "异常支不得写字段");
+    // 单字符同义（`"1"` 的 `[1]` 也越界）。
+    e.s_param3 = "1".into();
     let errors = run_act(&mut npc, &mut player, e);
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(player.auto_get_exp, Some((false, None, 10_000, 20)));
+    assert_eq!(player.auto_get_exp, before, "单字符 sParam3 不得写字段");
     // 时间/点数非法 ⇒ 报错
     let mut b = act(236, "0", "20", 0, 0);
     b.s_param3 = "A1".into();
@@ -2635,4 +2649,19 @@ fn power_rate_action_sets_fields_and_rejects_negative() {
     let errors = run_act(&mut npc, &mut player, act(198, "-5", "3", 0, 0));
     assert!(!errors.is_empty());
     assert_eq!((player.power_rate, player.power_rate_time), (150, 0));
+}
+
+/// **PL-2 / P07 反向判据**：`SETONTIMER`（field 307）在 oracle 只有枚举声明
+/// （`ExecutionCode.cs:620-621`）、`src/` 无任何 handler；本仓也不得凭空实现
+/// （`AutoTimerStatus` 无写入者、部署 `Envir` 0 文件使用）。⇒ 两条查表路径都必须落空。
+#[test]
+fn p07_setontimer_has_no_handler() {
+    use mir2_script::engine::dispatch;
+    assert_eq!(dispatch::execution_handler(307), None, "注册表：无 handler");
+    assert_eq!(
+        dispatch::engine_switch_execution(307),
+        None,
+        "ScriptEngine switch：无 case"
+    );
+    assert!(!dispatch::execution_implemented(307));
 }

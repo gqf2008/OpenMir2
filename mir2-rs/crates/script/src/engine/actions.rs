@@ -547,8 +547,16 @@ impl Engine<'_, '_> {
                 // C# `SETAUTOGETEXP 时间 点数 是否安全区 地图号`
                 let n_time = mir2_shared::hutil32::str_to_int(&info.s_param1, -1);
                 let n_point = mir2_shared::hutil32::str_to_int(&info.s_param2, -1);
-                // C# `sParam3[1] == '1'`（空串/单字符会抛异常；此处按 false 处理）
-                let bo_safe = info.s_param3.chars().nth(1) == Some('1');
+                // `bool boIsSafeZone = questActionInfo.sParam3[1] == '1';`
+                // （`ExecutionProcessingSys.cs:2696`）——**先于**参数校验与字段写入。
+                // 空串/单字符 ⇒ C# 抛 `IndexOutOfRangeException`，由 NPC 外层 catch 吞掉
+                // ⇒ 动作中止、四个字段一个都不写（`PlayObject.UserLogon` 的 catch，
+                // `PlayObject.cs:1488-1492`）。Rust 不 panic；等价落点 = 直接 return。
+                // 差异仅剩「不写崩溃日志/堆栈」，登记见 `tests/parity/whitelist.md` B-108。
+                let Some(safe_flag) = info.s_param3.chars().nth(1) else {
+                    return;
+                };
+                let bo_safe = safe_flag == '1';
                 let s_map = info.s_param4.clone();
                 // 原文：只有 sMap 为空时才去 FindMap（非空时 envir 恒为 null）
                 let envir = s_map.is_empty() && self.player.map_exists(&s_map);

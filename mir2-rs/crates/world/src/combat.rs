@@ -1404,19 +1404,42 @@ pub fn win_exp(
             dw_exp = hutil::round(f64::from(rate) / 100.0 * f64::from(dw_exp));
         }
     }
-    // GetExp：加经验；`if (Abil.Exp >= Abil.MaxExp)` 单步升级（C# 就是 if 而非 while）。
-    // `leveled` = **进了这个块**（不是"等级真的 +1"）：`Abil.Level++` 才有 `< MAXUPLEVEL` 门，
-    // 而块内的 `HasLevelUp`/`IncHealthSpell` 无条件执行（255 级仍会重算/回血/出帧）。
-    killer.exp += dw_exp;
-    let leveled = killer.exp >= killer.max_exp;
+    get_exp_raw(killer, dw_exp, need_exps)
+}
+
+/// `PlayObject.GetExp(int dwExp)`（`PlayObject.Base.cs:149-166`）的**裸加经验**段。
+///
+/// **P31（`SETAUTOGETEXP`）的唯一入口**：oracle 的 `PlayObject.Message.cs:743` 是
+/// `GetExp(AutoGetExpPoint)`——**不经** `WinExp`，所以这里**不得**乘 `KillMonExpMultiple` /
+/// `MNKillMonExpMultiple` / `KillMonExpRate` / 地图 `ExpRate`，也**不得**过 `CalcGetExp`
+/// 或组队均分（那些都在 [`win_exp`] / [`award_kill_exp`] 里）。逐行：
+///
+/// ```text
+/// Abil.Exp += dwExp;
+/// AddBodyLuck(dwExp * 0.002);            // 世界层不建模，宿主按 exp_awards 补
+/// SendMsg(RM_WINEXP, 0, dwExp, 0, 0);    // 宿主按 exp_awards 出 44
+/// if (Abil.Exp >= Abil.MaxExp) {
+///     Abil.Exp -= Abil.MaxExp;
+///     if (Abil.Level < MAXUPLEVEL) Abil.Level++;
+///     HasLevelUp(Abil.Level - 1);
+///     AddBodyLuck(100);                  // 宿主补
+///     IncHealthSpell(2000, 2000);        // 宿主升级链补
+/// }
+/// ```
+///
+/// 返回 `(本次加值, 是否进入升级块, 升级后等级)`——`leveled` 是**进块**而非「等级真的 +1」
+/// （255 级时 `Level++` 被门挡住，但块内 `HasLevelUp`/`IncHealthSpell` 仍无条件执行）。
+pub fn get_exp_raw(entity: &mut Entity, dw_exp: i32, need_exps: &[i32]) -> (i32, bool, u8) {
+    entity.exp += dw_exp;
+    let leveled = entity.exp >= entity.max_exp;
     if leveled {
-        killer.exp -= killer.max_exp;
+        entity.exp -= entity.max_exp;
         // oracle：`if (Abil.Level < MessageSettings.MAXUPLEVEL) Abil.Level++;`
         // （`MAXUPLEVEL = byte.MaxValue = 255`，`MessageSettings.cs:7`）⇒ u8 饱和自增。
-        killer.level = killer.level.saturating_add(1);
-        killer.max_exp = get_level_exp(need_exps, 255, i32::from(killer.level));
+        entity.level = entity.level.saturating_add(1);
+        entity.max_exp = get_level_exp(need_exps, 255, i32::from(entity.level));
     }
-    (dw_exp, leveled, killer.level)
+    (dw_exp, leveled, entity.level)
 }
 
 /// 生成怪物所需的行数据（`monsters` 表子集 + 位置）。

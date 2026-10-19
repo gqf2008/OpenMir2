@@ -22,7 +22,7 @@ use crate::buff::{
     BUFF_PASS_INTERVAL_MS, MAX_STATUS_ATTRIBUTE,
 };
 use crate::combat::{
-    attack_dir_grouped_poison, generate_drops, swing_power, win_exp, AttackOutcome,
+    attack_dir_grouped_poison, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
     AttackPoisonState, AttackPowerMode, CombatConfig,
 };
 use crate::entity::{Entity, EntityStore};
@@ -623,6 +623,28 @@ pub enum TailPhase {
     Die,
     /// `BaseObject.Base.cs:223-245`：`VerifyMapTime` + HP/MP 超上限钳制。
     VerifyMapTime,
+}
+
+/// **P31（`SETAUTOGETEXP`）** 的每玩家会话态（oracle `PlayObject.cs:804-808` 的 5 个字段）。
+///
+/// 归属宿主 `SessionGround`（PR-3 spike §3.3：`AutoGetExp*` 属会话态），本结构只是
+/// 调 [`World::auto_get_exp`] 时的传参/回写载体；`envir_map_id` 是
+/// `AutoGetExpEnvir` 的 Rust 等价物（`None` = oracle 的 `null`，`Some(map_id)` = 该图对象）。
+///
+/// `AutoGetExpTick` 的 ctor 初值 = `GetTickCount()`（`PlayObject.cs:1009`），登录与换图
+/// 各复位一次（`:1485` / `:3796`），**不落库、死亡不清**（§3.3 表）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AutoGetExpState {
+    /// `PlayObject.AutoGetExpTick`（毫秒，宿主时钟域）。
+    pub tick: i64,
+    /// `PlayObject.AutoGetExpTime`（`int`；脚本写入 `nTime * 1000`，unchecked）。
+    pub time_ms: i32,
+    /// `PlayObject.AutoGetExpPoint`。
+    pub point: i32,
+    /// `PlayObject.AutoGetExpEnvir` 的 map_id；`None` = `null` ⇒ 不判地图。
+    pub envir_map_id: Option<usize>,
+    /// `PlayObject.AutoGetExpInSafeZone`（true ⇒ 还需 `InSafeZone()`）。
+    pub in_safe_zone: bool,
 }
 
 pub struct World {
@@ -5517,6 +5539,71 @@ impl World {
         }
     }
 
+    /// **P31 / `SETAUTOGETEXP`**（`PlayObject.Message.cs:738-745`）的 per-Run 结算。
+    ///
+    /// 逐行照搬 oracle（**连缺陷一起**）：
+    /// ```text
+    /// if (AutoGetExpPoint > 0
+    ///     && (AutoGetExpEnvir == null || AutoGetExpEnvir == Envir)
+    ///     && (GetTickCount() - AutoGetExpTick) > AutoGetExpTime)
+    /// {
+    ///     AutoGetExpTick = GetTickCount();               // 先刷新（安全区门失败也刷新）
+    ///     if (!AutoGetExpInSafeZone || AutoGetExpInSafeZone && InSafeZone())
+    ///         GetExp(AutoGetExpPoint);                   // 裸 GetExp，不乘倍率
+    /// }
+    /// ```
+    ///
+    /// - **严格 `>`**（`elapsed == time` 不触发）；
+    /// - `AutoGetExpTick` 在**安全区判定之前**刷新 ⇒ 进安全区失败也吃掉这一周期；
+    /// - **无 `!Death` 门**（照抄）；
+    /// - `GetExp` 走 [`get_exp_raw`]，**不得**走 [`World::gain_exp`]（后者含 `CalcGetExp`/
+    ///   倍率/组队均分，见 PR-3 spike P31 口径）；
+    /// - `InSafeZone()` 用 `Entity.in_safe_zone`（本仓既有的折叠语义；
+    ///   `BaseObject.cs:1777` 的 `Envir == null ⇒ true` 在实体恒有图时不适用）。
+    ///
+    /// 命中时返回 `(actor_id, 本次加值, 是否进升级块, 升级后等级)`——调用方追加进
+    /// [`TickRecord::exp_awards`]，由既有 `drain_kill_exp_chain` 出
+    /// `53 → 44 → 45/52/752`（与击杀经验同一队列序）。
+    pub fn auto_get_exp(
+        &mut self,
+        actor_id: i32,
+        state: &mut AutoGetExpState,
+        now: i64,
+    ) -> Option<(i32, i32, bool, u8)> {
+        let (map_id, in_safe_zone) = {
+            let e = self.entities.get(actor_id)?;
+            (e.map_id, e.in_safe_zone)
+        };
+        // 门 ①：`AutoGetExpPoint > 0`。
+        if state.point <= 0 {
+            return None;
+        }
+        // 门 ②：`AutoGetExpEnvir == null || AutoGetExpEnvir == Envir`。
+        if state.envir_map_id.is_some_and(|id| id != map_id) {
+            return None;
+        }
+        // 门 ③：严格 `>`。
+        if now - state.tick <= i64::from(state.time_ms) {
+            return None;
+        }
+        // **先刷新 Tick，再判安全区**（oracle 的语句序，不可换）。
+        state.tick = now;
+        // 安全区门：`!AutoGetExpInSafeZone || AutoGetExpInSafeZone && InSafeZone()`。
+        if state.in_safe_zone && !in_safe_zone {
+            return None;
+        }
+        let need_exps = std::mem::take(&mut self.need_exps);
+        let out = match self.entities.get_mut(actor_id) {
+            Some(e) => get_exp_raw(e, state.point, &need_exps),
+            None => {
+                self.need_exps = need_exps;
+                return None;
+            }
+        };
+        self.need_exps = need_exps;
+        Some((actor_id, out.0, out.1, out.2))
+    }
+
     /// oracle `PlayObject.GainExp(int dwExp)`（`PlayObject.Base.cs:764-821`）。
     ///
     /// 在**经验获得者**（`KillTargetTrigger` 的 `this`）上调用：
@@ -9622,5 +9709,195 @@ mod tests {
             u16::MAX,
             "ushort 回绕：(ushort)(0-1) = 65535（照抄 oracle 缺陷）"
         );
+    }
+}
+
+/// **PL-2 / P31** 判据（`PlayObject.Message.cs:738-745`）。
+#[cfg(test)]
+mod p31_auto_get_exp_tests {
+    use super::*;
+
+    fn player_world(exp: i32, max_exp: i32) -> (World, i32) {
+        let mut w = World::new(16, 16);
+        // `Exps.conf` 的升级表（下标 = 新等级）。
+        w.need_exps[1] = 1000;
+        w.need_exps[2] = 2000;
+        let mut e = Entity::new(0, "p31", 2, 2);
+        e.level = 1;
+        e.exp = exp;
+        e.max_exp = max_exp;
+        let id = w.add_entity(e);
+        (w, id)
+    }
+
+    /// 判据 1：门是**严格 `>`**；命中先刷新 `tick`，未命中不刷新。
+    #[test]
+    fn p31_gate_strict_and_tick_refresh() {
+        let (mut w, id) = player_world(0, 10_000_000);
+        let mut st = AutoGetExpState {
+            tick: 1_000,
+            time_ms: 5_000,
+            point: 7,
+            ..Default::default()
+        };
+        assert!(
+            w.auto_get_exp(id, &mut st, 6_000).is_none(),
+            "elapsed == time ⇒ 严格 > 不触发"
+        );
+        assert_eq!(st.tick, 1_000, "未命中不得刷新 tick");
+        let a = w
+            .auto_get_exp(id, &mut st, 6_001)
+            .expect("elapsed > time 命中");
+        assert_eq!(a, (id, 7, false, 1));
+        assert_eq!(st.tick, 6_001, "命中先刷新 AutoGetExpTick");
+        assert_eq!(w.entities.get(id).unwrap().exp, 7, "Abil.Exp += point");
+    }
+
+    /// 判据 2：`point <= 0` 整段不发（且不刷新 tick）。
+    #[test]
+    fn p31_non_positive_point_is_noop() {
+        for point in [0, -5] {
+            let (mut w, id) = player_world(3, 10_000_000);
+            let mut st = AutoGetExpState {
+                tick: 0,
+                time_ms: 0,
+                point,
+                ..Default::default()
+            };
+            assert!(w.auto_get_exp(id, &mut st, 10_000).is_none());
+            assert_eq!(st.tick, 0);
+            assert_eq!(w.entities.get(id).unwrap().exp, 3);
+        }
+    }
+
+    /// 判据 3：`AutoGetExpEnvir` 两态——`null` 不判地图；非空必须**同图**。
+    #[test]
+    fn p31_envir_null_or_same_map() {
+        // 两张图：玩家在 0 号图，`AutoGetExpEnvir` 试 0 / 1 两态。
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.need_exps[1] = 1000;
+        let mut e = Entity::new(0, "p31", 2, 2);
+        e.level = 1;
+        e.exp = 0;
+        e.max_exp = 10_000_000;
+        let id = w.add_entity(e);
+        assert_eq!(w.entities.get(id).unwrap().map_id, 0);
+        let mut st = AutoGetExpState {
+            tick: 0,
+            time_ms: 100,
+            point: 9,
+            envir_map_id: Some(1),
+            ..Default::default()
+        };
+        assert!(
+            w.auto_get_exp(id, &mut st, 101).is_none(),
+            "Envir = map1、玩家在 map0 ⇒ 不发"
+        );
+        assert_eq!(st.tick, 0, "地图门失败不刷新");
+        st.envir_map_id = Some(0);
+        assert!(w.auto_get_exp(id, &mut st, 101).is_some(), "同图 ⇒ 发");
+        st.tick = 0;
+        st.envir_map_id = None;
+        assert!(
+            w.auto_get_exp(id, &mut st, 101).is_some(),
+            "null ⇒ 不判地图"
+        );
+    }
+
+    /// 判据 4（**先刷新 Tick，再判安全区**）：安全区门失败也吃掉这一周期。
+    #[test]
+    fn p31_refresh_precedes_safe_zone_check() {
+        let (mut w, id) = player_world(0, 10_000_000);
+        let mut st = AutoGetExpState {
+            tick: 0,
+            time_ms: 1_000,
+            point: 5,
+            in_safe_zone: true,
+            ..Default::default()
+        };
+        // 不在安全区 ⇒ 不发，但 tick 已刷新。
+        assert!(w.auto_get_exp(id, &mut st, 1_001).is_none());
+        assert_eq!(
+            st.tick, 1_001,
+            "安全区门失败必须已刷新 Tick（oracle 语句序）"
+        );
+        assert_eq!(w.entities.get(id).unwrap().exp, 0);
+        // 同一周期内（未过 1s）即使进安全区也不发。
+        w.entities.get_mut(id).unwrap().in_safe_zone = true;
+        assert!(w.auto_get_exp(id, &mut st, 1_500).is_none());
+        // 下一周期 ⇒ 发。
+        assert!(w.auto_get_exp(id, &mut st, 2_002).is_some());
+        assert_eq!(w.entities.get(id).unwrap().exp, 5);
+        // `AutoGetExpInSafeZone = false` ⇒ 无论安全区与否都发。
+        st.in_safe_zone = false;
+        w.entities.get_mut(id).unwrap().in_safe_zone = false;
+        assert!(w.auto_get_exp(id, &mut st, 3_003).is_some());
+    }
+
+    /// 判据 5（**裸 `GetExp` 不乘倍率**）：系统/人物/地图倍率全开，加值仍 == point。
+    #[test]
+    fn p31_raw_get_exp_ignores_all_multipliers() {
+        let (mut w, id) = player_world(0, 10_000_000);
+        w.combat_config.kill_mon_exp_multiple = 3;
+        w.combat_config.mn_kill_mon_exp_multiple = 5;
+        w.entities.get_mut(id).unwrap().kill_mon_exp_rate = 250;
+        let mut st = AutoGetExpState {
+            tick: 0,
+            time_ms: 0,
+            point: 13,
+            ..Default::default()
+        };
+        let a = w.auto_get_exp(id, &mut st, 1).expect("命中");
+        assert_eq!(a.1, 13, "GetExp(point) 直加：不得乘任何倍率");
+        assert_eq!(w.entities.get(id).unwrap().exp, 13);
+    }
+
+    /// 判据 6：升级链由裸 `GetExp` 驱动（单步 `if`、`Level++` 门、`MaxExp` 重取）。
+    #[test]
+    fn p31_levelup_uses_raw_get_exp_block() {
+        let (mut w, id) = player_world(990, 1_000);
+        let mut st = AutoGetExpState {
+            tick: 0,
+            time_ms: 0,
+            point: 20,
+            ..Default::default()
+        };
+        let a = w.auto_get_exp(id, &mut st, 1).expect("命中");
+        assert_eq!(a, (id, 20, true, 2), "进升级块 ⇒ 宿主出 53/45/52/752");
+        let e = w.entities.get(id).unwrap();
+        assert_eq!(e.exp, 10, "990 + 20 - 1000");
+        assert_eq!(e.level, 2);
+        assert_eq!(e.max_exp, 2_000, "MaxExp = get_level_exp(level=2)");
+    }
+
+    /// 判据 7：**无 `!Death` 门**（oracle 原样）+ 死亡不清字段（调用方不清 tick）。
+    #[test]
+    fn p31_no_death_gate() {
+        let (mut w, id) = player_world(0, 10_000_000);
+        w.entities.get_mut(id).unwrap().death = true;
+        let mut st = AutoGetExpState {
+            tick: 0,
+            time_ms: 0,
+            point: 4,
+            ..Default::default()
+        };
+        assert!(w.auto_get_exp(id, &mut st, 1).is_some(), "死玩家照跑");
+        assert_eq!(w.entities.get(id).unwrap().exp, 4);
+    }
+
+    /// 判据 8：**0 抽数**——P31 不得推进共享 RNG（五批 trace 不变的结构前提）。
+    #[test]
+    fn p31_consumes_no_rng() {
+        let (mut w, id) = player_world(0, 10_000_000);
+        let mut control = World::new(16, 16);
+        let mut st = AutoGetExpState {
+            tick: 0,
+            time_ms: 0,
+            point: 6,
+            ..Default::default()
+        };
+        assert!(w.auto_get_exp(id, &mut st, 1).is_some());
+        // 同种子 42 的两条流：P31 后下一次抽数必须与未结算的对照流相同。
+        assert_eq!(w.rng.random_below(1_000), control.rng.random_below(1_000));
     }
 }

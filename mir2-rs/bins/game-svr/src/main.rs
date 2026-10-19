@@ -1513,6 +1513,14 @@ fn run_party_goto_label(
             player.power_rate = e.power_rate;
             player.power_rate_time = e.power_rate_time;
         }
+        // **PL-2 / P31**：`SETAUTOGETEXP` 的四个可写字段在 `PlayObject` 自身
+        //（`ExecutionProcessingSys.cs:2707-2710`）⇒ 从宿主会话 seed、执行后写回。
+        if let Some(sg) = ground_sessions.get(chr_name) {
+            player.auto_get_exp_in_safe_zone = sg.auto_get_exp_in_safe_zone;
+            player.auto_get_exp_envir = sg.auto_get_exp_envir.clone();
+            player.auto_get_exp_time = sg.auto_get_exp_time;
+            player.auto_get_exp_point = sg.auto_get_exp_point;
+        }
         if let Some(says) = host.goto_label("QFunction", &mut player, label, false) {
             says_len = says.len();
             if let Some(tx) = route_to_gate(gates, gate_idx, socket, "组队 GotoLable 说词") {
@@ -1529,6 +1537,12 @@ fn run_party_goto_label(
         }
         if let Some(sg) = ground_sessions.get_mut(chr_name) {
             sg.state.gold = player.gold;
+            // **PL-2 / P31**：脚本写回（未命中动作时是 seed 的等值回写）。
+            sg.auto_get_exp_in_safe_zone = player.auto_get_exp_in_safe_zone;
+            sg.auto_get_exp_envir = player.auto_get_exp_envir.clone();
+            sg.auto_get_exp_envir_map_id = None; // 名变了就重新解析
+            sg.auto_get_exp_time = player.auto_get_exp_time;
+            sg.auto_get_exp_point = player.auto_get_exp_point;
         }
         if let Some(e) = world.entities.get_mut(actor) {
             e.kill_mon_exp_rate = player.kill_mon_exp_rate;
@@ -5339,6 +5353,11 @@ fn handle_move_cmd(
             // **L1 TransMap**：oracle `ClientChangeDir` 原地转身也调 `Walk(RM_TURN)`
             // （`PlayObject.Operate.cs:334`）⇒ 转身前在**当前格**做路线检查（命中 MapRoute ⇒ 换图）。
             if world.walk_route_check(actor_id) {
+                // **PL-2 / P31**：`EnterAnotherMap` 的「复位泡点，及金币，时间」段
+                // （`PlayObject.cs:3793-3796`）⇒ `AutoGetExpTick = GetTickCount()`。
+                if let Some(sg) = sessions.get_mut(chr_name) {
+                    sg.auto_get_exp_tick = now_ms();
+                }
                 // 帧序：换图簇（633/634）必须先于 SM_TURN（oracle `Walk` 尾段才发移动/转身帧）。
                 drain_map_change(world, online, gates, displays, registry);
             }
@@ -5386,6 +5405,11 @@ fn handle_move_cmd(
             // `PlayObject.Walk` 内 `EnterAnotherMap` 的 633/634 在尾段 `SendRefMsg(nIdent,…)` 之前）。
             // 移动帧本身也是换图后用**新图/新坐标**广播（oracle 用改后的 `CurrX/CurrY`）。
             if outcome.changed_map {
+                // **PL-2 / P31**：`EnterAnotherMap` 的 `AutoGetExpTick = GetTickCount()`
+                // （`PlayObject.cs:3796`；成功/回滚两支都走到该行，照抄）。
+                if let Some(sg) = sessions.get_mut(chr_name) {
+                    sg.auto_get_exp_tick = now_ms();
+                }
                 drain_map_change(world, online, gates, displays, registry);
             }
             // 实体 `dir` 已在判定前同步（走跑失败也保留尝试方向）；展示表按实体重投影。
@@ -7111,6 +7135,13 @@ fn handle_spell_cmd_with_magic(
                     );
                     // oracle `MagSaceMove` 的返回值 = `Random(11)` 门是否通过（与落地无关）。
                     bo_train = out.result;
+                    // **PL-2 / P31**：跨图落地同样走 `EnterAnotherMap` 的
+                    // `AutoGetExpTick = GetTickCount()`（`PlayObject.cs:3796`）。
+                    if out.cross_map {
+                        if let Some(sg) = ground_sessions.get_mut(chr_name) {
+                            sg.auto_get_exp_tick = now_ms();
+                        }
+                    }
                     // 登记（本卡不做）：`IsTimeRecall = false`（无该字段；`out.cross_map` 仅回报换图与否）、
                     // `OnEnvirnomentChanged()`、`VisibleHumanList.Clear()`；换图簇 633/634/807 由
                     // `drain_map_change` 于本 tick 下行段发出。
@@ -12039,6 +12070,21 @@ struct SessionGround {
     server_index: u8,
     /// oracle `PlayObject` 的换服状态（`RcdSaved`/`SwitchData`/…；`WorldServer.cs:592-610`，G11）。
     switch_state: SwitchDataState,
+    /// `PlayObject.AutoGetExpTick`（`PlayObject.cs:804`）：P31 的门基准（毫秒，宿主时钟域）。
+    /// ctor / 登录 / 换图各复位一次（`:1009` / `:1485` / `:3796`）；**不落库、死亡不清**。
+    auto_get_exp_tick: i64,
+    /// `PlayObject.AutoGetExpTime`（`:805`，`int`；脚本写 `nTime * 1000`）。
+    auto_get_exp_time: i32,
+    /// `PlayObject.AutoGetExpPoint`（`:806`）。
+    auto_get_exp_point: i32,
+    /// `PlayObject.AutoGetExpEnvir`（`:807`，oracle 是 `IEnvirnoment` 引用）：地图**名**。
+    /// `None` = `null` ⇒ P31 不判地图。脚本只能写名（`FindMap` 的成功名）。
+    auto_get_exp_envir: Option<String>,
+    /// 上式解析出的 `map_id`（`AutoGetExpEnvir == Envir` 的 Rust 等价物）；P31 段每 tick
+    /// 由注册表解析并缓存。`None` = `null`（不判地图）。
+    auto_get_exp_envir_map_id: Option<usize>,
+    /// `PlayObject.AutoGetExpInSafeZone`（`:808`）：true ⇒ P31 还要 `InSafeZone()`。
+    auto_get_exp_in_safe_zone: bool,
 }
 
 /// oracle `IPlayerActor`/`PlayObject` 的换服字段（`WorldServer.cs:592-610`，卡 G11）。
@@ -13224,6 +13270,71 @@ fn flush_run_frames(
                     });
                 }
             }
+        }
+    }
+}
+
+/// **PL-2 / P31**：`SETAUTOGETEXP` 自动经验（`PlayObject.Message.cs:738-745`）。
+///
+/// 段位照 oracle：`P27`（`:636-657`）之后、`P32`（`:747-763`）之前；一次 `Run()` 内只读一次
+/// 时钟（调用方传入的 `host_now`，与 P25/P26/P27/P32 共用）。
+///
+/// 逐会话（**按键排序**）：
+/// - 四字段 seed 自 `SessionGround`（`SETAUTOGETEXP` 的唯一权威写入途径）；
+/// - `AutoGetExpEnvir` 存的是地图名（oracle 存 `IEnvirnoment` 引用）⇒ 经注册表解析成
+///   `map_id` 做同一性比较；名字不在表内 = `FindMap` 返回 null ⇒ `None`；
+/// - 调 [`mir2_world::World::auto_get_exp`]：严格 `>` 门、**先刷新 Tick 再判安全区**、
+///   **无 `!Death` 门**（oracle 原样）；
+/// - 命中追加 `(actor_id, point, leveled, level)` 进 `TickRecord::exp_awards` ⇒ 既有
+///   [`drain_kill_exp_chain`] 按 `53 → 44 → 45/52/752` 出帧。P31 是**裸 `GetExp`**
+///   （不过 `CalcGetExp`/倍率/组队），所以**不得**走 `World::gain_exp`。
+#[allow(clippy::too_many_arguments)]
+fn drain_player_auto_get_exp(
+    world: &mut mir2_world::World,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    online: &OnlineRegistry,
+    registry: Option<&mir2_envir::MapRegistry>,
+    now: i64,
+    record: &mut mir2_world::TickRecord,
+) {
+    let mut names: Vec<String> = sessions.keys().cloned().collect();
+    names.sort();
+    for name in names {
+        // `AutoGetExp*` 是 `PlayObject` 字段 ⇒ 只对在线玩家结算。
+        if online.iter().all(|e| e.chr_name != name) {
+            continue;
+        }
+        let Some(sg) = sessions.get_mut(&name) else {
+            continue;
+        };
+        let actor_id = sg.actor_id;
+        if world.entities.get(actor_id).is_none() {
+            continue;
+        }
+        // `AutoGetExpEnvir` 的名字 → `map_id`（缓存到会话；脚本写回时清缓存）。
+        // 未解析名 ⇒ oracle `FindMap` 返回 null 的等价值（脚本成功路径不会产生）。
+        let mut envir_map_id = sg.auto_get_exp_envir_map_id;
+        if sg.auto_get_exp_envir.is_none() {
+            envir_map_id = None;
+        } else if envir_map_id.is_none() {
+            envir_map_id = sg
+                .auto_get_exp_envir
+                .as_deref()
+                .and_then(|map_name| registry.and_then(|r| r.id_of(map_name)));
+            sg.auto_get_exp_envir_map_id = envir_map_id;
+        }
+        let mut state = mir2_world::AutoGetExpState {
+            tick: sg.auto_get_exp_tick,
+            time_ms: sg.auto_get_exp_time,
+            point: sg.auto_get_exp_point,
+            envir_map_id,
+            in_safe_zone: sg.auto_get_exp_in_safe_zone,
+        };
+        let award = world.auto_get_exp(actor_id, &mut state, now);
+        sg.auto_get_exp_tick = state.tick;
+        sg.auto_get_exp_envir_map_id = envir_map_id;
+        if let Some(award) = award {
+            record.exp_awards.push(award);
         }
     }
 }
@@ -15421,6 +15532,14 @@ fn sim_loop(
                                                             save_rcd_tick: now_ms(),
                                                             server_index: enter_cfg.server_index,
                                                             switch_state: SwitchDataState::default(),
+                                                            // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+                                                            // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+                                                            auto_get_exp_tick: now_ms(),
+                                                            auto_get_exp_time: 0,
+                                                            auto_get_exp_point: 0,
+                                                            auto_get_exp_envir: None,
+                                                            auto_get_exp_envir_map_id: None,
+                                                            auto_get_exp_in_safe_zone: false,
                                                         },
                                                     );
                                                     // 存档用：留下原始记录 + 进图逻辑名（断线/`MakeGhost` 时用它合成）。
@@ -15578,6 +15697,22 @@ fn sim_loop(
                                                                     player.power_rate_time =
                                                                         e.power_rate_time;
                                                                 }
+                                                                // **PL-2 / P31**：`SETAUTOGETEXP`
+                                                                // 四字段从宿主会话 seed（`@Login` 里
+                                                                // 脚本可写，执行后写回）。
+                                                                if let Some(sg) =
+                                                                    ground_sessions
+                                                                        .get(&head.chr_name)
+                                                                {
+                                                                    player.auto_get_exp_in_safe_zone =
+                                                                        sg.auto_get_exp_in_safe_zone;
+                                                                    player.auto_get_exp_envir =
+                                                                        sg.auto_get_exp_envir.clone();
+                                                                    player.auto_get_exp_time =
+                                                                        sg.auto_get_exp_time;
+                                                                    player.auto_get_exp_point =
+                                                                        sg.auto_get_exp_point;
+                                                                }
                                                                 if let Some(says) =
                                                                     host.run_login(&mut player)
                                                                 {
@@ -15617,6 +15752,16 @@ fn sim_loop(
                                                                         .get_mut(&head.chr_name)
                                                                 {
                                                                     sg.state.gold = player.gold;
+                                                                    // **PL-2 / P31**：脚本写回。
+                                                                    sg.auto_get_exp_in_safe_zone =
+                                                                        player.auto_get_exp_in_safe_zone;
+                                                                    sg.auto_get_exp_envir =
+                                                                        player.auto_get_exp_envir.clone();
+                                                                    sg.auto_get_exp_envir_map_id = None;
+                                                                    sg.auto_get_exp_time =
+                                                                        player.auto_get_exp_time;
+                                                                    sg.auto_get_exp_point =
+                                                                        player.auto_get_exp_point;
                                                                 }
                                                                 if let Some(e) = world.entities.get_mut(id) {
                                                                     e.kill_mon_exp_rate =
@@ -15873,6 +16018,16 @@ fn sim_loop(
             enter_cfg.red_msg_b_color,
             host_now,
             &mut run_frames,
+        );
+        // **PL-2 / P31**：`PlayObject.Message.cs:738-745`（P27 之后、P32 之前）。
+        // 0 抽数；命中只落 `exp_awards`，帧由后面的 `drain_kill_exp_chain` 按既有链序出。
+        drain_player_auto_get_exp(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            registry.as_ref(),
+            host_now,
+            &mut rec,
         );
         drain_player_revival_with_magic(
             &mut world,
@@ -18922,6 +19077,14 @@ mod tests {
             save_rcd_tick: 0,
             server_index: 0,
             switch_state: SwitchDataState::default(),
+            // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+            // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+            auto_get_exp_tick: now_ms(),
+            auto_get_exp_time: 0,
+            auto_get_exp_point: 0,
+            auto_get_exp_envir: None,
+            auto_get_exp_envir_map_id: None,
+            auto_get_exp_in_safe_zone: false,
         }
     }
 
@@ -19116,6 +19279,14 @@ mod tests {
             save_rcd_tick: 0,
             server_index: 0,
             switch_state: SwitchDataState::default(),
+            // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+            // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+            auto_get_exp_tick: now_ms(),
+            auto_get_exp_time: 0,
+            auto_get_exp_point: 0,
+            auto_get_exp_envir: None,
+            auto_get_exp_envir_map_id: None,
+            auto_get_exp_in_safe_zone: false,
         };
         let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
@@ -21290,6 +21461,14 @@ mod tests {
                 save_rcd_tick: 0,
                 server_index: 0,
                 switch_state: SwitchDataState::default(),
+                // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+                // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+                auto_get_exp_tick: now_ms(),
+                auto_get_exp_time: 0,
+                auto_get_exp_point: 0,
+                auto_get_exp_envir: None,
+                auto_get_exp_envir_map_id: None,
+                auto_get_exp_in_safe_zone: false,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -21482,6 +21661,14 @@ mod tests {
                 save_rcd_tick: 0,
                 server_index: 0,
                 switch_state: SwitchDataState::default(),
+                // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+                // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+                auto_get_exp_tick: now_ms(),
+                auto_get_exp_time: 0,
+                auto_get_exp_point: 0,
+                auto_get_exp_envir: None,
+                auto_get_exp_envir_map_id: None,
+                auto_get_exp_in_safe_zone: false,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -21647,6 +21834,14 @@ mod tests {
                 save_rcd_tick: 0,
                 server_index: 0,
                 switch_state: SwitchDataState::default(),
+                // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+                // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+                auto_get_exp_tick: now_ms(),
+                auto_get_exp_time: 0,
+                auto_get_exp_point: 0,
+                auto_get_exp_envir: None,
+                auto_get_exp_envir_map_id: None,
+                auto_get_exp_in_safe_zone: false,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -21792,6 +21987,14 @@ mod tests {
                 save_rcd_tick: 0,
                 server_index: 0,
                 switch_state: SwitchDataState::default(),
+                // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+                // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+                auto_get_exp_tick: now_ms(),
+                auto_get_exp_time: 0,
+                auto_get_exp_point: 0,
+                auto_get_exp_envir: None,
+                auto_get_exp_envir_map_id: None,
+                auto_get_exp_in_safe_zone: false,
             },
         );
 
@@ -22620,6 +22823,14 @@ mod tests {
                 save_rcd_tick: 0,
                 server_index: 0,
                 switch_state: SwitchDataState::default(),
+                // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+                // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+                auto_get_exp_tick: now_ms(),
+                auto_get_exp_time: 0,
+                auto_get_exp_point: 0,
+                auto_get_exp_envir: None,
+                auto_get_exp_envir_map_id: None,
+                auto_get_exp_in_safe_zone: false,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -22784,6 +22995,14 @@ mod tests {
                 save_rcd_tick: 0,
                 server_index: 0,
                 switch_state: SwitchDataState::default(),
+                // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+                // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+                auto_get_exp_tick: now_ms(),
+                auto_get_exp_time: 0,
+                auto_get_exp_point: 0,
+                auto_get_exp_envir: None,
+                auto_get_exp_envir_map_id: None,
+                auto_get_exp_in_safe_zone: false,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -23739,6 +23958,14 @@ mod tests {
                 save_rcd_tick: 0,
                 server_index: 0,
                 switch_state: SwitchDataState::default(),
+                // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+                // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+                auto_get_exp_tick: now_ms(),
+                auto_get_exp_time: 0,
+                auto_get_exp_point: 0,
+                auto_get_exp_envir: None,
+                auto_get_exp_envir_map_id: None,
+                auto_get_exp_in_safe_zone: false,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -27703,6 +27930,14 @@ mod tests {
                 save_rcd_tick: 0,
                 server_index: 0,
                 switch_state: SwitchDataState::default(),
+                // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+                // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+                auto_get_exp_tick: now_ms(),
+                auto_get_exp_time: 0,
+                auto_get_exp_point: 0,
+                auto_get_exp_envir: None,
+                auto_get_exp_envir_map_id: None,
+                auto_get_exp_in_safe_zone: false,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -27870,6 +28105,14 @@ mod tests {
                 save_rcd_tick: 0,
                 server_index: 0,
                 switch_state: SwitchDataState::default(),
+                // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+                // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+                auto_get_exp_tick: now_ms(),
+                auto_get_exp_time: 0,
+                auto_get_exp_point: 0,
+                auto_get_exp_envir: None,
+                auto_get_exp_envir_map_id: None,
+                auto_get_exp_in_safe_zone: false,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -28003,6 +28246,14 @@ mod tests {
                 save_rcd_tick: 0,
                 server_index: 0,
                 switch_state: SwitchDataState::default(),
+                // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+                // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+                auto_get_exp_tick: now_ms(),
+                auto_get_exp_time: 0,
+                auto_get_exp_point: 0,
+                auto_get_exp_envir: None,
+                auto_get_exp_envir_map_id: None,
+                auto_get_exp_in_safe_zone: false,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -43433,6 +43684,327 @@ mod tests {
                 tran_point: 0,
             })]),
             "Level=1 / Key=0 / TranPoint=0"
+        );
+    }
+
+    // ───────────────────────── PL-2（P31 / SETAUTOGETEXP）─────────────────────────
+
+    /// **P31 宿主段 1**：`AutoGetExpEnvir` 存地图名，经注册表解析成 `map_id` 后与当前图
+    /// 同一性比较；命中写回 `AutoGetExpTick`；离线会话整段跳过。
+    #[test]
+    fn p31_drain_resolves_envir_name_and_filters_offline() {
+        use std::collections::HashMap;
+        let (registry, dir) = pl3_registry(""); // `[A|fa 甲]` ⇒ id 0 = "A"
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("p31a");
+        let actor = world
+            .enter_map("p31a", new_player_entity("p31a".to_string(), 2, 2), 0)
+            .unwrap();
+        world.entities.get_mut(actor).unwrap().max_exp = 1_000_000;
+        let mut sg = test_session_ground(actor);
+        sg.auto_get_exp_tick = 0;
+        sg.auto_get_exp_time = 1_000;
+        sg.auto_get_exp_point = 10;
+        sg.auto_get_exp_envir = Some("A".to_string());
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("p31a".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p31a", 1, 0, 901, actor));
+        let mut rec = mir2_world::TickRecord::default();
+        drain_player_auto_get_exp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            1_001,
+            &mut rec,
+        );
+        assert_eq!(rec.exp_awards, vec![(actor, 10, false, 1)]);
+        assert_eq!(sessions["p31a"].auto_get_exp_tick, 1_001);
+        assert_eq!(sessions["p31a"].auto_get_exp_envir_map_id, Some(0));
+        assert_eq!(world.entities.get(actor).unwrap().exp, 10);
+        // 离线 ⇒ 整段跳过（tick 不刷新、无经验）。
+        let offline: OnlineRegistry = Vec::new();
+        drain_player_auto_get_exp(
+            &mut world,
+            &mut sessions,
+            &offline,
+            Some(&registry),
+            10_000,
+            &mut rec,
+        );
+        assert_eq!(sessions["p31a"].auto_get_exp_tick, 1_001);
+        assert_eq!(rec.exp_awards.len(), 1);
+        assert_eq!(world.entities.get(actor).unwrap().exp, 10);
+        // 名字解析失败 ⇒ oracle `FindMap` 返回 null（`AutoGetExpEnvir = null`）⇒ 不判地图。
+        sessions.get_mut("p31a").unwrap().auto_get_exp_envir = Some("Z".to_string());
+        drain_player_auto_get_exp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            20_000,
+            &mut rec,
+        );
+        assert_eq!(rec.exp_awards.len(), 2, "未解析名 = null 语义");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// **P31 帧面 1（非升级）**：一条 P31 奖励 ⇒ 只出 `SM_WINEXP(44)`，`Param` = point
+    /// （裸 `GetExp`，未被任何倍率放大），`Recog` = 加后总量。
+    #[test]
+    fn p31_award_emits_single_sm_winexp() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let hero = {
+            let mut e = mir2_world::Entity::new(0, "p31hero".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        {
+            let e = world.entities.get_mut(hero).unwrap();
+            e.exp = 100;
+            e.level = 1;
+            e.max_exp = 10_000;
+        }
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"p31hero".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p31hero", 1, 0, 904, hero));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("p31hero".into(), test_session_ground(hero));
+        let mut rec = mir2_world::TickRecord::default();
+        let mut st = mir2_world::AutoGetExpState {
+            tick: 0,
+            time_ms: 0,
+            point: 7,
+            ..Default::default()
+        };
+        let award = world.auto_get_exp(hero, &mut st, 1).expect("命中");
+        rec.exp_awards.push(award);
+        drain_kill_exp_chain(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &game_svr::ability::StdItemCatalog::new(),
+            12,
+            true,
+        );
+        let mut frames: Vec<CommandMessage> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            assert_eq!(socket, 904);
+            frames.push(CommandMessage::from_bytes(&body).expect("12B"));
+        }
+        assert_eq!(frames.len(), 1, "非升级只有经验帧");
+        assert_eq!(frames[0].ident, mir2_protocol::messages::SM_WINEXP);
+        assert_eq!(frames[0].recog, 107, "Recog = 加后总量（100+7）");
+        assert_eq!(frames[0].param, 7, "Param = point（无倍率）");
+    }
+
+    /// **P31 帧面 2（升级）**：P31 奖励触发升级 ⇒ **复用**既有 `drain_kill_exp_chain` 的
+    /// oracle 出队序 `53 → 44 → 45 → 52 → 752`（P31 不另造帧序）。
+    ///
+    /// 牙：把 P31 奖励从 `exp_awards` 改走独立帧路径 / 不追加进 `exp_awards` ⇒ 本用例只剩 44
+    /// 或 0 帧，断言必红。
+    #[test]
+    fn p31_levelup_reuses_kill_exp_chain_order() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let hero = {
+            let mut e = mir2_world::Entity::new(0, "p31lv".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        world.need_exps[11] = 5_000;
+        {
+            let e = world.entities.get_mut(hero).unwrap();
+            e.exp = 900;
+            e.level = 10;
+            e.max_exp = 1_000;
+            e.hp = 10;
+            e.max_hp = 20;
+        }
+        let displays = downlink::DisplayTable::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p31lv", 1, 0, 905, hero));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.equip.abil.level = 10;
+        sg.state.wabil.level = 10;
+        sg.state.wabil.hp = 10;
+        sg.state.wabil.mp = 5;
+        sessions.insert("p31lv".into(), sg);
+        let mut rec = mir2_world::TickRecord::default();
+        let mut st = mir2_world::AutoGetExpState {
+            tick: 0,
+            time_ms: 0,
+            point: 200,
+            ..Default::default()
+        };
+        let award = world.auto_get_exp(hero, &mut st, 1).expect("命中");
+        assert!(award.2, "900+200 ≥ 1000 ⇒ 进升级块");
+        rec.exp_awards.push(award);
+        drain_kill_exp_chain(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &game_svr::ability::StdItemCatalog::new(),
+            12,
+            true,
+        );
+        let mut frames: Vec<CommandMessage> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            frames.push(CommandMessage::from_bytes(&body).expect("12B"));
+        }
+        assert_eq!(
+            frames.iter().map(|f| f.ident).collect::<Vec<_>>(),
+            vec![
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                mir2_protocol::messages::SM_WINEXP,
+                mir2_protocol::messages::SM_LEVELUP,
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_SUBABILITY,
+            ],
+            "P31 复用击杀经验链：53 → 44 → 45 → 52 → 752"
+        );
+        assert_eq!(frames[2].param, 11, "SM_LEVELUP 新等级");
+        assert_eq!(frames[1].param, 200, "SM_WINEXP 增量 = point");
+    }
+
+    /// **P31 字段复位时机**（ctor/登录）：`SessionGround` 新建即 `AutoGetExpTick = now`，
+    /// 四字段为 oracle ctor 缺省（`PlayObject.cs:1009-1012`）。
+    ///
+    /// 牙：把 ctor 的 `auto_get_exp_tick` 改成 0 ⇒ 第一个断言必红。
+    #[test]
+    fn p31_session_ctor_initializes_tick_to_now() {
+        let sg = test_session_ground(1);
+        assert!(sg.auto_get_exp_tick > 0, "ctor 取钟（不是 0）");
+        assert_eq!(sg.auto_get_exp_time, 0);
+        assert_eq!(sg.auto_get_exp_point, 0);
+        assert!(sg.auto_get_exp_envir.is_none());
+        assert!(!sg.auto_get_exp_in_safe_zone);
+    }
+
+    /// **P31 换图复位**：`CM_TURN` 的路线检查命中 `MapRoute` ⇒ `EnterAnotherMap` 的
+    /// `AutoGetExpTick = GetTickCount()`（`PlayObject.cs:3796`）。
+    ///
+    /// 牙：删掉 `handle_move_cmd` 里的复位两行 ⇒ `auto_get_exp_tick` 仍是 0，断言必红。
+    #[test]
+    fn p31_map_route_resets_tick() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", new_player_entity("hero".to_string(), 5, 5), 0)
+            .unwrap();
+        world.add_map_routes(vec![mir2_world::map::MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 3,
+            hop: mir2_world::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 2,
+                dst_y: 2,
+            },
+        }]);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"hero".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "hero", 1, 0, 906, hero));
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.auto_get_exp_tick = 0;
+        sessions.insert("hero".to_string(), sg);
+        handle_move_cmd(
+            mir2_protocol::messages::CM_TURN,
+            (5 & 0xFFFF) | (5 << 16),
+            0,
+            "hero",
+            906,
+            &online,
+            &mut sessions,
+            &mut world,
+            &mut displays,
+            &gates,
+            None,
+        );
+        assert_eq!(world.entities.get(hero).unwrap().map_id, 1, "路线换图");
+        assert!(
+            sessions["hero"].auto_get_exp_tick > 0,
+            "换图复位 AutoGetExpTick（PlayObject.cs:3796）"
+        );
+    }
+
+    /// **P31 死亡不清字段**：`PlayObject.Die()`（`PlayObject.cs:1967-1972`）只清
+    /// `IncHealth/IncSpell/IncHealing`；`AutoGetExp*` **不落库、死亡不清**（PR-3 spike §3.3 表）。
+    ///
+    /// 牙：在 `drain_combat_downlink` 的死亡支里顺手清 `auto_get_exp_*` ⇒ 本用例必红。
+    #[test]
+    fn p31_fields_survive_player_death() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = {
+            let mut e = mir2_world::Entity::new(0, "p31die".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let displays = downlink::DisplayTable::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p31die", 1, 0, 907, hero));
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.auto_get_exp_tick = 1_234;
+        sg.auto_get_exp_time = 5_000;
+        sg.auto_get_exp_point = 42;
+        sg.auto_get_exp_envir = Some("A".to_string());
+        sg.auto_get_exp_in_safe_zone = true;
+        sessions.insert("p31die".into(), sg);
+        let rec = mir2_world::TickRecord {
+            deaths: vec![(hero, 0, 0, None, 0)],
+            ..Default::default()
+        };
+        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
+        let sg = &sessions["p31die"];
+        assert_eq!(
+            (
+                sg.auto_get_exp_tick,
+                sg.auto_get_exp_time,
+                sg.auto_get_exp_point,
+                sg.auto_get_exp_envir.clone(),
+                sg.auto_get_exp_in_safe_zone
+            ),
+            (1_234, 5_000, 42, Some("A".to_string()), true),
+            "死亡不得清 AutoGetExp* 字段"
         );
     }
 }
