@@ -632,8 +632,9 @@ pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
 /// 这些类的 `AttackTarget` 覆写尚未建模（另有卡），但**索敌节拍本身**与基类一致，必须进本集合。
 ///
 /// **不在此列（登记）**：覆写 `Run` 的 `ATMonster` 派生（`92`/`96`/`100`/`105`/`107`/`114`/
-/// `132` 等，见模块头「未建模」；**MB-3b F2**：105 的 `base.Run()` 段已由 [`monster_run`]
-/// 单独补门 `|| race == 105`，本集合仍只表示「未覆写 `Run` 的直派生」），以及非 `ATMonster`
+/// `132` 等，见模块头「未建模」；**MB-3b F2**：105、**MB-4 F1**：92 的 `base.Run()` 段已由
+/// [`monster_run`] 单独补门 `|| race == 105` / `|| race == 92`，本集合仍只表示「未覆写 `Run`
+/// 的直派生」），以及非 `ATMonster`
 /// 家族但自实现同样索敌门的类（`BoneKing`/`Clone`/`DigOutZombi`/`Sculture`/`LightingZombi`/…）。
 ///
 /// 改坏必红：去掉本门 ⇒ `active_seek_race_*` 用例里 race 81/83 的怪不再发现玩家。
@@ -3263,7 +3264,12 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
     // `base.Run()` = `ATMonster.Run`，**这道 8s/1s 索敌门同样存在**。外层 `GasMothMonster.Run`
     // 过门时会先把 `SearchEnemyTick` 刷成 now ⇒ 本段随后自然为假；只有 WalkSpeed 门挡住外层
     // 时才由本段补跑 `SearchTarget`（与 oracle 同点同次）。最小改法：条件里显式加 105。
-    if (is_active_seek_race(e.race) || e.race == 105) && can_move(e) {
+    //
+    // **MB-4 F1**：`CowKingMonster`(92) `: AtMonster` 同样覆写 `Run`（`CowKingMonster.cs:40-94`），
+    // 末尾 `base.Run()`（`:93`）= `ATMonster.Run` ⇒ 同一道索敌门。两个 `return` 支（Siege 位移）
+    // 走 [`ClassRunBase::None`]、根本不进本函数，故这里补门与 oracle 的「两次 return 之后才
+    // base.Run()」逐点一致。`SearchTarget` 不消费随机数 ⇒ 五批 trace 不受影响。
+    if (is_active_seek_race(e.race) || e.race == 105 || e.race == 92) && can_move(e) {
         let now = world.clock_ms;
         let enemy_tick = e.ai.search_enemy_tick;
         let has_target = e.ai.target_creature.is_some();
@@ -9371,6 +9377,14 @@ mod tests {
             5,
             "3×3 地形墙计数（中心格不计）"
         );
+        // **MB-4 F3（牙补）**：把牛魔王自己落图 ⇒ 中心格上有活体；若实现漏了
+        // `(n_c != 0 || n10 != 0)`，计数会变 6 ⇒ 本断言红。
+        assert!(world.enter_world(id), "牛魔王自身落图（中心格占位）");
+        assert_eq!(
+            cow_king_siege_lock_count(&world, id),
+            5,
+            "中心格不计（自身活体不得 +1）"
+        );
         // 活体占位 +1；死亡/隐身不阻挡。
         let blocker = mb1_monster(&mut world, 80, 11, 10);
         assert!(world.enter_world(blocker), "活体落图");
@@ -9564,6 +9578,69 @@ mod tests {
             assert!(!e.crazy_ready_mode, "0 < 2 ⇒ 不 Ready");
             assert_eq!(e.ai.next_hit_time, 2000, "不 Ready ⇒ 不改 NextHitTime");
         }
+        // **MB-4 F2（牙补）**：`new == 2` 是 `>= 2` 的下边界，必须也进 Ready
+        // （MAXHP=700 ⇒ 700/7=100；HP=500 ⇒ 7-500/100=2）。改成 `> 2` ⇒ 本段红。
+        let mut world = World::new(32, 32);
+        let id = mb4_cow(&mut world, 10, 10, 500, 700);
+        world.clock_ms = 100_000;
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.jump_time = 0;
+            e.crazy_count = 0;
+            e.ai.next_hit_time = 2000;
+        }
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        {
+            let e = world.entities.get(id).unwrap();
+            assert_eq!(e.crazy_count, 2, "7 - 500/(700/7) = 2");
+            assert!(e.crazy_ready_mode, "new=2（下边界）⇒ Ready");
+            assert_eq!(e.ai.next_hit_time, COW_KING_READY_HIT_TIME);
+        }
+    }
+
+    /// **MB-4 F1（复验发现）**：`CowKingMonster : AtMonster`，`Run` 末尾 `base.Run()`
+    /// （`CowKingMonster.cs:93`）= `ATMonster.Run`（`ATMonster.cs:13-24`）——同一道
+    /// 8s/1s 索敌门。race 92 不在 `is_active_seek_race` 集合（它覆写了 `Run`），
+    /// 故必须由 [`monster_run`] 显式补门。
+    ///
+    /// 牙：去掉 `|| e.race == 92` ⇒ 本用例红（`target_creature` 仍为 None）。
+    #[test]
+    fn mb4_cow_king_inherits_at_monster_run_seek_gate() {
+        let mut world = World::new(60, 60);
+        let cow = mb4_cow(&mut world, 10, 10, 700, 700);
+        let pid = player(&mut world, 12, 10);
+        world.entities.get_mut(cow).unwrap().visible_actors = vec![VisibleBaseObject {
+            target: pid,
+            flag: VisibleFlag::Show,
+        }];
+        // 段1：`> 8000` ⇒ 即使无目标也搜。
+        world.clock_ms = 8001;
+        world.entities.get_mut(cow).unwrap().ai.search_enemy_tick = 0;
+        monster_run(&mut world, cow);
+        assert_eq!(
+            world.entities.get(cow).unwrap().ai.target_creature,
+            Some(pid),
+            "race 92 的 base.Run() = ATMonster.Run：>8000 必须索敌"
+        );
+        // 段2：`<= 1000` 且无目标 ⇒ 不搜（门是严格的，与其它 ATMonster 一致）。
+        let mut world = World::new(60, 60);
+        let cow = mb4_cow(&mut world, 10, 10, 700, 700);
+        let pid = player(&mut world, 12, 10);
+        world.entities.get_mut(cow).unwrap().visible_actors = vec![VisibleBaseObject {
+            target: pid,
+            flag: VisibleFlag::Show,
+        }];
+        world.clock_ms = 1000;
+        world.entities.get_mut(cow).unwrap().ai.search_enemy_tick = 0;
+        monster_run(&mut world, cow);
+        assert_eq!(
+            world.entities.get(cow).unwrap().ai.target_creature,
+            None,
+            "<=1000 不索敌"
+        );
     }
 
     /// 判据⑥：Ready/King 两段 8s 边界都是严格 `<`；King 到期恢复

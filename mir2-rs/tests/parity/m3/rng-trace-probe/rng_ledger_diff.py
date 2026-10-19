@@ -53,7 +53,7 @@ CSHARP_ATTACK_RE = re.compile(
 # Rust 站点（世界层调用点）。
 # 2026-10-17（magic-draws-move）：按当前活栈补齐实际取数行 103/106/763/771/790/792/936/1018/1126；
 # 旧表里的 579/587/601/606/608/609/628/630/736/758/831 保留为旧 trace 行号别名（不误伤新流水）。
-RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|831|936|1018|1126)")
+RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|829|831|837|856|858|936|1018|1126)")
 
 CSHARP_MARKER = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
 RUST_MARKER = r"crates\world\src\combat.rs:109"
@@ -78,6 +78,12 @@ CANON_RULES = [
     (re.compile(r"crates/world/src/combat\.rs:601$"), "struck_durability"),
     (re.compile(r"crates/world/src/combat\.rs:609$"), "struck_durability_slot"),
     (re.compile(r"crates/world/src/combat\.rs:831$"), "attack_success"),
+    # **MB-4 F4**：`struck_damage_durability` / `get_hit_struck_damage` 的**当前**取数行
+    # （改前只登记了旧行号 601/609/628/630 ⇒ 真机 trace 落 `UNCLASSIFIED`）。
+    (re.compile(r"crates/world/src/combat\.rs:829$"), "struck_durability"),
+    (re.compile(r"crates/world/src/combat\.rs:837$"), "struck_durability_slot"),
+    (re.compile(r"crates/world/src/combat\.rs:856$"), "hit_struck_damage"),
+    (re.compile(r"crates/world/src/combat\.rs:858$"), "hit_struck_damage2"),
     # 旧代码 trace 的行号别名（本片把 attack_success/attack_dir 加进 combat.rs 后行号位移；
     # 2026-10-12 之前采集的 Rust 活栈 trace 仍按旧行号落盘，别名保证旧件可复算）。
     (re.compile(r"crates/world/src/combat\.rs:736$"), "hit_gate"),
