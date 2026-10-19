@@ -2265,7 +2265,7 @@ mod tests {
             gold: 0,
             client_ability_layout: false,
         };
-        let (count, tail) = send_my_magic(&a).unwrap().expect("211 有尾");
+        let (count, tail) = send_my_magic(&a).expect("211 有尾");
         assert_eq!(count, 1, "Count = MagicList.Count（只数有效项）");
         let mut expect = edcode::encode(&game_svr::itemwire::encode_client_magic(
             0x41, 2, 100, &magic,
