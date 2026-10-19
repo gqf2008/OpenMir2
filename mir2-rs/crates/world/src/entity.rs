@@ -738,6 +738,22 @@ pub struct Entity {
     /// 的过期段（`BaseObject.Base.cs:119-132`）用它们判 30s / 6s 墙钟过期。
     pub last_hiter_tick: i64,
     pub exp_hitter_tick: i64,
+    /// C# `PlayObject.Revival`（`PlayObject.cs:284`）——复活戒指生效标志。
+    ///
+    /// **粘滞锁存**：`RecalcAbilitys()` 只在 Ringr/Ringl 槽的 `Shape == 114`
+    /// （`ItemShapeConst.RING_REVIVAL_ITEM`，`PlayObject.cs:2241-2243`）时置 `true`，
+    /// **全仓没有任何置 `false` 的写入点**（spike 实测的 oracle bug）⇒ 摘下戒指后仍为 true。
+    /// 本字段同口径：调用方按 `entity.revival |= recalc.revival` 落账，绝不重置。
+    pub revival: bool,
+    /// C# `PlayObject.RevivalTick`（`PlayObject.cs:283`）——上次复活时刻（sim 毫秒）。
+    ///
+    /// P32 的 60s 门：`(now - RevivalTick) > Config.RevivalTime`（`PlayObject.Message.cs:753`）。
+    pub revival_tick: i64,
+    /// C# `PlayObject.UnRevival`（`PlayObject.cs:506`，`bool` 属性缺省 `false`）——
+    /// **全仓无写入点**（`grep -rn UnRevival src` 只有声明与 P32 的读点）。
+    /// P32 门：`LastHiter` 是玩家且其 `UnRevival == true` ⇒ 不复活
+    /// （`PlayObject.Message.cs:751`）。本骨架同缺省 false，只在显式赋值时生效。
+    pub un_revival: bool,
     /// `BaseObject.HealthTick` / `SpellTick` / `AutoRecoveryTick`（`BaseObject.cs:287-306`）。
     ///
     /// 恢复段（`BaseObject.Base.cs:39-66`）按 `(now - AutoRecoveryTick) / 20` 把时间折成
@@ -986,6 +1002,9 @@ impl Entity {
             exp_hitter: None,
             last_hiter_tick: 0,
             exp_hitter_tick: 0,
+            revival: false,
+            revival_tick: 0,
+            un_revival: false,
             health_tick: 0,
             spell_tick: 0,
             auto_recovery_tick: 0,

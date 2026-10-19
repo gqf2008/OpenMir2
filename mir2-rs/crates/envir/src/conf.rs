@@ -73,6 +73,9 @@ pub struct GameSvrConf {
     pub snow_wind_range: u8,
     /// `[Setup] ElecBlizzardRange`（`GameSvrConf.cs:908/1772`，缺省 2）—— 24（地狱雷光）的半径。
     pub elec_blizzard_range: u8,
+    /// **PL-1 / P32**：`[Setup] RevivalTime`（`GameSvrConf.cs:804/1725`，缺省 `60*1000`ms）——
+    /// 复活戒指的二次复活间隔（`PlayObject.Message.cs:753`）。读取点 `ServerConf.cs:503`。
+    pub revival_time: i32,
 }
 
 /// `src/OpenMir2/Packets/ClientPackets/ClientConf.cs:6-24`（17 个 `bool`，声明序即序列化序）。
@@ -235,6 +238,7 @@ impl GameSvrConf {
             fire_boom_rage: ini.read_integer("Setup", "FireBoomRage", 1) as u8,
             snow_wind_range: ini.read_integer("Setup", "SnowWindRange", 1) as u8,
             elec_blizzard_range: ini.read_integer("Setup", "ElecBlizzardRange", 2) as u8,
+            revival_time: ini.read_integer("Setup", "RevivalTime", 60 * 1000),
         }
     }
 

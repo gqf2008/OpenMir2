@@ -940,6 +940,8 @@ async fn main() -> Result<()> {
                     save_human_rcd_time: i64::from(cfg.save_human_rcd_time),
                     health_fill_time: cfg.health_fill_time,
                     spell_fill_time: cfg.spell_fill_time,
+                    // **PL-1 / P32**：`[Setup] RevivalTime`（`GameSvrConf.cs:804/1725`，缺省 60000ms）。
+                    revival_time: i64::from(cfg.revival_time),
                     home: home_fallback,
                     newbie: NewbieItems {
                         candle: cfg.candle.clone(),
@@ -2603,11 +2605,14 @@ fn handle_bag_cmd(
 
     if out.recalc {
         let extra_abil = world.entities.get(sg.actor_id).map(|e| e.extra_abil);
-        recalc_session_ability(sg, catalog, extra_abil.as_ref());
-        // `PlayObject.cs:2899`：换装重算后 `HitSpeed = AddAbil.HitSpeed` 也要落到世界实体
-        // （657 末参读 `Entity.hit_speed`）。其余 `WAbil` 字段的实体同步仍属既有缺口（登记）。
+        let revival = recalc_session_ability(sg, catalog, extra_abil.as_ref());
+        // **PL-1 / A2**：换装重算后整份 `WAbil`（含 HP/MaxHP/MP/MaxMP）与 `SubAbility` 落世界实体
+        // （此前只同步 `HitSpeed`——登记缺口；P32 的 `Revival` 也在这里按粘滞锁存落账）。
         if let Some(e) = world.entities.get_mut(sg.actor_id) {
-            e.hit_speed = sg.hit_speed;
+            apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+            if revival {
+                e.revival = true;
+            }
         }
     }
 
@@ -5347,6 +5352,12 @@ fn apply_ability_to_entity(
     e.speed_point = sub.speed_point;
     e.hp = wabil.hp;
     e.max_hp = wabil.max_hp;
+    // **PL-1 / A2**：`WAbil.MP/MaxMP` 同样落到实体。此前未同步 ⇒ 实体 `mp/max_mp` 恒 0，
+    // `buff::magic_shield`（护身术扣蓝）与 `monai` 的恢复段读到的是假值；oracle 的
+    // `StruckDamage`/恢复都直接读同一个 `WAbil`。golden 的玩家路径此前没有非零 MP 观测点，
+    // 故该补全不改变既有 trace（B1..B5 逐字节）。
+    e.mp = wabil.mp;
+    e.max_mp = wabil.max_mp;
     e.level = wabil.level;
     // `RecalcAbilitys` 的 `AntiMagic = 1 + AddAbil.AntiMagic`（`BaseObject.Abil.cs:30/67`）。
     e.anti_magic = sub.anti_magic;
@@ -5371,7 +5382,7 @@ fn recalc_session_ability(
     catalog: &dyn game_svr::ability::ItemCatalog,
     // **P3-B5**：`PlayObject.ExtraAbil[7]`（`AttPowerUp` 写槽 0）。`None` ⇒ 全 0（既有行为不变）。
     extra_abil: Option<&[u16; 7]>,
-) {
+) -> bool {
     let bag: Vec<u16> = sg.state.item_list.iter().map(|i| i.index).collect();
     let mut use_inst: Vec<Option<game_svr::ability::ItemInstance>> =
         vec![None; game_svr::ability::USE_ITEMS_LEN];
@@ -5402,6 +5413,9 @@ fn recalc_session_ability(
     sg.hit_speed = recalc.hit_speed;
     // `RecalcAbilitys()` 尾部的 `ExtraAbil` 应用（`PlayObject.cs:2815-2846`）。
     game_svr::ability::apply_extra_abil(&mut sg.state.wabil, extra_abil.unwrap_or(&[0u16; 7]));
+    // **PL-1 / P32**：本次重算是否命中复活戒指（`Shape==114`）。oracle 只置 true、从不重置
+    // ⇒ 调用方按 `entity.revival |= 返回值` 落账（粘滞锁存）。
+    recalc.revival
 }
 
 /// `Envir.GetMovingObject(frontX, frontY, true)`（`Envirnoment.cs:1203-1234`）的**接线面最小等价物**：
@@ -10245,7 +10259,7 @@ fn drain_levelup_healthspell(
         }
         // ① HasLevelUp：RecalcLevelAbilitys() + RecalcAbilitys()
         let extra_abil = world.entities.get(*winner).map(|e| e.extra_abil);
-        recalc_session_ability(sg, catalog, extra_abil.as_ref());
+        let revival = recalc_session_ability(sg, catalog, extra_abil.as_ref());
         // ② GetExp 尾：IncHealthSpell(2000, 2000)（`BaseObject.cs:952-975`）
         let hp = u32::from(sg.state.wabil.hp) + 2000;
         let mp = u32::from(sg.state.wabil.mp) + 2000;
@@ -10262,6 +10276,9 @@ fn drain_levelup_healthspell(
         // ③ 世界实体（战斗权威值）同步
         if let Some(e) = world.entities.get_mut(*winner) {
             apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+            if revival {
+                e.revival = true;
+            }
         }
         // ④ `RM_HEALTHSPELLCHANGED` 入队后按优先级 68 出队 ⇒ 线上**先于** 44
         // 布局：默认冻结客户端（`TCharDesc` 尾），`MIR2_CLIENT_ABILITY_LAYOUT=0` ⇒ oracle header-only。
@@ -11677,6 +11694,9 @@ struct EnterConfig {
     /// `[Setup] SpellFillTime`（oracle `GameSvrConf.cs:1324`，缺省 `800`）：
     /// 魔力点回蓝阈值（`BaseObject.Base.cs:52/78`）。
     spell_fill_time: i32,
+    /// **PL-1 / P32**：`[Setup] RevivalTime`（oracle `GameSvrConf.cs:804/1725`，缺省 `60*1000`ms）——
+    /// 复活戒指的两次复活间隔门（`PlayObject.Message.cs:753`，**严格 `>`**）。
+    revival_time: i64,
     /// 空 `HomeMap` 新角色的进图回落（`homemap::HomeFallback`，`WorldServer.cs:250-260`）。
     home: homemap::HomeFallback,
     /// `IsNewHuman` 的新手物品输入。
@@ -11789,6 +11809,7 @@ impl EnterConfig {
             save_human_rcd_time: 600_000,
             health_fill_time: 300,
             spell_fill_time: 800,
+            revival_time: 60_000,
             home: homemap::HomeFallback {
                 start_points: Vec::new(),
                 start_point_size: 2,
@@ -12129,6 +12150,375 @@ fn drain_monster_ref_msgs(
     }
 }
 
+/// 实体 → 会话的**装备回写（仅当实体已装载过装备）**。
+///
+/// `Entity.use_items` 是磨损权威（G-06，`StruckDamage` 写它）；但全新实体全零 ≠ "装备被清空"。
+/// 判定口径与 [`build_save_record`] 相同：任一槽有 `index>0 || dura_max!=0 || desc!=0` 才算装载。
+fn sync_use_items_from_entity_if_loaded(world: &mir2_world::World, sg: &mut SessionGround) {
+    let loaded = world.entities.get(sg.actor_id).is_some_and(|e| {
+        e.use_items
+            .iter()
+            .any(|s| s.index > 0 || s.dura_max != 0 || s.desc != [0u8; 14])
+    });
+    if loaded {
+        sync_use_items_to_session(world, sg);
+    }
+}
+
+/// `HUtil32.Round(double)`（`Math.Round(x, MidpointRounding.AwayFromZero)`）——值域非负。
+fn hutil_round(v: f64) -> i32 {
+    v.round() as i32
+}
+
+/// **PL-1 / P21**：玩家 `Run` 的装备需求每-Run 复检（`PlayObject.Message.cs:403-441`）。
+///
+/// 逐行口径（**连 bug 一起搬**）：
+/// ```text
+/// bool boTakeItem = false;                       // :401 —— 声明在 for 之外！
+/// for i in 0..13:
+///   if UseItems[i] != null && Index > 0:
+///     stdItem = GetStdItem(Index)
+///     if stdItem == null: UseItems[i].Index = 0            // 无帧、无 recalc
+///     elif !CheckItemsNeed(stdItem):                       // 只走 7 值子集
+///       if AddItemToBag(item):                             // <46
+///           SendAddItem(item); WeightChanged(); boTakeItem = true;
+///       else:
+///           DropItemDown(item, MIN(DropItemRage,3), false, 0, ActorId)  // T-19 ⇒ 恒 false
+///       if boTakeItem: SendDelItems(item); Index = 0; RecalcAbilitys();
+/// ```
+///
+/// **原样复刻的 oracle 形态**：
+/// 1. `boTakeItem` **跨项累积**：前一项成功移出后，后一项即使背包满且掉落失败也会被
+///    `SendDelItems + Index=0 + RecalcAbilitys()`（oracle 的既有 bug）。
+/// 2. `DropItemDown` 因 `MapItem.ItemId` 恒 0（`T-19`）**恒失败** ⇒ 背包满时物品留在装备位。
+/// 3. `UseItems[i].Index = 0` **只清 Index**，`MakeIndex/Dura/DuraMax/Desc` 保留（本实现保留
+///    `Some(BagItem{index:0,..})`，与 oracle 的数组槽对象一致）。
+///
+/// 出帧：`SendAddItem` / `SendDelItems` 是即时 `SendSocket`（按项序）；`WeightChanged()` 的
+/// `RM_WEIGHTCHANGED` 经 `MsgQueue`（P21 在消息泵之后 ⇒ oracle 实际下一 Run 才出，本宿主同 tick 出，
+/// 登记 1-tick 相位差）。`RecalcAbilitys()` 本身不发 52/752。
+#[allow(clippy::too_many_arguments)]
+fn drain_player_need_recheck(
+    world: &mut mir2_world::World,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    drop_item_rage: u8,
+) {
+    let mut names: Vec<String> = sessions.keys().cloned().collect();
+    names.sort();
+    for name in names {
+        let Some(entry) = online.iter().find(|e| e.chr_name == name).cloned() else {
+            continue;
+        };
+        let Some(sg) = sessions.get_mut(&name) else {
+            continue;
+        };
+        let actor_id = sg.actor_id;
+        // 本 tick 战斗磨损在实体上（G-06）；先回写会话，P21 才看到 oracle 同一对象的值。
+        sync_use_items_from_entity_if_loaded(world, sg);
+        // `CheckItemsNeed` 的行会/城堡/会员输入在本骨架未建模 ⇒ 全 false/0（登记）：
+        // Need 6/7/8/60/70/81/82 因此恒判 false（无行会/无城堡/无会员），与"玩家无这些状态"等价。
+        let need_ctx = game_svr::bag::ItemsNeedContext::default();
+        let mut immediate: Vec<Vec<u8>> = Vec::new();
+        let mut bo_take_item = false;
+        let mut weight_changed = false;
+        for i in 0..game_svr::ability::USE_ITEMS_LEN {
+            let Some(cell) = sg.use_items.get(i) else {
+                continue;
+            };
+            let Some(index) = cell.as_ref().map(|it| it.index) else {
+                continue;
+            };
+            if index == 0 {
+                continue;
+            }
+            let Some(tpl) = catalog.get(index) else {
+                // `StdItem == null ⇒ Index = 0`（无 SendDelItems / 无 RecalcAbilitys）。
+                if let Some(it) = sg.use_items[i].as_mut() {
+                    it.index = 0;
+                }
+                continue;
+            };
+            if game_svr::bag::check_items_need(&need_ctx, tpl.need, tpl.need_level) {
+                continue;
+            }
+            // `AddItemToBag`：满 46 格 ⇒ false（`BaseObject.cs:1243`）。
+            if sg.state.item_list.len() < game_svr::bag::MAX_BAG_ITEM {
+                let item = sg.use_items[i].clone().expect("index > 0 ⇒ Some");
+                sg.state.item_list.push(item);
+                // `SendAddItem` 即时帧（模板必存在，因为上面 `catalog.get` 成功）。
+                if let Some(tail) =
+                    game_svr::trade::add_item_tail(sg.use_items[i].as_ref().unwrap(), catalog)
+                {
+                    immediate.push(game_svr::smframe::sm_additem(actor_id, &tail));
+                }
+                // `AddItemToBag` 内部 `WeightChanged()` + P21 再调一次：同 ident 的
+                // `SendUpdateMsg` 去重 ⇒ 线上只有一条。
+                sg.state.wabil.weight =
+                    game_svr::ground::recalc_bag_weight(catalog, &sg.state.item_list);
+                weight_changed = true;
+                bo_take_item = true;
+            } else {
+                let std_mode = tpl.std_mode;
+                let item = sg.use_items[i].as_mut().unwrap();
+                if game_svr::ground::drop_item_down_p21(
+                    catalog,
+                    item,
+                    std_mode,
+                    drop_item_rage,
+                    actor_id,
+                ) {
+                    bo_take_item = true;
+                }
+            }
+            // oracle 的 `if (boTakeItem)` 用**跨项累积**值（`:401` 的声明在循环外）。
+            if bo_take_item {
+                if let Some(tail) =
+                    game_svr::trade::del_item_tail(sg.use_items[i].as_ref().unwrap(), catalog)
+                {
+                    immediate.push(game_svr::smframe::sm_delitem(actor_id, &tail));
+                }
+                if let Some(it) = sg.use_items[i].as_mut() {
+                    it.index = 0;
+                }
+                // oracle 在**每次** `boTakeItem` 命中时逐项调 `RecalcAbilitys()`（循环内），
+                // 不是循环后调一次：重复调用会累加 `PoisonRecover/HealthRecover/SpellRecover`
+                // （`PlayObject.cs:2893-2895` 的 `+=`，T-18）⇒ 多项移出时逐次调用才等价。
+                let extra_abil = world.entities.get(actor_id).map(|e| e.extra_abil);
+                let revival = recalc_session_ability(sg, catalog, extra_abil.as_ref());
+                if let Some(e) = world.entities.get_mut(actor_id) {
+                    apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+                    if revival {
+                        e.revival = true;
+                    }
+                }
+            }
+        }
+        // 会话 → 实体（Index=0 / StdMode40 耐久）与存档同源。
+        sync_use_items_to_entity(world, sg);
+        let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "P21 装备复检帧")
+        else {
+            continue;
+        };
+        for body in immediate {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body,
+            });
+        }
+        if weight_changed {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body: game_svr::smframe::sm_weightchanged(
+                    sg.state.wabil.weight,
+                    sg.state.wabil.wear_weight,
+                    sg.state.wabil.hand_weight,
+                ),
+            });
+        }
+    }
+}
+
+/// **PL-1 / P32**：复活戒指（`PlayObject.Message.cs:747-763` + `PlayObject.cs:5355-5392`）。
+///
+/// 门（顺序照 oracle）：
+/// ```text
+/// !Death && WAbil.HP == 0
+///   && (LastHiter == null || (LastHiter.Race == Play && !LastHiter.UnRevival))
+///   && Race == Play && Revival && (now - RevivalTick) > Config.RevivalTime
+/// ```
+/// ⇒ `RevivalTick = now; ItemDamageRevivalRing(); HP = MaxHP; HealthSpellChanged();
+///    SysMsg(RevivalRecoverMsg, Green, Hint)`。
+///
+/// `LastHiter` 取 [`mir2_world::World::player_hiter_snapshot`]（`tick_head` 在 `expire_hitters()`
+/// **之前**留的清理前快照）；无快照（直接调用/单测）⇒ 回落实体当前值。
+///
+/// `ItemDamageRevivalRing`（`PlayObject.cs:5355-5392`）逐槽：
+/// - 命中 = `Shape ∈ {114,160,161,162}`，或 **武器/右手位**的 `AniCount ∈ 同集合`；
+/// - `ushort nDura = Dura - 1000`（**无符号回绕**）：`1000 ⇒ 0`、`999 ⇒ 65535`、`0 ⇒ 64536`；
+/// - 回绕后 `== 0`（即原 `Dura == 1000`）⇒ `Dura=0; SendDelItems; Index=0; RecalcAbilitys()`；
+///   否则写回 `nDura` 且**留在装备位**；
+/// - `RM_DURACHANGE` **仅当** `tDura != Round(nDura/1000.0)`，其中 `tDura = Round(Dura/1000.0)`
+///   （原值）——含 `Dura ∈ [1000,1499]` 的边界。
+///
+/// 出帧序按 oracle `MsgQueue` 的 ident 优先级（`(byte)wIdent`）：
+/// `SM_DELITEM`（即时 socket）→ 53(68) → `SM_DURACHANGE`(141) → `SM_SYSMESSAGE`(252)。
+#[allow(clippy::too_many_arguments)]
+fn drain_player_revival(
+    world: &mut mir2_world::World,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    now: i64,
+    revival_time: i64,
+    green_f_color: u8,
+    green_b_color: u8,
+    revival_msg: &[u8],
+    ref_msg_range: i32,
+) {
+    let mut names: Vec<String> = sessions.keys().cloned().collect();
+    names.sort();
+    for name in names {
+        let Some(entry) = online.iter().find(|e| e.chr_name == name).cloned() else {
+            continue;
+        };
+        let Some(sg) = sessions.get_mut(&name) else {
+            continue;
+        };
+        let actor_id = sg.actor_id;
+        let Some(entity) = world.entities.get(actor_id) else {
+            continue;
+        };
+        if entity.death || entity.hp != 0 || entity.race != mir2_world::ACTOR_RACE_PLAY {
+            continue;
+        }
+        if !entity.revival || now - entity.revival_tick <= revival_time {
+            continue;
+        }
+        // `LastHiter`：优先 tick_head 的清理前快照。
+        let last_hiter = world
+            .player_hiter_snapshot
+            .iter()
+            .find(|s| s.actor_id == actor_id)
+            .map_or(entity.last_hiter, |s| s.last_hiter);
+        let hiter_ok = match last_hiter {
+            None => true,
+            Some(id) => world
+                .entities
+                .get(id)
+                .is_some_and(|h| h.race == mir2_world::ACTOR_RACE_PLAY && !h.un_revival),
+        };
+        if !hiter_ok {
+            continue;
+        }
+        // 本 tick 磨损在实体上；P32 的耐久判断要看到 oracle 的同一对象。
+        sync_use_items_from_entity_if_loaded(world, sg);
+        // `WAbil.HP/MP` 以实体为唯一真源（spike §3.2）；`RecalcAbilitys` 的 `wOldHP/wOldMP`
+        // 与 `HealthSpellChanged()` 的载荷都取这份值。
+        sg.state.wabil.hp = entity.hp;
+        sg.state.wabil.mp = entity.mp;
+
+        // ── ItemDamageRevivalRing（`PlayObject.cs:5355-5392`）──
+        let mut delitem_frames: Vec<Vec<u8>> = Vec::new();
+        let mut durachange_items: Vec<(usize, u16, u16)> = Vec::new();
+        for i in 0..game_svr::ability::USE_ITEMS_LEN {
+            let Some(cell) = sg.use_items.get(i) else {
+                continue;
+            };
+            let Some(index) = cell.as_ref().map(|it| it.index) else {
+                continue;
+            };
+            if index == 0 {
+                continue;
+            }
+            let Some(tpl) = catalog.get(index) else {
+                continue;
+            };
+            let hit = game_svr::ability::ITEM_DAMAGE_REVIVAL_MAP.contains(&tpl.shape)
+                || ((i == game_svr::ability::SLOT_WEAPON
+                    || i == game_svr::ability::SLOT_RIGHTHAND)
+                    && game_svr::ability::ITEM_DAMAGE_REVIVAL_MAP.contains(&tpl.ani_count));
+            if !hit {
+                continue;
+            }
+            let (duramax, t_dura, n_dura, broken) = {
+                let item = sg.use_items[i].as_ref().unwrap();
+                let t_dura =
+                    u16::try_from(hutil_round(f64::from(item.dura) / 1000.0)).unwrap_or(u16::MAX);
+                let n_dura = item.dura.wrapping_sub(1000);
+                (item.dura_max, t_dura, n_dura, n_dura == 0)
+            };
+            if broken {
+                // `SendDelItems` 用**破零前**的 index（oracle 先发帧再清 Index）。
+                if let Some(tail) =
+                    game_svr::trade::del_item_tail(sg.use_items[i].as_ref().unwrap(), catalog)
+                {
+                    delitem_frames.push(game_svr::smframe::sm_delitem(actor_id, &tail));
+                }
+                if let Some(it) = sg.use_items[i].as_mut() {
+                    it.dura = 0;
+                    it.index = 0;
+                }
+                // `RecalcAbilitys()` 在循环内逐次调用（oracle 原样）。
+                let extra_abil = world.entities.get(actor_id).map(|e| e.extra_abil);
+                let revival = recalc_session_ability(sg, catalog, extra_abil.as_ref());
+                if let Some(e) = world.entities.get_mut(actor_id) {
+                    apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+                    if revival {
+                        e.revival = true;
+                    }
+                }
+            } else if let Some(it) = sg.use_items[i].as_mut() {
+                it.dura = n_dura;
+            }
+            // `tDura != Round(nDura / 1000.0)`（nDura 已按 ushort 回绕）。
+            let n_round =
+                u16::try_from(hutil_round(f64::from(n_dura) / 1000.0)).unwrap_or(u16::MAX);
+            if t_dura != n_round {
+                durachange_items.push((i, n_dura, duramax));
+            }
+        }
+
+        // ── 复活本体 ──
+        let (hp, mp, max_hp) = {
+            let e = world.entities.get_mut(actor_id).expect("刚查过存在");
+            e.revival_tick = now;
+            e.hp = e.max_hp;
+            // 会话是 53/存档的投影，同步同一真源。
+            sg.state.wabil.hp = e.hp;
+            sg.state.wabil.max_hp = e.max_hp;
+            (e.hp, e.mp, e.max_hp)
+        };
+        sync_use_items_to_entity(world, sg);
+
+        let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "P32 复活帧") else {
+            continue;
+        };
+        for body in delitem_frames {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body,
+            });
+        }
+        let body = game_svr::smframe::sm_healthspellchanged(actor_id, hp, mp, max_hp);
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: entry.socket,
+            body: body.clone(),
+        });
+        if sg.show_hp {
+            broadcast_healthspellchanged(world, online, gates, actor_id, &body, ref_msg_range);
+        }
+        for (slot, dura, dura_max) in durachange_items {
+            let body = game_svr::smframe::gm_data_body(
+                game_svr::smframe::command_header(
+                    i32::from(dura),
+                    mir2_protocol::messages::SM_DURACHANGE,
+                    u16::try_from(slot).unwrap_or(0),
+                    dura_max,
+                    0,
+                ),
+                &[],
+            );
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body,
+            });
+        }
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: entry.socket,
+            body: game_svr::smframe::sm_sysmessage(
+                actor_id,
+                u16::from(green_f_color),
+                u16::from(green_b_color),
+                revival_msg,
+            ),
+        });
+    }
+}
+
 /// **卡 `openmir2-run-gap-monster-specials`（F1）**：`world.tick()` + 专用怪的两条排水。
 ///
 /// 1. **产仔排水**：`World::tick` 的消息段把到点的 `RM_ZEN_BEE` 放进
@@ -12140,6 +12530,7 @@ fn drain_monster_ref_msgs(
 ///
 /// 宿主（`sim_loop`）与回归用例走**同一个**函数 ⇒ 删任一条排水都会让「队列有界 /
 /// 产仔」用例变红。
+#[cfg(test)]
 fn tick_world_with_specials(
     world: &mut mir2_world::World,
     host: Option<&mut game_svr::mongen::MonGenHost>,
@@ -12149,7 +12540,27 @@ fn tick_world_with_specials(
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> mir2_world::TickRecord {
-    let rec = world.tick();
+    let mut rec =
+        tick_world_head_with_specials(world, host, table, registry, displays, online, gates);
+    world.tick_tail(&mut rec);
+    rec
+}
+
+/// `tick_world_with_specials` 的**前半段**：`tick_head()` + 专用怪的两条排水。
+///
+/// `sim_loop` 在这之后驱动 P21/P32（玩家 `Run` 的宿主段），再调 `World::tick_tail`——
+/// 与 oracle「`PlayObject.Run` 的 P21→…→P32 → `base.Run()` 的 Die/VerifyMapTime」同序。
+/// 单测/回归仍走组合版 `tick_world_with_specials`（宿主段为空，行为与 A1 前一致）。
+fn tick_world_head_with_specials(
+    world: &mut mir2_world::World,
+    host: Option<&mut game_svr::mongen::MonGenHost>,
+    table: &game_svr::mongen::MonsterTable,
+    registry: Option<&mir2_envir::MapRegistry>,
+    displays: &mut downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) -> mir2_world::TickRecord {
+    let rec = world.tick_head();
     // oracle `Operate(RM_ZEN_BEE)` 的 `RegenMonsterByName`：与本 tick 其它怪物/商人取数
     // 同一条 `world.rng`（`flush_special_spawns` 内部移出/移入）。
     if let (Some(host), Some(reg)) = (host, registry) {
@@ -13858,6 +14269,11 @@ fn sim_loop(
                                                     // （此前只喂 52/752 帧，实体属性仍是 `Entity::new` 的空值）。
                                                     if let Some(e) = world.entities.get_mut(id) {
                                                         apply_ability_to_entity(e, &out.wabil, &out.sub, out.hit_speed);
+                                                        // **PL-1 / P32**：登录时已戴复活戒指 ⇒ `Revival=true`
+                                                        // （oracle 在 `RecalcAbilitys` 里置位，粘滞）。
+                                                        if out.revival {
+                                                            e.revival = true;
+                                                        }
                                                     } else {
                                                         glog!(
                                                             "WRN",
@@ -14341,8 +14757,9 @@ fn sim_loop(
         }
         // **卡 `openmir2-run-gap-monster-specials`（F1）**：专有怪的两条排水与本 tick 同点——
         // `RM_ZEN_BEE` 的 `RegenMonsterByName`（生产 `SpecialSpawner`）与 `RM_HIT` 的
-        // `SM_HIT` 出帧。宿主与回归用例走同一函数（见 `tick_world_with_specials`）。
-        let rec = tick_world_with_specials(
+        // `SM_HIT` 出帧。宿主走 `tick_world_head_with_specials` + 宿主段 + `tick_tail`；
+        // 回归用例走组合版 `tick_world_with_specials`（宿主段为空）。
+        let mut rec = tick_world_head_with_specials(
             &mut world,
             mon_gen_host.as_mut(),
             &enter_cfg.mon_gen.table,
@@ -14351,6 +14768,31 @@ fn sim_loop(
             &online,
             &gates,
         );
+        // **PL-1 宿主段（oracle `PlayObject.Run` 的 P21…P32）**：在 `tick_head` 之后、
+        // `tick_tail`（`base.Run` 的 Die + VerifyMapTime）之前。
+        drain_player_need_recheck(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            &gates,
+            &enter_cfg.catalog,
+            enter_cfg.ground.drop_item_rage,
+        );
+        drain_player_revival(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            &gates,
+            &enter_cfg.catalog,
+            now_ms(),
+            enter_cfg.revival_time,
+            enter_cfg.green_msg_f_color,
+            enter_cfg.green_msg_b_color,
+            &enter::gbk(enter_cfg.string_conf.revival_recover()),
+            enter_cfg.ref_msg_range,
+        );
+        // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
+        world.tick_tail(&mut rec);
         // **run-gap 状态到期**：`PlayObject.Run` 的烈火 20s / 双龙 60s（`PlayObject.Message.cs:54-64`）
         // ⇒ `SpiritsGone` 的 `SM_SYSMESSAGE(100)` + `+UFIR`/`+UTWN` 短包。oracle 在玩家自己的
         // `Run()` 内即时发；本宿主在世界 tick 后按记录出帧。
@@ -39305,5 +39747,452 @@ mod tests {
             0xFFFF | (0xFFFE_i32 << 16),
             "低/高字都保留二补数"
         );
+    }
+    // ────────────────────────── PL-1 / P21 ──────────────────────────
+
+    /// P21 的测试脚手架：世界 + 一个在线玩家 + 会话 + 一条 gate 通道。
+    #[allow(clippy::type_complexity)]
+    fn p21_fixture(
+        equip: &[(usize, u16, u16)],
+        bag_len: usize,
+        catalog: &game_svr::ability::StdItemCatalog,
+    ) -> (
+        mir2_world::World,
+        HashMap<String, SessionGround>,
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        i32,
+    ) {
+        let _ = catalog;
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("p21a");
+        let mut ent = mir2_world::Entity::new(0, "p21a".to_string(), 2, 2);
+        ent.hp = 50;
+        ent.max_hp = 50;
+        let actor = world.enter_map("p21a", ent, 0).unwrap();
+        let mut sg = test_session_ground(actor);
+        for &(slot, index, dura) in equip {
+            sg.use_items[slot] = Some(game_svr::bag::BagItem {
+                make_index: 100 + slot as i32,
+                index,
+                dura,
+                dura_max: dura,
+                desc: [0; 14],
+            });
+        }
+        for i in 0..bag_len {
+            sg.state
+                .item_list
+                .push(game_svr::bag::BagItem::new(10_000 + i as i32, 2));
+        }
+        let mut sessions = HashMap::new();
+        sessions.insert("p21a".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p21a", 1, 0, 901, actor));
+        let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = HashMap::new();
+        gates.insert(0u8, tx);
+        (world, sessions, online, gates, rx, actor)
+    }
+
+    fn take_frame_idents(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<u16> {
+        let mut out = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            out.push(u16::from_le_bytes([body[4], body[5]]));
+        }
+        out
+    }
+
+    fn p21_catalog() -> game_svr::ability::StdItemCatalog {
+        use mir2_data::StdItem;
+        let mut c = game_svr::ability::StdItemCatalog::new();
+        c.insert(
+            1,
+            StdItem {
+                name: "guild_sword".to_string(),
+                std_mode: 5,
+                need: 6,
+                need_level: 0,
+                weight: 1,
+                ac: 5,
+                ..StdItem::default()
+            },
+        );
+        // Need=0 且等级要求 200：不属于 CheckItemsNeed 子集 ⇒ 必须留下。
+        c.insert(
+            2,
+            StdItem {
+                name: "level_gated".to_string(),
+                std_mode: 22,
+                need: 0,
+                need_level: 200,
+                weight: 1,
+                ac: 7,
+                ..StdItem::default()
+            },
+        );
+        c
+    }
+
+    /// **PL-1 / P21 判据 1+2**：
+    /// - Need=6、无行会 ⇒ 一次 Run 后该槽 `Index=0`、物品进背包、
+    ///   `SM_ADDITEM`/`SM_DELITEM`/`SM_WEIGHTCHANGED` 各一帧、`RecalcAbilitys` 被调用
+    ///   （用另一个留下的 `Need=0` 物品的 AC 证明：等级不足**不**弹出，但属性进了重算）。
+    ///
+    /// 红检：把 `check_items_need` 的 Need=6 支改成 true ⇒ 槽不清、帧数 0 ⇒ 必红；
+    /// 把 P21 的 `recalc_needed` 分支删掉 ⇒ `entity.ac==7` 必红。
+    #[test]
+    fn p21_need6_item_moves_to_bag_need0_low_level_stays_and_recalc_runs() {
+        let catalog = p21_catalog();
+        let (mut world, mut sessions, online, gates, mut rx, actor) = p21_fixture(
+            &[
+                (game_svr::ability::SLOT_WEAPON, 1, 1000),
+                (game_svr::ability::SLOT_RING_L, 2, 1000),
+            ],
+            0,
+            &catalog,
+        );
+        // P32 的 `Revival` 是**粘滞锁存**：本次重算没有戒指（返回 false）不得把它清掉。
+        world.entities.get_mut(actor).unwrap().revival = true;
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 3);
+        let sg = sessions.get("p21a").unwrap();
+        assert_eq!(
+            sg.use_items[game_svr::ability::SLOT_WEAPON]
+                .as_ref()
+                .unwrap()
+                .index,
+            0,
+            "Need=6 无行会 ⇒ Index=0（对象保留）"
+        );
+        assert_eq!(sg.state.item_list.len(), 1, "物品进背包");
+        assert_eq!(
+            sg.use_items[game_svr::ability::SLOT_RING_L]
+                .as_ref()
+                .unwrap()
+                .index,
+            2,
+            "Need=0 的等级不足**不得**被弹出（只走 7 值子集）"
+        );
+        assert_eq!(
+            take_frame_idents(&mut rx),
+            vec![
+                mir2_protocol::messages::SM_ADDITEM,
+                mir2_protocol::messages::SM_DELITEM,
+                mir2_protocol::messages::SM_WEIGHTCHANGED,
+            ],
+            "出帧序：SendAddItem → SendDelItems → WeightChanged"
+        );
+        // RecalcAbilitys 跑过：留下的 Need=0 物品 AC=7 进了会话与实体。
+        assert_eq!(sg.state.wabil.ac & 0xFF, 7, "会话重算命中 AC=7");
+        assert_eq!(world.entities.get(actor).unwrap().ac & 0xFF, 7, "实体同步");
+        assert!(
+            world.entities.get(actor).unwrap().revival,
+            "RecalcAbilitys 不清 Revival（粘滞锁存，oracle 原样）"
+        );
+    }
+
+    /// **PL-1 / P21 判据 3**：背包满（46）⇒ `AddItemToBag` 失败 ⇒ `DropItemDown`；
+    /// oracle 的 `MapItem.ItemId` 恒 0（`T-19`）⇒ 掉落恒失败 ⇒ **物品留在装备位**、零帧。
+    ///
+    /// 红检：把 `drop_item_down_p21` 的返回值改成 true ⇒ 槽被清 + 出帧 ⇒ 必红。
+    #[test]
+    fn p21_full_bag_drop_fails_and_item_stays_equipped() {
+        let catalog = p21_catalog();
+        let (mut world, mut sessions, online, gates, mut rx, _) = p21_fixture(
+            &[(game_svr::ability::SLOT_WEAPON, 1, 1000)],
+            game_svr::bag::MAX_BAG_ITEM,
+            &catalog,
+        );
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 3);
+        let sg = sessions.get("p21a").unwrap();
+        assert_eq!(
+            sg.use_items[game_svr::ability::SLOT_WEAPON]
+                .as_ref()
+                .unwrap()
+                .index,
+            1,
+            "背包满 + DropItemDown 恒失败 ⇒ 物品不能被清"
+        );
+        assert_eq!(sg.state.item_list.len(), game_svr::bag::MAX_BAG_ITEM);
+        assert!(take_frame_idents(&mut rx).is_empty(), "失败路径零帧");
+    }
+
+    /// **PL-1 / P21 判据 4（连 bug 一起搬）**：`boTakeItem` 声明在 for **外** ⇒ 跨项累积。
+    /// 背包 45 格时：第 1 件成功入包（46），第 2 件背包满且掉落失败，但因 `boTakeItem` 已为
+    /// true，oracle 仍然 `SendDelItems + Index=0 + RecalcAbilitys()` ⇒ 第 2 件**凭空消失**。
+    ///
+    /// 红检：把 `bo_take_item` 改为每项重置（局部变量）⇒ 第 2 个槽仍为 1 ⇒ 必红。
+    #[test]
+    fn p21_bo_take_item_is_cumulative_across_items_oracle_bug() {
+        let catalog = p21_catalog();
+        let (mut world, mut sessions, online, gates, _rx, _) = p21_fixture(
+            &[
+                (game_svr::ability::SLOT_WEAPON, 1, 1000),
+                (game_svr::ability::SLOT_RING_L, 1, 1000),
+            ],
+            game_svr::bag::MAX_BAG_ITEM - 1,
+            &catalog,
+        );
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 3);
+        let sg = sessions.get("p21a").unwrap();
+        assert_eq!(sg.state.item_list.len(), game_svr::bag::MAX_BAG_ITEM);
+        assert_eq!(
+            sg.use_items[game_svr::ability::SLOT_WEAPON]
+                .as_ref()
+                .unwrap()
+                .index,
+            0,
+            "第 1 件入包成功"
+        );
+        assert_eq!(
+            sg.use_items[game_svr::ability::SLOT_RING_L]
+                .as_ref()
+                .unwrap()
+                .index,
+            0,
+            "第 2 件入包/掉落都失败，但 boTakeItem 累积 ⇒ 仍被清（oracle bug）"
+        );
+    }
+
+    // ────────────────────────── PL-1 / P32 ──────────────────────────
+
+    fn p32_catalog() -> game_svr::ability::StdItemCatalog {
+        use mir2_data::StdItem;
+        let mut c = game_svr::ability::StdItemCatalog::new();
+        c.insert(
+            1,
+            StdItem {
+                name: "revival_ring".to_string(),
+                std_mode: 22,
+                shape: 114,
+                dura_max: 5000,
+                ..StdItem::default()
+            },
+        );
+        c
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn p32_fixture(
+        dura: u16,
+        revival_tick: i64,
+    ) -> (
+        mir2_world::World,
+        HashMap<String, SessionGround>,
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        i32,
+    ) {
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("p32a");
+        let mut ent = mir2_world::Entity::new(0, "p32a".to_string(), 2, 2);
+        ent.hp = 0;
+        ent.max_hp = 100;
+        ent.revival = true;
+        ent.revival_tick = revival_tick;
+        let actor = world.enter_map("p32a", ent, 0).unwrap();
+        let mut sg = test_session_ground(actor);
+        sg.use_items[game_svr::ability::SLOT_RING_L] = Some(game_svr::bag::BagItem {
+            make_index: 77,
+            index: 1,
+            dura,
+            dura_max: 5000,
+            desc: [0; 14],
+        });
+        let mut sessions = HashMap::new();
+        sessions.insert("p32a".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p32a", 1, 0, 901, actor));
+        let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = HashMap::new();
+        gates.insert(0u8, tx);
+        (world, sessions, online, gates, rx, actor)
+    }
+
+    /// **PL-1 / P32 判据 1**：`HP==0 && !Death && LastHiter==null && Revival &&
+    /// now-RevivalTick>RevivalTime` ⇒ `HP=MaxHP`、`RevivalTick=now`、戒指耐久 -1000、
+    /// `RM_DURACHANGE`（千位变化）+ 53 + 绿色 SysMsg。
+    ///
+    /// 红检：把 `>` 改成 `>=` ⇒ 「恰好 60s 不复活」用例必红；删 `e.hp = e.max_hp` ⇒ HP 断言必红。
+    #[test]
+    fn p32_revives_hp_zero_player_and_damages_ring() {
+        let catalog = p32_catalog();
+        let now = 1_000_000i64;
+        let (mut world, mut sessions, online, gates, mut rx, actor) = p32_fixture(5000, 0);
+        drain_player_revival(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            &catalog,
+            now,
+            60_000,
+            0xDB,
+            0xFF,
+            b"revived",
+            12,
+        );
+        let e = world.entities.get(actor).unwrap();
+        assert_eq!(e.hp, 100, "HP=MaxHP");
+        assert_eq!(e.max_hp, 100);
+        assert_eq!(e.revival_tick, now, "RevivalTick=now");
+        let sg = sessions.get("p32a").unwrap();
+        assert_eq!(
+            sg.use_items[game_svr::ability::SLOT_RING_L]
+                .as_ref()
+                .unwrap()
+                .dura,
+            4000,
+            "耐久 -1000"
+        );
+        assert_eq!(
+            take_frame_idents(&mut rx),
+            vec![
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                mir2_protocol::messages::SM_DURACHANGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+            ],
+            "帧序：53(68) → SM_DURACHANGE(141) → SM_SYSMESSAGE(252)"
+        );
+    }
+
+    /// **PL-1 / P32 判据 2（三档耐久边界，ushort 回绕）**：
+    /// `1000 ⇒ 0` 才移除 + `SM_DELITEM`；`999 ⇒ 65535` 留位；`0 ⇒ 64536` 留位。
+    ///
+    /// 红检：把 `wrapping_sub` 改成 `saturating_sub` ⇒ 999/0 两档的耐久断言必红；
+    /// 把 `n_dura == 0` 改成 `n_dura <= 1000` ⇒ 999 档的 `index==0` 必红。
+    #[test]
+    fn p32_ring_dura_ushort_wrap_boundaries() {
+        let catalog = p32_catalog();
+        let cases: [(u16, u16, bool); 3] =
+            [(1000, 0, true), (999, 65535, false), (0, 64536, false)];
+        for (dura_in, dura_out, broken) in cases {
+            let now = 2_000_000i64;
+            let (mut world, mut sessions, online, gates, mut rx, _actor) = p32_fixture(dura_in, 0);
+            drain_player_revival(
+                &mut world,
+                &mut sessions,
+                &online,
+                &gates,
+                &catalog,
+                now,
+                60_000,
+                0xDB,
+                0xFF,
+                b"revived",
+                12,
+            );
+            let sg = sessions.get("p32a").unwrap();
+            let slot = sg.use_items[game_svr::ability::SLOT_RING_L]
+                .as_ref()
+                .unwrap();
+            assert_eq!(slot.dura, dura_out, "Dura {dura_in} ⇒ {dura_out}");
+            assert_eq!(
+                slot.index == 0,
+                broken,
+                "Dura {dura_in} ⇒ broken={broken}（ushort 回绕后 == 0 才移除）"
+            );
+            let idents = take_frame_idents(&mut rx);
+            assert_eq!(
+                idents.contains(&mir2_protocol::messages::SM_DELITEM),
+                broken,
+                "SM_DELITEM 只在 Dura==1000 时发"
+            );
+            assert!(
+                idents.contains(&mir2_protocol::messages::SM_DURACHANGE),
+                "Dura {dura_in}: tDura != Round(nDura/1000) ⇒ 必发（含 [1000,1499] 边界）"
+            );
+            assert!(idents.contains(&mir2_protocol::messages::SM_HEALTHSPELLCHANGED));
+            assert!(idents.contains(&mir2_protocol::messages::SM_SYSMESSAGE));
+        }
+    }
+
+    /// **PL-1 / P32 判据 3（门）**：严格 `>`、`Death`、`LastHiter` 三态。
+    ///
+    /// 红检：`>`→`>=` ⇒ 「恰好 60s」必红；去掉 `un_revival` 门 ⇒ 玩家命中者用例必红。
+    #[test]
+    fn p32_revival_gates_strict_gt_death_and_last_hiter() {
+        let catalog = p32_catalog();
+        let now = 3_000_000i64;
+        // 恰好 60s（不复活）。
+        let (mut world, mut sessions, online, gates, mut rx, actor) =
+            p32_fixture(5000, now - 60_000);
+        drain_player_revival(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            &catalog,
+            now,
+            60_000,
+            0xDB,
+            0xFF,
+            b"revived",
+            12,
+        );
+        assert_eq!(
+            world.entities.get(actor).unwrap().hp,
+            0,
+            "严格 >：恰好 60s 不复活"
+        );
+        assert!(take_frame_idents(&mut rx).is_empty());
+
+        // Death ⇒ 不复活。
+        let (mut world, mut sessions, online, gates, mut rx, actor) = p32_fixture(5000, 0);
+        world.entities.get_mut(actor).unwrap().death = true;
+        drain_player_revival(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            &catalog,
+            now,
+            60_000,
+            0xDB,
+            0xFF,
+            b"revived",
+            12,
+        );
+        assert_eq!(world.entities.get(actor).unwrap().hp, 0, "Death ⇒ 不复活");
+        assert!(take_frame_idents(&mut rx).is_empty());
+
+        // LastHiter = 怪物 ⇒ 不复活；= 玩家且 UnRevival ⇒ 不复活；= 玩家且 !UnRevival ⇒ 复活。
+        for (race, un_revival, expect_revive) in
+            [(1u8, false, false), (0u8, true, false), (0, false, true)]
+        {
+            let (mut world, mut sessions, online, gates, mut rx, actor) = p32_fixture(5000, 0);
+            let mut hiter = mir2_world::Entity::new(0, "hiter".to_string(), 3, 3);
+            hiter.race = race;
+            hiter.un_revival = un_revival;
+            let hid = world.entities.alloc_id();
+            hiter.id = hid;
+            world.entities.insert(hiter);
+            world.entities.get_mut(actor).unwrap().last_hiter = Some(hid);
+            drain_player_revival(
+                &mut world,
+                &mut sessions,
+                &online,
+                &gates,
+                &catalog,
+                now,
+                60_000,
+                0xDB,
+                0xFF,
+                b"revived",
+                12,
+            );
+            let revived = world.entities.get(actor).unwrap().hp > 0;
+            assert_eq!(
+                revived, expect_revive,
+                "race={race} un_revival={un_revival} ⇒ revived={expect_revive}"
+            );
+            if expect_revive {
+                assert!(!take_frame_idents(&mut rx).is_empty());
+            } else {
+                assert!(take_frame_idents(&mut rx).is_empty());
+            }
+        }
     }
 }

@@ -155,6 +155,11 @@ const SHAPE_NECKLACE_OF_MANATOHEALTH: u8 = 135;
 const SHAPE_RING_OF_MANATOHEALTH: u8 = 133;
 /// `ItemShapeConst.BRACELET_OF_MANATOHEALTH`（`src/M2Server/Actor/ActorConst.cs:110`）——魔血手镯。
 const SHAPE_BRACELET_OF_MANATOHEALTH: u8 = 134;
+/// `ItemShapeConst.RING_REVIVAL_ITEM`（`src/M2Server/Actor/ActorConst.cs:64`）——复活戒指。
+const SHAPE_RING_REVIVAL_ITEM: u8 = 114;
+/// `M2Share.ItemDamageRevivalMap`（`src/M2Server/M2Share.cs:186`）——P32 的耐久扣减命中集合
+/// （按 `StdItem.Shape`，或武器/右手位的 `StdItem.AniCount`）。
+pub const ITEM_DAMAGE_REVIVAL_MAP: [u8; 4] = [114, 160, 161, 162];
 
 /// `MessageSettings.DEFHIT`（`src/Modules/SystemModule/MessageSettings.cs:10`）。
 pub const DEF_HIT: u16 = 5;
@@ -407,6 +412,13 @@ pub struct RecalcOutput {
     /// `PlayObject.HitSpeed`（`PlayObject.cs:2899` 的 `HitSpeed = AddAbil.HitSpeed`）——
     /// 657 `SM_CHARSTATUSCHANGED` 末参的**收件人自己**的值（`PlayObject.Message.cs:1846`）。
     pub hit_speed: u16,
+    /// **PL-1 / P32**：本次 `RecalcAbilitys()` 里 Ringr/Ringl 槽的
+    /// `Shape == RING_REVIVAL_ITEM(114)` 是否命中（`PlayObject.cs:2241-2243`）。
+    ///
+    /// oracle 只在该分支写 `Revival = true`，**全函数没有任何 `Revival = false`** ⇒ 语义是
+    /// **粘滞锁存**。本输出只报「本次命中」，落账方必须做 `entity.revival |= out.revival`
+    /// （历史为 true 时摘下戒指也不清，照抄 oracle）。
+    pub revival: bool,
 }
 
 /// `PlayObject.RecalcLevelAbilitys()`（`PlayObject.cs:5254-5317`）的落库等价物：按 `Job` + `Abil.Level`
@@ -485,6 +497,8 @@ pub fn recalc_abilitys_with_prior(
     let mut mh_necklace = false;
     let mut mh_ring = false;
     let mut mh_bracelet = false;
+    // P32：复活戒指（`PlayObject.cs:2241` 的 `RING_REVIVAL_ITEM`）。
+    let mut revival = false;
 
     for (slot, cell) in inputs.use_items.iter().enumerate() {
         let Some(inst) = cell else { continue };
@@ -518,6 +532,9 @@ pub fn recalc_abilitys_with_prior(
             && tpl.shape == SHAPE_BRACELET_OF_MANATOHEALTH
         {
             mh_bracelet = true;
+        }
+        if (slot == SLOT_RING_L || slot == SLOT_RING_R) && tpl.shape == SHAPE_RING_REVIVAL_ITEM {
+            revival = true;
         }
         add_weight(slot, tpl.weight, &mut wear_weight, &mut hand_weight);
     }
@@ -590,6 +607,7 @@ pub fn recalc_abilitys_with_prior(
         sub,
         add,
         hit_speed,
+        revival,
     }
 }
 
@@ -1490,6 +1508,115 @@ mod tests {
         assert!(
             seen >= 2,
             "夹具必须含 ≥ 2 条 recover 非 0 的用例（实得 {seen}）——否则 T-18 是白测"
+        );
+    }
+
+    /// **PL-1 / P32**：复活戒指的 `Shape==114` 命中只来自 **Ringr/Ringl** 槽，且 `Dura==0`
+    /// 的槽被跳过（`PlayObject.cs:2107` 的 `Dura == 0 ⇒ continue` 早于 `case Ringr/Ringl` 的
+    /// `switch (Shape)`）。红检：把 slot 门去掉（任意槽命中）⇒ 第二段必红；
+    /// 把 `revival` 恒 false ⇒ 第一段必红。
+    #[test]
+    fn recalc_reports_revival_ring_only_from_durable_ring_slots() {
+        let ring = StdItem {
+            name: "RevivalRing".to_string(),
+            std_mode: 22,
+            shape: 114,
+            dura_max: 5000,
+            ..StdItem::default()
+        };
+        let cat = StdItemCatalog::from_items([(1u16, ring.clone())]);
+        let abil = Ability {
+            level: 1,
+            ..Ability::default()
+        };
+        let bonus = NakedAbility {
+            dc: 0,
+            mc: 0,
+            sc: 0,
+            ac: 0,
+            mac: 0,
+            hp: 0,
+            mp: 0,
+            hit: 0,
+            speed: 0,
+            reserved: 0,
+        };
+
+        let mut slots = vec![None; USE_ITEMS_LEN];
+        slots[SLOT_RING_L] = Some(ItemInstance {
+            index: 1,
+            dura: 5000,
+        });
+        let inputs = RecalcInputs {
+            job: 0,
+            abil: &abil,
+            bonus_abil: &bonus,
+            bonus_tick_hit: 25,
+            bonus_tick_speed: 35,
+            cur_hp: 0,
+            cur_mp: 0,
+            use_items: &slots,
+            bag: &[],
+        };
+        assert!(
+            recalc_abilitys(&cat, &inputs).revival,
+            "Ringl + Shape 114 + Dura>0 ⇒ revival=true"
+        );
+
+        slots[SLOT_RING_L] = None;
+        slots[SLOT_RING_R] = Some(ItemInstance { index: 1, dura: 1 });
+        let inputs = RecalcInputs {
+            job: 0,
+            abil: &abil,
+            bonus_abil: &bonus,
+            bonus_tick_hit: 25,
+            bonus_tick_speed: 35,
+            cur_hp: 0,
+            cur_mp: 0,
+            use_items: &slots,
+            bag: &[],
+        };
+        assert!(recalc_abilitys(&cat, &inputs).revival, "Ringr 同样命中");
+
+        // 放在非戒指槽 ⇒ 不命中（oracle 的 `switch (i)` 只到 Ringr/Ringl）。
+        slots[SLOT_RING_R] = None;
+        slots[SLOT_DRESS] = Some(ItemInstance {
+            index: 1,
+            dura: 5000,
+        });
+        let inputs = RecalcInputs {
+            job: 0,
+            abil: &abil,
+            bonus_abil: &bonus,
+            bonus_tick_hit: 25,
+            bonus_tick_speed: 35,
+            cur_hp: 0,
+            cur_mp: 0,
+            use_items: &slots,
+            bag: &[],
+        };
+        assert!(
+            !recalc_abilitys(&cat, &inputs).revival,
+            "非戒指槽的 Shape 114 不置 Revival"
+        );
+
+        // Dura==0 的戒指被 `continue` 跳过 ⇒ 不置位。
+        slots[SLOT_DRESS] = None;
+        slots[SLOT_RING_L] = Some(ItemInstance { index: 1, dura: 0 });
+        let inputs = RecalcInputs {
+            job: 0,
+            abil: &abil,
+            bonus_abil: &bonus,
+            bonus_tick_hit: 25,
+            bonus_tick_speed: 35,
+            cur_hp: 0,
+            cur_mp: 0,
+            use_items: &slots,
+            bag: &[],
+        };
+        assert!(
+            !recalc_abilitys(&cat, &inputs).revival,
+            "Dura==0 的戒指不置 Revival（oracle 在 Shape 分支前 continue）"
         );
     }
 }

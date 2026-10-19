@@ -104,6 +104,16 @@ const fn hi_byte_u8(_v: u8) -> u8 {
     0
 }
 
+/// `HUtil32.LoWord(byte NeedLevel)`：`NeedLevel` 提升为 `int` ⇒ 低 16 位 = 值本身。
+const fn lo_word_byte(v: u8) -> u8 {
+    v
+}
+
+/// `HUtil32.HiWord(byte NeedLevel)`：高 16 位 = 0。
+const fn hi_word_byte(_v: u8) -> u8 {
+    0
+}
+
 /// `HUtil32.HiByte(ushort)`（`WAbil.DC/MC/SC`）。
 const fn hi_byte_u16(v: u16) -> u8 {
     ((v >> 8) & 0x00FF) as u8
@@ -389,6 +399,61 @@ pub fn check_take_on_items(
         81 => ctx.member_type == lo && ctx.member_level >= hi,
         82 => ctx.member_type >= lo && ctx.member_level >= hi,
         _ => false,
+    }
+}
+
+/// `PlayObject.CheckItemsNeed(StdItem)`（`PlayObject.Base.cs:2832-2882`）的**7 值子集**。
+///
+/// **不是** [`check_take_on_items`] 的别名：后者是 `CM_TAKEONITEM` 的**全量穿戴校验**
+/// （性别/等级/职业/负重/Need 0-13/40-44/…）。P21（`PlayObject.Message.cs:403-441`）的
+/// 每-Run 复检只调本函数——**Need ∉ {6,60,7,70,8,81,82} ⇒ 一律 true**（含 Need=0 的等级不足）。
+///
+/// 逐分支照 oracle（`CheckItemsNeed` 的 `switch (stdItem.Need)`）：
+/// - 6：`MyGuild == null ⇒ false`；
+/// - 60：`MyGuild == null || GuildRankNo != 1 ⇒ false`；
+/// - 7：`CastleMgr.IsCastleMember(this) == null ⇒ false`（**不看** `MyGuild`）；
+/// - 70：`castle == null || GuildRankNo != 1 ⇒ false`（**不看** `MyGuild`）；
+/// - 8：`MemberType == 0 ⇒ false`；
+/// - 81：`MemberType != LoWord(NeedLevel) || MemberLevel < HiWord(NeedLevel) ⇒ false`；
+/// - 82：`MemberType < LoWord(NeedLevel) || MemberLevel < HiWord(NeedLevel) ⇒ false`；
+/// - 其它：true。
+///
+/// `NeedLevel` 是 **byte**（`OpenMir2.Data.StdItem`），传给 `HUtil32.LoWord/HiWord(int)` 时提升为
+/// `int` ⇒ `LoWord = NeedLevel`、`HiWord = 0`；因此 81/82 的 `MemberLevel < HiWord` 分支
+/// **对 u8 恒 false**（oracle 原样，不是省事）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ItemsNeedContext {
+    /// `MyGuild != null`。
+    pub has_guild: bool,
+    /// `GuildRankNo`。
+    pub guild_rank_no: u8,
+    /// `SystemShare.CastleMgr.IsCastleMember(this) != null`。
+    pub is_castle_member: bool,
+    /// `Player.MemberType`。
+    pub member_type: u8,
+    /// `Player.MemberLevel`。
+    pub member_level: u8,
+}
+
+/// `PlayObject.CheckItemsNeed(StdItem)`——见 [`ItemsNeedContext`] 的口径表。
+#[must_use]
+pub fn check_items_need(ctx: &ItemsNeedContext, need: u8, need_level: u8) -> bool {
+    match need {
+        6 => ctx.has_guild,
+        60 => ctx.has_guild && ctx.guild_rank_no == 1,
+        7 => ctx.is_castle_member,
+        70 => ctx.is_castle_member && ctx.guild_rank_no == 1,
+        8 => ctx.member_type != 0,
+        // `LoWord(byte)` = 值、`HiWord(byte)` = 0 ⇒ `member_level < 0` 恒 false（只剩前一项）。
+        81 => {
+            let hi = u16::from(hi_word_byte(need_level));
+            ctx.member_type == lo_word_byte(need_level) && u16::from(ctx.member_level) >= hi
+        }
+        82 => {
+            let hi = u16::from(hi_word_byte(need_level));
+            ctx.member_type >= lo_word_byte(need_level) && u16::from(ctx.member_level) >= hi
+        }
+        _ => true,
     }
 }
 
@@ -1057,5 +1122,87 @@ mod tests {
             out2.update_item.is_none(),
             "非衣服（StdMode 15）不产 SM_UPDATEITEM"
         );
+    }
+
+    /// **PL-1 / P21**：`CheckItemsNeed` 的 7 值子集逐分支（`PlayObject.Base.cs:2832-2882`）。
+    ///
+    /// 红检：把 `_ => true` 改成 `_ => false` ⇒ `other_needs_always_true` 与
+    /// `need_zero_low_level_is_not_checked` 必红；把 8 的 `member_type != 0` 改成 `== 0`
+    /// ⇒ `need_8` 必红。
+    #[test]
+    fn check_items_need_is_the_seven_value_subset() {
+        let none = ItemsNeedContext::default();
+        assert!(!check_items_need(&none, 6, 0), "Need=6 无行会 ⇒ false");
+        assert!(!check_items_need(&none, 60, 0), "Need=60 无行会 ⇒ false");
+        assert!(!check_items_need(&none, 7, 0), "Need=7 非城堡成员 ⇒ false");
+        assert!(
+            !check_items_need(&none, 70, 0),
+            "Need=70 非城堡成员 ⇒ false"
+        );
+        assert!(
+            !check_items_need(&none, 8, 0),
+            "Need=8 MemberType==0 ⇒ false"
+        );
+        // 81：MemberType 必须**等于** LoWord(NeedLevel)；HiWord=0 ⇒ MemberLevel 不参与。
+        let ctx = ItemsNeedContext {
+            member_type: 3,
+            member_level: 0,
+            ..ItemsNeedContext::default()
+        };
+        assert!(
+            check_items_need(&ctx, 81, 3),
+            "Need=81 MemberType==3 ⇒ true"
+        );
+        assert!(
+            !check_items_need(&ctx, 81, 2),
+            "Need=81 MemberType!=LoWord ⇒ false"
+        );
+        assert!(
+            check_items_need(&ctx, 81, 3),
+            "Need=81 MemberLevel=0 不挡（HiWord(byte)=0，`< 0` 恒 false）"
+        );
+        // 82：MemberType >= LoWord；HiWord=0 同上。
+        assert!(check_items_need(&ctx, 82, 3), "Need=82 ==LoWord ⇒ true");
+        assert!(check_items_need(&ctx, 82, 2), "Need=82 >LoWord ⇒ true");
+        assert!(!check_items_need(&ctx, 82, 4), "Need=82 <LoWord ⇒ false");
+        // 行会/城堡两支的正例。
+        let g = ItemsNeedContext {
+            has_guild: true,
+            guild_rank_no: 1,
+            is_castle_member: true,
+            ..ItemsNeedContext::default()
+        };
+        assert!(check_items_need(&g, 6, 0));
+        assert!(check_items_need(&g, 60, 0));
+        assert!(check_items_need(&g, 7, 0), "Need=7 只看城堡成员");
+        assert!(check_items_need(&g, 70, 0));
+        assert!(
+            !check_items_need(
+                &ItemsNeedContext {
+                    guild_rank_no: 2,
+                    ..g
+                },
+                60,
+                0
+            ),
+            "Need=60 非会长 ⇒ false"
+        );
+        assert!(
+            check_items_need(
+                &ItemsNeedContext {
+                    has_guild: false,
+                    ..g
+                },
+                7,
+                0
+            ),
+            "Need=7 不看 MyGuild（只有城堡成员门）"
+        );
+        assert!(!check_items_need(&g, 8, 0), "Need=8 仍看 MemberType");
+        // 其它 Need 一律 true（含 Need=0 的等级不足）。
+        assert!(check_items_need(&none, 0, 200), "Need=0 一律 true");
+        assert!(check_items_need(&none, 1, 200));
+        assert!(check_items_need(&none, 44, 200));
+        assert!(check_items_need(&none, 99, 200));
     }
 }

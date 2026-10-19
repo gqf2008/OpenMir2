@@ -246,6 +246,10 @@ pub struct GateConfig {
     /// `ServerConf.cs:153` 的 `ReadWriteInteger("Setup", "SpellFillTime", …)`）——
     /// `BaseObject.Run()`（`BaseObject.Base.cs:52/78`）的魔力点回蓝阈值。
     pub spell_fill_time: i32,
+    /// **PL-1 / P32**：`[Setup] RevivalTime`（oracle `GameSvrConf.cs:804/1725` 缺省 `60*1000`ms；
+    /// `ServerConf.cs:503` 的 `ReadWriteInteger("Setup", "RevivalTime", …)`）——
+    /// 复活戒指的二次复活间隔门（`PlayObject.Message.cs:753`，**严格 `>`**）。
+    pub revival_time: i32,
     /// `[Setup] ShowLineNoticeTime`（oracle `GameSvrConf.cs:340/1440`，缺省 `5*60*1000`；
     /// `ServerConf.cs:587` 的 `ReadWriteInteger("Setup", "ShowLineNoticeTime", …)`）——
     /// 逐玩家滚动公告的周期（`WorldServer.cs:669` 的 `(now - ShowLineNoticeTick) > ShowLineNoticeTime`）。
@@ -367,6 +371,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut save_human_rcd_time: Option<i32> = None;
     let mut health_fill_time: Option<i32> = None;
     let mut spell_fill_time: Option<i32> = None;
+    let mut revival_time: Option<i32> = None;
     let mut show_line_notice_time: Option<i32> = None;
     let mut line_notice_color: Option<u8> = None;
     let mut show_pre_fix_msg: Option<bool> = None;
@@ -714,6 +719,14 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("SpellFillTime 不是合法整数：{v:?}"))?,
                     );
                 }
+                // `ServerConf.cs:503` 的 `ReadWriteInteger("Setup", "RevivalTime", …)`；
+                // `GameSvrConf.cs:1725` 源码缺省 `60*1000`。
+                "REVIVALTIME" => {
+                    revival_time = Some(
+                        v.parse()
+                            .with_context(|| format!("RevivalTime 不是合法整数：{v:?}"))?,
+                    );
+                }
                 // 滚动公告周期（`ServerConf.cs:587`；`GameSvrConf.cs:1440` 缺省 5 分钟）。
                 "SHOWLINENOTICETIME" => {
                     show_line_notice_time = Some(
@@ -943,6 +956,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`GameSvrConf.cs:1323-1324` 的 `HealthFillTime = 300` / `SpellFillTime = 800`）。
         health_fill_time: health_fill_time.unwrap_or(300),
         spell_fill_time: spell_fill_time.unwrap_or(800),
+        // oracle 缺省值（`GameSvrConf.cs:1725` 的 `RevivalTime = 60 * 1000`）。
+        revival_time: revival_time.unwrap_or(60 * 1000),
         // oracle 缺省值（`GameSvrConf.cs:1440-1441` / `:1751`）：公告周期 5 分钟、缺省色 2、
         // 前缀关。缺 `[Setup]` 键不算错。
         show_line_notice_time: show_line_notice_time.unwrap_or(5 * 60 * 1000),
@@ -1543,6 +1558,27 @@ mod tests {
                 "DisableInSafeZoneFireCross={v:?}"
             );
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **PL-1 / P32**：`[Setup] RevivalTime`（`ServerConf.cs:503` 的 `ReadWriteInteger`；
+    /// `GameSvrConf.cs:1725` 源码缺省 `60*1000`）——实值解析、缺键回落缺省、非整数报错。
+    /// 红检：把缺省改成 0 ⇒ 第二条断言必红；把缺键分支写成报错 ⇒ 第二条必红。
+    #[test]
+    fn setup_revival_time_and_defaults() {
+        let dir = std::env::temp_dir().join(format!("gs-revival-cfg-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nIDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        let p = write(&dir, &format!("{base}[Setup]\nRevivalTime=12345\n"));
+        let c = load(&p).unwrap();
+        assert_eq!(c.revival_time, 12345, "[Setup] RevivalTime 实值");
+        let p2 = write(&dir, base);
+        let c2 = load(&p2).unwrap();
+        assert_eq!(
+            c2.revival_time, 60_000,
+            "缺键 ⇒ oracle 源码缺省 60*1000（GameSvrConf.cs:1725）"
+        );
+        let p3 = write(&dir, &format!("{base}[Setup]\nRevivalTime=abc\n"));
+        assert!(load(&p3).is_err(), "RevivalTime 非整数 ⇒ 必须报错");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -959,6 +959,29 @@ pub fn add_item_tail(item: &BagItem, catalog: &dyn ItemCatalog) -> Option<Vec<u8
     Some(edcode::encode(&itemwire::encode_client_item(&ci)))
 }
 
+/// `PlayObject.SendDelItems(UserItem)`（`PlayObject.Base.cs:1648-1665`）的**已编码尾**。
+///
+/// 与 [`add_item_tail`] 的差别逐行对照：**无** `M2Share.StdModeMap` 的 `Desc[8]`⇒`Shape`
+/// 0/130 改写（`SendDelItems` 不动 `Item.Shape`）；`StdMode == 50` 的 `" #Dura"` 后缀仍在。
+/// `clientItem.MakeIndex/Dura/DuraMax` 取实例；模板缺失 ⇒ `None`（oracle `stdItem == null`
+/// 直接不发帧）。
+pub fn del_item_tail(item: &BagItem, catalog: &dyn ItemCatalog) -> Option<Vec<u8>> {
+    let tpl = catalog.get(item.index)?;
+    let mut name = item_display_name(catalog, item);
+    if tpl.std_mode == 50 {
+        name = format!("{name} #{}", item.dura);
+    }
+    let ci = itemwire::ClientItem {
+        tpl,
+        name,
+        make_index: item.make_index,
+        dura: item.dura,
+        dura_max: item.dura_max,
+        desc: item.desc,
+    };
+    Some(edcode::encode(&itemwire::encode_client_item(&ci)))
+}
+
 /// `SendSocket(MakeMessage(SM_DEALREMOTEADDITEM/…, ActorId, 0, 0, 1), EncodeBuffer(clientItem))`。
 ///
 /// `clientItem.Item.Name = CustomItemSystem.GetItemName(userItem)`（**无** StdMode==50 后缀，

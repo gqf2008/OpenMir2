@@ -747,6 +747,59 @@ fn fail_frame(make_index: i32) -> Frame {
     }
 }
 
+/// **PL-1 / P21**：`PlayObject.Message.cs:421-426` 的
+/// `DropItemDown(UseItems[i], MIN(SystemShare.Config.DropItemRage, 3), false, 0, ActorId)`。
+///
+/// 与 [`drop_item`] 的丢弃路径共用 [`drop_item_down`] 的核心：
+/// 1. `StdMode == 40` 先做**原地**耐久扣减（`BaseObject.cs:541-548`，`ushort` 回绕；失败也留下）；
+/// 2. 返回值照 oracle 的 `Envir.AddItemToMap` —— `MapItem.ItemId` 恒 0（`T-19` 登记）
+///    ⇒ **恒 false**，即 P21 的「背包满 ⇒ 掉落」分支在当前 oracle 树上**永远失败**，
+///    物品留在装备位（P21 的 `boTakeItem` 也因此不置位）。
+///
+/// 这里传一张 0×0 的 [`GroundMap`]：`get_drop_position` 全部越界 ⇒ 落回原坐标，
+/// `put_item` 在 `item_id == 0` 的第一行即返回 false——与真实地图上的结果相同，
+/// 且不依赖宿主地图尺寸。
+#[must_use]
+pub fn drop_item_down_p21(
+    catalog: &dyn ItemCatalog,
+    item: &mut BagItem,
+    std_mode: u8,
+    drop_item_rage: u8,
+    actor_id: i32,
+) -> bool {
+    // `BaseObject.cs:539-548`：`ushort idura = (ushort)(Dura - 2000)`；`if (idura <= 0)` 对
+    // `ushort` 是 `== 0`（死代码分支），净效果 = `wrapping_sub(2000)`。
+    if std_mode == 40 {
+        item.dura = item.dura.wrapping_sub(2000);
+    }
+    let ctx = DropContext {
+        catalog,
+        actor_id,
+        curr_x: 0,
+        curr_y: 0,
+        now_tick: 0,
+        deal_last_tick: 0,
+        make_index: item.make_index,
+        item_name: "",
+        in_safe_disable_drop: false,
+        in_safe_zone: false,
+        is_can_drop: true,
+        no_throw_item: false,
+        control_drop_item: false,
+        can_drop_price: 0,
+        drop_item_rage,
+    };
+    let mut map = GroundMap::new(0, 0);
+    drop_item_down(
+        &ctx,
+        &mut map,
+        item,
+        0,
+        actor_id,
+        i32::from(drop_item_rage).min(3),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1270,5 +1323,33 @@ mod tests {
         assert_eq!(state.gold, 1000);
         assert!(out.notices.is_empty());
         assert_eq!(map.item_count(), 1);
+    }
+
+    /// **PL-1 / P21**：`drop_item_down_p21` 的 StdMode 40 耐久回绕 + 恒 false（T-19）。
+    /// 红检：把返回改成 `true` ⇒ 第二条断言必红；把 `wrapping_sub` 改成 `saturating_sub`
+    /// ⇒ 第一条断言（Dura=10 ⇒ 63546）必红。
+    #[test]
+    fn p21_drop_item_down_keeps_item_and_wraps_stdmode40_dura() {
+        let cat = StdItemCatalog::from_items([(
+            1u16,
+            StdItem {
+                name: "torch".to_string(),
+                std_mode: 40,
+                ..StdItem::default()
+            },
+        )]);
+        let mut item = BagItem {
+            make_index: 9,
+            index: 1,
+            dura: 10,
+            dura_max: 100,
+            desc: [0; 14],
+        };
+        assert!(
+            !drop_item_down_p21(&cat, &mut item, 40, 3, 42),
+            "MapItem.ItemId 恒 0 ⇒ AddItemToMap 必失败 ⇒ false"
+        );
+        assert_eq!(item.dura, 63546, "StdMode 40：10 - 2000 按 ushort 回绕");
+        assert_eq!(item.index, 1, "失败时槽位物品原样保留");
     }
 }

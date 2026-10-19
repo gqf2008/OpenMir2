@@ -42,6 +42,9 @@ pub const DEFAULT_CANOT_PICK_UP_ITEM: &str = "在一定时间以内无法捡起�
 /// 经 `StringConf.cs:76`（`GameShare.cs:91`）读入后覆盖本默认 ⇒ 线上体字节
 /// `c4fad6d0b6bec1cb212121`（`SM_SYSMESSAGE(100)`，魔号 6/48 与 50-D2 的 STY 帧）。
 pub const DEFAULT_YOU_POISONED: &str = "中毒了!!!";
+/// oracle `MessageSettings.RevivalRecoverMsg`（`MessageSettings.cs:226`）——P32 复活成功的
+/// `SysMsg(..., Green, Hint)` 文本（`PlayObject.Message.cs:759`）。缺键回落源码默认。
+pub const DEFAULT_REVIVAL_RECOVER_MSG: &str = "复活戒指生效，体力恢复.";
 
 /// `[String]` 段里帧 42 用到的键（键名照 `StringConf.cs`，**不发明**）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -57,6 +60,7 @@ pub struct StringConf {
     no_master_name: Option<String>,
     canot_pick_up_item: Option<String>,
     you_poisoned: Option<String>,
+    revival_recover: Option<String>,
 }
 
 impl StringConf {
@@ -149,6 +153,14 @@ impl StringConf {
     pub fn you_poisoned(&self) -> &str {
         self.you_poisoned.as_deref().unwrap_or(DEFAULT_YOU_POISONED)
     }
+
+    /// `[String] RevivalRecoverMsg`（P32 复活提示；缺键回落 `MessageSettings.cs:226`）。
+    #[must_use]
+    pub fn revival_recover(&self) -> &str {
+        self.revival_recover
+            .as_deref()
+            .unwrap_or(DEFAULT_REVIVAL_RECOVER_MSG)
+    }
 }
 
 /// 读 `String.conf` 并解析 `[String]` 段。
@@ -220,6 +232,7 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             "NOMASTERNAME" => &mut conf.no_master_name,
             "CANOTPICKUPITEM" => &mut conf.canot_pick_up_item,
             "YOUPOISONED" => &mut conf.you_poisoned,
+            "REVIVALRECOVERMSG" => &mut conf.revival_recover,
             _ => continue,
         };
         if slot.is_none() {
@@ -277,6 +290,11 @@ mod tests {
     fn missing_keys_fall_back_to_oracle_defaults() {
         let c = parse(b"[String]\n");
         assert_eq!(c.rank_level_name(), "{0}\\平民");
+        assert_eq!(
+            c.revival_recover(),
+            "复活戒指生效，体力恢复.",
+            "缺键 ⇒ MessageSettings.cs:226 源码默认"
+        );
         assert_eq!(
             c.human_show_name(),
             "%chrname\\%guildname\\%dearname\\%mastername"
