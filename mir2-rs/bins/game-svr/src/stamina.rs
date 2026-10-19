@@ -143,9 +143,18 @@ impl Stamina {
 /// `BaseObject.Run()`（`:26-109`）的体力/魔力点段，**按 [`RUN_INTERVAL_MS`] 重放**。
 ///
 /// `changes` 会被**清空后重填**：**每个命中过 `HealthSpellChanged()` 的 `Run()` 压一条**
-/// `(WAbil.HP, WAbil.MP)` 终态快照（同一 Run 内的 HP 支/MP 支/负值支共享一条 pending，
-/// 见模块头）。调用方按序一 Run 发一帧 `SM_HEALTHSPELLCHANGED`。
-/// 返回 = `changes.len()`（有 pending 的 `Run()` 数）。
+/// `(WAbil.HP, WAbil.MP, calls)` 终态快照。`calls` = 该 `Run()` 内 `HealthSpellChanged()`
+/// 的**调用次数**（HP 支 `:55` / MP 支 `:68` / 负值支 `:109`；同 Run 内至多共存两支 ⇒ 1..=2）：同一 Run 的这些调用
+/// 共享一个待发槽（`SendUpdateMsg` 头-only 去重 + `SendRefMsg` 不去重），调用方按
+/// [`crate::healthspell::HealthSpellSlots`] 的槽模型逐 Run 还原条数（G-C 与 G-A 同口径）。
+///
+/// 返回 `(changed_runs, last_run_changed)`：
+/// - `changed_runs` = `changes.len()`（有 pending 的 `Run()` 数）；
+/// - `last_run_changed` = **最后一个重放的 `Run()`** 是否调用过 `HealthSpellChanged()`。
+///   P8 钳制在同一个 `Run` 的末尾，据此决定是「替换最后一 Run 的 pending」还是
+///   「新入队一条」（最后一 Run 无变更时 = oracle 的下一个 Run 才出队的新 pending）。
+///   若本 tick 一次 `Run()` 都没有重放，则为 `false`。
+///
 /// `now` = 当轮 `HUtil32.GetTickCount()`（本宿主 [`super::now_ms`]，只有差值参与判定）。
 #[must_use]
 pub fn stamina_tick(
@@ -155,16 +164,17 @@ pub fn stamina_tick(
     now: i64,
     health_fill_time: i32,
     spell_fill_time: i32,
-    changes: &mut Vec<(u16, u16)>,
-) -> u32 {
+    changes: &mut Vec<(u16, u16, u8)>,
+) -> (u32, bool) {
     changes.clear();
+    let mut last_run_changed = false;
     // 重放 oracle 的 `Run()` 调用：`UserProcessor` 每 50ms 一次；每次
     // `recoveryTick = (cursor - AutoRecoveryTick)/20`，随后 `AutoRecoveryTick = cursor`。
     // 整数截断按 50ms/次 ⇒ 每次 `+2`。world tick 200ms 时即 4 次 `Run()` ⇒ `+8`（40/秒）。
     while st.replay_cursor + RUN_INTERVAL_MS <= now {
         st.replay_cursor += RUN_INTERVAL_MS;
-        // 本 `Run()` 是否调用过 `HealthSpellChanged()`（HP 支/MP 支/负值支共享一条 pending）。
-        let mut run_changed = false;
+        // 本 `Run()` 内 `HealthSpellChanged()` 的调用次数（HP 支/MP 支/负值支共享一个待发槽）。
+        let mut run_calls = 0_u8;
         if !death {
             // `AutoRecoveryTick` 只在 `if (!Death)` 里更新（`:39-40`）⇒ 死亡期间冻结。
             let recovery_tick = (st.replay_cursor - st.auto_recovery_tick) / RECOVERY_DIVISOR;
@@ -180,7 +190,7 @@ pub fn stamina_tick(
                 } else {
                     wabil.max_hp
                 };
-                run_changed = true; // `HealthSpellChanged()`（`:55`）
+                run_calls += 1; // `HealthSpellChanged()`（`:55`）
             }
             // `if ((WAbil.MP < WAbil.MaxMP) && (SpellTick >= SpellFillTime))`（`:52`）
             if wabil.mp < wabil.max_mp && st.spell_tick >= spell_fill_time {
@@ -190,7 +200,7 @@ pub fn stamina_tick(
                 } else {
                     wabil.max_mp
                 };
-                run_changed = true; // `HealthSpellChanged()`（`:68`）
+                run_calls += 1; // `HealthSpellChanged()`（`:68`）
             }
             // `:74-81`：到量清零（**在**负值扣血之前，照 oracle 次序）。
             if st.health_tick >= health_fill_time {
@@ -204,14 +214,18 @@ pub fn stamina_tick(
         if st.health_tick < -health_fill_time && wabil.hp > 1 {
             wabil.hp -= 1;
             st.health_tick += health_fill_time;
-            run_changed = true; // `HealthSpellChanged()`（`:109`）
+            run_calls += 1; // `HealthSpellChanged()`（`:109`）
         }
-        if run_changed {
+        last_run_changed = run_calls > 0;
+        if run_calls > 0 {
             // oracle 在**下一次** drain 出队时才读 `WAbil` ⇒ 该 Run 的 pending 载荷 = 本 Run 终态。
-            changes.push((wabil.hp, wabil.mp));
+            changes.push((wabil.hp, wabil.mp, run_calls));
         }
     }
-    u32::try_from(changes.len()).unwrap_or(u32::MAX)
+    (
+        u32::try_from(changes.len()).unwrap_or(u32::MAX),
+        last_run_changed,
+    )
 }
 
 /// `recoveryTick` 是 C# `int`（`BaseObject.Base.cs:39`）；本宿主用 `i64` 算差值，转回 `i32` 时**夹**
@@ -271,12 +285,13 @@ mod tests {
         // 满血满蓝时 `stamina_tick` 不会回血（`HP < MaxHP` 为假），只会累积/扣减体力点。
         let mut st = Stamina::new(start);
         let step = 660; // 真机 bot 的有效步距（见上）
-        let mut changes: Vec<(u16, u16)> = Vec::new();
+        let mut changes: Vec<(u16, u16, u8)> = Vec::new();
         let mut drops = 0;
         for k in 0..120 {
             // 这一击前，把 elapsed 重放到该击时刻（模拟 world tick 逐轮推进）。
             let now = start + k * step;
-            drops += stamina_tick(&mut st, &mut w, false, now, 300, 800, &mut changes);
+            let (n, _) = stamina_tick(&mut st, &mut w, false, now, 300, 800, &mut changes);
+            drops += n;
             // 攻击成功：`HealthTick -= 30`（`PlayObject.Attack.cs:955`）。
             st.on_attack_success();
         }
@@ -314,7 +329,7 @@ mod tests {
         st.auto_recovery_tick = 1_000;
         let before = w.hp;
         let mut changes = Vec::new();
-        let changed = stamina_tick(&mut st, &mut w, false, 1_050, 300, 800, &mut changes);
+        let (changed, _) = stamina_tick(&mut st, &mut w, false, 1_050, 300, 800, &mut changes);
         assert_eq!(w.hp, before - 1, "HealthTick < -300 且 HP>1 ⇒ 扣 1 HP");
         assert_eq!(
             st.health_tick, -1,
@@ -323,8 +338,8 @@ mod tests {
         assert_eq!(changed, 1, "该扣血调用 HealthSpellChanged() 一次");
         assert_eq!(
             changes,
-            vec![(20668u16, 900u16)],
-            "帧快照 = (扣血后 HP, 当前 MP)"
+            vec![(20668u16, 900u16, 1u8)],
+            "帧快照 = (扣血后 HP, 当前 MP, 调用次数)"
         );
     }
 
@@ -367,10 +382,14 @@ mod tests {
         st.replay_cursor = 0;
         // `now=50` ⇒ 重放 1 次 Run()：`recovery_tick=(50-0)/20=2` ⇒ HT=302、ST=802，两支都命中。
         let mut changes = Vec::new();
-        let n = stamina_tick(&mut st, &mut w, false, 50, 300, 800, &mut changes);
+        let (n, _) = stamina_tick(&mut st, &mut w, false, 50, 300, 800, &mut changes);
         assert_eq!(n, 1, "同一 Run 的 HP/MP 支共享一条 pending");
         // HP 支：HP += MaxHP/75+1 = 2 ⇒ 12；MP 支：MP += MaxMP/18+1 = 6 ⇒ 16（终态）。
-        assert_eq!(changes, vec![(12u16, 16u16)], "载荷取 Run 终态");
+        assert_eq!(
+            changes,
+            vec![(12u16, 16u16, 2u8)],
+            "载荷取 Run 终态；两次 HealthSpellChanged()（HP 支 + MP 支）"
+        );
         assert_eq!((w.hp, w.mp), (12, 16));
     }
 
@@ -389,13 +408,13 @@ mod tests {
         let mut st = Stamina::new(0);
         st.replay_cursor = 0;
         let mut changes = Vec::new();
-        let n = stamina_tick(&mut st, &mut w, false, 200, 2, 2, &mut changes);
+        let (n, _) = stamina_tick(&mut st, &mut w, false, 200, 2, 2, &mut changes);
         assert_eq!(n, 4, "200ms ⇒ 4 次 Run()，每 Run 一条 pending");
         // HP 每 Run +2；MP 每 Run +6（100/18+1）。
         assert_eq!(
             changes,
-            vec![(12, 16), (14, 22), (16, 28), (18, 34)],
-            "逐 Run 终态（HP 支后 MP 支后的 WAbil）"
+            vec![(12, 16, 2), (14, 22, 2), (16, 28, 2), (18, 34, 2)],
+            "逐 Run 终态（HP 支后 MP 支后的 WAbil）；每 Run 两次调用"
         );
         assert_eq!((w.hp, w.mp), (18, 34));
     }
@@ -416,6 +435,37 @@ mod tests {
         let _ = stamina_tick(&mut st, &mut w, false, 550, 300, 800, &mut changes);
         assert_eq!(st.auto_recovery_tick, 550);
         assert_eq!(st.health_tick, 27, "复活后一次补回死亡期间 27 点");
+    }
+
+    /// **V1（最后一 Run 是否有 pending）**：200ms 重放 4 次 `Run()`，只有第 3 次命中 MP 填充、
+    /// 第 4 次无变更 ⇒ `changes = [(105, 6, 1)]` 且 `last_run_changed = false`。
+    /// 调用方据此把 P8 钳制**新入队**一条（Run4 的 P8），而不是替换 Run3 快照。
+    ///
+    /// 牙（改坏必红）：把返回值恒置 `true`（或按 `changes.last()` 推断）⇒ `last` 断言红，
+    /// 上层 `v1_clamp_after_quiet_run_emits_separate_frame` 随之只收到 1 条帧。
+    #[test]
+    fn v1_last_run_changed_flag_distinguishes_quiet_tail_run() {
+        let mut w = wabil(105, 0);
+        w.max_hp = 100;
+        w.max_mp = 100;
+        let mut st = Stamina::new(0);
+        st.spell_tick = 794;
+        let mut changes = Vec::new();
+        let (n, last) = stamina_tick(&mut st, &mut w, false, 200, 300, 800, &mut changes);
+        assert_eq!(
+            n, 1,
+            "只有第 3 次 Run 命中 MP 填充（第 4 次 +2 后不到阈值）"
+        );
+        assert_eq!(
+            changes,
+            vec![(105u16, 6u16, 1u8)],
+            "载荷 = Run3 终态（钳制前），calls=1"
+        );
+        assert!(
+            !last,
+            "第 4 次 Run 无 HealthSpellChanged ⇒ last_run_changed=false"
+        );
+        assert_eq!((w.hp, w.mp), (105, 6));
     }
 
     #[test]

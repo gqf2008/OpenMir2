@@ -10496,16 +10496,22 @@ fn flush_healthspell_slots(
 /// ⇒ 本段必须晚于 [`drain_kill_exp_chain`] / [`drain_aoi_downlink`]，且钳制在填充**之后**
 /// （次序由 [`drain_run_downlinks`] 固定）。
 ///
-/// **G-C 条数**：一次 `Run()` 的 HP 支（`:55`）/ MP 支（`:68`）/ 负值支（`:109`）都走
-/// `SendUpdateMsg(53)` ⇒ 队列里至多一条 pending（后到者覆盖，`BaseObject.Message.cs:283-305`）；
-/// P8 钳制（`:244`）在**同一 `Run`** 的 `base.Run` 末尾，替换 P7 那条。故：
-/// - **每个命中过 `HealthSpellChanged()` 的 50ms Run 至多一条帧**，载荷取该 Run 终态；
-/// - 本 world tick 的钳制事件并入最后一个重放 Run 的 pending（帧数不增，载荷取钳制终态）。
+/// **G-C 条数（槽模型，与 G-A 同口径）**：一次 `Run()` 的 HP 支（`:55`）/ MP 支（`:68`）/
+/// 负值支（`:109`）每次调用都 `SendUpdateMsg(53)` 进同一个待发槽（头-only 去重，
+/// `BaseObject.Message.cs:283-305`）；`ShowHp` 时每次调用再 `SendRefMsg(53)`（源自己 + 观察者
+/// 各一份，**不去重**）。⇒ 本段按 Run 粒度把 `calls` 次调用喂给
+/// [`game_svr::healthspell::HealthSpellSlots`]：1 次调用 ⇒ 自见 1 条、观察者 0 份；
+/// 2 次调用（HP+MP 或 MP+负值）⇒ 自见 3 条、观察者 2 份（`ceil` 预算，逐位照抄 oracle）。
+/// oracle 在**下一个 Run 的 P3** 才出队上一个 Run 的 pending ⇒ 每个 Run 的槽相互独立。
 ///
-/// **钳制口径**：`TickRecord::verify_health_changes` 的 flag 由 world 在 `tick_tail` 按
-/// `HP > MaxHP` / `MP > MaxMP` 记录（oracle `WAbil` = 实体）。本段在 P7 之后按 flag 把**该字段**
-/// 写成 `Max-1`（`wrapping_sub(1)` 照抄 `ushort` 回绕）；未被钳制的字段保留 P7 终值
-/// （如 MP 填充值）——不能整对覆盖，否则会把 P7 的 MP 填充抹掉。
+/// **P8 钳制**：`BaseObject.Base.cs:230-245` 在同一 `Run` 的末尾按**当时的 `WAbil`** 判
+/// `HP > MaxHP` / `MP > MaxMP`：只钳命中的字段、写成 `Max-1`（`wrapping_sub(1)` 照抄
+/// `ushort` 回绕），再 `HealthSpellChanged()`。`TickRecord::verify_health_changes` 只用于判定
+/// 「本 tick 该 actor 的 30s `VerifyTick` 门跑过（P8 发生过）」——**不**采信它记录时的
+/// hp/mp/flag：那是 `tick_tail`（P3/P7 之前）的旧实体值，同 tick 的升级
+/// `IncHealthSpell(2000,2000)`、延迟 `RM_MAGSTRUCK` 都会让 oracle 在 P8 时不再命中。
+/// 钳制的 53 与 P7 同属**最后一 Run** 的槽：最后一 Run 已有 pending ⇒ 替换载荷、调用次数 +1
+/// （帧数不变）；最后一 Run 无变更 ⇒ **新入队一条**（多一帧，载荷取钳制终态）。
 ///
 /// **与 [`drain_recovery`] 的差别**：本段改动的是 `BaseObject.Run()` 里的 `WAbil.HP/MP`，
 /// 攻击结算与 `state_log` 的 `SERVER_STATE` dump 读的是世界实体 [`mir2_world::Entity::hp`]
@@ -10539,40 +10545,57 @@ fn drain_stamina(
         };
         let actor_id = sg.actor_id;
         let death = world.entities.get(actor_id).is_some_and(|e| e.death);
-        // `changes` = 每个命中过 `HealthSpellChanged()` 的 Run 一条终态快照（G-C 的 pending 槽）。
-        let mut changes: Vec<(u16, u16)> = Vec::new();
-        let _ = game_svr::stamina::stamina_tick(
+        // `runs` = 每个命中过 `HealthSpellChanged()` 的 Run 一条终态快照 + 本 Run 调用次数。
+        let mut runs: Vec<(u16, u16, u8)> = Vec::new();
+        let (_changed_runs, last_run_changed) = game_svr::stamina::stamina_tick(
             &mut sg.stamina,
             &mut sg.state.wabil,
             death,
             now,
             health_fill_time,
             spell_fill_time,
-            &mut changes,
+            &mut runs,
         );
-        // P8 钳制：oracle 在 P7 之后的同一 `base.Run` 里执行，`HealthSpellChanged()`
-        // 替换 P7 的 pending ⇒ 帧数不增，载荷取钳制终态。
-        if let Some((_, _hp, _mp, hp_clamped, mp_clamped)) = clamps.iter().find(|c| c.0 == actor_id)
-        {
-            let mut terminal = changes
-                .last()
-                .copied()
-                .unwrap_or((sg.state.wabil.hp, sg.state.wabil.mp));
-            if *hp_clamped {
-                terminal.0 = sg.state.wabil.max_hp.wrapping_sub(1);
+        // P8 钳制：oracle 在 P7 之后的同一 `base.Run` 里执行，判的是**当时的 `WAbil`**
+        // （`BaseObject.Base.cs:230-245`），不是 world 在 `tick_tail` 记下的旧实体 flag。
+        // `verify_health_changes` 只用来确认「本 tick 该 actor 的 VerifyTick 门跑过」。
+        if clamps.iter().any(|c| c.0 == actor_id) {
+            let max_hp = sg.state.wabil.max_hp;
+            let max_mp = sg.state.wabil.max_mp;
+            let hp_over = sg.state.wabil.hp > max_hp;
+            let mp_over = sg.state.wabil.mp > max_mp;
+            if hp_over || mp_over {
+                let mut terminal = runs
+                    .last()
+                    .map(|(hp, mp, _)| (*hp, *mp))
+                    .unwrap_or((sg.state.wabil.hp, sg.state.wabil.mp));
+                if hp_over {
+                    terminal.0 = max_hp.wrapping_sub(1);
+                }
+                if mp_over {
+                    terminal.1 = max_mp.wrapping_sub(1);
+                }
+                sg.state.wabil.hp = terminal.0;
+                sg.state.wabil.mp = terminal.1;
+                if last_run_changed {
+                    // P8 的 `HealthSpellChanged()` 与 P7 同属最后一 Run 的待发槽 ⇒ 同为一次调用。
+                    if let Some(last) = runs.last_mut() {
+                        *last = (terminal.0, terminal.1, last.2.saturating_add(1));
+                    } else {
+                        runs.push((terminal.0, terminal.1, 1));
+                    }
+                } else {
+                    // 最后一 Run 本来没有 pending ⇒ P8 自己入队一条（下一个 Run 才出队）。
+                    runs.push((terminal.0, terminal.1, 1));
+                }
             }
-            if *mp_clamped {
-                terminal.1 = sg.state.wabil.max_mp.wrapping_sub(1);
-            }
-            sg.state.wabil.hp = terminal.0;
-            sg.state.wabil.mp = terminal.1;
-            if let Some(last) = changes.last_mut() {
-                *last = terminal;
-            } else {
-                changes.push(terminal);
+            // oracle 的 P8 读/写唯一 `WAbil`；本宿主实体只是投影，且 world 的 `tick_tail`
+            // 已按**当时实体值**钳过 ⇒ 以会话 `WAbil` 回写，保证攻击结算/逐击 dump 读到 P8 终值。
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.hp = sg.state.wabil.hp;
             }
         }
-        if changes.is_empty() {
+        if runs.is_empty() {
             continue;
         }
         let show_hp = sg.show_hp;
@@ -10588,18 +10611,45 @@ fn drain_stamina(
             );
             continue;
         };
-        // 每个 Run 一条帧；载荷 = 该 Run 终态（钳制命中时最后一 Run 替换为钳制终态）。
-        for (hp, mp) in &changes {
+        // `SendRefMsg` 的观察者集合：源自己那份已由槽模型计入 `self_frames`，这里只发其它人。
+        let ref_targets = if show_hp {
+            chat::hear_targets(world, actor_id, range)
+        } else {
+            Vec::new()
+        };
+        // 每个 Run 一组槽；载荷 = 该 Run 终态（P8 命中时最后一 Run 已换成钳制终态）。
+        for (hp, mp, calls) in &runs {
+            let mut slots = game_svr::healthspell::HealthSpellSlots::new();
+            for _ in 0..*calls {
+                slots.health_spell_changed(actor_id, show_hp);
+            }
+            let (self_frames, ref_copies) = slots.take(actor_id);
             let body = game_svr::smframe::sm_healthspellchanged_frame(actor_id, *hp, *mp, max_hp);
             if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "体力/魔力点回帧")
             {
-                let _ = tx.send(SimToGate::SendFrame {
-                    socket: entry.socket,
-                    body: body.clone(),
-                });
+                for _ in 0..self_frames {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket: entry.socket,
+                        body: body.clone(),
+                    });
+                }
             }
-            if show_hp {
-                broadcast_healthspellchanged(&*world, online, gates, actor_id, &body, range);
+            for _ in 0..ref_copies {
+                for target_id in &ref_targets {
+                    if *target_id == actor_id {
+                        continue;
+                    }
+                    let Some(t) = online.iter().find(|e| e.actor_id == *target_id) else {
+                        continue;
+                    };
+                    if let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "体力/魔力点广播")
+                    {
+                        let _ = tx.send(SimToGate::SendFrame {
+                            socket: t.socket,
+                            body: body.clone(),
+                        });
+                    }
+                }
             }
         }
     }
@@ -40379,11 +40429,14 @@ mod tests {
     /// **同一 `base.Run` 末尾**（P8）入队、下一 Run 才出队 ⇒ **2 条**，顺序 = 恢复 → 钳制；
     /// 两条载荷分别取 P1 终值与 P8 终值，**终态 HP = MaxHP-1**。
     ///
-    /// 构造：会话 HP=10/Max=100，Inc 池 20（PerHealth=5 ⇒ P1 后 HP=15）；world 侧已按
-    /// `HP>Max` 记录钳制事件（flag）。P8 在 P7 之后把该字段写成 `Max-1`。
+    /// **可达构造（V2 修正）**：单一 `WAbil` 下 `HP=15 < MaxHP=100` 时 P8 不钳制
+    /// （`HP > MaxHP` 为假），旧夹具「HP=15 且 hp_clamped=true」不可达。钳制的真实来源是
+    /// **同 tick 的 MaxHP 下降**（能力重算/装备移除：HP 保留、MaxHP 变小 ⇒ `HP > MaxHP`）。
+    /// 故恢复帧 flush 之后把会话 `max_hp` 降到 12（= oracle 共享 `WAbil.MaxHP` 在 P1 与 P8
+    /// 之间被重算），P8 判当时 `WAbil` ⇒ `15 > 12` ⇒ 钳到 `Max-1=11`。
     ///
     /// 牙（改坏必红）：恢复被钳制抑制（旧 `superseded_healthspell_ids`）⇒ 只剩 1 条；
-    /// 钳制先于恢复 ⇒ 帧序红；钳制整对覆盖 ⇒ 终态断言红。
+    /// 钳制先于恢复 ⇒ 帧序红；按 `tick_tail` 旧 flag 无条件钳制 ⇒ 终态断言红。
     #[test]
     fn c6_recovery_then_clamp_emit_two_frames_terminal_max_minus_one() {
         let (mut world, mut sessions, online, gates, mut rx, actor) = clamp_fixture(10, 0, 100, 0);
@@ -40395,7 +40448,82 @@ mod tests {
         let mut slots = game_svr::healthspell::HealthSpellSlots::new();
         drain_recovery(&mut sessions, &world, &mut slots);
         flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
-        // P7（无填充命中）+ P8 钳制（flag）⇒ 第二帧。
+        // 同 tick 的 MaxHP 重算（12 < 恢复后的 HP=15）⇒ P8 按当时 WAbil 命中钳制。
+        sessions.get_mut("clamp").unwrap().state.wabil.max_hp = 12;
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[(actor, 11, 0, true, false)],
+        );
+        let frames = drain_healthspell_frames(&mut rx, 918);
+        assert_eq!(frames.len(), 2, "恢复 1 条 + 钳制 1 条");
+        assert_eq!(
+            frames[0],
+            (15, 0, 100),
+            "先恢复：P1 后 HP=15（flush 时 MaxHP 仍 100）"
+        );
+        assert_eq!(frames[1], (11, 0, 12), "后钳制：HP=MaxHP-1=11");
+        assert_eq!(sessions["clamp"].state.wabil.hp, 11, "终态 Max-1");
+    }
+
+    /// **V1（P8 钳制不得并入「本 tick 较早 Run」的快照）**：HP=105/Max=100、`SpellTick=794`，
+    /// 200ms 重放 **4** 次 `Run()`：Run3 命中 MP 填充（pending，载荷 `(105,6)`），Run4 无变更；
+    /// P8 在 Run4 末尾钳制 HP ⇒ **2 条帧**：`[(105,6,100),(99,6,100)]`（Run3 的 pending 在
+    /// Run4 的 P3 出队，载荷是**钳制前**；Run4 的 P8 自入队一条钳制终态）。
+    ///
+    /// 牙（改坏必红）：按 `runs.last()` 一律 pop+replace（旧实现）⇒ 只剩 1 条且载荷全为 99。
+    #[test]
+    fn v1_clamp_after_quiet_run_emits_separate_frame() {
+        let (mut world, mut sessions, online, gates, mut rx, actor) =
+            clamp_fixture(105, 0, 100, 100);
+        {
+            let sg = sessions.get_mut("clamp").unwrap();
+            sg.stamina.spell_tick = 794;
+            // 落后 204ms（< 250ms）⇒ 恰好重放 4 次 Run()（50/100/150/200）。
+            let base = now_ms() - 204;
+            sg.stamina.replay_cursor = base;
+            sg.stamina.auto_recovery_tick = base;
+        }
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[(actor, 99, 6, true, false)],
+        );
+        let frames = drain_healthspell_frames(&mut rx, 918);
+        assert_eq!(
+            frames,
+            vec![(105, 6, 100), (99, 6, 100)],
+            "Run3 填充帧（钳制前载荷）+ Run4 的 P8 钳制帧"
+        );
+        let sg = sessions.get("clamp").unwrap();
+        assert_eq!((sg.state.wabil.hp, sg.state.wabil.mp), (99, 6));
+    }
+
+    /// **V2（P8 判当时的 `WAbil`，不采信 `tick_tail` 的旧 flag）**：同 tick 升级的
+    /// `IncHealthSpell(2000,2000)` 已把 HP 夹到 `MaxHP` ⇒ oracle 的 P8 不再命中
+    /// （`HP > MaxHP` 为假），**不得出帧**、HP 保持 100。
+    ///
+    /// 牙（改坏必红）：按 `verify_health_changes` 的 `hp_clamped=true` 无条件写 `Max-1`
+    /// ⇒ 收到 1 条帧且 HP=99，两条断言都红。
+    #[test]
+    fn v2_stale_clamp_flag_after_levelup_must_not_reclamp() {
+        let (mut world, mut sessions, online, gates, mut rx, actor) = clamp_fixture(100, 0, 100, 0);
+        {
+            let sg = sessions.get_mut("clamp").unwrap();
+            sg.stamina.replay_cursor = now_ms() - 60;
+            sg.stamina.auto_recovery_tick = now_ms() - 60;
+        }
+        // world 的 `tick_tail` 在 P3/P7 之前记录过 `hp_clamped=true`（旧实体值）；P8 必须重判。
         drain_stamina(
             &mut sessions,
             &mut world,
@@ -40406,11 +40534,103 @@ mod tests {
             800,
             &[(actor, 99, 0, true, false)],
         );
-        let frames = drain_healthspell_frames(&mut rx, 918);
-        assert_eq!(frames.len(), 2, "恢复 1 条 + 钳制 1 条");
-        assert_eq!(frames[0], (15, 0, 100), "先恢复：P1 后 HP=15");
-        assert_eq!(frames[1], (99, 0, 100), "后钳制：HP=MaxHP-1=99");
-        assert_eq!(sessions["clamp"].state.wabil.hp, 99, "终态 Max-1");
+        assert_eq!(
+            drain_healthspell_frames(&mut rx, 918),
+            Vec::new(),
+            "HP==MaxHP ⇒ P8 不命中、不得出帧"
+        );
+        let sg = sessions.get("clamp").unwrap();
+        assert_eq!(sg.state.wabil.hp, 100, "HP 不得被旧 flag 压到 Max-1");
+        assert_eq!(world.entities.get(actor).unwrap().hp, 100, "实体投影同步");
+    }
+
+    /// **V3（G-C 走槽模型：`ShowHp` 的 `SendRefMsg` 副本）**：同一 `Run()` 的 HP 支 + MP 支
+    /// ⇒ 两次 `HealthSpellChanged()`：每次 `SendUpdateMsg(53)` + `SendRefMsg(53)`。
+    /// `SendUpdateMsg` 头-only `ceil` 预算留下 1 条、`SendRefMsg` 两次 ⇒ oracle 自见 **3 条**、
+    /// 每个观察者 **2 份**（旧实现 2 条 / 1 份）。
+    ///
+    /// 牙（改坏必红）：按 Run 直接发 1 条自见 + 1 份广播（旧实现）⇒ 3/2/2 断言红。
+    #[test]
+    fn v3_show_hp_send_ref_copies_follow_slot_model() {
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("clamp");
+        let mut ent = mir2_world::Entity::new(0, "clamp".to_string(), 2, 2);
+        ent.race = mir2_world::ACTOR_RACE_PLAY;
+        ent.hp = 10;
+        ent.max_hp = 100;
+        let actor = world.enter_map("clamp", ent, 0).unwrap();
+        let mut observers = Vec::new();
+        for (name, x, y, sock) in [("obs1", 3, 3, 921), ("obs2", 4, 4, 922)] {
+            world.open_session(name);
+            let mut e = mir2_world::Entity::new(0, name.to_string(), x, y);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let id = world.enter_map(name, e, 0).unwrap();
+            observers.push((name.to_string(), id, sock));
+        }
+        let mut sg = test_session_ground(actor);
+        sg.state.wabil.hp = 10;
+        sg.state.wabil.mp = 10;
+        sg.state.wabil.max_hp = 100;
+        sg.state.wabil.max_mp = 100;
+        // 一次 Run() 同时命中 HP 支与 MP 支（`recovery_tick +2` 后到阈值）。
+        sg.stamina.health_tick = 300;
+        sg.stamina.spell_tick = 800;
+        let base = now_ms() - 60;
+        sg.stamina.replay_cursor = base;
+        sg.stamina.auto_recovery_tick = base;
+        sg.show_hp = true;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("clamp".into(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("uc", "clamp", 1, 0, 918, actor));
+        for (name, id, sock) in &observers {
+            online_set(&mut online, entry("uo", name, 2, 0, *sock, *id));
+        }
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[],
+        );
+
+        let mut by_socket: HashMap<i32, Vec<(u16, u16, u16)>> = HashMap::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("12B");
+            assert_eq!(cm.ident, mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
+            by_socket
+                .entry(socket)
+                .or_default()
+                .push((cm.param, cm.tag, cm.series));
+        }
+        assert_eq!(
+            by_socket.get(&918).map(Vec::len),
+            Some(3),
+            "自见：SendUpdateMsg 1 + SendRefMsg 自发 2（同一 Run 两次调用）"
+        );
+        assert_eq!(
+            by_socket.get(&921).map(Vec::len),
+            Some(2),
+            "观察者 obs1 收 2 份 SendRefMsg"
+        );
+        assert_eq!(
+            by_socket.get(&922).map(Vec::len),
+            Some(2),
+            "观察者 obs2 收 2 份 SendRefMsg"
+        );
+        for frames in by_socket.values() {
+            assert!(
+                frames.iter().all(|f| *f == (12, 16, 100)),
+                "载荷 = Run 终态 (HP=10+2, MP=10+6, MaxHP=100)"
+            );
+        }
     }
 
     /// **C7（G-A：恢复 vs ExtraAbil 到期）**：P1 恢复与 P2 到期在同一队列批次，两者的
