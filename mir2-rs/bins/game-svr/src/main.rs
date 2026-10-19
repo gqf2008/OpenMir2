@@ -19944,18 +19944,20 @@ mod tests {
             "存档 Dura 取实体（会话仍是 4000）"
         );
         assert_eq!(hum[SLOT_WEAPON].as_ref().unwrap().index, 207);
-        assert_eq!(
-            hum[SLOT_HELMET].as_ref().unwrap().index,
-            88,
-            "HumItems[Helmet] = UseItems[Necklace]（交换保持）"
-        );
-        let broken = hum[SLOT_NECKLACE].as_ref().expect("破零槽对象仍存在");
+        // d7ead5b2a 起槽位 1:1：头盔破零写回头盔槽，项链留在项链槽。
+        let broken = hum[SLOT_HELMET].as_ref().expect("破零槽对象仍存在");
         assert_eq!(broken.index, 0, "破零：Index 写 0");
         assert_eq!(broken.dura, 0, "破零：Dura 写 0");
         assert_eq!(
             broken.make_index, 9003,
             "破零保留 MakeIndex（oracle 对象语义）"
         );
+        assert_eq!(
+            hum[SLOT_NECKLACE].as_ref().unwrap().index,
+            88,
+            "HumItems[Necklace] = UseItems[Necklace]（1:1）"
+        );
+        assert_eq!(hum[SLOT_NECKLACE].as_ref().unwrap().make_index, 9002);
     }
 
     /// 判据⑥：阴性对照——无装备的玩家目标**零 `Random(8)`**（oracle `:2957` 的无条件
