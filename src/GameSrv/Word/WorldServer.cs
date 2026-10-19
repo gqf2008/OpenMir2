@@ -1160,12 +1160,30 @@ namespace GameSrv.Word
             playObject.QuestUnitOpen = humData.QuestUnitOpen;
             playObject.QuestUnit = humData.QuestUnit;
             playObject.QuestFlag = humData.QuestFlag;
+            // HumItems 只有在"数据库里存在对应行"时才被 DataStorage 赋对象；
+            // CharacterData 的构造函数只分配数组、[OnSerializing] 才补空对象，
+            // 而反序列化不会走 [OnSerializing]。因此空槽/null 数组在这里是常态，
+            // 旧实现直接 humItems[i].ToClientItem() 会在任一空槽 NRE，
+            // 导致 MakeNewHuman 整体失败、客户端收不到 SM_LOGON/SM_NEWMAP。
+            // 与构造函数的意图对齐：13 个槽位保证非 null，Index==0 表示空槽。
             ServerUserItem[] humItems = humanRcd.Data.HumItems;
+            if (humItems == null)
+            {
+                humItems = new ServerUserItem[13];
+            }
+            for (int i = 0; i < humItems.Length; i++)
+            {
+                if (humItems[i] == null)
+                {
+                    humItems[i] = new ServerUserItem();
+                }
+            }
+            // 项链/头盔两行原先交叉取值（Necklace 取 Helmet、Helmet 取 Necklace），一并修正。
             playObject.UseItems[ItemLocation.Dress] = humItems[ItemLocation.Dress].ToClientItem();
             playObject.UseItems[ItemLocation.Weapon] = humItems[ItemLocation.Weapon].ToClientItem();
             playObject.UseItems[ItemLocation.RighThand] = humItems[ItemLocation.RighThand].ToClientItem();
-            playObject.UseItems[ItemLocation.Necklace] = humItems[ItemLocation.Helmet].ToClientItem();
-            playObject.UseItems[ItemLocation.Helmet] = humItems[ItemLocation.Necklace].ToClientItem();
+            playObject.UseItems[ItemLocation.Necklace] = humItems[ItemLocation.Necklace].ToClientItem();
+            playObject.UseItems[ItemLocation.Helmet] = humItems[ItemLocation.Helmet].ToClientItem();
             playObject.UseItems[ItemLocation.ArmRingl] = humItems[ItemLocation.ArmRingl].ToClientItem();
             playObject.UseItems[ItemLocation.ArmRingr] = humItems[ItemLocation.ArmRingr].ToClientItem();
             playObject.UseItems[ItemLocation.Ringl] = humItems[ItemLocation.Ringl].ToClientItem();
