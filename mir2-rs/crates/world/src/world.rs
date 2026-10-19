@@ -176,6 +176,13 @@ pub struct TickRecord {
     pub slave_self_deliveries: Vec<crate::slave::SelfDelayOutcome>,
     /// **P3-B5**：本 tick 的 `ExtraAbil` 过期/到期前 10s 事件（`PlayObject.Message.cs:163-227`）。
     pub extra_abil_expiries: Vec<ExtraAbilExpiry>,
+    /// **PL-1 硬前置**：`BaseObject.Run` 的 HP/MP 超上限钳制段
+    /// （`BaseObject.Base.cs:230-245`，30s `VerifyTick` 门内、`VerifyMapTime` 之后）
+    /// 触发的**玩家** `HealthSpellChanged()`：`(actor_id, hp_after, mp_after)`，保序。
+    ///
+    /// 宿主据此出 `SM_HEALTHSPELLCHANGED(53)`（oracle 只对 `Race == Play` 发帧）。
+    /// 该段不消费 RNG ⇒ 五批 trace 不变。
+    pub verify_health_changes: Vec<(i32, u16, u16)>,
     /// **出站接线片 W2**：本 tick 的 `RM_PUSH` 族（`SM_BACKSTEP(9)`）——`CharPushed` 每推进一格一条，保序。
     ///
     /// 两个来源共用本表（顺序 = 先命令 FIFO、后玩家 `Run` 的重叠推挤段）：
@@ -584,6 +591,37 @@ pub struct DigOutEvent {
     pub closed: bool,
 }
 
+/// **PL-1 硬前置**：P32 复活戒指读取的 **`LastHiter` 快照**。
+///
+/// oracle 的 P32（`PlayObject.Message.cs:747-763`）在 `PlayObject.Run` 尾、`base.Run()` 之前执行；
+/// 而 `LastHiter` 的 30s / 命中者死亡 / 隐身清理在 `base.Run` 内（`BaseObject.Base.cs:119-132`）——
+/// 即 **P32 看到的 `LastHiter` 尚未被本轮清理**。本骨架的 `expire_hitters()` 是「每 tick 统一清」
+/// 的结构等价物、位置在 tick 开头，比 P32 早 ⇒ [`World::tick_head`] 在命令 FIFO 之后、
+/// `expire_hitters()` **之前**为每个玩家留一份快照，供宿主在两段之间驱动的 P32 段读取
+/// （spike §4.3-3 / §5.5-1）。快照只在 `tick_head` 内刷新，`tick_tail` 不读写。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlayerHiterSnapshot {
+    /// 玩家自身 id（`Race == Play`）。
+    pub actor_id: i32,
+    /// 清理前的 `LastHiter`。
+    pub last_hiter: Option<i32>,
+    /// 清理前的 `LastHiterTick`（毫秒，sim 时钟域）。
+    pub last_hiter_tick: i64,
+}
+
+/// **PL-1 判据**：`tick_tail` 内部的段执行序（oracle `base.Run` 的定序）
+///
+/// 只作可观测诊断（每次 [`World::tick_head`] 清空，[`World::tick_tail`] 逐段 push）；
+/// 不参与状态、不抽 RNG、不落库。用于把「Die 在 VerifyMapTime 之前」变成可断言的事实
+/// （`BaseObject.Base.cs:70-73` 早于 `:223-245`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TailPhase {
+    /// `BaseObject.Base.cs:70-73`：玩家 `WAbil.HP == 0 ⇒ Die()`。
+    Die,
+    /// `BaseObject.Base.cs:223-245`：`VerifyMapTime` + HP/MP 超上限钳制。
+    VerifyMapTime,
+}
+
 pub struct World {
     /// 地图表（下标 = `map_id`）；`World::new` 建一张 0 号图。
     pub maps: Vec<MapGrid>,
@@ -857,6 +895,21 @@ pub struct World {
     pub pet_slave_cfg: mir2_data::pet_slave::PetSlaveConfig,
     /// 帧内待处理命令（FIFO）
     pending: VecDeque<Command>,
+    /// **PL-1 判据**：`tick_tail` 的段执行序诊断（[`TailPhase`]）。
+    ///
+    /// 每次 [`World::tick_head`] 清空，[`World::tick_tail`] 按执行序 push。
+    pub tail_phase_log: Vec<TailPhase>,
+    /// **PL-1 硬前置**：本 tick 玩家 `LastHiter` 的清理前快照（[`PlayerHiterSnapshot`]）。
+    ///
+    /// 刷新点 = [`World::tick_head`] 的命令 FIFO 之后、`expire_hitters()` 之前；按实体槽位序。
+    /// P32（宿主段）从这里读，保证「被怪物打死后 30s 内」仍能看到 oracle 会看到的非玩家命中者。
+    pub player_hiter_snapshot: Vec<PlayerHiterSnapshot>,
+    /// **PL-1 硬前置**：`verify_map_time` 的 `BaseObject.Base.cs:230-245` 钳制段触发的
+    /// 玩家 `HealthSpellChanged()`（`(actor_id, hp_after, mp_after)`，保序）。
+    ///
+    /// 累积到 [`World::tick_tail`] 末尾转抄进 [`TickRecord::verify_health_changes`]（宿主出 53）。
+    /// 只记 `Race == Play`（oracle 的 `HealthSpellChanged` 仅对 Play 发帧，`BaseObject.cs:700-703`）。
+    pub(crate) pending_verify_health_changes: Vec<(i32, u16, u16)>,
     /// 判据③：tick 必须始终跑在同一个线程上
     owner_thread: Option<ThreadId>,
     /// S1 tick 骨架：时钟推进 + 线程断言（单线程 `Schedule`）。
@@ -1013,6 +1066,9 @@ impl World {
             msg_order: 0,
             pet_slave_cfg: mir2_data::pet_slave::PetSlaveConfig::default(),
             pending: VecDeque::new(),
+            tail_phase_log: Vec::new(),
+            player_hiter_snapshot: Vec::new(),
+            pending_verify_health_changes: Vec::new(),
             owner_thread: None,
             clock_runner,
             item_number: ItemNumberCounter::default(),
@@ -4064,7 +4120,54 @@ impl World {
     }
 
     /// 推进一个 tick（固定 200ms；不做 sleep —— 调度归调用方）。
+    ///
+    /// = [`World::tick_head`] + [`World::tick_tail`] 的组合（中间宿主段为空）。既有 golden /
+    /// 单测调用点不变；玩家死亡结算已从 tick 开头移到 `tick_tail`（P32 复活门之前不得先置
+    /// `Death`），见 [`World::tick_tail`]。
+    ///
+    /// # 段序（oracle → Rust 段位）
+    ///
+    /// 玩家 `Run` 总序：`src/M2Server/Player/PlayObject.Message.cs:19-766`；末尾无条件
+    /// `base.Run()`：`src/M2Server/Actor/BaseObject.Base.cs:25-316`。
+    ///
+    /// ```text
+    /// [tick_head]
+    ///   命令 FIFO                        PlayObject.Run:356-400（GetMessage/Operate）
+    ///   [PL-1] 玩家 LastHiter 快照       P32 读值早于 base.Run:119-132 的清理
+    ///   expire_hitters                   base.Run:119-132（每 tick 结构等价物）
+    ///   非玩家死亡结算                   base.Run:70-73（Die）—— 玩家留到 tail
+    ///   宝宝自投递                       PlayObject.Run:360-364
+    ///   extra_abil                       PlayObject.Run:158-227
+    ///   地图事件 / 宝宝清表              base.Run:208-217
+    ///   buff / 怪物 AI / NPC / 商人      各自 Run()
+    ///   expire_player_run_state          PlayObject.Run:54-64
+    ///   check_dup_obj                    PlayObject.Run:263-285
+    /// --- 宿主段（bins/game-svr 在两段之间驱动；PL-1 起由 A2 填 P21/P32）---
+    ///   P21 装备需求每 Run 复检          PlayObject.Run:403-441
+    ///   P22 元宝自动增减 / 地图旗标      PlayObject.Run:442-529
+    ///   P24 游戏点（不在 PL-1..4）       PlayObject.Run:548-568
+    ///   P25 地图 DECHP/INCHP             PlayObject.Run:569-594
+    ///   P26 饥饿系统                     PlayObject.Run:596-635
+    ///   P27 经验/攻击倍率 1s 递减        PlayObject.Run:636-657
+    ///   P31 自动经验                     PlayObject.Run:738-745
+    ///   P32 复活戒指                     PlayObject.Run:747-763
+    /// [tick_tail]
+    ///   玩家死亡结算                     base.Run:70-73（在 P32 之后）
+    ///   verify_players_map_time          base.Run:223-245（VerifyMapTime + HP/MP 钳制）
+    ///   AOI 刷新
+    /// ```
     pub fn tick(&mut self) -> TickRecord {
+        let mut record = self.tick_head();
+        self.tick_tail(&mut record);
+        record
+    }
+
+    /// **tick 前半段**：命令 FIFO → 命中者过期 → 非玩家死亡结算 → … → `check_dup_obj`。
+    ///
+    /// 玩家死亡**不在此段**结算（`settle_deaths` 只结算 `Race != Play`）。宿主在两段之间驱动
+    /// P21..P32 后再调 [`World::tick_tail`]，P32 才有机会把 `HP == 0` 的玩家救活。
+    /// 本方法会推进时钟（+200ms）并做单线程断言；[`World::tick_tail`] 只推进状态，不再推进时钟。
+    pub fn tick_head(&mut self) -> TickRecord {
         let current = std::thread::current().id();
         match self.owner_thread {
             None => self.owner_thread = Some(current),
@@ -4118,6 +4221,7 @@ impl World {
             buff_recalcs: Vec::new(),
             buff_health_changes: Vec::new(),
             run_state_expiries: Vec::new(),
+            verify_health_changes: Vec::new(),
         };
 
         // 命令 FIFO
@@ -4220,11 +4324,31 @@ impl World {
             }
         }
 
+        // **PL-1 硬前置（spike §4.3-3 / §5.5-1）**：oracle 的 P32（`PlayObject.Message.cs:747-763`）
+        // 在 `base.Run()` 的 LastHiter 清理（`BaseObject.Base.cs:119-132`）**之前**读 `LastHiter`；
+        // 本骨架的 `expire_hitters()` 在 tick 开头统一清 ⇒ 必须在**清理之前**给每个玩家留快照，
+        // 供宿主段里的 P32 读（读清理前的值，含「命中者 30s 未过期 / 命中者是非玩家」两态）。
+        // 快照点在命令 FIFO 之后（同一 Run 的攻击命令可写 `LastHiter`，与 oracle 消息泵同相位）。
+        self.pending_verify_health_changes.clear();
+        self.tail_phase_log.clear();
+        self.player_hiter_snapshot.clear();
+        for e in self.entities.iter() {
+            if e.race == crate::entity::ACTOR_RACE_PLAY {
+                self.player_hiter_snapshot.push(PlayerHiterSnapshot {
+                    actor_id: e.id,
+                    last_hiter: e.last_hiter,
+                    last_hiter_tick: e.last_hiter_tick,
+                });
+            }
+        }
+
         // 命中者过期清理（照 `BaseObject.Base.cs:119-132` 的结构；墙钟那两项不在本骨架）
         self.expire_hitters();
-        // 死亡结算（C# 在实体下一次 `Run()` 里发现 `HP == 0` 才 `Die()`；
-        // 这里同一 tick 内先跑命令、再统一结算死亡，语义等价且顺序确定）
-        self.settle_deaths(&mut record);
+        // 死亡结算：`tick_head` 只结算**非玩家**（C# 在实体下一次 `Run()` 里发现 `HP == 0` 才
+        // `Die()`）。玩家的 `base.Run` 的 Die 在 P32 之后 ⇒ 留到 [`World::tick_tail`]
+        // （oracle 序：PlayObject.Run 的 P21→…→P32 → base.Run:70-73）。既有 golden 的 death
+        // 行全部是怪物 ⇒ 该拆分不改任何既有 golden（spike §4.3-4）。
+        self.settle_deaths(&mut record, false);
 
         // **M3⑨ 主人死/幽灵自投递**（卡 `openmir2-m3-pet-slave-masterdie-wire`）：oracle
         // `PlayObject.Run()`（`PlayObject.Message.cs:360-364`）在 `base.Run()`（`:765`）之前
@@ -4314,10 +4438,49 @@ impl World {
         // 只有三处门全部通过才取数（`crate::run_gap::dup_push_dir`）；事件进 `record.pushes`。
         record.pushes.extend(self.check_dup_obj());
 
-        // **玩家 `BaseObject.Run` 的 VerifyMapTime 段**（oracle `WorldServer.cs:697` 每 ~200ms
+        // 宿主段（P21 → P22 → [P24] → P25 → P26 → P27 → P31 → P32；oracle 行号见
+        // [`World::tick`] 文档）在 [`World::tick_head`] 与 [`World::tick_tail`] 之间由
+        // `bins/game-svr` 驱动。直接调用 [`World::tick`] 时该段为空。
+        record
+    }
+
+    /// **tick 后半段**（`World::tick()` = `tick_head()` + 宿主段 + `tick_tail()`）。
+    ///
+    /// 段序照 oracle `base.Run()`（`BaseObject.Base.cs:25-316`），且全部在 P21..P32 之后：
+    ///
+    /// 1. **玩家死亡结算**（`:70-73` `if (WAbil.HP == 0) Die();`）—— P32（`PlayObject.Message.cs:747-763`）
+    ///    复活门已在宿主段跑过；本段才置 `Death`（非玩家的死亡在 [`World::tick_head`] 已结算）。
+    /// 2. **`VerifyMapTime` + HP/MP 超上限钳制**（`:223-245`）——oracle 的 `VerifyTick` 30s 门下先
+    ///    `Envir.VerifyMapTime`，再 `HP > MaxHP ⇒ MaxHP-1` / `MP > MaxMP ⇒ MaxMP-1` + `HealthSpellChanged()`。
+    ///    （Rust 此前只建模 `:223-228`，本提交补 `:230-245`；钳制帧进
+    ///    [`TickRecord::verify_health_changes`]。）
+    /// 3. **AOI 刷新**。
+    ///
+    /// 不推进时钟（时钟在 [`World::tick_head`]）。不消费 RNG ⇒ 五批 trace 不变。
+    pub fn tick_tail(&mut self, record: &mut TickRecord) {
+        let current = std::thread::current().id();
+        match self.owner_thread {
+            None => self.owner_thread = Some(current),
+            Some(t) => assert_eq!(
+                t, current,
+                "世界 tick 必须始终在同一线程上串行执行（设计文档 §4.2：禁止并行）"
+            ),
+        }
+
+        // 1. 玩家死亡结算（oracle `base.Run:70-73`）：在 P32 复活门之后。
+        self.tail_phase_log.push(TailPhase::Die);
+        self.settle_deaths(record, true);
+
+        // 2. **玩家 `BaseObject.Run` 的 VerifyMapTime 段**（oracle `WorldServer.cs:697` 每 ~200ms
         // 驱动一次 `playObject.Run()`，末尾无条件 `base.Run()`）——必须在 AOI 扫描之前刷新
-        // 静止玩家的格子时间（`BaseObject.Base.cs:223-228`）。30s 门在 `verify_map_time` 内。
+        // 静止玩家的格子时间（`BaseObject.Base.cs:223-228`）。30s 门与 `:230-245` 钳制在
+        // `verify_map_time` 内。
+        self.tail_phase_log.push(TailPhase::VerifyMapTime);
         self.verify_players_map_time();
+        // 钳制段触发的玩家 `HealthSpellChanged()`（`BaseObject.cs:700-703` 只对 Play 发帧）。
+        record
+            .verify_health_changes
+            .append(&mut self.pending_verify_health_changes);
 
         // AOI 刷新：按地图、地图内按槽位顺序（顺序来自 ECS 内核的**显式槽位索引**，
         // `EcsStore::iter` 不迭代 `Query` 求顺序）；AOI 的扫描/过滤语义仍归 S2。
@@ -4414,7 +4577,6 @@ impl World {
         self.by_map_scratch = by_map;
 
         self.last_tick = record.clone();
-        record
     }
 
     /// `Envirnoment.VerifyMapTime`（`Envirnoment.cs:858-897`）的等价物 + `BaseObject.Run` 的
@@ -4448,47 +4610,83 @@ impl World {
         if let Some(e) = self.entities.get_mut(actor_id) {
             e.verify_tick = now;
         }
-        let Some(map) = self.maps.get_mut(map_id) else {
-            return true;
-        };
-        let mut bo_verify = false;
-        {
-            let (cell, cell_success) = map.get_cell_info_mut(x, y);
-            if cell_success && cell.is_available() {
-                let mut i = 0usize;
-                while i < cell.count() {
-                    let obj = cell.obj_list[i];
-                    if now - obj.add_time >= CELL_OBJECT_EXPIRE_MS {
-                        // `boVerify = true; cellInfo.Remove(i);`
-                        bo_verify = true;
-                        cell.remove_at(i);
-                        if cell.count() > 0 {
-                            // C# `for` 的 `continue` 仍执行 `i++` ⇒ 跳过前移后的下一项。
-                            i += 1;
-                            continue;
+        if let Some(map) = self.maps.get_mut(map_id) {
+            let mut bo_verify = false;
+            {
+                let (cell, cell_success) = map.get_cell_info_mut(x, y);
+                if cell_success && cell.is_available() {
+                    let mut i = 0usize;
+                    while i < cell.count() {
+                        let obj = cell.obj_list[i];
+                        if now - obj.add_time >= CELL_OBJECT_EXPIRE_MS {
+                            // `boVerify = true; cellInfo.Remove(i);`
+                            bo_verify = true;
+                            cell.remove_at(i);
+                            if cell.count() > 0 {
+                                // C# `for` 的 `continue` 仍执行 `i++` ⇒ 跳过前移后的下一项。
+                                i += 1;
+                                continue;
+                            }
+                            cell.clear();
+                            break;
                         }
-                        cell.clear();
-                        break;
+                        if obj.actor_object && obj.cell_obj_id == actor_id {
+                            // `cellInfo.Update(i, ref cellObject)` ⇒ `AddTime = GetTickCount()`。
+                            cell.obj_list[i].add_time = now;
+                            bo_verify = true;
+                            break;
+                        }
+                        i += 1;
                     }
-                    if obj.actor_object && obj.cell_obj_id == actor_id {
-                        // `cellInfo.Update(i, ref cellObject)` ⇒ `AddTime = GetTickCount()`。
-                        cell.obj_list[i].add_time = now;
-                        bo_verify = true;
-                        break;
+                }
+            }
+            if !bo_verify {
+                // `AddMapObject`（`Envirnoment.cs:252-296`）：成功时置 `AddToMaped`/`AddObject`。
+                if map.add_map_object(x, y, cell_type, actor_id, now) {
+                    if let Some(e) = self.entities.get_mut(actor_id) {
+                        e.add_to_mapped = true;
                     }
-                    i += 1;
                 }
             }
         }
-        if !bo_verify {
-            // `AddMapObject`（`Envirnoment.cs:252-296`）：成功时置 `AddToMaped`/`AddObject`。
-            if map.add_map_object(x, y, cell_type, actor_id, now) {
-                if let Some(e) = self.entities.get_mut(actor_id) {
-                    e.add_to_mapped = true;
-                }
-            }
-        }
+        // **PL-1**：`base.Run` 的 `:230-245` 钳制段——在**同一个 30s `VerifyTick` 门内**、
+        // `VerifyMapTime` 之后（oracle 行序）。此前 Rust 只建模 `:223-228`（缺口登记于 spike §1.1）。
+        self.clamp_overflow_abilitys(actor_id);
         true
+    }
+
+    /// `BaseObject.Run` 的 HP/MP 超上限钳制（`src/M2Server/Actor/BaseObject.Base.cs:230-245`）：
+    ///
+    /// ```csharp
+    /// bool needRecalc = false;
+    /// if (WAbil.HP > WAbil.MaxHP) { needRecalc = true; WAbil.HP = (ushort)(WAbil.MaxHP - 1); }
+    /// if (WAbil.MP > WAbil.MaxMP) { needRecalc = true; WAbil.MP = (ushort)(WAbil.MaxMP - 1); }
+    /// if (needRecalc) HealthSpellChanged();
+    /// ```
+    ///
+    /// 照抄点：① 两分支独立判、改的是 `MaxHP-1` / `MaxMP-1`（不是 `MaxHP`）；② `ushort` 减法在
+    /// C# 先提升为 int 再截断 ⇒ 用 `wrapping_sub(1)`（`MaxHP == 0` 时得到 65535，不 panic）；
+    /// ③ `HealthSpellChanged()` 只对 `Race == Play` 发帧（`BaseObject.cs:700-703`），非玩家只改值。
+    ///
+    /// 调用点：仅 [`World::verify_map_time`]（30s 门内、`VerifyMapTime` 之后）。不消费 RNG。
+    fn clamp_overflow_abilitys(&mut self, actor_id: i32) {
+        let Some(e) = self.entities.get_mut(actor_id) else {
+            return;
+        };
+        let mut changed = false;
+        if e.hp > e.max_hp {
+            e.hp = e.max_hp.wrapping_sub(1);
+            changed = true;
+        }
+        if e.mp > e.max_mp {
+            e.mp = e.max_mp.wrapping_sub(1);
+            changed = true;
+        }
+        let is_play = e.race == crate::entity::ACTOR_RACE_PLAY;
+        if changed && is_play {
+            let (id, hp, mp) = (e.id, e.hp, e.mp);
+            self.pending_verify_health_changes.push((id, hp, mp));
+        }
     }
 
     /// `PlayObject.Run` 的烈火/双龙到期段（`PlayObject.Message.cs:54-64`），按玩家槽位顺序。
@@ -5438,11 +5636,18 @@ impl World {
         my_gain
     }
 
-    fn settle_deaths(&mut self, record: &mut TickRecord) {
+    fn settle_deaths(&mut self, record: &mut TickRecord, only_players: bool) {
+        // **PL-1 硬前置（spike §4.3）**：玩家死亡必须晚于 P32 复活门（oracle 的 Die 在
+        // `base.Run:70-73`，P32 在 `PlayObject.Run:747-763`）⇒ 本函数按 `only_players` 分两段调用：
+        // `tick_head` 结算非玩家、`tick_tail` 结算玩家。既有 golden 的死亡行全是怪物 ⇒ 不变。
         let dead: Vec<i32> = self
             .entities
             .iter()
-            .filter(|e| e.hp == 0 && !e.death_settled)
+            .filter(|e| {
+                e.hp == 0
+                    && !e.death_settled
+                    && (e.race == crate::entity::ACTOR_RACE_PLAY) == only_players
+            })
             .map(|e| e.id)
             .collect();
         for id in dead {
@@ -9263,5 +9468,154 @@ mod tests {
         let e = Entity::new(0, "p", 10, 10);
         let id = w.add_entity(e);
         assert_eq!(w.entities.get(id).unwrap().verify_tick, 5_000);
+    }
+
+    /// **PL-1 判据①（tick 切分）**：玩家 `HP == 0 && !death_settled` 时，死亡结算发生在
+    /// `tick_tail`（= P32 槽位之后），`tick_head` 只结算非玩家。
+    ///
+    /// 牙：① 把 `tick_head` 的 `settle_deaths(&mut record, false)` 的过滤去掉（结算全部）⇒
+    /// 第一段 `rec.deaths.is_empty()` 红；② 删掉 `tick_tail` 的 `settle_deaths(record, true)`
+    /// ⇒ `death` / `death_tick` 断言红。
+    #[test]
+    fn pl1_player_death_settles_in_tick_tail() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 10, 10, 10));
+        let _ = w.tick(); // Enter 落图（clock=200）
+        w.entities.get_mut(p).unwrap().hp = 0;
+        let mut rec = w.tick_head();
+        assert!(
+            rec.deaths.is_empty(),
+            "玩家死亡不得在 tick_head 结算（P32 复活门之前）: {rec:?}"
+        );
+        assert!(!w.entities.get(p).unwrap().death);
+        assert!(!w.entities.get(p).unwrap().death_settled);
+        w.tick_tail(&mut rec);
+        assert_eq!(rec.deaths.len(), 1, "tail 结算恰一次: {rec:?}");
+        assert_eq!(rec.deaths[0].0, p);
+        let e = w.entities.get(p).unwrap();
+        assert!(e.death && e.death_settled);
+        assert_eq!(e.death_tick, w.clock_ms, "DeathTick = 本 tick 时钟");
+        // 再一个完整 tick 不重复结算。
+        let rec2 = w.tick();
+        assert!(rec2.deaths.is_empty(), "死亡只结算一次: {rec2:?}");
+    }
+
+    /// **PL-1 判据②（怪物回归）**：非玩家死亡仍在 `tick_head` 结算（oracle 的怪物 `Run` 与
+    /// 玩家段无关），`tick_tail` 不重复结算。
+    ///
+    /// 牙：把 `settle_deaths` 的 `only_players` 过滤写成恒 `true`（head 只结算玩家）⇒
+    /// 第一段 `rec.deaths.len() == 1` 红。
+    #[test]
+    fn pl1_monster_death_still_settles_in_tick_head() {
+        let mut w = World::new(32, 32);
+        let mut m = Entity::new(0, "mon", 10, 10);
+        m.race = ACTOR_RACE_MONSTER;
+        m.hp = 0;
+        let id = w.add_entity(m);
+        let mut rec = w.tick_head();
+        assert_eq!(rec.deaths.len(), 1, "怪物死亡在 head 结算: {rec:?}");
+        assert_eq!(rec.deaths[0].0, id);
+        assert!(w.entities.get(id).unwrap().death);
+        w.tick_tail(&mut rec);
+        assert_eq!(rec.deaths.len(), 1, "tail 不重复结算: {rec:?}");
+    }
+
+    /// **PL-1 判据③（tail 段序）**：oracle `base.Run` 的 `Die()`（`:70-73`）在
+    /// `VerifyMapTime` + 钳制（`:223-245`）**之前**。
+    ///
+    /// 牙：把 `tick_tail` 里 `settle_deaths` 与 `verify_players_map_time` 的调用对调 ⇒
+    /// `tail_phase_log` 断言红。
+    #[test]
+    fn pl1_tail_order_die_before_verify_map_time() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 10, 10, 10));
+        let _ = w.tick();
+        w.entities.get_mut(p).unwrap().hp = 0;
+        let mut rec = w.tick_head();
+        assert!(w.tail_phase_log.is_empty(), "head 不产生 tail 段序");
+        w.tick_tail(&mut rec);
+        assert_eq!(
+            w.tail_phase_log,
+            vec![TailPhase::Die, TailPhase::VerifyMapTime],
+            "oracle base.Run: Die(:70-73) 早于 VerifyMapTime(:223-245)"
+        );
+    }
+
+    /// **PL-1 判据④（LastHiter 快照）**：P32 必须看到 `expire_hitters()` **清理前**的
+    /// `LastHiter`（oracle 的清理在 `base.Run:119-132`，晚于 P32 `PlayObject.Message.cs:747-763`）。
+    ///
+    /// 牙：把快照采集移到 `expire_hitters()` 之后 ⇒ `snap.last_hiter` 变 `None` ⇒ 红。
+    #[test]
+    fn pl1_player_hiter_snapshot_precedes_expire_hitters() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 10, 10, 10));
+        let mut m = Entity::new(0, "mon", 11, 10);
+        m.race = ACTOR_RACE_MONSTER;
+        let mid = w.add_entity(m);
+        let _ = w.tick();
+        let stale_tick = w.clock_ms - 30_001; // 严格大于 30s ⇒ expire_hitters 会清
+        {
+            let e = w.entities.get_mut(p).unwrap();
+            e.last_hiter = Some(mid);
+            e.last_hiter_tick = stale_tick;
+        }
+        let _ = w.tick_head();
+        assert_eq!(
+            w.entities.get(p).unwrap().last_hiter,
+            None,
+            "expire_hitters 在 head 清掉 30s 过期的 LastHiter"
+        );
+        let snap = w
+            .player_hiter_snapshot
+            .iter()
+            .find(|s| s.actor_id == p)
+            .expect("玩家快照存在");
+        assert_eq!(snap.last_hiter, Some(mid), "快照保留清理前的值（P32 口径）");
+        assert_eq!(snap.last_hiter_tick, stale_tick);
+    }
+
+    /// **PL-1 判据⑤（`:230-245` 钳制段）**：`VerifyTick` 30s 门内、`VerifyMapTime` 之后执行；
+    /// `HP > MaxHP ⇒ HP = MaxHP-1`、`MP > MaxMP ⇒ MP = MaxMP-1`，且 C# 的 `(ushort)(Max-1)`
+    /// 在 `Max == 0` 时回绕到 65535（照抄，不修）；玩家出 `HealthSpellChanged` 记录。
+    ///
+    /// 牙：删掉 `clamp_overflow_abilitys` 调用 ⇒ HP/MP 不变、`verify_health_changes` 空 ⇒ 红。
+    #[test]
+    fn pl1_verify_map_time_clamps_overflow_hp_mp() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 10, 10, 10));
+        let mut q = player(2, "wrap", 12, 12, 10);
+        q.max_hp = 0; // 回绕向量：HP 1 > MaxHP 0 ⇒ (ushort)(0-1) = 65535
+        q.hp = 1;
+        let q = w.add_entity(q);
+        let _ = w.tick();
+        {
+            let e = w.entities.get_mut(p).unwrap();
+            e.hp = 250;
+            e.max_hp = 200;
+            e.mp = 300;
+            e.max_mp = 200;
+        }
+        // 未过 30s 门 ⇒ 钳制不执行（oracle 钳制在 VerifyTick 门内）。
+        w.clock_ms += 100;
+        let mut rec = TickRecord::default();
+        w.tick_tail(&mut rec);
+        assert_eq!(w.entities.get(p).unwrap().hp, 250, "30s 门内不钳制");
+        assert!(rec.verify_health_changes.is_empty());
+        // 过门 ⇒ MaxHP-1 / MaxMP-1 + 玩家 HealthSpellChanged 记录。
+        w.clock_ms += 30_000;
+        let mut rec = TickRecord::default();
+        w.tick_tail(&mut rec);
+        let e = w.entities.get(p).unwrap();
+        assert_eq!((e.hp, e.mp), (199, 199), "HP=MaxHP-1 / MP=MaxMP-1");
+        assert_eq!(
+            rec.verify_health_changes,
+            vec![(p, 199, 199), (q, u16::MAX, 0)],
+            "两个玩家各一条 HealthSpellChanged（槽位序）"
+        );
+        assert_eq!(
+            w.entities.get(q).unwrap().hp,
+            u16::MAX,
+            "ushort 回绕：(ushort)(0-1) = 65535（照抄 oracle 缺陷）"
+        );
     }
 }
