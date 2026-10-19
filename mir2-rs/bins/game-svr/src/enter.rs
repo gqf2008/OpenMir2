@@ -1627,13 +1627,13 @@ mod tests {
             Some(out.sub.to_frame_bytes()),
             "752 = SubAbility 的 7 个单字节通道"
         );
-        // 约简输入（`658` 直发；队列里仍有 `Logon + 3×SysMsg + 752 + 52`，621/211/811/46 缺席）：
-        // 四叉堆的 tie-break 仍给出 `52` 先。与真机全槽序一致（模型 C′，四个 C# 会话，
-        // `docs/window-shrink-run-20261019.md` §6 F1；全槽序判据在 `smframe`）。
+        // 约简输入（`658` 直发；队列里仍有 `RM_TURN + Logon + 2×657 + 3×SysMsg + 六条 + 42 + 第四条 SysMsg`；
+        // 621/211/811/46 的帧输入缺席，但槽位全部参与堆布局）：模型 D 的四叉堆仍给出 `52` 先。
+        // 全槽序判据在 `smframe`（`login_scenario_*` 三条用例逐项对真机 ident 序）。
         assert_eq!(
             idents(&base.frames()),
             vec![658, 52, 752],
-            "约简输入的堆序：52 先于 752（与模型 C′ 一致）；全槽序见 smframe 顺序判据"
+            "约简输入的堆序：52 先于 752（与模型 D 一致）；全槽序见 smframe 顺序判据"
         );
 
         // `MIR2_CLIENT_ABILITY_LAYOUT`：冻结客户端 58B 布局（`HIGHHP=True`）——同一 `WAbil`、

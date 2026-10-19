@@ -1255,20 +1255,42 @@ pub struct EnterWorldInputs {
     pub changelight: Option<(u8, i32)>,
 }
 
-/// 登录消息泵里的排队条目（`PlayObject.UserLogon` 的全部 `MsgQueue.Enqueue` 点）。
+/// 登录消息泵里的排队条目（`BaseObject.Initialize` + `PlayObject.UserLogon` 的全部
+/// `MsgQueue.Enqueue` 点）。
 ///
-/// 变体的**声明/入队序 = oracle 调用序**（不是出队序）：`RM_LOGON`（`PlayObject.cs:1176`）→
-/// 三条 `SysMsg`（`:1320-1383`）→ 六条 `SendPriorityMsg`（`:1385-1390`）。
+/// 变体的**声明/入队序 = oracle 调用序**（不是出队序）：
+///
+/// 1. `RM_TURN(10001)` ← `Initialize→AddToMap→SendRefMsg(RM_TURN)`
+///    （`BaseObject.cs:1370-1377`）。`SendRefMsg` 的格子扫描把**自己**也算作
+///    `Race==Play` 的目标（`BaseObject.Message.cs:427-433`）⇒ 自己也被入队；帧在
+///    `PlayObject.Message.cs:1528` 被 `processMsg.ActorId != ActorId` 门抑制 ⇒ **只占堆位**。
+/// 2. `RM_LOGON(10050)`（`PlayObject.cs:1176`）→ High=0。
+/// 3. `RecalcAbilitys()` 的两条 `RM_CHARSTATUSCHANGED(10139)`：`StatusChanged()`
+///    （`SendRefMsg`，`PlayObject.cs:2875`）与 `SendUpdateMsg`（`:2876`）各一条，优先级
+///    `(byte)10139 = 155`。`SendUpdateMsg` 的去重扫不到（队首是 LOGON）⇒ 两条都在。
+/// 4. 三条 `SysMsg`（攻击模式 / CTRL-H 帮助 / `TestServer` 欢迎语，`:1320-1383`）⇒ 252。
+/// 5. 六条 `SendPriorityMsg`（`:1385-1390`），**源码序**：
+///    `52(High)`, `752(High)`, `811(Normal)`, `46(Normal)`, `621(High)`, `211(High)`。
+/// 6. `RefShowName()→SendRefMsg(RM_USERNAME)`（`:1415` 附近；优先级 `(byte)8101 = 165`）
+///    ⇒ 只占堆位（`RM_LOGON` 里 `ClientQueryUserName` 的直发 42 已由 `username` 输入产出）。
+/// 7. `PayMent==3`（`TestServer || ServiceMode`）的第四条 `SysMsg`（`:1419`）⇒ 252。
+///
 /// `RM_CHANGELIGHT` 不在这里，它在 `RM_LOGON` 被**出队处理**时才入队
 /// （`PlayObject.Message.cs:1683`，见 [`EnterWorldInputs::frames`]）。
 #[derive(Debug, Clone, Copy)]
 enum LoginQueued {
+    /// `RM_TURN(10001)`：`Initialize→AddToMap→SendRefMsg`，优先级 `(byte)10001 = 17`；
+    /// 自身 TURN 被 `ActorId != ActorId` 门抑制 ⇒ 只占堆位。
+    Turn,
     /// `RM_LOGON`：`SendPriorityMsg(..., MessagePriority.High)` ⇒ 优先级 0。
     Logon,
+    /// `RM_CHARSTATUSCHANGED(10139)`：`StatusChanged()` 与 `SendUpdateMsg` 各一条，优先级 155；
+    /// 两条都会产 `SM_CHARSTATUSCHANGED(657)`，本输入集不建模 657 的尾 ⇒ 只占堆位。
+    CharStatusChanged,
     /// 登录 `SysMsg(..., MsgColor, MsgType.Hint)` ⇒ `BaseObject.SysMsg` 走 `SendMsg(RM_SYSMESSAGE)`
-    /// ⇒ 优先级 `(byte)RM_SYSMESSAGE = 252`。三条：攻击模式文案 / `StartChangeAttackModeHelp` /
-    /// `StartNoticeMsg`（`PlayObject.cs:1342-1383`）。正文/颜色依赖 `MessageSettings` 与
-    /// `Config.TestServer`，本输入集未建模 ⇒ 只占堆位、不产帧（登记 `openmir2-login-frame-order`）。
+    /// ⇒ 优先级 `(byte)RM_SYSMESSAGE = 252`。四条：攻击模式文案 / `StartChangeAttackModeHelp` /
+    /// `StartNoticeMsg`（三条，`TestServer`）/ `NowIsFreePlayMode`（`PayMent==3`，第六条之后）。
+    /// 正文/颜色未在本输入集建模 ⇒ 只占堆位、不产帧（登记 `openmir2-login-frame-order`）。
     SysMsg,
     /// `RM_ABILITY(52)`：`SendPriorityMsg(..., High)` ⇒ 0。
     Ability,
@@ -1282,6 +1304,8 @@ enum LoginQueued {
     SendUseItems,
     /// `RM_SENDMYMAGIC(211)`：`SendPriorityMsg(..., High)` ⇒ 0。
     SendMyMagic,
+    /// `RM_USERNAME(8101)`：`RefShowName()→SendRefMsg`，优先级 165；只占堆位。
+    Username,
     /// `RM_CHANGELIGHT(654)`：`SendMsg` ⇒ 优先级 `(byte)RM_CHANGELIGHT = 153`。
     ChangeLight,
 }
@@ -1290,34 +1314,43 @@ enum LoginQueued {
 const PRIORITY_HIGH: u8 = 0;
 /// `MessagePriority.Normal`（`src/OpenMir2/Enums/MessagePriority.cs:12`）= 1。
 const PRIORITY_NORMAL: u8 = 1;
+/// `(byte)RM_TURN` = 17（`SendRefMsg`→`SendMsg` 的入队优先级）。
+const PRIORITY_RM_TURN: u8 = (messages::RM_TURN & 0xFF) as u8;
+/// `(byte)RM_CHARSTATUSCHANGED` = 155。
+const PRIORITY_RM_CHARSTATUSCHANGED: u8 = (messages::RM_CHARSTATUSCHANGED & 0xFF) as u8;
+/// `(byte)RM_USERNAME` = 165。
+const PRIORITY_RM_USERNAME: u8 = (messages::RM_USERNAME & 0xFF) as u8;
 
 impl EnterWorldInputs {
     /// 按 oracle 的登录消息队列（.NET 8 `PriorityQueue<SendMessage, byte>`，**四叉最小堆**）
-    /// 模拟完整入队/出队过程后产出帧序（模型 C′）。
+    /// 模拟完整入队/出队过程后产出帧序（**模型 D**，2026-10-19 三次真机抓包裁定）。
     ///
-    /// # 入队（oracle 调用序）
+    /// # 入队（oracle 调用序，见 [`LoginQueued`] 的逐条出处）
     ///
-    /// `RM_LOGON(High=0)` → 三条 `SysMsg((byte)RM_SYSMESSAGE=252)` → 六条
-    /// `52(High)`, `752(High)`, `811(Normal)`, `46(Normal)`, `621(High)`, `211(High)`
-    /// （`PlayObject.cs:1176` / `:1320-1383` / `:1385-1390`）。
+    /// `RM_TURN(17)`（`Initialize→AddToMap→SendRefMsg`，自己也在扫描目标里）→
+    /// `RM_LOGON(0)` → `RM_CHARSTATUSCHANGED(155)`×2（`StatusChanged` + `SendUpdateMsg`）→
+    /// 三条 `SysMsg(252)` → 六条 `52(0),752(0),811(1),46(1),621(0),211(0)`（**源码序**）→
+    /// `RM_USERNAME(165)`（`RefShowName`）→ 第四条 `SysMsg(252)`（`PayMent==3`）。
     /// `RM_LOGON` 出队处理时再入 `RM_CHANGELIGHT(654)`（`Message.cs:1682`，优先级
-    /// `(byte)RM_CHANGELIGHT = (byte)10137 = 153`）。
+    /// `(byte)RM_CHANGELIGHT = 153`）。
     ///
-    /// # 出队（**模型 C′**，2026-10-19 缩窗真机裁定）
+    /// # 出队（**模型 D**，全部来自源码 + net8.0.26 实跑 BCL）
     ///
-    /// 观测事实：C# 本机**四个独立会话**入图前缀恒为
-    /// `658,51,50,41,213,11029,42,766,54,5008,1106,**52,752**,811,46`
-    /// （`docs/window-shrink-run-20261019.md` §6 F1）。按本模块的四叉堆复刻，
-    /// 「先入 `752` 再入 `52`」恰好给出该序（`52` 先出、`752` 次之、`811/46` 不变）；
-    /// 反之（旧模型 C：先入 `52` 再入 `752`）给出 `752,52`，与真机相反。
-    /// ⇒ **oracle 的实际入队序是 `752` 先、`52` 后**（旧模型把两者写反；真机四个会话
-    /// 与 2026-10-10 capture 一致地否定旧模型）。
+    /// 三次 C# 抓包（同一 oracle/角色 `aaa`，`E:/tmp/window/cliente2e/csharp/`）：
+    /// - 无装备无技能（`s2c`/`s2c-w03`/`s2c-w04`）：`…,1106,52,752,811,46,654,657,657,42,100×4`
+    /// - 有武器无有效技能（`s2c-621b`）：`…,1106,52,752,621,811,46,654,…`
+    /// - 有武器 + 有效技能（`s2c-621c`）：`…,1106,52,752,621,211,811,46,654,657,657,42,100×4`
     ///
-    /// 六条 + 654 的可观测相对序 = `52, 752, 811, 46, 654`（`621/211` 无装备/无技能时不出帧，
-    /// 其槽位仍参与堆布局 ⇒ 本层的入队/出队一律照常）。三条 `SysMsg`（252）在 654 之后出队，不产帧。
+    /// 本函数按上面的**完整入队内容**跑四叉堆，出队序恰为
+    /// `LOGON,52,752,621,211,811,46,TURN(无帧),654,657×2,42,100×4`，三种输入逐项命中。
+    /// 关键在**队列内容**而不是改入队序：旧模型 C/C′ 漏掉了 `RM_TURN`（它在 `RM_LOGON`
+    /// **之前**入队，改变了整棵树）与两条 `RM_CHARSTATUSCHANGED`、`RM_USERNAME`、第四条
+    /// `SysMsg`；其中队尾条目决定 `RemoveRootNode` 回填根的元素，能把 `811/46` 的相对序
+    /// 翻过来（这正是旧模型在「621/211 出帧」时预测错的原因）。
     ///
-    /// ⚠ **未验证面**：装备/技能齐备时 `621/211` 会出帧，此模型预测 `52,621,211,752,811,46`
-    /// ——真机尚无该样本（卡 `openmir2-login-frame-order-52-752` 的窗口余项）。
+    /// ⚠ **前提**：`Config.TestServer=TRUE`（⇒ `PayMent=3`）给出 3+1 条 `SysMsg`。
+    /// 条数变化会重排堆；非 `TestServer` 的部署尚未取样本（R 级窗口余项）。
+    /// 带发光装备/`IsSpirit` 会额外插入 `RM_CHANGELIGHT(153)`/`RM_SPIRITSUITE(255)` 槽位。
     ///
     /// # 空槽仍占位
     ///
@@ -1337,21 +1370,40 @@ impl EnterWorldInputs {
         // 只决定是否追加尾，空时走 `else SendSocket(ClientMsg)`）。故这里**不**用 `if let`。
         out.push(sm_sendnotice(&self.notice));
 
-        // ---- 入队：按 oracle 调用序把 9 条消息压进四叉最小堆 ----
+        // ---- 入队：按 oracle 调用序把 14 条消息压进四叉最小堆 ----
+        // 顺序 = 源码执行序（见 `LoginQueued` 的逐条行号）。**不要**按「可观测序」重排：
+        // 真机实拍的三段序完全由这个内容 + .NET 8 四叉堆决定。
         let mut queue: NetPriorityQueue<LoginQueued> = NetPriorityQueue::new();
+        // ① Initialize→AddToMap→SendRefMsg(RM_TURN)：自己也在扫描目标里（帧被自身门抑制）。
+        queue.enqueue(LoginQueued::Turn, PRIORITY_RM_TURN);
+        // ② RM_LOGON（High）。
         queue.enqueue(LoginQueued::Logon, PRIORITY_HIGH);
-        // 三条 SysMsg（`PlayObject.cs:1342-1383`）：`SendMsg` 以 `(byte)wIdent` 为优先级。
+        // ③ RecalcAbilitys：StatusChanged() 的 SendRefMsg 与 SendUpdateMsg 各一条 657。
+        queue.enqueue(
+            LoginQueued::CharStatusChanged,
+            PRIORITY_RM_CHARSTATUSCHANGED,
+        );
+        queue.enqueue(
+            LoginQueued::CharStatusChanged,
+            PRIORITY_RM_CHARSTATUSCHANGED,
+        );
+        // ④ 三条 SysMsg（攻击模式 / CTRL-H 帮助 / TestServer 欢迎语，`PlayObject.cs:1342-1383`）。
         for _ in 0..3 {
             queue.enqueue(LoginQueued::SysMsg, (messages::RM_SYSMESSAGE & 0xFF) as u8);
         }
-        // **模型 C′（真机裁定）**：入队序是 `752` 先、`52` 后（见 `frames` 头注）；
-        // 四叉堆同优先级不稳定 ⇒ 反过来入队会得到 `752,52`，与 oracle 实拍相反。
-        queue.enqueue(LoginQueued::SubAbility, PRIORITY_HIGH); // 752
+        // ⑤ 六条 SendPriorityMsg（`PlayObject.cs:1385-1390`），**源码序**：
+        //    52,752,811,46,621,211。堆在同一内容下自然给出真机序 52,752,621,211,811,46。
         queue.enqueue(LoginQueued::Ability, PRIORITY_HIGH); // 52
+        queue.enqueue(LoginQueued::SubAbility, PRIORITY_HIGH); // 752
         queue.enqueue(LoginQueued::AdjustBonus, PRIORITY_NORMAL); // 811
         queue.enqueue(LoginQueued::DayChanging, PRIORITY_NORMAL); // 46
         queue.enqueue(LoginQueued::SendUseItems, PRIORITY_HIGH); // 621
         queue.enqueue(LoginQueued::SendMyMagic, PRIORITY_HIGH); // 211
+
+        // ⑥ RefShowName()→SendRefMsg(RM_USERNAME)：自己也在可见人类列表里（只占堆位）。
+        queue.enqueue(LoginQueued::Username, PRIORITY_RM_USERNAME);
+        // ⑦ PayMent==3（TestServer/ServiceMode）的第四条 SysMsg（只占堆位）。
+        queue.enqueue(LoginQueued::SysMsg, (messages::RM_SYSMESSAGE & 0xFF) as u8);
 
         // ---- 出队：逐条按堆序处理 ----
         while let Some(item) = queue.dequeue() {
@@ -1475,8 +1527,15 @@ impl EnterWorldInputs {
                         ));
                     }
                 }
-                // 三条 SysMsg 只占堆位：正文/颜色未在本输入集建模（登记 `openmir2-login-frame-order`）。
-                LoginQueued::SysMsg => {}
+                // 以下四条只占堆位：
+                // - 自身 RM_TURN 被 `ActorId != ActorId` 门抑制（`PlayObject.Message.cs:1528`）；
+                // - 两条 RM_CHARSTATUSCHANGED 会产 657，但其字节（CharStatus/HitSpeed）未在本输入集建模；
+                // - RM_USERNAME 的 42 与 `RM_LOGON` 里直发那条同字节，已由 `username` 输入产出；
+                // - SysMsg 正文/颜色未建模（登记 `openmir2-login-frame-order`）。
+                LoginQueued::Turn
+                | LoginQueued::CharStatusChanged
+                | LoginQueued::Username
+                | LoginQueued::SysMsg => {}
             }
         }
         out
@@ -2250,28 +2309,28 @@ mod tests {
         }
     }
 
-    /// 顺序判据②（**模型 C′**）：登录消息按 oracle 四叉堆出队；每条帧的**字节**仍逐字节等于金标准。
+    /// 顺序判据②（**模型 D**）：登录消息按 oracle 四叉堆出队；每条帧的**字节**仍逐字节等于金标准。
     ///
-    /// 绝对序由 **2026-10-19 缩窗真机**裁定（`docs/window-shrink-run-20261019.md` §6 F1）：
-    /// C# 本机四个独立会话入图前缀恒为 `…,1106,52,752,811,46`；旧模型 C（`752,52`，源自部署
-    /// DLL 的 IL + net8.0 穷举）被真机否定，已按实拍改回 `52` 先。**capture 里出现的每一条帧
-    /// 字节不变**（按 ident 逐条比对金标准原始线缆）。
+    /// 绝对序由 **2026-10-19 三次真机抓包**裁定（`docs/window-shrink-run-20261019.md` §6 F1 +
+    /// `s2c-621b`/`s2c-621c`）：无装备无技能会话的前缀恒为 `…,1106,52,752,811,46`；
+    /// 旧模型 C/C′ 漏掉了 `RM_TURN` 等队列条目，已按源码全量内容重建（见 `frames` 头注）。
+    /// **capture 里出现的每一条帧字节不变**（按 ident 逐条比对金标准原始线缆）。
     #[test]
-    fn enter_world_sequence_matches_model_c_and_golden_bytes() {
+    fn enter_world_sequence_matches_model_d_and_golden_bytes() {
         let golden = golden_s2c(16);
         let built = golden_inputs().frames();
         let got_idents: Vec<u16> = built
             .iter()
             .map(|b| u16::from_le_bytes([b[4], b[5]]))
             .collect();
-        // 模型 C′：六条 + 654 的出队序 = 52, 621, 211, 752, 811, 46, 654
+        // 模型 D：六条 + 654 的出队序 = 52, 752, 621, 211, 811, 46, 654
         // （金标准角色无装备/无技能 ⇒ 621/211 的门关，不产帧，但槽位仍参与堆布局）。
         assert_eq!(
             got_idents,
             vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46, 10, 654],
-            "模型 C′ 的逐帧 ident 序（真机实拍：52 在 752 前，四个 C# 会话一致）"
+            "模型 D 的逐帧 ident 序（真机实拍：52 在 752 前，四个 C# 会话一致）"
         );
-        // capture 前 16 条 + 654：按 ident 取原始线缆，逐条比字节（顺序按模型 C′，字节不变）。
+        // capture 前 16 条 + 654：按 ident 取原始线缆，逐条比字节（顺序按模型 D，字节不变）。
         let mut capture_by_ident: Vec<(u16, &Vec<u8>)> =
             golden.iter().map(|(id, raw)| (*id, raw)).collect();
         let cl = golden_s2c_ident(messages::SM_CHANGELIGHT);
@@ -2279,7 +2338,7 @@ mod tests {
         assert_eq!(
             got_idents.len(),
             capture_by_ident.len(),
-            "模型 C′ 产出的帧数 = capture 可见帧数（17）"
+            "模型 D 产出的帧数 = capture 可见帧数（17）"
         );
         for body in &built {
             let ident = u16::from_le_bytes([body[4], body[5]]);
@@ -2333,7 +2392,7 @@ mod tests {
 
     /// 新增 11 条的**逐条**定位断言（失败时能直接看出是哪条）。
     ///
-    /// `built` 的次序按模型 C（52/752 与 capture 相反），故按 **ident** 取金标准帧，不按 capture 下标。
+    /// `built` 的次序按模型 D，故按 **ident** 取金标准帧，不按 capture 下标。
     #[test]
     fn remaining_eleven_encoders_match_golden_frames() {
         let f = golden_s2c(16);
@@ -2360,7 +2419,7 @@ mod tests {
             let got = built
                 .iter()
                 .find(|b| u16::from_le_bytes([b[4], b[5]]) == ident)
-                .expect("模型 C 产出里有该 ident");
+                .expect("模型 D 产出里有该 ident");
             assert_eq!(
                 &client_frame(got),
                 want,
@@ -2369,17 +2428,19 @@ mod tests {
         }
     }
 
-    /// **模型 C 全量顺序**（卡 `openmir2-login-frame-order`）：六条全部有输入时，
-    /// 逐帧 ident 必须等于 oracle 四叉堆的出队序 `752, 621, 211, 52, 811, 46, 654`。
+    /// **模型 D 全量顺序**（卡 `openmir2-login-frame-order`）：六条全部有输入时，
+    /// 逐帧 ident 必须等于 oracle 四叉堆的出队序 `52, 752, 621, 211, 811, 46, 654`。
     ///
     /// 红检（三条牙，任一都让本用例红）：
     /// ① 去掉 `RM_LOGON` 入队（`frames()` 不再 `enqueue(LoginQueued::Logon, ...)`）⇒ 51/50/...
     ///    整组消失、654 也不再入队；
-    /// ② 把 `RM_CHANGELIGHT` 改回「最先入队」（在 `RM_LOGON` 之前 `enqueue`）⇒ 优先级 153 提前
-    ///    参与 sift，High 组布局改变（实测出队首条变成 211）；
-    /// ③ 六条改成手写 FIFO（`52,752,811,46,621,211`）⇒ 与堆序不符。
+    /// ② 把 `RM_TURN`/两条 `RM_CHARSTATUSCHANGED`/`RM_USERNAME`/第四条 `SysMsg` 任一槽位删掉
+    ///    （模型 D 的堆布局依赖它们）⇒ High 组序改变；
+    /// ③ 六条按可观测序手写（`52,752,621,211,811,46`）⇒ 与 oracle 的**入队**序不符
+    ///    （源码序是 `52,752,811,46,621,211`）；本用例锁的是 `frames()` 的产物，
+    ///    `smframe` 的构造用例另行钉死 621/211 出帧时的位置。
     #[test]
-    fn login_frame_order_is_model_c_quaternary_heap() {
+    fn login_frame_order_matches_model_d_queue() {
         let inputs = EnterWorldInputs {
             actor_id: 7,
             cur_x: 1,
@@ -2417,11 +2478,91 @@ mod tests {
             vec![
                 658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008,
                 1106, // 直发 + RM_LOGON handler
-                52, 621, 211, 752, 811,
-                46, // 六条的堆序（High: 52,621,211,752；Normal: 811,46）
+                52, 752, 621, 211, 811,
+                46, // 六条的堆序（High: 52,752,621,211；Normal: 811,46）
                 10, 654, // 非队列 SM_TURN，随后 CHANGELIGHT
             ],
-            "模型 C′：入队 752,52,621,211 → 出队 52,621,211,752（621/211 出帧时的位置尚无真机样本，见卡 openmir2-login-frame-order-52-752 的窗口余项）"
+            "模型 D：源码入队序 52,752,811,46,621,211 + 完整队列内容 → 出队 52,752,621,211,811,46"
+        );
+    }
+
+    /// 三次真机抓包共用的 logon 输入（不含 `turn`：那三行的 ident 序里没有 `10`）。
+    fn login_scenario_inputs(use_items: bool, magic: bool) -> EnterWorldInputs {
+        EnterWorldInputs {
+            actor_id: 7,
+            cur_x: 1,
+            cur_y: 2,
+            dir: 3,
+            light: 4,
+            day_bright: 5,
+            notice: b"N".to_vec(),
+            map_file_name: Some(b"0".to_vec()),
+            logon_body_wl: Some((1, 2, 3, 0)),
+            feature: Some((1, 2)),
+            attack_mode: Some(0),
+            client_conf: Some(b"cfg".to_vec()),
+            username: Some((7, 255, b"name".to_vec())),
+            area_state: Some(0),
+            map_description: Some((-1, b"desc".to_vec())),
+            game_gold_name: Some((0, 0, b"gold".to_vec())),
+            version_fail: Some((0, 0)),
+            ability: Some((0, 0, 0, b"wabil".to_vec())),
+            sub_ability: Some([0; 7]),
+            adjust_bonus: Some((0, b"a".to_vec(), b"b".to_vec(), b"c".to_vec())),
+            day_changing: Some((1, 0)),
+            turn: None,
+            use_items_tail: use_items.then(|| b"0/abc/".to_vec()),
+            magic: magic.then(|| (1_u16, b"magic/".to_vec())),
+            changelight: Some((4, 500)),
+        }
+    }
+
+    /// 判据①（无装备无技能，`s2c`/`s2c-w03`/`s2c-w04`）：完整 ident 序逐项等于真机。
+    #[test]
+    fn login_scenario_naked_matches_oracle_ident_sequence() {
+        let got: Vec<u16> = login_scenario_inputs(false, false)
+            .frames()
+            .iter()
+            .map(|b| u16::from_le_bytes([b[4], b[5]]))
+            .collect();
+        assert_eq!(
+            got,
+            vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46, 654],
+            "无装备无技能：621/211 空尾门关（槽位仍占位），52,752,811,46,654"
+        );
+    }
+
+    /// 判据②（有武器无有效技能，`s2c-621b`，另有 212 `SM_DELMAGIC` 走直发）：
+    /// `52,752,621,811,46,654`。
+    #[test]
+    fn login_scenario_weapon_no_magic_matches_oracle_ident_sequence() {
+        let got: Vec<u16> = login_scenario_inputs(true, false)
+            .frames()
+            .iter()
+            .map(|b| u16::from_le_bytes([b[4], b[5]]))
+            .collect();
+        assert_eq!(
+            got,
+            vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 621, 811, 46, 654],
+            "有武器无技能：621 出帧、211 空尾 ⇒ 52,752,621,811,46,654"
+        );
+    }
+
+    /// 判据③（有武器 + 有效技能，`s2c-621c`）：`52,752,621,211,811,46,654`。
+    #[test]
+    fn login_scenario_weapon_with_magic_matches_oracle_ident_sequence() {
+        let got: Vec<u16> = login_scenario_inputs(true, true)
+            .frames()
+            .iter()
+            .map(|b| u16::from_le_bytes([b[4], b[5]]))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 621, 211, 811, 46,
+                654
+            ],
+            "有武器有技能：621/211 都出帧 ⇒ 52,752,621,211,811,46,654"
         );
     }
 
