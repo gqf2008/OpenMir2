@@ -20,7 +20,7 @@ mod idle_timeout;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -53,6 +53,31 @@ macro_rules! glog {
 /// 会话表：`SocketId → 该客户端连接的发送端`。
 type Sessions = Arc<Mutex<HashMap<u16, mpsc::UnboundedSender<Vec<u8>>>>>;
 
+/// 下行链路存活标志（C# `ClientThread.IsConnected` 的等价物）。
+///
+/// C# SelGate 在 `ClientThread.ClientSocketDisconnect` 里 `RestSessionArray()`
+/// 清空各槽位的 `SocketId` ⇒ `TimedService.ProcessDelayMsg` 的 `GetSession` 返回 null，
+/// 超时动作（发帧 + 摘会话）整体不再发生；`ClientSession.SendDefMessage` 另有
+/// `_lastDbSvr == null || !_lastDbSvr.IsConnected` 的早退。`downstream_loop` 一退出
+/// （读到 EOF/错误）就把本标志置 false。
+type DownstreamAlive = Arc<AtomicBool>;
+
+/// `downstream_loop` 的析构守卫：任何退出路径（含 panic）都置「下行已断开」。
+struct DownstreamAliveGuard(DownstreamAlive);
+
+impl Drop for DownstreamAliveGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// 每个客户端会话要用的共享状态（打包后 `client_loop` 参数保持在 clippy 上限内）。
+#[derive(Clone)]
+struct GateShared {
+    sessions: Sessions,
+    downstream_alive: DownstreamAlive,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // 配置路径：可选 argv[1] 覆盖（默认取可执行文件同目录，与 C# BaseDirectory 一致）
@@ -70,6 +95,7 @@ async fn main() -> Result<()> {
     );
 
     let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
+    let downstream_alive: DownstreamAlive = Arc::new(AtomicBool::new(true));
 
     // 下行连接：连不上 DBSrv 即失败退出（M1④）
     let downstream = TcpStream::connect((cfg.srv_addr.as_str(), cfg.srv_port))
@@ -91,7 +117,11 @@ async fn main() -> Result<()> {
     let down_tx = Arc::new(Mutex::new(down_tx));
 
     // 下行读取循环（DBSrv → 各客户端）
-    tokio::spawn(downstream_loop(down_rx, Arc::clone(&sessions)));
+    tokio::spawn(downstream_loop(
+        down_rx,
+        Arc::clone(&sessions),
+        Arc::clone(&downstream_alive),
+    ));
 
     let listener = TcpListener::bind((cfg.gate_addr.as_str(), cfg.gate_port))
         .await
@@ -115,7 +145,10 @@ async fn main() -> Result<()> {
         sock.set_nodelay(true).ok();
         let sid = next_sid.fetch_add(1, Ordering::Relaxed);
         glog!("INF", "开始连接: {peer}");
-        let sessions = Arc::clone(&sessions);
+        let shared = GateShared {
+            sessions: Arc::clone(&sessions),
+            downstream_alive: Arc::clone(&downstream_alive),
+        };
         let down_tx = Arc::clone(&down_tx);
         tokio::spawn(async move {
             if let Err(e) = client_loop(
@@ -124,7 +157,7 @@ async fn main() -> Result<()> {
                 peer.to_string(),
                 peer_ip(peer),
                 timeout_ms,
-                sessions,
+                shared,
                 down_tx,
             )
             .await
@@ -168,16 +201,23 @@ fn sel_gate_enter_body(socket_id: &str, ip: &str) -> Vec<u8> {
 ///   `SessionManager.CloseSession` 只 `TryRemove`（与 LoginGate 相反，不调 `ClientSession.CloseSession`）
 ///   ⇒ **socket 保持打开**：后续客户端数据因 `GetSession == null` 被静默丢弃，直到客户端自己断开；
 /// - 第二阶段状态机保留但线上不可达（会话已摘，`TimedService` 不会再取到它）；
-/// - 超时路径**不发**下行 `Leave`（oracle 在 `Disconnected` 时 `GetSession` 为 null）。
+/// - 超时路径**不发**下行 `Leave`（oracle 在 `Disconnected` 时 `GetSession` 为 null）；
+/// - **下行断开守卫**：DBSrv 链路已断时，C# 的 `RestSessionArray` 让
+///   `TimedService` 取不到会话 ⇒ 超时动作整段不发生（不发帧、不摘会话、计时也不动）。
+///   这里在 `timer.poll` **之前**判 [`DownstreamAlive`]，同形复刻。
 async fn client_loop(
     sock: TcpStream,
     sid: u16,
     peer: String,
     ip: String,
     timeout_ms: u64,
-    sessions: Sessions,
+    shared: GateShared,
     down_tx: Arc<Mutex<OwnedWriteHalf>>,
 ) -> Result<()> {
+    let GateShared {
+        sessions,
+        downstream_alive,
+    } = shared;
     let (mut rd, mut wr) = sock.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
     // 超时帧与 DBSrv 下行共用同一条回写通道，保证超时帧先于任何后续写出。
@@ -262,6 +302,13 @@ async fn client_loop(
                     // 不再调用 `HandleDelayMsg`。
                     continue;
                 }
+                // oracle 下行存活守卫：`ClientThread` 断开时 `RestSessionArray` 清空槽位
+                // `SocketId` ⇒ `GetSession == null` ⇒ 整段跳过（`HandleDelayMsg` 根本不被调用）。
+                // 因此这里必须在 `timer.poll` 之前判：计时状态也不得推进（否则 kick 标志
+                // 会先被置位，再在下一次扫描里产生动作）。
+                if !downstream_alive.load(Ordering::SeqCst) {
+                    continue;
+                }
                 match timer.poll(now_ms(), timeout_ms) {
                     TimeoutAction::None => {}
                     TimeoutAction::SendOutOfConnection => {
@@ -297,7 +344,12 @@ async fn client_loop(
 }
 
 /// 下行读取：DBSrv → 按 `SocketId` 分派给对应客户端（`Data`），`Leave` 关闭会话。
-async fn downstream_loop(mut rd: OwnedReadHalf, sessions: Sessions) -> Result<()> {
+async fn downstream_loop(
+    mut rd: OwnedReadHalf,
+    sessions: Sessions,
+    downstream_alive: DownstreamAlive,
+) -> Result<()> {
+    let _mark_dead = DownstreamAliveGuard(downstream_alive);
     loop {
         let mut head = [0u8; ServerDataPacket::SIZE];
         if rd.read_exact(&mut head).await.is_err() {

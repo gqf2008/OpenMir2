@@ -52,6 +52,33 @@ async fn fake_login_srv() -> (u16, tokio::task::JoinHandle<Vec<ServerDataMessage
     (port, h)
 }
 
+/// 起一个"接受后关闭"的假 LoginSrv：读到网关的 Enter 帧后立即断开（模拟 LoginSrv 掉线）。
+async fn fake_srv_accept_enter_then_close() -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut sock, _) = l.accept().await.unwrap();
+        loop {
+            let mut head = [0u8; ServerDataPacket::SIZE];
+            if sock.read_exact(&mut head).await.is_err() {
+                return;
+            }
+            let pkt = ServerDataPacket::from_bytes(&head).unwrap();
+            let mut body = vec![0u8; usize::from(pkt.packet_len)];
+            if sock.read_exact(&mut body).await.is_err() {
+                return;
+            }
+            let msg = ServerDataMessage::from_bytes(&body).unwrap();
+            if msg.kind == ServerDataType::Enter {
+                break;
+            }
+        }
+        // FIN：网关 `downstream_loop` 读到 EOF ⇒ 下行存活标志置 false。
+        drop(sock);
+    });
+    port
+}
+
 fn free_port() -> u16 {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     l.local_addr().unwrap().port()
@@ -272,5 +299,41 @@ async fn idle_session_times_out_with_oracle_frame_then_close() {
         !got.iter().any(|m| m.kind == ServerDataType::Leave),
         "超时路径不得给 LoginSrv 发 Leave（oracle 先摘会话）：{got:?}"
     );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 第二轮复验 Important（进程级）：LoginSrv 接受后关闭 ⇒ 客户端**收不到**超时帧。
+///
+/// oracle：`ClientThread.ClientSocketDisconnect` 把 `SessionArray` 槽位全置 null
+/// ⇒ `TimedService.ProcessDelayMsg` 取不到会话 ⇒ 超时动作整体不发生；
+/// `ClientSession.SendDefMessage` 另有 `IsConnected` 早退。
+///
+/// 牙：删掉超时支的 `downstream_alive` 守卫 ⇒ 本用例在 t≈10s 收到 16B 帧 ⇒ 红。
+#[tokio::test]
+async fn downstream_disconnect_suppresses_idle_timeout_frame() {
+    let srv_port = fake_srv_accept_enter_then_close().await;
+    let gate_port = free_port();
+    let dir = write_conf_with_timeout(gate_port, srv_port, 10_000);
+    let conf = dir.join("config.conf");
+
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-gate"))
+        .arg(&conf)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+
+    let t0 = tokio::time::Instant::now();
+    let mut client = connect_retry(gate_port).await;
+
+    // LoginGate 扫描节奏 1s、阈值 10s：若守卫失效，t≈10s 必发 16B 超时帧并 FIN。
+    // 等到 15s 仍无任何字节（既无帧也无 FIN）才算通过。
+    let mut buf = [0u8; 32];
+    let got = tokio::time::timeout_at(t0 + Duration::from_secs(15), client.read(&mut buf)).await;
+    assert!(
+        got.is_err(),
+        "LoginSrv 断开后不得发生超时动作（不得发帧/不得 FIN）；实得 {got:?}"
+    );
+
+    child.kill().await.ok();
     std::fs::remove_dir_all(&dir).ok();
 }
