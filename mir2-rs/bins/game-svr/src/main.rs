@@ -35,6 +35,7 @@ mod ids;
 mod items;
 mod line_notice;
 mod load;
+mod magicaudit;
 mod magicwire;
 mod mapwire;
 mod notice;
@@ -2522,6 +2523,7 @@ fn drain_deal_tick(
 /// `SM_TAKEON_OK/FAIL`（`SM_TAKEOFF_OK/FAIL`）→ 成功重算后的 `SM_ABILITY/SM_SUBABILITY`
 /// （oracle 走普通优先级队列，下一轮 flush；本宿主在同一批直接下发，顺序一致）。
 /// 成功换装还会 `FeatureChanged()` ⇒ 向同图周围玩家（含自己）广播 `SM_FEATURECHANGED(41)`。
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn handle_bag_cmd(
     ident: u16,
@@ -2540,6 +2542,50 @@ fn handle_bag_cmd(
     ref_msg_range: i32,
     dealing: bool,
     client_layout: bool,
+) {
+    // 单测/无记录路径：不做 210/212 审计（与加参前行为一致）。
+    handle_bag_cmd_with_magic(
+        ident,
+        recog,
+        param,
+        tag,
+        tail,
+        chr_name,
+        socket,
+        online,
+        sessions,
+        gates,
+        catalog,
+        world,
+        displays,
+        ref_msg_range,
+        dealing,
+        client_layout,
+        None,
+    );
+}
+
+/// 带 210/212 审计的 [`handle_bag_cmd`]（生产路径）。
+#[allow(clippy::too_many_arguments)]
+fn handle_bag_cmd_with_magic(
+    ident: u16,
+    recog: i32,
+    param: u16,
+    tag: u16,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    world: &mut mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    ref_msg_range: i32,
+    dealing: bool,
+    client_layout: bool,
+    // **Lane B**：`PlayObject.MagicList` 的唯一投影 + 魔表/配置名 + 历史粘滞值。
+    magic: Option<MagicRecalc<'_>>,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -2604,16 +2650,22 @@ fn handle_bag_cmd(
     // `StruckDamage` 的 `Random(8)` 格子集合（`Index > 0` 的槽数）与 oracle 不同。
     sync_use_items_to_entity(world, sg);
 
+    let mut magic_events = Vec::new();
     if out.recalc {
         let extra_abil = world.entities.get(sg.actor_id).map(|e| e.extra_abil);
-        let revival = recalc_session_ability(sg, catalog, extra_abil.as_ref());
+        // oracle `Operate.cs:458/538`：`RecalcAbilitys()` 里的 `SendAddMagic/SendDelMagic`
+        // 是**直接帧**，排在 `SM_TAKEON_OK/TAKEOFF_OK` 之前（`:459-461` 的 52/752 才是队列消息）。
+        let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic);
+        magic_events = effect.magic_events;
         // **PL-1 / A2**：换装重算后整份 `WAbil`（含 HP/MaxHP/MP/MaxMP）与 `SubAbility` 落世界实体
         // （此前只同步 `HitSpeed`——登记缺口；P32 的 `Revival` 也在这里按粘滞锁存落账）。
         if let Some(e) = world.entities.get_mut(sg.actor_id) {
             apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
-            if revival {
+            if effect.revival {
                 e.revival = true;
             }
+            // Lane B：`FlameRing` 粘滞锁存（`PlayObject.cs` 全仓只有 `= true`）。
+            e.flame_ring |= effect.flame_ring;
         }
     }
 
@@ -2636,6 +2688,14 @@ fn handle_bag_cmd(
                 item.index
             ),
         }
+    }
+    // **Lane B**：`RecalcAbilitys()` 尾段的 212/210 直接帧——oracle 在 `SendDefMessage(TAKEON_OK)`
+    // 之前发出（`Operate.cs:458-461`）。
+    for event in &magic_events {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: game_svr::smframe::magic_event_frame(event),
+        });
     }
     for f in &out.frames {
         let body = game_svr::smframe::gm_data_body(
@@ -5378,12 +5438,17 @@ fn apply_ability_to_entity(
 /// 调用点：① 装备/卸下成功分支；② 升级（`PlayObject.cs:5245-5246` 的 `HasLevelUp`——oracle 先
 /// `RecalcLevelAbilitys()` 再 `RecalcAbilitys()`，本函数内部 `level_ability_base` 已按该序覆盖
 /// `MaxHP/MaxMP/MaxWeight/DC/MC/SC/AC/MAC` 等等级派生字段）。
+///
+/// **Lane B**：`RecalcAbilitys()` 尾段的 `Del/AddItemSkill`（212/210）也在这里执行——`magic`
+/// 为 `Some` 时直接改 `SavedHuman.record.data.magic`（oracle `MagicList` 的唯一投影）并把事件
+/// 返回给调用方出帧。`flame_ring_in` 是**历史粘滞值**（调用方读 `entity.flame_ring`）。
 fn recalc_session_ability(
     sg: &mut SessionGround,
     catalog: &dyn game_svr::ability::ItemCatalog,
     // **P3-B5**：`PlayObject.ExtraAbil[7]`（`AttPowerUp` 写槽 0）。`None` ⇒ 全 0（既有行为不变）。
     extra_abil: Option<&[u16; 7]>,
-) -> bool {
+    magic: Option<MagicRecalc<'_>>,
+) -> RecalcEffect {
     let bag: Vec<u16> = sg.state.item_list.iter().map(|i| i.index).collect();
     let mut use_inst: Vec<Option<game_svr::ability::ItemInstance>> =
         vec![None; game_svr::ability::USE_ITEMS_LEN];
@@ -5416,7 +5481,95 @@ fn recalc_session_ability(
     game_svr::ability::apply_extra_abil(&mut sg.state.wabil, extra_abil.unwrap_or(&[0u16; 7]));
     // **PL-1 / P32**：本次重算是否命中复活戒指（`Shape==114`）。oracle 只置 true、从不重置
     // ⇒ 调用方按 `entity.revival |= 返回值` 落账（粘滞锁存）。
-    recalc.revival
+    //
+    // **Lane B**：`RecalcAbilitys()` 尾段（`:2764-2779`）——先火球分支、再治愈分支。
+    // `FlameRing` 是粘滞锁存（`历史 || 本次命中`），`RecoveryRing` 每轮重置（只取本次）。
+    // 事件按 oracle 调用序返回；调方负责出帧（210 带 `ClientMagic` 尾、212 无尾）。
+    let mut magic_events = Vec::new();
+    if let Some(m) = magic {
+        let list = magic_list_mut(m.saved);
+        magic_events = magicaudit::audit(
+            sg.equip.job,
+            list,
+            m.cfg.table,
+            m.cfg.fire_ball_skill,
+            m.cfg.heal_skill,
+            m.flame_ring_in || recalc.flame_ring,
+            recalc.recovery_ring,
+        );
+    }
+    RecalcEffect {
+        revival: recalc.revival,
+        flame_ring: recalc.flame_ring,
+        recovery_ring: recalc.recovery_ring,
+        magic_events,
+    }
+}
+
+/// 210/212 重算所需的进程级输入（oracle `SystemShare.WorldEngine.MagicList` +
+/// `Config.FireBallSkill/HealSkill`）。
+#[derive(Clone, Copy)]
+struct MagicCfg<'a> {
+    table: &'a magics::MagicTable,
+    fire_ball_skill: &'a str,
+    heal_skill: &'a str,
+}
+
+/// 一次 `RecalcAbilitys()` 的魔法侧输入（`None` ⇒ 不做 210/212 审计，单测/无记录路径）。
+struct MagicRecalc<'a> {
+    /// `SavedHuman.record.data.magic`（oracle `PlayObject.MagicList` 的唯一投影）。
+    saved: &'a mut SavedHuman,
+    cfg: MagicCfg<'a>,
+    /// `entity.flame_ring`（**历史粘滞值**，不是本次命中）。
+    flame_ring_in: bool,
+}
+
+/// 多会话排水函数（升级/装备复检/复活）的魔法侧输入：按 `chr_name` 现取 `SavedHuman`。
+struct MagicSource<'a> {
+    saves: &'a mut std::collections::HashMap<String, SavedHuman>,
+    cfg: MagicCfg<'a>,
+}
+
+impl MagicSource<'_> {
+    fn recalc_for<'b>(
+        &'b mut self,
+        chr_name: &str,
+        flame_ring_in: bool,
+    ) -> Option<MagicRecalc<'b>> {
+        let cfg = self.cfg;
+        self.saves.get_mut(chr_name).map(|saved| MagicRecalc {
+            saved,
+            cfg,
+            flame_ring_in,
+        })
+    }
+}
+
+/// `recalc_session_ability` 的输出：`revival`/`flame_ring` 均为**本次命中**（调方 `|=` 落账），
+/// `magic_events` 是 212/210 的直接帧事件（oracle 调用序）。
+struct RecalcEffect {
+    revival: bool,
+    flame_ring: bool,
+    /// 本次 `RecoveryRing` 命中（每轮重置；目前只用于判据/诊断，调用方不需要落账）。
+    #[allow(dead_code)]
+    recovery_ring: bool,
+    magic_events: Vec<smframe::MagicEvent>,
+}
+
+/// 取/建 `character_data.magic` 的 `MagicList`（`Some(vec![])` 表示空列表，与 oracle 的空
+/// `MagicList` 等价；`None` 在真实回包里不出现，防御性初始化）。
+fn magic_list_mut(saved: &mut SavedHuman) -> &mut Vec<Option<record::MagicRcd>> {
+    saved.record.data.magic.get_or_insert_with(Vec::new)
+}
+
+/// `EnterConfig` → [`MagicCfg`]（`Server.conf` 未载入时回 oracle 缺省 `火球术`/`治愈术`）。
+fn magic_cfg_of(enter_cfg: &EnterConfig) -> MagicCfg<'_> {
+    let conf = enter_cfg.game_conf.as_ref();
+    MagicCfg {
+        table: &enter_cfg.magic_table,
+        fire_ball_skill: conf.map_or("火球术", |c| c.fire_ball_skill.as_str()),
+        heal_skill: conf.map_or("治愈术", |c| c.heal_skill.as_str()),
+    }
 }
 
 /// `Envir.GetMovingObject(frontX, frontY, true)`（`Envirnoment.cs:1203-1234`）的**接线面最小等价物**：
@@ -6151,8 +6304,61 @@ const B5_ATT_POWER_UP_SECOND: &[u8] = b"\xc3\xeb\x20";
 /// `cast_tamming_spell`（`MagTamming` 账本 + `World::tame_adopt` 落尾）。46（分身）登记见
 /// `game_svr::slave` 模块头；46 分身已接（[`game_svr::slave::cast_clone_spell`] + 下方 46 支）。
 /// 效果体限速 / `SpellTick -= 450` / MP 消耗仍按 `magicwire` 模块头登记未接。
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn handle_spell_cmd(
+    recog: i32,
+    tag: u16,
+    param: u16,
+    series: u16,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    world: &mut mir2_world::World,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    magic_table: &magics::MagicTable,
+    pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
+    magic_attack_rage: i32,
+    registry: Option<&mir2_envir::MapRegistry>,
+    table: &game_svr::mongen::MonsterTable,
+    displays: &mut downlink::DisplayTable,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    fire_boom_rage: i32,
+    snow_wind_range: i32,
+    elec_blizzard_range: i32,
+) {
+    // 单测/无配置路径：不做 210/212 审计（与加参前行为一致）。
+    handle_spell_cmd_with_magic(
+        recog,
+        tag,
+        param,
+        series,
+        chr_name,
+        socket,
+        online,
+        world,
+        saves,
+        ground_sessions,
+        catalog,
+        magic_table,
+        pet_cfg,
+        magic_attack_rage,
+        registry,
+        table,
+        displays,
+        gates,
+        fire_boom_rage,
+        snow_wind_range,
+        elec_blizzard_range,
+        None,
+    );
+}
+
+/// 带 210/212 审计的 [`handle_spell_cmd`]（生产路径）。
+#[allow(clippy::too_many_arguments)]
+fn handle_spell_cmd_with_magic(
     recog: i32,
     tag: u16,
     param: u16,
@@ -6176,6 +6382,9 @@ fn handle_spell_cmd(
     fire_boom_rage: i32,
     snow_wind_range: i32,
     elec_blizzard_range: i32,
+    // **Lane B**：`AttPowerUp` 的 `RecalcAbilitys()`（`:5328`）也要跑 210/212 尾段；
+    // `None` ⇒ 不审计（单测/未载入配置路径）。
+    magic_cfg: Option<MagicCfg<'_>>,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -8735,12 +8944,45 @@ fn handle_spell_cmd(
                                     if let Some(sg) = ground_sessions.get_mut(&entry.chr_name) {
                                         // **PL-1 复验 finding 3**：oracle `:5328 RecalcAbilitys()` 同样会
                                         // 置 `Revival`（粘滞锁存）⇒ 与其它 recalc 点一样 `|=` 落账。
-                                        let revival =
-                                            recalc_session_ability(sg, catalog, extra.as_ref());
+                                        // **Lane B**：尾段 210/212 的直接帧在 52 之前（oracle 调用序）。
+                                        let flame_ring_in = world
+                                            .entities
+                                            .get(out.target)
+                                            .is_some_and(|e| e.flame_ring);
+                                        let magic = magic_cfg.and_then(|cfg| {
+                                            saves.get_mut(&entry.chr_name).map(|saved| {
+                                                MagicRecalc {
+                                                    saved,
+                                                    cfg,
+                                                    flame_ring_in,
+                                                }
+                                            })
+                                        });
+                                        let effect = recalc_session_ability(
+                                            sg,
+                                            catalog,
+                                            extra.as_ref(),
+                                            magic,
+                                        );
+                                        let RecalcEffect {
+                                            revival,
+                                            flame_ring,
+                                            magic_events,
+                                            ..
+                                        } = effect;
                                         // `HitSpeed = AddAbil.HitSpeed` 落到世界实体（657 末参）。
                                         if let Some(e) = world.entities.get_mut(out.target) {
                                             e.revival |= revival;
+                                            e.flame_ring |= flame_ring;
                                             e.hit_speed = sg.hit_speed;
+                                        }
+                                        for event in &magic_events {
+                                            buf.push_actor(
+                                                online,
+                                                out.target,
+                                                0,
+                                                smframe::magic_event_frame(event),
+                                            );
                                         }
                                         let body = smframe::sm_ability(
                                             sg.state.gold,
@@ -10232,8 +10474,9 @@ fn drain_combat_downlink(
 /// `ShowHp` 支**已可达**（`SKILL_SHOWHP(28)` 已接线，`sg.show_hp` 由技能设置）；本函数只入槽，
 /// 自发副本与观察者广播统一由 [`healthspell::HealthSpellSlots`] 的 ceil 预算出帧。
 /// `WinExp` 的 `LimitExpLevel` 支生产不可达（`GameSvrConf.cs:1838` 默认 `LimitExpLevel = 1000 > 255`）。
+/// 带 210/212 审计的升级重算（生产路径；`magic = None` 即加参前行为）。
 #[allow(clippy::too_many_arguments)]
-fn drain_levelup_healthspell(
+fn drain_levelup_healthspell_with_magic(
     rec: &mir2_world::TickRecord,
     world: &mut mir2_world::World,
     online: &OnlineRegistry,
@@ -10241,6 +10484,9 @@ fn drain_levelup_healthspell(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
     range: i32,
+    // **Lane B**：升级时 oracle `HasLevelUp` 也跑 `RecalcAbilitys()`（`PlayObject.cs:5245-5246`）
+    // ⇒ 210/212 尾段照跑；`None` = 单测/无记录。
+    mut magic: Option<MagicSource<'_>>,
 ) {
     for (winner, _amount, leveled, level) in &rec.exp_awards {
         if !*leveled {
@@ -10264,7 +10510,29 @@ fn drain_levelup_healthspell(
         }
         // ① HasLevelUp：RecalcLevelAbilitys() + RecalcAbilitys()
         let extra_abil = world.entities.get(*winner).map(|e| e.extra_abil);
-        let revival = recalc_session_ability(sg, catalog, extra_abil.as_ref());
+        let flame_ring_in = world.entities.get(*winner).is_some_and(|e| e.flame_ring);
+        let magic_recalc = magic
+            .as_mut()
+            .and_then(|src| src.recalc_for(&entry.chr_name, flame_ring_in));
+        let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic_recalc);
+        let RecalcEffect {
+            revival,
+            flame_ring,
+            magic_events,
+            ..
+        } = effect;
+        if let Some(e) = world.entities.get_mut(*winner) {
+            e.flame_ring |= flame_ring;
+        }
+        // oracle 的直接帧（`SendAddMagic/SendDelMagic`）。
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "升级 210/212") {
+            for event in &magic_events {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: entry.socket,
+                    body: game_svr::smframe::magic_event_frame(event),
+                });
+            }
+        }
         // ② GetExp 尾：IncHealthSpell(2000, 2000)（`BaseObject.cs:952-975`）
         let hp = u32::from(sg.state.wabil.hp) + 2000;
         let mp = u32::from(sg.state.wabil.mp) + 2000;
@@ -10367,6 +10635,7 @@ fn drain_levelup_downlink(
 ///
 /// `sim_loop` 与升级帧序用例都经本函数 ⇒ **顺序本身可被用例钉住**（红检 = 交换前两行 ⇒ 用例必红）。
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn drain_kill_exp_chain(
     rec: &mir2_world::TickRecord,
     world: &mut mir2_world::World,
@@ -10378,8 +10647,38 @@ fn drain_kill_exp_chain(
     range: i32,
     client_layout: bool,
 ) {
+    drain_kill_exp_chain_with_magic(
+        rec,
+        world,
+        displays,
+        online,
+        sessions,
+        gates,
+        catalog,
+        range,
+        client_layout,
+        None,
+    );
+}
+
+/// 带 210/212 审计的 [`drain_kill_exp_chain`]（生产路径）。
+#[allow(clippy::too_many_arguments)]
+fn drain_kill_exp_chain_with_magic(
+    rec: &mir2_world::TickRecord,
+    world: &mut mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    range: i32,
+    client_layout: bool,
+    magic: Option<MagicSource<'_>>,
+) {
     // 53（= `GetExp` 尾的 `IncHealthSpell(2000,2000)`）先于 44（`SendMsg(RM_WINEXP)`）。
-    drain_levelup_healthspell(rec, world, online, sessions, gates, catalog, range);
+    drain_levelup_healthspell_with_magic(
+        rec, world, online, sessions, gates, catalog, range, magic,
+    );
     drain_combat_downlink(rec, world, displays, online, sessions, gates);
     drain_levelup_downlink(rec, online, sessions, gates, client_layout);
 }
@@ -10687,6 +10986,7 @@ fn periodic_save_due(save_rcd_tick: &mut i64, save_time: i64, now: i64) -> bool 
 /// **改坏必红**：把 [`drain_stamina`] 挪到 [`drain_kill_exp_chain`] 之前 ⇒ 同 tick 既升级又掉点时
 /// 帧序变成 `53(体力) → 53(升级) → 44/45/52/752`，`tick_frame_order_puts_stamina_after_kill_exp_chain` 必红。
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn drain_run_downlinks(
     rec: &mir2_world::TickRecord,
     world: &mut mir2_world::World,
@@ -10700,7 +11000,39 @@ fn drain_run_downlinks(
     spell_fill_time: i32,
     client_layout: bool,
 ) -> Vec<(String, usize)> {
-    drain_kill_exp_chain(
+    drain_run_downlinks_with_magic(
+        rec,
+        world,
+        displays,
+        online,
+        sessions,
+        gates,
+        catalog,
+        range,
+        health_fill_time,
+        spell_fill_time,
+        client_layout,
+        None,
+    )
+}
+
+/// 带 210/212 审计的 [`drain_run_downlinks`]（生产路径）。
+#[allow(clippy::too_many_arguments)]
+fn drain_run_downlinks_with_magic(
+    rec: &mir2_world::TickRecord,
+    world: &mut mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    range: i32,
+    health_fill_time: i32,
+    spell_fill_time: i32,
+    client_layout: bool,
+    magic: Option<MagicSource<'_>>,
+) -> Vec<(String, usize)> {
+    drain_kill_exp_chain_with_magic(
         rec,
         world,
         displays,
@@ -10710,6 +11042,7 @@ fn drain_run_downlinks(
         catalog,
         range,
         client_layout,
+        magic,
     );
     // **orphan 编码器接线首批**：本 tick 的 AOI 消失帧（`SM_DISAPPEAR(30)`）——与下面
     // [`drain_aoi_downlink`] 的出现帧同属 oracle `PlayObject.Run()` 里 `VisibleActors` 的那趟循环。
@@ -12327,6 +12660,7 @@ fn hutil_round(v: f64) -> i32 {
 /// `RM_WEIGHTCHANGED` 经 `MsgQueue`（P21 在消息泵之后 ⇒ oracle 实际下一 Run 才出，本宿主同 tick 出，
 /// 登记 1-tick 相位差）。`RecalcAbilitys()` 本身不发 52/752。
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn drain_player_need_recheck(
     world: &mut mir2_world::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -12334,6 +12668,29 @@ fn drain_player_need_recheck(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
     drop_item_rage: u8,
+) {
+    drain_player_need_recheck_with_magic(
+        world,
+        sessions,
+        online,
+        gates,
+        catalog,
+        drop_item_rage,
+        None,
+    );
+}
+
+/// 带 210/212 审计的 [`drain_player_need_recheck`]（生产路径）。
+fn drain_player_need_recheck_with_magic(
+    world: &mut mir2_world::World,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    drop_item_rage: u8,
+    // **Lane B**：装备复检移出戒指后 oracle `RecalcAbilitys()`（`PlayObject.Message.cs:412-434`
+    // 循环内）会删技能并发 212。
+    mut magic: Option<MagicSource<'_>>,
 ) {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     names.sort();
@@ -12440,13 +12797,30 @@ fn drain_player_need_recheck(
                 // 不是循环后调一次：重复调用会累加 `PoisonRecover/HealthRecover/SpellRecover`
                 // （`PlayObject.cs:2893-2895` 的 `+=`，T-18）⇒ 多项移出时逐次调用才等价。
                 let extra_abil = world.entities.get(actor_id).map(|e| e.extra_abil);
-                let revival = recalc_session_ability(sg, catalog, extra_abil.as_ref());
+                let flame_ring_in = world.entities.get(actor_id).is_some_and(|e| e.flame_ring);
+                let magic_recalc = magic
+                    .as_mut()
+                    .and_then(|src| src.recalc_for(&name, flame_ring_in));
+                let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic_recalc);
+                let RecalcEffect {
+                    revival,
+                    flame_ring,
+                    magic_events,
+                    ..
+                } = effect;
                 if let Some(e) = world.entities.get_mut(actor_id) {
                     apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
                     if revival {
                         e.revival = true;
                     }
+                    e.flame_ring |= flame_ring;
                 }
+                // oracle `SendDelItems` 之后紧跟 `RecalcAbilitys()` 的直接帧（212/210）。
+                immediate.extend(
+                    magic_events
+                        .iter()
+                        .map(game_svr::smframe::magic_event_frame),
+                );
             }
         }
         // 会话 → 实体（Index=0 / StdMode40 耐久）与存档同源。
@@ -12499,6 +12873,7 @@ fn drain_player_need_recheck(
 /// 出帧序按 oracle `MsgQueue` 的 ident 优先级（`(byte)wIdent`）：
 /// `SM_DELITEM`（即时 socket）→ 53(68) → `SM_DURACHANGE`(141) → `SM_SYSMESSAGE`(252)。
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn drain_player_revival(
     world: &mut mir2_world::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -12511,6 +12886,40 @@ fn drain_player_revival(
     green_b_color: u8,
     revival_msg: &[u8],
     ref_msg_range: i32,
+) {
+    drain_player_revival_with_magic(
+        world,
+        sessions,
+        online,
+        gates,
+        catalog,
+        now,
+        revival_time,
+        green_f_color,
+        green_b_color,
+        revival_msg,
+        ref_msg_range,
+        None,
+    );
+}
+
+/// 带 210/212 审计的 [`drain_player_revival`]（生产路径）。
+#[allow(clippy::too_many_arguments)]
+fn drain_player_revival_with_magic(
+    world: &mut mir2_world::World,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    now: i64,
+    revival_time: i64,
+    green_f_color: u8,
+    green_b_color: u8,
+    revival_msg: &[u8],
+    ref_msg_range: i32,
+    // **Lane B**：复活戒指打碎（`Index=0`）后的 `RecalcAbilitys()` 会删治愈术并发 212
+    // （`RecoveryRing` 每轮重置；`FlameRing` 粘滞不删）。
+    mut magic: Option<MagicSource<'_>>,
 ) {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     names.sort();
@@ -12602,13 +13011,30 @@ fn drain_player_revival(
                 }
                 // `RecalcAbilitys()` 在循环内逐次调用（oracle 原样）。
                 let extra_abil = world.entities.get(actor_id).map(|e| e.extra_abil);
-                let revival = recalc_session_ability(sg, catalog, extra_abil.as_ref());
+                let flame_ring_in = world.entities.get(actor_id).is_some_and(|e| e.flame_ring);
+                let magic_recalc = magic
+                    .as_mut()
+                    .and_then(|src| src.recalc_for(&name, flame_ring_in));
+                let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic_recalc);
+                let RecalcEffect {
+                    revival,
+                    flame_ring,
+                    magic_events,
+                    ..
+                } = effect;
                 if let Some(e) = world.entities.get_mut(actor_id) {
                     apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
                     if revival {
                         e.revival = true;
                     }
+                    e.flame_ring |= flame_ring;
                 }
+                // `SendDelItems`（即时 socket）→ Recalc 的直接帧（212/210）同属本循环。
+                delitem_frames.extend(
+                    magic_events
+                        .iter()
+                        .map(game_svr::smframe::magic_event_frame),
+                );
             } else if let Some(it) = sg.use_items[i].as_mut() {
                 it.dura = n_dura;
             }
@@ -13613,7 +14039,19 @@ fn sim_loop(
                     } else if cmd.ident == game_svr::bag::CM_TAKEONITEM
                         || cmd.ident == game_svr::bag::CM_TAKEOFFITEM
                     {
-                        handle_bag_cmd(
+                        // **Lane B**：`RecalcAbilitys()` 尾段的 210/212——戴/脱 115/116 戒指
+                        // 在同会话内立即生效（`Operate.cs:458/538`）。
+                        let flame_ring_in = online
+                            .iter()
+                            .find(|e| e.chr_name == chr_name)
+                            .and_then(|e| world.entities.get(e.actor_id))
+                            .is_some_and(|e| e.flame_ring);
+                        let magic = saves.get_mut(&chr_name).map(|saved| MagicRecalc {
+                            saved,
+                            cfg: magic_cfg_of(&enter_cfg),
+                            flame_ring_in,
+                        });
+                        handle_bag_cmd_with_magic(
                             cmd.ident,
                             cmd.recog,
                             cmd.param,
@@ -13632,6 +14070,7 @@ fn sim_loop(
                             trade_sessions.get(&chr_name).is_some_and(|s| s.dealing),
                             // 52 的尾布局与入图/升级同源（`ability_tail`）。
                             mir2_client_ability_layout(),
+                            magic,
                         );
                     } else if cmd.ident == game_svr::useitem::CM_EAT {
                         // `CM_EAT(1006)`：oracle `PlayObject.Message.cs:826` 的 `ClientUseItems(nParam1, Msg)`。
@@ -13808,7 +14247,7 @@ fn sim_loop(
                         handle_magic_key_cmd(cmd.recog, cmd.param, &chr_name, socket, &mut saves);
                     } else if magicwire::is_spell_ident(cmd.ident) {
                         // 同片 + ⑨-2 第②片：`CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790`）。
-                        handle_spell_cmd(
+                        handle_spell_cmd_with_magic(
                             cmd.recog,
                             cmd.tag,
                             cmd.param,
@@ -13830,6 +14269,8 @@ fn sim_loop(
                             enter_cfg.fire_boom_rage,
                             enter_cfg.snow_wind_range,
                             enter_cfg.elec_blizzard_range,
+                            // **Lane B**：36 的 `AttPowerUp` 重算也跑 210/212 尾段。
+                            Some(magic_cfg_of(&enter_cfg)),
                         );
                     } else if handle_login_notice_ok_cmd(
                         &cmd,
@@ -14301,6 +14742,41 @@ fn sim_loop(
                                                         r.data.abil = Some(new_human_ability());
                                                     }
                                                 }
+                                                // **Lane B**：`WorldServer.GetHumData`（`:1198-1213`）的
+                                                // `FindMagic(MagIdx)==null ⇒ 丢弃`（V1 装载过滤）+ 紧接着
+                                                // `UserLogon → RecalcAbilitys()` 尾段（`:2764-2779`）的
+                                                // `Del/AddItemSkill`。两者都就地改角色记录的 `Magic`
+                                                // （= oracle `MagicList`，`MakeSaveRcd` 同源）：
+                                                // 211/852 与存档都看这一份；212/210 事件走 `magic_journal`，
+                                                // 在 658 之后、登录队列出队（51 等）之前发出。
+                                                let mut login_magic_events = Vec::new();
+                                                if let Some(r) = full.as_mut() {
+                                                    let mut list = magicaudit::filter_for_logon(
+                                                        r.data.magic.take().unwrap_or_default(),
+                                                        &enter_cfg.magic_table,
+                                                    );
+                                                    let (flame_ring_hit, recovery_ring_hit) =
+                                                        enter::ring_hits(
+                                                            &enter_cfg.catalog,
+                                                            r.data.hum_items.as_deref(),
+                                                        );
+                                                    let cfg = magic_cfg_of(&enter_cfg);
+                                                    login_magic_events = magicaudit::audit(
+                                                        r.data.job,
+                                                        &mut list,
+                                                        cfg.table,
+                                                        cfg.fire_ball_skill,
+                                                        cfg.heal_skill,
+                                                        // 登录 = 新 PlayObject：`FlameRing` 初始 false，
+                                                        // 首次 `RecalcAbilitys` 的命中即锁存值。
+                                                        flame_ring_hit,
+                                                        recovery_ring_hit,
+                                                    );
+                                                    // `MakeSaveRcd` 的 20 槽存档形态（前 N 槽 = MagicList）。
+                                                    r.data.magic =
+                                                        Some(magicaudit::pad_for_save(list));
+                                                }
+                                                inputs.magic_journal = login_magic_events;
                                                 let data = full.as_ref().map(|r| &r.data);
                                                 // 帧 42 的展示名输入（`GetShowName()`）：成员/师徒/婚姻/转生/职业
                                                 // 全取角色记录；行会在本骨架恒空（`MyGuild == null`，见 `enter::show_name`）。
@@ -14434,6 +14910,8 @@ fn sim_loop(
                                                         if out.revival {
                                                             e.revival = true;
                                                         }
+                                                        // **Lane B**：火球戒指粘滞锁存（首次登录 = 本次命中）。
+                                                        e.flame_ring |= out.flame_ring;
                                                     } else {
                                                         glog!(
                                                             "WRN",
@@ -14930,15 +15408,19 @@ fn sim_loop(
         );
         // **PL-1 宿主段（oracle `PlayObject.Run` 的 P21…P32）**：在 `tick_head` 之后、
         // `tick_tail`（`base.Run` 的 Die + VerifyMapTime）之前。
-        drain_player_need_recheck(
+        drain_player_need_recheck_with_magic(
             &mut world,
             &mut ground_sessions,
             &online,
             &gates,
             &enter_cfg.catalog,
             enter_cfg.ground.drop_item_rage,
+            Some(MagicSource {
+                saves: &mut saves,
+                cfg: magic_cfg_of(&enter_cfg),
+            }),
         );
-        drain_player_revival(
+        drain_player_revival_with_magic(
             &mut world,
             &mut ground_sessions,
             &online,
@@ -14950,6 +15432,10 @@ fn sim_loop(
             enter_cfg.green_msg_b_color,
             &enter::gbk(enter_cfg.string_conf.revival_recover()),
             enter_cfg.ref_msg_range,
+            Some(MagicSource {
+                saves: &mut saves,
+                cfg: magic_cfg_of(&enter_cfg),
+            }),
         );
         // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
         world.tick_tail(&mut rec);
@@ -15068,7 +15554,7 @@ fn sim_loop(
         // **reviewer-5 O-1 收口**：oracle 一次 `PlayObject.Run()` = 消息段（击杀经验/升级链 +
         // AOI 出现帧）→ `BaseObject.Run()` 的体力/魔力点段；次序由 [`drain_run_downlinks`] 固定。
         // 返回值 = 本 tick 每会话实发的 AOI 出现帧数（只读诊断，累加进 `af=`）。
-        let aoi_frames_this_tick = drain_run_downlinks(
+        let aoi_frames_this_tick = drain_run_downlinks_with_magic(
             &rec,
             &mut world,
             &displays,
@@ -15080,6 +15566,10 @@ fn sim_loop(
             enter_cfg.health_fill_time,
             enter_cfg.spell_fill_time,
             mir2_client_ability_layout(),
+            Some(MagicSource {
+                saves: &mut saves,
+                cfg: magic_cfg_of(&enter_cfg),
+            }),
         );
         for (chr, n) in aoi_frames_this_tick {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
@@ -35321,7 +35811,7 @@ mod tests {
         // 收件人 A（施法者自己）：+3。
         let mut cg = rig.ground_sessions.remove("caster").unwrap();
         cg.use_items[game_svr::ability::SLOT_WEAPON] = Some(weapon_item(7101));
-        recalc_session_ability(&mut cg, &catalog, None);
+        recalc_session_ability(&mut cg, &catalog, None, None);
         assert_eq!(
             cg.hit_speed, 3,
             "StdMode 5 + Hi(MAC)=13 ⇒ RealAttackSpeed=3"
@@ -35338,7 +35828,7 @@ mod tests {
         // 收件人 B（观察者）：+5。
         let mut og = spell_session_ground(rig.observer);
         og.use_items[game_svr::ability::SLOT_WEAPON] = Some(weapon_item(7102));
-        recalc_session_ability(&mut og, &catalog, None);
+        recalc_session_ability(&mut og, &catalog, None, None);
         assert_eq!(
             og.hit_speed, 5,
             "StdMode 5 + Hi(MAC)=15 ⇒ RealAttackSpeed=5"
@@ -37724,7 +38214,7 @@ mod tests {
             tsg.show_hp = false;
             tsg.state.gold = 1234;
             tsg.game_gold = 7;
-            recalc_session_ability(&mut tsg, &catalog, None);
+            recalc_session_ability(&mut tsg, &catalog, None, None);
             assert_eq!(
                 tsg.state.wabil.dc, 0x0A05,
                 "B5Rig 自检：目标全量重算必须产出 dc=0x0A05（合同 §3.4）"
@@ -41142,5 +41632,233 @@ mod tests {
                 assert!(take_frame_idents(&mut rx).is_empty());
             }
         }
+    }
+
+    /// **Lane B / B6**：会话内 `RecalcAbilitys()` 的 `FlameRing` **粘滞**、`RecoveryRing` **每轮重置**。
+    ///
+    /// 牙 4：把 `flame_ring_in` 当「每轮本次命中」传（第 2 轮传 false）⇒ 火球被删、本用例红；
+    /// 把 `recovery_ring` 做成粘滞（第 2 轮仍传 true）⇒ 治愈不被删、本用例红。
+    #[test]
+    fn lane_b_session_recalc_flame_sticky_and_recovery_resets() {
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1151,
+            mir2_data::StdItem {
+                name: "FireRing".into(),
+                std_mode: 22,
+                shape: 115,
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        catalog.insert(
+            1152,
+            mir2_data::StdItem {
+                name: "HealRing".into(),
+                std_mode: 22,
+                shape: 116,
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let table = magics::MagicTable::new(vec![
+            mir2_data::MagicInfo {
+                magic_id: 1,
+                magic_name: "火球术".into(),
+                ..mir2_data::MagicInfo::default()
+            },
+            mir2_data::MagicInfo {
+                magic_id: 2,
+                magic_name: "治愈术".into(),
+                ..mir2_data::MagicInfo::default()
+            },
+        ]);
+        let cfg = MagicCfg {
+            table: &table,
+            fire_ball_skill: "火球术",
+            heal_skill: "治愈术",
+        };
+        let ring = |index: u16| {
+            Some(game_svr::bag::BagItem {
+                make_index: 1,
+                index,
+                dura: 100,
+                dura_max: 100,
+                desc: [0u8; 14],
+            })
+        };
+        let magic = |id: u16| {
+            Some(record::MagicRcd {
+                mag_idx: id,
+                level: 0,
+                magic_key: 0,
+                tran_point: 0,
+            })
+        };
+        let mut saved = SavedHuman {
+            account: "a".into(),
+            record: record::PlayerRecord::default(),
+            enter_map: "0".into(),
+        };
+        saved.record.data.magic = Some(vec![magic(1), magic(2)]);
+        let mut sg = test_session_ground(9);
+        sg.equip.job = 0; // 战士：无火球戒指时 `DelItemSkill(1)` 会删火球
+
+        // 第 1 轮：两枚戒指都戴（Dura>0）⇒ 两块都命中；技能已在列表 ⇒ 无 210。
+        sg.use_items[game_svr::ability::SLOT_RING_L] = ring(1151);
+        sg.use_items[game_svr::ability::SLOT_RING_R] = ring(1152);
+        let eff = recalc_session_ability(
+            &mut sg,
+            &catalog,
+            None,
+            Some(MagicRecalc {
+                saved: &mut saved,
+                cfg,
+                flame_ring_in: false,
+            }),
+        );
+        assert!(eff.magic_events.is_empty());
+        assert!(eff.flame_ring && eff.recovery_ring);
+        let mut flame = eff.flame_ring; // `entity.flame_ring |= effect.flame_ring`
+        assert_eq!(saved.record.data.magic, Some(vec![magic(1), magic(2)]));
+
+        // 第 2 轮：两枚都脱下。FlameRing 粘滞（历史 true）⇒ 火球不删；
+        // RecoveryRing 本轮 false ⇒ 立即删治愈并发 212。
+        sg.use_items[game_svr::ability::SLOT_RING_L] = None;
+        sg.use_items[game_svr::ability::SLOT_RING_R] = None;
+        let eff = recalc_session_ability(
+            &mut sg,
+            &catalog,
+            None,
+            Some(MagicRecalc {
+                saved: &mut saved,
+                cfg,
+                flame_ring_in: flame,
+            }),
+        );
+        assert_eq!(
+            eff.magic_events,
+            vec![smframe::MagicEvent::Del { mag_idx: 2 }]
+        );
+        flame |= eff.flame_ring;
+        assert_eq!(
+            saved.record.data.magic,
+            Some(vec![magic(1)]),
+            "火球保留（粘滞）、治愈删除（每轮重置）"
+        );
+
+        // 第 3 轮：仍无戒指且粘滞仍真 ⇒ 火球依旧保留、无事件。
+        let eff = recalc_session_ability(
+            &mut sg,
+            &catalog,
+            None,
+            Some(MagicRecalc {
+                saved: &mut saved,
+                cfg,
+                flame_ring_in: flame,
+            }),
+        );
+        assert!(eff.magic_events.is_empty());
+        assert_eq!(saved.record.data.magic, Some(vec![magic(1)]));
+
+        // 下次登录 = 新 PlayObject（flame_ring_in=false）⇒ 才删火球并发 212。
+        let eff = recalc_session_ability(
+            &mut sg,
+            &catalog,
+            None,
+            Some(MagicRecalc {
+                saved: &mut saved,
+                cfg,
+                flame_ring_in: false,
+            }),
+        );
+        assert_eq!(
+            eff.magic_events,
+            vec![smframe::MagicEvent::Del { mag_idx: 1 }]
+        );
+        assert_eq!(saved.record.data.magic, Some(vec![]));
+
+        // 牙 3：Dura==0 的戒指不置标志 ⇒ 等同没戴。
+        sg.use_items[game_svr::ability::SLOT_RING_L] = Some(game_svr::bag::BagItem {
+            make_index: 1,
+            index: 1151,
+            dura: 0,
+            dura_max: 100,
+            desc: [0u8; 14],
+        });
+        let eff = recalc_session_ability(
+            &mut sg,
+            &catalog,
+            None,
+            Some(MagicRecalc {
+                saved: &mut saved,
+                cfg,
+                flame_ring_in: false,
+            }),
+        );
+        assert!(!eff.flame_ring, "Dura==0 不置 FlameRing");
+    }
+
+    /// **Lane B / B1**：会话内第一次戴上 115 火球戒指 ⇒ 追加 `Level=1/Key=0/TranPoint=0`
+    /// 并发 210（事件携带模板 `Def`）；211/存档同源记录立即可见。
+    #[test]
+    fn lane_b_session_recalc_ring_adds_magic_and_emits_210() {
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1151,
+            mir2_data::StdItem {
+                name: "FireRing".into(),
+                std_mode: 22,
+                shape: 115,
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let def = mir2_data::MagicInfo {
+            magic_id: 1,
+            magic_name: "火球术".into(),
+            ..mir2_data::MagicInfo::default()
+        };
+        let table = magics::MagicTable::new(vec![def.clone()]);
+        let cfg = MagicCfg {
+            table: &table,
+            fire_ball_skill: "火球术",
+            heal_skill: "治愈术",
+        };
+        let mut saved = SavedHuman {
+            account: "a".into(),
+            record: record::PlayerRecord::default(),
+            enter_map: "0".into(),
+        };
+        saved.record.data.magic = Some(Vec::new());
+        let mut sg = test_session_ground(11);
+        sg.use_items[game_svr::ability::SLOT_RING_R] = Some(game_svr::bag::BagItem {
+            make_index: 1,
+            index: 1151,
+            dura: 5000,
+            dura_max: 5000,
+            desc: [0u8; 14],
+        });
+        let eff = recalc_session_ability(
+            &mut sg,
+            &catalog,
+            None,
+            Some(MagicRecalc {
+                saved: &mut saved,
+                cfg,
+                flame_ring_in: false,
+            }),
+        );
+        assert_eq!(eff.magic_events, vec![smframe::MagicEvent::Add { def }]);
+        assert_eq!(
+            saved.record.data.magic,
+            Some(vec![Some(record::MagicRcd {
+                mag_idx: 1,
+                level: 1,
+                magic_key: 0,
+                tran_point: 0,
+            })]),
+            "Level=1 / Key=0 / TranPoint=0"
+        );
     }
 }

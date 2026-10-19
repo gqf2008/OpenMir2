@@ -36,6 +36,12 @@ pub struct GameSvrConf {
     pub game_gold_name: String,
     /// `[Names] GamePoint`（帧 5008 的金币名）。
     pub game_point_name: String,
+    /// `[Names] FireBallSkill`（`ServerConf.cs:80-81`；缺省 `GameSvrConf.cs:1407` 的 `火球术`）——
+    /// `DelItemSkill(1)` 的 `DeleteNameSkill`（区分大小写）与 `AddItemSkill(1)` 的
+    /// `FindMagic(name)`（忽略大小写）共用该配置名。
+    pub fire_ball_skill: String,
+    /// `[Names] HealSkill`（`ServerConf.cs:80-81`；缺省 `GameSvrConf.cs:1408` 的 `治愈术`）。
+    pub heal_skill: String,
     /// **MB-3（R34）**：`[Names] Zuma1..4`（`ServerConf.cs:96-99`；`GameSvrConf.cs:159/1315`
     /// 缺省 `祖玛卫士/祖玛雕像/祖玛弓箭手/楔蛾`）——`ScultureKingMonster.CallSlave` 的
     /// `Config.Zuma[Random(4)]` 怪名表。
@@ -212,6 +218,10 @@ impl GameSvrConf {
         GameSvrConf {
             game_gold_name: ini.read_string("Names", "GameGold", "元宝").to_string(),
             game_point_name: ini.read_string("Names", "GamePoint", "游戏点").to_string(),
+            fire_ball_skill: ini
+                .read_string("Names", "FireBallSkill", "火球术")
+                .to_string(),
+            heal_skill: ini.read_string("Names", "HealSkill", "治愈术").to_string(),
             zuma: [
                 ini.read_string("Names", "Zuma1", "祖玛卫士").to_string(),
                 ini.read_string("Names", "Zuma2", "祖玛雕像").to_string(),
@@ -439,6 +449,28 @@ mod tests {
             bytes,
             vec![1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]
         );
+    }
+
+    /// `[Names] FireBallSkill` / `[Names] HealSkill`（`ServerConf.cs:80-81`）：
+    /// 缺省 = `GameSvrConf.cs:1407-1408` 的 `火球术` / `治愈术`；文件值覆盖。
+    #[test]
+    fn skill_name_config_defaults_and_override() {
+        let c = GameSvrConf::from_bytes(
+            b"[Server]
+GatePort=5000
+",
+        );
+        assert_eq!(c.fire_ball_skill, "火球术");
+        assert_eq!(c.heal_skill, "治愈术");
+        let c2 = GameSvrConf::from_bytes(
+            "[Names]
+FireBallSkill=FireBall
+HealSkill=Heal
+"
+            .as_bytes(),
+        );
+        assert_eq!(c2.fire_ball_skill, "FireBall");
+        assert_eq!(c2.heal_skill, "Heal");
     }
 
     /// `NakedAbility` 序列化原文 = 20 字节（`DC..MP` 7×u16 LE + `Hit` u8 + `Speed` i32 LE + `Reserved` u8）。

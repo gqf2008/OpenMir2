@@ -172,6 +172,18 @@ pub fn recalc_for_session(a: &AbilityInputs<'_>, job: u8) -> ability::RecalcOutp
     )
 }
 
+/// **Lane B**：`RecalcAbilitys()` 主循环里 Ringl/Ringr 槽的 `Shape 115/116` 命中
+/// （`PlayObject.cs:2226-2249`；`Dura==0` 在 `:2105-2120` 已 `continue`）。
+///
+/// 登录期在构造完整 `AbilityInputs` 之外需要这个轻量判定，以驱动 `Del/AddItemSkill` 尾段。
+#[must_use]
+pub fn ring_hits(
+    catalog: &dyn ItemCatalog,
+    use_items: Option<&[Option<ServerUserItem>]>,
+) -> (bool, bool) {
+    ability::ring_flags(catalog, &to_instances(use_items))
+}
+
 /// `PlayObject.GetShowName()`（`PlayObject.cs:3300-3388`）的输入。
 #[derive(Debug, Clone, Copy)]
 pub struct ShowNameInputs<'a> {
@@ -2192,5 +2204,73 @@ mod tests {
             "UTF-8 字节不是 oracle 口径"
         );
         assert_eq!(gbk("0"), b"0".to_vec(), "现网 ASCII 地图名不变");
+    }
+
+    /// **Lane B / 211 空槽修复**：DB 回包的 20 槽里常含 `MagIdx=0` 空槽与模板缺失项；
+    /// oracle `GetHumData` 装载时已丢弃它们 ⇒ 211 只发有效条目、`Count` 只数有效项。
+    /// 牙：恢复旧行为（遇到空槽整条跳过 / 把空槽计入 Count）⇒ 本用例红。
+    #[test]
+    fn send_my_magic_skips_empty_and_missing_slots() {
+        let magic = mir2_data::MagicInfo {
+            magic_id: 17,
+            magic_name: "heal".into(),
+            ..mir2_data::MagicInfo::default()
+        };
+        let table = game_svr::magics::MagicTable::new(vec![magic.clone()]);
+        let empty = Some(MagicRcd {
+            mag_idx: 0,
+            level: 3,
+            magic_key: 9,
+            tran_point: 77,
+        });
+        let valid = Some(MagicRcd {
+            mag_idx: 17,
+            level: 2,
+            magic_key: 0x41,
+            tran_point: 100,
+        });
+        let missing = Some(MagicRcd {
+            mag_idx: 9999,
+            level: 1,
+            magic_key: 1,
+            tran_point: 2,
+        });
+        let magics = vec![None, empty, valid, None, missing];
+        let abil = Ability {
+            level: 1,
+            ..Ability::default()
+        };
+        let bonus = NakedAbility {
+            dc: 0,
+            mc: 0,
+            sc: 0,
+            ac: 0,
+            mac: 0,
+            hp: 0,
+            mp: 0,
+            hit: 0,
+            speed: 0,
+            reserved: 0,
+        };
+        let a = AbilityInputs {
+            catalog: &game_svr::ability::StdItemCatalog::new(),
+            abil: &abil,
+            bonus_abil: &bonus,
+            bonus_tick_hit: 20,
+            bonus_tick_speed: 35,
+            use_items: None,
+            bag_items: None,
+            magics: Some(&magics),
+            magic_table: Some(&table),
+            gold: 0,
+            client_ability_layout: false,
+        };
+        let (count, tail) = send_my_magic(&a).unwrap().expect("211 有尾");
+        assert_eq!(count, 1, "Count = MagicList.Count（只数有效项）");
+        let mut expect = edcode::encode(&game_svr::itemwire::encode_client_magic(
+            0x41, 2, 100, &magic,
+        ));
+        expect.push(b'/');
+        assert_eq!(tail, expect, "只发有效条目（空槽/缺模板都不进 211）");
     }
 }

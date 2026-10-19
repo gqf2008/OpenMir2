@@ -754,6 +754,13 @@ pub struct Entity {
     /// P32 门：`LastHiter` 是玩家且其 `UnRevival == true` ⇒ 不复活
     /// （`PlayObject.Message.cs:751`）。本骨架同缺省 false，只在显式赋值时生效。
     pub un_revival: bool,
+    /// C# `PlayObject.FlameRing`（`PlayObject.cs:283` 附近）——火球戒指生效标志。
+    ///
+    /// **粘滞锁存（oracle bug，照抄）**：`RecalcAbilitys()` 顶部只重置 `RecoveryRing`
+    /// （`PlayObject.cs:2017`），全仓唯一写入点是 Ringl/Ringr 的 `Shape == 115` 分支
+    /// （`ItemShapeConst.RING_FIREBALL_ITEM`，`:2244-2246`）的 `FlameRing = true`；
+    /// **没有任何置 `false` 的写入点**。调用方按 `entity.flame_ring |= recalc.flame_ring` 落账。
+    pub flame_ring: bool,
     /// `BaseObject.HealthTick` / `SpellTick` / `AutoRecoveryTick`（`BaseObject.cs:287-306`）。
     ///
     /// 恢复段（`BaseObject.Base.cs:39-66`）按 `(now - AutoRecoveryTick) / 20` 把时间折成
@@ -1005,6 +1012,7 @@ impl Entity {
             revival: false,
             revival_tick: 0,
             un_revival: false,
+            flame_ring: false,
             health_tick: 0,
             spell_tick: 0,
             auto_recovery_tick: 0,

@@ -157,6 +157,12 @@ const SHAPE_RING_OF_MANATOHEALTH: u8 = 133;
 const SHAPE_BRACELET_OF_MANATOHEALTH: u8 = 134;
 /// `ItemShapeConst.RING_REVIVAL_ITEM`（`src/M2Server/Actor/ActorConst.cs:64`）——复活戒指。
 const SHAPE_RING_REVIVAL_ITEM: u8 = 114;
+/// `ItemShapeConst.RING_FIREBALL_ITEM`（`src/M2Server/Actor/ActorConst.cs:68`）——火球戒指。
+/// `RecalcAbilitys` 命中即置 `FlameRing = true`（`PlayObject.cs:2244-2246`）。
+const SHAPE_RING_FIREBALL_ITEM: u8 = 115;
+/// `ItemShapeConst.RING_HEALING_ITEM`（`src/M2Server/Actor/ActorConst.cs:72`）——治愈戒指。
+/// 命中即置 `RecoveryRing = true`（`PlayObject.cs:2247-2249`）。
+const SHAPE_RING_HEALING_ITEM: u8 = 116;
 /// `M2Share.ItemDamageRevivalMap`（`src/M2Server/M2Share.cs:186`）——P32 的耐久扣减命中集合
 /// （按 `StdItem.Shape`，或武器/右手位的 `StdItem.AniCount`）。
 pub const ITEM_DAMAGE_REVIVAL_MAP: [u8; 4] = [114, 160, 161, 162];
@@ -419,6 +425,16 @@ pub struct RecalcOutput {
     /// **粘滞锁存**。本输出只报「本次命中」，落账方必须做 `entity.revival |= out.revival`
     /// （历史为 true 时摘下戒指也不清，照抄 oracle）。
     pub revival: bool,
+    /// **Lane B**：本次 `RecalcAbilitys()` 里 Ringr/Ringl 槽的
+    /// `Shape == RING_FIREBALL_ITEM(115)` 且 `Dura > 0` 是否命中（`PlayObject.cs:2244-2246`）。
+    ///
+    /// oracle 的 `FlameRing` 是**粘滞锁存**（顶部只重置 `RecoveryRing`，全仓唯一写入是
+    /// `FlameRing = true`）⇒ 落账方必须 `entity.flame_ring |= out.flame_ring`；**不要**每轮覆盖。
+    pub flame_ring: bool,
+    /// **Lane B**：本次命中的 `Shape == RING_HEALING_ITEM(116)` 且 `Dura > 0`
+    /// （`PlayObject.cs:2247-2249`）。oracle 每轮开头 `RecoveryRing = false`（`:2017`）⇒
+    /// 语义是**每轮重置**，调用方直接取本次值。
+    pub recovery_ring: bool,
 }
 
 /// `PlayObject.RecalcLevelAbilitys()`（`PlayObject.cs:5254-5317`）的落库等价物：按 `Job` + `Abil.Level`
@@ -461,6 +477,38 @@ fn level_ability_base(abil: &Ability, job: u8) -> Ability {
     }
 }
 
+/// **Lane B**：只扫戒指标志的轻量等价物（`RecalcAbilitys` 的 `UseItems` 循环里
+/// `Dura==0 ⇒ continue` 之后的 Ringl/Ringr Shape 分支，`PlayObject.cs:2224-2249`）。
+///
+/// 口径与 [`recalc_abilitys_with_prior`] 的主循环**逐条相同**（`Index>0`、模板存在、`Dura>0`、
+/// 只认 `SLOT_RING_L/SLOT_RING_R`）；登录期在完整 `Abil` 输入之外需要它来跑 `Del/AddItemSkill`
+/// 尾段时使用。返回值 = `(FlameRing 本次命中, RecoveryRing 本次命中)`。
+#[must_use]
+pub fn ring_flags(catalog: &dyn ItemCatalog, use_items: &[Option<ItemInstance>]) -> (bool, bool) {
+    let mut flame_ring = false;
+    let mut recovery_ring = false;
+    for (slot, cell) in use_items.iter().enumerate() {
+        let Some(inst) = cell else { continue };
+        if inst.index == 0 || inst.dura == 0 {
+            // `Dura == 0` 在 `PlayObject.cs:2107-2120` 就 `continue`，不置标志。
+            continue;
+        }
+        if slot != SLOT_RING_L && slot != SLOT_RING_R {
+            continue;
+        }
+        let Some(tpl) = catalog.get(inst.index) else {
+            continue;
+        };
+        if tpl.shape == SHAPE_RING_FIREBALL_ITEM {
+            flame_ring = true;
+        }
+        if tpl.shape == SHAPE_RING_HEALING_ITEM {
+            recovery_ring = true;
+        }
+    }
+    (flame_ring, recovery_ring)
+}
+
 /// `PlayObject.RecalcAbilitys()` 的**首次调用**纯函数等价物（本片作用域，见模块文档「未做清单」）。
 ///
 /// 等价于 `recalc_abilitys_with_prior(catalog, inputs, &SubAbility::first_call())`。
@@ -499,6 +547,9 @@ pub fn recalc_abilitys_with_prior(
     let mut mh_bracelet = false;
     // P32：复活戒指（`PlayObject.cs:2241` 的 `RING_REVIVAL_ITEM`）。
     let mut revival = false;
+    // Lane B：火球/治愈戒指（`PlayObject.cs:2244/2247`，只在 `Dura > 0` 的 Ringl/Ringr 槽上）。
+    let mut flame_ring = false;
+    let mut recovery_ring = false;
 
     for (slot, cell) in inputs.use_items.iter().enumerate() {
         let Some(inst) = cell else { continue };
@@ -535,6 +586,12 @@ pub fn recalc_abilitys_with_prior(
         }
         if (slot == SLOT_RING_L || slot == SLOT_RING_R) && tpl.shape == SHAPE_RING_REVIVAL_ITEM {
             revival = true;
+        }
+        if (slot == SLOT_RING_L || slot == SLOT_RING_R) && tpl.shape == SHAPE_RING_FIREBALL_ITEM {
+            flame_ring = true;
+        }
+        if (slot == SLOT_RING_L || slot == SLOT_RING_R) && tpl.shape == SHAPE_RING_HEALING_ITEM {
+            recovery_ring = true;
         }
         add_weight(slot, tpl.weight, &mut wear_weight, &mut hand_weight);
     }
@@ -608,6 +665,8 @@ pub fn recalc_abilitys_with_prior(
         add,
         hit_speed,
         revival,
+        flame_ring,
+        recovery_ring,
     }
 }
 
@@ -1618,5 +1677,97 @@ mod tests {
             !recalc_abilitys(&cat, &inputs).revival,
             "Dura==0 的戒指不置 Revival（oracle 在 Shape 分支前 continue）"
         );
+    }
+
+    /// **Lane B**：`Shape 115/116` 戒指标志（`PlayObject.cs:2244-2249`）：
+    /// 只认 Ringl/Ringr、只认 `Dura > 0`；且轻量 [`ring_flags`] 与完整 `recalc_abilitys` 同口径。
+    #[test]
+    fn recalc_reports_flame_and_recovery_rings_only_from_durable_ring_slots() {
+        let fire = StdItem {
+            name: "FireRing".to_string(),
+            std_mode: 22,
+            shape: 115,
+            dura_max: 5000,
+            ..StdItem::default()
+        };
+        let heal = StdItem {
+            name: "HealRing".to_string(),
+            std_mode: 22,
+            shape: 116,
+            dura_max: 5000,
+            ..StdItem::default()
+        };
+        let cat = StdItemCatalog::from_items([(1u16, fire), (2u16, heal)]);
+        let abil = Ability {
+            level: 1,
+            ..Ability::default()
+        };
+        let bonus = NakedAbility {
+            dc: 0,
+            mc: 0,
+            sc: 0,
+            ac: 0,
+            mac: 0,
+            hp: 0,
+            mp: 0,
+            hit: 0,
+            speed: 0,
+            reserved: 0,
+        };
+        let run = |slots: &[Option<ItemInstance>]| {
+            let inputs = RecalcInputs {
+                job: 0,
+                abil: &abil,
+                bonus_abil: &bonus,
+                bonus_tick_hit: 25,
+                bonus_tick_speed: 35,
+                cur_hp: 0,
+                cur_mp: 0,
+                use_items: slots,
+                bag: &[],
+            };
+            let out = recalc_abilitys(&cat, &inputs);
+            assert_eq!(
+                (out.flame_ring, out.recovery_ring),
+                ring_flags(&cat, slots),
+                "ring_flags 必须与 RecalcAbilitys 主循环同口径"
+            );
+            (out.flame_ring, out.recovery_ring)
+        };
+
+        let mut slots = vec![None; USE_ITEMS_LEN];
+        slots[SLOT_RING_L] = Some(ItemInstance { index: 1, dura: 1 });
+        assert_eq!(
+            run(&slots),
+            (true, false),
+            "Ringl + 115 + Dura>0 ⇒ FlameRing"
+        );
+
+        slots[SLOT_RING_L] = None;
+        slots[SLOT_RING_R] = Some(ItemInstance { index: 2, dura: 1 });
+        assert_eq!(
+            run(&slots),
+            (false, true),
+            "Ringr + 116 + Dura>0 ⇒ RecoveryRing"
+        );
+
+        // 牙 3：Dura==0 不置标志（`PlayObject.cs:2107-2120` 的 continue 在 Shape 分支之前）。
+        slots[SLOT_RING_R] = Some(ItemInstance { index: 2, dura: 0 });
+        assert_eq!(
+            run(&slots),
+            (false, false),
+            "Dura==0 的治愈戒指不置 RecoveryRing"
+        );
+
+        // 非戒指槽（Dress）上的 115/116 不置标志。
+        slots[SLOT_RING_R] = None;
+        slots[SLOT_DRESS] = Some(ItemInstance { index: 1, dura: 1 });
+        assert_eq!(run(&slots), (false, false), "非 Ringl/Ringr 槽不置标志");
+
+        // 两个戒指同时命中。
+        slots[SLOT_DRESS] = None;
+        slots[SLOT_RING_L] = Some(ItemInstance { index: 1, dura: 1 });
+        slots[SLOT_RING_R] = Some(ItemInstance { index: 2, dura: 1 });
+        assert_eq!(run(&slots), (true, true), "两枚戒指同时命中");
     }
 }

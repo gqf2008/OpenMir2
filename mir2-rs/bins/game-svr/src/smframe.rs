@@ -449,6 +449,48 @@ pub fn sm_sendnotice(notice: &[u8]) -> Vec<u8> {
     gm_data_body(header, &edcode::encode(notice))
 }
 
+/// **Lane B**：`RecalcAbilitys()` 尾段（`PlayObject.cs:2764-2779`）的直接帧事件。
+///
+/// 顺序即 oracle 调用序：先火球分支（`FlameRing ? AddItemSkill(1) : DelItemSkill(1)`），
+/// 再治愈分支（`RecoveryRing ? AddItemSkill(2) : DelItemSkill(2)`）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum MagicEvent {
+    /// `SendDelMagic(userMagic)`（`PlayObject.Base.cs:2218-2222`）。
+    Del { mag_idx: u16 },
+    /// `SendAddMagic(userMagic)`（`PlayObject.Base.cs:2205-2216`）——`def` 即 `UserMagic.Magic`。
+    Add { def: mir2_data::MagicInfo },
+}
+
+/// `PlayerObject.SendDelMagic`（`PlayObject.Base.cs:2218-2222`）：
+/// `MakeMessage(SM_DELMAGIC, userMagic.MagIdx, 0, 0, 1)` + `SendSocket(ClientMsg)`（**无尾**）。
+#[must_use]
+pub fn sm_delmagic(mag_idx: u16) -> Vec<u8> {
+    let header = command_header(i32::from(mag_idx), messages::SM_DELMAGIC, 0, 0, 1);
+    gm_data_body(header, &[])
+}
+
+/// `PlayObject.SendAddMagic`（`PlayObject.Base.cs:2205-2216`）：
+/// `MakeMessage(SM_ADDMAGIC, 0, 0, 0, 1)` + `EDCode.EncodeBuffer(ClientMagic)`。
+///
+/// `ClientMagic`（`src/OpenMir2/Packets/ClientPackets/ClientMagic.cs`）由 `AddItemSkill`
+/// 新建的 `UserMagic` 填：`Key = 0`、`Level = 1`、`CurTrain = 0`、`Def = magic`
+/// （`PlayObject.cs:3919-3926`）。
+#[must_use]
+pub fn sm_addmagic(def: &mir2_data::MagicInfo) -> Vec<u8> {
+    let header = command_header(0, messages::SM_ADDMAGIC, 0, 0, 1);
+    let tail = edcode::encode(&crate::itemwire::encode_client_magic(0, 1, 0, def));
+    gm_data_body(header, &tail)
+}
+
+/// 把一个 [`MagicEvent`] 编成完整 `GM_DATA` body（212 无尾 / 210 带 `ClientMagic` 尾）。
+#[must_use]
+pub fn magic_event_frame(event: &MagicEvent) -> Vec<u8> {
+    match event {
+        MagicEvent::Del { mag_idx } => sm_delmagic(*mag_idx),
+        MagicEvent::Add { def } => sm_addmagic(def),
+    }
+}
+
 /// `SM_SYSMESSAGE`（`BaseObject.SysMsg`，`BaseObject.cs:1588-1685`）：
 /// `SendMsg(RM_SYSMESSAGE, 0, fColor, bColor, 0, sMsg)` ⇒ `PlayObject.Message.cs:1715-1718`
 /// 把它们翻成 `MakeMessage(SM_SYSMESSAGE, ActorId, MakeWord(fColor, bColor), 0, 1)`
@@ -1249,6 +1291,10 @@ pub struct EnterWorldInputs {
     /// `SM_SENDMYMAGIC(211)` = `(MagicList.Count, 已编码尾 EncodeBuffer(ClientMagic)+'/')`。
     /// `None`/空 = 不产帧。
     pub magic: Option<(u16, Vec<u8>)>,
+    /// **Lane B**：`UserLogon → RecalcAbilitys()` 尾段直接发出的 212/210 事件
+    /// （`PlayObject.cs:2764-2779`）。帧在 `658` 之后、登录消息队列出队（`51` 等）之前逐条产出；
+    /// 真机实测序 `658 → 212 → 51`。
+    pub magic_journal: Vec<MagicEvent>,
     /// `SM_CHANGELIGHT(654)` = `(Light, Config.nClientKey)`（`Message.cs:1840`；`Recog=ActorId`）。
     /// 来自 `RM_LOGON` 里排队的 `SendMsg(RM_CHANGELIGHT, 0,0,0,0)`（`Message.cs:1682`）。
     /// `None` ⇒ 跳过并登记（等待世界时钟/AOI 侧的 654 另有通路）。
@@ -1369,6 +1415,11 @@ impl EnterWorldInputs {
         // `sNoticeMsg` 为空也照发 header-only 658（`SendDefMessage` 的 `if (!string.IsNullOrEmpty)`
         // 只决定是否追加尾，空时走 `else SendSocket(ClientMsg)`）。故这里**不**用 `if let`。
         out.push(sm_sendnotice(&self.notice));
+        // **Lane B**：`UserLogon()` 里 `RecalcAbilitys()` 的直接帧（212/210）先于队列出队
+        // （真机 `658 → 212 → 51`）。顺序 = oracle 调用序（火球分支在前、治愈分支在后）。
+        for event in &self.magic_journal {
+            out.push(magic_event_frame(event));
+        }
 
         // ---- 入队：按 oracle 调用序把 15 条消息压进四叉最小堆（LOGON 出队时再入 654）----
         // 顺序 = 源码执行序（见 `LoginQueued` 的逐条行号）。**不要**按「可观测序」重排：
@@ -2236,6 +2287,7 @@ mod tests {
             dir: u8::try_from(u16at(&h2, 10) & 0xFF).unwrap(),
             light: u8::try_from(u16at(&h2, 10) >> 8).unwrap(),
             notice: edcode::decode(&t0),
+            magic_journal: Vec::new(),
             map_file_name: Some(edcode::decode(&t1)),
             logon_body_wl: Some((
                 i32at(&logon, 0),
@@ -2451,6 +2503,7 @@ mod tests {
             light: 4,
             day_bright: 5,
             notice: b"N".to_vec(),
+            magic_journal: Vec::new(),
             map_file_name: Some(b"0".to_vec()),
             logon_body_wl: Some((1, 2, 3, 0)),
             feature: Some((1, 2)),
@@ -2498,6 +2551,7 @@ mod tests {
             light: 4,
             day_bright: 5,
             notice: b"N".to_vec(),
+            magic_journal: Vec::new(),
             map_file_name: Some(b"0".to_vec()),
             logon_body_wl: Some((1, 2, 3, 0)),
             feature: Some((1, 2)),
@@ -3239,5 +3293,77 @@ mod tests {
         assert_eq!(u16at12(&body, 6), 0x0390);
         // 配置色（<=255）不变：MakeWord(0xDB, 0xFF) = 0xFFDB（金标准）。
         assert_eq!(u16at12(&sm_sysmessage(1, 0xDB, 0xFF, &[]), 6), 0xFFDB);
+    }
+
+    /// **Lane B**：`SM_DELMAGIC(212)` 的命令头逐字节 —— `Recog=MagIdx`、`Param/Tag=0`、`Series=1`、
+    /// **无尾**。真机 `s2c-621b` seq4 的 `raw_hex`（`2365…2121`，经网关 `client_frame`）解码后
+    /// 即本 12B（牙 3：把 recog 写成 0 或 series 写成 0 ⇒ 本用例红）。
+    #[test]
+    fn sm_delmagic_header_matches_capture() {
+        assert_eq!(
+            sm_delmagic(1),
+            vec![1, 0, 0, 0, 0xD4, 0x00, 0, 0, 0, 0, 1, 0],
+            "212: Recog=1, Ident=0x00D4, Param=0, Tag=0, Series=1"
+        );
+        assert_eq!(sm_delmagic(2)[0], 2, "Recog 是 MagIdx 而非固定 1");
+        assert_eq!(sm_delmagic(2)[10], 1, "Series 恒 1");
+        // 真机原始线缆字节（`client_frame`）— 与抓包 raw_hex 完全一致。
+        assert_eq!(crate::smframe::client_frame(&sm_delmagic(1)), {
+            let mut v = vec![b'#'];
+            v.extend_from_slice(&mir2_protocol::edcode::encode(&[
+                1, 0, 0, 0, 0xD4, 0x00, 0, 0, 0, 0, 1, 0,
+            ]));
+            v.push(b'!');
+            v
+        });
+    }
+
+    /// **Lane B**：`SM_ADDMAGIC(210)` —— `Recog/Param/Tag=0`、`Series=1`，尾 =
+    /// `EDCode.EncodeBuffer(ClientMagic)`（`Key=0, Level=1, CurTrain=0, Def=magic`）。
+    /// 牙 6：漏 `edcode` / 漏 `encode_client_magic` 的 `Def` ⇒ 长度与尾字节断言必红。
+    #[test]
+    fn sm_addmagic_header_and_client_magic_tail() {
+        let def = mir2_data::MagicInfo {
+            magic_id: 1,
+            magic_name: "火球术".into(),
+            effect_type: 1,
+            effect: 1,
+            spell: 5,
+            power: 3,
+            max_power: 9,
+            job: 0,
+            train_level: [1, 2, 3, 4],
+            max_train: [10, 20, 30, 40],
+            train_lv: 3,
+            delay_time: 700,
+            def_spell: 0,
+            def_power: 0,
+            def_max_power: 0,
+            desc: String::new(),
+        };
+        let body = sm_addmagic(&def);
+        assert_eq!(&body[..12], &[0, 0, 0, 0, 0xD2, 0x00, 0, 0, 0, 0, 1, 0]);
+        let client_magic = crate::itemwire::encode_client_magic(0, 1, 0, &def);
+        assert_eq!(client_magic.len(), 84, "1+1+2+4 + MagicInfo 76");
+        assert_eq!(body[12..], mir2_protocol::edcode::encode(&client_magic));
+    }
+
+    /// **Lane B**：入图帧序 —— 658 → `magic_journal`（212/210）→ 队列出队（51 …）。
+    #[test]
+    fn magic_journal_frames_follow_notice_and_precede_queue() {
+        use mir2_protocol::frame::CommandMessage;
+        let inputs = EnterWorldInputs {
+            actor_id: 7,
+            map_file_name: Some(b"0".to_vec()),
+            logon_body_wl: Some((0, 0, 0, 0)),
+            magic_journal: vec![MagicEvent::Del { mag_idx: 1 }],
+            ..EnterWorldInputs::default()
+        };
+        let ids: Vec<u16> = inputs
+            .frames()
+            .iter()
+            .map(|b| CommandMessage::from_bytes(b).unwrap().ident)
+            .collect();
+        assert_eq!(&ids[..3], &[658, 212, 51], "658 → 212 → 51");
     }
 }

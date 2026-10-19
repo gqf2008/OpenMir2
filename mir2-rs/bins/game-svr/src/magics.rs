@@ -45,17 +45,34 @@ pub async fn load_magics(conn: &str) -> Result<Vec<MagicInfo>, String> {
 #[derive(Debug, Clone, Default)]
 pub struct MagicTable {
     by_id: HashMap<u16, MagicInfo>,
+    /// 按 `magics` 装表序保留的**全表**（含重复 `MagicId` 行）：`FindMagic(string)`
+    /// （`WorldServer.cs:1559-1571`）线性扫的是 `M2Share.MagicList` 原表，不是按 id 去重后的表。
+    list: Vec<MagicInfo>,
 }
 
 impl MagicTable {
     #[must_use]
     pub fn new(list: Vec<MagicInfo>) -> Self {
         let mut by_id = HashMap::with_capacity(list.len());
-        for m in list {
+        for m in &list {
             // 首行胜（oracle `FindMagic` 线性首匹配；装表序 = `M2Share.MagicList` 序）。
-            by_id.entry(m.magic_id).or_insert(m);
+            by_id.entry(m.magic_id).or_insert_with(|| m.clone());
         }
-        Self { by_id }
+        Self { by_id, list }
+    }
+
+    /// `WorldServer.FindMagic(string sMagicName)`（`src/GameSrv/Word/WorldServer.cs:1559-1571`）：
+    /// 按**装表序**线性扫全表，首个 `MagicName.Equals(name, StringComparison.OrdinalIgnoreCase)` 命中。
+    ///
+    /// ⚠ 与 [`Self::get`] 的两处差异（必须照抄，不能共用比较器）：
+    /// - 名字比较**忽略大小写**（`OrdinalIgnoreCase`）；
+    /// - 扫的是**含重复 `MagicId` 的原表**（`M2Share.MagicList`），不是 `by_id` 的首行去重表
+    ///   ⇒ 同 `MagicId` 的两行可因名字不同而分别命中。
+    #[must_use]
+    pub fn find_by_name(&self, name: &str) -> Option<&MagicInfo> {
+        self.list
+            .iter()
+            .find(|m| ordinal_ignore_case_eq(&m.magic_name, name))
     }
 
     /// `GameItemSystem.GetStdItem` 式的查表接缝：`MagicId → 模板`；缺列 `None`。
@@ -72,6 +89,20 @@ impl MagicTable {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_id.is_empty()
+    }
+}
+
+/// C# `StringComparison.OrdinalIgnoreCase` 的等价物：逐 `char` 做 Unicode 小写映射后比较
+/// （不变文化、与区域设置无关；ASCII 与中文名行为与 C# 一致）。
+fn ordinal_ignore_case_eq(a: &str, b: &str) -> bool {
+    let mut ai = a.chars().flat_map(char::to_lowercase);
+    let mut bi = b.chars().flat_map(char::to_lowercase);
+    loop {
+        match (ai.next(), bi.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y)) if x == y => {}
+            _ => return false,
+        }
     }
 }
 
@@ -99,6 +130,53 @@ mod tests {
         assert_eq!(t.get(20).map(|m| m.effect_type), Some(0));
         assert_eq!(t.get(99), None);
         assert!(MagicTable::default().is_empty());
+    }
+
+    /// `FindMagic(string)`：**忽略大小写**、**装表序首匹配**、**扫含重复 id 的原表**。
+    #[test]
+    fn find_by_name_is_ordinal_ignore_case_over_load_order() {
+        let t = MagicTable::new(vec![
+            MagicInfo {
+                magic_id: 1,
+                magic_name: "FireBall".into(),
+                ..MagicInfo::default()
+            },
+            MagicInfo {
+                magic_id: 2,
+                magic_name: "fireball".into(),
+                ..MagicInfo::default()
+            },
+        ]);
+        assert_eq!(
+            t.find_by_name("fireball").map(|m| m.magic_id),
+            Some(1),
+            "装表序首匹配"
+        );
+        assert_eq!(t.find_by_name("FIREBALL").map(|m| m.magic_id), Some(1));
+        assert_eq!(t.find_by_name("火球术"), None);
+
+        // 重复 `MagicId`、不同名字：字符串查找可命中第二行（oracle 原表语义）。
+        let dup = MagicTable::new(vec![
+            MagicInfo {
+                magic_id: 48,
+                magic_name: "群体施毒术".into(),
+                ..MagicInfo::default()
+            },
+            MagicInfo {
+                magic_id: 48,
+                magic_name: "气功波".into(),
+                ..MagicInfo::default()
+            },
+        ]);
+        assert_eq!(
+            dup.get(48).map(|m| m.magic_name.as_str()),
+            Some("群体施毒术")
+        );
+        assert_eq!(
+            dup.find_by_name("气功波").map(|m| m.magic_id),
+            Some(48),
+            "名字查找扫原表而非去重表"
+        );
     }
 
     /// 重复 `MagicId` 必须**首行胜**：oracle `WorldServer.FindMagic`（`WorldServer.cs:1430-1443`）
