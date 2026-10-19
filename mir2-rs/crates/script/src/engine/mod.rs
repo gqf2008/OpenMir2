@@ -459,6 +459,12 @@ pub trait ScriptPlayer {
         false
     }
 
+    /// **PL-3 / P27**：`ActionOfKillMonExpRate`（`ExecutionProcessingSys.cs:5449-5464`）写
+    /// `playerActor.KillMonExpRate = nRate; KillMonExpRateTime = nTime;`。
+    fn set_kill_mon_exp_rate(&mut self, _rate: i32, _time: i32) {}
+    /// **PL-3 / P27**：`ActionOfPowerRate`（`ExecutionProcessingSys.cs:5539-5554`）写
+    /// `playerActor.PowerRate = nRate; PowerRateTime = nTime;`。
+    fn set_power_rate(&mut self, _rate: i32, _time: i32) {}
     /// `playerActor.AdminMode`
     fn admin_mode(&self) -> bool {
         false

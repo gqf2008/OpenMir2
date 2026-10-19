@@ -633,6 +633,34 @@ impl Engine<'_, '_> {
                 self.player.set_re_level(0);
                 self.player.has_level_up(0);
             }
+            "ActionOfKillMonExpRate" => {
+                // C# `ExecutionProcessingSys.cs:5449-5464`：两参数先 `StrToInt(default -1)`；
+                // 任一 `< 0` ⇒ `ScriptActionError` 且**不写字段**（0 合法）。
+                let n_rate = mir2_shared::hutil32::str_to_int(&info.s_param1, -1);
+                let n_time = mir2_shared::hutil32::str_to_int(&info.s_param2, -1);
+                if n_rate < 0 || n_time < 0 {
+                    self.script_action_error("KillMonExpRate", info);
+                    return;
+                }
+                self.player.set_kill_mon_exp_rate(n_rate, n_time);
+                // `if (SystemShare.Config.ShowScriptActionMsg) SysMsg(string.Format(...))`：
+                // **登记为不可观测**——`NpcPlayer::sys_msg` 是默认空实现（宿主只 drain says），
+                // 且部署 `Envir` 0 处使用 197/198（`plan-run-gap-batches-20261018.md` §1.2）。
+                // 部署 `String.conf:235-236` 的模板是 `%g/%d` 占位而代码用 `string.Format`
+                // ⇒ 实发文本是字面量 `%g/%d`（不替换），也一并登记。
+                let _ = self.player.config_show_script_action_msg();
+            }
+            "ActionOfPowerRate" => {
+                // C# `ExecutionProcessingSys.cs:5539-5554`（与 197 同形）。
+                let n_rate = mir2_shared::hutil32::str_to_int(&info.s_param1, -1);
+                let n_time = mir2_shared::hutil32::str_to_int(&info.s_param2, -1);
+                if n_rate < 0 || n_time < 0 {
+                    self.script_action_error("PowerRate", info);
+                    return;
+                }
+                self.player.set_power_rate(n_rate, n_time);
+                let _ = self.player.config_show_script_action_msg();
+            }
             "ActionOfReNewLevel" => {
                 // C# 先把 sParam1/sParam2 收成 `byte`（截断后恒 >= 0，原文的两个分支不可达）
                 let n_re_level = mir2_shared::hutil32::str_to_int(&info.s_param1, -1) as u8;

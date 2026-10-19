@@ -944,6 +944,8 @@ async fn main() -> Result<()> {
                     spell_fill_time: cfg.spell_fill_time,
                     // **PL-1 / P32**：`[Setup] RevivalTime`（`GameSvrConf.cs:804/1725`，缺省 60000ms）。
                     revival_time: i64::from(cfg.revival_time),
+                    hunger_system: cfg.hunger_system,
+                    hunger_dec_hp: cfg.hunger_dec_hp,
                     home: home_fallback,
                     newbie: NewbieItems {
                         candle: cfg.candle.clone(),
@@ -1503,6 +1505,14 @@ fn run_party_goto_label(
             group_owner,
             &group_member_jobs,
         );
+        // **PL-3 / P27**：脚本 197/198 的读写源是 `PlayObject` 自身 ⇒ 从世界实体快照
+        // `KillMonExpRate/KillMonExpRateTime/PowerRate/PowerRateTime`，执行后写回。
+        if let Some(e) = world.entities.get(actor) {
+            player.kill_mon_exp_rate = e.kill_mon_exp_rate;
+            player.kill_mon_exp_rate_time = e.kill_mon_exp_rate_time;
+            player.power_rate = e.power_rate;
+            player.power_rate_time = e.power_rate_time;
+        }
         if let Some(says) = host.goto_label("QFunction", &mut player, label, false) {
             says_len = says.len();
             if let Some(tx) = route_to_gate(gates, gate_idx, socket, "组队 GotoLable 说词") {
@@ -1519,6 +1529,12 @@ fn run_party_goto_label(
         }
         if let Some(sg) = ground_sessions.get_mut(chr_name) {
             sg.state.gold = player.gold;
+        }
+        if let Some(e) = world.entities.get_mut(actor) {
+            e.kill_mon_exp_rate = player.kill_mon_exp_rate;
+            e.kill_mon_exp_rate_time = player.kill_mon_exp_rate_time;
+            e.power_rate = player.power_rate;
+            e.power_rate_time = player.power_rate_time;
         }
     }
     world.rng = rng;
@@ -9444,6 +9460,10 @@ fn new_player_entity(chr_name: String, x: i32, y: i32) -> mir2_world::Entity {
     let mut e = mir2_world::Entity::new(0, chr_name, x, y);
     e.want_ref_msg = true;
     e.view_range = 12;
+    // **PL-3 / P27**：`PlayObject.cs:942` 的 ctor 取钟（`ExpRateTick = GetTickCount()`）。
+    // `Entity::new` 拿不到宿主时钟 ⇒ 在玩家构造点用同一时钟域（[`now_ms`]）重盖；
+    // 否则 0 会让登录后的第一个宿主 tick 立即过 `>1000` 门。
+    e.exp_rate_tick = now_ms();
     e
 }
 
@@ -10375,6 +10395,14 @@ fn drain_combat_downlink(
     // ② 死亡广播（含死者自己；展示表登记了玩家与已生成的怪物，未登记 actor 跳过并 WRN）。
     for death in &rec.deaths {
         let dead_id = death.0;
+        // **PL-3 / P26（spike §5.5#9）**：`PlayObject.Die()`（`PlayObject.cs:1967-1972`）清
+        // `IncSpell/IncHealth/IncHealing`（`PerHealth/PerSpell` 不清）。玩家死亡由 `tick_tail`
+        // 结算 ⇒ 本处按 `rec.deaths` 补宿主投影；否则死前吃的药会在复活后继续回血。
+        if let Some(sg) = sessions.values_mut().find(|s| s.actor_id == dead_id) {
+            sg.recovery.inc_health = 0;
+            sg.recovery.inc_spell = 0;
+            sg.recovery.inc_healing = 0;
+        }
         let Some(d) = displays.get(dead_id) else {
             glog!("WRN", "死亡下行：actor={dead_id} 无展示表 ⇒ 跳过（登记）");
             continue;
@@ -11925,6 +11953,13 @@ struct SessionGround {
     user_unlock_durg: bool,
     /// `PlayObject.HungerStatus`（`CM_EAT` 的 `StdMode 1`：`+= DuraMax/10`，上限 5000）。
     hunger_status: i32,
+    /// `PlayObject.DecHpTick`（`PlayObject.cs:783`；**ctor 不赋值** ⇒ 0）——P25 的 `DECHP` 门基准。
+    dec_hp_tick: i64,
+    /// `PlayObject.IncHpTick`（`PlayObject.cs:784`；ctor 不赋值 ⇒ 0）——P25 的 `INCHP` 门基准。
+    inc_hp_tick: i64,
+    /// `PlayObject.DecHungerPointTick`（`PlayObject.cs:296`；ctor `:887` = `GetTickCount()`）
+    /// ——P26 的 1s 门基准（**不是 0**）。
+    dec_hunger_point_tick: i64,
     /// `PlayObject.QueryBagItemsTick`（`PlayObject.Message.cs:786` 的 30s 限频）：`None` = 未查过（照 oracle 首次即过）。
     query_bag_items_tick: Option<i64>,
     /// `PlayObject.BoReconnection`（`PlayObject.cs:376`）：`CM_SOFTCLOSE` 置真 ⇒ 小退后允许重连。
@@ -12159,6 +12194,10 @@ struct EnterConfig {
     /// **PL-1 / P32**：`[Setup] RevivalTime`（oracle `GameSvrConf.cs:804/1725`，缺省 `60*1000`ms）——
     /// 复活戒指的两次复活间隔门（`PlayObject.Message.cs:753`，**严格 `>`**）。
     revival_time: i64,
+    /// **PL-3 / P26**：`[Setup] HungerSystem`（缺省 false；部署 `Server.conf:396` = 0）。
+    hunger_system: bool,
+    /// **PL-3 / P26**：`[Setup] HungerDecHP`（缺省 false；部署 `Server.conf:398` = 0）。
+    hunger_dec_hp: bool,
     /// 空 `HomeMap` 新角色的进图回落（`homemap::HomeFallback`，`WorldServer.cs:250-260`）。
     home: homemap::HomeFallback,
     /// `IsNewHuman` 的新手物品输入。
@@ -12272,6 +12311,8 @@ impl EnterConfig {
             health_fill_time: 300,
             spell_fill_time: 800,
             revival_time: 60_000,
+            hunger_system: false,
+            hunger_dec_hp: false,
             home: homemap::HomeFallback {
                 start_points: Vec::new(),
                 start_point_size: 2,
@@ -12848,6 +12889,303 @@ fn drain_player_need_recheck_with_magic(
     }
 }
 
+/// **PL-3 / P25**：地图 `DECHP`/`INCHP`（`PlayObject.Message.cs:569-594`）。
+///
+/// 逐会话（**按键排序**）读 `Envir.Flag`（`MapRegistry::flag_of(entity.map_id)`）：
+/// - 两块都是**严格 `>`** 门；`nDECHPTIME/nINCHPTIME` 是秒（`int` 乘法 unchecked）；
+/// - `DecHpTick/IncHpTick` ctor 不赋值 ⇒ 0 ⇒ 进图后第一次调用立即触发；
+/// - **无 `!Death` 门**；
+/// - `INCHP` 判上限与加血都用 `nDECHPPOINT`（oracle bug，照抄）；
+/// - 每次命中都调用 `HealthSpellChanged()`（即使 HP 数值没变）⇒ 逐次
+///   [`game_svr::run_frames::RunFrames::health_spell_changed`]。
+///
+/// 写回：`Entity.hp` 是权威（战斗/死亡读它），`sg.state.wabil.hp` 是 53/存档的投影。
+fn drain_player_map_hp(
+    world: &mut mir2_world::World,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    online: &OnlineRegistry,
+    registry: Option<&mir2_envir::MapRegistry>,
+    now: i64,
+    frames: &mut game_svr::run_frames::RunFrames,
+) {
+    let Some(reg) = registry else {
+        return;
+    };
+    let mut names: Vec<String> = sessions.keys().cloned().collect();
+    names.sort();
+    for name in names {
+        if online.iter().all(|e| e.chr_name != name) {
+            continue;
+        }
+        let Some(sg) = sessions.get_mut(&name) else {
+            continue;
+        };
+        let actor_id = sg.actor_id;
+        let Some(e) = world.entities.get_mut(actor_id) else {
+            continue;
+        };
+        let Some(flag) = reg.flag_of(e.map_id) else {
+            continue;
+        };
+        let mut ticks = game_svr::run_segments::MapHpTicks {
+            dec_hp_tick: sg.dec_hp_tick,
+            inc_hp_tick: sg.inc_hp_tick,
+        };
+        let mut hp = e.hp;
+        let calls = game_svr::run_segments::map_hp_tick(flag, &mut hp, e.max_hp, now, &mut ticks);
+        e.hp = hp;
+        sg.dec_hp_tick = ticks.dec_hp_tick;
+        sg.inc_hp_tick = ticks.inc_hp_tick;
+        if calls == 0 {
+            continue;
+        }
+        sg.state.wabil.hp = hp;
+        for _ in 0..calls {
+            frames.health_spell_changed(actor_id, sg.show_hp);
+        }
+    }
+}
+
+/// **PL-3 / P26**：饥饿系统（`PlayObject.Message.cs:596-635`）。
+///
+/// - 总开关 `HungerSystem`（部署 0 ⇒ 生产整段短路）；
+/// - 1s **严格 `>`** 门，过门即刷新 `DecHungerPointTick`；
+/// - `HungerStatus > 0`：`GetMyStatus()` 跨档 ⇒ **完整 `RecalcAbilitys` + `RM_MYSTATUS`**
+///   （不是只发帧）；
+/// - `<= 0 && HungerDecHP`：体力点/`Per*`/HP 逐字段（见 [`game_svr::run_segments::hunger_tick`]）
+///   + `HealthSpellChanged()`；
+/// - **无 `!Death` 门**。
+///
+/// 帧只入 G-B 队列（53/708 按 RM ident 低字节排序），组边界统一 flush。
+#[allow(clippy::too_many_arguments)]
+fn drain_player_hunger(
+    world: &mut mir2_world::World,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    online: &OnlineRegistry,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    hunger_system: bool,
+    hunger_dec_hp: bool,
+    now: i64,
+    frames: &mut game_svr::run_frames::RunFrames,
+) {
+    if !hunger_system {
+        return;
+    }
+    let mut names: Vec<String> = sessions.keys().cloned().collect();
+    names.sort();
+    for name in names {
+        if online.iter().all(|e| e.chr_name != name) {
+            continue;
+        }
+        let Some(sg) = sessions.get_mut(&name) else {
+            continue;
+        };
+        let actor_id = sg.actor_id;
+        let Some(hp0) = world.entities.get(actor_id).map(|e| e.hp) else {
+            continue;
+        };
+        let mut hunger_status = sg.hunger_status;
+        let mut hp = hp0;
+        let mut health_tick = sg.stamina.health_tick;
+        let mut spell_tick = sg.stamina.spell_tick;
+        let mut per_health = sg.recovery.per_health;
+        let mut per_spell = sg.recovery.per_spell;
+        let mut ticks = game_svr::run_segments::HungerTicks {
+            dec_hunger_point_tick: sg.dec_hunger_point_tick,
+        };
+        let outcome = game_svr::run_segments::hunger_tick(
+            hunger_system,
+            hunger_dec_hp,
+            &mut hunger_status,
+            &mut hp,
+            &mut health_tick,
+            &mut spell_tick,
+            &mut per_health,
+            &mut per_spell,
+            now,
+            &mut ticks,
+        );
+        // 状态回写（Recalc 不碰 Per*，见 `RecalcAbilitys` 逐行）。
+        sg.hunger_status = hunger_status;
+        sg.stamina.health_tick = health_tick;
+        sg.stamina.spell_tick = spell_tick;
+        sg.recovery.per_health = per_health;
+        sg.recovery.per_spell = per_spell;
+        sg.dec_hunger_point_tick = ticks.dec_hunger_point_tick;
+        match outcome {
+            game_svr::run_segments::HungerOutcome::None => {}
+            game_svr::run_segments::HungerOutcome::StatusChanged => {
+                // `RefMyStatus()`（`PlayObject.Base.cs:288-292`）= `RecalcAbilitys()` +
+                // `SendMsg(RM_MYSTATUS)`。`RecalcAbilitys` 的 `cur_hp/cur_mp` 必须取实体当前值。
+                let (hp_now, mp_now) = world
+                    .entities
+                    .get(actor_id)
+                    .map_or((hp, 0), |e| (e.hp, e.mp));
+                sg.state.wabil.hp = hp_now;
+                sg.state.wabil.mp = mp_now;
+                let extra_abil = world.entities.get(actor_id).map(|e| e.extra_abil);
+                let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
+                if let Some(e) = world.entities.get_mut(actor_id) {
+                    apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+                    if effect.revival {
+                        e.revival = true;
+                    }
+                    e.flame_ring |= effect.flame_ring;
+                }
+                frames.enqueue(actor_id, game_svr::run_frames::GroupFrame::MyStatus);
+            }
+            game_svr::run_segments::HungerOutcome::DecHealth => {
+                if let Some(e) = world.entities.get_mut(actor_id) {
+                    e.hp = hp;
+                }
+                sg.state.wabil.hp = hp;
+                frames.health_spell_changed(actor_id, sg.show_hp);
+            }
+        }
+    }
+}
+
+/// **PL-3 / P27**：经验/攻击倍率 1s 递减（`PlayObject.Message.cs:636-657`）。
+///
+/// - 门**严格 `>` 1000**；**过门无条件刷新** `ExpRateTick`；
+/// - 两个倒计时独立、每次最多减 1（`if` 非 `while`，不追帧）；
+/// - `Time = 0` 是永久倍率；
+/// - 归零各发一条**红色** `SysMsg`（`MsgColor.Red` + `MsgType.Hint`），顺序「经验 → 攻击」；
+///   文本是 oracle 的**硬编码字面量**，走 GBK。
+fn drain_player_run_rates(
+    world: &mut mir2_world::World,
+    sessions: &std::collections::HashMap<String, SessionGround>,
+    red_f_color: u8,
+    red_b_color: u8,
+    now: i64,
+    frames: &mut game_svr::run_frames::RunFrames,
+) {
+    let mut names: Vec<String> = sessions.keys().cloned().collect();
+    names.sort();
+    for name in names {
+        let Some(sg) = sessions.get(&name) else {
+            continue;
+        };
+        let actor_id = sg.actor_id;
+        let Some(e) = world.entities.get_mut(actor_id) else {
+            continue;
+        };
+        let mut timers = game_svr::run_segments::RateTimers {
+            kill_mon_exp_rate: e.kill_mon_exp_rate,
+            kill_mon_exp_rate_time: e.kill_mon_exp_rate_time,
+            power_rate: e.power_rate,
+            power_rate_time: e.power_rate_time,
+            exp_rate_tick: e.exp_rate_tick,
+        };
+        let events = game_svr::run_segments::rate_tick(now, &mut timers);
+        e.kill_mon_exp_rate = timers.kill_mon_exp_rate;
+        e.kill_mon_exp_rate_time = timers.kill_mon_exp_rate_time;
+        e.power_rate = timers.power_rate;
+        e.power_rate_time = timers.power_rate_time;
+        e.exp_rate_tick = timers.exp_rate_tick;
+        if events.exp_recovered {
+            frames.enqueue(
+                actor_id,
+                game_svr::run_frames::GroupFrame::SysMessage {
+                    f_color: u16::from(red_f_color),
+                    b_color: u16::from(red_b_color),
+                    text: enter::gbk("经验倍数恢复正常..."),
+                },
+            );
+        }
+        if events.power_recovered {
+            frames.enqueue(
+                actor_id,
+                game_svr::run_frames::GroupFrame::SysMessage {
+                    f_color: u16::from(red_f_color),
+                    b_color: u16::from(red_b_color),
+                    text: enter::gbk("攻击力倍数恢复正常..."),
+                },
+            );
+        }
+    }
+}
+
+/// **G-B 组边界 flush**（P4∪P5 + P27 的 `SysMsg`）：按 oracle `MsgQueue` 的 RM ident 低字节
+/// 出队（53 → `SM_DURACHANGE` → `SM_MYSTATUS` → `SM_SYSMESSAGE`）。
+///
+/// - 53 的载荷在**此刻**读会话 `WAbil`（oracle 在出队时读 `WAbil`）；
+/// - `SM_MYSTATUS` 的 `Param` 在**此刻**读 `HungerStatus`（oracle `Operate` 时算
+///   `(short)GetMyStatus()`，`PlayObject.Message.cs:1949-1950`）；
+/// - `ShowHp` 的观察者副本在源自己那份发完后逐目标发（同一 body）。
+fn flush_run_frames(
+    frames: &mut game_svr::run_frames::RunFrames,
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    sessions: &std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    range: i32,
+) {
+    let actors: Vec<i32> = frames.pending_actors().collect();
+    for actor_id in actors {
+        let (queued, ref_copies) = frames.take(actor_id);
+        let Some(sg) = sessions.values().find(|s| s.actor_id == actor_id) else {
+            continue;
+        };
+        let Some(entry) = online.iter().find(|e| e.actor_id == actor_id) else {
+            glog!(
+                "WRN",
+                "G-B 帧：actor={actor_id} 无在线网关坐标 ⇒ 不回帧（登记）"
+            );
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "G-B 组帧") else {
+            continue;
+        };
+        let health_body = game_svr::smframe::sm_healthspellchanged_frame(
+            actor_id,
+            sg.state.wabil.hp,
+            sg.state.wabil.mp,
+            sg.state.wabil.max_hp,
+        );
+        for frame in queued {
+            let body = match frame {
+                game_svr::run_frames::GroupFrame::HealthSpell => health_body.clone(),
+                game_svr::run_frames::GroupFrame::DuraChange {
+                    slot,
+                    dura,
+                    dura_max,
+                } => game_svr::smframe::sm_durachange(dura, slot, dura_max),
+                game_svr::run_frames::GroupFrame::MyStatus => game_svr::smframe_ext::sm_mystatus(
+                    game_svr::useitem::my_status(sg.hunger_status),
+                ),
+                game_svr::run_frames::GroupFrame::SysMessage {
+                    f_color,
+                    b_color,
+                    text,
+                } => game_svr::smframe::sm_sysmessage(actor_id, f_color, b_color, &text),
+            };
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body,
+            });
+        }
+        // `SendRefMsg(53)`（`ShowHp`）：观察者各 `ref_copies` 份；源自己那份已在上面。
+        for _ in 0..ref_copies {
+            for target_id in chat::hear_targets(world, actor_id, range) {
+                if target_id == actor_id {
+                    continue;
+                }
+                let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+                    continue;
+                };
+                if let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "G-B 健康变化广播")
+                {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket: t.socket,
+                        body: health_body.clone(),
+                    });
+                }
+            }
+        }
+    }
+}
+
 /// **PL-1 / P32**：复活戒指（`PlayObject.Message.cs:747-763` + `PlayObject.cs:5355-5392`）。
 ///
 /// 门（顺序照 oracle）：
@@ -12887,6 +13225,8 @@ fn drain_player_revival(
     revival_msg: &[u8],
     ref_msg_range: i32,
 ) {
+    // 单测/回归入口：P32 是 G-B（P4+P5）的最后一个生产者，段末 flush 保持既有「调用即出帧」契约。
+    let mut frames = game_svr::run_frames::RunFrames::new();
     drain_player_revival_with_magic(
         world,
         sessions,
@@ -12898,9 +13238,10 @@ fn drain_player_revival(
         green_f_color,
         green_b_color,
         revival_msg,
-        ref_msg_range,
         None,
+        &mut frames,
     );
+    flush_run_frames(&mut frames, world, online, sessions, gates, ref_msg_range);
 }
 
 /// 带 210/212 审计的 [`drain_player_revival`]（生产路径）。
@@ -12916,10 +13257,12 @@ fn drain_player_revival_with_magic(
     green_f_color: u8,
     green_b_color: u8,
     revival_msg: &[u8],
-    ref_msg_range: i32,
     // **Lane B**：复活戒指打碎（`Index=0`）后的 `RecalcAbilitys()` 会删治愈术并发 212
     // （`RecoveryRing` 每轮重置；`FlameRing` 粘滞不删）。
     mut magic: Option<MagicSource<'_>>,
+    // **PL-3**：G-B（P4+P5）待发队列；53/`RM_DURACHANGE`/`RM_SYSMESSAGE` 只入队，
+    // 组边界由调用方（`sim_loop` / 单测包装）flush。
+    frames: &mut game_svr::run_frames::RunFrames,
 ) {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     names.sort();
@@ -13047,15 +13390,14 @@ fn drain_player_revival_with_magic(
         }
 
         // ── 复活本体 ──
-        let (hp, mp, max_hp) = {
+        {
             let e = world.entities.get_mut(actor_id).expect("刚查过存在");
             e.revival_tick = now;
             e.hp = e.max_hp;
             // 会话是 53/存档的投影，同步同一真源。
             sg.state.wabil.hp = e.hp;
             sg.state.wabil.max_hp = e.max_hp;
-            (e.hp, e.mp, e.max_hp)
-        };
+        }
         sync_use_items_to_entity(world, sg);
 
         let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "P32 复活帧") else {
@@ -13067,42 +13409,29 @@ fn drain_player_revival_with_magic(
                 body,
             });
         }
-        // **复验 F2**：生产选路 = `sm_healthspellchanged_frame`（默认冻结客户端布局 ⇒ 12B
-        // `TCharDesc` 尾）；`sm_healthspellchanged` 只服务 `MIR2_CLIENT_ABILITY_LAYOUT=0` 的
-        // oracle 对拍路径。`broadcast_healthspellchanged` 复用同一 body（SendRefMsg 同帧）。
-        let body = game_svr::smframe::sm_healthspellchanged_frame(actor_id, hp, mp, max_hp);
-        let _ = tx.send(SimToGate::SendFrame {
-            socket: entry.socket,
-            body: body.clone(),
-        });
-        if sg.show_hp {
-            broadcast_healthspellchanged(world, online, gates, actor_id, &body, ref_msg_range);
-        }
+        // **PL-3 帧面**：P32 的 53 / `RM_DURACHANGE` / `RM_SYSMESSAGE` 与 P25/P26/P27 同属
+        // oracle 的 **G-B 组**（P4∪P5，`base.Run()` 的消息段出队）。只入队，组边界 flush；
+        // 出队序按 RM ident 低字节：53(68) → 141 → 166 → 252（`run_frames` 模块头）。
+        // 载荷在 flush 时读会话 `WAbil`（oracle 出队时读 `WAbil`）。
+        frames.health_spell_changed(actor_id, sg.show_hp);
         for (slot, dura, dura_max) in durachange_items {
-            let body = game_svr::smframe::gm_data_body(
-                game_svr::smframe::command_header(
-                    i32::from(dura),
-                    mir2_protocol::messages::SM_DURACHANGE,
-                    u16::try_from(slot).unwrap_or(0),
-                    dura_max,
-                    0,
-                ),
-                &[],
-            );
-            let _ = tx.send(SimToGate::SendFrame {
-                socket: entry.socket,
-                body,
-            });
-        }
-        let _ = tx.send(SimToGate::SendFrame {
-            socket: entry.socket,
-            body: game_svr::smframe::sm_sysmessage(
+            frames.enqueue(
                 actor_id,
-                u16::from(green_f_color),
-                u16::from(green_b_color),
-                revival_msg,
-            ),
-        });
+                game_svr::run_frames::GroupFrame::DuraChange {
+                    slot: u8::try_from(slot).unwrap_or(0),
+                    dura,
+                    dura_max,
+                },
+            );
+        }
+        frames.enqueue(
+            actor_id,
+            game_svr::run_frames::GroupFrame::SysMessage {
+                f_color: u16::from(green_f_color),
+                b_color: u16::from(green_b_color),
+                text: revival_msg.to_vec(),
+            },
+        );
     }
 }
 
@@ -14994,6 +15323,12 @@ fn sim_loop(
                                                             // 与 `CM_EAT` 的 Shape 2 同一状态变）：登记为未建模。
                                                             user_unlock_durg: false,
                                                             hunger_status: d.hunger_status,
+                                                            // `PlayObject.cs:783-784`：两 tick 无 ctor 赋值 ⇒ 0
+                                                            //（进图后第一次 Run 立即过门）。
+                                                            dec_hp_tick: 0,
+                                                            inc_hp_tick: 0,
+                                                            // `PlayObject.cs:887`：ctor 取钟 ⇒ 1s 后才触发。
+                                                            dec_hunger_point_tick: now_ms(),
                                                             query_bag_items_tick: None,
                                                             bo_reconnection: false,
                                                             bo_soft_close: false,
@@ -15167,6 +15502,17 @@ fn sim_loop(
                                                                     group_owner,
                                                                     &group_member_jobs,
                                                                 );
+                                                                // **PL-3 / P27**：脚本 197/198 的
+                                                                // 读写源（见 `run_party_goto_label` 同段）。
+                                                                if let Some(e) = world.entities.get(id) {
+                                                                    player.kill_mon_exp_rate =
+                                                                        e.kill_mon_exp_rate;
+                                                                    player.kill_mon_exp_rate_time =
+                                                                        e.kill_mon_exp_rate_time;
+                                                                    player.power_rate = e.power_rate;
+                                                                    player.power_rate_time =
+                                                                        e.power_rate_time;
+                                                                }
                                                                 if let Some(says) =
                                                                     host.run_login(&mut player)
                                                                 {
@@ -15206,6 +15552,16 @@ fn sim_loop(
                                                                         .get_mut(&head.chr_name)
                                                                 {
                                                                     sg.state.gold = player.gold;
+                                                                }
+                                                                if let Some(e) = world.entities.get_mut(id) {
+                                                                    e.kill_mon_exp_rate =
+                                                                        player.kill_mon_exp_rate;
+                                                                    e.kill_mon_exp_rate_time =
+                                                                        player.kill_mon_exp_rate_time;
+                                                                    e.power_rate =
+                                                                        player.power_rate;
+                                                                    e.power_rate_time =
+                                                                        player.power_rate_time;
                                                                 }
                                                             }
                                                             world.rng = rng;
@@ -15420,22 +15776,64 @@ fn sim_loop(
                 cfg: magic_cfg_of(&enter_cfg),
             }),
         );
+        // **PL-3 宿主段（P25 → P26 → P27）**：oracle `PlayObject.Message.cs:569-657`，在 P21
+        // 之后、P32（P5）之前。三段的 53 / `SM_MYSTATUS` / `SysMsg` 与 P32 同属 **G-B 组**
+        // （P4∪P5），只入队，P32 之后统一 flush。
+        let mut run_frames = game_svr::run_frames::RunFrames::new();
+        // oracle 一次 `Run()` 只取一次 `GetTickCount()`；本宿主同样在段首取一次，三段与 P32 共用，
+        // 避免同一 tick 内多次墙钟读取造成门比较抖动。
+        let host_now = now_ms();
+        drain_player_map_hp(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            registry.as_ref(),
+            host_now,
+            &mut run_frames,
+        );
+        drain_player_hunger(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            &enter_cfg.catalog,
+            enter_cfg.hunger_system,
+            enter_cfg.hunger_dec_hp,
+            host_now,
+            &mut run_frames,
+        );
+        drain_player_run_rates(
+            &mut world,
+            &ground_sessions,
+            enter_cfg.red_msg_f_color,
+            enter_cfg.red_msg_b_color,
+            host_now,
+            &mut run_frames,
+        );
         drain_player_revival_with_magic(
             &mut world,
             &mut ground_sessions,
             &online,
             &gates,
             &enter_cfg.catalog,
-            now_ms(),
+            host_now,
             enter_cfg.revival_time,
             enter_cfg.green_msg_f_color,
             enter_cfg.green_msg_b_color,
             &enter::gbk(enter_cfg.string_conf.revival_recover()),
-            enter_cfg.ref_msg_range,
             Some(MagicSource {
                 saves: &mut saves,
                 cfg: magic_cfg_of(&enter_cfg),
             }),
+            &mut run_frames,
+        );
+        // **G-B 组边界**（oracle `base.Run()` 的消息段 P6）：53 → 141 → 166 → 252。
+        flush_run_frames(
+            &mut run_frames,
+            &world,
+            &online,
+            &ground_sessions,
+            &gates,
+            enter_cfg.ref_msg_range,
         );
         // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
         world.tick_tail(&mut rec);
@@ -18441,6 +18839,9 @@ mod tests {
             abil_see_heal_gauge: false,
             user_unlock_durg: false,
             hunger_status: 0,
+            dec_hp_tick: 0,
+            inc_hp_tick: 0,
+            dec_hunger_point_tick: 0,
             query_bag_items_tick: None,
             bo_reconnection: false,
             bo_soft_close: false,
@@ -18632,6 +19033,9 @@ mod tests {
             abil_see_heal_gauge: false,
             user_unlock_durg: false,
             hunger_status: 55,
+            dec_hp_tick: 0,
+            inc_hp_tick: 0,
+            dec_hunger_point_tick: 0,
             query_bag_items_tick: None,
             bo_reconnection: false,
             bo_soft_close: false,
@@ -20759,6 +21163,9 @@ mod tests {
                 abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
+                dec_hp_tick: 0,
+                inc_hp_tick: 0,
+                dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
                 bo_soft_close: false,
@@ -20948,6 +21355,9 @@ mod tests {
                 abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
+                dec_hp_tick: 0,
+                inc_hp_tick: 0,
+                dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
                 bo_soft_close: false,
@@ -21110,6 +21520,9 @@ mod tests {
                 abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
+                dec_hp_tick: 0,
+                inc_hp_tick: 0,
+                dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
                 bo_soft_close: false,
@@ -21252,6 +21665,9 @@ mod tests {
                 abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
+                dec_hp_tick: 0,
+                inc_hp_tick: 0,
+                dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
                 bo_soft_close: false,
@@ -22077,6 +22493,9 @@ mod tests {
                 abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
+                dec_hp_tick: 0,
+                inc_hp_tick: 0,
+                dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
                 bo_soft_close: false,
@@ -22238,6 +22657,9 @@ mod tests {
                 abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
+                dec_hp_tick: 0,
+                inc_hp_tick: 0,
+                dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
                 bo_soft_close: false,
@@ -22847,6 +23269,9 @@ mod tests {
                 abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
+                dec_hp_tick: 0,
+                inc_hp_tick: 0,
+                dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
                 bo_soft_close: false,
@@ -26808,6 +27233,9 @@ mod tests {
                 abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
+                dec_hp_tick: 0,
+                inc_hp_tick: 0,
+                dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
                 bo_soft_close: false,
@@ -26972,6 +27400,9 @@ mod tests {
                 abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
+                dec_hp_tick: 0,
+                inc_hp_tick: 0,
+                dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
                 bo_soft_close: false,
@@ -27102,6 +27533,9 @@ mod tests {
                 abil_see_heal_gauge: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
+                dec_hp_tick: 0,
+                inc_hp_tick: 0,
+                dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
                 bo_soft_close: false,
@@ -41320,6 +41754,694 @@ mod tests {
             },
         );
         c
+    }
+
+    // ───────────────────────── PL-3（P25/P26/P27）─────────────────────────
+
+    /// PL-3 地图夹具：临时 `Envir/MapInfo.txt` + `Map/fa.map`（16×16），注册表 id 0 = `A`。
+    fn pl3_registry(flag_line: &str) -> (mir2_envir::MapRegistry, std::path::PathBuf) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "pl3-map-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let map_dir = dir.join("Map");
+        let envir = dir.join("Envir");
+        std::fs::create_dir_all(&map_dir).unwrap();
+        std::fs::create_dir_all(&envir).unwrap();
+        let mut buf = vec![0u8; mir2_envir::HEADER_BYTES + 16 * 16 * mir2_envir::CELL_BYTES];
+        buf[0..2].copy_from_slice(&16u16.to_le_bytes());
+        buf[2..4].copy_from_slice(&16u16.to_le_bytes());
+        std::fs::write(map_dir.join("fa.map"), buf).unwrap();
+        // `MapInfo` 的 `DECHP(time/point)` 口径（`Maps.cs:198-209`：`/` 之后是 point）。
+        let text = format!("[A|fa 甲] {flag_line}\n");
+        let (bytes, _, _) = encoding_rs::GBK.encode(&text);
+        std::fs::write(envir.join("MapInfo.txt"), bytes.as_ref()).unwrap();
+        let reg = mir2_envir::MapLoader::new(&dir, "Map", "Envir")
+            .load_registry()
+            .unwrap();
+        assert!(
+            reg.flag_of(0).is_some(),
+            "夹具注册表必须加载出 id 0（MapInfo/地图文件/GBK）"
+        );
+        (reg, dir)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn p25_fixture(
+        flag_line: &str,
+        hp: u16,
+        max_hp: u16,
+        show_hp: bool,
+    ) -> (
+        mir2_world::World,
+        HashMap<String, SessionGround>,
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        i32,
+        mir2_envir::MapRegistry,
+        std::path::PathBuf,
+    ) {
+        let (registry, dir) = pl3_registry(flag_line);
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("p25a");
+        let mut ent = new_player_entity("p25a".to_string(), 2, 2);
+        ent.hp = hp;
+        ent.max_hp = max_hp;
+        let actor = world.enter_map("p25a", ent, 0).unwrap();
+        let mut sg = test_session_ground(actor);
+        sg.state.wabil.hp = hp;
+        sg.state.wabil.max_hp = max_hp;
+        sg.show_hp = show_hp;
+        // `DecHpTick/IncHpTick` ctor 不赋值 ⇒ 0（进图后第一次立即触发）。
+        sg.dec_hp_tick = 0;
+        sg.inc_hp_tick = 0;
+        let mut sessions = HashMap::new();
+        sessions.insert("p25a".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p25a", 1, 0, 901, actor));
+        let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = HashMap::new();
+        gates.insert(0u8, tx);
+        (world, sessions, online, gates, rx, actor, registry, dir)
+    }
+
+    /// P25-1：`DECHP(1/10)`、HP=100 ⇒ `now=1001` 后 HP=90、一条 53；`==1000` 不触发。
+    #[test]
+    fn p25_dechp_updates_entity_and_emits_one_frame() {
+        let (mut world, mut sessions, online, gates, mut rx, actor, registry, dir) =
+            p25_fixture("DECHP(1/10)", 100, 100, false);
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_map_hp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            1001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert_eq!(world.entities.get(actor).unwrap().hp, 90);
+        assert_eq!(sessions.get("p25a").unwrap().state.wabil.hp, 90);
+        assert_eq!(
+            take_frame_idents(&mut rx),
+            vec![mir2_protocol::messages::SM_HEALTHSPELLCHANGED]
+        );
+        // 恰好 1000 ⇒ 严格 `>` 不触发。
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_map_hp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            2001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert_eq!(world.entities.get(actor).unwrap().hp, 90);
+        assert!(take_frame_idents(&mut rx).is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// **P25-6 核心牙（INCHP bug）**：`DECHP(1/10)+INCHP(1/7)`、HP=50/Max=100
+    /// ⇒ 同 Run 恰 **1** 条 53（头-only 去重），载荷 HP=**50**（40+10，不是 47）。
+    #[test]
+    fn p25_dechp_plus_inchp_one_frame_with_final_payload() {
+        let (mut world, mut sessions, online, gates, mut rx, actor, registry, dir) =
+            p25_fixture("DECHP(1/10) INCHP(1/7)", 50, 100, false);
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_map_hp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            1001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert_eq!(world.entities.get(actor).unwrap().hp, 50);
+        let mut bodies = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            bodies.push(body);
+        }
+        assert_eq!(bodies.len(), 1, "同组 SendUpdateMsg 头-only 去重 ⇒ 恰 1 条");
+        // 53 的载荷在出队时读 `WAbil` ⇒ HP=50。
+        if game_svr::smframe::client_layout_enabled() {
+            let desc = mir2_protocol::edcode::decode(&bodies[0][12..]);
+            let at = |o: usize| i32::from_le_bytes(desc[o..o + 4].try_into().unwrap());
+            assert_eq!(at(0), 50, "Feature = HP（终态）");
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// P25-7：`INCHP`-only（`nDECHPPOINT=0`）⇒ HP 不变，但每周期仍出一条 53。
+    #[test]
+    fn p25_inchp_only_noop_but_emits_each_period() {
+        let (mut world, mut sessions, online, gates, mut rx, actor, registry, dir) =
+            p25_fixture("INCHP(1/7)", 50, 100, false);
+        for now in [1001_i64, 2002] {
+            let mut frames = game_svr::run_frames::RunFrames::new();
+            drain_player_map_hp(
+                &mut world,
+                &mut sessions,
+                &online,
+                Some(&registry),
+                now,
+                &mut frames,
+            );
+            flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+            assert_eq!(
+                take_frame_idents(&mut rx),
+                vec![mir2_protocol::messages::SM_HEALTHSPELLCHANGED],
+                "now={now}"
+            );
+        }
+        assert_eq!(world.entities.get(actor).unwrap().hp, 50, "加 0 点");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// P25-8：死玩家（HP=0, Death=true）被 INCHP 抬回 MaxHP，`Death` **不被清**。
+    ///
+    /// 牙：在 drain 里加 `if death { continue; }` ⇒ 本用例必红。
+    #[test]
+    fn p25_inchp_heals_dead_player_but_death_stays() {
+        let (mut world, mut sessions, online, gates, mut rx, actor, registry, dir) =
+            p25_fixture("DECHP(1/100) INCHP(1/7)", 0, 100, false);
+        {
+            let e = world.entities.get_mut(actor).unwrap();
+            e.death = true;
+            e.hp = 0;
+        }
+        sessions.get_mut("p25a").unwrap().state.wabil.hp = 0;
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_map_hp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            1001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        let e = world.entities.get(actor).unwrap();
+        assert_eq!(e.hp, 100, "INCHP：0 + nDECHPPOINT(100) < 100? 否 ⇒ MaxHP");
+        assert!(e.death, "INCHP 不清 Death（oracle 原样）");
+        assert_eq!(
+            take_frame_idents(&mut rx),
+            vec![mir2_protocol::messages::SM_HEALTHSPELLCHANGED]
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// P25-4：tick 初值 0 ⇒ 进图后第一次段调用（now≫0）立即触发。
+    #[test]
+    fn p25_first_run_triggers_with_zero_ctor_tick() {
+        let (mut world, mut sessions, online, _gates, _rx, actor, registry, dir) =
+            p25_fixture("DECHP(1/1)", 50, 50, false);
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_map_hp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            5_000,
+            &mut frames,
+        );
+        assert_eq!(world.entities.get(actor).unwrap().hp, 49);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// P25-9：`ShowHp` ⇒ `SendRefMsg` 给同图 `±range` 的观察者各一份（源自己那份已在 53 里）。
+    #[test]
+    fn p25_show_hp_broadcasts_to_in_range_observer() {
+        let (mut world, mut sessions, online_in, gates, mut rx, actor, registry, dir) =
+            p25_fixture("DECHP(1/10)", 100, 100, true);
+        // 观察者：同图 (4,2)、同一网关。
+        world.open_session("p25b");
+        let mut ent = new_player_entity("p25b".to_string(), 4, 2);
+        ent.hp = 80;
+        ent.max_hp = 80;
+        let observer = world.enter_map("p25b", ent, 0).unwrap();
+        let mut online = online_in;
+        online_set(&mut online, entry("a", "p25b", 1, 0, 902, observer));
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_map_hp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            1001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        let mut per_socket: HashMap<i32, Vec<u16>> = HashMap::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            per_socket
+                .entry(socket)
+                .or_default()
+                .push(u16::from_le_bytes([body[4], body[5]]));
+        }
+        assert_eq!(
+            per_socket.get(&901).map(Vec::as_slice),
+            Some(
+                &[
+                    mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                    mir2_protocol::messages::SM_HEALTHSPELLCHANGED
+                ][..]
+            ),
+            "源：SendUpdateMsg 1 + SendRefMsg 自发 1（不去重）"
+        );
+        assert_eq!(
+            per_socket.get(&902).map(Vec::as_slice),
+            Some(&[mir2_protocol::messages::SM_HEALTHSPELLCHANGED][..]),
+            "观察者收 1 条"
+        );
+        let _ = actor;
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// P26 夹具：HP/Max=100、`HungerStatus`/stamina/recovery 可配。
+    #[allow(clippy::type_complexity)]
+    fn p26_fixture(
+        hunger_status: i32,
+        hp: u16,
+        dec_tick: i64,
+    ) -> (
+        mir2_world::World,
+        HashMap<String, SessionGround>,
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        i32,
+    ) {
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("p26a");
+        let mut ent = new_player_entity("p26a".to_string(), 2, 2);
+        ent.hp = hp;
+        ent.max_hp = 100;
+        let actor = world.enter_map("p26a", ent, 0).unwrap();
+        let mut sg = test_session_ground(actor);
+        sg.state.wabil.hp = hp;
+        sg.state.wabil.max_hp = 100;
+        sg.hunger_status = hunger_status;
+        sg.dec_hunger_point_tick = dec_tick;
+        sg.stamina.health_tick = 0;
+        sg.stamina.spell_tick = 5;
+        sg.recovery.per_health = 5;
+        sg.recovery.per_spell = 5;
+        let mut sessions = HashMap::new();
+        sessions.insert("p26a".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p26a", 1, 0, 901, actor));
+        let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = HashMap::new();
+        gates.insert(0u8, tx);
+        (world, sessions, online, gates, rx, actor)
+    }
+
+    fn p26_catalog() -> game_svr::ability::StdItemCatalog {
+        game_svr::ability::StdItemCatalog::new()
+    }
+
+    /// P26-3：`HungerSystem=false` ⇒ 推进 10s 全不变（生产回归门：部署 `Server.conf:396=0`）。
+    #[test]
+    fn p26_disabled_is_full_noop() {
+        let (mut world, mut sessions, online, gates, mut rx, _actor) = p26_fixture(4500, 100, 0);
+        for now in [1001_i64, 5001, 10_001] {
+            let mut frames = game_svr::run_frames::RunFrames::new();
+            drain_player_hunger(
+                &mut world,
+                &mut sessions,
+                &online,
+                &p26_catalog(),
+                false,
+                true,
+                now,
+                &mut frames,
+            );
+            flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+            assert!(take_frame_idents(&mut rx).is_empty());
+        }
+        let sg = sessions.get("p26a").unwrap();
+        assert_eq!(sg.hunger_status, 4500);
+        assert_eq!(sg.stamina.health_tick, 0);
+        assert_eq!((sg.recovery.per_health, sg.recovery.per_spell), (5, 5));
+    }
+
+    /// P26-2：`HungerStatus=1000` → 999（1→0）⇒ 恰一条 `SM_MYSTATUS(708)`、`Param=0`、
+    /// `Recog=0`；`RecalcAbilitys` 被调用（`max_hp` 由等级派生出来）。
+    #[test]
+    fn p26_band_crossing_recalcs_and_emits_mystatus() {
+        let (mut world, mut sessions, online, gates, mut rx, actor) = p26_fixture(1000, 100, 0);
+        // 把 max_hp 放到哨兵 0 ⇒ Recalc 必须把它改成等级派生值。
+        {
+            let sg = sessions.get_mut("p26a").unwrap();
+            sg.state.wabil.max_hp = 0;
+            sg.equip.abil.level = 10;
+        }
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_hunger(
+            &mut world,
+            &mut sessions,
+            &online,
+            &p26_catalog(),
+            true,
+            false,
+            1001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert_eq!(sessions.get("p26a").unwrap().hunger_status, 999);
+        assert_ne!(
+            sessions.get("p26a").unwrap().state.wabil.max_hp,
+            0,
+            "RecalcAbilitys 已执行：max_hp 由等级派生（哨兵 0 被覆盖）"
+        );
+        let mut bodies = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            bodies.push(body);
+        }
+        assert_eq!(bodies.len(), 1, "恰一条 708");
+        assert_eq!(
+            u16::from_le_bytes([bodies[0][4], bodies[0][5]]),
+            mir2_protocol::messages::SM_MYSTATUS
+        );
+        assert_eq!(
+            u16::from_le_bytes([bodies[0][6], bodies[0][7]]),
+            0,
+            "Param = (short)GetMyStatus(999) = 0"
+        );
+        assert_eq!(
+            u32::from_le_bytes(bodies[0][0..4].try_into().unwrap()),
+            0,
+            "Recog = 0（SendDefMessage 的 0）"
+        );
+        let _ = actor;
+    }
+
+    /// P26-5/6/7：扣血支逐字段 + `u8` 回绕 + 死玩家照跑。
+    #[test]
+    fn p26_dec_hp_branch_wraps_and_ignores_death() {
+        let (mut world, mut sessions, online, gates, mut rx, actor) = p26_fixture(0, 100, 0);
+        {
+            let e = world.entities.get_mut(actor).unwrap();
+            e.death = true; // 无 `!Death` 门：死玩家照跑
+        }
+        {
+            let sg = sessions.get_mut("p26a").unwrap();
+            sg.recovery.per_health = 0;
+            sg.recovery.per_spell = 0;
+            sg.state.wabil.hp = 100;
+        }
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_hunger(
+            &mut world,
+            &mut sessions,
+            &online,
+            &p26_catalog(),
+            true,
+            true,
+            1001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        let sg = sessions.get("p26a").unwrap();
+        assert_eq!(world.entities.get(actor).unwrap().hp, 99);
+        assert_eq!(sg.state.wabil.hp, 99);
+        assert_eq!(sg.stamina.health_tick, -60);
+        assert_eq!(sg.stamina.spell_tick, 0, "5-10 ⇒ max(0,-5)");
+        assert_eq!((sg.recovery.per_health, sg.recovery.per_spell), (255, 255));
+        assert_eq!(
+            take_frame_idents(&mut rx),
+            vec![mir2_protocol::messages::SM_HEALTHSPELLCHANGED]
+        );
+    }
+
+    /// P26-8：`HungerStatus=-1001` ⇒ `GetMyStatus()=-1`（向零截断）；无下限。
+    #[test]
+    fn p26_negative_status_truncates_toward_zero() {
+        assert_eq!(game_svr::useitem::my_status(-1001), -1);
+        assert_eq!(game_svr::useitem::my_status(-999), 0);
+        let (mut world, mut sessions, online, gates, mut rx, _actor) = p26_fixture(1000, 100, 0);
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_hunger(
+            &mut world,
+            &mut sessions,
+            &online,
+            &p26_catalog(),
+            true,
+            false,
+            1001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert_eq!(sessions.get("p26a").unwrap().hunger_status, 999);
+        assert_eq!(
+            take_frame_idents(&mut rx),
+            vec![mir2_protocol::messages::SM_MYSTATUS],
+            "1000 → 999：1 → 0 跨档"
+        );
+        // 下一周期 status 已 <= 0 ⇒ 不再减、不再出帧。
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_hunger(
+            &mut world,
+            &mut sessions,
+            &online,
+            &p26_catalog(),
+            true,
+            false,
+            2002,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert!(take_frame_idents(&mut rx).is_empty());
+        assert_eq!(sessions.get("p26a").unwrap().hunger_status, 998);
+    }
+
+    /// P26-9：门严格 `>` 1000；`DecHungerPointTick` 只在触发时刷新。
+    #[test]
+    fn p26_gate_is_strictly_greater_than_1000() {
+        let (mut world, mut sessions, online, gates, mut rx, _actor) = p26_fixture(5, 100, 0);
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_hunger(
+            &mut world,
+            &mut sessions,
+            &online,
+            &p26_catalog(),
+            true,
+            true,
+            1000,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert_eq!(sessions.get("p26a").unwrap().hunger_status, 5);
+        assert_eq!(sessions.get("p26a").unwrap().dec_hunger_point_tick, 0);
+        assert!(take_frame_idents(&mut rx).is_empty());
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_hunger(
+            &mut world,
+            &mut sessions,
+            &online,
+            &p26_catalog(),
+            true,
+            true,
+            1001,
+            &mut frames,
+        );
+        assert_eq!(sessions.get("p26a").unwrap().hunger_status, 4);
+        assert_eq!(sessions.get("p26a").unwrap().dec_hunger_point_tick, 1001);
+    }
+
+    /// P26-10：`build_save_record` 写回的 `hunger_status` 与内存一致（DB 持久化面）。
+    #[test]
+    fn p26_save_record_carries_hunger_status() {
+        let (mut world, mut sessions, online, _gates, _rx, _actor) = p26_fixture(1000, 100, 0);
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_hunger(
+            &mut world,
+            &mut sessions,
+            &online,
+            &p26_catalog(),
+            true,
+            false,
+            1001,
+            &mut frames,
+        );
+        let saved = SavedHuman {
+            account: "acct".to_string(),
+            record: record::PlayerRecord::default(),
+            enter_map: "A".to_string(),
+        };
+        let sg = sessions.get("p26a").unwrap();
+        let rec = build_save_record(&saved, "p26a", &world, sg, None);
+        assert_eq!(rec.data.hunger_status, 999);
+    }
+
+    /// P27 夹具。
+    #[allow(clippy::type_complexity)]
+    fn p27_fixture(
+        kill_rate: i32,
+        kill_time: i32,
+        power_rate: i32,
+        power_time: i32,
+        exp_tick: i64,
+    ) -> (
+        mir2_world::World,
+        HashMap<String, SessionGround>,
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        i32,
+    ) {
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("p27a");
+        let mut ent = new_player_entity("p27a".to_string(), 2, 2);
+        ent.kill_mon_exp_rate = kill_rate;
+        ent.kill_mon_exp_rate_time = kill_time;
+        ent.power_rate = power_rate;
+        ent.power_rate_time = power_time;
+        ent.exp_rate_tick = exp_tick;
+        let actor = world.enter_map("p27a", ent, 0).unwrap();
+        let mut sessions = HashMap::new();
+        sessions.insert("p27a".to_string(), test_session_ground(actor));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p27a", 1, 0, 901, actor));
+        let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = HashMap::new();
+        gates.insert(0u8, tx);
+        (world, sessions, online, gates, rx, actor)
+    }
+
+    /// P27-1/2：两个倒计时独立递减；到期各发一条**红色** SysMsg（经验在前）。
+    #[test]
+    fn p27_decays_rates_and_emits_red_sysmessages_in_order() {
+        let (mut world, sessions, online, gates, mut rx, actor) = p27_fixture(200, 2, 150, 1, 0);
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_run_rates(&mut world, &sessions, 0xFF, 0x38, 1001, &mut frames);
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        let e = world.entities.get(actor).unwrap();
+        assert_eq!((e.kill_mon_exp_rate, e.kill_mon_exp_rate_time), (200, 1));
+        assert_eq!((e.power_rate, e.power_rate_time), (100, 0));
+        let bodies = drain_bodies(&mut rx);
+        assert_eq!(bodies.len(), 1, "第一次只到期攻击倍率");
+        assert_eq!(
+            sysmessage_text(&bodies[0]),
+            "攻击力倍数恢复正常...",
+            "红色 SysMsg 文本（GBK 硬编码字面量）"
+        );
+        assert_eq!(
+            u16::from_le_bytes([bodies[0][6], bodies[0][7]]),
+            0xFF | (0x38 << 8),
+            "Param = MakeWord(RedMsgFColor, RedMsgBColor)"
+        );
+        assert_eq!(
+            u32::from_le_bytes(bodies[0][0..4].try_into().unwrap()),
+            u32::try_from(actor).unwrap(),
+            "Recog = player.ActorId"
+        );
+
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_run_rates(&mut world, &sessions, 0xFF, 0x38, 2002, &mut frames);
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        let e = world.entities.get(actor).unwrap();
+        assert_eq!((e.kill_mon_exp_rate, e.kill_mon_exp_rate_time), (100, 0));
+        let bodies = drain_bodies(&mut rx);
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(sysmessage_text(&bodies[0]), "经验倍数恢复正常...");
+    }
+
+    /// P27-3 牙：`Time = 0` ⇒ 永久（推进 10s 不变）。
+    #[test]
+    fn p27_time_zero_is_permanent() {
+        let (mut world, sessions, online, gates, mut rx, actor) = p27_fixture(200, 0, 300, 0, 0);
+        for now in [1001_i64, 5001, 10_001] {
+            let mut frames = game_svr::run_frames::RunFrames::new();
+            drain_player_run_rates(&mut world, &sessions, 0xFF, 0x38, now, &mut frames);
+            flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        }
+        let e = world.entities.get(actor).unwrap();
+        assert_eq!((e.kill_mon_exp_rate, e.kill_mon_exp_rate_time), (200, 0));
+        assert_eq!((e.power_rate, e.power_rate_time), (300, 0));
+        assert!(take_frame_idents(&mut rx).is_empty());
+    }
+
+    /// P27-4：门严格 `>`；`ExpRateTick` 过门无条件刷新（两个 Time 都是 0 也刷新）。
+    #[test]
+    fn p27_gate_strict_and_tick_always_refreshed() {
+        let (mut world, sessions, _online, _gates, _rx, actor) = p27_fixture(100, 0, 100, 0, 0);
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_run_rates(&mut world, &sessions, 0xFF, 0x38, 1000, &mut frames);
+        assert_eq!(world.entities.get(actor).unwrap().exp_rate_tick, 0);
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_run_rates(&mut world, &sessions, 0xFF, 0x38, 1001, &mut frames);
+        assert_eq!(world.entities.get(actor).unwrap().exp_rate_tick, 1001);
+    }
+
+    /// P27-5 牙：一次跳 5001ms ⇒ 只减 1（`if` 非 `while`，不追帧）。
+    #[test]
+    fn p27_single_step_no_catch_up() {
+        let (mut world, sessions, _online, _gates, _rx, actor) = p27_fixture(200, 10, 100, 0, 0);
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_run_rates(&mut world, &sessions, 0xFF, 0x38, 5001, &mut frames);
+        assert_eq!(world.entities.get(actor).unwrap().kill_mon_exp_rate_time, 9);
+    }
+
+    /// **帧面牙**：P25 的 53 与 P26 跨档的 708 同 Run ⇒ 帧序 `53 → 708`（RM ident 低字节）。
+    #[test]
+    fn p25_plus_p26_group_orders_healthspell_before_mystatus() {
+        let (mut world, mut sessions, online, gates, mut rx, actor, registry, dir) =
+            p25_fixture("DECHP(1/10)", 100, 100, false);
+        {
+            let sg = sessions.get_mut("p25a").unwrap();
+            sg.hunger_status = 1000;
+            sg.dec_hunger_point_tick = 0;
+        }
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_map_hp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            1001,
+            &mut frames,
+        );
+        drain_player_hunger(
+            &mut world,
+            &mut sessions,
+            &online,
+            &p26_catalog(),
+            true,
+            false,
+            1001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert_eq!(
+            take_frame_idents(&mut rx),
+            vec![
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                mir2_protocol::messages::SM_MYSTATUS
+            ],
+            "53(68) 先于 708(RM_MYSTATUS 166)"
+        );
+        let _ = actor;
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    fn drain_bodies(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            out.push(body);
+        }
+        out
+    }
+
+    fn sysmessage_text(body: &[u8]) -> String {
+        let raw = mir2_protocol::edcode::decode(&body[12..]);
+        encoding_rs::GBK.decode(&raw).0.into_owned()
     }
 
     #[allow(clippy::type_complexity)]

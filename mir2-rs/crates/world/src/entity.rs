@@ -551,6 +551,19 @@ pub struct Entity {
     pub name_color: u8,
     /// C# `PlayObject.PowerRate`（`PlayObject.cs:724`；新角色 `PlayObject.cs:943` 置 `100`）。
     pub power_rate: i32,
+    /// C# `PlayObject.PowerRateTime`（`PlayObject.cs:726`；**无 ctor 赋值** ⇒ 0）——
+    /// P27 的 1s 递减计时（`PlayObject.Message.cs:646-656`）。`0` = 永久倍率。
+    pub power_rate_time: i32,
+    /// C# `PlayObject.KillMonExpRate`（`PlayObject.cs:720`；ctor `:941` 置 `100`）——
+    /// **per-player** 经验倍率；唯一读点 = `WinExp`（`PlayObject.Base.cs:140`）。
+    /// PL-3/P27：1s 递减到 0 时回 100；脚本 `KILLMONEXPRATE` 写入。
+    pub kill_mon_exp_rate: i32,
+    /// C# `PlayObject.KillMonExpRateTime`（`PlayObject.cs:725`；无 ctor ⇒ 0）——P27 的秒数。
+    pub kill_mon_exp_rate_time: i32,
+    /// C# `PlayObject.ExpRateTick`（`PlayObject.cs:727`；ctor `:942` = `GetTickCount()`）——
+    /// P27 的 1s 门基准。oracle 在对象构造时取钟；本骨架 `Entity::new` 拿不到宿主时钟
+    /// ⇒ 缺省 0，生产路径由 `new_player_entity` 用 `now_ms()` 重盖（与 `VerifyTick` 同法）。
+    pub exp_rate_tick: i64,
     /// C# `PlayObject.BoPowerItem`（`PlayObject.cs:223`）。
     pub bo_power_item: bool,
     /// C# `PlayObject.PowerItem`（`PlayObject.cs:199`）。
@@ -930,6 +943,12 @@ impl Entity {
             // `PowerRate = 100`；`BoPowerItem=false` / `PowerItem=0`。
             luck: 0,
             power_rate: 100,
+            // `PlayObject.cs:725-727`：`PowerRateTime`/`KillMonExpRateTime` 无 ctor 赋值 ⇒ 0；
+            // `KillMonExpRate = 100`（`:941`）；`ExpRateTick` 的 ctor 取钟由落图点重盖。
+            power_rate_time: 0,
+            kill_mon_exp_rate: 100,
+            kill_mon_exp_rate_time: 0,
+            exp_rate_tick: 0,
             bo_power_item: false,
             power_item: 0,
             // `PlayObject.cs:181/185/194/195`：ctor 缺省 `FireHitSkill/TwinHitSkill = false`、

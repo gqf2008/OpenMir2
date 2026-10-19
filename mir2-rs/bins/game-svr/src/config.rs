@@ -250,6 +250,14 @@ pub struct GateConfig {
     /// `ServerConf.cs:503` 的 `ReadWriteInteger("Setup", "RevivalTime", …)`）——
     /// 复活戒指的二次复活间隔门（`PlayObject.Message.cs:753`，**严格 `>`**）。
     pub revival_time: i32,
+    /// **PL-3 / P26**：`[Setup] HungerSystem`（oracle `GameSvrConf.cs:501/1505` 缺省 `false`；
+    /// `ServerConf.cs:282` 的 `ReadWriteBool`）——饥饿系统的总开关（`PlayObject.Message.cs:596`）。
+    /// 部署 `Server.conf:396` = `0` ⇒ 生产整段短路。
+    pub hunger_system: bool,
+    /// **PL-3 / P26**：`[Setup] HungerDecHP`（oracle `GameSvrConf.cs:502/1506` 缺省 `false`；
+    /// `ServerConf.cs:283`）——`HungerStatus <= 0` 时的扣血支（`PlayObject.Message.cs:612`）。
+    /// 部署 `Server.conf:398` = `0`。
+    pub hunger_dec_hp: bool,
     /// `[Setup] ShowLineNoticeTime`（oracle `GameSvrConf.cs:340/1440`，缺省 `5*60*1000`；
     /// `ServerConf.cs:587` 的 `ReadWriteInteger("Setup", "ShowLineNoticeTime", …)`）——
     /// 逐玩家滚动公告的周期（`WorldServer.cs:669` 的 `(now - ShowLineNoticeTick) > ShowLineNoticeTime`）。
@@ -372,6 +380,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut health_fill_time: Option<i32> = None;
     let mut spell_fill_time: Option<i32> = None;
     let mut revival_time: Option<i32> = None;
+    let mut hunger_system: Option<bool> = None;
+    let mut hunger_dec_hp: Option<bool> = None;
     let mut show_line_notice_time: Option<i32> = None;
     let mut line_notice_color: Option<u8> = None;
     let mut show_pre_fix_msg: Option<bool> = None;
@@ -512,6 +522,14 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 // 为真；空 ⇒ 缺省 false；其余（含 `False`/`no`/`off`/垃圾）一律 false。
                 "DISABLEINSAFEZONEFIRECROSS" => {
                     disable_in_safe_zone_fire_cross = Some(read_bool_or_false(v));
+                }
+                // P26 饥饿系统（`GameSvrConf.cs:501-502` 的 `ReadWriteBool`，源码缺省 false；
+                // 空/未识别值 ⇒ false，不报错——与 `ReadBool` 同口径）。
+                "HUNGERSYSTEM" => {
+                    hunger_system = Some(read_bool_or_false(v));
+                }
+                "HUNGERDECHP" => {
+                    hunger_dec_hp = Some(read_bool_or_false(v));
                 }
                 // 元宝寄售 `SysMsg(..., Blue, ...)` 的颜色（`ServerConf.cs:331-332` 的 `ReadWriteByte`）。
                 "BLUEMSGFCOLOR" => {
@@ -958,6 +976,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         spell_fill_time: spell_fill_time.unwrap_or(800),
         // oracle 缺省值（`GameSvrConf.cs:1725` 的 `RevivalTime = 60 * 1000`）。
         revival_time: revival_time.unwrap_or(60 * 1000),
+        // P26：缺键 ⇒ oracle 源码缺省 false（`GameSvrConf.cs:1505-1506`）。
+        hunger_system: hunger_system.unwrap_or(false),
+        hunger_dec_hp: hunger_dec_hp.unwrap_or(false),
         // oracle 缺省值（`GameSvrConf.cs:1440-1441` / `:1751`）：公告周期 5 分钟、缺省色 2、
         // 前缀关。缺 `[Setup]` 键不算错。
         show_line_notice_time: show_line_notice_time.unwrap_or(5 * 60 * 1000),
@@ -1579,6 +1600,63 @@ mod tests {
         );
         let p3 = write(&dir, &format!("{base}[Setup]\nRevivalTime=abc\n"));
         assert!(load(&p3).is_err(), "RevivalTime 非整数 ⇒ 必须报错");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+    /// **PL-3 / P26**：`[Setup] HungerSystem/HungerDecHP` 的 `ReadBool` 口径
+    /// （`是/YES/1/TRUE` 为真；其余含 `False`/垃圾一律假；缺键回落 oracle 缺省 false）。
+    ///
+    /// 牙：删掉两个解析臂 ⇒ `=1` 用例读成 false ⇒ 必红。
+    #[test]
+    fn hunger_keys_use_read_bool_semantics() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-hunger-{}", std::process::id()));
+        let base = "[Server]
+DBPort=6000
+CheckBlock=1
+GateAddr=127.0.0.1
+GatePort=5000
+                    IDSAddr=127.0.0.1
+IDSPort=5600
+DBAddr=127.0.0.1
+DBPort=6000
+";
+        for (body, want) in [
+            (
+                "[Setup]
+HungerSystem=1
+HungerDecHP=TRUE
+",
+                (true, true),
+            ),
+            (
+                "[Setup]
+HungerSystem=是
+HungerDecHP=YES
+",
+                (true, true),
+            ),
+            (
+                "[Setup]
+HungerSystem=0
+HungerDecHP=False
+",
+                (false, false),
+            ),
+            (
+                "[Setup]
+HungerSystem=garbage
+",
+                (false, false),
+            ),
+            (
+                "[Setup]
+",
+                (false, false),
+            ),
+        ] {
+            let p = write(&dir, &format!("{base}{body}"));
+            let c = load(&p).unwrap();
+            assert_eq!((c.hunger_system, c.hunger_dec_hp), want, "body={body:?}");
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 }

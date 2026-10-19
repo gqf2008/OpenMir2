@@ -375,6 +375,14 @@ pub struct NpcPlayer<'r> {
     pub frames: Vec<SendMsg>,
     /// `RandomNumber.Random` —— 必须**世界同一条流**（R-4/Claim B 的输入）。
     pub rng: &'r mut dyn FnMut(i32) -> i32,
+    /// `PlayObject.KillMonExpRate`（`PlayObject.cs:720`；ctor 100）——P27 / 脚本 197 的写回源。
+    pub kill_mon_exp_rate: i32,
+    /// `PlayObject.KillMonExpRateTime`（`PlayObject.cs:725`；ctor 0）。
+    pub kill_mon_exp_rate_time: i32,
+    /// `PlayObject.PowerRate`（`PlayObject.cs:724`；ctor 100）——P27 / 脚本 198。
+    pub power_rate: i32,
+    /// `PlayObject.PowerRateTime`（`PlayObject.cs:726`；ctor 0）。
+    pub power_rate_time: i32,
 }
 
 impl NpcPlayer<'_> {
@@ -404,6 +412,11 @@ impl NpcPlayer<'_> {
             ms_string: HashMap::new(),
             frames: Vec::new(),
             rng,
+            // `PlayObject.cs:941/943` 的 ctor 初值 + 两个 `Time` 的零初值。
+            kill_mon_exp_rate: 100,
+            kill_mon_exp_rate_time: 0,
+            power_rate: 100,
+            power_rate_time: 0,
         }
     }
 }
@@ -462,6 +475,14 @@ impl ScriptPlayer for NpcPlayer<'_> {
     }
     fn random(&mut self, value: i32) -> i32 {
         (self.rng)(value)
+    }
+    fn set_kill_mon_exp_rate(&mut self, rate: i32, time: i32) {
+        self.kill_mon_exp_rate = rate;
+        self.kill_mon_exp_rate_time = time;
+    }
+    fn set_power_rate(&mut self, rate: i32, time: i32) {
+        self.power_rate = rate;
+        self.power_rate_time = time;
     }
     fn send_msg(
         &mut self,

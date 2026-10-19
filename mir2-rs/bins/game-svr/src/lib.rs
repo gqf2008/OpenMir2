@@ -35,6 +35,8 @@ pub mod party;
 pub mod pickwire;
 pub mod queryuser;
 pub mod recover;
+pub mod run_frames;
+pub mod run_segments;
 pub mod selloff;
 pub mod sessionwire;
 pub mod shop;

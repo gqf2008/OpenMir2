@@ -66,6 +66,8 @@ pub static IMPLEMENTED_EXECUTIONS: &[&str] = &[
     "ActionOfRepairAllItem",
     "ActionOfRestReNewLevel",
     "ActionOfReNewLevel",
+    "ActionOfKillMonExpRate",
+    "ActionOfPowerRate",
     "ActionOfChangeMode",
     "ActionOfQueryValue",
     "ActionOfQueryItemDlg",

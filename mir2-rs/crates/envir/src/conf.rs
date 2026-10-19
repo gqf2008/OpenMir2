@@ -82,6 +82,15 @@ pub struct GameSvrConf {
     /// **PL-1 / P32**：`[Setup] RevivalTime`（`GameSvrConf.cs:804/1725`，缺省 `60*1000`ms）——
     /// 复活戒指的二次复活间隔（`PlayObject.Message.cs:753`）。读取点 `ServerConf.cs:503`。
     pub revival_time: i32,
+    /// **PL-3 / P26**：`[Setup] HungerSystem`（`GameSvrConf.cs:501/1505`，缺省 `false`；
+    /// `ServerConf.cs:282` 的 `ReadWriteBool`）——饥饿系统总开关（`PlayObject.Message.cs:596`）。
+    pub hunger_system: bool,
+    /// **PL-3 / P26**：`[Setup] HungerDecHP`（`GameSvrConf.cs:502/1506`，缺省 `false`；
+    /// `ServerConf.cs:283`）——`HungerStatus <= 0` 的扣血支（`:612`）。
+    pub hunger_dec_hp: bool,
+    /// **PL-3 / P26**：`[Setup] HungerDecPower`（`GameSvrConf.cs:503/1507`，缺省 `false`；
+    /// `ServerConf.cs:284`）——**死键**：oracle 全树无消费者，本项只为配置面完整。
+    pub hunger_dec_power: bool,
 }
 
 /// `src/OpenMir2/Packets/ClientPackets/ClientConf.cs:6-24`（17 个 `bool`，声明序即序列化序）。
@@ -249,6 +258,10 @@ impl GameSvrConf {
             snow_wind_range: ini.read_integer("Setup", "SnowWindRange", 1) as u8,
             elec_blizzard_range: ini.read_integer("Setup", "ElecBlizzardRange", 2) as u8,
             revival_time: ini.read_integer("Setup", "RevivalTime", 60 * 1000),
+            // P26 饥饿系统三键：`ReadWriteBool` 口径（`是/YES/1/TRUE`；其余 false）。
+            hunger_system: ini.read_bool("Setup", "HungerSystem", false),
+            hunger_dec_hp: ini.read_bool("Setup", "HungerDecHP", false),
+            hunger_dec_power: ini.read_bool("Setup", "HungerDecPower", false),
         }
     }
 
@@ -496,5 +509,34 @@ HealSkill=Heal
                 0x14, 0x23, 0x00, 0x00, 0x00, 0x00
             ]
         );
+    }
+    /// **PL-3 / P26**：`[Setup] HungerSystem/HungerDecHP/HungerDecPower`
+    /// （`GameSvrConf.cs:501-503/1505-1507`，缺省 false；`ReadWriteBool` 口径）。
+    ///
+    /// 牙：删掉 `from_ini` 的三行 ⇒ 键值用例读成 false ⇒ 必红。
+    #[test]
+    fn hunger_keys_read_with_bool_semantics_and_default_false() {
+        let c = GameSvrConf::from_bytes(
+            b"[Setup]
+HungerSystem=1
+HungerDecHP=YES
+HungerDecPower=TRUE
+",
+        );
+        assert!(c.hunger_system);
+        assert!(c.hunger_dec_hp);
+        assert!(c.hunger_dec_power);
+        let d = GameSvrConf::from_bytes(
+            b"[Setup]
+HungerSystem=0
+",
+        );
+        assert!(!d.hunger_system);
+        assert!(!d.hunger_dec_hp);
+        assert!(!d.hunger_dec_power);
+        let e = GameSvrConf::from_bytes(b"");
+        assert!(!e.hunger_system);
+        assert!(!e.hunger_dec_hp);
+        assert!(!e.hunger_dec_power);
     }
 }

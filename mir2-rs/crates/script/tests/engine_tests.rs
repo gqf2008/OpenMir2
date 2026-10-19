@@ -113,6 +113,11 @@ struct MockPlayer {
     worn_desc: std::collections::HashMap<(i32, i32), i32>,
     worn_present: std::collections::HashMap<i32, bool>,
     updated_items: Vec<i32>,
+    /// PL-3 / P27：脚本 197/198 的写回目标（`PlayObject.cs:720/724-727`）。
+    kill_mon_exp_rate: i32,
+    kill_mon_exp_rate_time: i32,
+    power_rate: i32,
+    power_rate_time: i32,
 }
 
 /// 对方（pose）侧的可观测状态。
@@ -227,11 +232,23 @@ impl MockPlayer {
             worn_desc: std::collections::HashMap::new(),
             worn_present: std::collections::HashMap::new(),
             updated_items: Vec::new(),
+            kill_mon_exp_rate: 100,
+            kill_mon_exp_rate_time: 0,
+            power_rate: 100,
+            power_rate_time: 0,
         }
     }
 }
 
 impl ScriptPlayer for MockPlayer {
+    fn set_kill_mon_exp_rate(&mut self, rate: i32, time: i32) {
+        self.kill_mon_exp_rate = rate;
+        self.kill_mon_exp_rate_time = time;
+    }
+    fn set_power_rate(&mut self, rate: i32, time: i32) {
+        self.power_rate = rate;
+        self.power_rate_time = time;
+    }
     fn last_npc(&self) -> i32 {
         self.last_npc
     }
@@ -2560,4 +2577,62 @@ fn group_recall_actions_are_noops_like_oracle() {
         assert!(player.msgs.is_empty(), "owner={owner} 不应发帧");
         assert!(player.events.is_empty(), "owner={owner} 不应有副作用");
     }
+}
+
+// ---- PL-3 / P27：脚本动作 197/198 ----
+
+/// `KILLMONEXPRATE 200 5` ⇒ 两个字段写入；负值 ⇒ `ScriptActionError` 且字段不变。
+///
+/// 牙：删掉 `n_rate < 0 || n_time < 0` 校验 ⇒ 负值用例红（字段被写成 -1）。
+#[test]
+fn kill_mon_exp_rate_action_sets_fields_and_rejects_negative() {
+    let mut npc = MockNpc {
+        actor_id: 7,
+        chr_name: "测试NPC".into(),
+        map: "0".into(),
+        scripts: Vec::new(),
+        says: Vec::new(),
+        goto_limit: 100,
+        envir_root: None,
+        path: String::new(),
+    };
+    let mut player = MockPlayer::new();
+    let errors = run_act(&mut npc, &mut player, act(197, "200", "5", 0, 0));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(
+        (player.kill_mon_exp_rate, player.kill_mon_exp_rate_time),
+        (200, 5)
+    );
+
+    let errors = run_act(&mut npc, &mut player, act(197, "-1", "-1", 0, 0));
+    let text = first_script_error(&errors);
+    assert!(text.contains("197") || !text.is_empty(), "{text}");
+    assert_eq!(
+        (player.kill_mon_exp_rate, player.kill_mon_exp_rate_time),
+        (200, 5),
+        "负值不写字段"
+    );
+}
+
+/// `POWERRATE 150 0` ⇒ `(150, 0)`（0 合法 = 永久倍率）；负值 ⇒ 错误且不写。
+#[test]
+fn power_rate_action_sets_fields_and_rejects_negative() {
+    let mut npc = MockNpc {
+        actor_id: 7,
+        chr_name: "测试NPC".into(),
+        map: "0".into(),
+        scripts: Vec::new(),
+        says: Vec::new(),
+        goto_limit: 100,
+        envir_root: None,
+        path: String::new(),
+    };
+    let mut player = MockPlayer::new();
+    let errors = run_act(&mut npc, &mut player, act(198, "150", "0", 0, 0));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!((player.power_rate, player.power_rate_time), (150, 0));
+
+    let errors = run_act(&mut npc, &mut player, act(198, "-5", "3", 0, 0));
+    assert!(!errors.is_empty());
+    assert_eq!((player.power_rate, player.power_rate_time), (150, 0));
 }

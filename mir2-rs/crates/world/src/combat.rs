@@ -1294,7 +1294,6 @@ pub struct CombatConfig {
     pub high_level_kill_mon_fix_exp: bool,
     pub kill_mon_exp_multiple: i32,
     pub mn_kill_mon_exp_multiple: i32,
-    pub kill_mon_exp_rate: i32,
     /// `SystemShare.Config.AttackPosionRate`（`GameSvrConf.cs:796/1723` 缺省 5；
     /// `ServerConf.cs:501` 读 `[Setup] AttackPosionRate`）——玩家攻击命中中毒门的抽样上界
     /// （`PlayObject.Attack.cs:221` 的 `Random(target.AntiPoison + AttackPosionRate) == 0`）。
@@ -1314,7 +1313,6 @@ impl Default for CombatConfig {
             high_level_kill_mon_fix_exp: true, // 现网 Exps.conf: HighLevelKillMonFixExp=1
             kill_mon_exp_multiple: 1,
             mn_kill_mon_exp_multiple: 1,
-            kill_mon_exp_rate: 100,
             attack_poison_rate: 5, // GameSvrConf.cs:1723
             attack_poison_time: 5, // GameSvrConf.cs:1724
         }
@@ -1396,7 +1394,10 @@ pub fn win_exp(
     if dw_exp > 0 {
         dw_exp *= config.kill_mon_exp_multiple;
         dw_exp *= config.mn_kill_mon_exp_multiple;
-        dw_exp = hutil::round(f64::from(config.kill_mon_exp_rate) / 100.0 * f64::from(dw_exp));
+        // **PL-3 / P27**：`KillMonExpRate` 是 **per-player** 字段（`PlayObject.cs:720`），
+        // 不再是全局 `CombatConfig` 字段——组队时每个成员各读自己的值（oracle `GainExp`
+        // 对每个成员调各自的 `WinExp`）。`rate == 100` 时与旧公式逐字节相同。
+        dw_exp = hutil::round(f64::from(killer.kill_mon_exp_rate) / 100.0 * f64::from(dw_exp));
         // `Envir.Flag.boEXPRATE` ⇒ 地图级经验倍率（`PlayObject.Base.cs:143-146`）。
         // `map_exp_rate = Some(rate)` 对应 `boEXPRATE==true` 时的 `Envir.Flag.ExpRate`。
         if let Some(rate) = map_exp_rate {
@@ -1892,5 +1893,34 @@ mod tests {
         for flag in ["death", "ghost", "invisible"] {
             assert_eq!(run(Some(flag)), normal, "{flag}: 取数流水应与正常目标一致");
         }
+    }
+    /// PL-3 / P27：`win_exp` 读 **per-player** `kill_mon_exp_rate`（全局 `CombatConfig` 字段已删）；
+    /// `rate=100` 时与旧公式逐字节相同（既有 golden 回归门）。
+    ///
+    /// 牙：改回全局字段/忽略 `killer.kill_mon_exp_rate` ⇒ 200 与队伍用例必红。
+    #[test]
+    fn win_exp_reads_per_player_kill_mon_exp_rate() {
+        let cfg = CombatConfig::default();
+        let need = [0i32; 256];
+        for dw in [0, 1, 3, 25, 99, 100, 101, 999, 12_345] {
+            let mut e = Entity::new(1, "a", 0, 0);
+            e.kill_mon_exp_rate = 100;
+            let (got, _, _) = win_exp(&mut e, dw, &need, &cfg, None);
+            assert_eq!(got, dw, "rate=100 ⇒ 旧公式 round(1.0*dw) = dw");
+        }
+        let mut e = Entity::new(1, "a", 0, 0);
+        e.kill_mon_exp_rate = 200;
+        assert_eq!(win_exp(&mut e, 123, &need, &cfg, None).0, 246);
+        let mut e = Entity::new(1, "a", 0, 0);
+        e.kill_mon_exp_rate = 0;
+        assert_eq!(win_exp(&mut e, 123, &need, &cfg, None).0, 0);
+        // 队伍 per-member：A=100 / B=200 ⇒ B 拿双倍（oracle 对每成员调各自的 WinExp）。
+        let mut a = Entity::new(1, "a", 0, 0);
+        a.kill_mon_exp_rate = 100;
+        let mut b = Entity::new(2, "b", 0, 0);
+        b.kill_mon_exp_rate = 200;
+        let ea = win_exp(&mut a, 280, &need, &cfg, None).0;
+        let eb = win_exp(&mut b, 280, &need, &cfg, None).0;
+        assert_eq!((ea, eb), (280, 560));
     }
 }
