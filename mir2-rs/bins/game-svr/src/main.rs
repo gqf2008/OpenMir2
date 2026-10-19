@@ -5352,12 +5352,20 @@ fn handle_move_cmd(
             sync_display_dir(world, displays, actor_id);
             // **L1 TransMap**：oracle `ClientChangeDir` 原地转身也调 `Walk(RM_TURN)`
             // （`PlayObject.Operate.cs:334`）⇒ 转身前在**当前格**做路线检查（命中 MapRoute ⇒ 换图）。
-            if world.walk_route_check(actor_id) {
-                // **PL-2 / P31**：`EnterAnotherMap` 的「复位泡点，及金币，时间」段
-                // （`PlayObject.cs:3793-3796`）⇒ `AutoGetExpTick = GetTickCount()`。
+            let route = world.walk_route_check(actor_id);
+            // **PL-2 / P31**：`EnterAnotherMap` 的「复位泡点，及金币，时间」段
+            // （`PlayObject.cs:3793-3796`）⇒ `AutoGetExpTick = GetTickCount()`。
+            // **成功与回滚两支都复位**：`AddToMap` 失败的回滚支在 oracle 位于 `if/else` 之后，
+            // 仍会执行该行；前置门失败（`CellValid` 等）提前 `return`，**不**复位。
+            if matches!(
+                route,
+                mir2_world::RouteCheck::Switched | mir2_world::RouteCheck::RolledBack
+            ) {
                 if let Some(sg) = sessions.get_mut(chr_name) {
                     sg.auto_get_exp_tick = now_ms();
                 }
+            }
+            if route == mir2_world::RouteCheck::Switched {
                 // 帧序：换图簇（633/634）必须先于 SM_TURN（oracle `Walk` 尾段才发移动/转身帧）。
                 drain_map_change(world, online, gates, displays, registry);
             }
@@ -5394,6 +5402,14 @@ fn handle_move_cmd(
                 e.ai.dir = dir;
             }
             let outcome = world.step_with_route(actor_id, ddx, ddy, steps);
+            // **PL-2 / P31**：`EnterAnotherMap` 已进落地段但 `AddToMap` 失败的回滚支
+            // （`PlayObject.cs:3787-3796`）在 oracle **仍**执行 `AutoGetExpTick = GetTickCount()`。
+            // 该支 `moved == false`（上游 `WalkTo` 回滚、不发移动帧）⇒ 复位必须放在下面的早退之前。
+            if outcome.rolled_back {
+                if let Some(sg) = sessions.get_mut(chr_name) {
+                    sg.auto_get_exp_tick = now_ms();
+                }
+            }
             if !outcome.moved {
                 glog!(
                     "DBG",
@@ -5406,7 +5422,8 @@ fn handle_move_cmd(
             // 移动帧本身也是换图后用**新图/新坐标**广播（oracle 用改后的 `CurrX/CurrY`）。
             if outcome.changed_map {
                 // **PL-2 / P31**：`EnterAnotherMap` 的 `AutoGetExpTick = GetTickCount()`
-                // （`PlayObject.cs:3796`；成功/回滚两支都走到该行，照抄）。
+                // （`PlayObject.cs:3796`）。**回滚支**（`AddToMap` 失败）已在上面复位；
+                // 前置门失败提前 `return`，永不复位。
                 if let Some(sg) = sessions.get_mut(chr_name) {
                     sg.auto_get_exp_tick = now_ms();
                 }
@@ -7135,13 +7152,9 @@ fn handle_spell_cmd_with_magic(
                     );
                     // oracle `MagSaceMove` 的返回值 = `Random(11)` 门是否通过（与落地无关）。
                     bo_train = out.result;
-                    // **PL-2 / P31**：跨图落地同样走 `EnterAnotherMap` 的
-                    // `AutoGetExpTick = GetTickCount()`（`PlayObject.cs:3796`）。
-                    if out.cross_map {
-                        if let Some(sg) = ground_sessions.get_mut(chr_name) {
-                            sg.auto_get_exp_tick = now_ms();
-                        }
-                    }
+                    // **注意**：`SpaceMove`（`BaseObject.cs:1103-1164`）**不写** `AutoGetExpTick`；
+                    // 只有 `EnterAnotherMap`（`:3793-3796`）才有泡点复位。故此处**不得**复位
+                    // （P31 复验 F2：oracle 的 `MagSaceMove→MapRandomMove→SpaceMove` 无该字段写入）。
                     // 登记（本卡不做）：`IsTimeRecall = false`（无该字段；`out.cross_map` 仅回报换图与否）、
                     // `OnEnvirnomentChanged()`、`VisibleHumanList.Clear()`；换图簇 633/634/807 由
                     // `drain_map_change` 于本 tick 下行段发出。
@@ -13323,6 +13336,17 @@ fn drain_player_auto_get_exp(
                 .and_then(|map_name| registry.and_then(|r| r.id_of(map_name)));
             sg.auto_get_exp_envir_map_id = envir_map_id;
         }
+        // oracle `InSafeZone()`（`BaseObject.cs:1777-1808`）的第 1 步 = `Envir.Flag.SafeArea`；
+        // 生产真源是注册表（`Entity.in_safe_zone` 无写入点，P31 复验 F1）。注册表缺失（夹具路径）
+        // ⇒ `false`，与 oracle 的 `Envir == null ⇒ true` 差异见 whitelist T-75。
+        let in_safe_zone = registry
+            .and_then(|r| {
+                world
+                    .entities
+                    .get(actor_id)
+                    .and_then(|e| r.flag_of(e.map_id))
+            })
+            .is_some_and(|f| f.safe_area);
         let mut state = mir2_world::AutoGetExpState {
             tick: sg.auto_get_exp_tick,
             time_ms: sg.auto_get_exp_time,
@@ -13330,7 +13354,7 @@ fn drain_player_auto_get_exp(
             envir_map_id,
             in_safe_zone: sg.auto_get_exp_in_safe_zone,
         };
-        let award = world.auto_get_exp(actor_id, &mut state, now);
+        let award = world.auto_get_exp(actor_id, &mut state, now, in_safe_zone);
         sg.auto_get_exp_tick = state.tick;
         sg.auto_get_exp_envir_map_id = envir_map_id;
         if let Some(award) = award {
@@ -20063,8 +20087,9 @@ mod tests {
         );
     }
 
-    /// 判据⑤：存档写回 `Dura` 以实体为准（会话可能滞后一个排水段），并保留 13 槽
-    /// Helmet/Necklace 交换：破零槽写 `Index=0` 但保留 `MakeIndex`（oracle 的对象语义）。
+    /// 判据⑤：存档写回 `Dura` 以实体为准（会话可能滞后一个排水段）；**槽位 1:1**
+    /// （oracle `d7ead5b2a` 已取消 Helmet/Necklace 交换，load/save 两侧一致）。
+    /// 破零槽写 `Index=0`/`Dura=0` 但保留 `MakeIndex`（oracle 的对象语义）。
     #[test]
     fn save_record_takes_durability_from_entity() {
         use game_svr::ability::{SLOT_HELMET, SLOT_NECKLACE, SLOT_WEAPON};
@@ -43788,7 +43813,7 @@ mod tests {
             point: 7,
             ..Default::default()
         };
-        let award = world.auto_get_exp(hero, &mut st, 1).expect("命中");
+        let award = world.auto_get_exp(hero, &mut st, 1, false).expect("命中");
         rec.exp_awards.push(award);
         drain_kill_exp_chain(
             &rec,
@@ -43857,7 +43882,7 @@ mod tests {
             point: 200,
             ..Default::default()
         };
-        let award = world.auto_get_exp(hero, &mut st, 1).expect("命中");
+        let award = world.auto_get_exp(hero, &mut st, 1, false).expect("命中");
         assert!(award.2, "900+200 ≥ 1000 ⇒ 进升级块");
         rec.exp_awards.push(award);
         drain_kill_exp_chain(
@@ -44005,6 +44030,323 @@ mod tests {
             ),
             (1_234, 5_000, 42, Some("A".to_string()), true),
             "死亡不得清 AutoGetExp* 字段"
+        );
+    }
+
+    /// **P31 复验 F1（宿主路径）**：安全区真值由**注册表** `flag_of(map_id).safe_area` 提供，
+    /// 不是 `Entity.in_safe_zone`（后者在生产无写入点，恒 `false`）。
+    ///
+    /// 判据：① `SAFE` 图 + `AutoGetExpInSafeZone=true` ⇒ 发；空 flag 图 ⇒ 不发，但过 timed 门后
+    /// `tick` **仍先刷新**（oracle `PlayObject.Message.cs:740-742` 的语句序）；②
+    /// `AutoGetExpInSafeZone=false` ⇒ 空 flag 图也发（不判安全区）。
+    ///
+    /// 牙：把 `drain_player_auto_get_exp` 的 `in_safe_zone` 改成 `false` 常量（或改回读
+    /// `Entity.in_safe_zone`）⇒ ① 的 `SAFE` 支必红（exp 应为 10、实为 0）。
+    #[test]
+    fn p31_drain_uses_registry_safe_area() {
+        use std::collections::HashMap;
+        for (flag_line, safe_expected) in [("SAFE", true), ("", false)] {
+            let (registry, dir) = pl3_registry(flag_line);
+            let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+            world.open_session("p31safe");
+            let actor = world
+                .enter_map("p31safe", new_player_entity("p31safe".to_string(), 2, 2), 0)
+                .unwrap();
+            world.entities.get_mut(actor).unwrap().max_exp = 1_000_000;
+            let mut sg = test_session_ground(actor);
+            sg.auto_get_exp_tick = 0;
+            sg.auto_get_exp_time = 0;
+            sg.auto_get_exp_point = 10;
+            sg.auto_get_exp_in_safe_zone = true;
+            let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+            sessions.insert("p31safe".to_string(), sg);
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(&mut online, entry("a", "p31safe", 1, 0, 910, actor));
+            let mut rec = mir2_world::TickRecord::default();
+            drain_player_auto_get_exp(
+                &mut world,
+                &mut sessions,
+                &online,
+                Some(&registry),
+                1,
+                &mut rec,
+            );
+            assert_eq!(
+                world.entities.get(actor).unwrap().exp,
+                if safe_expected { 10 } else { 0 },
+                "flag_line={flag_line:?}: 安全区真值必须取注册表 flag.safe_area（F1）"
+            );
+            assert_eq!(
+                sessions["p31safe"].auto_get_exp_tick, 1,
+                "安全区门失败也先刷新 tick（oracle 语句序）"
+            );
+            // ② `AutoGetExpInSafeZone=false` ⇒ 不判安全区。
+            let before = world.entities.get(actor).unwrap().exp;
+            sessions.get_mut("p31safe").unwrap().auto_get_exp_tick = 0;
+            sessions
+                .get_mut("p31safe")
+                .unwrap()
+                .auto_get_exp_in_safe_zone = false;
+            drain_player_auto_get_exp(
+                &mut world,
+                &mut sessions,
+                &online,
+                Some(&registry),
+                2,
+                &mut rec,
+            );
+            assert_eq!(
+                world.entities.get(actor).unwrap().exp,
+                before + 10,
+                "AutoGetExpInSafeZone=false ⇒ 不判安全区（flag_line={flag_line:?}）"
+            );
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    /// **P31 复验 F4/F5（CM_WALK 换图）**：`step_with_route` 成功换图 ⇒
+    /// `EnterAnotherMap` 的 `AutoGetExpTick = GetTickCount()`（`PlayObject.cs:3796`）。
+    ///
+    /// 牙：删掉 `handle_move_cmd` 的 `if outcome.changed_map` 复位块 ⇒ tick 仍为 0，必红。
+    #[test]
+    fn p31_cm_walk_changed_map_resets_tick() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", new_player_entity("hero".to_string(), 5, 5), 0)
+            .unwrap();
+        world.add_map_routes(vec![mir2_world::map::MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 6,
+            route_id: 3,
+            hop: mir2_world::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 2,
+                dst_y: 2,
+            },
+        }]);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"hero".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "hero", 1, 0, 911, hero));
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.auto_get_exp_tick = 0;
+        sessions.insert("hero".to_string(), sg);
+        handle_move_cmd(
+            mir2_protocol::messages::CM_WALK,
+            (5 & 0xFFFF) | (6 << 16),
+            0,
+            "hero",
+            911,
+            &online,
+            &mut sessions,
+            &mut world,
+            &mut displays,
+            &gates,
+            None,
+        );
+        assert_eq!(
+            world.entities.get(hero).unwrap().map_id,
+            1,
+            "踩 route 应换图"
+        );
+        assert!(
+            sessions["hero"].auto_get_exp_tick > 0,
+            "CM_WALK 成功换图必须复位 AutoGetExpTick"
+        );
+    }
+
+    /// **P31 复验 F4（回滚支）**：`EnterAnotherMap` **已进落地段**、`AddToMap` 失败（越界目标格
+    /// ⇒ `CellValid` 对越界返回 true、`AddMapObject` 的 `CellMatch` 失败）⇒ 回滚支在 oracle
+    /// **仍执行** `AutoGetExpTick = GetTickCount()`（`PlayObject.cs:3787-3796`）；上游 `WalkTo`
+    /// 回滚坐标、`moved == false`。
+    ///
+    /// 牙：删掉 `handle_move_cmd` 里 `if outcome.rolled_back { … }` 复位块（或只在
+    /// `changed_map` 支复位）⇒ 早退前 tick 仍为 0，必红。
+    #[test]
+    fn p31_cm_walk_rolled_back_map_still_resets_tick() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", new_player_entity("hero".to_string(), 5, 5), 0)
+            .unwrap();
+        // 越界目标：oracle `CellValid` 越界返回 true ⇒ 前置门放行；
+        // `AddMapObject` 的 `CellMatch` 失败 ⇒ AddToMap 失败回滚支。
+        world.add_map_routes(vec![mir2_world::map::MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 6,
+            route_id: 4,
+            hop: mir2_world::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 100,
+                dst_y: 100,
+            },
+        }]);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"hero".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "hero", 1, 0, 912, hero));
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.auto_get_exp_tick = 0;
+        sessions.insert("hero".to_string(), sg);
+        handle_move_cmd(
+            mir2_protocol::messages::CM_WALK,
+            (5 & 0xFFFF) | (6 << 16),
+            0,
+            "hero",
+            912,
+            &online,
+            &mut sessions,
+            &mut world,
+            &mut displays,
+            &gates,
+            None,
+        );
+        let e = world.entities.get(hero).unwrap();
+        assert_eq!(
+            (e.map_id, e.x, e.y),
+            (0, 5, 5),
+            "AddToMap 失败 ⇒ 回滚到走前格"
+        );
+        assert!(
+            sessions["hero"].auto_get_exp_tick > 0,
+            "回滚支也必须复位 AutoGetExpTick（oracle :3796）"
+        );
+    }
+
+    /// **P31 复验 F5（生产接线锚点）**：`sim_loop` 里的四处接线必须仍在且未被注释——
+    /// ① `drain_player_auto_get_exp(...)` 生产调用点；② `SessionGround` 生产 ctor 的
+    /// `auto_get_exp_tick: now_ms()`（及四字段初值）；③ `@Login` 的 seed 块；④ `@Login` 的写回块。
+    ///
+    /// 背景：`sim_loop` 需真机/DB 才能驱到，行为用例无法因删掉这些接线而变红（复验实测：
+    /// 删 sim_loop 调用 / 改生产 ctor tick / 删 `@Login` seed+写回 ⇒ `cargo test` 仍绿）。
+    /// 本用例按仓内先例（`drain_deal_tick_production_call_is_wired_in_sim_loop`）用源码锚点保鲜。
+    ///
+    /// 牙：删/注释任一块 ⇒ 对应 `seq(...)` 计数为 0 ⇒ 必红。
+    #[test]
+    fn p31_production_wiring_anchors() {
+        let src = include_str!("main.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let start = lines
+            .iter()
+            .position(|l| l.trim() == "fn sim_loop(")
+            .expect("`fn sim_loop(` 定义行");
+        let end = lines
+            .iter()
+            .enumerate()
+            .skip(start + 1)
+            .find(|(_, l)| l.starts_with("fn "))
+            .map(|(i, _)| i)
+            .expect("sim_loop 之后的下一顶层函数");
+        let body = &lines[start..end];
+        let seq = |want: &[&str]| -> usize {
+            body.windows(want.len())
+                .filter(|w| w.iter().zip(want).all(|(l, x)| l.trim() == *x))
+                .count()
+        };
+        // ① sim_loop 的生产调用点（实参形状与其它调用点不同 ⇒ 唯一命中）。
+        assert_eq!(
+            seq(&[
+                "drain_player_auto_get_exp(",
+                "&mut world,",
+                "&mut ground_sessions,",
+                "&online,",
+                "registry.as_ref(),",
+                "host_now,",
+                "&mut rec,",
+                ");",
+            ]),
+            1,
+            "sim_loop 里 P31 的 drain_player_auto_get_exp(...) 生产调用行必须仍在且未被注释"
+        );
+        // ② 生产 ctor（`PlayObject.cs:1009-1012`）。
+        assert_eq!(
+            seq(&[
+                "auto_get_exp_tick: now_ms(),",
+                "auto_get_exp_time: 0,",
+                "auto_get_exp_point: 0,",
+                "auto_get_exp_envir: None,",
+                "auto_get_exp_envir_map_id: None,",
+                "auto_get_exp_in_safe_zone: false,",
+            ]),
+            1,
+            "sim_loop 的 SessionGround 生产 ctor 必须把 AutoGetExpTick 初始化为 now_ms()"
+        );
+        // ③ `@Login` seed。
+        assert_eq!(
+            seq(&[
+                "player.auto_get_exp_in_safe_zone =",
+                "sg.auto_get_exp_in_safe_zone;",
+                "player.auto_get_exp_envir =",
+                "sg.auto_get_exp_envir.clone();",
+                "player.auto_get_exp_time =",
+                "sg.auto_get_exp_time;",
+                "player.auto_get_exp_point =",
+                "sg.auto_get_exp_point;",
+            ]),
+            1,
+            "sim_loop 的 `@Login` 前 seed 块必须仍在（脚本可写字段从宿主会话 seed）"
+        );
+        // ④ `@Login` 写回。
+        assert_eq!(
+            seq(&[
+                "sg.auto_get_exp_in_safe_zone =",
+                "player.auto_get_exp_in_safe_zone;",
+                "sg.auto_get_exp_envir =",
+                "player.auto_get_exp_envir.clone();",
+                "sg.auto_get_exp_envir_map_id = None;",
+                "sg.auto_get_exp_time =",
+                "player.auto_get_exp_time;",
+                "sg.auto_get_exp_point =",
+                "player.auto_get_exp_point;",
+            ]),
+            1,
+            "sim_loop 的 `@Login` 后写回块必须仍在（清 envir 缓存 + 四字段写回）"
+        );
+    }
+
+    /// **P31 复验 F2（牙）**：`SpaceMove`（`BaseObject.cs:1103-1164`，`SKILL_SPACEMOVE` 的
+    /// `MagSaceMove→MapRandomMove→SpaceMove`）**不写** `AutoGetExpTick`；只有 `EnterAnotherMap`
+    /// （`:3793-3796`）才有泡点复位。生产代码里 `AutoGetExpTick = now_ms()` 只允许出现在
+    /// `handle_move_cmd` 的三处 EnterAnotherMap 支（CM_TURN 成功/回滚合并、CM_WALK 回滚、CM_WALK 成功）。
+    ///
+    /// 牙：把 `if out.cross_map { … }` 的复位支加回 `handle_spell_cmd_with_magic` ⇒ 下面的
+    /// `cross_map` 断言与计数断言同时必红。
+    #[test]
+    fn p31_space_move_does_not_reset_tick_anchor() {
+        let src = include_str!("main.rs");
+        let prod = &src[..src
+            .find(
+                "#[cfg(test)]
+mod tests {",
+            )
+            .expect("`#[cfg(test)] mod tests` 起点")];
+        assert!(
+            !prod.contains("if out.cross_map {"),
+            "SpaceMove 路径不得复位 AutoGetExpTick（oracle 只在 EnterAnotherMap :3796 写该字段）"
+        );
+        assert_eq!(
+            prod.matches("sg.auto_get_exp_tick = now_ms();").count(),
+            3,
+            "生产复位点只允许是 EnterAnotherMap 的三处（CM_TURN 成功/回滚、CM_WALK 回滚、CM_WALK 成功）"
         );
     }
 }

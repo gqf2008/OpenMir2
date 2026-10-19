@@ -705,6 +705,12 @@ pub struct Engine<'n, 'p> {
     pub errors: Vec<EngineError>,
     /// 当前脚本下标（进入 GotoLable 后可能被改写）
     pub current_script: Option<usize>,
+    /// **异常式中止信号**：C# 的 `ActionOfAutoGetExp` 在 `sParam3[1]` 越界时抛
+    /// `IndexOutOfRangeException`，异常从 `ScriptEngine.GotoLable` 逃出 ⇒ **整个 GotoLable
+    /// 中止**（当前动作列表后续动作、后续 procedure、以及 `sSendMsg` 说词都不执行）。
+    /// Rust 不 panic，用本字段表达同一次展开：动作处理器置 `true`，[`Engine::run_actions`]
+    /// 与 [`Engine::goto_label`] 见旗即返回（whitelist B-108）。
+    pub abort_goto: bool,
 }
 
 impl<'n, 'p> Engine<'n, 'p> {
@@ -715,11 +721,14 @@ impl<'n, 'p> Engine<'n, 'p> {
             goto_params: GotoLabParams::default(),
             errors: Vec::new(),
             current_script: None,
+            abort_goto: false,
         }
     }
 
     /// `ScriptEngine.GotoLable`（1:1 移植，含 C# 的选脚本顺序与 break 语义）。
     pub fn goto_label(&mut self, label: &str, bo_ext_jmp: bool) {
+        // 上一次（嵌套）GotoLable 的异常中止不得泄漏到本次调用。
+        self.abort_goto = false;
         if self.player.last_npc() != self.npc.actor_id() {
             self.player.set_last_npc(0);
         }
@@ -770,6 +779,10 @@ impl<'n, 'p> Engine<'n, 'p> {
             if ok {
                 s_send_msg.push_str(&proc_.s_say_msg);
                 if !self.run_actions(&proc_.action_list) {
+                    // C# 的越界异常会从 GotoLable 逃出 ⇒ 后续 procedure 与说词都不执行。
+                    if self.abort_goto {
+                        return;
+                    }
                     break;
                 }
                 if self.goto_params.send_say_msg {
@@ -779,6 +792,9 @@ impl<'n, 'p> Engine<'n, 'p> {
             } else {
                 s_send_msg.push_str(&proc_.s_else_say_msg);
                 if !self.run_actions(&proc_.else_action_list) {
+                    if self.abort_goto {
+                        return;
+                    }
                     break;
                 }
                 if self.goto_params.send_say_msg {
@@ -1241,6 +1257,10 @@ impl<'n, 'p> Engine<'n, 'p> {
                 // —— 执行**第一个已注册动作**后立即返回（后续动作不再执行）
                 let mut ok = result;
                 self.run_action(code, info, &mut ok);
+                if self.abort_goto {
+                    // C# 异常从 GotoLable 逃出：本动作列表的后续动作也不再执行。
+                    return false;
+                }
                 return ok;
             }
             if crate::engine::dispatch::execution_registered(code) {

@@ -232,6 +232,12 @@ pub struct StepOutcome {
     pub moved: bool,
     /// 是否发生换图（移动后落点格命中 `CellType::MapRoute` 且 `EnterAnotherMap` 门通过）。
     pub changed_map: bool,
+    /// **`EnterAnotherMap` 已走进落地段、但 `AddToMap` 失败并回滚**（`PlayObject.cs:3787-3796`）。
+    ///
+    /// oracle 的前置门失败（等级/`NeedSetonFlag`/`CellValid`/城堡）**提前 `return false`**，
+    /// 不执行泡点计时复位；只有 `AddToMap` 失败的回滚支仍会走到
+    /// `AutoGetExpTick = GetTickCount()`（`:3796`）。宿主据本字段决定「回滚支也要复位」。
+    pub rolled_back: bool,
 }
 
 /// [`World::route_enter`] 的结果：区分「无 route / 被门跳过」「成功换图」「`EnterAnotherMap` 失败」。
@@ -244,8 +250,27 @@ enum RouteOutcome {
     Skipped,
     /// 至少一条 `MapRoute` 的 `EnterAnotherMap` 成功 ⇒ 换图（终落点 = 最后一条成功者）。
     Switched,
-    /// 至少一条 `MapRoute` 的 `EnterAnotherMap` 失败 ⇒ 调用方回滚、不发移动帧。
+    /// `EnterAnotherMap` 的**前置门**失败（`CellValid` 等，`PlayObject.cs:3721-3757`）⇒ 调用方
+    /// 回滚、不发移动帧；oracle 提前 `return false`，**不执行**泡点计时复位。
     Failed,
+    /// 至少一条 `MapRoute` 已走进 `EnterAnotherMap` 的落地段，但 `AddToMap` 失败并回滚
+    /// （`PlayObject.cs:3787-3796`）⇒ 调用方回滚、不发移动帧；oracle **仍执行**
+    /// `AutoGetExpTick = GetTickCount()`。
+    RolledBack,
+}
+
+/// [`World::walk_route_check`] 的结果（`CM_TURN` 原地转身的路线检查）。
+///
+/// 与 [`StepOutcome`] 同口径：oracle `EnterAnotherMap` 的前置门失败提前 `return`（不复位），
+/// 只有 `AddToMap` 失败的回滚支仍走到 `AutoGetExpTick = GetTickCount()`（`PlayObject.cs:3796`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteCheck {
+    /// 无 route / 门跳过 / 前置门失败 ⇒ 未换图、不复位泡点时间。
+    NoMapChange,
+    /// 换图成功 ⇒ oracle 复位泡点时间。
+    Switched,
+    /// `EnterAnotherMap` 已进入落地段但 `AddToMap` 失败 ⇒ 回滚；oracle 仍复位泡点时间。
+    RolledBack,
 }
 
 /// **P3-B1（单体直击/骰门族）**：`DoSpell` 单个目标效果体的返回值（供共享尾与用例观察）。
@@ -5558,8 +5583,10 @@ impl World {
     /// - **无 `!Death` 门**（照抄）；
     /// - `GetExp` 走 [`get_exp_raw`]，**不得**走 [`World::gain_exp`]（后者含 `CalcGetExp`/
     ///   倍率/组队均分，见 PR-3 spike P31 口径）；
-    /// - `InSafeZone()` 用 `Entity.in_safe_zone`（本仓既有的折叠语义；
-    ///   `BaseObject.cs:1777` 的 `Envir == null ⇒ true` 在实体恒有图时不适用）。
+    /// - `InSafeZone()` 由**调用方**按 `registry.flag_of(map_id).safe_area` 传入
+    ///   （oracle `BaseObject.cs:1777-1808`：`Envir == null ⇒ true` 在实体恒有图时不适用；
+    ///   第 2–4 步未建模见 whitelist T-75）。**不得**读 `Entity.in_safe_zone`——该字段
+    ///   在生产没有写入点（F1），读它等于安全区门恒 `false`。
     ///
     /// 命中时返回 `(actor_id, 本次加值, 是否进升级块, 升级后等级)`——调用方追加进
     /// [`TickRecord::exp_awards`]，由既有 `drain_kill_exp_chain` 出
@@ -5569,11 +5596,9 @@ impl World {
         actor_id: i32,
         state: &mut AutoGetExpState,
         now: i64,
+        in_safe_zone: bool,
     ) -> Option<(i32, i32, bool, u8)> {
-        let (map_id, in_safe_zone) = {
-            let e = self.entities.get(actor_id)?;
-            (e.map_id, e.in_safe_zone)
-        };
+        let map_id = self.entities.get(actor_id)?.map_id;
         // 门 ①：`AutoGetExpPoint > 0`。
         if state.point <= 0 {
             return None;
@@ -6088,6 +6113,7 @@ impl World {
             return StepOutcome {
                 moved: false,
                 changed_map: false,
+                rolled_back: false,
             };
         };
         // 走前格（回滚落点；oracle `WalkTo` 的 `oldX/oldY`/`oldEnvir`）。
@@ -6096,6 +6122,7 @@ impl World {
             return StepOutcome {
                 moved: false,
                 changed_map: false,
+                rolled_back: false,
             };
         }
         // 记下本轮起点，失败回滚时把误记的 `MapChange` 撤掉（否则宿主多发一组换图簇）。
@@ -6107,35 +6134,54 @@ impl World {
                 StepOutcome {
                     moved: false,
                     changed_map: false,
+                    rolled_back: false,
+                }
+            }
+            RouteOutcome::RolledBack => {
+                // oracle `Walk()` 返回 false ⇒ 上游 `WalkTo` 同样回滚坐标、不发移动帧；
+                // 但 `EnterAnotherMap` 的落地失败支仍执行泡点计时复位（`:3796`）。
+                self.sessions.truncate_map_changes(mc_len);
+                self.rollback_move(actor_id, old_x, old_y, old_map);
+                StepOutcome {
+                    moved: false,
+                    changed_map: false,
+                    rolled_back: true,
                 }
             }
             RouteOutcome::Switched => StepOutcome {
                 moved: true,
                 changed_map: true,
+                rolled_back: false,
             },
             RouteOutcome::Skipped => StepOutcome {
                 moved: true,
                 changed_map: false,
+                rolled_back: false,
             },
         }
     }
 
     /// **L1 TransMap 触发**：actor 在**当前格**做一次路线检查（走/跑/骑跑成功移动之后，或 `CM_TURN`
-    /// 原地转身）。返回 `true` = 发生了换图。
+    /// 原地转身）。返回值见 [`RouteCheck`]：`Switched` = 换图成功，`RolledBack` = 已进
+    /// `EnterAnotherMap` 落地段但 `AddToMap` 失败并回滚，`NoMapChange` = 无换图（含前置门失败）。
     ///
     /// 调用点：① [`World::step_with_route`]（走）；② `CM_TURN` 原地转身（oracle `ClientChangeDir`
-    /// 也调 `Walk(RM_TURN)`，`PlayObject.Operate.cs:334`）。转身路径无「走前格」可回滚，故 `Failed`
-    /// 时只撤掉误记的 `MapChange` 并返回 `false`（oracle 转身时 `Walk()` 返回 false ⇒ 不发转身帧而回
+    /// 也调 `Walk(RM_TURN)`，`PlayObject.Operate.cs:334`）。转身路径无「走前格」可回滚，故失败支
+    /// 只撤掉误记的 `MapChange`（oracle 转身时 `Walk()` 返回 false ⇒ 不发转身帧而回
     /// `RM_MOVEFAIL`；**该帧本宿主未接，登记**）。
-    pub fn walk_route_check(&mut self, actor_id: i32) -> bool {
+    pub fn walk_route_check(&mut self, actor_id: i32) -> RouteCheck {
         let mc_len = self.sessions.map_changes().len();
         match self.route_enter(actor_id) {
-            RouteOutcome::Switched => true,
+            RouteOutcome::Switched => RouteCheck::Switched,
             RouteOutcome::Failed => {
                 self.sessions.truncate_map_changes(mc_len);
-                false
+                RouteCheck::NoMapChange
             }
-            RouteOutcome::Skipped => false,
+            RouteOutcome::RolledBack => {
+                self.sessions.truncate_map_changes(mc_len);
+                RouteCheck::RolledBack
+            }
+            RouteOutcome::Skipped => RouteCheck::NoMapChange,
         }
     }
 
@@ -6202,6 +6248,7 @@ impl World {
         }
         let mut switched = false;
         let mut failed = false;
+        let mut rolled_back = false;
         for route_id in route_ids {
             // `M2Share.CellObjectMgr.Get<MapRouteItem>(CellObjId)`；`mapRoute.Envir != null`。
             let Some(hop) = self
@@ -6244,6 +6291,8 @@ impl World {
                 .get(hop.dst_map_id)
                 .is_some_and(|m| m.cell_valid(hop.dst_x, hop.dst_y));
             if !dst_valid {
+                // oracle `!envir.CellValid(...)` 是 `EnterAnotherMap` 的前置门：提前 `return
+                // false` ⇒ 不执行落地段/泡点复位。
                 failed = true;
                 continue;
             }
@@ -6265,13 +6314,23 @@ impl World {
             // 目标图由 route 表校验、会话由宿主建立）⇒ 按「失败」保守处理，与 `result=false` 同支。
             match self.switch_map(&chr_name, hop.dst_map_id, hop.dst_x, hop.dst_y) {
                 Ok(()) => switched = true,
+                // `CellRejected` = oracle `AddToMap()` 返回 false ⇒ 走回滚支；该支之后仍执行
+                // `AutoGetExpTick = GetTickCount()`（`PlayObject.cs:3793-3796`）。
+                Err(crate::session::SessionError::CellRejected) => rolled_back = true,
+                // `NoSuchMap`/`NotInWorld` 等 Rust 独有护栏（oracle 无对应）⇒ 按前置失败处理：
+                // 不进落地段、不复位泡点时间（保守取「不回滚支」）。
                 Err(_) => failed = true,
             }
         }
         // oracle `if (result)`：任一 `EnterAnotherMap` 失败 ⇒ result=false（即便另一条成功过，
         // oracle 的 `result` 也被置 false；该「部分成功 + 部分失败」病态混合在真实数据不可达，本仓
         // 按"任一失败 ⇒ 回滚到走前格"处理并登记）。
-        if failed {
+        //
+        // 复位口径：`RolledBack` 优先于 `Failed`——oracle 的 `AddToMap` 失败支在 `if/else`
+        // 之后仍执行复位；前置门失败则提前 `return`，永不复位。
+        if rolled_back {
+            RouteOutcome::RolledBack
+        } else if failed {
             RouteOutcome::Failed
         } else if switched {
             RouteOutcome::Switched
@@ -9025,7 +9084,11 @@ mod tests {
                 dst_y: 2,
             },
         }]);
-        assert!(w.walk_route_check(hero), "当前格命中 route ⇒ 换图");
+        assert_eq!(
+            w.walk_route_check(hero),
+            RouteCheck::Switched,
+            "当前格命中 route ⇒ 换图"
+        );
         assert_eq!(
             (
                 w.entities.get(hero).unwrap().map_id,
@@ -9741,12 +9804,12 @@ mod p31_auto_get_exp_tests {
             ..Default::default()
         };
         assert!(
-            w.auto_get_exp(id, &mut st, 6_000).is_none(),
+            w.auto_get_exp(id, &mut st, 6_000, false).is_none(),
             "elapsed == time ⇒ 严格 > 不触发"
         );
         assert_eq!(st.tick, 1_000, "未命中不得刷新 tick");
         let a = w
-            .auto_get_exp(id, &mut st, 6_001)
+            .auto_get_exp(id, &mut st, 6_001, false)
             .expect("elapsed > time 命中");
         assert_eq!(a, (id, 7, false, 1));
         assert_eq!(st.tick, 6_001, "命中先刷新 AutoGetExpTick");
@@ -9764,7 +9827,7 @@ mod p31_auto_get_exp_tests {
                 point,
                 ..Default::default()
             };
-            assert!(w.auto_get_exp(id, &mut st, 10_000).is_none());
+            assert!(w.auto_get_exp(id, &mut st, 10_000, false).is_none());
             assert_eq!(st.tick, 0);
             assert_eq!(w.entities.get(id).unwrap().exp, 3);
         }
@@ -9790,16 +9853,19 @@ mod p31_auto_get_exp_tests {
             ..Default::default()
         };
         assert!(
-            w.auto_get_exp(id, &mut st, 101).is_none(),
+            w.auto_get_exp(id, &mut st, 101, false).is_none(),
             "Envir = map1、玩家在 map0 ⇒ 不发"
         );
         assert_eq!(st.tick, 0, "地图门失败不刷新");
         st.envir_map_id = Some(0);
-        assert!(w.auto_get_exp(id, &mut st, 101).is_some(), "同图 ⇒ 发");
+        assert!(
+            w.auto_get_exp(id, &mut st, 101, false).is_some(),
+            "同图 ⇒ 发"
+        );
         st.tick = 0;
         st.envir_map_id = None;
         assert!(
-            w.auto_get_exp(id, &mut st, 101).is_some(),
+            w.auto_get_exp(id, &mut st, 101, false).is_some(),
             "null ⇒ 不判地图"
         );
     }
@@ -9815,23 +9881,21 @@ mod p31_auto_get_exp_tests {
             in_safe_zone: true,
             ..Default::default()
         };
-        // 不在安全区 ⇒ 不发，但 tick 已刷新。
-        assert!(w.auto_get_exp(id, &mut st, 1_001).is_none());
+        // 不在安全区（宿主传入 `false`）⇒ 不发，但 tick 已刷新。
+        assert!(w.auto_get_exp(id, &mut st, 1_001, false).is_none());
         assert_eq!(
             st.tick, 1_001,
             "安全区门失败必须已刷新 Tick（oracle 语句序）"
         );
         assert_eq!(w.entities.get(id).unwrap().exp, 0);
-        // 同一周期内（未过 1s）即使进安全区也不发。
-        w.entities.get_mut(id).unwrap().in_safe_zone = true;
-        assert!(w.auto_get_exp(id, &mut st, 1_500).is_none());
+        // 同一周期内（未过 1s）即使传入安全区也不发。
+        assert!(w.auto_get_exp(id, &mut st, 1_500, true).is_none());
         // 下一周期 ⇒ 发。
-        assert!(w.auto_get_exp(id, &mut st, 2_002).is_some());
+        assert!(w.auto_get_exp(id, &mut st, 2_002, true).is_some());
         assert_eq!(w.entities.get(id).unwrap().exp, 5);
         // `AutoGetExpInSafeZone = false` ⇒ 无论安全区与否都发。
         st.in_safe_zone = false;
-        w.entities.get_mut(id).unwrap().in_safe_zone = false;
-        assert!(w.auto_get_exp(id, &mut st, 3_003).is_some());
+        assert!(w.auto_get_exp(id, &mut st, 3_003, false).is_some());
     }
 
     /// 判据 5（**裸 `GetExp` 不乘倍率**）：系统/人物/地图倍率全开，加值仍 == point。
@@ -9847,7 +9911,7 @@ mod p31_auto_get_exp_tests {
             point: 13,
             ..Default::default()
         };
-        let a = w.auto_get_exp(id, &mut st, 1).expect("命中");
+        let a = w.auto_get_exp(id, &mut st, 1, false).expect("命中");
         assert_eq!(a.1, 13, "GetExp(point) 直加：不得乘任何倍率");
         assert_eq!(w.entities.get(id).unwrap().exp, 13);
     }
@@ -9862,7 +9926,7 @@ mod p31_auto_get_exp_tests {
             point: 20,
             ..Default::default()
         };
-        let a = w.auto_get_exp(id, &mut st, 1).expect("命中");
+        let a = w.auto_get_exp(id, &mut st, 1, false).expect("命中");
         assert_eq!(a, (id, 20, true, 2), "进升级块 ⇒ 宿主出 53/45/52/752");
         let e = w.entities.get(id).unwrap();
         assert_eq!(e.exp, 10, "990 + 20 - 1000");
@@ -9881,7 +9945,10 @@ mod p31_auto_get_exp_tests {
             point: 4,
             ..Default::default()
         };
-        assert!(w.auto_get_exp(id, &mut st, 1).is_some(), "死玩家照跑");
+        assert!(
+            w.auto_get_exp(id, &mut st, 1, false).is_some(),
+            "死玩家照跑"
+        );
         assert_eq!(w.entities.get(id).unwrap().exp, 4);
     }
 
@@ -9896,7 +9963,7 @@ mod p31_auto_get_exp_tests {
             point: 6,
             ..Default::default()
         };
-        assert!(w.auto_get_exp(id, &mut st, 1).is_some());
+        assert!(w.auto_get_exp(id, &mut st, 1, false).is_some());
         // 同种子 42 的两条流：P31 后下一次抽数必须与未结算的对照流相同。
         assert_eq!(w.rng.random_below(1_000), control.rng.random_below(1_000));
     }

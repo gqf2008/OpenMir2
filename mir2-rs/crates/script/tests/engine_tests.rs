@@ -1738,6 +1738,48 @@ fn auto_get_exp_and_offline() {
     assert!(player.events.contains(&"def 528 0 0 0 0 ".to_string()));
 }
 
+/// **P31 复验 F3 / B-108**：`SETAUTOGETEXP` 的 `sParam3[1]` 越界在 C# 抛
+/// `IndexOutOfRangeException`，异常从 `ScriptEngine.GotoLable` **逃出** ⇒ 整个 GotoLable 中止：
+/// 当前动作之后不再执行、后续 procedure 不再执行、`sSendMsg` 说词也不发。
+///
+/// 牙（实测）：把 `actions.rs` 的 `self.abort_goto = true;` 删掉 ⇒ `close` 会执行、两段说词都会发
+/// ⇒ 本用例的 `msgs`/`says` 断言必红。
+#[test]
+fn auto_get_exp_index_out_of_range_aborts_whole_goto_label() {
+    let (mut npc, mut player) = setup(
+        "[@main]
+#IF
+checkgold 0
+#ACT
+setautogetexp 10 20
+#SAY
+第一段
+#IF
+checkgold 0
+#ACT
+close
+#SAY
+第二段
+",
+    );
+    let errors = run(&mut npc, &mut player, "@main");
+    assert!(
+        errors.is_empty(),
+        "C# 是异常不是 ScriptActionError: {errors:?}"
+    );
+    assert_eq!(player.auto_get_exp, None, "越界支不得写字段");
+    assert!(
+        player.msgs.is_empty(),
+        "后续 procedure 的 close 不得执行: {:?}",
+        player.msgs
+    );
+    assert!(
+        npc.says.is_empty(),
+        "整个 GotoLable 中止 ⇒ 两段说词都不发: {:?}",
+        npc.says
+    );
+}
+
 #[test]
 fn gm_execute_substitutes_self_and_restores_permission() {
     let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");

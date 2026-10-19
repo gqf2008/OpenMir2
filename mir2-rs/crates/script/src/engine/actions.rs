@@ -554,6 +554,9 @@ impl Engine<'_, '_> {
                 // `PlayObject.cs:1488-1492`）。Rust 不 panic；等价落点 = 直接 return。
                 // 差异仅剩「不写崩溃日志/堆栈」，登记见 `tests/parity/whitelist.md` B-108。
                 let Some(safe_flag) = info.s_param3.chars().nth(1) else {
+                    // C# 的 `IndexOutOfRangeException` 从 `GotoLable` 逃出 ⇒ 整个 GotoLable
+                    // 中止（不是只中止当前动作）。置旗后由 `run_actions`/`goto_label` 展开。
+                    self.abort_goto = true;
                     return;
                 };
                 let bo_safe = safe_flag == '1';
