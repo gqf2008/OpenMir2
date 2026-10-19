@@ -91,6 +91,30 @@ impl<T> NetPriorityQueue<T> {
         }
     }
 
+    /// 队列元素个数（oracle `MsgQueue.Count`）。
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// 队列是否为空。
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    /// 队首元素（oracle `MsgQueue.TryPeek`：只看**最小优先级**那一条，不看第 i 条）。
+    #[must_use]
+    pub fn peek(&self) -> Option<&T> {
+        self.nodes.first().map(|n| &n.0)
+    }
+
+    /// 队首元素的优先级字节。
+    #[must_use]
+    pub fn peek_priority(&self) -> Option<u8> {
+        self.nodes.first().map(|n| n.1)
+    }
+
     /// `.NET Dequeue` → `RemoveRootNode`：根取出，**末元素**回填根后 `MoveDownDefaultComparer`
     /// 下沉（4 个孩子里取**首个**最小者；末元素 `<=` 选中子时停）。
     pub fn dequeue(&mut self) -> Option<T> {
@@ -125,6 +149,41 @@ impl<T> NetPriorityQueue<T> {
         }
         Some(root)
     }
+}
+
+/// `BaseObject.SendUpdateMsg`（`src/M2Server/Actor/BaseObject.Message.cs:283-305`）的**纯函数**模型。
+///
+/// ```csharp
+/// i = 0;
+/// while (true) {
+///     if (MsgQueue.Count <= i) break;
+///     if (MsgQueue.TryPeek(out sendMessage, out _)) {
+///         if (sendMessage.wIdent == wIdent) { MsgQueue.TryDequeue(out _, out _); Dispose(sendMessage); }
+///     }
+///     i++;
+/// }
+/// SendMsg(this, wIdent, wParam, lParam1, lParam2, lParam3, sMsg);
+/// ```
+///
+/// 照抄两个 oracle 怪癖（**不是**「全队列扫描去重」）：
+/// 1. `TryPeek` 永远只看**当前队首**（最小优先级元素）⇒ 非队首的同 ident 消息删不掉；
+/// 2. `Count <= i` 预算 ⇒ 队首连续 N 条同 ident 最多删 `ceil(N/2)` 条。
+///
+/// 元素 = `wIdent`（`u16`），入队优先级 = `(byte)wIdent`（低字节）。删除段结束后照
+/// `SendMsg` 入队一条新的。
+pub fn send_update_msg(queue: &mut NetPriorityQueue<u16>, w_ident: u16) {
+    let ident = (w_ident & 0xFF) as u8;
+    let mut i = 0_usize;
+    loop {
+        if queue.len() <= i {
+            break;
+        }
+        if queue.peek().is_some_and(|head| *head == w_ident) {
+            let _ = queue.dequeue();
+        }
+        i += 1;
+    }
+    queue.enqueue(w_ident, ident);
 }
 
 #[cfg(test)]
@@ -221,5 +280,79 @@ mod tests {
             got.push(e);
         }
         assert_eq!(got, vec!["c1", "c2", "n2", "n1"], "名组出队序与入队序相反");
+    }
+
+    /// **C9（oracle 队首-only 去重，模型级）**：队列里先有一条待发 53（68），随后被一条
+    /// `RM_HIT(20)` 挡在队首。再调 `SendUpdateMsg(53)` 时 `TryPeek` 只看到 `RM_HIT`
+    /// ⇒ **旧 53 删不掉**；入队新 53 后 pending = 2；drain 时 20 先出，随后 2 条 53。
+    ///
+    /// 牙（改坏必红）：把 `send_update_msg` 的删除段写成「全队列扫描同 ident」⇒ 旧 53 被删、
+    /// 只剩 1 条 ⇒ 计数断言红（这会把 oracle 的 bug 修掉）。
+    #[test]
+    fn c9_send_update_msg_peeks_head_only() {
+        use super::{send_update_msg, NetPriorityQueue};
+        const RM_HIT: u16 = 10_004; // (byte)20
+        const RM_HEALTHSPELLCHANGED: u16 = 10_052; // (byte)68
+        assert_eq!((RM_HIT & 0xFF) as u8, 20);
+        assert_eq!((RM_HEALTHSPELLCHANGED & 0xFF) as u8, 68);
+
+        let mut q: NetPriorityQueue<u16> = NetPriorityQueue::new();
+        send_update_msg(&mut q, RM_HEALTHSPELLCHANGED); // 待发 53
+        q.enqueue(RM_HIT, (RM_HIT & 0xFF) as u8); // 更低优先级的 blocker 成为队首
+        send_update_msg(&mut q, RM_HEALTHSPELLCHANGED); // 头-only ⇒ 旧 53 不被删
+        let mut probe = q.clone();
+        let mut pending_53 = 0_usize;
+        while let Some(e) = probe.dequeue() {
+            if e == RM_HEALTHSPELLCHANGED {
+                pending_53 += 1;
+            }
+        }
+        assert_eq!(
+            pending_53, 2,
+            "队首被 RM_HIT 挡住 ⇒ 旧 53 保留，新建后 pending=2"
+        );
+
+        let mut drained = Vec::new();
+        while let Some(e) = q.dequeue() {
+            drained.push(e);
+        }
+        assert_eq!(drained[0], RM_HIT, "优先级 20 先出队");
+        assert_eq!(
+            drained
+                .iter()
+                .filter(|e| **e == RM_HEALTHSPELLCHANGED)
+                .count(),
+            2,
+            "drain 时 2 条 53 全部发出"
+        );
+    }
+
+    /// **C10（同批出队序 = `(byte)wIdent`）**：同批出现 `SM_HIT` 的动作源 `RM_HIT(20)`、
+    /// `RM_HEALTHSPELLCHANGED(68)`、`RM_WINEXP(139)`、`RM_LEVELUP(150)` ⇒ 出队序必须是
+    /// 20 → 68 → 139 → 150。`SM_LEVELUP/SM_ABILITY/SM_SUBABILITY` 是 `RM_LEVELUP` 的 Operate
+    /// 内即时 `SendSocket`，不占队列元素。
+    ///
+    /// 牙（改坏必红）：改成按入队序（或稳定排序）输出 ⇒ 断言红。
+    #[test]
+    fn c10_healthspell_batch_drains_by_priority_byte() {
+        use super::NetPriorityQueue;
+        const RM_HIT: u16 = 10_004; // 20
+        const RM_HEALTHSPELLCHANGED: u16 = 10_052; // 68
+        const RM_WINEXP: u16 = 8_075; // 139
+        const RM_LEVELUP: u16 = 8_086; // 150
+        let mut q: NetPriorityQueue<u16> = NetPriorityQueue::new();
+        // 故意按「消息段处理序」之后的反序入队，证明确实按优先级出队。
+        for ident in [RM_LEVELUP, RM_WINEXP, RM_HEALTHSPELLCHANGED, RM_HIT] {
+            q.enqueue(ident, (ident & 0xFF) as u8);
+        }
+        let mut priorities = Vec::new();
+        while let Some(ident) = q.dequeue() {
+            priorities.push((ident & 0xFF) as u8);
+        }
+        assert_eq!(priorities, vec![20, 68, 139, 150]);
+        // 45/52/752 不是独立队列元素：它们是 `RM_LEVELUP(150)` 的 Operate 内即时 `SendSocket`
+        // （`PlayObject.Message.cs:1670-1676`）⇒ 紧跟 150 之后直发，不参与优先级比较。
+        assert_eq!((mir2_protocol::messages::RM_ABILITY & 0xFF) as u8, 67);
+        assert_eq!((mir2_protocol::messages::RM_SUBABILITY & 0xFF) as u8, 62);
     }
 }

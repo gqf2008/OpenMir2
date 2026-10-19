@@ -181,8 +181,11 @@ pub struct TickRecord {
     /// 触发的**玩家** `HealthSpellChanged()`：`(actor_id, hp_after, mp_after)`，保序。
     ///
     /// 宿主据此出 `SM_HEALTHSPELLCHANGED(53)`（oracle 只对 `Race == Play` 发帧）。
+    /// `(actor_id, hp_after, mp_after, hp_clamped, mp_clamped)`：两个 flag 分别对应 oracle
+    /// 的 `if (WAbil.HP > WAbil.MaxHP)` / `if (WAbil.MP > WAbil.MaxMP)` 分支——宿主按 flag
+    /// 把**该字段**写成 `Max-1`（P8 钳制在 P7 填充/扣血之后），未被钳制的字段保留 P7 终值。
     /// 该段不消费 RNG ⇒ 五批 trace 不变。
-    pub verify_health_changes: Vec<(i32, u16, u16)>,
+    pub verify_health_changes: Vec<(i32, u16, u16, bool, bool)>,
     /// **出站接线片 W2**：本 tick 的 `RM_PUSH` 族（`SM_BACKSTEP(9)`）——`CharPushed` 每推进一格一条，保序。
     ///
     /// 两个来源共用本表（顺序 = 先命令 FIFO、后玩家 `Run` 的重叠推挤段）：
@@ -905,11 +908,11 @@ pub struct World {
     /// P32（宿主段）从这里读，保证「被怪物打死后 30s 内」仍能看到 oracle 会看到的非玩家命中者。
     pub player_hiter_snapshot: Vec<PlayerHiterSnapshot>,
     /// **PL-1 硬前置**：`verify_map_time` 的 `BaseObject.Base.cs:230-245` 钳制段触发的
-    /// 玩家 `HealthSpellChanged()`（`(actor_id, hp_after, mp_after)`，保序）。
+    /// 玩家 `HealthSpellChanged()`（`(actor_id, hp_after, mp_after, hp_clamped, mp_clamped)`，保序）。
     ///
     /// 累积到 [`World::tick_tail`] 末尾转抄进 [`TickRecord::verify_health_changes`]（宿主出 53）。
     /// 只记 `Race == Play`（oracle 的 `HealthSpellChanged` 仅对 Play 发帧，`BaseObject.cs:700-703`）。
-    pub(crate) pending_verify_health_changes: Vec<(i32, u16, u16)>,
+    pub(crate) pending_verify_health_changes: Vec<(i32, u16, u16, bool, bool)>,
     /// 判据③：tick 必须始终跑在同一个线程上
     owner_thread: Option<ThreadId>,
     /// S1 tick 骨架：时钟推进 + 线程断言（单线程 `Schedule`）。
@@ -4673,19 +4676,21 @@ impl World {
         let Some(e) = self.entities.get_mut(actor_id) else {
             return;
         };
-        let mut changed = false;
+        let mut hp_clamped = false;
+        let mut mp_clamped = false;
         if e.hp > e.max_hp {
             e.hp = e.max_hp.wrapping_sub(1);
-            changed = true;
+            hp_clamped = true;
         }
         if e.mp > e.max_mp {
             e.mp = e.max_mp.wrapping_sub(1);
-            changed = true;
+            mp_clamped = true;
         }
         let is_play = e.race == crate::entity::ACTOR_RACE_PLAY;
-        if changed && is_play {
+        if (hp_clamped || mp_clamped) && is_play {
             let (id, hp, mp) = (e.id, e.hp, e.mp);
-            self.pending_verify_health_changes.push((id, hp, mp));
+            self.pending_verify_health_changes
+                .push((id, hp, mp, hp_clamped, mp_clamped));
         }
     }
 
@@ -9609,8 +9614,8 @@ mod tests {
         assert_eq!((e.hp, e.mp), (199, 199), "HP=MaxHP-1 / MP=MaxMP-1");
         assert_eq!(
             rec.verify_health_changes,
-            vec![(p, 199, 199), (q, u16::MAX, 0)],
-            "两个玩家各一条 HealthSpellChanged（槽位序）"
+            vec![(p, 199, 199, true, true), (q, u16::MAX, 0, true, false)],
+            "两个玩家各一条 HealthSpellChanged（槽位序；flag = 实际命中的分支）"
         );
         assert_eq!(
             w.entities.get(q).unwrap().hp,

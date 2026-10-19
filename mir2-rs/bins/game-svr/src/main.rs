@@ -9744,76 +9744,6 @@ fn drain_action_downlink(
     }
 }
 
-/// 本 tick「恢复段的 53 被后续 53 取代」的获得者集合（oracle `SendUpdateMsg` 同 ident 去重，
-/// `BaseObject.Message.cs:283-303`）：
-/// - 升级段的 53（`exp_awards` 里 `leveled`）；
-/// - **PL-1 复验 finding 1**：钳制段（`BaseObject.Base.cs:230-245`）的 53 —— 同一 `base.Run` 内
-///   晚于恢复段，去重后线上只剩钳制那条。
-fn superseded_healthspell_ids(rec: &mir2_world::TickRecord) -> std::collections::HashSet<i32> {
-    let mut set: std::collections::HashSet<i32> = rec
-        .exp_awards
-        .iter()
-        .filter(|(_, _, leveled, _)| *leveled)
-        .map(|(actor, _, _, _)| *actor)
-        .collect();
-    set.extend(rec.verify_health_changes.iter().map(|(actor, _, _)| *actor));
-    set
-}
-
-/// **PL-1 复验 F5**：`TickRecord::verify_health_changes` → `SM_HEALTHSPELLCHANGED(53)` 出帧。
-///
-/// oracle `BaseObject.Run` 的钳制段（`BaseObject.Base.cs:230-245`）在改完 `WAbil.HP/MP` 后调
-/// `HealthSpellChanged()`（`BaseObject.cs:700-709`）：`Race == Play` ⇒ `SendUpdateMsg`（只自己）；
-/// `ShowHp` ⇒ `SendRefMsg`（范围广播）。A1 只把事件记进 `TickRecord`，此前**无宿主消费者**
-/// ⇒ 真机永远看不到这条 53。载荷用生产选路 [`game_svr::smframe::sm_healthspellchanged_frame`]
-/// （与 P32 同布局口径：默认冻结客户端布局带 12B `TCharDesc` 尾）。
-fn drain_verify_health_changes(
-    rec: &mir2_world::TickRecord,
-    world: &mir2_world::World,
-    online: &OnlineRegistry,
-    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
-    range: i32,
-) {
-    for (actor_id, hp, mp) in &rec.verify_health_changes {
-        let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
-            continue;
-        };
-        let name = entry.chr_name.clone();
-        let (body, show_hp) = {
-            let Some(sg) = ground_sessions.get_mut(&name) else {
-                continue;
-            };
-            // 会话是 WAbil 的投影：钳制后的 HP/MP 与实体 MaxHP/MaxMP 同步回会话。
-            sg.state.wabil.hp = *hp;
-            sg.state.wabil.mp = *mp;
-            if let Some(e) = world.entities.get(*actor_id) {
-                sg.state.wabil.max_hp = e.max_hp;
-                sg.state.wabil.max_mp = e.max_mp;
-            }
-            (
-                game_svr::smframe::sm_healthspellchanged_frame(
-                    sg.actor_id,
-                    sg.state.wabil.hp,
-                    sg.state.wabil.mp,
-                    sg.state.wabil.max_hp,
-                ),
-                sg.show_hp,
-            )
-        };
-        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "Verify 钳制回帧")
-        {
-            let _ = tx.send(SimToGate::SendFrame {
-                socket: entry.socket,
-                body: body.clone(),
-            });
-        }
-        if show_hp {
-            broadcast_healthspellchanged(world, online, gates, *actor_id, &body, range);
-        }
-    }
-}
-
 /// **车道 B1（buff 系统）**：本 tick 由 [`mir2_world::World::buff_tick`] 记下的 buff 帧。
 ///
 /// - `rec.buff_status_changes`（oracle `ActorBuffSystem.Operate` 的 `boChg` 支 ⇒ `StatusChanged()`）
@@ -10454,26 +10384,27 @@ fn drain_kill_exp_chain(
     drain_levelup_downlink(rec, online, sessions, gates, client_layout);
 }
 
-/// 每 tick 的**周期恢复**（oracle `PlayObject.Run` 的 `:70-141` 段，见 [`game_svr::recover`] 模块头）。
+/// 每 tick 的**周期恢复状态段**（oracle `PlayObject.Run` 的 `:70-141`，P1；见
+/// [`game_svr::recover`] 模块头）。
 ///
 /// 逐会话（**按键排序**，不让 `HashMap` 迭代序参与逻辑）执行
-/// [`game_svr::recover::recovery_tick`]；命中（`IncHealthSpell` 被调用）⇒ 照
-/// `BaseObject.HealthSpellChanged()`（`BaseObject.cs:700-710`）：
+/// [`game_svr::recover::recovery_tick`]；命中（`IncHealthSpell` 被调用）⇒ **只**在
+/// [`game_svr::healthspell::HealthSpellSlots`] 里 mark 一次
+/// `HealthSpellChanged()`（`BaseObject.cs:700-710`），**不**在这里出帧：
 ///
-/// - `Race==Play`（本宿主的会话全是玩家）⇒ `SendUpdateMsg(RM_HEALTHSPELLCHANGED,…)` = **给自己**；
-/// - `ShowHp` ⇒ 再 `SendRefMsg(RM_HEALTHSPELLCHANGED,…)` = 同一图内 `SendRefMsgRange` 格的观察者
-///   （含自己；`SendRefMsg` 的单元格扫描含源格）。`ShowHp` 由技能「心灵启示」置位（未移植）
-///   ⇒ 生产路径不可达，登记。
+/// - oracle 的 P1 恢复与 P2 ExtraAbil 到期落在**同一队列批次**（`PlayObject.Message.cs:70-141`
+///   在 `:163-227` 之前），两者的 `SendUpdateMsg(53)` 只保留一条 pending（头-only 去重）；
+/// - 该 pending 在 P3 消息段出队，`SM_HIT(20)` 等更低优先级消息先出、53(68) 随后。
 ///
-/// **登记**：oracle `SendRefMsg` 有 500ms 的 `VisibleHumanList` 重建缓存（`BaseObject.Message.cs:395`），
-/// 与 `broadcast_feature_changed` 同源地按“实时扫描”近似。
+/// ⇒ 帧由组边界 [`flush_healthspell_slots`] 统一发出，载荷在 flush 时读会话 `WAbil`
+/// （oracle 在**出队时**读 `WAbil`，`PlayObject.Message.cs:1736-1739`）。
+///
+/// **不再**用「升级/钳制抑制恢复」：oracle 的恢复 53 在 `CM_HIT(198)` 之前已出队，同 tick 的
+/// 升级/钳制属于**后续**批次，各成一条（审计 `laneB-53dedup` D1/D2）。
 fn drain_recovery(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     world: &mir2_world::World,
-    online: &OnlineRegistry,
-    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-    range: i32,
-    superseded_healthspell: &std::collections::HashSet<i32>,
+    slots: &mut game_svr::healthspell::HealthSpellSlots,
 ) {
     let now = now_ms();
     let mut names: Vec<String> = sessions.keys().cloned().collect();
@@ -10486,63 +10417,109 @@ fn drain_recovery(
         if !game_svr::recover::recovery_tick(&mut sg.recovery, &mut sg.state.wabil, death, now) {
             continue;
         }
-        // **F-1 的同 tick 去重**：oracle `SendUpdateMsg(RM_HEALTHSPELLCHANGED)`
-        // （`BaseObject.Message.cs:275-304`）先移除 `MsgQueue` 里同 ident 的旧消息再入队。恢复段在
-        // `PlayObject.Run()` 里**先**入队 53，随后 `BaseObject.Run()` 的消息段处理击杀/升级
-        // （触发消息优先级 `MessagePriority.Normal=1` / `RM_HIT=20` 均 < `(byte)RM_HEALTHSPELLCHANGED=68`
-        // ⇒ 先出队）⇒ 升级段的 `IncHealthSpell(2000,2000)→HealthSpellChanged()` 会把恢复段的 53 替换掉。
-        // 因此若本 tick 该对象进升级块，这里**不回帧**（由 [`drain_levelup_healthspell`] 出唯一一条）。
-        // HP/MP/`Inc*` 的状态变更仍照常发生。
-        // 登记：由**最低优先级**（255）延时消息驱动的击杀（恢复段 53 先出队）不在此模型内。
-        if superseded_healthspell.contains(&sg.actor_id) {
+        slots.health_spell_changed(sg.actor_id, sg.show_hp);
+    }
+}
+
+/// **组边界 flush（G-A / 任意 pending 组）**：把每个 actor 的待发 53 按 oracle 条数发出。
+///
+/// - 自见帧数 = [`game_svr::healthspell::HealthSpellSlots::take`] 的队列计数
+///   （`SendUpdateMsg` 1 条 + `ShowHp` 的 `SendRefMsg` 自发副本）；
+/// - 观察者副本 = 本组 `SendRefMsg` 调用次数，收件人 = `±range` 格的 `Play && !Ghost`
+///   （`hear_targets` 含源自己 ⇒ 显式跳过，源自己那份已在自见帧里）；
+/// - 载荷在**此刻**读会话 `WAbil`（oracle 出队时读 `WAbil`）。同一组内多次出队之间
+///   `WAbil` 若变化，oracle 会给出不同载荷——本宿主按同一终态发（登记：组内状态不再变）。
+#[allow(clippy::too_many_arguments)]
+fn flush_healthspell_slots(
+    slots: &mut game_svr::healthspell::HealthSpellSlots,
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    sessions: &std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    range: i32,
+) {
+    let actors: Vec<i32> = slots.pending_actors().collect();
+    for actor_id in actors {
+        // 先取走槽（无在线收件人也不得把 pending 留到下一组）。
+        let (self_frames, ref_copies) = slots.take(actor_id);
+        let Some(sg) = sessions.values().find(|s| s.actor_id == actor_id) else {
             continue;
-        }
-        let Some(entry) = online.iter().find(|e| e.chr_name == name) else {
+        };
+        let Some(entry) = online.iter().find(|e| e.actor_id == actor_id) else {
             glog!(
                 "WRN",
-                "周期恢复：ChrName={name} 无在线网关坐标 ⇒ 不回帧（登记）"
+                "健康/魔法变化：actor={actor_id} 无在线网关坐标 ⇒ 不回帧（登记）"
             );
             continue;
         };
         let body = game_svr::smframe::sm_healthspellchanged_frame(
-            sg.actor_id,
+            actor_id,
             sg.state.wabil.hp,
             sg.state.wabil.mp,
             sg.state.wabil.max_hp,
         );
-        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "周期恢复回帧") {
-            let _ = tx.send(SimToGate::SendFrame {
-                socket: entry.socket,
-                body: body.clone(),
-            });
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "健康/魔法变化回帧")
+        {
+            for _ in 0..self_frames {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: entry.socket,
+                    body: body.clone(),
+                });
+            }
         }
-        // `ShowHp` 的 AOI 支（oracle `SendRefMsg`）：同图范围内观察者各收一份。
-        if sg.show_hp {
-            broadcast_healthspellchanged(world, online, gates, sg.actor_id, &body, range);
+        // `ShowHp` 的 `SendRefMsg`：观察者各收 `ref_copies` 份（源自己那份已在上面的自见帧）。
+        for _ in 0..ref_copies {
+            for target_id in chat::hear_targets(world, actor_id, range) {
+                if target_id == actor_id {
+                    continue;
+                }
+                let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+                    continue;
+                };
+                if let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "健康/魔法变化广播")
+                {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket: t.socket,
+                        body: body.clone(),
+                    });
+                }
+            }
         }
     }
 }
 
-/// 每 tick 的**体力/魔力点段**（oracle `BaseObject.Run()` 的 `:26-109`，见 [`game_svr::stamina`]）。
+/// 每 tick 的**体力/魔力点段**（oracle `BaseObject.Run()` 的 `:26-109` + P8 钳制 `:230-245`，
+/// 见 [`game_svr::stamina`]）。
 ///
-/// 位置（reviewer-5 O-1 收口）：oracle 一次 `PlayObject.Run()` 的 `base.Run()`（`PlayObject.Message.cs:765`）
-/// 先把**消息段**跑完（`BaseObject.Base.cs:28-34`；攻击/击杀经验链与 AOI 出现帧都在这一段出帧），
-/// 再跑本段（`:36-68` 的填充 + `:110-115` 的负值扣血）⇒ 本段必须晚于 `drain_kill_exp_chain` /
-/// `drain_aoi_downlink`（次序由 [`drain_run_downlinks`] 固定）。逐会话（**按键排序**）调
-/// [`game_svr::stamina::stamina_tick`]，命中（`HealthSpellChanged()` 被调用）⇒ 照
-/// `BaseObject.HealthSpellChanged()` 给自己发 `SM_HEALTHSPELLCHANGED`（`ShowHp` 再广播）。
-/// **一次 `Run()` 可命中两次**（HP 支 `:55` + MP 支 `:68`）⇒ 逐次各发一条帧，帧内容取自当次
-/// `(HP, MP)` 快照（HP 支那条是「MP 未加」的中间态，照 `PlayObject.Message.cs:1736-1739`）。
+/// 位置（oracle `P1..P8`）：`PlayObject.Run()` 的 P1 恢复 → P3 消息段（击杀经验链/AOI）→
+/// P4/P5 → P6 `base.Run` 消息段 → **P7 体力/魔力填充 + 负值扣血** → **P8 钳制**。
+/// ⇒ 本段必须晚于 [`drain_kill_exp_chain`] / [`drain_aoi_downlink`]，且钳制在填充**之后**
+/// （次序由 [`drain_run_downlinks`] 固定）。
+///
+/// **G-C 条数**：一次 `Run()` 的 HP 支（`:55`）/ MP 支（`:68`）/ 负值支（`:109`）都走
+/// `SendUpdateMsg(53)` ⇒ 队列里至多一条 pending（后到者覆盖，`BaseObject.Message.cs:283-305`）；
+/// P8 钳制（`:244`）在**同一 `Run`** 的 `base.Run` 末尾，替换 P7 那条。故：
+/// - **每个命中过 `HealthSpellChanged()` 的 50ms Run 至多一条帧**，载荷取该 Run 终态；
+/// - 本 world tick 的钳制事件并入最后一个重放 Run 的 pending（帧数不增，载荷取钳制终态）。
+///
+/// **钳制口径**：`TickRecord::verify_health_changes` 的 flag 由 world 在 `tick_tail` 按
+/// `HP > MaxHP` / `MP > MaxMP` 记录（oracle `WAbil` = 实体）。本段在 P7 之后按 flag 把**该字段**
+/// 写成 `Max-1`（`wrapping_sub(1)` 照抄 `ushort` 回绕）；未被钳制的字段保留 P7 终值
+/// （如 MP 填充值）——不能整对覆盖，否则会把 P7 的 MP 填充抹掉。
 ///
 /// **与 [`drain_recovery`] 的差别**：本段改动的是 `BaseObject.Run()` 里的 `WAbil.HP/MP`，
 /// 攻击结算与 `state_log` 的 `SERVER_STATE` dump 读的是世界实体 [`mir2_world::Entity::hp`]
 /// ⇒ 命中后**回写实体 `hp`**（`mp` 不在世界实体里，只在 `WAbil`，见 `Entity` 字段表）。
 ///
-/// **登记（阶段顺序）**：oracle 一次 `ProcessPlayObjectData` 的顺序是「`PlayObject.Run()` 的恢复段
-/// → `BaseObject.Run()` 的消息段（攻击/移动在此扣点）→ `BaseObject.Run()` 的体力点段」。
+/// **登记（阶段顺序 / 跨 tick）**：oracle 一次 `ProcessPlayObjectData` 的顺序是「`PlayObject.Run()`
+/// 的恢复段 → `BaseObject.Run()` 的消息段（攻击/移动在此扣点）→ `BaseObject.Run()` 的体力点段」。
 /// 本宿主把玩家指令走了 gate→sim 的异步通道（不在 tick 内收消息）⇒ 本段相对同 tick 内已处理的
 /// 指令晚一拍/早一拍（最多一个 world tick = 200ms）。掉血阈值跨过点因此可能与 oracle 差 1 击，
 /// 但**终值一致**（本卡判据 = `scoped_diff` 的末态），登记不静默。
+/// 另外，跨 tick 的 G-C pending（oracle 在下一 Run 的 P3 才出队，可被下一 Run 的 P1/P2 恢复
+/// 替换）在本宿主按 tick 末 flush；帧相对 oracle 早 0–50ms、跨 tick 替换未建模（R 级窗口项，
+/// 见审计 `laneB-53dedup` D6/C12）。
+#[allow(clippy::too_many_arguments)]
 fn drain_stamina(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     world: &mut mir2_world::World,
@@ -10551,6 +10528,7 @@ fn drain_stamina(
     range: i32,
     health_fill_time: i32,
     spell_fill_time: i32,
+    clamps: &[(i32, u16, u16, bool, bool)],
 ) {
     let now = now_ms();
     let mut names: Vec<String> = sessions.keys().cloned().collect();
@@ -10559,10 +10537,11 @@ fn drain_stamina(
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
         };
-        let death = world.entities.get(sg.actor_id).is_some_and(|e| e.death);
-        // oracle `HealthSpellChanged()` 的调用次数 = 帧数（HP 支/MP 支各一条，内容为当时 WAbil）。
+        let actor_id = sg.actor_id;
+        let death = world.entities.get(actor_id).is_some_and(|e| e.death);
+        // `changes` = 每个命中过 `HealthSpellChanged()` 的 Run 一条终态快照（G-C 的 pending 槽）。
         let mut changes: Vec<(u16, u16)> = Vec::new();
-        let changed = game_svr::stamina::stamina_tick(
+        let _ = game_svr::stamina::stamina_tick(
             &mut sg.stamina,
             &mut sg.state.wabil,
             death,
@@ -10571,10 +10550,31 @@ fn drain_stamina(
             spell_fill_time,
             &mut changes,
         );
-        if changed == 0 {
+        // P8 钳制：oracle 在 P7 之后的同一 `base.Run` 里执行，`HealthSpellChanged()`
+        // 替换 P7 的 pending ⇒ 帧数不增，载荷取钳制终态。
+        if let Some((_, _hp, _mp, hp_clamped, mp_clamped)) = clamps.iter().find(|c| c.0 == actor_id)
+        {
+            let mut terminal = changes
+                .last()
+                .copied()
+                .unwrap_or((sg.state.wabil.hp, sg.state.wabil.mp));
+            if *hp_clamped {
+                terminal.0 = sg.state.wabil.max_hp.wrapping_sub(1);
+            }
+            if *mp_clamped {
+                terminal.1 = sg.state.wabil.max_mp.wrapping_sub(1);
+            }
+            sg.state.wabil.hp = terminal.0;
+            sg.state.wabil.mp = terminal.1;
+            if let Some(last) = changes.last_mut() {
+                *last = terminal;
+            } else {
+                changes.push(terminal);
+            }
+        }
+        if changes.is_empty() {
             continue;
         }
-        let actor_id = sg.actor_id;
         let show_hp = sg.show_hp;
         let max_hp = sg.state.wabil.max_hp;
         // 回写世界实体：攻击结算（`crates/world`）与逐击 `SERVER_STATE` dump 读 `Entity.hp`。
@@ -10588,8 +10588,7 @@ fn drain_stamina(
             );
             continue;
         };
-        // 每次 `HealthSpellChanged()` 各发一条帧；帧内容取自**当次快照**（不是终态）——
-        // oracle `PlayObject.Message.cs:1736-1739` 用当时 `WAbil` 拼包，HP 支那条是中间态。
+        // 每个 Run 一条帧；载荷 = 该 Run 终态（钳制命中时最后一 Run 替换为钳制终态）。
         for (hp, mp) in &changes {
             let body = game_svr::smframe::sm_healthspellchanged_frame(actor_id, *hp, *mp, max_hp);
             if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "体力/魔力点回帧")
@@ -10630,7 +10629,8 @@ fn periodic_save_due(save_rcd_tick: &mut i64, save_time: i64, now: i64) -> bool 
 /// `base.Run()`（`PlayObject.Message.cs:765`）先跑**消息段**（`BaseObject.Base.cs:28-34` 的
 /// `while (GetMessage(ref msg)) Operate(msg);`）——本宿主的击杀经验/升级链（`drain_kill_exp_chain`）
 /// 与 AOI 出现帧（`drain_aoi_downlink`）都对应这一段——再跑**体力/魔力填充段**
-/// （`BaseObject.Base.cs:36-68`）与**体力点扣血段**（`:110-115`，`drain_stamina`）。
+/// （`BaseObject.Base.cs:36-68`）、**体力点扣血段**（`:110-115`）与末尾的**钳制段**
+/// （`:230-245`）⇒ 全部由 [`drain_stamina`] 按 P7→P8 次序处理。
 /// ⇒ 出帧次序固定在 `drain_kill_exp_chain`（53→44→45→52→752）→ `drain_aoi_downlink` → `drain_stamina`。
 /// 与 [`drain_stamina`] 文档「登记（阶段顺序）」一致（reviewer-5 O-1 收口）。
 ///
@@ -10675,6 +10675,7 @@ fn drain_run_downlinks(
         range,
         health_fill_time,
         spell_fill_time,
+        &rec.verify_health_changes,
     );
     aoi_frames
 }
@@ -10683,8 +10684,9 @@ fn drain_run_downlinks(
 ///
 /// oracle：`if ((IncHealing + nParam1) < 300) { IncHealing += (ushort)nParam1; PerHealing = 5; }
 /// else { IncHealing = 300; }` —— `PerHealing = 5` **只在 if 分支**；`else` 只封顶。
-/// `RM_MAGHEALING` 本身**无线上帧**；恢复期每 tick 最多消费 `PerHealing` 点并由
-/// [`drain_recovery`] 各发一条 `SM_HEALTHSPELLCHANGED(53)`（`ceil(nPower/5)` 条）。
+/// `RM_MAGHEALING` 本身**无线上帧**；恢复期每次 `Run()` 最多消费 `PerHealing` 点，命中
+/// `IncHealthSpell` ⇒ [`drain_recovery`] 只在 G-A 槽里 mark 一次（同一 `Run` 的多次消费共享
+/// 一条 pending），组边界由 [`flush_healthspell_slots`] 出帧。
 ///
 /// 位置：oracle 属目标的 `Run()` 消息段（在恢复段之前）⇒ 本函数在 `drain_recovery` 之前调用。
 fn drain_mag_healing_delivery(
@@ -12715,22 +12717,22 @@ fn drain_b4_with_enter_cfg(
     );
 }
 
-/// **P3-B5**：`ExtraAbil` 过期帧 + `RM_MAGSTRUCK` 投递段的宿主侧。
+/// **P2（G-A 的第二个生产者）**：`ExtraAbil` 任一槽到期（oracle `PlayObject.Message.cs:163-227`）。
 ///
-/// - `rec.extra_abil_expiries`：`SysMsg(..., Green, Hint)` ⇒ `SM_SYSMESSAGE(100)`（优先级 252）
-///   仅该 actor 自己；任一槽过期（`boNeedRecalc`）⇒ `HealthSpellChanged()` 的 53（68）仅自己。
-///   **过期不 recalc、不发 52**（oracle `PlayObject.Message.cs:163-227`）。
-/// - `RM_MAGSTRUCK` 的到点项已由 `World::deliver_self_delay_msgs` 放进 `pending_mag_struck`；
-///   这里统一走 [`drain_mag_struck_b2`]（`R(1000)` 条件 + MSD + 31/53/656）。
-fn drain_b5_self_deliveries(
+/// - 事件 → `SysMsg(..., Green, Hint)` ⇒ `SM_SYSMESSAGE(100)`（优先级 252）仅该 actor 自己；
+/// - `health_changed`（`boNeedRecalc`）⇒ `HealthSpellChanged()` 的 53（68）**只 mark 槽**：
+///   它与 P1 恢复在同一队列批次，后到者覆盖（[`game_svr::healthspell::HealthSpellSlots`]）；
+/// - **过期不 recalc、不发 52**（oracle 原样）。
+///
+/// 返回的 [`SpellFrameBuf`] 由调用方在 **53 flush 之后**发出：oracle 的 53 优先级 68 < SysMsg 252
+/// （`BaseObject.Message.cs:94` + `Count<=i` 的优先级比较）⇒ `53 → SM_SYSMESSAGE`。
+fn drain_extra_abil_expiries(
     rec: &mir2_world::TickRecord,
-    world: &mut mir2_world::World,
+    world: &mir2_world::World,
     online: &OnlineRegistry,
-    displays: &downlink::DisplayTable,
-    sessions: &mut std::collections::HashMap<String, SessionGround>,
-    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-) {
-    const P_HEALTH: u8 = (mir2_protocol::messages::RM_HEALTHSPELLCHANGED & 0xFF) as u8;
+    sessions: &std::collections::HashMap<String, SessionGround>,
+    slots: &mut game_svr::healthspell::HealthSpellSlots,
+) -> SpellFrameBuf {
     const P_SYSMSG: u8 = (mir2_protocol::messages::RM_SYSMESSAGE & 0xFF) as u8;
     let cfg = world.b5_cfg;
     let mut buf = SpellFrameBuf::new();
@@ -12756,27 +12758,26 @@ fn drain_b5_self_deliveries(
             buf.push_actor(online, exp.actor_id, P_SYSMSG, body);
         }
         if exp.health_changed {
-            if let Some(entry) = online.iter().find(|e| e.actor_id == exp.actor_id) {
-                if let Some(sg) = sessions.get_mut(&entry.chr_name) {
-                    let hp = world
-                        .entities
-                        .get(exp.actor_id)
-                        .map_or(sg.state.wabil.hp, |e| e.hp);
-                    sg.state.wabil.hp = hp;
-                    let mp = sg.state.wabil.mp;
-                    let max_hp = sg.state.wabil.max_hp;
-                    let show_hp = sg.show_hp;
-                    let body = smframe::sm_healthspellchanged_frame(exp.actor_id, hp, mp, max_hp);
-                    buf.push_actor(online, exp.actor_id, P_HEALTH, body.clone());
-                    if show_hp {
-                        buf.push_broadcast(world, online, exp.actor_id, true, P_HEALTH, &body);
-                    }
-                }
+            if let Some(sg) = sessions.values().find(|s| s.actor_id == exp.actor_id) {
+                slots.health_spell_changed(exp.actor_id, sg.show_hp);
             }
         }
     }
-    buf.flush(online, gates);
-    // `RM_MAGSTRUCK` 到点交付（9/10 的 600ms 延迟帧；也覆盖同 tick 的 22 事件 MINE）。
+    buf
+}
+
+/// **P3-B5**：`RM_MAGSTRUCK` 投递段的宿主侧。
+///
+/// 到点项已由 `World::deliver_self_delay_msgs` 放进 `pending_mag_struck`；这里统一走
+/// [`drain_mag_struck_b2`]（`R(1000)` 条件 + MSD + 31/53/656）。该段的 53 属 **P3 消息段**
+/// （`RM_MAGSTRUCK` 的 Operate），不在 G-A 批次内。
+fn drain_b5_self_deliveries(
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    displays: &downlink::DisplayTable,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
     let mut struck = SpellFrameBuf::new();
     drain_mag_struck_b2(world, online, displays, sessions, &mut struck);
     struck.flush(online, gates);
@@ -14900,16 +14901,28 @@ fn sim_loop(
         );
         // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
         world.tick_tail(&mut rec);
-        // **复验 F5**：`base.Run:230-245` 钳制段的 `HealthSpellChanged()`（53）。oracle 在钳制
-        // 点即时发；本宿主由 world 记事件、此处按同一 tick 出帧（含 `ShowHp` 的范围广播）。
-        drain_verify_health_changes(
+        // **G-A（oracle P1 → P2）**：`PlayObject.Run` 的周期恢复（`:70-141`）与 `ExtraAbil`
+        // 到期（`:163-227`）落在同一队列批次；两者的 `SendUpdateMsg(53)` 只保留一条 pending。
+        // 次序：先恢复状态（P1）→ 再到期状态/SysMsg（P2）→ flush 53（优先级 68）→ SysMsg（252）。
+        // 载荷在 flush 时读会话 `WAbil`（oracle 在出队时读 `WAbil`）。
+        let mut healthspell_slots = game_svr::healthspell::HealthSpellSlots::new();
+        drain_recovery(&mut ground_sessions, &world, &mut healthspell_slots);
+        let extra_abil_frames = drain_extra_abil_expiries(
             &rec,
             &world,
             &online,
+            &ground_sessions,
+            &mut healthspell_slots,
+        );
+        flush_healthspell_slots(
+            &mut healthspell_slots,
+            &world,
+            &online,
+            &ground_sessions,
             &gates,
-            &mut ground_sessions,
             enter_cfg.ref_msg_range,
         );
+        extra_abil_frames.flush(&online, &gates);
         // **run-gap 状态到期**：`PlayObject.Run` 的烈火 20s / 双龙 60s（`PlayObject.Message.cs:54-64`）
         // ⇒ `SpiritsGone` 的 `SM_SYSMESSAGE(100)` + `+UFIR`/`+UTWN` 短包。oracle 在玩家自己的
         // `Run()` 内即时发；本宿主在世界 tick 后按记录出帧。
@@ -14980,15 +14993,8 @@ fn sim_loop(
             &enter_cfg,
         );
         drain_b3_self_deliveries(&rec, &world, &online, &mut ground_sessions, &gates);
-        // **P3-B5**：`ExtraAbil` 过期帧 + `RM_MAGSTRUCK`（9/10 的 600ms 延迟帧）交付。
-        drain_b5_self_deliveries(
-            &rec,
-            &mut world,
-            &online,
-            &displays,
-            &mut ground_sessions,
-            &gates,
-        );
+        // **P3-B5**：`RM_MAGSTRUCK`（9/10 的 600ms 延迟帧）交付。
+        drain_b5_self_deliveries(&mut world, &online, &displays, &mut ground_sessions, &gates);
         // `openmir2-m3-party-group-state`：`PlayObject.Run()` 的组队段（`PlayObject.Message.cs:704-719`）
         // 在同一 tick 的恢复段之前（`base.Run()` 在 `:765`，晚于组队段）。
         world.party_run_tick();
@@ -15005,22 +15011,8 @@ fn sim_loop(
             &enter_cfg.trade,
             &enter_cfg.catalog,
         );
-        // T-28：周期恢复 tick（oracle `PlayObject.Run` 的 `:70-141`）——同一 world tick 后处理，
-        // 把 `IncHealth/IncSpell/IncHealing` 按 oracle 节奏消费回 `WAbil.HP/MP` 并回帧。
-        // F-1：本 tick 进升级块的获得者集合 ⇒ 其恢复段的 53 被升级段的 53 取代（`SendUpdateMsg` 去重）。
-        // **PL-1 复验 finding 1**：oracle 在**同一次** `base.Run` 里先恢复段（`BaseObject.Base.cs:39-68`）
-        // 再钳制段（`:230-245`），两者都走 `HealthSpellChanged()`→`SendUpdateMsg`
-        // （`BaseObject.Message.cs:283-303`：先删同 `wIdent` 旧消息再入队）⇒ 线上**恰一条** 53，
-        // 取最后的（钳制后的 WAbil）。故钳制事件同样并入「被后续 53 取代」集合。
-        let superseded_healthspell = superseded_healthspell_ids(&rec);
-        drain_recovery(
-            &mut ground_sessions,
-            &world,
-            &online,
-            &gates,
-            enter_cfg.ref_msg_range,
-            &superseded_healthspell,
-        );
+        // **P8 钳制并入 G-C**：`TickRecord::verify_health_changes` 由 [`drain_run_downlinks`]
+        // 在体力/魔力填充段（P7）之后应用并出帧（钳制是同一 `base.Run` 的末尾，替换 P7 的 pending）。
         // **reviewer-5 O-1 收口**：oracle 一次 `PlayObject.Run()` = 消息段（击杀经验/升级链 +
         // AOI 出现帧）→ `BaseObject.Run()` 的体力/魔力点段；次序由 [`drain_run_downlinks`] 固定。
         // 返回值 = 本 tick 每会话实发的 AOI 出现帧数（只读诊断，累加进 `af=`）。
@@ -21788,14 +21780,10 @@ mod tests {
         assert_eq!(sessions["hero"].recovery.inc_health, 20);
 
         // 2) 周期恢复 tick：tick 初值 0、now = 真实时钟 ⇒ 远超 1 级阈值 590ms ⇒ 首轮命中。
-        drain_recovery(
-            &mut sessions,
-            &world,
-            &online,
-            &gates,
-            12,
-            &std::collections::HashSet::new(),
-        );
+        //    G-A 组边界：恢复只 mark，flush 时按会话 WAbil 出帧（`ShowHp` ⇒ 自发副本 + 观察者）。
+        let mut slots = game_svr::healthspell::HealthSpellSlots::new();
+        drain_recovery(&mut sessions, &world, &mut slots);
+        flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, socket }) = rx0.try_recv() {
             let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
@@ -21884,7 +21872,16 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        drain_stamina(&mut sessions, &mut world, &online, &gates, 12, 300, 800);
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[],
+        );
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
             let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
@@ -21915,7 +21912,16 @@ mod tests {
 
         // 无变更 ⇒ 无帧（oracle 只在 `HealthSpellChanged()` 被调用时发包）。
         sessions.get_mut("hero").unwrap().stamina.replay_cursor = now_ms();
-        drain_stamina(&mut sessions, &mut world, &online, &gates, 12, 300, 800);
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[],
+        );
         assert!(rx0.try_recv().is_err(), "无变更 ⇒ 不得回帧");
     }
 
@@ -25892,14 +25898,20 @@ mod tests {
         assert_eq!(e.max_hp, sg.state.wabil.max_hp);
     }
 
-    /// **F-1（同 tick 去重）**：恢复段已产生 53 的对象，若本 tick 进升级块，
-    /// `SendUpdateMsg(RM_HEALTHSPELLCHANGED)`（`BaseObject.Message.cs:275-304`）会把恢复段入队的 53
-    /// 移除 ⇒ `drain_recovery` 不得回帧（升级段由 `drain_levelup_healthspell` 出唯一一条）。
+    /// **C5（G-A 恢复 vs P3 升级）**：Inc 池恢复（P1）与本 tick 击杀升级（P3 的
+    /// `GetExp` 尾 `IncHealthSpell(2000,2000)`）**不是同一队列批次**：恢复 53 在
+    /// `CM_HIT(198)` 之前已出队（`BaseObject.Message.cs:283-305` 只删队首；恢复 pending 68
+    /// 先于 198 出队）⇒ 线上 **2 条**：先恢复（升级前 HP/MP）、后升级（满血）。
     ///
-    /// 红检：删掉 `drain_recovery` 的 `superseded_healthspell.contains(...)` 分支 ⇒ 本用例必红（① 收到帧）。
+    /// 构造确认：本用例的 G-A 槽里**没有 <68 的 blocker**（模型只装 53；`RM_HIT(20)` 等未入槽，
+    /// 见 `healthspell` 模块头的登记）⇒ 恢复 pending 必成 1 条。
+    ///
+    /// 牙（改坏必红）：恢复被升级抑制（旧的 `superseded_healthspell_ids`）⇒ 只剩 1 条 53；
+    /// 先升级后恢复 ⇒ 帧序/载荷断言红。
     #[test]
-    fn recovery_healthspell_is_superseded_by_levelup_in_same_tick() {
-        use std::collections::{HashMap, HashSet};
+    fn c5_recovery_then_levelup_emit_two_frames() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
         let mut world = mir2_world::World::new(32, 32);
         let hid = {
             let mut e = mir2_world::Entity::new(0, "hero".to_string(), 10, 10);
@@ -25907,6 +25919,15 @@ mod tests {
             world.add_entity(e)
         };
         world.tick();
+        {
+            let e = world.entities.get_mut(hid).unwrap();
+            e.exp = 500;
+            e.level = 11;
+            e.max_exp = 1000;
+            e.hp = 15;
+            e.max_hp = 100;
+        }
+        let displays = downlink::DisplayTable::new();
         let mut online: OnlineRegistry = Vec::new();
         online_set(
             &mut online,
@@ -25922,71 +25943,67 @@ mod tests {
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-
-        // 「恢复段必命中」的会话：池里 20 点 IncHealth、HP 未满、tick 初值 0（真实时钟远超阈值）。
-        let mk = || {
-            let mut sg = test_session_ground(hid);
-            sg.state.wabil.hp = 10;
-            sg.state.wabil.max_hp = 100;
-            sg.recovery = game_svr::recover::Recovery::new(0);
-            sg.recovery.inc_health = 20;
-            sg
-        };
-
-        // ① 在「本 tick 进升级块」集合里 ⇒ 不回帧（被升级段的 53 取代），但状态照常消费。
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
-        sessions.insert("hero".into(), mk());
-        let superseded: HashSet<i32> = [hid].into_iter().collect();
-        drain_recovery(&mut sessions, &world, &online, &gates, 12, &superseded);
-        assert!(
-            rx0.try_recv().is_err(),
-            "升级块取代恢复段 53 ⇒ 本段不得回帧"
-        );
-        assert_eq!(
-            sessions["hero"].recovery.inc_health, 15,
-            "HP/MP 与 Inc* 的状态变更仍照常发生（20 - PerHealth 5）"
+        let mut sg = test_session_ground(hid);
+        sg.state.wabil.hp = 10;
+        sg.state.wabil.max_hp = 100;
+        sg.state.wabil.level = 10;
+        sg.equip.abil.level = 10;
+        sg.recovery = game_svr::recover::Recovery::new(0);
+        sg.recovery.inc_health = 20; // PerHealth=5 ⇒ HP 10 → 15
+        sg.stamina.replay_cursor = now_ms();
+        sg.stamina.auto_recovery_tick = now_ms();
+        sessions.insert("hero".into(), sg);
+
+        // P1：恢复只 mark；G-A 组边界 flush ⇒ 第 1 条 53（恢复后、升级前）。
+        let mut slots = game_svr::healthspell::HealthSpellSlots::new();
+        drain_recovery(&mut sessions, &world, &mut slots);
+        flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
+
+        // P3：击杀升级链 ⇒ 第 2 条 53 + 44 + 45/52/752。
+        let rec = mir2_world::TickRecord {
+            exp_awards: vec![(hid, 500, true, 11)],
+            ..Default::default()
+        };
+        let _ = drain_run_downlinks(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &game_svr::ability::StdItemCatalog::new(),
+            12,
+            300,
+            800,
+            false,
         );
 
-        // ② 不在集合里 ⇒ 照常回帧（自见一条）。
-        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
-        sessions.insert("hero".into(), mk());
-        drain_recovery(&mut sessions, &world, &online, &gates, 12, &HashSet::new());
-        let (cm, frame_body) = match rx0.try_recv() {
-            Ok(SimToGate::SendFrame { body, socket }) => {
-                assert_eq!(socket, 901);
-                (CommandMessage::from_bytes(&body).expect("12B"), body)
-            }
-            _ => panic!("未取代时必须有 53 帧"),
-        };
-        assert_eq!(cm.ident, mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
-        // **①/② 真机根因（卡 `openmir2-client-e2e-enter-gaps`）**：冻结客户端 `HIGHHP=True`
-        // （`Grobal2.pas:39`）的 53 支从**尾**读 `TCharDesc`（`ClMain.pas:10220`）⇒ 生产默认
-        // （`client_layout_enabled()`）必须带 12B 尾，否则客户端 HUD 归零、`CanRun` 拒绝跑。
-        // 红检：把 `sm_healthspellchanged_frame` 的默认支改回 header-only ⇒ 下面断言必红。
-        if game_svr::smframe::client_layout_enabled() {
-            let desc = mir2_protocol::edcode::decode(&frame_body[12..]);
-            assert_eq!(
-                desc.len(),
-                12,
-                "53 尾 = TCharDesc（12B，HIGHHP 客户端要求）"
-            );
-            let le = |o: usize| i32::from_le_bytes(desc[o..o + 4].try_into().unwrap());
-            assert_eq!(
-                le(0),
-                i32::from(sessions["hero"].state.wabil.hp),
-                "Feature = HP"
-            );
-            assert_eq!(
-                le(4),
-                i32::from(sessions["hero"].state.wabil.mp),
-                "Status = MP"
-            );
-            assert_eq!(
-                le(8),
-                i32::from(sessions["hero"].state.wabil.max_hp),
-                "StatusEx = MaxHP"
-            );
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            assert_eq!(socket, 901);
+            frames.push(CommandMessage::from_bytes(&body).expect("12B"));
         }
+        let idents: Vec<u16> = frames.iter().map(|cm| cm.ident).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                mir2_protocol::messages::SM_WINEXP,
+                mir2_protocol::messages::SM_LEVELUP,
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_SUBABILITY,
+            ],
+            "恢复 53 → 升级 53 → 44 → 45/52/752（两条 53，不是一条）"
+        );
+        assert_eq!(frames[0].param, 15, "恢复帧载荷 = 升级前 HP（10+5）");
+        let max_hp = sessions["hero"].state.wabil.max_hp;
+        assert_eq!(
+            frames[1].param, max_hp,
+            "升级帧载荷 = IncHealthSpell 后满血"
+        );
+        assert_eq!(sessions["hero"].state.wabil.hp, max_hp);
     }
 
     /// **F-2（`AddBodyLuck`）**：`PlayObject.AddBodyLuck`（`PlayObject.cs:4304-4323`）的纯函数口径——
@@ -37742,7 +37759,6 @@ mod tests {
                 ..Default::default()
             };
             drain_b5_self_deliveries(
-                &rec,
                 &mut self.world,
                 &self.online,
                 &self.displays,
@@ -40248,56 +40264,97 @@ mod tests {
         );
     }
 
-    /// **PL-1 复验 F5**：A1 的 `TickRecord::verify_health_changes` 必须有宿主消费者：
-    /// `HP > MaxHP` 过 30s `VerifyTick` 门 ⇒ 钳制到 `MaxHP-1` 并向收件人发一条 53
-    /// （默认生产布局带 12B `TCharDesc` 尾）。
-    ///
-    /// 牙：删掉 `drain_verify_health_changes` 的调用/函数体 ⇒ 下面的帧断言必红。
-    #[test]
-    fn f5_verify_clamp_emits_healthspellchanged_53() {
-        use std::collections::HashMap;
+    /// 通用夹具：一个玩家会话 + 在线登记 + 网关通道；`stamina.replay_cursor` 拨到当前时刻
+    /// 前 60ms（恰好重放 1 次 `Run()`）。
+    #[allow(clippy::type_complexity)]
+    fn clamp_fixture(
+        hp: u16,
+        mp: u16,
+        max_hp: u16,
+        max_mp: u16,
+    ) -> (
+        mir2_world::World,
+        HashMap<String, SessionGround>,
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        i32,
+    ) {
         let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
-        world.open_session("f5");
-        let mut ent = mir2_world::Entity::new(0, "f5".to_string(), 2, 2);
+        world.open_session("clamp");
+        let mut ent = mir2_world::Entity::new(0, "clamp".to_string(), 2, 2);
         ent.race = mir2_world::ACTOR_RACE_PLAY;
-        ent.hp = 150;
-        ent.max_hp = 100;
-        ent.verify_tick = 0;
-        let actor = world.enter_map("f5", ent, 0).unwrap();
-        world.clock_ms = 40_000; // > 30s VerifyTick 门
-        let mut rec = world.tick_head();
-        world.tick_tail(&mut rec);
-        assert_eq!(
-            rec.verify_health_changes,
-            vec![(actor, 99, 0)],
-            "HP 150 > MaxHP 100 ⇒ 钳到 MaxHP-1（ushort）"
-        );
-
+        ent.hp = hp;
+        ent.max_hp = max_hp;
+        let actor = world.enter_map("clamp", ent, 0).unwrap();
+        let mut sg = test_session_ground(actor);
+        sg.state.wabil.hp = hp;
+        sg.state.wabil.mp = mp;
+        sg.state.wabil.max_hp = max_hp;
+        sg.state.wabil.max_mp = max_mp;
+        let base = now_ms() - 60;
+        sg.stamina.replay_cursor = base;
+        sg.stamina.auto_recovery_tick = base;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
-        sessions.insert("f5".into(), test_session_ground(actor));
+        sessions.insert("clamp".into(), sg);
         let mut online: OnlineRegistry = Vec::new();
         online_set(
             &mut online,
             OnlineEntry {
-                account: "uf".into(),
-                chr_name: "f5".into(),
+                account: "uc".into(),
+                chr_name: "clamp".into(),
                 session_id: 1,
                 gate_idx: 0,
-                socket: 917,
+                socket: 918,
                 actor_id: actor,
             },
         );
-        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        drain_verify_health_changes(&rec, &world, &online, &gates, &mut sessions, 12);
+        (world, sessions, online, gates, rx0, actor)
+    }
+
+    /// 取出通道里的帧，返回 `(param, tag, series)`（=`(HP, MP, MaxHP)`）。
+    fn drain_healthspell_frames(
+        rx: &mut mpsc::UnboundedReceiver<SimToGate>,
+        socket: i32,
+    ) -> Vec<(u16, u16, u16)> {
+        let mut out = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket: s, body }) = rx.try_recv() {
+            assert_eq!(s, socket);
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            assert_eq!(cm.ident, mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
+            out.push((cm.param, cm.tag, cm.series));
+        }
+        out
+    }
+
+    /// **F5（钳制段出帧）**：`TickRecord::verify_health_changes` 的 flag ⇒ P8 钳制到
+    /// `MaxHP-1` 并恰发一条 53（默认生产布局带 12B `TCharDesc` 尾）。
+    ///
+    /// 牙：删掉 [`drain_stamina`] 的钳制段（或删 flag 分支）⇒ 帧断言必红。
+    #[test]
+    fn f5_verify_clamp_emits_healthspellchanged_53() {
+        // 会话 HP 与实体一致（P8 读的是 oracle 共享的 `WAbil`）。
+        let (mut world, mut sessions, online, gates, mut rx, actor) = clamp_fixture(150, 0, 100, 0);
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[(actor, 99, 0, true, false)],
+        );
 
         let mut frames = Vec::new();
-        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
             frames.push((socket, body));
         }
         assert_eq!(frames.len(), 1, "钳制段恰发一条 53（只自己；ShowHp=false）");
-        assert_eq!(frames[0].0, 917);
+        assert_eq!(frames[0].0, 918);
         let body = &frames[0].1;
         assert_eq!(
             u16::from_le_bytes([body[4], body[5]]),
@@ -40313,84 +40370,173 @@ mod tests {
         } else {
             assert_eq!(body.len(), 12, "对拍路径 header-only");
         }
-        let sg = sessions.get("f5").unwrap();
+        let sg = sessions.get("clamp").unwrap();
         assert_eq!(sg.state.wabil.hp, 99, "会话投影同步");
         assert_eq!(sg.state.wabil.max_hp, 100);
     }
 
-    /// **PL-1 复验 finding 1**：钳制段的 53 与恢复段的 53 在**同一次** `base.Run` 内都走
-    /// `SendUpdateMsg`（`BaseObject.Message.cs:283-303`，先删同 ident 旧消息再入队）⇒ 线上**恰一条**，
-    /// 且是钳制那条（晚于恢复段）。本宿主两个 drain 各发一条就会多发。
+    /// **C6（恢复 vs 钳制）**：oracle 的恢复 53 在 P3 出队（`CM_HIT` 之前），钳制 53 在
+    /// **同一 `base.Run` 末尾**（P8）入队、下一 Run 才出队 ⇒ **2 条**，顺序 = 恢复 → 钳制；
+    /// 两条载荷分别取 P1 终值与 P8 终值，**终态 HP = MaxHP-1**。
     ///
-    /// 牙：把 `superseded_healthspell_ids` 里的 `verify_health_changes` 并集删掉 ⇒ 本用例收到 2 条 ⇒ 红。
+    /// 构造：会话 HP=10/Max=100，Inc 池 20（PerHealth=5 ⇒ P1 后 HP=15）；world 侧已按
+    /// `HP>Max` 记录钳制事件（flag）。P8 在 P7 之后把该字段写成 `Max-1`。
+    ///
+    /// 牙（改坏必红）：恢复被钳制抑制（旧 `superseded_healthspell_ids`）⇒ 只剩 1 条；
+    /// 钳制先于恢复 ⇒ 帧序红；钳制整对覆盖 ⇒ 终态断言红。
     #[test]
-    fn clamp_healthspell_supersedes_recovery_in_same_tick() {
-        use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
-        world.open_session("clamp");
-        let mut ent = mir2_world::Entity::new(0, "clamp".to_string(), 2, 2);
-        ent.race = mir2_world::ACTOR_RACE_PLAY;
-        ent.hp = 150;
-        ent.max_hp = 100;
-        ent.verify_tick = 0;
-        let actor = world.enter_map("clamp", ent, 0).unwrap();
-        world.clock_ms = 40_000;
-        let mut rec = world.tick_head();
-        world.tick_tail(&mut rec);
-        assert_eq!(rec.verify_health_changes, vec![(actor, 99, 0)]);
+    fn c6_recovery_then_clamp_emit_two_frames_terminal_max_minus_one() {
+        let (mut world, mut sessions, online, gates, mut rx, actor) = clamp_fixture(10, 0, 100, 0);
+        {
+            let sg = sessions.get_mut("clamp").unwrap();
+            sg.recovery = game_svr::recover::Recovery::new(0);
+            sg.recovery.inc_health = 20;
+        }
+        let mut slots = game_svr::healthspell::HealthSpellSlots::new();
+        drain_recovery(&mut sessions, &world, &mut slots);
+        flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
+        // P7（无填充命中）+ P8 钳制（flag）⇒ 第二帧。
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[(actor, 99, 0, true, false)],
+        );
+        let frames = drain_healthspell_frames(&mut rx, 918);
+        assert_eq!(frames.len(), 2, "恢复 1 条 + 钳制 1 条");
+        assert_eq!(frames[0], (15, 0, 100), "先恢复：P1 后 HP=15");
+        assert_eq!(frames[1], (99, 0, 100), "后钳制：HP=MaxHP-1=99");
+        assert_eq!(sessions["clamp"].state.wabil.hp, 99, "终态 Max-1");
+    }
 
-        let mut sg = test_session_ground(actor);
-        sg.state.wabil.hp = 10;
-        sg.state.wabil.max_hp = 100;
-        sg.recovery = game_svr::recover::Recovery::new(0);
-        sg.recovery.inc_health = 20;
-        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
-        sessions.insert("clamp".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
-        online_set(
-            &mut online,
-            OnlineEntry {
-                account: "uc".into(),
-                chr_name: "clamp".into(),
-                session_id: 1,
-                gate_idx: 0,
-                socket: 918,
+    /// **C7（G-A：恢复 vs ExtraAbil 到期）**：P1 恢复与 P2 到期在同一队列批次，两者的
+    /// `SendUpdateMsg(53)` **后到者覆盖** ⇒ 恰 **1 条** 53，载荷 = 恢复后的会话 `WAbil`；
+    /// 出队序按优先级 68 < 252 ⇒ **53 → SM_SYSMESSAGE**。
+    ///
+    /// 牙（改坏必红）：两个生产者各发一条 ⇒ 2 条 53；先发 SysMsg ⇒ 帧序红。
+    #[test]
+    fn c7_recovery_and_extra_abil_expiry_share_one_frame() {
+        let (world, mut sessions, online, gates, mut rx, actor) = clamp_fixture(10, 0, 100, 0);
+        {
+            let sg = sessions.get_mut("clamp").unwrap();
+            sg.recovery = game_svr::recover::Recovery::new(0);
+            sg.recovery.inc_health = 20;
+        }
+        let rec = mir2_world::TickRecord {
+            extra_abil_expiries: vec![mir2_world::ExtraAbilExpiry {
                 actor_id: actor,
-            },
-        );
-        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
-        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
-        gates.insert(0, tx0);
+                events: vec![mir2_world::ExtraAbilEventKind::Restored(0)],
+                health_changed: true,
+            }],
+            ..Default::default()
+        };
+        let mut slots = game_svr::healthspell::HealthSpellSlots::new();
+        drain_recovery(&mut sessions, &world, &mut slots);
+        let sysmsgs = drain_extra_abil_expiries(&rec, &world, &online, &sessions, &mut slots);
+        flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
+        sysmsgs.flush(&online, &gates);
 
-        // 与 sim_loop 同序：先钳制 drain，再恢复段（后者被「同 ident 去重」抑制）。
-        drain_verify_health_changes(&rec, &world, &online, &gates, &mut sessions, 12);
-        let superseded = superseded_healthspell_ids(&rec);
-        assert!(
-            superseded.contains(&actor),
-            "钳制事件必须进「被后续 53 取代」集合"
-        );
-        drain_recovery(&mut sessions, &world, &online, &gates, 12, &superseded);
-
-        let mut frames = Vec::new();
-        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
-            frames.push((socket, body));
+        let mut idents = Vec::new();
+        let mut health = None;
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            assert_eq!(socket, 918);
+            let cm = CommandMessage::from_bytes(&body).expect("12B");
+            if cm.ident == mir2_protocol::messages::SM_HEALTHSPELLCHANGED {
+                health = Some((cm.param, cm.tag, cm.series));
+            }
+            idents.push(cm.ident);
         }
         assert_eq!(
-            frames.len(),
-            1,
-            "同一次 base.Run 内 53 恰一条（钳制那条），恢复段不得多发"
+            idents,
+            vec![
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+            ],
+            "G-A 恰 1 条 53，且 53(68) 先于 SysMsg(252)"
         );
-        assert_eq!(frames[0].0, 918);
+        assert_eq!(health, Some((15, 0, 100)), "载荷 = 恢复后的会话 WAbil");
+    }
+
+    /// **C3（钳制 vs 填充）**：P7 与 P8 同属 G-C ⇒ **恰 1 条**，载荷取钳制终态。
+    /// - (a) `HP>Max` 且 `MP<Max` 且 MP 填充到期 ⇒ 1 条，HP=`MaxHP-1`、MP=填充值；
+    /// - (b) HP/MP 都 `>Max` ⇒ 1 条，两者都 `Max-1`。
+    ///
+    /// 牙（改坏必红）：钳制不抑制 P7 ⇒ 2 条；钳制先于填充 ⇒ MP 被抬回 Max；整对覆盖 ⇒ (a) 红。
+    #[test]
+    fn c3_clamp_and_fill_share_one_frame_with_terminal_payload() {
+        // (a) HP>Max、MP<Max 且 SpellTick 到期（fill_time=2 ⇒ 每个 Run 都命中）。
+        let (mut world, mut sessions, online, gates, mut rx, actor) =
+            clamp_fixture(105, 10, 100, 100);
+        {
+            let sg = sessions.get_mut("clamp").unwrap();
+            sg.stamina.spell_tick = 800;
+        }
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            2,
+            2,
+            &[(actor, 99, 0, true, false)],
+        );
+        let frames = drain_healthspell_frames(&mut rx, 918);
+        assert_eq!(frames.len(), 1, "P7 填充 + P8 钳制 = 同一条 pending");
+        // MP 填充 = 100/18+1 = 6 ⇒ 16；HP 钳到 99。
         assert_eq!(
-            u16::from_le_bytes([frames[0].1[4], frames[0].1[5]]),
-            mir2_protocol::messages::SM_HEALTHSPELLCHANGED
+            frames[0],
+            (99, 16, 100),
+            "HP=Max-1、MP=填充值（未被钳制抹掉）"
         );
-        // 恢复段的状态消费照常发生（只是不出帧）：99 + IncHealth(20) 被 MaxHP=100 截顶。
-        assert_eq!(
-            sessions.get("clamp").unwrap().state.wabil.hp,
-            100,
-            "去重只抑制帧，不抑制状态消费"
+        assert_eq!(sessions["clamp"].state.wabil.mp, 16);
+
+        // (b) HP>Max 且 MP>Max ⇒ 两者都 Max-1。
+        let (mut world, mut sessions, online, gates, mut rx, actor) =
+            clamp_fixture(105, 105, 100, 100);
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            2,
+            2,
+            &[(actor, 99, 99, true, true)],
         );
+        let frames = drain_healthspell_frames(&mut rx, 918);
+        assert_eq!(frames, vec![(99, 99, 100)], "两字段分别钳到 Max-1");
+    }
+
+    /// **C4（钳制 vs 负体力扣血）**：P7 的负值支先 `HP -= 1`，P8 再钳到 `Max-1` ⇒ **1 条**，
+    /// 终态 `HP=Max-1`（先 -1 再钳；不是 2 条、也不是少 1 点）。
+    ///
+    /// 牙（改坏必红）：钳制先应用（先钳到 Max-1 再 -1 ⇒ **少 1 点**、断言红）；
+    /// 两条独立出帧 ⇒ 计数红。
+    #[test]
+    fn c4_clamp_and_negative_stamina_share_one_frame() {
+        let (mut world, mut sessions, online, gates, mut rx, actor) = clamp_fixture(105, 0, 100, 0);
+        {
+            let sg = sessions.get_mut("clamp").unwrap();
+            sg.stamina.health_tick = -400;
+        }
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[(actor, 99, 0, true, false)],
+        );
+        let frames = drain_healthspell_frames(&mut rx, 918);
+        assert_eq!(frames.len(), 1, "负值支与钳制同一 pending");
+        assert_eq!(frames[0], (99, 0, 100), "先 -1 再钳 ⇒ Max-1");
     }
 
     /// **PL-1 复验 F1（复现）**：P21 重算不得用上一 tick 的会话 HP/MP 覆盖实体。

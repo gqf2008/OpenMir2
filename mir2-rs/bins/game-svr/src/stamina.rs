@@ -33,15 +33,18 @@
 //!
 //! # `HealthSpellChanged` 帧口径（本模块的 `changes` 出参）
 //!
-//! oracle 的 HP/MP 两支各自**独立**调一次 `HealthSpellChanged()`（`:55`、`:68`），负值扣血支也调
-//! 一次（`:109`）——一次 `Run()` 最多产生 **2** 次（HP 支 + MP 支；负值支与它们互斥：`:105` 要求
-//! `HealthTick < -HealthFillTime`，而 `:74` 在 `HealthTick >= HealthFillTime` 时已把它清零，
-//! 两者不可能同时成立）。`BaseObject.HealthSpellChanged()`（`BaseObject.cs:700-710`）在
-//! `Race==Play` 时 `SendUpdateMsg(RM_HEALTHSPELLCHANGED, …)` ⇒ `SendMsg` ⇒ 处理器
-//! `PlayObject.Message.cs:1736-1739` 用**当时**的 `WAbil` 拼 `SM_HEALTHSPELLCHANGED`。
-//! ⇒ HP 支那条帧带的是「HP 已加、MP 未加」的**中间态**，MP 支那条才是终态；两条**内容不同**，
-//! 不能合并成一条。本模块因此用 `changes: &mut Vec<(u16, u16)>` 逐次记录
-//! `(WAbil.HP, WAbil.MP)` 快照，调用方（`drain_stamina`）按序各发一条帧。
+//! **一次 `Run()` 的 HP 支（`:55`）、MP 支（`:68`）、负值扣血支（`:109`）全部落在同一个
+//! `base.Run` 批次里**：三次 `SendUpdateMsg(RM_HEALTHSPELLCHANGED, …)` 都只 `TryPeek` 队首并
+//! 删除同 ident 旧消息（`BaseObject.Message.cs:283-305`）⇒ 同一 `Run` 的 53 每次替换前一条，
+//! 队列里**至多一条 pending**；下一 `Run()` 的消息段（`PlayObject.Message.cs:358-366`）才出队。
+//! ⇒ **每个 50ms `Run()` 至多一条帧**，不是「HP 支一条 + MP 支一条」。
+//!
+//! 载荷不随消息保存：`PlayObject.Message.cs:1736-1739` 在**出队时**读当前 `WAbil`
+//! （逐字段 int → 线上 u16，若出队时已到终态则取终态）⇒ 本模块的 `changes` 按
+//! **Run 粒度**记录该 Run 结束时的 `(WAbil.HP, WAbil.MP)`；调用方（`drain_stamina`）按序
+//! 一个 Run 发一条帧。跨 Run 的 pending 本应在下一 Run 的 drain 发出（若下一 Run 的 P1/P2
+//! 恢复先产生 53 则被替换）——宿主按 world tick 批量重放，**登记**为「帧相对 oracle 早
+//! 0–50ms，且跨 tick 替换未建模」（R 级，真机窗口项）。
 //!
 //! # 扣体力的站点（都在本模块之外，由调用方作用到 [`Stamina`]）
 //!
@@ -139,10 +142,10 @@ impl Stamina {
 
 /// `BaseObject.Run()`（`:26-109`）的体力/魔力点段，**按 [`RUN_INTERVAL_MS`] 重放**。
 ///
-/// `changes` 会被**清空后重填**：每调一次 `HealthSpellChanged()`（oracle `:55`/`:68`/`:109`）
-/// 压一条`(WAbil.HP, WAbil.MP)` 快照，顺序 = oracle 的调用顺序（HP 支 → MP 支 → 负值支）。
-/// 调用方按序各发一帧 `SM_HEALTHSPELLCHANGED`（帧内容取自快照，不取终态，见模块头）。
-/// 返回 = `changes.len()`（`HealthSpellChanged()` 调用次数），与 [`crate::recover`] 同口径。
+/// `changes` 会被**清空后重填**：**每个命中过 `HealthSpellChanged()` 的 `Run()` 压一条**
+/// `(WAbil.HP, WAbil.MP)` 终态快照（同一 Run 内的 HP 支/MP 支/负值支共享一条 pending，
+/// 见模块头）。调用方按序一 Run 发一帧 `SM_HEALTHSPELLCHANGED`。
+/// 返回 = `changes.len()`（有 pending 的 `Run()` 数）。
 /// `now` = 当轮 `HUtil32.GetTickCount()`（本宿主 [`super::now_ms`]，只有差值参与判定）。
 #[must_use]
 pub fn stamina_tick(
@@ -160,6 +163,8 @@ pub fn stamina_tick(
     // 整数截断按 50ms/次 ⇒ 每次 `+2`。world tick 200ms 时即 4 次 `Run()` ⇒ `+8`（40/秒）。
     while st.replay_cursor + RUN_INTERVAL_MS <= now {
         st.replay_cursor += RUN_INTERVAL_MS;
+        // 本 `Run()` 是否调用过 `HealthSpellChanged()`（HP 支/MP 支/负值支共享一条 pending）。
+        let mut run_changed = false;
         if !death {
             // `AutoRecoveryTick` 只在 `if (!Death)` 里更新（`:39-40`）⇒ 死亡期间冻结。
             let recovery_tick = (st.replay_cursor - st.auto_recovery_tick) / RECOVERY_DIVISOR;
@@ -175,7 +180,7 @@ pub fn stamina_tick(
                 } else {
                     wabil.max_hp
                 };
-                changes.push((wabil.hp, wabil.mp)); // `HealthSpellChanged()`（`:55`）
+                run_changed = true; // `HealthSpellChanged()`（`:55`）
             }
             // `if ((WAbil.MP < WAbil.MaxMP) && (SpellTick >= SpellFillTime))`（`:52`）
             if wabil.mp < wabil.max_mp && st.spell_tick >= spell_fill_time {
@@ -185,7 +190,7 @@ pub fn stamina_tick(
                 } else {
                     wabil.max_mp
                 };
-                changes.push((wabil.hp, wabil.mp)); // `HealthSpellChanged()`（`:68`）
+                run_changed = true; // `HealthSpellChanged()`（`:68`）
             }
             // `:74-81`：到量清零（**在**负值扣血之前，照 oracle 次序）。
             if st.health_tick >= health_fill_time {
@@ -199,7 +204,11 @@ pub fn stamina_tick(
         if st.health_tick < -health_fill_time && wabil.hp > 1 {
             wabil.hp -= 1;
             st.health_tick += health_fill_time;
-            changes.push((wabil.hp, wabil.mp)); // `HealthSpellChanged()`（`:109`）
+            run_changed = true; // `HealthSpellChanged()`（`:109`）
+        }
+        if run_changed {
+            // oracle 在**下一次** drain 出队时才读 `WAbil` ⇒ 该 Run 的 pending 载荷 = 本 Run 终态。
+            changes.push((wabil.hp, wabil.mp));
         }
     }
     u32::try_from(changes.len()).unwrap_or(u32::MAX)
@@ -341,12 +350,14 @@ mod tests {
         assert_eq!(st.health_tick, 12, "300ms ⇒ 6 次 Run() × +2 = 12（40/秒）");
     }
 
-    /// **帧口径**（模块头「`HealthSpellChanged` 帧口径」）：HP/MP 两支在一次 `Run()` 里同时命中 ⇒
-    /// oracle 调 `HealthSpellChanged()` 两次（`:55`、`:68`）⇒ 两条帧，且 HP 支那条带的是
-    /// 「HP 已加、MP 未加」的**中间态**（`PlayObject.Message.cs:1736-1739` 用当时 `WAbil` 拼包）。
-    /// 把两条合并成一条（或用终态发两条）⇒ 本用例必红。
+    /// **C1**：一次 `Run()` 内 HP 支与 MP 支同时命中 ⇒ oracle 的两次 `SendUpdateMsg` 只保留
+    /// 一条 pending（后到者覆盖）⇒ **恰 1 条帧**，载荷 = 该 Run 终态 `(HP+fill, MP+fill)`。
+    ///
+    /// 旧期望（「HP 支中间态 + MP 支终态 = 2 条」）把 `SendUpdateMsg` 的去重方向理解反了。
+    ///
+    /// 牙（改坏必红）：改回逐分支各发一条 ⇒ `n==2`（或 `changes.len()==2`）断言红。
     #[test]
-    fn both_branches_in_one_run_produce_two_distinct_change_snapshots() {
+    fn c1_one_run_with_hp_and_mp_branches_emits_one_terminal_snapshot() {
         let mut w = wabil(10, 10); // HP<MaxHP、MP<MaxMP ⇒ 两支都可命中
         w.max_hp = 100;
         w.max_mp = 100;
@@ -357,15 +368,36 @@ mod tests {
         // `now=50` ⇒ 重放 1 次 Run()：`recovery_tick=(50-0)/20=2` ⇒ HT=302、ST=802，两支都命中。
         let mut changes = Vec::new();
         let n = stamina_tick(&mut st, &mut w, false, 50, 300, 800, &mut changes);
-        assert_eq!(n, 2, "HP/MP 各一次 HealthSpellChanged()");
-        // HP 支：HP += MaxHP/75+1 = 2 ⇒ 12；MP 还没加（中间态）。
-        // MP 支：MP += MaxMP/18+1 = 6 ⇒ 16（终态）。
+        assert_eq!(n, 1, "同一 Run 的 HP/MP 支共享一条 pending");
+        // HP 支：HP += MaxHP/75+1 = 2 ⇒ 12；MP 支：MP += MaxMP/18+1 = 6 ⇒ 16（终态）。
+        assert_eq!(changes, vec![(12u16, 16u16)], "载荷取 Run 终态");
+        assert_eq!((w.hp, w.mp), (12, 16));
+    }
+
+    /// **C2**：一个 world tick（200ms）重放 **4 次** `Run()`，每次两支都命中 ⇒ 恰 **4 条**
+    /// （每 Run 一条），载荷逐 Run 取终态、依次递增。
+    ///
+    /// 构造前提（**必须显式给**）：`fill_time <= 2`，否则 `:74-81` 在第一次命中后把
+    /// `HealthTick/SpellTick` 清零，后续 Run 到不了阈值（构造不成立）。这里取 2。
+    ///
+    /// 牙（改坏必红）：把 4 个 Run 合并成 1 条 ⇒ 计数断言红；逐分支发 ⇒ 8 条断言红。
+    #[test]
+    fn c2_four_runs_emit_four_terminal_snapshots() {
+        let mut w = wabil(10, 10);
+        w.max_hp = 100;
+        w.max_mp = 100;
+        let mut st = Stamina::new(0);
+        st.replay_cursor = 0;
+        let mut changes = Vec::new();
+        let n = stamina_tick(&mut st, &mut w, false, 200, 2, 2, &mut changes);
+        assert_eq!(n, 4, "200ms ⇒ 4 次 Run()，每 Run 一条 pending");
+        // HP 每 Run +2；MP 每 Run +6（100/18+1）。
         assert_eq!(
             changes,
-            vec![(12u16, 10u16), (12u16, 16u16)],
-            "第一条 = HP 支中间态（MP 未加），第二条 = 终态"
+            vec![(12, 16), (14, 22), (16, 28), (18, 34)],
+            "逐 Run 终态（HP 支后 MP 支后的 WAbil）"
         );
-        assert_eq!((w.hp, w.mp), (12, 16));
+        assert_eq!((w.hp, w.mp), (18, 34));
     }
 
     /// `if (!Death)` 内不更新 `AutoRecoveryTick`（`BaseObject.Base.cs:39-40`）：死亡期间冻结、

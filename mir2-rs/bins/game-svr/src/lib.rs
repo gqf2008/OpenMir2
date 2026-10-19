@@ -19,6 +19,7 @@ pub mod downlink;
 pub mod feature;
 pub mod ground;
 pub mod guardlist;
+pub mod healthspell;
 pub mod inbound;
 pub mod itemwire;
 pub mod magics;
