@@ -18,6 +18,7 @@ mod config;
 mod gbk;
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
@@ -113,11 +114,42 @@ async fn main() -> Result<()> {
         let sessions = Arc::clone(&sessions);
         let down_tx = Arc::clone(&down_tx);
         tokio::spawn(async move {
-            if let Err(e) = client_loop(sock, sid, peer.to_string(), sessions, down_tx).await {
+            if let Err(e) = client_loop(
+                sock,
+                sid,
+                peer.to_string(),
+                peer_ip(peer),
+                sessions,
+                down_tx,
+            )
+            .await
+            {
                 glog!("WRN", "客户端[{peer}]会话结束: {e:#}");
             }
         });
     }
+}
+
+/// C# `RemoteEndPoint.GetIP()`（TouchSocket `SystemNetExtension.GetIP`）口径：只取对端 IP，
+/// **不含**客户端临时端口；IPv6 带方括号（实测 `[::1]`）。
+fn peer_ip(peer: SocketAddr) -> String {
+    match peer {
+        SocketAddr::V4(v4) => v4.ip().to_string(),
+        SocketAddr::V6(v6) => {
+            let ip = v6.ip();
+            // .NET `IPAddress.ToString()` 对 link-local 会带 `%scope`；TouchSocket 原样包进方括号。
+            match v6.scope_id() {
+                0 => format!("[{ip}]"),
+                scope => format!("[{ip}%{scope}]"),
+            }
+        }
+    }
+}
+
+/// C# `src/SelGate/Services/ClientSession.cs:166-175` 的 `UserEnter` 帧体：
+/// `$"%K{SocketId}/{ClientIP}/{ClientIP}$"`（含前导 `%K` 与尾部 `$`）。
+fn sel_gate_enter_body(socket_id: &str, ip: &str) -> Vec<u8> {
+    format!("%K{socket_id}/{ip}/{ip}$").into_bytes()
 }
 
 /// 单客户端会话：读客户端字节 → 拆帧 → 透传给 DBSrv；并把该会话登记到会话表。
@@ -125,19 +157,26 @@ async fn client_loop(
     sock: TcpStream,
     sid: u16,
     peer: String,
+    ip: String,
     sessions: Sessions,
     down_tx: Arc<Mutex<OwnedWriteHalf>>,
 ) -> Result<()> {
     let (mut rd, mut wr) = sock.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
-    // 会话登记 + 通知 DBSrv "新会话接入"（C# 的 Enter 语义：体为客户端 IP，此处给 IP:port）
+    // 会话登记 + 通知 DBSrv "新会话接入"（C# `UserEnter`：`%K{SocketId}/{ClientIP}/{ClientIP}$`）
     sessions.lock().await.insert(sid, tx);
-    let enter = ServerDataMessage::new(
-        ServerDataType::Enter,
-        sid.to_string(),
-        peer.as_bytes().to_vec(),
-    );
+    let sid_text = sid.to_string();
+    let body = sel_gate_enter_body(&sid_text, &ip);
+    // C# `accountPacket.DataLen = (short)body.Length`（unchecked 截断）。
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    let data_len = body.len() as i16;
+    let enter = ServerDataMessage {
+        kind: ServerDataType::Enter,
+        socket_id: sid_text,
+        data_len,
+        data: body,
+    };
     send_internal(&down_tx, &enter).await?;
 
     // 回写任务：把 DBSrv 发来的原始帧字节写给客户端
@@ -236,4 +275,54 @@ async fn send_internal(tx: &Arc<Mutex<OwnedWriteHalf>>, msg: &ServerDataMessage)
     w.write_all(&wire).await.context("写数据服务失败")?;
     w.flush().await.ok();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{peer_ip, sel_gate_enter_body};
+
+    /// 判据 1：SelGate Enter 体逐字节 == `"%K{sid}/{ip}/{ip}$"`（含尾 `$`）。
+    #[test]
+    fn enter_body_matches_oracle_ipv4() {
+        let body = sel_gate_enter_body("7", "10.0.0.5");
+        assert_eq!(body, b"%K7/10.0.0.5/10.0.0.5$".to_vec());
+    }
+
+    /// 判据 2：体里没有端口，且 DBSrv 口径能切出 3 段（`%K{sid}` / ip / `{ip}$`）。
+    #[test]
+    fn enter_body_has_three_arrest_segments_and_no_port() {
+        let peer = "10.1.2.3:53123".parse().expect("SocketAddr");
+        let body = String::from_utf8(sel_gate_enter_body("7", &peer_ip(peer))).unwrap();
+        assert_eq!(body, "%K7/10.1.2.3/10.1.2.3$");
+        assert!(!body.contains(':'), "体不得带端口，实得 {body}");
+        let inner = body
+            .strip_prefix("%K")
+            .and_then(|s| s.strip_suffix('$'))
+            .expect("体必须由 %K 开头、$ 结尾");
+        let parts: Vec<&str> = inner.split('/').collect();
+        assert_eq!(parts.len(), 3, "DBSrv ArrestStringEx 口径应得到 3 段");
+        assert_eq!(parts[0], "7");
+        assert_eq!(parts[1], "10.1.2.3");
+        assert_eq!(parts[2], "10.1.2.3");
+    }
+
+    /// 判据 3：`RemoteEndPoint.GetIP()` 口径 —— IPv6 带方括号。
+    #[test]
+    fn peer_ip_matches_touchsocket_get_ip() {
+        assert_eq!(
+            peer_ip("192.168.1.42:53123".parse().unwrap()),
+            "192.168.1.42"
+        );
+        assert_eq!(peer_ip("[::1]:53123".parse().unwrap()), "[::1]");
+        assert_eq!(peer_ip("[2001:db8::1]:1".parse().unwrap()), "[2001:db8::1]");
+        assert_eq!(peer_ip("[fe80::1%12]:1".parse().unwrap()), "[fe80::1%12]");
+    }
+
+    /// 判据 4：`DataLen` 口径 == C# `(short)body.Length`。
+    #[test]
+    fn enter_data_len_uses_oracle_short_cast() {
+        let body = sel_gate_enter_body("7", "10.1.2.3");
+        assert_eq!(body.len(), 22);
+        assert_eq!(i16::try_from(body.len()).unwrap(), 22);
+    }
 }

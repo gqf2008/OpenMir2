@@ -122,6 +122,22 @@ async fn relays_frames_and_swallows_heartbeat() {
         .await
         .expect("假 LoginSrv 未按时结束")
         .unwrap();
+    // Enter 帧体是 C# LoginSrv 的机器判据：`{ClientIP}/{ClientIP}`（无 %K、无端口）。
+    let enter = got
+        .iter()
+        .find(|m| m.kind == ServerDataType::Enter)
+        .expect("网关必须向 LoginSrv 发送 Enter 帧");
+    assert_eq!(
+        enter.data,
+        b"127.0.0.1/127.0.0.1".to_vec(),
+        "LoginGate Enter 体必须与 C# UserEnter 逐字节一致"
+    );
+    assert_eq!(
+        usize::try_from(enter.data_len).unwrap(),
+        enter.data.len(),
+        "Enter 的 DataLen 必须等于体长"
+    );
+
     let data_frames: Vec<_> = got
         .iter()
         .filter(|m| m.kind == ServerDataType::Data)

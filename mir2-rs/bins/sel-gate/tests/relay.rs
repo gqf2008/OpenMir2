@@ -122,6 +122,23 @@ async fn relays_frames_and_swallows_heartbeat() {
         .await
         .expect("假 DBSrv 未按时结束")
         .unwrap();
+    // Enter 帧体是 C# DBSrv 的机器判据：`%K{SocketId}/{ClientIP}/{ClientIP}$`。
+    let enter = got
+        .iter()
+        .find(|m| m.kind == ServerDataType::Enter)
+        .expect("网关必须向 DBSrv 发送 Enter 帧");
+    let enter_body = String::from_utf8(enter.data.clone()).unwrap();
+    assert_eq!(
+        enter_body,
+        format!("%K{}/127.0.0.1/127.0.0.1$", enter.socket_id),
+        "SelGate Enter 体必须与 C# UserEnter 逐字节一致（含 %K 与尾 $）"
+    );
+    assert_eq!(
+        usize::try_from(enter.data_len).unwrap(),
+        enter.data.len(),
+        "Enter 的 DataLen 必须等于体长"
+    );
+
     let data_frames: Vec<_> = got
         .iter()
         .filter(|m| m.kind == ServerDataType::Data)

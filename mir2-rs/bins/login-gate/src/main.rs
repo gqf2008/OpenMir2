@@ -18,6 +18,7 @@ mod config;
 mod gbk;
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
@@ -113,11 +114,42 @@ async fn main() -> Result<()> {
         let sessions = Arc::clone(&sessions);
         let down_tx = Arc::clone(&down_tx);
         tokio::spawn(async move {
-            if let Err(e) = client_loop(sock, sid, peer.to_string(), sessions, down_tx).await {
+            if let Err(e) = client_loop(
+                sock,
+                sid,
+                peer.to_string(),
+                peer_ip(peer),
+                sessions,
+                down_tx,
+            )
+            .await
+            {
                 glog!("WRN", "客户端[{peer}]会话结束: {e:#}");
             }
         });
     }
+}
+
+/// TouchSocket `ITcpClientBase.IP` / `SystemNetExtension.GetIP` 口径：只取对端 IP，
+/// **不含**客户端临时端口；IPv6 带方括号（实测 `[::1]`，与 C# `client.IP` 一致）。
+fn peer_ip(peer: SocketAddr) -> String {
+    match peer {
+        SocketAddr::V4(v4) => v4.ip().to_string(),
+        SocketAddr::V6(v6) => {
+            let ip = v6.ip();
+            // .NET `IPAddress.ToString()` 对 link-local 会带 `%scope`；TouchSocket 原样包进方括号。
+            match v6.scope_id() {
+                0 => format!("[{ip}]"),
+                scope => format!("[{ip}%{scope}]"),
+            }
+        }
+    }
+}
+
+/// C# `src/LoginGate/Services/ClientSession.cs:204-212` 的 `UserEnter` 帧体：
+/// `$"{ClientIP}/{ClientIP}"`（**无** `%K`）。
+fn login_gate_enter_body(ip: &str) -> Vec<u8> {
+    format!("{ip}/{ip}").into_bytes()
 }
 
 /// 单客户端会话：读客户端字节 → 拆帧 → 透传给 LoginSrv；并把该会话登记到会话表。
@@ -125,19 +157,25 @@ async fn client_loop(
     sock: TcpStream,
     sid: u16,
     peer: String,
+    ip: String,
     sessions: Sessions,
     down_tx: Arc<Mutex<OwnedWriteHalf>>,
 ) -> Result<()> {
     let (mut rd, mut wr) = sock.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
-    // 会话登记 + 通知 LoginSrv "新会话接入"（C# 的 Enter 语义：体为客户端 IP，此处给 IP:port）
+    // 会话登记 + 通知 LoginSrv "新会话接入"（C# `UserEnter`：`{ClientIP}/{ClientIP}`，无 `%K`）
     sessions.lock().await.insert(sid, tx);
-    let enter = ServerDataMessage::new(
-        ServerDataType::Enter,
-        sid.to_string(),
-        peer.as_bytes().to_vec(),
-    );
+    let body = login_gate_enter_body(&ip);
+    // C# `accountPacket.DataLen = (byte)body.Length`（unchecked 截断到 8 位，再隐式扩回 short）。
+    #[allow(clippy::cast_possible_truncation)]
+    let data_len = i16::from(body.len() as u8);
+    let enter = ServerDataMessage {
+        kind: ServerDataType::Enter,
+        socket_id: sid.to_string(),
+        data_len,
+        data: body,
+    };
     send_internal(&down_tx, &enter).await?;
 
     // 回写任务：把 LoginSrv 发来的原始帧字节写给客户端
@@ -236,4 +274,49 @@ async fn send_internal(tx: &Arc<Mutex<OwnedWriteHalf>>, msg: &ServerDataMessage)
     w.write_all(&wire).await.context("写登录服务失败")?;
     w.flush().await.ok();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{login_gate_enter_body, peer_ip};
+
+    /// 判据 1：LoginGate Enter 体逐字节 == `"{ip}/{ip}"`，且**无** `%K`。
+    #[test]
+    fn enter_body_matches_oracle_ipv4() {
+        let body = login_gate_enter_body("192.168.1.42");
+        assert_eq!(body, b"192.168.1.42/192.168.1.42".to_vec());
+        assert!(
+            !body.windows(2).any(|w| w == b"%K"),
+            "LoginGate Enter 体不得含 %K（oracle 无该前缀）"
+        );
+    }
+
+    /// 判据 2：体里没有端口（oracle `_session.ClientIP` 是 `client.IP`，不含 `:port`）。
+    #[test]
+    fn enter_body_has_no_transient_port() {
+        let peer = "10.1.2.3:53123".parse().expect("SocketAddr");
+        let body = String::from_utf8(login_gate_enter_body(&peer_ip(peer))).unwrap();
+        assert_eq!(body, "10.1.2.3/10.1.2.3");
+        assert!(!body.contains(':'), "体不得带端口，实得 {body}");
+    }
+
+    /// 判据 3：`client.IP` 口径 —— IPv4 无括号，IPv6 带方括号（TouchSocket 实测）。
+    #[test]
+    fn peer_ip_matches_touchsocket_get_ip() {
+        assert_eq!(
+            peer_ip("192.168.1.42:53123".parse().unwrap()),
+            "192.168.1.42"
+        );
+        assert_eq!(peer_ip("[::1]:53123".parse().unwrap()), "[::1]");
+        assert_eq!(peer_ip("[2001:db8::1]:1".parse().unwrap()), "[2001:db8::1]");
+        assert_eq!(peer_ip("[fe80::1%12]:1".parse().unwrap()), "[fe80::1%12]");
+    }
+
+    /// 判据 4：`DataLen` 口径 == C# `(byte)body.Length`。
+    #[test]
+    fn enter_data_len_uses_oracle_byte_cast() {
+        let body = login_gate_enter_body("10.1.2.3");
+        assert_eq!(body.len(), 17);
+        assert_eq!(i16::from(u8::try_from(body.len()).unwrap()), 17);
+    }
 }
