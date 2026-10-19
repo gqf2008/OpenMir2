@@ -1627,10 +1627,13 @@ mod tests {
             Some(out.sub.to_frame_bytes()),
             "752 = SubAbility 的 7 个单字节通道"
         );
+        // 两槽约简（只入 752/52）：四叉堆在两元素时退化为 FIFO ⇒ 先入者先出。
+        // 生产全槽序**不是**这个：全槽下 oracle 实拍是 `52,752`（模型 C′，四个 C# 会话一致，
+        // 见 `docs/window-shrink-run-20261019.md` §6 F1 与 `smframe::frames` 的顺序判据）。
         assert_eq!(
             idents(&base.frames()),
             vec![658, 752, 52],
-            "模型 C：752 先于 52 出队（入队序仍是 52 先；堆序非 FIFO，见卡 openmir2-login-frame-order）"
+            "两槽约简的 FIFO 序（入队序 = 752 先、52 后）；生产全槽序见 smframe 顺序判据"
         );
 
         // `MIR2_CLIENT_ABILITY_LAYOUT`：冻结客户端 58B 布局（`HIGHHP=True`）——同一 `WAbil`、

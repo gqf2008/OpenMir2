@@ -1293,7 +1293,7 @@ const PRIORITY_NORMAL: u8 = 1;
 
 impl EnterWorldInputs {
     /// 按 oracle 的登录消息队列（.NET 8 `PriorityQueue<SendMessage, byte>`，**四叉最小堆**）
-    /// 模拟完整入队/出队过程后产出帧序（模型 C）。
+    /// 模拟完整入队/出队过程后产出帧序（模型 C′）。
     ///
     /// # 入队（oracle 调用序）
     ///
@@ -1303,11 +1303,21 @@ impl EnterWorldInputs {
     /// `RM_LOGON` 出队处理时再入 `RM_CHANGELIGHT(654)`（`Message.cs:1682`，优先级
     /// `(byte)RM_CHANGELIGHT = (byte)10137 = 153`）。
     ///
-    /// # 出队（net8.0 实测的模型 C）
+    /// # 出队（**模型 C′**，2026-10-19 缩窗真机裁定）
     ///
-    /// 六条 + 654 的相对序 = `752, 621, 211, 52, 811, 46, 654`。**High 组内不是 FIFO**：
-    /// `52` 最先入队却最后出（同优先级出队序取决于堆数组布局，`NetPriorityQueue` 逐操作复刻
-    /// 了 .NET 的 sift 规则）。三条 `SysMsg`（252）在 654 之后出队，不产帧。
+    /// 观测事实：C# 本机**四个独立会话**入图前缀恒为
+    /// `658,51,50,41,213,11029,42,766,54,5008,1106,**52,752**,811,46`
+    /// （`docs/window-shrink-run-20261019.md` §6 F1）。按本模块的四叉堆复刻，
+    /// 「先入 `752` 再入 `52`」恰好给出该序（`52` 先出、`752` 次之、`811/46` 不变）；
+    /// 反之（旧模型 C：先入 `52` 再入 `752`）给出 `752,52`，与真机相反。
+    /// ⇒ **oracle 的实际入队序是 `752` 先、`52` 后**（旧模型把两者写反；真机四个会话
+    /// 与 2026-10-10 capture 一致地否定旧模型）。
+    ///
+    /// 六条 + 654 的可观测相对序 = `52, 752, 811, 46, 654`（`621/211` 无装备/无技能时不出帧，
+    /// 其槽位仍参与堆布局 ⇒ 本层的入队/出队一律照常）。三条 `SysMsg`（252）在 654 之后出队，不产帧。
+    ///
+    /// ⚠ **未验证面**：装备/技能齐备时 `621/211` 会出帧，此模型预测 `52,621,211,752,811,46`
+    /// ——真机尚无该样本（卡 `openmir2-login-frame-order-52-752` 的窗口余项）。
     ///
     /// # 空槽仍占位
     ///
@@ -1334,8 +1344,10 @@ impl EnterWorldInputs {
         for _ in 0..3 {
             queue.enqueue(LoginQueued::SysMsg, (messages::RM_SYSMESSAGE & 0xFF) as u8);
         }
-        queue.enqueue(LoginQueued::Ability, PRIORITY_HIGH); // 52
+        // **模型 C′（真机裁定）**：入队序是 `752` 先、`52` 后（见 `frames` 头注）；
+        // 四叉堆同优先级不稳定 ⇒ 反过来入队会得到 `752,52`，与 oracle 实拍相反。
         queue.enqueue(LoginQueued::SubAbility, PRIORITY_HIGH); // 752
+        queue.enqueue(LoginQueued::Ability, PRIORITY_HIGH); // 52
         queue.enqueue(LoginQueued::AdjustBonus, PRIORITY_NORMAL); // 811
         queue.enqueue(LoginQueued::DayChanging, PRIORITY_NORMAL); // 46
         queue.enqueue(LoginQueued::SendUseItems, PRIORITY_HIGH); // 621
@@ -2238,12 +2250,12 @@ mod tests {
         }
     }
 
-    /// 顺序判据②（**模型 C**）：登录消息按 oracle 四叉堆出队；每条帧的**字节**仍逐字节等于金标准。
+    /// 顺序判据②（**模型 C′**）：登录消息按 oracle 四叉堆出队；每条帧的**字节**仍逐字节等于金标准。
     ///
-    /// 绝对序由模型 C 给出（`openmir2-login-frame-order`，R 级窗口项：最终须由「有装备/有技能
-    /// 角色的真机登录抓包」裁定）。与 2026-10-10 capture 的差别只有 52/752 的先后：capture 是
-    /// `52,752`，模型 C 是 `752,52`（复验者以部署 DLL 的 IL + net8.0 穷举确认入队序与堆算法）。
-    /// 本片按模型 C；**capture 里出现的每一条帧字节不变**（按 ident 逐条比对金标准原始线缆）。
+    /// 绝对序由 **2026-10-19 缩窗真机**裁定（`docs/window-shrink-run-20261019.md` §6 F1）：
+    /// C# 本机四个独立会话入图前缀恒为 `…,1106,52,752,811,46`；旧模型 C（`752,52`，源自部署
+    /// DLL 的 IL + net8.0 穷举）被真机否定，已按实拍改回 `52` 先。**capture 里出现的每一条帧
+    /// 字节不变**（按 ident 逐条比对金标准原始线缆）。
     #[test]
     fn enter_world_sequence_matches_model_c_and_golden_bytes() {
         let golden = golden_s2c(16);
@@ -2252,14 +2264,14 @@ mod tests {
             .iter()
             .map(|b| u16::from_le_bytes([b[4], b[5]]))
             .collect();
-        // 模型 C：六条 + 654 的出队序 = 752, 621, 211, 52, 811, 46, 654
+        // 模型 C′：六条 + 654 的出队序 = 52, 621, 211, 752, 811, 46, 654
         // （金标准角色无装备/无技能 ⇒ 621/211 的门关，不产帧，但槽位仍参与堆布局）。
         assert_eq!(
             got_idents,
-            vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 752, 52, 811, 46, 10, 654],
-            "模型 C 的逐帧 ident 序（含 High 组内非 FIFO：752 在 52 前）"
+            vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46, 10, 654],
+            "模型 C′ 的逐帧 ident 序（真机实拍：52 在 752 前，四个 C# 会话一致）"
         );
-        // capture 前 16 条 + 654：按 ident 取原始线缆，逐条比字节（顺序按模型 C，字节不变）。
+        // capture 前 16 条 + 654：按 ident 取原始线缆，逐条比字节（顺序按模型 C′，字节不变）。
         let mut capture_by_ident: Vec<(u16, &Vec<u8>)> =
             golden.iter().map(|(id, raw)| (*id, raw)).collect();
         let cl = golden_s2c_ident(messages::SM_CHANGELIGHT);
@@ -2267,7 +2279,7 @@ mod tests {
         assert_eq!(
             got_idents.len(),
             capture_by_ident.len(),
-            "模型 C 产出的帧数 = capture 可见帧数（17）"
+            "模型 C′ 产出的帧数 = capture 可见帧数（17）"
         );
         for body in &built {
             let ident = u16::from_le_bytes([body[4], body[5]]);
@@ -2405,11 +2417,11 @@ mod tests {
             vec![
                 658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008,
                 1106, // 直发 + RM_LOGON handler
-                752, 621, 211, 52, 811,
-                46, // 六条的堆序（High: 752,621,211,52；Normal: 811,46）
+                52, 621, 211, 752, 811,
+                46, // 六条的堆序（High: 52,621,211,752；Normal: 811,46）
                 10, 654, // 非队列 SM_TURN，随后 CHANGELIGHT
             ],
-            "模型 C：High 组非 FIFO（入队 52,752,621,211 → 出队 752,621,211,52）"
+            "模型 C′：入队 752,52,621,211 → 出队 52,621,211,752（621/211 出帧时的位置尚无真机样本，见卡 openmir2-login-frame-order-52-752 的窗口余项）"
         );
     }
 
