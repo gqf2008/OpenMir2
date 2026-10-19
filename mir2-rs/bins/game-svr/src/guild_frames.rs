@@ -80,13 +80,19 @@ pub fn sm_guild_changename_750(guild_name: Option<&str>, rank_name: &str) -> Vec
     }
 }
 
-/// `RM_CHANGEGUILDNAME(10301)` 的**触发门**（简报 §0.3 / §2.1）：只有 `MyGuild != null` 的
-/// `GetRankName`/`RefRankInfo` 路径才会 `SendMsg(RM_CHANGEGUILDNAME)`。
+/// **登录路径**的 750 触发门（简报 §0.3）：`GuildInfo.GetRankName`（`GuildInfo.cs:485-509`）
+/// 只在 `MyGuild != null` 时 `SendMsg(RM_CHANGEGUILDNAME)` ⇒ **无会登录一条 750 都不发**。
 ///
-/// - `guild_name == None` ⇒ `None`（**无会登录一条 750 都不发**）；
+/// ⚠ 这不是「RM 一律不出 750」：`PlayObject.RefRankInfo`（`PlayObject.Base.cs:2655-2660`）
+/// **无条件** `SendMsg(RM_CHANGEGUILDNAME)`；被踢/掌门自删/解散三条路径都是「先清空
+/// `MyGuild` 再调 RefRankInfo」⇒ `SendChangeGuildName` 因 `MyGuild==null` 发**纯头 750**
+/// （`Operate.cs:1383-1384/1403-1404`、`GuildInfo.cs:605-606`）。那些路径**直接**
+/// 调 [`sm_guild_changename_750`]（`None` 时它本就产纯头），不要经过本函数。
+///
+/// - `guild_name == None` ⇒ `None`（登录无会不发）；
 /// - 有会 ⇒ 出 [`sm_guild_changename_750`] 的帧。
 #[must_use]
-pub fn rm_changename_750(guild_name: Option<&str>, rank_name: &str) -> Option<Vec<u8>> {
+pub fn login_changename_750(guild_name: Option<&str>, rank_name: &str) -> Option<Vec<u8>> {
     guild_name.map(|_| sm_guild_changename_750(guild_name, rank_name))
 }
 
@@ -234,7 +240,7 @@ pub fn sm_guild_make_ally_ok_768() -> Vec<u8> {
 
 /// `SM_GUILDMAKEALLY_FAIL(769)`：`PlayObject.Operate.cs:1515`（Ally）**和 `:1554`**（BreakAlly）。
 ///
-/// - Ally：`SendDefMessage(SM_GUILDMAKEALLY_FAIL, n8, 0, 0, 0)`，`n8 ∈ {-4,-3,-2}`（当前恒 `-4`）；
+/// - Ally：`SendDefMessage(SM_GUILDMAKEALLY_FAIL, n8, 0, 0, 0)`，`n8 ∈ {-1,-2,-3,-4}`（初值 `-1`；当前恒 `-4`）；
 /// - **BreakAlly 失败也发 769 且 `Recog=0`**（`:1554`，不是 771/`-1`）。
 ///
 /// `n8` 是**有符号 i32**（负数必须完整进 `Recog`）。
@@ -361,13 +367,19 @@ mod tests {
         assert_eq!(body.len(), 12, "无会 750 是纯头，不得带尾");
     }
 
-    /// 判据 G1-3（§0.3 的 RM 门）：无会登录**一条 750 都不发**；有会才出帧。
-    /// oracle：`GuildInfo.cs:499` / `PlayObject.Base.cs:2659` 只在 MyGuild 非空时 SendMsg。
+    /// 判据 G1-3（§0.3 的**登录**门）：无会登录**一条 750 都不发**；有会才出帧。
+    /// oracle：`GuildInfo.cs:499` 只在 MyGuild 非空时 SendMsg。
+    ///
+    /// 牙：把 `login_changename_750` 对 `None` 改成也出帧 ⇒ 本用例红。
     #[test]
-    fn rm_changename_750_skips_frame_without_guild() {
-        assert_eq!(rm_changename_750(None, ""), None);
-        let body = rm_changename_750(Some("会"), "成员").expect("有会必须有 750");
+    fn login_changename_750_skips_frame_without_guild() {
+        assert_eq!(login_changename_750(None, ""), None);
+        let body = login_changename_750(Some("会"), "成员").expect("有会必须有 750");
         assert_eq!(ident(&body), messages::SM_CHANGEGUILDNAME);
+        // RefRankInfo 路径（被踢/自删/解散）直接调编码器：MyGuild 已清空时发**纯头**。
+        let kicked = sm_guild_changename_750(None, "");
+        assert_header(&kicked, 0, messages::SM_CHANGEGUILDNAME, 0, 0, 0);
+        assert_eq!(kicked.len(), 12, "RefRankInfo 路径的无会 750 是纯头");
     }
 
     // ---- 753 / 754 ----
