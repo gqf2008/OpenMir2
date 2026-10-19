@@ -66,7 +66,7 @@
 - Rust（同点）：入站 `SM_STRUCK` **59**、`SM_NOWDEATH` 0（level 30）；level 1 三趟均在 ~14s 内入站致死。
 - 判读口径「看入站栏 ≥1」⇒ 两侧都成立；**主动索敌在两侧都真实发生**。
 - 备注：Rust 侧同样点位击杀速度显著快于 C#（level 1：14s 内 5–8 次受击即死；C# 同点同血 ~30s 仅 2 次）。
-  这是**待查线索**（怪 AI 攻击节拍/目标选择），本轮不下结论。
+  这是**待查线索**（怪 AI 攻击节拍/目标选择），卡 `openmir2-monster-attack-cadence-lead`，本轮不下结论。
 
 ## 6. 本轮发现
 
@@ -80,15 +80,15 @@
   **本轮四个真机会话与 2026-10-10 capture 一致地否定了模型 C**。
 - 性质：帧序 = 时序类，**R 级**；`check_client_s2c_frames.py` 因此对 Rust capture 判 RED
   （`enter_seq` 前缀不符），这是**判据正确报警**，不是夹具问题。
-- 处置：登记卡片并按 oracle 改回 `52 → 752`（含单测期望、`smframe` 头注订正）。
+- 处置：卡 `openmir2-login-frame-order-52-752`；已按 oracle 改回 `52 → 752`（含单测期望、`smframe` 头注订正、T-80 收窄）。
 
 ### F2【工具/L 级】`mir_flow -AttackTurn "dx,dy"` 的像素步长会落到非目标格
 
 - 实现按 `(512 + dx*48, 304 + dy*32)` 点「相邻格」。本轮 Rust 侧同一配方 3 次（`0,-1`×2、`0,1`×1）
   全部落成 `CM_WALK`（角色走位），而 `CM_TURN` 只在 C# 那次出现。
 - 现成可靠的替代路径 = **按截图里怪的像素位置点**（`tools/client/mir_click.ps1`，本轮已入库并用于 W0-2）。
-- 处置：登记为工具改进（把「格心锚 + 48/32」换成由客户端 `CXYfromMouseXY` 反推的等距投影步长，
-  或直接把 `mir_click` 的截图点击编进 `mir_flow`）。
+- 处置：卡 `openmir2-mirflow-attackturn-projection`（把「格心锚 + 48/32」换成由客户端
+  `CXYfromMouseXY` 反推的等距投影步长，或直接把 `mir_click` 的截图点击编进 `mir_flow`）。
 
 ### F3【已知偏差复验】D-9 的 52 体长（oracle 40B vs Rust 58B）真机复现
 
