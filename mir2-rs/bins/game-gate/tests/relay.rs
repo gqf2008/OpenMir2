@@ -14,12 +14,13 @@
 //! 5. body < 16 字节（登录后）⇒ 网关关会话（"异常消息封包"）并补发 `GM_CLOSE`（`session_id=0, socket=handle`）；
 //! 6. 缺配置时进程**非零退出**（M1 验收④）。
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mir2_protocol::frame::ServerMessage;
 use mir2_protocol::messages::grobal2;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 
 #[path = "../../game-svr/tests/support/mod.rs"]
 #[allow(dead_code)] // 共用模块：另一个 target 的条目在本 target 未用
@@ -114,6 +115,151 @@ async fn connect_with_retry(port: u16) -> TcpStream {
     panic!("网关未在预期时间内监听 {port}");
 }
 
+/// 双向假 GameSvr：`frames` 收网关→服务端的帧，`tx` 可下发服务端→网关的帧。
+///
+/// 与 `fake_game_svr` 的区别：后者只收不发、且要等网关断开才返回；B-4/B-5 需要在**同一条活连接**
+/// 上收发抖动（GM_STOP/GM_RECEIVE_OK/GM_DATA），所以这里用两个 channel 解耦读写。
+struct FakeSvr {
+    port: u16,
+    frames: mpsc::UnboundedReceiver<(ServerMessage, Vec<u8>)>,
+    tx: mpsc::UnboundedSender<(ServerMessage, Vec<u8>)>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl FakeSvr {
+    async fn start() -> FakeSvr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (frame_tx, frame_rx) = mpsc::unbounded_channel();
+        let (out_tx, mut out_rx) = mpsc::unbounded_channel::<(ServerMessage, Vec<u8>)>();
+        let task = tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let (mut rd, mut wr) = sock.into_split();
+            let reader = tokio::spawn(async move {
+                loop {
+                    let mut head = [0u8; ServerMessage::SIZE];
+                    if rd.read_exact(&mut head).await.is_err() {
+                        break;
+                    }
+                    let Some(msg) = ServerMessage::from_bytes(&head) else {
+                        break;
+                    };
+                    let mut body = vec![0u8; msg.body_len()];
+                    if !body.is_empty() && rd.read_exact(&mut body).await.is_err() {
+                        break;
+                    }
+                    if frame_tx.send((msg, body)).is_err() {
+                        break;
+                    }
+                }
+            });
+            while let Some((msg, body)) = out_rx.recv().await {
+                if wr.write_all(&msg.to_bytes()).await.is_err() {
+                    break;
+                }
+                if !body.is_empty() && wr.write_all(&body).await.is_err() {
+                    break;
+                }
+                let _ = wr.flush().await;
+            }
+            reader.abort();
+        });
+        FakeSvr {
+            port,
+            frames: frame_rx,
+            tx: out_tx,
+            task,
+        }
+    }
+
+    /// 下发一帧仅 20B 头的管理帧（GM_STOP/GM_RECEIVE_OK/GM_CHECKSERVER）。
+    fn send(&self, msg: ServerMessage) {
+        self.tx.send((msg, Vec::new())).unwrap();
+    }
+
+    /// 下发一帧 `GM_DATA`（头 + body）。
+    fn send_data(&self, msg: ServerMessage, body: &[u8]) {
+        self.tx.send((msg, body.to_vec())).unwrap();
+    }
+
+    /// 等一帧满足 `pred` 的网关→服务端帧（超时 5s 返回 `None`）。
+    async fn recv_until(
+        &mut self,
+        pred: impl Fn(&ServerMessage) -> bool,
+    ) -> Option<(ServerMessage, Vec<u8>)> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some((msg, body)) = self.frames.recv().await {
+                if pred(&msg) {
+                    return Some((msg, body));
+                }
+            }
+            None
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// 等指定 ident 的一帧（`grobal2::GM_*`）；超时 5s 返回 `None`。
+    async fn recv_ident(&mut self, ident: u8) -> Option<(ServerMessage, Vec<u8>)> {
+        let ident = u16::from(ident);
+        self.recv_until(|m| m.ident == ident).await
+    }
+
+    /// 收 `dur` 内到达的全部帧（用于断言"窗口内没有某类帧"）。
+    async fn recv_for(&mut self, dur: Duration) -> Vec<(ServerMessage, Vec<u8>)> {
+        let mut out = Vec::new();
+        let deadline = tokio::time::Instant::now() + dur;
+        while let Ok(Some(frame)) = tokio::time::timeout_at(deadline, self.frames.recv()).await {
+            out.push(frame);
+        }
+        out
+    }
+}
+
+impl Drop for FakeSvr {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// 从客户端 face 读一次（一个 GM_DATA 会以一次 `#…!` write 到达）。
+async fn read_some(sock: &mut TcpStream, dur: Duration) -> Option<Vec<u8>> {
+    let mut buf = [0u8; 512];
+    let n = tokio::time::timeout(dur, sock.read(&mut buf))
+        .await
+        .ok()?
+        .ok()?;
+    if n == 0 {
+        None
+    } else {
+        Some(buf[..n].to_vec())
+    }
+}
+
+/// 断言 socket 仍被对端保持（读超时 = 没数据也没 EOF）；被关闭/有下行都算失败。
+async fn assert_still_open(sock: &mut TcpStream, dur: Duration) {
+    let mut buf = [0u8; 64];
+    match tokio::time::timeout(dur, sock.read(&mut buf)).await {
+        Err(_) => {}
+        Ok(Ok(0)) => panic!("socket 被对端关闭（EOF）；oracle 在 GM_STOP 后不关新连接"),
+        Ok(Ok(n)) => panic!("GM_STOP 后新连接不应有下行，实得 {n} 字节"),
+        Ok(Err(e)) => panic!("socket 读错误: {e}"),
+    }
+}
+
+/// 造一帧 `GM_DATA` 头（body 长度由调用方给）。
+fn gm_data(session_id: u16, body_len: i32) -> ServerMessage {
+    ServerMessage {
+        packet_code: grobal2::PacketCode,
+        socket: 0,
+        session_id,
+        ident: u16::from(grobal2::GM_DATA),
+        session_index: 0,
+        pack_length: body_len,
+    }
+}
+
 /// 起一个 `game-gate` 子进程并**等它自己 bind 成功**（就绪门）。
 ///
 /// 卡 `openmir2-m2-flaky-relay-testports`：`free_port()` 的「探测即释放」会让并行用例的
@@ -129,18 +275,30 @@ struct Gate {
 
 impl Gate {
     async fn start(tag: &str, srv_port: u16, gate_port: u16) -> Gate {
+        Self::start_with_env(tag, srv_port, gate_port, &[]).await
+    }
+
+    /// 同 `start`，但给子进程注入环境变量（B-4/B-5 用小容量/短心跳做进程级判定）。
+    async fn start_with_env(
+        tag: &str,
+        srv_port: u16,
+        gate_port: u16,
+        envs: &[(&str, &str)],
+    ) -> Gate {
         let dir = support::unique_temp_dir(tag);
         write_conf(&dir, srv_port, gate_port);
         let log = dir.join("gate.out.log");
         let out = std::fs::File::create(&log).unwrap();
         let err = out.try_clone().unwrap();
-        let mut proc = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
-            .arg(dir.join("config.conf"))
+        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"));
+        cmd.arg(dir.join("config.conf"))
             .stdout(out)
             .stderr(err)
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
+            .kill_on_drop(true);
+        for (key, value) in envs {
+            cmd.env(key, value);
+        }
+        let mut proc = cmd.spawn().unwrap();
         let text =
             support::wait_child_ready(&mut proc, &log, gate_port, Duration::from_secs(15)).await;
         if !text.contains(&format!(":{gate_port}]已启动")) {
@@ -838,4 +996,282 @@ async fn oversize_frame_is_dropped_without_kick() {
         "超限帧必须被丢（不转发），而它后面的正常帧必须转发（会话存活）：期望 1 条命令帧，实得 {}",
         datas.len()
     );
+}
+
+/// **B-4 判据 1/2**：槽位按连接生命周期回收；全满时照 oracle 返回最后一个非空槽。
+///
+/// 旧实现 `used: HashSet` 只 insert 不 remove ⇒ 超过可注入容量后新连接落到「槽满」分支；
+/// 这里用**下行可达性**做判据（不依赖 socket handle 是否被 OS 复用）：
+/// 槽满分支的下行走宿主 `ConnectionId`（`ClientSession.cs:908`），新客户端收不到自己的数据。
+#[tokio::test]
+async fn session_slots_release_and_full_branch_follow_oracle() {
+    let mut srv = FakeSvr::start().await;
+    let gate_port = support::next_port();
+    let gate = Gate::start_with_env(
+        "gg-b4",
+        srv.port,
+        gate_port,
+        &[("MIR2_GAME_GATE_MAX_SESSION", "2")],
+    )
+    .await;
+
+    // 两个并发会话占满两个槽。
+    let client_a = gate.connect().await;
+    let open_a = srv
+        .recv_ident(grobal2::GM_OPEN)
+        .await
+        .expect("A 的 GM_OPEN");
+    let mut client_b = gate.connect().await;
+    let open_b = srv
+        .recv_ident(grobal2::GM_OPEN)
+        .await
+        .expect("B 的 GM_OPEN");
+    assert_ne!(open_a.0.socket, open_b.0.socket, "两个并发会话各占一槽");
+
+    // 槽满：oracle 返回**最后一个非空槽**（B）的 SckHandle，新连接不被关闭、也不入槽。
+    let mut client_c = gate.connect().await;
+    let open_c = srv
+        .recv_ident(grobal2::GM_OPEN)
+        .await
+        .expect("槽满时的 GM_OPEN（oracle 不干净拒绝）");
+    assert_eq!(
+        open_c.0.socket, open_b.0.socket,
+        "槽满时 GM_OPEN 必须带最后一个非空槽（B）的 handle（ServerService.cs:131-147）"
+    );
+    assert_ne!(
+        open_c.0.session_id, open_b.0.session_id,
+        "槽满分支仍分配新 SessionId"
+    );
+    // 下行按宿主 ConnectionId 路由 ⇒ B 收到发给 C 的数据，C 收不到。
+    srv.send_data(gm_data(open_c.0.session_id, 12), &[9u8; 12]);
+    let to_b = read_some(&mut client_b, Duration::from_secs(2))
+        .await
+        .expect("槽满分支的下行必须走宿主（B）的连接");
+    assert!(to_b.starts_with(b"#"));
+    assert!(
+        read_some(&mut client_c, Duration::from_millis(300))
+            .await
+            .is_none(),
+        "槽满分支的新客户端不得收到发给自己的下行（oracle 绑定的是宿主 SessionInfo）"
+    );
+
+    // 断开 A/B ⇒ 槽位回收；新连接 D 的下行必须回到 D 自己（泄漏槽时 D 会落槽满分支、收不到）。
+    drop(client_a);
+    drop(client_b);
+    for _ in 0..2 {
+        srv.recv_until(|m| m.ident == u16::from(grobal2::GM_CLOSE))
+            .await
+            .expect("断开必须补发 GM_CLOSE");
+    }
+    let mut client_d = gate.connect().await;
+    let open_d = srv
+        .recv_ident(grobal2::GM_OPEN)
+        .await
+        .expect("D 的 GM_OPEN");
+    srv.send_data(gm_data(open_d.0.session_id, 12), &[7u8; 12]);
+    let to_d = read_some(&mut client_d, Duration::from_secs(2))
+        .await
+        .expect("释放槽位后，新会话必须收到自己的下行");
+    assert!(to_d.starts_with(b"#"));
+    drop(client_d);
+    drop(client_c);
+
+    // 顺序 churn：容量 2 下 8 次连/断全部正常（旧 `used` 泄漏会从第 3 次起走下坡）。
+    for i in 0..8 {
+        let mut client_x = gate.connect().await;
+        let open_x = srv
+            .recv_ident(grobal2::GM_OPEN)
+            .await
+            .expect("churn 的 GM_OPEN");
+        srv.send_data(
+            gm_data(open_x.0.session_id, 12),
+            &[u8::try_from(i).unwrap(); 12],
+        );
+        assert!(
+            read_some(&mut client_x, Duration::from_secs(2))
+                .await
+                .is_some(),
+            "第 {i} 次 churn 的下行必须可达（槽位已回收）"
+        );
+        drop(client_x);
+        srv.recv_until(|m| m.ident == u16::from(grobal2::GM_CLOSE))
+            .await
+            .expect("churn 的 GM_CLOSE");
+    }
+
+    gate.shutdown().await;
+}
+
+/// **B-5 判据 1**：稳定连接后按周期收 `GM_CHECKCLIENT`，头字段除 PacketCode/Ident 外全 0、
+/// 无 body（`ClientThread.cs:112-142` + `TimedService.cs:69-88`）。
+#[tokio::test]
+async fn gm_checkclient_is_sent_every_keepalive_period() {
+    let mut srv = FakeSvr::start().await;
+    let gate_port = support::next_port();
+    let gate = Gate::start_with_env(
+        "gg-b5-ka",
+        srv.port,
+        gate_port,
+        &[("MIR2_GAME_GATE_KEEPALIVE_MS", "150")],
+    )
+    .await;
+
+    let mut got = Vec::new();
+    let start = Instant::now();
+    for _ in 0..3 {
+        let frame = srv
+            .recv_until(|m| m.ident == u16::from(grobal2::GM_CHECKCLIENT))
+            .await
+            .expect("每周期必须有一帧 GM_CHECKCLIENT");
+        got.push((start.elapsed(), frame));
+    }
+    for (_, (msg, body)) in &got {
+        assert_eq!(msg.packet_code, grobal2::PacketCode);
+        assert_eq!(msg.ident, u16::from(grobal2::GM_CHECKCLIENT));
+        assert_eq!(msg.socket, 0);
+        assert_eq!(msg.session_id, 0);
+        assert_eq!(msg.session_index, 0);
+        assert_eq!(msg.pack_length, 0);
+        assert!(
+            body.is_empty(),
+            "GM_CHECKCLIENT 是 20B 纯头（SendServerMsg 无 body）"
+        );
+    }
+    let gap1 = got[1].0.checked_sub(got[0].0).expect("elapsed 单调递增");
+    let gap2 = got[2].0.checked_sub(got[1].0).expect("elapsed 单调递增");
+    for gap in [gap1, gap2] {
+        assert!(
+            gap >= Duration::from_millis(140),
+            "心跳间隔不得短于注入周期（150ms），实得 {gap:?}"
+        );
+        assert!(
+            gap <= Duration::from_secs(2),
+            "心跳间隔不得漂移到 2s 以上，实得 {gap:?}"
+        );
+    }
+    gate.shutdown().await;
+}
+
+/// **B-5 判据 2**：`GM_RECEIVE_OK` 收到即回显同 ident 的 20B 头（其余字段全 0）；
+/// 回显必须由收帧触发（< GameSvr 的 `SocCheckTimeOut`=50ms），不能等周期任务。
+#[tokio::test]
+async fn gm_receive_ok_is_echoed_immediately_with_zeroed_fields() {
+    let mut srv = FakeSvr::start().await;
+    let gate_port = support::next_port();
+    let gate = Gate::start_with_env(
+        "gg-b5-ok",
+        srv.port,
+        gate_port,
+        &[("MIR2_GAME_GATE_KEEPALIVE_MS", "60000")],
+    )
+    .await;
+
+    let mut best = Duration::from_secs(5);
+    for _ in 0..5 {
+        let sent_at = Instant::now();
+        srv.send(ServerMessage {
+            packet_code: grobal2::PacketCode,
+            socket: 0,
+            session_id: 0,
+            ident: u16::from(grobal2::GM_RECEIVE_OK),
+            session_index: 0,
+            pack_length: 0,
+        });
+        let (echo, body) = srv
+            .recv_until(|m| m.ident == u16::from(grobal2::GM_RECEIVE_OK))
+            .await
+            .expect("GM_RECEIVE_OK 必须被回显（ClientThread.cs:279-280）");
+        best = best.min(sent_at.elapsed());
+        assert_eq!(echo.packet_code, grobal2::PacketCode);
+        assert_eq!(echo.socket, 0);
+        assert_eq!(echo.session_id, 0);
+        assert_eq!(echo.session_index, 0);
+        assert_eq!(echo.pack_length, 0);
+        assert!(body.is_empty(), "回显必须是 20B 纯头");
+    }
+    assert!(
+        best < Duration::from_millis(50),
+        "回显必须是收到即发（GameSvr 的 SocCheckTimeOut=50ms），最快一轮 {best:?}"
+    );
+    gate.shutdown().await;
+}
+
+/// **B-5 判据 3**：`GM_STOP` 后不再分配新用户（不发 `GM_OPEN`、socket 不关、已有会话不动），
+/// 同时停发 `GM_CHECKCLIENT`（`ClientThread.cs:116-123,265-267`；`ServerService.cs:123-129`）。
+#[tokio::test]
+async fn gm_stop_stops_assignment_but_keeps_existing_sessions() {
+    let mut srv = FakeSvr::start().await;
+    let gate_port = support::next_port();
+    let gate = Gate::start_with_env(
+        "gg-b5-stop",
+        srv.port,
+        gate_port,
+        &[("MIR2_GAME_GATE_KEEPALIVE_MS", "150")],
+    )
+    .await;
+
+    let mut a = gate.connect().await;
+    let open_a = srv
+        .recv_until(|m| m.ident == u16::from(grobal2::GM_OPEN))
+        .await
+        .expect("A 的 GM_OPEN");
+    // 先完成登录，让后续命令帧走上行转发路径（登录帧本身也会产生一条合成登录 GM_DATA，
+    // 下面的 `recv_until(GM_CHECKCLIENT)` 会顺带把它排掉）。
+    a.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
+    a.flush().await.unwrap();
+    settle().await;
+    srv.recv_until(|m| m.ident == u16::from(grobal2::GM_CHECKCLIENT))
+        .await
+        .expect("GM_STOP 前健康帧必须已经在发");
+
+    srv.send(ServerMessage {
+        packet_code: grobal2::PacketCode,
+        socket: 0,
+        session_id: 0,
+        ident: u16::from(grobal2::GM_STOP),
+        session_index: 0,
+        pack_length: 0,
+    });
+    // 排掉停机瞬间可能在途的心跳，再看一个完整静默窗。
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let _ = srv.recv_for(Duration::from_millis(100)).await;
+    let quiet = srv.recv_for(Duration::from_millis(500)).await;
+    assert!(
+        quiet
+            .iter()
+            .all(|(m, _)| m.ident != u16::from(grobal2::GM_CHECKCLIENT)),
+        "GM_STOP 后必须停发健康帧（`CheckConnectedState` 的 Stop 分支直接 return）"
+    );
+
+    // 新客户端：不建会话、不发 GM_OPEN，socket 留在服务端。
+    let mut b = gate.connect().await;
+    let after_stop = srv.recv_for(Duration::from_millis(600)).await;
+    assert!(
+        after_stop
+            .iter()
+            .all(|(m, _)| m.ident != u16::from(grobal2::GM_OPEN)),
+        "GM_STOP 后新连接不得拿到 GM_OPEN（ServerManager 只分配 Runing 实例）"
+    );
+    b.write_all(&login_frame(GOOD_LOGIN))
+        .await
+        .expect("GM_STOP 后新连接的 socket 不得被网关关闭");
+    assert_still_open(&mut b, Duration::from_millis(300)).await;
+
+    // 已有会话照常工作：服务端下行仍能到达 A，A 的上行仍能带原 handle 转发。
+    srv.send_data(gm_data(open_a.0.session_id, 12), &[5u8; 12]);
+    let to_a = read_some(&mut a, Duration::from_secs(2))
+        .await
+        .expect("GM_STOP 不得影响已有会话的下行");
+    assert!(to_a.starts_with(b"#"));
+    a.write_all(&command_frame(&[1u8; 12])).await.unwrap();
+    a.flush().await.unwrap();
+    let up = srv
+        .recv_until(|m| {
+            m.ident == u16::from(grobal2::GM_DATA) && m.session_id == open_a.0.session_id
+        })
+        .await
+        .expect("GM_STOP 不得影响已有会话的上行");
+    assert_eq!(up.0.socket, open_a.0.socket);
+
+    gate.shutdown().await;
 }

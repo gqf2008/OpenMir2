@@ -26,8 +26,12 @@
 //! 余量：`ItemSpeed`（下行 `SM_CHARSTATUSCHANGED`）与 `SpeedLimit`（登录 `PunishList`）
 //! 尚未接线，见 `rules.rs` 模块文档。
 //!
+//! **已接线（B-5 / B-4，2026-10-20）**：`GM_CHECKCLIENT` 10s 健康帧、`GM_RECEIVE_OK` 回显、
+//! `GM_STOP` 停止分配（`ClientThread.cs:431-459`、`:265-300`）；会话槽位按连接生命周期回收
+//! （`ServerService.cs:131-209`），槽满时照 oracle 返回最后一个非空槽。
+//!
 //! **本切片不做**（登记在协议梳理 §6，切片 2/3）：`Filters/*`、
-//! `Auth/DynamicAuthenticator`(OTP)、`GM_CHECKCLIENT` 周期健康帧、`ClientTimeOutTime` 空闲回收。
+//! `Auth/DynamicAuthenticator`(OTP)、`ClientTimeOutTime` 空闲回收、下行断线重连（与 SelGate 同类缺口）。
 //!
 //! **失败要响**：缺配置键、绑不上端口、连不上 GameSvr —— 明确报错并非零退出。
 
@@ -40,7 +44,8 @@ mod login;
 mod rules;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use mir2_protocol::frame::ServerMessage;
@@ -56,6 +61,14 @@ const COMMAND_FIXED_LENGTH: usize = 16;
 const COMMAND_MESSAGE_SIZE: usize = 12;
 /// C# `GateShare.MaxSession`（`GateShare.cs:14`）：每条网关→服务器连接的会话上限。
 const MAX_SESSION: usize = 10_000;
+/// 测试注入：会话槽位数（oracle 恒为 `GateShare.MaxSession`=10000，生产不设该变量）。
+const MAX_SESSION_ENV: &str = "MIR2_GAME_GATE_MAX_SESSION";
+/// C# `TimedService.KeepAlive`（`TimedService.cs:69-88`）：健康帧周期 10000ms。
+const KEEPALIVE_MS: u64 = 10_000;
+/// 测试注入：健康帧周期（生产不设该变量）。
+const KEEPALIVE_ENV: &str = "MIR2_GAME_GATE_KEEPALIVE_MS";
+/// `ClientThread.CheckConnectedState`（`ClientThread.cs:431-441`）：GM_STOP 后 60*10000ms 内不重连。
+const MAINTENANCE_MS: i64 = 600_000;
 /// 单次 read 的缓冲：客户端帧的正常上界远小于它（`NomClientPacketSize=400`；登录帧 <254）。
 const MAX_READ: usize = 64 * 1024;
 
@@ -83,6 +96,102 @@ type Sessions = Arc<Mutex<HashMap<u16, mpsc::UnboundedSender<Vec<u8>>>>>;
 /// 之后该会话发往 GameSvr 的每一帧都要带上它（未收到时为 0）。
 type SessionIndexes = Arc<Mutex<HashMap<u16, i32>>>;
 
+/// `ClientThread.RunningState`（`GateShare.cs:104-114`）：`GM_STOP` 后不再向该引擎分配新用户。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunningState {
+    Waiting,
+    Running,
+    Stop,
+}
+
+/// 网关→GameSvr 链路状态（`ClientThread` 的 `GateReady` / `CheckServerTick` / `RunningState`）。
+struct GateState {
+    running: RunningState,
+    /// `GateReady`：连接建立后才发 `GM_CHECKCLIENT`（`ClientThread.cs:431-459`）。
+    gate_ready: bool,
+    /// `CheckServerTick`：最近一次连接成功/收到 `GM_CHECKSERVER` 的时刻。
+    last_server_tick: i64,
+}
+
+/// 心跳一次 tick 的处置（状态判定与 I/O 分开，便于把 GM_STOP 语义读清楚）。
+enum KeepaliveTick {
+    /// 发 `GM_CHECKCLIENT`。
+    Send,
+    /// GM_STOP 后的维护窗口已过（oracle 在此调用 `Start()`；本网关无下行重连，只照抄日志）。
+    Maintenance,
+    /// 不动作。
+    Idle,
+}
+
+/// 一个被占用的会话槽：oracle `SessionInfo` 在本片用到的两个字段
+/// （`SckHandle` 与所属会话；`SessionArray` 见 `ServerService.cs:131-147`）。
+struct SlotOwner {
+    sid: u16,
+    handle: i32,
+}
+
+/// C# `ClientThread.SessionArray`（`new SessionInfo[GateShare.MaxSession]`）：
+/// 槽位在**客户端断开**时回收（`ServerService.cs:166-209`）。
+/// 槽满时 oracle **不拒绝新连接**：扫描循环结束后 `userSession` 停在最后一个非空槽，
+/// 新会话拿到的是那个陈旧槽的 `SckHandle`（`allocate` 的返回值复刻该语义）。
+struct SessionSlots {
+    slots: Vec<Option<SlotOwner>>,
+}
+
+impl SessionSlots {
+    fn new(capacity: usize) -> Self {
+        Self {
+            slots: (0..capacity).map(|_| None).collect(),
+        }
+    }
+
+    /// 分配：首个空槽；全满则照 oracle 返回**最后一个非空槽**的 `SckHandle`
+    /// 与宿主会话 id（新会话不入槽）。
+    fn allocate(&mut self, sid: u16, handle: i32) -> (i32, Option<u16>) {
+        if let Some(idx) = self.slots.iter().position(Option::is_none) {
+            self.slots[idx] = Some(SlotOwner { sid, handle });
+            return (handle, None);
+        }
+        match self.slots.last().and_then(Option::as_ref) {
+            Some(owner) => (owner.handle, Some(owner.sid)),
+            // 容量为 0（仅测试注入；oracle 的 10000 不会走这里）。
+            None => (handle, None),
+        }
+    }
+
+    /// 断开回收：只清**属于该会话**的槽（oracle 按 `ConnectionId` 匹配，`ServerService.cs:166-201`；
+    /// 槽满分支的新会话从未入槽，因此不得误清宿主槽）。
+    fn release(&mut self, sid: u16) {
+        if let Some(slot) = self
+            .slots
+            .iter_mut()
+            .find(|s| matches!(s, Some(o) if o.sid == sid))
+        {
+            *slot = None;
+        }
+    }
+
+    #[cfg(test)]
+    fn active(&self) -> usize {
+        self.slots.iter().filter(|s| s.is_some()).count()
+    }
+}
+
+/// RAII：`client_loop` 的任何退出路径（含 `?` 早退）都回收槽位（B-4）。
+struct SlotGuard {
+    slots: Arc<StdMutex<SessionSlots>>,
+    sid: u16,
+}
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        if let Ok(mut slots) = self.slots.lock() {
+            slots.release(self.sid);
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)] // 端点循环：连接/状态/槽表/两个任务；拆函数只会多传一坨 Arc
 #[tokio::main]
 async fn main() -> Result<()> {
     let conf = std::env::args()
@@ -94,6 +203,23 @@ async fn main() -> Result<()> {
         chat_interval_ms: cfg.chat_interval_ms,
         speed: cfg.speed.clone(),
     };
+    // 测试注入（生产环境不设这两个变量 ⇒ oracle 口径：10000 槽 / 10s 心跳）。
+    let max_session = std::env::var(MAX_SESSION_ENV)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(MAX_SESSION);
+    let keepalive_ms = std::env::var(KEEPALIVE_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(KEEPALIVE_MS);
+    if max_session != MAX_SESSION || keepalive_ms != KEEPALIVE_MS {
+        glog!(
+            "INF",
+            "测试注入：MaxSession={max_session} KeepAlive={keepalive_ms}ms"
+        );
+    }
     glog!(
         "INF",
         "游戏网关启动：{} 组端点（config={}）",
@@ -106,6 +232,13 @@ async fn main() -> Result<()> {
         let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
         // 会话→引擎侧索引（`SvrListIdx`；由 `GM_SERVERUSERINDEX` 下发）
         let indexes: SessionIndexes = Arc::new(Mutex::new(HashMap::new()));
+        // 会话槽表（`ClientThread.SessionArray`）与本线引擎状态（`GateReady`/`RunningState`）。
+        let slots = Arc::new(StdMutex::new(SessionSlots::new(max_session)));
+        let state = Arc::new(StdMutex::new(GateState {
+            running: RunningState::Waiting,
+            gate_ready: false,
+            last_server_tick: now_ms(),
+        }));
         // 下游连接：连不上 GameSvr 即失败退出（M1④）
         let downstream = TcpStream::connect((ep.srv_addr.as_str(), ep.srv_port))
             .await
@@ -122,15 +255,38 @@ async fn main() -> Result<()> {
             ep.srv_addr,
             ep.srv_port
         );
+        // `ClientThread.ClientSocketConnect`：GateReady=true、CheckServerTick=now、Runing。
+        if let Ok(mut st) = state.lock() {
+            st.running = RunningState::Running;
+            st.gate_ready = true;
+            st.last_server_tick = now_ms();
+        }
         let (down_rx, down_tx) = downstream.into_split();
         let down_tx = Arc::new(Mutex::new(down_tx));
         tasks.push(tokio::spawn(server_loop(
             down_rx,
             Arc::clone(&sessions),
             Arc::clone(&indexes),
+            Arc::clone(&down_tx),
+            Arc::clone(&state),
             ep.srv_addr.clone(),
             ep.srv_port,
         )));
+        // `TimedService.KeepAlive`（10s 心跳）在本线独立任务里跑。
+        let keep_down_tx = Arc::clone(&down_tx);
+        let keep_state = Arc::clone(&state);
+        let keep_addr = ep.srv_addr.clone();
+        tasks.push(tokio::spawn(async move {
+            keepalive_loop(
+                keep_down_tx,
+                keep_state,
+                keep_addr,
+                ep.srv_port,
+                Duration::from_millis(keepalive_ms),
+            )
+            .await;
+            Ok::<(), anyhow::Error>(())
+        }));
 
         let listener = TcpListener::bind((ep.gate_addr.as_str(), ep.gate_port))
             .await
@@ -155,7 +311,7 @@ async fn main() -> Result<()> {
             gate_rules: gate_rules.clone(),
             nom_client_packet_size: cfg.nom_client_packet_size,
         };
-        tasks.push(tokio::spawn(accept_loop(listener, gate_ctx)));
+        tasks.push(tokio::spawn(accept_loop(listener, gate_ctx, slots, state)));
     }
     for t in tasks {
         let _ = t.await;
@@ -201,22 +357,63 @@ enum Step {
 }
 
 /// 客户端 face：接受连接并为每个会话分配 `SessionId`。
-async fn accept_loop(listener: TcpListener, ctx: GateCtx) -> Result<()> {
-    let mut used: std::collections::HashSet<u16> = std::collections::HashSet::new();
+#[allow(clippy::too_many_lines)] // 与 oracle 的 Connect 回调一一对应（停服分支/槽满分支/登记）
+async fn accept_loop(
+    listener: TcpListener,
+    ctx: GateCtx,
+    slots: Arc<StdMutex<SessionSlots>>,
+    state: Arc<StdMutex<GateState>>,
+) -> Result<()> {
     loop {
         let (sock, peer) = listener.accept().await.context("accept 失败")?;
         sock.set_nodelay(true).ok();
-        if used.len() >= MAX_SESSION {
-            glog!("WRN", "会话已满({MAX_SESSION})，拒绝 {peer}");
+        // `ServerService.cs:123-129`：GM_STOP 后 `ServerManager.GetClientThread` 找不到
+        // `RunningState.Runing` 的实例 ⇒ 不建会话、不发 `GM_OPEN`，也**不关**客户端连接
+        // （socket 留在服务端）。客户端此后的上行同样没有会话可路由（照 oracle 静默丢弃）。
+        let stopped = state
+            .lock()
+            .is_ok_and(|s| s.running != RunningState::Running);
+        if stopped {
+            glog!(
+                "DBG",
+                "获取GameSvr服务器实例失败，请确认GameGate和GameSvr是否链接正常。"
+            );
+            tokio::spawn(async move {
+                let mut sock = sock;
+                let mut buf = [0u8; 4096];
+                loop {
+                    match sock.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+            });
             continue;
         }
         let handle = raw_socket_i32(&sock);
         let sid = gen_session_id(&format!("{peer}|{}|{}", ctx.gate_addr, ctx.gate_port));
-        used.insert(sid);
+        // `ServerService.cs:131-147`：找首个空槽；全满则返回**最后一个非空槽**的 SckHandle
+        // （`donor` 是那个宿主会话，复用其下行路由，见 `client_loop`）。
+        let (slot_handle, donor) = match slots.lock() {
+            Ok(mut table) => table.allocate(sid, handle),
+            Err(_) => (handle, None),
+        };
         glog!("INF", "开始连接: {peer} (SessionId={sid} socket={handle})");
         let ctx = ctx.clone();
+        let slots = Arc::clone(&slots);
         tokio::spawn(async move {
-            if let Err(e) = client_loop(sock, sid, handle, peer.to_string(), ctx).await {
+            if let Err(e) = client_loop(
+                sock,
+                sid,
+                slot_handle,
+                handle,
+                donor,
+                peer.to_string(),
+                ctx,
+                slots,
+            )
+            .await
+            {
                 glog!("WRN", "客户端[{peer}]会话结束: {e:#}");
             }
         });
@@ -224,16 +421,32 @@ async fn accept_loop(listener: TcpListener, ctx: GateCtx) -> Result<()> {
 }
 
 /// 单客户端会话：登记会话表 → 发 `GM_OPEN` → 逐帧处置 → 断开发 `GM_CLOSE`。
+#[allow(clippy::too_many_arguments)] // sid/handle/槽 handle/宿主/对端 都是 oracle 同名概念
 async fn client_loop(
     sock: TcpStream,
     sid: u16,
+    slot_handle: i32,
     handle: i32,
+    donor: Option<u16>,
     peer: String,
     ctx: GateCtx,
+    slots: Arc<StdMutex<SessionSlots>>,
 ) -> Result<()> {
+    // 任何退出路径（含下面的 `?` 早退）都回收槽位。
+    let _slot_guard = SlotGuard { slots, sid };
     let (mut rd, mut wr) = sock.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    ctx.sessions.lock().await.insert(sid, tx);
+    // 槽满复用时，新会话在 oracle 里绑的是**宿主的** `SessionInfo`：下行仍经宿主的
+    // `ConnectionId` 发出（`ClientSession.cs:908`）。宿主已断开（槽已释放）⇒ oracle 的
+    // `Session.Socket == null` 静默丢弃；这里不登记新键，让 `server_loop` 走
+    // 「会话不存在，丢弃下行」分支。
+    let route_tx = match donor {
+        None => Some(tx),
+        Some(donor_sid) => ctx.sessions.lock().await.get(&donor_sid).cloned(),
+    };
+    if let Some(route_tx) = route_tx {
+        ctx.sessions.lock().await.insert(sid, route_tx);
+    }
     // 每会话的规则状态：聊天计时 + 三条速度规则的计时 + 延时消息队列
     // （C# `ClientSession` 里的 `gameSpeed` / `SayMsgTick` / `MsgList`）。
     let mut session = SessionRules {
@@ -257,7 +470,7 @@ async fn client_loop(
     let ip_bytes = ip_bytes(&peer);
     let open = ServerMessage {
         packet_code: grobal2::PacketCode,
-        socket: handle,
+        socket: slot_handle,
         session_id: sid,
         ident: u16::from(grobal2::GM_OPEN),
         session_index: 0,
@@ -282,7 +495,7 @@ async fn client_loop(
             &mut session,
             &ctx,
             sid,
-            handle,
+            slot_handle,
             now_ms(),
         )
         .await
@@ -528,12 +741,17 @@ async fn server_loop(
     mut rd: tokio::net::tcp::OwnedReadHalf,
     sessions: Sessions,
     indexes: SessionIndexes,
+    down_tx: Arc<Mutex<OwnedWriteHalf>>,
+    state: Arc<StdMutex<GateState>>,
     srv_addr: String,
     srv_port: u16,
 ) -> Result<()> {
     loop {
         let mut head = [0u8; ServerMessage::SIZE];
         if rd.read_exact(&mut head).await.is_err() {
+            if let Ok(mut st) = state.lock() {
+                st.gate_ready = false; // `ClientThread.ClientSocketDisconnect`：GateReady=false
+            }
             glog!("ERR", "游戏服务连接断开，网关停止接收。");
             return Ok(());
         }
@@ -543,6 +761,9 @@ async fn server_loop(
         let body_len = msg.body_len();
         let mut body = vec![0u8; body_len];
         if body_len > 0 && rd.read_exact(&mut body).await.is_err() {
+            if let Ok(mut st) = state.lock() {
+                st.gate_ready = false;
+            }
             glog!("ERR", "读取游戏服务载荷失败。");
             return Ok(());
         }
@@ -566,7 +787,28 @@ async fn server_loop(
                 indexes.lock().await.remove(&msg.session_id);
                 glog!("INF", "游戏服务要求关闭会话[{}]", msg.session_id);
             }
-            grobal2::GM_CHECKSERVER => {}
+            grobal2::GM_CHECKSERVER => {
+                // `ClientThread.cs:268-271`：`CheckServerFail=false; CheckServerTick=now`。
+                if let Ok(mut st) = state.lock() {
+                    st.last_server_tick = now_ms();
+                }
+            }
+            grobal2::GM_RECEIVE_OK => {
+                // `ClientThread.cs:279-280`：收到即回发同 ident 的 20B 头（其余字段全 0）。
+                // GameSvr 的 `ProcessBufferSend` 在 `SendChecked>0` 时暂停下行，只有收到回显
+                // 才复位（`ChannelMessageHandler.cs:166-169`）；否则要等 `SocCheckTimeOut`(50ms)。
+                let echo = ServerMessage {
+                    packet_code: grobal2::PacketCode,
+                    socket: 0,
+                    session_id: 0,
+                    ident: u16::from(grobal2::GM_RECEIVE_OK),
+                    session_index: 0,
+                    pack_length: 0,
+                };
+                if let Err(e) = send_internal(&down_tx, echo, &[]).await {
+                    glog!("WRN", "GM_RECEIVE_OK 回显失败: {e:#}");
+                }
+            }
             grobal2::GM_SERVERUSERINDEX => {
                 // `ClientThread.cs:272-275`：把 SessionIndex 记到会话的 `SvrListIdx`，
                 // 之后该会话发往 GameSvr 的每帧都带它（`ClientSession.cs:649`）。
@@ -582,6 +824,12 @@ async fn server_loop(
                 );
             }
             grobal2::GM_STOP => {
+                // `ClientThread.cs:265-267`：置 `RunningState.Stop`；此后
+                // `ServerManager.GetClientThread` 只挑 `Runing` 实例（`ServerManager.cs:161-163`），
+                // 新客户端不再拿到 `GM_OPEN`（`ServerService.cs:123-129`），已有会话不动。
+                if let Ok(mut st) = state.lock() {
+                    st.running = RunningState::Stop;
+                }
                 glog!(
                     "WRN",
                     "游戏引擎停止服务（{}:{}），网关不再分配用户连接到该实例",
@@ -590,6 +838,57 @@ async fn server_loop(
                 );
             }
             other => glog!("DBG", "未处理的 GM_{other}（SessionId={}）", msg.session_id),
+        }
+    }
+}
+
+/// GameGate→GameSvr 心跳（`TimedService.cs:69-88` + `ClientThread.CheckConnectedState` `:431-459`）：
+/// 每个周期发一帧 `GM_CHECKCLIENT`；`GM_STOP` 后停发，只有维护窗口过后照抄一条日志
+/// （下行重连不在本片范围，见模块文档）。
+async fn keepalive_loop(
+    down_tx: Arc<Mutex<OwnedWriteHalf>>,
+    state: Arc<StdMutex<GateState>>,
+    srv_addr: String,
+    srv_port: u16,
+    period: Duration,
+) {
+    loop {
+        tokio::time::sleep(period).await;
+        let now = now_ms();
+        let tick = match state.lock() {
+            Ok(st) if st.running == RunningState::Stop => {
+                if now - st.last_server_tick > MAINTENANCE_MS {
+                    KeepaliveTick::Maintenance
+                } else {
+                    KeepaliveTick::Idle
+                }
+            }
+            Ok(st) if st.gate_ready => KeepaliveTick::Send,
+            _ => KeepaliveTick::Idle,
+        };
+        match tick {
+            KeepaliveTick::Send => {
+                // `SendServerMsg(GM_CHECKCLIENT, 0, 0, 0, "", 0)`：20B 头，其余字段全 0。
+                let head = ServerMessage {
+                    packet_code: grobal2::PacketCode,
+                    socket: 0,
+                    session_id: 0,
+                    ident: u16::from(grobal2::GM_CHECKCLIENT),
+                    session_index: 0,
+                    pack_length: 0,
+                };
+                if send_internal(&down_tx, head, &[]).await.is_err() {
+                    if let Ok(mut st) = state.lock() {
+                        st.gate_ready = false;
+                    }
+                    glog!("WRN", "游戏服务连接不可用，停止心跳。");
+                }
+            }
+            KeepaliveTick::Maintenance => glog!(
+                "DBG",
+                "游戏引擎维护时间结束,重新连接游戏引擎[{srv_addr}:{srv_port}]."
+            ),
+            KeepaliveTick::Idle => {}
         }
     }
 }
@@ -876,6 +1175,48 @@ mod tests {
             u16::from_le_bytes([body[8], body[9]]),
             2,
             "转发的是第二帧（第一帧必须没写下游）"
+        );
+    }
+
+    /// B-4：槽位按「首个空槽」分配；全满时照 oracle 返回**最后一个非空槽**的 handle，
+    /// 且不吞掉新连接（`ServerService.cs:131-147`）。
+    #[test]
+    fn session_slots_allocate_release_and_full_branch() {
+        let mut slots = SessionSlots::new(2);
+        assert_eq!(slots.allocate(11, 100), (100, None));
+        assert_eq!(slots.allocate(22, 200), (200, None));
+        assert_eq!(slots.active(), 2);
+        assert_eq!(
+            slots.allocate(33, 300),
+            (200, Some(22)),
+            "槽满：返回最后一个非空槽（22）的 SckHandle，宿主 sid=22"
+        );
+        assert_eq!(slots.active(), 2, "槽满不新增槽");
+        // 释放后同一 sid 可再用（旧 `used: HashSet` 泄漏的回归牙）。
+        slots.release(11);
+        assert_eq!(slots.active(), 1);
+        assert_eq!(slots.allocate(11, 111), (111, None));
+        // 回收必须按宿主匹配：槽满分支的新会话从未入槽，断开它不得误清宿主槽。
+        slots.release(33);
+        assert_eq!(slots.active(), 2, "33 从未入槽，release 不得清掉宿主槽");
+    }
+
+    /// B-4：`GateShare.MaxSession`(=10000) 全满再分配不 panic，且返回最后一个非空槽。
+    #[test]
+    fn session_slots_full_at_oracle_max_does_not_panic() {
+        let mut slots = SessionSlots::new(MAX_SESSION);
+        for i in 0..MAX_SESSION {
+            let sid = u16::try_from(i % 10_000).unwrap();
+            let handle = i32::try_from(i).unwrap();
+            assert_eq!(slots.allocate(sid, handle), (handle, None));
+        }
+        assert_eq!(
+            slots.allocate(1, 42),
+            (
+                i32::try_from(MAX_SESSION - 1).unwrap(),
+                Some(u16::try_from(MAX_SESSION - 1).unwrap())
+            ),
+            "第 10001 个连接返回最后一个槽（9999）的 handle，不 panic"
         );
     }
 }
