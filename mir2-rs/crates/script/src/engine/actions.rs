@@ -549,9 +549,10 @@ impl Engine<'_, '_> {
                 let n_point = mir2_shared::hutil32::str_to_int(&info.s_param2, -1);
                 // `bool boIsSafeZone = questActionInfo.sParam3[1] == '1';`
                 // （`ExecutionProcessingSys.cs:2696`）——**先于**参数校验与字段写入。
-                // 空串/单字符 ⇒ C# 抛 `IndexOutOfRangeException`，由 NPC 外层 catch 吞掉
-                // ⇒ 动作中止、四个字段一个都不写（`PlayObject.UserLogon` 的 catch，
-                // `PlayObject.cs:1488-1492`）。Rust 不 panic；等价落点 = 直接 return。
+                // 空串/单字符 ⇒ C# 抛 `IndexOutOfRangeException`，异常从 `ScriptEngine.GotoLable`
+                // 逃出 ⇒ 整个 GotoLable 中止（含嵌套 `Goto` 逐层穿出），四个字段一个都不写；
+                // 外层 catch 只吞日志（`PlayObject.UserLogon`，`PlayObject.cs:1488-1492`）。
+                // Rust 不 panic；等价落点 = 置旗后直接 return。
                 // 差异仅剩「不写崩溃日志/堆栈」，登记见 `tests/parity/whitelist.md` B-108。
                 let Some(safe_flag) = info.s_param3.chars().nth(1) else {
                     // C# 的 `IndexOutOfRangeException` 从 `GotoLable` 逃出 ⇒ 整个 GotoLable

@@ -709,7 +709,9 @@ pub struct Engine<'n, 'p> {
     /// `IndexOutOfRangeException`，异常从 `ScriptEngine.GotoLable` 逃出 ⇒ **整个 GotoLable
     /// 中止**（当前动作列表后续动作、后续 procedure、以及 `sSendMsg` 说词都不执行）。
     /// Rust 不 panic，用本字段表达同一次展开：动作处理器置 `true`，[`Engine::run_actions`]
-    /// 与 [`Engine::goto_label`] 见旗即返回（whitelist B-108）。
+    /// 与 [`Engine::goto_label`] 见旗即返回（whitelist B-108）。嵌套 `Goto`/`GoQuest`
+    /// 递归返回后由 `run_actions` 的 switch 分支续查，保证异常穿出每一层 GotoLable；
+    /// `goto_label` 的**调用方尾部**不在本建模范围（B-108 口径按实收窄）。
     pub abort_goto: bool,
 }
 
@@ -1275,6 +1277,12 @@ impl<'n, 'p> Engine<'n, 'p> {
             }
             // 未注册 → C# 的 ScriptEngine switch（含位移语义：case 常量是枚举值）
             if !self.run_switch_action(code, info) {
+                return false;
+            }
+            // switch 分支里的 `Goto`/`GoQuest` 会递归进 `goto_label`：C# 的越界异常从
+            // **内层** GotoLable 穿出后同样中止**外层** GotoLable（外层后续动作、后续
+            // procedure、`sSendMsg` 说词都不执行）⇒ 与已注册动作分支一样见旗即停。
+            if self.abort_goto {
                 return false;
             }
         }

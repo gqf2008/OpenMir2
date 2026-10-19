@@ -1780,6 +1780,51 @@ close
     );
 }
 
+/// **PL-2 第二轮复验 Important**：`SETAUTOGETEXP` 越界发生在**内层** GotoLable 时，
+/// C# 的异常经 `JmpToLable`（`goto @inner`）穿出**外层** GotoLable ⇒ 外层当前动作列表的
+/// 后续动作、外层后续 procedure、`sSendMsg` 说词全不执行。
+///
+/// 牙（实测）：删掉 `run_actions` switch 分支返回前的 `if self.abort_goto { return false; }`
+/// ⇒ 外层第二个 procedure 的 `close` 会执行、`第二段` 会说 ⇒ 本用例的 `msgs`/`says` 断言必红。
+#[test]
+fn auto_get_exp_abort_propagates_out_of_nested_goto_label() {
+    let (mut npc, mut player) = setup(
+        "[@main]
+#IF
+checkgold 0
+#ACT
+goto @inner
+#SAY
+外层
+#IF
+checkgold 0
+#ACT
+close
+#SAY
+第二段
+[@inner]
+#ACT
+setautogetexp 10 20
+",
+    );
+    let errors = run(&mut npc, &mut player, "@main");
+    assert!(
+        errors.is_empty(),
+        "C# 是异常不是 ScriptActionError: {errors:?}"
+    );
+    assert_eq!(player.auto_get_exp, None, "越界支不得写字段");
+    assert!(
+        player.msgs.is_empty(),
+        "异常穿出外层 GotoLable ⇒ 外层后续 procedure 的 close 不得执行: {:?}",
+        player.msgs
+    );
+    assert!(
+        npc.says.is_empty(),
+        "异常穿出外层 GotoLable ⇒ 两段说词都不发: {:?}",
+        npc.says
+    );
+}
+
 #[test]
 fn gm_execute_substitutes_self_and_restores_permission() {
     let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");

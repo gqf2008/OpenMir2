@@ -44232,6 +44232,73 @@ mod tests {
         );
     }
 
+    /// **PL-2 第二轮复验（CM_TURN 回滚复位牙）**：`CM_TURN` 原地转身经 `walk_route_check`
+    /// 同样会进 `EnterAnotherMap` 的落地段；`AddToMap` 失败的回滚支
+    /// （`RouteCheck::RolledBack`）在 oracle 仍执行 `AutoGetExpTick = GetTickCount()`
+    /// （`PlayObject.cs:3787-3796`），与 `CM_WALK` 的回滚支同口径。
+    ///
+    /// 牙：把 CM_TURN 分支 `matches!(route, … | …)` 里的 `| mir2_world::RouteCheck::RolledBack`
+    /// 删掉（只判 `Switched`）⇒ tick 仍为 0，必红。
+    #[test]
+    fn p31_cm_turn_rolled_back_map_still_resets_tick() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", new_player_entity("hero".to_string(), 5, 5), 0)
+            .unwrap();
+        // 转身后在本格做路线检查：越界目标 ⇒ `CellValid` 放行、`AddMapObject` 的
+        // `CellMatch` 失败 ⇒ `RouteCheck::RolledBack`（与 CM_WALK 回滚用例同构造）。
+        world.add_map_routes(vec![mir2_world::map::MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 6,
+            hop: mir2_world::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 100,
+                dst_y: 100,
+            },
+        }]);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"hero".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "hero", 1, 0, 913, hero));
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.auto_get_exp_tick = 0;
+        sessions.insert("hero".to_string(), sg);
+        handle_move_cmd(
+            mir2_protocol::messages::CM_TURN,
+            (5 & 0xFFFF) | (5 << 16),
+            0,
+            "hero",
+            913,
+            &online,
+            &mut sessions,
+            &mut world,
+            &mut displays,
+            &gates,
+            None,
+        );
+        let e = world.entities.get(hero).unwrap();
+        assert_eq!(
+            (e.map_id, e.x, e.y),
+            (0, 5, 5),
+            "AddToMap 失败 ⇒ 转身不换图、留在原格"
+        );
+        assert!(
+            sessions["hero"].auto_get_exp_tick > 0,
+            "CM_TURN 回滚支也必须复位 AutoGetExpTick（oracle :3796）"
+        );
+    }
+
     /// **P31 复验 F5（生产接线锚点）**：`sim_loop` 里的四处接线必须仍在且未被注释——
     /// ① `drain_player_auto_get_exp(...)` 生产调用点；② `SessionGround` 生产 ctor 的
     /// `auto_get_exp_tick: now_ms()`（及四字段初值）；③ `@Login` 的 seed 块；④ `@Login` 的写回块。
@@ -44320,6 +44387,47 @@ mod tests {
             ]),
             1,
             "sim_loop 的 `@Login` 后写回块必须仍在（清 envir 缓存 + 四字段写回）"
+        );
+        // ⑤ 组队 `GotoLable`（`run_party_goto_label`）：与 `@Login` 同法的 P31 seed/写回，
+        //    不在 sim_loop 体内 ⇒ 单独取该函数体做源码锚。
+        let start = lines
+            .iter()
+            .position(|l| l.trim() == "fn run_party_goto_label(")
+            .expect("`fn run_party_goto_label(` 定义行");
+        let end = lines
+            .iter()
+            .enumerate()
+            .skip(start + 1)
+            .find(|(_, l)| l.starts_with("fn ") || l.starts_with("pub fn "))
+            .map(|(i, _)| i)
+            .expect("run_party_goto_label 之后的下一顶层函数");
+        let party_body = &lines[start..end];
+        let seq_party = |want: &[&str]| -> usize {
+            party_body
+                .windows(want.len())
+                .filter(|w| w.iter().zip(want).all(|(l, x)| l.trim() == *x))
+                .count()
+        };
+        assert_eq!(
+            seq_party(&[
+                "player.auto_get_exp_in_safe_zone = sg.auto_get_exp_in_safe_zone;",
+                "player.auto_get_exp_envir = sg.auto_get_exp_envir.clone();",
+                "player.auto_get_exp_time = sg.auto_get_exp_time;",
+                "player.auto_get_exp_point = sg.auto_get_exp_point;",
+            ]),
+            1,
+            "run_party_goto_label 的 P31 seed 块必须仍在（与 @Login 同法 seed）"
+        );
+        assert_eq!(
+            seq_party(&[
+                "sg.auto_get_exp_in_safe_zone = player.auto_get_exp_in_safe_zone;",
+                "sg.auto_get_exp_envir = player.auto_get_exp_envir.clone();",
+                "sg.auto_get_exp_envir_map_id = None; // 名变了就重新解析",
+                "sg.auto_get_exp_time = player.auto_get_exp_time;",
+                "sg.auto_get_exp_point = player.auto_get_exp_point;",
+            ]),
+            1,
+            "run_party_goto_label 的 P31 写回块必须仍在（四字段 + 清 envir 缓存）"
         );
     }
 
