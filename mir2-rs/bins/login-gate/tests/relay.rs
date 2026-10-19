@@ -175,3 +175,102 @@ async fn missing_config_exits_nonzero() {
     assert!(err.contains("配置"), "错误信息应指明配置问题，实得：{err}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// 写一份带 `[Integer] ClientTimeOutTime` 的 config.conf（审计 #12 的超时判据）。
+fn write_conf_with_timeout(gate_port: u16, srv_port: u16, timeout_ms: u64) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("lg-timeout-{}-{}", std::process::id(), gate_port));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.conf"),
+        format!(
+            "[Integer]\nClientTimeOutTime={timeout_ms}\n\n\
+             [LoginGate]\nServerAddr0=127.0.0.1\nServerPort0={srv_port}\n\
+             GateAddr0=127.0.0.1\nGatePort0={gate_port}\n"
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+/// 轮询到网关开始监听（不 sleep 猜）。
+async fn connect_retry(gate_port: u16) -> TcpStream {
+    for _ in 0..100 {
+        match TcpStream::connect(("127.0.0.1", gate_port)).await {
+            Ok(c) => return c,
+            Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+        }
+    }
+    panic!("网关未在预期时间内监听");
+}
+
+/// 判据（审计 #12，进程级）：
+/// - `ClientTimeOutTime=10000`（oracle 最小值）⇒ 无流量约 10s 后网关先发 C#
+///   同字节的 `SM_OUTOFCONNECTION`（16 字节，含其截断缺陷），随后关闭连接；
+/// - **收到客户端数据不刷新计时**（LoginGate oracle 的刷新语句全被注释）：
+///   t≈8s 发一帧，仍必须在 t≤15s 超时；若被刷新，违约时刻会推到 ~19s ⇒ 本用例红；
+/// - 超时路径**不得**向 LoginSrv 发 `Leave`（oracle 先摘会话，`Disconnected` 取不到会话）。
+#[tokio::test]
+async fn idle_session_times_out_with_oracle_frame_then_close() {
+    let (srv_port, srv_task) = fake_login_srv().await;
+    let gate_port = free_port();
+    let dir = write_conf_with_timeout(gate_port, srv_port, 10_000);
+    let conf = dir.join("config.conf");
+
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-gate"))
+        .arg(&conf)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+
+    let t0 = tokio::time::Instant::now();
+    let mut client = connect_retry(gate_port).await;
+
+    // t≈8s：发一帧。LoginGate 的 oracle 不因客户端数据刷新计时。
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    client.write_all(b"#1ABCdef!").await.unwrap();
+    client.flush().await.unwrap();
+
+    // 该帧被原样回显（假 LoginSrv 的应答），先消费掉。
+    let mut echo = vec![0u8; 9];
+    tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut echo))
+        .await
+        .expect("5s 内未收到中继回帧")
+        .unwrap();
+    assert_eq!(echo, b"#1ABCdef!");
+
+    // 从连接时刻起 15s 内必须超时：正常 ~11s（1s 扫描）；若 8s 的帧刷新了计时，
+    // 违约时刻会推到 ~19s，本用例即红。
+    let mut frame = vec![0u8; 16];
+    tokio::time::timeout_at(t0 + Duration::from_secs(15), client.read_exact(&mut frame))
+        .await
+        .expect("超时未触发：LoginGate 收到客户端数据不得刷新计时（oracle 语句被注释）")
+        .unwrap();
+    assert_eq!(
+        frame,
+        vec![
+            0x23, 0x64, 0x64, 0x68, 0x6b, 0x64, 0x68, 0x6a, 0x6b, 0x64, 0x64, 0x68, 0x6b, 0x64,
+            0x64, 0x68,
+        ],
+        "超时帧必须逐字节等于 C# LoginGate 的线上形态（含截断缺陷）"
+    );
+
+    // 发帧后关连接（C# `TimedService` 同一扫描 `CloseSession`）。
+    let mut one = [0u8; 1];
+    let n = tokio::time::timeout(Duration::from_secs(5), client.read(&mut one))
+        .await
+        .expect("超时帧之后必须关闭连接")
+        .unwrap();
+    assert_eq!(n, 0, "超时后必须 FIN（read 返回 0）");
+
+    child.kill().await.ok();
+    drop(client);
+    let got = tokio::time::timeout(Duration::from_secs(5), srv_task)
+        .await
+        .expect("假 LoginSrv 未按时结束")
+        .unwrap();
+    assert!(
+        !got.iter().any(|m| m.kind == ServerDataType::Leave),
+        "超时路径不得给 LoginSrv 发 Leave（oracle 先摘会话）：{got:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

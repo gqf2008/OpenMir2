@@ -16,14 +16,17 @@
 
 mod config;
 mod gbk;
+mod idle_timeout;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use mir2_protocol::frame::{FrameSplitter, ServerDataPacket, SplitOut};
+use idle_timeout::{IdleTimer, TimeoutAction, CHECK_INTERVAL_MS};
+use mir2_protocol::frame::{decode_client_frame, FrameSplitter, ServerDataPacket, SplitOut};
 use mir2_protocol::internal::{ServerDataMessage, ServerDataType};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -106,6 +109,7 @@ async fn main() -> Result<()> {
     );
 
     let next_sid = Arc::new(AtomicU16::new(1));
+    let timeout_ms = cfg.client_timeout_ms;
     loop {
         let (sock, peer) = listener.accept().await.context("accept 失败")?;
         sock.set_nodelay(true).ok();
@@ -119,6 +123,7 @@ async fn main() -> Result<()> {
                 sid,
                 peer.to_string(),
                 peer_ip(peer),
+                timeout_ms,
                 sessions,
                 down_tx,
             )
@@ -153,16 +158,27 @@ fn sel_gate_enter_body(socket_id: &str, ip: &str) -> Vec<u8> {
 }
 
 /// 单客户端会话：读客户端字节 → 拆帧 → 透传给 DBSrv；并把该会话登记到会话表。
+///
+/// 空闲超时（审计 #12）照 C# `ClientSession.HandleDelayMsg` + `TimedService`：
+/// - 计时起点 = 会话构造；
+/// - **只有** `CM_QUERYCHR/CM_NEWCHR/CM_DELCHR/CM_SELCHR`（100..=103）刷新计时
+///   （C# `HandleUserPacket` 的 4 个 `case`）；其它帧只记日志、不刷新；
+/// - 每 20s 扫描一次，严格 `> timeout` 才动作；
+/// - 第一阶段发 `SM_OUTOFCONNECTION` 并在同一次扫描关会话；第二阶段状态机保留但线上不可达；
+/// - 超时关会话时**不发**下行 `Leave`（oracle 先摘会话，`Disconnected` 取不到会话）。
 async fn client_loop(
     sock: TcpStream,
     sid: u16,
     peer: String,
     ip: String,
+    timeout_ms: u64,
     sessions: Sessions,
     down_tx: Arc<Mutex<OwnedWriteHalf>>,
 ) -> Result<()> {
     let (mut rd, mut wr) = sock.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    // 超时帧与 DBSrv 下行共用同一条回写通道，保证「先发帧、后断开」的字节次序。
+    let timeout_tx = tx.clone();
 
     // 会话登记 + 通知 DBSrv "新会话接入"（C# `UserEnter`：`%K{SocketId}/{ClientIP}/{ClientIP}$`）
     sessions.lock().await.insert(sid, tx);
@@ -189,36 +205,78 @@ async fn client_loop(
         }
     });
 
-    // 读循环：拆帧（含 `*` 心跳）后原样透传
+    // 读循环：拆帧（含 `*` 心跳）后原样透传；同时按 C# `TimedService` 的节奏轮询超时。
     let mut splitter = FrameSplitter::new();
     let mut buf = vec![0u8; 8192];
+    let clock_start = Instant::now();
+    let now_ms = || u64::try_from(clock_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let mut timer = IdleTimer::new(now_ms());
+    let mut sweep = tokio::time::interval(Duration::from_millis(CHECK_INTERVAL_MS));
+    sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut timed_out = false;
     loop {
-        let n = rd.read(&mut buf).await.context("读客户端失败")?;
-        if n == 0 {
-            break;
-        }
-        for item in splitter.feed(&buf[..n]) {
-            match item {
-                // 心跳：C# 侧收到 1 字节包直接忽略；这里同样不转发
-                SplitOut::Heartbeat => {}
-                SplitOut::Frame(frame) => {
-                    let msg = ServerDataMessage {
-                        kind: ServerDataType::Data,
-                        socket_id: sid.to_string(),
-                        data_len: i16::try_from(frame.len()).unwrap_or(i16::MAX),
-                        data: frame,
-                    };
-                    send_internal(&down_tx, &msg).await?;
+        tokio::select! {
+            // 不用 `biased`：持续有客户端流量时也不能饿死超时扫描
+            //（C# 的定时服务是独立线程，收包流量不会阻塞它）。
+            read = rd.read(&mut buf) => {
+                let n = read.context("读客户端失败")?;
+                if n == 0 {
+                    break;
+                }
+                for item in splitter.feed(&buf[..n]) {
+                    match item {
+                        // 心跳：C# 侧收到 1 字节包直接忽略；这里同样不转发
+                        SplitOut::Heartbeat => {}
+                        SplitOut::Frame(frame) => {
+                            // C# `HandleUserPacket`：解码成功且 `Ident` 是四个角色命令之一
+                            // 才 `_clientTimeOutTick = GetTickCount()`。解码失败/其它 ident
+                            // 走 `default`（只记日志）⇒ 不刷新。
+                            if let Ok(msg) = decode_client_frame(&frame) {
+                                if idle_timeout::refreshes_on_ident(msg.head.ident) {
+                                    timer.refresh(now_ms());
+                                }
+                            }
+                            let msg = ServerDataMessage {
+                                kind: ServerDataType::Data,
+                                socket_id: sid.to_string(),
+                                data_len: i16::try_from(frame.len()).unwrap_or(i16::MAX),
+                                data: frame,
+                            };
+                            send_internal(&down_tx, &msg).await?;
+                        }
+                    }
+                }
+            }
+            _ = sweep.tick() => {
+                match timer.poll(now_ms(), timeout_ms) {
+                    TimeoutAction::None => {}
+                    TimeoutAction::SendOutOfConnection => {
+                        // C# `TimedService`：`success=true` ⇒ 同一次扫描立即 CloseSession。
+                        let _ = timeout_tx.send(idle_timeout::out_of_connection_frame());
+                        glog!("INF", "Client Connect Time Out: {ip}");
+                        timed_out = true;
+                        break;
+                    }
+                    // 线上不可达（第一阶段已关会话）；保留以对齐 oracle 状态机。
+                    TimeoutAction::Close => {
+                        timed_out = true;
+                        break;
+                    }
                 }
             }
         }
     }
 
-    // 会话离开（C# Leave 语义）
+    // 会话离开（C# Leave 语义）。超时路径不发：oracle 的 TimedService 先摘会话再关
+    // socket，`Disconnected` 处理器 `GetSession` 为 null ⇒ 不产生 `UserLeave`。
     sessions.lock().await.remove(&sid);
-    let leave = ServerDataMessage::new(ServerDataType::Leave, sid.to_string(), Vec::new());
-    let _ = send_internal(&down_tx, &leave).await;
-    writer.abort();
+    if !timed_out {
+        let leave = ServerDataMessage::new(ServerDataType::Leave, sid.to_string(), Vec::new());
+        let _ = send_internal(&down_tx, &leave).await;
+    }
+    // 等回写任务把队列（含超时帧）写完再 drop 写半端：C# 是 Send 后 Close。
+    drop(timeout_tx);
+    let _ = writer.await;
     glog!("INF", "断开链接: {peer} (SessionId={sid})");
     Ok(())
 }

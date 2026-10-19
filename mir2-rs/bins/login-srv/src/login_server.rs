@@ -185,7 +185,13 @@ async fn process_message(
 fn receive_open_user(info: &mut LoginGateInfo, msg: &ServerDataMessage) {
     let sock_index = msg.socket_id.clone();
     let sipaddr = gbk::decode(&msg.data);
-    let (s_gate_ipaddr, s_user_ipaddr) = hutil32::get_valid_str3(&sipaddr, &['/']);
+    // C# `LoginServer.cs:189`：`string sGateIPaddr = HUtil32.GetValidStr3(sIPaddr,
+    // ref sUserIPaddr, '/')` —— 该函数把**第一段写进 dest**、**返回第二段**
+    //（`src/OpenMir2/HUtil32.cs:384-389`）⇒ 第一段 = `sUserIPaddr`、返回值 = `sGateIPaddr`。
+    // 当前 LoginGate 的 Enter 体是 `{ip}/{ip}`（两段相同），故本订正不改变行为；
+    // 仅把命名与 oracle 对齐（SelGate 的 `%K{sid}/{ip}/{ip}$` 经 DBSrv 的 `ArrestStringEx`
+    // 走另一条路径，不经过这里）。
+    let (s_user_ipaddr, s_gate_ipaddr) = hutil32::get_valid_str3(&sipaddr, &['/']);
     for user in &mut info.user_list {
         if user.sock_index == sock_index {
             user.user_ipaddr.clone_from(&s_user_ipaddr);

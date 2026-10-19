@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-/// 网关配置（只取 M1 必需项；其余键留给后续按需补）。
+use crate::idle_timeout::{DEFAULT_TIMEOUT_MS, MIN_TIMEOUT_MS};
+
+/// 网关配置（只取 M1 必需项 + 会话超时；其余键留给后续按需补）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateConfig {
     /// 下游 LoginSrv 地址。
@@ -24,6 +26,8 @@ pub struct GateConfig {
     pub gate_addr: String,
     /// 对外监听端口（现网 7000）。
     pub gate_port: u16,
+    /// 会话空闲超时（ms）。C# `[Integer] ClientTimeOutTime`：缺省 60s、`<10s` 夹到 10s。
+    pub client_timeout_ms: u64,
 }
 
 /// 默认配置文件：可执行文件同目录的 `config.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -68,11 +72,32 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         srv_port: port("ServerPort0")?,
         gate_addr: get("GateAddr0")?,
         gate_port: port("GatePort0")?,
+        client_timeout_ms: client_timeout_ms(&text),
     };
     if cfg.srv_port == 0 || cfg.gate_port == 0 {
         bail!("端口为 0 非法：{cfg:?}");
     }
     Ok(cfg)
+}
+
+/// C# `LoginGate/Conf/ConfigManager.cs:26-31` 的 `[Integer] ClientTimeOutTime`。
+///
+/// 语义：键缺失 / 非法 ⇒ 缺省 `60 * 1000`；解析成功但 `< 10 * 1000` ⇒ 夹到 `10 * 1000`。
+/// C# 在夹取后会 `WriteInteger` 回写 config.conf；Rust 只在内存里夹取、**不改写用户配置**
+/// （回写属配置持久化副作用，不改变客户端可观测行为；报告已登记）。
+fn client_timeout_ms(text: &str) -> u64 {
+    let section = parse_section(text, "Integer");
+    let raw = section
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("ClientTimeOutTime"))
+        .map(|(_, v)| v.trim());
+    // C# `ReadInteger` 走 int.TryParse：失败即用缺省。
+    let default = i64::try_from(DEFAULT_TIMEOUT_MS).unwrap_or(i64::MAX);
+    let parsed = raw.and_then(|v| v.parse::<i64>().ok()).unwrap_or(default);
+    // C# `if (ClientTimeOutTime < 10 * 1000) ClientTimeOutTime = 10 * 1000;`
+    let min = i64::try_from(MIN_TIMEOUT_MS).unwrap_or(i64::MAX);
+    let clamped = parsed.max(min);
+    u64::try_from(clamped).unwrap_or(DEFAULT_TIMEOUT_MS)
 }
 
 /// 取 `[section]` 下的键值对（大小写不敏感；`;`/`#` 起头为注释；去掉行尾注释）。
@@ -122,6 +147,67 @@ mod tests {
         assert_eq!(cfg.srv_port, 5500);
         assert_eq!(cfg.gate_addr, "127.0.0.1");
         assert_eq!(cfg.gate_port, 7000);
+        // `[LoginGate] KeepConnectTimeOut` 不是 oracle 读取的键；超时取 `[Integer]` 缺省。
+        assert_eq!(cfg.client_timeout_ms, 60_000);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 判据：`[Integer] ClientTimeOutTime` 必须被读出（C# `ConfigManager.cs:26`）。
+    /// 牙：把读取改回常量 60000 ⇒ 本用例红。
+    #[test]
+    fn parses_integer_client_timeout() {
+        let dir = std::env::temp_dir().join(format!("lg-timeout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("config.conf");
+        std::fs::write(
+            &p,
+            "[Integer]\nClientTimeOutTime=45000\n\n[LoginGate]\nServerAddr0=127.0.0.1\n\
+             ServerPort0=5500\nGateAddr0=127.0.0.1\nGatePort0=7000\n",
+        )
+        .unwrap();
+        assert_eq!(load(&p).unwrap().client_timeout_ms, 45_000);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 判据：缺键/非法值 ⇒ 60s；`<10s`（含负数）⇒ 夹到 10s（C# `ConfigManager.cs:27-31`）。
+    /// 牙：去掉夹取、或把非法值当 0 ⇒ 本用例红。
+    #[test]
+    fn client_timeout_defaults_and_clamps_like_oracle() {
+        let dir = std::env::temp_dir().join(format!("lg-timeout-clamp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("config.conf");
+        let base = "[LoginGate]\nServerAddr0=127.0.0.1\nServerPort0=5500\n\
+                    GateAddr0=127.0.0.1\nGatePort0=7000\n";
+        for (integer, want) in [
+            (String::new(), 60_000_u64),                             // 缺键 ⇒ 缺省
+            ("[Integer]\nClientTimeOutTime=abc\n".into(), 60_000),   // 非法 ⇒ 缺省
+            ("[Integer]\nClientTimeOutTime=5000\n".into(), 10_000),  // 低于 10s ⇒ 夹取
+            ("[Integer]\nClientTimeOutTime=-1\n".into(), 10_000),    // 负数 ⇒ 夹取
+            ("[Integer]\nClientTimeOutTime=10000\n".into(), 10_000), // 恰好 10s
+        ] {
+            std::fs::write(&p, format!("{integer}{base}")).unwrap();
+            assert_eq!(
+                load(&p).unwrap().client_timeout_ms,
+                want,
+                "[Integer] 段={integer:?} 时必须得到 {want}ms"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 判据：同名键放在 `[LoginGate]` 段**不得**被当成超时（oracle 读 `[Integer]`）。
+    #[test]
+    fn client_timeout_is_read_from_integer_section_only() {
+        let dir = std::env::temp_dir().join(format!("lg-timeout-sect-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("config.conf");
+        std::fs::write(
+            &p,
+            "[LoginGate]\nServerAddr0=127.0.0.1\nServerPort0=5500\nGateAddr0=127.0.0.1\n\
+             GatePort0=7000\nClientTimeOutTime=12000\n",
+        )
+        .unwrap();
+        assert_eq!(load(&p).unwrap().client_timeout_ms, 60_000);
         std::fs::remove_dir_all(&dir).ok();
     }
 
