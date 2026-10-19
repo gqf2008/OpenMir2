@@ -21,7 +21,7 @@
 //! - `name`/`map`：C# 直接拼接（不转义），这里做最小 JSON 转义（`\"`/`\\`/控制字符）——真实角色名无
 //!   这些字符 ⇒ 逐字节同形，且避免名字带引号时把整行打成非法 JSON（gate 会 PREREQ）；
 //! - `dir`：C# dump 发生在 `Dir = nDir`（`BaseObject.Attack.cs:12`）**之前**（旧朝向），Rust 在本击
-//!   处理返回后 dump（`DisplayTable` 已按本帧 `dir` 更新）；gate 不读 `dir`，仅登记。
+//!   处理返回后 dump（`Entity.ai.dir` 已是本帧 `dir`）；gate 不读 `dir`，仅登记。
 
 use std::io::Write;
 
@@ -82,12 +82,12 @@ impl StateLog {
 
     /// 落一行 `SERVER_STATE <seq> <json 数组>`（关闭态为 no-op）。
     ///
-    /// `displays` 提供 `Entity` 里没有的 `dir`（`PlayObject._dir` 由展示表承载）；`registry` 提供
-    /// `map_id → MapName`。缺展示表/注册表时对应字段退化为 `0`/空串（不 panic）。
+    /// `dir` 取**实体** `Entity.ai.dir`（oracle `BaseObject.Dir`；展示表只是投影，走/跑被挡时
+    /// 可能落后）；`registry` 提供 `map_id → MapName`。缺注册表时对应字段退化为空串（不 panic）。
     pub fn record(
         &mut self,
         world: &World,
-        displays: &DisplayTable,
+        _displays: &DisplayTable,
         registry: Option<&MapRegistry>,
     ) {
         let Some(out) = self.out.as_mut() else {
@@ -100,7 +100,8 @@ impl StateLog {
             if e.race != mir2_world::ACTOR_RACE_PLAY {
                 continue;
             }
-            let dir = displays.get(e.id).map_or(0_u8, |d| d.dir);
+            // `Entity.ai.dir` 是 `BaseObject.Dir` 的唯一权威（展示表只是投影）。
+            let dir = e.dir();
             let map = registry
                 .and_then(|r| r.name_of(e.map_id))
                 .unwrap_or_default();

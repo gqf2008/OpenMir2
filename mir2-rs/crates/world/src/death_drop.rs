@@ -6,8 +6,11 @@
 //! PlayObject.Die()                       PlayObject.cs:1964-1996
 //!   base.Die()                           BaseObject.Base.cs:318-344
 //!     KillFunc()                         BaseObject.cs:2429-2447
-//!       SendMsg(RM_DIEDROPITEM, …)       仅当 ExpHitter != null 且
-//!                                        (ExpHitter.Master != null || ExpHitter.Race == Play)
+//!       两个**独立** if（不是 `||` 折叠）：
+//!       if (ExpHitter.Master != null) SendMsg(RM_DIEDROPITEM, Master.ActorId, …)
+//!       if (ExpHitter.Race == Play)   SendMsg(RM_DIEDROPITEM, ExpHitter.ActorId, …)
+//!       两条件同时成立 ⇒ oracle 两次 DropUseItems；本骨架的 Play 实体不置 Master
+//!       （`PlayCloneObject` ctor 亦不置）⇒ 实际互斥（T-81 登记）。
 //! Operate(RM_DIEDROPITEM)                BaseObject.Base.cs:766-767
 //!   DieDropItems(wParam)                 BaseObject.cs:2450-2464
 //!     if (!FightZone && !Fight3Zone && !Animal)
@@ -60,8 +63,10 @@ pub(crate) fn drop_use_items_on_death(
     } else {
         world.die_drop_use_item_rate
     };
-    // `:2194 int dropWide = HUtil32._MIN(Config.DropItemRage, 3)`。
-    let drop_wide = hutil::min_i32(world.drop_item_rage, 3);
+    // `:2194 int dropWide = HUtil32._MIN(Config.DropItemRage, 3)`——只作为
+    // `DropItemDown → GetDropPosition` 的散布半径；`AddItemToMap` 恒失败（T-82）⇒ 无消费者。
+    // 保留计算以记录口径（`_` 前缀避免 dead-code 噪声）。
+    let _drop_wide = hutil::min_i32(world.drop_item_rage, 3);
     let disable = world.disable_take_off_keys.clone();
     // 物品目录按 `Index`（1-based）查表；`mem::take` 避免与 `world.rng`/实体同时可变借用
     // （与 `World::spawn_monster_now` 的既有写法同口径）。
@@ -137,7 +142,6 @@ pub(crate) fn drop_use_items_on_death(
         }
         // `GetDropPosition(CurrX, CurrY, nScatterRange, …)`：纯格子扫描，零 RNG（`BaseObject.cs:459`）。
         // `Envir.AddItemToMap` 恒 false（`MapItem.ItemId == 0`）⇒ 本槽不清、不记 DeleteItem。
-        let _ = drop_wide;
     }
 
     world.item_catalog = catalog_items;

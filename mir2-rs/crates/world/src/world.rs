@@ -248,7 +248,7 @@ pub struct SpellStrikeOutcome {
     pub target: Option<i32>,
     /// `boTrain`（`true` 才可能在共享尾抽 `Random(3)+1`）。
     pub bo_train: bool,
-    /// `RM_DELAYMAGIC` 的威力（本仓不建延迟队列，只登记载荷）。
+    /// `RM_DELAYMAGIC` 的威力（宿主据此 `SendSelfDelayMsg`，入队零抽数）。
     pub power: i32,
     /// 是否排入 `RM_DELAYMAGIC`（`SendSelfDelayMsg`）。
     pub delayed: bool,
@@ -3684,7 +3684,7 @@ impl World {
     /// 返回 `(oracle result, 逐格推挤事件)`。**`result` 是「调用了 `CharPushed` 的目标数」**，
     /// 与 `CharPushed` 实际推进几格无关（oracle 不看其返回值）——训练尾 `boTrain` 的判据。
     ///
-    /// **登记（本卡不实现）**：`target.StickMode` 本骨架无该字段 => 恒按 `false`；`CharPushed` 的
+    /// **登记（本卡不实现）**：`CharPushed` 的
     /// `WalkTick += 800`（`Race >= Animal` 支）本骨架未建模；`IsProperTarget` 用
     /// [`crate::combat::is_proper_target_grouped`]（组队成员表 = `Entity::group_members`）。
     #[must_use]
@@ -3711,10 +3711,11 @@ impl World {
             if target.death || target_id == actor_id {
                 continue;
             }
-            if caster.level <= target.level {
+            if caster.level <= target.level || target.stick_mode {
+                // `:34 playObject.Abil.Level > targetObject.Abil.Level && !targetObject.StickMode`
+                // ——StickMode 目标**零抽**（`Random(20)` 在门内，漏掉此门会平移整条 RNG 流）。
                 continue;
             }
-            // `!target.StickMode`：本骨架无该字段 => 恒过（登记）。
             let level_gap = i32::from(caster.level) - i32::from(target.level);
             if !crate::magic_effect::push_chance(&mut self.rng, push_level, level_gap) {
                 continue;
@@ -5530,14 +5531,20 @@ impl World {
             // ② `DieDropItems` 的 `!Envir.Flag.FightZone && !Envir.Flag.Fight3Zone`；
             // ③ `!Animal`（玩家恒 false）。
             if is_play {
-                let send_diedrop = exp_hitter
-                    .and_then(|h| self.entities.get(h))
-                    .is_some_and(|h| {
-                        h.master.is_some() || h.race == crate::entity::ACTOR_RACE_PLAY
-                    });
+                // `KillFunc`（`BaseObject.cs:2431-2445`）是两个**独立** if：
+                // `ExpHitter.Master != null` 发一次、`ExpHitter.Race == Play` 再发一次。
+                // 两条件同时成立时 oracle 会执行**两次** `DropUseItems`；本骨架的 Play 实体
+                // 不置 `Master`（`PlayCloneObject` ctor 也不置）⇒ 实际互斥，单次调用与
+                // oracle 等价（相位/触发点登记见 T-81）。
+                let hitter_is_actor =
+                    exp_hitter
+                        .and_then(|h| self.entities.get(h))
+                        .is_some_and(|h| {
+                            h.master.is_some() || h.race == crate::entity::ACTOR_RACE_PLAY
+                        });
                 let fight_zone = self.maps.get(map_id).is_some_and(|m| m.is_fight_zone());
                 let animal = self.entities.get(id).is_some_and(|x| x.ai.animal);
-                if send_diedrop && !fight_zone && !animal {
+                if hitter_is_actor && !fight_zone && !animal {
                     let deleted = crate::death_drop::drop_use_items_on_death(self, id);
                     if !deleted.is_empty() {
                         record.death_use_item_drops.push((id, deleted));
@@ -5549,12 +5556,6 @@ impl World {
                 // `killObject.DropUseItems(0)`（`:1787-1798`）。部署件
                 // `KillByHumanDropUseItem=1` ⇒ PvP 死亡**两次**逐槽抽数（第二次的删除列表
                 // 恒空：第一段已把 `ItemDesc&8` 清空）。
-                let killer_is_actor =
-                    exp_hitter
-                        .and_then(|h| self.entities.get(h))
-                        .is_some_and(|h| {
-                            h.master.is_some() || h.race == crate::entity::ACTOR_RACE_PLAY
-                        });
                 // `PlayObject.cs:1787-1793` 的前置与 `!NoItem || !Envir.Flag.NoDropItem`
                 // 都取 **`this`**——即处理 `RM_PLAYERKILLMONSTER` 的 PlayObject：
                 // `ExpHitter.Master` 存在时是主人（`KillFunc` 把消息发给 Master），
@@ -5567,12 +5568,22 @@ impl World {
                 let killer_map = killer_map_id.and_then(|m| self.maps.get(m));
                 let map_no_drop = killer_map.is_some_and(|m| m.no_drop_item());
                 let killer_fight_zone = killer_map.is_some_and(|m| m.is_fight_zone());
-                // 死者是玩家 ⇒ `AttackBaseObject.Race == Play`（`AttackBaseObject` = 死者/
-                // 死者主人）⇒ 只有 human 门。
-                if killer_is_actor
-                    && !killer_fight_zone
-                    && (!no_item || !map_no_drop)
-                    && self.kill_by_human_drop_use_item
+                // `:1788-1793 AttackBaseObject = killObject.Master ?? killObject`——human/monster
+                // 门由**死者侧**的 `AttackBaseObject.Race` 选（不是击杀者；死者是 Play 但
+                // `Master` 非 Play 时仍走 `KillByMonstDropUseItem`）。
+                let attack_base_race_play = match self.entities.get(id).and_then(|e| e.master) {
+                    None => true,
+                    Some(m) => self
+                        .entities
+                        .get(m)
+                        .is_none_or(|e| e.race == crate::entity::ACTOR_RACE_PLAY),
+                };
+                let kill_gate = if attack_base_race_play {
+                    self.kill_by_human_drop_use_item
+                } else {
+                    self.kill_by_monst_drop_use_item
+                };
+                if hitter_is_actor && !killer_fight_zone && (!no_item || !map_no_drop) && kill_gate
                 {
                     let _ = crate::death_drop::drop_use_items_on_death(self, id);
                 }
@@ -8141,6 +8152,36 @@ mod tests {
         assert_eq!(res, steps, "成功步数 = 事件数");
         assert_eq!((wx, wy), (x, y), "末端坐标一致");
         assert_eq!(dir, crate::magic::DIR_DOWN, "result>0 ⇒ Dir 落 nBackDir");
+    }
+
+    /// **StickMode 门（`MagicManager.cs:34`）**：`!target.StickMode` 在 `Random(20)` **之前**
+    /// ⇒ StickMode 目标既不被推、也**零抽**（漏门会平移整条 RNG 流）。
+    ///
+    /// 红检：删掉 `cast_firewind_spell` 里的 `|| target.stick_mode` ⇒ `result=1`、有事件、
+    /// RNG 流前进 ⇒ 三条断言全红。
+    #[test]
+    fn firewind_stick_mode_target_is_skipped_without_drawing() {
+        let mut w = World::new(64, 64);
+        let caster = w.add_entity(player(1, "caster", 10, 10, 60));
+        let mut sticky = player(2, "sticky", 11, 10, 1);
+        sticky.stick_mode = true;
+        let sticky = w.add_entity(sticky);
+        {
+            let e = w.entities.get_mut(caster).unwrap();
+            e.visible_actors.push(crate::entity::VisibleBaseObject {
+                target: sticky,
+                flag: crate::entity::VisibleFlag::Show,
+            });
+        }
+        let before = format!("{:?}", w.rng);
+        let (result, events) = w.cast_firewind_spell(caster, 3);
+        assert_eq!(result, 0, "StickMode ⇒ 不调 CharPushed、result 不 ++");
+        assert!(events.is_empty(), "StickMode ⇒ 无逐格 RM_PUSH");
+        assert_eq!(
+            format!("{:?}", w.rng),
+            before,
+            "StickMode ⇒ Random(20) 零抽"
+        );
     }
 
     /// `Command::Rush`（`DoMotaebo` 无正前目标支，`PlayObject.Base.cs:1443-1467`）：向前冲刺，

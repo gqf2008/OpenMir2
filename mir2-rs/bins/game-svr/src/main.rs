@@ -1907,7 +1907,16 @@ fn handle_inbound_cmd(
             // **出站接线片 W2 / 批 B 生产者**：过限速门后 `SendRefMsg(RM_BUTCH, Dir, CurrX, CurrY, 0, "")`
             // 恒发（`PlayObject.Operate.cs:749`）。`Dir = btDir` 仅在 `|Δ|<=2` 成立时
             // （`Operate.cs:729-747`，`IsValidObject` 只门效果体、不门方向）；否则当前朝向。
+            //
+            // **`openmir2-player-dir-supply`**：`Dir = btDir` 写的是 `BaseObject.Dir` ⇒ 必须落进
+            // 实体（`Entity.ai.dir`）。遗漏时 AOI 出现帧/`GetPoseCreate`/`MakeSaveRcd` 会继续用
+            // 旧朝向（展示表只是投影，下一次转向/走跑会重新投影）。
             if out.send_butch && actor_id != 0 {
+                if out.dir_updated {
+                    if let Some(e) = world.entities.get_mut(actor_id) {
+                        e.ai.dir = bt_dir;
+                    }
+                }
                 let cur_dir = actor_dir(world, displays, actor_id);
                 let dir = if out.dir_updated { bt_dir } else { cur_dir };
                 world.enqueue(mir2_world::Command::Butch { actor_id, dir });
@@ -2167,7 +2176,8 @@ fn handle_ground_cmd(
 
 /// `BaseObject.GetPoseCreate()`（`src/M2Server/Actor/BaseObject.cs:1253-1263`）：
 /// `GetFrontPosition()` 命中 ⇒ `Envir.GetMovingObject(nX, nY, true)`，即**前方格**首个
-/// `!Ghost && !Death` 的对象。朝向取展示表（`crates/world` 的 `Entity` 无 `dir`），缺省 `0`。
+/// `!Ghost && !Death` 的对象。朝向取**实体** `Entity.ai.dir`（oracle `BaseObject.Dir`；
+/// 见 [`actor_dir`]），展示表只作实体缺失时的回退。
 fn pose_create(
     world: &mir2_world::World,
     displays: &downlink::DisplayTable,
@@ -7317,8 +7327,8 @@ fn handle_spell_cmd(
     //
     // 帧序：`SM_SPELL`（前）→ `SM_MAGICFIRE(638，含自己，处理器无自守卫)` →
     // `SM_MAGIC_LVEXP(640，仅自己)`。`RM_DELAYMAGIC`/`RM_DELAYPUSHED` 是**服务端自延迟队列**
-    // （`SendSelfDelayMsg`），不是线上帧 ⇒ 本仓只登记载荷（`SpellStrikeOutcome::{power,push}`），
-    // 延迟结算（`GetMagStruckDamage`/`RM_MAGSTRUCK`/`CharPushed`）**未建模**（登记）。
+    // （`SendSelfDelayMsg`），不是线上帧：本块在效果体之后、共享尾之前入队（`world.send_self_delay_msg_full`），
+    // 到点由 `deliver_self_delay_msgs` 结算（`GetMagStruckDamage`/`RM_MAGSTRUCK`/`CharPushed`）。
     if matches!(req.magic_id, 1 | 5 | 11 | 13 | 44 | 45) {
         if let Some(magic) = magic_table.get(req.magic_id) {
             // `CretInNearXy` snap（与 8/21/37、17/30/41、20、46、P1 同口径）。
@@ -10986,7 +10996,18 @@ fn drain_b4_self_deliveries(
                 continue;
             };
             if let Some(body) = downlink::backstep_frame(ev, &d) {
-                broadcast_ref_msg_with_self(world, online, gates, ev.actor_id, &[body]);
+                // oracle `CharPushed` **每推进一格**立即 `SendRefMsg(RM_PUSH)` ⇒ 收件人按
+                // **该步**的 `CurrX/CurrY` 算（与 `cast_firewind_spell` 的 `_at` 口径一致；
+                // 不能用 `broadcast_ref_msg_with_self` 的「推挤结束后的最终坐标」）。
+                let map_id = world.entities.get(ev.actor_id).map_or(0, |e| e.map_id);
+                broadcast_ref_msg_with_self_at(
+                    world,
+                    online,
+                    gates,
+                    ev.actor_id,
+                    (map_id, ev.x, ev.y),
+                    &[body],
+                );
             }
         }
         // `CharPushed` 收尾把实体 `Dir` 置为 `nBackDir`（推进 > 0）⇒ 展示表按实体重投影。
@@ -27424,6 +27445,12 @@ mod tests {
             &cfg,
             &displays,
         );
+        // `PlayObject.Operate.cs:747 Dir = btDir`：实体 `ai.dir` 是权威（AOI/存档/GetPoseCreate）。
+        assert_eq!(
+            world.entities.get(hero).unwrap().ai.dir,
+            5,
+            "① CM_BUTCH 的 Dir = btDir 必须落进实体"
+        );
         let rec = world.tick();
         assert_eq!(rec.butches.len(), 1, "① CM_BUTCH ⇒ 一条 ButchEvent");
         assert_eq!(rec.butches[0].dir, 5, "① 2 格内 ⇒ Dir = btDir");
@@ -27441,7 +27468,8 @@ mod tests {
             "① Series = Dir = btDir = 5"
         );
 
-        // ② 目标格 (20,10) 超 2 格 ⇒ `Dir` 取当前朝向 2（**不取** btDir=7）。
+        // ② 目标格 (20,10) 超 2 格 ⇒ `Dir` 取当前朝向 5（**不取** btDir=7；① 已把实体
+        // `Dir = btDir = 5`，oracle 的 `BaseObject.Dir` 同样保留 5）。
         handle_inbound_cmd(
             &CommandMessage {
                 recog: hero,
@@ -27465,13 +27493,13 @@ mod tests {
         let rec = world.tick();
         assert_eq!(rec.butches.len(), 1);
         assert_eq!(
-            rec.butches[0].dir, 2,
-            "② 超 2 格 ⇒ Dir 取当前朝向 2（不取 btDir=7）"
+            rec.butches[0].dir, 5,
+            "② 超 2 格 ⇒ Dir 取当前朝向 5（不取 btDir=7）"
         );
         drain_action_downlink(&rec, &world, &displays, &online, &gates);
         let frames = drain_frames(&mut rx0);
         assert_eq!(frames.len(), 1);
-        assert_eq!(u16::from_le_bytes([frames[0][10], frames[0][11]]), 2);
+        assert_eq!(u16::from_le_bytes([frames[0][10], frames[0][11]]), 5);
     }
 
     /// 把一条 `SimToGate::SendFrame` 流排空成帧体列表（body 含 12B 命令头）。
