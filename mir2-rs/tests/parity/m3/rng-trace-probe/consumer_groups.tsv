@@ -63,9 +63,9 @@ construct	csharp	PlayObject\.\.ctor@PlayObject\.cs:	src/M2Server/Player/PlayObje
 construct	rust	crates/world/src/entity\.rs:	crates/world/src/entity.rs	已启用：固定 NPC（insert_npc）/商人列表（merchant_ctor_run_delay/spawn_merchant）构造链唯一抽数点 BaseAnimalCtorDraws::draw（4 抽）；**怪物**构造仍折在 mongen 宿主（spawn 组）
 npc_ai	csharp	GuildOfficial\.Run@GuildOfficial\.cs:	src/GameSrv/Npc/GuildOfficial.cs:41	行会 NPC AI（非商人）
 revive	csharp	BaseObject\.ReAliveEx@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:2744	复活点随机
-homemap	csharp	GetHomeInfo@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1392	回城点
-homemap	csharp	GetRandHomeX@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1412	回城点随机 x
-homemap	csharp	GetRandHomeY@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1417	回城点随机 y
+homemap	csharp	GetHomeInfo@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1413	回城点
+homemap	csharp	GetRandHomeX@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1433	回城点随机 x
+homemap	csharp	GetRandHomeY@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1438	回城点随机 y
 homemap	rust	bins/game-svr/src/homemap\.rs:	bins/game-svr/src/homemap.rs	落点/Home 计算
 startup	csharp	ServerConf\.LoadConfig@ServerConf\.cs:	src/Modules/SystemModule/Conf/ServerConf.cs:114	配置加载期抽数
 startup	rust	bins/game-svr/src/main\.rs:	bins/game-svr/src/main.rs	宿主启动期（seed/main 抽数）

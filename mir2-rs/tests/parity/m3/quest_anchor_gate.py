@@ -194,9 +194,9 @@ REGISTERED = [
         (1160, 'playObject.QuestUnitOpen = humData.QuestUnitOpen;'),
         (1162, 'playObject.QuestFlag = humData.QuestFlag;'),
     ]),
-    ('WorldServer.cs:1291-1293', 'src/GameSrv/Word/WorldServer.cs', [
-        (1291, 'playerInfo.QuestUnitOpen = playObject.QuestUnitOpen;'),
-        (1293, 'playerInfo.QuestFlag = playObject.QuestFlag;'),
+    ('WorldServer.cs:1309-1311', 'src/GameSrv/Word/WorldServer.cs', [
+        (1309, 'playerInfo.QuestUnitOpen = playObject.QuestUnitOpen;'),
+        (1311, 'playerInfo.QuestFlag = playObject.QuestFlag;'),
     ]),
     ('PlayDataStorage.Save.cs:45', 'src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs', [
         (45, 'private bool SaveRecord(int playerId, ref CharacterDataInfo humanRcd)'),
