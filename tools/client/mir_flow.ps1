@@ -65,6 +65,45 @@ param(
   # (512,304)**（48x32 px/格），不是 -CenterX/-CenterY：259 是精灵中心标定，格点击锚 304（推导见
   # rationale.md）。仅与 -AttackClicks 联动；默认空 = 现状逐字节不变。
   [string]$AttackTurn = "",
+  # ---- AttackTurn 像素映射标定与「新映射」（卡 openmir2-mirflow-attackturn-projection；tier=L）----
+  # 现状（旧路径，默认逐字节不变）：右键/左键点 (512 + dx*48, 304 + dy*32)。
+  #   · 锚点 (512,304) 有源码依据：512 = SCREENWIDTH div 2；304 = ShiftYOffset
+  #     = Round((768-150)/32/2)*32-16（MShare.pas:4620，自格带 y∈[288,320)）。
+  #   · **步长 48x32 只是假设**：本仓源码无法证实（MirClient 是外部冻结仓，
+  #     CXYfromMouseXY 的逆映射不可见），也没有 oracle 侧等价物。
+  #   · 已知失败证据（2026-10-19 缩窗 W0-1 第二轮，docs/window-shrink-run-20261019.md §F2）：
+  #     Rust 侧同一配方 `0,-1`×2、`0,1`×1 **全部落成 CM_WALK**（角色走位），
+  #     同一点改成按截图里怪的像素位置点（tools/client/mir_click.ps1）后**立刻出 CM_HIT**。
+  #     说明「相邻格格心 = 锚点 + 48/32」在这套部署上不成立（具体逆映射待标定）。
+  #
+  # 标定模式（只有显式给 -AttackTurnCalibrate 才走；与 -AttackTurn/-AttackClicks 互斥）：
+  #   -AttackTurnCalibrate "0,-1;0,1;1,0;-1,0;1,-1;-1,-1;1,1;-1,1"
+  #   条目语法（三种，可混用）：
+  #     dx,dy              ⇒ 右键/左键都用旧投影 (512+dx*48, 304+dy*32)（基线探针）
+  #     dx,dy@x,y          ⇒ 右键/左键都用显式像素 (x,y)（扫不同步长/锚点用）
+  #     dx,dy@rx,ry>x,y    ⇒ 右键 (rx,ry) 测 CM_TURN、左键 (x,y) 测 CM_HIT（分别标定）
+  #   每个探针：右键 → 等 -CalibrateTurnGapMs → 左键 → 等 -CalibrateSettleMs，
+  #   记录 [t_start_ms,t_end_ms]；随后把该窗口内 c2s 的
+  #     CM_TURN(3010) / CM_HIT(3014) / CM_WALK(3011) / CM_RUN(3013)
+  #   归到探针（需 -CalibrateCapture 指向 capture.jsonl；字段口径：
+  #   Tag = 方向（0=Up..7=UpLeft），Recog = MakeLong(x,y)）。
+  #   一次跑完全部探针，导出 <CalibrateOut>.json + 同名 .csv（格式见写表函数注释）。
+  #   窗口判定成功的口径：某格偏移至少一个探针 verdict=turn+hit（CM_TURN 方向与请求一致
+  #   且窗口内有 CM_HIT）；只有 turn_only 说明转向对了但左键没打到怪；walk 复现 F2 失败。
+  #   capture.jsonl 通常要会话结束后用 tools/capture/GoldenExport 导出；届时用同一条
+  #   -AttackTurnCalibrate 配方 + -AttackTurnDryRun + -CalibrateCapture 做离线回填（不启动客户端）。
+  [string]$AttackTurnCalibrate = "",
+  # 标定后的新映射（**只有显式给本参数才启用**；旧 -AttackTurn 路径不受任何影响）：
+  #   -AttackTurn "dx,dy" -AttackTurnMap <attackturn-calibration.json>
+  #   取表里 resolved["dx,dy"] 的 right_x/right_y 点右键、left_x/left_y 点左键；
+  #   该偏移没有标定结果时 **fail-closed 抛错**（不静默退回旧投影）。
+  #   resolved 只收「CM_TURN 方向与请求一致」的探针（turn+hit > turn_only 优先级）。
+  [string]$AttackTurnMap = "",
+  [string]$CalibrateOut = "",        # 默认 <OutDir>/attackturn-calibration.json（CSV 同名）
+  [string]$CalibrateCapture = "",    # capture.jsonl（GoldenExport 产物）；给定则回填 observed_*
+  [int]$CalibrateTurnGapMs = 400,    # 右键→左键间隔（与旧 -AttackTurn 的 400ms 节拍一致）
+  [int]$CalibrateSettleMs = 700,     # 左键后观察窗尾（等客户端发包/落盘）
+  [switch]$AttackTurnDryRun,         # 离线：不启动客户端，只做参数解析/标定表生成或回填
   [int]$CenterX = 512,       # 角色屏幕中心 X（攻击环 / 跑动拖拽基准；默认 512 = 现状，不破坏既有调用）
   [int]$CenterY = 384,       # 角色屏幕中心 Y（真机实测本部署角色屏幕中心约 y=259——底部 UI 遮挡；
                              #   命中环须配 -CenterY 259，否则整环偏下约 2 格，片67 受击步判读受此影响）
@@ -95,7 +134,521 @@ param(
 
 $ErrorActionPreference = "Stop"
 if ($StageLog -eq "") { $StageLog = Join-Path $OutDir "stages.ndjson" }
+
+# ==== AttackTurn 标定/新映射：纯函数（离线可测；不触碰旧攻击路径）================
+# 这些函数只被 -AttackTurnCalibrate / -AttackTurnMap / -AttackTurnDryRun 使用。
+# 旧 -AttackTurn（未给 -AttackTurnMap）仍走攻击块里的字面量 512+dx*48 / 304+dy*32。
+
+$script:TurnDirNames = @("Up", "UpRight", "Right", "DownRight", "Down", "DownLeft", "Left", "UpLeft")
+
+function Test-TurnIntLiteral([string]$s) {
+  return ($s -match '^[+-]?[0-9]+$')
+}
+
+function Get-TurnNowMs {
+  return [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+}
+
+function Get-TurnCellDirection([int]$dx, [int]$dy) {
+  # Mir2 方向：0=Up 1=UpRight 2=Right 3=DownRight 4=Down 5=DownLeft 6=Left 7=UpLeft
+  # （src/OpenMir2/Enums/Direction.cs；格坐标 +y = 屏幕向下 = Down）
+  $ix = 0
+  $iy = 0
+  if ($dx -gt 0) { $ix = 1 } elseif ($dx -lt 0) { $ix = -1 }
+  if ($dy -gt 0) { $iy = 1 } elseif ($dy -lt 0) { $iy = -1 }
+  if ($ix -eq 0 -and $iy -eq -1) { return 0 }
+  if ($ix -eq 1 -and $iy -eq -1) { return 1 }
+  if ($ix -eq 1 -and $iy -eq 0) { return 2 }
+  if ($ix -eq 1 -and $iy -eq 1) { return 3 }
+  if ($ix -eq 0 -and $iy -eq 1) { return 4 }
+  if ($ix -eq -1 -and $iy -eq 1) { return 5 }
+  if ($ix -eq -1 -and $iy -eq 0) { return 6 }
+  if ($ix -eq -1 -and $iy -eq -1) { return 7 }
+  throw "无法从格偏移 ($dx,$dy) 得到方向"
+}
+
+function Get-TurnDirName($dir) {
+  if ($null -eq $dir) { return "" }
+  $i = [int]$dir
+  if ($i -ge 0 -and $i -lt $script:TurnDirNames.Count) { return $script:TurnDirNames[$i] }
+  return "?"
+}
+
+function Get-LegacyTurnPixel([int]$dx, [int]$dy) {
+  # 旧投影：格心锚 (512,304) + 每格 (48,32)。仅用于标定基线/干跑输出；
+  # 主攻击路径在未启用 -AttackTurnMap 时仍保留原来的字面量表达式。
+  return [pscustomobject]@{ X = 512 + $dx * 48; Y = 304 + $dy * 32 }
+}
+
+function ConvertFrom-TurnCalibrateSpec([string]$spec) {
+  # 条目语法：dx,dy | dx,dy@x,y | dx,dy@rx,ry>x,y（详见 param 注释）
+  $rows = New-Object System.Collections.ArrayList
+  $i = 0
+  foreach ($raw in $spec.Split(";")) {
+    $s = $raw.Trim()
+    if ($s -eq "") { continue }
+    $i++
+    $cellPart = $s
+    $rightPart = ""
+    $leftPart = ""
+    $at = $s.IndexOf("@")
+    if ($at -ge 0) {
+      $cellPart = $s.Substring(0, $at).Trim()
+      $pix = $s.Substring($at + 1).Trim()
+      $gt = $pix.IndexOf(">")
+      if ($gt -ge 0) {
+        $rightPart = $pix.Substring(0, $gt).Trim()
+        $leftPart = $pix.Substring($gt + 1).Trim()
+      } else {
+        $rightPart = $pix
+        $leftPart = $pix
+      }
+    }
+    $c = $cellPart.Split(",")
+    if ($c.Count -ne 2 -or -not (Test-TurnIntLiteral $c[0].Trim()) -or -not (Test-TurnIntLiteral $c[1].Trim())) {
+      throw "标定条目 '$raw' 的格偏移须为 'dx,dy'（两个整数），当前：'$cellPart'"
+    }
+    $dx = [int]$c[0]; $dy = [int]$c[1]
+    if ([Math]::Abs($dx) -gt 1 -or [Math]::Abs($dy) -gt 1) {
+      throw "标定条目 '$raw' 须为相邻格（|dx|,|dy|<=1）"
+    }
+    if ($dx -eq 0 -and $dy -eq 0) {
+      throw "标定条目 '$raw' 不能是 (0,0)（自格 ⇒ 无方向）"
+    }
+    $lp = Get-LegacyTurnPixel $dx $dy
+    $rx = $lp.X; $ry = $lp.Y
+    if ($rightPart -ne "") {
+      $r = $rightPart.Split(",")
+      if ($r.Count -ne 2 -or -not (Test-TurnIntLiteral $r[0].Trim()) -or -not (Test-TurnIntLiteral $r[1].Trim())) {
+        throw "标定条目 '$raw' 的右键像素须为 'x,y'（两个整数）"
+      }
+      $rx = [int]$r[0]; $ry = [int]$r[1]
+    }
+    $lx = $rx; $ly = $ry
+    if ($leftPart -ne "") {
+      $l = $leftPart.Split(",")
+      if ($l.Count -ne 2 -or -not (Test-TurnIntLiteral $l[0].Trim()) -or -not (Test-TurnIntLiteral $l[1].Trim())) {
+        throw "标定条目 '$raw' 的左键像素须为 'x,y'（两个整数）"
+      }
+      $lx = [int]$l[0]; $ly = [int]$l[1]
+    }
+    [void]$rows.Add([pscustomobject][ordered]@{
+      I = $i; CellDx = $dx; CellDy = $dy
+      ExpectedDir = (Get-TurnCellDirection $dx $dy)
+      RightX = $rx; RightY = $ry; LeftX = $lx; LeftY = $ly
+    })
+  }
+  if ($rows.Count -eq 0) {
+    throw "-AttackTurnCalibrate 没有有效条目（示例：""0,-1;0,1;1,0;-1,0""）"
+  }
+  return ,$rows.ToArray()
+}
+
+function New-TurnObserved {
+  return [pscustomobject][ordered]@{
+    analyzed = $false
+    cm_turn = 0; turn_dirs = @(); turn_dir = $null; turn_x = $null; turn_y = $null
+    cm_hit = 0; hit_dirs = @(); hit_dir = $null; hit_x = $null; hit_y = $null
+    cm_walk = 0; cm_run = 0
+    turn_matches = $false; hit_matches = $false
+  }
+}
+
+function New-TurnCalibrationSummary([object[]]$probes) {
+  $s = [ordered]@{
+    probes = 0; turn_hit = 0; turn_only = 0; turn_mismatch = 0
+    walk = 0; none = 0; unknown = 0; resolved = 0
+  }
+  foreach ($p in $probes) {
+    if ($null -eq $p) { continue }
+    $s.probes++
+    switch ([string]$p.verdict) {
+      "turn+hit" { $s.turn_hit++ }
+      "turn_only" { $s.turn_only++ }
+      "turn_mismatch" { $s.turn_mismatch++ }
+      "walk" { $s.walk++ }
+      "none" { $s.none++ }
+      default { $s.unknown++ }
+    }
+  }
+  return [pscustomobject]$s
+}
+
+function New-TurnCalibrationLedger([object[]]$probes, [string]$mode) {
+  $rows = New-Object System.Collections.ArrayList
+  foreach ($p in $probes) {
+    [void]$rows.Add([pscustomobject][ordered]@{
+      probe = [int]$p.I
+      cell_dx = [int]$p.CellDx
+      cell_dy = [int]$p.CellDy
+      expected_dir = [int]$p.ExpectedDir
+      expected_dir_name = (Get-TurnDirName $p.ExpectedDir)
+      right_x = [int]$p.RightX
+      right_y = [int]$p.RightY
+      left_x = [int]$p.LeftX
+      left_y = [int]$p.LeftY
+      t_start_ms = $null
+      t_end_ms = $null
+      observed = (New-TurnObserved)
+      verdict = "unknown"
+    })
+  }
+  $arr = $rows.ToArray()
+  return [pscustomobject][ordered]@{
+    schema = "openmir2.attackturn-calibration/1"
+    created_utc = [DateTimeOffset]::UtcNow.ToString("o")
+    mode = $mode
+    projection = [pscustomobject][ordered]@{
+      anchor_x = 512; anchor_y = 304; step_x = 48; step_y = 32
+      source = "anchor from MShare.pas:4620 / SCREENWIDTH div 2; step 48x32 was an assumption (unconfirmed inverse CXYfromMouseXY)"
+    }
+    capture = $CalibrateCapture
+    probes = @($arr)
+    resolved = [pscustomobject][ordered]@{}
+    summary = (New-TurnCalibrationSummary @($arr))
+  }
+}
+
+function Get-TurnLoWord([long]$v) {
+  $lo = [long]($v -band 0xFFFF)
+  if ($lo -ge 0x8000) { $lo -= 0x10000 }
+  return [int]$lo
+}
+
+function Get-TurnHiWord([long]$v) {
+  $hi = [long](($v -shr 16) -band 0xFFFF)
+  if ($hi -ge 0x8000) { $hi -= 0x10000 }
+  return [int]$hi
+}
+
+function Read-TurnCaptureFrames([string]$path, [long]$minTs, [long]$maxTs) {
+  # 只解析 ts 落在总窗口内的 c2s 帧（capture.jsonl 可能整场几十万行）。
+  if (-not (Test-Path -LiteralPath $path)) { throw "capture.jsonl 不存在：$path" }
+  $full = (Resolve-Path -LiteralPath $path).Path
+  $frames = New-Object System.Collections.ArrayList
+  foreach ($line in [IO.File]::ReadLines($full)) {
+    # capture.jsonl 的序列化器可能是紧凑或带空格的；两种都要认。
+    if ($line -notmatch '"dir"\s*:\s*"c2s"') { continue }
+    $m = [regex]::Match($line, '"ts_ms"\s*:\s*([0-9]+)')
+    if (-not $m.Success) { continue }
+    $ts = [long]$m.Groups[1].Value
+    if ($ts -lt $minTs -or $ts -gt $maxTs) { continue }
+    try { $r = $line | ConvertFrom-Json } catch { continue }
+    if ($null -eq $r) { continue }
+    if ($null -eq $r.PSObject.Properties["kind"] -or [string]$r.kind -ne "frame") { continue }
+    if ($null -eq $r.PSObject.Properties["ident"]) { continue }
+    [void]$frames.Add($r)
+  }
+  return ,$frames.ToArray()
+}
+
+function Get-TurnCalibrationMapFromLedger($ledger) {
+  # 每个格偏移挑一个最可信的探针：turn+hit 且 hit 方向也对 > turn+hit > turn_only。
+  $groups = @{}
+  foreach ($p in @($ledger.probes)) {
+    if ($null -eq $p) { continue }
+    if ($null -eq $p.observed) { continue }
+    if (-not [bool]$p.observed.turn_matches) { continue }
+    $v = [string]$p.verdict
+    if ($v -ne "turn+hit" -and $v -ne "turn_only") { continue }
+    $key = ([string]$p.cell_dx) + "," + ([string]$p.cell_dy)
+    if (-not $groups.ContainsKey($key)) { $groups[$key] = New-Object System.Collections.ArrayList }
+    [void]$groups[$key].Add($p)
+  }
+  $resolved = [ordered]@{}
+  foreach ($key in @($groups.Keys | Sort-Object)) {
+    $best = $null
+    $rank = 0
+    foreach ($p in $groups[$key]) {
+      $r = 1
+      if ([string]$p.verdict -eq "turn+hit") { $r = 2 }
+      if ([string]$p.verdict -eq "turn+hit" -and [bool]$p.observed.hit_matches) { $r = 3 }
+      if ($r -gt $rank) { $rank = $r; $best = $p }
+    }
+    if ($null -ne $best) {
+      $conf = "turn_only"
+      if ($rank -eq 3) { $conf = "turn+hit" } elseif ($rank -eq 2) { $conf = "turn+hit_dir_mismatch" }
+      $resolved[$key] = [pscustomobject][ordered]@{
+        right_x = [int]$best.right_x
+        right_y = [int]$best.right_y
+        left_x = [int]$best.left_x
+        left_y = [int]$best.left_y
+        from_probe = [int]$best.probe
+        confidence = $conf
+        expected_dir = [int]$best.expected_dir
+      }
+    }
+  }
+  return [pscustomobject]$resolved
+}
+
+function Update-TurnCalibrationLedger($ledger, [string]$capturePath) {
+  # 把 capture.jsonl 的 c2s 帧按探针 [t_start_ms,t_end_ms] 窗口归属，回填 observed/verdict/resolved。
+  # 时钟域：capture 的 ts_ms 与 -AttackTurnCalibrate 记录的 UTC epoch ms 同机同时钟
+  # （proxy/hook 的 t_wall_ms = 本机 wall clock），窗口比较不需要额外换算。
+  $minTs = [long]::MaxValue
+  $maxTs = [long]::MinValue
+  foreach ($p in @($ledger.probes)) {
+    if ($null -eq $p) { continue }
+    if ($null -eq $p.t_start_ms -or $null -eq $p.t_end_ms) { continue }
+    if ([long]$p.t_start_ms -lt $minTs) { $minTs = [long]$p.t_start_ms }
+    if ([long]$p.t_end_ms -gt $maxTs) { $maxTs = [long]$p.t_end_ms }
+  }
+  $frames = @()
+  if ($minTs -le $maxTs) {
+    $frames = Read-TurnCaptureFrames $capturePath $minTs $maxTs
+  }
+  foreach ($p in @($ledger.probes)) {
+    if ($null -eq $p) { continue }
+    $obs = New-TurnObserved
+    $obs.analyzed = $true
+    if ($null -eq $p.t_start_ms -or $null -eq $p.t_end_ms) {
+      # 表里没有探针窗口（例如干跑生成的计划表）⇒ 无法归属，保持 unknown。
+      $obs.analyzed = $false
+      $p.observed = $obs
+      $p.verdict = "unknown"
+      continue
+    }
+    $t0 = [long]$p.t_start_ms
+    $t1 = [long]$p.t_end_ms
+    $turnDirs = New-Object System.Collections.ArrayList
+    $hitDirs = New-Object System.Collections.ArrayList
+    foreach ($f in $frames) {
+      $ts = [long]$f.ts_ms
+      if ($ts -lt $t0 -or $ts -gt $t1) { continue }
+      $ident = [int]$f.ident
+      $tag = 0
+      if ($null -ne $f.PSObject.Properties["tag"] -and $null -ne $f.tag) { $tag = [int]$f.tag }
+      $recog = $null
+      if ($null -ne $f.PSObject.Properties["recog"] -and $null -ne $f.recog) { $recog = [long]$f.recog }
+      switch ($ident) {
+        3010 {
+          $obs.cm_turn++
+          [void]$turnDirs.Add($tag)
+          $obs.turn_dir = $tag
+          if ($null -ne $recog) { $obs.turn_x = Get-TurnLoWord $recog; $obs.turn_y = Get-TurnHiWord $recog }
+        }
+        3014 {
+          $obs.cm_hit++
+          [void]$hitDirs.Add($tag)
+          $obs.hit_dir = $tag
+          if ($null -ne $recog) { $obs.hit_x = Get-TurnLoWord $recog; $obs.hit_y = Get-TurnHiWord $recog }
+        }
+        3011 { $obs.cm_walk++ }
+        3013 { $obs.cm_run++ }
+      }
+    }
+    $obs.turn_dirs = @($turnDirs.ToArray())
+    $obs.hit_dirs = @($hitDirs.ToArray())
+    foreach ($d in $turnDirs) { if ([int]$d -eq [int]$p.expected_dir) { $obs.turn_matches = $true } }
+    foreach ($d in $hitDirs) { if ([int]$d -eq [int]$p.expected_dir) { $obs.hit_matches = $true } }
+    if ($obs.cm_turn -eq 0 -and $obs.cm_hit -eq 0 -and $obs.cm_walk -eq 0 -and $obs.cm_run -eq 0) {
+      $p.verdict = "none"
+    } elseif ($obs.turn_matches -and $obs.cm_hit -gt 0) {
+      $p.verdict = "turn+hit"
+    } elseif ($obs.turn_matches) {
+      $p.verdict = "turn_only"
+    } elseif ($obs.cm_turn -gt 0) {
+      $p.verdict = "turn_mismatch"
+    } elseif ($obs.cm_walk -gt 0 -or $obs.cm_run -gt 0) {
+      $p.verdict = "walk"
+    } else {
+      $p.verdict = "none"
+    }
+    $p.observed = $obs
+  }
+  $ledger.capture = (Resolve-Path -LiteralPath $capturePath).Path
+  $ledger.resolved = (Get-TurnCalibrationMapFromLedger $ledger)
+  $ledger.summary = (New-TurnCalibrationSummary @($ledger.probes))
+  $ledger.summary.resolved = @($ledger.resolved.PSObject.Properties).Count
+  return $ledger
+}
+
+function Read-TurnCalibrationMap([string]$path) {
+  if (-not (Test-Path -LiteralPath $path)) { throw "-AttackTurnMap 文件不存在：$path" }
+  $raw = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $path).Path)
+  $m = $raw | ConvertFrom-Json
+  if ($null -eq $m.PSObject.Properties["schema"] -or [string]$m.schema -ne "openmir2.attackturn-calibration/1") {
+    throw "-AttackTurnMap 不是 openmir2.attackturn-calibration/1 标定表：$path"
+  }
+  if ($null -eq $m.PSObject.Properties["resolved"] -or $null -eq $m.resolved) {
+    throw "-AttackTurnMap 标定表缺少 resolved 段：$path"
+  }
+  $table = @{}
+  foreach ($prop in $m.resolved.PSObject.Properties) { $table[$prop.Name] = $prop.Value }
+  if ($table.Count -eq 0) {
+    throw ("-AttackTurnMap 的 resolved 为空：没有探针达成 turn+hit/turn_only。" +
+      "先在窗口跑 -AttackTurnCalibrate，并用 -CalibrateCapture 回填 capture.jsonl。")
+  }
+  return $table
+}
+
+function Resolve-TurnMapPixel($map, [int]$dx, [int]$dy) {
+  $key = ([string]$dx) + "," + ([string]$dy)
+  if (-not $map.ContainsKey($key)) {
+    $keys = @($map.Keys | Sort-Object) -join "; "
+    throw "-AttackTurnMap 没有格偏移 ($key) 的标定结果；可用格偏移：$keys"
+  }
+  $v = $map[$key]
+  return [pscustomobject]@{
+    RightX = [int]$v.right_x; RightY = [int]$v.right_y
+    LeftX = [int]$v.left_x; LeftY = [int]$v.left_y
+  }
+}
+
+function ConvertTo-TurnCsvCell($v) {
+  if ($null -eq $v) { return "" }
+  if ($v -is [bool]) { if ($v) { return "true" } else { return "false" } }
+  $s = [string]$v
+  if ($s.IndexOf('"') -ge 0) { $s = $s.Replace('"', '""') }
+  if ($s.IndexOf(',') -ge 0 -or $s.IndexOf('"') -ge 0 -or $s.IndexOf("`n") -ge 0 -or $s.IndexOf("`r") -ge 0) {
+    return '"' + $s + '"'
+  }
+  return $s
+}
+
+function Write-TurnCalibrationTable($ledger, [string]$path) {
+  # 标定表：JSON（机器读，含 resolved 段）+ 同名 CSV（26 列，便于窗口里人眼/表格对照）。
+  # CSV 列：probe,cell_dx,cell_dy,expected_dir,expected_dir_name,right_x,right_y,
+  #         left_x,left_y,t_start_ms,t_end_ms,cm_turn,turn_dirs,turn_dir,turn_x,turn_y,
+  #         cm_hit,hit_dirs,hit_dir,hit_x,hit_y,cm_walk,cm_run,turn_matches,hit_matches,verdict
+  $dir = Split-Path -Parent $path
+  if ($dir -ne "" -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+  $enc = New-Object System.Text.UTF8Encoding($false)
+  $json = $ledger | ConvertTo-Json -Depth 12
+  [IO.File]::WriteAllText($path, $json + "`r`n", $enc)
+  $csvPath = [IO.Path]::ChangeExtension($path, ".csv")
+  $cols = @("probe", "cell_dx", "cell_dy", "expected_dir", "expected_dir_name",
+            "right_x", "right_y", "left_x", "left_y", "t_start_ms", "t_end_ms",
+            "cm_turn", "turn_dirs", "turn_dir", "turn_x", "turn_y",
+            "cm_hit", "hit_dirs", "hit_dir", "hit_x", "hit_y",
+            "cm_walk", "cm_run", "turn_matches", "hit_matches", "verdict")
+  $sb = New-Object System.Text.StringBuilder
+  [void]$sb.Append(($cols -join ",") + "`r`n")
+  foreach ($p in @($ledger.probes)) {
+    if ($null -eq $p) { continue }
+    $o = $p.observed
+    $vals = @(
+      $p.probe, $p.cell_dx, $p.cell_dy, $p.expected_dir, $p.expected_dir_name,
+      $p.right_x, $p.right_y, $p.left_x, $p.left_y, $p.t_start_ms, $p.t_end_ms,
+      $o.cm_turn, (@($o.turn_dirs) -join "/"), $o.turn_dir, $o.turn_x, $o.turn_y,
+      $o.cm_hit, (@($o.hit_dirs) -join "/"), $o.hit_dir, $o.hit_x, $o.hit_y,
+      $o.cm_walk, $o.cm_run, $o.turn_matches, $o.hit_matches, $p.verdict
+    )
+    $cells = @()
+    foreach ($v in $vals) { $cells += (ConvertTo-TurnCsvCell $v) }
+    [void]$sb.Append(($cells -join ",") + "`r`n")
+  }
+  [IO.File]::WriteAllText($csvPath, $sb.ToString(), $enc)
+  return $csvPath
+}
+
+function Write-TurnCalibrationSummary($ledger, [string]$jsonPath, [string]$csvPath) {
+  $s = $ledger.summary
+  Write-Output ("CALIB_TABLE " + $jsonPath)
+  Write-Output ("CALIB_CSV " + $csvPath)
+  Write-Output ("CALIB_SUMMARY probes=" + $s.probes + " turn_hit=" + $s.turn_hit +
+    " turn_only=" + $s.turn_only + " turn_mismatch=" + $s.turn_mismatch +
+    " walk=" + $s.walk + " none=" + $s.none + " unknown=" + $s.unknown +
+    " resolved=" + $s.resolved)
+  foreach ($p in @($ledger.probes)) {
+    if ($null -eq $p) { continue }
+    $o = $p.observed
+    Write-Output ("CALIB_PROBE i=" + $p.probe + " cell=" + $p.cell_dx + "," + $p.cell_dy +
+      " expected_dir=" + $p.expected_dir + "(" + $p.expected_dir_name + ")" +
+      " right=" + $p.right_x + "," + $p.right_y + " left=" + $p.left_x + "," + $p.left_y +
+      " cm_turn=" + $o.cm_turn + " turn_dir=" + (Get-TurnDirName $o.turn_dir) +
+      " cm_hit=" + $o.cm_hit + " hit_dir=" + (Get-TurnDirName $o.hit_dir) +
+      " cm_walk=" + $o.cm_walk + " verdict=" + $p.verdict)
+  }
+  if ($null -ne $ledger.resolved) {
+    foreach ($prop in $ledger.resolved.PSObject.Properties) {
+      $v = $prop.Value
+      Write-Output ("CALIB_RESOLVED cell=" + $prop.Name + " right=" + $v.right_x + "," + $v.right_y +
+        " left=" + $v.left_x + "," + $v.left_y + " from_probe=" + $v.from_probe +
+        " confidence=" + $v.confidence)
+    }
+  }
+}
+
+function Read-TurnCalibrationLedger([string]$path) {
+  if (-not (Test-Path -LiteralPath $path)) { throw "标定表不存在：$path" }
+  $ledger = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $path).Path) | ConvertFrom-Json
+  if ($null -eq $ledger.PSObject.Properties["schema"] -or [string]$ledger.schema -ne "openmir2.attackturn-calibration/1") {
+    throw "不是 openmir2.attackturn-calibration/1 标定表：$path"
+  }
+  return $ledger
+}
+
+function Assert-TurnAttackTurn([string]$value) {
+  # 与旧攻击块同一套校验（只用于干跑/参数解析；旧路径的校验原样保留）。
+  $td = $value.Split(",") | ForEach-Object { [int]$_ }
+  if ($td.Count -ne 2) { throw "-AttackTurn 须为 'dx,dy'（两个整数格偏移），当前：$value" }
+  if ([Math]::Abs($td[0]) -gt 1 -or [Math]::Abs($td[1]) -gt 1) {
+    throw "-AttackTurn 须为相邻格（|dx|,|dy|<=1），当前：$value"
+  }
+  if ($td[0] -eq 0 -and $td[1] -eq 0) {
+    throw "-AttackTurn 不能为 (0,0)（自格 ⇒ tdir 退化），当前：$value"
+  }
+  return ,$td
+}
+
+if ($CalibrateOut -eq "") { $CalibrateOut = Join-Path $OutDir "attackturn-calibration.json" }
+if ($AttackTurnCalibrate -ne "" -and $AttackTurn -ne "") {
+  throw "-AttackTurnCalibrate 与 -AttackTurn 互斥（标定探针自己决定每个格偏移，不要混入旧映射配方）"
+}
+if ($AttackTurnCalibrate -ne "" -and $AttackClicks -gt 0) {
+  throw "-AttackTurnCalibrate 与 -AttackClicks 互斥（避免两套驱动互相污染标定窗口）"
+}
+if ($AttackTurnMap -ne "" -and $AttackTurn -eq "") {
+  throw "-AttackTurnMap 须与 -AttackTurn 'dx,dy' 联用（新映射按格偏移查表）"
+}
+if ($AttackTurnMap -ne "" -and $AttackTurnCalibrate -ne "") {
+  throw "-AttackTurnMap 与 -AttackTurnCalibrate 互斥"
+}
+$turnMapTable = $null
+if ($AttackTurnMap -ne "") { $turnMapTable = Read-TurnCalibrationMap $AttackTurnMap }
+
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+# ---- 离线干跑：不启动客户端（语法/参数解析/标定表格式自检都靠它）----
+if ($AttackTurnDryRun) {
+  if ($AttackTurnCalibrate -ne "") {
+    $probes = ConvertFrom-TurnCalibrateSpec $AttackTurnCalibrate
+    if ($CalibrateCapture -ne "" -and (Test-Path -LiteralPath $CalibrateOut)) {
+      # 已有驱动阶段的表（带 t_start_ms/t_end_ms）⇒ 只做离线回填。
+      $ledger = Read-TurnCalibrationLedger $CalibrateOut
+      $ledger.mode = "dry-run-analyze"
+      $ledger = Update-TurnCalibrationLedger $ledger $CalibrateCapture
+    } else {
+      $ledger = New-TurnCalibrationLedger $probes "dry-run"
+      if ($CalibrateCapture -ne "") {
+        # 没有探针窗口 ⇒ 无法归属，observed 保持 unknown。
+        $ledger = Update-TurnCalibrationLedger $ledger $CalibrateCapture
+      }
+    }
+    $csvPath = Write-TurnCalibrationTable $ledger $CalibrateOut
+    Write-TurnCalibrationSummary $ledger $CalibrateOut $csvPath
+    Write-Output "DRY_RUN_OK"
+    exit 0
+  }
+  if ($AttackTurn -ne "") {
+    $td = Assert-TurnAttackTurn $AttackTurn
+    if ($turnMapTable) {
+      $px = Resolve-TurnMapPixel $turnMapTable ([int]$td[0]) ([int]$td[1])
+      Write-Output ("TURN_CLICK x=" + $px.LeftX + " y=" + $px.LeftY +
+        " right_x=" + $px.RightX + " right_y=" + $px.RightY +
+        " source=map cell=" + $td[0] + "," + $td[1])
+    } else {
+      $lp = Get-LegacyTurnPixel ([int]$td[0]) ([int]$td[1])
+      Write-Output ("TURN_CLICK x=" + $lp.X + " y=" + $lp.Y +
+        " source=legacy cell=" + $td[0] + "," + $td[1])
+    }
+    Write-Output "DRY_RUN_OK"
+    exit 0
+  }
+  throw "-AttackTurnDryRun 需要 -AttackTurn 或 -AttackTurnCalibrate"
+}
 
 $src = @"
 using System;
@@ -441,7 +994,46 @@ if ($AutoPlaySec -gt 0) {
   Shot "05d_autoplay_off.png"
 }
 
+# ---- AttackTurn 标定（只有显式 -AttackTurnCalibrate 才走这里）----
+# 现状 48x32 步长与已知失败证据见 param 注释与 docs/window-shrink-run-20261019.md §F2。
+# 本块只驱动「右键→左键」探针并记录 [t_start_ms,t_end_ms]；CM_TURN/CM_HIT 的观测值
+# 由 -CalibrateCapture（capture.jsonl）回填：窗口内一次跑完全部格偏移，导出 JSON+CSV。
+# 旧的 -AttackTurn / -AttackRing 路径在下面，完全不经过本块。
+if ($AttackTurnCalibrate -ne "") {
+  $calProbes = ConvertFrom-TurnCalibrateSpec $AttackTurnCalibrate
+  $ledger = New-TurnCalibrationLedger $calProbes "drive"
+  $calIdx = 0
+  foreach ($p in $calProbes) {
+    Stage ("calibrate_turn_" + $p.I)
+    $row = $ledger.probes[$calIdx]
+    $row.t_start_ms = Get-TurnNowMs
+    Send-RightClick $p.RightX $p.RightY
+    Start-Sleep -Milliseconds $CalibrateTurnGapMs
+    Stage ("calibrate_hit_" + $p.I)
+    Send-Click $p.LeftX $p.LeftY 1
+    Start-Sleep -Milliseconds $CalibrateSettleMs
+    $row.t_end_ms = Get-TurnNowMs
+    $calIdx++
+  }
+  Shot "10_attackturn_calibration.png"
+  if ($CalibrateCapture -ne "") {
+    if (Test-Path -LiteralPath $CalibrateCapture) {
+      $ledger = Update-TurnCalibrationLedger $ledger $CalibrateCapture
+    } else {
+      Write-Output ("CALIB_CAPTURE_MISSING " + $CalibrateCapture +
+        "（会话结束后用 GoldenExport 导出 capture.jsonl，再用 -AttackTurnDryRun -CalibrateCapture 回填）")
+    }
+  }
+  $csvPath = Write-TurnCalibrationTable $ledger $CalibrateOut
+  Write-TurnCalibrationSummary $ledger $CalibrateOut $csvPath
+  Stage "calibrate_done"
+}
+
 # ---- 攻击：在角色周围按环状点几下（比奇省刷怪区怪物密集，点到即出 CM_HIT）----
+# 旧口径（默认）仍然是 (512 + dx*48, 304 + dy*32)；48x32 只是**未被证实的假设**：
+# 2026-10-19 缩窗 W0-1 第二轮 Rust 侧同配方 3 次（0,-1×2、0,1×1）全部落成 CM_WALK，
+# 同点改按截图像素点（mir_click.ps1）立刻出 CM_HIT —— 见 docs/window-shrink-run-20261019.md §F2。
+# 新映射只在显式给 -AttackTurnMap 时启用（按标定表 resolved 的像素点）；默认路径逐字节不变。
 if ($AttackClicks -gt 0) {
   $ring = @("0,-40", "40,0", "0,40", "-40,0", "28,-28", "28,28", "-28,28", "-28,-28",
             "70,0", "0,70", "-70,0", "0,-70")
@@ -455,6 +1047,11 @@ if ($AttackClicks -gt 0) {
     if ($td[0] -eq 0 -and $td[1] -eq 0) { throw "-AttackTurn 不能为 (0,0)（自格 ⇒ tdir 退化），当前：$AttackTurn" }
     $turnCell = $td
   }
+  # -AttackTurnMap：标定后的新映射（只有显式给本参数才启用；否则下面保持旧字面量）。
+  $turnPx = $null
+  if ($turnCell -and $turnMapTable) {
+    $turnPx = Resolve-TurnMapPixel $turnMapTable $turnCell[0] $turnCell[1]
+  }
   # 格心锚（idle 时 CXYfromMouseXY 的逆映射原点；与 -CenterX/-CenterY 无关，后者是**精灵**中心标定）：
   #   x=512=SCREENWIDTH div 2；y=304=ShiftYOffset=Round((768-150)/32/2)*32-16（MShare.pas:4620，自格带 y∈[288,320)）
   $TurnCellCx = 512
@@ -463,8 +1060,12 @@ if ($AttackClicks -gt 0) {
     $d = $ring[$i].Split(",") | ForEach-Object { [int]$_ }
     if ($turnCell) {
       Stage ("attack_turn_" + ($i + 1))
-      # 右键相邻格格心：512+dx*48 / 304+dy*32 ⇒ CXYfromMouseXY 恰得 (Rx+dx, Ry+dy)（idle ShiftX/Y=0）
-      Send-RightClick ($TurnCellCx + $turnCell[0] * 48) ($TurnCellCy + $turnCell[1] * 32)
+      # 旧口径：右键相邻格格心 512+dx*48 / 304+dy*32（未证实假设）；新映射：标定表 resolved 像素。
+      if ($turnPx) {
+        Send-RightClick $turnPx.RightX $turnPx.RightY
+      } else {
+        Send-RightClick ($TurnCellCx + $turnCell[0] * 48) ($TurnCellCy + $turnCell[1] * 32)
+      }
       # oracle TurnIntervalTime=600ms（GameSvrConf.cs:1814，连续 CM_TURN 更快会被拒；Rust 侧未接限速，
       # 但驱动必须按 oracle 节拍）；客户端 CanNextAction/ServerAcceptNextAction
       # （ClMain.pas:5452）也要求上一动作收尾。右键助手内部已 ~510ms，再 400ms ⇒ turn→hit ~0.9s、
@@ -477,8 +1078,13 @@ if ($AttackClicks -gt 0) {
     # （默认环第 1 项 = 北侧 -40px），会点空/点地（CM_WALK/RUN），永远打不到刚转向的怪。
     # 显式 -AttackRing 仍按调用方给的像素偏移（高级用法，逐字节不变）。
     if ($turnCell -and $AttackRing -eq "") {
-      $clickX = $TurnCellCx + $turnCell[0] * 48
-      $clickY = $TurnCellCy + $turnCell[1] * 32
+      if ($turnPx) {
+        $clickX = $turnPx.LeftX
+        $clickY = $turnPx.LeftY
+      } else {
+        $clickX = $TurnCellCx + $turnCell[0] * 48
+        $clickY = $TurnCellCy + $turnCell[1] * 32
+      }
     } else {
       $clickX = $CenterX + $d[0]
       $clickY = $CenterY + $d[1]
