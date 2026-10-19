@@ -96,16 +96,18 @@ fn client_timeout_ms(text: &str) -> u64 {
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("ClientTimeOutTime"))
         .map(|(_, v)| v.trim());
-    // C# `ReadInteger` 走 int.TryParse：失败即用缺省。
-    let default = i64::try_from(DEFAULT_TIMEOUT_MS).unwrap_or(i64::MAX);
-    let parsed = raw.and_then(|v| v.parse::<i64>().ok()).unwrap_or(default);
+    // C# `ReadInteger` 走 `int.TryParse`（**i32**）：超出 i32 范围（如 2147483648）即失败 ⇒ 缺省。
+    let default = i32::try_from(DEFAULT_TIMEOUT_MS).unwrap_or(i32::MAX);
+    let parsed = raw.and_then(|v| v.parse::<i32>().ok()).unwrap_or(default);
     // C# `if (m_nClientTimeOutTime < 10 * 1000) m_nClientTimeOutTime = 10 * 1000;`
-    let min = i64::try_from(MIN_TIMEOUT_MS).unwrap_or(i64::MAX);
+    let min = i32::try_from(MIN_TIMEOUT_MS).unwrap_or(i32::MAX);
     let clamped = parsed.max(min);
     u64::try_from(clamped).unwrap_or(DEFAULT_TIMEOUT_MS)
 }
 
-/// 取 `[section]` 下的键值对（大小写不敏感；`;`/`#` 起头为注释；去掉行尾注释）。
+/// 取 `[section]` 下的键值对（大小写不敏感；`;`/`#` 起头为整行注释）。
+///
+/// 行尾注释**只认 `;;`**（C# `ConfigFile.cs:312` `str.IndexOf(";;")`）：单个 `;` 属于值的一部分。
 fn parse_section(text: &str, want: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut in_section = false;
@@ -126,7 +128,7 @@ fn parse_section(text: &str, want: &str) -> Vec<(String, String)> {
         let Some((k, v)) = line.split_once('=') else {
             continue;
         };
-        let v = v.split(';').next().unwrap_or("").trim();
+        let v = v.split_once(";;").map_or(v, |(head, _)| head).trim();
         out.push((k.trim().to_string(), v.to_string()));
     }
     out
@@ -194,6 +196,53 @@ mod tests {
                 load(&p).unwrap().client_timeout_ms,
                 want,
                 "[Integer] 段={integer:?} 时必须得到 {want}ms"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 判据（F2）：`ClientTimeOutTime` 按 C# `int.TryParse` 的 **i32** 宽度解析；
+    /// 超出 i32 范围 ⇒ 解析失败 ⇒ 缺省 60s（不是 i64 直接接受）。
+    /// 牙：改回 `parse::<i64>()` ⇒ `2147483648` 会被接受 ⇒ 本用例红。
+    #[test]
+    fn client_timeout_parses_i32_like_oracle() {
+        let dir = std::env::temp_dir().join(format!("sg-timeout-i32-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("config.conf");
+        let base = "[SelGate]\nServerAddr0=127.0.0.1\nServerPort0=5500\nGatePort0=7100\n";
+        for (raw, want) in [
+            ("2147483648", 60_000_u64),    // i32::MAX + 1 ⇒ TryParse 失败 ⇒ 缺省
+            ("-2147483649", 60_000),       // i32::MIN - 1 ⇒ TryParse 失败 ⇒ 缺省
+            ("2147483647", 2_147_483_647), // i32::MAX 可接受（不再夹到缺省）
+        ] {
+            std::fs::write(&p, format!("[Integer]\nClientTimeOutTime={raw}\n{base}")).unwrap();
+            assert_eq!(
+                load(&p).unwrap().client_timeout_ms,
+                want,
+                "ClientTimeOutTime={raw} 必须得到 {want}ms（C# int.TryParse 口径）"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 判据（F3）：行尾注释**只认 `;;`**（C# `ConfigFile.cs:312` `IndexOf(";;")`）；
+    /// 单个 `;` 属于值的一部分，因此 `45000;semi` 解析失败 ⇒ 缺省。
+    /// 牙：改回在第一个 `;` 截断 ⇒ 第一条会得到 45_000 ⇒ 本用例红。
+    #[test]
+    fn tail_comment_only_on_double_semicolon_like_oracle() {
+        let dir = std::env::temp_dir().join(format!("sg-timeout-comment-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("config.conf");
+        let base = "[SelGate]\nServerAddr0=127.0.0.1\nServerPort0=5500\nGatePort0=7100\n";
+        for (line, want) in [
+            ("ClientTimeOutTime=45000;semi", 60_000_u64), // 单个 ; 仍在值里 ⇒ 非法 ⇒ 缺省
+            ("ClientTimeOutTime=45000;;tail", 45_000),    // 双 ;; 才是行尾注释
+        ] {
+            std::fs::write(&p, format!("[Integer]\n{line}\n{base}")).unwrap();
+            assert_eq!(
+                load(&p).unwrap().client_timeout_ms,
+                want,
+                "{line:?} 必须得到 {want}ms（C# 只把 `;;` 当行尾注释）"
             );
         }
         std::fs::remove_dir_all(&dir).ok();

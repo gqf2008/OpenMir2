@@ -164,8 +164,11 @@ fn sel_gate_enter_body(socket_id: &str, ip: &str) -> Vec<u8> {
 /// - **只有** `CM_QUERYCHR/CM_NEWCHR/CM_DELCHR/CM_SELCHR`（100..=103）刷新计时
 ///   （C# `HandleUserPacket` 的 4 个 `case`）；其它帧只记日志、不刷新；
 /// - 每 20s 扫描一次，严格 `> timeout` 才动作；
-/// - 第一阶段发 `SM_OUTOFCONNECTION` 并在同一次扫描关会话；第二阶段状态机保留但线上不可达；
-/// - 超时关会话时**不发**下行 `Leave`（oracle 先摘会话，`Disconnected` 取不到会话）。
+/// - 第一阶段发 `SM_OUTOFCONNECTION` 并在同一次扫描**只摘会话**；C# SelGate 的
+///   `SessionManager.CloseSession` 只 `TryRemove`（与 LoginGate 相反，不调 `ClientSession.CloseSession`）
+///   ⇒ **socket 保持打开**：后续客户端数据因 `GetSession == null` 被静默丢弃，直到客户端自己断开；
+/// - 第二阶段状态机保留但线上不可达（会话已摘，`TimedService` 不会再取到它）；
+/// - 超时路径**不发**下行 `Leave`（oracle 在 `Disconnected` 时 `GetSession` 为 null）。
 async fn client_loop(
     sock: TcpStream,
     sid: u16,
@@ -177,7 +180,7 @@ async fn client_loop(
 ) -> Result<()> {
     let (mut rd, mut wr) = sock.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    // 超时帧与 DBSrv 下行共用同一条回写通道，保证「先发帧、后断开」的字节次序。
+    // 超时帧与 DBSrv 下行共用同一条回写通道，保证超时帧先于任何后续写出。
     let timeout_tx = tx.clone();
 
     // 会话登记 + 通知 DBSrv "新会话接入"（C# `UserEnter`：`%K{SocketId}/{ClientIP}/{ClientIP}$`）
@@ -223,6 +226,12 @@ async fn client_loop(
                 if n == 0 {
                     break;
                 }
+                if timed_out {
+                    // C# SelGate：`SessionManager.CloseSession` 只摘会话、不关 socket；
+                    // 之后 `ProcessReviceMessage` 的 `GetSession` 返回 null ⇒ 字节被静默丢弃，
+                    // 连接保持到客户端自己断开（F1）。
+                    continue;
+                }
                 for item in splitter.feed(&buf[..n]) {
                     match item {
                         // 心跳：C# 侧收到 1 字节包直接忽略；这里同样不转发
@@ -248,16 +257,22 @@ async fn client_loop(
                 }
             }
             _ = sweep.tick() => {
+                if timed_out {
+                    // 会话已摘：C# `TimedService` 对 `GetSession == null` 的槽位直接 continue，
+                    // 不再调用 `HandleDelayMsg`。
+                    continue;
+                }
                 match timer.poll(now_ms(), timeout_ms) {
                     TimeoutAction::None => {}
                     TimeoutAction::SendOutOfConnection => {
-                        // C# `TimedService`：`success=true` ⇒ 同一次扫描立即 CloseSession。
+                        // C# `TimedService`：`success=true` ⇒ 同一次扫描 `SessionManager.CloseSession`。
+                        // SelGate 的 CloseSession 只摘会话（不关 socket）⇒ 这里同样只摘、不 break。
                         let _ = timeout_tx.send(idle_timeout::out_of_connection_frame());
                         glog!("INF", "Client Connect Time Out: {ip}");
+                        sessions.lock().await.remove(&sid);
                         timed_out = true;
-                        break;
                     }
-                    // 线上不可达（第一阶段已关会话）；保留以对齐 oracle 状态机。
+                    // 线上不可达（第一阶段已摘会话）；保留以对齐 oracle 状态机。
                     TimeoutAction::Close => {
                         timed_out = true;
                         break;
@@ -267,8 +282,8 @@ async fn client_loop(
         }
     }
 
-    // 会话离开（C# Leave 语义）。超时路径不发：oracle 的 TimedService 先摘会话再关
-    // socket，`Disconnected` 处理器 `GetSession` 为 null ⇒ 不产生 `UserLeave`。
+    // 会话离开（C# Leave 语义）。超时路径不发：oracle 的 `TimedService` 先摘会话，
+    // 客户端真正断开时 `Disconnected` 处理器 `GetSession` 为 null ⇒ 不产生 `UserLeave`。
     sessions.lock().await.remove(&sid);
     if !timed_out {
         let leave = ServerDataMessage::new(ServerDataType::Leave, sid.to_string(), Vec::new());

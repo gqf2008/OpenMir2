@@ -176,3 +176,101 @@ async fn missing_config_exits_nonzero() {
     assert!(err.contains("配置"), "错误信息应指明配置问题，实得：{err}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// 写一份带 `[Integer] ClientTimeOutTime` 的 config.conf（F1 的进程级判据）。
+fn write_conf_with_timeout(gate_port: u16, srv_port: u16, timeout_ms: u64) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("sg-timeout-{}-{}", std::process::id(), gate_port));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.conf"),
+        format!(
+            "[Integer]\nClientTimeOutTime={timeout_ms}\n\n\
+             [SelGate]\nServerAddr0=127.0.0.1\nServerPort0={srv_port}\n\
+             GateAddr0=127.0.0.1\nGatePort0={gate_port}\n"
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+/// 轮询到网关开始监听（不 sleep 猜）。
+async fn connect_retry(gate_port: u16) -> TcpStream {
+    for _ in 0..100 {
+        match TcpStream::connect(("127.0.0.1", gate_port)).await {
+            Ok(c) => return c,
+            Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+        }
+    }
+    panic!("网关未在预期时间内监听");
+}
+
+/// F1（进程级，oracle 行为）：SelGate 第一阶段超时后
+/// - 客户端收到 18B `SM_OUTOFCONNECTION`（`EDCode(12B 头) + 0x00 + '!'`，无 `'#'` 前导）；
+/// - 连接**保持打开**（read 不返回 0，客户端仍可写）；
+/// - 服务端继续读并**静默丢弃**超时后的客户端数据（`GetSession == null`，不得再转发给 DBSrv）；
+/// - 客户端最终断开时**不发** `Leave`。
+///
+/// 牙：恢复 `break`（发帧后 writer drop ⇒ 立即 FIN）⇒ 超时后的 `read` 返回 0 ⇒ 本用例红。
+#[tokio::test]
+async fn idle_timeout_sends_frame_but_keeps_socket_open() {
+    let (srv_port, srv_task) = fake_login_srv().await;
+    let gate_port = free_port();
+    let dir = write_conf_with_timeout(gate_port, srv_port, 10_000);
+    let conf = dir.join("config.conf");
+
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_sel-gate"))
+        .arg(&conf)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+
+    let t0 = tokio::time::Instant::now();
+    let mut client = connect_retry(gate_port).await;
+
+    // SelGate 的扫描节奏是 20s（`TimedService.cs:40`），阈值 10s ⇒ 首次动作在 t≈20s。
+    let mut frame = vec![0u8; 18];
+    tokio::time::timeout_at(t0 + Duration::from_secs(25), client.read_exact(&mut frame))
+        .await
+        .expect("25s 内必须超时并收到 18B SM_OUTOFCONNECTION")
+        .unwrap();
+    assert_eq!(
+        frame,
+        vec![
+            0x64, 0x64, 0x68, 0x6b, 0x64, 0x68, 0x6a, 0x6b, 0x64, 0x64, 0x68, 0x6b, 0x64, 0x64,
+            0x68, 0x6b, 0x00, 0x21,
+        ],
+        "超时帧必须逐字节等于 C# SelGate 的线上形态"
+    );
+
+    // oracle：SelGate 的 `SessionManager.CloseSession` 只 `TryRemove`，不关 socket ⇒ 连接保持打开。
+    let mut one = [0u8; 1];
+    let alive = tokio::time::timeout(Duration::from_millis(800), client.read(&mut one)).await;
+    assert!(
+        alive.is_err(),
+        "超时后连接不得 FIN（read 返回 0）；实得 {alive:?}"
+    );
+
+    // 客户端仍可写；服务端继续读并丢弃（不得再转发给 DBSrv）。
+    client
+        .write_all(b"#1ABCdef!")
+        .await
+        .expect("超时后客户端仍应可写");
+    client.flush().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    child.kill().await.ok();
+    drop(client);
+    let got = tokio::time::timeout(Duration::from_secs(5), srv_task)
+        .await
+        .expect("假 DBSrv 未按时结束")
+        .unwrap();
+    assert!(
+        !got.iter().any(|m| m.kind == ServerDataType::Data),
+        "超时后客户端数据必须被静默丢弃（GetSession == null）：{got:?}"
+    );
+    assert!(
+        !got.iter().any(|m| m.kind == ServerDataType::Leave),
+        "超时路径不得给 DBSrv 发 Leave：{got:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

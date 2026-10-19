@@ -9,6 +9,9 @@
 //!   `错误的数据包索引` 日志，**不刷新**；
 //! - `TimedService.cs:38-76`：每 `> 20 * 1000` ms 扫描一次，`success=true` 时立即
 //!   `_sessionManager.CloseSession` 并摘除 `SessionArray` 槽位（阶段二线上不可达）；
+//!   SelGate 的 `SessionManager.CloseSession` **只 `TryRemove`、不调 `ClientSession.CloseSession`**
+//!   （`Services/SessionManager.cs:60-67`，与 LoginGate 相反）⇒ 超时后 **socket 保持打开**，
+//!   后续客户端数据因 `GetSession == null` 被静默丢弃，直到客户端自己断开；
 //! - `Conf/GateConfig.cs:116`：缺省 `m_nClientTimeOutTime = 60 * 1000`；
 //!   `Conf/ConfigManager.cs:33-38`：`< 10 * 1000` 夹到 `10 * 1000`。
 //!
