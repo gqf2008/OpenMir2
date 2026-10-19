@@ -4911,7 +4911,7 @@ impl World {
     ///
     /// `ignore_actors = true`（oracle `boFlag` 支）：只判 `cellSuccess && Valid`；
     /// `false`：再排除格上的活体（`!Ghost && !Death && !FixedHideMode && !ObMode`）。
-    fn can_walk_at(&self, map_id: usize, x: i32, y: i32, ignore_actors: bool) -> bool {
+    pub(crate) fn can_walk_at(&self, map_id: usize, x: i32, y: i32, ignore_actors: bool) -> bool {
         let Some(map) = self.maps.get(map_id) else {
             return false;
         };

@@ -731,6 +731,10 @@ pub enum ClassRunBase {
     /// `DigOutZombi`/`ScultureMonster : MonsterObject` ⇒ `base.Run()` = `MonsterObject.Run`
     /// → `AnimalObject.Run` → `BaseObject.Run`。
     Monster,
+    /// 类 `Run` 体内已 `return`（oracle 显式跳过 `base.Run()`）⇒ 调用方**不得**续跑
+    /// `AnimalObject.Run`/`BaseObject.Run`。目前只有 `CowKingMonster.Run` 的 Siege 两支
+    /// （`CowKingMonster.cs:53/56`）会走到。
+    None,
 }
 
 /// `SendRefMsg(...)`（`BaseObject.Message.cs:383-445`）在怪物 AI 里产生的帧事件。
@@ -845,7 +849,8 @@ fn send_ref_msg_with_target(
 ///
 /// 已接：MB-1 的 `StickMonster`(85)/`DigOutZombi`(95)/`ScultureMonster`(101)/
 /// `BigHeartMonster`(115)；MB-2 的 `ChickenDeer`(52)/`DualAxeMonster`(87，93/104 继承)/
-/// `LightingZombi`(94)/`ZilKinZombi`(96)。
+/// `LightingZombi`(94)/`ZilKinZombi`(96)；MB-3 的 `CentipedeKing`(107)/`GasMoth`(105)/
+/// `ScultureKing`(102)/`ExplosionSpider`(117)；MB-4 的 `CowKingMonster`(92)。
 ///
 /// 返回 `None` = 非上述类，调用方继续走通用 [`monster_run`]；否则按 [`ClassRunBase`]
 /// 决定 oracle `base.Run()` 的落点。
@@ -911,6 +916,16 @@ pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBas
         117 => {
             explosion_spider_run(world, actor_id);
             Some(ClassRunBase::Monster)
+        }
+        // **MB-4**：`CowKingMonster.Run`（`:40-94`）；`base.Run()` =
+        // `ATMonster.Run`（race 92 不在索敌集合）→ `MonsterObject.Run`。
+        // Siege 两支在 oracle 里 `return`，**跳过 `base.Run()`** ⇒ `ClassRunBase::None`。
+        92 => {
+            if cow_king_run(world, actor_id) {
+                Some(ClassRunBase::None)
+            } else {
+                Some(ClassRunBase::Monster)
+            }
         }
         _ => None,
     }
@@ -1169,6 +1184,9 @@ fn monster_attack_target(world: &mut World, actor_id: i32) -> bool {
         // `ScultureKingMonster` 用的是基版 `MonsterObject.AttackTarget`，但虚调用 `Attack`
         // 被覆写为 `HitMagAttackTarget`（102）。
         Some(102) => sculture_king_attack_target(world, actor_id),
+        // **MB-4**：`CowKingMonster.Attack`（`:27-31`：`GetAttackPower` + 半物理/半魔法
+        // `HitMagAttackTarget`）。
+        Some(92) => cow_king_attack_target(world, actor_id),
         // **`openmir2-attacktarget-overrides`**：余下 7 类（见上方分区注释）。
         Some(130) => double_critical_attack_target(world, actor_id),
         // `SpitSpider`（82）/`HighRiskSpider`（118）/`BigPoisionSpider`（119）继承同一实现，
@@ -2957,6 +2975,275 @@ fn back_position_from(world: &World, map_id: usize, x: i32, y: i32, dir: u8) -> 
     (n_x, n_y)
 }
 
+// ---------------------------------------------------------------------------
+// **MB-4**（R10）——`CowKingMonster`（race 92）：30s 跳跃/狂暴状态机 + `Attack` 覆写。
+// ---------------------------------------------------------------------------
+
+/// 30s 跳跃门（`CowKingMonster.cs:42`，严格 `>`）。
+const COW_KING_JUMP_INTERVAL_MS: i64 = 30 * 1000;
+/// `CrazyReady` 段长（`:70`，严格 `<`）。
+const COW_KING_READY_MS: i64 = 8 * 1000;
+/// `CrazyKing` 段长（`:81`，严格 `<`）。
+const COW_KING_KING_MS: i64 = 8 * 1000;
+/// `CrazyReadyMode` 期间的 `NextHitTime`（`:72`）。
+const COW_KING_READY_HIT_TIME: i64 = 10_000;
+/// `CrazyKingMode` 期间的 `NextHitTime`（`:83`）。
+const COW_KING_KING_HIT_TIME: i64 = 500;
+/// `CrazyKingMode` 期间的 `WalkSpeed`（`:84`）。
+const COW_KING_KING_WALK_SPEED: i64 = 400;
+/// `SiegeLockCount()` 的进入门（`:47`）。
+const COW_KING_SIEGE_LOCK_THRESHOLD: i32 = 5;
+
+/// `CowKingMonster.SiegeLockCount()`（`CowKingMonster.cs:96-118`）。
+///
+/// **oracle 无持久字段**：每次 `Run` 现算 3×3 邻域（`nC/n10 ∈ {-1,0,1}`）里
+/// `Envir.CanWalk(CurrX+nC, CurrY+n10, false)` 为假的格数，**中心格不计**
+/// （`:110` 的 `(nC != 0) || (n10 != 0)`）。`CanWalk(..., false)` 的含义见
+/// [`World::can_walk_at`]：越界/墙格为假；格上 `!Ghost && !Death && !FixedHideMode && !ObMode`
+/// 的活体也算阻挡。
+///
+/// 不抽随机数、不写状态。
+fn cow_king_siege_lock_count(world: &World, actor_id: i32) -> i32 {
+    let Some(e) = world.entities.get(actor_id) else {
+        return 0;
+    };
+    let (cx, cy, map_id) = (e.x, e.y, e.map_id);
+    let mut result = 0;
+    let mut n_c = -1;
+    while n_c != 2 {
+        let mut n10 = -1;
+        while n10 != 2 {
+            if !world.can_walk_at(map_id, cx + n_c, cy + n10, false) && (n_c != 0 || n10 != 0) {
+                result += 1;
+            }
+            n10 += 1;
+        }
+        n_c += 1;
+    }
+    result
+}
+
+/// `CowKingMonster.Run`（`CowKingMonster.cs:40-94`）。`base.Run()` 由调用方按
+/// [`ClassRunBase::Monster`] 续跑。
+///
+/// 逐句：
+/// 1. `!Death && !Ghost && (now - JumpTime) > 30s` —— 严格 `>`，进门先刷新 `JumpTime`；
+/// 2. `TargetCret != null && SiegeLockCount() >= 5` ⇒ `TargetCret.GetBackPosition` 的格子
+///    `CanWalk(...,false)` ⇒ `SpaceMove(Envir.MapName, x, y, 0)`，否则 `MapRandomMove`；
+///    **两支都 `return`**（跳过 Crazy 段与 `base.Run()`）；
+/// 3. `CrazyCount = 7 - HP / (MaxHP / 7)` —— **C# `int/int` 两次整除**；
+/// 4. `CrazyCount >= 2 && CrazyCount != oldCrazyCount` ⇒ 进 `CrazyReadyMode`；
+/// 5. Ready 段 `< 8s` ⇒ `NextHitTime = 10000`；到期 ⇒ 清 Ready、进 King、`CrazyTime = now`
+///    （同一调用内随后立即跑 King 段 ⇒ 立刻写 `500/400`）；
+/// 6. King 段 `< 8s` ⇒ `NextHitTime = 500`、`WalkSpeed = 400`；到期 ⇒ 清 King 并恢复
+///    `oldHitTime/oldWalkTime`（`Initialize()` 保存的 **DB** 值）。
+///
+/// **取数**：本函数自身零抽。`SpaceMove` 在落点已由 `CanWalk` 验证可走时
+/// `SpaceMoveGetRandXY` 首轮即成功 ⇒ 零抽；`MapRandomMove` 恰好 2 抽
+/// （`merchant::map_random_move_xy`），落点不可走时再进 `space_move` 移位环。
+///
+/// 返回 `true` = oracle 在 `Run` 体内 `return`（Siege 两支）⇒ 调用方不得续跑 `base.Run()`。
+fn cow_king_run(world: &mut World, actor_id: i32) -> bool {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return false;
+    };
+    if e.death || e.ghost || now - e.jump_time <= COW_KING_JUMP_INTERVAL_MS {
+        return false;
+    }
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.jump_time = now;
+    }
+    // `TargetCret != null`：悬空 id 在本骨架等价于 `null`（oracle 的强引用不可能悬空）。
+    let target_id = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+        .filter(|tid| world.entities.get(*tid).is_some());
+    if let Some(tid) = target_id {
+        if cow_king_siege_lock_count(world, actor_id) >= COW_KING_SIEGE_LOCK_THRESHOLD {
+            // `TargetCret.GetBackPosition(ref nX, ref nY)`（边界按**目标**图夹取）。
+            let (n_x, n_y) = get_back_position(world, tid).unwrap_or((0, 0));
+            let map_id = world.entities.get(actor_id).map_or(0, |e| e.map_id);
+            // `Envir.CanWalk(nX, nY, false)` —— `Envir` 是**自己**的地图。
+            if world.can_walk_at(map_id, n_x, n_y, false) {
+                crate::space_move::monster_space_move(world, actor_id, map_id, n_x, n_y);
+                return true;
+            }
+            crate::merchant::map_random_move(world, actor_id);
+            return true;
+        }
+    }
+    let (hp, max_hp) = world
+        .entities
+        .get(actor_id)
+        .map_or((0, 0), |e| (e.hp, e.max_hp));
+    let old_crazy_count = world.entities.get(actor_id).map_or(0, |e| e.crazy_count);
+    // **C# `int/int` 整除**：`MaxHP / 7` 先截断，再 `HP / (MaxHP / 7)`。
+    // `MaxHP < 7` 时 oracle 会抛 `DivideByZeroException`（部署无此怪）；本实现用
+    // `max(1)` 避免 panic（等价的 crash 不复刻，登记在报告）。
+    let base = i32::from(max_hp) / 7;
+    let crazy_count = 7 - i32::from(hp) / base.max(1);
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.crazy_count = crazy_count;
+    }
+    if crazy_count >= 2 && crazy_count != old_crazy_count {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.crazy_ready_mode = true;
+            e.crazy_ready = now;
+        }
+    }
+    let (ready, ready_tick) = world
+        .entities
+        .get(actor_id)
+        .map_or((false, 0), |e| (e.crazy_ready_mode, e.crazy_ready));
+    if ready {
+        if now - ready_tick < COW_KING_READY_MS {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.next_hit_time = COW_KING_READY_HIT_TIME;
+            }
+        } else {
+            // `CrazyReadyMode = false; CrazyKingMode = true; CrazyTime = GetTickCount();`
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.crazy_ready_mode = false;
+                e.crazy_king_mode = true;
+                e.crazy_time = now;
+            }
+        }
+    }
+    let (king, king_tick) = world
+        .entities
+        .get(actor_id)
+        .map_or((false, 0), |e| (e.crazy_king_mode, e.crazy_time));
+    if king {
+        if now - king_tick < COW_KING_KING_MS {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.next_hit_time = COW_KING_KING_HIT_TIME;
+                e.ai.walk_speed = COW_KING_KING_WALK_SPEED;
+            }
+        } else {
+            // `CrazyKingMode = false; NextHitTime = oldHitTime; WalkSpeed = oldWalkTime;`
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.crazy_king_mode = false;
+                e.ai.next_hit_time = e.old_hit_time;
+                e.ai.walk_speed = e.old_walk_time;
+            }
+        }
+    }
+    false
+}
+
+/// `MonsterObject.AttackTarget` 的 race 92 版本：门/状态写点与 [`attack_target`] 相同，
+/// 只把到点后的虚调用 `Attack(target, btDir)` 换成 [`cow_king_attack`]
+/// （`CowKingMonster.cs:27-31`）。
+fn cow_king_attack_target(world: &mut World, actor_id: i32) -> bool {
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return false;
+    };
+    let now = world.clock_ms;
+    if let Some(bt_dir) = get_attack_dir(world, actor_id, target_id) {
+        let due = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
+        if due {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.attack_tick = now;
+                e.ai.target_focus_tick = now;
+                e.ai.holy_seize = false;
+            }
+            turn_to(world, actor_id, bt_dir);
+            cow_king_attack(world, actor_id, target_id);
+        }
+        true
+    } else {
+        let (same_map, tx, ty) = match (
+            world.entities.get(actor_id).map(|e| e.map_id),
+            world.entities.get(target_id).map(|t| (t.map_id, t.x, t.y)),
+        ) {
+            (Some(am), Some((tm, tx, ty))) => (am == tm, tx, ty),
+            _ => (false, 0, 0),
+        };
+        if same_map {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.target_x = tx;
+                e.ai.target_y = ty;
+            }
+        } else {
+            del_target_creature(world, actor_id);
+        }
+        false
+    }
+}
+
+/// `CowKingMonster.Attack`（`CowKingMonster.cs:27-31`）：
+/// `nPower = GetAttackPower(LoByte(DC), Math.Abs(HiByte(DC) - LoByte(DC)))`
+/// （第二参是 **`Abs`**，不是 `(sbyte)` 强转）→ `HitMagAttackTarget(target, nPower/2, nPower/2, true)`
+/// （`AnimalObject.cs:361-383`：目标格 `GetBaseObjects(..., false)` 逐对象
+/// `GetHitStruckDamage(nPower/2) + GetMagStruckDamage(nPower/2)` → `StruckDamage` +
+/// 200ms `RM_REFMESSAGE`；尾帧 `RM_HIT`）。
+fn cow_king_attack(world: &mut World, actor_id: i32, target_id: i32) {
+    let Some((cx, cy, dc)) = world.entities.get(actor_id).map(|e| (e.x, e.y, e.dc)) else {
+        return;
+    };
+    let lo = i32::from(crate::combat::lo_byte(dc));
+    let hi = i32::from(crate::combat::hi_byte(dc));
+    // **1 抽**：`Random(|Hi-Lo| + 1)`。
+    let n_power = crate::combat::get_attack_power(&mut world.rng, lo, (hi - lo).abs());
+    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+        return;
+    };
+    // `Dir = M2Share.GetNextDirection(CurrX, CurrY, target.CurrX, target.CurrY)`。
+    let dir = crate::magic::next_direction(cx, cy, tx, ty);
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = dir;
+    }
+    let map_id = world.entities.get(actor_id).map_or(0, |e| e.map_id);
+    let undead = world.entities.get(actor_id).map_or(0, |e| e.undead_power);
+    // `Envir.GetBaseObjects(target.CurrX, target.CurrY, false, ...)`：boFlag=false 口径
+    // （含「死但未 Ghost」）——复用与 ScultureKing 相同的格扫。
+    for tid in world.base_objects_at_including_dead(map_id, tx, ty) {
+        let proper = world
+            .entities
+            .get(actor_id)
+            .zip(world.entities.get(tid))
+            .is_some_and(|(a, t)| is_proper_target(a, t));
+        if !proper {
+            continue;
+        }
+        let mac = world.entities.get(tid).map_or(0, |t| t.mac);
+        // `GetHitStruckDamage(this, nPower / 2)`：AC 骰照抽（即使 nPower/2 == 0）。
+        let hit = {
+            let target = world.entities.get(tid).expect("target exists");
+            let attacker = world.entities.get(actor_id).expect("attacker exists");
+            crate::combat::get_hit_struck_damage(&mut world.rng, target, attacker, n_power / 2)
+        };
+        // `GetMagStruckDamage(this, nPower / 2)`：MAC 骰照抽。
+        let mag =
+            crate::combat::get_mag_struck_damage(&mut world.rng, mac, n_power / 2, Some(undead));
+        let n_damage = i32::from(hit) + mag;
+        if n_damage > 0 {
+            let _ = class_struck_apply(world, actor_id, tid, n_damage, n_power);
+            // `SendStruckDelayMsg(RM_REFMESSAGE, nDamage, HP, MaxHP, ActorId, "", 200)`。
+            world.send_struck_delay_msg_refmessage(
+                tid,
+                actor_id,
+                n_damage,
+                HIT_MAG_STRUCK_DELAY_MS,
+            );
+        }
+    }
+    let (dir, x, y) = match world.entities.get(actor_id) {
+        Some(e) => (e.ai.dir, e.x, e.y),
+        None => return,
+    };
+    send_ref_msg(world, actor_id, RM_HIT, i32::from(dir), x, y, 0);
+}
+
 /// `MonsterObject.Run`（`MonsterObject.cs:251-360`）的**普通怪路径**（任务/逃跑触发点未建模；
 /// `Master` 跟随 / `SlaveRelax` 已接）。
 ///
@@ -3466,6 +3753,7 @@ pub fn monster_ai_tick(world: &mut World) {
                             animal_run(world, id);
                             base_object_run_monster(world, id);
                         }
+                        ClassRunBase::None => {}
                     }
                     continue;
                 }
@@ -3519,6 +3807,7 @@ pub fn monster_ai_tick(world: &mut World) {
                     animal_run(world, id);
                     base_object_run_monster(world, id);
                 }
+                ClassRunBase::None => {}
             }
             continue;
         }
@@ -8987,5 +9276,458 @@ mod tests {
         let mut e = Entity::new(0, "y", 8, 8);
         crate::mongen::apply_monster_class_constants(&mut e, 215, 12_345);
         assert_eq!(e.view_range, 8, "MagicMonster ctor ViewRange=8");
+    }
+
+    // ------------------------------------------------------------------
+    // **MB-4**（R10）——`CowKingMonster`（race 92）构造级用例。
+    // ------------------------------------------------------------------
+
+    /// 造一只 race 92 的牛魔王（`jump_time` 由各用例按门设置）。
+    fn mb4_cow(world: &mut World, x: i32, y: i32, hp: u16, max_hp: u16) -> i32 {
+        let id = mb1_monster(world, 92, x, y);
+        let e = world.entities.get_mut(id).unwrap();
+        e.hp = hp;
+        e.max_hp = max_hp;
+        id
+    }
+
+    /// 把 map 0 的指定格置为墙（`Valid == false` ⇒ `CanWalk` 失败）。
+    fn mb4_block(world: &mut World, cells: &[(i32, i32)]) {
+        for &(x, y) in cells {
+            let (cell, ok) = world.maps[0].get_cell_info_mut(x, y);
+            assert!(ok, "({x},{y}) 应为合法格");
+            cell.set_attribute(crate::map::CellAttribute::LowWall);
+        }
+    }
+
+    /// 判据①：30s 门严格 `>`；进门先刷新 `JumpTime`；`Death`/`Ghost` 两支都跳过。
+    ///
+    /// 牙：删掉 30s 门（或把 `>` 改 `>=`）⇒ 本用例红。
+    #[test]
+    fn mb4_run_30s_gate_is_strict_greater_and_refreshes_jump_time() {
+        let mut world = World::new(32, 32);
+        let id = mb4_cow(&mut world, 10, 10, 700, 700);
+        world.clock_ms = 100_000;
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.jump_time = 70_000; // now - jump == 30_000：严格 > ⇒ 不得进门
+            e.crazy_count = 5;
+        }
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        {
+            let e = world.entities.get(id).unwrap();
+            assert_eq!(e.jump_time, 70_000, "恰好 30s 不刷新 JumpTime");
+            assert_eq!(e.crazy_count, 5, "恰好 30s 不进 Crazy 段");
+        }
+        // 30_001 ⇒ 进门：刷新 JumpTime 并重算 CrazyCount（满血 ⇒ 0）。
+        world.entities.get_mut(id).unwrap().jump_time = 69_999;
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        {
+            let e = world.entities.get(id).unwrap();
+            assert_eq!(e.jump_time, 100_000, "> 30s 刷新 JumpTime");
+            assert_eq!(e.crazy_count, 0, "满血 ⇒ 7 - 700/(700/7) = 0");
+        }
+        // Death / Ghost：即使 30s 已过也整段跳过（只留 base.Run）。
+        for ghost in [false, true] {
+            let mut world = World::new(32, 32);
+            let id = mb4_cow(&mut world, 10, 10, 700, 700);
+            world.clock_ms = 100_000;
+            {
+                let e = world.entities.get_mut(id).unwrap();
+                e.jump_time = 0;
+                e.crazy_count = 5;
+                if ghost {
+                    e.ghost = true;
+                } else {
+                    e.death = true;
+                }
+            }
+            assert_eq!(
+                monster_class_run(&mut world, id),
+                Some(ClassRunBase::Monster)
+            );
+            let e = world.entities.get(id).unwrap();
+            assert_eq!(e.jump_time, 0, "Death/Ghost ⇒ 不刷新");
+            assert_eq!(e.crazy_count, 5, "Death/Ghost ⇒ 不进 Crazy 段");
+        }
+    }
+
+    /// 判据②：`SiegeLockCount()` 按 oracle **现算** 3×3 不可走格数（中心格不计）；
+    /// 地形墙、越界格、活体（`!Ghost && !Death && !FixedHideMode && !ObMode`）都算，
+    /// `Death`/`Ghost` 不算。
+    #[test]
+    fn mb4_siege_lock_count_is_3x3_terrain_and_actor_blockers_excluding_center() {
+        let mut world = World::new(32, 32);
+        let id = mb4_cow(&mut world, 10, 10, 700, 700);
+        mb4_block(&mut world, &[(9, 9), (10, 9), (11, 9), (9, 10), (9, 11)]);
+        assert_eq!(
+            cow_king_siege_lock_count(&world, id),
+            5,
+            "3×3 地形墙计数（中心格不计）"
+        );
+        // 活体占位 +1；死亡/隐身不阻挡。
+        let blocker = mb1_monster(&mut world, 80, 11, 10);
+        assert!(world.enter_world(blocker), "活体落图");
+        assert_eq!(
+            cow_king_siege_lock_count(&world, id),
+            6,
+            "活体算阻挡（CanWalk(...,false)）"
+        );
+        world.entities.get_mut(blocker).unwrap().death = true;
+        assert_eq!(cow_king_siege_lock_count(&world, id), 5, "Death ⇒ 不阻挡");
+        world.entities.get_mut(blocker).unwrap().death = false;
+        world.entities.get_mut(blocker).unwrap().ghost = true;
+        assert_eq!(cow_king_siege_lock_count(&world, id), 5, "Ghost ⇒ 不阻挡");
+        // 边界：越界格算不可走（(0,0) 的 5 个越界邻格）。
+        let mut world = World::new(32, 32);
+        let corner = mb4_cow(&mut world, 0, 0, 700, 700);
+        assert_eq!(
+            cow_king_siege_lock_count(&world, corner),
+            5,
+            "越界格算不可走"
+        );
+    }
+
+    /// 判据③a：`TargetCret != null && SiegeLockCount() >= 5` 且目标身后格可走 ⇒
+    /// `SpaceMove` 到目标身后格，**零抽**，并且 `return` 跳过 Crazy 段。
+    ///
+    /// 牙：把 `>= 5` 改成 `> 5`（恰好 5 格时不再进支）⇒ 本用例红。
+    #[test]
+    fn mb4_siege_ge5_spaces_to_target_back_and_skips_crazy() {
+        let mut world = World::new(32, 32);
+        let id = mb4_cow(&mut world, 10, 10, 700, 700);
+        assert!(world.enter_world(id), "牛魔王落图");
+        mb4_block(&mut world, &[(9, 9), (10, 9), (11, 9), (9, 10), (9, 11)]);
+        // 目标 (12,10) 朝右 ⇒ `GetBackPosition` = (11,10)（可走）。
+        let target = mb1_monster(&mut world, 80, 12, 10);
+        world.entities.get_mut(target).unwrap().ai.dir = DIR_RIGHT;
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.jump_time = 0;
+            e.ai.target_creature = Some(target);
+            e.crazy_count = 5;
+        }
+        world.clock_ms = 100_000;
+        world.rng = RandomNumber::with_seed(1234);
+        let mut probe = RandomNumber::with_seed(1234);
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::None),
+            "Siege 支 return ⇒ 跳过 base.Run"
+        );
+        {
+            let e = world.entities.get(id).unwrap();
+            assert_eq!((e.x, e.y), (11, 10), "落点 = 目标身后格");
+            assert_eq!(e.jump_time, 100_000, "进门先刷新 JumpTime");
+            assert_eq!(e.crazy_count, 5, "Siege 支 return ⇒ 跳过 Crazy 段");
+        }
+        assert_eq!(
+            world.rng.random(),
+            probe.random(),
+            "落点已由 CanWalk 验证 ⇒ SpaceMoveGetRandXY 首轮成功 ⇒ 零抽"
+        );
+    }
+
+    /// 判据③b：目标身后格不可走 ⇒ `MapRandomMove`（恰好 2 抽，落点可走时无移位环），
+    /// 并且同样 `return` 跳过 Crazy 段。
+    #[test]
+    fn mb4_siege_failure_falls_back_to_map_random_move_with_two_draws() {
+        let mut world = World::new(32, 32);
+        let id = mb4_cow(&mut world, 10, 10, 700, 700);
+        assert!(world.enter_world(id), "牛魔王落图");
+        // 目标 (12,9) 朝右 ⇒ 身后 (11,9) 是墙 ⇒ 走 MapRandomMove。
+        mb4_block(&mut world, &[(9, 9), (10, 9), (11, 9), (9, 10), (9, 11)]);
+        let target = mb1_monster(&mut world, 80, 12, 9);
+        world.entities.get_mut(target).unwrap().ai.dir = DIR_RIGHT;
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.jump_time = 0;
+            e.ai.target_creature = Some(target);
+            e.crazy_count = 5;
+        }
+        world.clock_ms = 100_000;
+        world.rng = RandomNumber::with_seed(777);
+        let mut probe = RandomNumber::with_seed(777);
+        // `MapRandomMove`（`BaseObject.cs:1214-1237`）：32×32 ⇒ nEgdey=20，
+        // 两抽 `Random(32-20-1)=Random(11)`，落点 = 值 + 20。
+        let want_x = probe.random_below(11) + 20;
+        let want_y = probe.random_below(11) + 20;
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::None),
+            "Siege 支 return ⇒ 跳过 base.Run"
+        );
+        {
+            let e = world.entities.get(id).unwrap();
+            assert_eq!((e.x, e.y), (want_x, want_y), "MapRandomMove 落点");
+            assert_eq!(e.crazy_count, 5, "MapRandomMove 后 return ⇒ 跳过 Crazy 段");
+        }
+        assert_eq!(
+            world.rng.random(),
+            probe.random(),
+            "恰两抽（落点可走 ⇒ 无移位环）"
+        );
+    }
+
+    /// 判据④：`CrazyCount = 7 - HP / (MaxHP / 7)` 是 **C# `int/int` 两次整除**。
+    ///
+    /// 牙：把外层 `/` 改成浮点（`7 - (HP as f64 / (MaxHP as f64 / 7.0)) as i32`）⇒
+    /// `(hp=99, max=100)` 用例红（整除 99/14=7 ⇒ 0；浮点 99/14.285=6.93 ⇒ 1）。
+    #[test]
+    fn mb4_crazy_count_uses_int_division_boundaries() {
+        let run = |hp: u16, max_hp: u16, old: i32| {
+            let mut world = World::new(32, 32);
+            let id = mb4_cow(&mut world, 10, 10, hp, max_hp);
+            world.clock_ms = 100_000;
+            {
+                let e = world.entities.get_mut(id).unwrap();
+                e.jump_time = 0;
+                e.crazy_count = old;
+            }
+            assert_eq!(
+                monster_class_run(&mut world, id),
+                Some(ClassRunBase::Monster)
+            );
+            world.entities.get(id).unwrap().crazy_count
+        };
+        assert_eq!(run(700, 700, 9), 0, "HP=MaxHP ⇒ 7-7=0");
+        assert_eq!(run(100, 700, 9), 6, "HP=MaxHP/7 ⇒ 7-1=6");
+        assert_eq!(run(699, 700, 9), 1, "699/100=6 ⇒ 1");
+        assert_eq!(run(99, 100, 9), 0, "int/int：MaxHP/7=14，99/14=7 ⇒ 0");
+        assert_eq!(run(6, 42, 9), 6, "42/7=6，6/6=1 ⇒ 6");
+    }
+
+    /// 判据⑤：`CrazyCount >= 2 && CrazyCount != oldCrazyCount` 才进 Ready；
+    /// 同值不重进（`CrazyReady` 不被改写）；`<2` 不进。
+    #[test]
+    fn mb4_ready_requires_ge2_and_value_change() {
+        // (old=0, new=6) ⇒ 进 Ready，写 Ready tick 并立刻 `NextHitTime=10000`。
+        let mut world = World::new(32, 32);
+        let id = mb4_cow(&mut world, 10, 10, 100, 700);
+        world.clock_ms = 100_000;
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.jump_time = 0;
+            e.crazy_count = 0;
+            e.ai.next_hit_time = 2000;
+        }
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        {
+            let e = world.entities.get(id).unwrap();
+            assert!(e.crazy_ready_mode, "new=6 >= 2 且变化 ⇒ Ready");
+            assert_eq!(e.crazy_ready, 100_000, "CrazyReady = now");
+            assert_eq!(e.ai.next_hit_time, COW_KING_READY_HIT_TIME);
+        }
+        // (old=6, new=6) ⇒ 同值不重进：Ready tick 仍是首次的 100_000；
+        // 此时已过 8s ⇒ 转 King 并写 500/400（同一调用）。
+        world.clock_ms = 130_000;
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.jump_time = 99_999; // 让 30s 门通过
+        }
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        {
+            let e = world.entities.get(id).unwrap();
+            assert_eq!(e.crazy_ready, 100_000, "同值不得重写 CrazyReady");
+            assert!(e.crazy_king_mode, "已过 8s ⇒ 转 King");
+            assert_eq!(e.ai.next_hit_time, COW_KING_KING_HIT_TIME);
+            assert_eq!(e.ai.walk_speed, COW_KING_KING_WALK_SPEED);
+        }
+        // (new=0 < 2) ⇒ 不进 Ready。
+        let mut world = World::new(32, 32);
+        let id = mb4_cow(&mut world, 10, 10, 700, 700);
+        world.clock_ms = 100_000;
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.jump_time = 0;
+            e.crazy_count = 0;
+            e.ai.next_hit_time = 2000;
+        }
+        assert_eq!(
+            monster_class_run(&mut world, id),
+            Some(ClassRunBase::Monster)
+        );
+        {
+            let e = world.entities.get(id).unwrap();
+            assert!(!e.crazy_ready_mode, "0 < 2 ⇒ 不 Ready");
+            assert_eq!(e.ai.next_hit_time, 2000, "不 Ready ⇒ 不改 NextHitTime");
+        }
+    }
+
+    /// 判据⑥：Ready/King 两段 8s 边界都是严格 `<`；King 到期恢复
+    /// `oldHitTime/oldWalkTime`（`Initialize()` 保存值）。
+    ///
+    /// 牙：去掉恢复赋值 ⇒ 到期用例红；把 `< 8000` 改 `<= 8000` ⇒ 边界用例红。
+    #[test]
+    fn mb4_ready_and_king_8s_boundaries_are_strict_and_restore_old_values() {
+        let setup = |clock: i64, ready_ago: i64, king_ago: Option<i64>| {
+            let mut world = World::new(32, 32);
+            let id = mb4_cow(&mut world, 10, 10, 700, 700);
+            world.clock_ms = clock;
+            {
+                let e = world.entities.get_mut(id).unwrap();
+                e.jump_time = 0;
+                e.old_hit_time = 2222;
+                e.old_walk_time = 333;
+                e.ai.next_hit_time = 2000;
+                e.ai.walk_speed = 777;
+                match king_ago {
+                    None => {
+                        e.crazy_ready_mode = true;
+                        e.crazy_ready = clock - ready_ago;
+                    }
+                    Some(ago) => {
+                        e.crazy_king_mode = true;
+                        e.crazy_time = clock - ago;
+                    }
+                }
+            }
+            assert_eq!(
+                monster_class_run(&mut world, id),
+                Some(ClassRunBase::Monster)
+            );
+            world.entities.get(id).unwrap().clone()
+        };
+        // Ready 7999ms：仍 Ready，NextHitTime=10000。
+        let e = setup(100_000, 7_999, None);
+        assert!(e.crazy_ready_mode, "7999 < 8000 ⇒ 仍 Ready");
+        assert!(!e.crazy_king_mode);
+        assert_eq!(e.ai.next_hit_time, COW_KING_READY_HIT_TIME);
+        // Ready 8000ms：转 King 并在同一调用写 500/400。
+        let e = setup(100_000, 8_000, None);
+        assert!(!e.crazy_ready_mode, "8000 不再 < 8000 ⇒ 退出 Ready");
+        assert!(e.crazy_king_mode, "进入 King");
+        assert_eq!(e.crazy_time, 100_000, "CrazyTime = now");
+        assert_eq!(e.ai.next_hit_time, COW_KING_KING_HIT_TIME);
+        assert_eq!(e.ai.walk_speed, COW_KING_KING_WALK_SPEED);
+        // King 7999ms：保持 500/400。
+        let e = setup(100_000, 0, Some(7_999));
+        assert!(e.crazy_king_mode, "7999 < 8000 ⇒ 仍 King");
+        assert_eq!(e.ai.next_hit_time, COW_KING_KING_HIT_TIME);
+        assert_eq!(e.ai.walk_speed, COW_KING_KING_WALK_SPEED);
+        // King 8000ms：退出并恢复 Initialize 保存值。
+        let e = setup(100_000, 0, Some(8_000));
+        assert!(!e.crazy_king_mode, "8000 不再 < 8000 ⇒ 退出 King");
+        assert_eq!(e.ai.next_hit_time, 2222, "恢复 oldHitTime");
+        assert_eq!(e.ai.walk_speed, 333, "恢复 oldWalkTime");
+    }
+
+    /// 判据⑦：`Attack` 覆写的取数/帧面：
+    /// `GetAttackPower(Lo, Abs(Hi-Lo))`（**Abs**，不是 sbyte 差）→
+    /// `HitMagAttackTarget(target, nPower/2, nPower/2)`（两半各自整除）→
+    /// 目标格每 proper 对象 `GetHitStruckDamage` + `GetMagStruckDamage` →
+    /// 200ms `RM_REFMESSAGE`；尾帧 `RM_HIT` 且 `Dir = NextDirection`。
+    ///
+    /// 牙：把 `n_power / 2` 两处改成 `n_power` ⇒ 伤害断言红；
+    /// 把 `(hi - lo).abs()` 改成 `(hi - lo) as i8 as i32` ⇒ 取数参数/伤害断言红。
+    #[test]
+    fn mb4_attack_uses_abs_dc_spread_and_half_physical_half_magic() {
+        // lo=13、hi=5 ⇒ Abs 差 = 8（sbyte 差 = -8 ⇒ clamp 0）。
+        // 选一个 `Random(9)` 抽到偶数且 >0 的种子：nPower = 13+d 为奇数，两半各截断。
+        let seed = (0..100_000)
+            .find(|s| {
+                let d = RandomNumber::with_seed(*s).random_below(9);
+                d >= 2 && d % 2 == 0
+            })
+            .expect("找不到偶数非零抽的种子");
+        let mut world = World::new(32, 32);
+        let id = mb4_cow(&mut world, 10, 10, 700, 700);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.dc = (5 << 8) | 13;
+            e.ai.attack_tick = 0;
+            e.ai.next_hit_time = 2000;
+        }
+        // 必须**落图**：`HitMagAttackTarget` 走 `Envir.GetBaseObjects(target.CurrX, target.CurrY)`。
+        let target = mb1_real_player(&mut world, 11, 10); // race=Play、AC=MAC=0、HP=500
+        world.entities.get_mut(id).unwrap().ai.target_creature = Some(target);
+        world.clock_ms = 100_000;
+        world.enable_refmessage_delay();
+        world.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        let draw = probe.random_below(9);
+        let n_power = 13 + draw;
+        assert!(n_power % 2 == 1, "构造：nPower 奇数");
+        let want_damage = (n_power / 2) * 2;
+        // 目标 AC=0 ⇒ `Random(1)`；MAC=0 ⇒ `Random(1)`；玩家耐久 ⇒ `Random(10)`。
+        let _ = probe.random_below(1);
+        let _ = probe.random_below(1);
+        let _ = probe.random_below(10);
+        let next_after = probe.random();
+
+        assert!(monster_attack_target(&mut world, id), "邻接目标 ⇒ true");
+        {
+            let t = world.entities.get(target).unwrap();
+            assert_eq!(
+                t.hp,
+                500 - u16::try_from(want_damage).unwrap(),
+                "伤害 = nPower/2 + nPower/2（各自整除）"
+            );
+        }
+        assert_eq!(
+            world.entities.get(id).unwrap().ai.dir,
+            crate::magic::next_direction(10, 10, 11, 10),
+            "Dir = NextDirection(CurrX,CurrY,target.CurrX,CurrY)"
+        );
+        assert_eq!(
+            world.rng.random(),
+            next_after,
+            "取数次序：AP(Random(9)) → AC 骰 → MAC 骰 → 玩家耐久 Random(10)"
+        );
+        let msg = world
+            .self_delay_msgs
+            .peek(target)
+            .expect("RM_REFMESSAGE 入队");
+        assert_eq!(msg.ident, crate::slave::RM_REFMESSAGE);
+        assert_eq!(msg.w_param, want_damage);
+        assert_eq!(msg.n_param1, i32::from(500 - want_damage as u16), "HP 快照");
+        assert_eq!(msg.n_param2, 500, "MaxHP 快照");
+        assert_eq!(msg.n_param3, id, "ActorId");
+        assert_eq!(msg.deliver_at_ms, 100_200, "200ms 延迟");
+        let refs = world.pending_monster_ref_msgs.clone();
+        assert_eq!(refs.len(), 1, "HitMagAttackTarget 尾帧一条 RM_HIT");
+        assert_eq!(refs[0].ident, RM_HIT);
+        assert_eq!(refs[0].actor_id, id);
+        assert_eq!((refs[0].x, refs[0].y), (10, 10));
+    }
+
+    /// 判据③c：Siege 两支在 oracle 里 `return` ⇒ **跳过 `base.Run()`**
+    /// （`BaseObject.Run` 的消息段不执行）。用 `pending_view_updates` 是否被排空钉住。
+    #[test]
+    fn mb4_siege_branches_skip_base_run_in_tick_driver() {
+        let mut world = World::new(32, 32);
+        let id = mb4_cow(&mut world, 10, 10, 700, 700);
+        assert!(world.enter_world(id), "牛魔王落图");
+        mb4_block(&mut world, &[(9, 9), (10, 9), (11, 9), (9, 10), (9, 11)]);
+        let target = mb1_monster(&mut world, 80, 12, 10);
+        world.entities.get_mut(target).unwrap().ai.dir = DIR_RIGHT;
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.jump_time = 0;
+            e.ai.target_creature = Some(target);
+            // base.Run 的 `RM_UPDATEVIEWRANGE` 消息段若执行会 take 掉它。
+            e.ai.pending_view_updates = vec![999];
+        }
+        world.clock_ms = 100_000;
+        monster_ai_tick(&mut world);
+        let e = world.entities.get(id).unwrap();
+        assert_eq!((e.x, e.y), (11, 10), "Siege 支仍执行 SpaceMove");
+        assert_eq!(
+            e.ai.pending_view_updates,
+            vec![999],
+            "oracle return ⇒ base.Run 的消息段不得执行"
+        );
     }
 }

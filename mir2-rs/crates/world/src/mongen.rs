@@ -99,9 +99,9 @@ pub type MonsterCreator<'a> =
 /// 表外 race 保持 [`Entity::new`] 的 C# 字段缺省（0/false）。`now` = oracle
 /// `HUtil32.GetTickCount()`（本骨架用 `World::clock_ms` 的确定性注入）。
 ///
-/// **不落 `CowKingMonster.ctor` 的 `RushMode = true`**（`CowKingMonster.cs:21`）：
-/// `Entity.rush_mode` 已被 `RM_MAGSTRUCK` 消费（`BaseObject.Base.cs:620`），置位会改变行为，
-/// 超出 PR-2「零行为改动」；留待 MB-4 连 `Run` 一起接（登记）。
+/// **MB-4 起落 `CowKingMonster.ctor` 的 `RushMode = true`**（`CowKingMonster.cs:21`）：
+/// PR-2 因 `Entity.rush_mode` 已被 `RM_MAGSTRUCK` 消费（`BaseObject.Base.cs:620`）而暂缓；
+/// 本批按 oracle ctor 置位，消费点即该门（`!RushMode` 时才 `WalkTick += 800 + Random(1000)`）。
 pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
     match race {
         // `StickMonster` 基类 ctor（`StickMonster.cs:14-23`）：`ViewRange = 7`、
@@ -194,12 +194,20 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
             entity.want_ref_msg = true;
             entity.guard_direction = -1;
         }
-        // `CowKingMonster` ctor + `Initialize()`。
+        // `CowKingMonster` ctor（`CowKingMonster.cs:17-25`）+ `Initialize()`（`:33-38`）。
+        // ctor 的 `RushMode = true`（`:21`）**本批落地**：消费点
+        // `BaseObject.Base.cs:620` 的 `RM_MAGSTRUCK` 门（`!RushMode` 才给
+        // `WalkTick += 800 + Random(1000)`）——不置位会多抽一次并推迟行走。
         92 => {
             entity.jump_time = now;
+            entity.rush_mode = true;
             entity.crazy_count = 0;
             entity.crazy_ready_mode = false;
             entity.crazy_king_mode = false;
+            // `Initialize()` 的保存值来自 **DB**（oracle 顺序：`ApplyMonsterAbility` `:735`
+            // 先写 `WalkSpeed/NextHitTime`，随后 `:750` 才 `cert.Initialize()`）。
+            // 调用方（`WorldMonsterSink::spawn_monster`）已在调用本函数前用
+            // `MonsterInfo.WalkSpeed/AttackSpeed` 覆盖 `ai.walk_speed/next_hit_time`。
             entity.old_hit_time = entity.ai.next_hit_time;
             entity.old_walk_time = entity.ai.walk_speed;
         }

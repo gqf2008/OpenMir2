@@ -793,6 +793,19 @@ impl MonsterSink for WorldMonsterSink<'_> {
         // 逐 race 的 oracle 出处见 `apply_monster_class_constants` 的文档。
         let now = self.world.clock_ms;
         if let Some(e) = self.world.entities.get_mut(id) {
+            // oracle `ApplyMonsterAbility`（`WorldServer.MonGen.cs:906/909`）：
+            // `WalkSpeed = monster.WalkSpeed`、`NextHitTime = monster.AttackSpeed`。
+            // 时机也必须一致：`ApplyMonsterAbility`（`:735`）**先行**，`cert.Initialize()`
+            // （`:750`）后行 ⇒ race 92 的 `oldWalkTime/oldHitTime` 必须取到 DB 值
+            // （部署 race 92 的 `WALK_SPD = 400`，不是构造缺省 1400）。
+            //
+            // **登记（本批不扩）**：`ApplyMonsterAbility` 的其余两项
+            // `WalkStep/WalkWait`（`:907-908`）仍未接线（现有缺口，影响所有怪）；
+            // 本批只补 MB-4 的 `oldHitTime/oldWalkTime` 直接依赖的两个字段。
+            if let Some(m) = info {
+                e.ai.walk_speed = i64::from(m.walk_speed);
+                e.ai.next_hit_time = i64::from(m.attack_speed);
+            }
             mir2_world::mongen::apply_monster_class_constants(e, req.race, now);
         }
         // **C 第 ③ 片**：生成成功即登记怪物展示层。`MonsterList` 未命中时 oracle 的
@@ -1839,6 +1852,10 @@ mod tests {
             MonsterInfo {
                 name: "牛魔王".to_string(),
                 race: 92,
+                // **MB-4**：`ApplyMonsterAbility`（`:906/909`）写 `WalkSpeed/NextHitTime`；
+                // 部署 race 92 的 DB `WALK_SPD = 400`（`Initialize()` 用它保存 oldWalkTime）。
+                walk_speed: 400,
+                attack_speed: 1500,
                 ..MonsterInfo::default()
             },
         ]);
@@ -1879,8 +1896,22 @@ mod tests {
         let cow = spawn(&mut world, "牛魔王", 92);
         let c = world.entities.get(cow).expect("牛魔王在仓库");
         assert_eq!(c.jump_time, 12_345, "ctor JumpTime = GetTickCount()");
-        assert_eq!(c.old_hit_time, 2000, "Initialize: oldHitTime = NextHitTime");
-        assert_eq!(c.old_walk_time, 1400, "Initialize: oldWalkTime = WalkSpeed");
+        assert!(c.rush_mode, "ctor RushMode = true（CowKingMonster.cs:21）");
+        // **MB-4**：`Initialize()` 的保存值必须来自 **DB**（`ApplyMonsterAbility` 先写，
+        // `cert.Initialize()` 后跑）——部署 race 92 `WALK_SPD=400`，不是构造缺省 1400。
+        assert_eq!(c.ai.walk_speed, 400, "WalkSpeed = MonsterInfo.WalkSpeed");
+        assert_eq!(
+            c.ai.next_hit_time, 1500,
+            "NextHitTime = MonsterInfo.AttackSpeed"
+        );
+        assert_eq!(
+            c.old_hit_time, 1500,
+            "Initialize: oldHitTime = DB AttackSpeed"
+        );
+        assert_eq!(
+            c.old_walk_time, 400,
+            "Initialize: oldWalkTime = DB WalkSpeed"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
