@@ -799,12 +799,17 @@ impl MonsterSink for WorldMonsterSink<'_> {
             // （`:750`）后行 ⇒ race 92 的 `oldWalkTime/oldHitTime` 必须取到 DB 值
             // （部署 race 92 的 `WALK_SPD = 400`，不是构造缺省 1400）。
             //
-            // **登记（本批不扩）**：`ApplyMonsterAbility` 的其余两项
-            // `WalkStep/WalkWait`（`:907-908`）仍未接线（现有缺口，影响所有怪）；
-            // 本批只补 MB-4 的 `oldHitTime/oldWalkTime` 直接依赖的两个字段。
+            // oracle `ApplyMonsterAbility`（`WorldServer.MonGen.cs:907-908`）的其余两项
+            // `WalkStep/WalkWait`（**Lane A 缺口 3**）：数据层 `loaders.rs:293-294` 已读
+            // （`WalkStep = MAX(1, …)`、`WaLkWait` 原样），这里按 oracle 同点写入实体。
+            // 消费端 `monai.rs:3310-3345`：`WalkCount > WalkStep` ⇒ 清零 + `WalkWaitLocked`
+            // + `WalkWaitTick = now`。缺表（`info == None`）时 oracle 的 `ApplyMonsterAbility`
+            // 在 `MonGen.cs:882-885` 直接 return ⇒ 保持构造函数缺省 0/0，不得无条件落默认值。
             if let Some(m) = info {
                 e.ai.walk_speed = i64::from(m.walk_speed);
                 e.ai.next_hit_time = i64::from(m.attack_speed);
+                e.ai.walk_step = i32::from(m.walk_step); // MySqlDB.cs:214 → ApplyMonsterAbility :907
+                e.ai.walk_wait = i64::from(m.walk_wait); // MySqlDB.cs:215 → ApplyMonsterAbility :908
             }
             mir2_world::mongen::apply_monster_class_constants(e, req.race, now);
         }
@@ -1947,5 +1952,172 @@ mod tests {
         assert_eq!(n.mon_gen, Some(0));
         assert_eq!(n.mon_gen_zen_time, 60_000);
         assert_eq!(n.re_alive_tick, 1_234);
+    }
+
+    // ==================================================================
+    // Lane A 缺口 3：WalkStep/WalkWait 接线（oracle ApplyMonsterAbility :907-908）
+    // ==================================================================
+
+    /// 5×5 地图 0 的最小注册表（临时目录，用例级唯一；照上方 sink 用例）。
+    fn lane_a_registry() -> (MapRegistry, std::path::PathBuf) {
+        let base = std::env::temp_dir().join(format!(
+            "gs-mongen-lanea-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&5_i16.to_le_bytes());
+        bytes[2..4].copy_from_slice(&5_i16.to_le_bytes());
+        bytes.resize(mir2_envir::HEADER_BYTES + 5 * 5 * mir2_envir::CELL_BYTES, 0);
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
+        let loader = MapLoader::new(base.clone(), "Map", "Envir");
+        let registry = MapRegistry::from_entries(
+            loader,
+            vec![mir2_envir::MapInfoEntry {
+                map_name: "0".to_string(),
+                map_file_name: "0".to_string(),
+                desc: String::new(),
+                server_index: 0,
+                flag: mir2_envir::MapInfoFlag::default(),
+            }],
+        );
+        (registry, base)
+    }
+
+    fn lane_a_req(mon_name: &str) -> MonsterSpawnRequest {
+        MonsterSpawnRequest {
+            map_name: "0".to_string(),
+            mon_name: mon_name.to_string(),
+            x: 2,
+            y: 2,
+            race: 51,
+            dir: 5,
+            cool_eye: false,
+            gold: 0,
+            drop_items: Vec::new(),
+            ctor: MonsterCtorDraws::default(),
+        }
+    }
+
+    /// **Lane A 缺口 3**：`ApplyMonsterAbility` 的 `WalkStep/WalkWait` 必须落到实体。
+    /// 牙：删掉 sink 里新增的两行 ⇒ 0/0，必红。
+    #[test]
+    fn world_monster_sink_seeds_walk_step_wait() {
+        let (registry, base) = lane_a_registry();
+        let table = MonsterTable::new(vec![MonsterInfo {
+            name: "鸡".to_string(),
+            race: 51,
+            walk_speed: 400,
+            walk_step: 3,
+            walk_wait: 1200,
+            attack_speed: 2000,
+            ..MonsterInfo::default()
+        }]);
+        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        let mut displays = downlink::DisplayTable::new();
+        let id = WorldMonsterSink {
+            world: &mut world,
+            registry: &registry,
+            table: &table,
+            displays: &mut displays,
+        }
+        .spawn_monster(&lane_a_req("鸡"))
+        .expect("生成成功");
+        let e = world.entities.get(id).expect("怪物在仓库");
+        assert_eq!(e.ai.walk_step, 3, "oracle ApplyMonsterAbility :907");
+        assert_eq!(e.ai.walk_wait, 1200, "oracle ApplyMonsterAbility :908");
+        assert_eq!(e.ai.walk_speed, 400);
+        assert_eq!(e.ai.next_hit_time, 2000);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **Lane A 缺口 3**：缺表时 oracle `ApplyMonsterAbility` 早退（`MonGen.cs:882-885`）
+    /// ⇒ 保持构造缺省 0/0（**不得**无条件落 `MAX(1, …)`）。
+    #[test]
+    fn missing_monster_info_keeps_ctor_defaults() {
+        let (registry, base) = lane_a_registry();
+        let table = MonsterTable::default();
+        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        let mut displays = downlink::DisplayTable::new();
+        let id = WorldMonsterSink {
+            world: &mut world,
+            registry: &registry,
+            table: &table,
+            displays: &mut displays,
+        }
+        .spawn_monster(&lane_a_req("鸡"))
+        .expect("空表也可生成（info==None 支）");
+        let e = world.entities.get(id).expect("怪物在仓库");
+        assert_eq!(
+            e.ai.walk_step, 0,
+            "info==None ⇒ oracle 早退，保持 ctor 缺省"
+        );
+        assert_eq!(
+            e.ai.walk_wait, 0,
+            "info==None ⇒ oracle 早退，保持 ctor 缺省"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **Lane A 缺口 3**：`WalkCount > WalkStep` ⇒ 清零 + `WalkWaitLocked` + `WalkWaitTick`；
+    /// 锁在 `now - WalkWaitTick > WalkWait` 时释放（`MonsterObject.cs:260-275`）。
+    /// 牙：`walk_step` 仍为 0（未接线）⇒ 第一次调用就 `1 > 0` 置锁 ⇒ 第一条断言红。
+    #[test]
+    fn walk_wait_gates_after_walk_step_plus_one() {
+        let (registry, base) = lane_a_registry();
+        let table = MonsterTable::default();
+        let mut world = mir2_world::World::with_maps(vec![(5, 5)]); // clock = 0
+        let mut displays = downlink::DisplayTable::new();
+        let id = WorldMonsterSink {
+            world: &mut world,
+            registry: &registry,
+            table: &table,
+            displays: &mut displays,
+        }
+        .spawn_monster(&lane_a_req("鸡"))
+        .expect("生成成功");
+        {
+            let e = world.entities.get_mut(id).expect("怪物在仓库");
+            e.ai.walk_step = 1;
+            e.ai.walk_wait = 600;
+            e.ai.walk_speed = 200;
+            e.ai.walk_tick = 0; // 首次调用即过 (`now - walk_tick) > walk_speed)` 门
+            e.ai.think_tick = 1000;
+            e.ai.target_creature = None;
+        }
+        let snap = |w: &mir2_world::World| {
+            let e = w.entities.get(id).expect("怪物在仓库");
+            (e.ai.walk_count, e.ai.walk_wait_locked, e.ai.walk_wait_tick)
+        };
+        world.clock_ms = 1000;
+        mir2_world::monai::monster_run(&mut world, id);
+        assert_eq!(
+            snap(&world),
+            (1, false, 0),
+            "第 1 步：`1 > WalkStep(1)` 为假 ⇒ 不锁"
+        );
+        world.clock_ms = 1400;
+        mir2_world::monai::monster_run(&mut world, id);
+        assert_eq!(
+            snap(&world),
+            (0, true, 1400),
+            "第 2 步：`2 > 1` ⇒ count=0 + 锁 + WalkWaitTick=now"
+        );
+        world.clock_ms = 1800;
+        mir2_world::monai::monster_run(&mut world, id);
+        assert_eq!(
+            snap(&world),
+            (0, true, 1400),
+            "400 ≤ 600 ⇒ 仍锁，不进入走步段"
+        );
+        world.clock_ms = 2100;
+        mir2_world::monai::monster_run(&mut world, id);
+        assert_eq!(
+            snap(&world),
+            (1, false, 1400),
+            "700 > 600 ⇒ 解锁并走一步（count 重新为 1）"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

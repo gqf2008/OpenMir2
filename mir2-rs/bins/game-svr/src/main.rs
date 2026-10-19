@@ -2885,6 +2885,53 @@ fn add_newbie_items(
     warns
 }
 
+/// **Lane A 缺口 1**：把 `PlayObject.cs:1205-1244` 的四件新手物品**并入角色记录的背包**
+/// （`CharacterData.bag_items`），而不是只写会话 `item_list`。
+///
+/// 原因（评审员更正）：登录期 `RecalcAbilitys()`（`PlayObject.cs:1308-1310`）读的是
+/// `PlayObject.ItemList`（本仓 `bag_items_from(记录 bag_items)`）；旧实现把 `add_newbie_items`
+/// 写在会话 `sg.state.item_list` 上，52/752 的重量与首次 `wabil` 早已按空背包算完 ⇒ 两个列表
+/// 不同源。并进记录后：52/752（`AbilityInputs.bag_items`）、会话 `item_list`、`npc_player_from`
+/// 与存档（`bag_items_for_save`）全部同源。
+///
+/// 顺序照 oracle：`GetHumData` 先装记录里的非空槽，随后 `ItemList.Add` 四件 ⇒
+/// `bag_items_from` 先展平旧槽、再按固定序追加这四件（追加到记录 Vec 末尾即可）。
+/// `MakeIndex` 仍由同一个 `item_number` 计数器分配，且只分配一次。
+/// 返回模板缺失告警（oracle `CopyToUserItemFromName` 失败 ⇒ 不入包）。
+fn merge_newbie_items_into_record(
+    rec: &mut record::CharacterData,
+    catalog: &game_svr::ability::StdItemCatalog,
+    newbie: &NewbieItems,
+    gender: u8,
+    item_number: &mut i32,
+) -> Vec<String> {
+    let mut items = Vec::new();
+    let warns = add_newbie_items(&mut items, catalog, newbie, gender, item_number);
+    let bag = rec.bag_items.get_or_insert_with(Vec::new);
+    for it in &items {
+        bag.push(Some(server_item_from_bag(it)));
+    }
+    warns
+}
+
+/// **Lane A 缺口 2**：oracle `PlayObject.cs:1310-1312` 登录末尾对所有角色
+/// `Abil.MaxExp = GetLevelExp(Abil.Level)`。
+///
+/// `RecalcAbilitys` 本身**不写** `MaxExp`（`ability.rs:476/654` 只 `..abil.clone()` 复制记录值），
+/// 所以这行漏了就会让 52/752 与实体带记录里的旧值（新号 `new_human_ability()` 的 100，
+/// 现网 `Exps.conf:Level1=10`）。存档侧 `build_save_record` 早已按 `GetLevelExp` 写，
+/// 本函数只补登录期这一处（升级路径 `combat.rs`/`win_exp` 另有自己的 `get_level_exp`）。
+fn refresh_login_max_exp(rec: &mut record::CharacterData, need_exps: &[i32]) {
+    let Some(a) = rec.abil.as_mut() else {
+        return;
+    };
+    a.max_exp = mir2_formula::exp::get_level_exp(
+        need_exps,
+        mir2_data::models::MAX_LEVEL,
+        i32::from(a.level),
+    );
+}
+
 /// `CM_QUERYBAGITEMS(81)` 的派发（owner 追加的卡项 ②）。
 ///
 /// oracle 链：`PlayObject.Message.cs:784-795` 的 30s 限频 → `ClientQueryBagItems()`
@@ -5426,6 +5473,11 @@ fn apply_ability_to_entity(
     e.mp = wabil.mp;
     e.max_mp = wabil.max_mp;
     e.level = wabil.level;
+    // oracle `PlayObject.cs:1310-1312`：`Abil.Exp/MaxExp` 与 `WAbil` 同源，实体是战斗侧
+    // （`crates/world/src/combat.rs::win_exp`）的唯一读点。旧实现不写 ⇒ 实体缺省 `0/0`
+    // （`crates/world/src/entity.rs:1006`），登录后首杀必 `exp >= 0` 伪升级（等级 +1）。
+    e.exp = wabil.exp;
+    e.max_exp = wabil.max_exp;
     // `RecalcAbilitys` 的 `AntiMagic = 1 + AddAbil.AntiMagic`（`BaseObject.Abil.cs:30/67`）。
     e.anti_magic = sub.anti_magic;
     // `WAbil.MAC = MakeWord(MIN(255, Lo(AddAbil.MAC)+Lo(Abil.MAC)), …Hi…)`
@@ -15059,7 +15111,38 @@ fn sim_loop(
                                                         r.data.cur_x = enter_x;
                                                         r.data.cur_y = enter_y;
                                                         r.data.abil = Some(new_human_ability());
+                                                        // **Lane A 缺口 1**（oracle `PlayObject.cs:1205-1244`）：
+                                                        // 四件新手物品必须**先并入记录背包**——`:1308-1310` 的
+                                                        // `RecalcAbilitys()` 读的就是 `ItemList`。旧实现直到下面
+                                                        // 的 late 调用才写会话 `item_list`，而重算读记录
+                                                        // `bag_items`（两个列表不同源）⇒ 新号首登 52 的重量少四件。
+                                                        let gender = r.data.sex;
+                                                        let warns = merge_newbie_items_into_record(
+                                                            &mut r.data,
+                                                            &enter_cfg.catalog,
+                                                            &enter_cfg.newbie,
+                                                            gender,
+                                                            &mut item_number,
+                                                        );
+                                                        for w in warns {
+                                                            glog!(
+                                                                "WRN",
+                                                                "{w}（照 oracle CopyToUserItemFromName 失败分支，不入包）"
+                                                            );
+                                                        }
                                                     }
+                                                }
+                                                // **Lane A 缺口 2**（oracle `PlayObject.cs:1310-1312`）：
+                                                // 登录末尾对**所有角色** `Abil.MaxExp = GetLevelExp(Abil.Level)`。
+                                                // `RecalcAbilitys` 本身不写 `MaxExp`（`ability.rs` 只 `..abil`
+                                                // 复制记录值）⇒ 必须在这里补。放在新角色
+                                                // `new_human_ability()`（`max_exp=100`）之后，与 oracle 同序
+                                                // 覆盖为 `Exps[Level]`（现网 1 级 = 10）。
+                                                if let Some(r) = full.as_mut() {
+                                                    refresh_login_max_exp(
+                                                        &mut r.data,
+                                                        &world.need_exps,
+                                                    );
                                                 }
                                                 // **Lane B**：`WorldServer.GetHumData`（`:1198-1213`）的
                                                 // `FindMagic(MagIdx)==null ⇒ 丢弃`（V1 装载过滤）+ 紧接着
@@ -15354,31 +15437,19 @@ fn sim_loop(
                                                     }
                                                     // oracle `PlayObject.cs:1205-1245` 的 `IsNewHuman` 四件新手物品
                                                     // （`IsNewHuman` 由 `WorldServer.cs:258-277` 在 `HomeMap` 空且
-                                                    // `Abil.Level==0` 时置位）。
+                                                    // `Abil.Level==0` 时置位）。**Lane A 缺口 1**：四件已在上面
+                                                    // `full.as_mut()` 的新角色块里并入**记录背包**（重算/帧/会话/
+                                                    // 存档同源）；旧 late `add_newbie_items`（写
+                                                    // `sg.state.item_list`，不同源）已删除。
+                                                    // 日志语义 = **非空件数**（`bag_items_from` 展平后计数）：
+                                                    // 记录 Vec 是定长槽位（新号 46 空槽 + 4 件），`Vec::len()`
+                                                    // 会打印 50，不表实际件数（评审员更正）。
                                                     glog!(
                                                         "INF",
                                                         "IsNewHuman 判定 ChrName={} home_empty={home_empty} 记录 Abil.Level={abil_level} is_new_human={is_new_human} bag_items={}",
                                                         head.chr_name,
-                                                        d.bag_items.as_ref().map_or(0, Vec::len)
+                                                        bag_items_from(d.bag_items.as_deref()).len()
                                                     );
-                                                    if is_new_human {
-                                                        if let Some(sg) =
-                                                            ground_sessions.get_mut(&head.chr_name)
-                                                        {
-                                                            for w in add_newbie_items(
-                                                                &mut sg.state.item_list,
-                                                                &enter_cfg.catalog,
-                                                                &enter_cfg.newbie,
-                                                                d.sex,
-                                                                &mut item_number,
-                                                            ) {
-                                                                glog!(
-                                                                    "WRN",
-                                                                    "{w}（照 oracle CopyToUserItemFromName 失败分支，不入包）"
-                                                                );
-                                                            }
-                                                        }
-                                                    }
                                                 }
                                                 // S3 后半段：把 oracle 在 `SendLogon` 同轮算出的
                                                 // **展示层**字段登记进同屏下行表（`GetFeatureToLong` /
@@ -15475,6 +15546,10 @@ fn sim_loop(
                                                                         .party_script_group_snapshot(
                                                                             id,
                                                                         );
+                                                                // **Lane A 缺口 1 的正向副作用（登记）**：`npc_player_from` 读记录
+                                                                // `bag_items`；四件新手物品已并入记录 ⇒ 脚本侧 `CHECKBAGGAGE` 一类
+                                                                // 查询在新号首次登录即可见四件（与 oracle 的 `ItemList` 语义一致，
+                                                                // 但与旧 Rust 行为不同——旧行为要等 late 调用之后才有）。
                                                                 let mut player = npc_player_from(
                                                                     &mut rngf,
                                                                     &head.chr_name,
@@ -23130,6 +23205,7 @@ mod tests {
             1,
             mir2_data::StdItem {
                 name: "蜡烛".into(),
+                weight: 1,
                 dura_max: 20,
                 ..Default::default()
             },
@@ -23141,6 +23217,7 @@ mod tests {
                 std_mode: 0,
                 shape: 1,
                 ac: 10,
+                weight: 1,
                 dura_max: 30,
                 ..Default::default()
             },
@@ -23150,6 +23227,7 @@ mod tests {
             mir2_data::StdItem {
                 name: "木剑".into(),
                 std_mode: 5,
+                weight: 5,
                 dura_max: 20,
                 ..Default::default()
             },
@@ -23158,6 +23236,7 @@ mod tests {
             4,
             mir2_data::StdItem {
                 name: "布衣(男)".into(),
+                weight: 3,
                 ..Default::default()
             },
         );
@@ -23165,6 +23244,7 @@ mod tests {
             5,
             mir2_data::StdItem {
                 name: "布衣(女)".into(),
+                weight: 3,
                 ..Default::default()
             },
         );
@@ -23258,6 +23338,344 @@ mod tests {
             vec![100 + r + 1, 100 + r + 2, 100 + r + 3, 100 + r + 4],
             "四件新手物品的 MakeIndex 起点 = [Setup] ItemNumber + 屏障 A 抽数（整段前移，不是从 101 起）"
         );
+    }
+
+    /// **Lane A 缺口 1**：四件新手物品必须并入**角色记录背包**（重算/帧/会话/存档同源）。
+    /// 红检：把 `merge_newbie_items_into_record` 的插入挪回旧 late 调用（只写会话
+    /// `item_list`）⇒ `bag_items_from(记录)` 为空，`len == 4` 断言必红。
+    #[test]
+    fn newbie_items_enter_record_bag_before_recalc() {
+        let catalog = newbie_catalog();
+        let names = newbie_names();
+        let mut rec = record::CharacterData {
+            bag_items: Some(vec![None; 46]),
+            sex: 0,
+            ..record::CharacterData::default()
+        };
+        let mut n = names.item_number;
+        let warns = merge_newbie_items_into_record(&mut rec, &catalog, &names, 0, &mut n);
+        assert!(warns.is_empty(), "模板都在：{warns:?}");
+        let flat = bag_items_from(rec.bag_items.as_deref());
+        assert_eq!(
+            flat.iter().map(|i| i.index).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4],
+            "记录背包展平后 = 蜡烛/金创药/木剑/布衣(男)（oracle GetHumData 后 Add 四件）"
+        );
+        assert_eq!(flat.len(), 4, "只并入四件");
+        assert_eq!(
+            flat.iter().map(|i| i.make_index).collect::<Vec<_>>(),
+            vec![101, 102, 103, 104],
+            "MakeIndex 由同一计数器分配一次（旧+新两处都调 ⇒ 108 / 8 件）"
+        );
+        assert_eq!(
+            rec.bag_items.as_ref().map(Vec::len),
+            Some(50),
+            "记录定长槽位 46 + 四件（存档编码形态）"
+        );
+        assert_eq!(n, 104, "计数器恰好前进 4");
+    }
+
+    /// **Lane A 缺口 1**：52/752 的 `WAbil.Weight` 必须含四件（重量 1+1+5+3=10）。
+    /// 牙：`bag_items` 传 `None`（旧语义：重算读不到记录背包）⇒ 0，必红。
+    #[test]
+    fn frame52_weight_counts_newbie_items() {
+        let catalog = newbie_catalog();
+        let names = newbie_names();
+        let mut rec = record::CharacterData::default();
+        let mut n = names.item_number;
+        merge_newbie_items_into_record(&mut rec, &catalog, &names, 0, &mut n);
+        let abil = new_human_ability();
+        let bonus = game_svr::ability::NakedAbility {
+            dc: 0,
+            mc: 0,
+            sc: 0,
+            ac: 0,
+            mac: 0,
+            hp: 0,
+            mp: 0,
+            hit: 0,
+            speed: 0,
+            reserved: 0,
+        };
+        let a = enter::AbilityInputs {
+            catalog: &catalog,
+            abil: &abil,
+            bonus_abil: &bonus,
+            bonus_tick_hit: 1,
+            bonus_tick_speed: 1,
+            use_items: None,
+            bag_items: rec.bag_items.as_deref(),
+            magics: None,
+            magic_table: None,
+            gold: 0,
+            client_ability_layout: false,
+        };
+        assert_eq!(
+            enter::recalc_for_session(&a, 0).wabil.weight,
+            10,
+            "蜡烛1+金创药1+木剑5+布衣3（oracle 重算读的 ItemList 已含四件）"
+        );
+        let empty = enter::AbilityInputs {
+            bag_items: None,
+            ..a
+        };
+        assert_eq!(
+            enter::recalc_for_session(&empty, 0).wabil.weight,
+            0,
+            "对照：背包输入为空 ⇒ 0（证明重量不是恒真）"
+        );
+    }
+
+    /// **Lane A 缺口 1**：会话侧 `recalc_session_ability` 与记录同源（会话 `item_list` 由
+    /// `bag_items_from(记录)` 建立）。牙：只改 `AbilityInputs`/帧、不改记录 ⇒ 会话列表为空 ⇒ 红。
+    #[test]
+    fn login_session_recalc_keeps_newbie_weight() {
+        let catalog = newbie_catalog();
+        let names = newbie_names();
+        let mut rec = record::CharacterData::default();
+        let mut n = names.item_number;
+        merge_newbie_items_into_record(&mut rec, &catalog, &names, 0, &mut n);
+        let mut sg = test_session_ground(1);
+        sg.state.item_list = bag_items_from(rec.bag_items.as_deref());
+        assert_eq!(sg.state.item_list.len(), 4, "会话列表 = 记录非空件");
+        let _ = recalc_session_ability(&mut sg, &catalog, None, None);
+        assert_eq!(
+            sg.state.wabil.weight, 10,
+            "装备/卸下重算读同一份会话 item_list ⇒ 仍是四件的重量"
+        );
+    }
+
+    /// **Lane A 缺口 1/2 的接线牙**（评审员更正要求）：`sim_loop` 的内联接线在仓内用例里
+    /// 从不执行 ⇒ 用源码锚点钉住生产位置。红检：把并入调用挪到 `let data = full.as_ref()`
+    /// 之后、恢复旧 late `add_newbie_items`、或删掉 `refresh_login_max_exp` 调用 ⇒ 必红。
+    #[test]
+    fn login_numeric_gap_wiring_is_anchored() {
+        let src = include_str!("main.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let tests_start = lines
+            .iter()
+            .position(|l| l.trim() == "mod tests {")
+            .expect("`mod tests {` 行");
+        let prod = &lines[..tests_start];
+        let pos = |needle: &str| -> Vec<usize> {
+            prod.iter()
+                .enumerate()
+                .filter(|(_, l)| l.trim() == needle)
+                .map(|(i, _)| i)
+                .collect()
+        };
+        let merge = pos("let warns = merge_newbie_items_into_record(");
+        assert_eq!(merge.len(), 1, "并入调用必须恰一处：{merge:?}");
+        let data = prod
+            .iter()
+            .position(|l| l.trim() == "let data = full.as_ref().map(|r| &r.data);")
+            .expect("`let data = full.as_ref()` 行");
+        assert!(
+            merge[0] < data,
+            "并入必须在 `let data = full.as_ref()`（52/752 输入）之前"
+        );
+        let newh = prod
+            .iter()
+            .position(|l| l.trim() == "if is_new_human {")
+            .expect("`if is_new_human {` 块");
+        assert!(merge[0] > newh, "并入必须在 `if is_new_human` 块内");
+        assert!(
+            !prod
+                .iter()
+                .any(|l| l.contains("for w in add_newbie_items(")),
+            "旧 late `add_newbie_items`（写会话 item_list，不同源）必须已删除"
+        );
+        let refresh = pos("refresh_login_max_exp(");
+        assert_eq!(refresh.len(), 1, "登录 MaxExp 刷新必须恰一处：{refresh:?}");
+        assert!(
+            refresh[0] < data,
+            "MaxExp 刷新必须在 `let data` 之前（所有角色）"
+        );
+        let exp = pos("e.exp = wabil.exp;");
+        let max_exp = pos("e.max_exp = wabil.max_exp;");
+        assert_eq!(exp.len(), 1, "实体 Exp 必须恰一处：{exp:?}");
+        assert_eq!(max_exp.len(), 1, "实体 MaxExp 必须恰一处：{max_exp:?}");
+        assert_eq!(
+            max_exp[0],
+            exp[0] + 1,
+            "两行相邻落在 `apply_ability_to_entity`（生产登录点调用它）"
+        );
+    }
+
+    fn exps_table() -> Vec<i32> {
+        let mut t = vec![0i32; 300];
+        t[1] = 10;
+        t[10] = 300;
+        t
+    }
+
+    fn zero_bonus_abil() -> game_svr::ability::NakedAbility {
+        game_svr::ability::NakedAbility {
+            dc: 0,
+            mc: 0,
+            sc: 0,
+            ac: 0,
+            mac: 0,
+            hp: 0,
+            mp: 0,
+            hit: 0,
+            speed: 0,
+            reserved: 0,
+        }
+    }
+
+    /// **Lane A 缺口 2**：登录记录侧 `Abil.MaxExp = GetLevelExp(Level)`（oracle :1310）。
+    /// 牙：删掉记录侧赋值 ⇒ 保持 100/1，必红。
+    #[test]
+    fn login_max_exp_uses_exps_table() {
+        let need_exps = exps_table();
+        let mut rec = record::CharacterData {
+            abil: Some(record::Ability {
+                level: 1,
+                max_exp: 100,
+                ..record::Ability::default()
+            }),
+            ..record::CharacterData::default()
+        };
+        refresh_login_max_exp(&mut rec, &need_exps);
+        assert_eq!(
+            rec.abil.as_ref().unwrap().max_exp,
+            10,
+            "Level1 = Exps[1]（现网 10，不是记录/新号缺省 100）"
+        );
+        let a = rec.abil.as_mut().unwrap();
+        a.level = 10;
+        a.max_exp = 1;
+        refresh_login_max_exp(&mut rec, &need_exps);
+        assert_eq!(
+            rec.abil.as_ref().unwrap().max_exp,
+            300,
+            "Level10 = Exps[10]（记录旧值 1 被覆盖）"
+        );
+    }
+
+    /// **Lane A 缺口 2**：52/752 的 MaxExp 与登录记录值一致（两种布局都断言）。
+    /// 牙：记录不刷新 ⇒ `recalc_abilitys` 只 `..base` 复制 ⇒ 100，必红。
+    #[test]
+    fn frame52_max_exp_equals_login_value() {
+        let need_exps = exps_table();
+        let unrefreshed = new_human_ability(); // max_exp = 100
+        let mut rec = record::CharacterData {
+            abil: Some(unrefreshed.clone()),
+            ..record::CharacterData::default()
+        };
+        refresh_login_max_exp(&mut rec, &need_exps);
+        let abil = rec.abil.clone().unwrap();
+        let bonus = zero_bonus_abil();
+        let catalog = newbie_catalog();
+        let a = enter::AbilityInputs {
+            catalog: &catalog,
+            abil: &abil,
+            bonus_abil: &bonus,
+            bonus_tick_hit: 1,
+            bonus_tick_speed: 1,
+            use_items: None,
+            bag_items: None,
+            magics: None,
+            magic_table: None,
+            gold: 0,
+            client_ability_layout: false,
+        };
+        let out = enter::recalc_for_session(&a, 0);
+        assert_eq!(out.wabil.max_exp, 10, "52 帧尾取登录后的 MaxExp");
+        let b = record::encode_ability(&out.wabil);
+        assert_eq!(b.len(), 40, "oracle 40B 体");
+        assert_eq!(
+            i32::from_le_bytes([b[28], b[29], b[30], b[31]]),
+            10,
+            "MaxExp@28（40B 布局）"
+        );
+        let c = record::encode_ability_client(&out.wabil);
+        assert_eq!(c.len(), 58, "冻结客户端 58B");
+        assert_eq!(
+            i32::from_le_bytes([c[42], c[43], c[44], c[45]]),
+            10,
+            "MaxExp@42（client-58）"
+        );
+        // 对照（牙）：未刷新的记录值原样复制。
+        let u = enter::AbilityInputs {
+            abil: &unrefreshed,
+            ..a
+        };
+        assert_eq!(
+            enter::recalc_for_session(&u, 0).wabil.max_exp,
+            100,
+            "对照：不刷新 ⇒ 100（证明本判据有牙）"
+        );
+    }
+
+    /// **Lane A 缺口 2**：实体 `exp/max_exp` 必须随登录装载——否则 `win_exp` 的
+    /// `exp >= max_exp` 在 `0/0` 下恒真，登录后首杀必然伪升级（等级 +1、`exp -= 0`）。
+    /// 牙：删掉 `apply_ability_to_entity` 的两行 ⇒ 对照段 `1 >= 0` 必红为真。
+    #[test]
+    fn login_seeds_entity_exp_and_max_exp() {
+        let need_exps = exps_table();
+        let mut abil = new_human_ability(); // exp = 0 / max_exp = 100
+        abil.max_exp = mir2_formula::exp::get_level_exp(
+            &need_exps,
+            mir2_data::models::MAX_LEVEL,
+            i32::from(abil.level),
+        );
+        let bonus = zero_bonus_abil();
+        let catalog = newbie_catalog();
+        let a = enter::AbilityInputs {
+            catalog: &catalog,
+            abil: &abil,
+            bonus_abil: &bonus,
+            bonus_tick_hit: 1,
+            bonus_tick_speed: 1,
+            use_items: None,
+            bag_items: None,
+            magics: None,
+            magic_table: None,
+            gold: 0,
+            client_ability_layout: false,
+        };
+        let out = enter::recalc_for_session(&a, 0);
+        let mut e = new_player_entity("hero".to_string(), 10, 10);
+        apply_ability_to_entity(&mut e, &out.wabil, &out.sub, out.hit_speed);
+        assert_eq!(e.exp, 0, "实体 Exp = WAbil.Exp（记录值）");
+        assert_eq!(e.max_exp, 10, "实体 MaxExp = Exps[1]");
+        // 首杀：1 点经验 < 10 ⇒ 不得升级。
+        let (_, leveled, _) = mir2_world::combat::win_exp(
+            &mut e,
+            1,
+            &need_exps,
+            &mir2_world::combat::CombatConfig::default(),
+            None,
+        );
+        assert!(!leveled, "登录后首杀不得伪升级（exp=1 < max_exp=10）");
+        assert_eq!(e.level, 1, "等级保持不变");
+        // 对照（牙）：max_exp 未装载（0）⇒ `1 >= 0` 恒真。
+        let mut d = new_player_entity("hero2".to_string(), 10, 10);
+        d.exp = 0;
+        d.max_exp = 0;
+        let (_, bogus, _) = mir2_world::combat::win_exp(
+            &mut d,
+            1,
+            &need_exps,
+            &mir2_world::combat::CombatConfig::default(),
+            None,
+        );
+        assert!(bogus, "对照：0/0 ⇒ 首杀伪升级（证明本判据有牙）");
+    }
+
+    /// **Lane A 缺口 2**：装备/卸下重算只 `..base` 复制 `MaxExp/Exp`，登录值不得被记录旧值覆盖。
+    #[test]
+    fn equip_recalc_preserves_login_max_exp() {
+        let catalog = newbie_catalog();
+        let mut sg = test_session_ground(1);
+        sg.equip.abil.max_exp = 10;
+        sg.equip.abil.exp = 3;
+        sg.state.wabil.max_exp = 10;
+        let _ = recalc_session_ability(&mut sg, &catalog, None, None);
+        assert_eq!(sg.state.wabil.max_exp, 10, "重算保留登录 MaxExp");
+        assert_eq!(sg.state.wabil.exp, 3, "重算保留 Exp");
     }
 
     /// **owner 追加的卡项 ②**：`CM_QUERYBAGITEMS(81)` 回 `SM_BAGITEMS(201)`，`recog=ActorId`、
