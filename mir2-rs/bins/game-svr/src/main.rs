@@ -28,6 +28,7 @@ mod config;
 mod dbclient;
 mod enter;
 mod goldsales;
+mod guild_frames;
 mod homemap;
 mod hutil;
 mod ids;
