@@ -250,3 +250,10 @@ monster_ai	csharp	ElfWarriorMonster\.SpitAttack@ElfWarriorMonster\.cs:	src/M2Ser
 drop	csharp	PlayObject\.DropUseItems@PlayObject\.Message\.cs:	src/M2Server/Player/PlayObject.Message.cs:2152	死亡逐槽 Random(DieDropUseItemRate / DieRedDropUseItemRate)（:2183/:2185，13 次含空槽）
 drop	csharp	M2Share\.GetRandomLook@M2Share\.cs:	src/M2Server/M2Share.cs:524	DropItemDown 的 StdMode45 Looks 随机：Random(StdItem.Shape)（:526）
 drop	rust	crates/world/src/death_drop\.rs:	crates/world/src/death_drop.rs	drop_use_items_on_death：13×Random(nRate) →（StdMode45）Random(Shape)；文件级行（漂移信号）
+
+# ---- 2026-10-19 追加（PL-1 复验 F6）：P21 `CheckItemsNeed` 的 DropItemDown 抽数 -------------
+# P21（`PlayObject.Message.cs:403-441`）在背包满时走 `DropItemDown(UseItems[i], …)`；
+# `StdMode == 45` 的 `M2Share.GetRandomLook`（`M2Share.cs:524-527`）在 `AddItemToMap` **之前**
+# 抽一次 `Random(StdItem.Shape)`。Rust 同抽在 `bins/game-svr/src/ground.rs::drop_item_down_p21`
+# （结果丢弃，T-19 使 Looks 不可观测）。C# 侧沿用上方 `M2Share.GetRandomLook` 行。
+drop	rust	bins/game-svr/src/ground\.rs:	bins/game-svr/src/ground.rs	P21 drop_item_down_p21：StdMode45 `Random(StdItem.Shape)`（oracle BaseObject.cs:557-560 → M2Share.cs:524-527；复验 F6）

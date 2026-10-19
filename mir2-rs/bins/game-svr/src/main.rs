@@ -9739,6 +9739,60 @@ fn drain_action_downlink(
     }
 }
 
+/// **PL-1 复验 F5**：`TickRecord::verify_health_changes` → `SM_HEALTHSPELLCHANGED(53)` 出帧。
+///
+/// oracle `BaseObject.Run` 的钳制段（`BaseObject.Base.cs:230-245`）在改完 `WAbil.HP/MP` 后调
+/// `HealthSpellChanged()`（`BaseObject.cs:700-709`）：`Race == Play` ⇒ `SendUpdateMsg`（只自己）；
+/// `ShowHp` ⇒ `SendRefMsg`（范围广播）。A1 只把事件记进 `TickRecord`，此前**无宿主消费者**
+/// ⇒ 真机永远看不到这条 53。载荷用生产选路 [`game_svr::smframe::sm_healthspellchanged_frame`]
+/// （与 P32 同布局口径：默认冻结客户端布局带 12B `TCharDesc` 尾）。
+fn drain_verify_health_changes(
+    rec: &mir2_world::TickRecord,
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    range: i32,
+) {
+    for (actor_id, hp, mp) in &rec.verify_health_changes {
+        let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+            continue;
+        };
+        let name = entry.chr_name.clone();
+        let (body, show_hp) = {
+            let Some(sg) = ground_sessions.get_mut(&name) else {
+                continue;
+            };
+            // 会话是 WAbil 的投影：钳制后的 HP/MP 与实体 MaxHP/MaxMP 同步回会话。
+            sg.state.wabil.hp = *hp;
+            sg.state.wabil.mp = *mp;
+            if let Some(e) = world.entities.get(*actor_id) {
+                sg.state.wabil.max_hp = e.max_hp;
+                sg.state.wabil.max_mp = e.max_mp;
+            }
+            (
+                game_svr::smframe::sm_healthspellchanged_frame(
+                    sg.actor_id,
+                    sg.state.wabil.hp,
+                    sg.state.wabil.mp,
+                    sg.state.wabil.max_hp,
+                ),
+                sg.show_hp,
+            )
+        };
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "Verify 钳制回帧")
+        {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body: body.clone(),
+            });
+        }
+        if show_hp {
+            broadcast_healthspellchanged(world, online, gates, *actor_id, &body, range);
+        }
+    }
+}
+
 /// **车道 B1（buff 系统）**：本 tick 由 [`mir2_world::World::buff_tick`] 记下的 buff 帧。
 ///
 /// - `rec.buff_status_changes`（oracle `ActorBuffSystem.Operate` 的 `boChg` 支 ⇒ `StatusChanged()`）
@@ -12218,6 +12272,15 @@ fn drain_player_need_recheck(
         let actor_id = sg.actor_id;
         // 本 tick 战斗磨损在实体上（G-06）；先回写会话，P21 才看到 oracle 同一对象的值。
         sync_use_items_from_entity_if_loaded(world, sg);
+        // **复验 F1**：oracle 的 `WAbil` 与实体是**同一份对象**（`PlayObject.WAbil` 就在 `BaseObject`
+        // 上）；本宿主的 `sg.state.wabil` 只是跨 tick 投影，战斗/恢复的写点都在 `Entity.hp/mp`。
+        // `recalc_session_ability` 的 `cur_hp/cur_mp` 输入与 `apply_ability_to_entity` 的回写
+        // 都必须以实体为准——否则上一 tick 的会话值会覆盖本 tick 已扣的血（复验实测
+        // session.hp=19/entity.hp=10 ⇒ 回写 19，且本 tick 被打到 0 还会被救活）。与 P32 同一写法。
+        if let Some(e) = world.entities.get(actor_id) {
+            sg.state.wabil.hp = e.hp;
+            sg.state.wabil.mp = e.mp;
+        }
         // `CheckItemsNeed` 的行会/城堡/会员输入在本骨架未建模 ⇒ 全 false/0（登记）：
         // Need 6/7/8/60/70/81/82 因此恒判 false（无行会/无城堡/无会员），与"玩家无这些状态"等价。
         let need_ctx = game_svr::bag::ItemsNeedContext::default();
@@ -12245,8 +12308,12 @@ fn drain_player_need_recheck(
                 continue;
             }
             // `AddItemToBag`：满 46 格 ⇒ false（`BaseObject.cs:1243`）。
+            // **复验 F4**：oracle `UserItem` 是 class，`ItemList`/`UseItems` 存的是**同一引用**；
+            // 本宿主克隆进包，故要记下入包位置，在下面的 `UseItems[i].Index = 0` 处模拟别名。
+            let mut bag_pos: Option<usize> = None;
             if sg.state.item_list.len() < game_svr::bag::MAX_BAG_ITEM {
                 let item = sg.use_items[i].clone().expect("index > 0 ⇒ Some");
+                bag_pos = Some(sg.state.item_list.len());
                 sg.state.item_list.push(item);
                 // `SendAddItem` 即时帧（模板必存在，因为上面 `catalog.get` 成功）。
                 if let Some(tail) =
@@ -12269,6 +12336,7 @@ fn drain_player_need_recheck(
                     std_mode,
                     drop_item_rage,
                     actor_id,
+                    &mut world.rng,
                 ) {
                     bo_take_item = true;
                 }
@@ -12282,6 +12350,14 @@ fn drain_player_need_recheck(
                 }
                 if let Some(it) = sg.use_items[i].as_mut() {
                     it.index = 0;
+                }
+                // **复验 F4**：oracle 的 `UseItems[i].Index = 0` 通过引用别名**同时**把背包里
+                // 刚加入的那一件置 0（`PlayObject.Message.cs:412-434`；连 bug 一起搬）。
+                // 只清 Index，`MakeIndex/Dura/DuraMax/Desc` 保留（与 oracle 的数组槽对象一致）。
+                if let Some(pos) = bag_pos {
+                    if let Some(bag_item) = sg.state.item_list.get_mut(pos) {
+                        bag_item.index = 0;
+                    }
                 }
                 // oracle 在**每次** `boTakeItem` 命中时逐项调 `RecalcAbilitys()`（循环内），
                 // 不是循环后调一次：重复调用会累加 `PoisonRecover/HealthRecover/SpellRecover`
@@ -12432,14 +12508,19 @@ fn drain_player_revival(
                 (item.dura_max, t_dura, n_dura, n_dura == 0)
             };
             if broken {
-                // `SendDelItems` 用**破零前**的 index（oracle 先发帧再清 Index）。
+                // **复验 F3**：oracle 行序是 `UseItems[i].Dura = nDura(0)` → `SendDelItems`
+                // → `UseItems[i].Index = 0`（`PlayObject.cs:5371-5377`）；`SendDelItems` 的
+                // `clientItem.Dura = userItem.Dura`（`PlayObject.Base.cs:1654-1658`）⇒ 载荷 Dura **必须为 0**。
+                if let Some(it) = sg.use_items[i].as_mut() {
+                    it.dura = 0;
+                }
+                // Index 保留到发帧之后（`SendDelItems` 还要用它查模板/编码）。
                 if let Some(tail) =
                     game_svr::trade::del_item_tail(sg.use_items[i].as_ref().unwrap(), catalog)
                 {
                     delitem_frames.push(game_svr::smframe::sm_delitem(actor_id, &tail));
                 }
                 if let Some(it) = sg.use_items[i].as_mut() {
-                    it.dura = 0;
                     it.index = 0;
                 }
                 // `RecalcAbilitys()` 在循环内逐次调用（oracle 原样）。
@@ -12483,7 +12564,10 @@ fn drain_player_revival(
                 body,
             });
         }
-        let body = game_svr::smframe::sm_healthspellchanged(actor_id, hp, mp, max_hp);
+        // **复验 F2**：生产选路 = `sm_healthspellchanged_frame`（默认冻结客户端布局 ⇒ 12B
+        // `TCharDesc` 尾）；`sm_healthspellchanged` 只服务 `MIR2_CLIENT_ABILITY_LAYOUT=0` 的
+        // oracle 对拍路径。`broadcast_healthspellchanged` 复用同一 body（SendRefMsg 同帧）。
+        let body = game_svr::smframe::sm_healthspellchanged_frame(actor_id, hp, mp, max_hp);
         let _ = tx.send(SimToGate::SendFrame {
             socket: entry.socket,
             body: body.clone(),
@@ -14793,6 +14877,16 @@ fn sim_loop(
         );
         // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
         world.tick_tail(&mut rec);
+        // **复验 F5**：`base.Run:230-245` 钳制段的 `HealthSpellChanged()`（53）。oracle 在钳制
+        // 点即时发；本宿主由 world 记事件、此处按同一 tick 出帧（含 `ShowHp` 的范围广播）。
+        drain_verify_health_changes(
+            &rec,
+            &world,
+            &online,
+            &gates,
+            &mut ground_sessions,
+            enter_cfg.ref_msg_range,
+        );
         // **run-gap 状态到期**：`PlayObject.Run` 的烈火 20s / 双龙 60s（`PlayObject.Message.cs:54-64`）
         // ⇒ `SpiritsGone` 的 `SM_SYSMESSAGE(100)` + `+UFIR`/`+UTWN` 短包。oracle 在玩家自己的
         // `Run()` 内即时发；本宿主在世界 tick 后按记录出帧。
@@ -39955,6 +40049,129 @@ mod tests {
         );
     }
 
+    /// **PL-1 复验 F5**：A1 的 `TickRecord::verify_health_changes` 必须有宿主消费者：
+    /// `HP > MaxHP` 过 30s `VerifyTick` 门 ⇒ 钳制到 `MaxHP-1` 并向收件人发一条 53
+    /// （默认生产布局带 12B `TCharDesc` 尾）。
+    ///
+    /// 牙：删掉 `drain_verify_health_changes` 的调用/函数体 ⇒ 下面的帧断言必红。
+    #[test]
+    fn f5_verify_clamp_emits_healthspellchanged_53() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("f5");
+        let mut ent = mir2_world::Entity::new(0, "f5".to_string(), 2, 2);
+        ent.race = mir2_world::ACTOR_RACE_PLAY;
+        ent.hp = 150;
+        ent.max_hp = 100;
+        ent.verify_tick = 0;
+        let actor = world.enter_map("f5", ent, 0).unwrap();
+        world.clock_ms = 40_000; // > 30s VerifyTick 门
+        let mut rec = world.tick_head();
+        world.tick_tail(&mut rec);
+        assert_eq!(
+            rec.verify_health_changes,
+            vec![(actor, 99, 0)],
+            "HP 150 > MaxHP 100 ⇒ 钳到 MaxHP-1（ushort）"
+        );
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("f5".into(), test_session_ground(actor));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uf".into(),
+                chr_name: "f5".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 917,
+                actor_id: actor,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        drain_verify_health_changes(&rec, &world, &online, &gates, &mut sessions, 12);
+
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            frames.push((socket, body));
+        }
+        assert_eq!(frames.len(), 1, "钳制段恰发一条 53（只自己；ShowHp=false）");
+        assert_eq!(frames[0].0, 917);
+        let body = &frames[0].1;
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            mir2_protocol::messages::SM_HEALTHSPELLCHANGED
+        );
+        if game_svr::smframe::client_layout_enabled() {
+            let desc = mir2_protocol::edcode::decode(&body[12..]);
+            assert_eq!(desc.len(), 12, "生产布局：12B TCharDesc");
+            let at = |o: usize| i32::from_le_bytes(desc[o..o + 4].try_into().unwrap());
+            assert_eq!(at(0), 99, "Feature = 钳制后 HP");
+            assert_eq!(at(4), 0, "Status = MP");
+            assert_eq!(at(8), 100, "StatusEx = MaxHP");
+        } else {
+            assert_eq!(body.len(), 12, "对拍路径 header-only");
+        }
+        let sg = sessions.get("f5").unwrap();
+        assert_eq!(sg.state.wabil.hp, 99, "会话投影同步");
+        assert_eq!(sg.state.wabil.max_hp, 100);
+    }
+
+    /// **PL-1 复验 F1（复现）**：P21 重算不得用上一 tick 的会话 HP/MP 覆盖实体。
+    ///
+    /// oracle 的 `WAbil` 与实体是同一份对象；本宿主的 `SessionGround.state.wabil` 只是投影
+    /// ⇒ 重算前必须以实体为唯一真源（与 P32 的同步写法同口径）。
+    /// 牙：预置 `entity.hp=10 / session.hp=19`，断言重算后 `entity.hp == 10`（9 点伤害不得被抹）。
+    #[test]
+    fn p21_recalc_keeps_entity_hp_not_stale_session_hp() {
+        let catalog = p21_catalog();
+        let (mut world, mut sessions, online, gates, _rx, actor) =
+            p21_fixture(&[(game_svr::ability::SLOT_WEAPON, 1, 1000)], 0, &catalog);
+        {
+            let e = world.entities.get_mut(actor).unwrap();
+            e.hp = 10;
+            e.max_hp = 50;
+        }
+        sessions.get_mut("p21a").unwrap().state.wabil.hp = 19;
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 3);
+        assert_eq!(
+            world.entities.get(actor).unwrap().hp,
+            10,
+            "P21 重算后实体 HP 必须仍是 10（会话的上一 tick 值 19 不得覆盖）"
+        );
+        assert_eq!(
+            sessions.get("p21a").unwrap().state.wabil.hp,
+            10,
+            "会话是投影，也应同步回 10"
+        );
+    }
+
+    /// **PL-1 复验 F4（复现）**：oracle `UserItem` 是 class、`ItemList`/`UseItems` 存引用：
+    /// `AddItemToBag(useItems[i])` 后 `UseItems[i].Index = 0` 会把背包里同一件也置 0
+    /// （`PlayObject.Message.cs:412-434`）。Rust 克隆进包 ⇒ 必须显式模拟别名。
+    /// 牙：`item_list[len-1].index == 0`。
+    #[test]
+    fn p21_bag_item_alias_is_cleared_with_equipment_slot_oracle_bug() {
+        let catalog = p21_catalog();
+        let (mut world, mut sessions, online, gates, _rx, _actor) =
+            p21_fixture(&[(game_svr::ability::SLOT_WEAPON, 1, 1000)], 0, &catalog);
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 3);
+        let sg = sessions.get("p21a").unwrap();
+        assert_eq!(sg.state.item_list.len(), 1, "一件入包");
+        assert_eq!(
+            sg.state.item_list[sg.state.item_list.len() - 1].index,
+            0,
+            "oracle 引用别名：清装备槽同时把背包同名对象 Index 置 0（连 bug 一起搬）"
+        );
+        assert_eq!(
+            sg.state.item_list[0].make_index,
+            100 + game_svr::ability::SLOT_WEAPON as i32,
+            "只清 Index；MakeIndex/Dura/Desc 保留（oracle 原样）"
+        );
+    }
+
     // ────────────────────────── PL-1 / P32 ──────────────────────────
 
     fn p32_catalog() -> game_svr::ability::StdItemCatalog {
@@ -40058,6 +40275,92 @@ mod tests {
         );
     }
 
+    /// **PL-1 复验 F2（复现）**：P32 的 53 帧必须走生产选路
+    /// [`game_svr::smframe::sm_healthspellchanged_frame`]——默认（冻结客户端布局）
+    /// 追加 12B `TCharDesc` 尾；`sm_healthspellchanged` 是 oracle header-only，仅供
+    /// `MIR2_CLIENT_ABILITY_LAYOUT=0` 对拍路径使用。
+    /// 牙：默认布局下断言 53 tail 长度 = 12 且可按客户端口径回读 HP/MP/MaxHP。
+    #[test]
+    fn p32_healthspellchanged_uses_production_layout_with_tchardesc() {
+        let catalog = p32_catalog();
+        let (mut world, mut sessions, online, gates, mut rx, _actor) = p32_fixture(5000, 0);
+        drain_player_revival(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            &catalog,
+            1_000_000,
+            60_000,
+            0xDB,
+            0xFF,
+            b"revived",
+            12,
+        );
+        let mut body = None;
+        while let Ok(SimToGate::SendFrame { body: b, .. }) = rx.try_recv() {
+            if u16::from_le_bytes([b[4], b[5]]) == mir2_protocol::messages::SM_HEALTHSPELLCHANGED {
+                body = Some(b);
+            }
+        }
+        let body = body.expect("复活必须发 53");
+        if game_svr::smframe::client_layout_enabled() {
+            let desc = mir2_protocol::edcode::decode(&body[12..]);
+            assert_eq!(desc.len(), 12, "冻结客户端布局：TCharDesc = 3 × i32 = 12B");
+            let at = |o: usize| i32::from_le_bytes(desc[o..o + 4].try_into().unwrap());
+            assert_eq!(at(0), 100, "Feature = HP（复活后 = MaxHP）");
+            assert_eq!(at(4), 0, "Status = MP");
+            assert_eq!(at(8), 100, "StatusEx = MaxHP");
+        } else {
+            assert_eq!(
+                body.len(),
+                12,
+                "oracle 对拍路径（MIR2_CLIENT_ABILITY_LAYOUT=0）header-only"
+            );
+        }
+    }
+
+    /// **PL-1 复验 F3（复现）**：破零戒指的 `SM_DELITEM` 载荷 `Dura` 必须是 **0**。
+    /// oracle `PlayObject.cs:5371-5377` 先写 `UseItems[i].Dura = 0` 再 `SendDelItems`
+    /// （`PlayObject.Base.cs:1654-1658` 取 `userItem.Dura`），Index 保留到发帧后。
+    /// 牙：解码载荷断言 `Dura == 0`（用例 Dura=1000），`MakeIndex` 仍按实例回读。
+    #[test]
+    fn p32_sm_delitem_payload_carries_zero_dura() {
+        let catalog = p32_catalog();
+        let (mut world, mut sessions, online, gates, mut rx, _actor) = p32_fixture(1000, 0);
+        drain_player_revival(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            &catalog,
+            2_000_000,
+            60_000,
+            0xDB,
+            0xFF,
+            b"revived",
+            12,
+        );
+        let mut payload = None;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_DELITEM {
+                payload = Some(body[12..].to_vec());
+            }
+        }
+        let raw = mir2_protocol::edcode::decode(&payload.expect("Dura==1000 ⇒ 必发 SM_DELITEM"));
+        assert_eq!(raw.len(), 124, "ClientItem 定长 124B");
+        assert_eq!(
+            u16::from_le_bytes([raw[104], raw[105]]),
+            0,
+            "SendDelItems 的 Dura 取破零后的 0（oracle 先赋值再发帧）"
+        );
+        assert_eq!(
+            &raw[100..104],
+            &77i32.to_le_bytes(),
+            "MakeIndex 仍按实例编码（Index 保留到发帧后）"
+        );
+    }
+
     /// **PL-1 / P32 判据 2（三档耐久边界，ushort 回绕）**：
     /// `1000 ⇒ 0` 才移除 + `SM_DELITEM`；`999 ⇒ 65535` 留位；`0 ⇒ 64536` 留位。
     ///
@@ -40094,18 +40397,21 @@ mod tests {
                 broken,
                 "Dura {dura_in} ⇒ broken={broken}（ushort 回绕后 == 0 才移除）"
             );
-            let idents = take_frame_idents(&mut rx);
+            // **复验 F7**：精确帧序列（不是 `contains`）——Dura==1000 破零多一条即时
+            // `SM_DELITEM`；642 每次都**恰一条**（`tDura != Round(nDura/1000)` 对本用例恒真），
+            // 重复入队必须在这里判红（旧 `contains` 口径对「多发 642」是假绿）。
+            let mut expected = Vec::new();
+            if broken {
+                expected.push(mir2_protocol::messages::SM_DELITEM);
+            }
+            expected.push(mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
+            expected.push(mir2_protocol::messages::SM_DURACHANGE);
+            expected.push(mir2_protocol::messages::SM_SYSMESSAGE);
             assert_eq!(
-                idents.contains(&mir2_protocol::messages::SM_DELITEM),
-                broken,
-                "SM_DELITEM 只在 Dura==1000 时发"
+                take_frame_idents(&mut rx),
+                expected,
+                "Dura {dura_in}: 精确帧序（SM_DELITEM 仅破零；642 恰一条；53 → 642 → 252 按 ident 优先级）"
             );
-            assert!(
-                idents.contains(&mir2_protocol::messages::SM_DURACHANGE),
-                "Dura {dura_in}: tDura != Round(nDura/1000) ⇒ 必发（含 [1000,1499] 边界）"
-            );
-            assert!(idents.contains(&mir2_protocol::messages::SM_HEALTHSPELLCHANGED));
-            assert!(idents.contains(&mir2_protocol::messages::SM_SYSMESSAGE));
         }
     }
 

@@ -54,7 +54,8 @@
 //!   │    Rust 用 `wrapping_sub(2000)` 1:1 复刻（`drop_stdmode40_dura_underflow` 用例钉住）。
 //!   ├─ new MapItem { UserItem=copy, Name=GetItemName, Looks=StdItem.Looks, …; Count=1;
 //!   │               OfBaseObject=itemOfCreat; CanPickUpTick=tick; DropBaseObject=dropCreat }
-//!   ├─ StdMode==45 ⇒ Looks = GetRandomLook(Looks, Shape)（**本片未建模**，见「未做清单」）
+//!   ├─ StdMode==45 ⇒ Looks = GetRandomLook(Looks, Shape)（**P21 路径已建模为一次
+//!   │    `Random(Shape)` 抽数**；结果不可观测（T-19），但 RNG 流水必须一致。见 `drop_item_down_p21`）
 //!   ├─ GetDropPosition(CurrX,CurrY,nScatterRange) → (dx,dy)（`Envir.GetItemEx` 扫格）
 //!   └─ Envir.AddItemToMap(dx,dy,mapItem) ? SendRefMsg(RM_ITEMSHOW,…) true : false
 //! ```
@@ -101,8 +102,9 @@
 //!
 //! # 未做清单（登记在卡 `openmir2-m3-bag-equip-alignment`；不是"静默跳过"）
 //!
-//! - **StdMode 45 掉落物的 `Looks` 随机化**（`M2Share.GetRandomLook`）：未建模；因为
-//!   `AddItemToMap` 恒失败、`Looks` 不可观测，且它依赖全局 RNG（会破坏夹具确定性）。
+//! - **StdMode 45 掉落物的 `Looks` 随机化**（`M2Share.GetRandomLook`）：**P21 路径已建模**为
+//!   一次 `Random(Shape)` 抽数（`drop_item_down_p21`，复验 F6）；`Looks` 值仍不可观测
+//!   （`AddItemToMap` 恒失败），通用 `drop_item_down` 路径的抽数仍按原样登记（本片未扩大）。
 //! - **`AddItemToMap` 的金币合并分支**（同名金币堆叠 + 容量 5 上限）：未建模（本片可达路径里
 //!   不出现——金币放回时目标格子已空）。
 //! - **`GetUpgradeStdItem` 的 Desc 升级差量**：同 `bag.rs`/`ability.rs`，传入模板视为「有效物品」。
@@ -119,6 +121,7 @@
 use crate::ability::{Ability, ItemCatalog};
 use crate::bag::{item_display_name, BagItem, Frame, MAX_BAG_ITEM};
 use crate::useitem::QueuedNotice;
+use mir2_shared::rng::RandomNumber;
 
 /// `Messages.CM_PICKUP`（`src/OpenMir2/Messages.cs:46`）。
 pub const CM_PICKUP: u16 = 1001;
@@ -616,7 +619,8 @@ fn drop_item_down(
     let Some(tpl) = ctx.catalog.get(user_item.index) else {
         return false;
     };
-    // `StdMode 45` 的 `GetRandomLook` 未建模（未做清单）；`AddItemToMap` 恒失败使其不可观测。
+    // `StdMode 45` 的 `GetRandomLook` 抽数在 P21 的 `drop_item_down_p21` 里补（复验 F6）；
+    // 本通用路径暂未建模（`AddItemToMap` 恒失败使其 Looks 不可观测）。
     let map_item = GroundItem {
         // ⚠️ oracle 无任何 `MapItem.ItemId = …` 赋值点 ⇒ 恒 0（`MapItem.cs:41` 的赋值被注释）。
         item_id: 0,
@@ -766,11 +770,22 @@ pub fn drop_item_down_p21(
     std_mode: u8,
     drop_item_rage: u8,
     actor_id: i32,
+    rng: &mut RandomNumber,
 ) -> bool {
     // `BaseObject.cs:539-548`：`ushort idura = (ushort)(Dura - 2000)`；`if (idura <= 0)` 对
     // `ushort` 是 `== 0`（死代码分支），净效果 = `wrapping_sub(2000)`。
     if std_mode == 40 {
         item.dura = item.dura.wrapping_sub(2000);
+    }
+    // **复验 F6**：`BaseObject.cs:557-560`（→`M2Share.cs:524-527`）——
+    // `if (StdMode == 45) mapItem.Looks = GetRandomLook(Looks, StdItem.Shape)`，
+    // 即 `Looks + Random(Shape)`，**在 `AddItemToMap` 恒失败之前**就抽。
+    // `Looks` 不可观测（T-19），但这次抽必须发生：它推进全局 RNG 流水，后续站点逐次对齐
+    // 依赖它。结果丢弃；`StdItem == null` 时 oracle 不进支 ⇒ 不抽。
+    if std_mode == 45 {
+        if let Some(tpl) = catalog.get(item.index) {
+            let _looks = i32::from(tpl.looks) + rng.random_below(i32::from(tpl.shape));
+        }
     }
     let ctx = DropContext {
         catalog,
@@ -1345,11 +1360,52 @@ mod tests {
             dura_max: 100,
             desc: [0; 14],
         };
+        let mut rng = RandomNumber::with_seed(7);
         assert!(
-            !drop_item_down_p21(&cat, &mut item, 40, 3, 42),
+            !drop_item_down_p21(&cat, &mut item, 40, 3, 42, &mut rng),
             "MapItem.ItemId 恒 0 ⇒ AddItemToMap 必失败 ⇒ false"
         );
         assert_eq!(item.dura, 63546, "StdMode 40：10 - 2000 按 ushort 回绕");
         assert_eq!(item.index, 1, "失败时槽位物品原样保留");
+    }
+
+    /// **复验 F6**：P21 的 `DropItemDown` 必须补 StdMode 45 的 `Random(Shape)` 抽数
+    /// （`BaseObject.cs:557-560` → `M2Share.cs:524-527`），即使 `AddItemToMap` 恒失败、
+    /// 结果不可观测——它推进全局 RNG 流水。
+    ///
+    /// 牙：删掉 `drop_item_down_p21` 里的 `if std_mode == 45` 抽数 ⇒ 第一条断言必红；
+    /// 把抽数条件写成 `!= 45` ⇒ 第二条（StdMode!=45 零抽）必红。
+    #[test]
+    fn p21_drop_item_down_draws_stdmode45_random_look() {
+        let cat = StdItemCatalog::from_items([(
+            1u16,
+            StdItem {
+                name: "wine".to_string(),
+                std_mode: 45,
+                shape: 4,
+                ..StdItem::default()
+            },
+        )]);
+        let mut item = BagItem {
+            make_index: 1,
+            index: 1,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        };
+        let mut rng = RandomNumber::with_seed(7);
+        let _ = drop_item_down_p21(&cat, &mut item, 45, 3, 42, &mut rng);
+        let mut expect = RandomNumber::with_seed(7);
+        let _ = expect.random_below(4);
+        assert_eq!(
+            rng.random(),
+            expect.random(),
+            "StdMode 45 ⇒ 恰一抽 Random(Shape=4)（GetRandomLook）"
+        );
+
+        let mut rng2 = RandomNumber::with_seed(7);
+        let _ = drop_item_down_p21(&cat, &mut item, 5, 3, 42, &mut rng2);
+        let mut fresh = RandomNumber::with_seed(7);
+        assert_eq!(rng2.random(), fresh.random(), "StdMode != 45 ⇒ 零抽");
     }
 }

@@ -425,12 +425,12 @@ pub fn check_take_on_items(
 pub struct ItemsNeedContext {
     /// `MyGuild != null`。
     pub has_guild: bool,
-    /// `GuildRankNo`。
-    pub guild_rank_no: u8,
+    /// `PlayObject.GuildRankNo`（**`short`**，`PlayObject.cs:250`）。
+    pub guild_rank_no: i16,
     /// `SystemShare.CastleMgr.IsCastleMember(this) != null`。
     pub is_castle_member: bool,
-    /// `Player.MemberType`。
-    pub member_type: u8,
+    /// `PlayObject.MemberType`（**`int`**，`PlayObject.cs:750`）。
+    pub member_type: i32,
     /// `Player.MemberLevel`。
     pub member_level: u8,
 }
@@ -447,11 +447,13 @@ pub fn check_items_need(ctx: &ItemsNeedContext, need: u8, need_level: u8) -> boo
         // `LoWord(byte)` = 值、`HiWord(byte)` = 0 ⇒ `member_level < 0` 恒 false（只剩前一项）。
         81 => {
             let hi = u16::from(hi_word_byte(need_level));
-            ctx.member_type == lo_word_byte(need_level) && u16::from(ctx.member_level) >= hi
+            ctx.member_type == i32::from(lo_word_byte(need_level))
+                && u16::from(ctx.member_level) >= hi
         }
         82 => {
             let hi = u16::from(hi_word_byte(need_level));
-            ctx.member_type >= lo_word_byte(need_level) && u16::from(ctx.member_level) >= hi
+            ctx.member_type >= i32::from(lo_word_byte(need_level))
+                && u16::from(ctx.member_level) >= hi
         }
         _ => true,
     }
@@ -1121,6 +1123,47 @@ mod tests {
         assert!(
             out2.update_item.is_none(),
             "非衣服（StdMode 15）不产 SM_UPDATEITEM"
+        );
+    }
+
+    /// **PL-1 复验 F8**：`ItemsNeedContext` 的字段宽度必须与 oracle 一致
+    /// （`PlayObject.MemberType:int`、`GuildRankNo:short`）。窄化成 u8 在负值/超 255 的
+    /// 行会/会员接线输入上会与 oracle 分岔。
+    ///
+    /// 牙：`MemberType=-1`（Need=82 应 false、Need=8 应 true）、`MemberType=300`
+    /// （Need=81 的 LoWord 是 byte ⇒ 恒不等）、`GuildRankNo=300`（i16 可表示、≠1）。
+    #[test]
+    fn items_need_context_field_widths_match_oracle() {
+        let negative = ItemsNeedContext {
+            member_type: -1,
+            ..ItemsNeedContext::default()
+        };
+        assert!(
+            !check_items_need(&negative, 82, 0),
+            "MemberType=-1 < LoWord(0) ⇒ Need=82 false（u8 会读成 255 ⇒ 假 true）"
+        );
+        assert!(
+            check_items_need(&negative, 8, 0),
+            "MemberType=-1 != 0 ⇒ Need=8 true（oracle 只判 ==0）"
+        );
+
+        let over_byte = ItemsNeedContext {
+            member_type: 300,
+            ..ItemsNeedContext::default()
+        };
+        assert!(
+            !check_items_need(&over_byte, 81, 255),
+            "MemberType=300 不可能等于 LoWord(byte<256) ⇒ Need=81 false"
+        );
+
+        let rank = ItemsNeedContext {
+            has_guild: true,
+            guild_rank_no: 300,
+            ..ItemsNeedContext::default()
+        };
+        assert!(
+            !check_items_need(&rank, 60, 0),
+            "GuildRankNo=300（short 可表示）!= 1 ⇒ Need=60 false"
         );
     }
 
