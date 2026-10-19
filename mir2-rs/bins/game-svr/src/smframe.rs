@@ -1370,7 +1370,7 @@ impl EnterWorldInputs {
         // 只决定是否追加尾，空时走 `else SendSocket(ClientMsg)`）。故这里**不**用 `if let`。
         out.push(sm_sendnotice(&self.notice));
 
-        // ---- 入队：按 oracle 调用序把 14 条消息压进四叉最小堆 ----
+        // ---- 入队：按 oracle 调用序把 15 条消息压进四叉最小堆（LOGON 出队时再入 654）----
         // 顺序 = 源码执行序（见 `LoginQueued` 的逐条行号）。**不要**按「可观测序」重排：
         // 真机实拍的三段序完全由这个内容 + .NET 8 四叉堆决定。
         let mut queue: NetPriorityQueue<LoginQueued> = NetPriorityQueue::new();
@@ -2434,7 +2434,9 @@ mod tests {
     /// 红检（三条牙，任一都让本用例红）：
     /// ① 去掉 `RM_LOGON` 入队（`frames()` 不再 `enqueue(LoginQueued::Logon, ...)`）⇒ 51/50/...
     ///    整组消失、654 也不再入队；
-    /// ② 把 `RM_TURN`/两条 `RM_CHARSTATUSCHANGED`/`RM_USERNAME`/第四条 `SysMsg` 任一槽位删掉
+    /// ② 删掉承重槽位之一（实测：`Logon`、621/211 槽、`811/46`、`RM_USERNAME`、第四条 `SysMsg`、
+    ///    或「两条 `RM_CHARSTATUSCHANGED` 全删」）——注意单独删 `RM_TURN` 或单独删一条 657 不改变
+    ///    本用例的 High 组序（复验实测），不要把它写进红检清单
     ///    （模型 D 的堆布局依赖它们）⇒ High 组序改变；
     /// ③ 六条按可观测序手写（`52,752,621,211,811,46`）⇒ 与 oracle 的**入队**序不符
     ///    （源码序是 `52,752,811,46,621,211`）；本用例锁的是 `frames()` 的产物，
@@ -2517,7 +2519,8 @@ mod tests {
         }
     }
 
-    /// 判据①（无装备无技能，`s2c`/`s2c-w03`/`s2c-w04`）：完整 ident 序逐项等于真机。
+    /// 判据①（无装备无技能，`s2c`/`s2c-w03`/`s2c-w04`）：**至 654 为止**的登录队列序逐项等于真机
+    /// （654 之后的 `657,657,42,100×4` Rust 只占堆位不产帧，见 T-80）。
     #[test]
     fn login_scenario_naked_matches_oracle_ident_sequence() {
         let got: Vec<u16> = login_scenario_inputs(false, false)
