@@ -103,7 +103,17 @@
 - 证据保留：`E:/tmp/window/cliente2e/{csharp,rust}/`（`proxy*`、`s2c*`、`shots*`、`live*.png`）。
 - 新增入库件：`tools/client/mir_click.ps1`（截图 / 右键 / 左键，供后续窗口按像素驱动）。
 
-## 8. 下次窗口的剩余项
+## 8. 修复后真机复验（同日 13:1x，同一缩窗授权）
+
+- 基线提升到 **`f3675f69a`**（MB-4 + 52/752 修复 + 约简序判据补漏），六件重编到
+  `E:/tmp/m2svr-window-target2` 并 `--record-provenance`（`source_head=f3675f69a…`）。
+- Rust 侧同一拓扑（shadow 7600 + proxy 7200），角色钉 `(311,666)`、level 1、HP 19/19：
+  `enter_seq = 658,51,50,41,213,11029,42,766,54,5008,1106,**52,752**,811,46`
+  ⇒ 与 oracle 四个会话**逐项相同**，`check_client_s2c_frames.py` **GREEN**
+  （修复前同一命令 RED）。证据：`E:/tmp/window/cliente2e/rust/{proxy-fix,s2c-fix,shots-fix}`。
+- 收窗：栈全停、九端口 DOWN、影子 7600 DOWN；DB 角色还原 `(296,653)` / level 1 / HP 19/19。
+
+## 9. 下次窗口的剩余项
 
 1. F1 修复合入后，重编六件并**重跑一次 Rust 侧入图抓包**，确认 `enter_seq` 与 oracle 同序（`check_client_s2c_frames.py` GREEN）。
 2. `-AttackTurn` 的投影步长修正后，用**纯 `mir_flow` 配方**在 Rust 侧复现 W0-2（不再依赖截图点击）。
