@@ -232,8 +232,13 @@ CM_MERCHANTDLGSELECT(1011)（PlayObject.Message.cs:888-890）
 
 1. `if (player.LastNpc != npc.ActorId) player.LastNpc = 0`；
 2. `@main`：按 `ScriptList` **正序**找第一个含 `@main` 的脚本，命中即 `player.Script = script; LastNpc = npc.ActorId; break`；
-3. 否则：若 `player.Script != null`，从 `ScriptList` **倒序**找同一个对象；仍 null 则从倒序找第一个
-   `CheckGotoLableQuestStatus` 通过的脚本，并写回 `Script/LastNpc`；
+3. 否则：若 `player.Script != null`，从 `ScriptList` **倒序**找同一个对象（`ScriptEngine.cs:64-70`，
+   这个循环**也没有 `break`**，但每次赋的都是同一个对象引用，故无行为差异）；仍 null 则再从倒序扫一遍
+   `CheckGotoLableQuestStatus` 通过的脚本并写回 `Script/LastNpc`——**这个循环同样没有 `break`**
+   （`ScriptEngine.cs:74-82`），每次命中都覆盖 `script` ⇒ 最终保留的是**下标最小的通过者**
+   （即正序第一个通过者），**不是「倒序第一个」**。商人脚本的 `CheckGotoLableQuestStatus`
+   （`ScriptEngine.cs:146-173`）对 `IsQuest == false` 直接返回 true，而 `MerChant.txt` 引用的 131 个
+   `Market_Def` 脚本实测**无一个含 `{Quest`** ⇒ 恒真 ⇒ 实际取 `ScriptList[0]`；
 4. `RecordList.TryGetValue(sLabel)`；`boExtJmp && !record.boExtJmp` ⇒ **return**（冷标签被挡）；
 5. 逐 `SayingProcedure`：条件真 ⇒ 拼 `sSayMsg` + 执行 `ActionList`；假 ⇒ 拼 `sElseSayMsg` + 执行 `ElseActionList`；
    动作返回 false（`break`）⇒ 结束；`gotoLabParams.SendSayMsg` ⇒ 立即发已拼说词（`priority`）；
@@ -250,17 +255,38 @@ GotoLableSendMerChantSayMsg(npc, player, sMsg, boFlag):
 ```
 
 `GetScriptLabel` 用 `ScriptRegex` = `(?<=(<))[.\s\S]*?(?=(>))` + `RegexOptions.RightToLeft`
-（`M2Share.cs:270/272-275`）逐段提取；`LableIsCanJmp`：`@main` 恒真，否则查
-`CanJmpScriptLableMap`（`PlayObject.Base.cs:2814-2826`）。
+（`M2Share.cs:270/272-275`）逐段提取；`LableIsCanJmp`（`PlayObject.Base.cs:2814-2829`）有**三支**：
+① `@main` 恒真（`:2816-2819`）；② `CanJmpScriptLableMap` 命中（`:2820-2823`）；
+③ `PlayDiceLabel` 相等（`:2824-2828`）——**命中后立即把 `PlayDiceLabel` 清空**，是一次性口令。
+`PlayDiceLabel` 由 `ActionOfPlayDice` 从动作的 `sParam2` 写入（`ExecutionProcessingSys.cs:2030-2033`）；
+部署件 `赌博NPC/赌场-B013.txt` 有 6 处 `playdice 1 @cube82/@cube91/@cube52/@cube61/@cube2/@cube1`，
+而这些 `@cubeNN` 在该脚本里**只出现两次**（`playdice` 参数 + `[@cubeNN]` 标签定义），
+**没有任何 `<.../@cubeNN>` 说词链接** ⇒ 第 ③ 支是它们唯一的放行通道，缺它则掷骰后客户端回跳必被拒。
 
 **变量展开**（`NormNpc.cs:245-274` + `:275-...`；`Merchant.cs:1102-1124`）：
 循环条件 `sMsg.IndexOf('>') >= 1`；`ArrestStringEx(sMsg,"<",">", ref sVariable)`；仅 `sVariable[0]=='$'`
 调 `GetVariableText`；最多 101 次。Merchant 覆写在基类之后追加 `$PRICERATE`/`$UPGRADEWEAPONFEE`/`$USERWEAPON`。
-部署 **131 个商人脚本**中实际出现的变量（次数）：`$GAMEGIRD`(23)、`$GAMEDIAMOND`(20)、
+部署 **131 个商人脚本**中实际出现的变量（次数；口径：对 `MerChant.txt` 引用的 131 个脚本按
+`\$[A-Za-z_][A-Za-z0-9_]*` 全文计数，大小写不敏感）：`$GAMEGIRD`(23)、`$GAMEDIAMOND`(20)、
 `$USERNAME`(17)、`$CREDITPOINT`(14)、`$SERVERNAME`(11)、`$LORD`(7)、`$OWNERGUILD`(7)、
 `$USERWEAPON`(3)、`$GAMEGOLD`(3)、`$HIGHSCINFO/$HIGHMCINFO/$HIGHDCINFO/$HIGHLEVELINFO`(各 1)、
-`$UPGRADEWEAPONFEE`(1)、`$GAMEPOINT`(1)、`$GUILDNAME`(1)；`$PRICERATE` 部署未用。
-（全 `Market_Def` 目录的计数会更高，这里只统计 `MerChant.txt` 引用的 131 个脚本。）
+`$UPGRADEWEAPONFEE`(1)、`$GAMEPOINT`(1)、`$GUILDNAME`(1)、**`$STR(...)`(96，跨 7 个脚本：
+真爱-G002 38、桃源-N109 35、铸造-B351 9、赌场-B013 6、打铁-0 5、客栈-0148 2、监狱-0147 1)**；
+`$PRICERATE` 部署未用。（全 `Market_Def` 目录的计数会更高，这里只统计这 131 个脚本。）
+
+`$STR(...)` 不是旁路：它同时被**说词**与**动作参数**两套展开器识别，两条路径都必搬：
+
+- **说词路径**：`NormNpc.GetVariableText` 的 `$STR(` 支（`NormNpc.cs:1532-1587`）——先
+  `M2Share.GetValNameNo(槽名)` 得槽位号，再按 `0..99 MNVal / 100..199 GlobalVal / 200..299 MDyVal /
+  300..399 MNMval / 400..499 GlobaDyMval / 500..599 MNInteger / 600..699 MSString / 700..799 GlobalAVal /
+  800..1199 GlobalVal[n-700] / 1200..1599 GlobalAVal[n-1100] / 1600..1699 ServerStrVal /
+  1700..1799 ServerIntVal` 取值（**800..1199 的偏移是 -700**）；槽位号 `< 0` 时**不替换**（原样保留）。
+- **动作参数路径**：`ProcessingBase.GetLineVariableText` / `GetVarValue` 的 `$STR(` 支
+  （`ProcessingBase.cs:1347-1351`、`:1584-1622`、`:1196-1230`），槽位映射与说词侧**不同**：
+  多出 `0..499 → GlobalVal[n]`、`1000..1099 GlobaDyMval`、`1100..1109 MNVal`、`1110..1119 MDyVal`、
+  `1200..1299 MNMval`、`1300..1399 MNInteger`、`1400..1499 MSString`、`2000..2499 GlobalAVal` 一套；
+  `S` 开头且 `GetValNameNo < 0` 时回落到 `playerActor.m_StringList`。
+  同一 token 在两侧可能解析到不同槽位 ⇒ 这是必须照搬的实际行为，不要「顺手统一」。
 
 ### 2.2 Rust 现状与缺口（逐项）
 
@@ -274,7 +300,7 @@ GotoLableSendMerChantSayMsg(npc, player, sMsg, boFlag):
 | 6 | 1011 → `base.UserSelect` 标签账本 | `NormNpc.cs:1633-1657` | 只写 `script_lable`；`script_curr_lable/go_back_lable` 只在 guildofficial 用例里用 | `main.rs:4438-4446`、`ShopSession` `main.rs:12846-12861` | ❌ |
 | 7 | 1011 → `GotoLable` | `Merchant.cs:808` | 不调用；说词不产出 | `main.rs:4418-4470` | ❌ |
 | 8 | `CanJmpScriptLableMap` 填充 | `GetScriptLabel` 每次说词重建 | `get_script_label` 已实现，但生产不调用 ⇒ 表恒空 | `shop.rs:1459-1479`；`main.rs:4444` | ❌（仅测试 seed） |
-| 9 | `LableIsCanJmp` | `PlayObject.Base.cs:2814-2826` | 已实现（`@main` + 表） | `shop.rs:1448-1457` | ✅（但输入空） |
+| 9 | `LableIsCanJmp` | `PlayObject.Base.cs:2814-2829`（三支） | **部分实现**：`@main` + `CanJmpScriptLableMap` 两支；`PlayDiceLabel` 支**未接**（`lable_is_can_jmp` 无该形参；`ScriptPlayer::set_play_dice_label` 是空钩子、`NpcPlayer` 未存值；「命中即清空」的一次性语义未建模） | `shop.rs:1448-1451`；`engine/mod.rs:528-529`；`actions.rs:803-805` | ⚠ 部分（另：生产输入 `can_jmp_labels` 恒空） |
 | 10 | 说词帧 | `ScriptEngine.cs:987-998` | 引擎能产 `SayMsg`，`emit_npc_says` 能落 643；无商人调用点 | `npc.rs:246-266`、`main.rs:5035-5057` | ⚠ 半 |
 | 11 | 变量展开 | `NormNpc.cs:245-274` | 钩子存在但 `NpcPlayer` 未覆写 ⇒ 原样返回 | `crates/script/src/engine/mod.rs:130-133` | ❌ |
 | 12 | `Script`/`LastNpc`/`ScriptGotoCount` 跨调用保持 | `PlayObject.cs:622-626`、`ScriptEngine.cs:41-79` | `NpcPlayer` 每次调用新建；`ShopSession` 不存 `script_index/last_npc` | `npc.rs:336-405` | ❌ |
@@ -294,6 +320,11 @@ GotoLableSendMerChantSayMsg(npc, player, sMsg, boFlag):
   「修得还算不错。」；Rust 无。
 - 升级武器：`@upgradenow` 页的 `~@upgradenow_ok/_fail/_ing` 等同样缺失。
 - `@back`：oracle 在 `Merchant.UserSelect` 里回跳 `ScriptGoBackLable`；Rust 商人路径无。
+- **掷骰回跳**：`赌场-B013` 的 `playdice 1 @cubeNN` 之后客户端发 `@cubeNN`；oracle 靠
+  `LableIsCanJmp` 第 ③ 支（`PlayDiceLabel` 一次性放行）通过——这些标签**不在**说词表里。
+  Rust 的 `lable_is_can_jmp` 只认 `@main` + 表 ⇒ `boCanJmp = false`，随后
+  `GotoLable(..., boExtJmp=true)` 又被 `[@cubeNN]` 的 `boExtJmp=false` 挡住（`ScriptEngine.cs:89-92`）
+  ⇒ **点完骰子无任何反应**。补齐时务必带「命中即清空」，否则退化成永久可跳。
 
 ---
 
@@ -320,9 +351,15 @@ if (!GetValValue(playerActor, questActionInfo.sParam1, ref nGameGold))
     nGameGold = HUtil32.StrToInt(GetLineVariableText(playerActor, questActionInfo.sParam1), 0);
 ```
 
-- `GetValValue`（`ProcessingBase.cs:1106-...`）：按 `SystemShare.GetValNameNo` 解析变量名：
-  `0..99` → `MNVal`；`100..199` → `GlobalVal`；`200..299` → `MDyVal`；`300..399` → `MNMval`；
-  `400..499` → `GlobaDyMval`；`500..599` → `MNInteger`（以源码实际范围为准）；其余不命中。
+- `GetValValue`（`ProcessingBase.cs:1106-1178`）：按 `SystemShare.GetValNameNo`（`SystemShare.cs:502+`）
+  解析出**槽位号**，再按区间取当前值——共 **12 段**，不止 0..599：
+  `0..99`→`MNVal[n]`；`100..199`→`GlobalVal[n-100]`；`200..299`→`MDyVal[n-200]`；
+  `300..399`→`MNMval[n-300]`；`400..499`→`GlobaDyMval[n-400]`；`500..599`→`MNInteger[n-500]`；
+  `600..699`→`StrToInt(MSString[n-600], 0)`；`700..799`→`StrToInt(GlobalAVal[n-700], 0)`；
+  `800..1199`→`GlobalVal[n-700]`（**偏移 -700 而非 -800**，与 100..499 段重叠，必搬）；
+  `1200..1599`→`StrToInt(GlobalAVal[n-1100], 0)`；`1600..1699`→`StrToInt(ServerStrVal[n-1600], 0)`；
+  `1700..1799`→`ServerIntVal[n-1700]`。只有落在 12 段之外才 `return false`（回落到
+  `GetLineVariableText` 展开 + `StrToInt(...,0)`）。
 - 未命中 ⇒ `GetLineVariableText`（`ProcessingBase.cs:1438+`）展开 `<$...>` 后再 `StrToInt(...,0)`。
   例：`OPENYBDEAL <$GAMEGOLD>` ⇒ 费用 = 当前元宝数（必然通过，扣到 0）；`OPENYBDEAL abc` ⇒ 0（免费开通）；
   `OPENYBDEAL 1000` ⇒ 1000。
@@ -425,12 +462,15 @@ for (i = SellOffItemList.Count-1; i >= 0; i--):
 | `GameGold` 载入读 `characters.Gold` 同列 | `PlayDataStorage.Query.cs:239-241`：`humInfoData.Gold = dr.GetInt32("Gold"); humInfoData.GameGold = dr.GetInt32("Gold");` |
 | 保存只写 `Gold`，不写 `GameGold`（DDL 也无 `GameGold` 列） | `PlayDataStorage.Save.cs:76/102`；`sql/mir2_db.sql:37` 只有 `Gold`、`:38` 是 `GamePoint` |
 | ⇒ 登录领取的元宝 | 本会话内存有效；下次登录被 `Gold` 覆盖（**不保留**） |
-| `goldsales` 读取列名错 | `MySqlDB.cs:251-291` 读 `DealChrName/BuyChrName`，DDL 是 `DealCharName/BuyCharName`（`sql/mir2_data.sql:26-27`）⇒ 恒 0 行 |
+| `goldsales` 读取列名错（**有行即抛**） | `MySqlDB.cs:264-265` 读 `DealChrName/BuyChrName`，DDL 是 `DealCharName/BuyCharName`（`sql/mir2_data.sql:26-27`）。`dr.GetString` 经 `dr.GetOrdinal`（`src/OpenMir2/Extensions/DataReaderExtension.cs:9-19`），列名不存在时 `GetOrdinal` 抛 `IndexOutOfRangeException`；`LoadSellOffItemList`（`MySqlDB.cs:258-287`）只有 `try/finally` **没有 `catch`**，调用点 `GameApp.cs:182`（`Initialize()`）也不在 `:224` 那个 `try` 里 ⇒ **不是「静默跳过」**。0 行的直接原因是表本身为空（DDL 的 `Records of goldsales` 段为空，`sql/mir2_data.sql:36-37`）。⇒ **表空 ⇒ 0 行；一旦播种 ⇒ oracle 装载器抛异常**（启动链中断） |
 | `goldsales` 写入 | `SaveSellOffItemList` 的三个调用点全被注释（`PlayObject.Sale.cs:240/332/577`）⇒ 永不写 |
 | 运行时列表来源 | `ClientSellOffEnd` 往 `M2Share.SellOffItemList` 里加（`PlayObject.Sale.cs:516-591`）；条目 `Flag=1` 由买方在卖方离线时购买置位（`:281-385`） |
 
-Rust `bins/game-svr/src/main.rs:827-848` 已把 `goldsales` 只读种子加载接上（含列名 bug ⇒ 0 行）；
-`SellOffBook` 是 sim 线程内唯一实例（`main.rs:15677-15682`）。
+Rust `bins/game-svr/src/main.rs:827-845` 已把 `goldsales` 只读种子加载接上；`SellOffBook` 是 sim 线程内
+唯一实例（`main.rs:15677-15682`）。**注意**：Rust 的 `get_string`（`crates/data/src/loaders.rs:104-110`）
+把 `ColumnNotFound` 降级成空串 ⇒ 表里有行时 **Rust 静默得 0 行、oracle 抛异常**，二者不等价；
+stock 表为空故当前不可观测。`goldsales.rs` 模块头「读错列名 ⇒ 恒 0 行」的归因同样需订正为
+「表空 ⇒ 0 行」。是否复刻抛异常见 §9 第 9 条。
 
 ### 4.5 Rust 现状
 
@@ -509,8 +549,15 @@ impl NpcDialogHost {
 - **出队序必须统一排序**：oracle 把说词和面板帧都塞进同一个 `MsgQueue`，按 `(byte)RM_*` 升序出队
   （`BaseObject.Message.cs:180/334`）。Rust 现在把 `shop::user_select` 的 `Vec<ShopFrame>` 与说词分开
   发送 ⇒ 必须合并成一个 `(priority, seq)` 列表后统一发出，否则「先 say 后面板/先面板后 say」会错。
-  已知优先级：`RM_MERCHANTSAY=11009 ⇒ 1`；`RM_SENDGOODSLIST=10128 ⇒ 208`；`RM_SENDREPAIRCOST=10142 ⇒ 158`；
-  `RM_USERREPAIRITEM_OK=10143 ⇒ 159`；`RM_MERCHANTDLGCLOSE=10127 ⇒ 143`；`RM_MENU_OK=10309 ⇒ 69`。
+  优先级就是 **`(byte)wIdent`**（`BaseObject.Message.cs:180` `MsgQueue.Enqueue(sendMessage, (byte)wIdent)`，
+  即 `wIdent & 0xFF`；常量见 `src/OpenMir2/Messages.cs`）。逐个复核（按低 8 位）：
+  `RM_MERCHANTSAY=11009(0x2B01) ⇒ 1`；`RM_SENDREPAIRCOST=10142(0x279E) ⇒ 158`；
+  `RM_USERREPAIRITEM_OK=10143(0x279F) ⇒ 159`；`RM_MERCHANTDLGCLOSE=10127(0x278F) ⇒ 143`；
+  `RM_SENDGOODSLIST=10128(**0x2790**) ⇒ **144**`（旧稿写 208，已订正）；`RM_MENU_OK=10309(0x2845) ⇒ 69`。
+  ⇒ 同批次出队序（小者先）：say(1) < menu_ok(69) < dlgclose(143) < goodslist(144) <
+  sendrepaircost(158) < userrepairitem_ok(159)。
+  （`SendPriorityMsg` 的 `MessagePriority.High` 走另一条入口 `Enqueue(..., (byte)Priority)`
+  （`BaseObject.Message.cs:30`），与 `(byte)wIdent` 不是同一套数值，比较时不要混用。）
 
 ### 5.3 商人接线
 
@@ -615,7 +662,7 @@ MD-C 可与 MD-D 同卡但必须先返回 id 表。`[goods]`/`%`/`+` 已存在�
 | C4 | `merchant_dialog_label_gate` | 首次 1011 `@main` 后 `can_jmp_labels` 含页面里的全部 `<.../@label>`；冷发 `@upgradenow` 被拒（0 帧）；`@buy` 在说词后放行；`@exit`/`@back` 行为 | `GetScriptLabel` 不 Clear / 不填表 / 把 `@main` 特判删掉 ⇒ 红 | L |
 | C5 | `merchant_base_userselect_back_state` | `ScriptCurrLable/ScriptGoBackLable`：`@a → @b` 后 go_back=@a；`@back` 清 curr；再 `@back` 清 go_back；`@main` 特判；`ScriptGotoCount` 每次 0 | 不调 base / 把两个字段合并 / 不重置 goto ⇒ 红 | L |
 | C6 | `merchant_repair_ok_label` | 修好普通装备：`SM_USERREPAIRITEM_OK` 之后有 `SM_MERCHANTSAY`「修得还算不错。\ \ \ <返 回/@Main>」（`恶魔布衣-B345`）；特殊修理 1 个脚本；修失败/不支持无 say | 删 `goto_label` 调用 / 把 `~@repair` 写成 `@repair` ⇒ 红 | L（帧序另见 C13） |
-| C7 | `merchant_variable_text_vectors` | 部署商人页出现的 16 种 `$...` 变量逐个展开；`$PRICERATE/$UPGRADEWEAPONFEE/$USERWEAPON` 商人数值；未知 token 原样；101 次上限；`>` 位置门 | 改文案/大小写敏感/去 101 上限/未知 token 置空 ⇒ 红 | L |
+| C7 | `merchant_variable_text_vectors` | 部署商人页出现的 17 种 `$...` 变量逐个展开（含 `$STR(...)` 的 12 段槽位映射，且说词侧与动作参数侧映射不同）；`$PRICERATE/$UPGRADEWEAPONFEE/$USERWEAPON` 商人数值；未知 token 原样；101 次上限；`>` 位置门 | 改文案/大小写敏感/去 101 上限/未知 token 置空 ⇒ 红 | L |
 | C8 | `market_def_call_define_vectors` | `#CALL [\冲值元宝\元宝.txt] @领取元宝` 插入后的标签/动作序列与 oracle 一致；`#DEFINE` 行首不替换、最多 10 次；`#SETHOME` 默认主页 | 漏插入/把行首也替换/去 10 次上限 ⇒ 红 | L |
 | C9 | `market_def_encoding_bom_vectors` | GB2312 无 BOM、UTF-8 BOM、UTF-16LE BOM、`FF FE 00 00`（UTF-16LE）逐字节；说词尾 GBK+EDCode | 选错编码/把 `FF FE 00 00` 当 UTF-32 ⇒ 红 | L |
 | C10 | `openybdeal_branches` | 已开通 ⇒ 已开通文案、元宝不变；成功 ⇒ 扣费/`sale_deal=true`/成功文案；不足 ⇒ 文案、元宝不变；异常 ⇒ 无帧 | 任一文案/扣费方向/分支顺序错 ⇒ 红 | L |
@@ -681,6 +728,9 @@ MD-C 可与 MD-D 同卡但必须先返回 id 表。`[goods]`/`%`/`+` 已存在�
    本文建议顺带带上，避免下一张补货卡再改 envir。
 8. **`QUERYYBSELL/QUERYBDEAL`**：是否与 `OPENYBDEAL` 同卡实现？部署 0 使用；本文建议只登记，
    不扩大本卡写集。
+9. **`goldsales` 列名 bug 的异常语义**：oracle 在表有行时抛 `IndexOutOfRangeException`（无 catch），
+   Rust 当前降级成 0 行。是否按「行为等价优先」复刻抛异常（会让播种过的库直接启动失败），
+   还是登记 `T-*` 白名单保留静默？本文建议复刻并配构造级判据（`D-5/B-5` 的措辞需改为「异常复刻」）。
 
 ---
 
