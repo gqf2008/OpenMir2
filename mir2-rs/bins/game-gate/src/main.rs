@@ -36,7 +36,7 @@
 //! 的 10min 维护窗口）与 `TimedService.ClearIdleSession` + `ClientThread.ProcessIdleSession`
 //! 的 15 天会话清理（硬编码 `GateShare.SessionTimeOutTime`）。
 //!
-//! **下行重连（2026-10-20，T-118）**：照 oracle `ClientThread.Start()`（`ClientThread.cs:431-460`）
+//! **下行重连（2026-10-20，T-119）**：照 oracle `ClientThread.Start()`（`ClientThread.cs:431-460`）
 //! 与 SelGate `downstream.rs` 的现成模式实现——运行期断链后按判定周期重连、失败计数、
 //! `GateReady`/连接代次、`RestSessionArray()` 的会话摘除，以及 `Stop()` 的全关（读循环由关闭信号
 //! 退出）。启动时连不上 GameSvr 仍按 M1④ 失败退出（重连只覆盖运行期断链）。
@@ -374,7 +374,7 @@ enum KeepaliveTick {
     Send,
     /// GM_STOP 后的 10min 维护窗口已过（oracle 在此调用 `Start()`；本网关无下行重连，只照抄日志）。
     Maintenance,
-    /// `CheckServerFail` ⇒ `Start()` 重连尝试（本线只照抄失败日志与计数，见 T-118）。
+    /// `CheckServerFail` ⇒ `Start()` 重连尝试（本线只照抄失败日志与计数，见 T-119）。
     RetryConnect { fail_count: u32 },
     /// 失败计数达到 `ushort.MaxValue` 之后（`ClientThread.cs:455-459`）。
     MaxRetries,

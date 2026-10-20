@@ -1427,7 +1427,7 @@ async fn live_session_with_traffic_stays_open_and_emits_no_frames() {
     gate.shutdown().await;
 }
 
-/// **T-118 进程级（下行重连）**：网关→GameSvr 断链后按判定周期调用 `Start()` 重连
+/// **T-119 进程级（下行重连）**：网关→GameSvr 断链后按判定周期调用 `Start()` 重连
 /// （`ClientThread.cs:449-455`），重连成功后恢复 `GM_CHECKCLIENT`。
 ///
 /// 夹具顺序是确定的：首连接**先收到一帧健康帧**再被主动断开 ⇒ 断链时链路确实就绪过；
