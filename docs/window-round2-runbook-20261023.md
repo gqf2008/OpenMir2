@@ -282,7 +282,7 @@ $pf = Get-Content "$W/csharp/stack/csharp-stack.pid.json" -Raw | ConvertFrom-Jso
   ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue; "STOPPED RunGate pid=$_" }
 Start-Sleep -Milliseconds 800
 
-# 2) 影子 conf：cp936 原样，只改 Count / GatePort1 两个数字
+# 2) 影子 conf：cp936 往返 byte-exact（严格 GBK 解码会失败），只改 Count / GatePort1 两个数字
 $enc = [Text.Encoding]::GetEncoding(936)
 New-Item -ItemType Directory -Force "$W/csharp/shadow" | Out-Null
 Copy-Item -LiteralPath "$pack/RunGate/config.conf" -Destination "$W/csharp/shadow/game-gate.conf" -Force
@@ -377,11 +377,21 @@ powershell -NoProfile -ExecutionPolicy Bypass `
   （今日存在），所以不会临时 `dotnet build`。
 - 第三步 `cargo run -p replay` 是既有逐字节自洽门；若窗口不允许 cargo，可加 `-SkipReplay`，
   但要在证据里写明“replay 未跑”，不得把 `-SkipReplay` 说成自洽。
-- 导出后确认 `capture.jsonl` 每行有 `port=7200`、`dir=s2c`、`raw_hex` 以 `#` 开头、`!` 结尾：
+- **schema 注意**：`capture.jsonl` 同时含 `c2s` 与 `s2c` 行；`raw_hex` 是**线上字节的十六进制**
+  （`#` = `0x23`、`!` = `0x21`，不是字面量文本）⇒ 形如 `"raw_hex": "23…21"`。
+  自检必须先筛 `dir=s2c`（第一行可能是 c2s），再检查 `raw_hex.startswith("23")`：
   ```powershell
-  Get-Content "$W/csharp/s2c/capture.jsonl" -TotalCount 1
-  #   期望含 "port": 7200, "dir": "s2c", "raw_hex": "#...
+  $rows = Get-Content "$W/csharp/s2c/capture.jsonl" | ForEach-Object { $_ | ConvertFrom-Json }
+  $s = @($rows | Where-Object { $_.dir -eq 's2c' -and $_.port -eq 7200 })
+  if ($s.Count -eq 0) { throw 'PREREQ_MISSING: 没有 dir=s2c/port=7200 的帧' }
+  $bad = @($s | Where-Object { -not ($_.raw_hex.StartsWith('23') -and $_.raw_hex.EndsWith('21')) })
+  if ($bad.Count -ne 0) { throw "RED: $($bad.Count) 帧 raw_hex 不以 23 开头 / 21 结尾" }
+  "CAPTURE_OK s2c=$($s.Count) act=$(@($s | Where-Object { $_.frame_form -eq 'act' }).Count)"
+  #   2026-10-21 按 §1.7 复验（dump = E:/tmp/window/20261022/csharp/proxy）：
+  #   CAPTURE_OK s2c=58 act=11
   ```
+- `frame_form=act`（`#+GD/<tick>!` 明文动作帧）**没有 `ident`**；J2–J4 的脚本必须显式过滤
+  （见 §3.2 的 `frame_form != 'act'`），否则 `KeyError`。
 
 ### 1.8 Rust 侧（混合栈 + 影子 7600 + 代理 7200）
 
@@ -436,7 +446,7 @@ $pf = Get-Content "$W/rust/stack/rust-stack.pid.json" -Raw | ConvertFrom-Json
   ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue; "STOPPED game-gate pid=$_" }
 Start-Sleep -Milliseconds 800
 
-# 影子 conf：cp936 原样，只改 Count / GatePort1
+# 影子 conf：cp936 往返 byte-exact（严格 GBK 解码会失败），只改 Count / GatePort1
 $enc = [Text.Encoding]::GetEncoding(936)
 New-Item -ItemType Directory -Force "$W/rust/shadow" | Out-Null
 Copy-Item -LiteralPath 'E:\MirServer\RunGate\config.conf' -Destination "$W/rust/shadow/game-gate.conf" -Force
@@ -489,9 +499,13 @@ $proxy.Id | Set-Content "$W/rust/proxy.pid"
    - `check_client_s2c_frames.py`：`RED: 52 body 解码失败：帧形状不符（需 # 开头 / ! 结尾 / 头 16 字符）`（rc=1）。
 4. **7200 必须先释放**。C# 侧停 `RunGate`；Rust 侧停 `game-gate`（它同时占 7200/7201/7202）。
    代理启动报 `address in use` 就是这一步没做干净。
-5. **gate conf 是 cp936，且只改两个数字**。`Count=1`、`GatePort1=7600`；其余 `ServerAddr/ServerPort`
-   保持指向 5000。C# GameGate 读 `AppContext.BaseDirectory/config.conf`，所以必须**整目录拷贝**
-   `RunGate` 再覆盖 conf，不能只改 `E:/MirServer/RunGate`。
+5. **gate conf 不是“纯 cp936 原样”**：`E:/MirServer/RunGate/config.conf` 主体是 UTF-8 中文
+   （另夹少量 GBK 中文行），且含 `0x80` 字节 ⇒ **严格 GBK 解码会失败**（Python `gbk`/`cp936`
+   在 position 1158 的 `0x80` 处 `UnicodeDecodeError`）。但 .NET `ReadAllText/WriteAllText(...,936)`
+   走替换回退，往返后 **byte-exact**（2026-10-21 实测 sha256 `c000bbbe…` 不变），所以“只改两个数字”
+   仍成立。正确措辞是 **“cp936 往返 byte-exact”**，不是“cp936 原样”。`Count=1`、`GatePort1=7600`；
+   其余 `ServerAddr/ServerPort` 保持指向 5000。C# GameGate 读 `AppContext.BaseDirectory/config.conf`，
+   所以必须**整目录拷贝** `RunGate` 再覆盖 conf，不能只改 `E:/MirServer/RunGate`。
 6. **`ConnctionString` 是上游拼写**（少一个 `e`），不要改成 `ConnectionString`；改了组件读不到。
 7. **账号/密码**：今日 `winplay0` 的密码长度 = 8（`LoginSrv` 日志），即密码也是 `winplay0`。
    账号必须在 LoginSrv 启动前存在于测试库（今日 `[QueryChr] 候选 account=winplay0 ... quickIndex=6231`）。
@@ -671,8 +685,11 @@ $cap = "$W/<side>/s2c/capture.jsonl"
 import json, sys
 p = sys.argv[1]
 rows = [json.loads(l) for l in open(p, encoding='utf-8') if l.strip()]
-# 只取 7200 s2c；单会话 capture 里 46 只出现一次
-s = [r['ident'] for r in rows if r.get('dir') == 's2c' and r.get('port', 7200) == 7200]
+# 只取 7200 s2c；导出件同时含 c2s 行与 frame_form=act 的明文动作帧
+# （`#+GD/<tick>!`，这些行没有 ident），不筛掉会在 r['ident'] 处 KeyError
+s = [r['ident'] for r in rows
+     if r.get('dir') == 's2c' and r.get('port', 7200) == 7200
+     and r.get('frame_form') != 'act' and 'ident' in r]
 PRE = [658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46]
 i46 = s.index(46)
 assert s[max(0, i46-14):i46+1] == PRE, ('prefix', s[max(0, i46-14):i46+1])
@@ -699,6 +716,14 @@ LOGIN_TAIL_OK i46=14 i654=15 i657=[16, 17] i42=[6, 18] 100x4
 今日 C# 因为走了两步，实际是 `i46=14 i654=27 i657=[28,29] i42=[6,30]`——同样通过相对次序判据；
 今日 Rust 在 `42 count` 断言处 `AssertionError ('42 count', [6])` ⇒ RED，正是“被打死”的直接后果。）
 
+**导出件坑（2026-10-21 复验）**：`export_s2c.ps1` 产出的 `capture.jsonl` 里，
+今日 C# 有 **11 条 `frame_form=act` 的明文动作帧**（`#+GD/<tick>!`，s2c 共 58 条），
+这些行**没有 `ident`**；按旧版脚本（不加 `frame_form` 过滤）实跑必崩：
+`KeyError: 'ident'`。上面的 `r.get('frame_form') != 'act' and 'ident' in r` 即为修复。
+复验实跑（dump = `E:/tmp/window/20261022/csharp/proxy`，导出到 `E:/tmp/w2verify/csharp`）：
+加筛选后 C# 输出 `LOGIN_TAIL_OK i46=14 i654=27 i657=[28, 29] i42=[6, 30] 100x4`（rc=0）；
+Rust 导出 0 条 act，仍在 `AssertionError ('42 count', [6])` 处 RED。
+
 **失败判据**：
 
 - `654` 不在 `46` 之后，或出现超过 1 次；
@@ -719,18 +744,23 @@ LOGIN_TAIL_OK i46=14 i654=15 i657=[16, 17] i42=[6, 18] 100x4
 C# oracle 的 `52 SM_ABILITY` 是 **40B**（`EncodeMessage(WAbil)`），Rust 生产默认是**冻结客户端
 `TAbility` 58B**。`s2c_diff.py` 会逐字段比 `body_len/body_sha256/raw_hex`，三条全部必须登记到
 D-9 白名单；只登记 `body_len`/`raw_hex` 不够（`body_sha256` 也会不同）。
+注意：白名单只覆盖 **52 的 D-9**；2026-10-21 实跑同一次运行里 `50/51` 还有 **4 处未登记差异**
+（`param` 289 vs 288 及带出的 `raw_hex`），必须按下面「待查项」处理，**不得**加白名单换绿。
 
 白名单文件 `$W/judge/s2c-whitelist.jsonl`（每条必须带 `reason` + `reviewer`，缺一直接 RED）：
 
 ```jsonl
 {"ident":52,"field":"body_len","reason":"D-9：oracle 40B vs Rust client-58 58B（owner 已裁决，whitelist.md D-9）","reviewer":"openmir2-reviewer-1"}
-{"ident":52,"field":"body_sha256","reason":"D-9 同上：40B→58B 布局变化必然改变 body_sha256（s2c_diff:213 逐字段比）","reviewer":"openmir2-reviewer-1"}
+{"ident":52,"field":"body_sha256","reason":"D-9 同上：40B→58B 布局变化必然改变 body_sha256（tools/m2-acceptance/s2c_diff.py:284 逐字段比）","reviewer":"openmir2-reviewer-1"}
 {"ident":52,"field":"raw_hex","reason":"D-9 同上（52 body 布局差异）","reviewer":"openmir2-reviewer-1"}
 ```
 
 ```powershell
 New-Item -ItemType Directory -Force "$W/judge" | Out-Null
 # 把上面三行原样写入 $W/judge/s2c-whitelist.jsonl（UTF-8，无 BOM 也可以；每行一个 JSON）
+
+# 白名单只允许登记**已裁决**的布局差异（当前仅 D-9/52）。50/51 的 param 差异**不得**登记为
+# 白名单来换 GREEN；确需登记，必须带 reason + reviewer 且先有 owner/审查记录（格式同上面三行）。
 
 python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff.py `
   --rust   "$W/rust/s2c/capture.jsonl" `
@@ -740,26 +770,48 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
   --out "$W/judge/g1-diff.json"
 ```
 
-**期望**：
+**期望（2026-10-21 按 §1.7 导出后实跑；与实测一致，不是 GREEN）**：
 
 ```text
 GOLDEN idents(15): [658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46]
 RUST   idents(15): [658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46]
+DIFF ident=51 field=param golden=289 rust=288
+DIFF ident=51 field=raw_hex golden=236464686b6463686b5d653c7b6664686b603f21 rust=236464686b6463686b5c653c7b6664686b603f21
+DIFF ident=50 field=param golden=289 rust=288
+DIFF ident=50 field=raw_hex golden=236464686b6462686b5d653c7b6664686b64646a6b6464686b6464686b6464686b6464686b643f21 rust=236464686b6462686b5c653c7b6664686b64646a6b6464686b6464686b6464686b6464686b643f21
 WHITELISTED ident=52 field=body_len reviewer=openmir2-reviewer-1
 WHITELISTED ident=52 field=body_sha256 reviewer=openmir2-reviewer-1
 WHITELISTED ident=52 field=raw_hex reviewer=openmir2-reviewer-1
 REPORT <...>/g1-diff.json
-GREEN: 同序列逐字节 diff = 0
+RED: 4 处未登记差异（同序列 diff != 0）
 ```
 
-rc=0；`g1-diff.json` 里 `diffs == []`、`whitelisted_count == 3`（`whitelisted` 数组含 3 条）。
+rc=1；`g1-diff.json` 里 `diff_count == 4`、`pass == false`、`whitelisted_count == 3`（3 条均来自 52/D-9）。
+**三条 52 白名单只覆盖 D-9，不能把 50/51 的差异变绿**；在 50/51 查清前，J5 判 **RED（待查）**，
+不得写成「三条 52 白名单 ⇒ GREEN」。
+
+**待查项（必须单列；按 R 级处理，不得白名单）**：
+
+| ident | 帧 | field | golden | rust | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| 51 | `SM_NEWMAP` | `param` | 289 (`0x0121`) | 288 (`0x0120`) | **真实分叉候选**：param 差 1 |
+| 51 | `SM_NEWMAP` | `raw_hex` | `…6b5d653c…` | `…6b5c653c…` | 只差 `0x5d→0x5c` 一个字节（param 低字节），非 D-9 |
+| 50 | `SM_LOGON` | `param` | 289 (`0x0121`) | 288 (`0x0120`) | 与 51 同形，**同样待查** |
+| 50 | `SM_LOGON` | `raw_hex` | `…6b5d653c…` | `…6b5c653c…` | 同上 |
+
+50/51 的 `param` 是 `CurrX`（`PlayObject.cs` 的 `MakeMessage(SM_LOGON/SM_NEWMAP, ActorId, CurrX, CurrY, …)`）。
+今日 §2.4 已记录**两侧之间没有 restore**、位置从 `289,618` 漂到 `288,620`，因此这 4 条至少有两种解释：
+① **输入漂移**（C# 先跑并写回 289→288，Rust 读到 288）；② Rust 侧真的少算 1。判别实验只有一个：
+下一轮开窗前 reset `base-test`，两侧从**同一起点**跑（侧间 restore）；若差异消失 = ①，若仍在 = ②。
+在判别前，**不得**把它写成 GREEN，也**不得**放宽白名单。
 
 **失败判据**：
 
 - 任一 `DIFF ident=52 field=...` 未登记 ⇒ RED；
 - 白名单条目缺 `reason`/`reviewer` ⇒ 工具直接 RED（`§6.0-3`）；
-- 同序列出现 `ident` 次序分叉 ⇒ `DIFF ident=... field=ident kind=order` ⇒ RED（这不是 D-9，
-  是登录尾/入图序的问题，先回去看 J1/J2）；
+- 同序列出现 `ident` 次序分叉 ⇒ RED（这不是 D-9，是登录尾/入图序的问题，先回去看 J1/J2）。
+  注意：`kind=order` **只写在 `g1-diff.json` 的 `diffs[].kind` 字段**（`s2c_diff.py:278` 写入）；
+  控制台 `DIFF ident=... field=... golden=... rust=...` 行**不带** `kind`（`:324` 打印）；
 - `--golden` 用了静态金标准（不是本次同 DB 状态的 C# 实时 capture）⇒ 可能带 A-9 假红；
   必须用本轮 C# capture。
 
@@ -772,8 +824,10 @@ rc=0；`g1-diff.json` 里 `diffs == []`、`whitelisted_count == 3`（`whiteliste
 | `52 body_sha256` | 与 40B 布局绑定 | 与 58B 布局绑定（必不同） |
 | `52 raw_hex` | 40B body | 58B body（必不同） |
 
-> 今日没有导出 capture，所以没有跑成 `s2c_diff`；但原始 dump 已能确认 `body_len=40/58` 与
-> `param/tag` 相同。下一轮导出后按上面命令重跑即可。
+> 2026-10-21 已按 §1.7 从今日 dump 导出并实跑：52 的 `body_len=40/58`、`param/tag/series`
+> 相同，三条 D-9 白名单全部命中；但同一次运行还有 **50/51 的 4 处差异**（`diff_count=4`，
+> 见上「待查项」），所以本判据今日是 **RED**，不是 GREEN。下一轮在**两侧同一起点**下重跑，
+> 才能区分“输入漂移（§2.4）”与“Rust param 差 1 的真实分叉”。
 
 ### 3.4 判据工具自检（离线，不占窗口）
 
@@ -792,23 +846,27 @@ python -I -B "$CHK/check_reverse_point_clean.py" --selftest  # 今日 GREEN
 | J2 `654` 位置 | 46 后（seq28，走位对之后） | 46 后（seq16） | 46 后、657 前 |
 | J3 第二 `42` | 有（seq31） | **无** | 恰 2 条 |
 | J4 `100×4` | 有（seq32–35） | **无** | 恰 4 条 |
-| J5 `52` 布局 | 40B | 58B | 三条白名单 GREEN |
+| J5 `52` 布局 | 40B | 58B | 52 白名单 3 条命中；但 50/51 param 差异 ⇒ **RED（待查）** |
 | 战斗噪声 | 无 | **9 条 self struck + NOWDEATH** | 0 |
 
 ---
 
-## 4. E1–E4 状态（2026-10-23 本轮口径）
+## 4. E1–E4 状态（2026-10-23；E2 待 owner 签名）
 
 | 项 | 状态 | 本轮可用范围 |
 | --- | --- | --- |
 | **E1 测试库克隆** | **已建**（owner 2026-10-22 裁决） | 所有构造/起栈只准写 `mir2_test_*`；生产 `mir2_*` 不写 |
-| **E2 影子内容** | **已批**（本轮口径） | 允许只读复制到影子包内改内容；本趟未用任何内容改动 |
+| **E2 影子内容** | **待 owner 签名**（`b46805058` / run sheet §E-0 均记待裁决） | **本轮不可开窗**；拿到 owner 签名后才允许只读复制到影子包并在包内改内容 |
 | **E3 MySQL 停/起** | **待裁决** | G6 故障注入仍不可开窗 |
 | **E4 C# 重编** | **允许**（owner 2026-10-22 裁决） | 可重编对比用 C#；今日**未用**（用部署件 pack） |
 
-> 口径差异提示：仓库内最后一次书面记录 `b46805058` 的提交说明仍是
-> `E1=测试库克隆、E4=允许重编；E2/E3 仍待裁决`。本表按**本轮任务口径**把 E2 记为已批；
-> 开窗前请 owner 补一条签名 `status`/`comment` 消歧，避免“口头已批、板上待裁决”两套账。
+> **E2 没有 owner 签名授权**：仓库内最后一次书面记录 `b46805058` 的提交说明是
+> `E1=测试库克隆、E4=允许重编；E2/E3 仍待裁决`；`docs/window-run-sheet-20261022.md` §E-0
+> 也把 E2 记为「未回答（仍待裁决）」。**「本轮任务口径」不是 owner 签名授权**，本表不据此记已批。
+> 开窗前需 owner 用一条签名 `status`/`comment` 明确确认**影子内容范围**：
+> ① `GuildBase/`（行会 750）；② `Envir/MonGen.txt`（特殊怪）；③ `Server.conf` 的非 `TestServer`
+> 变体（连带整棵 `Envir`）；并确认「只读复制到影子包、在影子包内改，`E:/MirServer/**` 一字不动」。
+> 在拿到这条签名前，E2 相关范围（G2 行会半 / G3b/G3c / B10 非 TestServer）一律不开窗。
 > E1/E4 与 `docs/window-run-sheet-20261022.md` §E-0 一致。
 
 ### 4.1 E1：测试库克隆（已建；重置命令）
@@ -897,13 +955,16 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/dbsnap/dbsnap.py --pas
 > `Hp=0`）。下一轮开窗前先按 4.1.1 重置一次，再按 4.1.3 拍 `base-test`；否则第一次 restore
 > 没有可还原的干净基线。
 
-### 4.2 E2：影子内容（本轮口径：已批；本趟未用）
+### 4.2 E2：影子内容（**待 owner 签名**；本趟未用）
 
-- **允许**：把 `E:/MirServer` 的内容只读复制到 `<WIN>/csharp/pack` 或 `GameSvr-shadow`，在**影子内**
+- **状态**：唯一书面记录 `b46805058` 与 run sheet §E-0 都是「待裁决」；**没有 owner 签名就不开窗**。
+  下面列的是**待确认的范围**，不是已授权口径。需 owner 一句话确认的影子内容：
+  `GuildBase/`、`Envir/MonGen.txt`、`Server.conf`（`TestServer=FALSE` 变体，连带整棵 `Envir`）。
+- **授权后允许**：把 `E:/MirServer` 的内容只读复制到 `<WIN>/csharp/pack` 或 `GameSvr-shadow`，在**影子内**
   改 `Envir/MonGen.txt`、`GuildBase/`、`Server.conf`（非 TestServer 等）；`E:/MirServer/**` 一字不动。
 - **本趟没有做任何内容改动**：今日只改了三个 DB 连接串（§1.3），`GameSvr-shadow/Envir`、`GuildBase`
   都是 pack 的原样复制。
-- 若下一轮要做行会 750/特殊怪/非 TestServer：
+- 若下一轮要做行会 750/特殊怪/非 TestServer（**先拿到 E2 签名**）：
   - `GameSvr-shadow/Server.conf:11` 现在是 `TestServer=TRUE`；非 TestServer 要在**影子**副本改，
     并重新记录 `!deployed-from.json` 之外的“内容改动清单”（文件名 + sha256）。
   - `GuildBase/` 在 `GameSvr-shadow` 下建，不要手写 `Guildlist.txt` 的格式；优先用游戏内建会。
@@ -1057,7 +1118,9 @@ git -C E:/Users/gxh/Documents/GitHub/OpenMir2 diff --stat -- src/ sql/   # 期�
    下一轮开窗前先 §4.1.1 重置 + §4.1.3 拍 base-test。
 3. **Rust 登录尾未证**：今日 Rust 在安全格之外被打死，`654` 之后是 `10/41 + 14/31` 噪声，
    没有 `657×2 / 第二 42 / 100×4`。这是下一轮的主要目标，不是“已通过”。
-4. **E2 书面记录不一致**：本表按本轮口径记“已批”，但 `b46805058` 仍写待裁决；开窗前补 owner 签名。
+4. **E2 仍待 owner 签名**：`b46805058` 与 run sheet §E-0 都记「待裁决」；本文件不把“本轮口径”当授权。
+   开窗前需 owner 一句话确认影子内容范围：`GuildBase/`、`Envir/MonGen.txt`、`Server.conf` 的非
+   TestServer 变体（连带整棵 `Envir`）。
 5. **E4 未实际使用**：今日用部署件 pack（`git_head=8a621f6a`），没有重编。若下一轮重编，
    必须重新记录 DLL hash + 构建 HEAD（§4.4）。
 6. **`100×4` 的输入前提**：`TestServer=TRUE` + `PayMent==3`；非 TestServer/其它付费态是不同输入，
