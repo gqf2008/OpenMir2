@@ -104,7 +104,7 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
   1. 读命名约定：`git for-each-ref refs/collab/meta/principals` 找 `<proj>` 前缀与角色模式；
   2. 沿用本 worktree 已有 identity，否则取该角色最高编号 +1 的下一个空闲名；
   3. `walgit collab join`（存在则采用、不存在则生成）；
-  4. 同步协作视图：`git fetch origin '+refs/collab/inbox/*:refs/collab/inbox/*' '+refs/collab/meta/*:refs/collab/meta/*'`，
+  4. 同步协作视图：`git fetch walgit '+refs/collab/inbox/*:refs/collab/inbox/*' '+refs/collab/meta/*:refs/collab/meta/*'`，
      再 `walgit collab board`，然后才谈认领。
 
 ## 0b. 并行拓扑（§0b）
@@ -169,8 +169,9 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 
 ### 远端与看板
 
-- 代码主源 = GitHub `origin`；walgit 承载 D1 协作层，remote 名 = `walgit`
-  → `http://127.0.0.1:8081/gqf2008/OpenMir2.git`。
+- **代码主源 = `walgit`（owner 2026-10-22 明确：GitHub `origin` 只是镜像，需要时人工同步）**：
+  remote 名 = `walgit` → `http://127.0.0.1:8081/gqf2008/OpenMir2.git`；**日常 fetch/push 只对 `walgit`**，
+  不再自动推 `origin`（GitHub）——`.git/config` 里已设 `remote.pushDefault=walgit`。
 - 看板列定义在 `.walgit/board.toml`（改它走提交 + 评审）；**移动卡片 = 追加一条签名 `status` 条目**，
   只通过签名条目移卡，绝不编辑 board、状态文件或别人的 inbox。
 - 抢卡示例（worktree 内可省略 `--actor` / `--key`）：
@@ -183,13 +184,13 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
   ```
 
 - 标准流转：`issue` → `status: in-progress` → worktree 干活 → `patch(--base/--head)` → `status: needs-review`
-  → **另一 principal** `review` → coordinator 合并并推 `origin` + `walgit` → `merge_result{oid}` → `status: closed`。
+  → **另一 principal** `review` → coordinator 合并并推 `walgit` → `merge_result{oid}` → `status: closed`。
 - 无人值守：`walgit collab watch --once`（§0c）；巡检跑 `E:\MirServer\port-status.ps1` + `walgit collab board` + `walgit collab report`。
 
 ### 每批收尾清单（Cleanup DoD，缺一不算完）
 
 1. **worktree**：`git worktree remove <路径>`；`git worktree list` 只剩主检出 + 进行中的线；
-2. **分支**：已合并的本地/远端删除（`git push origin --delete <分支>`），未合并的写明原因与归宿；
+2. **分支**：已合并的本地/远端删除（`git push walgit --delete <分支>`；GitHub 镜像按需人工同步），未合并的写明原因与归宿；
 3. **看板**：该卡收口为 `status: closed` 且在【已完成】列——**只写代码不收卡片 = 没收尾**；
 4. **进程**：本线起的客户端/服务端/假人/代理进程全部结束，`E:\MirServer` 十端口状态与开工前一致；
 5. **临时物**：临时目录/库/抓包中间件/日志清掉或登记到报告（写清路径 + 为何保留）；`E:\tmp` 不留本线专属残留；
