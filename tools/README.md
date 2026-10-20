@@ -26,6 +26,7 @@ tools/logdiff/error_curve.py  ERROR 行分桶曲线 + 不上升趋势判定（M5
 tools/m5-acceptance/start_full_rust_stack.ps1  含 game-svr 的全 Rust 栈起栈器（六件；起停同一 -LogDir、端口 fail-closed）  PARSE 检查（真机项归 R 窗口）
 tools/m5-acceptance/stage_gray_rollback.ps1   灰度阶梯 + 回滚演练 + 计时口径（每步时间戳落 ndjson；MySQL 永不停）  PARSE 检查 + 真机红检归 R 窗口
 tools/dbsnap/dbsnap.py        MySQL 快照/字段级比对                          selftest（2 项）
+tools/db-parity/              LB-10 字段级证据：快照逐列 diff + 建/删/选角后态骨架  dbsnap_pair/selftest；probe/selftest（离线）
 tools/e2e/run_e2e.ps1         E2E 回归套件（工具自测+金标准+流程+冒烟）      -SelfTestRed；-FailOnSkip 严格模式
 tools/e2e/stack_e2e.ps1       **整栈 E2E 一条命令**（停栈→开号→起栈→run_e2e→压测档→收尾） -SelfTestRed
 tools/oracle/                 S1 线：oracle 部署件对账 / 铺部署 / 网关重连门禁（见 tools/oracle/README.md）  -SelfTestRed
