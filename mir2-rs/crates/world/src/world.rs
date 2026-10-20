@@ -3473,6 +3473,29 @@ impl World {
             .is_some_and(|(_, allies)| allies.contains(&other))
     }
 
+    /// `CastleManager.InCastleWarArea(IActor/IEnvir)`（`CastleManager.cs:38-59`）：
+    /// 按 `CastleList` 顺序返回**首个**命中的城堡下标。
+    ///
+    /// `map_id = None` ⇔ oracle `Envir == null` ⇒ `InCastleWarArea` 恒 false。
+    #[must_use]
+    pub fn castle_war_area_at(&self, map_id: Option<usize>, x: i32, y: i32) -> Option<usize> {
+        self.castles
+            .iter()
+            .position(|c| c.in_castle_war_area(map_id, x, y))
+    }
+
+    /// `CastleManager.IsCastleMember(playObject)`（`CastleManager.cs:115-124`）：
+    /// 按 `CastleList` 顺序返回首个 `IsMasterGuild(MyGuild)` 命中的城堡下标。
+    ///
+    /// 名字口径 = `GuildMgr.MemberOfGuild(ChrName)` 的会名与 `OwnGuild` 逐字比较
+    /// （见 `UserCastle::is_master_guild_name` 的引用相等证法）。
+    #[must_use]
+    pub fn castle_member_at(&self, guild_name: Option<&str>) -> Option<usize> {
+        self.castles
+            .iter()
+            .position(|c| c.is_master_guild_name(guild_name))
+    }
+
     /// `GuardUnit.IsProperTarget` 的豁免表达式（`GuardUnit.cs:73/86`）：
     /// `MasterGuild == guild || MasterGuild.IsAllyGuild(guild)`。
     ///

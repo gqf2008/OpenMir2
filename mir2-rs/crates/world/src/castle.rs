@@ -59,6 +59,7 @@
 //! 真机两侧时间门对拍仍需 ⑧-1 的 C# 时钟注入片 + 独占窗口。
 
 use mir2_data::guild_castle::GuildCastleConfig;
+use mir2_shared::rng::RandomNumber;
 
 /// `UserCastle.Archers = new ArcherUnit[12]`（`UserCastle.cs:48`）与 `CastleConst.MaxCastleArcher`
 /// （`CastleConst.cs:10`）。`Guards` 数组长度同为 12（`UserCastle.cs:49`），
@@ -68,6 +69,36 @@ pub const MAX_CASTLE_ARCHER: usize = 12;
 pub const MAX_CASTLE_GUARD: usize = 12;
 /// `CastleWarRangeX` / `CastleWarRangeY` 的 `InCastleWarArea` 默认（`GameSvrConf.cs:1786-1787`）。
 pub const DEFAULT_WAR_RANGE: i32 = 100;
+/// `SM_AREASTATE` 的 bit0：`Envir.Flag.FightZone`（`PlayObject.Base.cs:274`）。
+pub const AREA_STATE_FIGHT_ZONE: u16 = 1;
+/// `SM_AREASTATE` 的 bit1：`Envir.Flag.SafeArea`（`PlayObject.Base.cs:279`）。
+pub const AREA_STATE_SAFE_AREA: u16 = 2;
+/// `SM_AREASTATE` 的 bit2（值 4）：`InGuildWarArea`（`PlayObject.Base.cs:283`）。
+pub const AREA_STATE_GUILD_WAR: u16 = 4;
+
+/// `Server.conf:740-745` 的四个名字色（部署值与 `GameSvrConf.cs:1731-1736` 缺省一致）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CastleNameColors {
+    /// `PKFlagNameColor`（部署 47）。
+    pub pk_flag: u8,
+    /// `AllyAndGuildNameColor`（部署 180）。
+    pub ally_guild: u8,
+    /// `WarGuildNameColor`（部署 69）。
+    pub war_guild: u8,
+    /// `InFreePKAreaNameColor`（部署 221）。
+    pub in_free_pk: u8,
+}
+
+impl Default for CastleNameColors {
+    fn default() -> Self {
+        CastleNameColors {
+            pk_flag: 47,
+            ally_guild: 180,
+            war_guild: 69,
+            in_free_pk: 221,
+        }
+    }
+}
 /// `Messages.cs:453` 的 `SS_204`（跨服系统消息）。
 pub const SS_204: u16 = 204;
 /// `Messages.cs:461` 的 `SS_212`（跨服 `RELOADCASTLEINFO`）。
@@ -649,8 +680,26 @@ pub struct DefenseUnitSpec {
 /// （接线属第②片的 `bins/game-svr` 面，等 owner 对 bins 串行序裁决后另片交付）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CastleDefenseSpecs {
+    /// `[Setup] OwnGuild`（`CastleConf.cs:18`，缺省 `""`）。
+    ///
+    /// **读序照抄**：`MasterGuild` 的反查在 `CastleMgr.Initialize`（`GameApp.cs:213`）里，
+    /// 早于 `GuildMgr.LoadGuildInfo`（`GameApp.cs:245`）⇒ 启动时恒为 `None`；本结构只搬名字，
+    /// 由 [`UserCastle::is_master_guild_name`] 用名字比较。
+    pub own_guild: String,
     /// `[Defense] CastleMap`（`CastleConf.cs:39`，缺省 `"3"`）。
     pub map_name: String,
+    /// `[Defense] CastleHomeMap`（`CastleConf.cs:40`，缺省 `"3"`）。
+    pub home_map: String,
+    /// `[Defense] CastleHomeX`（`CastleConf.cs:41`，缺省 644）。
+    pub home_x: i16,
+    /// `[Defense] CastleHomeY`（`CastleConf.cs:42`，缺省 290）。
+    pub home_y: i16,
+    /// `[Defense] CastleWarRangeX`（`CastleConf.cs:43`，缺省 100）。
+    pub war_range_x: i32,
+    /// `[Defense] CastleWarRangeY`（`CastleConf.cs:44`，缺省 100）。
+    pub war_range_y: i32,
+    /// `[Defense] CastleMapList`（`CastleConf.cs:24-37`，逗号分隔，**保留重复与顺序**）。
+    pub envir_list: Vec<String>,
     /// `[Defense] CastlePlaceMap`（皇宫地图，`CastleConf.cs:45`）。
     pub palace_map: String,
     /// `[Defense] CastleSecretMap`（密道地图，`CastleConf.cs:46`）。
@@ -727,6 +776,11 @@ pub trait CastleInitializeEnv {
     fn map_owner_is_self(&self, map_name: &str) -> bool;
     /// `SystemShare.MapMgr.FindMap(name) != null`（`UserCastle.cs:115/121/127`）。
     fn find_map(&self, map_name: &str) -> bool;
+    /// `FindMap(name)` 的注册表 id（本仓 `MapRegistry::id_of`；`None` ⇔ oracle `null`）。
+    ///
+    /// 用于把 `CastleEnvir`/`PalaceEnvir`/`SecretEnvir` 与 `EnvirList` 归一成 id，
+    /// 让 [`UserCastle::in_castle_war_area`] 的引用相等语义可离线判定。
+    fn map_id(&self, map_name: &str) -> Option<usize>;
     /// `SystemShare.WorldEngine.RegenMonsterByName(map, x, y, name)`：造出怪物则返回其模板
     /// `MaxHP`，怪物库无此名 ⇒ `None`（oracle 返回 `null`）。
     fn regen_monster_by_name(
@@ -874,6 +928,19 @@ pub struct UserCastle {
     pub name: String,
     /// `MapName`（`CastleConf` 的 `[Setup] MapName`；空 ⇒ `Run` 直接返回）。
     pub map_name: Option<String>,
+    /// `HomeMap`（`CastleConf` 的 `[Defense] CastleHomeMap`；死亡回城支用）。
+    pub home_map: String,
+    /// `CastleEnvir`（`FindMap(MapName)`）的注册表 id（`None` ⇔ oracle `null`）。
+    pub castle_map_id: Option<usize>,
+    /// `PalaceEnvir`（`FindMap(CastlePlaceMap)`）的注册表 id。
+    pub palace_map_id: Option<usize>,
+    /// `SecretEnvir`（`FindMap(CastleSecretMap)`）的注册表 id。
+    pub secret_map_id: Option<usize>,
+    /// `EnvirList` 逐项解析出的 `map_id`（`InCastleWarArea` 的第三支）。
+    pub envir_map_ids: Vec<usize>,
+    /// `WarRangeX` / `WarRangeY`（`InCastleWarArea` 的严格 `<` 边界）。
+    pub war_range_x: i32,
+    pub war_range_y: i32,
     /// `M2Share.ServerIndex`。
     pub server_index: i32,
     /// `SystemShare.MapMgr.GetMapOfServerIndex(MapName)`（归属服）。
@@ -928,6 +995,13 @@ impl UserCastle {
         UserCastle {
             name: name.into(),
             map_name: None,
+            home_map: "3".to_string(),
+            castle_map_id: None,
+            palace_map_id: None,
+            secret_map_id: None,
+            envir_map_ids: Vec::new(),
+            war_range_x: DEFAULT_WAR_RANGE,
+            war_range_y: DEFAULT_WAR_RANGE,
             server_index: 0,
             map_owner_server_index: 0,
             master_guild: None,
@@ -1009,6 +1083,18 @@ impl UserCastle {
     ) -> Vec<CastleEvent> {
         // `LoadConfig()`：`MapName = ReadWriteString("Defense", "CastleMap", "3")`（`CastleConf.cs:39`）。
         self.map_name = Some(specs.map_name.clone());
+        // `CastleConf.LoadConfig` 的其余键（`CastleConf.cs:18/40-44`）在归属门**之前**装载。
+        self.own_guild = Some(specs.own_guild.clone());
+        self.home_map = specs.home_map.clone();
+        self.home_x = specs.home_x;
+        self.home_y = specs.home_y;
+        self.war_range_x = specs.war_range_x;
+        self.war_range_y = specs.war_range_y;
+        self.envir_map_ids = specs
+            .envir_list
+            .iter()
+            .filter_map(|name| env.map_id(name))
+            .collect();
         let mut events = Vec::new();
         let map_name = specs.map_name.as_str();
 
@@ -1016,6 +1102,11 @@ impl UserCastle {
         if !env.map_owner_is_self(map_name) {
             return events;
         }
+
+        // `UserCastle.cs:115-127`：`CastleEnvir`/`PalaceEnvir`/`SecretEnvir = FindMap(...)`。
+        self.castle_map_id = env.map_id(map_name);
+        self.palace_map_id = env.map_id(&specs.palace_map);
+        self.secret_map_id = env.map_id(&specs.secret_map);
 
         // `UserCastle.cs:115-125`：皇宫 / 密道地图告警（找不到只告警，不阻断）。
         if !env.find_map(&specs.palace_map) {
@@ -1424,6 +1515,67 @@ impl UserCastle {
         self.is_master_guild(guild)
     }
 
+    /// **名字口径**的 `IsMasterGuild`：`OwnGuild`（`CastleConf.LoadConfig` 读入的字符串）
+    /// 与 `GuildMgr.MemberOfGuild(ChrName)` 的会名逐字比较。
+    ///
+    /// oracle 的 `MasterGuild == guild` 是引用相等；两侧都由同一个 `GuildMgr` 解析，
+    /// 同名必同对象 ⇒ 名字相等与引用相等在本仓（无 `GuildId` 映射的生产路径）等价。
+    #[must_use]
+    pub fn is_master_guild_name(&self, guild_name: Option<&str>) -> bool {
+        match (self.own_guild.as_deref(), guild_name) {
+            (Some(own), Some(name)) => !own.is_empty() && own == name,
+            _ => false,
+        }
+    }
+
+    /// **名字口径**的 `IsMember(PlayObject)` = `IsMasterGuild(MyGuild)`（`UserCastle.cs:480-483`）。
+    #[must_use]
+    pub fn is_member_name(&self, guild_name: Option<&str>) -> bool {
+        self.is_master_guild_name(guild_name)
+    }
+
+    /// oracle `InCastleWarArea(IEnvirnoment envir, int nX, int nY)`（`UserCastle.cs:454-478`）。
+    ///
+    /// 逐行：
+    /// 1. `envir == null` ⇒ false（本签名用 `Option<usize>` 表达，`None` 直接 false）；
+    /// 2. `envir == CastleEnvir` 且 `|HomeX-x| < WarRangeX` 且 `|HomeY-y| < WarRangeY` ⇒ true
+    ///    （**严格 `<`**：dx=100 为 false）；
+    /// 3. `envir == PalaceEnvir || envir == SecretEnvir` ⇒ true；
+    /// 4. `EnvirList` 任一项与 `envir.MapName` 相等（OrdinalIgnoreCase；本仓解析为 map_id 后
+    ///    等价）⇒ true；
+    /// 5. 否则 false。
+    #[must_use]
+    pub fn in_castle_war_area(&self, map_id: Option<usize>, x: i32, y: i32) -> bool {
+        let Some(map_id) = map_id else {
+            return false;
+        };
+        if self.castle_map_id == Some(map_id)
+            && (i32::from(self.home_x) - x).abs() < self.war_range_x
+            && (i32::from(self.home_y) - y).abs() < self.war_range_y
+        {
+            return true;
+        }
+        if self.palace_map_id == Some(map_id) || self.secret_map_id == Some(map_id) {
+            return true;
+        }
+        self.envir_map_ids.contains(&map_id)
+    }
+
+    /// oracle `GetHomeX()`（`UserCastle.cs:649-652`）：`HomeX - 4 + Random(9)`。
+    ///
+    /// **共享函数**：进图（成员皇宫臂）、死亡（成员+战时臂）与回家技能三处必须走同一实现，
+    /// 保证抽数点位与顺序一致。
+    #[must_use]
+    pub fn get_home_x(&self, rng: &mut RandomNumber) -> i16 {
+        self.home_x - 4 + rng.random_below(9) as i16
+    }
+
+    /// oracle `GetHomeY()`（`UserCastle.cs:654-657`）：`HomeY - 4 + Random(9)`。
+    #[must_use]
+    pub fn get_home_y(&self, rng: &mut RandomNumber) -> i16 {
+        self.home_y - 4 + rng.random_below(9) as i16
+    }
+
     /// oracle `InPalaceGuildCount()`（`UserCastle.cs:604-607`）= `AttackGuildList.Count`。
     ///
     /// 登记：语义是「攻城行会数」，**不是**皇宫内玩家数（盘点 §1.E）。
@@ -1516,6 +1668,413 @@ fn set_stone_mode(slot: &mut Option<CastleUnit>, value: bool) {
     if let Some(unit) = slot.as_mut() {
         unit.stone_mode = value;
     }
+}
+
+// ---------------------------------------------------------------------------
+// 进图 / 死亡落点改写（`WorldServer.cs:298-350`）
+// ---------------------------------------------------------------------------
+
+/// 一次落点改写的产物（地图逻辑名 + 短坐标）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Relocation {
+    /// 新 `MapName`（oracle `playObject.MapName`）。
+    pub map_name: String,
+    /// 新 `CurrX`。
+    pub x: i16,
+    /// 新 `CurrY`。
+    pub y: i16,
+}
+
+/// `Server.conf` 的 `RedDieHomeMap/RedDieHomeX/RedDieHomeY`（`WorldServer.cs:343-348`）。
+///
+/// 缺键缺省 = `GameSvrConf.cs:1380-1382` 的 `"3"/839/668`；部署件实测 `3/838/668`
+/// （`E:/MirServer/M2GameSvr/Server.conf:413-415`）⇒ 生产由宿主读配置传入。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RedDieHome {
+    pub map_name: String,
+    pub x: i16,
+    pub y: i16,
+}
+
+impl Default for RedDieHome {
+    fn default() -> Self {
+        RedDieHome {
+            map_name: "3".to_string(),
+            x: 839,
+            y: 668,
+        }
+    }
+}
+
+/// 进图落点改写的输入（`WorldServer.cs:299-318`）。
+#[derive(Clone, Copy, Debug)]
+pub struct EnterRelocateInput<'a> {
+    /// `CastleMgr.InCastleWarArea(envir, CurrX, CurrY)` 的首个命中城（`None` = 不在攻城区）。
+    pub castle: Option<&'a UserCastle>,
+    /// 解析后的 `map_id`（对应 `envir`）。
+    pub map_id: usize,
+    /// 当前 `CurrX/CurrY`。
+    pub x: i32,
+    pub y: i32,
+    /// `MyGuild?.GuildName`（`None` ⇔ `MyGuild == null`）。
+    pub my_guild_name: Option<&'a str>,
+    /// 角色记录 `HomeMap/HomeX/HomeY`（**不是**城堡的 `HomeMap`）。
+    pub home_map: &'a str,
+    pub home_x: i16,
+    pub home_y: i16,
+}
+
+/// oracle `WorldServer.cs:298-318` 的进图改写两臂。
+///
+/// - 外层：`envir != null && castle != null && (castle.PalaceEnvir == envir || castle.UnderWar)`；
+/// - 非成员（`CastleMgr.IsCastleMember == null`）⇒ 本人 `HomeMap` + `HomeX-2+Random(5)`、
+///   `HomeY-2+Random(5)`（**X 先 Y 后**）；
+/// - 成员且 `PalaceEnvir == envir` ⇒ `castle.MapName` + `GetHomeX()`/`GetHomeY()`
+///   （各 `Random(9)`，X 先 Y 后）；
+/// - 成员但不在皇宫 ⇒ **不改写、0 抽**。
+///
+/// `None` = 不改写（调用方继续用原坐标）；`Some` 时已按顺序抽完数。
+pub fn relocate_on_enter(
+    input: &EnterRelocateInput<'_>,
+    rng: &mut RandomNumber,
+) -> Option<Relocation> {
+    let castle = input.castle?;
+    if !(castle.palace_map_id == Some(input.map_id) || castle.under_war) {
+        return None;
+    }
+    if !castle.is_master_guild_name(input.my_guild_name) {
+        // `WorldServer.cs:305-307`：先 X 后 Y，各一次 `Random(5)`。
+        let x = input.home_x - 2 + rng.random_below(5) as i16;
+        let y = input.home_y - 2 + rng.random_below(5) as i16;
+        return Some(Relocation {
+            map_name: input.home_map.to_string(),
+            x,
+            y,
+        });
+    }
+    if castle.palace_map_id == Some(input.map_id) {
+        // `WorldServer.cs:313-315`：`GetMapName()` + `GetHomeX()/GetHomeY()`（各 `Random(9)`）。
+        let x = castle.get_home_x(rng);
+        let y = castle.get_home_y(rng);
+        return Some(Relocation {
+            map_name: castle.map_name.clone().unwrap_or_default(),
+            x,
+            y,
+        });
+    }
+    None
+}
+
+/// 死亡（`HP <= 0`）落点改写的输入（`WorldServer.cs:324-350`）。
+#[derive(Clone, Copy, Debug)]
+pub struct DeathRelocateInput<'a> {
+    /// `CastleMgr.IsCastleMember(playObject)` 的首个命中城（与进图改写**独立**重算）。
+    pub member_castle: Option<&'a UserCastle>,
+    /// `playObject.Abil.HP`（调用方已按 `Fight3Zone` 恢复支处理过）。
+    pub hp: i32,
+    /// `PvpLevel()` = `PkPoint / 100`。
+    pub pvp_level: u8,
+    /// 角色记录 `HomeMap/HomeX/HomeY`。
+    pub home_map: &'a str,
+    pub home_x: i16,
+    pub home_y: i16,
+    /// `Config.RedDieHome*`。
+    pub red_die: &'a RedDieHome,
+}
+
+/// oracle `WorldServer.cs:324-350` 的死亡三臂：
+///
+/// 1. `PvpLevel < 2` 且成员城 `UnderWar` ⇒ `castle.HomeMap` + `GetHomeX()/GetHomeY()`
+///    （各 `Random(9)`，X 先 Y 后）；
+/// 2. `PvpLevel < 2` 其余 ⇒ 本人 `HomeMap` + `HomeX-2+Random(5)` ×2（X 先 Y 后）；
+/// 3. `PvpLevel >= 2` ⇒ `RedDieHomeMap` + `RedDieHomeX+Random(13)` / `+Random(13)`。
+///
+/// `hp > 0` ⇒ `None`（0 抽）。
+pub fn relocate_on_death(
+    input: &DeathRelocateInput<'_>,
+    rng: &mut RandomNumber,
+) -> Option<Relocation> {
+    if input.hp > 0 {
+        return None;
+    }
+    if input.pvp_level < 2 {
+        if let Some(castle) = input.member_castle.filter(|c| c.under_war) {
+            let x = castle.get_home_x(rng);
+            let y = castle.get_home_y(rng);
+            return Some(Relocation {
+                map_name: castle.home_map.clone(),
+                x,
+                y,
+            });
+        }
+        let x = input.home_x - 2 + rng.random_below(5) as i16;
+        let y = input.home_y - 2 + rng.random_below(5) as i16;
+        return Some(Relocation {
+            map_name: input.home_map.to_string(),
+            x,
+            y,
+        });
+    }
+    // `WorldServer.cs:345-347`：`Random(13) + RedDieHomeX`（**先 X 后 Y**）。
+    let x = (i32::from(input.red_die.x) + rng.random_below(13)) as i16;
+    let y = (i32::from(input.red_die.y) + rng.random_below(13)) as i16;
+    Some(Relocation {
+        map_name: input.red_die.map_name.clone(),
+        x,
+        y,
+    })
+}
+
+/// `RefUserState` 的位累加器：只在 `cond` 为真时置位。
+///
+/// 用 `|=`（不是 `^=`/`=`）：同一 bit **重复置位幂等**，不同 bit 互不覆盖
+/// （`PlayObject.Base.cs:270-286` 的逐位 `if` 语义）。
+pub fn set_area_flag(n8: &mut u16, bit: u16, cond: bool) {
+    if cond {
+        *n8 |= bit;
+    }
+}
+
+/// oracle `RefUserState()` 的 `n8`（`PlayObject.Base.cs:270-286`）：
+/// `FightZone|1`、`SafeArea|2`、`InGuildWarArea|4`。
+#[must_use]
+pub fn area_state(fight_zone: bool, safe_area: bool, in_guild_war_area: bool) -> u16 {
+    let mut n8 = 0u16;
+    set_area_flag(&mut n8, AREA_STATE_FIGHT_ZONE, fight_zone);
+    set_area_flag(&mut n8, AREA_STATE_SAFE_AREA, safe_area);
+    set_area_flag(&mut n8, AREA_STATE_GUILD_WAR, in_guild_war_area);
+    n8
+}
+
+// ---------------------------------------------------------------------------
+// 名字色（`PlayObject.GetChrColor`，`PlayObject.cs:3585-3657`）
+// ---------------------------------------------------------------------------
+
+/// `GetChrColor` 的输入（观察者 + 目标 + 城堡态的只读快照）。
+#[derive(Clone, Copy, Debug)]
+pub struct ChrColorInput<'a> {
+    /// `CastleMgr.InCastleWarArea(targetObject)` 的首个命中城。
+    pub castle: Option<&'a UserCastle>,
+    /// `target.NameColor`（玩家 ctor = 255）。
+    pub target_name_color: u8,
+    /// `target.PvpLevel()`。
+    pub target_pvp_level: u8,
+    /// `target.PvpFlag`。
+    pub target_pvp_flag: bool,
+    /// `target.Envir.Flag.Fight3Zone`。
+    pub target_fight3_zone: bool,
+    /// 观察者 `MyGuild?.GuildName`（`None` ⇔ `MyGuild == null`）。
+    pub my_guild_name: Option<&'a str>,
+    /// 目标 `MyGuild?.GuildName`。
+    pub target_guild_name: Option<&'a str>,
+    /// `GetGuildRelation(this, target)`：0 无 / 1 同会 / 2 宣战 / 3 盟友。
+    pub guild_relation: u8,
+    /// `MyGuild.IsAllyGuild(targetObject.MyGuild)`（城主分支用）。
+    pub viewer_is_ally_of_target: bool,
+    /// 观察者 `InGuildWarArea`。
+    pub viewer_in_guild_war_area: bool,
+    /// 目标 `InGuildWarArea`。
+    pub target_in_guild_war_area: bool,
+}
+
+/// `GetChrColor` 的 `NotImplementedException`（`UserCastle.cs:1045-1048`）。
+///
+/// oracle 里 `IsAttackGuild(IGuild)` 选中接口重载 ⇒ 抛异常 ⇒ 被 `PlayObject.Run` 的消息段
+/// `catch` 吞掉 ⇒ **本 tick 剩余消息全部不再出队**（不只是名字帧）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChrColorError {
+    /// `IUserCastle.IsAttackGuild(IGuild)`（`UserCastle.cs:1045-1048`）。
+    AttackGuildNotImplemented,
+}
+
+/// `GetChrColor` 的结果。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChrColorResult {
+    /// 名字色字节。
+    pub color: u8,
+    /// oracle 的 `GuildWarArea = true` 副作用（影响同 tick 攻击判定）。
+    pub guild_war_area: bool,
+}
+
+/// `PlayObject.GetChrColor(IActor)`（`PlayObject.cs:3585-3657`）的 1:1。
+///
+/// 顺序：`PvpLevel < 2` 的 PK/行会/Fight3Zone 三段 ⇒ 城堡段。城堡段的怪行为
+/// **照抄不修**：有行会观察者（非城主或目标非同会/盟友）走 `IsAttackGuild(IGuild)`
+/// ⇒ [`ChrColorError::AttackGuildNotImplemented`]；无行会观察者返回 221。
+///
+/// # Errors
+/// 见 [`ChrColorError`]。
+pub fn get_chr_color(
+    input: &ChrColorInput<'_>,
+    colors: &CastleNameColors,
+) -> Result<ChrColorResult, ChrColorError> {
+    let mut result = input.target_name_color;
+    let mut guild_war_area = false;
+    if input.target_pvp_level < 2 {
+        if input.target_pvp_flag {
+            result = colors.pk_flag;
+        }
+        match input.guild_relation {
+            1 | 3 => result = colors.ally_guild,
+            2 => result = colors.war_guild,
+            _ => {}
+        }
+        if input.target_fight3_zone {
+            result = if input.my_guild_name == input.target_guild_name {
+                colors.ally_guild
+            } else {
+                colors.war_guild
+            };
+        }
+    }
+    if let Some(castle) = input.castle {
+        if castle.under_war && input.viewer_in_guild_war_area && input.target_in_guild_war_area {
+            result = colors.in_free_pk;
+            guild_war_area = true;
+            let Some(my_guild) = input.my_guild_name else {
+                return Ok(ChrColorResult {
+                    color: result,
+                    guild_war_area,
+                });
+            };
+            if castle.is_master_guild_name(Some(my_guild)) {
+                if input.my_guild_name == input.target_guild_name || input.viewer_is_ally_of_target
+                {
+                    result = colors.ally_guild;
+                } else {
+                    // `castle.IsAttackGuild(targetObject.MyGuild)` ⇒ N1。
+                    return Err(ChrColorError::AttackGuildNotImplemented);
+                }
+            } else {
+                // `castle.IsAttackGuild(MyGuild)` ⇒ N1（任何非城主有会观察者）。
+                return Err(ChrColorError::AttackGuildNotImplemented);
+            }
+        }
+    }
+    Ok(ChrColorResult {
+        color: result,
+        guild_war_area,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// 每 tick 的 766 `InGuildWarArea` 置位/清除（`PlayObject.Message.cs:286-350`）
+// ---------------------------------------------------------------------------
+
+/// 一个在线玩家的每 tick 世界快照（宿主从 `Entity` + `SessionGround` 装配）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CastleWarPlayer {
+    /// `BaseObject.ActorId`。
+    pub actor_id: i32,
+    /// `BaseObject.Envir` 的 `map_id`。
+    pub map_id: usize,
+    /// `CurrX/CurrY`。
+    pub x: i32,
+    pub y: i32,
+    /// `MyGuild?.GuildName`（皇宫自动占领链的 N1 门）。
+    pub guild_name: Option<String>,
+}
+
+/// `PlayObject` 的城堡会话位（`InGuildWarArea` / `NameColorChanged` / `DiscountForNightTick`）。
+///
+/// ctor：`InGuildWarArea=false`（`PlayObject.cs:905`）、`NameColorChanged=false`、
+/// `DiscountForNightTick=GetTickCount()`（`PlayObject.cs:914`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CastleWarState {
+    /// `PlayObject.InGuildWarArea`。
+    pub in_guild_war_area: bool,
+    /// `PlayObject.NameColorChanged`。
+    pub name_color_changed: bool,
+    /// `PlayObject.DiscountForNightTick`（1s 门基准）。
+    pub discount_for_night_tick: i64,
+}
+
+impl CastleWarState {
+    /// ctor 口径：门基准 = 当前 tick。
+    #[must_use]
+    pub const fn new(now_ms: i64) -> Self {
+        CastleWarState {
+            in_guild_war_area: false,
+            name_color_changed: false,
+            discount_for_night_tick: now_ms,
+        }
+    }
+
+    /// `PlayObject.ChangePkStatus(boWarFlag)`（`PlayObject.cs:4343-4350`）：
+    /// 只在值不同时写位并置 `NameColorChanged`。
+    pub fn change_pk_status(&mut self, bo_war_flag: bool) {
+        if self.in_guild_war_area != bo_war_flag {
+            self.in_guild_war_area = bo_war_flag;
+            self.name_color_changed = true;
+        }
+    }
+}
+
+/// 每 tick 推给宿主的 766/名牌重发事件。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CastleWarEvent {
+    /// `RefUserState()` ⇒ `SendDefMessage(SM_AREASTATE, n8, 0, 0, 0)`（发给本人）。
+    AreaState {
+        actor_id: i32,
+        in_guild_war_area: bool,
+    },
+    /// `RefShowName()` ⇒ `SendRefMsg(RM_USERNAME, ..., GetShowName())`（发给同屏观察者）。
+    ShowName { actor_id: i32 },
+}
+
+/// oracle `PlayObject.Message.cs:286-350` 的每 tick 城堡段（1:1）。
+///
+/// - **每 tick**：`castle != null && castle.UnderWar` ⇒ `ChangePkStatus(true)`；
+/// - **1s 门内**（`now - DiscountForNightTick > 1000`，**先**把基准写成 `now`）：
+///   - 战时且皇宫且 `MyGuild != null` ⇒ 自动占领链第一跳 `IsAttackGuild(IGuild)` 抛 N1
+///     ⇒ 本 tick 后续（含 `NameColorChanged` 块）全部跳过，`NameColorChanged` 保持真；
+///   - 否则若不在战时 ⇒ `ChangePkStatus(false)`；
+///   - `NameColorChanged` ⇒ 清标记 + `RefUserState` + `RefShowName`（两条事件）。
+///
+/// 事件顺序与 oracle 的发送序一致。`states` 缺项按 ctor 口径 [`CastleWarState::new`] 建立。
+pub fn castle_war_tick(
+    castles: &[UserCastle],
+    players: &[CastleWarPlayer],
+    states: &mut std::collections::HashMap<i32, CastleWarState>,
+    now_ms: i64,
+) -> Vec<CastleWarEvent> {
+    let mut events = Vec::new();
+    for p in players {
+        let st = states
+            .entry(p.actor_id)
+            .or_insert_with(|| CastleWarState::new(now_ms));
+        let castle = castles
+            .iter()
+            .find(|c| c.in_castle_war_area(Some(p.map_id), p.x, p.y));
+        let in_war = castle.is_some_and(|c| c.under_war);
+        // `PlayObject.Message.cs:286-290`：每 tick 置位。
+        if in_war {
+            st.change_pk_status(true);
+        }
+        // `PlayObject.Message.cs:291-350`：1s 门（严格 `>`），先写基准。
+        if now_ms - st.discount_for_night_tick > 1000 {
+            st.discount_for_night_tick = now_ms;
+            // `PlayObject.Message.cs:319-338`：皇宫 `MyGuild != null` ⇒ 自动占领链在
+            // `castle.IsAttackGuild(IGuild)` 抛 N1，本 tick 剩余块不再执行。
+            let n1_throw = castle.is_some_and(|c| {
+                c.under_war && c.palace_map_id == Some(p.map_id) && p.guild_name.is_some()
+            });
+            if !(castle.is_some_and(|c| c.under_war)) {
+                st.change_pk_status(false);
+            }
+            if !n1_throw && st.name_color_changed {
+                st.name_color_changed = false;
+                events.push(CastleWarEvent::AreaState {
+                    actor_id: p.actor_id,
+                    in_guild_war_area: st.in_guild_war_area,
+                });
+                events.push(CastleWarEvent::ShowName {
+                    actor_id: p.actor_id,
+                });
+            }
+        }
+    }
+    events
 }
 
 #[cfg(test)]
@@ -2552,7 +3111,14 @@ mod tests {
     /// 一份与 `CastleConf` 默认值等价的规格（`CastleConf.cs:39-93`）：弓手/守卫 `nHP=2000`>0。
     fn defense_specs() -> CastleDefenseSpecs {
         CastleDefenseSpecs {
+            own_guild: String::new(),
             map_name: "3".to_string(),
+            home_map: "3".to_string(),
+            home_x: 644,
+            home_y: 290,
+            war_range_x: 100,
+            war_range_y: 100,
+            envir_list: vec!["0151".to_string(), "d701".to_string()],
             palace_map: "0150".to_string(),
             secret_map: "D701".to_string(),
             main_door: DefenseUnitSpec {
@@ -2609,6 +3175,9 @@ mod tests {
         }
         fn find_map(&self, map_name: &str) -> bool {
             self.maps.iter().any(|m| m == map_name)
+        }
+        fn map_id(&self, map_name: &str) -> Option<usize> {
+            self.maps.iter().position(|m| m == map_name)
         }
         fn regen_monster_by_name(
             &mut self,
@@ -2904,5 +3473,447 @@ mod tests {
         assert_eq!(c.archers[0].unwrap().entity_id, Some(sp[4].actor_id));
         assert!(sp[..16].iter().all(|s| s.castle_owner));
         assert!(sp[16..].iter().all(|s| !s.castle_owner));
+    }
+
+    // =====================================================================
+    // 车道 castlewar：攻城区语义判据（C1/C2/C3/C4/C5/C6/C13）
+    // =====================================================================
+
+    /// C1 `castle_war_area_predicate`：部署 `Home=644/290`、`Range=100/100` 的谓词向量。
+    ///
+    /// 牙：`<` 改 `<=` ⇒ `(3,544,290)/(3,644,390)` 翻真；删 EnvirList 扫描 ⇒ 0151 红；
+    /// 删 Palace/Secret 分支 ⇒ 0150/D701 红；删 `map_id=None` 门 ⇒ panic。
+    #[test]
+    fn c1_castle_war_area_predicate_vectors() {
+        let mut c = UserCastle::new("沙巴克", config());
+        c.home_x = 644;
+        c.home_y = 290;
+        c.war_range_x = 100;
+        c.war_range_y = 100;
+        c.castle_map_id = Some(0); // "3"
+        c.palace_map_id = Some(1); // "0150"
+        c.secret_map_id = Some(2); // "D701"
+        c.envir_map_ids = vec![3, 4]; // "0151", "0152"
+
+        assert!(c.in_castle_war_area(Some(0), 643, 289));
+        assert!(
+            !c.in_castle_war_area(Some(0), 544, 290),
+            "dx=100 ⇒ 严格 < 为假"
+        );
+        assert!(!c.in_castle_war_area(Some(0), 543, 290), "dx=101");
+        assert!(c.in_castle_war_area(Some(0), 743, 290), "dx=99");
+        assert!(!c.in_castle_war_area(Some(0), 744, 290), "dx=100");
+        assert!(c.in_castle_war_area(Some(0), 644, 389), "dy=99");
+        assert!(!c.in_castle_war_area(Some(0), 644, 390), "dy=100");
+        assert!(c.in_castle_war_area(Some(1), 0, 0), "皇宫无条件 true");
+        assert!(c.in_castle_war_area(Some(2), 9999, 9999), "密道无条件 true");
+        assert!(c.in_castle_war_area(Some(3), 0, 0), "EnvirList 命中");
+        assert!(!c.in_castle_war_area(Some(9), 644, 290), "未知图 false");
+        assert!(!c.in_castle_war_area(None, 644, 290), "envir=None ⇒ false");
+    }
+
+    /// C1 补充：EnvirList 的 `OrdinalIgnoreCase` 等价 —— 启动时归一成 map_id 后 `d701`/`D701`
+    /// 命中同一个 id（`MapRegistry::id_of` 的 `normalize_name`）。
+    #[test]
+    fn c1_envir_list_resolves_to_map_ids_case_insensitively() {
+        struct Env {
+            ids: Vec<(&'static str, usize)>,
+        }
+        impl CastleInitializeEnv for Env {
+            fn map_owner_is_self(&self, _map_name: &str) -> bool {
+                true
+            }
+            fn find_map(&self, map_name: &str) -> bool {
+                self.ids.iter().any(|(n, _)| *n == map_name)
+            }
+            fn map_id(&self, map_name: &str) -> Option<usize> {
+                self.ids
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(map_name))
+                    .map(|(_, id)| *id)
+            }
+            fn regen_monster_by_name(
+                &mut self,
+                _map_name: &str,
+                _x: i16,
+                _y: i16,
+                _name: &str,
+            ) -> Option<DefenseCreature> {
+                None
+            }
+            fn warn(&mut self, _text: String) {}
+        }
+        let mut env = Env {
+            ids: vec![("3", 0), ("0150", 1), ("D701", 2), ("d701", 2), ("0151", 3)],
+        };
+        let mut c = UserCastle::new("沙巴克", config());
+        let specs = CastleDefenseSpecs {
+            own_guild: String::new(),
+            map_name: "3".to_string(),
+            home_map: "3".to_string(),
+            home_x: 644,
+            home_y: 290,
+            war_range_x: 100,
+            war_range_y: 100,
+            envir_list: vec!["d701".to_string(), "0151".to_string()],
+            palace_map: "0150".to_string(),
+            secret_map: "D701".to_string(),
+            main_door: DefenseUnitSpec {
+                name: "x".to_string(),
+                x: 0,
+                y: 0,
+                status: false,
+                hp: 0,
+            },
+            left_wall: DefenseUnitSpec {
+                name: "x".to_string(),
+                x: 0,
+                y: 0,
+                status: false,
+                hp: 0,
+            },
+            center_wall: DefenseUnitSpec {
+                name: "x".to_string(),
+                x: 0,
+                y: 0,
+                status: false,
+                hp: 0,
+            },
+            right_wall: DefenseUnitSpec {
+                name: "x".to_string(),
+                x: 0,
+                y: 0,
+                status: false,
+                hp: 0,
+            },
+            archers: Vec::new(),
+            guards: Vec::new(),
+        };
+        c.initialize(&specs, &mut env);
+        assert_eq!(c.envir_map_ids, vec![2, 3], "小写 d701 归一为同一个 map_id");
+        assert!(c.in_castle_war_area(Some(2), 0, 0));
+        assert!(c.in_castle_war_area(Some(3), 0, 0));
+    }
+
+    fn enter_castle() -> UserCastle {
+        let mut c = UserCastle::new("沙巴克", config());
+        c.map_name = Some("3".to_string());
+        c.home_map = "3".to_string();
+        c.home_x = 644;
+        c.home_y = 290;
+        c.palace_map_id = Some(1);
+        c.castle_map_id = Some(0);
+        c.own_guild = Some("守方".to_string());
+        c.under_war = false;
+        c
+    }
+
+    /// C2/C3/C4 `castle_relocation_vectors`：四条落点向量，按独立复算的 `System.Random(seed)`
+    /// 手算值钉死（seed=20261021；`Random(5)` 前两抽 = [4,2]、`Random(9)` = [8,5]、
+    /// `Random(13)` = [12,7]）。
+    ///
+    /// 牙：`Random(5)` 改 `Random(9)` ⇒ 坐标/下一抽红；交换 X/Y（r0≠r1）⇒ 坐标红；
+    /// 成员判定写成「有会即成员」⇒ 非成员臂红；死亡三臂顺序写反 ⇒ 红。
+    #[test]
+    fn c2_c3_c4_relocation_vectors_and_rng_ledger() {
+        const SEED: i32 = 20261021;
+        let castle = enter_castle();
+        let red = RedDieHome {
+            map_name: "3".to_string(),
+            x: 838,
+            y: 668,
+        };
+
+        // (a) 非成员进皇宫：2×Random(5)，X 先 Y 后 ⇒ (644-2+4, 290-2+2) = (646, 290)。
+        let mut rng = RandomNumber::with_seed(SEED);
+        let reloc = relocate_on_enter(
+            &EnterRelocateInput {
+                castle: Some(&castle),
+                map_id: 1,
+                x: 644,
+                y: 290,
+                my_guild_name: None,
+                home_map: "0",
+                home_x: 644,
+                home_y: 290,
+            },
+            &mut rng,
+        )
+        .expect("非成员进皇宫必须改写");
+        assert_eq!((reloc.map_name.as_str(), reloc.x, reloc.y), ("0", 646, 290));
+        assert_eq!(rng.random_below(5), 0, "R5 第 3 抽 = 0（恰 2 抽）");
+
+        // (b) 成员进皇宫：castle.MapName + 2×Random(9) ⇒ (644-4+8, 290-4+5) = (648, 291)。
+        let mut rng = RandomNumber::with_seed(SEED);
+        let reloc = relocate_on_enter(
+            &EnterRelocateInput {
+                castle: Some(&castle),
+                map_id: 1,
+                x: 644,
+                y: 290,
+                my_guild_name: Some("守方"),
+                home_map: "0",
+                home_x: 644,
+                home_y: 290,
+            },
+            &mut rng,
+        )
+        .expect("成员进皇宫必须改写");
+        assert_eq!((reloc.map_name.as_str(), reloc.x, reloc.y), ("3", 648, 291));
+        assert_eq!(rng.random_below(9), 1, "R9 第 3 抽 = 1（恰 2 抽）");
+
+        // (c) 死亡：成员 + UnderWar ⇒ castle.HomeMap + 2×Random(9)。
+        let mut war = enter_castle();
+        war.under_war = true;
+        let mut rng = RandomNumber::with_seed(SEED);
+        let reloc = relocate_on_death(
+            &DeathRelocateInput {
+                member_castle: Some(&war),
+                hp: 0,
+                pvp_level: 0,
+                home_map: "0",
+                home_x: 100,
+                home_y: 200,
+                red_die: &red,
+            },
+            &mut rng,
+        )
+        .expect("HP<=0 必须改写");
+        assert_eq!((reloc.map_name.as_str(), reloc.x, reloc.y), ("3", 648, 291));
+
+        // (d) 死亡：非成员 ⇒ 本人 HomeMap + 2×Random(5) ⇒ (100-2+4, 200-2+2) = (102, 200)。
+        let mut rng = RandomNumber::with_seed(SEED);
+        let reloc = relocate_on_death(
+            &DeathRelocateInput {
+                member_castle: None,
+                hp: 0,
+                pvp_level: 1,
+                home_map: "0",
+                home_x: 100,
+                home_y: 200,
+                red_die: &red,
+            },
+            &mut rng,
+        )
+        .expect("HP<=0 必须改写");
+        assert_eq!((reloc.map_name.as_str(), reloc.x, reloc.y), ("0", 102, 200));
+
+        // (e) 死亡：红名 ⇒ RedDieHome + 2×Random(13) ⇒ (838+12, 668+7) = (850, 675)。
+        let mut rng = RandomNumber::with_seed(SEED);
+        let reloc = relocate_on_death(
+            &DeathRelocateInput {
+                member_castle: Some(&war),
+                hp: 0,
+                pvp_level: 2,
+                home_map: "0",
+                home_x: 100,
+                home_y: 200,
+                red_die: &red,
+            },
+            &mut rng,
+        )
+        .expect("HP<=0 必须改写");
+        assert_eq!((reloc.map_name.as_str(), reloc.x, reloc.y), ("3", 850, 675));
+
+        // (f) HP>0 ⇒ 0 抽、不改写。
+        let mut rng = RandomNumber::with_seed(SEED);
+        assert!(relocate_on_death(
+            &DeathRelocateInput {
+                member_castle: Some(&war),
+                hp: 1,
+                pvp_level: 2,
+                home_map: "0",
+                home_x: 100,
+                home_y: 200,
+                red_die: &red,
+            },
+            &mut rng,
+        )
+        .is_none());
+        assert_eq!(rng.random_below(13), 12, "HP>0 ⇒ 一次都没抽");
+    }
+
+    /// C2 补充：成员但不在皇宫且非战 ⇒ 0 抽、不改写；`UnderWar=false` 的非皇宫图也不改写。
+    #[test]
+    fn c2_member_not_palace_no_relocation_zero_draws() {
+        let castle = enter_castle();
+        let mut rng = RandomNumber::with_seed(20261021);
+        assert!(relocate_on_enter(
+            &EnterRelocateInput {
+                castle: Some(&castle),
+                map_id: 0,
+                x: 644,
+                y: 290,
+                my_guild_name: Some("守方"),
+                home_map: "0",
+                home_x: 644,
+                home_y: 290,
+            },
+            &mut rng,
+        )
+        .is_none());
+        assert_eq!(rng.random_below(5), 4, "0 抽（独立复算第 1 抽 = 4）");
+    }
+
+    /// C5 `area_state_bit4`：四向量 + 重复置位幂等。
+    ///
+    /// 牙：位常量 4 改 8 ⇒ 红；`|=` 改 `^=` ⇒ 重复置位 4→0 红；`|=` 改 `=` ⇒ `1|2|4` 变 4 红。
+    #[test]
+    fn c5_area_state_bit4_and_idempotent_set() {
+        assert_eq!(area_state(true, false, false), 1);
+        assert_eq!(area_state(false, true, false), 2);
+        assert_eq!(area_state(false, false, true), 4);
+        assert_eq!(area_state(true, true, true), 7);
+        let mut n8 = area_state(true, true, true);
+        set_area_flag(&mut n8, AREA_STATE_GUILD_WAR, true);
+        assert_eq!(n8, 7, "同一 bit 重复置位幂等");
+        let mut n8 = 4;
+        set_area_flag(&mut n8, AREA_STATE_GUILD_WAR, false);
+        assert_eq!(
+            n8, 4,
+            "cond=false 不清位（ChangePkStatus 只由调用方显式清）"
+        );
+    }
+
+    /// C6 `castle_name_color_vectors`：普通/PvpFlag/同会/敌对/攻城区 221/N1/红名 255。
+    ///
+    /// 牙：221 改 255 ⇒ 红；红名改 249 ⇒ 红；「补全」城主/攻方色 ⇒ 红（必须 Err）。
+    #[test]
+    fn c6_name_color_vectors() {
+        let colors = CastleNameColors::default();
+        let mut war = enter_castle();
+        war.under_war = true;
+        let base = ChrColorInput {
+            castle: None,
+            target_name_color: 255,
+            target_pvp_level: 0,
+            target_pvp_flag: false,
+            target_fight3_zone: false,
+            my_guild_name: None,
+            target_guild_name: None,
+            guild_relation: 0,
+            viewer_is_ally_of_target: false,
+            viewer_in_guild_war_area: false,
+            target_in_guild_war_area: false,
+        };
+        // 普通。
+        assert_eq!(get_chr_color(&base, &colors).unwrap().color, 255);
+        // PvpFlag ⇒ 47。
+        let mut i = base;
+        i.target_pvp_flag = true;
+        assert_eq!(get_chr_color(&i, &colors).unwrap().color, 47);
+        // 同会/盟友 ⇒ 180；宣战 ⇒ 69。
+        let mut i = base;
+        i.guild_relation = 1;
+        assert_eq!(get_chr_color(&i, &colors).unwrap().color, 180);
+        let mut i = base;
+        i.guild_relation = 3;
+        assert_eq!(get_chr_color(&i, &colors).unwrap().color, 180);
+        let mut i = base;
+        i.guild_relation = 2;
+        assert_eq!(get_chr_color(&i, &colors).unwrap().color, 69);
+        // Fight3Zone：同会 180 / 异会 69。
+        let mut i = base;
+        i.target_fight3_zone = true;
+        i.my_guild_name = Some("守方");
+        i.target_guild_name = Some("守方");
+        assert_eq!(get_chr_color(&i, &colors).unwrap().color, 180);
+        let mut i = base;
+        i.target_fight3_zone = true;
+        i.my_guild_name = Some("攻方");
+        i.target_guild_name = Some("守方");
+        assert_eq!(get_chr_color(&i, &colors).unwrap().color, 69);
+        // 攻城区 + 战时 + 双方 InGuildWarArea：无行会观者 ⇒ 221 且置 GuildWarArea。
+        let mut i = base;
+        i.castle = Some(&war);
+        i.viewer_in_guild_war_area = true;
+        i.target_in_guild_war_area = true;
+        let r = get_chr_color(&i, &colors).unwrap();
+        assert_eq!(r.color, 221);
+        assert!(r.guild_war_area, "副作用 GuildWarArea=true");
+        // 有行会观者（非城主）⇒ N1。
+        let mut i = base;
+        i.castle = Some(&war);
+        i.my_guild_name = Some("攻方");
+        i.target_guild_name = Some("守方");
+        i.viewer_in_guild_war_area = true;
+        i.target_in_guild_war_area = true;
+        assert_eq!(
+            get_chr_color(&i, &colors),
+            Err(ChrColorError::AttackGuildNotImplemented)
+        );
+        // 红名（PvpLevel>=2）且不在攻城区 ⇒ 255（怪行为：跳过整个 PK 块）。
+        let mut i = base;
+        i.target_pvp_level = 2;
+        i.target_pvp_flag = true;
+        assert_eq!(get_chr_color(&i, &colors).unwrap().color, 255);
+    }
+
+    /// C13 `castle_in_guild_war_area_setclear`：每 tick 置位、1s 门清除、变化才发 766。
+    ///
+    /// 牙：清除移出 1s 门 ⇒ 第一 tick 就清红；置位移进 1s 门 ⇒ 迟到红；无变化也发 ⇒ 重复帧红。
+    #[test]
+    fn c13_war_area_set_clear_and_one_second_gate() {
+        let mut war = enter_castle();
+        war.under_war = true;
+        let castles = vec![war];
+        let players = vec![CastleWarPlayer {
+            actor_id: 7,
+            map_id: 0,
+            x: 644,
+            y: 290,
+            guild_name: None,
+        }];
+        let mut states = std::collections::HashMap::new();
+        // t=0：置位（每 tick），但 1s 门未到 ⇒ 不发帧。
+        let ev = castle_war_tick(&castles, &players, &mut states, 0);
+        assert!(ev.is_empty(), "1s 门内不得发 766");
+        assert!(states[&7].in_guild_war_area);
+        assert!(states[&7].name_color_changed);
+        // t=1000：严格 `>`，仍不发。
+        assert!(castle_war_tick(&castles, &players, &mut states, 1000).is_empty());
+        // t=1001：发 AreaState + ShowName。
+        assert_eq!(
+            castle_war_tick(&castles, &players, &mut states, 1001),
+            vec![
+                CastleWarEvent::AreaState {
+                    actor_id: 7,
+                    in_guild_war_area: true
+                },
+                CastleWarEvent::ShowName { actor_id: 7 }
+            ]
+        );
+        // t=1002：无变化 ⇒ 不发。
+        assert!(castle_war_tick(&castles, &players, &mut states, 1002).is_empty());
+        // 离开攻城区：每 tick 不置位；清除在 1s 门内（t=2002 恰好差 1001）。
+        let out = vec![CastleWarPlayer {
+            actor_id: 7,
+            map_id: 9,
+            x: 0,
+            y: 0,
+            guild_name: None,
+        }];
+        assert!(castle_war_tick(&castles, &out, &mut states, 1500).is_empty());
+        assert!(states[&7].in_guild_war_area, "清除被 1s 门节流");
+        assert_eq!(
+            castle_war_tick(&castles, &out, &mut states, 2002),
+            vec![
+                CastleWarEvent::AreaState {
+                    actor_id: 7,
+                    in_guild_war_area: false
+                },
+                CastleWarEvent::ShowName { actor_id: 7 }
+            ]
+        );
+        // 皇宫 + 有行会 ⇒ 自动占领链 N1：不发、NameColorChanged 保持。
+        let in_palace = vec![CastleWarPlayer {
+            actor_id: 7,
+            map_id: 1,
+            x: 10,
+            y: 10,
+            guild_name: Some("攻方".to_string()),
+        }];
+        assert!(castle_war_tick(&castles, &in_palace, &mut states, 4000).is_empty());
+        assert!(states[&7].name_color_changed, "N1 跳过 NameColorChanged 块");
     }
 }
