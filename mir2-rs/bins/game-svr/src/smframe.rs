@@ -1227,6 +1227,20 @@ pub fn sm_hear(actor_id: i32, f_color: u8, b_color: u8, msg: &[u8]) -> Vec<u8> {
 ///   （隐藏任务 NPC 不经地图，恒 0；见 `bins/game-svr/src/npc.rs`）。
 ///
 /// `msg` = `normNpc.ChrName + '/' + sMsg` 的**原始字节**（GBK；本层不转 UTF-8）。
+/// `SM_MERCHANTDLGCLOSE(644)`（`PlayObject.Message.cs:1806-1808` 的 `RM_MERCHANTDLGCLOSE` 支）：
+/// `SendDefMessage(SM_MERCHANTDLGCLOSE, processMsg.nParam1, 0, 0, 0)`。
+///
+/// 触发方 `GuildOfficial.UserSelect` 的 `@exit` 支（`GuildOfficial.cs:84`）发
+/// `SendMsg(this, RM_MERCHANTDLGCLOSE, 0, ActorId, 0, 0)` ⇒ `Recog` = **NPC** 的 `ActorId`
+/// （不是玩家自己），无尾。
+#[must_use]
+pub fn sm_merchantdlgclose(npc_actor_id: i32) -> Vec<u8> {
+    gm_data_body(
+        command_header(npc_actor_id, messages::SM_MERCHANTDLGCLOSE, 0, 0, 0),
+        &[],
+    )
+}
+
 #[must_use]
 pub fn sm_merchantsay(recog: i32, n_param1: u8, n_param2: u8, msg: &[u8]) -> Vec<u8> {
     let header = command_header(

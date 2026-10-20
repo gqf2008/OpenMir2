@@ -225,6 +225,19 @@ pub fn sm_buildguild_fail_763(result: i32) -> Vec<u8> {
     )
 }
 
+/// `SM_DONATE_OK(764)`：`PlayObject.Message.cs:1943-1945`（`RM_DONATE_OK` 支）。
+///
+/// `SendDefMessage(SM_DONATE_OK, processMsg.nParam1, 0, 0, 0)`；触发方
+/// `GuildOfficial.DoNate`（`src/GameSrv/Npc/GuildOfficial.cs:203-206`）发的是
+/// `SendMsg(this, RM_DONATE_OK, 0, 0, 0, 0)` ⇒ `nParam1 = 0`（全 0、无尾）。
+#[must_use]
+pub fn sm_donate_ok_764(n_param1: i32) -> Vec<u8> {
+    gm_data_body(
+        command_header(n_param1, messages::SM_DONATE_OK, 0, 0, 0),
+        &[],
+    )
+}
+
 /// `SM_GUILDMAKEALLY_OK(768)`：`PlayObject.Operate.cs:1511`。
 ///
 /// `SendDefMessage(SM_GUILDMAKEALLY_OK, 0, 0, 0, 0)` ⇒ 全 0、无尾。
