@@ -11,6 +11,11 @@
   diff     <a.jsonl> <b.jsonl>              两次运行之间的字段级比对（M3 判据；有差异即红）
   selftest                                  改坏必红自检
 
+参数必填性（评审 C6，2026-10-20）：
+  * `delta` 的 `--out` **必填**（改动清单输出 JSONL；漏写 argparse 直接报错）。
+  * `diff` **没有** `--out`；需要把摘要落盘时用**可选**的 `--summary-out <json>`。
+    run sheet 里若写 `diff ... --out` 是错误的（`--out` 只属于 `delta`）。
+
 抽取规则：行内出现 `<prefix>` 字节即归属本次运行（账号/角色名、以及以角色名为键的表）。
 归一化：`--normalize` 打开时，把 <prefix> 统一替换为 `<RUN>`，并把角色名里的序号保留
 （序号是确定性命名的一部分，必须比）。
@@ -646,8 +651,20 @@ def cmd_selftest(args):
     sys.exit(0)
 
 
+class _Parser(argparse.ArgumentParser):
+    """错误提示补充 C6 口径：--out 只属于 delta。"""
+
+    def error(self, message):
+        if "--out" in message:
+            message += "（提示：--out 是 delta 子命令的必填参数；diff 不接收 --out，摘要用 --summary-out）"
+        super().error(message)
+
+
 def main():
-    ap = argparse.ArgumentParser(description="M3 作用域内 DB 差异比对")
+    ap = _Parser(
+        description="M3 作用域内 DB 差异比对",
+        epilog="注意：--out 是 delta 子命令的必填参数；diff 不接收 --out，"
+               "摘要用可选的 --summary-out。")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     e = sub.add_parser("extract")
@@ -658,16 +675,19 @@ def main():
     e.add_argument("--allow-empty", action="store_true",
                    help="允许 0 行（运行**前**的快照按定义就是 0 行，别当失败）")
 
-    d = sub.add_parser("delta")
+    d = sub.add_parser("delta", help="改动清单（--out 必填）")
     d.add_argument("before")
     d.add_argument("after")
-    d.add_argument("--out", required=True)
+    d.add_argument("--out", required=True,
+                   help="必填：改动清单 JSONL 输出路径")
 
-    f = sub.add_parser("diff")
+    f = sub.add_parser("diff", help="字段级比对（无 --out；摘要用 --summary-out）",
+                       description="字段级比对。本子命令不接受 --out；"
+                                   "需要落摘要请用可选的 --summary-out。")
     f.add_argument("a")
     f.add_argument("b")
     f.add_argument("--max-diffs", type=int, default=5)
-    f.add_argument("--summary-out")
+    f.add_argument("--summary-out", help="可选：摘要 JSON 输出路径（diff 没有 --out）")
     f.add_argument("--canonical", action="store_true",
                    help="按易变列白名单规范化后再比（M3 正式门禁用；见设计文档 §6）")
     f.add_argument("--fixed-newchr", action="store_true",

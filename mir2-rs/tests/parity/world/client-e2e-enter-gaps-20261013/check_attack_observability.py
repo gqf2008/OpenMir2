@@ -30,7 +30,12 @@
 `--expect`：
   `attack` 只要求 ①；`damage` 只要求 ②（出站 `SM_STRUCK`）；`kill` 只要求 ②（出站 `SM_NOWDEATH`）；
   `any` 要求 ① **且** ②（②取出站 `SM_STRUCK` 或出站 `SM_NOWDEATH` 任一）——**默认**（= DoD「能攻击造成伤害」）；
+  `incoming` 只要求**入站** `SM_STRUCK`（victim = 自己）≥ `--min-struck`（默认 1）：
+  用于 G3「入站 sm_struck≥1（主动族；空转=缺陷）」——**不**要求 CM_HIT，也不把出站受击算数；
   `none` 要求 ① == 0（无怪点的反向对照）。
+
+  `--expect incoming` 必须能解析 self（见下）；探测不到时 fail-closed（PREREQ_RED），
+  **不要**用 `--allow-unknown-self` 跑正式判据（intended 仅诊断）。
 
 `--left/--right`（两侧）：两侧各按同一 `--expect` 判（两侧对照，与 `aoi_visibility_pair.py` 同口径）；
 两侧各自解析 self（两侧玩家 ActorId 不同）。
@@ -119,6 +124,11 @@ def check(rows: list[dict], expect: str = "any", min_hits: int = 1,
         if kills < min_kills:
             fails.append("s2c 出站 SM_NOWDEATH(%d)（victim≠自己）只有 %d 条 < 要求 %d"
                          % (SM_NOWDEATH, kills, min_kills))
+    elif expect == "incoming":
+        if struck_in < min_struck:
+            fails.append("s2c 入站 SM_STRUCK(%d)（victim=自己）只有 %d 条 < 要求 %d"
+                         "（本侧玩家没有被攻击/受击帧；出站受击 %d 条不计入）"
+                         % (SM_STRUCK, struck_in, min_struck, struck))
     elif expect == "any":
         if hits < min_hits:
             fails.append("c2s CM_HIT(%d) 只有 %d 条 < 要求 %d（客户端没打到目标）"
@@ -213,6 +223,20 @@ def selftest() -> int:
                 rc_of(check(synthetic(1, 0, 1), "damage", self_recog=SELF)[0]), 1)
     expect_case("expect=kill 有出站 SM_NOWDEATH ⇒ GREEN",
                 rc_of(check(synthetic(1, 0, 1), "kill", self_recog=SELF)[0]), 0)
+    # —— C2（评审 2026-10-20）：入站受击单独成判据 ——
+    expect_case("expect=incoming 入站 SM_STRUCK=1 ⇒ GREEN",
+                rc_of(check(synthetic(0, 0, 0, struck_incoming=1), "incoming",
+                            self_recog=SELF)[0]), 0)
+    expect_case("expect=incoming 只有出站受击 ⇒ RED",
+                rc_of(check(synthetic(1, 1, 0), "incoming", self_recog=SELF)[0]), 1)
+    expect_case("expect=incoming 入站=0（无受击）⇒ RED",
+                rc_of(check(synthetic(1, 1, 0, struck_incoming=0), "incoming",
+                            self_recog=SELF)[0]), 1)
+    expect_case("expect=incoming min_struck=2 只 1 条 ⇒ RED",
+                rc_of(check(synthetic(0, 0, 0, struck_incoming=1), "incoming",
+                            min_struck=2, self_recog=SELF)[0]), 1)
+    expect_case("expect=incoming self 未知（旧口径）⇒ RED（出站不能冒充入站）",
+                rc_of(check(synthetic(1, 1, 0), "incoming")[0]), 1)
     expect_case("expect=none 无 CM_HIT ⇒ GREEN",
                 rc_of(check(synthetic(0, 0, 0), "none", self_recog=SELF)[0]), 0)
     expect_case("expect=none 有 CM_HIT ⇒ RED",
@@ -268,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--left", default="", help="两侧：左（Rust）capture.jsonl")
     ap.add_argument("--right", default="", help="两侧：右（C#）capture.jsonl")
     ap.add_argument("--expect", default="any",
-                    choices=["attack", "damage", "kill", "any", "none"])
+                    choices=["attack", "damage", "kill", "any", "incoming", "none"])
     ap.add_argument("--min-hits", type=int, default=1)
     ap.add_argument("--min-struck", type=int, default=1)
     ap.add_argument("--min-kills", type=int, default=1)
