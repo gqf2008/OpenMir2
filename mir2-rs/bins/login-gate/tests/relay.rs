@@ -337,3 +337,97 @@ async fn downstream_disconnect_suppresses_idle_timeout_frame() {
     child.kill().await.ok();
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// 起一个"接受后立即关闭"的假 LoginSrv（不给客户端留 Enter 机会）：模拟网关启动后
+/// LoginSrv 立刻掉线（LoginGate 不自动重连，链路断开是终态）。
+async fn fake_srv_close_immediately() -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (sock, _) = l.accept().await.unwrap();
+        drop(sock); // FIN：网关 downstream_loop 读到 EOF ⇒ DownstreamAlive=false
+    });
+    port
+}
+
+/// 起网关并把 stdout 落到日志文件（日志判据要读原文串）。
+fn spawn_gate_logged(conf: &std::path::Path, log: &std::path::Path) -> tokio::process::Child {
+    let out = std::fs::File::create(log).unwrap();
+    tokio::process::Command::new(env!("CARGO_BIN_EXE_login-gate"))
+        .arg(conf)
+        .stdout(out)
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap()
+}
+
+/// 轮询日志文件直到出现 `needle`（不 sleep 猜固定时长）。
+async fn wait_for_log(path: &std::path::Path, needle: &str, within: Duration) -> String {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        if text.contains(needle) {
+            return text;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{within:?} 内日志未出现 {needle:?}；实得:\n{text}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// 判据（审计 B-3，进程级 / oracle 未就绪分支）：
+/// LoginSrv 已断开后新接入的客户端**不得**建会话、**不得**发 `Enter`、**不得**被关 socket；
+/// 它的帧被 `ProcessLoginMessage` 判成「非法攻击」后丢弃。
+///
+/// oracle：`GetClientThread()` 返回非 null 但 `ConnectState=false` ⇒
+/// `ServerService.cs:72-77` 打 `未就绪: {GetIPPort()}` 后 return；槽位循环在其后，
+/// 故**不占槽位**、也不发 `UserLeave`。
+///
+/// 牙：把未就绪判定删掉（直接建会话/发 Enter）⇒ 假 LoginSrv 早退，本用例只能靠
+/// 日志与「客户端收到字节/FIN」失败；把 `rejected_loop` 改成读后转发 ⇒ 上行字节出现 ⇒ 红。
+#[tokio::test]
+async fn new_client_after_downstream_death_is_not_admitted() {
+    let srv_port = fake_srv_close_immediately().await;
+    let gate_port = free_port();
+    let dir = write_conf(gate_port, srv_port);
+    let conf = dir.join("config.conf");
+    let log = dir.join("gate.log");
+
+    let mut child = spawn_gate_logged(&conf, &log);
+    // 该日志在 `DownstreamAlive=false` **之后**打 ⇒ 看到它就代表后续连接必走未就绪分支。
+    wait_for_log(
+        &log,
+        "登录服务连接断开，网关停止接收。",
+        Duration::from_secs(5),
+    )
+    .await;
+
+    let mut client = connect_retry(gate_port).await;
+    let text = wait_for_log(&log, "未就绪: ", Duration::from_secs(5)).await;
+    assert!(
+        text.contains("未就绪: 127.0.0.1:"),
+        "未就绪日志必须带 GetIPPort()（含端口）：\n{text}"
+    );
+
+    client.write_all(b"#1ABC!").await.unwrap();
+    client.flush().await.unwrap();
+    let text = wait_for_log(&log, "非法攻击: 127.0.0.1", Duration::from_secs(5)).await;
+    assert!(
+        text.contains("非法攻击: 127.0.0.1"),
+        "未建会话的帧必须走「非法攻击」丢弃分支：\n{text}"
+    );
+
+    // socket 保持打开：既无回帧也无 FIN。
+    let mut buf = [0u8; 32];
+    let got = tokio::time::timeout(Duration::from_millis(800), client.read(&mut buf)).await;
+    assert!(
+        got.is_err(),
+        "被拒接入的客户端不得收到字节/不得 FIN；实得 {got:?}"
+    );
+
+    child.kill().await.ok();
+    std::fs::remove_dir_all(&dir).ok();
+}

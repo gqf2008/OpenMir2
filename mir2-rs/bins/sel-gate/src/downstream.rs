@@ -38,6 +38,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
+use crate::slots::SlotTable;
 use crate::{SessionEntry, Sessions};
 
 /// C# `GateShare.cs:19`：`CheckServerTimeOutTime = 10 * 1000`。
@@ -177,11 +178,13 @@ struct Inner {
     /// 当前连接的写队列；`None` ⇒ `SendSocket` 的 `Offline` 早退。
     tx: Mutex<Option<(u64, mpsc::UnboundedSender<ServerDataMessage>)>>,
     sessions: Sessions,
+    /// C# `ClientThread.SessionArray`（`RestSessionArray` 的等价物由本模块驱动）。
+    slots: Arc<Mutex<SlotTable>>,
 }
 
 impl Downstream {
     #[must_use]
-    pub fn new(addr: String, port: u16, sessions: Sessions) -> Self {
+    pub fn new(addr: String, port: u16, sessions: Sessions, slots: Arc<Mutex<SlotTable>>) -> Self {
         let endpoint = format!("{addr}:{port}");
         Self(Arc::new(Inner {
             addr,
@@ -191,6 +194,7 @@ impl Downstream {
             generation: AtomicU64::new(0),
             tx: Mutex::new(None),
             sessions,
+            slots,
         }))
     }
 
@@ -238,18 +242,29 @@ impl Downstream {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn sessions_guard(&self) -> MutexGuard<'_, std::collections::HashMap<u16, SessionEntry>> {
+    fn sessions_guard(&self) -> MutexGuard<'_, std::collections::HashMap<String, SessionEntry>> {
         self.0
             .sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    fn slots_guard(&self) -> MutexGuard<'_, SlotTable> {
+        self.0
+            .slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// C# `RestSessionArray()`：保留槽位/会话，只让它们不再参与空闲超时。
+    ///
+    /// oracle（`ClientThread.cs:231-242`）同时把非空槽的 `SocketId`/`ClientIP` 置空
+    /// （槽位**不**置 null）⇒ 这里同步调用 [`SlotTable::rest`]。
     fn detach_all_sessions(&self) {
         for entry in self.sessions_guard().values_mut() {
             entry.idle_eligible = false;
         }
+        self.slots_guard().rest();
     }
 
     fn install(&self, generation: u64, tx: mpsc::UnboundedSender<ServerDataMessage>) {
@@ -453,25 +468,25 @@ async fn reader(
         };
         match msg.kind {
             ServerDataType::Data => {
-                let Ok(sid) = msg.socket_id.parse::<u16>() else {
-                    continue;
-                };
+                // oracle 的键是字符串 SocketId（`ConcurrentDictionary<string, ClientSession>`）。
                 let sender = downstream
                     .sessions_guard()
-                    .get(&sid)
+                    .get(&msg.socket_id)
                     .map(|entry| entry.tx.clone());
                 if let Some(tx) = sender {
                     let _ = tx.send(msg.data);
                 } else {
-                    crate::glog!("WRN", "会话[{sid}]不存在，丢弃下行 {} 字节", msg.data.len());
+                    crate::glog!(
+                        "WRN",
+                        "会话[{}]不存在，丢弃下行 {} 字节",
+                        msg.socket_id,
+                        msg.data.len()
+                    );
                 }
             }
             ServerDataType::Leave => {
-                let Ok(sid) = msg.socket_id.parse::<u16>() else {
-                    continue;
-                };
-                downstream.sessions_guard().remove(&sid);
-                crate::glog!("INF", "数据服务要求关闭会话[{sid}]");
+                downstream.sessions_guard().remove(&msg.socket_id);
+                crate::glog!("INF", "数据服务要求关闭会话[{}]", msg.socket_id);
             }
             // C# 收 KeepAlive：`CheckServerFail = false; boGateReady = true;`
             ServerDataType::KeepAlive => {
@@ -590,21 +605,23 @@ mod tests {
         {
             let mut guard = sessions.lock().unwrap();
             guard.insert(
-                1,
+                "1".to_string(),
                 SessionEntry {
                     tx: tx1,
                     idle_eligible: true,
                 },
             );
             guard.insert(
-                2,
+                "2".to_string(),
                 SessionEntry {
                     tx: tx2,
                     idle_eligible: true,
                 },
             );
         }
-        let downstream = super::Downstream::new("127.0.0.1".into(), 5100, Arc::clone(&sessions));
+        let slots = Arc::new(Mutex::new(crate::slots::SlotTable::new()));
+        let downstream =
+            super::Downstream::new("127.0.0.1".into(), 5100, Arc::clone(&sessions), slots);
         downstream.detach_all_sessions();
         let guard = sessions.lock().unwrap();
         assert_eq!(guard.len(), 2, "RestSessionArray 不得清空会话");

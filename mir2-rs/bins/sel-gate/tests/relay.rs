@@ -801,3 +801,51 @@ async fn sends_keepalive_every_ten_seconds() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// 判据（审计 B-3，进程级 churn）：SelGate 的 `SessionArray` 在 oracle 里**从不被写回**
+/// （`ServerService.cs:99-110` 缺 `SessionArray[nIdx] = sessionInfo;`）⇒ 反复接入/断开
+/// 永远不会触发 `MaxSession=2000` 上限，每个连接都拿到新会话（`Enter` 的 sid 唯一）。
+///
+/// 牙：给分配循环补上写回（“修 bug”）⇒ 2000 次后才会退化为陈旧槽；本用例只跑 8 次
+/// 不足以让它红，因此同时用 `slots::tests::selection_never_fills_slots_*` 在构造级
+/// 钉住“不写回”；这里钉住运行期没有其它路径把槽位填满/复用 sid。
+#[tokio::test]
+async fn churn_never_hits_cap_and_sids_are_unique() {
+    let (srv_port, srv_task, _accepted) = fake_login_srv().await;
+    let gate_port = free_port();
+    let dir = write_conf(gate_port, srv_port);
+    let conf = dir.join("config.conf");
+    let log = dir.join("gate.log");
+
+    let mut child = spawn_gate_ready(&conf, &log, srv_port).await;
+    for round in 0..8u8 {
+        let mut client = connect_retry(gate_port).await;
+        let frame = format!("#1CHURN{round}!");
+        client.write_all(frame.as_bytes()).await.unwrap();
+        client.flush().await.unwrap();
+        let mut back = vec![0u8; frame.len()];
+        tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut back))
+            .await
+            .unwrap_or_else(|_| panic!("第 {round} 次接入未收到中继回帧"))
+            .unwrap();
+        assert_eq!(back, frame.as_bytes(), "第 {round} 次接入的载荷被改动");
+        drop(client);
+    }
+
+    child.kill().await.ok();
+    let got = tokio::time::timeout(Duration::from_secs(5), srv_task)
+        .await
+        .expect("假 DBSrv 未按时结束")
+        .unwrap();
+    let sids: Vec<String> = got
+        .iter()
+        .filter(|m| m.kind == ServerDataType::Enter)
+        .map(|m| m.socket_id.clone())
+        .collect();
+    assert_eq!(sids.len(), 8, "8 次接入必须各有一条 Enter：{sids:?}");
+    let mut unique = sids.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), 8, "8 次接入的 sid 必须互不相同：{sids:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}

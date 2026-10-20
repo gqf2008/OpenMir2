@@ -17,10 +17,11 @@
 mod config;
 mod gbk;
 mod idle_timeout;
+mod slots;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -28,6 +29,7 @@ use anyhow::{Context, Result};
 use idle_timeout::{IdleTimer, TimeoutAction, CHECK_INTERVAL_MS};
 use mir2_protocol::frame::{FrameSplitter, ServerDataPacket, SplitOut};
 use mir2_protocol::internal::{ServerDataMessage, ServerDataType};
+use slots::SlotTable;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -51,7 +53,12 @@ macro_rules! glog {
 }
 
 /// 会话表：`SocketId → 该客户端连接的发送端`。
-type Sessions = Arc<Mutex<HashMap<u16, mpsc::UnboundedSender<Vec<u8>>>>>;
+///
+/// `u32`：oracle 的 `ConnectionId` 是 TouchSocket 的每 socket 唯一字符串；
+/// Rust 侧用进程内单调 id 等价（客户端不可观测，写进内部帧的 `SocketId` 字符串）。
+/// 用 32 位而不是 16 位，避免 65535 次接入后回绕、把新连接撞进**泄漏中的陈旧槽 id**
+/// （审计 B-3 的登记项；u16 下这是 Rust-only 差异）。
+type Sessions = Arc<Mutex<HashMap<u32, mpsc::UnboundedSender<Vec<u8>>>>>;
 
 /// 下行链路存活标志（C# `ClientThread.IsConnected` 的等价物）。
 ///
@@ -76,9 +83,24 @@ impl Drop for DownstreamAliveGuard {
 struct GateShared {
     sessions: Sessions,
     downstream_alive: DownstreamAlive,
+    /// C# `ClientThread.SessionArray`（单下游 ⇒ 单表）。
+    slots: Arc<std::sync::Mutex<SlotTable>>,
+}
+
+/// C# `ServerService.ServerSocketClientConnect:65-94` 的三个接入分支。
+enum Admission {
+    /// `ClientManager.GetClientThread():148` 的 `SessionIsFull()` ⇒ null ⇒
+    /// `ServerService.cs:65-70` 打 `获取登陆服务失败。` 后 return（不关 socket、不建会话）。
+    Full,
+    /// `ServerService.cs:72-77` 的 `!ConnectState` ⇒ `未就绪: {GetIPPort()}` 后 return
+    /// （此时**还没有**分配槽位：oracle 的槽位循环在 ConnectState 判定之后）。
+    NotReady,
+    /// 正常接入：`ServerService.cs:82-94` 线性分配到的空槽下标。
+    Slot(usize),
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)] // 启动顺序照 `AppService.Start`：先连下游、再监听，错误分支都是 fail-loud
 async fn main() -> Result<()> {
     // 配置路径：可选 argv[1] 覆盖（默认取可执行文件同目录，与 C# BaseDirectory 一致）
     let conf = std::env::args()
@@ -96,6 +118,7 @@ async fn main() -> Result<()> {
 
     let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
     let downstream_alive: DownstreamAlive = Arc::new(AtomicBool::new(true));
+    let slots: Arc<std::sync::Mutex<SlotTable>> = Arc::new(std::sync::Mutex::new(SlotTable::new()));
 
     // 下行连接：连不上 LoginSrv 即失败退出（M1④）
     let downstream = TcpStream::connect((cfg.srv_addr.as_str(), cfg.srv_port))
@@ -121,6 +144,7 @@ async fn main() -> Result<()> {
         down_rx,
         Arc::clone(&sessions),
         Arc::clone(&downstream_alive),
+        Arc::clone(&slots),
     ));
 
     let listener = TcpListener::bind((cfg.gate_addr.as_str(), cfg.gate_port))
@@ -138,34 +162,93 @@ async fn main() -> Result<()> {
         cfg.gate_port
     );
 
-    let next_sid = Arc::new(AtomicU16::new(1));
+    let next_sid = Arc::new(AtomicU32::new(1));
     let timeout_ms = cfg.client_timeout_ms;
     loop {
         let (sock, peer) = listener.accept().await.context("accept 失败")?;
         sock.set_nodelay(true).ok();
         let sid = next_sid.fetch_add(1, Ordering::Relaxed);
-        glog!("INF", "开始连接: {peer}");
+        // C# `ServerService.ServerSocketClientConnect:65-94` 的准入顺序：
+        // ① `ClientManager.GetClientThread():148` → `SessionIsFull()`；满 ⇒ `获取登陆服务失败。`
+        //    （null 分支，socket 留开）；② `!clientThread.ConnectState` ⇒ `未就绪`；
+        // ③ 线性找空槽并登记会话。
+        let admission = {
+            let mut table = slots
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            admit(&mut table, sid, downstream_alive.load(Ordering::SeqCst))
+        };
         let shared = GateShared {
             sessions: Arc::clone(&sessions),
             downstream_alive: Arc::clone(&downstream_alive),
+            slots: Arc::clone(&slots),
         };
         let down_tx = Arc::clone(&down_tx);
+        let ip = peer_ip(peer);
         tokio::spawn(async move {
-            if let Err(e) = client_loop(
-                sock,
-                sid,
-                peer.to_string(),
-                peer_ip(peer),
-                timeout_ms,
-                shared,
-                down_tx,
-            )
-            .await
-            {
+            let result = match admission {
+                Admission::Full => {
+                    // LogService.Debug("获取登陆服务失败。")；随后 return。
+                    glog!("DBG", "获取登陆服务失败。");
+                    rejected_loop(sock, ip).await
+                }
+                Admission::NotReady => {
+                    // LogService.Info("未就绪: " + sRemoteAddress)；随后 return。
+                    glog!("INF", "未就绪: {peer}");
+                    rejected_loop(sock, ip).await
+                }
+                Admission::Slot(slot_index) => {
+                    glog!("INF", "开始连接: {peer}");
+                    client_loop(
+                        sock,
+                        sid,
+                        peer.to_string(),
+                        ip,
+                        timeout_ms,
+                        slot_index,
+                        shared,
+                        down_tx,
+                    )
+                    .await
+                }
+            };
+            if let Err(e) = result {
                 glog!("WRN", "客户端[{peer}]会话结束: {e:#}");
             }
         });
     }
+}
+
+/// C# `ServerService.ServerSocketClientConnect:65-94` 的准入判定（纯函数，构造级可判）。
+///
+/// 顺序照 oracle：`ClientManager.GetClientThread():130-149` 的**判满最先行**（满 ⇒ null
+/// ⇒ `获取登陆服务失败。`），随后才判 `ConnectState`（未就绪 ⇒ 不分配槽位）。
+fn admit(table: &mut SlotTable, sid: u32, downstream_alive: bool) -> Admission {
+    if table.is_full() {
+        Admission::Full
+    } else if !downstream_alive {
+        Admission::NotReady
+    } else {
+        Admission::Slot(table.alloc(sid).expect("is_full() == false ⇒ 必有空槽"))
+    }
+}
+
+/// C# 接入被拒（`Full` / `NotReady`）后的客户端形态：socket **保持打开**。
+///
+/// oracle 没有任何会话登记；后续每个接收块在 `ServerSocketClientRead` 入队，
+/// `ServerManager.ProcessLoginMessage:76-83` 因 `GetSession == null` 打
+/// `非法攻击: {ClientIP}`（Warn）后丢弃 ⇒ 不产生任何上行字节、也不发生空闲超时
+/// （`TimedService` 只扫槽位，无槽位 ⇒ 不动作）。
+async fn rejected_loop(mut sock: TcpStream, ip: String) -> Result<()> {
+    let mut buf = vec![0u8; 8192];
+    loop {
+        match sock.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(_) => glog!("WRN", "非法攻击: {ip}"),
+            Err(e) => return Err(e).context("读客户端失败"),
+        }
+    }
+    Ok(())
 }
 
 /// TouchSocket `ITcpClientBase.IP` / `SystemNetExtension.GetIP` 口径：只取对端 IP，
@@ -204,18 +287,21 @@ fn login_gate_enter_body(ip: &str) -> Vec<u8> {
 ///   `SessionArray` 槽位全置 null ⇒ `TimedService` 取不到会话 ⇒ 超时动作整段不发生
 ///   （不发帧、不关会话、计时也不动）。这里在 `timer.poll` **之前**判
 ///   [`DownstreamAlive`]，同形复刻。
+#[allow(clippy::too_many_arguments)] // 与 C# `ServerService` 的接入/收包/超时三段一一对应
 async fn client_loop(
     sock: TcpStream,
-    sid: u16,
+    sid: u32,
     peer: String,
     ip: String,
     timeout_ms: u64,
+    slot_index: usize,
     shared: GateShared,
     down_tx: Arc<Mutex<OwnedWriteHalf>>,
 ) -> Result<()> {
     let GateShared {
         sessions,
         downstream_alive,
+        slots,
     } = shared;
     let (mut rd, mut wr) = sock.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -297,11 +383,20 @@ async fn client_loop(
                         let _ = timeout_tx.send(idle_timeout::out_of_connection_frame());
                         glog!("DBG", "Client Connect TimeOut: {ip}");
                         timed_out = true;
+                        // `TimedService.ProcessDelayMsg:79-80`：`SessionArray[j] = null`。
+                        slots
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clear(slot_index);
                         break;
                     }
                     // 线上不可达（第一阶段已关会话）；保留以对齐 oracle 状态机。
                     TimeoutAction::Close => {
                         timed_out = true;
+                        slots
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clear(slot_index);
                         break;
                     }
                 }
@@ -311,6 +406,9 @@ async fn client_loop(
 
     // 会话离开（C# Leave 语义）。超时路径不发：oracle 的 TimedService 先摘会话再关
     // socket，`Disconnected` 处理器 `GetSession` 为 null ⇒ 不产生 `UserLeave`。
+    //
+    // 槽位**故意不清**：C# `ServerSocketClientDisconnect:113-127` 只 `CloseSession`，
+    // 从不触碰 `SessionArray` ⇒ 正常断开泄漏一个槽（oracle 缺陷照抄；见 `slots` 模块）。
     sessions.lock().await.remove(&sid);
     if !timed_out {
         let leave = ServerDataMessage::new(ServerDataType::Leave, sid.to_string(), Vec::new());
@@ -328,21 +426,23 @@ async fn downstream_loop(
     mut rd: OwnedReadHalf,
     sessions: Sessions,
     downstream_alive: DownstreamAlive,
+    slots: Arc<std::sync::Mutex<SlotTable>>,
 ) -> Result<()> {
-    let _mark_dead = DownstreamAliveGuard(downstream_alive);
+    let mark_dead = DownstreamAliveGuard(downstream_alive);
+    let reason;
     loop {
         let mut head = [0u8; ServerDataPacket::SIZE];
         if rd.read_exact(&mut head).await.is_err() {
-            glog!("ERR", "登录服务连接断开，网关停止接收。");
-            return Ok(());
+            reason = "登录服务连接断开，网关停止接收。";
+            break;
         }
         let Some(pkt) = ServerDataPacket::from_bytes(&head) else {
             continue;
         };
         let mut body = vec![0u8; usize::from(pkt.packet_len)];
         if rd.read_exact(&mut body).await.is_err() {
-            glog!("ERR", "读取登录服务载荷失败。");
-            return Ok(());
+            reason = "读取登录服务载荷失败。";
+            break;
         }
         let Ok(msg) = ServerDataMessage::from_bytes(&body) else {
             glog!("WRN", "内部帧解析失败（长度 {}）", body.len());
@@ -350,7 +450,7 @@ async fn downstream_loop(
         };
         match msg.kind {
             ServerDataType::Data => {
-                let Ok(sid) = msg.socket_id.parse::<u16>() else {
+                let Ok(sid) = msg.socket_id.parse::<u32>() else {
                     continue;
                 };
                 let guard = sessions.lock().await;
@@ -361,7 +461,7 @@ async fn downstream_loop(
                 }
             }
             ServerDataType::Leave => {
-                let Ok(sid) = msg.socket_id.parse::<u16>() else {
+                let Ok(sid) = msg.socket_id.parse::<u32>() else {
                     continue;
                 };
                 sessions.lock().await.remove(&sid);
@@ -371,6 +471,17 @@ async fn downstream_loop(
             ServerDataType::KeepAlive | ServerDataType::Enter => {}
         }
     }
+    // C# `ClientThread.ClientSocketDisconnect:118-130`：所有槽位置 null。
+    // （LoginGate 不自动重连，链路断开是终态；此后 `TimedService` 再也取不到会话。）
+    slots
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .reset();
+    // 先让 `DownstreamAlive=false` 落定再打日志：日志出现即代表后续连接必走
+    // `未就绪` 分支（进程级用例据此消除竞态）。
+    drop(mark_dead);
+    glog!("ERR", "{reason}");
+    Ok(())
 }
 
 /// 发一帧内部消息：`[PacketCode u32][PacketLen u16]` + MemoryPack 体。
@@ -416,6 +527,50 @@ mod tests {
         assert_eq!(peer_ip("[::1]:53123".parse().unwrap()), "[::1]");
         assert_eq!(peer_ip("[2001:db8::1]:1".parse().unwrap()), "[2001:db8::1]");
         assert_eq!(peer_ip("[fe80::1%12]:1".parse().unwrap()), "[fe80::1%12]");
+    }
+
+    /// 判据 5（准入三分支，cap=4 构造级）：未就绪 ⇒ `NotReady` 且**不占槽**；
+    /// 满 ⇒ `Full` 优先于 `NotReady`（oracle 的 `SessionIsFull` 在 `ConnectState` 之前）；
+    /// 正常 ⇒ 按下标分配，第 cap 个之后满。
+    /// 牙：把判满与就绪顺序对调、或 `NotReady` 也分配槽 ⇒ 本用例红。
+    #[test]
+    fn admission_matches_oracle_branch_order() {
+        use super::{admit, Admission};
+        use crate::slots::SlotTable;
+
+        let mut table = SlotTable::with_capacity(4);
+        // 未就绪：不分配槽位（oracle 的槽位循环在 ConnectState 判定之后）。
+        assert!(matches!(admit(&mut table, 1, false), Admission::NotReady));
+        assert_eq!(table.capacity(), 4);
+        // 正常接入：下标 0..3。
+        for sid in 1..=4 {
+            match admit(&mut table, sid, true) {
+                Admission::Slot(index) => {
+                    assert_eq!(index, usize::try_from(sid).unwrap() - 1);
+                }
+                Admission::Full | Admission::NotReady => panic!("期望 Slot，实得拒接入"),
+            }
+        }
+        assert!(table.is_full());
+        // 满 + 未就绪：oracle 先判满 ⇒ Full（不是 NotReady）。
+        assert!(matches!(admit(&mut table, 5, false), Admission::Full));
+        assert!(matches!(admit(&mut table, 5, true), Admission::Full));
+    }
+
+    /// 判据 6（泄漏照抄）：cap=4 churn 5 次“连接→正常断开”后第 5 次仍被拒。
+    /// 牙：在正常断开路径调用 `clear` ⇒ 第 5 次会拿到槽位 ⇒ 本用例红。
+    #[test]
+    fn churn_after_normal_disconnects_hits_cap() {
+        use super::{admit, Admission};
+        use crate::slots::SlotTable;
+
+        let mut table = SlotTable::with_capacity(4);
+        for round in 1..=4 {
+            assert!(matches!(admit(&mut table, round, true), Admission::Slot(_)));
+            // 客户端正常断开：oracle 只 CloseSession，不碰 SessionArray ⇒ 无 clear。
+        }
+        // 第 5 次接入：oracle `SessionIsFull()` ⇒ null ⇒ `获取登陆服务失败。`
+        assert!(matches!(admit(&mut table, 5, true), Admission::Full));
     }
 
     /// 判据 4：`DataLen` 口径 == C# `(byte)body.Length`。

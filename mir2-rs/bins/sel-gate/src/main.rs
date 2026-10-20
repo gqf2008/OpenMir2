@@ -21,10 +21,11 @@ mod config;
 mod downstream;
 mod gbk;
 mod idle_timeout;
+mod slots;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -33,6 +34,7 @@ use downstream::Downstream;
 use idle_timeout::{IdleTimer, TimeoutAction, CHECK_INTERVAL_MS};
 use mir2_protocol::frame::{decode_client_frame, FrameSplitter, SplitOut};
 use mir2_protocol::internal::{ServerDataMessage, ServerDataType};
+use slots::{SlotChoice, SlotTable};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
@@ -65,13 +67,19 @@ pub(crate) struct SessionEntry {
 }
 
 /// 会话表：`SocketId → 会话项`（跨下行断线保留，照 oracle `SessionArray`）。
-pub(crate) type Sessions = Arc<Mutex<HashMap<u16, SessionEntry>>>;
+///
+/// 键是**字符串**：oracle `SessionManager` 的 `ConcurrentDictionary<string, ClientSession>`
+/// 用 TouchSocket 的 socket id 字符串；`RestSessionArray` 还会把槽位 `SocketId` 置空，
+/// 满表陈旧槽路径（构造级）需要能表示空 id。Rust 生成的 id 在进程内唯一即可。
+pub(crate) type Sessions = Arc<Mutex<HashMap<String, SessionEntry>>>;
 
 /// 每个客户端会话要用的共享状态（打包后 `client_loop` 参数保持在 clippy 上限内）。
 #[derive(Clone)]
 struct GateShared {
     sessions: Sessions,
     downstream: Downstream,
+    /// C# `ClientThread.SessionArray`（单下游 ⇒ 单表）。
+    slots: Arc<std::sync::Mutex<SlotTable>>,
 }
 
 #[tokio::main]
@@ -91,7 +99,13 @@ async fn main() -> Result<()> {
     );
 
     let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
-    let downstream = Downstream::new(cfg.srv_addr.clone(), cfg.srv_port, Arc::clone(&sessions));
+    let slots: Arc<std::sync::Mutex<SlotTable>> = Arc::new(std::sync::Mutex::new(SlotTable::new()));
+    let downstream = Downstream::new(
+        cfg.srv_addr.clone(),
+        cfg.srv_port,
+        Arc::clone(&sessions),
+        Arc::clone(&slots),
+    );
 
     // oracle `AppService.Start()` 先起监听（`_serverService.Start()`）再连下游
     // （`_clientManager.Start()`）；DBSrv 不在**不退出**，由 10s 重连循环负责。
@@ -111,28 +125,20 @@ async fn main() -> Result<()> {
         cfg.gate_port
     );
 
-    let next_sid = Arc::new(AtomicU16::new(1));
+    let next_sid = Arc::new(AtomicU32::new(1));
     let timeout_ms = cfg.client_timeout_ms;
     loop {
         let (sock, peer) = listener.accept().await.context("accept 失败")?;
         sock.set_nodelay(true).ok();
         let sid = next_sid.fetch_add(1, Ordering::Relaxed);
-        glog!("INF", "开始连接: {peer}");
         let shared = GateShared {
             sessions: Arc::clone(&sessions),
             downstream: downstream.clone(),
+            slots: Arc::clone(&slots),
         };
+        let ip = peer_ip(peer);
         tokio::spawn(async move {
-            if let Err(e) = client_loop(
-                sock,
-                sid,
-                peer.to_string(),
-                peer_ip(peer),
-                timeout_ms,
-                shared,
-            )
-            .await
-            {
+            if let Err(e) = client_loop(sock, sid, peer.to_string(), ip, timeout_ms, shared).await {
                 glog!("WRN", "客户端[{peer}]会话结束: {e:#}");
             }
         });
@@ -179,7 +185,7 @@ fn sel_gate_enter_body(socket_id: &str, ip: &str) -> Vec<u8> {
 #[allow(clippy::too_many_lines)] // 与 C# `ServerService` 的接入/收包/超时三段一一对应，拆开反而难对读
 async fn client_loop(
     sock: TcpStream,
-    sid: u16,
+    sid: u32,
     peer: String,
     ip: String,
     timeout_ms: u64,
@@ -188,6 +194,7 @@ async fn client_loop(
     let GateShared {
         sessions,
         downstream,
+        slots,
     } = shared;
     let (mut rd, mut wr) = sock.into_split();
 
@@ -225,25 +232,43 @@ async fn client_loop(
     // 超时帧与 DBSrv 下行共用同一条回写通道，保证超时帧先于任何后续写出。
     let timeout_tx = tx.clone();
 
+    // C# `ServerService.ServerSocketClientConnect:99-118` 的槽位选择。
+    //
+    // 重要 oracle 事实（见 `slots` 模块）：分配循环**从不写回 `SessionArray`**，运行期
+    // 数组恒为空 ⇒ 这里必然得到 `Fresh`（`Stale` 只在人工预填充的构造级用例里出现）。
+    // 陈旧槽分支仍按 oracle 照抄：`UserEnter` / `AddSession` 都用**陈旧槽**的
+    // `SocketId`/`ClientIP`，新连接自己的 id 不进会话表 ⇒ 它的帧静默丢弃。
+    let sid_text = sid.to_string();
+    let choice = slots
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .select(&sid_text, &ip);
+    let (session_id, slot_ip) = match choice {
+        SlotChoice::Fresh(info) | SlotChoice::Stale(info) => (info.socket_id, info.client_ip),
+    };
+    // 新连接自己的 id 是否被登记（`Fresh` 为真；`Stale` 时 oracle 只登记陈旧 id）。
+    let registered_as_own = session_id == sid_text;
+    // LogService.Info("开始连接: " + sRemoteAddress)（成功分支，GetIP() 不含端口）。
+    glog!("INF", "开始连接: {ip}");
+
     // 会话登记 + 通知 DBSrv "新会话接入"（C# `UserEnter`：`%K{SocketId}/{ClientIP}/{ClientIP}$`）
     sessions
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(
-            sid,
+            session_id.clone(),
             SessionEntry {
                 tx,
                 idle_eligible: true,
             },
         );
-    let sid_text = sid.to_string();
-    let body = sel_gate_enter_body(&sid_text, &ip);
+    let body = sel_gate_enter_body(&session_id, &slot_ip);
     // C# `accountPacket.DataLen = (short)body.Length`（unchecked 截断）。
     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     let data_len = body.len() as i16;
     let enter = ServerDataMessage {
         kind: ServerDataType::Enter,
-        socket_id: sid_text,
+        socket_id: session_id.clone(),
         data_len,
         data: body,
     };
@@ -289,10 +314,20 @@ async fn client_loop(
                         // 心跳：C# 侧收到 1 字节包直接忽略；这里同样不转发
                         SplitOut::Heartbeat => {}
                         SplitOut::Frame(frame) => {
-                            // C# `ServerServiceClientRead`：`!boGateReady` ⇒ 打「未就绪」并
-                            // 丢弃整帧（`HandleUserPacket` 不会被调用 ⇒ 空闲计时也不刷新）。
+                            // C# `ServerServiceClientRead:152-168`：
+                            // - `GetClientThread(id)` 走兜底；无就绪实例 ⇒「非法攻击」；
+                            // - 有实例但 `!boGateReady` ⇒「未就绪」；
+                            // - 已就绪但 `ProcessReviceMessage` 的 `GetSession(id)` 为 null
+                            //   （陈旧槽串号的新客户端）⇒ 静默丢弃。
                             if !downstream.is_ready() {
-                                glog!("INF", "未就绪: {ip}");
+                                if registered_as_own {
+                                    glog!("INF", "未就绪: {ip}");
+                                } else {
+                                    glog!("INF", "非法攻击: {ip}");
+                                }
+                                continue;
+                            }
+                            if !registered_as_own {
                                 continue;
                             }
                             // C# `HandleUserPacket`：解码成功且 `Ident` 是四个角色命令之一
@@ -305,7 +340,7 @@ async fn client_loop(
                             }
                             let msg = ServerDataMessage {
                                 kind: ServerDataType::Data,
-                                socket_id: sid.to_string(),
+                                socket_id: session_id.clone(),
                                 data_len: i16::try_from(frame.len()).unwrap_or(i16::MAX),
                                 data: frame,
                             };
@@ -333,7 +368,7 @@ async fn client_loop(
                 let idle_eligible = sessions
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .get(&sid)
+                    .get(&session_id)
                     .is_some_and(|entry| entry.idle_eligible);
                 if !idle_eligible {
                     continue;
@@ -345,10 +380,12 @@ async fn client_loop(
                         // SelGate 的 CloseSession 只摘会话（不关 socket）⇒ 这里同样只摘、不 break。
                         let _ = timeout_tx.send(idle_timeout::out_of_connection_frame());
                         glog!("INF", "Client Connect Time Out: {ip}");
+                        // C# `TimedService.ProcessDelayMsg:68-72`：
+                        // `_sessionManager.CloseSession(session.SocketId)`。
                         sessions
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .remove(&sid);
+                            .remove(&session_id);
                         timed_out = true;
                     }
                     // 线上不可达（第一阶段已摘会话）；保留以对齐 oracle 状态机。
@@ -363,14 +400,23 @@ async fn client_loop(
 
     // 会话离开（C# Leave 语义）。超时路径不发：oracle 的 `TimedService` 先摘会话，
     // 客户端真正断开时 `Disconnected` 处理器 `GetSession` 为 null ⇒ 不产生 `UserLeave`。
-    sessions
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&sid);
-    if !timed_out {
-        let leave = ServerDataMessage::new(ServerDataType::Leave, sid.to_string(), Vec::new());
-        // C# `UserLeave()` → `SendSocket()`：下行断开时同样静默丢弃。
-        downstream.send(leave);
+    //
+    // 槽位**故意不清**：`ServerSocketClientDisconnect:126-150` 只 `CloseSession`，
+    // 不碰 `SessionArray`；`RestSessionArray` 也不置 null（oracle 缺陷照抄）。
+    //
+    // 陈旧槽串号（oracle `ServerSocketClientDisconnect:131`）：`GetClientThread(新 id)`
+    // 兜底到就绪实例，但 `GetSession(新 id)` 为 null ⇒ 既不 `UserLeave`、也不摘陈旧会话。
+    if registered_as_own {
+        sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&session_id);
+        if !timed_out {
+            let leave =
+                ServerDataMessage::new(ServerDataType::Leave, session_id.clone(), Vec::new());
+            // C# `UserLeave()` → `SendSocket()`：下行断开时同样静默丢弃。
+            downstream.send(leave);
+        }
     }
     // 等回写任务把队列（含超时帧）写完再 drop 写半端：C# 是 Send 后 Close。
     drop(timeout_tx);
