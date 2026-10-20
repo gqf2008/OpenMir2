@@ -14,10 +14,13 @@ pedantic = "warn"
 
 [dependencies]
 mir2-protocol = { path = "../../crates/protocol" }
+# 编码统一入口（.NET cp936 逐字节等价）：`cp936::encode_gb2312_dotnet`。
+mir2-script = { path = "../../crates/script" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "signal", "time"] }
 anyhow = "1"
 # gb2312(cp936) 域名：C# `ConfigFile.cs:263` 用 `Encoding.GetEncoding("GB2312")` 读配置；
-# 现网 config.conf 可能含中文（Title 等），严格 UTF-8 会读失败。差异登记同 whitelist A-14。
+# 现网 config.conf 可能含中文（Title 等），严格 UTF-8 会读失败。**编码**走 `mir2-script` 的
+# `cp936::encode_gb2312_dotnet`；`encoding_rs` 只保留给**解码**近似（whitelist A-14）。
 encoding_rs = "0.8"
 
 [dev-dependencies]

@@ -50,10 +50,10 @@ fn write_lab(dir: &Path, gate_port: u16, srv_port: u16, dsn: &str) -> PathBuf {
     conf_path
 }
 
-/// GB2312 编码（测试侧只需 ASCII + “热血传奇”）。
+/// GB2312 编码（测试侧只需 ASCII + “热血传奇”）：与生产同一 `.NET cp936` 入口，
+/// 避免夹具与线上编码口径分叉。
 fn gbk(s: &str) -> Vec<u8> {
-    let (bytes, _, _) = encoding_rs::GBK.encode(s);
-    bytes.into_owned()
+    mir2_script::cp936::encode_gb2312_dotnet(s)
 }
 
 fn free_port() -> u16 {

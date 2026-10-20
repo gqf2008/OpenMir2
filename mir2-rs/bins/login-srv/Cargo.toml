@@ -16,10 +16,13 @@ pedantic = "warn"
 mir2-protocol = { path = "../../crates/protocol" }
 mir2-shared = { path = "../../crates/shared" }
 mir2-storage = { path = "../../crates/storage" }
+# 编码统一入口（.NET cp936 逐字节等价）：`cp936::encode_gb2312_dotnet`。
+mir2-script = { path = "../../crates/script" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "signal", "time"] }
 anyhow = "1"
-# gb2312(cp936) 域名：C# 用 Encoding.GetEncoding("gb2312") 读写账号/口令/服务名；
-# 本 crate 用 GBK 编解码器近似（差异见 tests/parity/whitelist.md 的 A-14）。
+# gb2312(cp936) 域名：C# 用 Encoding.GetEncoding("gb2312") 读写账号/口令/服务名。
+# **编码**走 `mir2-script` 的 `cp936::encode_gb2312_dotnet`（逐字节等价）；`encoding_rs`
+# 只保留给**解码**近似（差异见 tests/parity/whitelist.md 的 A-14）。
 encoding_rs = "0.8"
 
 [dev-dependencies]

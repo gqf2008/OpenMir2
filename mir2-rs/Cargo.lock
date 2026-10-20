@@ -355,6 +355,7 @@ dependencies = [
  "encoding_rs",
  "futures-util",
  "mir2-protocol",
+ "mir2-script",
  "mir2-storage",
  "serde_json",
  "sqlx",
@@ -634,6 +635,7 @@ dependencies = [
  "anyhow",
  "encoding_rs",
  "mir2-protocol",
+ "mir2-script",
  "tokio",
 ]
 
@@ -999,6 +1001,7 @@ dependencies = [
  "anyhow",
  "encoding_rs",
  "mir2-protocol",
+ "mir2-script",
  "tokio",
 ]
 
@@ -1009,6 +1012,7 @@ dependencies = [
  "anyhow",
  "encoding_rs",
  "mir2-protocol",
+ "mir2-script",
  "mir2-shared",
  "mir2-storage",
  "serde_json",
@@ -1500,6 +1504,7 @@ dependencies = [
  "anyhow",
  "encoding_rs",
  "mir2-protocol",
+ "mir2-script",
  "tokio",
 ]
 

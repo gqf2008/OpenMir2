@@ -175,17 +175,17 @@ pub fn fold_key(b: &[u8]) -> Vec<u8> {
     b.iter().map(u8::to_ascii_lowercase).collect()
 }
 
-/// 编码（对应 `HUtil32.GetBytes(str)`）：GB2312 ≈ `encoding_rs::GBK`。
+/// 编码（对应 `HUtil32.GetBytes(str)`）：**逐字节等于 .NET cp936**。
 ///
-/// 与 whitelist **A-14** 同一近似口径（PUA 少量字节对映射 / 非法字符回退字符不同；
-/// 现网角色名为常用 GBK 汉字，判定相同）。
+/// 走 `mir2_script::cp936::encode_gb2312_dotnet`（全 workspace 唯一编码实现）：
+/// 不可映射码点（含 99 个 WHATWG-only、代理码元）回退单个 `0x3F`，绝不输出 `&#N;`。
+/// 解码仍用 `encoding_rs::GBK` 近似（whitelist **A-14** 的差异只在解码侧）。
 ///
 /// **不查库**：oracle `DataService.cs:192` 的 `EDCode.EncodeString(chrName)` 走的是
 /// `HUtil32.GetBytes`，DB 停机时该帧的角色名依然必须是 GB2312 字节。
 #[must_use]
 pub fn encode(s: &str) -> Vec<u8> {
-    let (bytes, _, _) = encoding_rs::GBK.encode(s);
-    bytes.into_owned()
+    mir2_script::cp936::encode_gb2312_dotnet(s)
 }
 
 #[cfg(test)]
@@ -281,5 +281,75 @@ mod tests {
     fn encodes_gb2312_without_db() {
         assert_eq!(encode("测试"), vec![0xB2, 0xE2, 0xCA, 0xD4]);
         assert_eq!(encode("loadhero"), b"loadhero".to_vec());
+    }
+
+    /// 判据 E-1（WHATWG-only）：99 个 `.NET cp936` 不可映射、但 WHATWG GBK 有真实字节的
+    /// 码点必须回退单个 `0x3F`。牙：改回 `encoding_rs::GBK.encode` 时 `U+01F9` 编成
+    /// `A8 BF`、`U+2E81` 编成 `FE 50`，本断言必红。
+    #[test]
+    fn whatwg_only_codepoints_fall_back_to_question_mark() {
+        assert_eq!(encode("\u{01F9}"), vec![0x3F]);
+        assert_eq!(encode("\u{2E81}"), vec![0x3F]);
+        // 前后的合法字符不受影响（逐码元编码，不是整串替换）。
+        assert_eq!(encode("a\u{01F9}\u{8840}"), vec![b'a', 0x3F, 0xD1, 0xAA]);
+    }
+
+    /// 判据 E-1（非 BMP）：按 UTF-16 码元拆成两个代理码元，各回退一个 `0x3F`。
+    /// 牙：`encoding_rs::GBK.encode` 对 `U+1F600` 输出 `&#128512;`（9 字节），本断言必红。
+    #[test]
+    fn non_bmp_char_falls_back_to_two_question_marks() {
+        assert_eq!(encode("\u{1F600}"), vec![0x3F, 0x3F]);
+        assert_eq!(encode("a\u{1F600}b"), vec![b'a', 0x3F, 0x3F, b'b']);
+    }
+
+    /// 判据 E-1（合法 GBK 逐字节不变）：现网名字域的常用汉字与 ASCII 必须与
+    /// C# `HUtil32.GetBytes` 同字节；best-fit 项（`U+00A6 -> 0x7C`）同 .NET 表。
+    #[test]
+    fn legal_gbk_bytes_unchanged() {
+        assert_eq!(encode("测试"), vec![0xB2, 0xE2, 0xCA, 0xD4]);
+        assert_eq!(
+            encode("热血传奇"),
+            vec![0xC8, 0xC8, 0xD1, 0xAA, 0xB4, 0xAB, 0xC6, 0xE6]
+        );
+        assert_eq!(encode("loadhero/1234"), b"loadhero/1234".to_vec());
+        assert_eq!(encode("\u{00A6}"), vec![0x7C]);
+    }
+
+    /// 判据 E-1（非法输入）：孤立代理在 .NET 下回退 `0x3F`；Rust `&str` 不能承载孤立
+    /// 代理，等价输入是 UTF-16 lossy 后的 `U+FFFD`。同时断言绝不输出 `&#N;`。
+    #[test]
+    fn invalid_or_unmappable_input_falls_back_to_single_question_mark() {
+        let lone_surrogate = String::from_utf16_lossy(&[0xD800]);
+        assert_eq!(encode(&lone_surrogate), vec![0x3F]);
+        assert_eq!(encode("\u{FFFD}"), vec![0x3F]);
+        let emoji = encode("\u{1F600}");
+        assert_eq!(emoji, vec![0x3F, 0x3F], "每个代理码元各回退一个 `?`");
+        assert!(
+            !emoji.windows(2).any(|w| w[0] == b'&' && w[1] == b'#'),
+            "绝不能输出数字字符引用"
+        );
+    }
+
+    /// 判据 E-1（db-srv 6000 面）：合法名字的 GBK 字节经 `EDCode` 后必须与 oracle
+    /// `EDCode.EncodeString(name)` 逐字节相同（`DataService.cs:192` 的 1100 取档帧字段）。
+    /// 牙：若编码回退 UTF-8（旧实现）或回退 `encoding_rs`，EDCode 串都会变。
+    #[test]
+    fn name_and_6000_frame_bytes_unchanged() {
+        let gbk = encode("测试");
+        assert_eq!(
+            gbk,
+            vec![0xB2, 0xE2, 0xCA, 0xD4],
+            "oracle `HUtil32.GetBytes(\"测试\")`"
+        );
+        assert_eq!(
+            mir2_protocol::edcode::encode(&gbk),
+            b"BNb[X>".to_vec(),
+            "1100 取档帧 ChrName = EDCode(GBK(name))"
+        );
+        // 反向牙：UTF-8 字节的 EDCode 与 oracle 不同。
+        assert_ne!(
+            mir2_protocol::edcode::encode("测试".as_bytes()),
+            mir2_protocol::edcode::encode(&gbk)
+        );
     }
 }
