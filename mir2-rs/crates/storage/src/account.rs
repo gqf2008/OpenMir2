@@ -57,6 +57,20 @@ pub struct AccountRecord {
     pub user_name: String,
     /// `account_protection.Quiz2`。
     pub quiz2: String,
+    /// `UserEntry.SSNo` → `account_protection.IdCard`。
+    pub id_card: String,
+    /// `UserEntryAdd.BirthDay` → `account_protection.Birthday`（INSERT 时也写进 Phone/MobilePhone）。
+    pub birthday: String,
+    /// `UserEntry.EMail` → `account_protection.EMail`。
+    pub email: String,
+    /// `UserEntry.Quiz` → `account_protection.Quiz1`。
+    pub quiz: String,
+    /// `UserEntry.Answer` → `account_protection.Answer1`。
+    pub answer: String,
+    /// `UserEntryAdd.MobilePhone` → `account_protection.MobilePhone`（UPDATE 时也写进 Phone）。
+    pub mobile_phone: String,
+    /// `UserEntryAdd.Answer2` → `account_protection.Answer2`。
+    pub answer2: String,
 }
 
 /// 账号存储（对应 C# `AccountStorage`）。
@@ -113,6 +127,61 @@ fn str_col(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<String, StorageErr
 /// 内存表键：C# 用 OrdinalIgnoreCase（ASCII 域内等价于 ASCII 小写；非 ASCII 差异见 whitelist B-103 同族）。
 fn key(account: &str) -> String {
     account.to_ascii_lowercase()
+}
+
+/// `account_protection` 创建语句（C# `AccountStorage.cs:295-310`，`@Param` 换成 `?`）。
+///
+/// 列顺序与 oracle 完全一致；13 列全填，未提供的列写空串。
+pub(crate) const PROTECTION_INSERT_SQL: &str = "INSERT INTO account_protection (AccountId, UserName, IdCard, Birthday, Phone, MobilePhone, ADDRESS1, ADDRESS2, EMail, Quiz1, Answer1, Quiz2, Answer2) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+/// `account_protection` 更新语句（C# `AccountStorage.cs:498-513`，`@Param` 换成 `?`）。
+///
+/// 12 列 SET + `WHERE AccountId = ?`（AccountId 本身不在 SET 里）。
+pub(crate) const PROTECTION_UPDATE_SQL: &str = "UPDATE account_protection SET UserName = ?, IdCard = ?, Birthday = ?, Phone = ?, MobilePhone = ?, ADDRESS1 = ?, ADDRESS2 = ?, EMail = ?, Quiz1 = ?, Answer1 = ?, Quiz2 = ?, Answer2 = ? WHERE AccountId = ?";
+
+/// `Add` 对 `account_protection` 各列的取值，逐列照抄 C#（含刻意保留的怪行为）。
+///
+/// C# 原文：`@Phone = UserEntryAdd.BirthDay`、`@MobilePhone = UserEntryAdd.BirthDay`
+/// ⇒ **Phone 与 MobilePhone 都取生日**（不是 `UserEntry.Phone`/`MobilePhone`）；
+/// `ADDRESS1/ADDRESS2` 恒为空串。
+#[must_use]
+pub(crate) fn protection_insert_values(rec: &AccountRecord) -> [String; 12] {
+    [
+        rec.user_name.clone(),
+        rec.id_card.clone(),
+        rec.birthday.clone(),
+        rec.birthday.clone(),
+        rec.birthday.clone(),
+        String::new(),
+        String::new(),
+        rec.email.clone(),
+        rec.quiz.clone(),
+        rec.answer.clone(),
+        rec.quiz2.clone(),
+        rec.answer2.clone(),
+    ]
+}
+
+/// `UpdateAccount` 对 `account_protection` 各列的取值。
+///
+/// C# 原文：`@Phone = UserEntryAdd.MobilePhone`、`@MobilePhone = UserEntryAdd.MobilePhone`
+/// ⇒ **Phone 与 MobilePhone 都取手机号**（与 INSERT 的 `BirthDay` 口径**不同**，照抄）。
+#[must_use]
+pub(crate) fn protection_update_values(rec: &AccountRecord) -> [String; 12] {
+    [
+        rec.user_name.clone(),
+        rec.id_card.clone(),
+        rec.birthday.clone(),
+        rec.mobile_phone.clone(),
+        rec.mobile_phone.clone(),
+        String::new(),
+        String::new(),
+        rec.email.clone(),
+        rec.quiz.clone(),
+        rec.answer.clone(),
+        rec.quiz2.clone(),
+        rec.answer2.clone(),
+    ]
 }
 
 impl AccountStore {
@@ -211,6 +280,15 @@ impl AccountStore {
             password: str_col(&r, "PassWord")?,
             user_name: str_col(&r, "UserName")?,
             quiz2: str_col(&r, "Quiz2")?,
+            // C# `GetAccount` 只读 UserName/Quiz2 两列；其余 protection 列在记录里保持空串
+            // （.NET 未赋值字段为 null，写回时按空串口径）—— 改资料路径会用封包整组覆盖。
+            id_card: String::new(),
+            birthday: String::new(),
+            email: String::new(),
+            quiz: String::new(),
+            answer: String::new(),
+            mobile_phone: String::new(),
+            answer2: String::new(),
         }))
     }
 
@@ -246,16 +324,24 @@ impl AccountStore {
                 return Err(StorageError::Backend(format!("创建账号失败：{e}")));
             }
         };
-        // protection 行：C# 把 Phone/MobilePhone/Birthday 都写成 BirthDay，ADDRESS1/2 写空串
-        let res2 = sqlx::query(
-            "INSERT INTO account_protection (AccountId, UserName, IdCard, Birthday, Phone, MobilePhone, ADDRESS1, ADDRESS2, EMail, Quiz1, Answer1, Quiz2, Answer2) \
-             VALUES (?, ?, '', '', '', '', '', '', '', '', '', ?, '')",
-        )
-        .bind(new_id)
-        .bind(&rec.user_name)
-        .bind(&rec.quiz2)
-        .execute(&mut *tx)
-        .await;
+        // protection 行：13 列全填，取值口径见 `protection_insert_values`（含 Phone=BirthDay 的怪行为）
+        let v = protection_insert_values(rec);
+        let res2 = sqlx::query(PROTECTION_INSERT_SQL)
+            .bind(new_id)
+            .bind(&v[0])
+            .bind(&v[1])
+            .bind(&v[2])
+            .bind(&v[3])
+            .bind(&v[4])
+            .bind(&v[5])
+            .bind(&v[6])
+            .bind(&v[7])
+            .bind(&v[8])
+            .bind(&v[9])
+            .bind(&v[10])
+            .bind(&v[11])
+            .execute(&mut *tx)
+            .await;
         if let Err(e) = res2 {
             let _ = tx.rollback().await;
             return Err(StorageError::Backend(format!("创建账号资料失败：{e}")));
@@ -361,14 +447,24 @@ impl AccountStore {
             let _ = tx.rollback().await;
             return Err(StorageError::Backend(format!("更新账号失败：{e}")));
         }
-        let r2 = sqlx::query(
-            "UPDATE account_protection SET UserName = ?, Quiz2 = ? WHERE AccountId = ?",
-        )
-        .bind(&rec.user_name)
-        .bind(&rec.quiz2)
-        .bind(id)
-        .execute(&mut *tx)
-        .await;
+        // protection 行：12 列 SET + WHERE AccountId，取值口径见 `protection_update_values`
+        let v = protection_update_values(rec);
+        let r2 = sqlx::query(PROTECTION_UPDATE_SQL)
+            .bind(&v[0])
+            .bind(&v[1])
+            .bind(&v[2])
+            .bind(&v[3])
+            .bind(&v[4])
+            .bind(&v[5])
+            .bind(&v[6])
+            .bind(&v[7])
+            .bind(&v[8])
+            .bind(&v[9])
+            .bind(&v[10])
+            .bind(&v[11])
+            .bind(id)
+            .execute(&mut *tx)
+            .await;
         if let Err(e) = r2 {
             let _ = tx.rollback().await;
             return Err(StorageError::Backend(format!("更新账号资料失败：{e}")));
@@ -429,5 +525,229 @@ impl AccountStore {
             .await
             .map_err(|e| StorageError::Backend(format!("更新账号[{account}]游戏时间失败：{e}")))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn oracle_rec() -> AccountRecord {
+        AccountRecord {
+            account: "acct".into(),
+            password: "pwd".into(),
+            user_name: "uname".into(),
+            quiz2: "q2".into(),
+            id_card: "idcard".into(),
+            birthday: "1980-01-02".into(),
+            email: "e@x".into(),
+            quiz: "q1".into(),
+            answer: "a1".into(),
+            mobile_phone: "13800000000".into(),
+            answer2: "a2".into(),
+            ..AccountRecord::default()
+        }
+    }
+
+    /// INSERT 的列清单（oracle `AccountStorage.cs:295-310`，13 列按原顺序）。
+    fn insert_columns() -> Vec<String> {
+        let open = PROTECTION_INSERT_SQL.find('(').expect("INSERT 应有列清单");
+        let close = PROTECTION_INSERT_SQL
+            .find(')')
+            .expect("INSERT 列清单应闭合");
+        PROTECTION_INSERT_SQL[open + 1..close]
+            .split(',')
+            .map(|c| c.trim().to_string())
+            .collect()
+    }
+
+    /// UPDATE 的 SET 列清单（oracle `AccountStorage.cs:498-513`，12 列按原顺序）。
+    fn update_columns() -> Vec<String> {
+        let set = PROTECTION_UPDATE_SQL
+            .find(" SET ")
+            .expect("UPDATE 应有 SET")
+            + 5;
+        let end = PROTECTION_UPDATE_SQL
+            .find(" WHERE ")
+            .expect("UPDATE 应有 WHERE");
+        PROTECTION_UPDATE_SQL[set..end]
+            .split(',')
+            .map(|c| c.split('=').next().unwrap_or("").trim().to_string())
+            .collect()
+    }
+
+    /// 判据 1：INSERT 13 列与 oracle 逐列同序（少一列/换序/拼错即红）。
+    #[test]
+    fn insert_sql_has_oracle_13_columns() {
+        assert_eq!(
+            insert_columns(),
+            vec![
+                "AccountId",
+                "UserName",
+                "IdCard",
+                "Birthday",
+                "Phone",
+                "MobilePhone",
+                "ADDRESS1",
+                "ADDRESS2",
+                "EMail",
+                "Quiz1",
+                "Answer1",
+                "Quiz2",
+                "Answer2",
+            ]
+        );
+        assert_eq!(PROTECTION_INSERT_SQL.matches('?').count(), 13);
+        assert!(PROTECTION_INSERT_SQL.contains("VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+    }
+
+    /// 判据 2：UPDATE 12 列 SET + `WHERE AccountId = ?`（不能漏列，AccountId 不能进 SET）。
+    #[test]
+    fn update_sql_has_oracle_12_columns_and_where() {
+        assert_eq!(
+            update_columns(),
+            vec![
+                "UserName",
+                "IdCard",
+                "Birthday",
+                "Phone",
+                "MobilePhone",
+                "ADDRESS1",
+                "ADDRESS2",
+                "EMail",
+                "Quiz1",
+                "Answer1",
+                "Quiz2",
+                "Answer2",
+            ]
+        );
+        assert_eq!(PROTECTION_UPDATE_SQL.matches('?').count(), 13);
+        assert!(PROTECTION_UPDATE_SQL.ends_with(" WHERE AccountId = ?"));
+        assert!(!update_columns().iter().any(|c| c == "AccountId"));
+    }
+
+    /// 判据 3：INSERT 取值逐列照抄 oracle —— Phone/MobilePhone 都取 **BirthDay**，ADDRESS1/2 空串。
+    #[test]
+    fn insert_values_match_oracle_quirks() {
+        assert_eq!(
+            protection_insert_values(&oracle_rec()),
+            [
+                "uname",
+                "idcard",
+                "1980-01-02",
+                "1980-01-02",
+                "1980-01-02",
+                "",
+                "",
+                "e@x",
+                "q1",
+                "a1",
+                "q2",
+                "a2"
+            ]
+        );
+        // 生产路径必须绑定这些值：改回 hardcode 空串时该断言红
+        let v = protection_insert_values(&oracle_rec());
+        assert_eq!(v.len(), 12);
+        assert_eq!(v[3], v[2], "oracle: @Phone = UserEntryAdd.BirthDay");
+        assert_eq!(v[4], v[2], "oracle: @MobilePhone = UserEntryAdd.BirthDay");
+    }
+
+    /// 判据 4：UPDATE 取值逐列照抄 oracle —— Phone/MobilePhone 都取 **MobilePhone**（与 INSERT 不同口径）。
+    #[test]
+    fn update_values_match_oracle_quirks() {
+        assert_eq!(
+            protection_update_values(&oracle_rec()),
+            [
+                "uname",
+                "idcard",
+                "1980-01-02",
+                "13800000000",
+                "13800000000",
+                "",
+                "",
+                "e@x",
+                "q1",
+                "a1",
+                "q2",
+                "a2"
+            ]
+        );
+        let v = protection_update_values(&oracle_rec());
+        assert_eq!(
+            v[3], v[4],
+            "oracle: @Phone = @MobilePhone = UserEntryAdd.MobilePhone"
+        );
+        assert_ne!(v[3], v[2], "UPDATE 的 Phone 不是生日（与 INSERT 口径不同）");
+    }
+
+    /// 判据 5：未提供字段的 oracle 默认是**空串**（不是 NULL，也不是跳过列）。
+    #[test]
+    fn default_record_yields_empty_strings_not_nulls() {
+        let rec = AccountRecord::default();
+        for v in protection_insert_values(&rec)
+            .iter()
+            .chain(protection_update_values(&rec).iter())
+        {
+            assert_eq!(v, "");
+        }
+    }
+
+    /// 判据 6（失败路径）：连不上库时 `add` 必须报错（C# 侧回滚并返回 0）。
+    #[tokio::test]
+    async fn add_failure_path_rolls_back_and_reports() {
+        let mut store = lazy_store();
+        // 连接失败在事务开启处即中止（C# 侧 `catch → Rollback → return 0`），绝不能返回 Ok(true)
+        let err = store
+            .add(&oracle_rec())
+            .await
+            .expect_err("连不上库必须报错");
+        assert!(matches!(err, StorageError::Backend(_)), "{err}");
+    }
+
+    /// 判据 6b（失败路径）：`update_account` 连不上库必须报错，不得静默成功。
+    #[tokio::test]
+    async fn update_account_failure_path_reports() {
+        let store = lazy_store();
+        let err = store
+            .update_account(7, &oracle_rec())
+            .await
+            .expect_err("连不上库必须报错");
+        assert!(matches!(err, StorageError::Backend(_)), "{err}");
+    }
+
+    /// 判据 7：重复建号在**不碰库**的前提下返回 false（`Index(s) > 0` 早退）。
+    #[tokio::test]
+    async fn add_existing_account_short_circuits_before_db() {
+        let mut store = lazy_store();
+        store.map.insert(
+            key("acct"),
+            AccountQuick {
+                account: "acct".into(),
+                index: 7,
+            },
+        );
+        assert!(!store.add(&oracle_rec()).await.unwrap());
+    }
+
+    /// 判据 7b：`Update` 的越界判定 `map.len() <= Id` 静默跳过（不碰库）。
+    #[tokio::test]
+    async fn update_out_of_range_skips_write() {
+        let store = lazy_store();
+        assert!(!store.update(0, &oracle_rec()).await.unwrap());
+    }
+
+    /// 惰性连接池：构造时**不连接**，使用时才尝试（127.0.0.1:1 必被拒），
+    /// 只用于「失败路径/早退路径」单测，不占端口、不写库。
+    fn lazy_store() -> AccountStore {
+        let pool = MySqlPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(300))
+            .connect_lazy("mysql://root@127.0.0.1:1/mir2test")
+            .expect("connect_lazy 不做实际连接");
+        AccountStore {
+            pool,
+            map: HashMap::new(),
+        }
     }
 }
