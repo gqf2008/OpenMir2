@@ -12,6 +12,15 @@
 //! - 客户端文件名：`ServerConf.cs:116-118`（`[Setup] ClientFile1..3`，默认 `GameSvrConf.cs:1298-1300`）；
 //! - `BonusAbilof*`/`NakedAbilof*`：`ServerConf.cs:165-224`（`[Setup] BonusAbilof{Warr,Wizard,Taos}{DC,MC,SC,AC,MAC,HP,MP,Hit,Speed,X2}`
 //!   与 `NakedAbilof*`，`*X2` → `Reserved`；默认值 `GameSvrConf.cs:1413-1418`）；
+//! - **出生点 / 安全区（loaders 车道补的字段完整性）**：`ServerConf.cs:133-141` 的
+//!   `[Setup] HomeMap/HomeX/HomeY`（`GameSvrConf.cs:1374-1376` 初值 `0/289/618`）、
+//!   `RedHomeMap/RedHomeX/RedHomeY`（`:1377-1379`，`3/845/674`）、
+//!   `RedDieHomeMap/RedDieHomeX/RedDieHomeY`（`:1380-1382`，`3/839/668`）、
+//!   `SafeZoneSize`（`:1399`，`10`）、`StartPointSize`（`:1400`，`2`）—— 消费者分别是
+//!   `WorldServer.cs:1411-1426`（`GetHomeInfo` 的 `Random(StartPointSize)`）、
+//!   `WorldServer.cs:345-347`（红名死亡落点）、`BaseObject.cs:1786-1837`（`InSafeZone`）。
+//!   **登记不读**：`JobHomePoint`（键 `JobHomePointSystem`）与 `Warrior/Wizard/TaoistHome*`
+//!   九键 —— oracle 全树**零消费者**（只声明 + 赋值），补进来只会造第二真源。
 //! - `ClientConf`：`GameSvrConf.cs:1104`（声明）+ `:1866-1878`（初值）；
 //!   `ServerConf.LoadConfig` **没有**读它的任何键 ⇒ 现网恒为初值；
 //! - 序列化：`src/OpenMir2/SerializerUtil.cs:10-13`（MemoryPack/Utf16）+ `EDcode.cs:211-226`
@@ -91,6 +100,33 @@ pub struct GameSvrConf {
     /// **PL-3 / P26**：`[Setup] HungerDecPower`（`GameSvrConf.cs:503/1507`，缺省 `false`；
     /// `ServerConf.cs:284`）——**死键**：oracle 全树无消费者，本项只为配置面完整。
     pub hunger_dec_power: bool,
+    /// 出生点地图（`ServerConf.cs:133` `ReadWriteString("Setup", "HomeMap", …)`；
+    /// `GameSvrConf.cs:1374` 初值 `"0"`）。`StartPointList` 为空时 `GetHomeInfo` 的回落
+    /// （`WorldServer.cs:1424-1426`）。
+    pub home_map: String,
+    /// `ServerConf.cs:134` `ReadWriteInt16`；初值 `289`（`WorldServer.cs:393/1425`）。
+    pub home_x: i16,
+    /// `ServerConf.cs:135` `ReadWriteInt16`；初值 `618`（`WorldServer.cs:394/1426`）。
+    pub home_y: i16,
+    /// 红名回城图（`ServerConf.cs:136`；初值 `"3"`）。`InSafeZone` 的红名安全区判定
+    /// （`BaseObject.cs:1786/1821`）。
+    pub red_home_map: String,
+    /// `ServerConf.cs:137` `ReadWriteInt16`；初值 `845`（`BaseObject.cs:1787`）。
+    pub red_home_x: i16,
+    /// `ServerConf.cs:138` `ReadWriteInt16`；初值 `674`。
+    pub red_home_y: i16,
+    /// 红名死亡落点图（`ServerConf.cs:139`；初值 `"3"`，`WorldServer.cs:345`）。
+    pub red_die_home_map: String,
+    /// `ServerConf.cs:140` `ReadWriteInt16`；初值 `839`（`Random(13)` 的基值，`WorldServer.cs:346`）。
+    pub red_die_home_x: i16,
+    /// `ServerConf.cs:141` `ReadWriteInt16`；初值 `668`（`WorldServer.cs:347`）。
+    pub red_die_home_y: i16,
+    /// 安全区半径（`ServerConf.cs:160` `ReadWriteByte("Setup", "SafeZoneSize", …)`；
+    /// `GameSvrConf.cs:1399` 初值 `10`）——`InSafeZone` 的 `abs` 判定（`BaseObject.cs:1794/1837`）。
+    pub safe_zone_size: u8,
+    /// 出生点抽样条数（`ServerConf.cs:161` `ReadWriteByte`；`GameSvrConf.cs:1400` 初值 `2`）——
+    /// `GetHomeInfo` 的 `Random(StartPointSize)`（`WorldServer.cs:1411-1413`）。
+    pub start_point_size: u8,
 }
 
 /// `src/OpenMir2/Packets/ClientPackets/ClientConf.cs:6-24`（17 个 `bool`，声明序即序列化序）。
@@ -262,6 +298,19 @@ impl GameSvrConf {
             hunger_system: ini.read_bool("Setup", "HungerSystem", false),
             hunger_dec_hp: ini.read_bool("Setup", "HungerDecHP", false),
             hunger_dec_power: ini.read_bool("Setup", "HungerDecPower", false),
+            // `ServerConf.cs:133-141`：`ReadWriteString` / `ReadWriteInt16` 读侧。
+            home_map: ini.read_string("Setup", "HomeMap", "0").to_string(),
+            home_x: read_i16(ini, "Setup", "HomeX", 289),
+            home_y: read_i16(ini, "Setup", "HomeY", 618),
+            red_home_map: ini.read_string("Setup", "RedHomeMap", "3").to_string(),
+            red_home_x: read_i16(ini, "Setup", "RedHomeX", 845),
+            red_home_y: read_i16(ini, "Setup", "RedHomeY", 674),
+            red_die_home_map: ini.read_string("Setup", "RedDieHomeMap", "3").to_string(),
+            red_die_home_x: read_i16(ini, "Setup", "RedDieHomeX", 839),
+            red_die_home_y: read_i16(ini, "Setup", "RedDieHomeY", 668),
+            // `ServerConf.cs:160-161`：`ReadWriteByte`（截断口径与 `read_u8` 同）。
+            safe_zone_size: read_u8(ini, "Setup", "SafeZoneSize", 10),
+            start_point_size: read_u8(ini, "Setup", "StartPointSize", 2),
         }
     }
 
@@ -300,6 +349,15 @@ fn read_u16(ini: &IniFile, section: &str, key: &str, def: u16) -> u16 {
 
 fn read_u8(ini: &IniFile, section: &str, key: &str, def: u8) -> u8 {
     ini.read_integer(section, key, i32::from(def)) as u8
+}
+
+/// `ConfigFile.ReadWriteInt16` 的读侧（`Read<short>` + `Convert.ChangeType`）。
+///
+/// 口径与 [`read_u8`] / `crates::data::party` 一致：**越界按 `as i16` 截断**
+/// （oracle `Convert.ChangeType` 对 `|v| > 32767` 抛 `OverflowException`；部署件
+/// `HomeX/RedHomeX/RedDieHomeX` 均在范围内 ⇒ 该分支不可达，登记）。
+fn read_i16(ini: &IniFile, section: &str, key: &str, def: i16) -> i16 {
+    ini.read_integer(section, key, i32::from(def)) as i16
 }
 
 fn bonus_defaults() -> (NakedAbility, NakedAbility, NakedAbility) {
@@ -538,5 +596,71 @@ HungerSystem=0
         assert!(!e.hunger_system);
         assert!(!e.hunger_dec_hp);
         assert!(!e.hunger_dec_power);
+    }
+
+    /// **判据 CF-1（出生点/安全区 11 键，缺键 => GameSvrConf 初值）**：
+    /// `ServerConf.cs:133-141/160-161`；初值 `GameSvrConf.cs:1374-1400`。
+    ///
+    /// 牙：删掉 `from_ini` 里任一对应行（字段恒 `Default`）⇒ 本测必红（默认值不是 0/空）。
+    #[test]
+    fn home_and_safe_zone_keys_default_to_game_svr_conf() {
+        let c = GameSvrConf::from_bytes(
+            b"[Server]
+GatePort=5000
+",
+        );
+        assert_eq!(c.home_map, "0");
+        assert_eq!(c.home_x, 289);
+        assert_eq!(c.home_y, 618);
+        assert_eq!(c.red_home_map, "3");
+        assert_eq!(c.red_home_x, 845);
+        assert_eq!(c.red_home_y, 674);
+        assert_eq!(c.red_die_home_map, "3");
+        assert_eq!(c.red_die_home_x, 839);
+        assert_eq!(c.red_die_home_y, 668);
+        assert_eq!(c.safe_zone_size, 10);
+        assert_eq!(c.start_point_size, 2);
+    }
+
+    /// **判据 CF-2（出生点/安全区 11 键，文件值覆盖初值）**。
+    ///
+    /// 牙：把 `read_i16` 改成恒返回 `def`（或漏掉某一行）⇒ 对应用例必红。
+    #[test]
+    fn home_and_safe_zone_keys_read_from_file() {
+        let c = GameSvrConf::from_bytes(
+            b"[Setup]
+HomeMap=3
+HomeX=839
+HomeY=668
+RedHomeMap=D701
+RedHomeX=5
+RedHomeY=6
+RedDieHomeMap=0150
+RedDieHomeX=7
+RedDieHomeY=8
+SafeZoneSize=3
+StartPointSize=5
+",
+        );
+        assert_eq!(c.home_map, "3");
+        assert_eq!(c.home_x, 839);
+        assert_eq!(c.home_y, 668);
+        assert_eq!(c.red_home_map, "D701");
+        assert_eq!(c.red_home_x, 5);
+        assert_eq!(c.red_home_y, 6);
+        assert_eq!(c.red_die_home_map, "0150");
+        assert_eq!(c.red_die_home_x, 7);
+        assert_eq!(c.red_die_home_y, 8);
+        assert_eq!(c.safe_zone_size, 3);
+        assert_eq!(c.start_point_size, 5);
+        // 空值 ⇒ 初值（`ReadWrite*` 的 `string.IsNullOrEmpty` 分支）。
+        let d = GameSvrConf::from_bytes(
+            b"[Setup]
+HomeX=
+SafeZoneSize=
+",
+        );
+        assert_eq!(d.home_x, 289);
+        assert_eq!(d.safe_zone_size, 10);
     }
 }
