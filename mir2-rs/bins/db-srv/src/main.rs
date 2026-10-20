@@ -26,6 +26,8 @@ mod data;
 mod db;
 mod gbk;
 mod handler;
+#[cfg(test)]
+mod lb08_tests;
 mod log;
 mod loginsrv;
 mod market;
