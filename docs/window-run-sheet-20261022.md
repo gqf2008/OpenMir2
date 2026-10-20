@@ -7,6 +7,9 @@
 > `-Db*`、`check_timing.py` 预设、`s2c_diff.py` 选帧过滤）按**实际参数**写进对应节；
 > ③ D 节按 2 小时块重排：G1/G2a 这类可全机判的组前移，依赖 E1 的 G5a 后移。
 >
+> **v3.1 行号订正（2026-10-20，复验 low/info，tier=L）**：按基线 `c83a9ae24` 工作树逐条 `grep -n`/`sed -n` 实测，
+> 订正 5 处行号引用漂移（§A4 ×2、§B9、§C7、§C9）与 §C5 的 1 处 off-by-one。**行号以 `c83a9ae24` 工作树实测为准**。
+>
 > **v3 核对发现并已改正的旧写法**（一律不采信旧文档）：
 > - `s2c_diff.py --selftest` 现为 **9 条**（v2.5 写 8 条）；
 > - `run_bag_equip_pair.ps1` **没有 `-Go`**；v2.5 §B8 的 `-Side ... -Go` 会直接参数错误；
@@ -49,6 +52,9 @@
 | C# 参照栈 | 主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2` 的 `src/DBSrv/bin/Release`、`src/LoginSrv/bin/Release`；部署件 `E:/MirServer`（`M2GameSvr/!deployed-from.json.git_head=8a621f6a`，2026-10-20 00:19 部署） |
 | 本文件固定工作目录 | `E:/tmp/window/20261022-a`（下文所有 `<WIN>` 均指它；命令里直接写全路径） |
 | 判据脚本目录 | `E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013`（下文 `<CHK>` 均指它） |
+
+**核对口径（行号）**：本文件所有 `文件:行号` / `文件:起-止` 引用，均以基线 `c83a9ae24` 的**工作树**为准，
+逐条用 `grep -n` / `sed -n` 实测；换基线后必须重测，不沿用旧文档行号。
 
 ### 0.2 当前机器实况（2026-10-20 只读快照；开窗当天必须重跑）
 
@@ -322,9 +328,9 @@ Get-Process -Id $gsvr.Id -ErrorAction SilentlyContinue   # 期望：无输出（
   它只用于 GameSvr 已经优雅退出后的网关/DBSrv/LoginSrv 清理。GameSvr 退出后**至少等 3 秒**再清理，
   让最后一次 DBSrv 存档应答/日志落完（否则会把「没等到回执」误判成「没落库」）。
 - **MySQL**：`start_rust_stack.ps1` / `start_full_rust_stack.ps1` 只在 3306 **原本 DOWN** 时才启动 MySQL；
-  **条件结论（不是一般结论）**：3306 开工前已 UP ⇒ 起栈器不登记 MySQL（`start_rust_stack.ps1:374-377`），
+  **条件结论（不是一般结论）**：3306 开工前已 UP ⇒ 起栈器不登记 MySQL（`start_rust_stack.ps1:476-479`），
   `-Stop` 不会杀它；**若中途由起栈器拉起过 MySQL**（3306 原本 DOWN），则**禁用 `start_rust_stack.ps1 -Stop`**
-  （它会按 `:193-215` 对登记项 `Stop-Process -Force`，包括 MySQL），改用 `start_full_rust_stack.ps1 -Stop`
+  （它会按 `:208-222`（`if ($Stop)`）对登记项 `Stop-Process -Force`（`:221`），包括 MySQL），改用 `start_full_rust_stack.ps1 -Stop`
   （其 MySQL 条目跳过不杀）或按 §E3 授权手工停。**不要**用 `start-all -Stop`。
 - **D-12 的预期不是既定的**：M1 证据（`mir2-rs/tests/parity/evidence/M1/s4b-slice5-exitpaths/README.md` §6，`M1-EXIT-2`）
   记录该 shutdown 场景两侧**都没有落库**。所以 G5a 的判据是「**玩家在世界中**时 oracle 是否真落库」，
@@ -621,7 +627,7 @@ UPDATE mir2_test_db.characters_ablity a JOIN mir2_test_db.characters c ON a.Play
 
 ### B9. 入图序判据必须用 `--expect-enter-seq`（G2 的 621/211 场景）
 
-**改正**（评审 B9）：`check_client_s2c_frames.py:28` 的默认 15 帧不含 621/211；有装备/技能时必红。现已支持：
+**改正**（评审 B9）：`check_client_s2c_frames.py:39` 的默认 15 帧不含 621/211；有装备/技能时必红。现已支持：
 
 ```bash
 # G1（无装备/无技能）
@@ -865,7 +871,7 @@ powershell -File E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/chec
      但 E1-a 的字段级 diff 仍被 ② 挡住，所以结论不变：E1-a 只做行数/关键值断言；
   ② 即使手动跑 §A5-T（v3 起可一条 `--db test`），`dbsnap` manifest 里的表名是 `mir2_test_db.*`，而 `scoped_diff.py` 的
      `TABLE_COLUMNS`（`:47-106`）只登记 `mir2_db.*`/`mir2_account.*`，`extract` 对未登记表
-     `sys.exit(4)`（`:294-299`）。
+     `sys.exit(4)`（`:295-299`）。
   ⇒ E1-a 下**不做**字段级 diff，改做行数/关键值断言（`COUNT(*)` + 登录/关服前后 `SELECT`）；
      softclose/disconnect/shutdown 三条路径全部标**部分收**；`save-on-shutdown` 仅 E1-b 全收。
   E1-a 快照示例（`-Table`/`-AllowDb` 逐项透传给 `dbsnap snap`）：
@@ -911,7 +917,7 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 
 - **工具口径（v3 复核）**：`s2c_diff.py --selftest` 9 条全绿；whitelist 每条必须带 `reason`+`reviewer`。
 - **期望**：三条 `WHITELISTED ident=52 field=body_len|body_sha256|raw_hex ...`；末行 `GREEN`。
-  只登记 `body_len`/`raw_hex` 不够：`s2c_diff.py:213` 的字段元组含 `body_sha256`，D-9 下它必不同 ⇒ 仍 RED。
+  只登记 `body_len`/`raw_hex` 不够：`s2c_diff.py:284` 的字段元组含 `body_sha256`，D-9 下它必不同 ⇒ 仍 RED。
 - **失败判据**：whitelist 条目缺 `reason/reviewer` ⇒ 工具直接红；未登记的差异 ⇒ `RED`。
 - **注意**：`--golden` 必须是**同 DB 状态**的 C# 实时 capture，不要用 2026-10-10 的静态金标准（会带 A-9 假红）。
 
@@ -969,7 +975,7 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 - `mir2_proxy.py` 的 `--map` 可以映射任意端口，但**没有**可起的 6000/5100 影子 `db-srv`（全 Rust 栈直接绑
   6000/5100，不接受把出口重定向到代理），也没有逐帧日志。
 - Rust db-srv 只打连接/错误/同步日志（`data.rs` 的 `log::info/warn/error`），不打 `1100/520/524/522/525` 逐帧；
-  game-svr 侧只打「存档请求已发（DB_SAVEHUMANRCD）ChrName... 记录 N 字节」（`main.rs:5469`）。
+  game-svr 侧只打「存档请求已发（DB_SAVEHUMANRCD）ChrName... 记录 N 字节」（`main.rs:5794`）。
 - ⇒ 本窗 G6 只能做「DB 行级 + 日志级」的**部分**观察，帧级判据未闭环。G6 整组 `not_collectible`。
 
 ### C10. 未闭环工具/未知项清单（汇总）
