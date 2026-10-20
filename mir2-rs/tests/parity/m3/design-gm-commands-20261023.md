@@ -11,7 +11,7 @@
 
 1. **分发链已完全查清**：`CM_SAY(3030)` → `PlayObject.ProcessUserLineMsg` → `sData.StartsWith("@")` → `GameCommandSystem.Execute` → `ExtractCommandAndParameters`（`Trim` + 去首 `@` + 按**单个 ASCII 空格**切首 token）→ `CommandMaps`（`OrdinalIgnoreCase`）→ `GameCommand.Handle`（权限门 + 按 `Execute` 形参个数三选一派发）→ 返回值非空则 `SysMsg(Red, Hint)`。
 2. **命令名不是代码里的名字**：185 条里 160 条经 `[RegisterCommand]` 被 `Command.conf` 覆盖名字与权限。audit #17 点名的 `@LetGuild`/`@LetTrade`/`@GroupRecall`/`@GuildRecall`/`@AllowGroupReCall`/`@AllowGuildReCall` **在现网一个都不存在**；现网拼写分别是 `@加入门派`/`@交易`/`@天地合一`/`@df56dfs`/`@允许天地合一`/`@sadasd`。
-3. **现网权限恒 0**：`Permission` 的唯一加载点 `PlayObject.cs:1188-1194`（`GetHumPermission`）**被注释**；`AdminList.txt` 唯一一行 `*\t阿瑞斯乐园` 缺 IP 字段会被 `continue` 丢弃；`StartPermission=0`；部署是 **Release**（`!deployed-from.json` 的 `build_dir=...\bin\Release`，且 `CommandSystem.dll` 里没有 `#if DEBUG` 的「当前运行调试模式」串）。⇒ 185 条里**只有 6 条在现网可达**：`@时间`、`@拒绝`、`@拒绝私聊`、`@LockLogin`、`@AddRobotPlay`、`@help`；其余 179 条（含点名 6 条）全部卡在 `权限不够!!!`。
+3. **现网权限恒 0**：`Permission` 的唯一加载点 `PlayObject.cs:1188-1194`（`GetHumPermission`）**被注释**；`AdminList.txt` 唯一一行 `*\t阿瑞斯乐园` 缺 IP 字段会被 `continue` 丢弃；`StartPermission=0`；部署是 **Release**（`!deployed-from.json` 的 `build_dir=...\bin\Release`，且 `CommandSystem.dll` 里没有 `#if DEBUG` 的「当前运行调试模式」串）。⇒ **两类计数必须分开**：`src/Modules/GameCommand/Commands/` 下 **185 个命令类**中 perm 0 的只有 **5 条**（`@时间`、`@拒绝`、`@拒绝私聊`、`@LockLogin`、`@AddRobotPlay`），其余 **180 条**（含点名 6 条）全部卡在 `权限不够!!!`；第 6 条 `@help` 是 `CommandSystem.cs:281-307` 的**内建类**，**不在 185 内**。⇒ 「有回帧的现网可达集」= 185 内 5 条 + 内建 `@help` = **6 条**（另有内建 `@commands`，perm 0 但每次反射异常、无回帧，见 §1.3）。
 4. **这与 inventory A-06 的「GM/管理端可达」冲突**：不是「GM 能用的面没实现」，而是「oracle 现网自己就把 GM 面锁死了」。若要真机能验，必须先用 `SETPERMISSION` 脚本或改内容/改 AdminList 换窗口，属**内容或配置变更**，需要 owner 裁决（见 §9 D-1/D-2）。
 5. **`@GuildRecall` 是死功能**：`GuildRecallCommand.cs` 的成员遍历整段被注释，`nRecallCount`/`nNoRecallCount` 恒 0，永远只回「已传送0个成员，0个成员未被传送。」再重置 `GroupRcallTick/GroupRcallTime`。
 6. **配置面有 49 个死键**：`Command.conf` 的 `[Command]` 201 条里 49 条不被任何 `GameCmdConf` 行消费（`Recall=ch`、`ReGoto=gz`、`Level`、`Attack`、`NameColor`、`Transparecy`、`ViewDiary`…），另有 5 条**键名拼写不匹配**，导致这些命令在现网只能按英文出厂名调用。
@@ -80,10 +80,10 @@ if (line.Contains(' '))
 
 > `PermissionMax` 只在 4 个命令里被读（`Make`/`RecallHuman`/`Smake` 等「支持权限分配」的命令内部再比一次），`Handle` 的门只比 `PermissionMin`（`GameCommand.cs:37`）。
 
-**内建两条**（`CommandSystem.cs:236-300`）：
+**内建两条**（`CommandSystem.cs:255-307`；**均不属于下文的 185 个命令类**）：
 
 - `@commands`（`CommandsCommandGroup`）：`[Command("commands","列出可用的命令")]`，`Execute()` 空、**未重写 `Handle`** ⇒ 走 `Handle` 的 `default: Invoke(this, new object[]{null, PlayerActor})`，而 `Execute()` 零形参 ⇒ 反射抛 `TargetParameterCountException`；被 `ProcessUserLineMsg` 的 `catch` 吞掉并记日志 ⇒ **玩家看不到任何回帧**。这条是「已注册但每次调用都抛异常」的活标本。
-- `@help`（`HelpCommandGroup`）：重写 `Handle`，`parameters == ""` 回 `"usage: help <command>"`，否则回 `"Unknown command: {group} {command}"`；**不受权限门约束**（重写里没比 `Permission`）⇒ 现网可达。
+- `@help`（`HelpCommandGroup`）：重写 `Handle`，`parameters == ""` 回 `"usage: help <command>"`，否则回 `"Unknown command: {group} {command}"`；**不受权限门约束**（重写里没比 `Permission`）⇒ 现网可达。它是唯一计入「可达 6 条」的内建类（185 之外）。
 
 ### 1.4 权限门与派发（`GameCommand.cs:28-58`）
 
@@ -109,7 +109,16 @@ switch (MethodParameterCount) {
 ### 1.5 未知命令回落与 `@@!` 红字（`PlayObject.Chat.cs:368-400`）
 
 ```
-Execute(@cmd) == false
+Execute(@cmd)（CommandSystem.cs:125-196）
+  ├─ ExtractCommandAndParameters 失败（Trim 后为空 / 首字符非 '@'）
+  │     → return false，不发任何帧（chat 入口已保证 StartsWith('@')，实际走不到）
+  ├─ CommandMaps 命中（OrdinalIgnoreCase）→ output = Handle(...)，found = true
+  ├─ 未命中 → output = "未知命令: {commandName} {parameters}"
+  │     无条件、先发；commandName 已去前导 '@'，parameters 已 Trim，无参数时文本以空格结尾
+  ├─ output 非空 → SysMsg(output, MsgColor.Red, MsgType.Hint)      // 第 1 条帧（恒发）
+  └─ return found
+
+Execute == false 时，PlayObject.Chat.cs:368-400 继续回落：
   ├─ Permission >= 2 且 sData.Length > 2:
   │    sCMD = GetValidStr3(sData, [' ', ':', ',', '\t'])[0]   // 含前导 '@'
   │    └─ Permission >= 6 且 sData[2] == GMRedMsgCmd('!'):     // 即玩家输入 "@@!..."
@@ -118,14 +127,15 @@ Execute(@cmd) == false
   │         截断 SayRedMsgMaxLen（现网 40）
   │         广播文本 = ShutRedMsgShowGMName ? (ChrName+": "+sData) : sData
   │         SendBroadCastMsg(..., MsgType.GameManger)
-  │         return
-  └─ SysMsg($"@{sCMD}此命令不正确，或没有足够的权限!!!", Red, Hint)
+  │         return                                             // 提前返回：不再发第 2 条
+  └─ SysMsg($"@{sCMD}此命令不正确，或没有足够的权限!!!", Red, Hint)  // 第 2 条帧
 ```
 
 要点：
 
 - `Execute` 命中（含返回空串）就 `return true`，**不会**再走回落；因此「已知命令但参数错」只出命令自己的提示，不出「此命令不正确」。
-- 未知命令在现网（Permission=0）出**一条**：`@此命令不正确，或没有足够的权限!!!`（`sCMD` 为空串）；若权限 ≥2 则是两条（先 `未知命令: X`，再 `@@X此命令不正确…`）。
+- **未知命令恒出两条帧**（与权限无关）：第 1 条来自 `CommandSystem.cs:185-194`，文本 `未知命令: {commandName} {parameters}`（无参数时末尾保留一个空格）；第 2 条来自 `PlayObject.Chat.cs:400`：perm 0 时 `sCMD` 为空串 ⇒ `@此命令不正确，或没有足够的权限!!!`，perm ≥2 时 `sCMD` = 首 token（含前导 `@`）⇒ `@@X此命令不正确，或没有足够的权限!!!`（`X` 为首 token 去掉前导 `@`）。两条都是 `SysMsg(..., MsgColor.Red, MsgType.Hint)` ⇒ `SM_SYSMESSAGE(100)`、`series=1`、`param=MakeWord(255,56)`。
+- 唯一的「少一条」例外：perm ≥6 且输入命中 `@@!正文` 红字分支时，回落提前 `return`，因此只有第 1 条 `未知命令: …` + 一条广播（`MsgType.GameManger`），没有第 2 条。
 - `@@!红字` 需要 `sData[2]=='!'`，即字面量 **`@@!`** 三字符前缀（`@!` 不成立：`sData[2]` 是正文首字符）。现网 `ShutRedMsgShowGMName=0`、`SayRedMsgMaxLen=40`、`ShowPreFixMsg=0` ⇒ 广播正文就是 `!` + 正文前 40 字符。但现网 Permission 恒 0，**这条也不可达**（`Permission >= 6` 门）。
 
 ### 1.6 帧与颜色
@@ -175,7 +185,9 @@ Execute(@cmd) == false
 - `strings -el CommandSystem.dll` 里**没有**「当前运行调试模式,权限等级：10」⇒ `#if DEBUG` 分支未被编译。
 - `Mir200/Server.conf:365` `StartPermission=0`。
 
-### 2.4 结论：现网可达命令 = 6 条
+### 2.4 结论：现网可达命令 = 6 条（185 内 5 条 + 内建 `@help`）
+
+> 口径：下表前 5 行来自 `Commands/` 的 185 个命令类（perm 0 恰好 5 条）；第 6 行 `@help` 是 `CommandSystem.cs:281-307` 的内建类，**不在 185 内**。
 
 | # | 现网拼写 | 权限 | 行为 | 帧 |
 |---|---|---:|---|---|
@@ -184,9 +196,9 @@ Execute(@cmd) == false
 | 3 | `@拒绝私聊` | 0 | `AllowMsg`：`HearWhisper = !HearWhisper`（默认 true） | Green 219/255 |
 | 4 | `@LockLogin` | 0 | `LockLogin`：`Config.LockHumanLogin` 未开则红字拒绝；否则 toggle `IsLockLogon` | Green / Red |
 | 5 | `@AddRobotPlay` | 0 | `CreateRobotPlay`：校验后**全段被注释**（真正的加机器人没了）；`?` 出帮助 | 仅 `?` 时 Red |
-| 6 | `@help` | 0 | 内建；重写 `Handle` 不过权限门 | Red 255/56 |
+| 6 | `@help` | 0 | **内建（不在 185 内）**；重写 `Handle` 不过权限门 | Red 255/56 |
 
-其余 **179 条**在现网只能得到 `权限不够!!!`（Red 255/56）。**audit #17 点名的 6 条全部在这 179 条里。**
+其余 **180 条**（185 − 5，含点名 6 条）在现网只能得到 `权限不够!!!`（Red 255/56）。**audit #17 点名的 6 条全部在这 180 条里。** 内建 `@commands` 也 perm 0，但反射异常被 `catch` 吞掉、无回帧，不计入可达集。
 
 ### 2.5 与 inventory A-06 的冲突（必须显式记录）
 
@@ -229,11 +241,13 @@ Execute(@cmd) == false
 
 | 类 / 出厂名 | 代码读的键 | 部署里的键 | 后果 |
 |---|---|---|---|
-| `ChangeMasterNameCommand` / `ChangeMasterName` | `ChangeMasterName` | `ChangeMasterrName`（多个 r） | 部署名「MasterName」不生效，现网 `@ChangeMasterName` |
-| `RestBonuPointCommand` / `RestBonuPoint` | `DelBonusPoint` | `DelBonuPoint` | 部署名「还原属性」不生效（且该类未登记，权限仍是 10） |
+| `ChangeMasterNameCommand` / `ChangeMasterName` | `[Command]` 段 `ChangeMasterName` | `ChangeMasterrName`（多个 r） | 部署键拼错 ⇒ 代码读 `ChangeMasterName` 缺失，`ReadWriteString` 回落 ctor 默认 **`MasterName`**；现网拼写是 **`@MasterName`**（`GameCommands.cs:528`），不是 `@ChangeMasterName`。`[Permission]` 段 `ChangeMasterName=10` 存在，权限仍 10 |
+| `DelBonuPointCommand` / `DelBonuPoint`（登记字段是 `DelBonusPoint`） | `[Command]` 段 `DelBonusPoint` | `DelBonuPoint` | 部署键拼错 ⇒ 字段 `DelBonusPoint` 回落 ctor 默认 **`DelBonusPoint`**（`GameCommands.cs:477`），现网 `@DelBonusPoint`；部署的 `DelBonuPoint=删除属性` 是死键。**注意**：`RestBonuPointCommand` 是未登记的 25 条之一，与 `DelBonusPoint` 字段无关——它按自身 `[Command]` 名注册，现网名就是 `@RestBonuPoint`（权限 10），部署 `RestBonuPoint=还原属性` 同样是死键（代码读的是 `RestBonusPoint`，`GameCmdConf.cs:218-220`） |
 | `DenyCharNameLogonCommand` / `DenyChrNameLogon` | `DenyChrNameLogon` | `DenyCharNameLogon` | 部署名 `+jww` 不生效，现网 `@DenyChrNameLogon` |
 | `DelDenyCharNameLogonCommand` / `DelDenyChrNameLogon` | `DelDenyChrNameLogon` | `DelDenyCharNameLogon` | 部署名 `-jww` 不生效 |
 | `ShowDenyCharNameLogonCommand` / `ShowDenyChrNameLogon` | `ShowDenyChrNameLogon` | `ShowDenyCharNameLogon` | 部署名 `+-jww` 不生效 |
+
+另有 **2 条不属于「拼写漂移」、而是「配置缺键回落构造默认」**：`[RegisterCommand]` 字段对应的 `[Command]`/`[Permission]` 键在部署里都不存在，`ReadWriteString` 直接回落 ctor 里混合大小写的默认名 ⇒ `BindUseItemCommand` 现网 **`@Binduseitem`**、`ShowUseItemInfoCommand` 现网 **`@Showuseiteminfo`**（`GameCommands.cs:40-43` 的 `[RegisterCommand]`，`:551-552` 的构造默认名；`GameCmdConf.cs` 无对应读取行）。
 
 ### 3.4 audit 点名 6 条的实际拼写（`Command.conf:12/14/30-33`）
 
@@ -407,7 +421,7 @@ Execute(@cmd) == false
 | 74 | 数值/角色 | `AdjuestExpCommand` | `调整经验` | `AdjuestExp` | 10 | 2 | C+S | SM_SYSMESSAGE |
 | 75 | 数值/角色 | `AdjuestLevelCommand` | `1级` | `AdjuestLevel` | 10 | 2 | C+S | SM_SYSMESSAGE |
 | 76 | 数值/角色 | `AdjustExpCommand` | `AdjustExp` | `AdjustExp` | 10 | 2 | N | — |
-| 77 | 数值/角色 | `BindUseItemCommand` | `BindUseItem` | `BindUseItem` | 10 | 2 | F+C+S | SM_SYSMESSAGE |
+| 77 | 数值/角色 | `BindUseItemCommand` | `Binduseitem` | `BindUseItem` | 10 | 2 | F+C+S | SM_SYSMESSAGE |
 | 78 | 数值/角色 | `BonuPointCommand` | `调整属性` | `BonuPoint` | 10 | 2 | F+C+S | SM_SYSMESSAGE |
 | 79 | 数值/角色 | `ChangeAdminModeCommand` | `1` | `ChangeAdminMode` | 10 | 1 | S | SM_SYSMESSAGE |
 | 80 | 数值/角色 | `ChangeAttackModeCommand` | `AttackMode` | `AttackMode` | 10 | 1 | S | SM_SYSMESSAGE |
@@ -459,7 +473,7 @@ Execute(@cmd) == false
 | 126 | 查询/展示 | `ShowMapInfoCommand` | `MapInfo` | `ShowMapInfo` | 10 | 1 | S | SM_SYSMESSAGE |
 | 127 | 查询/展示 | `ShowMapModeCommand` | `ShowMapMode` | `ShowMapMode` | 10 | 2 | S | SM_SYSMESSAGE |
 | 128 | 查询/展示 | `ShowUnitCommand` | `showunit` | `ShowUnit` | 10 | 0 | N | — |
-| 129 | 查询/展示 | `ShowUseItemInfoCommand` | `ShowUseItem` | `ShowUseItem` | 10 | 2 | C+S | SM_SYSMESSAGE |
+| 129 | 查询/展示 | `ShowUseItemInfoCommand` | `Showuseiteminfo` | `ShowUseItem` | 10 | 2 | C+S | SM_SYSMESSAGE |
 | 130 | 查询/展示 | `TotalCommand` | `Total` | `Total` | 10 | 1 | N | — |
 | 131 | 查询/展示 | `WhoCommand` | `who` | `Who` | 10 | 1 | N | — |
 | 132 | 桩/测试 | `BackStepCommand` | `Backstep` | `BackStep` | 10 | 2 | N | — |
@@ -608,10 +622,10 @@ Execute(@cmd) == false
 
 ### 7.1 语义表（改动即红）
 
-1. **命令表完整性**：`gmcmd::COMMANDS` 长度 == 185；按 `(name.to_ascii_lowercase())` 唯一；与本文 §4.3 表逐行 diff（列：现网名/权限/参数个数）。
+1. **命令表完整性**：`gmcmd::COMMANDS` 长度 == 185（**范围 = `src/Modules/GameCommand/Commands/` 的 185 个命令类，不含内建 `@help`/`@commands`**；内建两条另用常量/小表，判据单列）；按 `(name.to_ascii_lowercase())` 唯一；与本文 §4.3 表逐行 diff（列：现网名/权限/参数个数）。可达集断言：185 内 perm 0 == **5**（`时间`/`拒绝`/`拒绝私聊`/`LockLogin`/`AddRobotPlay`），加内建 `@help` 共 **6**。
 2. **解析器**：`parse_command` 表驱动 15 例，逐例比对 `ExtractCommandAndParameters`（§1.2 的 6 条推论每条至少 2 例，含 `@ 时间`、`@时间\t1`、`@时间  1`、`@`、`@时间 `、`@@!hi`、`@天地合一:1`）。
 3. **权限门**：`@交易` 在 perm 0 → 输出 `权限不够!!!`（Red 255/56）；`@时间` perm 0 放行。
-4. **未知命令**：perm 0 → 恰好一条 `@此命令不正确，或没有足够的权限!!!`；perm ≥2 → 两条（`未知命令: X Y` + `@@X此命令不正确…`）。
+4. **未知命令恒两条**：任何未命中 `CommandMaps` 的输入都先出 `未知命令: X Y`（Red 255/56），再出第 2 条——perm 0 为 `@此命令不正确，或没有足够的权限!!!`，perm ≥2 为 `@@X此命令不正确，或没有足够的权限!!!`。唯一例外是 perm ≥6 的 `@@!` 红字分支：回落提前 `return`，只剩第 1 条 + 广播。
 5. **名字匹配**：`@sadasd` 命中 `AllowGuildRecallCommand`（验证小写类名 + 配置覆盖）；`@Allowguildrecall` 在现网配置下**不**命中（验证覆盖确实发生）。
 6. **参数语义**：`@Make 木剑  1`（双空格）得到的 `@params` 必须是 `["木剑","","1"]`（验证 `Split(' ')` 保留空项）。
 
@@ -620,6 +634,7 @@ Execute(@cmd) == false
 - `@时间`：`SM_SYSMESSAGE(100)`，`series=1`，`param=MakeWord(251,252)`，正文 GBK `当前日期时间: ` + 格式化时间；用现有 `sm_sysmessage` 与金标准 seq 对齐。
 - `@拒绝私聊`：Green `MakeWord(219,255)`，正文 `[禁止私聊]` / `[允许私聊]`（GBK 字节）。
 - `权限不够!!!`：Red `MakeWord(255,56)`。
+- 未知命令两条帧：均为 `SM_SYSMESSAGE(100)`、`series=1`、`param=MakeWord(255,56)`；第 1 条正文 GBK = `未知命令: ` + 命令名 + ` ` + 参数（无参数时末尾空格保留）；第 2 条正文 GBK = `@`（perm 0）或 `@@` + 首 token 去前导 `@`（perm ≥2） + `此命令不正确，或没有足够的权限!!!`。
 - `@@!正文`：广播逐人 `SM_SYSMESSAGE(Red, GameManger)`，正文 = `!` + 前 40 字符（GBK 字符数截断口径需与 `string.Length` 对齐：oracle 是 UTF-16 字符数，GBK 编码后字节数可能不同——**这是 G6 的必测歧义点**）。
 
 ### 7.3 真机 A/B（窗口项）
@@ -659,7 +674,7 @@ Execute(@cmd) == false
 |---|---|---|
 | W-1 | 确认对拍用的 C# 构建是 **Release** | Debug 会强制 `Permission=10` 并多发一条红字，命令可达集完全不同 |
 | W-2 | 确认 `M2GameSvr/Command.conf` 与 `Mir200/Command.conf` 一致 | 名字/权限全来自这份文件；被改动过则命令名整体漂移 |
-| W-3 | 非 0 权限命令的测试前置：`SETPERMISSION` 脚本或等价授权 | 现网 `Permission` 恒 0，无它则 179 条不可测 |
+| W-3 | 非 0 权限命令的测试前置：`SETPERMISSION` 脚本或等价授权 | 现网 `Permission` 恒 0，无它则 185 内除 5 条 perm 0 外的 180 条不可测 |
 | W-4 | `characters.AllowGroupReCall/AllowGuildReCall/GroupRcallTime` 的库前后态 | R 级落库判据 |
 | W-5 | `@@!` 红字的截断口径（UTF-16 字符 vs GBK 字节） | 中文正文 40 字符处会分叉 |
 
@@ -693,11 +708,14 @@ sha256sum src/Modules/GameCommand/GameCommands.cs \
           src/Modules/GameCommand/Conf/GameCmdConf.cs \
           /e/MirServer/M2GameSvr/Command.conf \
           /e/MirServer/Mir200/Envir/AdminList.txt
-# 39490ffb78a110ff2f27cbd7adf806ad3e9c320def4d7c2f5805f3e423258e2e  GameCommands.cs
-# 3c3e7212ae7b7e9a904a5d4e34f78b64c423284d854f33d4eb6afb262a624243  CommandSystem.cs
-# 902f042bae72af068335986c29ca6a4c87e3bbb907ae559903262c0510d793fd  GameCmdConf.cs
-# 062eda7d2e3600a5cca2fbc9b64e62f6acbb29cbe9e6c7de46a0260305b5970a  Command.conf
-# 28e8d54c48fb6a5d8bb2642c9d267e59dd8ad6f9adfc9e3138a525fa97fa4f1e  AdminList.txt
+# 口径：前三个是工作树文件实算（仓库 core.autocrlf=false，LF 检出、UTF-8 BOM，0 个 CRLF；
+#       sha256sum 对原始字节求和）。早先记的 39490ffb…/3c3e7212…/902f042b… 是 CRLF 版本，已废弃。
+# 762c18c09e4f08606d47f075c90f5d613a21bf17eb000cf30730c8d8d1e6e54d  src/Modules/GameCommand/GameCommands.cs
+# 4474e6fc1ca78f02eed4ecd8554e5df2e88a3c0a481b486ab1959ace507366ca  src/Modules/GameCommand/CommandSystem.cs
+# 5d33775115f7c91c37000ad252602dd96ed709150ed4680147338179043484f4  src/Modules/GameCommand/Conf/GameCmdConf.cs
+# 062eda7d2e3600a5cca2fbc9b64e62f6acbb29cbe9e6c7de46a0260305b5970a  /e/MirServer/M2GameSvr/Command.conf
+# 28e8d54c48fb6a5d8bb2642c9d267e59dd8ad6f9adfc9e3138a525fa97fa4f1e  /e/MirServer/Mir200/Envir/AdminList.txt
+# 后两个是仓库外部署文件，字节未变，哈希与前次一致。
 
 # 3) 部署构建与权限链
 cat /e/MirServer/M2GameSvr/!deployed-from.json            # build_dir=...\bin\Release
