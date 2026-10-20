@@ -20,6 +20,8 @@ pub const SM_OUTOFCONNECTION: i32 = 528;
 pub const SM_QUERYITEMDLG: i32 = 623;
 pub const RM_DURACHANGE: i32 = 10125;
 pub const RM_PLAYDICE: i32 = 10500;
+/// `Messages.RM_MERCHANTSAY`（`Messages.cs:651`）。
+pub const RM_MERCHANTSAY: i32 = 11009;
 pub const RM_WINEXP: i32 = 8075;
 pub const RM_ADJUST_BONUS: i32 = 8078;
 pub const RM_SPACEMOVE_FIRE: i32 = 8062;
@@ -815,6 +817,42 @@ impl Engine<'_, '_> {
                     p4,
                     Some(&info.s_param2),
                 );
+            }
+            "ActionOfOpenSaleDeal" => {
+                // C# `ActionOfOpenSaleDeal`（`ExecutionProcessingSys.cs:2329-2357`，`OPENYBDEAL`）：
+                // 已开通 ⇒ 提示后返回（**不**扣元宝、**不**重写 SaleDeal）；
+                // 否则按 `sParam1` 取开通费用：`GetValValue` 命中数值变量即用其值，
+                // 未命中回落 `StrToInt(GetLineVariableText(sParam1), 0)`；
+                // `GameGold >= 费用` ⇒ 扣费 + `SaleDeal = true` + 成功提示，否则不足提示。
+                // 寄售/GoldDeal 的世界面不在脚本层：玩家态只经钩子写入（`set_sale_deal` 默认 no-op）。
+                let chr_name = self.player.chr_name();
+                if self.player.sale_deal() {
+                    let msg =
+                        format!("{chr_name}/您已开通寄售服务,不需要再开通!!!\\ \\<返回/@main>");
+                    self.player.send_msg(RM_MERCHANTSAY, 0, 0, 0, 0, Some(&msg));
+                    return;
+                }
+                let n_game_gold = match self.get_val_value_int(&info.s_param1) {
+                    Some(v) => v,
+                    None => {
+                        let text = self.player.line_variable_text(&info.s_param1);
+                        mir2_shared::hutil32::str_to_int(&text, 0)
+                    }
+                };
+                if self.player.game_gold() >= n_game_gold {
+                    // C# `GameGold -= nGameGold`（unchecked）：用 `wrapping_sub` 保 1:1，绝不 panic。
+                    let gold = self.player.game_gold().wrapping_sub(n_game_gold);
+                    self.player.set_game_gold(gold);
+                    self.player.set_sale_deal(true);
+                    let msg = format!("{chr_name}/开通寄售服务成功!!!\\ \\<返回/@main>");
+                    self.player.send_msg(RM_MERCHANTSAY, 0, 0, 0, 0, Some(&msg));
+                } else {
+                    let gold_name = self.player.config_game_gold_name();
+                    let msg = format!(
+                        "{chr_name}/您身上没有{gold_name},或{gold_name}数不够!!!\\ \\<返回/@main>"
+                    );
+                    self.player.send_msg(RM_MERCHANTSAY, 0, 0, 0, 0, Some(&msg));
+                }
             }
             "ActionOfAddSkill" => {
                 let n_level = 3.min(mir2_shared::hutil32::str_to_int(&info.s_param2, 0));

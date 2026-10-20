@@ -75,6 +75,7 @@ pub static IMPLEMENTED_EXECUTIONS: &[&str] = &[
     "ActionOfQueryItemDlg",
     "ActionOfUpgradeDlgItem",
     "ActionOfPlayDice",
+    "ActionOfOpenSaleDeal",
     "ActionOfAddSkill",
     "ActionOfAddNameList",
     "ActionOfDelNameList",

@@ -1,6 +1,6 @@
 //! 求值引擎测试：控制流、派发落点（含 B-8 位移）、未实现显式报错。
 
-use mir2_script::engine::{Engine, EngineError, ScriptNpc, ScriptPlayer};
+use mir2_script::engine::{lable_is_can_jmp, Engine, EngineError, ScriptNpc, ScriptPlayer};
 use mir2_script::{ScriptInfo, ScriptParsers};
 
 struct MockPlayer {
@@ -83,6 +83,10 @@ struct MockPlayer {
     val_query: Option<(u8, u8, String, i32)>,
     dlg_query: Option<(bool, String)>,
     play_dice_label: String,
+    /// `playerActor.SaleDeal`（`OPENYBDEAL` 写；测试镜像世界面）
+    sale_deal: bool,
+    /// `SystemShare.Config.GameGoldName`（测试覆写环境值，验证消息拼接）
+    game_gold_name: String,
     auto_get_exp: Option<(bool, Option<String>, i32, i32)>,
     /// PL-4 / P22：脚本 192/193 的 `BoIncGameGold`/`BoDecGameGold`
     /// （START 在当前 oracle 源码下不可达，STOP 只写 false）。
@@ -210,6 +214,8 @@ impl MockPlayer {
             val_query: None,
             dlg_query: None,
             play_dice_label: String::new(),
+            sale_deal: false,
+            game_gold_name: "元宝".into(),
             auto_get_exp: None,
             bo_inc_game_gold: false,
             bo_dec_game_gold: false,
@@ -792,6 +798,18 @@ impl ScriptPlayer for MockPlayer {
     }
     fn set_play_dice_label(&mut self, label: &str) {
         self.play_dice_label = label.to_string();
+    }
+    fn play_dice_label(&self) -> String {
+        self.play_dice_label.clone()
+    }
+    fn sale_deal(&self) -> bool {
+        self.sale_deal
+    }
+    fn set_sale_deal(&mut self, v: bool) {
+        self.sale_deal = v;
+    }
+    fn config_game_gold_name(&self) -> String {
+        self.game_gold_name.clone()
     }
     fn set_auto_get_exp(
         &mut self,
@@ -1955,6 +1973,115 @@ fn play_dice_packs_mdy_values() {
         player.msgs_full.last().unwrap(),
         &format!("msg 10500 3 {p2} {p3} {p4} @dice")
     );
+}
+
+#[test]
+fn lable_is_can_jmp_three_branches_and_play_dice_is_one_shot() {
+    let mut player = MockPlayer::new();
+    let table = vec!["@Table".to_string()];
+    // 第一支：@main 恒可跳（大小写不敏感），且**不消费** PlayDiceLabel。
+    player.play_dice_label = "@main".into();
+    assert!(lable_is_can_jmp(&mut player, &[], "@MAIN"));
+    assert_eq!(player.play_dice_label, "@main", "@main 先命中，不消费骰标");
+    // 第二支：CanJmpScriptLableMap 命中（OrdinalIgnoreCase）。
+    assert!(lable_is_can_jmp(&mut player, &table, "@table"));
+    // 第三支：PlayDiceLabel 命中 ⇒ **一次性**（命中即清空）。
+    player.play_dice_label = "@dice".into();
+    assert!(lable_is_can_jmp(&mut player, &table, "@DICE"));
+    assert_eq!(player.play_dice_label, "");
+    assert!(
+        !lable_is_can_jmp(&mut player, &table, "@dice"),
+        "第二次不可跳"
+    );
+    // 三支都不命中 ⇒ false，且不清空骰标。
+    player.play_dice_label = "@dice".into();
+    assert!(!lable_is_can_jmp(&mut player, &table, "@other"));
+    assert_eq!(player.play_dice_label, "@dice");
+}
+
+#[test]
+fn action_of_play_dice_label_is_consumed_once_by_jmp_gate() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    let errors = run_act(&mut npc, &mut player, act(42, "", "@dice", 3, 0));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(player.play_dice_label, "@dice");
+    assert!(lable_is_can_jmp(&mut player, &[], "@dice"), "第一次可跳");
+    assert_eq!(player.play_dice_label, "");
+    assert!(!lable_is_can_jmp(&mut player, &[], "@dice"), "第二次不可跳");
+}
+
+#[test]
+fn open_yb_deal_deducts_gold_and_opens_sale_deal() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.game_gold = 100;
+    let errors = run_act(&mut npc, &mut player, act(342, "30", "", 0, 0));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(player.game_gold, 70);
+    assert!(player.sale_deal);
+    assert_eq!(
+        player.msgs_full.last().unwrap(),
+        "msg 11009 0 0 0 0 测试玩家/开通寄售服务成功!!!\\ \\<返回/@main>"
+    );
+}
+
+#[test]
+fn open_yb_deal_reads_numeric_var_parameter() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.game_gold = 50;
+    player.mn[3] = 20; // `P3` ⇒ MNVal[3]
+    let errors = run_act(&mut npc, &mut player, act(342, "P3", "", 0, 0));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(player.game_gold, 30);
+    assert!(player.sale_deal);
+    // 恰好相等也走成功支（`GameGold >= nGameGold`）。
+    player.sale_deal = false;
+    player.game_gold = 20;
+    let _ = run_act(&mut npc, &mut player, act(342, "P3", "", 0, 0));
+    assert_eq!(player.game_gold, 0);
+    assert!(player.sale_deal);
+}
+
+#[test]
+fn open_yb_deal_insufficient_and_already_open_paths() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.game_gold = 10;
+    let errors = run_act(&mut npc, &mut player, act(342, "30", "", 0, 0));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(player.game_gold, 10, "不足不扣");
+    assert!(!player.sale_deal);
+    assert_eq!(
+        player.msgs_full.last().unwrap(),
+        "msg 11009 0 0 0 0 测试玩家/您身上没有元宝,或元宝数不够!!!\\ \\<返回/@main>"
+    );
+    // 已开通：提示后直接返回（即便参数合法也不扣、不重写）。
+    player.sale_deal = true;
+    let _ = run_act(&mut npc, &mut player, act(342, "0", "", 0, 0));
+    assert_eq!(player.game_gold, 10);
+    assert_eq!(
+        player.msgs_full.last().unwrap(),
+        "msg 11009 0 0 0 0 测试玩家/您已开通寄售服务,不需要再开通!!!\\ \\<返回/@main>"
+    );
+}
+
+#[test]
+fn open_yb_deal_param_boundary_falls_back_to_zero() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.game_gold = 5;
+    // 非数字 ⇒ `GetValValue` 未命中 + `StrToInt(...,0)` ⇒ 费用 0（照搬 C# 缺省）。
+    let errors = run_act(&mut npc, &mut player, act(342, "不是数字", "", 0, 0));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(player.game_gold, 5, "费用 0 ⇒ 扣 0");
+    assert!(player.sale_deal);
+    // 变量槽越界（P100 超出 0..99）⇒ `GetValNameNo == -1` ⇒ 同样回落 0，不 panic。
+    player.sale_deal = false;
+    let _ = run_act(&mut npc, &mut player, act(342, "P100", "", 0, 0));
+    assert_eq!(player.game_gold, 5);
+    assert!(player.sale_deal);
+    // 空参数 ⇒ `GetValValue` 对空串返回 false ⇒ StrToInt("",0) = 0。
+    player.sale_deal = false;
+    let _ = run_act(&mut npc, &mut player, act(342, "", "", 0, 0));
+    assert_eq!(player.game_gold, 5);
+    assert!(player.sale_deal);
 }
 
 #[test]

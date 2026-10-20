@@ -13,6 +13,9 @@ use crate::model::{QuestActionInfo, QuestConditionInfo, ScriptInfo};
 /// `Grobal2.MaxBagItem`（`src/OpenMir2/Grobal2.cs`）。
 pub const MAX_BAG_ITEM: i32 = 46;
 
+/// `SystemShare.Config.GameGoldName` 的部署缺省（`GameSvrConf.cs:1320`）。
+pub const DEFAULT_GAME_GOLD_NAME: &str = "元宝";
+
 /// `ActorRace.Play`（`src/OpenMir2/Enums/Race.cs`）。
 pub const ACTOR_RACE_PLAY: i32 = 0;
 
@@ -385,6 +388,21 @@ pub trait ScriptPlayer {
 
     /// `playerActor.GameGold = v`
     fn set_game_gold(&mut self, _v: i32) {}
+    /// `playerActor.SaleDeal`（是否已开通元宝寄售；`ActionOfOpenSaleDeal` 的前置读）。
+    ///
+    /// 默认 `false` = C# flow 夹具（DispatchProxy 回默认值）口径。
+    fn sale_deal(&self) -> bool {
+        false
+    }
+    /// `playerActor.SaleDeal = v`（`ActionOfOpenSaleDeal` 成功写）。
+    ///
+    /// **默认 no-op**：引擎只表达「触发元宝寄售」的脚本语义，寄售态与 GoldDeal 的世界面
+    /// 由宿主适配层（`bins/game-svr` 的 `NpcPlayer`/进世界快照）覆写落地；接线前保持缺省。
+    fn set_sale_deal(&mut self, _v: bool) {}
+    /// `SystemShare.Config.GameGoldName`（缺省 = `GameSvrConf.cs:1320` 的部署缺省 "元宝"）
+    fn config_game_gold_name(&self) -> String {
+        DEFAULT_GAME_GOLD_NAME.to_string()
+    }
     /// `playerActor.BoIncGameGold = v`（`ExecutionProcessingSys.cs:2678/2684`，
     /// `AUTOADDGAMEGOLD` 的 START/STOP；START 在当前 oracle 源码下不可达，见 `actions.rs`）。
     fn set_bo_inc_game_gold(&mut self, _v: bool) {}
@@ -525,8 +543,12 @@ pub trait ScriptPlayer {
     }
     /// `TakeDlgItem / GotoNpcLabel`（`ActionOfQueryItemDlg`）
     fn set_dlg_query(&mut self, _take_dlg_item: bool, _goto_npc_label: &str) {}
-    /// `playerActor.PlayDiceLabel = v`
+    /// `playerActor.PlayDiceLabel = v`（`ActionOfPlayDice` 写 `sParam2`）
     fn set_play_dice_label(&mut self, _label: &str) {}
+    /// `playerActor.PlayDiceLabel`（`LableIsCanJmp` 第三支的比较/取数口；默认空 = 未掷骰）
+    fn play_dice_label(&self) -> String {
+        String::new()
+    }
 
     /// `AutoGetExpInSafeZone / AutoGetExpEnvir / AutoGetExpTime / AutoGetExpPoint`
     fn set_auto_get_exp(
@@ -670,6 +692,35 @@ pub trait ScriptNpc {
     }
     /// `normNpc.SendSayMsg(msg)`（`ActionOfLineMsg` 的 nParam1=4 分支）
     fn send_say_msg(&mut self, _msg: &str) {}
+}
+
+/// `PlayObject.LableIsCanJmp`（`PlayObject.Base.cs:2814-2829`）的 1:1 移植——**按序**三支，
+/// 比较一律 `OrdinalIgnoreCase`：
+///
+/// 1. `@main` 恒可跳（**先于**其它两支，且**不消费** `PlayDiceLabel`）；
+/// 2. `CanJmpScriptLableMap` 命中（最近一次说词重建的表，由调用方传入）；
+/// 3. `PlayDiceLabel` 命中 ⇒ **一次性**：命中即 `PlayDiceLabel = string.Empty`。
+///
+/// `PlayDiceLabel` 由 `ActionOfPlayDice`（`ExecutionProcessingSys.cs:2030-2033`）写入
+/// `sParam2`。C# 原样保留「空串 == 空串」的边界（`label` 与 `PlayDiceLabel` 都为空时第 3
+/// 支命中）；调用方按 oracle 只在 `sData` 以 `@` 开头后进入本判定。
+#[must_use]
+pub fn lable_is_can_jmp(
+    player: &mut dyn ScriptPlayer,
+    can_jmp_labels: &[String],
+    label: &str,
+) -> bool {
+    if label.eq_ignore_ascii_case("@main") {
+        return true;
+    }
+    if can_jmp_labels.iter().any(|l| l.eq_ignore_ascii_case(label)) {
+        return true;
+    }
+    if label.eq_ignore_ascii_case(&player.play_dice_label()) {
+        player.set_play_dice_label("");
+        return true;
+    }
+    false
 }
 
 /// 运行时错误/显式报告项。
@@ -1303,3 +1354,114 @@ pub mod vars;
 
 pub use vars::VarLookup;
 pub use vars::{DynVar, DynVarKind, VarVal};
+
+#[cfg(test)]
+mod default_hooks_tests {
+    //! 新增世界面钩子的**默认实现**判据（默认 no-op / 世界缺省）。
+    //!
+    //! 真世界适配层（`bins/game-svr`）覆写这些钩子后才能观察寄售态；接线前缺省必须
+    //! 与 C# flow 夹具（DispatchProxy 回默认值且不落日志）一致，故在此直接钉默认值。
+
+    use super::*;
+
+    struct NoopPlayer;
+
+    impl ScriptPlayer for NoopPlayer {
+        fn last_npc(&self) -> i32 {
+            0
+        }
+        fn set_last_npc(&mut self, _actor_id: i32) {}
+        fn script_index(&self) -> Option<usize> {
+            None
+        }
+        fn set_script_index(&mut self, _idx: Option<usize>) {}
+        fn script_goto_count(&self) -> i32 {
+            0
+        }
+        fn set_script_goto_count(&mut self, _v: i32) {}
+        fn quest_flag_status(&self, _flag: i16) -> u8 {
+            0
+        }
+        fn gold(&self) -> i32 {
+            0
+        }
+        fn dec_gold(&mut self, _n: i32) {}
+        fn inc_gold(&mut self, _n: i32) {}
+        fn actor_id(&self) -> i32 {
+            0
+        }
+        fn level(&self) -> i32 {
+            0
+        }
+        fn random(&mut self, _value: i32) -> i32 {
+            0
+        }
+        fn send_msg(
+            &mut self,
+            _ident: i32,
+            _w_param: i32,
+            _n_param1: i32,
+            _n_param2: i32,
+            _n_param3: i32,
+            _msg: Option<&str>,
+        ) {
+        }
+        fn mn_val(&self, _n: usize) -> i32 {
+            0
+        }
+        fn set_mn_val(&mut self, _n: usize, _v: i32) {}
+        fn mdy_val(&self, _n: usize) -> i32 {
+            0
+        }
+        fn mnmval(&self, _n: usize) -> i32 {
+            0
+        }
+        fn mn_integer(&self, _n: usize) -> i32 {
+            0
+        }
+        fn ms_string(&self, _n: usize) -> String {
+            String::new()
+        }
+        fn set_quest_unit_status(&mut self, _index: i32, _value: i32) {}
+        fn set_quest_flag_status(&mut self, _flag: i32, _value: i32) {}
+        fn set_quest_unit_open_status(&mut self, _index: i32, _value: i32) {}
+        fn item_count(&self, _name: &str) -> i32 {
+            0
+        }
+        fn slave_count(&self) -> i32 {
+            0
+        }
+        fn bag_count(&self) -> i32 {
+            0
+        }
+        fn has_worn(&self, _location: &str) -> bool {
+            false
+        }
+        fn give_item(&mut self, _name: &str, _count: i32) {}
+        fn remove_item(&mut self, _name: &str, _count: i32) -> i32 {
+            0
+        }
+    }
+
+    #[test]
+    fn open_yb_deal_and_play_dice_hooks_default_to_world_noop() {
+        let mut p = NoopPlayer;
+        // `SaleDeal` 默认 false；`set_sale_deal` 默认 no-op（不持有寄售态）。
+        assert!(!p.sale_deal(), "SaleDeal 默认 false（未开通）");
+        p.set_sale_deal(true);
+        assert!(!p.sale_deal(), "set_sale_deal 默认 no-op");
+        // `GameGoldName` 缺省 = 部署缺省 "元宝"（`GameSvrConf.cs:1320`）。
+        assert_eq!(p.config_game_gold_name(), "元宝");
+        // `PlayDiceLabel` 默认空；setter 默认 no-op。
+        assert_eq!(p.play_dice_label(), "");
+        p.set_play_dice_label("@dice");
+        assert_eq!(p.play_dice_label(), "", "set_play_dice_label 默认 no-op");
+    }
+
+    #[test]
+    fn lable_is_can_jmp_empty_label_matches_empty_dice_label_like_oracle() {
+        // C# `string.Compare("", PlayDiceLabel="", OrdinalIgnoreCase) == 0` ⇒ 第三支命中。
+        let mut p = NoopPlayer;
+        assert!(lable_is_can_jmp(&mut p, &[], ""));
+    }
+}
