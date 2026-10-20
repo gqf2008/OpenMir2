@@ -352,6 +352,7 @@ name = "db-srv"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "encoding_rs",
  "futures-util",
  "mir2-protocol",
  "mir2-storage",

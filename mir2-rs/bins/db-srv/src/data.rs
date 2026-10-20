@@ -36,6 +36,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::cache::CacheStore;
 use crate::db::Db;
+use crate::gbk;
 use crate::log;
 use crate::server::Server;
 
@@ -300,13 +301,12 @@ async fn load_human_rcd(
         }
     }
     if n_check_code == 1 || bo_found {
-        let gbk = {
-            let db = db.lock().await;
-            db.gbk_bytes(&chr_name)
-                .await
-                .unwrap_or_else(|_| chr_name.as_bytes().to_vec())
-        };
-        let encoded_name = String::from_utf8(edcode::encode(&gbk)).unwrap_or_default();
+        // oracle `DataService.cs:192`：`EDCode.EncodeString(chrName)` 内部是
+        // `HUtil32.GetBytes`（GB2312），**不查库**。旧实现让 MySQL 做
+        // `CONVERT(... USING gbk)`，DB 停机时回退 UTF-8 ⇒ 非 ASCII 名字在降级帧上
+        // 字节不等（复验 F1）。这里用本地 GBK 编码，与会话/缓存/库状态无关。
+        let encoded_name =
+            String::from_utf8(edcode::encode(&gbk::encode(&chr_name))).unwrap_or_default();
         let load = LoadPlayerDataPacket {
             chr_name: Some(encoded_name),
             hum_data_info: human_rcd,
@@ -968,6 +968,66 @@ mod db_fault_tests {
             }
             s
         });
+        ts::drop_db(&dsn).await;
+    }
+
+    /// **复验 F1 主判据**：降级 1100 帧的 `ChrName` 是 GB2312 字节（oracle `DataService.cs:192`
+    /// 的 `HUtil32.GetBytes`），**与 MySQL 可用性无关**；旧实现走 `db.gbk_bytes`，`pool.close()`
+    /// 后回退 UTF-8 ⇒ 非 ASCII 名字逐字节不等。
+    ///
+    /// ASCII 反向对照是上一条用例（`loadhero`，同样 `pool.close()`）。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_loadfail_gbk（自建自删）"]
+    async fn load_degraded_frame_chr_name_is_gb2312_not_utf8() {
+        let dsn = ts::setup_db("mir2_test_loadfail_gbk").await;
+        let name = "测试";
+        ts::insert_character(&dsn, "acct", name).await;
+        let db = ts::open_db(&dsn).await;
+        assert!(
+            db.play_data_index_text(name).is_some(),
+            "内存索引必须命中（否则走 -3 分支）"
+        );
+        db.pool.close().await;
+        let db = Arc::new(Mutex::new(db));
+
+        let server = ts::test_server("loadfail_gbk", &dsn);
+        server
+            .login
+            .lock()
+            .await
+            .add_session(b"acct".to_vec(), SESSION, Vec::new());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let req = LoadCharacterData {
+            account: Some("acct".to_string()),
+            chr_name: Some(name.to_string()),
+            user_addr: Some("127.0.0.1".to_string()),
+            session_id: SESSION,
+        };
+        load_human_rcd(&server, &db, &tx, 9, &req.to_bytes())
+            .await
+            .expect("DB 停机不得上抛");
+        let frames = ts::take_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "必须有且只有一帧");
+        let (qid, m, packet) = parse_reply(&frames[0]);
+        assert_eq!(qid, 9);
+        assert_eq!(
+            (m.ident, m.recog, m.param, m.tag, m.series),
+            (DBR_LOADHUMANRCD, 1, 0, 0, 1),
+            "oracle `DataService.cs:190-199`：会话已找到时降级成功帧"
+        );
+        let body = LoadPlayerDataPacket::from_bytes(&packet.expect("成功帧必须带业务体"))
+            .expect("LoadPlayerDataPacket 解析失败");
+        assert_eq!(body.hum_data_info, None, "oracle 同场景 HumDataInfo=null");
+
+        // 期望：`EDCode.EncodeString("测试")`，其中 `HUtil32.GetBytes` = GB2312。
+        let gbk = [0xB2u8, 0xE2, 0xCA, 0xD4];
+        assert_eq!(crate::gbk::encode(name), gbk, "本地编码口径 = GB2312");
+        let expected = String::from_utf8(edcode::encode(&gbk)).unwrap();
+        assert_eq!(body.chr_name.as_deref(), Some(expected.as_str()));
+
+        // 反向牙：旧实现的 UTF-8 回退字节与期望**不同**（本断言让「改回 UTF-8」必红）。
+        let utf8_fallback = String::from_utf8(edcode::encode(name.as_bytes())).unwrap();
+        assert_ne!(expected, utf8_fallback, "GBK 与 UTF-8 字节必须可区分");
         ts::drop_db(&dsn).await;
     }
 

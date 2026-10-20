@@ -13,9 +13,10 @@
 //!
 //! 名字一律带两种表示：**GBK 字节**（线上形态，用于组包与查表键）与**文本**（日志/比较用）。
 //! 查表键统一做 ASCII 折叠（等价 C# `StringComparer.OrdinalIgnoreCase`，见 `gbk::fold_key`）。
-//! 取角色名的 GBK 字节走服务端转换 `CAST(CONVERT(ChrName USING gbk) AS BINARY)`，
-//! 即让 MySQL 做 utf8mb3→gbk 的编码（等价 .NET `Encoding.GetEncoding("gb2312").GetBytes`），
-//! 因此不需要在 Rust 侧内置 GBK 码表。
+//! 建索引时取角色名的 GBK 字节走服务端转换 `CAST(CONVERT(ChrName USING gbk) AS BINARY)`，
+//! 即让 MySQL 做 utf8mb3→gbk 的编码（等价 .NET `Encoding.GetEncoding("gb2312").GetBytes`）。
+//! **例外**：6000 面 1100 取档帧的 `ChrName` 由 oracle `HUtil32.GetBytes` 产生，必须与
+//! 库可用性无关 —— 见 [`crate::gbk::encode`]（本地 `encoding_rs::GBK`，A-14 口径）。
 //!
 //! 一处授权偏离（登记 `tests/parity/whitelist.md` A-10）：C# 连不上 MySQL / 表缺列时
 //! **只打日志、带空索引继续跑**（之后所有角色操作都失败）；本实现按 M1 验收④

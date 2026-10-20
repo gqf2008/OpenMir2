@@ -175,6 +175,19 @@ pub fn fold_key(b: &[u8]) -> Vec<u8> {
     b.iter().map(u8::to_ascii_lowercase).collect()
 }
 
+/// 编码（对应 `HUtil32.GetBytes(str)`）：GB2312 ≈ `encoding_rs::GBK`。
+///
+/// 与 whitelist **A-14** 同一近似口径（PUA 少量字节对映射 / 非法字符回退字符不同；
+/// 现网角色名为常用 GBK 汉字，判定相同）。
+///
+/// **不查库**：oracle `DataService.cs:192` 的 `EDCode.EncodeString(chrName)` 走的是
+/// `HUtil32.GetBytes`，DB 停机时该帧的角色名依然必须是 GB2312 字节。
+#[must_use]
+pub fn encode(s: &str) -> Vec<u8> {
+    let (bytes, _, _) = encoding_rs::GBK.encode(s);
+    bytes.into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +274,12 @@ mod tests {
         assert_eq!(str_to_int(b"", -2), -2);
         assert_eq!(str_to_int(b"abc", -2), -2);
         assert_eq!(str_to_int(b"999999999999", -2), -2);
+    }
+
+    /// `HUtil32.GetBytes` 的 GB2312 字节：不依赖 MySQL 也能拿到（DBSrv 1100 降级帧用）。
+    #[test]
+    fn encodes_gb2312_without_db() {
+        assert_eq!(encode("测试"), vec![0xB2, 0xE2, 0xCA, 0xD4]);
+        assert_eq!(encode("loadhero"), b"loadhero".to_vec());
     }
 }
