@@ -410,9 +410,12 @@ SELECT COUNT(*) AS n, COUNT(DISTINCT Position) AS slots, MIN(Position), MAX(Posi
   ```bash
   python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_client_s2c_frames.py \
     --capture E:/tmp/window/20261021-a/rust/s2c/capture.jsonl \
-    --expect-enter-seq auto --expect-52-weight 14 --expect-52-max-exp 10
+    --expect-enter-seq auto --expect-52-layout client58 \
+    --expect-52-weight 14 --expect-52-max-exp 10
   ```
   期望末行 `RESULT: GREEN`；`Weight=10`（构造级夹具）或 `!=14`（新手件清单不符）都必红。
+  **必须钉 `--expect-52-layout client58`**：40B oracle 布局同样能解出 `Weight=14/MaxExp=10`，
+  不钉布局则布局回退（本该 58B 却按 40B 解）不会被咬。
   （`dump_body_layout.py` 仍只切段；布局口径以 `record.rs::encode_ability_client` 为准。）
 - **侧间还原**：删 `characters/characters_ablity/characters_item/characters_magic` 里该新角行（或 restore base）。
 
@@ -694,26 +697,34 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/world/c
 
 ```bash
 # 主判据（两侧各跑一次；C# capture 为 oracle）
-# 卫士的 recog/x/y 从 C# 侧第一条目标 10 SM_TURN 读（或先用 aoi_visibility_pair 定位）；
-# 两侧必须用**同一组**过滤值（oracle 的 recog 由归一化抹平，x/y 由摆位保证同点）。
+# **跨侧只能用坐标定位**：两侧 ActorId 命名空间不同——C# 的 recog 来自 HUtil32.Sequence()
+# （Guid 取随机正数，实测 SM_TURN recog=255025409），Rust 的来自 EcsStore::alloc_id
+# （从 1 自增，实测 actor recog=275）。同一个 --from-recog 值不可能同时命中两侧
+# （实测带 --from-recog 255025409 对 Rust capture 直接 rc=1）。
+# 且 recog 归一化发生在**选帧之后**：s2c_diff.py:104-118 先按 capture 的 recog 字段选帧，
+# norm_raw 只改 raw_hex 头——归一化**不能**弥补跨侧 recog 差异，不能拿它当「同一组过滤值」。
+# x/y 由摆位保证两侧同点，故跨侧只给 --from-x/--from-y；选中后各侧自动用
+# 「该侧起始帧的 recog」匹配截止 41，不会配到旁人的 41。
 python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff.py \
   --rust E:/tmp/window/20261021-a/rust/s2c/capture.jsonl \
   --golden E:/tmp/window/20261021-a/csharp/s2c/capture.jsonl \
   --start-ident 10 --upto-ident 41 \
-  --from-recog <GUARD_RECOG> --from-x <GUARD_X> --from-y <GUARD_Y> \
+  --from-x <GUARD_X> --from-y <GUARD_Y> \
   --out E:/tmp/window/20261021-a/judge/g3-guardlist-diff.json
-# 只按 recog 或只给坐标也可；--from-x/--from-y 必须成对，找不到匹配帧按 PREREQ/RED fail-closed。
+# 跨侧只给坐标；--from-recog/--to-recog 仅限**单侧**独立诊断（两侧取值不同，禁止共用）。
+# --from-x/--from-y 必须成对，找不到匹配帧按 PREREQ/RED fail-closed。
 # 辅助：出现对数
 python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/aoi_visibility_pair.py \
   --left E:/tmp/window/20261021-a/rust/s2c/capture.jsonl \
   --right E:/tmp/window/20261021-a/csharp/s2c/capture.jsonl --expect visible --min-pairs 1
 ```
 
-- **期望**：`s2c_diff` 对**过滤选中的** 10→41 对的字段逐字节等价（recog 已归一化）；`GREEN: 同序列逐字节 diff = 0`。
+- **期望**：`s2c_diff` 对**坐标选中的** 10→41 对的字段逐字节等价（recog 只在选中**之后**的字节比较里归一化，不参与跨侧选帧）；`GREEN: 同序列逐字节 diff = 0`。
   `aoi_visibility_pair` 末行 `RESULT: GREEN`。
 - **失败判据**：选中对 10/41 的 `param/tag/series/body_sha256` 不同；出现对 <1；过滤值在任一 capture 找不到匹配帧。
 - **C10#2 已闭环（v2.3）**：`s2c_diff.py` 支持 `--from-recog/--from-x/--from-y`（及 `--to-recog`），
-  不再只能截首对；截止 41 默认按起始帧的同一 recog 匹配，避免配到旁人的 41。选帧后仍逐字节比，
+  不再只能截首对；**跨侧 C3 只用坐标**（recog 两侧命名空间不同，见上），`--from-recog/--to-recog`
+  只用于单侧独立诊断；截止 41 在该侧默认按起始帧的同一 recog 匹配，避免配到旁人的 41。选帧后仍逐字节比，
   **不降低任何口径**。真机窗口里 GuardList 卡可按「卫士那一对」直接判；若窗口抓不到该对则 fail-closed。
 
 ### C4. 时间戳判据：`check_timing.py`（已闭环，但规则要按场景写）
@@ -844,7 +855,7 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 | # | 缺口 | 影响 | 目前能做到的 |
 | --- | --- | --- | --- |
 | 1 | **【闭环 v2.3】** 52 body 的 **Weight/MaxExp 字段级解码器** | B2 的 `Weight=14` 可机判 | `check_client_s2c_frames.py --expect-52-weight/--expect-52-max-exp`（40B/58B 自动识别） |
-| 2 | **【闭环 v2.3】** 10/41 的 **recog/坐标过滤**（C3） | GuardList 可挑「卫士那一对」 | `s2c_diff.py --from-recog/--from-x/--from-y/--to-recog` |
+| 2 | **【闭环 v2.3】** 10/41 的**坐标过滤**（C3；recog 过滤仅单侧诊断） | GuardList 可挑「卫士那一对」 | `s2c_diff.py --from-x/--from-y`（跨侧）；`--from-recog/--to-recog` 限单侧 |
 | 3 | 1.2s/30s/600ms/3min 等**服务端节拍**读数 | cadence/aoi-maptime/delay-magic/corpse 卡 | 只能真实等待 + 日志人工看；不判 R |
 | 4 | LoginGate/SelGate 影子抓包 + 网关 timer gate（C8） | G7 四卡 | 日志/截图；保持 in-progress |
 | 5 | 6000/5100 代理或逐帧日志（C9） | G6 | DB 行级 + 连接日志；不判 R |

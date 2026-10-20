@@ -387,6 +387,16 @@ def selftest():
     got, err = trim(rows2, 10, 41, from_recog=0x22)
     expect("截止 41 按同一 recog 匹配（不吃旁人的 41）",
            0 if err is None and [f["recog"] for f in got] == [0x22, 0x99, 0x22] else 1, 0)
+    # 显式 --to-recog 必须真正生效：起始 recog=A 的 41 在前，截止只能落在 recog=B 的 41。
+    # （把 trim 的 `to_recog if ... else start_recog` 改成只用 start_recog 时，本条必红。）
+    rows_t = [
+        _st_frame(10, recog=0x11, seq=0),
+        _st_frame(41, recog=0x11, seq=1),
+        _st_frame(41, recog=0x22, seq=2),
+    ]
+    got_t, err = trim(rows_t, 10, 41, from_recog=0x11, to_recog=0x22)
+    expect("显式 --to-recog=B 截止（不吃起始 recog=A 的 41）",
+           0 if err is None and [f["recog"] for f in got_t] == [0x11, 0x11, 0x22] else 1, 0)
     # 负 recog 的 32 位比较（捕获里 i32 可能显示为负）。
     rows3 = [_st_frame(10, recog=-1, param=1, tag=2, seq=0),
              _st_frame(41, recog=-1, seq=1)]
