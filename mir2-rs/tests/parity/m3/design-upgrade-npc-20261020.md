@@ -180,9 +180,14 @@ n10 = min(85, (n90 << ((3 - n90) & 31)) + 10 + UserItem.Desc[3] - UserItem.Desc[
 3. `RM_ABILITY(10051→67)` → `SM_ABILITY(52)` `Recog=Gold, Param=MakeWord(job,99), Tag=LoWord(GameGold), Series=HiWord(GameGold)`，尾 `EncodeMessage(WAbil)`；
 4. `RM_FEATURECHANGED(10116→132)` → `SM_FEATURECHANGED(41)` 对 12 格内可见者（含自己）；
 5. `RM_GOLDCHANGED(10136→152)` → `SM_GOLDCHANGED(653)` `Recog=Gold, Param=LoWord(GameGold), Tag=HiWord(GameGold), Series=0`；
-6. `RM_SENDDELITEMLIST(10148→164)` → `SM_DELITEMS(709)` `Series=条数`，尾 `EncodeString("名/makeindex/…")`。
+6. `RM_CHARSTATUSCHANGED(10139→**155**)×2` → `SM_CHARSTATUSCHANGED(657)`：`RecalcAbilitys` 尾段
+   `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(RM_CHARSTATUSCHANGED, …)`
+   （`PlayObject.cs:2874-2876`）。`StatusChanged()` 的 `SendRefMsg` 给 12 格内玩家（含自己）一条，
+   `SendUpdateMsg` 的去重因 `TryPeek` 不前进而无效 ⇒ 自己**两条**；`Series` = 每个**收件人自己**的
+   `HitSpeed`（`PlayObject.Message.cs:1846` 的 `this.HitSpeed`）。近邻支只收一条；
+7. `RM_SENDDELITEMLIST(10148→164)` → `SM_DELITEMS(709)` `Series=条数`，尾 `EncodeString("名/makeindex/…")`。
 
-⇒ 线上自助视角顺序：**SM_DELITEM → SM_MERCHANTSAY → SM_ABILITY → SM_FEATURECHANGED → SM_GOLDCHANGED → SM_DELITEMS**（say 优先级 1，会插到最前，**不是**调用序）。本路径**不发 752**。
+⇒ 线上自助视角顺序：**SM_DELITEM → SM_MERCHANTSAY → SM_ABILITY → SM_FEATURECHANGED → SM_GOLDCHANGED → [SM_CHANGELIGHT(654)] → SM_CHARSTATUSCHANGED(657)×2 → SM_DELITEMS**（say 优先级 1，会插到最前，**不是**调用序；654 仅 `oldlight != Light`，本宿主无展示表 ⇒ 不发）。近邻视角：`SM_FEATURECHANGED(41) → [654] → 657`。本路径**不发 752**。
 
 **提交失败**：只有一条 `SM_MERCHANTSAY`。**取回成功**：`SM_ADDITEM(200)`（`ActorId,0,0,1` + `EncodeBuffer(ClientItem)`）立即，然后 `SM_MERCHANTSAY`；**无 52/41**。
 
@@ -254,7 +259,7 @@ n10 = min(85, (n90 << ((3 - n90) & 31)) + 10 + UserItem.Desc[3] - UserItem.Desc[
 - 牙：把 SC 的 `Mc` 改成 `Sc` ⇒ 该种子红。
 
 **C8 帧序与字节**
-- 提交成功断言完整序列与头字段：`SM_DELITEM(202, Recog=ActorId, Series=1)` → `SM_MERCHANTSAY(643, Recog=商人, Series=1)` → `SM_ABILITY(52, Recog=Gold, Param=MakeWord(job,99), Tag/Series=GameGold 低/高)` → `SM_FEATURECHANGED(41)` → `SM_GOLDCHANGED(653)` → `SM_DELITEMS(709, Series=count)`；尾逐字节。
+- 提交成功断言完整序列与头字段：`SM_DELITEM(202, Recog=ActorId, Series=1)` → `SM_MERCHANTSAY(643, Recog=商人, Series=1)` → `SM_ABILITY(52, Recog=Gold, Param=MakeWord(job,99), Tag/Series=GameGold 低/高)` → `SM_FEATURECHANGED(41)` → `SM_GOLDCHANGED(653)` → `SM_CHARSTATUSCHANGED(657)×2`（`Recog=ActorId, Param/Tag=Lo/Hi(CharStatus), Series=HitSpeed`） → `SM_DELITEMS(709, Series=count)`；尾逐字节。近邻另断言 `41 → 657`。
 - 取回成功：`SM_ADDITEM(200)` 先于 say。
 - 牙：把 say 的队列优先级写成 643（而非 1）⇒ 顺序红；`SM_DELITEMS` 的 `Series` 写 0 ⇒ 红。
 
@@ -291,7 +296,7 @@ n10 = min(85, (n90 << ((3 - n90) & 31)) + 10 + UserItem.Desc[3] - UserItem.Desc[
 
 ## 摘要（≤1000 字）
 
-本卡=武器升级 NPC 两条指令 1:1 接线，tier=R。守卫：UserSelect→城堡战门（部署 false）→`@`→LableIsCanJmp（Rust 未建模）→派发（Merchant.cs:883/890）→脚本头标志。提交 UpgradeWapon（:527-586）零 RNG：同名记录（区分大小写）→武器 index≠0/金币≥10000/包内有黑铁→扣 10000→发 SM_DELITEM→槽 Index=0（对象保留）→52/41→AddValue 吃掉全部黑铁与首饰并算 Dc/Sc/Mc/Dura（整体反转伪排序，Dura 只累前 5 件）→SM_DELITEMS→say `_ok`；失败仅 `_ing/_fail`。取回（:592-759）：包满门→不区分大小写找记录→未到期 `_ing`，到期或权限≥4 取出→耐久分支（9-15 Random(Dura)；18-255 Random(Dura-18)，Dura=18 仍抽 Random(0)；16-17 不抽）→Dc=Mc=Sc 时 Random(3)（空转）→DC/MC/SC 按序 Random(50)+条件 Random(30)/Random(200)，n90<<((3-n90)&31) 定 n10（n90=6 恒败；SC 支用 Mc 的 bug）→写 Desc[10]→SM_ADDITEM（不 AddItemToBag，缺陷）。持久化：upgradeinfo 三表空桩，在途列表仅内存、重启即丢。帧序：立即 SM_DELITEM；排队 say(1)→52(67)→41(132)→653(152)→709(164)。写集：world/merchant.rs（含 RNG，禁止 main.rs）、shop.rs 两分支、main.rs 一处臂、config.rs。判据 C1-C10 各带牙。缺口引用 #15/T-24、T-79②⑥、smframe.rs:207、Market_Def 未装载。
+本卡=武器升级 NPC 两条指令 1:1 接线，tier=R。守卫：UserSelect→城堡战门（部署 false）→`@`→LableIsCanJmp（Rust 未建模）→派发（Merchant.cs:883/890）→脚本头标志。提交 UpgradeWapon（:527-586）零 RNG：同名记录（区分大小写）→武器 index≠0/金币≥10000/包内有黑铁→扣 10000→发 SM_DELITEM→槽 Index=0（对象保留）→52/41→AddValue 吃掉全部黑铁与首饰并算 Dc/Sc/Mc/Dura（整体反转伪排序，Dura 只累前 5 件）→SM_DELITEMS→say `_ok`；失败仅 `_ing/_fail`。取回（:592-759）：包满门→不区分大小写找记录→未到期 `_ing`，到期或权限≥4 取出→耐久分支（9-15 Random(Dura)；18-255 Random(Dura-18)，Dura=18 仍抽 Random(0)；16-17 不抽）→Dc=Mc=Sc 时 Random(3)（空转）→DC/MC/SC 按序 Random(50)+条件 Random(30)/Random(200)，n90<<((3-n90)&31) 定 n10（n90=6 恒败；SC 支用 Mc 的 bug）→写 Desc[10]→SM_ADDITEM（不 AddItemToBag，缺陷）。持久化：upgradeinfo 三表空桩，在途列表仅内存、重启即丢。帧序：立即 SM_DELITEM；排队 say(1)→52(67)→41(132)→653(152)→657×2(155)→709(164)。写集：world/merchant.rs（含 RNG，禁止 main.rs）、shop.rs 两分支、main.rs 一处臂、config.rs。判据 C1-C10 各带牙。缺口引用 #15/T-24、T-79②⑥、smframe.rs:207、Market_Def 未装载。
 
 
 ---
@@ -301,7 +306,7 @@ n10 = min(85, (n90 << ((3 - n90) & 31)) + 10 + UserItem.Desc[3] - UserItem.Desc[
 - **A1**：提交重复检查是 `upgradeInfo.UserName == user.ChrName`（C# 区分大小写）⇒ 「大小写不同」**会继续升级并再加一条记录**，
   不是 `_ing`；取回端用 OrdinalIgnoreCase 且找到不 break ⇒ 可取到后一条。C3① 期望写反了。
 - **A2**：C7 的期望集合错——`Dc=0/Mc=3/Sc=6` 时 SC 支 `n90=min(11,Mc)=3 ⇒ n10=13`，成功后 `Desc[10]=30`，不会出现 31/32。
-- **A3**：C8 与「Market_Def 未装载 ⇒ say 发不出」自相矛盾。拆成 C8a（无 say 的 5 帧顺序：202→52→41→653→709）
+- **A3**：C8 与「Market_Def 未装载 ⇒ say 发不出」自相矛盾。拆成 C8a（无 say 的 7 帧顺序：202→52→41→653→657×2→709；657×2 见复验 F3）
   与 C8b（say 字节，随脚本装载卡）；Rust 的 `emit_shop_frames` **没有优先级队列**（按 vector 直发），
   牙应写「把 say 排在 52 之后 ⇒ 顺序红」。handler 只能调 `recalc_session_ability`，不得复用登录侧带 752 的助手。
 - **A4**：C9 的城堡战门在本卡写集里不存在（`MerchantView` 只有 `castle_merchant`，World 无 under_war/城堡表）——

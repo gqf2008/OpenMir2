@@ -940,7 +940,11 @@ fn upgrade_wapon_add_value(
             break;
         }
     }
-    // 提交前已确认至少 1 件黑铁 ⇒ oracle 的 `nDura / nItemCount` 不会除零；此处仅防御。
+    // **复验 F6（已登记 T-95⑧）**：oracle 在 `nItemCount == 0` 时 `nDura / nItemCount`
+    // 抛 `DivideByZeroException`。本入口前置 `CheckItems(BlackStone)`（`OrdinalIgnoreCase`）
+    // 与这里的精确 `==` 名单**理论上**可错位（忽略大小写命中而精确不命中），但冻结内容
+    // `BlackStone=黑铁矿` 使两者同集 ⇒ 不可达。`.max(1)` 是防御性偏离（oracle 抛异常、
+    // 本侧给 0 耐久），登记而不照搬异常。
     let n_item_count = n_item_count.max(1);
     let min5 = n_item_count.min(5);
     info.dura = (f64::from(min5) + f64::from(min5) * (f64::from(n_dura / n_item_count) / 5.0))
@@ -980,7 +984,8 @@ fn upgrade_wapon_begin_impl(
     }
     // `CheckItems`：名 `OrdinalIgnoreCase` 命中（`BaseObject.cs:2189-2204`）。
     let has_black_stone = bag.iter().any(|it| {
-        item_name_at(catalog, it.index).is_some_and(|n| n.eq_ignore_ascii_case(&cfg.black_stone))
+        item_name_at(catalog, it.index)
+            .is_some_and(|n| equals_ordinal_ignore_case(n, &cfg.black_stone))
     });
     if !has_black_stone {
         return UpgradeWaponBegin::Fail;
@@ -1057,7 +1062,7 @@ fn get_backupg_weapon_impl(
     let mut info: Option<WeaponUpgradeInfo> = None;
     let mut i = 0usize;
     while i < list.len() {
-        if list[i].user_name.eq_ignore_ascii_case(chr_name) {
+        if equals_ordinal_ignore_case(&list[i].user_name, chr_name) {
             n_flag = 1;
             if (now_ms - list[i].get_back_tick) > cfg.get_back_time_ms || permission >= 4 {
                 info = Some(list.remove(i));

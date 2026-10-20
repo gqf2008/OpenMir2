@@ -3722,6 +3722,26 @@ fn emit_shop_frames(
     }
 }
 
+/// `SM_CHARSTATUSCHANGED(657)` 的 [`game_svr::shop::ShopFrame`] 形态。
+///
+/// 字段口径与 [`game_svr::smframe_ext::sm_charstatuschanged`] 逐字节相同（header-only）；
+/// 用于把升级 `RecalcAbilitys` 产生的两条 657 按向量序插进 `out`（`emit_shop_frames` 直发）。
+fn charstatuschanged_shop_frame(
+    actor_id: i32,
+    status: i32,
+    hit_speed: u16,
+) -> game_svr::shop::ShopFrame {
+    game_svr::shop::ShopFrame {
+        ident: mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+        recog: actor_id,
+        param: game_svr::smframe::lo_word(status),
+        tag: game_svr::smframe::hi_word(status),
+        series: hit_speed,
+        tail: Vec::new(),
+        tail_encoded: false,
+    }
+}
+
 /// 商店“找件”的门：`MakeIndex == nMakeIndex && 名 OrdinalIgnoreCase 相等`
 /// （`PlayObject.Operate.cs:131/162/1558/1585` 四处同形）。
 fn find_bag_item_by_make_index(
@@ -4065,6 +4085,9 @@ fn handle_shop_cmd(
     // 武器升级的 `FeatureChanged()`（41）：本人那条已按序放进 `out`；这里记下参数，
     // 出帧后补发给其它同图 12 格内在线玩家（`broadcast_feature_changed_except(..., Some(self))`）。
     let mut feature_broadcast: Option<(i32, u16)> = None;
+    // **复验 F3**：提交成功时 `StatusChanged()` 的 `SendRefMsg` 还给 12 格内其它玩家一条 657
+    // （自己的两条已按发送序放进 `out`）。这里记下 `CharStatus`，出帧后补发。
+    let mut charstatus_broadcast: Option<i32> = None;
     match ident {
         game_svr::shop::CM_MERCHANTDLGSELECT => {
             // `ClientMerchantDlgSelect`（`Operate.cs:114-128`）。
@@ -4198,7 +4221,35 @@ fn handle_shop_cmd(
                                 if let Some(Some(slot)) = sg.use_items.get_mut(1) {
                                     slot.index = 0;
                                 }
-                                let _ = recalc_session_ability(sg, catalog, None, None);
+                                // **复验 F1**：oracle 的 `UseItems` 就是实体上的同一份数组；本宿主会话与实体
+                                // 是两份投影。摘武器后必须立即整表同步到实体，否则下一 tick 的
+                                // `drain_player_need_recheck_with_magic` 会用实体（仍是旧武器）整表回写会话
+                                // ⇒ 武器复活（`main.rs` 复验 F1）。
+                                sync_use_items_to_entity(world, sg);
+                                // **复验 F2**：`RecalcAbilitys` 尾段的 `ExtraAbil`（`PlayObject.cs:2818-2846`）
+                                // 用实体上的 `ExtraAbil`（与换装路径 `main.rs:2717` 同口径）。
+                                let extra_abil =
+                                    world.entities.get(sg.actor_id).map(|e| e.extra_abil);
+                                // **复验 F2 附带（T-95⑨ 登记）**：`RecalcAbilitys` 尾段的
+                                // FlameRing/RecoveryRing `Del/AddItemSkill`（210/212 事件）未接——
+                                // 本 handler 无 `SavedHuman`/`MagicCfg` 输入；`WAbil/SubAbility` 语义等价。
+                                let effect =
+                                    recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
+                                // **复验 F1**：`RecalcAbilitys` 的产物（`WAbil`/`SubAbility`/`HitSpeed`）
+                                // 同帧落实体（与换装路径 `main.rs:2717-2726` 同口径）。
+                                if let Some(e) = world.entities.get_mut(sg.actor_id) {
+                                    apply_ability_to_entity(
+                                        e,
+                                        &sg.state.wabil,
+                                        &sg.sub,
+                                        sg.hit_speed,
+                                    );
+                                    if effect.revival {
+                                        e.revival = true;
+                                    }
+                                    // Lane B：`FlameRing` 粘滞锁存（同换装路径）。
+                                    e.flame_ring |= effect.flame_ring;
+                                }
                                 // 税：`if (CastleMerchant || GetAllNpcTax)`（部署两条件皆 false）。
                                 let _tax = mcastle || shop_cfg.get_all_npc_tax;
                                 // `Merchant.cs:572`：`UpgradeWaponAddValue`（吃材料、算四字段、入列表）。
@@ -4260,7 +4311,26 @@ fn handle_shop_cmd(
                             );
                         }
                         feature_broadcast = oc.feature_changed;
-                        out = oc.frames;
+                        let mut frames = oc.frames;
+                        if oc.feature_changed.is_some() {
+                            // **复验 F3**：oracle `RecalcAbilitys` 尾段（`PlayObject.cs:2874-2876`）
+                            // `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(RM_CHARSTATUSCHANGED, …)`。
+                            // `StatusChanged()` 是 `SendRefMsg`（12 格内玩家，含自己）⇒ 自己一条；
+                            // `SendUpdateMsg` 再去重失败地追加自己一条 ⇒ 自己共两条。
+                            // 两条同 ident/同载荷，按入队序插在 `709` 之前（优先级 155 < 164）。
+                            let status = world.get_char_status(sg.actor_id);
+                            let hit_speed =
+                                world.entities.get(sg.actor_id).map_or(0, |e| e.hit_speed);
+                            let cs = charstatuschanged_shop_frame(sg.actor_id, status, hit_speed);
+                            let at = frames
+                                .iter()
+                                .position(|f| f.ident == mir2_protocol::messages::SM_DELITEMS)
+                                .unwrap_or(frames.len());
+                            frames.insert(at, cs.clone());
+                            frames.insert(at, cs);
+                            charstatus_broadcast = Some(status);
+                        }
+                        out = frames;
                     }
                     game_svr::shop::UpgradeRequest::GetBackupgWeapon => {
                         let r = world.merchant_get_backupg_weapon(
@@ -4456,6 +4526,17 @@ fn handle_shop_cmd(
             feature_ex,
             shop_cfg.send_ref_msg_range,
             Some(actor_id),
+        );
+    }
+    if let Some(status) = charstatus_broadcast {
+        // 近邻序 41 → 657（自己的两条 657 已随 `out` 走）。
+        broadcast_charstatuschanged_except_self(
+            world,
+            online,
+            gates,
+            actor_id,
+            status,
+            shop_cfg.send_ref_msg_range,
         );
     }
 }
@@ -4873,6 +4954,39 @@ fn broadcast_feature_changed_except(
             let _ = tx.send(SimToGate::SendFrame {
                 socket: e.socket,
                 body: body.clone(),
+            });
+        }
+    }
+}
+
+/// `StatusChanged()`（`BaseObject.cs:1514` 的 `SendRefMsg(RM_CHARSTATUSCHANGED)`）的宿主等价物，
+/// 用于武器升级 `RecalcAbilitys` 尾段（`PlayObject.cs:2874-2876`）的**近邻**支：
+/// 给 ±`range` 格内**其它**玩家各一条 `SM_CHARSTATUSCHANGED(657)`。
+///
+/// 自己那两条（`SendRefMsg` 回环 + `SendUpdateMsg`）由调用方按发送序放进 `out`，本函数跳过自己。
+/// 每条的 `Series` 是**收件人自己**的 `HitSpeed`（`PlayObject.Message.cs:1846` 的 `this.HitSpeed`）；
+/// `Recog/Param/Tag` 是**发送者**的 `ActorId` 与 `CharStatus` 的 Lo/Hi。
+fn broadcast_charstatuschanged_except_self(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    status: i32,
+    range: i32,
+) {
+    for target_id in chat::hear_targets(world, actor_id, range) {
+        if target_id == actor_id {
+            continue;
+        }
+        let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+            continue;
+        };
+        let hit_speed = world.entities.get(target_id).map_or(0, |e| e.hit_speed);
+        let body = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
+        if let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "657 广播") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: t.socket,
+                body,
             });
         }
     }
@@ -45666,9 +45780,12 @@ mod tests {",
     }
     /// **C8a（A3）**：武器升级 NPC 的提交/取回全链（`handle_shop_cmd`）——
     /// ① 未展示过标签（`CanJmpScriptLableMap` 空）⇒ `@upgradenow` **零帧、零副作用**（A6）；
-    /// ② 展示过后提交成功：帧序 **202 → 52 → 41 → 653 → 709**（**无 say**，C8a），
+    /// ② 展示过后提交成功：帧序 **202 → 52 → 41 → 653 → 657 → 657 → 709**（**无 say**，C8a），
     ///    `202` 尾 = `del_item_tail(武器)`、`52` 尾 = `Encode(WAbil)`、`709` 尾 = 倒序删除表；
-    ///    状态：gold 20000→10000、`UseItems[1]` 仍 `Some` 且 `index=0`（make/desc 保留）、背包清空；
+    ///    `657×2` = `StatusChanged()` 回环 + `SendUpdateMsg`（`PlayObject.cs:2874-2876`），
+    ///    近邻另收 `41 → 657`；状态：gold 20000→10000、`UseItems[1]` 仍 `Some` 且 `index=0`
+    ///    （make/desc 保留）、背包清空；**world 实体武器槽同帧 index=0，drain 后会话仍 0**（复验 F1）；
+    ///    **`ExtraAbil[0]=5` ⇒ WAbil.dc=0x0601**（复验 F2）；
     /// ③ 取回到期：`SM_ADDITEM(200)` 一条；**`ItemList` 长度不变**（`AddItemToBag` 被注释的
     ///    BUG-REPLICA），尾含 `desc[10]` 与耐久分支后的 `DuraMax`。
     ///
@@ -45846,6 +45963,37 @@ mod tests {",
         assert_eq!(sessions["hero"].state.gold, 20_000, "未展示 ⇒ 不扣金");
         assert_eq!(sessions["hero"].use_items[1].as_ref().unwrap().index, 4);
 
+        // **复验 F1**：按生产进世界路径预装实体装备（实体全零会掩盖"实体旧武器整表回写"的 bug）。
+        apply_use_items_to_entity(
+            world.entities.get_mut(hero).expect("hero 实体在"),
+            &sessions["hero"].use_items,
+        );
+        // **复验 F2**：`AttPowerUp` 写 `ExtraAbil[0]`（`world.rs:3752` 可达）；+5 后 WAbil.dc 应 0x0601。
+        world
+            .entities
+            .get_mut(hero)
+            .expect("hero 实体在")
+            .extra_abil[0] = 5;
+        // **复验 F3**：12 格内近邻观察者，验证近邻 `41 → 657`。
+        let obs = world.add_entity({
+            let mut e = mir2_world::Entity::new(0, "obs", 12, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".to_string(),
+                chr_name: "obs".to_string(),
+                session_id: 2,
+                gate_idx: 1,
+                socket: 902,
+                actor_id: obs,
+            },
+        );
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        gates.insert(1, tx1);
+
         // ② 展示过 `<确定/@upgradenow>` 后提交。
         shop_sessions
             .entry("hero".to_string())
@@ -45882,9 +46030,11 @@ mod tests {",
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_FEATURECHANGED,
                 mir2_protocol::messages::SM_GOLDCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_DELITEMS,
             ],
-            "C8a：202 → 52 → 41 → 653 → 709（无 say）"
+            "C8a：202 → 52 → 41 → 653 → 657 → 657 → 709（无 say，654 无发光变化）"
         );
         // 202：Recog=ActorId、Series=1，尾 = del_item_tail(武器)。
         let (ident, param, tag, recog) = hdr(&frames[0]);
@@ -45944,15 +46094,41 @@ mod tests {",
         assert_eq!((ident, recog), (653, 10_000));
         assert_eq!((param, tag), (0, 0));
         assert_eq!(u16::from_le_bytes([frames[3][10], frames[3][11]]), 0);
+        // 657×2：`StatusChanged()` 的 SendRefMsg 回环 + `SendUpdateMsg`（`PlayObject.cs:2874-2876`）。
+        // 载荷 = 发送者 `ActorId`、`CharStatus` 的 Lo/Hi、**收件人自己**的 `HitSpeed`（此处 0）。
+        for i in [4usize, 5] {
+            let (ident, param, tag, recog) = hdr(&frames[i]);
+            assert_eq!(
+                (ident, param, tag, recog),
+                (mir2_protocol::messages::SM_CHARSTATUSCHANGED, 0, 0, hero),
+                "657#{i}: (ActorId, Lo/Hi(CharStatus), HitSpeed)"
+            );
+            assert_eq!(u16::from_le_bytes([frames[i][10], frames[i][11]]), 0);
+            assert_eq!(frames[i].len(), 12, "657 header-only");
+        }
         // 709：Series=3，尾 = 倒序删除表。
-        let (ident, param, tag, recog) = hdr(&frames[4]);
+        let (ident, param, tag, recog) = hdr(&frames[6]);
         assert_eq!((ident, param, tag, recog), (709, 0, 0, 0));
-        assert_eq!(u16::from_le_bytes([frames[4][10], frames[4][11]]), 3);
+        assert_eq!(u16::from_le_bytes([frames[6][10], frames[6][11]]), 3);
         assert_eq!(
-            &frames[4][12..],
+            &frames[6][12..],
             &mir2_protocol::edcode::encode(&crate::downlink::gbk("项链/3/黑铁矿/2/黑铁矿/1/")),
             "删除表 = 背包倒序"
         );
+        // **复验 F3 近邻**：41（FeatureChanged 广播）→ 657（StatusChanged 广播）。
+        let obs_frames = drain_frames(&mut rx1);
+        let obs_idents: Vec<u16> = obs_frames.iter().map(|b| hdr(b).0).collect();
+        assert_eq!(
+            obs_idents,
+            vec![
+                mir2_protocol::messages::SM_FEATURECHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+            ],
+            "近邻：41 → 657（654 无发光变化）"
+        );
+        let (ident, param, tag, recog) = hdr(&obs_frames[1]);
+        assert_eq!((ident, param, tag, recog), (657, 0, 0, hero));
+        assert_eq!(obs_frames[1].len(), 12);
         // 状态：金币、槽位、背包、在途记录。
         let sg_after = &sessions["hero"];
         assert_eq!(sg_after.state.gold, 10_000);
@@ -45963,11 +46139,35 @@ mod tests {",
         assert_eq!(slot.make_index, 7, "MakeIndex 保留");
         assert_eq!(slot.desc, [0; 14], "Desc 保留");
         assert!(sg_after.state.item_list.is_empty(), "黑铁/首饰全被吃");
+        // **复验 F1**：实体武器槽同帧清零；再跑一次每-tick 复检（实体 → 会话整表回写）后仍为 0。
+        assert_eq!(
+            world.entities.get(hero).expect("hero 实体在").use_items[1].index,
+            0,
+            "F1：world 实体武器槽 index == 0"
+        );
+        // **复验 F2**：`ExtraAbil[0]=5` 已应用到 WAbil（Hi 1+5 = 6，Lo 1 ⇒ 0x0601）。
+        assert_eq!(
+            sg_after.state.wabil.dc, 0x0601,
+            "F2：ExtraAbil[0]=5 ⇒ Hi 1+5"
+        );
+        // **复验 F1**：`apply_ability_to_entity` 同帧落 `dc`（战斗侧读 `Entity.dc`）。
+        assert_eq!(
+            world.entities.get(hero).expect("hero 实体在").dc,
+            0x0601,
+            "F1：实体 dc 跟随重算（含 ExtraAbil）"
+        );
         // **顺序即语义**：`RecalcAbilitys`（`Merchant.cs:570`）在 `AddValue`（`:572`）之前 ⇒
         // 52 帧的 `WAbil.Weight` 含材料重量（2×黑铁 weight1 + 项链 weight2 = 4；武器已摘 ⇒ 0）。
         assert_eq!(
             sg_after.state.wabil.weight, 4,
             "重算时材料仍在包里（oracle 顺序）"
+        );
+        // **复验 F1**：再跑一次每-tick 复检（实体 → 会话整表回写）后会话仍为 0。
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 3);
+        assert_eq!(
+            sessions["hero"].use_items[1].as_ref().unwrap().index,
+            0,
+            "F1：再跑一次 drain 后会话仍为 0（武器不复活）"
         );
         let st = world.entities.get(mid).unwrap().merchant.as_ref().unwrap();
         assert_eq!(st.upgrade_weapon_list.len(), 1);

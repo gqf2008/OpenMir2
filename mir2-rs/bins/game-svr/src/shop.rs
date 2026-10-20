@@ -1300,6 +1300,10 @@ pub struct UpgradeOutcome {
     /// 提交成功 = `SM_DELITEM(202)` → `SM_ABILITY(52)` → `SM_FEATURECHANGED(41)` →
     /// `SM_GOLDCHANGED(653)` → `SM_DELITEMS(709)`。say 帧**不在**这里：`Market_Def`
     /// 商人脚本未装载（T-47 ③），`goto_label` 由宿主登记。
+    ///
+    /// **657**：本接缝只回上面 5 帧；oracle `RecalcAbilitys` 尾段的 `SM_CHARSTATUSCHANGED(657)×2`
+    /// （`PlayObject.cs:2874-2876`）由宿主在 `653` 与 `709` 之间按发送序插入，近邻支另行广播
+    /// （见 `main.rs::charstatuschanged_shop_frame` / `broadcast_charstatuschanged_except_self`）。
     pub frames: Vec<ShopFrame>,
     /// `GotoLable(...)` 的标签名（脚本未装载 ⇒ 不执行，只登记）。
     pub goto_label: Option<&'static str>,
