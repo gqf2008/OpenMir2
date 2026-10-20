@@ -268,20 +268,35 @@ merchant	csharp	Merchant\.GetBackupgWeapon@Merchant\.cs:	src/GameSrv/Npc/Merchan
 
 # ---- 2026-10-20 追加（MB-5：毒 / 隐身 / 瞬移；卡 openmir2-mb5-monsters）-----------------
 # 五类全部是可覆写 Run 的专用怪，取数点全在 Run 体/其调用的 helper 内；Rust 站点文件级
-# MB-6（R14/R25/R31）：魔法 / 群攻。
-monster_ai	csharp	ElectronicScolpionMon\.LightingAttack@ElectronicScolpionMon\.cs:	src/M2Server/Monster/Monsters/ElectronicScolpionMon.cs:18	MB-6 R14：`GetAttackPower(Lo(DC), |Hi(DC)-Lo(DC)|)`（`:18`，恰 1 抽）；`GetMagStruckDamage`（MAC 1 抽）走攻击组正则同口径；Rust `monai.rs::electronic_scolpion_lighting_attack`
-monster_ai	csharp	RonObject\.AroundAttack@RonObject\.cs:	src/M2Server/Monster/Monsters/RonObject.cs:22	MB-6 R31：`GetBaseAttackPoewr()`（`:22`，`objectList.Count > 0` 时恰 1 抽，全目标共用）；Rust `monai.rs::ron_object_around_attack`
-# MB-6 R31 **窗口前待办（未闭）**：`AroundAttack` 逐个 `_Attack` 的命中骰（`RandomByte(target.SpeedPoint)`）
-#   在 Rust 落 `crates/world/src/monai.rs::ron_attack`（本表文件级 `monster_ai` 行），而 oracle 站点是
-#   `BaseObject._Attack@BaseObject.Attack.cs:37`（C# 侧命中 `CSHARP_ATTACK_RE` ⇒ `attack` 组）。
-#   `GetHitStruckDamage` 的护甲/耐久抽在两侧都在 `combat.rs`（attack 组）⇒ 只有命中骰这一项分组不对称。
-#   闭合方式二选一：①把命中骰下沉到 `crates/world/src/combat.rs`（改 `combat.rs`，本车道写集外）；
-#   ②`groupdiff` 按段折叠。真机窗口（race 200/133/131 均无对象）前必须先定。
-# MagicMonObject：`LightingAttack` 是空函数（`MagicMonObject.cs:18-21`）⇒ 零 RNG 站点，不登记。
-# 已由上方 `monster_ai rust crates/world/src/monai.rs:` 与 `space_move`/`magic_effect` 行覆盖。
 monster_ai	csharp	GreenMonster\.Run@GreenMonster\.cs:	src/M2Server/Monster/Monsters/GreenMonster.cs:23	MB-5 R22：`Random(TargetCret.AntiPoison + 7) <= 6`（**先抽**，再判 `StatusTimeArr[DECHEALTH]==0`）；Rust `monai.rs::green_red_monster_run`
 monster_ai	csharp	RedMonster\.Run@RedMonster\.cs:	src/M2Server/Monster/Monsters/RedMonster.cs:23	MB-5 R29：与 Green 同门同序，仅毒型 `DAMAGEARMOR`；Rust `monai.rs::green_red_monster_run`
 monster_ai	csharp	Khazard\.Run@Khazard\.cs:25$	src/M2Server/Monster/Monsters/Khazard.cs:25	MB-5 R23：两轴各 2 格后的 `Random(2)` 分支门；Rust `monai.rs::khazard_run`
 monster_ai	csharp	Khazard\.Run@Khazard\.cs:(30|44)$	src/M2Server/Monster/Monsters/Khazard.cs:30	MB-5 R23：`Random(1)`（恒 0 但必抽）+ `Random(TargetCret.AntiPoison + 7)`；`:44` 同序；Rust `monai.rs::khazard_run`
 magic_effect	csharp	MagicManager\.MagMakePrivateTransparent@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:686	MB-5 R20：`FrostTiger.Run` 直接调 helper；helper 内邻格且以目标为靶才 `Random(2)`；Rust `world.rs::mag_make_private_transparent` → `magic_effect::private_transparent_draw`（`magic_effect` 组已按文件覆盖）
 # TeleMonster.Run（R40）本身零直接抽：只有 `SendRefMsg(RM_SPACEMOVE_FIRE)` + `SpaceMove` 的移位环（归 `space_move` 组，见上）。
+
+# ---- 2026-10-21 订正（MB-6：魔法 / 群攻；卡 openmir2-mb2-monsters）------------------------
+# **不新增 C# 行**：C# rng-hook 的 site 是「**直接调用 `Random` 的方法帧**」，不是覆写
+# `Run`/攻击入口的帧（实证：基版攻击力在真机 trace 里记成
+# `M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892`）。R14（ElectronicScolpionMon）/
+# R31（RonObject）的全部取数落在**既有**站点：
+#   · `GetAttackPower`（`LightingAttack` 与 `GetBaseAttackPoewr` 都经它）⇒ 站点
+#     `M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892`，命中 `CSHARP_ATTACK_RE`
+#     ⇒ `attack` 组；该行已在 `rng-hook/divert-sites.txt`（`atk_power_base`）。
+#   · `GetMagStruckDamage`（R14 的 MAC 1 抽）⇒ 上方 `magic_effect` 行
+#     `BaseObject.GetMagStruckDamage@BaseObject.Base.cs:`（实测帧 = `:814`）。
+#   · `_Attack` 的命中骰 `RandomByte(target.SpeedPoint)` ⇒ 站点
+#     `M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41`，命中 `CSHARP_ATTACK_RE`
+#     ⇒ `attack` 组；该行已在 `rng-hook/divert-sites.txt`（`hit_gate`）。
+# 覆写体 `ElectronicScolpionMon.LightingAttack@...cs:18` / `RonObject.AroundAttack@...cs:22`
+# **不会**出现在 trace 里（它们不是直接调用 `Random` 的帧）⇒ 原先那两条登记是永远匹配不到
+# 的死行，已于 2026-10-21 删除。
+# MagicMonObject：`LightingAttack` 是空函数（`MagicMonObject.cs:18-21`）⇒ 零 RNG 站点，不登记。
+#
+# MB-6 R31 **窗口前待办（未闭）**：`AroundAttack` 逐个 `_Attack` 的命中骰
+#   （`RandomByte(target.SpeedPoint)`）在 Rust 落 `crates/world/src/monai.rs::ron_attack`
+#   （本表文件级 `monster_ai` 行），而 oracle 站点是 `BaseObject._Attack@BaseObject.Attack.cs:41`
+#   （C# 侧命中 `CSHARP_ATTACK_RE` ⇒ `attack` 组）。
+#   `GetHitStruckDamage` 的护甲/耐久抽在两侧都在 `combat.rs`（attack 组）⇒ 只有命中骰这一项分组不对称。
+#   闭合方式二选一：①把命中骰下沉到 `crates/world/src/combat.rs`（改 `combat.rs`，本车道写集外）；
+#   ②`groupdiff` 按段折叠。真机窗口（race 200/133/131 均无对象）前必须先定。
