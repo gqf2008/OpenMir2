@@ -16,7 +16,7 @@
 //! 建索引时取角色名的 GBK 字节走服务端转换 `CAST(CONVERT(ChrName USING gbk) AS BINARY)`，
 //! 即让 MySQL 做 utf8mb3→gbk 的编码（等价 .NET `Encoding.GetEncoding("gb2312").GetBytes`）。
 //! **例外**：6000 面 1100 取档帧的 `ChrName` 由 oracle `HUtil32.GetBytes` 产生，必须与
-//! 库可用性无关 —— 见 [`crate::gbk::encode`]（本地 `encoding_rs::GBK`，A-14 口径）。
+//! 库可用性无关 —— 见 [`crate::gbk::encode`]（本地 cp936 逐字节编码：`cp936::encode_gb2312_dotnet`，不查库）。
 //!
 //! 一处授权偏离（登记 `tests/parity/whitelist.md` A-10）：C# 连不上 MySQL / 表缺列时
 //! **只打日志、带空索引继续跑**（之后所有角色操作都失败）；本实现按 M1 验收④
@@ -130,7 +130,7 @@ pub(crate) const CREATE_GATE_SHARDS: usize = 64;
 /// 名字 → 建角闸门分片：大小写折叠后的 GBK 字节做 FNV-1a（32 位）。
 ///
 /// 5100 面直接拿线上 GBK 字节、6000 面用本地 [`crate::gbk::encode`]（与
-/// `EDCode.EncodeString` 同一近似口径，whitelist A-14）⇒ 同名跨面必然落到同一分片。
+/// `EDCode.EncodeString` 同一 cp936 逐字节口径，whitelist A-14）⇒ 同名跨面必然落到同一分片。
 pub(crate) fn create_gate_shard(name_gbk: &[u8]) -> usize {
     let mut hash: u32 = 0x811c_9dc5;
     for b in fold_key(name_gbk) {

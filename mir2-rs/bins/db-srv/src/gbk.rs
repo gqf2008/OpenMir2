@@ -179,7 +179,7 @@ pub fn fold_key(b: &[u8]) -> Vec<u8> {
 ///
 /// 走 `mir2_script::cp936::encode_gb2312_dotnet`（全 workspace 唯一编码实现）：
 /// 不可映射码点（含 99 个 WHATWG-only、代理码元）回退单个 `0x3F`，绝不输出 `&#N;`。
-/// 解码仍用 `encoding_rs::GBK` 近似（whitelist **A-14** 的差异只在解码侧）。
+/// 本 crate 的解码仍用 `encoding_rs::GBK` 近似（未切换的编码点见 whitelist **A-14** 分项台账；本 crate 的编码点已切换）。
 ///
 /// **不查库**：oracle `DataService.cs:192` 的 `EDCode.EncodeString(chrName)` 走的是
 /// `HUtil32.GetBytes`，DB 停机时该帧的角色名依然必须是 GB2312 字节。
