@@ -1085,6 +1085,66 @@ impl ScriptPlayer for NpcPlayer<'_> {
     fn ms_string(&self, n: usize) -> String {
         self.ms_string.get(&n).cloned().unwrap_or_default()
     }
+    fn global_val(&self, n: usize) -> i32 {
+        self.vars.global_val.get(n).copied().unwrap_or(0)
+    }
+    fn globa_dy_mval(&self, n: usize) -> i32 {
+        self.vars.globa_dy_mval.get(n).copied().unwrap_or(0)
+    }
+    fn global_a_val(&self, n: usize) -> String {
+        self.vars.global_a_val.get(n).cloned().unwrap_or_default()
+    }
+    fn server_int_val(&self, n: usize) -> i32 {
+        self.server_int_val.get(n).copied().unwrap_or(0)
+    }
+    fn server_str_val(&self, n: usize) -> String {
+        self.server_str_val.get(n).cloned().unwrap_or_default()
+    }
+    // ---- `$STR` 槽位写侧（`NormNpc.cs:1532-1587` 的读侧对面）----
+    //
+    // 复验 Important 2：这些 setter 是脚本 `MOV/INC/DEC/SET` 的唯一落点
+    // （`crates/script/src/engine/{actions,mod}.rs`），默认实现为空 ⇒ 200..1799 槽
+    // 在生产路径恒 0/""，说词 `<$STR(...)>` 全部展开成 0/空。这里按槽位写进与
+    // [`Self::get_variable_text`] 读取的**同一存储**（全局槽在 `vars`，玩家槽在自身字段）。
+    fn set_mdy_val(&mut self, n: usize, v: i32) {
+        self.mdy_val.insert(n, v);
+    }
+    fn set_mnmval(&mut self, n: usize, v: i32) {
+        self.mnmval.insert(n, v);
+    }
+    fn set_mn_integer(&mut self, n: usize, v: i32) {
+        if let Some(slot) = self.mn_integer.get_mut(n) {
+            *slot = v;
+        }
+    }
+    fn set_ms_string(&mut self, n: usize, v: String) {
+        self.ms_string.insert(n, v);
+    }
+    fn set_global_val(&mut self, n: usize, v: i32) {
+        if let Some(slot) = self.vars.global_val.get_mut(n) {
+            *slot = v;
+        }
+    }
+    fn set_globa_dy_mval(&mut self, n: usize, v: i32) {
+        if let Some(slot) = self.vars.globa_dy_mval.get_mut(n) {
+            *slot = v;
+        }
+    }
+    fn set_global_a_val(&mut self, n: usize, v: String) {
+        if let Some(slot) = self.vars.global_a_val.get_mut(n) {
+            *slot = v;
+        }
+    }
+    fn set_server_int_val(&mut self, n: usize, v: i32) {
+        if let Some(slot) = self.server_int_val.get_mut(n) {
+            *slot = v;
+        }
+    }
+    fn set_server_str_val(&mut self, n: usize, v: String) {
+        if let Some(slot) = self.server_str_val.get_mut(n) {
+            *slot = v;
+        }
+    }
     fn set_quest_unit_status(&mut self, index: i32, value: i32) {
         // `SetQuestUnitStatus`（`PlayObject.cs:4084`）：位语义在实现侧。
         self.quest_unit.set(index, value);
@@ -1656,17 +1716,19 @@ mod tests {
         p.vars.upgrade_weapon_price = 25_000;
         assert_eq!(p.line_variable_text("<$UPGRADEWEAPONFEE>"), "25000");
         // `$STR` 12 段（说词侧，`NormNpc.cs:1532-1587`）。
+        // 复验 Important 2：只经 `ScriptPlayer` 的 setter 写（脚本动作的唯一落点），
+        // **不直接写字段**——否则测的是读侧，掩掉写侧空默认的缺陷。
         p.set_mn_val(9, 11);
-        p.mdy_val.insert(4, 22);
-        p.mnmval.insert(9, 33);
-        p.ms_string.insert(9, "S9值".to_string());
-        p.mn_integer[5] = 66;
-        p.vars.global_val[5] = 55;
-        p.vars.global_val[1] = 99;
-        p.vars.globa_dy_mval[3] = 44;
-        p.vars.global_a_val[5] = "A5值".to_string();
-        p.server_str_val[7] = "E7值".to_string();
-        p.server_int_val[7] = 77;
+        p.set_mdy_val(4, 22);
+        p.set_mnmval(9, 33);
+        p.set_ms_string(9, "S9值".to_string());
+        p.set_mn_integer(5, 66);
+        p.set_global_val(5, 55);
+        p.set_global_val(1, 99);
+        p.set_globa_dy_mval(3, 44);
+        p.set_global_a_val(5, "A5值".to_string());
+        p.set_server_str_val(7, "E7值".to_string());
+        p.set_server_int_val(7, 77);
         assert_eq!(
             p.line_variable_text("<$STR(M9)>"),
             "33",
@@ -1713,9 +1775,107 @@ mod tests {
             "1700..1799 → ServerIntVal"
         );
         // **BUG-REPLICA**：`G12` 长度 3 ⇒ 槽 112（GlobalVal[12]），不是 812。
-        p.vars.global_val[12] = 12;
+        p.set_global_val(12, 12);
         assert_eq!(p.line_variable_text("<$STR(G12)>"), "12");
         // 槽位号 < 0 ⇒ 不替换。
         assert_eq!(p.line_variable_text("<$STR(Z1)>"), "<$STR(Z1)>");
+    }
+
+    /// **复验 Important 2（生产路径）**：脚本 `#ACT` 的 `MOV/INC/DEC` 经引擎落到
+    /// `ScriptPlayer::set_*`，随后 `#SAY` 的 `<$STR(...)>` 必须展开成写入值。
+    ///
+    /// 走「文件解析 → `Engine::goto_label` → setter → `GetLineVariableText`」，**不碰字段**。
+    /// oracle `GotoLableQuestActionProcess` 对**已注册动作**执行一条即 return
+    /// （`ScriptEngine.cs:889-893`）⇒ 每条动作各放一个 `#IF/#ACT/#SAY` procedure。
+    /// 红检：删任一 `NpcPlayer::set_*` 覆写 ⇒ 对应槽回落到空默认（`0`/`""`）⇒ 本用例红。
+    #[test]
+    fn str_slots_set_by_script_actions_reach_say_text() {
+        let root = std::env::temp_dir().join(format!("gs-npc-str-{}", std::process::id()));
+        let dir = root.join("Envir").join("MapQuest_def");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("QManage.txt"),
+            concat!(
+                "[@Login]\r\n",
+                "#ACT\r\n",
+                "MOV D4 22\r\n",
+                "#SAY\r\n",
+                "D4=<$STR(D4)>|\r\n",
+                "#IF\r\n",
+                "#ACT\r\n",
+                "MOV M9 33\r\n",
+                "#SAY\r\n",
+                "M9=<$STR(M9)>|\r\n",
+                "#IF\r\n",
+                "#ACT\r\n",
+                "INC M9 1\r\n",
+                "#SAY\r\n",
+                "M9b=<$STR(M9)>|\r\n",
+                "#IF\r\n",
+                "#ACT\r\n",
+                "MOV N5 66\r\n",
+                "#SAY\r\n",
+                "N5=<$STR(N5)>|\r\n",
+                "#IF\r\n",
+                "#ACT\r\n",
+                "MOV S9 S9v\r\n",
+                "#SAY\r\n",
+                "S9=<$STR(S9)>|\r\n",
+                "#IF\r\n",
+                "#ACT\r\n",
+                "MOV G5 55\r\n",
+                "#SAY\r\n",
+                "G5=<$STR(G5)>|\r\n",
+                "#IF\r\n",
+                "#ACT\r\n",
+                "DEC G5 5\r\n",
+                "#SAY\r\n",
+                "G5b=<$STR(G5)>|\r\n",
+                "#IF\r\n",
+                "#ACT\r\n",
+                "MOV I3 44\r\n",
+                "#SAY\r\n",
+                "I3=<$STR(I3)>|\r\n",
+                "#IF\r\n",
+                "#ACT\r\n",
+                "MOV A5 A5v\r\n",
+                "#SAY\r\n",
+                "A5=<$STR(A5)>|\r\n",
+                "#IF\r\n",
+                "#ACT\r\n",
+                "MOV G12 12\r\n",
+                "#SAY\r\n",
+                "G12=<$STR(G12)>\r\n",
+            ),
+        )
+        .unwrap();
+        let record = QuestNpcRecord {
+            map_name: "0".to_string(),
+            curr_x: 0,
+            curr_y: 0,
+            chr_name: "QManage".to_string(),
+            npc_flag: 0,
+            appr: 0,
+            file_path: "MapQuest_def".to_string(),
+            script_name: None,
+            is_hide: true,
+            is_quest: false,
+        };
+        let mut rename = move |_min: i32, _max: i32| 1;
+        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename);
+        assert!(host.failures.is_empty(), "{:?}", host.failures);
+        let mut rng = no_rng();
+        let mut player = NpcPlayer::empty(&mut rng);
+        let says = host.run_login(&mut player).expect("QManage 必须可加载");
+        assert_eq!(says.len(), 1);
+        assert_eq!(
+            says[0].raw_msg,
+            concat!(
+                "D4=22|M9=34|M9b=34|N5=66|S9=S9v|G5=50|G5b=50|",
+                "I3=44|A5=A5v|G12=12"
+            ),
+            "MOV/INC/DEC 写入的 $STR 槽必须在 #SAY 里取到"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -3822,6 +3822,8 @@ fn handle_click_npc_cmd(
             // `PlayObject.Script` / `LastNpc` 跨调用保持（`ScriptEngine.cs:41-70`）。
             session.script_index = player.script_index;
             session.last_npc = player.last_npc;
+            // `MNMval` 是 `$STR(M*)` 与 `<QUERYVAL>` 共用数组（`PlayObject.cs:543`）⇒ 写回会话。
+            write_back_player_mnmval(&player, sg);
         }
         world.rng = rng;
         glog!(
@@ -4515,7 +4517,7 @@ fn handle_shop_cmd(
                 merchant_id,
                 label,
                 !bo_can_jmp,
-                sg,
+                &mut *sg,
                 chr_name,
                 &map_text,
                 catalog,
@@ -4553,7 +4555,7 @@ fn handle_shop_cmd(
                     merchant_id,
                     &target,
                     false,
-                    sg,
+                    &mut *sg,
                     chr_name,
                     &map_text,
                     catalog,
@@ -4924,7 +4926,7 @@ fn handle_shop_cmd(
                     merchant_id,
                     g,
                     false,
-                    sg,
+                    &mut *sg,
                     chr_name,
                     &map_text,
                     catalog,
@@ -5239,7 +5241,25 @@ fn npc_player_from_session<'r>(
             p.items.push((name.to_string(), 1));
         }
     }
+    // `PlayObject.MNMval`（`PlayObject.cs:543`）是**脚本侧与 `<QUERYVAL>` 共用的同一数组**：
+    // 说词 `$STR(M*)` 读 300..399（`NormNpc.cs:1548`），而 `CM_QUERYVAL` 的 `ValType=1`
+    // 写 `MNMval[ValLabel]`（`PlayObject.Base.cs:3436`）。oracle 里两者天然同一 `PlayObject`；
+    // 本仓的会话态在 `SessionGround.mnm_val` ⇒ 建 `NpcPlayer` 时必须映射进来（会话→NPC），
+    // 否则客户端回填的 `<QUERYVAL>` 值在随后的 `GotoLable` 里读不到（复验 Important 2）。
+    for (i, v) in sg.mnm_val.iter().enumerate() {
+        p.mnmval.insert(i, *v);
+    }
     p
+}
+
+/// 脚本跑完后把 `NpcPlayer.MNMval`（见 [`npc_player_from_session`] 的映射说明）写回会话，
+/// 保持 oracle「同一个 `PlayObject.MNMval` 跨 `GotoLable`/`CM_QUERYVAL` 存活」的语义。
+fn write_back_player_mnmval(p: &game_svr::npc::NpcPlayer<'_>, sg: &mut SessionGround) {
+    for (i, v) in &p.mnmval {
+        if let Some(slot) = sg.mnm_val.get_mut(*i) {
+            *slot = *v;
+        }
+    }
 }
 
 /// `NormNpc.UserSelect` 的**标签账本**半边（`NormNpc.cs:1632-1658`）：`ScriptGotoCount=0`
@@ -5261,7 +5281,7 @@ fn run_merchant_goto(
     merchant_actor_id: i32,
     label: &str,
     bo_ext_jmp: bool,
-    sg: &SessionGround,
+    sg: &mut SessionGround,
     chr_name: &str,
     map_text: &str,
     catalog: &dyn game_svr::ability::ItemCatalog,
@@ -5270,7 +5290,8 @@ fn run_merchant_goto(
     rng: &mut mir2_shared::rng::RandomNumber,
 ) -> Vec<game_svr::npc::SayMsg> {
     let mut rngf = |v: i32| rng.random_below(v);
-    let mut player = npc_player_from_session(&mut rngf, chr_name, sg, map_text, catalog, npc_vars);
+    let mut player =
+        npc_player_from_session(&mut rngf, chr_name, &*sg, map_text, catalog, npc_vars);
     player.script_index = session.script_index;
     player.last_npc = session.last_npc;
     let says = book
@@ -5278,6 +5299,7 @@ fn run_merchant_goto(
         .unwrap_or_default();
     session.script_index = player.script_index;
     session.last_npc = player.last_npc;
+    write_back_player_mnmval(&player, sg);
     says
 }
 
@@ -21326,6 +21348,36 @@ mod tests {
             auto_get_exp_in_safe_zone: false,
             guild: guild_cmd::GuildSession::default(),
         }
+    }
+
+    /// **复验 Important 2**：会话的 `PlayObject.MNMval`（`SessionGround.mnm_val`）必须映射进
+    /// 脚本侧 `NpcPlayer.mnmval`，脚本跑完再写回——oracle 里说词 `$STR(M*)`（`NormNpc.cs:1548`）
+    /// 与 `<QUERYVAL>`（`PlayObject.Base.cs:3436`）读写的是**同一个** `PlayObject.MNMval`
+    /// （`PlayObject.cs:543`）。
+    ///
+    /// 红检：删掉 `npc_player_from_session` 的 `mnm_val` seeding ⇒ 读断言红；
+    /// 删掉 `write_back_player_mnmval` 调用/函数体 ⇒ 写回断言红。
+    #[test]
+    fn npc_player_maps_session_mnmval_both_ways() {
+        use mir2_script::engine::ScriptPlayer as _;
+        let mut sg = test_session_ground(7);
+        sg.mnm_val[9] = 77;
+        let vars = npc_vars_from(None, "SKY引擎", 10_000);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut rng = |_v: i32| 0;
+        {
+            let mut p = npc_player_from_session(&mut rng, "hero", &sg, "0", &catalog, &vars);
+            assert_eq!(
+                p.line_variable_text("<$STR(M9)>"),
+                "77",
+                "会话 MNMval[9] 必须映射进 NpcPlayer（$STR 300..399）"
+            );
+            // 脚本 `INC M9 1` 的落点。
+            p.set_mnmval(9, 78);
+            assert_eq!(p.line_variable_text("<$STR(M9)>"), "78");
+            write_back_player_mnmval(&p, &mut sg);
+        }
+        assert_eq!(sg.mnm_val[9], 78, "脚本写回的 MNMval 必须回到会话");
     }
 
     /// **施法用例**的会话态：真冻结客户端的 `PlayObject.SoftVersionDateEx != 0`
