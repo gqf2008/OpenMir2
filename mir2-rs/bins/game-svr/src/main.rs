@@ -1206,7 +1206,7 @@ struct DbWiring {
     /// `WorldServer.cs:469`）——它是**取档请求**的字段、不在角色记录里，须随查询带过来做帧 11029/5008 的门。
     /// `session_id`/`account` 同样是取档请求的字段（不在 `PlayerDataHead` 里），用于进世界时登记
     /// 在线表（账号级顶号 `KickUser` 按 `Account`/`SessionID` 匹配）。
-    /// `pay_ment` = `LoadDBInfo.PayMent`（`PlayObject.cs:1145-1148` 的覆盖前值；登录第四条
+    /// `pay_ment` = `LoadDBInfo.PayMent`（`PlayObject.cs:1168-1171` 的覆盖前值；登录第四条
     /// `SysMsg` 的门需要它）。
     outstanding: Vec<(i32, i32, i32, i32, i32, i32, String)>,
     /// 已发出、还没取走的**存档**应答 `(query_id, ChrName)`（`DBR_SAVEHUMANRCD(1102)` 或失败时的
@@ -10718,7 +10718,8 @@ fn drain_aoi_downlink(
 /// `RM_TURN` 以优先级 `(byte)10001=17` 入**观察者自己**的队列），随后 `BaseObject.Run()` 的
 /// `while (GetMessage()) Operate()`（`BaseObject.Base.cs:28-34`）按 .NET 四叉堆出队 ⇒
 /// 优先级 17 的出现帧恒在 `RM_CHANGELIGHT(153)`、`RM_USERNAME(165)`、`RM_SYSMESSAGE(252)` 之前。
-/// 2026-10-22 真机（同一账号 `winplay0`）实测：`10,41 ×6 → 654 → 657,657 → 42 → 100×4`。
+/// 2026-10-20 真机（同一账号 `winplay0`；抓包文件 mtime，目录名 `20261022`）实测：
+/// `10,41 ×6 → 654 → 657,657 → 42 → 100×4`。
 ///
 /// # 本宿主位置
 ///
@@ -17300,7 +17301,7 @@ fn sim_loop(
                                                     // `Run()` 里先出队的那些，含入图 15 帧）；`after` =
                                                     // `654` 及其后（657/42/100，含优先级 61 的 750）——
                                                     // oracle 在**其他 actor 的出现帧（RM_TURN=17）之后**
-                                                    // 才出队它们（2026-10-22 真机：10/41×6 → 654 → …），
+                                                    // 才出队它们（2026-10-20 真机：10/41×6 → 654 → …），
                                                     // 故由首次 AOI 扫描 tick 的 [`drain_login_tail`] 补发。
                                                     let (bodies, tail_probe) = inputs.frames_split();
                                                     glog!(

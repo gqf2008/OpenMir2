@@ -31,10 +31,14 @@ pub struct GateConfig {
     pub server_index: u8,
     /// `[Server] TestServer`（`ServerConf.cs:23`：`ReadWriteString("Server","TestServer","FALSE")`
     /// 与 `"TRUE"` 做 **OrdinalIgnoreCase** 比较）。登录 `UserLogon` 的第三条 `SysMsg`
-    /// （`StartNoticeMsg`）与 `PayMent=3` 覆盖都看它（`PlayObject.cs:1369-1373/1145-1148`）。
+    /// （`StartNoticeMsg`，`PlayObject.cs:1372`）与 `PayMent=3` 覆盖都看它
+    /// （`PlayObject.cs:1168-1171`）。
     pub test_server: bool,
-    /// `[Server] ServiceMode`（`ServerConf.cs:27`：`CompareTo("TRUE") == 0`，**精确大小写**）。
-    /// 与 `TestServer` 同用于 `PayMent=3` 覆盖（`PlayObject.cs:1145-1148`）。
+    /// `[Server] ServiceMode`（`ServerConf.cs:27`：`ReadWriteString(...).CompareTo("TRUE") == 0`）。
+    /// **注意**：`String.CompareTo(string)` 是 **culture-aware** 比较，**不是**
+    /// `StringComparison.Ordinal`；只是对 ASCII 大小写仍敏感 ⇒ 部署语义是「只认大写 `TRUE`」
+    /// （`true`/`True` 都为 false）。与 `TestServer` 同用于 `PayMent=3` 覆盖
+    /// （`PlayObject.cs:1168-1171`）。
     pub service_mode: bool,
     /// S1 占位：世界地图尺寸列表（有 Envir 真地图注册表时被其尺寸取代；无 Envir 时才用）。
     ///
@@ -530,8 +534,10 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("ServerIndex 不是合法字节：{v:?}"))?
                     });
                 }
-                // `ServerConf.cs:23/27`：`TestServer` 大小写不敏感；`ServiceMode` 是
-                // `CompareTo("TRUE") == 0`（序数比较 ⇒ **只认大写 TRUE**）。缺键都是 `false`。
+                // `ServerConf.cs:23/27`：`TestServer` 用 `OrdinalIgnoreCase`（大小写不敏感）；
+                // `ServiceMode` 用 `String.CompareTo("TRUE") == 0`——culture-aware，**非
+                // `StringComparison.Ordinal`**，对 ASCII 大小写敏感 ⇒ **只认大写 TRUE**。
+                // 缺键都是 `false`。
                 "TESTSERVER" => test_server = Some(v.eq_ignore_ascii_case("TRUE")),
                 "SERVICEMODE" => service_mode = Some(v == "TRUE"),
                 "WORLDMAPS" => maps = Some(parse_maps(v)?),
@@ -1937,6 +1943,56 @@ HungerSystem=garbage
             let p = write(&dir, &format!("{base}{body}"));
             let c = load(&p).unwrap();
             assert_eq!((c.hunger_system, c.hunger_dec_hp), want, "body={body:?}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **Minor 3（2026-10-21）**：`[Server] TestServer` / `ServiceMode` 的解析语义。
+    ///
+    /// - `TestServer`：`ServerConf.cs:23` 用 `OrdinalIgnoreCase` ⇒ `TRUE/true/True` 都算 true。
+    /// - `ServiceMode`：`ServerConf.cs:27` 用 `String.CompareTo("TRUE") == 0`——culture-aware
+    ///   （**不是** `StringComparison.Ordinal`），对 ASCII 大小写敏感 ⇒ **只认大写 `TRUE`**。
+    ///
+    /// 牙：把 `SERVICEMODE` 臂改成 `eq_ignore_ascii_case` ⇒ 小写用例第二条必红；
+    /// 把 `TESTSERVER` 臂改成 `v == "TRUE"` ⇒ `true`/`True` 两条必红。
+    #[test]
+    fn parses_test_server_ignoring_case_and_service_mode_exact_uppercase() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-svc-{}", std::process::id()));
+        let nl = "\n";
+        let base = format!(
+            "[Server]{nl}GateAddr=127.0.0.1{nl}GatePort=5000{nl}CheckBlock=12288{nl}\
+             IDSAddr=127.0.0.1{nl}IDSPort=5600{nl}DBAddr=127.0.0.1{nl}DBPort=6000{nl}"
+        );
+        // (TestServer 原值, ServiceMode 原值, 期望 (test_server, service_mode))
+        for (ts, sm, want) in [
+            ("TRUE", "TRUE", (true, true)),
+            ("true", "TRUE", (true, true)),
+            ("True", "TRUE", (true, true)),
+            ("FALSE", "TRUE", (false, true)),
+            // ServiceMode 只认大写 TRUE：小写/混合大小写/false 都是 false。
+            ("TRUE", "true", (true, false)),
+            ("TRUE", "True", (true, false)),
+            ("TRUE", "FALSE", (true, false)),
+            ("TRUE", "1", (true, false)),
+            // 值前后的空白照 `ReadWriteString` 口径 trim。
+            (" true ", " TRUE ", (true, true)),
+            // 缺键 ⇒ false。
+            ("", "", (false, false)),
+        ] {
+            let body = if ts.is_empty() && sm.is_empty() {
+                String::new()
+            } else if sm.is_empty() {
+                format!("TestServer={ts}{nl}")
+            } else {
+                format!("TestServer={ts}{nl}ServiceMode={sm}{nl}")
+            };
+            let p = write(&dir, &format!("{base}{body}"));
+            let c = load(&p).unwrap();
+            assert_eq!(
+                (c.test_server, c.service_mode),
+                want,
+                "TestServer={ts:?} ServiceMode={sm:?}"
+            );
         }
         std::fs::remove_dir_all(&dir).ok();
     }

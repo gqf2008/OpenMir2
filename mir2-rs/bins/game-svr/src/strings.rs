@@ -65,25 +65,27 @@ pub const DEFAULT_THIS_MAP_DISABLE_SEND_CYCY_MSG: &str = "本地图不允许喊�
 /// oracle `MessageSettings.YouCanSendCyCyLaterMsg`（`MessageSettings.cs:260`）——10s 门提示。
 pub const DEFAULT_YOU_CAN_SEND_CYCY_LATER_MSG: &str = "{0}秒后才可以再发文字!!!";
 
-/// oracle `MessageSettings.AttackModeOfAll`（`MessageSettings.cs:46`）——登录 `SysMsg` 攻击模式文案。
+/// oracle `MessageSettings.AttackModeOfAll`（`MessageSettings.cs:39`；`StringConf.cs:54` 读键）——登录 `SysMsg` 攻击模式文案。
 pub const DEFAULT_ATTACK_MODE_OF_ALL: &str = "[攻击模式: 全体攻击]";
-/// `MessageSettings.AttackModeOfPeaceful`（`MessageSettings.cs:47`）。
+/// `MessageSettings.AttackModeOfPeaceful`（`MessageSettings.cs:40`；`StringConf.cs:55` 读键）。
 pub const DEFAULT_ATTACK_MODE_OF_PEACEFUL: &str = "[攻击模式: 和平攻击]";
-/// `MessageSettings.AttackModeOfDear`（`MessageSettings.cs:48`）。
+/// `MessageSettings.AttackModeOfDear`（`MessageSettings.cs:41`）——**只作为源码默认值**：
+/// oracle `StringConf.cs:53-61` 不读 `[String] AttackModeOfDear` 键（部署件也没有该键），
+/// 故本解析器同样不读（Minor 1，2026-10-21）。
 pub const DEFAULT_ATTACK_MODE_OF_DEAR: &str = "[攻击模式: 夫妻攻击]";
-/// `MessageSettings.AttackModeOfMaster`（`MessageSettings.cs:49`）。
+/// `MessageSettings.AttackModeOfMaster`（`MessageSettings.cs:42`；`StringConf.cs:59` 读键）。
 pub const DEFAULT_ATTACK_MODE_OF_MASTER: &str = "[攻击模式: 师徒攻击]";
-/// `MessageSettings.AttackModeOfGroup`（`MessageSettings.cs:50`）。
+/// `MessageSettings.AttackModeOfGroup`（`MessageSettings.cs:43`；`StringConf.cs:56` 读键）。
 pub const DEFAULT_ATTACK_MODE_OF_GROUP: &str = "[攻击模式: 编组攻击]";
-/// `MessageSettings.AttackModeOfGuild`（`MessageSettings.cs:51`）。
+/// `MessageSettings.AttackModeOfGuild`（`MessageSettings.cs:44`；`StringConf.cs:57` 读键）。
 pub const DEFAULT_ATTACK_MODE_OF_GUILD: &str = "[攻击模式: 行会攻击]";
-/// `MessageSettings.AttackModeOfRedWhite`（`MessageSettings.cs:52`）。
+/// `MessageSettings.AttackModeOfRedWhite`（`MessageSettings.cs:45`；`StringConf.cs:58` 读键）。
 pub const DEFAULT_ATTACK_MODE_OF_RED_WHITE: &str = "[攻击模式: 红名攻击]";
-/// `MessageSettings.StartChangeAttackModeHelp`（`MessageSettings.cs:53`）——登录第二条 `SysMsg`。
+/// `MessageSettings.StartChangeAttackModeHelp`（`MessageSettings.cs:46`；`StringConf.cs:60` 读键）——登录第二条 `SysMsg`。
 pub const DEFAULT_START_CHANGE_ATTACK_MODE_HELP: &str = "使用组合快捷键 CTRL-H 更改攻击模式...";
-/// `MessageSettings.StartNoticeMsg`（`MessageSettings.cs:54`）——`TestServer` 时的欢迎语（第三条）。
+/// `MessageSettings.StartNoticeMsg`（`MessageSettings.cs:47`；`StringConf.cs:61` 读键）——`TestServer` 时的欢迎语（第三条）。
 pub const DEFAULT_START_NOTICE_MSG: &str = "欢迎进入本服务器进行游戏...";
-/// `MessageSettings.NowIsFreePlayMode`（`MessageSettings.cs:43`）——`PayMent==3` 的第四条。
+/// `MessageSettings.NowIsFreePlayMode`（`MessageSettings.cs:38`；`StringConf.cs:53` 读键）——`PayMent==3` 的第四条。
 pub const DEFAULT_NOW_IS_FREE_PLAY_MODE: &str = "当前服务器运行于测试模式.";
 
 /// oracle `MessageSettings.RevivalRecoverMsg`（`MessageSettings.cs:226`）——P32 复活成功的
@@ -114,14 +116,12 @@ pub struct StringConf {
     guild_chief: Option<String>,
     // `[String] GuildMsgPreFix`（`StringConf.cs:38`）。
     guild_msg_prefix: Option<String>,
-    // 登录 `UserLogon` 的 3+1 条 `SysMsg` 文本（`PlayObject.cs:1342-1383/1417-1420`；
-    // `StringConf.cs:53/60/61` 只覆盖 NowIsFreePlayMode/StartChangeAttackModeHelp/StartNoticeMsg，
-    // 7 个攻击模式键在 `StringConf.cs` 里由 `MessageSettings` 静态字段直接承载，
-    // 部署件通过同名 `[String]` 键覆盖——`MessageSettings` 的静态字段本来就是 `String.conf`
-    // 的落地形态，故这里同样按 `[String]` 键读）。
+    // 登录 `UserLogon` 的 3+1 条 `SysMsg` 文本（`PlayObject.cs:1342-1383/1417-1420`）。
+    // oracle `StringConf.cs:53-61` 读 NowIsFreePlayMode/AttackModeOfAll/Peaceful/Group/Guild/
+    // RedWhite/Master/StartChangeAttackModeHelp/StartNoticeMsg —— **不含 `AttackModeOfDear`**
+    // （Minor 1：部署件无该键、oracle 不读，本解析器同样不读；模式 2 用源码默认值）。
     attack_mode_of_all: Option<String>,
     attack_mode_of_peaceful: Option<String>,
-    attack_mode_of_dear: Option<String>,
     attack_mode_of_master: Option<String>,
     attack_mode_of_group: Option<String>,
     attack_mode_of_guild: Option<String>,
@@ -309,13 +309,17 @@ impl StringConf {
     /// 枚举外 ⇒ `None`（oracle `switch` 无 `default` ⇒ **一条都不发**，见 `PlayObject.cs:1371`）。
     #[must_use]
     pub fn attack_mode_msg(&self, mode: u8) -> Option<&str> {
+        // `AttatckMode.HAM_DEAR(2)`：oracle `StringConf.cs:53-61` **不读** `AttackModeOfDear`
+        // ⇒ 恒用 `MessageSettings.cs:41` 的源码默认值（Minor 1；部署件无该键）。
+        if mode == 2 {
+            return Some(DEFAULT_ATTACK_MODE_OF_DEAR);
+        }
         let (slot, default) = match mode {
             0 => (&self.attack_mode_of_all, DEFAULT_ATTACK_MODE_OF_ALL),
             1 => (
                 &self.attack_mode_of_peaceful,
                 DEFAULT_ATTACK_MODE_OF_PEACEFUL,
             ),
-            2 => (&self.attack_mode_of_dear, DEFAULT_ATTACK_MODE_OF_DEAR),
             3 => (&self.attack_mode_of_master, DEFAULT_ATTACK_MODE_OF_MASTER),
             4 => (&self.attack_mode_of_group, DEFAULT_ATTACK_MODE_OF_GROUP),
             5 => (&self.attack_mode_of_guild, DEFAULT_ATTACK_MODE_OF_GUILD),
@@ -328,7 +332,7 @@ impl StringConf {
         Some(slot.as_deref().unwrap_or(default))
     }
 
-    /// `[String] StartChangeAttackModeHelp`（`MessageSettings.cs:53`）。
+    /// `[String] StartChangeAttackModeHelp`（`MessageSettings.cs:46`；`StringConf.cs:60`）。
     #[must_use]
     pub fn start_change_attack_mode_help(&self) -> &str {
         self.start_change_attack_mode_help
@@ -336,7 +340,7 @@ impl StringConf {
             .unwrap_or(DEFAULT_START_CHANGE_ATTACK_MODE_HELP)
     }
 
-    /// `[String] StartNoticeMsg`（`MessageSettings.cs:54`，仅 `TestServer` 发）。
+    /// `[String] StartNoticeMsg`（`MessageSettings.cs:47`；`StringConf.cs:61`；仅 `TestServer` 发）。
     #[must_use]
     pub fn start_notice_msg(&self) -> &str {
         self.start_notice_msg
@@ -344,7 +348,7 @@ impl StringConf {
             .unwrap_or(DEFAULT_START_NOTICE_MSG)
     }
 
-    /// `[String] NowIsFreePlayMode`（`MessageSettings.cs:43`，仅 `PayMent==3` 发）。
+    /// `[String] NowIsFreePlayMode`（`MessageSettings.cs:38`；`StringConf.cs:53`；仅 `PayMent==3` 发）。
     #[must_use]
     pub fn now_is_free_play_mode(&self) -> &str {
         self.now_is_free_play_mode
@@ -440,7 +444,6 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             (Section::String, "GUILDMSGPREFIX") => &mut conf.guild_msg_prefix,
             (Section::String, "ATTACKMODEOFALL") => &mut conf.attack_mode_of_all,
             (Section::String, "ATTACKMODEOFPEACEFUL") => &mut conf.attack_mode_of_peaceful,
-            (Section::String, "ATTACKMODEOFDEAR") => &mut conf.attack_mode_of_dear,
             (Section::String, "ATTACKMODEOFMASTER") => &mut conf.attack_mode_of_master,
             (Section::String, "ATTACKMODEOFGROUP") => &mut conf.attack_mode_of_group,
             (Section::String, "ATTACKMODEOFGUILD") => &mut conf.attack_mode_of_guild,
@@ -555,5 +558,30 @@ Other=1
             d.you_can_send_cycy_later_msg(),
             DEFAULT_YOU_CAN_SEND_CYCY_LATER_MSG
         );
+    }
+
+    /// **Minor 1（2026-10-21）**：oracle `StringConf.cs:53-61` **不读** `[String] AttackModeOfDear`
+    /// （部署件也没有该键）⇒ 本解析器不得读它；其余六个攻击模式键照读。
+    ///
+    /// 牙：把 `ATTACKMODEOFDEAR` 的映射加回 `parse` ⇒ 第一条断言红（`CUSTOM` 会覆盖默认值）。
+    #[test]
+    fn attack_mode_of_dear_key_is_not_read_like_oracle() {
+        let c = parse(
+            b"[String]\nAttackModeOfAll=A\nAttackModeOfPeaceful=P\nAttackModeOfDear=CUSTOM\n\
+              AttackModeOfMaster=M\nAttackModeOfGroup=G\nAttackModeOfGuild=Gd\n\
+              AttackModeOfRedWhite=R\n",
+        );
+        assert_eq!(
+            c.attack_mode_msg(2),
+            Some(DEFAULT_ATTACK_MODE_OF_DEAR),
+            "oracle 不读 AttackModeOfDear ⇒ 恒用 MessageSettings.cs:41 默认值"
+        );
+        assert_eq!(c.attack_mode_msg(0), Some("A"));
+        assert_eq!(c.attack_mode_msg(1), Some("P"));
+        assert_eq!(c.attack_mode_msg(3), Some("M"));
+        assert_eq!(c.attack_mode_msg(4), Some("G"));
+        assert_eq!(c.attack_mode_msg(5), Some("Gd"));
+        assert_eq!(c.attack_mode_msg(6), Some("R"));
+        assert_eq!(c.attack_mode_msg(7), None, "枚举外 ⇒ 一条都不发");
     }
 }
