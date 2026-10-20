@@ -1,0 +1,84 @@
+{
+  "card": "openmir2-account-protection-fields",
+  "audit_index": 14,
+  "case": "account_protection_roundtrip",
+  "tier": "R",
+  "window_required": true,
+  "executed": false,
+  "database_guard": "mir2_test_account",
+  "oracle": {
+    "insert": "src/LoginSrv/Storage/AccountStorage.cs:299-316",
+    "update": "src/LoginSrv/Storage/AccountStorage.cs:496-513",
+    "packet_read": "src/OpenMir2/Packets/ClientPackets/UserEntry.cs:51-65",
+    "short_read": "src/OpenMir2/Extensions/BinaryReaderExtension.cs:19-27"
+  },
+  "probe_account": "acctprot01",
+  "probe_packet_insert": {
+    "account": "acctprot01",
+    "password": "pwd0rd",
+    "user_name": "tester01",
+    "ss_no": "ID1234567890",
+    "phone_unused": "",
+    "quiz": "q1question",
+    "answer": "answer1",
+    "email": "t@example.com",
+    "quiz2": "q2question",
+    "answer2": "answer2",
+    "birthday": "19900101",
+    "mobile_phone": "13800000000",
+    "memo": "",
+    "memo2": ""
+  },
+  "probe_packet_update": {
+    "account": "acctprot01",
+    "password": "newpwd",
+    "user_name": "tester02",
+    "ss_no": "ID0987654321",
+    "phone_unused": "",
+    "quiz": "uq1",
+    "answer": "ua1",
+    "email": "u@example.com",
+    "quiz2": "uq2",
+    "answer2": "ua2",
+    "birthday": "19851231",
+    "mobile_phone": "13911112222",
+    "memo": "",
+    "memo2": ""
+  },
+  "insert_columns": [
+    {"column": "AccountId", "expected": "<auto_increment id>", "source": "account.Id"},
+    {"column": "UserName", "expected": "tester01", "source": "UserEntry.UserName"},
+    {"column": "IdCard", "expected": "ID1234567890", "source": "UserEntry.SSNo"},
+    {"column": "Birthday", "expected": "19900101", "source": "UserEntryAdd.BirthDay"},
+    {"column": "Phone", "expected": "19900101", "source": "UserEntryAdd.BirthDay", "note": "oracle quirk: INSERT 取 BirthDay"},
+    {"column": "MobilePhone", "expected": "19900101", "source": "UserEntryAdd.BirthDay", "note": "oracle quirk: INSERT 取 BirthDay"},
+    {"column": "ADDRESS1", "expected": "", "source": "constant empty string"},
+    {"column": "ADDRESS2", "expected": "", "source": "constant empty string"},
+    {"column": "EMail", "expected": "t@example.com", "source": "UserEntry.EMail"},
+    {"column": "Quiz1", "expected": "q1question", "source": "UserEntry.Quiz"},
+    {"column": "Answer1", "expected": "answer1", "source": "UserEntry.Answer"},
+    {"column": "Quiz2", "expected": "q2question", "source": "UserEntryAdd.Quiz2"},
+    {"column": "Answer2", "expected": "answer2", "source": "UserEntryAdd.Answer2"}
+  ],
+  "insert_account_columns": [
+    {"column": "Account", "expected": "acctprot01", "source": "UserEntry.Account"},
+    {"column": "PassWord", "expected": "pwd0rd", "source": "UserEntry.Password"}
+  ],
+  "update_columns": [
+    {"column": "UserName", "expected": "tester02", "source": "UserEntry.UserName"},
+    {"column": "IdCard", "expected": "ID0987654321", "source": "UserEntry.SSNo"},
+    {"column": "Birthday", "expected": "19851231", "source": "UserEntryAdd.BirthDay"},
+    {"column": "Phone", "expected": "13911112222", "source": "UserEntryAdd.MobilePhone", "note": "oracle quirk: UPDATE 取 MobilePhone（与 INSERT 不同）"},
+    {"column": "MobilePhone", "expected": "13911112222", "source": "UserEntryAdd.MobilePhone"},
+    {"column": "ADDRESS1", "expected": "", "source": "constant empty string"},
+    {"column": "ADDRESS2", "expected": "", "source": "constant empty string"},
+    {"column": "EMail", "expected": "u@example.com", "source": "UserEntry.EMail"},
+    {"column": "Quiz1", "expected": "uq1", "source": "UserEntry.Quiz"},
+    {"column": "Answer1", "expected": "ua1", "source": "UserEntry.Answer"},
+    {"column": "Quiz2", "expected": "uq2", "source": "UserEntryAdd.Quiz2"},
+    {"column": "Answer2", "expected": "ua2", "source": "UserEntryAdd.Answer2"}
+  ],
+  "update_account_columns": [
+    {"column": "PassWord", "expected": "newpwd", "source": "UserEntry.Password (packet replaces the whole UserEntry)"}
+  ]
+}
