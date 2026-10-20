@@ -1369,14 +1369,16 @@ impl World {
     /// **登记（帧面 deferred，A-5）**：oracle 尾 `if (nOldCharStatus != CharStatus) StatusChanged();`
     /// （⇒ `RM_CHARSTATUSCHANGED`）与 `Race==Play` 的 `SysMsg` 未接（帧面归接线层）。
     ///
-    /// **消费方（A-5 接线后的口径确认，独立复验 2026-10-17）**：本函数在本仓**唯一可达的生产入口 =
-    /// 玩家攻击路径**——`PlayObject.Attack.cs:223` 的麻痹戒指命中（宿主 `bins/game-svr` 的
+    /// **消费方（A-5 接线 + MB-5 专用怪 Run 覆写后的口径订正）**：本仓生产入口有两条：
+    /// ① **玩家攻击路径**——`PlayObject.Attack.cs:223` 的麻痹戒指命中（宿主 `bins/game-svr` 的
     /// `handle_hit_cmd` → `World::attack_once` 的 `attack_dir_grouped_poison` 那一次
-    /// `make_posion(STONE, AttackPosionTime, 0)`）。
-    /// **6 个怪物种类的 `MakePosion` 调用点在本仓不可接线**：`monai.rs` 只建模「通用族」AI、
-    /// `mongen.rs` 不按怪物名分派 ⇒ 没有可挂的按名调用点。⇒ **原任务文本「怪物命中玩家施毒」
-    /// 与 oracle 的接线口径不符**（oracle 那 6 处是**按怪物类**写的），需编排侧确认后再决定
-    /// 是否为这 6 处单开片；本片**未引入、亦未修**。
+    /// `make_posion(STONE, AttackPosionTime, 0)`）；
+    /// ② **专用怪 `Run` 覆写**（MB-5，`crates/world/src/monai.rs`）：`GreenMonster`(208)/
+    /// `RedMonster`(209) 的 [`crate::monai::monster_class_run`] ⇒ `green_red_monster_run` 在
+    /// 毒门命中时 `make_posion(DECHEALTH/DAMAGEARMOR, 30, 1)`；`Khazard`(206) ⇒ `khazard_run`
+    /// 在毒门命中时 `make_posion(DECHEALTH, 35, 2)` 后 `return`。⇒ 本函数**不再**是「只有玩家
+    /// 攻击路径可达」。oracle 其余 3 个按类调用点（`CentipedeKingMonster`、`GasAttackMonster`、
+    /// `SpitSpider`）仍未接线（对应 `Run`/攻击覆写尚未移植）。
     ///
     /// **登记订正 3（独立复验 2026-10-17）**：上面「oracle 入口」的枚举**低估**了——除本函数的
     /// 玩家攻击路径（`PlayObject.Attack.cs:223`）与 6 个怪物类（`CentipedeKingMonster.cs:70/74`、

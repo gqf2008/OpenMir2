@@ -91,6 +91,11 @@ pub const RM_LIGHTING: u16 = 10204;
 /// `Messages.RM_ALIVE`（`src/OpenMir2/Messages.cs:612`）——`BaseObject.ReAlive()`
 /// （`BaseObject.Base.cs:354-358`；`ZilKinZombi.Run` 的复生；`SM_ALIVE(27)`）。
 pub const RM_ALIVE: u16 = 10153;
+/// `Messages.RM_CHARSTATUSCHANGED`（`src/OpenMir2/Messages.cs` = 10139）——`StatusChanged()`
+/// 的状态帧（`BaseObject.cs` 的 `SendRefMsg(RM_CHARSTATUSCHANGED, 0, CharStatus, 0, 0, "")`；
+/// 玩家侧 `PlayObject.Message.cs` 出 `SM_CHARSTATUSCHANGED(657)`）。
+/// 生产来源见 [`frost_tiger_run`]（`MagMakePrivateTransparent` 收尾的 `StatusChanged()`）。
+pub const RM_CHARSTATUSCHANGED: u16 = 10139;
 
 /// `_Attack` 的 `SendStruckDelayMsg(RM_REFMESSAGE, …, 200)`（`BaseObject.Attack.cs:57`）。
 /// `AttackDirect` 的 500ms（`:78`）尚无移植调用点（`AttackDirect` 未建模，登记）。
@@ -747,8 +752,9 @@ pub enum ClassRunBase {
     /// → `AnimalObject.Run` → `BaseObject.Run`。
     Monster,
     /// 类 `Run` 体内已 `return`（oracle 显式跳过 `base.Run()`）⇒ 调用方**不得**续跑
-    /// `AnimalObject.Run`/`BaseObject.Run`。目前只有 `CowKingMonster.Run` 的 Siege 两支
-    /// （`CowKingMonster.cs:53/56`）会走到。
+    /// `AnimalObject.Run`/`BaseObject.Run`。目前两处：
+    /// ① `CowKingMonster.Run` 的 Siege 两支（`CowKingMonster.cs:53/56`）；
+    /// ② `Khazard.Run` 的毒门命中支（`Khazard.cs:32/46`；见 [`khazard_run`] 返回 `true`）。
     None,
 }
 
@@ -802,6 +808,11 @@ fn ref_snapshot(world: &World, actor_id: i32) -> Option<(u8, i32, i32, usize, i3
     })
 }
 
+/// `send_ref_msg_targets_at` 的 `sender_id` 只用于排除「已 `Ghost` 的离开者」（`RM_DISAPPEAR`）。
+/// 怪物 AI 的 `SendRefMsg` 无该语义，且 oracle 格扫**包含 sender 自己**（`Race == Play` 时）
+/// ⇒ 传一个不可能命中的 id，sender 不被排除，格扫顺序仍按 oracle（X 外层、Y 内层）。
+const NO_SENDER_EXCLUSION: i32 = i32::MIN;
+
 /// `BaseObject.SendRefMsg(wIdent, wParam, nParam1, nParam2, nParam3, sMsg)`（`BaseObject.Message.cs:383`）。
 fn send_ref_msg(
     world: &mut World,
@@ -836,10 +847,17 @@ fn send_ref_msg_with_target(
         .and_then(|id| world.entities.get(id))
         .map_or((0, 0), |t| (t.x, t.y));
     // 收件人**在发帧时刻**快照（oracle `SendRefMsg` 同点）；`self_only` 恒无收件人。
+    //
+    // **格扫包含发送者自己**：oracle `BaseObject.Message.cs` 的格扫对命中的
+    // `Race == Play && !Ghost` 对象一律 `SendMsg(this, …)`，发送者自己的格子也在扫掠范围内
+    // ⇒ 玩家作 sender 时（`Khazard` 的 `TargetCret.SendRefMsg(RM_SPACEMOVE_FIRE)`）收件人含本人。
+    // `send_ref_msg_targets_at` 因 `RM_DISAPPEAR`（离开者已 `Ghost`）语义显式排除 `sender_id`；
+    // 怪物 AI 的 `SendRefMsg` 没有「离开者」语义，故传一个不可能命中的 id，让格扫按 oracle
+    // 原样（含玩家 sender、按 X 外层 → Y 内层的格序）产出收件人。
     let recipients = if self_only {
         Vec::new()
     } else {
-        crate::session::send_ref_msg_targets_at(world, actor_id, map_id, x, y, 12)
+        crate::session::send_ref_msg_targets_at(world, NO_SENDER_EXCLUSION, map_id, x, y, 12)
     };
     world.pending_monster_ref_msgs.push(MonsterRefMsg {
         actor_id,
@@ -1016,9 +1034,11 @@ fn khazard_run(world: &mut World, actor_id: i32) -> bool {
 ///
 /// `CanMove` 门内：无目标且 `StatusTimeArr[STATETRANSPARENT] == 0` ⇒
 /// `MagicManager.MagMakePrivateTransparent(this, 180)`（复用 [`World::mag_make_private_transparent`]，
-/// 其内部按 `GetMapBaseObjects(9)` 逐目标 `Random(2)`）；有目标 ⇒ 只把
-/// `StatusTimeArr[STATETRANSPARENT]` 置 **0**（oracle **不**在此清 `HideMode/Transparent`，
-/// 那两个位由 `RecalcAbilitys` 收口）。尾段 `class_seek_gate` + `base.Run()`。
+/// 其内部按 `GetMapBaseObjects(9)` 逐目标 `Random(2)`）；helper 收尾 oracle 无条件
+/// `StatusChanged()` ⇒ [`RM_CHARSTATUSCHANGED`]（`nParam1 = CharStatus`），本函数按返回的
+/// [`crate::slave::TransparentDelivery::status_changed`] 入出帧队列，**不得丢弃**。
+/// 有目标 ⇒ 只把 `StatusTimeArr[STATETRANSPARENT]` 置 **0**（oracle **不**在此清
+/// `HideMode/Transparent`，那两个位由 `RecalcAbilitys` 收口）。尾段 `class_seek_gate` + `base.Run()`。
 fn frost_tiger_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
@@ -1030,7 +1050,15 @@ fn frost_tiger_run(world: &mut World, actor_id: i32) {
     let transparent_status = e.status_time[crate::entity::POISON_STATETRANSPARENT];
     if !has_target {
         if transparent_status == 0 {
-            world.mag_make_private_transparent(actor_id, 180);
+            let d = world.mag_make_private_transparent(actor_id, 180);
+            // oracle `MagicManager.MagMakePrivateTransparent` 收尾无条件 `baseObject.StatusChanged()`
+            // ⇒ `SendRefMsg(RM_CHARSTATUSCHANGED, 0, CharStatus, 0, 0, "")`。helper 内早退
+            // （计时器 > 0 / 实体消失）时 `status_changed == false` ⇒ 不产帧。
+            // **投递结果不得丢弃**：为真 ⇒ 入 `pending_monster_ref_msgs`（与其它 `SendRefMsg`
+            // 消费点同口径）。宿主 `drain_monster_ref_msgs` 尚未列该 ident ⇒ 出帧面登记 T-135。
+            if d.status_changed {
+                send_ref_msg(world, actor_id, RM_CHARSTATUSCHANGED, 0, d.status, 0, 0);
+            }
         }
     } else if let Some(e) = world.entities.get_mut(actor_id) {
         e.status_time[crate::entity::POISON_STATETRANSPARENT] = 0;
@@ -10747,6 +10775,10 @@ mod tests {
             frame.actor_id, tid,
             "发帧者是 TargetCret（TargetCret.SendRefMsg），不是 Khazard"
         );
+        assert!(
+            frame.recipients.contains(&tid),
+            "oracle SendRefMsg 的格扫包含 sender 自己的格子（Race==Play）⇒ 目标玩家本人也收 RM_SPACEMOVE_FIRE"
+        );
         assert_eq!(
             w.rng.random(),
             probe.random(),
@@ -10855,6 +10887,10 @@ mod tests {
         let viewer = monster(&mut w, 11, 10);
         assert!(w.enter_world(viewer));
         w.entities.get_mut(viewer).unwrap().ai.target_creature = Some(tiger);
+        // 玩家观察者：helper 的 `Random(2)` 只对 `Race >= Animal` 抽，玩家不改变抽数序；
+        // 用于钉住 `StatusChanged()` 的收件人集合（oracle 格扫仅 `Race == Play`）。
+        let observer = player(&mut w, 12, 10);
+        assert!(w.enter_world(observer));
         quiet_seek(&mut w, tiger);
         w.rng = RandomNumber::with_seed(seed);
         let mut probe = RandomNumber::with_seed(seed);
@@ -10875,6 +10911,27 @@ mod tests {
             w.entities.get(viewer).unwrap().ai.target_creature,
             None,
             "邻格 Random(2)==0 ⇒ 清靶"
+        );
+        // **牙**：helper 返回的投递结果必须排水（`StatusChanged()` ⇒ RM_CHARSTATUSCHANGED）。
+        // 去掉 `frost_tiger_run` 里的 `send_ref_msg(...)` ⇒ 本断言红。
+        let frame = w
+            .pending_monster_ref_msgs
+            .iter()
+            .find(|m| m.ident == RM_CHARSTATUSCHANGED)
+            .expect("MagMakePrivateTransparent 的 StatusChanged ⇒ RM_CHARSTATUSCHANGED 必须入队");
+        assert_eq!(frame.actor_id, tiger, "StatusChanged 由 FrostTiger 自己发");
+        assert_eq!(
+            frame.w_param, 0,
+            "SendRefMsg(RM_CHARSTATUSCHANGED, 0, CharStatus, …)"
+        );
+        assert_eq!(
+            frame.n_param1, e.char_status,
+            "nParam1 = 收尾后的 CharStatus"
+        );
+        assert_eq!(
+            frame.recipients,
+            vec![observer],
+            "oracle 格扫只发 Race==Play（含 sender 自己；tiger/邻怪不发）"
         );
         assert_eq!(w.rng.random(), probe.random(), "helper 内恰一次 Random(2)");
     }
