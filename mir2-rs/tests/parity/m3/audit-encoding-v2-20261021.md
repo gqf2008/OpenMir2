@@ -95,9 +95,28 @@ FF FE 00                -> enc=utf-16   chars= U+FFFD      # 不足 4B，退回 
 ```
 
 `StringList.LoadFromFile`（`Common/StringList.cs:276-291`）先按 `GetEncoding`（`:293-360`）给默认编码，
-随后 `new StreamReader(fileName, fs)` 的 **BOM 探测优先级更高**，因此**有效模型以上表为准**。
-注意：`whitelist.md:98` B-105 原文的「`FF FE 00 00` 亦然（UTF-16LE）」与本次实测不符，应按本表订正
-（见 §7 未决问题 1）。
+再显式传给 `new StreamReader(fileName, fs)`；`ConfigFile.Load`（`Common/ConfigFile.cs:263`）显式传
+`Encoding.GetEncoding("GB2312")`。**两者在 `FF FE 00 00` 上不同**，原因在 `StreamReader.ReadBuffer` 的
+顺序：`IsPreamble()` 先于 `DetectEncoding()`，而 `_checkPreamble = encoding.Preamble.Length > 0`
+（runtime release/8.0 源码）：
+
+- **StringList**：`GetEncoding` 对 `FF FE …` 返回 `Encoding.Unicode`（preamble 长度 2）⇒ `IsPreamble`
+  命中、压缩 2 字节并关掉探测 ⇒ **UTF-16LE**（`U+0000 U+0041 U+0000`）。
+- **ConfigFile**：GB2312（codepage 936）**preamble 长度 0** ⇒ 跳过 `IsPreamble`，`DetectEncoding`
+  看到 `FF FE 00 00` ⇒ **UTF-32LE**（`U+0041`）。
+
+2026-10-21 本机 .NET 8（与 oracle `TargetFramework` 一致）实测：
+
+```text
+gb2312 codepage=936 preamble_len=0    unicode preamble_len=2
+string+gb2312 : enc=utf-32  chars=U+0041
+stream+gb2312 : enc=utf-32  chars=U+0041
+string+unicode: enc=utf-16  chars=U+0000 U+0041 U+0000
+stream+unicode: enc=utf-16  chars=U+0000 U+0041 U+0000
+```
+
+⇒ 上表的裸构造器行为只对「**无 preamble 的编码**（如 GB2312）」成立；`whitelist.md:98` B-105 的
+「`FF FE 00 00` 亦然（UTF-16LE）」描述的是 **StringList 路径**（成立），但**不适用于 ConfigFile**。
 
 ### 1.3 .NET 字节边界 / `Split`
 
@@ -167,7 +186,7 @@ cp936_only_pua(single)=101
 | 前缀 | .NET 实际 | Rust-B `script/textfile.rs` 现状 | Rust-A `envir/text.rs` 现状 |
 |---|---|---|---|
 | `EF BB BF` | UTF-8 | UTF-8 ✓ | UTF-8 ✓ |
-| `FF FE 00 00` | **UTF-32LE** | **UTF-16LE ✗**（`FF FE` 先命中；实测 `U+0000 U+0041 U+0000` vs `U+0041`） | **UTF-16LE ✗**（第 3 字节 0x00 ≠ 0xFF） |
+| `FF FE 00 00` | **StringList（Encoding.Unicode，preamble 2B）：UTF-16LE**；**ConfigFile（GB2312，preamble 0B）：UTF-32LE**（见 §1.2） | UTF-16LE ✓（enc-core 起） | UTF-32LE ✓（enc-core 起） |
 | `FF FE`（非 `00 00`） | UTF-16LE | UTF-16LE ✓ | UTF-16LE ✓ |
 | `FF FE FF` | UTF-16LE（`U+41FF`） | UTF-16LE ✓ | **GBK ✗**（`byte2 != 0xFF` 条件） |
 | `FE FF` | UTF-16BE | UTF-16BE ✓ | UTF-16BE ✓ |
