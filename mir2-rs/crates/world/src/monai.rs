@@ -1212,7 +1212,7 @@ fn electronic_scolpion_run(world: &mut World, actor_id: i32) -> bool {
 /// `ElectronicScolpionMon.LightingAttack(byte nDir)`（`ElectronicScolpionMon.cs:15-31`）。
 ///
 /// 取数次序（勿改）：`GetAttackPower(Lo(DC), |Hi(DC)-Lo(DC)|)`（`:18`，**1 抽**）→
-/// `TargetCret.GetMagStruckDamage(this, nPower)`（`BaseObject.Base.cs:808-817`，MAC **1 抽**；
+/// `TargetCret.GetMagStruckDamage(this, nPower)`（`BaseObject.Base.cs:812-821`，MAC **1 抽**；
 /// 不死系再加**接收者**的 `UndeadPower`）→ `nDamage > 0` 才：吸血
 /// `WAbil.HP += (ushort)(nDamage / LoByte(WAbil.MP))`（`:22-26`，`ushort` 回绕）→
 /// `TargetCret.StruckDamage(nDamage)` → `SendStruckDelayMsg(RM_REFMESSAGE, nDamage, …, 200)`。
@@ -11977,6 +11977,181 @@ mod tests {
         assert!(
             w.self_delay_msgs.peek(t).is_none(),
             "零伤害不发 RM_REFMESSAGE"
+        );
+    }
+
+    /// R31①：`GetMapBaseObjects` 的 `!Death && !Ghost` 过滤（`BaseObject.cs:2830`）。
+    ///
+    /// 同格表里放「活怪 / 已死怪 / Ghost」：只有活怪进列表（死/幽灵对象仍留在 `ObjList`，
+    /// 过滤发生在 `!baseObject.Death && !baseObject.Ghost`，不是落格期）。
+    ///
+    /// 牙：删掉 `!e.death && !e.ghost` ⇒ 死/幽灵也进 `pending_ai_attacks` ⇒ 序列断言红。
+    #[test]
+    fn mb6_r31_map_base_objects_filters_death_and_ghost() {
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 131, 10, 10);
+        assert!(w.enter_world(mid));
+        let alive = mb1_monster(&mut w, ACTOR_RACE_MONSTER, 9, 10);
+        assert!(w.enter_world(alive));
+        let dead = mb1_monster(&mut w, ACTOR_RACE_MONSTER, 10, 11);
+        assert!(w.enter_world(dead));
+        let ghost = mb1_monster(&mut w, ACTOR_RACE_MONSTER, 11, 10);
+        assert!(w.enter_world(ghost));
+        // 落图后再置位：对象仍在 `ObjList` 里（oracle 的过滤点在枚举期）。
+        w.entities.get_mut(dead).unwrap().death = true;
+        w.entities.get_mut(ghost).unwrap().ghost = true;
+        {
+            let e = w.entities.get_mut(mid).unwrap();
+            e.ai.target_creature = Some(alive);
+            e.ai.search_enemy_tick = 100_000;
+            e.ai.attack_tick = 0;
+        }
+        w.clock_ms = 100_000;
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        let order: Vec<i32> = w.pending_ai_attacks.iter().map(|(_, t, _)| *t).collect();
+        // 枚举序 = [alive(9,10), 自身(10,10), dead(10,11), ghost(11,10)]，过滤后 [alive, 自身]，
+        // 倒序逐个 `_Attack` ⇒ [自身, alive]。
+        assert_eq!(
+            order,
+            vec![mid, alive],
+            "`!Death && !Ghost`：死/幽灵目标不得进 objectList"
+        );
+    }
+
+    /// R31①：3×3 越界格（`CellMatch=false`）与非法格（`Valid=false`）都整格跳过；
+    /// 越界**不得**回落到 `GetCellInfo` 的 `CellArray[0]`（自身格）。
+    ///
+    /// 边界放在 `(0,0)`：`x=-1` 与 `y=-1` 共 5 个越界位；若丢掉 `success` 检查，5 次失败会
+    /// 各自回落 `CellArray[0]`（自身格）⇒ 自身被重复 `_Attack`。`(1,1)` 落图后再置
+    /// `LowWall`（`set_map_xy_flag` 只改属性、不摘对象）⇒ 该格 `cellSuccess=false`。
+    ///
+    /// 牙：删 `!success` ⇒ 越界位回落自身格 ⇒ 序列多出自身；删 `is_available`/整格跳过 ⇒
+    /// 非法格里的玩家重新入列 ⇒ 序列多出 p_bad。
+    #[test]
+    fn mb6_r31_around_attack_skips_out_of_range_and_invalid_cells() {
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 131, 0, 0);
+        assert!(w.enter_world(mid));
+        let p_right = mb1_real_player(&mut w, 1, 0);
+        let p_down = mb1_real_player(&mut w, 0, 1);
+        let p_bad = mb1_real_player(&mut w, 1, 1);
+        assert!(
+            w.maps[0].set_map_xy_flag(1, 1, false),
+            "置 LowWall（非法格）"
+        );
+        {
+            let e = w.entities.get_mut(mid).unwrap();
+            e.ai.target_creature = Some(p_right);
+            e.ai.search_enemy_tick = 100_000;
+            e.ai.attack_tick = 0;
+        }
+        w.clock_ms = 100_000;
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        let order: Vec<i32> = w.pending_ai_attacks.iter().map(|(_, t, _)| *t).collect();
+        // 枚举序 = [自身(0,0), p_down(0,1), p_right(1,0)]，倒序 ⇒ [p_right, p_down, 自身]。
+        assert_eq!(
+            order,
+            vec![p_right, p_down, mid],
+            "越界位不得回落 CellArray[0]；非法格整格跳过（p_bad 不在列）"
+        );
+        assert!(
+            !order.contains(&p_bad),
+            "LowWall 格内的玩家不参与 AroundAttack"
+        );
+    }
+
+    /// R31③：`RACE_CLONE_MONSTER` 的 `Operate` 覆写（恒 `return false`）**不写 `LastHiter`**，
+    /// 但 `SendMsg(self, RM_STRUCK)` 的入队面照旧 ⇒ `pending_struck` 仍有该项。
+    /// 普通怪（同一路径）两者都写。
+    ///
+    /// 牙：把 `is_clone` 门删掉 ⇒ clone 的 `last_hiter` 变 `Some(mid)`；把入队也挪进
+    /// `!is_clone` ⇒ clone 的 `pending_struck` 为空。
+    #[test]
+    fn mb6_r31_clone_monster_struck_skips_last_hiter_but_enqueues() {
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 131, 10, 10);
+        w.entities.get_mut(mid).unwrap().dc = (9 << 8) | 5; // Lo=5, Hi=9
+        assert!(w.enter_world(mid));
+        let master = monster(&mut w, 20, 20);
+        let clone = mb1_monster(&mut w, crate::special_monster::RACE_CLONE_MONSTER, 11, 10);
+        assert!(w.enter_world(clone));
+        let normal = mb1_monster(&mut w, ACTOR_RACE_MONSTER, 9, 10);
+        assert!(w.enter_world(normal));
+        for t in [clone, normal] {
+            let e = w.entities.get_mut(t).unwrap();
+            e.master = Some(master); // `is_attack_target_base` 的 `target.master != null` 支
+            e.hp = 500;
+            e.max_hp = 500;
+            e.ai.pending_struck.clear();
+        }
+        {
+            let e = w.entities.get_mut(mid).unwrap();
+            e.ai.target_creature = Some(clone);
+            e.ai.search_enemy_tick = 100_000;
+            e.ai.attack_tick = 0;
+        }
+        w.clock_ms = 100_000;
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        // 枚举序 = [normal(9,10), 自身(10,10), clone(11,10)] ⇒ 两者都被 `_Attack`。
+        assert!(
+            w.pending_ai_attacks.iter().any(|(_, t, _)| *t == clone),
+            "CloneMonster 在 objectList 内"
+        );
+        {
+            let c = w.entities.get(clone).unwrap();
+            assert_eq!(c.last_hiter, None, "`Operate` 覆写 ⇒ 不写 LastHiter");
+            assert_eq!(c.ai.pending_struck.len(), 1, "仍入队 pending_struck");
+            assert_eq!(c.ai.pending_struck[0].hiter, mid);
+        }
+        {
+            let n = w.entities.get(normal).unwrap();
+            assert_eq!(n.last_hiter, Some(mid), "普通怪照写 LastHiter");
+            assert_eq!(n.ai.pending_struck.len(), 1, "普通怪入队 pending_struck");
+        }
+    }
+
+    /// R31④：`Run` 到点门 `(now - AttackTick) > NextHitTime` 是**严格 `>`**：过门刷新
+    /// `AttackTick` 并进 `AroundAttack`（空列表也发 `RM_HIT`）；恰等于 `NextHitTime` 不触发、
+    /// 不刷新、不发帧。
+    ///
+    /// 牙：`>` 改 `>=` ⇒ 边界段红（`attack_tick` 被刷新 + 多一帧）；把 `AttackTick = now`
+    /// 删掉 ⇒ 首段 `attack_tick` 仍为 0 ⇒ 红。
+    #[test]
+    fn mb6_r31_run_attack_tick_refresh_and_strict_next_hit_time() {
+        let run = |clock_ms: i64, attack_tick: i64| -> (i64, usize) {
+            let mut w = World::new(32, 32);
+            let mid = mb1_monster(&mut w, 131, 10, 10); // next_hit_time = 2000
+            let t = monster(&mut w, 11, 10);
+            {
+                let e = w.entities.get_mut(mid).unwrap();
+                e.ai.target_creature = Some(t);
+                e.ai.search_enemy_tick = clock_ms;
+                e.ai.attack_tick = attack_tick;
+            }
+            w.clock_ms = clock_ms;
+            assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+            (
+                w.entities.get(mid).unwrap().ai.attack_tick,
+                w.pending_monster_ref_msgs
+                    .iter()
+                    .filter(|m| m.ident == RM_HIT)
+                    .count(),
+            )
+        };
+        assert_eq!(
+            run(2001, 0),
+            (2001, 1),
+            "差值 2001 > 2000 ⇒ 刷新 AttackTick + AroundAttack（RM_HIT）"
+        );
+        assert_eq!(
+            run(2000, 0),
+            (0, 0),
+            "差值恰 2000 ⇒ 严格 `>` 不成立：不刷新、不发帧"
+        );
+        assert_eq!(
+            run(2001, 1),
+            (1, 0),
+            "差值恰 2000（now=2001/AttackTick=1）⇒ 不触发"
         );
     }
 }
