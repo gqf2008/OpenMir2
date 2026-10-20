@@ -1,4 +1,9 @@
-# 真机窗口 Run Sheet v2（OpenMir2，2026-10-21）
+# 真机窗口 Run Sheet v2.1（OpenMir2，2026-10-21）
+
+> **v2.1 修订（同日）**：按评审 F1–F12 修正——C# oracle 必须用**全新影子**（旧 `M2GameSvr-hook` 停在 `628d8024`）、
+> whitelist 补 `body_sha256`、R8 外部 C# 全栈的停机责任、B11 测试库开号、C4 按 `recog` 过滤、
+> D.3 的 E1-a/E1-b 分支、7600 影子 gate 的 pid 落盘、A5 的测试库快照组、C6 摘要键、C1 用例数、
+> B3/B5 可照抄 SQL、以及 `start_rust_stack -Stop` 对 MySQL 的条件结论。
 
 > **本文件完整取代 `docs/window-run-sheet-20261020.md`（草稿）。** 草稿的评审结论
 > （`docs/window-run-sheet-review-20261020.md`：A1–A5 / B1–B12 / C1–C9 / D1–D4 / E1–E4）已逐条吸收改正；
@@ -114,9 +119,13 @@ cd /e/Users/gxh/Documents/GitHub/OpenMir2 && \
 - **期望输出**：最后两行 `RESULT: GREEN` + `WINDOW_GUARD_OK`。
 - **失败判据**：出现任何 `RED`/`PREREQ_RED` 即拒绝起窗。R6 红 ⇒ 基线/构建源不对；R7 红 ⇒ 没重编或没录出处；
   R8 红 ⇒ 端口被占（见下）。
-- **R8 的处理**：先确认占用栈归属（§0.2 的 pid 列表），**用其自己的 `-LogDir` 停**：
-  `powershell -File E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/start_rust_stack.ps1 -LogDir $StackLogDir -Stop`（`$StackLogDir` = 从占用端口的 pid 反查到的 `rust-stack.pid.json` 所在目录；guard 的 R8 输出会提示它）。
-  不得 `Stop-Process -Name game-svr` 一把杀（可能是别的车道）。
+- **R8 的处理（不由窗口操作者单方完成）**：当前九端口是**外部 C# 全栈**（2026-10-20 12:35 起；实测路径：
+  GameSrv=`E:\MirServer\M2GameSvr\GameSrv.exe` pid 9440、DBSrv=`.../src/DBSrv/bin/Release/DBSrv.exe` pid 9964、
+  LoginSrv=`.../src/LoginSrv/bin/Release/LoginSrv.exe` pid 22324、三网关=`E:\MirServer\{LoginGate,SelGate,RunGate}`
+  pid 3544/3584/18464），**没有 `rust-stack.pid.json`**；`start_rust_stack.ps1 -Stop` 在这里只会 `NOTHING_TO_STOP`。
+  必须由**起栈会话/coordinator**优雅停（C# GameSvr 用 §A4 的 `send_ctrlc.ps1`；其余按该会话自己的 pid 文件停），
+  或由 owner 授权停；**禁止 `start-all.ps1 -Stop`**（Force 且连带杀 `mysqld`）。
+  `start_rust_stack.ps1 -Stop` 只适用于**该脚本自己起过**的栈。A1 的 R8 项不能由窗口操作者单方清掉。
 - **禁止**：在 `E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs` 构建后去跑镜像 guard。要改 guard 的
   `repo=/tgt=` 属于脚本变更，不在窗口授权内。
 
@@ -143,11 +152,12 @@ $t = $t -replace '(?m)(?<=^Count=)\d+(?=\r?$)','1' -replace '(?m)(?<=^GatePort1=
 Select-String -Path 'E:/tmp/window/20261021-a/shadow/game-gate.conf' -Pattern '^Count=|^GatePort1='
 
 # 4) 起影子 Rust game-gate(7600)：Rust 直接吃 conf 路径参数
-Start-Process -FilePath E:/tmp/m2svr-window-target/debug/game-gate.exe `
+$shadowGate = Start-Process -FilePath E:/tmp/m2svr-window-target/debug/game-gate.exe `
   -ArgumentList 'E:/tmp/window/20261021-a/shadow/game-gate.conf' `
   -WorkingDirectory E:/tmp/window/20261021-a/shadow -WindowStyle Hidden `
   -RedirectStandardOutput E:/tmp/window/20261021-a/shadow/game-gate.out.log `
   -RedirectStandardError  E:/tmp/window/20261021-a/shadow/game-gate.err.log -PassThru
+$shadowGate.Id | Set-Content E:/tmp/window/20261021-a/shadow/rust-gate.pid
 
 # 5) 断言：7200 必须 DOWN、7600 必须 UP（port-status.ps1 的十端口**不含 7600**，必须单独断言）
 [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
@@ -161,9 +171,22 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/capture/mir2_proxy.py 
 **C# 侧**（同样先停 7200，影子必须是**整目录拷贝**：C# GameGate 按 `AppContext.BaseDirectory` 读 `config.conf`）：
 
 ```powershell
-# 1) 起 C# 影子栈（DBSrv/LoginSrv/GameSvr 影子/三网关；不动 MySQL）
+# 0) 断言新影子目录不存在（**不要**复用 E:/MirServer/M2GameSvr-hook：那里的 GameSrv.exe 停在 628d8024，
+#    不含 d7ead5b2a，WorldServer.cs 的项链/头盔仍是交叉交换 ⇒ B3 的 1:1 在 oracle 侧必失败）
+Test-Path E:/tmp/window/20261021-a/csharp/GameSvr-shadow    # 期望 False
+
+# 1) 起 C# 影子栈：**显式给全新 -Shadow**（脚本 :96-104 只在 GameSrv.exe 不存在时才 robocopy）
 powershell -NoProfile -ExecutionPolicy Bypass -File E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/m3/start-csharp-hook.ps1 `
-  -Seed 42 -LogDir E:/tmp/window/20261021-a/csharp/stack
+  -Seed 42 -LogDir E:/tmp/window/20261021-a/csharp/stack `
+  -Shadow E:/tmp/window/20261021-a/csharp/GameSvr-shadow
+
+# 1b) 记录 oracle 影子身份：git_head 必须含 d7ead5b2a，否则停窗
+$dep = Get-Content E:/tmp/window/20261021-a/csharp/GameSvr-shadow/!deployed-from.json -Raw | ConvertFrom-Json
+$dep.git_head
+git -C E:/Users/gxh/Documents/GitHub/OpenMir2 merge-base --is-ancestor d7ead5b2a $dep.git_head
+Get-FileHash E:/tmp/window/20261021-a/csharp/GameSvr-shadow/GameSrv.dll, E:/tmp/window/20261021-a/csharp/GameSvr-shadow/M2Server.dll -Algorithm SHA256 |
+  Format-List Path,Hash
+# 期望：merge-base rc=0；把 git_head + 两个 hash 落 E:/tmp/window/20261021-a/csharp/GameSvr-shadow-identity.txt
 
 # 2) 只停它起的 RunGate（7200）
 $pf = Get-Content E:/tmp/window/20261021-a/csharp/stack/csharp-stack.pid.json -Raw | ConvertFrom-Json
@@ -175,10 +198,11 @@ Copy-Item -Recurse -Force 'E:\MirServer\RunGate' 'E:/tmp/window/20261021-a/shado
 Copy-Item -Force E:/tmp/window/20261021-a/shadow/game-gate.conf E:/tmp/window/20261021-a/shadow/run-gate/config.conf
 
 # 4) 起影子 C# GameGate(7600)
-Start-Process -FilePath 'E:/tmp/window/20261021-a/shadow/run-gate/GameGate.exe' `
+$shadowGate = Start-Process -FilePath 'E:/tmp/window/20261021-a/shadow/run-gate/GameGate.exe' `
   -WorkingDirectory 'E:/tmp/window/20261021-a/shadow/run-gate' -WindowStyle Hidden `
   -RedirectStandardOutput E:/tmp/window/20261021-a/shadow/csharp-gate.out.log `
   -RedirectStandardError  E:/tmp/window/20261021-a/shadow/csharp-gate.err.log -PassThru
+$shadowGate.Id | Set-Content E:/tmp/window/20261021-a/shadow/csharp-gate.pid
 
 # 5) 断言 7200 DOWN / 7600 UP（同 Rust 侧那条 .NET 监听表命令）
 # 6) 代理占 7200（同 Rust 侧）
@@ -186,8 +210,11 @@ Start-Process -FilePath 'E:/tmp/window/20261021-a/shadow/run-gate/GameGate.exe' 
 
 - **开窗前**：C# 抓包前置把 `--shadow-config` 指向**影子** conf，期望 `RESULT: GREEN`：
   `python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_csharp_capture_preflight.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --mirserver E:/MirServer --shadow-config E:/tmp/window/20261021-a/shadow/run-gate/config.conf`
-- **收窗**（草稿漏项）：先停代理，再停 **7600 影子 gate**（用第 4 步 `-PassThru` 记录的 pid），
-  最后才 `start_rust_stack.ps1 -LogDir E:/tmp/window/20261021-a/rust/stack -Stop` /
+  > 该门只查**真部署** `E:/MirServer/M2GameSvr/!deployed-from.json`（当前 `8a621f6a`），**不查影子**；
+  > 影子的 `git_head` + DLL hash 必须由 step 1b 单独落证据。
+- **收窗**（草稿漏项）：先停代理，再按 pid 文件停 **7600 影子 gate**
+  （`Stop-Process -Id (Get-Content E:/tmp/window/20261021-a/shadow/rust-gate.pid)`；
+  C# 侧同理读 `csharp-gate.pid`），最后才 `start_rust_stack.ps1 -LogDir E:/tmp/window/20261021-a/rust/stack -Stop` /
   `start-csharp-hook.ps1 -LogDir E:/tmp/window/20261021-a/csharp/stack -Stop`。
   `port-status.ps1` 看不到 7600 ⇒ 必须用 step 5 的监听表断言 **7600 DOWN**。
 - **失败判据**：代理启动即报 `address in use`（7200 没释放）；7200 仍被 gate 监听；7600 无监听；
@@ -239,12 +266,17 @@ Get-Process -Id $gsvr.Id -ErrorAction SilentlyContinue   # 期望：无输出（
   它只用于 GameSvr 已经优雅退出后的网关/DBSrv/LoginSrv 清理。GameSvr 退出后**至少等 3 秒**再清理，
   让最后一次 DBSrv 存档应答/日志落完（否则会把「没等到回执」误判成「没落库」）。
 - **MySQL**：`start_rust_stack.ps1` / `start_full_rust_stack.ps1` 只在 3306 **原本 DOWN** 时才启动 MySQL；
-  开工前 3306 已 UP ⇒ 它们的 `-Stop` 不会杀 MySQL。**不要**用 `start-all -Stop`，也不要手工停 mysqld（除非 §E3 授权）。
+  **条件结论（不是一般结论）**：3306 开工前已 UP ⇒ 起栈器不登记 MySQL（`start_rust_stack.ps1:374-377`），
+  `-Stop` 不会杀它；**若中途由起栈器拉起过 MySQL**（3306 原本 DOWN），则**禁用 `start_rust_stack.ps1 -Stop`**
+  （它会按 `:193-215` 对登记项 `Stop-Process -Force`，包括 MySQL），改用 `start_full_rust_stack.ps1 -Stop`
+  （其 MySQL 条目跳过不杀）或按 §E3 授权手工停。**不要**用 `start-all -Stop`。
 - **D-12 的预期不是既定的**：M1 证据（`mir2-rs/tests/parity/evidence/M1/s4b-slice5-exitpaths/README.md` §6，`M1-EXIT-2`）
   记录该 shutdown 场景两侧**都没有落库**。所以 G5a 的判据是「**玩家在世界中**时 oracle 是否真落库」，
   必须现场采，不能拿 M1 的旧结论替代。
 
-### A5. DB 快照/还原：`--dir` + `--yes-apply`，且必须在 MySQL 活着时做
+### A5. DB 快照/还原：先由 §E1 决定「生产组」还是「测试库组」
+
+**A5-P（E1-b：生产库 + 书面授权）**
 
 ```bash
 # 快照（停栈后做，避免边写边拍）
@@ -261,10 +293,37 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/dbsnap/dbsnap.py --pas
   --dir E:/tmp/window/20261021-a/db/base --yes-apply
 ```
 
+**A5-T（E1-a：`mir2_test_*` 克隆）**——`dbsnap` 默认表集是**生产库名**，测试库必须逐表指定：
+
+```bash
+python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/dbsnap/dbsnap.py --password= snap \
+  --out E:/tmp/window/20261021-a/db/base-test \
+  --table mir2_test_account.account --table mir2_test_account.account_protection \
+  --table mir2_test_db.characters --table mir2_test_db.characters_ablity \
+  --table mir2_test_db.characters_bonusability --table mir2_test_db.characters_item \
+  --table mir2_test_db.characters_item_attr --table mir2_test_db.characters_magic \
+  --table mir2_test_db.characters_bagitem --table mir2_test_db.characters_storageitem \
+  --table mir2_test_db.characters_status --table mir2_test_db.characters_quest \
+  --table mir2_test_db.characters_indexes
+
+# dry-run 也要带 --allow-db（白名单在生成计划前就校验）
+python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/dbsnap/dbsnap.py --password= restore \
+  --dir E:/tmp/window/20261021-a/db/base-test \
+  --allow-db mir2_test_db --allow-db mir2_test_account --allow-db mir2_test_data
+
+python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/dbsnap/dbsnap.py --password= restore \
+  --dir E:/tmp/window/20261021-a/db/base-test --yes-apply \
+  --allow-db mir2_test_db --allow-db mir2_test_account --allow-db mir2_test_data
+```
+
+> **由 §E1 裁决选哪一组**：E1-b 用 A5-P；E1-a 用 A5-T。两组不可混用；A5-T 还要求服务端确实指向测试库（§C10#8）。
+
+
 - **`--yes-apply` 语义**：没有它只打印计划、**一行都不写**（`dbsnap.py::cmd_restore`）；「收窗跑过 restore」不等于回滚成功，
   必须核对 rc 与行数。
 - **`--allow-db`**：默认只允许 `mir2_db/mir2_account/mir2_data`；灌 `mir2_test_*` 必须
   `--allow-db mir2_test_db --allow-db mir2_test_account --allow-db mir2_test_data`（可重复）。
+  **只跑 A5-P 时绝不加 `--allow-db`**（默认白名单就是生产三库）。
 - **禁止**在建栈已停 MySQL 之后执行 restore（连不上库）。
 - **失败判据**：rc≠0；`RESTORE PLAN` 的表/行数与 base 清单不符；灌完断言行数不符。
 
@@ -315,8 +374,19 @@ SELECT COUNT(*) AS n, COUNT(DISTINCT Position) AS slots, MIN(Position), MAX(Posi
 **改正**：C# save 侧已改成与 load 对齐（`src/GameSrv/Word/WorldServer.cs:1320-1324` 注释与代码：项链/头盔各取本槽）；
 Rust 断言也是 1:1（卡 work 记录 `a84c81aae + d7ead5b2a`）。旧 issue 文本里的「save 仍交换」是历史漂移，**只能做负例**。
 
+- **前置断言（F1）**：oracle 影子 `!deployed-from.json.git_head` 必须含 `d7ead5b2a`
+  （A2 step 1b 已记录）；否则 `WorldServer.cs` 仍是旧的交叉交换实现 ⇒ 本项必红，**先停窗**。
 - 摆位：槽 3 = 金项链 `StdIndex=298`，槽 4 = 青铜头盔 `StdIndex=192`（`ItemLocation.Necklace=3/Helmet=4`，
-  `src/OpenMir2/Enums/ItemLocation.cs`）。
+  `src/OpenMir2/Enums/ItemLocation.cs`）。可照抄 SQL（`@pid` 同 B1）：
+  ```sql
+  SET @pid=(SELECT Id FROM mir2_test_db.characters WHERE ChrName='aaa');
+  UPDATE mir2_test_db.characters_item
+     SET MakeIndex=900003, StdIndex=298, Dura=8000, DuraMax=8000
+   WHERE PlayerId=@pid AND Position=3;
+  UPDATE mir2_test_db.characters_item
+     SET MakeIndex=900004, StdIndex=192, Dura=8000, DuraMax=8000
+   WHERE PlayerId=@pid AND Position=4;
+  ```
 - 判据 SQL（登录前 / 小退后各一次）：
   ```sql
   SELECT Position,StdIndex,Dura,DuraMax FROM mir2_test_db.characters_item
@@ -353,6 +423,31 @@ Rust 断言也是 1:1（卡 work 记录 `a84c81aae + d7ead5b2a`）。旧 issue �
 
 > **改正草稿的 MagicId**：`MagicId=1` 是**火球术，Job=1（法师）**，战士 `aaa` 不可学。战士用 `MagicId=3`；
 > `magics` 表：3 的 `Job=0/NeedL1=7`；14/15 是 Job=2；1/8/31/37 是 Job=1（`sql/mir2_data.sql` 的 `magics` 行）。
+
+可照抄 SQL（每轮前先 restore base；`@pid` 同 B1）：
+
+```sql
+SET @pid=(SELECT Id FROM mir2_test_db.characters WHERE ChrName='aaa');
+-- R1：无技能 + 火焰戒指（Slot7）
+DELETE FROM mir2_test_db.characters_magic WHERE PlayerId=@pid;
+UPDATE mir2_test_db.characters_item
+   SET MakeIndex=900005, StdIndex=354, Dura=5000, DuraMax=5000
+ WHERE PlayerId=@pid AND Position=7;
+
+-- R2：无技能 + 无戒指（Slot7 清空）
+DELETE FROM mir2_test_db.characters_magic WHERE PlayerId=@pid;
+UPDATE mir2_test_db.characters_item
+   SET MakeIndex=0, StdIndex=0, Dura=0, DuraMax=0
+ WHERE PlayerId=@pid AND Position=7;
+
+-- R3：一行有效技能（基本剑术），无戒指；角色 Level>=7
+DELETE FROM mir2_test_db.characters_magic WHERE PlayerId=@pid;
+INSERT INTO mir2_test_db.characters_magic (PlayerId,MagicId,Level,UseKey,CurrTrain)
+VALUES (@pid,3,3,'F1',0);
+UPDATE mir2_test_db.characters SET Level=30 WHERE ChrName='aaa';
+UPDATE mir2_test_db.characters_ablity a JOIN mir2_test_db.characters c ON a.PlayerId=c.Id
+   SET a.Level=30 WHERE c.ChrName='aaa';
+```
 
 - **失败判据**：210/212 不在 `658` 后 `51` 前；R2 未出 212；R3 未出 211；技能行下线后未删除。
 - **侧间还原**：每轮前 restore base → 摆本轮状态 → 再登录；轮间必须停栈。
@@ -455,9 +550,22 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/world/c
 **改正**（评审 B11）：`mir2-rs/tests/parity/m3/README.md:505`：`AccountStorage.Index()` 查的是启动时的内存账号表；
 `account_provision.ps1` 直接写 `mir2_account`，之后新建的号看不到。
 
-- **首选**：在**起任何栈之前**执行
-  `powershell -File E:/Users/gxh/Documents/GitHub/OpenMir2/tools/client/account_provision.ps1 -Account g1new -Password g1new`
-  （或测试库等价 SQL，见 §C10#7），再起 LoginSrv ⇒ 无需重启。
+- **首选（E1-a，测试库）**：`account_provision.ps1` 固定写 `mir2_account.account/account_protection`（无 host/db 参数，
+  见其 `:56-91`），**在 E1-a 下不能用**。改在**起任何栈之前**对测试库执行等价 SQL：
+  ```sql
+  INSERT INTO mir2_test_account.account
+    (Account,PassWord,PayMode,Seconds,State,CreateTime,ModifyTime,LastLoginTime)
+  VALUES ('g1new','g1new',0,0,0,UNIX_TIMESTAMP(),UNIX_TIMESTAMP(),0);
+  INSERT INTO mir2_test_account.account_protection
+    (AccountId,UserName,Birthday,Quiz1,Answer1,Quiz2,Answer2)
+  SELECT Id,Account,'1986/06/06','q1','a1','q2','a2'
+    FROM mir2_test_account.account WHERE Account='g1new';
+  -- 断言行齐：SELECT COUNT(*) ... WHERE Account='g1new';  -- 期望 1
+  ```
+  前提：LoginSrv 已指向测试库（§C10#8；否则它读的仍是生产 `mir2_account`）。
+- **仅 E1-b（生产书面授权）**：才用
+  `powershell -File E:/Users/gxh/Documents/GitHub/OpenMir2/tools/client/account_provision.ps1 -Account g1new -Password g1new`。
+  不论哪种，账号都要在 LoginSrv 启动前建好 ⇒ 无需重启。
 - **若中途开号**：优雅停 LoginSrv 再起（不要 Force）：
   ```powershell
   $pf = Get-Content E:/tmp/window/20261021-a/rust/stack/rust-stack.pid.json -Raw | ConvertFrom-Json
@@ -515,7 +623,7 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/world/c
   `RESULT: RED`。
 - **边界**：`--require-each-struck` 默认关——怪物未命中/多点攻击常无前导，开了会假红；
   只有「每条受击都应有同源命中」的场景才开。
-- 状态：**已闭环**（工具 selftest 16 条全绿）。
+- 状态：**已闭环**（工具 `--selftest` 15 条用例全绿；末行另打 `SELFTEST GREEN`）。
 
 ### C2. 入站 `sm_struck>=1` 用 `--expect incoming`，不用 `any`
 
@@ -560,19 +668,30 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/world/c
   --config E:/tmp/window/20261021-a/judge/timing.json
 ```
 
-规则 JSON（示例，**只保留本场景要判的**；`--example-config` 里的 `3014/34/35/36` 是占位，不能原样用）：
+先取**自己的 ActorId**（`s2c SM_LOGON(50)` 的 `recog` 即本人；`SM_HIT/SM_STRUCK` 与 `check_timing` 的过滤都用它）：
+
+```bash
+python -I -B -c "import json;rows=[json.loads(l) for l in open('E:/tmp/window/20261021-a/rust/s2c/capture.jsonl',encoding='utf-8') if l.strip()];print(next(r['recog'] for r in rows if r.get('dir')=='s2c' and r.get('ident')==50))"
+```
+
+规则 JSON（示例，**只保留本场景要判的**；`--example-config` 里的 `3014/34/35/36` 是占位，不能原样用；
+`<SELF>` 换成上一条命令的输出数字）：
 
 ```json
 {"rules":[
   {"name":"sm_hit-leads-sm_struck-250ms","type":"after",
    "from":{"dir":"s2c","ident":14},"to":{"dir":"s2c","ident":31},
    "min_ms":0,"max_ms":250,"allowed_missing":0},
-  {"name":"monster-struck-cadence-min3s","type":"interval",
-   "match":{"dir":"s2c","ident":31},"min_ms":3000,"max_ms":600000,"min_pairs":2},
+  {"name":"monster-struck-incoming-cadence-min3s","type":"interval",
+   "match":{"dir":"s2c","ident":31,"recog":<SELF>},"min_ms":3000,"max_ms":600000,"min_pairs":2},
   {"name":"send-rate-50-per-s","type":"rate",
    "match":{"dir":"s2c"},"window_ms":1000,"max_count":50}
 ]}
 ```
+
+> **为什么必须带 `recog`（F5）**：`ident=31` 同时含两类 `SM_STRUCK`——入站（victim=自己，`recog=SELF`）与
+> 出站（victim=怪/别人，`recog=对方`）。`check_timing` 只按帧字段精确过滤 ⇒ 不带 `recog` 会把两类混进
+> 同一 interval 序列，`min_ms=3000` 可能假红也可能假绿。**没有 self 过滤就不许用它判 cadence。**
 
 - **期望**：每条规则 `[PASS]`；末行 `RESULT: GREEN`。
 - **失败判据**：任一 `[FAIL]`；帧缺 `ts_ms` ⇒ rc=2；`from` 帧 0 条 ⇒ fail-closed RED。
@@ -602,7 +721,10 @@ powershell -File E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/chec
 - **期望**：每条路径 `GREEN`；末行 `EVIDENCE <...>.json`，其 `pass=true`、`failed=[]`。
 - **失败判据**：`PREREQ_MISSING`（缺某条 `<path>-after.jsonl`，说明 snap 没跑全）；`RED`（字段级 diff≠0）。
 - **注意**：`-Mode diff` 只读 `<dir>/<path>-after.jsonl`；三条路径都必须先 snap，否则 PREREQ（评审 F8）。
-- 状态：**已闭环**（工具参数齐全）。
+- **E1-a（测试库）不适用**：`check_db_paths.ps1` 没有 `--table/--allow-db` 透传，固定 `dbsnap snap --out` 生产库；
+  测试库只能走 §A5-T 的逐表快照 + `scoped_diff.py extract/diff` 手工组装，此时 C5 的 softclose/disconnect/shutdown
+  只能逐条判、未覆盖的标**部分收**（F6）。
+- 状态：**E1-b 下闭环；E1-a 下见上（部分收）**（工具参数齐全，但无测试库透传）。
 
 ### C6. 字段级 DB diff：`scoped_diff.py diff` 用 `--summary-out`（不是 `--out`）
 
@@ -613,7 +735,8 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/m3/scop
   --canonical --summary-out E:/tmp/window/20261021-a/judge/g5-softclose-diff.json
 ```
 
-- **期望**：rc=0；无 `DIFF` 行；摘要 JSON 里 `diff_count=0`。
+- **期望**：rc=0；无 `DIFF` 行；摘要 JSON 的 `"mismatch_hashes" == 0`。
+  （`scoped_diff.py:378-380` 写的是 `{"summary":{...},"mismatch_hashes":N}`；**没有 `diff_count` 键**。）
 - **失败判据**：rc≠0；任一 `DIFF ident=... field=...`（差异要么修到 0，要么按 §6.0-3 登记）。
 - **不要再写 `--out`**：`diff` 子命令会直接 argparse 报错（`scoped_diff.py diff --help` 原文已注明）。
 
@@ -621,6 +744,7 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/m3/scop
 
 ```jsonl
 {"ident":52,"field":"body_len","reason":"D-9：oracle 40B vs Rust client-58 58B（owner 已裁决，whitelist.md D-9）","reviewer":"openmir2-reviewer-1"}
+{"ident":52,"field":"body_sha256","reason":"D-9 同上：40B→58B 布局变化必然改变 body_sha256（s2c_diff:213 逐字段比）","reviewer":"openmir2-reviewer-1"}
 {"ident":52,"field":"raw_hex","reason":"D-9 同上（52 body 布局差异）","reviewer":"openmir2-reviewer-1"}
 ```
 
@@ -633,7 +757,8 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
   --out E:/tmp/window/20261021-a/judge/g1-diff.json
 ```
 
-- **期望**：`WHITELISTED ident=52 field=body_len ...` / `field=raw_hex ...`；末行 `GREEN`。
+- **期望**：三条 `WHITELISTED ident=52 field=body_len|body_sha256|raw_hex ...`；末行 `GREEN`。
+  只登记 `body_len`/`raw_hex` 不够：`s2c_diff.py:213` 的字段元组含 `body_sha256`，D-9 下它必不同 ⇒ 仍 RED。
 - **失败判据**：whitelist 条目缺 `reason/reviewer` ⇒ 工具直接红；未登记的差异 ⇒ `RED`。
 - **注意**：`--golden` 必须是**同 DB 状态**的 C# 实时 capture，不要用 2026-10-10 的静态金标准（会带 A-9 假红）。
 
@@ -663,7 +788,7 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 | 4 | LoginGate/SelGate 影子抓包 + 网关 timer gate（C8） | G7 四卡 | 日志/截图；保持 in-progress |
 | 5 | 6000/5100 代理或逐帧日志（C9） | G6 | DB 行级 + 连接日志；不判 R |
 | 6 | 法术按键/`AutoSpell` 驱动 | G4 全部 | 只能摆前置（B6）；不收 |
-| 7 | `account_provision.ps1` 无 `--host/--db` | 测试库开号 | 手写测试库等价 SQL（B2/B11） |
+| 7 | `account_provision.ps1` 无 `--host/--db`（固定写 `mir2_account`） | 测试库开号 | 用 **B11 的可照抄测试库 SQL**；`account_provision.ps1` 仅 E1-b 下用 |
 | 8 | 栈启动器无「指向 `mir2_test_*`」参数 | E1 的测试库隔离 | 需手工改影子 conf / 另开工具改动 |
 | 9 | `dbsnap` 默认快照只含生产库名 | 测试库快照 | `--table mir2_test_db.<表>` 逐表指定 + `--allow-db` |
 | 10 | `check_client_s2c_frames` 无「按角色/状态选预设」自动判 | G2 预设需人工选 | 显式 `--expect-enter-seq`（B9） |
@@ -706,7 +831,8 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 | 收/还原 | 停栈 + restore | 10 min |
 
 - **能全收（3 张，单场景口径）**：`openmir2-monster-attack-hit-frame`（C1+C4 头/收件人/前导）、
-  `openmir2-monster-attack-cadence-lead`（C4 interval + 同 HP）、`openmir2-player-dir-supply`（Dir 变化可观测）。
+  `openmir2-monster-attack-cadence-lead`（C4 interval + 同 HP + **`recog=SELF` 过滤**；缺此过滤只能部分收）、
+  `openmir2-player-dir-supply`（Dir 变化可观测）。
 - **只能部分收**：`openmir2-aoi-verify-maptime`（30s 时间半不可判，§C10#3）、`openmir2-monster-view-throttle`、
   `openmir2-attacktarget-overrides`（82/119/130/91/107/105 特殊怪未构造）、`openmir2-active-seek-race-missing`、
   `openmir2-proper-target-unfolded`/`openmir2-search-target-clear-target`（攻击已死目标需尸体构造）、
@@ -726,8 +852,11 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 | G5a | 玩家在世界中 → §A4 优雅停 GameSvr → 快照/diff | 15 min/侧 |
 | 收/还原 | 停栈 + restore | 10 min |
 
-- **能全收（3 张）**：`openmir2-oracle-humitems-align`（B3 1:1）、`openmir2-delmagic-addmagic-chain`（B5 两轮）、
-  `openmir2-save-on-shutdown`（§A4 + C5 shutdown 路径）。
+- **能全收（E1-b 下 3 张；E1-a 下 2 张）**：`openmir2-oracle-humitems-align`（B3 1:1）、
+  `openmir2-delmagic-addmagic-chain`（B5 两轮）、`openmir2-save-on-shutdown`。
+  **`save-on-shutdown` 的全收只在 E1-b 成立**：`check_db_paths.ps1` 固定 `dbsnap snap --out`、无 `--table/--allow-db`，
+  E1-a 测试库取不了快照；且 `-Mode diff` 要求三条 `<path>-after.jsonl` 都在，本块只排 shutdown。
+  E1-a 下改用 C6 的 `scoped_diff.py diff …/shutdown-after.jsonl` 直接比，并把 softclose/disconnect 标**部分收**。
 - **只能部分收**：`openmir2-persist-useitems-wiring`（装载半有、破零收尾不在本组）、
   `openmir2-persist-create-rows`（需 E1 测试库 + 建角）、`openmir2-save-misc-gaps`（G11/G7 面未覆盖）。
 - **不收**：`openmir2-persist-item-attr-and-gold`（G-01 受 B-117、G-02 受 B-116 阻塞）、
