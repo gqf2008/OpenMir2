@@ -109,15 +109,36 @@ pub(crate) struct Indexes {
 /// `Db` 自身是 `Send + Sync`，由 `Arc<Db>` 跨连接共享：
 /// - `pool` 由 sqlx 线程安全复用，一次慢存档只占它自己借出的那条连接；
 /// - `idx` 只保护内存索引，**临界区内不 await SQL**（拿快照/改完即 drop）；
-/// - `create_gate` 只串行化「检查 → INSERT → 内存索引更新」的建角路径，防同名并发建两行。
+/// - `create_gates` 只按**名字**串行化「检查 → INSERT → 内存索引更新」的建角路径，
+///   防同名并发建两行；不同名字走不同分片（撞片才串行，残余差异见 whitelist T-120）。
 pub struct Db {
     /// 连接池（`playdata` 模块的 6000 面直接复用）。
     pub(crate) pool: MySqlPool,
     /// 内存索引（读多写少；写只发生在建角/建索引/软删）。
     pub(crate) idx: RwLock<Indexes>,
-    /// 建角闸门：5100 `CM_NEWCHR` 与 6000 自动建档可能并发，二者对同名角色
-    /// 必须只有一个赢家（oracle 的 `Dictionary` 竞争是 G10 非契约，见登记 `D-DBSCHEME-1`）。
-    pub(crate) create_gate: Mutex<()>,
+    /// 建角闸门（按名字分片）：5100 `CM_NEWCHR` 与 6000 自动建档可能并发，二者对同名
+    /// 角色必须只有一个赢家。oracle 没有应用层全局锁（5100 单消息线程只串行 5100 面，
+    /// 6000/5700 跨连接并发），因此闸门只按名字互斥。`characters`/`characters_indexes`
+    /// **没有** `UNIQUE(ChrName)` 兜底（`sql/mir2_db.sql`），同名保护完全依赖本闸门。
+    /// 残余差异（不同名哈希到同一分片时仍会串行）登记见 whitelist T-120。
+    pub(crate) create_gates: Box<[Mutex<()>]>,
+}
+
+/// 建角闸门分片数（见 [`Db::create_gate`] 与 `tests/parity/whitelist.md` T-120）。
+pub(crate) const CREATE_GATE_SHARDS: usize = 64;
+
+/// 名字 → 建角闸门分片：大小写折叠后的 GBK 字节做 FNV-1a（32 位）。
+///
+/// 5100 面直接拿线上 GBK 字节、6000 面用本地 [`crate::gbk::encode`]（与
+/// `EDCode.EncodeString` 同一近似口径，whitelist A-14）⇒ 同名跨面必然落到同一分片。
+pub(crate) fn create_gate_shard(name_gbk: &[u8]) -> usize {
+    let mut hash: u32 = 0x811c_9dc5;
+    for b in fold_key(name_gbk) {
+        hash ^= u32::from(b);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    // u32 → usize 在支持的目标上无损（32/64 位）；取模保证落在分片内。
+    (hash as usize) % CREATE_GATE_SHARDS
 }
 
 /// 列名**大小写不敏感**地解析（C# MySqlConnector 的 `dr.GetXxx("HP")` 对 `Hp` 列也能取到）。
@@ -162,6 +183,11 @@ const INDEX_COLS: &str = "Id, Account, ChrName, \
      CAST(CONVERT(ChrName USING gbk) AS BINARY) AS name_gbk, SelectID, IsDeleted";
 
 impl Db {
+    /// 取名字对应的建角闸门（同名同片；分片规则见 [`create_gate_shard`]）。
+    pub(crate) fn create_gate(&self, name_gbk: &[u8]) -> &Mutex<()> {
+        &self.create_gates[create_gate_shard(name_gbk)]
+    }
+
     /// 连接 `mir2_db` 并建立连接池（连不上即报错，M1 验收④）。
     ///
     /// 池参数对齐 oracle 的 MySqlConnector 缺省（`design-dbsrv-connection-20261021.md` §4.2）：
@@ -201,7 +227,10 @@ impl Db {
         Ok(Self {
             pool,
             idx: RwLock::new(Indexes::default()),
-            create_gate: Mutex::new(()),
+            create_gates: (0..CREATE_GATE_SHARDS)
+                .map(|_| Mutex::new(()))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
         })
     }
 
@@ -363,10 +392,11 @@ impl Db {
         account_text: &str,
         sel_gate_id: i16,
     ) -> Result<Option<i64>> {
-        // 建角闸门：检查 + INSERT + 索引更新必须是不可分割的线性化区间。
+        // 建角闸门：同名检查 + INSERT + 索引更新必须是不可分割的线性化区间。
         // 5100 单消息线程本来串行，但 6000 自动建档（`play_data_add`）与 5100 可并发；
-        // oracle 的 `Dictionary.Add` 竞争（G10）不是可观测契约，这里取更强的不变量（D-DBSCHEME-1）。
-        let _gate = self.create_gate.lock().await;
+        // oracle 的 `Dictionary.Add` 竞争（G10）不是可观测契约，这里取更强的不变量。
+        // 闸门按名字分片、只互斥同名（原全局实现的范围更宽），登记见 whitelist T-120。
+        let _gate = self.create_gate(name_gbk).lock().await;
         if self
             .idx
             .read()
@@ -584,8 +614,9 @@ impl Db {
         job: u8,
         hair: u8,
     ) -> Result<Option<i64>> {
-        // 建角闸门：见 `record_add`。检查 + 建角事务 + 索引更新必须线性化。
-        let _gate = self.create_gate.lock().await;
+        // 建角闸门：见 `record_add`。同名的检查 + 建角事务 + 索引更新必须线性化
+        // （按名字分片，只互斥同名；残余差异见 whitelist T-120）。
+        let _gate = self.create_gate(name_gbk).lock().await;
         // C# `PlayDataStorage.Add` → `CheckChrExists(_NameQuickMap)`：同名已在 `characters`
         // （启动时载入 + 本进程内新建）即返回 false，后续 INSERT 一条都不执行。
         if self

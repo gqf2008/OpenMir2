@@ -220,7 +220,10 @@ where
         );
     }
     let t0 = Instant::now();
-    probe().await;
+    // 探针必须有上界：回归时若无锁保护，延迟测例会卡到测试超时（50s）甚至永久。
+    tokio::time::timeout(Duration::from_secs(2), probe())
+        .await
+        .expect("探针 2s 未返回（被测路径疑似退化/死锁）");
     let elapsed = t0.elapsed();
     // 释放行锁；存档必须正常收尾（oracle 口径：失败被吞、仍回成功应答）。
     rollback(&mut locker).await;
@@ -337,8 +340,9 @@ async fn slow_save_does_not_block_load() {
 
 /// 5100 全序：单消费者队列必须按入队顺序回包。
 ///
-/// 第一条 `CM_DELCHR` 被外部行锁挡住 ~700ms，第二条 `CM_SELCHR` 只需读 `characters`
-/// （MVCC 不阻塞）。**若队列改成每消息 `tokio::spawn`**，SELCHR 会先回包 ⇒ 断言红。
+/// 第一条 `CM_DELCHR` 被外部行锁挡住 ~700ms，第二条 `CM_QUERYCHR` 只读
+/// `characters_indexes` 的另一账号行（MVCC 不阻塞）。**若队列改成每消息
+/// `tokio::spawn`**，QUERYCHR 会先回包 ⇒ 断言红。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "需要本机 MySQL；库名 mir2_test_lb8_order（自建自删）"]
 async fn gateway_queue_preserves_reply_order() {
@@ -394,7 +398,7 @@ async fn gateway_queue_preserves_reply_order() {
     .expect("入队 QUERYCHR");
     drop(qtx);
 
-    // 700ms 后放锁：DELCHR 收尾，随后才轮到 SELCHR。
+    // 700ms 后放锁：DELCHR 收尾，随后才轮到 QUERYCHR。
     tokio::time::sleep(Duration::from_millis(700)).await;
     rollback(&mut locker).await;
 
@@ -477,6 +481,26 @@ async fn create_gate_single_winner() {
                 .expect("统计 characters_indexes 失败");
         assert_eq!(idx_rows, 1, "同名索引只允许 1 行");
     }
+    // 闸门不是全局锁：持住 race0 的闸门时，另一个落在不同分片的名字必须立刻可建。
+    // （同名仍由同一分片互斥；不同名撞同一分片是可接受的残余，见 whitelist T-120。）
+    let held_name = b"race0";
+    let other = (0..10_000)
+        .map(|i| format!("gatename{i}"))
+        .find(|n| {
+            crate::db::create_gate_shard(n.as_bytes()) != crate::db::create_gate_shard(held_name)
+        })
+        .expect("64 分片下必须能找到不同分片的名字");
+    let gate = db.create_gate(held_name).lock().await;
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            db.create_gate(other.as_bytes()).lock()
+        )
+        .await
+        .is_ok(),
+        "不同名字不得被 race0 的建角闸门阻塞（闸门必须是按名分片，不是全局）"
+    );
+    drop(gate);
     ts::drop_db(&dsn).await;
 }
 
@@ -500,11 +524,14 @@ async fn index_snapshot_never_tears() {
             }
         })
     };
+    // 读者采样必须够密：写者的撕裂窗口只有「两次写临界区之间」的几微秒。
+    // 原 4×300 轮在变异（M4 拆写临界区）下 8 次只红 2 次；这里提高到 8×4000，
+    // 且**不在快照与回查之间让出**（让出会给写者补完 quick 的机会，反而漏检）。
     let mut readers = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..8 {
         let db = Arc::clone(&db);
         readers.push(tokio::spawn(async move {
-            for _ in 0..300 {
+            for _ in 0..4000 {
                 let list = db.find_by_account(b"tearacct").await;
                 for q in list {
                     assert!(
@@ -640,12 +667,14 @@ async fn closed_db_leaves_no_arc_or_lock_leak() {
         1,
         "所有请求结束后不得残留 Arc<Db> 克隆（任务泄漏）"
     );
-    assert!(
-        tokio::time::timeout(Duration::from_secs(1), db.create_gate.lock())
-            .await
-            .is_ok(),
-        "建角闸门不得被残留 guard 占住"
-    );
+    for (i, gate) in db.create_gates.iter().enumerate() {
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), gate.lock())
+                .await
+                .is_ok(),
+            "建角闸门分片 {i} 不得被残留 guard 占住"
+        );
+    }
     assert!(
         tokio::time::timeout(Duration::from_secs(1), db.idx.write())
             .await

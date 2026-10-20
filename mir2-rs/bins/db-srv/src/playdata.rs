@@ -1117,8 +1117,11 @@ impl Db {
             return Ok(false);
         };
         // 建角闸门：与 5100 `data_add`/`record_add` 共用（见 `db::Db::create_gate`）。
-        // 检查 + 建角事务 + 索引更新线性化 ⇒ 并发同名只有一个赢家（D-DBSCHEME-1）。
-        let _gate = self.create_gate.lock().await;
+        // 检查 + 建角事务 + 索引更新线性化 ⇒ 并发同名只有一个赢家。闸门按名字分片、
+        // 只互斥同名（原全局实现的范围更宽），登记见 whitelist T-120。
+        // 分片键用本地 GBK 编码（不额外查库；DB 转换仍留给后面的 `gbk_bytes`）。
+        let gate_key = crate::gbk::encode(&name);
+        let _gate = self.create_gate(&gate_key).lock().await;
         if self
             .idx
             .read()
