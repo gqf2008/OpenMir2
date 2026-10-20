@@ -14,20 +14,26 @@
 //!   BColor), 0, 1)` + 尾 `EncodeString(processMsg.Msg)`。
 //!
 //! **频道入口（本批 `openmir2-channel-chat`）**：`!!` 组队、`!~` 行会、`!` 喊话
-//! ⇒ [`parse_channel`] + [`channel_text`]/[`cry_text`]/[`cry_targets`]/[`shout_decision`]；
+//! ⇒ [`parse_channel`] + [`cry_text`]/[`cry_hear_frame`]/[`cry_targets`]/[`shout_decision`]；
 //! 发射点在 `main.rs::handle_say`。逐条照 `PlayObject.Chat.cs:163-208`：
 //! - `!!` ⇒ `SendGroupText(ChrName + ": " + sText)`（`PlayObject.cs:5185-5197`，前缀
 //!   `GroupMsgPreFix` 由世界侧 [`mir2_world::World::party_send_group_text`] 拼）；
 //! - `!~` **且** `MyGuild != null` ⇒ `MyGuild.SendGuildMsg(...)`（`GuildInfo.cs:431-456`）；
 //!   无行会时 `case '~' when MyGuild != null` 不命中 ⇒ 落**喊话**支（正文以 `~` 开头）；
-//! - 其余 `!` ⇒ 喊话：`boQUIZ` 门 → 10s 门（**严格 `>`**）→ 等级门
-//!   （`Abil.Level <= CanShoutMsgLevel`）→ `CryCry(..., nWide=50, ...)`。
+//! - 其余 `!` ⇒ 喊话三门（`boQUIZ` → 10s（**严格 `>`**）→ 等级
+//!   `Abil.Level <= CanShoutMsgLevel`）；全过后写 `ShoutMsgTick`，**不投递任何帧**（见下 NRE）。
 //!
-//! **登记/偏差（见模块 `main.rs` 与 `whitelist.md` T-118）**：oracle 的 `CryCry` 对每个收件人调
-//! `SendMsg(null, RM_CRY, …)`，而 `BaseObject.Message.cs:154` 直接解引用 `baseObject.ActorId`
-//! ⇒ 空引用被 `ProcessSayMsg` 的 catch 吞掉（字面行为 = 不出任何帧）；本仓按 `CryCry` 的**意图**
-//! （源 = null ⇒ `Recog=0`）投递。`BanShout` 唯一写点是 GM 命令/跨服 `SwitchData`（未移植）
-//! ⇒ 恒 true（`PlayObject.cs:1006`），本仓不建模该门。
+//! **oracle NRE 的 1:1 搬运（硬约束③；`whitelist.md` T-118）**：oracle 的 `CryCry`
+//! （`src/GameSrv/Word/WorldServer.cs:755-764`）对每个收件人调 `SendMsg(null, RM_CRY, …)`，
+//! `BaseObject.SendMsg` 在 `ActorId = baseObject.ActorId`（`src/M2Server/Actor/BaseObject.Message.cs:154`）
+//! 抛 `NullReferenceException`，被 `ProcessSayMsg` 的 `catch` 吞掉并记 `LogService.Error`
+//! （`src/M2Server/Player/PlayObject.Chat.cs:222-226`）⇒ **成功喊话的字面行为 = 零帧**
+//! （`FilterSendMsg` 支的 `SendMsg(null, …)` 同形）。本仓照搬：三门全过后只写
+//! `ShoutMsgTick` + 记一条 ERR（仅当 `CryCry` 收件人非空——oracle 进循环才会抛）；
+//! [`cry_targets`]/[`cry_hear_frame`] 保留为纯函数并由单测钉住语义，**不在线上投递**。
+//! 意图投递（`Recog=0`）属将来 bug-fix 批次的候选，需 owner 批准后单开卡。
+//! `BanShout` 唯一写点是 GM 命令/跨服 `SwitchData`（未移植）⇒ 恒 true
+//! （`PlayObject.cs:1006`），本仓不建模该门。
 //!
 //! **仍未接（登记）**：`@` 命令系统、GM 红字、`SayMsgTime/SayMsgCount/DisableSayMsg` 频率限制、
 //! `FilterSendMsg`、`DenySayMsgList`、地图 `boNOCHAT`、`SayMsgMaxLen` 截断、`@@加速处理` 特判、
@@ -38,6 +44,7 @@
 //! **已接（orphan 编码器接线首批）**：私聊 `/`（[`parse_whisper`]/[`whisper_text`]）
 //! ⇒ `SM_WHISPER(103)`，发射点见 `main.rs::handle_whisper`。
 
+use crate::smframe;
 use mir2_world::{World, ACTOR_RACE_PLAY};
 
 /// `Messages.CM_SAY`（`Messages.cs:147`）。
@@ -48,8 +55,9 @@ pub const CM_SAY: u16 = 3030;
 /// 本切片按常量取用（配置读取登记为后续项，见模块头）；现网与缺省一致 ⇒ 行为等价。
 pub const SEND_REF_MSG_RANGE: i32 = 12;
 
-/// `PlayObject.ProcessUserLineMsg` 的"不以 `@` 开头"这一支；`ProcessSayMsg` 再按首字符分流，
-/// 本切片只接**非频道**的普通行（`/`、`!`、空行都不接，交给后续片）。
+/// `PlayObject.ProcessUserLineMsg` 的"不以 `@` 开头"这一支。**当前分流**在 `main.rs::handle_say`：
+/// 先 `/`（[`parse_whisper`]）、再 `!`（[`parse_channel`]），剩下的非空、非 `@` 行才是普通说话；
+/// `@` 命令系统仍未接（宿主记 DBG 并丢弃），空行直接忽略。
 #[must_use]
 pub fn is_plain_say(line: &str) -> bool {
     !line.is_empty() && !line.starts_with('@') && !line.starts_with('/') && !line.starts_with('!')
@@ -192,16 +200,6 @@ pub fn parse_channel(line: &str, has_guild: bool) -> Option<ChannelSay<'_>> {
     }
 }
 
-/// 组队/行会正文 `ChrName + ": " + sText`（`PlayObject.Chat.cs:168/174`；GBK 字节拼接）。
-#[must_use]
-pub fn channel_text(chr_name: &[u8], say: &[u8]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(chr_name.len() + 2 + say.len());
-    v.extend_from_slice(chr_name);
-    v.extend_from_slice(b": ");
-    v.extend_from_slice(say);
-    v
-}
-
 /// 喊话正文 `"(!)" + ChrName + ": " + sText`（`PlayObject.Chat.cs:192`；GBK 字节拼接）。
 #[must_use]
 pub fn cry_text(chr_name: &[u8], say: &[u8]) -> Vec<u8> {
@@ -211,6 +209,17 @@ pub fn cry_text(chr_name: &[u8], say: &[u8]) -> Vec<u8> {
     v.extend_from_slice(b": ");
     v.extend_from_slice(say);
     v
+}
+
+/// `RM_CRY` 若投递会产生的帧（`PlayObject.Message.cs:1705-1707` 的 `RM_HEAR` 支）：
+/// `SM_HEAR(40)`、`Recog=0`（null 源）、`Param=MakeWord(f_color, b_color)`、`Tag=0`、
+/// `Series=1`、尾 `EncodeString("(!)"+ChrName+": "+sText)`。
+///
+/// **当前线上路径不投递**（oracle NRE 1:1 搬运，见模块头与 T-118）；保留为将来 bug-fix
+/// 批次的候选实现，语义由单测钉住（不是线上判据）。
+#[must_use]
+pub fn cry_hear_frame(chr_name: &[u8], say: &[u8], f_color: u8, b_color: u8) -> Vec<u8> {
+    smframe::sm_hear(0, f_color, b_color, &cry_text(chr_name, say))
 }
 
 /// `WorldServer.CryCry` 的收件人集合（`src/GameSrv/Word/WorldServer.cs:755-764`）：
@@ -252,6 +261,12 @@ pub enum ShoutDecision {
 
 /// `ProcessSayMsg` 的 `!` 喊话三门（顺序照 oracle）：
 /// `!boQUIZ` → `now - ShoutMsgTick > 10_000` → `Abil.Level > CanShoutMsgLevel`。
+///
+/// **`last_tick == 0` 视为「从未喊过」**：oracle 的 `now` 是 `HUtil32.GetTickCount()`（机器
+/// uptime），`ShoutMsgTick` ctor 为 0 ⇒ 只要 uptime > 10s，`now - 0 > 10_000` 恒真。
+/// 本仓未注入时钟时 `world.clock_ms` 从 0 起（每 tick +200ms），按字面比较会把**起服后
+/// 前 10 秒**的所有 `!` 判成 `TooSoon`（oracle 不会）⇒ 用 0 作哨兵直接放行。0 只可能是
+/// uptime/进程时钟 < 10s 的退化窗口。
 #[must_use]
 pub fn shout_decision(
     now_ms: i64,
@@ -264,7 +279,8 @@ pub fn shout_decision(
         return ShoutDecision::MapDisable;
     }
     let elapsed = now_ms - last_tick;
-    if elapsed > SHOUT_INTERVAL_MS {
+    // `last_tick == 0` = 从未喊过（哨兵；见函数 doc）。
+    if last_tick == 0 || elapsed > SHOUT_INTERVAL_MS {
         if i32::from(level) <= can_shout_level {
             ShoutDecision::LevelTooLow(can_shout_level + 1)
         } else {
@@ -420,14 +436,37 @@ mod tests {
     }
 
     #[test]
-    fn channel_and_cry_text_are_gbk_byte_concats() {
-        assert_eq!(channel_text(b"aaa", b"hi"), b"aaa: hi".to_vec());
+    fn cry_text_and_frame_are_gbk_byte_concats() {
         assert_eq!(cry_text(b"aaa", b"hi"), b"(!)aaa: hi".to_vec());
         assert_eq!(cry_text(b"", b""), b"(!): ".to_vec());
+        // 未来 bug-fix 批次的候选帧形状（当前线上不投递，见模块头/T-118）。
+        let body = cry_hear_frame(b"aaa", b"hi", 0x00, 0x97);
+        assert_eq!(
+            i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            0,
+            "Recog = null 源 ⇒ 0"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            mir2_protocol::messages::SM_HEAR,
+            "RM_CRY ⇒ SM_HEAR(40)"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[6], body[7]]),
+            u16::from(0x97u8) << 8,
+            "Param = MakeWord(0x00, 0x97)"
+        );
+        assert_eq!(u16::from_le_bytes([body[8], body[9]]), 0, "Tag=0");
+        assert_eq!(u16::from_le_bytes([body[10], body[11]]), 1, "Series=1");
+        assert_eq!(
+            mir2_protocol::edcode::decode(&body[12..]),
+            b"(!)aaa: hi".to_vec()
+        );
     }
 
     /// `CryCry` 的半径是**严格 `< 50`**（与 [`hear_targets`] 的 `<= 12` 不同）；
-    /// 同图 + 非 Ghost + 玩家；含自己。
+    /// 同图 + 非 Ghost + 玩家；含自己。**线上不投递**（oracle NRE 搬运，T-118）——
+    /// 本用例只钉住将来 bug-fix 批次（意图投递）的候选收件人语义，不是线上判据。
     #[test]
     fn cry_targets_strict_range_50() {
         let mut world = World::new(200, 200);
@@ -459,20 +498,16 @@ mod tests {
     }
 
     /// 10s 门：`(now - tick) > 10_000` **严格大于**；剩余秒 = `10 - elapsed/1000`。
-    /// 首次喊话 `ShoutMsgTick=0` ⇒ 服务器启动后 10s 内被拒（与 oracle 的 ctor 零值一致）。
+    /// `ShoutMsgTick == 0` 是「从未喊过」哨兵（见下一条用例），不参与字面比较。
     #[test]
     fn shout_decision_time_gate_is_strict_and_reports_remaining_seconds() {
         assert_eq!(
-            shout_decision(0, 0, 40, 34, false),
-            ShoutDecision::TooSoon(10)
-        );
-        assert_eq!(
-            shout_decision(10_000, 0, 40, 34, false),
+            shout_decision(11_000, 1_000, 40, 34, false),
             ShoutDecision::TooSoon(0),
             "恰好 10.000s 仍不过（C# 是 `>`）"
         );
         assert_eq!(
-            shout_decision(10_001, 0, 40, 34, false),
+            shout_decision(11_001, 1_000, 40, 34, false),
             ShoutDecision::Send
         );
         assert_eq!(
@@ -486,23 +521,46 @@ mod tests {
         );
     }
 
+    /// **时钟原点**：未注入 `MIR2_CLOCK_MS` 时 `world.clock_ms` 从 0 起（每 tick +200ms），
+    /// oracle 的 `now` 是 `HUtil32.GetTickCount()`（机器 uptime）。新会话 `ShoutMsgTick = 0`
+    /// 只可能是「从未喊过」⇒ 必须立即放行；否则起服后前 10 秒的 `!` 会被 oracle 不存在的
+    /// `TooSoon` 拒掉。等级门仍在时间门之后照常生效。
+    #[test]
+    fn shout_decision_treats_zero_tick_as_never_shouted() {
+        assert_eq!(
+            shout_decision(0, 0, 40, 34, false),
+            ShoutDecision::Send,
+            "clock_ms=0（未注入时钟的起服原点）⇒ 立即放行"
+        );
+        assert_eq!(
+            shout_decision(5_000, 0, 40, 34, false),
+            ShoutDecision::Send,
+            "0 = 从未喊过，不看 elapsed"
+        );
+        assert_eq!(
+            shout_decision(0, 0, 34, 34, false),
+            ShoutDecision::LevelTooLow(35),
+            "放行时间门后等级门照常判"
+        );
+    }
+
     /// 等级门在时间门**之后**：`Abil.Level <= CanShoutMsgLevel` ⇒ 提示 `CanShoutMsgLevel+1`；
     /// 等于也拒（`<=`）。
     #[test]
     fn shout_decision_level_gate_is_after_time_gate_and_inclusive() {
         assert_eq!(
-            shout_decision(10_001, 0, 34, 34, false),
+            shout_decision(20_001, 1_000, 34, 34, false),
             ShoutDecision::LevelTooLow(35),
             "level == CanShoutMsgLevel ⇒ 拒"
         );
         assert_eq!(
-            shout_decision(10_001, 0, 35, 34, false),
+            shout_decision(20_001, 1_000, 35, 34, false),
             ShoutDecision::Send
         );
         // 时间门未过时先报时间，不报等级。
         assert_eq!(
-            shout_decision(5_000, 0, 1, 34, false),
-            ShoutDecision::TooSoon(5)
+            shout_decision(5_000, 1_000, 1, 34, false),
+            ShoutDecision::TooSoon(6)
         );
     }
 

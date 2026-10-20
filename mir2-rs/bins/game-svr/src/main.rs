@@ -1270,10 +1270,6 @@ struct ChatHost<'a> {
     party_cfg: &'a mir2_world::PartyConfig,
     strings: &'a strings::StringConf,
     colors: &'a MsgColors,
-    /// `[Setup] CryMsgFColor`。
-    cry_f: u8,
-    /// `[Setup] CryMsgBColor`。
-    cry_b: u8,
     /// `[Setup] CanShoutMsgLevel`。
     can_shout_level: i32,
     /// `Envir.Flag` 来源；`None`（S1 占位世界）⇒ `boQUIZ=false`（登记）。
@@ -1287,7 +1283,9 @@ struct ChatHost<'a> {
 /// [`handle_channel_say`]/[`handle_whisper`] 与 `chat` 模块头。
 ///
 /// `shout_msg_tick`（`PlayObject.ShoutMsgTick`）存在 [`SessionGround`]，与 `PlayObject` 同生命周期
-/// （进世界建、离场删 ⇒ 重登从 0 起算，与 oracle ctor 零值一致）。
+/// （进世界建、离场删 ⇒ 重登从 0 起算）。ctor 零值 = **「从未喊过」哨兵**：oracle 的 `now` 是
+/// 机器 uptime（`HUtil32.GetTickCount()`），`now - 0 > 10s` 在 uptime > 10s 时恒真；本仓
+/// `world.clock_ms` 未注入时从 0 起 ⇒ 用 0 作哨兵（见 [`chat::shout_decision`]）。
 fn handle_say(
     host: &ChatHost<'_>,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -1371,7 +1369,9 @@ fn handle_say(
 ///   `RM_GROUPMESSAGE` ⇒ `SM_SYSMESSAGE(100)`（`recog` = 说话者、`Series=1`）；无组 ⇒ 无帧。
 /// - `!~` 且 `MyGuild != null` ⇒ `MyGuild.SendGuildMsg(...)` ⇒ 逐成员 `SM_GUILDMESSAGE(104)`
 ///   （`GuildInfo.cs:431-456`；`BanGuildChat` 反向门沿用 G3 口径）；无行会 ⇒ **落喊话支**。
-/// - 其余 `!` ⇒ 喊话三门（`!boQUIZ` → 10s → 等级）后 `CryCry(..., 50, ...)` ⇒ `SM_HEAR(40)`。
+/// - 其余 `!` ⇒ 喊话三门（`!boQUIZ` → 10s → 等级）；全过后只写 `ShoutMsgTick` + 记 ERR
+///   （oracle `CryCry` 的 `SendMsg(null, RM_CRY, …)` 在 `BaseObject.Message.cs:154` 抛 NRE，
+///   被 catch 吞掉 ⇒ **零帧**；硬约束③ 1:1 搬运，见 `chat` 模块头与 T-118）。
 ///
 /// `SS_208`（跨服）两侧都只记日志（单服无接收端，T-113）。
 fn handle_channel_say(
@@ -1470,7 +1470,7 @@ fn handle_channel_say(
                 delivered
             );
         }
-        chat::ChannelSay::Shout(text) => {
+        chat::ChannelSay::Shout(_text) => {
             let (last_tick, level) = sessions
                 .get(&speaker.chr_name)
                 .map_or((0, 0), |sg| (sg.shout_msg_tick, sg.equip.abil.level));
@@ -1511,31 +1511,22 @@ fn handle_channel_say(
             if let Some(sg) = sessions.get_mut(&speaker.chr_name) {
                 sg.shout_msg_tick = host.world.clock_ms;
             }
-            // `"(!)" + ChrName + ": " + sText` ⇒ `RM_CRY` ⇒ `SM_HEAR`（`Recog=0`，见 T-118）。
-            let cry = chat::cry_text(&gbk_encode(&speaker.chr_name), &gbk_encode(text));
-            let body = smframe::sm_hear(0, host.cry_f, host.cry_b, &cry);
-            let mut delivered = 0usize;
-            for target_id in chat::cry_targets(host.world, speaker.actor_id, chat::SEND_CRY_RANGE) {
-                let Some(t) = host.online.iter().find(|e| e.actor_id == target_id) else {
-                    continue;
-                };
-                let Some(tx) = route_to_gate(host.gates, t.gate_idx, t.socket, "喊话") else {
-                    continue;
-                };
-                let _ = tx.send(SimToGate::SendFrame {
-                    socket: t.socket,
-                    body: body.clone(),
-                });
-                delivered += 1;
+            // **oracle NRE 的 1:1 搬运（硬约束③，T-118）**：`CryCry` 对每个收件人调
+            // `SendMsg(null, RM_CRY, …)`，`BaseObject.SendMsg` 在
+            // `ActorId = baseObject.ActorId`（`BaseObject.Message.cs:154`）抛 NRE，被
+            // `ProcessSayMsg` 的 catch（`PlayObject.Chat.cs:222-226`）吞掉并记
+            // `LogService.Error` ⇒ **成功喊话不投递任何帧**。只有进入收件人循环才会抛 ⇒
+            // 收件人为空时不记日志。
+            // 帧形状（`SM_HEAR(40)`/`Recog=0`/CryMsg 颜色）保留在 `chat::cry_hear_frame` 的
+            // 单测里，供将来 bug-fix 批次（意图投递，需 owner 批准后单开卡）复用。
+            let targets = chat::cry_targets(host.world, speaker.actor_id, chat::SEND_CRY_RANGE);
+            if !targets.is_empty() {
+                glog!(
+                    "ERR",
+                    "[Exception] PlayObject.ProcessSayMsg Msg = {line}（CryCry 的 SendMsg(null, RM_CRY, …) 在 BaseObject.Message.cs:154 抛 NRE ⇒ 零帧；收件人 {} 个）",
+                    targets.len()
+                );
             }
-            glog!(
-                "INF",
-                "喊话 ChrName:{} ActorId:{} → {} 个收件人 tail={:?}",
-                speaker.chr_name,
-                speaker.actor_id,
-                delivered,
-                text
-            );
         }
     }
 }
@@ -12908,6 +12899,9 @@ struct SessionGround {
     /// `PlayObject.ShoutMsgTick`（`PlayObject.cs:267`，auto-property 零值）——
     /// `!` 喊话的 10s 门基准（`PlayObject.Chat.cs:183` 的 `now - ShoutMsgTick > 10*1000`）。
     /// 与 `PlayObject` 同生命周期：进世界建会话 ⇒ 0，离场删会话 ⇒ 重登重新从 0 起算。
+    /// **0 = 从未喊过**：oracle 的 `now` 是机器 uptime（`HUtil32.GetTickCount()`），
+    /// `now - 0 > 10s` 在 uptime > 10s 时恒真；本仓 `world.clock_ms` 未注入时从 0 起，
+    /// 故以 0 作哨兵直接放行（见 [`chat::shout_decision`]）。
     shout_msg_tick: i64,
     /// `PlayObject.BoReconnection`（`PlayObject.cs:376`）：`CM_SOFTCLOSE` 置真 ⇒ 小退后允许重连。
     bo_reconnection: bool,
@@ -13132,7 +13126,12 @@ struct EnterConfig {
     /// （本仓未解析该键，登记）。
     pk_flag_time: i32,
     /// `[Setup] CryMsgFColor/CryMsgBColor`（`!` 喊话的 `SM_HEAR` 颜色；缺省 0x00/0x97）。
+    ///
+    /// oracle NRE 搬运（T-118）后成功喊话零帧 ⇒ 线上不读；配置管线保留，帧形状由
+    /// [`chat::cry_hear_frame`] 的单测钉住，供将来 bug-fix 批次（意图投递）复用。
+    #[allow(dead_code)]
     cry_msg_f_color: u8,
+    #[allow(dead_code)]
     cry_msg_b_color: u8,
     /// `[Setup] CanShoutMsgLevel`（`!` 喊话等级门；缺省 7，部署件 34）。
     can_shout_msg_level: i32,
@@ -15611,8 +15610,6 @@ fn sim_loop(
                             party_cfg: &party_cfg,
                             strings: &enter_cfg.string_conf,
                             colors: &colors,
-                            cry_f: enter_cfg.cry_msg_f_color,
-                            cry_b: enter_cfg.cry_msg_b_color,
                             can_shout_level: enter_cfg.can_shout_msg_level,
                             registry: registry.as_ref(),
                         };
@@ -23660,8 +23657,6 @@ mod tests {
         guild_msg_cfg: guild_runtime::GuildMsgCfg,
         party_cfg: mir2_world::PartyConfig,
         strings: crate::strings::StringConf,
-        cry_f: u8,
-        cry_b: u8,
         can_shout_level: i32,
     }
 
@@ -23677,8 +23672,6 @@ mod tests {
                 },
                 party_cfg: mir2_world::PartyConfig::default(),
                 strings: crate::strings::StringConf::defaults(),
-                cry_f: 0,
-                cry_b: 0x97,
                 can_shout_level: 0,
             }
         }
@@ -23699,8 +23692,6 @@ mod tests {
                 party_cfg: &self.party_cfg,
                 strings: &self.strings,
                 colors,
-                cry_f: self.cry_f,
-                cry_b: self.cry_b,
                 can_shout_level: self.can_shout_level,
                 registry: None,
             }
@@ -24086,9 +24077,10 @@ mod tests {
     }
 
     /// **判据③**：`!~` 但 `MyGuild == null` ⇒ C# 的 `case '~' when MyGuild != null` 不命中
-    /// ⇒ 落**喊话**支，正文保留 `~`（`PlayObject.Chat.cs:171-179`）。
+    /// ⇒ 落**喊话**支（正文保留 `~`）。喊话成功路径按 oracle NRE 搬运 ⇒ **零帧**，
+    /// 因此用 `ShoutMsgTick` 被写来证明走了喊话支。
     ///
-    /// 牙：把无行会 `!~` 当静默丢弃 / 当行会消息 ⇒ 必红（应收到 `SM_HEAR` 且文本以 `~` 开头）。
+    /// 牙：把无行会 `!~` 当静默丢弃 ⇒ tick 不写 ⇒ 必红；当行会消息 ⇒ 收到 104 ⇒ 必红。
     #[test]
     fn guild_say_without_guild_falls_through_to_shout() {
         use std::collections::HashMap;
@@ -24120,30 +24112,26 @@ mod tests {
         let host = ctx.host(&online, &world, &gates, &colors);
         handle_say(&host, &mut sessions, "aaa", 901, Some("!~hi"));
 
-        match rx0.try_recv().expect("无行会 !~ 必须落喊话") {
-            SimToGate::SendFrame { body, .. } => {
-                assert_eq!(
-                    u16::from_le_bytes([body[4], body[5]]),
-                    mir2_protocol::messages::SM_HEAR,
-                    "喊话 ⇒ SM_HEAR(40)，不是 104"
-                );
-                assert_eq!(
-                    mir2_protocol::edcode::decode(&body[12..]),
-                    encoding_rs::GBK.encode("(!)aaa: ~hi").0.to_vec(),
-                    "正文是 sData[1..]，保留 `~`"
-                );
-            }
-            other => panic!("应收到喊话帧，实收 {other:?}"),
-        }
+        assert!(
+            rx0.try_recv().is_err(),
+            "喊话成功路径按 oracle NRE 搬运 ⇒ 零帧（不得发 SM_HEAR/104）"
+        );
+        assert_eq!(
+            sessions["aaa"].shout_msg_tick, 20_000,
+            "无行会 !~ 必须落喊话支并写 ShoutMsgTick（静默丢弃 ⇒ 仍为 0）"
+        );
     }
 
-    /// **判据④**：`!` 喊话的 `CryCry(..., nWide=50, ...)` 收件人 = 同图 + `!Ghost` + 玩家 +
-    /// **严格 `|dx| < 50 && |dy| < 50`**；帧 = `SM_HEAR(40)`，`Recog=0`（T-118）、
-    /// `Param=MakeWord(CryMsgFColor=0, CryMsgBColor=0x97)`、`Series=1`、尾 `(!)aaa: hi`。
+    /// **判据④（owner 裁决：oracle NRE 1:1 搬运）**：`CryCry` 逐收件人 `SendMsg(null, RM_CRY, …)`
+    /// 在 `BaseObject.Message.cs:154` 抛 NRE，被 `ProcessSayMsg` 的 catch
+    /// （`PlayObject.Chat.cs:222-226`）吞掉 ⇒ **成功喊话零帧**：范围内（自己/dx=49）、
+    /// 范围外（dx=50/异图）**一律不收**，只写 `ShoutMsgTick`。
+    /// 收件人/帧形状语义改由 `chat.rs` 的 `cry_targets_strict_range_50` /
+    /// `cry_text_and_frame_are_gbk_byte_concats` 单测钉住（**不再作为线上判据**）。
     ///
-    /// 牙：把 `<` 改 `<=` ⇒ 边界 dx=50 的玩家收到帧 ⇒ 必红；把 Recog 改说话者 ⇒ 必红。
+    /// 牙：把任一收件人恢复投递 ⇒ 必红；不写 tick ⇒ 必红。
     #[test]
-    fn shout_uses_strict_range_50_and_oracle_frame_bytes() {
+    fn shout_success_path_is_zero_frames_like_oracle_nre() {
         use std::collections::HashMap;
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
@@ -24198,39 +24186,21 @@ mod tests {
         let host = ctx.host(&online, &world, &gates, &colors);
         handle_say(&host, &mut sessions, "aaa", 901, Some("!hi"));
 
-        let check = |rx: &mut mpsc::UnboundedReceiver<SimToGate>, sock: i32| match rx.try_recv() {
-            Ok(SimToGate::SendFrame { socket, body }) => {
-                assert_eq!(socket, sock);
-                assert_eq!(
-                    i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
-                    0,
-                    "Recog = 0（oracle SendMsg(null, RM_CRY, …)，见 T-118）"
-                );
-                assert_eq!(
-                    u16::from_le_bytes([body[4], body[5]]),
-                    mir2_protocol::messages::SM_HEAR,
-                    "RM_CRY ⇒ SM_HEAR(40)"
-                );
-                assert_eq!(
-                    u16::from_le_bytes([body[6], body[7]]),
-                    0x9700,
-                    "Param = MakeWord(CryMsgFColor=0x00, CryMsgBColor=0x97)"
-                );
-                assert_eq!(u16::from_le_bytes([body[10], body[11]]), 1, "Series=1");
-                assert_eq!(
-                    mir2_protocol::edcode::decode(&body[12..]),
-                    encoding_rs::GBK.encode("(!)aaa: hi").0.to_vec()
-                );
-            }
-            other => panic!("socket={sock} 应收到喊话 SM_HEAR，实收 {other:?}"),
-        };
-        check(&mut rx0, 901); // 含自己
-        check(&mut rx1, 902); // dx=49
-        assert!(
-            rx2.try_recv().is_err(),
-            "dx=50 严格出界（CryCry 是 `< 50`）"
+        for (who, rx) in [
+            ("自己", &mut rx0),
+            ("dx=49", &mut rx1),
+            ("dx=50", &mut rx2),
+            ("异图", &mut rx3),
+        ] {
+            assert!(
+                rx.try_recv().is_err(),
+                "{who} 不得收到任何帧（oracle NRE 搬运 ⇒ 成功喊话零帧）"
+            );
+        }
+        assert_eq!(
+            sessions["aaa"].shout_msg_tick, 20_000,
+            "成功喊话仍按 oracle 写 ShoutMsgTick（写点在 CryCry 之前）"
         );
-        assert!(rx3.try_recv().is_err(), "异图不收");
     }
 
     /// **判据⑤**：10s 门（`(now - ShoutMsgTick) > 10*1000`，**严格 >**）：窗口内第二次喊话
@@ -24271,7 +24241,10 @@ mod tests {
             let host = ctx.host(&online, &world, &gates, &colors);
             handle_say(&host, &mut sessions, "aaa", 901, Some("!hi"));
         }
-        assert!(matches!(rx0.try_recv(), Ok(SimToGate::SendFrame { .. })));
+        assert!(
+            rx0.try_recv().is_err(),
+            "成功喊话零帧（oracle NRE 搬运，T-118）"
+        );
         assert_eq!(sessions["aaa"].shout_msg_tick, 20_000);
 
         world.clock_ms = 29_999; // 9.999s ⇒ 10 - 9 = 1
@@ -24315,8 +24288,8 @@ mod tests {
             handle_say(&host, &mut sessions, "aaa", 901, Some("!hi 3"));
         }
         assert!(
-            matches!(rx0.try_recv(), Ok(SimToGate::SendFrame { .. })),
-            "10.001s 后允许再喊"
+            rx0.try_recv().is_err(),
+            "10.001s 后允许再喊 = 写 tick（成功路径仍零帧，NRE 搬运）"
         );
         assert_eq!(sessions["aaa"].shout_msg_tick, 30_001);
     }
@@ -24381,13 +24354,14 @@ mod tests {
             let host = ctx.host(&online, &world, &gates, &colors);
             handle_say(&host, &mut sessions, "aaa", 901, Some("!hi"));
         }
-        match rx0.try_recv().expect("level=35 > 34 应放行") {
-            SimToGate::SendFrame { body, .. } => assert_eq!(
-                u16::from_le_bytes([body[4], body[5]]),
-                mir2_protocol::messages::SM_HEAR
-            ),
-            other => panic!("应收到 SM_HEAR，实收 {other:?}"),
-        }
+        assert!(
+            rx0.try_recv().is_err(),
+            "level=35 > 34 放行 ⇒ 成功喊话零帧（oracle NRE 搬运）"
+        );
+        assert_eq!(
+            sessions["aaa"].shout_msg_tick, 20_000,
+            "放行后写 ShoutMsgTick（证明过了等级门）"
+        );
     }
 
     /// **判据⑦**：`@` 命令仍走脚本支（本切片未接）——**不得**产生任何聊天帧。
@@ -24426,7 +24400,7 @@ mod tests {
     /// **判据⑧**：单个 `!`——oracle `sData[1]` 下标越界被 `ProcessSayMsg` 的 catch 吞掉
     /// ⇒ 无任何输出。
     ///
-    /// 牙：把它当喊话（空正文）⇒ 会冒出一条 `SM_HEAR` ⇒ 必红。
+    /// 牙：把它当喊话（空正文）⇒ 会写 `ShoutMsgTick`（并记 NRE ERR）⇒ 必红。
     #[test]
     fn bare_bang_produces_no_frame_like_oracle_index_overflow() {
         use std::collections::HashMap;
