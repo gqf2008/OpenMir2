@@ -684,7 +684,8 @@ pub struct CastleDefenseSpecs {
     ///
     /// **读序照抄**：`MasterGuild` 的反查在 `CastleMgr.Initialize`（`GameApp.cs:213`）里，
     /// 早于 `GuildMgr.LoadGuildInfo`（`GameApp.cs:245`）⇒ 启动时恒为 `None`；本结构只搬名字，
-    /// 由 [`UserCastle::is_master_guild_name`] 用名字比较。
+    /// 由 [`UserCastle::initialize`] 落到 `own_guild`；[`UserCastle::is_master_guild_name`]
+    /// 照 oracle 在 `MasterGuild == None` 时恒 false（登记 `whitelist.md` T-131）。
     pub own_guild: String,
     /// `[Defense] CastleMap`（`CastleConf.cs:39`，缺省 `"3"`）。
     pub map_name: String,
@@ -1515,13 +1516,21 @@ impl UserCastle {
         self.is_master_guild(guild)
     }
 
-    /// **名字口径**的 `IsMasterGuild`：`OwnGuild`（`CastleConf.LoadConfig` 读入的字符串）
-    /// 与 `GuildMgr.MemberOfGuild(ChrName)` 的会名逐字比较。
+    /// **名字口径**的 `IsMasterGuild`（oracle `UserCastle.cs:639-642`：
+    /// `MasterGuild != null && MasterGuild == guild`）。
     ///
-    /// oracle 的 `MasterGuild == guild` 是引用相等；两侧都由同一个 `GuildMgr` 解析，
-    /// 同名必同对象 ⇒ 名字相等与引用相等在本仓（无 `GuildId` 映射的生产路径）等价。
+    /// `MasterGuild` 只由 `UserCastle.LoadConfig`（`UserCastle.cs:231`）与 `GetCastle`
+    /// （`UserCastle.cs:543`）赋值；`CastleMgr.Initialize` 早于 `GuildMgr.LoadGuildInfo` ⇒ **行会表装载前
+    /// 恒 `None`**，此时本函数**恒 false**（照 oracle，不拿 `OwnGuild` 名字顶替城主身份）。
+    /// 城池被占领（`GetCastle`）后 `master_guild` 才有值；本仓生产路径尚未接线 `GetCastle`
+    /// ⇒ 生产恒 false（登记 `whitelist.md` T-131）。
     #[must_use]
     pub fn is_master_guild_name(&self, guild_name: Option<&str>) -> bool {
+        if self.master_guild.is_none() {
+            return false;
+        }
+        // `MasterGuild == guild` 是引用相等；本签名只有会名 ⇒ 仅在 `master_guild` 已挂时
+        // 用 `OwnGuild` 与会名逐字比较（同一个 `GuildMgr` 解析，同名即同对象）。
         match (self.own_guild.as_deref(), guild_name) {
             (Some(own), Some(name)) => !own.is_empty() && own == name,
             _ => false,
@@ -2026,8 +2035,9 @@ pub enum CastleWarEvent {
 ///
 /// - **每 tick**：`castle != null && castle.UnderWar` ⇒ `ChangePkStatus(true)`；
 /// - **1s 门内**（`now - DiscountForNightTick > 1000`，**先**把基准写成 `now`）：
-///   - 战时且皇宫且 `MyGuild != null` ⇒ 自动占领链第一跳 `IsAttackGuild(IGuild)` 抛 N1
-///     ⇒ 本 tick 后续（含 `NameColorChanged` 块）全部跳过，`NameColorChanged` 保持真；
+///   - 战时且皇宫且 `MyGuild != null` **且 `!castle.IsMember(this)`** ⇒ 自动占领链第一跳
+///     `IsAttackGuild(IGuild)` 抛 N1 ⇒ 本 tick 后续（含 `NameColorChanged` 块）全部跳过，
+///     `NameColorChanged` 保持真；城主行会成员站皇宫 ⇒ 不抛，照常清标记并重发两条；
 ///   - 否则若不在战时 ⇒ `ChangePkStatus(false)`；
 ///   - `NameColorChanged` ⇒ 清标记 + `RefUserState` + `RefShowName`（两条事件）。
 ///
@@ -2054,10 +2064,15 @@ pub fn castle_war_tick(
         // `PlayObject.Message.cs:291-350`：1s 门（严格 `>`），先写基准。
         if now_ms - st.discount_for_night_tick > 1000 {
             st.discount_for_night_tick = now_ms;
-            // `PlayObject.Message.cs:319-338`：皇宫 `MyGuild != null` ⇒ 自动占领链在
+            // `PlayObject.Message.cs:319-338`：皇宫 `MyGuild != null` **且
+            // `!castle.IsMember(this)`**（`UserCastle.cs:480-483`）⇒ 自动占领链在
             // `castle.IsAttackGuild(IGuild)` 抛 N1，本 tick 剩余块不再执行。
+            // 城主行会成员（`IsMember == true`）不进该链 ⇒ 继续 `NameColorChanged` 块。
             let n1_throw = castle.is_some_and(|c| {
-                c.under_war && c.palace_map_id == Some(p.map_id) && p.guild_name.is_some()
+                c.under_war
+                    && c.palace_map_id == Some(p.map_id)
+                    && p.guild_name.is_some()
+                    && !c.is_member_name(p.guild_name.as_deref())
             });
             if !(castle.is_some_and(|c| c.under_war)) {
                 st.change_pk_status(false);
@@ -3603,6 +3618,9 @@ mod tests {
         c.home_y = 290;
         c.palace_map_id = Some(1);
         c.castle_map_id = Some(0);
+        // `MasterGuild` 必须已挂（oracle `IsMasterGuild` 的 `MasterGuild != null` 门）；
+        // 只给 `OwnGuild` 名字不够（`is_master_guild_name` 照 oracle 在 `None` 时恒 false）。
+        c.master_guild = Some(G_DEFEND);
         c.own_guild = Some("守方".to_string());
         c.under_war = false;
         c
@@ -3847,6 +3865,61 @@ mod tests {
         i.target_pvp_level = 2;
         i.target_pvp_flag = true;
         assert_eq!(get_chr_color(&i, &colors).unwrap().color, 255);
+    }
+
+    /// Minor 1：`IsMasterGuild` 的 `MasterGuild != null` 门（oracle `UserCastle.cs:639-642`）。
+    /// 只有 `OwnGuild` 名字、`MasterGuild == None` ⇒ 恒 false（行会表装载前的相位）。
+    ///
+    /// 牙：去掉 `if self.master_guild.is_none() { return false; }` ⇒ 第一条断言红。
+    #[test]
+    fn master_guild_name_requires_master_guild_loaded() {
+        let mut c = UserCastle::new("沙巴克", config());
+        c.own_guild = Some("守方".to_string());
+        assert!(
+            !c.is_master_guild_name(Some("守方")),
+            "MasterGuild == None ⇒ 名字相等也不得判城主"
+        );
+        c.master_guild = Some(G_DEFEND);
+        assert!(c.is_master_guild_name(Some("守方")));
+        assert!(!c.is_master_guild_name(Some("攻方")));
+        assert!(!c.is_master_guild_name(None));
+    }
+
+    /// N1 判据的 `!castle.IsMember(this)` 门（oracle `PlayObject.Message.cs:319-338`）：
+    /// 城主行会成员（`own_guild` 与会名相同、`MasterGuild` 已挂）站皇宫且 1s 门过
+    /// ⇒ 自动占领链不执行 ⇒ `NameColorChanged` 块照常出 2 条事件。
+    ///
+    /// 牙：去掉 `!c.is_member_name(...)` ⇒ N1 ⇒ 0 条事件 ⇒ 红。
+    #[test]
+    fn c13_palace_master_member_skips_n1_and_emits_two_events() {
+        let mut c = ready_castle();
+        c.under_war = true;
+        c.palace_map_id = Some(0);
+        let castles = vec![c];
+        let players = [CastleWarPlayer {
+            actor_id: 7,
+            map_id: 0,
+            x: 644,
+            y: 290,
+            guild_name: Some("守方".to_string()),
+        }];
+        let mut states = std::collections::HashMap::new();
+        assert!(
+            castle_war_tick(&castles, &players, &mut states, 0).is_empty(),
+            "t=0：1s 门未开（只置 `InGuildWarArea`，不发事件）"
+        );
+        let ev = castle_war_tick(&castles, &players, &mut states, 1001);
+        assert_eq!(
+            ev,
+            vec![
+                CastleWarEvent::AreaState {
+                    actor_id: 7,
+                    in_guild_war_area: true
+                },
+                CastleWarEvent::ShowName { actor_id: 7 },
+            ],
+            "城主成员站皇宫 ⇒ 不抛 N1 ⇒ RefUserState()+RefShowName() 两条"
+        );
     }
 
     /// C13 `castle_in_guild_war_area_setclear`：每 tick 置位、1s 门清除、变化才发 766。

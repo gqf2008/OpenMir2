@@ -3487,8 +3487,9 @@ impl World {
     /// `CastleManager.IsCastleMember(playObject)`（`CastleManager.cs:115-124`）：
     /// 按 `CastleList` 顺序返回首个 `IsMasterGuild(MyGuild)` 命中的城堡下标。
     ///
-    /// 名字口径 = `GuildMgr.MemberOfGuild(ChrName)` 的会名与 `OwnGuild` 逐字比较
-    /// （见 `UserCastle::is_master_guild_name` 的引用相等证法）。
+    /// 名字口径 = `GuildMgr.MemberOfGuild(ChrName)` 的会名，且城堡 `MasterGuild` 必须已挂
+    /// （oracle `IsMasterGuild` 的 `MasterGuild != null` 门；启动时行会表未装载 ⇒ 恒 `None`
+    /// ⇒ 本函数恒 `None`，见 `UserCastle::is_master_guild_name`）。
     #[must_use]
     pub fn castle_member_at(&self, guild_name: Option<&str>) -> Option<usize> {
         self.castles

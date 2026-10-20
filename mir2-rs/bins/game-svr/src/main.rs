@@ -3382,8 +3382,10 @@ fn handle_query_user_name_cmd(
         return;
     };
     let body = if queryuser::cetin_near_xy(world, self_map, i32::from(x), i32::from(y), target_id) {
-        // `GetChrColor(target)`：观察者 × 目标的真实分支（PK/行会/攻城区）。有行会观察者在
-        // 攻城区命中 `IsAttackGuild(IGuild)` 的 N1 ⇒ oracle 丢弃本 tick 剩余消息，这里丢帧。
+        // `GetChrColor(target)`：观察者 × 目标的真实分支（PK/行会/攻城区）。oracle 里
+        // 有行会观察者在攻城区命中 `IsAttackGuild(IGuild)` 的 N1 会丢弃本 tick 剩余消息；
+        // 但本调用点把 `viewer_in_guild_war_area`/`target_in_guild_war_area` 硬传 `false`
+        // ⇒ N1 分支**当前不可达**（下面 `Err` 分支只是 oracle 语义镜像的死代码，登记 T-128）。
         let viewer_guild = sessions
             .get(chr_name)
             .and_then(|s| s.guild.guild_name.as_deref());
@@ -14940,6 +14942,122 @@ fn production_world(
     world
 }
 
+/// oracle `WorldServer.cs:298-350` 的进图/死亡落点与 `Abil` 改写（**生产路径**：
+/// `sim_loop` 的登录分支只调本函数）。
+///
+/// **Home 输入口径**：oracle 的 `playObject.HomeMap/HomeX/HomeY` 由 `GetHumData` 从
+/// **角色记录**装入（`WorldServer.cs:305-307/339-341`），不是 `Server.conf [Setup]`
+/// （后者只在 `:389-393` 的地形移位回落里用）⇒ 本函数只读 `rec`，不接收 `[Setup]` Home。
+///
+/// `Abil` 写回（调用方随后用同一记录装配 52/752 的 `cur_hp/cur_mp`，`enter.rs:167`）：
+/// - `WorldServer.cs:279-294`：Fight3Zone 且 `HP<=0 && FightZoneDieCount<3`
+///   ⇒ `HP=MaxHP`、`MP=MaxMP`、`DieInFight3Zone=true`；else ⇒ `FightZoneDieCount=0`；
+/// - `WorldServer.cs:351`：死亡改写后无条件 `HP=14`。
+///
+/// `DieInFight3Zone` 不是记录字段（oracle 是 `PlayObject` 运行时位）⇒ 由返回值交给
+/// 调用方写进实体；唯一消费点（登录后的 `MapRandomMove`）未移植，登记在
+/// `whitelist.md` 的 T-129。
+#[allow(clippy::too_many_arguments)]
+fn rewrite_enter_position(
+    world: &mir2_world::World,
+    rng: &mut mir2_shared::rng::RandomNumber,
+    rec: &mut record::PlayerRecord,
+    map_name: &str,
+    map_id: usize,
+    x: i16,
+    y: i16,
+    my_guild_name: Option<&str>,
+    is_new_human: bool,
+    fight3_zone: bool,
+    registry: Option<&mir2_envir::MapRegistry>,
+    red_die: &mir2_world::castle::RedDieHome,
+) -> (String, usize, i16, i16, bool) {
+    let mut hp = rec.data.abil.as_ref().map_or(0, |a| i32::from(a.hp));
+    let record_max_hp = rec.data.abil.as_ref().map_or(0, |a| a.max_hp);
+    let fight_zone_die_count = rec.data.fight_zone_die_count;
+    // `WorldServer.cs:258-277`：新角色 `Abil.HP = 15`（oracle 的能力初始化更早）。
+    if is_new_human {
+        hp = 15;
+    }
+    // `WorldServer.cs:279-294`：Fight3Zone 恢复支 / else 清 `FightZoneDieCount`。
+    let mut fight3_recovered_hp = None;
+    let mut die_in_fight3_zone = false;
+    if fight3_zone {
+        if hp <= 0 && fight_zone_die_count < 3 {
+            let recovered = if is_new_human { 15 } else { record_max_hp };
+            hp = i32::from(recovered);
+            fight3_recovered_hp = Some(recovered);
+            die_in_fight3_zone = true;
+        } else {
+            rec.data.fight_zone_die_count = 0;
+        }
+    }
+    let pvp_level = u8::try_from(rec.data.pk_point.max(0) / 100).unwrap_or(255);
+    let mut map_name = map_name.to_string();
+    let mut map_id = map_id;
+    let (mut x, mut y) = (x, y);
+    // 进图两臂（`WorldServer.cs:299-318`）——`HomeMap/HomeX/HomeY` 取**记录**。
+    let enter_castle = world.castle_war_area_at(Some(map_id), i32::from(x), i32::from(y));
+    if let Some(reloc) = mir2_world::castle::relocate_on_enter(
+        &mir2_world::castle::EnterRelocateInput {
+            castle: enter_castle.and_then(|i| world.castles.get(i)),
+            map_id,
+            x: i32::from(x),
+            y: i32::from(y),
+            my_guild_name,
+            home_map: rec.data.home_map.as_deref().unwrap_or(""),
+            home_x: rec.data.home_x,
+            home_y: rec.data.home_y,
+        },
+        rng,
+    ) {
+        map_name = reloc.map_name;
+        (x, y) = (reloc.x, reloc.y);
+        match registry.map_or(Some(map_id), |r| r.id_of(&map_name)) {
+            Some(id) => map_id = id,
+            // `WorldServer.cs:319-321`：`FindMap == null ⇒ Abil.HP = 0`。
+            None => hp = 0,
+        }
+    }
+    // 死亡三臂（`WorldServer.cs:324-350`）——`HomeMap/HomeX/HomeY` 同样取**记录**。
+    let member_castle = world
+        .castle_member_at(my_guild_name)
+        .and_then(|i| world.castles.get(i));
+    let died = if let Some(reloc) = mir2_world::castle::relocate_on_death(
+        &mir2_world::castle::DeathRelocateInput {
+            member_castle,
+            hp,
+            pvp_level,
+            home_map: rec.data.home_map.as_deref().unwrap_or(""),
+            home_x: rec.data.home_x,
+            home_y: rec.data.home_y,
+            red_die,
+        },
+        rng,
+    ) {
+        map_name = reloc.map_name;
+        (x, y) = (reloc.x, reloc.y);
+        if let Some(id) = registry.and_then(|r| r.id_of(&map_name)) {
+            map_id = id;
+        }
+        true
+    } else {
+        false
+    };
+    // oracle 的 `Abil` 写回：Fight3Zone 恢复支写在城堡块之前、死亡 `HP=14` 写在最后；
+    // 中间没有其它写点 ⇒ 在这里按同一终值落记录。
+    if let Some(abil) = rec.data.abil.as_mut() {
+        if let Some(recovered) = fight3_recovered_hp {
+            abil.hp = recovered;
+            abil.mp = abil.max_mp;
+        }
+        if died {
+            abil.hp = 14;
+        }
+    }
+    (map_name, map_id, x, y, die_in_fight3_zone)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
@@ -16389,122 +16507,47 @@ fn sim_loop(
                                                 in_world,
                                             );
                                         } else {
-                                        // oracle `WorldServer.cs:298-350`：进图/死亡落点改写。
+                                        // oracle `WorldServer.cs:298-350`：进图/死亡落点改写（生产实现在
+                                        // `rewrite_enter_position`；**Home 输入取角色记录**，不是 `[Setup]`）。
                                         // **位置**：`resolve_enter_map` 之后、地形移位环之前；抽数走
                                         // **同一条** `world.rng`（X 先 Y 后）。
-                                        let (final_map_name, map_id, enter_x, enter_y) = {
-                                            // 仅头部窗口（合成/诊断载荷）：oracle 恒有全字段记录，
-                                            // 本仓无法判定 HP/PkPoint/Home ⇒ **不做**改写、**不抽数**
-                                            // （与入图帧「输入不足 ⇒ 跳过」同口径，避免污染 RNG 流水）。
-                                            if full.is_none() {
-                                                (final_map_name, map_id, enter_x, enter_y)
+                                        let (final_map_name, map_id, enter_x, enter_y, die_in_fight3_zone) =
+                                            if let Some(r) = full.as_mut() {
+                                                let guild_name =
+                                                    guild_cmd::materialize(&guilds, &head.chr_name)
+                                                        .guild_name;
+                                                // `WorldServer.cs:284` 读的是 `envir.Flag.Fight3Zone`
+                                                // （MapInfo 的 `FIGHT3`），不是 `FightZone`（`FIGHT`）。
+                                                let fight3_zone = registry
+                                                    .as_ref()
+                                                    .and_then(|reg| reg.flag_of(map_id))
+                                                    .is_some_and(|f| f.fight3_zone);
+                                                let mut rng = std::mem::replace(
+                                                    &mut world.rng,
+                                                    mir2_shared::rng::RandomNumber::with_seed(0),
+                                                );
+                                                let out = rewrite_enter_position(
+                                                    &world,
+                                                    &mut rng,
+                                                    r,
+                                                    &final_map_name,
+                                                    map_id,
+                                                    enter_x,
+                                                    enter_y,
+                                                    guild_name.as_deref(),
+                                                    is_new_human,
+                                                    fight3_zone,
+                                                    registry.as_ref(),
+                                                    &enter_cfg.red_die_home,
+                                                );
+                                                world.rng = rng;
+                                                out
                                             } else {
-                                            let record_abil = full
-                                                .as_ref()
-                                                .and_then(|r| r.data.abil.as_ref());
-                                            let mut hp =
-                                                record_abil.map_or(0, |a| i32::from(a.hp));
-                                            let record_max_hp =
-                                                record_abil.map_or(0, |a| i32::from(a.max_hp));
-                                            let pvp_level = u8::try_from(
-                                                full.as_ref().map_or(0, |r| r.data.pk_point).max(0)
-                                                    / 100,
-                                            )
-                                            .unwrap_or(255);
-                                            let fight_zone_die_count = full
-                                                .as_ref()
-                                                .map_or(0, |r| r.data.fight_zone_die_count);
-                                            // `WorldServer.cs:258-277`：新角色 `Abil.HP = 15`
-                                            // （Rust 的新角色能力初始化在本块之后，这里先按 oracle 值喂城堡段）。
-                                            if is_new_human {
-                                                hp = 15;
-                                            }
-                                            // `WorldServer.cs:279-294`：Fight3Zone 死亡恢复支
-                                            // （`HP = MaxHP`，`FightZoneDieCount < 3`），先于城堡块。
-                                            if hp <= 0
-                                                && fight_zone_die_count < 3
-                                                && registry
-                                                    .as_ref()
-                                                    .and_then(|r| r.flag_of(map_id))
-                                                    .is_some_and(|f| f.fight_zone)
-                                            {
-                                                hp = if is_new_human { 15 } else { record_max_hp };
-                                            }
-                                            let guild_name = guild_cmd::materialize(
-                                                &guilds,
-                                                &head.chr_name,
-                                            )
-                                            .guild_name;
-                                            let mut rng = std::mem::replace(
-                                                &mut world.rng,
-                                                mir2_shared::rng::RandomNumber::with_seed(0),
-                                            );
-                                            let mut map_name = final_map_name;
-                                            let mut map_id = map_id;
-                                            let (mut x, mut y) = (enter_x, enter_y);
-                                            // 进图两臂（`WorldServer.cs:299-318`）。
-                                            let enter_castle = world.castle_war_area_at(
-                                                Some(map_id),
-                                                i32::from(x),
-                                                i32::from(y),
-                                            );
-                                            if let Some(reloc) =
-                                                mir2_world::castle::relocate_on_enter(
-                                                    &mir2_world::castle::EnterRelocateInput {
-                                                        castle: enter_castle
-                                                            .and_then(|i| world.castles.get(i)),
-                                                        map_id,
-                                                        x: i32::from(x),
-                                                        y: i32::from(y),
-                                                        my_guild_name: guild_name.as_deref(),
-                                                        home_map: &enter_cfg.home.home_map,
-                                                        home_x: enter_cfg.home.home_x,
-                                                        home_y: enter_cfg.home.home_y,
-                                                    },
-                                                    &mut rng,
-                                                )
-                                            {
-                                                map_name = reloc.map_name;
-                                                (x, y) = (reloc.x, reloc.y);
-                                                match registry
-                                                    .as_ref()
-                                                    .map_or(Some(map_id), |r| r.id_of(&map_name))
-                                                {
-                                                    Some(id) => map_id = id,
-                                                    None => hp = 0,
-                                                }
-                                            }
-                                            // 死亡三臂（`WorldServer.cs:324-350`）。
-                                            let member_castle = world
-                                                .castle_member_at(guild_name.as_deref())
-                                                .and_then(|i| world.castles.get(i));
-                                            if let Some(reloc) =
-                                                mir2_world::castle::relocate_on_death(
-                                                    &mir2_world::castle::DeathRelocateInput {
-                                                        member_castle,
-                                                        hp,
-                                                        pvp_level,
-                                                        home_map: &enter_cfg.home.home_map,
-                                                        home_x: enter_cfg.home.home_x,
-                                                        home_y: enter_cfg.home.home_y,
-                                                        red_die: &enter_cfg.red_die_home,
-                                                    },
-                                                    &mut rng,
-                                                )
-                                            {
-                                                map_name = reloc.map_name;
-                                                (x, y) = (reloc.x, reloc.y);
-                                                if let Some(id) = registry
-                                                    .as_ref()
-                                                    .and_then(|r| r.id_of(&map_name))
-                                                {
-                                                    map_id = id;
-                                                }
-                                            }
-                                            world.rng = rng;
-                                            (map_name, map_id, x, y)
-                                            }
-                                        };
+                                                // 仅头部窗口（合成/诊断载荷）：oracle 恒有全字段记录，
+                                                // 本仓无法判定 HP/PkPoint/Home ⇒ **不做**改写、**不抽数**
+                                                // （与入图帧「输入不足 ⇒ 跳过」同口径，避免污染 RNG 流水）。
+                                                (final_map_name, map_id, enter_x, enter_y, false)
+                                            };
                                         // 进世界：`World::open_session` + `enter_map`
                                         // oracle `WorldServer.cs:371-395` 进图前的**地形移位环**：
                                         // 出生/存档格是墙 ⇒ 每轮 `-3+Random(6)`（X 先 Y 后），至多 5 轮；
@@ -16566,6 +16609,10 @@ fn sim_loop(
                                         // `:1113-1125` 之外的 `CharacterData.Dir` 直接赋给实体）；
                                         // 旧实现不装载 ⇒ `MakeSaveRcd` 只能写回载入值（G-09）。
                                         ent.ai.dir = full.as_ref().map_or(0, |r| r.data.dir);
+                                        // `WorldServer.cs:290`：Fight3Zone 死亡恢复支置位
+                                        // `PlayObject.DieInFight3Zone`（随后由登录 `MapRandomMove` 消费；
+                                        // 该调用点未移植，位仍按 oracle 保存）。
+                                        ent.die_in_fight3_zone = die_in_fight3_zone;
                                         match world.enter_map(&head.chr_name, ent, map_id) {
                                             Ok(id) => {
                                                 // **诊断口径（审计 §4.4）**：`aoi_frames_total` 按
@@ -26111,6 +26158,206 @@ mod tests {
             max_exp[0],
             exp[0] + 1,
             "两行相邻落在 `apply_ability_to_entity`（生产登录点调用它）"
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // 进图/死亡改写（`rewrite_enter_position`）的**生产路径**判据
+    // ---------------------------------------------------------------------
+
+    /// 带一座「战时 + 皇宫在 map_id=0」的城：任何进图/死亡都命中城堡改写臂。
+    fn rewrite_test_world_with_castle() -> mir2_world::World {
+        let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut castle = mir2_world::castle::UserCastle::new(
+            "沙巴克",
+            mir2_world::castle::CastleSiegeConfig::default(),
+        );
+        castle.map_name = Some("3".to_string());
+        castle.palace_map_id = Some(0);
+        castle.under_war = true;
+        castle.home_map = "3".to_string();
+        castle.home_x = 644;
+        castle.home_y = 290;
+        world.castles.push(castle);
+        world
+    }
+
+    /// 记录 Home 与 `Server.conf [Setup]` Home（部署 3/839/668）**故意不同**：
+    /// 落点若取 `[Setup]` ⇒ map_name 变 `"3"`、坐标在 837..841 / 666..670。
+    fn rewrite_test_record() -> record::PlayerRecord {
+        record::PlayerRecord {
+            chr_name: Some("hero".to_string()),
+            header: record::RecordHeader::default(),
+            data: record::CharacterData {
+                home_map: Some("recordHome".to_string()),
+                home_x: 100,
+                home_y: 200,
+                abil: Some(record::Ability {
+                    level: 30,
+                    hp: 40,
+                    mp: 20,
+                    max_hp: 60,
+                    max_mp: 30,
+                    ..record::Ability::default()
+                }),
+                ..record::CharacterData::default()
+            },
+        }
+    }
+
+    /// **Critical 宿主接线级判据**：进图改写必须用**角色记录**的 `HomeMap/HomeX/HomeY`
+    /// （oracle `WorldServer.cs` 的 `playObject.HomeMap` 来自 `GetHumData`），
+    /// 不是 `Server.conf [Setup]`（部署 3/839/668）。
+    ///
+    /// 牙：把 `EnterRelocateInput` 的 `home_*` 改回 `enter_cfg.home.*` ⇒ 落点变
+    /// `"3"`/837..841 ⇒ 本用例红。
+    #[test]
+    fn enter_rewrite_uses_record_home_not_setup_home() {
+        let world = rewrite_test_world_with_castle();
+        let mut rec = rewrite_test_record();
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(20261021);
+        let (map_name, map_id, x, y, die) = rewrite_enter_position(
+            &world,
+            &mut rng,
+            &mut rec,
+            "3",
+            0,
+            1,
+            1,
+            None,
+            false,
+            false,
+            None,
+            &mir2_world::castle::RedDieHome::default(),
+        );
+        assert_eq!(
+            map_name, "recordHome",
+            "进图落点必须用记录 HomeMap（不是 [Setup] 的 3）"
+        );
+        assert_eq!(map_id, 0);
+        assert!((98..=102).contains(&x), "x 以记录 HomeX=100 为基准：{x}");
+        assert!((198..=202).contains(&y), "y 以记录 HomeY=200 为基准：{y}");
+        assert!(!die, "非 Fight3Zone ⇒ DieInFight3Zone=false");
+    }
+
+    /// **Critical + Important 2 宿主接线级判据（死亡臂）**：记录 `HP<=0` ⇒ 死亡三臂的
+    /// 非成员支用**记录** `HomeMap/HomeX/HomeY`，并在改写后写回记录 `HP=14`
+    /// （oracle `WorldServer.cs` 的 `playObject.Abil.HP = 14`；该记录随后进入 52 帧）。
+    ///
+    /// 牙：Home 改回 `[Setup]` ⇒ map_name/坐标红；删掉 `abil.hp = 14` 写回 ⇒ HP=0 红。
+    #[test]
+    fn death_rewrite_uses_record_home_and_writes_hp_14() {
+        let world = rewrite_test_world_with_castle();
+        let mut rec = rewrite_test_record();
+        rec.data.abil.as_mut().unwrap().hp = 0;
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(20261021);
+        let (map_name, _, x, y, die) = rewrite_enter_position(
+            &world,
+            &mut rng,
+            &mut rec,
+            "3",
+            0,
+            1,
+            1,
+            None,
+            false,
+            false,
+            None,
+            &mir2_world::castle::RedDieHome::default(),
+        );
+        assert_eq!(map_name, "recordHome", "死亡落点必须用记录 HomeMap");
+        assert!((98..=102).contains(&x), "x 以记录 HomeX=100 为基准：{x}");
+        assert!((198..=202).contains(&y), "y 以记录 HomeY=200 为基准：{y}");
+        assert!(!die);
+        assert_eq!(
+            rec.data.abil.as_ref().unwrap().hp,
+            14,
+            "oracle 死亡改写后无条件 Abil.HP=14，写回记录（后续 52 帧的 cur_hp）"
+        );
+    }
+
+    /// **Important 2**：Fight3Zone 恢复支写记录 `HP=MaxHP、MP=MaxMP` 并置
+    /// `DieInFight3Zone=true`（oracle `WorldServer.cs`），不进入死亡 `HP=14` 分支。
+    ///
+    /// 牙：只改局部 `hp` 不写回记录 ⇒ HP/MP 仍是 0 红；不置位 ⇒ `die` false 红。
+    #[test]
+    fn fight3_zone_recovery_writes_record_hp_mp_and_die_bit() {
+        let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut rec = rewrite_test_record();
+        {
+            let a = rec.data.abil.as_mut().unwrap();
+            a.hp = 0;
+            a.mp = 0;
+        }
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(20261021);
+        let (_, _, _, _, die) = rewrite_enter_position(
+            &world,
+            &mut rng,
+            &mut rec,
+            "3",
+            0,
+            640,
+            300,
+            None,
+            false,
+            true,
+            None,
+            &mir2_world::castle::RedDieHome::default(),
+        );
+        let a = rec.data.abil.as_ref().unwrap();
+        assert_eq!((a.hp, a.mp), (60, 30), "HP=MaxHP、MP=MaxMP 写回记录");
+        assert!(die, "DieInFight3Zone=true（oracle WorldServer.cs:290）");
+        assert_ne!(a.hp, 14, "HP>0 ⇒ 不进死亡改写支");
+        let _ = &mut world;
+    }
+
+    /// **Important 2（else 支）**：Fight3Zone 且不满足恢复条件 ⇒ 清记录
+    /// `FightZoneDieCount=0`（oracle 的 else 分支），HP/MP 不动。
+    #[test]
+    fn fight3_zone_else_resets_fight_zone_die_count() {
+        let world = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut rec = rewrite_test_record();
+        rec.data.fight_zone_die_count = 2;
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(20261021);
+        let (_, _, _, _, die) = rewrite_enter_position(
+            &world,
+            &mut rng,
+            &mut rec,
+            "3",
+            0,
+            640,
+            300,
+            None,
+            false,
+            true,
+            None,
+            &mir2_world::castle::RedDieHome::default(),
+        );
+        assert_eq!(rec.data.fight_zone_die_count, 0, "else 支清记录计数");
+        assert_eq!(rec.data.abil.as_ref().unwrap().hp, 40, "HP>0 不动");
+        assert!(!die);
+    }
+
+    /// **Critical 的源码牙**：生产面不得再把 `[Setup]` Home 喂给落点改写；
+    /// 地形移位回落（oracle `WorldServer.cs:389-393`）仍必须用 `[Setup]` Home。
+    #[test]
+    fn enter_rewrite_home_source_is_record_anchored() {
+        let src = include_str!("main.rs");
+        let tests = src
+            .find("#[cfg(test)]\nmod tests {")
+            .expect("`#[cfg(test)] mod tests` 起点");
+        let prod = &src[..tests];
+        assert!(
+            !prod.contains("home_map: &enter_cfg.home.home_map"),
+            "进图/死亡改写的 Home 必须取角色记录，不是 Server.conf [Setup]"
+        );
+        assert!(
+            prod.contains("home_map: rec.data.home_map.as_deref().unwrap_or(\"\")"),
+            "两臂都必须从记录取 HomeMap"
+        );
+        assert!(
+            prod.contains("map_name: &enter_cfg.home.home_map"),
+            "地形移位回落（oracle 389-393）仍按 oracle 用 [Setup] HomeMap"
         );
     }
 

@@ -562,6 +562,12 @@ pub struct Entity {
     ///
     /// **重复置位也刷新**（oracle 赋值在 `if (!targetObject.PvpFlag)` **之前**）。
     pub pvp_name_color_tick: i64,
+    /// C# `PlayObject.DieInFight3Zone`（`PlayObject.cs:522`）：`WorldServer.cs:290` 在
+    /// Fight3Zone 死亡恢复支置 `true`，`Initialize()`（`PlayObject.cs:891`）清 `false`。
+    ///
+    /// 唯一消费点是登录后的 `if (DieInFight3Zone) MapRandomMove(...)`（`PlayObject.cs:1184`）；
+    /// 该调用点未移植 ⇒ 本骨架只忠实保存该位（登录时由 `rewrite_enter_position` 写回）。
+    pub die_in_fight3_zone: bool,
     /// C# `PlayObject.Luck`（`PlayObject.cs:62`，`RecalcAbilitys` 里 `Luck = 0 + AddAbil.Luck - AddAbil.UnLuck`）。
     /// 玩家攻方的 [`crate::combat::get_attack_power_player`] override 用它决定取数次数。
     pub luck: i32,
@@ -960,6 +966,8 @@ impl Entity {
             pk_point: 0,
             pvp_flag: false,
             pvp_name_color_tick: 0,
+            // `PlayObject.cs:891`：`Initialize()` 置 `DieInFight3Zone = false`。
+            die_in_fight3_zone: false,
             // `BaseObject.cs:385`：ctor 初值 `NameColor = 255`。
             name_color: 255,
             // `PlayObject.cs:62/943`：新角色 `Luck` 由 `RecalcAbilitys` 置 0（无 `AddAbil`），

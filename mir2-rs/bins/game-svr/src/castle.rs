@@ -274,12 +274,17 @@ pub fn area_state_with(flag: &MapInfoFlag, in_guild_war_area: bool) -> u16 {
 /// `GetChrColor` 的生产接线（名字色）：观察者 × 目标的只读快照 → 名字色字节。
 ///
 /// 行会关系只按**会名相等**判同会（`GetGuildRelation` 的 `1`）；盟友/宣战列表需要
-/// `GuildId` 映射（本仓生产路径尚未物化）⇒ 传 0/`false`（登记 T-130）。
+/// `GuildId` 映射（本仓生产路径尚未物化）⇒ 传 0/`false`（登记 T-128）。
 /// `GuildWarArea` 的按观察者副作用由返回值丢弃（调用方只取色）——查询用户名路径不需要它。
+///
+/// 颜色取 [`CastleNameColors::default()`]（47/180/69/221）：oracle 从 `Server.conf [Setup]`
+/// 读 `PKFlagNameColor` 等四键（`ServerConf.cs:509-512`），本函数**不读配置**；部署件四值与
+/// 源码缺省相同 ⇒ 当前等价（配置覆盖未接，登记 T-132）。
 ///
 /// # Errors
 /// 见 [`mir2_world::castle::ChrColorError`]（有行会观察者在攻城区 ⇒ oracle 抛 N1，
-/// 本函数把失败交给调用方丢弃该帧）。
+/// 本函数把失败交给调用方丢弃该帧）。**当前生产调用点**把 `viewer_in_guild_war_area`/
+/// `target_in_guild_war_area` 硬传 `false` ⇒ N1 分支不可达（`Err` 丢帧是死代码镜像，登记 T-128）。
 pub fn query_user_name_color(
     world: &mir2_world::World,
     viewer_guild: Option<&str>,

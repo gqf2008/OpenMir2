@@ -229,6 +229,10 @@ ANCHORS = [
     ("UserCastle.cs:639-642", UC, [
         (639, "public bool IsMasterGuild(IGuild guild)"),
         (641, "MasterGuild != null && MasterGuild == guild")]),
+    ("UserCastle.cs:231", UC, [
+        (231, "MasterGuild = SystemShare.GuildMgr.FindGuild(OwnGuild);")]),
+    ("UserCastle.cs:543", UC, [
+        (543, "MasterGuild = Guild;")]),
     ("UserCastle.cs:480-483", UC, [
         (480, "public bool IsMember(PlayObject member)"),
         (482, "IsMasterGuild(member.MyGuild)")]),
