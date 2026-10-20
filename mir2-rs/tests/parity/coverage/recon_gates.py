@@ -2346,6 +2346,10 @@ def cmd_mutate(args):
     # 已接线（orphan-encoder-wiring 批已接生产发点）：SM_DISAPPEAR(30) 离开 AOI/Dispose 的消失帧、
     # SM_WHISPER(103) 私聊下发（红名单 v2 §3 V2-01 / V2-12；对照 dispatch 门 rust_at 有值）。
     _wired_now = {"SM_DISAPPEAR", "SM_WHISPER",
+        # 卡 `openmir2-guild-official-npc`（2026-10-21）：GuildOfficial 的 `@exit` 支在
+        # `bins/game-svr/src/guild_official.rs` 生产路径上调用 `guild_frames::sm_merchantdlgclose`
+        # 并送发送口 ⇒ 644 已有生产发射点，移入 wired。
+        "SM_MERCHANTDLGCLOSE",
         # 片107（世界 tick 扩容）接线：滚动公告 LineNotice 的 `[`/`{` 支发 SM_MOVEMESSAGE
         # （bins/game-svr/src/line_notice.rs 的 build_frame 分支 + 生产逐会话接线）。
         "SM_MOVEMESSAGE",
@@ -2427,8 +2431,9 @@ def cmd_mutate(args):
     #     （SM_MOVEMESSAGE(99)（V2-10）原列本簇；片107 接线滚动公告后已移入 `_wired_now`，见上——
     #      本注释块曾与集合成员矛盾，2026-10-17 订正为一致。）
     #   · 门与事件系统（门显隐 612/614；随门系统进 MapGrid，见门设计件）—— SM_OPENDOOR_OK(612)/SM_CLOSEDOOR(614)（V2-11）。
-    #   · 商人脚本簇（商人/公务员/元宝寄售对话）—— SM_MERCHANTDLGCLOSE(644)/SM_QUERYYBDEAL(23023)/
-    #     SM_QUERYYBSELL(23021)（V2-13）。
+    #   · 商人脚本簇（商人/公务员/元宝寄售对话）—— SM_QUERYYBDEAL(23023)/SM_QUERYYBSELL(23021)（V2-13）。
+    #     （SM_MERCHANTDLGCLOSE(644) 原列本簇；卡 `openmir2-guild-official-npc` 接线 @exit 后已移入
+    #      `_wired_now`，见上。）
     #     （SM_716(716) 原列本簇；卡 `openmir2-spell-shared-tail-p3b4` 接线 42 的 `RM_10205`
     #      后已移入 `_wired_now`，见上。）
     #   · 重连 / 换脸 / 掷骰 / 地面物品簇（杂项）—— SM_RECONNECT(802)/SM_CHANGEFACE(1104)/
@@ -2437,7 +2442,7 @@ def cmd_mutate(args):
     #      `_wired_now`，见上。）
     _blocked = {"SM_SKELETON",
                 "SM_CLOSEHEALTH", "SM_BREAKWEAPON",
-                "SM_LAMPCHANGEDURA", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL",
+                "SM_LAMPCHANGEDURA", "SM_QUERYYBDEAL",
                 "SM_QUERYYBSELL", "SM_RECONNECT", "SM_CHANGEFACE",
                 "SM_PLAYDICE", "SM_ITEMSHOW", "SM_HIDEEVENT", "SM_SHOWEVENT", "SM_OPENDOOR_OK",
                 "SM_CLOSEDOOR"}
