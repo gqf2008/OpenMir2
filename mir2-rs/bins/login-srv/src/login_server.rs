@@ -1053,9 +1053,14 @@ fn record_from_packet(packet: &UserAccountPacket) -> AccountRecord {
     }
 }
 
-/// 把改资料封包逐字段覆盖到已有记录（C# `accountRecord.UserEntry/UserEntryAdd = userAccount.*`，
-/// `ClientSession.AccountUpdateUserInfo`）。
+/// 把改资料封包逐字段覆盖到已有记录（C# `accountRecord.UserEntry = userAccount.UserEntry` /
+/// `accountRecord.UserEntryAdd = userAccount.UserEntryAdd`，`ClientSession.AccountUpdateUserInfo`）。
+///
+/// **包含 `PassWord`**：oracle `AccountStorage.UpdateAccount` 的
+/// `UPDATE account SET PassWord = @PassWord ...` 取的是 `accountRecord.UserEntry.Password`，
+/// 而该字段已被整体替换成封包里的 `Password` ⇒ 改资料会覆盖密码（不是保留库内旧值）。
 fn apply_packet_to_record(rec: &mut AccountRecord, packet: &UserAccountPacket) {
+    rec.password.clone_from(&packet.password);
     rec.user_name.clone_from(&packet.user_name);
     rec.quiz2.clone_from(&packet.quiz2);
     rec.id_card.clone_from(&packet.ss_no);
@@ -1071,13 +1076,20 @@ fn apply_packet_to_record(rec: &mut AccountRecord, packet: &UserAccountPacket) {
 fn parse_user_account_packet(buf: &[u8]) -> Option<UserAccountPacket> {
     let mut cur = 0usize;
     let mut take = |size: usize| -> Option<String> {
-        let len = *buf.get(cur)? as usize;
+        // C# `BinaryReader.ReadByte()`：EOF 抛 EndOfStreamException（`ToPacket` 吞掉 ⇒ null）。
+        let len = usize::from(*buf.get(cur)?);
         let size = size.max(len);
         let start = cur + 1;
-        let end = start.checked_add(size)?;
-        let bytes = buf.get(start..end)?;
-        cur = end;
-        Some(gbk::decode(bytes.get(..len)?))
+        // C# `BinaryReader.ReadBytes(size)` 在流尾**短读不抛异常**（返回可用字节）。
+        let read = size.min(buf.len().saturating_sub(start));
+        // C# `HUtil32.GetString(strbuff, 0, len)`：`len > strbuff.Length` 时抛
+        // ArgumentOutOfRangeException（同样 ⇒ null）；`len <= 可用字节` 即成功。
+        if len > read {
+            return None;
+        }
+        let bytes = &buf[start..start + read];
+        cur = start + read;
+        Some(gbk::decode(&bytes[..len]))
     };
     let account = take(10)?;
     let password = take(10)?;
@@ -1179,6 +1191,7 @@ mod tests {
     use crate::config::TGateNet;
     use crate::session_server::ServerHandle;
     use crate::state::ServerSessionInfo;
+    use sqlx::Row as _;
     use std::sync::atomic::AtomicBool;
 
     fn srv(id: &str, name: &str, index: i32, online: i32) -> ServerSessionInfo {
@@ -1254,25 +1267,49 @@ mod tests {
         assert_eq!(&buf[23..31], b"mir2test");
     }
 
-    /// `ToPacket<UserAccountPacket>`：148B（UserEntry）+ 101B（UserEntryAdd）→ 取 5 个字段。
+    /// 构造 `ToPacket<UserAccountPacket>` 的 249B 线上缓冲
+    /// （148B UserEntry + 101B UserEntryAdd，字段顺序照 `UserEntry.ReadPacket`）。
+    fn packet_bytes(p: &UserAccountPacket, memo2: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        write_ascii_string(&mut buf, &p.account, 10);
+        write_ascii_string(&mut buf, &p.password, 10);
+        write_ascii_string(&mut buf, &p.user_name, 20);
+        write_ascii_string(&mut buf, &p.ss_no, 14); // SSNo
+        write_ascii_string(&mut buf, "", 14); // Phone（oracle SQL 不取该字段）
+        write_ascii_string(&mut buf, &p.quiz, 20); // Quiz
+        write_ascii_string(&mut buf, &p.answer, 12); // Answer
+        write_ascii_string(&mut buf, &p.email, 40); // EMail
+        assert_eq!(buf.len(), 148);
+        write_ascii_string(&mut buf, &p.quiz2, 20);
+        write_ascii_string(&mut buf, &p.answer2, 12);
+        write_ascii_string(&mut buf, &p.birthday, 10);
+        write_ascii_string(&mut buf, &p.mobile_phone, 13);
+        write_ascii_string(&mut buf, "", 20); // Memo
+        write_ascii_string(&mut buf, memo2, 20); // Memo2
+        buf
+    }
+
+    fn sample_packet() -> UserAccountPacket {
+        UserAccountPacket {
+            account: "newacct".into(),
+            password: "pwd123".into(),
+            user_name: "nickname".into(),
+            ss_no: "ssn1".into(),
+            quiz: "q1".into(),
+            answer: "a1".into(),
+            email: "e@x".into(),
+            quiz2: "q2".into(),
+            answer2: "a2".into(),
+            birthday: "1970-01-01".into(),
+            mobile_phone: "13800000000".into(),
+        }
+    }
+
+    /// `ToPacket<UserAccountPacket>`：148B（UserEntry）+ 101B（UserEntryAdd）→ 13 段逐字段。
     #[test]
     fn parses_user_account_packet() {
-        let mut buf = Vec::new();
-        write_ascii_string(&mut buf, "newacct", 10);
-        write_ascii_string(&mut buf, "pwd123", 10);
-        write_ascii_string(&mut buf, "nickname", 20);
-        write_ascii_string(&mut buf, "ssn1", 14); // SSNo
-        write_ascii_string(&mut buf, "", 14); // Phone（oracle SQL 不取该字段）
-        write_ascii_string(&mut buf, "q1", 20); // Quiz
-        write_ascii_string(&mut buf, "a1", 12); // Answer
-        write_ascii_string(&mut buf, "e@x", 40); // EMail
-        assert_eq!(buf.len(), 148);
-        write_ascii_string(&mut buf, "q2", 20);
-        write_ascii_string(&mut buf, "a2", 12);
-        write_ascii_string(&mut buf, "1970-01-01", 10);
-        write_ascii_string(&mut buf, "13800000000", 13);
-        write_ascii_string(&mut buf, "", 20);
-        write_ascii_string(&mut buf, "", 20);
+        let buf = packet_bytes(&sample_packet(), "");
+        assert_eq!(buf.len(), 249);
         let p = parse_user_account_packet(&buf).expect("应能解析");
         assert_eq!(p.account, "newacct");
         assert_eq!(p.password, "pwd123");
@@ -1285,12 +1322,39 @@ mod tests {
         assert_eq!(p.answer2, "a2");
         assert_eq!(p.birthday, "1970-01-01");
         assert_eq!(p.mobile_phone, "13800000000");
-        // 缓冲不足 ⇒ C# 抛 EndOfStream 被 ToPacket 吞掉返回 null ⇒ Rust 返回 None
+        // UserName 段声明 len=8，但截断到 30B 后只剩 7 个内容字节：
+        // C# `GetString(strbuff, 0, 8)` 抛 ArgumentOutOfRangeException ⇒ ToPacket 返回 null。
         assert!(parse_user_account_packet(&buf[..30]).is_none());
-        // 只到 UserEntry（148B）也不够：C# 还要读 UserEntryAdd 的 6 段
+        // 148B 正好读完 UserEntry；下一段 Quiz2 的 `ReadByte` 在 EOF 抛 EndOfStream ⇒ null。
         assert!(parse_user_account_packet(&buf[..148]).is_none());
-        // 少了 Memo2 最后一段同样失败
-        assert!(parse_user_account_packet(&buf[..buf.len() - 1]).is_none());
+    }
+
+    /// 尾段短读严格按 oracle 语义：`BinaryReader.ReadBytes(size)` 短读**不抛**，
+    /// `HUtil32.GetString(strbuff, 0, len)` 只在 `len > strbuff.Length` 时抛。
+    #[test]
+    fn trailing_short_read_follows_readbytes_semantics() {
+        // UserEntry 148B + Quiz2 21 + Answer2 13 + Birthday 11 + MobilePhone 14 + Memo 21
+        // ⇒ Memo2 的长度字节在 offset 228。
+        let buf = packet_bytes(&sample_packet(), "");
+        // 连 Memo2 的长度字节都没有 ⇒ `ReadByte` 抛 EndOfStream ⇒ null。
+        assert!(parse_user_account_packet(&buf[..228]).is_none());
+        // 有 len=0、只缺末尾 1B padding ⇒ ReadBytes 短读 19B，GetString(len=0) 成功。
+        let p = parse_user_account_packet(&buf[..248]).expect("短读 padding 应成功");
+        assert_eq!(p.account, "newacct");
+        assert_eq!(p.mobile_phone, "13800000000");
+        // 只有长度字节、声明 len=1 但 0 个内容字节 ⇒ GetString(1 > 0) 抛 ⇒ null。
+        let mut content_short = packet_bytes(&sample_packet(), "x");
+        content_short.truncate(229);
+        assert!(parse_user_account_packet(&content_short).is_none());
+        // 声明 len=1 且 1 个内容字节在（只是 padding 缺）⇒ 成功。
+        let mut content_ok = packet_bytes(&sample_packet(), "x");
+        content_ok.truncate(230);
+        assert_eq!(
+            parse_user_account_packet(&content_ok)
+                .expect("内容够即成功")
+                .mobile_phone,
+            "13800000000"
+        );
     }
 
     /// 解析结果 → 建号记录：protection 13 列的数据源必须全部落到 `AccountRecord`
@@ -1322,10 +1386,12 @@ mod tests {
         assert_eq!(rec.answer2, "a2");
     }
 
-    /// 改资料：封包必须**覆盖**（不是保留旧值）全部 protection 字段。
+    /// 改资料：封包必须**覆盖**（不是保留旧值）全部 protection 字段，且按 oracle
+    /// 一并覆盖 `account.PassWord`（`UpdateAccount` 写 `accountRecord.UserEntry.Password`）。
     #[test]
-    fn apply_packet_overwrites_all_protection_fields() {
+    fn apply_packet_overwrites_all_protection_fields_and_password() {
         let mut rec = AccountRecord {
+            password: "oldpwd".into(),
             user_name: "old".into(),
             quiz2: "oldq2".into(),
             id_card: "oldid".into(),
@@ -1351,6 +1417,7 @@ mod tests {
             mobile_phone: "newm".into(),
         };
         apply_packet_to_record(&mut rec, &packet);
+        assert_eq!(rec.password, "pwd", "C# 改资料会用封包 PassWord 覆盖");
         assert_eq!(rec.user_name, "newun");
         assert_eq!(rec.id_card, "newid");
         assert_eq!(rec.birthday, "newbd");
@@ -1360,6 +1427,265 @@ mod tests {
         assert_eq!(rec.quiz2, "newq2");
         assert_eq!(rec.mobile_phone, "newm");
         assert_eq!(rec.answer2, "newa2");
+    }
+
+    /// 清掉证据账号的所有行（先 `account_protection` 再 `account`），返回命中的账号 Id。
+    async fn purge_evidence_account(pool: &sqlx::MySqlPool, account: &str) -> Vec<i64> {
+        let ids: Vec<i64> = sqlx::query_scalar("SELECT Id FROM account WHERE Account = ?")
+            .bind(account)
+            .fetch_all(pool)
+            .await
+            .expect("查询证据账号残留失败");
+        for id in &ids {
+            sqlx::query("DELETE FROM account_protection WHERE AccountId = ?")
+                .bind(id)
+                .execute(pool)
+                .await
+                .expect("删除证据 account_protection 失败");
+            sqlx::query("DELETE FROM account WHERE Id = ?")
+                .bind(id)
+                .execute(pool)
+                .await
+                .expect("删除证据 account 失败");
+        }
+        ids
+    }
+
+    /// 按给定列顺序读 `account_protection` 一行（每列按字符串取）。
+    async fn read_protection_row(pool: &sqlx::MySqlPool, id: i32, columns: &[&str]) -> Vec<String> {
+        let sql = format!(
+            "SELECT {} FROM account_protection WHERE AccountId = ?",
+            columns.join(", ")
+        );
+        let row = sqlx::query(&sql)
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .expect("读取 account_protection 失败");
+        columns
+            .iter()
+            .map(|c| {
+                row.try_get::<String, _>(*c)
+                    .unwrap_or_else(|e| panic!("列 {c} 应为字符串：{e}"))
+            })
+            .collect()
+    }
+
+    /// 打印「列 / C# 期望 / 库内实际 / 是否一致」表，返回不符项（空 = GREEN）。
+    fn assert_columns(
+        phase: &str,
+        columns: &[&str],
+        expected: &[&str],
+        actual: &[String],
+    ) -> Vec<String> {
+        assert_eq!(columns.len(), expected.len(), "{phase}: 列清单长度不等");
+        assert_eq!(actual.len(), expected.len(), "{phase}: 读回列数不等");
+        println!("== {phase} ==");
+        println!(
+            "{:<12} {:<24} {:<24} match",
+            "column", "expected(C#)", "actual(DB)"
+        );
+        let mut mismatches = Vec::new();
+        for ((col, exp), act) in columns.iter().zip(expected).zip(actual) {
+            let act = act.as_str();
+            let exp = *exp;
+            let ok = act == exp;
+            if !ok {
+                mismatches.push(format!("{col}: expected {exp:?}, actual {act:?}"));
+            }
+            println!(
+                "{col:<12} {exp:<24} {act:<24} {}",
+                if ok { "OK" } else { "MISMATCH" }
+            );
+        }
+        mismatches
+    }
+
+    /// R 级真机证据用例（audit #14 `account_protection_roundtrip`）：
+    /// 造带全 13 字段的 `UserAccountPacket` → 建号 → `SELECT *` 逐列与 C# 同值；
+    /// 再用改资料封包跑一遍 UPDATE 路径（含 `PassWord` 覆盖），最后自删并校验。
+    ///
+    /// 默认 `#[ignore]`：只在**真机窗口**显式跑（窗口执行 = owner 授权 + 可写测试库克隆）。
+    /// 库名守卫：`MIR2_ACCOUNT_TEST_DSN` 的 `database` 必须**恰好**是 `mir2_test_account`，
+    /// 否则在任何 SQL 之前 panic；**绝不**连生产库 `mir2_account`。
+    ///
+    /// 命令与期望输出见 `mir2-rs/tests/parity/m3/account-protection/README.md`。
+    #[tokio::test]
+    #[ignore = "R 级真机窗口用例：需要可写 mir2_test_account；命令见 tests/parity/m3/account-protection/README.md"]
+    #[allow(clippy::too_many_lines)] // 逐列 expected/actual 表必须一眼对读，拆开反而难核
+    async fn account_protection_roundtrip() {
+        let raw = std::env::var("MIR2_ACCOUNT_TEST_DSN").expect(
+            "缺 MIR2_ACCOUNT_TEST_DSN（形如 server=127.0.0.1;uid=root;pwd=;database=mir2_test_account;）",
+        );
+        let dsn = mir2_storage::LegacyDsn::parse(&raw).expect("DSN 解析失败");
+        assert_eq!(
+            dsn.database, "mir2_test_account",
+            "库名守卫：本用例只允许 mir2_test_account（收到 {:?}）",
+            dsn.database
+        );
+        let pool = sqlx::mysql::MySqlPoolOptions::new()
+            .max_connections(2)
+            .connect(&dsn.to_sqlx_url())
+            .await
+            .expect("连接测试库失败");
+        let account = "acctprot01";
+        // 自建自删：先清同名残留（仅这一个证据账号），结束时再删并校验。
+        let stale = purge_evidence_account(&pool, account).await;
+        println!("[setup] 清理同名残留 Id：{stale:?}");
+        let mut store = mir2_storage::AccountStore::connect(&dsn)
+            .await
+            .expect("载入账号表失败");
+
+        let packet = UserAccountPacket {
+            account: account.into(),
+            password: "pwd0rd".into(),
+            user_name: "tester01".into(),
+            ss_no: "ID1234567890".into(),
+            quiz: "q1question".into(),
+            answer: "answer1".into(),
+            email: "t@example.com".into(),
+            quiz2: "q2question".into(),
+            answer2: "answer2".into(),
+            birthday: "19900101".into(),
+            mobile_phone: "13800000000".into(),
+        };
+        let parsed = parse_user_account_packet(&packet_bytes(&packet, ""))
+            .expect("证据 UserAccountPacket 必须可解析");
+        let rec = record_from_packet(&parsed);
+        assert!(store.add(&rec).await.expect("建号失败"), "建号应返回 true");
+        let id = store.index(account).expect("建号后内存表应命中");
+        println!("[INSERT] account={account} id={id}");
+
+        let account_row = sqlx::query("SELECT Account, PassWord FROM account WHERE Id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("读取 account 失败");
+        let db_account: String = account_row.try_get("Account").expect("Account 列");
+        let db_password: String = account_row.try_get("PassWord").expect("PassWord 列");
+        assert_eq!(db_account, account);
+        println!("[INSERT] account.Account={db_account:?} account.PassWord={db_password:?}");
+
+        let columns = [
+            "UserName",
+            "IdCard",
+            "Birthday",
+            "Phone",
+            "MobilePhone",
+            "ADDRESS1",
+            "ADDRESS2",
+            "EMail",
+            "Quiz1",
+            "Answer1",
+            "Quiz2",
+            "Answer2",
+        ];
+        // oracle `AccountStorage.cs:299-316`：@Phone / @MobilePhone 都取 UserEntryAdd.BirthDay。
+        let expected_insert = [
+            "tester01",
+            "ID1234567890",
+            "19900101",
+            "19900101",
+            "19900101",
+            "",
+            "",
+            "t@example.com",
+            "q1question",
+            "answer1",
+            "q2question",
+            "answer2",
+        ];
+        let actual = read_protection_row(&pool, id, &columns).await;
+        let mut mismatches = assert_columns(
+            "INSERT account_protection（C# AccountStorage.cs:299-316）",
+            &columns,
+            &expected_insert,
+            &actual,
+        );
+        if db_password != "pwd0rd" {
+            mismatches.push(format!(
+                "account.PassWord: expected \"pwd0rd\", actual {db_password:?}"
+            ));
+        }
+
+        // ---- CM_UPDATEUSER：`AccountUpdateUserInfo` 整体替换 UserEntry/UserEntryAdd ----
+        let mut rec = store
+            .get(id)
+            .await
+            .expect("读取账号失败")
+            .expect("账号行应存在");
+        let update = UserAccountPacket {
+            account: account.into(),
+            password: "newpwd".into(),
+            user_name: "tester02".into(),
+            ss_no: "ID0987654321".into(),
+            quiz: "uq1".into(),
+            answer: "ua1".into(),
+            email: "u@example.com".into(),
+            quiz2: "uq2".into(),
+            answer2: "ua2".into(),
+            birthday: "19851231".into(),
+            mobile_phone: "13911112222".into(),
+        };
+        let parsed =
+            parse_user_account_packet(&packet_bytes(&update, "")).expect("更新封包必须可解析");
+        apply_packet_to_record(&mut rec, &parsed);
+        assert!(
+            store.update_account(id, &rec).await.expect("改资料失败"),
+            "改资料应返回 true"
+        );
+        let updated_row = sqlx::query("SELECT PassWord FROM account WHERE Id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("读取 account.PassWord 失败");
+        let db_password: String = updated_row.try_get("PassWord").expect("PassWord 列");
+        println!("[UPDATE] account.PassWord={db_password:?}");
+        // oracle `AccountStorage.cs:498-513`：@Phone / @MobilePhone 都取 UserEntryAdd.MobilePhone。
+        let expected_update = [
+            "tester02",
+            "ID0987654321",
+            "19851231",
+            "13911112222",
+            "13911112222",
+            "",
+            "",
+            "u@example.com",
+            "uq1",
+            "ua1",
+            "uq2",
+            "ua2",
+        ];
+        let actual = read_protection_row(&pool, id, &columns).await;
+        mismatches.extend(assert_columns(
+            "UPDATE account_protection（C# AccountStorage.cs:498-513）",
+            &columns,
+            &expected_update,
+            &actual,
+        ));
+        if db_password != "newpwd" {
+            mismatches.push(format!(
+                "account.PassWord(update): expected \"newpwd\", actual {db_password:?}"
+            ));
+        }
+
+        // ---- 自建自删：删掉本用例建的账号，并校验无残留 ----
+        let removed = purge_evidence_account(&pool, account).await;
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM account WHERE Account = ?")
+            .bind(account)
+            .fetch_one(&pool)
+            .await
+            .expect("校验自删失败");
+        assert_eq!(left, 0, "自删后不应残留 account 行");
+        println!("[cleanup] removed={removed:?} account_rows_left={left}");
+
+        assert!(
+            mismatches.is_empty(),
+            "逐列不符（{} 项）：\n{}",
+            mismatches.len(),
+            mismatches.join("\n")
+        );
+        println!("RESULT: GREEN account_protection_roundtrip");
     }
 
     /// `GetGatePublicAddr`：AddrTable `RemoteAddr` 命中即换成 `PublicAddr`，否则原样。
