@@ -45021,7 +45021,10 @@ mod tests {",
     /// F1：`WorldServer.cs:250-262` 的 `HomeMap` 回落写回对**非新角色**同样生效，
     /// 且不碰 `Abil`（新手能力只在 `Abil.Level == 0` 时写）。
     ///
-    /// 牙：把写回关回 `if is_new_human`（或删掉 helper 调用）⇒ 非新角色记录 `HomeMap` 仍空。
+    /// 本用例**直接调 helper**、不经过生产门控 ⇒ 只钉「六个字段确实写进记录」这一层；
+    /// 牙 = 删掉 helper 的任一字段写入。**不**钉生产调用点（第三轮复验实测：把调用点关回
+    /// `if is_new_human` 本用例仍绿 ⇒ 旧注释的「牙」是假牙）。生产门控由
+    /// [`p22_home_fallback_writeback_is_gated_by_home_empty`] 的源码锚点钉住。
     #[test]
     fn p22_home_fallback_writeback_applies_to_non_new_human() {
         let mut rec = record::PlayerRecord::default();
@@ -45041,6 +45044,72 @@ mod tests {",
             rec.data.abil.as_ref().map(|a| a.level),
             Some(7),
             "非新角色不得重置 Abil"
+        );
+    }
+
+    /// F1 的**生产门控牙**（第三轮复验）：`write_home_fallback_to_record` 的**唯一调用点**
+    /// 必须被 `if home_empty {` 块包含、且**不得**落在任何 `if is_new_human {` 块内
+    /// （oracle `WorldServer.cs:250-262`：写回只看 `HomeMap` 是否为空，`Abil.Level == 0`
+    /// 只额外决定新手能力/物品）。
+    ///
+    /// 红检：调用点改回 `if is_new_human` ⇒ 第二条断言红；删掉调用 ⇒ 出现次数断言红；
+    /// 调用移出 `home_empty` 块（如无条件调用）⇒ 第一条断言红。
+    /// 做法同 `p31_space_move_does_not_reset_tick_anchor`（对生产切片做源码断言）。
+    #[test]
+    fn p22_home_fallback_writeback_is_gated_by_home_empty() {
+        let src = include_str!("main.rs");
+        let prod = &src[..src
+            .find(
+                "#[cfg(test)]
+mod tests {",
+            )
+            .expect("`#[cfg(test)] mod tests` 起点")];
+        // 生产面恰两处：函数定义 + 唯一调用点（定义在前）。
+        let sites: Vec<usize> = prod
+            .match_indices("write_home_fallback_to_record(")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(sites.len(), 2, "定义 + 唯一调用点，实际 {sites:?}");
+        assert!(
+            prod[..sites[0]].ends_with("fn "),
+            "第一处必须是定义（`fn write_home_fallback_to_record(`）"
+        );
+        let call = sites[1];
+
+        // 从 `{` 起做括号配对，返回匹配 `}` 的下标。
+        let block_end = |open: usize| -> usize {
+            let mut depth = 0usize;
+            for (i, ch) in prod[open..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return open + i;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            panic!("未闭合的块（open={open}）");
+        };
+        let enclosing = |needle: &str| -> Vec<(usize, usize)> {
+            prod.match_indices(needle)
+                .map(|(i, _)| {
+                    let open = i + needle.len() - 1;
+                    (open, block_end(open))
+                })
+                .filter(|&(open, end)| open < call && call < end)
+                .collect()
+        };
+        assert_eq!(
+            enclosing("if home_empty {").len(),
+            1,
+            "写回调用必须恰被一个 `if home_empty {{` 块包含"
+        );
+        assert!(
+            enclosing("if is_new_human {").is_empty(),
+            "写回调用不得在 `if is_new_human {{` 块内（非新角色且 Home 为空也必须写回）"
         );
     }
 

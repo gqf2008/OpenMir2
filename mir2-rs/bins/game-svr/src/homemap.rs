@@ -34,8 +34,12 @@
 //!     if (Count > Config.StartPointSize) I = Random(Config.StartPointSize); else I = 0;
 //!     result = M2Share.GetStartPointInfo(I, ref nX, ref nY);   // StartPointList[I] 的 MapName/X/Y
 //! }
-//! else { result = Config.HomeMap; nX = Config.HomeX; nY = Config.HomeY; }  // 注意 oracle 这里把 nY 写成 nX（笔误）；本片按 X/Y 各自取
+//! else { result = Config.HomeMap; nX = Config.HomeX; nX = Config.HomeY; }  // ← 笔误：第二行仍写 nX
 //! ```
+//!
+//! ⇒ 空表时 `HomeX = Config.HomeY`、`HomeY` 保持调用方初值 `0`（调用点
+//! `WorldServer.cs:252-253` 写 `short homeX = 0; short homeY = 0;`）。**硬约束③：1:1 照抄该笔误，
+//! 不登记偏离**——现网 `StartPoint.txt` 非空 ⇒ 不可达，用例只作保护。
 //!
 //! # RNG 抽数账本（M3 固定种子两侧同序列的前提）
 //!
@@ -117,11 +121,17 @@ impl HomeFallback {
     /// `StartPointList` 非空且 `Count > StartPointSize` ⇒ 抽 1×`Random(StartPointSize)` 定索引；
     /// 非空但 `Count <= StartPointSize` ⇒ `I = 0`（**0 抽**）；空 ⇒ `Config.HomeMap/HomeX/HomeY`（0 抽）。
     ///
-    /// 注意 oracle 形参 `Job` **完全未被使用**（不是按职业取）；`nY = Config.HomeY` 的笔误这里按 X/Y 各自取。
+    /// 注意 oracle 形参 `Job` **完全未被使用**（不是按职业取）。空表分支照抄 oracle 笔误
+    /// （`WorldServer.cs:1424-1426`：`nX = Config.HomeX; nX = Config.HomeY;`）⇒ `HomeX = Config.HomeY`、
+    /// `HomeY` 保持调用方初值 `0`（`:252-253` 的 `short homeY = 0`）。
     #[must_use]
     pub fn get_home_info(&self, rng: &mut RandomNumber) -> (String, i16, i16) {
         if self.start_points.is_empty() {
-            return (self.home_map.clone(), self.home_x, self.home_y);
+            // 硬约束③（行为等价优先）：oracle `WorldServer.cs:1424-1426` 是
+            // `nX = Config.HomeX; nX = Config.HomeY;`（第二行笔误仍写 `nX`）⇒ 最终
+            // `nX = Config.HomeY`，`nY` 保持调用方初值 0（`:252-253` 的 `short homeY = 0`）。
+            // 照抄该笔误，**不登记偏离**（现网 `StartPoint.txt` 非空，不可达；用例只作保护）。
+            return (self.home_map.clone(), self.home_y, 0);
         }
         let count = self.start_points.len();
         let idx = if count > usize::from(self.start_point_size) {
@@ -325,11 +335,40 @@ mod tests {
             home_y: 668,
         };
         let mut rng = RandomNumber::with_seed(42);
-        assert_eq!(fb.get_home_info(&mut rng), ("3".to_string(), 839, 668));
+        // 空表 ⇒ `Config.HomeMap` + oracle 笔误坐标（`HomeX = Config.HomeY`、`HomeY = 0`）。
+        assert_eq!(fb.get_home_info(&mut rng), ("3".to_string(), 668, 0));
         // 空表 ⇒ **0 抽**：下一抽与同种子首抽一致。
         assert_eq!(
             rng.random_below(1000),
             RandomNumber::with_seed(42).random_below(1000)
+        );
+    }
+
+    /// **硬约束③**：空 `StartPointList` 时照抄 oracle 的笔误（`WorldServer.cs:1424-1426`）——
+    /// `nX` 先取 `Config.HomeX` 随即被 `Config.HomeY` 覆盖，`nY` 保持调用方初值 `0`
+    /// ⇒ 返回 `(HomeMap, Config.HomeY, 0)`，`Config.HomeX` **被丢弃**。
+    ///
+    /// 现网 `StartPoint.txt` 非空 ⇒ 不可达；本用例是保护（防「顺手修正笔误」）。
+    /// 牙：把空支改回「X/Y 各自取」⇒ 坐标断言红（必红）。
+    #[test]
+    fn get_home_info_copies_oracle_typo_when_no_start_points() {
+        let fb = HomeFallback {
+            start_points: Vec::new(),
+            start_point_size: 2,
+            home_map: "7".into(),
+            home_x: 111,
+            home_y: 222,
+        };
+        let mut rng = RandomNumber::with_seed(7);
+        assert_eq!(
+            fb.get_home_info(&mut rng),
+            ("7".to_string(), 222, 0),
+            "oracle 笔误：HomeX = Config.HomeY(222) 而不是 Config.HomeX(111)；HomeY 保持初值 0"
+        );
+        // 空表 ⇒ 0 抽（坐标来自配置，不抽数）。
+        assert_eq!(
+            rng.random_below(1000),
+            RandomNumber::with_seed(7).random_below(1000)
         );
     }
 
