@@ -65,7 +65,7 @@ use mir2_protocol::messages::grobal2;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 /// C# `GateShare.CommandFixedLength`（`GateShare.cs:18`）：命令帧最小长度。
 const COMMAND_FIXED_LENGTH: usize = 16;
@@ -144,7 +144,13 @@ type IdleSessions = Arc<Mutex<HashMap<u16, IdleEntry>>>;
 type SessionIndexes = Arc<Mutex<HashMap<u16, i32>>>;
 
 /// 一次出站写（已经拼好的 20B 头 + body）。写任务按到达顺序原样写线上字节。
-type Outbound = Vec<u8>;
+struct Outbound {
+    wire: Vec<u8>,
+    /// `Some` ⇒ 调用方在等「已 `write_all` **且** `flush`」的回执（[`Downstream::send_frame_sync`]）：
+    /// 离开路径的控制帧必须确认已进入内核发送缓冲，语义对齐 oracle `ClientThread.Send` 的同步
+    /// `Socket.Send`（`ClientThread.cs:393-399`）。普通 `GM_DATA` 走 `None`，保持异步入队。
+    ack: Option<oneshot::Sender<bool>>,
+}
 
 /// 网关→GameSvr 链路句柄：连接由 [`link_loop`] 建立/重建，会话与健康帧只经它发送。
 ///
@@ -170,6 +176,13 @@ struct DownstreamInner {
     tx: StdMutex<Option<(u64, mpsc::UnboundedSender<Outbound>)>>,
     /// 当前连接的“全关”信号（`Stop()` 用）；`None` ⇒ 无活连接。
     close: StdMutex<Option<(u64, watch::Sender<bool>)>>,
+}
+
+/// 拼一帧内部消息的线上字节：20B 小端头 + body。
+fn server_message_wire(msg: ServerMessage, body: &[u8]) -> Vec<u8> {
+    let mut wire = msg.to_bytes().to_vec();
+    wire.extend_from_slice(body);
+    wire
 }
 
 impl Downstream {
@@ -227,18 +240,50 @@ impl Downstream {
         let Some((generation, tx)) = self.tx_slot().clone() else {
             return false;
         };
-        if tx.send(wire).is_ok() {
+        if tx.send(Outbound { wire, ack: None }).is_ok() {
             return true;
         }
         self.mark_dead(generation);
         false
     }
 
+    /// **同步**写一帧：入队后等写任务回执「已 `write_all` + `flush`」。
+    ///
+    /// oracle 的 `ClientThread.Send` 是同步 `_clientSocket.Send(sendBuffer)`（`ClientThread.cs:393-399`）：
+    /// 调用返回时字节已在**内核发送缓冲**里，之后进程即使立刻退出也不会丢帧。Rust 侧普通发送是
+    /// 「入队即返回、写任务稍后落盘」，客户端断开后的 `GM_CLOSE` 因此可能在进程收工前还躺在队列里
+    /// —— 2026-10-20 全量并行门禁的 `header_prefixed_login_is_kicked` 偶发失败就是这条路径。
+    ///
+    /// 到达顺序不变：先入队，写任务按 FIFO 写完它前面的帧后才回执。链路已死 ⇒ 返回 `false`
+    /// （oracle 的 `!_clientSocket.Online` 静默丢弃）；写失败/写任务被 `Stop` 打断 ⇒ `ack` 发送端
+    /// 被丢弃，同样返回 `false`，不会挂住会话任务。
+    async fn send_frame_sync(&self, wire: Vec<u8>) -> bool {
+        // 标准库互斥量守卫不能跨 await：先取出「代次 + 发送端」再释放。
+        let Some((generation, tx)) = self.tx_slot().clone() else {
+            return false;
+        };
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if tx
+            .send(Outbound {
+                wire,
+                ack: Some(ack_tx),
+            })
+            .is_err()
+        {
+            self.mark_dead(generation);
+            return false;
+        }
+        ack_rx.await.unwrap_or(false)
+    }
+
     /// 发一帧内部消息：20B 小端头 + body。
     fn send_internal(&self, msg: ServerMessage, body: &[u8]) -> bool {
-        let mut wire = msg.to_bytes().to_vec();
-        wire.extend_from_slice(body);
-        self.send_frame(wire)
+        self.send_frame(server_message_wire(msg, body))
+    }
+
+    /// 同 [`Self::send_internal`]，但等写任务确认已写入并 `flush`（控制帧用，见 `send_frame_sync`）。
+    async fn send_internal_sync(&self, msg: ServerMessage, body: &[u8]) -> bool {
+        self.send_frame_sync(server_message_wire(msg, body)).await
     }
 
     /// 发一段**已经拼好**的线上字节（命令路径自己拼 20B 头 + 解码头 + 编码尾，见 §7.9）。
@@ -825,7 +870,11 @@ async fn client_loop(
         }
     }
 
-    // 离开：GM_CLOSE(session_id=0, socket=handle)（实机取证确认）
+    // 离开：GM_CLOSE(session_id=0, socket=handle)（实机取证确认）。
+    //
+    // **同步发送**：oracle `ClientThread.UserLeave` → `SendServerMsg` → `Send` 是同步
+    // `_clientSocket.Send`（`ClientThread.cs:384-399`），返回时帧已进内核。这里必须等写任务
+    // 回执，否则客户端先看到 EOF、测试/进程收工会把还在队列里的 `GM_CLOSE` 丢掉。
     ctx.sessions.lock().await.remove(&sid);
     ctx.indexes.lock().await.remove(&sid);
     ctx.idle.lock().await.remove(&sid);
@@ -837,7 +886,7 @@ async fn client_loop(
         session_index: 0,
         pack_length: 0,
     };
-    let _ = ctx.downstream.send_internal(leave, &[]);
+    let _ = ctx.downstream.send_internal_sync(leave, &[]).await;
     writer.abort();
     glog!("INF", "断开链接: {peer} (SessionId={sid})");
     closed
@@ -1178,17 +1227,21 @@ async fn writer(
     events: mpsc::UnboundedSender<LinkEvent>,
 ) {
     loop {
-        let wire = tokio::select! {
+        let out = tokio::select! {
             _ = close_rx.changed() => break,
             item = rx.recv() => match item {
-                Some(wire) => wire,
+                Some(out) => out,
                 None => break,
             },
         };
-        if wr.write_all(&wire).await.is_err() {
+        let written = wr.write_all(&out.wire).await.is_ok() && wr.flush().await.is_ok();
+        // 同步发送方（离开路径的 `GM_CLOSE`）在等这个回执：只有确认写进 socket 才放它返回。
+        if let Some(ack) = out.ack {
+            let _ = ack.send(written);
+        }
+        if !written {
             break;
         }
-        wr.flush().await.ok();
     }
     downstream.mark_dead(generation);
     let _ = events.send(LinkEvent::Dead(generation));
@@ -1732,11 +1785,14 @@ mod tests {
         let (close_tx, _close_rx) = watch::channel(false);
         down.install(1, tx, close_tx);
         let _writer = tokio::spawn(async move {
-            while let Some(wire) = rx.recv().await {
-                if wr.write_all(&wire).await.is_err() {
+            while let Some(out) = rx.recv().await {
+                let written = wr.write_all(&out.wire).await.is_ok() && wr.flush().await.is_ok();
+                if let Some(ack) = out.ack {
+                    let _ = ack.send(written);
+                }
+                if !written {
                     break;
                 }
-                let _ = wr.flush().await;
             }
         });
         let ctx = GateCtx {
@@ -1782,6 +1838,51 @@ mod tests {
             2,
             "转发的是第二帧（第一帧必须没写下游）"
         );
+    }
+
+    /// 离开路径的控制帧必须**同步**落地（oracle `ClientThread.Send` 的同步 `Socket.Send`，
+    /// `ClientThread.cs:393-399`）：`send_frame_sync` 在写任务回执之前**不得**返回；
+    /// 回执成功返回 `true`。写任务消失（链路死/`Stop`）时 `ack` 被丢弃 ⇒ 立即返回 `false`，
+    /// 不得挂住会话任务。
+    ///
+    /// 判据不靠 sleep 碰运气：`timeout(50ms, &mut fut)` 只有「未来已就绪」才会是 `Ok`，
+    /// 所以提前返回必定红；机器负载只会让超时更容易成立。
+    #[tokio::test]
+    async fn sync_control_frame_waits_for_writer_ack() {
+        let down = Downstream::new("127.0.0.1".into(), 0);
+        let (tx, mut rx) = mpsc::unbounded_channel::<Outbound>();
+        let (close_tx, _close_rx) = watch::channel(false);
+        down.install(1, tx, close_tx);
+
+        // 1) 写任务还没确认 ⇒ 同步发送必须挂住。
+        let mut send = Box::pin(down.send_frame_sync(vec![7, 8, 9]));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut send)
+                .await
+                .is_err(),
+            "写任务确认前 send_frame_sync 不得返回"
+        );
+        let out = rx.recv().await.expect("同步帧必须入队");
+        assert_eq!(out.wire, vec![7, 8, 9], "入队字节不得被改写");
+        // 2) 写任务回执 true ⇒ 同步发送返回 true。
+        out.ack
+            .expect("同步帧必须带回执")
+            .send(true)
+            .expect("回执接收端仍在等");
+        assert!(send.await, "写任务确认成功 ⇒ true");
+
+        // 3) 回执端被丢弃（写任务退出/Stop）⇒ false，且不得挂住。
+        //    先 poll 一次让 future 真的入队（async fn 不 poll 不执行）。
+        let mut send = Box::pin(down.send_frame_sync(vec![1]));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut send)
+                .await
+                .is_err(),
+            "写任务确认前 send_frame_sync 不得返回"
+        );
+        let out = rx.recv().await.expect("同步帧必须入队");
+        drop(out);
+        assert!(!send.await, "写任务消失 ⇒ false（不得一直等）");
     }
 
     /// B-4：槽位按「首个空槽」分配；全满时照 oracle 返回**最后一个非空槽**的 handle，

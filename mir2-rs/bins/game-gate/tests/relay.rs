@@ -832,6 +832,11 @@ async fn oracle_golden_login_frame_yields_oracle_synthetic_packet() {
 /// 会变成"帧内垃圾前缀"⇒ 照 oracle 必须**剔除**（且 5000 侧不得出现任何 `GM_DATA`）。
 ///
 /// 这条用例的牙齿：谁把入站 reading 改回"读 20B 头"，它就会变红。
+///
+/// 同时钉死**离开路径的同步性**：客户端读到 EOF 就立刻 `shutdown()` 杀网关进程，中间不 sleep、
+/// 不等任何队列。oracle 的 `ClientThread.Send` 是同步 `Socket.Send`（`ClientThread.cs:393-399`），
+/// 所以网关必须在让客户端看到 EOF 之前把 `GM_CLOSE` 写进内核；若有人把离开路径改回归普通
+/// 异步入队，这条用例会在高负载并行门禁下偶发丢 `GM_CLOSE`（2026-10-20 的实际红因）。
 #[tokio::test]
 async fn header_prefixed_login_is_kicked() {
     const GOLDEN_LOGIN_FRAME: &str = "23315e5e3c716f6d446f6e6f5478615f3c786e61497b5f623f5f6162586b6062586b61625a675f615a5f60605a6b60615a6a62603f6b6062667663606b756277667761625662626151666161516b7660647977605969757651666361697674615667607656627563516677615b6a21";
@@ -873,8 +878,24 @@ async fn header_prefixed_login_is_kicked() {
     assert_eq!(
         idents,
         vec![u16::from(grobal2::GM_OPEN), u16::from(grobal2::GM_CLOSE)],
-        "剔除路径不得出现 GM_DATA"
+        "剔除路径不得出现 GM_DATA；且 GM_CLOSE 必须已在客户端 EOF 前写入"
     );
+    // `GM_CLOSE` 的字段照实机取证：session_id=0、socket=客户端 handle、无 body。
+    let (open, open_body) = &got[0];
+    let (close, close_body) = &got[1];
+    assert_eq!(
+        open_body, b"127.0.0.1",
+        "GM_OPEN 的 body 必须是客户端 IP 串"
+    );
+    assert_eq!(close.packet_code, grobal2::PacketCode);
+    assert_eq!(close.session_id, 0, "GM_CLOSE 的 SessionId 必须是 0");
+    assert_eq!(
+        close.socket, open.socket,
+        "GM_CLOSE 的 Socket 必须与 GM_OPEN 的客户端 handle 一致"
+    );
+    assert_eq!(close.session_index, 0, "GM_CLOSE 的 SessionIndex 必须是 0");
+    assert_eq!(close.pack_length, 0, "GM_CLOSE 无 body ⇒ PackLength=0");
+    assert!(close_body.is_empty(), "GM_CLOSE 不得带 body");
 }
 
 /// **判据（下行）**：网关 → 客户端的两种出帧形态必须等于 oracle 实测字节。
