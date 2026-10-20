@@ -31,6 +31,7 @@ mod gamegold;
 mod goldsales;
 mod guild_cmd;
 mod guild_frames;
+mod guild_official;
 mod guild_runtime;
 mod homemap;
 mod hutil;
@@ -12850,6 +12851,13 @@ struct ShopSession {
     /// （T-47 ③）⇒ 生产侧该表恒空（构造客户端直发 `@upgradenow` 会被 oracle 丢弃，本侧同样丢弃）；
     /// 说词链路落地后由 say 生产者调用 `shop::get_script_label` 填充。
     can_jmp_labels: Vec<String>,
+    /// `PlayObject.ScriptCurrLable`（`PlayObject.cs` 字段；`NormNpc.UserSelect` 的
+    /// `NormNpc.cs:1633-1657` 维护）：固定 NPC（`GuildOfficial`）的 `@back` 回跳账本。
+    /// 与 [`Self::script_lable`]（`Merchant.UserSelect` 写的 `ScriptLable`）是 oracle 的两个
+    /// 独立字段，不能合并。
+    script_curr_lable: String,
+    /// `PlayObject.ScriptGoBackLable`（`NormNpc.cs:1639-1655`）。
+    script_go_back_lable: String,
 }
 
 /// 一个在线角色的**地面交互会话态**（`CM_PICKUP`/`CM_DROPITEM` 用）。
@@ -15751,6 +15759,15 @@ fn sim_loop(
                         cmd.series,
                         tail.as_deref().unwrap_or("")
                     );
+                    // `ClientMerchantDlgSelect` 的 `FindMerchant(nParam1) ?? FindNpc(nParam1)`
+                    // （`PlayObject.Operate.cs:120`）：第二臂命中**固定 NPC**（`Npcs.txt`）⇒ 走
+                    // `GuildOfficial.UserSelect`（`bins/game-svr/src/guild_official.rs`），
+                    // 不能落商店派发（商店 `FindMerchant` 找不到固定 NPC）。
+                    let fixed_npc_dialog = cmd.ident == game_svr::shop::CM_MERCHANTDLGSELECT
+                        && world
+                            .entities
+                            .get(cmd.recog)
+                            .is_some_and(|e| e.npc.is_some());
                     // `CM_SAY`：`/` 私聊、`!` 频道（`!!`/`!~`/`!`）、普通说话（`@` 仍不接）。
                     if cmd.ident == chat::CM_SAY {
                         let host = ChatHost {
@@ -15936,6 +15953,33 @@ fn sim_loop(
                         // 入站 P0 批（R1 前六条：CM_QUERYUSERNAME/CM_QUERYUSERSTATE/CM_QUERYUSERSET/
                         // CM_QUERYVAL/CM_SOFTCLOSE/CM_CLICKNPC）：派发与线缆字段映射见
                         // [`dispatch_inbound_p0`] 的逐条 oracle 对照。
+                    } else if fixed_npc_dialog {
+                        // 固定 NPC（`Envir/Npcs.txt`）的对话框：oracle `FindNpc` 臂 ⇒
+                        // `GuildOfficial.UserSelect`（`@@buildguildnow`/`@@guildwar`/...）。
+                        let now_tick = world.clock_ms as i32;
+                        guild_official::handle_select(
+                            cmd.recog,
+                            tail.as_deref(),
+                            &chr_name,
+                            socket,
+                            &online,
+                            &mut ground_sessions,
+                            &mut shop_sessions,
+                            &displays,
+                            &mut world,
+                            &mut guilds,
+                            guild_store.as_ref(),
+                            &enter_cfg.guild_sections,
+                            &guild_cfg,
+                            &enter_cfg.guild_msg_cfg,
+                            &enter_cfg.guild_castle_cfg,
+                            i32::from(enter_cfg.server_index),
+                            enter_cfg.ref_msg_range,
+                            (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
+                            &gates,
+                            &enter_cfg.catalog,
+                            now_tick,
+                        );
                     } else if matches!(
                         cmd.ident,
                         game_svr::shop::CM_MERCHANTDLGSELECT
@@ -48221,6 +48265,656 @@ mod tests {",
         );
         let st = world.entities.get(mid).unwrap().merchant.as_ref().unwrap();
         assert!(st.upgrade_weapon_list.is_empty(), "取回后记录移除");
+    }
+
+    // ---- 行会管理 NPC（`GuildOfficial`）标签派发（audit #3）----
+    //
+    // 生产入口 = `guild_official::handle_select`（`CM_MERCHANTDLGSELECT` 命中固定 NPC）。
+    // oracle：`ClientMerchantDlgSelect`（`PlayObject.Operate.cs:114-128`）→
+    // `GuildOfficial.UserSelect`（`src/GameSrv/Npc/GuildOfficial.cs:55-199`）。
+
+    fn gnp_ident(b: &[u8]) -> u16 {
+        u16::from_le_bytes([b[4], b[5]])
+    }
+
+    fn gnp_recog(b: &[u8]) -> i32 {
+        i32::from_le_bytes([b[0], b[1], b[2], b[3]])
+    }
+
+    fn gnp_param(b: &[u8]) -> u16 {
+        u16::from_le_bytes([b[6], b[7]])
+    }
+
+    fn gnp_series(b: &[u8]) -> u16 {
+        u16::from_le_bytes([b[10], b[11]])
+    }
+
+    /// `EDCode.EncodeString(GBK)` 的逆：先 6-bit 解码，再按 GBK 解出文本。
+    fn gnp_tail_text(b: &[u8]) -> String {
+        let raw = mir2_protocol::edcode::decode(&b[12..]);
+        let (text, _, _) = encoding_rs::GBK.decode(&raw);
+        text.into_owned()
+    }
+
+    /// 建会/宣战固定 NPC 的完整宿主夹具（世界 + 会话 + 网关 + 行会表 + 临时 GuildBase）。
+    struct GuildNpcFixture {
+        world: mir2_world::World,
+        npc_id: i32,
+        online: OnlineRegistry,
+        sessions: HashMap<String, SessionGround>,
+        shop_sessions: HashMap<String, ShopSession>,
+        displays: downlink::DisplayTable,
+        guilds: mir2_world::GuildManager,
+        guild_cfg: mir2_world::GuildConfig,
+        guild_msg_cfg: guild_runtime::GuildMsgCfg,
+        castle_cfg: mir2_data::guild_castle::GuildCastleConfig,
+        sections: mir2_data::guild::GuildFileSections,
+        catalog: game_svr::ability::StdItemCatalog,
+        store_dir: std::path::PathBuf,
+        store: mir2_data::guild::GuildStore,
+        gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        now_tick: i32,
+        server_index: i32,
+    }
+
+    impl GuildNpcFixture {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static SEQ: AtomicU32 = AtomicU32::new(0);
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let store_dir =
+                std::env::temp_dir().join(format!("gs-guild-npc-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&store_dir);
+            std::fs::create_dir_all(store_dir.join("Guilds")).expect("建 Guilds");
+            std::fs::write(store_dir.join("GuildList.txt"), b"Other\r\n")
+                .expect("建 GuildList.txt");
+            let store = mir2_data::guild::GuildStore::new(
+                store_dir.join("Guilds"),
+                store_dir.join("GuildList.txt"),
+            );
+
+            let world = mir2_world::World::new(32, 32);
+            let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx);
+            let mut f = Self {
+                world,
+                npc_id: 0,
+                online: Vec::new(),
+                sessions: HashMap::new(),
+                shop_sessions: HashMap::new(),
+                displays: downlink::DisplayTable::new(),
+                guilds: mir2_world::GuildManager::new(),
+                guild_cfg: mir2_world::GuildConfig::default(),
+                guild_msg_cfg: guild_runtime::GuildMsgCfg {
+                    show_pre_fix_msg: false,
+                    prefix: String::new(),
+                    f_color: 0xDB,
+                    b_color: 0xFF,
+                },
+                castle_cfg: mir2_data::guild_castle::GuildCastleConfig::default(),
+                sections: mir2_data::guild::GuildFileSections::oracle_defaults(),
+                catalog: game_svr::ability::StdItemCatalog::new(),
+                store_dir,
+                store,
+                gates,
+                rx,
+                now_tick: 1_000,
+                server_index: 0,
+            };
+            f.add_player("hero", 1, 10, 10, 901);
+            // 固定 NPC 在玩家之后建：`EntityStore::alloc_id` 先到先得（避免与玩家 id 撞号）。
+            f.npc_id = f
+                .world
+                .spawn_npc(mir2_world::npc::NpcSpawn {
+                    name: "比奇国王".to_string(),
+                    x: 11,
+                    y: 10,
+                    map_id: 0,
+                    state: mir2_world::npc::NpcState {
+                        npc_type: mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL,
+                        ..Default::default()
+                    },
+                })
+                .expect("固定 NPC 入世界");
+            f
+        }
+
+        fn add_player(&mut self, name: &str, actor_id: i32, x: i32, y: i32, socket: i32) {
+            let mut e = mir2_world::Entity::new(actor_id, name, x, y);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            self.world.add_entity(e);
+            let mut sg = test_session_ground(actor_id);
+            sg.guild = crate::guild_cmd::materialize(&self.guilds, name);
+            self.sessions.insert(name.to_string(), sg);
+            self.displays.set(
+                actor_id,
+                downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, name.as_bytes().to_vec()),
+            );
+            online_set(
+                &mut self.online,
+                OnlineEntry {
+                    account: format!("u-{name}"),
+                    chr_name: name.to_string(),
+                    session_id: actor_id,
+                    gate_idx: 0,
+                    socket,
+                    actor_id,
+                },
+            );
+        }
+
+        fn set_item(&mut self, index: u16, make_index: i32, dura: u16) {
+            use game_svr::bag::BagItem;
+            self.sessions
+                .get_mut("hero")
+                .unwrap()
+                .state
+                .item_list
+                .push(BagItem {
+                    make_index,
+                    index,
+                    dura,
+                    dura_max: dura,
+                    desc: [0; 14],
+                });
+        }
+
+        fn add_catalog_item(&mut self, index: u16, name: &str) {
+            self.catalog.insert(
+                index,
+                mir2_data::StdItem {
+                    name: name.to_string(),
+                    ..mir2_data::StdItem::default()
+                },
+            );
+        }
+
+        fn allow_labels(&mut self, labels: &[&str]) {
+            self.shop_sessions
+                .entry("hero".to_string())
+                .or_default()
+                .can_jmp_labels = labels.iter().map(|s| (*s).to_string()).collect();
+        }
+
+        fn set_hero_guild(&mut self, name: &str, rank_no: i16) {
+            let sg = self.sessions.get_mut("hero").unwrap();
+            sg.guild.guild_name = Some(name.to_string());
+            sg.guild.rank_no = rank_no;
+            sg.guild.rank_name = if rank_no == 1 {
+                "掌门人".to_string()
+            } else {
+                "行会成员".to_string()
+            };
+        }
+
+        fn hero_session_mut(&mut self) -> &mut SessionGround {
+            self.sessions.get_mut("hero").unwrap()
+        }
+
+        fn call(&mut self, tail: &str) {
+            let now_tick = self.now_tick;
+            let server_index = self.server_index;
+            guild_official::handle_select(
+                self.npc_id,
+                Some(tail),
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.shop_sessions,
+                &self.displays,
+                &mut self.world,
+                &mut self.guilds,
+                Some(&self.store),
+                &self.sections,
+                &self.guild_cfg,
+                &self.guild_msg_cfg,
+                &self.castle_cfg,
+                server_index,
+                12,
+                (255, 56),
+                &self.gates,
+                &self.catalog,
+                now_tick,
+            );
+        }
+
+        fn drain(&mut self) -> Vec<(i32, Vec<u8>)> {
+            let mut out = Vec::new();
+            while let Ok(ev) = self.rx.try_recv() {
+                if let SimToGate::SendFrame { socket, body } = ev {
+                    out.push((socket, body));
+                }
+            }
+            out
+        }
+    }
+
+    fn gnp_on(frames: &[(i32, Vec<u8>)], socket: i32) -> Vec<Vec<u8>> {
+        frames
+            .iter()
+            .filter(|(s, _)| *s == socket)
+            .map(|(_, b)| b.clone())
+            .collect()
+    }
+
+    fn gnp_idents(frames: &[Vec<u8>]) -> Vec<u16> {
+        frames.iter().map(|b| gnp_ident(b)).collect()
+    }
+
+    /// **判据 1（建会成功全链）**：`@@buildguildnow\rMyGuild` ⇒ 202(直发) → 750 → 762 → 653 → 42；
+    /// 物品删除 / 金币扣除 / 会话 `MyGuild` / 会表 / `GuildList` 落盘全部生效，且 oracle 的
+    /// `SaveGuildFile`「目标文件不存在 ⇒ 写不出去」怪行为照搬（新会 `<名>.txt` **不出现**）。
+    ///
+    /// 改坏必红：① 不扣 `BuildGuildPrice` ⇒ 653 `Recog` 与 gold 断言红；② 不删号角 ⇒ 202 与
+    /// 背包为空断言红；③ 750/762 优先级写反 ⇒ ident 序列断言红；④ 不写 `GuildList` ⇒ 文件断言红。
+    #[test]
+    fn guild_official_build_success_full_chain() {
+        let mut f = GuildNpcFixture::new();
+        f.add_catalog_item(42, "沃玛号角");
+        f.set_item(42, 77, 10);
+        f.hero_session_mut().state.gold = 2_000_000;
+        f.allow_labels(&["@@buildguildnow"]);
+        f.call("@@buildguildnow\rMyGuild");
+        let frames = f.drain();
+        let me = gnp_on(&frames, 901);
+        assert_eq!(
+            gnp_idents(&me),
+            vec![202, 750, 762, 653, 42],
+            "建会成功帧序：202 直发 → 750(61) → 762(63) → 653(152) → 42(165)"
+        );
+        // 202 SM_DELITEM：Recog=自己、Series=1；尾 = EncodeBuffer(ClientItem)，MakeIndex=77。
+        assert_eq!(gnp_recog(&me[0]), 1, "SendDelItems 的 ActorId = 玩家自己");
+        assert_eq!(gnp_series(&me[0]), 1, "SM_DELITEM Series=1");
+        let ci = mir2_protocol::edcode::decode(&me[0][12..]);
+        assert_eq!(
+            i32::from_le_bytes([ci[100], ci[101], ci[102], ci[103]]),
+            77,
+            "202 尾 = 被删号角的 ClientItem（MakeIndex=77）"
+        );
+        // 750：尾 = EncodeString("MyGuild/掌门人")，头全 0。
+        assert_eq!(gnp_recog(&me[1]), 0, "750 Recog=0");
+        assert_eq!(gnp_tail_text(&me[1]), "MyGuild/掌门人");
+        // 762：全 0 纯头。
+        assert_eq!(
+            &me[2][..12],
+            &game_svr::smframe::command_header(
+                0,
+                mir2_protocol::messages::SM_BUILDGUILD_OK,
+                0,
+                0,
+                0
+            )
+        );
+        assert_eq!(me[2].len(), 12, "762 无尾");
+        // 653：Recog = 扣费后的 Gold。
+        assert_eq!(
+            gnp_recog(&me[3]),
+            1_000_000,
+            "653 Recog = 2,000,000-1,000,000"
+        );
+        // 42：RefShowName 的 Recog=自己，Param 低字节 = 名字色。
+        assert_eq!(gnp_recog(&me[4]), 1, "42 Recog = 被展示者 ActorId");
+        assert_eq!(gnp_param(&me[4]) & 0xFF, 255, "42 Param 低字节 = NameColor");
+        // 状态副作用。
+        assert_eq!(f.hero_session_mut().state.gold, 1_000_000);
+        assert!(
+            f.hero_session_mut().state.item_list.is_empty(),
+            "号角已从背包删除"
+        );
+        {
+            let sg = f.hero_session_mut();
+            assert_eq!(sg.guild.guild_name.as_deref(), Some("MyGuild"));
+            assert_eq!(sg.guild.rank_no, 1);
+            assert_eq!(sg.guild.rank_name, "掌门人");
+        }
+        let g = f.guilds.find_guild("MyGuild").expect("会表已建会");
+        assert_eq!(g.get_chief_name(), "hero");
+        assert_eq!(f.guilds.member_of_guild("hero"), Some("MyGuild"));
+        // GuildList 落盘（`SaveGuildList`）；新会 .txt 写失败（oracle FileMode.Open 怪行为）。
+        let list = std::fs::read(f.store_dir.join("GuildList.txt")).expect("GuildList 可读");
+        assert_eq!(
+            mir2_data::guild::parse_guild_list(&list),
+            vec!["MyGuild".to_string()],
+            "GuildList = 存活会名（Other 被覆盖，oracle 每次全量重写）"
+        );
+        assert!(
+            !f.store_dir.join("Guilds").join("MyGuild.txt").exists(),
+            "oracle SaveGuildFile 对不存在的文件抛异常被吞 ⇒ 新会 .txt 不落盘"
+        );
+        assert_eq!(
+            std::fs::read(f.store_dir.join("Guilds").join("MyGuild.ini")).unwrap_or_default(),
+            Vec::<u8>::new(),
+            "GuildInfo ctor 的 GuildConf.Load() 建空 .ini（SaveGuildConfig 从不 Save）"
+        );
+    }
+
+    /// **判据 2（建会失败矩阵）**：空名 / 已有行会 / 费用不足 / 缺号角 / 重名 的五条失败支
+    /// 各自只回 `763 SM_BUILDGUILD_FAIL`（`Recog = result`），且金币/背包/会表**零副作用**。
+    ///
+    /// 改坏必红：把 `result` 的 -1/-2/-3/-4 任一支改成 0 ⇒ 对应 `Recog` 断言红；失败也扣钱 ⇒
+    /// gold 断言红。
+    #[test]
+    fn guild_official_build_failure_matrix() {
+        fn one(
+            gold: i32,
+            horn: bool,
+            has_guild: bool,
+            preexisting: bool,
+            tail: &str,
+            expected: i32,
+        ) {
+            let mut f = GuildNpcFixture::new();
+            f.add_catalog_item(42, "沃玛号角");
+            if horn {
+                f.set_item(42, 77, 10);
+            }
+            f.hero_session_mut().state.gold = gold;
+            if has_guild {
+                f.set_hero_guild("Old", 99);
+            }
+            if preexisting {
+                f.guilds.add_guild("MyGuild", "other", &f.guild_cfg.clone());
+            }
+            f.allow_labels(&["@@buildguildnow"]);
+            f.call(tail);
+            let frames = f.drain();
+            let me = gnp_on(&frames, 901);
+            assert_eq!(
+                gnp_idents(&me),
+                vec![763],
+                "失败支只有 763（tail={tail:?}）"
+            );
+            assert_eq!(
+                gnp_recog(&me[0]),
+                expected,
+                "763 Recog = result（{tail:?}）"
+            );
+            assert_eq!(f.hero_session_mut().state.gold, gold, "失败不扣钱");
+            assert_eq!(
+                f.hero_session_mut().state.item_list.len(),
+                usize::from(horn),
+                "失败不删号角"
+            );
+            assert!(
+                f.guilds.find_guild("MyGuild").is_none() || preexisting,
+                "失败不建会"
+            );
+        }
+        // 空名：result 先置 -4，且金/物品都满足 ⇒ 保持 -4（不短路、也不建会）。
+        one(2_000_000, true, false, false, "@@buildguildnow\r", -4);
+        // 已有行会 ⇒ -1（覆盖空名/费用/物品判定）。
+        one(2_000_000, true, true, false, "@@buildguildnow\rX", -1);
+        // 费用不足 ⇒ -2。
+        one(10, true, false, false, "@@buildguildnow\rX", -2);
+        // 钱够但没号角 ⇒ -3。
+        one(2_000_000, false, false, false, "@@buildguildnow\rX", -3);
+        // 重名（AddGuild false）⇒ -4。
+        one(2_000_000, true, false, true, "@@buildguildnow\rMyGuild", -4);
+    }
+
+    /// **判据 3（CheckItems/DelBagItem 的首个命中）**：背包两只号角时只删**第一只**
+    /// （`CheckItems` 正序首个；`DelBagItem(MakeIndex, Name)` 精确匹配），202 尾的 MakeIndex = 第一只。
+    ///
+    /// 改坏必红：改成删最后一只或按 Index 删 ⇒ 202 MakeIndex / 剩余 MakeIndex 断言红。
+    #[test]
+    fn guild_official_build_removes_only_first_horn() {
+        let mut f = GuildNpcFixture::new();
+        f.add_catalog_item(42, "沃玛号角");
+        f.set_item(42, 77, 10);
+        f.set_item(42, 78, 20);
+        f.hero_session_mut().state.gold = 2_000_000;
+        f.allow_labels(&["@@buildguildnow"]);
+        f.call("@@buildguildnow\rMyGuild");
+        let frames = gnp_on(&f.drain(), 901);
+        let del = frames
+            .iter()
+            .find(|b| gnp_ident(b) == mir2_protocol::messages::SM_DELITEM)
+            .expect("202 存在");
+        let ci = mir2_protocol::edcode::decode(&del[12..]);
+        assert_eq!(
+            i32::from_le_bytes([ci[100], ci[101], ci[102], ci[103]]),
+            77,
+            "202 尾 = 第一只号角（MakeIndex=77）"
+        );
+        let bag = &f.hero_session_mut().state.item_list;
+        assert_eq!(bag.len(), 1, "只删一只");
+        assert_eq!(bag[0].make_index, 78, "剩下的是第二只（MakeIndex=78）");
+    }
+
+    /// **判据 4（宣战成功 + 战表副作用 + 104/42/653 帧序）**：本会已在战 ⇒ oracle `AddWarGuild`
+    /// 的 N2 反逻辑（先命中克隆再追加一条副本）+ `SS_207`；A 会战表 **2 条 B**、B 会战表 **0 条**
+    /// （目标层 `warGuild.WarTime == 0` ⇒ 不追加），两侧 `<名>.txt` 都被 `UpdateGuildFile` 重写。
+    ///
+    /// 改坏必红：把 `add_war_guild` 的 `war_guild.war_time > 0` 改成恒真/恒假 ⇒ A 的副本数或
+    /// 104 文案断言红；不扣 `GuildWarPrice` ⇒ 653 断言红；不重写目标会文件 ⇒ B.txt 仍是 dummy。
+    #[test]
+    fn guild_official_war_declares_and_writes_war_table() {
+        let mut f = GuildNpcFixture::new();
+        f.add_player("boss", 3, 10, 11, 902);
+        assert!(f.guilds.add_guild("A", "hero", &f.guild_cfg.clone()));
+        assert!(f.guilds.add_guild("B", "boss", &f.guild_cfg.clone()));
+        f.set_hero_guild("A", 1);
+        {
+            let boss = f.sessions.get_mut("boss").unwrap();
+            boss.guild.guild_name = Some("B".to_string());
+            boss.guild.rank_no = 1;
+            boss.guild.rank_name = "掌门人".to_string();
+        }
+        // 本会已在战（N2 的第一层会命中克隆）。
+        f.guilds
+            .find_guild_mut("A")
+            .unwrap()
+            .wars
+            .push(mir2_world::WarGuild {
+                guild_name: "B".to_string(),
+                war_tick: 1,
+                war_time: f.castle_cfg.guild_war_time,
+            });
+        // 两侧 .txt 先落地（oracle `AddWarGuild` 尾的 `UpdateGuildFile` 会重写它们）。
+        std::fs::write(f.store_dir.join("Guilds").join("A.txt"), b"dummy-A").unwrap();
+        std::fs::write(f.store_dir.join("Guilds").join("B.txt"), b"dummy-B").unwrap();
+        f.hero_session_mut().state.gold = 100_000;
+        f.allow_labels(&["@@guildwar"]);
+        f.call("@@guildwar\rB");
+        let frames = f.drain();
+        let hero = gnp_on(&frames, 901);
+        assert_eq!(
+            gnp_idents(&hero),
+            vec![653, 42, 42, 104, 104],
+            "宣战帧序：653(152) → 42×2(165) → 104×2(255)"
+        );
+        assert_eq!(gnp_recog(&hero[0]), 70_000, "653 Recog = 100,000-30,000");
+        assert_eq!(gnp_recog(&hero[1]), 1, "42#1 Recog = hero");
+        assert_eq!(
+            gnp_recog(&hero[2]),
+            3,
+            "42#2 Recog = boss（目标会 RefMemberName）"
+        );
+        assert_eq!(
+            gnp_tail_text(&hero[3]),
+            "***B行会战争将持续三个小时。",
+            "第一层命中克隆的文案"
+        );
+        assert_eq!(
+            gnp_tail_text(&hero[4]),
+            "***B行会战争开始(三个小时)",
+            "同一函数内又追加副本的文案（N2 照搬）"
+        );
+        assert_eq!(f.hero_session_mut().state.gold, 70_000);
+        let a = f.guilds.find_guild("A").unwrap();
+        assert_eq!(a.wars.len(), 2, "A 会战表 = 原 1 条 + 新追加 1 条副本");
+        assert!(a.wars.iter().all(|w| w.guild_name == "B"));
+        assert_eq!(a.wars[1].war_tick, f.now_tick, "新副本 WarTick = now");
+        assert!(
+            f.guilds.find_guild("B").unwrap().wars.is_empty(),
+            "目标层 warGuild.WarTime == 0 ⇒ B 会战表不追加（oracle N2）"
+        );
+        // 两侧 UpdateGuildFile 的落盘。
+        let a_txt = std::fs::read(f.store_dir.join("Guilds").join("A.txt")).unwrap();
+        let b_txt = std::fs::read(f.store_dir.join("Guilds").join("B.txt")).unwrap();
+        assert_ne!(a_txt, b"dummy-A", "A 会 UpdateGuildFile 已重写");
+        assert_ne!(b_txt, b"dummy-B", "第二层 AddWarGuild 也重写了 B 会文件");
+        let (a_text, _, _) = encoding_rs::GBK.decode(&a_txt);
+        assert!(a_text.contains('B'), "A 会战表含 B");
+    }
+
+    /// **判据 5（宣战失败/怪分支）**：NPC 层与 `PlayObject` 层的门，含「金币先扣后判掌门」的
+    /// oracle 怪行为（`GuildOfficial.cs:186` 在 `PlayObject.Base.cs:3351` 之前）。
+    ///
+    /// 改坏必红：把扣钱移到掌门判定之后 ⇒ no-guild/非掌门两臂的 gold 断言红；目标不存在也扣钱
+    /// ⇒ 第一臂 gold 断言红。
+    #[test]
+    fn guild_official_war_failures_and_gold_quirk() {
+        fn setup(hero_guild: Option<(&str, i16)>, with_target: bool, gold: i32) -> GuildNpcFixture {
+            let mut f = GuildNpcFixture::new();
+            assert!(f.guilds.add_guild("B", "boss", &f.guild_cfg.clone()));
+            if let Some((name, rank)) = hero_guild {
+                assert!(f.guilds.add_guild(name, "other", &f.guild_cfg.clone()));
+                if rank != 1 {
+                    f.guilds
+                        .find_guild_mut(name)
+                        .unwrap()
+                        .ranks
+                        .push(mir2_world::GuildRank {
+                            rank_no: rank,
+                            rank_name: "行会成员".to_string(),
+                            members: vec!["hero".to_string()],
+                        });
+                }
+                f.set_hero_guild(name, rank);
+            }
+            f.hero_session_mut().state.gold = gold;
+            f.allow_labels(&["@@guildwar"]);
+            if !with_target {
+                // 目标会名改成不存在（B 仍在表里？不，构造尾部用不存在的名字）。
+            }
+            f
+        }
+
+        // ① 目标不存在 ⇒ 只有 100「行会 X 不存在!!!」，不扣钱、无 653。
+        let mut f = setup(Some(("A", 1)), false, 100_000);
+        f.call("@@guildwar\rNoSuch");
+        let me = gnp_on(&f.drain(), 901);
+        assert_eq!(gnp_idents(&me), vec![100]);
+        assert_eq!(gnp_tail_text(&me[0]), "行会 NoSuch 不存在!!!");
+        assert_eq!(f.hero_session_mut().state.gold, 100_000, "目标不存在不扣钱");
+
+        // ② 费用不足 ⇒ 只有 100「你没有足够的金币!!!」，不扣钱。
+        let mut f = setup(Some(("A", 1)), true, 10_000);
+        f.call("@@guildwar\rB");
+        let me = gnp_on(&f.drain(), 901);
+        assert_eq!(gnp_idents(&me), vec![100]);
+        assert_eq!(gnp_tail_text(&me[0]), "你没有足够的金币!!!");
+        assert_eq!(f.hero_session_mut().state.gold, 10_000, "钱不够不扣钱");
+
+        // ③ 无行会（非掌门）⇒ 653 先扣 30,000 + 100「只有行会掌门人才能申请!!!」。
+        let mut f = setup(None, true, 100_000);
+        f.call("@@guildwar\rB");
+        let me = gnp_on(&f.drain(), 901);
+        assert_eq!(gnp_idents(&me), vec![653, 100]);
+        assert_eq!(gnp_recog(&me[0]), 70_000);
+        assert_eq!(gnp_tail_text(&me[1]), "只有行会掌门人才能申请!!!");
+        assert_eq!(
+            f.hero_session_mut().state.gold,
+            70_000,
+            "oracle 先扣钱后判掌门（无会也白扣）"
+        );
+        assert!(
+            f.guilds.find_guild("A").is_none() && f.guilds.find_guild("B").unwrap().wars.is_empty(),
+            "无会不产生任何战表副作用"
+        );
+
+        // ④ 有会但非掌门（rank 99）⇒ 同样先扣钱。
+        let mut f = setup(Some(("A", 99)), true, 100_000);
+        f.call("@@guildwar\rB");
+        let me = gnp_on(&f.drain(), 901);
+        assert_eq!(gnp_idents(&me), vec![653, 100]);
+        assert_eq!(gnp_tail_text(&me[1]), "只有行会掌门人才能申请!!!");
+        assert_eq!(f.hero_session_mut().state.gold, 70_000);
+        assert!(f.guilds.find_guild("A").unwrap().wars.is_empty());
+
+        // ⑤ 非 0 区 ⇒ 先扣钱，再「这个命令不能在本服务器上使用!!!」。
+        let mut f = setup(Some(("A", 1)), true, 100_000);
+        f.server_index = 1;
+        f.call("@@guildwar\rB");
+        let me = gnp_on(&f.drain(), 901);
+        assert_eq!(gnp_idents(&me), vec![653, 100]);
+        assert_eq!(gnp_tail_text(&me[1]), "这个命令不能在本服务器上使用!!!");
+        assert_eq!(f.hero_session_mut().state.gold, 70_000);
+        assert!(f.guilds.find_guild("A").unwrap().wars.is_empty());
+    }
+
+    /// **判据 6（`LableIsCanJmp` 门）**：没有「说过含该标签的台词」时，直发 `@@buildguildnow`
+    /// 必须被丢弃（oracle `GotoLable` 后 `return`）——零帧、零副作用；`@main` 特判也无助于
+    /// `@@buildguildnow`。播种该标签后才允许派发。
+    ///
+    /// 改坏必红：删掉 `lable_is_can_jmp` 门 ⇒ 第一臂出现 762 且建会。
+    #[test]
+    fn guild_official_lable_gate_drops_unseen_labels() {
+        let mut f = GuildNpcFixture::new();
+        f.add_catalog_item(42, "沃玛号角");
+        f.set_item(42, 77, 10);
+        f.hero_session_mut().state.gold = 2_000_000;
+        f.call("@@buildguildnow\rMyGuild");
+        assert!(f.drain().is_empty(), "未见过标签 ⇒ 零帧");
+        assert!(
+            f.guilds.find_guild("MyGuild").is_none(),
+            "未见过标签 ⇒ 不建会"
+        );
+        assert_eq!(f.hero_session_mut().state.gold, 2_000_000);
+
+        f.allow_labels(&["@main"]);
+        f.call("@@buildguildnow\rMyGuild");
+        assert!(f.drain().is_empty(), "@main 特判只放行 @main 本身");
+        assert!(f.guilds.find_guild("MyGuild").is_none());
+
+        f.allow_labels(&["@@buildguildnow"]);
+        f.call("@@buildguildnow\rMyGuild");
+        assert!(!f.drain().is_empty(), "播种后放行");
+        assert!(f.guilds.find_guild("MyGuild").is_some());
+    }
+
+    /// **判据 7（其余标签）**：`@@donate` ⇒ `764`（Recog=0）；`@exit` ⇒ `644`（Recog=NPC ActorId）；
+    /// `@back` ⇒ 无帧，但 `NormNpc.UserSelect` 的回跳账本正确（空 back ⇒ `@main`）。
+    ///
+    /// 改坏必红：把 644 的 Recog 写成玩家 ActorId ⇒ 断言红；删掉 `base.UserSelect` 账本 ⇒
+    /// `script_go_back_lable` 断言红。
+    #[test]
+    fn guild_official_donate_exit_back_labels() {
+        let mut f = GuildNpcFixture::new();
+        f.allow_labels(&["@@donate", "@exit", "@back"]);
+        f.call("@@donate");
+        let me = gnp_on(&f.drain(), 901);
+        assert_eq!(gnp_idents(&me), vec![764]);
+        assert_eq!(gnp_recog(&me[0]), 0, "DoNate 的 nParam1 = 0");
+
+        f.call("@exit");
+        let me = gnp_on(&f.drain(), 901);
+        assert_eq!(gnp_idents(&me), vec![644]);
+        assert_eq!(
+            gnp_recog(&me[0]),
+            f.npc_id,
+            "SM_MERCHANTDLGCLOSE Recog = NPC ActorId"
+        );
+
+        f.call("@back");
+        assert!(f.drain().is_empty(), "@back 无说词（Npc_def 脚本未装载）");
+        let ss = f.shop_sessions.get("hero").unwrap();
+        assert_eq!(
+            ss.script_curr_lable, "",
+            "base.UserSelect：@back 清空 ScriptCurrLable"
+        );
+        assert_eq!(
+            ss.script_go_back_lable, "@@donate",
+            "上一标签（@exit 之前）留在 go-back；@back 不覆盖它"
+        );
+        // 再按一次 @back：此时 `ScriptCurrLable` 已空 ⇒ base 清 go-back ⇒ GuildOfficial 回落到 @main。
+        f.call("@back");
+        let ss = f.shop_sessions.get("hero").unwrap();
+        assert_eq!(ss.script_go_back_lable, "@main", "空 go-back ⇒ 回 @main");
     }
 }
 
