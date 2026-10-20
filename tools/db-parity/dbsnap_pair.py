@@ -38,23 +38,30 @@ manifest 的每个表项至少要有 `table` / `file` / `sha256` / `rows` / `col
    - `--time-mode exact`（默认）：逐字节比（两侧同一基线/同一时钟源时用）。
    - `--time-mode normalized`：DATETIME 统一为 `YYYY-MM-DD HH:MM:SS.ffffff`
      （小数位右补 0 到 6 位；`T` 分隔符归一为空格）；纯整数时间列（unix 秒）
-     保持十进制字符串逐字节比；无法识别的格式按 exact 比并在摘要里计数。
+     按整数比较；无法识别的格式按 exact 比，并在摘要 `unrecognized_time_values`
+     里计数（不静默）。
    - `--time-mode presence`：只比 NULL/非 NULL，不比时刻值。
-   - 时间列**不自动忽略**：要忽略必须显式 `--ignore-columns`，且仅当该列已登记为
-     易变列（见 `TABLE_SPECS[...]["volatile"]`）时允许；否则工具拒绝（rc=2）并说明。
+   - 时间列**不自动忽略**：要忽略必须显式 `--ignore-columns`（或探针的
+     `--ignore-time-columns`），且仅当该列已登记为易变列或时间列时允许；否则工具
+     拒绝（rc=2）并说明。
 
 4) C3「changed 标志」模式
    - `--baseline-a BEFORE_A --baseline-b BEFORE_B` 与两份 after 一起给时，额外计算
      每侧 `changed = (after_row != before_row)`（按比较列 + time-mode），并机判：
        · oracle changed=false 的行，Rust 必须也 false；
        · oracle changed=true  的行，Rust 必须也 true；
-       · changed 的时间列 after 必须不早于 before（`time_not_later`）。
+       · changed 的时间列 after 必须**严格晚于** before（相等或回退都报
+         `time_not_later`）；DATETIME 与 unix 秒均支持；
+       · before 与 after 走同一套结构校验（hash/columns/rows/重复主键）。
      这直接对应 design-dbsrv-connection-20261021.md §6.4 C3。
 
 5) 表集合
    - 默认比较「两份 manifest 里出现的所有表」；未登记表 ⇒ RED（`unknown_table`），
      除非 `--allow-unknown-table`（届时只能 multiset 比，且摘要显式标注）。
-   - `--require-tables` 点名必须在两侧都出现的表；缺失 ⇒ RED（`missing_table`）。
+   - `--require-tables` 点名必须在两侧都出现的表，且**进入比较集**（收窄
+     `--tables` 也不会被跳过）；缺失 ⇒ RED（`missing_table`）。
+   - 表名按 `<任意库前缀>.<表名>` 归一到登记名后对齐：E1 克隆
+     `mir2_test_db_oracle` / `mir2_test_db_rust` 仅前缀不同也能比。
    - `--scope lb10` = LB-10 的 9 表 + `characters_indexes`（quest 不在其内）。
 
 退出码：0=GREEN，1=RED（有差异/结构问题），2=用法或输入错误（fail-closed）。
@@ -213,6 +220,21 @@ LB10_TABLES = [
 
 NULL_TOKEN_DEFAULT = "NULL"
 _DT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?$")
+_UNIX_RE = re.compile(r"^\d+$")
+
+
+def canonical_table_name(fq):
+    """把 `<任意库前缀>.<表名>` 归一到 TABLE_SPECS 的登记名。
+
+    E1 裁决用测试库克隆（`mir2_test_db_oracle`/`mir2_test_db_rust`），dbsnap 快照里
+    的表名带各自库前缀。两侧只差前缀时也必须能按同一张表对齐比较，否则 compare 会
+    报 `missing_table`/`unknown_table`（LB-10 实测缺陷）。未登记的表原样返回。
+    """
+    if fq in TABLE_SPECS:
+        return fq
+    bare = fq.rpartition(".")[2]
+    matches = [k for k in TABLE_SPECS if k.rpartition(".")[2] == bare]
+    return matches[0] if len(matches) == 1 else fq
 
 
 def sha256_file(path):
@@ -236,7 +258,26 @@ def norm_time(value):
     return value
 
 
-def values_equal(a, b, *, is_time, time_mode, null_token):
+def time_value_kind(value):
+    """时间列值分类：'dt'=DATETIME 文本、'unix'=纯整数秒、None=无法识别。"""
+    if _DT_RE.match(value):
+        return "dt"
+    if _UNIX_RE.match(value):
+        return "unix"
+    return None
+
+
+def parse_time_value(value):
+    """把时间列值变成可比较键：('dt', 归一文本) / ('unix', int) / None。"""
+    kind = time_value_kind(value)
+    if kind == "dt":
+        return ("dt", norm_time(value))
+    if kind == "unix":
+        return ("unix", int(value))
+    return None
+
+
+def values_equal(a, b, *, is_time, time_mode, null_token, stats=None):
     """单列比较。非时间列永远逐字节；时间列按 time_mode。"""
     a_null = is_null(a, null_token)
     b_null = is_null(b, null_token)
@@ -247,6 +288,11 @@ def values_equal(a, b, *, is_time, time_mode, null_token):
     if time_mode == "presence":
         return True
     if time_mode == "normalized":
+        # 无法识别的格式按 exact 比，并计数（摘要里显式标注，不静默）。
+        if stats is not None and (time_value_kind(a) is None
+                                  or time_value_kind(b) is None):
+            stats["unrecognized_time_values"] = (
+                stats.get("unrecognized_time_values", 0) + 1)
         return norm_time(a) == norm_time(b)
     raise ValueError("未知 time_mode: %s" % time_mode)
 
@@ -274,9 +320,15 @@ def manifest_tables(snapdir):
     man = load_manifest(snapdir)
     out = {}
     for entry in man["tables"]:
-        fq = entry.get("table")
-        if not fq or "." not in fq:
+        raw_fq = entry.get("table")
+        if not raw_fq or "." not in raw_fq:
             raise InputError("manifest 表项缺 table 或格式非法: %r" % (entry,))
+        # 两侧克隆库前缀可能不同（mir2_test_db_oracle.* / mir2_test_db_rust.*），
+        # 归一后按同一张登记表对齐。
+        fq = canonical_table_name(raw_fq)
+        if fq in out:
+            raise InputError("快照里多张表归一到同一登记名 %s: %r 与 %r" %
+                             (fq, out[fq]["raw_table"], raw_fq))
         if "columns" in entry:
             cols = [c.get("name") if isinstance(c, dict) else c
                     for c in entry["columns"]]
@@ -284,12 +336,13 @@ def manifest_tables(snapdir):
             cols = list(TABLE_SPECS[fq]["columns"])
         else:
             cols = []
-        file_name = entry.get("file") or (fq + ".tsv")
+        file_name = entry.get("file") or (raw_fq + ".tsv")
         path = os.path.join(snapdir, file_name)
         if not os.path.exists(path):
             raise InputError("快照缺 tsv: %s" % path)
         out[fq] = {"columns": cols, "file": path, "sha256": entry.get("sha256"),
-                   "rows": entry.get("rows"), "raw_columns": entry.get("columns")}
+                   "rows": entry.get("rows"), "raw_columns": entry.get("columns"),
+                   "raw_table": raw_fq}
     return out
 
 
@@ -383,9 +436,11 @@ def compare_tables(fq, a_entry, b_entry, opts, records):
 
     # ignore 白名单校验：只允许已登记易变列；否则拒绝（不悄悄不比）。
     if spec is not None:
-        bad = sorted(ignore - set(spec["volatile"]) - set(pk))
+        # 已登记时间列允许显式忽略（--ignore-time-columns 会展开到这些列）。
+        allowed_ignore = set(spec["volatile"]) | set(spec["time_columns"]) | set(pk)
+        bad = sorted(ignore - allowed_ignore)
         if bad:
-            raise InputError("表 %s 的 --ignore-columns %s 不是已登记易变列/主键；"
+            raise InputError("表 %s 的 --ignore-columns %s 不是已登记易变列/时间列/主键；"
                              "行为列不许静默忽略（先登记理由）" % (fq, bad))
     compare_cols = [c for c in cols if c not in ignore]
 
@@ -434,7 +489,8 @@ def compare_tables(fq, a_entry, b_entry, opts, records):
                 va, vb = ra[idx[c]], rb[idx[c]]
                 if not values_equal(va, vb, is_time=(c in time_cols),
                                     time_mode=opts["time_mode"],
-                                    null_token=opts["null_token"]):
+                                    null_token=opts["null_token"],
+                                    stats=opts.get("stats")):
                     records.append({"table": fq, "kind": "value", "key": key_json(key),
                                     "column": c, "a": va, "b": vb})
     else:  # multiset
@@ -466,54 +522,127 @@ def index_by_key(rows, idx, pk):
     return out, dup
 
 
+def _entry_structure_errors(fq, label, entry, spec, records):
+    """before/after 共用的一侧结构校验：申报 hash、columns 名单/列序、登记结构。
+
+    返回 True=通过；任一项不符都追加记录并返回 False（fail-closed）。
+    """
+    ok = True
+    if entry.get("sha256"):
+        actual = sha256_file(entry["file"])
+        if actual != entry["sha256"]:
+            records.append({"table": fq, "kind": "tamper", "side": label,
+                            "expected_sha256": entry["sha256"],
+                            "actual_sha256": actual,
+                            "detail": "快照被事后改动（manifest 与 tsv 不符）"})
+            ok = False
+    cols = entry.get("columns") or []
+    if not cols:
+        records.append({"table": fq, "kind": "schema", "side": label,
+                        "detail": "manifest 缺 columns"})
+        return False
+    if spec is not None and cols != spec["columns"]:
+        records.append({"table": fq, "kind": "schema", "side": label,
+                        "detail": "快照列与登记表结构不符（表结构漂移或登记过期）",
+                        "manifest_columns": cols,
+                        "registered_columns": spec["columns"]})
+        ok = False
+    return ok
+
+
 def compare_changed(fq, base_a, after_a, base_b, after_b, opts, records):
-    """C3 changed 标志：按主键对齐每侧的 before/after，比较 changed 奇偶。"""
+    """C3 changed 标志：按主键对齐每侧的 before/after。
+
+    before 与 after 用**同一套**结构校验（hash / columns 名单与列序 / rows /
+    重复主键），不只信 after；before 被事后篡改或列序漂移必须红。
+    """
     spec = TABLE_SPECS.get(fq)
     if spec is None:
         return 0
     n_before = len(records)
+    sides = (("a_before", base_a), ("a_after", after_a),
+             ("b_before", base_b), ("b_after", after_b))
+    ok = True
+    for label, entry in sides:
+        if not _entry_structure_errors(fq, label, entry, spec, records):
+            ok = False
+    if not ok:
+        return len(records) - n_before
+
     cols = after_a["columns"]
+    for label, entry in sides:
+        if entry["columns"] != cols:
+            records.append({"table": fq, "kind": "schema", "side": label,
+                            "detail": "before/after 列名/列序不同",
+                            "columns": entry["columns"], "expected": cols})
+    if len(records) > n_before:
+        return len(records) - n_before
+
     idx = {c: i for i, c in enumerate(cols)}
     pk = spec["pk"]
     time_cols = set(spec["time_columns"])
     ignore = set(opts["ignore_columns"]) & set(cols)
     compare_cols = [c for c in cols if c not in ignore]
 
-    def load(entry):
+    def load(label, entry):
         rows, errs = read_rows(entry, cols)
+        for e in errs:
+            e["table"] = fq
+            e["side"] = label
+            records.append(e)
         if errs:
-            raise InputError("changed 模式读表 %s 结构错误: %s" % (fq, errs[:1]))
-        return index_by_key(rows, idx, pk)[0]
+            return None
+        if entry.get("rows") is not None and int(entry["rows"]) != len(rows):
+            records.append({"table": fq, "kind": "row_count", "side": label,
+                            "manifest_rows": entry["rows"], "tsv_rows": len(rows),
+                            "detail": "manifest.rows 与 tsv 逻辑行数不符（坏快照）"})
+            return None
+        mapping, dup = index_by_key(rows, idx, pk)
+        for key, count in dup:
+            records.append({"table": fq, "kind": "duplicate_key", "side": label,
+                            "key": key_json(key), "count": count,
+                            "detail": "同侧重复主键，无法唯一对齐"})
+        return None if dup else mapping
 
-    ba, aa = load(base_a), load(after_a)
-    bb, ab = load(base_b), load(after_b)
+    loaded = [(label, load(label, entry)) for label, entry in sides]
+    if any(m is None for _, m in loaded):
+        return len(records) - n_before
+    ba, aa, bb, ab = (m for _, m in loaded)
 
-    def side_changed(before, after):
+    def side_changed(rows_before, rows_after):
         out = {}
-        for k in set(before) | set(after):
-            if k not in before or k not in after:
+        for k in set(rows_before) | set(rows_after):
+            if k not in rows_before or k not in rows_after:
                 out[k] = True
                 continue
-            ra, rb = before[k], after[k]
+            ra, rb = rows_before[k], rows_after[k]
             changed = any(not values_equal(ra[idx[c]], rb[idx[c]],
                                            is_time=(c in time_cols),
                                            time_mode=opts["time_mode"],
-                                           null_token=opts["null_token"])
+                                           null_token=opts["null_token"],
+                                           stats=opts.get("stats"))
                           for c in compare_cols)
             out[k] = changed
-            if changed:
-                for c in time_cols:
-                    if c in ignore:
-                        continue
-                    va, vb = ra[idx[c]], rb[idx[c]]
-                    if is_null(va, opts["null_token"]) or is_null(vb, opts["null_token"]):
-                        continue
-                    ta, tb = norm_time(va), norm_time(vb)
-                    if _DT_RE.match(ta) and _DT_RE.match(tb) and tb < ta:
-                        records.append({"table": fq, "kind": "time_not_later",
-                                        "key": key_json(k), "column": c,
-                                        "before": va, "after": vb,
-                                        "detail": "after 早于 before，不在因果窗内"})
+            if not changed:
+                continue
+            for c in sorted(time_cols):
+                if c in ignore:
+                    continue
+                va, vb = ra[idx[c]], rb[idx[c]]
+                if is_null(va, opts["null_token"]) or is_null(vb, opts["null_token"]):
+                    continue
+                ta, tb = parse_time_value(va), parse_time_value(vb)
+                # 设计 C3：changed 行的 after 必须**严格晚于** before
+                # （DATETIME 与 unix 秒各自按同一量纲比；格式不明则跳过）。
+                if ta is None or tb is None or ta[0] != tb[0]:
+                    continue
+                # 违反「严格晚于」的条件是 after <= before（相等也不行）。
+                if tb[1] <= ta[1]:
+                    records.append({"table": fq, "kind": "time_not_later",
+                                    "key": key_json(k), "column": c,
+                                    "before": va, "after": vb,
+                                    "detail": "changed 行的 after 未严格晚于 before，"
+                                              "不在因果窗内"})
         return out
 
     ca = side_changed(ba, aa)
@@ -533,7 +662,7 @@ def run_pair(a_dir, b_dir, *, tables=None, require_tables=None, key_mode="pk",
     """核心入口（不 sys.exit）。返回 (rc, records, summary)。"""
     opts = {"key_mode": key_mode, "time_mode": time_mode,
             "null_token": null_token, "ignore_columns": list(ignore_columns),
-            "allow_unknown_table": allow_unknown_table}
+            "allow_unknown_table": allow_unknown_table, "stats": {}}
     if time_mode not in ("exact", "presence", "normalized"):
         raise InputError("未知 --time-mode: %s" % time_mode)
     if key_mode not in ("pk", "multiset"):
@@ -544,24 +673,37 @@ def run_pair(a_dir, b_dir, *, tables=None, require_tables=None, key_mode="pk",
     A = manifest_tables(a_dir)
     B = manifest_tables(b_dir)
 
+    # 调用方可以给登记名或带实际库前缀的表名（E1 克隆）；统一归一到登记名。
+    tables = [canonical_table_name(t) for t in tables] if tables else None
+    require_tables = [canonical_table_name(t) for t in (require_tables or [])]
+    require_set = set(require_tables)
+
     if tables:
         names = list(tables)
     else:
         names = [t for t in TABLE_SPECS if t in A or t in B]
         names += sorted((set(A) | set(B)) - set(names))
-    records = []
-    for t in (require_tables or []):
-        if t not in A or t not in B:
-            records.append({"table": t, "kind": "missing_table",
-                            "detail": "require-tables 点名但至少一侧快照缺失"})
+    # --require-tables 不只是「存在性检查」：它必须进入比较集，
+    # 否则收窄 --tables 时被点名要求的表会被静默跳过。
+    seen = set(names)
+    for t in require_tables:
+        if t not in seen:
+            names.append(t)
+            seen.add(t)
 
+    records = []
     BA = manifest_tables(baseline_a) if baseline_a else None
     BB = manifest_tables(baseline_b) if baseline_b else None
     per_table = {}
     for fq in names:
         if fq not in A or fq not in B:
-            records.append({"table": fq, "kind": "missing_table",
-                            "detail": "仅一侧 after 快照有该表"})
+            both_missing = fq not in A and fq not in B
+            rec = {"table": fq, "kind": "missing_table",
+                   "detail": ("两侧 after 快照都没有该表" if both_missing
+                              else "仅一侧 after 快照有该表")}
+            if fq in require_set:
+                rec["required"] = True
+            records.append(rec)
             per_table[fq] = 1
             continue
         n = compare_tables(fq, A[fq], B[fq], opts, records)
@@ -579,23 +721,38 @@ def run_pair(a_dir, b_dir, *, tables=None, require_tables=None, key_mode="pk",
     for r in records:
         counts[r["kind"]] = counts.get(r["kind"], 0) + 1
     red = len(records) > 0
+    unknown_tables = sorted(t for t in names if t not in TABLE_SPECS)
+    unrecognized = opts["stats"].get("unrecognized_time_values", 0)
     summary = {
         "tool": "dbsnap_pair",
         "a": os.path.abspath(a_dir), "b": os.path.abspath(b_dir),
         "options": {"key_mode": key_mode, "time_mode": time_mode,
                     "null_token": null_token,
                     "ignore_columns": sorted(ignore_columns),
+                    "allow_unknown_table": bool(allow_unknown_table),
                     "baseline_a": os.path.abspath(baseline_a) if baseline_a else None,
                     "baseline_b": os.path.abspath(baseline_b) if baseline_b else None},
         "tables": per_table,
         "diff_counts": counts,
         "diff_records": len(records),
         "red": red,
+        # 低层行为显式登记：未登记表（仅在 --allow-unknown-table 下放行）
+        # 与 normalized 下无法识别、按 exact 比较的时间值数量。
+        "unknown_tables": unknown_tables,
+        "unknown_table_policy": ("allowed（仅 multiset 可比的表见 diff）"
+                                 if allow_unknown_table and unknown_tables else ""),
+        "unrecognized_time_values": unrecognized,
     }
     if not quiet:
         for fq in names:
             n = per_table.get(fq, 0)
             print("%-8s %s (%d)" % ("DIFF" if n else "OK", fq, n))
+        if unrecognized:
+            print("NOTE: normalized 下有 %d 个时间值无法识别格式，已按 exact 比较"
+                  % unrecognized)
+        if unknown_tables and allow_unknown_table:
+            print("NOTE: --allow-unknown-table 放行未登记表 %s（摘要已标注）"
+                  % ", ".join(unknown_tables))
         if red:
             print("RED: %d 差异记录（%s）" % (len(records), counts))
         else:
@@ -618,8 +775,16 @@ def write_jsonl(path, records):
 # ---------------------------------------------------------------------------
 # selftest：全离线合成快照
 # ---------------------------------------------------------------------------
+def _prefixed(rows, prefix):
+    """把 {mir2_db.characters: rows} 改写成 {<prefix>.characters: rows}（模拟克隆库）。"""
+    out = {}
+    for fq, vals in rows.items():
+        out["%s.%s" % (prefix, fq.rpartition(".")[2])] = vals
+    return out
+
+
 def _synth_row(fq, overrides=None):
-    spec = TABLE_SPECS[fq]
+    spec = TABLE_SPECS[canonical_table_name(fq)]
     row = []
     for c in spec["columns"]:
         if c == "ChrName":
@@ -637,11 +802,15 @@ def _synth_row(fq, overrides=None):
 
 
 def write_snapshot(d, tables_rows):
-    """tables_rows: {fq: [[str,...], ...]}，列按 TABLE_SPECS 登记序。"""
+    """tables_rows: {fq: [[str,...], ...]}，列按 TABLE_SPECS 登记序。
+
+    fq 可带任意库前缀（模拟 E1 的 mir2_test_db_oracle/rust 克隆）；列结构按归一后
+    的登记表取。
+    """
     os.makedirs(d, exist_ok=True)
     man = {"tool": "dbsnap", "tables": []}
     for fq, rows in tables_rows.items():
-        spec = TABLE_SPECS[fq]
+        spec = TABLE_SPECS[canonical_table_name(fq)]
         lines = [("\t".join(r) + "\n").encode("latin-1") for r in rows]
         name = fq + ".tsv"
         path = os.path.join(d, name)
@@ -659,7 +828,12 @@ def _find_scoped_diff():
     here = os.path.dirname(os.path.abspath(__file__))
     cand = os.path.normpath(os.path.join(
         here, "..", "..", "mir2-rs", "tests", "parity", "m3", "scoped_diff.py"))
-    return cand if os.path.exists(cand) else None
+    if os.path.exists(cand):
+        return cand
+    print("NOTE: check-spec 未找到 %s；表登记漂移对账被跳过（本工具仍可独立运行）。"
+          "若该文件被移动，请同步更新 dbsnap_pair._find_scoped_diff 的路径。" % cand,
+          file=sys.stderr)
+    return None
 
 
 def check_spec_drift():
@@ -826,6 +1000,129 @@ def cmd_selftest(args):
         print("%s %-42s rc=%d kinds=%s" % ("PASS" if case_ok else "FAIL",
                                            "changed_mismatch_red", rc, sorted(kinds)))
 
+        # 两侧仅库前缀不同（E1 克隆 mir2_test_db_oracle/rust）也必须能对齐比较。
+        prefix_a = os.path.join(tmp, "prefix-a")
+        prefix_b = os.path.join(tmp, "prefix-b")
+        write_snapshot(prefix_a, _prefixed(rows, "mir2_test_db_oracle"))
+        write_snapshot(prefix_b, _prefixed(rows, "mir2_test_db_rust"))
+        rc, recs = _run_rc(prefix_a, prefix_b)
+        case_ok = (rc == 0 and not recs)
+        passed += 1 if case_ok else 0
+        failed += 0 if case_ok else 1
+        print("%s %-42s rc=%d recs=%s" % ("PASS" if case_ok else "FAIL",
+                                          "prefix_only_diff_green", rc, recs[:2]))
+
+        # require-tables 必须进入比较集（收窄 --tables 时也不能被跳过）。
+        req_changed = os.path.join(tmp, "require-items-changed")
+        write_snapshot(req_changed, rows)
+        change_cell("mir2_db.characters_item", "Position", "9")(req_changed)
+        rc, recs = _run_rc(base, req_changed, tables=["mir2_db.characters"],
+                           require_tables=["mir2_db.characters_item"])
+        hit = any(r.get("table") == "mir2_db.characters_item" and r.get("column") == "Position"
+                  for r in recs)
+        case_ok = (rc == 1 and hit)
+        passed += 1 if case_ok else 0
+        failed += 0 if case_ok else 1
+        print("%s %-42s rc=%d kinds=%s" % ("PASS" if case_ok else "FAIL",
+                                           "require_table_compared_red", rc,
+                                           sorted({r.get("kind") for r in recs})))
+
+        # C3 时间列：changed 行的 after 必须**严格晚于** before（相等也红）。
+        def changed_time_case(label, after_overrides, want_rc):
+            nonlocal passed, failed
+            d = os.path.join(tmp, label)
+            if os.path.exists(d):
+                shutil.rmtree(d)
+            write_snapshot(d, rows)
+            change_cell("mir2_db.characters", "Level", "9")(d)
+            for col, value in after_overrides.items():
+                change_cell("mir2_db.characters", col, value)(d)
+            rc, recs = _run_rc(d, d, baseline_a=base, baseline_b=base)
+            kinds = {r.get("kind") for r in recs}
+            ok = rc == want_rc and (want_rc == 0 or "time_not_later" in kinds)
+            passed += 1 if ok else 0
+            failed += 0 if ok else 1
+            print("%s %-42s rc=%d kinds=%s" % ("PASS" if ok else "FAIL",
+                                               label, rc, sorted(kinds)))
+
+        # CREATEDATE/LASTUPDATE 都推进 1 秒 => 绿；相等/回退 => time_not_later 红。
+        changed_time_case("changed_time_later_green",
+                          {"CREATEDATE": "2026-10-20 12:00:01.000000",
+                           "LASTUPDATE": "2026-10-20 12:00:01.000000"}, 0)
+        changed_time_case("changed_time_equal_red", {}, 1)
+        changed_time_case("changed_time_earlier_red",
+                          {"CREATEDATE": "2026-10-20 11:59:59.000000",
+                           "LASTUPDATE": "2026-10-20 11:59:59.000000"}, 1)
+
+        # unix 秒时间列（account.CreateTime/LastLoginTime）按整数比较。
+        unix_before = {"mir2_account.account": [_synth_row(
+            "mir2_account.account",
+            {"Id": "1", "CreateTime": "1700000000", "LastLoginTime": "1700000000"})]}
+        unix_base = os.path.join(tmp, "unix-base")
+        write_snapshot(unix_base, unix_before)
+
+        def unix_case(label, after_ts, want_rc, extra=None):
+            nonlocal passed, failed
+            d = os.path.join(tmp, label)
+            after = {"mir2_account.account": [_synth_row(
+                "mir2_account.account",
+                {"Id": "1", "CreateTime": after_ts, "LastLoginTime": after_ts})]}
+            if extra:
+                after["mir2_account.account"][0] = _synth_row(
+                    "mir2_account.account",
+                    dict({"Id": "1", "CreateTime": after_ts,
+                          "LastLoginTime": after_ts}, **extra))
+            write_snapshot(d, after)
+            rc, recs = _run_rc(d, d, baseline_a=unix_base, baseline_b=unix_base,
+                               tables=["mir2_account.account"],
+                               ignore_columns=["ValidFrom", "ValidUntil",
+                                               "StopUntil", "ModifyTime"])
+            kinds = {r.get("kind") for r in recs}
+            ok = rc == want_rc and (want_rc == 0 or "time_not_later" in kinds)
+            passed += 1 if ok else 0
+            failed += 0 if ok else 1
+            print("%s %-42s rc=%d kinds=%s" % ("PASS" if ok else "FAIL",
+                                               label, rc, sorted(kinds)))
+
+        unix_case("changed_unix_time_later_green", "1700000001", 0)
+        unix_case("changed_unix_time_equal_red", "1700000000", 1,
+                  extra={"PassWord": "x"})
+        unix_case("changed_unix_time_earlier_red", "1699999999", 1)
+
+        # changed 模式的 before 也必须做同一套校验：篡改/列序反序都必红。
+        before_tamper = os.path.join(tmp, "before-tamper")
+        shutil.copytree(base, before_tamper)
+        with open(os.path.join(before_tamper, "mir2_db.characters.tsv"), "ab") as f:
+            f.write(b"\t9\n")
+        rc, recs = _run_rc(base, base, baseline_a=before_tamper, baseline_b=base)
+        hit = any(r.get("kind") == "tamper" and r.get("side") == "a_before"
+                  for r in recs)
+        case_ok = (rc == 1 and hit)
+        passed += 1 if case_ok else 0
+        failed += 0 if case_ok else 1
+        print("%s %-42s rc=%d kinds=%s" % ("PASS" if case_ok else "FAIL",
+                                           "before_tamper_red", rc,
+                                           sorted({r.get("kind") for r in recs})))
+
+        before_rev = os.path.join(tmp, "before-columns-reversed")
+        shutil.copytree(base, before_rev)
+        man_path = os.path.join(before_rev, "manifest.json")
+        man = json.load(open(man_path, encoding="utf-8"))
+        for t in man["tables"]:
+            if t["table"] == "mir2_db.characters":
+                t["columns"] = list(reversed(t["columns"]))
+        json.dump(man, open(man_path, "w", encoding="utf-8", newline="\n"),
+                  ensure_ascii=False, indent=2)
+        rc, recs = _run_rc(base, base, baseline_a=before_rev, baseline_b=base)
+        hit = any(r.get("kind") == "schema" and r.get("side") == "a_before"
+                  for r in recs)
+        case_ok = (rc == 1 and hit)
+        passed += 1 if case_ok else 0
+        failed += 0 if case_ok else 1
+        print("%s %-42s rc=%d kinds=%s" % ("PASS" if case_ok else "FAIL",
+                                           "before_columns_reversed_red", rc,
+                                           sorted({r.get("kind") for r in recs})))
+
         # require-tables 缺失必须红。
         rc, recs = _run_rc(base, base, require_tables=["mir2_db.characters_magic"])
         kinds = {r.get("kind") for r in recs}
@@ -834,6 +1131,42 @@ def cmd_selftest(args):
         failed += 0 if case_ok else 1
         print("%s %-42s rc=%d kinds=%s" % ("PASS" if case_ok else "FAIL",
                                            "missing_required_table_red", rc, sorted(kinds)))
+
+        # 低层行为：normalized 无法识别的时间值要计数；--allow-unknown-table
+        # 必须在摘要里显式标注。
+        weird = os.path.join(tmp, "unrecognized-time")
+        write_snapshot(weird, rows)
+        change_cell("mir2_db.characters", "LASTUPDATE", "not-a-time")(weird)
+        rc, recs, summary = run_pair(base, weird, quiet=True, time_mode="normalized")
+        ok = rc == 1 and summary.get("unrecognized_time_values", 0) >= 1
+        passed += 1 if ok else 0
+        failed += 0 if ok else 1
+        print("%s %-42s count=%s" % ("PASS" if ok else "FAIL",
+                                     "normalized_unrecognized_counted",
+                                     summary.get("unrecognized_time_values")))
+
+        unknown_dir = os.path.join(tmp, "unknown-table")
+        write_snapshot(unknown_dir, rows)
+        extra_name = "custom.extra.tsv"
+        extra_path = os.path.join(unknown_dir, extra_name)
+        with open(extra_path, "wb") as f:
+            f.write(b"1" + bytes([10]))
+        man_path2 = os.path.join(unknown_dir, "manifest.json")
+        man2 = json.load(open(man_path2, encoding="utf-8"))
+        man2["tables"].append({"table": "custom.extra", "rows": 1,
+                               "sha256": sha256_file(extra_path), "file": extra_name,
+                               "columns": [{"name": "Id", "type": "text"}]})
+        json.dump(man2, open(man_path2, "w", encoding="utf-8", newline="\n"),
+                  ensure_ascii=False, indent=2)
+        rc, recs, summary = run_pair(unknown_dir, unknown_dir, quiet=True,
+                                     allow_unknown_table=True, key_mode="multiset")
+        ok = (rc == 0 and summary.get("unknown_tables") == ["custom.extra"]
+              and "allowed" in summary.get("unknown_table_policy", ""))
+        passed += 1 if ok else 0
+        failed += 0 if ok else 1
+        print("%s %-42s rc=%d unknown=%s" % ("PASS" if ok else "FAIL",
+                                             "allow_unknown_table_annotated", rc,
+                                             summary.get("unknown_tables")))
 
         drift = check_spec_drift()
         if drift and not drift[0].startswith("SKIP"):

@@ -19,7 +19,10 @@ LB-10（审计 `audit-dbsrv-persistence-20261020.md`）要求 `CM_NEWCHR` / `CM_
 - **本脚本自身不写数据库**；`run` 只调用调用方给的 `--driver-cmd`，并调用 dbsnap 做
   **只读**快照。`snap` / `run` 的库名必须匹配 `mir2_test_*`（`test` 是 `mir2_test_db`
   的别名），否则拒绝；显式 `--allow-db <库名>` 才放行非测试库（会在 stderr 醒目告警）。
-- `assert` / `compare` / `plan` / `selftest` 完全离线，不连 MySQL。
+- `assert` / `compare` / `plan` / `selftest` 完全离线，不连 MySQL；`assert`/`compare`
+  的表名按 run/snap 的 manifest **实际库前缀**归一（E1 克隆各跑各的也能判/比）。
+- `run` 是 fail-closed：before 快照失败立即停止且不调用驱动；驱动任一步失败或 after
+  快照失败都返回非零。落盘的 argv 会把 `--password` 脱敏为 `***`。
 - 本车道（lb10tool）不执行 `run`；真机驱动属 LB-10-E1 的 R 窗口（见 design 文档 §6.5）。
 
 规范序列（oracle 依据）
@@ -123,6 +126,13 @@ def validate_db_name(db, allow_dbs=()):
             % (db, db))
 
 
+def warn_allow_db(db, allow_dbs):
+    """--allow-db 显式放行非测试库时，在 stderr 醒目告警（文档承诺的行为）。"""
+    if db in set(allow_dbs or ()) and not TEST_DB_RE.match(db):
+        print("WARN: --allow-db 放行非测试库 %r；仅只读快照，确认不是生产库。" % db,
+              file=sys.stderr)
+
+
 def build_steps(sequence):
     return [dict(s, index=i + 1) for i, s in enumerate(SEQUENCES[sequence])]
 
@@ -198,11 +208,30 @@ def _dbsnap_cmd(args, db, out_dir, tables):
     return cmd
 
 
+def redact_argv(argv):
+    """把 argv 里的口令脱敏：`--password X` -> `--password ***`，也处理 `--password=X`。"""
+    out = []
+    redact_next = False
+    for tok in argv:
+        if redact_next:
+            out.append("***")
+            redact_next = False
+        elif tok == "--password":
+            out.append(tok)
+            redact_next = True
+        elif tok.startswith("--password="):
+            out.append("--password=***")
+        else:
+            out.append(tok)
+    return out
+
+
 def take_snapshot(args, db, out_dir, tables):
     os.makedirs(os.path.dirname(out_dir) or ".", exist_ok=True)
     cmd = _dbsnap_cmd(args, db, out_dir, tables)
     r = subprocess.run(cmd, capture_output=True, text=True)
-    return {"cmd": cmd, "rc": r.returncode,
+    # run.json/stdout 不得出现明文口令（argv 脱敏后再落盘）。
+    return {"cmd": redact_argv(cmd), "rc": r.returncode,
             "stdout": (r.stdout or "")[-2000:], "stderr": (r.stderr or "")[-2000:]}
 
 
@@ -212,24 +241,46 @@ def cmd_snap(args):
     if err:
         print("RED: %s" % err, file=sys.stderr)
         return 2
+    warn_allow_db(db, args.allow_db)
     tables = [t.strip() for t in args.tables.split(",") if t.strip()]
     res = take_snapshot(args, db, args.out, tables)
     print(json.dumps(res, ensure_ascii=False, indent=2))
     return 0 if res["rc"] == 0 else res["rc"]
 
 
+def _strip_quotes(tok):
+    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in ("'", '"'):
+        return tok[1:-1]
+    return tok
+
+
 def _driver_argv(template, step, account, name, db):
+    """解析驱动命令模板。
+
+    Windows 下 `posix=True` 会把 `C:/path/python.exe` 的反斜杠当转义符打坏
+    （Medium：`shlex.split(posix=True)` 缺陷）。这里统一用 `posix=False` 保留反斜杠，
+    再剥掉成对引号；含空格的路径必须用引号包住。
+    """
     fmt = {"step": step, "account": account, "name": name, "db": db}
-    parts = shlex.split(template, posix=True)
-    return [p.format(**fmt) for p in parts]
+    try:
+        parts = shlex.split(template, posix=False)
+    except ValueError as e:
+        raise ValueError("--driver-cmd 无法解析（含空格的路径请整体加引号）：%s" % e)
+    return [_strip_quotes(p).format(**fmt) for p in parts]
 
 
 def cmd_run(args):
+    """编排一次 run：before 快照 -> 驱动序列 -> after 快照。
+
+    fail-closed：before 快照失败立即停止且**不调用驱动**；任一驱动步骤非零、
+    或 after 快照失败，整体返回非零（旧实现把这些都吞成 0，属 fail-open）。
+    """
     db = resolve_db(args.db)
     err = validate_db_name(db, args.allow_db)
     if err:
         print("RED: %s" % err, file=sys.stderr)
         return 2
+    warn_allow_db(db, args.allow_db)
     if not args.driver_cmd:
         print("RED: run 需要 --driver-cmd（外部驱动；本脚本不起服务端/客户端）", file=sys.stderr)
         return 2
@@ -237,6 +288,7 @@ def cmd_run(args):
     before_dir = os.path.join(args.out, "before")
     after_dir = os.path.join(args.out, "after")
     tables = [t.strip() for t in args.tables.split(",") if t.strip()]
+    steps = build_steps(args.sequence)
     run = {
         "tool": "newchr_delchr_selchr_probe", "mode": "run",
         "db": db, "account": args.account, "chr_name": args.name,
@@ -245,36 +297,64 @@ def cmd_run(args):
         "steps": [], "before_snapshot": "before", "after_snapshot": "after",
     }
     run["before"] = take_snapshot(args, db, before_dir, tables)
+    before_rc = run["before"]["rc"]
     aborted = False
-    for st in build_steps(args.sequence):
-        if aborted:
+    step_failures = 0
+
+    if before_rc != 0:
+        # 驱动会写库；before 基线不可用时必须立刻停，不能带着未知前态去写。
+        aborted = True
+        run["aborted_reason"] = "before_snapshot_failed"
+        for st in steps:
             run["steps"].append({**st, "rc": None, "skipped": True})
-            continue
-        if st["delay_before_ms"]:
-            time.sleep(st["delay_before_ms"] / 1000.0)
-        env = dict(os.environ, PROBE_STEP=st["step"], PROBE_ACCOUNT=args.account,
-                   PROBE_NAME=args.name, PROBE_DB=db)
-        body = ""
-        try:
-            argv = _driver_argv(args.driver_cmd, st["step"], args.account, args.name, db)
-            r = subprocess.run(argv, capture_output=True, text=True, env=env, timeout=args.timeout)
-            rc = r.returncode
-            body = (r.stdout or "") + (r.stderr or "")
-        except subprocess.TimeoutExpired:
-            rc = 124
-            body = "TIMEOUT after %ss" % args.timeout
-        except OSError as e:
-            rc = 127
-            body = "spawn failed: %s" % e
-        run["steps"].append({**st, "rc": rc, "output_tail": body[-2000:]})
-        if rc != 0 and args.stop_on_fail:
-            aborted = True
-    run["after"] = take_snapshot(args, db, after_dir, tables)
+        run["after"] = None
+    else:
+        for st in steps:
+            if aborted:
+                run["steps"].append({**st, "rc": None, "skipped": True})
+                continue
+            if st["delay_before_ms"]:
+                time.sleep(st["delay_before_ms"] / 1000.0)
+            env = dict(os.environ, PROBE_STEP=st["step"], PROBE_ACCOUNT=args.account,
+                       PROBE_NAME=args.name, PROBE_DB=db)
+            body = ""
+            try:
+                argv = _driver_argv(args.driver_cmd, st["step"], args.account,
+                                    args.name, db)
+                r = subprocess.run(argv, capture_output=True, text=True, env=env,
+                                   timeout=args.timeout)
+                rc = r.returncode
+                body = (r.stdout or "") + (r.stderr or "")
+            except subprocess.TimeoutExpired:
+                rc = 124
+                body = "TIMEOUT after %ss" % args.timeout
+            except ValueError as e:
+                rc = 2
+                body = "driver-cmd parse failed: %s" % e
+            except OSError as e:
+                rc = 127
+                body = "spawn failed: %s" % e
+            run["steps"].append({**st, "rc": rc, "output_tail": body[-2000:]})
+            if rc != 0:
+                step_failures += 1
+                if args.stop_on_fail:
+                    aborted = True
+                    run["aborted_reason"] = "driver_step_failed"
+        run["after"] = take_snapshot(args, db, after_dir, tables)
+        if run["after"]["rc"] != 0:
+            run["aborted_reason"] = "after_snapshot_failed"
+    after_rc = run["after"]["rc"] if run["after"] else None
+    run["ok"] = (before_rc == 0 and after_rc == 0 and step_failures == 0)
+    run["failures"] = {"before_snapshot_rc": before_rc,
+                       "driver_failed_steps": step_failures,
+                       "after_snapshot_rc": after_rc}
     run["finished_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    with open(os.path.join(args.out, "run.json"), "w", encoding="utf-8", newline="\n") as f:
+    with open(os.path.join(args.out, "run.json"), "w", encoding="utf-8",
+              newline="\n") as f:
         json.dump(run, f, ensure_ascii=False, indent=2)
-    print("RUN -> %s（steps=%d, aborted=%s）" % (args.out, len(run["steps"]), aborted))
-    return 0
+    print("RUN -> %s（steps=%d, aborted=%s, ok=%s）"
+          % (args.out, len(run["steps"]), aborted, run["ok"]))
+    return 0 if run["ok"] else 1
 
 
 class AssertError(Exception):
@@ -407,8 +487,17 @@ def cmd_assert(args):
 def cmd_compare(args):
     a_snap = os.path.join(args.a, "after") if os.path.isdir(os.path.join(args.a, "after")) else args.a
     b_snap = os.path.join(args.b, "after") if os.path.isdir(os.path.join(args.b, "after")) else args.b
-    tables = [t.strip() for t in args.tables.split(",") if t.strip()] or list(LB10_TABLES)
+    # 表名从 run/snap 的 manifest 实际前缀归一（E1 克隆各跑各的也能比）。
+    tables = [dp.canonical_table_name(t.strip())
+              for t in args.tables.split(",") if t.strip()] or list(LB10_TABLES)
     ignore = [c.strip() for c in (args.ignore_columns or "").split(",") if c.strip()]
+    if args.ignore_time_columns:
+        expanded = set(ignore)
+        for t in tables:
+            spec = dp.TABLE_SPECS.get(t)
+            if spec:
+                expanded.update(spec["time_columns"])
+        ignore = sorted(expanded)
     try:
         rc, records, summary = dp.run_pair(
             a_snap, b_snap, tables=tables, require_tables=tables,
@@ -466,13 +555,15 @@ def _fixture_rows(name="Hero", account="acct1", is_deleted="0", select_id="0",
     return r
 
 
-def write_fake_run(d, sequence, rows, step_rcs=None, name="Hero", account="acct1"):
+def write_fake_run(d, sequence, rows, step_rcs=None, name="Hero", account="acct1",
+                   prefix=None):
     os.makedirs(d, exist_ok=True)
     dp.write_snapshot(os.path.join(d, "after"), rows)
     steps = []
     for st in build_steps(sequence):
         steps.append({**st, "rc": (step_rcs or {}).get(st["step"], 0)})
-    run = {"tool": "newchr_delchr_selchr_probe", "mode": "run", "db": "mir2_test_db",
+    run = {"tool": "newchr_delchr_selchr_probe", "mode": "run",
+           "db": prefix or "mir2_test_db",
            "account": account, "chr_name": name, "sequence": sequence, "steps": steps,
            "before_snapshot": "before", "after_snapshot": "after"}
     with open(os.path.join(d, "run.json"), "w", encoding="utf-8", newline="\n") as f:
@@ -559,13 +650,128 @@ def cmd_selftest(args):
         report("db_guard_allow_db_ok",
                validate_db_name("mir2_db", ["mir2_db"]) is None)
 
-        # 5) 快照表名必须重定到目标库（--db 是测试克隆时绝不能读 mir2_db）
+        # 5) 两份 run 目录仅库前缀不同（E1 克隆）也必须 assert/compare 绿。
+        pfx_o = os.path.join(tmp, "run-prefix-oracle")
+        pfx_r = os.path.join(tmp, "run-prefix-rust")
+        write_fake_run(pfx_o, "create",
+                       dp._prefixed(_fixture_rows(select_id="1"),
+                                    "mir2_test_db_oracle"),
+                       prefix="mir2_test_db_oracle")
+        write_fake_run(pfx_r, "create",
+                       dp._prefixed(_fixture_rows(select_id="1"),
+                                    "mir2_test_db_rust"),
+                       prefix="mir2_test_db_rust")
+        rc_o, checks_o = _assert_rc(pfx_o)
+        rc_r, checks_r = _assert_rc(pfx_r)
+        report("assert_prefix_only_green", rc_o == 0 and rc_r == 0,
+               "rc=%d/%d" % (rc_o, rc_r))
+        rc, recs, _ = dp.run_pair(os.path.join(pfx_o, "after"),
+                                  os.path.join(pfx_r, "after"),
+                                  tables=list(LB10_TABLES),
+                                  require_tables=list(LB10_TABLES), quiet=True)
+        report("compare_prefix_only_green", rc == 0 and not recs,
+               "rc=%d recs=%s" % (rc, recs[:1]))
+
+        # 6) run 必须 fail-closed：before 快照失败不跑驱动；驱动/after 失败非零。
+        orig_sleep = time.sleep
+        time.sleep = lambda _s: None  # 自检不等待 oracle 限频
+        try:
+            python = sys.executable
+
+            def _stub_run(label, dbsnap_src, driver_rc, env_extra=None):
+                d = os.path.join(tmp, label)
+                dbsnap = os.path.join(tmp, label + "-dbsnap.py")
+                driver = os.path.join(tmp, label + "-driver.py")
+                marker = os.path.join(tmp, label + "-driver-called")
+                with open(dbsnap, "w", encoding="utf-8") as f:
+                    f.write(dbsnap_src)
+                driver_src = "import os,sys" + chr(10)
+                driver_src += "open(os.environ['PROBE_TEST_MARK'],'w').write('called')"
+                driver_src += chr(10) + "sys.exit(%d)" % driver_rc + chr(10)
+                with open(driver, "w", encoding="utf-8") as f:
+                    f.write(driver_src)
+                args = build_parser().parse_args([
+                    "run", "--db", "mir2_test_db", "--sequence", "create",
+                    "--account", "acct1", "--name", "Hero", "--out", d,
+                    "--dbsnap", dbsnap,
+                    "--driver-cmd", "%s %s --step {step}" % (python, driver),
+                ])
+                old_mark = os.environ.get("PROBE_TEST_MARK")
+                os.environ["PROBE_TEST_MARK"] = marker
+                extra = env_extra or {}
+                old_extra = {k: os.environ.get(k) for k in extra}
+                os.environ.update(extra)
+                try:
+                    rc = cmd_run(args)
+                finally:
+                    if old_mark is None:
+                        os.environ.pop("PROBE_TEST_MARK", None)
+                    else:
+                        os.environ["PROBE_TEST_MARK"] = old_mark
+                    for k, v in old_extra.items():
+                        if v is None:
+                            os.environ.pop(k, None)
+                        else:
+                            os.environ[k] = v
+                return rc, marker, d
+
+            fail_snap = "import sys" + chr(10) + "sys.exit(2)" + chr(10)
+            ok_snap = "import sys" + chr(10) + "sys.exit(0)" + chr(10)
+            rc, marker, d = _stub_run("run-before-fail", fail_snap, 1)
+            run_json = json.load(open(os.path.join(d, "run.json"), encoding="utf-8"))
+            report("run_before_snapshot_fail_closed",
+                   rc != 0 and not os.path.exists(marker) and
+                   run_json.get("failures", {}).get("before_snapshot_rc") == 2,
+                   "rc=%d driver_called=%s" % (rc, os.path.exists(marker)))
+
+            rc, marker, d = _stub_run("run-driver-fail", ok_snap, 1)
+            run_json = json.load(open(os.path.join(d, "run.json"), encoding="utf-8"))
+            report("run_driver_fail_nonzero",
+                   rc != 0 and os.path.exists(marker) and
+                   run_json.get("failures", {}).get("driver_failed_steps", 0) >= 1,
+                   "rc=%d" % rc)
+
+            fail_second = "import os,sys" + chr(10)
+            fail_second += "p=os.environ['PROBE_TEST_COUNT']" + chr(10)
+            fail_second += "n=int(open(p).read()) if os.path.exists(p) else 0" + chr(10)
+            fail_second += "open(p,'w').write(str(n+1))" + chr(10)
+            fail_second += "sys.exit(0 if n==0 else 2)" + chr(10)
+            count = os.path.join(tmp, "run-after-fail-count")
+            rc, marker, d = _stub_run("run-after-fail", fail_second, 0,
+                                      env_extra={"PROBE_TEST_COUNT": count})
+            run_json = json.load(open(os.path.join(d, "run.json"), encoding="utf-8"))
+            report("run_after_snapshot_fail_nonzero",
+                   rc != 0 and
+                   run_json.get("failures", {}).get("after_snapshot_rc") == 2,
+                   "rc=%d" % rc)
+        finally:
+            time.sleep = orig_sleep
+
+        # 7) 口令脱敏与 Windows 反斜杠驱动命令
+        red = redact_argv(["--user", "root", "--password", "s3cret", "snap"])
+        report("snapshot_argv_password_redacted",
+               "s3cret" not in red and "***" in red, str(red))
+        path = "C:" + chr(92) + "Program Files" + chr(92) + "py" + chr(92) + "python.exe"
+        argv = _driver_argv('"%s" -m drv --step {step}' % path, "NEWCHR",
+                            "acct1", "Hero", "mir2_test_db")
+        report("driver_cmd_backslash_preserved",
+               argv[0] == path and argv[1] == "-m" and argv[-1] == "NEWCHR", str(argv))
+
+        # 8) --allow-db 必须在 stderr 告警
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            warn_allow_db("mir2_db", ["mir2_db"])
+        report("allow_db_warning", "WARN" in buf.getvalue(), buf.getvalue().strip())
+
+        # 9) 快照表名必须重定到目标库（--db 是测试克隆时绝不能读 mir2_db）
         rt = retarget_tables(["mir2_db.characters", "mir2_db.characters_item"],
                              "mir2_test_db")
         report("snapshot_tables_retargeted",
                rt == ["mir2_test_db.characters", "mir2_test_db.characters_item"], str(rt))
 
-        # 6) plan 的限频延迟必须是 oracle 口径（NEWCHR/DELCHR > 1000ms）
+        # 10) plan 的限频延迟必须是 oracle 口径（NEWCHR/DELCHR > 1000ms）
         plan_ok = True
         for seq in ("create", "delete"):
             for st in build_steps(seq):
@@ -632,8 +838,12 @@ def build_parser():
     c.add_argument("--tables", default=",".join(LB10_TABLES))
     c.add_argument("--key-mode", choices=["pk", "multiset"], default="pk")
     c.add_argument("--time-mode", choices=["exact", "presence", "normalized"],
-                   default="exact")
+                   default="normalized",
+                   help="默认 normalized；S1 建角两侧墙钟不同，需配合 "
+                        "--ignore-time-columns 才可绿")
     c.add_argument("--ignore-columns", default="")
+    c.add_argument("--ignore-time-columns", action="store_true",
+                   help="忽略所比表的全部已登记时间列（S1 跨实现比对用）")
     c.add_argument("--jsonl", default="", help="差异 JSONL（- = stdout；默认不输出）")
     c.add_argument("--summary-out")
     c.add_argument("--quiet", action="store_true")
