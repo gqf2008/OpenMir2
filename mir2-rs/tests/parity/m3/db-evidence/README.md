@@ -33,8 +33,14 @@ python tools/db-parity/newchr_delchr_selchr_probe.py run --db mir2_test_db_rust 
 # S1 库后态断言（C5 的库后态部分）与逐字段 diff（C3）
 python tools/db-parity/newchr_delchr_selchr_probe.py assert --run-dir E:/tmp/w1/run-oracle
 python tools/db-parity/newchr_delchr_selchr_probe.py assert --run-dir E:/tmp/w1/run-rust
+# compare 默认 normalized；S1 建角写 now() 的 5 个时间列，跨实现必须显式忽略
+# 已登记时间列才可绿；随机建角夹具（BotSrv Random）还需忽略 Hair/Sex/Job。
+# 自增 Id/PlayerId 仅在「同一基线 + 同一夹具序列」下可对齐，否则按 --key-mode
+# multiset 并在报告登记「身份列未比较」。
 python tools/db-parity/newchr_delchr_selchr_probe.py compare \
   --a E:/tmp/w1/run-oracle --b E:/tmp/w1/run-rust \
+  --time-mode normalized --ignore-time-columns \
+  --ignore-columns Id,PlayerId,Hair,Sex,Job \
   --summary-out E:/tmp/w1/s1-cmp.json --jsonl E:/tmp/w1/s1-cmp.jsonl
 
 # S2：6000 取档/穿脱/仓库/存档（驱动由窗口卡提供）后再拍 after，做 C3 changed 模式
@@ -48,6 +54,16 @@ python tools/db-parity/dbsnap_pair.py diff \
 
 判据：`diff.jsonl` 为空且 assert 两项 GREEN；时间列按 `changed_mismatch` /
 `time_not_later` 机判，不许只写「变化了」。
+
+补充口径（工具修订）：
+
+- 两侧快照的表名会按**实际库前缀**归一（`mir2_test_db_oracle.*` / `mir2_test_db_rust.*`
+  可直接比），`--require-tables` 点名的表一定进入比较集；
+- `run` 是 fail-closed：before 快照失败时**不会调用驱动**并返回非零；驱动/after 失败同样
+  非零。窗口卡据此判断「本 run 是否有效」，不要看旧版的 0；
+- `time_not_later` 现在是**严格**判据：changed 行的 `after` 必须晚于 `before`（相等即红），
+  DATETIME 与 unix 秒都支持。oracle 不重写的时间列（如 `characters.CREATEDATE`）应在命令
+  里用 `--ignore-columns CREATEDATE` 显式排除并在报告登记理由，不能默认放过。
 
 ## 2. W-DB-2 故障矩阵（S3，C1/C3/C5/C7）
 
