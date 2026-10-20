@@ -53,7 +53,19 @@ check_healthspellchanged_trigger / aoi_visibility_pair / s2c_diff）只判计数
      "match":{"dir":"s2c"},"window_ms":1000,"max_count":50}
   ]}
 
-退出码：0 GREEN / 1 RED / 2 PREREQ_MISSING（缺文件/JSON 坏/规则非法/帧缺 ts_ms）。
+内置规则预设（C10#3；`--preset NAME`，可重复，`all` = 全部四条）：
+  cadence-1.2s       玩家 `SearchViewRange` 节拍（SearchTime=1000ms，200ms tick ⇒ ≈1200ms）
+  verify-maptime-30s `VerifyMapTime` 30s 门（严格 `>30s`，200ms tick ⇒ 30000..30400ms）
+  delaymagic-600ms   `RM_DELAYMAGIC` 600ms 延时投递（到点 tick ⇒ 600..800ms）
+  corpse-3min        `MakeGhostTime` 180s 尸体变鬼（严格 `>180s` ⇒ 180001..180200ms）
+  四条预设都要求**服务端事件流**：capture.jsonl 每行需带整数 `ts_ms` 与 `event` 字段，
+  事件名分别为 `search_view_range` / `verify_map_time` / `delay_magic_schedule` /
+  `delay_magic_fire` / `death` / `make_ghost`；`--preset-var actor=<id>` 注入 `actor` 过滤
+  （**没有 actor 过滤不许判节拍**，否则会混多个 actor 的序列）。普通 s2c capture 没有这些帧 ⇒
+  预设如实判 `UNCLOSED`（rc=3），绝不因「没采到」而 GREEN。
+
+退出码：0 GREEN / 1 RED / 2 PREREQ_MISSING（缺文件/JSON 坏/规则非法/帧缺 ts_ms/预设缺变量）/
+        3 UNCLOSED（预设的观测物不在 capture 里，判不了；不是通过）。
 `--selftest` 不依赖外部文件。
 """
 
@@ -236,6 +248,107 @@ def run_rules(rows, rules):
 
 
 # ---------------------------------------------------------------------------
+# 规则预设（C10#3）：把 1.2s / 30s / 600ms / 3min 的服务端节拍写成可复用规则。
+# 预设只声明「规则 + 观测物来源」；capture 里没有对应事件时必须判 UNCLOSED（rc=3）。
+# ---------------------------------------------------------------------------
+
+PRESETS = {
+    "cadence-1.2s": {
+        "source": "server-log",
+        "anchor": "event=search_view_range（玩家 SearchViewRange；SearchTime=1000ms，200ms tick ⇒ ≈1200ms）",
+        "requires_vars": ["actor"],
+        "rules": [
+            {"name": "player-searchviewrange-1200ms", "type": "interval",
+             "match": {"event": "search_view_range", "actor": "{{actor}}"},
+             "min_ms": 1000, "max_ms": 1400, "min_pairs": 2},
+        ],
+    },
+    "verify-maptime-30s": {
+        "source": "server-log",
+        "anchor": "event=verify_map_time（BaseObject.Run 的 `(now-VerifyTick) > 30s` 门）",
+        "requires_vars": ["actor"],
+        "rules": [
+            {"name": "verifymaptime-30s-gate", "type": "interval",
+             "match": {"event": "verify_map_time", "actor": "{{actor}}"},
+             "min_ms": 30000, "max_ms": 30400, "min_pairs": 1},
+        ],
+    },
+    "delaymagic-600ms": {
+        "source": "server-log",
+        "anchor": "event=delay_magic_schedule → delay_magic_fire（RM_DELAYMAGIC 600ms，200ms tick）",
+        "requires_vars": ["actor"],
+        "rules": [
+            {"name": "rm-delaymagic-600ms", "type": "after",
+             "from": {"event": "delay_magic_schedule", "actor": "{{actor}}"},
+             "to": {"event": "delay_magic_fire", "actor": "{{actor}}"},
+             "min_ms": 600, "max_ms": 800, "allowed_missing": 0},
+        ],
+    },
+    "corpse-3min": {
+        "source": "server-log",
+        "anchor": "event=death → make_ghost（Config.MakeGhostTime 默认 180000ms，严格 >）",
+        "requires_vars": ["actor"],
+        "rules": [
+            {"name": "makeghost-180s-gate", "type": "after",
+             "from": {"event": "death", "actor": "{{actor}}"},
+             "to": {"event": "make_ghost", "actor": "{{actor}}"},
+             "min_ms": 180001, "max_ms": 180200, "allowed_missing": 0},
+        ],
+    },
+}
+
+
+def _substitute_vars(value, variables):
+    """把过滤器里的 `{{key}}` 换掉；缺变量 ⇒ ValueError（fail-closed）。"""
+    if isinstance(value, str) and value.startswith("{{") and value.endswith("}}"):
+        key = value[2:-2]
+        if key not in variables:
+            raise ValueError("预设缺变量 %s（用 --preset-var %s=<值> 提供）" % (key, key))
+        return variables[key]
+    return value
+
+
+def expand_preset_rule(rule, variables):
+    out = json.loads(json.dumps(rule))
+    for key in ("match", "from", "to"):
+        flt = out.get(key)
+        if isinstance(flt, dict):
+            out[key] = {k: _substitute_vars(v, variables) for k, v in flt.items()}
+    return out
+
+
+def preset_anchor_count(rows, rule):
+    flt = rule.get("from") if rule.get("type") == "after" else rule.get("match")
+    return len(select(rows, flt))
+
+
+def run_preset(rows, name, variables):
+    """返回 dict：status ∈ GREEN/RED/UNCLOSED/PREREQ；failures/results/facts。"""
+    if name not in PRESETS:
+        raise ValueError("未知预设 %r（可用：%s）" % (name, ",".join(sorted(PRESETS))))
+    spec = PRESETS[name]
+    missing = [v for v in spec["requires_vars"] if v not in variables]
+    if missing:
+        return {"name": name, "status": "PREREQ", "source": spec["source"],
+                "anchor": spec["anchor"], "failures": [
+                    "预设 %s 缺变量 %s（--preset-var %s=<值>）"
+                    % (name, ",".join(missing), ",".join(missing))],
+                "results": [], "facts": {}}
+    rules = [expand_preset_rule(r, variables) for r in spec["rules"]]
+    counts = [preset_anchor_count(rows, r) for r in rules]
+    if all(c == 0 for c in counts):
+        return {"name": name, "status": "UNCLOSED", "source": spec["source"],
+                "anchor": spec["anchor"], "failures": [
+                    "UNCLOSED: 预设 %s 的观测帧 0 条（%s）—— capture 里没有服务端事件流，"
+                    "不是通过；需要服务端日志/事件导出后重判" % (name, spec["anchor"])],
+                "results": [], "facts": {"anchor_counts": counts}}
+    fails, results = run_rules(rows, rules)
+    return {"name": name, "status": ("RED" if fails else "GREEN"), "source": spec["source"],
+            "anchor": spec["anchor"], "failures": fails, "results": results,
+            "facts": {"anchor_counts": counts}}
+
+
+# ---------------------------------------------------------------------------
 # selftest：合成帧
 # ---------------------------------------------------------------------------
 
@@ -254,7 +367,7 @@ def selftest():
         nonlocal ok
         good = got == want
         ok = ok and good
-        print("%-62s %s (rc=%d, want %d)" % (name, "OK" if good else "FAIL", got, want))
+        print("%-62s %s (rc=%s, want %s)" % (name, "OK" if good else "FAIL", got, want))
 
     def rc(fails):
         return 1 if fails else 0
@@ -302,6 +415,66 @@ def selftest():
                                                    "from": {}, "to": {}}])) else 0, 1)
     expect("帧缺 ts_ms => ValueError",
            1 if _raises(lambda: run_rules([{"ident": 14, "seq": 1}], rf)) else 0, 1)
+
+    # ---- 预设（C10#3）：每条都要证明「会绿、会红、没观测物时 UNCLOSED」----
+    def ev(specs, actor=1):
+        return [{"kind": "server-event", "seq": i, "ts_ms": t, "event": name, "actor": actor}
+                for i, (t, name) in enumerate(specs)]
+
+    def pstatus(rows, name, variables):
+        return run_preset(rows, name, variables).get("status")
+
+    cad_ok = ev([(0, "search_view_range"), (1200, "search_view_range"),
+                 (2400, "search_view_range")])
+    expect("preset cadence-1.2s：1200ms ⇒ GREEN",
+           pstatus(cad_ok, "cadence-1.2s", {"actor": 1}), "GREEN")
+    cad_bad = ev([(0, "search_view_range"), (700, "search_view_range"),
+                  (1400, "search_view_range")])
+    expect("preset cadence-1.2s：700ms ⇒ RED",
+           pstatus(cad_bad, "cadence-1.2s", {"actor": 1}), "RED")
+    mixed = ev([(0, "search_view_range"), (1200, "search_view_range"),
+                (2400, "search_view_range")], actor=1) + \
+            ev([(0, "search_view_range"), (300, "search_view_range"),
+                (600, "search_view_range")], actor=2)
+    expect("preset cadence-1.2s：actor 过滤只判本人（混入 actor=2 仍 GREEN）",
+           pstatus(mixed, "cadence-1.2s", {"actor": 1}), "GREEN")
+    expect("preset cadence-1.2s：actor 过滤有牙（按 actor=2 判 ⇒ RED）",
+           pstatus(mixed, "cadence-1.2s", {"actor": 2}), "RED")
+    expect("preset 缺 actor 变量 ⇒ PREREQ（绝不默认判）",
+           pstatus(cad_ok, "cadence-1.2s", {}), "PREREQ")
+    expect("preset 在普通 s2c capture（无事件帧）⇒ UNCLOSED 而不是 GREEN",
+           pstatus(_frames([(1, 0, 53), (2, 1200, 53)]), "cadence-1.2s", {"actor": 1}),
+           "UNCLOSED")
+    expect("preset 在完全空 capture ⇒ UNCLOSED",
+           pstatus([], "cadence-1.2s", {"actor": 1}), "UNCLOSED")
+
+    ver_ok = ev([(0, "verify_map_time"), (30100, "verify_map_time")])
+    expect("preset verify-maptime-30s：30100ms ⇒ GREEN",
+           pstatus(ver_ok, "verify-maptime-30s", {"actor": 1}), "GREEN")
+    ver_bad = ev([(0, "verify_map_time"), (20000, "verify_map_time")])
+    expect("preset verify-maptime-30s：20000ms ⇒ RED",
+           pstatus(ver_bad, "verify-maptime-30s", {"actor": 1}), "RED")
+
+    dm_ok = ev([(0, "delay_magic_schedule"), (650, "delay_magic_fire")])
+    expect("preset delaymagic-600ms：650ms ⇒ GREEN",
+           pstatus(dm_ok, "delaymagic-600ms", {"actor": 1}), "GREEN")
+    dm_bad = ev([(0, "delay_magic_schedule"), (400, "delay_magic_fire")])
+    expect("preset delaymagic-600ms：400ms ⇒ RED",
+           pstatus(dm_bad, "delaymagic-600ms", {"actor": 1}), "RED")
+
+    cg_ok = ev([(0, "death"), (180100, "make_ghost")])
+    expect("preset corpse-3min：180100ms ⇒ GREEN",
+           pstatus(cg_ok, "corpse-3min", {"actor": 1}), "GREEN")
+    cg_bad = ev([(0, "death"), (100000, "make_ghost")])
+    expect("preset corpse-3min：100000ms ⇒ RED",
+           pstatus(cg_bad, "corpse-3min", {"actor": 1}), "RED")
+    expect("预设目录：四条且名字固定",
+           sorted(PRESETS.keys()),
+           sorted(["cadence-1.2s", "verify-maptime-30s", "delaymagic-600ms", "corpse-3min"]))
+    expect("预设变量替换：非占位值原样保留",
+           expand_preset_rule({"match": {"event": "x", "actor": "{{actor}}"}}, {"actor": 7})["match"],
+           {"event": "x", "actor": 7})
+
     print("SELFTEST %s" % ("GREEN" if ok else "RED"))
     return 0 if ok else 1
 
@@ -347,6 +520,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="capture.jsonl 时间戳判据（after/interval/rate）")
     ap.add_argument("--capture", default="", help="capture.jsonl")
     ap.add_argument("--config", default="", help="规则 JSON（{\"rules\":[...]}）")
+    ap.add_argument("--preset", action="append", default=[],
+                    help="内置预设名（可重复；all=四条全跑）：%s" % ",".join(sorted(PRESETS)))
+    ap.add_argument("--preset-var", action="append", default=[], metavar="KEY=VALUE",
+                    help="预设变量（如 actor=275）；数字自动转 int")
+    ap.add_argument("--list-presets", action="store_true", help="列出内置预设后退出")
     ap.add_argument("--json", action="store_true", help="JSON 输出")
     ap.add_argument("--example-config", action="store_true", help="打印规则模板后退出")
     ap.add_argument("--selftest", action="store_true")
@@ -354,14 +532,76 @@ def main(argv=None):
 
     if args.selftest:
         return selftest()
+    if args.list_presets:
+        print(json.dumps({k: {"source": v["source"], "anchor": v["anchor"],
+                              "requires_vars": v["requires_vars"]}
+                          for k, v in PRESETS.items()}, ensure_ascii=False, indent=2))
+        return 0
     if args.example_config:
         print(json.dumps(EXAMPLE_CONFIG, ensure_ascii=False, indent=2))
         return 0
 
-    if not args.capture or not args.config:
-        print("PREREQ_MISSING: 必须给 --capture 与 --config（或 --selftest）")
+    if args.preset and args.config:
+        print("PREREQ_MISSING: --config 与 --preset 不能同时给（两套口径不混用）")
         print("RESULT: PREREQ_RED")
         return 2
+    if not args.capture or (not args.config and not args.preset):
+        print("PREREQ_MISSING: 必须给 --capture 与 --config（或 --preset/--selftest）")
+        print("RESULT: PREREQ_RED")
+        return 2
+
+    if args.preset:
+        names = []
+        for item in args.preset:
+            for name in item.split(","):
+                name = name.strip()
+                if name == "all":
+                    names.extend(sorted(PRESETS.keys()))
+                elif name:
+                    names.append(name)
+        variables = {}
+        try:
+            for item in args.preset_var:
+                if "=" not in item:
+                    raise ValueError("--preset-var 必须是 KEY=VALUE：%r" % item)
+                key, value = item.split("=", 1)
+                variables[key] = int(value) if value.lstrip("-").isdigit() else value
+            rows = load_capture(args.capture)
+            reports = [run_preset(rows, name, variables) for name in names]
+        except FileNotFoundError as exc:
+            print("PREREQ_MISSING: 文件不存在 %s" % exc)
+            print("RESULT: PREREQ_RED")
+            return 2
+        except (ValueError, json.JSONDecodeError) as exc:
+            print("PREREQ_MISSING: 配置/capture 不可解析：%s" % exc)
+            print("RESULT: PREREQ_RED")
+            return 2
+        statuses = [r["status"] for r in reports]
+        if "RED" in statuses:
+            overall = "RED"
+        elif "PREREQ" in statuses:
+            overall = "PREREQ_RED"
+        elif "UNCLOSED" in statuses:
+            overall = "UNCLOSED"
+        else:
+            overall = "GREEN"
+        if args.json:
+            print(json.dumps({"capture": args.capture, "presets": reports,
+                              "result": overall}, ensure_ascii=False))
+        else:
+            print("capture=%s presets=%d" % (args.capture, len(reports)))
+            for r in reports:
+                print("[%s] %-24s source=%s" % (r["status"], r["name"], r["source"]))
+                for f in r["failures"]:
+                    print("  %s" % f)
+            print("RESULT: %s" % overall)
+        if overall == "GREEN":
+            return 0
+        if overall == "RED":
+            return 1
+        if overall == "PREREQ_RED":
+            return 2
+        return 3
     try:
         rows = load_capture(args.capture)
         with open(args.config, encoding="utf-8") as fh:
