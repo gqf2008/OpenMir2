@@ -32,6 +32,40 @@ pub fn to_upper(s: &str) -> String {
     s.chars().map(to_upper_char).collect()
 }
 
+/// .NET `string.Compare(a, b, StringComparison.OrdinalIgnoreCase)` 的**码位差**语义。
+///
+/// 实测（.NET 8，见 `guild.rs` 的 C7 矩阵）：返回**首个不同的 UTF-16 码元差**；前缀关系
+/// 时返回**码元长度差**（`ab`/`a` ⇒ 1、`a`/`ab` ⇒ -1）。大小写折叠逐码元走
+/// [`to_upper_char`]（.NET ordinal-ignore-case 的简单映射口径），不展开、不做文化相关比较。
+///
+/// `GuildState::del_human_obj_member` 用它判 `== 1`（`GuildInfo.cs:540` 的 `string.Compare(...)
+/// == 1`），与 `Ordering::Greater` 不等价（后者会把 `c/a = 2` 也当作命中）。
+#[must_use]
+pub fn dotnet_compare_ordinal_ignore_case(a: &str, b: &str) -> i32 {
+    let au: Vec<u16> = a.encode_utf16().collect();
+    let bu: Vec<u16> = b.encode_utf16().collect();
+    let n = au.len().min(bu.len());
+    for i in 0..n {
+        let x = upper_code_unit(au[i]);
+        let y = upper_code_unit(bu[i]);
+        if x != y {
+            return i32::from(x) - i32::from(y);
+        }
+    }
+    i32::try_from(au.len()).unwrap_or(i32::MAX) - i32::try_from(bu.len()).unwrap_or(i32::MAX)
+}
+
+/// 单个 UTF-16 码元的大小写折叠；代理项（不可单独成 `char`）原样返回。
+fn upper_code_unit(u: u16) -> u16 {
+    match char::decode_utf16([u]).next() {
+        Some(Ok(c)) => {
+            let mut buf = [0u16; 2];
+            to_upper_char(c).encode_utf16(&mut buf)[0]
+        }
+        _ => u,
+    }
+}
+
 /// `HUtil32.StrToInt`：`int.TryParse(str, out result) ? result : def`。
 /// .NET `int.TryParse` 默认允许前后空白与前导符号，溢出/含杂质失败。
 pub fn str_to_int(s: &str, def: i32) -> i32 {
@@ -297,6 +331,26 @@ mod tests {
         );
         assert_eq!(get_valid_str3("", &[' ']), (String::new(), String::new()));
         assert_eq!(get_valid_str3("a b c", &[' ']), ("a".into(), "b c".into()));
+    }
+
+    /// C7 矩阵：.NET 8 的 `string.Compare(..., OrdinalIgnoreCase)` 返回**码位差**。
+    /// 牙：改成 `Ordering::Greater`/`== 0`、去掉长度分支 ⇒ 对应行必红。
+    #[test]
+    fn dotnet_compare_ordinal_ignore_case_c7_matrix() {
+        let cmp = dotnet_compare_ordinal_ignore_case;
+        assert_eq!(cmp("b", "a"), 1);
+        assert_eq!(cmp("c", "a"), 2);
+        assert_eq!(cmp("z", "a"), 25);
+        assert_eq!(cmp("ab", "a"), 1, "前缀：码元长度差");
+        assert_eq!(cmp("a", "ab"), -1);
+        assert_eq!(cmp("B", "a"), 1, "大小写折叠");
+        assert_eq!(cmp("丁", "一"), 1);
+        assert_eq!(cmp("中", "一"), 45);
+        assert_eq!(cmp("会乙", "会甲"), -9945);
+        assert_eq!(cmp("b", "b"), 0);
+        // `DelHumanObj` 的空槽口径：`Compare("", name) = -len ≠ 1`。
+        assert_ne!(cmp("", "a"), 1);
+        assert_eq!(cmp("", ""), 0);
     }
 
     #[test]

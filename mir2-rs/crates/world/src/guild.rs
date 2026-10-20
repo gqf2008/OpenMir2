@@ -18,7 +18,7 @@
 //! | [`GuildState::add_war_guild`] | `GuildInfo.cs:1020-1056`（**N2**：条件反置 ⇒ 未战不生效 / 已战追加重复） |
 //! | [`GuildState::end_guild_war`] | `GuildInfo.cs:1058-1061` |
 //! | [`GuildState::check_save_guild_file`] | `GuildInfo.cs:525-533`（`BoChanged && >30s` ⇒ 落盘） |
-//! | [`GuildState::del_human_obj`] | `GuildInfo.cs:534-550`（**附**：`Compare(...)==1` 而非 `!=0`） |
+//! | [`GuildState::del_human_obj_member`] | `GuildInfo.cs:534-550`（**附**：`Compare(...)==1` 而非 `!=0`） |
 //! | [`GuildState::count`] / [`GuildState::is_full`] | `GuildInfo.cs:1064-1072`（`Count = Σ MemberList.Count`，`IsFull = Count >= GuildMemberMaxLimit`） |
 //! | [`GuildManager`] | `GuildManager.cs:19-167`（`AddGuild`/`DelGuild`/`FindGuild`/`MemberOfGuild`/`LoadGuildInfo`/`Run`） |
 //! | [`check_guild_name`] | `M2Share.cs:529-545`（**N4**：循环 `i < Length-1` ⇒ 末字符不比黑名单） |
@@ -62,7 +62,9 @@ use std::cmp::Ordering;
 use mir2_data::guild::{
     GuildConfValues, GuildFileBody, GuildRankRecord, GuildRecord, WarGuildRecord,
 };
-use mir2_shared::hutil32::{get_valid_str3, str_to_int16, to_upper};
+use mir2_shared::hutil32::{
+    dotnet_compare_ordinal_ignore_case, get_valid_str3, str_to_int16, to_upper,
+};
 
 /// 行会消息前景色（`GameSvrConf.cs:1542` 初值 0xDB；读取点 `ServerConf.cs:335`）。
 pub const GUILD_MSG_F_COLOR_DEFAULT: u8 = 0xDB;
@@ -204,6 +206,37 @@ pub struct GuildWarEnded {
     pub enemy: String,
     /// `EndGuildWar` 文案（`SendGuildMsg`）。
     pub message: String,
+}
+
+/// `GuildManager.Run` 的落盘原因（`GuildInfo.cs:584-589` 的 `UpdateGuildFile` 与
+/// `:525-533` 的 `CheckSaveGuildFile`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuildSaveReason {
+    /// `UpdateGuildFile`：置 `BoChanged=true` + `DwSaveTick=now` 后当场落盘。
+    UpdateGuildFile,
+    /// `CheckSaveGuildFile`：`BoChanged && now-DwSaveTick > 30s` ⇒ 清标记后落盘。
+    CheckSaveGuildFile,
+}
+
+/// `GuildManager.Run` 的一行产出：战争结束（104 广播）或落盘请求。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GuildRunEvent {
+    /// 某会与某敌会的战争到期（`EndGuildWar` + `RemoveAt`）。
+    WarEnded {
+        /// 本会名。
+        guild: String,
+        /// 敌会名。
+        enemy: String,
+        /// `EndGuildWar` 文案（`SendGuildMsg`）。
+        message: String,
+    },
+    /// 需要落盘（`guild_runtime::save_one`），按事件顺序执行。
+    Save {
+        /// 会名。
+        guild: String,
+        /// 原因（决定 oracle 的置脏/清脏语义）。
+        reason: GuildSaveReason,
+    },
 }
 
 /// 行会战宣战请求的输入（M3⑧-实现 5；NPC 层 + `PlayObject` 层）。
@@ -367,6 +400,16 @@ impl GuildState {
         }
     }
 
+    /// 当前内存态 → 落盘记录（`SaveGuildInfoFile` 的输入；`.ini` 五键 + `.txt` 四段）。
+    #[must_use]
+    pub fn to_record(&self) -> GuildRecord {
+        GuildRecord {
+            name: self.name.clone(),
+            conf: self.conf(),
+            body: self.to_body(),
+        }
+    }
+
     /// 把 `.ini` 五键写回（`GuildConf.LoadConfig(this)`，`GuildInfo.cs:203-205`）。
     ///
     /// `GuildConf.LoadConfig`（`GuildConf.cs:16-23`）经 5 个 public property setter 赋值，
@@ -513,18 +556,21 @@ impl GuildState {
         false
     }
 
-    /// `GuildInfo.cs:534-550` 的 `DelHumanObj`（**照搬 `Compare(...)==1`**）：只命中「大于」。
-    pub fn del_human_obj(&mut self, name: &str, now_tick: i32) -> bool {
-        self.check_save_guild_file(now_tick);
+    /// `GuildInfo.cs:534-550` 的 `DelHumanObj` 的**清槽段**（**照搬 `Compare(...)==1`**）：
+    /// 只命中 .NET 码位差恰为 `1` 的首个槽；命中返回**被清的旧成员名**，未命中 `None`。
+    ///
+    /// oracle 的 `CheckSaveGuildFile()` 在清槽**之前**（`:536`），由调用方在落盘后调用本函数
+    /// （`guild_runtime::on_disconnect`）；本函数是纯清，不碰 `bo_changed`/`dw_save_tick`。
+    pub fn del_human_obj_member(&mut self, name: &str) -> Option<String> {
         for rank in &mut self.ranks {
             for j in 0..rank.members.len() {
-                if cmp_ignore_case(&rank.members[j], name) == Ordering::Greater {
-                    rank.members[j] = String::new();
-                    return true;
+                if dotnet_compare_ordinal_ignore_case(&rank.members[j], name) == 1 {
+                    let old = std::mem::take(&mut rank.members[j]);
+                    return Some(old);
                 }
             }
         }
-        false
+        None
     }
 
     /// `GuildInfo.cs:525-533` 的 `CheckSaveGuildFile`：命中返回 `true`（调用方落盘）。
@@ -996,18 +1042,28 @@ impl GuildManager {
     }
 
     /// `GuildManager.cs:34-52` 的 `DelGuild`：`OrdinalIgnoreCase` 命中；`RankList.Count > 1` ⇒ `break`（拒删）。
-    pub fn del_guild(&mut self, name: &str) -> bool {
+    ///
+    /// 返回被删行会**清空后**的 [`GuildRecord`]（`BackupGuildFile` 已把四段清空），供调用方
+    /// 落盘空体（oracle 的 `BackupGuildFile` 在移除前写 `" "` 四段）；未命中/拒删 ⇒ `None`。
+    pub fn del_guild(&mut self, name: &str) -> Option<GuildRecord> {
         for i in 0..self.guilds.len() {
             if cmp_ignore_case(&self.guilds[i].name, name) == Ordering::Equal {
                 if self.guilds[i].ranks.len() > 1 {
-                    break;
+                    return None;
                 }
                 self.guilds[i].backup_guild_file();
+                let record = self.guilds[i].to_record();
                 self.guilds.remove(i);
-                return true;
+                return Some(record);
             }
         }
-        false
+        None
+    }
+
+    /// 存活会名（`GuildManager.cs:126-143` 的 `SaveGuildList` 输入），保持 `GuildList` 序。
+    #[must_use]
+    pub fn names(&self) -> Vec<String> {
+        self.guilds.iter().map(|g| g.name.clone()).collect()
     }
 
     /// `GuildManager.cs:63-72` 的 `FindGuild`（**大小写敏感** `==`）。
@@ -1035,9 +1091,14 @@ impl GuildManager {
         self.guilds = records.iter().map(GuildState::from_record).collect();
     }
 
-    /// `GuildManager.cs:145-167` 的 `Run`：逐会倒序扫 `GuildWarList`，到期 `EndGuildWar` + 移除 + 落盘。
-    pub fn run(&mut self, now_tick: i32) -> Vec<GuildWarEnded> {
-        let mut ended = Vec::new();
+    /// `GuildManager.cs:145-167` 的 `Run`：逐会倒序扫 `GuildWarList`，到期 `EndGuildWar` + 移除；
+    /// 随后 `UpdateGuildFile`（有战结束）与 `CheckSaveGuildFile`（30s 门）。
+    ///
+    /// 事件序 = **每会**：`WarEnded*`（倒序扫序）→ `Save{UpdateGuildFile}`（若有战结束）→
+    /// `Save{CheckSaveGuildFile}`（若 30s 门命中）。落盘由调用方按事件顺序执行（`guild_runtime::step`），
+    /// 与 oracle「`UpdateGuildFile` 当场写、`CheckSave` 再写」的可观测字节序一致。
+    pub fn run(&mut self, now_tick: i32) -> Vec<GuildRunEvent> {
+        let mut events = Vec::new();
         for guild in &mut self.guilds {
             let mut bo_changed = false;
             let mut j = guild.wars.len();
@@ -1045,7 +1106,7 @@ impl GuildManager {
                 j -= 1;
                 let war = &guild.wars[j];
                 if now_tick.wrapping_sub(war.war_tick) > war.war_time {
-                    ended.push(GuildWarEnded {
+                    events.push(GuildRunEvent::WarEnded {
                         guild: guild.name.clone(),
                         enemy: war.guild_name.clone(),
                         message: GuildState::end_guild_war(&war.guild_name),
@@ -1056,10 +1117,19 @@ impl GuildManager {
             }
             if bo_changed {
                 guild.update_guild_file(now_tick);
+                events.push(GuildRunEvent::Save {
+                    guild: guild.name.clone(),
+                    reason: GuildSaveReason::UpdateGuildFile,
+                });
             }
-            guild.check_save_guild_file(now_tick);
+            if guild.check_save_guild_file(now_tick) {
+                events.push(GuildRunEvent::Save {
+                    guild: guild.name.clone(),
+                    reason: GuildSaveReason::CheckSaveGuildFile,
+                });
+            }
         }
-        ended
+        events
     }
 
     /// 行会战宣战全链（NPC 层 + `PlayObject` 层；`GuildOfficial.cs:180-199` + `PlayObject.Base.cs:3349-3385`）。
@@ -1369,7 +1439,7 @@ mod tests {
     }
 
     #[test]
-    fn del_human_obj_compare_equals_one_quirk() {
+    fn del_human_obj_member_compare_equals_one_quirk() {
         let mut g = GuildState::new("会");
         g.ranks.push(GuildRank {
             rank_no: 1,
@@ -1377,14 +1447,16 @@ mod tests {
             members: vec!["b".into()],
         });
         // 等值 ⇒ Compare == 0 ⇒ 不动（照搬 oracle 附注）。
-        assert!(!g.del_human_obj("b", 0));
+        assert_eq!(g.del_human_obj_member("b"), None);
         assert_eq!(g.ranks[0].members, vec!["b".to_string()]);
         // 小于目标 ⇒ Compare == -1 ⇒ 不动。
-        assert!(!g.del_human_obj("c", 0));
+        assert_eq!(g.del_human_obj_member("c"), None);
         assert_eq!(g.ranks[0].members, vec!["b".to_string()]);
-        // 大于目标 ⇒ Compare == 1 ⇒ 命中，置默认（空名占位）。
-        assert!(g.del_human_obj("a", 0));
+        // 大于目标且差恰为 1 ⇒ 命中，置默认（空名占位），返回旧名。
+        assert_eq!(g.del_human_obj_member("a"), Some("b".to_string()));
         assert_eq!(g.ranks[0].members, vec![String::new()]);
+        // 差为 2（`c/a`）⇒ 不命中（`Ordering::Greater` 会误清）。
+        assert_eq!(g.del_human_obj_member("a"), None);
     }
 
     // ---- AddWarGuild（N2） ----
@@ -1519,9 +1591,11 @@ mod tests {
         assert_eq!(m.member_of_guild("A"), Some("会甲"));
         // DelGuild：rankCount > 1 ⇒ 拒删。
         m.find_guild_mut("会甲").unwrap().add_member("B", &cfg(), 1);
-        assert!(!m.del_guild("会甲"));
-        // 单 rank ⇒ 可删（大小写不敏感）。
-        assert!(m.del_guild("会丙"));
+        assert!(m.del_guild("会甲").is_none());
+        // 单 rank ⇒ 可删（大小写不敏感）；返回清空后的记录。
+        let removed = m.del_guild("会丙").expect("单 rank 可删");
+        assert_eq!(removed.name, "会丙");
+        assert!(removed.body.ranks.is_empty(), "BackupGuildFile 清空");
         assert!(m.find_guild("会丙").is_none());
     }
 
@@ -1536,11 +1610,21 @@ mod tests {
         });
         // now=140 ⇒ 140-100=40 <= 50 ⇒ 未完。
         assert!(m.run(140).is_empty());
-        // now=151 ⇒ 51 > 50 ⇒ 结束。
-        let ended = m.run(151);
-        assert_eq!(ended.len(), 1);
-        assert_eq!(ended[0].enemy, "敌");
-        assert_eq!(ended[0].message, "***敌行会战争结束");
+        // now=151 ⇒ 51 > 50 ⇒ 结束；事件序 = WarEnded → Save{UpdateGuildFile}。
+        let events = m.run(151);
+        assert_eq!(events.len(), 2);
+        let GuildRunEvent::WarEnded { enemy, message, .. } = &events[0] else {
+            panic!("首事件必须是 WarEnded");
+        };
+        assert_eq!(enemy, "敌");
+        assert_eq!(message, "***敌行会战争结束");
+        assert_eq!(
+            events[1],
+            GuildRunEvent::Save {
+                guild: "会甲".into(),
+                reason: GuildSaveReason::UpdateGuildFile
+            }
+        );
         assert!(m.find_guild("会甲").unwrap().wars.is_empty());
     }
 
@@ -1946,11 +2030,22 @@ mod tests {
         // 原始 + 重复两条 `war_tick == 2000` ⇒ 同刻到期。
         assert!(mgr.run(3_000).is_empty(), "差 == WarTime 不过期");
         assert_eq!(mgr.guilds[0].wars.len(), 2);
-        let ended = mgr.run(3_001);
+        let events = mgr.run(3_001);
+        let ended: Vec<(&str, &str, &str)> = events
+            .iter()
+            .filter_map(|e| match e {
+                GuildRunEvent::WarEnded {
+                    guild,
+                    enemy,
+                    message,
+                } => Some((guild.as_str(), enemy.as_str(), message.as_str())),
+                GuildRunEvent::Save { .. } => None,
+            })
+            .collect();
         assert_eq!(ended.len(), 2);
-        assert_eq!(ended[0].guild, "会A");
-        assert_eq!(ended[0].enemy, "会B");
-        assert_eq!(ended[0].message, "***会B行会战争结束");
+        assert_eq!(ended[0].0, "会A");
+        assert_eq!(ended[0].1, "会B");
+        assert_eq!(ended[0].2, "***会B行会战争结束");
         assert!(mgr.guilds[0].wars.is_empty());
         assert!(mgr.guilds[0].bo_changed, "Run 到期 ⇒ UpdateGuildFile 置脏");
     }
