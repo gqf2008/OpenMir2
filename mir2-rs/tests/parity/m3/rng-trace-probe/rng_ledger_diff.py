@@ -53,7 +53,11 @@ CSHARP_ATTACK_RE = re.compile(
 # Rust 站点（世界层调用点）。
 # 2026-10-17（magic-draws-move）：按当前活栈补齐实际取数行 103/106/763/771/790/792/936/1018/1126；
 # 旧表里的 579/587/601/606/608/609/628/630/736/758/831 保留为旧 trace 行号别名（不误伤新流水）。
-RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|829|831|837|856|858|936|1018|1126)")
+# 2026-10-21（T-141 hit-site）：`_Attack` 的命中骰（`random_byte(target.speed_point)`）在
+# `6a774ea79` 于 `if is_proper_target_grouped_direct(...)` 上方插入 4 行注释后从 1018 漂到 1014
+# ⇒ 补 **1014 为当前活栈**；1018 保留为旧 trace 别名（2026-10-17~10-19 的 Rust 流水落 1018）。
+# 两处 `RUST_ATTACK_RE` 仍逐字同表（`attack_rng_ledger.py` selftest 钉住）。
+RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|829|831|837|856|858|936|1014|1018|1126)")
 
 CSHARP_MARKER = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
 RUST_MARKER = r"crates\world\src\combat.rs:109"
@@ -73,6 +77,9 @@ CANON_RULES = [
     (re.compile(r"crates/world/src/combat\.rs:111$"), "atk_power_b"),
     (re.compile(r"crates/world/src/combat\.rs:67$"), "atk_power_base"),
     (re.compile(r"crates/world/src/combat\.rs:758$"), "hit_gate"),
+    # T-141（2026-10-21）：命中骰（`_Attack` 的 `RandomByte(target.SpeedPoint)`）的**当前**活栈行
+    # （`6a774ea79` 后 1018→1014）。758/736 保留为旧别名 ⇒ 两侧 canonical 都收敛到 `hit_gate`。
+    (re.compile(r"crates/world/src/combat\.rs:1014$"), "hit_gate"),
     (re.compile(r"crates/world/src/combat\.rs:628$"), "hit_struck_damage"),
     (re.compile(r"crates/world/src/combat\.rs:630$"), "hit_struck_damage2"),
     (re.compile(r"crates/world/src/combat\.rs:601$"), "struck_durability"),
@@ -87,6 +94,7 @@ CANON_RULES = [
     # 旧代码 trace 的行号别名（本片把 attack_success/attack_dir 加进 combat.rs 后行号位移；
     # 2026-10-12 之前采集的 Rust 活栈 trace 仍按旧行号落盘，别名保证旧件可复算）。
     (re.compile(r"crates/world/src/combat\.rs:736$"), "hit_gate"),
+    (re.compile(r"crates/world/src/combat\.rs:1018$"), "hit_gate"),
     (re.compile(r"crates/world/src/combat\.rs:606$"), "hit_struck_damage"),
     (re.compile(r"crates/world/src/combat\.rs:608$"), "hit_struck_damage2"),
     (re.compile(r"crates/world/src/combat\.rs:579$"), "struck_durability"),
@@ -654,6 +662,30 @@ def cmd_selftest(args):
     check("attack-success-mapped",
           canonical(r"crates\world\src\combat.rs:831") == "attack_success"
           and is_attack(r"crates\world\src\combat.rs:831", "rust"))
+
+    # ---- T-141（2026-10-21，卡 hit-site）：命中骰当前活栈行归 attack + canonical `hit_gate` ----
+    # 与 attack_rng_ledger.py selftest 同口径：从源码现读 `random_byte(target.speed_point)` 的
+    # 物理行（不写死 1014），表里漏行 ⇒ 红；1018 保留为旧 trace 别名（`6a774ea79` 之前的流水）。
+    _combat_rs = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "..",
+        "mir2-rs", "crates", "world", "src", "combat.rs"))
+    _hit_needle = "rng.random_byte(target.speed_point)"
+    _hit_lines = []
+    try:
+        with open(_combat_rs, "r", encoding="utf-8", errors="replace") as _fh:
+            _hit_lines = [i for i, ln in enumerate(_fh, 1) if _hit_needle in ln]
+    except OSError:
+        _hit_lines = []
+    check("hit-dice-live-line-found", len(_hit_lines) == 1, str(_hit_lines))
+    if len(_hit_lines) == 1:
+        _live_site = r"crates\world\src\combat.rs:%d" % _hit_lines[0]
+        check("hit-dice-live-line-is-attack", is_attack(_live_site, "rust"), _live_site)
+        check("hit-dice-live-line-canonical-hit-gate",
+              canonical(_live_site) == "hit_gate", _live_site)
+    check("hit-dice-legacy-1018-is-attack",
+          is_attack(r"crates\world\src\combat.rs:1018", "rust"), "1018 旧 trace 别名")
+    check("hit-dice-legacy-1018-canonical-hit-gate",
+          canonical(r"crates\world\src\combat.rs:1018") == "hit_gate", "1018 旧 trace 别名")
 
     # ---- Claim B（owner 2026-10-13 09:35）：非攻击站点组口径（groups / groupdiff）----
     W = "M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427"
