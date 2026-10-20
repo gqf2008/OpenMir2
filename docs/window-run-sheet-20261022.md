@@ -28,10 +28,10 @@
 
 ---
 
-## 🚦 状态：E1/E4 已裁决（2026-10-22），E2/E3 仍待裁决
+## 🚦 状态：E1/E2/E4 已裁决（2026-10-21/22），E3 仍待裁决
 
 - **2026-10-22 owner 裁决**：E1 = 从正式库复制测试库（已建 `mir2_test_*`）；E4 = 允许重编对比用 C# 程序。
-  详见 §E-0。E2（影子内容）/ E3（MySQL 停起）仍未裁决 ⇒ 对应组仍不可开窗。
+  详见 §E-0。E3（MySQL 停起）仍未裁决 ⇒ G6 不可开窗。
 - **历史授权** = owner 2026-10-19 批准的「**只开缩窗 W0-1..W0-5**」
   （`docs/window-owner-decisions-20261018.md` §5 末项）。该授权是**一次性**的、已随 2026-10-19 实跑用尽，
   **不能外推**到本文件的任何组、任何 SQL、任何停/起 MySQL 动作。
@@ -515,7 +515,7 @@ Rust 断言也是 1:1（卡 work 记录 `a84c81aae + d7ead5b2a`）。旧 issue �
   → `AddGuild` → `SaveGuildList`；`GuildOfficial.cs:142`）。
 - **若要预置影子包**：`start-csharp-hook.ps1:96-104` 只在 `<Shadow>/GameSrv.exe` **不存在**时才 robocopy。
   正确做法是**先准备一份带 GuildBase 内容的 `-Pack` 源目录**再起栈；不要「拷完再改 -Shadow」（删影子会丢）。
-  内容改动属 §E2，未裁决前**不做**。
+  内容改动属 §E2（**已裁决**）：只读复制到影子包、仅改副本。
 - **失败判据**：`750` 不是恰 1 条；或不在 `46 < 750 < 654`；或无会角色也出 750。
 - **侧间还原**：停栈 → 删除/恢复影子 GuildBase 文件 → restore base。
 
@@ -656,7 +656,7 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/world/c
 
 - 本窗**只**能收 TestServer 部署的样本 ⇒ 该卡标 **部分收**。
 - 非 TestServer 影子需要改内容/起影子 GameSvr 树（`start-csharp-hook.ps1 -Pack` 可以换源目录，
-  但整棵 Envir 与 `Server.conf` 都要影子化）⇒ 属 §E2，未裁决前不做。
+  但整棵 Envir 与 `Server.conf` 都要影子化）⇒ 属 §E2（**已裁决**）：影子包内可做。
 
 ### B11. 新账号必须在 LoginSrv **启动前**建好（或重启 LoginSrv）
 
@@ -1068,7 +1068,7 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
   `openmir2-persist-useitems-wiring`、`openmir2-persist-create-rows`、`openmir2-save-misc-gaps`。
 - **不收**：`openmir2-persist-item-attr-and-gold`（G-01 受 B-117、G-02 受 B-116 阻塞）、
   `openmir2-snap-cell-fidelity`（两个前置未解）。
-- **注意**：G2 的行会半（750）需要 §E2，**本块不排**；`guild-g2-dispatch` 只做无会对照或整体不做。
+- **注意**：G2 的行会半（750）需要 §E2（**已裁决**：影子 GuildBase 内可做）；无会对照仍可直接做。
 - **E1-a 口径**：不做字段级 DB diff（C10#11②），只做行数/关键值断言；三条路径均**部分收**。
 
 ### D.3 Block C（2 小时）：G3a（单客户端战斗/AOI/GuardList/反向点）
