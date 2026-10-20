@@ -2916,9 +2916,10 @@ impl World {
 /// 2. `clone.Master/MasterRoyaltyTick/SlaveMakeLevel/SlaveExpLevel` 复制；
 /// 3. `clone.RecalcAbilitys()`：base 的 `ApplySlaveLevelAbilitys` + 派生 `ResetElfMon`
 ///    （`ElfMonster.cs:31-41` / `ElfWarriorMonster.cs:35-39/105-110`）；
-/// 4. `clone.Abil = OldMon.Abil`：本骨架 `dc/max_hp` 合并了 `Abil/WAbil`，复制会破坏
-///    第 3 步算出的当前 `WAbil` ⇒ **不覆盖**（登记；`Abil` 只影响之后的
-///    `RecalcAbilitys`，数据不可达路径上无法观察）；
+/// 4. `clone.Abil = OldMon.Abil`（`MonsterObject.cs:115`）：复制 [`Entity::abil`] 快照
+///    （`Abil.DC`/`Abil.MaxHP`）。**必须**发生在第 3 步 `RecalcAbilitys()` 之后（oracle
+///    顺序）：第 3 步用克隆自己的 `Abil`，随后的 `AppearNow` 再用源怪 `Abil` 重算
+///    （`f(Abil)` 而非 `f(f(初值))`）；
 /// 5. `StatusTimeArr/TargetCret/TargetFocusTick/LastHiter/LastHiterTick/Dir/IsSlave` 复制；
 /// 6. `if (OldMon.Master != null) Master.SlaveList.Add(clone)`。
 ///
@@ -2959,6 +2960,10 @@ fn apply_make_clone(world: &mut World, owner_id: i32, clone_id: i32) {
         old.last_hiter,
         old.last_hiter_tick,
     );
+    // 4. `clone.Abil = OldMon.Abil`（`MonsterObject.cs:115`）：先取源怪的 `Abil` 快照
+    //    （未取过则按其当前 `dc`/`max_hp` 懒取——源怪未 `RecalcAbilitys` 过时二者相等）；
+    //    等克隆自己的第一次 `RecalcAbilitys()` 落定后再写入 `clone.abil`（oracle 顺序）。
+    let old_abil = world.entities.get_mut(owner_id).map(Entity::abil_snapshot);
     let now = world.clock_ms;
     let Some(clone) = world.entities.get_mut(clone_id) else {
         return;
@@ -2970,6 +2975,11 @@ fn apply_make_clone(world: &mut World, owner_id: i32, clone_id: i32) {
     // 3. `RecalcAbilitys()`（base + 派生覆写），顺序与 oracle 一致。
     crate::slave::apply_slave_level_abilitys(clone);
     crate::slave::apply_derived_slave_recalc(clone, now);
+    // 4. `ElfMon.Abil = OldMon.Abil`（`MonsterObject.cs:115`）——在第一次 Recalc 之后，
+    //    供随后的 `AppearNow` 第二次 Recalc 从源怪 `Abil` 重算。
+    if let Some(abil) = old_abil {
+        clone.abil = Some(abil);
+    }
     // 5. 其余字段复制。
     clone.status_time = status_time;
     clone.ai.target_creature = target;
@@ -12996,6 +13006,46 @@ mod tests {
         assert!(w.entities.get(id).unwrap().ghost, "> 2000ms ⇒ MakeGhost");
     }
 
+    /// R15（`monster_ai_tick` 死怪路由）：死亡 race 113/114 必须经类 `Run` 的 2s 严格 `>` 门
+    /// `MakeGhost`，**不是** `Config.MakeGhostTime` 的通用门（缺省 180s）。
+    ///
+    /// 这条补的是 `monster_ai_tick` 死怪支的 `matches!(e.race, 96 | 113 | 114)`——此前只有
+    /// `monster_class_run` 直调用例，没有任何用例证明**死**的 113/114 在 tick 里真的进类 `Run`。
+    ///
+    /// 牙：把 `matches!(e.race, 96 | 113 | 114)` 改回 `96`（写集外也要能证）⇒ 死怪只落
+    /// `base_object_run_monster` 的 180s 门 ⇒ 2001ms 段不 Ghost ⇒ 本用例红。
+    #[test]
+    fn mb7_dead_elf_races_ghost_through_class_run_via_ai_tick() {
+        for race in [113u8, 114u8] {
+            let mut w = World::new(30, 30);
+            w.clock_ms = 102_000;
+            assert!(
+                w.make_ghost_time > 2_001,
+                "前提：通用 MakeGhostTime 远大于类 Run 的 2s 门（oracle 缺省 180s）"
+            );
+            let id = class_monster(&mut w, race, 10, 10);
+            {
+                let e = w.entities.get_mut(id).unwrap();
+                e.bo_is_first = false;
+                e.death = true;
+                e.death_tick = 100_000;
+            }
+            // 恰 2000ms：类 `Run` 的严格 `>` 不成立；通用门（180s）也远未到 ⇒ 不 Ghost。
+            monster_ai_tick(&mut w);
+            assert!(
+                !w.entities.get(id).unwrap().ghost,
+                "race {race}: 恰 2000ms 不得 MakeGhost"
+            );
+            // 2001ms：类 `Run` 的 2s 门命中（通用门尚差约 178s）⇒ 必须 Ghost。
+            w.clock_ms = 102_001;
+            monster_ai_tick(&mut w);
+            assert!(
+                w.entities.get(id).unwrap().ghost,
+                "race {race}: >2000ms 必须 MakeGhost（类 Run 门，非通用 MakeGhostTime 门）"
+            );
+        }
+    }
+
     /// R15（生成链）：`MakeClone(Dragon1)` 的请求点、字段继承与收尾。
     ///
     /// 段 1：`Dragon1` 造出 113 ⇒ 不 `AppearNow`；字段复制 + `Master=null` + `KickException`。
@@ -13086,6 +13136,21 @@ mod tests {
         {
             let c = w.entities.get(clone).unwrap();
             assert_eq!(c.race, 114, "AppearNow 再置 Race=ElfWarriormon");
+            // **Abil 快照钉数**（oracle 两次 `RecalcAbilitys` 的复合门）：
+            // 源怪 `Abil` = `dc=0x0905` / `MaxHP=500`（上面设的源 113 值），克隆自身
+            // 生成值 = `dc=0` / `MaxHP=500`（`Mb7Spawner`）。
+            // 第 1 次 Recalc（`MonsterObject.cs:113`）用克隆自身 Abil ⇒ `dc=0x0100`/`700`；
+            // `:115` `clone.Abil = OldMon.Abil`；第 2 次（`ElfWarriorMonster.cs:20`）
+            // 从源怪 Abil 重算 ⇒ `dc = 0x0905 高字节 9 + Round(3*(0.3+0.1*1)*1)=1 = 0x0A`、
+            // `MaxHP = 500 + Round(500*0.4)*1 = 700`。
+            // 旧实现把「当前 WAbil」当 Abil ⇒ 复合两次得 `dc=0x0200(512)`/`MaxHP=980`。
+            assert_eq!(
+                c.abil.map(|a| (a.dc, a.max_hp)),
+                Some((0x0905, 500)),
+                "MonsterObject.cs:115 clone.Abil = OldMon.Abil"
+            );
+            assert_eq!(c.dc, 0x0A05, "oracle 手算 dc=0x0A05(2565)，非复合值 0x0200");
+            assert_eq!(c.max_hp, 700, "oracle 手算 MaxHP=700，非复合值 980");
             assert!(!c.bo_is_first);
             assert!(!c.fixed_hide_mode);
             assert_eq!(c.dig_down_tick, 100_000);

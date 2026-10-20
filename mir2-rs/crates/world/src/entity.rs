@@ -431,6 +431,26 @@ pub struct CastleBinding {
     pub role: crate::castle::DefenseRole,
 }
 
+/// C# `BaseObject.Abil` 的**本骨架子集快照**（`Abil.DC` / `Abil.MaxHP`）。
+///
+/// oracle `RecalcAbilitys` 首行 `WAbil = Abil.Clone()`（`src/M2Server/Actor/BaseObject.Abil.cs:19`）
+/// 再按 `Abil` 重算；`MakeClone`（`src/M2Server/Monster/MonsterObject.cs:113`）与
+/// `ElfMonster.AppearNow`（`src/M2Server/Monster/Monsters/ElfMonster.cs:28`）/
+/// `ElfWarriorMonster.AppearNow`（`src/M2Server/Monster/Monsters/ElfWarriorMonster.cs:20`）
+/// 各调一次 `RecalcAbilitys`。第二次必须从 `Abil` 重算（`MonsterObject.cs:115` 已
+/// `ElfMon.Abil = OldMon.Abil`），**不能**复合在当前 `WAbil` 上。
+///
+/// 本骨架只建模 `RecalcAbilitys` 对怪物可观测的两个字段：`DC` 与 `MaxHP`（其余
+/// `AC/MAC/MC/SC/Weight*` 等怪物路径未被 `ApplySlaveLevelAbilitys` 改写，登记于
+/// `ApplySlaveLevelAbilitys` 文档）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BaseAbil {
+    /// C# `Abil.DC`（`WAbil.DC` 在 `RecalcAbilitys` 内先被 `Abil.Clone()` 覆盖）。
+    pub dc: i32,
+    /// C# `Abil.MaxHP`（`WAbil.MaxHP = Abil.MaxHP + AddAbil.HP`，怪物 `AddAbil` 为空）。
+    pub max_hp: u16,
+}
+
 /// `BaseObject` 中参与本骨架（tick / AOI / 移动）的字段子集。
 ///
 /// S1 起 `Entity` 直接就是 bevy 的**组件**（每个实体一个组件），由
@@ -655,6 +675,14 @@ pub struct Entity {
     /// `WAbil.HP` / `WAbil.MaxHP`
     pub hp: u16,
     pub max_hp: u16,
+    /// C# `BaseObject.Abil` 的本骨架子集快照（见 [`BaseAbil`]）。
+    ///
+    /// `None` = 尚未取快照：生成路径（`monster_from_row`）直接把库值写进 `dc`/`max_hp`
+    /// （此时 `WAbil == Abil`，此后未被 `RecalcAbilitys`/伤害改过）⇒ 首次需要时由
+    /// [`Entity::abil_snapshot`] 以当前 `dc`/`max_hp` 懒取。`MakeClone` 在第一次
+    /// `RecalcAbilitys()` 之后复制源怪的快照（oracle `MonsterObject.cs:115`），
+    /// 使随后的 `AppearNow` 从 `OldMon.Abil` 重算（`f(Abil)` 而不是 `f(f(初值))`）。
+    pub abil: Option<BaseAbil>,
     /// `WAbil.MP` / `WAbil.MaxMP`。
     ///
     /// 怪物生成时照 `WorldServer.MonGen.cs:896-897` 的 `ApplyMonsterAbility`：`MP = 0`、
@@ -1044,6 +1072,8 @@ impl Entity {
             magic_shield: false,
             un_magic_shield: false,
             dc: 0,
+            // 生成路径不调 `RecalcAbilitys` ⇒ 快照未取（首次需要时懒取，见 `abil_snapshot`）。
+            abil: None,
             ac: 0,
             hit_point: 0,
             speed_point: 0,
@@ -1123,6 +1153,22 @@ impl Entity {
             group_owner: 0,
             group_members: Vec::new(),
         }
+    }
+
+    /// 取 `Abil` 快照；未取过时用当前 `dc`/`max_hp` 建立（生成路径 `WAbil == Abil`）。
+    ///
+    /// 生产路径**唯一**的 `Abil` 写入点是 `monster_from_row` 的库值（`dc`/`max_hp`）；
+    /// `MakeClone` 的 `ElfMon.Abil = OldMon.Abil` 由 [`crate::monai`] 直接复制本字段。
+    pub fn abil_snapshot(&mut self) -> BaseAbil {
+        if let Some(abil) = self.abil {
+            return abil;
+        }
+        let abil = BaseAbil {
+            dc: self.dc,
+            max_hp: self.max_hp,
+        };
+        self.abil = Some(abil);
+        abil
     }
 
     /// 当前朝向（C# `BaseObject.Dir`），供接线层发 `SM_TURN`/`RM_TURN` 等帧面用。

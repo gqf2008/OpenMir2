@@ -457,9 +457,21 @@ fn make_word_u16(low: u16, high: u16) -> u16 {
 /// 本骨架曾按「基类怪 = `WAbil=Abil.Clone()` ⇒ no-op」处理（⑨-2 `slave.rs` 旧注释），
 /// 与 oracle 分叉 —— 即 reviewer-5 ⑨-2 `M-1` 所指缺口（⑨-3 未真落）。
 ///
-/// `Abil` 取「当前 `dc` / `max_hp`」：召唤路径上被落尾的怪是 `RegenMonsterByName` 刚造的
+/// `Abil` 取 [`Entity::abil_snapshot`]（`Abil.DC` / `Abil.MaxHP` 的独立快照）：
+/// 生成路径上被落尾的怪是 `RegenMonsterByName` 刚造的
 /// （`WorldServer.MonGen.cs:742` `cert.WAbil = cert.Abil`，此后未被任何
-/// `RecalcAbilitys`/伤害改过），故当前态即 `Abil`，等价。
+/// `RecalcAbilitys`/伤害改过），首次调用时懒取「当前态」即 `Abil`，等价。
+///
+/// **必须用快照而不是「当前 `dc`/`max_hp`」**：oracle 同一次 `Run` 里会连调两次
+/// `RecalcAbilitys` —— `MakeClone`（`MonsterObject.cs:113`）一次、`AppearNow`
+/// （`ElfWarriorMonster.cs:20` / `ElfMonster.cs:28`）再一次，且 `MonsterObject.cs:115`
+/// 已把 `ElfMon.Abil` 换成 `OldMon.Abil`。`RecalcAbilitys` 首行 `WAbil = Abil.Clone()`
+/// （`BaseObject.Abil.cs:19`）⇒ 第二次是 **`f(Abil)`**；若把当前 `WAbil` 当 `Abil`
+/// 就变成 `f(f(初值))`，`dc`/`max_hp` 逐次漂移。复验向量（源 113→克隆 114、
+/// `SlaveExpLevel=1`、`OldMon.Abil.dc=0x0905`、`Abil.MaxHP=500`）：oracle 手算
+/// `dc=0x0A05(2565)`/`MaxHP=700`，旧实现得 `dc=0x0200(512)`/`MaxHP=980`
+/// （`mb7_r15_...` 的钉数断言）。
+///
 /// **未建模**：else 支尾部的 `WAbil.MAC = 0` —— 本骨架怪物无 MAC 字段、战斗不消费（登记，
 /// 不假造）；`RecalcAbilitys` 其余字段（`AntiPoison=0`/`AntiMagic=1`/`Weight*`…）本骨架亦
 /// 无对应怪物字段。
@@ -469,9 +481,14 @@ pub(crate) fn apply_slave_level_abilitys(mon: &mut Entity) {
         return;
     }
     let exp = i32::from(mon.slave_exp_level);
-    // `Abil.MaxHP` / `Abil.DC` = 当前 `max_hp` / `dc`（见上）。
-    let abil_max_hp = i32::from(mon.max_hp);
-    let abil_dc = mon.dc;
+    // `Abil.MaxHP` / `Abil.DC` = 独立快照（见上）。
+    let abil = mon.abil_snapshot();
+    let abil_max_hp = i32::from(abil.max_hp);
+    let abil_dc = abil.dc;
+    // `RecalcAbilitys` 的 `WAbil = Abil.Clone()`（`HP/MP` 保留，`BaseObject.Abil.cs:19-23`）：
+    // 本骨架只建模 `DC`/`MaxHP` 两项，先按快照重置 ⇒ 重复 `RecalcAbilitys` 不复合。
+    mon.dc = abil_dc;
+    mon.max_hp = abil.max_hp;
     if matches!(
         mon.race,
         ACTOR_RACE_WHITE_SKELETON | ACTOR_RACE_ELF_MONSTER | ACTOR_RACE_ELF_WARRIORMON
@@ -563,7 +580,8 @@ impl World {
     /// 3. `monObj.MasterRoyaltyTick = GetTickCount() + dwRoyaltySec*1000`；
     /// 4. `monObj.SlaveMakeLevel = (byte)nMakeLevel`、`monObj.SlaveExpLevel = (byte)nExpLevel`；
     /// 5. `monObj.RecalcAbilitys()`（`BaseObject.cs:1197`）：base 的 `WAbil = Abil.Clone()`
-    ///    部分对本骨架是恒等（`dc`/`max_hp` 即 `Abil`），但末尾
+    ///    部分在本骨架落为「按 [`Entity::abil`] 快照重置 `dc`/`max_hp`」（生成路径首次懒取
+    ///    = 当前 `dc`/`max_hp`，即 `Abil`），但末尾
     ///    `if (Race >= ActorRace.Animal)` 的 [`apply_slave_level_abilitys`]
     ///    （`BaseObject.Abil.cs:133-170`）会按 `SlaveExpLevel` 改 `WAbil.DC`/`WAbil.MaxHP`；
     ///    三个派生召唤物（变异骷髅/神兽两形态）再由 [`apply_derived_slave_recalc`]

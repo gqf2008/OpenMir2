@@ -198,8 +198,13 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
             entity.fixed_hide_mode = true;
             entity.bo_is_first = true;
         }
-        // `BoneKingMonster.cs:17`（`ScultureKingMonster` 已在上面的 102 支一并落定）。
-        134 => entity.danger_level = 5,
+        // `BoneKingMonster.cs:14-19` ctor：`ViewRange=8`、`Dir=5`、`DangerLevel=5`
+        // （`SearchTime = Random(1500)+1500` 是抽数字段，已在宿主构造链）。
+        // **MB-7 补**：`ViewRange` 曾漏落 ⇒ race 134 保持 `BaseObject` 缺省 5。
+        134 => {
+            entity.danger_level = 5;
+            entity.view_range = 8;
+        }
         // `MagicMonObject.cs:15` / `ElectronicScolpionMon.cs:12`：显式落 ctor 值
         // （与字段缺省同值，保留以钉住“类 ctor 有此赋值”这一事实）。
         133 | 200 => entity.use_magic = false,
@@ -1076,6 +1081,7 @@ mod tests {
         let sand = mk(132, 0);
         assert_eq!((sand.come_out_value, sand.attack_range), (8, 4));
         assert_eq!(mk(134, 0).danger_level, 5, "BoneKing ctor");
+        assert_eq!(mk(134, 0).view_range, 8, "BoneKing ctor ViewRange=8");
         assert_eq!(mk(102, 0).danger_level, 5, "ScultureKing ctor");
         assert!(!mk(133, 0).use_magic, "MagicMonObject ctor");
         assert!(!mk(200, 0).use_magic, "ElectronicScolpionMon ctor");
