@@ -56,8 +56,8 @@ pub use mapquest::{
     MapQuestLine, MapQuestLoad, QuestNpcRecord, TEXT_SPLIT_CONST as MAP_QUEST_TEXT_SPLIT_CONST,
 };
 pub use merchant::{
-    parse_merchant_line, MerchantRecord, MERCHANT_DEFAULT_PRICE_RATE, MERCHANT_PRICE_RATE_MIN,
-    MERCHANT_SCRIPT_DIR, MERCHANT_TEXT_SPLIT,
+    parse_merchant_line, LoadedMerchant, MerchantRecord, MERCHANT_DEFAULT_PRICE_RATE,
+    MERCHANT_PRICE_RATE_MIN, MERCHANT_SCRIPT_DIR, MERCHANT_TEXT_SPLIT,
 };
 pub use minimap::{
     load_minimap, parse_minimap_line, MiniMapEntry, MiniMapRegistry, MINIMAP_SEPARATOR,

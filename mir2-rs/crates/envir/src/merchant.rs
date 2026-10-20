@@ -46,7 +46,7 @@
 
 use std::path::PathBuf;
 
-use mir2_script::{LocalFs, ScriptParsers};
+use mir2_script::{LocalFs, ScriptInfo, ScriptParsers};
 use mir2_shared::hutil32::{
     arrest_string_ex_ref, get_valid_str3, str_to_int, str_to_int16, ArrestWrite,
 };
@@ -111,6 +111,20 @@ impl MerchantRecord {
     pub fn script_file_stem(&self) -> String {
         format!("{}-{}", self.script_name, self.map_name)
     }
+}
+
+/// 一条商人记录 + **同一次**解析产出的完整脚本表（`Merchant.ScriptList`）。
+///
+/// `Merchant.LoadMerchantScript`（`Merchant.cs:1089-1095`）把
+/// `ScriptParsers.LoadScriptFile(this, "Market_Def", ScriptName+"-"+MapName, true)` 的
+/// `LoadOutcome.scripts` 直接存进 `Merchant.ScriptList`；本结构保留同一份解析结果，
+/// **不允许宿主对同一文件二次解析**（重名 label 会二次抽 `rename_rand`，RNG 流水与 oracle 不等）。
+#[derive(Debug)]
+pub struct LoadedMerchant {
+    /// `LocalDB.LoadMerchant` 的记录（含脚本头字段）。
+    pub record: MerchantRecord,
+    /// `Merchant.ScriptList`（文件内脚本顺序 = 解析顺序）。
+    pub scripts: Vec<ScriptInfo>,
 }
 
 /// 解析 `Envir/Merchant.txt` 的**一行**（未加载脚本，脚本头字段为默认值）。
@@ -200,10 +214,10 @@ impl crate::registry::MapLoader {
     /// # Errors
     /// - 主文件存在但读取失败；
     /// - 某商人的脚本解析抛 `LoadPanic`（C# 侧异常穿透）。
-    pub fn load_merchants(
+    pub fn load_merchants_loaded(
         &self,
         rename_rand: &mut dyn FnMut(i32, i32) -> i32,
-    ) -> Result<Option<Vec<MerchantRecord>>, EnvirError> {
+    ) -> Result<Option<Vec<LoadedMerchant>>, EnvirError> {
         let path = self.merchant_path();
         let bytes = match std::fs::read(&path) {
             Ok(b) => b,
@@ -223,6 +237,7 @@ impl crate::registry::MapLoader {
                 continue;
             };
             let stem = record.script_file_stem();
+            let mut scripts = Vec::new();
             match parsers.load_script_file(
                 &fs,
                 &envir_root,
@@ -236,6 +251,7 @@ impl crate::registry::MapLoader {
                     record.price_rate = outcome.price_rate.unwrap_or(MERCHANT_DEFAULT_PRICE_RATE);
                     record.item_type_list = outcome.item_type_list;
                     record.refill_goods = outcome.refill_goods;
+                    scripts = outcome.scripts;
                 }
                 // oracle：`LogService.Error("Script file not found: ...")`，四个头字段保持默认。
                 Ok(None) => {}
@@ -246,9 +262,27 @@ impl crate::registry::MapLoader {
                     });
                 }
             }
-            out.push(record);
+            out.push(LoadedMerchant { record, scripts });
         }
         Ok(Some(out))
+    }
+
+    /// `LocalDB.LoadMerchant`（`:412-473`）+ 逐商人 `LoadMerchantScript`（`Merchant.cs:1089`）
+    /// 的 1:1 移植（**只取记录与四个头字段**）。
+    ///
+    /// 等价于 [`Self::load_merchants_loaded`] 但丢弃 `LoadOutcome.scripts`；保留给不消费
+    /// 商人脚本表的调用方/旧用例。需要 `GotoLable` 的宿主必须用 `load_merchants_loaded`
+    /// （否则就是对同一文件二次解析，见 [`LoadedMerchant`]）。
+    ///
+    /// # Errors
+    /// 同 [`Self::load_merchants_loaded`]。
+    pub fn load_merchants(
+        &self,
+        rename_rand: &mut dyn FnMut(i32, i32) -> i32,
+    ) -> Result<Option<Vec<MerchantRecord>>, EnvirError> {
+        Ok(self
+            .load_merchants_loaded(rename_rand)?
+            .map(|list| list.into_iter().map(|m| m.record).collect()))
     }
 }
 
