@@ -302,6 +302,12 @@ pub struct GateConfig {
     /// `ServerConf.cs:529` 的 `ReadWriteBool("Setup", "ShowPreFixMsg", …)`）——为真时公告前拼接
     /// `Config.LineNoticePreFix`。现网 `Server.conf:778` = `0`（假 ⇒ 前缀支不可达）。
     pub show_pre_fix_msg: bool,
+    /// `[Setup] GuildMsgFColor`（oracle `GameSvrConf.cs:1542` 缺省 `0xDB`；
+    /// `ServerConf.cs:335` 的 `ReadWriteByte`）——行会消息 `104` 的 `Param` 低字节。
+    pub guild_msg_f_color: u8,
+    /// `[Setup] GuildMsgBColor`（oracle `GameSvrConf.cs:1543` 缺省 `0xFF`；
+    /// `ServerConf.cs:336`）——`104` 的 `Param` 高字节。
+    pub guild_msg_b_color: u8,
     /// `[Setup] MonsterPowerRate`（oracle `GameSvrConf.cs:391/1476`，缺省 `10`；
     /// `ServerConf.cs:560` 的 `ReadWriteInteger("Setup", "MonsterPowerRate", …)`）——
     /// `load_monster_db` 的怪物能力缩放（`monitems::load_monsters` 的入参）。
@@ -358,6 +364,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut deal_ok_time: Option<i32> = None;
     let mut can_not_get_back_deal: Option<bool> = None;
     let mut disable_deal: Option<bool> = None;
+    let mut guild_msg_f_color: Option<u8> = None;
+    let mut guild_msg_b_color: Option<u8> = None;
     let mut hear_msg_f_color: Option<u8> = None;
     let mut hear_msg_b_color: Option<u8> = None;
     let mut whisper_msg_f_color: Option<u8> = None;
@@ -611,6 +619,18 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 }
                 "DISABLEDEAL" => {
                     disable_deal = Some(parse_bool(v, "DisableDeal")?);
+                }
+                "GUILDMSGFCOLOR" => {
+                    guild_msg_f_color = Some(
+                        v.parse()
+                            .with_context(|| format!("GuildMsgFColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "GUILDMSGBCOLOR" => {
+                    guild_msg_b_color = Some(
+                        v.parse()
+                            .with_context(|| format!("GuildMsgBColor 不是合法字节：{v:?}"))?,
+                    );
                 }
                 "HEARMSGFCOLOR" => {
                     hear_msg_f_color = Some(
@@ -1100,6 +1120,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         show_line_notice_time: show_line_notice_time.unwrap_or(5 * 60 * 1000),
         line_notice_color: line_notice_color.unwrap_or(2),
         show_pre_fix_msg: show_pre_fix_msg.unwrap_or(false),
+        // oracle 缺省值（`GameSvrConf.cs:1542-1543`；`ServerConf.cs:335-336`）。
+        guild_msg_f_color: guild_msg_f_color.unwrap_or(0xDB),
+        guild_msg_b_color: guild_msg_b_color.unwrap_or(0xFF),
         // oracle 缺省值（`GameSvrConf.cs:1476` 的 `MonsterPowerRate = 10`）。
         monster_power_rate: monster_power_rate.unwrap_or(10),
         // oracle 缺省值（`GameSvrConf.cs:1527` 的 `ScriptGotoCountLimit = 30`）。
@@ -1377,6 +1400,37 @@ mod tests {
         );
         assert_eq!(c2.home_map, "0", "缺键 ⇒ 缺省 \"0\"（GameSvrConf.cs:1374）");
         assert_eq!((c2.home_x, c2.home_y), (289, 618), "缺键 ⇒ 缺省 289/618");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[Setup] GuildMsgFColor/GuildMsgBColor`（`ServerConf.cs:335-336`；缺省 0xDB/0xFF）——
+    /// G3 的 104 `Param` 低/高字节（`GuildConfig` 唯一来源，M-8）。
+    #[test]
+    fn guild_msg_colors_from_setup_section() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-guild-{}", std::process::id()));
+        let base = "[Server]
+GateAddr=127.0.0.1
+GatePort=5000
+CheckBlock=12288
+IDSAddr=127.0.0.1
+IDSPort=5600
+DBAddr=127.0.0.1
+DBPort=6000
+";
+        let p = write(
+            &dir,
+            &format!(
+                "{base}[Setup]
+GuildMsgFColor=10
+GuildMsgBColor=11
+"
+            ),
+        );
+        let c = load(&p).unwrap();
+        assert_eq!((c.guild_msg_f_color, c.guild_msg_b_color), (10, 11));
+        let p2 = write(&dir, base);
+        let c2 = load(&p2).unwrap();
+        assert_eq!((c2.guild_msg_f_color, c2.guild_msg_b_color), (0xDB, 0xFF));
         std::fs::remove_dir_all(&dir).ok();
     }
 

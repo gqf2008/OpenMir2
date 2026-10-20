@@ -60,11 +60,13 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use game_svr::chat;
 use game_svr::downlink::{self, DisplayTable};
+use mir2_data::guild::{GuildFileSections, GuildRecord, GuildStore};
 use mir2_protocol::messages;
 use mir2_shared::hutil32::to_upper;
 use mir2_world::{GuildConfig, GuildManager};
 
 use crate::guild_frames;
+use crate::guild_runtime::{self, GuildMsgCfg};
 use crate::smframe;
 use crate::{OnlineEntry, OnlineRegistry, SimToGate};
 
@@ -94,6 +96,10 @@ pub(crate) struct GuildSession {
     pub allow_guild: bool,
     /// `PlayObject.BanGuildChat`（ctor `true`；**`true` = 允许**收行会消息）。
     pub ban_guild_chat: bool,
+    /// G3：本会话是否已跑过断线生命周期（`guild_runtime::on_disconnect` 的 `guild_done` 门）。
+    /// 放在 `GuildSession`（不是 `SessionGround`）：`GuildSessions` trait 只暴露会话字段；
+    /// 重进世界走 `materialize` 的 `..default()` ⇒ 复位 `false`。
+    pub guild_done: bool,
 }
 
 impl Default for GuildSession {
@@ -106,6 +112,7 @@ impl Default for GuildSession {
             rank_name: String::new(),
             allow_guild: false,
             ban_guild_chat: true,
+            guild_done: false,
         }
     }
 }
@@ -210,7 +217,11 @@ pub(crate) fn handle_guild_cmd<S: GuildSessions>(
     ref_range: i32,
     green: (u8, u8),
     red: (u8, u8),
-    now_ms: i64,
+    store: Option<&GuildStore>,
+    sections: &GuildFileSections,
+    msg_cfg: &GuildMsgCfg,
+    server_index: i32,
+    now_tick: i32,
 ) -> Vec<GuildServerEvent> {
     let Some(me) = online.iter().find(|e| e.chr_name == chr_name) else {
         crate::glog!(
@@ -240,7 +251,11 @@ pub(crate) fn handle_guild_cmd<S: GuildSessions>(
         ref_range,
         green,
         red,
-        now_tick: now_ms as i32,
+        store,
+        sections,
+        msg_cfg,
+        server_index,
+        now_tick,
         events: Vec::new(),
     };
     // 两个臂**保持独立**（同体是 oracle 同构：`ClientGuildHome` 直接调 `ClientOpenGuildDlg`）：
@@ -294,6 +309,12 @@ struct Ctx<'a, S: GuildSessions> {
     ref_range: i32,
     green: (u8, u8),
     red: (u8, u8),
+    store: Option<&'a GuildStore>,
+    sections: &'a GuildFileSections,
+    /// G3 派发面无 104（WarEnded/断线走 `guild_runtime`），但按 §7 写集保留接线位。
+    #[allow(dead_code)]
+    msg_cfg: &'a GuildMsgCfg,
+    server_index: i32,
     now_tick: i32,
     events: Vec<GuildServerEvent>,
 }
@@ -331,6 +352,46 @@ impl<S: GuildSessions> Ctx<'_, S> {
             s.guild_name = None;
             s.rank_no = 0;
             s.rank_name.clear();
+        }
+    }
+
+    // ---- G3 落盘（`GuildInfo.cs:366-379/425-428/584-589`）----
+
+    /// `SaveGuildInfoFile()`：按当前内存态写 `<名>.txt`；失败只记 `保存行会信息失败!!!`。
+    fn save_guild(&self, name: &str) {
+        let Some(g) = self.guilds.find_guild(name) else {
+            return;
+        };
+        if let Err(e) = guild_runtime::save_one(
+            self.store,
+            self.sections,
+            g,
+            self.now_tick,
+            self.server_index,
+        ) {
+            crate::glog!("ERR", "保存行会信息失败!!! {e}");
+        }
+    }
+
+    /// 已物化记录落盘（解散路径没有活 `GuildState`）。
+    fn save_record(&self, record: &GuildRecord) {
+        if let Err(e) = guild_runtime::save_record(
+            self.store,
+            self.sections,
+            record,
+            self.now_tick,
+            self.server_index,
+        ) {
+            crate::glog!("ERR", "保存行会信息失败!!! {e}");
+        }
+    }
+
+    /// `GuildManager.SaveGuildList()`（非 0 区 no-op；失败照 `:135-142` 吞掉）。
+    fn save_guild_list(&self) {
+        if let Err(e) =
+            guild_runtime::save_list(self.store, &self.guilds.names(), self.server_index)
+        {
+            crate::glog!("ERR", "行会信息保存失败!!! {e}");
         }
     }
 
@@ -514,6 +575,8 @@ impl<S: GuildSessions> Ctx<'_, S> {
         if let Some(g) = self.guilds.find_guild_mut(my_guild) {
             g.add_member(target_chr, self.cfg, self.now_tick);
         }
+        // `AddMember` 末尾 `UpdateGuildFile()` ⇒ 置脏 + 当场落盘。
+        self.save_guild(my_guild);
         self.events.push(GuildServerEvent::ServerGroupMsg {
             ident: messages::SS_207,
             guild: my_guild.to_string(),
@@ -580,6 +643,8 @@ impl<S: GuildSessions> Ctx<'_, S> {
                         .find_guild_mut(&my_guild)
                         .is_some_and(|g| g.del_member(s_hum_name, self.now_tick));
                     if removed {
+                        // `DelMember` 末尾 `UpdateGuildFile()` ⇒ 置脏 + 当场落盘。
+                        self.save_guild(&my_guild);
                         // 目标可能已离线：`GetPlayObject == null` ⇒ 不写会话、不产 750/42。
                         if let Some(target) = find_play_object(self.online, self.world, s_hum_name)
                         {
@@ -612,7 +677,12 @@ impl<S: GuildSessions> Ctx<'_, S> {
                         .find_guild_mut(&s14)
                         .is_some_and(|g| g.cancel_guld(s_hum_name));
                     if cancelled {
-                        self.guilds.del_guild(&s14);
+                        // `CancelGuld`（Backup）→ `DelGuild`（Backup + RemoveAt + SaveGuildList）。
+                        let removed = self.guilds.del_guild(&s14);
+                        if let Some(record) = &removed {
+                            self.save_record(record);
+                        }
+                        self.save_guild_list();
                         self.events.push(GuildServerEvent::ServerGroupMsg {
                             ident: messages::SS_206,
                             guild: s14.clone(),
@@ -660,8 +730,9 @@ impl<S: GuildSessions> Ctx<'_, S> {
         let notices = mir2_world::guild::notices_from_text(self.tail);
         if let Some(g) = self.guilds.find_guild_mut(&name) {
             g.notices = notices;
-            // `SaveGuildInfoFile()`：**不经 BoChanged**（G3 接 `GuildStore`；G2 不落盘，登记）。
         }
+        // `SaveGuildInfoFile()`：**不经 BoChanged/DwSaveTick**（直写）。
+        self.save_guild(&name);
         self.events.push(GuildServerEvent::ServerGroupMsg {
             ident: messages::SS_207,
             guild: name,
@@ -690,6 +761,8 @@ impl<S: GuildSessions> Ctx<'_, S> {
             })
         });
         if n_c == 0 {
+            // `UpdateRank` 成功末尾 `UpdateGuildFile()` ⇒ 置脏 + 当场落盘。
+            self.save_guild(&name);
             self.events.push(GuildServerEvent::ServerGroupMsg {
                 ident: messages::SS_207,
                 guild: name.clone(),
@@ -804,7 +877,7 @@ mod tests {
         guilds: GuildManager,
         cfg: GuildConfig,
         ids: HashMap<String, i32>,
-        now: i64,
+        now: i32,
     }
 
     impl Rig {
@@ -860,7 +933,7 @@ mod tests {
                 ]
                 .into_iter()
                 .collect(),
-                now: 12_345,
+                now: 12_345i32,
             }
         }
 
@@ -906,6 +979,10 @@ mod tests {
                 12,
                 GREEN,
                 RED,
+                None,
+                &GuildFileSections::oracle_defaults(),
+                &GuildMsgCfg::from_config(&self.cfg, false, ""),
+                0,
                 self.now,
             )
         }

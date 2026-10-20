@@ -42,6 +42,22 @@ pub const DEFAULT_CANOT_PICK_UP_ITEM: &str = "在一定时间以内无法捡起�
 /// 经 `StringConf.cs:76`（`GameShare.cs:91`）读入后覆盖本默认 ⇒ 线上体字节
 /// `c4fad6d0b6bec1cb212121`（`SM_SYSMESSAGE(100)`，魔号 6/48 与 50-D2 的 STY 帧）。
 pub const DEFAULT_YOU_POISONED: &str = "中毒了!!!";
+/// `[String] GuildMsgPreFix`（`GameSvrConf.cs:1843`，缺省 `〖行会〗`）——`ShowPreFixMsg` 为真时
+/// 行会消息（104）的前缀（`GuildInfo.cs:435-438`，**无空格**拼接）。
+pub const DEFAULT_GUILD_MSG_PREFIX: &str = "〖行会〗";
+/// `[Guild] GuildNotice`（`GameSvrConf.cs:1850`）——`<名>.txt` 公告段头。
+pub const DEFAULT_GUILD_NOTICE: &str = "公告";
+/// `[Guild] GuildWar`（`GameSvrConf.cs:1851`）——敌对行会段头。
+pub const DEFAULT_GUILD_WAR: &str = "敌对行会";
+/// `[Guild] GuildAll`（`GameSvrConf.cs:1852`）——联盟行会段头。
+pub const DEFAULT_GUILD_ALL: &str = "联盟行会";
+/// `[Guild] GuildMember`（`GameSvrConf.cs:1853`）——成员段头。
+pub const DEFAULT_GUILD_MEMBER: &str = "行会成员";
+/// `[Guild] GuildMemberRank`（`GameSvrConf.cs:1854`）——普通成员封号。
+pub const DEFAULT_GUILD_MEMBER_RANK: &str = "行会成员";
+/// `[Guild] GuildChief`（`GameSvrConf.cs:1855`）——掌门人封号。
+pub const DEFAULT_GUILD_CHIEF: &str = "掌门人";
+
 /// oracle `MessageSettings.RevivalRecoverMsg`（`MessageSettings.cs:226`）——P32 复活成功的
 /// `SysMsg(..., Green, Hint)` 文本（`PlayObject.Message.cs:759`）。缺键回落源码默认。
 pub const DEFAULT_REVIVAL_RECOVER_MSG: &str = "复活戒指生效，体力恢复.";
@@ -61,6 +77,15 @@ pub struct StringConf {
     canot_pick_up_item: Option<String>,
     you_poisoned: Option<String>,
     revival_recover: Option<String>,
+    // `[Guild]` 六键（`StringConf.cs:30-35`）。
+    guild_notice: Option<String>,
+    guild_war: Option<String>,
+    guild_all: Option<String>,
+    guild_member: Option<String>,
+    guild_member_rank: Option<String>,
+    guild_chief: Option<String>,
+    // `[String] GuildMsgPreFix`（`StringConf.cs:38`）。
+    guild_msg_prefix: Option<String>,
 }
 
 impl StringConf {
@@ -154,6 +179,52 @@ impl StringConf {
         self.you_poisoned.as_deref().unwrap_or(DEFAULT_YOU_POISONED)
     }
 
+    /// `[Guild] GuildNotice`（缺键回落 `GameSvrConf.cs:1850`）。
+    #[must_use]
+    pub fn guild_notice(&self) -> &str {
+        self.guild_notice.as_deref().unwrap_or(DEFAULT_GUILD_NOTICE)
+    }
+
+    /// `[Guild] GuildWar`。
+    #[must_use]
+    pub fn guild_war(&self) -> &str {
+        self.guild_war.as_deref().unwrap_or(DEFAULT_GUILD_WAR)
+    }
+
+    /// `[Guild] GuildAll`。
+    #[must_use]
+    pub fn guild_all(&self) -> &str {
+        self.guild_all.as_deref().unwrap_or(DEFAULT_GUILD_ALL)
+    }
+
+    /// `[Guild] GuildMember`。
+    #[must_use]
+    pub fn guild_member(&self) -> &str {
+        self.guild_member.as_deref().unwrap_or(DEFAULT_GUILD_MEMBER)
+    }
+
+    /// `[Guild] GuildMemberRank`（`AddMember` 的普通成员封号）。
+    #[must_use]
+    pub fn guild_member_rank(&self) -> &str {
+        self.guild_member_rank
+            .as_deref()
+            .unwrap_or(DEFAULT_GUILD_MEMBER_RANK)
+    }
+
+    /// `[Guild] GuildChief`（`SetGuildInfo` 的掌门封号）。
+    #[must_use]
+    pub fn guild_chief(&self) -> &str {
+        self.guild_chief.as_deref().unwrap_or(DEFAULT_GUILD_CHIEF)
+    }
+
+    /// `[String] GuildMsgPreFix`（`ShowPreFixMsg` 为真时 104 的前缀，缺省 `〖行会〗`）。
+    #[must_use]
+    pub fn guild_msg_prefix(&self) -> &str {
+        self.guild_msg_prefix
+            .as_deref()
+            .unwrap_or(DEFAULT_GUILD_MSG_PREFIX)
+    }
+
     /// `[String] RevivalRecoverMsg`（P32 复活提示；缺键回落 `MessageSettings.cs:226`）。
     #[must_use]
     pub fn revival_recover(&self) -> &str {
@@ -182,7 +253,15 @@ pub fn load(path: &Path) -> Result<StringConf> {
 pub fn parse(bytes: &[u8]) -> StringConf {
     let (text, _, _) = encoding_rs::GBK.decode(bytes);
     let mut conf = StringConf::defaults();
-    let mut in_string_section = false;
+    // 段解析从「单 bool」改为三态（I-6）：`[String]` 与 `[Guild]` 各取各的键，
+    // 其余段一律忽略。段名 `OrdinalIgnoreCase`（`ConfigFile.cs:13`）。
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Section {
+        String,
+        Guild,
+        Other,
+    }
+    let mut section = Section::Other;
     let mut large_comment = false;
     for raw in text.lines() {
         let mut line = raw.trim();
@@ -201,10 +280,16 @@ pub fn parse(bytes: &[u8]) -> StringConf {
         }
         if let Some(rest) = line.strip_prefix('[') {
             let sec = rest.split_once(']').map_or("", |(name, _)| name.trim());
-            in_string_section = sec.eq_ignore_ascii_case("String");
+            section = if sec.eq_ignore_ascii_case("String") {
+                Section::String
+            } else if sec.eq_ignore_ascii_case("Guild") {
+                Section::Guild
+            } else {
+                Section::Other
+            };
             continue;
         }
-        if !in_string_section {
+        if section == Section::Other {
             continue;
         }
         // 行内注释：`ConfigFile.cs:314-318` 取首个 `;;` 之前。
@@ -220,19 +305,26 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             continue;
         }
         // `ConfigFile.cs:327`：同一键**首次出现为准**。
-        let slot = match k.to_ascii_uppercase().as_str() {
-            "HUMANSHOWNAME" => &mut conf.human_show_name,
-            "RANKLEVELNAME" => &mut conf.rank_level_name,
-            "WARRRENEWNAME" => &mut conf.warr_re_new_name,
-            "WIZARDRENEWNAME" => &mut conf.wizard_re_new_name,
-            "TAOSRENEWNAME" => &mut conf.taos_re_new_name,
-            "MANDEARNAME" => &mut conf.man_dear_name,
-            "WOMANDEARNAME" => &mut conf.wo_man_dear_name,
-            "MASTERNAME" => &mut conf.master_name,
-            "NOMASTERNAME" => &mut conf.no_master_name,
-            "CANOTPICKUPITEM" => &mut conf.canot_pick_up_item,
-            "YOUPOISONED" => &mut conf.you_poisoned,
-            "REVIVALRECOVERMSG" => &mut conf.revival_recover,
+        let slot = match (section, k.to_ascii_uppercase().as_str()) {
+            (Section::String, "HUMANSHOWNAME") => &mut conf.human_show_name,
+            (Section::String, "RANKLEVELNAME") => &mut conf.rank_level_name,
+            (Section::String, "WARRRENEWNAME") => &mut conf.warr_re_new_name,
+            (Section::String, "WIZARDRENEWNAME") => &mut conf.wizard_re_new_name,
+            (Section::String, "TAOSRENEWNAME") => &mut conf.taos_re_new_name,
+            (Section::String, "MANDEARNAME") => &mut conf.man_dear_name,
+            (Section::String, "WOMANDEARNAME") => &mut conf.wo_man_dear_name,
+            (Section::String, "MASTERNAME") => &mut conf.master_name,
+            (Section::String, "NOMASTERNAME") => &mut conf.no_master_name,
+            (Section::String, "CANOTPICKUPITEM") => &mut conf.canot_pick_up_item,
+            (Section::String, "YOUPOISONED") => &mut conf.you_poisoned,
+            (Section::String, "REVIVALRECOVERMSG") => &mut conf.revival_recover,
+            (Section::String, "GUILDMSGPREFIX") => &mut conf.guild_msg_prefix,
+            (Section::Guild, "GUILDNOTICE") => &mut conf.guild_notice,
+            (Section::Guild, "GUILDWAR") => &mut conf.guild_war,
+            (Section::Guild, "GUILDALL") => &mut conf.guild_all,
+            (Section::Guild, "GUILDMEMBER") => &mut conf.guild_member,
+            (Section::Guild, "GUILDMEMBERRANK") => &mut conf.guild_member_rank,
+            (Section::Guild, "GUILDCHIEF") => &mut conf.guild_chief,
             _ => continue,
         };
         if slot.is_none() {

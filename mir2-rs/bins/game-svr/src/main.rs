@@ -31,6 +31,7 @@ mod gamegold;
 mod goldsales;
 mod guild_cmd;
 mod guild_frames;
+mod guild_runtime;
 mod homemap;
 mod hutil;
 mod ids;
@@ -897,6 +898,25 @@ async fn main() -> Result<()> {
                 map_sizes,
                 registry,
                 EnterConfig {
+                    guild_store: Some(mir2_data::guild::GuildStore::new(
+                        &guild_castle_cfg.guild_dir,
+                        &guild_castle_cfg.guild_file,
+                    )),
+                    guild_sections: mir2_data::guild::GuildFileSections::from_strings(
+                        string_conf.guild_notice(),
+                        string_conf.guild_war(),
+                        string_conf.guild_all(),
+                        string_conf.guild_member(),
+                    ),
+                    guild_msg_cfg: guild_runtime::GuildMsgCfg::from_config(
+                        &mir2_world::GuildConfig {
+                            guild_msg_f_color: cfg.guild_msg_f_color,
+                            guild_msg_b_color: cfg.guild_msg_b_color,
+                            ..mir2_world::GuildConfig::default()
+                        },
+                        cfg.show_pre_fix_msg,
+                        string_conf.guild_msg_prefix(),
+                    ),
                     game_conf,
                     string_conf,
                     show_rank_level_name,
@@ -3527,6 +3547,17 @@ fn handle_click_npc_cmd(
 /// **本片已实现**：三道置位 + `world.soft_close()`（= `MakeGhost` 的世界侧等价物，`crates/world::session`）。
 /// **登记**：`OffLineFlag`（挂机态）未建模 ⇒ 恒 `false`（门恒通过）；`BoKickFlag` 支
 /// （`SM_OUTOFCONNECTION`）不属本命令。
+/// **G3**：四条断线宿主共享的行会/落盘句柄（`CM_SOFTCLOSE` 由 `dispatch_inbound_p0`
+/// 透传；测试可传 `None`，G3 侧完全 no-op）。
+struct GuildDisconnect<'a> {
+    guilds: &'a mut mir2_world::GuildManager,
+    store: Option<&'a mir2_data::guild::GuildStore>,
+    sections: &'a mir2_data::guild::GuildFileSections,
+    msg_cfg: &'a guild_runtime::GuildMsgCfg,
+    server_index: i32,
+    gates: &'a std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+}
+
 fn handle_soft_close_cmd(
     w_param: u16,
     chr_name: &str,
@@ -3534,6 +3565,7 @@ fn handle_soft_close_cmd(
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     world: &mut mir2_world::World,
+    guild: Option<&mut GuildDisconnect<'_>>,
 ) {
     if online.iter().all(|e| e.chr_name != chr_name) {
         glog!(
@@ -3555,10 +3587,40 @@ fn handle_soft_close_cmd(
     }
     // `RunNotice` 的 `BoSoftClose` 支 ⇒ `MakeGhost()`（同 tick 后段）。
     match world.soft_close(chr_name) {
-        Ok(()) => glog!(
-            "INF",
-            "CM_SOFTCLOSE：ChrName={chr_name} 软关（BoReconnection=true/BoSoftClose=true/BoEmergencyClose={emergency}）⇒ 离开世界"
-        ),
+        Ok(()) => {
+            glog!(
+                "INF",
+                "CM_SOFTCLOSE：ChrName={chr_name} 软关（BoReconnection=true/BoSoftClose=true/BoEmergencyClose={emergency}）⇒ 离开世界"
+            );
+            // **G3（§3 第四条接线）**：`world.soft_close` 成功后跑行会断线生命周期。
+            // 标志已置 `bo_reconnection=true, bo_soft_close=true` ⇒ oracle `!BoReconnection`
+            // 为假 ⇒ **无 104/SS_208**，只做 check_save + 清槽（用会话缓存 `my_guild`）。
+            if let Some(host) = guild {
+                let guild_ban: std::collections::HashMap<String, bool> = sessions
+                    .iter()
+                    .map(|(k, sg)| (k.clone(), sg.guild.ban_guild_chat))
+                    .collect();
+                #[allow(clippy::needless_borrow)]
+                let guild_rcpt = guild_recipients(&online, &world, &guild_ban);
+                let guild_softcmd = guild_runtime::on_disconnect(
+                    &mut *host.guilds,
+                    host.store,
+                    host.sections,
+                    host.msg_cfg,
+                    sessions,
+                    &guild_runtime::DisconnectCtx {
+                        chr_name,
+                        bo_reconnection: true,
+                        bo_soft_close: true,
+                        now_tick: world.clock_ms as i32,
+                        server_index: host.server_index,
+                    },
+                    &guild_rcpt,
+                );
+                send_guild_notices(&guild_softcmd.notices, online, host.gates);
+                log_guild_outcome(&guild_softcmd, chr_name);
+            }
+        }
         Err(e) => glog!(
             "DBG",
             "CM_SOFTCLOSE：ChrName={chr_name} 置位完成，但 soft_close 未生效（{e:?}）"
@@ -3585,6 +3647,7 @@ fn dispatch_inbound_p0(
     displays: &downlink::DisplayTable,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    guild: Option<&mut GuildDisconnect<'_>>,
 ) -> bool {
     if cmd.ident == mir2_protocol::messages::CM_QUERYUSERNAME {
         // 线缆映射（`WorldServer.cs:793-794`）：`Recog=targetId`、`Param=x`、`Tag=y`。
@@ -3610,7 +3673,7 @@ fn dispatch_inbound_p0(
         true
     } else if cmd.ident == mir2_protocol::messages::CM_SOFTCLOSE {
         // `wParam`（= 线缆 `Series`）== 1 ⇒ `BoEmergencyClose`。
-        handle_soft_close_cmd(cmd.series, chr_name, socket, online, sessions, world);
+        handle_soft_close_cmd(cmd.series, chr_name, socket, online, sessions, world, guild);
         true
     } else if cmd.ident == mir2_protocol::messages::CM_CLICKNPC {
         // 线缆映射：`Recog=npcActorId`。
@@ -12105,6 +12168,102 @@ fn handle_duplicate_enter(
 /// 给**旧**连接发 `SM_OUTOFCONNECTION`（`SendDefMessage(SM_OUTOFCONNECTION, 0, 0, 0, 0)`），
 /// 再 `MakeGhost()` = 离开世界（摘格子 + 移除实体）并清掉旧槽。
 #[allow(clippy::too_many_arguments)]
+/// **G3/C2**：把 104 帧按收件人 `ActorId` 路由回各自网关。
+fn send_guild_notices(
+    notices: &[(i32, Vec<u8>)],
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    for (actor_id, body) in notices {
+        let Some(t) = online.iter().find(|e| e.actor_id == *actor_id) else {
+            glog!(
+                "WRN",
+                "行会 104：ActorId={actor_id} 不在在线登记表 ⇒ 丢弃（收件人解析时还在，帧序中离开）"
+            );
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "行会 104") else {
+            continue;
+        };
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: t.socket,
+            body: body.clone(),
+        });
+    }
+}
+
+/// **G3/C-2**：生产收件人闭包——`guild_cmd::find_play_object`（在线 + 实体存在 + `!ghost`）
+/// + `ban` 快照里的 `BanGuildChat`（缺条目按 oracle 缺省 `true` = 允许）。
+///
+/// **不得**捕获 `ground_sessions`——调用方先快照 `ban`，否则与 `on_disconnect` 的
+/// `&mut ground_sessions` 重叠借用（E0502）。
+fn guild_recipients<'a>(
+    online: &'a OnlineRegistry,
+    world: &'a mir2_world::World,
+    ban: &'a std::collections::HashMap<String, bool>,
+) -> impl Fn(&str) -> Option<(i32, bool)> + 'a {
+    move |name: &str| {
+        let e = guild_cmd::find_play_object(online, world, name)?;
+        let allow = ban.get(&e.chr_name).copied().unwrap_or(true);
+        Some((e.actor_id, allow))
+    }
+}
+
+/// **G3**：断线产出的统一日志（104 帧已由 [`send_guild_notices`] 发出）。
+fn log_guild_outcome(outcome: &guild_runtime::DisconnectOutcome, chr_name: &str) {
+    if let Some(ss) = &outcome.ss208 {
+        glog!("INF", "行会跨服事件：{}", ss.describe());
+    }
+    if let Some(saved) = &outcome.saved {
+        match saved {
+            Ok(status) => glog!("INF", "行会断线 check_save：{status:?} ChrName={chr_name}"),
+            Err(e) => glog!("ERR", "保存行会信息失败!!! {e}"),
+        }
+    }
+    if let Some(cleared) = &outcome.cleared {
+        glog!("DBG", "行会清槽：ChrName={chr_name} 清空旧成员槽 {cleared}");
+    }
+}
+
+/// **T-101/M-12**：陈旧 `Closed` 的判定——比 `(gate_idx, socket)`。
+///
+/// `GateEvent::Closed` 带 `index`（= **网关线号** `service_id`，与 `OnlineEntry.gate_idx`
+/// 同源）/`chr_name`/`socket`，不带 game `session_id`；重登后 `ground_sessions.insert` 覆盖会话、
+/// `online` 换成新 socket ⇒ 旧 socket 的 `Closed` 不匹配。
+fn closed_event_is_current(
+    online: &OnlineRegistry,
+    chr_name: &str,
+    gate_idx: i32,
+    socket: i32,
+) -> bool {
+    online
+        .iter()
+        .any(|e| e.chr_name == chr_name && e.gate_idx == gate_idx && e.socket == socket)
+}
+
+/// **T-101/M-12**：`Closed` 臂的「陈旧早退 + CloseUser 置位」。
+///
+/// **置位必须在早退之后**：否则陈旧 `Closed` 会把**新会话**的 `bo_soft_close` 置真，之后新会话
+/// 走 `drain_kicks` 会从路径 B 变成路径 A 发 104（N-1）。返回 `false` ⇒ 整臂早退。
+#[allow(clippy::needless_return)]
+fn prepare_closed_guild(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    online: &OnlineRegistry,
+    chr_name: &str,
+    gate_idx: i32,
+    socket: i32,
+) -> bool {
+    if !closed_event_is_current(online, chr_name, gate_idx, socket) {
+        return false;
+    }
+    // `CloseUser`: `if (!OffLineFlag) BoSoftClose = true`
+    if let Some(sg) = sessions.get_mut(chr_name) {
+        sg.bo_soft_close = true;
+    }
+    return true;
+}
+
+#[allow(clippy::too_many_arguments)]
 fn drain_kicks(
     world: &mut mir2_world::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -12115,6 +12274,11 @@ fn drain_kicks(
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     registry: Option<&mir2_envir::MapRegistry>,
+    guilds: &mut mir2_world::GuildManager,
+    guild_store: Option<&mir2_data::guild::GuildStore>,
+    guild_sections: &mir2_data::guild::GuildFileSections,
+    guild_msg_cfg: &guild_runtime::GuildMsgCfg,
+    guild_server_index: i32,
 ) {
     for chr in std::mem::take(kick_pending) {
         let Some(e) = online_take(online, &chr) else {
@@ -12136,6 +12300,33 @@ fn drain_kicks(
         if let (Some(saved), Some(sg)) = (saves.get(&chr), ground_sessions.get(&chr)) {
             save_human_rcd(db, engine, saved, &chr, world, sg, registry);
         }
+        // **G3**：`drain_kicks` 只置 `BoKickFlag`（`WorldServer.cs:1052-1063`）⇒ 路径 B
+        // （`bo_reconnection=false, bo_soft_close=false`）：无 104/SS_208，check_save+清槽照做。
+        let online = &*online;
+        let guild_ban: std::collections::HashMap<String, bool> = ground_sessions
+            .iter()
+            .map(|(k, sg)| (k.clone(), sg.guild.ban_guild_chat))
+            .collect();
+        #[allow(clippy::needless_borrow)]
+        let guild_rcpt = guild_recipients(&online, &world, &guild_ban);
+        let guild_kick = guild_runtime::on_disconnect(
+            guilds,
+            guild_store,
+            guild_sections,
+            guild_msg_cfg,
+            ground_sessions,
+            &guild_runtime::DisconnectCtx {
+                chr_name: &chr,
+                bo_reconnection: false,
+                bo_soft_close: false,
+                now_tick: world.clock_ms as i32,
+                server_index: guild_server_index,
+            },
+            &guild_rcpt,
+        );
+        send_guild_notices(&guild_kick.notices, online, gates);
+        drop(guild_rcpt);
+        log_guild_outcome(&guild_kick, &chr);
         match world.disconnect(&chr) {
             Ok(()) => glog!(
                 "INF",
@@ -12247,6 +12438,11 @@ fn drain_soft_close(
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     registry: Option<&mir2_envir::MapRegistry>,
+    guilds: &mut mir2_world::GuildManager,
+    guild_store: Option<&mir2_data::guild::GuildStore>,
+    guild_sections: &mir2_data::guild::GuildFileSections,
+    guild_msg_cfg: &guild_runtime::GuildMsgCfg,
+    guild_server_index: i32,
 ) {
     for chr in std::mem::take(soft_close_pending) {
         let Some(e) = online_take(online, &chr) else {
@@ -12264,6 +12460,37 @@ fn drain_soft_close(
         if let (Some(saved), Some(sg)) = (saves.get(&chr), ground_sessions.get(&chr)) {
             save_human_rcd(db, engine, saved, &chr, world, sg, registry);
         }
+        // **G3**：`KickUser` 置 `BoEmergencyClose=true, BoSoftClose=true`（`TCPNetChannel.cs:268-269`）
+        // ⇒ 路径 A（`BoReconnection` 不动；此位若已被 `CM_SOFTCLOSE` 置真则路径 B）。
+        if let Some(sg) = ground_sessions.get_mut(&chr) {
+            sg.bo_soft_close = true;
+            sg.bo_emergency_close = true;
+        }
+        let online = &*online;
+        let guild_ban: std::collections::HashMap<String, bool> = ground_sessions
+            .iter()
+            .map(|(k, sg)| (k.clone(), sg.guild.ban_guild_chat))
+            .collect();
+        #[allow(clippy::needless_borrow)]
+        let guild_rcpt = guild_recipients(&online, &world, &guild_ban);
+        let guild_soft = guild_runtime::on_disconnect(
+            guilds,
+            guild_store,
+            guild_sections,
+            guild_msg_cfg,
+            ground_sessions,
+            &guild_runtime::DisconnectCtx {
+                chr_name: &chr,
+                bo_reconnection: false,
+                bo_soft_close: true,
+                now_tick: world.clock_ms as i32,
+                server_index: guild_server_index,
+            },
+            &guild_rcpt,
+        );
+        send_guild_notices(&guild_soft.notices, online, gates);
+        drop(guild_rcpt);
+        log_guild_outcome(&guild_soft, &chr);
         match world.disconnect(&chr) {
             Ok(()) => glog!(
                 "INF",
@@ -12612,6 +12839,12 @@ struct EnterConfig {
     /// G2 只用其中的行会键映射成 `mir2_world::GuildConfig`（简报 §8）；G3 直接复用它建 `GuildStore`
     /// （`GuildFileSections::from_config`）。
     guild_castle_cfg: mir2_data::guild_castle::GuildCastleConfig,
+    /// **G3**：`GuildBase/GuildList.txt` + `Guilds/<名>.txt` 仓库（`[Share] GuildDir/GuildFile`）。
+    guild_store: Option<mir2_data::guild::GuildStore>,
+    /// **G3**：`String.conf [Guild]` 四段头（`GuildNotice/GuildWar/GuildAll/GuildMember`）。
+    guild_sections: mir2_data::guild::GuildFileSections,
+    /// **G3**：104 的前缀/颜色（颜色转发自 `GuildConfig`，M-8）。
+    guild_msg_cfg: guild_runtime::GuildMsgCfg,
     /// `stditems` 物品目录（`game_svr::ability::StdItemCatalog`，**1-based** 查表，见 `crate::items`）；
     /// 空目录 = 未加载/无配置。帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
     catalog: game_svr::ability::StdItemCatalog,
@@ -12759,6 +12992,13 @@ impl EnterConfig {
             show_rank_level_name: false,
             server_index: 0,
             guild_castle_cfg: mir2_data::guild_castle::GuildCastleConfig::default(),
+            guild_store: None,
+            guild_sections: mir2_data::guild::GuildFileSections::oracle_defaults(),
+            guild_msg_cfg: guild_runtime::GuildMsgCfg::from_config(
+                &mir2_world::GuildConfig::default(),
+                false,
+                "",
+            ),
             catalog: game_svr::ability::StdItemCatalog::new(),
             world_item_catalog: Vec::new(),
             magic_table: magics::MagicTable::new(Vec::new()),
@@ -14427,9 +14667,24 @@ fn sim_loop(
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = production_world(map_sizes, &mut enter_cfg.world_item_catalog);
-    // **G2**：行会管理器的生产配置（与 `Server.conf` 同源，简报 §8）与会表（G2 空表；G3 启动加载）。
-    let guild_cfg = mir2_world::GuildConfig::from_guild_castle(&enter_cfg.guild_castle_cfg);
-    let mut guilds = mir2_world::GuildManager::new();
+    // **G2**：行会管理器的生产配置（与 `Server.conf` 同源，简报 §8）与会表（G3 启动加载）。
+    // **I-6**：`GuildChief/GuildMemberRank` 的生产源是 `String.conf [Guild]`（`StringConf.cs:30-35`），
+    // 不是 `GuildCastleConfig`；不覆盖会静默回落 `掌门人/行会成员`（W3-m8/m9）。
+    let mut guild_cfg = mir2_world::GuildConfig::from_guild_castle(&enter_cfg.guild_castle_cfg);
+    guild_cfg.guild_chief = enter_cfg.string_conf.guild_chief().to_string();
+    guild_cfg.guild_member_rank = enter_cfg.string_conf.guild_member_rank().to_string();
+    guild_cfg.guild_msg_f_color = enter_cfg.guild_msg_cfg.f_color;
+    guild_cfg.guild_msg_b_color = enter_cfg.guild_msg_cfg.b_color;
+    // **G3**：启动加载（`GuildManager.LoadGuildInfo`）：名单缺失 ⇒ WRN + 空表、不拒启。
+    let guild_store = enter_cfg.guild_store.clone();
+    let mut guilds = guild_runtime::startup(
+        guild_store.as_ref(),
+        &enter_cfg.guild_sections,
+        guild_cfg.guild_rank_name_len,
+        world.clock_ms as i32,
+        i32::from(enter_cfg.server_index),
+    );
+    let mut guild_run_tick = world.clock_ms as i32;
     // **P3 收尾残余**：`MagTurnUndeadLevel` + `PKFlagTime`（`Server.conf [Setup]`）。
     world.set_mag_turn_undead_level(enter_cfg.mag_turn_undead_level);
     world.set_pk_flag_config(
@@ -15245,6 +15500,14 @@ fn sim_loop(
                         &displays,
                         &gates,
                         &enter_cfg.catalog,
+                        Some(&mut GuildDisconnect {
+                            guilds: &mut guilds,
+                            store: guild_store.as_ref(),
+                            sections: &enter_cfg.guild_sections,
+                            msg_cfg: &enter_cfg.guild_msg_cfg,
+                            server_index: i32::from(enter_cfg.server_index),
+                            gates: &gates,
+                        }),
                     ) {
                         // 入站 P0 批（R1 前六条：CM_QUERYUSERNAME/CM_QUERYUSERSTATE/CM_QUERYUSERSET/
                         // CM_QUERYVAL/CM_SOFTCLOSE/CM_CLICKNPC）：派发与线缆字段映射见
@@ -15424,7 +15687,11 @@ fn sim_loop(
                             enter_cfg.ref_msg_range,
                             (enter_cfg.green_msg_f_color, enter_cfg.green_msg_b_color),
                             (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
-                            now_ms(),
+                            guild_store.as_ref(),
+                            &enter_cfg.guild_sections,
+                            &enter_cfg.guild_msg_cfg,
+                            i32::from(enter_cfg.server_index),
+                            world.clock_ms as i32,
                         );
                         for ev in &events {
                             glog!("INF", "行会跨服事件：{}", ev.describe());
@@ -15479,6 +15746,52 @@ fn sim_loop(
                         );
                     } else {
                         kick_pending.retain(|n| n != &chr_name);
+                        // **T-101/M-12**：陈旧 `Closed`（重登后旧 socket）⇒ 整臂早退。
+                        // 位置：`engine.delete_human` 与 `kick_pending.retain` 之后、
+                        // `deal_cancel_between`/`online_take`/存档/移除之前。
+                        if !prepare_closed_guild(
+                            &mut ground_sessions,
+                            &online,
+                            &chr_name,
+                            index,
+                            socket,
+                        ) {
+                            // 陈旧 Closed（重登后旧 socket）⇒ 整臂早退（T-101/M-12）。
+                            continue;
+                        }
+                        // **N-6**：flags 必须先复制到局部（直接写 `sg.*` 会与同一实参列表里的
+                        // `&mut ground_sessions` 重叠借用 E0502）。`bo_soft_close` 在此已被
+                        // `prepare_closed_guild` 置真（`CloseUser`），不得写死 `false`。
+                        let (bo_reconnection, bo_soft_close) = ground_sessions
+                            .get(&chr_name)
+                            .map_or((false, false), |sg| (sg.bo_reconnection, sg.bo_soft_close));
+                        // **G3/N-10**：104/SS_208/清槽必须在 `deal_cancel_between`（15409 对应）
+                        // 之前 ⇒ oracle 的 104（`Run()`）先于交易/party 帧。
+                        let guild_ban: std::collections::HashMap<String, bool> = ground_sessions
+                            .iter()
+                            .map(|(k, sg)| (k.clone(), sg.guild.ban_guild_chat))
+                            .collect();
+                        #[allow(clippy::needless_borrow)]
+                        let guild_rcpt = guild_recipients(&online, &world, &guild_ban);
+                        #[allow(clippy::redundant_field_names)]
+                        let guild_closed = guild_runtime::on_disconnect(
+                            &mut guilds,
+                            guild_store.as_ref(),
+                            &enter_cfg.guild_sections,
+                            &enter_cfg.guild_msg_cfg,
+                            &mut ground_sessions,
+                            &guild_runtime::DisconnectCtx {
+                                chr_name: &chr_name,
+                                bo_reconnection: bo_reconnection,
+                                bo_soft_close: bo_soft_close,
+                                now_tick: world.clock_ms as i32,
+                                server_index: i32::from(enter_cfg.server_index),
+                            },
+                            &guild_rcpt,
+                        );
+                        send_guild_notices(&guild_closed.notices, &online, &gates);
+                        drop(guild_rcpt);
+                        log_guild_outcome(&guild_closed, &chr_name);
                         // M3⑦-实现 3：断线中断交易（oracle `DealCancelA`，`WorldServer.cs:712`）——
                         // 须在 `online_take`/存档之前，交易栏物品退回本侧背包后再存档。
                         deal_cancel_between(
@@ -16594,6 +16907,11 @@ fn sim_loop(
             &mut saves,
             &mut ground_sessions,
             registry.as_ref(),
+            &mut guilds,
+            guild_store.as_ref(),
+            &enter_cfg.guild_sections,
+            &enter_cfg.guild_msg_cfg,
+            i32::from(enter_cfg.server_index),
         );
         // 账号级顶号落地（`BoSoftClose` 支）：提示帧已即时发出，这里只离开世界 + 清槽。
         // 同一 tick 后段落地（oracle ≥1 tick）——见 docs §4 的 O-1 登记。
@@ -16607,7 +16925,32 @@ fn sim_loop(
             &mut saves,
             &mut ground_sessions,
             registry.as_ref(),
+            &mut guilds,
+            guild_store.as_ref(),
+            &enter_cfg.guild_sections,
+            &enter_cfg.guild_msg_cfg,
+            i32::from(enter_cfg.server_index),
         );
+        // **G3**：10s 门 + `GuildManager.Run` + 30s `CheckSaveGuildFile`（`SystemProcessor.cs:70-77`）。
+        // 收件人闭包只捕获 `&online`/`&world`/`ban` 快照（C-2：不得捕获 `ground_sessions`，否则 E0502）。
+        {
+            let guild_ban: std::collections::HashMap<String, bool> = ground_sessions
+                .iter()
+                .map(|(k, sg)| (k.clone(), sg.guild.ban_guild_chat))
+                .collect();
+            let guild_rcpt_tick = guild_recipients(&online, &world, &guild_ban);
+            let outcome = guild_runtime::step(
+                &mut guilds,
+                guild_store.as_ref(),
+                &enter_cfg.guild_sections,
+                &enter_cfg.guild_msg_cfg,
+                i32::from(enter_cfg.server_index),
+                world.clock_ms as i32,
+                &mut guild_run_tick,
+                &guild_rcpt_tick,
+            );
+            send_guild_notices(&outcome.notices, &online, &gates);
+        }
         // **orphan 接线第二批**：掉线/小退/顶号的**离世广播**（oracle `BaseObject.DisappearA`
         // `BaseObject.cs:1519-1524` ⇒ `SendRefMsg(RM_DISAPPEAR)`，由 `MakeGhost` 调用）。
         // 世界侧 `disconnect`/`soft_close` 已在本轮（事件循环的断线处置 + `drain_kicks` +
@@ -17074,6 +17417,7 @@ async fn gate_conn(
             &ev_tx,
             check_block,
             &auth,
+            service_id,
         )
         .await?;
         // 处理与本帧同批到达的 sim 命令（清槽/入图发包等）
@@ -17294,6 +17638,7 @@ async fn dispatch(
     ev_tx: &std::sync::mpsc::Sender<GateEvent>,
     check_block: usize,
     auth: &Arc<std::sync::Mutex<auth::AdmissionStore>>,
+    service_id: u8,
 ) -> Result<()> {
     match u8::try_from(msg.ident).unwrap_or(0) {
         grobal2::GM_OPEN => {
@@ -17336,7 +17681,10 @@ async fn dispatch(
                     users.slots()
                 );
                 let _ = ev_tx.send(GateEvent::Closed {
-                    index,
+                    // **G3/T-102**：`GateEvent::Closed.index` 必须是**网关线号**（与
+                    // `OnlineEntry.gate_idx` 同源），不是 `UserList` 槽位下标；`service_id`
+                    // 是 `gates` 表的键，也是 oracle 的 `GateIdx`。
+                    index: i32::from(service_id),
                     chr_name,
                     socket: msg.socket,
                 });
@@ -17431,7 +17779,7 @@ async fn dispatch(
                         );
                         users.close_by_socket(msg.socket);
                         let _ = ev_tx.send(GateEvent::Closed {
-                            index,
+                            index: i32::from(service_id),
                             chr_name: String::new(),
                             socket: msg.socket,
                         });
@@ -19756,7 +20104,7 @@ mod tests {
     }
 
     /// 测试用的最小 `SessionGround`（攻击/受击用例只需 `wabil` 与 `per_*`）。
-    fn test_session_ground(actor_id: i32) -> SessionGround {
+    pub(crate) fn test_session_ground(actor_id: i32) -> SessionGround {
         SessionGround {
             state: game_svr::ground::GroundState {
                 item_list: Vec::new(),
@@ -22943,6 +23291,15 @@ mod tests {
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             None,
+            &mut mir2_world::GuildManager::new(),
+            None,
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            &guild_runtime::GuildMsgCfg::from_config(
+                &mir2_world::GuildConfig::default(),
+                false,
+                "",
+            ),
+            0,
         );
         match rx0.try_recv().expect("旧连接必须收到 SM_OUTOFCONNECTION") {
             SimToGate::SendFrame { socket, body } => {
@@ -22990,6 +23347,15 @@ mod tests {
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             None,
+            &mut mir2_world::GuildManager::new(),
+            None,
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            &guild_runtime::GuildMsgCfg::from_config(
+                &mir2_world::GuildConfig::default(),
+                false,
+                "",
+            ),
+            0,
         );
         assert!(kick_pending.is_empty(), "待踢名单必须被消费掉（幂等）");
         assert!(world.session("ghost").is_none());
@@ -23282,6 +23648,15 @@ mod tests {
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             None,
+            &mut mir2_world::GuildManager::new(),
+            None,
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            &guild_runtime::GuildMsgCfg::from_config(
+                &mir2_world::GuildConfig::default(),
+                false,
+                "",
+            ),
+            0,
         );
         assert_eq!(soft_close_pending.len(), 0, "待软关名单被消费");
         match rx0.try_recv().expect("随后必须清槽（CloseUser）") {
@@ -23374,6 +23749,15 @@ mod tests {
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             None,
+            &mut mir2_world::GuildManager::new(),
+            None,
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            &guild_runtime::GuildMsgCfg::from_config(
+                &mir2_world::GuildConfig::default(),
+                false,
+                "",
+            ),
+            0,
         );
         assert_eq!(
             world.session("lb1a").unwrap().stage,
@@ -23435,6 +23819,15 @@ mod tests {
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             None,
+            &mut mir2_world::GuildManager::new(),
+            None,
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            &guild_runtime::GuildMsgCfg::from_config(
+                &mir2_world::GuildConfig::default(),
+                false,
+                "",
+            ),
+            0,
         );
         let _ = rx0.try_recv(); // 528
         let _ = rx0.try_recv(); // KickUser
@@ -30802,7 +31195,7 @@ mod tests {
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
 
         // ① wParam=1 ⇒ 三标志全置真 + 离开世界。
-        handle_soft_close_cmd(1, "hero", 901, &online, &mut sessions, &mut world);
+        handle_soft_close_cmd(1, "hero", 901, &online, &mut sessions, &mut world, None);
         let sg = sessions.get("hero").unwrap();
         assert!(sg.bo_reconnection, "BoReconnection=true");
         assert!(sg.bo_soft_close, "BoSoftClose=true");
@@ -30821,7 +31214,7 @@ mod tests {
             .unwrap();
         sessions.get_mut("hero").unwrap().actor_id = hero2;
         sessions.get_mut("hero").unwrap().bo_emergency_close = false;
-        handle_soft_close_cmd(0, "hero", 901, &online, &mut sessions, &mut world);
+        handle_soft_close_cmd(0, "hero", 901, &online, &mut sessions, &mut world, None);
         let sg = sessions.get("hero").unwrap();
         assert!(sg.bo_reconnection && sg.bo_soft_close);
         assert!(!sg.bo_emergency_close, "wParam==0 ⇒ 不置 BoEmergencyClose");
@@ -30986,6 +31379,7 @@ mod tests {
                 &displays,
                 &gates,
                 &catalog,
+                None,
             ),
             "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
         );
@@ -31020,6 +31414,7 @@ mod tests {
                 &displays,
                 &gates,
                 &catalog,
+                None,
             ),
             "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
         );
@@ -31083,6 +31478,7 @@ mod tests {
                 &displays,
                 &gates,
                 &catalog,
+                None,
             ),
             "CM_QUERYUSERNAME 属 P0 批"
         );
@@ -31117,6 +31513,7 @@ mod tests {
             &displays,
             &gates,
             &catalog,
+            None,
         ));
         let frames = drain_frames(&mut rx0);
         assert_eq!(frames.len(), 1, "近窗 ⇒ 恰好一帧 SM_USERNAME");
@@ -31189,6 +31586,7 @@ mod tests {
                 &displays,
                 &gates,
                 &catalog,
+                None,
             ),
             "CM_QUERYUSERSTATE 属 P0 批 ⇒ 派发返回 true"
         );
@@ -31284,6 +31682,7 @@ mod tests {
                 &displays,
                 &gates,
                 &catalog,
+                None,
             ),
             "CM_CLICKNPC 属 P0 批 ⇒ 派发返回 true"
         );
@@ -31331,6 +31730,7 @@ mod tests {
                 &displays,
                 &gates,
                 &catalog,
+                None,
             ),
             "非 P0 ident ⇒ 返回 false"
         );
@@ -31354,6 +31754,7 @@ mod tests {
             &displays,
             &gates,
             &catalog,
+            None,
         ));
         assert_eq!(
             sessions.get("hero").unwrap().mns_val[3],
@@ -31383,6 +31784,7 @@ mod tests {
             &displays,
             &gates,
             &catalog,
+            None,
         ));
         let sg = sessions.get("hero").unwrap();
         assert_eq!(sg.mns_val[3], "hello", "CM_QUERYVAL 尾经派发落 MNSval[3]");
