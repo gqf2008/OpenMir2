@@ -9,8 +9,12 @@
 //! - 下行 `102 SS_SOFTOUTSESSION`：`账号/会话号`（角色离开时通知 LoginSrv 释放会话）。
 //!
 //! 连接失败**不致命**：C# 只打日志，`TimedService` 每 10s 重连一次（`UseReconnection`）；
-//! 这里同样按 10s 重试。**没连上时 `CheckSession` 恒假** —— 与 C# 一致（所有选角请求都会
-//! 得到 `SM_QUERYCHR_FAIL`）。
+//! 这里同样按 10s 重试。
+//!
+//! **断线不清会话表**（B-6，对齐 C# `ClientSession.LoginSocketDisconnected`，`ClientSession.cs:64-68`
+//! 只打日志）：C# 的 `_globaSessionList` 跨链路断线保留，只有 `Stop()`（进程退出，
+//! `AppService.cs:58-63`）才逐个置空。因此链路断开期间 `CheckSession` **仍然可能为真**；
+//! 只有进程从未收到过 `(100/…)`（或 `Stop()`）时才是假。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -212,8 +216,16 @@ impl LoginState {
     }
 }
 
+/// C# `TimedService.ExecuteAsync` 的重连节拍（10s）。
+const RECONNECT_DELAY: Duration = Duration::from_secs(10);
+
 /// LoginSrv 连接任务：连不上就每 10s 重试；连上后按行解析 + 每 7s 上报在线数。
 pub async fn login_link_task(server: Arc<Server>) {
+    login_link_task_with(server, RECONNECT_DELAY).await;
+}
+
+/// 同 [`login_link_task`]，但重连节拍可注入（单元测试用；生产恒为 10s）。
+pub(crate) async fn login_link_task_with(server: Arc<Server>, retry: Duration) {
     let cfg = server.cfg.clone();
     let mut buf: Vec<u8> = Vec::new();
     loop {
@@ -226,7 +238,7 @@ pub async fn login_link_task(server: Arc<Server>) {
                     let mut st = server.login.lock().await;
                     st.tx = None;
                 }
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                tokio::time::sleep(retry).await;
                 continue;
             }
         };
@@ -284,18 +296,187 @@ pub async fn login_link_task(server: Arc<Server>) {
                 }
             }
         }
+        // C# `LoginSocketDisconnected`（`ClientSession.cs:64-68`）只打日志：`_globaSessionList`
+        // **跨断线保留**，只有进程 `Stop()` 才清（`AppService.cs:58-63`）。重连由
+        // `TimedService` 每 10s `Start()` 完成，新会话只追加、不重放旧会话。
         {
             let mut st = server.login.lock().await;
             st.tx = None;
-            st.sessions.clear();
         }
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        tokio::time::sleep(retry).await;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::TcpListener;
+
+    fn test_server(port: u16) -> (Arc<Server>, mpsc::UnboundedReceiver<crate::server::Queued>) {
+        Server::new(
+            crate::config::for_test("127.0.0.1".to_string(), port),
+            Arc::new(crate::route::Share::default()),
+            Arc::new(tokio::sync::Mutex::new(crate::cache::CacheStore::default())),
+        )
+    }
+
+    async fn wait_until<F, Fut>(what: &str, mut cond: F)
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        for _ in 0..1000 {
+            if cond().await {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("等待超时：{what}");
+    }
+
+    /// 牙 1（B-6）：链路断开**不得清会话表**（C# `LoginSocketDisconnected` 只打日志，
+    /// `_globaSessionList` 跨断线保留，只有进程 `Stop()` 才清）。
+    /// 旧实现在断链收尾里 `sessions.clear()`，本用例必红。
+    #[tokio::test]
+    async fn disconnect_keeps_session_table() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (server, _queue_rx) = test_server(port);
+        let task = tokio::spawn(login_link_task_with(
+            Arc::clone(&server),
+            Duration::from_millis(20),
+        ));
+
+        let (mut link, _) = listener.accept().await.unwrap();
+        link.write_all(b"(100/acc/7/0/0/1.2.3.4/0)").await.unwrap();
+        wait_until("首链会话入表", || async {
+            server.login.lock().await.check_session(b"acc", 7)
+        })
+        .await;
+
+        drop(link);
+        wait_until("断链后发送端释放", || async {
+            server.login.lock().await.tx.is_none()
+        })
+        .await;
+
+        let st = server.login.lock().await;
+        assert!(
+            st.check_session(b"acc", 7),
+            "B-6：链路断开不得清空会话表（C# ClientSession.cs:64-68 只打日志）"
+        );
+        assert_eq!(st.sessions.len(), 1, "断线不得清表（C# 只在 Stop() 清）");
+        drop(st);
+        task.abort();
+    }
+
+    /// 牙 2（B-6）：重连后旧会话仍在、新会话只追加一次（不重放、不重复），
+    /// 且旧会话仍可被 `(101/…)` 正常关闭。
+    #[tokio::test]
+    async fn reconnect_appends_without_replaying_or_duplicating() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (server, _queue_rx) = test_server(port);
+        let task = tokio::spawn(login_link_task_with(
+            Arc::clone(&server),
+            Duration::from_millis(20),
+        ));
+
+        let (mut link, _) = listener.accept().await.unwrap();
+        link.write_all(b"(100/acc/7/0/0/1.2.3.4/0)").await.unwrap();
+        wait_until("首链会话入表", || async {
+            server.login.lock().await.check_session(b"acc", 7)
+        })
+        .await;
+        drop(link);
+        wait_until("断链后发送端释放", || async {
+            server.login.lock().await.tx.is_none()
+        })
+        .await;
+
+        let (mut link2, _) = listener.accept().await.unwrap();
+        link2
+            .write_all(b"(100/acc2/8/0/0/5.6.7.8/0)")
+            .await
+            .unwrap();
+        wait_until("重连后新会话入表", || async {
+            server.login.lock().await.check_session(b"acc2", 8)
+        })
+        .await;
+
+        {
+            let st = server.login.lock().await;
+            assert_eq!(
+                st.sessions.len(),
+                2,
+                "重连只追加新会话：不得重放/重复旧会话，也不得丢掉旧会话"
+            );
+            assert!(st.check_session(b"acc", 7));
+            assert!(st.check_session(b"acc2", 8));
+        }
+
+        // 旧会话在新链路上仍可被 LoginSrv 的 `(101/…)` 关闭。
+        link2.write_all(b"(101/acc/7)").await.unwrap();
+        wait_until("旧会话可关闭", || async {
+            !server.login.lock().await.check_session(b"acc", 7)
+        })
+        .await;
+        let st = server.login.lock().await;
+        assert_eq!(st.sessions.len(), 1);
+        assert!(st.check_session(b"acc2", 8));
+        drop(st);
+        task.abort();
+    }
+
+    /// 牙 3（B-6）：断链窗口内 `send_soft_out` 只丢队列（`tx=None`），不清会话；
+    /// 重连后发送端被重新接线，旧会话的软下线能真正写到新链路。
+    #[tokio::test]
+    async fn soft_out_rewires_to_new_link_and_keeps_sessions() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (server, _queue_rx) = test_server(port);
+        let task = tokio::spawn(login_link_task_with(
+            Arc::clone(&server),
+            Duration::from_millis(20),
+        ));
+
+        let (mut link, _) = listener.accept().await.unwrap();
+        link.write_all(b"(100/acc/7/0/0/1.2.3.4/0)").await.unwrap();
+        wait_until("首链会话入表", || async {
+            server.login.lock().await.check_session(b"acc", 7)
+        })
+        .await;
+        drop(link);
+        wait_until("断链后发送端释放", || async {
+            server.login.lock().await.tx.is_none()
+        })
+        .await;
+        {
+            let st = server.login.lock().await;
+            // 断链窗口：无发送端 ⇒ 静默丢弃，不得 panic 或清表。
+            st.send_soft_out(b"acc", 7);
+            assert!(st.check_session(b"acc", 7));
+        }
+
+        let (mut link2, _) = listener.accept().await.unwrap();
+        wait_until("重连后发送端接线", || async {
+            server.login.lock().await.tx.is_some()
+        })
+        .await;
+        server.login.lock().await.send_soft_out(b"acc", 7);
+
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout(Duration::from_secs(2), link2.read(&mut buf))
+            .await
+            .expect("重连后应收到软下线报文")
+            .unwrap();
+        assert_eq!(
+            &buf[..n],
+            b"(102/acc/7)",
+            "C# `SendSocketMsg`：`(标识/内容)`"
+        );
+        task.abort();
+    }
 
     /// LoginSrv 的三条报文（形态取自 `SessionServer.SendServerMsg`）。
     #[test]

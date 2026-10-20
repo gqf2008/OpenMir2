@@ -83,6 +83,29 @@ pub struct DbConfig {
     pub conn_string: RawStr,
 }
 
+/// 单元测试用的最小配置（会话链只需要 `ids_addr`/`ids_port`/`server_name`）。
+#[cfg(test)]
+pub(crate) fn for_test(ids_addr: String, ids_port: u16) -> DbConfig {
+    DbConfig {
+        server_name: RawStr(b"LegendOfMir2".to_vec()),
+        show_debug: false,
+        server_addr: "127.0.0.1".to_string(),
+        server_port: 0,
+        gate_addr: "127.0.0.1".to_string(),
+        gate_port: 0,
+        market_addr: "127.0.0.1".to_string(),
+        market_port: 0,
+        delete_min_level: 0,
+        dynamic_ip_mode: false,
+        map_file: RawStr(Vec::new()),
+        english_names: false,
+        ids_addr,
+        ids_port,
+        storeage: RawStr(b"MySQL".to_vec()),
+        conn_string: RawStr(Vec::new()),
+    }
+}
+
 /// 默认配置文件：可执行文件同目录的 `dbsvr.conf`（与 C# `AppContext.BaseDirectory` 一致）。
 #[must_use]
 pub fn default_path() -> PathBuf {

@@ -4,6 +4,7 @@
 //! 已登记的偏离：`mir2-rs/tests/parity/whitelist.md` 的 A-13
 //! （畸形帧只跳过该条，不让单消费者循环永久停摆）。
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -142,6 +143,28 @@ pub async fn run_dispatch(
     }
 }
 
+/// 把分发期间对网关条目副本的修改回写到 `_gateInfos`，**只在条目仍在表内时**覆盖。
+///
+/// 返回 `true` = 已回写；`false` = 条目在分发期间被读任务删除。
+///
+/// C# 消费者拿的是 `_clientManager.GetSession(...)` 的**同一对象引用**：读任务 EOF 时
+/// `Disconnected`（`LoginServer.cs:71-77`）先把条目摘掉，在途消息仍改那个对象，但改的是
+/// **已摘下的对象**，随对象丢弃，绝不会把条目挂回表里。Rust 先 clone 再处理，若回写时
+/// 无条件 `insert`，就会把已删除的条目"复活"成幽灵（`user_list` 残留、`tx` 写端已无读者）。
+/// 存在性判断与覆盖在同一把锁内完成 ⇒ 不存在"判断时在、写入时已被删"的窗口。
+fn commit_gate_update(
+    gates: &mut HashMap<String, LoginGateInfo>,
+    connection_id: &str,
+    info: LoginGateInfo,
+) -> bool {
+    if let Some(slot) = gates.get_mut(connection_id) {
+        *slot = info;
+        true
+    } else {
+        false
+    }
+}
+
 /// 一条网关消息的处理（C# `ProcessGateData` → 队列消费体）。
 async fn process_message(
     share: &Arc<Share>,
@@ -171,13 +194,11 @@ async fn process_message(
         ServerDataType::Enter => receive_open_user(&mut info, &msg),
         ServerDataType::Leave => receive_close_user(share, &mut info, &msg.socket_id).await,
     }
-    // C# `_config.sGateIPaddr = gateInfo.sIPaddr;`（每条消息后刷新）
+    // C# `_config.sGateIPaddr = gateInfo.sIPaddr;`（每条消息后刷新；即使条目已被摘掉，
+    // C# 仍从那个对象读 `sIPaddr`，这里保持同口径）。
     *share.gate_ipaddr.lock().await = info.sipaddr.clone();
-    share
-        .gates
-        .lock()
-        .await
-        .insert(connection_id.to_string(), info);
+    // 回写必须"条目仍在才覆盖"（见 `commit_gate_update`），不得 `insert` 复活已删条目。
+    let _ = commit_gate_update(&mut *share.gates.lock().await, connection_id, info);
     Ok(())
 }
 
@@ -1260,5 +1281,124 @@ mod tests {
         assert_eq!(format_second(0), "0天0小时0分钟0秒");
         assert_eq!(format_second(3661), "0天1小时1分钟1秒");
         assert_eq!(format_second(90061), "1天1小时1分钟1秒");
+    }
+
+    fn gate(tx: mpsc::UnboundedSender<Vec<u8>>) -> LoginGateInfo {
+        LoginGateInfo {
+            sipaddr: "10.0.0.9".to_string(),
+            user_list: Vec::new(),
+            keepalive_tick: 0,
+            tx,
+        }
+    }
+
+    fn user(sock: &str) -> UserInfo {
+        UserInfo {
+            sock_index: sock.to_string(),
+            ..UserInfo::default()
+        }
+    }
+
+    /// 牙 1（B-7）：分发期间条目被读任务删除 ⇒ 回写不得复活幽灵条目，且旧 `tx` 随对象释放。
+    /// 旧实现（无条件 `insert`）下本用例必红：`gates` 会重新出现该 id。
+    #[test]
+    fn removed_gate_is_not_resurrected_by_inflight_writeback() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut gates = HashMap::new();
+        gates.insert("gate-1".to_string(), gate(tx.clone()));
+
+        // 分发开始：C# `GetSession`（这里是 clone）。
+        let mut info = gates.get("gate-1").unwrap().clone();
+        info.user_list.push(user("s1"));
+        info.keepalive_tick = 42;
+
+        // 读任务 EOF：`Disconnected` → `_clientManager.Delete`。
+        gates.remove("gate-1");
+
+        // 分发结束：回写。
+        assert!(
+            !commit_gate_update(&mut gates, "gate-1", info),
+            "条目已被删除，回写必须报告未写入"
+        );
+        assert!(
+            !gates.contains_key("gate-1"),
+            "已删除的网关条目不得被在途消息写回（幽灵条目：user_list 残留 + tx 无读者）"
+        );
+        // `commit_gate_update` 在未回写时丢弃 `info`（连同它的 `tx` 克隆）；`tx` 也随之
+        // 成为最后一个持有者 ⇒ 释放后接收端应观察到断开。
+        drop(tx);
+        assert!(
+            matches!(rx.try_recv(), Err(mpsc::error::TryRecvError::Disconnected)),
+            "幽灵 tx 不应被任何存活条目持有"
+        );
+    }
+
+    /// 牙 2（B-7）：条目仍在表内时，分发期间的修改必须照常落地（防"干脆不回写"的过度修正）。
+    #[test]
+    fn present_gate_still_receives_mutations() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut gates = HashMap::new();
+        gates.insert("gate-1".to_string(), gate(tx));
+
+        let mut info = gates.get("gate-1").unwrap().clone();
+        info.user_list.push(user("s1"));
+        info.keepalive_tick = 9;
+
+        assert!(commit_gate_update(&mut gates, "gate-1", info));
+        let got = &gates["gate-1"];
+        assert_eq!(got.user_list.len(), 1);
+        assert_eq!(got.user_list[0].sock_index, "s1");
+        assert_eq!(got.keepalive_tick, 9);
+    }
+
+    /// 牙 3（B-7）：两种交错顺序（先回写后删 / 先删后回写）终态都必须无幽灵条目。
+    #[test]
+    fn both_interleavings_converge_to_absent() {
+        // 顺序 A：回写先于删除。
+        {
+            let (tx, _rx) = mpsc::unbounded_channel();
+            let mut gates = HashMap::new();
+            gates.insert("gate-1".to_string(), gate(tx));
+            let mut info = gates.get("gate-1").unwrap().clone();
+            info.user_list.push(user("s1"));
+            assert!(commit_gate_update(&mut gates, "gate-1", info));
+            gates.remove("gate-1");
+            assert!(!gates.contains_key("gate-1"));
+        }
+        // 顺序 B：删除先于回写（含"判断时在、写入时已被删"的窗口——本实现里判断与写入同锁）。
+        {
+            let (tx, _rx) = mpsc::unbounded_channel();
+            let mut gates = HashMap::new();
+            gates.insert("gate-1".to_string(), gate(tx));
+            let mut info = gates.get("gate-1").unwrap().clone();
+            info.user_list.push(user("s1"));
+            gates.remove("gate-1");
+            assert!(!commit_gate_update(&mut gates, "gate-1", info));
+            assert!(!gates.contains_key("gate-1"));
+        }
+    }
+
+    /// 反例牙：把回写改回旧的"无条件 insert"，上面牙 1 的断言确实会红（证明判别力）。
+    #[test]
+    fn unconditional_insert_would_resurrect_removed_gate() {
+        fn buggy_insert(
+            gates: &mut HashMap<String, LoginGateInfo>,
+            connection_id: &str,
+            info: LoginGateInfo,
+        ) {
+            gates.insert(connection_id.to_string(), info);
+        }
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut gates = HashMap::new();
+        gates.insert("gate-1".to_string(), gate(tx));
+        let mut info = gates.get("gate-1").unwrap().clone();
+        info.user_list.push(user("s1"));
+        gates.remove("gate-1");
+        buggy_insert(&mut gates, "gate-1", info);
+        assert!(
+            gates.contains_key("gate-1"),
+            "旧实现必然复活条目——这正是本卡要消除的幽灵"
+        );
     }
 }
