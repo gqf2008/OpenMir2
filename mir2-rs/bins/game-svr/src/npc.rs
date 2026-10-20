@@ -38,13 +38,15 @@
 //!   本片只保证「引擎 → 适配器 → 说词」这条链的取数/次序与 oracle 一致。
 //! - 隐藏 NPC 的 `ActorId`：oracle 里它们不经地图、`BaseObject.ActorId` 恒 0（本模块同）。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use mir2_envir::mapquest::QuestNpcRecord;
 use mir2_script::engine::quest_state::QuestBitmap;
+use mir2_script::engine::vars::get_val_name_no;
 use mir2_script::engine::{Engine, ScriptNpc, ScriptPlayer};
 use mir2_script::{LocalFs, ScriptInfo, ScriptParsers};
+use mir2_shared::hutil32::{arrest_string_ex_ref, compare_lstr_prefix, ArrestWrite};
 
 /// `GotoLableSendMerChantSayMsg`（`ScriptEngine.cs:991/996`）的说词行：`normNpc.ChrName + '/' + sMsg`。
 #[must_use]
@@ -138,6 +140,168 @@ pub struct NpcDef {
     /// 那需要整个世界（怪物/商人/玩家）的构造序；客户端只用它关联说话 NPC（`g_nCurMerchant`），
     /// 只要非 0 且稳定即可（G-4；精确数值登记为口径差）。
     pub actor_id: i32,
+}
+
+/// `NormNpc.Castle` 的只读快照（`$OWNERGUILD/$LORD/$CASTLENAME/...` 展开用）。
+///
+/// 城堡家族（⑧）尚未在宿主落地 ⇒ 生产恒 `None`（= oracle `Castle == null` 的 `"????"` 支）；
+/// 本结构只为把 oracle 的**非 null 分支**也能被构造级用例钉住。
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct CastleVars {
+    /// `Castle.sName`（`$CASTLENAME`）。
+    pub name: String,
+    /// `Castle.OwnGuild`（`$OWNERGUILD`；oracle 空串 ⇒ `"游戏管理"`）。
+    pub own_guild: String,
+    /// `Castle.MasterGuild.GetChiefName()`（`$LORD`；`None` = MasterGuild 为 null ⇒ `"管理员"`）。
+    pub lord: Option<String>,
+}
+
+/// `NormNpc.GetVariableText` / `Merchant.GetVariableText` 需要的**非玩家**取值。
+///
+/// oracle 的变量表一半来自 `SystemShare.Config`（服务器名、货币名、升级费…），一半来自
+/// NPC 自身（`PriceRate`、`Castle`）；本结构把这些在说词展开前一次性喂给 [`NpcPlayer`]。
+/// 缺省值 = oracle `GameSvrConf` ctor（`GameSvrConf.cs:1233/1320/1321/1420`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NpcVars {
+    /// `SystemShare.Config.ServerName`（缺省 `SKY引擎`）。
+    pub server_name: String,
+    /// `SystemShare.Config.GameGoldName`（缺省 `元宝`）。
+    pub game_gold_name: String,
+    /// `SystemShare.Config.GamePointName`（缺省 `游戏点`）。
+    pub game_point_name: String,
+    /// `SystemShare.Config.UpgradeWeaponPrice`（缺省 `10000`；`$UPGRADEWEAPONFEE`）。
+    pub upgrade_weapon_price: i32,
+    /// `Merchant.PriceRate`（`$PRICERATE`）。
+    pub price_rate: i32,
+    /// `NormNpc.Castle`（`$OWNERGUILD/$LORD/$CASTLENAME/...`）。
+    pub castle: Option<CastleVars>,
+    /// `UseItems[Weapon]` 的展示名（`$USERWEAPON`；`None`/空 = `无`）。
+    pub user_weapon: Option<String>,
+    /// `PlayObject.MyGuild?.GuildName`（`$GUILDNAME`）。
+    pub guild_name: Option<String>,
+    /// `SystemShare.Config.GlobalVal`（`int[500]`）。
+    pub global_val: Vec<i32>,
+    /// `SystemShare.Config.GlobaDyMval`（`int[500]`）。
+    pub globa_dy_mval: Vec<i32>,
+    /// `SystemShare.Config.GlobalAVal`（`string[500]`）。
+    pub global_a_val: Vec<String>,
+    /// `M2Share.High*Human` 的 `GetMyInfo()`；`None` = 无人 ⇒ `????`（`NormNpc.cs:362-435`）。
+    pub high_level_info: Option<String>,
+    pub high_pk_info: Option<String>,
+    pub high_dc_info: Option<String>,
+    pub high_mc_info: Option<String>,
+    pub high_sc_info: Option<String>,
+    pub high_online_info: Option<String>,
+}
+
+impl Default for NpcVars {
+    fn default() -> Self {
+        Self {
+            server_name: "SKY引擎".to_string(),
+            game_gold_name: "元宝".to_string(),
+            game_point_name: "游戏点".to_string(),
+            upgrade_weapon_price: 10_000,
+            price_rate: 100,
+            castle: None,
+            user_weapon: None,
+            guild_name: None,
+            global_val: vec![0; 500],
+            globa_dy_mval: vec![0; 500],
+            global_a_val: vec![String::new(); 500],
+            high_level_info: None,
+            high_pk_info: None,
+            high_dc_info: None,
+            high_mc_info: None,
+            high_sc_info: None,
+            high_online_info: None,
+        }
+    }
+}
+
+/// 一个**商人**的运行时脚本条目（`Merchant.ScriptList` + 变量展开所需的 NPC 侧字段）。
+#[derive(Debug)]
+pub struct MerchantNpc {
+    /// `Merchant.ScriptList` 与身份（`file_path` = `Market_Def`，`actor_id` = 世界实体 id）。
+    pub def: NpcDef,
+    /// `Merchant.PriceRate`（构造默认 100；脚本 `%` 行覆盖）。
+    pub price_rate: i32,
+    /// `NormNpc.Castle`（`Initialize` 的 `InCastleWarArea`；本宿主未建模 ⇒ `None`）。
+    pub castle: Option<CastleVars>,
+    pub map_name: String,
+    pub curr_x: i32,
+    pub curr_y: i32,
+}
+
+/// 商人脚本表（`ActorId → Merchant.ScriptList`）。
+///
+/// oracle 用 `SystemShare.ActorMgr.Get<INormNpc>(actorId)` 找脚本；本宿主以世界实体 id
+/// （= `ActorId`）为键。`ScriptInfo` 不 Clone ⇒ 表只在装载时建一次，宿主按引用使用
+/// （**禁止**每次 `GotoLable` 重新 `load_script_file`，见 `crates/envir::LoadedMerchant`）。
+#[derive(Debug, Default)]
+pub struct MerchantScriptBook {
+    /// `SystemShare.Config.ScriptGotoCountLimit`。
+    pub goto_count_limit: i32,
+    by_actor: BTreeMap<i32, MerchantNpc>,
+}
+
+impl MerchantScriptBook {
+    #[must_use]
+    pub fn new(goto_count_limit: i32) -> Self {
+        Self {
+            goto_count_limit,
+            by_actor: BTreeMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, entry: MerchantNpc) {
+        self.by_actor.insert(entry.def.actor_id, entry);
+    }
+
+    #[must_use]
+    pub fn get(&self, actor_id: i32) -> Option<&MerchantNpc> {
+        self.by_actor.get(&actor_id)
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_actor.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_actor.is_empty()
+    }
+
+    /// `ScriptEngine.GotoLable(player, actorId, label, boExtJmp)`（`ScriptEngine.cs:38-129`）
+    /// 的商人侧入口：按实体 id 取 `ScriptList`，跑引擎并收说词。
+    ///
+    /// `None` = `ActorMgr.Get(actorId)` 为 null（未装载脚本/非商人）——oracle 的
+    /// `if (normNpc == null) return;`（`ScriptEngine.cs:131-136`）。
+    pub fn goto_label(
+        &self,
+        actor_id: i32,
+        player: &mut NpcPlayer<'_>,
+        label: &str,
+        bo_ext_jmp: bool,
+    ) -> Option<Vec<SayMsg>> {
+        let entry = self.get(actor_id)?;
+        // `Merchant.GetVariableText` 覆写在基类之后读 `PriceRate`；`NormNpc` 的 `Castle` 支读
+        // `Initialize` 落下的城堡快照。两者都由本表在入口注入。
+        player.vars.price_rate = entry.price_rate;
+        player.vars.castle = entry.castle.clone();
+        let (map_name, curr_x, curr_y) = (entry.map_name.clone(), entry.curr_x, entry.curr_y);
+        Some(run_goto_label(
+            &entry.def,
+            actor_id,
+            &map_name,
+            curr_x,
+            curr_y,
+            self.goto_count_limit,
+            player,
+            label,
+            bo_ext_jmp,
+        ))
+    }
 }
 
 /// NPC 脚本运行时宿主。
@@ -252,16 +416,18 @@ impl NpcHost {
     ) -> Option<Vec<SayMsg>> {
         let idx = self.find(chr_name)?;
         let def = &self.defs[idx];
-        let mut npc = HostNpc {
+        // 隐藏 NPC 不经地图：`ActorId/Envir/CurrX/CurrY` 均为 0（`BaseObject` 默认）。
+        Some(run_goto_label(
             def,
-            says: Vec::new(),
-            goto_count_limit: self.goto_count_limit,
-        };
-        {
-            let mut engine = Engine::new(&mut npc, player);
-            engine.goto_label(label, bo_ext_jmp);
-        }
-        Some(npc.says)
+            0,
+            "0",
+            0,
+            0,
+            self.goto_count_limit,
+            player,
+            label,
+            bo_ext_jmp,
+        ))
     }
 
     /// `@Login`（`PlayObject.cs:1440` 用 `SystemShare.ManageNPC`，即 `QManage`）。
@@ -284,29 +450,62 @@ impl NpcHost {
     }
 }
 
-/// `ScriptNpc` 适配：借 [`NpcDef`] 的脚本表，收集说词。
+/// `ScriptNpc` 适配：借 [`NpcDef`] 的脚本表 + 调用方给的实体身份，收集说词。
 struct HostNpc<'a> {
     def: &'a NpcDef,
     says: Vec<SayMsg>,
     goto_count_limit: i32,
+    /// `BaseObject.ActorId`（隐藏 NPC 0；商人 = 世界实体 id）。
+    actor_id: i32,
+    map_name: String,
+    curr_x: i32,
+    curr_y: i32,
+}
+
+/// 跑一次 `ScriptEngine.GotoLable` 并收说词（[`NpcHost`] 与 [`MerchantScriptBook`] 共用）。
+#[allow(clippy::too_many_arguments)]
+fn run_goto_label(
+    def: &NpcDef,
+    actor_id: i32,
+    map_name: &str,
+    curr_x: i32,
+    curr_y: i32,
+    goto_count_limit: i32,
+    player: &mut NpcPlayer<'_>,
+    label: &str,
+    bo_ext_jmp: bool,
+) -> Vec<SayMsg> {
+    let mut npc = HostNpc {
+        def,
+        says: Vec::new(),
+        goto_count_limit,
+        actor_id,
+        map_name: map_name.to_string(),
+        curr_x,
+        curr_y,
+    };
+    {
+        let mut engine = Engine::new(&mut npc, player);
+        engine.goto_label(label, bo_ext_jmp);
+    }
+    npc.says
 }
 
 impl ScriptNpc for HostNpc<'_> {
     fn actor_id(&self) -> i32 {
-        // 隐藏 NPC 不经地图，`BaseObject.ActorId` 恒 0。
-        0
+        self.actor_id
     }
     fn chr_name(&self) -> String {
         self.def.chr_name.clone()
     }
     fn map_name(&self) -> String {
-        "0".to_string()
+        self.map_name.clone()
     }
     fn curr_x(&self) -> i32 {
-        0
+        self.curr_x
     }
     fn curr_y(&self) -> i32 {
-        0
+        self.curr_y
     }
     fn script_list(&self) -> &Vec<ScriptInfo> {
         &self.def.scripts
@@ -340,7 +539,17 @@ pub struct NpcPlayer<'r> {
     pub level: i32,
     /// `playerActor.Gold`
     pub gold: i32,
-    /// `playerActor.LastNpc`
+    /// `playerActor.GameGold`（`$GAMEGOLD`；`OPENYBDEAL` 等动作的读源）。
+    pub game_gold: i32,
+    /// `playerActor.GamePoint`（`$GAMEPOINT`）。
+    pub game_point: i32,
+    /// `playerActor.CreditPoint`（`$CREDITPOINT`）。
+    pub credit_point: i32,
+    /// `playerActor.ReLevel`（`$RELEVEL`）。
+    pub re_level: i32,
+    /// 说词变量展开的非玩家取值（`NormNpc.GetVariableText` 的 `SystemShare.Config`/NPC 侧）。
+    pub vars: NpcVars,
+    /// `PlayObject.LastNpc`
     pub last_npc: i32,
     /// `playerActor.Script`（脚本下标）
     pub script_index: Option<usize>,
@@ -371,6 +580,10 @@ pub struct NpcPlayer<'r> {
     pub mdy_val: HashMap<usize, i32>,
     pub mnmval: HashMap<usize, i32>,
     pub ms_string: HashMap<usize, String>,
+    /// `PlayObject.ServerStrVal[string[100]]`（`$STR` 1600..1699）。
+    pub server_str_val: Vec<String>,
+    /// `PlayObject.ServerIntVal[int[100]]`（`$STR` 1700..1799）。
+    pub server_int_val: Vec<i32>,
     /// 引擎调用 `SendMsg` 的实参序列（保序）。
     pub frames: Vec<SendMsg>,
     /// `RandomNumber.Random` —— 必须**世界同一条流**（R-4/Claim B 的输入）。
@@ -410,6 +623,11 @@ impl NpcPlayer<'_> {
             map_name: String::new(),
             level: 1,
             gold: 0,
+            game_gold: 0,
+            game_point: 0,
+            credit_point: 0,
+            re_level: 0,
+            vars: NpcVars::default(),
             last_npc: 0,
             script_index: None,
             script_goto_count: 0,
@@ -426,6 +644,8 @@ impl NpcPlayer<'_> {
             mdy_val: HashMap::new(),
             mnmval: HashMap::new(),
             ms_string: HashMap::new(),
+            server_str_val: vec![String::new(); 100],
+            server_int_val: vec![0; 100],
             frames: Vec::new(),
             rng,
             // `PlayObject.cs:941/943` 的 ctor 初值 + 两个 `Time` 的零初值。
@@ -442,6 +662,257 @@ impl NpcPlayer<'_> {
             // `PlayObject.cs:965/970` 的 ctor 初值。
             bo_inc_game_gold: false,
             bo_dec_game_gold: false,
+        }
+    }
+}
+
+/// `NormNpc.ReplaceVariableText`（`NormNpc.cs:1618-1633`）：`IndexOf(sStr, OrdinalIgnoreCase)`
+/// 命中**第一处**后用 `sText` 替换（只替换一次）。
+fn replace_variable_text(msg: &str, token: &str, text: &str) -> String {
+    if token.is_empty() || token.len() > msg.len() {
+        return msg.to_string();
+    }
+    let Some(pos) = msg
+        .as_bytes()
+        .windows(token.len())
+        .position(|w| w.eq_ignore_ascii_case(token.as_bytes()))
+    else {
+        return msg.to_string();
+    };
+    let mut out = String::with_capacity(msg.len() + text.len());
+    out.push_str(&msg[..pos]);
+    out.push_str(text);
+    out.push_str(&msg[pos + token.len()..]);
+    out
+}
+
+impl NpcPlayer<'_> {
+    /// `NormNpc.GetVariableText` + `Merchant.GetVariableText` 的 1:1 移植（说词侧）。
+    ///
+    /// 口径（逐条对应 oracle）：
+    /// - `switch (sVariable)` 是 **C# 字符串 switch ⇒ 大小写敏感**（`$username` 不命中）；
+    /// - 替换用 `ReplaceVariableText` ⇒ **只替换第一处**、且 token 查找 `OrdinalIgnoreCase`；
+    /// - `$GUILDNAME` 无行会时 oracle **把整条说词置为 `"无"`**（不是替换 token）；
+    /// - `Castle == null` 时 `$OWNERGUILD/$LORD/$CASTLENAME/...` 展开为 `"????"`
+    ///   （`NormNpc.cs:749-894`）；
+    /// - `$STR(...)` 按 `GetValNameNo` 的 12 段槽位映射（说词侧：800..1199 偏移 **-700**）；
+    /// - oracle 没有 `$GAMEGIRD`/`$GAMEDIAMOND` 分支 ⇒ **原样保留**（部署件 23/20 次，照搬）。
+    pub fn get_variable_text(&mut self, s_variable: &str, s_msg: &mut String) {
+        let token = |name: &str| format!("<{name}>");
+        match s_variable {
+            "$SERVERNAME" => {
+                *s_msg =
+                    replace_variable_text(s_msg, &token("$SERVERNAME"), &self.vars.server_name);
+            }
+            "$GAMEGOLDNAME" => {
+                *s_msg = replace_variable_text(
+                    s_msg,
+                    &token("$GAMEGOLDNAME"),
+                    &self.vars.game_gold_name,
+                );
+            }
+            "$GAMEPOINTNAME" => {
+                *s_msg = replace_variable_text(
+                    s_msg,
+                    &token("$GAMEPOINTNAME"),
+                    &self.vars.game_point_name,
+                );
+            }
+            "$USERNAME" => {
+                *s_msg = replace_variable_text(s_msg, &token("$USERNAME"), &self.chr_name);
+            }
+            "$GAMEGOLD" => {
+                *s_msg =
+                    replace_variable_text(s_msg, &token("$GAMEGOLD"), &self.game_gold.to_string());
+            }
+            "$GAMEPOINT" => {
+                *s_msg = replace_variable_text(
+                    s_msg,
+                    &token("$GAMEPOINT"),
+                    &self.game_point.to_string(),
+                );
+            }
+            "$CREDITPOINT" => {
+                *s_msg = replace_variable_text(
+                    s_msg,
+                    &token("$CREDITPOINT"),
+                    &self.credit_point.to_string(),
+                );
+            }
+            "$RELEVEL" => {
+                *s_msg =
+                    replace_variable_text(s_msg, &token("$RELEVEL"), &self.re_level.to_string());
+            }
+            "$LEVEL" => {
+                *s_msg = replace_variable_text(s_msg, &token("$LEVEL"), &self.level.to_string());
+            }
+            "$GUILDNAME" => {
+                // `NormNpc.cs:486-497`：**无行会时整条说词 = "无"**（怪异点，照搬）。
+                if let Some(g) = &self.vars.guild_name {
+                    *s_msg = replace_variable_text(s_msg, &token("$GUILDNAME"), g);
+                } else {
+                    *s_msg = "无".to_string();
+                }
+            }
+            "$OWNERGUILD" => {
+                let text = match &self.vars.castle {
+                    Some(c) if !c.own_guild.is_empty() => c.own_guild.clone(),
+                    Some(_) => "游戏管理".to_string(),
+                    None => "????".to_string(),
+                };
+                *s_msg = replace_variable_text(s_msg, &token("$OWNERGUILD"), &text);
+            }
+            "$LORD" => {
+                let text = match &self.vars.castle {
+                    Some(c) => c.lord.clone().unwrap_or_else(|| "管理员".to_string()),
+                    None => "????".to_string(),
+                };
+                *s_msg = replace_variable_text(s_msg, &token("$LORD"), &text);
+            }
+            "$CASTLENAME" => {
+                let text = match &self.vars.castle {
+                    Some(c) => c.name.clone(),
+                    None => "????".to_string(),
+                };
+                *s_msg = replace_variable_text(s_msg, &token("$CASTLENAME"), &text);
+            }
+            "$USERWEAPON" => {
+                let text = self
+                    .vars
+                    .user_weapon
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("无")
+                    .to_string();
+                *s_msg = replace_variable_text(s_msg, &token("$USERWEAPON"), &text);
+            }
+            "$PRICERATE" => {
+                *s_msg = replace_variable_text(
+                    s_msg,
+                    &token("$PRICERATE"),
+                    &self.vars.price_rate.to_string(),
+                );
+            }
+            "$UPGRADEWEAPONFEE" => {
+                *s_msg = replace_variable_text(
+                    s_msg,
+                    &token("$UPGRADEWEAPONFEE"),
+                    &self.vars.upgrade_weapon_price.to_string(),
+                );
+            }
+            "$HIGHLEVELINFO" => {
+                let t = self
+                    .vars
+                    .high_level_info
+                    .clone()
+                    .unwrap_or_else(|| "????".into());
+                *s_msg = replace_variable_text(s_msg, &token("$HIGHLEVELINFO"), &t);
+            }
+            "$HIGHPKINFO" => {
+                let t = self
+                    .vars
+                    .high_pk_info
+                    .clone()
+                    .unwrap_or_else(|| "????".into());
+                *s_msg = replace_variable_text(s_msg, &token("$HIGHPKINFO"), &t);
+            }
+            "$HIGHDCINFO" => {
+                let t = self
+                    .vars
+                    .high_dc_info
+                    .clone()
+                    .unwrap_or_else(|| "????".into());
+                *s_msg = replace_variable_text(s_msg, &token("$HIGHDCINFO"), &t);
+            }
+            "$HIGHMCINFO" => {
+                let t = self
+                    .vars
+                    .high_mc_info
+                    .clone()
+                    .unwrap_or_else(|| "????".into());
+                *s_msg = replace_variable_text(s_msg, &token("$HIGHMCINFO"), &t);
+            }
+            "$HIGHSCINFO" => {
+                let t = self
+                    .vars
+                    .high_sc_info
+                    .clone()
+                    .unwrap_or_else(|| "????".into());
+                *s_msg = replace_variable_text(s_msg, &token("$HIGHSCINFO"), &t);
+            }
+            "$HIGHONLINEINFO" => {
+                let t = self
+                    .vars
+                    .high_online_info
+                    .clone()
+                    .unwrap_or_else(|| "????".into());
+                *s_msg = replace_variable_text(s_msg, &token("$HIGHONLINEINFO"), &t);
+            }
+            _ => {
+                // `$STR(...)`（`NormNpc.cs:1532-1587`）。`CompareLStr` 只看前 5 字符。
+                if compare_lstr_prefix(s_variable, "$STR(", 5) {
+                    let (ArrestWrite::Value(inner), _) = arrest_string_ex_ref(s_variable, '(', ')')
+                    else {
+                        return;
+                    };
+                    let n = get_val_name_no(&inner);
+                    let text = match n {
+                        0..=99 => self.mn_val(n as usize).to_string(),
+                        100..=199 => self
+                            .vars
+                            .global_val
+                            .get((n - 100) as usize)
+                            .copied()
+                            .unwrap_or(0)
+                            .to_string(),
+                        200..=299 => self.mdy_val((n - 200) as usize).to_string(),
+                        300..=399 => self.mnmval((n - 300) as usize).to_string(),
+                        400..=499 => self
+                            .vars
+                            .globa_dy_mval
+                            .get((n - 400) as usize)
+                            .copied()
+                            .unwrap_or(0)
+                            .to_string(),
+                        500..=599 => self.mn_integer((n - 500) as usize).to_string(),
+                        600..=699 => self.ms_string((n - 600) as usize),
+                        700..=799 => self
+                            .vars
+                            .global_a_val
+                            .get((n - 700) as usize)
+                            .cloned()
+                            .unwrap_or_default(),
+                        // 说词侧偏移是 **-700**（不是 -800；`NormNpc.cs:1565-1568`）。
+                        800..=1199 => self
+                            .vars
+                            .global_val
+                            .get((n - 700) as usize)
+                            .copied()
+                            .unwrap_or(0)
+                            .to_string(),
+                        1200..=1599 => self
+                            .vars
+                            .global_a_val
+                            .get((n - 1100) as usize)
+                            .cloned()
+                            .unwrap_or_default(),
+                        1600..=1699 => self
+                            .server_str_val
+                            .get((n - 1600) as usize)
+                            .cloned()
+                            .unwrap_or_default(),
+                        1700..=1799 => self
+                            .server_int_val
+                            .get((n - 1700) as usize)
+                            .copied()
+                            .unwrap_or(0)
+                            .to_string(),
+                        // 槽位号 `< 0`（或越界）⇒ **不替换**（原样保留，`NormNpc.cs:1534`）。
+                        _ => return,
+                    };
+                    *s_msg = replace_variable_text(s_msg, &format!("<{s_variable}>"), &text);
+                }
+            }
         }
     }
 }
@@ -488,6 +959,51 @@ impl ScriptPlayer for NpcPlayer<'_> {
     }
     fn actor_id(&self) -> i32 {
         self.actor_id
+    }
+    fn chr_name(&self) -> String {
+        self.chr_name.clone()
+    }
+    fn game_gold(&self) -> i32 {
+        self.game_gold
+    }
+    fn game_point(&self) -> i32 {
+        self.game_point
+    }
+    fn credit_point(&self) -> i32 {
+        self.credit_point
+    }
+    fn re_level(&self) -> i32 {
+        self.re_level
+    }
+    fn guild_name(&self) -> Option<String> {
+        self.vars.guild_name.clone()
+    }
+    /// `NormNpc.GetLineVariableText`（`NormNpc.cs:245-273`）：
+    /// 循环条件 `sMsg.IndexOf('>') >= 1`（**门：没有 `>` 或 `>` 在位置 0 ⇒ 立即中止**）；
+    /// `ArrestStringEx(sMsg,"<",">",ref sVariable)` 取 `<...>`；仅 `sVariable[0]=='$'` 才展开；
+    /// **最多 101 次**（`nCount >= 101` ⇒ break）。`ArrestStringEx` 失败时 C# 不覆盖
+    /// `sVariable`（保留上一次的值）——本实现照搬（`ArrestWrite::Unchanged`）。
+    fn line_variable_text(&mut self, msg: &str) -> String {
+        let mut s = msg.to_string();
+        let mut variable = String::new();
+        let mut count = 0i32;
+        loop {
+            if s.find('>').is_none_or(|p| p < 1) {
+                break;
+            }
+            match mir2_shared::hutil32::arrest_string_ex_ref(&s, '<', '>') {
+                (mir2_shared::hutil32::ArrestWrite::Value(v), _) => variable = v,
+                (mir2_shared::hutil32::ArrestWrite::Unchanged, _) => {}
+            }
+            if !variable.is_empty() && variable.starts_with('$') {
+                self.get_variable_text(&variable.clone(), &mut s);
+            }
+            count += 1;
+            if count >= 101 {
+                break;
+            }
+        }
+        s
     }
     fn group_owner(&self) -> i32 {
         self.group_owner
@@ -926,5 +1442,280 @@ mod tests {
             ),
             (false, Some("A".to_string()), 5_000, 20)
         );
+    }
+
+    // ---- lane marketdef：商人脚本表 / GotoLable 说词 / GetVariableText ----
+
+    fn merchant_script(pairs: &[(&str, &str)]) -> ScriptInfo {
+        ScriptInfo {
+            is_quest: false,
+            quest_info: Default::default(),
+            record_list: pairs
+                .iter()
+                .map(|(label, say)| SayingRecord {
+                    s_label: (*label).to_string(),
+                    procedure_list: vec![SayingProcedure {
+                        condition_list: Vec::new(),
+                        action_list: Vec::new(),
+                        else_action_list: Vec::new(),
+                        s_say_msg: (*say).to_string(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                })
+                .collect(),
+            quest_count: 0,
+        }
+    }
+
+    fn merchant_book(
+        actor_id: i32,
+        chr_name: &str,
+        price_rate: i32,
+        pairs: &[(&str, &str)],
+    ) -> MerchantScriptBook {
+        let mut book = MerchantScriptBook::new(30);
+        book.insert(MerchantNpc {
+            def: NpcDef {
+                chr_name: chr_name.to_string(),
+                file_path: "Market_Def".to_string(),
+                script_name: Some("卫家店-0103".to_string()),
+                is_hide: false,
+                is_quest: false,
+                scripts: vec![merchant_script(pairs)],
+                loaded: true,
+                actor_id,
+            },
+            price_rate,
+            castle: None,
+            map_name: "0103".to_string(),
+            curr_x: 9,
+            curr_y: 12,
+        });
+        book
+    }
+
+    /// **C2 `merchant_click_main_say`**：`GotoLable("@main")` 的说词经 `GetLineVariableText`
+    /// 展开后收进 [`SayMsg`]：前缀 `NPC 名 + '/'`、`npc_actor_id` = 真实实体 id、
+    /// `priority=false`（`ScriptEngine.cs:997` 的 `SendMsg(normNpc)` 支）。
+    ///
+    /// 牙：不种 `price_rate`（`$PRICERATE` 不展开）/ 不实现变量展开 / 用 0 当 NPC id ⇒ 红。
+    #[test]
+    fn merchant_click_main_say_expands_player_and_npc_vars() {
+        let book = merchant_book(
+            42,
+            "卫家店",
+            120,
+            &[(
+                "@main",
+                "你好<$USERNAME>！元宝<$GAMEGOLD> 价格比例<$PRICERATE> \\ <返回/@Main>",
+            )],
+        );
+        let mut rng = no_rng();
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.chr_name = "张三".to_string();
+        p.game_gold = 7;
+        let says = book
+            .goto_label(42, &mut p, "@main", false)
+            .expect("商人已装载");
+        assert_eq!(says.len(), 1);
+        assert_eq!(
+            says[0].raw_msg,
+            "你好张三！元宝7 价格比例120 \\ <返回/@Main>"
+        );
+        assert_eq!(says[0].npc_name, "卫家店");
+        assert_eq!(
+            says[0].text,
+            "卫家店/你好张三！元宝7 价格比例120 \\ <返回/@Main>"
+        );
+        assert!(!says[0].priority, "最终说词走 SendMsg（非 High）");
+        assert_eq!(says[0].npc_actor_id, 42, "Recog 必须是商人实体 id（G-4）");
+        // `GotoLable` 选脚本/LastNpc（`ScriptEngine.cs:41-70`）。
+        assert_eq!(p.script_index, Some(0));
+        assert_eq!(p.last_npc, 42);
+    }
+
+    /// **C4 `merchant_dialog_label_gate`**：`GetScriptLabel` 从说词重建的标签表使
+    /// `<修理/@repair>` 可跳；冷标签（`@upgradenow`）仍被拒（`PlayObject.Base.cs:2814-2826`）。
+    ///
+    /// 牙：不重建 / 删掉 `@main` 特判 / 大小写比较改成敏感 ⇒ 红。
+    #[test]
+    fn merchant_dialog_label_gate() {
+        let labels = crate::shop::get_script_label("欢迎 <购买/@buy> <修理/@repair> <离开/@exit>");
+        assert_eq!(labels, vec!["@buy", "@repair", "@exit"]);
+        assert!(crate::shop::lable_is_can_jmp(&labels, "@main"));
+        assert!(crate::shop::lable_is_can_jmp(&labels, "@BUY"));
+        assert!(!crate::shop::lable_is_can_jmp(&labels, "@upgradenow"));
+        // 空的表只放行 `@main`（未说词前的冷直发）。
+        assert!(!crate::shop::lable_is_can_jmp(&[], "@repair"));
+    }
+
+    /// **C6 `merchant_repair_ok_label`**：修理成功后 `GotoLable("~@repair")` / `"~@s_repair"`
+    /// 的标签与说词（`Merchant.cs:1652/1659`）。脚本无该标签时**无说词但不 panic**；
+    /// 未装载（actor 不在表里）⇒ `None`（oracle `normNpc == null ⇒ return`）。
+    ///
+    /// 牙：把 `~@repair` 写成 `@repair`（前缀错）/ 未装载时返回 Some ⇒ 红。
+    #[test]
+    fn merchant_repair_ok_label_say_and_degrade() {
+        let book = merchant_book(
+            7,
+            "恶魔布衣",
+            100,
+            &[
+                ("~@repair", "修得还算不错。\\ \\ \\ <返 回/@Main>"),
+                ("~@s_repair", "特殊修理完成。\\ \\ \\ <返 回/@Main>"),
+            ],
+        );
+        let mut rng = no_rng();
+        let mut p = NpcPlayer::empty(&mut rng);
+        let says = book.goto_label(7, &mut p, "~@repair", false).unwrap();
+        assert_eq!(says.len(), 1);
+        assert_eq!(says[0].raw_msg, "修得还算不错。\\ \\ \\ <返 回/@Main>");
+        let says = book.goto_label(7, &mut p, "~@s_repair", false).unwrap();
+        assert_eq!(says[0].raw_msg, "特殊修理完成。\\ \\ \\ <返 回/@Main>");
+        // 未装载脚本（actor 不在表里）：oracle `ActorMgr.Get` 为 null ⇒ 直接 return。
+        assert!(book.goto_label(999, &mut p, "~@repair", false).is_none());
+        // 已装载但脚本无该标签：`RecordList.TryGetValue` 失败 ⇒ 无说词（不是 None）。
+        let empty_book = merchant_book(8, "空店", 100, &[("@main", "hi")]);
+        assert_eq!(
+            empty_book.goto_label(8, &mut p, "~@repair", false).unwrap(),
+            Vec::new()
+        );
+    }
+
+    /// **C7 `merchant_variable_text_vectors`**：`NormNpc.GetVariableText` 的边界口径。
+    ///
+    /// 牙（任一破坏 ⇒ 红）：
+    /// - switch **大小写敏感**（`$username` 不展开）；
+    /// - `ReplaceVariableText` **只替换第一处**；
+    /// - 未知 token（`$GAMEGIRD/$GAMEDIAMOND`，oracle 无分支）**原样保留**；
+    /// - `Castle == null` ⇒ `????`；`$GUILDNAME` 无行会 ⇒ **整条 = "无"**；
+    /// - `$STR` 12 段槽位（含 800..1199 的 -700 偏移与 `G12` 的 C# 长度怪点）；
+    /// - `IndexOf('>') < 1` 的**门**（无 `>` / 位置 0 ⇒ 中止）与 101 次上限。
+    #[test]
+    fn merchant_variable_text_vectors() {
+        let mut rng = no_rng();
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.chr_name = "张三".to_string();
+        // 大小写敏感：C# 字符串 switch。
+        assert_eq!(p.line_variable_text("<$username>"), "<$username>");
+        // 未知 token 原样（oracle 没有这两个分支；部署件各出现 23/20 次）。
+        assert_eq!(
+            p.line_variable_text("<$GAMEGIRD>/<$GAMEDIAMOND>"),
+            "<$GAMEGIRD>/<$GAMEDIAMOND>"
+        );
+        // 首次替换（直接调 GetVariableText：同一条里有两次只换第一处）。
+        let mut msg = "x<$USERNAME>y<$USERNAME>".to_string();
+        p.get_variable_text("$USERNAME", &mut msg);
+        assert_eq!(msg, "x张三y<$USERNAME>");
+        // `GetLineVariableText` 循环会把第二个也换掉。
+        assert_eq!(
+            p.line_variable_text("x<$USERNAME>y<$USERNAME>"),
+            "x张三y张三"
+        );
+        // 门：没有 `>` ⇒ 中止；`>` 在位置 0 ⇒ 中止。
+        assert_eq!(
+            p.line_variable_text("没有闭合 <$USERNAME"),
+            "没有闭合 <$USERNAME"
+        );
+        assert_eq!(p.line_variable_text(">abc"), ">abc");
+        // 101 次上限：`>` 存在但 ArrestStringEx 失败（无 `<` 在 `>` 前）⇒ 不挂死、原样返回。
+        assert_eq!(p.line_variable_text("a>b"), "a>b");
+        // Castle == null ⇒ "????"（`NormNpc.cs:749-894`）。
+        assert_eq!(
+            p.line_variable_text("<$OWNERGUILD>|<$LORD>|<$CASTLENAME>"),
+            "????|????|????"
+        );
+        // Castle 非 null 的三支。
+        p.vars.castle = Some(CastleVars {
+            name: "沙巴克".to_string(),
+            own_guild: String::new(),
+            lord: None,
+        });
+        assert_eq!(
+            p.line_variable_text("<$OWNERGUILD>|<$LORD>|<$CASTLENAME>"),
+            "游戏管理|管理员|沙巴克"
+        );
+        p.vars.castle = Some(CastleVars {
+            name: "沙巴克".to_string(),
+            own_guild: "王者".to_string(),
+            lord: Some("老大".to_string()),
+        });
+        assert_eq!(p.line_variable_text("<$OWNERGUILD>|<$LORD>"), "王者|老大");
+        // `$GUILDNAME` 无行会 ⇒ **整条说词 = "无"**（怪异点，照搬）。
+        assert_eq!(p.line_variable_text("前缀<$GUILDNAME>后缀"), "无");
+        p.vars.guild_name = Some("行会甲".to_string());
+        assert_eq!(
+            p.line_variable_text("前缀<$GUILDNAME>后缀"),
+            "前缀行会甲后缀"
+        );
+        // 商人覆写：`$USERWEAPON` / `$UPGRADEWEAPONFEE`。
+        assert_eq!(p.line_variable_text("<$USERWEAPON>"), "无");
+        p.vars.user_weapon = Some("炼狱".to_string());
+        assert_eq!(p.line_variable_text("<$USERWEAPON>"), "炼狱");
+        p.vars.upgrade_weapon_price = 25_000;
+        assert_eq!(p.line_variable_text("<$UPGRADEWEAPONFEE>"), "25000");
+        // `$STR` 12 段（说词侧，`NormNpc.cs:1532-1587`）。
+        p.set_mn_val(9, 11);
+        p.mdy_val.insert(4, 22);
+        p.mnmval.insert(9, 33);
+        p.ms_string.insert(9, "S9值".to_string());
+        p.mn_integer[5] = 66;
+        p.vars.global_val[5] = 55;
+        p.vars.global_val[1] = 99;
+        p.vars.globa_dy_mval[3] = 44;
+        p.vars.global_a_val[5] = "A5值".to_string();
+        p.server_str_val[7] = "E7值".to_string();
+        p.server_int_val[7] = 77;
+        assert_eq!(
+            p.line_variable_text("<$STR(M9)>"),
+            "33",
+            "300..399 → MNMval"
+        );
+        assert_eq!(
+            p.line_variable_text("<$STR(D4)>"),
+            "22",
+            "200..299 → MDyVal"
+        );
+        assert_eq!(
+            p.line_variable_text("<$STR(S9)>"),
+            "S9值",
+            "600..699 → MSString"
+        );
+        assert_eq!(
+            p.line_variable_text("<$STR(N5)>"),
+            "66",
+            "500..599 → MNInteger"
+        );
+        assert_eq!(
+            p.line_variable_text("<$STR(G5)>"),
+            "55",
+            "100..199 → GlobalVal"
+        );
+        assert_eq!(
+            p.line_variable_text("<$STR(I3)>"),
+            "44",
+            "400..499 → GlobaDyMval"
+        );
+        assert_eq!(
+            p.line_variable_text("<$STR(A5)>"),
+            "A5值",
+            "700..799 → GlobalAVal"
+        );
+        assert_eq!(
+            p.line_variable_text("<$STR(E7)>"),
+            "E7值",
+            "1600..1699 → ServerStrVal"
+        );
+        assert_eq!(
+            p.line_variable_text("<$STR(W7)>"),
+            "77",
+            "1700..1799 → ServerIntVal"
+        );
+        // **BUG-REPLICA**：`G12` 长度 3 ⇒ 槽 112（GlobalVal[12]），不是 812。
+        p.vars.global_val[12] = 12;
+        assert_eq!(p.line_variable_text("<$STR(G12)>"), "12");
+        // 槽位号 < 0 ⇒ 不替换。
+        assert_eq!(p.line_variable_text("<$STR(Z1)>"), "<$STR(Z1)>");
     }
 }

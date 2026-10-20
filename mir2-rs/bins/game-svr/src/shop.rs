@@ -377,6 +377,37 @@ pub fn user_select(
     out
 }
 
+/// `NormNpc.UserSelect` 的**标签账本**半边（`NormNpc.cs:1632-1658`）：
+/// `ScriptGotoCount = 0` 由调用方每次新建 player 表达；本函数只维护
+/// `ScriptCurrLable / ScriptGoBackLable`（比较一律 `OrdinalIgnoreCase`）。
+///
+/// 逐行：
+/// ```text
+/// if (sData[0] == '@') {
+///   GetValidStr3(sData, ref sLabel, '\r');
+///   if (ScriptCurrLable != sLabel) {
+///     if (sLabel != "@back") { ScriptGoBackLable = ScriptCurrLable; ScriptCurrLable = sLabel; }
+///     else if (ScriptCurrLable != "") ScriptCurrLable = "";
+///     else ScriptGoBackLable = "";
+///   }
+/// }
+/// ```
+pub fn base_user_select(curr_lable: &mut String, go_back_lable: &mut String, label: &str) {
+    if label.is_empty() || !label.starts_with('@') {
+        return;
+    }
+    if !eq_label(curr_lable, label) {
+        if !eq_label(label, "@back") {
+            *go_back_lable = curr_lable.clone();
+            *curr_lable = label.to_string();
+        } else if !curr_lable.is_empty() {
+            curr_lable.clear();
+        } else {
+            go_back_lable.clear();
+        }
+    }
+}
+
 /// `Merchant.ClientMakeDrugItem`（`Merchant.cs:1500-1551`）的结果。
 pub struct MakeDrugResult {
     /// 出帧（oracle 发送序：`SM_ADDITEM`（`SendAddItem` 直发，成功时）→ `SM_DELITEMS`
@@ -2481,5 +2512,32 @@ mod tests {
         assert_eq!(r.frames[0].recog, 2);
         assert_eq!(st.item_list.len(), 46);
         assert_eq!(st.gold, 1000, "失败不得扣金");
+    }
+
+    /// **C5 `merchant_base_userselect_back_state`**：`NormNpc.UserSelect`（`:1632-1658`）的
+    /// `ScriptCurrLable/ScriptGoBackLable` 账本。
+    ///
+    /// 牙：把两个字段合并 / 漏 `@back` 的双清空分支 / 把 `@main` 特判掉 ⇒ 任一断言红。
+    #[test]
+    fn base_user_select_tracks_curr_and_back_labels() {
+        let (mut curr, mut back) = (String::new(), String::new());
+        // 首次 `@a`：curr=@a，back=""（原 curr 为空）。
+        base_user_select(&mut curr, &mut back, "@a");
+        assert_eq!((curr.as_str(), back.as_str()), ("@a", ""));
+        // `@b`：back=@a，curr=@b。
+        base_user_select(&mut curr, &mut back, "@b");
+        assert_eq!((curr.as_str(), back.as_str()), ("@b", "@a"));
+        // 重复点 `@b`（大小写不敏感）：账本不动。
+        base_user_select(&mut curr, &mut back, "@B");
+        assert_eq!((curr.as_str(), back.as_str()), ("@b", "@a"));
+        // `@back`：curr 非空 ⇒ 只清 curr（back 保留，供上层回跳）。
+        base_user_select(&mut curr, &mut back, "@back");
+        assert_eq!((curr.as_str(), back.as_str()), ("", "@a"));
+        // 再 `@back`：curr 空 ⇒ 清 back。
+        base_user_select(&mut curr, &mut back, "@back");
+        assert_eq!((curr.as_str(), back.as_str()), ("", ""));
+        // 非 `@` 开头 / 空：完全不碰账本（`Merchant.UserSelect` 的前置门）。
+        base_user_select(&mut curr, &mut back, "hello");
+        assert_eq!((curr.as_str(), back.as_str()), ("", ""));
     }
 }

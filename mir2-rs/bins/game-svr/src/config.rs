@@ -112,6 +112,9 @@ pub struct GateConfig {
     /// `[Setup] CanShoutMsgLevel`（`ServerConf.cs:278`，`GameSvrConf.cs:1455` 缺省 `7`）——
     /// `!` 喊话的等级门：`Abil.Level <= CanShoutMsgLevel` ⇒ 拒（`PlayObject.Chat.cs:185`）。现网 `=34`。
     pub can_shout_msg_level: i32,
+    /// `[Server] ServerName`（`ServerConf.cs:19` 的 `ReadWriteString("Server","ServerName",…)`；
+    /// `GameSvrConf.cs:1233` 缺省 `SKY引擎`）。说词变量 `<$SERVERNAME>` 的取值。
+    pub server_name: String,
     /// `[Server] IDSAddr`：登录服务器地址（oracle 是 TcpClient 主动连它，`AuthenticationService.cs:22-34`）。
     pub ids_addr: String,
     /// `[Server] IDSPort`（现网 5600）。
@@ -462,6 +465,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut show_pre_fix_msg: Option<bool> = None;
     let mut monster_power_rate: Option<i32> = None;
     let mut script_goto_count_limit: Option<i32> = None;
+    let mut server_name: Option<String> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
@@ -541,6 +545,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 "TESTSERVER" => test_server = Some(v.eq_ignore_ascii_case("TRUE")),
                 "SERVICEMODE" => service_mode = Some(v == "TRUE"),
                 "WORLDMAPS" => maps = Some(parse_maps(v)?),
+                "SERVERNAME" => server_name = Some(v.to_string()),
                 "IDSADDR" => ids_addr = Some(v.to_string()),
                 "DBADDR" => db_addr = Some(v.to_string()),
                 "DBPORT" => {
@@ -1186,6 +1191,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         monster_power_rate: monster_power_rate.unwrap_or(10),
         // oracle 缺省值（`GameSvrConf.cs:1527` 的 `ScriptGotoCountLimit = 30`）。
         script_goto_count_limit: script_goto_count_limit.unwrap_or(30),
+        // `GameSvrConf.cs:1233` 的 ctor 缺省。
+        server_name: server_name.unwrap_or_else(|| "SKY引擎".to_string()),
         ids_addr,
         ids_port,
         db_addr,

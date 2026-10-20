@@ -25,8 +25,11 @@
 //!   ⇒ 此刻确为默认 `false`，1:1 成立（详见 `crates/world::merchant` 模块头）。
 
 use mir2_envir::MapLoader;
+use mir2_script::ScriptInfo;
 use mir2_shared::rng::RandomNumber;
 use mir2_world::merchant::{MerchantFlags, MerchantGoods, MerchantSpawn, MerchantState};
+
+use crate::npc::{MerchantNpc, MerchantScriptBook, NpcDef};
 
 /// 装载结果读数（O-1 的真机判据：`records` vs `kept`）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -37,6 +40,22 @@ pub struct MerchantLoadReport {
     pub kept: usize,
     /// 被 `FindMap` 门丢弃的 `(ChrName, MapName)`（部署件 = 空；合成用例才触发门）。
     pub dropped_unknown_map: Vec<(String, String)>,
+}
+
+/// 与 [`MerchantSpawn`] 下标对齐的脚本种子（`Merchant.ScriptList` + 说词变量所需字段）。
+///
+/// 来自 [`mir2_envir::LoadedMerchant`] 的**同一次**解析（禁止宿主二次解析：重名 label 会
+/// 二次抽 `rename_rand`，见 `crates/envir::LoadedMerchant` 的文档）。
+#[derive(Debug)]
+pub struct MerchantScriptSeed {
+    pub chr_name: String,
+    pub script_name: String,
+    pub map_name: String,
+    pub x: i16,
+    pub y: i16,
+    pub price_rate: i32,
+    /// `Merchant.ScriptList`（`Merchant.LoadMerchantScript`，`Merchant.cs:1089-1095`）。
+    pub scripts: Vec<ScriptInfo>,
 }
 
 /// `MerchantRecord` + `map_id` → [`MerchantSpawn`]（逐字段；不显式命名 `crates/script` 类型，
@@ -118,23 +137,43 @@ pub fn load_merchant_spawns(
     loader: &MapLoader,
     resolve_map: impl Fn(&str) -> Option<usize>,
     rng: &mut RandomNumber,
-) -> Result<(Vec<MerchantSpawn>, MerchantLoadReport), String> {
+) -> Result<
+    (
+        Vec<MerchantSpawn>,
+        MerchantLoadReport,
+        Vec<MerchantScriptSeed>,
+    ),
+    String,
+> {
     // O-2：`SystemShare.RandomNumber.GetRandomNumber(1, 200)`（`ScriptParsers.cs:857`）。
     // 经 `crates/world::merchant::merchant_rename_rand` 转发 ⇒ `#[track_caller]` 记到的站点是
     // `crates/world/src/merchant.rs`（`merchant` 组），**不**在宿主产生未归类站点。
     let mut rename_rand =
         |min: i32, max: i32| mir2_world::merchant::merchant_rename_rand(rng, min, max);
     let records = loader
-        .load_merchants(&mut rename_rand)
+        .load_merchants_loaded(&mut rename_rand)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
     let total = records.len();
     let mut spawns = Vec::with_capacity(total);
+    let mut seeds = Vec::with_capacity(total);
     let mut dropped_unknown_map = Vec::new();
-    for record in records {
+    for loaded in records {
+        let record = loaded.record;
         // O-1：`FindMap(MapName) == null ⇒ Error + RemoveAt`（`WorldServer.Merchant.cs:24-31`）。
         match resolve_map(&record.map_name) {
-            Some(map_id) => spawns.push(to_spawn(record, map_id)),
+            Some(map_id) => {
+                seeds.push(MerchantScriptSeed {
+                    chr_name: record.chr_name.clone(),
+                    script_name: record.script_name.clone(),
+                    map_name: record.map_name.clone(),
+                    x: record.x,
+                    y: record.y,
+                    price_rate: record.price_rate,
+                    scripts: loaded.scripts,
+                });
+                spawns.push(to_spawn(record, map_id));
+            }
             None => dropped_unknown_map.push((record.chr_name, record.map_name)),
         }
     }
@@ -143,7 +182,7 @@ pub fn load_merchant_spawns(
         kept: spawns.len(),
         dropped_unknown_map,
     };
-    Ok((spawns, report))
+    Ok((spawns, report, seeds))
 }
 
 /// 把装载好的商人逐条挂图，**按 oracle 的两个独立次序**（owner `b311a876b1` 裁决 +
@@ -167,30 +206,78 @@ pub fn load_merchant_spawns(
 #[must_use]
 pub fn spawn_merchants(
     world: &mut mir2_world::World,
-    mut spawns: Vec<MerchantSpawn>,
+    spawns: Vec<MerchantSpawn>,
 ) -> (usize, Vec<String>) {
+    let (kept, failed, _book) = spawn_merchants_with_scripts(world, spawns, Vec::new());
+    (kept, failed)
+}
+
+/// [`spawn_merchants`] + **商人脚本表**（`Merchant.ScriptList`，按世界实体 id 建索引）。
+///
+/// `seeds` 与 `spawns` **下标对齐**（来自 [`load_merchant_spawns`]）；空 `seeds` = 不建表
+/// （旧调用方/单测）。只有**挂图成功**的商人进入脚本表——oracle `MerchantInitialize` 在
+/// `AddtoMap`/`FindMap` 失败时 `RemoveAt`，不会执行 `LoadMerchantScript`（`WorldServer.Merchant.cs:8-31`）。
+///
+/// 次序约束（reviewer-5 `0f220cac` F-1 + owner `b311a876b1`）不变：正序建实体、倒序挂图。
+#[must_use]
+pub fn spawn_merchants_with_scripts(
+    world: &mut mir2_world::World,
+    mut spawns: Vec<MerchantSpawn>,
+    seeds: Vec<MerchantScriptSeed>,
+) -> (usize, Vec<String>, MerchantScriptBook) {
+    debug_assert!(
+        seeds.is_empty() || seeds.len() == spawns.len(),
+        "seeds 必须与 spawns 下标对齐"
+    );
     // ① `LocalDB.LoadMerchant` 正序构造抽（每条 1 次；站点归 `merchant` 组）。
     for spawn in spawns.iter_mut() {
         spawn.state.run_tick = world.merchant_ctor_run_delay();
     }
     // ② `MerchantList` 正序建实体：实体槽位序 = 文件序 ⇒ `merchant_ids_sorted`/`merchant_tick` 正序。
-    let pending: Vec<(Option<i32>, String)> = spawns
+    let mut seeds = seeds.into_iter();
+    let pending: Vec<(Option<i32>, String, Option<MerchantScriptSeed>)> = spawns
         .into_iter()
         .map(|spawn| {
             let name = spawn.name.clone();
-            (world.insert_merchant(spawn), name)
+            (world.insert_merchant(spawn), name, seeds.next())
         })
         .collect();
     // ③ `MerchantInitialize` 倒序挂图：只有 `AddToMap` 的 `obj_list` 追加序是反序。
     let mut kept = 0;
     let mut failed = Vec::new();
-    for (id, name) in pending.into_iter().rev() {
+    let mut book = MerchantScriptBook::new(0);
+    for (id, name, seed) in pending.into_iter().rev() {
         match id {
-            Some(id) if world.attach_merchant_to_map(id) => kept += 1,
+            Some(id) if world.attach_merchant_to_map(id) => {
+                kept += 1;
+                if let Some(seed) = seed {
+                    book.insert(MerchantNpc {
+                        def: NpcDef {
+                            chr_name: seed.chr_name,
+                            // `Merchant.LoadMerchantScript` 先把 `Path = "Market_Def"`
+                            // （`Merchant.cs:1092`），`CHECKNAMELIST` 一类条件按它拼相对路径。
+                            file_path: "Market_Def".to_string(),
+                            script_name: Some(seed.script_name),
+                            is_hide: false,
+                            is_quest: false,
+                            loaded: !seed.scripts.is_empty(),
+                            scripts: seed.scripts,
+                            actor_id: id,
+                        },
+                        price_rate: seed.price_rate,
+                        // `NormNpc.Initialize` 的 `CastleMgr.InCastleWarArea(this)`：城堡家族（⑧）
+                        // 未落地 ⇒ `None`（oracle 的 `Castle == null` 支，`"????"`）。
+                        castle: None,
+                        map_name: seed.map_name,
+                        curr_x: i32::from(seed.x),
+                        curr_y: i32::from(seed.y),
+                    });
+                }
+            }
             _ => failed.push(name),
         }
     }
-    (kept, failed)
+    (kept, failed, book)
 }
 
 #[cfg(test)]
@@ -229,7 +316,7 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
         let dir = temp_envir("gate", MERCHANT_TXT);
         let loader = loader_for(&dir);
         let mut rng = RandomNumber::with_seed(42);
-        let (spawns, report) = load_merchant_spawns(
+        let (spawns, report, _seeds) = load_merchant_spawns(
             &loader,
             |name| match name {
                 "0" => Some(0),
@@ -257,7 +344,7 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
         let dir = temp_envir("attach", MERCHANT_TXT);
         let loader = loader_for(&dir);
         let mut rng = RandomNumber::with_seed(42);
-        let (spawns, _) = load_merchant_spawns(
+        let (spawns, _, _seeds) = load_merchant_spawns(
             &loader,
             |name| match name {
                 "0" | "0139" => Some(0),
@@ -273,6 +360,119 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
         assert_eq!(world.merchant_ids_sorted().len(), 2);
     }
 
+    /// **C3 `merchant_script_book_actor_ids`**：脚本表按**世界实体 id**（= `ActorId`）索引，
+    /// 与 `MerchantList` 一一对应（`ScriptEngine.cs:131` 的 `ActorMgr.Get(actorId)` 口径）。
+    ///
+    /// 牙：用装载序/0 当键（不是实体 id）/ 挂图失败也入表 ⇒ 红。
+    #[test]
+    fn merchant_script_book_maps_world_actor_ids() {
+        let dir = temp_envir("book", MERCHANT_TXT);
+        let market = dir.join("Envir").join("Market_Def");
+        fs::create_dir_all(market.join("smith")).unwrap();
+        fs::create_dir_all(market.join("fengmo")).unwrap();
+        fs::write(
+            market.join("smith/repair-0.txt"),
+            "[@main]
+smith main
+",
+        )
+        .unwrap();
+        fs::write(
+            market.join("fengmo/smith-0139.txt"),
+            "[@main]
+风魔 main
+[~@repair]
+修好了。
+",
+        )
+        .unwrap();
+        let loader = loader_for(&dir);
+        let mut rng = RandomNumber::with_seed(42);
+        let (spawns, report, seeds) = load_merchant_spawns(
+            &loader,
+            |name| match name {
+                "0" | "0139" => Some(0),
+                _ => None,
+            },
+            &mut rng,
+        )
+        .expect("装载不应失败");
+        assert_eq!(report.kept, spawns.len());
+        assert_eq!(seeds.len(), spawns.len(), "seeds 与 spawns 下标对齐");
+        let mut world = mir2_world::World::new(64, 64);
+        let (kept, failed, book) = spawn_merchants_with_scripts(&mut world, spawns, seeds);
+        assert_eq!(kept, 2);
+        assert!(failed.is_empty());
+        assert_eq!(book.len(), kept, "只有挂图成功的商人进脚本表");
+        let ids: Vec<i32> = world.merchant_ids_sorted();
+        assert_eq!(ids.len(), 2);
+        for id in ids {
+            let name = world.entities.get(id).expect("实体在").name.clone();
+            let entry = book
+                .get(id)
+                .unwrap_or_else(|| panic!("实体 {id}（{name}）缺少脚本表项"));
+            assert_eq!(entry.def.actor_id, id);
+            assert_eq!(entry.def.chr_name, name);
+            assert_eq!(entry.def.file_path, "Market_Def");
+            assert!(entry.def.script_name.is_some());
+            assert!(entry.def.scripts[0].contains_label("@main"));
+        }
+    }
+
+    /// **C2b `market_def_no_second_parse`**：重名 label 的 `rename_rand` 抽数发生在
+    /// `load_merchant_spawns` 的**那一次**解析里；`spawn_merchants_with_scripts` 不接受
+    /// RNG（结构上不可能二次解析/二次抽）。
+    ///
+    /// 牙：宿主若改为在 spawn 阶段重新 `load_script_file`，`rename_rand` 计数会再 +1 ⇒ 红；
+    /// 装载器若丢掉 scripts，标签表为空 ⇒ 红。
+    #[test]
+    fn market_def_rename_rand_is_drawn_once_at_load() {
+        let dir = temp_envir(
+            "rng",
+            "smith/dup 0 1 1 dup 0 3 0
+",
+        );
+        let market = dir.join("Envir").join("Market_Def");
+        fs::create_dir_all(market.join("smith")).unwrap();
+        fs::write(
+            market.join("smith/dup-0.txt"),
+            "[@main]
+A
+[@dup]
+B
+[@dup]
+C
+",
+        )
+        .unwrap();
+        let loader = loader_for(&dir);
+        let mut calls = 0;
+        let mut rng = RandomNumber::with_seed(42);
+        let mut rename_rand = |min: i32, max: i32| {
+            calls += 1;
+            mir2_world::merchant::merchant_rename_rand(&mut rng, min, max)
+        };
+        let list = loader
+            .load_merchants_loaded(&mut rename_rand)
+            .expect("装载不应失败")
+            .expect("应有商人");
+        assert_eq!(calls, 1, "一个重名 label ⇒ 恰好一次 GetRandomNumber(1,200)");
+        let labels: Vec<&str> = list[0].scripts[0]
+            .record_list
+            .iter()
+            .map(|r| r.s_label.as_str())
+            .collect();
+        assert_eq!(labels.len(), 3, "重名 label 改名后仍保留三条记录");
+        assert_eq!(labels[0], "@main");
+        assert!(labels[1].starts_with("@dup"));
+        assert!(labels[2].starts_with("@dup"));
+        assert_ne!(labels[1], labels[2]);
+        assert_eq!(
+            list[0].scripts[0].find_record("@dup").unwrap().s_label,
+            "@dup"
+        );
+    }
+
     /// 无 `Merchant.txt` ⇒ oracle `File.Exists == false` ⇒ 无记录、无差异。
     #[test]
     fn missing_merchant_txt_is_empty() {
@@ -280,7 +480,8 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
         let _ = fs::remove_file(dir.join("Envir").join("Merchant.txt"));
         let loader = loader_for(&dir);
         let mut rng = RandomNumber::with_seed(42);
-        let (spawns, report) = load_merchant_spawns(&loader, |_| Some(0), &mut rng).unwrap();
+        let (spawns, report, _seeds) =
+            load_merchant_spawns(&loader, |_| Some(0), &mut rng).unwrap();
         assert!(spawns.is_empty());
         assert_eq!(report.records, 0);
     }
@@ -311,8 +512,9 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
         let loader = MapLoader::new(&base, "Map", "Envir");
         let registry = loader.load_registry().expect("载入真地图注册表");
         let mut rng = RandomNumber::with_seed(42);
-        let (spawns, report) = load_merchant_spawns(&loader, |n| registry.id_of(n), &mut rng)
-            .expect("载入真 Merchant.txt");
+        let (spawns, report, _seeds) =
+            load_merchant_spawns(&loader, |n| registry.id_of(n), &mut rng)
+                .expect("载入真 Merchant.txt");
         println!(
             "MERCHANT_VECTOR records={} kept={} dropped={:?}",
             report.records, report.kept, report.dropped_unknown_map

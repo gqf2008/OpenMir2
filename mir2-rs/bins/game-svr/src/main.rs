@@ -1031,6 +1031,8 @@ async fn main() -> Result<()> {
                     npcs,
                     loader: Some(envir_loader),
                     script_goto_count_limit: cfg.script_goto_count_limit,
+                    server_name: cfg.server_name.clone(),
+                    upgrade_weapon_price: cfg.upgrade_weapon_price,
                     trade: game_svr::trade::DealConfig {
                         try_deal_time: cfg.try_deal_time,
                         deal_ok_time: cfg.deal_ok_time,
@@ -3709,13 +3711,19 @@ const CLICK_NPC_TIME_MS: i32 = 1000;
 /// ⇒ 仅商人可被点；② `normNpc.Click(this)` 的 `GotoLable("@main")` → `SM_MERCHANTSAY` 交互链依赖 NPC 脚本
 /// 宿主，未在本派发内接线（登记为 T1 依赖）；③ `!IsCanDeal` 支的 `MessageSettings.CanotTryDealMsg` 文本 +
 /// `ManageNPC` 回帧未建模（`IsCanDeal` 生产恒真 ⇒ 该支不可达）。
+#[allow(clippy::too_many_arguments)]
 fn handle_click_npc_cmd(
     npc_actor_id: i32,
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
-    world: &mir2_world::World,
+    world: &mut mir2_world::World,
+    merchant_book: &game_svr::npc::MerchantScriptBook,
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    npc_vars: &game_svr::npc::NpcVars,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> bool {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -3783,10 +3791,42 @@ fn handle_click_npc_cmd(
     };
     let (nx, ny, nmap) = (ne.x, ne.y, ne.map_id);
     if nmap == pmap && (nx - px).abs() <= 15 && (ny - py).abs() <= 15 {
-        // `normNpc.Click(this)` ⇒ `GotoLable("@main")`（`NormNpc.cs:68-73`）——NPC 脚本交互链未接线（登记）。
+        // `normNpc.Click(this)`（`NormNpc.cs:68-73`）：清 `ScriptGotoCount/ScriptGoBackLable/
+        // ScriptCurrLable`，再 `GotoLable(this, "@main", false)`。
+        let session = shop_sessions.entry(chr_name.to_string()).or_default();
+        session.script_curr_lable.clear();
+        session.script_go_back_lable.clear();
+        // 引擎的 `random` 走**世界同一条** RNG（oracle `SystemShare.RandomNumber`）。
+        let mut rng =
+            std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+        let mut sent = 0usize;
+        {
+            let mut rngf = |v: i32| rng.random_below(v);
+            let map_text = pmap.to_string();
+            let mut player =
+                npc_player_from_session(&mut rngf, chr_name, sg, &map_text, catalog, npc_vars);
+            player.script_index = session.script_index;
+            player.last_npc = session.last_npc;
+            if let Some(says) = merchant_book.goto_label(npc_actor_id, &mut player, "@main", false)
+            {
+                // `GotoLableSendMerChantSayMsg` → `playerActor.GetScriptLabel(sMsg)`
+                // （`ScriptEngine.cs:993`）：**每句说词 Clear 后重建** `CanJmpScriptLableMap`。
+                for say in &says {
+                    session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
+                }
+                if let Some(tx) = route_to_gate(gates, entry.gate_idx, socket, "商人 @main 说词")
+                {
+                    sent = emit_npc_says(tx, socket, sg.actor_id, &says);
+                }
+            }
+            // `PlayObject.Script` / `LastNpc` 跨调用保持（`ScriptEngine.cs:41-70`）。
+            session.script_index = player.script_index;
+            session.last_npc = player.last_npc;
+        }
+        world.rng = rng;
         glog!(
             "INF",
-            "CM_CLICKNPC：到达 Click 点 ChrName={chr_name} npc={npc_actor_id}（Click→@main 未接线，登记）"
+            "CM_CLICKNPC：到达 Click 点 ChrName={chr_name} npc={npc_actor_id}（@main 说词 {sent} 条）"
         );
         return true;
     }
@@ -3915,6 +3955,9 @@ fn dispatch_inbound_p0(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
     guild: Option<&mut GuildDisconnect<'_>>,
+    merchant_book: &game_svr::npc::MerchantScriptBook,
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    npc_vars: &game_svr::npc::NpcVars,
 ) -> bool {
     if cmd.ident == mir2_protocol::messages::CM_QUERYUSERNAME {
         // 线缆映射（`WorldServer.cs:793-794`）：`Recog=targetId`、`Param=x`、`Tag=y`。
@@ -3944,7 +3987,19 @@ fn dispatch_inbound_p0(
         true
     } else if cmd.ident == mir2_protocol::messages::CM_CLICKNPC {
         // 线缆映射：`Recog=npcActorId`。
-        handle_click_npc_cmd(cmd.recog, chr_name, socket, online, sessions, world);
+        handle_click_npc_cmd(
+            cmd.recog,
+            chr_name,
+            socket,
+            online,
+            sessions,
+            world,
+            merchant_book,
+            shop_sessions,
+            npc_vars,
+            catalog,
+            gates,
+        );
         true
     } else {
         false
@@ -4328,6 +4383,8 @@ fn handle_shop_cmd(
     colors: &MsgColors,
     make_items: Option<&mir2_envir::makeitem::MakeItemRegistry>,
     item_number: &mut i32,
+    merchant_book: &game_svr::npc::MerchantScriptBook,
+    npc_vars: &game_svr::npc::NpcVars,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -4440,17 +4497,80 @@ fn handle_shop_cmd(
             }
             // `Merchant.UserSelect`（`Merchant.cs:799`）：`ScriptLable = sData`。
             let session = shop_sessions.entry(chr_name.to_string()).or_default();
+            // `base.UserSelect`（`NormNpc.cs:1632-1658`）：`ScriptGotoCount=0` + `@back` 账本。
+            merchant_base_user_select(session, label);
             session.script_lable = label_full.to_string();
             // `LableIsCanJmp`（`Merchant.cs:800-806` / `PlayObject.Base.cs:2814-2826`）：
             // 只有 `@main` 或「最近一次说词里出现过」的标签才允许命令派发；否则 oracle 在
             // `GotoLable`（无同名脚本标签 ⇒ 无动作）后 `return`，**整段派发跳过**。
             // 这是可达性差异（构造客户端直发 `@upgradenow`：oracle 丢弃，本侧同样丢弃）。
-            if !game_svr::shop::lable_is_can_jmp(&session.can_jmp_labels, label) {
+            let bo_can_jmp = game_svr::shop::lable_is_can_jmp(&session.can_jmp_labels, label);
+            // `Merchant.cs:808`：`GotoLable(playObject, ActorId, sLabel, !boCanJmp)` —— 在
+            // `!boCanJmp` 的 return **之前**执行（说词照出）。
+            let map_text = pmap.to_string();
+            let mut rng =
+                std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+            let says = run_merchant_goto(
+                merchant_book,
+                merchant_id,
+                label,
+                !bo_can_jmp,
+                sg,
+                chr_name,
+                &map_text,
+                catalog,
+                npc_vars,
+                session,
+                &mut rng,
+            );
+            world.rng = rng;
+            for say in &says {
+                session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
+            }
+            if !says.is_empty() {
+                if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人 1011 说词") {
+                    emit_npc_says(tx, socket, actor_id, &says);
+                }
+            }
+            if !bo_can_jmp {
                 glog!(
                     "DBG",
                     "CM_MERCHANTDLGSELECT：LableIsCanJmp({label}) == false ⇒ 不派发 ChrName={chr_name}"
                 );
                 return;
+            }
+            // `Merchant.cs:922-929` 的 `@back` 支：`ScriptGoBackLable` 空则回 `@main`。
+            if game_svr::shop::eq_label(label, "@back") {
+                let target = if session.script_go_back_lable.is_empty() {
+                    "@main".to_string()
+                } else {
+                    session.script_go_back_lable.clone()
+                };
+                let mut rng =
+                    std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+                let says = run_merchant_goto(
+                    merchant_book,
+                    merchant_id,
+                    &target,
+                    false,
+                    sg,
+                    chr_name,
+                    &map_text,
+                    catalog,
+                    npc_vars,
+                    session,
+                    &mut rng,
+                );
+                world.rng = rng;
+                for say in &says {
+                    session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
+                }
+                if !says.is_empty() {
+                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人 @back 说词")
+                    {
+                        emit_npc_says(tx, socket, actor_id, &says);
+                    }
+                }
             }
             let ctx = shop_context(
                 catalog,
@@ -4791,12 +4911,46 @@ fn handle_shop_cmd(
             }
             out.extend(r.frames);
             if let Some(g) = r.goto_label {
-                // `Merchant.cs:1652/1659` 的 `GotoLable`：本宿主尚未装载 `Market_Def`
-                // 商人脚本（`Merchant.LoadScriptFile`，`Merchant.cs:1089`）⇒ 只登记、不执行。
-                glog!(
-                    "WRN",
-                    "CM_USERREPAIRITEM：GotoLable({g}) 未执行（Market_Def 商人脚本未装载，登记；ChrName={chr_name}）"
+                // `Merchant.cs:1652/1659`：修理成功后的 `GotoLable(REPAIROK/SUPERREPAIROK)`。
+                // 说词 `RM_MERCHANTSAY` 优先级 1，`SM_USERREPAIRITEM_OK` 优先级 159
+                // （`BaseObject.Message.cs:180`）⇒ **说词先出队**；本宿主立即下发说词，
+                // `out` 在函数尾部才发 ⇒ 线上次序 = 说词 → 修理 OK。
+                let session = shop_sessions.entry(chr_name.to_string()).or_default();
+                let map_text = pmap.to_string();
+                let mut rng =
+                    std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+                let says = run_merchant_goto(
+                    merchant_book,
+                    merchant_id,
+                    g,
+                    false,
+                    sg,
+                    chr_name,
+                    &map_text,
+                    catalog,
+                    npc_vars,
+                    session,
+                    &mut rng,
                 );
+                world.rng = rng;
+                for say in &says {
+                    session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
+                }
+                if !says.is_empty() {
+                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人修理说词") {
+                        emit_npc_says(tx, socket, actor_id, &says);
+                    }
+                    glog!(
+                        "INF",
+                        "CM_USERREPAIRITEM：GotoLable({g}) 说词 {} 条 ChrName={chr_name}",
+                        says.len()
+                    );
+                } else {
+                    glog!(
+                        "DBG",
+                        "CM_USERREPAIRITEM：GotoLable({g}) 无说词（脚本无该标签/未装载）ChrName={chr_name}"
+                    );
+                }
             }
         }
         game_svr::shop::CM_USERMAKEDRUGITEM => {
@@ -5029,6 +5183,102 @@ fn npc_player_from<'r>(
         p.quest_flag = mir2_script::engine::quest_state::QuestBitmap::from_bytes(arr);
     }
     p
+}
+
+/// 由 `[Names]/[Setup]/[Server]` 构造说词变量的**基线**（`NormNpc.GetVariableText` 的
+/// `SystemShare.Config` 半边）。每商人入口再由 [`game_svr::npc::MerchantScriptBook`] 覆写
+/// `$PRICERATE`/`Castle`（`Merchant.GetVariableText` 覆写 + `NormNpc.Castle`）。
+fn npc_vars_from(
+    conf: Option<&mir2_envir::GameSvrConf>,
+    server_name: &str,
+    upgrade_weapon_price: i32,
+) -> game_svr::npc::NpcVars {
+    let mut v = game_svr::npc::NpcVars::default();
+    if let Some(c) = conf {
+        v.game_gold_name = c.game_gold_name.clone();
+        v.game_point_name = c.game_point_name.clone();
+    }
+    v.server_name = server_name.to_string();
+    v.upgrade_weapon_price = upgrade_weapon_price;
+    v
+}
+
+/// 会话态 → [`game_svr::npc::NpcPlayer`] 的快照（商人说词/`GotoLable` 用）。
+///
+/// 只填说词变量与 `LastNpc/Script` 链需要的字段；任务态/组队等由其它用法自填。
+fn npc_player_from_session<'r>(
+    rng: &'r mut dyn FnMut(i32) -> i32,
+    chr_name: &str,
+    sg: &SessionGround,
+    map_name: &str,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    vars: &game_svr::npc::NpcVars,
+) -> game_svr::npc::NpcPlayer<'r> {
+    let mut p = game_svr::npc::NpcPlayer::empty(rng);
+    p.chr_name = chr_name.to_string();
+    p.actor_id = sg.actor_id;
+    p.map_name = map_name.to_string();
+    p.level = i32::from(sg.equip.abil.level);
+    p.gold = sg.state.gold;
+    p.game_gold = sg.game_gold;
+    p.game_point = sg.game_point;
+    p.credit_point = i32::from(sg.equip.credit_point);
+    p.re_level = i32::from(sg.equip.re_level);
+    p.vars = vars.clone();
+    // `PlayObject.MyGuild?.GuildName`（`$GUILDNAME`；`None` = 无行会 ⇒ 整条说词 "无"）。
+    p.vars.guild_name = sg.guild.guild_name.clone();
+    // `$USERWEAPON`（`Merchant.GetVariableText`）：`UseItems[ItemLocation.Weapon=1]` 的模板名。
+    p.vars.user_weapon = sg
+        .use_items
+        .get(1)
+        .and_then(|c| c.as_ref())
+        .filter(|it| it.index != 0)
+        .and_then(|it| catalog.name(it.index).map(str::to_string));
+    for it in &sg.state.item_list {
+        if let Some(name) = catalog.name(it.index) {
+            p.items.push((name.to_string(), 1));
+        }
+    }
+    p
+}
+
+/// `NormNpc.UserSelect` 的**标签账本**半边（`NormNpc.cs:1632-1658`）：`ScriptGotoCount=0`
+/// 由每次新建的 [`game_svr::npc::NpcPlayer`] 表达；本函数只维护
+/// `ScriptCurrLable/ScriptGoBackLable`（`OrdinalIgnoreCase`）。
+fn merchant_base_user_select(session: &mut ShopSession, label: &str) {
+    game_svr::shop::base_user_select(
+        &mut session.script_curr_lable,
+        &mut session.script_go_back_lable,
+        label,
+    );
+}
+
+/// 商人 `GotoLable`（`ScriptEngine.cs:38-129` → `Merchant.ScriptList`）＋ `Script/LastNpc`
+/// 跨调用回写。返回本次说词（调用方按 `MsgQueue` 出队序落 `SM_MERCHANTSAY`）。
+#[allow(clippy::too_many_arguments)]
+fn run_merchant_goto(
+    book: &game_svr::npc::MerchantScriptBook,
+    merchant_actor_id: i32,
+    label: &str,
+    bo_ext_jmp: bool,
+    sg: &SessionGround,
+    chr_name: &str,
+    map_text: &str,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    npc_vars: &game_svr::npc::NpcVars,
+    session: &mut ShopSession,
+    rng: &mut mir2_shared::rng::RandomNumber,
+) -> Vec<game_svr::npc::SayMsg> {
+    let mut rngf = |v: i32| rng.random_below(v);
+    let mut player = npc_player_from_session(&mut rngf, chr_name, sg, map_text, catalog, npc_vars);
+    player.script_index = session.script_index;
+    player.last_npc = session.last_npc;
+    let says = book
+        .goto_label(merchant_actor_id, &mut player, label, bo_ext_jmp)
+        .unwrap_or_default();
+    session.script_index = player.script_index;
+    session.last_npc = player.last_npc;
+    says
 }
 
 /// **M3⑥-实现 3 第②片**：把 NPC 说词按 oracle `MsgQueue` **出队序**落 `SM_MERCHANTSAY(643)`。
@@ -12956,6 +13206,11 @@ struct ShopSession {
     script_curr_lable: String,
     /// `PlayObject.ScriptGoBackLable`（`NormNpc.cs:1639-1655`）。
     script_go_back_lable: String,
+    /// `PlayObject.Script`（脚本下标；`GotoLable` 选脚本与 `LastNpc` 一起跨调用保持，
+    /// `ScriptEngine.cs:41-70`）。每次 `GotoLable` 后回写。
+    script_index: Option<usize>,
+    /// `PlayObject.LastNpc`（`ScriptEngine.cs:41-44`）。
+    last_npc: i32,
 }
 
 /// 一个在线角色的**地面交互会话态**（`CM_PICKUP`/`CM_DROPITEM` 用）。
@@ -13365,6 +13620,10 @@ struct EnterConfig {
     /// **M3⑥-实现 3 第②片**：`[Setup] ScriptGotoCountLimit`（缺省 30；见 [`config::GateConfig`]）——
     /// `NpcHost` 装载时注入 `ScriptNpc::script_goto_count_limit`（`ScriptEngine.cs:629`）。
     script_goto_count_limit: i32,
+    /// `[Server] ServerName`（说词变量 `<$SERVERNAME>`）。
+    server_name: String,
+    /// `[Setup] UpgradeWeaponPrice`（商人说词 `<$UPGRADEWEAPONFEE>`）。
+    upgrade_weapon_price: i32,
     /// **M3⑦-实现 3**：交易状态机的 `[Setup]` 配置（`TryDealTime`/`DealOKTime`/
     /// `CanNotGetBackDeal`/`DisableDeal` + `HumanMaxGold` + 颜色）。
     trade: game_svr::trade::DealConfig,
@@ -13486,6 +13745,8 @@ impl EnterConfig {
             npcs: None,
             loader: None,
             script_goto_count_limit: 30,
+            server_name: "SKY引擎".to_string(),
+            upgrade_weapon_price: 10_000,
             trade: game_svr::trade::DealConfig::default(),
             sell_off: game_svr::selloff::SellOffConfig::default(),
             sell_off_seed: Vec::new(),
@@ -15189,6 +15450,12 @@ fn sim_loop(
     // **G2**：行会管理器的生产配置（与 `Server.conf` 同源，简报 §8）与会表（G3 启动加载）。
     // **I-6**：`GuildChief/GuildMemberRank` 的生产源是 `String.conf [Guild]`（`StringConf.cs:30-35`），
     // 不是 `GuildCastleConfig`；不覆盖会静默回落 `掌门人/行会成员`（W3-m8/m9）。
+    // 说词变量的配置基线（`NormNpc.GetVariableText` 的 `SystemShare.Config` 半边）。
+    let npc_vars_base = npc_vars_from(
+        enter_cfg.game_conf.as_ref(),
+        &enter_cfg.server_name,
+        enter_cfg.upgrade_weapon_price,
+    );
     let mut guild_cfg = mir2_world::GuildConfig::from_guild_castle(&enter_cfg.guild_castle_cfg);
     guild_cfg.guild_chief = enter_cfg.string_conf.guild_chief().to_string();
     guild_cfg.guild_member_rank = enter_cfg.string_conf.guild_member_rank().to_string();
@@ -15554,10 +15821,17 @@ fn sim_loop(
     // 或 `registry=None` 时跳过（无逻辑名→map_id 映射 ⇒ 全会被 FindMap 门丢掉，故不载）。
     // **M3⑥-实现 3 第②片**：隐藏任务 NPC 脚本宿主（`QManage`/`QFunction`/`RobotManage`）。
     let mut npc_host: Option<game_svr::npc::NpcHost> = None;
+    // **marketdef**：商人脚本表（`Merchant.ScriptList`，`Merchant.cs:1089-1095`）。
+    // 按世界实体 id 索引；`GotoLable`（点击 `@main`、1011 说词、`~@repair`）从这里取脚本。
+    let mut merchant_book =
+        game_svr::npc::MerchantScriptBook::new(enter_cfg.script_goto_count_limit);
     if let (Some(loader), Some(reg)) = (enter_cfg.loader.take(), registry.as_ref()) {
         match game_svr::merchant::load_merchant_spawns(&loader, |n| reg.id_of(n), &mut world.rng) {
-            Ok((spawns, report)) => {
-                let (kept, failed) = game_svr::merchant::spawn_merchants(&mut world, spawns);
+            Ok((spawns, report, seeds)) => {
+                let (kept, failed, book) =
+                    game_svr::merchant::spawn_merchants_with_scripts(&mut world, spawns, seeds);
+                merchant_book = book;
+                merchant_book.goto_count_limit = enter_cfg.script_goto_count_limit;
                 // `[Setup] ClearExpireUpgradeWeaponDays`（`Merchant.cs:1085`）落到每个商人。
                 game_svr::merchant::set_upgrade_clear_days(
                     &mut world,
@@ -15565,11 +15839,12 @@ fn sim_loop(
                 );
                 glog!(
                     "INF",
-                    "Envir/Merchant.txt 已载入：{} 条（FindMap 门丢 {} 条，挂图失败 {} 条）⇒ 世界内商人 {}",
+                    "Envir/Merchant.txt 已载入：{} 条（FindMap 门丢 {} 条，挂图失败 {} 条）⇒ 世界内商人 {}，脚本表 {} 条",
                     report.records,
                     report.dropped_unknown_map.len(),
                     failed.len(),
-                    kept
+                    kept,
+                    merchant_book.len()
                 );
                 for (name, map) in &report.dropped_unknown_map {
                     glog!(
@@ -16067,6 +16342,9 @@ fn sim_loop(
                             server_index: i32::from(enter_cfg.server_index),
                             gates: &gates,
                         }),
+                        &merchant_book,
+                        &mut shop_sessions,
+                        &npc_vars_base,
                     ) {
                         // 入站 P0 批（R1 前六条：CM_QUERYUSERNAME/CM_QUERYUSERSTATE/CM_QUERYUSERSET/
                         // CM_QUERYVAL/CM_SOFTCLOSE/CM_CLICKNPC）：派发与线缆字段映射见
@@ -16133,6 +16411,8 @@ fn sim_loop(
                             &colors,
                             make_items.as_ref(),
                             &mut item_number,
+                            &merchant_book,
+                            &npc_vars_base,
                         );
                     } else if matches!(
                         cmd.ident,
@@ -32002,6 +32282,8 @@ mod tests {
             &colors,
             None,
             &mut item_number,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &game_svr::npc::NpcVars::default(),
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -32042,6 +32324,8 @@ mod tests {
             &colors,
             None,
             &mut item_number,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &game_svr::npc::NpcVars::default(),
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -32071,6 +32355,8 @@ mod tests {
             &colors,
             None,
             &mut item_number,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &game_svr::npc::NpcVars::default(),
         );
         let mut emitted = 0usize;
         while rx0.try_recv().is_ok() {
@@ -32207,6 +32493,8 @@ mod tests {
             &colors,
             None,
             &mut item_number,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &game_svr::npc::NpcVars::default(),
         );
         let body = match rx0.try_recv() {
             Ok(SimToGate::SendFrame { socket, body }) => {
@@ -32263,6 +32551,8 @@ mod tests {
             &colors,
             None,
             &mut item_number,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &game_svr::npc::NpcVars::default(),
         );
         let body = match rx0.try_recv() {
             Ok(SimToGate::SendFrame { socket, body }) => {
@@ -32313,6 +32603,8 @@ mod tests {
             &colors,
             None,
             &mut item_number,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &game_svr::npc::NpcVars::default(),
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -32498,6 +32790,8 @@ mod tests {
             &colors,
             Some(&make_reg),
             &mut item_number,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &game_svr::npc::NpcVars::default(),
         );
         let panel = drain_frames(&mut rx0);
         assert_eq!(
@@ -32537,6 +32831,8 @@ mod tests {
             &colors,
             Some(&make_reg),
             &mut item_number,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &game_svr::npc::NpcVars::default(),
         );
         let frames = drain_frames(&mut rx0);
         let idents: Vec<u16> = frames.iter().map(|b| hdr(b).0).collect();
@@ -32591,6 +32887,8 @@ mod tests {
             &colors,
             Some(&make_reg),
             &mut item_number,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &game_svr::npc::NpcVars::default(),
         );
         assert!(
             drain_frames(&mut rx0).is_empty(),
@@ -33080,18 +33378,43 @@ mod tests {
         sessions.insert("hero".into(), test_session_ground(hero));
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+        let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
 
         // ① IsCanDeal=false ⇒ 走到 !IsCanDeal 支，返回 false（不点）。
         sessions.get_mut("hero").unwrap().is_can_deal = false;
         assert!(
-            !handle_click_npc_cmd(mid, "hero", 901, &online, &mut sessions, &world),
+            !handle_click_npc_cmd(
+                mid,
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &mut world,
+                &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
+                &game_svr::npc::NpcVars::default(),
+                &game_svr::ability::StdItemCatalog::new(),
+                &gates,
+            ),
             "IsCanDeal=false ⇒ 不点"
         );
         sessions.get_mut("hero").unwrap().is_can_deal = true;
 
         // ② 全过：商人 (11,10) 在 ±15 ⇒ 返回 true。
         assert!(
-            handle_click_npc_cmd(mid, "hero", 901, &online, &mut sessions, &world),
+            handle_click_npc_cmd(
+                mid,
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &mut world,
+                &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
+                &game_svr::npc::NpcVars::default(),
+                &game_svr::ability::StdItemCatalog::new(),
+                &gates,
+            ),
             "商人在 ±15 ⇒ 到达 Click 点"
         );
 
@@ -33102,7 +33425,19 @@ mod tests {
         }
         sessions.get_mut("hero").unwrap().click_npc_time = None; // 复位限频
         assert!(
-            !handle_click_npc_cmd(mid, "hero", 901, &online, &mut sessions, &world),
+            !handle_click_npc_cmd(
+                mid,
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &mut world,
+                &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
+                &game_svr::npc::NpcVars::default(),
+                &game_svr::ability::StdItemCatalog::new(),
+                &gates,
+            ),
             "NPC 超 ±15 ⇒ 不点"
         );
 
@@ -33114,13 +33449,37 @@ mod tests {
         world.clock_ms = 100_000;
         sessions.get_mut("hero").unwrap().click_npc_time = Some(100_000);
         assert!(
-            !handle_click_npc_cmd(mid, "hero", 901, &online, &mut sessions, &world),
+            !handle_click_npc_cmd(
+                mid,
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &mut world,
+                &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
+                &game_svr::npc::NpcVars::default(),
+                &game_svr::ability::StdItemCatalog::new(),
+                &gates,
+            ),
             "限频内 ⇒ 不点"
         );
         // 过了一个限频窗 ⇒ 再点成功。
         world.clock_ms = 100_000 + i64::from(CLICK_NPC_TIME_MS) + 1;
         assert!(
-            handle_click_npc_cmd(mid, "hero", 901, &online, &mut sessions, &world),
+            handle_click_npc_cmd(
+                mid,
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &mut world,
+                &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
+                &game_svr::npc::NpcVars::default(),
+                &game_svr::ability::StdItemCatalog::new(),
+                &gates,
+            ),
             "超出限频窗 ⇒ 可点"
         );
     }
@@ -33194,6 +33553,9 @@ mod tests {
                 &gates,
                 &catalog,
                 None,
+                &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
+                &game_svr::npc::NpcVars::default(),
             ),
             "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
         );
@@ -33229,6 +33591,9 @@ mod tests {
                 &gates,
                 &catalog,
                 None,
+                &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
+                &game_svr::npc::NpcVars::default(),
             ),
             "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
         );
@@ -33293,6 +33658,9 @@ mod tests {
                 &gates,
                 &catalog,
                 None,
+                &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
+                &game_svr::npc::NpcVars::default(),
             ),
             "CM_QUERYUSERNAME 属 P0 批"
         );
@@ -33328,6 +33696,9 @@ mod tests {
             &gates,
             &catalog,
             None,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &mut HashMap::new(),
+            &game_svr::npc::NpcVars::default(),
         ));
         let frames = drain_frames(&mut rx0);
         assert_eq!(frames.len(), 1, "近窗 ⇒ 恰好一帧 SM_USERNAME");
@@ -33401,6 +33772,9 @@ mod tests {
                 &gates,
                 &catalog,
                 None,
+                &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
+                &game_svr::npc::NpcVars::default(),
             ),
             "CM_QUERYUSERSTATE 属 P0 批 ⇒ 派发返回 true"
         );
@@ -33497,6 +33871,9 @@ mod tests {
                 &gates,
                 &catalog,
                 None,
+                &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
+                &game_svr::npc::NpcVars::default(),
             ),
             "CM_CLICKNPC 属 P0 批 ⇒ 派发返回 true"
         );
@@ -33545,6 +33922,9 @@ mod tests {
                 &gates,
                 &catalog,
                 None,
+                &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
+                &game_svr::npc::NpcVars::default(),
             ),
             "非 P0 ident ⇒ 返回 false"
         );
@@ -33569,6 +33949,9 @@ mod tests {
             &gates,
             &catalog,
             None,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &mut HashMap::new(),
+            &game_svr::npc::NpcVars::default(),
         ));
         assert_eq!(
             sessions.get("hero").unwrap().mns_val[3],
@@ -33599,6 +33982,9 @@ mod tests {
             &gates,
             &catalog,
             None,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &mut HashMap::new(),
+            &game_svr::npc::NpcVars::default(),
         ));
         let sg = sessions.get("hero").unwrap();
         assert_eq!(sg.mns_val[3], "hello", "CM_QUERYVAL 尾经派发落 MNSval[3]");
@@ -48249,6 +48635,8 @@ mod tests {",
             &colors,
             None,
             &mut item_number,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &game_svr::npc::NpcVars::default(),
         );
         assert!(drain_frames(&mut rx0).is_empty(), "未展示标签 ⇒ 零帧");
         assert_eq!(sessions["hero"].state.gold, 20_000, "未展示 ⇒ 不扣金");
@@ -48311,6 +48699,8 @@ mod tests {",
             &colors,
             None,
             &mut item_number,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &game_svr::npc::NpcVars::default(),
         );
         let frames = drain_frames(&mut rx0);
         let idents: Vec<u16> = frames.iter().map(|b| hdr(b).0).collect();
@@ -48496,6 +48886,8 @@ mod tests {",
             &colors,
             None,
             &mut item_number,
+            &game_svr::npc::MerchantScriptBook::default(),
+            &game_svr::npc::NpcVars::default(),
         );
         let frames = drain_frames(&mut rx0);
         assert_eq!(frames.len(), 1, "取回成功仅 SM_ADDITEM（+ say 未装载）");
