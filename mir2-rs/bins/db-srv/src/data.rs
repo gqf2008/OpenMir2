@@ -270,7 +270,11 @@ pub(crate) async fn load_human_rcd(
     let mut human_rcd: Option<CharacterDataInfo> = None;
     if n_check_code == 1 || bo_found {
         if let Some(_n_index) = db.play_data_index_text(&chr_name).await {
-            if let Some(cached) = server.cache.lock().await.get(chr_name.as_bytes()) {
+            // 注意：`if let` 的临时量活到整个 block 结束 —— 这里的 `lock()` guard 不能写进
+            // 条件位置，否则会把缓存锁一直持到下面的 `play_data_get().await`，把 N 条取档
+            // 串行化（LB-08 判据 `db_down_requests_fail_in_parallel` 会因此变红）。
+            let cached = { server.cache.lock().await.get(chr_name.as_bytes()) };
+            if let Some(cached) = cached {
                 human_rcd = Some(cached);
             } else {
                 // oracle `DataService.cs:177-182`：`_playDataStorage.Get(...)` 返回 false
