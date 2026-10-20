@@ -27,7 +27,7 @@ use std::path::Path;
 use mir2_data::exps::IniFile;
 
 use crate::error::EnvirError;
-use crate::text::decode_text;
+use crate::text::decode_config_text;
 
 /// `GameSvrConf` 里本卡用到的字段（读侧；键名照 `ServerConf.cs`，**不发明**）。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -207,16 +207,15 @@ impl GameSvrConf {
     /// 从 `Server.conf` 字节加载（用现网语料；只读）。
     ///
     /// 编码口径照 `ConfigFile.Load` 的 `StreamReader(..., GB2312)`：**带 BOM 探测**
-    /// ⇒ 现网 UTF-8+BOM 的 `Server.conf` 按 UTF-8 解出 `元宝`/`成长`（不是 GBK 乱码）。
-    /// 解码后用 [`IniFile::from_gbk_bytes`] 解析（`crates/data` 的既有入口）。
+    /// （`StreamReader` 口径，不是 `StringList` 的 `GetEncoding` 口径 ⇒ `FF FE 00 00`
+    /// 是 UTF-32LE）⇒ 现网 UTF-8+BOM 的 `Server.conf` 按 UTF-8 解出 `元宝`/`成长`。
+    ///
+    /// 解码后的 `String` **直接**交给 [`IniFile::from_text`]，不再重编码成 GBK 二次解码
+    /// —— 后者会把 cp936 独有的 `A8 BF = U+E7C8` 按 WHATWG 解成 `U+01F9`，与 oracle 不符。
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        let text = decode_text(bytes);
-        // `IniFile::from_gbk_bytes` 是 `crates/data` 的 GBK 入口；这里先把 BOM 探测后的文本
-        // 重新编码为 cp936 再喂它，保证 ini 结构与值都与 `ConfigFile.Load` 一致。
-        // 用统一编码入口（E-1/E-2）：不可映射 → `?`，不产生 `&#N;` 数字引用。
-        let gbk = mir2_script::cp936::encode_gb2312_dotnet(&text);
-        let ini = IniFile::from_gbk_bytes(&gbk);
+        let text = decode_config_text(bytes);
+        let ini = IniFile::from_text(&text);
         Self::from_ini(&ini)
     }
 

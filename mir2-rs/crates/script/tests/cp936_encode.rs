@@ -3,8 +3,9 @@
 //! 探测表由 .NET 探针生成（`Encoding.GetEncoding(936)` 逐 BMP 码点 `GetBytes`），
 //! 与 `audit-encoding-v2-20261021.md` §1.1/§2.3 的输出同源；测试直接调生产函数
 //! `mir2_script::cp936::{encode_gb2312_dotnet, decode, decode_string_list}`，
-//! 不复制实现。红检：把生产入口改回 `encoding_rs::GBK.encode`、把 BOM 顺序改回
-//! `FF FE` 先于 `FF FE 00 00`、或改掉 `gbk_overrides.rs` 任一映射 => 对应断言必红。
+//! 不复制实现。红检：把生产入口改回 `encoding_rs::GBK.encode`、把 `decode_string_list`
+//! 的 `FF FE` 分支改回“`FF FE 00 00` 先判 UTF-32LE”（StringList 口径应为 UTF-16LE）、
+//! 或改掉 `gbk_overrides.rs` 任一映射 => 对应断言必红。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -181,14 +182,27 @@ fn non_bmp_and_unmapped_fallback_never_numeric_reference() {
     }
 }
 
-/// E-2 / E-4：BOM 顺序按 .NET `StreamReader` 实测 —— `FF FE 00 00` 是 UTF-32LE，
-/// **必须先于** `FF FE`（UTF-16LE）判定。
+/// E-2 / E-4：两套 BOM 模型（.NET 实测）。
+///
+/// - `StringList.LoadFromFile` = `GetEncoding` + `new StreamReader(fileName, fs)`：
+///   `FF FE 00 00` 走 **UTF-16LE**（`GetEncoding` 给 `Encoding.Unicode`，StreamReader
+///   不再升级 UTF-32LE）；`FF FE FF FE` 也走 UTF-16LE（BOM 探测，解出 `U+FEFF`）。
+/// - `ConfigFile.Load` = 裸 `StreamReader(stream, gb2312)`：`FF FE 00 00` 走 **UTF-32LE**。
+///
+/// 探针：`E:/tmp/enca-v2/encprobe-dotnet`（`audit-encoding-v2-20261021.md` §1.2）；
+/// 复现时注意两者的构图差异，直接拿裸 StreamReader 的结果套到 StringList 会错。
 #[test]
-fn bom_order_utf32le_before_utf16le() {
-    let vectors: &[(&[u8], &str)] = &[
-        (&[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00], "A"),
-        (&[0xFF, 0xFE, 0x41, 0x00], "A"),
+fn bom_models_string_list_vs_stream_reader() {
+    // StringList 口径（Envir 文本）。
+    let string_list: &[(&[u8], &str)] = &[
+        // FF FE 00 00 是 UTF-16LE：首字符 U+0000，不是 UTF-32LE 的 U+0041。
+        (
+            &[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00],
+            "\u{0000}A\u{0000}",
+        ),
+        (&[0xFF, 0xFE, 0xFF, 0xFE], "\u{FEFF}"),
         (&[0xFF, 0xFE, 0xFF, 0x41], "\u{41FF}"),
+        (&[0xFF, 0xFE, 0x41, 0x00], "A"),
         (&[0xFE, 0xFF, 0x00, 0x41], "A"),
         (&[0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, 0x41], "A"),
         (&[0xEF, 0xBB, 0xBF, 0x41], "A"),
@@ -202,30 +216,58 @@ fn bom_order_utf32le_before_utf16le() {
         ),
         (
             &[0xFF, 0xFE, 0x00, 0x00, 0x00, 0x00, 0xD8, 0x00],
-            "\u{FFFD}",
+            "\u{0000}\u{0000}\u{00D8}",
         ),
         (
             &[0xFF, 0xFE, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00],
-            "\u{FFFF}",
+            "\u{0000}\u{FFFF}\u{0000}",
         ),
         (
             &[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x42],
-            "A\u{FFFD}",
+            "\u{0000}A\u{0000}\u{FFFD}",
         ),
         (&[0xFF, 0xFE, 0x00, 0xD8, 0x41, 0x00], "\u{FFFD}A"),
         (&[0xFF, 0xFE, 0x00], "\u{FFFD}"),
+        // 无 BOM → cp936。
         (&[0xA8, 0xBF], "\u{E7C8}"),
         (&[0xFF], "\u{F8F5}"),
         (&[0x80], "\u{20AC}"),
         (&[0x81, 0x20, 0x41], "?A"),
     ];
-    for (bytes, want) in vectors {
+    for (bytes, want) in string_list {
         assert_eq!(
             cp936::decode_string_list(bytes),
             *want,
-            "BOM/解码向量 {bytes:02X?} 不符"
+            "StringList BOM/解码向量 {bytes:02X?} 不符"
         );
         assert_eq!(mir2_script::textfile::decode_bytes(bytes), *want);
+    }
+
+    // ConfigFile.Load 口径（配置文件）：裸 StreamReader 会把 FF FE 00 00 升级成 UTF-32LE。
+    let config: &[(&[u8], &str)] = &[
+        (&[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00], "A"),
+        (
+            &[0xFF, 0xFE, 0x00, 0x00, 0x00, 0x00, 0xD8, 0x00],
+            "\u{FFFD}",
+        ),
+        (
+            &[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x42],
+            "A\u{FFFD}",
+        ),
+        (&[0xFF, 0xFE, 0xFF, 0xFE], "\u{FEFF}"),
+        (&[0xFF, 0xFE, 0xFF, 0x41], "\u{41FF}"),
+        (&[0xFE, 0xFF, 0x00, 0x41], "A"),
+        (&[0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, 0x41], "A"),
+        (&[0xEF, 0xBB, 0xBF, 0x41], "A"),
+        (&[0xFF, 0xFE, 0x00], "\u{FFFD}"),
+        (&[0xA8, 0xBF], "\u{E7C8}"),
+    ];
+    for (bytes, want) in config {
+        assert_eq!(
+            cp936::decode_stream_reader(bytes),
+            *want,
+            "StreamReader BOM/解码向量 {bytes:02X?} 不符"
+        );
     }
 }
 

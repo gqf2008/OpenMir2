@@ -22,7 +22,7 @@ pub struct IniFile {
 
 impl IniFile {
     /// 从任意编码字节加载：先按 BOM 探测编码（UTF-8 / UTF-16LE / UTF-16BE），无 BOM 则按
-    /// GB2312（GBK）；解码成文本后再喂 [`IniFile::from_gbk_bytes`] 走同一套 ini 解析。
+    /// GB2312（GBK）；解码成文本后直接走 [`IniFile::from_text`]（同一套 ini 解析）。
     ///
     /// 口径来源：`ConfigFile.Load` 的 `new StreamReader(..., Encoding.GetEncoding("GB2312"))`
     /// （`src/OpenMir2/Common/ConfigFile.cs:263`）——`StreamReader` 默认 `detectEncodingFromByteOrderMarks: true`，
@@ -47,15 +47,27 @@ impl IniFile {
         Self::from_gbk_bytes(bytes)
     }
 
-    /// 把已解码的文本重新编码为 GBK 后走 [`IniFile::from_gbk_bytes`]（共用一套解析）。
+    /// 已解码文本直接走 [`IniFile::from_text`]（共用一套解析，**不做**重编码往返）。
     fn from_decoded_text(text: &str) -> Self {
-        let (gbk, _, _) = encoding_rs::GBK.encode(text);
-        Self::from_gbk_bytes(&gbk)
+        Self::from_text(text)
     }
 
     /// 从 GBK（GB2312）字节加载。解析规则逐条对应 `ConfigFile.Load`。
+    ///
+    /// 注意：这里是 WHATWG GBK（`encoding_rs`），不是 .NET cp936。需要 .NET 口径的调用方
+    /// （如 `crates/envir` 的 `GameSvrConf`）应先按 cp936 解码，再把 `String` 交给
+    /// [`IniFile::from_text`]；否则会“解码→重编码→再解码”，把 cp936 独有的
+    /// `A8 BF = U+E7C8` 二次解释成 WHATWG 的 `U+01F9`。
     pub fn from_gbk_bytes(bytes: &[u8]) -> Self {
         let (text, _, _) = encoding_rs::GBK.decode(bytes);
+        Self::from_text(&text)
+    }
+
+    /// 从**已解码**的文本加载（解析规则逐条对应 `ConfigFile.Load`）。
+    ///
+    /// 供调用方在完成自己的编码/BOM 口径（.NET cp936、UTF-8 等）之后直接解析，
+    /// 避免对文本再做一次 GBK 重编码/解码。ini 结构（段/键/注释）与值都原样保留。
+    pub fn from_text(text: &str) -> Self {
         let mut ini = IniFile::default();
         let mut large_comment = false;
         let mut is_cur_sec_comment = false;

@@ -1,8 +1,10 @@
 //! `StringList.LoadFromFile` 的文件读取：BOM 嗅探 + GB2312(GBK) 默认解码 + `ReadLine` 切行。
 //!
 //! 参照 `src/OpenMir2/Common/StringList.cs` 的 `GetEncoding` / `LoadFromFile`：
-//! - 有 BOM 按 BOM（UTF-8 / UTF-32LE / UTF-16LE / UTF-16BE / UTF-32BE），无 BOM 按 gb2312
-//!   （.NET 实为 cp936）；实现统一在 [`crate::cp936`]；
+//! - 有 BOM 按 BOM（UTF-8 / UTF-16LE / UTF-16BE / UTF-32BE），无 BOM 按 gb2312
+//!   （.NET 实为 cp936）；**本路径没有 UTF-32LE 分支**：`FF FE 00 00` 是 UTF-16LE
+//!   （`GetEncoding` 先给 `Encoding.Unicode`，`StreamReader` 不再升级；见
+//!   [`crate::cp936::decode_string_list`]）；实现统一在 [`crate::cp936`]；
 //! - `StreamReader.ReadLine` 以 `\r\n` / `\r` / `\n` 切行，文件尾无换行符也返回最后一行。
 
 use std::path::Path;
@@ -11,8 +13,9 @@ use crate::parser::ScriptFs;
 
 pub fn decode_bytes(bytes: &[u8]) -> String {
     // 唯一实现见 `crate::cp936::decode_string_list`（B-105 / E-4 的统一入口）：
-    // BOM 顺序按 .NET `StreamReader` 实测（UTF-32LE 先于 UTF-16LE），
-    // `U+FFFD → '?'` 的归一**只适用于 cp936 分支**。
+    // BOM 模型是 `StringList.LoadFromFile` 的 GetEncoding + StreamReader 组合
+    // （`FF FE 00 00` = UTF-16LE，不是 UTF-32LE）；`U+FFFD → '?'` 的归一
+    // **只适用于 cp936 分支**。
     crate::cp936::decode_string_list(bytes)
 }
 
@@ -102,17 +105,17 @@ mod tests {
         // .NET 实测：StreamReader 按 BOM 判定，优先于 GetEncoding 给出的 gb2312。
         // FF FE FF 41 → 按 UTF-16LE 解出 U+41FF（不是 gb2312 的 U+F8F5 '?' 'A'）。
         assert_eq!(decode_bytes(&[0xFF, 0xFE, 0xFF, 0x41]), "\u{41FF}");
-        // FF FE 00 00 是 UTF-32LE BOM（.NET StreamReader 实测，audit-encoding-v2 §2.2）：
-        // 必须排在 FF FE（UTF-16LE）之前，否则 41 00 00 00 会解成 U+0000 U+0041。
-        assert_eq!(decode_bytes(&[0xFF, 0xFE, 0x00, 0x00]), "");
+        // FF FE 00 00 在 StringList 路径是 UTF-16LE（GetEncoding 给 Encoding.Unicode，
+        // StreamReader 不再升级 UTF-32LE）：首字符 U+0000，41 00 00 00 → A, U+0000。
+        assert_eq!(decode_bytes(&[0xFF, 0xFE, 0x00, 0x00]), "\u{0000}");
         assert_eq!(
             decode_bytes(&[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00]),
-            "A"
+            "\u{0000}A\u{0000}"
         );
-        // 尾部不足 4 字节 → 单个 U+FFFD（不是 ?）
+        // UTF-16LE 尾部单字节 → 单个 U+FFFD（不是 ?）
         assert_eq!(
             decode_bytes(&[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x42]),
-            "A\u{FFFD}"
+            "\u{0000}A\u{0000}\u{FFFD}"
         );
         assert_eq!(decode_bytes(&[0xFF, 0xFE, 0x41, 0x00]), "A");
         assert_eq!(decode_bytes(&[0xFE, 0xFF, 0x00, 0x41]), "A");

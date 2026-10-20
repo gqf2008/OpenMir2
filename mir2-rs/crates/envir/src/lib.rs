@@ -76,7 +76,7 @@ pub use paths::{
 pub use points::{parse_points, PointInfo};
 pub use registry::{MapLoader, MapRegistry, SkippedMap};
 pub use robot::{parse_robot_line, parse_robot_lines, RobotRecord, ROBOT_TEXT_SPLIT};
-pub use text::decode_text;
+pub use text::{decode_config_text, decode_text};
 
 // 便于调用方/测试直接引用属性类型（`MapFile::attribute` 的返回类型）。
 pub use mir2_world::CellAttribute;
