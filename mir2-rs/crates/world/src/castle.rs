@@ -2850,7 +2850,9 @@ mod tests {
     /// **C2 `castle_initialize_call_order_and_skip_counts`**：`Castle/0` 口径
     /// （守卫 1..4 HP=0 跳过、5..12 缺模板）⇒ 24 次 Regen、16 个 `SpawnDefenseUnit`、8 条告警。
     ///
-    /// 牙：去掉 `hp==0` 跳过 ⇒ 26/红；把守卫默认 2000 改 0 ⇒ 16/红；调换墙序 ⇒ 名字序红。
+    /// 牙：去掉**守卫** `hp==0` 跳过 ⇒ 28 次 Regen（本用例红）；调换墙序 ⇒ 名字序红。
+    /// （弓手在本用例全部 `HP>0`，其跳过分支由 C1 的解析默认值用例覆盖；「守卫默认 2000」属 C1，
+    /// 不在本手造 specs 用例内。）
     #[test]
     fn castle_initialize_call_order_and_skip_counts() {
         let mut specs = defense_specs();

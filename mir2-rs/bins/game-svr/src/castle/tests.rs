@@ -32,12 +32,13 @@ fn real_deployed_sabuk_w() -> Vec<u8> {
         .collect()
 }
 
-/// **C1**：`Castle/0/SabukW.txt` → `CastleDefenseSpecs` 逐字段。
+/// **C1**：`Castle/0/SabukW.txt` 的 hex 证据夹具 → `CastleDefenseSpecs` 逐字段；
+/// A 情景（`Castle/Castle/SabukW.txt`）的部署等价由 `default_specs()` 合成用例对照。
 ///
 /// 牙：① 把 `GUARD_ARRAY_LEN` 改成 4 ⇒ `guards.len()==12` 红；② 把中/右墙名按语义对调
 /// ⇒ 墙名断言红；③ 把缺键守卫 HP 默认改 0 ⇒ `guards[4..].hp==2000` 红。
 #[test]
-fn castle_sabukw_specs_from_deployed_file() {
+fn castle_sabukw_specs_from_fixture() {
     let cfg = parse_sabuk_w_bytes(&real_deployed_sabuk_w());
     let specs = specs_from_sabuk(&cfg);
 
