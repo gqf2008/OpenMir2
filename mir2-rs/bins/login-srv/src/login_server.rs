@@ -809,13 +809,7 @@ async fn account_create(
         let n10 = accounts.index(&packet.account).unwrap_or(-1);
         if n10 <= 0 {
             if !packet.account.is_empty() {
-                let rec = AccountRecord {
-                    account: packet.account.clone(),
-                    password: packet.password.clone(),
-                    user_name: packet.user_name.clone(),
-                    quiz2: packet.quiz2.clone(),
-                    ..AccountRecord::default()
-                };
+                let rec = record_from_packet(&packet);
                 if accounts.add(&rec).await? {
                     n_err_code = 1;
                 }
@@ -924,8 +918,7 @@ async fn account_update_user_info(
         let account_index = accounts.index(&packet.account).unwrap_or(-1);
         if account_index >= 0 {
             if let Some(mut rec) = accounts.get(account_index).await? {
-                rec.user_name = packet.user_name.clone();
-                rec.quiz2 = packet.quiz2.clone();
+                apply_packet_to_record(&mut rec, &packet);
                 n_code = i32::from(accounts.update_account(account_index, &rec).await?);
             }
         } else {
@@ -1031,7 +1024,47 @@ struct UserAccountPacket {
     account: String,
     password: String,
     user_name: String,
+    ss_no: String,
+    quiz: String,
+    answer: String,
+    email: String,
     quiz2: String,
+    answer2: String,
+    birthday: String,
+    mobile_phone: String,
+}
+
+/// 把新建账号封包映射成待写库记录（C# `accountRecord.UserEntry = userAccount.UserEntry`
+/// + `UserEntryAdd`，见 `ClientSession.AccountCreate`）。
+fn record_from_packet(packet: &UserAccountPacket) -> AccountRecord {
+    AccountRecord {
+        account: packet.account.clone(),
+        password: packet.password.clone(),
+        user_name: packet.user_name.clone(),
+        quiz2: packet.quiz2.clone(),
+        id_card: packet.ss_no.clone(),
+        birthday: packet.birthday.clone(),
+        email: packet.email.clone(),
+        quiz: packet.quiz.clone(),
+        answer: packet.answer.clone(),
+        mobile_phone: packet.mobile_phone.clone(),
+        answer2: packet.answer2.clone(),
+        ..AccountRecord::default()
+    }
+}
+
+/// 把改资料封包逐字段覆盖到已有记录（C# `accountRecord.UserEntry/UserEntryAdd = userAccount.*`，
+/// `ClientSession.AccountUpdateUserInfo`）。
+fn apply_packet_to_record(rec: &mut AccountRecord, packet: &UserAccountPacket) {
+    rec.user_name.clone_from(&packet.user_name);
+    rec.quiz2.clone_from(&packet.quiz2);
+    rec.id_card.clone_from(&packet.ss_no);
+    rec.birthday.clone_from(&packet.birthday);
+    rec.email.clone_from(&packet.email);
+    rec.quiz.clone_from(&packet.quiz);
+    rec.answer.clone_from(&packet.answer);
+    rec.mobile_phone.clone_from(&packet.mobile_phone);
+    rec.answer2.clone_from(&packet.answer2);
 }
 
 /// `BinaryReader` + `ReadPascalString(size)`：读长度字节，再读 `max(size, len)` 字节，取前 `len` 字节。
@@ -1049,17 +1082,29 @@ fn parse_user_account_packet(buf: &[u8]) -> Option<UserAccountPacket> {
     let account = take(10)?;
     let password = take(10)?;
     let user_name = take(20)?;
-    let _ss_no = take(14)?;
+    let ss_no = take(14)?;
     let _phone = take(14)?;
-    let _quiz = take(20)?;
-    let _answer = take(12)?;
-    let _email = take(40)?;
+    let quiz = take(20)?;
+    let answer = take(12)?;
+    let email = take(40)?;
     let quiz2 = take(20)?;
+    let answer2 = take(12)?;
+    let birthday = take(10)?;
+    let mobile_phone = take(13)?;
+    let _memo = take(20)?;
+    let _memo2 = take(20)?;
     Some(UserAccountPacket {
         account,
         password,
         user_name,
+        ss_no,
+        quiz,
+        answer,
+        email,
         quiz2,
+        answer2,
+        birthday,
+        mobile_phone,
     })
 }
 
@@ -1216,11 +1261,11 @@ mod tests {
         write_ascii_string(&mut buf, "newacct", 10);
         write_ascii_string(&mut buf, "pwd123", 10);
         write_ascii_string(&mut buf, "nickname", 20);
-        write_ascii_string(&mut buf, "", 14); // SSNo
-        write_ascii_string(&mut buf, "", 14); // Phone
+        write_ascii_string(&mut buf, "ssn1", 14); // SSNo
+        write_ascii_string(&mut buf, "", 14); // Phone（oracle SQL 不取该字段）
         write_ascii_string(&mut buf, "q1", 20); // Quiz
         write_ascii_string(&mut buf, "a1", 12); // Answer
-        write_ascii_string(&mut buf, "", 40); // EMail
+        write_ascii_string(&mut buf, "e@x", 40); // EMail
         assert_eq!(buf.len(), 148);
         write_ascii_string(&mut buf, "q2", 20);
         write_ascii_string(&mut buf, "a2", 12);
@@ -1232,9 +1277,89 @@ mod tests {
         assert_eq!(p.account, "newacct");
         assert_eq!(p.password, "pwd123");
         assert_eq!(p.user_name, "nickname");
+        assert_eq!(p.ss_no, "ssn1");
+        assert_eq!(p.quiz, "q1");
+        assert_eq!(p.answer, "a1");
+        assert_eq!(p.email, "e@x");
         assert_eq!(p.quiz2, "q2");
+        assert_eq!(p.answer2, "a2");
+        assert_eq!(p.birthday, "1970-01-01");
+        assert_eq!(p.mobile_phone, "13800000000");
         // 缓冲不足 ⇒ C# 抛 EndOfStream 被 ToPacket 吞掉返回 null ⇒ Rust 返回 None
         assert!(parse_user_account_packet(&buf[..30]).is_none());
+        // 只到 UserEntry（148B）也不够：C# 还要读 UserEntryAdd 的 6 段
+        assert!(parse_user_account_packet(&buf[..148]).is_none());
+        // 少了 Memo2 最后一段同样失败
+        assert!(parse_user_account_packet(&buf[..buf.len() - 1]).is_none());
+    }
+
+    /// 解析结果 → 建号记录：protection 13 列的数据源必须全部落到 `AccountRecord`
+    /// （C# `AccountCreate` 里 `accountRecord.UserEntry/UserEntryAdd = userAccount.*`）。
+    #[test]
+    fn record_from_packet_fills_all_protection_fields() {
+        let packet = UserAccountPacket {
+            account: "acct".into(),
+            password: "pwd".into(),
+            user_name: "uname".into(),
+            ss_no: "idcard".into(),
+            quiz: "q1".into(),
+            answer: "a1".into(),
+            email: "e@x".into(),
+            quiz2: "q2".into(),
+            answer2: "a2".into(),
+            birthday: "1980-01-02".into(),
+            mobile_phone: "13800000000".into(),
+        };
+        let rec = record_from_packet(&packet);
+        assert_eq!(rec.user_name, "uname");
+        assert_eq!(rec.id_card, "idcard");
+        assert_eq!(rec.birthday, "1980-01-02");
+        assert_eq!(rec.email, "e@x");
+        assert_eq!(rec.quiz, "q1");
+        assert_eq!(rec.answer, "a1");
+        assert_eq!(rec.quiz2, "q2");
+        assert_eq!(rec.mobile_phone, "13800000000");
+        assert_eq!(rec.answer2, "a2");
+    }
+
+    /// 改资料：封包必须**覆盖**（不是保留旧值）全部 protection 字段。
+    #[test]
+    fn apply_packet_overwrites_all_protection_fields() {
+        let mut rec = AccountRecord {
+            user_name: "old".into(),
+            quiz2: "oldq2".into(),
+            id_card: "oldid".into(),
+            birthday: "oldbd".into(),
+            email: "olde".into(),
+            quiz: "oldq1".into(),
+            answer: "olda1".into(),
+            mobile_phone: "oldm".into(),
+            answer2: "olda2".into(),
+            ..AccountRecord::default()
+        };
+        let packet = UserAccountPacket {
+            account: "acct".into(),
+            password: "pwd".into(),
+            user_name: "newun".into(),
+            ss_no: "newid".into(),
+            quiz: "newq1".into(),
+            answer: "newa1".into(),
+            email: "newe".into(),
+            quiz2: "newq2".into(),
+            answer2: "newa2".into(),
+            birthday: "newbd".into(),
+            mobile_phone: "newm".into(),
+        };
+        apply_packet_to_record(&mut rec, &packet);
+        assert_eq!(rec.user_name, "newun");
+        assert_eq!(rec.id_card, "newid");
+        assert_eq!(rec.birthday, "newbd");
+        assert_eq!(rec.email, "newe");
+        assert_eq!(rec.quiz, "newq1");
+        assert_eq!(rec.answer, "newa1");
+        assert_eq!(rec.quiz2, "newq2");
+        assert_eq!(rec.mobile_phone, "newm");
+        assert_eq!(rec.answer2, "newa2");
     }
 
     /// `GetGatePublicAddr`：AddrTable `RemoteAddr` 命中即换成 `PublicAddr`，否则原样。
