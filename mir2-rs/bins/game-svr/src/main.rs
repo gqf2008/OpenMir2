@@ -988,6 +988,8 @@ async fn main() -> Result<()> {
                     red_msg_b_color: cfg.red_msg_b_color,
                     green_msg_f_color: cfg.green_msg_f_color,
                     green_msg_b_color: cfg.green_msg_b_color,
+                    test_server: cfg.test_server,
+                    service_mode: cfg.service_mode,
                     disable_in_safe_zone_fire_cross: cfg.disable_in_safe_zone_fire_cross,
                     save_human_rcd_time: i64::from(cfg.save_human_rcd_time),
                     health_fill_time: cfg.health_fill_time,
@@ -1204,7 +1206,9 @@ struct DbWiring {
     /// `WorldServer.cs:469`）——它是**取档请求**的字段、不在角色记录里，须随查询带过来做帧 11029/5008 的门。
     /// `session_id`/`account` 同样是取档请求的字段（不在 `PlayerDataHead` 里），用于进世界时登记
     /// 在线表（账号级顶号 `KickUser` 按 `Account`/`SessionID` 匹配）。
-    outstanding: Vec<(i32, i32, i32, i32, i32, String)>,
+    /// `pay_ment` = `LoadDBInfo.PayMent`（`PlayObject.cs:1145-1148` 的覆盖前值；登录第四条
+    /// `SysMsg` 的门需要它）。
+    outstanding: Vec<(i32, i32, i32, i32, i32, i32, String)>,
     /// 已发出、还没取走的**存档**应答 `(query_id, ChrName)`（`DBR_SAVEHUMANRCD(1102)` 或失败时的
     /// `DBR_LOADHUMANRCD(1100)`）——取走时同步 `FrontEngine.end_save`（oracle `RemoveSaveList`
     /// 的时机就是「应答回来」，`WorldServer.cs:1091` ↔ 进世界守卫 `:203`）。
@@ -10705,6 +10709,92 @@ fn drain_aoi_downlink(
     sent
 }
 
+/// **lane654**：登录队列 `after` 段（`654` / 第二 `42` / `100×4`，以及优先级 61 的 `750`）的
+/// 补发点。
+///
+/// # oracle 口径
+///
+/// `PlayObject.Run()` 每次先跑 `SearchViewRange()`（`PlayObject.cs:3220-3240` 把其他 actor 的
+/// `RM_TURN` 以优先级 `(byte)10001=17` 入**观察者自己**的队列），随后 `BaseObject.Run()` 的
+/// `while (GetMessage()) Operate()`（`BaseObject.Base.cs:28-34`）按 .NET 四叉堆出队 ⇒
+/// 优先级 17 的出现帧恒在 `RM_CHANGELIGHT(153)`、`RM_USERNAME(165)`、`RM_SYSMESSAGE(252)` 之前。
+/// 2026-10-22 真机（同一账号 `winplay0`）实测：`10,41 ×6 → 654 → 657,657 → 42 → 100×4`。
+///
+/// # 本宿主位置
+///
+/// 出现帧由世界 tick 的 [`drain_aoi_downlink`] 下发；本函数紧跟其后、在该会话**本 tick 实际扫描**
+/// （`ai.search_tick == world.clock_ms`，与 [`drain_aoi_downlink`] 同一判据）时按登录时的队列序
+/// 补发 `after`。扫描前不补发（不猜时机）；扫描前已掉线 ⇒ 缓冲作废。
+fn drain_login_tail(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    pending: &mut std::collections::HashMap<String, smframe::EnterWorldInputs>,
+) -> usize {
+    let mut sent = 0usize;
+    let mut finished: Vec<String> = Vec::new();
+    // 按键排序：不让 `HashMap` 迭代序参与帧叙（同 `drain_periodic_save` 的确定性口径）。
+    let mut keys: Vec<String> = pending.keys().cloned().collect();
+    keys.sort();
+    for chr in keys {
+        let Some(entry) = online.iter().find(|e| e.chr_name == chr) else {
+            // 首次扫描前掉线：缓冲作废（不静默留给下一次登录）。
+            finished.push(chr);
+            continue;
+        };
+        let Some(sess) = world.sessions.iter().find(|s| s.chr_name == chr) else {
+            finished.push(chr);
+            continue;
+        };
+        if sess.stage != mir2_world::WorldStage::InWorld {
+            continue;
+        }
+        let Some(actor_id) = sess.actor_id else {
+            continue;
+        };
+        let Some(entity) = world.entities.get(actor_id) else {
+            continue;
+        };
+        // 本 tick 没扫 ⇒ 出现帧还没发 ⇒ 654 也不能先走（oracle 同一次 Run 里 17 < 153）。
+        if entity.race != mir2_world::ACTOR_RACE_PLAY || entity.ai.search_tick != world.clock_ms {
+            continue;
+        }
+        let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "登录延迟段") else {
+            continue;
+        };
+        // 本 tick `SearchViewRange` 对其他 actor 的入队槽（`VisibleActors` 顺序）——
+        // `RM_TURN`(17) / `RM_DEATH`(37)。它们不产帧（AOI 已发），但改变堆形 ⇒ 决定
+        // `654` 之后 `100×4` 的出队序。`Skeleton`(40) 无世界字段（登记），死亡一律按 `RM_DEATH`。
+        let others: Vec<smframe::OtherAppear> = entity
+            .visible_actors
+            .iter()
+            .filter(|v| v.flag == mir2_world::VisibleFlag::Show && v.target != actor_id)
+            .map(|v| {
+                if world.entities.get(v.target).is_some_and(|t| t.death) {
+                    smframe::OtherAppear::Death
+                } else {
+                    smframe::OtherAppear::Turn
+                }
+            })
+            .collect();
+        if let Some(inputs) = pending.get(&chr) {
+            let (_, after) = inputs.frames_split_with_others(&others);
+            for body in after {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: entry.socket,
+                    body,
+                });
+                sent += 1;
+            }
+        }
+        finished.push(chr);
+    }
+    for chr in finished {
+        pending.remove(&chr);
+    }
+    sent
+}
+
 /// **出站接线片 W2**：把世界 tick 的 `RM_PUSH`/`RM_RUSH`/`RM_RUSHKUNG`/`RM_BUTCH` 事件
 /// （`TickRecord::{pushes,rushes,butches}`）翻成 `SM_BACKSTEP(9)`/`SM_RUSH(6)`/`SM_RUSHKUNG(7)`/
 /// `SM_BUTCH(637)` 并广播。
@@ -11797,6 +11887,7 @@ fn drain_run_downlinks(
         spell_fill_time,
         client_layout,
         None,
+        None,
     )
 }
 
@@ -11815,6 +11906,7 @@ fn drain_run_downlinks_with_magic(
     spell_fill_time: i32,
     client_layout: bool,
     magic: Option<MagicSource<'_>>,
+    login_tails: Option<&mut std::collections::HashMap<String, smframe::EnterWorldInputs>>,
 ) -> Vec<(String, usize)> {
     drain_kill_exp_chain_with_magic(
         rec,
@@ -11834,6 +11926,11 @@ fn drain_run_downlinks_with_magic(
     // < `Show` 下标，见 [`drain_aoi_disappear`] 的顺序订正）⇒ 本宿主先发消失帧与 oracle **同序**。
     let _disappeared = drain_aoi_disappear(rec, online, gates);
     let aoi_frames = drain_aoi_downlink(world, displays, online, gates);
+    // **lane654**：登录队列 `after` 段（654/42/100）在**出现帧之后**补发（oracle 同一
+    // `Run()` 里 17 < 153 < 165 < 252 的出队序），且在任何体力/魔力段帧之前。
+    if let Some(pending) = login_tails {
+        drain_login_tail(world, online, gates, pending);
+    }
     drain_stamina(
         sessions,
         world,
@@ -13197,6 +13294,10 @@ struct EnterConfig {
     /// `[Setup] GreenMsgFColor`/`GreenMsgBColor`（P3-B5 的 36 `AttPowerUp` 提示）。
     green_msg_f_color: u8,
     green_msg_b_color: u8,
+    /// `[Server] TestServer`（`ServerConf.cs:23`）：登录第三条 `SysMsg` 与 `PayMent=3` 覆盖。
+    test_server: bool,
+    /// `[Server] ServiceMode`（`ServerConf.cs:27`）：与 `TestServer` 一同覆盖 `PayMent=3`。
+    service_mode: bool,
     /// `[Setup] DisableInSafeZoneFireCross`（P3-B5 的 22 安全区门；现网 = 1）。
     disable_in_safe_zone_fire_cross: bool,
     /// `[Setup] SaveHumanRcdTime`（oracle `GameSvrConf.cs:423/1484`，缺省 `600000`ms）：
@@ -13336,6 +13437,8 @@ impl EnterConfig {
             red_msg_b_color: 0x38,
             green_msg_f_color: 0xDB,
             green_msg_b_color: 0xFF,
+            test_server: false,
+            service_mode: false,
             disable_in_safe_zone_fire_cross: false,
             save_human_rcd_time: 600_000,
             health_fill_time: 300,
@@ -15701,6 +15804,11 @@ fn sim_loop(
     // 只读观测：不参与任何模拟/出帧语义。
     let mut aoi_frames_total: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
+    // **lane654**：登录队列 `after` 段的补发缓冲（`654` / 第二 `42` / `100×4`，含优先级 61 的
+    // `750`）。oracle 在观察者**首次** `SearchViewRange` 的同一次 `Run()` 里出队（优先级 17 的
+    // 其他 actor 出现帧之后）；本宿主在会话首次扫描 tick 由 [`drain_login_tail`] 补发。
+    let mut login_tails: std::collections::HashMap<String, smframe::EnterWorldInputs> =
+        std::collections::HashMap::new();
     loop {
         // **关服分支**（oracle `AppService.OnShutdown` → `SavePlayer`）：只在收到进程级关服请求时进入。
         // 正常 tick 的额外成本 = 一次通道探测，**不**发起任何存档（判据 4e）。
@@ -16413,6 +16521,7 @@ fn sim_loop(
                             info.gate_idx,
                             info.soft_version_date,
                             info.session_id,
+                            info.pay_ment,
                             info.account.clone(),
                         ));
                         Some(qid)
@@ -16456,7 +16565,7 @@ fn sim_loop(
             let replies = std::sync::Arc::clone(&w.replies);
             let mut r = replies.lock().expect("DB 应答表锁被毒化");
             let mut still = Vec::new();
-            for (qid, socket, gate_idx, soft_version_date, session_id, account) in
+            for (qid, socket, gate_idx, soft_version_date, session_id, pay_ment, account) in
                 std::mem::take(&mut w.outstanding)
             {
                 match r.take(qid) {
@@ -16919,6 +17028,13 @@ fn sim_loop(
                                                     // 帧 52/752：角色记录 `Abil`/`BonusAbil` + `stditems`
                                                     // 目录 + 各职业 `Config.BonusAbilofXxx` 除数（见上面 hoist）。
                                                     ability: ability_inputs,
+                                                    green_msg: (
+                                                        enter_cfg.green_msg_f_color,
+                                                        enter_cfg.green_msg_b_color,
+                                                    ),
+                                                    test_server: enter_cfg.test_server,
+                                                    service_mode: enter_cfg.service_mode,
+                                                    pay_ment,
                                                 };
                                                 for w in enter::apply(&mut inputs, &wx) {
                                                     glog!("WRN", "入图帧输入：{w}");
@@ -17179,11 +17295,19 @@ fn sim_loop(
                                                     socket,
                                                     "标记进世界/下发入图帧",
                                                 ) {
-                                                    let bodies = inputs.frames();
+                                                    // **lane654**：登录队列切成两段。`before` =
+                                                    // 优先级 ≤ `(byte)RM_TURN`(17) 的帧（oracle 在同一
+                                                    // `Run()` 里先出队的那些，含入图 15 帧）；`after` =
+                                                    // `654` 及其后（657/42/100，含优先级 61 的 750）——
+                                                    // oracle 在**其他 actor 的出现帧（RM_TURN=17）之后**
+                                                    // 才出队它们（2026-10-22 真机：10/41×6 → 654 → …），
+                                                    // 故由首次 AOI 扫描 tick 的 [`drain_login_tail`] 补发。
+                                                    let (bodies, tail_probe) = inputs.frames_split();
                                                     glog!(
                                                         "INF",
-                                                        "进世界帧下发：socket={socket} 共 {} 条（输入齐备的）",
-                                                        bodies.len()
+                                                        "进世界帧下发：socket={socket} 共 {} 条（输入齐备的），延迟段 {} 条",
+                                                        bodies.len(),
+                                                        tail_probe.len()
                                                     );
                                                     for body in bodies {
                                                         let _ = tx.send(SimToGate::SendFrame {
@@ -17191,6 +17315,11 @@ fn sim_loop(
                                                             body,
                                                         });
                                                     }
+                                                    // 延迟段 = 654/第二 42/100×4 —— 出队序随本 tick
+                                                    // `SearchViewRange` 对其他 actor 的 `RM_TURN` 槽数
+                                                    // 变化（同优先级不是 FIFO）⇒ 首次扫描时才按真机
+                                                    // 堆布局重算（[`drain_login_tail`]）。
+                                                    login_tails.insert(head.chr_name.clone(), inputs);
                                                     let _ = tx.send(SimToGate::MarkInWorld { socket });
                                                     // **M3⑥-实现 3 第②片**：进世界完成点 oracle
                                                     // `PlayObject.cs:1440` 的 `if (SystemShare.ManageNPC != null)
@@ -17381,6 +17510,7 @@ fn sim_loop(
                         gate_idx,
                         soft_version_date,
                         session_id,
+                        pay_ment,
                         account,
                     )),
                 }
@@ -17890,6 +18020,7 @@ fn sim_loop(
                 saves: &mut saves,
                 cfg: magic_cfg_of(&enter_cfg),
             }),
+            Some(&mut login_tails),
         );
         for (chr, n) in aoi_frames_this_tick {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
@@ -19135,6 +19266,124 @@ mod tests {
         );
         assert!(dealing, "仍 Dealing（不得误取消）");
         assert!(deal_creature.is_some(), "DealCreat 保持不变");
+    }
+
+    /// **lane654 判据⑤（延迟段补发点行为）**：`drain_login_tail` 只在该会话**本 tick 实际扫描**
+    /// （`ai.search_tick == world.clock_ms`）时补发 `after`（654/第二 42/100×4），补发后清缓冲；
+    /// 未扫描 ⇒ 不发、缓冲保留；扫描前已掉线（无在线表项）⇒ 缓冲作废。
+    ///
+    /// 红检（实测）：去掉 `entity.ai.search_tick != world.clock_ms` 门 ⇒ 第一条断言必红
+    /// （未扫描也发 654）。
+    #[test]
+    fn drain_login_tail_waits_for_first_scan_and_clears_buffer() {
+        let mut world = mir2_world::World::new(32, 32);
+        world.open_session("p");
+        let id = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .unwrap();
+        // 最小延迟段：只给 `changelight`（`before` = 658，`after` = 654）。
+        let mut inputs = smframe::EnterWorldInputs {
+            actor_id: id,
+            ..Default::default()
+        };
+        inputs.changelight = Some((0, game_svr::sessionwire::N_CLIENT_KEY_DEFAULT));
+        assert_eq!(inputs.frames_split().1.len(), 1, "最小 after = 654");
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".into(),
+            chr_name: "p".into(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 5,
+            actor_id: id,
+        }];
+        let mut pending: HashMap<String, smframe::EnterWorldInputs> = HashMap::new();
+        pending.insert("p".to_string(), inputs);
+
+        // 未扫描（search_tick 落后于本 tick 时钟）⇒ 不发、缓冲保留。
+        world.entities.get_mut(id).unwrap().ai.search_tick = world.clock_ms - 1;
+        assert_eq!(
+            drain_login_tail(&world, &online, &gates, &mut pending),
+            0,
+            "未扫描的 tick 不得先发 654"
+        );
+        assert_eq!(pending.len(), 1, "缓冲必须保留到首次扫描");
+
+        // 本 tick 扫描 ⇒ 654 下发，缓冲清空。
+        world.entities.get_mut(id).unwrap().ai.search_tick = world.clock_ms;
+        assert_eq!(drain_login_tail(&world, &online, &gates, &mut pending), 1);
+        assert!(pending.is_empty(), "补发后必须清缓冲");
+        match rx0.try_recv().expect("654") {
+            SimToGate::SendFrame { socket, body } => {
+                assert_eq!(socket, 5);
+                assert_eq!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_CHANGELIGHT
+                );
+            }
+            other => panic!("期望 SendFrame，得到 {other:?}"),
+        }
+    }
+
+    /// **lane654 判据⑥（掉线清缓冲）**：扫描前会话已离开在线表 ⇒ 缓冲直接作废（不静默留给
+    /// 下一次同名登录）。
+    #[test]
+    fn drain_login_tail_drops_pending_when_session_not_online() {
+        let world = mir2_world::World::new(32, 32);
+        let online: OnlineRegistry = Vec::new();
+        let (_tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        let mut pending: HashMap<String, smframe::EnterWorldInputs> = HashMap::new();
+        pending.insert(
+            "gone".to_string(),
+            smframe::EnterWorldInputs {
+                changelight: Some((0, 500)),
+                ..Default::default()
+            },
+        );
+        assert_eq!(drain_login_tail(&world, &online, &gates, &mut pending), 0);
+        assert!(pending.is_empty(), "掉线会话的延迟段必须作废");
+    }
+
+    /// **lane654 接线点保鲜门**：生产路径必须
+    /// ① 用 [`smframe::EnterWorldInputs::frames_split`]（不是 `frames()`）把登录队列切两段，
+    ///    延迟段存的是**输入**（`login_tails.insert(..., inputs)`）；
+    /// ② 在 `drain_aoi_downlink`（出现帧）之后、`drain_stamina`（体力/魔力段）之前调
+    ///    [`drain_login_tail`]，且生产调用传 `Some(&mut login_tails)`。
+    ///
+    /// 红检（实测）：删掉 `drain_login_tail(...)` 调用行或把 `Some(&mut login_tails)` 改成
+    /// `None` ⇒ 本用例必红。
+    #[test]
+    fn login_tail_production_call_is_wired_after_aoi() {
+        let src = include_str!("main.rs");
+        assert!(
+            src.contains("let (bodies, tail_probe) = inputs.frames_split();"),
+            "登录点必须用 frames_split 切分"
+        );
+        assert!(
+            src.contains("login_tails.insert(head.chr_name.clone(), inputs);"),
+            "延迟段必须存 EnterWorldInputs（首次扫描时按真机堆布局重算）"
+        );
+        assert!(
+            src.contains("            Some(&mut login_tails),\n        );"),
+            "生产 drain 调用必须传 Some(&mut login_tails)"
+        );
+        let aoi = src
+            .find("let aoi_frames = drain_aoi_downlink(world, displays, online, gates);")
+            .expect("AOI 下行调用");
+        let tail = src
+            .find("drain_login_tail(world, online, gates, pending);")
+            .expect("延迟段补发调用");
+        let stamina = src
+            .find("    drain_stamina(\n        sessions,")
+            .expect("体力段");
+        assert!(
+            aoi < tail && tail < stamina,
+            "补发点必须在 AOI 之后、体力段之前"
+        );
     }
 
     /// **接线点保鲜门（卡 `openmir2-drain-deal-tick-tooth`）**：`drain_deal_tick` 的**生产调用行**

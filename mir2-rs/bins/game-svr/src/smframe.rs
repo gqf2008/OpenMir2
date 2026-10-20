@@ -1321,6 +1321,47 @@ pub struct EnterWorldInputs {
     ///
     /// 属 `game_svr` lib ⇒ 只收已编码字节，不依赖 bin 侧的 `guild_frames` 模块。
     pub guild_changename: Option<Vec<u8>>,
+    /// 登录 `UserLogon` 的 3+1 条 `SysMsg` 正文（GBK 原文；入队序见 [`LoginSysMsgs`]）。
+    pub login_sys_msgs: LoginSysMsgs,
+    /// `[Server] TestServer`（`ServerConf.cs:23`）：第三条 `SysMsg`（`StartNoticeMsg`）的入队门
+    /// （`PlayObject.cs:1369-1373`）。
+    pub test_server: bool,
+    /// `PayMent == 3`（`TestServer || ServiceMode` 覆盖后的值，`PlayObject.cs:1145-1148`）：
+    /// 第四条 `SysMsg`（`NowIsFreePlayMode`）的入队门（`:1417-1420`）。
+    pub pay_ment_three: bool,
+}
+
+/// 登录 `UserLogon` 的 3+1 条 `SysMsg`（`PlayObject.cs:1342-1383` 的攻击模式/帮助/欢迎语 +
+/// `:1417-1420` 的免费模式）。正文是 **GBK 字节**（协议层不转 UTF-8）。
+///
+/// `None` = 该槽的正文输入缺失（oracle 一定有文本；缺输入时**槽位仍占堆**、出队不产帧并登记）。
+#[derive(Debug, Clone, Default)]
+pub struct LoginSysMsgs {
+    /// 槽 0：`switch (AttatckMode)` 选中的文案（枚举外 ⇒ `None` 且不占槽）。
+    pub attack_mode: Option<Vec<u8>>,
+    /// 槽 1：`MessageSettings.StartChangeAttackModeHelp`。
+    pub change_help: Option<Vec<u8>>,
+    /// 槽 2：`MessageSettings.StartNoticeMsg`（仅 `TestServer` 入队）。
+    pub notice: Option<Vec<u8>>,
+    /// 槽 3：`MessageSettings.NowIsFreePlayMode`（仅 `PayMent==3` 入队）。
+    pub free_play: Option<Vec<u8>>,
+    /// `MsgColor.Green` 的 `(GreenMsgFColor, GreenMsgBColor)`（`BaseObject.cs:1645-1652`；
+    /// 落在 `SM_SYSMESSAGE.Param = make_word(f, b)`，`PlayObject.Message.cs:1715`）。
+    pub green: (u8, u8),
+}
+
+impl LoginSysMsgs {
+    /// 槽号 → 正文（`None` = 输入缺失）。
+    #[must_use]
+    pub fn text(&self, slot: u8) -> Option<&[u8]> {
+        match slot {
+            0 => self.attack_mode.as_deref(),
+            1 => self.change_help.as_deref(),
+            2 => self.notice.as_deref(),
+            3 => self.free_play.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 /// 登录消息泵里的排队条目（`BaseObject.Initialize` + `PlayObject.UserLogon` 的全部
@@ -1356,10 +1397,15 @@ enum LoginQueued {
     /// 两条都会产 `SM_CHARSTATUSCHANGED(657)`，本输入集不建模 657 的尾 ⇒ 只占堆位。
     CharStatusChanged,
     /// 登录 `SysMsg(..., MsgColor, MsgType.Hint)` ⇒ `BaseObject.SysMsg` 走 `SendMsg(RM_SYSMESSAGE)`
-    /// ⇒ 优先级 `(byte)RM_SYSMESSAGE = 252`。四条：攻击模式文案 / `StartChangeAttackModeHelp` /
-    /// `StartNoticeMsg`（三条，`TestServer`）/ `NowIsFreePlayMode`（`PayMent==3`，第六条之后）。
-    /// 正文/颜色未在本输入集建模 ⇒ 只占堆位、不产帧（登记 `openmir2-login-frame-order`）。
-    SysMsg,
+    /// ⇒ 优先级 `(byte)RM_SYSMESSAGE = 252`。
+    ///
+    /// 槽号 = oracle **入队序**（`PlayObject.cs:1342-1383/1417-1420`）：
+    /// 0 = 攻击模式文案（`switch (AttatckMode)`，枚举外不发 ⇒ 不占槽）、
+    /// 1 = `StartChangeAttackModeHelp`（恒发）、2 = `StartNoticeMsg`（`TestServer`）、
+    /// 3 = `NowIsFreePlayMode`（`PayMent==3`，在 `RefShowName` **之后**入队）。
+    /// 出队时按槽号取 [`EnterWorldInputs::login_sys_msgs`] 的 GBK 正文产帧；
+    /// 正文缺失仍占堆位、不产帧（登记，绝不因缺文本少占位）。
+    SysMsg(u8),
     /// `RM_ABILITY(52)`：`SendPriorityMsg(..., High)` ⇒ 0。
     Ability,
     /// `RM_SUBABILITY(752)`：`SendPriorityMsg(..., High)` ⇒ 0。
@@ -1383,6 +1429,36 @@ enum LoginQueued {
     Username,
     /// `RM_CHANGELIGHT(654)`：`SendMsg` ⇒ 优先级 `(byte)RM_CHANGELIGHT = 153`。
     ChangeLight,
+    /// 其他 actor 的出现槽（本宿主由 AOI 侧下发帧，这里只占堆位）。
+    /// 优先级随种类由 [`OtherAppear::priority`] 在入队时给出（`RM_TURN` 17 / `RM_DEATH` 37 /
+    /// `RM_SKELETON` 40）；出队不产帧。
+    OtherAppear,
+}
+
+/// `PlayObject.SearchViewRange` 对**其他** actor 入队的出现/死亡帧种类
+/// （`PlayObject.cs:3220-3240`）。本宿主不在这里产帧（AOI 侧 [`crate::drain_aoi_downlink`]
+/// 负责），只用于复刻真机 `.NET PriorityQueue` 的堆布局——等优先级/不同优先级的槽位数量
+/// 会改变 `654` 之后 `42`/`100` 的出队序（同优先级不是 FIFO）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OtherAppear {
+    /// `SendMsg(baseObject, RM_TURN, ...)`（活着）：优先级 `(byte)10001 = 17`。
+    Turn,
+    /// `SendMsg(baseObject, RM_DEATH, ...)`（死亡且非 Skeleton）：`(byte)10021 = 37`。
+    Death,
+    /// `SendMsg(baseObject, RM_SKELETON, ...)`：`(byte)10024 = 40`。
+    Skeleton,
+}
+
+impl OtherAppear {
+    /// oracle 的入队优先级（`SendMsg(baseObject, ...)` 的 `(byte)wIdent`）。
+    #[must_use]
+    pub fn priority(self) -> u8 {
+        match self {
+            Self::Turn => (messages::RM_TURN & 0xFF) as u8,
+            Self::Death => (messages::RM_DEATH & 0xFF) as u8,
+            Self::Skeleton => (messages::RM_SKELETON & 0xFF) as u8,
+        }
+    }
 }
 
 /// `MessagePriority.High`（`src/OpenMir2/Enums/MessagePriority.cs:16`）= 0。
@@ -1442,9 +1518,40 @@ impl EnterWorldInputs {
     /// `SM_TURN(10)` 属 AOI/出现帧路径（`PlayObject.cs:3240` 的 `RM_TURN`），不是登录队列成员；
     /// 金标准 capture 里它早于 654（seq 30 vs 62），故在 654 出队前插入。`658` 由
     /// `SendNotice` 在消息泵之前直发，恒第一条。
+    ///
+    /// 生产路径用 [`Self::frames_split`]：`RM_TURN`（优先级 17）的**其他 actor** 出现帧由世界侧
+    /// AOI 在本批之后、`after` 之前下发（oracle 同一 `Run()` 里 17 < 153 的出队序）。本函数把
+    /// 两段拼起来，供只关心「完整登录队列内容」的用例使用。
     #[must_use]
     pub fn frames(&self) -> Vec<Vec<u8>> {
+        let (mut before, after) = self.frames_split_with_others(&[]);
+        before.extend(after);
+        before
+    }
+
+    /// 登录帧序的**两段切分**（生产路径）：`before` = 优先级 ≤ `(byte)RM_TURN`(=17) 的出队帧，
+    /// `after` = 其后的一切（`654`/`657×2`/第二 `42`/`100×4`，含优先级 61 的 `750`）。
+    ///
+    /// oracle 的 `PlayObject.Run()` 在**同一次**消息泵里消费整个队列；`RM_TURN(17)` 的**其他 actor**
+    /// 出现帧由观察者自己的 `SearchViewRange` 入队（`PlayObject.cs:3220-3240`），因此
+    /// 654（153）恒在出现帧**之后**。本宿主的出现帧由世界 tick 的 [`crate::drain_aoi_downlink`]
+    /// 下发 ⇒ 登录点先发 `before`，`after` 由 [`crate::drain_login_tail`] 在该会话首次
+    /// `SearchViewRange` 的同 tick 补发（C# 实测 2026-10-22：`10/41 ×6 → 654 → 657,657 → 42 → 100×4`）。
+    #[must_use]
+    pub fn frames_split(&self) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        self.frames_split_with_others(&[])
+    }
+
+    /// [`Self::frames_split`] 的**真机堆布局**版本：`others` = 本 tick `SearchViewRange`
+    /// 对其他 actor 入队的出现/死亡条目（顺序 = `VisibleActors` 顺序）。
+    ///
+    /// 这些条目在 `UserLogon` 的全部入队之后、`Run()` 的消息泵之前入队（`SearchViewRange` 在
+    /// `WorldServer.cs:663-665` 先于 `playObject.Run()`），因此追加到队列尾部即可。它们**不产帧**
+    /// （AOI 侧下发），但会改变堆形 ⇒ 决定 `654` 之后同优先级 `100×4` 的出队序。
+    #[must_use]
+    pub fn frames_split_with_others(&self, others: &[OtherAppear]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
         let mut out = Vec::new();
+        let mut split_at: Option<usize> = None;
         // **R1-1**：oracle `SendNotice` 无条件 `SendDefMessage(..., sNoticeMsg)`；即使
         // `sNoticeMsg` 为空也照发 header-only 658（`SendDefMessage` 的 `if (!string.IsNullOrEmpty)`
         // 只决定是否追加尾，空时走 `else SendSocket(ClientMsg)`）。故这里**不**用 `if let`。
@@ -1472,9 +1579,28 @@ impl EnterWorldInputs {
             LoginQueued::CharStatusChanged,
             PRIORITY_RM_CHARSTATUSCHANGED,
         );
-        // ④ 三条 SysMsg（攻击模式 / CTRL-H 帮助 / TestServer 欢迎语，`PlayObject.cs:1342-1383`）。
-        for _ in 0..3 {
-            queue.enqueue(LoginQueued::SysMsg, (messages::RM_SYSMESSAGE & 0xFF) as u8);
+        // ③b `RecalcAbilitys()` 的 `oldlight != Light` 支（`PlayObject.cs:2878-2885`）：
+        //     登录时 `BaseObject.Light` 从 0 起（`BaseObject.cs:384` 的 ctor），而
+        //     `Light = GetMyLight()`（装备发光 / 高等级基线 1）⇒ `Light != 0` 时**多入队一条**
+        //     `RM_CHANGELIGHT(153)`（`SendRefMsg` 把玩家自己也扫进目标）。它与 `RM_LOGON` 出队时
+        //     再入的那条（`Message.cs:1683`）**各发一帧 654**（两次 Param 相同 = 处理时的 `Light`）。
+        //     金标准角色无光源（`Light=0`）⇒ 只有一条；带火把/高等级角色有两条。
+        if self.light != 0 {
+            queue.enqueue(
+                LoginQueued::ChangeLight,
+                (messages::RM_CHANGELIGHT & 0xFF) as u8,
+            );
+        }
+        // ④ 登录 SysMsg（`PlayObject.cs:1342-1383`）：`switch (AttatckMode)` 的攻击模式文案
+        //    （仅枚举 0..=6 时入队；`switch` 无 `default` ⇒ 枚举外一条都不发、不占槽）
+        //    + `StartChangeAttackModeHelp`（恒发）+ `TestServer` 的 `StartNoticeMsg`。
+        let prio_sysmsg = (messages::RM_SYSMESSAGE & 0xFF) as u8;
+        if self.attack_mode.is_some_and(|m| m <= 6) {
+            queue.enqueue(LoginQueued::SysMsg(0), prio_sysmsg);
+        }
+        queue.enqueue(LoginQueued::SysMsg(1), prio_sysmsg);
+        if self.test_server {
+            queue.enqueue(LoginQueued::SysMsg(2), prio_sysmsg);
         }
         // ⑤ 六条 SendPriorityMsg（`PlayObject.cs:1385-1390`），**源码序**：
         //    52,752,811,46,621,211。堆在同一内容下自然给出真机序 52,752,621,211,811,46。
@@ -1494,11 +1620,31 @@ impl EnterWorldInputs {
 
         // ⑥ RefShowName()→SendRefMsg(RM_USERNAME)：自己也在可见人类列表里（只占堆位）。
         queue.enqueue(LoginQueued::Username, PRIORITY_RM_USERNAME);
-        // ⑦ PayMent==3（TestServer/ServiceMode）的第四条 SysMsg（只占堆位）。
-        queue.enqueue(LoginQueued::SysMsg, (messages::RM_SYSMESSAGE & 0xFF) as u8);
+        // ⑦ `PayMent==3`（`TestServer || ServiceMode`）的第四条 SysMsg：
+        //    `NowIsFreePlayMode`（`PlayObject.cs:1417-1420`，位置在 `RefShowName` 之后）。
+        if self.pay_ment_three {
+            queue.enqueue(LoginQueued::SysMsg(3), prio_sysmsg);
+        }
+
+        // ⑧ 其他 actor 的出现/死亡槽（`SearchViewRange`，`PlayObject.cs:3220-3240`）：
+        //    本 tick 的 `VisibleActors` 里 `Show` 且非自己的对象，按 oracle 顺序入队。
+        for other in others {
+            queue.enqueue(LoginQueued::OtherAppear, other.priority());
+        }
 
         // ---- 出队：逐条按堆序处理 ----
-        while let Some(item) = queue.dequeue() {
+        // 登录自身 `RM_TURN` 的帧在 oracle 被 `ActorId != ActorId` 门抑制；本输入集里 `turn`
+        // 只用于金标准夹具的 AOI 形状复现 ⇒ 多名 `ChangeLight` 槽下也只插入一次。
+        let mut turn_emitted = false;
+        while let Some(priority) = queue.peek_priority() {
+            // 切分点 = 第一条优先级 **大于** `(byte)RM_TURN` 的条目。`RM_TURN` 的其余条目
+            // （其他 actor 的出现帧）由 AOI 侧补在同一位置，故 `> 17` 而非 `>= 17`。
+            if split_at.is_none() && priority > PRIORITY_RM_TURN {
+                split_at = Some(out.len());
+            }
+            let Some(item) = queue.dequeue() else {
+                break;
+            };
             match item {
                 LoginQueued::Logon => {
                     // `RM_LOGON` 支（`PlayObject.Message.cs:1680-1692`）在**出队处理时**
@@ -1607,8 +1753,11 @@ impl EnterWorldInputs {
                 LoginQueued::ChangeLight => {
                     // `SM_TURN(10)` 属 AOI/出现帧路径（`PlayObject.cs:3240`），不是队列成员；
                     // 金标准 capture 里 10 早于 654（seq 30 vs 62）⇒ 在 654 出队前插入。
-                    if let Some((id, x, y, d, light, desc, msg)) = &self.turn {
-                        out.push(sm_turn(*id, *x, *y, *d, *light, desc, msg));
+                    if !turn_emitted {
+                        if let Some((id, x, y, d, light, desc, msg)) = &self.turn {
+                            out.push(sm_turn(*id, *x, *y, *d, *light, desc, msg));
+                            turn_emitted = true;
+                        }
                     }
                     // `Message.cs:1840`：`SendDefMessage(SM_CHANGELIGHT, ActorId, Light, nClientKey, 0)`。
                     if let Some((light, client_key)) = self.changelight {
@@ -1626,18 +1775,40 @@ impl EnterWorldInputs {
                         out.push(body.clone());
                     }
                 }
-                // 以下四条只占堆位：
+                LoginQueued::Username => {
+                    // `RefShowName()`（`PlayObject.cs:1415`，`BaseObject.cs:1174-1177`）
+                    // `SendRefMsg(RM_USERNAME, 0,0,0,0, GetShowName())` ⇒ 出队时
+                    // `SM_USERNAME(ActorId, GetChrColor(baseObject), 0, 0)` + `EncodeString(GetShowName())`
+                    // （`PlayObject.Message.cs:1662-1666`）。与 `RM_LOGON` 里 `ClientQueryUserName`
+                    // 直发的那条**同字段同字节** ⇒ 直接复用 `username` 输入。
+                    if let Some((id, color, name)) = &self.username {
+                        out.push(sm_username(*id, *color, name));
+                    }
+                }
+                LoginQueued::SysMsg(slot) => {
+                    // `RM_SYSMESSAGE` 出队（`PlayObject.Message.cs:1714-1718`）：
+                    // `SM_SYSMESSAGE(ActorId, make_word(f, b), 0, 1)` + `EncodeString(正文)`。
+                    // 正文缺失 ⇒ 不产帧（槽位已按 oracle 占堆）。
+                    if let Some(msg) = self.login_sys_msgs.text(slot) {
+                        let (f, b) = self.login_sys_msgs.green;
+                        out.push(sm_sysmessage(
+                            self.actor_id,
+                            u16::from(f),
+                            u16::from(b),
+                            msg,
+                        ));
+                    }
+                }
+                // 以下两条只占堆位：
                 // - 自身 RM_TURN 被 `ActorId != ActorId` 门抑制（`PlayObject.Message.cs:1528`）；
-                // - 两条 RM_CHARSTATUSCHANGED 会产 657，但其字节（CharStatus/HitSpeed）未在本输入集建模；
-                // - RM_USERNAME 的 42 与 `RM_LOGON` 里直发那条同字节，已由 `username` 输入产出；
-                // - SysMsg 正文/颜色未建模（登记 `openmir2-login-frame-order`）。
-                LoginQueued::Turn
-                | LoginQueued::CharStatusChanged
-                | LoginQueued::Username
-                | LoginQueued::SysMsg => {}
+                // - 两条 RM_CHARSTATUSCHANGED 会产 657，但其字节（CharStatus/HitSpeed）未在本输入集建模
+                //   （登记 `openmir2-login-frame-order`）。
+                LoginQueued::Turn | LoginQueued::CharStatusChanged | LoginQueued::OtherAppear => {}
             }
         }
-        out
+        let at = split_at.unwrap_or(out.len());
+        let after = out.split_off(at);
+        (out, after)
     }
 }
 
@@ -2228,6 +2399,28 @@ mod tests {
         &s[i..j]
     }
 
+    /// 从金标准取**全部** `port=7200 && dir=s2c && ident=<id>` 帧的原始线缆字节（capture 顺序）。
+    fn golden_s2c_ident_all(ident: u16) -> Vec<Vec<u8>> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../tests/golden/session-20261010-c3-hook/capture.jsonl"
+        );
+        let capture =
+            std::fs::read_to_string(path).unwrap_or_else(|e| panic!("金标准不存在：{path}（{e}）"));
+        let needle = format!("\"ident\":{ident},");
+        let mut out = Vec::new();
+        for line in capture.lines() {
+            if !line.contains("\"dir\":\"s2c\"")
+                || !line.contains("\"port\":7200")
+                || !line.contains(&needle)
+            {
+                continue;
+            }
+            out.push(hex(between(line, "\"raw_hex\":\"", "\"")));
+        }
+        out
+    }
+
     /// 从 M0 金标准取**第一条** `port=7200 && dir=s2c && ident=<id>` 帧的原始线缆字节。
     fn golden_s2c_ident(ident: u16) -> Vec<u8> {
         let path = concat!(
@@ -2408,6 +2601,11 @@ mod tests {
             )),
             // 金标准会话无行会：登录不发 750、队列不占堆位。
             guild_changename: None,
+            // 金标准抓包是 `TestServer=TRUE` 部署（3 条 SysMsg + `PayMent==3` 的第 4 条）；
+            // 正文缺输入 ⇒ 100 槽占位不产帧（本用例只比 ident 与已知帧字节）。
+            login_sys_msgs: Default::default(),
+            test_server: true,
+            pay_ment_three: true,
         }
     }
 
@@ -2427,9 +2625,13 @@ mod tests {
             .collect();
         // 模型 D：六条 + 654 的出队序 = 52, 752, 621, 211, 811, 46, 654
         // （金标准角色无装备/无技能 ⇒ 621/211 的门关，不产帧，但槽位仍参与堆布局）。
+        // 2026-10-22 真机（`winplay0`）与 c3 金标准均含**第二条 42**（`RefShowName`，
+        // `PlayObject.cs:1415`）：654 之后、100×4 之前。本 fixture 未给 SysMsg 正文 ⇒ 100 不产帧。
         assert_eq!(
             got_idents,
-            vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46, 10, 654],
+            vec![
+                658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46, 10, 654, 42
+            ],
             "模型 D 的逐帧 ident 序（真机实拍：52 在 752 前，四个 C# 会话一致）"
         );
         // capture 前 16 条 + 654：按 ident 取原始线缆，逐条比字节（顺序按模型 D，字节不变）。
@@ -2439,8 +2641,8 @@ mod tests {
         capture_by_ident.push((messages::SM_CHANGELIGHT, &cl));
         assert_eq!(
             got_idents.len(),
-            capture_by_ident.len(),
-            "模型 D 产出的帧数 = capture 可见帧数（17）"
+            capture_by_ident.len() + 1,
+            "模型 D 产出的帧数 = capture 可见帧数（17）+ 第二条 42（`RefShowName`，与首条同字节）"
         );
         for body in &built {
             let ident = u16::from_le_bytes([body[4], body[5]]);
@@ -2550,7 +2752,8 @@ mod tests {
             cur_x: 1,
             cur_y: 2,
             dir: 3,
-            light: 4,
+            // 金标准角色无光源（`654.param=0`）⇒ 不触发 ③b 的第二条 RM_CHANGELIGHT。
+            light: 0,
             day_bright: 5,
             notice: b"N".to_vec(),
             magic_journal: Vec::new(),
@@ -2571,8 +2774,11 @@ mod tests {
             turn: Some((7, 1, 2, 3, 4, b"12345678".to_vec(), b"x".to_vec())),
             use_items_tail: Some(b"0/abc/".to_vec()),
             magic: Some((1, b"magic/".to_vec())),
-            changelight: Some((4, 500)),
+            changelight: Some((0, 500)),
             guild_changename: None,
+            login_sys_msgs: Default::default(),
+            test_server: true,
+            pay_ment_three: true,
         };
         let got: Vec<u16> = inputs
             .frames()
@@ -2587,6 +2793,7 @@ mod tests {
                 52, 752, 621, 211, 811,
                 46, // 六条的堆序（High: 52,752,621,211；Normal: 811,46）
                 10, 654, // 非队列 SM_TURN，随后 CHANGELIGHT
+                42,  // `RefShowName` 的 RM_USERNAME 出队（165），与首条 42 同字节
             ],
             "模型 D：源码入队序 52,752,811,46,621,211 + 完整队列内容 → 出队 52,752,621,211,811,46"
         );
@@ -2599,7 +2806,8 @@ mod tests {
             cur_x: 1,
             cur_y: 2,
             dir: 3,
-            light: 4,
+            // 金标准角色无光源（`654.param=0`）⇒ 不触发 ③b 的第二条 RM_CHANGELIGHT。
+            light: 0,
             day_bright: 5,
             notice: b"N".to_vec(),
             magic_journal: Vec::new(),
@@ -2620,13 +2828,18 @@ mod tests {
             turn: None,
             use_items_tail: use_items.then(|| b"0/abc/".to_vec()),
             magic: magic.then(|| (1_u16, b"magic/".to_vec())),
-            changelight: Some((4, 500)),
+            changelight: Some((0, 500)),
             guild_changename: None,
+            login_sys_msgs: Default::default(),
+            test_server: true,
+            pay_ment_three: true,
         }
     }
 
-    /// 判据①（无装备无技能，`s2c`/`s2c-w03`/`s2c-w04`）：**至 654 为止**的登录队列序逐项等于真机
-    /// （654 之后的 `657,657,42,100×4` Rust 只占堆位不产帧，见 T-80）。
+    /// 判据①（无装备无技能，`s2c`/`s2c-w03`/`s2c-w04`）：**至 654 为止**的登录队列序逐项等于真机；
+    /// 654 之后的 `657,657`（CharStatus/HitSpeed 未建模）仍只占堆位，第二条 `42`（`RefShowName`）
+    /// 已实现，`100×4` 需 `String.conf` 正文输入（本 fixture 未给 ⇒ 不产帧；见
+    /// `login_sys_messages_match_csharp_capture_order_and_bytes`）。
     #[test]
     fn login_scenario_naked_matches_oracle_ident_sequence() {
         let got: Vec<u16> = login_scenario_inputs(false, false)
@@ -2636,7 +2849,7 @@ mod tests {
             .collect();
         assert_eq!(
             got,
-            vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46, 654],
+            vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46, 654, 42],
             "无装备无技能：621/211 空尾门关（槽位仍占位），52,752,811,46,654"
         );
     }
@@ -2652,7 +2865,10 @@ mod tests {
             .collect();
         assert_eq!(
             got,
-            vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 621, 811, 46, 654],
+            vec![
+                658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 621, 811, 46, 654,
+                42
+            ],
             "有武器无技能：621 出帧、211 空尾 ⇒ 52,752,621,811,46,654"
         );
     }
@@ -2669,9 +2885,9 @@ mod tests {
             got,
             vec![
                 658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 621, 211, 811, 46,
-                654
+                654, 42
             ],
-            "有武器有技能：621/211 都出帧 ⇒ 52,752,621,211,811,46,654"
+            "有武器有技能：621/211 都出帧 ⇒ 52,752,621,211,811,46,654,42（第二条 42 = RefShowName）"
         );
     }
 
@@ -2723,6 +2939,265 @@ mod tests {
         assert_eq!(PRIORITY_RM_CHANGEGUILDNAME, 61);
     }
 
+    /// **lane654 判据①（654 顺序）**：`frames_split` 的 `before` 段**不含** `654`，`after` 段以
+    /// `654` 开头；15 帧入图前缀逐帧不变；插入会（优先级 61 的 `750`）后它落在 `after` 里、
+    /// 仍在 `654` 之前。
+    ///
+    /// 红检（实测）：把 `frames_split_with_others` 的切分条件改成恒假 ⇒ `after` 为空、
+    /// 654 落回 `before` ⇒ 本用例必红。
+    #[test]
+    fn frames_split_defers_changelight_until_after_appearance_slots() {
+        let ids = |v: &Vec<Vec<u8>>| -> Vec<u16> {
+            v.iter().map(|b| u16::from_le_bytes([b[4], b[5]])).collect()
+        };
+        let inputs = login_scenario_inputs(false, false);
+        let (before, after) = inputs.frames_split();
+        // 入图 15 帧前缀（2026-10-22 真机两侧完全一致）。
+        assert_eq!(
+            ids(&before),
+            vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46],
+            "15 帧入图前缀不得回归"
+        );
+        assert!(
+            !ids(&before).contains(&messages::SM_CHANGELIGHT),
+            "654 必须离开登录即时段（它排在 RM_TURN 出现帧之后）"
+        );
+        assert_eq!(
+            ids(&after),
+            vec![messages::SM_CHANGELIGHT, messages::SM_USERNAME],
+            "after 段 = 654 → RefShowName 的第二条 42"
+        );
+
+        // 有会：750（优先级 61）同属 after，且必须仍在 654 之前。
+        let mut guild = login_scenario_inputs(true, true);
+        {
+            // 真 750 帧（12B 头，ident=10301）——`login_changename_750` 的字节形状。
+            let mut f = command_header(0, messages::SM_CHANGEGUILDNAME, 0, 0, 0).to_vec();
+            f.extend_from_slice(b"/");
+            guild.guild_changename = Some(f);
+        }
+        let (_, after) = guild.frames_split();
+        let a = ids(&after);
+        let p750 = a
+            .iter()
+            .position(|x| *x == messages::SM_CHANGEGUILDNAME)
+            .expect("750");
+        let p654 = a
+            .iter()
+            .position(|x| *x == messages::SM_CHANGELIGHT)
+            .expect("654");
+        assert!(p750 < p654, "750(61) 必须先于 654(153): {a:?}");
+    }
+
+    /// **lane654 判据⑦（RecalcAbilitys 的 oldlight != Light 支）**：登录时 `Light != 0`
+    /// （带发光装备 / 高等级基线）⇒ `RecalcAbilitys` 额外入队一条 `RM_CHANGELIGHT(153)`，
+    /// 与 `RM_LOGON` 出队时那条**各发一帧** `654`（两条 Param 相同）。
+    ///
+    /// 红检（实测）：删掉 ③b 的 `if self.light != 0 { queue.enqueue(ChangeLight, ...) }`
+    /// ⇒ 本用例的第二条 654 消失 ⇒ 必红。
+    #[test]
+    fn light_bearing_login_enqueues_extra_changelight_slot() {
+        let mut inputs = login_scenario_inputs(false, false);
+        inputs.light = 3;
+        inputs.changelight = Some((3, crate::sessionwire::N_CLIENT_KEY_DEFAULT));
+        let frames = inputs.frames();
+        let cl: Vec<(&Vec<u8>, u16)> = frames
+            .iter()
+            .filter_map(|b| {
+                let ident = u16::from_le_bytes([b[4], b[5]]);
+                (ident == messages::SM_CHANGELIGHT).then_some((b, ident))
+            })
+            .collect();
+        assert_eq!(
+            cl.len(),
+            2,
+            "RecalcAbilitys 的 oldlight(0)!=Light(3) ⇒ 多一条 654"
+        );
+        for (body, _) in cl {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(body).unwrap();
+            assert_eq!((cm.param, cm.tag), (3, 500), "两条 654 的 Param/Tag 相同");
+        }
+        // 无光源（金标准）⇒ 一条。
+        let mut naked = login_scenario_inputs(false, false);
+        naked.light = 0;
+        naked.changelight = Some((0, crate::sessionwire::N_CLIENT_KEY_DEFAULT));
+        assert_eq!(
+            naked
+                .frames()
+                .iter()
+                .filter(|b| u16::from_le_bytes([b[4], b[5]]) == messages::SM_CHANGELIGHT)
+                .count(),
+            1,
+            "Light=0 ⇒ 只发 RM_LOGON 那条"
+        );
+    }
+
+    /// **lane654 判据②（第二 42）**：`frames()` 里 `42` 恰出现两次，且两条**逐字节相同**
+    /// （`RefShowName` 用与 `ClientQueryUserName` 相同的 `GetShowName()/GetChrColor`）。
+    ///
+    /// 红检（实测）：删掉 `LoginQueued::Username` 分支的 `out.push(sm_username(...))`
+    /// ⇒ 第二次计数为 1 ⇒ 本用例必红。
+    #[test]
+    fn ref_show_name_emits_second_username_frame_byte_identical() {
+        let frames = login_scenario_inputs(false, false).frames();
+        let names: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|b| u16::from_le_bytes([b[4], b[5]]) == messages::SM_USERNAME)
+            .collect();
+        assert_eq!(
+            names.len(),
+            2,
+            "登录期 42 = ClientQueryUserName + RefShowName 两条"
+        );
+        assert_eq!(names[0], names[1], "两条 42 必须逐字节相同");
+        // 位置：第二条在 654 之后（优先级 165 > 153）。
+        let idents: Vec<u16> = frames
+            .iter()
+            .map(|b| u16::from_le_bytes([b[4], b[5]]))
+            .collect();
+        let first = idents.iter().position(|x| *x == 42).unwrap();
+        let second = idents.iter().rposition(|x| *x == 42).unwrap();
+        let cl = idents
+            .iter()
+            .position(|x| *x == messages::SM_CHANGELIGHT)
+            .unwrap();
+        assert!(first < cl && cl < second, "{idents:?}");
+    }
+
+    /// **lane654 判据③（100×4 条数与文本）**：LoginSysMsgs 四槽按 `String.conf` 正文产出
+    /// `100×4`；四条正文的**集合**与金标准逐字节相同，`Param = make_word(GreenMsgFColor,
+    /// GreenMsgBColor)`、`Series = 1`、`Recog = ActorId`。
+    ///
+    /// 入队序 = oracle 调用序（攻击模式 → CTRL-H 帮助 → `TestServer` 欢迎语 → `PayMent==3`）。
+    /// **四条之间的相对序不在此钉**：它由观察者队列里**全部**同优先级（252）条目 + 堆形决定，
+    /// 而本宿主不建模整条观察者队列（`msgqueue.rs` 模块头已登记 `not_verified`）。两次真机抓包
+    /// 也不一致（c3：欢迎语→帮助→攻击模式→免费模式；2026-10-22：欢迎语→帮助→免费模式→攻击模式）。
+    /// 本用例钉的是**条数 = 4**、**正文集合逐字节**、**字段形状**。
+    ///
+    /// 红检（实测）：把 `green` 的 `(f, b)` 对调 ⇒ `Param` 变 ⇒ 必红；把 `pay_ment_three`
+    /// 入队门改成 `false`（只剩 3 条）⇒ 条数断言必红。
+    #[test]
+    fn login_sys_messages_match_csharp_capture_bytes_and_order() {
+        let golden = golden_s2c_ident_all(messages::SM_SYSMESSAGE);
+        assert_eq!(golden.len(), 4, "c3 金标准登录期 100 恰 4 条");
+        let (head, _) = split_wire(&golden[0]);
+        let actor = recog(&head);
+        let param = u16at(&head, 6);
+        let f = u8::try_from(param & 0xFF).unwrap();
+        let b = u8::try_from(param >> 8).unwrap();
+
+        let mut inputs = login_scenario_inputs(false, false);
+        inputs.actor_id = actor;
+        inputs.username = Some((actor, f, crate::downlink::gbk("名字")));
+        inputs.login_sys_msgs = LoginSysMsgs {
+            // 入队序 = oracle 调用序（部署件 `M2GameSvr/String.conf` 的 `[String]` 覆盖值）。
+            attack_mode: Some(crate::downlink::gbk("[攻击模式: 全体攻击]")),
+            change_help: Some(crate::downlink::gbk(
+                "欢迎进入记忆传奇(月卡版)-官方网站：www.aresm2.com",
+            )),
+            notice: Some(crate::downlink::gbk(
+                "唯一客服QQ：79311185 唯一担保QQ：79311185",
+            )),
+            free_play: Some(crate::downlink::gbk(
+                "禁止使用任何外挂、加速、辅助、脱机，一经发现，封号封IP",
+            )),
+            green: (f, b),
+        };
+        // c3 抓包时同屏 16 个其他 actor（16 对 10/41）⇒ 16 个 RM_TURN(17) 槽位。
+        let others = vec![OtherAppear::Turn; 16];
+        let (_, after) = inputs.frames_split_with_others(&others);
+        let idents: Vec<u16> = after
+            .iter()
+            .map(|x| u16::from_le_bytes([x[4], x[5]]))
+            .collect();
+        assert_eq!(idents[0], messages::SM_CHANGELIGHT, "after 以 654 开头");
+        assert_eq!(idents[1], messages::SM_USERNAME, "654 之后是第二 42");
+        assert_eq!(
+            idents
+                .iter()
+                .filter(|x| **x == messages::SM_SYSMESSAGE)
+                .count(),
+            4,
+            "100 恰 4 条: {idents:?}"
+        );
+        let mut got: Vec<Vec<u8>> = after
+            .iter()
+            .filter(|x| u16::from_le_bytes([x[4], x[5]]) == messages::SM_SYSMESSAGE)
+            .map(|x| client_frame(x))
+            .collect();
+        let mut want: Vec<Vec<u8>> = golden.clone();
+        got.sort();
+        want.sort();
+        assert_eq!(
+            got, want,
+            "四条 100 的 Param/Series/正文集合逐字节等于金标准"
+        );
+
+        // 字段形状（逐条）：Recog=ActorId、Series=1、Param=make_word(f,b)。
+        for body in after
+            .iter()
+            .filter(|x| u16::from_le_bytes([x[4], x[5]]) == messages::SM_SYSMESSAGE)
+        {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(body).unwrap();
+            assert_eq!(cm.recog, actor);
+            assert_eq!(cm.param, make_word16(u16::from(f), u16::from(b)));
+            assert_eq!((cm.tag, cm.series), (0, 1));
+        }
+    }
+
+    /// **lane654 判据④（出现槽数不影响 654 的切分位置与条数）**：本 tick 其他 actor 的
+    /// `RM_TURN/RM_DEATH` 槽数从 0 到 24 变化时，
+    /// ① `654` 恒为 `after` 第一条（切分点只由优先级 17 决定）；
+    /// ② `after` 恒含 654 + 第二 42 + 100×4；
+    /// ③ `100` 正文集合恒为四槽正文。
+    ///
+    /// 注：`before` 内 `811/46` 的相对序在 4 叉堆模型下随槽数翻转（N=0 与真机 811→46 一致；
+    /// N≥1 模型给 46→811）。真实 oracle 的 `PriorityQueue` 是**二叉堆**（.NET 8），其前缀在
+    /// 各槽数下恒为 `811→46`——本宿主登录前缀按 N=0 的既有模型下发，与两次真机抓包一致。
+    /// 该差异只影响模型内部的 `before` 排序，不影响本用例钉的切分点/条数。
+    ///
+    /// 红检见判据①（切分条件恒假 ⇒ 654 落回 before）。
+    #[test]
+    fn appear_slot_count_does_not_move_split_or_drop_tail_frames() {
+        for n in 0..=24usize {
+            let mut inputs = login_scenario_inputs(true, true);
+            inputs.login_sys_msgs = LoginSysMsgs {
+                attack_mode: Some(b"A".to_vec()),
+                change_help: Some(b"B".to_vec()),
+                notice: Some(b"C".to_vec()),
+                free_play: Some(b"D".to_vec()),
+                green: (0xDB, 0xFF),
+            };
+            let (before, after) = inputs.frames_split_with_others(&vec![OtherAppear::Turn; n]);
+            assert!(
+                !before
+                    .iter()
+                    .any(|x| u16::from_le_bytes([x[4], x[5]]) == messages::SM_CHANGELIGHT),
+                "槽数 {n}：654 不得留在 before"
+            );
+            let tail: Vec<u16> = after
+                .iter()
+                .map(|x| u16::from_le_bytes([x[4], x[5]]))
+                .collect();
+            assert_eq!(tail[0], messages::SM_CHANGELIGHT, "槽数 {n}");
+            assert_eq!(tail[1], messages::SM_USERNAME, "槽数 {n}");
+            assert_eq!(
+                tail.iter()
+                    .filter(|x| **x == messages::SM_SYSMESSAGE)
+                    .count(),
+                4,
+                "槽数 {n}"
+            );
+            let mut bodies: Vec<String> = after
+                .iter()
+                .filter(|x| u16::from_le_bytes([x[4], x[5]]) == messages::SM_SYSMESSAGE)
+                .map(|x| String::from_utf8(edcode::decode(&x[12..])).unwrap())
+                .collect();
+            bodies.sort();
+            assert_eq!(bodies, vec!["A", "B", "C", "D"], "槽数 {n}");
+        }
+    }
+
     /// **G2b / T9 回归**：无会（`None`）时**不占堆位、不产 750**，整串帧与改动前逐字节相等
     /// （与 `login_scenario_weapon_with_magic_matches_oracle_ident_sequence` 的期望同源）。
     #[test]
@@ -2742,12 +3217,12 @@ mod tests {
             ids,
             vec![
                 658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 621, 211, 811, 46,
-                654
+                654, 42
             ],
-            "无会路径的帧序必须一字不改"
+            "无会路径的帧序必须一字不改（654 后跟随 `RefShowName` 的第二条 42）"
         );
         // 金标准里 654 之前的帧序也未被 750 模型影响。
-        assert_eq!(ids.len(), 18);
+        assert_eq!(ids.len(), 19);
     }
 
     /// `SM_ATTACKMODE` 的模式在 **`Recog`**（oracle `Messages.cs:846-857` 的参序）；

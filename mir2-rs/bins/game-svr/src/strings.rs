@@ -65,6 +65,27 @@ pub const DEFAULT_THIS_MAP_DISABLE_SEND_CYCY_MSG: &str = "本地图不允许喊�
 /// oracle `MessageSettings.YouCanSendCyCyLaterMsg`（`MessageSettings.cs:260`）——10s 门提示。
 pub const DEFAULT_YOU_CAN_SEND_CYCY_LATER_MSG: &str = "{0}秒后才可以再发文字!!!";
 
+/// oracle `MessageSettings.AttackModeOfAll`（`MessageSettings.cs:46`）——登录 `SysMsg` 攻击模式文案。
+pub const DEFAULT_ATTACK_MODE_OF_ALL: &str = "[攻击模式: 全体攻击]";
+/// `MessageSettings.AttackModeOfPeaceful`（`MessageSettings.cs:47`）。
+pub const DEFAULT_ATTACK_MODE_OF_PEACEFUL: &str = "[攻击模式: 和平攻击]";
+/// `MessageSettings.AttackModeOfDear`（`MessageSettings.cs:48`）。
+pub const DEFAULT_ATTACK_MODE_OF_DEAR: &str = "[攻击模式: 夫妻攻击]";
+/// `MessageSettings.AttackModeOfMaster`（`MessageSettings.cs:49`）。
+pub const DEFAULT_ATTACK_MODE_OF_MASTER: &str = "[攻击模式: 师徒攻击]";
+/// `MessageSettings.AttackModeOfGroup`（`MessageSettings.cs:50`）。
+pub const DEFAULT_ATTACK_MODE_OF_GROUP: &str = "[攻击模式: 编组攻击]";
+/// `MessageSettings.AttackModeOfGuild`（`MessageSettings.cs:51`）。
+pub const DEFAULT_ATTACK_MODE_OF_GUILD: &str = "[攻击模式: 行会攻击]";
+/// `MessageSettings.AttackModeOfRedWhite`（`MessageSettings.cs:52`）。
+pub const DEFAULT_ATTACK_MODE_OF_RED_WHITE: &str = "[攻击模式: 红名攻击]";
+/// `MessageSettings.StartChangeAttackModeHelp`（`MessageSettings.cs:53`）——登录第二条 `SysMsg`。
+pub const DEFAULT_START_CHANGE_ATTACK_MODE_HELP: &str = "使用组合快捷键 CTRL-H 更改攻击模式...";
+/// `MessageSettings.StartNoticeMsg`（`MessageSettings.cs:54`）——`TestServer` 时的欢迎语（第三条）。
+pub const DEFAULT_START_NOTICE_MSG: &str = "欢迎进入本服务器进行游戏...";
+/// `MessageSettings.NowIsFreePlayMode`（`MessageSettings.cs:43`）——`PayMent==3` 的第四条。
+pub const DEFAULT_NOW_IS_FREE_PLAY_MODE: &str = "当前服务器运行于测试模式.";
+
 /// oracle `MessageSettings.RevivalRecoverMsg`（`MessageSettings.cs:226`）——P32 复活成功的
 /// `SysMsg(..., Green, Hint)` 文本（`PlayObject.Message.cs:759`）。缺键回落源码默认。
 pub const DEFAULT_REVIVAL_RECOVER_MSG: &str = "复活戒指生效，体力恢复.";
@@ -93,6 +114,21 @@ pub struct StringConf {
     guild_chief: Option<String>,
     // `[String] GuildMsgPreFix`（`StringConf.cs:38`）。
     guild_msg_prefix: Option<String>,
+    // 登录 `UserLogon` 的 3+1 条 `SysMsg` 文本（`PlayObject.cs:1342-1383/1417-1420`；
+    // `StringConf.cs:53/60/61` 只覆盖 NowIsFreePlayMode/StartChangeAttackModeHelp/StartNoticeMsg，
+    // 7 个攻击模式键在 `StringConf.cs` 里由 `MessageSettings` 静态字段直接承载，
+    // 部署件通过同名 `[String]` 键覆盖——`MessageSettings` 的静态字段本来就是 `String.conf`
+    // 的落地形态，故这里同样按 `[String]` 键读）。
+    attack_mode_of_all: Option<String>,
+    attack_mode_of_peaceful: Option<String>,
+    attack_mode_of_dear: Option<String>,
+    attack_mode_of_master: Option<String>,
+    attack_mode_of_group: Option<String>,
+    attack_mode_of_guild: Option<String>,
+    attack_mode_of_red_white: Option<String>,
+    start_change_attack_mode_help: Option<String>,
+    start_notice_msg: Option<String>,
+    now_is_free_play_mode: Option<String>,
     // `[String]` 喊话三键（`StringConf.cs:257-259`）。
     you_need_level_msg: Option<String>,
     this_map_disable_send_cycy_msg: Option<String>,
@@ -267,6 +303,54 @@ impl StringConf {
             .as_deref()
             .unwrap_or(DEFAULT_REVIVAL_RECOVER_MSG)
     }
+
+    /// `[String] AttackModeOfXxx`（`PlayObject.cs:1342-1371` 的 `switch (AttatckMode)`）：
+    /// `mode` = oracle `AttatckMode`（`AttackMode` 枚举 `HAM_ALL=0 … HAM_PKATTACK=6`）。
+    /// 枚举外 ⇒ `None`（oracle `switch` 无 `default` ⇒ **一条都不发**，见 `PlayObject.cs:1371`）。
+    #[must_use]
+    pub fn attack_mode_msg(&self, mode: u8) -> Option<&str> {
+        let (slot, default) = match mode {
+            0 => (&self.attack_mode_of_all, DEFAULT_ATTACK_MODE_OF_ALL),
+            1 => (
+                &self.attack_mode_of_peaceful,
+                DEFAULT_ATTACK_MODE_OF_PEACEFUL,
+            ),
+            2 => (&self.attack_mode_of_dear, DEFAULT_ATTACK_MODE_OF_DEAR),
+            3 => (&self.attack_mode_of_master, DEFAULT_ATTACK_MODE_OF_MASTER),
+            4 => (&self.attack_mode_of_group, DEFAULT_ATTACK_MODE_OF_GROUP),
+            5 => (&self.attack_mode_of_guild, DEFAULT_ATTACK_MODE_OF_GUILD),
+            6 => (
+                &self.attack_mode_of_red_white,
+                DEFAULT_ATTACK_MODE_OF_RED_WHITE,
+            ),
+            _ => return None,
+        };
+        Some(slot.as_deref().unwrap_or(default))
+    }
+
+    /// `[String] StartChangeAttackModeHelp`（`MessageSettings.cs:53`）。
+    #[must_use]
+    pub fn start_change_attack_mode_help(&self) -> &str {
+        self.start_change_attack_mode_help
+            .as_deref()
+            .unwrap_or(DEFAULT_START_CHANGE_ATTACK_MODE_HELP)
+    }
+
+    /// `[String] StartNoticeMsg`（`MessageSettings.cs:54`，仅 `TestServer` 发）。
+    #[must_use]
+    pub fn start_notice_msg(&self) -> &str {
+        self.start_notice_msg
+            .as_deref()
+            .unwrap_or(DEFAULT_START_NOTICE_MSG)
+    }
+
+    /// `[String] NowIsFreePlayMode`（`MessageSettings.cs:43`，仅 `PayMent==3` 发）。
+    #[must_use]
+    pub fn now_is_free_play_mode(&self) -> &str {
+        self.now_is_free_play_mode
+            .as_deref()
+            .unwrap_or(DEFAULT_NOW_IS_FREE_PLAY_MODE)
+    }
 }
 
 /// 读 `String.conf` 并解析 `[String]` 段。
@@ -354,6 +438,18 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             (Section::String, "YOUPOISONED") => &mut conf.you_poisoned,
             (Section::String, "REVIVALRECOVERMSG") => &mut conf.revival_recover,
             (Section::String, "GUILDMSGPREFIX") => &mut conf.guild_msg_prefix,
+            (Section::String, "ATTACKMODEOFALL") => &mut conf.attack_mode_of_all,
+            (Section::String, "ATTACKMODEOFPEACEFUL") => &mut conf.attack_mode_of_peaceful,
+            (Section::String, "ATTACKMODEOFDEAR") => &mut conf.attack_mode_of_dear,
+            (Section::String, "ATTACKMODEOFMASTER") => &mut conf.attack_mode_of_master,
+            (Section::String, "ATTACKMODEOFGROUP") => &mut conf.attack_mode_of_group,
+            (Section::String, "ATTACKMODEOFGUILD") => &mut conf.attack_mode_of_guild,
+            (Section::String, "ATTACKMODEOFREDWHITE") => &mut conf.attack_mode_of_red_white,
+            (Section::String, "STARTCHANGEATTACKMODEHELP") => {
+                &mut conf.start_change_attack_mode_help
+            }
+            (Section::String, "STARTNOTICEMSG") => &mut conf.start_notice_msg,
+            (Section::String, "NOWISFREEPLAYMODE") => &mut conf.now_is_free_play_mode,
             (Section::String, "YOUNEEDLEVELSENDMSG") => &mut conf.you_need_level_msg,
             (Section::String, "THISMAPDISABLESENDCYCYMSG") => {
                 &mut conf.this_map_disable_send_cycy_msg

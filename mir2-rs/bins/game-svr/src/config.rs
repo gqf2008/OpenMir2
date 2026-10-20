@@ -29,6 +29,13 @@ pub struct GateConfig {
     ///
     /// oracle 是 `byte`（`SystemShare.ServerIndex`，`SystemShare.cs:45`）⇒ 越界/非整数报错。
     pub server_index: u8,
+    /// `[Server] TestServer`（`ServerConf.cs:23`：`ReadWriteString("Server","TestServer","FALSE")`
+    /// 与 `"TRUE"` 做 **OrdinalIgnoreCase** 比较）。登录 `UserLogon` 的第三条 `SysMsg`
+    /// （`StartNoticeMsg`）与 `PayMent=3` 覆盖都看它（`PlayObject.cs:1369-1373/1145-1148`）。
+    pub test_server: bool,
+    /// `[Server] ServiceMode`（`ServerConf.cs:27`：`CompareTo("TRUE") == 0`，**精确大小写**）。
+    /// 与 `TestServer` 同用于 `PayMent=3` 覆盖（`PlayObject.cs:1145-1148`）。
+    pub service_mode: bool,
     /// S1 占位：世界地图尺寸列表（有 Envir 真地图注册表时被其尺寸取代；无 Envir 时才用）。
     ///
     /// **可选键**：配置里没有 `WorldMaps` ⇒ 空表。空表**不是**错误，但"空表 + 没有 Envir"
@@ -359,6 +366,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut gate_port: Option<u16> = None;
     let mut check_block: Option<usize> = None;
     let mut server_index: Option<u8> = None;
+    let mut test_server: Option<bool> = None;
+    let mut service_mode: Option<bool> = None;
     let mut maps: Option<Vec<(i32, i32)>> = None;
     let mut envir_dir: Option<String> = None;
     let mut map_dir: Option<String> = None;
@@ -521,6 +530,10 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("ServerIndex 不是合法字节：{v:?}"))?
                     });
                 }
+                // `ServerConf.cs:23/27`：`TestServer` 大小写不敏感；`ServiceMode` 是
+                // `CompareTo("TRUE") == 0`（序数比较 ⇒ **只认大写 TRUE**）。缺键都是 `false`。
+                "TESTSERVER" => test_server = Some(v.eq_ignore_ascii_case("TRUE")),
+                "SERVICEMODE" => service_mode = Some(v == "TRUE"),
                 "WORLDMAPS" => maps = Some(parse_maps(v)?),
                 "IDSADDR" => ids_addr = Some(v.to_string()),
                 "DBADDR" => db_addr = Some(v.to_string()),
@@ -1042,6 +1055,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`SystemShare.cs:45` 的 `ServerIndex = 0`）：缺键不算错。
         server_index: server_index.unwrap_or(0),
         maps,
+        // oracle 缺省 `FALSE`（`ServerConf.cs:23/27`）：缺键不算错。
+        test_server: test_server.unwrap_or(false),
+        service_mode: service_mode.unwrap_or(false),
         // oracle 缺省值（`GameSvrConf.cs:1295-1296`）：缺 `[Share]` 键不算错。
         envir_dir: envir_dir.unwrap_or_else(|| "Envir".to_string()),
         map_dir: map_dir.unwrap_or_else(|| "Map".to_string()),

@@ -47,7 +47,7 @@ use game_svr::feature::{feature_ex, human_feature, make_long, make_word};
 use game_svr::smframe::EnterWorldInputs;
 
 /// 装配入图帧额外输入所需的世界/配置层数据（`None` = 该层未就绪，对应帧**跳过并登记**）。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct WorldFrameInputs<'a> {
     /// 当前地图的 `Envir.Flag`（`MapRegistry::flag_of(map_id)`；无 Envir 时 `None`）。
     pub flag: Option<&'a MapInfoFlag>,
@@ -80,6 +80,15 @@ pub struct WorldFrameInputs<'a> {
     /// 帧 52/752 的输入（`PlayObject.cs:1385-1386` 登录后的 `SendPriorityMsg(RM_ABILITY/RM_SUBABILITY)`）。
     /// `None` ⇒ 两条同组跳过并登记（`RecalcAbilitys` 的输入接缝未就绪）。
     pub ability: Option<AbilityInputs<'a>>,
+    /// `[Setup] GreenMsgFColor/GreenMsgBColor`（登录 `SysMsg(..., MsgColor.Green, ...)` 的
+    /// `Param = make_word(f, b)`；`Server.conf` 现网 219/255 ⇒ `Param=0xFFDB`）。
+    pub green_msg: (u8, u8),
+    /// `[Server] TestServer`（`ServerConf.cs:23`）：第三条登录 `SysMsg`（`StartNoticeMsg`）的门。
+    pub test_server: bool,
+    /// `[Server] ServiceMode`（`ServerConf.cs:27`）：与 `TestServer` 一同把 `PayMent` 覆盖成 3。
+    pub service_mode: bool,
+    /// `LoadDBInfo.PayMent`（`PlayObject.cs:1145-1148` 覆盖前的值；`TestServer||ServiceMode` ⇒ 3）。
+    pub pay_ment: i32,
 }
 
 /// `PlayObject.RecalcAbilitys()`（`BaseObject.Abil.cs:15` + `PlayObject.cs:2008`）的一次输入。
@@ -701,6 +710,32 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
         ),
     }
 
+    // 登录 `UserLogon` 的 3+1 条 `SysMsg`（`PlayObject.cs:1342-1383` 的攻击模式/CTRL-H/欢迎语 +
+    // `:1417-1420` 的免费模式）。**入队门**由 `test_server`/`pay_ment_three` 决定（槽位在
+    // `EnterWorldInputs::frames_split` 里按 oracle 无条件 `SysMsg(...)` 调用占堆）；正文取自
+    // `String.conf [String]`（键名与 `MessageSettings` 静态字段同源，缺键回落源码默认）。
+    base.test_server = wx.test_server;
+    // `PlayObject.cs:1145-1148`：`if (TestServer || ServiceMode) PayMent = 3;`
+    let pay_ment = if wx.test_server || wx.service_mode {
+        3
+    } else {
+        wx.pay_ment
+    };
+    base.pay_ment_three = pay_ment == 3;
+    base.login_sys_msgs.green = wx.green_msg;
+    if let Some(strings) = wx.strings {
+        base.login_sys_msgs.change_help = Some(gbk(strings.start_change_attack_mode_help()));
+        if wx.test_server {
+            base.login_sys_msgs.notice = Some(gbk(strings.start_notice_msg()));
+        }
+        if pay_ment == 3 {
+            base.login_sys_msgs.free_play = Some(gbk(strings.now_is_free_play_mode()));
+        }
+        if let Some(l) = wx.logon {
+            base.login_sys_msgs.attack_mode = strings.attack_mode_msg(l.attack_mode).map(gbk);
+        }
+    }
+
     match wx.conf {
         Some(conf) => {
             // 门：`SoftVersionDateEx == 0 ⇒ SendServerConfig/SendGoldInfo 直接 return`。
@@ -848,6 +883,7 @@ mod tests {
             show_name: None,
             logon: None,
             ability: None,
+            ..WorldFrameInputs::default()
         };
         let warns = apply(&mut base, &wx);
         assert_eq!(
@@ -921,6 +957,7 @@ mod tests {
             show_name: None,
             logon: None,
             ability: None,
+            ..WorldFrameInputs::default()
         };
         let mut base = EnterWorldInputs {
             actor_id: 7,
@@ -1062,6 +1099,7 @@ mod tests {
             show_name: None,
             logon: None,
             ability: None,
+            ..WorldFrameInputs::default()
         };
         let warns = apply(&mut base, &wx);
         assert_eq!(
@@ -1130,6 +1168,7 @@ mod tests {
             show_name: None,
             logon: None,
             ability: None,
+            ..WorldFrameInputs::default()
         };
         let warns = apply(&mut base, &wx);
         assert_eq!(
@@ -1258,6 +1297,7 @@ mod tests {
             show_name: Some(sn),
             logon: None,
             ability: None,
+            ..WorldFrameInputs::default()
         };
         let warns = apply(&mut base, &wx);
         assert_eq!(
@@ -1273,8 +1313,11 @@ mod tests {
         assert_eq!(base.username, Some((7, 255, gbk(r"bot\\\"))));
         assert_eq!(
             idents(&base.frames()),
-            vec![658, 42, 766, 54, 46],
-            "42 在 766 前、46 在 54 后（金标准相对序）"
+            // 654 之后：`RefShowName` 的第二条 42（165）先于 `StartChangeAttackModeHelp`
+            // 的 100（252）；本 fixture 无 logon ⇒ 攻击模式槽不占位、`TestServer/PayMent`
+            // 缺省 false ⇒ 第 3/4 条 100 不入队。
+            vec![658, 42, 766, 54, 46, 42, 100],
+            "42 在 766 前、46 在 54 后；第二 42 在 100 前（金标准相对序）"
         );
     }
 
@@ -1313,7 +1356,8 @@ mod tests {
             cur_x: 10,
             cur_y: 20,
             dir: 2,
-            light: 1,
+            // 金标准角色无光源（`Light=0`）⇒ 不触发 `RecalcAbilitys` 的额外 `RM_CHANGELIGHT`。
+            light: 0,
             ..EnterWorldInputs::default()
         };
         let wx = WorldFrameInputs {
@@ -1331,6 +1375,7 @@ mod tests {
             show_name: None,
             logon: Some(logon),
             ability: None,
+            ..WorldFrameInputs::default()
         };
         let warns = apply(&mut base, &wx);
         assert_eq!(
@@ -1351,11 +1396,11 @@ mod tests {
             vec![658, 50, 41, 213, 654],
             "同组三条 + 658 + RM_LOGON 排队的 654"
         );
-        // 654：`Recog=ActorId(7)`、`Param=Light(1)`、`Tag=500`、`Series=0`、无尾。
+        // 654：`Recog=ActorId(7)`、`Param=Light(0)`、`Tag=500`、`Series=0`、无尾。
         let mut expect_654 = Vec::new();
         expect_654.extend_from_slice(&7i32.to_le_bytes());
         expect_654.extend_from_slice(&654u16.to_le_bytes());
-        expect_654.extend_from_slice(&1u16.to_le_bytes()); // param = Light
+        expect_654.extend_from_slice(&0u16.to_le_bytes()); // param = Light
         expect_654.extend_from_slice(&500u16.to_le_bytes()); // tag = nClientKey
         expect_654.extend_from_slice(&0u16.to_le_bytes());
         assert_eq!(frames[4], expect_654, "654 逐字节");
@@ -1426,7 +1471,7 @@ mod tests {
             cur_x: 291,
             cur_y: 666,
             dir: 4,
-            light: 1,
+            light: 0,
             ..EnterWorldInputs::default()
         };
         let wx = WorldFrameInputs {
@@ -1444,6 +1489,7 @@ mod tests {
             show_name: None,
             logon: Some(logon),
             ability: None,
+            ..WorldFrameInputs::default()
         };
         let _ = apply(&mut base, &wx);
         // 金标准 seq17：`Param1=0x0002_0000`（`MakeHumanFeature(0,0,0,2)`）、其余 0。
@@ -1612,6 +1658,7 @@ mod tests {
             show_name: None,
             logon: None,
             ability: Some(inputs),
+            ..WorldFrameInputs::default()
         };
         let _ = apply(&mut base, &wx);
         let out = ability::recalc_abilitys(
@@ -1828,12 +1875,19 @@ mod tests {
             use_items_tail: Some(use_tail),
             magic: Some((count, magic_tail)),
             changelight: Some((0, game_svr::sessionwire::N_CLIENT_KEY_DEFAULT)),
+            // 真实登录必有 `AttatckMode`（记录 byte）+ `TestServer=TRUE`（部署件）⇒ 4 条 SysMsg
+            // 全部占堆；否则堆布局变化会把 621/211 的先后翻过来（与真机不符）。
+            attack_mode: Some(0),
+            test_server: true,
+            pay_ment_three: true,
             ..EnterWorldInputs::default()
         };
         assert_eq!(
             idents(&base.frames()),
-            vec![658, 621, 211, 654],
-            "order: 46 后 621→211，654 收尾"
+            // `attack_mode` 是真实登录必有的记录字段（同时产 213）；4 条 SysMsg 全占堆的
+            // 布局下 621 仍先于 211，654 收尾。
+            vec![658, 213, 621, 211, 654],
+            "order: 621→211，654 收尾"
         );
     }
 
@@ -1983,6 +2037,7 @@ mod tests {
             show_name: None,
             logon: None,
             ability: Some(a),
+            ..WorldFrameInputs::default()
         };
         let warns = apply(&mut base, &wx);
         assert!(base.magic.is_none(), "211 不得进入待发帧");
@@ -2175,6 +2230,7 @@ mod tests {
             show_name: None,
             logon: Some(LogonInputs::default()),
             ability: Some(a),
+            ..WorldFrameInputs::default()
         };
         let _ = apply(&mut base, &wx);
         assert_eq!(base.light, 3, "右手火把 Light=3");
