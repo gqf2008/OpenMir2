@@ -72,6 +72,18 @@ param(
   # 帧 52/53 记录布局：`0|false|FALSE|False` = oracle 逐字节（③ 对拍），`1|...` = 冻结客户端布局（生产默认）；
   # 空 ⇒ 回落读 `MIR2_CLIENT_ABILITY_LAYOUT`，两者皆空 ⇒ 不注入（生产默认）。
   [string]$ClientAbilityLayout = '',
+  # ---- C10#8：把服务端指向测试库（克隆 `mir2_test_*`）------------------------------------
+  # 只有给了任一 `-Db*` 才启用；未给 ⇒ **零调用**、生成的配置/命令行逐字节不变（selftest 钉住）。
+  # `-DbName` 是前缀（`mir2_test` → `mir2_test_db/_account/_data`），也接受 `mir2_test_*` 模板
+  # 或具体库名 `mir2_test_db`（自动剥 `_db/_account/_data` 后缀仍按前缀展开三库）。
+  # 每个组件只覆盖给定字段；未给的 host/port/user/password 沿用该组件自己的配置源。
+  [string]$DbHost = '',
+  [string]$DbPort = '',
+  [string]$DbUser = '',
+  [string]$DbPassword = '',
+  [string]$DbName = '',
+  # 只打印将要执行的进程计划（JSON）后退出；不查端口、不起进程。给 -Db* 时会先生成影子配置。
+  [switch]$EmitPlan,
   [switch]$Stop,
   [switch]$Status,
   [switch]$Force
@@ -80,11 +92,18 @@ param(
 $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 # 种子/状态/rng/隔离/布局注入管线：与 `start_rust_stack.ps1` 共用同一份 helper。
-if (Test-Path (Join-Path $Here 'rust_seed_plumb.ps1')) {
-  . (Join-Path $Here 'rust_seed_plumb.ps1')
-} else {
-  . (Join-Path $CsharpRepo 'tools\m2-acceptance\rust_seed_plumb.ps1')
+# helper 解析顺序：同目录 → 仓库内 tools/m2-acceptance → CsharpRepo（兼容 old checkout）。
+function Resolve-Mir2Plumb([string]$Name) {
+  foreach ($cand in @((Join-Path $Here $Name),
+                      (Join-Path (Join-Path (Split-Path $Here -Parent) 'm2-acceptance') $Name),
+                      (Join-Path $CsharpRepo ("tools\m2-acceptance\" + $Name)))) {
+    if (Test-Path -LiteralPath $cand) { return $cand }
+  }
+  throw ("找不到 plumb 文件 {0}（同目录/仓库 tools/m2-acceptance/CsharpRepo 均无）" -f $Name)
 }
+. (Resolve-Mir2Plumb 'rust_seed_plumb.ps1')
+# C10#8：测试库目标（纯函数；未给 -Db* ⇒ Present=$false，下面所有分支都不进）。
+. (Resolve-Mir2Plumb 'db_target_plumb.ps1')
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 New-Item -ItemType Directory -Force -Path $StackRoot | Out-Null
 $PidFile = Join-Path $LogDir 'full-rust-stack.pid.json'
@@ -148,10 +167,19 @@ if ($Stop) {
 }
 
 if ($Status) { Show-Status; exit 0 }
+# ---- 测试库目标（C10#8）：`-Stop`/`-Status` 不受 -Db* 校验影响；起栈路径 fail-closed。----
+$dbInfo = $null
+try {
+  $dbInfo = Resolve-Mir2DbTarget -DbHost $DbHost -DbPort $DbPort -DbUser $DbUser -DbPassword $DbPassword -DbName $DbName
+} catch {
+  Write-Output ("RED: " + $_.Exception.Message + " —— 拒绝在非法测试库目标下起栈（fail-closed）")
+  exit 1
+}
+
 
 # ---- 0) 前置：端口必须空（不静默混实现）----
 $wanted = @(6000, 5100, 5700, 5500, 5600, 5000, 7000, 7100, 7200)
-if (-not $Force) {
+if (-not $Force -and -not $EmitPlan) {
   $busy = @($wanted | Where-Object { Test-Port $_ })
   if ($busy.Count -gt 0) {
     Write-Output ("RED: 目标端口已被监听 {0} —— 先停掉现有栈（本脚本 -Stop，或对应 Rust 起栈器 start_rust_stack.ps1 -LogDir <同一起栈目录> -Stop）再起；**不要**用 E:\MirServer\start-all.ps1 -Stop（其 targets 含 mysqld，会停共享 DB，2026-10-15 验证者 D1）" -f ($busy -join ','))
@@ -175,14 +203,16 @@ $lgConfSrc = Join-Path $MirServer 'LoginGate\config.conf'
 $sgConfSrc = Join-Path $MirServer 'SelGate\config.conf'
 $ggConfSrc = Join-Path $MirServer 'RunGate\config.conf'
 
-$missing = @()
-foreach ($p in @($mysqlExe, $dbsrvExe, $lsrvExe, $gsvrExe, $lgExe, $sgExe, $ggExe, $gsvrConf, $lgConfSrc, $sgConfSrc, $ggConfSrc)) {
-  if (-not (Test-Path $p)) { $missing += $p }
-}
-if ($missing.Count -gt 0) {
-  Write-Output 'PREREQ_MISSING: 缺以下 exe/配置：'
-  $missing | ForEach-Object { Write-Output ("  " + $_) }
-  exit 2
+if (-not $EmitPlan) {
+  $missing = @()
+  foreach ($p in @($mysqlExe, $dbsrvExe, $lsrvExe, $gsvrExe, $lgExe, $sgExe, $ggExe, $gsvrConf, $lgConfSrc, $sgConfSrc, $ggConfSrc)) {
+    if (-not (Test-Path $p)) { $missing += $p }
+  }
+  if ($missing.Count -gt 0) {
+    Write-Output 'PREREQ_MISSING: 缺以下 exe/配置：'
+    $missing | ForEach-Object { Write-Output ("  " + $_) }
+    exit 2
+  }
 }
 
 # ---- 2) 生成影子配置（不碰 `E:\MirServer` 的配置；照 m1 -StackRoot 做法）----
@@ -251,6 +281,69 @@ Interval=3000
 $denySrc = Join-Path $MirServer 'DBServer\DenyChrName.txt'
 if (Test-Path $denySrc) { Copy-Item $denySrc (Join-Path $dbsDir 'DenyChrName.txt') -Force }
 else { [System.IO.File]::WriteAllText((Join-Path $dbsDir 'DenyChrName.txt'), "", (New-Object System.Text.ASCIIEncoding)) }
+
+# ---- 2a) C10#8：测试库目标（改写 StackRoot 里的影子配置；未给 -Db* ⇒ 一个字节都不动）----
+if ($dbInfo.Present) {
+  try {
+    $dbsName = Expand-Mir2DbName $dbInfo 'db'
+    $accName = Expand-Mir2DbName $dbInfo 'account'
+    $datName = Expand-Mir2DbName $dbInfo 'data'
+
+    $dbsConfPath = Join-Path $dbsDir 'dbsvr.conf'
+    $dbsConn = Update-Mir2ConnString -ConnString (Get-Mir2IniConnString -Path $dbsConfPath) `
+      -ServerHost $dbInfo.Host -Port $dbInfo.Port -User $dbInfo.User -Password $dbInfo.Password -Database $dbsName
+    Set-Mir2IniConnString -Path $dbsConfPath -ConnString $dbsConn
+
+    $lsvConfPath = Join-Path $lsvDir 'logsrv.conf'
+    $lsvConn = Update-Mir2ConnString -ConnString (Get-Mir2IniConnString -Path $lsvConfPath) `
+      -ServerHost $dbInfo.Host -Port $dbInfo.Port -User $dbInfo.User -Password $dbInfo.Password -Database $accName
+    Set-Mir2IniConnString -Path $lsvConfPath -ConnString $lsvConn
+
+    $gsvrSrcDir = Split-Path $gsvrConf -Parent
+    $gsvrShadowConf = Join-Path (Join-Path $StackRoot 'game-svr') 'Server.conf'
+    $gsvrConn = Update-Mir2ConnString -ConnString (Get-Mir2IniConnString -Path $gsvrConf) `
+      -ServerHost $dbInfo.Host -Port $dbInfo.Port -User $dbInfo.User -Password $dbInfo.Password -Database $datName
+    New-Mir2GameSvrShadowBase -SourceDir $gsvrSrcDir -DestDir (Split-Path $gsvrShadowConf -Parent) -ConnString $gsvrConn
+    $gsvrConf = $gsvrShadowConf
+
+    if (-not $EmitPlan) {
+      Write-Output ("DB_TARGET db-srv database={0}" -f $(if ($dbsName) { $dbsName } else { '<沿用配置>' }))
+      Write-Output ("DB_TARGET login-srv database={0}" -f $(if ($accName) { $accName } else { '<沿用配置>' }))
+      Write-Output ("DB_TARGET game-svr database={0}" -f $(if ($datName) { $datName } else { '<沿用配置>' }))
+      Write-Output ("DB_TARGET_SHADOW " + $StackRoot)
+    }
+  } catch {
+    Write-Output ("RED: 测试库影子生成失败：" + $_.Exception.Message + "（fail-closed，未起栈）")
+    exit 1
+  }
+}
+
+if ($EmitPlan) {
+  $plan = [ordered]@{
+    mode      = 'start_full_rust_stack'
+    pidfile   = $PidFile
+    db_target = [ordered]@{
+      present    = $dbInfo.Present
+      host       = $dbInfo.Host
+      port       = $dbInfo.Port
+      user       = $dbInfo.User
+      db_db      = (Expand-Mir2DbName $dbInfo 'db')
+      db_account = (Expand-Mir2DbName $dbInfo 'account')
+      db_data    = (Expand-Mir2DbName $dbInfo 'data')
+    }
+    procs = @(
+      [ordered]@{ name='MySQL';      exe=$mysqlExe; args=@("--datadir=$mysqlData",'--port=3306','--bind-address=127.0.0.1','--console'); workdir='D:\mysql\mariadb-10.11.19-winx64'; ports=@(3306); stop_order=9 }
+      [ordered]@{ name='db-srv';     exe=$dbsrvExe; args=@((Join-Path $dbsDir 'dbsvr.conf')); workdir=$dbsDir; ports=@(6000,5100,5700); stop_order=7 }
+      [ordered]@{ name='login-srv';  exe=$lsrvExe;  args=@((Join-Path $lsvDir 'logsrv.conf')); workdir=$lsvDir; ports=@(5500,5600); stop_order=6 }
+      [ordered]@{ name='game-svr';   exe=$gsvrExe;  args=@($gsvrConf); workdir=(Split-Path $gsvrConf -Parent); ports=@(5000); stop_order=5 }
+      [ordered]@{ name='login-gate'; exe=$lgExe;    args=@((Join-Path $lgsDir 'config.conf')); workdir=$lgsDir; ports=@(7000); stop_order=1 }
+      [ordered]@{ name='sel-gate';   exe=$sgExe;    args=@((Join-Path $sgsDir 'config.conf')); workdir=$sgsDir; ports=@(7100); stop_order=2 }
+      [ordered]@{ name='game-gate';  exe=$ggExe;    args=@((Join-Path $ggsDir 'config.conf')); workdir=$ggsDir; ports=@(7200,7201,7202); stop_order=3 }
+    )
+  }
+  $plan | ConvertTo-Json -Depth 8
+  exit 0
+}
 
 # ---- 2b) 种子/状态/rng/隔离/布局解析（fail-closed：非法 ⇒ 不起栈 exit 1；未传 ⇒ 零行为差）----
 $seedInfo = $null
