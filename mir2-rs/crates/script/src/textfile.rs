@@ -1,8 +1,8 @@
 //! `StringList.LoadFromFile` 的文件读取：BOM 嗅探 + GB2312(GBK) 默认解码 + `ReadLine` 切行。
 //!
 //! 参照 `src/OpenMir2/Common/StringList.cs` 的 `GetEncoding` / `LoadFromFile`：
-//! - 有 BOM 按 BOM（UTF-8 / UTF-16LE / UTF-16BE），无 BOM 按 gb2312（.NET 实为 cp936≈GBK）；
-//! - 解码失败字节用替换字符（.NET ReplacementFallback 与 encoding_rs 一致）；
+//! - 有 BOM 按 BOM（UTF-8 / UTF-32LE / UTF-16LE / UTF-16BE / UTF-32BE），无 BOM 按 gb2312
+//!   （.NET 实为 cp936）；实现统一在 [`crate::cp936`]；
 //! - `StreamReader.ReadLine` 以 `\r\n` / `\r` / `\n` 切行，文件尾无换行符也返回最后一行。
 
 use std::path::Path;
@@ -10,103 +10,10 @@ use std::path::Path;
 use crate::parser::ScriptFs;
 
 pub fn decode_bytes(bytes: &[u8]) -> String {
-    // 注意：U+FFFD → '?' 的归一**只适用于 cp936 分支**（在 decode_gb2312 内完成）。
-    // .NET 的 UTF-8/UTF-16/UTF-32 解码器保留 U+FFFD（实测：UTF-8 BOM+0xFF → U+FFFD U+0041；
-    // UTF-16 孤立高代理 → U+FFFD），因此这里不做全局替换。
-    decode_bytes_raw(bytes)
-}
-
-/// GB2312(cp936) 解码：逐字节状态机 + 差异覆盖表（`gbk_overrides.rs`）。
-///
-/// cp936 的字节语义（.NET 实测）：
-/// - `0x00..=0x7F` → 原样字符；
-/// - `0x80` → `U+20AC`（欧元，单字节，不吞后续字节）；
-/// - `0xFF` → `U+F8F5`（单字节 PUA，不吞后续字节）；
-/// - `0x81..=0xFE` + 后继字节 → 双字节映射（任何后继字节都按一对消耗，非单字符 → `?`）；
-///   表内命中用覆盖值，否则用 encoding_rs GBK（WHATWG）逐对解码；
-/// - 末位孤立引导字节 → `?`。
-fn decode_gb2312(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b < 0x80 {
-            out.push(b as char);
-            i += 1;
-            continue;
-        }
-        if b == 0x80 {
-            out.push('\u{20AC}');
-            i += 1;
-            continue;
-        }
-        if b == 0xFF {
-            out.push('\u{F8F5}');
-            i += 1;
-            continue;
-        }
-        if i + 1 >= bytes.len() {
-            out.push('?');
-            i += 1;
-            continue;
-        }
-        let key = ((b as u16) << 8) | bytes[i + 1] as u16;
-        if let Some((_, c)) = crate::gbk_overrides::GBK_OVERRIDES
-            .iter()
-            .find(|(k, _)| *k == key)
-        {
-            out.push(*c);
-            i += 2;
-            continue;
-        }
-        let (s, _, _) = encoding_rs::GBK.decode(&bytes[i..i + 2]);
-        for c in s.chars() {
-            out.push(if c == '\u{FFFD}' { '?' } else { c });
-        }
-        i += 2;
-    }
-    out
-}
-
-/// `StringList.LoadFromFile` 的解码模型（.NET 实测，2026-10-10）：
-/// `GetEncoding` 先按前 4 字节给出编码（无 BOM 时 gb2312），但 `StreamReader` 的
-/// `detectEncodingFromByteOrderMarks`（默认 true）**优先级更高**：流以可识别 BOM 开头时
-/// 一律按 BOM 解并跳过 BOM。实测判定顺序与结果：
-/// - `EF BB BF` → UTF-8；`FF FE` → UTF-16LE（`FF FE 00 00` 也按 UTF-16LE，实测 U+0000 起头）；
-/// - `FE FF` → UTF-16BE；`00 00 FE FF` → UTF-32BE；
-/// - 其余 → gb2312（cp936，见 `decode_gb2312`）。
-fn decode_bytes_raw(bytes: &[u8]) -> String {
-    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        let (s, _, _) = encoding_rs::UTF_8.decode(&bytes[3..]);
-        return s.into_owned();
-    }
-    if bytes.starts_with(&[0xFF, 0xFE]) {
-        let (s, _, _) = encoding_rs::UTF_16LE.decode(&bytes[2..]);
-        return s.into_owned();
-    }
-    if bytes.starts_with(&[0xFE, 0xFF]) {
-        let (s, _, _) = encoding_rs::UTF_16BE.decode(&bytes[2..]);
-        return s.into_owned();
-    }
-    if bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF]) {
-        return decode_utf32_be(&bytes[4..]);
-    }
-    decode_gb2312(bytes)
-}
-
-/// UTF-32BE 解码（.NET `Encoding.UTF32` big-endian 分支）：4 字节一组，非法/残余 → `?`。
-fn decode_utf32_be(bytes: &[u8]) -> String {
-    let mut out = String::new();
-    // 4 字节分组（as_chunks 是切片版 chunks_exact，避免 clippy::chunks_exact_to_as_chunks）
-    let (groups, rest) = bytes.as_chunks::<4>();
-    for chunk in groups {
-        let cp = u32::from_be_bytes(*chunk);
-        out.push(char::from_u32(cp).unwrap_or('?'));
-    }
-    for _ in rest {
-        out.push('?');
-    }
-    out
+    // 唯一实现见 `crate::cp936::decode_string_list`（B-105 / E-4 的统一入口）：
+    // BOM 顺序按 .NET `StreamReader` 实测（UTF-32LE 先于 UTF-16LE），
+    // `U+FFFD → '?'` 的归一**只适用于 cp936 分支**。
+    crate::cp936::decode_string_list(bytes)
 }
 
 /// `StreamReader.ReadLine` 切行：`\r\n` / `\r` / `\n` 均为行终止符。
@@ -148,20 +55,13 @@ pub fn text_as_string_list_text(lines: &[String]) -> String {
 /// `StringList.SaveToFile` 的编码口径：`Encoding.GetEncoding("gb2312")`（cp936≈GBK，**无 BOM**），
 /// 逐行 `WriteLine`（每行后接 CRLF，由调用方拼好）。
 ///
-/// 逐字符编码：不可映射字符回退单字节 `'?'`，与 .NET 编码器 best-fit 失败时的 `?` 回退同类；
+/// 逐 UTF-16 码元编码：不可映射码元回退单字节 `'?'`（非 BMP 字符 → 两个 `?`），
+/// 与 .NET cp936 编码器一致；
 /// **不用** one-shot `Encoding::encode` 的整串替换（它会写 `&#NNNN;` 数值字符引用，会把列表写坏）。
 pub fn encode_gb2312(text: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(text.len());
-    let mut buf = [0u8; 4];
-    for c in text.chars() {
-        let (bytes, _, had_errors) = encoding_rs::GBK.encode(c.encode_utf8(&mut buf));
-        if had_errors {
-            out.push(b'?');
-        } else {
-            out.extend_from_slice(&bytes);
-        }
-    }
-    out
+    // 唯一实现见 `crate::cp936::encode_gb2312_dotnet`（E-1 / E-2）：逐 UTF-16 码元查
+    // .NET cp936 表，不可映射 → `?`；绝不写 `&#NNNN;` 数字字符引用。
+    crate::cp936::encode_gb2312_dotnet(text)
 }
 
 /// FNV-1a 64（与 digest.rs / C# harness 同算法，用于原文摘要）。
@@ -202,8 +102,18 @@ mod tests {
         // .NET 实测：StreamReader 按 BOM 判定，优先于 GetEncoding 给出的 gb2312。
         // FF FE FF 41 → 按 UTF-16LE 解出 U+41FF（不是 gb2312 的 U+F8F5 '?' 'A'）。
         assert_eq!(decode_bytes(&[0xFF, 0xFE, 0xFF, 0x41]), "\u{41FF}");
-        // FF FE 00 00 仍按 UTF-16LE（实测首字符 U+0000），不是 UTF-32LE
-        assert_eq!(decode_bytes(&[0xFF, 0xFE, 0x00, 0x00]), "\u{0000}");
+        // FF FE 00 00 是 UTF-32LE BOM（.NET StreamReader 实测，audit-encoding-v2 §2.2）：
+        // 必须排在 FF FE（UTF-16LE）之前，否则 41 00 00 00 会解成 U+0000 U+0041。
+        assert_eq!(decode_bytes(&[0xFF, 0xFE, 0x00, 0x00]), "");
+        assert_eq!(
+            decode_bytes(&[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00]),
+            "A"
+        );
+        // 尾部不足 4 字节 → 单个 U+FFFD（不是 ?）
+        assert_eq!(
+            decode_bytes(&[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x42]),
+            "A\u{FFFD}"
+        );
         assert_eq!(decode_bytes(&[0xFF, 0xFE, 0x41, 0x00]), "A");
         assert_eq!(decode_bytes(&[0xFE, 0xFF, 0x00, 0x41]), "A");
         assert_eq!(decode_bytes(&[0xEF, 0xBB, 0xBF, 0x41]), "A");

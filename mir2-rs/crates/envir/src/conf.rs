@@ -213,8 +213,9 @@ impl GameSvrConf {
     pub fn from_bytes(bytes: &[u8]) -> Self {
         let text = decode_text(bytes);
         // `IniFile::from_gbk_bytes` 是 `crates/data` 的 GBK 入口；这里先把 BOM 探测后的文本
-        // 重新编码为 GBK 再喂它，保证 ini 结构与值都与 `ConfigFile.Load` 一致。
-        let (gbk, _, _) = encoding_rs::GBK.encode(&text);
+        // 重新编码为 cp936 再喂它，保证 ini 结构与值都与 `ConfigFile.Load` 一致。
+        // 用统一编码入口（E-1/E-2）：不可映射 → `?`，不产生 `&#N;` 数字引用。
+        let gbk = mir2_script::cp936::encode_gb2312_dotnet(&text);
         let ini = IniFile::from_gbk_bytes(&gbk);
         Self::from_ini(&ini)
     }

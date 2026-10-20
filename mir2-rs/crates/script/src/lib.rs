@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod codes;
+pub mod cp936;
 pub mod digest;
 pub mod engine;
 pub mod gbk_overrides;
