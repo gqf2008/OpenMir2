@@ -342,6 +342,72 @@ async fn downstream_disconnect_suppresses_idle_timeout_frame() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// F2（进程级，oracle `RestSessionArray`）：下行断链会让**已有会话**退出空闲超时
+/// 集合，且链路恢复也**不回填** ⇒ 之后哪怕计时早已逾期，20s 扫描也不得产生任何动作。
+///
+/// 时间线：链路就绪 → 客户端接入（建会话）→ 假 DBSrv 掉线 → 网关重连 →
+/// 再等 ≥1 个完整 20s 扫描 ⇒ 客户端收不到任何字节（既无 18B 超时帧也无 FIN）。
+///
+/// 牙：把 `if !idle_eligible { continue; }` 改成 `if false` ⇒ 重连后的扫描会用
+/// 过期计时触发 `SendOutOfConnection` ⇒ 客户端收到 18B 帧 ⇒ 本用例红。
+#[tokio::test]
+async fn downstream_reconnect_keeps_session_out_of_idle_timeout() {
+    let (accepted1_tx, _accepted1_rx) = oneshot::channel();
+    let (enter_sid_tx, enter_sid_rx) = oneshot::channel();
+    let (accepted2_tx, accepted2_rx) = oneshot::channel();
+    let (srv_port, srv_task) =
+        fake_srv_drop_then_echo(accepted1_tx, enter_sid_tx, accepted2_tx).await;
+    let gate_port = free_port();
+    let dir = write_conf_with_timeout(gate_port, srv_port, 10_000);
+    let conf = dir.join("config.conf");
+    let log = dir.join("gate.log");
+
+    // 先等下行链路安装完成，客户端才能建会话（否则命中「获取服务器实例失败。」分支）。
+    let mut child = spawn_gate_ready(&conf, &log, srv_port).await;
+    let mut client = connect_retry(gate_port).await;
+
+    // 假 DBSrv 读到 Enter 后立即断开 ⇒ oracle `RestSessionArray` 把该会话踢出超时集合。
+    tokio::time::timeout(Duration::from_secs(5), enter_sid_rx)
+        .await
+        .expect("5s 内假 DBSrv 未收到 Enter")
+        .unwrap();
+    wait_for_log(
+        &log,
+        &format!("数据库服务器[127.0.0.1:{srv_port}]断开链接."),
+        Duration::from_secs(5),
+    )
+    .await;
+
+    // 等网关重连（≤2 个 10s 周期，与 R1 用例同口径）。
+    tokio::time::timeout(Duration::from_secs(27), accepted2_rx)
+        .await
+        .expect("两个 10s 周期内未重连（重试被关掉或周期改错？）")
+        .unwrap();
+    wait_for_log_count(
+        &log,
+        &format!("数据库服务器[127.0.0.1:{srv_port}]链接成功."),
+        2,
+        Duration::from_secs(5),
+    )
+    .await;
+
+    // 重连后再等一个完整扫描周期：链路已就绪、计时也早已超过 10s 阈值，
+    // 唯一能阻止超时动作的就是 `idle_eligible` 守卫（oracle 不回填 `SocketId`）。
+    tokio::time::sleep(Duration::from_secs(21)).await;
+
+    let mut buf = [0u8; 32];
+    let got = tokio::time::timeout(Duration::from_millis(800), client.read(&mut buf)).await;
+    assert!(
+        got.is_err(),
+        "重连后该会话仍不得参与空闲超时（不得发 18B 帧/不得 FIN）；实得 {got:?}"
+    );
+
+    child.kill().await.ok();
+    drop(client);
+    srv_task.abort();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// 起网关并把 stdout 落到日志文件（日志判据要读原文串）。
 fn spawn_gate_logged(conf: &std::path::Path, log: &std::path::Path) -> tokio::process::Child {
     let out = std::fs::File::create(log).unwrap();
@@ -572,6 +638,14 @@ async fn reconnects_after_downstream_drop_and_keeps_sessions() {
     );
 
     let text = std::fs::read_to_string(&log).unwrap_or_default();
+    // F1（日志牙）：链路恢复后，无会话客户端的帧必须静默丢弃（oracle `GetSession == null`），
+    // 不得再逐帧打「非法攻击」。本用例在断链期与恢复后各写一帧 ⇒ 只允许断链期那一次。
+    assert_eq!(
+        text.matches("非法攻击").count(),
+        1,
+        "断链期间接入的客户端只应在链路仍断时打一次「非法攻击」；恢复后必须静默：
+{text}"
+    );
     child.kill().await.ok();
     drop(client);
     drop(zombie);

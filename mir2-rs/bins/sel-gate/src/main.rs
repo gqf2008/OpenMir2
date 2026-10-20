@@ -193,19 +193,31 @@ async fn client_loop(
 
     // C# `ClientManager.GetClientThread()`：下行断开时 `GateShare.ServerGateList` 已
     // `Remove(this)` ⇒ 返回 null ⇒ `ServerSocketClientConnect` 打「获取服务器实例失败。」
-    // 并直接返回：**不建会话、不发 Enter**。该客户端之后每帧走 `GetClientThread()` 的
-    // 兜底（仍为 null）⇒「非法攻击」并丢弃；直到自己断开。链路恢复后也不会补会话
-    //（oracle 没有回填逻辑），因此这里在接入瞬间判一次即可。
+    // 并直接返回：**不建会话、不发 Enter**。之后每帧都按**当时的**链路状态重判
+    //（oracle 的 `ServerSocketClientRead` 每次调用 `GetClientThread(id)`）：
+    // - 链路仍断 ⇒ 兜底 `GetClientThread()` 为 null ⇒「非法攻击」并丢弃；
+    // - 链路已恢复 ⇒ 兜底拿到活着的 `ClientThread`，但 `GetSession(id)` 为 null
+    //   （oracle 从不回填会话）⇒ 静默丢弃，**无日志**。
     if !downstream.is_ready() {
         glog!("INF", "获取服务器实例失败。");
         let mut buf = vec![0u8; 8192];
         loop {
             match rd.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
-                Ok(_) => glog!("INF", "非法攻击: {ip}"),
+                Ok(_) => {
+                    if downstream.is_ready() {
+                        continue;
+                    }
+                    glog!("INF", "非法攻击: {ip}");
+                }
             }
         }
-        glog!("INF", "断开链接: {peer} (SessionId={sid})");
+        // 断开日志同理（oracle `ServerSocketClientDisconnect`）：链路已恢复时
+        // `GetClientThread(id)` 兜底到活着的客户端线程、`boGateReady == true`，
+        // 但 `GetSession(id) == null` ⇒ 不打 Info 日志；只有链路仍断才打「断开链接」。
+        if !downstream.is_ready() {
+            glog!("INF", "断开链接: {peer} (SessionId={sid})");
+        }
         return Ok(());
     }
 
