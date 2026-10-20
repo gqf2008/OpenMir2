@@ -31,11 +31,15 @@
    死亡回落另有 `Random(9)`×2 / `Random(5)`×2 / `Random(13)`×2 三臂。
    这些抽数发生在 **地形移位环（`Random(6)`×2/轮）之前**，与 `GetHomeInfo` 的 3 抽同一条 `world.rng`；
    漏抽/多抽会让后续全局 RNG 流整体偏移。
-4. **部署可达性（D-2）**：`Castle/0/AttackSabukWall.txt` 0 字节、`OwnGuild=` 空、
-   `AddAttackerInfo(IGuild)` 与 `GetCastle(IGuild)` 抛 `NotImplementedException` ⇒
+4. **部署可达性（D-2，按真实可达性分层）**：`Castle/0/AttackSabukWall.txt` 0 字节、
+   `OwnGuild=` 空、`AddAttackerInfo(IGuild)` 与 `GetCastle(IGuild)` 抛 `NotImplementedException` ⇒
    **无城主、无攻击者、日常 20 点开战不可达**；`UnderWar` 只有 GM 命令
-   `@ForcedWallConQuestWar`（`Command.conf:159/330`，权限 10）可达。因此 #4/#7 的 R 级判据
-   真机窗口可以推迟，但**构造级判据必须先绿**。
+   `@ForcedWallConQuestWar`（`Command.conf:159/330`，权限 10）或测试注入可达。
+   **但「进图改写」不依赖 `UnderWar`**：外层条件是 `(PalaceEnvir == envir || UnderWar)`
+   （`WorldServer.cs:300`），部署 `Envir/MapInfo.txt:857-866` 有 `3 -> 0150` 的正常行走路线 ⇒
+   **非成员走入皇宫 0150 时即触发非成员改写臂（2×`Random(5)`）**，此路径自然可达；
+   成员臂（需 `MasterGuild != null`）、死亡臂、战时分支仍需注入/GM。因此 #4/#7 的 R 级窗口
+   **不能整体推迟**：至少「非成员进皇宫」必须在窗口内真机对拍，其余构造级判据先绿。
 5. **名字色必须照抄 N1 异常**：`GetChrColor` 的城堡分支在 `MyGuild != null` 时走到
    `castle.IsAttackGuild(IGuild)`（`UserCastle.cs:1045-1048`）⇒ 抛异常被
    `PlayObject.Run` 的消息段 `catch` 吞掉（`PlayObject.Message.cs:356-400`）⇒
@@ -56,17 +60,19 @@
 
 | 说法 | 复核结果 | 证据 |
 | --- | --- | --- |
-| 有城主 | **否**。`OwnGuild=` 空 ⇒ `MasterGuild = GuildMgr.FindGuild("") = null` | `Castle/Castle/SabukW.txt` `[Setup] OwnGuild=`；`UserCastle.cs:228-232` |
+| 有城主 | **否**。`OwnGuild=` 空；且 `MasterGuild = GuildMgr.FindGuild(OwnGuild)` 在 `CastleMgr.Initialize`（`GameApp.cs:213`）内执行，早于 `GuildMgr.LoadGuildInfo`（`GameApp.cs:245`）⇒ 即使 `OwnGuild` 非空也解析为 null | `Castle/Castle/SabukW.txt` `[Setup] OwnGuild=`；`UserCastle.cs:228-232`；`GameApp.cs:213/245` |
 | 有攻城申请 | **否**。`Castle/0/AttackSabukWall.txt` 0 字节；`AddAttackerInfo(IGuild)` 抛 N1 | 部署件；`UserCastle.cs:670-673` |
 | 日常 20 点自动开战 | **不可达**（`AttackWarList` 恒空 ⇒ `UnderWar` 不会置真） | `UserCastle.cs:340-376` |
 | 自动占领 / 改归属 | **不可达**（`CanGetCastle(IGuild)`/`GetCastle(IGuild)` 抛 N1） | `UserCastle.cs:644-647/675-678`；`ChangeSabukLordCommand.cs:39` |
 | `UnderWar` 唯一入口 | GM `@ForcedWallConQuestWar`（切换 `UnderWar`，权限 10） | `ForcedWallconquestWarCommand.cs:19-53`；`Command.conf:159/330` |
 | 城门/城墙/弓手实体 | **可达**（启动刷出，已由实体挂图片实现） | `design-castle-entities-20261020.md`；`main.rs:14995-15033` |
 | 城堡 NPC 文本 | 可达；动作受 `IsMasterGuild && IsGuildMaster` 门限制 | `CastleOfficial.cs:107` |
+| 进入皇宫 `0150` | **可达**（自然行走）。`3 -> 0150` 有 6 条路线；进图改写外层条件命中的是 `PalaceEnvir == envir`，**不要求** `UnderWar` | `Envir/MapInfo.txt:857-866`（其中 `3 -> 0150` 共 6 条）；`WorldServer.cs:300` |
 
-> 结论：#4/#7 的 **R 级判据必须设计**，但**当前部署下靠自然流程不可达**。
-> 实现与判据应允许「注入世界态」（`UnderWar=true`、`MasterGuild=Some`）来驱动，
-> 而不是依赖 GM 命令或改内容。
+> 结论：#4/#7 的 **R 级判据必须设计**。当前部署下：**非成员进皇宫 0150 自然可达**
+> （`3 -> 0150` 行走 + `PalaceEnvir == envir` 分支），必须在真机窗口对拍；
+> 成员/死亡/战时分支不可达，需「注入世界态」（`UnderWar=true`、`MasterGuild=Some`）驱动，
+> 不依赖 GM 命令或改内容。
 
 ### 1.2 判级
 
@@ -97,7 +103,7 @@
 | B1 | `UserCastle.cs:454-478` | `InCastleWarArea(envir,x,y)`：`envir==null` ⇒ false；`envir==CastleEnvir` 且 `abs(HomeX-x)<WarRangeX` 且 `abs(HomeY-y)<WarRangeY` ⇒ true；`envir==PalaceEnvir` 或 `envir==SecretEnvir` ⇒ true；`EnvirList` 逐项 `OrdinalIgnoreCase` 比 `envir.MapName` ⇒ true；否则 false | **无** | 谓词整体缺失 |
 | B2 | `CastleManager.cs:38-59` | 两个重载：按 actor 取 `Envir/CurrX/CurrY`，按 `Envir`+坐标；按 `CastleList` 顺序返回首个命中 | **无** | 需在 `World` 侧提供「act/坐标 → 城堡」查询 |
 | B3 | `CastleManager.cs:115-124` | `IsCastleMember(playObject)`：按列表序 `Castle.IsMember` = `IsMasterGuild(MyGuild)`（只认**城主行会**，不含盟友） | **无**；`World.actor_guilds` 已有读写口（`world.rs:3430-3446`），bins 尚未写 | 会话 `MyGuild` → `GuildId` 映射 + 查询 |
-| B4 | `UserCastle.cs:639-642` | `IsMasterGuild(guild)`：`MasterGuild != null && MasterGuild == guild` | `is_master_guild(GuildId)` 已有 | 需把 `OwnGuild` 经 `GuildMgr.FindGuild` 反查为 id（启动时） |
+| B4 | `UserCastle.cs:639-642`；`UserCastle.cs:228-232` | `IsMasterGuild(guild)`：`MasterGuild != null && MasterGuild == guild`；`MasterGuild = GuildMgr.FindGuild(OwnGuild)` 在 `LoadConfig`（`Initialize` 内）执行 | `is_master_guild(GuildId)` 已有；`master_guild: Option<GuildId>`（`castle.rs:882`） | **读序**：`CastleMgr.Initialize`（`GameApp.cs:213`）早于 `GuildMgr.LoadGuildInfo`（`GameApp.cs:245`）⇒ 启动时 `FindGuild` 必返回 null；即使 `OwnGuild` 非空，`MasterGuild` 也是 null。Rust 启动装载应照抄该读序（`master_guild=None`），不要「先读行会表再反查」 |
 
 ### 2.3 进图/死亡落点改写
 
@@ -129,7 +135,7 @@
 | E1 | `PlayObject.cs:3585-3657` | `GetChrColor` 玩家分支：先 `NameColor`（ctor 255），`PvpLevel<2` 时套 `PvpFlag`/`GetGuildRelation`/`Fight3Zone`；再套城堡分支 | `enter::PLAY_NAME_COLOR=255` 常量；`downlink` 用展示表 `name_color`（恒 255） | 分支整体缺失；见 §5 的 N1 异常结论 |
 | E2 | `PlayObject.Base.cs:3529-3559` | `GetGuildRelation`：两边有会、都不在安全区、`play.MyGuild.GuildWarList.Count>0` 才有效；2=互相宣战、1=同会、3=互相联盟；副作用 `GuildWarArea` | `World.is_ally_guild` 有；战争列表/安全区判定未接 | 依赖行会战状态 |
 | E3 | `PlayObject.cs:3300-3388`（城堡段 `:3311-3327`） | `GetShowName`：`IsCastleMember!=null` ⇒ `CastleGuildName` 替换 `%castlename/%guildname/%rankname`；否则 `InCastleWarArea!=null` 且（`ShowGuildName` 或 `UnderWar` 或 `InGuildWarArea`）⇒ `NoCastleGuildName` | `enter::show_name` 把 `%guildname` 恒替换为 `""`（`enter.rs:338`） | 两个模板键 + 城堡/战争门 |
-| E4 | `MessageSettings.cs:228-229` | 默认模板：`CastleGuildName="(%castlename)%guildname[%rankname]"`，`NoCastleGuildName="%guildname[%rankname]"`；部署 `String.conf` 无这两键 | `StringConf` 只有 `guild_*` 六键，无这两个 | 配置读侧补两键（缺键回落默认） |
+| E4 | `MessageSettings.cs:228-229`；`StringConf.cs:236-237` | 代码默认模板：`CastleGuildName="(%castlename)%guildname[%rankname]"`，`NoCastleGuildName="%guildname[%rankname]"`；**部署 `String.conf:223-224` 实有这两键**，值分别为 `%guildname(%castlename)` 与 `%guildname`（均无 `[%rankname]`） | `StringConf` 只有 `guild_*` 六键，无这两个 | 配置读侧补两键；期望串**以部署值为准**，不得用 `MessageSettings` 默认值 |
 | E5 | `BaseObject.cs:1174-1176` | `RefShowName` = `SendRefMsg(RM_USERNAME, 0,0,0,0, GetShowName())`（发给同屏观察者） | `sm_username`/AOI 已有 | 名字色 + 城堡名牌接入 |
 | E6 | `PlayObject.cs:3589/3616` | 观者/目标都 `InGuildWarArea` 且 `UnderWar` 时先给 `InFreePKAreaNameColor`，随后 **`GuildWarArea=true`**（副作用） | `GuildWarArea` 未建模 | 副作用必须照搬（影响同 tick 的攻击判定） |
 
@@ -145,7 +151,7 @@
 | F6 | `UserCastle.cs:377-389` | 回收 Ghost：先 `Guards` 后 `Archers`，只清 `BaseObject` | `run` 已实现 | — |
 | F7 | `UserCastle.cs:890-909` | `MainDoorControl(bool)`：`BaseObject==null` 或 `Ghost` 不动；只在状态不符时开/关 | `main_door_control` 已实现 | 事件排水 |
 | F8 | `CastleConf.cs:15-94` | `LoadConfig` 全键 + 默认；`EnvirList` 逐段 append；构造 `Archers/Guards` 12 项 | `envir::SabukWConfig::from_ini` 全实现 | `CastleDefenseSpecs` 只带 map/palace/secret/门墙弓守，**缺** `envir_list/home_x/home_y/war_range` |
-| F9 | `CastleConf.cs:96-...` | `SaveConfig`：归属服门；`CastleMapList` 逗号串 append；`ChangeDate/WarDate/IncomeToday` 恒写；`TotalGold/TodayIncome` 非 0 才写；`MainDoorOpen/HP` 仅 `BaseObject!=null` 才写；`Archers/Guards` 的 `HP` 总是写 | **无写侧** | 全部缺失 |
+| F9 | `CastleConf.cs:96-...` | `SaveConfig`：归属服门；`CastleMapList` 逗号串 append；`ChangeDate/WarDate/IncomeToday` 恒写；`TotalGold/TodayIncome` 仅非 0 时**更新缓存值**；`MainDoorOpen/HP` 仅 `BaseObject!=null` 时更新；`Archers/Guards` 的 `HP` 无论 `BaseObject` 都写（空写 0）。**写侧是 `ConfigFile` 的全量缓存重写**：`LoadConfig` 的 `ReadWrite*` 会把缺键的默认值写入 `iniCahce`（`ConfigFile.cs:56-64` 等），`Save()` 遍历 `iniCahce` 全量写回（`ConfigFile.cs:363-377`）⇒ 上述「非 0/非空才写」只决定**值是否更新**，不决定键是否存在；缺键会以默认值出现在输出中 | **无写侧** | 全部缺失；实现必须把「键存在性」与「条件写值」分开建模 |
 | F10 | `CastleManager.cs:144-152` | `Save()` = `SaveCastleList()` 然后逐城 `Save()` | 无 | 同上 |
 
 ---
@@ -333,12 +339,14 @@ return result;
 
 | 条件 | 结果 |
 | --- | --- |
-| `IsCastleMember(this) != null` | `CastleGuildName`（默认 `(%castlename)%guildname[%rankname]`）替换城堡名/会名/封号 |
-| 否则 `InCastleWarArea(this) != null` 且（`ShowGuildName` **或** `castle.UnderWar` **或** `InGuildWarArea`） | `NoCastleGuildName`（默认 `%guildname[%rankname]`） |
+| `IsCastleMember(this) != null` | `CastleGuildName`（部署值 `%guildname(%castlename)`）替换城堡名/会名；模板无 `%rankname` 占位 |
+| 否则 `InCastleWarArea(this) != null` 且（`ShowGuildName` **或** `castle.UnderWar` **或** `InGuildWarArea`） | `NoCastleGuildName`（部署值 `%guildname`）；模板无 `%rankname` 占位 |
 | 其余 | `sGuildName=""` |
 
 部署 `ShowGuildName=0` ⇒ 平时不显示会名；但**战时/攻城区内仍显示**。
-两个模板键在部署 `String.conf` 中缺失 ⇒ 用 `MessageSettings` 默认值。
+两个模板键在部署 `String.conf:223-224` 中**存在**，实值为
+`CastleGuildName=%guildname(%castlename)`、`NoCastleGuildName=%guildname`
+（均无 `[%rankname]`）；`MessageSettings` 的代码默认值仅作缺键回落，**不用于本部署的期望串**。
 
 ---
 
@@ -353,15 +361,21 @@ return result;
 :155 InitializeMonster
 :184 LoadMapQuest
 :213 CastleMgr.Initialize   // ctor 读 Castle/Castle/SabukW.txt → Initialize() 造实体
+                            // → LoadConfig 内 MasterGuild = FindGuild(OwnGuild)（行会表尚未装载）
                             // → ConfigDir="0" → EnvirList += 0151..0156 → Save()
 :214 DataServer.Initialize
 :227 LoadMerchant
 :229 LoadNpcs
 :233 LoadStartPoint
 :244 WorldEngine.Initialize
-:245 GuildMgr.LoadGuildInfo  // MasterGuild 反查依赖行会表
+:245 GuildMgr.LoadGuildInfo  // 行会表在此才装载（晚于 :213 的 MasterGuild 反查）
 :246 CastleMgr.LoadCastleList// 读 Castle/List.txt，append 未初始化城
 ```
+
+**读序结论（Minor 3 订正）**：`MasterGuild` 的反查发生在 `:213` 的 `CastleMgr.Initialize` 内，
+早于 `:245` 的 `GuildMgr.LoadGuildInfo` ⇒ 启动时 `FindGuild` 必为 null；**`OwnGuild` 非空也不能让
+`MasterGuild` 非 null**。部署 `OwnGuild=` 空只是第二重保证。Rust 若先装载行会再初始化城堡，
+会凭空制造 oracle 不可达的城主态。
 
 **列表形状**：`CastleList = [默认城(ConfigDir="0")] + L 座装载城`。
 装载城 `MapName` 为 null（从未 `LoadConfig`）⇒ `Run` 在 `UserCastle.cs:318-321` 早退；
@@ -429,8 +443,12 @@ return result;
 3. **`List.txt` 1↔2 行**：启动时 `SaveCastleList` 在装载前写 `0`（1 行）；装载后首次 10min Save
    写 `0\r\n1\r\n`（1+L 行）。部署当前 2 行（有服务在跑）。
 4. **`Castle/1/SabukW.txt` 0 字节**：装载城 ctor 的 `ConfigFile` 建空文件。
-5. **写侧条件**：`TotalGold/TodayIncome` 为 0 不写；`MainDoorOpen/MainDoorHP` 仅
-   `BaseObject != null` 才写；`Archers/Guards` 的 `HP` 无论 `BaseObject` 是否为空都写（空写 0）。
+5. **写侧条件与「键存在性」**：`TotalGold/TodayIncome` 为 0 时**不更新**缓存值；
+   `MainDoorOpen/MainDoorHP` 仅 `BaseObject != null` 时更新；`Archers/Guards` 的 `HP`
+   无论 `BaseObject` 是否为空都写（空写 0）。**注意：这不等于「键不出现」**——`LoadConfig`
+   的每个 `ReadWrite*` 在缺键时会把默认值写入 `iniCahce`（`ConfigFile.cs:56-64`），
+   `Save()` 再遍历 `iniCahce` 全量写回（`ConfigFile.cs:363-377`）⇒ 缺键会以默认值被写入，
+   输出文件里该键仍存在。实现分两层：缓存键集合（读入 ∪ `ReadWrite*` 默认）+ 条件更新值。
 6. **CRLF / GBK**：`StringList.SaveToFile` 用 `Environment.NewLine`（Windows CRLF）；
    `ConfigFile` 保持 GBK 编码。
 7. **时间字段**：`ChangeDate/WarDate/IncomeToday` 由 `WriteDateTime` 写成固定格式
@@ -471,13 +489,13 @@ return result;
 
 | ID | tier | 断言（要点） | 牙（改坏 ⇒ 必红） |
 | --- | --- | --- | --- |
-| **C1** `castle_war_area_predicate` | L | `in_castle_war_area`：`(3,643,289)=true`；`(3,544,290)=true`；`(3,543,290)=false`；`(0150)=true`；`(D701)=true`；`(0151)=true`；未知图 false；`envir=None` false | `<` 改 `<=` ⇒ `(544,290)` 翻真；按位与改成按位或 ⇒ 同上；删 EnvirList 扫描 ⇒ 0151 红；删 null 门 ⇒ panic |
-| **C2** `castle_enter_nonmember_relocation` | **R** | 固定种子；非成员在 `3` 图的 (644,290) 且 `UnderWar=true` ⇒ `MapName=HomeMap`，X=`HomeX-2+r0`、Y=`HomeY-2+r1`；RNG trace 恰 2 抽 `Random(5)`，顺序 X→Y | `Random(5)` 改 `Random(9)` ⇒ 坐标/流红；交换 X/Y ⇒ 固定种子下 r0≠r1 时红；把成员判定写成「有行会即成员」⇒ 红 |
+| **C1** `castle_war_area_predicate` | L | 部署 `CastleHomeX/Y=644/290`、`CastleWarRangeX/Y=100/100`（`SabukW.txt:14-17`），oracle 严格 `<`（`UserCastle.cs:460`）：`(3,643,289)=true`；`(3,544,290)=false`（dx=100 边界）；`(3,543,290)=false`（dx=101）；`(3,743,290)=true`（dx=99）；`(3,744,290)=false`；`(3,644,389)=true`（dy=99）；`(3,644,390)=false`（dy=100）；`(0150)=true`（Palace）；`(D701)=true`（Secret）；`(0151)=true`（EnvirList）；未知图 false；`envir=None` false | `<` 改 `<=` ⇒ `(3,544,290)`/`(3,644,390)` 翻真；`&&` 改 `||` ⇒ 同上（另一轴为 0）；删 EnvirList 扫描 ⇒ 0151 红；删 Palace/Secret 分支 ⇒ 0150/D701 红；删 null 门 ⇒ panic |
+| **C2** `castle_enter_nonmember_relocation` | **R** | 固定种子；(a) **自然可达**：非成员经 `3 -> 0150` 走入皇宫（`UnderWar=false` 也触发，因 `PalaceEnvir==envir`）⇒ `MapName=HomeMap`，X=`HomeX-2+r0`、Y=`HomeY-2+r1`，trace 恰 2 抽 `Random(5)`、顺序 X→Y；(b) 注入 `UnderWar=true` 的非成员在城堡图 `3` 的 (644,290) ⇒ 同一改写 | `Random(5)` 改 `Random(9)` ⇒ 坐标/流红；交换 X/Y ⇒ 固定种子下 r0≠r1 时红；把成员判定写成「有行会即成员」⇒ 红；外层条件写成只认 `UnderWar` ⇒ (a) 不改写红 |
 | **C3** `castle_enter_member_palace_relocation` | **R** | `MasterGuild=Some` 的成员在 `0150`（`UnderWar=false` 也可）⇒ `MapName="3"`，X=`HomeX-4+r0`、Y=`HomeY-4+r1`；RNG trace 2 抽 `Random(9)`；随后移位环从该点继续抽 | 去掉一次 `Random(9)` ⇒ 流偏移红；`HomeX-4` 改 `-2` ⇒ 红；先 Y 后 X ⇒ 红 |
 | **C4** `castle_death_relocation_arms` | **R** | `HP<=0` 三臂各一例：成员+UnderWar ⇒ 城堡 `HomeMap` + 2×`Random(9)`；非成员 ⇒ 本人 `HomeMap` + 2×`Random(5)`；红名 ⇒ `RedDieHomeMap` + 2×`Random(13)`；trace 计数与顺序 | 三臂顺序写反 ⇒ 红；红名支用 `Random(5)` ⇒ 红；`PvpLevel>=2` 判定写成 `>2` ⇒ 红 |
-| **C5** `area_state_bit4_encoding` | L | `area_state(FIGHT,0,false)=1`；`(0,SAFE,false)=2`；`(0,0,true)=4`；`(FIGHT,SAFE,true)=7`；766 `Recog` 等于 n8，`Param/Tag/Series=0`、无尾 | 位常量 4 改 8 ⇒ 红；按位或改异或 ⇒ 同时 FIGHT+bit4 时红；把 n8 写进 `Param` ⇒ 红 |
+| **C5** `area_state_bit4_encoding` | L | `area_state(FIGHT,0,false)=1`；`(0,SAFE,false)=2`；`(0,0,true)=4`；`(FIGHT,SAFE,true)=7`；**同一 bit 重复置位幂等**：对已含 bit4 的 `n8` 再置 bit4 仍等于原值（实现应暴露 `set_flag(&mut n8, 4, cond)` 或等价累加器供此用例）；766 `Recog` 等于 n8，`Param/Tag/Series=0`、无尾 | 位常量 4 改 8 ⇒ 红；把累加器的 `|=` 改 `^=` ⇒ 「重复置位」用例红（`4` 变 `0`；单次 `1|2|4` 因位互不重叠仍为 `7`，不能靠它咬）；`|=` 改 `=` ⇒ `(FIGHT,SAFE,true)` 变 4 红；把 n8 写进 `Param` ⇒ 红 |
 | **C6** `castle_name_color_vectors` | L | 无行会观者 + 双方 `InGuildWarArea` + `UnderWar` + 目标在攻城区 ⇒ **221**；有行会观者同一场景 ⇒ `Err(NameColorN1)` 且本 tick 后续消息不出队；`PvpLevel>=2` ⇒ 255（怪行为）；`PvpFlag` ⇒ 47；同会/盟友 ⇒ 180；宣战 ⇒ 69 | 「补全」城主/攻方色 ⇒ 红（必须抛）；221 改 255 ⇒ 红；红名改回 249 ⇒ 红 |
-| **C7** `castle_show_name_war_branch` | L | `ShowGuildName=0`、`UnderWar=true`、有会 ⇒ 名牌含 `%guildname[%rankname]`；`IsCastleMember` ⇒ `(沙巴克)会名[封号]`；平时 ⇒ 会名为空 | 删 `UnderWar` 门 ⇒ 战时不显示红；模板两键用错 ⇒ 红 |
+| **C7** `castle_show_name_war_branch` | L | 读部署 `String.conf:223-224`：`ShowGuildName=0`、`UnderWar=true`、有会 ⇒ 名牌 = `会名`（`NoCastleGuildName=%guildname`，无封号）；`IsCastleMember` ⇒ `会名(城堡名)`（`CastleGuildName=%guildname(%castlename)`）；平时 ⇒ 会名为空 | 删 `UnderWar` 门 ⇒ 战时不显示红；用 `MessageSettings` 默认模板（带 `[%rankname]`/前置城堡名）⇒ 串不等红 |
 | **C8** `castle_ghost_reclaim` | L | `guards[i].ghost/archers[j].ghost` ⇒ 下一跳槽位 None；实体本身不被删；非 ghost 槽不变 | 只清 Archers ⇒ 红；删 reclaim ⇒ 红；清实体 ⇒ 实体数红 |
 | **C9** `map_owner_self_from_entries` | L | 部署 MapInfo 的 `3` 号图 `server_index=0`、`ServerIndex=0` ⇒ 初始化继续；把注册表该项改成 1 ⇒ `initialize_castle` 0 实体 + 无告警（oracle 归属门早退） | 硬编码 `true` ⇒ 第二例红；读错字段 ⇒ 红 |
 
@@ -495,8 +513,8 @@ return result;
 | ID | tier | 断言 | 牙 |
 | --- | --- | --- | --- |
 | **C14** `castle_startup_list_shape` | **R** | 用部署件只读副本：`List.txt` 2 行 ⇒ `world.castles.len()=3`；装载城 `map_name=None/master_guild=None`；默认城 `EnvirList.len()=原 1314 + 6`；`save` 后 `Castle/Castle/SabukW.txt` 的 `CastleMapList` 项数 = 1320（**不 dedupe**） | dedupe ⇒ 1314 红；初始化装载城 ⇒ `Some` 红；少加 6 ⇒ 红；读错文件（`Castle/0`）⇒ 项数 6 红 |
-| **C15** `castle_save_path_and_bytes` | **R** | `SaveConfig` 写 `Castle/Castle/SabukW.txt`（ctor 路径）；`SaveAttackSabukWall` 写 `Castle/<ConfigDir>/AttackSabukWall.txt`；`Castle/0/SabukW.txt` sha256 不变；CRLF + GBK；键序与 oracle 一致 | 用 `ConfigDir` 拼 `SaveConfig` 路径 ⇒ `Castle/0/SabukW.txt` hash 红；用 `\n` ⇒ 字节红；漏写非 0 的 `TotalGold` ⇒ 红 |
-| **C16** `attack_sabuk_wall_roundtrip` | **R** | 行格式 `会名 + 7 空格 + 引号日期`；未知行会丢弃；`TryParse` 失败 = Now；0 字节文件 ⇒ 空表；`serialize(parse(x))` 逐字节（日期原串） | 7 改 6 空格 ⇒ 红；不丢未知行会 ⇒ 红；重排日期格式 ⇒ 红 |
+| **C15** `castle_save_path_and_bytes` | **R** | `SaveConfig` 写 `Castle/Castle/SabukW.txt`（ctor 路径）；`SaveAttackSabukWall` 写 `Castle/<ConfigDir>/AttackSabukWall.txt`；`Castle/0/SabukW.txt` sha256 不变；CRLF + GBK；键序与 oracle 一致；**输入缺键 ⇒ 输出仍带该键且值为默认值**（`ReadWrite*` 入缓存 + `Save()` 全量重写） | 用 `ConfigDir` 拼 `SaveConfig` 路径 ⇒ `Castle/0/SabukW.txt` hash 红；用 `\n` ⇒ 字节红；删掉 `TotalGold` 非 0 的更新 ⇒ 值红（键仍在）；实现成「未显式 `WriteXxx` 就不输出该键」⇒ 缺键夹具红 |
+| **C16** `attack_sabuk_wall_roundtrip` | **R** | 行格式 `会名 + 7 空格 + 引号日期`；未知行会丢弃；`TryParse` 失败 = Now；0 字节文件 ⇒ 空表。**日期串不是逐字节契约**：oracle `SaveAttackSabukWall` 写 `attackerInfo.AttackDate` 的 `DateTime.ToString()`（culture 相关，`UserCastle.cs:306`）；Rust 保留原串属**已登记偏差**（`crates/envir/src/castle.rs:41/461-496`），逐字节判据只覆盖结构部分（会名 + 7 空格 + 引号 + 原样日期串） | 7 改 6 空格 ⇒ 红；不丢未知行会 ⇒ 红；把日期原串参与逐字节比较 ⇒ 判据本身红（应移出）；结构分隔符写错 ⇒ 红 |
 | **C17** `castle_enter_map_null_guard` | L | `envir=None`（`GetMapInfo` 未命中）⇒ 谓词 false、0 抽、不改写、不 panic | 删 null 门 ⇒ panic/多抽红 |
 
 > 每个 R 项在实现卡里必须附「先红」证据（改坏生产路径的失败输出）与还原后的 `sha256sum -c`。
@@ -508,7 +526,7 @@ return result;
 
 | 窗口项 | 内容 | 为什么必须窗口 |
 | --- | --- | --- |
-| **W-1 进图 RNG 对拍** | 固定种子，两侧各跑：非成员进战区 / 成员进皇宫 / 死亡三臂；逐 k 比 RNG trace 与最终 `CurrX/CurrY/MapName` | RNG 流水位置 + 进图时序 |
+| **W-1 进图 RNG 对拍** | 固定种子，两侧各跑：**非成员经 `3 -> 0150` 走入皇宫（自然可达，`UnderWar=false`）** / 注入 `UnderWar` 的非成员进战区 / 成员进皇宫（注入 `MasterGuild`）/ 死亡三臂；逐 k 比 RNG trace 与最终 `CurrX/CurrY/MapName` | RNG 流水位置 + 进图时序；皇宫非成员臂无需改内容即可真机复现 |
 | **W-2 766 动态序列** | GM `@ForcedWallConQuestWar`（或注入 `UnderWar`）后，真实进程观察进入/离开战区的 766 帧序、bit4 变化与 1s 节流 | 时序（1s/每 tick） |
 | **W-3 姓名色/名牌真机** | 有行会/无行会观察者各一；确认有行会观察者触发 N1 时的**消息批次中断**与客户端可见结果 | 客户端可见 + 异常路径 |
 | **W-4 文件字节** | 只读副本上跑启动 + 一次 Save，对比 `Castle/Castle/SabukW.txt`、`Castle/List.txt`、`Castle/0/AttackSabukWall.txt` 的 sha256（含 CRLF/GBK） | 持久化逐字节 |
@@ -526,17 +544,19 @@ return result;
 2. **`Save()` 在未初始化城 NRE**：Rust 无异常语义。建议建模为「保存完已初始化城后停止，
    未初始化城无输出」；需确认是否需要复刻 `Castle/1/SabukW.txt` 的建空文件副作用。
 3. **`SaveConfig` 写 ctor 路径**是否按怪行为照抄：建议**照抄**（硬约束③），并在实现卡登记。
-4. **`EnvirList` 的 `OrdinalIgnoreCase`**：Rust `MapRegistry::id_of` 是精确匹配。部署内容只有数字图名，
-   无差异；建议启动时把 `EnvirList` 归一成 `map_id` 集合，并登记「大小写不敏感 vs 精确」的偏差，
-   加一条构造级用例（`d701` vs `D701`）钉住当前口径。
+4. **`EnvirList` 的 `OrdinalIgnoreCase`**：Rust `MapRegistry` 的索引与查找都先过
+   `normalize_name = to_ascii_lowercase`（`crates/envir/src/registry.rs:248/364/388-390`），
+   对 ASCII 图名等价 oracle 的 `OrdinalIgnoreCase`（`UserCastle.cs:469-474`），**不是精确匹配**。
+   建议启动时把 `EnvirList` 归一成 `map_id` 集合；保留构造级用例（`d701` vs `D701`）钉住该等价性。
 5. **红名 `GetChrColor` 返回 255**：与 `GetNameColor` 的 249/251 不一致，属 oracle 怪行为。
    请 reviewer 确认「照抄 255」而不是「修正为 249」。
 6. **`GetMapInfo(ServerIndex, MapName)` 的 server_index 门**：Rust 进图目前只按 `id_of`。
    单服部署 `ServerIndex=0` 等价；多服需补门（本片登记，不实现）。
 7. **登录 766 的 bit4 时序**：`Run` 的城堡检查在消息段之前，`RM_LOGON` 的 766 可能已带 bit4。
    需真机确认首帧是否如此（金标准场景不在战区，未覆盖）。
-8. **`UnderWar` 测试驱动**：自然流程不可达；建议测试专用注入（世界态 setter），
-   不实现 GM 命令、不改内容。
+8. **`UnderWar` 测试驱动**：自然流程不可达（无城主/无攻击者；除 GM `@ForcedWallConQuestWar`），
+   建议测试专用注入（世界态 setter），不实现 GM 命令、不改内容。**注意**：皇宫 `0150`
+   的进图改写**不依赖** `UnderWar`，其非成员臂自然可达，不能一并归入「只能注入」。
 
 ---
 
