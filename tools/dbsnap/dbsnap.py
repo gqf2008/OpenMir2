@@ -54,11 +54,20 @@ b	c）
      仅对 InnoDB 生效（本项目 3 库的表全为 InnoDB）；MyISAM 无事务，不在保证范围内。
 
 用法：
-  python dbsnap.py snap --out DIR [--table mir2_db.characters ...] [--mysql PATH] [--host ..] [--user ..] [--password ..]
+  python dbsnap.py snap --out DIR [--table mir2_db.characters ...] [--db test|prod|DB] ...
   python dbsnap.py diff A_DIR B_DIR [--max-diffs 10]
-  python dbsnap.py restore --dir DIR [--yes-apply] [--allow-db DB]   # 从快照字段级灌回（默认 dry-run；白名单库才可写）
+  python dbsnap.py restore --dir DIR [--yes-apply] [--allow-db DB | --db test|prod|DB]
   python dbsnap.py selftest            # 改坏必红自检（快照→篡改→diff 必须红）
   python dbsnap.py restore-selftest    # restore 自检（临时库往返；三库只读）
+  python dbsnap.py tables-selftest     # 纯表集展开自检（不连库）
+
+--db（C10#9，测试库快照）：
+  test  = mir2_test_db 的 11 张角色表 + mir2_test_account 的 2 张账号表；
+  prod  = mir2_db + mir2_account（与默认表集逐项相同）；
+  也可给单库名（mir2_db / mir2_account / mir2_test_db / mir2_test_account / mir2_test_data）。
+  `--db` 与 `--table` 同时给 ⇒ 取并集（去重，保序）。
+  snap 的 `--allow-db` 是**可选**的额外读库白名单：给了就要求每张表的库都在
+  `mir2_db/mir2_account/mir2_data` ∪ `--allow-db` 内（fail-closed）；不给则维持旧行为。
 
 默认表集：mir2_account.account / account_protection + mir2_db.characters* 全族
 （对应设计文档 §5.1 的角色数据边界）。
@@ -89,6 +98,81 @@ DEFAULT_TABLES = [
 ]
 
 DEFAULT_MYSQL = r"D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe"
+
+# --db 预设（C10#9）：把 DEFAULT_TABLES 的「角色库 / 账号库」两个角色映射到目标库。
+DB_PRESETS = {
+    "prod": ("mir2_db", "mir2_account", "mir2_data"),
+    "test": ("mir2_test_db", "mir2_test_account", "mir2_test_data"),
+}
+# 目标库 -> DEFAULT_TABLES 里的角色库（None = 该库在默认表集里没有表）。
+DB_ROLE = {
+    "mir2_db": "mir2_db",
+    "mir2_account": "mir2_account",
+    "mir2_test_db": "mir2_db",
+    "mir2_test_account": "mir2_account",
+    "mir2_test_data": None,
+    "mir2_data": None,
+}
+
+
+def expand_db_tables(db_specs):
+    """把 --db 规格展开成 db.table（未知规格即 ValueError；不猜库名）。"""
+    targets = []
+    for spec in db_specs:
+        dbs = DB_PRESETS.get(spec, (spec,))
+        for db in dbs:
+            if db not in DB_ROLE:
+                raise ValueError("未知 --db '%s'（可用: %s 或单库名 %s）" %
+                                 (db, "/".join(DB_PRESETS), "/".join(sorted(DB_ROLE))))
+            targets.append(db)
+    # 按 DEFAULT_TABLES 的默认顺序输出（账号表在前、角色表在后），同一表只出现一次。
+    out = []
+    for fq in DEFAULT_TABLES:
+        src_db, _, table = fq.partition(".")
+        for db in targets:
+            if DB_ROLE[db] == src_db:
+                item = "%s.%s" % (db, table)
+                if item not in out:
+                    out.append(item)
+    return out
+
+
+def resolve_tables(table_args, db_specs):
+    """--table / --db 的组合语义：任给其一就用给定集，同时给则并集去重保序；都没给 = 默认表集。"""
+    if not table_args and not db_specs:
+        return list(DEFAULT_TABLES)
+    out = []
+    for fq in list(table_args or []) + expand_db_tables(db_specs or []):
+        if fq not in out:
+            out.append(fq)
+    return out
+
+
+def resolve_allow_dbs(db_specs):
+    """restore 的 --db 甜头：把 test/prod/单库名展开成 --allow-db 条目。"""
+    out = []
+    for spec in db_specs or []:
+        dbs = DB_PRESETS.get(spec, (spec,))
+        for db in dbs:
+            if db not in DB_ROLE:
+                raise ValueError("未知 --db '%s'" % db)
+            if db not in out:
+                out.append(db)
+    return out
+
+
+def validate_snap_tables(tables, allow_db):
+    """snap 的可选读库白名单：仅当显式给了 --allow-db 时生效（默认不改变旧行为）。"""
+    if not allow_db:
+        return None
+    allowed = set(ALLOWED_DBS) | set(allow_db)
+    for fq in tables:
+        db = fq.partition(".")[0]
+        if db not in allowed:
+            return ("表 %s 的库 '%s' 不在读库白名单（允许: %s）；"
+                    "测试库请加 --allow-db %s 或直接用 --db test" %
+                    (fq, db, sorted(allowed), db))
+    return None
 
 # restore 目标白名单：只允许把快照写回这三个库；其他库名一律拒绝（rc≠0）。
 # 自检临时库经显式 --allow-db 放行（仅用于 selftest/受控场景，不进默认路径）。
@@ -188,6 +272,11 @@ def sql_literal(field: str, col_type: str) -> str:
 
 
 def cmd_snap(args):
+    allow_db = list(getattr(args, "allow_db", None) or [])
+    err = validate_snap_tables(args.table, allow_db)
+    if err:
+        print("RED: %s" % err, file=sys.stderr)
+        sys.exit(2)
     os.makedirs(args.out, exist_ok=True)
     manifest = {"tool": "dbsnap", "tables": []}
     for fq in args.table:
@@ -322,7 +411,13 @@ def cmd_restore(args):
     其他库名一律 rc≠0 拒绝。生成 SQL 前先按工具头 L1 拒绝含 TAB/LF 的坏快照（dry-run 亦拒绝）。
     """
     manifest = load_manifest(args.dir)
-    allowed = set(ALLOWED_DBS) | set(getattr(args, "allow_db", None) or [])
+    allow_db = list(getattr(args, "allow_db", None) or [])
+    try:
+        allow_db += resolve_allow_dbs(getattr(args, "db", None) or [])
+    except ValueError as e:
+        print("RED: %s" % e, file=sys.stderr)
+        sys.exit(2)
+    allowed = set(ALLOWED_DBS) | set(allow_db)
     plans = []
     for t in manifest.get("tables", []):
         fq = t["table"]
@@ -649,6 +744,50 @@ def cmd_restore_selftest(args):
     sys.exit(0)
 
 
+def cmd_tables_selftest(args):
+    """纯函数自检（不连库）：--db 预设 / 并集去重 / 读库白名单三条生产路径。"""
+    ok = True
+
+    def expect(name, got, want):
+        nonlocal ok
+        good = got == want
+        ok = ok and good
+        print("%-56s %s (got=%r want=%r)" % (name, "OK" if good else "FAIL", got, want))
+
+    test_tables = expand_db_tables(["test"])
+    expect("--db test 展开 13 张（2 账号 + 11 角色）", len(test_tables), 13)
+    expect("--db test 首项", test_tables[0], "mir2_test_account.account")
+    expect("--db test 含 characters_ablity",
+           "mir2_test_db.characters_ablity" in test_tables, True)
+    expect("--db test 末项", test_tables[-1], "mir2_test_db.characters_indexes")
+    expect("--db prod 与默认表集逐项相同", expand_db_tables(["prod"])[:len(DEFAULT_TABLES)],
+           list(DEFAULT_TABLES))
+    expect("--db mir2_test_db 只展开角色表", len(expand_db_tables(["mir2_test_db"])), 11)
+    expect("--db mir2_test_data 无默认表", expand_db_tables(["mir2_test_data"]), [])
+    expect("无 --table/--db ⇒ 默认表集", resolve_tables(None, None), list(DEFAULT_TABLES))
+    expect("--table custom.t ⇒ 仅该表", resolve_tables(["custom.t"], None), ["custom.t"])
+    expect("--table + --db 并集去重",
+           len(resolve_tables(["mir2_test_db.characters"], ["test"])), 13)
+    expect("restore --db test 展开 3 库",
+           resolve_allow_dbs(["test"]), ["mir2_test_db", "mir2_test_account", "mir2_test_data"])
+    expect("白名单：未给 --allow-db 时不拦（旧行为）",
+           validate_snap_tables(["mir2_test_db.characters"], []), None)
+    expect("白名单：给 --allow-db 后测试库放行",
+           validate_snap_tables(["mir2_test_db.characters"], ["mir2_test_db"]), None)
+    expect("白名单：给 --allow-db 后生产库仍放行",
+           validate_snap_tables(["mir2_db.characters"], ["mir2_test_db"]), None)
+    expect("白名单：未列出的库被拒（fail-closed）",
+           validate_snap_tables(["other_db.t"], ["mir2_test_db"]) is not None, True)
+    try:
+        expand_db_tables(["nope"])
+        bad = False
+    except ValueError:
+        bad = True
+    expect("未知 --db 直接拒绝（不猜库名）", bad, True)
+    print("SELFTEST %s" % ("GREEN" if ok else "RED"))
+    sys.exit(0 if ok else 1)
+
+
 def main():
     ap = argparse.ArgumentParser(description="MySQL 快照与比对")
     ap.add_argument("--mysql", default=DEFAULT_MYSQL, help="mysql.exe 路径")
@@ -660,6 +799,11 @@ def main():
     s = sub.add_parser("snap")
     s.add_argument("--out", required=True)
     s.add_argument("--table", action="append", help="db.table，可多次；默认 mir2 账号/角色全族")
+    s.add_argument("--db", action="append", default=[],
+                   help="库预设/单库名：test|prod|mir2_db|mir2_account|mir2_test_db|"
+                        "mir2_test_account|mir2_test_data（可多次；与 --table 取并集）")
+    s.add_argument("--allow-db", action="append", default=[],
+                   help="可选读库白名单（给了才校验；测试库加 --allow-db mir2_test_db 或用 --db test）")
     d = sub.add_parser("diff")
     d.add_argument("a")
     d.add_argument("b")
@@ -669,15 +813,28 @@ def main():
     r.add_argument("--yes-apply", action="store_true", help="真正写库（默认 dry-run，不写）")
     r.add_argument("--allow-db", action="append", default=[],
                    help="扩展白名单库（仅自检/受控场景；默认只允许 mir2_db/mir2_account/mir2_data）")
+    r.add_argument("--db", action="append", default=[],
+                   help="库预设/单库名：test|prod|DB（等价于逐库 --allow-db，便于 E1-a）")
     sub.add_parser("selftest")
     sub.add_parser("restore-selftest")
+    sub.add_parser("tables-selftest")
     args = ap.parse_args()
+    if getattr(args, "cmd") == "tables-selftest":
+        cmd_tables_selftest(args)
+        return
     if not os.path.exists(args.mysql):
         print(f"RED: 找不到 mysql 客户端: {args.mysql}", file=sys.stderr)
         sys.exit(2)
     if getattr(args, "cmd") in ("snap", "selftest"):
-        if not getattr(args, "table", None):
-            args.table = DEFAULT_TABLES
+        try:
+            args.table = resolve_tables(getattr(args, "table", None),
+                                        getattr(args, "db", None))
+        except ValueError as e:
+            print(f"RED: {e}", file=sys.stderr)
+            sys.exit(2)
+        if not args.table:
+            print("RED: --db 展开后没有任何表", file=sys.stderr)
+            sys.exit(2)
     {"snap": cmd_snap, "diff": cmd_diff, "selftest": cmd_selftest,
      "restore": cmd_restore, "restore-selftest": cmd_restore_selftest}[args.cmd](args)
 

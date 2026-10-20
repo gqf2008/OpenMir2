@@ -25,6 +25,13 @@
             对当前库做一次快照并抽取本次命名空间内的行。**前置**：MySQL 3306 在跑。
     diff    `-CsharpDir <dir> -RustDir <dir>` 对三条路径逐条 `scoped_diff.py diff`，任一 != 0 即红。
 
+  snap 的测试库透传（C10#11 ① / §A5-T）：
+    -Table <db.table>   逐项透传给 `dbsnap.py snap --table`（可多次）；不给则用 dbsnap 默认表集。
+    -AllowDb <db>       逐项透传给 `dbsnap.py snap --allow-db`（可多次）；给了即启用读库白名单
+                        （未列出的库 fail-closed）。测试库示例：
+                        `-Table mir2_test_db.characters ... -AllowDb mir2_test_db -AllowDb mir2_test_account`
+                        或更省事的 `-Table` 全列 + `-AllowDb` 两库（dbsnap 的 `--db test` 预设需直接调 dbsnap）。
+
   红/绿：
     GREEN  = 三条路径的 after 作用域字段级 diff 全为 0；
     PREREQ = MySQL 不可达 / 侧目录或某个 `<path>-after.jsonl` 缺失 ⇒ 退出码 2（不静默通过）；
@@ -52,6 +59,10 @@ param(
   [int]$MysqlPort = 3306,
   [string]$MysqlUser = "root",
   [string]$MysqlPassword = "",
+  # 测试库透传（snap 模式）：直接进 dbsnap 的 --table / --allow-db，不影响默认路径。
+  [string[]]$Table = @(),
+  [string[]]$AllowDb = @(),
+  [switch]$Selftest,
   # 跨侧真机运行必须开：`--canonical` 把 M3 已登记白名单的**易变列**（自增 Id / 墙钟时间戳等，
   # 见 scoped_diff.VOLATILE_COLUMNS 的逐列理由）置占位后再比；否则两次侧运行的 LoginTime/ModifyDate
   # 必然不同 ⇒ 真机 ④ **恒 RED**（假红）。M3 本体（run_m3_gate.ps1:179 / run_bag_equip_pair.ps1:121）
@@ -65,6 +76,65 @@ $RepoRoot = (Resolve-Path (Join-Path $Here "..\..")).Path
 $Dbsnap = Join-Path $RepoRoot "tools\dbsnap\dbsnap.py"
 $Scoped = Join-Path $RepoRoot "mir2-rs\tests\parity\m3\scoped_diff.py"
 $Paths = @("softclose", "disconnect", "shutdown")
+
+function Build-SnapArgs {
+  # 生产路径唯一构造器（snap 模式与 -Selftest 共用）：保持 dbsnap 全局选项在子命令之前、
+  # `--password=<值>` 的 = 形式（PS 5.1 会丢掉空字符串实参，见下方原注释）。
+  param(
+    [string]$Dbsnap, [string]$MysqlHost, [int]$MysqlPort, [string]$MysqlUser,
+    [string]$MysqlPassword, [string]$SnapDir, [string[]]$Table, [string[]]$AllowDb
+  )
+  $a = @($Dbsnap, "--host", $MysqlHost, "--port", [string]$MysqlPort,
+         "--user", $MysqlUser, "--password=$MysqlPassword", "snap", "--out", $SnapDir)
+  foreach ($t in @($Table)) { if (-not [string]::IsNullOrWhiteSpace($t)) { $a += @("--table", $t) } }
+  foreach ($d in @($AllowDb)) { if (-not [string]::IsNullOrWhiteSpace($d)) { $a += @("--allow-db", $d) } }
+  return $a
+}
+
+function Invoke-Selftest {
+  # 纯参数构造自检（不连库、不起进程）：-Table/-AllowDb 必须逐项落到 dbsnap 的 snap 子命令之后。
+  $fail = 0
+  function Assert-That([string]$Name, [bool]$Cond, [string]$Detail) {
+    if ($Cond) { Write-Output ("{0,-56} OK" -f $Name) }
+    else { Write-Output ("{0,-56} FAIL {1}" -f $Name, $Detail); $script:stFail++ }
+  }
+  $script:stFail = 0
+  $base = @(Build-SnapArgs -Dbsnap "X\dbsnap.py" -MysqlHost "127.0.0.1" -MysqlPort 3306 `
+            -MysqlUser "root" -MysqlPassword "" -SnapDir "X\snap" -Table @() -AllowDb @())
+  Assert-That "默认：含 snap --out" (($base -join " ") -match "snap --out X\\snap") ($base -join " ")
+  Assert-That "默认：--password= 的 = 形式（空值不丢参）" ($base -contains "--password=") ($base -join " ")
+  Assert-That "默认：不带 --table" (-not ($base -contains "--table")) ($base -join " ")
+  Assert-That "默认：不带 --allow-db" (-not ($base -contains "--allow-db")) ($base -join " ")
+  Assert-That "默认：全局选项在 snap 之前" `
+    ([array]::IndexOf($base, "--port") -lt [array]::IndexOf($base, "snap")) ($base -join " ")
+
+  $a = @(Build-SnapArgs -Dbsnap "X\dbsnap.py" -MysqlHost "127.0.0.1" -MysqlPort 3306 `
+        -MysqlUser "root" -MysqlPassword "" -SnapDir "X\snap" `
+        -Table @("mir2_test_db.characters", "mir2_test_account.account") `
+        -AllowDb @("mir2_test_db", "mir2_test_account"))
+  Assert-That "-Table：两条 --table 且值原样透传" `
+    (([regex]::Matches(($a -join " "), "--table ")).Count -eq 2 -and
+     ($a -contains "mir2_test_db.characters") -and ($a -contains "mir2_test_account.account")) ($a -join " ")
+  Assert-That "-AllowDb：两条 --allow-db 且值原样透传" `
+    (([regex]::Matches(($a -join " "), "--allow-db ")).Count -eq 2 -and
+     ($a -contains "mir2_test_db") -and ($a -contains "mir2_test_account")) ($a -join " ")
+  $iSnap = [array]::IndexOf($a, "snap")
+  $iTable = [array]::IndexOf($a, "--table")
+  $iAllow = [array]::IndexOf($a, "--allow-db")
+  Assert-That "透传项都在 snap 之后" (($iTable -gt $iSnap) -and ($iAllow -gt $iSnap)) ($a -join " ")
+
+  # 只给 -Table 不给 -AllowDb：不得凭空追加白名单（默认行为不受影响）。
+  $b = @(Build-SnapArgs -Dbsnap "X\dbsnap.py" -MysqlHost "127.0.0.1" -MysqlPort 3306 `
+        -MysqlUser "root" -MysqlPassword "" -SnapDir "X\snap" `
+        -Table @("mir2_db.characters") -AllowDb @())
+  Assert-That "只给 -Table：不追加 --allow-db" (-not ($b -contains "--allow-db")) ($b -join " ")
+
+  if ($script:stFail -gt 0) { Write-Output ("SELFTEST RED ({0} FAILED)" -f $script:stFail); exit 1 }
+  Write-Output "SELFTEST GREEN"
+  exit 0
+}
+
+if ($Selftest) { Invoke-Selftest }
 
 # 两个模式都会 shell out 到 python（dbsnap/scoped_diff）。缺 python 会抛终止错误、被聚合器误当 RED，
 # 故先显式报 PREREQ（preflight.ps1 也先行拦一道）。
@@ -94,11 +164,12 @@ if ($Mode -eq "snap") {
   }
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
   Write-Output ("--- dbsnap snap [{0}/{1}] -> {2} ---" -f $Path, $Phase, $SnapDir)
-  # 注意：dbsnap.py 的 --host/--port/--user/--password 是**顶层**选项，必须在子命令 snap 之前。
-  # ⚠ PowerShell 5.1 会把**空字符串实参**从原生命令行里丢掉 ⇒ `--password ""` 会退化成
-  #   `--password snap …`（snap 被当成密码、快照目录被当成子命令）⇒ 直接 RED。
-  #   故这里必须写成 `--password=<值>`（`=` 形式，空值也成立）。本机 MySQL 无口令时尤其要注意。
-  python $Dbsnap --host $MysqlHost --port $MysqlPort --user $MysqlUser "--password=$MysqlPassword" snap --out $SnapDir
+  # 参数构造见 Build-SnapArgs（`--password=<值>` 的 = 形式是硬要求：PowerShell 5.1 会把
+  # **空字符串实参**从原生命令行里丢掉 ⇒ `--password ""` 会退化成 `--password snap …`）。
+  $snapArgs = @(Build-SnapArgs -Dbsnap $Dbsnap -MysqlHost $MysqlHost -MysqlPort $MysqlPort `
+                -MysqlUser $MysqlUser -MysqlPassword $MysqlPassword -SnapDir $SnapDir `
+                -Table $Table -AllowDb $AllowDb)
+  & python @snapArgs
   if ($LASTEXITCODE -ne 0) { Write-Output "RED: dbsnap snap 失败"; exit 1 }
   $outJsonl = Join-Path $OutDir ("{0}-{1}.jsonl" -f $Path, $Phase)
   Write-Output ("--- scoped_diff extract prefix={0} -> {1} ---" -f $Prefix, $outJsonl)
