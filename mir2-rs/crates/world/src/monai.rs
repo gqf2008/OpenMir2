@@ -72,6 +72,8 @@ use crate::magic::{
 };
 use crate::world::World;
 
+/// `Messages.RM_TURN`（`src/OpenMir2/Messages.cs:555`）——转向帧（`SM_TURN` + `SM_FEATURECHANGED`）。
+pub const RM_TURN: u16 = 10001;
 /// `Messages.RM_HIT`（`src/OpenMir2/Messages.cs:554`）——`AnimalObject.Attack` 的攻击动作帧。
 pub const RM_HIT: u16 = 10004;
 /// `Messages.RM_DIGUP`（`src/OpenMir2/Messages.cs:614`）——出土帧（`SM_DIGUP`）。
@@ -3729,6 +3731,112 @@ fn make_ghost(world: &mut World, actor_id: i32) {
 ///
 /// 顺序契约：来自 `EntityStore` 的显式槽位索引（`iter`），不迭代 Query。
 /// 每只怪再跑一次 [`base_object_run_monster`]（`MonsterObject.Run` 末尾的 `base.Run()`）。
+/// **Lane B**：race 110/111 的 `Run`（`CastleDoor.Run` / `WallStructure.Run`）+ 副作用落地。
+///
+/// oracle 调用链：`ProcessMonsters` → `cert.Run()` 多态分派到
+/// `CastleDoor.Run`（`CastleDoor.cs:84-104`）/ `WallStructure.Run`（`WallStructure.cs:47-82`），
+/// 末尾再 `base.Run()`（= `GuardUnit:NormNpc` → `AnimalObject.Run` → `BaseObject.Run`，由调用方
+/// 按序跑 [`animal_run`] + [`base_object_run_monster`]）。
+///
+/// 事件落地：
+/// - `RefDigUp/RefDigDown/RefTurn/RefAlive` ⇒ `SendRefMsg`（`MonsterRefMsg`，宿主排水出帧）；
+///   `RM_TURN` 的收件人支在 `PlayObject.Message.cs:1524-1560` 发 `SM_TURN` + `SM_FEATURECHANGED`；
+/// - `SetMapXyFlag` ⇒ 同步按序作用到 `World.maps[map_id]`，并保留原始序供判据。
+///
+/// **HP 权威 = `Entity.hp`**：oracle 的 `WAbil.HP` 只有一份；本骨架 `StruckDamage` 写实体，
+/// 因此每 tick 入口把 `CastleUnit.hp` 同步成实体 HP，再跑门/墙状态机（C3b 的防漂移牙）。
+fn castle_structure_run(world: &mut World, actor_id: i32, race: u8) {
+    let now = world.clock_ms;
+    let Some((castle_index, role, map_id, hp)) = world.entities.get(actor_id).and_then(|e| {
+        e.castle_binding
+            .map(|b| (b.castle_index, b.role, e.map_id, e.hp))
+    }) else {
+        return;
+    };
+    let mut events = Vec::new();
+    if let Some(castle) = world.castles.get_mut(castle_index) {
+        if let Some(unit) = castle.defense_unit_mut(role) {
+            unit.hp = i32::from(hp);
+            events = if race == 110 {
+                // `CastleDoor.Run`：`Death && Castle != null` ⇒ 刷 `DeathTick`；
+                // 未开门 ⇒ 按 `3 - Round(HP/MaxHP*3)` 刷 `Dir` + `RM_TURN`（`n08 < 3`）。
+                unit.door_run(now, true)
+            } else {
+                // `WallStructure.Run`：死亡恢复格（B-15：`LowWall` 无法救回）+ `RM_DIGUP`。
+                unit.wall_run(now)
+            };
+        }
+    }
+    for event in events {
+        if let crate::castle::StructureEvent::RefDigUp { dir, .. }
+        | crate::castle::StructureEvent::RefDigDown { dir, .. }
+        | crate::castle::StructureEvent::RefTurn { dir, .. }
+        | crate::castle::StructureEvent::RefAlive { dir, .. } = event
+        {
+            // `SendRefMsg` 的帧方向 = `BaseObject.Dir`（状态机刚写完）。
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.dir = dir;
+            }
+        }
+        match event {
+            crate::castle::StructureEvent::RefDigUp { dir, x, y } => {
+                send_ref_msg(
+                    world,
+                    actor_id,
+                    RM_DIGUP,
+                    i32::from(dir),
+                    i32::from(x),
+                    i32::from(y),
+                    0,
+                );
+            }
+            crate::castle::StructureEvent::RefDigDown { dir, x, y } => {
+                send_ref_msg(
+                    world,
+                    actor_id,
+                    RM_DIGDOWN,
+                    i32::from(dir),
+                    i32::from(x),
+                    i32::from(y),
+                    0,
+                );
+            }
+            crate::castle::StructureEvent::RefTurn { dir, x, y } => {
+                send_ref_msg(
+                    world,
+                    actor_id,
+                    RM_TURN,
+                    i32::from(dir),
+                    i32::from(x),
+                    i32::from(y),
+                    0,
+                );
+            }
+            crate::castle::StructureEvent::RefAlive { dir, x, y } => {
+                send_ref_msg(
+                    world,
+                    actor_id,
+                    RM_ALIVE,
+                    i32::from(dir),
+                    i32::from(x),
+                    i32::from(y),
+                    0,
+                );
+            }
+            crate::castle::StructureEvent::SetMapXyFlag { .. } => {}
+        }
+        world.record_castle_structure(castle_index, map_id, event);
+    }
+}
+
+/// race 110/111 是否绑定到一座城堡（未绑定 ⇒ 不跑门/墙状态机，落回通用路径）。
+fn has_castle_binding(world: &World, actor_id: i32) -> bool {
+    world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| e.castle_binding.is_some())
+}
+
 pub fn monster_ai_tick(world: &mut World) {
     let ids: Vec<i32> = world
         .entities
@@ -3754,6 +3862,14 @@ pub fn monster_ai_tick(world: &mut World) {
         // `CanMove()`（`AnimalObject.cs:162-165`）对 `Death` 恒 false ⇒ `MonsterObject.Run`
         // 的 AI 体（Think/Walk/Attack）整段跳过，只剩 `base.Run()` 的死亡支与 VerifyTick 段。
         if world.entities.get(id).is_some_and(|e| e.death) {
+            // **Lane B**：死亡但未 Ghost 的门/墙仍要跑自己的 `Run`（CastleDoor.Run 刷
+            // `DeathTick`；WallStructure.Run 恢复格），随后 `base.Run()`。
+            let race = world.entities.get(id).map_or(0, |e| e.race);
+            if matches!(race, 110 | 111) && has_castle_binding(world, id) {
+                castle_structure_run(world, id, race);
+                base_object_run_monster(world, id);
+                continue;
+            }
             // oracle `ProcessMonsters` 对 `!Ghost` 的怪**照常调 `Run()`**（`WorldServer.MonGen.cs:288`）
             // ——`ZilKinZombi.Run` 的复活门正是读 `Death`（`ZilKinZombi.cs:37`）。本批只对
             // race 96 走类覆写；其余死怪维持既有等价（`BaseObject.Run` 的死亡支）。
@@ -3774,6 +3890,16 @@ pub fn monster_ai_tick(world: &mut World) {
                     continue;
                 }
             }
+            base_object_run_monster(world, id);
+            continue;
+        }
+        // **Lane B**：城堡门/墙（race 110/111）**不得**进入 `monster_run`（`GuardUnit:NormNpc`
+        // 没有 `MonsterObject.Run` 的 Think/游走/索敌）。未绑定城堡时落回下面的静止守卫/通用支。
+        let race_now = world.entities.get(id).map_or(0, |e| e.race);
+        if matches!(race_now, 110 | 111) && has_castle_binding(world, id) {
+            castle_structure_run(world, id, race_now);
+            // `CastleDoor.Run`/`WallStructure.Run` 末尾的 `base.Run()`。
+            animal_run(world, id);
             base_object_run_monster(world, id);
             continue;
         }

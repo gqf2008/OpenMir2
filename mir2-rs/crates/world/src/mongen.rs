@@ -211,6 +211,15 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
             entity.old_hit_time = entity.ai.next_hit_time;
             entity.old_walk_time = entity.ai.walk_speed;
         }
+        // `CastleDoor` ctor（`CastleDoor.cs:14-21`）：`Animal=false`、`StickMode=true`、
+        // `AntiPoison=200`（本骨架无 `anti_poison` 字段，按「登记」处理）、`CellType=Door`
+        // （`Entity` 无 cell_type 字段，实体登记在 `MapCellInfo.cert_cell_type` 一侧，本批不接线）。
+        // `WallStructure` ctor（`WallStructure.cs:9-15`）同前两项；`Initialize` 的 `Dir=0`
+        // 由宿主绑定点写入（`World::bind_castle_defense`）。
+        110 | 111 => {
+            entity.stick_mode = true;
+            entity.ai.animal = false;
+        }
         _ => {}
     }
 }

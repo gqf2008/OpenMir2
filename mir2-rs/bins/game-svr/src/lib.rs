@@ -12,6 +12,7 @@
 pub mod ability;
 pub mod attackwire;
 pub mod bag;
+pub mod castle;
 pub mod chat;
 pub mod contentload;
 pub mod ctor_fold;

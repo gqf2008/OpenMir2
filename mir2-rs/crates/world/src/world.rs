@@ -113,6 +113,21 @@ pub enum RunStateExpiry {
 /// `ItemName` 在第一段（`ItemDesc & 8`）恒空串（oracle `DeleteItem.ItemName` 缺省 null）。
 pub type UseItemDeletion = (usize, String, i32);
 
+/// **Lane B（城堡实体挂图）**：本 tick 由门/墙状态机产生的一条结构事件（顺序 = oracle 调用序）。
+///
+/// `event` 的 `SetMapXyFlag` 在**产生时**就已按序作用到 `World.maps[map_id]`
+/// （oracle `Envir.SetMapXyFlag`）；本记录保留原始序供帧排水/判据（尤其 B-15：
+/// `LowWall` 格无法被后续 `walk=true` 恢复 ⇒ 重放 `apply_structure_events` 的 changed 数可判）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CastleStructureAt {
+    /// `World.castles` 的下标。
+    pub castle_index: usize,
+    /// 事件作用的 `map_id`。
+    pub map_id: usize,
+    /// 门/墙的一次副作用。
+    pub event: crate::castle::StructureEvent,
+}
+
 /// 一个 tick 的处理记录（判据①：断言"谁、按什么顺序"被处理）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TickRecord {
@@ -186,6 +201,10 @@ pub struct TickRecord {
     /// 把**该字段**写成 `Max-1`（P8 钳制在 P7 填充/扣血之后），未被钳制的字段保留 P7 终值。
     /// 该段不消费 RNG ⇒ 五批 trace 不变。
     pub verify_health_changes: Vec<(i32, u16, u16, bool, bool)>,
+    /// **Lane B（城堡实体挂图）**：本 tick 门/墙状态机（race 110/111 的 `Run` + 门死亡掩码）
+    /// 产生的结构事件，保序。`SetMapXyFlag` 已同步作用到 `MapGrid`；`Ref*` 已转成
+    /// `MonsterRefMsg`（`RM_DIGUP/DIGDOWN/TURN/ALIVE`）由宿主排水出帧。
+    pub castle_structures: Vec<CastleStructureAt>,
     /// **出站接线片 W2**：本 tick 的 `RM_PUSH` 族（`SM_BACKSTEP(9)`）——`CharPushed` 每推进一格一条，保序。
     ///
     /// 两个来源共用本表（顺序 = 先命令 FIFO、后玩家 `Run` 的重叠推挤段）：
@@ -879,6 +898,15 @@ pub struct World {
     /// `DigOutZombi`/`ScultureMonster`/`BigHeartMonster`），宿主按 ident 出
     /// `SM_DIGUP`/`SM_DIGDOWN`/`SM_HIT`/`SM_716`（保序；见 [`crate::monai::MonsterRefMsg`]）。
     pub pending_monster_ref_msgs: Vec<crate::monai::MonsterRefMsg>,
+    /// **Lane B**：`World.castles`（oracle `SystemShare.CastleMgr.CastleList` 的本服单城等价物）。
+    ///
+    /// 生产宿主（`bins/game-svr`）在 `LoadMapQuest` 之后、`LoadMerchant` 之前推入一座
+    /// `UserCastle`（oracle `CastleMgr.Initialize` 的时机）；`monster_ai_tick` / `settle_deaths`
+    /// 按 `Entity.castle_binding` 反查这里的状态机。
+    pub castles: Vec<crate::castle::UserCastle>,
+    /// **Lane B**：`monster_ai_tick` 里门/墙 `Run` 产生的结构事件（下一 tick 头转抄进
+    /// [`TickRecord::castle_structures`]）。
+    pub pending_castle_structures: Vec<CastleStructureAt>,
     /// **卡 `openmir2-rm-refmessage-delay-layer`**：`Operate(RM_REFMESSAGE)`
     /// （`BaseObject.Base.cs:699-710`）的 `SendRefMsg(RM_STRUCK, …)` 广播事件（保序）。
     ///
@@ -1127,6 +1155,8 @@ impl World {
             pending_refmessage_frames: Vec::new(),
             refmessage_delay_enabled: false,
             pending_monster_ref_msgs: Vec::new(),
+            castles: Vec::new(),
+            pending_castle_structures: Vec::new(),
             bee_name: crate::special_monster::DEFAULT_BEE_NAME.to_string(),
             spider_name: crate::special_monster::DEFAULT_SPIDER_NAME.to_string(),
             zuma_names: [
@@ -3374,6 +3404,97 @@ impl World {
             .any(|e| !e.closed && e.event_type == 1 && e.map_id == map_id && e.x == x && e.y == y)
     }
 
+    /// **Lane B**：把一个成功挂图的防御单元绑到实体（oracle `BaseObject.Castle = this`）。
+    ///
+    /// 调用点 = 宿主在 `UserCastle::initialize` 返回后，对每条 `CastleEvent::SpawnDefenseUnit`
+    /// 调用（`castle_index` = 该城在 [`World::castles`] 的下标）。
+    ///
+    /// - 守卫（`castle_owner == false`）**不绑**（`UserCastle.cs:202-206` 只写 `HP`）；
+    /// - 门/墙补 ctor 常量 `StickMode=true` / `Animal=false`（`CastleDoor.cs:14-21` /
+    ///   `WallStructure.cs:9-15`；110/111 的 `AntiPoison=200`/`CellType=Door` 因本骨架无字段登记）；
+    /// - 墙补 `WallStructure.Initialize` 的 `Dir = 0`（`WallStructure.cs:17-21`）；
+    /// - 弓手补 `GuardDirection = 3`（`UserCastle.cs:187`）。
+    pub fn bind_castle_defense(
+        &mut self,
+        castle_index: usize,
+        spawn: &crate::castle::DefenseSpawn,
+    ) {
+        let is_wall = matches!(
+            spawn.role,
+            crate::castle::DefenseRole::LeftWall
+                | crate::castle::DefenseRole::CenterWall
+                | crate::castle::DefenseRole::RightWall
+        );
+        let is_door = spawn.role == crate::castle::DefenseRole::MainDoor;
+        // `CastleDoor.Open()` 写 `Dir=7`、`WallStructure.Initialize` 写 `Dir=0`——绑定后同步到
+        // 实体（弓手的 `Dir` 保持 `CreateMonster` 的 `RandomByte(8)`，不得覆盖）。
+        let unit_dir = if is_wall {
+            // `WallStructure.Initialize`（`WallStructure.cs:17-21`）：`Dir = 0`。
+            Some(0)
+        } else if is_door {
+            // 只有 `Open()`（`CastleDoor.cs:46-58`）写 `Dir=7`；未开的门保留 ctor 的
+            // `RandomByte(8)`（`Initialize` 不碰 `Dir`）。
+            self.castles
+                .get(castle_index)
+                .and_then(|c| c.defense_unit(spawn.role))
+                .filter(|u| u.opened)
+                .map(|u| u.dir)
+        } else {
+            None
+        };
+        let Some(e) = self.entities.get_mut(spawn.actor_id) else {
+            return;
+        };
+        // `UserCastle.cs:133/147/157/167/185/205`：`BaseObject.WAbil.HP = nHP`（**不改 MaxHP**）。
+        // 守卫也写（`UserCastle.cs:205`），只是不绑 `Castle`。
+        e.hp = spawn.hp;
+        if !spawn.castle_owner {
+            return;
+        }
+        e.castle_binding = Some(crate::entity::CastleBinding {
+            castle_index,
+            role: spawn.role,
+        });
+        if is_door || is_wall {
+            e.stick_mode = true;
+            e.ai.animal = false;
+        }
+        if let Some(dir) = unit_dir {
+            e.ai.dir = dir;
+        }
+        if matches!(spawn.role, crate::castle::DefenseRole::Archer(_)) {
+            e.guard_direction = spawn.guard_direction.unwrap_or(3);
+        }
+    }
+
+    /// **Lane B**：把一条 `SetMapXyFlag` 按序作用到 `MapGrid`（oracle `Envir.SetMapXyFlag`）。
+    pub(crate) fn apply_castle_map_event(
+        &mut self,
+        map_id: usize,
+        event: &crate::castle::StructureEvent,
+    ) {
+        if let crate::castle::StructureEvent::SetMapXyFlag { x, y, walk } = *event {
+            if let Some(grid) = self.maps.get_mut(map_id) {
+                grid.set_map_xy_flag(i32::from(x), i32::from(y), walk);
+            }
+        }
+    }
+
+    /// **Lane B**：记录一条门/墙结构事件（`SetMapXyFlag` 同步落到地图，其余保留原始序）。
+    pub(crate) fn record_castle_structure(
+        &mut self,
+        castle_index: usize,
+        map_id: usize,
+        event: crate::castle::StructureEvent,
+    ) {
+        self.apply_castle_map_event(map_id, &event);
+        self.pending_castle_structures.push(CastleStructureAt {
+            castle_index,
+            map_id,
+            event,
+        });
+    }
+
     /// 取走本 tick 的怪物 `SendRefMsg` 帧事件（保序）。
     pub fn take_monster_ref_msgs(&mut self) -> Vec<crate::monai::MonsterRefMsg> {
         std::mem::take(&mut self.pending_monster_ref_msgs)
@@ -4380,6 +4501,7 @@ impl World {
             buff_health_changes: Vec::new(),
             run_state_expiries: Vec::new(),
             verify_health_changes: Vec::new(),
+            castle_structures: Vec::new(),
         };
 
         // 命令 FIFO
@@ -4548,6 +4670,12 @@ impl World {
         if self.ai_enabled {
             crate::monai::monster_ai_tick(self);
         }
+        // **Lane B**：门/墙 `Run` 产生的结构事件转抄进本 tick 记录（顺序 = AI 槽位序）。
+        // `SetMapXyFlag` 在 `World::record_castle_structure` 里已按序作用到 `MapGrid`；
+        // `Ref*` 已转成 `MonsterRefMsg` 入 `pending_monster_ref_msgs`。
+        record
+            .castle_structures
+            .append(&mut self.pending_castle_structures);
         // **W4**：把 AI（怪物）本 tick 的攻击结算转抄进 `record.attacks`——与玩家 `CM_HIT`
         // 命令的攻击**同一份**记录，宿主 `drain_combat_downlink` ① 据它出 `SM_STRUCK`。
         // 关闭 AI 时 `pending_ai_attacks` 恒空 ⇒ 既有 golden 逐字节不变。
@@ -5893,6 +6021,37 @@ impl World {
                 // `BaseObject.cs:323`：`Death = true; DeathTick = HUtil32.GetTickCount();`
                 e.death_tick = self.clock_ms;
                 e.death_settled = true;
+            }
+            // **Lane B（城堡实体挂图）**：race 110/111 的 `Die()` 多态分派。
+            //
+            // - `CastleDoor.Die()`（`CastleDoor.cs:78-82`）：`base.Die()` 之后 `SetMapXyFlag(2)`
+            //   ⇒ 12 项有序掩码（`door_map_xy_flag_ops(2)`）。`base.Die()` 的通用段已由上面的
+            //   `Death/DeathTick` 置位等价完成，这里只补门掩码（顺序 = oracle：先通用后掩码）。
+            // - `WallStructure.Die()`（`WallStructure.cs:42-45`）：**只** `base.Die()`；格子恢复
+            //   留到下一 tick 的 `WallStructure.Run`（§2.4），这里只同步 `unit.death`。
+            let race = self.entities.get(id).map_or(0, |e| e.race);
+            if matches!(race, 110 | 111) {
+                if let Some(b) = self.entities.get(id).and_then(|e| e.castle_binding) {
+                    let mut events: Vec<crate::castle::StructureEvent> = Vec::new();
+                    if let Some(castle) = self.castles.get_mut(b.castle_index) {
+                        if let Some(unit) = castle.defense_unit_mut(b.role) {
+                            unit.hp = 0;
+                            if race == 110 {
+                                events = unit.door_die();
+                            } else {
+                                unit.death = true;
+                            }
+                        }
+                    }
+                    for event in events {
+                        self.apply_castle_map_event(map_id, &event);
+                        record.castle_structures.push(CastleStructureAt {
+                            castle_index: b.castle_index,
+                            map_id,
+                            event,
+                        });
+                    }
+                }
             }
             // **M3⑦-实现 2 F-1**：oracle `Die()`（`PlayObject.cs:1964-1978`）在置 `Death` 之后、
             // `base.Die()`（掉落）之前判 `if (GroupOwner != 0) groupOwnerPlay.DelMember(this)`
@@ -10290,5 +10449,357 @@ mod pl4_base_object_move_tests {
         replay.random_below(40);
         assert_eq!(w.rng.random_below(1000), replay.random_below(1000));
         assert_eq!(out.map_id, 1);
+    }
+}
+
+/// **Lane B（城堡实体挂图）**：门/墙运行时接线判据（C3b / C5 / C6 / C7 / C8）。
+#[cfg(test)]
+mod castle_wire_tests {
+    use super::*;
+    use crate::castle::{
+        apply_structure_events, door_map_xy_flag_ops, CastleSiegeConfig, CastleUnit, DefenseRole,
+        StructureEvent, UserCastle,
+    };
+    use crate::entity::CastleBinding;
+
+    fn castle_world(race: u8, hp: u16, max_hp: u16, dir: u8) -> (World, i32) {
+        let mut w = World::new(20, 20);
+        let mut e = Entity::new(1, "castle-unit", 5, 5);
+        e.race = race;
+        e.hp = hp;
+        e.max_hp = max_hp;
+        e.ai.dir = dir;
+        let id = w.add_entity(e);
+        let unit = CastleUnit {
+            entity_id: Some(id),
+            x: 5,
+            y: 5,
+            hp: i32::from(hp),
+            max_hp: i32::from(max_hp),
+            dir,
+            ..CastleUnit::default()
+        };
+        let mut castle = UserCastle::new("沙巴克", CastleSiegeConfig::default());
+        if race == 110 {
+            castle.main_door = Some(unit);
+        } else {
+            castle.left_wall = Some(unit);
+        }
+        w.castles.push(castle);
+        let role = if race == 110 {
+            DefenseRole::MainDoor
+        } else {
+            DefenseRole::LeftWall
+        };
+        w.entities.get_mut(id).unwrap().castle_binding = Some(CastleBinding {
+            castle_index: 0,
+            role,
+        });
+        w.enable_monster_ai();
+        (w, id)
+    }
+
+    fn unit_of(w: &World) -> CastleUnit {
+        w.castles[0]
+            .defense_unit(DefenseRole::MainDoor)
+            .or_else(|| w.castles[0].defense_unit(DefenseRole::LeftWall))
+            .copied()
+            .expect("unit")
+    }
+
+    /// **C3b `castle_unit_hp_tracks_entity_after_struck`**：受击后 `CastleUnit.hp` 跟实体走，
+    /// 且同 tick 的 `door_run` 用新 HP 算 `Dir`。
+    ///
+    /// 牙：把 `unit.hp` 固定为生成值（不在每 tick 同步）⇒ 本用例红。
+    #[test]
+    fn castle_unit_hp_tracks_entity_after_struck() {
+        let (mut w, id) = castle_world(110, 9999, 10000, 5);
+        let attacker = Entity::new(99, "hero", 6, 5);
+        let mut rng = std::mem::replace(&mut w.rng, RandomNumber::with_seed(0));
+        let cfg = w.combat_config;
+        let (_, killed) = {
+            let target = w.entities.get_mut(id).unwrap();
+            crate::combat::apply_struck_damage(&mut rng, &attacker, target, 5000, None, &cfg)
+        };
+        w.rng = rng;
+        assert!(!killed);
+        let after_hp = w.entities.get(id).unwrap().hp;
+        assert!(after_hp < 9999, "受击必须扣血");
+        let _rec = w.tick();
+        let unit = unit_of(&w);
+        assert_eq!(
+            unit.hp,
+            i32::from(after_hp),
+            "CastleUnit.hp 必须等于实体权威 HP（防双份状态漂移）"
+        );
+        let n08 = 3 - crate::castle::hutil32_round(f64::from(after_hp) / 10000.0 * 3.0);
+        if n08 < 3 {
+            assert_eq!(i32::from(unit.dir), n08, "door_run 用实体 HP 重算 Dir");
+        }
+    }
+
+    /// **C5 `door_die_sets_flag2_after_death`**：死亡 ⇒ `death` + 12 项有序掩码；B-15 下已开/已关
+    /// 的门板格仍是 `LowWall`（破门不能恢复）。
+    ///
+    /// 牙：删 `door_die` 或把 `nFlag=2` 改成 1 ⇒ 事件数/顺序红；在 `base.Die` 之前发掩码 ⇒ 红。
+    #[test]
+    fn door_die_sets_flag2_after_death() {
+        // 前置 A：门关闭（nFlag=1 把 3 个门板格置 LowWall）。
+        let (mut w, id) = castle_world(110, 0, 10000, 0);
+        let close_events = w.castles[0]
+            .defense_unit_mut(DefenseRole::MainDoor)
+            .unwrap()
+            .door_close();
+        let grid = &mut w.maps[0];
+        assert_eq!(apply_structure_events(grid, &close_events), 12);
+        let rec = w.tick();
+        assert!(w.entities.get(id).unwrap().death);
+        assert!(w.castles[0].main_door.unwrap().death);
+        assert_eq!(
+            rec.castle_structures.len(),
+            12,
+            "SetMapXyFlag(2) 恰好 12 项（door_map_xy_flag_ops(2)）"
+        );
+        let want: Vec<StructureEvent> = door_map_xy_flag_ops(2)
+            .into_iter()
+            .map(|(dx, dy, walk)| StructureEvent::SetMapXyFlag {
+                x: 5 + dx,
+                y: 5 + dy,
+                walk,
+            })
+            .collect();
+        let got: Vec<StructureEvent> = rec.castle_structures.iter().map(|c| c.event).collect();
+        assert_eq!(got, want, "掩码顺序 = oracle 调用序");
+        assert!(rec.deaths.iter().any(|d| d.0 == id), "死亡结算含门");
+        // B-15：已关的门 3 个门板格仍 LowWall（nFlag=2 的 true 无法恢复）。
+        for (dx, dy) in [(0, -2), (1, -1), (1, -2)] {
+            assert_eq!(
+                w.maps[0].cell_attribute(5 + dx, 5 + dy),
+                Some(crate::map::CellAttribute::LowWall),
+                "B-15：门板格不能被破门恢复"
+            );
+        }
+
+        // 前置 B：门已开（Open 的最后 3 项把门板格置 LowWall）。
+        let (mut w2, _) = castle_world(110, 0, 10000, 0);
+        let open_events = w2.castles[0]
+            .defense_unit_mut(DefenseRole::MainDoor)
+            .unwrap()
+            .door_open();
+        let grid = &mut w2.maps[0];
+        let _ = apply_structure_events(grid, &open_events);
+        let _ = w2.tick();
+        for (dx, dy) in [(0, -2), (1, -1), (1, -2)] {
+            assert_eq!(
+                w2.maps[0].cell_attribute(5 + dx, 5 + dy),
+                Some(crate::map::CellAttribute::LowWall),
+                "B-15：已开门被打破后门板格仍 LowWall"
+            );
+        }
+    }
+
+    /// **C6 `wall_run_toggles_cell_and_digup`**：首 tick 置 `LowWall`、`Dir` 不变无 `RM_DIGUP`；
+    /// HP 2000 ⇒ `RM_DIGUP(2)`；HP=0 ⇒ 恢复事件 + `Dir=4`，但格子仍是 `LowWall`（B-15）。
+    ///
+    /// 牙：删死亡恢复事件 ⇒ 红；把 `n08 < 5` 改成 `< 3` ⇒ HP=0 的 `Dir=4` 帧丢失 ⇒ 红。
+    #[test]
+    fn wall_run_toggles_cell_and_digup() {
+        let (mut w, id) = castle_world(111, 4999, 5000, 0);
+        let rec = w.tick();
+        assert_eq!(rec.castle_structures.len(), 1);
+        assert_eq!(
+            rec.castle_structures[0].event,
+            StructureEvent::SetMapXyFlag {
+                x: 5,
+                y: 5,
+                walk: false
+            }
+        );
+        assert!(unit_of(&w).set_map_flaged);
+        assert_eq!(
+            w.maps[0].cell_attribute(5, 5),
+            Some(crate::map::CellAttribute::LowWall)
+        );
+        assert!(
+            !rec.castle_structures
+                .iter()
+                .any(|c| matches!(c.event, StructureEvent::RefDigUp { .. })),
+            "HP 4999/5000 ⇒ n08=0，Dir 已是 0 ⇒ 无 RM_DIGUP"
+        );
+
+        w.entities.get_mut(id).unwrap().hp = 2000;
+        let rec = w.tick();
+        assert!(
+            rec.castle_structures
+                .iter()
+                .any(|c| c.event == StructureEvent::RefDigUp { dir: 2, x: 5, y: 5 }),
+            "HP 2000/5000 ⇒ n08=2 ⇒ RM_DIGUP(2)"
+        );
+
+        w.entities.get_mut(id).unwrap().hp = 0;
+        let rec = w.tick();
+        let events: Vec<StructureEvent> = rec.castle_structures.iter().map(|c| c.event).collect();
+        assert_eq!(
+            events,
+            vec![
+                StructureEvent::SetMapXyFlag {
+                    x: 5,
+                    y: 5,
+                    walk: true
+                },
+                StructureEvent::RefDigUp { dir: 4, x: 5, y: 5 },
+            ],
+            "死亡：先恢复格（事件照发）再 RM_DIGUP(4)"
+        );
+        assert!(!unit_of(&w).set_map_flaged);
+        // B-15：`walk=true` 对已置 `LowWall` 的格恒无效 ⇒ 重放返回 0 changed。
+        let changed = apply_structure_events(&mut w.maps[0], &events);
+        assert_eq!(changed, 0, "B-15：LowWall 格无法被 walk=true 恢复");
+        assert_eq!(
+            w.maps[0].cell_attribute(5, 5),
+            Some(crate::map::CellAttribute::LowWall)
+        );
+    }
+
+    /// **C7 `door_run_turn_and_death_tick`**：未开门 + `Dir=5` ⇒ 一 tick 后 `Dir=0` + 1 帧
+    /// `RM_TURN(0)`；死亡后连续两 tick `DeathTick` 每次刷新为当前 `now`。
+    ///
+    /// 牙：每 tick 无条件发 `RM_TURN` ⇒ 第二 tick 帧数红；死亡不刷 `DeathTick` ⇒ 红。
+    #[test]
+    fn door_run_turn_and_death_tick() {
+        let (mut w, id) = castle_world(110, 9999, 10000, 5);
+        let rec = w.tick();
+        let turns: Vec<StructureEvent> = rec
+            .castle_structures
+            .iter()
+            .map(|c| c.event)
+            .filter(|e| matches!(e, StructureEvent::RefTurn { .. }))
+            .collect();
+        assert_eq!(turns, vec![StructureEvent::RefTurn { dir: 0, x: 5, y: 5 }]);
+        assert_eq!(unit_of(&w).dir, 0);
+        let msgs = w.take_monster_ref_msgs();
+        assert!(
+            msgs.iter()
+                .any(|m| m.ident == crate::monai::RM_TURN && m.w_param == 0),
+            "RM_TURN 必须入出帧队列"
+        );
+        // 第二 tick 不再发（Dir 已等于 n08）。
+        let rec2 = w.tick();
+        assert!(
+            !rec2
+                .castle_structures
+                .iter()
+                .any(|c| matches!(c.event, StructureEvent::RefTurn { .. })),
+            "每 tick 无条件 RM_TURN 是错的"
+        );
+
+        // 死亡：`DeathTick` 每 tick 刷新。
+        w.entities.get_mut(id).unwrap().hp = 0;
+        let r1 = w.tick();
+        let t1 = unit_of(&w).death_tick;
+        assert_eq!(t1, r1.clock_ms);
+        let r2 = w.tick();
+        let t2 = unit_of(&w).death_tick;
+        assert_eq!(t2, r2.clock_ms);
+        assert!(t2 > t1, "死亡且属城堡 ⇒ 每 tick 刷 DeathTick");
+    }
+
+    /// **C8 `castle_structures_do_not_wander`**：100 tick 无玩家 ⇒ 门/墙坐标、目标不变，
+    /// 且不消费 RNG（不进入 `monster_run`）。
+    ///
+    /// 牙：让 110/111 落到 `monster_run` ⇒ 位置/目标/RNG 流水红（当前 bug 的回归牙）。
+    #[test]
+    fn castle_structures_do_not_wander() {
+        let (mut w, door_id) = castle_world(110, 9999, 10000, 0);
+        let wall_id = {
+            let mut e = Entity::new(2, "wall", 8, 8);
+            e.race = 111;
+            e.hp = 4999;
+            e.max_hp = 5000;
+            let id = w.add_entity(e);
+            let unit = CastleUnit {
+                entity_id: Some(id),
+                x: 8,
+                y: 8,
+                hp: 4999,
+                max_hp: 5000,
+                ..CastleUnit::default()
+            };
+            w.castles[0].left_wall = Some(unit);
+            w.entities.get_mut(id).unwrap().castle_binding = Some(CastleBinding {
+                castle_index: 0,
+                role: DefenseRole::LeftWall,
+            });
+            id
+        };
+        w.rng = RandomNumber::with_seed(777);
+        for _ in 0..100 {
+            let _ = w.tick();
+        }
+        for (id, (x, y)) in [(door_id, (5, 5)), (wall_id, (8, 8))] {
+            let e = w.entities.get(id).unwrap();
+            assert_eq!((e.x, e.y), (x, y));
+            assert_eq!(e.ai.target_creature, None, "门/墙不索敌");
+        }
+        assert_eq!(
+            w.rng.random(),
+            RandomNumber::with_seed(777).random(),
+            "门/墙 Run 不消费 RNG（未落 monster_run）"
+        );
+    }
+
+    /// **C3 补充**：`bind_castle_defense` 的 `Dir` 同步——已开的门 = `Open()` 的 7；
+    /// **未开的门保留 `CreateMonster` 的 `RandomByte(8)`**（`Initialize` 不碰 `Dir`）；
+    /// 墙恒 0（`WallStructure.Initialize`）。
+    ///
+    /// 牙：把未开门也强写 0 ⇒ 第二条断言红。
+    #[test]
+    fn castle_binding_syncs_door_dir_only_when_opened() {
+        use crate::castle::DefenseSpawn;
+        let make = |opened: bool| {
+            let mut w = World::new(10, 10);
+            let mut e = Entity::new(1, "门", 5, 5);
+            e.race = 110;
+            e.ai.dir = 5; // ctor 的 RandomByte(8)
+            let id = w.add_entity(e);
+            let mut unit = CastleUnit {
+                entity_id: Some(id),
+                x: 5,
+                y: 5,
+                hp: 9999,
+                max_hp: 10000,
+                dir: if opened { 7 } else { 0 },
+                opened,
+                ..CastleUnit::default()
+            };
+            if opened {
+                let _ = unit.door_open();
+            }
+            let mut castle = UserCastle::new("沙巴克", CastleSiegeConfig::default());
+            castle.main_door = Some(unit);
+            w.castles.push(castle);
+            let spawn = DefenseSpawn {
+                role: DefenseRole::MainDoor,
+                actor_id: id,
+                map_name: "3".to_string(),
+                name: "沙巴克城门".to_string(),
+                x: 5,
+                y: 5,
+                hp: 9999,
+                castle_owner: true,
+                guard_direction: None,
+            };
+            w.bind_castle_defense(0, &spawn);
+            (w, id)
+        };
+        let (w_open, id_open) = make(true);
+        assert_eq!(w_open.entities.get(id_open).unwrap().ai.dir, 7);
+        assert_eq!(w_open.entities.get(id_open).unwrap().hp, 9999);
+        let (w_closed, id_closed) = make(false);
+        assert_eq!(
+            w_closed.entities.get(id_closed).unwrap().ai.dir,
+            5,
+            "未开的门保留 ctor 随机 Dir"
+        );
     }
 }

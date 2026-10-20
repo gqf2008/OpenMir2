@@ -13042,6 +13042,34 @@ fn drain_monster_ref_msgs(
         if m.self_only {
             continue;
         }
+        // **Lane B**：城堡门 `CastleDoor.Run` 的 `RM_TURN`（`CastleDoor.cs:93-101`）。
+        // 收件人支 = `PlayObject.Message.cs:1524-1560`：`SM_TURN` + 紧随 `SM_FEATURECHANGED`
+        // 两帧；`sMsg` 空 ⇒ `SM_TURN` 尾只有 `Encode(8B CharDesc)`（无名尾）。
+        if m.ident == mir2_world::monai::RM_TURN {
+            let Some(d) = displays.get(m.actor_id) else {
+                continue;
+            };
+            let mut d = d.clone();
+            d.dir = m.dir;
+            let frames =
+                downlink::turn_pair_nameless(m.actor_id, wire_coord(m.x), wire_coord(m.y), &d);
+            for target_id in &m.recipients {
+                let Some(t) = online.iter().find(|e| e.actor_id == *target_id) else {
+                    continue;
+                };
+                let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "城堡结构转向帧下行")
+                else {
+                    continue;
+                };
+                for body in &frames {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket: t.socket,
+                        body: body.clone(),
+                    });
+                }
+            }
+            continue;
+        }
         let body = match m.ident {
             mir2_world::monai::RM_HIT => smframe::sm_action_hit(
                 mir2_protocol::messages::SM_HIT,
@@ -14692,6 +14720,53 @@ fn sim_loop(
         ctor_ledger_m1.len(),
         enter_cfg.ctor_fold_plan.load_map_quest.len()
     );
+    // S3 后半段（第一格）：同屏 AOI 下行要用的展示表（`ActorId -> Dir/Light/Feature/…`）。
+    // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world`**。
+    // **Lane B**：提前到城堡块之前——门/墙/弓手由 `WorldMonsterSink` 登记展示层，
+    // 与后续商人/守卫/AOI 共用同一张表。
+    let mut displays = downlink::DisplayTable::new();
+    // **Lane B（城堡实体挂图）**：oracle `GameApp.cs:213` `CastleMgr.Initialize()` 的实体半
+    // （`GameApp.Initialize`：`LoadMapQuest` `:184` → **CastleMgr.Initialize `:213`** →
+    // `LoadMerchant` `:227`）。`CastleManager.Initialize` 在改 `ConfigDir="0"` **之前**就用
+    // ctor 的 `ConfigDir = Config.CastleDir` 初始化 ⇒ 部署实读 `Castle/Castle/SabukW.txt`，
+    // **不是**夹具 `Castle/0`。RNG 走同一条 `world.rng`（`mem::replace` 移出/还回）。
+    if let (Some(loader), Some(reg)) = (enter_cfg.loader.as_ref(), registry.as_ref()) {
+        let castle_dir = enter_cfg.guild_castle_cfg.castle_dir.clone();
+        match game_svr::castle::load_sabuk_specs(loader, &castle_dir) {
+            Ok(specs) => match mon_gen_host.as_mut() {
+                Some(host) => {
+                    let mut rng = std::mem::replace(
+                        &mut world.rng,
+                        mir2_shared::rng::RandomNumber::with_seed(0),
+                    );
+                    let report = game_svr::castle::initialize_castle(
+                        &mut world,
+                        reg,
+                        &enter_cfg.mon_gen.table,
+                        &mut host.state,
+                        &mut displays,
+                        &mut rng,
+                        &specs,
+                        game_svr::castle::siege_config_from(&enter_cfg.guild_castle_cfg),
+                    );
+                    world.rng = rng;
+                    glog!(
+                        "INF",
+                        "城堡实体挂图完成：成功 {} 个防御单元（oracle CastleMgr.Initialize，位于 LoadMapQuest 之后、LoadMerchant 之前）",
+                        report.spawned
+                    );
+                    for w in &report.warns {
+                        glog!("WRN", "城堡初始化告警：{w}");
+                    }
+                }
+                None => glog!(
+                    "WRN",
+                    "无 MonGen 刷怪宿主（无 Envir/MonGen.txt）⇒ 跳过城堡实体挂图（登记：oracle InitializeMonster 恒建线程表，部署件必有 MonGen.txt）"
+                ),
+            },
+            Err(e) => glog!("WRN", "{e} ⇒ 跳过城堡实体挂图（登记）"),
+        }
+    }
     // **M3⑤-实现 2 第①片**：`Envir/Merchant.txt` 装载 + O-1 FindMap 门 + O-2 `rename_rand`
     // （`LocalDB.cs:412` / `WorldServer.Merchant.cs:8-25`）。装载在起世界之后 ⇒ `rename_rand`
     // 走**同一条** `world.rng`（oracle `SystemShare.RandomNumber`）。`loader=None`（无 Envir）
@@ -14803,7 +14878,7 @@ fn sim_loop(
         std::collections::HashMap::new();
     // S3 后半段（第一格）：同屏 AOI 下行要用的展示表（`ActorId -> Dir/Light/Feature/…`）。
     // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world`**。
-    let mut displays = downlink::DisplayTable::new();
+    // **Lane B**：声明已提前到城堡块之前（门/墙/弓手在启动期登记展示层）。
     // **接线批 A**：`CM_PASSWORD` 的会话密码态（`PlayObject.StoragePwdState` + `ActionLocks`）。
     let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
         std::collections::HashMap::new();
@@ -46233,5 +46308,151 @@ mod tests {",
         );
         let st = world.entities.get(mid).unwrap().merchant.as_ref().unwrap();
         assert!(st.upgrade_weapon_list.is_empty(), "取回后记录移除");
+    }
+}
+
+/// **C9 `castle_spawn_startup_order_before_merchant`**（L 子项）：启动插入点的**源码序门**。
+///
+/// RNG 流水账本（16×6=96 抽）由 `game_svr::castle::tests` 钉死；本用例钉「城堡块确实位于
+/// `fold_ctor_draws_load_map_quest`（`GameApp.cs:184`）之后、`load_merchant_spawns`
+/// （`GameApp.cs:227`）之前」——即 oracle `CastleMgr.Initialize`（`:213`）的位置。
+///
+/// 牙：把城堡块移到 `load_merchant_spawns` 之后（或 fold 之前）⇒ 位置断言红。
+#[cfg(test)]
+mod castle_insertion_tests {
+    /// 剥掉 `//` 行注释（保留换行），避免文档里的同一标识符误命中（「守卫扫代码不扫注释」同口径）。
+    fn strip_line_comments(src: &str) -> String {
+        src.lines()
+            .map(|line| match line.find("//") {
+                Some(pos) => &line[..pos],
+                None => line,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn castle_startup_inserted_between_load_map_quest_and_merchant() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+            .expect("读 main.rs");
+        let code = strip_line_comments(&src);
+        // 只看生产段：切掉本测试模块自身（它的断言文本也含这些标识符）。
+        let code = match code.find("mod castle_insertion_tests") {
+            Some(pos) => &code[..pos],
+            None => code.as_str(),
+        };
+        let pos = |needle: &str| {
+            let mut it = code.match_indices(needle);
+            let first = it
+                .next()
+                .unwrap_or_else(|| panic!("缺少生产调用点 {needle}"))
+                .0;
+            assert!(
+                it.next().is_none(),
+                "{needle} 在剥注释后的源码里必须恰好出现一次"
+            );
+            first
+        };
+        let fold = pos("world.fold_ctor_draws_load_map_quest(");
+        let castle = pos("game_svr::castle::initialize_castle(");
+        let merchant = pos("game_svr::merchant::load_merchant_spawns(");
+        assert!(
+            fold < castle,
+            "城堡块必须在 LoadMapQuest fold 之后（oracle GameApp.cs:184 → :213）"
+        );
+        assert!(
+            castle < merchant,
+            "城堡块必须在 LoadMerchant 之前（oracle GameApp.cs:213 → :227）"
+        );
+    }
+}
+
+/// **C10（抽样帧）**：城堡门 `RM_TURN` ⇒ `SM_TURN` + `SM_FEATURECHANGED` 两帧
+/// （`PlayObject.Message.cs:1524-1560`）。
+///
+/// 牙：`RM_TURN` 不补 `SM_FEATURECHANGED` ⇒ 帧数断言红。
+#[cfg(test)]
+mod castle_frame_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use tokio::sync::mpsc;
+
+    #[test]
+    fn castle_rm_turn_emits_turn_and_featurechanged() {
+        use mir2_world::Entity;
+        let mut world = mir2_world::World::new(64, 64);
+        let mut p = Entity::new(0, "P".to_string(), 11, 10);
+        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let pid = world.add_entity(p);
+        let mut d = Entity::new(0, "沙巴克城门".to_string(), 10, 10);
+        d.race = 110;
+        let did = world.add_entity(d);
+        world.tick();
+
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            did,
+            downlink::monster_display(3, &mir2_data::models::MonsterInfo::default()),
+        );
+        world
+            .pending_monster_ref_msgs
+            .push(mir2_world::monai::MonsterRefMsg {
+                actor_id: did,
+                ident: mir2_world::monai::RM_TURN,
+                w_param: 3,
+                n_param1: 10,
+                n_param2: 10,
+                n_param3: 0,
+                target_x: 0,
+                target_y: 0,
+                dir: 3,
+                x: 10,
+                y: 10,
+                map_id: 0,
+                status: 0,
+                self_only: false,
+                recipients: vec![pid],
+            });
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".to_string(),
+            chr_name: "P".to_string(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 5,
+            actor_id: pid,
+        }];
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            frames.push(body);
+        }
+        assert_eq!(
+            frames.len(),
+            2,
+            "RM_TURN 必须出 SM_TURN + SM_FEATURECHANGED"
+        );
+        assert_eq!(
+            u16::from_le_bytes([frames[0][4], frames[0][5]]),
+            mir2_protocol::messages::SM_TURN
+        );
+        assert_eq!(
+            u16::from_le_bytes([frames[0][10], frames[0][11]]) & 0x00FF,
+            3,
+            "Series 低字节 = Dir"
+        );
+        assert_eq!(
+            i32::from_le_bytes([frames[0][0], frames[0][1], frames[0][2], frames[0][3]]),
+            did,
+            "Recog = ActorId"
+        );
+        assert_eq!(
+            u16::from_le_bytes([frames[1][4], frames[1][5]]),
+            mir2_protocol::messages::SM_FEATURECHANGED
+        );
     }
 }

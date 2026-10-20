@@ -415,6 +415,22 @@ pub struct StruckMsg {
     pub w_param: i32,
 }
 
+/// 实体 → 城堡防御单元的反向绑定（oracle `BaseObject.Castle = this` 的等价物）。
+///
+/// `UserCastle.Initialize` 成功造出的门 / 墙 / 弓手在 `World.castles[castle_index]` 里各有
+/// 一份 [`crate::castle::CastleUnit`]；本结构让每 tick 的 `Run`（race 110/111）与死亡路由
+/// 能从实体反查那一份状态机。
+///
+/// **守卫不绑**：oracle 守卫生成后只写 `WAbil.HP`、不设 `Castle`
+/// （`UserCastle.cs:202-206`）⇒ `castle_binding` 恒 `None`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CastleBinding {
+    /// `World.castles` 的下标。
+    pub castle_index: usize,
+    /// `MainDoor` / `LeftWall` / `CenterWall` / `RightWall` / `Archer(i)`。
+    pub role: crate::castle::DefenseRole,
+}
+
 /// `BaseObject` 中参与本骨架（tick / AOI / 移动）的字段子集。
 ///
 /// S1 起 `Entity` 直接就是 bevy 的**组件**（每个实体一个组件），由
@@ -489,6 +505,12 @@ pub struct Entity {
     /// C# `BaseObject.ReAliveTick`（`BaseObject.cs:224`）——复活冷却起点
     /// （`WorldServer.MonGen.cs:833/855` 置创建时刻、`:290` 在复活成功后刷新）。
     pub re_alive_tick: i64,
+    /// **Lane B（城堡实体挂图）**：本实体对应的城堡防御单元（`BaseObject.Castle != null` 的等价物）。
+    ///
+    /// 只有 `UserCastle.Initialize` 成功挂图的**门 / 墙 / 弓手**被绑定（守卫不绑，见
+    /// [`CastleBinding`]）。race 110/111 的 `Run` 与死亡路由靠它反查
+    /// `World.castles[castle_index]` 的状态机。
+    pub castle_binding: Option<CastleBinding>,
     /// C# `BaseObject.MonGen`（`BaseObject.cs` 属性）——本实体所属 `MonGenInfo` 在
     /// [`crate::mongen::MonGenState::entries`] 里的下标；`None` = oracle `MonGen == null`。
     pub mon_gen: Option<usize>,
@@ -924,6 +946,7 @@ impl Entity {
             can_re_alive: false,
             re_alive_tick: 0,
             mon_gen: None,
+            castle_binding: None,
             mon_gen_zen_time: 0,
             fixed_hide_mode: false,
             ob_mode: false,

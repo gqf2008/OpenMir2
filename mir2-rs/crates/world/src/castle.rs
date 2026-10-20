@@ -175,6 +175,13 @@ pub struct AttackerInfo {
 /// 方法（`CastleDoor.cs` / `WallStructure.cs`，⑧-8）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct CastleUnit {
+    /// 绑定到世界里的实体 `ActorId`（`Arc<ArcherUnit>.BaseObject.ActorId`）。
+    ///
+    /// `UserCastle.Initialize` 的 `RegenMonsterByName` 成功 ⇒ `Some(actor_id)`；配置存在但
+    /// 造怪失败（`nHP<=0` 跳过 / 怪物库无此名）⇒ `None`。门/墙的每 tick `Run` 与死亡路由
+    /// （`CastleDoor.Run`/`WallStructure.Run`/`CastleDoor.Die`）靠它把
+    /// `World.entities[actor_id]` 与城堡状态机接起来。
+    pub entity_id: Option<i32>,
     pub ghost: bool,
     pub death: bool,
     /// 城墙 `StoneMode`：非战时 `true`（不可破坏），战时 `false`。
@@ -670,6 +677,8 @@ pub struct CastleDefenseSpecs {
 pub struct DefenseCreature {
     /// 怪物模板的 `WAbil.MaxHP`。
     pub max_hp: i32,
+    /// `CreateMonster` 成功返回的 `cert.ActorId`（世界实体 id）。
+    pub actor_id: i32,
 }
 
 /// `Initialize` 里的防御单元角色（枚举顺序 = `RegenMonsterByName` 调用序）。
@@ -690,6 +699,8 @@ pub enum DefenseRole {
 pub struct DefenseSpawn {
     /// 角色（决定 oracle 的绑定分支）。
     pub role: DefenseRole,
+    /// 世界实体 `ActorId`（`RegenMonsterByName` 的返回句柄）。
+    pub actor_id: i32,
     /// `MapName`。
     pub map_name: String,
     /// `sName`。
@@ -743,6 +754,7 @@ fn regen_and_bind(
 ) -> Option<CastleUnit> {
     let creature = env.regen_monster_by_name(map_name, spec.x, spec.y, &spec.name)?;
     let mut unit = CastleUnit {
+        entity_id: Some(creature.actor_id),
         x: spec.x,
         y: spec.y,
         hp: i32::from(spec.hp),
@@ -751,6 +763,7 @@ fn regen_and_bind(
     };
     events.push(CastleEvent::SpawnDefenseUnit(DefenseSpawn {
         role,
+        actor_id: creature.actor_id,
         map_name: map_name.to_string(),
         name: spec.name.clone(),
         x: spec.x,
@@ -939,6 +952,31 @@ impl UserCastle {
             home_x: 644,
             home_y: 290,
             config,
+        }
+    }
+
+    /// 按 [`DefenseRole`] 取已绑定的门/墙/弓手/守卫（`Initialize` 成功者）。
+    #[must_use]
+    pub fn defense_unit(&self, role: DefenseRole) -> Option<&CastleUnit> {
+        match role {
+            DefenseRole::MainDoor => self.main_door.as_ref(),
+            DefenseRole::LeftWall => self.left_wall.as_ref(),
+            DefenseRole::CenterWall => self.center_wall.as_ref(),
+            DefenseRole::RightWall => self.right_wall.as_ref(),
+            DefenseRole::Archer(i) => self.archers.get(i).and_then(Option::as_ref),
+            DefenseRole::Guard(i) => self.guards.get(i).and_then(Option::as_ref),
+        }
+    }
+
+    /// [`UserCastle::defense_unit`] 的可写版（门/墙 `Run` 与死亡掩码在这里落状态）。
+    pub fn defense_unit_mut(&mut self, role: DefenseRole) -> Option<&mut CastleUnit> {
+        match role {
+            DefenseRole::MainDoor => self.main_door.as_mut(),
+            DefenseRole::LeftWall => self.left_wall.as_mut(),
+            DefenseRole::CenterWall => self.center_wall.as_mut(),
+            DefenseRole::RightWall => self.right_wall.as_mut(),
+            DefenseRole::Archer(i) => self.archers.get_mut(i).and_then(Option::as_mut),
+            DefenseRole::Guard(i) => self.guards.get_mut(i).and_then(Option::as_mut),
         }
     }
 
@@ -2584,7 +2622,11 @@ mod tests {
             self.creatures
                 .iter()
                 .find(|(n, _)| *n == name)
-                .map(|(_, hp)| DefenseCreature { max_hp: *hp })
+                .map(|(_, hp)| DefenseCreature {
+                    max_hp: *hp,
+                    // 记录式 env：actor id 取「本次调用序号」，供 C3 绑定断言。
+                    actor_id: i32::try_from(self.regen_calls.len()).unwrap_or(i32::MAX),
+                })
         }
         fn warn(&mut self, text: String) {
             self.warns.push(text);
@@ -2803,5 +2845,62 @@ mod tests {
             "[Error] UserCastle.Initialize MainDoor.UnitObj = nil"
         );
         assert!(c.main_door.is_none());
+    }
+
+    /// **C2 `castle_initialize_call_order_and_skip_counts`**：`Castle/0` 口径
+    /// （守卫 1..4 HP=0 跳过、5..12 缺模板）⇒ 24 次 Regen、16 个 `SpawnDefenseUnit`、8 条告警。
+    ///
+    /// 牙：去掉 `hp==0` 跳过 ⇒ 26/红；把守卫默认 2000 改 0 ⇒ 16/红；调换墙序 ⇒ 名字序红。
+    #[test]
+    fn castle_initialize_call_order_and_skip_counts() {
+        let mut specs = defense_specs();
+        for g in &mut specs.guards[..4] {
+            g.hp = 0;
+        }
+        let mut env = FakeEnv::full();
+        env.creatures.retain(|(n, _)| *n != "守卫");
+        let mut c = UserCastle::new("沙巴克", config());
+        let events = c.initialize(&specs, &mut env);
+
+        let names: Vec<&str> = env.regen_calls.iter().map(|r| r.3.as_str()).collect();
+        let mut want: Vec<&str> = vec!["MainDoor", "LeftWall", "CenterWall", "RightWall"];
+        want.extend(std::iter::repeat_n("弓箭手", 12));
+        want.extend(std::iter::repeat_n("守卫", 8));
+        assert_eq!(names, want, "调用序 = oracle（墙序 + 守卫 5..12）");
+        assert_eq!(env.regen_calls.len(), 24);
+        let sp = spawns(&events);
+        assert_eq!(sp.len(), 16);
+        assert_eq!(env.warns.len(), 8);
+        assert!(env
+            .warns
+            .iter()
+            .all(|w| w == "[错误信息] 城堡初始化守卫失败(检查怪物数据库里有没守卫怪物)"));
+        assert!(c.main_door.is_some() && c.left_wall.is_some());
+        assert!(c.archers.iter().all(Option::is_some));
+        assert!(c.guards.iter().all(Option::is_none));
+    }
+
+    /// **C3（绑定半）**：造怪句柄写回 `CastleUnit.entity_id` 与 `DefenseSpawn.actor_id`，
+    /// 且门/墙/弓手 `castle_owner=true`、守卫 `false`。
+    ///
+    /// 牙：`regen_and_bind` 不写 `entity_id` ⇒ 本用例红；把守卫 `castle_owner` 置 true ⇒ 红。
+    #[test]
+    fn castle_spawn_carries_actor_id_binding() {
+        let specs = defense_specs();
+        let mut env = FakeEnv::full();
+        let mut c = UserCastle::new("沙巴克", config());
+        let events = c.initialize(&specs, &mut env);
+        let sp = spawns(&events);
+        assert_eq!(sp.len(), 28);
+        for s in &sp {
+            assert!(s.actor_id > 0);
+            let unit = c.defense_unit(s.role).expect("unit bound");
+            assert_eq!(unit.entity_id, Some(s.actor_id));
+        }
+        assert_eq!(sp[0].role, DefenseRole::MainDoor);
+        assert_eq!(c.main_door.unwrap().entity_id, Some(sp[0].actor_id));
+        assert_eq!(c.archers[0].unwrap().entity_id, Some(sp[4].actor_id));
+        assert!(sp[..16].iter().all(|s| s.castle_owner));
+        assert!(sp[16..].iter().all(|s| !s.castle_owner));
     }
 }
