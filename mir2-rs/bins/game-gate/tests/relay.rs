@@ -1275,3 +1275,133 @@ async fn gm_stop_stops_assignment_but_keeps_existing_sessions() {
 
     gate.shutdown().await;
 }
+
+/// **audit #18 C1（进程级）**：`GM_CHECKCLIENT` 的 10s 门是严格 `>`——首个周期之前**不出现**
+/// 任何健康帧，周期到点才发（`TimedService.cs:69-88`）；帧形状仍是 20B 纯头。
+#[tokio::test]
+async fn gm_checkclient_waits_for_the_period_before_first_frame() {
+    let mut srv = FakeSvr::start().await;
+    let gate_port = support::next_port();
+    let gate = Gate::start_with_env(
+        "gg-ka-first",
+        srv.port,
+        gate_port,
+        &[("MIR2_GAME_GATE_KEEPALIVE_MS", "2000")],
+    )
+    .await;
+
+    // 周期 2000ms、轮询 10ms：前 500ms 内（从子进程启动算起）不得有健康帧。
+    let early = srv.recv_for(Duration::from_millis(500)).await;
+    assert!(
+        early
+            .iter()
+            .all(|(m, _)| m.ident != u16::from(grobal2::GM_CHECKCLIENT)),
+        "首个健康帧必须等满一个周期（严格 `>`），提前收到: {early:?}"
+    );
+    let (frame, body) = srv
+        .recv_until(|m| m.ident == u16::from(grobal2::GM_CHECKCLIENT))
+        .await
+        .expect("周期到点必须发 GM_CHECKCLIENT");
+    assert_eq!(frame.packet_code, grobal2::PacketCode);
+    assert_eq!(frame.socket, 0);
+    assert_eq!(frame.session_id, 0);
+    assert_eq!(frame.session_index, 0);
+    assert_eq!(frame.pack_length, 0);
+    assert!(body.is_empty(), "GM_CHECKCLIENT 是 20B 纯头");
+    gate.shutdown().await;
+}
+
+/// **audit #18 C3（进程级）**：15 天无上行的会话被清理（`ClientThread.ProcessIdleSession`）：
+/// 客户端 socket 被关（EOF），网关补发 `GM_CLOSE`。注入阈值 400ms / 扫描 100ms；
+/// 严格 `>` 意味着 250ms 时仍必须存活。
+#[tokio::test]
+async fn idle_session_without_traffic_is_closed_after_timeout() {
+    let mut srv = FakeSvr::start().await;
+    let gate_port = support::next_port();
+    let gate = Gate::start_with_env(
+        "gg-idle-close",
+        srv.port,
+        gate_port,
+        &[
+            ("MIR2_GAME_GATE_KEEPALIVE_MS", "60000"),
+            ("MIR2_GAME_GATE_SESSION_IDLE_MS", "400"),
+            ("MIR2_GAME_GATE_SESSION_SWEEP_MS", "100"),
+        ],
+    )
+    .await;
+    let mut client = gate.connect().await;
+    let _ = srv
+        .recv_until(|m| m.ident == u16::from(grobal2::GM_OPEN))
+        .await
+        .expect("GM_OPEN");
+
+    // 严格 `>`：400ms 阈值内（扫描粒度 100ms）不得清理。
+    assert_still_open(&mut client, Duration::from_millis(250)).await;
+
+    let mut buf = [0u8; 16];
+    let n = tokio::time::timeout(Duration::from_secs(3), client.read(&mut buf))
+        .await
+        .expect("空闲超时后必须关闭客户端 socket")
+        .expect("读客户端 socket 失败");
+    assert_eq!(n, 0, "空闲清理必须关 socket（客户端读到 EOF）");
+    srv.recv_until(|m| m.ident == u16::from(grobal2::GM_CLOSE))
+        .await
+        .expect("空闲清理后网关必须补发 GM_CLOSE（照断开回调）");
+    gate.shutdown().await;
+}
+
+/// **audit #18 C4（存活时零帧）**：有上行（1 字节心跳/短帧）的会话不进入空闲清理；
+/// 存活期间空闲面**不产生任何下行帧**（健康帧周期注入 60s，窗口内也不会出现）。
+/// 停止上行后再超时会被清理 ⇒ 证明 `ReceiveTick` 确实随上行刷新，而不是永不清理。
+#[tokio::test]
+async fn live_session_with_traffic_stays_open_and_emits_no_frames() {
+    let mut srv = FakeSvr::start().await;
+    let gate_port = support::next_port();
+    let gate = Gate::start_with_env(
+        "gg-idle-live",
+        srv.port,
+        gate_port,
+        &[
+            ("MIR2_GAME_GATE_KEEPALIVE_MS", "60000"),
+            ("MIR2_GAME_GATE_SESSION_IDLE_MS", "400"),
+            ("MIR2_GAME_GATE_SESSION_SWEEP_MS", "100"),
+        ],
+    )
+    .await;
+    let mut client = gate.connect().await;
+    let _ = srv
+        .recv_until(|m| m.ident == u16::from(grobal2::GM_OPEN))
+        .await
+        .expect("GM_OPEN");
+
+    // ~720ms 持续上行（每 90ms 一帧）：远过 400ms 的注入阈值。
+    for _ in 0..8 {
+        client.write_all(&[0u8]).await.unwrap();
+        client.flush().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(90)).await;
+    }
+    // 停止上行后的 200ms（< 400ms 阈值）内仍不得有下行帧/关闭。
+    let frames = srv.recv_for(Duration::from_millis(200)).await;
+    assert!(
+        frames
+            .iter()
+            .all(|(m, _)| m.ident != u16::from(grobal2::GM_CLOSE)),
+        "存活会话不得被空闲清理（也不得有其它下行）: {frames:?}"
+    );
+    assert!(
+        frames.is_empty(),
+        "存活期间空闲面必须零帧（健康帧周期 60s）: {frames:?}"
+    );
+
+    // 停止上行：阈值后必须清理（牙：把 last_recv 刷新删掉，上面的存活断言会先红）。
+    let mut buf = [0u8; 16];
+    let n = tokio::time::timeout(Duration::from_secs(3), client.read(&mut buf))
+        .await
+        .expect("停止上行后必须触发空闲清理")
+        .expect("读客户端 socket 失败");
+    assert_eq!(n, 0, "停止上行后应读 EOF");
+    srv.recv_until(|m| m.ident == u16::from(grobal2::GM_CLOSE))
+        .await
+        .expect("空闲清理后必须补发 GM_CLOSE");
+    gate.shutdown().await;
+}

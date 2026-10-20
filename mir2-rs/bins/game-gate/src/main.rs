@@ -30,8 +30,15 @@
 //! `GM_STOP` 停止分配（`ClientThread.cs:431-459`、`:265-300`）；会话槽位按连接生命周期回收
 //! （`ServerService.cs:131-209`），槽满时照 oracle 返回最后一个非空槽。
 //!
+//! **已接线（audit #18，2026-10-20）**：`ClientThread.CheckConnectedState` 的完整状态机
+//! （`ClientThread.cs:431-474`：`GateReady` 每 10s 发 `GM_CHECKCLIENT` 并清失败计数；
+//! `CheckServerTimeOut` 的 3min 严格 `>` 边界、失败标记/计数/断链/日志；`RunningState.Stop`
+//! 的 10min 维护窗口）与 `TimedService.ClearIdleSession` + `ClientThread.ProcessIdleSession`
+//! 的 15 天会话清理（硬编码 `GateShare.SessionTimeOutTime`）。
+//!
 //! **本切片不做**（登记在协议梳理 §6，切片 2/3）：`Filters/*`、
-//! `Auth/DynamicAuthenticator`(OTP)、`ClientTimeOutTime` 空闲回收、下行断线重连（与 SelGate 同类缺口）。
+//! `Auth/DynamicAuthenticator`(OTP)、`ClientTimeOutTime` 空闲回收、下行断线重连（与 SelGate 同类缺口；
+//! `CheckConnectedState` 里的 `Start()` 只照抄日志/计数，见白名单 T-118）。
 //!
 //! **失败要响**：缺配置键、绑不上端口、连不上 GameSvr —— 明确报错并非零退出。
 
@@ -44,6 +51,7 @@ mod login;
 mod rules;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -53,7 +61,7 @@ use mir2_protocol::messages::grobal2;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, watch, Mutex};
 
 /// C# `GateShare.CommandFixedLength`（`GateShare.cs:18`）：命令帧最小长度。
 const COMMAND_FIXED_LENGTH: usize = 16;
@@ -69,6 +77,22 @@ const KEEPALIVE_MS: u64 = 10_000;
 const KEEPALIVE_ENV: &str = "MIR2_GAME_GATE_KEEPALIVE_MS";
 /// `ClientThread.CheckConnectedState`（`ClientThread.cs:431-441`）：GM_STOP 后 60*10000ms 内不重连。
 const MAINTENANCE_MS: i64 = 600_000;
+/// C# `GateShare.CheckServerTimeOutTime`（`GateShare.cs:22`）：网关↔GameSvr 3min 无响应判定。
+const CHECK_SERVER_TIMEOUT_MS: i64 = 3 * 60 * 1000;
+/// 测试注入：3min 无响应阈值（生产不设该变量）。
+const CHECK_SERVER_TIMEOUT_ENV: &str = "MIR2_GAME_GATE_CHECK_SERVER_TIMEOUT_MS";
+/// C# `GateShare.SessionTimeOutTime`（`GateShare.cs:26`）：会话 15 天无上行即清理。
+const SESSION_IDLE_MS: i64 = 15 * 24 * 60 * 60 * 1000;
+/// 测试注入：会话空闲阈值（生产不设该变量）。
+const SESSION_IDLE_ENV: &str = "MIR2_GAME_GATE_SESSION_IDLE_MS";
+/// C# `TimedService.ClearIdleSession`（`TimedService.cs:151-173`）：每 120000ms 扫一次。
+const SESSION_SWEEP_MS: u64 = 120_000;
+/// 测试注入：空闲会话扫描周期（生产不设该变量）。
+const SESSION_SWEEP_ENV: &str = "MIR2_GAME_GATE_SESSION_SWEEP_MS";
+/// C# `TimedService` 的 `PeriodicTimer(TimeSpan.FromMilliseconds(10))`（`TimedService.cs:30`）。
+const TIMED_POLL_MS: u64 = 10;
+/// C# `ushort.MaxValue`：`CheckServerFailCount` 的比较上界（`ClientThread.cs:453/467`）。
+const U16_MAX: u32 = 65_535;
 /// 单次 read 的缓冲：客户端帧的正常上界远小于它（`NomClientPacketSize=400`；登录帧 <254）。
 const MAX_READ: usize = 64 * 1024;
 
@@ -91,6 +115,17 @@ macro_rules! glog {
 /// 会话表：`SessionId → 该客户端连接的发送端`（一条网关→服务器连接一张表）。
 type Sessions = Arc<Mutex<HashMap<u16, mpsc::UnboundedSender<Vec<u8>>>>>;
 
+/// 空闲清理登记项（oracle `SessionInfo` 的 `Socket`/`ReceiveTick` 在 `SessionArray` 里的那一格）：
+/// 最近一次上行时刻 + 空闲关闭信号。关掉读循环即等价于 `Socket.Close()`（`ClientThread.cs:417-424`）。
+struct IdleEntry {
+    last_recv_ms: Arc<AtomicI64>,
+    close: watch::Sender<bool>,
+}
+
+/// `ClientThread.SessionArray` 里的非空槽（只登记**占槽**的会话，槽满复用分支不入表，
+/// 与 oracle 的 `SessionArray` 口径一致）。
+type IdleSessions = Arc<Mutex<HashMap<u16, IdleEntry>>>;
+
 /// 会话在**引擎侧的索引**（`ClientSession.cs:649` 的 `SendMsg.SessionIndex = SvrListIdx`）：
 /// 由服务端用 `GM_SERVERUSERINDEX` 下发（`ClientThread.cs:272-275` 存进会话的 `SvrListIdx`），
 /// 之后该会话发往 GameSvr 的每一帧都要带上它（未收到时为 0）。
@@ -104,21 +139,34 @@ enum RunningState {
     Stop,
 }
 
-/// 网关→GameSvr 链路状态（`ClientThread` 的 `GateReady` / `CheckServerTick` / `RunningState`）。
+/// 网关→GameSvr 链路状态（`ClientThread` 的 `GateReady` / `CheckServerFail` /
+/// `CheckServerFailCount` / `CheckServerTick` / `RunningState`）。
 struct GateState {
     running: RunningState,
     /// `GateReady`：连接建立后才发 `GM_CHECKCLIENT`（`ClientThread.cs:431-459`）。
     gate_ready: bool,
+    /// `CheckServerFail`：连接失败/断开后置真，`GM_CHECKSERVER` 清假（`ClientThread.cs:155-191/268-271`）。
+    check_server_fail: bool,
+    /// `CheckServerFailCount`（oracle 是 `int`；比较上界为 `ushort.MaxValue`）。
+    check_server_fail_count: u32,
     /// `CheckServerTick`：最近一次连接成功/收到 `GM_CHECKSERVER` 的时刻。
     last_server_tick: i64,
 }
 
-/// 心跳一次 tick 的处置（状态判定与 I/O 分开，便于把 GM_STOP 语义读清楚）。
+/// 一次 10s tick 的处置（`ClientThread.CheckConnectedState` 的状态判定与 I/O 分开，
+/// 便于用注入时钟逐条钉住边界）。
+#[derive(Debug, PartialEq, Eq)]
 enum KeepaliveTick {
-    /// 发 `GM_CHECKCLIENT`。
+    /// `GateReady` ⇒ 发 `GM_CHECKCLIENT`，并把 `CheckServerFailCount` 清零。
     Send,
-    /// GM_STOP 后的维护窗口已过（oracle 在此调用 `Start()`；本网关无下行重连，只照抄日志）。
+    /// GM_STOP 后的 10min 维护窗口已过（oracle 在此调用 `Start()`；本网关无下行重连，只照抄日志）。
     Maintenance,
+    /// `CheckServerFail` ⇒ `Start()` 重连尝试（本线只照抄失败日志与计数，见 T-118）。
+    RetryConnect { fail_count: u32 },
+    /// 失败计数达到 `ushort.MaxValue` 之后（`ClientThread.cs:455-459`）。
+    MaxRetries,
+    /// `CheckServerTimeOut()` 首判 ⇒ 置 `CheckServerFail`、`Stop()`、计数、日志（`:463-474`）。
+    TimeoutStop { fail_count: u32 },
     /// 不动作。
     Idle,
 }
@@ -214,10 +262,30 @@ async fn main() -> Result<()> {
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|&n| n > 0)
         .unwrap_or(KEEPALIVE_MS);
-    if max_session != MAX_SESSION || keepalive_ms != KEEPALIVE_MS {
+    let check_server_timeout_ms = std::env::var(CHECK_SERVER_TIMEOUT_ENV)
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(CHECK_SERVER_TIMEOUT_MS);
+    let session_idle_ms = std::env::var(SESSION_IDLE_ENV)
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(SESSION_IDLE_MS);
+    let session_sweep_ms = std::env::var(SESSION_SWEEP_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(SESSION_SWEEP_MS);
+    if max_session != MAX_SESSION
+        || keepalive_ms != KEEPALIVE_MS
+        || check_server_timeout_ms != CHECK_SERVER_TIMEOUT_MS
+        || session_idle_ms != SESSION_IDLE_MS
+        || session_sweep_ms != SESSION_SWEEP_MS
+    {
         glog!(
             "INF",
-            "测试注入：MaxSession={max_session} KeepAlive={keepalive_ms}ms"
+            "测试注入：MaxSession={max_session} KeepAlive={keepalive_ms}ms CheckServerTimeOut={check_server_timeout_ms}ms SessionIdle={session_idle_ms}ms Sweep={session_sweep_ms}ms"
         );
     }
     glog!(
@@ -234,9 +302,13 @@ async fn main() -> Result<()> {
         let indexes: SessionIndexes = Arc::new(Mutex::new(HashMap::new()));
         // 会话槽表（`ClientThread.SessionArray`）与本线引擎状态（`GateReady`/`RunningState`）。
         let slots = Arc::new(StdMutex::new(SessionSlots::new(max_session)));
+        // 空闲清理登记（`SessionArray` 的非空槽 + `ReceiveTick`）。
+        let idle: IdleSessions = Arc::new(Mutex::new(HashMap::new()));
         let state = Arc::new(StdMutex::new(GateState {
             running: RunningState::Waiting,
             gate_ready: false,
+            check_server_fail: false,
+            check_server_fail_count: 0,
             last_server_tick: now_ms(),
         }));
         // 下游连接：连不上 GameSvr 即失败退出（M1④）
@@ -283,6 +355,18 @@ async fn main() -> Result<()> {
                 keep_addr,
                 ep.srv_port,
                 Duration::from_millis(keepalive_ms),
+                check_server_timeout_ms,
+            )
+            .await;
+            Ok::<(), anyhow::Error>(())
+        }));
+        // `TimedService.ClearIdleSession`（120s 扫描 / 15 天阈值）在本线独立任务里跑。
+        let sweep_idle = Arc::clone(&idle);
+        tasks.push(tokio::spawn(async move {
+            session_sweep_loop(
+                sweep_idle,
+                Duration::from_millis(session_sweep_ms),
+                session_idle_ms,
             )
             .await;
             Ok::<(), anyhow::Error>(())
@@ -307,6 +391,7 @@ async fn main() -> Result<()> {
             service_id: u8::try_from(i).unwrap_or(0),
             sessions,
             indexes,
+            idle,
             down_tx,
             gate_rules: gate_rules.clone(),
             nom_client_packet_size: cfg.nom_client_packet_size,
@@ -334,6 +419,8 @@ struct GateCtx {
     sessions: Sessions,
     /// 本线会话→引擎侧索引（`SvrListIdx`）。
     indexes: SessionIndexes,
+    /// 空闲清理登记（`SessionArray` 的非空槽）。
+    idle: IdleSessions,
     /// 本线到 GameSvr 的发送端。
     down_tx: Arc<Mutex<OwnedWriteHalf>>,
     /// 本线生效的网关规则（速度/间隔）。
@@ -436,6 +523,10 @@ async fn client_loop(
     let _slot_guard = SlotGuard { slots, sid };
     let (mut rd, mut wr) = sock.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    // C# `SessionInfo.ReceiveTick`（`ClientSession.ProcessSessionPacket` 首行刷新）。
+    let last_recv_ms = Arc::new(AtomicI64::new(now_ms()));
+    // `ProcessIdleSession` 的 `Socket.Close()` 等价物：唤醒读循环 ⇒ 退出时关 socket、发 `GM_CLOSE`。
+    let (close_tx, mut close_rx) = watch::channel(false);
     // 槽满复用时，新会话在 oracle 里绑的是**宿主的** `SessionInfo`：下行仍经宿主的
     // `ConnectionId` 发出（`ClientSession.cs:908`）。宿主已断开（槽已释放）⇒ oracle 的
     // `Session.Socket == null` 静默丢弃；这里不登记新键，让 `server_loop` 走
@@ -446,6 +537,16 @@ async fn client_loop(
     };
     if let Some(route_tx) = route_tx {
         ctx.sessions.lock().await.insert(sid, route_tx);
+    }
+    // 只有**占槽**的会话进入 `SessionArray` 的空闲清理面（槽满复用分支不新增 SessionInfo）。
+    if donor.is_none() {
+        ctx.idle.lock().await.insert(
+            sid,
+            IdleEntry {
+                last_recv_ms: Arc::clone(&last_recv_ms),
+                close: close_tx.clone(),
+            },
+        );
     }
     // 每会话的规则状态：聊天计时 + 三条速度规则的计时 + 延时消息队列
     // （C# `ClientSession` 里的 `gameSpeed` / `SayMsgTick` / `MsgList`）。
@@ -485,10 +586,16 @@ async fn client_loop(
     let mut logged_in = false;
     let mut closed = Ok(());
     loop {
-        let n = match rd.read(&mut buf).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => n,
+        let n = tokio::select! {
+            // 空闲超时：oracle `ProcessIdleSession` 直接 `Socket.Close()`。
+            _ = close_rx.changed() => break,
+            read = rd.read(&mut buf) => match read {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            },
         };
+        // C# `ClientSession.ProcessSessionPacket` 第一行：收到任何上行（含心跳/无效帧）都刷新。
+        last_recv_ms.store(now_ms(), Ordering::Relaxed);
         match handle_frame(
             &buf[..n],
             logged_in,
@@ -519,6 +626,7 @@ async fn client_loop(
     // 离开：GM_CLOSE(session_id=0, socket=handle)（实机取证确认）
     ctx.sessions.lock().await.remove(&sid);
     ctx.indexes.lock().await.remove(&sid);
+    ctx.idle.lock().await.remove(&sid);
     let leave = ServerMessage {
         packet_code: grobal2::PacketCode,
         socket: handle,
@@ -750,7 +858,9 @@ async fn server_loop(
         let mut head = [0u8; ServerMessage::SIZE];
         if rd.read_exact(&mut head).await.is_err() {
             if let Ok(mut st) = state.lock() {
-                st.gate_ready = false; // `ClientThread.ClientSocketDisconnect`：GateReady=false
+                // `ClientThread.ClientSocketDisconnect`：GateReady=false; CheckServerFail=true。
+                st.gate_ready = false;
+                st.check_server_fail = true;
             }
             glog!("ERR", "游戏服务连接断开，网关停止接收。");
             return Ok(());
@@ -763,6 +873,7 @@ async fn server_loop(
         if body_len > 0 && rd.read_exact(&mut body).await.is_err() {
             if let Ok(mut st) = state.lock() {
                 st.gate_ready = false;
+                st.check_server_fail = true;
             }
             glog!("ERR", "读取游戏服务载荷失败。");
             return Ok(());
@@ -790,6 +901,7 @@ async fn server_loop(
             grobal2::GM_CHECKSERVER => {
                 // `ClientThread.cs:268-271`：`CheckServerFail=false; CheckServerTick=now`。
                 if let Ok(mut st) = state.lock() {
+                    st.check_server_fail = false;
                     st.last_server_tick = now_ms();
                 }
             }
@@ -842,31 +954,73 @@ async fn server_loop(
     }
 }
 
-/// GameGate→GameSvr 心跳（`TimedService.cs:69-88` + `ClientThread.CheckConnectedState` `:431-459`）：
-/// 每个周期发一帧 `GM_CHECKCLIENT`；`GM_STOP` 后停发，只有维护窗口过后照抄一条日志
-/// （下行重连不在本片范围，见模块文档）。
+/// `TimedService.KeepAlive`（`TimedService.cs:69-88`）的 10s 门：严格 `>`。
+fn keepalive_due(now: i64, last_check: i64, period_ms: i64) -> bool {
+    now - last_check > period_ms
+}
+
+/// `ClientThread.CheckConnectedState`（`ClientThread.cs:431-474`）的完整状态机：
+/// 判定 + 计数变更 + 选动作，I/O 由调用方做。严格按 oracle 的分支顺序。
+fn connected_state_action(state: &mut GateState, now: i64, timeout_ms: i64) -> KeepaliveTick {
+    if state.running == RunningState::Stop {
+        // 停止服务后暂时停止心跳检查；`> 60 * 10000` 才 `Start()`。
+        if now - state.last_server_tick > MAINTENANCE_MS {
+            return KeepaliveTick::Maintenance;
+        }
+        return KeepaliveTick::Idle;
+    }
+    if state.gate_ready {
+        // 先发健康帧、再把失败计数清零（oracle `:443-448`）。
+        state.check_server_fail_count = 0;
+        return KeepaliveTick::Send;
+    }
+    if state.check_server_fail && state.check_server_fail_count <= U16_MAX {
+        // `_ = Start(); CheckServerFailCount++; log(新计数)`（`:449-455`）。
+        state.check_server_fail_count += 1;
+        return KeepaliveTick::RetryConnect {
+            fail_count: state.check_server_fail_count,
+        };
+    }
+    if state.check_server_fail_count >= U16_MAX {
+        return KeepaliveTick::MaxRetries;
+    }
+    // `CheckServerTimeOut()`（`:463-472`）：严格 `>`；触发后 `CheckServerFail=true; Stop(); count++`。
+    if now - state.last_server_tick > timeout_ms && state.check_server_fail_count <= U16_MAX {
+        state.check_server_fail = true;
+        state.check_server_fail_count += 1;
+        return KeepaliveTick::TimeoutStop {
+            fail_count: state.check_server_fail_count,
+        };
+    }
+    KeepaliveTick::Idle
+}
+
+/// GameGate→GameSvr 心跳/超时（`TimedService.cs:69-88` + `ClientThread.CheckConnectedState` `:431-474`）。
+///
+/// 节奏照 oracle：`PeriodicTimer(10ms)` 每 10ms 看一次，`now - CheckServerConnectTick > period`
+/// 才跑一轮判定并把 `CheckServerConnectTick` 置为当前（严格 `>`，首个周期之前不发帧）。
 async fn keepalive_loop(
     down_tx: Arc<Mutex<OwnedWriteHalf>>,
     state: Arc<StdMutex<GateState>>,
     srv_addr: String,
     srv_port: u16,
     period: Duration,
+    timeout_ms: i64,
 ) {
+    let period_ms = i64::try_from(period.as_millis()).unwrap_or(i64::MAX);
+    let mut last_check = now_ms();
     loop {
-        tokio::time::sleep(period).await;
+        tokio::time::sleep(Duration::from_millis(TIMED_POLL_MS)).await;
         let now = now_ms();
-        let tick = match state.lock() {
-            Ok(st) if st.running == RunningState::Stop => {
-                if now - st.last_server_tick > MAINTENANCE_MS {
-                    KeepaliveTick::Maintenance
-                } else {
-                    KeepaliveTick::Idle
-                }
-            }
-            Ok(st) if st.gate_ready => KeepaliveTick::Send,
-            _ => KeepaliveTick::Idle,
+        if !keepalive_due(now, last_check, period_ms) {
+            continue;
+        }
+        last_check = now;
+        let action = match state.lock() {
+            Ok(mut st) => connected_state_action(&mut st, now, timeout_ms),
+            Err(_) => continue,
         };
-        match tick {
+        match action {
             KeepaliveTick::Send => {
                 // `SendServerMsg(GM_CHECKCLIENT, 0, 0, 0, "", 0)`：20B 头，其余字段全 0。
                 let head = ServerMessage {
@@ -878,8 +1032,10 @@ async fn keepalive_loop(
                     pack_length: 0,
                 };
                 if send_internal(&down_tx, head, &[]).await.is_err() {
+                    // 写失败等价于 oracle 的连接断开回调：GateReady=false; CheckServerFail=true。
                     if let Ok(mut st) = state.lock() {
                         st.gate_ready = false;
+                        st.check_server_fail = true;
                     }
                     glog!("WRN", "游戏服务连接不可用，停止心跳。");
                 }
@@ -888,8 +1044,58 @@ async fn keepalive_loop(
                 "DBG",
                 "游戏引擎维护时间结束,重新连接游戏引擎[{srv_addr}:{srv_port}]."
             ),
+            KeepaliveTick::RetryConnect { fail_count } => {
+                // 偏差 T-118：oracle 在此 `Start()` 重连；本线无下行重连，只照抄日志与计数。
+                glog!(
+                    "DBG",
+                    "链接服务器[{srv_addr}:{srv_port}] 失败次数[{fail_count}]"
+                );
+            }
+            KeepaliveTick::MaxRetries => glog!(
+                "DBG",
+                "超过最大重试次数，请重启程序后再次确认链接是否正常。"
+            ),
+            KeepaliveTick::TimeoutStop { fail_count } => {
+                // `Stop()`：oracle 关整条网关→GameSvr socket；这里关写半端，读循环随之退出。
+                let mut w = down_tx.lock().await;
+                let _ = w.shutdown().await;
+                drop(w);
+                glog!(
+                    "DBG",
+                    "服务器[{srv_addr}:{srv_port}]长时间没有响应,断开链接.失败次数:[{fail_count}]"
+                );
+            }
             KeepaliveTick::Idle => {}
         }
+    }
+}
+
+/// `ClientThread.ProcessIdleSession`（`ClientThread.cs:410-427`）的判定：严格 `>`。
+fn session_idle_expired(now: i64, last_recv: i64, timeout_ms: i64) -> bool {
+    now - last_recv > timeout_ms
+}
+
+/// `TimedService.ClearIdleSession`（`TimedService.cs:151-173`）：每 `sweep` 扫一遍
+/// `SessionArray` 的非空槽，超时者关客户端 socket（读循环退出 ⇒ 发 `GM_CLOSE`）。
+async fn session_sweep_loop(idle: IdleSessions, sweep: Duration, idle_ms: i64) {
+    loop {
+        tokio::time::sleep(sweep).await;
+        let now = now_ms();
+        let stale: Vec<watch::Sender<bool>> = {
+            let guard = idle.lock().await;
+            guard
+                .values()
+                .filter(|entry| {
+                    session_idle_expired(now, entry.last_recv_ms.load(Ordering::Relaxed), idle_ms)
+                })
+                .map(|entry| entry.close.clone())
+                .collect()
+        };
+        for close in &stale {
+            let _ = close.send(true);
+        }
+        // oracle 在清完整轮后打 Debug（没有任何会话也打）。
+        glog!("DBG", "清理空闲或无效客户端会话...");
     }
 }
 
@@ -1140,6 +1346,7 @@ mod tests {
             service_id: 0,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             indexes: Arc::new(Mutex::new(HashMap::new())),
+            idle: Arc::new(Mutex::new(HashMap::new())),
             down_tx: Arc::new(Mutex::new(wr)),
             gate_rules: gate_rules(),
             nom_client_packet_size: 400,
@@ -1199,6 +1406,138 @@ mod tests {
         // 回收必须按宿主匹配：槽满分支的新会话从未入槽，断开它不得误清宿主槽。
         slots.release(33);
         assert_eq!(slots.active(), 2, "33 从未入槽，release 不得清掉宿主槽");
+    }
+
+    // ------------------------------------------------------------------
+    // audit #18：GameGate↔GameSvr 保活/超时（tier=R）的构造级判据
+    // ------------------------------------------------------------------
+
+    fn link_state() -> GateState {
+        GateState {
+            running: RunningState::Running,
+            gate_ready: false,
+            check_server_fail: false,
+            check_server_fail_count: 0,
+            last_server_tick: 1_000,
+        }
+    }
+
+    /// C1：`TimedService.KeepAlive` 的 10s 门是严格 `>`（`TimedService.cs:71`）。
+    #[test]
+    fn keepalive_period_is_strictly_greater() {
+        assert!(!keepalive_due(10_000, 0, 10_000), "恰好 10000ms 不得触发");
+        assert!(keepalive_due(10_001, 0, 10_000), "10001ms 必须触发");
+        assert_eq!(KEEPALIVE_MS, 10_000);
+    }
+
+    /// C2：`CheckServerTimeOut` 的 3min 边界是严格 `>`，触发即
+    /// `CheckServerFail=true` + `Stop()`(动作) + 计数 +1（`ClientThread.cs:463-472`）。
+    #[test]
+    fn check_server_timeout_boundary_marks_fail_and_counts() {
+        assert_eq!(CHECK_SERVER_TIMEOUT_MS, 3 * 60 * 1000);
+        let mut st = link_state();
+        assert_eq!(
+            connected_state_action(&mut st, 1_000 + 180_000, CHECK_SERVER_TIMEOUT_MS),
+            KeepaliveTick::Idle,
+            "恰好 3min 不得超时（oracle 是 `>`）"
+        );
+        assert!(!st.check_server_fail);
+        assert_eq!(st.check_server_fail_count, 0);
+
+        assert_eq!(
+            connected_state_action(&mut st, 1_000 + 180_001, CHECK_SERVER_TIMEOUT_MS),
+            KeepaliveTick::TimeoutStop { fail_count: 1 },
+            "3min+1ms 必须走 CheckServerTimeOut"
+        );
+        assert!(st.check_server_fail, "超时后 CheckServerFail 必须置真");
+        assert_eq!(st.check_server_fail_count, 1);
+    }
+
+    /// C5：超时后的动作/顺序——失败计数逐 tick +1，到 `ushort.MaxValue` 的下一轮转
+    /// `MaxRetries`（`ClientThread.cs:449-459`）。
+    #[test]
+    fn timeout_then_retry_until_max_retries() {
+        let mut st = link_state();
+        assert_eq!(
+            connected_state_action(&mut st, 181_001, CHECK_SERVER_TIMEOUT_MS),
+            KeepaliveTick::TimeoutStop { fail_count: 1 }
+        );
+        for expected in 2..=U16_MAX {
+            assert_eq!(
+                connected_state_action(&mut st, 181_010, CHECK_SERVER_TIMEOUT_MS),
+                KeepaliveTick::RetryConnect {
+                    fail_count: expected
+                },
+                "CheckServerFail 分支每 tick 计数 +1"
+            );
+        }
+        assert_eq!(
+            connected_state_action(&mut st, 181_010, CHECK_SERVER_TIMEOUT_MS),
+            KeepaliveTick::RetryConnect { fail_count: 65_536 },
+            "65535 <= ushort.MaxValue 仍走重连分支"
+        );
+        assert_eq!(
+            connected_state_action(&mut st, 181_010, CHECK_SERVER_TIMEOUT_MS),
+            KeepaliveTick::MaxRetries
+        );
+        assert_eq!(U16_MAX, u32::from(u16::MAX));
+    }
+
+    /// C4：`GateReady` 时只发健康帧并清零计数；GM_STOP 后停发，10min 维护窗口严格 `>`。
+    #[test]
+    fn gate_ready_sends_and_stop_uses_maintenance_window() {
+        let mut st = link_state();
+        st.gate_ready = true;
+        st.check_server_fail_count = 42;
+        assert_eq!(
+            connected_state_action(&mut st, 200_000, CHECK_SERVER_TIMEOUT_MS),
+            KeepaliveTick::Send
+        );
+        assert_eq!(st.check_server_fail_count, 0, "就绪态必须清零失败计数");
+
+        let mut stopped = link_state();
+        stopped.running = RunningState::Stop;
+        assert_eq!(
+            connected_state_action(
+                &mut stopped,
+                1_000 + MAINTENANCE_MS,
+                CHECK_SERVER_TIMEOUT_MS
+            ),
+            KeepaliveTick::Idle,
+            "恰好 10min 不得重连"
+        );
+        assert_eq!(
+            connected_state_action(
+                &mut stopped,
+                1_000 + MAINTENANCE_MS + 1,
+                CHECK_SERVER_TIMEOUT_MS
+            ),
+            KeepaliveTick::Maintenance,
+            "10min+1ms 才走维护结束分支"
+        );
+        assert!(!stopped.gate_ready, "Stop 分支不得发健康帧");
+    }
+
+    /// C3：15 天会话超时（`GateShare.SessionTimeOutTime`）与 120s 扫描周期；
+    /// 判定是严格 `>`（`ClientThread.cs:418`）。
+    #[test]
+    fn session_idle_timeout_is_strictly_greater() {
+        assert_eq!(SESSION_IDLE_MS, 15 * 24 * 60 * 60 * 1000);
+        assert_eq!(SESSION_SWEEP_MS, 120_000);
+        assert!(
+            !session_idle_expired(SESSION_IDLE_MS, 0, SESSION_IDLE_MS),
+            "恰好 15 天不得清理"
+        );
+        assert!(
+            session_idle_expired(SESSION_IDLE_MS + 1, 0, SESSION_IDLE_MS),
+            "15 天 +1ms 必须清理"
+        );
+        assert!(!session_idle_expired(5_000, 1_000, SESSION_IDLE_MS));
+        assert!(session_idle_expired(
+            1_000 + SESSION_IDLE_MS + 1,
+            1_000,
+            SESSION_IDLE_MS
+        ));
     }
 
     /// B-4：`GateShare.MaxSession`(=10000) 全满再分配不 panic，且返回最后一个非空槽。
