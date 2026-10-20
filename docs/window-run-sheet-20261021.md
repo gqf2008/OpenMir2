@@ -1,4 +1,6 @@
 # 真机窗口 Run Sheet v2.5（OpenMir2，2026-10-21）
+> **已被 v3 完整取代**：开窗一律看 `docs/window-run-sheet-20261022.md`（2026-10-22）。本文件仅存档，不再作为开窗依据。
+
 
 > **v2.5 修订（2026-10-21，tier=L，纯工具/文档，离线；车道 gwcapture）**：只收 **C10#4 / 评审 C8 的工具缺口**——
 > ① `tools/gw-capture/gate_shadow_proxy.py`：LoginGate 7000 / SelGate 7100 影子 TCP 代理，
