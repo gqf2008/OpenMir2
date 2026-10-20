@@ -4,7 +4,9 @@
 ///
 /// Rust 的 `f64::round` 恰好是「一半远离零」，语义一致。
 pub fn round(r: f64) -> i32 {
-    r.round() as i32
+    // 统一实现：crate::hutil32（含 .NET 非检查 int 转换的越界/NaN 语义：
+    // 越界与 NaN 一律 INT_MIN，而 Rust `as i32` 会饱和到 INT_MAX）。
+    crate::hutil32::round(r)
 }
 
 /// C# `HUtil32.MakeWord(byte low, byte high)` / `(ushort low, ushort high)`：
