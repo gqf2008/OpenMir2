@@ -4959,6 +4959,28 @@ fn new_human_ability() -> record::Ability {
     }
 }
 
+/// `WorldServer.cs:250-262` 的 `HomeMap` 回落写回（存档 `MakeSaveRcd:1256-1282` 同源）。
+///
+/// oracle 在 `GetHumData` 之后只要 `playObject.HomeMap` 为空就写这六个字段；
+/// `Abil.Level == 0` 只额外决定新手能力/物品。⇒ **非新角色也必须写回**，
+/// 否则记录 `HomeMap` 恒空，每次登录都重新 `GetHomeInfo` 抽出生点（PL-4 复验 F1）。
+fn write_home_fallback_to_record(
+    rec: &mut record::PlayerRecord,
+    home_map: &str,
+    home_x: i16,
+    home_y: i16,
+    cur_map: &str,
+    cur_x: i16,
+    cur_y: i16,
+) {
+    rec.data.home_map = Some(home_map.to_string());
+    rec.data.home_x = home_x;
+    rec.data.home_y = home_y;
+    rec.data.cur_map = Some(cur_map.to_string());
+    rec.data.cur_x = cur_x;
+    rec.data.cur_y = cur_y;
+}
+
 /// `WorldServer.GetHumData`（`:1100-1229`）的恢复计数器登录初始化。
 ///
 /// - `:1151`：`playObject.IncHealing = humanRcd.Data.IncHealing`（**G-19**：旧实现漏拷 ⇒
@@ -15410,20 +15432,31 @@ fn sim_loop(
                                                     map_file_name: Some(enter::gbk(&final_map_name)),
                                                     ..smframe::EnterWorldInputs::default()
                                                 };
-                                                // oracle `WorldServer.cs:262-275` 的新角色 `Abil` 初始化 +
-                                                // `HomeMap/HomeX/HomeY/MapName/CurrX/CurrY` 落记录：
+                                                // oracle `WorldServer.cs:250-262`：`HomeMap` 为空的回落分支
+                                                // **与 `Abil.Level == 0` 解耦**——非新角色同样把
+                                                // `HomeMap/HomeX/HomeY/MapName/CurrX/CurrY` 写回记录
+                                                // （`MakeSaveRcd:1256-1282` 存的就是这些会话值），只有
+                                                // `Abil.Level == 0` 才额外做新手能力/物品初始化。
+                                                // 旧实现把两半都关在 `is_new_human` 里 ⇒ 非新角色且 DB
+                                                // `HomeMap` 为空时记录恒空，每次登录都重新抽出生点（F1）。
+                                                if home_empty {
+                                                    if let Some(r) = full.as_mut() {
+                                                        write_home_fallback_to_record(
+                                                            r,
+                                                            &enter_map_name,
+                                                            home_x,
+                                                            home_y,
+                                                            &final_map_name,
+                                                            enter_x,
+                                                            enter_y,
+                                                        );
+                                                    }
+                                                }
+                                                // oracle `WorldServer.cs:262-275` 的新角色 `Abil` 初始化：
                                                 // 随后的 `RecalcLevelAbilitys()/RecalcAbilitys()`（本宿主在
                                                 // `enter::recalc_for_session` 里）按 `Job` 覆盖等级派生字段。
                                                 if is_new_human {
                                                     if let Some(r) = full.as_mut() {
-                                                        r.data.home_map =
-                                                            Some(enter_map_name.clone());
-                                                        r.data.home_x = home_x;
-                                                        r.data.home_y = home_y;
-                                                        r.data.cur_map =
-                                                            Some(final_map_name.clone());
-                                                        r.data.cur_x = enter_x;
-                                                        r.data.cur_y = enter_y;
                                                         r.data.abil = Some(new_human_ability());
                                                         // **Lane A 缺口 1**（oracle `PlayObject.cs:1205-1244`）：
                                                         // 四件新手物品必须**先并入记录背包**——`:1308-1310` 的
@@ -44873,9 +44906,10 @@ mod tests {",
     }
 
     /// 判据 9（R，宿主侧）：`FindMap(HomeMap)` 为空 ⇒ `MoveToHome` 的 800 **照发**，
-    /// 但 0 抽不动、无换图簇、无 653。
+    /// 但 0 抽不动、无换图簇；**金币确实变化时仍须发 653**（`tObjCount != GameGold`
+    /// 与 `FindMap` 无关）。
     ///
-    /// 牙：提前 return 掉 800 ⇒ 第一条断言红。
+    /// 牙：提前 return 掉 800 ⇒ 第一条断言红；把 653 也跳过（或夹具改回 0→0）⇒ 第二条断言红。
     #[test]
     fn p22_move_to_home_find_map_missing_still_emits_800() {
         use mir2_protocol::frame::CommandMessage;
@@ -44887,7 +44921,7 @@ mod tests {",
             .enter_map("p22n", new_player_entity("p22n".to_string(), 5, 5), 0)
             .unwrap();
         let mut sg = test_session_ground(actor);
-        sg.game_gold = 0; // 不足 ⇒ 0（不变）⇒ 无 653。
+        sg.game_gold = 10; // 10 → 0（欠额）⇒ 必须发 653。
         sg.p22.bo_dec_game_gold = true;
         sg.p22.dec_game_gold = 30;
         sg.p22.dec_game_gold_time = 1000;
@@ -44917,7 +44951,14 @@ mod tests {",
             CommandMessage::from_bytes(&body).unwrap().ident,
             mir2_protocol::messages::SM_SPACEMOVE_HIDE
         );
-        assert!(rx0.try_recv().is_err(), "0 抽不动且无 653");
+        let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() else {
+            panic!("FindMap 为空、金币 10→0 仍必须发 653（oracle 526-529 与 FindMap 无关）");
+        };
+        let cm = CommandMessage::from_bytes(&body).unwrap();
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_GOLDCHANGED);
+        assert_eq!((cm.param, cm.tag), (0, 0), "GameGold = 0 的两半");
+        assert_eq!(sessions["p22n"].game_gold, 0);
+        assert!(rx0.try_recv().is_err(), "无第二条帧（0 抽不动、无换图簇）");
         assert!(world.sessions.map_changes().is_empty(), "不得记换图事件");
         assert_eq!(world.entities.get(actor).unwrap().map_id, 0);
         std::fs::remove_dir_all(dir).ok();
@@ -44974,6 +45015,279 @@ mod tests {",
             !playdata.contains(".bind(d.game_gold)"),
             "GameGold 不得进 SQL（照抄 oracle 缺陷）"
         );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// F1：`WorldServer.cs:250-262` 的 `HomeMap` 回落写回对**非新角色**同样生效，
+    /// 且不碰 `Abil`（新手能力只在 `Abil.Level == 0` 时写）。
+    ///
+    /// 牙：把写回关回 `if is_new_human`（或删掉 helper 调用）⇒ 非新角色记录 `HomeMap` 仍空。
+    #[test]
+    fn p22_home_fallback_writeback_applies_to_non_new_human() {
+        let mut rec = record::PlayerRecord::default();
+        rec.data.abil = Some(record::Ability {
+            level: 7,
+            ..Default::default()
+        });
+        rec.data.home_map = None;
+
+        write_home_fallback_to_record(&mut rec, "B", 10, 20, "B", 9, 19);
+
+        assert_eq!(rec.data.home_map.as_deref(), Some("B"));
+        assert_eq!((rec.data.home_x, rec.data.home_y), (10, 20));
+        assert_eq!(rec.data.cur_map.as_deref(), Some("B"));
+        assert_eq!((rec.data.cur_x, rec.data.cur_y), (9, 19));
+        assert_eq!(
+            rec.data.abil.as_ref().map(|a| a.level),
+            Some(7),
+            "非新角色不得重置 Abil"
+        );
+    }
+
+    /// F3 用的两张图注册表：A = id0、B = id1（均 16×16）。
+    /// `flag_a`/`flag_b` = `MapInfo` 行尾 flag（空串 = 无 flag）。
+    fn p22_two_map_registry(
+        flag_a: &str,
+        flag_b: &str,
+    ) -> (mir2_envir::MapRegistry, std::path::PathBuf) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "p22-two-map-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let map_dir = dir.join("Map");
+        let envir = dir.join("Envir");
+        std::fs::create_dir_all(&map_dir).unwrap();
+        std::fs::create_dir_all(&envir).unwrap();
+        for name in ["fa.map", "fb.map"] {
+            let mut buf = vec![0u8; mir2_envir::HEADER_BYTES + 16 * 16 * mir2_envir::CELL_BYTES];
+            buf[0..2].copy_from_slice(&16u16.to_le_bytes());
+            buf[2..4].copy_from_slice(&16u16.to_le_bytes());
+            std::fs::write(map_dir.join(name), buf).unwrap();
+        }
+        let text = format!("[A|fa 甲] {flag_a}\n[B|fb 乙] {flag_b}\n");
+        let (bytes, _, _) = encoding_rs::GBK.encode(&text);
+        std::fs::write(envir.join("MapInfo.txt"), bytes.as_ref()).unwrap();
+        let reg = mir2_envir::MapLoader::new(&dir, "Map", "Envir")
+            .load_registry()
+            .unwrap();
+        assert_eq!(reg.id_of("A"), Some(0), "A = id 0");
+        assert_eq!(reg.id_of("B"), Some(1), "B = id 1");
+        (reg, dir)
+    }
+
+    /// F2（宿主线序，R）：同一 pass 的 ① 玩家 DEC 必须先于 ② 玩家 INC。
+    ///
+    /// 夹具让次序**不可交换**：gold=10、DEC=30 ⇒ ① 欠额清零 + MoveToHome；
+    /// 若 ② 先跑（10+100=110）则 ① 不欠额、不移动。⇒ 观测终值 100 vs 80、
+    /// 以及 800 是否出现。
+    ///
+    /// 牙：把 `drain_player_game_gold` 的 ①/② 两段互换 ⇒ 终值 80、无 800 ⇒ 两条断言全红。
+    #[test]
+    fn p22_player_dec_precedes_player_inc() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let (registry, dir) = pl3_registry("");
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("p22o");
+        let actor = world
+            .enter_map("p22o", new_player_entity("p22o".to_string(), 2, 2), 0)
+            .unwrap();
+        let mut sg = test_session_ground(actor);
+        sg.game_gold = 10;
+        sg.p22.bo_dec_game_gold = true;
+        sg.p22.dec_game_gold = 30;
+        sg.p22.dec_game_gold_time = 1000;
+        sg.p22.dec_game_gold_tick = 0;
+        sg.p22.bo_inc_game_gold = true;
+        sg.p22.inc_game_gold = 100;
+        sg.p22.inc_game_gold_time = 1000;
+        sg.p22.inc_game_gold_tick = 0;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("p22o".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p22o", 1, 0, 916, actor));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert("p22o".to_string(), p22_saved("A", 2, 2));
+
+        drain_player_game_gold(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            Some(&registry),
+            &saves,
+            1001,
+        );
+        let mut idents = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            idents.push(CommandMessage::from_bytes(&body).unwrap().ident);
+        }
+        assert_eq!(
+            sessions["p22o"].game_gold, 100,
+            "① DEC 先清零、② INC 再加 100（交换次序 ⇒ 80）"
+        );
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_SPACEMOVE_HIDE,
+                mir2_protocol::messages::SM_GOLDCHANGED
+            ],
+            "① 欠额触发 MoveToHome（800），随后 653；交换次序 ⇒ 只有 653"
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// F3（R）：`MoveToHome` 之后 ③/④ 必须**重新读取当前图的 flag**。
+    ///
+    /// A 图无 flag、B 图 `INCGAMEGOLD(1/50)`（time/point 口径）；① 欠额把玩家移到 B。
+    /// 只有「移动后重取」才会在 ④ 加 50；若沿用移动前预取的 A 图 flag ⇒ 保持 0、无 653。
+    ///
+    /// 牙：把 `flag` 的读取提到 ① 之前（预取一次复用）⇒ 终值 0、无 653 ⇒ 红。
+    #[test]
+    fn p22_map_flag_is_refetched_after_move_to_home() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let (registry, dir) = p22_two_map_registry("", "INCGAMEGOLD(1/50)");
+        let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+        world.open_session("p22f");
+        let actor = world
+            .enter_map("p22f", new_player_entity("p22f".to_string(), 2, 2), 0)
+            .unwrap();
+        let mut sg = test_session_ground(actor);
+        sg.game_gold = 10;
+        sg.p22.bo_dec_game_gold = true;
+        sg.p22.dec_game_gold = 30;
+        sg.p22.dec_game_gold_time = 1000;
+        sg.p22.dec_game_gold_tick = 0;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("p22f".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p22f", 1, 0, 917, actor));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert("p22f".to_string(), p22_saved("B", 5, 5));
+
+        drain_player_game_gold(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            Some(&registry),
+            &saves,
+            1001,
+        );
+        let mut idents = Vec::new();
+        let mut last = None;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).unwrap();
+            idents.push(cm.ident);
+            last = Some(cm);
+        }
+        assert_eq!(
+            world.entities.get(actor).unwrap().map_id,
+            1,
+            "① 欠额必须把玩家移到 B 图"
+        );
+        assert_eq!(
+            sessions["p22f"].game_gold, 50,
+            "④ 必须读移动后（B 图）的 INCGAMEGOLD；预取 A 图 flag ⇒ 0"
+        );
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_SPACEMOVE_HIDE,
+                mir2_protocol::messages::SM_GOLDCHANGED
+            ],
+            "移动后 ④ 加 50 ⇒ 653；预取 ⇒ 只有 800"
+        );
+        assert_eq!(last.map(|c| (c.param, c.tag)), Some((50, 0)));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// F4（R）：800 必须在移动**之前**、按**旧图旧坐标**广播（含自己）。
+    ///
+    /// 旧图 A 的观察者收 800；新图 B 的观察者不收；自己落在 B。
+    /// 牙：把 `broadcast_ref_msg_with_self` 移到 `base_object_move_player` 之后 ⇒
+    /// 旧图观察者漏收、新图观察者误收 ⇒ 两条断言红。
+    #[test]
+    fn p22_move_to_home_800_is_broadcast_before_move_at_old_position() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let (registry, dir) = p22_two_map_registry("", "");
+        let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+        world.open_session("p22b");
+        let actor = world
+            .enter_map("p22b", new_player_entity("p22b".to_string(), 2, 2), 0)
+            .unwrap();
+        // 旧图 A 的观察者（±12 内）。
+        let mut o1 = mir2_world::Entity::new(0, "obs_old".to_string(), 3, 2);
+        o1.race = mir2_world::ACTOR_RACE_PLAY;
+        let obs_old = world.add_entity(o1);
+        // 新图 B 的观察者：落在目的地 ±12 内，但**不在**旧位置附近。
+        let mut o2 = mir2_world::Entity::new(0, "obs_new".to_string(), 11, 10);
+        o2.race = mir2_world::ACTOR_RACE_PLAY;
+        o2.map_id = 1;
+        let obs_new = world.add_entity(o2);
+
+        let mut sg = test_session_ground(actor);
+        sg.game_gold = 0; // 欠额 ⇒ 0（不变）⇒ 只出 800。
+        sg.p22.bo_dec_game_gold = true;
+        sg.p22.dec_game_gold = 30;
+        sg.p22.dec_game_gold_time = 1000;
+        sg.p22.dec_game_gold_tick = 0;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("p22b".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p22b", 1, 0, 918, actor));
+        online_set(&mut online, entry("b", "obs_old", 1, 1, 919, obs_old));
+        online_set(&mut online, entry("c", "obs_new", 1, 2, 920, obs_new));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx2, mut rx2) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+        gates.insert(2, tx2);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert("p22b".to_string(), p22_saved("B", 10, 10));
+
+        drain_player_game_gold(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            Some(&registry),
+            &saves,
+            1001,
+        );
+        let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() else {
+            panic!("自己必须收到 800");
+        };
+        assert_eq!(
+            CommandMessage::from_bytes(&body).unwrap().ident,
+            mir2_protocol::messages::SM_SPACEMOVE_HIDE
+        );
+        let Ok(SimToGate::SendFrame { body, .. }) = rx1.try_recv() else {
+            panic!("旧图观察者必须收到 800（移动前按旧位置广播）");
+        };
+        assert_eq!(
+            CommandMessage::from_bytes(&body).unwrap().ident,
+            mir2_protocol::messages::SM_SPACEMOVE_HIDE
+        );
+        assert!(
+            rx2.try_recv().is_err(),
+            "新图观察者不得收到 800（那说明广播发生在移动之后）"
+        );
+        let e = world.entities.get(actor).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (1, 10, 10), "随后才落地到 B");
         std::fs::remove_dir_all(dir).ok();
     }
 }

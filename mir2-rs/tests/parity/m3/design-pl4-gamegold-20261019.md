@@ -123,7 +123,7 @@
 2329   if (envir != Envir && Race == Play) IsTimeRecall = false;   // 死分支
 ```
 
-- `MoveToHome` 的数据源是 `PlayObject.HomeMap/HomeX/HomeY`（`WorldServer.cs` 登录时从 `humData` 拷；新角色在 `:254-256` 落出生点）。Rust 侧对应 `saves[chr].record.data.home_map/home_x/home_y`（`bins/game-svr/src/record.rs:527-529`；新角色回写在 `main.rs:14293-14298`，随后 `saves.insert` 于 14543）。**不要**另存一份会话态。
+- `MoveToHome` 的数据源：oracle 读**会话态** `PlayObject.HomeMap/HomeX/HomeY`——登录时从 `humData` 拷，新角色在 `:254-256` 落出生点；随后 `UserLogon`（`PlayObject.cs:1199`）与每 3s 的 `Run`（`PlayObject.Message.cs:266`）的 `GetStartPoint()`（`PlayObject.Base.cs:704-721`）还会按「红名 ⇒ `RedHomeMap` / 当前图在 `StartPointList` 的首条」重算并覆盖会话值。**本仓当前实现直接读 DB 存档记录** `saves[chr].record.data.home_map/home_x/home_y`（`bins/game-svr/src/record.rs:527-529`；回落写回在 `main.rs::write_home_fallback_to_record`，随后 `saves.insert`）——这是与 oracle 会话态的**登记分叉**（whitelist T-94），不是等价实现；本批次不另存会话态。
 - `SpaceMove`（`BaseObject.cs:1103-1168`）同服支：`FindMap(sMap) == null` ⇒ 什么都不做（**0 抽数、不移动**）；否则删旧格 → 置 `Envir/CurrX/CurrY` → `SpaceMoveGetRandXY`（不可走则 3/10、2/15/50 步进 + `Random(Width/Height)`，至多 201 轮）→ 成功才 `AddMapObject` + `RM_CLEAROBJECTS`/`RM_CHANGEMAP`/`RM_SPACEMOVE_SHOW(nInt=0)`；失败回滚旧图旧格、**不出帧**。
 - `MapRandomMove`（`BaseObject.cs:1214-1237`）：先两抽 `Random(Width-nEgdey-1)+nEgdey`、`Random(Height-nEgdey-1)+nEgdey`（`nEgdey` 只看**目标图**高度：<30⇒2，<150⇒20，否则 50），再 `SpaceMove(sMap, 随机点, 0)`。
 - **RNG 账本（既有组，不需新组）**：

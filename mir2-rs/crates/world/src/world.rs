@@ -10239,4 +10239,56 @@ mod pl4_base_object_move_tests {
         assert!(w.sessions.map_changes().is_empty());
         assert_eq!(w.entities.get(id).unwrap().map_id, 0);
     }
+
+    /// **F5 非方图**：`space_move` 的两次随机跳点必须按**目标图的宽/高各自**抽
+    /// （`Random(Width)` 给 X、`Random(Height)` 给 Y）；方图夹具交换 W/H 不可见。
+    ///
+    /// 图 (100, 40)：`n18=10`（Width>=80）、`n1C=2`（Height<50）。起点 (99,39) 不可走
+    /// ⇒ `x >= 100-2-1` ⇒ `x=Random(100)`；`y >= 40-2-1` ⇒ `y=Random(40)`。
+    /// 牙：把两抽的 W/H 互换 ⇒ 期望值不同（且 Y 可能越界后重抽）⇒ 红。
+    #[test]
+    fn p22_move_home_non_square_ring_uses_width_and_height() {
+        let mut w = World::with_maps(vec![(16, 16), (100, 40)]);
+        w.open_session("hero");
+        let mut e = Entity::new(0, "hero", 5, 5);
+        e.race = ACTOR_RACE_PLAY;
+        let id = w.enter_map("hero", e, 0).expect("进图");
+        // 只挡起点 (99,39)（列主序 x*Height+y），其余可走。
+        let mut attrs = vec![CellAttribute::Walk; 100 * 40];
+        attrs[99 * 40 + 39] = CellAttribute::HighWall;
+        assert_eq!(w.maps[1].set_cell_attributes(&attrs), 100 * 40);
+        let _ = w.sessions.drain_map_changes();
+        // 选一个落点不等于被挡起点的种子（否则移位环会再抽一轮）。
+        let mut seed = 42;
+        let (rx, ry) = loop {
+            let mut r = RandomNumber::with_seed(seed);
+            let a = r.random_below(100);
+            let b = r.random_below(40);
+            if (a, b) != (99, 39) {
+                break (a, b);
+            }
+            seed += 1;
+        };
+        w.rng = RandomNumber::with_seed(seed);
+        let out = w.base_object_move_player(
+            "hero",
+            id,
+            Some(HomeMoveTarget::Fixed {
+                map_id: 1,
+                x: 99,
+                y: 39,
+            }),
+        );
+        assert!(out.moved);
+        assert_eq!(
+            (out.x, out.y),
+            (rx, ry),
+            "X 抽 Random(Width=100)、Y 抽 Random(Height=40)（互换即红）"
+        );
+        let mut replay = RandomNumber::with_seed(seed);
+        replay.random_below(100);
+        replay.random_below(40);
+        assert_eq!(w.rng.random_below(1000), replay.random_below(1000));
+        assert_eq!(out.map_id, 1);
+    }
 }
