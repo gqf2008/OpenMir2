@@ -270,13 +270,17 @@ fn is_dotnet_parse_whitespace(c: char) -> bool {
     )
 }
 
-/// 去掉 .NET 解析口径的前导空白与**尾部空白/尾部 NUL**。
+/// 去掉 .NET 解析口径的**前导空白**与**尾部 NUL 串 + 尾部空白**（顺序固定）。
 ///
-/// 实机探测：`int.TryParse("12\0")` 与 `"12\0\0"` 成功，而 `"1\02"`、`"\0"` 失败
-/// ⇒ 尾随 NUL 视作可忽略的尾部杂讯，串中 NUL 不忽略。保持 1:1。
+/// 实机探测（.NET 8.0.26，独立探针）：`int.TryParse("12\0")`、`"12\0\0"`、`"12 \0"`
+/// 成功；但 `"12\0 "`、`"12 \0 "`、`"12\0\0 "`、`"12\0 \0"` **全部失败**。
+/// ⇒ 规则是：先剥前导 .NET 空白；再从尾部**先剥 NUL 串、后剥 .NET 空白**。
+/// 两步**不可交换**（NUL 之后不能再出现空白）；串中 NUL 不忽略（`"1\u{0}2"`、`"\0"` 失败）。
+/// 保持 1:1。
 fn trim_parse(s: &str) -> &str {
     let s = s.trim_start_matches(is_dotnet_parse_whitespace);
-    s.trim_end_matches(|c: char| is_dotnet_parse_whitespace(c) || c == '\0')
+    let s = s.trim_end_matches('\0');
+    s.trim_end_matches(is_dotnet_parse_whitespace)
 }
 
 /// `HUtil32.StrToInt(string, int)`：`int.TryParse(str, out result) ? result : def`。
@@ -328,6 +332,11 @@ fn is_div(c: char, divs: &[char]) -> bool {
 ///
 /// `null` 源在 oracle 抛 `NullReferenceException`；Rust `&str` 无 null，调用方以 `""` 表达
 /// 空输入（`""` / `"   "` → `("", "")`）。
+///
+/// **空 `divs` 不等价（已登记）**：.NET `Split(空 char[], 2, RemoveEmptyEntries)` 按**全部
+/// Unicode 空白**切分，而这里的空 slice 表示「无分隔符」（`("abc", "")`）。生产调用点从不传空
+/// slice；为避免静默分歧，该差异登记在 `docs/HUtil32-parity-inventory-20261020.md` §6（Minor 3），
+/// 后续卡应改为显式 `Err` 或按 .NET 空白切分。
 pub fn get_valid_str3(source: &str, divs: &[char]) -> (String, String) {
     let cs = chars(source);
     let mut i = 0;
@@ -442,7 +451,11 @@ pub fn get_valid_str_cap(s: &str, divs: &[char]) -> Result<(String, String), Cap
 
 /// `HUtil32.IsStringNumber(str)`：`!string.IsNullOrEmpty(str) || ValidationNumber().IsMatch(str)`。
 /// 注意原实现的 `||` 缺陷：任何非空串都为 true；且正则 `^[+-]?\d*[.]?\d*$` 匹配空串，
-/// 因此该函数对任意输入恒为 true。`null` 在 Rust 侧以 `""` 表示，仍为 true。保持 1:1。
+/// 因此该函数对任意**非 null** 输入恒为 true。
+///
+/// `null` 口径：oracle 对 `IsStringNumber(null)` 会先算 `IsNullOrEmpty(null)=true`（取反 false），
+/// 再进 `ValidationNumber().IsMatch(null)` ⇒ 抛 `ArgumentNullException`（不会返回 true）。
+/// Rust `&str` 无 null，**null 不可表示**；空串是唯一“空”输入，返回 true。保持 1:1。
 pub fn is_string_number(s: &str) -> bool {
     !s.is_empty() || validation_number_matches(s)
 }
@@ -814,6 +827,34 @@ mod tests {
         assert_eq!(str_to_int("\0", -1), -1);
     }
 
+    /// 12 组矩阵：尾部 NUL 串与 .NET 空白的**剥离顺序不可交换**。
+    ///
+    /// .NET 8.0.26 独立探针口径：先剥前导空白；尾部先剥 NUL 串、再剥空白。
+    /// 牙：把 `trim_parse` 尾部换回「NUL 与空白无序一起剥」⇒ 第 5–8 组必红。
+    #[test]
+    fn trim_parse_nul_whitespace_order_matrix() {
+        // 1–4：尾随 NUL 串直接贴在数字后（可先有前导空白）⇒ 成功。
+        assert_eq!(str_to_int("12\0", -1), 12, "尾随单个 NUL");
+        assert_eq!(str_to_int("12\0\0", -1), 12, "尾随 NUL 串");
+        assert_eq!(str_to_int("12 \0", -1), 12, "空白在 NUL 之前");
+        assert_eq!(str_to_int(" 12\0", -1), 12, "前导空白 + 尾随 NUL");
+        // 5–8：NUL 之后又出现空白 ⇒ 失败（顺序不可交换）。
+        assert_eq!(str_to_int("12\0 ", -1), -1, "NUL 之后有空白");
+        assert_eq!(str_to_int("12 \0 ", -1), -1, "空白-NUL-空白");
+        assert_eq!(str_to_int("12\0\0 ", -1), -1, "NUL 串之后有空白");
+        assert_eq!(str_to_int("12\0 \0", -1), -1, "NUL-空白-NUL");
+        // 9–11：串中 NUL / 纯 NUL / NUL+制表符。
+        assert_eq!(str_to_int("1\u{0}2", -1), -1, "串中 NUL");
+        assert_eq!(str_to_int("\0", -1), -1, "纯 NUL");
+        assert_eq!(str_to_int("12\0\t", -1), -1, "NUL 后接制表符");
+        // 12：IpToInt 的每段走同一个 int64 TryParse 口径。
+        assert_eq!(
+            ip_to_int("1.2.3.4\0 "),
+            Err(IpToIntError::Format),
+            "ip 段 NUL 之后有空白 ⇒ Format"
+        );
+    }
+
     #[test]
     fn str_to_int16_and_uint16_match_oracle() {
         assert_eq!(str_to_int16("-32768", 0), i16::MIN);
@@ -897,6 +938,7 @@ mod tests {
         assert!(!is_eng_numeric('_'));
         assert!(!is_eng_numeric('中'));
         assert!(compare_lstr("#IFxxx", "#IF"));
+        assert!(compare_lstr("#if", "#IF"));
         assert!(!compare_lstr("#I", "#IF"));
         assert!(compare_lstr_prefix("[NECKLACE]x", "[NECKLACE]", 4));
         assert!(compare_back_lstr("abcd", "ZZcd", 2));

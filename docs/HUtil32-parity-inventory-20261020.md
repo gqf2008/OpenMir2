@@ -3,7 +3,7 @@
 - 车道：`hutil`（`hutil-parity` / worktree `/e/tmp/wt-hutil`）
 - 基线：`master = c83a9ae24`
 - oracle（只读）：`src/OpenMir2/HUtil32.cs`（866 行，`net8.0`）
-- Rust 目标：`mir2-rs/crates/shared/src/hutil32.rs`（本批前 463 行 → 本批后约 1100 行）
+- Rust 目标：`mir2-rs/crates/shared/src/hutil32.rs`（本批前 463 行 → 本批后 1115 行）
 - 配套：`mir2-rs/crates/shared/src/hutil.rs`（`round` 改为委托）
 
 ## 1. 结论（缺失 / 不等价项数）
@@ -16,6 +16,13 @@ oracle 共有 **76 个公共成员**（按重载逐个计）。
 | 本批后已覆盖且逐字节等价 | **54** | 新增 38 个公共函数 + 2 个常量 + 1 个错误枚举（共 41 个公共项）；4 个 `GetValidStr3` + 3 个 `GetValidStrCap` 重载分别收敛为 `&[char]` 入口 |
 | 本批后仍未覆盖 | **22** | 12 个平台/类型不适用（不移植）+ **10 个 GB2312 族因 `shared` 零依赖契约延后**（bins 已有等价 gbk 模块） |
 | 覆盖部分的不等价项 | **0** | 已覆盖成员全部按 §2 的 .NET 8 实测值对齐 |
+
+**复验修正（2026-10-20，第二轮）**：首版 `trim_parse` 把 NUL 与 .NET 空白当作**无序集合**一起剥，
+导致 `"12\0 "` / `"12 \0 "` / `"12\0\0 "` / `"12\0 \0"` 被误判为 12
+（oracle `int.TryParse` 对这四个输入全部为 false）。已按 .NET 8.0.26 独立探针改为**先剥前导空白；
+再从尾部先剥 NUL 串、后剥空白**（顺序不可交换），并补 12 组矩阵用例
+`trim_parse_nul_whitespace_order_matrix`（含四个反例与 `ip_to_int("1.2.3.4\0 ")` 必须 `Err`）。
+§2.1 的旧结论已同步更正。
 
 **关键阻塞（未做项）**：任务要求补 `GetBytes`/`GetString`/`GetByteCount`/`StringToByte`/`StringToByteAry`。
 实现需要 GB2312 编解码。首版引入 `encoding_rs = "0.8"` 后，门禁
@@ -41,14 +48,19 @@ crates/shared 必须保持零依赖（B 线也依赖它）；实际: ["encoding_
 StrToInt(" 12 ")=12   StrToInt("+12")=12   StrToInt("\t12\n")=12
 StrToInt("\u00A012\u00A0")=-99   StrToInt("\u300012")=-99
 StrToInt("1,000")=-99   StrToInt("０１２")=-99   StrToInt("+ 7")=-99
-StrToInt("12\0")=12   StrToInt("12\0\0")=12   StrToInt("1\02")=-99   StrToInt("\0")=-99
+StrToInt("12\0")=12     StrToInt("12\0\0")=12    StrToInt("12 \0")=12
+StrToInt("12\0 ")=-99   StrToInt("12 \0 ")=-99   StrToInt("12\0\0 ")=-99   StrToInt("12\0 \0")=-99
+StrToInt("1\02")=-99    StrToInt("\0")=-99
+IpToInt("1.2.3.4\0 ")  => FormatException
 StrToUInt16("+12")=12  StrToUInt16("-1")=999  StrToUInt16("65536")=999
 Round(2147483647)=2147483647   Round(2147483648)=-2147483648
 Round(-3e9)=-2147483648        Round(NaN)=-2147483648   Round(±∞)=-2147483648
 RangeInDefined(4,5,3)=False   RangeInDefined(5,5,3)=False   RangeInDefined(3,5,3)=False
 ```
 
-**结论**：`int.TryParse` 只认 `\t \n \v \f \r` 与空格（不认 U+00A0/U+3000），允许尾随 NUL；
+**结论**：`int.TryParse` 只认 `\t \n \v \f \r` 与空格（不认 U+00A0/U+3000）。
+尾部剥离**有顺序**：先剥前导空白；再从尾部**先剥 NUL 串、后剥空白**——`"12 \0"` 成功，
+而 `"12\0 "`、`"12 \0 "`、`"12\0\0 "`、`"12\0 \0"` 全部失败（顺序不可交换）；
 `(int)Math.Round(...)` 对越界/NaN/∞ 走非检查转换得 `INT_MIN`（Rust `as i32` 饱和到 `INT_MAX`，不等价）；
 `RangeInDefined` 在 `min > max` 时恒 false。
 
@@ -61,7 +73,7 @@ GetValidStr3("a, ,b", ',')          => dest=a    ret=" ,b"
 GetValidStr3("\u3000a b", ' ')      => dest="\u3000a" ret=b
 GetValidStr3(string[]{"ab"}, "abXabY") => dest=bX ret=bY   // 只取每个元素首字符
 ReplaceChar("abc", 'a', 'x')        => "abc"                // 缺陷：返回值未替换
-IsStringNumber(null/""/"abc")       => True/True/True        // || 逻辑缺陷
+IsStringNumber(null)                => ArgumentNullException  // IsMatch(null)；""/"abc" => True/True（|| 逻辑缺陷）
 GetDayCount(2026-10-20, 2025-01-01) => 649                   // min 年份被清零，月/日按 30 天
 IpToInt("1.2.3.999")                => 16909287              // 无 0..255 校验
 IpToInt("1.2.3.-4")                 => -4
@@ -145,7 +157,7 @@ StrPas(41 00 42) = "A\0B"      SpanToStr(80 FF) = "??"
 | 51 | `GetValidStrCap(char)` | 空⇒("","")；`"`⇒CaptureString；否则 GVS3 | ❌ | ✅ `get_valid_str_cap` |
 | 52 | `GetValidStrCap(char[])` | 同上 | ✅ | ✅ |
 | 53 | `GetValidStrCap(string[])` | 同上 | ❌ | ✅ |
-| 54 | `IsStringNumber` | `!IsNullOrEmpty \|\| regex` ⇒ 恒 true | ✅ | ✅（缺陷保持） |
+| 54 | `IsStringNumber` | `!IsNullOrEmpty \|\| regex` ⇒ 非 null 恒 true；null ⇒ `ArgumentNullException` | ✅ | ✅（缺陷保持；Rust 无 null） |
 | 55 | `ArrestStringEx` | 三态写回 + catch 吞异常 | ✅ | ✅ |
 | 56 | `CompareLStr(src,targ)` | 以 targ 长度为前缀 | ✅ | ✅ `compare_lstr` |
 | 57 | `CompareLStr(src,targ,compn)` | 显式长度 | ✅ | ✅ `compare_lstr_prefix` |
@@ -169,7 +181,11 @@ StrPas(41 00 42) = "A\0B"      SpanToStr(80 FF) = "??"
 | 75 | `FormatBytesValue` | 1024 进制 + `Math.Round(x,2)`（一半取偶） | ❌ | ✅ |
 | 76 | `IpToInt` | 前四段 `long.Parse` 后移位，无校验 | ❌ | ✅（返回 `Result`） |
 
-## 4. 判据与牙（9/9 改坏必红）
+## 4. 判据分级与牙（10/10 改坏必红）
+
+**分级（本批）**：tier = **R**，`window_required: true`。窗口项：`hutil::round` 的战斗调用点
+（`bins/game-svr/src/main.rs` 的 `b1_six_replay`，`mir2_shared::hutil::round`）在 **NaN / |x| ≥ 2^31**
+分支上的真机对拍（oracle 非检查 int 转换 ⇒ `INT_MIN`）。窗口未跑前本卡保持 `in-progress`，不置 `closed`。
 
 命令（在 `/e/tmp/wt-hutil/mir2-rs`，`CARGO_TARGET_DIR=/e/tmp/wt-hutil-target`）：
 
@@ -191,11 +207,16 @@ cargo test -p mir2-shared --lib <filter>
 | 7 | `GetDayCount` 月按 31 天折算 | `get_day_count_zeroes_min_year` | RED |
 | 8 | `GetValidStr3` 连续分隔符只跳一个 | `get_valid_str3_dotnet_semantics` | RED |
 | 9 | `FormatBytesValue` 一半取偶改成一半远离零 | `format_bytes_value_matrix` | RED |
+| 10 | `trim_parse` 尾部改回 NUL/空白**无序**一起剥（首版缺陷） | `trim_parse_nul_whitespace_order_matrix` | RED |
 
-还原校验：
+还原校验（blob 字节；牙脚本在 Windows 工作树上自校验时用 CRLF 字节
+`f15aa20174f6c7cacf5c3eb6a70031a9503a12d62168b4ca5e3fd03968d877db`，二者内容等价，
+`hutil32.rs` 带 `text eol=lf` 属性；报告以 blob hash 为准）：
 
 ```
-ORIG_SHA=85691169424ec2bdd5dc4107c0f005746348cb362c2adeff5904cad9fcbb18bb
+# 提交 blob 字节口径（干净检出可复现）：
+$ git cat-file blob HEAD:mir2-rs/crates/shared/src/hutil32.rs | sha256sum
+aebb27ad5465e12de6f8a6f316c6183005e3938d515f50df14545ce9b88debe4  -
 crates/shared/src/hutil32.rs: OK
 TEETH_RC=0
 ```
@@ -206,7 +227,7 @@ TEETH_RC=0
 |---|---|
 | `cargo fmt --all -- --check` | rc=0 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | rc=0 |
-| `cargo test --workspace` | rc=0（`mir2-shared` 32 个 lib 测试全过） |
+| `cargo test --workspace` | rc=0（**2446 passed / 0 failed / 59 ignored**；`mir2-shared` 33 个 lib 测试全过）。首轮并行跑出现 1 个既有 game-gate relay 时序 flake（`header_prefixed_login_is_kicked`，GM_CLOSE/EOF 竞态，与本批无关）：单测重跑绿、全量重跑绿 |
 | `cargo run -p msgcodegen -- --check` | rc=0（604 条常量一致） |
 | `python -I whitelist_anchor_gate.py check` | rc=0（234 条锚 ALL PASS） |
 | `python -I m3_whitelist_registry_audit.py audit --strict` | rc=0（WHITELIST_REGISTRY GREEN） |
@@ -220,5 +241,18 @@ TEETH_RC=0
    不在 `shared` 职责内；对应的 Rust 形态已由 `crates/protocol`、bins `clock`、chrono、tokio 承担。
 3. 探针工程 `E:\tmp\hutil-probe`（含 `probe-output*.txt`）为**本线临时物**，按收尾清单登记保留，
    便于复查实测值；不属于仓库写集。
-4. 未改动 `src/**`、`sql/**`、`MirClient/`、`crates/{protocol,storage}`、`E:/MirServer/**`；
+4. **`get_valid_str3(src, &[])` 与 oracle 不等价（Minor 3，已登记）**：.NET
+   `Split(空 char[], 2, RemoveEmptyEntries)` 按**全部 Unicode 空白**切分；Rust 空 slice 表示
+   「无分隔符」（`("abc", "")`）。生产调用点从不传空 slice。未改为 `Err`——改公共签名会波及
+   `crates/{data,envir,script,world}` 与 `bins/*` 的全部调用方，超出本线写集；按「登记」处理，
+   代码 doc 已注明。后续卡建议 `openmir2-hutil-empty-divider`：给 `shared` 增加 checked 入口
+   （空 slice ⇒ `Err`）或直接按 .NET 空白集合切分，再逐调用点迁移。
+5. **两份 `HUtil32.Round` 分叉（Minor 5，均不在本线写集）**：
+   - `crates/script/src/engine/conditions.rs:7`：`round_away` 手写 `(r±0.5).floor/ceil as i32`；
+     `as i32` 对 NaN ⇒ 0、正溢出 ⇒ `INT_MAX`（oracle 均为 `INT_MIN`；半距本身正确）。
+   - `bins/game-svr/src/useitem.rs:438`：`r.round() as i32`；半距正确，但 NaN/溢出仍是饱和转换。
+   两者都应在后续卡改为 `mir2_shared::hutil32::round`。建议登记号 **T-136**（owner 口径当前最大
+   T-135；本树 `whitelist.md` 实测最大 T-132，133–135 可能在别的在飞车道）并开卡
+   `openmir2-hutil-round-forks`；`whitelist.md` 不在本线写集，故本报告先登记、未改注册表。
+6. 未改动 `src/**`、`sql/**`、`MirClient/`、`crates/{protocol,storage}`、`E:/MirServer/**`；
    未起服务、未占端口、未写数据库。
