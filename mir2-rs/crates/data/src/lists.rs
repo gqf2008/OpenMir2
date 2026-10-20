@@ -17,7 +17,7 @@
 //!
 //! oracle 全部经 `StringList.LoadFromFile`（`src/OpenMir2/Common/StringList.cs:276-291`）读入：
 //! 默认 **gb2312**（有 BOM 时切 UTF-8/UTF-16，见 `:293-360`），逐行 `StreamReader.ReadLine()`。
-//! 本层沿用 `crates/data` 既有口径（`monitems.rs`/`exps.rs`）：`encoding_rs::GBK` 解码
+//! 本层沿用 `crates/data` 既有口径（`monitems.rs`/`exps.rs`）：.NET cp936 解码
 //! （GBK 是 GB2312 的超集）+ `str::lines()`（剥 `\n` 与其前的 `\r`，与 `ReadLine` 对 CRLF/LF 等价）。
 //!
 //! ## 刻意偏离（登记，非"顺手修"）
@@ -492,8 +492,7 @@ fn read_gbk_if_file(path: &Path) -> Result<Option<String>, ListsError> {
         path: path.to_path_buf(),
         source: e,
     })?;
-    let (text, _, _) = encoding_rs::GBK.decode(&bytes);
-    Ok(Some(text.into_owned()))
+    Ok(Some(mir2_encoding::decode(&bytes)))
 }
 
 #[cfg(test)]
@@ -502,7 +501,7 @@ mod tests {
 
     /// GBK 编码夹具（部署件真实格式）。
     fn gbk(s: &str) -> Vec<u8> {
-        encoding_rs::GBK.encode(s).0.into_owned()
+        mir2_encoding::encode_gb2312_dotnet(s)
     }
 
     /// 用例级唯一临时目录（照 `monitems.rs` 的 `temp_dir` + 进程号口径）。

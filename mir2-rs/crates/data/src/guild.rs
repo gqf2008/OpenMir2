@@ -462,7 +462,7 @@ pub fn split_lines_readline(text: &str) -> Vec<&str> {
 /// `GuildManager.LoadGuildInfo` 的名单读侧（`:85-93`）：GBK 解码、逐行 `Trim()`、跳过空行。
 #[must_use]
 pub fn parse_guild_list(bytes: &[u8]) -> Vec<String> {
-    let (text, _, _) = encoding_rs::GBK.decode(bytes);
+    let text = mir2_encoding::decode(bytes);
     split_lines_readline(&text)
         .into_iter()
         .map(str::trim)
@@ -504,7 +504,7 @@ pub fn parse_guild_file(
     now_tick: i32,
     guild_exists: impl Fn(&str) -> bool,
 ) -> GuildFileBody {
-    let (text, _, _) = encoding_rs::GBK.decode(bytes);
+    let text = mir2_encoding::decode(bytes);
     let mut body = GuildFileBody::default();
     let mut s1c = String::new();
     // oracle 的 `s20` 是**跨行可变**变量：行会战段（case 2）从不给它赋值，联盟段（case 3）才写。
@@ -651,8 +651,9 @@ pub fn serialize_guild_file(
 fn encode_lines_gbk(lines: &[String]) -> Vec<u8> {
     let mut out = Vec::new();
     for line in lines {
-        let (bytes, _, _) = encoding_rs::GBK.encode(line);
-        out.extend_from_slice(&bytes);
+        // oracle `StringList.SaveToFile` = .NET cp936（E-1/E-2）：不可映射码元 →
+        // 单个 `?`，绝不写 `&#N;` 数字字符引用。
+        out.extend_from_slice(&mir2_encoding::encode_gb2312_dotnet(line));
         out.extend_from_slice(b"\r\n");
     }
     out
@@ -675,8 +676,7 @@ mod tests {
     use super::*;
 
     fn gbk(s: &str) -> Vec<u8> {
-        let (bytes, _, _) = encoding_rs::GBK.encode(s);
-        bytes.into_owned()
+        mir2_encoding::encode_gb2312_dotnet(s)
     }
 
     #[test]

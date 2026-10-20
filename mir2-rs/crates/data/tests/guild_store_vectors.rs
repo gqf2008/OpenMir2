@@ -74,8 +74,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn gbk(s: &str) -> Vec<u8> {
-    let (bytes, _, _) = encoding_rs::GBK.encode(s);
-    bytes.into_owned()
+    mir2_encoding::encode_gb2312_dotnet(s)
 }
 
 fn tmp_root(tag: &str) -> PathBuf {

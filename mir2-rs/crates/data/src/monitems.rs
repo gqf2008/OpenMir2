@@ -24,7 +24,7 @@ pub const MONITEMS_DIR: &str = "MonItems";
 /// - 仅当 `n18 > 0 && n1C > 0 && 物品名非空` 才收录；
 /// - 收录时 `SelPoint = n18 - 1`、`MaxPoint = n1C`。
 pub fn parse_monitems_gbk(bytes: &[u8]) -> Vec<MonsterDropItem> {
-    let (text, _, _) = encoding_rs::GBK.decode(bytes);
+    let text = mir2_encoding::decode(bytes);
     let mut list = Vec::new();
     for line in text.lines() {
         if line.is_empty() || line.starts_with(';') {
@@ -139,7 +139,7 @@ mod tests {
 
     /// 夹具统一走 GBK 编码（MonItems 真实文件格式）。
     fn gbk(s: &str) -> Vec<u8> {
-        encoding_rs::GBK.encode(s).0.into_owned()
+        mir2_encoding::encode_gb2312_dotnet(s)
     }
 
     #[test]

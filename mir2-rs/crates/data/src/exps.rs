@@ -28,39 +28,22 @@ impl IniFile {
     /// （`src/OpenMir2/Common/ConfigFile.cs:263`）——`StreamReader` 默认 `detectEncodingFromByteOrderMarks: true`，
     /// 现网 UTF-8+BOM 的 `Server.conf` 实际按 UTF-8 解码。
     ///
-    /// 无 BOM 时**直接**交给 [`IniFile::from_gbk_bytes`]（不做 GBK 解码/再编码往返），
-    /// 保证与既有入口逐字节同口径。
+    /// 无 BOM 时按 .NET cp936 解码（不是 WHATWG GBK）：`A8 BF = U+E7C8`。
+    /// 解码后**直接**交给 [`IniFile::from_text`]（不做解码/重编码往返）。
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-            let (text, _, _) = encoding_rs::UTF_8.decode(&bytes[3..]);
-            return Self::from_decoded_text(&text);
-        }
-        if bytes.starts_with(&[0xFE, 0xFF]) {
-            let (text, _, _) = encoding_rs::UTF_16BE.decode(&bytes[2..]);
-            return Self::from_decoded_text(&text);
-        }
-        // C# 判定：0xFF 0xFE 且第 3 字节 != 0xFF ⇒ Unicode(LE)；0xFF 0xFE 0xFF 落到默认编码。
-        if bytes.starts_with(&[0xFF, 0xFE]) && bytes.get(2) != Some(&0xFF) {
-            let (text, _, _) = encoding_rs::UTF_16LE.decode(&bytes[2..]);
-            return Self::from_decoded_text(&text);
-        }
-        Self::from_gbk_bytes(bytes)
+        // 唯一实现见 `mir2_encoding::decode_config_text`（E-4 统一入口）：
+        // `ConfigFile.Load` 的裸 `StreamReader(stream, GB2312)` BOM 探测顺序
+        // （`FF FE 00 00` → UTF-32LE、`FF FE FF` → UTF-16LE、`00 00 FE FF` → UTF-32BE）。
+        Self::from_text(&mir2_encoding::decode_config_text(bytes))
     }
 
-    /// 已解码文本直接走 [`IniFile::from_text`]（共用一套解析，**不做**重编码往返）。
-    fn from_decoded_text(text: &str) -> Self {
-        Self::from_text(text)
-    }
-
-    /// 从 GBK（GB2312）字节加载。解析规则逐条对应 `ConfigFile.Load`。
+    /// 从无 BOM 的 GBK（GB2312/cp936）字节加载。解析规则逐条对应 `ConfigFile.Load`。
     ///
-    /// 注意：这里是 WHATWG GBK（`encoding_rs`），不是 .NET cp936。需要 .NET 口径的调用方
-    /// （如 `crates/envir` 的 `GameSvrConf`）应先按 cp936 解码，再把 `String` 交给
-    /// [`IniFile::from_text`]；否则会“解码→重编码→再解码”，把 cp936 独有的
-    /// `A8 BF = U+E7C8` 二次解释成 WHATWG 的 `U+01F9`。
+    /// 解码走 [`mir2_encoding::decode`]（.NET cp936 全表 + 7032 条覆盖表，B-105）：
+    /// `A8 BF` → `U+E7C8`，不是 WHATWG GBK 的 `U+01F9`。需要 BOM 探测的调用方用
+    /// [`IniFile::from_bytes`]（`ConfigFile.Load` 的 `StreamReader` 口径）。
     pub fn from_gbk_bytes(bytes: &[u8]) -> Self {
-        let (text, _, _) = encoding_rs::GBK.decode(bytes);
-        Self::from_text(&text)
+        Self::from_text(&mir2_encoding::decode(bytes))
     }
 
     /// 从**已解码**的文本加载（解析规则逐条对应 `ConfigFile.Load`）。
@@ -232,7 +215,9 @@ impl ExpsConfig {
     /// 从 GBK 文件路径加载。
     pub fn from_file(path: &Path) -> std::io::Result<Self> {
         let bytes = std::fs::read(path)?;
-        Ok(Self::from_ini(&IniFile::from_gbk_bytes(&bytes)))
+        // oracle `ExpsConf : ConfigFile` 的构造函数调 `Load()` ⇒ 裸
+        // `StreamReader(..., GB2312)` 的 BOM 探测（不是裸 GBK 解码）。
+        Ok(Self::from_ini(&IniFile::from_bytes(&bytes)))
     }
 }
 
