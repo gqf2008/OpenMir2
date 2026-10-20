@@ -168,7 +168,7 @@ impl Db {
 
     /// 载入两张表的快速索引（C# 两个 `LoadQuickList`）。
     ///
-    /// Errors: 表/列缺失（`SELECT` 报错）、`characters` 里有重名列（C# `Dictionary.Add` 会抛）。
+    /// Errors: 表/列缺失（`SELECT` 报错）、两张表里有重名列（C# `Dictionary.Add` 会抛）。
     pub async fn load_quick_lists(&mut self) -> Result<()> {
         self.load_indexes().await?;
         self.load_chars().await?;
@@ -176,6 +176,10 @@ impl Db {
     }
 
     /// `characters_indexes`（`IsDeleted < 2`，与 C# 的 SQL 一字不差）。
+    ///
+    /// 重名判定按折叠键（等价 C# `StringComparer.OrdinalIgnoreCase`）：C# 的
+    /// `_quickList.Add` / `_indexQuickList.Add` 都是 `Dictionary.Add`，重名/重 Id 直接抛
+    /// `ArgumentException` ⇒ 宿主启动失败（LB-09）。这里同样 `bail!`，**不得**静默覆盖。
     async fn load_indexes(&mut self) -> Result<()> {
         self.quick.clear();
         self.by_account.clear();
@@ -187,22 +191,35 @@ impl Db {
             .await
             .context("载入 characters_indexes 失败（表/列与 C# 预期不符 ⇒ 启动失败）")?;
         let mut account_list: Vec<(Vec<u8>, Vec<u8>, i64)> = Vec::new();
-        let mut names: Vec<(Vec<u8>, i64)> = Vec::new();
+        let mut names: Vec<(Vec<u8>, String, i64)> = Vec::new();
         let mut deleted: Vec<i64> = Vec::new();
         for row in &rows {
             let id = int_col(row, "Id")?;
             let account = text_col(row, "Account")?;
+            let name_text = text_col(row, "ChrName")?;
             let name_gbk = gbk_col(row, "name_gbk")?;
             if int_col(row, "IsDeleted")? != 0 {
                 deleted.push(id);
                 continue;
             }
-            names.push((fold_key(&name_gbk), id));
+            names.push((fold_key(&name_gbk), name_text, id));
             account_list.push((fold_key(account.as_bytes()), name_gbk, id));
         }
-        for (key, id) in names {
-            self.quick.insert(key, id);
-            self.index_ids.insert(id);
+        for (key, name_text, id) in names {
+            // LB-09：oracle `PlayRecordStorage.LoadQuickList` 的 `_quickList.Add` 重名即抛，
+            // 未捕获 ⇒ 启动失败；Rust 曾经 `insert` 静默覆盖（带病运行），两侧口径不一致。
+            if self.quick.insert(key, id).is_some() {
+                bail!(
+                    "characters_indexes 表里角色名重复（C# 侧 Dictionary.Add 会抛异常 ⇒ 启动失败）：{name_text}"
+                );
+            }
+            // 同一循环里 oracle 还有 `_indexQuickList.Add(Id, Name)`（Dictionary.Add ⇒ 重 Id 也抛）；
+            // `Id` 是主键，实际不可达，仍按 oracle 口径守住。
+            if !self.index_ids.insert(id) {
+                bail!(
+                    "characters_indexes 表里 Id 重复（C# 侧 _indexQuickList 的 Dictionary.Add 会抛异常 ⇒ 启动失败）：{id}"
+                );
+            }
         }
         self.deleted_ids = deleted;
         for (account, name_gbk, id) in account_list {
@@ -239,7 +256,13 @@ impl Db {
                     "characters 表里角色名重复（C# 侧 Dictionary.Add 会抛异常 ⇒ 启动失败）：{name_text}"
                 );
             }
-            self.char_ids.insert(id);
+            // oracle 的 `_IndexQuickIdMap.Add(Id, Id)` 同样是 `Dictionary.Add`；`Id` 是主键，
+            // 重 Id 不可达，仍按 oracle 口径守住。
+            if !self.char_ids.insert(id) {
+                bail!(
+                    "characters 表里 Id 重复（C# 侧 _IndexQuickIdMap 的 Dictionary.Add 会抛异常 ⇒ 启动失败）：{id}"
+                );
+            }
             self.name_text.insert(name_text.to_lowercase(), id);
         }
         Ok(())
@@ -929,5 +952,71 @@ mod create_rows_tests {
             .execute(&mut conn)
             .await
             .expect("清理测试库失败");
+    }
+}
+
+/// LB-09：`characters_indexes` 重名必须**启动失败**（oracle `PlayRecordStorage.LoadQuickList`
+/// 用 `Dictionary.Add`，重名抛 `ArgumentException` 且无 catch ⇒ 宿主退出），不得像旧的
+/// `HashMap::insert` 那样静默覆盖后带病运行。
+///
+/// 跑法（需本机 MySQL；用例自建自删 `mir2_test_*` 库）：
+/// `cargo test -p db-srv --bins index_dup_tests -- --ignored --nocapture`
+#[cfg(test)]
+mod index_dup_tests {
+    use crate::db::Db;
+    use crate::testsupport as ts;
+
+    const DB: &str = "mir2_test_lb09_dup_index";
+
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；自建 mir2_test_* 库"]
+    async fn duplicate_index_name_fails_startup() {
+        let dsn = ts::setup_db(DB).await;
+        let mut c = ts::conn(&dsn).await;
+
+        // 两条同 `ChrName`、`IsDeleted=0` 的索引行。`characters_indexes` 只有 `Id` 主键、
+        // 没有 `ChrName` 唯一索引 ⇒ 历史脏数据/双写可以造出这种行（LB-09 的可达场景）。
+        for account in ["lb09_acct_a", "lb09_acct_b"] {
+            sqlx::query(
+                "INSERT INTO characters_indexes (Account, ChrName, SelectID, IsDeleted, \
+                 CreateDate, ModifyDate) VALUES (?, 'lb09_dup', 0, 0, now(), now())",
+            )
+            .bind(account)
+            .execute(&mut c)
+            .await
+            .expect("插入重复索引行失败（表上无 ChrName 唯一索引，应当允许）");
+        }
+
+        // ---- 有重复 ⇒ `load_quick_lists`（main.rs 的启动路径）返回 Err，且信息含冲突键 ----
+        let mut db = Db::connect(&dsn).await.expect("连测试库失败");
+        let err = db
+            .load_quick_lists()
+            .await
+            .expect_err("重名索引必须启动失败（oracle Dictionary.Add 会抛）");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("lb09_dup"), "错误信息必须含冲突键：{msg}");
+        assert!(
+            msg.contains("重复"),
+            "措辞必须与 characters 重名路径同口径：{msg}"
+        );
+
+        // ---- 去掉重复行 ⇒ 启动正常 ----
+        sqlx::query(
+            "DELETE FROM characters_indexes WHERE ChrName='lb09_dup' ORDER BY Id DESC LIMIT 1",
+        )
+        .execute(&mut c)
+        .await
+        .expect("删除重复行失败");
+        db.load_quick_lists().await.expect("无重复时必须启动成功");
+        assert!(db.record_index(b"lb09_dup").is_some(), "正常路径的索引缺失");
+        assert_eq!(
+            db.find_by_account(b"lb09_acct_a").len(),
+            1,
+            "正常路径应按账号建出 1 条索引"
+        );
+
+        drop(db);
+        drop(c);
+        ts::drop_db(&dsn).await;
     }
 }
