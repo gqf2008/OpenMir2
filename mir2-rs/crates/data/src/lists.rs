@@ -17,8 +17,9 @@
 //!
 //! oracle 全部经 `StringList.LoadFromFile`（`src/OpenMir2/Common/StringList.cs:276-291`）读入：
 //! 默认 **gb2312**（有 BOM 时切 UTF-8/UTF-16，见 `:293-360`），逐行 `StreamReader.ReadLine()`。
-//! 本层沿用 `crates/data` 既有口径（`monitems.rs`/`exps.rs`）：.NET cp936 解码
-//! （GBK 是 GB2312 的超集）+ `str::lines()`（剥 `\n` 与其前的 `\r`，与 `ReadLine` 对 CRLF/LF 等价）。
+//! 解码走 [`mir2_encoding::decode_string_list`]（BOM 感知：UTF-8 / UTF-16LE / UTF-16BE /
+//! UTF-32BE；无 BOM ⇒ .NET cp936）。行切分用 `str::lines()`（剥 `\n` 与其前的 `\r`，
+//! 与 `ReadLine` 对 CRLF/LF 等价）。
 //!
 //! ## 刻意偏离（登记，非"顺手修"）
 //!
@@ -478,10 +479,16 @@ pub fn load_unbind_list_file(path: &Path) -> Result<Option<UnbindListLoad>, List
 }
 
 // ===========================================================================
-// 公共文件半：File.Exists 门 + GBK 解码
+// 公共文件半：File.Exists 门 + `StringList.LoadFromFile` 解码（BOM 感知）
 // ===========================================================================
 
-/// `File.Exists` 门（等价 `Path::is_file`，同名目录亦视为不存在）+ GBK 解码整文件。
+/// `File.Exists` 门（等价 `Path::is_file`，同名目录亦视为不存在）+ 整文件解码。
+///
+/// 解码口径 = oracle `StringList.LoadFromFile`（`src/OpenMir2/Common/StringList.cs:276-291`）：
+/// 先 `GetEncoding` 预判 BOM，再由 `StreamReader` 探测（UTF-8 / UTF-16LE / UTF-16BE /
+/// UTF-32BE；`FF FE 00 00` 是 UTF-16LE），无 BOM ⇒ cp936。统一走
+/// [`mir2_encoding::decode_string_list`]（曾用裸 [`mir2_encoding::decode`]，手工加 UTF-8 BOM 的
+/// 文件会被解成 cp936 乱码）。
 ///
 /// `Ok(None)` = 不存在（或同名目录）；`Err(Io)` = 存在但读失败（fail-closed，不静默当空）。
 fn read_gbk_if_file(path: &Path) -> Result<Option<String>, ListsError> {
@@ -492,7 +499,7 @@ fn read_gbk_if_file(path: &Path) -> Result<Option<String>, ListsError> {
         path: path.to_path_buf(),
         source: e,
     })?;
-    Ok(Some(mir2_encoding::decode(&bytes)))
+    Ok(Some(mir2_encoding::decode_string_list(&bytes)))
 }
 
 #[cfg(test)]

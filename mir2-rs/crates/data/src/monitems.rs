@@ -1,5 +1,6 @@
 //! `Envir/MonItems/*.txt` 解析，移植源 `src/GameSrv/DB/LocalDB.cs:596`
-//! （`LoadMonitems`）。文件为 GBK 编码。
+//! （`LoadMonitems`）。文件经 `StringList.LoadFromFile` 读入：无 BOM 时是 GBK/cp936，
+//! 带 BOM 时按 UTF-8 / UTF-16 解码（见 `mir2_encoding::decode_string_list`）。
 
 use std::path::Path;
 
@@ -14,7 +15,7 @@ const TEXT_SPLIT_CONST: [char; 2] = [' ', '\t'];
 /// oracle `M2Share.GetEnvirFilePath("MonItems", ...)` 的固定子目录名（`M2Share.cs:1979-1986`）。
 pub const MONITEMS_DIR: &str = "MonItems";
 
-/// 解析一个 MonItems 文件（GBK 字节）为掉落表。
+/// 解析一个 MonItems 文件（`StringList.LoadFromFile` 字节：BOM 感知，默认 cp936）为掉落表。
 ///
 /// 逐条对应 `LoadMonitems`：
 /// - 跳过空行与 `;` 注释行；
@@ -24,7 +25,7 @@ pub const MONITEMS_DIR: &str = "MonItems";
 /// - 仅当 `n18 > 0 && n1C > 0 && 物品名非空` 才收录；
 /// - 收录时 `SelPoint = n18 - 1`、`MaxPoint = n1C`。
 pub fn parse_monitems_gbk(bytes: &[u8]) -> Vec<MonsterDropItem> {
-    let text = mir2_encoding::decode(bytes);
+    let text = mir2_encoding::decode_string_list(bytes);
     let mut list = Vec::new();
     for line in text.lines() {
         if line.is_empty() || line.starts_with(';') {

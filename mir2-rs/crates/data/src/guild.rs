@@ -459,10 +459,11 @@ pub fn split_lines_readline(text: &str) -> Vec<&str> {
     out
 }
 
-/// `GuildManager.LoadGuildInfo` 的名单读侧（`:85-93`）：GBK 解码、逐行 `Trim()`、跳过空行。
+/// `GuildManager.LoadGuildInfo` 的名单读侧（`:85-93`）：`StringList.LoadFromFile` 解码
+/// （BOM 感知，默认 cp936）、逐行 `Trim()`、跳过空行。
 #[must_use]
 pub fn parse_guild_list(bytes: &[u8]) -> Vec<String> {
-    let text = mir2_encoding::decode(bytes);
+    let text = mir2_encoding::decode_string_list(bytes);
     split_lines_readline(&text)
         .into_iter()
         .map(str::trim)
@@ -504,7 +505,7 @@ pub fn parse_guild_file(
     now_tick: i32,
     guild_exists: impl Fn(&str) -> bool,
 ) -> GuildFileBody {
-    let text = mir2_encoding::decode(bytes);
+    let text = mir2_encoding::decode_string_list(bytes);
     let mut body = GuildFileBody::default();
     let mut s1c = String::new();
     // oracle 的 `s20` 是**跨行可变**变量：行会战段（case 2）从不给它赋值，联盟段（case 3）才写。
