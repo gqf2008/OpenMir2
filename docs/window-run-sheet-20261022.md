@@ -1142,7 +1142,7 @@ owner 在 2026-10-22 的会话中明确回答，逐条落账：
 | 项 | 裁决 | 落地状态 |
 | --- | --- | --- |
 | **E1** | **从正式库复制一份测试库**（= E1-a） | 2026-10-22 已创建 `mir2_test_db` / `mir2_test_account` / `mir2_test_data`（`mysqldump --single-transaction` 克隆，表数 11/13/7）。窗口构造一律指向这三个库 |
-| **E2** | 未回答（仍待裁决） | 行会 750 / 特殊怪 / 非 TestServer 余量仍不可开窗 |
+| **E2** | **已裁决（2026-10-21 owner 会话明确「E2 可以」）**：允许只读复制 `Envir`/`GuildBase`/`MonGen`/`Server.conf` 到影子包、只在副本内改内容 | 行会 750 / 特殊怪 / 非 TestServer 余量**可开窗**（仍不得改 `E:/MirServer` 原件） |
 | **E3** | 未回答（仍待裁决） | G6（MySQL 停起故障注入）仍不可开窗 |
 | **E4** | **可以重编对比用的 C# 程序** | 影子包按 §A2 用全新 `-Shadow` 目录编译，并记录 `git_head` 与 DLL hash |
 | **外部 C# 全栈** | **owner 自己启动的**（2026-10-20 12:35，占 5000–7200） | 窗口需要停它时，由 owner 操作或经 owner 同意后停；**禁止** `start-all -Stop`（会 Force 到 mysqld），按 §A4 用 `send_ctrlc.ps1` |
