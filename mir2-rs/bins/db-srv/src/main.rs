@@ -33,6 +33,8 @@ mod marketdata;
 mod playdata;
 mod route;
 mod server;
+#[cfg(test)]
+mod testsupport;
 mod user;
 
 use std::sync::Arc;

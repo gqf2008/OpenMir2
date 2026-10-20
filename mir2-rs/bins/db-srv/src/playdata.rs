@@ -430,8 +430,8 @@ async fn save_characters(
     conn: &mut MySqlConnection,
     player_id: i64,
     d: &CharacterData,
+    abil: &Ability,
 ) -> Result<()> {
-    let abil = d.abil.clone().unwrap_or_default();
     sqlx::query(SAVE_CHARACTERS_SQL)
         .bind(i32::from(d.server_index))
         .bind(d.account.as_deref())
@@ -605,13 +605,26 @@ async fn update_item_attr(
     player_id: i64,
     items: &[Option<ServerUserItem>],
 ) -> Result<()> {
-    for item in items.iter().flatten() {
-        let desc = item.desc.clone().unwrap_or_else(|| vec![0; 14]);
-        let v: Vec<u8> = (0..14).map(|i| desc.get(i).copied().unwrap_or(0)).collect();
+    // C# `UpdateItemAttr` 先把**整批** SQL 拼进 `strSqlList`、最后一次性执行：任一非空物品的
+    // `Desc` 为 null（NRE）或长度 < 14（越界）都会在拼串阶段被内层 `catch` 吞掉 ⇒
+    // **整批一行不改**。旧实现逐条 `unwrap_or_else(|| vec![0; 14])` 补 0 执行 ⇒ 把
+    // `VALUE0..VALUE13` 全写 0（数据丢失，LB-06）。
+    let pending: Vec<&ServerUserItem> = items.iter().flatten().collect();
+    if pending
+        .iter()
+        .any(|i| i.desc.as_ref().is_none_or(|d| d.len() < 14))
+    {
+        log::error(
+            "[Exception] PlayDataStorage.UpdateItemAttr: 物品 Desc 缺失或长度不足（C# NRE 被 catch ⇒ 整批跳过）",
+        );
+        return Ok(());
+    }
+    for item in pending {
+        let desc = item.desc.as_ref().expect("上面已确保 Desc 长度 >= 14");
         let sql = format!(
             "UPDATE characters_item_attr SET VALUE0={},VALUE1={},VALUE2={},VALUE3={},VALUE4={},VALUE5={},VALUE6={},VALUE7={},VALUE8={},VALUE9={},VALUE10={},VALUE11={},VALUE12={},VALUE13={} WHERE PlayerId={player_id} AND MakeIndex={};",
-            v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13],
-            item.make_index
+            desc[0], desc[1], desc[2], desc[3], desc[4], desc[5], desc[6], desc[7], desc[8],
+            desc[9], desc[10], desc[11], desc[12], desc[13], item.make_index
         );
         sqlx::query(&sql)
             .execute(&mut *conn)
@@ -760,6 +773,7 @@ async fn save_status(conn: &mut MySqlConnection, player_id: i64, status: &[u16])
 
 /// C# `PlayDataStorage.SaveRecord(context, playerId, humanRcd)`：
 /// 一个事务里跑 8 个 `Save*`（各自吞错），只有 `SaveMagics` 的 `DELETE` 与 `Commit` 失败会回滚。
+#[allow(clippy::too_many_lines)] // 逐段照抄 oracle 的 8 个 Save*，拆函数会打散行号对照
 async fn save_record(
     conn: &mut MySqlConnection,
     player_id: i64,
@@ -768,11 +782,31 @@ async fn save_record(
     let Some(d) = info.data.as_ref() else {
         return Ok(false);
     };
+    // C# `SaveRecord(context, playerId, hd)` 的**参数绑定**在它自己的内层 try 之外：
+    // `hd.Abil.Level` 为 null 时 NRE 冒到外层 `SaveRecord` 的 catch ⇒ `RollBack()` +
+    // `result=false` ⇒ **8 张表一行不改**（不是只跳过 characters_ablity）。
+    // `hd.HumItems` 同理（`SaveItem` 的 `userItems.Length` 在 SaveItem 的 try 之外）。
+    // 判据：`partial_save_tests`（LB-06 重写）。
+    if d.abil.is_none() {
+        log::error(
+            "[Exception] PlayDataStorage.UpdateRecord: Abil 缺失（C# 同场景 NRE ⇒ 整次存档回滚）",
+        );
+        return Ok(false);
+    }
+    if d.hum_items.is_none() {
+        log::error(
+            "[Exception] PlayDataStorage.SaveItem: HumItems 缺失（C# 同场景 NRE ⇒ 整次存档回滚）",
+        );
+        return Ok(false);
+    }
+    let Some(abil) = d.abil.as_ref() else {
+        return Ok(false);
+    };
     let mut tx = conn.begin().await.context("开启存档事务失败")?;
-    if let Err(e) = save_characters(&mut tx, player_id, d).await {
+    if let Err(e) = save_characters(&mut tx, player_id, d, abil).await {
         log::error(&format!("[Exception] PlayDataStorage.UpdateRecord: {e:#}"));
     }
-    if let Err(e) = save_ablity(&mut tx, player_id, &d.abil.clone().unwrap_or_default()).await {
+    if let Err(e) = save_ablity(&mut tx, player_id, abil).await {
         log::error(&format!("[Exception] PlayDataStorage.SaveAblity: {e:#}"));
     }
     if let Err(e) = save_item_table(
@@ -816,25 +850,30 @@ async fn save_record(
         tx.rollback().await.ok();
         return Ok(false);
     }
-    if let Err(e) = save_bonusability(
-        &mut tx,
-        player_id,
-        &d.bonus_abil.clone().unwrap_or_default(),
-    )
-    .await
-    {
-        log::error(&format!(
-            "[Exception] PlayDataStorage.SaveBonusability: {e:#}"
-        ));
+    if let Some(bonus) = d.bonus_abil.as_ref() {
+        if let Err(e) = save_bonusability(&mut tx, player_id, bonus).await {
+            log::error(&format!(
+                "[Exception] PlayDataStorage.SaveBonusability: {e:#}"
+            ));
+        }
+    } else {
+        // C# `SaveBonusability` 的内层 try：`bonusAbil.AC` NRE 被 catch ⇒ 该表一行不改。
+        log::error(
+            "[Exception] PlayDataStorage.SaveBonusability: BonusAbil 缺失（C# NRE 被 catch ⇒ 该表不改）",
+        );
     }
-    if let Err(e) = save_status(
-        &mut tx,
-        player_id,
-        d.status_time_arr.as_deref().unwrap_or(&[]),
-    )
-    .await
-    {
-        log::error(&format!("[Exception] PlayDataStorage.SaveStatus: {e:#}"));
+    match d.status_time_arr.as_deref() {
+        Some(status) if status.len() >= STATUS_SLOTS => {
+            if let Err(e) = save_status(&mut tx, player_id, status).await {
+                log::error(&format!("[Exception] PlayDataStorage.SaveStatus: {e:#}"));
+            }
+        }
+        _ => {
+            // C# `SaveStatus` 的内层 try：`statusTimeArr[0..14]` NRE/越界被 catch ⇒ 该表一行不改。
+            log::error(
+                "[Exception] PlayDataStorage.SaveStatus: StatusTimeArr 缺失或长度不足（C# NRE 被 catch ⇒ 该表不改）",
+            );
+        }
     }
     if let Err(e) = tx.commit().await {
         log::error(&format!(
@@ -979,6 +1018,7 @@ async fn create_empty_items(
     player_id: i64,
     table: &str,
     count: i32,
+    swallow: bool,
 ) -> Result<()> {
     let sql = format!(
         "INSERT INTO {table} (PlayerId, Position, MakeIndex, StdIndex, Dura, DuraMax) VALUES (?, ?, 0, 0, 0, 0);"
@@ -993,6 +1033,15 @@ async fn create_empty_items(
         {
             Ok(_) => items.push(Some(ServerUserItem::csharp_new())),
             Err(e) => {
+                if !swallow {
+                    // C# `CreateUseItem`/`CreateBagItem` 的 INSERT 循环在 `AddRecord` 的
+                    // try **之外** ⇒ 异常冒到 `AddRecord` 的 catch ⇒ 整次建角回滚
+                    // （含主表 characters 行）。调用方负责回滚事务。
+                    return Err(anyhow::anyhow!(
+                        "建角附属表 {table} 写入失败（C# 在 try 外 ⇒ 整次建角回滚）: {e}"
+                    ));
+                }
+                // C# `CreateStorageItem` 的循环在自己的 try 内 ⇒ 吞错并继续。
                 log::error(&format!(
                     "[Exception] PlayDataStorage.CreateItem({table}): {e:#}"
                 ));
@@ -1076,6 +1125,14 @@ impl Db {
         let Some(d) = info.data.as_ref() else {
             return Ok(false);
         };
+        // C# `AddRecord` → `CreateCharacters` 的 `hd.Abil.Level`（try 内）对 null NRE ⇒
+        // catch ⇒ 整次建角回滚、`Add` 返回 false。照搬：不建行、不写内存索引。
+        if d.abil.is_none() {
+            log::error(
+                "[Exception] PlayDataStorage.CreateCharacters: Abil 缺失（C# NRE ⇒ 整次建角回滚）",
+            );
+            return Ok(false);
+        }
         let mut tx = self.pool.begin().await.context("开启建角事务失败")?;
         let player_id = create_characters(&mut tx, info).await?;
         if player_id <= 0 {
@@ -1083,9 +1140,24 @@ impl Db {
             return Ok(false);
         }
         create_ablity_status(&mut tx, player_id, d).await?;
-        create_empty_items(&mut tx, player_id, "characters_item", 13).await?;
-        create_empty_items(&mut tx, player_id, "characters_bagitem", 46).await?;
-        create_empty_items(&mut tx, player_id, "characters_storageitem", 50).await?;
+        // `characters_item` / `characters_bagitem` 的 Oracle INSERT 循环在 try 外 ⇒
+        // 失败即整次建角回滚；`characters_storageitem` 在 try 内 ⇒ 吞错并提交（LB-07）。
+        if let Err(e) = create_empty_items(&mut tx, player_id, "characters_item", 13, false).await {
+            tx.rollback().await.ok();
+            return Err(e);
+        }
+        if let Err(e) =
+            create_empty_items(&mut tx, player_id, "characters_bagitem", 46, false).await
+        {
+            tx.rollback().await.ok();
+            return Err(e);
+        }
+        if let Err(e) =
+            create_empty_items(&mut tx, player_id, "characters_storageitem", 50, true).await
+        {
+            tx.rollback().await.ok();
+            return Err(e);
+        }
         tx.commit().await.context("提交建角事务失败")?;
         self.name_text.insert(name.to_lowercase(), player_id);
         self.name_quick.insert(fold_key(&name_gbk), player_id);
@@ -1299,7 +1371,7 @@ mod item_attr_tests {
         );
         // 建角路径（create_empty_items）同样不得产生 attr 行
         let pid_creation = 9003;
-        create_empty_items(&mut conn, pid_creation, "characters_item", 13)
+        create_empty_items(&mut conn, pid_creation, "characters_item", 13, false)
             .await
             .expect("create_empty_items 失败");
         assert_eq!(
@@ -1337,7 +1409,7 @@ mod item_attr_tests {
         // ---- d) 存档往返：UPDATE 写全部 14 列；回读按 oracle 映射 ----
         let pid_d = 9005;
         let d_saved = seq(40);
-        create_empty_items(&mut conn, pid_d, "characters_item", 13)
+        create_empty_items(&mut conn, pid_d, "characters_item", 13, false)
             .await
             .expect("create_empty_items 失败");
         // 先按 oracle 的 INSERT 门造出一行（模拟「已有 attr 行」）
@@ -1643,5 +1715,330 @@ mod single_sided_column_tests {
             .execute(&mut conn)
             .await
             .expect("清理测试库失败");
+    }
+}
+
+#[cfg(test)]
+mod partial_save_tests {
+    //! 存档体缺字段不得写 0 覆盖（LB-06 重写，按评审更正节的 oracle 口径）：
+    //!
+    //! | 缺失字段 | oracle 实际行为（本测试钉住） |
+    //! |---|---|
+    //! | `Abil` | `SaveRecord(context,…,hd)` 的 `hd.Abil.Level` 在**内层 try 之外** NRE ⇒ 外层 catch ⇒ `RollBack()`，**8 张表一行不改**、`Update` 返回 false |
+    //! | `BonusAbil` | `SaveBonusability` 自己的 try 内 NRE 被 catch ⇒ 只跳过 `characters_bonusability` |
+    //! | `StatusTimeArr` | `SaveStatus` 自己的 try 内 NRE/越界被 catch ⇒ 只跳过 `characters_status` |
+    //! | 物品 `Desc` | `UpdateItemAttr` 先拼**整批** SQL 再执行 ⇒ 拼串时 NRE 被 catch ⇒ 该批 `characters_item_attr` 一行不改 |
+    //!
+    //! 旧实现四处 `unwrap_or_default()` / 补 0 ⇒ 把等级/HP/AC/状态位/物品属性全部清零。
+    //!
+    //! 跑法（需本机 MySQL；各用例独立 `mir2_test_*` 库，自建自删）：
+    //! `cargo test -p db-srv --bins partial_save_tests -- --ignored --nocapture`
+
+    use super::save_record;
+    use crate::testsupport as ts;
+    use mir2_storage::playerdata::{Ability, CharacterDataInfo, NakedAbility, ServerUserItem};
+    use mir2_storage::LegacyDsn;
+    use sqlx::Row;
+
+    fn info(name: &str) -> CharacterDataInfo {
+        let mut v = CharacterDataInfo::csharp_new();
+        v.header.set_name(Some(name.to_string()));
+        let d = v.data.as_mut().expect("CharacterData 默认非空");
+        d.chr_name = Some(name.to_string());
+        d.gold = 999;
+        d.abil = Some(Ability {
+            level: 5,
+            hp: 55,
+            ..Ability::default()
+        });
+        d.bonus_abil = Some(NakedAbility {
+            ac: 9,
+            ..NakedAbility::default()
+        });
+        d.status_time_arr = Some(vec![444; 15]);
+        v
+    }
+
+    async fn one(dsn: &LegacyDsn, sql: &str, id: i64) -> i64 {
+        let mut c = ts::conn(dsn).await;
+        let row = sqlx::query(sql)
+            .bind(id)
+            .fetch_one(&mut c)
+            .await
+            .unwrap_or_else(|e| panic!("查询失败 ({sql}): {e}"));
+        // 列类型跨 int/bigint/tinyint(1)（后者 sqlx 视作 BOOLEAN），逐档取。
+        row.try_get::<i64, _>("v")
+            .or_else(|_| row.try_get::<i32, _>("v").map(i64::from))
+            .or_else(|_| row.try_get::<i16, _>("v").map(i64::from))
+            .or_else(|_| row.try_get::<u16, _>("v").map(i64::from))
+            .or_else(|_| row.try_get::<i8, _>("v").map(i64::from))
+            .or_else(|_| row.try_get::<u8, _>("v").map(i64::from))
+            .or_else(|_| row.try_get::<bool, _>("v").map(i64::from))
+            .unwrap_or_else(|e| panic!("v 列解码失败 ({sql}): {e}"))
+    }
+
+    /// 种一份带区分度的存档（characters.Gold=100 / ablity.Level=7 / status.Status0=111 /
+    /// bonusability.AC=1），返回 `characters.Id`。
+    async fn seed(dsn: &LegacyDsn, name: &str) -> i64 {
+        let id = ts::insert_character(dsn, "acct", name).await;
+        let mut c = ts::conn(dsn).await;
+        sqlx::query("UPDATE characters SET Gold=100, Level=1 WHERE Id=?")
+            .bind(id)
+            .execute(&mut c)
+            .await
+            .expect("seed characters 失败");
+        sqlx::query(
+            "INSERT INTO characters_ablity (PlayerId, Level, Ac, Mac, Dc, Mc, Sc, Hp, Mp, MaxHP, MAxMP, \
+             Exp, MaxExp, Weight, MaxWeight, WearWeight, MaxWearWeight, HandWeight, MaxHandWeight) \
+             VALUES (?, 7, 41, 42, 1, 2, 3, 7, 8, 101, 102, 100, 1000, 10, 100, 11, 110, 12, 120)",
+        )
+        .bind(id)
+        .execute(&mut c)
+        .await
+        .expect("seed characters_ablity 失败");
+        sqlx::query(
+            "INSERT INTO characters_status (PlayerId, Status0, Status1, Status2, Status3, Status4, \
+             Status5, Status6, Status7, Status8, Status9, Status10, Status11, Status12, Status13, \
+             Status14, Status15) VALUES (?, 111, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 222, 0)",
+        )
+        .bind(id)
+        .execute(&mut c)
+        .await
+        .expect("seed characters_status 失败");
+        sqlx::query(
+            "INSERT INTO characters_bonusability (PLAYERID, AC, MAC, DC, MC, SC, HP, MP, HIT, SPEED, RESERVED) \
+             VALUES (?, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)",
+        )
+        .bind(id)
+        .execute(&mut c)
+        .await
+        .expect("seed characters_bonusability 失败");
+        id
+    }
+
+    /// LB-06(a)：`Abil` 缺失 ⇒ oracle 整次存档回滚（不是只跳过 ablitiy 表）。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_psave_abil（自建自删）"]
+    async fn save_missing_abil_rolls_back_everything() {
+        let dsn = ts::setup_db("mir2_test_psave_abil").await;
+        let name = "psabilhero";
+        let id = seed(&dsn, name).await;
+        let mut rcd = info(name);
+        rcd.data.as_mut().expect("data").abil = None;
+        let mut c = ts::conn(&dsn).await;
+        let ok = save_record(&mut c, id, &rcd)
+            .await
+            .expect("save_record 不得报错（oracle 外层 catch 吞掉 NRE）");
+        assert!(!ok, "Abil 缺失 ⇒ oracle 外层 catch ⇒ Update 返回 false");
+        assert_eq!(
+            one(&dsn, "SELECT Gold AS v FROM characters WHERE Id=?", id).await,
+            100,
+            "characters 也不得更新（整次回滚）"
+        );
+        assert_eq!(
+            one(
+                &dsn,
+                "SELECT Level AS v FROM characters_ablity WHERE PlayerId=?",
+                id
+            )
+            .await,
+            7,
+            "characters_ablity 保持库内旧值"
+        );
+        assert_eq!(
+            one(
+                &dsn,
+                "SELECT Status0 AS v FROM characters_status WHERE PlayerId=?",
+                id
+            )
+            .await,
+            111,
+            "characters_status 保持库内旧值"
+        );
+        assert_eq!(
+            one(
+                &dsn,
+                "SELECT AC AS v FROM characters_bonusability WHERE PlayerId=?",
+                id
+            )
+            .await,
+            1,
+            "characters_bonusability 保持库内旧值"
+        );
+        ts::drop_db(&dsn).await;
+    }
+
+    /// LB-06(b)：`BonusAbil` 缺失 ⇒ 只跳过 `characters_bonusability`，其余照常落库。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_psave_bonus（自建自删）"]
+    async fn save_missing_bonus_abil_keeps_bonusability_table() {
+        let dsn = ts::setup_db("mir2_test_psave_bonus").await;
+        let name = "psbonushero";
+        let id = seed(&dsn, name).await;
+        let mut rcd = info(name);
+        rcd.data.as_mut().expect("data").bonus_abil = None;
+        let mut c = ts::conn(&dsn).await;
+        let ok = save_record(&mut c, id, &rcd).await.expect("保存失败");
+        assert!(ok, "BonusAbil 缺失被 catch ⇒ 其余表照常提交");
+        assert_eq!(
+            one(&dsn, "SELECT Gold AS v FROM characters WHERE Id=?", id).await,
+            999
+        );
+        assert_eq!(
+            one(
+                &dsn,
+                "SELECT Level AS v FROM characters_ablity WHERE PlayerId=?",
+                id
+            )
+            .await,
+            5
+        );
+        assert_eq!(
+            one(
+                &dsn,
+                "SELECT AC AS v FROM characters_bonusability WHERE PlayerId=?",
+                id
+            )
+            .await,
+            1,
+            "characters_bonusability 一行不改（不得写 0）"
+        );
+        assert_eq!(
+            one(
+                &dsn,
+                "SELECT Status0 AS v FROM characters_status WHERE PlayerId=?",
+                id
+            )
+            .await,
+            444,
+            "其余表照常更新"
+        );
+        ts::drop_db(&dsn).await;
+    }
+
+    /// LB-06(c)：`StatusTimeArr` 缺失 ⇒ 只跳过 `characters_status`。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_psave_status（自建自删）"]
+    async fn save_missing_status_keeps_status_table() {
+        let dsn = ts::setup_db("mir2_test_psave_status").await;
+        let name = "psstatushero";
+        let id = seed(&dsn, name).await;
+        let mut rcd = info(name);
+        rcd.data.as_mut().expect("data").status_time_arr = None;
+        let mut c = ts::conn(&dsn).await;
+        let ok = save_record(&mut c, id, &rcd).await.expect("保存失败");
+        assert!(ok);
+        assert_eq!(
+            one(&dsn, "SELECT Gold AS v FROM characters WHERE Id=?", id).await,
+            999
+        );
+        assert_eq!(
+            one(
+                &dsn,
+                "SELECT Status0 AS v FROM characters_status WHERE PlayerId=?",
+                id
+            )
+            .await,
+            111,
+            "characters_status 一行不改（不得把 15 个状态位写 0）"
+        );
+        assert_eq!(
+            one(
+                &dsn,
+                "SELECT Status14 AS v FROM characters_status WHERE PlayerId=?",
+                id
+            )
+            .await,
+            222
+        );
+        assert_eq!(
+            one(
+                &dsn,
+                "SELECT AC AS v FROM characters_bonusability WHERE PlayerId=?",
+                id
+            )
+            .await,
+            9,
+            "其余表照常更新"
+        );
+        ts::drop_db(&dsn).await;
+    }
+
+    /// LB-06(d)：物品 `Desc` 缺失 ⇒ `characters_item_attr` 整批一行不改（不是补 0）。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_psave_desc（自建自删）"]
+    async fn save_missing_item_desc_keeps_item_attr_table() {
+        let dsn = ts::setup_db("mir2_test_psave_desc").await;
+        let name = "psdeschero";
+        let id = seed(&dsn, name).await;
+        {
+            let mut c = ts::conn(&dsn).await;
+            // 旧物品：槽 0 穿戴 MakeIndex=111；槽 1 空。
+            sqlx::query(
+                "INSERT INTO characters_item (PlayerId, Position, MakeIndex, StdIndex, Dura, DuraMax) \
+                 VALUES (?, 0, 111, 45, 0, 0), (?, 1, 0, 0, 0, 0)",
+            )
+            .bind(id)
+            .bind(id)
+            .execute(&mut c)
+            .await
+            .expect("seed characters_item 失败");
+            // attr 行：目标 MakeIndex=123 的 VALUE0..13 种成非零。
+            sqlx::query(
+                "INSERT INTO characters_item_attr (PlayerId, MakeIndex, VALUE0, VALUE1, VALUE2, VALUE3, \
+                 VALUE4, VALUE5, VALUE6, VALUE7, VALUE8, VALUE9, VALUE10, VALUE11, VALUE12, VALUE13) \
+                 VALUES (?, 123, 77, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)",
+            )
+            .bind(id)
+            .execute(&mut c)
+            .await
+            .expect("seed characters_item_attr 失败");
+        }
+        let mut rcd = info(name);
+        {
+            let d = rcd.data.as_mut().expect("data");
+            let mut hum = vec![None; 13];
+            hum[0] = Some(ServerUserItem::csharp_new()); // 旧 MakeIndex>0、新 0 ⇒ del
+            let mut it = ServerUserItem::csharp_new();
+            it.make_index = 123;
+            it.index = 45;
+            it.desc = None; // 缺失 Desc
+            hum[1] = Some(it); // 空槽 → 有物 ⇒ chg
+            d.hum_items = Some(hum);
+        }
+        let mut c = ts::conn(&dsn).await;
+        let ok = save_record(&mut c, id, &rcd).await.expect("保存失败");
+        assert!(ok, "UpdateItemAttr 的 NRE 被 catch，不影响提交");
+        assert_eq!(
+            one(
+                &dsn,
+                "SELECT VALUE0 AS v FROM characters_item_attr WHERE PlayerId=? AND MakeIndex=123",
+                id
+            )
+            .await,
+            77,
+            "characters_item_attr 整批一行不改（旧实现会写 0）"
+        );
+        assert_eq!(
+            one(
+                &dsn,
+                "SELECT MakeIndex AS v FROM characters_item WHERE PlayerId=? AND Position=1",
+                id
+            )
+            .await,
+            123,
+            "槽位表的 UPDATE 循环照常执行"
+        );
+        assert_eq!(
+            one(
+                &dsn,
+                "SELECT MakeIndex AS v FROM characters_item WHERE PlayerId=? AND Position=0",
+                id
+            )
+            .await,
+            0,
+            "del 分支照常清空槽 0"
+        );
+        ts::drop_db(&dsn).await;
     }
 }

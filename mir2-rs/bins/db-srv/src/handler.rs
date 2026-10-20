@@ -280,6 +280,11 @@ async fn query_chr(
     if found {
         u.account.clone_from(&account);
         u.session_no = session;
+        // oracle `QueryChr` 的 `bool result` 是**粘性**的（`GetRecord` 只在 `dr.Read()` 时置真、
+        // 从不重置）：全部 `GetBy` 因 `Open` 失败返回 `default` 时它保持 false ⇒ 逐行跳过、
+        // 照常回空列表；一旦某行成功过，后续失败/无行会让 `humRecord=null` ⇒
+        // `!humRecord.Deleted` NRE 冒到消息线程 catch ⇒ **不回包**（与 Rust Err 上抛同形）。
+        let mut result = false;
         for (i, q) in db.find_by_account(&account).into_iter().enumerate() {
             log::info(&format!(
                 "[QueryChr] 候选 account={} i={i} name=[{}] quickIndex={}",
@@ -287,14 +292,40 @@ async fn query_chr(
                 q.name_text,
                 q.index
             ));
-            let rec = db.record_get_by(q.index).await?;
+            let rec = match db.record_get_by(q.index).await {
+                Ok(rec) => {
+                    // C# `GetBy`：`nIndex <= 0` 显式 `success=false`；`dr.Read()` 才置真。
+                    if q.index <= 0 {
+                        result = false;
+                    } else if rec.is_some() {
+                        result = true;
+                    }
+                    rec
+                }
+                Err(e) => {
+                    // C# `GetRecord`：`Open` 失败返回 `default`、**不改 success**（LB-02 更正节）。
+                    log::error(&format!(
+                        "[QueryChr]   GetBy 失败（C# Open 失败同口径，result={result}）: {e:#}"
+                    ));
+                    None
+                }
+            };
             // 日志口径照抄 C# 的 `$"...result={result}"`（.NET 布尔渲染 True/False），
             // 便于把两侧日志按行 diff 当证据用。
             log::info(&format!(
                 "[QueryChr]   GetBy -> result={}",
-                if rec.is_some() { "True" } else { "False" }
+                if result { "True" } else { "False" }
             ));
-            let Some(rec) = rec else { continue };
+            let Some(rec) = rec else {
+                if result {
+                    // C# `if (result && !humRecord.Deleted)` 对 null 行 NRE ⇒ 消息线程 catch ⇒ 不回包。
+                    bail!(
+                        "角色[{}]GetBy 无行/失败而 result 已为真（C# 同场景 NRE，不回包）",
+                        q.index
+                    );
+                }
+                continue;
+            };
             if rec.deleted {
                 continue;
             }
@@ -307,9 +338,20 @@ async fn query_chr(
             if nchr >= 2 {
                 continue;
             }
-            let Some(ch) = db.get_query_char(index).await? else {
-                // C# 此处 `chrRecord` 为 null ⇒ NRE（被上层吞掉、**不回包**）
-                bail!("角色[{index}]在 characters 表取不到行（C# 同场景为 NRE，不回包）");
+            let ch = match db.get_query_char(index).await {
+                Ok(Some(ch)) => ch,
+                // C# `GetQryChar` 读到行才赋值；无行仍返回 true ⇒ `chrRecord` 为 null ⇒ NRE
+                // （被上层吞掉、**不回包**）。
+                Ok(None) => {
+                    bail!("角色[{index}]在 characters 表取不到行（C# 同场景为 NRE，不回包）")
+                }
+                Err(e) => {
+                    // C# `GetQryChar` 内部 catch ⇒ false ⇒ 该角色被跳过（不整条命令失败）。
+                    log::error(&format!(
+                        "[QueryChr]   GetQryChar 失败（C# catch 后跳过该角色）: {e:#}"
+                    ));
+                    continue;
+                }
             };
             log::info("[QueryChr]   GetQryChar -> True");
             items.push((
@@ -386,45 +428,65 @@ async fn new_chr(
     if ncode == -1 {
         if db.data_index(&name).is_some() {
             ncode = 2;
-        } else if db.chr_count_of_account(&req.account).await? >= 2 {
-            ncode = 3;
         } else {
-            // C# `Add` 绑的 `@SelectID` 是 `PlayerRecordData.Selected`（此处恒 0），
-            // `Header.SelectID`（= 网关 ID）只用于内存索引 —— 如实照搬。
-            if db
-                .record_add(&name, &account, u.sel_gate_id)
-                .await?
-                .is_none()
-            {
-                ncode = 2;
-            } else {
-                let sex = byte_cast(str_to_int(&req.sex, 0));
-                let job = byte_cast(str_to_int(&req.job, 0));
-                let hair = byte_cast(str_to_int(&req.hair, 0));
-                // **G4（照抄 oracle；硬约束③）**：`NewChrData`（`UserService.cs:259-280`）
-                // ① 先 `if (_playDataStorage.Index(sChrName) != -1) return false;`
-                // ② 否则 `_playDataStorage.Add(chrRecord); return true;` —— **忽略 Add 返回值**。
-                let add = db.data_add(&name, &account, sex, job, hair).await;
-                if let Err(e) = &add {
+            let count = match db.chr_count_of_account(&req.account).await {
+                Ok(n) => n,
+                Err(e) => {
+                    // C# `ChrCountOfAccount`：`GetBy` 的 `Open` 失败只让该条不计入 ⇒ 计数 0。
                     log::error(&format!(
-                        "创建角色[{}]数据失败（C# 同场景吞异常并回成功）: {e:#}",
+                        "创建角色[{}]：统计账号角色数失败（C# Open 失败同口径按 0）: {e:#}",
                         show(&name)
                     ));
+                    0
                 }
-                match new_chr_data_outcome(&add) {
-                    NewChrDataOutcome::Success => ncode = 1,
-                    NewChrDataOutcome::IndexExists => {
-                        // ①：`NewChrData` 返回 false ⇒ `_playRecordStorage.Delete(sChrName)`
-                        // （`:645`）先写 `IsDeleted=2`；随后 `Delete` 里的
-                        // `_quickIdList.DelRecord` 用角色名查 account 键表抛
-                        // `KeyNotFoundException`，异常从 `NewChr`（调用点无 catch）冒泡
-                        // ⇒ **不回包**。Rust 的 `record_soft_delete` 不抛，故显式 `bail!`
-                        // 让上层只记日志（`process_server_msg` 的 Err 支），保持同一可观测语义。
-                        db.record_soft_delete(&name).await?;
-                        bail!(
-                            "创建角色[{}]：NewChrData 返回 false（Index != -1）⇒ 照 oracle Delete 异常路径，不回包",
+            };
+            if count >= 2 {
+                ncode = 3;
+            } else {
+                // C# `Add` 绑的 `@SelectID` 是 `PlayerRecordData.Selected`（此处恒 0），
+                // `Header.SelectID`（= 网关 ID）只用于内存索引 —— 如实照搬。
+                let added = match db.record_add(&name, &account, u.sel_gate_id).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        // C# `PlayRecordStorage.Add` → `UpdateRecord` 内部 catch ⇒ false ⇒ `nCode=2`。
+                        log::error(&format!(
+                            "创建角色[{}]：插入 characters_indexes 失败（C# 吞异常后 nCode=2）: {e:#}",
                             show(&name)
-                        );
+                        ));
+                        None
+                    }
+                };
+                if added.is_none() {
+                    ncode = 2;
+                } else {
+                    let sex = byte_cast(str_to_int(&req.sex, 0));
+                    let job = byte_cast(str_to_int(&req.job, 0));
+                    let hair = byte_cast(str_to_int(&req.hair, 0));
+                    // **G4（照抄 oracle；硬约束③）**：`NewChrData`（`UserService.cs:259-280`）
+                    // ① 先 `if (_playDataStorage.Index(sChrName) != -1) return false;`
+                    // ② 否则 `_playDataStorage.Add(chrRecord); return true;` —— **忽略 Add 返回值**。
+                    let add = db.data_add(&name, &account, sex, job, hair).await;
+                    if let Err(e) = &add {
+                        log::error(&format!(
+                            "创建角色[{}]数据失败（C# 同场景吞异常并回成功）: {e:#}",
+                            show(&name)
+                        ));
+                    }
+                    match new_chr_data_outcome(&add) {
+                        NewChrDataOutcome::Success => ncode = 1,
+                        NewChrDataOutcome::IndexExists => {
+                            // ①：`NewChrData` 返回 false ⇒ `_playRecordStorage.Delete(sChrName)`
+                            // （`:645`）先写 `IsDeleted=2`；随后 `Delete` 里的
+                            // `_quickIdList.DelRecord` 用角色名查 account 键表抛
+                            // `KeyNotFoundException`，异常从 `NewChr`（调用点无 catch）冒泡
+                            // ⇒ **不回包**。Rust 的 `record_soft_delete` 不抛，故显式 `bail!`
+                            // 让上层只记日志（`process_server_msg` 的 Err 支），保持同一可观测语义。
+                            db.record_soft_delete(&name).await?;
+                            bail!(
+                                "创建角色[{}]：NewChrData 返回 false（Index != -1）⇒ 照 oracle Delete 异常路径，不回包",
+                                show(&name)
+                            );
+                        }
                     }
                 }
             }
@@ -455,14 +517,36 @@ async fn delete_chr(
     let name = edcode::decode(body);
     let mut bocheck = false;
     if let Some(nindex) = db.record_index(&name) {
-        if let Some(rec) = db.record_get_by(nindex).await? {
+        let rec = match db.record_get_by(nindex).await {
+            Ok(rec) => rec,
+            Err(e) => {
+                // C# `_playRecordStorage.Get` 的 `Open` 失败返回 `default`、`boCheck` 保持 false
+                // ⇒ 回 `SM_DELCHR_FAIL(524)`（不是零回包，LB-03）。
+                log::error(&format!(
+                    "删除角色[{}]：读 characters_indexes 失败（C# Open 失败 ⇒ boCheck=false）: {e:#}",
+                    show(&name)
+                ));
+                None
+            }
+        };
+        if let Some(rec) = rec {
             bocheck = true; // C# `Get(nIndex, ref boCheck)` 读到行即置 true
             if rec.account_text.as_bytes() == u.account.as_slice() {
                 let level = del_chr_sname_to_level(db, &name).await?;
                 if i32::from(level) < server.cfg.delete_min_level {
                     let mut row = rec;
                     row.deleted = true;
-                    bocheck = db.record_update(&row).await?;
+                    bocheck = match db.record_update(&row).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            // C# `PlayRecordStorage.Update` → `UpdateRecord` 内部 catch ⇒ false。
+                            log::error(&format!(
+                                "删除角色[{}]：更新 characters_indexes 失败（C# catch ⇒ boCheck=false）: {e:#}",
+                                show(&name)
+                            ));
+                            false
+                        }
+                    };
                 }
             }
         }
@@ -487,9 +571,16 @@ async fn del_chr_sname_to_level(db: &Db, name: &[u8]) -> Result<u16> {
     let Some(index) = db.data_index(name) else {
         return Ok(0);
     };
-    match db.get_query_char(index).await? {
-        Some(q) => Ok(q.level),
-        None => bail!("角色[{index}]在 characters 表取不到行（C# 同场景为 NRE，不回包）"),
+    match db.get_query_char(index).await {
+        Ok(Some(q)) => Ok(q.level),
+        Ok(None) => bail!("角色[{index}]在 characters 表取不到行（C# 同场景为 NRE，不回包）"),
+        Err(e) => {
+            // C# `GetQryChar` 内部 catch ⇒ false ⇒ `DelChrSnameToLevel` 返回 0。
+            log::error(&format!(
+                "删除角色[{index}]：GetQryChar 失败（C# catch ⇒ 等级按 0）: {e:#}"
+            ));
+            Ok(0)
+        }
     }
 }
 
@@ -506,19 +597,56 @@ async fn select_chr(
     let mut data_ok = false;
     let mut cur_map = String::new();
     if u.account.eq_ignore_ascii_case(&account) {
+        // oracle `bool result` 同理粘性：全部 `GetBy` 失败（Open 失败）时跳过、继续走
+        // `_playDataStorage.Query`；一旦成功过再遇 null 行 ⇒ NRE、不回包。
+        let mut result = false;
         for q in db.find_by_account(&account) {
-            let Some(mut rec) = db.record_get_by(q.index).await? else {
+            let rec = match db.record_get_by(q.index).await {
+                Ok(rec) => {
+                    if q.index <= 0 {
+                        result = false;
+                    } else if rec.is_some() {
+                        result = true;
+                    }
+                    rec
+                }
+                Err(e) => {
+                    log::error(&format!(
+                        "选择角色[{}]：GetBy 失败（C# Open 失败且 result={result}）: {e:#}",
+                        show(&name)
+                    ));
+                    None
+                }
+            };
+            let Some(mut rec) = rec else {
+                if result {
+                    bail!("选择角色：GetBy 无行/失败而 result 已为真（C# 同场景 NRE，不回包）");
+                }
                 continue;
             };
             if rec.name_gbk == name {
                 rec.selected = 1;
-                db.record_update_by(&rec).await?;
+                // C# `UpdateBy` → `UpdateRecord` 内部 catch：写失败被吞、继续回 STARTPLAY
+                // （LB-05 的真实差异格：索引 UPDATE 失败但 characters SELECT 正常）。
+                if let Err(e) = db.record_update_by(&rec).await {
+                    log::error(&format!(
+                        "选择角色[{}]：写入 SelectID 失败（C# UpdateBy 吞异常、照常回 STARTPLAY）: {e:#}",
+                        show(&name)
+                    ));
+                }
             } else if rec.selected == 1 {
                 rec.selected = 0;
-                db.record_update_by(&rec).await?;
+                if let Err(e) = db.record_update_by(&rec).await {
+                    log::error(&format!(
+                        "选择角色[{}]：清除 SelectID 失败（C# UpdateBy 吞异常）: {e:#}",
+                        show(&name)
+                    ));
+                }
             }
         }
         if let Some(index) = db.data_index(&name) {
+            // C# `PlayDataStorage.Query` 对 `Open` 失败/读异常都返回 null ⇒ `chrRecord.ChrName`
+            // NRE ⇒ 不回包（与 Rust Err 上抛/None 走 bail 同形；这里不降级）。
             match db.query_name_and_map(index).await? {
                 None => bail!("角色[{index}]在 characters 表取不到行（C# 同场景为 NRE，不回包）"),
                 Some((chr_name, map)) => {
@@ -618,5 +746,300 @@ mod new_chr_g4_tests {
             NewChrDataOutcome::IndexExists,
             "Index != -1 ⇒ NewChrData false ⇒ Delete 异常路径"
         );
+    }
+}
+
+#[cfg(test)]
+mod fault_path_tests {
+    //! 5100 面 DB 故障路径（LB-02/03/04/05 + LB-07 的 5100 侧）。
+    //!
+    //! 全部走生产 `dispatch`（限频门/会话门/`chr_queryed` 门都在），故障注入用
+    //! `db.pool.close()`（MySQL 停机/重启）或 `SIGNAL` 触发器（单条 SQL 失败）：
+    //! - `CM_QUERYCHR` 停库 ⇒ `SM_QUERYCHR` 0 个角色（不是 527、不是零回包）；
+    //! - `CM_DELCHR` 停库 ⇒ `SM_DELCHR_FAIL(524)`；
+    //! - `CM_NEWCHR` 停库 ⇒ `SM_NEWCHR_FAIL(522) recog=2`；
+    //! - `CM_SELCHR` 仅 `characters_indexes` 的 UPDATE 失败 ⇒ 仍回 `SM_STARTPLAY(525)`；
+    //! - `CM_NEWCHR` 的 `characters_item` 第 5 条 INSERT 失败 ⇒ 整次建角回滚、索引留孤儿
+    //!   （oracle `NewChrData` 忽略 `Add` 返回值 ⇒ 仍回成功）。
+    //!
+    //! 跑法（需本机 MySQL；各用例独立 `mir2_test_*` 库，自建自删）：
+    //! `cargo test -p db-srv --bins fault_path_tests -- --ignored --nocapture`
+
+    use super::dispatch;
+    use crate::server::{GateUser, Server};
+    use crate::testsupport as ts;
+    use crate::user::ClientPacket;
+    use mir2_protocol::edcode;
+    use mir2_protocol::frame::CommandMessage;
+    use mir2_protocol::messages::{
+        CM_DELCHR, CM_NEWCHR, CM_QUERYCHR, CM_SELCHR, SM_DELCHR_FAIL, SM_NEWCHR_FAIL,
+        SM_NEWCHR_SUCCESS, SM_QUERYCHR, SM_STARTPLAY,
+    };
+    use sqlx::Row;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+
+    const SESSION: i32 = 4242;
+    const ACCOUNT: &str = "acct";
+
+    fn client(ident: u16, plain: &[u8]) -> ClientPacket {
+        ClientPacket {
+            head: CommandMessage::make(i32::from(ident), 0, 0, 0, 0),
+            body: edcode::encode(plain),
+        }
+    }
+
+    async fn setup(
+        tag: &str,
+        database: &str,
+        with_rows: bool,
+    ) -> (
+        mir2_storage::LegacyDsn,
+        Arc<Server>,
+        crate::db::Db,
+        GateUser,
+    ) {
+        let dsn = ts::setup_db(database).await;
+        if with_rows {
+            ts::insert_index(&dsn, ACCOUNT, "aaa").await;
+            ts::insert_character(&dsn, ACCOUNT, "aaa").await;
+        }
+        let db = ts::open_db(&dsn).await;
+        let server = ts::test_server(tag, &dsn);
+        server
+            .login
+            .lock()
+            .await
+            .add_session(ACCOUNT.as_bytes().to_vec(), SESSION, Vec::new());
+        let u = ts::gate_user("s1", ACCOUNT.as_bytes());
+        (dsn, server, db, u)
+    }
+
+    /// 协议前置（评审更正）：同 socket 先成功 `CM_QUERYCHR`（填 `sAccount`/`chr_queryed`），
+    /// 并等 >1000ms 过 `NEWCHR`/`DELCHR` 的限频门。
+    async fn query_ok(
+        server: &Arc<Server>,
+        db: &mut crate::db::Db,
+        tx: &UnboundedSender<Vec<u8>>,
+        rx: &mut UnboundedReceiver<Vec<u8>>,
+        u: &mut GateUser,
+    ) {
+        let body = format!("{ACCOUNT}/{SESSION}");
+        dispatch(
+            server,
+            db,
+            0,
+            tx,
+            "127.0.0.1",
+            u,
+            &client(CM_QUERYCHR, body.as_bytes()),
+        )
+        .await
+        .expect("前置 QUERYCHR 不得失败");
+        let frames = ts::take_frames(rx);
+        assert_eq!(frames.len(), 1, "前置 QUERYCHR 必须有应答");
+        let (head, list) = ts::decode_user_reply(&frames[0]);
+        assert_eq!(head.ident, SM_QUERYCHR, "前置 QUERYCHR 必须成功");
+        assert_eq!(head.recog, 1, "前置：1 个角色");
+        assert_eq!(list, b"aaa/0/0/1/0/");
+    }
+
+    /// LB-02 主判据：停库 ⇒ `SM_QUERYCHR` 空列表（oracle 逐行 `GetBy` 失败即跳过）。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_hfault_q（自建自删）"]
+    async fn querychr_db_down_answers_empty_list() {
+        let (dsn, server, mut db, mut u) = setup("hfault_q", "mir2_test_hfault_q", true).await;
+        db.pool.close().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let body = format!("{ACCOUNT}/{SESSION}");
+        dispatch(
+            &server,
+            &mut db,
+            0,
+            &tx,
+            "127.0.0.1",
+            &mut u,
+            &client(CM_QUERYCHR, body.as_bytes()),
+        )
+        .await
+        .expect("故障路径不得上抛（旧实现 `?` ⇒ 零回包）");
+        let frames = ts::take_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "必须有应答（旧实现零回包）");
+        let (head, list) = ts::decode_user_reply(&frames[0]);
+        assert_eq!(head.ident, SM_QUERYCHR, "oracle 是成功 ident，不是 527");
+        assert_eq!(head.recog, 0, "oracle 回 0 个角色");
+        assert!(list.is_empty(), "空列表体");
+        ts::drop_db(&dsn).await;
+    }
+
+    /// LB-02 第二条：`characters` 读失败（`GetQryChar` 内部 catch）⇒ 跳过该角色、仍空列表。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_hfault_q2（自建自删）"]
+    async fn querychr_chr_table_failure_skips_character() {
+        let (dsn, server, mut db, mut u) = setup("hfault_q2", "mir2_test_hfault_q2", true).await;
+        // characters_indexes 正常、characters 查询失败（GetQryChar 的 catch 支）。
+        sqlx::query("DROP TABLE characters")
+            .execute(&mut ts::conn(&dsn).await)
+            .await
+            .expect("drop characters 失败");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let body = format!("{ACCOUNT}/{SESSION}");
+        dispatch(
+            &server,
+            &mut db,
+            0,
+            &tx,
+            "127.0.0.1",
+            &mut u,
+            &client(CM_QUERYCHR, body.as_bytes()),
+        )
+        .await
+        .expect("GetQryChar 失败必须被跳过");
+        let frames = ts::take_frames(&mut rx);
+        assert_eq!(frames.len(), 1);
+        let (head, list) = ts::decode_user_reply(&frames[0]);
+        assert_eq!((head.ident, head.recog), (SM_QUERYCHR, 0));
+        assert!(list.is_empty());
+        ts::drop_db(&dsn).await;
+    }
+
+    /// LB-03：停库 ⇒ `SM_DELCHR_FAIL(524)`（oracle `boCheck` 保持 false）。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_hfault_d（自建自删）"]
+    async fn delchr_db_down_answers_fail() {
+        let (dsn, server, mut db, mut u) = setup("hfault_d", "mir2_test_hfault_d", true).await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        query_ok(&server, &mut db, &tx, &mut rx, &mut u).await;
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        db.pool.close().await;
+        dispatch(
+            &server,
+            &mut db,
+            0,
+            &tx,
+            "127.0.0.1",
+            &mut u,
+            &client(CM_DELCHR, b"aaa"),
+        )
+        .await
+        .expect("故障路径不得上抛（旧实现 `?` ⇒ 零回包）");
+        let frames = ts::take_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "必须有应答（旧实现零回包）");
+        let (head, body) = ts::decode_user_reply(&frames[0]);
+        assert_eq!((head.ident, head.recog), (SM_DELCHR_FAIL, 0));
+        assert!(body.is_empty());
+        ts::drop_db(&dsn).await;
+    }
+
+    /// LB-04：停库 ⇒ `SM_NEWCHR_FAIL(522) recog=2`（`Add` 失败吞成 false）。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_hfault_n（自建自删）"]
+    async fn newchr_db_down_answers_fail2() {
+        let (dsn, server, mut db, mut u) = setup("hfault_n", "mir2_test_hfault_n", true).await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        query_ok(&server, &mut db, &tx, &mut rx, &mut u).await;
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        db.pool.close().await;
+        dispatch(
+            &server,
+            &mut db,
+            0,
+            &tx,
+            "127.0.0.1",
+            &mut u,
+            &client(CM_NEWCHR, b"acct/dbfailhero/1/0/0"),
+        )
+        .await
+        .expect("故障路径不得上抛（旧实现 `?` ⇒ 零回包）");
+        let frames = ts::take_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "必须有应答（旧实现零回包）");
+        let (head, body) = ts::decode_user_reply(&frames[0]);
+        assert_eq!(
+            (head.ident, head.recog),
+            (SM_NEWCHR_FAIL, 2),
+            "oracle：计数 0 + Add 失败 ⇒ nCode=2（不是 0/3/4）"
+        );
+        assert!(body.is_empty());
+        ts::drop_db(&dsn).await;
+    }
+
+    /// LB-05：`characters_indexes` 的 UPDATE 失败但 `characters` SELECT 正常 ⇒ 仍回 STARTPLAY。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_hfault_s（自建自删）"]
+    async fn selchr_selectid_write_failure_still_startplay() {
+        let (dsn, server, mut db, mut u) = setup("hfault_s", "mir2_test_hfault_s", true).await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        query_ok(&server, &mut db, &tx, &mut rx, &mut u).await;
+        ts::fail_update_trigger(&dsn, "trg_sel_fail", "characters_indexes").await;
+        dispatch(
+            &server,
+            &mut db,
+            0,
+            &tx,
+            "127.0.0.1",
+            &mut u,
+            &client(CM_SELCHR, b"acct/aaa"),
+        )
+        .await
+        .expect("UpdateBy 失败必须被吞");
+        let frames = ts::take_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "必须有应答（旧实现 `?` ⇒ 零回包）");
+        let (head, body) = ts::decode_user_reply(&frames[0]);
+        assert_eq!(
+            head.ident, SM_STARTPLAY,
+            "oracle 吞 UpdateBy 失败、照常回 525"
+        );
+        assert_eq!(body, b"127.0.0.1/7200", "路由体与正常路径逐字节相同");
+        ts::drop_db(&dsn).await;
+    }
+
+    /// LB-07（5100 侧）：建角时 `characters_item` 第 5 条 INSERT 失败 ⇒ 整次建角回滚。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_hfault_i4（自建自删）"]
+    async fn newchr_item_insert_failure_rolls_back_whole_character() {
+        let (dsn, server, mut db, mut u) = setup("hfault_i4", "mir2_test_hfault_i4", true).await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        // `new_chr` 本身不要求先 QUERYCHR，但会话/账号与 1000ms 限频门先满足。
+        query_ok(&server, &mut db, &tx, &mut rx, &mut u).await;
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        ts::fail_insert_trigger(&dsn, "trg_item_fail", "characters_item", 4).await;
+        dispatch(
+            &server,
+            &mut db,
+            0,
+            &tx,
+            "127.0.0.1",
+            &mut u,
+            &client(CM_NEWCHR, b"acct/itemhero/1/0/0"),
+        )
+        .await
+        .expect("oracle 同场景吞异常并回成功（G4）");
+        let frames = ts::take_frames(&mut rx);
+        assert_eq!(frames.len(), 1);
+        let (head, _) = ts::decode_user_reply(&frames[0]);
+        assert_eq!(
+            head.ident, SM_NEWCHR_SUCCESS,
+            "oracle `NewChrData` 忽略 Add 返回值 ⇒ 仍回成功（索引留孤儿）"
+        );
+        let mut c = ts::conn(&dsn).await;
+        let n: i64 = sqlx::query("SELECT COUNT(*) AS n FROM characters WHERE ChrName=?")
+            .bind("itemhero")
+            .fetch_one(&mut c)
+            .await
+            .expect("统计 characters 失败")
+            .try_get("n")
+            .expect("COUNT 列");
+        assert_eq!(n, 0, "oracle 整次建角回滚（characters 0 行）");
+        let idx: i64 = sqlx::query("SELECT COUNT(*) AS n FROM characters_indexes WHERE ChrName=?")
+            .bind("itemhero")
+            .fetch_one(&mut c)
+            .await
+            .expect("统计 characters_indexes 失败")
+            .try_get("n")
+            .expect("COUNT 列");
+        assert_eq!(idx, 1, "索引行残留（oracle 同：Add 先于建档、独立提交）");
+        assert!(db.data_index(b"itemhero").is_none(), "内存索引不得污染");
+        ts::drop_db(&dsn).await;
     }
 }

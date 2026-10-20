@@ -277,10 +277,23 @@ async fn load_human_rcd(
         if let Some(_n_index) = db.play_data_index_text(&chr_name) {
             if let Some(cached) = server.cache.lock().await.get(chr_name.as_bytes()) {
                 human_rcd = Some(cached);
-            } else if let Some(v) = db.play_data_get(&chr_name).await? {
-                human_rcd = Some(v);
             } else {
-                n_check_code = -2;
+                // oracle `DataService.cs:177-182`：`_playDataStorage.Get(...)` 返回 false
+                // （`Open` 失败 / `GetRecord` 内部吞掉读异常）时只置 `nCheckCode = -2`，
+                // **不回包也不上抛**；应答分支只看 `(nCheckCode == 1) || boFoundSession`
+                // ⇒ 会话已找到时仍回 `DBR_LOADHUMANRCD(1100) recog=1 series=1` +
+                // `HumDataInfo = null`（降级成功帧）。
+                // 旧实现用 `?` 上抛 ⇒ MySQL 停机/重启窗内取档**零回包**，GameSvr 永久挂起（LB-01）。
+                match db.play_data_get(&chr_name).await {
+                    Ok(Some(v)) => human_rcd = Some(v),
+                    Ok(None) => n_check_code = -2,
+                    Err(e) => {
+                        log::error(&format!(
+                            "获取玩家[{chr_name}]数据失败（C# 同场景置 nCheckCode=-2）: {e:#}"
+                        ));
+                        n_check_code = -2;
+                    }
+                }
             }
         } else {
             n_check_code = -3;
@@ -823,5 +836,223 @@ mod save_failure_tests {
             .execute(&mut conn)
             .await
             .expect("清理测试库失败");
+    }
+}
+
+#[cfg(test)]
+mod db_fault_tests {
+    //! 6000 面故障路径（LB-01 + LB-07 的 6000 侧）：
+    //! - `DB_LOADHUMANRCD` 在 `acquire` 失败时必须回 oracle 的**降级成功帧**
+    //!   （`1100 recog=1 series=1` + `HumDataInfo=null`），不得零回包；
+    //! - 自动建档时 `characters_item`/`characters_bagitem` 的 INSERT 失败必须整次回滚
+    //!   （oracle `CreateUseItem`/`CreateBagItem` 在 `AddRecord` 的 try 之外），而
+    //!   `characters_storageitem` 的失败被吞并提交（它在 try 内）。
+    //!
+    //! 跑法（需本机 MySQL；各用例独立 `mir2_test_*` 库，自建自删）：
+    //! `cargo test -p db-srv --bins db_fault_tests -- --ignored --nocapture`
+
+    use super::{load_human_rcd, save_reply, store_human_rcd, DBR_LOADHUMANRCD, DBR_SAVEHUMANRCD};
+    use crate::cache::CacheStore;
+    use crate::testsupport as ts;
+    use mir2_protocol::edcode;
+    use mir2_protocol::frame::ServerDataPacket;
+    use mir2_storage::playerdata::{
+        CharacterDataInfo, LoadCharacterData, LoadPlayerDataPacket, MemPack, ServerRequestData,
+        ServerRequestMessage,
+    };
+    use mir2_storage::LegacyDsn;
+    use sqlx::Row;
+    use std::sync::Arc;
+    use tokio::sync::{mpsc, Mutex};
+
+    const SESSION: i32 = 7001;
+
+    fn info(name: &str) -> CharacterDataInfo {
+        let mut v = CharacterDataInfo::csharp_new();
+        v.header.set_name(Some(name.to_string()));
+        if let Some(d) = v.data.as_mut() {
+            d.chr_name = Some(name.to_string());
+        }
+        v
+    }
+
+    /// 拆 6B 头 + `ServerRequestData`，返回 `(query_id, 消息头, 业务体解码结果)`。
+    fn parse_reply(wire: &[u8]) -> (i32, ServerRequestMessage, Option<Vec<u8>>) {
+        let head =
+            ServerDataPacket::from_bytes(&wire[..ServerDataPacket::SIZE]).expect("应答 6B 头非法");
+        assert_eq!(
+            head.packet_len as usize,
+            wire.len() - ServerDataPacket::SIZE
+        );
+        let resp = ServerRequestData::from_bytes(&wire[ServerDataPacket::SIZE..])
+            .expect("应答信封解析失败");
+        let message = resp.message.as_ref().expect("应答缺 Message");
+        let m =
+            ServerRequestMessage::from_bytes(&edcode::decode(message)).expect("应答消息头解析失败");
+        let body = resp.packet.as_ref().map(|p| edcode::decode(p));
+        (resp.query_id, m, body)
+    }
+
+    async fn count_where(dsn: &LegacyDsn, table: &str, col: &str, value: &str) -> i64 {
+        let mut c = ts::conn(dsn).await;
+        let sql = format!("SELECT COUNT(*) AS n FROM {table} WHERE {col}=?");
+        let row = sqlx::query(&sql)
+            .bind(value)
+            .fetch_one(&mut c)
+            .await
+            .unwrap_or_else(|e| panic!("统计 {table}.{col} 失败: {e}"));
+        row.try_get("n").expect("COUNT 列")
+    }
+
+    async fn count_all(dsn: &LegacyDsn, table: &str) -> i64 {
+        let mut c = ts::conn(dsn).await;
+        let sql = format!("SELECT COUNT(*) AS n FROM {table}");
+        let row = sqlx::query(&sql)
+            .fetch_one(&mut c)
+            .await
+            .unwrap_or_else(|e| panic!("统计 {table} 失败: {e}"));
+        row.try_get("n").expect("COUNT 列")
+    }
+
+    /// LB-01 主判据：`pool.close()`（MySQL 停机/重启时 acquire 失败）⇒ oracle 降级成功帧。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_loadfail_a（自建自删）"]
+    async fn load_db_acquire_failure_answers_degraded_success_frame() {
+        let dsn = ts::setup_db("mir2_test_loadfail_a").await;
+        ts::insert_character(&dsn, "acct", "loadhero").await;
+        let db = ts::open_db(&dsn).await;
+        assert!(
+            db.play_data_index_text("loadhero").is_some(),
+            "内存索引必须命中（否则走 -3 分支）"
+        );
+        // 故障注入：关闭连接池 ⇒ 后续 `acquire` 返回 Err（评审更正：池占满不可达，
+        // 真实触发是 MySQL 停机/重启）。
+        db.pool.close().await;
+        let db = Arc::new(Mutex::new(db));
+
+        let server = ts::test_server("loadfail_a", &dsn);
+        server
+            .login
+            .lock()
+            .await
+            .add_session(b"acct".to_vec(), SESSION, Vec::new());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let req = LoadCharacterData {
+            account: Some("acct".to_string()),
+            chr_name: Some("loadhero".to_string()),
+            user_addr: Some("127.0.0.1".to_string()),
+            session_id: SESSION,
+        };
+        load_human_rcd(&server, &db, &tx, 7, &req.to_bytes())
+            .await
+            .expect("故障路径不得上抛（旧实现 `?` 会冒到 conn_task 只记日志）");
+        let frames = ts::take_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "必须有且只有一帧（旧实现零回包）");
+        let (qid, m, packet) = parse_reply(&frames[0]);
+        assert_eq!(qid, 7);
+        assert_eq!(
+            (m.ident, m.recog, m.param, m.tag, m.series),
+            (DBR_LOADHUMANRCD, 1, 0, 0, 1),
+            "oracle `DataService.cs:190-199`：会话已找到时即使 Get 失败也回成功帧"
+        );
+        let body = LoadPlayerDataPacket::from_bytes(&packet.expect("成功帧必须带业务体"))
+            .expect("LoadPlayerDataPacket 解析失败");
+        assert_eq!(body.hum_data_info, None, "oracle 同场景 HumDataInfo=null");
+        let expected_name = String::from_utf8(edcode::encode(b"loadhero")).unwrap();
+        assert_eq!(body.chr_name.as_deref(), Some(expected_name.as_str()));
+        println!("[golden] DBR_LOADHUMANRCD degraded frame hex = {}", {
+            use std::fmt::Write as _;
+            let mut s = String::new();
+            for b in &frames[0] {
+                let _ = write!(s, "{b:02x}");
+            }
+            s
+        });
+        ts::drop_db(&dsn).await;
+    }
+
+    /// LB-01 反向子断言：会话未命中时仍回 `1100 recog=-1`（不得把失败帧也改成成功帧）。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_loadfail_b（自建自删）"]
+    async fn load_session_miss_still_answers_negative_code() {
+        let dsn = ts::setup_db("mir2_test_loadfail_b").await;
+        ts::insert_character(&dsn, "acct", "loadhero").await;
+        let db = Arc::new(Mutex::new(ts::open_db(&dsn).await));
+        let server = ts::test_server("loadfail_b", &dsn);
+        // 不推会话 ⇒ `CheckSessionLoadRcd` 未命中。
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let req = LoadCharacterData {
+            account: Some("acct".to_string()),
+            chr_name: Some("loadhero".to_string()),
+            user_addr: Some("127.0.0.1".to_string()),
+            session_id: SESSION,
+        };
+        load_human_rcd(&server, &db, &tx, 8, &req.to_bytes())
+            .await
+            .expect("会话未命中不得上抛");
+        let frames = ts::take_frames(&mut rx);
+        assert_eq!(frames.len(), 1);
+        let (qid, m, packet) = parse_reply(&frames[0]);
+        assert_eq!(qid, 8);
+        assert_eq!(
+            (m.ident, m.recog, m.series),
+            (DBR_LOADHUMANRCD, -1, 0),
+            "未命中会话 ⇒ nCheckCode=-1 的失败帧"
+        );
+        assert_eq!(packet.map_or(0, |p| p.len()), 0, "失败帧不得带业务体");
+        ts::drop_db(&dsn).await;
+    }
+
+    /// LB-07（6000 侧）：自动建档的 `characters_item` 第 5 条 INSERT 失败 ⇒ 整次建角回滚。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_4k_item（自建自删）"]
+    async fn save_auto_create_item_insert_failure_rolls_back_character() {
+        let dsn = ts::setup_db("mir2_test_4k_item").await;
+        ts::fail_insert_trigger(&dsn, "trg_item_fail", "characters_item", 4).await;
+        let db = Arc::new(Mutex::new(ts::open_db(&dsn).await));
+        let cache = Arc::new(Mutex::new(CacheStore::default()));
+        let name = "k6itemhero";
+        let bo21 = store_human_rcd(&db, &cache, name, &info(name)).await;
+        assert!(bo21, "建角失败 ⇒ 索引仍缺失 ⇒ DBR_LOADHUMANRCD recog=0");
+        let m = save_reply(bo21);
+        assert_eq!((m.ident, m.recog), (DBR_LOADHUMANRCD, 0));
+        assert_eq!(
+            count_where(&dsn, "characters", "ChrName", name).await,
+            0,
+            "oracle：CreateUseItem 在 try 外 ⇒ characters 行一起回滚"
+        );
+        assert_eq!(count_all(&dsn, "characters_item").await, 0);
+        assert!(
+            db.lock().await.play_data_index_text(name).is_none(),
+            "回滚后不得写内存索引"
+        );
+        ts::drop_db(&dsn).await;
+    }
+
+    /// LB-07 反向子断言：`characters_storageitem` 的 INSERT 失败被吞并照常提交。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；库名 mir2_test_4k_storage（自建自删）"]
+    async fn save_auto_create_storage_insert_failure_is_swallowed() {
+        let dsn = ts::setup_db("mir2_test_4k_storage").await;
+        ts::fail_insert_trigger(&dsn, "trg_storage_fail", "characters_storageitem", -1).await;
+        let db = Arc::new(Mutex::new(ts::open_db(&dsn).await));
+        let cache = Arc::new(Mutex::new(CacheStore::default()));
+        let name = "k6storhero";
+        let bo21 = store_human_rcd(&db, &cache, name, &info(name)).await;
+        assert!(!bo21, "CreateStorageItem 在 try 内 ⇒ 吞错、照常回存档成功");
+        let m = save_reply(bo21);
+        assert_eq!((m.ident, m.recog), (DBR_SAVEHUMANRCD, 1));
+        assert_eq!(
+            count_where(&dsn, "characters", "ChrName", name).await,
+            1,
+            "主表必须提交"
+        );
+        assert_eq!(count_all(&dsn, "characters_storageitem").await, 0);
+        assert_eq!(
+            count_all(&dsn, "characters_item").await,
+            13,
+            "item 表不受 storage 失败影响"
+        );
+        ts::drop_db(&dsn).await;
     }
 }

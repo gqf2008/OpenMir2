@@ -525,10 +525,13 @@ impl Db {
                 "建角附属表 characters_status 写入失败（C# 同样吞掉）: {e}"
             ));
         }
-        for (table, count) in [
-            ("characters_item", 13i32),
-            ("characters_bagitem", 46),
-            ("characters_storageitem", 50),
+        // C# `CreateUseItem`/`CreateBagItem` 的 INSERT 循环在 `AddRecord` 的 try **之外**
+        // ⇒ 任一 INSERT 抛异常就冒到 `AddRecord` 的 catch ⇒ `RollBack()`（连 characters 行
+        // 一起回滚）；`CreateStorageItem` 的循环在自己的 try 内 ⇒ 吞错并继续提交（LB-07）。
+        for (table, count, swallow) in [
+            ("characters_item", 13i32, false),
+            ("characters_bagitem", 46, false),
+            ("characters_storageitem", 50, true),
         ] {
             let sql = format!(
                 "INSERT INTO {table} (PlayerId, Position, MakeIndex, StdIndex, Dura, DuraMax) \
@@ -546,10 +549,18 @@ impl Db {
                         items.push(Some(mir2_storage::playerdata::ServerUserItem::csharp_new()));
                     }
                     Err(e) => {
-                        crate::log::warn(&format!(
-                            "建角附属表 {table} 写入失败（C# 同样吞掉）: {e}"
+                        if swallow {
+                            crate::log::warn(&format!(
+                                "建角附属表 {table} 写入失败（C# CreateStorageItem 吞错并继续）: {e}"
+                            ));
+                            break;
+                        }
+                        // oracle 整次建角回滚（含主表 characters 行）；调用方按 `Add` 返回
+                        // false 处理（5100 侧忽略返回值回成功、6000 侧回 1100 recog=0）。
+                        tx.rollback().await.ok();
+                        return Err(anyhow::anyhow!(
+                            "建角附属表 {table} 写入失败（C# 在 try 外 ⇒ 整次建角回滚）: {e}"
                         ));
-                        break;
                     }
                 }
             }
