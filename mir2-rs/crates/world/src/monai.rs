@@ -615,6 +615,8 @@ pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
     if let Some(e) = world.entities.get_mut(victim_id) {
         e.ai.attack_tick += i64::from(add);
     }
+    // `GuardUnit.Struck`（`GuardUnit.cs:27-33`）：`Castle != null` ⇒ 置 `CrimeforCastle`。
+    guard_unit_struck(world, victim_id, now);
 }
 
 /// `CreateMonster`（`WorldServer.MonGen.cs:507-728`）按 `monsters.Race` 选怪类；本函数给出
@@ -2686,36 +2688,33 @@ fn cleanup_sculture_slaves(world: &mut World, actor_id: i32) {
     }
 }
 
-/// `GuardUnit.IsProperTarget`（`GuardUnit.cs:35-125`，`Castle == null` 分支）——
-/// ArcherGuard 的 proper 判定。与 [`is_proper_target`] 的差异：不看 `Ghost/Invisible`、
-/// `LastHiter` 恒为目标、`TargetCret` 是弓箭守卫时也成立、末尾对一切（除自己/石化/管理员）返回 true。
-fn guard_unit_is_proper_target(world: &World, actor_id: i32, target_id: i32) -> bool {
-    let (Some(a), Some(t)) = (world.entities.get(actor_id), world.entities.get(target_id)) else {
-        return false;
-    };
-    if a.id == t.id {
-        return false;
-    }
-    if a.last_hiter == Some(target_id) {
-        return true;
-    }
-    if let Some(tc) = t.ai.target_creature {
-        if world.entities.get(tc).is_some_and(|x| x.race == 112) {
-            return true;
-        }
-    }
-    if t.race == ACTOR_RACE_PLAY {
-        if t.admin_mode {
-            return false;
-        }
-        if t.pk_point / 100 >= 2 {
-            return true;
-        }
-    }
-    if t.stone_mode {
-        return false;
-    }
-    true
+/// `GuardUnit.IsProperTarget`（`GuardUnit.cs:35-125`）—— ArcherGuard 的 proper 判定。
+///
+/// `Castle != null` 分支（`GuardUnit.cs:37-94`）的等价物 = 实体带
+/// [`crate::entity::CastleBinding`]（oracle `BaseObject.Castle != null`）：
+/// 1. `LastHiter == target` ⇒ `true`；
+/// 2. `Castle.UnderWar` ⇒ `true`（先于成员豁免/管理员/同城排除）；
+/// 3. `Race == ActorRace.Guard(11)` 且 `CrimeforCastle` 未过期 ⇒ `true`；过期清位，
+///    若该守卫自身 `Castle != null` ⇒ `false`；
+/// 4. `Castle.MasterGuild != null` 时，目标（或其主人）是玩家且
+///    `MasterGuild == MyGuild || MasterGuild.IsAllyGuild(MyGuild)` ⇒ 非 `LastHiter` 时 `false`；
+/// 5. 管理员 / 石化 / `Race ∈ [NPC, Animal)` / 自己 / 同城 ⇒ `false`。
+///
+/// 之后落回尾段（`LastHiter`、弓箭守卫目标、红名玩家、石化）。`Castle == null` 的旧路径
+/// 与改造前逐字节一致（判据 C5）。
+///
+/// 逐行实现见 [`guard_target_is_proper_target`]（本文件尾部）；本函数保持薄包装，
+/// 以便 `check_anchors.py` 的 `monster_ai_tick` 行号锚不因新逻辑位移。
+///
+/// 判据：`guard_target_castle_tests` 的 C1..C7（每条带「改坏⇒红⇒sha256 还原」牙）。
+///
+///
+/// # 参数
+/// - `world`：世界（需要可变：到期时清 `CrimeforCastle`）；
+/// - `actor_id`：发起判定的守卫（`ArcherGuard.Run` 的 `this`）；
+/// - `target_id`：被判定为目标的实体。
+fn guard_unit_is_proper_target(world: &mut World, actor_id: i32, target_id: i32) -> bool {
+    guard_target_is_proper_target(world, actor_id, target_id)
 }
 
 /// `ArcherGuard.AttackTarger`（`ArcherGuard.cs:21-37`）。
@@ -2799,16 +2798,17 @@ fn archer_guard_run(world: &mut World, actor_id: i32) {
         let mut n_rage = 9999;
         let mut best = None;
         for target_id in visible {
-            let Some(t) = world.entities.get(target_id) else {
+            let Some((tx, ty, death)) = world.entities.get(target_id).map(|t| (t.x, t.y, t.death))
+            else {
                 continue;
             };
-            if t.death {
+            if death {
                 continue;
             }
             if !guard_unit_is_proper_target(world, actor_id, target_id) {
                 continue;
             }
-            let n_abs = (cx - t.x).abs() + (cy - t.y).abs();
+            let n_abs = (cx - tx).abs() + (cy - ty).abs();
             if n_abs < n_rage {
                 n_rage = n_abs;
                 best = Some(target_id);
@@ -4775,6 +4775,169 @@ fn magic_monster_attack_target(world: &mut World, actor_id: i32) -> bool {
 /// 其 ctor 自置 `Race = 80`）⇒ 生产不可达；dispatch 仍显式登记以防未来接类。
 fn percent_monster_attack_target(world: &mut World, actor_id: i32) -> bool {
     attack_target(world, actor_id)
+}
+
+/// `ActorRace.Guard = 11`（`Race.cs:16`）—— `GuardUnit.IsProperTarget` 的
+/// `CrimeforCastle` 子分支只对 race 11 生效。
+const ACTOR_RACE_GUARD: u8 = 11;
+/// `GuardUnit.cs:54` 的 `2 * 60 * 1000`：`CrimeforCastle`（犯罪标记）的有效窗口。
+const GUARD_CRIME_FOR_CASTLE_MS: i64 = 2 * 60 * 1000;
+
+/// `GuardUnit.IsProperTarget` 只读的目标字段快照（避免与 `World` 的犯罪表写侧冲突）。
+struct GuardTargetSnapshot {
+    id: i32,
+    race: u8,
+    master: Option<i32>,
+    admin_mode: bool,
+    stone_mode: bool,
+    castle: Option<crate::entity::CastleBinding>,
+    target_creature: Option<i32>,
+    pk_point: i32,
+}
+
+/// `GuardUnit.IsProperTarget`（`GuardUnit.cs:35-125`）—— ArcherGuard 的 proper 判定。
+///
+/// `Castle != null` 分支（`GuardUnit.cs:37-94`）的等价物 = 实体带
+/// [`crate::entity::CastleBinding`]（oracle `BaseObject.Castle != null`；由
+/// `UserCastle::Initialize` / [`World::bind_castle_defense`] 写入门/墙/弓手）：
+///
+/// 1. `LastHiter == target` ⇒ `true`；
+/// 2. `Castle.UnderWar` ⇒ `true`（**先于**成员豁免与管理员/同城排除，故开战时全打）；
+/// 3. `Race == ActorRace.Guard(11)` 且 `CrimeforCastle` 未过期（<2min）⇒ `true`；过期清位，
+///    若该守卫自身 `Castle != null` ⇒ `false`；
+/// 4. `Castle.MasterGuild != null` 时：目标（无主人则看本人；有主人则看主人）是玩家且
+///    `MasterGuild == MyGuild || MasterGuild.IsAllyGuild(MyGuild)` ⇒ 非 `LastHiter` 时 `false`；
+/// 5. 管理员 / 石化 / `Race ∈ [NPC, Animal)` / 自己 / 同城（`target.Castle == Castle`）⇒ `false`。
+///
+/// 之后落回尾段（`LastHiter`、弓箭守卫目标、红名玩家、石化）。`Castle == null` 的旧路径
+/// 与改造前逐字节一致（判据 C5）。
+fn guard_target_is_proper_target(world: &mut World, actor_id: i32, target_id: i32) -> bool {
+    let (Some(a), Some(t)) = (world.entities.get(actor_id), world.entities.get(target_id)) else {
+        return false;
+    };
+    if a.id == t.id {
+        return false;
+    }
+    // 只复制标量/`Option`，使城堡分支能改 `World` 侧 `CrimeforCastle` 表
+    // （oracle 在 `IsProperTarget` 里就地清 `guardObject.CrimeforCastle`）。
+    let actor_castle = a.castle_binding;
+    let last_hiter = a.last_hiter;
+    let target = GuardTargetSnapshot {
+        id: t.id,
+        race: t.race,
+        master: t.master,
+        admin_mode: t.admin_mode,
+        stone_mode: t.stone_mode,
+        castle: t.castle_binding,
+        target_creature: t.ai.target_creature,
+        pk_point: t.pk_point,
+    };
+    // ---- `Castle != null` 分支（`GuardUnit.cs:37-94`）----
+    if let Some(binding) = actor_castle {
+        if let Some(castle) = world.castles.get(binding.castle_index) {
+            let under_war = castle.under_war;
+            let master_guild = castle.master_guild;
+            // `if (LastHiter == baseObject) return true;`
+            if last_hiter == Some(target.id) {
+                return true;
+            }
+            // `if (Castle.UnderWar) return true;`
+            if under_war {
+                return true;
+            }
+            // `if (baseObject.Race == ActorRace.Guard) { GuardUnit guardObject = ... }`
+            if target.race == ACTOR_RACE_GUARD {
+                if let Some(crime_tick) = world.guard_crime_for_castle_tick(target.id) {
+                    if world.clock_ms - crime_tick < GUARD_CRIME_FOR_CASTLE_MS {
+                        return true;
+                    }
+                    // 过期：`guardObject.CrimeforCastle = false;`
+                    world.clear_guard_crime_for_castle(target.id);
+                    // `if (guardObject.Castle != null) { ...; return false; }`
+                    if target.castle.is_some() {
+                        return false;
+                    }
+                }
+            }
+            // `if (Castle.MasterGuild != null) { ... }`
+            if let Some(master_guild) = master_guild {
+                let (exempt, last_hiter_is_target) = match target.master {
+                    // `baseObject.Master == null`：只有玩家本人有 `MyGuild`。
+                    None => (
+                        target.race == ACTOR_RACE_PLAY
+                            && world
+                                .castle_exempts_guild(master_guild, world.actor_guild(target.id)),
+                        last_hiter == Some(target.id),
+                    ),
+                    // `baseObject.Master != null`：主人是玩家时读主人的 `MyGuild`。
+                    Some(master_id) => {
+                        let master_is_play = world
+                            .entities
+                            .get(master_id)
+                            .is_some_and(|m| m.race == ACTOR_RACE_PLAY);
+                        let exempt = master_is_play
+                            && world
+                                .castle_exempts_guild(master_guild, world.actor_guild(master_id));
+                        (
+                            exempt,
+                            last_hiter == Some(master_id) || last_hiter == Some(target.id),
+                        )
+                    }
+                };
+                // `if (LastHiter != baseObject / != baseObject.Master) return false;`
+                if exempt && !last_hiter_is_target {
+                    return false;
+                }
+            }
+            // `if (AdminMode || StoneMode || Race ∈ [NPC, Animal) || baseObject == this ||
+            //      baseObject.Castle == Castle) return false;`
+            if target.admin_mode
+                || target.stone_mode
+                || (target.race >= crate::entity::ACTOR_RACE_NPC
+                    && target.race < crate::entity::ACTOR_RACE_ANIMAL)
+                || target.id == actor_id
+                || target.castle.map(|b| b.castle_index) == Some(binding.castle_index)
+            {
+                return false;
+            }
+        }
+    }
+    // ---- 尾段（`GuardUnit.cs:95-121`）----
+    if last_hiter == Some(target.id) {
+        return true;
+    }
+    if let Some(tc) = target.target_creature {
+        if world.entities.get(tc).is_some_and(|x| x.race == 112) {
+            return true;
+        }
+    }
+    if target.race == ACTOR_RACE_PLAY {
+        if target.admin_mode {
+            return false;
+        }
+        if target.pk_point / 100 >= 2 {
+            return true;
+        }
+    }
+    if target.stone_mode {
+        return false;
+    }
+    true
+}
+
+/// `GuardUnit.Struck`（`GuardUnit.cs:27-33`）：`Castle != null` ⇒
+/// `CrimeforCastle = true; CrimeforCastleTime = GetTickCount();`。
+///
+/// 本骨架的 `Castle != null` = `Entity::castle_binding.is_some()`（弓手/门/墙由
+/// `UserCastle::Initialize` 绑定；守卫表不绑，与 oracle 同）。
+fn guard_unit_struck(world: &mut World, victim_id: i32, now: i64) {
+    if world
+        .entities
+        .get(victim_id)
+        .is_some_and(|e| e.castle_binding.is_some())
+    {
+        world.set_guard_crime_for_castle(victim_id, now);
+    }
 }
 
 #[cfg(test)]
@@ -10111,6 +10274,269 @@ mod tests {
             e.ai.pending_view_updates,
             vec![999],
             "oracle return ⇒ base.Run 的消息段不得执行"
+        );
+    }
+}
+
+/// **卡 `guard-target`**：`GuardUnit.IsProperTarget` 的 `Castle != null` 分支
+/// （oracle `src/M2Server/Monster/Monsters/GuardUnit.cs:35-94`）逐行判据。
+///
+/// 生产路径 = [`super::guard_unit_is_proper_target`]（`ArcherGuard.Run` 的索敌门）；
+/// 每条用例只经 `World` 的公开接线口（`castle_binding` / `set_actor_guild` /
+/// `set_guild_allies` / `animal_struck`）布置前置，不改生产分支。
+#[cfg(test)]
+mod guard_target_castle_tests {
+    use super::*;
+    use crate::castle::{CastleSiegeConfig, DefenseRole, GuildId, UserCastle};
+    use crate::entity::CastleBinding;
+
+    const G_CASTLE: GuildId = GuildId(7);
+    const G_ALLY: GuildId = GuildId(9);
+    const G_OTHER: GuildId = GuildId(77);
+
+    /// 一座城 + 一个已绑定的弓手（race 112，`Castle != null`）。
+    fn world_with_archer(under_war: bool, master_guild: Option<GuildId>) -> (World, i32) {
+        let mut w = World::new(20, 20);
+        w.clock_ms = 100_000;
+        let mut e = Entity::new(1, "弓手", 5, 5);
+        e.race = 112;
+        e.hp = 100;
+        e.max_hp = 100;
+        let archer = w.add_entity(e);
+        let mut castle = UserCastle::new("沙巴克", CastleSiegeConfig::default());
+        castle.under_war = under_war;
+        castle.master_guild = master_guild;
+        w.castles.push(castle);
+        w.entities.get_mut(archer).unwrap().castle_binding = Some(CastleBinding {
+            castle_index: 0,
+            role: DefenseRole::Archer(0),
+        });
+        (w, archer)
+    }
+
+    fn add_player(w: &mut World, x: i32, y: i32, guild: Option<GuildId>) -> i32 {
+        let mut e = Entity::new(0, "玩家", x, y);
+        e.hp = 100;
+        e.max_hp = 100;
+        let id = w.add_entity(e);
+        if let Some(g) = guild {
+            w.set_actor_guild(id, g);
+        }
+        id
+    }
+
+    fn add_archer_at(w: &mut World, x: i32, y: i32, castle_index: Option<usize>) -> i32 {
+        let mut e = Entity::new(0, "弓手", x, y);
+        e.race = 112;
+        e.hp = 100;
+        e.max_hp = 100;
+        let id = w.add_entity(e);
+        if let Some(castle_index) = castle_index {
+            w.entities.get_mut(id).unwrap().castle_binding = Some(CastleBinding {
+                castle_index,
+                role: DefenseRole::Archer(1),
+            });
+        }
+        id
+    }
+
+    /// C1 `same_castle_units_do_not_attack_each_other`：`baseObject.Castle == Castle`
+    /// （同 `castle_index` 的绑定实体）⇒ `false`；**另一座城**的同 race 单位仍可打。
+    ///
+    /// 牙：删 `target.castle.map(..) == Some(binding.castle_index)` ⇒ 第一条红。
+    #[test]
+    fn c1_same_castle_units_do_not_attack_each_other() {
+        let (mut w, archer) = world_with_archer(false, None);
+        let mate = add_archer_at(&mut w, 7, 5, Some(0));
+        assert!(
+            !guard_unit_is_proper_target(&mut w, archer, mate),
+            "同城单位（target.Castle == Castle）必须互不攻击"
+        );
+        let foreign = add_archer_at(&mut w, 9, 5, None);
+        assert!(
+            guard_unit_is_proper_target(&mut w, archer, foreign),
+            "未绑定城堡的 112 不是同城 ⇒ 走尾段可打（防「凡 112 都 false」的假实现）"
+        );
+    }
+
+    /// C2 `master_guild_players_are_exempt`：无主人的玩家 `MyGuild == MasterGuild` ⇒ `false`；
+    /// 非成员仍可打；`LastHiter == target` 时豁免让位于先手（⇒ `true`）。
+    ///
+    /// 牙：把 `castle_exempts_guild` 的命中分支去掉（恒 `false`）⇒ 第一条红。
+    #[test]
+    fn c2_master_guild_players_are_exempt() {
+        let (mut w, archer) = world_with_archer(false, Some(G_CASTLE));
+        let member = add_player(&mut w, 8, 5, Some(G_CASTLE));
+        assert!(
+            !guard_unit_is_proper_target(&mut w, archer, member),
+            "MasterGuild 成员豁免"
+        );
+        let outsider = add_player(&mut w, 9, 5, Some(G_OTHER));
+        assert!(
+            guard_unit_is_proper_target(&mut w, archer, outsider),
+            "非盟友/非 MasterGuild 的玩家可打"
+        );
+        w.entities.get_mut(archer).unwrap().last_hiter = Some(member);
+        assert!(
+            guard_unit_is_proper_target(&mut w, archer, member),
+            "LastHiter == target 先手优先于 MasterGuild 豁免（oracle `LastHiter != baseObject`）"
+        );
+    }
+
+    /// C3 `ally_guild_players_are_exempt`：`MasterGuild.IsAllyGuild(MyGuild)` ⇒ `false`；
+    /// 盟友表为空时同一条不豁免。
+    ///
+    /// 牙：`World::is_ally_guild` 恒 `false` ⇒ 第一条红。
+    #[test]
+    fn c3_ally_guild_players_are_exempt() {
+        let (mut w, archer) = world_with_archer(false, Some(G_CASTLE));
+        w.set_guild_allies(G_CASTLE, &[G_ALLY]);
+        let ally = add_player(&mut w, 8, 5, Some(G_ALLY));
+        assert!(
+            !guard_unit_is_proper_target(&mut w, archer, ally),
+            "盟友行会成员豁免"
+        );
+        let (mut w2, archer2) = world_with_archer(false, Some(G_CASTLE));
+        let ally2 = add_player(&mut w2, 8, 5, Some(G_ALLY));
+        assert!(
+            guard_unit_is_proper_target(&mut w2, archer2, ally2),
+            "盟友表空 ⇒ 不豁免（缺省与 oracle 的恒空 GuildAllList 一致）"
+        );
+    }
+
+    /// C4 `under_war_attacks_everything`：`Castle.UnderWar` 的 `true` **先于**成员豁免、
+    /// 管理员/石化排除与同城排除 ⇒ MasterGuild 成员、管理员、同城单位全部可打。
+    ///
+    /// 牙：把 `UnderWar` 门改成 `under_war && !target.admin_mode`（即排到管理员门之后）
+    /// ⇒ 第二条红；再改成仅在非成员时开战 ⇒ 第一条红。
+    #[test]
+    fn c4_under_war_attacks_everything() {
+        let (mut w, archer) = world_with_archer(true, Some(G_CASTLE));
+        let member = add_player(&mut w, 8, 5, Some(G_CASTLE));
+        assert!(
+            guard_unit_is_proper_target(&mut w, archer, member),
+            "UnderWar 先于 MasterGuild 豁免（全员开打）"
+        );
+        w.entities.get_mut(member).unwrap().admin_mode = true;
+        assert!(
+            guard_unit_is_proper_target(&mut w, archer, member),
+            "UnderWar 先于管理员排除（oracle 在 AdminMode 前 return true）"
+        );
+        let mate = add_archer_at(&mut w, 7, 5, Some(0));
+        assert!(
+            guard_unit_is_proper_target(&mut w, archer, mate),
+            "UnderWar 先于同城排除"
+        );
+    }
+
+    /// C5 `null_castle_path_is_unchanged`：弓手**未绑定** `Castle` 时，即使世界里有城、
+    /// 目标恰是 MasterGuild 成员，也按旧路径返回 `true`；旧尾段的红名/石化/管理员语义不变。
+    ///
+    /// 牙：把分支门 `if let Some(binding) = actor_castle` 改成「世界有城就进」
+    /// （`if let Some(castle) = world.castles.first()`）⇒ 第一条红。
+    #[test]
+    fn c5_null_castle_path_is_unchanged() {
+        let mut w = World::new(20, 20);
+        w.clock_ms = 100_000;
+        let archer = add_archer_at(&mut w, 5, 5, None);
+        let mut castle = UserCastle::new("沙巴克", CastleSiegeConfig::default());
+        castle.master_guild = Some(G_CASTLE);
+        w.castles.push(castle);
+        let member = add_player(&mut w, 8, 5, Some(G_CASTLE));
+        assert!(
+            guard_unit_is_proper_target(&mut w, archer, member),
+            "Castle == null ⇒ 不看 MasterGuild（旧路径）"
+        );
+        let red = add_player(&mut w, 9, 5, Some(G_OTHER));
+        w.entities.get_mut(red).unwrap().pk_point = 250;
+        assert!(
+            guard_unit_is_proper_target(&mut w, archer, red),
+            "旧尾段：PvpLevel >= 2 的玩家可打"
+        );
+        let stone = add_player(&mut w, 10, 5, None);
+        w.entities.get_mut(stone).unwrap().stone_mode = true;
+        assert!(
+            !guard_unit_is_proper_target(&mut w, archer, stone),
+            "旧尾段：石化目标不可打"
+        );
+        let admin = add_player(&mut w, 11, 5, None);
+        w.entities.get_mut(admin).unwrap().admin_mode = true;
+        assert!(
+            !guard_unit_is_proper_target(&mut w, archer, admin),
+            "旧尾段：管理员玩家不可打"
+        );
+    }
+
+    /// C6 `player_master_guild_is_exempt`：`baseObject.Master` 是玩家且其 `MyGuild` 命中
+    /// `MasterGuild` ⇒ 宝宝豁免；`LastHiter` 是主人或宝宝时仍打。
+    ///
+    /// 牙：把主人分支的 `actor_guild(master_id)` 改成 `actor_guild(target.id)`（宝宝无行会）
+    /// ⇒ 第一条红。
+    #[test]
+    fn c6_player_master_guild_is_exempt() {
+        let (mut w, archer) = world_with_archer(false, Some(G_CASTLE));
+        let owner = add_player(&mut w, 9, 9, Some(G_CASTLE));
+        let mut pet = Entity::new(0, "神兽", 8, 5);
+        pet.race = 80;
+        pet.hp = 100;
+        pet.max_hp = 100;
+        pet.master = Some(owner);
+        let pet_id = w.add_entity(pet);
+        assert!(
+            !guard_unit_is_proper_target(&mut w, archer, pet_id),
+            "主人的 MyGuild == MasterGuild ⇒ 宝宝豁免"
+        );
+        w.entities.get_mut(archer).unwrap().last_hiter = Some(owner);
+        assert!(
+            guard_unit_is_proper_target(&mut w, archer, pet_id),
+            "LastHiter == 主人 ⇒ 豁免让位（打）"
+        );
+        w.entities.get_mut(archer).unwrap().last_hiter = Some(pet_id);
+        assert!(
+            guard_unit_is_proper_target(&mut w, archer, pet_id),
+            "LastHiter == 宝宝 ⇒ 豁免让位（打）"
+        );
+    }
+
+    /// C7 `crime_for_castle_window`：`GuardUnit.Struck` 经 `animal_struck` 置
+    /// `CrimeforCastle`；2 分钟内 race 11 守卫是合法目标，到期清位且自身 `Castle != null`
+    /// ⇒ `false`。
+    ///
+    /// 牙：删 `animal_struck` 尾部的 `set_guard_crime_for_castle` ⇒ 第一条红；
+    /// 把过期门 `<` 改成 `<=` 或直接 `return true` ⇒ 第二条红。
+    #[test]
+    fn c7_crime_for_castle_window() {
+        let (mut w, archer) = world_with_archer(false, None);
+        // oracle 的守卫表（`UserCastle.Initialize` 的 `Guards[]`）不赋 `Castle`；
+        // 这里显式绑定以钉住 `CrimeforCastle` 子分支的语义。
+        let mut guard = Entity::new(0, "守卫", 8, 5);
+        guard.race = 11;
+        guard.hp = 100;
+        guard.max_hp = 100;
+        let guard_id = w.add_entity(guard);
+        w.entities.get_mut(guard_id).unwrap().castle_binding = Some(CastleBinding {
+            castle_index: 0,
+            role: DefenseRole::Guard(0),
+        });
+        animal_struck(&mut w, guard_id, archer);
+        assert_eq!(
+            w.guard_crime_for_castle_tick(guard_id),
+            Some(w.clock_ms),
+            "GuardUnit.Struck（Castle != null）必须置 CrimeforCastle + 时刻"
+        );
+        assert!(
+            guard_unit_is_proper_target(&mut w, archer, guard_id),
+            "< 2min 的犯罪守卫是合法目标"
+        );
+        w.clock_ms += GUARD_CRIME_FOR_CASTLE_MS;
+        assert!(
+            !guard_unit_is_proper_target(&mut w, archer, guard_id),
+            "到期且守卫自身 Castle != null ⇒ false"
+        );
+        assert_eq!(
+            w.guard_crime_for_castle_tick(guard_id),
+            None,
+            "到期必须清 CrimeforCastle"
         );
     }
 }

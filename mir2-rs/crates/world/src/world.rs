@@ -907,6 +907,23 @@ pub struct World {
     /// **Lane B**：`monster_ai_tick` 里门/墙 `Run` 产生的结构事件（下一 tick 头转抄进
     /// [`TickRecord::castle_structures`]）。
     pub pending_castle_structures: Vec<CastleStructureAt>,
+    /// **卡 `guard-target`**：`PlayObject.MyGuild` 的等价物（actor id → 行会 [`crate::castle::GuildId`]）。
+    ///
+    /// `GuardUnit.IsProperTarget` 的 `MasterGuild`/盟友豁免读它。生产写入点 = 行会会话车道
+    /// （入会/退会时调 [`World::set_actor_guild`]）；缺省无记录 = oracle 无行会角色
+    /// （`MyGuild == null`）。
+    pub actor_guilds: Vec<(i32, crate::castle::GuildId)>,
+    /// **卡 `guard-target`**：`GuildInfo.GuildAllList` 的等价物（行会 → 盟友行会表）。
+    ///
+    /// oracle 的两处 `GuildAllList.Add` 均被注释（`GuildInfo.cs` 的 `AllyGuild` 与加载分支）
+    /// ⇒ 生产恒空；本表缺省空与之一致，写入点 = 行会接线车道。
+    pub guild_allies: Vec<(crate::castle::GuildId, Vec<crate::castle::GuildId>)>,
+    /// **卡 `guard-target`**：`GuardUnit.CrimeforCastle` / `CrimeforCastleTime`
+    /// （`GuardUnit.cs:12-13`）的等价物（actor id → 置位时刻；**存在 = `CrimeforCastle=true`**）。
+    ///
+    /// 写侧 = [`World::set_guard_crime_for_castle`]（`GuardUnit.Struck`，由
+    /// [`crate::monai::animal_struck`] 在 `Castle != null` 时调用）。
+    pub guard_castle_crime: Vec<(i32, i64)>,
     /// **卡 `openmir2-rm-refmessage-delay-layer`**：`Operate(RM_REFMESSAGE)`
     /// （`BaseObject.Base.cs:699-710`）的 `SendRefMsg(RM_STRUCK, …)` 广播事件（保序）。
     ///
@@ -1157,6 +1174,9 @@ impl World {
             pending_monster_ref_msgs: Vec::new(),
             castles: Vec::new(),
             pending_castle_structures: Vec::new(),
+            actor_guilds: Vec::new(),
+            guild_allies: Vec::new(),
+            guard_castle_crime: Vec::new(),
             bee_name: crate::special_monster::DEFAULT_BEE_NAME.to_string(),
             spider_name: crate::special_monster::DEFAULT_SPIDER_NAME.to_string(),
             zuma_names: [
@@ -3402,6 +3422,96 @@ impl World {
             .iter()
             .rev()
             .any(|e| !e.closed && e.event_type == 1 && e.map_id == map_id && e.x == x && e.y == y)
+    }
+
+    /// **卡 `guard-target`**：写 `PlayObject.MyGuild` 的等价物（actor → 行会 id）。
+    ///
+    /// 行会会话车道在入会/退会时调用；缺省无记录 ⇔ oracle `MyGuild == null`。
+    pub fn set_actor_guild(&mut self, actor_id: i32, guild: crate::castle::GuildId) {
+        if let Some(slot) = self.actor_guilds.iter_mut().find(|(id, _)| *id == actor_id) {
+            slot.1 = guild;
+        } else {
+            self.actor_guilds.push((actor_id, guild));
+        }
+    }
+
+    /// [`Self::set_actor_guild`] 的读侧：`None` ⇔ oracle `MyGuild == null`。
+    #[must_use]
+    pub fn actor_guild(&self, actor_id: i32) -> Option<crate::castle::GuildId> {
+        self.actor_guilds
+            .iter()
+            .find(|(id, _)| *id == actor_id)
+            .map(|(_, guild)| *guild)
+    }
+
+    /// **卡 `guard-target`**：写 `GuildInfo.GuildAllList` 的等价物（行会 → 盟友表）。
+    ///
+    /// oracle 的 `GuildAllList.Add` 被注释 ⇒ 生产恒空；本方法只是接线口
+    /// （行会车道 / 构造级用例），缺省不调用即与 oracle 等价。
+    pub fn set_guild_allies(
+        &mut self,
+        guild: crate::castle::GuildId,
+        allies: &[crate::castle::GuildId],
+    ) {
+        if let Some(slot) = self.guild_allies.iter_mut().find(|(g, _)| *g == guild) {
+            slot.1 = allies.to_vec();
+        } else {
+            self.guild_allies.push((guild, allies.to_vec()));
+        }
+    }
+
+    /// `GuildInfo.IsAllyGuild`（`GuildInfo.cs:146-159`）：`guild` 的盟友表是否含 `other`。
+    #[must_use]
+    pub fn is_ally_guild(
+        &self,
+        guild: crate::castle::GuildId,
+        other: crate::castle::GuildId,
+    ) -> bool {
+        self.guild_allies
+            .iter()
+            .find(|(g, _)| *g == guild)
+            .is_some_and(|(_, allies)| allies.contains(&other))
+    }
+
+    /// `GuardUnit.IsProperTarget` 的豁免表达式（`GuardUnit.cs:73/86`）：
+    /// `MasterGuild == guild || MasterGuild.IsAllyGuild(guild)`。
+    ///
+    /// `guild == None`（无行会）⇒ `false`（oracle 两次比较都落空）。
+    #[must_use]
+    pub fn castle_exempts_guild(
+        &self,
+        master_guild: crate::castle::GuildId,
+        guild: Option<crate::castle::GuildId>,
+    ) -> bool {
+        guild.is_some_and(|g| g == master_guild || self.is_ally_guild(master_guild, g))
+    }
+
+    /// `GuardUnit.CrimeforCastle = true; CrimeforCastleTime = GetTickCount();`
+    /// （`GuardUnit.cs:27-33`，由 [`crate::monai::animal_struck`] 在 `Castle != null` 时调）。
+    pub(crate) fn set_guard_crime_for_castle(&mut self, actor_id: i32, now: i64) {
+        if let Some(slot) = self
+            .guard_castle_crime
+            .iter_mut()
+            .find(|(id, _)| *id == actor_id)
+        {
+            slot.1 = now;
+        } else {
+            self.guard_castle_crime.push((actor_id, now));
+        }
+    }
+
+    /// `guardObject.CrimeforCastle` 的读侧：`Some(CrimeforCastleTime)` ⇔ 置位中。
+    #[must_use]
+    pub(crate) fn guard_crime_for_castle_tick(&self, actor_id: i32) -> Option<i64> {
+        self.guard_castle_crime
+            .iter()
+            .find(|(id, _)| *id == actor_id)
+            .map(|(_, tick)| *tick)
+    }
+
+    /// `guardObject.CrimeforCastle = false;`（`GuardUnit.cs:57/61/62`）。
+    pub(crate) fn clear_guard_crime_for_castle(&mut self, actor_id: i32) {
+        self.guard_castle_crime.retain(|(id, _)| *id != actor_id);
     }
 
     /// **Lane B**：把一个成功挂图的防御单元绑到实体（oracle `BaseObject.Castle = this`）。
