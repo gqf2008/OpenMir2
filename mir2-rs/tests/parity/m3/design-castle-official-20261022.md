@@ -33,7 +33,7 @@
      ⇒ 正常点 NPC 对任何玩家都是**静默无反应**（不是显示对话）。
    - **但 say / 变量 / 脚本标签层可被「构造包」直接触达**：`CM_MERCHANTDLGSELECT(1011)` 的入口
      `ClientMerchantDlgSelect`（`PlayObject.Operate.cs:114-127`）**不检查 Click、不检查权限、不检查城主**，
-     只查 `FindMerchant ?? FindNpc` + 同图/±15 视距。`CastleOfficial.UserSelect` 第 97 行先调
+     只查 `FindMerchant ?? FindNpc` + 同图/严格 `<15` 视距（`PlayObject.Operate.cs:1717`）。`CastleOfficial.UserSelect` 第 97 行先调
      `base.UserSelect`（= `Merchant.UserSelect`），而 `CastleMerchant=false`（`Npcs.txt` 不设该列）
      ⇒ `Merchant.UserSelect` 的门为真，会执行 `GotoLable(@main)` 与脚本标签。**因此 BotSrv/自造客户端
      直发 1011 就能拿到 `@main`、`@treatdoor`、`@repairdoor`、`@hirearchers` 等说词帧**，
@@ -45,13 +45,16 @@
 2. **两个已登记 oracle 缺陷必须先照搬，不许「顺手修」**：
    - **N1（T-38）**：`@@withdrawal`/`@@receipts` 调的是 `IUserCastle` 接口重载
      `WithDrawalGolds(IPlayerActor,int)`/`ReceiptGolds(IPlayerActor,int)`（`UserCastle.cs:599-602/911-914`），
-     两者 `throw new NotImplementedException`，被 `UserSelect` 的 `catch` 吞掉 ⇒ **静默无效果**
-     （无帧、无金币变动、无提示）。
+     两者 `throw new NotImplementedException`，被 **Castle** 的 `catch`（`CastleOfficial.cs:258-260`）
+     吞掉 ⇒ **客户端静默无效果**（无帧、无金币变动、无提示；服务端只落常量日志）。
    - **N5（T-40）**：`@hireguardnow*`/`@hirearchernow*` 的
      `sLabel.Substring(prefix.Length, sLabel.Length)`（`CastleOfficial.cs:229/235`）第二参用整串长度
      ⇒ 恒抛 `ArgumentOutOfRangeException` ⇒ 被吞 ⇒ 雇佣**不可达**。附加一层：即使有人「修好」Substring，
-     `@hirearchernow12` 的 `n10=12` 仍会命中 `Archers[12]` 越界（数组长 12，比较是 `n10 <= 12`），
-     `@hirearchernow0` 的 `n10=-1` 也越界 ⇒ 该分支是**双重坏**，Rust 不得实现「能雇佣」。
+     序号仍先做 `n10 = StrToInt(sIndex,0) - 1`（`CastleOfficial.cs:320`），而 `Archers` 长 12、
+     `MaxCastleArcher=12`（`CastleConst.cs:10`）、判断是 `n10 <= 12` ⇒ `@hirearchernow12 → n10=11`
+     命中 `Archers[11]` **合法**；越界的是 label **13**（`n10=12`）与 label **0**（`n10=-1`）。部署页
+     只发 1..12，所以 stock 页面本身踩不到第二个坑；但 N5 的 `Substring` 恒越界仍使整个分支不可达
+     ⇒ C7 结论（Rust 不得实现「能雇佣」）不变。
 3. **Rust 已有「纯函数半」，缺「宿主半」**：
    - 已有：`door_state_text`（`castle.rs:463`）、`castle_official_action`（`:510`）、`compare_lstr`（`:486`）、
      `hire_substring`（`:538`）、`official_repair_door/wall`（`:553/:589`）、`main_door_control`（`:1398`）、
@@ -69,8 +72,12 @@
    - `Castle/Castle/SabukW.txt` 的门/墙名是 `MainDoor/LeftWall/...`，怪物库无此名
      （`sql/mir2_data.sql` 只有 `沙巴克城门/左/中/右城墙`，`:366-369`）⇒ 启动 **0 个防御实体**
      ⇒ `Castle.MainDoor.BaseObject == null`。于是 `$CASTLEDOORSTATE`（`CastleOfficial.cs:52-67`）
-     对 null 无检查 ⇒ `@treatdoor` 页在渲染时抛 `NullReferenceException`，被 `UserSelect` 的
-     `catch`（`:258-261`）吞 ⇒ **该页不显示、只落一行常量日志**。这是部署态的真实 oracle 行为。
+     对 null 无检查 ⇒ `@treatdoor` 页在**变量展开阶段**（`ScriptEngine.cs:989` 调
+     `GetLineVariableText`）抛 `NullReferenceException`，被 **`Merchant.UserSelect`** 的
+     `catch`（`Merchant.cs:944-947`）捕获并打印 `[Exception] TMerchant::UserSelect... Data: {0}`
+     + `ex.StackTrace` ⇒ **该页不显示、落两行日志（含栈）**。Castle 的常量日志
+     （`CastleOfficial.cs:96/258-260`）**不会**出现：`base.UserSelect` 在 `:97`、Castle 的 `try`
+     在 `:98`，base 内的异常根本不进 Castle 的 try。这是部署态的真实 oracle 行为。
    - 部署价：`HireGuard=300000`、`HireArcher=300000`、`RepairDoor=2000000`、`RepairWall=500000`
      （`Server.conf:306-309`）；`SubkMasterSendMsg=1`（`:817`）；`ShowPreFixMsg=0`（`:778`）；
      `RedMsgFColor/BColor=255/56`、`GreenMsgFColor/BColor=219/255`（`:600-605`）。
@@ -98,15 +105,21 @@
 | # | 路径 | 触发 | oracle 门 | 可达性 | 能观测到什么 |
 | --- | --- | --- | --- | --- | --- |
 | P1 | 正常点击 NPC | `CM_CLICKNPC(1010)` → `ClientClickNpc` → `FindMerchant ?? FindNpc` → `Click` | `Castle != null` + (`IsMasterGuild` 或 `Permission>=3`) | **不可达**（R-0：MasterGuild null；Permission 恒 0） | 无帧、无日志 |
-| P2 | 构造包直发对话选择 | `CM_MERCHANTDLGSELECT(1011)` → `ClientMerchantDlgSelect` → `npc.UserSelect` | 仅 `Death/Ghost` + `FindMerchant ?? FindNpc` + 同图/±15（或 `IsHide`） | **可达（BotSrv/自造客户端）** | `Merchant.UserSelect` 的 `@main`/脚本页说词帧 + `$` 变量展开 + 标签表 |
+| P2 | 构造包直发对话选择 | `CM_MERCHANTDLGSELECT(1011)` → `ClientMerchantDlgSelect` → `npc.UserSelect` | 仅 `Death/Ghost` + `FindMerchant ?? FindNpc` + 同图/严格 `<15`（`Operate.cs:1717`；或 `IsHide`） | **可达（BotSrv/自造客户端）** | `Merchant.UserSelect` 的 `@main`/脚本页说词帧 + `$` 变量展开 + 标签表 |
 | P3 | P2 后点脚本标签 | 1011，label = `@treatdoor`/`@repairdoor` 等 | 同 P2；`LableIsCanJmp` 为真（上一页说词里出现过该标签） | **可达** | 脚本 say 帧；`$CASTLEDOORSTATE` 页因 NRE 不显示 |
-| P4 | P2 后点城堡动作标签 | 1011，label = `@openmaindoor`/`@repairdoornow`/`@hirearchernowN`/`@@withdrawal`/… | P2 + `IsMasterGuild && IsGuildMaster` | **不可达**（R-0） | oracle 只有 base 的脚本 `#ACT` 部分（若有）与异常日志 |
+| P4 | P2 后点城堡动作标签 | 1011，label = `@openmaindoor`/`@repairdoornow`/`@hirearchernowN`/`@@withdrawal`/… | P2 + `IsMasterGuild && IsGuildMaster` | **不可达**（R-0） | 无帧、无日志；open/close 的 base `#ACT` 也因标签从未注册而不可达（见下方 note） |
 | P5 | 非 `@` 的 `sData` | 1011，`sData` 不以 `@` 开头 | 无门 | 可达（构造包） | `SM_MENU_OK` 尾「你没有权利使用.」 |
 
 > P4 的「base 脚本 `#ACT` 部分」：`@openmaindoor`/`@closemaindoor` 是脚本标签（`Npc_def` 第 35-44 行），
-> 含 `MESSAGEBOX` + `goto @main`。因为 `CastleOfficial.UserSelect` **先调 base**，所以即使城主门为假，
-> 这两个标签的脚本动作仍会执行（对任何能发 1011 的人）；**只有 `Castle.MainDoorControl` 不执行**。
-> 即：客户端会看到「城门已经打开。」与主页面，但门不动。这是 R-0 下最容易被误判成「已实现」的点。
+> 含 `MESSAGEBOX` + `goto @main`，但 **stock 部署下不可达**：
+> ① 这两个标签只出现在 `@treatdoor` 页的链接里（`Npc_def:32`），而该页 say 在
+>    `GetLineVariableText` 阶段因 `MainDoor.BaseObject==null` 抛 NRE（`CastleOfficial.cs:54`），
+>    `GetScriptLabel`（`ScriptEngine.cs:989-990`）永不执行 ⇒ 标签永不进入 `CanJmpScriptLableMap`；
+> ② 冷发（label 不在表里）时 `boCanJmp=false`，`GotoLable(..., boExtJmp=true)` 被
+>    `ScriptEngine.cs:89` 的 `boExtJmp && !sayingRecord.boExtJmp` 挡掉（`ScriptParsers.cs:845-852`
+>    只在标签头后跟 `TRUE` 时置 `boExtJmp=true`，本页没有）。
+> ⇒ 实际可见为 **0 帧**（没有「城门已经打开。」、没有主页面、门也不动）。要观察脚本部分必须
+> 额外注入 `CanJmpScriptLableMap` 或测试钩子，单靠注入城主/`Permission` 不够。
 
 ### 1.2 R-0：部署态无城主（新增可达性结论）
 
@@ -180,7 +193,7 @@ CastleOfficial.UserSelect（CastleOfficial.cs:93-262）
     } else {
       PlayObject.SendMsg(this, RM_MENU_OK, 0, ActorId, 0, 0, "你没有权利使用.");
     }
-  } catch { LogService.Error("[Exception] TCastleManager::UserSelect... "); }  // 常量、无栈、无 data
+  } catch { LogService.Error("[Exception] TCastleManager::UserSelect... "); }  // 常量、无栈、无 data；只覆盖本 try（base 在 :97，异常走 Merchant catch）
 ```
 
 **必须先调 base**：`Merchant.UserSelect`（`Merchant.cs:787-953`）自己也会 `GotoLable`、也会处理
@@ -211,7 +224,8 @@ LableIsCanJmp（PlayObject.Base.cs:2814-2826）
 > **标签可达性的真实含义**：`CanJmpScriptLableMap` 在**每次说词**时清空重建 ⇒ 只有「最近一页」
 > 里出现的链接可点；`@main` 例外。部署 `[@main]` 注册的链接是
 > `@@withdrawal`、`@@receipts`、`@treatdoor`、`@repaircastle`、`@hirearchers`、`@commandorder`、
-> `@aboutwar`、`@day`；`[@treatdoor]` 注册 `@closemaindoor`、`@openmaindoor`、`@main`；
+> `@aboutwar`、`@day`。理想链上 `[@treatdoor]` 会注册 `@closemaindoor`、`@openmaindoor`、`@main`，
+> **但 stock 下该页 say 在 `$CASTLEDOORSTATE` 处 NRE 中止、`GetScriptLabel` 未执行 ⇒ 这两个标签实际不注册**；
 > `[@repairdoor]` 注册 `@repairdoornow`、`@repaircastle`；`[@repairwalls]` 注册
 > `@repairwallnow1/2/3`、`@repaircastle`；`[@hirearchers]` 注册 `@hirearchernow1..12`、`@main`。
 > **`@@sendmsg`、`@@offlinemsg`、`@exit`、`@hireguardnow*` 不在任何页面的链接里**
@@ -227,30 +241,36 @@ LableIsCanJmp（PlayObject.Base.cs:2814-2826）
 | 标签 | oracle 行 | 输入 | 副作用（状态/文件/广播） | 帧（ident；Recog；尾） | 脚本跳转与顺序 | 部署可达 |
 | --- | --- | --- | --- | --- | --- | --- |
 | （Click 门） | `CastleOfficial.cs:20-31` | 无 | 无（或在授权时 `GotoLable(@main)`） | 授权时 `SM_MERCHANTSAY(643)` ×页 | `@main` | P1 不可达 |
-| `@openmaindoor` | `:199-202`；脚本 `Npc_def:35-39` | 无 | `MainDoorControl(false)`：门未开且非死/非 ghost ⇒ `Open()`（`Dir=7`、`IsOpened=true`、`StoneMode=true`、`HoldPlace=false`、15 条格子掩码） | 脚本 `MESSAGEBOX` → `SM_MENU_OK(767)`（Recog=**玩家** ActorId；尾「城门已经打开。」）+ `@main` say(643)；随后门帧 `SM_DIGUP(20)`（Recog=门 ActorId；Param=x；Tag=y；Series=MakeWord(dir,Light)） | `GotoLable(@openmaindoor)` → `MESSAGEBOX`+`goto @main`；返回后 `MainDoorControl` | P4 不可达；P2+P3 下脚本部分可达（门不动、无 DIGUP） |
-| `@closemaindoor` | `:203-206`；脚本 `:40-44` | 无 | `MainDoorControl(true)`：已开且非死/非 ghost ⇒ `Close()`（`Dir=3-Round(HP/MaxHP*3)`，`>=3⇒0`；`IsOpened=false`；`StoneMode=false`；`HoldPlace=true`；12 条掩码） | `SM_MENU_OK` 尾「城门已经关闭。」+ `@main` say；`SM_DIGDOWN(21)`（Series 恒 0，`PlayObject.Message.cs:1900-1902`） | 同上 | 同上 |
+| `@openmaindoor` | `:199-202`；脚本 `Npc_def:35-39` | 无 | `MainDoorControl(false)`：门未开且非死/非 ghost ⇒ `Open()`（`Dir=7`、`IsOpened=true`、`StoneMode=true`、`HoldPlace=false`、15 条格子掩码） | 若可达：脚本 `MESSAGEBOX` → `SM_MENU_OK(767)`（Recog=**玩家** ActorId；尾「城门已经打开。」）+ `@main` say(643)；随后门帧 `SM_DIGUP(20)`（Recog=门 ActorId；Param=x；Tag=y；Series=MakeWord(dir,Light)） | 若可达：`GotoLable(@openmaindoor)` → `MESSAGEBOX`+`goto @main`；返回后 `MainDoorControl` | **0 帧**（stock 不可达）：标签只在 `@treatdoor` 页被链接（`Npc_def:32`），该页 say 在 `$CASTLEDOORSTATE` 处 NRE ⇒ 未注册；冷发被 `boExtJmp` 挡（见 §1.1 P4 note） |
+| `@closemaindoor` | `:203-206`；脚本 `:40-44` | 无 | `MainDoorControl(true)`：已开且非死/非 ghost ⇒ `Close()`（`Dir=3-Round(HP/MaxHP*3)`，`>=3⇒0`；`IsOpened=false`；`StoneMode=false`；`HoldPlace=true`；12 条掩码） | 若可达：`SM_MENU_OK` 尾「城门已经关闭。」+ `@main` say；`SM_DIGDOWN(21)`（Series 恒 0，`PlayObject.Message.cs:1900-1902`） | 若可达：同上 | **0 帧**（stock 不可达，同 `@openmaindoor`） |
 | `@repairdoornow` | `:207-211`；`RepairDoor :358-381` | 无（金币在城内 `TotalGold`） | 门 `BaseObject==null`/`UnderWar`/`HP>=MaxHP` ⇒ false；否则**严格 `>`** 60s（`GetTickCount()-StruckTick`）才回满；死亡门额外 `Death=false`、`IsOpened=false`；`RefStatus()`；成功才 `TotalGold -= RepairDoorPrice` | `SysMsg`：成功绿「修理成功。」；未生效绿「城门不需要修理!!!」；钱不足红「城内资金不足!!!」；随后 `@main` say。出队序：say(1) → sysmsg(252)（调用序是 sysmsg 在前） | `GotoLable(@main)` | P4 不可达 |
 | `@repairwallnow1` | `:212-216`；`RepairWallNow :383-406` | 同上 | `RepairWall(1)` → `LeftWall`；同 60s/UnderWar/满血门；成功 HP=max + `RefStatus` + 扣 `RepairWallPrice` | 成功「修理成功。」；失败**「城门不需要修理!!!」**（墙也用门文案，照抄）；钱不足红；`@main` say | `GotoLable(@main)` | P4 |
 | `@repairwallnow2` | `:217-221` | 同上 | `CenterWall` | 同上 | 同上 | P4 |
 | `@repairwallnow3` | `:222-226` | 同上 | `RightWall` | 同上 | 同上 | P4 |
 | `@hireguardnow*` | `:227-232`；`HireGuard :264-309` | 末尾序号（`StrToInt`） | **不可达**：`Substring` 抛 → catch；方法体（金币 300000、`n10<=4`、未雇佣、`!UnderWar`、`RegenMonsterByName`、扣钱、`Castle=castle`、`GuardDirection=3`）永不执行 | 无 | 无 | 内容无链接 ⇒ 双重不可达 |
-| `@hirearchernow*` | `:233-238`；`HireArcher :311-356` | 序号 1..12（部署页） | **不可达**：同上；即使修 Substring，`Archers[12]`/`Archers[-1]` 仍越界 | 无 | 无 | P3 点击可达（标签在链接里），但仍静默 |
+| `@hirearchernow*` | `:233-238`；`HireArcher :311-356` | 序号 1..12（部署页） | **不可达**：同上；即使修 Substring，部署页 1..12 也**不**越界（`12→n10=11` 合法；越界只发生在 label 13 的 `n10=12` 与 label 0 的 `n10=-1`） | 无 | 无 | P3 点击可达（标签在链接里），但仍静默 |
 | `@@castlename` | `:139-154` | `sMsg` = `\r` 后文本，`Trim()` | 非空：`Castle.sName = sMsg`；`Castle.Save()`（`SaveConfigFile` 写**ctor 时**路径 `Castle/Castle/SabukW.txt` 整文件；`SaveAttackSabukWall` 写 `Castle/<ConfigDir>/AttackSabukWall.txt` = 部署 `Castle/0/`）；`MasterGuild.RefMemberName()`（对在线成员逐人 `RefShowName`）；空：不改不存 | `SM_MENU_OK`（Recog=**NPC** ActorId）尾「城堡名称更改成功...」/「城堡名称更改失败!!!」；成员名牌 `SM_USERNAME(42)`（Recog=成员 ActorId，Param=GetChrColor，尾=EncodeString(名字)）。出队序：menu-ok(69) 先于 username(165) | 无脚本记录（`@@` 标签不在 `Npc_def` 里） | P4 不可达；无长度校验（`CastleNameLen=16` 声明了但全仓无消费） |
-| `@@withdrawal` | `:155-176` | `sMsg` 数字（`StrToInt(...,0)`） | **N1：抛 `NotImplementedException` → catch；无状态、无金币、无提示** | 无 | `GotoLable` 无记录 | P4；P3 点击静默 |
+| `@@withdrawal` | `:155-176` | `sMsg` 数字（`StrToInt(...,0)`） | **N1：抛 `NotImplementedException` → Castle catch（常量日志）；客户端无状态、无金币、无提示** | 无 | `GotoLable` 无记录 | P4；P3 点击静默 |
 | `@@receipts` | `:177-198` | 同上 | **N1 同上** | 无 | 同上 | 同上 |
 | `@@sendmsg` | `:134-138`；`SendCustemMsg :408-420` | `sMsg` 文本 | `!SubkMasterSendMsg` ⇒ 红「城主发信息功能还没有开放!!!」；否则 `BoSendMsgFlag` 为真 ⇒ 清标志 + 全服广播 `ChrName + ": " + sMsg`（`MsgType.Castle`，走 `SendBroadCastMsg`，`WorldServer.cs:1738-1775`，每收件人 `SysMsg(..., Red, Castle)`）；**不检查 `IsSendMsg`**（与 Merchant 不同） | `SM_MENU_OK`（Recog=NPC；**空尾**）；广播为每个在线者 `SM_SYSMESSAGE(100)`（Recog=收件人；尾=EncodeString）；出队序 menu-ok(69) 先于 sysmsg(252) | 无 | 双重不可达（标签不在页面；`SETSENDMSGFLAG` 不在城堡脚本） |
 | `@@offlinemsg` | `:127-133` | `sMsg` | `IsOffLineMsg` 为真才 `SetOffLineMsg`（`OffLineLeaveWord`）；城堡 NPC 的 `IsOffLineMsg` 恒 false（头被 `boFlag=false` 跳过） | 无 | 无 | 不可达 |
 | `@exit` | `:239-242` | 无 | 无（关面板） | `SM_MERCHANTDLGCLOSE(644)`（Recog = 调用里的 `nParam1` = NPC ActorId）；base 已发过一条 ⇒ **两条同帧**（同优先级 143，顺序不定） | 无 | 本部署脚本无该链接；客户端关闭按钮是否直发 `@exit`/`RM_MERCHANTDLGCLOSE` 需抓包确认；注入页面后可达 |
 | `@back` | `:243-250` | 无 | 无 | 返回页 `SM_MERCHANTSAY`；base 可能已发一份 ⇒ **两份说词** | `GotoLable(ScriptGoBackLable ?: @main)` | 同上 |
 | 非 `@` 数据 | `:253-256` | 任意不以 `@` 开头的串 | 无 | `SM_MENU_OK`（Recog=NPC）尾「你没有权利使用.」 | 无 | P5 可达（构造包） |
-| `@main`/`@treatdoor`/`@repaircastle`/`@repairdoor`/`@repairwalls`/`@hirearchers`/`@commandorder`/`@aboutwar`/`@day`/`@listwar` | `Npc_def:2-90` | 无 | 纯说词（`@openmaindoor/@closemaindoor` 例外，有 `#ACT`） | `SM_MERCHANTSAY(643)`，尾 = `ChrName + '/' + 展开后的整页` | `GotoLable(label)` | P2/P3 可达 |
+| `@main`/`@repaircastle`/`@repairdoor`/`@repairwalls`/`@hirearchers`/`@commandorder`/`@day` | `Npc_def:2-90` | 无 | 纯说词 | `SM_MERCHANTSAY(643)`，尾 = `ChrName + '/' + 展开后的整页` | `GotoLable(label)` | P2/P3 可达 |
+| `@treatdoor` | `Npc_def:29-33`；`CastleOfficial.cs:52-67` | 无 | 无 | **0 帧**：页面 say 在 `$CASTLEDOORSTATE` 处因 `MainDoor.BaseObject==null` 抛 NRE（`CastleOfficial.cs:54`），被 `Merchant.cs:944-947` 捕获并落 `TMerchant` 日志+栈；`SM_MERCHANTSAY` 不发送 | `GotoLable(@treatdoor)`（说词构建即抛） | P3 可点（`@main` 页注册），但 0 帧 |
+| `@aboutwar` | `Npc_def:17-23` | 无 | 无（说词被整页覆盖） | `SM_MERCHANTSAY(643)`，尾 = `ChrName + '/暂时没有行会攻城 .\ \<返回/@main>'`：stock `AttackWarList` 为空（`Castle/0/AttackSabukWall.txt` 0 字节）⇒ `$CASTLEWARDATE` 走 `NormNpc.cs:805-831` 的 `sMsg = "暂时没有行会攻城 .\\ \\<返回/@main>"` **整页覆盖**，同页的 `<详细情况./@listwar>` 一并丢弃 | `GotoLable(@aboutwar)` | P3 可达（内容与通行写法不同） |
+| `@listwar` | `Npc_def:25-27` | 无 | 无 | 无 | — | **stock 不可达**：只被 `@aboutwar` 页链接（`Npc_def:21`），而该页已被 `$CASTLEWARDATE` 整页覆盖；无其它链接；冷发被 `boExtJmp` 挡（`ScriptEngine.cs:89`） |
 
 ### 3.2 每类副作用的口径
 
 - **门/墙 HP**：`Repair*` 只在成功时写 `WAbil.HP = MaxHP`；`CastleDoor.Open/Close` 本身不改 HP；
   `RefStatus` 把 `Dir` 重算并广播。Rust `CastleUnit.hp/max_hp/dir/death/opened` 已能承载。
 - **弓手**：`@hirearchernow*` 全不可达（N5）。部署启动时 12 个弓手 HP=0 被 `Initialize` 跳过
-  （`UserCastle.cs:174-193`），所以**不存在「用标签补弓手」这条链**；不要为了「让标签有作用」而实现它。
+  （`UserCastle.cs:174-193`）⇒ `Archers[i].BaseObject` 保持 null，这**正是** `HireArcher` 能走
+  `RegenMonsterByName` 的前置（`CastleOfficial.cs:323-328`），不是阻断原因；真正阻断是 N5 的
+  `Substring(prefix.Length, sLabel.Length)` 恒越界（`:235`）⇒ 分支不可达。所以**不存在「用标签补弓手」
+  这条链**；不要为了「让标签有作用」而实现它。
 - **行会仓库（金库）**：唯一入口 `@@withdrawal`/`@@receipts`，N1 ⇒ 无效果。`TotalGold` 的**真实**写入
   只有商人税 `IncRateGold`（`UserCastle.cs:768-812`，`crates/world/src/castle_tax.rs`，另一片），
   与 CastleOfficial 无关。
@@ -380,7 +400,10 @@ pub struct OfficialSelectOutcome {
 - 修门/修墙的 `now_tick` 由宿主注入（`world.clock_ms`），60s 门严格 `>`。
 - `door_state_text` 的调用点先判 `main_door.is_none()` → `DoorStateWithoutEntity`（整页中止）。
 - N1/N5 保持 no-op：返回空 `frames`/`world_ops`，日志仅 oracle 的常量前缀（N5）或无日志（N1 在
-  `CastleOfficial` 的 catch 里落常量前缀；base 的 catch 不会触发，因为接口调用在 Castle 的 try 内）。
+  `CastleOfficial` 的 catch 里落常量前缀）。**catch 归属按调用位置分**：`base.UserSelect` 在
+  `CastleOfficial.cs:97`、Castle 的 `try` 在 `:98` ⇒ base 内的异常（如 `$CASTLEDOORSTATE` NRE）由
+  `Merchant.cs:944-947` 落 `Data`+栈；只有 Castle `try` 内的动作异常才落 `TCastleManager` 常量行。
+  两层 catch 互不吞对方的异常。
 
 ### 5.2 宿主层（`bins/game-svr`，与 guildofficial 串行）
 
@@ -478,12 +501,12 @@ pub struct OfficialSelectOutcome {
 
 | ID | 内容 | 需要什么 | 断言 |
 | --- | --- | --- | --- |
-| W-CO-1 | BotSrv 直发 `CM_MERCHANTDLGSELECT(1011)` 给 `沙巴克城堡管理`（同图 0150、距 ≤15），`sData="@main\r"` | 固定 NPC `FindNpc` 在 oracle 侧已可用；BotSrv 已有 `open_dlg` 原语（T-46） | 捕获 `SM_MERCHANTSAY(643)` 尾（mask `$DATETIME`）：OWNERGUILD=游戏管理、LORD=管理员、CASTLEGOLD=0、TODAYINCOME=0；`Recog`=NPC ActorId |
-| W-CO-2 | 接 W-CO-1 后发 `@treatdoor\r` | 同上 | 无 `SM_MERCHANTSAY`；服务端日志恰为 `[Exception] TCastleManager::UserSelect... `（常量行，无栈）——部署 0 实体 ⇒ `$CASTLEDOORSTATE` NRE |
+| W-CO-1 | BotSrv 直发 `CM_MERCHANTDLGSELECT(1011)` 给 `沙巴克城堡管理`（同图 0150；入口是 `IsWithinSight`，**严格 `<15`**，`PlayObject.Operate.cs:1717`；站 15 格会 fail——`ClientClickNpc` 的 `<=15`（`PlayObject.Base.cs:691`）是另一个门），`sData="@main\r"` | 固定 NPC `FindNpc` 在 oracle 侧已可用；BotSrv 已有 `open_dlg` 原语（T-46） | 捕获 `SM_MERCHANTSAY(643)` 尾（mask `$DATETIME`）：OWNERGUILD=游戏管理、LORD=管理员、CASTLEGOLD=0、TODAYINCOME=0；`Recog`=NPC ActorId |
+| W-CO-2 | 接 W-CO-1 后发 `@treatdoor\r` | 同上 | 无 `SM_MERCHANTSAY`；服务端日志恰为 **2 行**：`[Exception] TMerchant::UserSelect... Data: @treatdoor` + `ex.StackTrace`（`Merchant.cs:944-947`；`sData` 已在 `PlayObject.Operate.cs:127` `Trim()`，无尾 `\r`）。**不是** `TCastleManager` 常量行——`base.UserSelect` 在 Castle 的 `try` 之外（`CastleOfficial.cs:97/98`）。部署 0 实体 ⇒ `$CASTLEDOORSTATE` NRE |
 | W-CO-3 | 发 `@repairdoor` / `@repairwalls` / `@hirearchers` / `@commandorder` / `@guardrule_*` | 同上 | 页文本逐字节；价格 2000000/500000/300000；静态防守页文案 |
-| W-CO-4 | 发 `@openmaindoor` / `@closemaindoor` | 同上 | 只有脚本 `MESSAGEBOX` + `@main` say；**无** `SM_DIGUP/DIGDOWN`（P4 不可达）；文本「城门已经打开。」/「城门已经关闭。」 |
-| W-CO-5 | 发 `@hirearchernow1` / `@hirearchernow12` / `@@withdrawal` / `@@receipts` | 同上 | 无任何帧；无金币/HP 变化；日志常量行（hire/withdrawal 都由 Castle 的 catch 落） |
-| W-CO-6 | 修门/修墙/开关门的状态动作 | **无法用 stock 部署**：需 oracle 侧注入城主/`Permission`（不允许改 `E:/MirServer` 或 `src`）⇒ 只能构造级 + owner 豁免；如 owner 批准测试专用注入，再补 | 60s 门（60000/60001）、扣款、`SM_DIGUP/DIGDOWN/ALIVE`、`SetMapXyFlag` 逐格 |
+| W-CO-4 | 发 `@openmaindoor` / `@closemaindoor` | 同上 | **0 帧、0 日志**（stock 部署不可达）：标签只在 `@treatdoor` 页被链接（`Npc_def:32`），该页说词在 `GetLineVariableText` 阶段因 `MainDoor.BaseObject==null`（`CastleOfficial.cs:54`）抛 NRE ⇒ `GetScriptLabel`（`ScriptEngine.cs:989-990`）永不执行 ⇒ 永不进 `CanJmpScriptLableMap`；冷发又被 `ScriptEngine.cs:89` 的 `boExtJmp && !sayingRecord.boExtJmp` 挡掉（`ScriptParsers.cs:845-852` 只认 `TRUE` 标记）。**没有** `MESSAGEBOX`、没有 `@main` say、没有 `SM_DIGUP/DIGDOWN`。仅靠注入城主/`Permission` **不足以**覆盖本项（`@repairdoor/@repairwalls` 页的标签能注册，open/close 不能），需另注入 `CanJmpScriptLableMap` 或测试钩子 |
+| W-CO-5 | 发 `@hirearchernow1` / `@hirearchernow12` / `@@withdrawal` / `@@receipts` | 同上 | **无任何帧、无日志**（stock R-0）：这些标签走不到 Castle 的 switch（`CastleOfficial.cs:109-110` 的 `IsMasterGuild && IsGuildMaster` 门），Merchant 的 `GotoLable` 对无脚本记录的标签静默 ⇒ 无异常可记。`TCastleManager` 常量日志只在注入城主后出现（届时 hire 由 N5 `Substring` 抛、withdrawal 由 N1 `NotImplementedException` 抛）。无金币/HP 变化 |
+| W-CO-6 | 修门/修墙/开关门的状态动作 | **无法用 stock 部署**：需 oracle 侧注入城主/`Permission`（不允许改 `E:/MirServer` 或 `src`）；且 **open/close 单靠城主/Permission 仍不可达**——open/close 标签只挂在 `@treatdoor` 页，还需额外注入 `CanJmpScriptLableMap` 或测试钩子（`@repairdoor`/`@repairwalls` 页的 repair 标签可正常注册）⇒ 只能构造级 + owner 豁免；如 owner 批准测试专用注入，再补 | 60s 门（60000/60001）、扣款、`SM_DIGUP/DIGDOWN/ALIVE`、`SetMapXyFlag` 逐格 |
 | W-CO-7 | `@@castlename` 持久化 | 需 C 卡实现 + 注入城主 + **临时复制的 Envir 树**（绝不写真部署） | `Castle/Castle/SabukW.txt` 整文件 CRLF 逐字节；`Castle/0/AttackSabukWall.txt` 重写 |
 
 > 窗口注意：`$DATETIME` 与 `$CASTLEGETDAYS` 是墙钟；比较必须 mask 或用固定时钟（oracle 侧无时钟注入，
@@ -507,8 +530,9 @@ pub struct OfficialSelectOutcome {
 
 ### 9.2 需真机 / 内容 / 注入
 
-1. **真机（可达层）**：P2/P3 的 say 帧字节与顺序；`@treatdoor` 的 NRE 日志；`@openmaindoor` 脚本动作
-   但门不动；`@hirearchernowN` 静默；`$DATETIME/$CASTLEGETDAYS` 的墙钟值（mask）。
+1. **真机（可达层）**：P2/P3 的 say 帧字节与顺序；`@treatdoor` 的 `TMerchant` NRE 日志（Data+栈）；
+   `@openmaindoor`/`@closemaindoor` **0 帧**（stock 不可达，需注入才能观察脚本动作）；
+   `@hirearchernowN` 静默；`$DATETIME/$CASTLEGETDAYS` 的墙钟值（mask）。
 2. **内容**：`Npcs.txt` 的 type=2 行；`Npc_def/沙巴克城堡管理-0150.txt` 的存在与字节；`SabukW.txt`
    的地图/坐标/价格；怪物库中门/墙名的有无（决定实体是否为 0）；`Server.conf` 的价格/颜色/前缀。
 3. **注入/裁决**：P4 的城堡状态动作在 stock 部署**不可达**（R-0）——真机要么由 owner 批准测试专用
