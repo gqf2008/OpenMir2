@@ -3509,7 +3509,7 @@ impl World {
             .map(|(_, tick)| *tick)
     }
 
-    /// `guardObject.CrimeforCastle = false;`（`GuardUnit.cs:57/61/62`）。
+    /// `guardObject.CrimeforCastle = false;`（`GuardUnit.cs:58/62`）。
     pub(crate) fn clear_guard_crime_for_castle(&mut self, actor_id: i32) {
         self.guard_castle_crime.retain(|(id, _)| *id != actor_id);
     }

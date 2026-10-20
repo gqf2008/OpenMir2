@@ -2690,7 +2690,7 @@ fn cleanup_sculture_slaves(world: &mut World, actor_id: i32) {
 
 /// `GuardUnit.IsProperTarget`（`GuardUnit.cs:35-125`）—— ArcherGuard 的 proper 判定。
 ///
-/// `Castle != null` 分支（`GuardUnit.cs:37-94`）的等价物 = 实体带
+/// `Castle != null` 分支（`GuardUnit.cs:37-100`）的等价物 = 实体带
 /// [`crate::entity::CastleBinding`]（oracle `BaseObject.Castle != null`）：
 /// 1. `LastHiter == target` ⇒ `true`；
 /// 2. `Castle.UnderWar` ⇒ `true`（先于成员豁免/管理员/同城排除）；
@@ -2706,7 +2706,7 @@ fn cleanup_sculture_slaves(world: &mut World, actor_id: i32) {
 /// 逐行实现见 [`guard_target_is_proper_target`]（本文件尾部）；本函数保持薄包装，
 /// 以便 `check_anchors.py` 的 `monster_ai_tick` 行号锚不因新逻辑位移。
 ///
-/// 判据：`guard_target_castle_tests` 的 C1..C7（每条带「改坏⇒红⇒sha256 还原」牙）。
+/// 判据：`guard_target_castle_tests` 的 C1..C8（每条带「改坏⇒红⇒sha256 还原」牙）。
 ///
 ///
 /// # 参数
@@ -4780,7 +4780,7 @@ fn percent_monster_attack_target(world: &mut World, actor_id: i32) -> bool {
 /// `ActorRace.Guard = 11`（`Race.cs:16`）—— `GuardUnit.IsProperTarget` 的
 /// `CrimeforCastle` 子分支只对 race 11 生效。
 const ACTOR_RACE_GUARD: u8 = 11;
-/// `GuardUnit.cs:54` 的 `2 * 60 * 1000`：`CrimeforCastle`（犯罪标记）的有效窗口。
+/// `GuardUnit.cs:52` 的 `2 * 60 * 1000`：`CrimeforCastle`（犯罪标记）的有效窗口。
 const GUARD_CRIME_FOR_CASTLE_MS: i64 = 2 * 60 * 1000;
 
 /// `GuardUnit.IsProperTarget` 只读的目标字段快照（避免与 `World` 的犯罪表写侧冲突）。
@@ -4797,7 +4797,7 @@ struct GuardTargetSnapshot {
 
 /// `GuardUnit.IsProperTarget`（`GuardUnit.cs:35-125`）—— ArcherGuard 的 proper 判定。
 ///
-/// `Castle != null` 分支（`GuardUnit.cs:37-94`）的等价物 = 实体带
+/// `Castle != null` 分支（`GuardUnit.cs:37-100`）的等价物 = 实体带
 /// [`crate::entity::CastleBinding`]（oracle `BaseObject.Castle != null`；由
 /// `UserCastle::Initialize` / [`World::bind_castle_defense`] 写入门/墙/弓手）：
 ///
@@ -4832,7 +4832,7 @@ fn guard_target_is_proper_target(world: &mut World, actor_id: i32, target_id: i3
         target_creature: t.ai.target_creature,
         pk_point: t.pk_point,
     };
-    // ---- `Castle != null` 分支（`GuardUnit.cs:37-94`）----
+    // ---- `Castle != null` 分支（`GuardUnit.cs:37-100`）----
     if let Some(binding) = actor_castle {
         if let Some(castle) = world.castles.get(binding.castle_index) {
             let under_war = castle.under_war;
@@ -4902,7 +4902,7 @@ fn guard_target_is_proper_target(world: &mut World, actor_id: i32, target_id: i3
             }
         }
     }
-    // ---- 尾段（`GuardUnit.cs:95-121`）----
+    // ---- 尾段（`GuardUnit.cs:101-124`）----
     if last_hiter == Some(target.id) {
         return true;
     }
@@ -10279,7 +10279,7 @@ mod tests {
 }
 
 /// **卡 `guard-target`**：`GuardUnit.IsProperTarget` 的 `Castle != null` 分支
-/// （oracle `src/M2Server/Monster/Monsters/GuardUnit.cs:35-94`）逐行判据。
+/// （oracle `src/M2Server/Monster/Monsters/GuardUnit.cs:35-125`，城堡分支 `37-100`）逐行判据。
 ///
 /// 生产路径 = [`super::guard_unit_is_proper_target`]（`ArcherGuard.Run` 的索敌门）；
 /// 每条用例只经 `World` 的公开接线口（`castle_binding` / `set_actor_guild` /
@@ -10288,7 +10288,7 @@ mod tests {
 mod guard_target_castle_tests {
     use super::*;
     use crate::castle::{CastleSiegeConfig, DefenseRole, GuildId, UserCastle};
-    use crate::entity::CastleBinding;
+    use crate::entity::{CastleBinding, VisibleBaseObject, VisibleFlag};
 
     const G_CASTLE: GuildId = GuildId(7);
     const G_ALLY: GuildId = GuildId(9);
@@ -10341,7 +10341,8 @@ mod guard_target_castle_tests {
     }
 
     /// C1 `same_castle_units_do_not_attack_each_other`：`baseObject.Castle == Castle`
-    /// （同 `castle_index` 的绑定实体）⇒ `false`；**另一座城**的同 race 单位仍可打。
+    /// （同 `castle_index` 的绑定实体）⇒ `false`；**另一座城**（`castle_index = 1`）的同 race
+    /// 单位仍可打；未绑定城堡的 112 也不触发同城排除。
     ///
     /// 牙：删 `target.castle.map(..) == Some(binding.castle_index)` ⇒ 第一条红。
     #[test]
@@ -10352,10 +10353,19 @@ mod guard_target_castle_tests {
             !guard_unit_is_proper_target(&mut w, archer, mate),
             "同城单位（target.Castle == Castle）必须互不攻击"
         );
-        let foreign = add_archer_at(&mut w, 9, 5, None);
+        // 真的补第二座城（`castle_index = 1`）：同 race、不同 Castle ⇒ 不是同城。
+        w.castles
+            .push(UserCastle::new("沙巴克2", CastleSiegeConfig::default()));
+        let foreign = add_archer_at(&mut w, 9, 5, Some(1));
         assert!(
             guard_unit_is_proper_target(&mut w, archer, foreign),
-            "未绑定城堡的 112 不是同城 ⇒ 走尾段可打（防「凡 112 都 false」的假实现）"
+            "另一座城（castle_index = 1）的同 race 单位仍可打"
+        );
+        // 未绑定城堡的 112 ⇒ 也不触发同城排除（防「凡 112 都 false」的假实现）。
+        let unbound = add_archer_at(&mut w, 10, 5, None);
+        assert!(
+            guard_unit_is_proper_target(&mut w, archer, unbound),
+            "未绑定城堡的 112 不是同城 ⇒ 走尾段可打"
         );
     }
 
@@ -10537,6 +10547,52 @@ mod guard_target_castle_tests {
             w.guard_crime_for_castle_tick(guard_id),
             None,
             "到期必须清 CrimeforCastle"
+        );
+    }
+
+    /// C8 `npc_race_guard_is_not_a_target`：`Race ∈ [NPC, Animal)` 排除子句
+    /// （oracle `GuardUnit.cs:96`）经**生产索敌路径**（`ArcherGuard.Run`）生效。
+    ///
+    /// 场景：城堡弓手（`Castle != null`）的可见集里同时有「race 11 守卫（未绑定 Castle、
+    /// 无 `CrimeforCastle`、距离更近）」与「玩家（更远）」⇒ race 11 守卫被该子句排除
+    /// （race 11 ∈ [10, 50)），最近 proper 目标是玩家。改前旧尾段对 race 11 返回 `true`
+    /// （不命中红名/石化/目标为 112 的任何分支），故删该子句会把守卫选成目标。
+    ///
+    /// 牙：把 `(target.race >= NPC && target.race < ANIMAL)` 替换成 `false` ⇒ 断言红
+    /// （race 11 距离 3 < 玩家距离 7，会被选为 `target_creature`）。
+    #[test]
+    fn c8_npc_race_guard_is_not_a_target() {
+        let (mut w, archer) = world_with_archer(false, None);
+        // oracle 的 `UserCastle.Initialize` 守卫表不赋 `Castle` ⇒ 这里同样不绑。
+        let mut guard = Entity::new(0, "守卫", 8, 5);
+        guard.race = 11;
+        guard.hp = 100;
+        guard.max_hp = 100;
+        let guard_id = w.add_entity(guard);
+        // 无犯罪标记：race-11 子分支不提前 `return true`，必须落到 [NPC, Animal) 排除。
+        assert_eq!(w.guard_crime_for_castle_tick(guard_id), None);
+        let player_id = add_player(&mut w, 12, 5, None);
+        // 守卫更近（距离 3），玩家更远（距离 7）。
+        w.entities.get_mut(archer).unwrap().visible_actors = vec![
+            VisibleBaseObject {
+                target: guard_id,
+                flag: VisibleFlag::Show,
+            },
+            VisibleBaseObject {
+                target: player_id,
+                flag: VisibleFlag::Show,
+            },
+        ];
+        {
+            let e = w.entities.get_mut(archer).unwrap();
+            e.ai.walk_speed = 0;
+            e.ai.walk_tick = 99_999;
+        }
+        archer_guard_run(&mut w, archer);
+        assert_eq!(
+            w.entities.get(archer).unwrap().ai.target_creature,
+            Some(player_id),
+            "Race ∈ [NPC, Animal) 的未犯罪守卫不是合法目标 ⇒ 跳过它选更远的玩家"
         );
     }
 }
