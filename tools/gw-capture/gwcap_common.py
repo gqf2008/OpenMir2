@@ -19,8 +19,10 @@
 - LoginGate：`16B = '#' + 15 个 EDCode 字符`（C# 只发 `iLen` 字节，末字符与 `'!'` 丢失）；
 - SelGate：`18B = 16 个 EDCode 字符 + 0x00 + '!'`（无 `'#'` 前导，中间夹 0）。
 
-这两个形状是 oracle 既有缺陷的逐字节复刻；判据必须以字节形状为准，不能只靠 ident
-（LoginGate 帧被截断，ident 可能仍可解，但**帧长/前导**才是线上事实）。
+这两个形状是 oracle 既有缺陷的逐字节复刻。LoginGate 的 16B 形状**还必须**解出
+`ident=528`（`SM_OUTOFCONNECTION`）才算真缺陷帧：普通 18B 正常帧被截成 16B 时
+（如 ident=520）形状相同，只靠「len==16 + '#' + 可打印」会误判成超时帧。
+SelGate 18B 形状（无 '#' 前导 + `0x00!` 收尾）在字节上已足够唯一。
 """
 
 from __future__ import annotations
@@ -39,6 +41,8 @@ SEGMENT_IMPL = os.path.join(REPO, "tools", "capture", "segment_frames.py")
 
 # C# `grobal2.PacketCode`（服务端内部帧 6B 头的前 4 字节，小端）。
 PACKET_CODE = 0xAA9AAA9A
+# LoginGate 60s 空闲超时帧的 ident（`grobal2.SM_OUTOFCONNECTION`）。
+LOGIN_TIMEOUT_IDENT = 528
 
 _edcode = None
 _segment = None
@@ -82,7 +86,9 @@ def wire_shape(direction: str, frame: bytes) -> str:
         return "heartbeat"
     if direction == "s2c":
         # 先认两条缺陷帧，再认正常帧，避免 18B 缺陷帧被当成 s2c-other。
-        if len(f) == 16 and f[:1] == b"#" and all(0x20 <= b < 0x7F for b in f[1:]):
+        # 16B 形状还必须 ident=528：普通 18B 帧截成 16B（ident=520 等）不是缺陷帧。
+        if (len(f) == 16 and f[:1] == b"#" and all(0x20 <= b < 0x7F for b in f[1:])
+                and frame_ident(direction, f) == LOGIN_TIMEOUT_IDENT):
             return "login-timeout-16"
         if len(f) == 18 and f[-2:] == b"\x00!" and f[:1] != b"#":
             return "sel-timeout-18"
@@ -132,7 +138,39 @@ def frame_ident(direction: str, frame: bytes):
     return int.from_bytes(dec[4:6], "little")
 
 
+def _expand_login16_defects(items, direction):
+    """把「16B LoginGate 缺陷帧 + 后续帧」从单个 '!' 帧里拆出来。
+
+    16B 缺陷帧没有 `'!'` 收尾，`segment_frames.segment()` 会把它与下一帧粘成一块
+    （流形如 `#<15 chars>#<16 chars>!`）。EDCode 输出字符恒 >= 0x3C，正常帧内部
+    不可能出现 `'#'`/`'*'`，因此在偏移 16 处见到 `'#'`/`'*'` 即可确定是
+    「16B 缺陷帧 + 下一帧」。尾包恰好 16B 时保持 `kind=partial`，由 `_frame_row`
+    按 wire 形状升级为 `frame`（截断写是完整的一次写，只是缺 `'!'` 收尾）。
+    """
+    if direction != "s2c":
+        return items  # LoginGate 缺陷帧只在网关→客户端方向
+    out = []
+    for off, frame, kind in items:
+        pos = 0
+        rest = frame
+        while (len(rest) >= 16 and rest[:1] == b"#"
+               and all(0x20 <= b < 0x7F for b in rest[1:16])):
+            nxt = rest[16:17]
+            if nxt in (b"#", b"*"):
+                out.append((off + pos, rest[:16], "frame"))
+                pos += 16
+                rest = rest[16:]
+                continue
+            break
+        if rest:
+            out.append((off + pos, rest, kind))
+    return out
+
+
 def _frame_row(seq, conn, port, direction, off, frame, kind, t_wall_ms, t_rel_us):
+    wire = wire_shape(direction, frame)
+    if kind == "partial" and wire == "login-timeout-16":
+        kind = "frame"  # 16B 截断写：缺 '!' 收尾，但已按形状+ident 识别为缺陷帧
     return {
         "seq": seq,
         "event": "frame",
@@ -145,7 +183,7 @@ def _frame_row(seq, conn, port, direction, off, frame, kind, t_wall_ms, t_rel_us
         "len": len(frame),
         "sha256": sha256_bytes(frame),
         "kind": kind,
-        "wire": wire_shape(direction, frame),
+        "wire": wire,
         "ident": frame_ident(direction, frame),
         "hex": frame[:64].hex(),
     }
@@ -169,7 +207,8 @@ def feed_segmenter(state, buf, t_wall_ms, t_rel_us):
     seg = load_segmenter()
     rows = []
     consumed = 0
-    for off, frame, kind in seg.segment(bytes(state["pending"])):
+    for off, frame, kind in _expand_login16_defects(
+            seg.segment(bytes(state["pending"])), state["direction"]):
         if kind == "partial":
             consumed = off
             break
@@ -283,13 +322,25 @@ class Capture:
         sj = os.path.join(capture_dir, "session.json")
         if os.path.isfile(sj):
             with open(sj, "r", encoding="utf-8") as fh:
-                self.session = json.load(fh)
+                try:
+                    self.session = json.load(fh)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        "session.json 无法解析（半截写？）：%s" % exc
+                    ) from exc
         self.chunks = []
         with open(self.chunks_path, "r", encoding="utf-8") as fh:
-            for line in fh:
+            for lineno, line in enumerate(fh, 1):
                 line = line.strip()
-                if line:
+                if not line:
+                    continue
+                try:
                     self.chunks.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        "chunks.ndjson 第 %d 行无法解析（半截写？）：%s"
+                        % (lineno, exc)
+                    ) from exc
         self.opens = {}
         self.closes = {}
         self.fails = {}

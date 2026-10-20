@@ -9,8 +9,9 @@
   2. chunks 对账：chunks.ndjson 的 (dir, off, n, sha256) 能无损重建两条 .bin；
   3. frames 对账：frames.ndjson 逐帧覆盖整条流，wire/时间戳与实算一致，
      且能认出 LoginGate 16B 截断超时帧；
-  4. 红检：篡改 frames 的 wire 或 .bin 一个字节 ⇒ `--verify` 必须变红；
-     `--direction s2c` 只落盘下行，上行仍透传。
+  4. 红检：篡改 frames 的 wire/ident 或 .bin 一个字节、删掉整条方向的
+     `.bin`+frames（chunks 仍留 data 事件）⇒ `--verify` 必须变红；
+     `--direction s2c` 只落盘下行，上行仍透传；半截 chunks.ndjson ⇒ rc=2。
 
 用法：python -I -B selftest_gate_shadow.py
 """
@@ -279,7 +280,64 @@ def main():
         if _run_verify(victim2).returncode == 0:
             print("RED: 篡改 .bin 后 verify 仍绿——红检失效")
             return 1
-        print("PASS 4/4 篡改 wire/.bin 后 verify 变红（改坏必红成立）")
+
+        # 4c: 篡改 frames.ident ⇒ 必须红（verify 实算 ident）
+        victim3 = os.path.join(tmp, "tamper-ident")
+        shutil.copytree(out1, victim3)
+        fpath3 = os.path.join(victim3, "frames.ndjson")
+        with open(fpath3, "r", encoding="utf-8") as fh:
+            lines3 = [json.loads(x) for x in fh if x.strip()]
+        target3 = next((r for r in lines3 if r.get("ident") is not None), None)
+        if target3 is None:
+            print("RED: 抓包没有任何可解 ident 的帧，无法做 ident 红检")
+            return 1
+        target3["ident"] = (target3["ident"] + 1) % 65536
+        with open(fpath3, "w", encoding="utf-8") as fh:
+            for row in lines3:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        if _run_verify(victim3).returncode == 0:
+            print("RED: 篡改 frames.ident 后 verify 仍绿——红检失效")
+            return 1
+
+        # 4d: 删掉整条方向的 .bin 与 frames（chunks 里的 data 事件保留）
+        # ⇒ verify 必须红；否则「整条方向缺失」对 verify 是盲的。
+        victim4 = os.path.join(tmp, "tamper-missing-direction")
+        shutil.copytree(out1, victim4)
+        victims = sorted(f for f in os.listdir(victim4) if f.endswith(".bin"))
+        if not victims:
+            print("RED: 抓包没有 .bin，无法做缺方向红检")
+            return 1
+        victim_bin = victims[0]
+        parts = victim_bin.split(".")
+        drop_conn = int(parts[0].split("-")[1])
+        drop_dir = parts[1]
+        os.remove(os.path.join(victim4, victim_bin))
+        fpath4 = os.path.join(victim4, "frames.ndjson")
+        with open(fpath4, "r", encoding="utf-8") as fh:
+            lines4 = [json.loads(x) for x in fh if x.strip()]
+        kept4 = [r for r in lines4
+                 if not (r["conn"] == drop_conn and r["dir"] == drop_dir)]
+        with open(fpath4, "w", encoding="utf-8") as fh:
+            for row in kept4:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        if _run_verify(victim4).returncode == 0:
+            print("RED: 删除整条方向的 .bin+frames 后 verify 仍绿"
+                  "（chunks data 事件未被对账）——红检失效")
+            return 1
+
+        # 4e: 半截 chunks.ndjson ⇒ PREREQ_MISSING rc=2（不是 traceback rc=1）
+        victim5 = os.path.join(tmp, "half-chunks")
+        os.makedirs(victim5, exist_ok=True)
+        with open(os.path.join(victim5, "chunks.ndjson"), "w",
+                  encoding="utf-8") as fh:
+            fh.write('{"event":"open","conn":1')
+        half = _run_verify(victim5)
+        if half.returncode != 2:
+            print("RED: 半截 chunks.ndjson 期望 rc=2，实得 rc=%d\n%s%s"
+                  % (half.returncode, half.stdout, half.stderr))
+            return 1
+        print("PASS 4/4 篡改 wire/ident/.bin、删整条方向、半截 chunks 后"
+              " verify 变红或 PREREQ（改坏必红成立）")
         print("GREEN: gate shadow proxy selftest 4/4")
         rc = 0
         return rc

@@ -181,6 +181,16 @@ def verify_capture(gwcap, out_dir, require_frames=True):
         with open(os.path.join(out_dir, fname), "rb") as fh:
             bins[(conn, direction)] = fh.read()
 
+    # chunks 里每个 data 方向都必须在 .bin 里有对应真值；否则删掉整条方向的
+    # .bin 与 frames 仍会「无处可对账」而假绿。
+    for key in sorted(data_evs):
+        if key not in bins:
+            errors.append(
+                "%s 有 chunks data 事件但缺 .bin（off=%d..%d）"
+                % (key, data_evs[key][0]["off"],
+                   max(e["off"] + e["n"] for e in data_evs[key]))
+            )
+
     for key, stream in sorted(bins.items()):
         cursor = 0
         for ev in sorted(data_evs.get(key, []), key=lambda r: r["off"]):
@@ -231,6 +241,13 @@ def verify_capture(gwcap, out_dir, require_frames=True):
                     % (key, row["off"], row.get("wire"), want)
                 )
                 break
+            want_ident = gwcap.frame_ident(row["dir"], blob)
+            if row.get("ident") != want_ident:
+                errors.append(
+                    "frames %s off=%d ident 记录 %r != 实算 %r"
+                    % (key, row["off"], row.get("ident"), want_ident)
+                )
+                break
             if last_t is not None and row.get("t_wall_ms") is not None:
                 if row["t_wall_ms"] < last_t:
                     errors.append("frames %s 时间戳倒退（off=%d）" % (key, row["off"]))
@@ -274,12 +291,16 @@ def main(argv=None):
 
     mir2_proxy, gwcap = _deps()
     if args.verify:
-        errors = verify_capture(gwcap, args.verify)
+        try:
+            errors = verify_capture(gwcap, args.verify)
+        except ValueError as exc:
+            print("PREREQ_MISSING: 抓包文件半截/无法解析：%s" % exc, file=sys.stderr)
+            return 2
         if errors:
             for err in errors:
                 print("RED: " + err)
             return 1
-        print("GREEN: capture 对账通过（chunks 与 frames 均可无损重建 .bin）")
+        print("GREEN: capture 对账通过（chunks 与 frames 均可无损重建 .bin，ident 实算一致）")
         return 0
 
     if not args.out or not args.map:

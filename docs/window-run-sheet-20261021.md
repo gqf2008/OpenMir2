@@ -4,10 +4,13 @@
 > ① `tools/gw-capture/gate_shadow_proxy.py`：LoginGate 7000 / SelGate 7100 影子 TCP 代理，
 >    capture 与 `mir2_proxy` 同 schema（`session.json`/`chunks.ndjson`/`conn-*.bin`），另产
 >    `frames.ndjson`（逐帧 `t_wall_ms`/`wire`/`ident`）；`--direction s2c|c2s` 只落单方向（另一方向仍透传）；
->    `--verify DIR` 对 chunks/frames 做无损对账；自检 4/4（本地假 socket，不绑 7000/7100、不连 `E:/MirServer`）。
-> ② `tools/gw-capture/gate_timer_gate.py`：从帧时间戳判 **LoginGate 60s 两阶段**（严格 `>60s` + 同扫描 close）、
->    **SelGate 60s 两阶段**（仅 100..103 刷新；超时后 socket 保持打开）、**10s 重连**（相邻 open 间隔）与
->    **10s KeepAlive**；无对应帧如实判 `UNCLOSED`（rc=3）；自检 24/24（会绿/会红/无观测物 UNCLOSED）。
+>    `--verify DIR` 对 chunks/frames 做无损对账，实算 `wire`/`ident`，并要求每个 `data` 方向都有
+>    对应 `.bin` 与帧（删整条方向不再假绿）；自检 4/4（本地假 socket，不绑 7000/7100、不连 `E:/MirServer`）。
+> ② `tools/gw-capture/gate_timer_gate.py`：从帧时间戳判 **LoginGate 60s 两阶段**（严格 `>60s` + 同扫描 close；
+>    16B 缺陷帧必须 **ident=528**，普通帧截成 16B 不误判）、**SelGate 60s 两阶段**（仅 100..103 刷新；
+>    超时后 socket 保持打开）、**10s 重连**（**close/upstream_fail→next-open 0..10s + 下一 tick 相位**，
+>    不是相邻 open 间隔）与 **10s KeepAlive**；无对应帧如实判 `UNCLOSED`（rc=3）；
+>    半截 `chunks.ndjson` ⇒ `PREREQ` rc=2；自检 32/32（会绿/会红/无观测物 UNCLOSED）。
 > ⇒ 评审 C8「无专用网关判据脚本」的**工具缺口已闭环**；但**真机 capture 仍未采**，G7 四卡
 >    （`gate-idle-timeout`/`selgate-reconnect`/`gategate-slots-gm`/`gategate-speed-rules`）**仍保持 `in-progress`**。
 >    0–210ms 丢帧 / 10ms 拍 / >200ms drain / GM 10s 节拍不在本次 gate 覆盖范围（见 §C8）。
@@ -109,8 +112,8 @@
 | `db_target_plumb.ps1` | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/db_target_plumb.ps1 -Selftest` | 22 条（名称展开/连接串改写/INI BOM+GBK 字节保真/BOM 紧贴 `[DataBase]` 首行/影子写不穿源 + 硬链 fail-closed/缺段重复键 fail-closed），`SELFTEST GREEN`，rc=0 |
 | `selftest_stack_db_target.ps1` | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest_stack_db_target.ps1` | 41 条（默认 plan/配置逐字节不变 + `-Db*` 影子三库 + 源 sha256 不变 + 非法参数 RED；game-svr 夹具为生产形态 `BOM + [DataBase]` 首行），`SELFTEST GREEN`，rc=0 |
 | `check_timing.py` 预设 | `python -I -B .../check_timing.py --selftest` | 30 条（原 15 + 15 条预设：四条会绿/会红、普通 capture ⇒ `UNCLOSED`、actor 过滤有牙），`SELFTEST GREEN`，rc=0 |
-| `selftest_gate_shadow.py` | `python -I -B tools/gw-capture/selftest_gate_shadow.py` | 4 条（透传保真 / chunks 复原 / frames 复原并认出 16B 超时帧 / 篡改 wire 与 .bin 必红；本地假 socket），`GREEN 4/4`，rc=0 |
-| `gate_timer_gate.py --selftest` | `python -I -B tools/gw-capture/gate_timer_gate.py --selftest` | 24 条（login/sel 60s 两阶段会绿会红、刷新/严格边界、正常 18B 帧不误认、10s 重连/KeepAlive、无观测物 `UNCLOSED`、缺 capture rc=2），`GREEN 24/24`，rc=0 |
+| `selftest_gate_shadow.py` | `python -I -B tools/gw-capture/selftest_gate_shadow.py` | 4 条（透传保真 / chunks 复原 / frames 复原并认出 16B 超时帧 / 篡改 wire·ident·.bin、删整条方向、半截 chunks 必红或 rc=2；本地假 socket），`GREEN 4/4`，rc=0 |
+| `gate_timer_gate.py --selftest` | `python -I -B tools/gw-capture/gate_timer_gate.py --selftest` | 32 条（login/sel 60s 两阶段会绿会红、刷新/严格边界、16B 形状必须 ident=528、16B 缺陷与下一帧同块可切、close→next-open 0/5/10s 绿与 20s 红、KeepAlive 相位轨、`auto --port` 按 port_meta.gate、无观测物 `UNCLOSED`、缺 capture/半截 chunks rc=2），`GREEN 32/32`，rc=0 |
 
 > 这些自检**不连库、不起栈、不抓包**；它们只证明「工具判据会咬人」，不替代真机窗口证据。
 > 原 `dbsnap.py selftest` / `restore-selftest` 仍需要 MySQL，本批未改其语义。
@@ -881,7 +884,9 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 - 评审 C8 的「没有入库的影子网关/代理拓扑」「没有计时工具」已补（tier=L，纯工具/文档）：
   - `tools/gw-capture/gate_shadow_proxy.py`：任意端口影子 TCP 代理；capture 与 `mir2_proxy` 同 schema，
     额外 `frames.ndjson`（逐帧 `t_wall_ms`/`wire`/`ident`）；可把 LoginGate 7000、SelGate 7100
-    或 SelGate→DBSrv 5100 的影子端口落盘；`--verify DIR` 做 chunks/frames 无损对账。
+    或 SelGate→DBSrv 5100 的影子端口落盘；`--verify DIR` 做 chunks/frames 无损对账并实算
+    `wire`/`ident`，每个 `data` 方向都必须有 `.bin` 与帧（缺整条方向 ⇒ RED）；半截
+    `chunks.ndjson` ⇒ `PREREQ_MISSING` rc=2（不是 traceback）。
   - `tools/gw-capture/gate_timer_gate.py`：`login-idle` / `sel-idle` / `sel-reconnect` / `sel-keepalive` /
     `auto` / `all`；帧时间取自 `chunks.ndjson`（完成帧的 TCP 读块时间）。无观测帧判 `UNCLOSED`（rc=3），
     **绝不**因「没采到」判 GREEN。
@@ -905,11 +910,14 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
   ```
 - 判据口径（与 oracle 源码逐行对齐，详见工具 docstring）：
   - LoginGate：计时从**会话构造**起，客户端数据**不刷新**；严格 `>60s`；扫描 >1s；发 16B
-    截断帧（`'#' + 15 字符`）后**同一次扫描**关会话（第二阶段线上不可达）。
+    截断帧（`'#' + 15 字符`，**且 ident=528**）后**同一次扫描**关会话（第二阶段线上不可达）。
+    普通 18B 正常帧被截成 16B（如 ident=520）形状相同但不是缺陷帧 ⇒ 不得 GREEN。
   - SelGate：仅 100..103 刷新；严格 `>60s`；扫描 >20s；发 18B 缺陷帧后 **socket 保持打开**
     （只摘槽）；第二阶段不可达。
-  - 10s 重连：断链后每个 10s tick 重试一次 ⇒ 相邻 open 间隔 `9500 < gap <= 11000ms`（可调）；
-    10s KeepAlive：就绪态每 tick 一条 `KeepAlive(3)`。
+  - 10s 重连：断链后**下一个 10s tick** 立即 `Start()` ⇒ 判据是 **close/upstream_fail→next-open
+    `0..10s`（默认 +2s 容差，可用 `--reconnect-max-gap-ms` 覆盖）**，不是相邻 open 间隔；
+    同连接采到 KeepAlive 时还校验下一 tick 相位（open 偏离 tick ⇒ RED）。
+    10s KeepAlive：就绪态每 tick 一条 `KeepAlive(3)`（`--min-gap-ms/--max-gap-ms`）。
 - **仍未覆盖**：0–210ms 丢帧、10ms 拍、>200ms drain、GameGate(7200) 的 GM 10s 节拍/槽位
   （评审 C8/F6 的另一半）——这些仍需 GameGate 侧注入/计时工具，不在本 gate。
 - 因此：`gate-idle-timeout`/`selgate-reconnect` **有工具、但必须真机抓包才能收**；`gategate-slots-gm`/
@@ -931,7 +939,7 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 | 1 | **【闭环 v2.3】** 52 body 的 **Weight/MaxExp 字段级解码器** | B2 的 `Weight=14` 可机判 | `check_client_s2c_frames.py --expect-52-weight/--expect-52-max-exp`（40B/58B 自动识别） |
 | 2 | **【闭环 v2.3】** 10/41 的**坐标过滤**（C3；recog 过滤仅单侧诊断） | GuardList 可挑「卫士那一对」 | `s2c_diff.py --from-x/--from-y`（跨侧）；`--from-recog/--to-recog` 限单侧 |
 | 3 | **【部分闭环 v2.4】** 1.2s/30s/600ms/3min 等**服务端节拍**读数 | cadence/aoi-maptime/delay-magic/corpse 卡 | 规则预设已具备（`--preset cadence-1.2s\|verify-maptime-30s\|delaymagic-600ms\|corpse-3min` + `--preset-var actor=`）；但普通 capture 无服务端事件帧 ⇒ 判 `UNCLOSED`（rc=3）。**读数仍未闭环**：缺服务端日志→事件流导出 |
-| 4 | **【工具闭环 v2.5】** LoginGate/SelGate 影子抓包 + 网关 timer gate（C8） | G7 四卡 | `tools/gw-capture/gate_shadow_proxy.py` + `gate_timer_gate.py`（`--selftest` 4/4、24/24）；真机 capture 仍需开窗采集 ⇒ 卡保持 `in-progress` |
+| 4 | **【工具闭环 v2.5】** LoginGate/SelGate 影子抓包 + 网关 timer gate（C8） | G7 四卡 | `tools/gw-capture/gate_shadow_proxy.py` + `gate_timer_gate.py`（`--selftest` 4/4、32/32）；真机 capture 仍需开窗采集 ⇒ 卡保持 `in-progress` |
 | 5 | 6000/5100 代理或逐帧日志（C9） | G6 | DB 行级 + 连接日志；不判 R |
 | 6 | 法术按键/`AutoSpell` 驱动 | G4 全部 | 只能摆前置（B6）；不收 |
 | 7 | **【闭环 v2.3】** `account_provision.ps1` 无 `--host/--db` | 测试库开号可直接用 | `-Db mir2_test_account -DbHost 127.0.0.1`（`-Host` 别名）；默认仍 `mir2_account` |

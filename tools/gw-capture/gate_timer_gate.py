@@ -15,8 +15,13 @@
   sel-idle      SelGate 60s 空闲：计时从会话构造起，**只**被 CM_QUERYCHR/NEWCHR/DELCHR/
                 SELCHR（100..103）刷新；扫描 >20s；严格 `>`；超时发 18B 缺陷帧后
                 **socket 保持打开**（SessionManager 只摘槽、不关 socket；第二阶段不可达）。
-  sel-reconnect SelGate 下行 10s 重连：断链后每个 10s tick 才重连一次
-                （`CheckServerTimeOutTime=10s`）⇒ 相邻 open 事件的间隔应 ≈10s。
+  sel-reconnect SelGate 下行 10s 重连：断链后**下一个 10s tick** 才 `Start()`
+                （`TimedService.CheckSocketState` 每 `>10000ms` 扫描一次；
+                `ClientSocketDisconnect` 置 `CheckServerFail=true`，下一 tick 立即重连）
+                ⇒ 判据是 **close→next-open 的间隔 0..10s**，不是相邻 open 的间隔。
+                若同一条连接上采到 KeepAlive（tick 相位可观测），还要求 open 落在
+                断链后的**下一个 tick** 上（±容差）；相位不可观测时只用 0..10s 上界
+                （跳过 tick ⇒ RED）。
   sel-keepalive SelGate 就绪态每 10s 发一条 `ServerDataMessage{Type=KeepAlive}`
                 ⇒ 下行 capture 里 KeepAlive 包的间隔应 ≈10s。
 
@@ -82,6 +87,30 @@ def _select_conns(cap, want_port, explicit_port=None):
         if cap.gate_port(conn) == target or cap.listen_port(conn) == target:
             out.append(conn)
     return out
+
+
+def _gate_label_for_port(cap, port):
+    """显式 `--port` 时用 session.json 的 `port_meta.gate` 选模式。
+
+    没有 port_meta（旧 capture）时按该端口命中的连接上游端口推断；若仍无法
+    唯一判定（同时命中多类选择器），返回 None，由调用方提示显式 `--mode`。
+    """
+    meta = (cap.session.get("port_meta") or {}).get(str(port))
+    if isinstance(meta, dict):
+        gate = meta.get("gate")
+        if gate in ("login", "sel", "sel-downstream"):
+            return gate
+    upstreams = set()
+    for conn in cap.conns():
+        if cap.gate_port(conn) == port or cap.listen_port(conn) == port:
+            up = cap.gate_port(conn)
+            if up is not None:
+                upstreams.add(up)
+    if len(upstreams) == 1:
+        return {7000: "login", 7100: "sel", 5100: "sel-downstream"}.get(
+            next(iter(upstreams))
+        )
+    return None
 
 
 def eval_login_idle(cap, args):
@@ -220,6 +249,32 @@ def eval_sel_idle(cap, args):
     return _result("sel-idle", checks, None, facts)
 
 
+def _keepalive_rail(cap, conn, direction):
+    """取一条连接上的 KeepAlive 时间轨（tick 相位可观测时）。
+
+    返回 (last_tick_ms, period_ms)；少于 2 条 KeepAlive 返回 (None, None)。
+    SelGate 在就绪态每个 `CheckSocketState` tick（>10s）发一条 KeepAlive，
+    因此这条轨就是断链后重连所对齐的 tick 相位。
+    """
+    times = sorted(
+        p["t_wall_ms"] for p in cap.packets(conn, direction)
+        if p.get("kind") == 3 and p.get("t_wall_ms") is not None
+    )
+    if len(times) < 2:
+        return None, None
+    deltas = sorted(b - a for a, b in zip(times, times[1:]) if b > a)
+    if not deltas:
+        return None, None
+    return times[-1], deltas[len(deltas) // 2]
+
+
+def _next_tick_after(last_tick, period, t_end):
+    k = 1
+    while last_tick + k * period <= t_end:
+        k += 1
+    return last_tick + k * period
+
+
 def eval_sel_reconnect(cap, args):
     conns = _select_conns(cap, 5100, args.port)
     if not conns:
@@ -229,30 +284,56 @@ def eval_sel_reconnect(cap, args):
         [(cap.open_time(c), c) for c in conns if cap.open_time(c) is not None]
     )
     facts = {"opens": [{"conn": c, "ms": t} for t, c in opens],
-             "pairs": [], "dir_note": "proxy 位于 SelGate→DBSrv 路径时，open=每次重连尝试"}
+             "pairs": [],
+             "criterion": "0 <= close/upstream_fail -> next open <= 10s tick (+tolerance)",
+             "tick_ms": RECONNECT_TICK_MS,
+             "dir_note": "proxy 位于 SelGate→DBSrv 路径时，open=每次重连尝试"}
     if len(opens) < 2:
         return _result("sel-reconnect", [],
-                       "只有 %d 次 open；至少 2 次（一次断链 + 一次重连）才能判 10s 节拍"
+                       "只有 %d 次 open；至少 2 次（一次断链 + 一次重连）才能判 next-tick 重连"
                        % len(opens), facts)
     pairs = []
     for (t1, c1), (t2, c2) in zip(opens, opens[1:]):
         end = cap.end_time(c1)
         if end is None or not (t1 <= end <= t2):
             continue  # 两条并存连接，不是重连
-        pairs.append((t2 - t1, c1, c2))
-        facts["pairs"].append({"from_conn": c1, "to_conn": c2,
-                               "gap_ms": t2 - t1, "prev_end_ms": end})
+        pairs.append((t2 - end, t1, end, c1, t2, c2))
     if not pairs:
         return _result("sel-reconnect", [],
                        "没有「前一条连接已结束 → 下一次 open」的配对——无重连观测物", facts)
     checks = []
-    for gap, c1, c2 in pairs:
-        ok = args.min_gap_ms < gap <= args.max_gap_ms
+    max_gap = (args.reconnect_max_gap_ms
+               if args.reconnect_max_gap_ms is not None
+               else RECONNECT_TICK_MS + args.tolerance_ms)
+    for gap, t1, end, c1, t2, c2 in pairs:
+        ok = 0 <= gap <= max_gap
         checks.append(_mkcheck(
             "conn%d->conn%d.reconnect-gap" % (c1, c2), ok,
-            "gap=%dms，判据 %dms < gap <= %dms（10s tick + 容差）"
-            % (gap, args.min_gap_ms, args.max_gap_ms),
+            "close→next-open=%dms（conn%d open=%dms end=%dms → conn%d open=%dms），"
+            "判据 0 <= gap <= %dms（%dms tick + %dms 容差）"
+            % (gap, c1, t1, end, c2, t2, max_gap, RECONNECT_TICK_MS,
+               max_gap - RECONNECT_TICK_MS),
         ))
+        last_tick, period = _keepalive_rail(cap, c1, args.dir)
+        if last_tick is not None:
+            next_tick = _next_tick_after(last_tick, period, end)
+            phase_ok = abs(t2 - next_tick) <= args.tolerance_ms
+            checks.append(_mkcheck(
+                "conn%d->conn%d.next-tick-phase" % (c1, c2), phase_ok,
+                "KeepAlive 相位轨 last=%dms period=%dms ⇒ 断链后下一 tick=%dms，"
+                "open=%dms，偏差 %dms（容差 %dms）"
+                % (last_tick, period, next_tick, t2, t2 - next_tick,
+                   args.tolerance_ms),
+            ))
+            phase_src = "keepalive-rail"
+        else:
+            phase_src = "gap-bound（无 KeepAlive，相位不可观测）"
+        facts["pairs"].append({
+            "from_conn": c1, "to_conn": c2, "gap_ms": gap,
+            "prev_open_ms": t1, "prev_end_ms": end, "next_open_ms": t2,
+            "phase_source": phase_src,
+            "phase_ok": (None if last_tick is None else phase_ok),
+        })
     return _result("sel-reconnect", checks, None, facts)
 
 
@@ -317,21 +398,45 @@ def run_modes(cap, args):
     if args.mode == "all":
         names = list(funcs)
     elif args.mode == "auto":
-        names = []
-        if _select_conns(cap, 7000, args.port):
-            names.append("login-idle")
-        if _select_conns(cap, 7100, args.port):
-            names.append("sel-idle")
-        if _select_conns(cap, 5100, args.port):
-            if _reconnect_pairs(cap, args) > 0:
-                names.append("sel-reconnect")
-            elif _has_keepalive(cap, args):
-                names.append("sel-keepalive")
+        if args.port is not None:
+            # 显式 --port：不能把同一个端口同时喂给三类选择器（否则 7001 会被
+            # 当成 7000/7100/5100 三路都命中）。优先用 session.json 的
+            # port_meta.gate 选模式；判不唯一就提示显式 --mode。
+            gate = _gate_label_for_port(cap, args.port)
+            if gate == "login":
+                names = ["login-idle"]
+            elif gate == "sel":
+                names = ["sel-idle"]
+            elif gate == "sel-downstream":
+                if _reconnect_pairs(cap, args) > 0:
+                    names = ["sel-reconnect"]
+                elif _has_keepalive(cap, args):
+                    names = ["sel-keepalive"]
+                else:
+                    names = ["sel-reconnect", "sel-keepalive"]
             else:
-                names.extend(["sel-reconnect", "sel-keepalive"])
-        if not names:
-            return [_result("auto", [],
-                            "capture 里没有 7000/7100/5100 映射，auto 无法选判据")]
+                return [_result(
+                    "auto", [],
+                    "端口 %d 无法唯一判定网关类（session.json 缺 port_meta.gate "
+                    "或同时命中多类选择器）；请显式 --mode "
+                    "login-idle|sel-idle|sel-reconnect|sel-keepalive" % args.port,
+                )]
+        else:
+            names = []
+            if _select_conns(cap, 7000, args.port):
+                names.append("login-idle")
+            if _select_conns(cap, 7100, args.port):
+                names.append("sel-idle")
+            if _select_conns(cap, 5100, args.port):
+                if _reconnect_pairs(cap, args) > 0:
+                    names.append("sel-reconnect")
+                elif _has_keepalive(cap, args):
+                    names.append("sel-keepalive")
+                else:
+                    names.extend(["sel-reconnect", "sel-keepalive"])
+            if not names:
+                return [_result("auto", [],
+                                "capture 里没有 7000/7100/5100 映射，auto 无法选判据")]
     else:
         names = [args.mode]
     return [funcs[name](cap, args) for name in names]
@@ -349,6 +454,10 @@ def run_report(capture_dir, args, json_out=None):
     try:
         cap = common.Capture(capture_dir)
     except FileNotFoundError as exc:
+        print("PREREQ_MISSING: %s" % exc, file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        # chunks.ndjson/session.json 半截行（JSONDecodeError 是 ValueError）
         print("PREREQ_MISSING: %s" % exc, file=sys.stderr)
         return 2
     try:
@@ -377,6 +486,7 @@ def run_report(capture_dir, args, json_out=None):
             "keep_open_ms": args.keep_open_ms,
             "min_gap_ms": args.min_gap_ms,
             "max_gap_ms": args.max_gap_ms,
+            "reconnect_max_gap_ms": args.reconnect_max_gap_ms,
         },
         "overall": overall,
         "rc": rc,
@@ -406,8 +516,12 @@ def _parser():
     ap.add_argument("--tolerance-ms", type=int, default=2_000)
     ap.add_argument("--keep-open-ms", type=int, default=1_000,
                     help="SelGate 超时帧后此窗口内 close 即判 RED")
-    ap.add_argument("--min-gap-ms", type=int, default=9_500)
-    ap.add_argument("--max-gap-ms", type=int, default=11_000)
+    ap.add_argument("--min-gap-ms", type=int, default=9_500,
+                    help="sel-keepalive 的下界（reconnect 判据不用它）")
+    ap.add_argument("--max-gap-ms", type=int, default=11_000,
+                    help="sel-keepalive 的上界（reconnect 判据不用它）")
+    ap.add_argument("--reconnect-max-gap-ms", type=int, default=None,
+                    help="sel-reconnect 的 close→next-open 上界；默认 10000+容差")
     ap.add_argument("--json-out")
     ap.add_argument("--selftest", action="store_true")
     return ap
@@ -471,8 +585,17 @@ class _Events:
             path = os.path.join(self.dir, "conn-%04d.%s.bin" % (conn, direction))
             with open(path, "wb") as fh:
                 fh.write(blob)
+        port_meta = {}
+        for listen, upstream in self.mapping.items():
+            up_port = int(upstream.rsplit(":", 1)[1])
+            gate = {7000: "login", 7100: "sel",
+                    5100: "sel-downstream"}.get(up_port, "other")
+            port_meta[str(listen)] = {
+                "upstream": upstream, "upstream_port": up_port, "gate": gate,
+            }
         with open(os.path.join(self.dir, "session.json"), "w", encoding="utf-8") as fh:
-            json.dump({"tool": "gate_shadow_proxy", "map": self.mapping}, fh)
+            json.dump({"tool": "gate_shadow_proxy", "map": self.mapping,
+                       "port_meta": port_meta}, fh)
         return self.dir
 
 
@@ -538,7 +661,7 @@ def _mk_sel(path, t_frame, refresh_at=None, close_after=None, with_frame=True,
     return ev.write()
 
 
-def _mk_recon(path, opens, ends):
+def _mk_recon(path, opens, ends, keepalives=None):
     ev = _Events(path, {"5510": "127.0.0.1:5100"})
     for conn, t in opens:
         ev.open(conn, 5510, t)
@@ -547,6 +670,9 @@ def _mk_recon(path, opens, ends):
             ev.upstream_fail(conn, 5510, t)
         else:
             ev.close(conn, 5510, t)
+    for conn, times in (keepalives or {}).items():
+        for t in times:
+            ev.data(conn, 5510, "c2s", _keepalive_packet(), t)
     return ev.write()
 
 
@@ -568,11 +694,13 @@ def selftest():
     failures = []
     count = [0]
 
-    def status(capture, mode, tag):
+    def status(capture, mode, tag, extra=None):
         path = os.path.join(tmp, "report-%s.json" % tag)
         buf = io.StringIO()
+        argv = ["--capture", capture, "--mode", mode, "--json-out", path]
+        argv.extend(extra or [])
         with contextlib.redirect_stdout(buf):
-            rc = main(["--capture", capture, "--mode", mode, "--json-out", path])
+            rc = main(argv)
         with open(path, "r", encoding="utf-8") as fh:
             report = json.load(fh)
         return rc, report["overall"]
@@ -613,9 +741,24 @@ def selftest():
         d = _mk_login(sub("login-wrongshape"), 60_500, frame=normal18)
         expect("login-idle 18B 正常帧冒充（不是截断缺陷形状）⇒ UNCLOSED",
                status(d, "login-idle", "login-wrongshape"), "UNCLOSED", 3)
+        trunc520 = (b"#" + ed.edcode_encode(_header(520)) + b"!")[:16]
+        d = _mk_login(sub("login-trunc520"), 60_500, frame=trunc520)
+        expect("login-idle 18B 正常帧截成 16B（ident=520）@60.5s / close@60.6s "
+               "⇒ 不得 GREEN（无真 528 缺陷帧 ⇒ UNCLOSED）",
+               status(d, "login-idle", "login-trunc520"), "UNCLOSED", 3)
+        d = _mk_login(sub("login16-concat"), 60_500,
+                      frame=_login_frame(ed) + normal18)
+        expect("login-idle 16B 缺陷帧与下一 18B 帧同块（缺 '!' 收尾）也能显式识别 "
+               "⇒ GREEN（不假 UNCLOSED）",
+               status(d, "login-idle", "login16-concat"), "GREEN", 0)
         d = _mk_login(sub("login-auto"), 60_500)
         expect("auto 只跑 7000 上的判据 ⇒ GREEN",
                status(d, "auto", "login-auto"), "GREEN", 0)
+        d = _mk_login(sub("login-auto-port"), 60_500)
+        expect("auto --port 7001 用 port_meta.gate 只选 login-idle"
+               "（不再同时命中 sel-idle）⇒ GREEN",
+               status(d, "auto", "login-auto-port",
+                      extra=["--port", "7001"]), "GREEN", 0)
 
         # ---- sel-idle ----
         d = _mk_sel(sub("sel-green"), 85_000, refresh_at=10_000, normal_before=True)
@@ -641,19 +784,32 @@ def selftest():
         expect("auto 只跑 7100 上的判据 ⇒ GREEN",
                status(d, "auto", "sel-auto"), "GREEN", 0)
 
-        # ---- sel-reconnect ----
+        # ---- sel-reconnect（close→next-open，不是相邻 open）----
         d = _mk_recon(
             sub("recon-green"),
             [(1, 0), (2, 10_100), (3, 20_200)],
             [(1, 5_000, "close"), (2, 15_000, "close")],
         )
-        expect("sel-reconnect 相邻 open 间隔 10.1s ⇒ GREEN",
+        expect("sel-reconnect close→next-open 5.1s/5.2s ⇒ GREEN",
                status(d, "sel-reconnect", "recon-green"), "GREEN", 0)
         d = _mk_recon(
-            sub("recon-red"), [(1, 0), (2, 5_000)], [(1, 1_000, "close")]
+            sub("recon-close-10s"), [(1, 0), (2, 610_000)],
+            [(1, 600_000, "close")],
         )
-        expect("sel-reconnect 5s 重连 ⇒ RED",
-               status(d, "sel-reconnect", "recon-red"), "RED", 1)
+        expect("sel-reconnect open1=0s/close1=600s/open2=610s（gap=10s，下一 tick）⇒ GREEN",
+               status(d, "sel-reconnect", "recon-close-10s"), "GREEN", 0)
+        d = _mk_recon(
+            sub("recon-close-5s"), [(1, 0), (2, 605_000)],
+            [(1, 600_000, "close")],
+        )
+        expect("sel-reconnect open2=605s（close→open 5s，仍在下一 tick 窗口）⇒ GREEN",
+               status(d, "sel-reconnect", "recon-close-5s"), "GREEN", 0)
+        d = _mk_recon(
+            sub("recon-close-20s"), [(1, 0), (2, 620_000)],
+            [(1, 600_000, "close")],
+        )
+        expect("sel-reconnect open2=620s（close→open 20s，跳过 tick）⇒ RED",
+               status(d, "sel-reconnect", "recon-close-20s"), "RED", 1)
         d = _mk_recon(sub("recon-unclosed"), [(1, 0)], [])
         expect("sel-reconnect 只有一次 open ⇒ UNCLOSED",
                status(d, "sel-reconnect", "recon-unclosed"), "UNCLOSED", 3)
@@ -664,6 +820,19 @@ def selftest():
         )
         expect("sel-reconnect 连接失败（upstream_fail）也计一次尝试 ⇒ GREEN",
                status(d, "sel-reconnect", "recon-fail-green"), "GREEN", 0)
+        rail = {1: [580_000, 590_000, 600_000]}
+        d = _mk_recon(
+            sub("recon-phase-green"), [(1, 0), (2, 610_000)],
+            [(1, 600_000, "close")], keepalives=rail,
+        )
+        expect("sel-reconnect KeepAlive 相位可见（tick=610s）且 open@610s ⇒ GREEN",
+               status(d, "sel-reconnect", "recon-phase-green"), "GREEN", 0)
+        d = _mk_recon(
+            sub("recon-phase-red"), [(1, 0), (2, 605_000)],
+            [(1, 600_000, "close")], keepalives=rail,
+        )
+        expect("sel-reconnect KeepAlive 相位可见时 open@605s 偏离下一 tick ⇒ RED",
+               status(d, "sel-reconnect", "recon-phase-red"), "RED", 1)
 
         # ---- sel-keepalive ----
         d = _mk_keepalive(sub("ka-green"), [0, 10_000, 20_010])
@@ -693,6 +862,19 @@ def selftest():
             print("FAIL missing capture rc=%d" % rc_missing)
         else:
             print("PASS %d 缺 capture 目录 ⇒ PREREQ_MISSING rc=2" % count[0])
+
+        bad = sub("chunks-half")
+        with open(os.path.join(bad, "chunks.ndjson"), "w", encoding="utf-8") as fh:
+            fh.write('{"event":"open","conn":1')
+        count[0] += 1
+        errbuf = io.StringIO()
+        with contextlib.redirect_stderr(errbuf):
+            rc_half = main(["--capture", bad, "--mode", "login-idle"])
+        if rc_half != 2:
+            failures.append("半截 chunks.ndjson: 期望 rc=2，实得 %d" % rc_half)
+            print("FAIL half-line chunks rc=%d" % rc_half)
+        else:
+            print("PASS %d 半截 chunks.ndjson ⇒ PREREQ_MISSING rc=2" % count[0])
 
         if failures:
             print("RED: gate timer selftest %d/%d 失败" % (len(failures), count[0]))
