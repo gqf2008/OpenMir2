@@ -93,7 +93,7 @@
 - `ProcessMessage` 按 `gateInfo.UserList` 找 `SessionId`，累积 `userInfo.sText`，按 `#...!` 抠一帧，`DeCodeUserMsg`（`UserService.cs:102-134`）。
 - `DeCodeUserMsg` 四命令：`CM_QUERYCHR` 200ms 限频、`CM_NEWCHR`/`CM_DELCHR` 1000ms 限频、`CM_SELCHR` 需先 `boChrQueryed`；`NEWCHR`/`DELCHR`/`SELCHR` 还要 `CheckSession`（`UserService.cs:346-437`）。
 - **串行化点**：所有 5100 数据库工作（`QueryChr`/`NewChr`/`DeleteChr`/`SelectChr`）都在这一条消息线程上，因此 5100 面内部是**全序**；一条慢 `QueryChr` 会阻塞同一 DBSrv 上所有 SelGate 的后续 5100 命令。这是 oracle 的既有行为，**不要**在 Rust 侧为了并发把它拆成每连接队列。
-- **无锁点**：`_globaSessionList` 被 5600 回调线程写、被 5100/6000 读，`List<GlobaSessionInfo>` 无锁（`ClientSession.cs:13`、`:135-190`）；`_gateClients`/`UserList` 也被回调线程与消息线程并发读写（`UserService.cs:200-235`、`:102-134`）。这是 oracle 的数据竞争，不是可依赖的契约（G10 相邻问题）。
+- **无锁点**：`_globaSessionList` 被 5600 回调线程写、被 5100/6000 读，`List<GlobaSessionInfo>` 无锁（`ClientSession.cs:11`、`:135-190`）；`_gateClients`/`UserList` 也被回调线程与消息线程并发读写（`UserService.cs:200-235`、`:102-134`）。这是 oracle 的数据竞争，不是可依赖的契约（G10 相邻问题）。
 
 ### 2.3 6000：回调内同步处理，跨连接并发
 
@@ -124,7 +124,7 @@
 
 - `TimedService.ExecuteAsync` 1s `PeriodicTimer`；`currentTick - syncSaveTick > 300000` 时 `ProcessCacheStorage`（`TimedService.cs:39-64`）。
 - `ProcessCacheStorage` 遍历 `_cacheStorage.QueryCacheData()`，逐条 `_playDataStorage.Update(play.Header.Name, play)`，再 `Delete`（`TimedService.cs:73-96`）。
-- 与 6000/5100 并发；`CacheStorageService` 的字典无锁（`CacheStorageService.cs:12-18`），oracle 存在数据竞争。Rust 用 `Mutex<CacheStore>` 串行化，是可观测行为不变的加固（缓存实际恒空，见 `cache.rs` 注释）。
+- 与 6000/5100 并发；`CacheStorageService._cacheMap` 是 `ConcurrentDictionary<string, CharacterDataInfo>`（`CacheStorageService.cs:10`，`StringComparer.OrdinalIgnoreCase`），**不是无锁字典**。`Add`（`:12-18`）是 `ContainsKey` 判存在 → 赋值的 check-then-act：只在键已存在时替换，与并发 `Delete`（`TryRemove`）之间存在 lost-update 窗口（删除后又被写回）。但缓存由空开始、**没有任何路径插入新键**，`Add` 对不存在的键是 no-op ⇒ 缓存恒空、该窗口不可达（`cache.rs` 模块注释按 oracle 照搬）。Rust 用 `Mutex<CacheStore>` 的理由是 `CacheStore` 是普通 `HashMap`、写需独占 `&mut`，而不是「修 oracle 的数据竞争」；缓存恒空时这把锁的串行化不可观测。
 
 ### 2.7 oracle 的串行化点汇总
 
@@ -139,7 +139,7 @@
 | 索引表写 | 每方法一条连接、autocommit | 否 |
 | 缓存回写 | 单 `TimedService` 线程逐条 | 定时任务内 |
 | MySQL 连接获取 | MySqlConnector 连接池内部同步（缺省 max 100） | 连接池 |
-| 共享内存结构 | **无锁**（`_globaSessionList`、`_quickList`、`_NameQuickMap`、`_cacheStorage`） | 数据竞争，非契约 |
+| 共享内存结构 | `_globaSessionList`/`_quickList`/`_NameQuickMap` **无锁**；`_cacheStorage` 是 `ConcurrentDictionary`（`CacheStorageService.cs:10`），但 `Add` 是 check-then-act（`:12-18`） | 前三者数据竞争、非契约；缓存恒空，lost-update 窗不可达 |
 
 ### 2.8 TouchSocket 2.0.0-beta.273 的边界
 
@@ -183,7 +183,7 @@
 
 1. `data::conn_task`（`data.rs:105-180`）读到帧，调用 `process` → `process_server_msg` → `save_human_rcd`（`data.rs:328-365`）。
 2. `save_human_rcd` → `store_human_rcd`（`data.rs:374-403`）→ `db.lock().await`（`:380`）成功，成为全局锁持有者。
-3. `play_data_update`（`playdata.rs:1098-1105`）→ `pool.acquire`（当前 8 条池，空闲时立即可得）→ `save_record`（`playdata.rs:777-890`）：
+3. `play_data_update`（`playdata.rs:1101-1107`）→ `pool.acquire`（当前 8 条池，空闲时立即可得）→ `save_record`（`playdata.rs:777-890`）：
    - `conn.begin()`（`:805`）；
    - 8 段 `Save*`，其中 `UPDATE characters` 等语句在 InnoDB 行锁上等待（缺省 `innodb_lock_wait_timeout=50s`）；
    - `tx.commit()`（`:878`）。
@@ -235,7 +235,7 @@ struct Indexes {
 ```
 
 - `main.rs` 改成 `let db = Arc::new(db::Db::connect(&dsn).await?);`（`Db` 内部池/RwLock 都是 `Send+Sync`），不再包 `tokio::sync::Mutex`。
-- `handler::queue_loop` 签名改为 `db: Arc<Db>`；`process_data`/`dispatch`/四个命令改为 `&Db`（`new_chr`/`delete_chr`/`select_chr` 不再需要 `&mut Db`）。
+- `server.rs` 的 `Server::run` 签名（`db: Arc<Mutex<crate::db::Db>>`，`server.rs:143`）与 `handler::queue_loop` 的传参（`server.rs:158`）同步改为 `db: Arc<Db>`；`process_data`/`dispatch`/四个命令改为 `&Db`（`new_chr`/`delete_chr`/`select_chr` 不再需要 `&mut Db`）。
 - `data::run`/`conn_task`/`load_human_rcd`/`save_human_rcd`/`store_human_rcd` 改为 `&Arc<Db>`/`&Db`。
 - `market::run`/`conn_task`/各 handler 改为 `&Arc<Db>`/`&Db`。
 - `cache_flush_task` 改为 `&Arc<Db>`，逐条 `play_data_update`。
@@ -269,11 +269,11 @@ MySqlPoolOptions::new()
 |---|---|---|
 | 读名字→Id | `data_index`（`db.rs:433`） | `idx.read().await` 取快照后立即释放 |
 | 读账号→角色列表 | `find_by_account`（`db.rs:279`） | 克隆 `Vec<Quick>` 后释放 |
-| 读索引行/角色字段 | `record_get_by`/`get_query_char`/`query_name_and_map` | 先在短读锁里取 `id`，再释放锁做 SQL |
+| 读索引行/角色字段 | `record_get_by`/`get_query_char`/`query_name_and_map`（`db.rs:289`/`:443`/`:467`） | **不读内存索引**：三者都直接收 `id`、只访问 `self.pool` ⇒ 不需要 `idx` 锁，也不需要改 async |
 | 插入索引 | `record_add`（`db.rs:316-363`） | `create_gate` 内：检查 → SQL INSERT → `idx.write()` 更新 `quick/index_ids/by_account` |
 | 软删索引 | `record_soft_delete`（`db.rs:379-393`） | SQL 后 `idx.write()` 移除 `index_ids`；保留 `quick`（oracle 不删，见方法注释） |
 | 更新索引行 | `record_update`/`record_update_by`（`db.rs:365-397`） | 只写 DB，不动内存索引（oracle 同样） |
-| 6000 自动建档 | `data_add`（`db.rs:506`） | `create_gate` 内：检查 `name_quick` → 事务 → `idx.write()` 更新 `name_quick/char_ids` |
+| 5100 `CM_NEWCHR` 建角 | `data_add`（`db.rs:506`） | `create_gate` 内：检查 `name_quick` → 事务 → `idx.write()` 更新 `name_quick/char_ids` |
 | 6000 `play_data_add` | `playdata.rs:1110` | `create_gate` 内：检查 `name_text` → 事务 → `idx.write()` 更新 `name_text/name_quick/char_ids` |
 
 - **不在持 `idx` 锁时 await SQL**：所有 `read`/`write` guard 都在一个同步块里取快照/改完即 drop，然后才 `.await` 数据库。这样 `tokio::sync::RwLock` 不会因慢 SQL 阻塞其他索引读。
@@ -284,7 +284,7 @@ MySqlPoolOptions::new()
 
 - 6000：`conn_task` 的读循环 `read_exact(head) → read_exact(body) → process(...).await`（`data.rs:105-180`），同连接天然串行；回复走 `tx`（每连接 writer task），`tx.send` 顺序 = 请求处理顺序。
 - 5700：同形。
-- 5100：`queue_loop` 单消费者，`process_data` 内 `send_user` 先入 `tx`，再回写会话状态（`handler.rs:51-57`、`:231-248`）；同连接（同一 `Gate.tx`）回复顺序 = 队列顺序。
+- 5100：`queue_loop` 单消费者，`process_data` 内 `send_user` 先入 `tx`，再回写会话状态（`handler.rs:51-57`、`:99-104`）；同连接（同一 `Gate.tx`）回复顺序 = 队列顺序。
 - 跨连接：oracle 不保证，A 也不保证；证据卡只要求**每连接**顺序一致（C2）。
 
 ### 4.5 事务边界
@@ -307,8 +307,9 @@ MySqlPoolOptions::new()
 | 文件 | 改动 |
 |---|---|
 | `mir2-rs/bins/db-srv/src/main.rs` | `Arc<Mutex<Db>>` → `Arc<Db>`；spawn 参数 |
+| `mir2-rs/bins/db-srv/src/server.rs` | `Server::run` 的 `db: Arc<Mutex<crate::db::Db>>`（`:143`）→ `Arc<Db>`；向 `handler::queue_loop` 传参（`:158`）同步改 |
 | `mir2-rs/bins/db-srv/src/db.rs` | `Db` 结构、`Indexes`、RwLock、`create_gate`、池参数；`record_*`/`data_*` 签名 `&self` |
-| `mir2-rs/bins/db-srv/src/playdata.rs` | `play_data_get/update/add` 改 `&self`；`data_add` 内部索引更新走 `idx.write()` |
+| `mir2-rs/bins/db-srv/src/playdata.rs` | `play_data_get/update/add` 改 `&self`；`play_data_add`（`:1110`）内部索引更新（`name_text/name_quick/char_ids`）走 `idx.write()`（`data_add` 在 `db.rs:506`，属 5100 建角，不在本文件） |
 | `mir2-rs/bins/db-srv/src/data.rs` | 去 `Mutex` 参数/锁；`load_human_rcd`/`store_human_rcd`/缓存回写 |
 | `mir2-rs/bins/db-srv/src/handler.rs` | `queue_loop` 去锁；`process_data`/`dispatch` 四命令 `&Db`；`new_chr`/`delete_chr`/`select_chr` 签名 |
 | `mir2-rs/bins/db-srv/src/market.rs` | 去 `Mutex`；各 handler `&Db` |
@@ -365,7 +366,7 @@ MySqlPoolOptions::new()
 - **tier**：**R**（持久化落库/时序/故障注入 ⇒ 占窗口）
 - **目标**：为「9 表 + `characters_indexes`」的正常路径、错误路径、并发延迟路径留下**可复算**的跨实现证据；不是再写一份代码审计。
 - **非目标**：不修代码；不替代 `openmir2-m3-scoped-diff-ability`；不覆盖 5700 拍卖行的业务语义（部署未加载 `MarketSystem.dll`，S4B-5..10 已登记）。
-- **前置**：M3 现有门禁全绿；`characters_ablity` RED 的承卡状态明确（W-DB-5）。
+- **前置**：M3 现有门禁**除已承卡 RED 外全绿**。唯一已知 RED 是 `scoped_diff.py diff --canonical` 在 `mir2_db.characters_ablity` 的 4 行（`Ac/MAxMP/MaxWeight/MaxWearWeight/MaxHandWeight/Hp`），承卡 `openmir2-m3-scoped-diff-ability`，出处 `mir2-rs/tests/parity/M3-report.md:306`（原始件 `diff/23-scope-m3-gate-canonical.txt`）。该 RED 归承卡，不是本卡（LB-10）的窗口项：D5 **不得**为它单独开窗，也不得把它算作 LB-10 判据；W-DB-5 只确认承卡状态。
 
 ### 6.2 采集物（每次 run 一个目录）
 
@@ -410,7 +411,7 @@ MySqlPoolOptions::new()
 |---|---|---|
 | C1 | 回包字节 | 每个请求的响应帧（6B 头 + MemoryPack 体）逐字节等于 oracle；`payload_hex` 与 `sha256` 一致。允许差异：无（`QueryId` 由驱动固定为同一序列）。 |
 | C2 | 每连接回包顺序 | 同一 `conn_id` 的 `direction=rx` 序列中的 `query_id` 顺序 = 发送顺序；跨连接不比较。 |
-| C3 | 9 表 + indexes 后态 | 按主键/业务键对齐后逐列相等；`CreateDate/ModifyDate/LASTUPDATE` 只比较「非空/变化」；`SelectID`、`IsDeleted` 精确；`Id/PlayerId` 在相同基线快照下精确，否则按 `ChrName` 映射并记录映射表。 |
+| C3 | 9 表 + indexes 后态 | 按主键/业务键对齐后逐列相等；`SelectID`、`IsDeleted` 精确；`Id/PlayerId` 在相同基线快照下精确，否则按 `ChrName` 映射并记录映射表。时间列（`CreateDate/ModifyDate/LASTUPDATE`）不得只比较「非空/变化」：导出时统一归一化为 `YYYY-MM-DD HH:MM:SS.ffffff` 或 `NULL` 标记，机判两件事——(a) `before`（run 前基线快照）与 `after`（run 后）的空值位逐字节一致；(b) 逐字节比较 `after` 与 `before` 并落 `changed = (after != before)` 标志：oracle 侧 `changed=false` 的行 Rust 必须也 `false`；oracle 侧 `changed=true` 的行 Rust 必须也 `true`，且 `after` 必须晚于 `before`（落在同一次请求的因果窗内）。禁止只断言「变化了」而不落归一化字节与 `changed` 标志。 |
 | C4 | 事务分组 | 每条 `BEGIN` 与对应 `COMMIT/ROLLBACK` 之间的 `db_stmt` 属于同一 `txn_id`，且不含其他请求的语句；存档 8 段的表/语句集合与顺序 = oracle；建角 5 张附属表集合 = oracle。 |
 | C5 | 错误路径 | 每个 S3 注入下，回包帧（含 `recog`/`ident`）与 oracle 相同；表后态相同（含孤儿索引、`IsDeleted=2`、回滚行数）；无「零回包超时」差异。 |
 | C6 | 慢存档延迟 | S4 中，慢存档被阻塞 ≥3s 时：6000 `LOAD` P99 < 500ms；5100 `QUERYCHR` P99 < 500ms；`SELCHR` 的 `SM_STARTPLAY` P99 < 500ms；另一角色 `SAVE` 的 P99 < 1s。oracle 同场景基线同表采集。 |
@@ -437,7 +438,7 @@ MySqlPoolOptions::new()
 |---|---|---|
 | M1 | `save_item_table` 的 `Position` 绑定错 1 位 | C3（物品表行/位置）或 C1（回包体） |
 | M2 | `CM_DELCHR` 写 `IsDeleted=0` 而非 1 | C3（`characters_indexes` 后态） |
-| M3 | 恢复 `store_human_rcd` 的 `?` 上抛（LB-01/02/03 旧形） | C5（回包缺失/降级帧） |
+| M3 | 恢复 `store_human_rcd` 两处 Err 的 `?` 上抛（存档路径旧形，`data.rs:373`；影响 `:384`/`:396`） | C5（存档零回包）；带牙单测 = G2 `update_failure_still_answers_success_for_in_save_release`（`data.rs:760`）/G3 `add_failure_still_answers_failure`（`data.rs:786`），**不是** LB-01 的 `load_db_acquire_failure_answers_degraded_success_frame`（`data.rs:920`） |
 | M4 | 加回全局 `Mutex<Db>` 或把池压到 1 | C6（QUERYCHR/SELCHR P99）与 C7（并行超时） |
 | M5 | `save_record` 去掉 `begin/commit` 或每表独立提交 | C4（事务分组）、C8（崩溃回滚） |
 | M6 | 跳过 `characters_bonusability` 的 `SaveBonusability` | C3（该表后态） |
@@ -463,7 +464,7 @@ MySqlPoolOptions::new()
 | 卡 | 内容 | tier | 写集 | 依赖 |
 |---|---|---|---|---|
 | **D1（本卡）** | 连接模型与证据卡设计 | **L** | `mir2-rs/tests/parity/m3/design-dbsrv-connection-20261021.md` | 无 |
-| **D2** | 方案 A 实现：去全局 `Mutex<Db>`、共享池、索引 RwLock、建角闸门 | **R** | `mir2-rs/bins/db-srv/src/{main,db,playdata,data,handler,market,testsupport}.rs` + 同文件 `#[cfg(test)]` | D1 |
+| **D2** | 方案 A 实现：去全局 `Mutex<Db>`、共享池、索引 RwLock、建角闸门 | **R** | `mir2-rs/bins/db-srv/src/{main,server,db,playdata,data,handler,market,testsupport}.rs` + 同文件 `#[cfg(test)]` | D1 |
 | **D3** | LB-08 延迟判据 | **R** | `mir2-rs/bins/db-srv/tests/lb08_latency.rs`（新）或 `data.rs` 的 `#[ignore]` 测试 | D2 |
 | **D4** | LB-10 证据驱动/采集脚本 | **R** | `mir2-rs/tests/parity/m3/db-evidence/**`（新）；必要时 `mir2-rs/tests/live_{data,querychr}.rs`（先与 owner 确认不与他人写集冲突） | D2 |
 | **D5** | LB-10 窗口执行与报告 | **R** | 报告 `mir2-rs/tests/parity/m3/window-dbsrv-evidence-*.md`；证据在 `/e/tmp/<window>/db-evidence/` | D3/D4 + 窗口 |
@@ -550,13 +551,13 @@ cargo run -p msgcodegen -- --check   # 本卡不改消息号，仍跑
 
 **步骤**：运行现有 LB-01/02/03/05/07/09 测试 + `new_chr_data_swallows_add_failure_like_oracle` + LB-06 重写的四个子测试。
 
-**牙**：把 `store_human_rcd` 的 Err 映射改回 `?` ⇒ `load_db_acquire_failure_answers_degraded_success_frame` 红；把 `record_update_by` 的 Err 当成失败 ⇒ `selchr_selectid_write_failure_still_startplay` 红。D2 合并前这些必须全绿。
+**牙**：把 `store_human_rcd`（`data.rs:374`）两处被吞的 Err 改回 `?` 上抛（`play_data_add` `:384`、`play_data_update` `:396`；旧形见 `:373` 注释；变异需把函数改成 `Result<bool>` 并在 `save_human_rcd:350` 用 `?` 传播，再让单测按旧形断言「得到 Err / 零回包」）⇒ **存档侧**带牙单测红：`update_failure_still_answers_success_for_in_save_release`（G2，`data.rs:760`）与 `add_failure_still_answers_failure`（G3，`data.rs:786`）。**不会**让 `load_db_acquire_failure_answers_degraded_success_frame`（`data.rs:920`）变红——该测试走 `load_human_rcd`（`data.rs:237`）的 `play_data_get` Err 分支（`:288-296`），与 `store_human_rcd` 无关。同理，把 `record_update_by` 的 Err 当成失败 ⇒ `selchr_selectid_write_failure_still_startplay`（`handler.rs:970`）红。D2 合并前这些必须全绿。
 
 ### 8.8 `index_create_single_winner`（支撑不变量，不作 parity 判据）
 
 **步骤**：构造 6000 自动建档与 5100 `CM_NEWCHR` 对同一名字并发；断言最终 `characters` 1 行、`characters_indexes` 1 行、`name_quick/name_text` 各 1 项；不允许 panic/重复行。
 
-**牙**：去掉 `create_gate` 并把 `idx` 改成无锁 `UnsafeCell` ⇒ 测试出现重复行/panic ⇒ 红。由于 oracle 此路径本身是字典数据竞争（G10），本测试只作为 Rust 安全性不变量；若 owner 要求 bug-for-bug，必须 `D-*` 换掉该断言。
+**牙**：去掉 `create_gate`，把建角改成可编译的 check-then-act 竞争实现——两次独立取锁：`idx.read()` 判 `name_text/name_quick` 不存在 → 立即释放 → SQL INSERT → `idx.write()` 插入（不使用 `UnsafeCell`；`bins/db-srv/Cargo.toml:9` 的 `unsafe_code = "forbid"` 不允许，且 `forbid` 不能被 `#[allow]` 覆盖，要写无锁实现必须先临时改 lint 并在变异说明中登记）。该变异下两个并发请求都通过检查、各自 INSERT ⇒ `characters`/`characters_indexes` 无 `UNIQUE(ChrName)` 可兜底（`sql/mir2_db.sql:24/287912`）⇒ 测试出现重复行 ⇒ 红。由于 oracle 此路径本身是字典数据竞争（G10），本测试只作为 Rust 安全性不变量；若 owner 要求 bug-for-bug，必须 `D-*` 换掉该断言。
 
 ---
 
@@ -609,8 +610,8 @@ cargo run -p msgcodegen -- --check   # 本卡不改消息号，仍跑
 | `db.rs:146-156` | `max_connections(8)` |
 | `db.rs:279/289/316/365/379/395/419/433/443/467/506` | 索引/账号/角色/建角方法 |
 | `handler.rs:45-58` | `queue_loop` 每消息持全局锁 |
-| `handler.rs:261-360` | `query_chr` |
-| `handler.rs:405-500` | `new_chr` |
+| `handler.rs:261-379` | `query_chr` |
+| `handler.rs:405-507` | `new_chr` |
 | `handler.rs:510-585` | `delete_chr`/`del_chr_sname_to_level` |
 | `handler.rs:588-690` | `select_chr` |
 | `data.rs:65-180` | 6000 监听/每连接读循环 |
