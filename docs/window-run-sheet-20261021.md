@@ -1,5 +1,12 @@
-# 真机窗口 Run Sheet v2.3（OpenMir2，2026-10-21）
+# 真机窗口 Run Sheet v2.4（OpenMir2，2026-10-21）
 
+> **v2.4 修订（2026-10-21，tier=L，纯工具/文档，离线）**：只收 C10 的两项——
+> ① **C10#8 闭环**：两个起栈器新增 `-DbHost/-DbPort/-DbUser/-DbPassword/-DbName`
+>    （`-DbName` 为前缀/模板，展开 `mir2_test_db/_account/_data`）。未给 `-Db*` 时**零调用、命令行与生成配置逐字节不变**
+>    （`selftest_stack_db_target.ps1` 用 sha256/字面量钉住）；影子只写 StackRoot/LogDir，**不碰 `E:/MirServer` 与主检出**。
+> ② **C10#3 部分闭环**：`check_timing.py` 增四条预设 `cadence-1.2s / verify-maptime-30s / delaymagic-600ms / corpse-3min`
+>    （`--preset`、`--preset-var actor=<id>`、`--list-presets`）。普通 s2c capture 没有这些服务端事件帧 ⇒
+>    **如实判 `UNCLOSED`（rc=3）**，不是通过；读数仍需服务端事件流/日志导出 ⇒ 本项**未闭环**。
 > **v2.3 修订（2026-10-21，tier=L，纯工具/文档，离线）**：补齐 C10 的 5 个**离线可做**缺口——
 > ① `s2c_diff.py` 增 `--from-recog/--from-x/--from-y/--to-recog`（C10#2，C3 不再只截首对）；
 > ② `check_client_s2c_frames.py` 增 52 body 的 `Weight/MaxExp` 字段级解码（C10#1）与
@@ -66,12 +73,12 @@
 | --- | --- | --- |
 | C1 | `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_sm_hit.py` | 存在；`--selftest` **SELFTEST GREEN**（15 条正反例）。参数：`--capture --expect count,order --expect-count --min-count --lead-ms(默认250) --min-order-pairs --require-each-struck --expect-hit R,X,Y,DIR --expect-recog/-x/-y/-dir --expect-recipients --conn` |
 | C2 | `.../check_attack_observability.py` | `--expect {attack,damage,kill,any,incoming,none}` 已含 **`incoming`**；`--selftest` rc=0。**正式判据禁用 `--allow-unknown-self`**（工具注明仅诊断） |
-| C4 | `.../check_timing.py` | 存在；`--selftest` **SELFTEST GREEN**（15 条）。读 capture 的 **`ts_ms`**（不是旧文的 `t_rel_us`）；规则 `after/interval/rate`；`--example-config` 可打印模板 |
+| C4 | `.../check_timing.py` | 存在；`--selftest` **SELFTEST GREEN**（v2.4 起 30 条）。读 capture 的 **`ts_ms`**（不是旧文的 `t_rel_us`）；规则 `after/interval/rate`；`--example-config` 可打印模板。**v2.4**：`--preset cadence-1.2s\|verify-maptime-30s\|delaymagic-600ms\|corpse-3min\|all` + `--preset-var actor=<id>`；无观测帧判 `UNCLOSED`（rc=3） |
 | B9 | `.../check_client_s2c_frames.py` | 已含 **`--expect-enter-seq`**，预设 `default/equipped/delmagic/g2`；**v2.3** 增 `auto` 预设、`--expect-52-weight/--expect-52-max-exp/--expect-52-layout`（40B/58B 自动识别）；`--selftest` 28 条 rc=0 |
 | C6 | `mir2-rs/tests/parity/m3/scoped_diff.py` | **注意：`diff` 子命令不接受 `--out`！**（`scoped_diff.py diff --help` 原文：`本子命令不接受 --out；需要落摘要请用可选的 --summary-out`）⇒ 评审 C6 里「补 `--out`」的写法**已过时**，正确用法是 `--summary-out` |
 | C7 | `tools/m2-acceptance/s2c_diff.py` | `--whitelist` 每条必须有 `reason` + `reviewer`（缺一即 RED）；字段口径 `ident/param/tag/series/body_len/body_sha256/raw_hex`。**v2.3**：`--from-recog/--from-x/--from-y/--to-recog` 选帧过滤（C3/C10#2）；`--selftest` 覆盖过滤与 `norm_raw` |
 | A4 | `mir2-rs/tests/parity/evidence/M1/s4b-slice5-exitpaths/send_ctrlc.ps1` | 存在；`-TargetPid <pid> -Event 1`（CTRL_BREAK）；M1 证据 README 记录 `CTRL_C_EVENT(0)` 不触发、`CTRL_BREAK_EVENT(1)` 触发 `Console.CancelKeyPress` |
-| A3 | `tools/m5-acceptance/start_full_rust_stack.ps1` | 存在；起 **Rust** `db-srv`(6000/5100/5700) + **Rust** `login-srv`(5500/5600) + Rust game-svr/三网关；`-Stop` **跳过 MySQL** |
+| A3 | `tools/m5-acceptance/start_full_rust_stack.ps1` | 存在；起 **Rust** `db-srv`(6000/5100/5700) + **Rust** `login-srv`(5500/5600) + Rust game-svr/三网关；`-Stop` **跳过 MySQL**。**v2.4**：增 `-DbHost/-DbPort/-DbUser/-DbPassword/-DbName`（C10#8）与 `-EmitPlan`（只打印进程计划 JSON）；默认路径逐字节不变 |
 | A5 | `tools/dbsnap/dbsnap.py restore` | 参数是 `--dir` + `--yes-apply`（默认 dry-run）+ 可选 `--allow-db`；**v2.3** snap/restore 增 `--db test|prod|DB` 预设，snap 可选 `--allow-db` 读库白名单；`tables-selftest` 纯表集自检 |
 | B11 | `tools/client/account_provision.ps1` | `-Account/-Password/-Birthday/-Mysql/-Prefix/-Count` + **v2.3** `-Db`（默认 `mir2_account`）/`-DbHost`（别名 `-Host`，默认 `127.0.0.1`）；SQL 全部跟随 `-Db`；`-Selftest`（mock mysql，不连库） |
 
@@ -84,6 +91,9 @@
 | `account_provision.ps1` | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/account_provision.ps1 -Selftest` | 16 条（mock mysql，不连库），`SELFTEST GREEN`，rc=0 |
 | `check_db_paths.ps1` | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_db_paths.ps1 -Selftest` | 9 条参数透传，`SELFTEST GREEN`，rc=0 |
 | `dbsnap.py` | `python -I -B tools/dbsnap/dbsnap.py tables-selftest` | 16 条表集展开/白名单，`SELFTEST GREEN`，rc=0 |
+| `db_target_plumb.ps1` | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/db_target_plumb.ps1 -Selftest` | 19 条（名称展开/连接串改写/INI BOM+GBK 字节保真/缺段重复键 fail-closed），`SELFTEST GREEN`，rc=0 |
+| `selftest_stack_db_target.ps1` | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest_stack_db_target.ps1` | 41 条（默认 plan/配置逐字节不变 + `-Db*` 影子三库 + 源 sha256 不变 + 非法参数 RED），`SELFTEST GREEN`，rc=0 |
+| `check_timing.py` 预设 | `python -I -B .../check_timing.py --selftest` | 30 条（原 15 + 15 条预设：四条会绿/会红、普通 capture ⇒ `UNCLOSED`、actor 过滤有牙），`SELFTEST GREEN`，rc=0 |
 
 > 这些自检**不连库、不起栈、不抓包**；它们只证明「工具判据会咬人」，不替代真机窗口证据。
 > 原 `dbsnap.py selftest` / `restore-selftest` 仍需要 MySQL，本批未改其语义。
@@ -766,7 +776,22 @@ python -I -B -c "import json;rows=[json.loads(l) for l in open('E:/tmp/window/20
   `monster-attack-hit-frame` 的 200ms 前导（C1 更细）、发送速率上限。
 - **不可判（观测物不在 capture 里）**：玩家 1.2s AOI 扫描节拍（`player-searchviewrange-cadence`）、
   30s `VerifyMapTime`（`aoi-verify-maptime` 时间半）、600/1200ms 延迟法术（`rm-delaymagic-*`）、
-  3/5 分钟尸体（`corpse-ghost-revive`）——需要**服务端日志时间**或专门注入 ⇒ §C10 未闭环。
+  3/5 分钟尸体（`corpse-ghost-revive`）——需要**服务端日志时间**或专门注入 ⇒ §C10#3 未闭环。
+
+- **C10#3 预设（v2.4，部分闭环）**——规则已经写好、会咬人，但观测物不在 s2c capture：
+  ```bash
+  # 先看预设（含观测物说明）
+  python -I -B <CHK>/check_timing.py --list-presets
+  # 对服务端事件流（每行带 ts_ms + event + actor）判节拍；<ACTOR> 换成该角色/怪的 actor id
+  python -I -B <CHK>/check_timing.py --capture <WIN>/server-events.jsonl \
+    --preset all --preset-var actor=<ACTOR>
+  ```
+  预设：`cadence-1.2s`（`search_view_range`，1000–1400ms）、`verify-maptime-30s`（`verify_map_time`，30000–30400ms）、
+  `delaymagic-600ms`（`delay_magic_schedule→delay_magic_fire`，600–800ms）、`corpse-3min`
+  （`death→make_ghost`，180001–180200ms；`MakeGhostTime` 默认 180s）。
+  事件流可以由服务端日志按上述 `event` 名导出，**但本批没有做日志→事件流的转换器**。
+  对普通 s2c capture 跑 `--preset all`：每条 `0 条观测帧` ⇒ `[UNCLOSED]` + `RESULT: UNCLOSED`（**rc=3，不是 GREEN**）。
+  ⇒ 四条读数**仍未闭环**；窗口里不得把 `UNCLOSED` 写成通过。
 
 ### C5. 三路径存档：`softclose|disconnect|shutdown` 各自 before/after
 
@@ -856,12 +881,12 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 | --- | --- | --- | --- |
 | 1 | **【闭环 v2.3】** 52 body 的 **Weight/MaxExp 字段级解码器** | B2 的 `Weight=14` 可机判 | `check_client_s2c_frames.py --expect-52-weight/--expect-52-max-exp`（40B/58B 自动识别） |
 | 2 | **【闭环 v2.3】** 10/41 的**坐标过滤**（C3；recog 过滤仅单侧诊断） | GuardList 可挑「卫士那一对」 | `s2c_diff.py --from-x/--from-y`（跨侧）；`--from-recog/--to-recog` 限单侧 |
-| 3 | 1.2s/30s/600ms/3min 等**服务端节拍**读数 | cadence/aoi-maptime/delay-magic/corpse 卡 | 只能真实等待 + 日志人工看；不判 R |
+| 3 | **【部分闭环 v2.4】** 1.2s/30s/600ms/3min 等**服务端节拍**读数 | cadence/aoi-maptime/delay-magic/corpse 卡 | 规则预设已具备（`--preset cadence-1.2s\|verify-maptime-30s\|delaymagic-600ms\|corpse-3min` + `--preset-var actor=`）；但普通 capture 无服务端事件帧 ⇒ 判 `UNCLOSED`（rc=3）。**读数仍未闭环**：缺服务端日志→事件流导出 |
 | 4 | LoginGate/SelGate 影子抓包 + 网关 timer gate（C8） | G7 四卡 | 日志/截图；保持 in-progress |
 | 5 | 6000/5100 代理或逐帧日志（C9） | G6 | DB 行级 + 连接日志；不判 R |
 | 6 | 法术按键/`AutoSpell` 驱动 | G4 全部 | 只能摆前置（B6）；不收 |
 | 7 | **【闭环 v2.3】** `account_provision.ps1` 无 `--host/--db` | 测试库开号可直接用 | `-Db mir2_test_account -DbHost 127.0.0.1`（`-Host` 别名）；默认仍 `mir2_account` |
-| 8 | 栈启动器无「指向 `mir2_test_*`」参数 | E1 的测试库隔离 | **未闭环**：需手工改影子 conf / 另开工具改动 |
+| 8 | **【闭环 v2.4】** 栈启动器无「指向 `mir2_test_*`」参数 | E1 的测试库隔离 | `start_rust_stack.ps1` / `start_full_rust_stack.ps1` 增 `-DbHost/-DbPort/-DbUser/-DbPassword/-DbName`（前缀/模板）与 `-EmitPlan`；默认零行为差（selftest 钉住），影子只写 StackRoot/LogDir，不碰 `E:/MirServer`/主检出 |
 | 9 | **【闭环 v2.3】** `dbsnap` 默认快照只含生产库名 | 测试库快照 | `--db test`（13 张）或 `--db <单库名>`；与 `--table` 取并集 |
 | 10 | **【闭环 v2.3】** `check_client_s2c_frames` 无「按角色/状态选预设」自动判 | G2 预设可自动选 | `--expect-enter-seq auto`（按 210/212/621/211 选 g2/delmagic/equipped/default，仍逐帧严判） |
 | 11 | **【部分闭环 v2.3】** `check_db_paths.ps1` 缺 `--table/--allow-db`（① 已补）；`scoped_diff.TABLE_COLUMNS` 仍未登记 `mir2_test_*`（② 未做，`extract` 对未登记表 rc=4） | E1-a 下 G5 字段级 diff 仍不可收 | ① 已闭环：`-Table/-AllowDb` 透传；② **保留**：仅 E1-b 可做字段级 diff，E1-a 只做行数/关键值断言 |
@@ -965,10 +990,11 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
   关服写回如果落在 `mir2_db` 就违反了卡的验收边界。**仅「有 dbsnap 备份」不等于满足**。
 - 需要裁决：
   - **E1-a**：批准克隆 `mir2_db/mir2_account/mir2_data` → `mir2_test_*`，并授权把 DBSrv/LoginSrv/game-svr
-    指向测试库（当前启动器无此参数，需 §C10#8 的临时手工配置或后续工具改动）。
+    指向测试库。**v2.4 起启动器已支持**（§C10#8 闭环）：`-DbName mir2_test [-DbHost/-DbPort/-DbUser/-DbPassword]`
+    （`start_rust_stack.ps1` / `tools/m5-acceptance/start_full_rust_stack.ps1`）；授权本身仍需 owner 裁决。
   - **E1-b**：或书面授权「本窗对生产 `mir2_db/mir2_account` 的摆位/装备/关服写回」，并指定授权条目/范围/回滚责任。
-- 补充事实：`check_db_paths.ps1`（C5 用的工具）没有 `--table/--allow-db` 透传，内部固定对默认生产库取快照
-  ⇒ 即使 E1-a（测试库）获批，G5 的三路径快照也需要**先改工具**（脚本变更不在本窗）或改用 E1-b。
+- 补充事实：`check_db_paths.ps1` 自 v2.3 起有 `-Table/-AllowDb` 透传，测试库可快照；但 `scoped_diff.TABLE_COLUMNS`
+  仍未登记 `mir2_test_*`（§C10#11 ②）⇒ E1-a 下 G5 仍只能做行数/关键值断言，字段级 diff 只在 E1-b 可收。
 - **不裁决则 Block A/B/C 全部不可开窗**（所有构造都会写库）。
 
 ### E2. 内容改动：影子 Envir / GuildBase / MonGen / 非 TestServer
