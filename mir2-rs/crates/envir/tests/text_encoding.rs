@@ -95,3 +95,23 @@ fn conf_from_bytes_uses_dotnet_cp936_once() {
     let conf2 = GameSvrConf::from_bytes(b"[Names]\r\n");
     assert_eq!(conf2.game_gold_name, "元宝");
 }
+
+/// 判据 14：`crates/envir` 的两个入口就是 `mir2_encoding` 的转发（E-4 统一入口），
+/// 改回 `mir2_script::cp936` 或自写分支 ⇒ 本测试仍可能过，但下面的逐向量相等把
+/// 「两个真源」钉死；配合 `decode_text_matches_dotnet` 的边界向量即改坏必红。
+#[test]
+fn envir_text_delegates_to_encoding_crate() {
+    let vectors: &[&[u8]] = &[
+        &[0xFF],
+        &[0x80],
+        &[0xA8, 0xBF],
+        &[0x81, 0x20, 0x41],
+        &[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00],
+        &[0xFF, 0xFE, 0xFF, 0x41],
+        &[0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, 0x41],
+    ];
+    for v in vectors {
+        assert_eq!(decode_text(v), mir2_encoding::decode_string_list(v));
+        assert_eq!(decode_config_text(v), mir2_encoding::decode_config_text(v));
+    }
+}

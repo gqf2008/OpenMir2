@@ -9,6 +9,7 @@ publish = false
 mir2-shared = { path = "../shared" }
 mir2-world = { path = "../world" }
 mir2-data = { path = "../data" }
+mir2-encoding = { path = "../encoding" }
 mir2-script = { path = "../script" }
 encoding_rs = "0.8"
 thiserror = "1"
