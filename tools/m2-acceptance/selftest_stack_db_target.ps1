@@ -92,8 +92,10 @@ Interval=3000
     "[DataBase]`nConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_account;`n", $enc)
   [System.IO.File]::WriteAllText((Join-Path $lsv 'AddrTable.txt'), "127.0.0.1`r`n", $enc)
   [System.IO.File]::WriteAllText((Join-Path $lsv 'LoginSrv.exe'), 'stub', $enc)
-  [System.IO.File]::WriteAllText((Join-Path $ms 'M2GameSvr\Server.conf'),
-    "[DataBase]`nConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_data;`n[Share]`nEnvirDir=Envir`n", $enc)
+  # 生产形态：UTF-8 BOM 紧贴首行 `[DataBase]`（E:\MirServer\M2GameSvr\Server.conf 实测 EF BB BF + [DataBase]）。
+  $gsConfText = "[DataBase]`nConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_data;`n[Share]`nEnvirDir=Envir`n"
+  [System.IO.File]::WriteAllBytes((Join-Path $ms 'M2GameSvr\Server.conf'),
+    [byte[]](0xEF, 0xBB, 0xBF) + $enc.GetBytes($gsConfText))
   [System.IO.File]::WriteAllText((Join-Path $ms 'M2GameSvr\Envir\MapInfo.txt'), "[0|0]`r`n", $enc)
   [System.IO.File]::WriteAllText((Join-Path $ms 'M2GameSvr\Map\0.map'), 'map', $enc)
   [System.IO.File]::WriteAllText((Join-Path $ms 'LoginSrv\UserLimit.txt'), "10`r`n", $enc)

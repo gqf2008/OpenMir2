@@ -489,8 +489,9 @@ function Wait-Ports([string]$Name, [int[]]$Ports) {
 }
 
 # ---- 2) C# DBSrv / LoginSrv ----
-Start-One -Name 'DBSrv'    -Exe $dbsrvExe -ExeArgs @() -WorkDir $dbsrvDir -Ports @(6000, 5100, 5700) -StopOrder 7
-Start-One -Name 'LoginSrv' -Exe $lsrvExe  -ExeArgs @() -WorkDir $lsrvDir  -Ports @(5500, 5600)       -StopOrder 6
+# workdir 与 -EmitPlan 一致：给 -Db* 时 exe/workdir 都在 StackRoot/LogDir 的影子目录（源 Release 不受写）。
+Start-One -Name 'DBSrv'    -Exe $dbsrvExe -ExeArgs @() -WorkDir $dbsrvAppDir -Ports @(6000, 5100, 5700) -StopOrder 7
+Start-One -Name 'LoginSrv' -Exe $lsrvExe  -ExeArgs @() -WorkDir $lsrvAppDir  -Ports @(5500, 5600)       -StopOrder 6
 
 # ---- 3) Rust game-svr（先于网关：网关注册需要 GameSvr 在） ----
 Start-One -Name 'game-svr'   -Exe $gsvrExe -ExeArgs @($gsvrConf) -WorkDir (Split-Path $gsvrConf -Parent) -Ports @(5000)           -StopOrder 5 -Seed $seedInfo -StateLog $stateLogInfo -RngLog $rngLogInfo -IsolateAttack $isolateInfo -ClientAbilityLayout $layoutInfo

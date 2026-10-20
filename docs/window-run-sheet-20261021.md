@@ -3,7 +3,10 @@
 > **v2.4 修订（2026-10-21，tier=L，纯工具/文档，离线）**：只收 C10 的两项——
 > ① **C10#8 闭环**：两个起栈器新增 `-DbHost/-DbPort/-DbUser/-DbPassword/-DbName`
 >    （`-DbName` 为前缀/模板，展开 `mir2_test_db/_account/_data`）。未给 `-Db*` 时**零调用、命令行与生成配置逐字节不变**
->    （`selftest_stack_db_target.ps1` 用 sha256/字面量钉住）；影子只写 StackRoot/LogDir，**不碰 `E:/MirServer` 与主检出**。
+>    （`selftest_stack_db_target.ps1` 用 sha256/字面量钉住）；影子只写 StackRoot/LogDir，**不写 `E:/MirServer` 与主检出**：
+>    `Map/` 以 Junction 只读挂载（游戏侧只读地图），其余配置/`Envir`/日志/存档目录与顶层文件一律复制；
+>    `New-Mir2GameSvrShadowBase` 生成后 fail-closed 断言「除 `Map` 外影子条目无 Junction/硬链」，
+>    selftest 以临时源目录验证写影子不改源文件。
 > ② **C10#3 部分闭环**：`check_timing.py` 增四条预设 `cadence-1.2s / verify-maptime-30s / delaymagic-600ms / corpse-3min`
 >    （`--preset`、`--preset-var actor=<id>`、`--list-presets`）。普通 s2c capture 没有这些服务端事件帧 ⇒
 >    **如实判 `UNCLOSED`（rc=3）**，不是通过；读数仍需服务端事件流/日志导出 ⇒ 本项**未闭环**。
@@ -91,8 +94,8 @@
 | `account_provision.ps1` | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/account_provision.ps1 -Selftest` | 16 条（mock mysql，不连库），`SELFTEST GREEN`，rc=0 |
 | `check_db_paths.ps1` | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_db_paths.ps1 -Selftest` | 9 条参数透传，`SELFTEST GREEN`，rc=0 |
 | `dbsnap.py` | `python -I -B tools/dbsnap/dbsnap.py tables-selftest` | 16 条表集展开/白名单，`SELFTEST GREEN`，rc=0 |
-| `db_target_plumb.ps1` | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/db_target_plumb.ps1 -Selftest` | 19 条（名称展开/连接串改写/INI BOM+GBK 字节保真/缺段重复键 fail-closed），`SELFTEST GREEN`，rc=0 |
-| `selftest_stack_db_target.ps1` | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest_stack_db_target.ps1` | 41 条（默认 plan/配置逐字节不变 + `-Db*` 影子三库 + 源 sha256 不变 + 非法参数 RED），`SELFTEST GREEN`，rc=0 |
+| `db_target_plumb.ps1` | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/db_target_plumb.ps1 -Selftest` | 22 条（名称展开/连接串改写/INI BOM+GBK 字节保真/BOM 紧贴 `[DataBase]` 首行/影子写不穿源 + 硬链 fail-closed/缺段重复键 fail-closed），`SELFTEST GREEN`，rc=0 |
+| `selftest_stack_db_target.ps1` | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest_stack_db_target.ps1` | 41 条（默认 plan/配置逐字节不变 + `-Db*` 影子三库 + 源 sha256 不变 + 非法参数 RED；game-svr 夹具为生产形态 `BOM + [DataBase]` 首行），`SELFTEST GREEN`，rc=0 |
 | `check_timing.py` 预设 | `python -I -B .../check_timing.py --selftest` | 30 条（原 15 + 15 条预设：四条会绿/会红、普通 capture ⇒ `UNCLOSED`、actor 过滤有牙），`SELFTEST GREEN`，rc=0 |
 
 > 这些自检**不连库、不起栈、不抓包**；它们只证明「工具判据会咬人」，不替代真机窗口证据。
@@ -886,7 +889,7 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 | 5 | 6000/5100 代理或逐帧日志（C9） | G6 | DB 行级 + 连接日志；不判 R |
 | 6 | 法术按键/`AutoSpell` 驱动 | G4 全部 | 只能摆前置（B6）；不收 |
 | 7 | **【闭环 v2.3】** `account_provision.ps1` 无 `--host/--db` | 测试库开号可直接用 | `-Db mir2_test_account -DbHost 127.0.0.1`（`-Host` 别名）；默认仍 `mir2_account` |
-| 8 | **【闭环 v2.4】** 栈启动器无「指向 `mir2_test_*`」参数 | E1 的测试库隔离 | `start_rust_stack.ps1` / `start_full_rust_stack.ps1` 增 `-DbHost/-DbPort/-DbUser/-DbPassword/-DbName`（前缀/模板）与 `-EmitPlan`；默认零行为差（selftest 钉住），影子只写 StackRoot/LogDir，不碰 `E:/MirServer`/主检出 |
+| 8 | **【闭环 v2.4】** 栈启动器无「指向 `mir2_test_*`」参数 | E1 的测试库隔离 | `start_rust_stack.ps1` / `start_full_rust_stack.ps1` 增 `-DbHost/-DbPort/-DbUser/-DbPassword/-DbName`（前缀/模板）与 `-EmitPlan`；默认零行为差（selftest 钉住）；影子只写 StackRoot/LogDir 且不写 `E:/MirServer`/主检出——`Map/` 只读 Junction，其余条目复制 + fail-closed 断言无 Junction/硬链（selftest：写影子不改源） |
 | 9 | **【闭环 v2.3】** `dbsnap` 默认快照只含生产库名 | 测试库快照 | `--db test`（13 张）或 `--db <单库名>`；与 `--table` 取并集 |
 | 10 | **【闭环 v2.3】** `check_client_s2c_frames` 无「按角色/状态选预设」自动判 | G2 预设可自动选 | `--expect-enter-seq auto`（按 210/212/621/211 选 g2/delmagic/equipped/default，仍逐帧严判） |
 | 11 | **【部分闭环 v2.3】** `check_db_paths.ps1` 缺 `--table/--allow-db`（① 已补）；`scoped_diff.TABLE_COLUMNS` 仍未登记 `mir2_test_*`（② 未做，`extract` 对未登记表 rc=4） | E1-a 下 G5 字段级 diff 仍不可收 | ① 已闭环：`-Table/-AllowDb` 透传；② **保留**：仅 E1-b 可做字段级 diff，E1-a 只做行数/关键值断言 |

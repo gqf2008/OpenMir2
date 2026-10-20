@@ -17,7 +17,9 @@
     · C# DBSrv/LoginSrv 的配置固定从 `AppContext.BaseDirectory` 读（`AppConfigManager.cs:6` /
       `AppServer.cs:29`）⇒ 只有在需要改库时才把整个 Release 目录**复制**到影子目录，再从影子 exe 启动。
     · game-svr 的 BasePath = Server.conf 所在目录（`mapwire.rs:94-102`，还要找 Envir/Map/Notice）⇒ 影子
-      目录用 Junction/HardLink 指向 `E:\MirServer\M2GameSvr` 的只读数据，只把 Server.conf 复制并改写。
+      目录里 `Map/` 以 Junction **只读**挂载（不复制 ~195MB），Envir/日志/存档等其余目录与顶层文件
+      一律复制，Server.conf 复制后改写；生成后 fail-closed 断言除 `Map` 外无 Junction/硬链
+      （硬链与源同 inode，写影子 = 写源）。
 
   公开函数：
     Resolve-Mir2DbTarget            -DbHost/-DbPort/-DbUser/-DbPassword/-DbName → 目标对象（含 Present）
@@ -26,7 +28,8 @@
     Get-Mir2IniConnString           -Path → 现配置里的连接串（只读）
     Set-Mir2IniConnString           -Path -ConnString → 原地字节保真改写
     New-Mir2ShadowAppDir            -SourceDir -DestDir → 复制整个 C# 应用目录
-    New-Mir2GameSvrShadowBase       -SourceDir -DestDir -ConnString [-LinkMode Junction|Copy]
+    New-Mir2GameSvrShadowBase       -SourceDir -DestDir -ConnString [-LinkMode ReadOnlyData|Copy]
+    Assert-Mir2ShadowNoWritableLinks -DestDir [-ReadOnlyDirs] → 影子内可写入口不得是链接
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/db_target_plumb.ps1 -Selftest
@@ -174,11 +177,27 @@ function Get-Mir2DataBaseSection {
   return [pscustomobject]@{ Start = $start; End = $end }
 }
 
-function Get-Mir2IniConnString {
+# 读 INI：Latin1 解码**前**显式剥离 UTF-8 BOM（EF BB BF）。BOM 字节在 Latin1 下会变成
+# 「ï»¿」（U+00EF U+00BB U+00BF），`^[ \t]*\[DataBase\]` 吃不到 ⇒ 生产 `Server.conf`
+# （BOM 紧贴首行 `[DataBase]`）会误判缺段。返回 Text（已剥离）与 HasBom（写回时原样补回）。
+function Read-Mir2IniText {
   param([string]$Path)
   if (-not (Test-Path -LiteralPath $Path)) { throw ("配置文件不存在：{0}" -f $Path) }
   $enc = Get-Mir2Latin1
-  $text = $enc.GetString([System.IO.File]::ReadAllBytes($Path))
+  $bytes = [System.IO.File]::ReadAllBytes($Path)
+  $offset = 0
+  $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+  if ($hasBom) { $offset = 3 }
+  return [pscustomobject]@{
+    Text   = $enc.GetString($bytes, $offset, $bytes.Length - $offset)
+    HasBom = $hasBom
+  }
+}
+
+function Get-Mir2IniConnString {
+  param([string]$Path)
+  $doc = Read-Mir2IniText -Path $Path
+  $text = $doc.Text
   $range = Get-Mir2DataBaseSection -Text $text -Path $Path
   $body = $text.Substring($range.Start, $range.End - $range.Start)
   $m = [regex]::Match($body, '(?im)^[ \t]*ConnctionString[ \t]*=[ \t]*([^\r\n]*)')
@@ -193,9 +212,9 @@ function Set-Mir2IniConnString {
   if ($null -eq $ConnString -or $ConnString -match '[\r\n]') {
     throw '连接串为空或含换行（fail-closed）'
   }
-  if (-not (Test-Path -LiteralPath $Path)) { throw ("配置文件不存在：{0}" -f $Path) }
+  $doc = Read-Mir2IniText -Path $Path
   $enc = Get-Mir2Latin1
-  $text = $enc.GetString([System.IO.File]::ReadAllBytes($Path))
+  $text = $doc.Text
   $range = Get-Mir2DataBaseSection -Text $text -Path $Path
   $body = $text.Substring($range.Start, $range.End - $range.Start)
   $rx = [regex]'(?im)^([ \t]*ConnctionString[ \t]*=[ \t]*)[^\r\n]*'
@@ -212,7 +231,14 @@ function Set-Mir2IniConnString {
   }
   $newBody = $rx.Replace($body, $evaluator, 1)
   $newText = $text.Substring(0, $range.Start) + $newBody + $text.Substring($range.End)
-  [System.IO.File]::WriteAllBytes($Path, $enc.GetBytes($newText))
+  $outBytes = $enc.GetBytes($newText)
+  if ($doc.HasBom) {
+    $withBom = New-Object byte[] ($outBytes.Length + 3)
+    $withBom[0] = 0xEF; $withBom[1] = 0xBB; $withBom[2] = 0xBF
+    [Array]::Copy($outBytes, 0, $withBom, 3, $outBytes.Length)
+    $outBytes = $withBom
+  }
+  [System.IO.File]::WriteAllBytes($Path, $outBytes)
 }
 
 function New-Mir2ShadowAppDir {
@@ -225,40 +251,55 @@ function New-Mir2ShadowAppDir {
   }
 }
 
+# fail-closed：影子内除声明的只读输入目录外，任何条目都不许是 Junction/硬链 ——
+# 硬链与源是同一 inode，服务端写影子里的同名文件（日志/ini/存档）会直接写穿到 `E:\MirServer`。
+function Assert-Mir2ShadowNoWritableLinks {
+  param([string]$DestDir, [string[]]$ReadOnlyDirs = @('Map'))
+  foreach ($e in Get-ChildItem -Force -LiteralPath $DestDir) {
+    if ($ReadOnlyDirs -contains $e.Name) {
+      if (-not ($e.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+        throw ("影子只读输入目录未链接（预期 Junction）：{0}（fail-closed）" -f $e.FullName)
+      }
+      continue
+    }
+    if (-not [string]::IsNullOrEmpty($e.LinkType)) {
+      throw ("影子内可写入口指向源（{0}: {1}）—— 写影子会写穿源目录（fail-closed）" -f $e.LinkType, $e.FullName)
+    }
+  }
+}
+
 function New-Mir2GameSvrShadowBase {
   param(
     [string]$SourceDir,
     [string]$DestDir,
     [string]$ConnString,
-    [ValidateSet('Junction', 'Copy')][string]$LinkMode = 'Junction'
+    [ValidateSet('ReadOnlyData', 'Copy')][string]$LinkMode = 'ReadOnlyData'
   )
   if (-not (Test-Path -LiteralPath (Join-Path $SourceDir 'Server.conf'))) {
     throw ("game-svr 配置目录缺 Server.conf：{0}" -f $SourceDir)
   }
   if (Test-Path -LiteralPath $DestDir) { Remove-Item -LiteralPath $DestDir -Recurse -Force }
   New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
+  # `ReadOnlyData`（默认）：只把**只读输入目录**做 Junction（Map 约 195MB，不复制）；其余目录与
+  # 顶层文件一律复制 ⇒ 影子完全独立。绝不硬链可写文件（硬链写穿源，见 Assert-* 注释）。
+  $readOnlyDirs = @('Map')
   foreach ($e in Get-ChildItem -Force -LiteralPath $SourceDir) {
     if ($e.Name -ieq 'Server.conf') { continue }
     $dest = Join-Path $DestDir $e.Name
-    if ($e.PSIsContainer) {
-      if ($LinkMode -eq 'Copy') {
-        Copy-Item -LiteralPath $e.FullName -Destination $dest -Recurse -Force
-      } else {
-        New-Item -ItemType Junction -Path $dest -Target $e.FullName | Out-Null
-      }
+    $link = ($LinkMode -eq 'ReadOnlyData' -and $e.PSIsContainer -and ($readOnlyDirs -contains $e.Name))
+    if ($link) {
+      New-Item -ItemType Junction -Path $dest -Target $e.FullName | Out-Null
+    } elseif ($e.PSIsContainer) {
+      Copy-Item -LiteralPath $e.FullName -Destination $dest -Recurse -Force
     } else {
-      if ($LinkMode -eq 'Copy') {
-        Copy-Item -LiteralPath $e.FullName -Destination $dest -Force
-      } else {
-        # 同卷优先硬链（零拷贝）；跨卷/不支持 ⇒ 复制（大目录仍走 Junction，不会整体复制 Map）。
-        try { New-Item -ItemType HardLink -Path $dest -Target $e.FullName | Out-Null }
-        catch { Copy-Item -LiteralPath $e.FullName -Destination $dest -Force }
-      }
+      Copy-Item -LiteralPath $e.FullName -Destination $dest -Force
     }
   }
   $conf = Join-Path $DestDir 'Server.conf'
   Copy-Item -LiteralPath (Join-Path $SourceDir 'Server.conf') -Destination $conf -Force
   Set-Mir2IniConnString -Path $conf -ConnString $ConnString
+  $linked = if ($LinkMode -eq 'ReadOnlyData') { $readOnlyDirs } else { @() }
+  Assert-Mir2ShadowNoWritableLinks -DestDir $DestDir -ReadOnlyDirs $linked
 }
 
 # ---------------------------------------------------------------------------
@@ -348,6 +389,17 @@ function Invoke-Mir2DbTargetSelftest {
     Test-Case 'INI 读连接串（BOM/GBK 共存）' {
       return ((Get-Mir2IniConnString -Path $ini) -eq $base)
     }
+    Test-Case 'BOM 紧贴 [DataBase] 段头（生产形态 LF）：读/写均成立且 BOM 保留' {
+      $p = Join-Path $root 'bom-first.conf'
+      $body = "[DataBase]`nConnctionString=$base`n[Server]`nX=1`n"
+      [System.IO.File]::WriteAllBytes($p, [byte[]](0xEF, 0xBB, 0xBF) + $enc.GetBytes($body))
+      $read0 = (Get-Mir2IniConnString -Path $p)
+      Set-Mir2IniConnString -Path $p -ConnString 'server=127.0.0.1;uid=root;pwd=;database=mir2_test_db;'
+      $after = [System.IO.File]::ReadAllBytes($p)
+      $bomOk = ($after.Length -ge 3 -and $after[0] -eq 0xEF -and $after[1] -eq 0xBB -and $after[2] -eq 0xBF)
+      $readOk = ((Get-Mir2IniConnString -Path $p) -eq 'server=127.0.0.1;uid=root;pwd=;database=mir2_test_db;')
+      return ($read0 -eq $base) -and $bomOk -and $readOk
+    }
     Test-Case 'INI 写同值 ⇒ 字节完全不变（sha256 相同）' {
       Set-Mir2IniConnString -Path $ini -ConnString $base
       return ((Get-FileHash -LiteralPath $ini -Algorithm SHA256).Hash -eq $sha0)
@@ -401,6 +453,41 @@ function Invoke-Mir2DbTargetSelftest {
       $envOk = (Test-Path -LiteralPath (Join-Path $dst 'Envir\MapInfo.txt'))
       $mapOk = (Test-Path -LiteralPath (Join-Path $dst 'Map\0.map'))
       return ($srcStill -and $dbOk -and $envOk -and $mapOk)
+    }
+    Test-Case 'game-svr 影子（默认 ReadOnlyData）：写影子日志/配置不改源，可写入口无链接' {
+      $src = Join-Path $root 'gsvr-write-src'
+      New-Item -ItemType Directory -Force -Path (Join-Path $src 'Envir') | Out-Null
+      New-Item -ItemType Directory -Force -Path (Join-Path $src 'Map') | Out-Null
+      New-Item -ItemType Directory -Force -Path (Join-Path $src 'logs') | Out-Null
+      [System.IO.File]::WriteAllText((Join-Path $src 'Envir\MapInfo.txt'), "[0|0]`r`n", $enc)
+      [System.IO.File]::WriteAllText((Join-Path $src 'Map\0.map'), 'map', $enc)
+      [System.IO.File]::WriteAllText((Join-Path $src 'logs\old.log'), 'old', $enc)
+      [System.IO.File]::WriteAllText((Join-Path $src 'setting.conf'), 'x=1', $enc)
+      [System.IO.File]::WriteAllBytes((Join-Path $src 'Server.conf'), $bytes)
+      $dst = Join-Path $root 'gsvr-write-dst'
+      New-Mir2GameSvrShadowBase -SourceDir $src -DestDir $dst -ConnString $base
+      Add-Content -LiteralPath (Join-Path $dst 'logs\old.log') -Value 'shadow'
+      Add-Content -LiteralPath (Join-Path $dst 'Envir\MapInfo.txt') -Value 'shadow'
+      Add-Content -LiteralPath (Join-Path $dst 'setting.conf') -Value 'shadow'
+      $srcLogOk = ([System.IO.File]::ReadAllText((Join-Path $src 'logs\old.log'), $enc) -ceq 'old')
+      $srcEnvirOk = (-not [System.IO.File]::ReadAllText((Join-Path $src 'Envir\MapInfo.txt'), $enc).Contains('shadow'))
+      $srcSettingOk = ([System.IO.File]::ReadAllText((Join-Path $src 'setting.conf'), $enc) -ceq 'x=1')
+      $dstLogOk = ([System.IO.File]::ReadAllText((Join-Path $dst 'logs\old.log'), $enc).Contains('shadow'))
+      $mapLink = ((Get-Item -LiteralPath (Join-Path $dst 'Map') -Force).LinkType -eq 'Junction')
+      $envirCopied = [string]::IsNullOrEmpty((Get-Item -LiteralPath (Join-Path $dst 'Envir') -Force).LinkType)
+      return ($srcLogOk -and $srcEnvirOk -and $srcSettingOk -and $dstLogOk -and $mapLink -and $envirCopied)
+    }
+    Test-Case 'game-svr 影子：可写入口被换成硬链 ⇒ 断言 fail-closed' {
+      $src = Join-Path $root 'gsvr-link-src'
+      New-Item -ItemType Directory -Force -Path (Join-Path $src 'Envir') | Out-Null
+      New-Item -ItemType Directory -Force -Path (Join-Path $src 'Map') | Out-Null
+      [System.IO.File]::WriteAllText((Join-Path $src 'setting.conf'), 'x=1', $enc)
+      [System.IO.File]::WriteAllBytes((Join-Path $src 'Server.conf'), $bytes)
+      $dst = Join-Path $root 'gsvr-link-dst'
+      New-Mir2GameSvrShadowBase -SourceDir $src -DestDir $dst -ConnString $base
+      Remove-Item -LiteralPath (Join-Path $dst 'setting.conf') -Force
+      New-Item -ItemType HardLink -Path (Join-Path $dst 'setting.conf') -Target (Join-Path $src 'setting.conf') | Out-Null
+      try { Assert-Mir2ShadowNoWritableLinks -DestDir $dst | Out-Null; return $false } catch { return $true }
     }
   } finally {
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
