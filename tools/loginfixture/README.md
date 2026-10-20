@@ -95,7 +95,8 @@ RESULT GREEN: 15/15 帧，0 非白名单差异（whitelisted=<recog 差异帧数
   （bin 用文件名，jsonl 用 `conn` 字段）。
 * `811` 是 3×20B 分段（`frame.rs::body_layout` 的 Segmented 契约）。工具默认从协议源码派生布局表
   （复用 `tools/capture/dump_body_layout.py`，不抄第二份）；也可 `--layout <body_layout.json>`。
-  布局表缺失且遇到分段帧 ⇒ PREREQ，不静默平铺解码。
+  布局表缺失且遇到分段帧（811/201，以及 6/7/9/10 的 `StructThenRest{8}`）⇒ **PREREQ（rc=2）**，
+  不静默平铺解码；`--no-layout` 同理（它只是显式选择「不要表」，不是放行）。
 
 ---
 
@@ -125,6 +126,9 @@ RESULT GREEN: 15/15 帧，0 非白名单差异（whitelisted=<recog 差异帧数
 注意 `752 SM_SUBABILITY` 的 7 个通道在头部 `param` 里（body 为空），要判 752 必须用 `--strict-head`。
 
 `--52-layout-only` 可退回「52 只看 40/58 长度、不比语义」，**不推荐**；默认开语义检查。
+用它时报告**显式记录降级口径**：`"52_layout_only": true`、`"52_semantic_compared": false`、
+`"unverified": ["52_semantic"]`，CLI 同时打 `WARN 52_layout_only=true…语义字段【未比较】`。
+该 JSON **不能**当语义等价证据（真实语义差异会被判成 GREEN——这是使用者的显式选择，不是静默放行）。
 
 ---
 
@@ -138,12 +142,20 @@ python -I -B tools/loginfixture/capture_login_compare.py --selftest
 | 工具 | 断言/用例 | 末行 | rc |
 | --- | --- | --- | --- |
 | `prepare_safe_login.py` | **39 条** | `SELFTEST GREEN` | 0 |
-| `capture_login_compare.py` | **18 条** | `SELFTEST GREEN` | 0 |
+| `capture_login_compare.py` | **24 条**（条件式：仓库内含离线金标准时；缺则 2 条互验 SKIP） | `SELFTEST GREEN`；缺金标准时 `SELFTEST INCOMPLETE` | 0；缺金标准时 **2** |
+
+> 「条件式」是指：`--selftest` 里两条离线金标准互验断言依赖仓库内的
+> `tests/golden/session-20261010-c3-hook/proxy` 与 `mir2-rs/tests/golden/c-line-baseline-c3-20261010.jsonl`。
+> **缺文件时不再打 SKIP 后判 GREEN**（旧行为是断言 18 掉到 16 仍 rc=0）：现在末行是
+> `SELFTEST INCOMPLETE`、rc=2，e2e 也会判红——没跑满就不许假绿。
 
 `capture_login_compare.py --selftest` 覆盖：52 40/58 语义相等 + recog 不同 ⇒ GREEN；bin 输入（含 811
 分段与明文 act 帧跳过）；目录输入；非 52 body 改 1 字节 ⇒ RED；52 语义改 hp ⇒ RED；52 同布局
 body 不同 ⇒ RED；ident 顺序错 ⇒ RED；缺 46 ⇒ PREREQ；`--strict-head` 前后 param 差异；52 白名单
-不外溢到 ident 54；以及**离线金标准** `tests/golden/session-20261010-c3-hook/proxy` ↔
+不外溢到 ident 54；**缺布局表 + 811 分段帧 ⇒ PREREQ**（fail-closed，不把 811 平铺成 62B）；
+**`--52-layout-only` 的降级口径写进报告**（`52_layout_only` / `52_semantic_compared` / `unverified`）；
+**`ABILITY_LAYOUTS` 与 `check_client_s2c_frames.py` 逐字段交叉一致**；以及**离线金标准**
+`tests/golden/session-20261010-c3-hook/proxy` ↔
 `mir2-rs/tests/golden/c-line-baseline-c3-20261010.jsonl` ⇒ GREEN（811 分段解出 60B）。
 
 `prepare_safe_login.py --selftest` 用假 mysql runner 覆盖：库名守卫放行/拒绝、SQL 引号/反斜杠转义、
@@ -157,7 +169,7 @@ Level/HP/坐标边界、dry-run 不写、apply 两条 UPDATE + 单事务、改�
 基线 sha256（本目录提交时的两份文件）：
 
 ```text
-69d8f9102ddbed86bf56b8811c5bb998c63fe6cf879c28495955642f4de93223  tools/loginfixture/capture_login_compare.py
+e2ef1f1e08bf7c85f5c3f7074aa0028760357810accfe96e27000b0de48be64b  tools/loginfixture/capture_login_compare.py
 6c84510e60f424a6b12788cac6989d62928aa28e4b93dd92db18e4aeae2c5084  tools/loginfixture/prepare_safe_login.py
 ```
 

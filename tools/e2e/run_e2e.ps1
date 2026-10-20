@@ -10,6 +10,7 @@
     3. dbsnap-selftest   DB 快照/比对自测（含篡改红检）
     3b. worldsample-selftest 世界态采样自测（确定性 + 改坐标必红）
     3c. segmented-check  Segmented 段边界自检（段回编=原字节；seg_len 改错必红）
+    3d. loginfixture-selftest 窗口登录夹具自测（摆位守卫 + 15 帧对账；缺布局表/缺金标准必红）
     4. golden-verify     最新金标准完整性（tests/golden/LATEST 指向的会话）
     4b. golden-fresh     入库金标准新鲜度+登记对账（重导==入库件；登记 sha 一致）
     5. flow-e2e          真实客户端全流程：阶段序列完整 + 截图非空 + 服务日志无新 ERR 暴涨
@@ -112,6 +113,13 @@ if (-not $mysqlUp) {
 
 python (Join-Path $RepoRoot "tools\worldsample\world_sampler.py") selftest
 Add-Result "worldsample-selftest" ($LASTEXITCODE -eq 0)
+
+# 窗口受控登录夹具（tier=L，离线）：prepare 只走假 mysql runner；compare 只用合成数据 +
+# 仓库内离线金标准。缺布局表必须 PREREQ、缺金标准必须 INCOMPLETE（rc≠0），不许假绿。
+python (Join-Path $RepoRoot "tools\loginfixture\prepare_safe_login.py") --selftest
+Add-Result "loginfixture-prepare-selftest" ($LASTEXITCODE -eq 0)
+python (Join-Path $RepoRoot "tools\loginfixture\capture_login_compare.py") --selftest
+Add-Result "loginfixture-compare-selftest" ($LASTEXITCODE -eq 0)
 
 # Segmented 段边界自检（C4）：用已入库的 C3 裸 dump 的真实帧 + A 线冻结契约。
 # 需要 GoldenExport 可执行体（缺则现构建）；改错 seg_len 必须 rc=4（改错必红）。

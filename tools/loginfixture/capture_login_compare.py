@@ -22,7 +22,9 @@
     `TAbility`（`HIGHHP=True`）的 Rust 侧 body = **58B**（`record.rs::encode_ability_client`）。
     仅当两侧 body_len 恰为 {40,58} 时按布局白名单；**语义字段仍逐项比对**（level/ac/mac/dc/mc/sc/
     hp/mp/max_hp/max_mp/exp/max_exp/weight/max_weight/wear_weight/max_wear_weight/hand_weight/
-    max_hand_weight），语义不一致 ⇒ RED。`--52-layout-only` 可退回「只看长度」，默认不推荐。
+    max_hand_weight），语义不一致 ⇒ RED。`--52-layout-only` 可退回「只看长度」，默认不推荐：
+    此时报告显式写 `52_layout_only=true` / `52_semantic_compared=false` / `unverified=["52_semantic"]`，
+    CLI 也打 WARN——该报告不能当语义等价证据。
 
 分段帧：811 `SM_...` 是 3×20B 各自编码、用 `/` 连接（`frame.rs::body_layout` 的 Segmented 契约）。
 本工具默认从**协议源码**派生布局表（复用 `tools/capture/dump_body_layout.py`，不抄第二份），
@@ -37,6 +39,7 @@
   python -I -B tools/loginfixture/capture_login_compare.py --selftest
 
 退出码：0 = 无非白名单差异（GREEN）/ 1 = 有差异（RED）/ 2 = 前置不满足（PREREQ，绝不静默通过）。
+`--selftest` 单独约定：0 = GREEN / 1 = RED / 2 = INCOMPLETE（离线金标准缺失，断言没跑满，绝不假绿）。
 
 本车道（tier=L，tools/）**没有**在真机窗口里跑过本脚本；`--selftest` 只用合成数据，另有
 「离线金标准」互验（`tests/golden/session-20261010-c3-hook/proxy` ↔ `mir2-rs/tests/golden/
@@ -58,6 +61,13 @@ HEAD_BLOCK = 16
 
 # 入图自帧 15 条（`s2c_diff.py` / `check_client_s2c_frames.py` 同口径）。
 ENTER_SEQ = [658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46]
+
+# `frame.rs::body_layout` 里**非 Single** 的消息号：没有布局表就不能平铺解码。
+#   - 811 SM_ADJUST_BONUS：3×20B 分段，`/` 连接、无尾分隔；
+#   - 201 SM_BAGITEMS：每件 124B 一段 + 尾 `/`，段数取头部 series；
+#   - 6/7/9/10 SM_RUSH/SM_RUSHKUNG/SM_BACKSTEP/SM_TURN：StructThenRest{8}（两段各自编码）。
+# 缺表时若遇到这些帧（例如 811 被平铺成 62B 仍判 GREEN），必须 PREREQ ⇒ fail-closed。
+LAYOUT_REQUIRED_IDENTS = frozenset({6, 7, 9, 10, 201, 811})
 
 # 52 body 两套布局（与 check_client_s2c_frames.py 的 ABILITY_LAYOUTS 同偏移；此处内联是为了
 # 本工具在干净检出上可自足复算，不 import 另一个验收脚本）。
@@ -91,6 +101,8 @@ NORMALIZATION = {
     "recog": "CommandMessage.Recog = ActorId（会话相关；不参与比较，差异记 whitelisted）",
     "head_other": "param/tag/series 不参与默认判据；--strict-head 时差异升级为 RED（recog 仍白名单）",
     "52_layout": "oracle40 (40B) vs client58 (58B) 的 body 字节差异按布局白名单；语义字段仍逐项比",
+    "52_layout_only": "--52-layout-only 时 52 只比 40/58 长度；18 个语义字段未比较"
+                      "（报告 52_semantic_compared=false / unverified=[52_semantic]）",
 }
 
 
@@ -207,9 +219,10 @@ def load_layout_module():
 def repo_layout():
     """从协议源码派生布局表；失败返回 (None, 原因)。"""
     try:
-        mod, repo = load_layout_module()
-        if mod is None:
+        loaded = load_layout_module()
+        if loaded is None:
             return None, "找不到 tools/capture/dump_body_layout.py"
+        mod, repo = loaded
         frame_rs = os.path.join(repo, "mir2-rs", "crates", "protocol", "src", "frame.rs")
         consts = os.path.join(repo, "mir2-rs", "crates", "protocol", "src", "messages.rs")
         for p in (frame_rs, consts):
@@ -233,6 +246,15 @@ class BodyDecoder(object):
     def decode_body(self, ident, series, enc):
         spec = self.layouts.get(str(ident))
         if not spec:
+            if ident in LAYOUT_REQUIRED_IDENTS:
+                if not self.layouts:
+                    why = "布局表为空（%s）" % self.source
+                else:
+                    why = "布局表（%s）缺 ident=%d 条目" % (self.source, ident)
+                # Prereq 不会被 parse_wire_frame 的 DecodeError 分支吞掉：一路传到 main ⇒ rc=2。
+                raise Prereq("ident=%d 的体必须按分段布局解码，否则会平铺出错误字节：%s；"
+                             "请恢复 tools/capture/dump_body_layout.py 派生或用 --layout 指定"
+                             " body_layout.json" % (ident, why))
             return decode(enc), "single"
         kind = spec.get("kind")
         if kind == "segmented":
@@ -622,6 +644,9 @@ def compare_sequences(o_seq, r_seq, expect, strict_head=False, layout_only_52=Fa
         "diffs": diffs,
         "whitelisted": whitelisted,
         "head_diag": head_diag,
+        "52_layout_only": bool(layout_only_52),
+        "52_semantic_compared": not layout_only_52,
+        "unverified": ["52_semantic"] if layout_only_52 else [],
         "pass": len(diffs) == 0,
     }
 
@@ -675,6 +700,9 @@ def emit(report):
     print("RUST   %s (%s, stream=%s)" % (report["rust"], report["rust_kind"],
                                          report["rust_stream"]))
     print("LAYOUT_SOURCE %s" % report["layout_source"])
+    if report.get("52_layout_only"):
+        print("WARN 52_layout_only=true：52 只按 40/58 长度白名单，18 个语义字段【未比较】"
+              "（unverified=[52_semantic]）——本报告不能当语义等价证据")
     print("EXPECT_SEQ %s" % ",".join(str(x) for x in report["expect_seq"]))
     for w in report.get("warnings", []):
         print("WARN %s" % w)
@@ -879,8 +907,51 @@ def write_bin(path, frames, decoder, act_between=None):
         f.write(bytes(out))
 
 
+def crosscheck_ability_layouts():
+    """与 check_client_s2c_frames.py 的 ABILITY_LAYOUTS 逐字段对账（Minor 3）。
+
+    返回 (导入的模块或 None, 问题列表)。两处偏移/格式必须逐字段相等；对方只登记自己
+    用到的字段子集时，只比对交集（同名布局 length/name 仍要比）。
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.abspath(os.path.join(here, "..", ".."))
+    other = os.path.join(repo, "mir2-rs", "tests", "parity", "world",
+                         "client-e2e-enter-gaps-20261013", "check_client_s2c_frames.py")
+    if not os.path.exists(other):
+        return None, ["找不到交叉校验对象：%s" % other]
+    spec = importlib.util.spec_from_file_location("_openmir2_check_frames", other)
+    if spec is None or spec.loader is None:
+        return None, ["无法加载 %s" % other]
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+    except Exception as e:  # noqa: BLE001 - selftest 要把导入失败变成 RED 而不是栈回溯
+        return None, ["导入 %s 失败：%s: %s" % (other, type(e).__name__, e)]
+    theirs_all = getattr(mod, "ABILITY_LAYOUTS", None)
+    if not isinstance(theirs_all, dict):
+        return mod, ["%s 没有 ABILITY_LAYOUTS 字典" % other]
+    problems = []
+    for size in sorted(set(ABILITY_LAYOUTS) | set(theirs_all)):
+        mine = ABILITY_LAYOUTS.get(size)
+        theirs = theirs_all.get(size)
+        if mine is None or theirs is None:
+            problems.append("布局 %dB 只在一侧存在" % size)
+            continue
+        if mine.get("name") != theirs.get("name"):
+            problems.append("%dB.name %r != %r" % (size, mine.get("name"), theirs.get("name")))
+        for field in ABILITY_FIELDS:
+            if field not in theirs:
+                continue  # 对方只登记自己使用的字段子集
+            if field not in mine:
+                problems.append("%dB.%s 只在对方存在" % (size, field))
+            elif tuple(mine[field]) != tuple(theirs[field]):
+                problems.append("%dB.%s %s != %s" % (size, field, mine[field], theirs[field]))
+    return mod, problems
+
+
 def selftest():
     ok = True
+    incomplete = False
 
     def expect(name, cond, detail=""):
         nonlocal ok
@@ -1011,7 +1082,30 @@ def selftest():
                and any(d["ident"] == 54 and d["field"] == "body_len" for d in rep["diffs"]),
                rep["diffs"][:3])
 
-        # 11) 离线金标准互验：真实 bin（c3-hook）↔ 真实 capture.jsonl 必须 GREEN
+        # 11) 缺布局表 + 分段帧 ⇒ PREREQ（fail-closed；不许把 811 平铺成 62B 还判 GREEN）
+        empty_decoder = BodyDecoder({}, "selftest empty table")
+        try:
+            compare_paths(b_o, b_r, args_for(), empty_decoder, "none (selftest empty table)")
+            expect("缺布局表 + 811 分段帧 ⇒ PREREQ", False, "却返回了报告")
+        except Prereq as e:
+            expect("缺布局表 + 811 分段帧 ⇒ PREREQ", "811" in str(e) or "分段" in str(e), e)
+
+        # 12) --52-layout-only 是显式降级：仍 GREEN，但报告必须记录口径与「语义未比较」
+        rep = compare_pair(p_o, p_sem, "--52-layout-only")
+        expect("--52-layout-only hp 不同仍 GREEN（降级口径）", rep["pass"], rep["diffs"][:3])
+        expect("报告记录 52_layout_only=true / semantic=false",
+               rep.get("52_layout_only") is True and rep.get("52_semantic_compared") is False,
+               (rep.get("52_layout_only"), rep.get("52_semantic_compared")))
+        expect("报告 unverified 含 52_semantic", "52_semantic" in rep.get("unverified", []),
+               rep.get("unverified"))
+        expect("默认报告 52_layout_only=false", compare_pair(p_o, p_r).get("52_layout_only") is False)
+
+        # 13) ABILITY_LAYOUTS 与 check_client_s2c_frames.py 逐字段一致（不抄第二份口径）
+        other_mod, problems = crosscheck_ability_layouts()
+        expect("ABILITY_LAYOUTS 与 check_client_s2c_frames.py 逐字段一致",
+               other_mod is not None and not problems, problems[:3])
+
+        # 14) 离线金标准互验：真实 bin（c3-hook）↔ 真实 capture.jsonl 必须 GREEN
         here = os.path.dirname(os.path.abspath(__file__))
         repo = os.path.abspath(os.path.join(here, "..", ".."))
         gold_bin = os.path.join(repo, "tests", "golden",
@@ -1025,10 +1119,18 @@ def selftest():
                    [r["oracle_ident"] for r in rep["frames"]] == ENTER_SEQ,
                    [r["oracle_ident"] for r in rep["frames"]])
         else:
+            incomplete = True
             print("%-70s SKIP（仓库里没有离线金标准文件）" % "离线金标准互验")
 
-    print("SELFTEST %s" % ("GREEN" if ok else "RED"))
-    return 0 if ok else 1
+    if not ok:
+        print("SELFTEST RED")
+        return 1
+    if incomplete:
+        # SKIP 不许假绿：断言没跑满就是非零（2 = INCOMPLETE）。
+        print("SELFTEST INCOMPLETE（离线金标准缺失，交叉互验断言未执行）")
+        return 2
+    print("SELFTEST GREEN")
+    return 0
 
 
 if __name__ == "__main__":
