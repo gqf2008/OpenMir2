@@ -932,6 +932,9 @@ async fn main() -> Result<()> {
                     elec_blizzard_range: i32::from(cfg.elec_blizzard_range),
                     mag_turn_undead_level: cfg.mag_turn_undead_level,
                     pk_flag_time: cfg.pk_flag_time,
+                    cry_msg_f_color: cfg.cry_msg_f_color,
+                    cry_msg_b_color: cfg.cry_msg_b_color,
+                    can_shout_msg_level: cfg.can_shout_msg_level,
                     b4: mir2_world::magic_effect::MabMabeConfig {
                         hit_rand_rate: cfg.mab_mabe_hit_rand_rate,
                         hit_min_lv_limit: cfg.mab_mabe_hit_min_lv_limit,
@@ -1253,21 +1256,46 @@ fn route_to_gate<'a>(
     }
 }
 
-/// `CM_SAY`(3030) 的**普通说话**落地：按在网关连接自己的 `UserList` 上解出的 `chr_name`
-/// 找回 `online` 登记表里的说话者，组 `SM_HEAR` 帧，
-/// 经 `chat::hear_targets`（`SendRefMsg` 的收件人集合）逐收件人按其 `[GateIdx, Socket]` 路由。
+/// `CM_SAY`(3030) 的宿主上下文（颜色/配置/行会/组队 + 网关路由）。
 ///
-/// 口径见 `chat` 模块头；非普通行（`/`、`!`、`@`）本切片不接并记日志（不静默丢）。
+/// `handle_say` 的入参曾是一条长参数表；频道入口（`openmir2-channel-chat`）又加了
+/// 行会/组队/文案/等级门/地图旗标，收敛成本结构，避免 `fn` 参数继续膨胀。
+struct ChatHost<'a> {
+    online: &'a OnlineRegistry,
+    world: &'a mir2_world::World,
+    gates: &'a std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    /// `WorldEngine` 的行会表（`MyGuild.SendGuildMsg` 的 `GuildInfo` 等价物）。
+    guilds: &'a mir2_world::GuildManager,
+    guild_msg_cfg: &'a guild_runtime::GuildMsgCfg,
+    party_cfg: &'a mir2_world::PartyConfig,
+    strings: &'a strings::StringConf,
+    colors: &'a MsgColors,
+    /// `[Setup] CryMsgFColor`。
+    cry_f: u8,
+    /// `[Setup] CryMsgBColor`。
+    cry_b: u8,
+    /// `[Setup] CanShoutMsgLevel`。
+    can_shout_level: i32,
+    /// `Envir.Flag` 来源；`None`（S1 占位世界）⇒ `boQUIZ=false`（登记）。
+    registry: Option<&'a mir2_envir::MapRegistry>,
+}
+
+/// `CM_SAY`(3030) 落地：`/` 私聊、`!` 频道（`!!`/`!~`/`!`）、普通说话；`@` 命令仍不接。
+///
+/// oracle 链：`PlayObject.Message.cs:1394-1396` ⇒ `ProcessUserLineMsg`（`@` 支先行）⇒
+/// `PlayObject.Chat.cs:106-208` 的 `ProcessSayMsg`。本函数按首字符分流，逐支见
+/// [`handle_channel_say`]/[`handle_whisper`] 与 `chat` 模块头。
+///
+/// `shout_msg_tick`（`PlayObject.ShoutMsgTick`）存在 [`SessionGround`]，与 `PlayObject` 同生命周期
+/// （进世界建、离场删 ⇒ 重登从 0 起算，与 oracle ctor 零值一致）。
 fn handle_say(
-    online: &OnlineRegistry,
-    world: &mir2_world::World,
-    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    host: &ChatHost<'_>,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
     socket: i32,
     tail: Option<&str>,
-    colors: &MsgColors,
 ) {
-    let Some(speaker) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(speaker) = host.online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
             "WRN",
             "CM_SAY：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 不猜说话者，丢弃 tail={tail:?}"
@@ -1280,26 +1308,45 @@ fn handle_say(
     // **orphan 编码器接线首批**：`/` 私聊（oracle `PlayObject.Chat.cs:157-166` 的 `case '/'`）
     // ⇒ `SM_WHISPER(103)`（见 [`handle_whisper`]）。首字符 `/` 时 `is_plain_say` 亦为 false。
     if let Some((who, text)) = chat::parse_whisper(line) {
-        handle_whisper(online, world, gates, speaker, *colors, &who, &text);
+        handle_whisper(
+            host.online,
+            host.world,
+            host.gates,
+            speaker,
+            *host.colors,
+            &who,
+            &text,
+        );
+        return;
+    }
+    // **openmir2-channel-chat**：`!` 支（`!!` 组队 / `!~` 行会 / `!` 喊话）。
+    if line.starts_with('!') {
+        handle_channel_say(host, sessions, speaker, line);
         return;
     }
     if !chat::is_plain_say(line) {
+        // `@` 命令系统（`ProcessUserLineMsg` 的 `@` 支）仍未接：照旧丢弃并记日志（不静默）。
         glog!(
             "DBG",
-            "CM_SAY：非普通说话（频道/命令），本切片未接 ⇒ 丢弃 ChrName={} tail={line:?}",
+            "CM_SAY：非普通说话（@命令），本切片未接 ⇒ 丢弃 ChrName={} tail={line:?}",
             speaker.chr_name
         );
         return;
     }
     // `BaseObject.Base.cs:478` 的 `ChrName + ':' + sMsg`（GBK 字节；协议层不转 UTF-8）。
     let text = chat::hear_text(&gbk_encode(&speaker.chr_name), &gbk_encode(line));
-    let body = smframe::sm_hear(speaker.actor_id, colors.hear_f, colors.hear_b, &text);
+    let body = smframe::sm_hear(
+        speaker.actor_id,
+        host.colors.hear_f,
+        host.colors.hear_b,
+        &text,
+    );
     let mut delivered = 0usize;
-    for target_id in chat::hear_targets(world, speaker.actor_id, chat::SEND_REF_MSG_RANGE) {
-        let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+    for target_id in chat::hear_targets(host.world, speaker.actor_id, chat::SEND_REF_MSG_RANGE) {
+        let Some(t) = host.online.iter().find(|e| e.actor_id == target_id) else {
             continue;
         };
-        let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "说话") else {
+        let Some(tx) = route_to_gate(host.gates, t.gate_idx, t.socket, "说话") else {
             continue;
         };
         let _ = tx.send(SimToGate::SendFrame {
@@ -1315,6 +1362,204 @@ fn handle_say(
         speaker.actor_id,
         delivered,
         line
+    );
+}
+
+/// `ProcessSayMsg` 的 `!` 支（`PlayObject.Chat.cs:163-208`）。
+///
+/// - `!!` ⇒ `SendGroupText(ChrName + ": " + sText)`（`PlayObject.cs:5185-5197`）⇒ 逐成员
+///   `RM_GROUPMESSAGE` ⇒ `SM_SYSMESSAGE(100)`（`recog` = 说话者、`Series=1`）；无组 ⇒ 无帧。
+/// - `!~` 且 `MyGuild != null` ⇒ `MyGuild.SendGuildMsg(...)` ⇒ 逐成员 `SM_GUILDMESSAGE(104)`
+///   （`GuildInfo.cs:431-456`；`BanGuildChat` 反向门沿用 G3 口径）；无行会 ⇒ **落喊话支**。
+/// - 其余 `!` ⇒ 喊话三门（`!boQUIZ` → 10s → 等级）后 `CryCry(..., 50, ...)` ⇒ `SM_HEAR(40)`。
+///
+/// `SS_208`（跨服）两侧都只记日志（单服无接收端，T-113）。
+fn handle_channel_say(
+    host: &ChatHost<'_>,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    speaker: &OnlineEntry,
+    line: &str,
+) {
+    let has_guild = sessions
+        .get(&speaker.chr_name)
+        .and_then(|s| s.guild.guild_name.clone());
+    let Some(kind) = chat::parse_channel(line, has_guild.is_some()) else {
+        glog!(
+            "DBG",
+            "CM_SAY：单个 `!`（oracle `sData[1]` 越界被 catch）⇒ 无输出 ChrName={}",
+            speaker.chr_name
+        );
+        return;
+    };
+    match kind {
+        chat::ChannelSay::Group(text) => {
+            // `SendGroupText(ChrName + ": " + sText)`；前缀 `GroupMsgPreFix` 由世界侧拼。
+            let body = format!("{}: {text}", speaker.chr_name);
+            let events = host
+                .world
+                .party_send_group_text(speaker.actor_id, host.party_cfg, &body);
+            let mut delivered = 0usize;
+            for (_, ev) in &events {
+                let Some((to, frame)) = partywire::event_body(ev) else {
+                    continue;
+                };
+                let Some(t) = host.online.iter().find(|e| e.actor_id == to) else {
+                    continue;
+                };
+                let Some(tx) = route_to_gate(host.gates, t.gate_idx, t.socket, "组队说话")
+                else {
+                    continue;
+                };
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: t.socket,
+                    body: frame,
+                });
+                delivered += 1;
+            }
+            if events.is_empty() {
+                glog!(
+                    "DBG",
+                    "组队说话：GroupOwner==0 ⇒ 无帧 ChrName={}",
+                    speaker.chr_name
+                );
+            }
+            // `SendServerGroupMsg(SS_208, ServerIndex, ChrName + "/:" + sText)`：单服无接收端。
+            glog!(
+                "DBG",
+                "SS_208（单服无接收端，T-113）：{}/:{text}",
+                speaker.chr_name
+            );
+            glog!(
+                "INF",
+                "组队说话 ChrName:{} ActorId:{} → {} 个收件人 tail={text:?}",
+                speaker.chr_name,
+                speaker.actor_id,
+                delivered
+            );
+        }
+        chat::ChannelSay::Guild(text) => {
+            let guild = has_guild.expect("parse_channel 只在 has_guild 时给 Guild");
+            let body = format!("{}: {text}", speaker.chr_name);
+            let ban: std::collections::HashMap<String, bool> = sessions
+                .iter()
+                .map(|(k, sg)| (k.clone(), sg.guild.ban_guild_chat))
+                .collect();
+            let rcpt = guild_recipients(host.online, host.world, &ban);
+            let notices = guild_runtime::guild_broadcast_104(
+                host.guilds,
+                &guild,
+                &body,
+                host.guild_msg_cfg,
+                &rcpt,
+                None,
+            );
+            let delivered = notices.len();
+            send_guild_notices(&notices, host.online, host.gates);
+            // `SendServerGroupMsg(SS_208, ServerIndex, GuildName + '/' + ChrName + '/' + sText)`。
+            glog!(
+                "DBG",
+                "SS_208（单服无接收端，T-113）：{}/{}/{text}",
+                guild,
+                speaker.chr_name
+            );
+            glog!(
+                "INF",
+                "行会说话 ChrName:{} ActorId:{} Guild={guild} → {} 个收件人 tail={text:?}",
+                speaker.chr_name,
+                speaker.actor_id,
+                delivered
+            );
+        }
+        chat::ChannelSay::Shout(text) => {
+            let (last_tick, level) = sessions
+                .get(&speaker.chr_name)
+                .map_or((0, 0), |sg| (sg.shout_msg_tick, sg.equip.abil.level));
+            let map_quiz = host
+                .registry
+                .and_then(|reg| {
+                    host.world
+                        .entities
+                        .get(speaker.actor_id)
+                        .and_then(|e| reg.flag_of(e.map_id))
+                })
+                .is_some_and(|flag| flag.bo_quiz);
+            match chat::shout_decision(
+                host.world.clock_ms,
+                last_tick,
+                level,
+                host.can_shout_level,
+                map_quiz,
+            ) {
+                chat::ShoutDecision::Send => {}
+                chat::ShoutDecision::TooSoon(secs) => {
+                    let msg = chat::format_int(host.strings.you_can_send_cycy_later_msg(), secs);
+                    send_self_sysmsg(host, speaker, &msg);
+                    return;
+                }
+                chat::ShoutDecision::LevelTooLow(need) => {
+                    let msg = chat::format_int(host.strings.you_need_level_msg(), need);
+                    send_self_sysmsg(host, speaker, &msg);
+                    return;
+                }
+                chat::ShoutDecision::MapDisable => {
+                    let msg = host.strings.this_map_disable_send_cycy_msg().to_string();
+                    send_self_sysmsg(host, speaker, &msg);
+                    return;
+                }
+            }
+            // oracle 在发帧**之前**写 `ShoutMsgTick`（`PlayObject.Chat.cs:190`）。
+            if let Some(sg) = sessions.get_mut(&speaker.chr_name) {
+                sg.shout_msg_tick = host.world.clock_ms;
+            }
+            // `"(!)" + ChrName + ": " + sText` ⇒ `RM_CRY` ⇒ `SM_HEAR`（`Recog=0`，见 T-118）。
+            let cry = chat::cry_text(&gbk_encode(&speaker.chr_name), &gbk_encode(text));
+            let body = smframe::sm_hear(0, host.cry_f, host.cry_b, &cry);
+            let mut delivered = 0usize;
+            for target_id in chat::cry_targets(host.world, speaker.actor_id, chat::SEND_CRY_RANGE) {
+                let Some(t) = host.online.iter().find(|e| e.actor_id == target_id) else {
+                    continue;
+                };
+                let Some(tx) = route_to_gate(host.gates, t.gate_idx, t.socket, "喊话") else {
+                    continue;
+                };
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: t.socket,
+                    body: body.clone(),
+                });
+                delivered += 1;
+            }
+            glog!(
+                "INF",
+                "喊话 ChrName:{} ActorId:{} → {} 个收件人 tail={:?}",
+                speaker.chr_name,
+                speaker.actor_id,
+                delivered,
+                text
+            );
+        }
+    }
+}
+
+/// `SysMsg(msg, Red, Hint)`（`BaseObject.cs:1588-1690` 的 Hint 支）⇒ `RM_SYSMESSAGE` ⇒
+/// `SM_SYSMESSAGE(100)`，`Recog` = 收件人（说话者）自己的 `ActorId`、`Param=MakeWord(RedF,RedB)`、
+/// `Series=1`、尾 `EncodeString(msg)`。
+fn send_self_sysmsg(host: &ChatHost<'_>, speaker: &OnlineEntry, msg: &str) {
+    let body = smframe::sm_sysmessage(
+        speaker.actor_id,
+        u16::from(host.colors.red_f),
+        u16::from(host.colors.red_b),
+        &gbk_encode(msg),
+    );
+    if let Some(tx) = route_to_gate(host.gates, speaker.gate_idx, speaker.socket, "说话提示") {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: speaker.socket,
+            body,
+        });
+    }
+    glog!(
+        "INF",
+        "说话提示 ChrName:{} → tail={msg:?}",
+        speaker.chr_name
     );
 }
 
@@ -12660,6 +12905,10 @@ struct SessionGround {
     dec_hunger_point_tick: i64,
     /// `PlayObject.QueryBagItemsTick`（`PlayObject.Message.cs:786` 的 30s 限频）：`None` = 未查过（照 oracle 首次即过）。
     query_bag_items_tick: Option<i64>,
+    /// `PlayObject.ShoutMsgTick`（`PlayObject.cs:267`，auto-property 零值）——
+    /// `!` 喊话的 10s 门基准（`PlayObject.Chat.cs:183` 的 `now - ShoutMsgTick > 10*1000`）。
+    /// 与 `PlayObject` 同生命周期：进世界建会话 ⇒ 0，离场删会话 ⇒ 重登重新从 0 起算。
+    shout_msg_tick: i64,
     /// `PlayObject.BoReconnection`（`PlayObject.cs:376`）：`CM_SOFTCLOSE` 置真 ⇒ 小退后允许重连。
     bo_reconnection: bool,
     /// `PlayObject.BoSoftClose`（`PlayObject.cs:368`）：`CM_SOFTCLOSE` 置真 ⇒ `RunNotice` 的 `MakeGhost()`。
@@ -12882,6 +13131,11 @@ struct EnterConfig {
     /// （`PlayObject.cs:4359`）；`DecLightItemDrugTime` 仍取 oracle 缺省 500
     /// （本仓未解析该键，登记）。
     pk_flag_time: i32,
+    /// `[Setup] CryMsgFColor/CryMsgBColor`（`!` 喊话的 `SM_HEAR` 颜色；缺省 0x00/0x97）。
+    cry_msg_f_color: u8,
+    cry_msg_b_color: u8,
+    /// `[Setup] CanShoutMsgLevel`（`!` 喊话等级门；缺省 7，部署件 34）。
+    can_shout_msg_level: i32,
     /// **P3-B4**：`[Setup]` 的 `MabMabe*` / `AmyOunsulPoint`（缺省 = oracle 缺省）。
     b4: mir2_world::magic_effect::MabMabeConfig,
     /// `CM_PICKUP`/`CM_DROPITEM` 的 `[Setup]` 输入。
@@ -13015,6 +13269,9 @@ impl EnterConfig {
             elec_blizzard_range: 2,
             mag_turn_undead_level: 50,
             pk_flag_time: 60_000,
+            cry_msg_f_color: 0,
+            cry_msg_b_color: 0x97,
+            can_shout_msg_level: 7,
             b4: mir2_world::magic_effect::MabMabeConfig::default(),
             ground: GroundCfg {
                 human_max_gold: 5_000_000,
@@ -15343,16 +15600,28 @@ fn sim_loop(
                         cmd.series,
                         tail.as_deref().unwrap_or("")
                     );
-                    // `CM_SAY`：普通说话回 `SM_HEAR`（其余 ident 仍在切片清单里，只记日志）。
+                    // `CM_SAY`：`/` 私聊、`!` 频道（`!!`/`!~`/`!`）、普通说话（`@` 仍不接）。
                     if cmd.ident == chat::CM_SAY {
+                        let host = ChatHost {
+                            online: &online,
+                            world: &world,
+                            gates: &gates,
+                            guilds: &guilds,
+                            guild_msg_cfg: &enter_cfg.guild_msg_cfg,
+                            party_cfg: &party_cfg,
+                            strings: &enter_cfg.string_conf,
+                            colors: &colors,
+                            cry_f: enter_cfg.cry_msg_f_color,
+                            cry_b: enter_cfg.cry_msg_b_color,
+                            can_shout_level: enter_cfg.can_shout_msg_level,
+                            registry: registry.as_ref(),
+                        };
                         handle_say(
-                            &online,
-                            &world,
-                            &gates,
+                            &host,
+                            &mut ground_sessions,
                             &chr_name,
                             socket,
                             tail.as_deref(),
-                            &colors,
                         );
                     } else if cmd.ident == game_svr::ground::CM_PICKUP
                         || cmd.ident == game_svr::ground::CM_DROPITEM
@@ -16531,6 +16800,7 @@ fn sim_loop(
                                                             dec_hunger_point_tick: now_ms(),
                                                             query_bag_items_tick: None,
                                                             bo_reconnection: false,
+                                                            shout_msg_tick: 0,
                                                             bo_soft_close: false,
                                                             bo_emergency_close: false,
                                                             is_can_deal: true,
@@ -20140,6 +20410,7 @@ mod tests {
             dec_hunger_point_tick: 0,
             query_bag_items_tick: None,
             bo_reconnection: false,
+            shout_msg_tick: 0,
             bo_soft_close: false,
             bo_emergency_close: false,
             is_can_deal: true,
@@ -20344,6 +20615,7 @@ mod tests {
             dec_hunger_point_tick: 0,
             query_bag_items_tick: None,
             bo_reconnection: false,
+            shout_msg_tick: 0,
             bo_soft_close: false,
             bo_emergency_close: false,
             is_can_deal: true,
@@ -22529,6 +22801,7 @@ mod tests {
                 dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
+                shout_msg_tick: 0,
                 bo_soft_close: false,
                 bo_emergency_close: false,
                 is_can_deal: true,
@@ -22731,6 +23004,7 @@ mod tests {
                 dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
+                shout_msg_tick: 0,
                 bo_soft_close: false,
                 bo_emergency_close: false,
                 is_can_deal: true,
@@ -22906,6 +23180,7 @@ mod tests {
                 dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
+                shout_msg_tick: 0,
                 bo_soft_close: false,
                 bo_emergency_close: false,
                 is_can_deal: true,
@@ -23061,6 +23336,7 @@ mod tests {
                 dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
+                shout_msg_tick: 0,
                 bo_soft_close: false,
                 bo_emergency_close: false,
                 is_can_deal: true,
@@ -23378,6 +23654,59 @@ mod tests {
         }
     }
 
+    /// **`openmir2-channel-chat`**：`handle_say` 的宿主上下文夹具（生产入参收敛后的形状）。
+    struct TestChatCtx {
+        guilds: mir2_world::GuildManager,
+        guild_msg_cfg: guild_runtime::GuildMsgCfg,
+        party_cfg: mir2_world::PartyConfig,
+        strings: crate::strings::StringConf,
+        cry_f: u8,
+        cry_b: u8,
+        can_shout_level: i32,
+    }
+
+    impl TestChatCtx {
+        fn new() -> Self {
+            Self {
+                guilds: mir2_world::GuildManager::new(),
+                guild_msg_cfg: guild_runtime::GuildMsgCfg {
+                    show_pre_fix_msg: false,
+                    prefix: String::new(),
+                    f_color: 0,
+                    b_color: 0,
+                },
+                party_cfg: mir2_world::PartyConfig::default(),
+                strings: crate::strings::StringConf::defaults(),
+                cry_f: 0,
+                cry_b: 0x97,
+                can_shout_level: 0,
+            }
+        }
+
+        fn host<'a>(
+            &'a self,
+            online: &'a OnlineRegistry,
+            world: &'a mir2_world::World,
+            gates: &'a std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+            colors: &'a MsgColors,
+        ) -> ChatHost<'a> {
+            ChatHost {
+                online,
+                world,
+                gates,
+                guilds: &self.guilds,
+                guild_msg_cfg: &self.guild_msg_cfg,
+                party_cfg: &self.party_cfg,
+                strings: &self.strings,
+                colors,
+                cry_f: self.cry_f,
+                cry_b: self.cry_b,
+                can_shout_level: self.can_shout_level,
+                registry: None,
+            }
+        }
+    }
+
     /// 在线登记在**进世界成功**时落坐标，断线/踢旧时被 `online_take` 拿走（名字精确匹配）。
     #[test]
     fn online_registry_set_and_take() {
@@ -23424,22 +23753,21 @@ mod tests {
         online_set(&mut online, entry("b", "bbb", 2, 1, 902, b));
         online_set(&mut online, entry("c", "ccc", 3, 2, 903, c));
 
-        handle_say(
-            &online,
-            &world,
-            &gates,
-            "aaa",
-            901,
-            Some("hi"),
-            &MsgColors {
-                red_f: 0xFF,
-                red_b: 0x38,
-                hear_f: 0x00,
-                hear_b: 0xFF,
-                whisper_f: 0,
-                whisper_b: 0,
-            },
-        );
+        let colors = MsgColors {
+            red_f: 0xFF,
+            red_b: 0x38,
+            hear_f: 0x00,
+            hear_b: 0xFF,
+            whisper_f: 0,
+            whisper_b: 0,
+        };
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        for (name, id) in [("aaa", a), ("bbb", b), ("ccc", c)] {
+            sessions.insert(name.to_string(), test_session_ground(id));
+        }
+        let ctx = TestChatCtx::new();
+        let host = ctx.host(&online, &world, &gates, &colors);
+        handle_say(&host, &mut sessions, "aaa", 901, Some("hi"));
 
         let check =
             |rx: &mut mpsc::UnboundedReceiver<SimToGate>, want_sock: i32| match rx.try_recv() {
@@ -23524,15 +23852,12 @@ mod tests {
             whisper_f: 0xFC,
             whisper_b: 0xFF,
         };
-        handle_say(
-            &online,
-            &world,
-            &gates,
-            "aaa",
-            901,
-            Some("/bbb 你好呀"),
-            &colors,
-        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("aaa".to_string(), test_session_ground(a));
+        sessions.insert("bbb".to_string(), test_session_ground(b));
+        let ctx = TestChatCtx::new();
+        let host = ctx.host(&online, &world, &gates, &colors);
+        handle_say(&host, &mut sessions, "aaa", 901, Some("/bbb 你好呀"));
 
         assert!(
             rx0.try_recv().is_err(),
@@ -23568,6 +23893,611 @@ mod tests {
             }
             other => panic!("目标应收到 SendFrame，实收 {other:?}"),
         }
+    }
+
+    /// **`openmir2-channel-chat` 判据①**：`!!正文` ⇒ `SendGroupText(ChrName + ": " + sText)`
+    /// （`PlayObject.Chat.cs:167-169` + `PlayObject.cs:5185-5197`）⇒ 逐成员 `SM_SYSMESSAGE(100)`：
+    /// `Recog` = **说话者** ActorId、`Param` = `MakeWord(GroupMsgFColor, GroupMsgBColor)`、
+    /// `Series=1`、尾 = `EncodeString("〖组队〗aaa: hello")`；非组员不收。
+    ///
+    /// 牙：把 `!!` 落回喊话/普通说话 ⇒ ident 变成 `SM_HEAR(40)` ⇒ 必红；把 recog 改成收件人 ⇒ 必红。
+    #[test]
+    fn group_say_sends_sm_sysmessage_to_each_party_member() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx2, mut rx2) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+        gates.insert(2, tx2);
+
+        let mut world = mir2_world::World::new(64, 64);
+        let mut mk = |name: &str, x: i32, y: i32| {
+            let mut e = mir2_world::Entity::new(0, name.to_string(), x, y);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let a = mk("aaa", 10, 10);
+        let b = mk("bbb", 11, 10);
+        let outsider = mk("ccc", 50, 50);
+        // 团长 a 的成员表 = [a, b]；b 的 GroupOwner = a（oracle Operate.cs:834-835/875）。
+        world.entities.get_mut(a).unwrap().group_owner = a;
+        world.entities.get_mut(a).unwrap().group_members = vec![a, b];
+        world.entities.get_mut(b).unwrap().group_owner = a;
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
+        online_set(&mut online, entry("b", "bbb", 2, 1, 902, b));
+        online_set(&mut online, entry("c", "ccc", 3, 2, 903, outsider));
+
+        let colors = MsgColors {
+            red_f: 0xFF,
+            red_b: 0x38,
+            hear_f: 0,
+            hear_b: 0,
+            whisper_f: 0,
+            whisper_b: 0,
+        };
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        for (name, id) in [("aaa", a), ("bbb", b), ("ccc", outsider)] {
+            sessions.insert(name.to_string(), test_session_ground(id));
+        }
+        let ctx = TestChatCtx::new();
+        let host = ctx.host(&online, &world, &gates, &colors);
+        handle_say(&host, &mut sessions, "aaa", 901, Some("!!hello"));
+
+        let check = |rx: &mut mpsc::UnboundedReceiver<SimToGate>, sock: i32| match rx.try_recv() {
+            Ok(SimToGate::SendFrame { socket, body }) => {
+                assert_eq!(socket, sock);
+                assert_eq!(
+                    i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                    a,
+                    "Recog = 说话者 ActorId（RM_GROUPMESSAGE 的 SendMsg(this, …)）"
+                );
+                assert_eq!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_SYSMESSAGE,
+                    "Ident = SM_SYSMESSAGE(100)"
+                );
+                assert_eq!(
+                    u16::from_le_bytes([body[6], body[7]]),
+                    0xFFC4,
+                    "Param = MakeWord(GroupMsgFColor=0xC4, GroupMsgBColor=0xFF)"
+                );
+                assert_eq!(u16::from_le_bytes([body[8], body[9]]), 0, "Tag=0");
+                assert_eq!(u16::from_le_bytes([body[10], body[11]]), 1, "Series=1");
+                assert_eq!(
+                    mir2_protocol::edcode::decode(&body[12..]),
+                    encoding_rs::GBK.encode("〖组队〗aaa: hello").0.to_vec(),
+                    "尾 = EncodeString(GroupMsgPreFix + ChrName + ': ' + sText)"
+                );
+            }
+            other => panic!("socket={sock} 应收到组队 SM_SYSMESSAGE，实收 {other:?}"),
+        };
+        check(&mut rx0, 901); // 说话者自己也在 GroupMembers 里（oracle 不排除 self）
+        check(&mut rx1, 902); // 组员
+        assert!(rx2.try_recv().is_err(), "非组员不收组队消息");
+    }
+
+    /// **判据②**：`!~正文`（有行会）⇒ `MyGuild.SendGuildMsg(ChrName + ": " + sText)`
+    /// （`PlayObject.Chat.cs:171-176` + `GuildInfo.cs:431-456`）⇒ 逐成员 `SM_GUILDMESSAGE(104)`：
+    /// `Recog` = **收件人自己** ActorId、`Param` = `MakeWord(GuildMsgFColor, GuildMsgBColor)`、
+    /// `Series=1`、尾 = `EncodeString(〖行会〗aaa: hi)`（`ShowPreFixMsg=true`）。
+    ///
+    /// 牙：把 recog 改成说话者 / 去掉前缀 / `!~` 落喊话 ⇒ 必红。
+    #[test]
+    fn guild_say_sends_104_to_members_with_prefix() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx2, mut rx2) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+        gates.insert(2, tx2);
+
+        let mut world = mir2_world::World::new(64, 64);
+        let mut mk = |name: &str, x: i32, y: i32| {
+            let mut e = mir2_world::Entity::new(0, name.to_string(), x, y);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let a = mk("aaa", 10, 10);
+        let b = mk("bbb", 11, 10);
+        let outsider = mk("ccc", 12, 10);
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
+        online_set(&mut online, entry("b", "bbb", 2, 1, 902, b));
+        online_set(&mut online, entry("c", "ccc", 3, 2, 903, outsider));
+
+        let colors = MsgColors {
+            red_f: 0xFF,
+            red_b: 0x38,
+            hear_f: 0,
+            hear_b: 0,
+            whisper_f: 0,
+            whisper_b: 0,
+        };
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sa = test_session_ground(a);
+        sa.guild.guild_name = Some("G".into());
+        let mut sb = test_session_ground(b);
+        sb.guild.guild_name = Some("G".into());
+        sessions.insert("aaa".into(), sa);
+        sessions.insert("bbb".into(), sb);
+        sessions.insert("ccc".into(), test_session_ground(outsider));
+
+        let mut ctx = TestChatCtx::new();
+        let guild_cfg = mir2_world::GuildConfig::default();
+        assert!(ctx.guilds.add_guild("G", "chief", &guild_cfg));
+        ctx.guilds
+            .find_guild_mut("G")
+            .unwrap()
+            .add_member("aaa", &guild_cfg, 0);
+        ctx.guilds
+            .find_guild_mut("G")
+            .unwrap()
+            .add_member("bbb", &guild_cfg, 0);
+        ctx.guild_msg_cfg = guild_runtime::GuildMsgCfg {
+            show_pre_fix_msg: true,
+            prefix: "〖行会〗".into(),
+            f_color: 0x0A,
+            b_color: 0x0B,
+        };
+        let host = ctx.host(&online, &world, &gates, &colors);
+        handle_say(&host, &mut sessions, "aaa", 901, Some("!~hi"));
+
+        let check =
+            |rx: &mut mpsc::UnboundedReceiver<SimToGate>, sock: i32, recv_actor: i32| match rx
+                .try_recv()
+            {
+                Ok(SimToGate::SendFrame { socket, body }) => {
+                    assert_eq!(socket, sock);
+                    assert_eq!(
+                        i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                        recv_actor,
+                        "Recog = 收件人自己 ActorId（SendGuildMsg 的 SendMsg(guildMember, …)）"
+                    );
+                    assert_eq!(
+                        u16::from_le_bytes([body[4], body[5]]),
+                        mir2_protocol::messages::SM_GUILDMESSAGE,
+                        "Ident = SM_GUILDMESSAGE(104)"
+                    );
+                    assert_eq!(
+                        u16::from_le_bytes([body[6], body[7]]),
+                        0x0B0A,
+                        "Param = MakeWord(GuildMsgFColor=0x0A, GuildMsgBColor=0x0B)"
+                    );
+                    assert_eq!(u16::from_le_bytes([body[8], body[9]]), 0, "Tag=0");
+                    assert_eq!(u16::from_le_bytes([body[10], body[11]]), 1, "Series=1");
+                    assert_eq!(
+                        mir2_protocol::edcode::decode(&body[12..]),
+                        encoding_rs::GBK.encode("〖行会〗aaa: hi").0.to_vec(),
+                        "尾 = EncodeString(ShowPreFixMsg 前缀 + ChrName + ': ' + sText)"
+                    );
+                }
+                other => panic!("socket={sock} 应收到行会 104，实收 {other:?}"),
+            };
+        check(&mut rx0, 901, a);
+        check(&mut rx1, 902, b);
+        assert!(rx2.try_recv().is_err(), "非行会成员不收 104");
+    }
+
+    /// **判据③**：`!~` 但 `MyGuild == null` ⇒ C# 的 `case '~' when MyGuild != null` 不命中
+    /// ⇒ 落**喊话**支，正文保留 `~`（`PlayObject.Chat.cs:171-179`）。
+    ///
+    /// 牙：把无行会 `!~` 当静默丢弃 / 当行会消息 ⇒ 必红（应收到 `SM_HEAR` 且文本以 `~` 开头）。
+    #[test]
+    fn guild_say_without_guild_falls_through_to_shout() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 20_000;
+        let mut e = mir2_world::Entity::new(0, "aaa".to_string(), 10, 10);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let a = world.add_entity(e);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
+
+        let colors = MsgColors {
+            red_f: 0xFF,
+            red_b: 0x38,
+            hear_f: 0,
+            hear_b: 0,
+            whisper_f: 0,
+            whisper_b: 0,
+        };
+        let mut sg = test_session_ground(a);
+        sg.equip.abil.level = 40;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("aaa".into(), sg);
+        let ctx = TestChatCtx::new();
+        let host = ctx.host(&online, &world, &gates, &colors);
+        handle_say(&host, &mut sessions, "aaa", 901, Some("!~hi"));
+
+        match rx0.try_recv().expect("无行会 !~ 必须落喊话") {
+            SimToGate::SendFrame { body, .. } => {
+                assert_eq!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_HEAR,
+                    "喊话 ⇒ SM_HEAR(40)，不是 104"
+                );
+                assert_eq!(
+                    mir2_protocol::edcode::decode(&body[12..]),
+                    encoding_rs::GBK.encode("(!)aaa: ~hi").0.to_vec(),
+                    "正文是 sData[1..]，保留 `~`"
+                );
+            }
+            other => panic!("应收到喊话帧，实收 {other:?}"),
+        }
+    }
+
+    /// **判据④**：`!` 喊话的 `CryCry(..., nWide=50, ...)` 收件人 = 同图 + `!Ghost` + 玩家 +
+    /// **严格 `|dx| < 50 && |dy| < 50`**；帧 = `SM_HEAR(40)`，`Recog=0`（T-118）、
+    /// `Param=MakeWord(CryMsgFColor=0, CryMsgBColor=0x97)`、`Series=1`、尾 `(!)aaa: hi`。
+    ///
+    /// 牙：把 `<` 改 `<=` ⇒ 边界 dx=50 的玩家收到帧 ⇒ 必红；把 Recog 改说话者 ⇒ 必红。
+    #[test]
+    fn shout_uses_strict_range_50_and_oracle_frame_bytes() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx2, mut rx2) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx3, mut rx3) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+        gates.insert(2, tx2);
+        gates.insert(3, tx3);
+
+        let mut world = mir2_world::World::with_maps(vec![(200, 200), (200, 200)]);
+        let mut mk = |name: &str, x: i32, y: i32, map_id: usize| {
+            let mut e = mir2_world::Entity::new(0, name.to_string(), x, y);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.map_id = map_id;
+            world.add_entity(e)
+        };
+        let a = mk("aaa", 100, 100, 0);
+        let inside = mk("in", 149, 100, 0); // dx=49
+        let edge = mk("edge", 150, 100, 0); // dx=50 ⇒ 严格 < 不含
+        let other_map = mk("om", 100, 100, 1);
+        world.clock_ms = 20_000;
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
+        online_set(&mut online, entry("i", "in", 2, 1, 902, inside));
+        online_set(&mut online, entry("e", "edge", 3, 2, 903, edge));
+        online_set(&mut online, entry("o", "om", 4, 3, 904, other_map));
+
+        let colors = MsgColors {
+            red_f: 0xFF,
+            red_b: 0x38,
+            hear_f: 0,
+            hear_b: 0,
+            whisper_f: 0,
+            whisper_b: 0,
+        };
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        for (name, id) in [
+            ("aaa", a),
+            ("in", inside),
+            ("edge", edge),
+            ("om", other_map),
+        ] {
+            let mut sg = test_session_ground(id);
+            sg.equip.abil.level = 40;
+            sessions.insert(name.to_string(), sg);
+        }
+        let mut ctx = TestChatCtx::new();
+        ctx.can_shout_level = 34;
+        let host = ctx.host(&online, &world, &gates, &colors);
+        handle_say(&host, &mut sessions, "aaa", 901, Some("!hi"));
+
+        let check = |rx: &mut mpsc::UnboundedReceiver<SimToGate>, sock: i32| match rx.try_recv() {
+            Ok(SimToGate::SendFrame { socket, body }) => {
+                assert_eq!(socket, sock);
+                assert_eq!(
+                    i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                    0,
+                    "Recog = 0（oracle SendMsg(null, RM_CRY, …)，见 T-118）"
+                );
+                assert_eq!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_HEAR,
+                    "RM_CRY ⇒ SM_HEAR(40)"
+                );
+                assert_eq!(
+                    u16::from_le_bytes([body[6], body[7]]),
+                    0x9700,
+                    "Param = MakeWord(CryMsgFColor=0x00, CryMsgBColor=0x97)"
+                );
+                assert_eq!(u16::from_le_bytes([body[10], body[11]]), 1, "Series=1");
+                assert_eq!(
+                    mir2_protocol::edcode::decode(&body[12..]),
+                    encoding_rs::GBK.encode("(!)aaa: hi").0.to_vec()
+                );
+            }
+            other => panic!("socket={sock} 应收到喊话 SM_HEAR，实收 {other:?}"),
+        };
+        check(&mut rx0, 901); // 含自己
+        check(&mut rx1, 902); // dx=49
+        assert!(
+            rx2.try_recv().is_err(),
+            "dx=50 严格出界（CryCry 是 `< 50`）"
+        );
+        assert!(rx3.try_recv().is_err(), "异图不收");
+    }
+
+    /// **判据⑤**：10s 门（`(now - ShoutMsgTick) > 10*1000`，**严格 >**）：窗口内第二次喊话
+    /// **只**发 `SM_SYSMESSAGE(100)` 提示 `10 - elapsed/1000` 秒，且不更新 `ShoutMsgTick`。
+    ///
+    /// 牙：删掉时间门 / 换成 `>=` / 不发提示 ⇒ 必红。
+    #[test]
+    fn shout_second_within_10s_sends_hint_and_no_hear() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut world = mir2_world::World::new(64, 64);
+        let mut e = mir2_world::Entity::new(0, "aaa".to_string(), 10, 10);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let a = world.add_entity(e);
+        world.clock_ms = 20_000;
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
+
+        let colors = MsgColors {
+            red_f: 0xFF,
+            red_b: 0x38,
+            hear_f: 0,
+            hear_b: 0,
+            whisper_f: 0,
+            whisper_b: 0,
+        };
+        let mut sg = test_session_ground(a);
+        sg.equip.abil.level = 40;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("aaa".into(), sg);
+        let mut ctx = TestChatCtx::new();
+        ctx.can_shout_level = 34;
+
+        {
+            let host = ctx.host(&online, &world, &gates, &colors);
+            handle_say(&host, &mut sessions, "aaa", 901, Some("!hi"));
+        }
+        assert!(matches!(rx0.try_recv(), Ok(SimToGate::SendFrame { .. })));
+        assert_eq!(sessions["aaa"].shout_msg_tick, 20_000);
+
+        world.clock_ms = 29_999; // 9.999s ⇒ 10 - 9 = 1
+        {
+            let host = ctx.host(&online, &world, &gates, &colors);
+            handle_say(&host, &mut sessions, "aaa", 901, Some("!hi again"));
+        }
+        match rx0.try_recv().expect("窗口内应收到 SysMsg 提示") {
+            SimToGate::SendFrame { body, .. } => {
+                assert_eq!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_SYSMESSAGE,
+                    "提示 = SM_SYSMESSAGE(100)"
+                );
+                assert_eq!(
+                    i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                    a,
+                    "SysMsg 的 Recog = 说话者自己 ActorId"
+                );
+                assert_eq!(
+                    u16::from_le_bytes([body[6], body[7]]),
+                    0x38FF,
+                    "Param = MakeWord(RedMsgFColor=0xFF, RedMsgBColor=0x38)"
+                );
+                assert_eq!(
+                    mir2_protocol::edcode::decode(&body[12..]),
+                    encoding_rs::GBK.encode("1秒后才可以再发文字!!!").0.to_vec()
+                );
+            }
+            other => panic!("窗口内第二次喊话必须是提示帧，实收 {other:?}"),
+        }
+        assert!(rx0.try_recv().is_err(), "提示之外不得再发 SM_HEAR");
+        assert_eq!(
+            sessions["aaa"].shout_msg_tick, 20_000,
+            "被 10s 门拒绝时不更新 ShoutMsgTick（oracle 在门后才写）"
+        );
+
+        world.clock_ms = 30_001; // 10.001s ⇒ 过门
+        {
+            let host = ctx.host(&online, &world, &gates, &colors);
+            handle_say(&host, &mut sessions, "aaa", 901, Some("!hi 3"));
+        }
+        assert!(
+            matches!(rx0.try_recv(), Ok(SimToGate::SendFrame { .. })),
+            "10.001s 后允许再喊"
+        );
+        assert_eq!(sessions["aaa"].shout_msg_tick, 30_001);
+    }
+
+    /// **判据⑥**：等级门 `Abil.Level <= CanShoutMsgLevel`（`<=`，不是 `<`）——等于也拒，
+    /// 提示 `CanShoutMsgLevel + 1`。
+    ///
+    /// 牙：把 `<=` 改成 `<` ⇒ level=34 时误放行 ⇒ 必红；提示文案用错参数 ⇒ 必红。
+    #[test]
+    fn shout_level_gate_is_inclusive_at_configured_level() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut world = mir2_world::World::new(64, 64);
+        let mut e = mir2_world::Entity::new(0, "aaa".to_string(), 10, 10);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let a = world.add_entity(e);
+        world.clock_ms = 20_000;
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
+
+        let colors = MsgColors {
+            red_f: 0xFF,
+            red_b: 0x38,
+            hear_f: 0,
+            hear_b: 0,
+            whisper_f: 0,
+            whisper_b: 0,
+        };
+        let mut sg = test_session_ground(a);
+        sg.equip.abil.level = 34; // == CanShoutMsgLevel ⇒ 拒
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("aaa".into(), sg);
+        let mut ctx = TestChatCtx::new();
+        ctx.can_shout_level = 34;
+        {
+            let host = ctx.host(&online, &world, &gates, &colors);
+            handle_say(&host, &mut sessions, "aaa", 901, Some("!hi"));
+        }
+        match rx0.try_recv().expect("等级不足应收到提示") {
+            SimToGate::SendFrame { body, .. } => {
+                assert_eq!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_SYSMESSAGE
+                );
+                assert_eq!(
+                    mir2_protocol::edcode::decode(&body[12..]),
+                    encoding_rs::GBK
+                        .encode("你的等级要在35级以上才能用此功能!!!")
+                        .0
+                        .to_vec()
+                );
+            }
+            other => panic!("应收到等级提示帧，实收 {other:?}"),
+        }
+        assert_eq!(sessions["aaa"].shout_msg_tick, 0, "被等级门拒绝不写 tick");
+
+        sessions.get_mut("aaa").unwrap().equip.abil.level = 35;
+        {
+            let host = ctx.host(&online, &world, &gates, &colors);
+            handle_say(&host, &mut sessions, "aaa", 901, Some("!hi"));
+        }
+        match rx0.try_recv().expect("level=35 > 34 应放行") {
+            SimToGate::SendFrame { body, .. } => assert_eq!(
+                u16::from_le_bytes([body[4], body[5]]),
+                mir2_protocol::messages::SM_HEAR
+            ),
+            other => panic!("应收到 SM_HEAR，实收 {other:?}"),
+        }
+    }
+
+    /// **判据⑦**：`@` 命令仍走脚本支（本切片未接）——**不得**产生任何聊天帧。
+    ///
+    /// 牙：把 `@` 行落进喊话/普通说话 ⇒ 必红。
+    #[test]
+    fn at_command_line_produces_no_chat_frame() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut world = mir2_world::World::new(64, 64);
+        let mut e = mir2_world::Entity::new(0, "aaa".to_string(), 10, 10);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let a = world.add_entity(e);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
+
+        let colors = MsgColors {
+            red_f: 0xFF,
+            red_b: 0x38,
+            hear_f: 0,
+            hear_b: 0,
+            whisper_f: 0,
+            whisper_b: 0,
+        };
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("aaa".into(), test_session_ground(a));
+        let ctx = TestChatCtx::new();
+        let host = ctx.host(&online, &world, &gates, &colors);
+        handle_say(&host, &mut sessions, "aaa", 901, Some("@move 1 1"));
+        assert!(rx0.try_recv().is_err(), "`@` 命令不得被当成聊天广播");
+    }
+
+    /// **判据⑧**：单个 `!`——oracle `sData[1]` 下标越界被 `ProcessSayMsg` 的 catch 吞掉
+    /// ⇒ 无任何输出。
+    ///
+    /// 牙：把它当喊话（空正文）⇒ 会冒出一条 `SM_HEAR` ⇒ 必红。
+    #[test]
+    fn bare_bang_produces_no_frame_like_oracle_index_overflow() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 20_000;
+        let mut e = mir2_world::Entity::new(0, "aaa".to_string(), 10, 10);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let a = world.add_entity(e);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
+
+        let colors = MsgColors {
+            red_f: 0xFF,
+            red_b: 0x38,
+            hear_f: 0,
+            hear_b: 0,
+            whisper_f: 0,
+            whisper_b: 0,
+        };
+        let mut sg = test_session_ground(a);
+        sg.equip.abil.level = 40;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("aaa".into(), sg);
+        let mut ctx = TestChatCtx::new();
+        ctx.can_shout_level = 34;
+        let host = ctx.host(&online, &world, &gates, &colors);
+        handle_say(&host, &mut sessions, "aaa", 901, Some("!"));
+        assert!(rx0.try_recv().is_err(), "单个 `!` 不得产生任何帧");
+        assert_eq!(sessions["aaa"].shout_msg_tick, 0);
+    }
+
+    /// **判据⑨**：`!!` 但 `GroupOwner == 0` ⇒ `SendGroupText` 什么都不发
+    /// （`PlayObject.cs:5190`）——不得退化成喊话/普通说话。
+    ///
+    /// 牙：把无组 `!!` 落喊话 ⇒ 必红。
+    #[test]
+    fn group_say_without_group_sends_nothing() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 20_000;
+        let mut e = mir2_world::Entity::new(0, "aaa".to_string(), 10, 10);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let a = world.add_entity(e);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
+
+        let colors = MsgColors {
+            red_f: 0xFF,
+            red_b: 0x38,
+            hear_f: 0,
+            hear_b: 0,
+            whisper_f: 0,
+            whisper_b: 0,
+        };
+        let mut sg = test_session_ground(a);
+        sg.equip.abil.level = 40;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("aaa".into(), sg);
+        let mut ctx = TestChatCtx::new();
+        ctx.can_shout_level = 34;
+        let host = ctx.host(&online, &world, &gates, &colors);
+        handle_say(&host, &mut sessions, "aaa", 901, Some("!!hello"));
+        assert!(rx0.try_recv().is_err(), "无组 `!!` 必须无帧");
     }
 
     /// **`openmir2-m2-session-lifecycle` ①**：账号级顶号（`SS_CLOSESESSION` ⇒ `KickUser`）：
@@ -24027,6 +24957,7 @@ mod tests {
                 dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
+                shout_msg_tick: 0,
                 bo_soft_close: false,
                 bo_emergency_close: false,
                 is_can_deal: true,
@@ -24201,6 +25132,7 @@ mod tests {
                 dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
+                shout_msg_tick: 0,
                 bo_soft_close: false,
                 bo_emergency_close: false,
                 is_can_deal: true,
@@ -25166,6 +26098,7 @@ mod tests {
                 dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
+                shout_msg_tick: 0,
                 bo_soft_close: false,
                 bo_emergency_close: false,
                 is_can_deal: true,
@@ -29140,6 +30073,7 @@ mod tests {
                 dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
+                shout_msg_tick: 0,
                 bo_soft_close: false,
                 bo_emergency_close: false,
                 is_can_deal: true,
@@ -29317,6 +30251,7 @@ mod tests {
                 dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
+                shout_msg_tick: 0,
                 bo_soft_close: false,
                 bo_emergency_close: false,
                 is_can_deal: true,
@@ -29460,6 +30395,7 @@ mod tests {
                 dec_hunger_point_tick: 0,
                 query_bag_items_tick: None,
                 bo_reconnection: false,
+                shout_msg_tick: 0,
                 bo_soft_close: false,
                 bo_emergency_close: false,
                 is_can_deal: true,

@@ -58,6 +58,13 @@ pub const DEFAULT_GUILD_MEMBER_RANK: &str = "行会成员";
 /// `[Guild] GuildChief`（`GameSvrConf.cs:1855`）——掌门人封号。
 pub const DEFAULT_GUILD_CHIEF: &str = "掌门人";
 
+/// oracle `MessageSettings.YouNeedLevelMsg`（`MessageSettings.cs:258`）——`!` 喊话等级门提示。
+pub const DEFAULT_YOU_NEED_LEVEL_MSG: &str = "你的等级要在{0}级以上才能用此功能!!!";
+/// oracle `MessageSettings.ThisMapDisableSendCyCyMsg`（`MessageSettings.cs:259`）——`boQUIZ` 图提示。
+pub const DEFAULT_THIS_MAP_DISABLE_SEND_CYCY_MSG: &str = "本地图不允许喊话!!!";
+/// oracle `MessageSettings.YouCanSendCyCyLaterMsg`（`MessageSettings.cs:260`）——10s 门提示。
+pub const DEFAULT_YOU_CAN_SEND_CYCY_LATER_MSG: &str = "{0}秒后才可以再发文字!!!";
+
 /// oracle `MessageSettings.RevivalRecoverMsg`（`MessageSettings.cs:226`）——P32 复活成功的
 /// `SysMsg(..., Green, Hint)` 文本（`PlayObject.Message.cs:759`）。缺键回落源码默认。
 pub const DEFAULT_REVIVAL_RECOVER_MSG: &str = "复活戒指生效，体力恢复.";
@@ -86,6 +93,10 @@ pub struct StringConf {
     guild_chief: Option<String>,
     // `[String] GuildMsgPreFix`（`StringConf.cs:38`）。
     guild_msg_prefix: Option<String>,
+    // `[String]` 喊话三键（`StringConf.cs:257-259`）。
+    you_need_level_msg: Option<String>,
+    this_map_disable_send_cycy_msg: Option<String>,
+    you_can_send_cycy_later_msg: Option<String>,
 }
 
 impl StringConf {
@@ -225,6 +236,30 @@ impl StringConf {
             .unwrap_or(DEFAULT_GUILD_MSG_PREFIX)
     }
 
+    /// `[String] YouNeedLevelSendMsg`（`!` 喊话等级门；缺键回落 `MessageSettings.cs:258`）。
+    #[must_use]
+    pub fn you_need_level_msg(&self) -> &str {
+        self.you_need_level_msg
+            .as_deref()
+            .unwrap_or(DEFAULT_YOU_NEED_LEVEL_MSG)
+    }
+
+    /// `[String] ThisMapDisableSendCyCyMsg`（`boQUIZ` 图；缺键回落 `MessageSettings.cs:259`）。
+    #[must_use]
+    pub fn this_map_disable_send_cycy_msg(&self) -> &str {
+        self.this_map_disable_send_cycy_msg
+            .as_deref()
+            .unwrap_or(DEFAULT_THIS_MAP_DISABLE_SEND_CYCY_MSG)
+    }
+
+    /// `[String] YouCanSendCyCyLaterMsg`（10s 门；缺键回落 `MessageSettings.cs:260`）。
+    #[must_use]
+    pub fn you_can_send_cycy_later_msg(&self) -> &str {
+        self.you_can_send_cycy_later_msg
+            .as_deref()
+            .unwrap_or(DEFAULT_YOU_CAN_SEND_CYCY_LATER_MSG)
+    }
+
     /// `[String] RevivalRecoverMsg`（P32 复活提示；缺键回落 `MessageSettings.cs:226`）。
     #[must_use]
     pub fn revival_recover(&self) -> &str {
@@ -319,6 +354,11 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             (Section::String, "YOUPOISONED") => &mut conf.you_poisoned,
             (Section::String, "REVIVALRECOVERMSG") => &mut conf.revival_recover,
             (Section::String, "GUILDMSGPREFIX") => &mut conf.guild_msg_prefix,
+            (Section::String, "YOUNEEDLEVELSENDMSG") => &mut conf.you_need_level_msg,
+            (Section::String, "THISMAPDISABLESENDCYCYMSG") => {
+                &mut conf.this_map_disable_send_cycy_msg
+            }
+            (Section::String, "YOUCANSENDCYCYLATERMSG") => &mut conf.you_can_send_cycy_later_msg,
             (Section::Guild, "GUILDNOTICE") => &mut conf.guild_notice,
             (Section::Guild, "GUILDWAR") => &mut conf.guild_war,
             (Section::Guild, "GUILDALL") => &mut conf.guild_all,
@@ -390,6 +430,34 @@ mod tests {
         assert_eq!(
             c.human_show_name(),
             "%chrname\\%guildname\\%dearname\\%mastername"
+        );
+    }
+    /// 现网 `String.conf:244-246` 的三键（GBK；提示文本里是 `%d` 而不是 `{0}`）。
+    /// 缺键回落 `MessageSettings.cs:258-260` 的源码缺省，**不是空串**。
+    #[test]
+    fn parses_deployed_shout_messages() {
+        let bytes = b"[String]
+YouNeedLevelSendMsg=%d level
+ThisMapDisableSendCyCyMsg=X
+YouCanSendCyCyLaterMsg=%d s
+";
+        let c = parse(bytes);
+        assert_eq!(c.you_need_level_msg(), "%d level");
+        assert_eq!(c.this_map_disable_send_cycy_msg(), "X");
+        assert_eq!(c.you_can_send_cycy_later_msg(), "%d s");
+        let d = parse(
+            b"[String]
+Other=1
+",
+        );
+        assert_eq!(d.you_need_level_msg(), DEFAULT_YOU_NEED_LEVEL_MSG);
+        assert_eq!(
+            d.this_map_disable_send_cycy_msg(),
+            DEFAULT_THIS_MAP_DISABLE_SEND_CYCY_MSG
+        );
+        assert_eq!(
+            d.you_can_send_cycy_later_msg(),
+            DEFAULT_YOU_CAN_SEND_CYCY_LATER_MSG
         );
     }
 }

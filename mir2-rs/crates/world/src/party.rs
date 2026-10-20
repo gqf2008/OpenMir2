@@ -265,7 +265,11 @@ impl World {
 
     /// `PlayObject.cs:5185-5197` 的 `SendGroupText`：把 `prefix + sMsg` 逐成员入 `RM_GROUPMESSAGE`
     /// 队列（优先级 `253`）。`sender` 的 `GroupOwner` 为 `0` ⇒ 什么都不发。
-    fn party_send_group_text(
+    ///
+    /// **宿主接缝**（`openmir2-channel-chat`）：`CM_SAY` 的 `!!` 支（`PlayObject.Chat.cs:167-169`）
+    /// 在 `bins/game-svr` 直接调用本函数，把返回的事件按 [`crate::party::PartyEvent::SysMessage`]
+    /// 编码成 `SM_SYSMESSAGE(100)` 下发；`recog` = 说话者 `ActorId`（oracle `SendMsg(this, …)`）。
+    pub fn party_send_group_text(
         &self,
         sender: i32,
         cfg: &PartyConfig,

@@ -93,6 +93,14 @@ pub struct GateConfig {
     pub group_msg_f_color: u8,
     /// `[Setup] GroupMsgBColor`（`ServerConf.cs:338`，`GameSvrConf.cs:1545` 缺省 `0xFF`）。
     pub group_msg_b_color: u8,
+    /// `[Setup] CryMsgFColor`（`ServerConf.cs:327`，`GameSvrConf.cs:1534` 缺省 `0x00`）——
+    /// `!` 喊话的 `RM_CRY`/`SM_HEAR` 前景色（`PlayObject.Chat.cs:199` 的 `btCryFColor`）。现网 `=0`。
+    pub cry_msg_f_color: u8,
+    /// `[Setup] CryMsgBColor`（`ServerConf.cs:328`，`GameSvrConf.cs:1535` 缺省 `0x97`）——同上，背景色。现网 `=151`。
+    pub cry_msg_b_color: u8,
+    /// `[Setup] CanShoutMsgLevel`（`ServerConf.cs:278`，`GameSvrConf.cs:1455` 缺省 `7`）——
+    /// `!` 喊话的等级门：`Abil.Level <= CanShoutMsgLevel` ⇒ 拒（`PlayObject.Chat.cs:185`）。现网 `=34`。
+    pub can_shout_msg_level: i32,
     /// `[Server] IDSAddr`：登录服务器地址（oracle 是 TcpClient 主动连它，`AuthenticationService.cs:22-34`）。
     pub ids_addr: String,
     /// `[Server] IDSPort`（现网 5600）。
@@ -375,6 +383,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut group_members_max: Option<u8> = None;
     let mut group_msg_f_color: Option<u8> = None;
     let mut group_msg_b_color: Option<u8> = None;
+    let mut cry_msg_f_color: Option<u8> = None;
+    let mut cry_msg_b_color: Option<u8> = None;
+    let mut can_shout_msg_level: Option<i32> = None;
     let mut show_rank_level_name: Option<bool> = None;
     let mut human_max_gold: Option<i32> = None;
     let mut floor_item_can_pick_up_time: Option<i32> = None;
@@ -654,6 +665,27 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                     whisper_msg_b_color = Some(
                         v.parse()
                             .with_context(|| format!("WhisperMsgBColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                // `ServerConf.cs:327-328` 的喊话颜色（`ReadWriteByte`）；缺省 `0x00/0x97`。
+                "CRYMSGFCOLOR" => {
+                    cry_msg_f_color = Some(
+                        v.parse()
+                            .with_context(|| format!("CryMsgFColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "CRYMSGBCOLOR" => {
+                    cry_msg_b_color = Some(
+                        v.parse()
+                            .with_context(|| format!("CryMsgBColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                // `ServerConf.cs:278` 的 `ReadWriteInteger("Setup", "CanShoutMsgLevel", …)`
+                // （`GameSvrConf.cs:1455` 缺省 7）。
+                "CANSHOUTMSGLEVEL" => {
+                    can_shout_msg_level = Some(
+                        v.parse()
+                            .with_context(|| format!("CanShoutMsgLevel 不是合法整数：{v:?}"))?,
                     );
                 }
                 // `ServerConf.cs:225/337/338` 的组队配置（M3⑦-实现 2）。
@@ -1039,6 +1071,11 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         group_members_max: group_members_max.unwrap_or(10),
         group_msg_f_color: group_msg_f_color.unwrap_or(0xC4),
         group_msg_b_color: group_msg_b_color.unwrap_or(0xFF),
+        // oracle 缺省值（`GameSvrConf.cs:1534-1535`）：`CryMsgFColor=0x00` / `CryMsgBColor=0x97`。
+        cry_msg_f_color: cry_msg_f_color.unwrap_or(0x00),
+        cry_msg_b_color: cry_msg_b_color.unwrap_or(0x97),
+        // oracle 缺省（`GameSvrConf.cs:1455`）：`CanShoutMsgLevel=7`。
+        can_shout_msg_level: can_shout_msg_level.unwrap_or(7),
         // oracle 缺省值（`GameSvrConf.cs:1464`）：`[Setup]` 里没写不算错。
         show_rank_level_name: show_rank_level_name.unwrap_or(false),
         // oracle 缺省值（`GameSvrConf.cs:1451/1488/1703/1704/1706/1754`）：`[Setup]` 里没写不算错。
@@ -1629,6 +1666,46 @@ GuildMsgBColor=11
         );
         let c = load(&p).unwrap();
         assert_eq!(c.notice_dir, "Notice2", "NoticeDir 值要 trim");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **`openmir2-channel-chat`**：`[Setup] CryMsgFColor/CryMsgBColor/CanShoutMsgLevel`
+    /// （`ServerConf.cs:278/327-328`；缺省 `0x00/0x97/7`）——`!` 喊话的帧颜色与等级门。
+    ///
+    /// 牙：删掉 `CRYMSGBCOLOR` 或 `CANSHOUTMSGLEVEL` 解析臂 ⇒ 现网值用例必红。
+    #[test]
+    fn parses_setup_cry_colors_and_can_shout_level_with_oracle_defaults() {
+        let dir = std::env::temp_dir().join(format!("gs-setup-cry-{}", std::process::id()));
+        let base = "[Server]
+GateAddr=127.0.0.1
+GatePort=5000
+CheckBlock=1
+                    IDSAddr=127.0.0.1
+IDSPort=5600
+DBAddr=127.0.0.1
+DBPort=6000
+";
+        // 不写 ⇒ oracle 源码缺省。
+        let p = write(&dir, base);
+        let c = load(&p).unwrap();
+        assert_eq!(c.cry_msg_f_color, 0x00, "GameSvrConf.cs:1534 缺省");
+        assert_eq!(c.cry_msg_b_color, 0x97, "GameSvrConf.cs:1535 缺省");
+        assert_eq!(c.can_shout_msg_level, 7, "GameSvrConf.cs:1455 缺省");
+        // 现网 `Server.conf:354/598-599` 的值（34 / 0 / 151）。
+        let p2 = write(
+            &dir,
+            &format!(
+                "{base}[Setup]
+CanShoutMsgLevel=34
+CryMsgFColor=0
+CryMsgBColor=151
+"
+            ),
+        );
+        let c2 = load(&p2).unwrap();
+        assert_eq!(c2.can_shout_msg_level, 34);
+        assert_eq!(c2.cry_msg_f_color, 0);
+        assert_eq!(c2.cry_msg_b_color, 151);
         std::fs::remove_dir_all(&dir).ok();
     }
 
