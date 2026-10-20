@@ -136,7 +136,7 @@ fn main() -> ExitCode {
             };
             let out = match args.iter().position(|a| a == "--out") {
                 Some(i) => PathBuf::from(&args[i + 1]),
-                None => mir2rs_root.join("crates/script/src/gbk_overrides.rs"),
+                None => mir2rs_root.join("crates/encoding/src/gbk_overrides.rs"),
             };
             let table = match gbkoverrides::parse_probe(&probe) {
                 Ok(t) => t,

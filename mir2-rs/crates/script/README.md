@@ -12,7 +12,7 @@ OpenMir2 经典脚本语言的 Rust 1:1 移植。硬约束：客户端冻结、�
 - RNG：`random.rs` 复刻 `System.Random` 带种子构造（.NET 8 CompatPrng / Knuth 减算法），序列与 .NET 逐位一致。
 - 对拍：`script-tool parse-stats`（Rust）与 `tools/script-parity-cs`（C# harness，DispatchProxy 假 NPC，只读引用参照实现，不改动任何 C# 参照代码）。
 - 解码层判据：`tools/gbk-probe`（C#，只读引用参照实现）——`pairs` 导出全部 32256 个 cp936 字节对映射（入库为 `tests/data/cp936-pairs.txt`），`bom` 打印 BOM 与各分支回退字符实测值。
-- 解码层（`textfile.rs` + `gbk_overrides.rs`）：BOM 按 `StringList`（`StreamReader`）实测模型——`EF BB BF`→UTF-8、`FF FE`→UTF-16LE（含 `FF FE 00 00`）、`FE FF`→UTF-16BE、`00 00 FE FF`→UTF-32BE，其余 gb2312；GB2312 解码为 **cp936 精确实现**——`0x80`→U+20AC、`0xFF`→U+F8F5、双字节对差异表（7032 条，由 `script-tool gen-gbk-overrides` 从 .NET 探测表机械生成），并由 `tests/gbk_decode.rs` 对全部 32256 个字节对做穷举门禁。
+- 解码层（`textfile.rs` 委托 `crates/encoding`；覆盖表在 `crates/encoding/src/gbk_overrides.rs`）：BOM 按 `StringList`（`StreamReader`）实测模型——`EF BB BF`→UTF-8、`FF FE`→UTF-16LE（含 `FF FE 00 00`）、`FE FF`→UTF-16BE、`00 00 FE FF`→UTF-32BE，其余 gb2312；GB2312 解码为 **cp936 精确实现**——`0x80`→U+20AC、`0xFF`→U+F8F5、双字节对差异表（7032 条，由 `script-tool gen-gbk-overrides` 从 .NET 探测表机械生成），并由 `tests/gbk_decode.rs` 对全部 32256 个字节对做穷举门禁。
 - 结构摘要门禁（`digest.rs`）：逐文件把 label（含重名改名后的后缀）、`cmd_code`、六个字符串参数、六个数值参数、opname、say 文本压成 FNV-1a 64 指纹，两侧逐文件比对——计数相同但内容不同的缺陷（如命令码位移、字段归属、改名随机序列）同样会变红。
 
 ## 已实证的 C# 怪行为（全部保留，改动即违规）
@@ -71,7 +71,7 @@ cargo test -p mir2-script-tool --test codegen_drift
 4. 脚本参数改 1 个数（计数不变）→ 结构摘要变红（已验证：`a.txt` 的 `give 金币 5→6`，计数四项全同、指纹不同）。
 5. 去掉解析器的 `字段序号-1` 位移 → 结构摘要 115 个文件变红（计数全不变）——证明该门禁确实能看见 B-8 一类缺陷（已验证，随后恢复并复绿）。
 6. **原文摘要门禁上线即抓到真实差异**：`GuildRankNameFilter.txt` 含 cp936 特有映射（`A8BF` → U+E7C8），encoding_rs 会解成 U+FFFD ⇒ 该文件原文指纹两侧不同。已据 .NET 探测表生成覆盖表修正，现 639/639 一致。
-7. GB2312 解码穷举门禁：改 `gbk_overrides.rs` 任一映射或 `textfile.rs` 的状态机 → `cargo test -p mir2-script --test gbk_decode` 必红（32256 个字节对全覆盖）。
+7. GB2312 解码穷举门禁：改 `crates/encoding/src/gbk_overrides.rs` 任一映射或 `crates/encoding/src/cp936.rs` 的状态机 → `cargo test -p mir2-script --test gbk_decode` 必红（32256 个字节对全覆盖）。
 
 ## 后续批次（不在本批范围）
 

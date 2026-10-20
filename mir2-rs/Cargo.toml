@@ -25,6 +25,8 @@ members = [
     # B 线：脚本引擎（crates/script）+ 工具（crates/script-tool）
     "crates/script",
     "crates/script-tool",
+    # 编码核心：.NET cp936 + 两套 BOM 模型（E-1/E-2/E-4 统一入口，零环依赖）
+    "crates/encoding",
     # M2 入口：Rust GameGate/RunGate（客户端 7200 ↔ GameSvr 5000）
     "bins/game-gate",
 ]

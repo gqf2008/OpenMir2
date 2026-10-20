@@ -12,7 +12,7 @@ pub mod codes;
 pub mod cp936;
 pub mod digest;
 pub mod engine;
-pub mod gbk_overrides;
+pub use mir2_encoding::gbk_overrides;
 pub mod handlers;
 pub mod model;
 pub mod parser;

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate `src/cp936_encode.bin` from the checked-in .NET probe table.
 
-Input (唯一输入，已入库): `tests/data/cp936-encode-bmp.txt`
+Input (唯一输入，已入库): `crates/script/tests/data/cp936-encode-bmp.txt`
     Each line is `XXXX<TAB>HEXBYTES` (one non-surrogate BMP code point per line),
     produced by the .NET probe described in
     `mir2-rs/tests/parity/m3/audit-encoding-v2-20261021.md` §1.1:
@@ -15,7 +15,7 @@ Output: `src/cp936_encode.bin`
 
 The table content is not modified here: this script is a mechanical, reproducible
 conversion only. Run it from anywhere:
-    python3 crates/script/tools/gen_cp936.py
+    python3 crates/encoding/tools/gen_cp936.py
 Expected sha256(cp936_encode.bin):
     a1ad4d6d44f62cd90cfa445ee759ba05a5226f3187af873704ef0498d16af867
 """
@@ -32,7 +32,7 @@ EXPECTED_SHA256 = "a1ad4d6d44f62cd90cfa445ee759ba05a5226f3187af873704ef0498d16af
 
 def main() -> int:
     crate = pathlib.Path(__file__).resolve().parents[1]
-    src = crate / "tests" / "data" / "cp936-encode-bmp.txt"
+    src = crate.parent / "script" / "tests" / "data" / "cp936-encode-bmp.txt"
     dst = crate / "src" / "cp936_encode.bin"
 
     table = [SENTINEL] * 0x10000

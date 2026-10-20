@@ -1,0 +1,12 @@
+[package]
+name = "mir2-encoding"
+version = "0.1.0"
+edition = "2021"
+description = "OpenMir2 文本编码核心：.NET cp936/gb2312 编解码 + 两套 BOM 模型（E-1/E-2/E-4 统一入口）"
+publish = false
+
+[dependencies]
+encoding_rs = "0.8"
+
+[lints]
+workspace = true
