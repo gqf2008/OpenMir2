@@ -6,11 +6,14 @@
   `mir2-rs/crates/{protocol,storage}`、`E:/MirServer/**`；不起服务端/客户端/代理；不占端口；不写数据库）
 - 取代：`mir2-rs/tests/parity/m3/audit-encoding-20261020.md`（v1 顶部已标注「已被 v2 取代」）
 - 权威登记（只引用、不重复上报）：`whitelist.md:98` **B-105**、`whitelist.md:78` **A-14**、
-  `whitelist.md:18` **D-2**、`whitelist.md:99` **B-103**、**B-1**（现网 `Server.conf` 的 UTF-8 BOM）
+  `whitelist.md:18` **D-2**、`whitelist.md:99` **B-103**；**B-1**（现网 `Server.conf` 的 UTF-8 BOM）
+  登记在 `docs/M2验收真机报告-20261011-3.md` 与 `docs/M2顺序判据②-对账台账.md §4.7`——
+  **不是** `whitelist.md:33` 的 B-1（那是 `MonGetRandomItems` 的 `itemName` 缺陷，与此无关）
 
 > **本版结论**：仓内仍存在「同一 oracle 语义、多种实现」的分裂，且**编码器**没有任何一处按 cp936
 > 全表实现。影响面是**字节/长度/字符串比较**，不是 UTF-8 直写。**现有部署语料（639 个 Envir 文件、
-> 683 个部署文本文件、46,102 个 DB 文本值）没有命中任何会导致编码分歧的字符**；E-1/E-2 因此是
+> 1357 个部署文本文件、46,102 个 DB 文本值）没有命中任何生产可达的编码分歧字符**
+> （唯一命中 `U+E7C8` 的 `GuildRankNameFilter.txt` 无生产加载器，见 §4.1）；E-1/E-2 因此是
 > 「影响高 / 可达性未证」，不是「现网必现」。
 
 ---
@@ -24,7 +27,7 @@
 | 3 | E-1/E-2 补 **99 个 WHATWG-only 字符**、非 BMP 的 UTF-16 码元回退（`U+1F600 → 3F 3F` vs 1 个 `?`）；给 .NET 探测表生成编码表方案，实跑小程序贴命令与输出 | §1.1、§2.3、E-1、§5.2 | 已实跑 `dotnet 9.0.313` + `System.Text.Encoding.CodePages 8.0.0`，全 BMP 63,488 码点对照：**99 WHATWG-only / 496 cp936-only / 38,907 双不可映射**；命令与输出见 §1.1、§2.3 |
 | 4 | E-7 改成：**ChrName 是 utf8 列，列值绑定解码后的 String；内存 key 用 String + 已登记折叠（D-2/B-103）** | E-7 | 已用 `information_schema` 证实 `characters.ChrName` / `characters_indexes.ChrName` = `utf8mb3_general_ci`；oracle 绑的是 string（`PlayDataStorage.Add.cs:107`、`PlayRecordStorage.cs:267/287`） |
 | 5 | E-3 把 `db-srv/gbk.rs::arrest` 纳入同卡；`route.rs` 定性订正（本地 ASCII 配置，不是主要可达面） | E-3 | 已纳入；`route.rs` 只解析 `AddrTable/SelectID/ServerInfo/MapInfo` 本地行，非线上文本面 |
-| 6 | 分级：E-1/E-2 改「**影响高 / 可达性未证**」；先扫 639 个 Envir 文件与 DB 列给可达性证据 | §4、E-1、E-2 | 已扫 639 Envir + 683 部署文本 + 46,102 DB 值；命中 0 条生产可达面 |
+| 6 | 分级：E-1/E-2 改「**影响高 / 可达性未证**」；先扫 639 个 Envir 文件与 DB 列给可达性证据 | §4、E-1、E-2 | 已扫 639 Envir + 1357 部署文本 + 46,102 DB 值；命中 0 条生产可达面 |
 
 ---
 
@@ -54,7 +57,8 @@ A	41              U+E4C5	FEFE        U+F8F5	FF
 U+FFFF	3F          U+0080	3F          U+00FF	3F
 ```
 
-同一批向量在 Rust `encoding_rs 0.8.35` 下：
+同一批向量在 Rust `encoding_rs 0.8.42` 下（`Cargo.toml` 声明 `"0.8.35"`（caret 约束），
+`Cargo.lock` 实际解析 **0.8.42**；复验在 0.8.42 下重跑同批向量，输出与下表逐字节一致）：
 
 ```text
 U+FFFD  -> 26 23 36 35 35 33 33 3B  ("&#65533;")  err=true
@@ -120,7 +124,8 @@ split('/') of [61 81 2F 62]       -> [a?b]
 
 ### 1.4 Rust 侧探测
 
-- `/e/tmp/enca-v2/encprobe-rust`（`encoding_rs 0.8.35`）：
+- `/e/tmp/enca-v2/encprobe-rust`（`encoding_rs` 声明 `"0.8.35"`、`Cargo.lock` 实际解析 **0.8.42**；
+  下述结果均在 0.8.42 下产出，复验重跑同批向量一致）：
   - 全 32,256 个双字节对与 `crates/script/tests/data/cp936-pairs.txt` 对照；
   - 全 BMP 码点 `encode` 对照；
   - 639 个 Envir 文件逐文件对照（cp936 状态机 vs WHATWG）；
@@ -135,7 +140,7 @@ split('/') of [61 81 2F 62]       -> [a?b]
 | 范围 | 数量 | 方法 |
 |---|---|---|
 | `E:/MirServer/M2GameSvr/Envir/**/*.txt` | **639** | cp936 状态机 vs WHATWG 整文件解码 + 原始字节对/非法序列/BOM/PUA/非 BMP 扫描 |
-| 部署文本（8 个服务目录的 `.txt/.conf/.ini/.cfg`） | **683** | 逐文件 cp936 解码后查「cp936 编码 ≠ WHATWG 编码」字符 |
+| 部署文本（8 个服务目录的 `.txt/.conf/.ini/.cfg`） | **1357**（M2GameSvr 661 / Mir200 673 / DBServer 6 / LoginSrv 7 / LoginGate 2 / SelGate 3 / RunGate 4 / CloudGate 1） | 逐文件按 BOM/`cp936` 解码后查「cp936 编码 ≠ WHATWG 编码」字符 |
 | `mir2_db` / `mir2_data` / `mir2_account` / `mir2_dbsrv6k_mkt_*` | **46,102 个文本值** | 只读 `SELECT DISTINCT`，逐字符对照编码表 |
 
 ---
@@ -220,12 +225,15 @@ U+4C9F..U+4CA3, U+4D13..U+4D19, U+4DAE, U+9FB4..U+9FBB, U+FE10..U+FE19
   - 实测编码器类型 `InternalEncoderBestFitFallback`（§1.1）；不可映射 → `3F`；非 BMP → 每码元 `3F`；
     best-fit 表见 §2.3。
 - **Rust 现状**
-  - 所有生产编码点都是 `encoding_rs::GBK.encode(...)` 且忽略 `had_errors`：
+  - one-shot `encoding_rs::GBK.encode(...)` 且忽略 `had_errors` 的生产编码点：
     `bins/game-svr/src/{downlink.rs:69,npc.rs:65,itemwire.rs:65,main.rs:1275,1345,17481,3136}`、
     `bins/game-gate/src/gbk.rs:22`、`bins/login-gate/src/gbk.rs:22`、`bins/sel-gate/src/gbk.rs:22`、
     `bins/login-srv/src/gbk.rs:21`、`bins/db-srv/src/gbk.rs:187`、
-    `crates/data/src/{guild.rs:639,exps.rs:52}`、`crates/envir/src/conf.rs:217`、
-    `crates/script/src/textfile.rs:157`。
+    `crates/data/src/{guild.rs:639,exps.rs:52}`、`crates/envir/src/conf.rs:217`。
+  - **订正（复验）**：`crates/script/src/textfile.rs:157`（`encode_gb2312`，`:153-160`）**不是**
+    one-shot 点：它逐 `char` 调 `encoding_rs::GBK.encode`、检查 `had_errors` 后写 `?`，不会产生
+    `&#N;`（复验者用临时探针复现）。它仍有 §2.3 的 496/99 类编码差异、归 E-1 判据，但不属于
+    「忽略 `had_errors`」一类，故从上面的 one-shot 清单移除。
   - 后果：① 不可映射 → `&#65533;` 等 5~10 字节（帧长变）；② 99 个 WHATWG-only 字符被编成真实
     字节而 oracle 编 `?`；③ 496 个 cp936-only（含 best-fit/PUA）被编成 `&#N;` 而 oracle 有确定字节；
     ④ 非 BMP 只得 1 个数字引用而 oracle 是 2 个 `?`。
@@ -242,17 +250,21 @@ U+4C9F..U+4CA3, U+4D13..U+4D19, U+4DAE, U+9FB4..U+9FBB, U+FE10..U+FE19
   再把 `had_errors` 简单映射成 `?`（不查表）⇒ `U+00A6/U+F8F5/U+E7C8` 必红。两个红点分别钉住
   「数字引用」与「全表」。
 - **tier / 可达性**：**tier=L**（纯逻辑，构造向量可判）；**影响高 / 可达性未证**（见 §4：
-  639 Envir + 683 部署文件 + 46,102 DB 值中 0 条命中；现网客户端只发合法 GBK）。
+  639 Envir + 1357 部署文件 + 46,102 DB 值中 0 条命中；现网客户端只发合法 GBK）。
 
 ### E-2　cp936 解码 + WHATWG 编码的错配：合法 `A8 BF` 在说词/写回时损坏
 
 - **oracle 依据**
   - `HUtil32.cs:183-205`：`GetString([A8 BF]) = U+E7C8`；`HUtil32.cs:689`：`GetBytes(U+E7C8) = A8 BF`
     ——**可逆**。
-  - 脚本读入走 `StringList.cs:276-291`（cp936）；说词出帧走 `PlayObject.Message.cs:1724`
+  - 脚本读入走 `StringList.cs:276-291`（cp936）；说词出帧走 `PlayObject.Message.cs:1664`
+    （`RM_USERNAME`）与 `:1730`（`RM_HEAR/RM_WHISPER/...` 组）的
     `SendSocket(..., EDCode.EncodeString(processMsg.Msg))`（cp936 编码）。
+    `:1724` **不是** `SendSocket`，而是 `RM_MERCHANTSAY` 分支的 `MakeMessage`。
 - **Rust 现状**
-  - `crates/script/src/textfile.rs:22-66` 的 7032 条覆盖表（**B-105**）把 `A8BF → U+E7C8`（与 oracle 一致）；
+  - `crates/script/src/gbk_overrides.rs` 的 `GBK_OVERRIDES`（7032 条，**B-105**）把
+    `A8BF → U+E7C8`（与 oracle 一致）；`crates/script/src/textfile.rs:22-66` 是解码状态机
+    `decode_gb2312`（`:28` 起），只逐对调用该表，**表本身不在 `textfile.rs`**。
     但生产接点 `bins/game-svr/src/npc.rs:65`（`main.rs:4726` 调用）、`guild.rs:639`、
     `textfile.rs:157` 用 WHATWG 编码：`U+E7C8` 不可映射 → `&#59336;`（说词）或 `3F`（写回）。
   - 本质是**解码器 A（cp936）+ 编码器 B（WHATWG）错配**；WHATWG 自己 decode+encode 对
@@ -356,9 +368,9 @@ U+4C9F..U+4CA3, U+4D13..U+4D19, U+4DAE, U+9FB4..U+9FBB, U+FE10..U+FE19
   经 `game_svr::config::load` 与 `envir::GameSvrConf::from_bytes`，断言「能读 + `[DataBase]`
   `ConnctionString` + `[Server] ServerName`」与 oracle 一致。
 - **牙**：把 `config.rs:333` 改回 `read_to_string` ⇒ GBK/UTF-16 夹具必红；把 `decode_text` 改回严格
-  UTF-8 ⇒ UTF-8 BOM 夹具必红（现网已由 B-1 钉住）。
-- **tier / 可达性**：**tier=L**；影响中。现网 `Server.conf` 是 UTF-8 BOM（B-1），当前部署可读；
-  其它部署用 GBK 时会启动失败。
+  UTF-8 ⇒ UTF-8 BOM 夹具必红（现网已由 B-1 钉住，见 `docs/M2验收真机报告-20261011-3.md`）。
+- **tier / 可达性**：**tier=L**；影响中。现网 `Server.conf` 是 UTF-8 BOM（B-1，见
+  `docs/M2顺序判据②-对账台账.md §4.7`），当前部署可读；其它部署用 GBK 时会启动失败。
 
 ### E-6　`String.conf` / `AddrTable` / `UserLimit` / 三网关配置 / data 列表：裸 GBK、不认 BOM
 
@@ -375,8 +387,10 @@ U+4C9F..U+4CA3, U+4D13..U+4D19, U+4DAE, U+9FB4..U+9FBB, U+FE10..U+FE19
 - **附带（低）**：`strings.rs:187` 与 `data/lists.rs:107,194,229,259,311,390,441` 用
   `str::lines()`，不按孤立 `\r` 切行；`ReadLine` 把 `\r`/`\n`/`\r\n` 都当行终止。639 个 Envir
   文件实测 **0 个孤立 CR**（§4.1），风险低；统一方案一并改用 `split_lines`。
-- **tier / 可达性**：**tier=L**；影响中。683 个部署文本里只有 `Server.conf`/`dbsvr.conf` 有
-  UTF-8 BOM，`String.conf`/`AddrTable`/`UserLimit`/三网关配置均无 BOM ⇒ 当前部署 0 命中。
+- **tier / 可达性**：**tier=L**；影响中。1357 个部署文本里共 4 个 UTF-8 BOM：
+  `M2GameSvr/Server.conf`、`DBServer/dbsvr.conf`、`CloudGate/config.conf`、`Mir200/Server.conf`，
+  均不在 E-6 的加载器面；`String.conf`/`AddrTable`/`UserLimit`/`LoginGate`/`SelGate`/`RunGate`
+  的配置均无 BOM ⇒ 当前部署 0 命中。
 
 ### E-7　DB 名字/键：`ChrName` 是 utf8 列，不要用 MySQL `CONVERT(… USING gbk)`
 
@@ -416,14 +430,17 @@ U+4C9F..U+4CA3, U+4D13..U+4D19, U+4DAE, U+9FB4..U+9FBB, U+FE10..U+FE19
 
 - **oracle 依据**：`GameGate/Services/ClientSession.cs:1060-1101`（`GetString` 后按
   `string.Length` 门控）、`:1203-1204`（拼 `**{account}/{charName}/…` 后 `GetBytes`）。
-- **Rust 现状**：`bins/game-gate/src/login.rs:89`（`gbk::encode`）、`:320`
-  （`encode_len = edcode::encode(&gbk::encode(&text)).len()`）；长度门用 `chars().count()`。
+- **Rust 现状**：生产编码点只有 `bins/game-gate/src/login.rs:89`（`synthetic_login_body` 内的
+  `gbk::encode`）；`PackLength` 由 `main.rs:726` 的 `login_body.len()` 决定（body = `#0` +
+  encode + `!`）。`:320` 在 `#[cfg(test)] mod tests`（`:161` 起）内，是测试里自证
+  `PackLength = encodeLen + 3` 的代码，**不是生产编码点**。长度门用 `chars().count()`。
   畸形 GBK 时：① `[81 20]` C# 是 1 个 `?`，Rust 是 2 个字符 ⇒ 账号/角色名长度门可能一放一拒；
   ② 重编码 `?` vs `&#65533;`，正文与 `PackLength` 都变。
 - **可机判判据**：在既有 oracle golden 登录帧上增加一条「账号含 `0x81 0x20`」的构造帧，断言
   `synthetic_login_body` 全字节与 `PackLength` 等于 oracle；另断言合法登录帧不变（已有 golden）。
-- **牙**：把 `login.rs:89` 或 `:320` 改回 one-shot `encoding_rs::GBK.encode` ⇒ 构造帧的
-  `PackLength` 必红；把 `chars().count()` 改成按字节/按 cp936 字符数（错误方向）⇒ 长度门用例必红。
+- **牙**：把生产点 `login.rs:89` 改回 one-shot `encoding_rs::GBK.encode` ⇒ 构造帧的
+  `PackLength` 必红（`:320` 只是测试自证式，不参与生产路径）；把 `chars().count()` 改成按字节/
+  按 cp936 字符数（错误方向）⇒ 长度门用例必红。
 - **tier / 可达性**：**tier=L**；影响中。冻结客户端只发合法 GBK，当前 golden 已覆盖；触发面是
   第三方/畸形登录帧。
 
@@ -446,16 +463,22 @@ WHATWG_ENCODE_ERR_DISTINCT_CHARS=1 (U+E7C8)
 
 其余 637 个文件在 cp936 与 WHATWG 下逐字节解码相同；无 `0xFF`、无孤立 CR、无 PUA、无非 BMP。
 
-### 4.2 683 个部署文本文件（8 个服务目录的 `.txt/.conf/.ini/.cfg`）
+### 4.2 1357 个部署文本文件（8 个服务目录的 `.txt/.conf/.ini/.cfg`）
 
 ```text
-files scanned 683
-hits 1   E:/MirServer/M2GameSvr/Envir/GuildRankNameFilter.txt  ['U+E7C8']
-BOM: E:/MirServer/M2GameSvr/Server.conf (UTF-8), E:/MirServer/DBServer/dbsvr.conf (UTF-8)
+files scanned 1357   M2GameSvr 661 / Mir200 673 / DBServer 6 / LoginSrv 7 /
+                     LoginGate 2 / SelGate 3 / RunGate 4 / CloudGate 1
+hits 2   E:/MirServer/M2GameSvr/Envir/GuildRankNameFilter.txt  ['U+E7C8']
+         E:/MirServer/Mir200/Envir/GuildRankNameFilter.txt     ['U+E7C8']  # 同内容客户端镜像
+BOM (4，均 UTF-8): M2GameSvr/Server.conf、DBServer/dbsvr.conf、
+                   CloudGate/config.conf、Mir200/Server.conf
 ```
 
-→ `String.conf`/`AddrTable.txt`/`UserLimit.txt`/三网关 `config.conf` **都没有 BOM**；E-6 当前
-部署 0 命中。除 `GuildRankNameFilter.txt` 外没有字符会让 cp936 编码 ≠ WHATWG 编码。
+→ 683 恰是前 6 个目录之和；新增的 CloudGate/Mir200 674 个文件只多出 `CloudGate/config.conf`、
+`Mir200/Server.conf` 两个 BOM 和 `GuildRankNameFilter.txt` 的同一份镜像，**没有引入新的分歧字符**。
+4 个 BOM 全在配置面，E-6 的加载器面（`String.conf`/`AddrTable.txt`/`UserLimit.txt`/三网关
+`config.conf`）**都没有 BOM** ⇒ E-6 当前部署 0 命中。除 `GuildRankNameFilter.txt` 的两份副本外，
+没有字符会让 cp936 编码 ≠ WHATWG 编码。
 
 ### 4.3 DB 文本列（只读 `SELECT DISTINCT`，无写入）
 
@@ -476,7 +499,8 @@ utf8 口径，见 §7-4）。
 
 ### 4.4 可达性结论
 
-- **E-1/E-2**：影响高，**可达性未证**。现有 639 + 683 文件与 46,102 DB 值均未命中；
+- **E-1/E-2**：影响高，**可达性未证**。现有 639 Envir + 1357 部署文件与 46,102 DB 值均未命中
+  **生产可达面**；
   触发条件是畸形/第三方帧、或未来内容引入 cp936-only PUA / 不可映射字符。
 - **E-4**：现网 0 命中（唯一分歧文件不进生产），但自定义 Envir 可触发。
 - **E-5/E-6**：现网 `Server.conf`/`dbsvr.conf` 的 UTF-8 BOM 已被（或恰好被缺省值）处理；
@@ -600,7 +624,9 @@ WHATWG-only、代理码元）→ 单个 `0x3F`。绝不输出 `&#N;`，绝不 pa
   A-14 同族；本版把 E-1/E-2 定位为该近似的**编码侧可观测后果 + 统一修法**，不是新差异类别。
 - **D-2 / B-103**（`whitelist.md:18/99`）：`OrdinalIgnoreCase`/`ToUpper` 折叠。E-7 的内存 key
   明确复用该口径，不另立条目。
-- **B-1**：现网 `Server.conf` 的 UTF-8 BOM 被剥；E-5 是「GBK/UTF-16 配置被严格 UTF-8 拒绝」，
+- **B-1**：现网 `Server.conf` 的 UTF-8 BOM 被剥（登记于 `docs/M2验收真机报告-20261011-3.md`、
+  `docs/M2顺序判据②-对账台账.md §4.7`；**勿引 `whitelist.md:33`**，那里的 B-1 是
+  `MonGetRandomItems` 的 `itemName` 缺陷）；E-5 是「GBK/UTF-16 配置被严格 UTF-8 拒绝」，
   不是 B-1 的重复。
 - **B-104**：639 vs 634 文件集口径；本审计的 639 指 `M2GameSvr/Envir` 递归 `.txt`，与 B-104 一致。
 
