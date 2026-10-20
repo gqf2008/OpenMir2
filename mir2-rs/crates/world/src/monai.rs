@@ -752,9 +752,11 @@ pub enum ClassRunBase {
     /// → `AnimalObject.Run` → `BaseObject.Run`。
     Monster,
     /// 类 `Run` 体内已 `return`（oracle 显式跳过 `base.Run()`）⇒ 调用方**不得**续跑
-    /// `AnimalObject.Run`/`BaseObject.Run`。目前两处：
+    /// `AnimalObject.Run`/`BaseObject.Run`。目前四处：
     /// ① `CowKingMonster.Run` 的 Siege 两支（`CowKingMonster.cs:53/56`）；
-    /// ② `Khazard.Run` 的毒门命中支（`Khazard.cs:32/46`；见 [`khazard_run`] 返回 `true`）。
+    /// ② `Khazard.Run` 的毒门命中支（`Khazard.cs:32/46`；见 [`khazard_run`] 返回 `true`）；
+    /// ③ `ElectronicScolpionMon.Run` 的 `TargetCret == null` 支（`ElectronicScolpionMon.cs:50-53`）；
+    /// ④ `MagicMonObject.Run` 的 `Master == null` 支（`MagicMonObject.cs:40-43`）。
     None,
 }
 
@@ -1094,13 +1096,419 @@ fn tele_monster_run(world: &mut World, actor_id: i32) {
     class_seek_gate(world, actor_id);
 }
 
+// ---------------------------------------------------------------------------
+// **MB-6**（R14/R25/R31；R17 已由 `attacktarget-overrides` 落地）——魔法 / 群攻
+//
+// oracle 逐句锚点（本片在 `b46805058` 上实读）：
+//
+// | 本片 | oracle |
+// | --- | --- |
+// | [`electronic_scolpion_run`] | `ElectronicScolpionMon.cs:33-70` |
+// | [`electronic_scolpion_lighting_attack`] | `ElectronicScolpionMon.cs:15-31` |
+// | [`magic_mon_object_run`] | `MagicMonObject.cs:23-60`（`LightingAttack` 是空函数 `:18-21`） |
+// | [`ron_object_run`] | `RonObject.cs:35-51` |
+// | [`ron_object_around_attack`] | `RonObject.cs:13-33` |
+// | [`ron_attack`] | `BaseObject._Attack`（`BaseObject.Attack.cs:30-66`） |
+// | [`map_base_objects_1`] | `BaseObject.GetMapBaseObjects`（`BaseObject.cs:2808-2837`） |
+//
+// 三类的 `base.Run()` 都是 `MonsterObject.Run`（`: MonsterObject`）⇒ [`ClassRunBase::Monster`]；
+// 但 R14/R25 的 oracle 在 `CanMove()` 门内 `return` 时**跳过** `base.Run()` ⇒ 调用方必须拿
+// [`ClassRunBase::None`]（与 CowKing/Khazard 同口径）。
+//
+// **建模差异（登记，不忽略）**：`GetMapBaseObjects` 的 `CellObjId > 0 && ActorObject`
+// 在 Rust 由 `CellObject` 的 `cell_obj_id/actor_object` 两字段承载（逐字段相同）；`Envir.GetCellInfo`
+// 的「越界/非法 ⇒ cellSuccess=false」由 `MapGrid::get_cell_info` 的 `cell_match + valid()` 承担。
+// ---------------------------------------------------------------------------
+
+/// `BaseObject.GetMapBaseObjects(envir, nX, nY, 1, ref objectList)`（`BaseObject.cs:2808-2837`）。
+///
+/// 3×3 窗口按 **x 外层升序、y 内层升序**扫描；每格按 `ObjList` 顺序追加
+/// `CellObjId > 0 && ActorObject && !Death && !Ghost` 的对象。**自身也在列表里**
+/// （同格对象，未死时），oracle 的 `_Attack(self)` 由 `IsProperTarget` 的
+/// `ActorId` 相等门归零 —— 真机 `RonObject.AroundAttack` 因此会给自己投递一条
+/// `RM_STRUCK(wParam=0)`，照抄。
+#[must_use]
+fn map_base_objects_1(world: &World, map_id: usize, nx: i32, ny: i32) -> Vec<i32> {
+    let Some(map) = world.maps.get(map_id) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for x in (nx - 1)..=(nx + 1) {
+        for y in (ny - 1)..=(ny + 1) {
+            let (cell, success) = map.get_cell_info(x, y);
+            if !success || !cell.is_available() {
+                continue;
+            }
+            for o in &cell.obj_list {
+                if o.cell_obj_id > 0 && o.actor_object {
+                    if let Some(e) = world.entities.get(o.cell_obj_id) {
+                        if !e.death && !e.ghost {
+                            out.push(o.cell_obj_id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `ElectronicScolpionMon.Run`（`ElectronicScolpionMon.cs:33-70`）。
+///
+/// 返回 `true` = oracle 在 `CanMove()` 门内 `return`（`TargetCret == null`，`:50-53`）
+/// ⇒ 调用方必须用 [`ClassRunBase::None`] 跳过 `base.Run()`。
+///
+/// 逐句：`UseMagic = HP < MaxHP / 2`（**严格 `<`**，`ushort` 整数除法）；`(now - SearchEnemyTick) > 1000
+/// && TargetCret == null` ⇒ 刷新 tick + `SearchTarget()`；仍无目标 ⇒ `return`；目标两轴 `<= 2` 且
+/// (`UseMagic || nX == 2 || nY == 2`) 且 `(now - AttackTick) > NextHitTime` ⇒ 刷新 `AttackTick` →
+/// `GetNextDirection` → [`electronic_scolpion_lighting_attack`]。
+fn electronic_scolpion_run(world: &mut World, actor_id: i32) -> bool {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return false;
+    };
+    if !can_move(e) {
+        return false;
+    }
+    // `WAbil.HP < WAbil.MaxHP / 2`（`:37`）——两侧都是 `ushort`，`/2` 为整数除法。
+    let use_magic = e.hp < e.max_hp / 2;
+    let (cx, cy) = (e.x, e.y);
+    let (has_target, enemy_tick) = (e.ai.target_creature.is_some(), e.ai.search_enemy_tick);
+    let (attack_tick, next_hit_time) = (e.ai.attack_tick, e.ai.next_hit_time);
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.use_magic = use_magic;
+    }
+    // `if ((now - SearchEnemyTick) > 1000 && TargetCret == null)`（`:45`）。
+    if now - enemy_tick > 1000 && !has_target {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.search_enemy_tick = now;
+        }
+        search_target(world, actor_id);
+    }
+    // `if (TargetCret == null) return;`（`:50-53`）——**跳过 `base.Run()`**。
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return true;
+    };
+    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+        return false;
+    };
+    let nx = (cx - tx).abs();
+    let ny = (cy - ty).abs();
+    if nx <= 2 && ny <= 2 && (use_magic || nx == 2 || ny == 2) && now - attack_tick > next_hit_time
+    {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.attack_tick = now;
+        }
+        let dir = crate::magic::next_direction(cx, cy, tx, ty);
+        electronic_scolpion_lighting_attack(world, actor_id, dir);
+    }
+    false
+}
+
+/// `ElectronicScolpionMon.LightingAttack(byte nDir)`（`ElectronicScolpionMon.cs:15-31`）。
+///
+/// 取数次序（勿改）：`GetAttackPower(Lo(DC), |Hi(DC)-Lo(DC)|)`（`:18`，**1 抽**）→
+/// `TargetCret.GetMagStruckDamage(this, nPower)`（`BaseObject.Base.cs:808-817`，MAC **1 抽**；
+/// 不死系再加**接收者**的 `UndeadPower`）→ `nDamage > 0` 才：吸血
+/// `WAbil.HP += (ushort)(nDamage / LoByte(WAbil.MP))`（`:22-26`，`ushort` 回绕）→
+/// `TargetCret.StruckDamage(nDamage)` → `SendStruckDelayMsg(RM_REFMESSAGE, nDamage, …, 200)`。
+/// 尾帧 `SendRefMsg(RM_LIGHTING, 1, CurrX, CurrY, TargetCret.ActorId, "")`（`:30`）**无条件**。
+fn electronic_scolpion_lighting_attack(world: &mut World, actor_id: i32, n_dir: u8) {
+    let Some((cx, cy, target_id)) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature.map(|t| (e.x, e.y, t)))
+    else {
+        return;
+    };
+    let dc = world.entities.get(actor_id).map_or(0, |e| e.dc);
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = n_dir;
+    }
+    let lo = i32::from(crate::combat::lo_byte(dc));
+    let hi = i32::from(crate::combat::hi_byte(dc));
+    // `GetAttackPower(HUtil32.LoByte(WAbil.DC), Math.Abs(HUtil32.HiByte(WAbil.DC) - LoByte))`
+    // （`:18`）：`power < 0` 归零后 `Random(power + 1)` ⇒ **恰 1 抽**。
+    let n_power = crate::combat::get_attack_power(&mut world.rng, lo, (hi - lo).abs());
+    // `GetMagStruckDamage` 的 undead 加项读**接收者的** `AddAbil.UndeadPower`，门 `LA_UNDEAD`。
+    let (mac, undead): (u16, Option<i32>) = world.entities.get(target_id).map_or((0, None), |t| {
+        (
+            t.mac,
+            if t.life_attrib == 1 {
+                Some(t.undead_power)
+            } else {
+                None
+            },
+        )
+    });
+    let n_damage = crate::combat::get_mag_struck_damage(&mut world.rng, mac, n_power, undead);
+    if n_damage > 0 {
+        let (mp, hp) = world
+            .entities
+            .get(actor_id)
+            .map_or((0u16, 0u16), |e| (e.mp, e.hp));
+        // `int btGetBackHp = HUtil32.LoByte(WAbil.MP); if (btGetBackHp != 0) WAbil.HP += (ushort)(...)`。
+        let back = i32::from(crate::combat::lo_byte(i32::from(mp)));
+        if back != 0 {
+            let heal = (n_damage / back) as u16;
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.hp = hp.wrapping_add(heal);
+            }
+        }
+        // `TargetCret.StruckDamage(nDamage)`：倍率 + `DamageHealth` + 玩家耐久（**不发 RM_STRUCK**）。
+        let _ = class_struck_apply(world, actor_id, target_id, n_damage, n_power);
+        // `TargetCret.SendStruckDelayMsg(RM_REFMESSAGE, nDamage, …, ActorId, "", 200)`（`:28`）。
+        world.send_struck_delay_msg_refmessage(
+            target_id,
+            actor_id,
+            n_damage,
+            ATTACK_STRUCK_DELAY_MS,
+        );
+    }
+    // `SendRefMsg(RM_LIGHTING, 1, CurrX, CurrY, TargetCret.ActorId, "")`（`:30`）——**无条件**。
+    send_ref_msg_with_target(
+        world,
+        actor_id,
+        RM_LIGHTING,
+        1,
+        cx,
+        cy,
+        target_id,
+        Some(target_id),
+    );
+}
+
+/// `MagicMonObject.Run`（`MagicMonObject.cs:23-60`）。
+///
+/// 返回 `true` = oracle 在 `CanMove()` 门内 `return`（`Master == null`，`:40-43`）⇒
+/// [`ClassRunBase::None`]。
+///
+/// 与 R14 的差异逐句：目标判据是 **`Master`**（不是 `TargetCret`）；`(now - SearchEnemyTick) > 1000
+/// && TargetCret == null` 仍按 `TargetCret` 索敌（照抄）；距离窗 `<= 5`、或门 `nX == 5 || nY == 5`；
+/// 到点分支里的 `LightingAttack(nAttackDir)` 是**空函数**（`:18-21`）⇒ 只刷新 `AttackTick`，
+/// 不抽数、不产帧、不写其它字段。
+fn magic_mon_object_run(world: &mut World, actor_id: i32) -> bool {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return false;
+    };
+    if !can_move(e) {
+        return false;
+    }
+    let use_magic = e.hp < e.max_hp / 2;
+    let (cx, cy) = (e.x, e.y);
+    let (has_target, enemy_tick) = (e.ai.target_creature.is_some(), e.ai.search_enemy_tick);
+    let (attack_tick, next_hit_time) = (e.ai.attack_tick, e.ai.next_hit_time);
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.use_magic = use_magic;
+    }
+    if now - enemy_tick > 1000 && !has_target {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.search_enemy_tick = now;
+        }
+        search_target(world, actor_id);
+    }
+    // `if (Master == null) return;`（`:40-43`）——**跳过 `base.Run()`**。
+    let Some(master_id) = world.entities.get(actor_id).and_then(|e| e.master) else {
+        return true;
+    };
+    let Some((mx, my)) = world.entities.get(master_id).map(|m| (m.x, m.y)) else {
+        return true;
+    };
+    let nx = (cx - mx).abs();
+    let ny = (cy - my).abs();
+    if nx <= 5 && ny <= 5 && (use_magic || nx == 5 || ny == 5) && now - attack_tick > next_hit_time
+    {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.attack_tick = now;
+        }
+        // `int nAttackDir = GetNextDirection(...); LightingAttack(nAttackDir);`（`:53-54`）——
+        // `LightingAttack` 是**空函数**（`:18-21`）：方向计算无副作用、不抽数 ⇒ 不落任何状态。
+    }
+    false
+}
+
+/// `RonObject.Run`（`RonObject.cs:35-51`）。`base.Run()` = `MonsterObject.Run` ⇒ 恒
+/// [`ClassRunBase::Monster`]。
+///
+/// 索敌门与 [`class_seek_gate`] 逐字相同（`> 8000 || (> 1000 && TargetCret == null)`）；
+/// 有目标且两轴 **`< 6`**（严格）且 `(now - AttackTick) > NextHitTime` ⇒ 刷新 `AttackTick` →
+/// [`ron_object_around_attack`]。
+fn ron_object_run(world: &mut World, actor_id: i32) {
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !can_move(e) {
+        return;
+    }
+    class_seek_gate(world, actor_id);
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    let Some(target_id) = e.ai.target_creature else {
+        return;
+    };
+    let (cx, cy) = (e.x, e.y);
+    let (attack_tick, next_hit_time) = (e.ai.attack_tick, e.ai.next_hit_time);
+    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+        return;
+    };
+    if (cx - tx).abs() < 6 && (cy - ty).abs() < 6 && now - attack_tick > next_hit_time {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.attack_tick = now;
+        }
+        ron_object_around_attack(world, actor_id);
+    }
+}
+
+/// `RonObject.AroundAttack()`（`RonObject.cs:13-33`）——群攻。
+///
+/// 顺序（勿改）：`GetAttackDir(TargetCret, ref attDir)`（不邻接 ⇒ `attDir` 保持 **0**）→ `Dir = attDir`
+/// → `GetMapBaseObjects(Envir, CurrX, CurrY, 1)`（3×3，含自身）→ **列表非空**才抽一次
+/// `GetBaseAttackPoewr()` → 从尾向头逐个 [`ron_attack`]（= oracle 的倒序 `for` + `RemoveAt`）→
+/// 尾帧 `SendRefMsg(RM_HIT, Dir, CurrX, CurrY, 0, "")`（**无条件**，列表空也发）。
+fn ron_object_around_attack(world: &mut World, actor_id: i32) {
+    let Some(target_id) = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.ai.target_creature)
+    else {
+        return;
+    };
+    let att_dir = get_attack_dir(world, actor_id, target_id).unwrap_or(0);
+    let Some((cx, cy, map_id)) = world.entities.get(actor_id).map(|e| (e.x, e.y, e.map_id)) else {
+        return;
+    };
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = att_dir;
+    }
+    let list = map_base_objects_1(world, map_id, cx, cy);
+    if !list.is_empty() {
+        let dc = world.entities.get(actor_id).map_or(0, |e| e.dc);
+        // `int nPower = GetBaseAttackPoewr();`（`BaseObject.Attack.cs:25-28`）——**一次**，全目标共用。
+        let n_power = crate::combat::get_base_attack_power(&mut world.rng, dc);
+        // `for (int i = objectList.Count - 1; i >= 0; i--) { _Attack(nPower, objectList[i]); RemoveAt(i); }`
+        // ⇒ 倒序访问，每项恰一次。
+        for tid in list.into_iter().rev() {
+            ron_attack(world, actor_id, tid, n_power);
+        }
+    }
+    let (dir, x, y) = world
+        .entities
+        .get(actor_id)
+        .map_or((0u8, 0, 0), |e| (e.ai.dir, e.x, e.y));
+    send_ref_msg(world, actor_id, RM_HIT, i32::from(dir), x, y, 0);
+}
+
+/// `BaseObject._Attack(int nPower, IActor targetObject)`（`BaseObject.Attack.cs:30-66`），
+/// 攻方攻击力**由调用方预先抽好**（`RonObject` 一次 `GetBaseAttackPoewr` 打全列表）。
+///
+/// 取数与副作用次序（勿改）：
+/// 1. `IsProperTarget(target)` 为假 ⇒ `nPower = 0`（不抽）；
+/// 2. `target.HitPoint > 0` ⇒ `HitPoint < RandomByte(target.SpeedPoint)` 时 `nPower = 0`（**1 抽**）；
+/// 3. `nPower > 0` ⇒ `GetHitStruckDamage`（AC 1~2 抽）→ `> 0` 时 `StruckDamage`（倍率 + 掉血 +
+///    玩家目标耐久抽）→ `SendStruckDelayMsg(RM_REFMESSAGE, nPower, …, 200)`；
+/// 4. `target.Race > Play` ⇒ `target.SendMsg(target, RM_STRUCK, nPower, HP, MaxHP, ActorId)`
+///    （本骨架折叠为 `SetLastHiter` + `pending_struck` 入队，与 [`World::attack_once`] 同口径；
+///    `CloneMonster` 的 `Operate` 覆写除外）。
+fn ron_attack(world: &mut World, actor_id: i32, target_id: i32, n_power: i32) {
+    let Some(attacker) = world.entities.get(actor_id).cloned() else {
+        return;
+    };
+    let Some(mut target) = world.entities.get(target_id).cloned() else {
+        return;
+    };
+    let power = n_power;
+    let mut n_power = n_power;
+    let mut hit = false;
+    if is_proper_target_grouped_direct(&attacker, &target, &[]) {
+        // `if (targetObject.HitPoint > 0) { if (HitPoint < RandomByte(targetObject.SpeedPoint)) nPower = 0; }`
+        if target.hit_point > 0 && attacker.hit_point < world.rng.random_byte(target.speed_point) {
+            n_power = 0;
+        } else {
+            hit = true;
+        }
+    } else {
+        n_power = 0;
+    }
+    let mut damage = 0u16;
+    let mut struck_power = 0u16;
+    let mut killed = false;
+    if n_power > 0 {
+        let reduced =
+            crate::combat::get_hit_struck_damage(&mut world.rng, &target, &attacker, n_power);
+        if reduced > 0 {
+            let last_hitter = current_last_hitter(world, target_id);
+            let cfg = world.combat_config;
+            let (d, k) = crate::combat::struck_damage_apply(
+                &mut world.rng,
+                &mut target,
+                i32::from(reduced),
+                last_hitter,
+                &cfg,
+            );
+            damage = d;
+            killed = k;
+            struck_power = reduced;
+            // 目标 `StruckDamage` 在克隆上跑（玩家目标含耐久段）⇒ 回写 `hp`/`use_items`。
+            if let Some(e) = world.entities.get_mut(target_id) {
+                e.hp = target.hp;
+                e.use_items = target.use_items;
+            }
+            // `targetObject.SendStruckDelayMsg(RM_REFMESSAGE, nPower, …, 200)`（`:57`）。
+            world.send_struck_delay_msg_refmessage(
+                target_id,
+                actor_id,
+                i32::from(reduced),
+                ATTACK_STRUCK_DELAY_MS,
+            );
+        }
+    }
+    world.pending_ai_attacks.push((
+        actor_id,
+        target_id,
+        crate::combat::AttackOutcome {
+            power,
+            hit,
+            damage,
+            struck_power,
+            killed,
+            target_hp_after: target.hp,
+        },
+    ));
+    // `if (targetObject.Race > ActorRace.Play) targetObject.SendMsg(targetObject, RM_STRUCK, nPower, …)`
+    // （`:61-64`）：目标自己的 `base.Run()` 出队（`AnimalObject.Operate`）。折叠口径同
+    // [`World::attack_once`]：`CloneMonster` 不写 `LastHiter`（其 `Operate` 覆写恒 `return false`）。
+    if target.race > ACTOR_RACE_PLAY {
+        let now = world.clock_ms;
+        let is_clone = target.race == crate::special_monster::RACE_CLONE_MONSTER;
+        if let Some(e) = world.entities.get_mut(target_id) {
+            if !is_clone {
+                e.set_last_hiter(actor_id, now);
+            }
+            if !e.ghost {
+                e.ai.pending_struck.push(crate::entity::StruckMsg {
+                    hiter: actor_id,
+                    w_param: i32::from(struck_power),
+                });
+            }
+        }
+    }
+}
+
 /// 专用怪 `Run` 覆写的分派（`CreateMonster` 的 race → 类映射）。
 ///
 /// 已接：MB-1 的 `StickMonster`(85)/`DigOutZombi`(95)/`ScultureMonster`(101)/
 /// `BigHeartMonster`(115)；MB-2 的 `ChickenDeer`(52)/`DualAxeMonster`(87，93/104 继承)/
 /// `LightingZombi`(94)/`ZilKinZombi`(96)；MB-3 的 `CentipedeKing`(107)/`GasMoth`(105)/
 /// `ScultureKing`(102)/`ExplosionSpider`(117)；MB-4 的 `CowKingMonster`(92)；
-/// MB-5 的 `TeleMonster`(203)/`Khazard`(206)/`GreenMonster`(208)/`RedMonster`(209)/`FrostTiger`(210)。
+/// MB-5 的 `TeleMonster`(203)/`Khazard`(206)/`GreenMonster`(208)/`RedMonster`(209)/`FrostTiger`(210)；
+/// MB-6 的 `ElectronicScolpionMon`(200)/`MagicMonObject`(133)/`RonObject`(131)。
 ///
 /// 返回 `None` = 非上述类，调用方继续走通用 [`monster_run`]；否则按 [`ClassRunBase`]
 /// 决定 oracle `base.Run()` 的落点。
@@ -1205,6 +1613,28 @@ pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBas
         // `FrostTiger`（210）：透明 180s / 有目标清计时器。
         210 => {
             frost_tiger_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        // **MB-6**：`ElectronicScolpionMon`（200）。`CanMove()` 门内 `TargetCret == null`
+        // ⇒ oracle `return`（跳过 `base.Run()`）⇒ [`ClassRunBase::None`]。
+        200 => {
+            if electronic_scolpion_run(world, actor_id) {
+                Some(ClassRunBase::None)
+            } else {
+                Some(ClassRunBase::Monster)
+            }
+        }
+        // `MagicMonObject`（133）：`CanMove()` 门内 `Master == null` ⇒ oracle `return`。
+        133 => {
+            if magic_mon_object_run(world, actor_id) {
+                Some(ClassRunBase::None)
+            } else {
+                Some(ClassRunBase::Monster)
+            }
+        }
+        // `RonObject`（131）：`Run` 恒落到 `base.Run()`（`MonsterObject.Run`）。
+        131 => {
+            ron_object_run(world, actor_id);
             Some(ClassRunBase::Monster)
         }
         _ => None,
@@ -11088,6 +11518,466 @@ mod tests {
             "过门必刷新 SearchEnemyTick"
         );
         assert_eq!(e.ai.target_creature, Some(tid), "SearchTarget 选中玩家");
+    }
+
+    // ------------------------------------------------------------------
+    // **MB-6**（R14/R25/R31）——构造级用例。
+    // ------------------------------------------------------------------
+
+    /// 找一个「先抽 `Random(power+1)`、再抽 `RandomByte(sp)` 指定是否非 0」的种子。
+    fn mb6_seed_power_then_byte(power: i32, sp: u8, want_nonzero: bool) -> i32 {
+        (0..200_000)
+            .find(|seed| {
+                let mut r = RandomNumber::with_seed(*seed);
+                let _ = r.random_below(power + 1);
+                (r.random_byte(sp) != 0) == want_nonzero
+            })
+            .expect("seed")
+    }
+
+    /// R14①：`CanMove()` 门内 `TargetCret == null` ⇒ oracle `return`（跳过 `base.Run()`）
+    /// ⇒ [`ClassRunBase::None`]；`return` 的位置在 `SearchTarget()` **之后**（照抄）——
+    /// 索敌认领到目标时**不得**再早退。
+    ///
+    /// 牙：把 `return true` 挪到索敌之前（或少写 `Some(ClassRunBase::None)`）⇒ 段 1 红；
+    /// 把 `return true` 删掉 ⇒ 段 1/2 红。
+    #[test]
+    fn mb6_r14_no_target_returns_none_but_after_search() {
+        // 段 1：无可视目标、>1000ms 门 ⇒ SearchTarget 空手 ⇒ None。
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 200, 10, 10);
+        w.clock_ms = 100_000;
+        w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000 - 1001;
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::None));
+        assert_eq!(
+            w.entities.get(mid).unwrap().ai.search_enemy_tick,
+            100_000,
+            ">1000ms 门刷新 SearchEnemyTick"
+        );
+        // 段 2：门未到（`> 1000` 严格）⇒ 不索敌、仍 None。
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 200, 10, 10);
+        w.clock_ms = 100_000;
+        w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000 - 1000;
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::None));
+        assert_eq!(
+            w.entities.get(mid).unwrap().ai.search_enemy_tick,
+            100_000 - 1000,
+            "`> 1000` 严格 ⇒ 恰 1000ms 不刷新"
+        );
+        // 段 3：索敌认领到目标 ⇒ `TargetCret != null` ⇒ **不早退**（None→Monster）。
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 200, 10, 10);
+        let p = mb1_players(&mut w, 20, 20); // 距离 >2 ⇒ 不攻击
+        mb1_see(&mut w, mid, p);
+        w.clock_ms = 100_000;
+        w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000 - 1001;
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert_eq!(
+            w.entities.get(mid).unwrap().ai.target_creature,
+            Some(p),
+            "SearchTarget 认领玩家"
+        );
+    }
+
+    /// R14②：`UseMagic = HP < MaxHP / 2`（严格 `<`、`ushort` 整数除法）；攻击门 =
+    /// 两轴 `<= 2` 且 (`UseMagic || nX == 2 || nY == 2`) 且 `(now - AttackTick) > NextHitTime`。
+    /// `LightingAttack` 取数序 = `Random(|Hi(DC)-Lo(DC)|+1)`（`:18`）→ MAC `Random(|Hi(MAC)-Lo(MAC)|+1)`
+    /// （`GetMagStruckDamage`）；吸血 = `nDamage / LoByte(MP)`（`ushort` 回绕）；尾帧 `RM_LIGHTING`
+    /// **无条件**；`RM_REFMESSAGE` 200ms。
+    ///
+    /// 牙：`<` 改成 `<=` ⇒ 段 1 红；删 `nX == 2 || nY == 2` ⇒ 段 3 红；把吸血放到 `StruckDamage`
+    /// 之后 ⇒ 吸血值不变（该值只依赖 nDamage/MP）但把 `btGetBackHp != 0` 门删掉会除零 panic ⇒ 段 3 红。
+    #[test]
+    fn mb6_r14_use_magic_threshold_and_lighting_attack_rng() {
+        // 段 1：HP == MaxHP/2 ⇒ UseMagic=false；HP == MaxHP/2 - 1 ⇒ true。
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 200, 10, 10); // MaxHP = 200
+        w.clock_ms = 100_000;
+        w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000;
+        w.entities.get_mut(mid).unwrap().hp = 100;
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::None));
+        assert!(
+            !w.entities.get(mid).unwrap().use_magic,
+            "HP == Max/2 ⇒ 不用魔法"
+        );
+        w.entities.get_mut(mid).unwrap().hp = 99;
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::None));
+        assert!(
+            w.entities.get(mid).unwrap().use_magic,
+            "HP < Max/2 ⇒ 用魔法"
+        );
+
+        // 段 2：UseMagic=false 且两轴 (1,0) ⇒ 攻击门不成立 ⇒ 零抽、零帧。
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 200, 10, 10);
+        w.entities.get_mut(mid).unwrap().hp = 100; // UseMagic=false
+        let t = monster(&mut w, 11, 10);
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(t);
+        w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000;
+        w.entities.get_mut(mid).unwrap().ai.attack_tick = 0;
+        w.clock_ms = 100_000;
+        w.rng = RandomNumber::with_seed(424242);
+        let mut probe = RandomNumber::with_seed(424242);
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert_eq!(w.rng.random(), probe.random(), "两轴 (1,0) ⇒ 零抽");
+        assert_eq!(
+            w.entities.get(mid).unwrap().ai.attack_tick,
+            0,
+            "不刷新 AttackTick"
+        );
+        assert!(w.pending_monster_ref_msgs.is_empty(), "不产帧");
+        assert!(w.pending_ai_attacks.is_empty(), "不结算");
+
+        // 段 3：nX == 2（UseMagic=false）⇒ 攻击；抽数序与数值逐项钉住。
+        let mut w = World::new(32, 32);
+        w.enable_refmessage_delay();
+        let mid = mb1_monster(&mut w, 200, 10, 10);
+        w.entities.get_mut(mid).unwrap().hp = 100; // UseMagic=false
+        w.entities.get_mut(mid).unwrap().dc = (9 << 8) | 5; // Lo=5, Hi=9 ⇒ Random(5)
+        w.entities.get_mut(mid).unwrap().mp = 2; // LoByte(MP)=2
+        let t = monster(&mut w, 12, 10);
+        w.entities.get_mut(t).unwrap().hp = 500;
+        w.entities.get_mut(t).unwrap().max_hp = 500;
+        w.entities.get_mut(t).unwrap().mac = 0; // Random(|0-0|+1)
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(t);
+        w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000;
+        w.entities.get_mut(mid).unwrap().ai.attack_tick = 0;
+        w.clock_ms = 100_000;
+        let seed = 20261020;
+        w.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        let draw = probe.random_below(5);
+        let _mac = probe.random_below(1);
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert_eq!(
+            w.rng.random(),
+            probe.random(),
+            "Random(5) → MAC Random(1)（恰好两次）"
+        );
+        let n_power = 5 + draw;
+        assert_eq!(
+            w.entities.get(t).unwrap().hp,
+            500 - n_power as u16,
+            "GetMagStruckDamage(MAC=0) ⇒ nDamage = nPower"
+        );
+        assert_eq!(
+            w.entities.get(mid).unwrap().hp,
+            100 + (n_power / 2) as u16,
+            "吸血 = nDamage / LoByte(MP=2)"
+        );
+        let lit = w
+            .pending_monster_ref_msgs
+            .iter()
+            .find(|m| m.ident == RM_LIGHTING)
+            .expect("RM_LIGHTING 帧");
+        assert_eq!(lit.w_param, 1);
+        assert_eq!((lit.n_param1, lit.n_param2), (10, 10), "CurrX/CurrY");
+        assert_eq!(lit.n_param3, t);
+        assert_eq!((lit.target_x, lit.target_y), (12, 10), "尾 = 目标坐标快照");
+        assert_eq!(lit.dir, DIR_RIGHT);
+        assert_eq!(w.pending_ai_attacks.len(), 1);
+        assert_eq!(w.pending_ai_attacks[0].2.power, n_power);
+        assert_eq!(w.pending_ai_attacks[0].2.struck_power, n_power as u16);
+        let msg = w
+            .self_delay_msgs
+            .peek(t)
+            .expect("200ms RM_REFMESSAGE 入队（受击者队列）");
+        assert_eq!(msg.ident, crate::slave::RM_REFMESSAGE);
+        assert_eq!(msg.w_param, n_power, "wParam = nDamage");
+        assert_eq!(msg.deliver_at_ms, 100_200, "200ms");
+        assert_eq!(msg.n_param3, mid, "nParam3 = 攻击者 ActorId");
+
+        // 段 4：UseMagic=true（HP < Max/2）且两轴 (1,1) ⇒ 走魔法（或门左支）。
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 200, 10, 10);
+        w.entities.get_mut(mid).unwrap().hp = 99; // UseMagic=true
+        w.entities.get_mut(mid).unwrap().dc = 0;
+        let t = monster(&mut w, 11, 11);
+        w.entities.get_mut(t).unwrap().hp = 500;
+        w.entities.get_mut(t).unwrap().max_hp = 500;
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(t);
+        w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000;
+        w.entities.get_mut(mid).unwrap().ai.attack_tick = 0;
+        w.clock_ms = 100_000;
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert!(
+            w.pending_monster_ref_msgs
+                .iter()
+                .any(|m| m.ident == RM_LIGHTING),
+            "UseMagic 支攻击"
+        );
+        assert_eq!(w.entities.get(mid).unwrap().ai.attack_tick, 100_000);
+    }
+
+    /// R25：`CanMove()` 门内 `Master == null` ⇒ `return`（跳过 `base.Run()`）⇒ `None`；
+    /// **索敌先于 `Master` 门**（照抄 `:35-43`）。有 Master 时：距离窗 `<= 5`、或门 `nX == 5 ||
+    /// nY == 5`、到点只刷新 `AttackTick`——`LightingAttack` 是**空函数**（`:18-21`）⇒
+    /// 零抽、零帧、零结算。
+    ///
+    /// 牙：把 `Master == null` 的早退删掉 ⇒ 段 1 红；把距离窗 `5` 改 `4` ⇒ 段 3 红。
+    #[test]
+    fn mb6_r25_master_gate_skips_base_and_empty_lighting_attack() {
+        // 段 1：无 Master；>1000ms 门索敌认领玩家后仍返回 None。
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 133, 10, 10);
+        let p = mb1_players(&mut w, 20, 20);
+        mb1_see(&mut w, mid, p);
+        w.clock_ms = 100_000;
+        w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000 - 1001;
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::None));
+        assert_eq!(
+            w.entities.get(mid).unwrap().ai.target_creature,
+            Some(p),
+            "索敌在 Master 门之前（照抄 oracle 次序）"
+        );
+
+        // 段 2：Master 存在、两轴 (5,0)、UseMagic=false ⇒ 到点 ⇒ 只刷新 AttackTick。
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 133, 10, 10);
+        w.entities.get_mut(mid).unwrap().hp = 100; // UseMagic=false（Max=200）
+        let master = monster(&mut w, 15, 10);
+        w.entities.get_mut(mid).unwrap().master = Some(master);
+        w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000;
+        w.entities.get_mut(mid).unwrap().ai.attack_tick = 0;
+        w.clock_ms = 100_000;
+        w.rng = RandomNumber::with_seed(7777);
+        let mut probe = RandomNumber::with_seed(7777);
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert_eq!(
+            w.entities.get(mid).unwrap().ai.attack_tick,
+            100_000,
+            "nX == 5 或门 ⇒ 刷新 AttackTick"
+        );
+        assert_eq!(w.rng.random(), probe.random(), "空 LightingAttack 零抽");
+        assert!(w.pending_monster_ref_msgs.is_empty(), "零帧");
+        assert!(w.pending_ai_attacks.is_empty(), "零结算");
+        assert_eq!(w.entities.get(mid).unwrap().ai.dir, 0, "空函数不写 Dir");
+
+        // 段 3：Master 两轴 (4,0) 且 UseMagic=false ⇒ 门不成立 ⇒ AttackTick 不变。
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 133, 10, 10);
+        w.entities.get_mut(mid).unwrap().hp = 100;
+        let master = monster(&mut w, 14, 10);
+        w.entities.get_mut(mid).unwrap().master = Some(master);
+        w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000;
+        w.entities.get_mut(mid).unwrap().ai.attack_tick = 0;
+        w.clock_ms = 100_000;
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert_eq!(
+            w.entities.get(mid).unwrap().ai.attack_tick,
+            0,
+            "nX == 4 不触发"
+        );
+
+        // 段 4：UseMagic=true 且两轴 (1,0) ⇒ 触发（只刷新 AttackTick）。
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 133, 10, 10);
+        w.entities.get_mut(mid).unwrap().hp = 99;
+        let master = monster(&mut w, 11, 10);
+        w.entities.get_mut(mid).unwrap().master = Some(master);
+        w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000;
+        w.entities.get_mut(mid).unwrap().ai.attack_tick = 0;
+        w.clock_ms = 100_000;
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert_eq!(w.entities.get(mid).unwrap().ai.attack_tick, 100_000);
+    }
+
+    /// R31①：`GetMapBaseObjects(envir, x, y, 1)` = 3×3、**x 外层升序 / y 内层升序**、
+    /// 逐格按 `ObjList` 序、含自身；`AroundAttack` 倒序逐个 `_Attack`；攻击力
+    /// `GetBaseAttackPoewr()` **只抽一次**（全目标共用）；`RM_HIT` 尾帧无条件。
+    ///
+    /// 牙：把 `into_iter().rev()` 改成正序 ⇒ 目标顺序断言红；把攻击力抽数挪进循环 ⇒ 抽数账本红；
+    /// 把 3×3 改成 2×2 ⇒ 对角目标不在列表 ⇒ 顺序/hp 断言红。
+    #[test]
+    fn mb6_r31_around_attack_order_single_power_draw_and_self_struck() {
+        let mut w = World::new(32, 32);
+        w.enable_refmessage_delay();
+        let mid = mb1_monster(&mut w, 131, 10, 10);
+        w.entities.get_mut(mid).unwrap().dc = (9 << 8) | 5; // Lo=5, Hi=9 ⇒ Random(5)
+        assert!(w.enter_world(mid));
+        let p1 = mb1_players(&mut w, 9, 9); // 对角：枚举序第 1
+        let p2 = mb1_players(&mut w, 11, 11); // 对角：枚举序最后
+        for t in [p1, p2] {
+            w.entities.get_mut(t).unwrap().hp = 500;
+            w.entities.get_mut(t).unwrap().max_hp = 500;
+            assert!(w.enter_world(t));
+        }
+        {
+            let e = w.entities.get_mut(mid).unwrap();
+            e.ai.target_creature = Some(p1); // 邻接 ⇒ attDir = UP_LEFT
+            e.ai.search_enemy_tick = 100_000;
+            e.ai.attack_tick = 0;
+        }
+        w.clock_ms = 100_000;
+        let seed = 31337;
+        w.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        let draw = probe.random_below(5); // GetBaseAttackPoewr：一次
+        for _ in 0..2 {
+            // p1/p2 各一次 `GetHitStruckDamage`（AC=0 ⇒ `Random(1)`）+ 一次
+            // `PlayObject.StruckDamage` 的耐久骰 `Random(10)`；自身 improper ⇒ 不抽。
+            let _ = probe.random_below(1);
+            let _ = probe.random_below(10);
+        }
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert_eq!(
+            w.rng.random(),
+            probe.random(),
+            "1 次攻击力 + 2×(护甲 1 + 玩家耐久 1)；自身 improper ⇒ 不抽"
+        );
+        let n_power = 5 + draw;
+        // 倒序：p2（x=11）→ 自身（x=10）→ p1（x=9）。
+        let order: Vec<i32> = w.pending_ai_attacks.iter().map(|(_, t, _)| *t).collect();
+        assert_eq!(order, vec![p2, mid, p1], "倒序逐个 _Attack");
+        for (_, tid, outcome) in &w.pending_ai_attacks {
+            assert_eq!(outcome.power, n_power, "攻击力全目标共用");
+            if *tid == mid {
+                assert!(!outcome.hit, "自身 ⇒ IsProperTarget false ⇒ 归零");
+                assert_eq!(outcome.damage, 0);
+            } else {
+                assert!(outcome.hit);
+                assert_eq!(outcome.damage, n_power as u16);
+                assert_eq!(
+                    w.entities.get(*tid).unwrap().hp,
+                    500 - n_power as u16,
+                    "掉血 = nPower（AC=0、倍率 10）"
+                );
+                assert_eq!(outcome.struck_power, n_power as u16);
+                let msg = w.self_delay_msgs.peek(*tid).expect("200ms RM_REFMESSAGE");
+                assert_eq!(msg.ident, crate::slave::RM_REFMESSAGE);
+                assert_eq!(msg.w_param, n_power);
+                assert_eq!(msg.deliver_at_ms, 100_200);
+            }
+        }
+        // 自身：`Race > Play` ⇒ `SendMsg(self, RM_STRUCK, 0)` ⇒ 折叠出 LastHiter=self + 队列项。
+        {
+            let e = w.entities.get(mid).unwrap();
+            assert_eq!(e.last_hiter, Some(mid), "自身 RM_STRUCK 折叠");
+            assert_eq!(
+                e.ai.pending_struck,
+                vec![crate::entity::StruckMsg {
+                    hiter: mid,
+                    w_param: 0,
+                }]
+            );
+        }
+        // 玩家目标 `Race == Play` ⇒ **不**走 `SendMsg(RM_STRUCK)`（oracle `:61` 的 `> Play` 门）。
+        for t in [p1, p2] {
+            assert!(w.entities.get(t).unwrap().ai.pending_struck.is_empty());
+        }
+        let hit = w
+            .pending_monster_ref_msgs
+            .iter()
+            .find(|m| m.ident == RM_HIT)
+            .expect("RM_HIT 尾帧");
+        assert_eq!(hit.dir, DIR_UP_LEFT, "GetAttackDir(TargetCret)");
+        assert_eq!((hit.n_param1, hit.n_param2), (10, 10));
+    }
+
+    /// R31②：`Run` 的两轴门是**严格 `< 6`**；`|Δx|=5` 触发（列表只有自身，攻击力仍抽一次）、
+    /// `|Δx|=6` 不触发（零抽、零帧）。
+    /// 牙：`< 6` 改 `<= 6` ⇒ Δx=6 段红；去掉 `<` 的 y 轴门 ⇒ Δy=6 段红。
+    #[test]
+    fn mb6_r31_run_gate_is_strict_six() {
+        // 世界不落图 ⇒ `GetMapBaseObjects` 为空：`AroundAttack` 仍发 `RM_HIT`（无条件），
+        // 但**不抽攻击力**（`objectList.Count > 0` 门）。这样正好把 Run 门与抽取门分开。
+        let run = |dx: i32, dy: i32| -> (usize, usize, bool) {
+            let mut w = World::new(40, 40);
+            let mid = mb1_monster(&mut w, 131, 10, 10);
+            w.entities.get_mut(mid).unwrap().dc = 0; // Random(1) 恒 0
+            let t = monster(&mut w, 10 + dx, 10 + dy);
+            w.entities.get_mut(mid).unwrap().ai.target_creature = Some(t);
+            w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000;
+            w.entities.get_mut(mid).unwrap().ai.attack_tick = 0;
+            w.clock_ms = 100_000;
+            w.rng = RandomNumber::with_seed(4242);
+            let mut probe = RandomNumber::with_seed(4242);
+            assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+            (
+                w.pending_ai_attacks.len(),
+                w.pending_monster_ref_msgs
+                    .iter()
+                    .filter(|m| m.ident == RM_HIT)
+                    .count(),
+                w.rng.random() == probe.random(),
+            )
+        };
+        assert_eq!(run(5, 0), (0, 1, true), "|Δx|=5 触发（空列表 ⇒ 零抽）");
+        assert_eq!(run(0, 5), (0, 1, true), "|Δy|=5 触发");
+        assert_eq!(run(6, 0), (0, 0, true), "|Δx|=6 不触发");
+        assert_eq!(run(0, 6), (0, 0, true), "|Δy|=6 不触发");
+    }
+
+    /// R31③：`_Attack` 的 `RandomByte(target.SpeedPoint)` **只在 `target.HitPoint > 0` 时抽**，
+    /// 且 `HitPoint < roll` ⇒ `nPower = 0`（不再走护甲/伤害/延时）。
+    /// 牙：把 `target.hit_point > 0` 去掉 ⇒ `HitPoint=0` 的既有段多抽一次、账本红；
+    /// 把 `<` 改成 `<=` ⇒ roll==HitPoint 的边界（本段用 HitPoint=0）红。
+    #[test]
+    fn mb6_r31_speed_point_draw_only_when_hit_point_positive() {
+        // 命中点 0 ⇒ 不抽 RandomByte(SpeedPoint)；抽数 = 攻击力 1 + 护甲 1。
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 131, 10, 10);
+        w.entities.get_mut(mid).unwrap().dc = (9 << 8) | 5;
+        assert!(w.enter_world(mid));
+        let t = mb1_players(&mut w, 11, 10); // Race == Play ⇒ proper
+        assert!(w.enter_world(t));
+        w.entities.get_mut(t).unwrap().hit_point = 0;
+        w.entities.get_mut(t).unwrap().speed_point = 10;
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(t);
+        w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000;
+        w.entities.get_mut(mid).unwrap().ai.attack_tick = 0;
+        w.clock_ms = 100_000;
+        let seed = 123;
+        w.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        let _power = probe.random_below(5);
+        let _armor = probe.random_below(1);
+        let _durability = probe.random_below(10); // PlayObject.StruckDamage 的耐久骰
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert_eq!(
+            w.rng.random(),
+            probe.random(),
+            "HitPoint=0 ⇒ 不抽 RandomByte(SpeedPoint)（否则多一抽 ⇒ 红）"
+        );
+
+        // 命中点 10、SpeedPoint 10、roll != 0 ⇒ nPower 归零、不抽护甲。
+        let seed = mb6_seed_power_then_byte(5, 10, true);
+        let mut w = World::new(32, 32);
+        let mid = mb1_monster(&mut w, 131, 10, 10);
+        w.entities.get_mut(mid).unwrap().dc = (9 << 8) | 5;
+        // `HitPoint < RandomByte(SpeedPoint)`：攻方 HitPoint=0、roll != 0 ⇒ 闪避。
+        assert!(w.enter_world(mid));
+        let t = mb1_players(&mut w, 11, 10); // Race == Play ⇒ proper
+        assert!(w.enter_world(t));
+        w.entities.get_mut(t).unwrap().hit_point = 10;
+        w.entities.get_mut(t).unwrap().speed_point = 10;
+        w.entities.get_mut(t).unwrap().hp = 500;
+        w.entities.get_mut(t).unwrap().max_hp = 500;
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(t);
+        w.entities.get_mut(mid).unwrap().ai.search_enemy_tick = 100_000;
+        w.entities.get_mut(mid).unwrap().ai.attack_tick = 0;
+        w.clock_ms = 100_000;
+        w.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        let _power = probe.random_below(5);
+        let _roll = probe.random_byte(10);
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert_eq!(w.rng.random(), probe.random(), "roll != 0 ⇒ 归零、无护甲抽");
+        assert_eq!(w.entities.get(t).unwrap().hp, 500, "闪避 → 零伤害");
+        let outcome = w
+            .pending_ai_attacks
+            .iter()
+            .find(|(_, tid, _)| *tid == t)
+            .map(|(_, _, o)| *o)
+            .expect("仍有结算记录（oracle `_Attack` 照跑）");
+        assert!(!outcome.hit, "闪避 ⇒ hit=false（`nPower` 归零支）");
+        assert_eq!(outcome.damage, 0);
+        assert_eq!(outcome.struck_power, 0);
+        assert!(
+            w.self_delay_msgs.peek(t).is_none(),
+            "零伤害不发 RM_REFMESSAGE"
+        );
     }
 }
 
