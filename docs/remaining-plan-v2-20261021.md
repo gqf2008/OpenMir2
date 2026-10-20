@@ -44,10 +44,12 @@
 5. **窗口前置仍是三红（2026-10-21 01:12 实测）**：
    - **R6 RED**：镜像 `/e/tmp/m2svr-window-origin` HEAD=`4a887354e`，落后 master `1915b67a5` **32** 个提交；
    - **R7 未绿**：`/e/tmp/m2svr-window-target/window-provenance.json` 的 `source_head=4a887354e`（旧基线）；
-   - **R8 RED**：`port-status.ps1` 报**十个端口全部监听**（5000/5100/5500/5600/5700/6000/7000/7100/7200 + 3306）。
-6. **E1/E4 已有明确 owner 裁决**（E1=测试库克隆、E4=允许重编）；**E2 有裁决记录但书面矛盾**；**E3（MySQL 停起）仍待裁决**。
-   E2 存在**书面记录矛盾**：run sheet §E-0 记「2026-10-21 owner 会话『E2 可以』」，而 runbook §4 注记
-   `b46805058` 仍记「E2/E3 待裁决」⇒ 见 §5 O-11，需要 owner 一行确认后才能开行会 750/G3b/G3c 窗口。
+   - **R8 RED**：`port-status.ps1` 报**九游戏端口全部监听**（5000/5100/5500/5600/5700/6000/7000/7100/7200）；
+     3306 UP 是 E1-a 测试库依赖，**不计入 R8 红**；`7600` 不在该脚本的十端口内，需单独断言。
+6. **E1/E2/E4 已有明确 owner 裁决**（E1=测试库克隆、E2=影子内容只读复制、E4=允许重编）；**E3（MySQL 停起）仍待裁决**。
+   E2 已裁决的依据：owner 2026-10-21 会话原话「E2 可以」，记于 `docs/window-run-sheet-20261022.md` §E-0 与
+   `docs/window-round2-runbook-20261023.md` §4；允许只读复制 `Envir`/`GuildBase`/`MonGen`/`Server.conf`
+   到影子包、只改副本。E3 仍待裁决 ⇒ G6 不可开窗。
 7. **本轮窗口只有 4 个块可收**：D.1（G0+G1）、D.2（G2a）、D.3（G3a）、D.4（G5a）。
    G4/G6/G7/G8/G9/G10/G11 在本文件写作时**不具备收口条件**（工具/授权/内容/独占时长）。
 8. **最高价值的生产可见缺口**（按用户可见度，不按 tier）：
@@ -82,20 +84,20 @@ walgit collab board --format json                      # 309 卡：165 in-progre
 | A-03 税丢弃 | `grep -n "let _tax" mir2-rs/bins/game-svr/src/shop.rs` | `937`/`1042`/`1217` 三处仍丢弃 |
 | A-08 Market_Def | `grep -n "Market_Def 商人脚本未装载" mir2-rs/bins/game-svr/src/main.rs` | `4640`/`4680`/`4798` 仍只登记 |
 | A-10 SETOFFLINE | `grep -rn "fn set_offline" mir2-rs` | 仅 `crates/script/src/engine/mod.rs:569` 默认实现；`NpcPlayer` 未覆写 |
-| A-21 sys_msg | `grep -rn "fn sys_msg" mir2-rs` | 仅 `crates/script/src/engine/mod.rs:350` 空默认；`NpcPlayer` 未覆写 |
+| A-21 sys_msg | `grep -rn "fn sys_msg" mir2-rs` | **4 处**：`crates/script/src/engine/mod.rs:350`（trait 空默认）、`bins/game-svr/src/guild_cmd.rs:422`（行会 `Ctx` 自有方法，非 `ScriptPlayer`）、`crates/script/tests/engine_tests.rs:622`（测试桩）、`bins/game-svr/src/line_notice.rs:140`（`sys_msg_notice`，非同名）；`NpcPlayer` 未覆写 trait 默认 |
 | A-17 怪物走帧 | `grep -n "fn walk_to" -A10 mir2-rs/crates/world/src/monai.rs` | `141-149` 只改 `e.x/e.y`，不产事件 |
 | T-134/T-135 排水 | `sed -n '13632,13646p' mir2-rs/bins/game-svr/src/main.rs` | `drain_special_ref_msgs` 只处理 `RM_HIT`，其余 ident `continue` |
 | A-04 13 列 | `grep -n "INSERT INTO account_protection" -A3 mir2-rs/crates/storage/src/account.rs` | `251-252` 13 列中 10 列写空串；`365` UPDATE 仍只 2 列 |
 | A-02 纯层 | `grep -n "pub fn castle_official_action" mir2-rs/crates/world/src/castle.rs` | `510` 已有；宿主无派发 |
 | A-22 落盘 | `grep -n "SaveAttackSabukWall" mir2-rs/bins/game-svr/src/main.rs` | `17656` 仅注释/日志，无排水 |
 | A-03 城堡下标 | `grep -n "castle_index" mir2-rs/crates/world/src/merchant.rs` | 无该字段（只有 `castle_merchant`/`castle_under_war`） |
-| T-137/T-138 | `grep -nE "T-13[78]" mir2-rs/bins/game-svr/src/guild_official.rs` | `453`/`612`/`615` 明写未接 |
+| T-137/T-138 | `grep -nE "T-13[78]" mir2-rs/bins/game-svr/src/guild_official.rs` | **6 处**：T-137 5 处（`27`/`453`/`456`/`600`/`612`）、T-138 1 处（`615`），均明写未接 |
 
 ### 1.3 已知 stale（写作时不得采信）
 
 - `openmir2-m3-drop-exp-align` 的 `work` 写「master 无 `run_drop_exp_pair.ps1`」，实际该文件
   （543 行）与 BotSrv 固定种子 100 杀驱动已在 `c83a9ae24` 前存在；缺口只是「0137 上 pin 单只固定怪」。
-- `openmir2-m3-quest-align` 的 `work` 写 `run_quest_pair.ps1` 缺失，实际 `quest_state_producer.py` 已在仓内。
+- `openmir2-m3-quest-align` 的 `work` 实际写「`quest_state.jsonl` 无生产者（本轮全仓 grep `WRITER_FOUND=0`，只有 `run_pair.ps1`/`run_quest_pair.ps1` 两个消费方）」——**并未称该脚本缺失**；`run_quest_pair.ps1` 在仓内，阻断点是生产者缺位导致 `run_quest_pair.ps1:526` `PREREQ_MISSING`。
 - 看板 `m3-*-align` 系列多数 `work` 停在 `master d4d5b89c`，与 `1915b67a5` 差 30+ 提交。
   **开窗前必须重跑静态 readiness，不按板面文字排期。**
 
@@ -181,7 +183,8 @@ C 表 20 条结论不变（`docs/m3-remaining-inventory-20261022.md` §C）。�
 
 ### 3.1 车道 P1：`castle-pure`（R-01 + R-02 + R-03-world）
 
-- **性质**：tier=L（R-03 的持久化语义按 R 登记，但本车道只做世界层事件与单测，不碰文件写）。
+- **性质**：tier=L（R-03 的持久化语义按 R 登记，但本车道只做世界层事件与单测，不碰文件写）；
+  合入后 **R-01/R-02 可 `closed`，R-03 保持 `in-progress`**，窗口未绿不得收卡。
 - **写集**：`mir2-rs/crates/world/src/castle.rs`、`castle_tax.rs`（仅测试）、`merchant.rs`、`world.rs`、
   `crates/world/tests/**`。**不碰** `bins/**`、`crates/envir/**`、`guild.rs`、`monai.rs`、`combat.rs`。
 - **交付**：
@@ -257,7 +260,7 @@ C 表 20 条结论不变（`docs/m3-remaining-inventory-20261022.md` §C）。�
 
 | 车道 | tier | 必须绿 | 不得触碰 | 收卡 |
 | --- | --- | --- | --- | --- |
-| P1 castle-pure | L | C1/C2/C3/C4/C6/C7/C8/C9/C12/C13/C14 + G-T1a；变异必红 | `bins/**`、`crates/envir/**`、`monai.rs`、`combat.rs` | 可 `closed` |
+| P1 castle-pure | L（R-03 持久化语义按 R） | C1/C2/C3/C4/C6/C7/C8/C9/C12/C13/C14 + G-T1a；变异必红 | `bins/**`、`crates/envir/**`、`monai.rs`、`combat.rs` | 仅 R-01/R-02 可 `closed`；**R-03 保持 `in-progress` 待窗口** |
 | P2 db-encoding | E-3=L / E-7=R | 20+ 向量 + arrest/split；DB 无 `CONVERT` | `crates/storage`、`crates/encoding` 源码 | E-3 可 `closed`；E-7 保持 `in-progress` |
 | P3 fixtures | L（工具） / R（real-run） | marker gate + drop-exp 自检 + LB-10 命令 + preflight 快照 | 任何 `src/bins/crates` | 工具面可 `closed`；real-run 保持 `in-progress` |
 
@@ -271,14 +274,15 @@ C 表 20 条结论不变（`docs/m3-remaining-inventory-20261022.md` §C）。�
 | --- | --- | --- |
 | R6 构建源 | 镜像 HEAD `4a887354e`；master `1915b67a5`；相差 **32** 提交 | **RED** |
 | R7 产物/provenance | `/e/tmp/m2svr-window-target` 六件存在；`window-provenance.json.source_head=4a887354e` | **未绿**（旧基线） |
-| R8 端口 | `port-status.ps1`：GameSrv 5000 / DBSrv 5100,5700,6000 / LoginSrv 5500,5600 / LoginGate 7000 / SelGate 7100 / GameGate 7200 全部监听；mysqld 3306 | **RED** |
+| R8 端口 | `port-status.ps1`：GameSrv 5000 / DBSrv 5100,5700,6000 / LoginSrv 5500,5600 / LoginGate 7000 / SelGate 7100 / GameGate 7200 **九游戏端口全部监听**；3306 UP（E1-a 依赖，不计入 R8） | **RED** |
 | E1 | 测试库 `mir2_test_db/_account/_data` 已建（run sheet §E-0） | 已裁决 |
-| E2 | run sheet §E-0 记「2026-10-21 E2 可以」；runbook §4 注记 `b46805058` 仍记待裁决 | **矛盾，见 O-11** |
+| E2 | 已裁决（owner 2026-10-21 会话「E2 可以」；依据 run sheet §E-0、round2 runbook §4） | 已裁决 |
 | E3 | 未回答 | 待裁决 |
 | E4 | 允许重编，但 runbook 记「今日未用」 | 已裁决 |
 
-**结论**：今天**不能开窗**。最少要 owner 停栈（十端口 DOWN）→ 镜像 `git fetch` 到当天
-`origin/master` → 重编六件 + 重录 provenance → guard `WINDOW_GUARD_OK`。
+**结论**：今天**不能开窗**。最少要 owner 停栈：**九游戏端口 DOWN、`7600` DOWN、`3306` UP**
+（3306 是 E1-a 测试库依赖；`port-status.ps1` 不含 7600，须单独断言；**禁止** `start-all -Stop`，
+见 O-01）→ 镜像 `git fetch` 到当天 `origin/master` → 重编六件 + 重录 provenance → guard `WINDOW_GUARD_OK`。
 
 ### 4.2 可离线完成（不需要窗口）
 
@@ -325,7 +329,7 @@ C 表 20 条结论不变（`docs/m3-remaining-inventory-20261022.md` §C）。�
 | ID | 项 | 裁决 | 影响 |
 | --- | --- | --- | --- |
 | E1 | 写库边界 | 从正式库克隆 `mir2_test_*`（E1-a） | 所有构造只准写测试库；`scoped_diff.TABLE_COLUMNS` 未登记测试库 ⇒ G5 只能行数/关键值 |
-| E2 | 影子内容 | 「E2 可以」（2026-10-21 会话，run sheet §E-0） | 行会 750 / 特殊怪 / 非 TestServer 可开窗（仍需 O-11 确认） |
+| E2 | 影子内容 | **已裁决（owner 2026-10-21 会话「E2 可以」；依据 run sheet §E-0、round2 runbook §4）**：允许只读复制 `Envir`/`GuildBase`/`MonGen`/`Server.conf` 到影子包、只改副本 | 行会 750 / 特殊怪 / 非 TestServer 可开窗（不得改 `E:/MirServer` 原件）；E3 仍待裁决 |
 | E4 | C# 重编 | 允许重编对比用 C# | 影子包可 `-Shadow` 编译并记 HEAD/DLL hash |
 | D-01 | E1 具体选型 | = E1-a | 同 E1 |
 | D-14 | 编码 cp936 全表 | 已由 `mir2-encoding` crate 落地（`ba82032f4`） | E-1/E-2 已合；E-3/E-5/E-6/E-7/E-8 仍按卡推进 |
@@ -344,7 +348,7 @@ C 表 20 条结论不变（`docs/m3-remaining-inventory-20261022.md` §C）。�
 | O-08 | **城堡优先级重裁（D-07）** | `AttackSabukWall.txt` 0 字节、`OwnGuild=` 空、`TotalGold=0`；无城主/无攻击者 | 若按 P0 排窗口，2h 块会花在不可达面 | 确认 A-02/A-03/A-22 **只做构造级**，不占 D.1–D.4 |
 | O-09 | **T-119② 3min `TimeoutStop` 分支** | 只在写失败竞态可达 | keepalive 卡无法判「3min 档」等价还是缺陷 | 接受构造级边界，窗口只观察 10s/15 天两档 |
 | O-10 | **`GateCount>1` 多实例（D-13）** | 三网关 config 只读 `*0`，单 listener；现网 1 | 配置 >1 即不可用（当前不可达） | 登记「单实例」，不开卡 |
-| O-11 | **E2 书面记录矛盾** | run sheet §E-0 说已裁决；runbook §4 注记 `b46805058` 仍「待裁决」 | 行会 750/G3b/G3c/B10 是否可以开窗不确定 | owner 用一行签名（commit 或 thread entry）钉死；在此之前按**未裁决**处理 |
+| O-11（**已闭合**，2026-10-21） | ~~E2 书面记录矛盾~~ | **E2 已裁决**（owner 2026-10-21 会话「E2 可以」；依据 run sheet §E-0、round2 runbook §4）；陈旧注记 `b46805058` 的「E2/E3 待裁决」已被覆盖；E3 仍待裁决（见 O-01） | 无（行会 750/G3b/G3c/B10 可在影子副本内开窗） | 无需再裁；保留本行仅作审计留痕 |
 | O-12 | **oracle 源码漂移** | 部署件 `!deployed-from.json.git_head=8a621f6a`；另一 zig 会话正在改 `src/**`（源码 HEAD `d7ead5b2a`） | 同一窗口两侧对照可能指向不同 oracle | 开窗期间冻结 `src/**` 与 `E:/MirServer` 二进制；每次窗口重钉 HEAD |
 | O-13 | **不可达面的投入边界** | MB-8/MB-9/A-22/A-07 部署/内容不可达 | 会持续消耗实现与评审 | 明确「构造级实现 + 不排窗口 + review 写 `window_required: true`」 |
 | O-14 | **`E:/tmp` 清理（D-10）** | A 类可回收 448.1 GiB（cargo target 443.6 GiB）；D 类 29.5 GiB 须人核 | 磁盘压力；D 类误删不可逆 | 批准 A 类自动回收；D 类逐项人工确认 |
@@ -355,7 +359,7 @@ C 表 20 条结论不变（`docs/m3-remaining-inventory-20261022.md` §C）。�
 
 | 批次 | 车道 | 内容 | tier | 验收 | 开窗? |
 | --- | --- | --- | --- | --- | --- |
-| **P1** | castle-pure | R-01/R-02/R-03-world | L（R-03 语义） | 设计 §7 C1–C4/C6–C9/C12–C14 + G-T1a；变异必红 | 否 |
+| **P1** | castle-pure | R-01/R-02/R-03-world | L（R-03 语义按 R） | 设计 §7 C1–C4/C6–C9/C12–C14 + G-T1a；变异必红 | 否（R-03 收卡要） |
 | **P2** | db-encoding | R-04/R-05 | L / R | 20+ E-3 向量 + 无 `CONVERT(gbk)`；E-7 窗口字段级 | 否（E-7 收卡要） |
 | **P3** | fixtures | R-06/R-07 | L / R | marker gate + drop-exp 自检 + LB-10 命令 + preflight 快照 | 否（real-run 要） |
 | **H1** | game-svr host | R-08/R-09/R-10 | R | `SM_WALK` 帧字节/收件人；PlayDiceLabel 三支；10139/8062 排水 | 实现否 / 收卡要 |
@@ -375,7 +379,7 @@ P1/P2/P3 可在 Market_Def 合入前并行跑完。
 1. **看板 stale**：`m3-*-align`/drop-exp/quest 的 `work` 字段落后 30+ 提交。对策：开窗前重跑
    `fixture_chain_gate.py`、`marker_prefix_gate.py`、`run_drop_exp_pair.ps1 -SelfCheckNoStack`，
    以输出为准（P3 的交付物之一）。
-2. **E2 记录矛盾（O-11）**：在 owner 签名前，行会 750、G3b/G3c、B10 一律按**未裁决**处理。
+2. **E2 已裁决（O-11 已闭合）**：owner 2026-10-21 会话「E2 可以」（依据 run sheet §E-0、round2 runbook §4），行会 750、G3b/G3c、B10 可在**影子副本**内开窗，不得改 `E:/MirServer` 原件；**E3 仍待裁决**，G6 不可开窗。
 3. **oracle 源码漂移（O-12）**：`src/**` 正被另一会话修改修 bug；窗口 provenance 必须记录
    C# 源码 HEAD + 部署件 hash；开窗时段要求冻结。
 4. **写集瓶颈**：`bins/game-svr/**` 是本轮所有高价值项的公共写集；任何并行都会把
@@ -396,7 +400,7 @@ P1/P2/P3 可在 Market_Def 合入前并行跑完。
 
 - 本车道只新增 `docs/remaining-plan-v2-20261021.md`；worktree `/e/tmp/wt-planv2` 内无 cargo target、
   无临时库、无进程。
-- 仓外临时物：`E:/tmp/planv2-board.json`（看板 JSON 只读快照，约 600 KB），可随时删除；
+- 仓外临时物：`E:/tmp/planv2-board.json`（看板 JSON 只读快照，**332,871 字节**），可随时删除；
   本文件不依赖它存在。
 - 未触碰：`E:/MirServer`、主检出、`mir2-rs/src/**`、`mir2-rs/bins/**`、`mir2-rs/crates/**`、
   `sql/**`、`MirClient/`、`crates/{protocol,storage,encoding}` 源码、任何数据库。
