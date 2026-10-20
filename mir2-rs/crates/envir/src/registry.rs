@@ -399,3 +399,25 @@ fn split_lines(text: &str) -> Vec<String> {
         .filter(|l| !l.is_empty())
         .collect()
 }
+
+/// StartPoint 装载接缝（`LocalDB.LoadStartPoint`）。
+impl MapLoader {
+    /// `M2Share.GetEnvirFilePath("StartPoint.txt")`（`LocalDB.cs:832`）。
+    #[must_use]
+    pub fn start_point_path(&self) -> PathBuf {
+        crate::startpoint::start_point_path(&self.base_path, &self.envir_dir)
+    }
+
+    /// 读 `Envir/StartPoint.txt`（`LocalDB.LoadStartPoint` `LocalDB.cs:822-867` 的装载半）。
+    ///
+    /// `Ok(None)` = 文件不存在（oracle `File.Exists` 假 ⇒ 整段跳过、不清表）；
+    /// `Ok(Some(list))` = 文件存在（oracle 先 `Clear()` 再逐条 `Add`，解析前表状态不参与结果）。
+    ///
+    /// # Errors
+    /// 文件存在但读取失败。
+    pub fn load_start_points(
+        &self,
+    ) -> Result<Option<Vec<crate::startpoint::StartPoint>>, EnvirError> {
+        crate::startpoint::load_start_points_if_exists(&self.start_point_path())
+    }
+}

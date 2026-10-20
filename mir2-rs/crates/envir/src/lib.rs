@@ -30,6 +30,7 @@ pub mod paths;
 pub mod points;
 pub mod registry;
 pub mod robot;
+pub mod startpoint;
 pub mod text;
 
 pub use castle::{
@@ -76,6 +77,10 @@ pub use paths::{
 pub use points::{parse_points, PointInfo};
 pub use registry::{MapLoader, MapRegistry, SkippedMap};
 pub use robot::{parse_robot_line, parse_robot_lines, RobotRecord, ROBOT_TEXT_SPLIT};
+pub use startpoint::{
+    get_start_point_info, load_start_points_if_exists, parse_start_point_line, parse_start_points,
+    start_point_path, StartPoint, START_POINT_FILE_NAME, START_POINT_TEXT_SPLIT,
+};
 pub use text::{decode_config_text, decode_text};
 
 // 便于调用方/测试直接引用属性类型（`MapFile::attribute` 的返回类型）。
