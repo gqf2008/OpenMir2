@@ -82,7 +82,8 @@ struct MockPlayer {
     delay_call: Option<(i32, String, i32, i32)>,
     val_query: Option<(u8, u8, String, i32)>,
     dlg_query: Option<(bool, String)>,
-    play_dice_label: String,
+    /// `playerActor.PlayDiceLabel`：C# 未初始化自动属性 = `null`，`None` 与 `Some("")` 不等价。
+    play_dice_label: Option<String>,
     /// `playerActor.SaleDeal`（`OPENYBDEAL` 写；测试镜像世界面）
     sale_deal: bool,
     /// `SystemShare.Config.GameGoldName`（测试覆写环境值，验证消息拼接）
@@ -213,7 +214,7 @@ impl MockPlayer {
             delay_call: None,
             val_query: None,
             dlg_query: None,
-            play_dice_label: String::new(),
+            play_dice_label: None,
             sale_deal: false,
             game_gold_name: "元宝".into(),
             auto_get_exp: None,
@@ -797,9 +798,9 @@ impl ScriptPlayer for MockPlayer {
         self.dlg_query = Some((take_dlg_item, goto_npc_label.to_string()));
     }
     fn set_play_dice_label(&mut self, label: &str) {
-        self.play_dice_label = label.to_string();
+        self.play_dice_label = Some(label.to_string());
     }
-    fn play_dice_label(&self) -> String {
+    fn play_dice_label(&self) -> Option<String> {
         self.play_dice_label.clone()
     }
     fn sale_deal(&self) -> bool {
@@ -1964,7 +1965,7 @@ fn play_dice_packs_mdy_values() {
     player.mdy = (1..=10).map(|i| (i - 1, i as i32)).collect();
     let errors = run_act(&mut npc, &mut player, act(42, "", "@dice", 3, 0));
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(player.play_dice_label, "@dice");
+    assert_eq!(player.play_dice_label.as_deref(), Some("@dice"));
     // p2 = MakeLong(MakeWord(1,2), MakeWord(3,4))；p3/p4 同构
     let p2 = 0x0201 | (0x0403 << 16);
     let p3 = 0x0605 | (0x0807 << 16);
@@ -1980,23 +1981,51 @@ fn lable_is_can_jmp_three_branches_and_play_dice_is_one_shot() {
     let mut player = MockPlayer::new();
     let table = vec!["@Table".to_string()];
     // 第一支：@main 恒可跳（大小写不敏感），且**不消费** PlayDiceLabel。
-    player.play_dice_label = "@main".into();
+    player.play_dice_label = Some("@main".into());
     assert!(lable_is_can_jmp(&mut player, &[], "@MAIN"));
-    assert_eq!(player.play_dice_label, "@main", "@main 先命中，不消费骰标");
+    assert_eq!(
+        player.play_dice_label.as_deref(),
+        Some("@main"),
+        "@main 先命中，不消费骰标"
+    );
     // 第二支：CanJmpScriptLableMap 命中（OrdinalIgnoreCase）。
     assert!(lable_is_can_jmp(&mut player, &table, "@table"));
-    // 第三支：PlayDiceLabel 命中 ⇒ **一次性**（命中即清空）。
-    player.play_dice_label = "@dice".into();
+    // 第三支：PlayDiceLabel 命中 ⇒ **一次性**（命中即 `string.Empty`）。
+    player.play_dice_label = Some("@dice".into());
     assert!(lable_is_can_jmp(&mut player, &table, "@DICE"));
-    assert_eq!(player.play_dice_label, "");
+    assert_eq!(player.play_dice_label.as_deref(), Some(""));
     assert!(
         !lable_is_can_jmp(&mut player, &table, "@dice"),
         "第二次不可跳"
     );
     // 三支都不命中 ⇒ false，且不清空骰标。
-    player.play_dice_label = "@dice".into();
+    player.play_dice_label = Some("@dice".into());
     assert!(!lable_is_can_jmp(&mut player, &table, "@other"));
-    assert_eq!(player.play_dice_label, "@dice");
+    assert_eq!(player.play_dice_label.as_deref(), Some("@dice"));
+}
+
+#[test]
+fn lable_is_can_jmp_none_and_some_empty_are_not_equivalent() {
+    // C# `PlayDiceLabel` 未初始化 = null ⇒ `Compare("", null) == 1`，第三支不命中；
+    // 而 `ActionOfPlayDice` 写入 `Some("")` 后 `Compare("", "") == 0` ⇒ 命中。
+    let mut player = MockPlayer::new();
+    assert_eq!(player.play_dice_label, None);
+    assert!(
+        !lable_is_can_jmp(&mut player, &[], ""),
+        "None 与空 label 不等价"
+    );
+    assert_eq!(player.play_dice_label, None, "未命中不消费");
+    player.set_play_dice_label("");
+    assert_eq!(player.play_dice_label.as_deref(), Some(""));
+    assert!(
+        lable_is_can_jmp(&mut player, &[], ""),
+        "Some(\"\") 与空 label 等价"
+    );
+    assert_eq!(
+        player.play_dice_label.as_deref(),
+        Some(""),
+        "第三支命中后清成 string.Empty"
+    );
 }
 
 #[test]
@@ -2004,9 +2033,9 @@ fn action_of_play_dice_label_is_consumed_once_by_jmp_gate() {
     let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
     let errors = run_act(&mut npc, &mut player, act(42, "", "@dice", 3, 0));
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(player.play_dice_label, "@dice");
+    assert_eq!(player.play_dice_label.as_deref(), Some("@dice"));
     assert!(lable_is_can_jmp(&mut player, &[], "@dice"), "第一次可跳");
-    assert_eq!(player.play_dice_label, "");
+    assert_eq!(player.play_dice_label.as_deref(), Some(""));
     assert!(!lable_is_can_jmp(&mut player, &[], "@dice"), "第二次不可跳");
 }
 
@@ -2072,13 +2101,17 @@ fn open_yb_deal_param_boundary_falls_back_to_zero() {
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(player.game_gold, 5, "费用 0 ⇒ 扣 0");
     assert!(player.sale_deal);
-    // 变量槽越界（P100 超出 0..99）⇒ `GetValNameNo == -1` ⇒ 同样回落 0，不 panic。
+    // `P100` 长度 4（≠ 3）⇒ `GetValNameNo` 的 P 分支走 `else`、只取首位数字 `1`
+    // ⇒ 槽号 1 ⇒ `GetValValue` **命中** `MNVal[1]`（并非 -1，也不回落 `StrToInt`）。
+    // 设 `MNVal[1] = 3` ⇒ 扣 3，用来钉住「取首位数」这一 oracle 边界。
     player.sale_deal = false;
+    player.mn[1] = 3;
     let _ = run_act(&mut npc, &mut player, act(342, "P100", "", 0, 0));
-    assert_eq!(player.game_gold, 5);
+    assert_eq!(player.game_gold, 2, "P100 ⇒ MNVal[1] == 3");
     assert!(player.sale_deal);
     // 空参数 ⇒ `GetValValue` 对空串返回 false ⇒ StrToInt("",0) = 0。
     player.sale_deal = false;
+    player.game_gold = 5;
     let _ = run_act(&mut npc, &mut player, act(342, "", "", 0, 0));
     assert_eq!(player.game_gold, 5);
     assert!(player.sale_deal);

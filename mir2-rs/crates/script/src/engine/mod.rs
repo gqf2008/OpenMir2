@@ -545,9 +545,15 @@ pub trait ScriptPlayer {
     fn set_dlg_query(&mut self, _take_dlg_item: bool, _goto_npc_label: &str) {}
     /// `playerActor.PlayDiceLabel = v`（`ActionOfPlayDice` 写 `sParam2`）
     fn set_play_dice_label(&mut self, _label: &str) {}
-    /// `playerActor.PlayDiceLabel`（`LableIsCanJmp` 第三支的比较/取数口；默认空 = 未掷骰）
-    fn play_dice_label(&self) -> String {
-        String::new()
+    /// `playerActor.PlayDiceLabel`（`LableIsCanJmp` 第三支的比较/取数口）。
+    ///
+    /// C# 是**未初始化自动属性**（`PlayObject.cs:588` ⇒ 引用初值 `null`），只在
+    /// `ActionOfPlayDice`（`ExecutionProcessingSys.cs:2032`）写入、`LableIsCanJmp`
+    /// 命中后清成 `string.Empty`（`PlayObject.Base.cs:2826`）。
+    /// `string.Compare(sLabel, null)` 对任何非 null 的 `sLabel` 都 != 0 ⇒ `None` **不**参与
+    /// 第三支匹配（**与 `Some("")` 不等价**）；默认 `None` = 从未掷骰。
+    fn play_dice_label(&self) -> Option<String> {
+        None
     }
 
     /// `AutoGetExpInSafeZone / AutoGetExpEnvir / AutoGetExpTime / AutoGetExpPoint`
@@ -698,12 +704,16 @@ pub trait ScriptNpc {
 /// 比较一律 `OrdinalIgnoreCase`：
 ///
 /// 1. `@main` 恒可跳（**先于**其它两支，且**不消费** `PlayDiceLabel`）；
-/// 2. `CanJmpScriptLableMap` 命中（最近一次说词重建的表，由调用方传入）；
+/// 2. `CanJmpScriptLableMap` 命中（最近一次说词重建的表，由调用方传入；该表在 oracle 用
+///    `StringComparer.OrdinalIgnoreCase` 构造，`PlayObject.cs:938`）；
 /// 3. `PlayDiceLabel` 命中 ⇒ **一次性**：命中即 `PlayDiceLabel = string.Empty`。
 ///
-/// `PlayDiceLabel` 由 `ActionOfPlayDice`（`ExecutionProcessingSys.cs:2030-2033`）写入
-/// `sParam2`。C# 原样保留「空串 == 空串」的边界（`label` 与 `PlayDiceLabel` 都为空时第 3
-/// 支命中）；调用方按 oracle 只在 `sData` 以 `@` 开头后进入本判定。
+/// `PlayDiceLabel` 是 C# **未初始化自动属性**（`PlayObject.cs:588`，初值 `null`），由
+/// `ActionOfPlayDice`（`ExecutionProcessingSys.cs:2032`）写入 `sParam2`、第三支命中时清成
+/// `string.Empty`（`PlayObject.Base.cs:2826`）。按 .NET `string.Compare` 的定义，
+/// 任何非 null 串都大于 `null` ⇒ `None` 与 `Some("")` **不等价**：只有 `Some` 才参与第 3
+/// 支比较（`Some("")` 与空 `label` 相等，`None` 永不相等）；调用方按 oracle 只在
+/// `sData` 以 `@` 开头后进入本判定，生产上 `label` 非空。
 #[must_use]
 pub fn lable_is_can_jmp(
     player: &mut dyn ScriptPlayer,
@@ -716,9 +726,11 @@ pub fn lable_is_can_jmp(
     if can_jmp_labels.iter().any(|l| l.eq_ignore_ascii_case(label)) {
         return true;
     }
-    if label.eq_ignore_ascii_case(&player.play_dice_label()) {
-        player.set_play_dice_label("");
-        return true;
+    if let Some(dice_label) = player.play_dice_label() {
+        if label.eq_ignore_ascii_case(&dice_label) {
+            player.set_play_dice_label("");
+            return true;
+        }
     }
     false
 }
@@ -1452,16 +1464,18 @@ mod default_hooks_tests {
         assert!(!p.sale_deal(), "set_sale_deal 默认 no-op");
         // `GameGoldName` 缺省 = 部署缺省 "元宝"（`GameSvrConf.cs:1320`）。
         assert_eq!(p.config_game_gold_name(), "元宝");
-        // `PlayDiceLabel` 默认空；setter 默认 no-op。
-        assert_eq!(p.play_dice_label(), "");
+        // `PlayDiceLabel` 默认 `None`（C# 未初始化自动属性 = null）；setter 默认 no-op。
+        assert_eq!(p.play_dice_label(), None);
         p.set_play_dice_label("@dice");
-        assert_eq!(p.play_dice_label(), "", "set_play_dice_label 默认 no-op");
+        assert_eq!(p.play_dice_label(), None, "set_play_dice_label 默认 no-op");
     }
 
     #[test]
-    fn lable_is_can_jmp_empty_label_matches_empty_dice_label_like_oracle() {
-        // C# `string.Compare("", PlayDiceLabel="", OrdinalIgnoreCase) == 0` ⇒ 第三支命中。
+    fn lable_is_can_jmp_none_dice_label_never_matches() {
+        // C# `PlayDiceLabel` 未初始化 = null；`string.Compare("", null, OrdinalIgnoreCase)`
+        // 返回 1（任何非 null 串都大于 null）⇒ 第三支**不**命中。
+        // `None` 与 `Some("")` 不等价（后者见 `engine_tests` 的显式覆盖）。
         let mut p = NoopPlayer;
-        assert!(lable_is_can_jmp(&mut p, &[], ""));
+        assert!(!lable_is_can_jmp(&mut p, &[], ""));
     }
 }
