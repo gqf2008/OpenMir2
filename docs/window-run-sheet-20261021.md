@@ -1,4 +1,7 @@
-# 真机窗口 Run Sheet v2.1（OpenMir2，2026-10-21）
+# 真机窗口 Run Sheet v2.2（OpenMir2，2026-10-21）
+
+> **v2.2 修订（同日）**：第二轮复审 N1–N4——统一 E1-a 下 G5 字段级 diff 的不可收口径（C5/C10#11/D.3）、
+> A2 影子身份文件真正落盘（`Tee-Object`）、旧影子目录 fail-closed 归档、外部 C# 全栈停机方式不再假设 pid 文件。
 
 > **v2.1 修订（同日）**：按评审 F1–F12 修正——C# oracle 必须用**全新影子**（旧 `M2GameSvr-hook` 停在 `628d8024`）、
 > whitelist 补 `body_sha256`、R8 外部 C# 全栈的停机责任、B11 测试库开号、C4 按 `recog` 过滤、
@@ -123,8 +126,9 @@ cd /e/Users/gxh/Documents/GitHub/OpenMir2 && \
   GameSrv=`E:\MirServer\M2GameSvr\GameSrv.exe` pid 9440、DBSrv=`.../src/DBSrv/bin/Release/DBSrv.exe` pid 9964、
   LoginSrv=`.../src/LoginSrv/bin/Release/LoginSrv.exe` pid 22324、三网关=`E:\MirServer\{LoginGate,SelGate,RunGate}`
   pid 3544/3584/18464），**没有 `rust-stack.pid.json`**；`start_rust_stack.ps1 -Stop` 在这里只会 `NOTHING_TO_STOP`。
-  必须由**起栈会话/coordinator**优雅停（C# GameSvr 用 §A4 的 `send_ctrlc.ps1`；其余按该会话自己的 pid 文件停），
-  或由 owner 授权停；**禁止 `start-all.ps1 -Stop`**（Force 且连带杀 `mysqld`）。
+  必须由**起栈会话/coordinator 按它自己的方式**优雅停（有 pid 文件就用 pid 文件；**当前外部 C# 全栈没有可发现的 pid 文件**
+  ——`start-all.ps1` 不写 pid 文件，9440/9964/22324/3544/3584/18464 也都不在任何 `rust-stack.pid.json` / `csharp-stack.pid.json` 里
+  ⇒ 只能由该会话/owner 授权停）；C# GameSvr 优先用 §A4 的 `send_ctrlc.ps1`；**禁止 `start-all.ps1 -Stop`**（Force 且连带杀 `mysqld`）。
   `start_rust_stack.ps1 -Stop` 只适用于**该脚本自己起过**的栈。A1 的 R8 项不能由窗口操作者单方清掉。
 - **禁止**：在 `E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs` 构建后去跑镜像 guard。要改 guard 的
   `repo=/tgt=` 属于脚本变更，不在窗口授权内。
@@ -171,9 +175,16 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/capture/mir2_proxy.py 
 **C# 侧**（同样先停 7200，影子必须是**整目录拷贝**：C# GameGate 按 `AppContext.BaseDirectory` 读 `config.conf`）：
 
 ```powershell
-# 0) 断言新影子目录不存在（**不要**复用 E:/MirServer/M2GameSvr-hook：那里的 GameSrv.exe 停在 628d8024，
-#    不含 d7ead5b2a，WorldServer.cs 的项链/头盔仍是交叉交换 ⇒ B3 的 1:1 在 oracle 侧必失败）
-Test-Path E:/tmp/window/20261021-a/csharp/GameSvr-shadow    # 期望 False
+# 0) fail-closed：旧影子目录存在就归档改名，否则拒绝起窗
+#    （不要复用 E:/MirServer/M2GameSvr-hook：那里 GameSrv.exe 停在 628d8024，不含 d7ead5b2a）
+$shadowDir = 'E:/tmp/window/20261021-a/csharp/GameSvr-shadow'
+if (Test-Path $shadowDir) {
+  $bak = "$shadowDir.bak-" + (Get-Date -Format 'yyyyMMdd-HHmmss')
+  Move-Item -LiteralPath $shadowDir -Destination $bak -ErrorAction Stop
+  Write-Output "ARCHIVED_OLD_SHADOW $bak"
+}
+if (Test-Path $shadowDir) { throw 'RED: 旧影子仍存在，拒绝起窗（复用旧 GameSrv.exe 会重现 F1）' }
+Test-Path $shadowDir    # 期望 False
 
 # 1) 起 C# 影子栈：**显式给全新 -Shadow**（脚本 :96-104 只在 GameSrv.exe 不存在时才 robocopy）
 powershell -NoProfile -ExecutionPolicy Bypass -File E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/m3/start-csharp-hook.ps1 `
@@ -181,12 +192,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:/Users/gxh/Documents/GitHu
   -Shadow E:/tmp/window/20261021-a/csharp/GameSvr-shadow
 
 # 1b) 记录 oracle 影子身份：git_head 必须含 d7ead5b2a，否则停窗
+$identity = 'E:/tmp/window/20261021-a/csharp/GameSvr-shadow-identity.txt'
 $dep = Get-Content E:/tmp/window/20261021-a/csharp/GameSvr-shadow/!deployed-from.json -Raw | ConvertFrom-Json
-$dep.git_head
+"git_head=$($dep.git_head)" | Tee-Object -FilePath $identity
 git -C E:/Users/gxh/Documents/GitHub/OpenMir2 merge-base --is-ancestor d7ead5b2a $dep.git_head
+"merge-base rc=$LASTEXITCODE" | Tee-Object -FilePath $identity -Append
 Get-FileHash E:/tmp/window/20261021-a/csharp/GameSvr-shadow/GameSrv.dll, E:/tmp/window/20261021-a/csharp/GameSvr-shadow/M2Server.dll -Algorithm SHA256 |
-  Format-List Path,Hash
-# 期望：merge-base rc=0；把 git_head + 两个 hash 落 E:/tmp/window/20261021-a/csharp/GameSvr-shadow-identity.txt
+  Format-List Path,Hash | Out-String | Tee-Object -FilePath $identity -Append
+# 期望：identity 文件里 merge-base rc=0 且含两个 hash；rc!=0 立即停窗
 
 # 2) 只停它起的 RunGate（7200）
 $pf = Get-Content E:/tmp/window/20261021-a/csharp/stack/csharp-stack.pid.json -Raw | ConvertFrom-Json
@@ -721,10 +734,14 @@ powershell -File E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/chec
 - **期望**：每条路径 `GREEN`；末行 `EVIDENCE <...>.json`，其 `pass=true`、`failed=[]`。
 - **失败判据**：`PREREQ_MISSING`（缺某条 `<path>-after.jsonl`，说明 snap 没跑全）；`RED`（字段级 diff≠0）。
 - **注意**：`-Mode diff` 只读 `<dir>/<path>-after.jsonl`；三条路径都必须先 snap，否则 PREREQ（评审 F8）。
-- **E1-a（测试库）不适用**：`check_db_paths.ps1` 没有 `--table/--allow-db` 透传，固定 `dbsnap snap --out` 生产库；
-  测试库只能走 §A5-T 的逐表快照 + `scoped_diff.py extract/diff` 手工组装，此时 C5 的 softclose/disconnect/shutdown
-  只能逐条判、未覆盖的标**部分收**（F6）。
-- 状态：**E1-b 下闭环；E1-a 下见上（部分收）**（工具参数齐全，但无测试库透传）。
+- **E1-a（测试库）下 G5 字段级 diff 不可收（N1，与 D.3/C10#11 同一口径）**：两条独立阻塞——
+  ① `check_db_paths.ps1` 无 `--table/--allow-db`，固定对生产库 `dbsnap snap --out`；
+  ② 即使手动跑 §A5-T，`dbsnap` manifest 里的表名是 `mir2_test_db.*`，而 `scoped_diff.py` 的
+     `TABLE_COLUMNS`（`:47-106`）只登记 `mir2_db.*`/`mir2_account.*`，`extract` 对未登记表
+     `sys.exit(4)`（`:294-299`）。
+  ⇒ E1-a 下**不做**字段级 diff，改做行数/关键值断言（`COUNT(*)` + 登录/关服前后 `SELECT`）；
+     softclose/disconnect/shutdown 三条路径全部标**部分收**；`save-on-shutdown` 仅 E1-b 全收。
+- 状态：**E1-b 下闭环；E1-a 下字段级 diff 不可收**（仅行数/关键值断言，三条路径均部分收）。
 
 ### C6. 字段级 DB diff：`scoped_diff.py diff` 用 `--summary-out`（不是 `--out`）
 
@@ -792,7 +809,7 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 | 8 | 栈启动器无「指向 `mir2_test_*`」参数 | E1 的测试库隔离 | 需手工改影子 conf / 另开工具改动 |
 | 9 | `dbsnap` 默认快照只含生产库名 | 测试库快照 | `--table mir2_test_db.<表>` 逐表指定 + `--allow-db` |
 | 10 | `check_client_s2c_frames` 无「按角色/状态选预设」自动判 | G2 预设需人工选 | 显式 `--expect-enter-seq`（B9） |
-| 11 | `check_db_paths.ps1` **没有** `--table/--allow-db` 透传 | C5 无法对 `mir2_test_*` 取快照（它内部固定 `dbsnap snap --out`） | 只能 E1-b（生产库授权）或先改脚本（不在本窗） |
+| 11 | `check_db_paths.ps1` 无 `--table/--allow-db` **且** `scoped_diff.TABLE_COLUMNS` 未登记 `mir2_test_*`（`extract` 对未登记表 rc=4） | E1-a 下 G5 字段级 diff 不可收 | 仅 E1-b；或先给 `scoped_diff` 登记测试库表名/manifest 别名（不在本窗）。E1-a 只做行数/关键值断言 |
 
 ---
 
@@ -856,7 +873,8 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
   `openmir2-delmagic-addmagic-chain`（B5 两轮）、`openmir2-save-on-shutdown`。
   **`save-on-shutdown` 的全收只在 E1-b 成立**：`check_db_paths.ps1` 固定 `dbsnap snap --out`、无 `--table/--allow-db`，
   E1-a 测试库取不了快照；且 `-Mode diff` 要求三条 `<path>-after.jsonl` 都在，本块只排 shutdown。
-  E1-a 下改用 C6 的 `scoped_diff.py diff …/shutdown-after.jsonl` 直接比，并把 softclose/disconnect 标**部分收**。
+  E1-a 下**不引用** `shutdown-after.jsonl`、也不跑 `scoped_diff`（C5 的 N1 口径：测试库表名未登记，`extract` 会 rc=4）；
+  只做行数/关键值断言（shutdown 前后 `COUNT(*)` + 字段 `SELECT`），`save-on-shutdown` 与 softclose/disconnect 均标**部分收**。
 - **只能部分收**：`openmir2-persist-useitems-wiring`（装载半有、破零收尾不在本组）、
   `openmir2-persist-create-rows`（需 E1 测试库 + 建角）、`openmir2-save-misc-gaps`（G11/G7 面未覆盖）。
 - **不收**：`openmir2-persist-item-attr-and-gold`（G-01 受 B-117、G-02 受 B-116 阻塞）、
