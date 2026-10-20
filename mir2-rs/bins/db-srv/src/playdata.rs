@@ -1063,8 +1063,13 @@ async fn create_empty_items(
 impl Db {
     /// C# `PlayDataStorage.Index(chrName)`：`characters` 名字（Unicode，大小写不敏感）→ Id。
     #[must_use]
-    pub fn play_data_index_text(&self, name: &str) -> Option<i64> {
-        self.name_text.get(&name.to_lowercase()).copied()
+    pub async fn play_data_index_text(&self, name: &str) -> Option<i64> {
+        self.idx
+            .read()
+            .await
+            .name_text
+            .get(&name.to_lowercase())
+            .copied()
     }
 
     /// C# `HUtil32.GetBytes(str)`（GB2312 编码）：`EDCode.EncodeString` 用它把 Unicode 名
@@ -1084,7 +1089,7 @@ impl Db {
         if name.is_empty() {
             return Ok(None);
         }
-        let Some(id) = self.play_data_index_text(name) else {
+        let Some(id) = self.play_data_index_text(name).await else {
             return Ok(None);
         };
         let mut conn = self.pool.acquire().await.context("取连接失败")?;
@@ -1099,7 +1104,7 @@ impl Db {
 
     /// C# `PlayDataStorage.Update(chrName, humanRcd)`：命中索引才存档。
     pub async fn play_data_update(&self, name: &str, info: &CharacterDataInfo) -> Result<bool> {
-        let Some(id) = self.play_data_index_text(name) else {
+        let Some(id) = self.play_data_index_text(name).await else {
             return Ok(false);
         };
         let mut conn = self.pool.acquire().await.context("取连接失败")?;
@@ -1107,11 +1112,20 @@ impl Db {
     }
 
     /// C# `PlayDataStorage.Add(humanRcd)`：名字已存在即 false；否则建角色并更新内存索引。
-    pub async fn play_data_add(&mut self, info: &CharacterDataInfo) -> Result<bool> {
+    pub async fn play_data_add(&self, info: &CharacterDataInfo) -> Result<bool> {
         let Some(name) = info.header.name.clone() else {
             return Ok(false);
         };
-        if self.name_text.contains_key(&name.to_lowercase()) {
+        // 建角闸门：与 5100 `data_add`/`record_add` 共用（见 `db::Db::create_gate`）。
+        // 检查 + 建角事务 + 索引更新线性化 ⇒ 并发同名只有一个赢家（D-DBSCHEME-1）。
+        let _gate = self.create_gate.lock().await;
+        if self
+            .idx
+            .read()
+            .await
+            .name_text
+            .contains_key(&name.to_lowercase())
+        {
             return Ok(false);
         }
         // C# `PlayDataStorage` 只有一份字符串键的 `_NameQuickMap`（`PlayDataStorage.Query.cs:16-23`），
@@ -1159,9 +1173,12 @@ impl Db {
             return Err(e);
         }
         tx.commit().await.context("提交建角事务失败")?;
-        self.name_text.insert(name.to_lowercase(), player_id);
-        self.name_quick.insert(fold_key(&name_gbk), player_id);
-        self.char_ids.insert(player_id);
+        {
+            let mut idx = self.idx.write().await;
+            idx.name_text.insert(name.to_lowercase(), player_id);
+            idx.name_quick.insert(fold_key(&name_gbk), player_id);
+            idx.char_ids.insert(player_id);
+        }
         Ok(true)
     }
 }

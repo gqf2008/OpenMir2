@@ -62,7 +62,7 @@ pub(crate) enum ConnAction {
 ///
 /// # Errors
 /// 绑定失败（端口被占/地址非法）时返回错误（M1④：启动失败要明确报错并给退出码）。
-pub async fn run(server: Arc<Server>, db: Arc<Mutex<Db>>) -> Result<()> {
+pub async fn run(server: Arc<Server>, db: Arc<Db>) -> Result<()> {
     let addr = (server.cfg.server_addr.as_str(), server.cfg.server_port);
     let listener = TcpListener::bind(addr).await.with_context(|| {
         format!(
@@ -88,12 +88,7 @@ pub async fn run(server: Arc<Server>, db: Arc<Mutex<Db>>) -> Result<()> {
 }
 
 /// 单个 GameSvr 连接（C# `Connecting`/`Received`/`Disconnected`）。
-async fn conn_task(
-    server: Arc<Server>,
-    db: Arc<Mutex<Db>>,
-    sock: TcpStream,
-    peer: String,
-) -> Result<()> {
+async fn conn_task(server: Arc<Server>, db: Arc<Db>, sock: TcpStream, peer: String) -> Result<()> {
     let ip = peer
         .rsplit_once(':')
         .map_or(peer.as_str(), |(h, _)| h)
@@ -151,7 +146,7 @@ async fn conn_task(
 /// C# `ProcessMessagePacket` + `ProcessServerMsg`。
 async fn process(
     server: &Arc<Server>,
-    db: &Arc<Mutex<Db>>,
+    db: &Db,
     tx: &mpsc::UnboundedSender<Vec<u8>>,
     request: &ServerRequestData,
 ) -> Result<ConnAction> {
@@ -212,7 +207,7 @@ async fn process(
 /// C# `ProcessServerMsg`。
 async fn process_server_msg(
     server: &Arc<Server>,
-    db: &Arc<Mutex<Db>>,
+    db: &Db,
     tx: &mpsc::UnboundedSender<Vec<u8>>,
     query_id: i32,
     packet: &ServerRequestMessage,
@@ -234,9 +229,9 @@ async fn process_server_msg(
 }
 
 /// C# `DataService.LoadHumanRcd`。
-async fn load_human_rcd(
+pub(crate) async fn load_human_rcd(
     server: &Arc<Server>,
-    db: &Arc<Mutex<Db>>,
+    db: &Db,
     tx: &mpsc::UnboundedSender<Vec<u8>>,
     query_id: i32,
     s_data: &[u8],
@@ -274,8 +269,7 @@ async fn load_human_rcd(
     }
     let mut human_rcd: Option<CharacterDataInfo> = None;
     if n_check_code == 1 || bo_found {
-        let db = db.lock().await;
-        if let Some(_n_index) = db.play_data_index_text(&chr_name) {
+        if let Some(_n_index) = db.play_data_index_text(&chr_name).await {
             if let Some(cached) = server.cache.lock().await.get(chr_name.as_bytes()) {
                 human_rcd = Some(cached);
             } else {
@@ -325,9 +319,9 @@ async fn load_human_rcd(
 }
 
 /// C# `DataService.SaveHumanRcd`（`SaveHumanRcdEx` 亦走此函数）。
-async fn save_human_rcd(
+pub(crate) async fn save_human_rcd(
     server: &Arc<Server>,
-    db: &Arc<Mutex<Db>>,
+    db: &Db,
     tx: &mpsc::UnboundedSender<Vec<u8>>,
     query_id: i32,
     s_data: &[u8],
@@ -371,14 +365,13 @@ async fn save_human_rcd(
 ///   `bo21 = false`（成功应答，GameSvr 侧据此清 in-save）。
 ///
 /// 旧实现两处都用 `?` 上抛 ⇒ 不回包、`save_outstanding`/`begin_save` 永不清（角色永久 in-save）。
-async fn store_human_rcd(
-    db: &Arc<Mutex<Db>>,
+pub(crate) async fn store_human_rcd(
+    db: &Db,
     cache: &Arc<Mutex<CacheStore>>,
     name: &str,
     rcd: &CharacterDataInfo,
 ) -> bool {
-    let mut db = db.lock().await;
-    let mut n_index = db.play_data_index_text(name);
+    let mut n_index = db.play_data_index_text(name).await;
     if n_index.is_none() {
         // oracle `DataService.cs:228`：`_playDataStorage.Add(humanRcd)` 的返回值被忽略。
         if let Err(e) = db.play_data_add(rcd).await {
@@ -386,7 +379,7 @@ async fn store_human_rcd(
                 "保存玩家数据出错（自动建档，C# 同场景吞异常）: {e:#}"
             ));
         }
-        n_index = db.play_data_index_text(name);
+        n_index = db.play_data_index_text(name).await;
     }
     let Some(_n_index) = n_index else {
         return true;
@@ -516,7 +509,7 @@ pub(crate) fn send_message(tx: &mpsc::UnboundedSender<Vec<u8>>, body: &[u8]) {
 ///
 /// C# `TimedService` 另有两个周期（10s 重连 LoginSrv、7s 上报 `(103/…)`）已由
 /// [`crate::loginsrv::login_link_task`] 承担（同一 `ClientSession`/`LoginState` 语义），这里不重复。
-pub async fn cache_flush_task(server: Arc<Server>, db: Arc<Mutex<Db>>) {
+pub async fn cache_flush_task(server: Arc<Server>, db: Arc<Db>) {
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
     let mut last_flush = tokio::time::Instant::now();
     loop {
@@ -532,17 +525,12 @@ pub async fn cache_flush_task(server: Arc<Server>, db: Arc<Mutex<Db>>) {
 ///
 /// 由于 [`crate::cache::CacheStore`] 的 `Add` 只在键已存在时替换（C# 既有行为），
 /// 缓存实际恒为空 —— 这个循环跑起来是**空转**，但日志两条与 C# 一致。
-async fn process_cache_storage(server: &Arc<Server>, db: &Arc<Mutex<Db>>) {
+async fn process_cache_storage(server: &Arc<Server>, db: &Db) {
     log::info("同步玩家缓存数据.");
     let items = server.cache.lock().await.query_all();
     for play in items {
         let name = play.header.name.clone().unwrap_or_default();
-        let ok = db
-            .lock()
-            .await
-            .play_data_update(&name, &play)
-            .await
-            .unwrap_or(false);
+        let ok = db.play_data_update(&name, &play).await.unwrap_or(false);
         log::debug(&format!("{name}同步{}.", if ok { "成功" } else { "失败" }));
         server.cache.lock().await.delete(name.as_bytes());
     }
@@ -762,10 +750,13 @@ mod save_failure_tests {
         insert_character(&dsn, "g2hero").await;
         let mut db = Db::connect(&dsn).await.expect("连测试库失败");
         db.load_quick_lists().await.expect("载入索引失败");
-        assert!(db.play_data_index_text("g2hero").is_some(), "索引必须命中");
+        assert!(
+            db.play_data_index_text("g2hero").await.is_some(),
+            "索引必须命中"
+        );
         // 失败注入：关闭连接池 ⇒ `play_data_update` 的 `pool.acquire()` 返回 Err。
         db.pool.close().await;
-        let db = Arc::new(Mutex::new(db));
+        let db = Arc::new(db);
         let cache = Arc::new(Mutex::new(CacheStore::default()));
         let bo21 = store_human_rcd(&db, &cache, "g2hero", &info("g2hero")).await;
         assert!(!bo21, "G2：Update 失败必须按 oracle 口径视为已进入 Update");
@@ -787,9 +778,9 @@ mod save_failure_tests {
         let dsn = setup("mir2_test_savefail_g3").await;
         let mut db = Db::connect(&dsn).await.expect("连测试库失败");
         db.load_quick_lists().await.expect("载入索引失败");
-        assert!(db.play_data_index_text("g3hero").is_none());
+        assert!(db.play_data_index_text("g3hero").await.is_none());
         db.pool.close().await;
-        let db = Arc::new(Mutex::new(db));
+        let db = Arc::new(db);
         let cache = Arc::new(Mutex::new(CacheStore::default()));
         let bo21 = store_human_rcd(&db, &cache, "g3hero", &info("g3hero")).await;
         assert!(bo21, "G3：Add 失败后索引仍缺失");
@@ -812,7 +803,7 @@ mod save_failure_tests {
         let id = insert_character(&dsn, "okhero").await;
         let mut db = Db::connect(&dsn).await.expect("连测试库失败");
         db.load_quick_lists().await.expect("载入索引失败");
-        let db = Arc::new(Mutex::new(db));
+        let db = Arc::new(db);
         let cache = Arc::new(Mutex::new(CacheStore::default()));
         let mut rcd = info("okhero");
         if let Some(d) = rcd.data.as_mut() {
@@ -922,13 +913,13 @@ mod db_fault_tests {
         ts::insert_character(&dsn, "acct", "loadhero").await;
         let db = ts::open_db(&dsn).await;
         assert!(
-            db.play_data_index_text("loadhero").is_some(),
+            db.play_data_index_text("loadhero").await.is_some(),
             "内存索引必须命中（否则走 -3 分支）"
         );
         // 故障注入：关闭连接池 ⇒ 后续 `acquire` 返回 Err（评审更正：池占满不可达，
         // 真实触发是 MySQL 停机/重启）。
         db.pool.close().await;
-        let db = Arc::new(Mutex::new(db));
+        let db = Arc::new(db);
 
         let server = ts::test_server("loadfail_a", &dsn);
         server
@@ -984,11 +975,11 @@ mod db_fault_tests {
         ts::insert_character(&dsn, "acct", name).await;
         let db = ts::open_db(&dsn).await;
         assert!(
-            db.play_data_index_text(name).is_some(),
+            db.play_data_index_text(name).await.is_some(),
             "内存索引必须命中（否则走 -3 分支）"
         );
         db.pool.close().await;
-        let db = Arc::new(Mutex::new(db));
+        let db = Arc::new(db);
 
         let server = ts::test_server("loadfail_gbk", &dsn);
         server
@@ -1037,7 +1028,7 @@ mod db_fault_tests {
     async fn load_session_miss_still_answers_negative_code() {
         let dsn = ts::setup_db("mir2_test_loadfail_b").await;
         ts::insert_character(&dsn, "acct", "loadhero").await;
-        let db = Arc::new(Mutex::new(ts::open_db(&dsn).await));
+        let db = Arc::new(ts::open_db(&dsn).await);
         let server = ts::test_server("loadfail_b", &dsn);
         // 不推会话 ⇒ `CheckSessionLoadRcd` 未命中。
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -1069,7 +1060,7 @@ mod db_fault_tests {
     async fn save_auto_create_item_insert_failure_rolls_back_character() {
         let dsn = ts::setup_db("mir2_test_4k_item").await;
         ts::fail_insert_trigger(&dsn, "trg_item_fail", "characters_item", 4).await;
-        let db = Arc::new(Mutex::new(ts::open_db(&dsn).await));
+        let db = Arc::new(ts::open_db(&dsn).await);
         let cache = Arc::new(Mutex::new(CacheStore::default()));
         let name = "k6itemhero";
         let bo21 = store_human_rcd(&db, &cache, name, &info(name)).await;
@@ -1083,7 +1074,7 @@ mod db_fault_tests {
         );
         assert_eq!(count_all(&dsn, "characters_item").await, 0);
         assert!(
-            db.lock().await.play_data_index_text(name).is_none(),
+            db.play_data_index_text(name).await.is_none(),
             "回滚后不得写内存索引"
         );
         ts::drop_db(&dsn).await;
@@ -1095,7 +1086,7 @@ mod db_fault_tests {
     async fn save_auto_create_storage_insert_failure_is_swallowed() {
         let dsn = ts::setup_db("mir2_test_4k_storage").await;
         ts::fail_insert_trigger(&dsn, "trg_storage_fail", "characters_storageitem", -1).await;
-        let db = Arc::new(Mutex::new(ts::open_db(&dsn).await));
+        let db = Arc::new(ts::open_db(&dsn).await);
         let cache = Arc::new(Mutex::new(CacheStore::default()));
         let name = "k6storhero";
         let bo21 = store_human_rcd(&db, &cache, name, &info(name)).await;

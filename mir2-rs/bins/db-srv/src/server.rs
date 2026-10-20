@@ -140,7 +140,7 @@ impl Server {
     pub async fn run(
         self: Arc<Self>,
         rx: mpsc::UnboundedReceiver<Queued>,
-        db: Arc<Mutex<crate::db::Db>>,
+        db: Arc<crate::db::Db>,
     ) -> Result<()> {
         let listener = TcpListener::bind((self.cfg.gate_addr.as_str(), self.cfg.gate_port))
             .await

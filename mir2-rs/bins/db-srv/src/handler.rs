@@ -43,14 +43,12 @@ pub fn now_ms() -> u64 {
 static PICK_SEED: AtomicU64 = AtomicU64::new(0);
 
 /// 单消费者队列：C# `Channel<UserGateMessage>` + `StartMessageThread`。
-pub async fn queue_loop(
-    server: Arc<Server>,
-    mut rx: UnboundedReceiver<Queued>,
-    db: Arc<tokio::sync::Mutex<Db>>,
-) {
+///
+/// **仍是单消费者、逐条 await**：这是 5100 面全序的唯一来源（oracle 同）。
+/// 不得改成「每消息 `tokio::spawn`」——那会破坏同网关连接的回包顺序。
+pub async fn queue_loop(server: Arc<Server>, mut rx: UnboundedReceiver<Queued>, db: Arc<Db>) {
     while let Some(q) = rx.recv().await {
-        let mut db = db.lock().await;
-        if let Err(e) = process_data(&server, &mut db, q).await {
+        if let Err(e) = process_data(&server, &db, q).await {
             // C# 在消息线程里 catch 并 `LogService.Error(e)`：该条命令**不回包**、不影响后续
             log::error(&format!("处理角色网关数据失败: {e:#}"));
         }
@@ -58,7 +56,7 @@ pub async fn queue_loop(
 }
 
 /// 处理一条 `Data`（C# `ProcessMessage` + `DeCodeUserMsg`）。
-async fn process_data(server: &Arc<Server>, db: &mut Db, q: Queued) -> Result<()> {
+async fn process_data(server: &Arc<Server>, db: &Db, q: Queued) -> Result<()> {
     // 取会话：C# 按 `SessionId == packet.SocketId` 在网关的用户表里找
     let (mut u, tx, remote_ip) = {
         let gates = server.gates.lock().await;
@@ -106,9 +104,9 @@ async fn process_data(server: &Arc<Server>, db: &mut Db, q: Queued) -> Result<()
 }
 
 /// `DeCodeUserMsg` 的四个命令（其余消息号 C# 侧也是 default 静默忽略）。
-async fn dispatch(
+pub(crate) async fn dispatch(
     server: &Arc<Server>,
-    db: &mut Db,
+    db: &Db,
     slot: usize,
     tx: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     remote_ip: &str,
@@ -260,7 +258,7 @@ fn show(b: &[u8]) -> String {
 /// C# `QueryChr`：查角色列表（会话校验 → 逐角色读库 → `SM_QUERYCHR[_FAIL]`）。
 async fn query_chr(
     server: &Arc<Server>,
-    db: &mut Db,
+    db: &Db,
     slot: usize,
     tx: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     u: &mut GateUser,
@@ -285,7 +283,7 @@ async fn query_chr(
         // 照常回空列表；一旦某行成功过，后续失败/无行会让 `humRecord=null` ⇒
         // `!humRecord.Deleted` NRE 冒到消息线程 catch ⇒ **不回包**（与 Rust Err 上抛同形）。
         let mut result = false;
-        for (i, q) in db.find_by_account(&account).into_iter().enumerate() {
+        for (i, q) in db.find_by_account(&account).await.into_iter().enumerate() {
             log::info(&format!(
                 "[QueryChr] 候选 account={} i={i} name=[{}] quickIndex={}",
                 show(&account),
@@ -329,7 +327,7 @@ async fn query_chr(
             if rec.deleted {
                 continue;
             }
-            let data_index = db.data_index(&q.name_gbk);
+            let data_index = db.data_index(&q.name_gbk).await;
             log::info(&format!(
                 "[QueryChr]   dataIndex={} nChrCount={nchr}",
                 data_index.map_or(-1, |v| i32::try_from(v).unwrap_or(i32::MAX))
@@ -404,7 +402,7 @@ fn new_chr_data_outcome(add: &Result<Option<i64>>) -> NewChrDataOutcome {
 /// C# `NewChr`：建角（前置校验 → 插索引 → 插存档 → `SM_NEWCHR_SUCCESS[_FAIL(code)]`）。
 async fn new_chr(
     server: &Arc<Server>,
-    db: &mut Db,
+    db: &Db,
     tx: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     u: &mut GateUser,
     body: &[u8],
@@ -426,7 +424,7 @@ async fn new_chr(
         ncode = 2;
     }
     if ncode == -1 {
-        if db.data_index(&name).is_some() {
+        if db.data_index(&name).await.is_some() {
             ncode = 2;
         } else {
             let count = match db.chr_count_of_account(&req.account).await {
@@ -509,14 +507,14 @@ async fn new_chr(
 /// C# `DeleteChr`：删角（软删 `IsDeleted=1`）。
 async fn delete_chr(
     server: &Arc<Server>,
-    db: &mut Db,
+    db: &Db,
     tx: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     u: &mut GateUser,
     body: &[u8],
 ) -> Result<()> {
     let name = edcode::decode(body);
     let mut bocheck = false;
-    if let Some(nindex) = db.record_index(&name) {
+    if let Some(nindex) = db.record_index(&name).await {
         let rec = match db.record_get_by(nindex).await {
             Ok(rec) => rec,
             Err(e) => {
@@ -568,7 +566,7 @@ async fn delete_chr(
 
 /// C# `DelChrSnameToLevel`。
 async fn del_chr_sname_to_level(db: &Db, name: &[u8]) -> Result<u16> {
-    let Some(index) = db.data_index(name) else {
+    let Some(index) = db.data_index(name).await else {
         return Ok(0);
     };
     match db.get_query_char(index).await {
@@ -587,7 +585,7 @@ async fn del_chr_sname_to_level(db: &Db, name: &[u8]) -> Result<u16> {
 /// C# `SelectChr`：写 `SelectID` 标记 → 取地图 → 回 `SM_STARTPLAY[_FAIL]`。
 async fn select_chr(
     server: &Arc<Server>,
-    db: &mut Db,
+    db: &Db,
     remote_ip: &str,
     tx: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     u: &mut GateUser,
@@ -600,7 +598,7 @@ async fn select_chr(
         // oracle `bool result` 同理粘性：全部 `GetBy` 失败（Open 失败）时跳过、继续走
         // `_playDataStorage.Query`；一旦成功过再遇 null 行 ⇒ NRE、不回包。
         let mut result = false;
-        for q in db.find_by_account(&account) {
+        for q in db.find_by_account(&account).await {
             let rec = match db.record_get_by(q.index).await {
                 Ok(rec) => {
                     if q.index <= 0 {
@@ -644,7 +642,7 @@ async fn select_chr(
                 }
             }
         }
-        if let Some(index) = db.data_index(&name) {
+        if let Some(index) = db.data_index(&name).await {
             // C# `PlayDataStorage.Query` 对 `Open` 失败/读异常都返回 null ⇒ `chrRecord.ChrName`
             // NRE ⇒ 不回包（与 Rust Err 上抛/None 走 bail 同形；这里不降级）。
             match db.query_name_and_map(index).await? {
@@ -820,7 +818,7 @@ mod fault_path_tests {
     /// 并等 >1000ms 过 `NEWCHR`/`DELCHR` 的限频门。
     async fn query_ok(
         server: &Arc<Server>,
-        db: &mut crate::db::Db,
+        db: &crate::db::Db,
         tx: &UnboundedSender<Vec<u8>>,
         rx: &mut UnboundedReceiver<Vec<u8>>,
         u: &mut GateUser,
@@ -849,13 +847,13 @@ mod fault_path_tests {
     #[tokio::test]
     #[ignore = "需要本机 MySQL；库名 mir2_test_hfault_q（自建自删）"]
     async fn querychr_db_down_answers_empty_list() {
-        let (dsn, server, mut db, mut u) = setup("hfault_q", "mir2_test_hfault_q", true).await;
+        let (dsn, server, db, mut u) = setup("hfault_q", "mir2_test_hfault_q", true).await;
         db.pool.close().await;
         let (tx, mut rx) = mpsc::unbounded_channel();
         let body = format!("{ACCOUNT}/{SESSION}");
         dispatch(
             &server,
-            &mut db,
+            &db,
             0,
             &tx,
             "127.0.0.1",
@@ -877,7 +875,7 @@ mod fault_path_tests {
     #[tokio::test]
     #[ignore = "需要本机 MySQL；库名 mir2_test_hfault_q2（自建自删）"]
     async fn querychr_chr_table_failure_skips_character() {
-        let (dsn, server, mut db, mut u) = setup("hfault_q2", "mir2_test_hfault_q2", true).await;
+        let (dsn, server, db, mut u) = setup("hfault_q2", "mir2_test_hfault_q2", true).await;
         // characters_indexes 正常、characters 查询失败（GetQryChar 的 catch 支）。
         sqlx::query("DROP TABLE characters")
             .execute(&mut ts::conn(&dsn).await)
@@ -887,7 +885,7 @@ mod fault_path_tests {
         let body = format!("{ACCOUNT}/{SESSION}");
         dispatch(
             &server,
-            &mut db,
+            &db,
             0,
             &tx,
             "127.0.0.1",
@@ -908,14 +906,14 @@ mod fault_path_tests {
     #[tokio::test]
     #[ignore = "需要本机 MySQL；库名 mir2_test_hfault_d（自建自删）"]
     async fn delchr_db_down_answers_fail() {
-        let (dsn, server, mut db, mut u) = setup("hfault_d", "mir2_test_hfault_d", true).await;
+        let (dsn, server, db, mut u) = setup("hfault_d", "mir2_test_hfault_d", true).await;
         let (tx, mut rx) = mpsc::unbounded_channel();
-        query_ok(&server, &mut db, &tx, &mut rx, &mut u).await;
+        query_ok(&server, &db, &tx, &mut rx, &mut u).await;
         tokio::time::sleep(Duration::from_millis(1100)).await;
         db.pool.close().await;
         dispatch(
             &server,
-            &mut db,
+            &db,
             0,
             &tx,
             "127.0.0.1",
@@ -936,14 +934,14 @@ mod fault_path_tests {
     #[tokio::test]
     #[ignore = "需要本机 MySQL；库名 mir2_test_hfault_n（自建自删）"]
     async fn newchr_db_down_answers_fail2() {
-        let (dsn, server, mut db, mut u) = setup("hfault_n", "mir2_test_hfault_n", true).await;
+        let (dsn, server, db, mut u) = setup("hfault_n", "mir2_test_hfault_n", true).await;
         let (tx, mut rx) = mpsc::unbounded_channel();
-        query_ok(&server, &mut db, &tx, &mut rx, &mut u).await;
+        query_ok(&server, &db, &tx, &mut rx, &mut u).await;
         tokio::time::sleep(Duration::from_millis(1100)).await;
         db.pool.close().await;
         dispatch(
             &server,
-            &mut db,
+            &db,
             0,
             &tx,
             "127.0.0.1",
@@ -968,13 +966,13 @@ mod fault_path_tests {
     #[tokio::test]
     #[ignore = "需要本机 MySQL；库名 mir2_test_hfault_s（自建自删）"]
     async fn selchr_selectid_write_failure_still_startplay() {
-        let (dsn, server, mut db, mut u) = setup("hfault_s", "mir2_test_hfault_s", true).await;
+        let (dsn, server, db, mut u) = setup("hfault_s", "mir2_test_hfault_s", true).await;
         let (tx, mut rx) = mpsc::unbounded_channel();
-        query_ok(&server, &mut db, &tx, &mut rx, &mut u).await;
+        query_ok(&server, &db, &tx, &mut rx, &mut u).await;
         ts::fail_update_trigger(&dsn, "trg_sel_fail", "characters_indexes").await;
         dispatch(
             &server,
-            &mut db,
+            &db,
             0,
             &tx,
             "127.0.0.1",
@@ -998,15 +996,15 @@ mod fault_path_tests {
     #[tokio::test]
     #[ignore = "需要本机 MySQL；库名 mir2_test_hfault_i4（自建自删）"]
     async fn newchr_item_insert_failure_rolls_back_whole_character() {
-        let (dsn, server, mut db, mut u) = setup("hfault_i4", "mir2_test_hfault_i4", true).await;
+        let (dsn, server, db, mut u) = setup("hfault_i4", "mir2_test_hfault_i4", true).await;
         let (tx, mut rx) = mpsc::unbounded_channel();
         // `new_chr` 本身不要求先 QUERYCHR，但会话/账号与 1000ms 限频门先满足。
-        query_ok(&server, &mut db, &tx, &mut rx, &mut u).await;
+        query_ok(&server, &db, &tx, &mut rx, &mut u).await;
         tokio::time::sleep(Duration::from_millis(1100)).await;
         ts::fail_insert_trigger(&dsn, "trg_item_fail", "characters_item", 4).await;
         dispatch(
             &server,
-            &mut db,
+            &db,
             0,
             &tx,
             "127.0.0.1",
@@ -1039,7 +1037,10 @@ mod fault_path_tests {
             .try_get("n")
             .expect("COUNT 列");
         assert_eq!(idx, 1, "索引行残留（oracle 同：Add 先于建档、独立提交）");
-        assert!(db.data_index(b"itemhero").is_none(), "内存索引不得污染");
+        assert!(
+            db.data_index(b"itemhero").await.is_none(),
+            "内存索引不得污染"
+        );
         ts::drop_db(&dsn).await;
     }
 }

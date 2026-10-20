@@ -76,7 +76,9 @@ async fn main() -> Result<()> {
     let mut db = db::Db::connect(&dsn).await?;
     db.load_quick_lists().await?;
     log::info(&format!("[{}]数据存储初始化成功.", cfg.storeage.text()));
-    let db = Arc::new(tokio::sync::Mutex::new(db));
+    // 方案 A（`design-dbsrv-connection-20261021.md` §4）：不再有 `Arc<Mutex<Db>>`。
+    // `Db` 内部是共享池 + 索引 RwLock + 建角闸门，本身 `Send + Sync`。
+    let db = Arc::new(db);
     let cache = Arc::new(tokio::sync::Mutex::new(cache::CacheStore::default()));
 
     let (srv, rx) = server::Server::new(cfg, Arc::clone(&share), Arc::clone(&cache));

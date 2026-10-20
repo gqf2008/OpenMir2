@@ -23,10 +23,12 @@
 //! **返回错误、启动失败**。
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use sqlx::mysql::{MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::{Column, MySql, Row, Transaction};
+use tokio::sync::{Mutex, RwLock};
 
 use crate::gbk::fold_key;
 use mir2_storage::LegacyDsn;
@@ -74,10 +76,13 @@ pub struct QryChar {
     pub level: u16,
 }
 
-/// 角色存储（两张表共用一个池 + 三份内存索引）。
-pub struct Db {
-    /// 连接池（`playdata` 模块的 6000 面直接复用）。
-    pub(crate) pool: MySqlPool,
+/// 三份内存索引的**联合体**：只由 [`Db::idx`] 保护。
+///
+/// 不变量：一次「建角/建索引」对 `quick`/`index_ids`/`by_account`（或
+/// `name_quick`/`name_text`/`char_ids`）的更新在**同一个 `write()` 临界区**内完成，
+/// 因此读者不可能看到「账号表里有、名字表里没有」的半套索引（无撕裂）。
+#[derive(Default)]
+pub(crate) struct Indexes {
     /// `characters_indexes`：名字（折叠）→ Id，只含未删除行。
     quick: HashMap<Vec<u8>, i64>,
     /// `characters_indexes`：账号（折叠）→ 角色列表（按读库顺序）。
@@ -96,6 +101,23 @@ pub struct Db {
     /// 就是 `StringComparer.OrdinalIgnoreCase` 的字符串键；这里镜像一份 Unicode 键表供 6000 面使用，
     /// 5100 面的 GBK 字节键表（[`Db::data_index`]）保持不变。
     pub(crate) name_text: HashMap<String, i64>,
+}
+
+/// 角色存储（两张表共用一个池 + 三份内存索引）。
+///
+/// **方案 A（`design-dbsrv-connection-20261021.md` §4）**：不再有 `Arc<Mutex<Db>>` 外层全局锁。
+/// `Db` 自身是 `Send + Sync`，由 `Arc<Db>` 跨连接共享：
+/// - `pool` 由 sqlx 线程安全复用，一次慢存档只占它自己借出的那条连接；
+/// - `idx` 只保护内存索引，**临界区内不 await SQL**（拿快照/改完即 drop）；
+/// - `create_gate` 只串行化「检查 → INSERT → 内存索引更新」的建角路径，防同名并发建两行。
+pub struct Db {
+    /// 连接池（`playdata` 模块的 6000 面直接复用）。
+    pub(crate) pool: MySqlPool,
+    /// 内存索引（读多写少；写只发生在建角/建索引/软删）。
+    pub(crate) idx: RwLock<Indexes>,
+    /// 建角闸门：5100 `CM_NEWCHR` 与 6000 自动建档可能并发，二者对同名角色
+    /// 必须只有一个赢家（oracle 的 `Dictionary` 竞争是 G10 非契约，见登记 `D-DBSCHEME-1`）。
+    pub(crate) create_gate: Mutex<()>,
 }
 
 /// 列名**大小写不敏感**地解析（C# MySqlConnector 的 `dr.GetXxx("HP")` 对 `Hp` 列也能取到）。
@@ -142,10 +164,32 @@ const INDEX_COLS: &str = "Id, Account, ChrName, \
 impl Db {
     /// 连接 `mir2_db` 并建立连接池（连不上即报错，M1 验收④）。
     ///
+    /// 池参数对齐 oracle 的 MySqlConnector 缺省（`design-dbsrv-connection-20261021.md` §4.2）：
+    /// `Maximum Pool Size=100`、`Connection Timeout=15s`、`Connection Idle Timeout=180s`、
+    /// 无连接寿命上限。旧实现的 `max_connections(8)` 会让 >8 并发取档在池上排队，
+    /// 与 oracle 的连接模型不一致（LB-08 的第二个阻塞源）。
+    ///
     /// Errors: 连接串非法、服务不可达、认证失败时返回错误。
     pub async fn connect(dsn: &LegacyDsn) -> Result<Self> {
+        Self::connect_with(dsn, 100, Duration::from_secs(15)).await
+    }
+
+    /// 显式池参数版本（生产 [`Db::connect`] 用 oracle 缺省；测试用小池/短超时复现
+    /// 「DB 不可达」并验证各连接独立失败）。
+    ///
+    /// Errors: 同 [`Db::connect`]。
+    pub async fn connect_with(
+        dsn: &LegacyDsn,
+        max_connections: u32,
+        acquire_timeout: Duration,
+    ) -> Result<Self> {
         let pool = MySqlPoolOptions::new()
-            .max_connections(8)
+            .max_connections(max_connections)
+            .min_connections(0)
+            .acquire_timeout(acquire_timeout)
+            .idle_timeout(Some(Duration::from_secs(180)))
+            .max_lifetime(None)
+            .test_before_acquire(true)
             .connect(&dsn.to_sqlx_url())
             .await
             .with_context(|| {
@@ -156,22 +200,20 @@ impl Db {
             })?;
         Ok(Self {
             pool,
-            quick: HashMap::new(),
-            by_account: HashMap::new(),
-            index_ids: HashSet::new(),
-            deleted_ids: Vec::new(),
-            char_ids: HashSet::new(),
-            name_quick: HashMap::new(),
-            name_text: HashMap::new(),
+            idx: RwLock::new(Indexes::default()),
+            create_gate: Mutex::new(()),
         })
     }
 
     /// 载入两张表的快速索引（C# 两个 `LoadQuickList`）。
     ///
+    /// 在本地 `Indexes` 上建好再一次替换，避免启动期持写锁跨多条 SQL。
+    ///
     /// Errors: 表/列缺失（`SELECT` 报错）、两张表里有重名列（C# `Dictionary.Add` 会抛）。
     pub async fn load_quick_lists(&mut self) -> Result<()> {
-        self.load_indexes().await?;
-        self.load_chars().await?;
+        let mut idx = self.load_indexes().await?;
+        self.load_chars(&mut idx).await?;
+        *self.idx.get_mut() = idx;
         Ok(())
     }
 
@@ -180,11 +222,8 @@ impl Db {
     /// 重名判定按折叠键（等价 C# `StringComparer.OrdinalIgnoreCase`）：C# 的
     /// `_quickList.Add` / `_indexQuickList.Add` 都是 `Dictionary.Add`，重名/重 Id 直接抛
     /// `ArgumentException` ⇒ 宿主启动失败（LB-09）。这里同样 `bail!`，**不得**静默覆盖。
-    async fn load_indexes(&mut self) -> Result<()> {
-        self.quick.clear();
-        self.by_account.clear();
-        self.index_ids.clear();
-        self.deleted_ids.clear();
+    async fn load_indexes(&self) -> Result<Indexes> {
+        let mut idx = Indexes::default();
         let sql = format!("select {INDEX_COLS} from characters_indexes where IsDeleted < 2");
         let rows = sqlx::query(&sql)
             .fetch_all(&self.pool)
@@ -208,35 +247,32 @@ impl Db {
         for (key, name_text, id) in names {
             // LB-09：oracle `PlayRecordStorage.LoadQuickList` 的 `_quickList.Add` 重名即抛，
             // 未捕获 ⇒ 启动失败；Rust 曾经 `insert` 静默覆盖（带病运行），两侧口径不一致。
-            if self.quick.insert(key, id).is_some() {
+            if idx.quick.insert(key, id).is_some() {
                 bail!(
                     "characters_indexes 表里角色名重复（C# 侧 Dictionary.Add 会抛异常 ⇒ 启动失败）：{name_text}"
                 );
             }
             // 同一循环里 oracle 还有 `_indexQuickList.Add(Id, Name)`（Dictionary.Add ⇒ 重 Id 也抛）；
             // `Id` 是主键，实际不可达，仍按 oracle 口径守住。
-            if !self.index_ids.insert(id) {
+            if !idx.index_ids.insert(id) {
                 bail!(
                     "characters_indexes 表里 Id 重复（C# 侧 _indexQuickList 的 Dictionary.Add 会抛异常 ⇒ 启动失败）：{id}"
                 );
             }
         }
-        self.deleted_ids = deleted;
+        idx.deleted_ids = deleted;
         for (account, name_gbk, id) in account_list {
-            self.by_account.entry(account).or_default().push(Quick {
+            idx.by_account.entry(account).or_default().push(Quick {
                 index: id,
                 name_text: String::from_utf8_lossy(&name_gbk).into_owned(),
                 name_gbk,
             });
         }
-        Ok(())
+        Ok(idx)
     }
 
     /// `characters`（`Deleted=0`，与 C# 的 SQL 一字不差）。
-    async fn load_chars(&mut self) -> Result<()> {
-        self.char_ids.clear();
-        self.name_quick.clear();
-        self.name_text.clear();
+    async fn load_chars(&self, idx: &mut Indexes) -> Result<()> {
         let rows = sqlx::query(
             "SELECT Id, LoginID, ChrName, CAST(CONVERT(ChrName USING gbk) AS BINARY) AS name_gbk \
              FROM characters WHERE Deleted=0",
@@ -251,33 +287,41 @@ impl Db {
                 continue;
             }
             let name_gbk = gbk_col(row, "name_gbk")?;
-            if self.name_quick.insert(fold_key(&name_gbk), id).is_some() {
+            if idx.name_quick.insert(fold_key(&name_gbk), id).is_some() {
                 bail!(
                     "characters 表里角色名重复（C# 侧 Dictionary.Add 会抛异常 ⇒ 启动失败）：{name_text}"
                 );
             }
             // oracle 的 `_IndexQuickIdMap.Add(Id, Id)` 同样是 `Dictionary.Add`；`Id` 是主键，
             // 重 Id 不可达，仍按 oracle 口径守住。
-            if !self.char_ids.insert(id) {
+            if !idx.char_ids.insert(id) {
                 bail!(
                     "characters 表里 Id 重复（C# 侧 _IndexQuickIdMap 的 Dictionary.Add 会抛异常 ⇒ 启动失败）：{id}"
                 );
             }
-            self.name_text.insert(name_text.to_lowercase(), id);
+            idx.name_text.insert(name_text.to_lowercase(), id);
         }
         Ok(())
     }
 
     /// C# `PlayRecordStorage.Index`：名字 → `characters_indexes.Id`。
     #[must_use]
-    pub fn record_index(&self, name_gbk: &[u8]) -> Option<i64> {
-        self.quick.get(&fold_key(name_gbk)).copied()
+    pub async fn record_index(&self, name_gbk: &[u8]) -> Option<i64> {
+        self.idx
+            .read()
+            .await
+            .quick
+            .get(&fold_key(name_gbk))
+            .copied()
     }
 
     /// C# `PlayRecordStorage.FindByAccount`：账号 → 角色列表（账号键大小写不敏感）。
     #[must_use]
-    pub fn find_by_account(&self, account: &[u8]) -> Vec<Quick> {
-        self.by_account
+    pub async fn find_by_account(&self, account: &[u8]) -> Vec<Quick> {
+        self.idx
+            .read()
+            .await
+            .by_account
             .get(&fold_key(account))
             .cloned()
             .unwrap_or_default()
@@ -314,20 +358,33 @@ impl Db {
     ///
     /// Errors: SQL 失败时返回错误。
     pub async fn record_add(
-        &mut self,
+        &self,
         name_gbk: &[u8],
         account_text: &str,
         sel_gate_id: i16,
     ) -> Result<Option<i64>> {
-        if self.quick.contains_key(&fold_key(name_gbk)) {
+        // 建角闸门：检查 + INSERT + 索引更新必须是不可分割的线性化区间。
+        // 5100 单消息线程本来串行，但 6000 自动建档（`play_data_add`）与 5100 可并发；
+        // oracle 的 `Dictionary.Add` 竞争（G10）不是可观测契约，这里取更强的不变量（D-DBSCHEME-1）。
+        let _gate = self.create_gate.lock().await;
+        if self
+            .idx
+            .read()
+            .await
+            .quick
+            .contains_key(&fold_key(name_gbk))
+        {
             return Ok(None);
         }
         // C# `Add` 先从 `_deletedList` 头部取一个待复用 Id（`_recordCount++` 为备选），
         // 随后被 INSERT 的 `LastInsertedId` 覆盖 ⇒ 取值只影响这两个计数器，如实照搬。
-        let reuse = if self.deleted_ids.is_empty() {
-            None
-        } else {
-            Some(self.deleted_ids.remove(0))
+        let reuse = {
+            let mut idx = self.idx.write().await;
+            if idx.deleted_ids.is_empty() {
+                None
+            } else {
+                Some(idx.deleted_ids.remove(0))
+            }
         };
         let res = sqlx::query(
             "INSERT INTO characters_indexes (Account, ChrName, SelectID, IsDeleted, CreateDate, ModifyDate) \
@@ -342,16 +399,20 @@ impl Db {
         .context("插入 characters_indexes 失败")?;
         #[allow(clippy::cast_possible_wrap)]
         let id = res.last_insert_id() as i64;
-        self.quick.insert(fold_key(name_gbk), id);
-        self.index_ids.insert(id);
-        self.by_account
-            .entry(fold_key(account_text.as_bytes()))
-            .or_default()
-            .push(Quick {
-                index: id,
-                name_gbk: name_gbk.to_vec(),
-                name_text: String::from_utf8_lossy(name_gbk).into_owned(),
-            });
+        // 三份索引在**同一个写临界区**内更新（读者不可能看到半套）。
+        {
+            let mut idx = self.idx.write().await;
+            idx.quick.insert(fold_key(name_gbk), id);
+            idx.index_ids.insert(id);
+            idx.by_account
+                .entry(fold_key(account_text.as_bytes()))
+                .or_default()
+                .push(Quick {
+                    index: id,
+                    name_gbk: name_gbk.to_vec(),
+                    name_text: String::from_utf8_lossy(name_gbk).into_owned(),
+                });
+        }
         crate::log::info(&format!(
             "新建角色索引[{}] account={account_text} id={id} selGate={sel_gate_id} reuse={reuse:?}",
             String::from_utf8_lossy(name_gbk),
@@ -363,7 +424,7 @@ impl Db {
     ///
     /// Errors: SQL 失败时返回错误。
     pub async fn record_update(&self, row: &IndexRow) -> Result<bool> {
-        if !self.index_ids.contains(&row.id) {
+        if !self.idx.read().await.index_ids.contains(&row.id) {
             return Ok(false);
         }
         self.write_index_row(row).await?;
@@ -376,8 +437,15 @@ impl Db {
     /// 不能重建（`Add` 命中已存在的名字即返回 false）。名字不在表里时 C# 也返回 true。
     ///
     /// Errors: SQL 失败时返回错误。
-    pub async fn record_soft_delete(&mut self, name_gbk: &[u8]) -> Result<bool> {
-        let Some(id) = self.quick.get(&fold_key(name_gbk)).copied() else {
+    pub async fn record_soft_delete(&self, name_gbk: &[u8]) -> Result<bool> {
+        let Some(id) = self
+            .idx
+            .read()
+            .await
+            .quick
+            .get(&fold_key(name_gbk))
+            .copied()
+        else {
             return Ok(true);
         };
         sqlx::query("UPDATE characters_indexes SET IsDeleted = 2, ModifyDate = now() WHERE Id = ?")
@@ -385,7 +453,7 @@ impl Db {
             .execute(&self.pool)
             .await
             .context("软删 characters_indexes 失败")?;
-        self.index_ids.remove(&id);
+        self.idx.write().await.index_ids.remove(&id);
         Ok(true)
     }
 
@@ -418,7 +486,7 @@ impl Db {
     /// Errors: SQL 失败时返回错误。
     pub async fn chr_count_of_account(&self, account: &[u8]) -> Result<i32> {
         let mut n = 0;
-        for q in self.find_by_account(account) {
+        for q in self.find_by_account(account).await {
             if let Some(row) = self.record_get_by(q.index).await? {
                 if !row.deleted {
                     n += 1;
@@ -430,8 +498,13 @@ impl Db {
 
     /// C# `PlayDataStorage.Index`：`ChrName → characters.Id`。
     #[must_use]
-    pub fn data_index(&self, name_gbk: &[u8]) -> Option<i64> {
-        self.name_quick.get(&fold_key(name_gbk)).copied()
+    pub async fn data_index(&self, name_gbk: &[u8]) -> Option<i64> {
+        self.idx
+            .read()
+            .await
+            .name_quick
+            .get(&fold_key(name_gbk))
+            .copied()
     }
 
     /// C# `PlayDataStorage.GetQryChar`：取选角列表要用的字段。
@@ -504,16 +577,24 @@ impl Db {
     ///
     /// Errors: 主表插入失败、事务失败时返回错误。
     pub async fn data_add(
-        &mut self,
+        &self,
         name_gbk: &[u8],
         account_text: &str,
         sex: u8,
         job: u8,
         hair: u8,
     ) -> Result<Option<i64>> {
+        // 建角闸门：见 `record_add`。检查 + 建角事务 + 索引更新必须线性化。
+        let _gate = self.create_gate.lock().await;
         // C# `PlayDataStorage.Add` → `CheckChrExists(_NameQuickMap)`：同名已在 `characters`
         // （启动时载入 + 本进程内新建）即返回 false，后续 INSERT 一条都不执行。
-        if self.name_quick.contains_key(&fold_key(name_gbk)) {
+        if self
+            .idx
+            .read()
+            .await
+            .name_quick
+            .contains_key(&fold_key(name_gbk))
+        {
             return Ok(None);
         }
         let mut tx = self.pool.begin().await.context("开启事务失败")?;
@@ -598,10 +679,14 @@ impl Db {
             }
         }
         tx.commit().await.context("提交建角事务失败")?;
-        self.name_quick.insert(fold_key(name_gbk), player_id);
-        self.name_text
-            .insert(String::from_utf8_lossy(name_gbk).to_lowercase(), player_id);
-        self.char_ids.insert(player_id);
+        // 同一写临界区更新三份名字/Id 索引（读者不可能看到半套）。
+        {
+            let mut idx = self.idx.write().await;
+            idx.name_quick.insert(fold_key(name_gbk), player_id);
+            idx.name_text
+                .insert(String::from_utf8_lossy(name_gbk).to_lowercase(), player_id);
+            idx.char_ids.insert(player_id);
+        }
         Ok(Some(player_id))
     }
 }
@@ -870,7 +955,7 @@ mod create_rows_tests {
         // `data_index` 读 GBK 字节键 ⇒ `play_data_add` 也必须更新 `name_quick`。
         let gbk_b = db.gbk_bytes("pcrow_b").await.expect("GBK 转换失败");
         assert_eq!(
-            db.data_index(&gbk_b),
+            db.data_index(&gbk_b).await,
             Some(id_b),
             "G6：play_data_add 必须更新 name_quick（否则 5100 面看不到该角色）"
         );
@@ -1008,9 +1093,12 @@ mod index_dup_tests {
         .await
         .expect("删除重复行失败");
         db.load_quick_lists().await.expect("无重复时必须启动成功");
-        assert!(db.record_index(b"lb09_dup").is_some(), "正常路径的索引缺失");
+        assert!(
+            db.record_index(b"lb09_dup").await.is_some(),
+            "正常路径的索引缺失"
+        );
         assert_eq!(
-            db.find_by_account(b"lb09_acct_a").len(),
+            db.find_by_account(b"lb09_acct_a").await.len(),
             1,
             "正常路径应按账号建出 1 条索引"
         );

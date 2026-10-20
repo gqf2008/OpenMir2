@@ -37,7 +37,7 @@ use mir2_protocol::messages::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 
 use crate::data::{low16, make_long, send_request_bytes, send_request_plain, ConnAction};
 use crate::db::Db;
@@ -228,7 +228,7 @@ impl MarkerUserLoadMessage {
 ///
 /// # Errors
 /// 绑定失败（端口被占/地址非法）时返回错误（M1④：启动失败要明确报错并给退出码）。
-pub async fn run(server: Arc<Server>, db: Arc<Mutex<Db>>) -> Result<()> {
+pub async fn run(server: Arc<Server>, db: Arc<Db>) -> Result<()> {
     let addr = (server.cfg.market_addr.as_str(), server.cfg.market_port);
     let listener = TcpListener::bind(addr).await.with_context(|| {
         format!(
@@ -254,12 +254,7 @@ pub async fn run(server: Arc<Server>, db: Arc<Mutex<Db>>) -> Result<()> {
 }
 
 /// 单个 GameSvr 连接（C# `Connecting`/`Received`/`Disconnected`）。
-async fn conn_task(
-    server: Arc<Server>,
-    db: Arc<Mutex<Db>>,
-    sock: TcpStream,
-    peer: String,
-) -> Result<()> {
+async fn conn_task(server: Arc<Server>, db: Arc<Db>, sock: TcpStream, peer: String) -> Result<()> {
     let ip = peer
         .rsplit_once(':')
         .map_or(peer.as_str(), |(h, _)| h)
@@ -325,7 +320,7 @@ fn decode_request(body: &[u8]) -> Option<mir2_storage::playerdata::ServerRequest
 
 /// C# `ProcessMessagePacket`（5700 版：校验码/签名不合法一律回 `DBR_FAIL`）。
 async fn process(
-    db: &Arc<Mutex<Db>>,
+    db: &Db,
     tx: &mpsc::UnboundedSender<Vec<u8>>,
     request: &mir2_storage::playerdata::ServerRequestData,
 ) -> Result<ConnAction> {
@@ -397,7 +392,7 @@ async fn process(
 
 /// C# `ProcessMarketPacket`（无 `default` ⇒ 未知 ident 不回包）。
 async fn process_market_packet(
-    db: &Arc<Mutex<Db>>,
+    db: &Db,
     tx: &mpsc::UnboundedSender<Vec<u8>>,
     n_query_id: i32,
     actor_id: i32,
@@ -412,10 +407,10 @@ async fn process_market_packet(
             save_market_item(db, tx, n_query_id, actor_id, s_data).await;
         }
         x if x == u16::from(DB_SEARCHMARKET) => {
-            search_market_item(db, tx, n_query_id, s_data).await;
+            search_market_item(db, tx, n_query_id, s_data);
         }
         x if x == u16::from(DB_LOADUSERMARKET) => {
-            query_market_user_load(db, tx, n_query_id, actor_id, s_data).await;
+            query_market_user_load(db, tx, n_query_id, actor_id, s_data);
         }
         _ => {}
     }
@@ -423,7 +418,7 @@ async fn process_market_packet(
 
 /// C# `MarketService.LoadMarketList`。
 async fn load_market_list(
-    db: &Arc<Mutex<Db>>,
+    db: &Db,
     tx: &mpsc::UnboundedSender<Vec<u8>>,
     n_query_id: i32,
     s_data: &[u8],
@@ -436,7 +431,7 @@ async fn load_market_list(
         log::warn(&format!("QueryId:[{n_query_id}] 非法获取拍卖行数据..."));
         return;
     }
-    match db.lock().await.market_query_items(register.group_id).await {
+    match db.market_query_items(register.group_id).await {
         Err(e) => {
             // C# `QueryMarketItems` 无 try/catch ⇒ 异常冒到 `Received` ⇒ 只记日志、不回包。
             log::error(&format!("读取拍卖行数据失败: {e:#}"));
@@ -460,7 +455,7 @@ async fn load_market_list(
 
 /// C# `MarketService.SaveMarketItem`。
 async fn save_market_item(
-    db: &Arc<Mutex<Db>>,
+    db: &Db,
     tx: &mpsc::UnboundedSender<Vec<u8>>,
     n_query_id: i32,
     actor_id: i32,
@@ -484,15 +479,13 @@ async fn save_market_item(
         return;
     };
     match db
-        .lock()
-        .await
         .market_save_item(item, save.group_id, save.server_index)
         .await
     {
         Err(e) => log::error(&format!("保存拍卖行数据失败: {e:#}")),
         Ok(false) => log::info("当前服务器分组拍卖行数据为空,推送拍卖行数据失败."),
         Ok(true) => {
-            let _ = db.lock().await.market_query_items(save.group_id).await;
+            let _ = db.market_query_items(save.group_id).await;
             // C# `SendSuccessMessage(Serialize(saveMessage))` 抛（含 MarketItem）⇒ 不回包。
             log::error(&format!(
                 "DB_SAVEMARKETSUCCESS 序列化失败（C# MarketSaveDataItem 含 MarketItem ⇒ 同场景抛异常、不回包）: recog={actor_id}"
@@ -503,8 +496,8 @@ async fn save_market_item(
 }
 
 /// C# `MarketService.SearchMarketItem`。
-async fn search_market_item(
-    db: &Arc<Mutex<Db>>,
+fn search_market_item(
+    db: &Db,
     tx: &mpsc::UnboundedSender<Vec<u8>>,
     n_query_id: i32,
     s_data: &[u8],
@@ -519,7 +512,7 @@ async fn search_market_item(
         return;
     }
     // C# 调用把 `SearchItem`/`SearchWho` 传反了（见 `marketdata.rs` 模块头），四个分支恒空。
-    let items = db.lock().await.market_search_items(
+    let items = db.market_search_items(
         search.group_id,
         &search.market_name,
         &search.search_item, // C# 实参位置 = sellWho
@@ -540,8 +533,8 @@ async fn search_market_item(
 }
 
 /// C# `MarketService.QueryMarketUserLoad`。
-async fn query_market_user_load(
-    db: &Arc<Mutex<Db>>,
+fn query_market_user_load(
+    db: &Db,
     tx: &mpsc::UnboundedSender<Vec<u8>>,
     n_query_id: i32,
     actor_id: i32,
@@ -556,10 +549,7 @@ async fn query_market_user_load(
         log::info("服务器组[0]拍卖行数据为空,搜索拍卖行数据失败.");
         return;
     }
-    let count = db
-        .lock()
-        .await
-        .market_query_items_count(user_market.group_id, &user_market.search_who);
+    let count = db.market_query_items_count(user_market.group_id, &user_market.search_who);
     let body = MarkerUserLoadMessage {
         sell_count: count,
         market_npc: user_market.market_npc,
