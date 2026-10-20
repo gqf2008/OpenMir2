@@ -860,12 +860,219 @@ fn send_ref_msg_with_target(
     });
 }
 
+/// `Messages.RM_SPACEMOVE_FIRE`（`src/OpenMir2/Messages.cs:676` = 8062）——瞬移前
+/// `SendRefMsg(RM_SPACEMOVE_FIRE, 0, 0, 0, 0, "")`（`TeleMonster.cs:20`、`Khazard.cs:28/42`）。
+/// 收件人支 `PlayObject.Message.cs:1957-1966` 发 `SM_SPACEMOVE_HIDE(800)`；本层只产出
+/// [`MonsterRefMsg`]，宿主排水面归接线层（`bins/game-svr/src/main.rs` 的 drain 尚未列
+/// 该 ident ⇒ 本车道登记为未接线项）。
+pub const RM_SPACEMOVE_FIRE: u16 = 8062;
+
+/// `Run` 覆写共用的 8s/1s 索敌门（逐句同一段，`GreenMonster.cs:29-33` 等五类相同）：
+/// ```text
+/// if ((GetTickCount() - SearchEnemyTick) > 8000
+///     || (GetTickCount() - SearchEnemyTick) > 1000 && TargetCret == null)
+/// { SearchEnemyTick = GetTickCount(); SearchTarget(); }
+/// ```
+/// `SearchTarget` 本身不抽数（见 [`search_target`] 文档）⇒ 本门只改目标态。
+fn class_seek_gate(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    let enemy_tick = e.ai.search_enemy_tick;
+    let has_target = e.ai.target_creature.is_some();
+    // C# `&&` 优先级高于 `||` ⇒ 第二项是 `(> 1000) && (TargetCret == null)`。
+    if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.search_enemy_tick = now;
+        }
+        search_target(world, actor_id);
+    }
+}
+
+/// `GreenMonster.Run`（`GreenMonster.cs:13-36`）/ `RedMonster.Run`（`RedMonster.cs:13-36`）。
+///
+/// 两类逐句相同，唯一差异是 `MakePosion` 的毒型（`DECHEALTH` vs `DAMAGEARMOR`）⇒ 参数化
+/// 防止漂移。`CanMove` 门内有目标即写 `TargetX/Y = TargetCret.CurrX/CurrY`；两轴各 1 格时：
+/// **先抽** `Random(TargetCret.AntiPoison + 7)`，**再判** `TargetCret.StatusTimeArr[DECHEALTH] == 0`
+/// ——oracle 的 `&&` 短路发生在**抽数之后**（`GreenMonster.cs:23`），因此状态已存在时
+/// **仍抽数**、只是不施毒。尾段 `class_seek_gate` + `base.Run()`。
+///
+/// `AntiPoison` 取**目标**的（Rust 唯一注入面 = [`World::target_anti_poison`]）。
+fn green_red_monster_run(world: &mut World, actor_id: i32, poison_type: u8) {
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !can_move(e) {
+        return;
+    }
+    let (cx, cy, target_id) = (e.x, e.y, e.ai.target_creature);
+    if let Some(target_id) = target_id {
+        if let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) {
+            // oracle 无条件覆盖 `TargetX/TargetY`（不走 `SetTargetCreat`）。
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.target_x = tx;
+                e.ai.target_y = ty;
+            }
+            if (tx - cx).abs() == 1 && (ty - cy).abs() == 1 {
+                let anti_poison = world.target_anti_poison(target_id);
+                // **先抽**（即使 DECHEALTH 已存在，`&&` 的右支不求值但左支已抽）。
+                let roll_passed = world.rng.random_below(anti_poison + 7) <= 6;
+                let dec_health_free = world
+                    .entities
+                    .get(target_id)
+                    .is_some_and(|t| t.status_time[crate::entity::POISON_DECHEALTH] == 0);
+                if roll_passed && dec_health_free {
+                    world.make_posion(target_id, poison_type, 30, 1);
+                }
+            }
+        }
+    }
+    class_seek_gate(world, actor_id);
+}
+
+/// `Khazard.Run`（`Khazard.cs:13-59`）。
+///
+/// 有目标 ⇒ 目标格写 `TargetX/Y`；`|Δx| == 2 && |Δy| == 2` 时按 `Random(2)` 分两支：
+/// - `==0`：`GetFrontPosition`（**自己**的朝向前格）→ `TargetCret.SendRefMsg(RM_SPACEMOVE_FIRE)`
+///   → `TargetCret.SpaceMove(this.MapName, nX, nY, 0)`；
+/// - `!=0`：目标 `HP <= MaxHP / 2` 才 `GetFrontPosition`（否则 `nX/nY` 保持 **0**，oracle 原样），
+///   随后**无条件** `SendRefMsg + SpaceMove(…, 0, 0)`。
+///
+/// 两支之后同序两抽：`Random(1)`（恒 0 但**必抽**）+ `Random(TargetCret.AntiPoison + 7)`，
+/// `<= 6` ⇒ `MakePosion(DECHEALTH, 35, 2)` 并 **`return`**（跳过索敌门与 `base.Run()`）。
+/// 毒门不成立 ⇒ 落回索敌门，再 `base.Run()`（= `MonsterObject.Run`）。
+///
+/// 发帧者是 **`TargetCret`**（不是 Khazard）：`send_ref_msg(world, target_id, …)`。
+/// 落点走 `space_move` 的移位环（起点可走 ⇒ 0 抽）。
+fn khazard_run(world: &mut World, actor_id: i32) -> bool {
+    let Some(e) = world.entities.get(actor_id) else {
+        return false;
+    };
+    if !can_move(e) {
+        return false;
+    }
+    let (cx, cy, target_id, map_id, dir) = (e.x, e.y, e.ai.target_creature, e.map_id, e.ai.dir);
+    if let Some(target_id) = target_id {
+        if let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.ai.target_x = tx;
+                e.ai.target_y = ty;
+            }
+            if (tx - cx).abs() == 2 && (ty - cy).abs() == 2 {
+                // oracle `short nX = 0; short nY = 0;`（两支持续共用；!=0 支可能不重算）。
+                let mut n_x = 0;
+                let mut n_y = 0;
+                if world.rng.random_below(2) == 0 {
+                    if let Some((fx, fy)) = front_of(world, actor_id, dir, map_id) {
+                        n_x = fx;
+                        n_y = fy;
+                    }
+                    // `TargetCret.SendRefMsg(...)`——发帧者 = 目标。
+                    send_ref_msg(world, target_id, RM_SPACEMOVE_FIRE, 0, 0, 0, 0);
+                    let _ =
+                        crate::space_move::monster_space_move(world, target_id, map_id, n_x, n_y);
+                    if world.rng.random_below(1) == 0
+                        && world
+                            .rng
+                            .random_below(world.target_anti_poison(target_id) + 7)
+                            <= 6
+                    {
+                        world.make_posion(target_id, crate::entity::POISON_DECHEALTH as u8, 35, 2);
+                        return true;
+                    }
+                } else {
+                    let half_or_below = world
+                        .entities
+                        .get(target_id)
+                        .is_some_and(|t| i32::from(t.hp) <= i32::from(t.max_hp) / 2);
+                    if half_or_below {
+                        if let Some((fx, fy)) = front_of(world, actor_id, dir, map_id) {
+                            n_x = fx;
+                            n_y = fy;
+                        }
+                    }
+                    send_ref_msg(world, target_id, RM_SPACEMOVE_FIRE, 0, 0, 0, 0);
+                    let _ =
+                        crate::space_move::monster_space_move(world, target_id, map_id, n_x, n_y);
+                    if world.rng.random_below(1) == 0
+                        && world
+                            .rng
+                            .random_below(world.target_anti_poison(target_id) + 7)
+                            <= 6
+                    {
+                        world.make_posion(target_id, crate::entity::POISON_DECHEALTH as u8, 35, 2);
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    class_seek_gate(world, actor_id);
+    false
+}
+
+/// `FrostTiger.Run`（`FrostTiger.cs:14-36`）。
+///
+/// `CanMove` 门内：无目标且 `StatusTimeArr[STATETRANSPARENT] == 0` ⇒
+/// `MagicManager.MagMakePrivateTransparent(this, 180)`（复用 [`World::mag_make_private_transparent`]，
+/// 其内部按 `GetMapBaseObjects(9)` 逐目标 `Random(2)`）；有目标 ⇒ 只把
+/// `StatusTimeArr[STATETRANSPARENT]` 置 **0**（oracle **不**在此清 `HideMode/Transparent`，
+/// 那两个位由 `RecalcAbilitys` 收口）。尾段 `class_seek_gate` + `base.Run()`。
+fn frost_tiger_run(world: &mut World, actor_id: i32) {
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !can_move(e) {
+        return;
+    }
+    let has_target = e.ai.target_creature.is_some();
+    let transparent_status = e.status_time[crate::entity::POISON_STATETRANSPARENT];
+    if !has_target {
+        if transparent_status == 0 {
+            world.mag_make_private_transparent(actor_id, 180);
+        }
+    } else if let Some(e) = world.entities.get_mut(actor_id) {
+        e.status_time[crate::entity::POISON_STATETRANSPARENT] = 0;
+    }
+    class_seek_gate(world, actor_id);
+}
+
+/// `TeleMonster.Run`（`TeleMonster.cs:12-31`）。
+///
+/// `CanMove` 门内有目标、且 `|CurrX - TargetX| > 5 || |CurrY - TargetY| > 5`
+/// （**比较的是 `TargetX/TargetY` 字段，不是 `TargetCret.CurrX/CurrY`**——目标刚被
+/// `SetTargetCreat` 选中、`TargetX/Y` 还是 -1 时也会触发，oracle 原样）⇒
+/// `this.SendRefMsg(RM_SPACEMOVE_FIRE)` + `SpaceMove(TargetCret.MapName, TargetCret.CurrX,
+/// TargetCret.CurrY, 0)`。尾段 `class_seek_gate` + `base.Run()`。
+fn tele_monster_run(world: &mut World, actor_id: i32) {
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !can_move(e) {
+        return;
+    }
+    let (cx, cy, target_id, target_x, target_y) =
+        (e.x, e.y, e.ai.target_creature, e.ai.target_x, e.ai.target_y);
+    if let Some(target_id) = target_id {
+        if (cx - target_x).abs() > 5 || (cy - target_y).abs() > 5 {
+            send_ref_msg(world, actor_id, RM_SPACEMOVE_FIRE, 0, 0, 0, 0);
+            let dest = world.entities.get(target_id).map(|t| (t.map_id, t.x, t.y));
+            if let Some((dest_map, dx, dy)) = dest {
+                let _ = crate::space_move::monster_space_move(world, actor_id, dest_map, dx, dy);
+            }
+        }
+    }
+    class_seek_gate(world, actor_id);
+}
+
 /// 专用怪 `Run` 覆写的分派（`CreateMonster` 的 race → 类映射）。
 ///
 /// 已接：MB-1 的 `StickMonster`(85)/`DigOutZombi`(95)/`ScultureMonster`(101)/
 /// `BigHeartMonster`(115)；MB-2 的 `ChickenDeer`(52)/`DualAxeMonster`(87，93/104 继承)/
 /// `LightingZombi`(94)/`ZilKinZombi`(96)；MB-3 的 `CentipedeKing`(107)/`GasMoth`(105)/
-/// `ScultureKing`(102)/`ExplosionSpider`(117)；MB-4 的 `CowKingMonster`(92)。
+/// `ScultureKing`(102)/`ExplosionSpider`(117)；MB-4 的 `CowKingMonster`(92)；
+/// MB-5 的 `TeleMonster`(203)/`Khazard`(206)/`GreenMonster`(208)/`RedMonster`(209)/`FrostTiger`(210)。
 ///
 /// 返回 `None` = 非上述类，调用方继续走通用 [`monster_run`]；否则按 [`ClassRunBase`]
 /// 决定 oracle `base.Run()` 的落点。
@@ -941,6 +1148,36 @@ pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBas
             } else {
                 Some(ClassRunBase::Monster)
             }
+        }
+        // **MB-5**：毒 / 隐身 / 瞬移五类（全部 `: MonsterObject` ⇒
+        // `base.Run()` = `MonsterObject.Run`）。
+        // `TeleMonster`（203）：`TargetX/Y` 错位瞬移。
+        203 => {
+            tele_monster_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        // `Khazard`（206）：目标 `return`（毒门命中）时 oracle **跳过 `base.Run()`**
+        // ⇒ `ClassRunBase::None`（与 CowKing 的 Siege 两支同口径）。
+        206 => {
+            if khazard_run(world, actor_id) {
+                Some(ClassRunBase::None)
+            } else {
+                Some(ClassRunBase::Monster)
+            }
+        }
+        // `GreenMonster`（208）/ `RedMonster`（209）：只差毒型。
+        208 => {
+            green_red_monster_run(world, actor_id, crate::entity::POISON_DECHEALTH as u8);
+            Some(ClassRunBase::Monster)
+        }
+        209 => {
+            green_red_monster_run(world, actor_id, crate::entity::POISON_DAMAGEARMOR as u8);
+            Some(ClassRunBase::Monster)
+        }
+        // `FrostTiger`（210）：透明 180s / 有目标清计时器。
+        210 => {
+            frost_tiger_run(world, actor_id);
+            Some(ClassRunBase::Monster)
         }
         _ => None,
     }
@@ -10275,6 +10512,525 @@ mod tests {
             vec![999],
             "oracle return ⇒ base.Run 的消息段不得执行"
         );
+    }
+
+    // ===================== MB-5：毒 / 隐身 / 瞬移（race 203/206/208/209/210） =====================
+    //
+    // 统一口径：固定 `clock_ms = 100_000`；把 `search_enemy_tick` 抬到 now 以关闭 8s/1s
+    // 索敌门（`SearchTarget` 不抽数，但会改写目标态，非本段判据的噪声源）；目标用
+    // `enter_world` 落格，使 `SpaceMove` 的摘格/登记真正发生。RNG 判据一律用「同种子
+    // 探针按预期抽数序列复算，最后比较 `random()`」——少抽/多抽/换序都会使探针状态错位。
+
+    fn find_seed(mut pred: impl FnMut(&mut RandomNumber) -> bool) -> i32 {
+        for seed in 0..200_000 {
+            let mut r = RandomNumber::with_seed(seed);
+            if pred(&mut r) {
+                return seed;
+            }
+        }
+        unreachable!("20 万种子里应能找到目标取值");
+    }
+
+    fn set_race(world: &mut World, id: i32, race: u8) {
+        world.entities.get_mut(id).unwrap().race = race;
+    }
+
+    fn set_anti_poison(world: &mut World, id: i32, anti_poison: u16) {
+        world.set_attack_poison(
+            id,
+            crate::combat::AttackPoisonState {
+                paralysis: false,
+                un_paralysis: false,
+                anti_poison,
+            },
+        );
+    }
+
+    fn quiet_seek(world: &mut World, id: i32) {
+        world.entities.get_mut(id).unwrap().ai.search_enemy_tick = world.clock_ms;
+    }
+
+    /// R22：`Random(TargetCret.AntiPoison + 7) <= 6` 过门 ⇒ `MakePosion(DECHEALTH, 30, 1)`；
+    /// 且 `TargetX/Y` 被写成目标当前格（`GreenMonster.cs:17-18`）。
+    #[test]
+    fn green_monster_poisons_adjacent_diagonal() {
+        let seed = find_seed(|r| r.random_below(7) == 0);
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let mid = monster(&mut w, 10, 10);
+        set_race(&mut w, mid, 208);
+        assert!(w.enter_world(mid));
+        let tid = player(&mut w, 11, 11);
+        assert!(w.enter_world(tid));
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(tid);
+        quiet_seek(&mut w, mid);
+        w.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        assert_eq!(probe.random_below(7), 0);
+
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert!(
+            w.buffs.has_buff(tid, crate::buff::BuffType::GreenPoison),
+            "两轴各 1 格且过门 ⇒ 绿毒"
+        );
+        let buff = &w.buffs.list(tid).unwrap()[0];
+        assert_eq!(
+            (buff.state_tick, buff.state_val),
+            (30, 1),
+            "MakePosion(DECHEALTH,30,1)"
+        );
+        let a = w.entities.get(mid).unwrap();
+        assert_eq!(
+            (a.ai.target_x, a.ai.target_y),
+            (11, 11),
+            "TargetX/Y 跟随目标当前格"
+        );
+        assert_eq!(w.rng.random(), probe.random(), "只抽一次 Random(7)");
+    }
+
+    /// R22 的**取数次序**（先抽后判）：`StatusTimeArr[DECHEALTH] != 0` 时仍消耗一次
+    /// `Random(AntiPoison+7)`，只是不施毒（`GreenMonster.cs:23` 的 `&&`）。
+    /// 改坏（先判状态再抽）⇒ 本用例的 `w.rng.random()` 比探针少一次 ⇒ 必红。
+    #[test]
+    fn green_monster_draws_before_dechealth_gate() {
+        let seed = find_seed(|r| r.random_below(7) == 0);
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let mid = monster(&mut w, 10, 10);
+        set_race(&mut w, mid, 208);
+        assert!(w.enter_world(mid));
+        let tid = player(&mut w, 11, 11);
+        assert!(w.enter_world(tid));
+        w.entities.get_mut(tid).unwrap().status_time[crate::entity::POISON_DECHEALTH] = 9;
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(tid);
+        quiet_seek(&mut w, mid);
+        w.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        let _ = probe.random_below(7);
+
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert!(
+            !w.buffs.has_buff(tid, crate::buff::BuffType::GreenPoison),
+            "DECHEALTH 已存在 ⇒ 不施毒"
+        );
+        assert_eq!(
+            w.rng.random(),
+            probe.random(),
+            "状态已存在时**仍抽数**（先抽 Random、再判 DECHEALTH）"
+        );
+    }
+
+    /// R22：`Random` 的模数取**目标**的 `AntiPoison + 7`。目标 `AntiPoison=7` 且种子使
+    /// `Random(14) > 6` ⇒ 不施毒；若误用 `Random(7)`（antipoison 恒 0）则必过门而施毒。
+    #[test]
+    fn green_monster_random_modulus_reads_target_anti_poison() {
+        let seed = find_seed(|r| r.random_below(14) > 6);
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let mid = monster(&mut w, 10, 10);
+        set_race(&mut w, mid, 208);
+        assert!(w.enter_world(mid));
+        let tid = player(&mut w, 11, 11);
+        assert!(w.enter_world(tid));
+        set_anti_poison(&mut w, tid, 7);
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(tid);
+        quiet_seek(&mut w, mid);
+        w.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        assert!(probe.random_below(14) > 6);
+
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert!(
+            !w.buffs.has_buff(tid, crate::buff::BuffType::GreenPoison),
+            "Random(AntiPoison+7) 的模数必须是 14，不是 7"
+        );
+        assert_eq!(w.rng.random(), probe.random(), "仍恰一次抽数");
+    }
+
+    /// R22 的邻接门：两轴必须**同时**为 1。`(1,0)` ⇒ 零抽、无副作用，但 `TargetX/Y` 仍刷新
+    /// （`GreenMonster.cs:17-18` 在距离判定之前）。
+    #[test]
+    fn green_monster_diagonal_gate_requires_both_axes() {
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let mid = monster(&mut w, 10, 10);
+        set_race(&mut w, mid, 208);
+        assert!(w.enter_world(mid));
+        let tid = player(&mut w, 11, 10);
+        assert!(w.enter_world(tid));
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(tid);
+        quiet_seek(&mut w, mid);
+        w.rng = RandomNumber::with_seed(42);
+        let before = w.rng.random();
+        w.rng = RandomNumber::with_seed(42);
+
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert!(!w.buffs.has_buff(tid, crate::buff::BuffType::GreenPoison));
+        let a = w.entities.get(mid).unwrap();
+        assert_eq!(
+            (a.ai.target_x, a.ai.target_y),
+            (11, 10),
+            "TargetX/Y 在门之前刷新"
+        );
+        assert_eq!(w.rng.random(), before, "非对角邻接 ⇒ 零抽");
+    }
+
+    /// R29：与 R22 逐句相同，唯一差异毒型 = `DAMAGEARMOR`（`RedMonster.cs:25`）。
+    #[test]
+    fn red_monster_poisons_with_damage_armor_type() {
+        let seed = find_seed(|r| r.random_below(7) == 0);
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let mid = monster(&mut w, 10, 10);
+        set_race(&mut w, mid, 209);
+        assert!(w.enter_world(mid));
+        let tid = player(&mut w, 11, 11);
+        assert!(w.enter_world(tid));
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(tid);
+        quiet_seek(&mut w, mid);
+        w.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        let _ = probe.random_below(7);
+
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        assert!(
+            w.buffs.has_buff(tid, crate::buff::BuffType::RedPoison),
+            "红毒 = DAMAGEARMOR"
+        );
+        assert!(!w.buffs.has_buff(tid, crate::buff::BuffType::GreenPoison));
+        assert_eq!(w.rng.random(), probe.random());
+    }
+
+    /// R23 的 `Random(2)==0` 支：目标瞬移到 **Khazard 自己**的朝向前格，随后
+    /// `Random(1)` + `Random(AntiPoison+7)` 两抽；过门 ⇒ `DECHEALTH,35,2` 并
+    /// **`return`**（分派返回 `ClassRunBase::None` ⇒ 跳过 `base.Run()`）。
+    #[test]
+    fn khazard_branch_zero_teleports_target_then_poisons_and_returns() {
+        let seed = find_seed(|r| r.random_below(2) == 0);
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let mid = monster(&mut w, 10, 10);
+        set_race(&mut w, mid, 206);
+        w.entities.get_mut(mid).unwrap().ai.dir = DIR_RIGHT; // 前格 = (11,10)
+        assert!(w.enter_world(mid));
+        let tid = player(&mut w, 12, 12);
+        assert!(w.enter_world(tid));
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(tid);
+        quiet_seek(&mut w, mid);
+        w.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        assert_eq!(probe.random_below(2), 0);
+        let _ = probe.random_below(1);
+        let _ = probe.random_below(7);
+
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::None));
+        let a = w.entities.get(mid).unwrap();
+        assert_eq!(
+            (a.ai.target_x, a.ai.target_y),
+            (12, 12),
+            "TargetX/Y 跟随目标当前格"
+        );
+        let t = w.entities.get(tid).unwrap();
+        assert_eq!((t.x, t.y), (11, 10), "落点 = GetFrontPosition(Khazard)");
+        assert!(
+            w.buffs.has_buff(tid, crate::buff::BuffType::GreenPoison),
+            "Khazard 的毒型是 DECHEALTH"
+        );
+        let buff = &w.buffs.list(tid).unwrap()[0];
+        assert_eq!((buff.state_tick, buff.state_val), (35, 2));
+        let frame = w
+            .pending_monster_ref_msgs
+            .iter()
+            .find(|m| m.ident == RM_SPACEMOVE_FIRE)
+            .expect("RM_SPACEMOVE_FIRE 帧");
+        assert_eq!(
+            frame.actor_id, tid,
+            "发帧者是 TargetCret（TargetCret.SendRefMsg），不是 Khazard"
+        );
+        assert_eq!(
+            w.rng.random(),
+            probe.random(),
+            "抽数序：Random(2) → Random(1) → Random(AntiPoison+7)"
+        );
+    }
+
+    /// R23 的 `Random(2)!=0` 支、目标 **HP > 半血**：`GetFrontPosition` 不被调用 ⇒
+    /// `nX/nY` 保持 0，`SpaceMove(MapName, 0, 0, 0)` 落到 (0,0)（oracle 原样怪癖）。
+    #[test]
+    fn khazard_branch_one_above_half_hp_teleports_to_origin_corner() {
+        let seed = find_seed(|r| r.random_below(2) == 1);
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let mid = monster(&mut w, 10, 10);
+        set_race(&mut w, mid, 206);
+        w.entities.get_mut(mid).unwrap().ai.dir = DIR_RIGHT;
+        assert!(w.enter_world(mid));
+        let tid = player(&mut w, 12, 12);
+        w.entities.get_mut(tid).unwrap().hp = 100;
+        w.entities.get_mut(tid).unwrap().max_hp = 100;
+        assert!(w.enter_world(tid));
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(tid);
+        quiet_seek(&mut w, mid);
+        w.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        assert_eq!(probe.random_below(2), 1);
+        let _ = probe.random_below(1);
+        let _ = probe.random_below(7);
+
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::None));
+        let t = w.entities.get(tid).unwrap();
+        assert_eq!(
+            (t.x, t.y),
+            (0, 0),
+            "HP > MaxHP/2 ⇒ 不重算前格，SpaceMove 起点保持 (0,0)"
+        );
+        assert_eq!(w.rng.random(), probe.random(), "两支同序三抽");
+    }
+
+    /// R23 的 `Random(2)!=0` 支、目标 **HP <= 半血**：才调 `GetFrontPosition` ⇒ 落点 = 前格。
+    #[test]
+    fn khazard_branch_one_at_half_hp_uses_front_position() {
+        let seed = find_seed(|r| r.random_below(2) == 1);
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let mid = monster(&mut w, 10, 10);
+        set_race(&mut w, mid, 206);
+        w.entities.get_mut(mid).unwrap().ai.dir = DIR_RIGHT;
+        assert!(w.enter_world(mid));
+        let tid = player(&mut w, 12, 12);
+        w.entities.get_mut(tid).unwrap().hp = 50;
+        w.entities.get_mut(tid).unwrap().max_hp = 100;
+        assert!(w.enter_world(tid));
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(tid);
+        quiet_seek(&mut w, mid);
+        w.rng = RandomNumber::with_seed(seed);
+
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::None));
+        let t = w.entities.get(tid).unwrap();
+        assert_eq!((t.x, t.y), (11, 10), "HP <= MaxHP/2 ⇒ 前格落点");
+    }
+
+    /// R23：毒门失败时 oracle **不 return** ⇒ 落回索敌门并继续 `base.Run()`
+    /// （分派返回 `ClassRunBase::Monster`），但瞬移与两抽都已发生。
+    #[test]
+    fn khazard_failed_poison_gate_falls_through_to_base_run() {
+        let seed = find_seed(|r| {
+            r.random_below(2) == 0 && {
+                let _ = r.random_below(1);
+                r.random_below(14) > 6
+            }
+        });
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let mid = monster(&mut w, 10, 10);
+        set_race(&mut w, mid, 206);
+        assert!(w.enter_world(mid));
+        let tid = player(&mut w, 12, 12);
+        assert!(w.enter_world(tid));
+        set_anti_poison(&mut w, tid, 7);
+        w.entities.get_mut(mid).unwrap().ai.target_creature = Some(tid);
+        quiet_seek(&mut w, mid);
+        w.rng = RandomNumber::with_seed(seed);
+
+        assert_eq!(
+            monster_class_run(&mut w, mid),
+            Some(ClassRunBase::Monster),
+            "毒门失败 ⇒ 不跳过 base.Run()"
+        );
+        assert!(!w.buffs.has_buff(tid, crate::buff::BuffType::GreenPoison));
+        let t = w.entities.get(tid).unwrap();
+        assert_eq!((t.x, t.y), (10, 9), "dir=Up 的前格 = (10,9)");
+    }
+
+    /// R20：无目标且透明计时器为 0 ⇒ `MagMakePrivateTransparent(this, 180)`；
+    /// 邻格有怪以它为靶 ⇒ helper 内 `Random(2)==0` 清靶（一次抽数）。
+    #[test]
+    fn frost_tiger_becomes_transparent_and_clears_nearby_targets() {
+        let seed = find_seed(|r| r.random_below(2) == 0);
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let tiger = monster(&mut w, 10, 10);
+        set_race(&mut w, tiger, 210);
+        assert!(w.enter_world(tiger));
+        let viewer = monster(&mut w, 11, 10);
+        assert!(w.enter_world(viewer));
+        w.entities.get_mut(viewer).unwrap().ai.target_creature = Some(tiger);
+        quiet_seek(&mut w, tiger);
+        w.rng = RandomNumber::with_seed(seed);
+        let mut probe = RandomNumber::with_seed(seed);
+        let _ = probe.random_below(2);
+
+        assert_eq!(
+            monster_class_run(&mut w, tiger),
+            Some(ClassRunBase::Monster)
+        );
+        let e = w.entities.get(tiger).unwrap();
+        assert_eq!(
+            e.status_time[crate::entity::POISON_STATETRANSPARENT],
+            180,
+            "MagMakePrivateTransparent(this, 180)"
+        );
+        assert!(e.hide_mode && e.transparent);
+        assert_eq!(
+            w.entities.get(viewer).unwrap().ai.target_creature,
+            None,
+            "邻格 Random(2)==0 ⇒ 清靶"
+        );
+        assert_eq!(w.rng.random(), probe.random(), "helper 内恰一次 Random(2)");
+    }
+
+    /// R20：无目标但透明计时器 > 0 ⇒ **不调用** helper（零抽、计时器不变）。
+    #[test]
+    fn frost_tiger_skips_transparent_helper_while_timer_active() {
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let tiger = monster(&mut w, 10, 10);
+        set_race(&mut w, tiger, 210);
+        w.entities.get_mut(tiger).unwrap().status_time[crate::entity::POISON_STATETRANSPARENT] = 50;
+        assert!(w.enter_world(tiger));
+        quiet_seek(&mut w, tiger);
+        w.rng = RandomNumber::with_seed(3);
+        let before = w.rng.random();
+        w.rng = RandomNumber::with_seed(3);
+
+        assert_eq!(
+            monster_class_run(&mut w, tiger),
+            Some(ClassRunBase::Monster)
+        );
+        let e = w.entities.get(tiger).unwrap();
+        assert_eq!(e.status_time[crate::entity::POISON_STATETRANSPARENT], 50);
+        assert!(!e.hide_mode);
+        assert_eq!(w.rng.random(), before, "计时器 > 0 ⇒ 零抽");
+    }
+
+    /// R20：有目标 ⇒ 只把 `StatusTimeArr[STATETRANSPARENT]` 置 0；oracle **不**在此清
+    /// `HideMode/Transparent`（由 `RecalcAbilitys` 收口）⇒ 本测试把该怪癖钉死。
+    #[test]
+    fn frost_tiger_with_target_resets_timer_only() {
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let tiger = monster(&mut w, 10, 10);
+        set_race(&mut w, tiger, 210);
+        {
+            let e = w.entities.get_mut(tiger).unwrap();
+            e.status_time[crate::entity::POISON_STATETRANSPARENT] = 180;
+            e.hide_mode = true;
+            e.transparent = true;
+        }
+        assert!(w.enter_world(tiger));
+        let tid = player(&mut w, 12, 10);
+        assert!(w.enter_world(tid));
+        w.entities.get_mut(tiger).unwrap().ai.target_creature = Some(tid);
+        quiet_seek(&mut w, tiger);
+        w.rng = RandomNumber::with_seed(3);
+        let before = w.rng.random();
+        w.rng = RandomNumber::with_seed(3);
+
+        assert_eq!(
+            monster_class_run(&mut w, tiger),
+            Some(ClassRunBase::Monster)
+        );
+        let e = w.entities.get(tiger).unwrap();
+        assert_eq!(e.status_time[crate::entity::POISON_STATETRANSPARENT], 0);
+        assert!(
+            e.hide_mode && e.transparent,
+            "oracle 不在此清 HideMode/Transparent"
+        );
+        assert_eq!(w.rng.random(), before, "有目标支零抽");
+    }
+
+    /// R40：条件读 `TargetX/TargetY` 字段（不是 `TargetCret.CurrX/CurrY`）。
+    /// 目标实际在 (20,20)、但字段 `TargetX/Y = 10/10` ⇒ **不瞬移**。
+    #[test]
+    fn tele_monster_compares_target_fields_not_target_current_cell() {
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let mid = monster(&mut w, 10, 10);
+        set_race(&mut w, mid, 203);
+        assert!(w.enter_world(mid));
+        let tid = player(&mut w, 20, 20);
+        assert!(w.enter_world(tid));
+        {
+            let a = &mut w.entities.get_mut(mid).unwrap().ai;
+            a.target_creature = Some(tid);
+            a.target_x = 10;
+            a.target_y = 10;
+        }
+        quiet_seek(&mut w, mid);
+
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        let e = w.entities.get(mid).unwrap();
+        assert_eq!(
+            (e.x, e.y),
+            (10, 10),
+            "字段距离 <= 5 ⇒ 不瞬移（目标实际距 10 格）"
+        );
+        assert!(!w
+            .pending_monster_ref_msgs
+            .iter()
+            .any(|m| m.ident == RM_SPACEMOVE_FIRE));
+    }
+
+    /// R40：字段错位但触发 ⇒ 落点是 `TargetCret.MapName/CurrX/CurrY`（目标**当前**格），
+    /// 不是 `TargetX/Y`；发帧者 = TeleMonster 自己。
+    #[test]
+    fn tele_monster_teleports_to_target_current_cell_on_field_mismatch() {
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let mid = monster(&mut w, 10, 10);
+        set_race(&mut w, mid, 203);
+        assert!(w.enter_world(mid));
+        let tid = player(&mut w, 13, 10);
+        assert!(w.enter_world(tid));
+        {
+            let a = &mut w.entities.get_mut(mid).unwrap().ai;
+            a.target_creature = Some(tid);
+            a.target_x = 0;
+            a.target_y = 0;
+        }
+        quiet_seek(&mut w, mid);
+
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        // 本函数自身瞬移到目标当前格；落点可走 ⇒ SpaceMove 零抽。
+        let e = w.entities.get(mid).unwrap();
+        assert_eq!((e.x, e.y), (13, 10), "SpaceMove(TargetCret.CurrX/CurrY)");
+        let frame = w
+            .pending_monster_ref_msgs
+            .iter()
+            .find(|m| m.ident == RM_SPACEMOVE_FIRE)
+            .expect("RM_SPACEMOVE_FIRE 帧");
+        assert_eq!(
+            frame.actor_id, mid,
+            "this.SendRefMsg ⇒ 发帧者 = TeleMonster"
+        );
+    }
+
+    /// 五类共用的 8s/1s 索敌门：>1000ms 且无目标 ⇒ `SearchTarget` 并刷新 `SearchEnemyTick`。
+    #[test]
+    fn mb5_class_run_shares_the_8s_1s_seek_gate() {
+        let mut w = World::new(60, 60);
+        w.clock_ms = 100_000;
+        let mid = monster(&mut w, 10, 10);
+        set_race(&mut w, mid, 203);
+        assert!(w.enter_world(mid));
+        let tid = player(&mut w, 12, 10);
+        assert!(w.enter_world(tid));
+        {
+            let e = w.entities.get_mut(mid).unwrap();
+            e.ai.search_enemy_tick = 100_000 - 1001;
+            e.visible_actors = vec![crate::entity::VisibleBaseObject {
+                target: tid,
+                flag: crate::entity::VisibleFlag::Show,
+            }];
+        }
+
+        assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
+        let e = w.entities.get(mid).unwrap();
+        assert_eq!(
+            e.ai.search_enemy_tick, 100_000,
+            "过门必刷新 SearchEnemyTick"
+        );
+        assert_eq!(e.ai.target_creature, Some(tid), "SearchTarget 选中玩家");
     }
 }
 
