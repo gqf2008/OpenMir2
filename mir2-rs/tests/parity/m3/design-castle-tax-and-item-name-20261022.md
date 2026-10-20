@@ -11,17 +11,27 @@
 
 实现卡的 reviewer 应先用下列哈希确认自己的检出与本文一致；任何一项不同，行号引用即失效。
 
+**归一化口径（2026-10-20 订正）**：表内 sha256 一律是**工作树原始字节**的 `sha256sum`，不做事先 EOL 转换。本仓 `core.autocrlf=false`；`git ls-files --eol` 显示 15 个文件 `w/lf`、`src/GameSrv/Npc/Merchant.cs` 因 blob 本身 CRLF 显示 `w/crlf`。等价的与检出无关的可复现写法是对 blob 内容做哈希（与工作树逐字节一致）：
+
+```sh
+git config core.autocrlf                             # false
+git ls-files --eol <上述 16 个文件>                  # 15×w/lf；Merchant.cs w/crlf
+sha256sum <上述 16 个文件>                           # 或：git show c83a9ae24:<path> | sha256sum
+```
+
+> 旧表有 8 个 C# 值是把 LF blob 逐行转 CRLF 后算的（`Merchant.cs` 本身 CRLF 入库，故 raw 字节偶然命中），在本仓 LF 检出上不可复现；下列值已全部按上述口径重算。
+
 | 文件 | sha256 |
 |---|---|
 | `src/GameSrv/Npc/Merchant.cs` | `ccefc0ecf719baf8bec59077b198a146c4e2ecf2491973e603845ffd8b291bfc` |
-| `src/M2Server/Castle/UserCastle.cs` | `fb9adf607e6df1f3998480682cc7ed0fa477a233bcfdcf107725d3f96d929d69` |
-| `src/M2Server/Castle/CastleManager.cs` | `302c1dd3e9bc27b982b26fc9ded687a51a3c613ff307e5c0fcbfbd9c87b91345` |
-| `src/M2Server/Items/GameItemSystem.cs` | `87f79392f4127ac2cfbd3c30bc2d7f5a8d9a12481e5544b63bb475c1517e154a` |
-| `src/M2Server/Items/CustomItemSystem.cs` | `9f05c55dc150aa5e03f67a91940cbb5b0018409008281d270eb153b59725b740` |
-| `src/M2Server/Player/PlayObject.Base.cs` | `24e3e3070c9874a2eb1ea3ad160311ee148759e572f180806b326fc6789e7e78` |
-| `src/M2Server/Player/PlayObject.Operate.cs` | `e23b446065ff2c7995940f8dd31642de81aa1a3fae9ef51a08ee9ca0e7ea1081` |
-| `src/OpenMir2/Packets/ClientPackets/ClientItem.cs` | `93b148ccf8a0b9b4e9456f72db26c149f91b4e9b2964742dac389eaf4e40cd22` |
-| `src/OpenMir2/Extensions/BinaryWriterExtension.cs` | `eabf5aeba20a06063da4149028f09f7804bcd97f18695620f27ef12befc4d7b3` |
+| `src/M2Server/Castle/UserCastle.cs` | `b6660b12434529209de9b19b7dc9eefaf350830b2e2045ddcd54447c6c05ab52` |
+| `src/M2Server/Castle/CastleManager.cs` | `913f0cbb18cb744912a3c95e7d846bfec4b8b53d0837fbaabdfb835f6e50798a` |
+| `src/M2Server/Items/GameItemSystem.cs` | `e5acbfcf0ad282500b5c5d95175bdd2151a3fd5090aed371416731ac1c3149df` |
+| `src/M2Server/Items/CustomItemSystem.cs` | `31f46666e4c0e1b2a234dc9bd94717673afd315f182b132e81c4c6693baf21aa` |
+| `src/M2Server/Player/PlayObject.Base.cs` | `230eec7683e640ba42d690e0c20de365d5b688eb92b5fa2dcce3d22e94cbea6b` |
+| `src/M2Server/Player/PlayObject.Operate.cs` | `42d9aa16ffd5568971eec4daad283c1c0f7ecaed16634615fecb3bf37ab052db` |
+| `src/OpenMir2/Packets/ClientPackets/ClientItem.cs` | `7dbdd7219e8fa61448ab1b13417418b2a307f387132429d9174a6f1bcfe1e650` |
+| `src/OpenMir2/Extensions/BinaryWriterExtension.cs` | `8c950be79e8d97537e49e3dd847621d5988f3d2d52eee1054aed2d4ffa835428` |
 | `mir2-rs/crates/world/src/castle_tax.rs` | `3f8280027f3bf8abcf3155b7b0caf9be82819c1ca873b773d1460796199744e6` |
 | `mir2-rs/crates/formula/src/shop.rs` | `7e9e594826fc43e17ce4ceb14338aeb4c0aa7ed874958847ae99f9816fceb09b` |
 | `mir2-rs/bins/game-svr/src/shop.rs` | `58d1c92edf41e45d2228d57cf09dcee35fb4ac152bb9d7f3ddfbef12c4779de4` |
@@ -44,7 +54,7 @@
 | `UpgradeWeaponPrice` | `10000` | 同上 `:333`；`GameSvrConf.cs:1420` |
 | `SuperRepairPriceRate` | `3` | 同上 `:725`；`GameSvrConf.cs:1709` |
 | `Castle/List.txt` | `0`、`1` 两行 | `E:/MirServer/M2GameSvr/Castle/List.txt` |
-| `Castle/Castle/SabukW.txt` | `CastleMap=3`、`Home=(644,290)`、`WarRange=(100,100)`、`EnvirList=0151..0156`（重复多轮） | 实读文件（见 §1.2） |
+| `Castle/Castle/SabukW.txt` | `[Defense] CastleMap=3`、`CastleHomeX/Y=(644,290)`、`CastleWarRangeX/Y=(100,100)`、`[Defense] CastleMapList=0151..0156`（逗号分隔、重复多轮；`CastleConf.LoadConfig` 解析进 `EnvirList`） | 实读文件（见 §1.2） |
 | `Envir/ItemNameList.txt` | 5 行（GB2312） | 见 §2.4.4 |
 
 ---
@@ -82,14 +92,14 @@ UserCastle.IncRateGold: Round(nGold * CastleTaxRate/100) → TodayIncome 日上�
 1. **`CastleMerchant` 来源**：`MerChant.txt` 第 8 列（0-based 第 7 个字段）`StrToInt(x,0) != 0`。
    - 生产加载器 `LocalDB.LoadMerchant()`（`LocalDB.cs:412-476`）用 `!= 0`。
    - `LocalDB.ReLoadMerchants()`（`:989-1059`）用 `!= 1` **反向**判，但唯一调用点 `ReloadNpcCommand.cs:24` 被注释 ⇒ **死代码，不要照它移植**（既有登记：`design-upgrade-npc-20261020.md` §0）。
-   - 部署 `MerChant.txt` 有 8 行第 8 列为 `1`：`0151` 武器铺、`0152` 仓库、`0153` 药店、`0154` 四家、`3` 的 `小贩(663,304)`。⇒ `CastleMerchant=true`。
+   - 部署 `MerChant.txt`（`E:/MirServer/M2GameSvr/Envir/MerChant.txt`，空白分隔）有 8 行第 8 列为 `1`：`0151` 武器铺、`0152` 仓库、`0153` 药店、`0154` 三家（手镯/项链/戒指）、`0155` 布衣店、地图 `3` 的小贩 `(663,304)`。⇒ `CastleMerchant=true`。
 2. **`Castle` 来源**：`NormNpc.Initialize()`（`NormNpc.cs:1676-1679`）在商人挂图时执行
    `Castle = SystemShare.CastleMgr.InCastleWarArea(this)`。`UserCastle.InCastleWarArea`（`UserCastle.cs:454-478`）三支：
    - `envir == CastleEnvir && |HomeX-x| < WarRangeX && |HomeY-y| < WarRangeY`（严格 `<`）；
    - `envir == PalaceEnvir || envir == SecretEnvir`；
    - `EnvirList` 中任一名与地图名 `OrdinalIgnoreCase` 相等。
    - **与 `CastleMerchant` 无关**：任何商人只要站在攻城区/皇宫/密道/`EnvirList` 图内，`Castle` 都会被赋值。
-3. **部署解析结果**：实读 `Castle/Castle/SabukW.txt` 得 `CastleMap=3`、`Home=(644,290)`、`WarRange=(100,100)`、`EnvirList=0151,0152,0153,0154,0155,0156`（文件中重复多轮）。
+3. **部署解析结果**：实读 `Castle/Castle/SabukW.txt` 得 `[Defense] CastleMap=3`、`CastleHomeX/Y=(644,290)`、`CastleWarRangeX/Y=(100,100)`，以及 `[Defense] CastleMapList=0151,0152,0153,0154,0155,0156,...`（逗号分隔、重复多轮）。该键由 `CastleConf.LoadConfig`（`CastleConf.cs:24-37`）解析进 `userCastle.EnvirList`；`InCastleWarArea` 第三支比对的是 `EnvirList`，不是原始键名。
    ⇒ 上述 8 个城堡商人的 `Castle` **都非 null**；`3` 图 `(663,304)` 距 `(644,290)` 为 `(19,14)`，严格落在 100 内。
 4. **时序**：`GameApp.cs:213` `CastleMgr.Initialize()` → `GameApp.cs:227` `LoadMerchant()` → `WorldEngine.Initialize()`（内部 `MerchantInitialize()`，`WorldServer.Merchant.cs:8-35`，这里跑 `merchant.Initialize()`）→ `GameApp.cs:246` `LoadCastleList()`。
    - 商人初始化时城堡表里只有 **1 座**已初始化城堡；`LoadCastleList()` 之后才追加 `Castle/0`、`Castle/1` 两座**从未 `Initialize()`** 的城堡。
@@ -201,7 +211,9 @@ if (CastleMerchant || SystemShare.Config.GetAllNpcTax) {
 **缺口（按“实现可独立合入”排序）**：
 
 1. **税从未落到状态**：`bins/game-svr/src/shop.rs:937`（卖）、`:1042`（买）、`:1217`（修）只有 `let _tax = ...`，条件算完即丢；升级武器（`crates/world/src/merchant.rs:964-1005`）也**没有**税分支。⇒ 沙巴克商人交易不增加 `TotalGold`。
-2. **成员价恒死**：`bins/game-svr/src/main.rs:4015` 的 `ShopContext.cfg.castle_member: false` 写死；`ShopContext` 没有玩家行会名，`MerchantState` 没有 `castle_index`（`crates/world/src/merchant.rs:130-235`）。⇒ 80% 永不生效。
+2. **成员价恒死（两层原因，缺一不可）**：
+   - **表层：配置开关写死**。`bins/game-svr/src/main.rs:4015` 的 `ShopContext.cfg.castle_member: false` 写死；`ShopContext` 没有玩家行会名，`MerchantState` 没有 `castle_index`（`crates/world/src/merchant.rs:130-235`）。⇒ 80% 永不生效。
+   - **底层：城主身份恒空**。即使把 `castle_member` 置 `true`，`UserCastle::is_master_guild_name`（`crates/world/src/castle.rs:1528-1538`）在 `master_guild == None` 时**恒 false**；`master_guild` 只由 `LoadConfig`（`UserCastle.cs:231`）/`GetCastle`（`UserCastle.cs:543`）赋值，本仓生产不赋值、`GetCastle` 未接线（白名单 **T-131**：「生产恒 false」）。⇒ 成员价仍恒死，必须**先接 `GetCastle`/`MasterGuild`**；只把 `castle_member` 改成 `is_master_guild_name(...)` 不足以让 80% 生效。
 3. **商人 `Castle` 未建模**：`MerchantState` 只有 `castle_merchant`/`castle_under_war`（后者恒 `false`，见 `merchant.rs:181`），没有“Initialize 时刻命中的城堡下标”。`castle_under_war` 是 `Merchant.Run` 显隐用的另一个 ⑧ 面，本片不要动。
 4. **`CastleMgr` 分支无目标**：`bins/game-svr/src/main.rs` 无 `CastleManager`（`World.castles: Vec<UserCastle>` 即全表，`world.rs:906`）。B-16 的“税基常量”实现好但**没有调用点**。
 5. **城堡表组成**：Rust `main.rs:15403-15410` 只 `load_sabuk_specs(Castle/Castle/SabukW.txt)` 建 1 座；oracle 另有 2 座未初始化城参与 `CastleMgr` 分支。部署 `GetAllNpcTax=0` ⇒ 当前无观测差异；若接 B-16 分支必须补齐（或显式登记“部署不可达”）。
@@ -216,7 +228,7 @@ if (CastleMerchant || SystemShare.Config.GetAllNpcTax) {
 | **T1a（world）** | `crates/world/src/merchant.rs`（+可能 `world.rs` 一个 helper） | `MerchantState` 增 `castle: Option<usize>`（名字建议 `castle_index`），`MerchantState::new` 增参数或设 `None` + setter；World 侧给一个 `set_merchant_castle_index(actor, idx)` / `merchant_castle_index(actor)`。**不改** `castle_tax.rs`/`formula`。 | 单测：构造两座城（一座含该 map/坐标、一座不含），设置后断言下标；再 `MapRandomMove` 后断言**不变**（照搬 §1.2.5）。 |
 | **T1b（bins spawn，冲突域）** | `bins/game-svr/src/merchant.rs` | spawn 时（城堡初始化之后）写 `world.castle_war_area_at(Some(map_id), x, y)`。 | 同 T1a 的集成断言。 |
 | **T2（bins shop，冲突域）** | `bins/game-svr/src/shop.rs` | `SellResult` / `BuyResult` / `RepairResult` 增 `tax: Option<(MerchantTaxTarget, i32)>`；四个成功分支用 `merchant_tax_target(m.castle_merchant, ctx.get_all_npc_tax, m.castle.is_some())` + `merchant_tax_amount(...)` 生成意图。**不在此片改 `main.rs`**。 | 单测：买/卖/修各一例，断言 `tax` 的 target 与 amount（含 B-16）。 |
-| **T3（bins main，冲突域）** | `bins/game-svr/src/main.rs` + `shop.rs` 的 `ShopContext` | `handle_shop_cmd`（`:4305`）拿到意图后：`Castle` ⇒ `world.castles[i].inc_rate_gold(&tax_cfg, amount, world.clock_ms)`；`CastleManager` ⇒ 遍历 `world.castles` 逐个 `inc_rate_gold`（**不要**新建 `CastleManager`，否则与 `world.castles` 双份状态）。`tax_cfg` 由 `guild_castle_cfg` + `ShopCfg.upgrade.price` 组装（`CastleTaxConfig::from_guild_castle_config`）。同时把 `shop_context` 的 `castle_member` 改为 `merchant.castle.is_some_and(|i| world.castles[i].is_master_guild_name(player_guild))`。 | 集成向量（见 §1.10）。 |
+| **T3（bins main，冲突域）** | `bins/game-svr/src/main.rs` + `shop.rs` 的 `ShopContext` | `handle_shop_cmd`（`:4305`）拿到意图后：`Castle` ⇒ `world.castles[i].inc_rate_gold(&tax_cfg, amount, world.clock_ms)`；`CastleManager` ⇒ 遍历 `world.castles` 逐个 `inc_rate_gold`（**不要**新建 `CastleManager`，否则与 `world.castles` 双份状态）。`tax_cfg` 由 `guild_castle_cfg` + `ShopCfg.upgrade.price` 组装（`CastleTaxConfig::from_guild_castle_config`）。同时把 `shop_context` 的 `castle_member` 改为 `merchant.castle.is_some_and(|i| world.castles[i].is_master_guild_name(player_guild))`——**这只是表层接线**：`master_guild == None` 时 `is_master_guild_name` 仍恒 false（§1.8 底层原因 / T-131），生产成员价要等 `GetCastle`/`MasterGuild` 接线；T3 的成员价集成向量必须先在夹具里挂 `master_guild`。 | 集成向量（见 §1.10）。 |
 | **T4（升级税，冲突域）** | `bins/game-svr/src/main.rs` 升级分支（`:4580-4600` 附近） | `UpgradeWaponOutcome::Ok` 后按 `cfg.shop.upgrade.price` 生成同一意图并应用。 | 单测断言扣 10000 后 `TotalGold +500`。 |
 
 **不要动的边界**：
@@ -275,14 +287,15 @@ if (CastleMerchant || SystemShare.Config.GetAllNpcTax) {
 
 - `nGold=10 ⇒ +1`；`nGold=110 ⇒ +6`；`nGold=90 ⇒ +5`（AwayFromZero）。
 - `TodayIncome=1_999_995, nGold=110` ⇒ 只加 5，`TodayIncome=2_000_000`；再加 ⇒ +0。
-- `TotalGold=4_999_998, nInGold=6` ⇒ `TotalGold=5_000_000`；恰好加满与已超限都回落到上限。
+- `TotalGold=4_999_998, nInGold=6` ⇒ `TotalGold=5_000_000`（**超限截断**：直接累加会得 `5_000_004`；这是可观测的封顶向量）。恰好加满与已超限都回落到上限。
 - `tick=600_000`（10min 整）⇒ `save_tick_fired=false`；`600_001` ⇒ true；`nGold=0, tick=600_001` ⇒ true。
-- **牙**：`hutil::round` 换 `as i32` 截断 ⇒ 10→0、110→5，红；`>` 改 `>=` ⇒ 600000 行红；严格 `<` 改 `<=` ⇒ 恰好加满分支红。
+- **牙**：`hutil::round` 换 `as i32` 截断 ⇒ 10→0、110→5，红；`>` 改 `>=` ⇒ 600000 行红；把封顶 `else` 支改成直接累加（`self.total_gold += n_in_gold`）⇒ 超限向量 `4_999_998+6` 得 `5_000_004` ≠ `5_000_000`，红（实证：`cargo test -p mir2-world --lib castle_tax` ⇒ `inc_rate_gold_caps_total_gold_at_castle_gold_max` 失败，`left: 5000004, right: 5000000`）。
+- **不咬的牙（订正 2026-10-20）**：`castle_tax.rs:147` 的严格 `<` 改 `<=` **没有可观测输出**——`TotalGold + nInGold == CastleGoldMax` 时两支都把 `TotalGold` 置为 `CastleGoldMax`，`>` 时两支都走 `else`；实证改后 11 项单测全绿。故该算符只能按**行级等价**验收（照抄 `UserCastle.cs:789` 的 `<`），不能写成可红的判据。
 
 #### G-T5 `castle_tax_target_branches`（复用/扩展 `castle_tax.rs` 单测）
 
 - 八个组合穷举 `(castle_merchant, get_all_npc_tax, castle_present)`，逐项断言 `None/Castle/CastleManager`。
-- **牙**：删 `castle_present` 优先支 ⇒ `(false,true,true)` 回 `CastleManager`，红；把 `!(a||b)` 改成 `!(a&&b)` ⇒ `(true,false,false)` 回 `CastleManager`，红。
+- **牙**：删 `castle_present` 优先支 ⇒ `(false,true,true)` 回 `CastleManager`，红；把 `!(castle_merchant || get_all_npc_tax)` 改成 `!(castle_merchant && get_all_npc_tax)` ⇒ **`(false,true,false)`** 由 `CastleManager` 变 `None`，红。**`(true,false,false)` 不是判别向量**：正确实现走到底为 `None`，变异式 `!(true&&false)=!(false)` 早退也 `None`，两支同值；可区分的还有 `(true,false,true)` 与 `(false,true,true)`（现有测试在 `(true,false,true)` 处首先失败：`left: None, right: Some(Castle)`）。
 
 #### G-T6 `repair_cost_frames_use_member_price`（T3 帧面）
 
@@ -345,12 +358,14 @@ Rust 现状已对齐帧序/守卫：`bins/game-svr/src/trade.rs:529-548`（OK �
 | 16 | `Shape` | 模板原值 | **交易路径不改** `Desc[8]⇒0/130`（与 `SendAddItem` 不同） |
 | 17.. | Weight/AniCount/SpecialPwr/ItemDesc/... | 模板，**经 `GetUpgradeStdItem` 差量** | 见 §2.3 |
 | 84..99 | `Reference`（1B+14B） | 模板 | |
-| 100 | 0 | 常量 | |
+| 99 | 0 | 常量 | |
 | 100..104 | `MakeIndex` | 实例 | |
 | 104..106 | `Dura` | 实例 | |
 | 106..108 | `DuraMax` | 实例 | 交易路径**不**用 `GetUserPrice` 覆盖（详情列表才覆盖） |
 | 108..122 | `Desc[14]` | **恒 0** | ← **关键：oracle 从不给 `ClientItem.Desc` 赋值**（`ClientItem.cs:14-18` 构造 `new byte[14]`；全仓 `grep clientItem.Desc` 0 命中） |
 | 122..124 | 0,0 | 常量 | |
+
+> 区间一律左闭右开：`Reference` = [84,99)、常量 0 = [99,100)、`MakeIndex` = [100,104)、`Dura` = [104,106)、`DuraMax` = [106,108)、`Desc` = [108,122)、尾部两个 0 = [122,124)。
 
 > **现有 Rust 偏差（未登记）**：`itemwire::encode_client_item` 把 `ci.desc`（来自 `item.desc`）原样写入（`itemwire.rs:138`），而 oracle 该 14 字节恒 0。所有调用点都用 `desc: item.desc`（`trade.rs:957/980/1002`、`shop.rs` 详情/仓库、`itemwire` bag 列表、`ground.rs`、`enter.rs`、`slave.rs`）。⇒ **带升级属性的物品在 `SM_ADDITEM`/`SM_DEALADDITEM` 等所有 `ClientItem` 尾上，Rust 的 Desc 14 字节是 `item.desc` 的非零值，而 oracle 是 14 个 0（帧长不变）。** 这是本片要修的“隐藏第二差量”，必须在判据里钉死（G-N1）。
 
@@ -554,7 +569,7 @@ Rust 现状：`trade.rs:939-960 add_item_tail`（后缀 + Shape）、`:968-983 d
 | 项 | 现状 | 缺口 |
 |---|---|---|
 | `GetUpgradeStdItem` 差量 | `bag.rs:674-676 effective_item` 恒等拷贝；`itemwire.rs:32-34` 明写未实现 | 全 switch 未实现；所有 `ClientItem` 产物都用模板 |
-| `ClientItem.Desc` | `itemwire.rs:138` 写 `ci.desc`；所有调用点传 `item.desc` | **oracle 恒 0**；带 Desc 的物品线上多 14 字节 |
+| `ClientItem.Desc` | `itemwire.rs:138` 写 `ci.desc`；所有调用点传 `item.desc` | **oracle 恒 0**；Rust 这 14 字节是 `item.desc` 的非零内容——**Desc 14 字节内容不同，帧长不变**（仍 124B，不是“多 14 字节”） |
 | 自定义名 | `bag.rs:465-470` 对 `Desc[13]==1` 返回空串；`crates/data/src/lists.rs` 已有完整解析/查询 | 未装载、未接进 catalog；13 个调用点受影响 |
 | `StdMode==50` 后缀 | `trade.rs:942-945`（add）、`:970-973`（del）、`remote_item_body` 无 | 已对 |
 | Shape 改写 | `add_item_tail` 有、`del_item_tail`/`remote_item_body` 无 | 已对 |
@@ -644,7 +659,7 @@ Rust 现状：`trade.rs:939-960 add_item_tail`（后缀 + Shape）、`:968-983 d
 | G-T1 | 税/成员价 | spawn 固定 `castle_index` | 改每帧重算 | L |
 | G-T2 | 成员价 | 8 组 `get_user_price` 期望值 | 删 `max(60)` / 只判有行会 / 卖出打折 | L |
 | G-T3 | 税 | 买/卖/修/升级 × 9 组 `TotalGold` 增量 | `_tax` 丢弃 / B-16 改税基 / 目的地优先级 | L |
-| G-T4 | 税 | round/日上限/金库上限/SaveTick 边界 | 截断 / `>=` / `<=` | L |
+| G-T4 | 税 | round/日上限/金库上限/SaveTick 边界 | 截断 / `>=` / 封顶 else 改累加（`<` vs `<=` 不可观测） | L |
 | G-T5 | 税 | 8 组目的地穷举 | 删 `Castle` 优先 / `&&` 代替 `\|\|` | L |
 | G-T6 | 税/帧 | 修理查询帧用成员价 | 查询漏传 member | L |
 | G-N1 | 物品名 | `ClientItem.Desc` 恒 0 | 改回 `item.desc`（**当前即红**） | L |
@@ -665,7 +680,7 @@ Rust 现状：`trade.rs:939-960 add_item_tail`（后缀 + Shape）、`:968-983 d
 
 1. **U1 — 城堡表组成**：oracle 生产 `CastleList` = 1 座已初始化城 + 2 座未初始化城（`Castle/List.txt` 的 `0`/`1`）。部署 `GetAllNpcTax=0` 时无观测差异。实现 B-16 分支时是否要复刻这 2 座“死城”？建议：先按部署不可达登记，接 `GetAllNpcTax` 时再补；否则 `CastleMgr` 税会少加到 2 座城。
 2. **U2 — `ItemNameList.txt` 的 5 条是否可达**：`MakeIndex` 是运行期 `M2Share.GetItemNumber()` 生成值，静态表里的 1e9 级数值是否仍可能命中、`ItemIndex=372/443` 是否在 `StdItemList` 内，需要真机抽样或读 DB 确认；若不可达，G-N4/N5 只能靠构造级向量。
-3. **U3 — `castle_member` 的运行时来源**：部署 `Castle/Castle/SabukW.txt` 的 `OwnGuild=` 为空 ⇒ `MasterGuild=null` ⇒ **当前线上无人享受成员价**。真机窗口 W2 必须先攻城或临时写 `OwnGuild`（后者算改内容，不建议）。Rust 侧只要按 `MasterGuild` 已挂时比较即可，不依赖行会系统是否已接线。
+3. **U3 — `castle_member` 的运行时来源**：部署 `Castle/Castle/SabukW.txt` 的 `OwnGuild=` 为空 ⇒ `MasterGuild=null` ⇒ **当前线上无人享受成员价**。真机窗口 W2 必须先攻城或临时写 `OwnGuild`（后者算改内容，不建议）。Rust 侧只要按 `MasterGuild` 已挂时比较即可，不依赖行会系统是否已接线；但本仓生产目前不赋值 `master_guild`（T-131），所以在接 `GetCastle`/`MasterGuild` 之前，成员价在线上仍不可达（见 §1.8 底层原因）。
 4. **U4 — 持久化归属**：`CastleMgr.Save()`/`SaveConfigFile` 的文件字段级对拍属 R；本片是否只做内存计数？建议本片 L、另开 R 卡（与 audit #4「攻城文件/状态机接线」合并）。
 5. **U5 — 名字比较的大小写口径**：`to_lowercase`（Unicode full）与 .NET `OrdinalIgnoreCase`（Unicode simple fold）在非 ASCII 上不等价。建议改成逐字符 simple case fold 或显式登记“物品名假定 ASCII/GBK 汉字，无大小写折叠差异”。需审查者定级。
 6. **U6 — `Desc[13]` 的双重语义**：它既是“自定义名标记”，又是武器 `Tox` 的增量（§2.3）。实现差量时必须先算 Tox 再按 `Desc[13]` 取名字，顺序不能反；但两者互不影响，建议用一条 V2 向量钉死。
