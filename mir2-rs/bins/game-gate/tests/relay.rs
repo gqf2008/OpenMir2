@@ -1282,6 +1282,7 @@ async fn gm_stop_stops_assignment_but_keeps_existing_sessions() {
 async fn gm_checkclient_waits_for_the_period_before_first_frame() {
     let mut srv = FakeSvr::start().await;
     let gate_port = support::next_port();
+    let started = Instant::now();
     let gate = Gate::start_with_env(
         "gg-ka-first",
         srv.port,
@@ -1302,6 +1303,17 @@ async fn gm_checkclient_waits_for_the_period_before_first_frame() {
         .recv_until(|m| m.ident == u16::from(grobal2::GM_CHECKCLIENT))
         .await
         .expect("周期到点必须发 GM_CHECKCLIENT");
+    // 首帧 elapsed 必须 ≥ 注入周期（容差 100ms）：只测“前 500ms 无帧”无法钉住严格 `>` 的
+    // 边界（周期被改成 100ms 时窗口仍会绿）。
+    let first_at = started.elapsed();
+    assert!(
+        first_at >= Duration::from_millis(1900),
+        "首个健康帧必须等满注入周期 2000ms（严格 `>`，容差 100ms），实得 {first_at:?}"
+    );
+    assert!(
+        first_at <= Duration::from_secs(5),
+        "首个健康帧不得漂移到 5s 以上，实得 {first_at:?}"
+    );
     assert_eq!(frame.packet_code, grobal2::PacketCode);
     assert_eq!(frame.socket, 0);
     assert_eq!(frame.session_id, 0);
@@ -1329,14 +1341,12 @@ async fn idle_session_without_traffic_is_closed_after_timeout() {
         ],
     )
     .await;
+    let started = Instant::now();
     let mut client = gate.connect().await;
     let _ = srv
         .recv_until(|m| m.ident == u16::from(grobal2::GM_OPEN))
         .await
         .expect("GM_OPEN");
-
-    // 严格 `>`：400ms 阈值内（扫描粒度 100ms）不得清理。
-    assert_still_open(&mut client, Duration::from_millis(250)).await;
 
     let mut buf = [0u8; 16];
     let n = tokio::time::timeout(Duration::from_secs(3), client.read(&mut buf))
@@ -1344,6 +1354,17 @@ async fn idle_session_without_traffic_is_closed_after_timeout() {
         .expect("空闲超时后必须关闭客户端 socket")
         .expect("读客户端 socket 失败");
     assert_eq!(n, 0, "空闲清理必须关 socket（客户端读到 EOF）");
+    // 严格 `>` + 扫描粒度：关闭必须发生在注入阈值 400ms **之后**（容差 20ms），而不是
+    // 只在 250ms 窗口里“还活着”就算过关。
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(380),
+        "注入阈值 400ms（严格 `>`）之前不得清理，实得 {elapsed:?}"
+    );
+    assert!(
+        elapsed <= Duration::from_secs(2),
+        "空闲清理不得漂移到 2s 以上，实得 {elapsed:?}"
+    );
     srv.recv_until(|m| m.ident == u16::from(grobal2::GM_CLOSE))
         .await
         .expect("空闲清理后网关必须补发 GM_CLOSE（照断开回调）");
@@ -1404,4 +1425,111 @@ async fn live_session_with_traffic_stays_open_and_emits_no_frames() {
         .await
         .expect("空闲清理后必须补发 GM_CLOSE");
     gate.shutdown().await;
+}
+
+/// **T-118 进程级（下行重连）**：网关→GameSvr 断链后按判定周期调用 `Start()` 重连
+/// （`ClientThread.cs:449-455`），重连成功后恢复 `GM_CHECKCLIENT`。
+///
+/// 夹具顺序是确定的：首连接**先收到一帧健康帧**再被主动断开 ⇒ 断链时链路确实就绪过；
+/// 监听 socket 仍在 ⇒ 重连必然能建立。注入 150ms 周期；5s 内未重连即失败。
+#[tokio::test]
+async fn reconnects_after_downstream_drop_and_resumes_keepalive() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let srv_port = listener.local_addr().unwrap().port();
+    let (done_tx, mut done_rx) = mpsc::unbounded_channel::<()>();
+    let srv = tokio::spawn(async move {
+        let (mut first, _) = listener.accept().await.expect("初始连接");
+        let (msg, _body) = read_frame(&mut first).await.expect("首连接的首帧");
+        assert_eq!(
+            msg.ident,
+            u16::from(grobal2::GM_CHECKCLIENT),
+            "断开前链路必须已就绪（已发健康帧）"
+        );
+        drop(first); // 模拟 GameSvr 重启/断链
+        let (mut second, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("网关必须在 5s 内重连 GameSvr")
+            .expect("accept 重连");
+        loop {
+            let (msg, _body) = read_frame(&mut second).await.expect("重连后的帧");
+            if msg.ident == u16::from(grobal2::GM_CHECKCLIENT) {
+                done_tx.send(()).unwrap();
+                break;
+            }
+        }
+        // 保持第二条连接直到用例结束（drop 只影响本任务）。
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    });
+
+    let gate_port = support::next_port();
+    let gate = Gate::start_with_env(
+        "gg-reconnect",
+        srv_port,
+        gate_port,
+        &[("MIR2_GAME_GATE_KEEPALIVE_MS", "150")],
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
+        .await
+        .expect("重连后必须恢复健康帧（Start() 未接线时这里会超时）")
+        .expect("夹具通道不得提前关闭");
+    gate.shutdown().await;
+    srv.abort();
+}
+
+/// **audit #18 ③ + `RestSessionArray`（进程级）**：下行断链后，既有会话被 `RestSessionArray()`
+/// 的 `Socket = null` 摘出空闲清理面（`ClientThread.cs:186/208/332-346`；`ProcessIdleSession`
+/// 只看 `Socket != null`，`:410-427`）⇒ 注入的 15 天阈值过去后客户端**不会**被空闲清理关闭。
+///
+/// 牙：删掉 `IdleEntry.idle_eligible` 门（或断链时不摘除）⇒ 扫描在 1000ms 关掉客户端 ⇒ 红。
+/// 断开时机由 channel 同步（客户端会话已建立后才断链），避免与启动竞速。
+#[tokio::test]
+async fn downstream_drop_detaches_existing_sessions_from_idle_close() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let srv_port = listener.local_addr().unwrap().port();
+    let (drop_tx, mut drop_rx) = mpsc::unbounded_channel::<()>();
+    let srv = tokio::spawn(async move {
+        let (first, _) = listener.accept().await.expect("初始连接");
+        let _ = drop_rx.recv().await;
+        drop(first);
+        // 重连也保持住：`ClientSocketConnect` 会再跑一次 RestSessionArray。
+        if let Ok(Ok((second, _))) =
+            tokio::time::timeout(Duration::from_secs(5), listener.accept()).await
+        {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            drop(second);
+        }
+    });
+
+    let gate_port = support::next_port();
+    let gate = Gate::start_with_env(
+        "gg-idle-rest",
+        srv_port,
+        gate_port,
+        &[
+            ("MIR2_GAME_GATE_KEEPALIVE_MS", "150"),
+            ("MIR2_GAME_GATE_SESSION_IDLE_MS", "1000"),
+            ("MIR2_GAME_GATE_SESSION_SWEEP_MS", "100"),
+        ],
+    )
+    .await;
+    let started = Instant::now();
+    let mut client = gate.connect().await;
+    settle().await; // 确保客户端会话与 IdleEntry 已登记（GM_OPEN 之后登记）
+    drop_tx.send(()).unwrap();
+    // 跨过 1000ms 阈值 + 多个 100ms 扫描周期。
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+    let mut buf = [0u8; 16];
+    match tokio::time::timeout(Duration::from_millis(200), client.read(&mut buf)).await {
+        Err(_) => {} // 无数据、无 EOF ⇒ 会话仍存活（正确：已被 RestSessionArray 摘除）
+        Ok(Ok(0)) => panic!(
+            "下行断链后的既有会话被空闲清理关闭（elapsed={:?}）；oracle 的 RestSessionArray \
+             会把 SessionInfo.Socket 置 null、从而跳过 ProcessIdleSession",
+            started.elapsed()
+        ),
+        Ok(Ok(n)) => panic!("不应有下行数据，实得 {n} 字节"),
+        Ok(Err(e)) => panic!("客户端读错误: {e}"),
+    }
+    gate.shutdown().await;
+    srv.abort();
 }
