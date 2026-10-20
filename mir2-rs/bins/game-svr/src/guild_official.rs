@@ -16,13 +16,15 @@
 //! [`PRI_CHANGEGUILDNAME`] 等常量固化这个序，`sort_by_key` 是稳定排序 ⇒ 同优先级保持**入队序**：
 //!
 //! - 建会成功：`202 SM_DELITEM`（直发）→ `750 SM_CHANGEGUILDNAME`(61) →
-//!   `762 SM_BUILDGUILD_OK`(63) → `653 SM_GOLDCHANGED`(152) → `42 SM_USERNAME`(165)；
+//!   `762 SM_BUILDGUILD_OK`(63) → `622 SM_WEIGHTCHANGED`(131) → `653 SM_GOLDCHANGED`(152)
+//!   → `42 SM_USERNAME`(165)。622 来自 `DelBagItem(MakeIndex, WomaHorn)` 命中后的
+//!   `WeightChanged()`（`BaseObject.cs:2238` → `:1771-1775`），优先级 = `(byte)10115`；
 //! - 建会失败：只有 `763 SM_BUILDGUILD_FAIL`(63)；
 //! - 宣战：`653`(152) → `42 SM_USERNAME`(165) → `100 SM_SYSMESSAGE`(252) →
 //!   `104 SM_GUILDMESSAGE`(255)；
 //! - `@@donate`：`764 SM_DONATE_OK`(65)；`@exit`：`644 SM_MERCHANTDLGCLOSE`(143)。
 //!
-//! # 未做项（登记见 `tests/parity/whitelist.md` T-133..T-135）
+//! # 未做项（登记见 `tests/parity/whitelist.md` T-133..T-136）
 //!
 //! - 固定 NPC 的 `Npc_def/<ChrName>-<MapName>` 脚本**未装载**（`bins/game-svr/src/npcs.rs`
 //!   模块头已登记）⇒ `@main` 菜单说词不存在、`CanJmpScriptLableMap` 恒空；本模块照 oracle
@@ -30,6 +32,9 @@
 //!   脚本 say 链路落地前，`@@buildguildnow`/`@@guildwar` 只能由「已说过含该标签的台词」的
 //!   会话触发（判据用生产会话态 `ShopSession::can_jmp_labels` 播种，不改默认值）。
 //! - `@@requestcastlewarnow<n>`（`GuildOfficial.cs:203+`）属攻城区，本车道不接。
+//! - 固定 NPC 按 `Npcs.txt` 的 `type` 分流（`LocalDB.cs:688-698`）：只有 `1` =
+//!   `GuildOfficial` 进入本模块标签集；`0` = `Merchant` / `2` = `CastleOfficial` 的
+//!   `UserSelect` 未移植（T-136）⇒ 本模块对它们零帧零副作用，宿主落到既有商店默认臂。
 //! - `GetShowName()` 的 42 尾用进图时展示表（`guildname` 恒空）；oracle 在 `RefShowName`
 //!   时重算（`ShowGuildName`/攻城区分支）。部署件 `ShowGuildName=0` 且 NPC 不在攻城区 ⇒ 等价。
 
@@ -77,6 +82,7 @@ const PRI_SYSMESSAGE: u8 = pri(messages::RM_SYSMESSAGE);
 const PRI_GUILDMESSAGE: u8 = pri(messages::RM_GUILDMESSAGE);
 const PRI_DONATE_OK: u8 = pri(messages::RM_DONATE_OK);
 const PRI_MERCHANTDLGCLOSE: u8 = pri(messages::RM_MERCHANTDLGCLOSE);
+const PRI_WEIGHTCHANGED: u8 = pri(messages::RM_WEIGHTCHANGED);
 
 /// `HUtil32.GetValidStr3(sData, ref sLabel, '\r')` 的**首段**（`GuildOfficial.cs:67`）。
 ///
@@ -105,14 +111,16 @@ pub(crate) fn check_items(
 }
 
 /// `BaseObject.DelBagItem(int nItemIndex, string sItemName)`（`BaseObject.cs:2223-2244`）：
-/// 首个 `MakeIndex` 与名字**同时**命中的物品移除；命中才 `WeightChanged()`（本仓未发 101，T-47⑤）。
+/// 首个 `MakeIndex` 与名字**同时**命中的物品移除；命中才 `WeightChanged()`
+/// （`BaseObject.cs:2238` ⇒ `:1771-1775`：`WAbil.Weight = RecalcBagWeight()` + 入队
+/// `RM_WEIGHTCHANGED`）。调用方在返回 `true` 时产 `SM_WEIGHTCHANGED(622)`。
 pub(crate) fn del_bag_item(
-    items: &mut Vec<BagItem>,
+    state: &mut game_svr::ground::GroundState,
     make_index: i32,
     item_name: &str,
     catalog: &dyn ItemCatalog,
 ) -> bool {
-    let Some(pos) = items.iter().position(|it| {
+    let Some(pos) = state.item_list.iter().position(|it| {
         it.make_index == make_index
             && catalog
                 .name(it.index)
@@ -120,7 +128,9 @@ pub(crate) fn del_bag_item(
     }) else {
         return false;
     };
-    items.remove(pos);
+    state.item_list.remove(pos);
+    // `WeightChanged()`：`WAbil.Weight = RecalcBagWeight()`（`BaseObject.cs:1356`）。
+    state.wabil.weight = game_svr::ground::recalc_bag_weight(catalog, &state.item_list);
     true
 }
 
@@ -393,6 +403,17 @@ pub(crate) fn handle_select(
         );
         return true;
     }
+    // `npc.UserSelect(this, sMsg.Trim())`（`Operate.cs:123`）是**按实际类**的虚调用：
+    // `Npcs.txt` type 0/1/2 ⇒ Merchant/GuildOfficial/CastleOfficial（`LocalDB.cs:688-698`）。
+    // 只有 `GuildOfficial` 的 `UserSelect` 在本模块；Merchant/CastleOfficial 未移植（T-136）
+    // ⇒ 零帧零副作用（宿主侧同样按 type 分流，不进本函数）。
+    if npc_type != mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL {
+        glog!(
+            "DBG",
+            "NPC 对话：npc={npc_actor_id} type={npc_type} 非 GuildOfficial ⇒ 不派发 ChrName={chr_name}"
+        );
+        return true;
+    }
     // `npc.UserSelect(this, sMsg.Trim())`（`Operate.cs:123`）。
     let s_data = tail.unwrap_or("").trim();
     if !s_data.starts_with('@') {
@@ -487,13 +508,23 @@ pub(crate) fn handle_select(
                 if let Some(body) = delitem_frame(actor_id, item, catalog) {
                     direct.push(body);
                 }
-                // `DelBagItem(UserItem.MakeIndex, WomaHorn)`（`:146`）。
-                del_bag_item(
-                    &mut sg.state.item_list,
+                // `DelBagItem(UserItem.MakeIndex, WomaHorn)`（`:146`）⇒ 命中则
+                // `WeightChanged()`（`:2238`）重算 `WAbil.Weight` 并入队 `RM_WEIGHTCHANGED`。
+                // 本仓在命中后立即产 `SM_WEIGHTCHANGED(622)`，优先级 131。
+                if del_bag_item(
+                    &mut sg.state,
                     item.make_index,
                     &castle_cfg.woma_horn,
                     catalog,
-                );
+                ) {
+                    let w = &sg.state.wabil;
+                    push_frame(
+                        &mut queue,
+                        PRI_WEIGHTCHANGED,
+                        actor_id,
+                        smframe::sm_weightchanged(w.weight, w.wear_weight, w.hand_weight),
+                    );
+                }
             }
             // `DecGold(BuildGuildPrice); GoldChanged();`（`:147-148`）。
             sg.state.gold -= outcome.gold_spent;

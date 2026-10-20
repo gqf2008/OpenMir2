@@ -15760,14 +15760,23 @@ fn sim_loop(
                         tail.as_deref().unwrap_or("")
                     );
                     // `ClientMerchantDlgSelect` 的 `FindMerchant(nParam1) ?? FindNpc(nParam1)`
-                    // （`PlayObject.Operate.cs:120`）：第二臂命中**固定 NPC**（`Npcs.txt`）⇒ 走
-                    // `GuildOfficial.UserSelect`（`bins/game-svr/src/guild_official.rs`），
-                    // 不能落商店派发（商店 `FindMerchant` 找不到固定 NPC）。
-                    let fixed_npc_dialog = cmd.ident == game_svr::shop::CM_MERCHANTDLGSELECT
-                        && world
+                    // （`PlayObject.Operate.cs:120`）：第二臂命中**固定 NPC**（`Npcs.txt`）。
+                    // `npc.UserSelect` 是**按实际类**的虚调用——`Npcs.txt` type 0/1/2 ⇒
+                    // Merchant/GuildOfficial/CastleOfficial（`LocalDB.cs:688-698`）——所以只有
+                    // type 1（GuildOfficial）进 `bins/game-svr/src/guild_official.rs`；
+                    // Merchant(0)/CastleOfficial(2) 的 `UserSelect` 未移植（T-136），落到既有
+                    // 商店默认臂（固定 NPC 无 `merchant` 态 ⇒ 零帧零副作用）。
+                    let fixed_npc_type = if cmd.ident == game_svr::shop::CM_MERCHANTDLGSELECT {
+                        world
                             .entities
                             .get(cmd.recog)
-                            .is_some_and(|e| e.npc.is_some());
+                            .and_then(|e| e.npc.as_ref())
+                            .map(|st| st.npc_type)
+                    } else {
+                        None
+                    };
+                    let fixed_npc_dialog =
+                        fixed_npc_type == Some(mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL);
                     // `CM_SAY`：`/` 私聊、`!` 频道（`!!`/`!~`/`!`）、普通说话（`@` 仍不接）。
                     if cmd.ident == chat::CM_SAY {
                         let host = ChatHost {
@@ -48289,6 +48298,10 @@ mod tests {",
         u16::from_le_bytes([b[10], b[11]])
     }
 
+    fn gnp_tag(b: &[u8]) -> u16 {
+        u16::from_le_bytes([b[8], b[9]])
+    }
+
     /// `EDCode.EncodeString(GBK)` 的逆：先 6-bit 解码，再按 GBK 解出文本。
     fn gnp_tail_text(b: &[u8]) -> String {
         let raw = mir2_protocol::edcode::decode(&b[12..]);
@@ -48438,6 +48451,26 @@ mod tests {",
                 .can_jmp_labels = labels.iter().map(|s| (*s).to_string()).collect();
         }
 
+        /// 改固定 NPC 的 `Npcs.txt` `type`（0/1/2 ⇒ Merchant/GuildOfficial/CastleOfficial，
+        /// `LocalDB.cs:688-698`）。
+        fn set_npc_type(&mut self, npc_type: i32) {
+            self.world
+                .entities
+                .get_mut(self.npc_id)
+                .expect("固定 NPC 存在")
+                .npc
+                .as_mut()
+                .expect("固定 NPC 有 NpcState")
+                .npc_type = npc_type;
+        }
+
+        fn script_ledger(&self) -> (String, String) {
+            self.shop_sessions.get("hero").map_or_else(
+                || (String::new(), String::new()),
+                |s| (s.script_curr_lable.clone(), s.script_go_back_lable.clone()),
+            )
+        }
+
         fn set_hero_guild(&mut self, name: &str, rank_no: i16) {
             let sg = self.sessions.get_mut("hero").unwrap();
             sg.guild.guild_name = Some(name.to_string());
@@ -48504,17 +48537,31 @@ mod tests {",
         frames.iter().map(|b| gnp_ident(b)).collect()
     }
 
-    /// **判据 1（建会成功全链）**：`@@buildguildnow\rMyGuild` ⇒ 202(直发) → 750 → 762 → 653 → 42；
-    /// 物品删除 / 金币扣除 / 会话 `MyGuild` / 会表 / `GuildList` 落盘全部生效，且 oracle 的
-    /// `SaveGuildFile`「目标文件不存在 ⇒ 写不出去」怪行为照搬（新会 `<名>.txt` **不出现**）。
+    /// **判据 1（建会成功全链）**：`@@buildguildnow\rMyGuild` ⇒ 202(直发) → 750 → 762 → 622 → 653 → 42；
+    /// 物品删除 / `WAbil.Weight` 重算 / 金币扣除 / 会话 `MyGuild` / 会表 / `GuildList` 落盘
+    /// 全部生效，且 oracle 的 `SaveGuildFile`「目标文件不存在 ⇒ 写不出去」怪行为照搬
+    /// （新会 `<名>.txt` **不出现**）。
     ///
     /// 改坏必红：① 不扣 `BuildGuildPrice` ⇒ 653 `Recog` 与 gold 断言红；② 不删号角 ⇒ 202 与
-    /// 背包为空断言红；③ 750/762 优先级写反 ⇒ ident 序列断言红；④ 不写 `GuildList` ⇒ 文件断言红。
+    /// 背包断言红；③ 750/762/622 优先级写反 ⇒ ident 序列断言红；④ 不写 `GuildList` ⇒ 文件断言红；
+    /// ⑤ `DelBagItem` 命中后不重算 `WAbil.Weight`/不产 622 ⇒ 622 帧缺失或 `Recog` 仍为旧值 100
+    /// （剩余物品重 7）⇒ ident/`Recog` 断言红。
     #[test]
     fn guild_official_build_success_full_chain() {
         let mut f = GuildNpcFixture::new();
         f.add_catalog_item(42, "沃玛号角");
         f.set_item(42, 77, 10);
+        // 第二件**不参与**建会的物品（重 7）：622 的 `Recog` 必须是 `RecalcBagWeight()`
+        // 对**剩余背包**的重算值 7——既不是旧 `WAbil.Weight`(100)，也不是「旧值 - 号角重」。
+        f.catalog.insert(
+            43,
+            mir2_data::StdItem {
+                name: "金创药".to_string(),
+                weight: 7,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        f.set_item(43, 88, 5);
         f.hero_session_mut().state.gold = 2_000_000;
         f.allow_labels(&["@@buildguildnow"]);
         f.call("@@buildguildnow\rMyGuild");
@@ -48522,8 +48569,8 @@ mod tests {",
         let me = gnp_on(&frames, 901);
         assert_eq!(
             gnp_idents(&me),
-            vec![202, 750, 762, 653, 42],
-            "建会成功帧序：202 直发 → 750(61) → 762(63) → 653(152) → 42(165)"
+            vec![202, 750, 762, 622, 653, 42],
+            "建会成功帧序：202 直发 → 750(61) → 762(63) → 622(131) → 653(152) → 42(165)"
         );
         // 202 SM_DELITEM：Recog=自己、Series=1；尾 = EncodeBuffer(ClientItem)，MakeIndex=77。
         assert_eq!(gnp_recog(&me[0]), 1, "SendDelItems 的 ActorId = 玩家自己");
@@ -48549,21 +48596,45 @@ mod tests {",
             )
         );
         assert_eq!(me[2].len(), 12, "762 无尾");
-        // 653：Recog = 扣费后的 Gold。
+        // 622：`DelBagItem` 命中 ⇒ `WeightChanged()`（`BaseObject.cs:2238` → `:1771-1775`）。
+        // `SendDefMessage(SM_WEIGHTCHANGED, WAbil.Weight, WearWeight, HandWeight, chk)`
+        // （`PlayObject.Message.cs:1760`）⇒ Recog=Weight、Param=WearWeight、Tag=HandWeight、
+        // Series=((Weight+Wear+Hand)^0x3A5F)^0x1F35^0xaa21。
         assert_eq!(
             gnp_recog(&me[3]),
+            7,
+            "622 Recog = 重算后的背包重（剩余金创药 7）"
+        );
+        assert_eq!(gnp_param(&me[3]), 5, "622 Param = WAbil.WearWeight");
+        assert_eq!(gnp_tag(&me[3]), 0, "622 Tag = WAbil.HandWeight");
+        let weight_sum = 7i32 + 5; // HandWeight = 0
+        let weight_chk = ((weight_sum ^ 0x3A5F) ^ 0x1F35) ^ 0xaa21;
+        assert_eq!(
+            gnp_series(&me[3]),
+            weight_chk as u16,
+            "622 Series = 重量校验和"
+        );
+        // 653：Recog = 扣费后的 Gold。
+        assert_eq!(
+            gnp_recog(&me[4]),
             1_000_000,
             "653 Recog = 2,000,000-1,000,000"
         );
         // 42：RefShowName 的 Recog=自己，Param 低字节 = 名字色。
-        assert_eq!(gnp_recog(&me[4]), 1, "42 Recog = 被展示者 ActorId");
-        assert_eq!(gnp_param(&me[4]) & 0xFF, 255, "42 Param 低字节 = NameColor");
+        assert_eq!(gnp_recog(&me[5]), 1, "42 Recog = 被展示者 ActorId");
+        assert_eq!(gnp_param(&me[5]) & 0xFF, 255, "42 Param 低字节 = NameColor");
         // 状态副作用。
         assert_eq!(f.hero_session_mut().state.gold, 1_000_000);
-        assert!(
-            f.hero_session_mut().state.item_list.is_empty(),
-            "号角已从背包删除"
+        assert_eq!(
+            f.hero_session_mut().state.wabil.weight,
+            7,
+            "WAbil.Weight = RecalcBagWeight()（剩余金创药 7）"
         );
+        {
+            let bag = &f.hero_session_mut().state.item_list;
+            assert_eq!(bag.len(), 1, "号角已从背包删除，金创药保留");
+            assert_eq!(bag[0].make_index, 88, "剩下的是金创药");
+        }
         {
             let sg = f.hero_session_mut();
             assert_eq!(sg.guild.guild_name.as_deref(), Some("MyGuild"));
@@ -48915,6 +48986,59 @@ mod tests {",
         f.call("@back");
         let ss = f.shop_sessions.get("hero").unwrap();
         assert_eq!(ss.script_go_back_lable, "@main", "空 go-back ⇒ 回 @main");
+    }
+
+    /// **判据 8（固定 NPC 按类别门）**：`npc.UserSelect` 是**按实际类**的虚调用——`Npcs.txt`
+    /// type 0/1/2 ⇒ Merchant/GuildOfficial/CastleOfficial（`LocalDB.cs:688-698`）。只有
+    /// GuildOfficial 进入本模块标签集；Merchant/CastleOfficial 的 `UserSelect` 未移植
+    /// （T-136）⇒ 同一 `@@buildguildnow` 在它们身上**零帧零副作用**（连 `base.UserSelect` 的
+    /// `ScriptCurrLable` 账本都不动）。
+    ///
+    /// 改坏必红：删掉 `handle_select` 的 `npc_type` 门（或宿主 `fixed_npc_dialog` 的门）⇒
+    /// 前者出现 762/622/653/42 与建会、金币/背包变化 ⇒ 断言红。
+    #[test]
+    fn guild_official_type_gate_drops_non_guild_npc() {
+        let mut f = GuildNpcFixture::new();
+        f.add_catalog_item(42, "沃玛号角");
+        f.set_item(42, 77, 10);
+        f.hero_session_mut().state.gold = 2_000_000;
+        f.allow_labels(&["@@buildguildnow"]);
+        for npc_type in [
+            mir2_world::npc::NPC_TYPE_MERCHANT,
+            mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL,
+        ] {
+            f.set_npc_type(npc_type);
+            f.call("@@buildguildnow\rMyGuild");
+            assert!(f.drain().is_empty(), "type={npc_type} ⇒ 零帧");
+            assert_eq!(
+                f.hero_session_mut().state.gold,
+                2_000_000,
+                "type={npc_type} ⇒ 不扣钱"
+            );
+            assert_eq!(
+                f.hero_session_mut().state.item_list.len(),
+                1,
+                "type={npc_type} ⇒ 不删号角"
+            );
+            assert!(
+                f.guilds.find_guild("MyGuild").is_none(),
+                "type={npc_type} ⇒ 不建会"
+            );
+            assert_eq!(
+                f.script_ledger(),
+                (String::new(), String::new()),
+                "type={npc_type} ⇒ 不进 base.UserSelect 回跳账本"
+            );
+        }
+        // 同一 fixture 改回 GuildOfficial（type 1）⇒ 正常派发。
+        f.set_npc_type(mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL);
+        f.call("@@buildguildnow\rMyGuild");
+        let me = gnp_on(&f.drain(), 901);
+        assert_eq!(
+            gnp_idents(&me),
+            vec![202, 750, 762, 622, 653, 42],
+            "GuildOfficial（type 1）⇒ 正常建会帧序"
+        );
     }
 }
 
