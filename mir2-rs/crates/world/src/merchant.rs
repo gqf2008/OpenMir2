@@ -1026,12 +1026,15 @@ fn upgrade_one_stat(
         + body_luck_level)
         .min(85);
     if rng.random_below(rate) < n10 {
+        // **覆盖赋值**而非累加：oracle 是 `Desc[...] = 10; if(..) Desc[...] = 11;
+        // if(..) Desc[...] = 12;`（`Merchant.cs:680-692` / `:703-715` / `:726-738`）——
+        // 两点/三点都命中时结果是 **12**（三点覆盖两点），不是 13。累加是行为偏差（tier=R）。
         let mut d = base_desc10;
         if n10 > 63 && rng.random_below(two_point_rate) == 0 {
-            d += 1;
+            d = base_desc10 + 1;
         }
         if n10 > 79 && rng.random_below(three_point_rate) == 0 {
-            d += 2;
+            d = base_desc10 + 2;
         }
         d
     } else {
@@ -2959,6 +2962,55 @@ mod tests {
             1,
             "若把 SC 的 Mc 改成 Sc ⇒ n90=6 ⇒ 恒失败"
         );
+    }
+
+    /// **C8**：两点/三点判定是**覆盖赋值**，不是累加（`Merchant.cs:680-692`/`:703-715`/`:726-738`）。
+    ///
+    /// oracle 逐行：`Desc[..] = 10; if(n10>63 && Random(Two)==0) Desc[..] = 11;
+    /// if(n10>79 && Random(Three)==0) Desc[..] = 12;` ⇒ 两点、三点**都命中**时结果是 **12**
+    /// （三点覆盖两点），不是 13；MC/SC 支同形 ⇒ 32，不是 33。
+    ///
+    /// 种子 16271：`n90=7 ⇒ n10=85`（必进两个判定），本种子两判都命中 ⇒ 旧实现（`d += 1; d += 2;`）
+    /// 返回 13/33，oracle 返回 12/32。
+    /// 牙：把 `d = base_desc10 + 2;` 改回 `d += 2;` ⇒ 本用例红（13 ≠ 12）。
+    #[test]
+    fn c8_two_and_three_point_assign_not_accumulate() {
+        let seed = 16271;
+        // 先用独立重放确认本种子「两判都命中」——否则累加与覆盖同值，用例无牙。
+        let mut r = RandomNumber::with_seed(seed);
+        assert!(r.random_below(50) < 85, "n90=7 ⇒ n10=85 必成功");
+        assert_eq!(r.random_below(30), 0, "两点判定命中（本种子的牙所在）");
+        assert_eq!(r.random_below(200), 0, "三点判定命中");
+
+        for (base, want) in [(10u8, 12u8), (20, 22), (30, 32)] {
+            let mut rng = RandomNumber::with_seed(seed);
+            assert_eq!(
+                upgrade_one_stat(&mut rng, 7, 50, 30, 200, &[0; 14], 0, base),
+                want,
+                "base={base}：三点覆盖两点 ⇒ {want}（累加会给 {}）",
+                base + 3
+            );
+        }
+
+        // 生产路径同断言（不是只测 helper）：Dc=7 ⇒ DC 支必成，desc[10] 必须是 12。
+        let (mut w, mid) = upgrade_world(seed);
+        push_info(&mut w, mid, info_with(7, 0, 0, 16, 0));
+        w.clock_ms = 600_001;
+        let GetBackupgWeaponOutcome::Ok(out) =
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg())
+        else {
+            panic!("应取回");
+        };
+        assert_eq!(
+            out.user_item.desc[10], 12,
+            "生产路径：两点+三点都命中 ⇒ oracle 覆盖成 12"
+        );
+        // 抽数次数不变（覆盖只改写入值）：Random(50)+Random(30)+Random(200) = 3 抽。
+        let mut exp = RandomNumber::with_seed(seed);
+        let _ = exp.random_below(50);
+        let _ = exp.random_below(30);
+        let _ = exp.random_below(200);
+        assert_eq!(w.rng.random(), exp.random(), "覆盖语义不改抽数序");
     }
 
     /// **C10**：过期清理边界——`>=` 删除、`<` 保留，且只影响过期记录。
