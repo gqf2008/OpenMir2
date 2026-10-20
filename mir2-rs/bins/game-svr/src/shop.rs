@@ -50,7 +50,9 @@ use mir2_data::models::StdItem;
 use mir2_envir::makeitem::MakeItemRegistry;
 use mir2_formula::shop::{self, PriceTables, ShopConfig, StdItemSource};
 use mir2_world::merchant::ACTOR_RACE_MERCHANT;
-use mir2_world::merchant::{MerchantFlags, MerchantItem};
+use mir2_world::merchant::{
+    GetBackupgWeaponOutcome, MerchantFlags, MerchantItem, UpgradeWaponOutcome,
+};
 
 use crate::ability::ItemCatalog;
 use crate::bag::{BagItem, MAX_BAG_ITEM};
@@ -1256,8 +1258,329 @@ pub fn is_merchant(world: &mir2_world::World, actor_id: i32) -> bool {
         .is_some_and(|e| e.race == ACTOR_RACE_MERCHANT && e.merchant.is_some())
 }
 
+// ───────────────────── 武器升级 NPC 接缝（`@upgradenow` / `@getbackupgnow`） ─────────────────────
+//
+// oracle：`Merchant.cs:883`（`@upgradenow` → `UpgradeWapon`）/ `:890`（`@getbackupgnow` →
+// `GetBackupgWeapon`）。判定/状态迁移/RNG 全在 `mir2_world::merchant`（**宿主不抽数**）；
+// 本接缝只做「世界结果 → 帧 + 跳转标签」，并把宿主必须执行的动作钉在 [`UpgradeOutcome`]。
+
+/// `ScriptFlagConst.sUPGRADENOW`（`ScriptFlagConst.cs:52`）。
+pub const LABEL_UPGRADENOW: &str = "@upgradenow";
+/// `ScriptFlagConst.sUPGRADEING`。
+pub const LABEL_UPGRADENOW_ING: &str = "~@upgradenow_ing";
+/// `ScriptFlagConst.sUPGRADEOK`。
+pub const LABEL_UPGRADENOW_OK: &str = "~@upgradenow_ok";
+/// `ScriptFlagConst.sUPGRADEFAIL`。
+pub const LABEL_UPGRADENOW_FAIL: &str = "~@upgradenow_fail";
+/// `ScriptFlagConst.sGETBACKUPGNOW`（`ScriptFlagConst.cs:56`）。
+pub const LABEL_GETBACKUPGNOW: &str = "@getbackupgnow";
+/// `ScriptFlagConst.sGETBACKUPGOK`。
+pub const LABEL_GETBACKUPGNOW_OK: &str = "~@getbackupgnow_ok";
+/// `ScriptFlagConst.sGETBACKUPGFAIL`。
+pub const LABEL_GETBACKUPGNOW_FAIL: &str = "~@getbackupgnow_fail";
+/// `ScriptFlagConst.sGETBACKUPGFULL`（部署脚本**没有**该标签 ⇒ `GotoLable` 空跳、无 say）。
+pub const LABEL_GETBACKUPGNOW_BAGFULL: &str = "~@getbackupgnow_bagfull";
+/// `ScriptFlagConst.sGETBACKUPGING`。
+pub const LABEL_GETBACKUPGNOW_ING: &str = "~@getbackupgnow_ing";
+
+/// 宿主需要执行的武器升级动作（`user_select` 判定，世界层执行）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpgradeRequest {
+    /// `Merchant.UpgradeWapon`（`Merchant.cs:527`）。
+    UpgradeWapon,
+    /// `Merchant.GetBackupgWeapon`（`Merchant.cs:592`）。
+    GetBackupgWeapon,
+}
+
+/// [`user_select`] 两条新分支的接缝结果（A5 定死的返回值）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpgradeOutcome {
+    /// 出帧（发送序；宿主按 vector 顺序直发，见 `emit_shop_frames`）。
+    ///
+    /// 提交成功 = `SM_DELITEM(202)` → `SM_ABILITY(52)` → `SM_FEATURECHANGED(41)` →
+    /// `SM_GOLDCHANGED(653)` → `SM_DELITEMS(709)`。say 帧**不在**这里：`Market_Def`
+    /// 商人脚本未装载（T-47 ③），`goto_label` 由宿主登记。
+    pub frames: Vec<ShopFrame>,
+    /// `GotoLable(...)` 的标签名（脚本未装载 ⇒ 不执行，只登记）。
+    pub goto_label: Option<&'static str>,
+    /// 本结果对应的宿主动作（`None` = 尚未执行；A5 的接缝标记）。
+    pub upgrade_request: Option<UpgradeRequest>,
+    /// `FeatureChanged()` 的 `(feature, feature_ex)`：`41` 已按**自己**收进 `frames`，
+    /// 宿主还须对**同图 12 格内其它在线玩家**广播同字节（`SendRefMsg` 口径，含自己那条已在 frames）。
+    pub feature_changed: Option<(i32, u16)>,
+}
+
+/// `Merchant.UserSelect` 的两条新分支（`Merchant.cs:883/890`）+ 脚本头标志门（`:889/896`）。
+#[must_use]
+pub fn upgrade_request_for(label: &str, m: &MerchantView) -> Option<UpgradeRequest> {
+    if eq_label(label, LABEL_UPGRADENOW) && m.flags.is_upgradenow {
+        return Some(UpgradeRequest::UpgradeWapon);
+    }
+    if eq_label(label, LABEL_GETBACKUPGNOW) && m.flags.is_get_backupgnow {
+        return Some(UpgradeRequest::GetBackupgWeapon);
+    }
+    None
+}
+
+/// 武器升级的世界结果 → 帧 + 标签。
+///
+/// 帧字段逐条锚（简报 §2.6）：
+/// - `202`：`SendDelItems` 直发（`Base.cs:1648-1665`）⇒ `Recog=ActorId`、尾 =
+///   `EDCode.EncodeBuffer(ClientItem)`（**无** `StdModeMap` 的 Shape 改写）。
+/// - `52`：`MakeMessage(SM_ABILITY, Gold, MakeWord(Job,99), LoWord(GameGold), HiWord(GameGold))`
+///   尾 = `Encode(WAbil)`（`ability_tail` 的 40B/58B 口径由宿主传）。
+/// - `41`：`FeatureChanged()`（`BaseObject.cs:1509`）⇒ `Recog=ActorId`、`Param/Tag=Lo/Hi(feature)`、
+///   `Series=feature_ex`。
+/// - `653`：`Recog=Gold`、`Param/Tag=Lo/Hi(GameGold)`、`Series=0`。
+/// - `709`：`Series=条数`，尾 = `EncodeString("名/makeindex/…")`（[`del_items_frame`]）。
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn upgrade_wapon_outcome(
+    outcome: &UpgradeWaponOutcome,
+    weapon: Option<&MerchantItem>,
+    player_actor_id: i32,
+    job: u8,
+    gold: i32,
+    game_gold: i32,
+    wabil_tail: &[u8],
+    feature: (i32, u16),
+    catalog: &dyn ItemCatalog,
+) -> UpgradeOutcome {
+    let mut frames: Vec<ShopFrame> = Vec::new();
+    let (goto_label, feature_changed) = match outcome {
+        UpgradeWaponOutcome::Ok(r) => {
+            let tail = weapon
+                .and_then(|w| crate::trade::del_item_tail(&to_bag(w), catalog))
+                .unwrap_or_default();
+            frames.push(frame_encoded(
+                mir2_protocol::messages::SM_DELITEM,
+                player_actor_id,
+                0,
+                0,
+                1,
+                tail,
+            ));
+            frames.push(frame_encoded(
+                mir2_protocol::messages::SM_ABILITY,
+                gold,
+                smframe::make_word(job, 99),
+                smframe::lo_word(game_gold),
+                smframe::hi_word(game_gold),
+                mir2_protocol::edcode::encode(wabil_tail),
+            ));
+            frames.push(frame_encoded(
+                mir2_protocol::messages::SM_FEATURECHANGED,
+                player_actor_id,
+                smframe::lo_word(feature.0),
+                smframe::hi_word(feature.0),
+                feature.1,
+                Vec::new(),
+            ));
+            frames.push(frame(
+                mir2_protocol::messages::SM_GOLDCHANGED,
+                gold,
+                smframe::lo_word(game_gold),
+                smframe::hi_word(game_gold),
+                0,
+                Vec::new(),
+            ));
+            frames.push(del_items_frame(&r.deleted));
+            (Some(LABEL_UPGRADENOW_OK), Some(feature))
+        }
+        UpgradeWaponOutcome::AlreadyUpgrading => (Some(LABEL_UPGRADENOW_ING), None),
+        UpgradeWaponOutcome::Fail => (Some(LABEL_UPGRADENOW_FAIL), None),
+    };
+    UpgradeOutcome {
+        frames,
+        goto_label,
+        upgrade_request: Some(UpgradeRequest::UpgradeWapon),
+        feature_changed,
+    }
+}
+
+/// 取回的世界结果 → 帧 + 标签。
+///
+/// 成功只有一帧 `SM_ADDITEM(200)`（`SendAddItem` 直发，`Base.cs:198-227`）：`Recog=ActorId`、
+/// 尾 = `EDCode.EncodeBuffer(ClientItem)`（含 `desc[10]`）。**不改 `ItemList`**
+/// （oracle `AddItemToBag` 被注释的 BUG-REPLICA，`Merchant.cs:744`）。
+#[must_use]
+pub fn get_backupgnow_outcome(
+    outcome: &GetBackupgWeaponOutcome,
+    player_actor_id: i32,
+    catalog: &dyn ItemCatalog,
+) -> UpgradeOutcome {
+    let mut frames: Vec<ShopFrame> = Vec::new();
+    let goto_label = match outcome {
+        GetBackupgWeaponOutcome::Ok(info) => {
+            let tail =
+                crate::trade::add_item_tail(&to_bag(&info.user_item), catalog).unwrap_or_default();
+            frames.push(frame_encoded(
+                mir2_protocol::messages::SM_ADDITEM,
+                player_actor_id,
+                0,
+                0,
+                1,
+                tail,
+            ));
+            LABEL_GETBACKUPGNOW_OK
+        }
+        GetBackupgWeaponOutcome::BagFull => LABEL_GETBACKUPGNOW_BAGFULL,
+        GetBackupgWeaponOutcome::NoRecord => LABEL_GETBACKUPGNOW_FAIL,
+        GetBackupgWeaponOutcome::NotDue => LABEL_GETBACKUPGNOW_ING,
+    };
+    UpgradeOutcome {
+        frames,
+        goto_label: Some(goto_label),
+        upgrade_request: Some(UpgradeRequest::GetBackupgWeapon),
+        feature_changed: None,
+    }
+}
+
+/// `PlayObject.LableIsCanJmp`（`PlayObject.Base.cs:2814-2826`）：`@main` **恒可跳**；
+/// 其余标签须在「最近一次说词」重建的 `CanJmpScriptLableMap` 里（`OrdinalIgnoreCase`）。
+///
+/// `PlayDiceLabel`（掷骰）本仓未建模 ⇒ 恒空、不参与判定（登记）。
+#[must_use]
+pub fn lable_is_can_jmp(can_jmp_labels: &[String], label: &str) -> bool {
+    eq_label(label, "@main") || can_jmp_labels.iter().any(|l| eq_label(l, label))
+}
+
+/// `PlayObject.GetScriptLabel`（`PlayObject.Base.cs:2775-2807`）的标签抽取：
+/// 按 `\` 分行（`GetValidStr3` 的 `divider = '\\'`），每行每个 `<...>` 内按首个 `/` 切两段
+/// （`RemoveEmptyEntries`），**取第二段**为标签（`<返回/@main>` ⇒ `@main`）。
+///
+/// 返回**去重保序**的标签表（`CanJmpScriptLableMap.Clear()` 后的新表）。
+/// 本卡只提供机制；宿主说词链路（`Market_Def` 装载，T-47 ③）落地后由 say 生产者调用。
+#[must_use]
+pub fn get_script_label(say_text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in say_text.split('\\') {
+        let mut rest = line;
+        while let Some(start) = rest.find('<') {
+            let after = &rest[start + 1..];
+            let Some(end) = after.find('>') else {
+                break;
+            };
+            let inner = &after[..end];
+            // `Split('/', 2, RemoveEmptyEntries)`：先切两段，再去掉空段。
+            let segs: Vec<&str> = inner.splitn(2, '/').filter(|s| !s.is_empty()).collect();
+            let label = if segs.len() > 1 { segs[1] } else { "" };
+            if !label.is_empty() && !out.iter().any(|l| eq_label(l, label)) {
+                out.push(label.to_string());
+            }
+            rest = &after[end + 1..];
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    /// **C9**：`@upgradenow`/`@getbackupgnow` 的脚本头标志门（`Merchant.cs:883-896`）+
+    /// 标签比较 `OrdinalIgnoreCase`。漏标志检查 ⇒ 红。
+    #[test]
+    fn upgrade_request_respects_script_header_flags() {
+        let view = |flags: MerchantFlags| MerchantView {
+            actor_id: 5,
+            flags,
+            price_rate: 100,
+            castle_merchant: false,
+            item_type_list: Vec::new(),
+            chr_name: "铁匠".to_string(),
+        };
+        let off = view(MerchantFlags::default());
+        assert_eq!(
+            upgrade_request_for("@upgradenow", &off),
+            None,
+            "IsUpgradenow=false ⇒ no-op"
+        );
+        assert_eq!(
+            upgrade_request_for("@getbackupgnow", &off),
+            None,
+            "IsGetBackupgnow=false ⇒ no-op"
+        );
+        let on = view(MerchantFlags {
+            is_upgradenow: true,
+            is_get_backupgnow: true,
+            ..MerchantFlags::default()
+        });
+        assert_eq!(
+            upgrade_request_for("@UPGRADENOW", &on),
+            Some(UpgradeRequest::UpgradeWapon),
+            "标签比较 OrdinalIgnoreCase"
+        );
+        assert_eq!(
+            upgrade_request_for("@getbackupgnow", &on),
+            Some(UpgradeRequest::GetBackupgWeapon)
+        );
+        assert_eq!(upgrade_request_for("@buy", &on), None);
+    }
+
+    /// **C8b 登记**：say 帧（`SM_MERCHANTSAY(643)`）随 `Market_Def` 装载卡延期——
+    /// 失败/未到期支**只回标签**、`frames` 为空（不是把 say 伪造成空尾帧）。
+    #[test]
+    fn upgrade_outcome_failure_labels_have_no_frames() {
+        let catalog = crate::ability::StdItemCatalog::new();
+        let ing = upgrade_wapon_outcome(
+            &UpgradeWaponOutcome::AlreadyUpgrading,
+            None,
+            1,
+            0,
+            0,
+            0,
+            &[],
+            (0, 0),
+            &catalog,
+        );
+        assert!(ing.frames.is_empty(), "Market_Def 未装载 ⇒ 无 say 帧");
+        assert_eq!(ing.goto_label, Some(LABEL_UPGRADENOW_ING));
+        assert_eq!(ing.upgrade_request, Some(UpgradeRequest::UpgradeWapon));
+        let fail = upgrade_wapon_outcome(
+            &UpgradeWaponOutcome::Fail,
+            None,
+            1,
+            0,
+            0,
+            0,
+            &[],
+            (0, 0),
+            &catalog,
+        );
+        assert!(fail.frames.is_empty());
+        assert_eq!(fail.goto_label, Some(LABEL_UPGRADENOW_FAIL));
+        for (outcome, label) in [
+            (
+                GetBackupgWeaponOutcome::BagFull,
+                LABEL_GETBACKUPGNOW_BAGFULL,
+            ),
+            (GetBackupgWeaponOutcome::NoRecord, LABEL_GETBACKUPGNOW_FAIL),
+            (GetBackupgWeaponOutcome::NotDue, LABEL_GETBACKUPGNOW_ING),
+        ] {
+            let oc = get_backupgnow_outcome(&outcome, 1, &catalog);
+            assert!(oc.frames.is_empty(), "{label} 无帧（say 未装载）");
+            assert_eq!(oc.goto_label, Some(label));
+            assert_eq!(oc.feature_changed, None);
+        }
+    }
+
+    /// `GetScriptLabel`（`PlayObject.Base.cs:2775-2807`）：`<显示/@label>` 取 `/` 之后；
+    /// `\` 分行；无 `/` 的条目不入表；去重保序。
+    #[test]
+    fn get_script_label_extracts_label_after_slash() {
+        let got = get_script_label(r"请选择\<确认/@upgradenow> \<取消/@exit> \<无斜杠>");
+        assert_eq!(
+            got,
+            vec!["@upgradenow".to_string(), "@exit".to_string()],
+            "只收 `/` 之后的段，且去重保序"
+        );
+        assert!(lable_is_can_jmp(&[], "@main"), "@main 恒可跳");
+        assert!(!lable_is_can_jmp(&[], "@upgradenow"), "未展示 ⇒ 不可跳");
+        assert!(
+            lable_is_can_jmp(&got, "@upgradenow"),
+            "展示过 ⇒ 可跳（OrdinalIgnoreCase 由 eq_label 保证）"
+        );
+    }
+
     use super::*;
     use crate::ability::StdItemCatalog;
     use mir2_data::models::StdItem;

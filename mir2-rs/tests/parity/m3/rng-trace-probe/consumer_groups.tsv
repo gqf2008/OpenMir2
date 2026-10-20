@@ -257,3 +257,11 @@ drop	rust	crates/world/src/death_drop\.rs:	crates/world/src/death_drop.rs	drop_u
 # 抽一次 `Random(StdItem.Shape)`。Rust 同抽在 `bins/game-svr/src/ground.rs::drop_item_down_p21`
 # （结果丢弃，T-19 使 Looks 不可观测）。C# 侧沿用上方 `M2Share.GetRandomLook` 行。
 drop	rust	bins/game-svr/src/ground\.rs:	bins/game-svr/src/ground.rs	P21 drop_item_down_p21：StdMode45 `Random(StdItem.Shape)`（oracle BaseObject.cs:557-560 → M2Share.cs:524-527；复验 F6）
+
+# ---- 2026-10-20 追加（卡 `openmir2-m3-upgrade-npc`，Lane A）------------------------------
+# oracle 武器升级 NPC：提交 `UpgradeWapon`（`Merchant.cs:527-586`）**零 RNG**；取回
+# `GetBackupgWeapon`（`:592-759`）RNG 密集（耐久分支 + `Random(3)` + DC/MC/SC 三支）。
+# Rust 侧全部抽数落 `crates/world/src/merchant.rs`（上方 `merchant`/rust 行已按文件覆盖，
+# 不新增 rust 行）。这两行只为 C# 侧的新站点提供归类，避免 `--require-closed` 报 UNCLASSIFIED。
+merchant	csharp	Merchant\.UpgradeWapon@Merchant\.cs:	src/GameSrv/Npc/Merchant.cs:527	武器升级提交（零 RNG；入口行，占位归类）
+merchant	csharp	Merchant\.GetBackupgWeapon@Merchant\.cs:	src/GameSrv/Npc/Merchant.cs:592	武器升级取回：耐久分支 Random(Dura)/Random(Dura-18)、Random(3)、DC/MC/SC 三支 Random(Rate)[+Two/ThreePointRate]（:621/:637/:647/:677/:698/:719）

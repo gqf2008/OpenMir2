@@ -194,6 +194,36 @@ pub struct GateConfig {
     /// `GameSvrConf.cs:1450` 缺省 `100`）——合成/制药单价
     /// （`Merchant.cs:1010` 面板价、`Merchant.cs:1510/1518` 收费与扣金）。
     pub make_durg_price: i32,
+    /// `[Names] BlackStone`（`ServerConf.cs:91`，缺省 `黑铁矿`；`GameSvrConf.cs:1310`）——
+    /// 武器升级的材料名（`Merchant.cs:537/408`，提交端**精确 `==`**、`CheckItems` 用
+    /// `OrdinalIgnoreCase`）。
+    pub black_stone: String,
+    /// `[Setup] UpgradeWeaponPrice`（`ServerConf.cs:232`，`ReadWriteInteger`，缺省 `10000`）。
+    pub upgrade_weapon_price: i32,
+    /// `[Setup] UPgradeWeaponGetBackTime`（`ServerConf.cs:230`，缺省 `60*60*1000` 毫秒；
+    /// 部署 `600000`）。注意 oracle 键名大小写照抄（解析时已归一大写）。
+    pub upgrade_weapon_get_back_time: i32,
+    /// `[Setup] ClearExpireUpgradeWeaponDays`（`ServerConf.cs:231`，`ReadWriteByte`，缺省 `8`；
+    /// 部署 `3`）。
+    pub clear_expire_upgrade_weapon_days: u8,
+    /// `[Setup] UpgradeWeaponDCRate`（`ServerConf.cs:234`，byte，缺省 `100`；部署 `50`）。
+    pub upgrade_weapon_dc_rate: u8,
+    /// `[Setup] UpgradeWeaponDCTwoPointRate`（缺省 `30`）。
+    pub upgrade_weapon_dc_two_point_rate: u8,
+    /// `[Setup] UpgradeWeaponDCThreePointRate`（缺省 `200`）。
+    pub upgrade_weapon_dc_three_point_rate: u8,
+    /// `[Setup] UpgradeWeaponMCRate`（缺省 `100`；部署 `50`）。
+    pub upgrade_weapon_mc_rate: u8,
+    /// `[Setup] UpgradeWeaponMCTwoPointRate`（缺省 `30`）。
+    pub upgrade_weapon_mc_two_point_rate: u8,
+    /// `[Setup] UpgradeWeaponMCThreePointRate`（缺省 `200`）。
+    pub upgrade_weapon_mc_three_point_rate: u8,
+    /// `[Setup] UpgradeWeaponSCRate`（缺省 `100`；部署 `50`）。
+    pub upgrade_weapon_sc_rate: u8,
+    /// `[Setup] UpgradeWeaponSCTwoPointRate`（缺省 `30`）。
+    pub upgrade_weapon_sc_two_point_rate: u8,
+    /// `[Setup] UpgradeWeaponSCThreePointRate`（缺省 `200`）。
+    pub upgrade_weapon_sc_three_point_rate: u8,
     /// `[Setup] CastleMemberPriceRate`（`ServerConf.cs:250`，缺省 `80`）——城堡成员价百分比
     /// （`Merchant.cs:772`）。
     pub castle_member_price_rate: i32,
@@ -364,6 +394,19 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut super_repair_price_rate: Option<i32> = None;
     let mut repair_item_dec_dura: Option<i32> = None;
     let mut make_durg_price: Option<i32> = None;
+    let mut black_stone: Option<String> = None;
+    let mut upgrade_weapon_price: Option<i32> = None;
+    let mut upgrade_weapon_get_back_time: Option<i32> = None;
+    let mut clear_expire_upgrade_weapon_days: Option<u8> = None;
+    let mut upgrade_weapon_dc_rate: Option<u8> = None;
+    let mut upgrade_weapon_dc_two_point_rate: Option<u8> = None;
+    let mut upgrade_weapon_dc_three_point_rate: Option<u8> = None;
+    let mut upgrade_weapon_mc_rate: Option<u8> = None;
+    let mut upgrade_weapon_mc_two_point_rate: Option<u8> = None;
+    let mut upgrade_weapon_mc_three_point_rate: Option<u8> = None;
+    let mut upgrade_weapon_sc_rate: Option<u8> = None;
+    let mut upgrade_weapon_sc_two_point_rate: Option<u8> = None;
+    let mut upgrade_weapon_sc_three_point_rate: Option<u8> = None;
     let mut castle_member_price_rate: Option<i32> = None;
     let mut castle_get_all_npc_tax: Option<bool> = None;
     let mut start_point_size: Option<u8> = None;
@@ -476,6 +519,12 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 }
                 _ => {}
             },
+            // `[Names] BlackStone`（`ServerConf.cs:91` 的 `ReadWriteString("Names", …)`）。
+            "NAMES" => {
+                if k == "BLACKSTONE" {
+                    black_stone = Some(v.to_string());
+                }
+            }
             // oracle 的取图目录（`ServerConf.cs:75-76` 从 `[Share]` 读，缺省 Envir/Map）。
             "SHARE" => match k.as_str() {
                 "ENVIRDIR" => envir_dir = Some(v.to_string()),
@@ -838,6 +887,59 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                                     .with_context(|| format!("MakeDurg 不是合法整数：{v:?}"))?,
                             );
                         }
+                        // 武器升级 NPC（`ServerConf.cs:230-242`；`ReadWriteInteger`/`ReadWriteByte`，
+                        // 空值 ⇒ oracle 返回缺省值）。
+                        "UPGRADEWEAPONPRICE" => {
+                            upgrade_weapon_price =
+                                Some(read_i32_or_default(v, 10_000, "UpgradeWeaponPrice")?);
+                        }
+                        "UPGRADEWEAPONGETBACKTIME" => {
+                            upgrade_weapon_get_back_time = Some(read_i32_or_default(
+                                v,
+                                60 * 60 * 1000,
+                                "UPgradeWeaponGetBackTime",
+                            )?);
+                        }
+                        "CLEAREXPIREUPGRADEWEAPONDAYS" => {
+                            clear_expire_upgrade_weapon_days =
+                                Some(read_u8_or_default(v, 8, "ClearExpireUpgradeWeaponDays")?);
+                        }
+                        "UPGRADEWEAPONDCRATE" => {
+                            upgrade_weapon_dc_rate =
+                                Some(read_u8_or_default(v, 100, "UpgradeWeaponDCRate")?);
+                        }
+                        "UPGRADEWEAPONDCTWOPOINTRATE" => {
+                            upgrade_weapon_dc_two_point_rate =
+                                Some(read_u8_or_default(v, 30, "UpgradeWeaponDCTwoPointRate")?);
+                        }
+                        "UPGRADEWEAPONDCTHREEPOINTRATE" => {
+                            upgrade_weapon_dc_three_point_rate =
+                                Some(read_u8_or_default(v, 200, "UpgradeWeaponDCThreePointRate")?);
+                        }
+                        "UPGRADEWEAPONMCRATE" => {
+                            upgrade_weapon_mc_rate =
+                                Some(read_u8_or_default(v, 100, "UpgradeWeaponMCRate")?);
+                        }
+                        "UPGRADEWEAPONMCTWOPOINTRATE" => {
+                            upgrade_weapon_mc_two_point_rate =
+                                Some(read_u8_or_default(v, 30, "UpgradeWeaponMCTwoPointRate")?);
+                        }
+                        "UPGRADEWEAPONMCTHREEPOINTRATE" => {
+                            upgrade_weapon_mc_three_point_rate =
+                                Some(read_u8_or_default(v, 200, "UpgradeWeaponMCThreePointRate")?);
+                        }
+                        "UPGRADEWEAPONSCRATE" => {
+                            upgrade_weapon_sc_rate =
+                                Some(read_u8_or_default(v, 100, "UpgradeWeaponSCRate")?);
+                        }
+                        "UPGRADEWEAPONSCTWOPOINTRATE" => {
+                            upgrade_weapon_sc_two_point_rate =
+                                Some(read_u8_or_default(v, 30, "UpgradeWeaponSCTwoPointRate")?);
+                        }
+                        "UPGRADEWEAPONSCTHREEPOINTRATE" => {
+                            upgrade_weapon_sc_three_point_rate =
+                                Some(read_u8_or_default(v, 200, "UpgradeWeaponSCThreePointRate")?);
+                        }
                         "CASTLEMEMBERPRICERATE" => {
                             castle_member_price_rate = Some(v.parse().with_context(|| {
                                 format!("CastleMemberPriceRate 不是合法整数：{v:?}")
@@ -955,6 +1057,20 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         repair_item_dec_dura: repair_item_dec_dura.unwrap_or(30),
         // oracle 缺省值（`GameSvrConf.cs:1450`）：`[Setup]` 里没写不算错。
         make_durg_price: make_durg_price.unwrap_or(100),
+        // oracle 缺省值（`GameSvrConf.cs:1310/1419-1432`；部署不同值见 `Server.conf`）。
+        black_stone: black_stone.unwrap_or_else(|| "黑铁矿".to_string()),
+        upgrade_weapon_price: upgrade_weapon_price.unwrap_or(10_000),
+        upgrade_weapon_get_back_time: upgrade_weapon_get_back_time.unwrap_or(60 * 60 * 1000),
+        clear_expire_upgrade_weapon_days: clear_expire_upgrade_weapon_days.unwrap_or(8),
+        upgrade_weapon_dc_rate: upgrade_weapon_dc_rate.unwrap_or(100),
+        upgrade_weapon_dc_two_point_rate: upgrade_weapon_dc_two_point_rate.unwrap_or(30),
+        upgrade_weapon_dc_three_point_rate: upgrade_weapon_dc_three_point_rate.unwrap_or(200),
+        upgrade_weapon_mc_rate: upgrade_weapon_mc_rate.unwrap_or(100),
+        upgrade_weapon_mc_two_point_rate: upgrade_weapon_mc_two_point_rate.unwrap_or(30),
+        upgrade_weapon_mc_three_point_rate: upgrade_weapon_mc_three_point_rate.unwrap_or(200),
+        upgrade_weapon_sc_rate: upgrade_weapon_sc_rate.unwrap_or(100),
+        upgrade_weapon_sc_two_point_rate: upgrade_weapon_sc_two_point_rate.unwrap_or(30),
+        upgrade_weapon_sc_three_point_rate: upgrade_weapon_sc_three_point_rate.unwrap_or(200),
         castle_member_price_rate: castle_member_price_rate.unwrap_or(80),
         castle_get_all_npc_tax: castle_get_all_npc_tax.unwrap_or(false),
         // oracle 缺省值（`GameSvrConf.cs:1400/1374/1375/1376`）：`[Setup]` 里没写不算错。
@@ -1009,6 +1125,24 @@ fn read_bool_or_false(v: &str) -> bool {
 }
 
 /// `ReadWriteBool` 口径（`ConfigFile.cs` 的布尔读法）：`0/1` + `true/false`（大小写不敏感），其余报错。
+/// `ReadWriteInteger` 的缺键/空值口径：空串 ⇒ oracle 返回 `def_value`；非法值报错（失败要响）。
+fn read_i32_or_default(v: &str, def_value: i32, name: &str) -> Result<i32> {
+    if v.is_empty() {
+        return Ok(def_value);
+    }
+    v.parse()
+        .with_context(|| format!("{name} 不是合法整数：{v:?}"))
+}
+
+/// `ReadWriteByte` 的缺键/空值口径（同 `read_i32_or_default`；越界按 byte 报错）。
+fn read_u8_or_default(v: &str, def_value: u8, name: &str) -> Result<u8> {
+    if v.is_empty() {
+        return Ok(def_value);
+    }
+    v.parse()
+        .with_context(|| format!("{name} 不是合法字节：{v:?}"))
+}
+
 fn parse_bool(v: &str, key: &str) -> Result<bool> {
     match v.trim().to_ascii_lowercase().as_str() {
         "1" | "true" => Ok(true),

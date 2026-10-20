@@ -93,6 +93,18 @@ pub fn to_spawn(record: mir2_envir::MerchantRecord, map_id: usize) -> MerchantSp
     }
 }
 
+/// `[Setup] ClearExpireUpgradeWeaponDays` → 每个商人的 [`MerchantState::clear_expire_upgrade_days`]。
+///
+/// oracle 的 `ClearExpreUpgradeListData`（`Merchant.cs:1076-1088`）在 `Merchant.Run` 的 10min
+/// 门里按该配置删过期在途升级（部署 3 天；`GameSvrConf.cs:1423` 缺省 8）。
+pub fn set_upgrade_clear_days(world: &mut mir2_world::World, days: u8) {
+    for id in world.merchant_ids_sorted() {
+        if let Some(st) = world.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+            st.clear_expire_upgrade_days = days;
+        }
+    }
+}
+
 /// `LocalDB.LoadMerchant`（含 ⑤-1 的脚本头装配）+ **O-1 FindMap 门** + **O-2 `rename_rand`**。
 ///
 /// `resolve_map` = `SystemShare.MapMgr.FindMap(MapName)` 的宿主等价物

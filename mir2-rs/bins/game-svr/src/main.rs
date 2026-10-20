@@ -935,6 +935,24 @@ async fn main() -> Result<()> {
                         make_durg_price: cfg.make_durg_price,
                         get_all_npc_tax: cfg.castle_get_all_npc_tax,
                         human_max_gold: cfg.human_max_gold,
+                        upgrade: mir2_world::merchant::UpgradeWeaponConfig {
+                            price: cfg.upgrade_weapon_price,
+                            get_back_time_ms: i64::from(cfg.upgrade_weapon_get_back_time),
+                            clear_expire_days: cfg.clear_expire_upgrade_weapon_days,
+                            black_stone: cfg.black_stone.clone(),
+                            dc_rate: i32::from(cfg.upgrade_weapon_dc_rate),
+                            dc_two_point_rate: i32::from(cfg.upgrade_weapon_dc_two_point_rate),
+                            dc_three_point_rate: i32::from(cfg.upgrade_weapon_dc_three_point_rate),
+                            mc_rate: i32::from(cfg.upgrade_weapon_mc_rate),
+                            mc_two_point_rate: i32::from(cfg.upgrade_weapon_mc_two_point_rate),
+                            mc_three_point_rate: i32::from(cfg.upgrade_weapon_mc_three_point_rate),
+                            sc_rate: i32::from(cfg.upgrade_weapon_sc_rate),
+                            sc_two_point_rate: i32::from(cfg.upgrade_weapon_sc_two_point_rate),
+                            sc_three_point_rate: i32::from(cfg.upgrade_weapon_sc_three_point_rate),
+                        },
+                        send_ref_msg_range: i32::from(cfg.send_ref_msg_range),
+                        // `PlayObject.Permission` 生产恒 0（简报 §2.3）。
+                        permission: 0,
                     },
                     ref_msg_range: i32::from(cfg.send_ref_msg_range),
                     die_drop_use_item_rate: cfg.die_drop_use_item_rate,
@@ -4044,6 +4062,9 @@ fn handle_shop_cmd(
         chr_name: mchr_name.clone(),
     };
     let mut out: Vec<game_svr::shop::ShopFrame> = Vec::new();
+    // 武器升级的 `FeatureChanged()`（41）：本人那条已按序放进 `out`；这里记下参数，
+    // 出帧后补发给其它同图 12 格内在线玩家（`broadcast_feature_changed_except(..., Some(self))`）。
+    let mut feature_broadcast: Option<(i32, u16)> = None;
     match ident {
         game_svr::shop::CM_MERCHANTDLGSELECT => {
             // `ClientMerchantDlgSelect`（`Operate.cs:114-128`）。
@@ -4067,6 +4088,17 @@ fn handle_shop_cmd(
             // `Merchant.UserSelect`（`Merchant.cs:799`）：`ScriptLable = sData`。
             let session = shop_sessions.entry(chr_name.to_string()).or_default();
             session.script_lable = label_full.to_string();
+            // `LableIsCanJmp`（`Merchant.cs:800-806` / `PlayObject.Base.cs:2814-2826`）：
+            // 只有 `@main` 或「最近一次说词里出现过」的标签才允许命令派发；否则 oracle 在
+            // `GotoLable`（无同名脚本标签 ⇒ 无动作）后 `return`，**整段派发跳过**。
+            // 这是可达性差异（构造客户端直发 `@upgradenow`：oracle 丢弃，本侧同样丢弃）。
+            if !game_svr::shop::lable_is_can_jmp(&session.can_jmp_labels, label) {
+                glog!(
+                    "DBG",
+                    "CM_MERCHANTDLGSELECT：LableIsCanJmp({label}) == false ⇒ 不派发 ChrName={chr_name}"
+                );
+                return;
+            }
             let ctx = shop_context(
                 catalog,
                 mprice,
@@ -4137,6 +4169,120 @@ fn handle_shop_cmd(
                     }
                 }
                 return;
+            }
+            // **Lane A**：`@upgradenow`（`Merchant.cs:883`）/ `@getbackupgnow`（`:890`）。
+            // 判定/RNG 全在 `mir2_world::merchant`（宿主禁止抽数）；本臂只做状态回写、重算与出帧。
+            if let Some(req) = game_svr::shop::upgrade_request_for(label, &view) {
+                match req {
+                    game_svr::shop::UpgradeRequest::UpgradeWapon => {
+                        let weapon = sg.use_items.get(1).and_then(|c| c.as_ref()).cloned();
+                        let weapon_item = weapon.as_ref().map(game_svr::shop::to_merchant);
+                        let mut bag: Vec<mir2_world::merchant::MerchantItem> = sg
+                            .state
+                            .item_list
+                            .iter()
+                            .map(game_svr::shop::to_merchant)
+                            .collect();
+                        let begin = world.merchant_upgrade_wapon_begin(
+                            merchant_id,
+                            chr_name,
+                            weapon_item.as_ref(),
+                            &bag,
+                            &mut sg.state.gold,
+                            &shop_cfg.upgrade,
+                        );
+                        let r = match begin {
+                            mir2_world::merchant::UpgradeWaponBegin::Accepted(info) => {
+                                // `Merchant.cs:566-570`：`UseItems[Weapon].Index = 0`（**槽对象保留**），
+                                // 随后 `RecalcAbilitys()` —— 此时黑铁/首饰**仍在 `ItemList`**（顺序即语义）。
+                                if let Some(Some(slot)) = sg.use_items.get_mut(1) {
+                                    slot.index = 0;
+                                }
+                                let _ = recalc_session_ability(sg, catalog, None, None);
+                                // 税：`if (CastleMerchant || GetAllNpcTax)`（部署两条件皆 false）。
+                                let _tax = mcastle || shop_cfg.get_all_npc_tax;
+                                // `Merchant.cs:572`：`UpgradeWaponAddValue`（吃材料、算四字段、入列表）。
+                                let result = world.merchant_upgrade_wapon_finish(
+                                    merchant_id,
+                                    info,
+                                    &mut bag,
+                                    &shop_cfg.upgrade,
+                                );
+                                sg.state.item_list =
+                                    bag.iter().map(game_svr::shop::to_bag).collect();
+                                mir2_world::merchant::UpgradeWaponOutcome::Ok(result)
+                            }
+                            mir2_world::merchant::UpgradeWaponBegin::AlreadyUpgrading => {
+                                mir2_world::merchant::UpgradeWaponOutcome::AlreadyUpgrading
+                            }
+                            mir2_world::merchant::UpgradeWaponBegin::Fail => {
+                                mir2_world::merchant::UpgradeWaponOutcome::Fail
+                            }
+                        };
+                        // `FeatureChanged()`（`Merchant.cs:571`）的 41 帧输入。
+                        let use_inst: Vec<Option<game_svr::ability::ItemInstance>> = sg
+                            .use_items
+                            .iter()
+                            .map(|c| {
+                                c.as_ref().map(|it| game_svr::ability::ItemInstance {
+                                    index: it.index,
+                                    dura: it.dura,
+                                })
+                            })
+                            .collect();
+                        let feature = game_svr::ability::equipped_feature(
+                            catalog,
+                            &use_inst,
+                            sg.equip.gender,
+                            sg.equip.hair,
+                        );
+                        let feature_ex = game_svr::feature::feature_ex(false, 0, 0);
+                        let wabil_tail = ability_tail(
+                            &sg.state.wabil,
+                            game_svr::smframe::client_layout_enabled(),
+                        );
+                        let oc = game_svr::shop::upgrade_wapon_outcome(
+                            &r,
+                            weapon_item.as_ref(),
+                            sg.actor_id,
+                            sg.equip.job,
+                            sg.state.gold,
+                            sg.game_gold,
+                            &wabil_tail,
+                            (feature, feature_ex),
+                            catalog,
+                        );
+                        if let Some(g) = oc.goto_label {
+                            // `Market_Def` 商人脚本未装载（T-47 ③）⇒ 只登记、不执行 say。
+                            glog!(
+                                "WRN",
+                                "CM_MERCHANTDLGSELECT：GotoLable({g}) 未执行（Market_Def 商人脚本未装载，登记；ChrName={chr_name}）"
+                            );
+                        }
+                        feature_broadcast = oc.feature_changed;
+                        out = oc.frames;
+                    }
+                    game_svr::shop::UpgradeRequest::GetBackupgWeapon => {
+                        let r = world.merchant_get_backupg_weapon(
+                            merchant_id,
+                            chr_name,
+                            shop_cfg.permission,
+                            sg.state.item_list.len(),
+                            sg.equip.body_luck_level,
+                            &shop_cfg.upgrade,
+                        );
+                        // **BUG-REPLICA**（`Merchant.cs:744` 的 `AddItemToBag` 被注释）：
+                        // 成功也只发 `SM_ADDITEM`，**不**改 `ItemList`（测试断言长度不变）。
+                        let oc = game_svr::shop::get_backupgnow_outcome(&r, sg.actor_id, catalog);
+                        if let Some(g) = oc.goto_label {
+                            glog!(
+                                "WRN",
+                                "CM_MERCHANTDLGSELECT：GotoLable({g}) 未执行（Market_Def 商人脚本未装载，登记；ChrName={chr_name}）"
+                            );
+                        }
+                        out = oc.frames;
+                    }
+                }
             }
         }
         game_svr::shop::CM_MERCHANTQUERYSELLPRICE => {
@@ -4299,6 +4445,19 @@ fn handle_shop_cmd(
         return;
     };
     emit_shop_frames(tx, socket, &out);
+    if let Some((feature, feature_ex)) = feature_broadcast {
+        // 41 已随 `out` 发给本人；这里补发给其它同图 12 格内在线玩家（`SendRefMsg` 口径）。
+        broadcast_feature_changed_except(
+            world,
+            online,
+            gates,
+            actor_id,
+            feature,
+            feature_ex,
+            shop_cfg.send_ref_msg_range,
+            Some(actor_id),
+        );
+    }
 }
 
 /// `CM_USERSTORAGEITEM(1031)` / `CM_USERTAKEBACKSTORAGEITEM(1032)` 的派发（⑤-4 第②片）。
@@ -4670,6 +4829,26 @@ fn broadcast_feature_changed(
     feature_ex: u16,
     range: i32,
 ) {
+    broadcast_feature_changed_except(
+        world, online, gates, actor_id, feature, feature_ex, range, None,
+    );
+}
+
+/// [`broadcast_feature_changed`] 的 `skip` 版本：`skip == Some(id)` 时不发给该 ActorId。
+///
+/// 武器升级 NPC 的 `41` 已经把「自己」那条按发送序放进 `frames`（`SM_DELITEM → 52 → 41 →
+/// 653 → 709`）⇒ 广播时跳过自己，避免同一线缆上出现两条 `41`。
+#[allow(clippy::too_many_arguments)]
+fn broadcast_feature_changed_except(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    feature: i32,
+    feature_ex: u16,
+    range: i32,
+    skip: Option<i32>,
+) {
     let Some(src) = world.entities.get(actor_id) else {
         glog!(
             "WRN",
@@ -4680,6 +4859,9 @@ fn broadcast_feature_changed(
     let (sx, sy, smap) = (src.x, src.y, src.map_id);
     let body = game_svr::smframe::sm_featurechanged(actor_id, feature, feature_ex);
     for e in online {
+        if skip == Some(e.actor_id) {
+            continue;
+        }
         let Some(t) = world.entities.get(e.actor_id) else {
             continue;
         };
@@ -12005,7 +12187,7 @@ struct GroundCfg {
 ///
 /// 价目/修理数值口径在 `mir2_formula::shop`（已合入的 ⑤-3）；本结构只带**配置层**字段，
 /// `price_rate`/`castle_merchant`/`item_type_list` 随商人实体（[`mir2_world::merchant::MerchantState`]）。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ShopCfg {
     /// `Config.CastleMemberPriceRate`（`Merchant.cs:772`）。
     castle_member_price_rate: i32,
@@ -12019,6 +12201,30 @@ struct ShopCfg {
     get_all_npc_tax: bool,
     /// `Config.HumanMaxGold`（`IncGold` 上限，`PlayObject.Base.cs:168`）。
     human_max_gold: i32,
+    /// 武器升级 NPC 的配置面（`Merchant.cs:527-759`；`[Names] BlackStone` + `[Setup] UpgradeWeapon*`）。
+    upgrade: mir2_world::merchant::UpgradeWeaponConfig,
+    /// `Config.SendRefMsgRange`（`FeatureChanged`/`SendRefMsg` 的广播半径，`BaseObject.cs:1509`）。
+    send_ref_msg_range: i32,
+    /// `PlayObject.Permission`（`GetBackupgWeapon` 的 `Permission >= 4` 豁免门）。
+    ///
+    /// **生产恒 0**：`GetHumPermission` 的唯一调用点被注释（`PlayObject.cs:1188`，简报 §2.3）。
+    permission: u8,
+}
+
+impl Default for ShopCfg {
+    fn default() -> Self {
+        Self {
+            castle_member_price_rate: 80,
+            super_repair_price_rate: 3,
+            repair_item_dec_dura: 30,
+            make_durg_price: 100,
+            get_all_npc_tax: false,
+            human_max_gold: 10_000_000,
+            upgrade: mir2_world::merchant::UpgradeWeaponConfig::default(),
+            send_ref_msg_range: 12,
+            permission: 0,
+        }
+    }
 }
 
 /// 一个在线角色的**商店会话态**（`CM_MERCHANTDLGSELECT` 写入 `PlayObject.ScriptLable`；
@@ -12028,6 +12234,13 @@ struct ShopSession {
     /// `PlayObject.ScriptLable`（`Merchant.cs:799`：`playObject.ScriptLable = sData`）——
     /// `CM_USERREPAIRITEM` 的 `@s_repair`/`@fail_s_repair` 分支靠它。
     script_lable: String,
+    /// `PlayObject.CanJmpScriptLableMap`（`PlayObject.cs:617/938`，`OrdinalIgnoreCase`）。
+    ///
+    /// `GetScriptLabel`（`PlayObject.Base.cs:2775-2807`）在**每次商人说词**时 `Clear` 后重建；
+    /// `LableIsCanJmp`（`:2814-2826`）特判 `@main`。本仓 `Market_Def` 商人脚本未装载
+    /// （T-47 ③）⇒ 生产侧该表恒空（构造客户端直发 `@upgradenow` 会被 oracle 丢弃，本侧同样丢弃）；
+    /// 说词链路落地后由 say 生产者调用 `shop::get_script_label` 填充。
+    can_jmp_labels: Vec<String>,
 }
 
 /// 一个在线角色的**地面交互会话态**（`CM_PICKUP`/`CM_DROPITEM` 用）。
@@ -12459,6 +12672,7 @@ impl EnterConfig {
                 make_durg_price: 0,
                 get_all_npc_tax: false,
                 human_max_gold: 5_000_000,
+                ..ShopCfg::default()
             },
             ref_msg_range: 12,
             die_drop_use_item_rate: 30,
@@ -14374,6 +14588,11 @@ fn sim_loop(
         match game_svr::merchant::load_merchant_spawns(&loader, |n| reg.id_of(n), &mut world.rng) {
             Ok((spawns, report)) => {
                 let (kept, failed) = game_svr::merchant::spawn_merchants(&mut world, spawns);
+                // `[Setup] ClearExpireUpgradeWeaponDays`（`Merchant.cs:1085`）落到每个商人。
+                game_svr::merchant::set_upgrade_clear_days(
+                    &mut world,
+                    enter_cfg.shop.upgrade.clear_expire_days,
+                );
                 glog!(
                     "INF",
                     "Envir/Merchant.txt 已载入：{} 条（FindMap 门丢 {} 条，挂图失败 {} 条）⇒ 世界内商人 {}",
@@ -29345,6 +29564,7 @@ mod tests {
             make_durg_price: 100,
             get_all_npc_tax: false,
             human_max_gold: 10_000_000,
+            ..ShopCfg::default()
         };
         let mut item_number = 0i32;
         let colors = MsgColors {
@@ -29537,6 +29757,15 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
         let mut shop_sessions: HashMap<String, ShopSession> = HashMap::new();
+        // 模拟「客户端已看过含 `<寄售/@dealybme>` 的页面」⇒ `CanJmpScriptLableMap` 非空
+        // （oracle `GetScriptLabel` 在商人说词时重建；本仓 `Market_Def` 未装载，测试显式播种）。
+        shop_sessions
+            .entry("hero".to_string())
+            .or_default()
+            .can_jmp_labels = game_svr::shop::get_script_label(&format!(
+            "<寄售/{}>",
+            game_svr::selloff::LABEL_DEAL_YB_ME
+        ));
         let mut sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState> =
             HashMap::new();
         let mut sell_off_book = game_svr::selloff::SellOffBook::default();
@@ -29547,6 +29776,7 @@ mod tests {
             make_durg_price: 100,
             get_all_npc_tax: false,
             human_max_gold: 10_000_000,
+            ..ShopCfg::default()
         };
         let mut item_number = 0i32;
         let colors = MsgColors {
@@ -29818,6 +30048,15 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
         let mut shop_sessions: HashMap<String, ShopSession> = HashMap::new();
+        // 模拟「客户端已看过含 `<确定/@makedrug>` 的页面」⇒ `CanJmpScriptLableMap` 非空
+        // （oracle `GetScriptLabel` 在商人说词时重建；本仓 `Market_Def` 未装载，测试显式播种）。
+        shop_sessions
+            .entry("hero".to_string())
+            .or_default()
+            .can_jmp_labels = game_svr::shop::get_script_label(&format!(
+            "<确定/{}>",
+            game_svr::shop::LABEL_MAKE_DRUG
+        ));
         let mut sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState> =
             HashMap::new();
         let mut sell_off_book = game_svr::selloff::SellOffBook::default();
@@ -29828,6 +30067,7 @@ mod tests {
             make_durg_price: 100,
             get_all_npc_tax: false,
             human_max_gold: 10_000_000,
+            ..ShopCfg::default()
         };
         let mut item_number = 500i32;
         let colors = MsgColors {
@@ -45423,5 +45663,375 @@ mod tests {",
         let e = world.entities.get(actor).unwrap();
         assert_eq!((e.map_id, e.x, e.y), (1, 10, 10), "随后才落地到 B");
         std::fs::remove_dir_all(dir).ok();
+    }
+    /// **C8a（A3）**：武器升级 NPC 的提交/取回全链（`handle_shop_cmd`）——
+    /// ① 未展示过标签（`CanJmpScriptLableMap` 空）⇒ `@upgradenow` **零帧、零副作用**（A6）；
+    /// ② 展示过后提交成功：帧序 **202 → 52 → 41 → 653 → 709**（**无 say**，C8a），
+    ///    `202` 尾 = `del_item_tail(武器)`、`52` 尾 = `Encode(WAbil)`、`709` 尾 = 倒序删除表；
+    ///    状态：gold 20000→10000、`UseItems[1]` 仍 `Some` 且 `index=0`（make/desc 保留）、背包清空；
+    /// ③ 取回到期：`SM_ADDITEM(200)` 一条；**`ItemList` 长度不变**（`AddItemToBag` 被注释的
+    ///    BUG-REPLICA），尾含 `desc[10]` 与耐久分支后的 `DuraMax`。
+    ///
+    /// 变异必红：删 CanJmp 门 ⇒ ①；把 say 排在 52 之后（本侧无 say，等价于改 `out` 顺序）⇒ ②；
+    /// `SM_DELITEMS` 的 Series 写 0 ⇒ ②；取回改成 `AddItemToBag` ⇒ ③。
+    #[test]
+    fn upgrade_npc_submit_and_getback_full_chain() {
+        use std::collections::HashMap;
+
+        let seed = 555;
+        let black_tpl = mir2_data::StdItem {
+            name: "黑铁矿".to_string(),
+            std_mode: 43,
+            weight: 1,
+            dura_max: 5000,
+            ..mir2_data::StdItem::default()
+        };
+        let acc_tpl = mir2_data::StdItem {
+            name: "项链".to_string(),
+            std_mode: 22,
+            weight: 2,
+            dc: 0x0201,
+            ..mir2_data::StdItem::default()
+        };
+        let weapon_tpl = mir2_data::StdItem {
+            name: "炼狱".to_string(),
+            std_mode: 5,
+            dura_max: 20000,
+            ..mir2_data::StdItem::default()
+        };
+
+        let mut world = mir2_world::World::new(32, 32);
+        world.item_catalog = vec![
+            black_tpl.clone(),
+            acc_tpl.clone(),
+            mir2_data::StdItem::default(),
+            weapon_tpl.clone(),
+        ];
+        world.clock_ms = 123_456;
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let mut mstate = mir2_world::merchant::MerchantState::new(
+            "铁匠".to_string(),
+            "3".to_string(),
+            0,
+            0,
+            100,
+            false,
+            false,
+            0,
+            mir2_world::merchant::MerchantFlags {
+                is_upgradenow: true,
+                is_get_backupgnow: true,
+                ..mir2_world::merchant::MerchantFlags::default()
+            },
+            Vec::new(),
+            Vec::new(),
+            0,
+        );
+        // 不抽构造数（本用例要按种子镜像取回路径的流水）。
+        mstate.run_tick = 0;
+        let mid = world
+            .insert_merchant(mir2_world::merchant::MerchantSpawn {
+                name: "铁匠".to_string(),
+                x: 11,
+                y: 10,
+                map_id: 0,
+                state: mstate,
+            })
+            .expect("商人入世界");
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(1, black_tpl.clone());
+        catalog.insert(2, acc_tpl.clone());
+        catalog.insert(4, weapon_tpl.clone());
+
+        let weapon = game_svr::bag::BagItem {
+            make_index: 7,
+            index: 4,
+            dura: 5000,
+            dura_max: 20000,
+            desc: [0; 14],
+        };
+        let black = |make_index: i32| game_svr::bag::BagItem {
+            make_index,
+            index: 1,
+            dura: 5000,
+            dura_max: 5000,
+            desc: [0; 14],
+        };
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.state.gold = 20_000;
+        sg.state.item_list = vec![
+            black(1),
+            black(2),
+            game_svr::bag::BagItem {
+                make_index: 3,
+                index: 2,
+                dura: 1000,
+                dura_max: 1000,
+                desc: [0; 14],
+            },
+        ];
+        sg.use_items[1] = Some(weapon.clone());
+        sessions.insert("hero".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut shop_sessions: HashMap<String, ShopSession> = HashMap::new();
+        let mut sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState> =
+            HashMap::new();
+        let mut sell_off_book = game_svr::selloff::SellOffBook::default();
+        let shop_cfg = ShopCfg {
+            upgrade: mir2_world::merchant::UpgradeWeaponConfig {
+                get_back_time_ms: 600_000,
+                dc_rate: 50,
+                mc_rate: 50,
+                sc_rate: 50,
+                ..mir2_world::merchant::UpgradeWeaponConfig::default()
+            },
+            ..ShopCfg::default()
+        };
+        let mut item_number = 0i32;
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+        };
+        let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+
+        // ① 未展示过 ⇒ 门丢弃（A6：构造客户端直发也不能扣钱）。
+        handle_shop_cmd(
+            game_svr::shop::CM_MERCHANTDLGSELECT,
+            mid,
+            0,
+            0,
+            Some(game_svr::shop::LABEL_UPGRADENOW),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut shop_sessions,
+            &mut sell_off_sessions,
+            &mut sell_off_book,
+            &trade,
+            &gates,
+            &mut world,
+            &catalog,
+            &shop_cfg,
+            &colors,
+            None,
+            &mut item_number,
+        );
+        assert!(drain_frames(&mut rx0).is_empty(), "未展示标签 ⇒ 零帧");
+        assert_eq!(sessions["hero"].state.gold, 20_000, "未展示 ⇒ 不扣金");
+        assert_eq!(sessions["hero"].use_items[1].as_ref().unwrap().index, 4);
+
+        // ② 展示过 `<确定/@upgradenow>` 后提交。
+        shop_sessions
+            .entry("hero".to_string())
+            .or_default()
+            .can_jmp_labels = game_svr::shop::get_script_label("<确定/@upgradenow>");
+        handle_shop_cmd(
+            game_svr::shop::CM_MERCHANTDLGSELECT,
+            mid,
+            0,
+            0,
+            Some(game_svr::shop::LABEL_UPGRADENOW),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut shop_sessions,
+            &mut sell_off_sessions,
+            &mut sell_off_book,
+            &trade,
+            &gates,
+            &mut world,
+            &catalog,
+            &shop_cfg,
+            &colors,
+            None,
+            &mut item_number,
+        );
+        let frames = drain_frames(&mut rx0);
+        let idents: Vec<u16> = frames.iter().map(|b| hdr(b).0).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_DELITEM,
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_FEATURECHANGED,
+                mir2_protocol::messages::SM_GOLDCHANGED,
+                mir2_protocol::messages::SM_DELITEMS,
+            ],
+            "C8a：202 → 52 → 41 → 653 → 709（无 say）"
+        );
+        // 202：Recog=ActorId、Series=1，尾 = del_item_tail(武器)。
+        let (ident, param, tag, recog) = hdr(&frames[0]);
+        assert_eq!((ident, param, tag, recog), (202, 0, 0, hero));
+        assert_eq!(u16::from_le_bytes([frames[0][10], frames[0][11]]), 1);
+        assert_eq!(
+            &frames[0][12..],
+            &game_svr::trade::del_item_tail(&weapon, &catalog).unwrap()
+        );
+        let sg_after = &sessions["hero"];
+        // 52：Recog=Gold(10000)、Param=MakeWord(job,99)、Tag/Series=GameGold 低/高。
+        let (ident, param, tag, recog) = hdr(&frames[1]);
+        assert_eq!(ident, 52);
+        assert_eq!(recog, 10_000, "Recog=扣后金币");
+        assert_eq!(param, game_svr::smframe::make_word(sg_after.equip.job, 99));
+        assert_eq!(tag, game_svr::smframe::lo_word(sg_after.game_gold));
+        assert_eq!(u16::from_le_bytes([frames[1][10], frames[1][11]]), 0);
+        let layout = game_svr::smframe::client_layout_enabled();
+        assert_eq!(
+            &frames[1][12..],
+            &mir2_protocol::edcode::encode(&ability_tail(&sg_after.state.wabil, layout)),
+            "52 尾 = Encode(WAbil)"
+        );
+        // 41：Recog=ActorId，Param/Tag=Lo/Hi(feature)，Series=feature_ex。
+        let use_inst: Vec<Option<game_svr::ability::ItemInstance>> = sg_after
+            .use_items
+            .iter()
+            .map(|c| {
+                c.as_ref().map(|it| game_svr::ability::ItemInstance {
+                    index: it.index,
+                    dura: it.dura,
+                })
+            })
+            .collect();
+        let feature = game_svr::ability::equipped_feature(
+            &catalog,
+            &use_inst,
+            sg_after.equip.gender,
+            sg_after.equip.hair,
+        );
+        let feature_ex = game_svr::feature::feature_ex(false, 0, 0);
+        let (ident, param, tag, recog) = hdr(&frames[2]);
+        assert_eq!((ident, recog), (41, hero));
+        assert_eq!(
+            (param, tag),
+            (
+                game_svr::smframe::lo_word(feature),
+                game_svr::smframe::hi_word(feature)
+            )
+        );
+        assert_eq!(
+            u16::from_le_bytes([frames[2][10], frames[2][11]]),
+            feature_ex
+        );
+        // 653。
+        let (ident, param, tag, recog) = hdr(&frames[3]);
+        assert_eq!((ident, recog), (653, 10_000));
+        assert_eq!((param, tag), (0, 0));
+        assert_eq!(u16::from_le_bytes([frames[3][10], frames[3][11]]), 0);
+        // 709：Series=3，尾 = 倒序删除表。
+        let (ident, param, tag, recog) = hdr(&frames[4]);
+        assert_eq!((ident, param, tag, recog), (709, 0, 0, 0));
+        assert_eq!(u16::from_le_bytes([frames[4][10], frames[4][11]]), 3);
+        assert_eq!(
+            &frames[4][12..],
+            &mir2_protocol::edcode::encode(&crate::downlink::gbk("项链/3/黑铁矿/2/黑铁矿/1/")),
+            "删除表 = 背包倒序"
+        );
+        // 状态：金币、槽位、背包、在途记录。
+        let sg_after = &sessions["hero"];
+        assert_eq!(sg_after.state.gold, 10_000);
+        let slot = sg_after.use_items[1]
+            .as_ref()
+            .expect("槽对象保留（不是 None）");
+        assert_eq!(slot.index, 0, "UseItems[Weapon].Index = 0");
+        assert_eq!(slot.make_index, 7, "MakeIndex 保留");
+        assert_eq!(slot.desc, [0; 14], "Desc 保留");
+        assert!(sg_after.state.item_list.is_empty(), "黑铁/首饰全被吃");
+        // **顺序即语义**：`RecalcAbilitys`（`Merchant.cs:570`）在 `AddValue`（`:572`）之前 ⇒
+        // 52 帧的 `WAbil.Weight` 含材料重量（2×黑铁 weight1 + 项链 weight2 = 4；武器已摘 ⇒ 0）。
+        assert_eq!(
+            sg_after.state.wabil.weight, 4,
+            "重算时材料仍在包里（oracle 顺序）"
+        );
+        let st = world.entities.get(mid).unwrap().merchant.as_ref().unwrap();
+        assert_eq!(st.upgrade_weapon_list.len(), 1);
+        assert_eq!(st.upgrade_weapon_list[0].dura, 4, "2×5000 ⇒ Dura=4");
+        assert_eq!(
+            st.upgrade_weapon_list[0].user_item,
+            game_svr::shop::to_merchant(&weapon)
+        );
+
+        // ③ 到期取回：`SM_ADDITEM` 一条；`ItemList` 长度不变（BUG-REPLICA）。
+        world.clock_ms += 600_001;
+        shop_sessions
+            .entry("hero".to_string())
+            .or_default()
+            .can_jmp_labels = game_svr::shop::get_script_label("<确定/@getbackupgnow>");
+        let bag_len_before = sessions["hero"].state.item_list.len();
+        handle_shop_cmd(
+            game_svr::shop::CM_MERCHANTDLGSELECT,
+            mid,
+            0,
+            0,
+            Some(game_svr::shop::LABEL_GETBACKUPGNOW),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut shop_sessions,
+            &mut sell_off_sessions,
+            &mut sell_off_book,
+            &trade,
+            &gates,
+            &mut world,
+            &catalog,
+            &shop_cfg,
+            &colors,
+            None,
+            &mut item_number,
+        );
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1, "取回成功仅 SM_ADDITEM（+ say 未装载）");
+        let (ident, param, tag, recog) = hdr(&frames[0]);
+        assert_eq!((ident, param, tag, recog), (200, 0, 0, hero));
+        assert_eq!(u16::from_le_bytes([frames[0][10], frames[0][11]]), 1);
+        // 镜像 RNG：Dc=Mc=Sc=0 ⇒ Random(3) + 三支 Random(50)，最后一支（SC）赢。
+        let mut exp = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let _n1c = exp.random_below(3);
+        let mut desc10 = 0u8;
+        for base in [10u8, 20, 30] {
+            desc10 = if exp.random_below(50) < 10 { base } else { 1 };
+        }
+        let mut returned = weapon.clone();
+        returned.dura_max = 17_000; // Dura=4 ∈ [0,8] ⇒ DuraMax(20000) - 3000
+        returned.desc[10] = desc10;
+        assert_eq!(
+            &frames[0][12..],
+            &game_svr::trade::add_item_tail(&returned, &catalog).unwrap(),
+            "200 尾 = SendAddItem(ClientItem)（含 desc[10]）"
+        );
+        assert_eq!(
+            sessions["hero"].state.item_list.len(),
+            bag_len_before,
+            "BUG-REPLICA：AddItemToBag 被注释 ⇒ 武器不进 ItemList"
+        );
+        let st = world.entities.get(mid).unwrap().merchant.as_ref().unwrap();
+        assert!(st.upgrade_weapon_list.is_empty(), "取回后记录移除");
     }
 }

@@ -179,6 +179,16 @@ pub struct MerchantState {
     /// 沙巴克攻城层属 ⑧ 家族，本片不建模城堡状态 ⇒ 缺省 `false`（与 oracle 「不在战中」同支）；
     /// 接线层在 ⑧ 落地后按城堡状态覆写。
     pub castle_under_war: bool,
+    /// `IMerchant.UpgradeWeaponList`（`Merchant.cs:54/92`）：在途武器升级记录。
+    ///
+    /// **只在内存**（oracle `SaveUpgradeWeaponRecord` 恒 `return -1`，`MySqlDB.cs:345-348`）
+    /// ⇒ 重启即丢（照抄）。缺省空表，**不改 [`MerchantState::new`] 签名**（简报 §3.1）。
+    pub upgrade_weapon_list: Vec<WeaponUpgradeInfo>,
+    /// `Config.ClearExpireUpgradeWeaponDays`（`Merchant.cs:1085`）的商人侧快照。
+    ///
+    /// `Merchant.Run` 的 10min 清理门用；缺省 = oracle 缺省 8（`GameSvrConf.cs:1423`），
+    /// 宿主装载后按部署值覆写（`[Setup] ClearExpireUpgradeWeaponDays`）。
+    pub clear_expire_upgrade_days: u8,
 }
 
 impl MerchantState {
@@ -222,6 +232,8 @@ impl MerchantState {
             run_tick: MERCHANT_RUN_TICK_UNSET,
             ghost_tick: 0,
             castle_under_war: false,
+            upgrade_weapon_list: Vec::new(),
+            clear_expire_upgrade_days: 8,
         }
     }
 }
@@ -654,6 +666,629 @@ pub fn merchant_rename_rand(rng: &mut RandomNumber, min: i32, max: i32) -> i32 {
     rng.get_random_number(min, max)
 }
 
+// ─────────────────────── 武器升级 NPC（`@upgradenow` / `@getbackupgnow`） ───────────────────────
+//
+// oracle 锚点（逐行；卡 `openmir2-m3-upgrade-npc`，简报
+// `tests/parity/m3/design-upgrade-npc-20261020.md`，以「评审员更正 A1-A9」为准）：
+//
+// | 本模块 | oracle |
+// | --- | --- |
+// | [`UpgradeWeaponConfig`] | `GameSvrConf.cs:1418-1432` + `ServerConf.cs:230-242` + `[Names] BlackStone` |
+// | [`WeaponUpgradeInfo`] | `src/Modules/SystemModule/Data/WeaponUpgradeInfo.cs:8-20` |
+// | [`upgrade_wapon_add_value`] | `Merchant.cs:373-525`（`UpgradeWaponAddValue`，**零 RNG**） |
+// | [`upgrade_wapon_impl`] | `Merchant.cs:527-586`（`UpgradeWapon`，**零 RNG**） |
+// | [`get_backupg_weapon_impl`] | `Merchant.cs:592-759`（`GetBackupgWeapon`，RNG 密集） |
+// | [`clear_expired_upgrades`] | `Merchant.cs:1076-1088`（`ClearExpreUpgradeListData`） |
+//
+// **RNG 站点（本卡红线）**：取回路径的全部抽数都落本文件（`consumer_groups.tsv` 的
+// `merchant` 组）；宿主 `bins/game-svr` 不得直接抽数。
+//
+// **持久化**：在途列表只在内存（oracle `SaveUpgradeWeaponRecord` 恒 `return -1`、
+// `MySqlDB.cs:345-348` 无 SQL）⇒ 不实现 `upgradeinfo*` 三表，重启即丢（照抄，见简报 §2.5）。
+//
+// **照抄的 oracle 缺陷**（BUG-REPLICA，必须钉住）：
+// - 取回成功只发 `SM_ADDITEM`，**不** `AddItemToBag`（`Merchant.cs:744` 被注释）⇒ 入参
+//   `item_list` 长度不变，武器只是客户端死数据（宿主断言）。
+// - SC 支的 `n90` 取的是 `upgradeInfo.Mc`（`Merchant.cs:721`），不是 `Sc`。
+// - 提交端同名检查是 C# `==`（**区分大小写**）；取回端是 `OrdinalIgnoreCase` 且命中不 `break`。
+
+/// `Config.UpgradeWeapon*` + `[Names] BlackStone`（部署值见简报 §0/§4；缺省 = `GameSvrConf.cs`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpgradeWeaponConfig {
+    /// `Config.UpgradeWeaponPrice`（缺省 10000）。
+    pub price: i32,
+    /// `Config.UPgradeWeaponGetBackTime`（毫秒，缺省 3_600_000）。
+    pub get_back_time_ms: i64,
+    /// `Config.ClearExpireUpgradeWeaponDays`（byte，缺省 8）。
+    pub clear_expire_days: u8,
+    /// `[Names] BlackStone`（缺省「黑铁矿」）。
+    pub black_stone: String,
+    /// `Config.UpgradeWeaponDCRate`（缺省 100；部署 50）。
+    pub dc_rate: i32,
+    /// `Config.UpgradeWeaponDCTwoPointRate`（缺省 30）。
+    pub dc_two_point_rate: i32,
+    /// `Config.UpgradeWeaponDCThreePointRate`（缺省 200）。
+    pub dc_three_point_rate: i32,
+    /// `Config.UpgradeWeaponMCRate`。
+    pub mc_rate: i32,
+    /// `Config.UpgradeWeaponMCTwoPointRate`。
+    pub mc_two_point_rate: i32,
+    /// `Config.UpgradeWeaponMCThreePointRate`。
+    pub mc_three_point_rate: i32,
+    /// `Config.UpgradeWeaponSCRate`。
+    pub sc_rate: i32,
+    /// `Config.UpgradeWeaponSCTwoPointRate`。
+    pub sc_two_point_rate: i32,
+    /// `Config.UpgradeWeaponSCThreePointRate`。
+    pub sc_three_point_rate: i32,
+}
+
+impl Default for UpgradeWeaponConfig {
+    fn default() -> Self {
+        Self {
+            price: 10_000,
+            get_back_time_ms: 3_600_000,
+            clear_expire_days: 8,
+            black_stone: "黑铁矿".to_string(),
+            dc_rate: 100,
+            dc_two_point_rate: 30,
+            dc_three_point_rate: 200,
+            mc_rate: 100,
+            mc_two_point_rate: 30,
+            mc_three_point_rate: 200,
+            sc_rate: 100,
+            sc_two_point_rate: 30,
+            sc_three_point_rate: 200,
+        }
+    }
+}
+
+/// `WeaponUpgradeInfo`（`WeaponUpgradeInfo.cs:8-20`）：在途升级记录。
+///
+/// `get_back_tick`/`upgrade_time_ms` 用世界 **sim 时钟**（`World::clock_ms`）；
+/// oracle 用 `GetTickCount()`/`DateTime.Now`——进程内等价（简报 §2.5/§6-3）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WeaponUpgradeInfo {
+    /// `UserName`（`PlayObject.ChrName`）。
+    pub user_name: String,
+    /// `UserItem`（提交时的武器拷贝；取回时写 `desc[10]`）。
+    pub user_item: MerchantItem,
+    /// `Dc`（`UpgradeWaponAddValue` 的 `btDc`）。
+    pub dc: u8,
+    /// `Sc`。
+    pub sc: u8,
+    /// `Mc`。
+    pub mc: u8,
+    /// `Dura`（`btDura`；取回耐久分支的输入）。
+    pub dura: u8,
+    /// `UpgradeTime`（`DateTime.Now` ⇒ sim `clock_ms`；过期清理用）。
+    pub upgrade_time_ms: i64,
+    /// `GetBackTick`（`GetTickCount()` ⇒ sim `clock_ms`；时限门用）。
+    pub get_back_tick: i64,
+}
+
+/// `UpgradeWapon` 成功的结果：删除列表 + 新记录。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpgradeWaponResult {
+    /// `(ItemName, MakeIndex)`；顺序 = 背包**从后往前**扫描的命中序（oracle `delItemList`）。
+    pub deleted: Vec<(String, i32)>,
+    /// 新加入 `UpgradeWeaponList` 的记录。
+    pub info: WeaponUpgradeInfo,
+}
+
+/// `Merchant.UpgradeWapon`（`Merchant.cs:527-586`）的**第一阶段**出口。
+///
+/// `Accepted` = 已扣费、已拷贝 `UserItem`，但**背包材料未吃**（oracle 在 `AddValue` 之前
+/// `RecalcAbilitys`）⇒ 宿主必须先重算，再调
+/// [`World::merchant_upgrade_wapon_finish`]。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpgradeWaponBegin {
+    /// 受理成功（材料仍在包里）。
+    Accepted(WeaponUpgradeInfo),
+    /// 已有同名记录（**精确 `==`**，区分大小写）⇒ `~@upgradenow_ing`。
+    AlreadyUpgrading,
+    /// 无武器 / 金币不足 / 无黑铁 ⇒ `~@upgradenow_fail`。
+    Fail,
+}
+
+/// `Merchant.UpgradeWapon`（`Merchant.cs:527-586`）的三种出口。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpgradeWaponOutcome {
+    /// 受理成功 ⇒ `~@upgradenow_ok`。
+    Ok(UpgradeWaponResult),
+    /// 已有同名记录（**精确 `==`**，区分大小写）⇒ `~@upgradenow_ing`。
+    AlreadyUpgrading,
+    /// 无武器 / 金币不足 / 无黑铁 ⇒ `~@upgradenow_fail`。
+    Fail,
+}
+
+/// `Merchant.GetBackupgWeapon`（`Merchant.cs:592-759`）的四种出口。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GetBackupgWeaponOutcome {
+    /// `!IsEnoughBag()` ⇒ `~@getbackupgnow_bagfull`（**先查包、后找记录**）。
+    BagFull,
+    /// `nFlag == 0`（无记录）⇒ `~@getbackupgnow_fail`。
+    NoRecord,
+    /// `nFlag == 1`（记录存在但未到时限）⇒ `~@getbackupgnow_ing`。
+    NotDue,
+    /// 取回成功（已从列表移除；`user_item.desc[10]` 已写）。
+    Ok(WeaponUpgradeInfo),
+}
+
+/// `M2Share.IsAccessoryMap`（`M2Share.cs:187/207`）：`StdMode ∈ {19,20,21,22,23,24,26}`。
+#[must_use]
+pub fn is_accessory_std_mode(std_mode: u8) -> bool {
+    matches!(std_mode, 19..=24 | 26)
+}
+
+/// `GetStdItem(index)`（1-based；`index == 0`/越界 ⇒ `None`）。
+fn std_item_at(catalog: &[StdItem], index: u16) -> Option<&StdItem> {
+    if index == 0 {
+        return None;
+    }
+    catalog.get(usize::from(index) - 1)
+}
+
+/// `GetStdItemName(index)`（`None` 对应 C# `null`）。
+fn item_name_at(catalog: &[StdItem], index: u16) -> Option<&str> {
+    std_item_at(catalog, index).map(|t| t.name.as_str())
+}
+
+/// `HUtil32.HiWord`（`ushort` 高字节）。
+fn hi_word(v: u16) -> i32 {
+    i32::from(v >> 8)
+}
+
+/// `HUtil32.LoWord`（`ushort` 低字节）。
+fn lo_word(v: u16) -> i32 {
+    i32::from(v & 0xFF)
+}
+
+/// `Merchant.UpgradeWaponAddValue`（`Merchant.cs:373-525`）——**零 RNG**。
+///
+/// 倒序扫描背包：吃掉**全部**黑铁矿（名 **精确 `==`** `Config.BlackStone`）与**全部**首饰
+/// （`IsAccessory`）。首饰按 `GetUpgradeStdItem` 的恒等口径（T-24 残余：desc 升级差量未建模）
+/// 取模板 `DC/SC/MC` 的 `HiWord+LoWord`（StdMode 24/26 再 +1），维护逐项最大/次大。
+///
+/// 收尾是 oracle 的**畸形「整体反转」置换**（不是排序）：`for i { for j=len-1..i+1 { if
+/// dura[j]>dura[j-1] { duras.Reverse() } } }`；`Dura` 只累置换后的**前 5 项**。
+fn upgrade_wapon_add_value(
+    catalog: &[StdItem],
+    item_list: &mut Vec<MerchantItem>,
+    black_stone: &str,
+    info: &mut WeaponUpgradeInfo,
+) -> Vec<(String, i32)> {
+    let mut deleted: Vec<(String, i32)> = Vec::new();
+    let mut dura_list: Vec<f64> = Vec::new();
+    let (mut dc_min, mut dc_max) = (0i32, 0i32);
+    let (mut sc_min, mut sc_max) = (0i32, 0i32);
+    let (mut mc_min, mut mc_max) = (0i32, 0i32);
+    // `for (int i = itemList.Count - 1; i >= 0; i--)`
+    let mut i = item_list.len();
+    while i > 0 {
+        i -= 1;
+        let (index, make_index, dura) = {
+            let it = &item_list[i];
+            (it.index, it.make_index, it.dura)
+        };
+        // `GetStdItemName(userItem.Index) == Config.BlackStone`：C# `==` 是**区分大小写**的序数比较。
+        if item_name_at(catalog, index) == Some(black_stone) {
+            // `Math.Round(userItem.Dura / 1.0e3)`：缺省 `MidpointRounding.ToEven`（银行家舍入）。
+            dura_list.push((f64::from(dura) / 1000.0).round_ties_even());
+            deleted.push((black_stone.to_string(), make_index));
+            item_list.remove(i);
+            continue;
+        }
+        let Some(tpl) = std_item_at(catalog, index) else {
+            continue;
+        };
+        if !is_accessory_std_mode(tpl.std_mode) {
+            continue;
+        }
+        // `GetUpgradeStdItem(stdItem, userItem, ref clientItem)` 的恒等口径（T-24 残余）：
+        // 直接用模板的 DC/SC/MC；`ClientItem.Item.StdMode` = 模板 StdMode。
+        let (mut n_dc, mut n_sc, mut n_mc) = (0i32, 0i32, 0i32);
+        match tpl.std_mode {
+            19..=23 => {
+                n_dc = hi_word(tpl.dc) + lo_word(tpl.dc);
+                n_sc = hi_word(tpl.sc) + lo_word(tpl.sc);
+                n_mc = hi_word(tpl.mc) + lo_word(tpl.mc);
+            }
+            24 | 26 => {
+                n_dc = hi_word(tpl.dc) + lo_word(tpl.dc) + 1;
+                n_sc = hi_word(tpl.sc) + lo_word(tpl.sc) + 1;
+                n_mc = hi_word(tpl.mc) + lo_word(tpl.mc) + 1;
+            }
+            _ => {}
+        }
+        // `if (nMin < n) { nMax = nMin; nMin = n; } else if (nMax < n) { nMax = n; }`（逐项独立）。
+        if dc_min < n_dc {
+            dc_max = dc_min;
+            dc_min = n_dc;
+        } else if dc_max < n_dc {
+            dc_max = n_dc;
+        }
+        if sc_min < n_sc {
+            sc_max = sc_min;
+            sc_min = n_sc;
+        } else if sc_max < n_sc {
+            sc_max = n_sc;
+        }
+        if mc_min < n_mc {
+            mc_max = mc_min;
+            mc_min = n_mc;
+        } else if mc_max < n_mc {
+            mc_max = n_mc;
+        }
+        deleted.push((tpl.name.clone(), make_index));
+        item_list.remove(i);
+    }
+    // 畸形置换：`List.Reverse()` 是**整体反转**，不是排序。
+    for i in 0..dura_list.len() {
+        for j in (i + 1..dura_list.len()).rev() {
+            if dura_list[j] > dura_list[j - 1] {
+                dura_list.reverse();
+            }
+        }
+    }
+    let mut n_dura = 0i32;
+    let mut n_item_count = 0i32;
+    for d in &dura_list {
+        n_dura += *d as i32; // C# `(int)double` 截断
+        n_item_count += 1;
+        if n_item_count >= 5 {
+            break;
+        }
+    }
+    // 提交前已确认至少 1 件黑铁 ⇒ oracle 的 `nDura / nItemCount` 不会除零；此处仅防御。
+    let n_item_count = n_item_count.max(1);
+    let min5 = n_item_count.min(5);
+    info.dura = (f64::from(min5) + f64::from(min5) * (f64::from(n_dura / n_item_count) / 5.0))
+        .round() as u8;
+    info.dc = (dc_min / 5 + dc_max / 3) as u8;
+    info.sc = (sc_min / 5 + sc_max / 3) as u8;
+    info.mc = (mc_min / 5 + mc_max / 3) as u8;
+    deleted
+}
+
+/// `Merchant.UpgradeWapon`（`Merchant.cs:527-586`）**第一阶段**——检查/扣费/拷贝，**零 RNG**。
+///
+/// **不改背包**：oracle 在 `AddValue` 之前先 `RecalcAbilitys()`（`:570`），此时黑铁/首饰仍在
+/// `ItemList` 里 ⇒ 52 帧 `WAbil.Weight` 含材料重量。宿主必须在 [`UpgradeWaponBegin::Accepted`]
+/// 之后、[`World::merchant_upgrade_wapon_finish`] 之前做重算。
+#[allow(clippy::too_many_arguments)]
+fn upgrade_wapon_begin_impl(
+    catalog: &[StdItem],
+    list: &[WeaponUpgradeInfo],
+    chr_name: &str,
+    weapon: Option<&MerchantItem>,
+    bag: &[MerchantItem],
+    gold: &mut i32,
+    cfg: &UpgradeWeaponConfig,
+    now_ms: i64,
+) -> UpgradeWaponBegin {
+    // 1. `upgradeInfo.UserName == user.ChrName`（C# `==`：**区分大小写**）。
+    if list.iter().any(|u| u.user_name == chr_name) {
+        return UpgradeWaponBegin::AlreadyUpgrading;
+    }
+    // 2. `UseItems[Weapon] != null && Index != 0 && Gold >= price && CheckItems(BlackStone) != null`。
+    let Some(weapon) = weapon.filter(|w| w.index != 0) else {
+        return UpgradeWaponBegin::Fail;
+    };
+    if *gold < cfg.price {
+        return UpgradeWaponBegin::Fail;
+    }
+    // `CheckItems`：名 `OrdinalIgnoreCase` 命中（`BaseObject.cs:2189-2204`）。
+    let has_black_stone = bag.iter().any(|it| {
+        item_name_at(catalog, it.index).is_some_and(|n| n.eq_ignore_ascii_case(&cfg.black_stone))
+    });
+    if !has_black_stone {
+        return UpgradeWaponBegin::Fail;
+    }
+    // 3. `DecGold(price)`（`GoldChanged` 的 653 由调用方出）。
+    *gold -= cfg.price;
+    // 4. `new UserItem(UseItems[Weapon])`（C# 的 Desc 是浅拷贝；本侧 clone；取回时不回写空槽）。
+    UpgradeWaponBegin::Accepted(WeaponUpgradeInfo {
+        user_name: chr_name.to_string(),
+        user_item: weapon.clone(),
+        dc: 0,
+        sc: 0,
+        mc: 0,
+        dura: 0,
+        upgrade_time_ms: now_ms,
+        get_back_tick: now_ms,
+    })
+}
+
+/// 一支（DC/MC/SC）的判定 + `desc[10]` 写入值（`Merchant.cs:677-733` 三支同形）。
+///
+/// `n10 = min(85, (n90 << ((3 - n90) & 31)) + 10 + Desc[3] - Desc[4] + BodyLuckLevel)`；
+/// C# 的 `<<` 在 unchecked 上下文按 32 位回绕 ⇒ Rust `wrapping_shl`（`n90=6` 恒失败）。
+#[allow(clippy::too_many_arguments)]
+fn upgrade_one_stat(
+    rng: &mut RandomNumber,
+    value: u8,
+    rate: i32,
+    two_point_rate: i32,
+    three_point_rate: i32,
+    desc: &[u8; 14],
+    body_luck_level: i32,
+    base_desc10: u8,
+) -> u8 {
+    let n90 = i32::from(value.min(11));
+    let shift = ((3 - n90) & 31) as u32;
+    let n10 = (n90.wrapping_shl(shift) + 10 + i32::from(desc[3]) - i32::from(desc[4])
+        + body_luck_level)
+        .min(85);
+    if rng.random_below(rate) < n10 {
+        let mut d = base_desc10;
+        if n10 > 63 && rng.random_below(two_point_rate) == 0 {
+            d += 1;
+        }
+        if n10 > 79 && rng.random_below(three_point_rate) == 0 {
+            d += 2;
+        }
+        d
+    } else {
+        1
+    }
+}
+
+/// `Merchant.GetBackupgWeapon`（`Merchant.cs:592-759`）本体——RNG 密集。
+///
+/// 抽数顺序**严格** A（耐久）→ B（`Dc==Mc==Sc` 时的 `Random(3)` 空转）→ C/D/E（DC/MC/SC）。
+#[allow(clippy::too_many_arguments)]
+fn get_backupg_weapon_impl(
+    rng: &mut RandomNumber,
+    list: &mut Vec<WeaponUpgradeInfo>,
+    chr_name: &str,
+    permission: u8,
+    now_ms: i64,
+    bag_len: usize,
+    body_luck_level: i32,
+    cfg: &UpgradeWeaponConfig,
+) -> GetBackupgWeaponOutcome {
+    // 1. `if (!user.IsEnoughBag())`（`ItemList.Count < 46`）—— **先于**找记录。
+    if bag_len >= 46 {
+        return GetBackupgWeaponOutcome::BagFull;
+    }
+    // 2. `OrdinalIgnoreCase` 命中；未到时限**不 break**（继续找下一条同名记录）。
+    let mut n_flag = 0u8;
+    let mut info: Option<WeaponUpgradeInfo> = None;
+    let mut i = 0usize;
+    while i < list.len() {
+        if list[i].user_name.eq_ignore_ascii_case(chr_name) {
+            n_flag = 1;
+            if (now_ms - list[i].get_back_tick) > cfg.get_back_time_ms || permission >= 4 {
+                info = Some(list.remove(i));
+                n_flag = 2;
+                break;
+            }
+        }
+        i += 1;
+    }
+    let Some(mut info) = info else {
+        return if n_flag == 0 {
+            GetBackupgWeaponOutcome::NoRecord
+        } else {
+            GetBackupgWeaponOutcome::NotDue
+        };
+    };
+    // 3. 耐久分支（`upgradeInfo.Dura` = 提交时算出的 `btDura`）。
+    let dura = info.dura;
+    if dura <= 8 {
+        if info.user_item.dura_max > 3000 {
+            info.user_item.dura_max -= 3000;
+        } else {
+            info.user_item.dura_max >>= 1;
+        }
+        if info.user_item.dura > info.user_item.dura_max {
+            info.user_item.dura = info.user_item.dura_max;
+        }
+    } else if matches!(dura, 9..=15) {
+        if rng.random_below(i32::from(dura)) < 6 {
+            if info.user_item.dura_max > 1000 {
+                info.user_item.dura_max -= 1000;
+            }
+            if info.user_item.dura > info.user_item.dura_max {
+                info.user_item.dura = info.user_item.dura_max;
+            }
+        }
+    } else if dura >= 18 {
+        // `Random(Dura - 18)`；`Dura == 18` ⇒ `Random(0)`（**仍消耗 1 抽**）。
+        let r = rng.random_below(i32::from(dura) - 18);
+        if matches!(r, 1..=4) {
+            info.user_item.dura_max = info.user_item.dura_max.wrapping_add(1000);
+        } else if matches!(r, 5..=7) {
+            info.user_item.dura_max = info.user_item.dura_max.wrapping_add(2000);
+        } else if matches!(r, 8..=255) {
+            info.user_item.dura_max = info.user_item.dura_max.wrapping_add(4000);
+        }
+    }
+    // Dura ∈ {16, 17}：三档都不命中，耐久不变、**不抽**。
+    let (dc, mc, sc) = (info.dc, info.mc, info.sc);
+    // B：`Dc==Mc==Sc` ⇒ `Random(3)`（**n1C 从不影响分支选择** ⇒ 纯空转抽）。
+    let n1c = if dc == mc && mc == sc {
+        rng.random_below(3)
+    } else {
+        -1
+    };
+    // C：DC 支（`||` 优先级低于 `&&`）。
+    if (dc >= mc && dc >= sc) || n1c == 0 {
+        info.user_item.desc[10] = upgrade_one_stat(
+            rng,
+            dc,
+            cfg.dc_rate,
+            cfg.dc_two_point_rate,
+            cfg.dc_three_point_rate,
+            &info.user_item.desc,
+            body_luck_level,
+            10,
+        );
+    }
+    // D：MC 支。
+    if (mc >= dc && mc >= sc) || n1c == 1 {
+        info.user_item.desc[10] = upgrade_one_stat(
+            rng,
+            mc,
+            cfg.mc_rate,
+            cfg.mc_two_point_rate,
+            cfg.mc_three_point_rate,
+            &info.user_item.desc,
+            body_luck_level,
+            20,
+        );
+    }
+    // E：SC 支——**照抄 oracle bug**：`n90 = min(11, upgradeInfo.Mc)`（`Merchant.cs:721`）。
+    if (sc >= mc && sc >= dc) || n1c == 2 {
+        info.user_item.desc[10] = upgrade_one_stat(
+            rng,
+            mc,
+            cfg.sc_rate,
+            cfg.sc_two_point_rate,
+            cfg.sc_three_point_rate,
+            &info.user_item.desc,
+            body_luck_level,
+            30,
+        );
+    }
+    GetBackupgWeaponOutcome::Ok(info)
+}
+
+/// `Merchant.ClearExpreUpgradeListData`（`Merchant.cs:1076-1088`）：倒序删除
+/// `(now - UpgradeTime).TotalDays >= ClearExpireUpgradeWeaponDays` 的记录（`>=` 边界）。
+pub fn clear_expired_upgrades(list: &mut Vec<WeaponUpgradeInfo>, now_ms: i64, days: u8) {
+    let expire_ms = i64::from(days) * 24 * 60 * 60 * 1000;
+    let mut i = list.len();
+    while i > 0 {
+        i -= 1;
+        if now_ms - list[i].upgrade_time_ms >= expire_ms {
+            list.remove(i);
+        }
+    }
+}
+
+impl World {
+    /// `Merchant.UpgradeWapon`（`Merchant.cs:527-586`）的宿主入口（**零 RNG**）。
+    ///
+    /// `weapon` = `UseItems[ItemLocation.Weapon]`（`None` = `null`；`index == 0` 由内部判 fail）。
+    /// `bag`/`gold` 直接改（成功时扣费并吃掉材料）；`weapon` 槽的 `Index = 0` 由宿主执行
+    /// （oracle 是「保留槽对象、只清 Index」⇒ 宿主解构后必须写回 `Some(BagItem{index:0, ..})`）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn merchant_upgrade_wapon_begin(
+        &mut self,
+        merchant_id: i32,
+        chr_name: &str,
+        weapon: Option<&MerchantItem>,
+        bag: &[MerchantItem],
+        gold: &mut i32,
+        cfg: &UpgradeWeaponConfig,
+    ) -> UpgradeWaponBegin {
+        let now = self.clock_ms;
+        let catalog = std::mem::take(&mut self.item_catalog);
+        let result = match self
+            .entities
+            .get_mut(merchant_id)
+            .and_then(|e| e.merchant.as_mut())
+        {
+            Some(st) => upgrade_wapon_begin_impl(
+                &catalog,
+                &st.upgrade_weapon_list,
+                chr_name,
+                weapon,
+                bag,
+                gold,
+                cfg,
+                now,
+            ),
+            None => UpgradeWaponBegin::Fail,
+        };
+        self.item_catalog = catalog;
+        result
+    }
+
+    /// `Merchant.UpgradeWapon` 的**第二阶段**：`UpgradeWaponAddValue`（吃材料、算 dc/sc/mc/dura）
+    /// + `UpgradeWeaponList.Add`（`SaveUpgradingList` 是空桩）。
+    ///
+    /// 必须在宿主 `RecalcAbilitys` **之后**调用（oracle 顺序：`:570` Recalc → `:572` AddValue）。
+    pub fn merchant_upgrade_wapon_finish(
+        &mut self,
+        merchant_id: i32,
+        mut info: WeaponUpgradeInfo,
+        bag: &mut Vec<MerchantItem>,
+        cfg: &UpgradeWeaponConfig,
+    ) -> UpgradeWaponResult {
+        let catalog = std::mem::take(&mut self.item_catalog);
+        let deleted = upgrade_wapon_add_value(&catalog, bag, &cfg.black_stone, &mut info);
+        if let Some(st) = self
+            .entities
+            .get_mut(merchant_id)
+            .and_then(|e| e.merchant.as_mut())
+        {
+            st.upgrade_weapon_list.push(info.clone());
+        }
+        self.item_catalog = catalog;
+        UpgradeWaponResult { deleted, info }
+    }
+
+    /// 两步合一的便利入口（**只给 world 单测/无重算场景**；宿主生产路径必须分两步：
+    /// `begin` → `RecalcAbilitys` → `finish`）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn merchant_upgrade_wapon(
+        &mut self,
+        merchant_id: i32,
+        chr_name: &str,
+        weapon: Option<&MerchantItem>,
+        bag: &mut Vec<MerchantItem>,
+        gold: &mut i32,
+        cfg: &UpgradeWeaponConfig,
+    ) -> UpgradeWaponOutcome {
+        match self.merchant_upgrade_wapon_begin(merchant_id, chr_name, weapon, bag, gold, cfg) {
+            UpgradeWaponBegin::Accepted(info) => {
+                let result = self.merchant_upgrade_wapon_finish(merchant_id, info, bag, cfg);
+                UpgradeWaponOutcome::Ok(result)
+            }
+            UpgradeWaponBegin::AlreadyUpgrading => UpgradeWaponOutcome::AlreadyUpgrading,
+            UpgradeWaponBegin::Fail => UpgradeWaponOutcome::Fail,
+        }
+    }
+
+    /// `Merchant.GetBackupgWeapon`（`Merchant.cs:592-759`）的宿主入口。
+    ///
+    /// `bag_len` = `ItemList.Count`（包满门）；`permission` 生产恒 0（简报 §2.3）。
+    /// 成功时记录已从列表移除、`user_item.desc[10]` 已写；**不改 `ItemList`**
+    /// （照抄 `AddItemToBag` 被注释的 oracle 缺陷）。
+    pub fn merchant_get_backupg_weapon(
+        &mut self,
+        merchant_id: i32,
+        chr_name: &str,
+        permission: u8,
+        bag_len: usize,
+        body_luck_level: i32,
+        cfg: &UpgradeWeaponConfig,
+    ) -> GetBackupgWeaponOutcome {
+        let now = self.clock_ms;
+        let World { entities, rng, .. } = self;
+        match entities
+            .get_mut(merchant_id)
+            .and_then(|e| e.merchant.as_mut())
+        {
+            Some(st) => get_backupg_weapon_impl(
+                rng,
+                &mut st.upgrade_weapon_list,
+                chr_name,
+                permission,
+                now,
+                bag_len,
+                body_luck_level,
+                cfg,
+            ),
+            // 宿主已在 `handle_shop_cmd` 做 `FindMerchant` 门 ⇒ 此处不可达；按「无记录」兜底。
+            None => GetBackupgWeaponOutcome::NoRecord,
+        }
+    }
+}
+
 /// `Merchant.Run`（`Merchant.cs:112-170`）。
 ///
 /// RNG 站点（全部落在本文件 ⇒ `merchant` 组）：
@@ -697,15 +1332,23 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
         outcome.refilled = refill_goods(world, actor_id);
         outcome.refill_delay_ms = delay;
     }
-    // `Merchant.cs:126-130`：清理门（`ClearExpreUpgradeListData` 用墙钟 `DateTime.Now`，
-    // 且升级表持久化属 ⑤-5 ⇒ 本片只推进计时态，无可观测效果）。
+    // `Merchant.cs:126-131`：清理门（`ClearExpreUpgradeListData`）。
+    //
+    // oracle 用墙钟 `DateTime.Now` 与 `WeaponUpgradeInfo.UpgradeTime` 比；本侧两者都取
+    // **sim 时钟** `world.clock_ms`（提交时写入、清理时比较）⇒ 进程内等价（登记）。
     if (now - clear_expre_upgrade_tick) > MERCHANT_CLEAR_EXPRE_UPGRADE_INTERVAL_MS {
+        let days = world
+            .entities
+            .get(actor_id)
+            .and_then(|e| e.merchant.as_ref())
+            .map_or(0, |st| st.clear_expire_upgrade_days);
         if let Some(st) = world
             .entities
             .get_mut(actor_id)
             .and_then(|e| e.merchant.as_mut())
         {
             st.clear_expre_upgrade_tick = now;
+            clear_expired_upgrades(&mut st.upgrade_weapon_list, now, days);
         }
     }
     // `Merchant.cs:132-141`：`Random(50)==0` ⇒ `TurnTo(RandomByte(8))`；否则 `Random(50)==0` ⇒ `RM_HIT`。
@@ -1770,5 +2413,593 @@ mod tests {
         for i in 0..3 {
             assert_eq!(w.rng.random(), oracle.next_value(), "第 {i} 个后续抽");
         }
+    }
+    // ───────────────────── 武器升级 NPC 判据（C1-C7/C9/C10，简报 §4 + 更正 A1-A9） ─────────────────────
+
+    fn upgrade_catalog() -> Vec<StdItem> {
+        vec![
+            // Index 1：黑铁矿（StdMode 43，DuraMax 5000，`sql/mir2_data.sql:1058`）。
+            StdItem {
+                name: "黑铁矿".to_string(),
+                std_mode: 43,
+                dura_max: 5000,
+                ..StdItem::default()
+            },
+            // Index 2：首饰 StdMode 22（`DC = MakeWord(1, 2)` ⇒ Hi+Lo = 3）。
+            StdItem {
+                name: "项链".to_string(),
+                std_mode: 22,
+                dc: 0x0201,
+                ..StdItem::default()
+            },
+            // Index 3：首饰 StdMode 24（`DC = MakeWord(2, 1)` ⇒ 3 + 1 = 4；`SC = 0x0200` ⇒ 2 + 1 = 3）。
+            StdItem {
+                name: "戒指".to_string(),
+                std_mode: 24,
+                dc: 0x0102,
+                sc: 0x0200,
+                ..StdItem::default()
+            },
+            // Index 4/5：武器。
+            StdItem {
+                name: "炼狱".to_string(),
+                std_mode: 5,
+                dura_max: 20000,
+                ..StdItem::default()
+            },
+            StdItem {
+                name: "屠龙".to_string(),
+                std_mode: 5,
+                dura_max: 20000,
+                ..StdItem::default()
+            },
+        ]
+    }
+
+    fn upgrade_world(seed: i32) -> (World, i32) {
+        let mut w = World::new(32, 32);
+        w.rng = RandomNumber::with_seed(seed);
+        w.item_catalog = upgrade_catalog();
+        w.clock_ms = 1_000;
+        let mid = w
+            .spawn_merchant(MerchantSpawn {
+                name: "铁匠".to_string(),
+                x: 5,
+                y: 5,
+                map_id: 0,
+                state: MerchantState::new(
+                    "铁匠".to_string(),
+                    "3".to_string(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    MerchantFlags {
+                        is_upgradenow: true,
+                        is_get_backupgnow: true,
+                        ..MerchantFlags::default()
+                    },
+                    Vec::new(),
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("挂图成功");
+        // 构造抽（4 抽）已发生；重播种让取回路径的流水从已知起点开始（用例镜像用）。
+        w.rng = RandomNumber::with_seed(seed);
+        (w, mid)
+    }
+
+    /// 部署值（`Server.conf`）：取回时限 600000ms、三率 50/30/200。
+    fn deploy_cfg() -> UpgradeWeaponConfig {
+        UpgradeWeaponConfig {
+            get_back_time_ms: 600_000,
+            dc_rate: 50,
+            mc_rate: 50,
+            sc_rate: 50,
+            ..UpgradeWeaponConfig::default()
+        }
+    }
+
+    fn weapon_at(index: u16) -> MerchantItem {
+        MerchantItem {
+            make_index: 900 + i32::from(index),
+            index,
+            dura: 5000,
+            dura_max: 20000,
+            desc: [0; 14],
+        }
+    }
+
+    fn black_stone(dura: u16, make_index: i32) -> MerchantItem {
+        MerchantItem {
+            make_index,
+            index: 1,
+            dura,
+            dura_max: 5000,
+            desc: [0; 14],
+        }
+    }
+
+    fn accessory(index: u16, make_index: i32) -> MerchantItem {
+        MerchantItem {
+            make_index,
+            index,
+            dura: 1000,
+            dura_max: 1000,
+            desc: [0; 14],
+        }
+    }
+
+    fn info_with(dc: u8, mc: u8, sc: u8, dura: u8, get_back_tick: i64) -> WeaponUpgradeInfo {
+        WeaponUpgradeInfo {
+            user_name: "hero".to_string(),
+            user_item: MerchantItem {
+                make_index: 77,
+                index: 4,
+                dura: 5000,
+                dura_max: 20000,
+                desc: [0; 14],
+            },
+            dc,
+            sc,
+            mc,
+            dura,
+            upgrade_time_ms: get_back_tick,
+            get_back_tick,
+        }
+    }
+
+    fn push_info(w: &mut World, mid: i32, info: WeaponUpgradeInfo) {
+        w.entities
+            .get_mut(mid)
+            .and_then(|e| e.merchant.as_mut())
+            .expect("商人在")
+            .upgrade_weapon_list
+            .push(info);
+    }
+
+    fn list_len(w: &World, mid: i32) -> usize {
+        w.entities
+            .get(mid)
+            .and_then(|e| e.merchant.as_ref())
+            .expect("商人在")
+            .upgrade_weapon_list
+            .len()
+    }
+
+    /// **C1**：提交成功——扣 10000、吃掉全部黑铁/首饰、`dc/sc/mc/dura` 手算值、
+    /// `info.user_item` 四字段拷贝、`get_back_tick == now`、列表 +1。
+    #[test]
+    fn c1_upgrade_wapon_success_state_and_fee() {
+        let (mut w, mid) = upgrade_world(1);
+        let weapon = weapon_at(4);
+        let mut bag = vec![
+            black_stone(5000, 10),
+            black_stone(5000, 11),
+            black_stone(5000, 12),
+            black_stone(5000, 13),
+            black_stone(5000, 14),
+            accessory(2, 20),
+            accessory(3, 21),
+        ];
+        let mut gold = 20_000;
+        let r = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        );
+        let UpgradeWaponOutcome::Ok(res) = r else {
+            panic!("应受理成功：{r:?}");
+        };
+        assert_eq!(gold, 10_000, "扣 UpgradeWeaponPrice");
+        assert!(bag.is_empty(), "全部黑铁与首饰被吃");
+        // 倒序扫描：戒指(21) → 项链(20) → 黑铁(14..10)。
+        assert_eq!(res.deleted.len(), 7);
+        assert_eq!(res.deleted[0], ("戒指".to_string(), 21));
+        assert_eq!(res.deleted[1], ("项链".to_string(), 20));
+        let blacks: Vec<(String, i32)> =
+            (10..=14).rev().map(|m| ("黑铁矿".to_string(), m)).collect();
+        assert_eq!(&res.deleted[2..], &blacks[..], "黑铁按背包倒序");
+        // 手算：`Dc = nDcMin/5 + nDcMax/3 = 4/5 + 3/3 = 1`；`Sc = 3/5 + 0/3 = 0`；
+        // 5×黑铁 5000 ⇒ 每项 5，`Dura = round(5 + 5*(25/5/5.0)) = 10`。
+        let info = &res.info;
+        assert_eq!((info.dc, info.sc, info.mc, info.dura), (1, 0, 0, 10));
+        assert_eq!(info.user_item, weapon, "UserItem 四字段拷贝");
+        assert_eq!(info.user_name, "hero");
+        assert_eq!(info.get_back_tick, w.clock_ms);
+        assert_eq!(info.upgrade_time_ms, w.clock_ms);
+        assert_eq!(list_len(&w, mid), 1, "UpgradeWeaponList +1");
+        assert_eq!(
+            &w.entities
+                .get(mid)
+                .and_then(|e| e.merchant.as_ref())
+                .unwrap()
+                .upgrade_weapon_list[0],
+            info
+        );
+    }
+
+    /// **C2**：6 件黑铁 [3,1,4,1,5,9]×1000 —— oracle 的**畸形整体反转置换**（不是排序）
+    /// ⇒ `nDura=14` / `n=5` / `Dura=7`；真降序排序会得 9。全部 6 件都被吃。
+    #[test]
+    fn c2_black_stone_count_and_malformed_reverse() {
+        let (mut w, mid) = upgrade_world(2);
+        let weapon = weapon_at(4);
+        let mut bag: Vec<MerchantItem> = [3u16, 1, 4, 1, 5, 9]
+            .into_iter()
+            .enumerate()
+            .map(|(i, k)| black_stone(k * 1000, 30 + i as i32))
+            .collect();
+        let mut gold = 10_000;
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        assert_eq!(
+            res.info.dura, 7,
+            "畸形置换后前 5 项和 14 ⇒ 7（真排序会得 9）"
+        );
+        assert_eq!(res.deleted.len(), 6, "全部黑铁被吃（不只 5 件）");
+        assert!(bag.is_empty());
+    }
+
+    /// **C3**：提交门控顺序——
+    /// ① 同名检查**区分大小写**（A1：大小写不同 ⇒ **继续升级并再加一条**）；
+    /// ② 武器 `Index == 0` ⇒ fail；③ 金币不足 ⇒ fail 且金币/材料不动；
+    /// ④ 金币够但无黑铁 ⇒ fail 且金币不动。
+    #[test]
+    fn c3_upgrade_gate_order_and_case_sensitive_duplicate() {
+        let (mut w, mid) = upgrade_world(3);
+        let weapon = weapon_at(4);
+        let cfg = UpgradeWeaponConfig::default();
+        // ① 记录 "HERO"（大写）已在表 ⇒ 用 "hero" 提交**不是** `_ing`（A1）。
+        push_info(&mut w, mid, info_with(1, 0, 0, 16, 0));
+        w.entities
+            .get_mut(mid)
+            .and_then(|e| e.merchant.as_mut())
+            .unwrap()
+            .upgrade_weapon_list[0]
+            .user_name = "HERO".to_string();
+        let mut bag = vec![black_stone(5000, 1)];
+        let mut gold = 10_000;
+        let r = w.merchant_upgrade_wapon(mid, "hero", Some(&weapon), &mut bag, &mut gold, &cfg);
+        assert!(
+            matches!(r, UpgradeWaponOutcome::Ok(_)),
+            "大小写不同 ⇒ 继续升级"
+        );
+        assert_eq!(list_len(&w, mid), 2, "再加一条记录（A1）");
+        assert_eq!(gold, 0, "扣费发生");
+        // 完全同名（精确 ==）⇒ `_ing`，且一切不动。
+        let mut bag2 = vec![black_stone(5000, 2)];
+        let mut gold2 = 10_000;
+        let r = w.merchant_upgrade_wapon(mid, "hero", Some(&weapon), &mut bag2, &mut gold2, &cfg);
+        assert!(matches!(r, UpgradeWaponOutcome::AlreadyUpgrading));
+        assert_eq!(gold2, 10_000, "重复检查先于扣费");
+        assert_eq!(bag2.len(), 1, "重复检查先于吃材料");
+        // ② 武器 Index == 0 ⇒ fail。
+        let mut zero = weapon.clone();
+        zero.index = 0;
+        let mut gold3 = 10_000;
+        let mut bag3 = vec![black_stone(5000, 3)];
+        assert!(matches!(
+            w.merchant_upgrade_wapon(mid, "p2", Some(&zero), &mut bag3, &mut gold3, &cfg),
+            UpgradeWaponOutcome::Fail
+        ));
+        // ③ gold = 9999 ⇒ fail，金币/材料不动。
+        let mut gold4 = 9_999;
+        let mut bag4 = vec![black_stone(5000, 4)];
+        assert!(matches!(
+            w.merchant_upgrade_wapon(mid, "p3", Some(&weapon), &mut bag4, &mut gold4, &cfg),
+            UpgradeWaponOutcome::Fail
+        ));
+        assert_eq!((gold4, bag4.len()), (9_999, 1), "金币不足不扣、不吃材料");
+        // ④ gold 够但无黑铁 ⇒ fail，金币不动。
+        let mut gold5 = 10_000;
+        let mut bag5 = vec![accessory(2, 5)];
+        assert!(matches!(
+            w.merchant_upgrade_wapon(mid, "p4", Some(&weapon), &mut bag5, &mut gold5, &cfg),
+            UpgradeWaponOutcome::Fail
+        ));
+        assert_eq!((gold5, bag5.len()), (10_000, 1), "无黑铁不扣金");
+    }
+
+    /// **C4**：取回时限三态 + 包满；`>` 严格边界；包满门**先于**找记录；A1 的
+    /// 「OrdinalIgnoreCase 找到不 break」可取到后一条。
+    #[test]
+    fn c4_get_back_time_limit_and_bag_full() {
+        let (mut w, mid) = upgrade_world(4);
+        let cfg = deploy_cfg();
+        push_info(&mut w, mid, info_with(1, 0, 0, 16, 0));
+        // now - tick == 600000 ⇒ 不 > ⇒ `_ing`。
+        w.clock_ms = 600_000;
+        assert!(matches!(
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &cfg),
+            GetBackupgWeaponOutcome::NotDue
+        ));
+        assert_eq!(list_len(&w, mid), 1, "未到期不移除");
+        // 600001 ⇒ ok 且移除。
+        w.clock_ms = 600_001;
+        assert!(matches!(
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &cfg),
+            GetBackupgWeaponOutcome::Ok(_)
+        ));
+        assert_eq!(list_len(&w, mid), 0);
+        // 无记录 ⇒ fail。
+        assert!(matches!(
+            w.merchant_get_backupg_weapon(mid, "nobody", 0, 0, 0, &cfg),
+            GetBackupgWeaponOutcome::NoRecord
+        ));
+        // 包满 46 ⇒ bagfull，记录仍在（门先于找记录）。
+        push_info(&mut w, mid, info_with(1, 0, 0, 16, 0));
+        assert!(matches!(
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 46, 0, &cfg),
+            GetBackupgWeaponOutcome::BagFull
+        ));
+        assert_eq!(list_len(&w, mid), 1, "包满不删记录");
+        // A1：单条记录名 "HERO"、请求名 "hero" ⇒ `OrdinalIgnoreCase` 命中并取回。
+        let mut w2 = w;
+        {
+            let list = w2
+                .entities
+                .get_mut(mid)
+                .and_then(|e| e.merchant.as_mut())
+                .unwrap();
+            list.upgrade_weapon_list.clear();
+            list.upgrade_weapon_list.push({
+                let mut i = info_with(9, 0, 0, 16, 0);
+                i.user_name = "HERO".to_string();
+                i
+            });
+        }
+        let r = w2.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &cfg);
+        assert!(
+            matches!(r, GetBackupgWeaponOutcome::Ok(_)),
+            "OrdinalIgnoreCase 大小写不同也命中：{r:?}"
+        );
+        // A1：第一条 "HERO" 未到期 ⇒ **不 break**，第二条 "hero" 到期 ⇒ 取走后一条。
+        let list = w2
+            .entities
+            .get_mut(mid)
+            .and_then(|e| e.merchant.as_mut())
+            .unwrap();
+        list.upgrade_weapon_list.clear();
+        list.upgrade_weapon_list.push({
+            let mut i = info_with(1, 0, 0, 16, w2.clock_ms);
+            i.user_name = "HERO".to_string();
+            i
+        });
+        list.upgrade_weapon_list.push(info_with(2, 0, 0, 16, 0));
+        let r = w2.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &cfg);
+        let GetBackupgWeaponOutcome::Ok(info) = r else {
+            panic!("应取到后一条：{r:?}");
+        };
+        assert_eq!(info.dc, 2, "取到的是第二条（未 break 语义）");
+        assert_eq!(list_len(&w2, mid), 1, "第一条（未到期）保留");
+    }
+
+    /// **C5**：耐久分支的抽数与边界——
+    /// `[0,8]` 不抽、`[9,15]` 抽 `Random(Dura)`、`[18,255]` 抽 `Random(Dura-18)`
+    /// （`Dura==18 ⇒ Random(0)` **仍消耗 1 抽**）、`{16,17}` 不改耐久且**不抽**。
+    ///
+    /// 用同一流的下一次 `random()` 与镜像流比较（抽数错 ⇒ 后续流偏移）。
+    #[test]
+    fn c5_durability_branch_draws_and_boundaries() {
+        // (dura, dura_max, expected_dura_max after, durability_draw: Option<i32>)
+        // (dura, dura_max, 期望 DuraMax, 期望 Dura, 耐久分支抽: Option<upper>)
+        let cases = [
+            (5u8, 5000u16, 2000u16, 2000u16, None),
+            (8, 2000, 1000, 1000, None),
+            (16, 5000, 5000, 5000, None),
+            (17, 5000, 5000, 5000, None),
+            (18, 5000, 5000, 5000, Some(0)),
+        ];
+        for (dura, dura_max, exp_max, exp_dura, draw) in cases {
+            let (mut w, mid) = upgrade_world(77);
+            let mut info = info_with(1, 0, 0, dura, 0);
+            info.user_item.dura_max = dura_max;
+            info.user_item.dura = dura_max;
+            push_info(&mut w, mid, info);
+            w.clock_ms = 600_001;
+            let mut exp = RandomNumber::with_seed(77);
+            if let Some(v) = draw {
+                assert_eq!(exp.random_below(v), 0, "Random(0)/Random(0) 恒 0");
+            }
+            // 镜像 DC/MC/SC 三支（dc=1,mc=sc=0 ⇒ 仅 DC 支成立；无 n1C）。
+            let _ = exp.random_below(50);
+            let r = w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg());
+            let GetBackupgWeaponOutcome::Ok(out) = r else {
+                panic!("应取回：{r:?}");
+            };
+            assert_eq!(out.user_item.dura_max, exp_max, "Dura={dura} 的 DuraMax");
+            assert_eq!(out.user_item.dura, exp_dura, "Dura={dura} 的 Dura（clamp）");
+            assert_eq!(w.rng.random(), exp.random(), "Dura={dura} 后续流同源");
+        }
+        // Dura=12：Random(12) < 6 ⇒ DuraMax -= 1000（找不到种子则跳过——但种子空间足够大，
+        // 这里显式搜索一个 `< 6` 的种子，并把 `>= 6` 的对照也跑一遍）。
+        let seed_lt = (1..=1000)
+            .find(|&s| {
+                let mut r = RandomNumber::with_seed(s);
+                r.random_below(12) < 6
+            })
+            .expect("应有 Random(12)<6 的种子");
+        for seed in [seed_lt, seed_lt + 1] {
+            let (mut w, mid) = upgrade_world(seed);
+            let mut info = info_with(1, 0, 0, 12, 0);
+            info.user_item.dura_max = 5000;
+            info.user_item.dura = 5000;
+            push_info(&mut w, mid, info);
+            w.clock_ms = 600_001;
+            let mut exp = RandomNumber::with_seed(seed);
+            let roll = exp.random_below(12);
+            let exp_max = if roll < 6 { 4000 } else { 5000 };
+            let _ = exp.random_below(50);
+            let GetBackupgWeaponOutcome::Ok(out) =
+                w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg())
+            else {
+                panic!("应取回");
+            };
+            assert_eq!(out.user_item.dura_max, exp_max, "Dura=12 / roll={roll}");
+            assert_eq!(w.rng.random(), exp.random(), "后续流同源");
+            if roll < 6 {
+                break;
+            }
+        }
+    }
+
+    /// **C6**：升级判定 RNG 顺序（核心）——
+    /// 例 A `Dc=Mc=Sc=0`：`Random(3)`（空转）+ DC/MC/SC 各 `Random(50)`；
+    /// 例 B `Dc=7`：DC 支 `Random(50)` 必成 + `Random(30)` + `Random(200)`；
+    /// 例 C `Dc=6`：n10 为负 ⇒ `Desc[10]=1`（仍抽 `Random(50)`）。
+    ///
+    /// 用例都用 `Dura=16`（耐久分支**不抽**）以隔离 A7 的分支。
+    #[test]
+    fn c6_upgrade_decision_rng_order() {
+        const RATE: i32 = 50;
+        // 例 A：三值全等 ⇒ 4 抽；最后一支（SC）赢。
+        let seed = 4242;
+        let (mut w, mid) = upgrade_world(seed);
+        push_info(&mut w, mid, info_with(0, 0, 0, 16, 0));
+        w.clock_ms = 600_001;
+        let mut exp = RandomNumber::with_seed(seed);
+        let _n1c = exp.random_below(3);
+        let mut last = 0u8;
+        for base in [10u8, 20, 30] {
+            let success = exp.random_below(RATE) < 10;
+            last = if success { base } else { 1 };
+        }
+        let GetBackupgWeaponOutcome::Ok(out) =
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg())
+        else {
+            panic!("应取回");
+        };
+        assert_eq!(out.user_item.desc[10], last, "三支全成 ⇒ 最后一支（SC）赢");
+        assert_eq!(w.rng.random(), exp.random(), "例 A 恰 4 抽");
+        // 例 B：Dc=7 / Mc=Sc=0 ⇒ 3 抽（无 n1C）。
+        let seed = 7;
+        let (mut w, mid) = upgrade_world(seed);
+        push_info(&mut w, mid, info_with(7, 0, 0, 16, 0));
+        w.clock_ms = 600_001;
+        let mut exp = RandomNumber::with_seed(seed);
+        assert!(exp.random_below(RATE) < 85, "n90=7 ⇒ n10=85 必成");
+        let _two = exp.random_below(30);
+        let _three = exp.random_below(200);
+        let GetBackupgWeaponOutcome::Ok(out) =
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg())
+        else {
+            panic!("应取回");
+        };
+        assert!(
+            matches!(out.user_item.desc[10], 10..=12),
+            "成功支 Desc[10] ∈ {{10,11,12}}，实际 {}",
+            out.user_item.desc[10]
+        );
+        assert_eq!(w.rng.random(), exp.random(), "例 B 恰 3 抽");
+        // 例 C：Dc=6 ⇒ n10 为负（`6 << 29` 回绕）⇒ 必败，仍抽 1 次 Random(50)。
+        let seed = 6;
+        let (mut w, mid) = upgrade_world(seed);
+        push_info(&mut w, mid, info_with(6, 0, 0, 16, 0));
+        w.clock_ms = 600_001;
+        let mut exp = RandomNumber::with_seed(seed);
+        let _ = exp.random_below(RATE);
+        let GetBackupgWeaponOutcome::Ok(out) =
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg())
+        else {
+            panic!("应取回");
+        };
+        assert_eq!(out.user_item.desc[10], 1, "n90=6 恒失败");
+        assert_eq!(w.rng.random(), exp.random(), "例 C 恰 1 抽");
+    }
+
+    /// **C7**：SC 支**照抄 oracle bug**（`n90 = min(11, upgradeInfo.Mc)`，`Merchant.cs:721`）。
+    ///
+    /// `Dc=0, Mc=3, Sc=6`：只有 SC 支成立；oracle 取 `Mc=3` ⇒ `n10 = 4 + 10 - 1 = 13`
+    /// （`3 << 0 = 3`，descluck 0）⇒ 成功时 `Desc[10]=30`（**不会出现 31/32**，A2）。
+    /// 修正成 `Sc=6` ⇒ `n90=6` ⇒ n10 负 ⇒ 恒失败（1）。
+    #[test]
+    fn c7_sc_branch_uses_mc_like_oracle() {
+        let seed = (1..=10_000)
+            .find(|&s| {
+                let mut r = RandomNumber::with_seed(s);
+                r.random_below(50) < 13
+            })
+            .expect("应能找到 Random(50)<13 的种子");
+        let (mut w, mid) = upgrade_world(seed);
+        push_info(&mut w, mid, info_with(0, 3, 6, 16, 0));
+        w.clock_ms = 600_001;
+        let GetBackupgWeaponOutcome::Ok(out) =
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg())
+        else {
+            panic!("应取回");
+        };
+        assert_eq!(
+            out.user_item.desc[10], 30,
+            "oracle 的 SC 支用 Mc ⇒ n10=13 ⇒ 30"
+        );
+        // 修正版（用 Sc）对照：同一流位置恒失败。
+        let mut rng = RandomNumber::with_seed(seed);
+        assert_eq!(
+            upgrade_one_stat(&mut rng, 6, 50, 30, 200, &[0; 14], 0, 30),
+            1,
+            "若把 SC 的 Mc 改成 Sc ⇒ n90=6 ⇒ 恒失败"
+        );
+    }
+
+    /// **C10**：过期清理边界——`>=` 删除、`<` 保留，且只影响过期记录。
+    #[test]
+    fn c10_clear_expired_upgrades_boundary() {
+        let day = 24 * 60 * 60 * 1000i64;
+        let now = 10 * day;
+        let mut list = vec![
+            {
+                let mut i = info_with(1, 0, 0, 16, 0);
+                i.user_name = "exact3".to_string();
+                i.upgrade_time_ms = now - 3 * day;
+                i
+            },
+            {
+                let mut i = info_with(1, 0, 0, 16, 0);
+                i.user_name = "justunder".to_string();
+                i.upgrade_time_ms = now - 3 * day + 1;
+                i
+            },
+            {
+                let mut i = info_with(1, 0, 0, 16, 0);
+                i.user_name = "old".to_string();
+                i.upgrade_time_ms = 0;
+                i
+            },
+        ];
+        clear_expired_upgrades(&mut list, now, 3);
+        let names: Vec<&str> = list.iter().map(|i| i.user_name.as_str()).collect();
+        assert_eq!(names, vec!["justunder"], "3 天整删、差 1ms 留、旧记录删");
+        // `Merchant.Run` 的 10min 门真的会调清理（days 从商人状态取）。
+        let (mut w, mid) = upgrade_world(10);
+        w.clock_ms = now;
+        {
+            let st = w
+                .entities
+                .get_mut(mid)
+                .and_then(|e| e.merchant.as_mut())
+                .unwrap();
+            st.clear_expre_upgrade_tick = 0;
+            st.clear_expire_upgrade_days = 3;
+            let mut old = info_with(1, 0, 0, 16, 0);
+            old.upgrade_time_ms = 0;
+            st.upgrade_weapon_list.push(old);
+        }
+        let _ = merchant_run(&mut w, mid);
+        assert_eq!(list_len(&w, mid), 0, "10min 门到点清理过期记录");
     }
 }
