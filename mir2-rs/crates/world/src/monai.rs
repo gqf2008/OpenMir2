@@ -80,6 +80,9 @@ pub const RM_HIT: u16 = 10004;
 pub const RM_DIGUP: u16 = 10200;
 /// `Messages.RM_DIGDOWN`（`src/OpenMir2/Messages.cs:615`）——入土帧（`SM_DIGDOWN`）。
 pub const RM_DIGDOWN: u16 = 10201;
+/// `Messages.RM_CHANGEFACE`（`src/OpenMir2/Messages.cs:640` = 10415）——
+/// `ElfWarriorMonster.Run` 换形成功帧（`ElfWarriorMonster.cs:149`）。
+pub const RM_CHANGEFACE: u16 = 10415;
 /// `Messages.RM_10205`（`src/OpenMir2/Messages.cs:618`）——`SM_716` 帧。
 pub const RM_10205: u16 = 10205;
 /// `Messages.RM_FLYAXE`（`src/OpenMir2/Messages.cs:616`）——`DualAxeMonster.FlyAxeAttack` 的飞斧帧
@@ -1508,7 +1511,8 @@ fn ron_attack(world: &mut World, actor_id: i32, target_id: i32, n_power: i32) {
 /// `LightingZombi`(94)/`ZilKinZombi`(96)；MB-3 的 `CentipedeKing`(107)/`GasMoth`(105)/
 /// `ScultureKing`(102)/`ExplosionSpider`(117)；MB-4 的 `CowKingMonster`(92)；
 /// MB-5 的 `TeleMonster`(203)/`Khazard`(206)/`GreenMonster`(208)/`RedMonster`(209)/`FrostTiger`(210)；
-/// MB-6 的 `ElectronicScolpionMon`(200)/`MagicMonObject`(133)/`RonObject`(131)。
+/// MB-6 的 `ElectronicScolpionMon`(200)/`MagicMonObject`(133)/`RonObject`(131)；
+/// MB-7 的 `BoneKingMonster`(134)/`ElfMonster`(113)/`ElfWarriorMonster`(114)。
 ///
 /// 返回 `None` = 非上述类，调用方继续走通用 [`monster_run`]；否则按 [`ClassRunBase`]
 /// 决定 oracle `base.Run()` 的落点。
@@ -1635,6 +1639,23 @@ pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBas
         // `RonObject`（131）：`Run` 恒落到 `base.Run()`（`MonsterObject.Run`）。
         131 => {
             ron_object_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        // **MB-7**：`BoneKingMonster.Run`（`BoneKingMonster.cs:48-76`）；`: MonsterObject`
+        // ⇒ `base.Run()` = `MonsterObject.Run`。
+        134 => {
+            bone_king_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        // `ElfMonster.Run`（`ElfMonster.cs:43-86`）；`: MonsterObject` ⇒ `MonsterObject.Run`。
+        113 => {
+            elf_monster_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        // `ElfWarriorMonster.Run`（`ElfWarriorMonster.cs:112-166`）；`: SpitSpider : AtMonster`
+        // ⇒ `base.Run()` = `ATMonster.Run` → `MonsterObject.Run`（索敌门见 [`monster_run`]）。
+        114 => {
+            elf_warrior_run(world, actor_id);
             Some(ClassRunBase::Monster)
         }
         _ => None,
@@ -1894,6 +1915,9 @@ fn monster_attack_target(world: &mut World, actor_id: i32) -> bool {
         // `ScultureKingMonster` 用的是基版 `MonsterObject.AttackTarget`，但虚调用 `Attack`
         // 被覆写为 `HitMagAttackTarget`（102）。
         Some(102) => sculture_king_attack_target(world, actor_id),
+        // **MB-7**：`BoneKingMonster.Attack`（`BoneKingMonster.cs:42-46`）与
+        // `ScultureKingMonster.Attack`（`:55-59`）**逐字相同** ⇒ 复用同一包装。
+        Some(134) => sculture_king_attack_target(world, actor_id),
         // **MB-4**：`CowKingMonster.Attack`（`:27-31`：`GetAttackPower` + 半物理/半魔法
         // `HitMagAttackTarget`）。
         Some(92) => cow_king_attack_target(world, actor_id),
@@ -2696,12 +2720,29 @@ fn sculture_monster_run(world: &mut World, actor_id: i32) {
 // **MB-3**（R07/R21/R34/R02）——延迟消息 / 毒 / 守卫。
 // ---------------------------------------------------------------------------
 
-/// 一条待执行的 `ScultureKingMonster.CallSlave`（`ScultureKingMonster.cs:35-53`）生成批次。
+/// 召唤 / 复制类生成请求的**种类**（oracle 三个同步 `RegenMonsterByName` 调用点）。
 ///
-/// `count` = `Random(6) + 6`（在 `Run` 的调用点**同点同次**抽出，`ScultureKingMonster.cs:39`）；
-/// `Random(4)`（`:47`）与 `RegenMonsterByName` 的构造抽由宿主
+/// - [`Self::Sculture`]：`ScultureKingMonster.CallSlave`（`ScultureKingMonster.cs:35-53`）；
+/// - [`Self::BoneKing`]：`BoneKingMonster.CallSlave`（`BoneKingMonster.cs:21-40`）；
+/// - [`Self::MakeClone`]：`MonsterObject.MakeClone`（`MonsterObject.cs:100-136`）——
+///   `ElfMonster.Run` / `ElfWarriorMonster.Run` 的换形支。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClassSlaveSpawnKind {
+    /// `Random(4)` 选 `Config.Zuma[idx]`（`ScultureKingMonster.cs:47`）。
+    Sculture,
+    /// `Random(3)` 选 `BoneCaptain/BoneArcher/BoneSpearman`（`BoneKingMonster.cs:22/34`）。
+    BoneKing,
+    /// `MakeClone(name, this)`：先造 `name`，再按 `MonsterObject.cs:100-136` 复制字段；
+    /// `source_race` 决定 `Run` 收尾的帧/`AppearNow` 分派（113/114）。
+    MakeClone { name: String, source_race: u8 },
+}
+
+/// 一条待执行的 `RegenMonsterByName` 生成批次。
+///
+/// `count` 在 `Run` 的调用点**同点同次**抽出（ScultureKing/BoneKing 的 `Random(6)+6`）；
+/// `Random(3)`/`Random(4)` 与 `RegenMonsterByName` 的构造抽由宿主
 /// [`World::flush_sculture_spawns`] 在**同一条** `world.rng` 上按 oracle 序执行
-/// （这样 `_mSlaveObjectList.Count >= 30` 的门与每次 `Random(4)` 的次数才与成功次数一致）。
+/// （这样 `>= 30` 的门与每次 `Random(n)` 的次数才与成功次数一致）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScultureSpawnRequest {
     pub owner_id: i32,
@@ -2709,6 +2750,7 @@ pub struct ScultureSpawnRequest {
     pub x: i32,
     pub y: i32,
     pub count: i32,
+    pub kind: ClassSlaveSpawnKind,
 }
 
 impl World {
@@ -2717,55 +2759,276 @@ impl World {
         self.zuma_names = names.clone();
     }
 
-    /// `ScultureKingMonster.CallSlave` 的宿主排水（oracle 同步 `RegenMonsterByName` 的等价物）。
+    /// 召唤 / 复制类请求的宿主排水（oracle 同步 `RegenMonsterByName` 的等价物）。
     ///
-    /// 逐字：先判 `_mSlaveObjectList.Count >= 30` ⇒ break；再抽 `Random(4)` 选
-    /// `Config.Zuma[idx]`；`RegenMonsterByName(MapName, nX, nY, name)` 成功 ⇒ 入表。
+    /// 按 [`ClassSlaveSpawnKind`] 逐字执行：
+    /// - `Sculture`：先判 `_mSlaveObjectList.Count >= 30` ⇒ break；再抽 `Random(4)` 选
+    ///   `Config.Zuma[idx]`；`RegenMonsterByName(MapName, nX, nY, name)` 成功 ⇒ 入表；
+    /// - `BoneKing`：同样先判 `SlaveObjectList.Count >= 30`，再抽 `Random(3)` 选
+    ///   `BoneCaptain/BoneArcher/BoneSpearman`（`BoneKingMonster.cs:31-38`）；
+    /// - `MakeClone`：在主人 `CurrX/CurrY` 造 `name`，成功后按 `MonsterObject.cs:100-136`
+    ///   复制字段，并执行 `ElfMonster`/`ElfWarriorMonster` `Run` 的收尾
+    ///   （帧 / `AppearNow` / `Master=null` / `KickException`）。
     ///
-    /// **次序登记**（与 `flush_special_spawns` 同口径）：oracle 在 `ScultureKing.Run()` 内同步造怪；
-    /// 本仓在 `world.tick()` 之后排水 ⇒ 构造抽相对其它 AI 抽数的位置不同。无 `CallSlave` 的 tick
-    /// 零抽数（五批 trace 逐字节不变）；有 ScultureKing 的场景需真机窗口核次序（R 级余量）。
+    /// **次序登记**（与 `flush_special_spawns` 同口径）：oracle 在各自 `Run()` 内同步造怪；
+    /// 本仓在 `world.tick()` 之后排水 ⇒ 构造抽相对其它 AI 抽数的位置不同。无这些调用的 tick
+    /// 零抽数（五批 trace 逐字节不变）；有调用的场景需真机窗口核次序（R 级余量）。
+    /// `MakeClone` 的 `KickException` 也因此在 `base.Run()` **之后**落定（oracle 在之前），
+    /// 三条 elf 路径数据不可达（规划件 MB-7），登记为已知次序差。
     pub fn flush_sculture_spawns<S: crate::special_monster::SpecialSpawner + ?Sized>(
         &mut self,
         spawner: &mut S,
     ) -> Vec<i32> {
+        const BONE_KING_NAMES: [&str; 3] = ["BoneCaptain", "BoneArcher", "BoneSpearman"];
         let reqs = std::mem::take(&mut self.pending_sculture_spawns);
         let mut out = Vec::new();
         for req in reqs {
-            for _ in 0..req.count {
-                let list_len = self
-                    .entities
-                    .get(req.owner_id)
-                    .map_or(0, |e| e.class_slave_list.len());
-                if list_len >= 30 {
-                    break;
+            match req.kind.clone() {
+                ClassSlaveSpawnKind::Sculture => {
+                    for _ in 0..req.count {
+                        let list_len = self
+                            .entities
+                            .get(req.owner_id)
+                            .map_or(0, |e| e.class_slave_list.len());
+                        if list_len >= 30 {
+                            break;
+                        }
+                        let idx = self.rng.random_below(4) as usize;
+                        let name = self
+                            .zuma_names
+                            .get(idx)
+                            .cloned()
+                            .unwrap_or_else(|| self.zuma_names[0].clone());
+                        if let Some(child) =
+                            self.regen_one(spawner, req.map_id, &name, req.x, req.y)
+                        {
+                            out.push(child);
+                            if let Some(e) = self.entities.get_mut(req.owner_id) {
+                                e.class_slave_list.push(child);
+                            }
+                        }
+                    }
                 }
-                let idx = self.rng.random_below(4) as usize;
-                let name = self
-                    .zuma_names
-                    .get(idx)
-                    .cloned()
-                    .unwrap_or_else(|| self.zuma_names[0].clone());
-                let mut rng =
-                    std::mem::replace(&mut self.rng, mir2_shared::rng::RandomNumber::with_seed(0));
-                let child = spawner.regen_monster_by_name(
-                    self,
-                    &mut rng,
-                    req.map_id,
-                    &name,
-                    req.x as i16,
-                    req.y as i16,
-                );
-                self.rng = rng;
-                if let Some(child) = child {
-                    out.push(child);
-                    if let Some(e) = self.entities.get_mut(req.owner_id) {
-                        e.class_slave_list.push(child);
+                // `BoneKingMonster.CallSlave`：`nC` 已在 `Run` 调用点抽好；
+                // 每个 minion 先判 30 上限再抽 `Random(3)`（`BoneKingMonster.cs:33-34`）。
+                ClassSlaveSpawnKind::BoneKing => {
+                    for _ in 0..req.count {
+                        let list_len = self
+                            .entities
+                            .get(req.owner_id)
+                            .map_or(0, |e| e.class_slave_list.len());
+                        if list_len >= 30 {
+                            break;
+                        }
+                        let idx = self.rng.random_below(3) as usize;
+                        let name = BONE_KING_NAMES[idx];
+                        if let Some(child) = self.regen_one(spawner, req.map_id, name, req.x, req.y)
+                        {
+                            out.push(child);
+                            if let Some(e) = self.entities.get_mut(req.owner_id) {
+                                e.class_slave_list.push(child);
+                            }
+                        }
+                    }
+                }
+                ClassSlaveSpawnKind::MakeClone { name, source_race } => {
+                    if let Some(child) = self.regen_one(spawner, req.map_id, &name, req.x, req.y) {
+                        apply_make_clone(self, req.owner_id, child);
+                        match source_race {
+                            // `ElfMonster.Run`（`ElfMonster.cs:70-83`）。
+                            crate::entity::ACTOR_RACE_ELF_MONSTER => {
+                                if self.entities.get(child).is_some_and(|e| {
+                                    e.race == crate::entity::ACTOR_RACE_ELF_WARRIORMON
+                                }) {
+                                    elf_warrior_appear_now(self, child);
+                                }
+                                if let Some(e) = self.entities.get_mut(req.owner_id) {
+                                    e.master = None;
+                                }
+                                kick_exception(self, req.owner_id);
+                            }
+                            // `ElfWarriorMonster.Run`（`ElfWarriorMonster.cs:146-157`）。
+                            crate::entity::ACTOR_RACE_ELF_WARRIORMON => {
+                                let (dir, x, y) = self
+                                    .entities
+                                    .get(req.owner_id)
+                                    .map_or((0, 0, 0), |e| (e.ai.dir, e.x, e.y));
+                                send_ref_msg(
+                                    self,
+                                    req.owner_id,
+                                    RM_DIGDOWN,
+                                    i32::from(dir),
+                                    x,
+                                    y,
+                                    0,
+                                );
+                                send_ref_msg(
+                                    self,
+                                    req.owner_id,
+                                    RM_CHANGEFACE,
+                                    0,
+                                    req.owner_id,
+                                    child,
+                                    0,
+                                );
+                                if self.entities.get(child).is_some_and(|e| {
+                                    e.race == crate::entity::ACTOR_RACE_ELF_MONSTER
+                                }) {
+                                    elf_monster_appear_now(self, child);
+                                }
+                                if let Some(e) = self.entities.get_mut(req.owner_id) {
+                                    e.master = None;
+                                }
+                                kick_exception(self, req.owner_id);
+                            }
+                            _ => {}
+                        }
+                        out.push(child);
                     }
                 }
             }
         }
         out
+    }
+
+    /// 在 `world.rng` 上执行一次宿主 `RegenMonsterByName`（同一条 RNG 流）。
+    fn regen_one<S: crate::special_monster::SpecialSpawner + ?Sized>(
+        &mut self,
+        spawner: &mut S,
+        map_id: usize,
+        name: &str,
+        x: i32,
+        y: i32,
+    ) -> Option<i32> {
+        let mut rng =
+            std::mem::replace(&mut self.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+        let child = spawner.regen_monster_by_name(self, &mut rng, map_id, name, x as i16, y as i16);
+        self.rng = rng;
+        child
+    }
+}
+
+/// `MonsterObject.MakeClone`（`MonsterObject.cs:100-136`）的**字段复制段**。
+///
+/// 逐句（`old` = 调用者 `OldMon`，`clone` = 刚造出的怪）：
+/// 1. `if (OldMon.TargetCret == null) OldMon.TargetCret = Master.TargetCret ?? Master.LastHiter`
+///    —— `Master == null` 时 oracle 会 NRE；本仓按「不可达」跳过继承（登记）。
+/// 2. `clone.Master/MasterRoyaltyTick/SlaveMakeLevel/SlaveExpLevel` 复制；
+/// 3. `clone.RecalcAbilitys()`：base 的 `ApplySlaveLevelAbilitys` + 派生 `ResetElfMon`
+///    （`ElfMonster.cs:31-41` / `ElfWarriorMonster.cs:35-39/105-110`）；
+/// 4. `clone.Abil = OldMon.Abil`：本骨架 `dc/max_hp` 合并了 `Abil/WAbil`，复制会破坏
+///    第 3 步算出的当前 `WAbil` ⇒ **不覆盖**（登记；`Abil` 只影响之后的
+///    `RecalcAbilitys`，数据不可达路径上无法观察）；
+/// 5. `StatusTimeArr/TargetCret/TargetFocusTick/LastHiter/LastHiterTick/Dir/IsSlave` 复制；
+/// 6. `if (OldMon.Master != null) Master.SlaveList.Add(clone)`。
+///
+/// `RefNameColor()` 只改展示色（未建模，登记）。
+fn apply_make_clone(world: &mut World, owner_id: i32, clone_id: i32) {
+    // 1. `TargetCret` 继承（先读 Master 的目标，再写回 OldMon）。
+    let inherited_target = {
+        let Some(old) = world.entities.get(owner_id) else {
+            return;
+        };
+        if old.ai.target_creature.is_some() {
+            None
+        } else {
+            old.master
+                .and_then(|m| world.entities.get(m))
+                .and_then(|m| m.ai.target_creature.or(m.last_hiter))
+        }
+    };
+    if let Some(target) = inherited_target {
+        if let Some(e) = world.entities.get_mut(owner_id) {
+            e.ai.target_creature = Some(target);
+        }
+    }
+    let Some(old) = world.entities.get(owner_id) else {
+        return;
+    };
+    let (master, royalty, make_level, exp_level) = (
+        old.master,
+        old.master_royalty_tick,
+        old.slave_make_level,
+        old.slave_exp_level,
+    );
+    let (status_time, dir, target, focus, last_hiter, last_hiter_tick) = (
+        old.status_time,
+        old.ai.dir,
+        old.ai.target_creature,
+        old.ai.target_focus_tick,
+        old.last_hiter,
+        old.last_hiter_tick,
+    );
+    let now = world.clock_ms;
+    let Some(clone) = world.entities.get_mut(clone_id) else {
+        return;
+    };
+    clone.master = master;
+    clone.master_royalty_tick = royalty;
+    clone.slave_make_level = make_level;
+    clone.slave_exp_level = exp_level;
+    // 3. `RecalcAbilitys()`（base + 派生覆写），顺序与 oracle 一致。
+    crate::slave::apply_slave_level_abilitys(clone);
+    crate::slave::apply_derived_slave_recalc(clone, now);
+    // 5. 其余字段复制。
+    clone.status_time = status_time;
+    clone.ai.target_creature = target;
+    clone.ai.target_focus_tick = focus;
+    clone.last_hiter = last_hiter;
+    clone.last_hiter_tick = last_hiter_tick;
+    clone.ai.dir = dir;
+    clone.is_slave = true;
+    // 6. `Master.SlaveList.Add(clone)`。
+    if let Some(master_id) = master {
+        if let Some(m) = world.entities.get_mut(master_id) {
+            m.slave_list.push(clone_id);
+        }
+    }
+}
+
+/// `BaseObject.KickException`（`BaseObject.Base.cs:919-924`）：`Death=true` → `DeathTick=now`
+/// → `MakeGhost()`。
+fn kick_exception(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.death = true;
+        e.death_tick = now;
+    }
+    make_ghost(world, actor_id);
+}
+
+/// `ElfMonster.AppearNow`（`ElfMonster.cs:24-29`）：
+/// `FixedHideMode=false` → `RecalcAbilitys()` → `WalkTick += 800`。
+fn elf_monster_appear_now(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.fixed_hide_mode = false;
+        crate::slave::apply_slave_level_abilitys(e);
+        crate::slave::apply_derived_slave_recalc(e, now);
+        e.ai.walk_tick += 800;
+    }
+}
+
+/// `ElfWarriorMonster.AppearNow`（`ElfWarriorMonster.cs:15-24`）：
+/// `BoIsFirst=false` → `FixedHideMode=false` → `RM_DIGUP` → `RecalcAbilitys()` →
+/// `WalkTick += 800` → `DigDownTick=now` → `Race=ElfWarriormon`。
+fn elf_warrior_appear_now(world: &mut World, actor_id: i32) {
+    let (dir, x, y) = world
+        .entities
+        .get(actor_id)
+        .map_or((0, 0, 0), |e| (e.ai.dir, e.x, e.y));
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.bo_is_first = false;
+        e.fixed_hide_mode = false;
+    }
+    send_ref_msg(world, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
+    let now = world.clock_ms;
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        crate::slave::apply_slave_level_abilitys(e);
+        crate::slave::apply_derived_slave_recalc(e, now);
+        e.ai.walk_tick += 800;
+        e.dig_down_tick = now;
+        e.race = crate::entity::ACTOR_RACE_ELF_WARRIORMON;
     }
 }
 
@@ -3224,7 +3487,268 @@ fn sculture_king_call_slave(world: &mut World, actor_id: i32) {
         x: nx,
         y: ny,
         count,
+        kind: ClassSlaveSpawnKind::Sculture,
     });
+}
+
+// ---------------------------------------------------------------------------
+// **MB-7**（R05/R15/R16）——`BoneKingMonster`(134) / `ElfMonster`(113) /
+// `ElfWarriorMonster`(114)。
+// ---------------------------------------------------------------------------
+
+/// `GameSvrConf.Dragon1`（`GameSvrConf.cs:1759` 源码缺省 `"神兽1"`；部署
+/// `E:/MirServer/M2GameSvr/Server.conf:130` 覆盖为 `"神兽"`，`ServerConf.cs:106` 读
+/// `[Names] Dragon1`）——`ElfMonster.Run` 的 `MakeClone(Config.Dragon1, this)`
+/// （`ElfMonster.cs:72`）。
+///
+/// **登记**：宿主配置通路不在本车道写集（`bins/game-svr/**` 属并行车道），此处取
+/// **部署件值 `"神兽"`**（race 113）；若换了 `Server.conf` 的 `Dragon1`，克隆目标类会随
+/// 之变化（`ElfMonster.cs:76` 的 `is ElfWarriorMonster` 分派）。
+pub const DRAGON1_NAME: &str = "神兽";
+
+/// `BoneKingMonster.CallSlave`（`BoneKingMonster.cs:21-40`）的**抽点**：
+/// `Random(6) + 6` 与 `GetFrontPosition`；每个 minion 的 `Random(3)` 与造怪在
+/// [`World::flush_sculture_spawns`] 内按 oracle 序执行。
+fn bone_king_call_slave(world: &mut World, actor_id: i32) {
+    let Some((map_id, x, y, dir)) = world
+        .entities
+        .get(actor_id)
+        .map(|e| (e.map_id, e.x, e.y, e.ai.dir))
+    else {
+        return;
+    };
+    let count = world.rng.random_below(6) + 6;
+    let (nx, ny) = front_of(world, actor_id, dir, map_id).unwrap_or((x, y));
+    world.pending_sculture_spawns.push(ScultureSpawnRequest {
+        owner_id: actor_id,
+        map_id,
+        x: nx,
+        y: ny,
+        count,
+        kind: ClassSlaveSpawnKind::BoneKing,
+    });
+}
+
+/// `BoneKingMonster.Run`（`BoneKingMonster.cs:48-76`）。
+///
+/// ```csharp
+/// if (CanMove() && GetTickCount() - WalkTick >= WalkSpeed) {
+///   if ((now-SearchEnemyTick) > 8000 || (now-SearchEnemyTick) > 1000 && TargetCret == null) {
+///     SearchEnemyTick = now; SearchTarget();
+///     if (DangerLevel > WAbil.HP / WAbil.MaxHP * 5 && DangerLevel > 0) { DangerLevel -= 1; CallSlave(); }
+///     if (WAbil.HP == WAbil.MaxHP) DangerLevel = 5;
+///   }
+///   for (i = SlaveObjectList.Count-1; i >= 0; i--) if (Death || Ghost) RemoveAt(i);
+/// }
+/// base.Run();
+/// ```
+///
+/// **整数除法照抄**：`HP / MaxHP` 是 C# `int/int`（ushort 提升），`HP < MaxHP` ⇒ 商 0
+/// ⇒ `DangerLevel > 0` 即触发；仅满血时阈值是 5。改坏必红：
+/// `mb7_bone_king_danger_level_uses_integer_division`（HP=MaxHP-1 ⇒ 必须召唤）。
+fn bone_king_run(world: &mut World, actor_id: i32) {
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    let now = world.clock_ms;
+    if !(can_move(e) && now - e.ai.walk_tick >= e.ai.walk_speed) {
+        return;
+    }
+    let (enemy_tick, has_target) = (e.ai.search_enemy_tick, e.ai.target_creature.is_some());
+    // C# `&&` 优先于 `||`：`(>8000) || ((>1000) && TargetCret == null)`。
+    if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.search_enemy_tick = now;
+        }
+        search_target(world, actor_id);
+        // `DangerLevel > WAbil.HP / WAbil.MaxHP * 5 && DangerLevel > 0`。
+        let (hp, max_hp, danger) = world
+            .entities
+            .get(actor_id)
+            .map_or((0, 0, 0), |e| (e.hp, e.max_hp, e.danger_level));
+        // `MaxHP == 0` 时 oracle 抛 DivideByZeroException；生产不变量 MaxHP>0（登记）。
+        let threshold = if max_hp == 0 {
+            0
+        } else {
+            (i32::from(hp) / i32::from(max_hp)) * 5
+        };
+        if danger > threshold && danger > 0 {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.danger_level -= 1;
+            }
+            bone_king_call_slave(world, actor_id);
+        }
+        if hp == max_hp {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.danger_level = 5;
+            }
+        }
+    }
+    // `for (i = Count-1; i >= 0; i--) if (Death || Ghost) RemoveAt(i);`
+    let dead_slaves: Vec<i32> = world
+        .entities
+        .get(actor_id)
+        .map(|e| {
+            e.class_slave_list
+                .iter()
+                .copied()
+                .filter(|id| world.entities.get(*id).is_none_or(|s| s.death || s.ghost))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !dead_slaves.is_empty() {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.class_slave_list.retain(|id| !dead_slaves.contains(id));
+        }
+    }
+}
+
+/// `ElfMonster.ResetElfMon`（`ElfMonster.cs:37-41`）：`WalkSpeed = 500 - SlaveMakeLevel*50`、
+/// `WalkTick = now + 2000`。
+fn elf_monster_reset(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.walk_speed = 500 - i64::from(e.slave_make_level) * 50;
+        e.ai.walk_tick = now + 2000;
+    }
+}
+
+/// `ElfMonster.Run`（`ElfMonster.cs:43-86`）。
+///
+/// 首次出土 → 死亡 2s `MakeGhost` → 否则 `TargetCret`/主人目标 ⇒ `MakeClone(Dragon1)`。
+/// 克隆的字段复制/收尾（`AppearNow`/`Master=null`/`KickException`）在宿主排水
+/// [`World::flush_sculture_spawns`] 内落定（登记次序差，见该函数文档）。
+fn elf_monster_run(world: &mut World, actor_id: i32) {
+    let (bo_first, dir, x, y) = match world.entities.get(actor_id) {
+        Some(e) => (e.bo_is_first, e.ai.dir, e.x, e.y),
+        None => return,
+    };
+    if bo_first {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.bo_is_first = false;
+            e.fixed_hide_mode = false;
+        }
+        send_ref_msg(world, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
+        elf_monster_reset(world, actor_id);
+    }
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    let now = world.clock_ms;
+    if e.death {
+        if now - e.death_tick > 2 * 1000 {
+            make_ghost(world, actor_id);
+        }
+        return;
+    }
+    let mut bo_change_face = e.ai.target_creature.is_some();
+    if let Some(master_id) = e.master {
+        if let Some(m) = world.entities.get(master_id) {
+            if m.ai.target_creature.is_some() || m.last_hiter.is_some() {
+                bo_change_face = true;
+            }
+        }
+    }
+    if bo_change_face {
+        let (map_id, x, y) = match world.entities.get(actor_id) {
+            Some(e) => (e.map_id, e.x, e.y),
+            None => return,
+        };
+        world.pending_sculture_spawns.push(ScultureSpawnRequest {
+            owner_id: actor_id,
+            map_id,
+            x,
+            y,
+            count: 1,
+            kind: ClassSlaveSpawnKind::MakeClone {
+                name: DRAGON1_NAME.to_string(),
+                source_race: crate::entity::ACTOR_RACE_ELF_MONSTER,
+            },
+        });
+    }
+}
+
+/// `ElfWarriorMonster.ResetElfMon`（`ElfWarriorMonster.cs:105-110`）：
+/// `NextHitTime = 1500 - SlaveMakeLevel*100`、`WalkSpeed = 500 - SlaveMakeLevel*50`、
+/// `WalkTick = now + 2000`。
+fn elf_warrior_reset(world: &mut World, actor_id: i32) {
+    let now = world.clock_ms;
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        let lvl = i64::from(e.slave_make_level);
+        e.ai.next_hit_time = 1500 - lvl * 100;
+        e.ai.walk_speed = 500 - lvl * 50;
+        e.ai.walk_tick = now + 2000;
+    }
+}
+
+/// `ElfWarriorMonster.Run`（`ElfWarriorMonster.cs:112-166`）。
+///
+/// 关键作用域：`else { DigDownTick = now; }` 属于 `if (boChangeFace)` 的 **else** ——
+/// `boChangeFace=true` 但未到 60s / 名字尾位不是 `1` 时**不刷新** `DigDownTick`；
+/// 只有 `boChangeFace=false`（有目标 / 主人有目标或 `LastHiter`）才刷新。
+/// 改坏必红：`mb7_elf_warrior_dig_down_tick_not_refreshed_when_change_face_true`。
+fn elf_warrior_run(world: &mut World, actor_id: i32) {
+    let (bo_first, dir, x, y) = match world.entities.get(actor_id) {
+        Some(e) => (e.bo_is_first, e.ai.dir, e.x, e.y),
+        None => return,
+    };
+    if bo_first {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.bo_is_first = false;
+            e.fixed_hide_mode = false;
+        }
+        send_ref_msg(world, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
+        elf_warrior_reset(world, actor_id);
+    }
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    let now = world.clock_ms;
+    if e.death {
+        if now - e.death_tick > 2 * 1000 {
+            make_ghost(world, actor_id);
+        }
+        return;
+    }
+    // `bool boChangeFace = TargetCret == null;`
+    let mut bo_change_face = e.ai.target_creature.is_none();
+    if let Some(master_id) = e.master {
+        if let Some(m) = world.entities.get(master_id) {
+            if m.ai.target_creature.is_some() || m.last_hiter.is_some() {
+                bo_change_face = false;
+            }
+        }
+    }
+    if bo_change_face {
+        let (dig_down_tick, name) = match world.entities.get(actor_id) {
+            Some(e) => (e.dig_down_tick, e.name.clone()),
+            None => return,
+        };
+        if now - dig_down_tick > 6 * 10 * 1000 {
+            // `if (elfName[^1] == '1') { elfName = elfName[..^1]; elfMon = MakeClone(elfName, this); }`
+            // C# `string` 的 `[^1]` 是 UTF-16 code unit；怪名均为 BMP ⇒ Rust `char` 等价。
+            if let Some(trimmed) = name.strip_suffix('1') {
+                let (map_id, x, y) = match world.entities.get(actor_id) {
+                    Some(e) => (e.map_id, e.x, e.y),
+                    None => return,
+                };
+                world.pending_sculture_spawns.push(ScultureSpawnRequest {
+                    owner_id: actor_id,
+                    map_id,
+                    x,
+                    y,
+                    count: 1,
+                    kind: ClassSlaveSpawnKind::MakeClone {
+                        name: trimmed.to_string(),
+                        source_race: crate::entity::ACTOR_RACE_ELF_WARRIORMON,
+                    },
+                });
+            }
+        }
+    } else if let Some(e) = world.entities.get_mut(actor_id) {
+        // `else { DigDownTick = GetTickCount(); }` —— **属于 `if (boChangeFace)` 的 else**。
+        e.dig_down_tick = now;
+    }
 }
 
 /// `ScultureKingMonster.Attack`（`:55-59`）：
@@ -3976,7 +4500,11 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
     // 末尾 `base.Run()`（`:93`）= `ATMonster.Run` ⇒ 同一道索敌门。两个 `return` 支（Siege 位移）
     // 走 [`ClassRunBase::None`]、根本不进本函数，故这里补门与 oracle 的「两次 return 之后才
     // base.Run()」逐点一致。`SearchTarget` 不消费随机数 ⇒ 五批 trace 不受影响。
-    if (is_active_seek_race(e.race) || e.race == 105 || e.race == 92) && can_move(e) {
+    // **MB-7 F1**：`ElfWarriorMonster`(114) `: SpitSpider : AtMonster` 亦覆写 `Run`，
+    // 末尾 `base.Run()` = `ATMonster.Run` ⇒ 同一道 8s/1s 索敌门（与 105/92 同法补门）。
+    if (is_active_seek_race(e.race) || e.race == 105 || e.race == 92 || e.race == 114)
+        && can_move(e)
+    {
         let now = world.clock_ms;
         let enemy_tick = e.ai.search_enemy_tick;
         let has_target = e.ai.target_creature.is_some();
@@ -4568,7 +5096,15 @@ pub fn monster_ai_tick(world: &mut World) {
             // oracle `ProcessMonsters` 对 `!Ghost` 的怪**照常调 `Run()`**（`WorldServer.MonGen.cs:288`）
             // ——`ZilKinZombi.Run` 的复活门正是读 `Death`（`ZilKinZombi.cs:37`）。本批只对
             // race 96 走类覆写；其余死怪维持既有等价（`BaseObject.Run` 的死亡支）。
-            if world.entities.get(id).is_some_and(|e| e.race == 96) {
+            // **MB-7**：`ElfMonster.Run` / `ElfWarriorMonster.Run` 的死亡支是
+            // `(now - DeathTick) > 2s ⇒ MakeGhost()`（`ElfMonster.cs:53-58` /
+            // `ElfWarriorMonster.cs:121-127`），**短于** `Config.MakeGhostTime` 的通用门
+            // ⇒ 死后仍必须跑类 `Run`。
+            if world
+                .entities
+                .get(id)
+                .is_some_and(|e| matches!(e.race, 96 | 113 | 114))
+            {
                 if let Some(base) = monster_class_run(world, id) {
                     match base {
                         ClassRunBase::Animal => {
@@ -9185,6 +9721,7 @@ mod tests {
             x: 10,
             y: 11,
             count: 3,
+            kind: ClassSlaveSpawnKind::Sculture,
         });
         let mut spawner = RecordingSpawner {
             names: Vec::new(),
@@ -9222,6 +9759,7 @@ mod tests {
             x: 10,
             y: 11,
             count: 11,
+            kind: ClassSlaveSpawnKind::Sculture,
         });
         let mut spawner = RecordingSpawner {
             names: Vec::new(),
@@ -12153,6 +12691,560 @@ mod tests {
             (1, 0),
             "差值恰 2000（now=2001/AttackTick=1）⇒ 不触发"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // **MB-7**（R05/R15/R16）——`BoneKingMonster`(134) / `ElfMonster`(113) /
+    // `ElfWarriorMonster`(114) 构造级用例 + 改坏必红。
+    // ------------------------------------------------------------------
+
+    /// 记录型 `RegenMonsterByName`：按名映射 race，记录名与「构造抽」的次序。
+    struct Mb7Spawner {
+        race_of: Vec<(&'static str, u8)>,
+        names: Vec<String>,
+        next_id: i32,
+    }
+
+    impl Mb7Spawner {
+        fn new(race_of: Vec<(&'static str, u8)>) -> Self {
+            Self {
+                race_of,
+                names: Vec::new(),
+                next_id: 9000,
+            }
+        }
+    }
+
+    impl crate::special_monster::SpecialSpawner for Mb7Spawner {
+        fn regen_monster_by_name(
+            &mut self,
+            world: &mut World,
+            rng: &mut RandomNumber,
+            _map_id: usize,
+            name: &str,
+            x: i16,
+            y: i16,
+        ) -> Option<i32> {
+            self.names.push(name.to_string());
+            // 模拟 `CreateMonster` 的构造抽（记录与 `Random(3)` 的相对次序）。
+            let _ = rng.random_below(1);
+            let race = self
+                .race_of
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map_or(80, |(_, r)| *r);
+            let mut e = Entity::new(0, name.to_string(), i32::from(x), i32::from(y));
+            e.race = race;
+            e.hp = 500;
+            e.max_hp = 500;
+            crate::mongen::apply_monster_class_constants(&mut e, i16::from(race), 0);
+            self.next_id += 1;
+            Some(world.add_entity(e))
+        }
+    }
+
+    /// R05：`DangerLevel > WAbil.HP / WAbil.MaxHP * 5 && DangerLevel > 0` 是 **C# 整数除法**：
+    /// `HP = MaxHP - 1` ⇒ 商 0 ⇒ `DangerLevel > 0` 即触发召唤；仅满血时阈值 5。
+    /// 召唤点同点抽 `Random(6)+6`；排水时每个 minion 先判 30 上限、再 `Random(3)`、再构造抽。
+    ///
+    /// 牙：把 `(hp / max_hp) * 5` 改成浮点/`hp * 5 / max_hp` ⇒ 段 1 不召唤 ⇒ 红；
+    /// 把 `Random(3)` 提到 30 上限判断之前 ⇒ 段 2 的抽数不符 ⇒ 红；
+    /// 把 `DangerLevel -= 1` 删掉 ⇒ 段 1 的 `danger_level` 断言红。
+    #[test]
+    fn mb7_r05_bone_king_integer_division_and_slave_draw_order() {
+        // 段 1：HP=999/MaxHP=1000 ⇒ 阈值 0 ⇒ DangerLevel=1 触发（整数除法）。
+        let mut w = World::new(30, 30);
+        w.clock_ms = 100_000;
+        let id = class_monster(&mut w, 134, 10, 10);
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.hp = 999;
+            e.max_hp = 1000;
+            e.danger_level = 1;
+            e.ai.search_enemy_tick = 0;
+            e.ai.walk_tick = 0;
+            e.ai.walk_speed = 0;
+            e.ai.dir = DIR_RIGHT;
+        }
+        w.rng = RandomNumber::with_seed(1234);
+        assert_eq!(
+            monster_class_run(&mut w, id),
+            Some(ClassRunBase::Monster),
+            "base.Run() = MonsterObject.Run"
+        );
+        assert_eq!(
+            w.entities.get(id).unwrap().danger_level,
+            0,
+            "DangerLevel -= 1"
+        );
+        let req = w
+            .pending_sculture_spawns
+            .first()
+            .expect("整数除法 ⇒ 应召唤")
+            .clone();
+        assert_eq!(req.kind, ClassSlaveSpawnKind::BoneKing);
+        assert_eq!((req.x, req.y), (11, 10), "GetFrontPosition(Dir=Right)");
+        assert!(
+            (6..=11).contains(&req.count),
+            "Random(6)+6 ⇒ 6..=11，实际 {}",
+            req.count
+        );
+
+        // 排水：每个 minion = Random(3) → 构造抽；怪名取自固定三表。
+        let seed = 777;
+        w.rng = RandomNumber::with_seed(seed);
+        let mut expect = RandomNumber::with_seed(seed);
+        let mut sp = Mb7Spawner::new(vec![
+            ("BoneCaptain", 80),
+            ("BoneArcher", 80),
+            ("BoneSpearman", 80),
+        ]);
+        const NAMES: [&str; 3] = ["BoneCaptain", "BoneArcher", "BoneSpearman"];
+        let mut expected = Vec::new();
+        for _ in 0..req.count {
+            expected.push(NAMES[expect.random_below(3) as usize].to_string());
+            let _ = expect.random_below(1);
+        }
+        let spawned = w.flush_sculture_spawns(&mut sp);
+        assert_eq!(spawned.len(), req.count as usize);
+        assert_eq!(sp.names, expected, "Random(3) 与构造抽交错次序");
+        assert_eq!(w.rng.random(), expect.random(), "RNG 流水一致");
+        assert_eq!(
+            w.entities.get(id).unwrap().class_slave_list,
+            spawned,
+            "成功造出的 minion 入 SlaveObjectList"
+        );
+
+        // 段 2：表内已 29 只、count=11 ⇒ 只能再造 1 只：先判 >=30 再抽 Random(3)。
+        let mut w = World::new(30, 30);
+        w.clock_ms = 100_000;
+        let id = class_monster(&mut w, 134, 10, 10);
+        w.entities.get_mut(id).unwrap().class_slave_list = (1..=29).collect();
+        w.rng = RandomNumber::with_seed(seed);
+        w.pending_sculture_spawns.push(ScultureSpawnRequest {
+            owner_id: id,
+            map_id: 0,
+            x: 10,
+            y: 11,
+            count: 11,
+            kind: ClassSlaveSpawnKind::BoneKing,
+        });
+        let mut sp = Mb7Spawner::new(Vec::new());
+        let mut expect = RandomNumber::with_seed(seed);
+        let _ = expect.random_below(3);
+        let _ = expect.random_below(1); // 构造抽
+        let spawned = w.flush_sculture_spawns(&mut sp);
+        assert_eq!(spawned.len(), 1, "29+1 ⇒ 到 30 即停");
+        assert_eq!(sp.names.len(), 1, "第 2 次起先判 >=30，不再抽 Random(3)");
+        assert_eq!(
+            w.rng.random(),
+            expect.random(),
+            ">=30 后**不得**再抽 Random(3)（先判后抽）"
+        );
+        assert_eq!(w.entities.get(id).unwrap().class_slave_list.len(), 30);
+
+        // 段 3：满血 ⇒ 阈值 5 ⇒ `DangerLevel=5` 不触发，且回满为 5。
+        let mut w = World::new(30, 30);
+        w.clock_ms = 100_000;
+        let id = class_monster(&mut w, 134, 10, 10);
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.hp = 1000;
+            e.max_hp = 1000;
+            e.danger_level = 5;
+            e.ai.search_enemy_tick = 0;
+            e.ai.walk_tick = 0;
+            e.ai.walk_speed = 0;
+        }
+        assert_eq!(monster_class_run(&mut w, id), Some(ClassRunBase::Monster));
+        assert!(w.pending_sculture_spawns.is_empty(), "满血不召唤");
+        assert_eq!(w.entities.get(id).unwrap().danger_level, 5);
+
+        // 段 4：死亡/幽灵的子怪在 Run 尾被移除（倒序语义等价于 retain）。
+        let mut w = World::new(30, 30);
+        w.clock_ms = 100_000;
+        let id = class_monster(&mut w, 134, 10, 10);
+        let alive = mb1_players(&mut w, 20, 20);
+        let dead = mb1_players(&mut w, 21, 20);
+        w.entities.get_mut(dead).unwrap().death = true;
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.class_slave_list = vec![alive, dead];
+            e.ai.search_enemy_tick = 100_000;
+            e.ai.walk_tick = 0;
+            e.ai.walk_speed = 0;
+        }
+        assert_eq!(monster_class_run(&mut w, id), Some(ClassRunBase::Monster));
+        assert_eq!(
+            w.entities.get(id).unwrap().class_slave_list,
+            vec![alive],
+            "Death||Ghost 移除"
+        );
+    }
+
+    /// R05（Attack）：`BoneKingMonster.Attack`（`BoneKingMonster.cs:42-46`）走
+    /// `GetAttackPower(Lo(DC), |Hi-Lo|)` → `HitMagAttackTarget(target, 0, nPower, true)`：
+    /// 目标格每个 proper 对象先 `GetHitStruckDamage(0)` 再 `GetMagStruckDamage(nPower)`，
+    /// **不写 `LastHiter`/不发 `RM_STRUCK`**，尾帧 `RM_HIT`，`RM_REFMESSAGE` 200ms。
+    ///
+    /// 牙：把 `Some(134)` 落回基版 `attack_target` ⇒ 取数序/帧/`LastHiter` 全变 ⇒ 红。
+    #[test]
+    fn mb7_r05_bone_king_attack_uses_hit_mag_attack_target() {
+        let mut w = World::new(30, 30);
+        w.enable_refmessage_delay();
+        w.clock_ms = 100_000;
+        let id = class_monster(&mut w, 134, 10, 10);
+        let t = refmsg_target(&mut w, 11, 10);
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.dc = 5 | (9 << 8); // Lo=5, Hi=9 ⇒ Random(|9-5|+1)=Random(5)
+            e.ai.attack_tick = 0;
+            e.ai.next_hit_time = 2000;
+            e.ai.target_creature = Some(t);
+        }
+        let seed = 4242;
+        w.rng = RandomNumber::with_seed(seed);
+        let mut expect = RandomNumber::with_seed(seed);
+        let d0 = expect.random_below(5);
+        let _ac = expect.random_below(1); // GetHitStruckDamage：AC=0
+        let _mac = expect.random_below(1); // GetMagStruckDamage：MAC=0
+        assert!(monster_attack_target(&mut w, id));
+        assert_stream_eq(&mut w, &mut expect, "BoneKing.Attack 取数序");
+        let refs = &w.pending_monster_ref_msgs;
+        assert_eq!(
+            refs.iter().filter(|m| m.ident == RM_HIT).count(),
+            1,
+            "HitMagAttackTarget 尾帧 RM_HIT"
+        );
+        {
+            let target = w.entities.get(t).unwrap();
+            assert!(target.hp < 1000, "命中扣血");
+            assert!(
+                target.last_hiter.is_none(),
+                "HitMagAttackTarget 不 SetLastHiter"
+            );
+            assert!(target.ai.pending_struck.is_empty(), "不发 RM_STRUCK");
+        }
+        let msg = w.self_delay_msgs.peek(t).expect("RM_REFMESSAGE");
+        assert_eq!(msg.ident, crate::slave::RM_REFMESSAGE);
+        assert_eq!(msg.w_param, 5 + d0, "nPower = Lo + Random(|Hi-Lo|+1)");
+        assert_eq!(msg.deliver_at_ms, 100_200, "200ms");
+    }
+
+    /// R15：`ElfMonster.Run` 的 `BoIsFirst` 只触发一次（出土帧 + `ResetElfMon`）；
+    /// 死亡支 `(now-DeathTick) > 2000` 严格 `>` ⇒ 恰 2000ms 不 Ghost。
+    ///
+    /// 牙：把 `BoIsFirst` 的清位删掉 ⇒ 第二次 Run 多发一帧 ⇒ 段 2 红；
+    /// 把 `>` 改成 `>=` ⇒ 段 3 红。
+    #[test]
+    fn mb7_r15_elf_monster_first_dig_and_two_second_ghost() {
+        let mut w = World::new(30, 30);
+        w.clock_ms = 100_000;
+        let id = class_monster(&mut w, 113, 10, 10);
+        {
+            let e = w.entities.get(id).unwrap();
+            assert!(e.bo_is_first, "ctor BoIsFirst=true");
+            assert!(e.fixed_hide_mode, "ctor FixedHideMode=true");
+            assert!(e.ai.no_attack_mode, "ctor NoAttackMode=true");
+            assert_eq!(e.view_range, 6, "ctor ViewRange=6");
+        }
+        assert_eq!(monster_class_run(&mut w, id), Some(ClassRunBase::Monster));
+        {
+            let e = w.entities.get(id).unwrap();
+            assert!(!e.bo_is_first);
+            assert!(!e.fixed_hide_mode, "首 Run 出土");
+            assert_eq!(e.ai.walk_speed, 500, "ResetElfMon: 500 - 0*50");
+            assert_eq!(e.ai.walk_tick, 102_000, "ResetElfMon: now+2000");
+        }
+        assert_eq!(
+            w.pending_monster_ref_msgs
+                .iter()
+                .filter(|m| m.ident == RM_DIGUP)
+                .count(),
+            1,
+            "首 Run 发一次 RM_DIGUP"
+        );
+        // 段 2：第二次 Run 不再出土。
+        assert_eq!(monster_class_run(&mut w, id), Some(ClassRunBase::Monster));
+        assert_eq!(
+            w.pending_monster_ref_msgs
+                .iter()
+                .filter(|m| m.ident == RM_DIGUP)
+                .count(),
+            1,
+            "BoIsFirst 只触发一次"
+        );
+        assert!(
+            w.pending_sculture_spawns.is_empty(),
+            "无目标/无主人联动 ⇒ 不 MakeClone"
+        );
+
+        // 段 3：死亡 2s 边界。
+        let mut w = World::new(30, 30);
+        w.clock_ms = 102_000;
+        let id = class_monster(&mut w, 113, 10, 10);
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.bo_is_first = false;
+            e.death = true;
+            e.death_tick = 100_000;
+        }
+        assert_eq!(monster_class_run(&mut w, id), Some(ClassRunBase::Monster));
+        assert!(!w.entities.get(id).unwrap().ghost, "恰 2000ms 不 MakeGhost");
+        w.clock_ms = 102_001;
+        assert_eq!(monster_class_run(&mut w, id), Some(ClassRunBase::Monster));
+        assert!(w.entities.get(id).unwrap().ghost, "> 2000ms ⇒ MakeGhost");
+    }
+
+    /// R15（生成链）：`MakeClone(Dragon1)` 的请求点、字段继承与收尾。
+    ///
+    /// 段 1：`Dragon1` 造出 113 ⇒ 不 `AppearNow`；字段复制 + `Master=null` + `KickException`。
+    /// 段 2：宿主把 `Dragon1` 配成 `神兽1`（114）⇒ 克隆走 `ElfWarriorMonster.AppearNow`
+    ///        （出土帧 + `DigDownTick=now` + `WalkTick=now+2000+800`）。
+    ///
+    /// 牙：删 `apply_make_clone` 的 `MasterRoyaltyTick` 复制 ⇒ 段 1 红；
+    /// 把 `source_race` 分支写成无条件 `AppearNow` ⇒ 段 1 多一帧/`fixed_hide` 红。
+    #[test]
+    fn mb7_r15_elf_monster_make_clone_inheritance_and_appear_now() {
+        let run = |dragon1_race: u8| {
+            let mut w = World::new(30, 30);
+            w.clock_ms = 100_000;
+            let id = class_monster(&mut w, 113, 10, 10);
+            w.entities.get_mut(id).unwrap().name = "神兽".into();
+            let master = mb1_players(&mut w, 20, 20);
+            let target = mb1_players(&mut w, 12, 10);
+            {
+                let e = w.entities.get_mut(id).unwrap();
+                e.bo_is_first = false;
+                e.fixed_hide_mode = false;
+                e.hp = 300;
+                e.max_hp = 500;
+                e.dc = 5 | (9 << 8);
+                e.master = Some(master);
+                e.master_royalty_tick = 42;
+                e.slave_make_level = 2;
+                e.slave_exp_level = 1;
+                e.ai.dir = 3;
+                e.status_time[0] = 7;
+                e.ai.target_creature = Some(target);
+                e.ai.target_focus_tick = 555;
+                e.last_hiter = Some(target);
+                e.last_hiter_tick = 666;
+            }
+            assert_eq!(monster_class_run(&mut w, id), Some(ClassRunBase::Monster));
+            let req = w.pending_sculture_spawns[0].clone();
+            assert_eq!(
+                req.kind,
+                ClassSlaveSpawnKind::MakeClone {
+                    name: "神兽".into(),
+                    source_race: 113
+                },
+                "MakeClone(Config.Dragon1, this)"
+            );
+            // `ElfMonster.Run` 恒请求 `Config.Dragon1`；测试用 race_of 模拟配置指向的类。
+            let mut sp = Mb7Spawner::new(vec![(DRAGON1_NAME, dragon1_race)]);
+            let spawned = w.flush_sculture_spawns(&mut sp);
+            assert_eq!(spawned.len(), 1);
+            (w, id, master, target, spawned[0])
+        };
+
+        // 段 1：Dragon1 仍是部署值「神兽」(113)。
+        let (w, id, master, target, clone) = run(113);
+        {
+            let c = w.entities.get(clone).unwrap();
+            assert_eq!(c.race, 113);
+            assert_eq!(c.master, Some(master), "Master 继承");
+            assert_eq!(c.master_royalty_tick, 42);
+            assert_eq!(c.slave_make_level, 2);
+            assert_eq!(c.slave_exp_level, 1);
+            assert_eq!(c.ai.dir, 3);
+            assert_eq!(c.status_time[0], 7);
+            assert_eq!(c.ai.target_creature, Some(target));
+            assert_eq!(c.ai.target_focus_tick, 555);
+            assert_eq!(c.last_hiter, Some(target));
+            assert_eq!(c.last_hiter_tick, 666);
+            assert!(c.is_slave);
+            // 113 克隆的 ctor 仍是 `FixedHideMode=true`/`BoIsFirst=true`（`ElfMonster.cs:18/20`）；
+            // 源 113 的收尾只对 `ElfWarriorMonster` 调 `AppearNow`。
+            assert!(c.fixed_hide_mode, "113 克隆保留 ctor FixedHideMode");
+            assert!(c.bo_is_first, "113 克隆保留 ctor BoIsFirst");
+        }
+        assert_eq!(
+            w.entities.get(master).unwrap().slave_list,
+            vec![clone],
+            "MakeClone 尾：Master.SlaveList.Add"
+        );
+        {
+            let old = w.entities.get(id).unwrap();
+            assert!(old.death, "KickException ⇒ Death=true");
+            assert!(old.ghost, "KickException ⇒ MakeGhost");
+            assert_eq!(old.master, None, "成功换形后 Master=null");
+        }
+
+        // 段 2：宿主把 Dragon1 配成「神兽1」(114) ⇒ 克隆走 ElfWarrior.AppearNow。
+        let (w, _id, _master, _target, clone) = run(114);
+        {
+            let c = w.entities.get(clone).unwrap();
+            assert_eq!(c.race, 114, "AppearNow 再置 Race=ElfWarriormon");
+            assert!(!c.bo_is_first);
+            assert!(!c.fixed_hide_mode);
+            assert_eq!(c.dig_down_tick, 100_000);
+            assert_eq!(c.ai.walk_tick, 102_800, "Recalc: now+2000, 再 +800");
+            assert_eq!(c.ai.walk_speed, 400, "500 - SlaveMakeLevel(2)*50");
+            assert_eq!(c.ai.next_hit_time, 1300, "1500 - 2*100");
+        }
+        assert_eq!(
+            w.pending_monster_ref_msgs
+                .iter()
+                .filter(|m| m.ident == RM_DIGUP && m.actor_id == clone)
+                .count(),
+            1,
+            "ElfWarrior.AppearNow 发 RM_DIGUP"
+        );
+    }
+
+    /// R16：`ElfWarriorMonster.Run` 的 `boChangeFace` 与 `DigDownTick` 作用域。
+    ///
+    /// - 有目标 / 主人有目标或 `LastHiter` ⇒ `boChangeFace=false` ⇒ **刷新** `DigDownTick`；
+    /// - `boChangeFace=true` 且未到 60s / 名字尾位不是 `1` ⇒ **不刷新**（else 作用域）；
+    /// - 60s 门严格 `>`，名字 `[^1]=='1'` 才去尾并 `MakeClone`；
+    /// - 换形成功 ⇒ `RM_DIGDOWN` + `RM_CHANGEFACE` + 克隆 `AppearNow` + `Master=null` + `KickException`。
+    ///
+    /// 牙：把 `else { DigDownTick = now; }` 移到 `if (boChangeFace)` 内 ⇒ 段 2/3 红；
+    /// 把 `> 60000` 改 `>=` ⇒ 段 4 红；名字判断改成 `ends_with("1")` 去多个 1 ⇒ 段 5 红。
+    #[test]
+    fn mb7_r16_elf_warrior_change_face_scope_and_clone_frames() {
+        // 段 1：首次出土（BoIsFirst）→ ResetElfMon。
+        let mut w = World::new(30, 30);
+        w.clock_ms = 100_000;
+        let id = class_monster(&mut w, 114, 10, 10);
+        w.entities.get_mut(id).unwrap().slave_make_level = 2;
+        assert_eq!(monster_class_run(&mut w, id), Some(ClassRunBase::Monster));
+        {
+            let e = w.entities.get(id).unwrap();
+            assert!(!e.bo_is_first);
+            assert!(!e.fixed_hide_mode);
+            assert_eq!(e.ai.next_hit_time, 1300);
+            assert_eq!(e.ai.walk_speed, 400);
+            assert_eq!(e.ai.walk_tick, 102_000);
+        }
+
+        // 段 2：boChangeFace=false（主人有目标）⇒ 刷新 DigDownTick。
+        let mut w = World::new(30, 30);
+        w.clock_ms = 100_000;
+        let id = class_monster(&mut w, 114, 10, 10);
+        let master = mb1_players(&mut w, 20, 20);
+        let mtarget = mb1_players(&mut w, 21, 20);
+        w.entities.get_mut(mtarget).unwrap().death = false;
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.bo_is_first = false;
+            e.name = "神兽1".into();
+            e.dig_down_tick = 0;
+            e.master = Some(master);
+        }
+        w.entities.get_mut(master).unwrap().ai.target_creature = Some(mtarget);
+        assert_eq!(monster_class_run(&mut w, id), Some(ClassRunBase::Monster));
+        assert_eq!(
+            w.entities.get(id).unwrap().dig_down_tick,
+            100_000,
+            "boChangeFace=false ⇒ else 支刷新"
+        );
+        assert!(w.pending_sculture_spawns.is_empty());
+
+        // 段 3：boChangeFace=true、未到 60s ⇒ 不刷新、不克隆。
+        let mut w = World::new(30, 30);
+        w.clock_ms = 160_000;
+        let id = class_monster(&mut w, 114, 10, 10);
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.bo_is_first = false;
+            e.name = "神兽1".into();
+            e.dig_down_tick = 100_000; // 恰 60000ms
+        }
+        assert_eq!(monster_class_run(&mut w, id), Some(ClassRunBase::Monster));
+        assert_eq!(
+            w.entities.get(id).unwrap().dig_down_tick,
+            100_000,
+            "boChangeFace=true 且未到 60s ⇒ **不得**刷新"
+        );
+        assert!(w.pending_sculture_spawns.is_empty(), "严格 > 60000ms");
+
+        // 段 4：名字尾位不是 '1' ⇒ boChangeFace=true 也不克隆、不刷新。
+        let mut w = World::new(30, 30);
+        w.clock_ms = 200_000;
+        let id = class_monster(&mut w, 114, 10, 10);
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.bo_is_first = false;
+            e.name = "神兽".into();
+            e.dig_down_tick = 0;
+        }
+        assert_eq!(monster_class_run(&mut w, id), Some(ClassRunBase::Monster));
+        assert!(w.pending_sculture_spawns.is_empty(), "尾位非 '1' 不克隆");
+        assert_eq!(
+            w.entities.get(id).unwrap().dig_down_tick,
+            0,
+            "boChangeFace=true ⇒ 不刷新"
+        );
+
+        // 段 5：60s 过门 + 名字尾位 '1' ⇒ 去尾 MakeClone；排水出两帧 + AppearNow。
+        let mut w = World::new(30, 30);
+        w.clock_ms = 200_000;
+        let id = class_monster(&mut w, 114, 10, 10);
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.bo_is_first = false;
+            e.name = "神兽1".into();
+            e.dig_down_tick = 100_000;
+            e.slave_make_level = 1;
+            e.ai.dir = 5;
+        }
+        assert_eq!(monster_class_run(&mut w, id), Some(ClassRunBase::Monster));
+        let req = w.pending_sculture_spawns[0].clone();
+        assert_eq!(
+            req.kind,
+            ClassSlaveSpawnKind::MakeClone {
+                name: "神兽".into(),
+                source_race: 114
+            }
+        );
+        let mut sp = Mb7Spawner::new(vec![("神兽", 113)]);
+        let spawned = w.flush_sculture_spawns(&mut sp);
+        assert_eq!(spawned.len(), 1);
+        let clone = spawned[0];
+        let refs = &w.pending_monster_ref_msgs;
+        assert_eq!(
+            refs.iter()
+                .filter(|m| m.actor_id == id && m.ident == RM_DIGDOWN)
+                .count(),
+            1,
+            "换形成功 ⇒ RM_DIGDOWN"
+        );
+        let change = refs
+            .iter()
+            .find(|m| m.actor_id == id && m.ident == RM_CHANGEFACE)
+            .expect("RM_CHANGEFACE");
+        assert_eq!(
+            (change.n_param1, change.n_param2),
+            (id, clone),
+            "RM_CHANGEFACE(0, ActorId, elfMon.ActorId, 0)"
+        );
+        {
+            let c = w.entities.get(clone).unwrap();
+            assert_eq!(c.race, 113);
+            assert!(!c.fixed_hide_mode, "ElfMonster.AppearNow");
+            // `ElfMonster.AppearNow`（`:24-29`）**不**清 `BoIsFirst` ⇒ 113 克隆首 Run 仍会出土。
+            assert!(c.bo_is_first);
+            assert_eq!(c.ai.walk_tick, 202_800, "now+2000 再 +800");
+            assert_eq!(c.ai.walk_speed, 450, "500 - 1*50");
+        }
+        {
+            let old = w.entities.get(id).unwrap();
+            assert!(old.death);
+            assert!(old.ghost);
+            assert_eq!(old.master, None);
+        }
     }
 }
 

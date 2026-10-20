@@ -180,6 +180,24 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
             entity.come_out_value = 8;
             entity.attack_range = 4;
         }
+        // **MB-7**：`ElfMonster` ctor（`ElfMonster.cs:15-22`）：`ViewRange=6`、
+        // `FixedHideMode=true`、`NoAttackMode=true`、`BoIsFirst=true`。
+        // `Race=ElfMonster` 已由 DB race（113）落定。
+        113 => {
+            entity.view_range = 6;
+            entity.fixed_hide_mode = true;
+            entity.ai.no_attack_mode = true;
+            entity.bo_is_first = true;
+        }
+        // **MB-7**：`ElfWarriorMonster` ctor（`ElfWarriorMonster.cs:26-33`）：
+        // 继承 `SpitSpider`（`Animal=true`，由 `is_animal_race` 承担）后设
+        // `ViewRange=6`、`FixedHideMode=true`、`BoIsFirst=true`、`UsePoison=false`
+        // （`UsePoison` 在本仓按 race 114 的「非强化形态」分支建模，见 monai）。
+        114 => {
+            entity.view_range = 6;
+            entity.fixed_hide_mode = true;
+            entity.bo_is_first = true;
+        }
         // `BoneKingMonster.cs:17`（`ScultureKingMonster` 已在上面的 102 支一并落定）。
         134 => entity.danger_level = 5,
         // `MagicMonObject.cs:15` / `ElectronicScolpionMon.cs:12`：显式落 ctor 值

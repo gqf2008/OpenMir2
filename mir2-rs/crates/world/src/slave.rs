@@ -463,7 +463,7 @@ fn make_word_u16(low: u16, high: u16) -> u16 {
 /// **未建模**：else 支尾部的 `WAbil.MAC = 0` —— 本骨架怪物无 MAC 字段、战斗不消费（登记，
 /// 不假造）；`RecalcAbilitys` 其余字段（`AntiPoison=0`/`AntiMagic=1`/`Weight*`…）本骨架亦
 /// 无对应怪物字段。
-fn apply_slave_level_abilitys(mon: &mut Entity) {
+pub(crate) fn apply_slave_level_abilitys(mon: &mut Entity) {
     // `if (Race >= ActorRace.Animal)`（`BaseObject.Abil.cs:85-88`，`Animal = 50`）。
     if mon.race < ACTOR_RACE_ANIMAL {
         return;
@@ -526,7 +526,7 @@ fn apply_slave_level_abilitys(mon: &mut Entity) {
 ///   `WalkTick = GetTickCount() + 2000`。
 ///
 /// 顺序：oracle 先 `base.RecalcAbilitys()`（含 [`apply_slave_level_abilitys`]），再本覆写。
-fn apply_derived_slave_recalc(mon: &mut Entity, now: i64) {
+pub(crate) fn apply_derived_slave_recalc(mon: &mut Entity, now: i64) {
     let lvl = i64::from(mon.slave_make_level);
     match mon.race {
         ACTOR_RACE_WHITE_SKELETON => {

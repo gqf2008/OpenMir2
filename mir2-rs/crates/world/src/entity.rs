@@ -857,6 +857,15 @@ pub struct Entity {
     /// `CallSlave` 生成成功即入表；`Run` 尾倒序移除 `Death || Ghost` 的子怪。
     /// 与 BeeQueen 的 `special_children`（`BeeList`）是不同 C# 字段，不合并。
     pub class_slave_list: Vec<i32>,
+    /// **MB-7（R15/R16）**：`ElfMonster.BoIsFirst`（`ElfMonster.cs:13`）/
+    /// `ElfWarriorMonster.BoIsFirst`（`ElfWarriorMonster.cs:12`）——ctor 置 `true`，
+    /// 首次 `Run` 出土后置 `false`（`ElfMonster.cs:46-52`、`ElfWarriorMonster.cs:114-120`）。
+    /// 非神兽类保持 C# 字段缺省 `false`。
+    pub bo_is_first: bool,
+    /// **MB-7（R16）**：`ElfWarriorMonster.DigDownTick`（`ElfWarriorMonster.cs:13`）——
+    /// 入土/换形计时；ctor 无显式初值（`int` 缺省 0），`AppearNow()` 与
+    /// `Run` 的 `boChangeFace == false` 支刷新（`ElfWarriorMonster.cs:22/162`）。
+    pub dig_down_tick: i64,
     /// C# `GuardUnit.GuardDirection`（`sbyte`，`GuardUnit.cs:16`，无显式初值 ⇒ 0）；
     /// `ArcherGuard` ctor `ArcherGuard.cs:17` 置 **-1**（`ArcherPolice` 继承）。
     /// 运行期城堡守卫由 `UserCastle.cs:187` 改 3（未建模，登记）。
@@ -1072,6 +1081,10 @@ impl Entity {
             ctor_draws: MonsterCtorDraws::default(),
             class_attack_tick: 0,
             class_slave_list: Vec::new(),
+            // MB-7：神兽两形态 ctor 置 `BoIsFirst = true`（`apply_monster_class_constants`）；
+            // 字段缺省照 C# `bool` = false。`DigDownTick` 是 `int` 缺省 0。
+            bo_is_first: false,
+            dig_down_tick: 0,
             // 专用怪 ctor 类常量（PR-2）：`Entity` 是 C# 各怪物类的公共载体，这里落
             // **C# 字段缺省**（`int`/`sbyte` 0、`bool` false）；派生类 ctor 的实际常量
             // （StickMonster 4/4、CentipedeKing 4/6、SandMob 8/4、BoneKing/ScultureKing 5、
