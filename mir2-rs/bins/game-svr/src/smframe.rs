@@ -1369,28 +1369,30 @@ impl LoginSysMsgs {
 ///
 /// 变体的**声明/入队序 = oracle 调用序**（不是出队序）：
 ///
-/// 1. `RM_TURN(10001)` ← `Initialize→AddToMap→SendRefMsg(RM_TURN)`
-///    （`BaseObject.cs:1370-1377`）。`SendRefMsg` 的格子扫描把**自己**也算作
-///    `Race==Play` 的目标（`BaseObject.Message.cs:427-433`）⇒ 自己也被入队；帧在
-///    `PlayObject.Message.cs:1528` 被 `processMsg.ActorId != ActorId` 门抑制 ⇒ **只占堆位**。
-/// 2. `RM_LOGON(10050)`（`PlayObject.cs:1176`）→ High=0。
-/// 3. `RecalcAbilitys()` 的两条 `RM_CHARSTATUSCHANGED(10139)`：`StatusChanged()`
+/// 1. `RM_LOGON(10050)`（`PlayObject.cs:1176`）→ High=0。
+///
+///    **没有**「自身 `RM_TURN`(17)」这一条：`AddToMap` 的 `SendRefMsg(RM_TURN)` 被
+///    `if (!FixedHideMode)` 挡住（`BaseObject.cs:1373-1376`），而 `PlayObject` 构造时
+///    `FixedHideMode = true`（`PlayObject.cs:993`），直到 `UserLogon` 末尾才置 false
+///    （`PlayObject.cs:1442`）⇒ 登录队列里不含该槽位。此前模型把它当槽位是错的：
+///    net8.0.26 实跑里只要有任一 17 槽（自身或出现帧）参与，四叉堆就会把 `811/46`
+///    翻成 `46/811`，而 13 次 C# 抓包（N=0..8 个出现对）**从不翻转**。
+///    （即便走到 `SendRefMsg`，`FixedHideMode` 支也只 `SendMsg` 给自己，
+///    `BaseObject.Message.cs:390-393`。）
+/// 2. `RecalcAbilitys()` 的两条 `RM_CHARSTATUSCHANGED(10139)`：`StatusChanged()`
 ///    （`SendRefMsg`，`PlayObject.cs:2875`）与 `SendUpdateMsg`（`:2876`）各一条，优先级
 ///    `(byte)10139 = 155`。`SendUpdateMsg` 的去重扫不到（队首是 LOGON）⇒ 两条都在。
-/// 4. 三条 `SysMsg`（攻击模式 / CTRL-H 帮助 / `TestServer` 欢迎语，`:1320-1383`）⇒ 252。
-/// 5. 六条 `SendPriorityMsg`（`:1385-1390`），**源码序**：
+/// 3. 三条 `SysMsg`（攻击模式 / CTRL-H 帮助 / `TestServer` 欢迎语，`:1320-1383`）⇒ 252。
+/// 4. 六条 `SendPriorityMsg`（`:1385-1390`），**源码序**：
 ///    `52(High)`, `752(High)`, `811(Normal)`, `46(Normal)`, `621(High)`, `211(High)`。
-/// 6. `RefShowName()→SendRefMsg(RM_USERNAME)`（`:1415` 附近；优先级 `(byte)8101 = 165`）
+/// 5. `RefShowName()→SendRefMsg(RM_USERNAME)`（`:1415` 附近；优先级 `(byte)8101 = 165`）
 ///    ⇒ 只占堆位（`RM_LOGON` 里 `ClientQueryUserName` 的直发 42 已由 `username` 输入产出）。
-/// 7. `PayMent==3`（`TestServer || ServiceMode`）的第四条 `SysMsg`（`:1419`）⇒ 252。
+/// 6. `PayMent==3`（`TestServer || ServiceMode`）的第四条 `SysMsg`（`:1419`）⇒ 252。
 ///
 /// `RM_CHANGELIGHT` 不在这里，它在 `RM_LOGON` 被**出队处理**时才入队
 /// （`PlayObject.Message.cs:1683`，见 [`EnterWorldInputs::frames`]）。
 #[derive(Debug, Clone, Copy)]
 enum LoginQueued {
-    /// `RM_TURN(10001)`：`Initialize→AddToMap→SendRefMsg`，优先级 `(byte)10001 = 17`；
-    /// 自身 TURN 被 `ActorId != ActorId` 门抑制 ⇒ 只占堆位。
-    Turn,
     /// `RM_LOGON`：`SendPriorityMsg(..., MessagePriority.High)` ⇒ 优先级 0。
     Logon,
     /// `RM_CHARSTATUSCHANGED(10139)`：`StatusChanged()` 与 `SendUpdateMsg` 各一条，优先级 155；
@@ -1465,7 +1467,8 @@ impl OtherAppear {
 const PRIORITY_HIGH: u8 = 0;
 /// `MessagePriority.Normal`（`src/OpenMir2/Enums/MessagePriority.cs:12`）= 1。
 const PRIORITY_NORMAL: u8 = 1;
-/// `(byte)RM_TURN` = 17（`SendRefMsg`→`SendMsg` 的入队优先级）。
+/// `(byte)RM_TURN` = 17（**其他 actor** 出现帧的入队优先级；`SendRefMsg`/`SearchViewRange`
+/// 对目标玩家调 `SendMsg`，落在目标自己的队列里）。
 const PRIORITY_RM_TURN: u8 = (messages::RM_TURN & 0xFF) as u8;
 /// `(byte)RM_CHARSTATUSCHANGED` = 155。
 const PRIORITY_RM_CHARSTATUSCHANGED: u8 = (messages::RM_CHARSTATUSCHANGED & 0xFF) as u8;
@@ -1483,12 +1486,16 @@ impl EnterWorldInputs {
     ///
     /// # 入队（oracle 调用序，见 [`LoginQueued`] 的逐条出处）
     ///
-    /// `RM_TURN(17)`（`Initialize→AddToMap→SendRefMsg`，自己也在扫描目标里）→
     /// `RM_LOGON(0)` → `RM_CHARSTATUSCHANGED(155)`×2（`StatusChanged` + `SendUpdateMsg`）→
     /// 三条 `SysMsg(252)` → 六条 `52(0),752(0),811(1),46(1),621(0),211(0)`（**源码序**）→
     /// `RM_USERNAME(165)`（`RefShowName`）→ 第四条 `SysMsg(252)`（`PayMent==3`）。
     /// `RM_LOGON` 出队处理时再入 `RM_CHANGELIGHT(654)`（`Message.cs:1682`，优先级
     /// `(byte)RM_CHANGELIGHT = 153`）。
+    ///
+    /// **没有自身 `RM_TURN(17)`**：`AddToMap` 的 `SendRefMsg` 被 `!FixedHideMode` 挡住
+    /// （`BaseObject.cs:1373-1376`；构造置 true `PlayObject.cs:993`，`UserLogon` 末尾
+    /// 置 false `PlayObject.cs:1442`）。这个槽位若补进来，四叉堆会把 `811/46` 翻成
+    /// `46/811`，与全部 13 次 C# 抓包（N=0..8 个出现对）矛盾。
     ///
     /// # 出队（**模型 D**，全部来自源码 + net8.0.26 实跑 BCL）
     ///
@@ -1498,11 +1505,11 @@ impl EnterWorldInputs {
     /// - 有武器 + 有效技能（`s2c-621c`）：`…,1106,52,752,621,211,811,46,654,657,657,42,100×4`
     ///
     /// 本函数按上面的**完整入队内容**跑四叉堆，出队序恰为
-    /// `LOGON,52,752,621,211,811,46,TURN(无帧),654,657×2,42,100×4`，三种输入逐项命中。
-    /// 关键在**队列内容**而不是改入队序：旧模型 C/C′ 漏掉了 `RM_TURN`（它在 `RM_LOGON`
-    /// **之前**入队，改变了整棵树）与两条 `RM_CHARSTATUSCHANGED`、`RM_USERNAME`、第四条
-    /// `SysMsg`；其中队尾条目决定 `RemoveRootNode` 回填根的元素，能把 `811/46` 的相对序
-    /// 翻过来（这正是旧模型在「621/211 出帧」时预测错的原因）。
+    /// `LOGON,52,752,621,211,811,46,654,657×2,42,100×4`，三组输入逐项命中
+    /// （`657×2` 只占槽位；其字节未建模）。
+    /// 关键在**队列内容**：两条 `RM_CHARSTATUSCHANGED`、`RM_USERNAME`、第四条 `SysMsg`
+    /// 决定 `RemoveRootNode` 回填根的元素，能把 `811/46` 的相对序翻过来（这正是旧模型
+    /// 在「621/211 出帧」时预测错的原因）。
     ///
     /// ⚠ **前提**：`Config.TestServer=TRUE`（⇒ `PayMent=3`）给出 3+1 条 `SysMsg`。
     /// 条数变化会重排堆；非 `TestServer` 的部署尚未取样本（R 级窗口余项）。
@@ -1513,15 +1520,21 @@ impl EnterWorldInputs {
     /// 缺输入的六条**无条件入队**（oracle 的消息一定入队，本层只是缺编码输入）；空槽会改变
     /// 堆布局，故绝不能跳过入队。621/211 的「尾为空则不發」门只在出队时决定是否产帧。
     ///
-    /// # 非队列帧
+    /// # 出现帧（`10/41`）
     ///
-    /// `SM_TURN(10)` 属 AOI/出现帧路径（`PlayObject.cs:3240` 的 `RM_TURN`），不是登录队列成员；
-    /// 金标准 capture 里它早于 654（seq 30 vs 62），故在 654 出队前插入。`658` 由
-    /// `SendNotice` 在消息泵之前直发，恒第一条。
+    /// `SM_TURN(10)` + 紧随的 `SM_FEATURECHANGED(41)` **确实走同一个 `MsgQueue`**：
+    /// `PlayObject.SearchViewRange` 对每个新出现的 actor 调 `SendMsg(baseObject, RM_TURN, ...)`
+    /// （`PlayObject.cs:3240`）⇒ 进入**观察者自己的**队列、优先级 `(byte)10001 = 17`；
+    /// 出队时 `PlayObject.Message.cs:1524-1560` 先发 `SM_TURN`、再无条件发
+    /// `SM_FEATURECHANGED`。它们不是直发。
     ///
-    /// 生产路径用 [`Self::frames_split`]：`RM_TURN`（优先级 17）的**其他 actor** 出现帧由世界侧
-    /// AOI 在本批之后、`after` 之前下发（oracle 同一 `Run()` 里 17 < 153 的出队序）。本函数把
-    /// 两段拼起来，供只关心「完整登录队列内容」的用例使用。
+    /// 时间上它们在**登录 pump 之前**入队：`WorldServer.cs:663-666` 的 `SearchViewRange()`
+    /// 先于 `:697` 的 `playObject.Run()`（`UserLogon` 在上一 tick 已完成）。因此 654（153）
+    /// 恒在出现帧之后，但 `811/46`（1）仍在它们之前 —— 这正是抓包序
+    /// `52,752,[621,211,]811,46, [10,41]×N, 654,657,657,42,100×4`。
+    ///
+    /// 生产路径用 [`Self::frames_split`]：出现帧由世界侧 AOI 在本批之后、`after` 之前下发。
+    /// 本函数把两段拼起来，供只关心「完整登录队列内容」的用例使用（`turn` 输入复现一对 10/41）。
     #[must_use]
     pub fn frames(&self) -> Vec<Vec<u8>> {
         let (mut before, after) = self.frames_split_with_others(&[]);
@@ -1532,11 +1545,13 @@ impl EnterWorldInputs {
     /// 登录帧序的**两段切分**（生产路径）：`before` = 优先级 ≤ `(byte)RM_TURN`(=17) 的出队帧，
     /// `after` = 其后的一切（`654`/`657×2`/第二 `42`/`100×4`，含优先级 61 的 `750`）。
     ///
-    /// oracle 的 `PlayObject.Run()` 在**同一次**消息泵里消费整个队列；`RM_TURN(17)` 的**其他 actor**
-    /// 出现帧由观察者自己的 `SearchViewRange` 入队（`PlayObject.cs:3220-3240`），因此
-    /// 654（153）恒在出现帧**之后**。本宿主的出现帧由世界 tick 的 [`crate::drain_aoi_downlink`]
-    /// 下发 ⇒ 登录点先发 `before`，`after` 由 [`crate::drain_login_tail`] 在该会话首次
-    /// `SearchViewRange` 的同 tick 补发（C# 实测 2026-10-22：`10/41 ×6 → 654 → 657,657 → 42 → 100×4`）。
+    /// oracle 的 `PlayObject.Run()` 在**同一次**消息泵里消费整个队列；其他 actor 的出现帧
+    /// （`RM_TURN` 17）由观察者自己的 `SearchViewRange` 入队（`PlayObject.cs:3240`），因此
+    /// 654（153）恒在出现帧**之后**。本宿主的出现帧由世界 tick 的
+    /// [`crate::drain_aoi_downlink`] 下发 ⇒ 登录点先发 `before`，`after` 由
+    /// [`crate::drain_login_tail`] 在该会话首次 `SearchViewRange` 的同 tick 补发
+    /// （C# 抓包实测 `10/41 ×N → 654 → 657,657 → 42 → 100×4`；抓包文件 mtime 2026-10-20，
+    /// 目录名 `20261022`）。
     #[must_use]
     pub fn frames_split(&self) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
         self.frames_split_with_others(&[])
@@ -1546,8 +1561,13 @@ impl EnterWorldInputs {
     /// 对其他 actor 入队的出现/死亡条目（顺序 = `VisibleActors` 顺序）。
     ///
     /// 这些条目在 `UserLogon` 的全部入队之后、`Run()` 的消息泵之前入队（`SearchViewRange` 在
-    /// `WorldServer.cs:663-665` 先于 `playObject.Run()`），因此追加到队列尾部即可。它们**不产帧**
-    /// （AOI 侧下发），但会改变堆形 ⇒ 决定 `654` 之后同优先级 `100×4` 的出队序。
+    /// `WorldServer.cs:663-666` 先于 `:697` 的 `playObject.Run()`），因此追加到队列尾部即可。
+    /// 它们**不产帧**（AOI 侧下发），但会改变堆形。
+    ///
+    /// **校准边界（reviewer-6 Important 1，2026-10-21）**：真实 oracle 的抓包在 N=0..8
+    /// 个出现对下恒为 `811,46`；而 net8.0.26 实跑表明：若队列里同时存在**自身 17 槽**，
+    /// 任一 N≥1 都会翻成 `46,811`。差异的根因是自身 `RM_TURN` 根本没入队（`FixedHideMode`
+    /// 门，见 `frames` 头注），不是二叉堆。本函数不含该槽位，故与全部抓包一致。
     #[must_use]
     pub fn frames_split_with_others(&self, others: &[OtherAppear]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
         let mut out = Vec::new();
@@ -1562,15 +1582,15 @@ impl EnterWorldInputs {
             out.push(magic_event_frame(event));
         }
 
-        // ---- 入队：按 oracle 调用序把 15 条消息压进四叉最小堆（LOGON 出队时再入 654）----
+        // ---- 入队：按 oracle 调用序把 14 条消息压进四叉最小堆（LOGON 出队时再入 654）----
         // 顺序 = 源码执行序（见 `LoginQueued` 的逐条行号）。**不要**按「可观测序」重排：
         // 真机实拍的三段序完全由这个内容 + .NET 8 四叉堆决定。
         let mut queue: NetPriorityQueue<LoginQueued> = NetPriorityQueue::new();
-        // ① Initialize→AddToMap→SendRefMsg(RM_TURN)：自己也在扫描目标里（帧被自身门抑制）。
-        queue.enqueue(LoginQueued::Turn, PRIORITY_RM_TURN);
-        // ② RM_LOGON（High）。
+        // ① RM_LOGON（High）。自身 `RM_TURN` 不入队：`AddToMap` 的 `SendRefMsg` 被
+        //    `FixedHideMode` 门挡住（`BaseObject.cs:1373-1376`；构造置 true
+        //    `PlayObject.cs:993`，`UserLogon` 末尾才置 false `PlayObject.cs:1442`）。
         queue.enqueue(LoginQueued::Logon, PRIORITY_HIGH);
-        // ③ RecalcAbilitys：StatusChanged() 的 SendRefMsg 与 SendUpdateMsg 各一条 657。
+        // ② RecalcAbilitys：StatusChanged() 的 SendRefMsg 与 SendUpdateMsg 各一条 657。
         queue.enqueue(
             LoginQueued::CharStatusChanged,
             PRIORITY_RM_CHARSTATUSCHANGED,
@@ -1579,7 +1599,7 @@ impl EnterWorldInputs {
             LoginQueued::CharStatusChanged,
             PRIORITY_RM_CHARSTATUSCHANGED,
         );
-        // ③b `RecalcAbilitys()` 的 `oldlight != Light` 支（`PlayObject.cs:2878-2885`）：
+        // ②b `RecalcAbilitys()` 的 `oldlight != Light` 支（`PlayObject.cs:2878-2885`）：
         //     登录时 `BaseObject.Light` 从 0 起（`BaseObject.cs:384` 的 ctor），而
         //     `Light = GetMyLight()`（装备发光 / 高等级基线 1）⇒ `Light != 0` 时**多入队一条**
         //     `RM_CHANGELIGHT(153)`（`SendRefMsg` 把玩家自己也扫进目标）。它与 `RM_LOGON` 出队时
@@ -1591,7 +1611,7 @@ impl EnterWorldInputs {
                 (messages::RM_CHANGELIGHT & 0xFF) as u8,
             );
         }
-        // ④ 登录 SysMsg（`PlayObject.cs:1342-1383`）：`switch (AttatckMode)` 的攻击模式文案
+        // ③ 登录 SysMsg（`PlayObject.cs:1342-1383`）：`switch (AttatckMode)` 的攻击模式文案
         //    （仅枚举 0..=6 时入队；`switch` 无 `default` ⇒ 枚举外一条都不发、不占槽）
         //    + `StartChangeAttackModeHelp`（恒发）+ `TestServer` 的 `StartNoticeMsg`。
         let prio_sysmsg = (messages::RM_SYSMESSAGE & 0xFF) as u8;
@@ -1602,7 +1622,7 @@ impl EnterWorldInputs {
         if self.test_server {
             queue.enqueue(LoginQueued::SysMsg(2), prio_sysmsg);
         }
-        // ⑤ 六条 SendPriorityMsg（`PlayObject.cs:1385-1390`），**源码序**：
+        // ④ 六条 SendPriorityMsg（`PlayObject.cs:1385-1390`），**源码序**：
         //    52,752,811,46,621,211。堆在同一内容下自然给出真机序 52,752,621,211,811,46。
         queue.enqueue(LoginQueued::Ability, PRIORITY_HIGH); // 52
         queue.enqueue(LoginQueued::SubAbility, PRIORITY_HIGH); // 752
@@ -1611,22 +1631,22 @@ impl EnterWorldInputs {
         queue.enqueue(LoginQueued::SendUseItems, PRIORITY_HIGH); // 621
         queue.enqueue(LoginQueued::SendMyMagic, PRIORITY_HIGH); // 211
 
-        // ⑤b **G2b**：`MyGuild != null` 才 `GetRankName` → `SendMsg(RM_CHANGEGUILDNAME)`
+        // ④b **G2b**：`MyGuild != null` 才 `GetRankName` → `SendMsg(RM_CHANGEGUILDNAME)`
         //    （`PlayObject.cs:1391-1398`；`GuildInfo.cs:485-509`）。无会 ⇒ **不入队**
         //    （不占堆位；oracle 的 `GetRankName` 根本没被调用）。
         if self.guild_changename.is_some() {
             queue.enqueue(LoginQueued::ChangeGuildName, PRIORITY_RM_CHANGEGUILDNAME);
         }
 
-        // ⑥ RefShowName()→SendRefMsg(RM_USERNAME)：自己也在可见人类列表里（只占堆位）。
+        // ⑤ RefShowName()→SendRefMsg(RM_USERNAME)：自己也在可见人类列表里（只占堆位）。
         queue.enqueue(LoginQueued::Username, PRIORITY_RM_USERNAME);
-        // ⑦ `PayMent==3`（`TestServer || ServiceMode`）的第四条 SysMsg：
+        // ⑥ `PayMent==3`（`TestServer || ServiceMode`）的第四条 SysMsg：
         //    `NowIsFreePlayMode`（`PlayObject.cs:1417-1420`，位置在 `RefShowName` 之后）。
         if self.pay_ment_three {
             queue.enqueue(LoginQueued::SysMsg(3), prio_sysmsg);
         }
 
-        // ⑧ 其他 actor 的出现/死亡槽（`SearchViewRange`，`PlayObject.cs:3220-3240`）：
+        // ⑦ 其他 actor 的出现/死亡槽（`SearchViewRange`，`PlayObject.cs:3220-3240`）：
         //    本 tick 的 `VisibleActors` 里 `Show` 且非自己的对象，按 oracle 顺序入队。
         for other in others {
             queue.enqueue(LoginQueued::OtherAppear, other.priority());
@@ -1799,11 +1819,10 @@ impl EnterWorldInputs {
                         ));
                     }
                 }
-                // 以下两条只占堆位：
-                // - 自身 RM_TURN 被 `ActorId != ActorId` 门抑制（`PlayObject.Message.cs:1528`）；
-                // - 两条 RM_CHARSTATUSCHANGED 会产 657，但其字节（CharStatus/HitSpeed）未在本输入集建模
-                //   （登记 `openmir2-login-frame-order`）。
-                LoginQueued::Turn | LoginQueued::CharStatusChanged | LoginQueued::OtherAppear => {}
+                // 以下两条只占堆位：两条 RM_CHARSTATUSCHANGED 会产 657，但其字节
+                // （CharStatus/HitSpeed）未在本输入集建模（登记 `openmir2-login-frame-order`）；
+                // 其他 actor 的出现槽由 AOI 侧产帧。
+                LoginQueued::CharStatusChanged | LoginQueued::OtherAppear => {}
             }
         }
         let at = split_at.unwrap_or(out.len());
@@ -2613,7 +2632,9 @@ mod tests {
     ///
     /// 绝对序由 **2026-10-19 三次真机抓包**裁定（`docs/window-shrink-run-20261019.md` §6 F1 +
     /// `s2c-621b`/`s2c-621c`）：无装备无技能会话的前缀恒为 `…,1106,52,752,811,46`；
-    /// 旧模型 C/C′ 漏掉了 `RM_TURN` 等队列条目，已按源码全量内容重建（见 `frames` 头注）。
+    /// 旧模型 C/C′ 漏掉了两条 `RM_CHARSTATUSCHANGED`、`RM_USERNAME` 与第四条 `SysMsg`，
+    /// 曾把自身 `RM_TURN` 误当槽位；现按源码重建（见 `frames` 头注；自身 TURN 被
+    /// `FixedHideMode` 挡住，不入队）。
     /// **capture 里出现的每一条帧字节不变**（按 ident 逐条比对金标准原始线缆）。
     #[test]
     fn enter_world_sequence_matches_model_d_and_golden_bytes() {
@@ -2625,7 +2646,8 @@ mod tests {
             .collect();
         // 模型 D：六条 + 654 的出队序 = 52, 752, 621, 211, 811, 46, 654
         // （金标准角色无装备/无技能 ⇒ 621/211 的门关，不产帧，但槽位仍参与堆布局）。
-        // 2026-10-22 真机（`winplay0`）与 c3 金标准均含**第二条 42**（`RefShowName`，
+        // 2026-10-20 真机（`winplay0`；抓包文件 mtime，目录名 `20261022`）与 c3 金标准均含
+        // **第二条 42**（`RefShowName`，
         // `PlayObject.cs:1415`）：654 之后、100×4 之前。本 fixture 未给 SysMsg 正文 ⇒ 100 不产帧。
         assert_eq!(
             got_idents,
@@ -2739,9 +2761,10 @@ mod tests {
     /// ① 去掉 `RM_LOGON` 入队（`frames()` 不再 `enqueue(LoginQueued::Logon, ...)`）⇒ 51/50/...
     ///    整组消失、654 也不再入队；
     /// ② 删掉承重槽位之一（实测：`Logon`、621/211 槽、`811/46`、`RM_USERNAME`、第四条 `SysMsg`、
-    ///    或「两条 `RM_CHARSTATUSCHANGED` 全删」）——注意单独删 `RM_TURN` 或单独删一条 657 不改变
-    ///    本用例的 High 组序（复验实测），不要把它写进红检清单
-    ///    （模型 D 的堆布局依赖它们）⇒ High 组序改变；
+    ///    或「两条 `RM_CHARSTATUSCHANGED` 全删」）⇒ High 组序改变；单独删一条 657 不改变
+    ///    High 组序。自身 `RM_TURN` 槽**不在**队列里（`FixedHideMode` 门）；若补回，本用例的
+    ///    ident 序仍通过（该槽不产帧），但 `login_capture_appearance_slots_keep_811_before_46`
+    ///    会红（`811/46` 翻序）——那条才是该槽位的牙；
     /// ③ 六条按可观测序手写（`52,752,621,211,811,46`）⇒ 与 oracle 的**入队**序不符
     ///    （源码序是 `52,752,811,46,621,211`）；本用例锁的是 `frames()` 的产物，
     ///    `smframe` 的构造用例另行钉死 621/211 出帧时的位置。
@@ -2752,7 +2775,7 @@ mod tests {
             cur_x: 1,
             cur_y: 2,
             dir: 3,
-            // 金标准角色无光源（`654.param=0`）⇒ 不触发 ③b 的第二条 RM_CHANGELIGHT。
+            // 金标准角色无光源（`654.param=0`）⇒ 不触发 ②b 的第二条 RM_CHANGELIGHT。
             light: 0,
             day_bright: 5,
             notice: b"N".to_vec(),
@@ -2806,7 +2829,7 @@ mod tests {
             cur_x: 1,
             cur_y: 2,
             dir: 3,
-            // 金标准角色无光源（`654.param=0`）⇒ 不触发 ③b 的第二条 RM_CHANGELIGHT。
+            // 金标准角色无光源（`654.param=0`）⇒ 不触发 ②b 的第二条 RM_CHANGELIGHT。
             light: 0,
             day_bright: 5,
             notice: b"N".to_vec(),
@@ -2893,8 +2916,11 @@ mod tests {
 
     /// **G2b / T9**：有会登录的 750 必须落在 **46 之后、654 之前**，尾逐字节 = `EncodeString("会名/封号")`。
     ///
-    /// 同时钉住评审员更正 2 的堆形：在正确入队位（六条之后、Username 之前）插入 p=61 的 750 会把
-    /// `811/46` 的相对序**翻成 46 先于 811**（oracle 同一四叉堆的必然结果，不是本项目改序）。
+    /// **reviewer-6 Important 1 订正（2026-10-21）**：旧文本声称「插入 p=61 的 750 会把
+    /// `811/46` 翻成 `46/811`（oracle 四叉堆的必然结果）」——这是**错的**。翻序的充分条件
+    /// 是队列里多了一个自身 `RM_TURN(17)` 槽位（`AddToMap` 被 `FixedHideMode` 挡住，根本不入队，
+    /// 见 `frames` 头注）；去掉该槽位后，750 不改变 `811/46` 的相对序，与真机抓包
+    /// （N=0..8 个出现对恒 `811,46`）一致。
     #[test]
     fn guild_login_750_between_46_and_654() {
         fn guild_750(name: &str, rank: &str) -> Vec<u8> {
@@ -2925,8 +2951,8 @@ mod tests {
             "750 必须在 654 之前: {ids:?}"
         );
         assert!(
-            pos(messages::SM_ADJUST_BONUS) > pos(messages::SM_DAYCHANGING),
-            "插入 750 后 811/46 翻转为 46 先于 811（oracle 堆形）: {ids:?}"
+            pos(messages::SM_ADJUST_BONUS) < pos(messages::SM_DAYCHANGING),
+            "有会时 811 仍先于 46（金标准；750 不改变 p=1 组序）: {ids:?}"
         );
         let wire = &frames[pos(messages::SM_CHANGEGUILDNAME)];
         assert_eq!(
@@ -2937,6 +2963,110 @@ mod tests {
         // 评审员更正 2 的齿：优先级常量必须是 61；改成 0（到 46 前）或 >=154（到 654 后）
         // 上面两条顺序断言必红；改成 1 / 152 不改变出队序，故不是牙。
         assert_eq!(PRIORITY_RM_CHANGEGUILDNAME, 61);
+    }
+
+    /// **reviewer-6 Important 1 回归（2026-10-21）**：把真机抓包的出现对（`RM_TURN` 17）
+    /// 灌进堆，`before` 段的 `811/46` 相对序必须恒为 `811,46`（N=0..=8）。
+    ///
+    /// 证据：13 次 C# 抓包（`E:/tmp/window/cliente2e/csharp/s2c*/capture.jsonl`，
+    /// 文件 mtime 2026-10-19；`E:/tmp/window/20261022/csharp/proxy/capture.jsonl`，
+    /// mtime 2026-10-20）的入图段恒为 `52,752,811,46,[10,41]×N,654,657,657,42,100×4`。
+    ///
+    /// 牙：若把自身 `RM_TURN` 槽位补回队列（`FixedHideMode` 门失效），N≥1 时四叉堆翻成
+    /// `46,811` ⇒ 本用例必红（同一红由 `self_turn_slot_would_flip_811_46` 直接钉住）。
+    #[test]
+    fn login_capture_appearance_slots_keep_811_before_46() {
+        let idents = |v: &Vec<Vec<u8>>| -> Vec<u16> {
+            v.iter().map(|b| u16::from_le_bytes([b[4], b[5]])).collect()
+        };
+        for n in 0..=8usize {
+            let inputs = login_scenario_inputs(false, false);
+            let others = vec![OtherAppear::Turn; n];
+            let (before, after) = inputs.frames_split_with_others(&others);
+            let b = idents(&before);
+            assert_eq!(
+                b,
+                vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46],
+                "N={n}：before 必须保持金标准 15 帧前缀"
+            );
+            assert!(
+                b.iter().position(|x| *x == 811).unwrap()
+                    < b.iter().position(|x| *x == 46).unwrap(),
+                "N={n}：811 必须先于 46（出现槽不得翻序）"
+            );
+            let a = idents(&after);
+            assert_eq!(
+                a[0],
+                messages::SM_CHANGELIGHT,
+                "N={n}：after 仍以 654 开头: {a:?}"
+            );
+        }
+        // 有会（750=61）同样不得翻序。
+        let mut guild = login_scenario_inputs(true, true);
+        guild.guild_changename = Some(vec![0u8; 12]);
+        for n in [0usize, 6, 8] {
+            let others = vec![OtherAppear::Turn; n];
+            let (before, _) = guild.frames_split_with_others(&others);
+            let b = idents(&before);
+            assert!(
+                b.iter().position(|x| *x == 811).unwrap()
+                    < b.iter().position(|x| *x == 46).unwrap(),
+                "有会 N={n}：811 先于 46: {b:?}"
+            );
+        }
+    }
+
+    /// **红检对照（文档化牙齿）**：仅把「自身 `RM_TURN(17)`」这一个槽位补回登录队列，
+    /// net8.0.26 的四叉堆在 N=1 时就会出 `46,811`（与全部抓包相反）。生产模型必须**没有**
+    /// 这个槽位（`FixedHideMode` 门），否则上面的回归用例必红。
+    #[test]
+    fn self_turn_slot_would_flip_811_46() {
+        use crate::msgqueue::NetPriorityQueue;
+
+        fn pop_order(with_self_turn: bool) -> Vec<&'static str> {
+            let mut q: NetPriorityQueue<&'static str> = NetPriorityQueue::new();
+            if with_self_turn {
+                q.enqueue("self_turn", 17);
+            }
+            // 登录队列（源码序）：Logon → 2×657 → 3×SysMsg → 六条 → Username → 第 4 条 SysMsg。
+            q.enqueue("logon", 0);
+            q.enqueue("cs", 155);
+            q.enqueue("cs", 155);
+            q.enqueue("sys", 252);
+            q.enqueue("sys", 252);
+            q.enqueue("sys", 252);
+            q.enqueue("52", 0);
+            q.enqueue("752", 0);
+            q.enqueue("811", 1);
+            q.enqueue("46", 1);
+            q.enqueue("621", 0);
+            q.enqueue("211", 0);
+            q.enqueue("username", 165);
+            q.enqueue("sys", 252);
+            // 观察者 SearchViewRange 在登录 pump 前入队 1 个出现帧（17）。
+            q.enqueue("appear_turn", 17);
+            let mut out = Vec::new();
+            while let Some(e) = q.dequeue() {
+                out.push(e);
+                if e == "logon" {
+                    q.enqueue("654", 153);
+                }
+            }
+            out
+        }
+
+        let without = pop_order(false);
+        assert!(
+            without.iter().position(|x| *x == "811").unwrap()
+                < without.iter().position(|x| *x == "46").unwrap(),
+            "无自身 17 槽：811,46（与抓包一致）: {without:?}"
+        );
+        let with = pop_order(true);
+        assert!(
+            with.iter().position(|x| *x == "46").unwrap()
+                < with.iter().position(|x| *x == "811").unwrap(),
+            "自身 17 槽一旦入队，N=1 即翻成 46,811（抓包从不如此）: {with:?}"
+        );
     }
 
     /// **lane654 判据①（654 顺序）**：`frames_split` 的 `before` 段**不含** `654`，`after` 段以
@@ -2952,7 +3082,7 @@ mod tests {
         };
         let inputs = login_scenario_inputs(false, false);
         let (before, after) = inputs.frames_split();
-        // 入图 15 帧前缀（2026-10-22 真机两侧完全一致）。
+        // 入图 15 帧前缀（2026-10-20 真机两侧完全一致；抓包文件 mtime）。
         assert_eq!(
             ids(&before),
             vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46],
@@ -2993,7 +3123,7 @@ mod tests {
     /// （带发光装备 / 高等级基线）⇒ `RecalcAbilitys` 额外入队一条 `RM_CHANGELIGHT(153)`，
     /// 与 `RM_LOGON` 出队时那条**各发一帧** `654`（两条 Param 相同）。
     ///
-    /// 红检（实测）：删掉 ③b 的 `if self.light != 0 { queue.enqueue(ChangeLight, ...) }`
+    /// 红检（实测）：删掉 ②b 的 `if self.light != 0 { queue.enqueue(ChangeLight, ...) }`
     /// ⇒ 本用例的第二条 654 消失 ⇒ 必红。
     #[test]
     fn light_bearing_login_enqueues_extra_changelight_slot() {
@@ -3071,7 +3201,7 @@ mod tests {
     /// 入队序 = oracle 调用序（攻击模式 → CTRL-H 帮助 → `TestServer` 欢迎语 → `PayMent==3`）。
     /// **四条之间的相对序不在此钉**：它由观察者队列里**全部**同优先级（252）条目 + 堆形决定，
     /// 而本宿主不建模整条观察者队列（`msgqueue.rs` 模块头已登记 `not_verified`）。两次真机抓包
-    /// 也不一致（c3：欢迎语→帮助→攻击模式→免费模式；2026-10-22：欢迎语→帮助→免费模式→攻击模式）。
+    /// 也不一致（c3：欢迎语→帮助→攻击模式→免费模式；2026-10-20 抓包：欢迎语→帮助→免费模式→攻击模式）。
     /// 本用例钉的是**条数 = 4**、**正文集合逐字节**、**字段形状**。
     ///
     /// 红检（实测）：把 `green` 的 `(f, b)` 对调 ⇒ `Param` 变 ⇒ 必红；把 `pay_ment_three`
@@ -3816,7 +3946,8 @@ mod tests {
 
     /// **G-1**：`SM_ADDITEM` 头 = `Recog=ActorId, Param/Tag=0, Series=1`，尾 = `EncodeBuffer(ClientItem)`。
     ///
-    /// 红检：把 `sm_additem` 的 `tail` 参数去掉（回到 header-only）或 `series` 改 0 ⇒ 必红。
+    /// 红检：把 `sm_additem` 的 `tail` 传空（回到 header-only；删参数只会编译错、不构成断言红）或
+    /// `series` 改 0 ⇒ 必红。
     #[test]
     fn sm_additem_header_and_client_item_tail() {
         let tail = vec![0xAAu8; 166]; // encode_len(124)=166；本用例只锁透传/字段位

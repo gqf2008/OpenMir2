@@ -1689,13 +1689,19 @@ mod tests {
             Some(out.sub.to_frame_bytes()),
             "752 = SubAbility 的 7 个单字节通道"
         );
-        // 约简输入（`658` 直发；队列里仍有 `RM_TURN + Logon + 2×657 + 3×SysMsg + 六条 + 42 + 第四条 SysMsg`；
-        // 621/211/811/46 的帧输入缺席，但槽位全部参与堆布局）：模型 D 的四叉堆仍给出 `52` 先。
-        // 全槽序判据在 `smframe`（`login_scenario_*` 三条用例逐项对真机 ident 序）。
+        // 约简输入：`658` 直发；本 fixture 只给六条里的 52/752/46（621/211/811 的帧输入缺席，
+        // 但槽位仍占堆位），且 `attack_mode`/`TestServer`/`PayMent` 都是缺省 ⇒ 只有
+        // `StartChangeAttackModeHelp` 这 **1 条** SysMsg 槽、没有第 4 条。
+        // 自身 `RM_TURN` 不入队——`AddToMap` 被 `FixedHideMode` 挡住（`smframe::frames` 头注）。
+        //
+        // 在这个**非真实**的约简内容下，四叉堆给出 `752,52`；真实登录至少还有攻击模式文案
+        // 一条 SysMsg 槽（2 条 252），全量内容下恒为 `52,752`（真机 13 次抓包一致）——
+        // 全槽序判据在 `smframe::tests::login_scenario_*` 与
+        // `login_capture_appearance_slots_keep_811_before_46`。
         assert_eq!(
             idents(&base.frames()),
-            vec![658, 52, 752],
-            "约简输入的堆序：52 先于 752（与模型 D 一致）；全槽序见 smframe 顺序判据"
+            vec![658, 752, 52],
+            "约简输入（仅 1 条 SysMsg 槽）的堆序；真实全量登录序见 smframe 判据"
         );
 
         // `MIR2_CLIENT_ABILITY_LAYOUT`：冻结客户端 58B 布局（`HIGHHP=True`）——同一 `WAbil`、
