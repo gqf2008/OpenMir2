@@ -1,4 +1,5 @@
 # Lane B — 行会 G3（持久化 + 10s/30s + 掉线）实施简报 v3
+> **已被 v4 取代**：`design-guild-g3-persistence-v4-20261020.md`（C1/C2/C3 已并入正文），本文仅作历史留档，判据以 v4 为准。
 
 - 基线：`ae669377f`（master，2026-10-20）。
 - 车道：Lane B **只读**（不建 worktree、不改仓库、不起栈、不碰 `E:/MirServer`、不进 `/e/tmp/wup` 与 `tools/` 判读脚本车道）。
