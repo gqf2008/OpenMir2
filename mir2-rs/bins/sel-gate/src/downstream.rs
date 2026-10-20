@@ -627,4 +627,62 @@ mod tests {
         assert_eq!(guard.len(), 2, "RestSessionArray 不得清空会话");
         assert!(guard.values().all(|entry| !entry.idle_eligible));
     }
+
+    /// 判据 6（RestSessionArray 的生产接线 + 陈旧槽选择）：把 cap=2 的数组预填满后，
+    /// 走**生产**调用点 `Downstream::detach_all_sessions()`（`downstream.rs` 的下游断链/
+    /// 重连路径），断言：
+    /// - 槽位不置 null（`occupied()==2`）；
+    /// - 非空槽只清 `SocketId`/`ClientIP`；
+    /// - 随后 `select` 走 oracle 的满表陈旧槽分支，返回空 id/ip 的 `Stale`。
+    ///
+    /// 说明：oracle 运行期从不写回 `SessionArray`（`select` 取 `&self`），所以陈旧槽分支
+    /// 在生产进程里不可达；这里用构造级预填 + 生产函数接线，是唯一能观察 `rest()` 槽位
+    /// 语义的路径。进程级 RestSessionArray 语义（会话保留、空闲超时摘除）已由
+    /// `tests/relay.rs` 的 `reconnects_after_downstream_drop_and_keeps_sessions` /
+    /// `downstream_reconnect_keeps_session_out_of_idle_timeout` 覆盖。
+    ///
+    /// 牙：`rest` 改成置 null ⇒ `occupied()` 为 0 ⇒ 红；`rest` 漏清 id/ip ⇒ `Stale`
+    /// 带旧 id ⇒ 红；`select` 满表改返回 `Fresh` ⇒ 红。
+    #[test]
+    fn detach_all_sessions_rests_slots_without_nulling_them() {
+        use crate::slots::{SlotChoice, SlotInfo};
+
+        let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
+        let slots = Arc::new(Mutex::new(crate::slots::SlotTable::with_capacity(2)));
+        {
+            let mut table = slots.lock().unwrap();
+            table.set(
+                0,
+                SlotInfo {
+                    socket_id: "stale-0".to_string(),
+                    client_ip: "192.0.2.9".to_string(),
+                },
+            );
+            table.set(
+                1,
+                SlotInfo {
+                    socket_id: "stale-1".to_string(),
+                    client_ip: "192.0.2.10".to_string(),
+                },
+            );
+        }
+        let downstream = super::Downstream::new(
+            "127.0.0.1".into(),
+            5100,
+            Arc::clone(&sessions),
+            Arc::clone(&slots),
+        );
+        // 生产调用点：下游断链/重连时 `RestSessionArray()`。
+        downstream.detach_all_sessions();
+        let table = slots.lock().unwrap();
+        assert_eq!(table.occupied(), 2, "RestSessionArray 不得把槽位置 null");
+        assert_eq!(
+            table.select("new-conn", "198.51.100.7"),
+            SlotChoice::Stale(SlotInfo {
+                socket_id: String::new(),
+                client_ip: String::new(),
+            }),
+            "满表 + 已 Rest ⇒ 返回最后一个陈旧槽，且 id/ip 已清空"
+        );
+    }
 }

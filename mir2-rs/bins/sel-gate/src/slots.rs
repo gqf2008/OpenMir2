@@ -118,8 +118,9 @@ impl SlotTable {
     }
 
     /// 构造级用例：把槽位直接填成“陈旧会话”（oracle 运行期不会发生）。
+    /// `pub(crate)`：`downstream` 的生产接线用例要用它预填数组。
     #[cfg(test)]
-    fn set(&mut self, index: usize, info: SlotInfo) {
+    pub(crate) fn set(&mut self, index: usize, info: SlotInfo) {
         self.slots[index] = Some(info);
     }
 }

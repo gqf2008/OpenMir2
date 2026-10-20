@@ -495,7 +495,20 @@ async fn send_internal(tx: &Arc<Mutex<OwnedWriteHalf>>, msg: &ServerDataMessage)
 
 #[cfg(test)]
 mod tests {
-    use super::{login_gate_enter_body, peer_ip};
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex};
+    use std::time::Duration;
+
+    use tokio::io::AsyncReadExt;
+    use tokio::net::tcp::OwnedWriteHalf;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::Mutex;
+
+    use super::{
+        admit, client_loop, downstream_loop, login_gate_enter_body, peer_ip, Admission,
+        DownstreamAlive, GateShared, SlotTable,
+    };
 
     /// 判据 1：LoginGate Enter 体逐字节 == `"{ip}/{ip}"`，且**无** `%K`。
     #[test]
@@ -579,5 +592,202 @@ mod tests {
         let body = login_gate_enter_body("10.1.2.3");
         assert_eq!(body.len(), 17);
         assert_eq!(i16::from(u8::try_from(body.len()).unwrap()), 17);
+    }
+
+    // ---- B-3 复验补牙：全部走**生产函数**（`client_loop` / `downstream_loop`），
+    // ---- 不是只测 `SlotTable`。回环 socket 只替代真实监听器，断开/超时/下游 EOF
+    // ---- 都由生产分支处理。
+
+    /// 假下行：交出一条 `OwnedWriteHalf`（网关→LoginSrv 方向），对端持续排空。
+    async fn dummy_downstream() -> (Arc<Mutex<OwnedWriteHalf>>, DownstreamAlive) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let gateway = TcpStream::connect(addr).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        let (mut server_rd, _server_wr) = server.into_split();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 4096];
+            while matches!(server_rd.read(&mut buf).await, Ok(n) if n > 0) {}
+        });
+        let (_, wr) = gateway.into_split();
+        (Arc::new(Mutex::new(wr)), Arc::new(AtomicBool::new(true)))
+    }
+
+    /// 一对回环 TCP：（客户端端，网关端）。丢弃客户端端 = 客户端正常断开（FIN）。
+    async fn client_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).await.unwrap();
+        let (gateway, _) = listener.accept().await.unwrap();
+        (client, gateway)
+    }
+
+    /// 判据 B-3-1（生产断开路径）：客户端**正常断开**时 `client_loop` 不得清槽。
+    ///
+    /// cap=2：A 占 0 号槽并正常断开（泄漏 1 槽）⇒ 新连接 B 只能拿 1 号槽，C 被拒。
+    /// 若把「正常断开不清槽」改成断开即清，A 断开后 0 号槽空出，B/C 会分别拿到
+    /// 0/1 号槽（C 不再 `Full`）⇒ 本用例红。
+    #[tokio::test]
+    async fn production_normal_disconnect_keeps_slot() {
+        let (down_tx, alive) = dummy_downstream().await;
+        let slots = Arc::new(StdMutex::new(SlotTable::with_capacity(2)));
+        {
+            let mut table = slots.lock().unwrap();
+            assert!(matches!(admit(&mut table, 1, true), Admission::Slot(0)));
+        }
+        let shared = GateShared {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            downstream_alive: alive,
+            slots: Arc::clone(&slots),
+        };
+        let (client, gateway) = client_pair().await;
+        let task = tokio::spawn(client_loop(
+            gateway,
+            1,
+            "127.0.0.1:40000".to_string(),
+            "127.0.0.1".to_string(),
+            60_000,
+            0,
+            shared,
+            down_tx,
+        ));
+        // 客户端正常断开：oracle `ServerSocketClientDisconnect` 只 CloseSession。
+        drop(client);
+        let joined = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("正常断开后 client_loop 未退出")
+            .expect("client_loop 任务 panic");
+        assert!(joined.is_ok(), "正常断开不应报错：{joined:?}");
+
+        let mut table = slots.lock().unwrap();
+        assert_eq!(
+            table.get(0),
+            Some(1),
+            "正常断开后槽位必须仍被占用（oracle 泄漏照抄）"
+        );
+        assert_eq!(table.occupied(), 1, "正常断开不得回收槽位");
+        assert!(
+            matches!(admit(&mut table, 2, true), Admission::Slot(1)),
+            "泄漏 1 槽后仍应能接纳下一个连接（拿剩下的空槽）"
+        );
+        assert!(
+            matches!(admit(&mut table, 3, true), Admission::Full),
+            "若正常断开清了槽，第三个连接会被接纳（拿到 0 号槽）⇒ 本用例红"
+        );
+    }
+
+    /// 判据 B-3-2a（生产超时路径）：超时**只清命中的槽**，不得清别的会话。
+    ///
+    /// cap=2：A（0 号槽，timeout=10ms）在首个 1s 扫描超时；B（1 号槽，timeout=60s）
+    /// 仍在跑。A 的 `client_loop` 返回后 0 号槽必须为 null、1 号槽必须仍为 `Some(2)`。
+    /// 若把 `clear(slot_index)` 改成 `reset()`（全清）⇒ 1 号槽也变 null ⇒ 本用例红。
+    #[tokio::test]
+    async fn production_timeout_clears_only_hit_slot() {
+        let (down_tx, alive) = dummy_downstream().await;
+        let slots = Arc::new(StdMutex::new(SlotTable::with_capacity(2)));
+        {
+            let mut table = slots.lock().unwrap();
+            assert!(matches!(admit(&mut table, 1, true), Admission::Slot(0)));
+            assert!(matches!(admit(&mut table, 2, true), Admission::Slot(1)));
+        }
+        let shared = GateShared {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            downstream_alive: alive,
+            slots: Arc::clone(&slots),
+        };
+        let (client_a, gateway_a) = client_pair().await;
+        let task_a = tokio::spawn(client_loop(
+            gateway_a,
+            1,
+            "127.0.0.1:40001".to_string(),
+            "127.0.0.1".to_string(),
+            10,
+            0,
+            shared.clone(),
+            Arc::clone(&down_tx),
+        ));
+        let (client_b, gateway_b) = client_pair().await;
+        let task_b = tokio::spawn(client_loop(
+            gateway_b,
+            2,
+            "127.0.0.1:40002".to_string(),
+            "127.0.0.1".to_string(),
+            60_000,
+            1,
+            shared,
+            down_tx,
+        ));
+
+        // A 在第一个扫描 tick（CHECK_INTERVAL_MS=1000）超时并清自己的槽。
+        let joined = tokio::time::timeout(Duration::from_secs(5), task_a)
+            .await
+            .expect("A 的超时路径未在 5s 内触发")
+            .expect("client_loop A 任务 panic");
+        assert!(joined.is_ok(), "超时路径不应报错：{joined:?}");
+
+        {
+            let table = slots.lock().unwrap();
+            assert_eq!(table.get(0), None, "命中的槽位必须被清");
+            assert_eq!(
+                table.get(1),
+                Some(2),
+                "未命中的槽位不得被清（若改成 reset 全清 ⇒ 本用例红）"
+            );
+            assert_eq!(table.occupied(), 1);
+        }
+
+        // 收尾：B 正常断开（同样不清槽）。
+        drop(client_a);
+        drop(client_b);
+        let joined_b = tokio::time::timeout(Duration::from_secs(5), task_b)
+            .await
+            .expect("B 未在 5s 内退出")
+            .expect("client_loop B 任务 panic");
+        assert!(joined_b.is_ok(), "B 正常断开不应报错：{joined_b:?}");
+    }
+
+    /// 判据 B-3-2b（生产下游断开路径）：LoginSrv 链路断开 ⇒ `downstream_loop` 清**全部**槽。
+    ///
+    /// 先把 cap=2 的两个槽占满；假 LoginSrv 关闭连接触发 `downstream_loop` 的 EOF 分支
+    /// （`ClientThread.ClientSocketDisconnect:118-130`）。返回后 `occupied()==0`。
+    /// 若把 `reset()` 改成只清一个槽 ⇒ `occupied()==1` ⇒ 本用例红。
+    #[tokio::test]
+    async fn production_downstream_disconnect_clears_all_slots() {
+        let slots = Arc::new(StdMutex::new(SlotTable::with_capacity(2)));
+        {
+            let mut table = slots.lock().unwrap();
+            assert!(matches!(admit(&mut table, 1, true), Admission::Slot(0)));
+            assert!(matches!(admit(&mut table, 2, true), Admission::Slot(1)));
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let gateway = TcpStream::connect(addr).await.unwrap();
+        let (srv, _) = listener.accept().await.unwrap();
+        let (down_rd, down_wr) = gateway.into_split();
+        drop(down_wr);
+        let alive = Arc::new(AtomicBool::new(true));
+        let sessions: super::Sessions = Arc::new(Mutex::new(HashMap::new()));
+        let task = tokio::spawn(downstream_loop(
+            down_rd,
+            sessions,
+            Arc::clone(&alive),
+            Arc::clone(&slots),
+        ));
+        // 假 LoginSrv 断开：EOF ⇒ 生产 reset 分支。
+        drop(srv);
+        let joined = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("downstream_loop 未在 5s 内退出")
+            .expect("downstream_loop 任务 panic");
+        assert!(joined.is_ok(), "downstream_loop 返回 Err：{joined:?}");
+        assert!(!alive.load(Ordering::SeqCst), "下行存活标志必须置 false");
+
+        let table = slots.lock().unwrap();
+        assert_eq!(
+            table.occupied(),
+            0,
+            "下游断开必须清全部槽（若只清一个 ⇒ 本用例红）"
+        );
+        assert!(!table.is_full());
     }
 }
