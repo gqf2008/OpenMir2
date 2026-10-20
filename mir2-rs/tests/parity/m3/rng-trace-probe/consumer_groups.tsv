@@ -265,3 +265,13 @@ drop	rust	bins/game-svr/src/ground\.rs:	bins/game-svr/src/ground.rs	P21 drop_ite
 # 不新增 rust 行）。这两行只为 C# 侧的新站点提供归类，避免 `--require-closed` 报 UNCLASSIFIED。
 merchant	csharp	Merchant\.UpgradeWapon@Merchant\.cs:	src/GameSrv/Npc/Merchant.cs:527	武器升级提交（零 RNG；入口行，占位归类）
 merchant	csharp	Merchant\.GetBackupgWeapon@Merchant\.cs:	src/GameSrv/Npc/Merchant.cs:592	武器升级取回：耐久分支 Random(Dura)/Random(Dura-18)、Random(3)、DC/MC/SC 三支 Random(Rate)[+Two/ThreePointRate]（:621/:637/:647/:677/:698/:719）
+
+# ---- 2026-10-20 追加（MB-5：毒 / 隐身 / 瞬移；卡 openmir2-mb5-monsters）-----------------
+# 五类全部是可覆写 Run 的专用怪，取数点全在 Run 体/其调用的 helper 内；Rust 站点文件级
+# 已由上方 `monster_ai rust crates/world/src/monai.rs:` 与 `space_move`/`magic_effect` 行覆盖。
+monster_ai	csharp	GreenMonster\.Run@GreenMonster\.cs:	src/M2Server/Monster/Monsters/GreenMonster.cs:23	MB-5 R22：`Random(TargetCret.AntiPoison + 7) <= 6`（**先抽**，再判 `StatusTimeArr[DECHEALTH]==0`）；Rust `monai.rs::green_red_monster_run`
+monster_ai	csharp	RedMonster\.Run@RedMonster\.cs:	src/M2Server/Monster/Monsters/RedMonster.cs:23	MB-5 R29：与 Green 同门同序，仅毒型 `DAMAGEARMOR`；Rust `monai.rs::green_red_monster_run`
+monster_ai	csharp	Khazard\.Run@Khazard\.cs:25$	src/M2Server/Monster/Monsters/Khazard.cs:25	MB-5 R23：两轴各 2 格后的 `Random(2)` 分支门；Rust `monai.rs::khazard_run`
+monster_ai	csharp	Khazard\.Run@Khazard\.cs:(30|44)$	src/M2Server/Monster/Monsters/Khazard.cs:30	MB-5 R23：`Random(1)`（恒 0 但必抽）+ `Random(TargetCret.AntiPoison + 7)`；`:44` 同序；Rust `monai.rs::khazard_run`
+magic_effect	csharp	MagicManager\.MagMakePrivateTransparent@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:686	MB-5 R20：`FrostTiger.Run` 直接调 helper；helper 内邻格且以目标为靶才 `Random(2)`；Rust `world.rs::mag_make_private_transparent` → `magic_effect::private_transparent_draw`（`magic_effect` 组已按文件覆盖）
+# TeleMonster.Run（R40）本身零直接抽：只有 `SendRefMsg(RM_SPACEMOVE_FIRE)` + `SpaceMove` 的移位环（归 `space_move` 组，见上）。
