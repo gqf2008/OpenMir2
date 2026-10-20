@@ -918,6 +918,7 @@ async fn main() -> Result<()> {
                         string_conf.guild_msg_prefix(),
                     ),
                     game_conf,
+                    red_die_home: game_svr::castle::load_red_die_home(&conf),
                     string_conf,
                     show_rank_level_name,
                     server_index: cfg.server_index,
@@ -3381,11 +3382,34 @@ fn handle_query_user_name_cmd(
         return;
     };
     let body = if queryuser::cetin_near_xy(world, self_map, i32::from(x), i32::from(y), target_id) {
-        // `GetChrColor(target)`：展示表里的 `name_color`（玩家 = `PLAY_NAME_COLOR`；非玩家 =
-        // `MONSTER_NAME_COLOR`），与 `GetChrColor` 在「无行会/PK/城堡」形态下的落点同口径（登记）。
-        let name_color = displays
-            .get(target_id)
-            .map_or(target.name_color, |d| d.name_color);
+        // `GetChrColor(target)`：观察者 × 目标的真实分支（PK/行会/攻城区）。有行会观察者在
+        // 攻城区命中 `IsAttackGuild(IGuild)` 的 N1 ⇒ oracle 丢弃本 tick 剩余消息，这里丢帧。
+        let viewer_guild = sessions
+            .get(chr_name)
+            .and_then(|s| s.guild.guild_name.as_deref());
+        let target_guild_name = online
+            .iter()
+            .find(|e| e.actor_id == target_id)
+            .and_then(|e| sessions.get(&e.chr_name))
+            .and_then(|s| s.guild.guild_name.as_deref());
+        let name_color = match game_svr::castle::query_user_name_color(
+            world,
+            viewer_guild,
+            target_guild_name,
+            target,
+            target.name_color,
+            false,
+            false,
+        ) {
+            Ok(color) => color,
+            Err(e) => {
+                glog!(
+                    "WRN",
+                    "GetChrColor N1（{e:?}）ChrName={chr_name} target={target_id} ⇒ 丢弃本帧（oracle 消息段中止）"
+                );
+                return;
+            }
+        };
         // `GetShowName()`：玩家 = `enter::show_name` 模板（= 展示表缓存）；缺项回落 `FilterShowName`。
         let show = displays.get(target_id).map_or_else(
             || {
@@ -13078,6 +13102,8 @@ struct NewbieItems {
 /// `sim_loop` 需要的入图帧配置层（`Server.conf` 的 `GameSvrConf` + `String.conf` + `[Setup] ShowRankLevelName`）。
 struct EnterConfig {
     game_conf: Option<mir2_envir::GameSvrConf>,
+    /// `[Setup] RedDieHomeMap/RedDieHomeX/RedDieHomeY`（`WorldServer.cs:343-348`）。
+    red_die_home: mir2_world::castle::RedDieHome,
     string_conf: crate::strings::StringConf,
     show_rank_level_name: bool,
     /// `[Server] ServerIndex`（`SystemShare.ServerIndex`）：`MakeSaveRcd` 写
@@ -13247,6 +13273,7 @@ impl EnterConfig {
     fn for_test(string_conf: crate::strings::StringConf) -> Self {
         Self {
             game_conf: None,
+            red_die_home: mir2_world::castle::RedDieHome::default(),
             string_conf,
             show_rank_level_name: false,
             server_index: 0,
@@ -14947,6 +14974,12 @@ fn sim_loop(
         i32::from(enter_cfg.server_index),
     );
     let mut guild_run_tick = world.clock_ms as i32;
+    // `CastleMgr.Run()` 的 10s 门基准（`SystemProcessor.cs:70-77`，与 `GuildMgr.Run` 同块、Guild 先）。
+    let mut castle_run_tick = world.clock_ms;
+    // 每个在线玩家的 `InGuildWarArea` / `NameColorChanged` / `DiscountForNightTick`
+    // （oracle `PlayObject` 会话位；本仓按 actor id 侧挂，生命周期随在线表清理）。
+    let mut castle_war_states: std::collections::HashMap<i32, mir2_world::castle::CastleWarState> =
+        std::collections::HashMap::new();
     // **P3 收尾残余**：`MagTurnUndeadLevel` + `PKFlagTime`（`Server.conf [Setup]`）。
     world.set_mag_turn_undead_level(enter_cfg.mag_turn_undead_level);
     world.set_pk_flag_config(
@@ -15265,6 +15298,7 @@ fn sim_loop(
                         &mut rng,
                         &specs,
                         game_svr::castle::siege_config_from(&enter_cfg.guild_castle_cfg),
+                        i32::from(enter_cfg.server_index),
                     );
                     world.rng = rng;
                     glog!(
@@ -16355,6 +16389,122 @@ fn sim_loop(
                                                 in_world,
                                             );
                                         } else {
+                                        // oracle `WorldServer.cs:298-350`：进图/死亡落点改写。
+                                        // **位置**：`resolve_enter_map` 之后、地形移位环之前；抽数走
+                                        // **同一条** `world.rng`（X 先 Y 后）。
+                                        let (final_map_name, map_id, enter_x, enter_y) = {
+                                            // 仅头部窗口（合成/诊断载荷）：oracle 恒有全字段记录，
+                                            // 本仓无法判定 HP/PkPoint/Home ⇒ **不做**改写、**不抽数**
+                                            // （与入图帧「输入不足 ⇒ 跳过」同口径，避免污染 RNG 流水）。
+                                            if full.is_none() {
+                                                (final_map_name, map_id, enter_x, enter_y)
+                                            } else {
+                                            let record_abil = full
+                                                .as_ref()
+                                                .and_then(|r| r.data.abil.as_ref());
+                                            let mut hp =
+                                                record_abil.map_or(0, |a| i32::from(a.hp));
+                                            let record_max_hp =
+                                                record_abil.map_or(0, |a| i32::from(a.max_hp));
+                                            let pvp_level = u8::try_from(
+                                                full.as_ref().map_or(0, |r| r.data.pk_point).max(0)
+                                                    / 100,
+                                            )
+                                            .unwrap_or(255);
+                                            let fight_zone_die_count = full
+                                                .as_ref()
+                                                .map_or(0, |r| r.data.fight_zone_die_count);
+                                            // `WorldServer.cs:258-277`：新角色 `Abil.HP = 15`
+                                            // （Rust 的新角色能力初始化在本块之后，这里先按 oracle 值喂城堡段）。
+                                            if is_new_human {
+                                                hp = 15;
+                                            }
+                                            // `WorldServer.cs:279-294`：Fight3Zone 死亡恢复支
+                                            // （`HP = MaxHP`，`FightZoneDieCount < 3`），先于城堡块。
+                                            if hp <= 0
+                                                && fight_zone_die_count < 3
+                                                && registry
+                                                    .as_ref()
+                                                    .and_then(|r| r.flag_of(map_id))
+                                                    .is_some_and(|f| f.fight_zone)
+                                            {
+                                                hp = if is_new_human { 15 } else { record_max_hp };
+                                            }
+                                            let guild_name = guild_cmd::materialize(
+                                                &guilds,
+                                                &head.chr_name,
+                                            )
+                                            .guild_name;
+                                            let mut rng = std::mem::replace(
+                                                &mut world.rng,
+                                                mir2_shared::rng::RandomNumber::with_seed(0),
+                                            );
+                                            let mut map_name = final_map_name;
+                                            let mut map_id = map_id;
+                                            let (mut x, mut y) = (enter_x, enter_y);
+                                            // 进图两臂（`WorldServer.cs:299-318`）。
+                                            let enter_castle = world.castle_war_area_at(
+                                                Some(map_id),
+                                                i32::from(x),
+                                                i32::from(y),
+                                            );
+                                            if let Some(reloc) =
+                                                mir2_world::castle::relocate_on_enter(
+                                                    &mir2_world::castle::EnterRelocateInput {
+                                                        castle: enter_castle
+                                                            .and_then(|i| world.castles.get(i)),
+                                                        map_id,
+                                                        x: i32::from(x),
+                                                        y: i32::from(y),
+                                                        my_guild_name: guild_name.as_deref(),
+                                                        home_map: &enter_cfg.home.home_map,
+                                                        home_x: enter_cfg.home.home_x,
+                                                        home_y: enter_cfg.home.home_y,
+                                                    },
+                                                    &mut rng,
+                                                )
+                                            {
+                                                map_name = reloc.map_name;
+                                                (x, y) = (reloc.x, reloc.y);
+                                                match registry
+                                                    .as_ref()
+                                                    .map_or(Some(map_id), |r| r.id_of(&map_name))
+                                                {
+                                                    Some(id) => map_id = id,
+                                                    None => hp = 0,
+                                                }
+                                            }
+                                            // 死亡三臂（`WorldServer.cs:324-350`）。
+                                            let member_castle = world
+                                                .castle_member_at(guild_name.as_deref())
+                                                .and_then(|i| world.castles.get(i));
+                                            if let Some(reloc) =
+                                                mir2_world::castle::relocate_on_death(
+                                                    &mir2_world::castle::DeathRelocateInput {
+                                                        member_castle,
+                                                        hp,
+                                                        pvp_level,
+                                                        home_map: &enter_cfg.home.home_map,
+                                                        home_x: enter_cfg.home.home_x,
+                                                        home_y: enter_cfg.home.home_y,
+                                                        red_die: &enter_cfg.red_die_home,
+                                                    },
+                                                    &mut rng,
+                                                )
+                                            {
+                                                map_name = reloc.map_name;
+                                                (x, y) = (reloc.x, reloc.y);
+                                                if let Some(id) = registry
+                                                    .as_ref()
+                                                    .and_then(|r| r.id_of(&map_name))
+                                                {
+                                                    map_id = id;
+                                                }
+                                            }
+                                            world.rng = rng;
+                                            (map_name, map_id, x, y)
+                                            }
+                                        };
                                         // 进世界：`World::open_session` + `enter_map`
                                         // oracle `WorldServer.cs:371-395` 进图前的**地形移位环**：
                                         // 出生/存档格是墙 ⇒ 每轮 `-3+Random(6)`（X 先 Y 后），至多 5 轮；
@@ -16672,6 +16822,24 @@ fn sim_loop(
                                                 };
                                                 for w in enter::apply(&mut inputs, &wx) {
                                                     glog!("WRN", "入图帧输入：{w}");
+                                                }
+                                                // oracle `PlayObject.Message.cs:286-290`：城堡检查在
+                                                // 消息段**之前** ⇒ `RM_LOGON` 的 766 带本 tick 的
+                                                // `InGuildWarArea`，不是恒 0。
+                                                if let Some(flag) = wx.flag {
+                                                    let in_guild_war_area = world
+                                                        .castle_war_area_at(
+                                                            Some(map_id),
+                                                            i32::from(enter_x),
+                                                            i32::from(enter_y),
+                                                        )
+                                                        .is_some_and(|i| world.castles[i].under_war);
+                                                    inputs.area_state = Some(
+                                                        game_svr::castle::area_state_with(
+                                                            flag,
+                                                            in_guild_war_area,
+                                                        ),
+                                                    );
                                                 }
                                                 // **G2**：登录物化 `MyGuild`/`GuildRankNo`（`PlayObject.cs:1391-1400`）：
                                                 // 有会才 `GetRankName` ⇒ `RM_CHANGEGUILDNAME`（优先级 61）；
@@ -17224,6 +17392,44 @@ fn sim_loop(
             );
             send_guild_notices(&outcome.notices, &online, &gates);
         }
+        // **CastleMgr.Run()**（`SystemProcessor.cs:70-77`）：与 `GuildMgr.Run` 同一个 10s 块、
+        // **Guild 先、Castle 后**；严格 `>` 门（oracle `GetTickCount()-RunTimeTick>10000`）。
+        // 状态机本体已在 `UserCastle::run` 逐行实现（跨天/每日开战/回收 Ghost/StoneMode/预告/超时）。
+        if world.clock_ms - castle_run_tick > 10_000 {
+            castle_run_tick = world.clock_ms;
+            let local = chrono::Local::now();
+            let now = mir2_world::castle::CastleNow::new(
+                mir2_world::castle::CastleDate::new(
+                    chrono::Datelike::year(&local),
+                    chrono::Datelike::month(&local),
+                    chrono::Datelike::day(&local),
+                ),
+                chrono::Timelike::hour(&local) as i32,
+                world.clock_ms,
+            );
+            for idx in 0..world.castles.len() {
+                let castle_events = world.castles[idx].run(now);
+                let castle_map_id = world.castles[idx].castle_map_id;
+                for ev in castle_events {
+                    match ev {
+                        // 门/墙的通行掩码：按序落到**该城**的地图格子（`Envir.SetMapXyFlag`）。
+                        mir2_world::castle::CastleEvent::Structure(
+                            mir2_world::castle::StructureEvent::SetMapXyFlag { x, y, walk },
+                        ) => {
+                            if let Some(id) = castle_map_id.filter(|id| *id < world.maps.len()) {
+                                if let Some(grid) = world.maps.get_mut(id) {
+                                    grid.set_map_xy_flag(i32::from(x), i32::from(y), walk);
+                                }
+                            }
+                        }
+                        // `Broadcast`/`ServerGroupMsg`/`SaveAttackSabukWall`/`RefreshShowName`/
+                        // `Ref*` 帧的宿主排水尚未接线（登记 T-121）；单服部署 `UnderWar=false`
+                        // 时这些分支不可达。
+                        other => glog!("DBG", "城堡状态机事件（未接线）：{other:?}"),
+                    }
+                }
+            }
+        }
         // **orphan 接线第二批**：掉线/小退/顶号的**离世广播**（oracle `BaseObject.DisappearA`
         // `BaseObject.cs:1519-1524` ⇒ `SendRefMsg(RM_DISAPPEAR)`，由 `MakeGhost` 调用）。
         // 世界侧 `disconnect`/`soft_close` 已在本轮（事件循环的断线处置 + `drain_kicks` +
@@ -17288,6 +17494,65 @@ fn sim_loop(
         // `RM_ZEN_BEE` 的 `RegenMonsterByName`（生产 `SpecialSpawner`）与 `RM_HIT` 的
         // `SM_HIT` 出帧。宿主走 `tick_world_head_with_specials` + 宿主段 + `tick_tail`；
         // 回归用例走组合版 `tick_world_with_specials`（宿主段为空）。
+        // oracle `PlayObject.Message.cs:286-350`：每 tick 城堡区检查（置位）+ 1s 门（清除/发帧）。
+        // 位置 = `PlayObject.Run()` 的消息段之前、世界 `SearchViewRange` 之前。
+        {
+            let online_ids: std::collections::HashSet<i32> =
+                online.iter().map(|e| e.actor_id).collect();
+            castle_war_states.retain(|id, _| online_ids.contains(id));
+            let players: Vec<mir2_world::castle::CastleWarPlayer> = online
+                .iter()
+                .filter_map(|e| {
+                    let ent = world.entities.get(e.actor_id)?;
+                    Some(mir2_world::castle::CastleWarPlayer {
+                        actor_id: e.actor_id,
+                        map_id: ent.map_id,
+                        x: ent.x,
+                        y: ent.y,
+                        guild_name: ground_sessions
+                            .get(&e.chr_name)
+                            .and_then(|s| s.guild.guild_name.clone()),
+                    })
+                })
+                .collect();
+            let events = mir2_world::castle::castle_war_tick(
+                &world.castles,
+                &players,
+                &mut castle_war_states,
+                world.clock_ms,
+            );
+            for ev in events {
+                match ev {
+                    mir2_world::castle::CastleWarEvent::AreaState {
+                        actor_id,
+                        in_guild_war_area,
+                    } => {
+                        let Some(entry) = online.iter().find(|e| e.actor_id == actor_id) else {
+                            continue;
+                        };
+                        let map_id = world.entities.get(actor_id).map_or(0, |e| e.map_id);
+                        let flag = registry
+                            .as_ref()
+                            .and_then(|r| r.flag_of(map_id))
+                            .cloned()
+                            .unwrap_or_default();
+                        let recog = game_svr::castle::area_state_with(&flag, in_guild_war_area);
+                        let body = game_svr::smframe::sm_areastate(recog);
+                        if let Some(tx) =
+                            route_to_gate(&gates, entry.gate_idx, entry.socket, "766 攻城区状态")
+                        {
+                            let _ = tx.send(SimToGate::SendFrame {
+                                socket: entry.socket,
+                                body,
+                            });
+                        }
+                    }
+                    // `RefShowName` 的逐观察者重发属 AOI 侧（`GetChrColor` 按观察者语义），
+                    // 本片只产事件，接线登记 T-122。
+                    mir2_world::castle::CastleWarEvent::ShowName { .. } => {}
+                }
+            }
+        }
         let mut rec = tick_world_head_with_specials(
             &mut world,
             mon_gen_host.as_mut(),
@@ -47854,6 +48119,83 @@ mod castle_frame_tests {
         assert_eq!(
             u16::from_le_bytes([frames[1][4], frames[1][5]]),
             mir2_protocol::messages::SM_FEATURECHANGED
+        );
+    }
+}
+
+#[cfg(test)]
+mod castle_shift_order_tests {
+    //! 车道 castlewar：进图改写必须发生在 `Random(6)` 移位环之前（生产 `mapwire::shift_enter_position`）。
+    use crate::mapwire;
+    use mir2_shared::rng::RandomNumber;
+    use mir2_world::castle::{CastleSiegeConfig, EnterRelocateInput, UserCastle};
+    use mir2_world::map::CellAttribute;
+
+    /// 期望（独立复算 seed=20261021）：`Random(5)` 前两抽 = [4,2] ⇒ 非成员落点 (646,290)；
+    /// 随后 `Random(6)`（第 3 抽起）= [0,1,1,2,0,3,3,0,5,1] ⇒ (643,288)→(641,287)→(638,287)
+    /// →(638,284)→(640,282)（第 5 轮命中 Walk）。第 13 抽 = 5。
+    ///
+    /// 牙：把城堡改写挪到移位环之后 ⇒ 起点 (644,290) 的路径不命中、轮数/坐标/后续抽数红。
+    #[test]
+    fn relocation_precedes_shift_ring_and_consumes_rng_ledger() {
+        const SEED: i32 = 20261021;
+        let mut world = mir2_world::World::with_maps(vec![(800, 400)]);
+        {
+            let (w, h) = {
+                let m = &world.maps[0];
+                (m.width, m.height)
+            };
+            let mut attrs = vec![CellAttribute::HighWall; (w * h) as usize];
+            attrs[(640 * h + 282) as usize] = CellAttribute::Walk;
+            assert_eq!(world.maps[0].set_cell_attributes(&attrs), (w * h) as usize);
+        }
+        world.rng = RandomNumber::with_seed(SEED);
+        let mut castle = UserCastle::new("沙巴克", CastleSiegeConfig::default());
+        castle.map_name = Some("3".to_string());
+        castle.home_map = "3".to_string();
+        castle.palace_map_id = Some(1);
+        castle.home_x = 644;
+        castle.home_y = 290;
+        castle.war_range_x = 100;
+        castle.war_range_y = 100;
+
+        let reloc = mir2_world::castle::relocate_on_enter(
+            &EnterRelocateInput {
+                castle: Some(&castle),
+                map_id: 1,
+                x: 644,
+                y: 290,
+                my_guild_name: None,
+                home_map: "0",
+                home_x: 644,
+                home_y: 290,
+            },
+            &mut world.rng,
+        )
+        .expect("非成员进皇宫改写");
+        assert_eq!((reloc.x, reloc.y), (646, 290), "R5=[4,2]");
+
+        let shift = mapwire::shift_enter_position(
+            &mut world,
+            mapwire::EnterTarget {
+                map_name: "0",
+                map_id: 0,
+                x: i32::from(reloc.x),
+                y: i32::from(reloc.y),
+            },
+            mapwire::HomePoint {
+                map_name: "3",
+                map_id: Some(0),
+                x: 644,
+                y: 290,
+            },
+        );
+        assert_eq!(shift.attempts, 5, "R6 第 5 轮命中 Walk");
+        assert_eq!((shift.x, shift.y), (640, 282));
+        assert_eq!(
+            world.rng.random_below(6),
+            5,
+            "第 13 抽 = R6[12] = 5（恰 12 抽）"
         );
     }
 }

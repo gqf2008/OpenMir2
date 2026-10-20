@@ -6,13 +6,17 @@ use mir2_data::models::MonsterInfo;
 use mir2_envir::castle::{parse_sabuk_w_bytes, SabukWConfig};
 use mir2_envir::{MapLoader, MapRegistry};
 use mir2_shared::rng::{DotNetRandom, RandomNumber};
-use mir2_world::castle::{CastleDefenseSpecs, CastleSiegeConfig, DefenseRole, DefenseUnitSpec};
+use mir2_world::castle::{
+    area_state, CastleDate, CastleDefenseSpecs, CastleNow, CastleSiegeConfig, DefenseRole,
+    DefenseUnitSpec, RedDieHome,
+};
 use mir2_world::mongen::MonGenConfig;
 
 use crate::downlink;
 use crate::mongen::{MonGenHost, MonsterTable};
+use crate::smframe;
 
-use super::{initialize_castle, specs_from_sabuk};
+use super::{area_state_with, initialize_castle, specs_from_sabuk};
 
 /// 部署件 `Castle/0/SabukW.txt` 的 GBK 原始字节（hex 证据夹具；与
 /// `crates/envir/src/castle.rs` 的 `real_deployed_sabuk_w` 同一份）。
@@ -171,7 +175,14 @@ fn unit(name: &str, x: i16, y: i16, hp: u16) -> DefenseUnitSpec {
 /// 合成部署口径（`Castle/Castle/SabukW.txt`）：默认名 + `MainDoorOpen=1` + 弓手/守卫 HP=0。
 fn default_specs() -> CastleDefenseSpecs {
     CastleDefenseSpecs {
+        own_guild: String::new(),
         map_name: "3".to_string(),
+        home_map: "3".to_string(),
+        home_x: 644,
+        home_y: 290,
+        war_range_x: 100,
+        war_range_y: 100,
+        envir_list: vec!["0151".to_string()],
         palace_map: "0150".to_string(),
         secret_map: "D701".to_string(),
         main_door: DefenseUnitSpec {
@@ -192,7 +203,14 @@ fn default_specs() -> CastleDefenseSpecs {
 /// `Castle/0` 夹具口径的**小坐标**版本（RNG/绑定判据用；怪物名与 HP 保持真值）。
 fn small_fixture_specs() -> CastleDefenseSpecs {
     CastleDefenseSpecs {
+        own_guild: String::new(),
         map_name: "3".to_string(),
+        home_map: "3".to_string(),
+        home_x: 644,
+        home_y: 290,
+        war_range_x: 100,
+        war_range_y: 100,
+        envir_list: vec!["0151".to_string()],
         palace_map: "0150".to_string(),
         secret_map: "D701".to_string(),
         main_door: unit("沙巴克城门", 5, 5, 9999),
@@ -256,6 +274,7 @@ fn castle_deployment_defaults_zero_entities_four_warns() {
         &mut rng,
         &specs,
         CastleSiegeConfig::default(),
+        0,
     );
 
     assert_eq!(report.spawned, 0, "部署口径 0 实体");
@@ -302,6 +321,7 @@ fn castle_fixture_spawns_sixteen_with_six_draws_each() {
         &mut rng,
         &specs,
         CastleSiegeConfig::default(),
+        0,
     );
 
     assert_eq!(report.spawned, 16, "1 门 + 3 墙 + 12 弓手");
@@ -413,4 +433,188 @@ fn specs_from_sabuk_copies_defaults_verbatim() {
     assert_eq!(specs.right_wall.name, "RightWall");
     assert_eq!(specs.archers.len(), 12);
     assert_eq!(specs.guards.len(), 12);
+}
+
+// ===========================================================================
+// 车道 castlewar：攻城区判据（C2/C4/C5/C8 + 源码序门）
+// ===========================================================================
+
+/// C5 `area_state_bit4_encoding`：生产 `area_state_with` 的四向量 + 766 帧字节。
+///
+/// 牙：位常量 4 改 8 ⇒ 红；`|=` 改 `^=` ⇒ 重复置位 4→0 红；`|=` 改 `=` ⇒ `1|2|4` 变 4 红；
+/// 把 n8 写进 `Param` ⇒ 帧字节红。
+#[test]
+fn c5_area_state_vectors_and_766_frame() {
+    let mut flag = mir2_envir::MapInfoFlag::default();
+    assert_eq!(area_state_with(&flag, false), 0, "无 FIGHT/SAFE/GW ⇒ 0");
+    flag.fight_zone = true;
+    assert_eq!(area_state_with(&flag, false), 1);
+    flag.safe_area = true;
+    assert_eq!(area_state_with(&flag, false), 1 | 2);
+    assert_eq!(area_state_with(&flag, true), 1 | 2 | 4);
+    let only = mir2_envir::MapInfoFlag {
+        safe_area: true,
+        ..mir2_envir::MapInfoFlag::default()
+    };
+    assert_eq!(area_state_with(&only, false), 2);
+    assert_eq!(area_state_with(&only, true), 2 | 4);
+
+    // 同一 bit 重复置位幂等（累加器生产实现）。
+    let mut n8 = area_state(false, false, true);
+    mir2_world::castle::set_area_flag(&mut n8, mir2_world::castle::AREA_STATE_GUILD_WAR, true);
+    assert_eq!(n8, 4);
+
+    // 766：Recog = n8，Param/Tag/Series = 0，无尾。
+    let body = smframe::sm_areastate(7);
+    assert_eq!(&body[0..4], &7i32.to_le_bytes(), "Recog = n8");
+    assert_eq!(
+        u16::from_le_bytes([body[4], body[5]]),
+        mir2_protocol::messages::SM_AREASTATE
+    );
+    assert_eq!(&body[6..12], &[0u8; 6], "Param/Tag/Series 全 0");
+    assert_eq!(body.len(), 12, "无尾");
+}
+
+/// C4 + C8：生产 `initialize_castle` → `UserCastle::run` 的 Ghost 回收（Guards 先于 Archers）。
+///
+/// 牙：只清 Archers ⇒ 红；删回收 ⇒ 红；把实体也删掉 ⇒ 实体数红。
+#[test]
+fn c8_ghost_reclaim_through_production_run() {
+    let f = fixture("3");
+    let table = castle_table();
+    let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+    let mut host = MonGenHost::start(
+        Vec::new(),
+        &table,
+        false,
+        MonGenConfig::default(),
+        &mut world.rng,
+    );
+    let mut displays = downlink::DisplayTable::new();
+    let mut rng = RandomNumber::with_seed(20261020);
+    let report = initialize_castle(
+        &mut world,
+        &f.registry,
+        &table,
+        &mut host.state,
+        &mut displays,
+        &mut rng,
+        &small_fixture_specs(),
+        CastleSiegeConfig::default(),
+        0,
+    );
+    assert_eq!(report.spawned, 16);
+    let entities_before = world.entities.iter().count();
+    world.castles[0].guards[0] = Some(mir2_world::castle::CastleUnit {
+        ghost: true,
+        ..mir2_world::castle::CastleUnit::default()
+    });
+    world.castles[0].archers[0].as_mut().unwrap().ghost = true;
+    let events = world.castles[0].run(CastleNow::new(CastleDate::new(2026, 10, 21), 3, 10_000));
+    assert!(events.is_empty(), "非开战钟点无事件");
+    assert!(world.castles[0].guards[0].is_none(), "Ghost 守卫被回收");
+    assert!(world.castles[0].archers[0].is_none(), "Ghost 弓手被回收");
+    assert_eq!(
+        world.entities.iter().count(),
+        entities_before,
+        "只清槽位，不删实体（oracle 只清 BaseObject）"
+    );
+    assert!(
+        world.castles[0].guards[1].is_none(),
+        "未命中的守卫槽保持 None"
+    );
+    assert!(world.castles[0].archers[1].is_some(), "非 Ghost 弓手不变");
+}
+
+/// 源码序门：进图改写必须在 `shift_enter_position` 之前；每 tick 城堡检查在
+/// `tick_world_head_with_specials` 之前；登录 766 覆盖在 `enter::apply` 之后；
+/// 10s `CastleMgr.Run` 在 Guild 之后。
+///
+/// 牙：把任一段挪位/删除 ⇒ 本用例必红（防「函数写了但没被调用」）。
+#[test]
+fn castle_production_call_order_is_wired() {
+    let main_rs = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"),
+    )
+    .expect("读 main.rs");
+    let reloc = main_rs
+        .find("mir2_world::castle::relocate_on_enter(")
+        .expect("进图改写调用必须存在");
+    let shift = main_rs
+        .find("let shift = mapwire::shift_enter_position(")
+        .expect("移位环调用必须存在");
+    assert!(reloc < shift, "城堡改写必须在移位环之前");
+
+    let tick = main_rs
+        .find("mir2_world::castle::castle_war_tick(")
+        .expect("每 tick 城堡检查必须存在");
+    let tick_head = main_rs
+        .find("let mut rec = tick_world_head_with_specials(")
+        .expect("world tick 必须存在");
+    assert!(tick < tick_head, "每 tick 城堡检查在 world tick 之前");
+
+    let apply = main_rs
+        .find("for w in enter::apply(&mut inputs, &wx)")
+        .expect("enter::apply 必须存在");
+    let override_area = main_rs
+        .find("inputs.area_state = Some(")
+        .expect("登录 766 的 bit4 覆盖必须存在");
+    assert!(
+        apply < override_area,
+        "登录 766 必须在 enter::apply 之后装配"
+    );
+
+    let guild = main_rs
+        .find("let outcome = guild_runtime::step(")
+        .expect("GuildMgr.Run 必须存在");
+    let castle_run = main_rs
+        .find("let castle_events = world.castles[idx].run(now);")
+        .expect("CastleMgr.Run 必须存在");
+    assert!(guild < castle_run, "Guild 先、Castle 后（同一 10s 块）");
+    assert!(
+        main_rs.contains("world.clock_ms - castle_run_tick > 10_000"),
+        "CastleMgr.Run 必须走严格 `>` 的 10s 门（SystemProcessor.cs:70-77）"
+    );
+}
+
+/// `specs_from_sabuk` 必须搬运新增的 `OwnGuild/Home*/WarRange/EnvirList`（缺字段 ⇒ 谓词全假）。
+#[test]
+fn specs_from_sabuk_copies_war_area_fields() {
+    let cfg = SabukWConfig {
+        own_guild: "沙巴克".to_string(),
+        home_x: 644,
+        home_y: 290,
+        war_range_x: 100,
+        war_range_y: 120,
+        envir_list: vec!["0151".to_string(), "d701".to_string()],
+        ..SabukWConfig::default()
+    };
+    let specs = specs_from_sabuk(&cfg);
+    assert_eq!(specs.own_guild, "沙巴克");
+    assert_eq!((specs.home_x, specs.home_y), (644, 290));
+    assert_eq!((specs.war_range_x, specs.war_range_y), (100, 120));
+    assert_eq!(specs.envir_list, vec!["0151", "d701"]);
+}
+
+/// `load_red_die_home` 读部署口径的 `[Setup]`（缺键/缺文件回落源码默认）。
+#[test]
+fn red_die_home_defaults_and_ini() {
+    let missing = std::env::temp_dir().join("gs-castle-no-such-server-conf.conf");
+    assert_eq!(super::load_red_die_home(&missing), RedDieHome::default());
+    let path = std::env::temp_dir().join(format!("gs-castle-server-{}.conf", std::process::id()));
+    std::fs::write(
+        &path,
+        b"[Setup]\r\nRedDieHomeMap=3\r\nRedDieHomeX=838\r\nRedDieHomeY=668\r\n",
+    )
+    .unwrap();
+    let red = super::load_red_die_home(&path);
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(
+        red,
+        RedDieHome {
+            map_name: "3".to_string(),
+            x: 838,
+            y: 668
+        }
+    );
 }

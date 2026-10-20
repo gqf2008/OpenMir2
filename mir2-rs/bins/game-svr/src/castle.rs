@@ -22,9 +22,9 @@
 //!
 //! ## 登记的建模偏差（未超写集，不修）
 //!
-//! - **`GetMapOfServerIndex`**：`crates/envir::MapRegistry` 未暴露 `MapInfoEntry.server_index`
-//!   的读接口 ⇒ `map_owner_is_self` 按部署口径（`ServerIndex=0`、MapInfo 无 server index ⇒ 0）
-//!   恒 `true`。多服分图时需另开片（登记）。
+//! - **`GetMapOfServerIndex`**（已接线，2026-10-21）：改读 `MapRegistry::entries()` 的
+//!   `MapInfoEntry.server_index`（`MapManager.cs:169-180`：找不到 ⇒ 0），再与
+//!   `M2Share.ServerIndex` 比较；单服部署两者同为 0。
 //! - **`MonsterThreadMap`**：`UserCastle.Initialize` 的 `RegenMonsterByName` 末尾
 //!   `GetMonsterThreadId` 需要 `InitializeMonster` 建好的线程表；本宿主要求 `MonGenHost` 已就绪
 //!   （无 `Envir/MonGen.txt` ⇒ 不接城堡块，部署件有该文件）。
@@ -37,13 +37,16 @@
 //! `Random(100) < CoolEyeCode`；无 `MonItems` 时掉落 0 抽）；`nHP<=0` 跳过 / 怪物库无此名
 //! = **0 抽**（`race = -1` 在任何构造取数之前返回）。判据见本文件 `tests`。
 
+use std::path::Path;
+
+use mir2_data::exps::IniFile;
 use mir2_data::guild_castle::GuildCastleConfig;
 use mir2_envir::castle::{DefenseUnit, SabukWConfig};
-use mir2_envir::MapRegistry;
+use mir2_envir::{MapInfoFlag, MapRegistry};
 use mir2_shared::rng::RandomNumber;
 use mir2_world::castle::{
-    CastleDefenseSpecs, CastleEvent, CastleSiegeConfig, DefenseCreature, DefenseUnitSpec,
-    UserCastle,
+    area_state, CastleDefenseSpecs, CastleEvent, CastleNameColors, CastleSiegeConfig,
+    DefenseCreature, DefenseUnitSpec, RedDieHome, UserCastle,
 };
 use mir2_world::mongen::MonGenState;
 
@@ -69,7 +72,14 @@ pub fn spec_from_unit(unit: &DefenseUnit, status: bool) -> DefenseUnitSpec {
 #[must_use]
 pub fn specs_from_sabuk(cfg: &SabukWConfig) -> CastleDefenseSpecs {
     CastleDefenseSpecs {
+        own_guild: cfg.own_guild.clone(),
         map_name: cfg.map_name.clone(),
+        home_map: cfg.home_map.clone(),
+        home_x: cfg.home_x as i16,
+        home_y: cfg.home_y as i16,
+        war_range_x: cfg.war_range_x,
+        war_range_y: cfg.war_range_y,
+        envir_list: cfg.envir_list.clone(),
         palace_map: cfg.palace_map.clone(),
         secret_map: cfg.secret_map.clone(),
         main_door: spec_from_unit(&cfg.main_door, cfg.main_door_open),
@@ -116,18 +126,30 @@ pub struct WorldCastleEnv<'a> {
     pub state: &'a mut MonGenState,
     pub displays: &'a mut downlink::DisplayTable,
     pub rng: &'a mut RandomNumber,
+    /// `M2Share.ServerIndex`（`[Server] ServerIndex`）。
+    pub server_index: i32,
     pub warns: Vec<String>,
 }
 
 impl mir2_world::castle::CastleInitializeEnv for WorldCastleEnv<'_> {
-    fn map_owner_is_self(&self, _map_name: &str) -> bool {
-        // 登记：`MapRegistry` 未暴露 `MapInfoEntry.server_index`；部署件 `ServerIndex=0` 且
-        // MapInfo 无 server index ⇒ `GetMapOfServerIndex == 0` 恒真。
-        true
+    fn map_owner_is_self(&self, map_name: &str) -> bool {
+        // `MapManager.GetMapOfServerIndex`（`MapManager.cs:169-180`）：
+        // 找不到（或空名）⇒ 0；否则该图 `ServerIndex`。再与 `M2Share.ServerIndex` 比。
+        let owner = self
+            .registry
+            .entries()
+            .iter()
+            .find(|e| e.map_name.eq_ignore_ascii_case(map_name))
+            .map_or(0, |e| e.server_index);
+        i32::from(owner) == self.server_index
     }
 
     fn find_map(&self, map_name: &str) -> bool {
         self.registry.id_of(map_name).is_some()
+    }
+
+    fn map_id(&self, map_name: &str) -> Option<usize> {
+        self.registry.id_of(map_name)
     }
 
     fn regen_monster_by_name(
@@ -185,6 +207,7 @@ pub fn initialize_castle(
     rng: &mut RandomNumber,
     specs: &CastleDefenseSpecs,
     siege: CastleSiegeConfig,
+    server_index: i32,
 ) -> CastleStartupReport {
     let castle_index = world.castles.len();
     let mut castle = UserCastle::new(siege.castle_name.clone(), siege);
@@ -196,6 +219,7 @@ pub fn initialize_castle(
             state,
             displays,
             rng,
+            server_index,
             warns: Vec::new(),
         };
         let events = castle.initialize(specs, &mut env);
@@ -237,6 +261,78 @@ pub fn initialize_castle(
 #[must_use]
 pub fn siege_config_from(cfg: &GuildCastleConfig) -> CastleSiegeConfig {
     CastleSiegeConfig::from_guild_castle_config(cfg)
+}
+
+/// `RefUserState` 的 `n8`（`PlayObject.Base.cs:270-286`）——生产帧 766 的输入。
+///
+/// 只做位累加（`|=`）；**同一 bit 重复置位幂等**（牙：`|=` 改 `^=` ⇒ 重复置位用例红）。
+#[must_use]
+pub fn area_state_with(flag: &MapInfoFlag, in_guild_war_area: bool) -> u16 {
+    area_state(flag.fight_zone, flag.safe_area, in_guild_war_area)
+}
+
+/// `GetChrColor` 的生产接线（名字色）：观察者 × 目标的只读快照 → 名字色字节。
+///
+/// 行会关系只按**会名相等**判同会（`GetGuildRelation` 的 `1`）；盟友/宣战列表需要
+/// `GuildId` 映射（本仓生产路径尚未物化）⇒ 传 0/`false`（登记 T-124）。
+/// `GuildWarArea` 的按观察者副作用由返回值丢弃（调用方只取色）——查询用户名路径不需要它。
+///
+/// # Errors
+/// 见 [`mir2_world::castle::ChrColorError`]（有行会观察者在攻城区 ⇒ oracle 抛 N1，
+/// 本函数把失败交给调用方丢弃该帧）。
+pub fn query_user_name_color(
+    world: &mir2_world::World,
+    viewer_guild: Option<&str>,
+    target_guild: Option<&str>,
+    target: &mir2_world::Entity,
+    target_name_color: u8,
+    viewer_in_guild_war_area: bool,
+    target_in_guild_war_area: bool,
+) -> Result<u8, mir2_world::castle::ChrColorError> {
+    let castle = world
+        .castle_war_area_at(Some(target.map_id), target.x, target.y)
+        .and_then(|i| world.castles.get(i));
+    let guild_relation = match (viewer_guild, target_guild) {
+        (Some(a), Some(b)) if a == b => 1,
+        _ => 0,
+    };
+    let input = mir2_world::castle::ChrColorInput {
+        castle,
+        target_name_color,
+        target_pvp_level: mir2_world::World::pvp_level(target),
+        target_pvp_flag: target.pvp_flag,
+        target_fight3_zone: false,
+        my_guild_name: viewer_guild,
+        target_guild_name: target_guild,
+        guild_relation,
+        viewer_is_ally_of_target: false,
+        viewer_in_guild_war_area,
+        target_in_guild_war_area,
+    };
+    mir2_world::castle::get_chr_color(&input, &CastleNameColors::default()).map(|r| r.color)
+}
+
+/// `Server.conf` 的 `RedDieHomeMap/RedDieHomeX/RedDieHomeY`（`WorldServer.cs:343-348`）。
+///
+/// 读 `ConfigFile` 的 `[Setup]` 段；缺文件/缺键回落 `GameSvrConf.cs:1380-1382` 的
+/// `"3"/839/668`（部署件 `E:/MirServer/M2GameSvr/Server.conf:413-415` 为 `3/838/668`）。
+#[must_use]
+pub fn load_red_die_home(server_conf: &Path) -> RedDieHome {
+    let defaults = RedDieHome::default();
+    let Ok(bytes) = std::fs::read(server_conf) else {
+        return defaults;
+    };
+    let ini = IniFile::from_bytes(&bytes);
+    let map_name = ini
+        .read_string("Setup", "RedDieHomeMap", &defaults.map_name)
+        .to_string();
+    let x = ini.read_integer("Setup", "RedDieHomeX", i32::from(defaults.x));
+    let y = ini.read_integer("Setup", "RedDieHomeY", i32::from(defaults.y));
+    RedDieHome {
+        map_name,
+        x: x as i16,
+        y: y as i16,
+    }
 }
 
 #[cfg(test)]
