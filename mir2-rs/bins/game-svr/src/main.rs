@@ -15764,7 +15764,7 @@ fn sim_loop(
                     // `npc.UserSelect` 是**按实际类**的虚调用——`Npcs.txt` type 0/1/2 ⇒
                     // Merchant/GuildOfficial/CastleOfficial（`LocalDB.cs:688-698`）——所以只有
                     // type 1（GuildOfficial）进 `bins/game-svr/src/guild_official.rs`；
-                    // Merchant(0)/CastleOfficial(2) 的 `UserSelect` 未移植（T-136），落到既有
+                    // Merchant(0)/CastleOfficial(2) 的 `UserSelect` 未移植（T-140），落到既有
                     // 商店默认臂（固定 NPC 无 `merchant` 态 ⇒ 零帧零副作用）。
                     let fixed_npc_type = if cmd.ident == game_svr::shop::CM_MERCHANTDLGSELECT {
                         world
@@ -48991,7 +48991,7 @@ mod tests {",
     /// **判据 8（固定 NPC 按类别门）**：`npc.UserSelect` 是**按实际类**的虚调用——`Npcs.txt`
     /// type 0/1/2 ⇒ Merchant/GuildOfficial/CastleOfficial（`LocalDB.cs:688-698`）。只有
     /// GuildOfficial 进入本模块标签集；Merchant/CastleOfficial 的 `UserSelect` 未移植
-    /// （T-136）⇒ 同一 `@@buildguildnow` 在它们身上**零帧零副作用**（连 `base.UserSelect` 的
+    /// （T-140）⇒ 同一 `@@buildguildnow` 在它们身上**零帧零副作用**（连 `base.UserSelect` 的
     /// `ScriptCurrLable` 账本都不动）。
     ///
     /// 改坏必红：删掉 `handle_select` 的 `npc_type` 门（或宿主 `fixed_npc_dialog` 的门）⇒

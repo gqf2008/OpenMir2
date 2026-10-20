@@ -24,7 +24,7 @@
 //!   `104 SM_GUILDMESSAGE`(255)；
 //! - `@@donate`：`764 SM_DONATE_OK`(65)；`@exit`：`644 SM_MERCHANTDLGCLOSE`(143)。
 //!
-//! # 未做项（登记见 `tests/parity/whitelist.md` T-133..T-136）
+//! # 未做项（登记见 `tests/parity/whitelist.md` T-137..T-140）
 //!
 //! - 固定 NPC 的 `Npc_def/<ChrName>-<MapName>` 脚本**未装载**（`bins/game-svr/src/npcs.rs`
 //!   模块头已登记）⇒ `@main` 菜单说词不存在、`CanJmpScriptLableMap` 恒空；本模块照 oracle
@@ -34,7 +34,7 @@
 //! - `@@requestcastlewarnow<n>`（`GuildOfficial.cs:203+`）属攻城区，本车道不接。
 //! - 固定 NPC 按 `Npcs.txt` 的 `type` 分流（`LocalDB.cs:688-698`）：只有 `1` =
 //!   `GuildOfficial` 进入本模块标签集；`0` = `Merchant` / `2` = `CastleOfficial` 的
-//!   `UserSelect` 未移植（T-136）⇒ 本模块对它们零帧零副作用，宿主落到既有商店默认臂。
+//!   `UserSelect` 未移植（T-140）⇒ 本模块对它们零帧零副作用，宿主落到既有商店默认臂。
 //! - `GetShowName()` 的 42 尾用进图时展示表（`guildname` 恒空）；oracle 在 `RefShowName`
 //!   时重算（`ShowGuildName`/攻城区分支）。部署件 `ShowGuildName=0` 且 NPC 不在攻城区 ⇒ 等价。
 
@@ -405,7 +405,7 @@ pub(crate) fn handle_select(
     }
     // `npc.UserSelect(this, sMsg.Trim())`（`Operate.cs:123`）是**按实际类**的虚调用：
     // `Npcs.txt` type 0/1/2 ⇒ Merchant/GuildOfficial/CastleOfficial（`LocalDB.cs:688-698`）。
-    // 只有 `GuildOfficial` 的 `UserSelect` 在本模块；Merchant/CastleOfficial 未移植（T-136）
+    // 只有 `GuildOfficial` 的 `UserSelect` 在本模块；Merchant/CastleOfficial 未移植（T-140）
     // ⇒ 零帧零副作用（宿主侧同样按 type 分流，不进本函数）。
     if npc_type != mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL {
         glog!(
@@ -450,10 +450,10 @@ pub(crate) fn handle_select(
         return true;
     }
     // `M2Share.ScriptEngine.GotoLable(PlayObject, ActorId, sLabel, !boCanJmp)`：固定 NPC 的
-    // `Npc_def/<Chr>-<Map>` 脚本未装载（T-133）⇒ 无说词/无脚本副作用。
+    // `Npc_def/<Chr>-<Map>` 脚本未装载（T-137）⇒ 无说词/无脚本副作用。
     glog!(
         "DBG",
-        "NPC 对话：GotoLable({label}) 未执行（Npc_def 脚本未装载，T-133）ChrName={chr_name} npc={npc_name}"
+        "NPC 对话：GotoLable({label}) 未执行（Npc_def 脚本未装载，T-137）ChrName={chr_name} npc={npc_name}"
     );
 
     let mut queue: Vec<QueuedFrame> = Vec::new();
@@ -597,7 +597,7 @@ pub(crate) fn handle_select(
             smframe::sm_merchantdlgclose(npc_actor_id),
         );
     } else if eq_label(label, LABEL_BACK) {
-        // `@back`：回跳标签（空 ⇒ `@main`）的 `GotoLable`；固定 NPC 脚本未装载 ⇒ 无说词（T-133）。
+        // `@back`：回跳标签（空 ⇒ `@main`）的 `GotoLable`；固定 NPC 脚本未装载 ⇒ 无说词（T-137）。
         let back = match shop_sessions.get_mut(chr_name) {
             Some(ss) => {
                 if ss.script_go_back_lable.is_empty() {
@@ -609,10 +609,10 @@ pub(crate) fn handle_select(
         };
         glog!(
             "DBG",
-            "NPC 对话：@back ⇒ GotoLable({back}) 未执行（Npc_def 脚本未装载，T-133）ChrName={chr_name}"
+            "NPC 对话：@back ⇒ GotoLable({back}) 未执行（Npc_def 脚本未装载，T-137）ChrName={chr_name}"
         );
     }
-    // `@@requestcastlewarnow<n>` 未接（T-134）：落到「GotoLable 后无动作」，与脚本缺页同形。
+    // `@@requestcastlewarnow<n>` 未接（T-138）：落到「GotoLable 后无动作」，与脚本缺页同形。
 
     for body in &direct {
         if let Some(tx) = crate::route_to_gate(gates, gate_idx, socket, "行会 NPC 直发帧") {
