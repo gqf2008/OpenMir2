@@ -53,16 +53,21 @@ CSHARP_ATTACK_RE = re.compile(
 # （`evidence-rng-trace-20261012/00-commands.txt` §5），保证两侧「攻击路径」同口径。
 # m3cs tick22 F2：旧表漏 758/628/630/601/609/831/250 ⇒ 同一条 Rust 流水把攻击路径取数
 # 算成噪声、报 attack=2/段；本表由 selftest 钉住（新站点必须分类为 attack）。
-# 2026-10-17（magic-draws-move）：再补当前活栈实际取数行 103/106/763/771/790/792/936/1018/1126；
-# 旧行号保留为旧 trace 别名。两处 `RUST_ATTACK_RE` 由 selftest 钉成**逐字同一张表**。
-# **T-141（2026-10-21，hit-site）**：`_Attack` 命中骰（`random_byte(target.speed_point)`）在
-# `6a774ea79` 插入 4 行注释后从 1018 漂到 **1014** ⇒ 补 1014 为**当前活栈**；1018 保留为旧 trace
-# 别名。两处表仍逐字同表；selftest 另从 `crates/world/src/combat.rs` **现读**该调用的物理行，
-# 表漏行/代码搬家未同步 ⇒ 必红（不再靠人记行号）。
+# 2026-10-17（magic-draws-move，`e7d432189`）：补当时活栈实际取数行
+# 103/106/763/771/790/792/936/1018/1126——**936 = 命中骰**、**1018 = `AttackSuccess` 的
+# `Random(5)`**、**1126 = 毒门**。旧行号保留为旧 trace 别名。
+# 2026-10-19（`bbf9694aa`）：三处取数漂到**当前活栈** 1014（命中骰）/ 1150（`Random(5)`）/
+# 1258（毒门）。**1018 从来不是命中骰**（它只是 `e7d432189` 当时的 `Random(5)`）；命中骰历史
+# 是 178/190/211/315/517/685/736/758/812/936/995/1002/1007→1014（`6a774ea79` 只从 1002 到
+# 1007，`bbf9694aa` 才到 1014）。三行都必须分类为 attack，否则玩家攻击链的两次
+# `AttackSuccess` 取数在 segment/summary 里被算成 noise。
+# 两处 `RUST_ATTACK_RE` 由 selftest 钉成**逐字同一张表**；selftest 另从
+# `crates/world/src/combat.rs` **现读**这三处取数的物理行，表漏行/代码搬家未同步 ⇒ 必红
+# （不再靠人记行号）。
 # **MB-4 F4**：补 `struck_damage_durability` / `get_hit_struck_damage` 的当前取数行
 # 829/837/856/858（CowKing `Attack` 打带装备玩家会触达；改前落 UNCLASSIFIED）。
 RUST_ATTACK_RE = re.compile(
-    r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|829|831|837|856|858|936|1014|1018|1126)"
+    r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|829|831|837|856|858|936|1014|1018|1126|1150|1258)"
 )
 
 # 每侧缺省：分段锚（每次攻击恰调用一次的站点）+ 攻击路径正则。
@@ -399,8 +404,10 @@ def cmd_selftest(args):
     # ---- F2（m3cs tick22）：Rust 攻击路径站点表必须含当前活栈站点（旧表漏 758/628/630/601/609/831/250）
     for line in (
         "758", "628", "630", "601", "609", "831", "250",
-        # 2026-10-17 当前活栈实际取数行（magic-draws-move 补齐）
+        # 2026-10-17 活栈行（magic-draws-move 补齐；936=命中骰 / 1018=Random(5) / 1126=毒门）
         "103", "106", "763", "771", "790", "792", "936", "1014", "1018", "1126",
+        # 2026-10-19（bbf9694aa）起的三处当前活栈：命中骰 / AttackSuccess Random(5) / 毒门
+        "1150", "1258",
     ):
         site = "crates\\world\\src\\combat.rs:" + line
         check("rust-site-%s-is-attack" % line, bool(RUST_ATTACK_RE.search(site)), site)
@@ -421,38 +428,63 @@ def cmd_selftest(args):
           "attack_rng_ledger=%r rng_ledger_diff=%r"
           % (RUST_ATTACK_RE.pattern, rld.RUST_ATTACK_RE.pattern))
 
-    # ---- T-141（2026-10-21，卡 hit-site）：`_Attack` 命中骰的**当前活栈**行必须归 attack ----
-    # `6a774ea79` 在 `if is_proper_target_grouped_direct(...)` 上方插了 4 行注释 ⇒ 命中骰从
-    # 1018 漂到 1014。表只登记 1018 时，普通怪命中骰在 trace 里落 `combat.rs:<live>` 却**不命中**
-    # `RUST_ATTACK_RE` ⇒ 被算成 noise。牙齿：从**源码现读**该调用的物理行（不写死行号），表里
-    # 漏掉该行（含未来再漂移未同步）⇒ 本条必红；再用真 CLI（`summary --side rust`）跑 trace
-    # 夹具，证明该站点被归 `attack_path`。
+    # ---- T-141（2026-10-21，卡 hit-site）：攻击链三处取数的**当前活栈**行必须归 attack ----
+    # 表在 2026-10-17（`e7d432189` magic-draws-move）登记的 936/1018/1126 是**当时**的活栈：
+    # 936 = `_Attack` 命中骰、1018 = `AttackSuccess` 的 `Random(5)`、1126 = 毒门。
+    # `bbf9694aa`（2026-10-19）后三处分别在 1014 / 1150 / 1258；`6a774ea79` 只把命中骰从
+    # 1002 移到 1007。**1018 从来不是命中骰行**。牙齿：从源码**现读**三处调用的物理行
+    # （不写死行号），表漏行（含未来再漂移未同步）⇒ 必红；再用真 CLI（`summary --side rust`）
+    # 跑 trace 夹具，证明当前活栈 + 历史别名全部被归 `attack_path`、无 noise。
     _combat_rs = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..",
         "mir2-rs", "crates", "world", "src", "combat.rs"))
-    _hit_needle = "rng.random_byte(target.speed_point)"
-    _hit_lines = []
+    _needles = (
+        ("hit-dice", "rng.random_byte(target.speed_point)"),
+        ("attack-success-random5", "(rng.random_below(5) + 2) as u16"),
+        ("attack-success-poison",
+         "rng.random_below(i32::from(p.anti_poison) + config.attack_poison_rate)"),
+    )
+    _src_lines = []
     try:
         with open(_combat_rs, "r", encoding="utf-8", errors="replace") as _fh:
-            _hit_lines = [i for i, ln in enumerate(_fh, 1) if _hit_needle in ln]
+            _src_lines = list(_fh)
     except OSError:
-        _hit_lines = []
-    check("rust-hit-dice-live-line-found", len(_hit_lines) == 1,
-          "combat.rs 中 `%s` 应恰有 1 处（实际行号 %r）" % (_hit_needle, _hit_lines))
-    if len(_hit_lines) == 1:
-        _live_site = r"crates\world\src\combat.rs:%d" % _hit_lines[0]
-        check("rust-hit-dice-live-line-is-attack",
-              bool(RUST_ATTACK_RE.search(_live_site)), _live_site)
-        check("rust-hit-dice-legacy-1018-is-attack",
-              bool(RUST_ATTACK_RE.search(r"crates\world\src\combat.rs:1018")),
-              "1018 旧 trace 别名")
-        _hit_trace = os.path.join(tmp, "hit_dice.tsv")
-        _write_trace(_hit_trace, [RM, _live_site])
-        _hit_out = _capture(lambda: cmd_summary(argparse.Namespace(
-            trace=_hit_trace, top=5, side="rust", attack_re="")))
-        check("rust-hit-dice-trace-attack",
-              _hit_out[0] == 0 and "attack_path=2" in _hit_out[1]
-              and "noise=0" in _hit_out[1], _hit_out[1][:200])
+        _src_lines = []
+    _live_sites = []
+    for _tag, _needle in _needles:
+        _hits = [i for i, ln in enumerate(_src_lines, 1) if _needle in ln]
+        check("rust-%s-live-line-found" % _tag, len(_hits) == 1,
+              "combat.rs 中 `%s` 应恰有 1 处（实际行号 %r）" % (_needle, _hits))
+        if len(_hits) != 1:
+            continue
+        _site = r"crates\world\src\combat.rs:%d" % _hits[0]
+        _live_sites.append(_site)
+        check("rust-%s-live-line-is-attack" % _tag,
+              bool(RUST_ATTACK_RE.search(_site)), _site)
+        _want_canon = "hit_gate" if _tag == "hit-dice" else "attack_success"
+        check("rust-%s-live-line-canonical-%s" % (_tag, _want_canon),
+              rld.canonical(_site) == _want_canon, _site)
+    # 历史别名按 git 事实归类（`e7d432189` 时代）：936=hit_gate、1018/1126=attack_success。
+    for _line, _want_canon in (("936", "hit_gate"), ("1018", "attack_success"),
+                               ("1126", "attack_success")):
+        _legacy = r"crates\world\src\combat.rs:" + _line
+        check("rust-legacy-%s-is-attack" % _line,
+              bool(RUST_ATTACK_RE.search(_legacy)), _legacy)
+        check("rust-legacy-%s-canonical-%s" % (_line, _want_canon),
+              rld.canonical(_legacy) == _want_canon, _legacy)
+    # 真 CLI：marker + 三处当前活栈 + 三处历史别名 ⇒ 全部 attack_path、noise=0。
+    _sites_trace = os.path.join(tmp, "attack_sites.tsv")
+    _write_trace(_sites_trace, [RM] + _live_sites + [
+        r"crates\world\src\combat.rs:936",
+        r"crates\world\src\combat.rs:1018",
+        r"crates\world\src\combat.rs:1126",
+    ])
+    _sites_out = _capture(lambda: cmd_summary(argparse.Namespace(
+        trace=_sites_trace, top=8, side="rust", attack_re="")))
+    _sites_want = "attack_path=%d" % (1 + len(_live_sites) + 3)
+    check("rust-attack-sites-trace-all-attack",
+          _sites_out[0] == 0 and _sites_want in _sites_out[1]
+          and "noise=0" in _sites_out[1], _sites_out[1][:300])
 
     # ---- C# `AnimalObject.Struck@AnimalObject.cs:342` 的定位（2026-10-17）----
     # 它是**受害者**在 `Struck` 里重选目标的 `Random(6)`（`Operate(RM_STRUCK)` 在受害者消息段），

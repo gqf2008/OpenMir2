@@ -51,13 +51,17 @@ CSHARP_ATTACK_RE = re.compile(
     r"BaseObject\.GetHitStruckDamage@|PlayObject\.AttackSuccess@|PlayObject\.AttackDir@|"
     r"BaseObject\.GetAttackPower@)")
 # Rust 站点（世界层调用点）。
-# 2026-10-17（magic-draws-move）：按当前活栈补齐实际取数行 103/106/763/771/790/792/936/1018/1126；
+# 2026-10-17（magic-draws-move，`e7d432189`）：按当时活栈补齐实际取数行
+# 103/106/763/771/790/792/936/1018/1126——其中 **936 = `_Attack` 命中骰**、
+# **1018 = `AttackSuccess` 的 `Random(5)`**、**1126 = 毒门 `Random(AntiPoison+Rate)`**。
 # 旧表里的 579/587/601/606/608/609/628/630/736/758/831 保留为旧 trace 行号别名（不误伤新流水）。
-# 2026-10-21（T-141 hit-site）：`_Attack` 的命中骰（`random_byte(target.speed_point)`）在
-# `6a774ea79` 于 `if is_proper_target_grouped_direct(...)` 上方插入 4 行注释后从 1018 漂到 1014
-# ⇒ 补 **1014 为当前活栈**；1018 保留为旧 trace 别名（2026-10-17~10-19 的 Rust 流水落 1018）。
+# 2026-10-19（`bbf9694aa`）：三处取数一起漂到**当前活栈** 1014（命中骰）/ 1150（`Random(5)`）/
+# 1258（毒门）。**1018 从来不是命中骰行**：它只是 `e7d432189` 当时的 `Random(5)`（同抽数现在
+# 在 1150）；命中骰的历史是 178/190/211/315/517/685/736/758/812/936/995/1002/1007→1014
+# （`6a774ea79` 只把它从 1002 移到 1007，`bbf9694aa` 才到 1014）。三行都必须分类为 attack，
+# 否则玩家攻击链的两次 `AttackSuccess` 取数被算成 noise。
 # 两处 `RUST_ATTACK_RE` 仍逐字同表（`attack_rng_ledger.py` selftest 钉住）。
-RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|829|831|837|856|858|936|1014|1018|1126)")
+RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|829|831|837|856|858|936|1014|1018|1126|1150|1258)")
 
 CSHARP_MARKER = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
 RUST_MARKER = r"crates\world\src\combat.rs:109"
@@ -69,7 +73,10 @@ CANON_RULES = [
     (re.compile(r"M2Server\.Player\.PlayObject\.GetAttackPower@PlayObject\.cs:2934$"), "atk_power_b"),
     (re.compile(r"M2Server\.Actor\.BaseObject\.GetAttackPower@BaseObject\.Base\.cs:892$"), "atk_power_base"),
     (re.compile(r"M2Server\.Actor\.BaseObject\._Attack@BaseObject\.Attack\.cs:41$"), "hit_gate"),
-    (re.compile(r"M2Server\.Player\.PlayObject\.AttackSuccess@PlayObject\.Attack\.cs:223$"), "attack_success"),
+    # `AttackSuccess` 内有两次取数：`:221` 毒门（`Random(AntiPoison+Rate)`，`&&` 短路）与
+    # `:225` `Random(5)`；真机 hook 曾把这些帧报成 `:223`（PDB 行映射）。三者同为 oracle
+    # 同一方法的攻击路径取数 ⇒ 同一 canonical（Rust 侧 1150/1258 与之对齐）。
+    (re.compile(r"M2Server\.Player\.PlayObject\.AttackSuccess@PlayObject\.Attack\.cs:(221|223|225)$"), "attack_success"),
     (re.compile(r"M2Server\.Player\.PlayObject\.StruckDamage@PlayObject\.cs:2957$"), "struck_durability"),
     (re.compile(r"M2Server\.Actor\.BaseObject\.GetHitStruckDamage@BaseObject\.Base\.cs:792$"), "hit_struck_damage"),
     # Rust（世界层）
@@ -77,14 +84,20 @@ CANON_RULES = [
     (re.compile(r"crates/world/src/combat\.rs:111$"), "atk_power_b"),
     (re.compile(r"crates/world/src/combat\.rs:67$"), "atk_power_base"),
     (re.compile(r"crates/world/src/combat\.rs:758$"), "hit_gate"),
-    # T-141（2026-10-21）：命中骰（`_Attack` 的 `RandomByte(target.SpeedPoint)`）的**当前**活栈行
-    # （`6a774ea79` 后 1018→1014）。758/736 保留为旧别名 ⇒ 两侧 canonical 都收敛到 `hit_gate`。
+    # 命中骰（`_Attack` 的 `RandomByte(target.SpeedPoint)`）：**当前**活栈 1014（`bbf9694aa` 起），
+    # 936（`e7d432189` magic-draws-move 时代）/ 758 / 736 只作旧 trace 别名。
     (re.compile(r"crates/world/src/combat\.rs:1014$"), "hit_gate"),
+    (re.compile(r"crates/world/src/combat\.rs:936$"), "hit_gate"),
     (re.compile(r"crates/world/src/combat\.rs:628$"), "hit_struck_damage"),
     (re.compile(r"crates/world/src/combat\.rs:630$"), "hit_struck_damage2"),
     (re.compile(r"crates/world/src/combat\.rs:601$"), "struck_durability"),
     (re.compile(r"crates/world/src/combat\.rs:609$"), "struck_durability_slot"),
     (re.compile(r"crates/world/src/combat\.rs:831$"), "attack_success"),
+    # `AttackSuccess` 的两处取数（**当前**活栈）：1150 = `Random(5)`（每次玩家攻击必抽）、
+    # 1258 = 毒门 `Random(AntiPoison+Rate)`（`!UnParalysis && Paralysis` 时抽）。
+    # 旧别名：1018 = `e7d432189` 时代的 `Random(5)`（**不是命中骰**）、
+    # 1126 = `e7d432189` 时代的毒门。
+    (re.compile(r"crates/world/src/combat\.rs:(1150|1258|1018|1126)$"), "attack_success"),
     # **MB-4 F4**：`struck_damage_durability` / `get_hit_struck_damage` 的**当前**取数行
     # （改前只登记了旧行号 601/609/628/630 ⇒ 真机 trace 落 `UNCLASSIFIED`）。
     (re.compile(r"crates/world/src/combat\.rs:829$"), "struck_durability"),
@@ -94,7 +107,6 @@ CANON_RULES = [
     # 旧代码 trace 的行号别名（本片把 attack_success/attack_dir 加进 combat.rs 后行号位移；
     # 2026-10-12 之前采集的 Rust 活栈 trace 仍按旧行号落盘，别名保证旧件可复算）。
     (re.compile(r"crates/world/src/combat\.rs:736$"), "hit_gate"),
-    (re.compile(r"crates/world/src/combat\.rs:1018$"), "hit_gate"),
     (re.compile(r"crates/world/src/combat\.rs:606$"), "hit_struck_damage"),
     (re.compile(r"crates/world/src/combat\.rs:608$"), "hit_struck_damage2"),
     (re.compile(r"crates/world/src/combat\.rs:579$"), "struck_durability"),
@@ -663,29 +675,49 @@ def cmd_selftest(args):
           canonical(r"crates\world\src\combat.rs:831") == "attack_success"
           and is_attack(r"crates\world\src\combat.rs:831", "rust"))
 
-    # ---- T-141（2026-10-21，卡 hit-site）：命中骰当前活栈行归 attack + canonical `hit_gate` ----
-    # 与 attack_rng_ledger.py selftest 同口径：从源码现读 `random_byte(target.speed_point)` 的
-    # 物理行（不写死 1014），表里漏行 ⇒ 红；1018 保留为旧 trace 别名（`6a774ea79` 之前的流水）。
+    # ---- T-141（2026-10-21，卡 hit-site）：攻击链三处取数的当前活栈行归 attack + 正确 canonical ----
+    # 与 attack_rng_ledger.py selftest 同口径：从源码现读三处调用的物理行（不写死 1014/1150/1258），
+    # 表里漏行 ⇒ 红。git 事实（`git log -p` 实读）：`e7d432189`（magic-draws-move）登记的
+    # 936/1018/1126 分别是命中骰 / `AttackSuccess` 的 `Random(5)` / 毒门；**1018 从来不是命中骰**。
+    # `bbf9694aa` 起三处当前活栈 = 1014 / 1150 / 1258，历史行号只作旧 trace 别名。
     _combat_rs = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "..",
         "mir2-rs", "crates", "world", "src", "combat.rs"))
-    _hit_needle = "rng.random_byte(target.speed_point)"
-    _hit_lines = []
+    _needles = (
+        ("hit-dice", "rng.random_byte(target.speed_point)", "hit_gate"),
+        ("attack-success-random5", "(rng.random_below(5) + 2) as u16", "attack_success"),
+        ("attack-success-poison",
+         "rng.random_below(i32::from(p.anti_poison) + config.attack_poison_rate)",
+         "attack_success"),
+    )
+    _src_lines = []
     try:
         with open(_combat_rs, "r", encoding="utf-8", errors="replace") as _fh:
-            _hit_lines = [i for i, ln in enumerate(_fh, 1) if _hit_needle in ln]
+            _src_lines = list(_fh)
     except OSError:
-        _hit_lines = []
-    check("hit-dice-live-line-found", len(_hit_lines) == 1, str(_hit_lines))
-    if len(_hit_lines) == 1:
-        _live_site = r"crates\world\src\combat.rs:%d" % _hit_lines[0]
-        check("hit-dice-live-line-is-attack", is_attack(_live_site, "rust"), _live_site)
-        check("hit-dice-live-line-canonical-hit-gate",
-              canonical(_live_site) == "hit_gate", _live_site)
-    check("hit-dice-legacy-1018-is-attack",
-          is_attack(r"crates\world\src\combat.rs:1018", "rust"), "1018 旧 trace 别名")
-    check("hit-dice-legacy-1018-canonical-hit-gate",
-          canonical(r"crates\world\src\combat.rs:1018") == "hit_gate", "1018 旧 trace 别名")
+        _src_lines = []
+    for _tag, _needle, _want_canon in _needles:
+        _hits = [i for i, ln in enumerate(_src_lines, 1) if _needle in ln]
+        check("%s-live-line-found" % _tag, len(_hits) == 1, str(_hits))
+        if len(_hits) != 1:
+            continue
+        _site = r"crates\world\src\combat.rs:%d" % _hits[0]
+        check("%s-live-line-is-attack" % _tag, is_attack(_site, "rust"), _site)
+        check("%s-live-line-canonical-%s" % (_tag, _want_canon),
+              canonical(_site) == _want_canon, _site)
+    # 历史别名按 git 事实归类：936=hit_gate、1018/1126=attack_success。
+    for _line, _want_canon in (("936", "hit_gate"), ("1018", "attack_success"),
+                               ("1126", "attack_success")):
+        _legacy = r"crates\world\src\combat.rs:" + _line
+        check("legacy-%s-is-attack" % _line, is_attack(_legacy, "rust"), _legacy)
+        check("legacy-%s-canonical-%s" % (_line, _want_canon),
+              canonical(_legacy) == _want_canon, _legacy)
+    # C# 侧同一方法的两次取数（毒门 :221 / `Random(5)` :225；真机 PDB 曾报 :223）必须同 canonical，
+    # 否则 Rust 的 1150/1258 在跨侧 canonical 比对里会与 oracle 对不上。
+    for _cs_line in ("221", "223", "225"):
+        _cs = "M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:" + _cs_line
+        check("csharp-attack-success-%s-canonical" % _cs_line,
+              is_attack(_cs, "csharp") and canonical(_cs) == "attack_success", _cs)
 
     # ---- Claim B（owner 2026-10-13 09:35）：非攻击站点组口径（groups / groupdiff）----
     W = "M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427"
