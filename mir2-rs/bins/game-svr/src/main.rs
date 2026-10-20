@@ -29,6 +29,7 @@ mod dbclient;
 mod enter;
 mod gamegold;
 mod goldsales;
+mod guild_cmd;
 mod guild_frames;
 mod homemap;
 mod hutil;
@@ -343,6 +344,10 @@ async fn main() -> Result<()> {
         .nth(1)
         .map_or_else(config::default_path, std::path::PathBuf::from);
     let cfg = config::load(&conf)?;
+    // **G2**：行会/城堡配置与 `Server.conf` 同源（简报 §8）。读不到 ⇒ fail-closed
+    // （`config::load` 已成功读过同一文件，此处失败只可能是 IO/权限变化）。
+    let guild_castle_cfg = mir2_data::guild_castle::GuildCastleConfig::load(&conf)
+        .with_context(|| format!("读取 Server.conf 的行会/城堡配置失败：{}", conf.display()))?;
     // **M3 T-30**：`MIR2_RNG_SEED` 同种子注入（读取口径照 C# 侧 `m3/rng-hook/StartupHook.cs`）。
     // 未设/空 ⇒ `None`（生产路径保持既有随机源，行为一字不改）；非法值 ⇒ 显式非零退出
     // （fail-closed，不许「以为注入了种子、其实没有」）。
@@ -896,6 +901,7 @@ async fn main() -> Result<()> {
                     string_conf,
                     show_rank_level_name,
                     server_index: cfg.server_index,
+                    guild_castle_cfg,
                     catalog: item_catalog,
                     world_item_catalog: item_table,
                     magic_table,
@@ -12144,6 +12150,10 @@ struct SessionGround {
     auto_get_exp_envir_map_id: Option<usize>,
     /// `PlayObject.AutoGetExpInSafeZone`（`:808`）：true ⇒ P31 还要 `InSafeZone()`。
     auto_get_exp_in_safe_zone: bool,
+    /// **G2**：`PlayObject` 的行会会话字段（`MyGuild` / `GuildRankNo` / `GuildRankName` /
+    /// `AllowGuild` / `BanGuildChat`）。管理器 `GuildManager` 才是真源，这里是每连接缓存；
+    /// 生命周期与 `SessionGround` 相同（进世界建、断线删）。**不要**放到 `Entity` 上。
+    guild: guild_cmd::GuildSession,
 }
 
 /// oracle `IPlayerActor`/`PlayObject` 的换服字段（`WorldServer.cs:592-610`，卡 G11）。
@@ -12270,6 +12280,11 @@ struct EnterConfig {
     /// `[Server] ServerIndex`（`SystemShare.ServerIndex`）：`MakeSaveRcd` 写
     /// `characters.ServerIndex`（`WorldServer.cs:1236`）。
     server_index: u8,
+    /// **G2**：同一份 `Server.conf` 的行会/城堡配置（`mir2_data::guild_castle::GuildCastleConfig::load`）。
+    ///
+    /// G2 只用其中的行会键映射成 `mir2_world::GuildConfig`（简报 §8）；G3 直接复用它建 `GuildStore`
+    /// （`GuildFileSections::from_config`）。
+    guild_castle_cfg: mir2_data::guild_castle::GuildCastleConfig,
     /// `stditems` 物品目录（`game_svr::ability::StdItemCatalog`，**1-based** 查表，见 `crate::items`）；
     /// 空目录 = 未加载/无配置。帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
     catalog: game_svr::ability::StdItemCatalog,
@@ -12416,6 +12431,7 @@ impl EnterConfig {
             string_conf,
             show_rank_level_name: false,
             server_index: 0,
+            guild_castle_cfg: mir2_data::guild_castle::GuildCastleConfig::default(),
             catalog: game_svr::ability::StdItemCatalog::new(),
             world_item_catalog: Vec::new(),
             magic_table: magics::MagicTable::new(Vec::new()),
@@ -14055,6 +14071,9 @@ fn sim_loop(
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = production_world(map_sizes, &mut enter_cfg.world_item_catalog);
+    // **G2**：行会管理器的生产配置（与 `Server.conf` 同源，简报 §8）与会表（G2 空表；G3 启动加载）。
+    let guild_cfg = mir2_world::GuildConfig::from_guild_castle(&enter_cfg.guild_castle_cfg);
+    let mut guilds = mir2_world::GuildManager::new();
     // **P3 收尾残余**：`MagTurnUndeadLevel` + `PKFlagTime`（`Server.conf [Setup]`）。
     world.set_mag_turn_undead_level(enter_cfg.mag_turn_undead_level);
     world.set_pk_flag_config(
@@ -14979,6 +14998,29 @@ fn sim_loop(
                             // **Lane B**：36 的 `AttPowerUp` 重算也跑 210/212 尾段。
                             Some(magic_cfg_of(&enter_cfg)),
                         );
+                    } else if guild_cmd::GUILD_IDENTS.contains(&cmd.ident) {
+                        // **G2**：9 条 `CM_GUILD*` 派发（oracle `PlayObject.Operate.cs:1229-1560`）。
+                        // 显式 9 条、**不是** `1035..=1045`（1042/1043 由 inbound 兜底）。
+                        let events = guild_cmd::handle_guild_cmd(
+                            cmd.ident,
+                            tail.as_deref(),
+                            &chr_name,
+                            socket,
+                            &online,
+                            &world,
+                            &displays,
+                            &mut guilds,
+                            &guild_cfg,
+                            &mut ground_sessions,
+                            &gates,
+                            enter_cfg.ref_msg_range,
+                            (enter_cfg.green_msg_f_color, enter_cfg.green_msg_b_color),
+                            (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
+                            now_ms(),
+                        );
+                        for ev in &events {
+                            glog!("INF", "行会跨服事件：{}", ev.describe());
+                        }
                     } else if handle_login_notice_ok_cmd(
                         &cmd,
                         &chr_name,
@@ -15638,6 +15680,16 @@ fn sim_loop(
                                                 for w in enter::apply(&mut inputs, &wx) {
                                                     glog!("WRN", "入图帧输入：{w}");
                                                 }
+                                                // **G2**：登录物化 `MyGuild`/`GuildRankNo`（`PlayObject.cs:1391-1400`）：
+                                                // 有会才 `GetRankName` ⇒ `RM_CHANGEGUILDNAME`（优先级 61）；
+                                                // 无会不发、队列不占堆位（简报 §0.4 / §3.1）。
+                                                let guild_session =
+                                                    guild_cmd::materialize(&guilds, &head.chr_name);
+                                                inputs.guild_changename =
+                                                    guild_frames::login_changename_750(
+                                                        guild_session.guild_name.as_deref(),
+                                                        &guild_session.rank_name,
+                                                    );
                                                 // 地面交互会话态（`CM_PICKUP`/`CM_DROPITEM`，owner §26）：进世界时
                                                 // 从同一份 `CharacterData` + `recalc_for_session`（**与帧 52/752
                                                 // 同一实现**）建立；`sys_msg` = `String.conf` 的 `CanotPickUpItem`
@@ -15777,6 +15829,7 @@ fn sim_loop(
                                                             auto_get_exp_envir: None,
                                                             auto_get_exp_envir_map_id: None,
                                                             auto_get_exp_in_safe_zone: false,
+                                                            guild: guild_session.clone(),
                                                         },
                                                     );
                                                     // 存档用：留下原始记录 + 进图逻辑名（断线/`MakeGhost` 时用它合成）。
@@ -19346,6 +19399,7 @@ mod tests {
             auto_get_exp_envir: None,
             auto_get_exp_envir_map_id: None,
             auto_get_exp_in_safe_zone: false,
+            guild: guild_cmd::GuildSession::default(),
         }
     }
 
@@ -19549,6 +19603,7 @@ mod tests {
             auto_get_exp_envir: None,
             auto_get_exp_envir_map_id: None,
             auto_get_exp_in_safe_zone: false,
+            guild: guild_cmd::GuildSession::default(),
         };
         let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
@@ -21733,6 +21788,7 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                guild: guild_cmd::GuildSession::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -21934,6 +21990,7 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                guild: guild_cmd::GuildSession::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -22108,6 +22165,7 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                guild: guild_cmd::GuildSession::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -22262,6 +22320,7 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                guild: guild_cmd::GuildSession::default(),
             },
         );
 
@@ -23099,6 +23158,7 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                guild: guild_cmd::GuildSession::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -23272,6 +23332,7 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                guild: guild_cmd::GuildSession::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -24236,6 +24297,7 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                guild: guild_cmd::GuildSession::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -28209,6 +28271,7 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                guild: guild_cmd::GuildSession::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -28385,6 +28448,7 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                guild: guild_cmd::GuildSession::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -28527,6 +28591,7 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                guild: guild_cmd::GuildSession::default(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();

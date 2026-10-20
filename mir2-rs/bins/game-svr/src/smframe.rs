@@ -1299,6 +1299,14 @@ pub struct EnterWorldInputs {
     /// 来自 `RM_LOGON` 里排队的 `SendMsg(RM_CHANGELIGHT, 0,0,0,0)`（`Message.cs:1682`）。
     /// `None` ⇒ 跳过并登记（等待世界时钟/AOI 侧的 654 另有通路）。
     pub changelight: Option<(u8, i32)>,
+    /// **G2b**：`SM_CHANGEGUILDNAME(750)` 的**已编码帧**（`guild_frames::login_changename_750` 产出）。
+    ///
+    /// oracle `PlayObject.cs:1391-1398`：`MyGuild = MemberOfGuild(ChrName)`；仅当 `MyGuild != null`
+    /// 才 `GetRankName` ⇒ `playObject.SendMsg(playObject, RM_CHANGEGUILDNAME, ...)`（优先级
+    /// `(byte)RM_CHANGEGUILDNAME = 61`）。**无会 ⇒ `None`，队列不占堆位**（简报 §0.4 / §3.1）。
+    ///
+    /// 属 `game_svr` lib ⇒ 只收已编码字节，不依赖 bin 侧的 `guild_frames` 模块。
+    pub guild_changename: Option<Vec<u8>>,
 }
 
 /// 登录消息泵里的排队条目（`BaseObject.Initialize` + `PlayObject.UserLogon` 的全部
@@ -1350,6 +1358,13 @@ enum LoginQueued {
     SendUseItems,
     /// `RM_SENDMYMAGIC(211)`：`SendPriorityMsg(..., High)` ⇒ 0。
     SendMyMagic,
+    /// **G2b**：`RM_CHANGEGUILDNAME(10301)`（`PlayObject.cs:1397` 的 `GetRankName` 内
+    /// `SendMsg(playObject, RM_CHANGEGUILDNAME, ...)`）⇒ 优先级 `(byte)10301 = 61`。
+    ///
+    /// 入队位置：六条 `SendPriorityMsg`（52/752/811/46/621/211）之后、`RM_USERNAME` 之前
+    /// （oracle `PlayObject.cs:1385-1390` → `:1391-1398` → `RefShowName`）。**仅 `MyGuild != null`
+    /// 时入队**（无会不占堆位）；出队时直接产出 [`EnterWorldInputs::guild_changename`] 的字节。
+    ChangeGuildName,
     /// `RM_USERNAME(8101)`：`RefShowName()→SendRefMsg`，优先级 165；只占堆位。
     Username,
     /// `RM_CHANGELIGHT(654)`：`SendMsg` ⇒ 优先级 `(byte)RM_CHANGELIGHT = 153`。
@@ -1366,6 +1381,11 @@ const PRIORITY_RM_TURN: u8 = (messages::RM_TURN & 0xFF) as u8;
 const PRIORITY_RM_CHARSTATUSCHANGED: u8 = (messages::RM_CHARSTATUSCHANGED & 0xFF) as u8;
 /// `(byte)RM_USERNAME` = 165。
 const PRIORITY_RM_USERNAME: u8 = (messages::RM_USERNAME & 0xFF) as u8;
+/// **G2b**：`(byte)RM_CHANGEGUILDNAME` = 61（`GuildInfo.cs:499` 的 `SendMsg` 入队优先级）。
+///
+/// 牙口径（评审员更正 2）：把它改成 **0**（750 跑到 46 前）或 **>=154**（750 跑到 654 后）
+/// 才改变出队序；改成 1 或 152 **不会**改变出队序，故不能当牙。
+const PRIORITY_RM_CHANGEGUILDNAME: u8 = (messages::RM_CHANGEGUILDNAME & 0xFF) as u8;
 
 impl EnterWorldInputs {
     /// 按 oracle 的登录消息队列（.NET 8 `PriorityQueue<SendMessage, byte>`，**四叉最小堆**）
@@ -1450,6 +1470,13 @@ impl EnterWorldInputs {
         queue.enqueue(LoginQueued::DayChanging, PRIORITY_NORMAL); // 46
         queue.enqueue(LoginQueued::SendUseItems, PRIORITY_HIGH); // 621
         queue.enqueue(LoginQueued::SendMyMagic, PRIORITY_HIGH); // 211
+
+        // ⑤b **G2b**：`MyGuild != null` 才 `GetRankName` → `SendMsg(RM_CHANGEGUILDNAME)`
+        //    （`PlayObject.cs:1391-1398`；`GuildInfo.cs:485-509`）。无会 ⇒ **不入队**
+        //    （不占堆位；oracle 的 `GetRankName` 根本没被调用）。
+        if self.guild_changename.is_some() {
+            queue.enqueue(LoginQueued::ChangeGuildName, PRIORITY_RM_CHANGEGUILDNAME);
+        }
 
         // ⑥ RefShowName()→SendRefMsg(RM_USERNAME)：自己也在可见人类列表里（只占堆位）。
         queue.enqueue(LoginQueued::Username, PRIORITY_RM_USERNAME);
@@ -1576,6 +1603,13 @@ impl EnterWorldInputs {
                             light,
                             client_key,
                         ));
+                    }
+                }
+                LoginQueued::ChangeGuildName => {
+                    // `RM_CHANGEGUILDNAME` 出队处理 = `SendChangeGuildName`（`PlayObject.Base.cs:1625-1635`）；
+                    // 字节已由 `guild_frames::sm_guild_changename_750` 编码好（有会恒带尾）。
+                    if let Some(body) = &self.guild_changename {
+                        out.push(body.clone());
                     }
                 }
                 // 以下四条只占堆位：
@@ -2358,6 +2392,8 @@ mod tests {
                 u8::try_from(u16at(&h2, 10) >> 8).unwrap(),
                 crate::sessionwire::N_CLIENT_KEY_DEFAULT,
             )),
+            // 金标准会话无行会：登录不发 750、队列不占堆位。
+            guild_changename: None,
         }
     }
 
@@ -2522,6 +2558,7 @@ mod tests {
             use_items_tail: Some(b"0/abc/".to_vec()),
             magic: Some((1, b"magic/".to_vec())),
             changelight: Some((4, 500)),
+            guild_changename: None,
         };
         let got: Vec<u16> = inputs
             .frames()
@@ -2570,6 +2607,7 @@ mod tests {
             use_items_tail: use_items.then(|| b"0/abc/".to_vec()),
             magic: magic.then(|| (1_u16, b"magic/".to_vec())),
             changelight: Some((4, 500)),
+            guild_changename: None,
         }
     }
 
@@ -2621,6 +2659,81 @@ mod tests {
             ],
             "有武器有技能：621/211 都出帧 ⇒ 52,752,621,211,811,46,654"
         );
+    }
+
+    /// **G2b / T9**：有会登录的 750 必须落在 **46 之后、654 之前**，尾逐字节 = `EncodeString("会名/封号")`。
+    ///
+    /// 同时钉住评审员更正 2 的堆形：在正确入队位（六条之后、Username 之前）插入 p=61 的 750 会把
+    /// `811/46` 的相对序**翻成 46 先于 811**（oracle 同一四叉堆的必然结果，不是本项目改序）。
+    #[test]
+    fn guild_login_750_between_46_and_654() {
+        fn guild_750(name: &str, rank: &str) -> Vec<u8> {
+            let header = command_header(0, messages::SM_CHANGEGUILDNAME, 0, 0, 0);
+            gm_data_body(
+                header,
+                &edcode::encode(&crate::downlink::gbk(&format!("{name}/{rank}"))),
+            )
+        }
+        let mut inputs = login_scenario_inputs(true, true);
+        inputs.guild_changename = Some(guild_750("测试会", "行会成员"));
+        let frames = inputs.frames();
+        let ids: Vec<u16> = frames
+            .iter()
+            .map(|b| u16::from_le_bytes([b[4], b[5]]))
+            .collect();
+        let pos = |id: u16| {
+            ids.iter()
+                .position(|x| *x == id)
+                .unwrap_or_else(|| panic!("缺帧 {id}: {ids:?}"))
+        };
+        assert!(
+            pos(messages::SM_DAYCHANGING) < pos(messages::SM_CHANGEGUILDNAME),
+            "750 必须在 46 之后: {ids:?}"
+        );
+        assert!(
+            pos(messages::SM_CHANGEGUILDNAME) < pos(messages::SM_CHANGELIGHT),
+            "750 必须在 654 之前: {ids:?}"
+        );
+        assert!(
+            pos(messages::SM_ADJUST_BONUS) > pos(messages::SM_DAYCHANGING),
+            "插入 750 后 811/46 翻转为 46 先于 811（oracle 堆形）: {ids:?}"
+        );
+        let wire = &frames[pos(messages::SM_CHANGEGUILDNAME)];
+        assert_eq!(
+            &wire[12..],
+            &edcode::encode(&crate::downlink::gbk("测试会/行会成员"))[..],
+            "750 尾 = EncodeString(会名/封号)"
+        );
+        // 评审员更正 2 的齿：优先级常量必须是 61；改成 0（到 46 前）或 >=154（到 654 后）
+        // 上面两条顺序断言必红；改成 1 / 152 不改变出队序，故不是牙。
+        assert_eq!(PRIORITY_RM_CHANGEGUILDNAME, 61);
+    }
+
+    /// **G2b / T9 回归**：无会（`None`）时**不占堆位、不产 750**，整串帧与改动前逐字节相等
+    /// （与 `login_scenario_weapon_with_magic_matches_oracle_ident_sequence` 的期望同源）。
+    #[test]
+    fn guild_login_without_guild_keeps_frame_stream_byte_identical() {
+        let inputs = login_scenario_inputs(true, true);
+        assert!(inputs.guild_changename.is_none());
+        let frames = inputs.frames();
+        let ids: Vec<u16> = frames
+            .iter()
+            .map(|b| u16::from_le_bytes([b[4], b[5]]))
+            .collect();
+        assert!(
+            !ids.contains(&messages::SM_CHANGEGUILDNAME),
+            "无会不得发 750"
+        );
+        assert_eq!(
+            ids,
+            vec![
+                658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 621, 211, 811, 46,
+                654
+            ],
+            "无会路径的帧序必须一字不改"
+        );
+        // 金标准里 654 之前的帧序也未被 750 模型影响。
+        assert_eq!(ids.len(), 18);
     }
 
     /// `SM_ATTACKMODE` 的模式在 **`Recog`**（oracle `Messages.cs:846-857` 的参序）；

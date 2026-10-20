@@ -140,6 +140,29 @@ impl Default for GuildConfig {
     }
 }
 
+impl GuildConfig {
+    /// 从同一份 `Server.conf` 的 [`mir2_data::guild_castle::GuildCastleConfig`] 映射生产配置
+    /// （简报 §8）。
+    ///
+    /// - `guild_war_time` / `guild_member_max_limit` / `guild_rank_name_len` / `guild_name_len`
+    ///   / `guild_chief` / `guild_member_rank` 取同源字段；
+    /// - `guild_msg_f_color` / `guild_msg_b_color` / `guild_recall_time` 本仓配置层**尚未解析**
+    ///   （`GateConfig` 与 `GuildCastleConfig` 都没有这三键）⇒ 沿用 `GameSvrConf` 初值
+    ///   `0xDB` / `0xFF` / `180`（登记，G3 若要判 `SM_GUILDMESSAGE(104)` 必须补 `[Setup]` 三键）。
+    #[must_use]
+    pub fn from_guild_castle(cfg: &mir2_data::guild_castle::GuildCastleConfig) -> Self {
+        Self {
+            guild_war_time: cfg.guild_war_time,
+            guild_member_max_limit: cfg.guild_member_max_limit,
+            guild_rank_name_len: cfg.guild_rank_name_len,
+            guild_name_len: cfg.guild_name_len,
+            guild_chief: cfg.guild_chief.clone(),
+            guild_member_rank: cfg.guild_member_rank.clone(),
+            ..Self::default()
+        }
+    }
+}
+
 /// `SystemModule.Data.GuildRank`（`GuildInfo.cs:5-10`）。`members` 只留成员名，
 /// oracle 的 `IPlayerActor` 引用由宿主按名解析（第②片）。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -859,6 +882,89 @@ pub fn check_guild_name(name: &str, guild_name_len: u8) -> bool {
         }
     }
     result
+}
+
+/// `PlayObject.Operate.cs:1283-1306` 之外的另一条文本构造：`ClientOpenGuildDlg` 的面板
+/// （`PlayObject.Operate.cs:1229-1277`，`SM_OPENGUILDDLG(753)` 的尾）。
+///
+/// 逐行：
+/// ```text
+/// sSendStr = GuildName + '\r' + ' ' + '\r';
+/// sSendStr += (GuildRankNo == 1) ? "1\r" : "0\r";
+/// sSendStr += "<Notice>\r";   foreach (notice, len > 5000 break) sSendStr += notice + '\r';
+/// sSendStr += "<KillGuilds>\r"; foreach (war, len > 5000 break) sSendStr += war + '\r';
+/// sSendStr += "<AllyGuilds>\r"; foreach (ally, len > 5000 break) sSendStr += ally + '\r';
+/// ```
+///
+/// - 第二行是**一个空格**（`'\r' + ' ' + '\r'`），不是空行；
+/// - 战表项是 `WarGuild`（record struct）的**默认 `ToString()`**：`Guild` 字段是 `IGuild`
+///   引用，`GuildInfo` 未重写 `ToString` ⇒ 恒打印类型名 `M2Server.Guild.GuildInfo`；
+///   `WarTick` / `WarTime` 是当前值（`src/Modules/SystemModule/Data/WarGuild.cs`）；
+/// - `sSendStr.Length > 5000` 是 **UTF-16 码元**计数（与 [`GuildState::member_list_text`] 同口径）。
+#[must_use]
+pub fn open_dlg_text(guild: &GuildState, rank_no: i16) -> String {
+    let mut out = String::new();
+    out.push_str(&guild.name);
+    out.push('\r');
+    out.push(' ');
+    out.push('\r');
+    out.push(if rank_no == 1 { '1' } else { '0' });
+    out.push('\r');
+    out.push_str("<Notice>\r");
+    for notice in &guild.notices {
+        if out.encode_utf16().count() > 5000 {
+            break;
+        }
+        out.push_str(notice);
+        out.push('\r');
+    }
+    out.push_str("<KillGuilds>\r");
+    for war in &guild.wars {
+        if out.encode_utf16().count() > 5000 {
+            break;
+        }
+        out.push_str(&war_guild_panel_line(war));
+        out.push('\r');
+    }
+    out.push_str("<AllyGuilds>\r");
+    for ally in &guild.allies {
+        if out.encode_utf16().count() > 5000 {
+            break;
+        }
+        out.push_str(ally);
+        out.push('\r');
+    }
+    out
+}
+
+/// `WarGuild`（record struct）的默认 `ToString()`（``WarGuild { Guild = …, WarTick = …, WarTime = … }``）。
+///
+/// `GuildInfo` 未重写 `ToString` ⇒ `Guild` 分量是类型全名 `M2Server.Guild.GuildInfo`
+/// （`GuildInfo.cs` 无 `override string ToString` 实测）。
+fn war_guild_panel_line(war: &WarGuild) -> String {
+    format!(
+        "WarGuild {{ Guild = M2Server.Guild.GuildInfo, WarTick = {}, WarTime = {} }}",
+        war.war_tick, war.war_time
+    )
+}
+
+/// `PlayObject.Operate.cs:1426-1442` 的公告分段：
+/// `while (!string.IsNullOrEmpty(sNotict)) { sNotict = GetValidStr3(sNotict, ref s, '\r'); NoticeList.Add(s); }`
+///
+/// `GetValidStr3` 的 `Split(divider, 2, RemoveEmptyEntries)` 语义：
+/// - 每次取**第一段非空**子串（连续 `\r` 被跳过），余下部分进入下一轮；
+/// - 尾随 `\r` 不产生空段；
+/// - 空串 ⇒ `[]`；纯 `"\r"` ⇒ `[""]`（第一轮 dest 为空、余下为空，循环结束）。
+#[must_use]
+pub fn notices_from_text(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut remaining = text.to_string();
+    while !remaining.is_empty() {
+        let (dest, rest) = get_valid_str3(&remaining, &['\r']);
+        out.push(dest);
+        remaining = rest;
+    }
+    out
 }
 
 /// `GuildManager`（`GuildManager.cs`）—— 会表 + 加载/落盘/`Run`。落盘 IO 由 第②片 接 `GuildStore`。
@@ -1847,6 +1953,77 @@ mod tests {
         assert_eq!(ended[0].message, "***会B行会战争结束");
         assert!(mgr.guilds[0].wars.is_empty());
         assert!(mgr.guilds[0].bo_changed, "Run 到期 ⇒ UpdateGuildFile 置脏");
+    }
+
+    /// T6（简报 §4）：公告分段 = `GetValidStr3(..., '\r')` + `RemoveEmptyEntries` 语义。
+    /// 牙：换成朴素 `split('\r')` ⇒ `"a\r\rb"` 会多一个空段、`"\r"` 会得两个空段 ⇒ 红。
+    #[test]
+    fn notice_segments_follow_get_valid_str3_semantics() {
+        assert_eq!(notices_from_text("a\rb\r"), vec!["a", "b"]);
+        assert_eq!(notices_from_text("a\r\rb"), vec!["a", "b"]);
+        assert_eq!(notices_from_text("\r"), vec![""]);
+        assert_eq!(notices_from_text(""), Vec::<String>::new());
+        assert_eq!(notices_from_text("公告一"), vec!["公告一"]);
+        // 连续 3 个分隔符 + 尾随：仍只取非空段。
+        assert_eq!(notices_from_text("a\r\r\rb\r\r"), vec!["a", "b"]);
+    }
+
+    /// T2（简报 §4）：753 面板逐字节文本 = oracle `ClientOpenGuildDlg` 的拼接序。
+    /// 牙：`\r \r` 改成 `\r\r`；战表只打会名；rank 1/99 互换 ⇒ 红。
+    #[test]
+    fn open_dlg_text_matches_oracle_panel_layout() {
+        let mut g = guild_with_chief("测试会", "甲");
+        g.notices.push("公告一".into());
+        g.notices.push("公告二".into());
+        g.wars.push(WarGuild {
+            guild_name: "敌会".into(),
+            war_tick: 123,
+            war_time: 45,
+        });
+        let panel = open_dlg_text(&g, 1);
+        assert_eq!(
+            panel,
+            "测试会\r \r1\r<Notice>\r公告一\r公告二\r<KillGuilds>\rWarGuild { Guild = M2Server.Guild.GuildInfo, WarTick = 123, WarTime = 45 }\r<AllyGuilds>\r"
+        );
+        let panel99 = open_dlg_text(&g, 99);
+        assert!(panel99.starts_with("测试会\r \r0\r<Notice>\r"));
+        assert!(!panel99.contains("\r\r"), "第二行必须是一个空格");
+    }
+
+    /// T2（截断）：`sSendStr.Length > 5000` 是 UTF-16 码元门，超过后不再追加后续公告。
+    #[test]
+    fn open_dlg_text_stops_after_5000_utf16_units() {
+        let mut g = guild_with_chief("会", "甲");
+        g.notices.push("x".repeat(5_001));
+        g.notices.push("后续".into());
+        let panel = open_dlg_text(&g, 1);
+        assert!(!panel.contains("后续"), ">5000 后必须 break");
+        assert_eq!(panel.matches('x').count(), 5_001);
+    }
+
+    /// `GuildConfig::from_guild_castle`：同源映射 + 三键未解析 ⇒ 沿用 `GameSvrConf` 初值。
+    #[test]
+    fn guild_config_from_castle_config_maps_same_file() {
+        let c = mir2_data::guild_castle::GuildCastleConfig {
+            guild_war_time: 7_777,
+            guild_member_max_limit: 321,
+            guild_rank_name_len: 12,
+            guild_name_len: 9,
+            guild_chief: "会长".into(),
+            guild_member_rank: "会员".into(),
+            ..Default::default()
+        };
+        let cfg = GuildConfig::from_guild_castle(&c);
+        assert_eq!(cfg.guild_war_time, 7_777);
+        assert_eq!(cfg.guild_member_max_limit, 321);
+        assert_eq!(cfg.guild_rank_name_len, 12);
+        assert_eq!(cfg.guild_name_len, 9);
+        assert_eq!(cfg.guild_chief, "会长");
+        assert_eq!(cfg.guild_member_rank, "会员");
+        // 三键本仓配置层未解析（登记）⇒ 初值。
+        assert_eq!(cfg.guild_msg_f_color, GUILD_MSG_F_COLOR_DEFAULT);
+        assert_eq!(cfg.guild_msg_b_color, GUILD_MSG_B_COLOR_DEFAULT);
+        assert_eq!(cfg.guild_recall_time, GUILD_RECALL_TIME_DEFAULT);
     }
 
     #[test]
