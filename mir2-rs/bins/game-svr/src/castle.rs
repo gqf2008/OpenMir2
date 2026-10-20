@@ -274,7 +274,7 @@ pub fn area_state_with(flag: &MapInfoFlag, in_guild_war_area: bool) -> u16 {
 /// `GetChrColor` 的生产接线（名字色）：观察者 × 目标的只读快照 → 名字色字节。
 ///
 /// 行会关系只按**会名相等**判同会（`GetGuildRelation` 的 `1`）；盟友/宣战列表需要
-/// `GuildId` 映射（本仓生产路径尚未物化）⇒ 传 0/`false`（登记 T-124）。
+/// `GuildId` 映射（本仓生产路径尚未物化）⇒ 传 0/`false`（登记 T-130）。
 /// `GuildWarArea` 的按观察者副作用由返回值丢弃（调用方只取色）——查询用户名路径不需要它。
 ///
 /// # Errors

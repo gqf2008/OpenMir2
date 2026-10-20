@@ -92,6 +92,8 @@ SC = "src/Modules/SystemModule/Conf/ServerConf.cs"
 CCONST = "src/M2Server/Castle/CastleConst.cs"
 PM = "src/M2Server/Player/PlayObject.Message.cs"
 PO = "src/M2Server/Player/PlayObject.Operate.cs"
+PL = "src/M2Server/Player/PlayObject.cs"
+PB = "src/M2Server/Player/PlayObject.Base.cs"
 
 # (anchor_text_in_docs, cs_relpath, [(line, expected_substring), ...])
 #
@@ -362,6 +364,99 @@ ANCHORS = [
     ("CastleOfficial.cs:365-380", "src/GameSrv/Npc/CastleOfficial.cs", [(365, 'if (Castle.TotalGold >= SystemShare.Config.RepairDoorPrice)'), (379, 'PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);')]),
     ("CastleOfficial.cs:365", "src/GameSrv/Npc/CastleOfficial.cs", [(365, 'if (Castle.TotalGold >= SystemShare.Config.RepairDoorPrice)')]),
     ("UserCastle.cs:128-220", "src/M2Server/Castle/UserCastle.cs", [(128, 'if (CastleEnvir != null)'), (209, 'LogService.Warn("[错误信息] 城堡初始化守卫失败(检查怪物数据库里有没守卫怪物)");')]),
+    # ---- 车道 castlewar（2026-10-21）：攻城区语义 / 落点改写 / 766 / 名字色 ----
+    ("CastleConf.cs:18/40-44", CC, [
+        (18, 'userCastle.OwnGuild = ReadWriteString("Setup", "OwnGuild", "");'),
+        (40, 'userCastle.HomeMap = ReadWriteString("Defense", "CastleHomeMap", userCastle.HomeMap);'),
+        (41, 'userCastle.HomeX = ReadWriteInteger("Defense", "CastleHomeX", userCastle.HomeX);'),
+        (42, 'userCastle.HomeY = ReadWriteInteger("Defense", "CastleHomeY", userCastle.HomeY);'),
+        (43, 'userCastle.WarRangeX = ReadWriteInteger("Defense", "CastleWarRangeX", userCastle.WarRangeX);'),
+        (44, 'userCastle.WarRangeY = ReadWriteInteger("Defense", "CastleWarRangeY", userCastle.WarRangeY);')]),
+    ("CastleConf.cs:18", CC, [(18, 'userCastle.OwnGuild = ReadWriteString("Setup", "OwnGuild", "");')]),
+    ("CastleConf.cs:40", CC, [(40, 'userCastle.HomeMap = ReadWriteString("Defense", "CastleHomeMap", userCastle.HomeMap);')]),
+    ("GameApp.cs:213", "src/GameSrv/GameApp.cs", [(213, "SystemShare.CastleMgr.Initialize();")]),
+    ("GameApp.cs:245", "src/GameSrv/GameApp.cs", [(245, "SystemShare.GuildMgr.LoadGuildInfo();")]),
+    ("UserCastle.cs:115-127", "src/M2Server/Castle/UserCastle.cs", [
+        (115, "PalaceEnvir = SystemShare.MapMgr.FindMap(PalaceMap);"),
+        (121, "SecretEnvir = SystemShare.MapMgr.FindMap(SecretMap);"),
+        (127, "CastleEnvir = SystemShare.MapMgr.FindMap(MapName);")]),
+    ("UserCastle.cs:454-478", "src/M2Server/Castle/UserCastle.cs", [
+        (454, "public bool InCastleWarArea(IEnvirnoment envir, int nX, int nY)"),
+        (472, "if (string.Compare(EnvirList[i], envir.MapName, StringComparison.OrdinalIgnoreCase) == 0)")]),
+    ("UserCastle.cs:649-652", "src/M2Server/Castle/UserCastle.cs", [
+        (649, "public short GetHomeX()"),
+        (651, "return (short)(HomeX - 4 + M2Share.RandomNumber.Random(9));")]),
+    ("UserCastle.cs:654-657", "src/M2Server/Castle/UserCastle.cs", [
+        (654, "public short GetHomeY()"),
+        (656, "return (short)(HomeY - 4 + M2Share.RandomNumber.Random(9));")]),
+    ("UserCastle.cs:1045-1048", "src/M2Server/Castle/UserCastle.cs", [
+        (1045, "public bool IsAttackGuild(IGuild Guild)"),
+        (1047, "throw new NotImplementedException();")]),
+    ("WorldServer.cs:298-350", "src/GameSrv/Word/WorldServer.cs", [
+        (298, "playObject.MyGuild = SystemShare.GuildMgr.MemberOfGuild(playObject.ChrName);"),
+        (347, "Random(13) + SystemShare.Config.RedDieHomeY")]),
+    ("WorldServer.cs:299-318", "src/GameSrv/Word/WorldServer.cs", [
+        (299, "IUserCastle userCastle = SystemShare.CastleMgr.InCastleWarArea(envir, playObject.CurrX, playObject.CurrY);"),
+        (315, "playObject.CurrY = userCastle.GetHomeY();")]),
+    ("WorldServer.cs:298-318", "src/GameSrv/Word/WorldServer.cs", [
+        (298, "playObject.MyGuild = SystemShare.GuildMgr.MemberOfGuild(playObject.ChrName);"),
+        (313, "playObject.MapName = userCastle.GetMapName();")]),
+    ("WorldServer.cs:305-307", "src/GameSrv/Word/WorldServer.cs", [
+        (305, "playObject.MapName = playObject.HomeMap;"),
+        (307, "playObject.CurrY = (short)(playObject.HomeY - 2 + M2Share.RandomNumber.Random(5));")]),
+    ("WorldServer.cs:313-315", "src/GameSrv/Word/WorldServer.cs", [
+        (313, "playObject.MapName = userCastle.GetMapName();"),
+        (315, "playObject.CurrY = userCastle.GetHomeY();")]),
+    ("WorldServer.cs:324-350", "src/GameSrv/Word/WorldServer.cs", [
+        (324, "if (playObject.Abil.HP <= 0)"),
+        (345, "playObject.MapName = SystemShare.Config.RedDieHomeMap;")]),
+    ("WorldServer.cs:343-348", "src/GameSrv/Word/WorldServer.cs", [
+        (345, "playObject.MapName = SystemShare.Config.RedDieHomeMap;"),
+        (347, "Random(13) + SystemShare.Config.RedDieHomeY")]),
+    ("WorldServer.cs:345-347", "src/GameSrv/Word/WorldServer.cs", [
+        (345, "playObject.MapName = SystemShare.Config.RedDieHomeMap;"),
+        (347, "Random(13) + SystemShare.Config.RedDieHomeY")]),
+    ("GameSvrConf.cs:1380-1382", GC, [
+        (1380, 'RedDieHomeMap = "3";'),
+        (1381, "RedDieHomeX = 839;"),
+        (1382, "RedDieHomeY = 668;")]),
+    ("PlayObject.Base.cs:270-286", PB, [
+        (270, "private void RefUserState()"),
+        (281, "if (InGuildWarArea)"),
+        (283, "n8 = n8 | 4;")]),
+    ("PlayObject.cs:3585-3657", PL, [
+        (3585, "protected override byte GetChrColor(IActor baseObject)"),
+        (3638, "castle.IsAttackGuild(MyGuild)")]),
+    ("PlayObject.cs:905", PL, [(905, "InGuildWarArea = false;")]),
+    ("PlayObject.cs:914", PL, [(914, "DiscountForNightTick = HUtil32.GetTickCount();")]),
+    ("PlayObject.cs:4343-4350", PL, [
+        (4343, "public void ChangePkStatus(bool boWarFlag)"),
+        (4348, "NameColorChanged = true;")]),
+    ("PlayObject.Message.cs:286-350", PM, [
+        (286, "IUserCastle castle = SystemShare.CastleMgr.InCastleWarArea(this);"),
+        (348, "RefShowName();")]),
+    ("PlayObject.Message.cs:286-290", PM, [
+        (286, "IUserCastle castle = SystemShare.CastleMgr.InCastleWarArea(this);"),
+        (289, "ChangePkStatus(true);")]),
+    ("PlayObject.Message.cs:291-350", PM, [
+        (291, "if ((HUtil32.GetTickCount() - DiscountForNightTick) > 1000)"),
+        (348, "RefShowName();")]),
+    ("PlayObject.Message.cs:319-338", PM, [
+        (319, "if (castle != null && castle.UnderWar)"),
+        (325, "castle.IsAttackGuild(MyGuild)")]),
+    ("PlayObject.Base.cs:274", PB, [(275, "n8 = n8 | 1;")]),
+    ("PlayObject.Base.cs:279", PB, [(279, "n8 = n8 | 2;")]),
+    ("PlayObject.Base.cs:283", PB, [(283, "n8 = n8 | 4;")]),
+    ("GameSvrConf.cs:1731-1736", GC, [
+        (1731, "PKFlagNameColor = 0x2F;"),
+        (1736, "InFreePKAreaNameColor = 0xDD;")]),
+    ("CastleConf.cs:24-37", CC, [
+        (24, 'string sMapList = ReadWriteString("Defense", "CastleMapList", "");'),
+        (37, "}")]),
+    ("CastleConf.cs:41", CC, [(41, 'userCastle.HomeX = ReadWriteInteger("Defense", "CastleHomeX", userCastle.HomeX);')]),
+    ("CastleConf.cs:42", CC, [(42, 'userCastle.HomeY = ReadWriteInteger("Defense", "CastleHomeY", userCastle.HomeY);')]),
+    ("CastleConf.cs:43", CC, [(43, 'userCastle.WarRangeX = ReadWriteInteger("Defense", "CastleWarRangeX", userCastle.WarRangeX);')]),
+    ("CastleConf.cs:44", CC, [(44, 'userCastle.WarRangeY = ReadWriteInteger("Defense", "CastleWarRangeY", userCastle.WarRangeY);')]),
     # COUNT 76
 ]
 

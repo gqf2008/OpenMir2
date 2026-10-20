@@ -17423,7 +17423,7 @@ fn sim_loop(
                             }
                         }
                         // `Broadcast`/`ServerGroupMsg`/`SaveAttackSabukWall`/`RefreshShowName`/
-                        // `Ref*` 帧的宿主排水尚未接线（登记 T-121）；单服部署 `UnderWar=false`
+                        // `Ref*` 帧的宿主排水尚未接线（登记 T-127）；单服部署 `UnderWar=false`
                         // 时这些分支不可达。
                         other => glog!("DBG", "城堡状态机事件（未接线）：{other:?}"),
                     }
@@ -17548,7 +17548,7 @@ fn sim_loop(
                         }
                     }
                     // `RefShowName` 的逐观察者重发属 AOI 侧（`GetChrColor` 按观察者语义），
-                    // 本片只产事件，接线登记 T-122。
+                    // 本片只产事件，接线登记 T-128。
                     mir2_world::castle::CastleWarEvent::ShowName { .. } => {}
                 }
             }
