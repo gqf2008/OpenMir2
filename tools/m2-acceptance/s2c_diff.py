@@ -24,7 +24,15 @@ GoldenExport 流水线产出，schema 与金标准逐字段同口径）与 **M0 
 用法：
   python s2c_diff.py --rust <rust capture.jsonl> [--golden <golden capture.jsonl>] \
       [--port 7200] [--start-ident 658] [--upto-ident 46] [--whitelist whitelist.jsonl] \
-      [--out report.json] [--max-diffs 20]
+      [--out report.json] [--max-diffs 20] \
+      [--from-recog N] [--from-x N] [--from-y N] [--to-recog N]
+
+  `--from-recog/--from-x/--from-y` 只用于**选起始帧**（默认 `--start-ident 10` 的
+  `SM_TURN`：recog=ActorId、param=x、tag=y）；`--to-recog` 选截止帧（默认
+  `--upto-ident 41` 的 `SM_FEATURECHANGED`），缺省沿用起始帧的 recog。
+  这是 C3 GuardList 需要的「按 recog/坐标挑出卫士那一对」，**不改变**任何逐字节口径
+  （选帧之后仍按 ident 序列 + 字段 + 归一化后的 raw_hex 逐字节比）。
+  `--selftest` 不需要 capture，覆盖选帧过滤与 `norm_raw` 归一化。
 
 退出码：0 = 0 差异（或全部落在白名单）；1 = 有未登记差异（红）；2 = 前置未满足（文件缺失/序列为空）。
 """
@@ -90,19 +98,63 @@ def select(rows, port, direction):
     return out
 
 
-def trim(rows, start_ident, upto_ident):
-    """从 start_ident 的第一次出现起，到 upto_ident 的第一次出现（含）为止。"""
-    start = 0
-    if start_ident is not None:
-        start = next((i for i, r in enumerate(rows) if r.get("ident") == start_ident), None)
-        if start is None:
-            return None, "序列里找不到起始 ident=%s" % start_ident
-        rows = rows[start:]
+def _recog_eq(a, b):
+    """recog 是带符号 i32（线上 ActorId 恒正，但归一化后可能以 0 出现）。按 32 位无符号比。"""
+    return ((a or 0) & 0xFFFFFFFF) == ((b or 0) & 0xFFFFFFFF)
+
+
+def frame_matches(r, ident, recog=None, x=None, y=None):
+    """选帧谓词：ident 必须相等；recog/param/tag 仅在显式给出时参与。"""
+    if r.get("ident") != ident:
+        return False
+    if recog is not None and not _recog_eq(r.get("recog", 0), recog):
+        return False
+    if x is not None and r.get("param") != x:
+        return False
+    if y is not None and r.get("tag") != y:
+        return False
+    return True
+
+
+def trim(rows, start_ident, upto_ident, from_recog=None, from_x=None, from_y=None,
+         to_recog=None):
+    """从 start_ident 的第一次**匹配**起，到 upto_ident 的第一次**匹配**（含）为止。
+
+    过滤参数只用于选帧，不改变逐字节口径（C3：按 recog/坐标挑出特定 actor 的 10→41 对）：
+      from_recog/from_x/from_y = 起始帧（SM_TURN(10)）的 recog/x(param)/y(tag)；
+      to_recog = 截止帧（SM_FEATURECHANGED(41)）的 recog，缺省沿用起始帧的 recog
+      （若起始帧带了 x/y，则截止帧自动按**那个 actor** 匹配，避免配到旁人的 41）。
+    """
+    start = None
+    for i, r in enumerate(rows):
+        if frame_matches(r, start_ident, from_recog, from_x, from_y):
+            start = i
+            break
+    if start is None:
+        flt = []
+        if from_recog is not None:
+            flt.append("recog=%s" % from_recog)
+        if from_x is not None:
+            flt.append("x=%s" % from_x)
+        if from_y is not None:
+            flt.append("y=%s" % from_y)
+        return None, ("序列里找不到起始 ident=%s%s" %
+                      (start_ident, ("（过滤 %s）" % " ".join(flt)) if flt else ""))
+    start_recog = from_recog
+    if start_recog is None and (from_x is not None or from_y is not None):
+        start_recog = rows[start].get("recog", 0)
+    rows = rows[start:]
     end = len(rows)
     if upto_ident is not None:
-        j = next((i for i, r in enumerate(rows) if r.get("ident") == upto_ident), None)
+        tr = to_recog if to_recog is not None else start_recog
+        j = None
+        for i, r in enumerate(rows):
+            if frame_matches(r, upto_ident, tr):
+                j = i
+                break
         if j is None:
-            return None, "序列里找不到截止 ident=%s" % upto_ident
+            return None, ("序列里找不到截止 ident=%s%s" %
+                          (upto_ident, ("（recog=%s）" % tr) if tr is not None else ""))
         end = j + 1
     return rows[:end], None
 
@@ -151,18 +203,35 @@ def whitelisted(entries, ident, field):
 
 def main():
     ap = argparse.ArgumentParser(description="M2 验收③：Rust s2c 序列 vs M0 金标准")
-    ap.add_argument("--rust", required=True)
+    ap.add_argument("--rust", default="")
     ap.add_argument("--golden", default=DEFAULT_GOLDEN)
     ap.add_argument("--port", type=int, default=7200)
     ap.add_argument("--dir", default="s2c")
     ap.add_argument("--start-ident", type=int, default=658)
     # owner §22 裁定：入图序 = 658→46（15 条自帧）；10 SM_TURN 是 AOI 帧，不属入图序（单列判）。
     ap.add_argument("--upto-ident", type=int, default=46)
+    ap.add_argument("--from-recog", type=int, default=None,
+                    help="起始帧 recog（ActorId）过滤；用于 C3 按 actor 挑 10→41 对")
+    ap.add_argument("--from-x", type=int, default=None,
+                    help="起始帧 param（SM_TURN 的 x）过滤；与 --from-y 同给")
+    ap.add_argument("--from-y", type=int, default=None,
+                    help="起始帧 tag（SM_TURN 的 y）过滤；与 --from-x 同给")
+    ap.add_argument("--to-recog", type=int, default=None,
+                    help="截止帧 recog 过滤；缺省沿用起始帧 recog")
     ap.add_argument("--whitelist", default="")
     ap.add_argument("--out", default="")
     ap.add_argument("--max-diffs", type=int, default=20)
+    ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 
+    if args.selftest:
+        return selftest()
+    if not args.rust:
+        print("PREREQ_MISSING: 必须给 --rust <capture.jsonl>（或 --selftest）", file=sys.stderr)
+        return 2
+    if (args.from_x is None) != (args.from_y is None):
+        print("PREREQ_MISSING: --from-x/--from-y 必须成对给出（坐标过滤）", file=sys.stderr)
+        return 2
     for p in (args.rust, args.golden):
         if not os.path.exists(p):
             print("PREREQ_MISSING: 找不到 %s（先跑 export_s2c.ps1 / 确认金标准在库）" % p, file=sys.stderr)
@@ -173,11 +242,13 @@ def main():
     if not r_all:
         print("PREREQ_MISSING: Rust 侧 capture.jsonl 里没有 port=%d dir=%s 的帧" % (args.port, args.dir), file=sys.stderr)
         return 2
-    g, err = trim(g_all, args.start_ident, args.upto_ident)
+    g, err = trim(g_all, args.start_ident, args.upto_ident, args.from_recog,
+                  args.from_x, args.from_y, args.to_recog)
     if err:
         print("PREREQ_MISSING(golden): %s" % err, file=sys.stderr)
         return 2
-    r, err = trim(r_all, args.start_ident, args.upto_ident)
+    r, err = trim(r_all, args.start_ident, args.upto_ident, args.from_recog,
+                  args.from_x, args.from_y, args.to_recog)
     if err:
         print("RED(rust): %s" % err, file=sys.stderr)
         return 1
@@ -227,6 +298,8 @@ def main():
         "dir": args.dir,
         "start_ident": args.start_ident,
         "upto_ident": args.upto_ident,
+        "filters": {"from_recog": args.from_recog, "from_x": args.from_x,
+                    "from_y": args.from_y, "to_recog": args.to_recog},
         "normalization": NORMALIZATION,
         "golden_frames": len(g),
         "rust_frames": len(r),
@@ -243,6 +316,8 @@ def main():
             json.dump(report, f, ensure_ascii=False, indent=1)
 
     print("NORMALIZATION %s" % json.dumps(NORMALIZATION, ensure_ascii=False))
+    print("FILTERS from_recog=%s from_x=%s from_y=%s to_recog=%s" %
+          (args.from_recog, args.from_x, args.from_y, args.to_recog))
     print("GOLDEN idents(%d): %s" % (len(g_idents), g_idents))
     print("RUST   idents(%d): %s" % (len(r_idents), r_idents))
     for d in diffs:
@@ -257,6 +332,73 @@ def main():
         return 1
     print("GREEN: 同序列逐字节 diff = 0（归一化仅 %s）" % ",".join(NORMALIZATION))
     return 0
+
+
+def _st_frame(ident, recog=0, param=0, tag=0, seq=0, raw_hex=""):
+    return {"kind": "frame", "dir": "s2c", "port": 7200, "seq": seq, "ident": ident,
+            "recog": recog, "param": param, "tag": tag, "series": 0,
+            "body_len": 0, "body_sha256": "", "raw_hex": raw_hex}
+
+
+def selftest():
+    """选帧过滤的改坏必红自检：不依赖任何外部 capture。"""
+    ok = True
+
+    def expect(name, got, want):
+        nonlocal ok
+        good = got == want
+        ok = ok and good
+        print("%-52s %s (rc=%d, want %d)" % (name, "OK" if good else "FAIL", got, want))
+
+    def rc_of(rows, **kw):
+        sid = kw.pop("start_ident", 10)
+        uid = kw.pop("upto_ident", 41)
+        _out, err = trim(rows, sid, uid, **kw)
+        return 0 if err is None else 1
+
+    # 同屏先有别人（guard 在第二对）：不加过滤必须取第一对；按 recog/坐标必须取第二对。
+    rows = [
+        _st_frame(10, recog=0x11, param=100, tag=200, seq=0),
+        _st_frame(41, recog=0x11, seq=1),
+        _st_frame(10, recog=0x22, param=291, tag=666, seq=2),
+        _st_frame(41, recog=0x22, seq=3),
+    ]
+    first, err = trim(rows, 10, 41)
+    expect("无过滤：取第一对（旧行为不变）",
+           0 if err is None and first[0]["recog"] == 0x11 else 1, 0)
+    guard, err = trim(rows, 10, 41, from_recog=0x22)
+    expect("--from-recog 0x22：取卫士那一对",
+           0 if err is None and [f["ident"] for f in guard] == [10, 41]
+           and guard[0]["recog"] == 0x22 else 1, 0)
+    guard2, err = trim(rows, 10, 41, from_x=291, from_y=666)
+    expect("--from-x/--from-y：按坐标取卫士那一对",
+           0 if err is None and [f["ident"] for f in guard2] == [10, 41]
+           and guard2[0]["recog"] == 0x22 else 1, 0)
+    expect("--from-recog 与坐标不符 ⇒ 找不到（fail-closed）",
+           rc_of(rows, from_recog=0x22, from_x=100, from_y=200), 1)
+    expect("--from-recog 不存在 ⇒ 找不到（fail-closed）",
+           rc_of(rows, from_recog=0x99), 1)
+    # 截止帧必须配同一 actor：中间插了旁人的 41，也不能拿它当截止。
+    rows2 = [
+        _st_frame(10, recog=0x22, param=291, tag=666, seq=0),
+        _st_frame(41, recog=0x99, seq=1),
+        _st_frame(41, recog=0x22, seq=2),
+    ]
+    got, err = trim(rows2, 10, 41, from_recog=0x22)
+    expect("截止 41 按同一 recog 匹配（不吃旁人的 41）",
+           0 if err is None and [f["recog"] for f in got] == [0x22, 0x99, 0x22] else 1, 0)
+    # 负 recog 的 32 位比较（捕获里 i32 可能显示为负）。
+    rows3 = [_st_frame(10, recog=-1, param=1, tag=2, seq=0),
+             _st_frame(41, recog=-1, seq=1)]
+    expect("负 recog 按 32 位无符号匹配",
+           0 if trim(rows3, 10, 41, from_recog=0xFFFFFFFF)[1] is None else 1, 0)
+    # 过滤不改变逐字节口径：两条只差 recog 的帧，norm_raw 后必须相等。
+    f1 = ED.client_frame(10, b"\x01\x02\x03", recog=0x11, param=291, tag=666).hex()
+    f2 = ED.client_frame(10, b"\x01\x02\x03", recog=0x22, param=291, tag=666).hex()
+    expect("norm_raw 只归一化 recog（过滤参数不参与字节比较）",
+           0 if norm_raw(f1) == norm_raw(f2) and norm_raw(f1) != f1 else 1, 0)
+    print("SELFTEST %s" % ("GREEN" if ok else "RED"))
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
