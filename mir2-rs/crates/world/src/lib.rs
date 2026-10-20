@@ -132,8 +132,8 @@ pub use special_monster::{
     RM_MAGSTRUCK, RM_MAGSTRUCK_MINE, RM_SPELL, RM_STRUCK, RM_ZEN_BEE, ZEN_BEE_DELAY_MS,
 };
 pub use world::{
-    AutoGetExpState, Command, DigOutEvent, EntitySnapshot, ExtraAbilEventKind, ExtraAbilExpiry,
-    FireBurnEvent, FireWallOutcome, FloorItemView, PassThroughHit, PassThroughOutcome, RouteCheck,
-    RunStateExpiry, SpaceMoveCastOutcome, StepOutcome, TickRecord, UEnhancerOutcome, World,
-    TICK_INTERVAL_MS,
+    AutoGetExpState, BaseObjectMoveOutcome, Command, DigOutEvent, EntitySnapshot,
+    ExtraAbilEventKind, ExtraAbilExpiry, FireBurnEvent, FireWallOutcome, FloorItemView,
+    HomeMoveTarget, PassThroughHit, PassThroughOutcome, RouteCheck, RunStateExpiry,
+    SpaceMoveCastOutcome, StepOutcome, TickRecord, UEnhancerOutcome, World, TICK_INTERVAL_MS,
 };

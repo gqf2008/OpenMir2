@@ -543,6 +543,29 @@ impl Engine<'_, '_> {
             "ActionOfSetSendMsgFlag" => {
                 self.player.set_bo_send_msg_flag(true);
             }
+            "ActionOfAutoAddGameGold" => {
+                // `ExecutionProcessingSys.cs:2667-2688`：`nPoint`/`nTime` **硬编码 0**
+                // （`:2670-2671` 之后在全段内再未被赋值；只读 `sParam1`）⇒ `START` 的
+                // `if (nPoint > 0 && nTime > 0)` **恒假** ⇒ 落到 `ScriptActionError`
+                // （只 `LogService.Error`，无帧、不改 `Success`）。`STOP`（OrdinalIgnoreCase）
+                // 清 flag——初值就是 false 且无其它写入者 ⇒ 当前树里也是空操作。
+                // **禁止**解析 `sParam2/sParam3`：那会让 START 变成可达（设计件 §2.2/§2.4）。
+                if info.s_param1.eq_ignore_ascii_case("STOP") {
+                    self.player.set_bo_inc_game_gold(false);
+                } else {
+                    self.script_action_error("AutoAddGameGold", info);
+                }
+            }
+            "ActionOfAutoSubGameGold" => {
+                // `ExecutionProcessingSys.cs:2733-2754`：与 ADD 逐字同构（`START` 恒假、
+                // `STOP` 清 `BoDecGameGold`）。oracle 的 START 支把 `DecGameGoldTick` 写 0
+                // （`:2743`，**不是** now）——该支不可达，故不建模。
+                if info.s_param1.eq_ignore_ascii_case("STOP") {
+                    self.player.set_bo_dec_game_gold(false);
+                } else {
+                    self.script_action_error("AutoSubGameGold", info);
+                }
+            }
             "ActionOfAutoGetExp" => {
                 // C# `SETAUTOGETEXP 时间 点数 是否安全区 地图号`
                 let n_time = mir2_shared::hutil32::str_to_int(&info.s_param1, -1);

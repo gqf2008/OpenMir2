@@ -393,6 +393,12 @@ pub struct NpcPlayer<'r> {
     pub auto_get_exp_envir: Option<String>,
     /// `PlayObject.AutoGetExpInSafeZone`（`PlayObject.cs:808`；ctor false）。
     pub auto_get_exp_in_safe_zone: bool,
+    /// `PlayObject.BoIncGameGold`（`PlayObject.cs:772`；ctor false）：脚本 192
+    /// `AUTOADDGAMEGOLD` 的 STOP 写点（START 在当前 oracle 源码下不可达，见 `actions.rs`）。
+    /// 宿主 `SessionGround.p22` 是唯一真源：脚本跑前 seed、跑后写回。
+    pub bo_inc_game_gold: bool,
+    /// `PlayObject.BoDecGameGold`（`PlayObject.cs:767`；ctor false）：脚本 193 的 STOP 写点。
+    pub bo_dec_game_gold: bool,
 }
 
 impl NpcPlayer<'_> {
@@ -433,6 +439,9 @@ impl NpcPlayer<'_> {
             auto_get_exp_point: 0,
             auto_get_exp_envir: None,
             auto_get_exp_in_safe_zone: false,
+            // `PlayObject.cs:965/970` 的 ctor 初值。
+            bo_inc_game_gold: false,
+            bo_dec_game_gold: false,
         }
     }
 }
@@ -499,6 +508,12 @@ impl ScriptPlayer for NpcPlayer<'_> {
     fn set_power_rate(&mut self, rate: i32, time: i32) {
         self.power_rate = rate;
         self.power_rate_time = time;
+    }
+    fn set_bo_inc_game_gold(&mut self, v: bool) {
+        self.bo_inc_game_gold = v;
+    }
+    fn set_bo_dec_game_gold(&mut self, v: bool) {
+        self.bo_dec_game_gold = v;
     }
     fn set_auto_get_exp(
         &mut self,

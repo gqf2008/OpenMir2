@@ -27,6 +27,7 @@ mod clock;
 mod config;
 mod dbclient;
 mod enter;
+mod gamegold;
 mod goldsales;
 mod guild_frames;
 mod homemap;
@@ -1520,6 +1521,10 @@ fn run_party_goto_label(
             player.auto_get_exp_envir = sg.auto_get_exp_envir.clone();
             player.auto_get_exp_time = sg.auto_get_exp_time;
             player.auto_get_exp_point = sg.auto_get_exp_point;
+            // **PL-4 / P22**：脚本 192/193 的 `BoIncGameGold`/`BoDecGameGold`
+            // （START 在当前 oracle 源码下不可达，STOP 只写 false；仍接线避免假实现）。
+            player.bo_inc_game_gold = sg.p22.bo_inc_game_gold;
+            player.bo_dec_game_gold = sg.p22.bo_dec_game_gold;
         }
         if let Some(says) = host.goto_label("QFunction", &mut player, label, false) {
             says_len = says.len();
@@ -1543,6 +1548,9 @@ fn run_party_goto_label(
             sg.auto_get_exp_envir_map_id = None; // 名变了就重新解析
             sg.auto_get_exp_time = player.auto_get_exp_time;
             sg.auto_get_exp_point = player.auto_get_exp_point;
+            // **PL-4 / P22**：脚本写回（未命中动作时是 seed 的等值回写）。
+            sg.p22.bo_inc_game_gold = player.bo_inc_game_gold;
+            sg.p22.bo_dec_game_gold = player.bo_dec_game_gold;
         }
         if let Some(e) = world.entities.get_mut(actor) {
             e.kill_mon_exp_rate = player.kill_mon_exp_rate;
@@ -5363,6 +5371,10 @@ fn handle_move_cmd(
             ) {
                 if let Some(sg) = sessions.get_mut(chr_name) {
                     sg.auto_get_exp_tick = now_ms();
+                    // **PL-4 / P22**：同一 `EnterAnotherMap` 段还复位 `IncGameGoldTick`
+                    // （`PlayObject.cs:3794-3796`；`IncGamePointTick` 留给 P24）。
+                    // `SpaceMove`（含 P22 的 `MoveToHome`）**不走**这里 ⇒ 不复位。
+                    sg.p22.inc_game_gold_tick = sg.auto_get_exp_tick;
                 }
             }
             if route == mir2_world::RouteCheck::Switched {
@@ -5408,6 +5420,10 @@ fn handle_move_cmd(
             if outcome.rolled_back {
                 if let Some(sg) = sessions.get_mut(chr_name) {
                     sg.auto_get_exp_tick = now_ms();
+                    // **PL-4 / P22**：同一 `EnterAnotherMap` 段还复位 `IncGameGoldTick`
+                    // （`PlayObject.cs:3794-3796`；`IncGamePointTick` 留给 P24）。
+                    // `SpaceMove`（含 P22 的 `MoveToHome`）**不走**这里 ⇒ 不复位。
+                    sg.p22.inc_game_gold_tick = sg.auto_get_exp_tick;
                 }
             }
             if !outcome.moved {
@@ -5426,6 +5442,10 @@ fn handle_move_cmd(
                 // 前置门失败提前 `return`，永不复位。
                 if let Some(sg) = sessions.get_mut(chr_name) {
                     sg.auto_get_exp_tick = now_ms();
+                    // **PL-4 / P22**：同一 `EnterAnotherMap` 段还复位 `IncGameGoldTick`
+                    // （`PlayObject.cs:3794-3796`；`IncGamePointTick` 留给 P24）。
+                    // `SpaceMove`（含 P22 的 `MoveToHome`）**不走**这里 ⇒ 不复位。
+                    sg.p22.inc_game_gold_tick = sg.auto_get_exp_tick;
                 }
                 drain_map_change(world, online, gates, displays, registry);
             }
@@ -11996,6 +12016,10 @@ struct SessionGround {
     actor_id: i32,
     /// `BaseObject.GameGold`（`SM_GOLDCHANGED` 的 LoWord/HiWord）。
     game_gold: i32,
+    /// **PL-4 / P22**：`PlayObject.BoDecGameGold…IncGameGoldTick`（`PlayObject.cs:763-776`；
+    /// ctor `:964-973` ⇒ 生产用 [`gamegold::P22GameGold::new`]）。`GameGold` 本身在
+    /// [`Self::game_gold`]；本字段只放 auto 增减的 flag/点数/周期/tick。
+    p22: gamegold::P22GameGold,
     /// `PlayObject.SoftVersionDateEx`（= `LoadDBInfo.SoftVersionDate`）：
     /// `SendGoldInfo` 的 `== 0 ⇒ 不发` 门（`PlayObject.Base.cs:930`）——元宝寄售的
     /// `SM_GAMEGOLDNAME` 与登录帧 5008 走同一条门。
@@ -13360,6 +13384,161 @@ fn drain_player_auto_get_exp(
         if let Some(award) = award {
             record.exp_awards.push(award);
         }
+    }
+}
+
+/// **PL-4 / P22**：元宝/游戏点自动增减（`PlayObject.Message.cs:442-529`）。
+///
+/// 逐玩家（`names.sort()`，与 P21/P32 同构）四支按序，见 [`gamegold::P22GameGold`]。
+///
+/// `MoveToHome` 的帧/落地按 oracle：
+/// 1. `SendRefMsg(RM_SPACEMOVE_FIRE, …)`（`PlayObject.Base.cs:2308`）⇒ 旧位置 ±12（**含自己**）
+///    收 `SM_SPACEMOVE_HIDE(800)`；必须在移动**之前**（`broadcast_ref_msg_with_self`）。
+/// 2. `BaseObjectMove(HomeMap, HomeX, HomeY)`（`:2309/2312-2327`）⇒
+///    [`mir2_world::World::base_object_move_player`]；`FindMap` 为空 ⇒ **0 抽不动**。
+/// 3. 换图簇 633/634/801 由后续 [`drain_map_change`] 发（同 tick 天然排在 653 之后，与 oracle
+///    `MsgQueue` 按 `(byte)wIdent` 出队的相对序一致：800 → 653 → 633 → 634 → 801）。
+///
+/// 出帧：仅 `tObjCount != GameGold` 时一条 `SM_GOLDCHANGED(653)`（`Recog = state.gold`、
+/// `Param/Tag = GameGold` 两半；`game_svr::smframe::sm_goldchanged`）。oracle 的
+/// `SendUpdateMsg` 入队后**下一 Run** 才出队；宿主按 P21 `WeightChanged` 既有口径**同 tick
+/// 直发**并登记 **1-tick 相位差**。
+///
+/// `flag` 取**当前图**的 `Envir.Flag`；无 registry（S1 占位）⇒ `None`（地图支不动，登记）。
+/// 两次 `MoveToHome` 之间**重新取** `flag`（oracle 的移动立即改 `Envir`，见设计件 §1.2/§3.2）。
+#[allow(clippy::too_many_arguments)]
+fn drain_player_game_gold(
+    world: &mut mir2_world::World,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    registry: Option<&mir2_envir::MapRegistry>,
+    saves: &std::collections::HashMap<String, SavedHuman>,
+    now: i64,
+) {
+    let mut names: Vec<String> = sessions.keys().cloned().collect();
+    names.sort();
+    for name in names {
+        let Some(entry) = online.iter().find(|e| e.chr_name == name).cloned() else {
+            continue;
+        };
+        let Some(sg) = sessions.get_mut(&name) else {
+            continue;
+        };
+        let actor_id = sg.actor_id;
+        let Some(map_id) = world.entities.get(actor_id).map(|e| e.map_id) else {
+            continue;
+        };
+        let t_obj_count = sg.game_gold;
+
+        // ① 玩家级 DEC（余额不足 ⇒ MoveToHome；`Envir` 可能已变）。
+        let o = sg.p22.auto_tick_player_dec(sg.game_gold, now);
+        sg.game_gold = o.game_gold;
+        if o.move_to_home {
+            p22_move_to_home(world, online, gates, registry, saves, &name, actor_id);
+        }
+        // ② 玩家级 INC（与 `Envir` 无关）。
+        let o = sg.p22.auto_tick_player_inc(sg.game_gold, now);
+        sg.game_gold = o.game_gold;
+        // ③ 地图 DEC：flag 取 **① 之后**当前图的。
+        let flag = registry.and_then(|r| r.flag_of(p22_current_map(world, actor_id, map_id)));
+        let o = sg.p22.auto_tick_map_dec(sg.game_gold, flag, now);
+        sg.game_gold = o.game_gold;
+        if o.move_to_home {
+            p22_move_to_home(world, online, gates, registry, saves, &name, actor_id);
+        }
+        // ④ 地图 INC：flag 取 **③ 之后**当前图的（oracle 的行序 505 在 482 的移动之后）。
+        let flag = registry.and_then(|r| r.flag_of(p22_current_map(world, actor_id, map_id)));
+        let o = sg.p22.auto_tick_map_inc(sg.game_gold, flag, now);
+        sg.game_gold = o.game_gold;
+
+        // 526-529：`if (tObjCount != GameGold) SendUpdateMsg(RM_GOLDCHANGED)`。
+        if t_obj_count != sg.game_gold {
+            let body = game_svr::smframe::sm_goldchanged(sg.state.gold, sg.game_gold);
+            if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "P22 元宝变更")
+            {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: entry.socket,
+                    body,
+                });
+            }
+        }
+    }
+}
+
+/// P22 的「当前图」：优先读实体（`MoveToHome` 后已变）；实体缺失时退回调用前的快照。
+fn p22_current_map(world: &mir2_world::World, actor_id: i32, fallback: usize) -> usize {
+    world.entities.get(actor_id).map_or(fallback, |e| e.map_id)
+}
+
+/// `PlayObject.MoveToHome`（`PlayObject.Base.cs:2306-2310`）的宿主侧：先广播 800，再落地。
+///
+/// `SendRefMsg(RM_SPACEMOVE_FIRE)` 的收件人 = **旧**位置 ±12 内全部 `Race==Play` 玩家
+/// （`BaseObject.Message.cs:383-449`，**含自己**）⇒ `broadcast_ref_msg_with_self`，且必须在
+/// 移动之前调用（否则旧图观察者漏收）。
+#[allow(clippy::too_many_arguments)]
+fn p22_move_to_home(
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    registry: Option<&mir2_envir::MapRegistry>,
+    saves: &std::collections::HashMap<String, SavedHuman>,
+    chr_name: &str,
+    actor_id: i32,
+) {
+    // `2308 SendRefMsg(RM_SPACEMOVE_FIRE, 0,0,0,0,"")` ⇒ 每接收端 `SM_SPACEMOVE_HIDE(800)`。
+    let hide =
+        game_svr::smframe::sm_spacemove_hide(mir2_protocol::messages::SM_SPACEMOVE_HIDE, actor_id);
+    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[hide]);
+
+    // `2309 BaseObjectMove(HomeMap, HomeX, HomeY)`：数据源是存档记录（`WorldServer.cs` 登录时
+    // 从 `humData` 拷；Rust 同源 `saves[chr].record.data.home_map/home_x/home_y`）。
+    let Some(saved) = saves.get(chr_name) else {
+        glog!(
+            "WRN",
+            "P22 MoveToHome：ChrName={chr_name} 无存档记录 ⇒ 无法取 HomeMap/HomeX/HomeY（登记；800 已照发）"
+        );
+        return;
+    };
+    // `2314 if (string.IsNullOrEmpty(sMap)) sMap = MapName;`
+    let current_name = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| registry.and_then(|r| r.name_of(e.map_id)))
+        .unwrap_or("");
+    let home = homemap::resolve_move_home(
+        saved.record.data.home_map.as_deref().unwrap_or(""),
+        current_name,
+        saved.record.data.home_x,
+        saved.record.data.home_y,
+    );
+    // `SpaceMove`/`MapRandomMove` 的首行：`FindMap(sMap) == null` ⇒ 0 抽不动。
+    let target = registry
+        .and_then(|r| r.id_of(&home.map_name))
+        .map(|map_id| {
+            if home.fixed {
+                mir2_world::HomeMoveTarget::Fixed {
+                    map_id,
+                    x: i32::from(home.x),
+                    y: i32::from(home.y),
+                }
+            } else {
+                mir2_world::HomeMoveTarget::Random { map_id }
+            }
+        });
+    if target.is_none() {
+        glog!(
+            "DBG",
+            "P22 MoveToHome：FindMap({}) 为空 ⇒ 0 抽不移动 ChrName={chr_name}",
+            home.map_name
+        );
+    }
+    let out = world.base_object_move_player(chr_name, actor_id, target);
+    if out.map_found && !out.moved {
+        glog!(
+            "DBG",
+            "P22 MoveToHome：201 轮仍不可走 ⇒ 回滚旧图/旧格 ChrName={chr_name}"
+        );
     }
 }
 
@@ -15488,6 +15667,7 @@ fn sim_loop(
                                                             ),
                                                             actor_id: id,
                                                             game_gold: d.game_gold,
+                                                            p22: gamegold::P22GameGold::new(now_ms()),
                                                             // `PlayObject.SoftVersionDateEx`（= `LoadDBInfo.SoftVersionDate`）：
                                                             // `SendGoldInfo` 的 `== 0 ⇒ 不发` 门（`PlayObject.Base.cs:930`）。
                                                             soft_version_date,
@@ -15736,6 +15916,12 @@ fn sim_loop(
                                                                         sg.auto_get_exp_time;
                                                                     player.auto_get_exp_point =
                                                                         sg.auto_get_exp_point;
+                                                                    // **PL-4 / P22**：脚本 192/193
+                                                                    // 的 `BoIncGameGold`/`BoDecGameGold`。
+                                                                    player.bo_inc_game_gold =
+                                                                        sg.p22.bo_inc_game_gold;
+                                                                    player.bo_dec_game_gold =
+                                                                        sg.p22.bo_dec_game_gold;
                                                                 }
                                                                 if let Some(says) =
                                                                     host.run_login(&mut player)
@@ -15786,6 +15972,11 @@ fn sim_loop(
                                                                         player.auto_get_exp_time;
                                                                     sg.auto_get_exp_point =
                                                                         player.auto_get_exp_point;
+                                                                    // **PL-4 / P22**：脚本写回。
+                                                                    sg.p22.bo_inc_game_gold =
+                                                                        player.bo_inc_game_gold;
+                                                                    sg.p22.bo_dec_game_gold =
+                                                                        player.bo_dec_game_gold;
                                                                 }
                                                                 if let Some(e) = world.entities.get_mut(id) {
                                                                     e.kill_mon_exp_rate =
@@ -16014,9 +16205,21 @@ fn sim_loop(
         // 之后、P32（P5）之前。三段的 53 / `SM_MYSTATUS` / `SysMsg` 与 P32 同属 **G-B 组**
         // （P4∪P5），只入队，P32 之后统一 flush。
         let mut run_frames = game_svr::run_frames::RunFrames::new();
-        // oracle 一次 `Run()` 只取一次 `GetTickCount()`；本宿主同样在段首取一次，三段与 P32 共用，
-        // 避免同一 tick 内多次墙钟读取造成门比较抖动。
+        // oracle 一次 `Run()` 只取一次 `GetTickCount()`；本宿主同样在段首取一次，P22 与 PL-3
+        // 三段/P32 共用，避免同一 tick 内多次墙钟读取造成门比较抖动。
         let host_now = now_ms();
+        // **PL-4 / P22**：`PlayObject.Message.cs:442-529`（P21 之后、P24/P25 之前）。
+        // 内容不可达 ⇒ 生产 0 抽数；一旦触发 `MoveToHome`，`merchant`/`space_move` 两组的
+        // 相对次序变为「玩家 Run 段末尾」（设计件 §4.4，属 R 窗口证据）。
+        drain_player_game_gold(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            &gates,
+            registry.as_ref(),
+            &saves,
+            host_now,
+        );
         drain_player_map_hp(
             &mut world,
             &mut ground_sessions,
@@ -19069,6 +19272,7 @@ mod tests {
             storage: storage::StorageState::new(),
             actor_id,
             game_gold: 0,
+            p22: gamegold::P22GameGold::default(),
             soft_version_date: 0,
             client_tick: 0,
             game_point: 0,
@@ -19267,6 +19471,7 @@ mod tests {
             storage: storage::StorageState::new(),
             actor_id: 1,
             game_gold: 77,
+            p22: gamegold::P22GameGold::default(),
             soft_version_date: 0,
             client_tick: 0,
             game_point: 0,
@@ -21454,6 +21659,7 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: p,
                 game_gold: 0,
+                p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
@@ -21645,6 +21851,7 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: 42,
                 game_gold: 0,
+                p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
@@ -21827,6 +22034,7 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: 42,
                 game_gold: 0,
+                p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
@@ -21980,6 +22188,7 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: hero,
                 game_gold: 0,
+                p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
@@ -22816,6 +23025,7 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: 7,
                 game_gold: 0,
+                p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
@@ -22988,6 +23198,7 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: hid,
                 game_gold: 0,
+                p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
@@ -23951,6 +24162,7 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: 7,
                 game_gold: 0,
+                p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
@@ -27923,6 +28135,7 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: hero,
                 game_gold: 0,
+                p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
@@ -28098,6 +28311,7 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: 42,
                 game_gold: 0,
+                p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
@@ -28239,6 +28453,7 @@ mod tests {
                 storage: storage::StorageState::new(),
                 actor_id: hero,
                 game_gold: 0,
+                p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
@@ -44456,5 +44671,309 @@ mod tests {",
             3,
             "生产复位点只允许是 EnterAnotherMap 的三处（CM_TURN 成功/回滚、CM_WALK 回滚、CM_WALK 成功）"
         );
+        // **PL-4 / P22**：同一三处还复位 `IncGameGoldTick`（`:3794-3796`），且**只**在这三处
+        // （`SpaceMove`/`MoveToHome` 不复位）。
+        assert_eq!(
+            prod.matches("sg.p22.inc_game_gold_tick = sg.auto_get_exp_tick;")
+                .count(),
+            3,
+            "P22 的 IncGameGoldTick 复位点只允许是 EnterAnotherMap 的三处"
+        );
+    }
+
+    // ───────────────────────── PL-4（P22 元宝/游戏点自动增减 + MoveToHome）─────────────────────────
+
+    /// 构造 P22 用例的存档记录（`HomeMap/HomeX/HomeY` 是 `MoveToHome` 的唯一数据源）。
+    fn p22_saved(home_map: &str, home_x: i16, home_y: i16) -> SavedHuman {
+        let mut rec = record::PlayerRecord::default();
+        rec.data.home_map = Some(home_map.to_string());
+        rec.data.home_x = home_x;
+        rec.data.home_y = home_y;
+        SavedHuman {
+            account: "a".into(),
+            record: rec,
+            enter_map: home_map.to_string(),
+        }
+    }
+
+    /// 判据 6（R）：`GameGold` 变化 ⇒ 恰一条 `SM_GOLDCHANGED(653)`，
+    /// `Recog = state.gold`、`Param/Tag = LoWord/HiWord(GameGold)`；无变化 pass ⇒ 0 条。
+    ///
+    /// 牙：把 `Recog` 写成 `game_gold` ⇒ recog 断言红；无条件发帧 ⇒ 第二次断言红。
+    #[test]
+    fn p22_drain_653_frame_content_and_single_emit() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let (registry, dir) = pl3_registry("INCGAMEGOLD(1/30)");
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("p22a");
+        let actor = world
+            .enter_map("p22a", new_player_entity("p22a".to_string(), 2, 2), 0)
+            .unwrap();
+        let mut sg = test_session_ground(actor);
+        sg.game_gold = 100;
+        sg.state.gold = 1234;
+        sg.p22.inc_game_gold_tick = 0;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("p22a".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p22a", 1, 0, 910, actor));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let saves: HashMap<String, SavedHuman> = HashMap::new();
+
+        drain_player_game_gold(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            Some(&registry),
+            &saves,
+            1001,
+        );
+        let body = match rx0.try_recv() {
+            Ok(SimToGate::SendFrame { body, socket }) => {
+                assert_eq!(socket, 910);
+                body
+            }
+            other => panic!("应收到 SM_GOLDCHANGED，实收 {other:?}"),
+        };
+        let cm = CommandMessage::from_bytes(&body).expect("12B 头");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_GOLDCHANGED);
+        assert_eq!(cm.recog, 1234, "Recog = state.gold（不是 GameGold）");
+        assert_eq!(cm.param, 130, "LoWord(GameGold)");
+        assert_eq!(cm.tag, 0, "HiWord(GameGold)");
+        assert_eq!(sessions["p22a"].game_gold, 130);
+        assert_eq!(sessions["p22a"].state.gold, 1234, "P22 不得改 Gold");
+        // 无变化的 pass ⇒ 不发票（1s 门未过，1002-1001 <= 1000）。
+        drain_player_game_gold(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            Some(&registry),
+            &saves,
+            1002,
+        );
+        assert!(rx0.try_recv().is_err(), "无变化不得发 653");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// 判据 8 + 12（R）：`MoveToHome` 在**旧位置**广播 `SM_SPACEMOVE_HIDE(800)`（含自己、
+    /// ±12 内两个观察者），随后才移动；本机 socket 顺序 = 800 → 653 → 633 → 634 → 801；
+    /// `SpaceMove`（含 MoveToHome）**不复位** `IncGameGoldTick`。
+    #[test]
+    fn p22_move_to_home_broadcast_order_and_tick_phase() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let (registry, dir) = pl3_registry("");
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("p22h");
+        let actor = world
+            .enter_map("p22h", new_player_entity("p22h".to_string(), 2, 2), 0)
+            .unwrap();
+        // 两个观察者（±12 内，旧坐标）。
+        let mut o1 = mir2_world::Entity::new(0, "obs1".to_string(), 3, 2);
+        o1.race = mir2_world::ACTOR_RACE_PLAY;
+        let obs1 = world.add_entity(o1);
+        let mut o2 = mir2_world::Entity::new(0, "obs2".to_string(), 4, 2);
+        o2.race = mir2_world::ACTOR_RACE_PLAY;
+        let obs2 = world.add_entity(o2);
+
+        let mut sg = test_session_ground(actor);
+        sg.game_gold = 10;
+        sg.state.gold = 77;
+        // ① 玩家级 DEC：不足 ⇒ 0 + 清 flag + MoveToHome。
+        sg.p22.bo_dec_game_gold = true;
+        sg.p22.dec_game_gold = 30;
+        sg.p22.dec_game_gold_time = 1000;
+        sg.p22.dec_game_gold_tick = 0;
+        // `IncGameGoldTick` 的相位哨兵：MoveToHome/SpaceMove 不得复位它。
+        sg.p22.inc_game_gold_tick = 5;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("p22h".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p22h", 1, 0, 911, actor));
+        online_set(&mut online, entry("b", "obs1", 1, 1, 912, obs1));
+        online_set(&mut online, entry("c", "obs2", 1, 2, 913, obs2));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx2, mut rx2) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+        gates.insert(2, tx2);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert("p22h".to_string(), p22_saved("A", 2, 2));
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            actor,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"p22h".to_vec()),
+        );
+
+        drain_player_game_gold(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            Some(&registry),
+            &saves,
+            1001,
+        );
+        let mut self_idents: Vec<u16> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, socket }) = rx0.try_recv() {
+            assert_eq!(socket, 911);
+            self_idents.push(CommandMessage::from_bytes(&body).expect("12B").ident);
+        }
+        assert_eq!(
+            self_idents,
+            vec![
+                mir2_protocol::messages::SM_SPACEMOVE_HIDE,
+                mir2_protocol::messages::SM_GOLDCHANGED
+            ],
+            "P22 段内：800 先于 653（800 在移动前发）"
+        );
+        // 观察者各收一条 800（653 只发给自己）。
+        for (rx, sock) in [(&mut rx1, 912), (&mut rx2, 913)] {
+            let Ok(SimToGate::SendFrame { body, socket }) = rx.try_recv() else {
+                panic!("观察者应收 800");
+            };
+            assert_eq!(socket, sock);
+            assert_eq!(
+                CommandMessage::from_bytes(&body).unwrap().ident,
+                mir2_protocol::messages::SM_SPACEMOVE_HIDE
+            );
+            assert!(rx.try_recv().is_err(), "观察者不得收 653");
+        }
+        // 落地：Home 坐标可走 ⇒ 0 抽，map/坐标不变（同图）。
+        assert_eq!(world.entities.get(actor).unwrap().map_id, 0);
+        // 换图簇由 drain_map_change 在 653 **之后**发。
+        drain_map_change(&mut world, &online, &gates, &displays, Some(&registry));
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            self_idents.push(CommandMessage::from_bytes(&body).expect("12B").ident);
+        }
+        assert_eq!(
+            self_idents,
+            vec![
+                mir2_protocol::messages::SM_SPACEMOVE_HIDE,
+                mir2_protocol::messages::SM_GOLDCHANGED,
+                mir2_protocol::messages::SM_CLEAROBJECTS,
+                mir2_protocol::messages::SM_CHANGEMAP,
+                mir2_protocol::messages::SM_SPACEMOVE_SHOW,
+            ],
+            "oracle 相对序：800 → 653 → 633 → 634 → 801"
+        );
+        // 相位：① 刷新 dec tick；`SpaceMove`/MoveToHome 不动 inc tick。
+        assert_eq!(sessions["p22h"].p22.dec_game_gold_tick, 1001);
+        assert_eq!(sessions["p22h"].p22.inc_game_gold_tick, 5);
+        assert!(!sessions["p22h"].p22.bo_dec_game_gold);
+        assert_eq!(sessions["p22h"].game_gold, 0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// 判据 9（R，宿主侧）：`FindMap(HomeMap)` 为空 ⇒ `MoveToHome` 的 800 **照发**，
+    /// 但 0 抽不动、无换图簇、无 653。
+    ///
+    /// 牙：提前 return 掉 800 ⇒ 第一条断言红。
+    #[test]
+    fn p22_move_to_home_find_map_missing_still_emits_800() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let (registry, dir) = pl3_registry("");
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("p22n");
+        let actor = world
+            .enter_map("p22n", new_player_entity("p22n".to_string(), 5, 5), 0)
+            .unwrap();
+        let mut sg = test_session_ground(actor);
+        sg.game_gold = 0; // 不足 ⇒ 0（不变）⇒ 无 653。
+        sg.p22.bo_dec_game_gold = true;
+        sg.p22.dec_game_gold = 30;
+        sg.p22.dec_game_gold_time = 1000;
+        sg.p22.dec_game_gold_tick = 0;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("p22n".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p22n", 1, 0, 914, actor));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert("p22n".to_string(), p22_saved("NOPE", 2, 2));
+        drain_player_game_gold(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            Some(&registry),
+            &saves,
+            1001,
+        );
+        let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() else {
+            panic!("FindMap 为空也必须先发 800（oracle MoveToHome 在 BaseObjectMove 之前）");
+        };
+        assert_eq!(
+            CommandMessage::from_bytes(&body).unwrap().ident,
+            mir2_protocol::messages::SM_SPACEMOVE_HIDE
+        );
+        assert!(rx0.try_recv().is_err(), "0 抽不动且无 653");
+        assert!(world.sessions.map_changes().is_empty(), "不得记换图事件");
+        assert_eq!(world.entities.get(actor).unwrap().map_id, 0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// 判据 11（R）：P22 只改 `rec.data.game_gold`，`rec.data.gold` 保持原值；
+    /// 且 `db-srv` 的 UPDATE 仍只绑 `d.gold`（GameGold 不落库，照抄 oracle）。
+    ///
+    /// 牙：把 `rec.data.gold` 也写成 game_gold ⇒ 红；DB 绑定改成 `game_gold` ⇒ 红。
+    #[test]
+    fn p22_save_record_game_gold_only() {
+        use std::collections::HashMap;
+        let (registry, dir) = pl3_registry("INCGAMEGOLD(1/30)");
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("p22s");
+        let actor = world
+            .enter_map("p22s", new_player_entity("p22s".to_string(), 2, 2), 0)
+            .unwrap();
+        let mut sg = test_session_ground(actor);
+        sg.game_gold = 100;
+        sg.state.gold = 555;
+        sg.p22.inc_game_gold_tick = 0;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("p22s".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "p22s", 1, 0, 915, actor));
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut saved = p22_saved("A", 2, 2);
+        saved.record.data.gold = 999;
+        saved.record.data.game_gold = 0;
+        // 本用例无 MoveToHome ⇒ `saves` 用空表（`build_save_record` 才用 `saved`）。
+        let saves: HashMap<String, SavedHuman> = HashMap::new();
+        drain_player_game_gold(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            Some(&registry),
+            &saves,
+            1001,
+        );
+        let rec = build_save_record(&saved, "p22s", &world, &sessions["p22s"], Some(&registry));
+        assert_eq!(rec.data.game_gold, 130, "存档记录跟随 GameGold");
+        assert_eq!(
+            rec.data.gold, 555,
+            "characters.Gold 列跟随 state.gold（运行期 Gold），不是 GameGold(130)"
+        );
+        // `db-srv` 的 UPDATE 绑定只认 `d.gold`（GameGold 从不进 SQL；`Save.cs:102`）。
+        let playdata = include_str!("../../db-srv/src/playdata.rs");
+        assert!(playdata.contains(".bind(d.gold)"), "UPDATE 仍绑 d.gold");
+        assert!(
+            !playdata.contains(".bind(d.game_gold)"),
+            "GameGold 不得进 SQL（照抄 oracle 缺陷）"
+        );
+        std::fs::remove_dir_all(dir).ok();
     }
 }

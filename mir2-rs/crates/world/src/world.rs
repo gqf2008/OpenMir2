@@ -1008,6 +1008,33 @@ pub struct SpaceMoveCastOutcome {
     pub cross_map: bool,
 }
 
+/// [`World::base_object_move_player`] 的目标（oracle `BaseObjectMove`，`PlayObject.Base.cs:2318-2327`）。
+///
+/// `map_id` 由宿主用 `MapRegistry::id_of(HomeMap)` 解析——`None`/解析失败 ⇒ 调用方不构造
+/// 目标（= oracle `FindMap == null`，0 抽不动）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HomeMoveTarget {
+    /// `sX != 0 && sY != 0` ⇒ `SpaceMove(sMap, sX, sY, 0)`：以 `(x, y)` 为起点找可走格。
+    Fixed { map_id: usize, x: i32, y: i32 },
+    /// 任一轴为 0 ⇒ `MapRandomMove(sMap, 0)`：先两抽随机起点，再 `SpaceMove`。
+    Random { map_id: usize },
+}
+
+/// [`World::base_object_move_player`] 的可观测结果。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BaseObjectMoveOutcome {
+    /// `MapMgr.FindMap(sMap) != null`（`target.is_some()` 且 `map_id` 在表内）。
+    pub map_found: bool,
+    /// `SpaceMoveGetRandXY` 找到落点并切图成功。
+    pub moved: bool,
+    /// oracle `SpaceMoved = true`（仅成功落地）。
+    pub space_moved: bool,
+    /// 落地后的 `map_id`（未移动时 = 调用前 `map_id`）。
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+}
+
 /// `BaseObject.Run` 的 `VerifyTick` 30s 门（`BaseObject.Base.cs:223`：`> 30 * 1000`）。
 ///
 /// 命中后 `Envir.VerifyMapTime` 刷新本格 `CellObject.AddTime`（`Envirnoment.cs:858-897`），
@@ -3941,6 +3968,87 @@ impl World {
         out.x = fx;
         out.y = fy;
         out.map_id = dst;
+        out
+    }
+
+    /// `BaseObjectMove`（`PlayObject.Base.cs:2312-2327`，由 `MoveToHome` 调用）的玩家落地。
+    ///
+    /// 两个分支都落在 `BaseObject.SpaceMove(sMap, nX, nY, 0)`（`BaseObject.cs:1103-1172`）：
+    ///
+    /// - [`HomeMoveTarget::Fixed`]：`sX != 0 && sY != 0` ⇒ 以 `(x, y)` 为起点找可走格
+    ///   （落点可走 ⇒ **0 抽**；不可走 ⇒ `SpaceMoveGetRandXY` 的 `space_move` 移位环）；
+    /// - [`HomeMoveTarget::Random`]：任一轴为 0 ⇒ `MapRandomMove(sMap, 0)`（`:1214-1237`）：
+    ///   先两抽 `Random(Width-nEgdey-1)+nEgdey` / `Random(Height-nEgdey-1)+nEgdey`（`merchant` 组，
+    ///   `nEgdey` 只看**目标图**高），再以该点为起点进移位环。
+    ///
+    /// `target == None` ⇒ oracle `FindMap(sMap) == null` ⇒ **0 抽、不动、不出帧**（`SpaceMove`
+    /// 的 `if (envir != null)` 门；`MoveToHome` 已先发的 `RM_SPACEMOVE_FIRE` 不在本函数内）。
+    ///
+    /// 落地成功 ⇒ [`World::switch_map_space`]（记一条 `MapChange{space_move_show: Some(false)}`
+    /// = oracle `nInt == 0` 的 `RM_SPACEMOVE_SHOW`(801)；宿主据此出 633/634/801）。
+    /// 201 轮仍不可走 ⇒ oracle 回滚旧 `Envir/CurrX/CurrY`（`:1147-1151`）⇒ 本实现**落地前**就算完，
+    /// 失败时一格不动（与 [`World::cast_space_move_spell_with`] 同一口径）。
+    ///
+    /// **登记（本函数不实现）**：`IsTimeRecall`（oracle 那段是恒假死分支，见设计件 §0.5）、
+    /// `OnEnvirnomentChanged()`、`SpaceMoved` 字段、`VisibleHumanList.Clear()`（视野由视差集表现）。
+    pub fn base_object_move_player(
+        &mut self,
+        chr_name: &str,
+        actor_id: i32,
+        target: Option<HomeMoveTarget>,
+    ) -> BaseObjectMoveOutcome {
+        let mut out = BaseObjectMoveOutcome::default();
+        let Some(e) = self.entities.get(actor_id) else {
+            return out;
+        };
+        out.map_id = e.map_id;
+        out.x = e.x;
+        out.y = e.y;
+        // `SpaceMove`: `IEnvirnoment envir = FindMap(sMap); if (envir != null)`。
+        let Some(target) = target else {
+            return out;
+        };
+        let map_id = match target {
+            HomeMoveTarget::Fixed { map_id, .. } | HomeMoveTarget::Random { map_id } => map_id,
+        };
+        if map_id >= self.maps.len() {
+            return out;
+        }
+        out.map_found = true;
+        let (w, h) = {
+            let map = &self.maps[map_id];
+            (map.width, map.height)
+        };
+        // `MapRandomMove` 的两次初始取数（`merchant` 组）——只有 Random 支才抽。
+        let (sx, sy) = match target {
+            HomeMoveTarget::Fixed { x, y, .. } => (x, y),
+            HomeMoveTarget::Random { .. } => {
+                crate::merchant::map_random_move_xy(&mut self.rng, w, h)
+            }
+        };
+        // `SpaceMove` 的移位环（`space_move` 组）；`can_walk` = `CanWalk(x,y,true)`。
+        let found = {
+            let rng = &mut self.rng;
+            let map = &self.maps[map_id];
+            crate::space_move::space_move_get_rand_xy(rng, w, h, sx, sy, |x, y| {
+                map.get_cell_info(x, y).1
+            })
+        };
+        let Some((fx, fy)) = found else {
+            return out;
+        };
+        // `SpaceMove` 同服支：删旧格 -> 新图登记 -> 记 `MapChange`（`nInt == 0` ⇒ SHOW(801)）。
+        if self
+            .switch_map_space(chr_name, map_id, fx, fy, false)
+            .is_err()
+        {
+            return out;
+        }
+        out.moved = true;
+        out.space_moved = true;
+        out.map_id = map_id;
+        out.x = fx;
+        out.y = fy;
         out
     }
 
@@ -9966,5 +10074,169 @@ mod p31_auto_get_exp_tests {
         assert!(w.auto_get_exp(id, &mut st, 1, false).is_some());
         // 同种子 42 的两条流：P31 后下一次抽数必须与未结算的对照流相同。
         assert_eq!(w.rng.random_below(1_000), control.rng.random_below(1_000));
+    }
+}
+
+/// **PL-4 / P22**：`BaseObjectMove` / `MoveToHome` 的落地（`PlayObject.Base.cs:2306-2333`）。
+#[cfg(test)]
+mod pl4_base_object_move_tests {
+    use super::*;
+    use crate::map::CellAttribute;
+    use crate::ACTOR_RACE_PLAY;
+    use mir2_shared::rng::RandomNumber;
+
+    /// 两张图（0 = 当前，1 = Home），玩家已进世界。
+    fn world_with_player() -> (World, i32) {
+        let mut w = World::with_maps(vec![(16, 16), (32, 32)]);
+        w.open_session("hero");
+        let mut e = Entity::new(0, "hero", 5, 5);
+        e.race = ACTOR_RACE_PLAY;
+        let id = w.enter_map("hero", e, 0).expect("进图");
+        (w, id)
+    }
+
+    /// 判据 7（R）：`HomeX/HomeY != 0` 且落点可走 ⇒ **0 抽**、目标格 = Home 坐标、
+    /// `MapChange{space_move_show: Some(false)}`（= 801）。
+    #[test]
+    fn p22_move_home_fixed_walkable_consumes_no_draws() {
+        let (mut w, id) = world_with_player();
+        let out = w.base_object_move_player(
+            "hero",
+            id,
+            Some(HomeMoveTarget::Fixed {
+                map_id: 1,
+                x: 7,
+                y: 9,
+            }),
+        );
+        assert!(out.map_found && out.moved && out.space_moved);
+        assert_eq!((out.map_id, out.x, out.y), (1, 7, 9));
+        assert_eq!(w.entities.get(id).unwrap().map_id, 1);
+        assert_eq!(w.session("hero").unwrap().map_id, 1);
+        // 0 抽：下一抽与同种子对照流一致。
+        assert_eq!(
+            w.rng.random_below(1000),
+            RandomNumber::with_seed(42).random_below(1000)
+        );
+        // 换图事件 = `nInt == 0` ⇒ SM_SPACEMOVE_SHOW(801)，不是 SHOW2。
+        let changes = w.sessions.map_changes();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].map_id, 1);
+        assert_eq!(changes[0].space_move_show, Some(false));
+    }
+
+    /// 判据 7（R）：`HomeX=0`（Random 支）⇒ `merchant` 组恰 2 抽（`Random(W-nEgdey-1)`，
+    /// `nEgdey` 按**目标图**高：32 ⇒ 20？不——32 < 150 且 >= 30 ⇒ 20）。
+    ///
+    /// 牙：用当前图（16）的宽高算抽数 ⇒ 本用例红。
+    #[test]
+    fn p22_move_home_random_draws_target_map_size() {
+        // 目标图用 (32, 64)（与当前图 (16,16) 尺寸不同），两抽的参数不同 ⇒ 次序可辨。
+        let mut w = World::with_maps(vec![(16, 16), (32, 64)]);
+        w.open_session("hero");
+        let mut e = Entity::new(0, "hero", 5, 5);
+        e.race = ACTOR_RACE_PLAY;
+        let id = w.enter_map("hero", e, 0).expect("进图");
+        let _ = w.sessions.drain_map_changes();
+        // 目标图 (32,64)：`nEgdey = 20`（64 <150 且 >=30）⇒ X 抽 `Random(32-20-1=11)`、
+        // Y 抽 `Random(64-20-1=43)`。**顺序 X 先于 Y**（交换次序 ⇒ 断言必红）。
+        // 选一个两抽结果不同的种子，让「X/Y 次序」可辨（同值种子下交换不可见）。
+        let mut seed = 1;
+        let (nx, ny) = loop {
+            let mut r = RandomNumber::with_seed(seed);
+            let a = r.random_below(11) + 20;
+            let b = r.random_below(43) + 20;
+            if a != b {
+                break (a, b);
+            }
+            seed += 1;
+        };
+        w.rng = RandomNumber::with_seed(seed);
+        let out = w.base_object_move_player("hero", id, Some(HomeMoveTarget::Random { map_id: 1 }));
+        assert!(out.moved);
+        assert_eq!((out.x, out.y), (nx, ny), "两抽的参数按目标图宽高、X 先于 Y");
+        // 恰 2 抽：下一抽与重放一致。
+        let mut replay = RandomNumber::with_seed(seed);
+        replay.random_below(11);
+        replay.random_below(43);
+        assert_eq!(w.rng.random_below(1000), replay.random_below(1000));
+        assert_eq!(out.map_id, 1);
+    }
+
+    /// 判据 9（R）：`FindMap == null`（target=None）⇒ 0 抽、不动、无换图簇。
+    ///
+    /// `MoveToHome` 的 800 已由宿主在调用前发（见 host 用例）；世界侧什么都不做。
+    #[test]
+    fn p22_move_home_no_map_is_noop() {
+        let (mut w, id) = world_with_player();
+        let _ = w.sessions.drain_map_changes();
+        let out = w.base_object_move_player("hero", id, None);
+        assert_eq!(
+            out,
+            BaseObjectMoveOutcome {
+                map_found: false,
+                moved: false,
+                space_moved: false,
+                map_id: 0,
+                x: 5,
+                y: 5
+            }
+        );
+        assert_eq!(w.session("hero").unwrap().map_id, 0);
+        assert!(w.sessions.map_changes().is_empty());
+        assert_eq!(
+            w.rng.random_below(1000),
+            RandomNumber::with_seed(42).random_below(1000)
+        );
+    }
+
+    /// 判据 7（R）：定坐标落点不可走 ⇒ 进 `space_move` 移位环（先按 `n18=3` 步进；
+    /// 到边界后抽 `Random(W)`/`Random(H)`）。这里把起点设在右下角，强制走两次 `Random(32)`。
+    #[test]
+    fn p22_move_home_blocked_start_enters_space_move_ring() {
+        let (mut w, id) = world_with_player();
+        let mut attrs = vec![CellAttribute::Walk; 32 * 32];
+        attrs[30 * 32 + 30] = CellAttribute::HighWall; // (30,30) 列主序 x*H+y
+        assert_eq!(w.maps[1].set_cell_attributes(&attrs), 32 * 32);
+        let _ = w.sessions.drain_map_changes();
+        let out = w.base_object_move_player(
+            "hero",
+            id,
+            Some(HomeMoveTarget::Fixed {
+                map_id: 1,
+                x: 30,
+                y: 30,
+            }),
+        );
+        assert!(out.moved);
+        // Height=32 < 50 ⇒ n1C=2；`W-n1C-1 == 29`，起点两轴都 >= 29 ⇒ 各抽一次 `Random(32)`。
+        let mut replay = RandomNumber::with_seed(42);
+        let rx = replay.random_below(32);
+        let ry = replay.random_below(32);
+        assert_eq!((out.x, out.y), (rx, ry), "移位环的两次 Random(32)");
+        assert_eq!(w.rng.random_below(1000), replay.random_below(1000));
+    }
+
+    /// 判据 9（R）补充：201 轮仍不可走 ⇒ 不落地、不记 `MapChange`、坐标不变（oracle 回滚）。
+    #[test]
+    fn p22_move_home_fully_blocked_rolls_back() {
+        let (mut w, id) = world_with_player();
+        let attrs = vec![CellAttribute::HighWall; 32 * 32];
+        assert_eq!(w.maps[1].set_cell_attributes(&attrs), 32 * 32);
+        let _ = w.sessions.drain_map_changes();
+        let out = w.base_object_move_player(
+            "hero",
+            id,
+            Some(HomeMoveTarget::Fixed {
+                map_id: 1,
+                x: 3,
+                y: 4,
+            }),
+        );
+        assert!(out.map_found);
+        assert!(!out.moved, "201 轮仍不可走 ⇒ 回滚");
+        assert_eq!((out.map_id, out.x, out.y), (0, 5, 5), "坐标/地图不动");
+        assert!(w.sessions.map_changes().is_empty());
+        assert_eq!(w.entities.get(id).unwrap().map_id, 0);
     }
 }

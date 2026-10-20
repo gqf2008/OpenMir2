@@ -61,6 +61,8 @@ pub static IMPLEMENTED_EXECUTIONS: &[&str] = &[
     "ActionOfSetScriptFlag",
     "ActionOfSetSendMsgFlag",
     "ActionOfAutoGetExp",
+    "ActionOfAutoAddGameGold",
+    "ActionOfAutoSubGameGold",
     "ActionOfOffLine",
     "ActionOfGmExecute",
     "ActionOfRepairAllItem",

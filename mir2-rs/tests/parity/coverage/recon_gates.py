@@ -2359,8 +2359,16 @@ def cmd_mutate(args):
         #  &[smframe::sm_spacemove_hide(SM_SPACEMOVE_HIDE2, …) body])`，挂在
         #  `cast_space_move_spell_with` 的 after_gate 钩子上、`MapRandomMove` 之前）
         # ⇒ 按门规移出 blocked（自失效断言）。
-        # 同族的 `SM_SPACEMOVE_HIDE(800)`（`RM_SPACEMOVE_FIRE`）仍无发射点，留在 blocked。
+        # 同族的 `SM_SPACEMOVE_HIDE2(806)`（魔号 21 的 HIDE2）已接；其 **HIDE(800)** 后来随
+        # PL-4（P22 `MoveToHome` 的 `SendRefMsg(RM_SPACEMOVE_FIRE)`，`PlayObject.Base.cs:2308`）
+        # 在 `bins/game-svr/src/main.rs::p22_move_to_home` 接上生产发射点 ⇒ 一并移入 wired。
         "SM_SPACEMOVE_HIDE2",
+        # 卡 PL-4（P22 元宝自动增减 + `MoveToHome`，2026-10-20）：`RM_SPACEMOVE_FIRE` 的
+        # `SendRefMsg` 处理器（`PlayObject.Message.cs` 的 `SM_SPACEMOVE_HIDE` 支）由
+        # `bins/game-svr/src/main.rs::p22_move_to_home` 的
+        # `broadcast_ref_msg_with_self(..., &[smframe::sm_spacemove_hide(SM_SPACEMOVE_HIDE, …)])`
+        # 生产发射（旧图/旧坐标、含自己）⇒ 按门规移出 blocked。
+        "SM_SPACEMOVE_HIDE",
         # 卡 `openmir2-spell-mp-wrapper`（2026-10-17）：`PlayObject.DoSpell` 包装层的蓝不足早退
         # （`PlayObject.Base.cs:1514` ⇒ 调用方 `PlayObject.Attack.cs:1279-1281` 发 `RM_MAGICFIREFAIL`）
         # 已接生产发射点：`bins/game-svr/src/main.rs` 的 `handle_spell_cmd` 在
@@ -2403,8 +2411,9 @@ def cmd_mutate(args):
     }
     # 仍 blocked（编码器已落地、生产路径无发射点）；各自 blocked_by 与出处（红名单 v2 §3 finding）：
     #   · 传送簇（切图/TransMap：HIDE 侧随切图簇；对照 SHOW(801)/SHOW2(807) 经
-    #     sessionwire::map_change_frames 已接）—— SM_SPACEMOVE_HIDE(800)（V2-02）；
-    #     HIDE2(806) 已随魔号 21 `MagSaceMove` 接线（`MagicManager.cs:881`）移入 `_wired_now`。
+    #     sessionwire::map_change_frames 已接）—— HIDE2(806) 已随魔号 21 `MagSaceMove`
+    #     接线（`MagicManager.cs:881`）、HIDE(800) 已随 PL-4 的 `MoveToHome`
+    #     （`PlayObject.Base.cs:2308`）接线，两者均在 `_wired_now`。
     #   · 怪物模型/形态簇（Entity 缺 skeleton 等形态字段 ⇒ 怪物动作帧发不出）
     #     —— SM_SKELETON(33)（V2-03；MB-2 后仅剩它）。
     #        （SM_ALIVE(27)/SM_FLYAXE(22)/SM_LIGHTING(23) 已随 MB-2 移入 `_wired_now`；
@@ -2426,7 +2435,7 @@ def cmd_mutate(args):
     #     SM_PLAYDICE(8001)/SM_ITEMSHOW(610)（V2-14）。
     #     （SM_MAGICFIRE_FAIL(639) 原列本簇；卡 `openmir2-spell-mp-wrapper` 接线后已移入
     #      `_wired_now`，见上。）
-    _blocked = {"SM_SPACEMOVE_HIDE", "SM_SKELETON",
+    _blocked = {"SM_SKELETON",
                 "SM_CLOSEHEALTH", "SM_BREAKWEAPON",
                 "SM_LAMPCHANGEDURA", "SM_MERCHANTDLGCLOSE", "SM_QUERYYBDEAL",
                 "SM_QUERYYBSELL", "SM_RECONNECT", "SM_CHANGEFACE",

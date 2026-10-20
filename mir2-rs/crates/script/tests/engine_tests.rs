@@ -84,6 +84,10 @@ struct MockPlayer {
     dlg_query: Option<(bool, String)>,
     play_dice_label: String,
     auto_get_exp: Option<(bool, Option<String>, i32, i32)>,
+    /// PL-4 / P22：脚本 192/193 的 `BoIncGameGold`/`BoDecGameGold`
+    /// （START 在当前 oracle 源码下不可达，STOP 只写 false）。
+    bo_inc_game_gold: bool,
+    bo_dec_game_gold: bool,
     offline: Option<(Option<String>, i32, i32, i32)>,
     magics: Vec<(i32, String, u8)>,
     magic_table: Vec<(String, i32, String)>,
@@ -207,6 +211,8 @@ impl MockPlayer {
             dlg_query: None,
             play_dice_label: String::new(),
             auto_get_exp: None,
+            bo_inc_game_gold: false,
+            bo_dec_game_gold: false,
             offline: None,
             magics: Vec::new(),
             magic_table: Vec::new(),
@@ -639,6 +645,12 @@ impl ScriptPlayer for MockPlayer {
     }
     fn set_game_gold(&mut self, v: i32) {
         self.game_gold = v;
+    }
+    fn set_bo_inc_game_gold(&mut self, v: bool) {
+        self.bo_inc_game_gold = v;
+    }
+    fn set_bo_dec_game_gold(&mut self, v: bool) {
+        self.bo_dec_game_gold = v;
     }
     fn game_gold_changed(&mut self) {
         self.game_gold_changed += 1;
@@ -2751,4 +2763,43 @@ fn p07_setontimer_has_no_handler() {
         "ScriptEngine switch：无 case"
     );
     assert!(!dispatch::execution_implemented(307));
+}
+
+/// 判据 10（L）：脚本 192/193（`AUTOADDGAMEGOLD`/`AUTOSUBGAMEGOLD`）——`START` 恒
+/// `ScriptActionError`（oracle `nPoint`/`nTime` 硬编码 0，`ExecutionProcessingSys.cs:2669-2673`），
+/// `STOP`（OrdinalIgnoreCase 大小写不敏感）清 flag，其它变体同样报错。
+///
+/// 牙：解析 `s_param2/3` 让 START 生效 ⇒ START 段两条断言红；START 不报错 ⇒ 红。
+#[test]
+fn auto_add_sub_game_gold_start_is_dead_stop_clears_flag() {
+    let (mut npc, mut player) = setup(
+        "[@main]
+#SAY
+x
+",
+    );
+    player.bo_inc_game_gold = true;
+    player.bo_dec_game_gold = true;
+    // START 即使带 `100 1` 也不生效 ⇒ 恰一条 ScriptError，flag 保持 true。
+    let errs = run_act(
+        &mut npc,
+        &mut player,
+        act_full(192, &["START", "100", "1"], &[]),
+    );
+    assert_eq!(script_errors(&errs).len(), 1, "{errs:?}");
+    assert!(player.bo_inc_game_gold, "START 不得写 flag（不可达）");
+    // STOP（小写）⇒ 0 错误 + 清 flag。
+    let errs = run_act(&mut npc, &mut player, act_full(192, &["stop"], &[]));
+    assert!(script_errors(&errs).is_empty(), "{errs:?}");
+    assert!(!player.bo_inc_game_gold);
+    // 其它变体 ⇒ 一条错误。
+    let errs = run_act(&mut npc, &mut player, act_full(192, &["FOO"], &[]));
+    assert_eq!(script_errors(&errs).len(), 1);
+    // 193 同构。
+    let errs = run_act(&mut npc, &mut player, act_full(193, &["START"], &[]));
+    assert_eq!(script_errors(&errs).len(), 1);
+    assert!(player.bo_dec_game_gold);
+    let errs = run_act(&mut npc, &mut player, act_full(193, &["Stop"], &[]));
+    assert!(script_errors(&errs).is_empty(), "{errs:?}");
+    assert!(!player.bo_dec_game_gold);
 }

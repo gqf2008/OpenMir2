@@ -385,6 +385,11 @@ pub trait ScriptPlayer {
 
     /// `playerActor.GameGold = v`
     fn set_game_gold(&mut self, _v: i32) {}
+    /// `playerActor.BoIncGameGold = v`（`ExecutionProcessingSys.cs:2678/2684`，
+    /// `AUTOADDGAMEGOLD` 的 START/STOP；START 在当前 oracle 源码下不可达，见 `actions.rs`）。
+    fn set_bo_inc_game_gold(&mut self, _v: bool) {}
+    /// `playerActor.BoDecGameGold = v`（`:2744/2750`，`AUTOSUBGAMEGOLD`）。
+    fn set_bo_dec_game_gold(&mut self, _v: bool) {}
     /// `playerActor.GameGoldChanged()`（`GameGold` 与 `GamePoint` 变更后共用）
     fn game_gold_changed(&mut self) {}
     /// `playerActor.GamePoint = v`

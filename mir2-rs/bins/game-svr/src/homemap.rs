@@ -180,6 +180,50 @@ pub fn load_start_points(base: &Path, envir_dir: &str) -> Vec<StartPoint> {
     }
 }
 
+/// `PlayObject.MoveToHome` → `BaseObjectMove`（`PlayObject.Base.cs:2306-2333`）的**目标解析**。
+///
+/// 逐行：
+/// - `2309 BaseObjectMove(HomeMap, HomeX, HomeY)`；
+/// - `2314 if (string.IsNullOrEmpty(sMap)) sMap = MapName;`（空 `HomeMap` ⇒ **当前**图名）；
+/// - `2318 if (sX != 0 && sY != 0) SpaceMove(sMap, sX, sY, 0); else MapRandomMove(sMap, 0);`
+///   （**两轴都非 0** 才走定坐标；任一轴为 0 走随机落点）。
+///
+/// **不含** `FindMap`（注册表在宿主）：`fixed == false` ⇒ `MapRandomMove`，即便某轴非 0。
+///
+/// 恒假死分支 `IEnvirnoment envir = Envir; if (envir != Envir …) IsTimeRecall = false;`
+/// （`:2328-2332`：赋值在移动**之后** ⇒ 恒 false）不必实现（登记，见设计件 §0.5）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MoveHomeTarget {
+    /// 解析后的目标图名（空 `HomeMap` 时回落到当前图名）。
+    pub map_name: String,
+    pub x: i16,
+    pub y: i16,
+    /// `sX != 0 && sY != 0`（**两轴都非 0**；写成 `||` 是错的）。
+    pub fixed: bool,
+}
+
+/// `BaseObjectMove`（`PlayObject.Base.cs:2312-2327`）的目标解析（纯逻辑，`FindMap` 由宿主做）。
+#[must_use]
+pub fn resolve_move_home(
+    home_map: &str,
+    current_map_name: &str,
+    home_x: i16,
+    home_y: i16,
+) -> MoveHomeTarget {
+    // `string.IsNullOrEmpty(sMap)`：C# 的 null 与 "" 在这里都落 `&str` 的空串。
+    let map_name = if home_map.is_empty() {
+        current_map_name
+    } else {
+        home_map
+    };
+    MoveHomeTarget {
+        map_name: map_name.to_string(),
+        x: home_x,
+        y: home_y,
+        fixed: home_x != 0 && home_y != 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,5 +396,40 @@ mod tests {
             }
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 判据 7（R）：`BaseObjectMove` 的分支选择——空 `HomeMap` 回落当前图名；**两轴都非 0**
+    /// 才走 `SpaceMove`（定坐标），任一轴为 0 ⇒ `MapRandomMove`。
+    ///
+    /// 牙：`&&` 写成 `||` ⇒ `home_x=0, home_y=5` 那条红；不回落当前图名 ⇒ 空 `HomeMap` 那条红。
+    #[test]
+    fn resolve_move_home_branches() {
+        assert_eq!(
+            resolve_move_home("3", "0", 839, 668),
+            MoveHomeTarget {
+                map_name: "3".into(),
+                x: 839,
+                y: 668,
+                fixed: true
+            }
+        );
+        // 空 HomeMap ⇒ 当前图名。
+        assert_eq!(
+            resolve_move_home("", "0", 839, 668),
+            MoveHomeTarget {
+                map_name: "0".into(),
+                x: 839,
+                y: 668,
+                fixed: true
+            }
+        );
+        // 任一轴为 0 ⇒ 随机落点（`fixed == false`）。
+        for (x, y) in [(0, 668), (839, 0), (0, 0)] {
+            let t = resolve_move_home("3", "0", x, y);
+            assert!(!t.fixed, "({x},{y}) 必须走 MapRandomMove");
+            assert_eq!(t.map_name, "3");
+        }
+        // 负坐标也是「非 0」（照抄 `sX != 0`，不 clamp）。
+        assert!(resolve_move_home("3", "0", -1, -1).fixed);
     }
 }
