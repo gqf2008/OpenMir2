@@ -12460,12 +12460,17 @@ fn drain_soft_close(
         if let (Some(saved), Some(sg)) = (saves.get(&chr), ground_sessions.get(&chr)) {
             save_human_rcd(db, engine, saved, &chr, world, sg, registry);
         }
-        // **G3**：`KickUser` 置 `BoEmergencyClose=true, BoSoftClose=true`（`TCPNetChannel.cs:268-269`）
-        // ⇒ 路径 A（`BoReconnection` 不动；此位若已被 `CM_SOFTCLOSE` 置真则路径 B）。
+        // **G3**：`KickUser` 置 `BoEmergencyClose=true, BoSoftClose=true`（`TCPNetChannel.cs:268-269`），
+        // **不动** `BoReconnection`（v9 §2.5）。若该会话曾 `CM_SOFTCLOSE`（`bo_reconnection=true`），
+        // oracle 走路径 B（无 104/SS_208），所以这里必须像 `Closed` 臂一样快照局部名，不能写死
+        // `false`（防御性：当前 `guild_done` 门使该组合不可达，但不把不变量埋进常量）。
         if let Some(sg) = ground_sessions.get_mut(&chr) {
             sg.bo_soft_close = true;
             sg.bo_emergency_close = true;
         }
+        let (bo_reconnection, bo_soft_close) = ground_sessions
+            .get(&chr)
+            .map_or((false, true), |sg| (sg.bo_reconnection, sg.bo_soft_close));
         let online = &*online;
         let guild_ban: std::collections::HashMap<String, bool> = ground_sessions
             .iter()
@@ -12473,6 +12478,7 @@ fn drain_soft_close(
             .collect();
         #[allow(clippy::needless_borrow)]
         let guild_rcpt = guild_recipients(&online, &world, &guild_ban);
+        #[allow(clippy::redundant_field_names)]
         let guild_soft = guild_runtime::on_disconnect(
             guilds,
             guild_store,
@@ -12481,8 +12487,8 @@ fn drain_soft_close(
             ground_sessions,
             &guild_runtime::DisconnectCtx {
                 chr_name: &chr,
-                bo_reconnection: false,
-                bo_soft_close: true,
+                bo_reconnection: bo_reconnection,
+                bo_soft_close: bo_soft_close,
                 now_tick: world.clock_ms as i32,
                 server_index: guild_server_index,
             },
@@ -23669,6 +23675,89 @@ mod tests {
             "MakeGhost：离开世界"
         );
         assert!(online.is_empty(), "在线登记被摘");
+    }
+
+    /// **G3 复验 Minor 的牙**：`drain_soft_close` 必须**快照** `bo_reconnection`，不能写死
+    /// `false`。构造一个曾 `CM_SOFTCLOSE` 的会话（`bo_reconnection=true`、`guild_done=false`；
+    /// 生产里 `guild_done` 门使其不可达，这里是防御性回归），落地顶号时 oracle 走路径 B
+    /// （`!BoReconnection` 假）⇒ **不得发 104/SS_208**；写死 `false` 会走路径 A，向 gm/b 发 104。
+    #[test]
+    fn drain_soft_close_respects_bo_reconnection_snapshot() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        world.open_session("a");
+        let a = world
+            .enter_map("a", mir2_world::Entity::new(0, "a", 5, 5), 0)
+            .unwrap();
+        let mut b_ent = mir2_world::Entity::new(0, "b", 6, 5);
+        b_ent.race = mir2_world::ACTOR_RACE_PLAY;
+        let b = world.add_entity(b_ent);
+        let mut gm_ent = mir2_world::Entity::new(0, "gm", 5, 6);
+        gm_ent.race = mir2_world::ACTOR_RACE_PLAY;
+        let gm = world.add_entity(gm_ent);
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "a", 1, 0, 901, a));
+        online_set(&mut online, entry("ub", "b", 2, 0, 902, b));
+        online_set(&mut online, entry("ug", "gm", 3, 0, 903, gm));
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sa = test_session_ground(a);
+        sa.bo_reconnection = true; // 曾 CM_SOFTCLOSE
+        sa.bo_soft_close = true;
+        sa.guild.guild_name = Some("G".into());
+        sa.guild.rank_no = 99;
+        sessions.insert("a".into(), sa);
+        sessions.insert("b".into(), test_session_ground(b));
+        sessions.insert("gm".into(), test_session_ground(gm));
+
+        let c = mir2_world::GuildConfig {
+            guild_chief: "掌门X".into(),
+            guild_member_rank: "职位X".into(),
+            ..mir2_world::GuildConfig::default()
+        };
+        let mut guilds = mir2_world::GuildManager::new();
+        assert!(guilds.add_guild("G", "gm", &c));
+        guilds.find_guild_mut("G").unwrap().add_member("a", &c, 0);
+        guilds.find_guild_mut("G").unwrap().add_member("b", &c, 0);
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut soft_close_pending = vec!["a".to_string()];
+        drain_soft_close(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut soft_close_pending,
+            &mut None,
+            &mut load::FrontEngine::new(),
+            &mut HashMap::new(),
+            &mut sessions,
+            None,
+            &mut guilds,
+            None,
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            &guild_runtime::GuildMsgCfg {
+                show_pre_fix_msg: true,
+                prefix: "〖行会〗".into(),
+                f_color: 0x0A,
+                b_color: 0x0B,
+            },
+            0,
+        );
+        match rx0.try_recv().expect("顶号先发 KickUser") {
+            SimToGate::KickUser { socket } => assert_eq!(socket, 901),
+            other => panic!("第一件事必须是 KickUser，实得 {other:?}"),
+        }
+        assert!(
+            rx0.try_recv().is_err(),
+            "路径 B（bo_reconnection=true）不得发 104；写死 false 会让 b/gm 收到帧"
+        );
+        assert!(
+            !sessions.contains_key("a"),
+            "drain_soft_close 移除离场者会话"
+        );
     }
 
     /// **`openmir2-m2-session-lifecycle` O-3（owner `cb0c70fd`）**：账号级顶号按 oracle

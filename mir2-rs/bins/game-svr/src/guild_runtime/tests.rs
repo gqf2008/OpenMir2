@@ -1978,16 +1978,34 @@ fn g3_anchor_a5_prepare_closed_guild_and_flags() {
     let deal = after(&l, c, "deal_cancel_between(").unwrap();
     assert!(del < c && kickret < c && c < deal);
 
-    // ④ 实参局部名 + 同臂作用域。
-    assert_eq!(exact(&l, "bo_reconnection: bo_reconnection,").len(), 1);
-    assert_eq!(exact(&l, "bo_soft_close: bo_soft_close,").len(), 1);
+    // ④ 实参局部名 + 同臂作用域（`drain_soft_close` 也快照同名局部量，故只要求在 Closed 臂内）。
     let letflags = exact(&l, "let (bo_reconnection, bo_soft_close) = ground_sessions");
-    assert_eq!(letflags.len(), 1);
+    assert!(!letflags.is_empty(), "Closed 臂必须先快照 flags");
     let closed = exact(&l, "let guild_closed = guild_runtime::on_disconnect(")[0];
-    assert!(letflags[0] < closed);
     let arm_start = (0..closed)
         .rev()
         .find(|&i| l[i].trim() == "GateEvent::Closed {")
         .unwrap();
-    assert!(arm_start < letflags[0]);
+    assert!(
+        letflags.iter().any(|&i| arm_start < i && i < closed),
+        "同臂作用域内、guild_closed 之前"
+    );
+    let arm = &l[arm_start..deal];
+    assert!(
+        arm.iter()
+            .any(|x| x.trim() == "bo_reconnection: bo_reconnection,"),
+        "bo_reconnection 实参必须是局部名"
+    );
+    assert!(
+        arm.iter()
+            .any(|x| x.trim() == "bo_soft_close: bo_soft_close,"),
+        "bo_soft_close 实参必须是局部名"
+    );
+    assert!(
+        !arm.iter().any(|x| {
+            let t = x.trim();
+            t == "bo_reconnection: false," || t == "bo_soft_close: false,"
+        }),
+        "不得写死 false"
+    );
 }
