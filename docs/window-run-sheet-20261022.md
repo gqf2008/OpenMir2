@@ -1130,7 +1130,7 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 
 ---
 
-## E. 授权边界（E1–E4；2026-10-22 更新：E1/E4 已裁决，E2/E3 待裁决）
+## E. 授权边界（E1–E4；2026-10-21/22 更新：E1/E2/E4 已裁决，E3 待裁决）
 
 > 每条都写「**不裁决则本组不可开窗**」。这些不是技术选择，而是 owner 的权力边界；
 > 编排侧不得自行推定、不得用「有备份」替代授权。
