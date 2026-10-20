@@ -1,5 +1,5 @@
 //! 「空 `HomeMap` 的新角色 ⇒ 出生点地图」——oracle `WorldServer.cs:250-260` + `GetHomeInfo`
-//! （`:1384-1410`）的 1:1 归因与实现。
+//! （`WorldServer.cs:1405-1428`）的 1:1 归因与实现。
 //!
 //! # 为什么需要它（缺陷现场）
 //!
@@ -26,7 +26,7 @@
 //!
 //! ⇒ 空 `CurMap` **不是**拒绝条件；两侧不等价的是 Rust 缺了这条「空 `HomeMap` ⇒ 出生点」回落。
 //!
-//! `GetHomeInfo`（`WorldServer.cs:1384-1410`）：
+//! `GetHomeInfo`（`WorldServer.cs:1405-1428`）：
 //!
 //! ```text
 //! if (M2Share.StartPointList.Count > 0)
@@ -116,18 +116,18 @@ pub struct HomeFallback {
 }
 
 impl HomeFallback {
-    /// `WorldServer.GetHomeInfo(job, ref x, ref y)`（`:1384-1410`）——**同序消费 RNG**。
+    /// `WorldServer.GetHomeInfo(job, ref x, ref y)`（`WorldServer.cs:1405-1428`）——**同序消费 RNG**。
     ///
     /// `StartPointList` 非空且 `Count > StartPointSize` ⇒ 抽 1×`Random(StartPointSize)` 定索引；
-    /// 非空但 `Count <= StartPointSize` ⇒ `I = 0`（**0 抽**）；空 ⇒ `Config.HomeMap/HomeX/HomeY`（0 抽）。
+    /// 非空但 `Count <= StartPointSize` ⇒ `I = 0`（**0 抽**）；空 ⇒ `Config.HomeMap` + 照抄笔误后的 HomeX/HomeY（详见下，0 抽）。
     ///
     /// 注意 oracle 形参 `Job` **完全未被使用**（不是按职业取）。空表分支照抄 oracle 笔误
-    /// （`WorldServer.cs:1424-1426`：`nX = Config.HomeX; nX = Config.HomeY;`）⇒ `HomeX = Config.HomeY`、
+    /// （`WorldServer.cs:1425-1426`：`nX = Config.HomeX; nX = Config.HomeY;`）⇒ `HomeX = Config.HomeY`、
     /// `HomeY` 保持调用方初值 `0`（`:252-253` 的 `short homeY = 0`）。
     #[must_use]
     pub fn get_home_info(&self, rng: &mut RandomNumber) -> (String, i16, i16) {
         if self.start_points.is_empty() {
-            // 硬约束③（行为等价优先）：oracle `WorldServer.cs:1424-1426` 是
+            // 硬约束③（行为等价优先）：oracle `WorldServer.cs:1425-1426` 是
             // `nX = Config.HomeX; nX = Config.HomeY;`（第二行笔误仍写 `nX`）⇒ 最终
             // `nX = Config.HomeY`，`nY` 保持调用方初值 0（`:252-253` 的 `short homeY = 0`）。
             // 照抄该笔误，**不登记偏离**（现网 `StartPoint.txt` 非空，不可达；用例只作保护）。
@@ -344,7 +344,7 @@ mod tests {
         );
     }
 
-    /// **硬约束③**：空 `StartPointList` 时照抄 oracle 的笔误（`WorldServer.cs:1424-1426`）——
+    /// **硬约束③**：空 `StartPointList` 时照抄 oracle 的笔误（`WorldServer.cs:1425-1426`）——
     /// `nX` 先取 `Config.HomeX` 随即被 `Config.HomeY` 覆盖，`nY` 保持调用方初值 `0`
     /// ⇒ 返回 `(HomeMap, Config.HomeY, 0)`，`Config.HomeX` **被丢弃**。
     ///
