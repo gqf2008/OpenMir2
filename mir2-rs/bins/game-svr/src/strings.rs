@@ -376,8 +376,12 @@ pub fn load(path: &Path) -> Result<StringConf> {
 /// 编码口径 = `Common/ConfigFile.cs:263` 的 `StreamReader(..., Encoding.GetEncoding("GB2312"))`：
 /// GB2312 的 preamble 长度为 0 ⇒ `StreamReader` 做 BOM 探测（UTF-8 / UTF-16LE / UTF-16BE /
 /// UTF-32LE `FF FE 00 00` / UTF-32BE），无 BOM 按 cp936。统一走
-/// `mir2_script::cp936::decode_config_text`（E-6）；旧实现裸 `encoding_rs::GBK.decode`
-/// 会把 UTF-8 BOM 的文件解成乱码。
+/// `mir2_script::cp936::decode_config_text`（E-6）。
+///
+/// 旧实现的 `encoding_rs::GBK.decode` **自带 BOM 嗅探**（UTF-8 / UTF-16LE / UTF-16BE），
+/// BOM 面本就一致；真实差异在 ① cp936 精确字符集（`0xFF→U+F8F5`、`A8 BF→U+E7C8`、
+/// 非法双字节对吞成 `?`）与 ② `FF FE 00 00` 的 UTF-32LE 分支（encoding_rs 无 UTF-32 嗅探，
+/// 会按 UTF-16LE 解）。牙见 `cp936_divergences_and_configfile_utf32le_model`。
 #[must_use]
 pub fn parse(bytes: &[u8]) -> StringConf {
     let text = mir2_script::cp936::decode_config_text(bytes);
@@ -593,8 +597,11 @@ Other=1
 
     /// **E-6 BOM 矩阵**：oracle `ConfigFile.Load`（`ConfigFile.cs:263`）的
     /// `StreamReader(..., GB2312)` 做 BOM 探测 ⇒ `String.conf` 的 GBK / UTF-8 BOM /
-    /// UTF-16LE BOM 都必须读出同一组中文值。旧实现裸 `encoding_rs::GBK.decode`
-    /// 会把 UTF-8 BOM 解成 `U+FEFF` 开头的乱码、UTF-16 解成乱码 ⇒ 本用例必红。
+    /// UTF-16LE BOM 都必须读出同一组中文值。
+    ///
+    /// 注意：本用例**不是**回退牙——旧的 `encoding_rs::GBK.decode` 自带 BOM 嗅探
+    /// （UTF-8 / UTF-16LE / UTF-16BE），这三份夹具在旧实现下同样绿。真牙见
+    /// [`cp936_divergences_and_configfile_utf32le_model`]。
     #[test]
     fn bom_matrix_decodes_string_conf() {
         let text = "[String]\nYouPoisoned=您中毒了!!!\nGuildMsgPrefix=行会:\n";
@@ -614,5 +621,49 @@ Other=1
             assert_eq!(c.you_poisoned(), "您中毒了!!!", "{name}: YouPoisoned");
             assert_eq!(c.guild_msg_prefix(), "行会:", "{name}: GuildMsgPrefix");
         }
+    }
+
+    /// **E-6 真牙（cp936 精确字符集 + 两套 BOM 模型）**。
+    ///
+    /// 1. `0xFF → U+F8F5`、`A8 BF → U+E7C8`：.NET cp936 的定向映射；旧实现的
+    ///    `encoding_rs::GBK.decode` 分别给 `U+FFFD` / `U+01F9` ⇒ 回退必红。
+    /// 2. `FF FE 00 00 41 00 00 00`：`ConfigFile.Load`（本文件走 `decode_config_text`）
+    ///    按 **UTF-32LE** 解出 `A`；`StringList.LoadFromFile`（`decode_string_list`）按
+    ///    **UTF-16LE** 解出 `U+0000 A U+0000`。两套模型不可混用；`encoding_rs` 没有
+    ///    UTF-32 嗅探（会按 UTF-16LE）⇒ 回退亦红。
+    #[test]
+    fn cp936_divergences_and_configfile_utf32le_model() {
+        let c = parse(b"[String]\nYouPoisoned=\xff\xa8\xbf\n");
+        assert_eq!(
+            c.you_poisoned(),
+            "\u{F8F5}\u{E7C8}",
+            "cp936：0xFF=U+F8F5、A8 BF=U+E7C8（WHATWG 给 U+FFFD / U+01F9）"
+        );
+
+        let raw = [0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00];
+        assert_eq!(
+            mir2_script::cp936::decode_config_text(&raw),
+            "A",
+            "ConfigFile.Load：FF FE 00 00 = UTF-32LE"
+        );
+        assert_eq!(
+            mir2_script::cp936::decode_string_list(&raw),
+            "\u{0000}A\u{0000}",
+            "StringList.LoadFromFile：FF FE 00 00 = UTF-16LE（U+0000 U+0041 U+0000）"
+        );
+
+        // 本文件实际加载器口径（ConfigFile / UTF-32LE）必须端到端解析；
+        // 若按 StringList 的 UTF-16LE 模型读，键全被 NUL 打断 ⇒ 落回源码默认值。
+        let text = "[String]\nYouPoisoned=测试值\n";
+        let mut utf32le = vec![0xFF, 0xFE, 0x00, 0x00];
+        for ch in text.chars() {
+            utf32le.extend_from_slice(&u32::from(ch).to_le_bytes());
+        }
+        let c = parse(&utf32le);
+        assert_eq!(
+            c.you_poisoned(),
+            "测试值",
+            "String.conf 走 ConfigFile.Load 的 UTF-32LE 分支（不是 StringList 的 UTF-16LE）"
+        );
     }
 }

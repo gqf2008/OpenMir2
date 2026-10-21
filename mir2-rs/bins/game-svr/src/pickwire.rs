@@ -159,8 +159,9 @@ pub fn script_frame(
         }
         RM_SCRIPT_PLAYDICE => {
             let msg = s.msg.as_deref().unwrap_or("");
-            // 线上尾 = `EDCode.EncodeString(processMsg.Msg)`；`Msg` 在线上是 GBK 字节。
-            let bytes = encoding_rs::GBK.encode(msg).0.into_owned();
+            // 线上尾 = `EDCode.EncodeString(processMsg.Msg)`；`Msg` 在线上是 cp936 字节
+            // （`HUtil32.GetBytes` 口径：不可映射回退单个 `3F`，绝不输出 `&#N;`）。
+            let bytes = mir2_script::cp936::encode_gb2312_dotnet(msg);
             Some(crate::smframe_ext::sm_playdice(
                 npc_actor_id,
                 s.w_param,
@@ -628,7 +629,9 @@ mod tests {
 
     /// **`RM_PLAYDICE` 映射**（`PlayObject.Message.cs:2034-2041`）：
     /// `ActorId` = 入队 NPC、`wParam` 原样、WL 三参 = 脚本 nParam1..3、尾 = `EncodeString(Msg)`。
-    /// 牙：删 `script_frame` 的 `RM_SCRIPT_PLAYDICE` 分支 ⇒ `None`，本用例红。
+    /// 牙①：删 `script_frame` 的 `RM_SCRIPT_PLAYDICE` 分支 ⇒ `None`，本用例红。
+    /// 牙②：尾编码改回 `encoding_rs::GBK.encode` ⇒ `U+E7C8` 变成 `&#59336;`（或回退 `?`），
+    /// 下面的 `A8 BF` 期望字节必红（cp936-only 496 表）。
     #[test]
     fn script_frame_maps_playdice_to_sm_playdice() {
         let s = SendMsg {
@@ -637,7 +640,7 @@ mod tests {
             n_param1: 0x0102_0304,
             n_param2: 0x0506_0708,
             n_param3: 0x090a_0b0c,
-            msg: Some("@cube82".to_string()),
+            msg: Some("@cube82\u{E7C8}".to_string()),
         };
         let got = script_frame(&s, 4242, 0, 0, 0).expect("RM_PLAYDICE 必须映射");
         let want = crate::smframe_ext::sm_playdice(
@@ -646,7 +649,7 @@ mod tests {
             0x0102_0304,
             0x0506_0708,
             0x090a_0b0c,
-            b"@cube82",
+            b"@cube82\xA8\xBF",
         );
         assert_eq!(got, want, "SM_PLAYDICE 字段/次序必须与泵逐字节一致");
     }

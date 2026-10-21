@@ -664,4 +664,26 @@ GatePort1=7200
         }
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// **E-6 真牙（cp936 精确字符集）**：`0xFF → U+F8F5`、`A8 BF → U+E7C8`。
+    /// 旧实现 `encoding_rs::GBK.decode`（`crate::gbk::decode` 的旧体）分别给
+    /// `U+FFFD` / `U+01F9` ⇒ 回退必红。BOM 矩阵用例**不**具备这个牙（encoding_rs 自带 BOM 嗅探）。
+    #[test]
+    fn cp936_divergent_bytes_decode_like_dotnet() {
+        let dir = std::env::temp_dir().join(format!("gg-cp936-div-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("config.conf");
+        let mut body = b"[GameGate]\nCount=1\nServerAddr1=127.0.0.1\nServerPort1=5000\n\
+                         GatePort1=7200\nGateAddress1="
+            .to_vec();
+        body.extend_from_slice(&[0xFF, 0xA8, 0xBF]);
+        body.push(b'\n');
+        std::fs::write(&p, &body).unwrap();
+        let cfg = load(&p).unwrap();
+        assert_eq!(
+            cfg.endpoints[0].gate_addr, "\u{F8F5}\u{E7C8}",
+            "cp936：0xFF=U+F8F5、A8 BF=U+E7C8（WHATWG 给 U+FFFD / U+01F9）"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

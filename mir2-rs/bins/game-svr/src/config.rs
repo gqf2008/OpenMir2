@@ -1606,8 +1606,9 @@ GuildMsgBColor=11
     /// （`ConfigFile.cs:263`）⇒ 首行 BOM 被吞掉，`[DataBase]` 段照常识别。Rust 若不剥 BOM，
     /// `[DataBase]` 头丢失 ⇒ `ConnctionString` 缺键 ⇒ 回落 `database=mir2`（现网无此库）
     /// ⇒ `stditems` 恒空 ⇒ **带装备角色的 50/41 与 oracle 偏离**（裸装夹具/真机号看不出来）。
-    /// 本用例把「带 BOM 的现网形态」钉住；把 `load` 里的 `decode_config_text` 改回
-    /// `read_to_string` + `strip_prefix` ⇒ 本用例必红（E-5）。
+    /// 本用例是 **BOM 剥离逻辑的 pin**（不是整条编码链的牙）：它只证明现网 `ef bb bf`
+    /// 形态能被读通。更广的红检（GBK / UTF-16LE / 含 `0xFF` 夹具）落在
+    /// `server_conf_bom_matrix_both_chains`。
     #[test]
     fn deployed_conf_with_utf8_bom_reads_database_section() {
         let dir = std::env::temp_dir().join(format!("gs-bom-{}", std::process::id()));

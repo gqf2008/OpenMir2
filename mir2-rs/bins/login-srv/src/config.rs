@@ -639,4 +639,39 @@ mod tests {
             std::fs::remove_dir_all(&d).ok();
         }
     }
+
+    /// **E-6 真牙（cp936 精确字符集）**：`AddrTable` / `UserLimit` 的服务器名含
+    /// `0xFF → U+F8F5`、`A8 BF → U+E7C8`。旧实现 `encoding_rs::GBK.decode`
+    /// （`crate::gbk::decode` 的旧体）给 `U+FFFD` / `U+01F9` ⇒ 回退必红；
+    /// BOM 矩阵用例**不**具备这个牙（encoding_rs 自带 BOM 嗅探）。
+    #[test]
+    fn cp936_divergent_server_names_decode_like_dotnet() {
+        let d = tmp("cp936-div");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("logsrv.conf"),
+            "[Server]\nGateAddr=0.0.0.0\nGatePort=5500\nServerAddr=127.0.0.1\n\
+             ServerPort=5600\n[DataBase]\n\
+             ConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_account;\n",
+        )
+        .unwrap();
+        let mut addr = vec![0xFF, 0xA8, 0xBF];
+        addr.extend_from_slice(b" T1 127.0.0.1 127.0.0.1 127.0.0.1:7100\n");
+        std::fs::write(d.join("AddrTable.txt"), &addr).unwrap();
+        std::fs::write(d.join("ServerAddr.txt"), "127.0.0.1\n").unwrap();
+        let mut limit = vec![0xFF, 0xA8, 0xBF];
+        limit.extend_from_slice(b" g1 3000\n");
+        std::fs::write(d.join("UserLimit.txt"), &limit).unwrap();
+        let cfg = load(&d.join("logsrv.conf")).unwrap();
+        assert_eq!(
+            cfg.routes[0].server_name, "\u{F8F5}\u{E7C8}",
+            "AddrTable 服务器名：cp936 0xFF=U+F8F5、A8 BF=U+E7C8（WHATWG 给 U+FFFD / U+01F9）"
+        );
+        assert_eq!(
+            cfg.user_limit[0].as_ref().unwrap().server_name,
+            "\u{F8F5}\u{E7C8}",
+            "UserLimit 服务器名同口径"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
 }

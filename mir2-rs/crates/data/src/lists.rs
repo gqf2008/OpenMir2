@@ -487,8 +487,8 @@ pub fn load_unbind_list_file(path: &Path) -> Result<Option<UnbindListLoad>, List
 /// 解码口径 = oracle `StringList.LoadFromFile`（`src/OpenMir2/Common/StringList.cs:276-291`）：
 /// 先 `GetEncoding` 预判 BOM，再由 `StreamReader` 探测（UTF-8 / UTF-16LE / UTF-16BE /
 /// UTF-32BE；`FF FE 00 00` 是 UTF-16LE），无 BOM ⇒ cp936。统一走
-/// [`mir2_encoding::decode_string_list`]（曾用裸 [`mir2_encoding::decode`]，手工加 UTF-8 BOM 的
-/// 文件会被解成 cp936 乱码）。
+/// [`mir2_encoding::decode_string_list`]（回退目标是裸 [`mir2_encoding::decode`]：无 BOM 嗅探，
+/// UTF-8 BOM 会被当作 cp936 双字节解；该用例是**既有行为补测**，不是本批牙）。
 ///
 /// `Ok(None)` = 不存在（或同名目录）；`Err(Io)` = 存在但读失败（fail-closed，不静默当空）。
 fn read_gbk_if_file(path: &Path) -> Result<Option<String>, ListsError> {
@@ -870,8 +870,9 @@ mod tests {
     }
 
     /// **E-6 BOM 矩阵**：oracle 全部经 `StringList.LoadFromFile`（`GetEncoding` + BOM 探测）。
-    /// GBK / UTF-8 BOM / UTF-16LE 三份夹具必须解出同一物品名。旧实现裸 GBK 解码在
-    /// UTF-8 BOM 上会得到 `\u{FEFF}1` 之类的乱码 ⇒ make_index 解析失败 ⇒ 本用例红。
+    /// GBK / UTF-8 BOM / UTF-16LE 三份夹具必须解出同一物品名。回退目标是裸
+    /// `mir2_encoding::decode`（无 BOM 嗅探 ⇒ UTF-8 BOM 被当 cp936 双字节解，物品名乱码）。
+    /// 本用例是既有行为的补测，**不是**本批（E-6 加载器统一）的牙。
     #[test]
     fn load_item_name_list_bom_matrix() {
         let text = "1\t2\t裁决之杖\n";

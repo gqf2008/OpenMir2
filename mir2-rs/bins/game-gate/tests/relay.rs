@@ -783,11 +783,13 @@ async fn login_success_sends_synthetic_login_packet() {
 /// oracle：`loginData = HUtil32.GetString(...)`（.NET cp936）后 `ClientLogin`，
 /// 再 `loginPacket = $"**{sAccount}/…"` + `HUtil32.GetBytes(loginPacket)`（`ClientSession.cs:1203-1204`）。
 /// .NET cp936 解 `81 20` 是**一个** `?`（`0x81` 前导吞掉任意后继），而 WHATWG GBK 是
-/// `U+FFFD` + 空格两个字符 ⇒ 账号长度门 12/13 一放一拒，且重编码后的正文与 `PackLength` 都不同。
+/// `U+FFFD` + 空格两个字符 ⇒ 账号长度门 12/13：oracle（cp936）放行、WHATWG 误踢；
+/// 重编码后的正文与 `PackLength` 也不同。
 ///
 /// 构造帧的账号字节 = `81 20` + `loadbot1234`（11 ASCII）：
-/// - cp936：`?loadbot1234` = 12 字符 ⇒ `4 ≤ len ≤ 12` **通过**；
-/// - WHATWG：`U+FFFD` + ` ` + 11 = 13 字符 ⇒ oracle 会踢、Rust 若用 WHATWG 也会踢（无合成包）⇒ 本用例红。
+/// - oracle（cp936）：`81 20` 解成一个 `?` ⇒ `?loadbot1234` = 12 字符 ⇒ `4 ≤ len ≤ 12`
+///   **接受并补发合成包**；
+/// - 沿用 WHATWG：`U+FFFD` + ` ` + 11 = 13 字符 ⇒ **误踢**（无合成包）⇒ 本用例红。
 ///
 /// 期望字节按 oracle 公式独立重算（不复用被测函数）：`#0` + `EDCode(CP936(文本))` + `!`。
 #[tokio::test]
