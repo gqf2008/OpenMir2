@@ -37,7 +37,7 @@
 2. **654 / 第二 42 / 100×4 的修复在真机成立**：654 恰一条且在 46 之后、字段 `self/0/500/0`；
    第二 42 两侧 body 逐字节相同；100 两侧各 4 条、`param=65499/tag=0/series=1`，正文集合相同而**顺序不同**（已登记不确定）。
 3. **新缺陷 `657×2` 仍在**：C# 在 654 后发两条 `SM_CHARSTATUSCHANGED(657)`，Rust 一条都没有；
-   2026-10-22（旧二进制）与 2026-10-23（新二进制）**两轮一致** ⇒ 持续缺口，非本轮回归。
+   2026-10-22（旧二进制）与 2026-10-21（新二进制，本轮实跑）**两轮一致**（`20261023` 只是场景包文件名日期）⇒ 持续缺口，非本轮回归。
    已开卡 `openmir2-login-charstatus-657`（tier=R，P1，待派工）。
 4. **第二 42 的绝对位置目前被 657 缺口掩盖**：C# 序为 `654,657,657,第二42`，Rust 为 `654,第二42`；
    657 补齐后必须复采，才能判 J3 的完整相对序（`i46 < i654 < 657[0] < 657[1] < i42[1]`）。
@@ -62,9 +62,9 @@
 | T1-03 | `openmir2-login-frame-order-52-752` | `compare.json`（`52_semantic_compared=true`、`unverified=[]`、52/752 序一致）；`docs/window-shrink-run-20261019.md §10`；`E:/tmp/window/cliente2e/{csharp,rust}/proxy-621` | `52` 的 18 个语义字段（`winplay0` L30）逐项比较；`52,752` 相对序；`621/211` 实测：有武器 `52,752,621`、有技能 `52,752,621,211`，oracle 真实序 `52,752,621,211,811,46` | **部分（GREEN）**。还缺：E2 非 TestServer/发光装备/IsSpirit 槽位变化；`openmir2-login-magic-211-empty-slots` 的 211 空槽修复；`621/211` 在当前 head 复采；§10 未重述 head（同日 §8 为 `f3675f69a`；**UNKNOWN** 是否中途换过） |
 | T1-04 | `openmir2-login-numeric-gaps` | `docs/window-round2-result-20261023.md §5`；`compare.json`；`docs/window-run-sheet-20261022.md §B2`（部署权重=14） | `50/51` 的 `param` 两侧相等（289）⇒ 上轮 289/288 为输入漂移；`52` 语义字段（L30）已比 | **部分**。还缺：新号首登 `52` 的 `Weight=14`/`MaxExp=10`（本轮用 L30 账号，**未覆盖新号**）；新号首杀 `44/45/52/752` 帧序（不得出现 45）；非零 `WalkWait` 怪（圣域牛魔王 1200）的行走间隔 |
 | T1-05 | `openmir2-window-collector-preflight` | `docs/window-round2-result-20261023.md §1`；`compare.json`；`docs/window-round2-runbook-20261023.md` 附录 A；`judge_login.py --selftest`（GREEN 35 assertions, rc=0）与 `preflight.py --selftest`（GREEN 25 assertions, rc=0，2026-10-21 本机只读复跑） | 两侧采集 → `capture_login_compare.py` → `0` 非白名单差异的端到端链路跑通；proxy dump 的 `conn-*.s2c.bin` 可被判定器消费 | **部分（工具链 GREEN）**。还缺：两侧种子交叉断言；C# `site` 列；前置门在生产路径不误拦。另：`tools/loginfixture/capture_login_compare.py` 的模块 docstring 仍写「本车道没有在真机窗口里跑过」，与本轮事实不符，属注释漂移（是否有意 **UNKNOWN**，建议另开 L 卡订正） |
-| T1-06 | `openmir2-aoi-verify-maptime` | `docs/window-shrink-run-20261019.md §3/§4`；`E:/tmp/window/cliente2e/csharp/s2c-w03`、`E:/tmp/window/cliente2e/rust/s2c-w04`、`E:/tmp/window/cliente2e/csharp/s2c-w04` | 反向点 `(311,666)` 两侧 `appearance_pairs=0`；GuardList 点 `(291,666)` 两侧各**恰 1 对** `SM_TURN(281,661)+SM_FEATURECHANGED` | **部分**。还缺：`vis>=1`/`nearest<=vr` 的显式读数；当前 master 复采（证据 head=`f3675f69a`，之后 world 有 MB-4/城堡等改动）；`SM_WALK=0` 已由新卡 `openmir2-monster-walk-frames` 承接；本行证据 head=`7b2a8e7d5`（§8 复验为 `f3675f69a`，不含本行 W0-3/W0-4） |
-| T1-07 | `openmir2-guardlist-guards-loading` | `docs/window-shrink-run-20261019.md §4`（`E:/tmp/window/cliente2e/{csharp,rust}/s2c-w04`） | GuardList 帧一致：两侧各恰 1 对 `SM_TURN(281,661)`+`SM_FEATURECHANGED`；C#/Rust `recog` 不同已登记为会话 ID 生成差异 | **部分（GREEN）**。还缺：当前 master 复采；多守卫/多玩家投递序（该卡是否要求 **UNKNOWN**）；本行证据 head=`7b2a8e7d5`。另：该卡离线片 review 写 `tier=L`，本表按 m3 B 表把其**剩余真机项**登记为 R |
-| T1-08 | `openmir2-monster-attack-hit-frame` | `mir2-rs/tests/parity/m3/audit-monster-attack-cadence-20261019.md §0-B2/§2`；`E:/tmp/window/cliente2e/{csharp,rust}/s2c-*`；`docs/window-shrink-run-20261019.md §1/§2/§5` | **缺陷侧真机证据**：Rust 的 5–66 条 `SM_STRUCK` capture 中 `SM_HIT(14)` **0 条**，C# 有；W0-1/W0-2 证明「真实客户端→服务端→出站伤害帧」端到端成立（数值不同，不作字节判据）；W0-5 怪→玩家入站 ≥1 两侧成立；本行证据 head=`7b2a8e7d5` | **RED/缺陷侧（修复后未复采）**。还缺：`dcdcd807d` 之后的真机复采：每个受击者前 ~200ms 有同 `Recog` 的 `SM_HIT`、`Series=AttackDir`、逐字节头字段、收件人集 |
+| T1-06 | `openmir2-aoi-verify-maptime` | `docs/window-shrink-run-20261019.md §3/§4`；`E:/tmp/window/cliente2e/{csharp,rust}/s2c-w03`（W0-3 反向点）、`E:/tmp/window/cliente2e/{csharp,rust}/s2c-w04`（W0-4 GuardList 点） | 反向点 `(311,666)` 两侧 `appearance_pairs=0`；GuardList 点 `(291,666)` 两侧各**恰 1 对** `SM_TURN(281,661)+SM_FEATURECHANGED` | **部分**。还缺：`vis>=1`/`nearest<=vr` 的显式读数；当前 master 复采（本行证据之后 world 有 MB-4/城堡等改动：§8 复验 `f3675f69a`、当前 master `ce61cdca4`）；**`SM_WALK=0`（W0-4 复跑）仍属本卡余量**（看板 `work` 明列）；`openmir2-monster-walk-frames` 只承接「怪物走位发 `SM_WALK(11)`」，其 acceptance 不含静态 GuardList 的 W0-4 检查；本行证据 head=`7b2a8e7d5`（不含 §8 的 `f3675f69a`） |
+| T1-07 | `openmir2-guardlist-guards-loading` | `docs/window-shrink-run-20261019.md §4`（`E:/tmp/window/cliente2e/{csharp,rust}/s2c-w04`） | GuardList 帧一致：两侧各恰 1 对 `SM_TURN(281,661)`+`SM_FEATURECHANGED`；C#/Rust `recog` 不同已登记为会话 ID 生成差异 | **部分（GREEN）**。还缺（卡面 `work` 明列的剩余 DoD）：①**③a 反向点出现帧一致**（C# 侧现 1 对、修复后应两侧同）；②**`MIR2_RNG_SEED` 双侧 `site`/`order` 对拍**；两项并入下次联调窗口（与 ③b/③a 复跑同窗）。本行证据 head=`7b2a8e7d5`。另：该卡离线片 review 写 `tier=L`，本表按 m3 B 表把其**剩余真机项**登记为 R |
+| T1-08 | `openmir2-monster-attack-hit-frame` | `mir2-rs/tests/parity/m3/audit-monster-attack-cadence-20261019.md §0-B2/§2`；`E:/tmp/window/cliente2e/{csharp,rust}/s2c-*`；`docs/window-shrink-run-20261019.md §1/§2/§5` | **缺陷侧真机证据**：Rust 的 5–66 条 `SM_STRUCK` capture 中 `SM_HIT(14)` **0 条**，C# 有；W0-1/W0-2 证明「真实客户端→服务端→出站伤害帧」端到端成立（数值不同，不作字节判据）；W0-5 怪→玩家入站 ≥1 两侧成立；本行证据 head 按来源分：10-19 缩窗（§1/§2/§5）=`7b2a8e7d5`、10-18 缩窗（W0-5 入站 ≥1）=`84b696b05`、审计文档基线 `049771a9b`（只读解析 capture，非采集 head） | **RED/缺陷侧（修复后未复采）**。还缺：`dcdcd807d` 之后的真机复采：每个受击者前 ~200ms 有同 `Recog` 的 `SM_HIT`、`Series=AttackDir`、逐字节头字段、收件人集 |
 | T1-09 | `openmir2-monster-attack-cadence-lead` | `audit-monster-attack-cadence-20261019.md §0-C/§2`；看板线程 `openmir2-monster-attack-cadence-lead` 的定文 comment（`ts=1792389327`） | 原线索「Rust 14s 内被 5–8 次打死 vs C# 30s 仅 2 次」被定量证伪：Rust 92 个同怪间隔 min=3.147s、C# 25 个 min=3.190s，两侧 **0 条 <3.0s** | **部分（线索证伪）**。还缺：**HP 受控重采样**（起始 HP 未控是原线索的混淆项）；`recog=SELF` 过滤后的同怪 interval；尸体/复活构造 |
 | T1-10 | `openmir2-delmagic-addmagic-chain` | `docs/window-shrink-run-20261019.md §10`；`E:/tmp/window/cliente2e/{csharp,rust}/proxy-621` | **缺陷侧真机证据**：角色带职业不可用技能时，C# 登录发 `SM_DELMAGIC(212)` 且落库；下线后 `characters_magic` 行消失；Rust 当时**未观察到 212** | **RED/缺陷侧（修复后未复采）**。还缺：`210/212` 的字节与序；会话内戴 115 发 210 / 打碎治愈戒指发 212；FlameRing 粘滞跨登录；若同场景出现 `657×2` 一并记；§10 未重述 head（同日 §8 为 `f3675f69a`；**UNKNOWN**） |
 | T1-11 | `openmir2-monster-walk-frames`（A-17 派生，非 B 表卡） | `audit-monster-attack-cadence-20261019.md §0-B1/§4.2`；同批 `E:/tmp/window/cliente2e/**/s2c-*` capture | **缺陷侧真机证据**：怪物走位时 Rust **完全不下发** `SM_WALK(11)`；oracle 观察者回 `SM_WALK` | **RED/缺陷侧**。还缺：修复后每次走位一帧、字段/收件人/相对序的真机复采；该卡与 657 同 lane（`wt-657`）串行，见 `openmir2-monster-walk-frames` `work` |
@@ -214,10 +214,10 @@
 
 1. **独占与前置（先做，缺一不开窗）**：确认九游戏端口 + `7600` 全 DOWN、`3306` UP。
    当前（13:30 实测）九个游戏端口被另一栈占用（3306 为共享 MySQL）⇒ **必须等其收窗**。随后重跑
-   `client-e2e-window.fixed.sh.txt guard`，期望 `WINDOW_GUARD_OK`；R6 按**当天** `origin/master` 重解析，R7 重编六件 + `--record-provenance`，R8 端口复核。
+   `client-e2e-window.fixed.sh.txt guard`，期望 `WINDOW_GUARD_OK`；R6 按**当天** `walgit/master` 重解析（`origin/master` 只是人工镜像，当前 `b46805058` 已落后 56 个提交、不含 `1915b67a5`/`ab44031ce`），R7 重编六件 + `--record-provenance`，R8 端口复核。
 2. **代码前置**：合入 `openmir2-login-charstatus-657`（657×2），确认 **15 帧前缀、654、第二 42、100×4 均不变**；
    同 lane 的 `openmir2-monster-walk-frames` 串行，不并发改 `bins/game-svr`。
-3. **镜像/产物**：`/e/tmp/m2svr-window-origin` 检出当天 `origin/master`；`CARGO_TARGET_DIR=/e/tmp/m2svr-window-target`；
+3. **镜像/产物**：`/e/tmp/m2svr-window-origin` 检出当天 `walgit/master`（仓库口径：walgit 为代码主源，`origin` 仅人工镜像）；`CARGO_TARGET_DIR=/e/tmp/m2svr-window-target`；
    重编 `game-svr/game-gate/login-srv/login-gate/sel-gate/db-srv`；`record_window_provenance.py --ref <HEAD> --record-provenance`。
 4. **DB（E1-a）**：两侧跑前从生产 `mysqldump --single-transaction` 克隆 `mir2_test_data/_db/_account`；
    快照 `base`；**不写生产库**。
@@ -285,7 +285,7 @@ sha256sum E:/tmp/window/20261023/compare.json \
 1. `657×2` 的根因未定位：是 `RecalcAbilitys` 的 `StatusChanged()` 自回环，还是 `SendUpdateMsg(RM_CHARSTATUSCHANGED)` 来源，
    **UNKNOWN**；卡里已列两条来源待查。
 2. 表 1 的 `SM_HIT`/`SM_WALK`/`212` 证据都是**修复前**的 RED 证据；修复后没有真机复采 ⇒ 不能据此收卡。
-3. 2026-10-18/19 缩窗证据的 head 是 `7b2a8e7d5`（§1–§5）/`f3675f69a`（§8 复验）；当前 master `ce61cdca4` 之后 `crates/world` 有 MB-4/城堡等改动，
+3. 缩窗证据 head 按来源分：**2026-10-18** = `84b696b05`（`docs/window-shrink-run-20261018.md`）；**2026-10-19** §1–§7 = `7b2a8e7d5`、§8 复验 = `f3675f69a`；当前 master `ce61cdca4` 之后 `crates/world` 有 MB-4/城堡等改动，
    **旧 GREEN 不自动等价于当前 head GREEN**。
 4. 当前栈是另一条 lane 在 13:30 启动的（占用 5000–7200）；其归属/预计收窗时间 **UNKNOWN**，本文件未触碰。
 5. 看板是移动目标；本文件只对 13:34 快照负责，重放以附录 A 的 `last_oid` 为准。
