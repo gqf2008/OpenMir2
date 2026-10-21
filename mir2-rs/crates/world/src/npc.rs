@@ -45,6 +45,7 @@
 //!   （与 [`crate::merchant`] 同款）；实体槽位序 = 文件正序 [`World::insert_npc`]。
 
 use crate::entity::{BaseAnimalCtorDraws, Entity, ACTOR_RACE_NPC};
+use crate::merchant::ACTOR_RACE_MERCHANT;
 use crate::map::CellType;
 use crate::World;
 
@@ -173,6 +174,14 @@ impl World {
         e.map_id = spawn.map_id;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
         e.verify_tick = self.clock_ms;
+        // 外观轴与 oracle 对齐（2026-10-21 复核 F1）：
+        // - `GuildOfficial()` ctor `RaceImg = ActorRace.Merchant(50)`、`Appr = 8`
+        //   （`GuildOfficial.cs:18-19`）；其余固定 NPC 的 `RaceImg` 保持 0（`BaseObject.cs:380`）。
+        // - `LocalDB.cs:707` 的 `Appr`（Npcs.txt 列）落在 `BaseObject.Appr`。
+        if state.npc_type == NPC_TYPE_GUILD_OFFICIAL {
+            e.race_img = ACTOR_RACE_MERCHANT;
+        }
+        e.appr = state.appr;
         e.npc = Some(state);
         Some(self.entities.insert(e))
     }

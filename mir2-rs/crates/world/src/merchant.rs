@@ -2069,7 +2069,9 @@ mod tests {
         assert_eq!(crate::world::entity_cell_type(e), CellType::Merchant);
     }
 
-    /// 判据 1（玩家攻击路径）：商人**不可被选中/击中**，攻击不产生伤害与受击帧。
+    /// 判据 1（玩家攻击路径）：**race 窗模式**（HAM_ALL/PEACE/GROUP/GUILD/PKATTACK）下
+    /// 商人不可被选中/击中，攻击不产生伤害与受击帧；`HAM_MASTER`/`HAM_DEAR` 对非玩家目标
+    /// 恒真（`PlayObject.Attack.cs:689-698`），属 oracle 既有分支，不在本判据范围。
     ///
     /// 走生产结算入口 [`World::attack_once`]（`Command::Attack` 的唯一结算点，玩家/怪物共用；
     /// 等价 oracle `_Attack` + `AttackSuccess`）。受击帧 = `RM_REFMESSAGE` 到点后的

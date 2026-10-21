@@ -900,7 +900,9 @@ pub fn struck_damage_multiplier(
     mon_hum: i32,
 ) -> i32 {
     // 返回"十分之几"的倍率（C# 里是 `伤害 * per10 / 10`）
-    if let Some(hitter) = last_hitter.filter(|h| target.race >= 50 && h.race == ACTOR_RACE_PLAY) {
+    if let Some(hitter) =
+        last_hitter.filter(|h| target.race >= ACTOR_RACE_ANIMAL && h.race == ACTOR_RACE_PLAY)
+    {
         // `(Race >= ActorRace.Animal) && (LastHiter != null) && (LastHiter.Race == ActorRace.Play)`
         match hitter.job {
             0 => warr_mon,   // Warrior
