@@ -3835,7 +3835,7 @@ fn handle_click_npc_cmd(
             if !script_frames.is_empty() {
                 if let Some(tx) = route_to_gate(gates, entry.gate_idx, socket, "商人 @main 脚本帧")
                 {
-                    emit_script_frames(tx, socket, sg, &script_frames);
+                    emit_script_frames(tx, socket, npc_actor_id, sg, &script_frames);
                 }
             }
         }
@@ -4559,7 +4559,7 @@ fn handle_shop_cmd(
             }
             if !script_frames.is_empty() {
                 if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人 1011 脚本帧") {
-                    emit_script_frames(tx, socket, sg, &script_frames);
+                    emit_script_frames(tx, socket, merchant_id, sg, &script_frames);
                 }
             }
             if !bo_can_jmp {
@@ -4605,7 +4605,7 @@ fn handle_shop_cmd(
                 if !script_frames.is_empty() {
                     if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人 @back 脚本帧")
                     {
-                        emit_script_frames(tx, socket, sg, &script_frames);
+                        emit_script_frames(tx, socket, merchant_id, sg, &script_frames);
                     }
                 }
             }
@@ -4996,7 +4996,7 @@ fn handle_shop_cmd(
                 if !script_frames.is_empty() {
                     if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人修理脚本帧")
                     {
-                        emit_script_frames(tx, socket, sg, &script_frames);
+                        emit_script_frames(tx, socket, merchant_id, sg, &script_frames);
                     }
                 }
             }
@@ -5429,14 +5429,19 @@ fn emit_npc_says(
 fn emit_script_frames(
     tx: &mpsc::UnboundedSender<SimToGate>,
     socket: i32,
+    npc_actor_id: i32,
     sg: &SessionGround,
     frames: &[game_svr::npc::SendMsg],
 ) -> usize {
     let mut sent = 0usize;
     for f in frames {
-        let Some(body) =
-            game_svr::pickwire::script_frame(f, sg.game_gold, sg.game_point, sg.soft_version_date)
-        else {
+        let Some(body) = game_svr::pickwire::script_frame(
+            f,
+            npc_actor_id,
+            sg.game_gold,
+            sg.game_point,
+            sg.soft_version_date,
+        ) else {
             continue;
         };
         let _ = tx.send(SimToGate::SendFrame { socket, body });
@@ -13464,9 +13469,10 @@ struct ShopSession {
     /// `PlayObject.CanJmpScriptLableMap`（`PlayObject.cs:617/938`，`OrdinalIgnoreCase`）。
     ///
     /// `GetScriptLabel`（`PlayObject.Base.cs:2775-2807`）在**每次商人说词**时 `Clear` 后重建；
-    /// `LableIsCanJmp`（`:2814-2826`）特判 `@main`。本仓 `Market_Def` 商人脚本未装载
-    /// （T-47 ③）⇒ 生产侧该表恒空（构造客户端直发 `@upgradenow` 会被 oracle 丢弃，本侧同样丢弃）；
-    /// 说词链路落地后由 say 生产者调用 `shop::get_script_label` 填充。
+    /// `LableIsCanJmp`（`:2814-2826`）特判 `@main`。**现状（2026-10-21）**：`Market_Def`
+    /// 商人脚本已装载（T-145/T-142），每个下发说词的调用点都会用 `shop::get_script_label`
+    /// 重填本表 ⇒ 直接发送的标签（`@upgradenow`/`@dice` 等）按最近的 say 集合判定；只有未装载
+    /// 脚本的 NPC 才表现为空表。
     can_jmp_labels: Vec<String>,
     /// `PlayObject.ScriptCurrLable`（`PlayObject.cs` 字段；`NormNpc.UserSelect` 的
     /// `NormNpc.cs:1633-1657` 维护）：固定 NPC（`GuildOfficial`）的 `@back` 回跳账本。
@@ -22127,6 +22133,22 @@ mod tests {
         assert!(
             frames.contains(&game_svr::smframe::sm_gamegoldname(160, 0x0001_0002, &[])),
             "CM_CLICKNPC 的脚本帧排水必须下发 SM_GAMEGOLDNAME(160, GamePoint)；实收 {:?}",
+            frames.iter().map(|b| hdr(b.as_slice())).collect::<Vec<_>>()
+        );
+        // `/code-review` finding 1：`RM_PLAYDICE(10500)` 必须经脚本帧排水下发
+        // `SM_PLAYDICE`（`PlayObject.Message.cs:2034-2041`：recog = 入队 NPC ActorId、
+        // wParam = 脚本 nParam1、WL 三参 = MDyVal 打包、尾 = EncodeString(sParam2)）。
+        // 删 `pickwire::script_frame` 的 RM_PLAYDICE 分支 ⇒ 本断言红。
+        assert!(
+            frames.contains(&game_svr::smframe_ext::sm_playdice(
+                rig.merchant_id,
+                1,
+                0,
+                0,
+                0,
+                b"@dice"
+            )),
+            "PLAYDICE 必须下发 SM_PLAYDICE(8001)；实收 {:?}",
             frames.iter().map(|b| hdr(b.as_slice())).collect::<Vec<_>>()
         );
 

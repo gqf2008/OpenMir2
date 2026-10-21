@@ -124,19 +124,28 @@ pub fn notice_frame(n: &QueuedNotice, session: &WireSession) -> Option<Vec<u8>> 
 /// `RM_GAMEGOLDCHANGED(8084)`：`GAMEGOLD`/`GAMEPOINT` 动作改元宝后
 /// `GameGoldChanged()`（`BaseObject.cs:593-599`）排队的那条消息。
 pub const RM_SCRIPT_GAMEGOLDCHANGED: i32 = mir2_protocol::messages::RM_GAMEGOLDCHANGED as i32;
+/// `Messages.RM_PLAYDICE`（`Messages.cs` 10500；泵 `PlayObject.Message.cs:2034-2041`）。
+pub const RM_SCRIPT_PLAYDICE: i32 = mir2_protocol::messages::RM_PLAYDICE as i32;
 
 /// **脚本帧**（[`SendMsg`]，`NpcPlayer.frames`）⇒ wire body。
 ///
-/// 目前只映射 `RM_GAMEGOLDCHANGED`：消息泵里它是 `SendGoldInfo(false)`
-/// （`PlayObject.Message.cs:1836-1837`）⇒ `SendDefMessage(SM_GAMEGOLDNAME, GameGold,
-/// LoWord(GamePoint), HiWord(GamePoint), 0, "")`（`PlayObject.Base.cs:927-939`）；
-/// `SoftVersionDateEx == 0` 时整帧不发（同 `:930`）。其余脚本 ident 仍按既有口径丢弃
-/// （登记在 T-142 残余；`RM_PLAYDICE` 的排水未在本片扩面）。
+/// 映射两条脚本 `RM_*`（与 oracle 消息泵逐字段对齐）：
 ///
+/// - `RM_GAMEGOLDCHANGED`（8084）⇒ `SendGoldInfo(false)`（`PlayObject.Message.cs:1836-1837`）
+///   ⇒ `SendDefMessage(SM_GAMEGOLDNAME, GameGold, LoWord(GamePoint), HiWord(GamePoint), 0, "")`
+///   （`PlayObject.Base.cs:927-939`）；`SoftVersionDateEx == 0` 时整帧不发（同 `:930`）。
+/// - `RM_PLAYDICE`（10500）⇒ `PlayObject.Message.cs:2034-2041`：
+///   `MakeMessage(SM_PLAYDICE, processMsg.ActorId, processMsg.wParam, 0, 0)`
+///   ++ `EncodePacket(MessageBodyWL{Param1,Param2,Tag1,0})` ++ `EncodeString(Msg)`；
+///   `ActorId` = 入队方 NPC 的 `ActorId`（`BaseObject.Message.cs:26/90` 的 `this.ActorId`），
+///   调用方须传入本次 `GotoLable` 的 NPC 实体 id。
+///
+/// 其余 ident 仍按既有口径丢弃（T-142 残余）。
 /// `None` = 不发帧（未知 ident，或 `SoftVersionDateEx == 0` 门挡住）。
 #[must_use]
 pub fn script_frame(
     s: &SendMsg,
+    npc_actor_id: i32,
     game_gold: i32,
     game_point: i32,
     soft_version_date: i32,
@@ -147,6 +156,19 @@ pub fn script_frame(
                 return None;
             }
             Some(smframe::sm_gamegoldname(game_gold, game_point, &[]))
+        }
+        RM_SCRIPT_PLAYDICE => {
+            let msg = s.msg.as_deref().unwrap_or("");
+            // 线上尾 = `EDCode.EncodeString(processMsg.Msg)`；`Msg` 在线上是 GBK 字节。
+            let bytes = encoding_rs::GBK.encode(msg).0.into_owned();
+            Some(crate::smframe_ext::sm_playdice(
+                npc_actor_id,
+                s.w_param,
+                s.n_param1,
+                s.n_param2,
+                s.n_param3,
+                &bytes,
+            ))
         }
         _ => None,
     }
@@ -602,6 +624,31 @@ mod tests {
         assert_eq!(g.name, crate::ground::GOLD_NAME);
         assert_eq!(g.count, 555);
         assert_eq!(g.of_base_object, 42);
+    }
+
+    /// **`RM_PLAYDICE` 映射**（`PlayObject.Message.cs:2034-2041`）：
+    /// `ActorId` = 入队 NPC、`wParam` 原样、WL 三参 = 脚本 nParam1..3、尾 = `EncodeString(Msg)`。
+    /// 牙：删 `script_frame` 的 `RM_SCRIPT_PLAYDICE` 分支 ⇒ `None`，本用例红。
+    #[test]
+    fn script_frame_maps_playdice_to_sm_playdice() {
+        let s = SendMsg {
+            ident: RM_SCRIPT_PLAYDICE,
+            w_param: 1,
+            n_param1: 0x0102_0304,
+            n_param2: 0x0506_0708,
+            n_param3: 0x090a_0b0c,
+            msg: Some("@cube82".to_string()),
+        };
+        let got = script_frame(&s, 4242, 0, 0, 0).expect("RM_PLAYDICE 必须映射");
+        let want = crate::smframe_ext::sm_playdice(
+            4242,
+            1,
+            0x0102_0304,
+            0x0506_0708,
+            0x090a_0b0c,
+            b"@cube82",
+        );
+        assert_eq!(got, want, "SM_PLAYDICE 字段/次序必须与泵逐字节一致");
     }
 
     /// `CM_PICKUP` 的位置门（派发层口径）。
