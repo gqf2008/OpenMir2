@@ -36,6 +36,7 @@
 use mir2_data::models::StdItem;
 use mir2_shared::rng::RandomNumber;
 
+use crate::castle_tax::MerchantCastleBinding;
 use crate::entity::{BaseAnimalCtorDraws, Entity};
 use crate::map::{CellType, MoveRequest};
 use crate::world::World;
@@ -152,6 +153,15 @@ pub struct MerchantState {
     pub goods_list: Vec<Vec<MerchantItem>>,
     /// `IMerchant.CastleMerchant`（`LocalDB.cs:461-464`）。
     pub castle_merchant: bool,
+    /// `NormNpc.Castle`（`Merchant.Castle`）——`Initialize()` 时刻
+    /// `CastleMgr.InCastleWarArea(this)`（`NormNpc.cs:1674-1678`）命中的城堡下标。
+    ///
+    /// **spawn 时刻固定**：oracle 的 `Merchant.Run → MapRandomMove` 之后不重算
+    /// （`design-castle-tax-and-item-name-20261022.md` §1.2.5），故本字段只在
+    /// [`World::insert_merchant`] 写一次（或由 [`World::set_merchant_castle_index`] 显式重绑）；
+    /// `Some(i)` ⇔ oracle `Castle != null`，与 `castle_merchant` **互相独立**
+    /// （位置落在攻城区/皇宫/密道/`EnvirList` 图内即命中）。
+    pub castle_index: Option<usize>,
     /// `IMerchant.BoCanMove`（`LocalDB.cs:465-468`）。
     pub can_move: bool,
     /// `IMerchant.MoveTime`（秒，`LocalDB.cs:451`）。
@@ -222,6 +232,7 @@ impl MerchantState {
             refill_goods,
             goods_list: Vec::new(),
             castle_merchant,
+            castle_index: None,
             can_move,
             move_time,
             process_refill_index,
@@ -281,6 +292,10 @@ impl World {
         let map_id = spawn.map_id;
         let (x, y) = (spawn.x, spawn.y);
         let mut state = spawn.state;
+        // `NormNpc.Initialize()`：`Castle = SystemShare.CastleMgr.InCastleWarArea(this)`
+        // （`NormNpc.cs:1674-1678`）。在出生点解析**一次**并固定（`Merchant.Run` 的移动不重算）；
+        // 与 `CastleMerchant` 无关——只要位置落在攻城区/皇宫/密道/`EnvirList` 图内就命中。
+        state.castle_index = self.castle_war_area_at(Some(map_id), x, y);
         if state.run_tick == MERCHANT_RUN_TICK_UNSET {
             // 无预抽（[`World::spawn_merchant`] 一步到位）⇒ 在此抽整条公共链 4 抽，同
             // [`World::merchant_ctor_run_delay`]；只有 `RunTick` 分量被保留（见其注释）。
@@ -365,6 +380,37 @@ impl World {
         } else {
             None
         }
+    }
+
+    /// 商人的 `castle_index`（`NormNpc.Castle` 的下标）；
+    /// `None` = 该 id 不是商人**或**商人无城堡（`Castle == null`）。
+    ///
+    /// 需要区分这两种 `None` 时用 [`World::merchant_castle_binding`]。
+    #[must_use]
+    pub fn merchant_castle_index(&self, id: i32) -> Option<usize> {
+        self.entities.get(id)?.merchant.as_ref()?.castle_index
+    }
+
+    /// [`MerchantCastleBinding`] 视图（`castle_merchant` + `castle_index`；`None` = 非商人）。
+    #[must_use]
+    pub fn merchant_castle_binding(&self, id: i32) -> Option<MerchantCastleBinding> {
+        let st = self.entities.get(id)?.merchant.as_ref()?;
+        Some(MerchantCastleBinding::new(
+            st.castle_merchant,
+            st.castle_index,
+        ))
+    }
+
+    /// 覆写 `castle_index`。oracle 只在 `Initialize()` 写一次；本 setter 供构造级夹具
+    /// （`CastleMgr` 晚于商人装载的场景）与 `GetCastle` 后的显式重绑使用。
+    ///
+    /// 返回 `false` = 该 id 不是商人（无 `merchant` 状态）。
+    pub fn set_merchant_castle_index(&mut self, id: i32, castle_index: Option<usize>) -> bool {
+        let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) else {
+            return false;
+        };
+        st.castle_index = castle_index;
+        true
     }
 
     /// 按**槽位顺序**列出所有商人实体 id（`MerchantList` 的确定性等价物；供 ⑤-4 取列表）。
@@ -1617,6 +1663,7 @@ fn equals_ordinal_ignore_case(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::castle::{CastleSiegeConfig, UserCastle};
     use crate::map::CellAttribute;
     use mir2_data::models::StdItem;
 
@@ -3058,5 +3105,118 @@ mod tests {
         }
         let _ = merchant_run(&mut w, mid);
         assert_eq!(list_len(&w, mid), 0, "10min 门到点清理过期记录");
+    }
+
+    /// 攻城区型城堡：`castle_map_id` 命中 + `|home - pos| < range`（严格 `<`）。
+    fn castle_at(map_id: usize, home: (i16, i16), range: (i32, i32)) -> UserCastle {
+        let mut c = UserCastle::new("沙巴克", CastleSiegeConfig::default());
+        c.map_name = Some(map_id.to_string());
+        c.castle_map_id = Some(map_id);
+        c.home_x = home.0;
+        c.home_y = home.1;
+        c.war_range_x = range.0;
+        c.war_range_y = range.1;
+        c
+    }
+
+    /// G-T1 `merchant_castle_index_is_fixed_at_spawn`：spawn 时按
+    /// `CastleMgr.InCastleWarArea(this)`（`NormNpc.cs:1674-1678`）解析一次，之后移动**不重算**。
+    ///
+    /// 牙：把 `merchant_castle_index` 改成“按当前坐标实时重算” ⇒ 移动后断言 `Some(0)` 得 `None`（红）；
+    /// 把 `insert_merchant` 的解析删掉（恒 `None`）⇒ 首条断言红。
+    #[test]
+    fn merchant_castle_index_is_fixed_at_spawn() {
+        let mut w = World::with_maps(vec![(120, 120); 10]);
+        w.castles.push(castle_at(3, (100, 50), (100, 100)));
+
+        let mut in_area = spawn_at(1, 50); // dx = |100-1| = 99 < 100
+        in_area.map_id = 3;
+        in_area.state.castle_merchant = false; // 与 Castle 命中无关（§1.2.2）
+        let id = w.spawn_merchant(in_area).expect("map 3 界内可走");
+        assert_eq!(w.merchant_castle_index(id), Some(0));
+        let binding = w.merchant_castle_binding(id).expect("商人");
+        assert!(!binding.castle_merchant, "MerChant 第 8 列缺省 0");
+        assert_eq!(
+            binding.castle_index,
+            Some(0),
+            "CastleMerchant=false 但位置在攻城区仍命中 Castle"
+        );
+
+        // oracle：Initialize 后移动不重算（`Merchant.Run → MapRandomMove` 不刷 Castle）。
+        // 移到 dx = 100（严格 `<` 不成立）——若重算必须变 None。
+        w.entities.get_mut(id).unwrap().x = 0;
+        assert_eq!(
+            w.merchant_castle_index(id),
+            Some(0),
+            "spawn 后移动不得重算（若重算应为 None）"
+        );
+
+        // 同一组城堡，出生点就在界外 ⇒ None（证明解析真的按位置发生，不是恒 Some）。
+        let mut out_of_area = spawn_at(1, 50);
+        out_of_area.map_id = 3;
+        out_of_area.state.castle_merchant = true;
+        w.castles[0].war_range_x = 99; // dx=99 ⇒ 严格 `<` 不成立
+        let far_id = w.spawn_merchant(out_of_area).expect("界内");
+        assert_eq!(
+            w.merchant_castle_index(far_id),
+            None,
+            "dx=99 不满足严格 `<`（range=99）"
+        );
+    }
+
+    /// `InCastleWarArea` 三支（攻城区严格 `<` / 皇宫 / 密道 / `EnvirList`）都参与 spawn 解析；
+    /// 多座城按 `CastleList` 顺序取首个命中。
+    ///
+    /// 牙：把解析改成 `castle_member_at`（按城主行会）⇒ 所有行都 `None`（红）；把严格 `<`
+    /// 改成 `<=` ⇒ dx=100 行得 `Some(0)`（红，需同步改 `castle.rs` 生产路径）。
+    #[test]
+    fn merchant_castle_index_uses_in_castle_war_area_branches() {
+        let mut w = World::with_maps(vec![(120, 120); 10]);
+        w.castles.push(castle_at(3, (100, 50), (100, 100)));
+        let mut palace = UserCastle::new("城B", CastleSiegeConfig::default());
+        palace.palace_map_id = Some(8);
+        palace.envir_map_ids = vec![7];
+        w.castles.push(palace);
+
+        let mut spawn_on = |map_id: usize, x: i32, y: i32| -> Option<usize> {
+            let mut sp = spawn_at(x, y);
+            sp.map_id = map_id;
+            let id = w.spawn_merchant(sp).expect("界内可走");
+            w.merchant_castle_index(id)
+        };
+
+        // dx=99 ⇒ 命中城 A；dx=100 ⇒ 严格 `<` 不成立。
+        assert_eq!(spawn_on(3, 1, 50), Some(0), "dx=99");
+        assert_eq!(spawn_on(3, 0, 50), None, "dx=100 严格 `<` 为 false");
+        // 皇宫 / EnvirList 支。
+        assert_eq!(spawn_on(8, 0, 0), Some(1), "PalaceEnvir");
+        assert_eq!(spawn_on(7, 0, 0), Some(1), "EnvirList");
+        // 无命中。
+        assert_eq!(spawn_on(9, 0, 0), None);
+    }
+
+    /// G-T1 变体：`castle_index` 的 setter/accessor 往返（构造级夹具与 `GetCastle` 重绑）。
+    ///
+    /// 牙：setter 改成只对 `castle_merchant=true` 的商人生效 ⇒ 缺省商人往返断言红。
+    #[test]
+    fn merchant_castle_index_setter_round_trip() {
+        let mut w = World::with_maps(vec![(20, 20); 4]);
+        let id = w.spawn_merchant(spawn_at(3, 4)).expect("map 0");
+        assert_eq!(w.merchant_castle_index(id), None, "无城堡 ⇒ Castle=null");
+
+        assert!(w.set_merchant_castle_index(id, Some(2)));
+        assert_eq!(w.merchant_castle_index(id), Some(2));
+        assert_eq!(
+            w.merchant_castle_binding(id),
+            Some(MerchantCastleBinding::new(false, Some(2)))
+        );
+
+        assert!(w.set_merchant_castle_index(id, None));
+        assert_eq!(w.merchant_castle_index(id), None);
+
+        // 非商人：setter false、getter None。
+        assert!(!w.set_merchant_castle_index(9999, Some(0)));
+        assert_eq!(w.merchant_castle_index(9999), None);
+        assert!(w.merchant_castle_binding(9999).is_none());
     }
 }
