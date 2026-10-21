@@ -29,11 +29,13 @@
 //!
 //! # 本片口径与登记
 //!
-//! - **`GetUpgradeStdItem` 的 desc 升级差量未实现**（`GameItemSystem.cs:731-...` 的大 switch）：
-//!   新角色默认 4 件物品 `Desc` 全 0 ⇒ 各分支退化为「原值」（`MakeWord(LoByte(x), min(255, HiByte(x)+0)) = x`）
-//!   ⇒ **本接缝对 desc=0 与 oracle 逐字节一致**；带升级物品走 `TODO: T-*` 登记。
-//! - `CustomItemSystem.GetItemName`（`CustomItemSystem.cs:122`）：`Desc[13]==1` 才取自定义名，
-//!   默认物品 `Desc[13]==0` ⇒ 模板名。本接缝只走模板名（自定义名未建模，登记）。
+//! - **`GetUpgradeStdItem` 的 desc 升级差量已实现**（`GameItemSystem.cs:731-1160`）：
+//!   [`encode_client_item`] 对每个 `ClientItem` 统一套 [`crate::bag::upgrade_std_item`]
+//!   （`CopyItemToClientItem` + 各 `StdMode` 分支），调用方传**原始模板**即可；`Desc` 全 0 ⇒ 恒等。
+//!   残余只在「先升级再 `ChangeItemWithLevel/ByJob`」的顺序点（宿主 `SM_UPDATEITEM` 已按 oracle 顺序）。
+//! - `CustomItemSystem.GetItemName`（`CustomItemSystem.cs:119-125`）：`Desc[13]==1` 才取自定义名
+//!   （`ItemNameList` 未命中 = **空串**，oracle 原样）；名字由调用方经
+//!   [`crate::bag::item_display_name`] 生成，本接缝只负责编码。
 //! - `StdMode == 50` 的名字后缀 `" #" + Dura` 照抄（`Operate.cs:52-55`）。
 
 use encoding_rs::GBK;
@@ -79,8 +81,41 @@ pub(crate) fn write_ascii_string(out: &mut Vec<u8>, value: &str, default_size: u
 }
 
 /// `ClientItem.WritePacket` 的 1:1 编码（字段序照 `ClientItem.cs:22-84`）。
+///
+/// **有效物品在这里统一生成**：oracle 每个 `ClientItem` 发射点都先调
+/// `GetUpgradeStdItem(stdItem, userItem, ref clientItem)`（`GameItemSystem.cs:731`）再做
+/// `Name = CustomItemSystem.GetItemName(...)`/`ChangeItemWithLevel`/`ChangeItemByJob`。
+/// 本函数的入参 `ci.tpl` 是**未升级的模板**、`ci.desc` 是实例的 `UserItem.Desc`，内部按
+/// [`crate::bag::upgrade_std_item`] 叠加差量后再编码 ⇒ 全部展示路径（背包/仓库/商人/寄售/
+/// 地面/交易）自动同口径，不会各写一份。`desc` 全 0 时差量与 oracle 一样退化为恒等。
+///
+/// ⚠ 调用方若还要做 `ChangeItemWithLevel`/`ChangeItemByJob`（`ClientItem` 的展示层变换），
+/// 必须**先**用 [`crate::bag::upgrade_std_item`] 得到有效物品再调用 `change_item_*`——oracle 的
+/// 顺序是“升级差量 → 展示层变换”（`PlayObject.Base.cs:1694-1710`）。本函数只负责最后一步编码。
 #[must_use]
 pub fn encode_client_item(ci: &ClientItem<'_>) -> Vec<u8> {
+    // `CopyItemToClientItem` + `/StdMode` 分支的 Desc 差量（`GameItemSystem.cs:731-1160`）。
+    // `count`（被 Desc 命中的字段数）在 oracle 的 ClientItem 发射点都被忽略。
+    let (upgraded, _count) = crate::bag::upgrade_std_item(ci.tpl, &ci.desc);
+    let prepared = ClientItem {
+        tpl: &upgraded,
+        name: ci.name.clone(),
+        make_index: ci.make_index,
+        dura: ci.dura,
+        dura_max: ci.dura_max,
+        desc: ci.desc,
+    };
+    encode_client_item_prepared(&prepared)
+}
+
+/// [`encode_client_item`] 的**模板已就绪**版本：不再做 `GetUpgradeStdItem`（`ci.tpl` 必须是
+/// 调用方按 oracle 顺序预先算好的有效物品：先升级差量、再 `ChangeItemWithLevel/ByJob`）。
+///
+/// 只有需要“升级后再做展示层变换”的调用点才走这里（宿主 `SM_UPDATEITEM`，oracle
+/// `SendUpdateItemWithLevel/ByJob`，`PlayObject.Base.cs:1688-1728`）；其余路径用
+/// [`encode_client_item`] 以免各写一份差量。
+#[must_use]
+pub fn encode_client_item_prepared(ci: &ClientItem<'_>) -> Vec<u8> {
     let t = ci.tpl;
     let mut out = Vec::with_capacity(128);
     write_ascii_string(&mut out, &ci.name, ITEM_NAME_LEN);
@@ -135,7 +170,11 @@ pub fn encode_client_item(ci: &ClientItem<'_>) -> Vec<u8> {
     out.extend_from_slice(&ci.make_index.to_le_bytes());
     out.extend_from_slice(&ci.dura.to_le_bytes());
     out.extend_from_slice(&ci.dura_max.to_le_bytes());
-    out.extend_from_slice(&ci.desc);
+    // `ClientItem.Desc` 在 oracle 里**恒为 14 个 0**：`ClientItem()` 构造 `new byte[14]`
+    // （`ClientItem.cs:14-18`），全仓没有任何 `clientItem.Desc[...] =` 赋值（`grep clientItem.Desc`
+    // 0 命中）⇒ 线上尾部这 14 字节与 `UserItem.Desc` **无关**。`ci.desc` 只用于升级差量
+    // （`encode_client_item` 的入参），不落线。
+    out.extend_from_slice(&[0u8; ITEM_NAME_LEN]);
     out.push(0);
     out.push(0);
     out
@@ -658,5 +697,103 @@ mod tests {
         };
         change_item_by_job(&mut dress, 1);
         assert_eq!((dress.dc, dress.mc, dress.sc), (0, 0x2222, 0));
+    }
+
+    fn w(lo: u8, hi: u8) -> u16 {
+        u16::from(lo) | (u16::from(hi) << 8)
+    }
+
+    /// A-09：`encode_client_item` 统一做 `GetUpgradeStdItem`（模板 + `desc` ⇒ 有效物品），
+    /// 且线上 `ClientItem.Desc` 恒 14 个 0（oracle 从不给 `clientItem.Desc` 赋值）。
+    ///
+    /// 牙：恢复成“直接用 `ci.tpl`” ⇒ DC/MAC/AC/`SpecialPwr` 断言红；把尾部改回写 `ci.desc`
+    /// ⇒ `Desc` 全 0 断言红。
+    #[test]
+    fn encode_client_item_applies_upgrade_delta_and_writes_zero_desc() {
+        let t = mir2_data::StdItem {
+            name: "木剑".into(),
+            std_mode: 5,
+            ac: w(1, 2),
+            mac: w(3, 4),
+            dc: w(5, 6),
+            mc: w(7, 8),
+            sc: w(9, 10),
+            slowdown: 1,
+            special_pwr: 1,
+            ..mir2_data::StdItem::default()
+        };
+        let desc = [1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 1, 1, 0];
+        let ci = ClientItem {
+            tpl: &t,
+            name: t.name.clone(),
+            make_index: 9,
+            dura: 1,
+            dura_max: 2,
+            desc,
+        };
+        let b = encode_client_item(&ci);
+        assert_eq!(b.len(), 124, "ClientItem 定长 124B");
+        // 偏移：SpecialPwr@19 / ItemDesc@20 / AC@26 / MAC@28 / DC@30 / MC@32 / SC@34 /
+        // Slowdown@74 / Tox@75 / Desc@108..122。
+        assert_eq!(b[19], 8, "Desc[7]=8 ⇒ SpecialPwr=8");
+        assert_eq!(b[20], 0, "Desc[10]=0 ⇒ ItemDesc 不变");
+        assert_eq!(u16::from_le_bytes([b[26], b[27]]), w(5, 8), "AC");
+        assert_eq!(
+            u16::from_le_bytes([b[28], b[29]]),
+            w(3, 11),
+            "MAC（Desc[4] 丢弃）"
+        );
+        assert_eq!(u16::from_le_bytes([b[30], b[31]]), w(5, 7), "DC");
+        assert_eq!(u16::from_le_bytes([b[32], b[33]]), w(7, 10), "MC");
+        assert_eq!(u16::from_le_bytes([b[34], b[35]]), w(9, 13), "SC");
+        assert_eq!(b[74], 2, "Slowdown = 1 + Desc[12]");
+        assert_eq!(b[75], 0, "Tox = 0 + Desc[13]");
+        assert!(
+            b[108..122].iter().all(|&x| x == 0),
+            "线上 ClientItem.Desc 恒 0（与 UserItem.Desc 无关）"
+        );
+        assert!(b[122..].iter().all(|&x| x == 0), "尾部 2 pad");
+    }
+
+    /// 已升级模板走 `encode_client_item_prepared` 时**不得二次叠加**差量。
+    #[test]
+    fn encode_client_item_prepared_does_not_reapply_upgrade() {
+        let t = mir2_data::StdItem {
+            std_mode: 5,
+            dc: w(5, 6),
+            mac: w(3, 4),
+            ..mir2_data::StdItem::default()
+        };
+        let desc = [1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 1, 1, 0];
+        let (upgraded, _) = crate::bag::upgrade_std_item(&t, &desc);
+        let raw = ClientItem {
+            tpl: &t,
+            name: "x".into(),
+            make_index: 1,
+            dura: 0,
+            dura_max: 0,
+            desc,
+        };
+        let prepared = ClientItem {
+            tpl: &upgraded,
+            name: "x".into(),
+            make_index: 1,
+            dura: 0,
+            dura_max: 0,
+            desc,
+        };
+        assert_eq!(
+            encode_client_item(&raw),
+            encode_client_item_prepared(&prepared),
+            "prepared 对已升级模板原样编码"
+        );
+        assert_eq!(
+            u16::from_le_bytes([
+                encode_client_item_prepared(&prepared)[30],
+                encode_client_item_prepared(&prepared)[31]
+            ]),
+            w(5, 7),
+            "DC 只叠加一次（叠加两次会变成 w(5,8)）"
+        );
     }
 }

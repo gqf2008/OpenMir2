@@ -64,9 +64,10 @@
 //!
 //! # 未做清单（本片作用域外，登记在卡 `openmir2-m3-bag-equip-alignment`）
 //!
-//! - **有效物品 = 模板**：`GetUpgradeStdItem`（`GameItemSystem.cs:731`）的 Desc 升级差量与各 `StdMode`
-//!   变换未实现 ⇒ 传入本模块的 `StdItem` 必须是"已升级的有效物品"。探针 `GetUpgradeStdItem` 也是恒等拷贝，
-//!   两侧同域（真正的升级差量由后续卡接）。
+//! - **有效物品 = 模板**：oracle `RecalcAbilitys` 的属性合成用 `GetStdItem` 的**原始模板**
+//!   （`ApplyItemParameters(UseItems[i], stdItem)`，`PlayObject.cs:2122`），**不**叠
+//!   `GetUpgradeStdItem` 的 `Desc` 差量 ⇒ 本模块保持模板口径（oracle 原样，不是缺口）。
+//!   A-09 的差量只作用于 `ClientItem` 展示路径（`bag::upgrade_std_item` / `itemwire::encode_client_item`）。
 //! - **套装/特殊 Shape 的巨型 else-if 块**（`PlayObject.cs:2538-2849`）：未实现（普通物品不含这些 Shape）。
 //!   已对齐的只有其中影响 **HP 尾钳的门** 的三个 Shape：魔血项链/戒指/手镯（`ActorConst.cs:114/109/110`）。
 //!   `MoXieSuite`/`MuscleRing` 等套装**属性**仍未建模（登记 `T-17`）。
@@ -216,6 +217,15 @@ pub trait ItemCatalog {
         self.get(index).map(|t| t.name.as_str())
     }
 
+    /// `CustomItemSystem.GetItemName`（`Items/CustomItemSystem.cs:119-125`）的自定义名半边：
+    /// `Desc[13] == 1` 时按 `(MakeIndex, Index)` 查 `CustomItemMgr.ItemNameList`。
+    ///
+    /// 返回 `Some("")` = 查过但**未命中**（oracle `GetCustomItemName` 未命中返回空串；
+    /// 见 [`crate::bag::item_display_name`]）；`None` = 本目录没有自定义名片表（默认）。
+    fn custom_item_name(&self, _make_index: i32, _index: u16) -> Option<String> {
+        None
+    }
+
     /// `GameItemSystem.CopyToUserItemFromName`（`GameItemSystem.cs:113-140`）的名命中：
     /// 表内**最小 Index** 的名字（`OrdinalIgnoreCase`）；无 ⇒ `None`。
     ///
@@ -230,6 +240,9 @@ pub trait ItemCatalog {
 #[derive(Debug, Clone, Default)]
 pub struct StdItemCatalog {
     items: HashMap<u16, StdItem>,
+    /// `CustomItemSystem.ItemNameList`（`LoadCustomItemName`，`CustomItemSystem.cs:80-112` 的产物）。
+    /// 空 = 未装载（或文件缺失）⇒ `GetCustomItemName` 恒空串。
+    item_names: Vec<mir2_data::lists::ItemName>,
 }
 
 impl StdItemCatalog {
@@ -243,11 +256,23 @@ impl StdItemCatalog {
     pub fn from_items(items: impl IntoIterator<Item = (u16, StdItem)>) -> Self {
         Self {
             items: items.into_iter().collect(),
+            item_names: Vec::new(),
         }
     }
 
     pub fn insert(&mut self, index: u16, item: StdItem) {
         self.items.insert(index, item);
+    }
+
+    /// 装载 `CustomItemSystem.LoadCustomItemName`（`CustomItemSystem.cs:80-112`）解析出的名片表。
+    pub fn set_item_names(&mut self, names: Vec<mir2_data::lists::ItemName>) {
+        self.item_names = names;
+    }
+
+    /// 当前自定义名片表（空 = 未装载）。
+    #[must_use]
+    pub fn item_names(&self) -> &[mir2_data::lists::ItemName] {
+        &self.item_names
     }
 
     /// `GameItemSystem.CopyToUserItemFromName` 的名字查找（`src/M2Server/Items/GameItemSystem.cs:113-140`）：
@@ -271,6 +296,16 @@ impl StdItemCatalog {
 impl ItemCatalog for StdItemCatalog {
     fn get(&self, index: u16) -> Option<&StdItem> {
         self.items.get(&index)
+    }
+
+    fn custom_item_name(&self, make_index: i32, index: u16) -> Option<String> {
+        // oracle `GetItemName` 只在 `Desc[13] == 1` 时进来；查表语义（倒序首个命中、
+        // 未命中空串）由数据层 [`mir2_data::lists::get_custom_item_name`] 1:1 提供。
+        Some(mir2_data::lists::get_custom_item_name(
+            &self.item_names,
+            make_index,
+            i32::from(index),
+        ))
     }
 
     fn find_by_name(&self, name: &str) -> Option<u16> {

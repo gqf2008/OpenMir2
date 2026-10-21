@@ -27,7 +27,10 @@
 //!   （`E:\\MirServer\\M2GameSvr\\Server.conf:11`）⇒ oracle `PlayObject.cs:1168-1171` 把 `PayMent` 置 **3**
 //!   ⇒ 该门在本部署**恒假**；本宿主未把 `PayMent` 落到会话（登记，行为暂等价）。
 //! - `SM_WEIGHTCHANGED`（`BaseObject.cs:1771`）未发（T-47 ⑤）；`SM_ADDITEM` 尾（T-24）。
-//! - `CustomItemSystem.GetItemName`/`GetUpgradeStdItem` 的物品展示层（T-47 ⑥/T-24）：详情/仓库列表用模板名。
+//! - `CustomItemSystem.GetItemName`/`GetUpgradeStdItem` 的物品展示层（T-47 ⑥/T-24）：
+//!   **已实现**——名称走 [`crate::bag::item_display_name`]（`Desc[13]==1` ⇒ 自定义名），
+//!   升级差量由 [`crate::itemwire::encode_client_item`] 统一叠加。详情列表照 oracle
+//!   （`Merchant.cs:1327`）**不**取自定义名（模板名），仓库列表照 oracle（`BaseObject.cs:1613`）取。
 //!
 //! # 本片未做（其余，登记）
 //! - `Market_Def` 商人脚本执行 + `GotoLable("~@repair")`（`Merchant.cs:1652/1659`）：本宿主
@@ -220,12 +223,13 @@ pub fn to_merchant(it: &BagItem) -> MerchantItem {
     }
 }
 
-/// `CustomItemSystem.GetItemName(userItem)`（`Merchant.cs:967/1237` 等）的**默认分支** = 模板名。
-///
-/// oracle 的 `Desc[13]` 自定义名（`DelCustomItemName`，`Operate.cs:174`）未建模 ⇒ 登记。
+/// `CustomItemSystem.GetItemName(userItem)`（`CustomItemSystem.cs:119-125`）：模板缺失 ⇒ `None`
+/// （调用方先过 `GetStdItem != null` 门）；否则 `Desc[13] == 1` 走自定义名（未命中 = 空串）、
+/// 其余取模板名——见 [`crate::bag::item_display_name`]。
 #[must_use]
-pub fn item_name(catalog: &dyn ItemCatalog, index: u16) -> Option<String> {
-    catalog.get(index).map(|t| t.name.clone())
+pub fn item_name(catalog: &dyn ItemCatalog, item: &BagItem) -> Option<String> {
+    catalog.get(item.index)?;
+    Some(crate::bag::item_display_name(catalog, item))
 }
 
 /// 建 `PriceTables`（`ItemPriceList` 空：oracle `LoadGoodPriceRecord` 是空壳，`LocalDB.cs:1111`）。
@@ -283,7 +287,7 @@ pub fn user_select(
             let Some(tpl) = ctx.catalog.get(it.index) else {
                 continue;
             };
-            let name = item_name(ctx.catalog, it.index).unwrap_or_default();
+            let name = item_name(ctx.catalog, &to_bag(it)).unwrap_or_default();
             let n_price = shop::get_user_price(&ctx.cfg, shop::get_item_price(&t, it.index));
             let n_stock = i32::try_from(group.len()).unwrap_or(i32::MAX);
             let n_submenu = if tpl.std_mode <= 4 || tpl.std_mode == 42 || tpl.std_mode == 31 {
@@ -705,7 +709,9 @@ pub fn back_item_list(actor_id: i32, items: &[BagItem], ctx: &ShopContext<'_>) -
             if let Some(tpl) = ctx.catalog.get(it.index) {
                 let ci = ClientItem {
                     tpl,
-                    name: tpl.name.clone(),
+                    // `clientItem.Item.Name = CustomItemSystem.GetItemName(userItem)`
+                    // （`PlayObject.Base.cs:1611-1613`；仓库列表**用**自定义名）。
+                    name: crate::bag::item_display_name(ctx.catalog, it),
                     make_index: it.make_index,
                     dura: it.dura,
                     dura_max: it.dura_max,
@@ -762,7 +768,7 @@ pub fn storage_item(
     let mut bo19 = false;
     for i in 0..state.item_list.len() {
         let it = &state.item_list[i];
-        let name_matches = item_name(ctx.catalog, it.index).is_some_and(|n| eq_label(&n, s_msg));
+        let name_matches = item_name(ctx.catalog, it).is_some_and(|n| eq_label(&n, s_msg));
         if it.make_index == make_index && name_matches {
             if merchant_allows {
                 if can_store {
@@ -830,7 +836,7 @@ pub fn take_back_storage_item(
     let mut bo19 = false;
     for i in 0..storage_items.len() {
         let it = &storage_items[i];
-        let name_matches = item_name(ctx.catalog, it.index).is_some_and(|n| eq_label(&n, raw_name));
+        let name_matches = item_name(ctx.catalog, it).is_some_and(|n| eq_label(&n, raw_name));
         if it.make_index == make_index && name_matches {
             let std_weight = ctx.catalog.get(it.index).map_or(0, |t| i32::from(t.weight));
             if is_add_weight_available(&state.wabil, std_weight) {
@@ -949,7 +955,7 @@ pub fn sell_item(
     // `Operate.cs:164-171`：按 `MakeIndex` + 名（OrdinalIgnoreCase）找件。
     let Some(pos) = state.item_list.iter().position(|it| {
         it.make_index == make_index
-            && item_name(ctx.catalog, it.index).is_some_and(|n| eq_label(&n, wanted_name))
+            && item_name(ctx.catalog, it).is_some_and(|n| eq_label(&n, wanted_name))
     }) else {
         return SellResult { frames, ok: false };
     };
@@ -1050,7 +1056,7 @@ pub fn buy_item(
         let std_weight = i32::from(tpl.weight);
         let std_mode = tpl.std_mode;
         if is_add_weight_available(&state.wabil, std_weight) {
-            let s_user_item_name = item_name(ctx.catalog, first.index).unwrap_or_default();
+            let s_user_item_name = item_name(ctx.catalog, &to_bag(&first)).unwrap_or_default();
             if s_user_item_name == s_item_name {
                 let group_len = goods[i].len();
                 let mut j = 0usize;
@@ -2594,5 +2600,143 @@ mod tests {
         // 非 `@` 开头 / 空：完全不碰账本（`Merchant.UserSelect` 的前置门）。
         base_user_select(&mut curr, &mut back, "hello");
         assert_eq!((curr.as_str(), back.as_str()), ("", ""));
+    }
+
+    // -----------------------------------------------------------------
+    // A-09：商人展示/成交路径上的 `GetUpgradeStdItem` 差量 + `GetItemName` 自定义名
+    // -----------------------------------------------------------------
+
+    fn w(lo: u8, hi: u8) -> u16 {
+        u16::from(lo) | (u16::from(hi) << 8)
+    }
+
+    /// 带升级差量的武器模板（`StdMode 5`，DC/MC/SC/AC/MAC 都非 0 便于观察差量）。
+    fn upgrade_catalog() -> StdItemCatalog {
+        let mut c = StdItemCatalog::new();
+        c.insert(
+            2,
+            StdItem {
+                name: "木剑".to_string(),
+                price: 30,
+                weight: 5,
+                std_mode: 5,
+                dura_max: 20,
+                ac: w(1, 2),
+                mac: w(3, 4),
+                dc: w(5, 6),
+                mc: w(7, 8),
+                sc: w(9, 10),
+                ..StdItem::default()
+            },
+        );
+        c.set_item_names(vec![mir2_data::lists::ItemName {
+            make_index: 7,
+            item_index: 2,
+            item_name: "★自定义剑★".to_string(),
+        }]);
+        c
+    }
+
+    fn upgraded_bag_item() -> BagItem {
+        BagItem {
+            make_index: 7,
+            index: 2,
+            dura: 20,
+            dura_max: 20,
+            // d0..d2 抬 DC/MC/SC 高字节；d13=1 同时置 Tox 与自定义名标记。
+            desc: [1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        }
+    }
+
+    /// 详情列表（`Merchant.cs:1304-1345`）：oracle **只**做 `GetUpgradeStdItem`，**不**取自定义名
+    /// （模板名）。牙：把 `encode_client_item` 的升级去掉 ⇒ DC/MC/SC/Tox 断言红；把名字改自定义名 ⇒ 名字断言红。
+    #[test]
+    fn detail_goods_list_upgrades_fields_but_keeps_template_name() {
+        let cat = upgrade_catalog();
+        let c = ctx(&cat);
+        let m = merchant(mflags(true, false));
+        let mut goods = vec![vec![MerchantItem {
+            make_index: 7,
+            index: 2,
+            dura: 20,
+            dura_max: 20,
+            desc: upgraded_bag_item().desc,
+        }]];
+        let f = detail_goods_list(&m, &mut goods, "木剑", 0, &c);
+        assert_eq!(f.ident, mir2_protocol::messages::SM_SENDDETAILGOODSLIST);
+        let raw = mir2_protocol::edcode::decode(&f.tail[..f.tail.len() - 1]);
+        let name = downlink::gbk("木剑");
+        assert_eq!(raw[0] as usize, name.len(), "模板名长度（不是自定义名）");
+        assert_eq!(&raw[1..1 + name.len()], &name[..], "详情列表用模板名");
+        assert_eq!(
+            u16::from_le_bytes([raw[30], raw[31]]),
+            w(5, 7),
+            "DC += Desc[0]"
+        );
+        assert_eq!(
+            u16::from_le_bytes([raw[32], raw[33]]),
+            w(7, 10),
+            "MC += Desc[1]"
+        );
+        assert_eq!(
+            u16::from_le_bytes([raw[34], raw[35]]),
+            w(9, 13),
+            "SC += Desc[2]"
+        );
+        assert_eq!(raw[75], 1, "Tox += Desc[13]");
+    }
+
+    /// 仓库列表（`PlayObject.Base.cs:1590-1620`）：`GetUpgradeStdItem` + `GetItemName`（**取**自定义名）。
+    #[test]
+    fn back_item_list_uses_custom_name_and_upgraded_template() {
+        let cat = upgrade_catalog();
+        let c = ctx(&cat);
+        let out = back_item_list(4242, &[upgraded_bag_item()], &c);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].ident, mir2_protocol::messages::SM_SAVEITEMLIST);
+        let raw = mir2_protocol::edcode::decode(&out[0].tail[..out[0].tail.len() - 1]);
+        let name = downlink::gbk("★自定义剑★");
+        assert_eq!(raw[0] as usize, name.len(), "自定义名长度");
+        assert_eq!(&raw[1..1 + name.len()], &name[..], "仓库列表用自定义名");
+        assert_eq!(
+            u16::from_le_bytes([raw[30], raw[31]]),
+            w(5, 7),
+            "DC += Desc[0]"
+        );
+        assert_eq!(raw[75], 1, "Tox += Desc[13]");
+    }
+
+    /// 商人卖出（`Merchant.ClientSellItem`，`Merchant.cs:1377`）：按 `CustomItemSystem.GetItemName`
+    /// 做 `OrdinalIgnoreCase` 比对 ⇒ `Desc[13]==1` 的物品必须能用**自定义名**卖出。
+    ///
+    /// 牙：把 `item_name` 改回“Desc[13]==1 ⇒ 空串” ⇒ 本用例红（找不到件、`ok=false`）。
+    #[test]
+    fn sell_item_matches_custom_item_name_from_registry() {
+        let cat = upgrade_catalog();
+        let c = ctx(&cat);
+        let m = merchant(mflags(false, true));
+        let mut state = GroundState {
+            item_list: vec![upgraded_bag_item()],
+            gold: 0,
+            wabil: ability(0, 100),
+        };
+        let mut goods: Vec<Vec<MerchantItem>> = Vec::new();
+        let r = sell_item(&m, &mut state, &mut goods, 7, "★自定义剑★", &c);
+        assert!(r.ok, "自定义名命中（oracle GetItemName 语义）");
+        assert!(state.item_list.is_empty(), "卖出成功 ⇒ 背包移除");
+        assert!(
+            r.frames
+                .iter()
+                .any(|f| f.ident == mir2_protocol::messages::SM_USERSELLITEM_OK),
+            "成功帧"
+        );
+        // 反证：模板名**不能**卖出该件（oracle 的 GetItemName 已换成自定义名）。
+        let mut state2 = GroundState {
+            item_list: vec![upgraded_bag_item()],
+            gold: 0,
+            wabil: ability(0, 100),
+        };
+        let r2 = sell_item(&m, &mut state2, &mut goods, 7, "木剑", &c);
+        assert!(!r2.ok, "Desc[13]==1 时名字是自定义名，模板名不匹配");
     }
 }

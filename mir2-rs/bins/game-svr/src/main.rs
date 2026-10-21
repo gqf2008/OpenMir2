@@ -569,7 +569,32 @@ async fn main() -> Result<()> {
     };
     // 查表口径只有一份：装成 `game_svr::ability::StdItemCatalog`（1-based + 空名按缺），
     // 供帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
-    let item_catalog = items::catalog_from(&item_table);
+    let mut item_catalog = items::catalog_from(&item_table);
+    // `CustomItemSystem.LoadCustomItemName`（`CustomItemSystem.cs:80-112`；装载点 `GameApp.cs:166`）：
+    // `<base>/<EnvirDir>/ItemNameList.txt` ⇒ `CustomItemMgr.ItemNameList`（`GetItemName` 的自定义名）。
+    // 缺文件 ⇒ 空表（oracle `File.Exists` 门；本层不落盘，见 `mir2_data::lists` 的登记）。
+    match mir2_data::lists::load_item_name_list_file(
+        &base
+            .join(&cfg.envir_dir)
+            .join(mir2_data::lists::ITEM_NAME_LIST_FILE),
+    ) {
+        Ok(Some(list)) => {
+            glog!(
+                "INF",
+                "Envir/ItemNameList.txt 已载入：{} 条自定义物品名",
+                list.len()
+            );
+            item_catalog.set_item_names(list);
+        }
+        Ok(None) => glog!(
+            "INF",
+            "无 Envir/ItemNameList.txt ⇒ 自定义物品名表为空（oracle File.Exists 门）"
+        ),
+        Err(e) => glog!(
+            "WRN",
+            "加载 Envir/ItemNameList.txt 失败（{e}）⇒ 自定义物品名表为空（登记）"
+        ),
+    }
     // **M3⑨-实现 2 第②片**：魔法模板表 `magics`（oracle `MySqlDB.LoadMagicDB`，
     // `MySqlDB.cs:105`，`GameApp.Initialize` 直连 MySQL 读）。`DoSpell` 取 `Magic.Effect`/
     // `EffectType`（`RM_SPELL`/`RM_MAGICFIRE` 帧参）与熟练度尾的 `TrainLv`/`TrainLevel`/`MaxTrain`。
@@ -3035,7 +3060,9 @@ fn handle_bag_cmd_with_magic(
     // 队列里的 52/752/41 之前。武器升级路径（`PlayObject.cs:4131`）本仓未建模 ⇒ 登记。
     if let Some(item) = &out.update_item {
         if let Some(tpl) = catalog.get(item.index) {
-            let mut owned = tpl.clone();
+            // oracle 顺序：`GetUpgradeStdItem` → `GetItemName` → `ChangeItemWithLevel/ByJob`
+            // （`PlayObject.Base.cs:1694-1728`）⇒ 先算有效物品，再做展示层变换。
+            let (mut owned, _) = game_svr::bag::upgrade_std_item(tpl, &item.desc);
             let mut name = game_svr::bag::item_display_name(catalog, item);
             if owned.std_mode == 50 {
                 name = format!("{name} #{}", item.dura);
@@ -3053,7 +3080,10 @@ fn handle_bag_cmd_with_magic(
                 dura_max: item.dura_max,
                 desc: item.desc,
             };
-            let tail = mir2_protocol::edcode::encode(&game_svr::itemwire::encode_client_item(&ci));
+            // `ci.tpl` 已是“升级差量 + 展示层变换”的成品 ⇒ 用 prepared（不再二次叠加差量）。
+            let tail = mir2_protocol::edcode::encode(
+                &game_svr::itemwire::encode_client_item_prepared(&ci),
+            );
             let _ = tx.send(SimToGate::SendFrame {
                 socket,
                 body: game_svr::smframe::sm_updateitem(sg.actor_id, &tail),
@@ -3299,8 +3329,8 @@ fn handle_query_bag_cmd(
         let Some(tpl) = game_svr::ability::ItemCatalog::get(catalog, it.index) else {
             continue;
         };
-        // `CustomItemSystem.GetItemName`（默认 = 模板名；`Desc[13]==1` 的自定义名未建模，登记）。
-        let mut name = tpl.name.clone();
+        // `clientItem.Item.Name = CustomItemSystem.GetItemName(userItem)`（`Operate.cs:48`）。
+        let mut name = game_svr::bag::item_display_name(catalog, it);
         // `item.StdMode == 50` 的名字后缀（`Operate.cs:52-55`）。
         if tpl.std_mode == 50 {
             name = format!("{name} #{}", it.dura);
@@ -3537,11 +3567,12 @@ fn handle_query_user_state_cmd(
             .and_then(|o| o.as_ref());
         match bag.and_then(|b| catalog.get(b.index).map(|tpl| (tpl, b))) {
             Some((tpl, b)) => {
-                // `clientItem.Item.Name = CustomItemSystem.GetItemName(useitem)`（默认 = 模板名，登记）。
+                // `clientItem.Item.Name = CustomItemSystem.GetItemName(useitem)`（`Operate.cs:97-98`）。
+                let name = game_svr::bag::item_display_name(catalog, b);
                 segments.push(game_svr::itemwire::encode_client_item(
                     &game_svr::itemwire::ClientItem {
                         tpl,
-                        name: tpl.name.clone(),
+                        name,
                         make_index: b.make_index,
                         dura: b.dura,
                         dura_max: b.dura_max,
@@ -4194,7 +4225,7 @@ fn find_bag_item_by_make_index(
 ) -> Option<usize> {
     item_list.iter().position(|it| {
         it.make_index == make_index
-            && game_svr::shop::item_name(catalog, it.index)
+            && game_svr::shop::item_name(catalog, it)
                 .is_some_and(|n| game_svr::shop::eq_label(&n, wanted_name))
     })
 }
