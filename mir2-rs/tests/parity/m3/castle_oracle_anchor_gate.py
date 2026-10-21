@@ -297,6 +297,7 @@ ANCHORS = [
     ("WallStructure.cs:28/70", "src/M2Server/Monster/Monsters/WallStructure.cs", [(28, 'n08 = (byte)(3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0));'), (70, 'n08 = 3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0);')]),
     ("CastleDoor.cs:46-58", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(46, 'public void Open()'), (57, 'HoldPlace = false;')]),
     ("CastleDoor.cs:60-76", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(60, 'public void Close()'), (75, 'HoldPlace = true;')]),
+    ("BaseObject.Base.cs:318-322", "src/M2Server/Actor/BaseObject.Base.cs", [(318, 'public virtual void Die()'), (320, 'if (SuperMan)'), (322, 'return;')]),
     ("CastleDoor.cs:78-82", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(78, 'public override void Die()'), (81, 'SetMapXyFlag(2);')]),
     ("CastleDoor.cs:84-104", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(84, 'public override void Run()'), (103, 'base.Run();')]),
     ("CastleDoor.cs:106-115", "src/M2Server/Monster/Monsters/CastleDoor.cs", [(106, 'public void RefStatus()'), (114, 'SendRefMsg(Messages.RM_ALIVE, Dir, CurrX, CurrY, 0, "");')]),
