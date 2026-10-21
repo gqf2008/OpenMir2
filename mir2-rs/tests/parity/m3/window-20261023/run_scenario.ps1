@@ -226,16 +226,25 @@ function Invoke-SqlFile([string]$RelPath) {
   return $true
 }
 
+# prepare_safe_login 强制要求 --level/--hp/--max-hp 三者齐全（缺任一 rc=2）。
+# scenarios.json 只钉真正会漂移的项（G1 的血量、各轮 Level）；其余用下面的夹具常量补齐，
+# 保证六个场景都能过 pin（两侧同值 ⇒ 不引入侧间漂移）。
+$script:PinDefaultLevel = 1
+$script:PinDefaultHp = 19
+$script:PinDefaultMaxHp = 19
+
 function Get-PinArgs($Sc, [string]$Chr) {
+  $level = if ($null -ne $Sc.level) { [string]$Sc.level } else { [string]$script:PinDefaultLevel }
+  $hp = if ($null -ne $Sc.hp) { [string]$Sc.hp } else { [string]$script:PinDefaultHp }
+  $maxHp = if ($null -ne $Sc.max_hp) { [string]$Sc.max_hp } else { [string]$script:PinDefaultMaxHp }
   $a = @('python', '-I', '-B',
          (Join-Path $Repo 'tools\loginfixture\prepare_safe_login.py'),
          '--db', 'mir2_test_db', '--char', $Chr,
          '--map', [string]$Sc.point.map,
          '--x', [string]$Sc.point.x,
-         '--y', [string]$Sc.point.y)
-  if ($null -ne $Sc.level) { $a += @('--level', [string]$Sc.level) }
-  if ($null -ne $Sc.hp) { $a += @('--hp', [string]$Sc.hp) }
-  if ($null -ne $Sc.max_hp) { $a += @('--max-hp', [string]$Sc.max_hp) }
+         '--y', [string]$Sc.point.y,
+         '--level', $level, '--hp', $hp, '--max-hp', $maxHp,
+         '--mysql', $Mysql)
   if ($Yes) { $a += '--yes-apply' }
   return $a
 }
@@ -246,9 +255,16 @@ function Assert-PinArgs([string[]]$Argv) {
   if ($i -lt 0 -or $Argv[$i + 1] -notmatch '^mir2_test_.+') {
     $errs += "prepare_safe_login --db 必须是 mir2_test_*"
   }
+  # fail-closed：上游缺任一即 rc=2，这里提前拦（避免整轮 PREREQ 才发现）。
+  foreach ($flag in '--level', '--hp', '--max-hp') {
+    $j = [array]::IndexOf($Argv, $flag)
+    if ($j -lt 0 -or $j + 1 -ge $Argv.Count) {
+      $errs += ("prepare_safe_login 必须给 " + $flag + "（缺任一 rc=2）")
+    }
+  }
   $ih = [array]::IndexOf($Argv, '--hp')
   $im = [array]::IndexOf($Argv, '--max-hp')
-  if ($ih -ge 0 -and $im -ge 0) {
+  if ($ih -ge 0 -and $im -ge 0 -and $ih + 1 -lt $Argv.Count -and $im + 1 -lt $Argv.Count) {
     if ([int]$Argv[$ih + 1] -gt [int]$Argv[$im + 1]) { $errs += "--hp 不得大于 --max-hp" }
   }
   return $errs
@@ -545,30 +561,42 @@ function Invoke-Export([string]$ProxyDir, [string]$S2cDir) {
   Write-Output ("EVIDENCE " + (Join-Path $S2cDir 'capture.jsonl'))
 }
 
-function Invoke-LoginJudge($Sc, [string]$Name, [string]$S2cDir, [string]$JudgeDir) {
-  Ensure-Dir $JudgeDir
-  $capture = Join-Path $S2cDir 'capture.jsonl'
+function Get-GoldenCapturePath([string]$Name) {
   # 同轮对比：G2a 的 C# capture 在 <WIN>/csharp/g2a-rN/s2c（不能被 R1/R2/R3 覆盖）。
   $peerSide = Join-Path $Win 'csharp'
   if ($Name -ne 'G1') { $peerSide = Join-Path $peerSide $Name.ToLower() }
-  $golden = Join-Path $peerSide 's2c\capture.jsonl'
+  return (Join-Path $peerSide 's2c\capture.jsonl')
+}
+
+function Get-LoginJudgeArgs([string]$Name, [string]$S2cDir, [string]$JudgeDir) {
+  $capture = Join-Path $S2cDir 'capture.jsonl'
+  $golden = Get-GoldenCapturePath $Name
   $wl = Join-Path $JudgeDir 's2c-whitelist.jsonl'
-  if ($Go) { Copy-Item -LiteralPath (Join-Path $Pkg 's2c-whitelist-d9.jsonl') -Destination $wl -Force }
   $out = Join-Path $JudgeDir ("{0}-{1}.json" -f $Name.ToLower(), $Side)
   $argv = @('python', '-I', '-B', (Join-Path $Pkg 'judge_login.py'),
             '--scenario', $Name, '--side', $Side, '--capture', $capture,
             '--whitelist', $wl, '--out', $out)
   if ($Side -eq 'rust') {
-    if (-not $Go -or (Test-Path -LiteralPath $golden)) {
-      $argv += @('--golden', $golden)
-    } else {
-      Write-Host ("WARN 缺本轮 C# capture（$golden）：J5 降级为 --no-j5")
-      $argv += '--no-j5'
-    }
+    # fail-closed：-Go 且缺本轮 C# golden ⇒ PREREQ_RED，绝不降级为 --no-j5。
+    if ($Go -and -not (Test-Path -LiteralPath $golden)) { return $null }
+    $argv += @('--golden', $golden)
   } else {
     $argv += '--no-j5'
   }
+  return ,$argv
+}
+
+function Invoke-LoginJudge($Sc, [string]$Name, [string]$S2cDir, [string]$JudgeDir) {
+  Ensure-Dir $JudgeDir
+  $argv = Get-LoginJudgeArgs $Name $S2cDir $JudgeDir
+  if ($null -eq $argv) {
+    Write-Output ("PREREQ_RED: 缺本轮 C# capture（{0}）；J5 不得降级为 --no-j5（README §J5）" -f (Get-GoldenCapturePath $Name))
+    exit 2
+  }
+  $wl = Join-Path $JudgeDir 's2c-whitelist.jsonl'
+  if ($Go) { Copy-Item -LiteralPath (Join-Path $Pkg 's2c-whitelist-d9.jsonl') -Destination $wl -Force }
   Invoke-Step -Argv $argv -Label 'judge_login' | Out-Null
+  $out = Join-Path $JudgeDir ("{0}-{1}.json" -f $Name.ToLower(), $Side)
   Write-Output ("EVIDENCE " + $out)
 }
 
@@ -601,9 +629,65 @@ function Invoke-CombatJudge($SubSc, [string]$Sub, [string]$S2cDir, [string]$Judg
   }
 }
 
+function Get-G5KeyMap([string[]]$Rows) {
+  $m = @{}
+  foreach ($l in @($Rows)) {
+    if ([string]::IsNullOrEmpty($l)) { continue }
+    $p = $l -split '\|'
+    $m[$p[0]] = $p
+  }
+  return $m
+}
+
+function New-G5JudgePayload([string]$Chr, [string]$DbDir, [string[]]$Before, [string[]]$After,
+                            [string[]]$Failures, [bool]$E1bOn, [string]$E1bState) {
+  $b = Get-G5KeyMap $Before
+  $a = Get-G5KeyMap $After
+  $delta = [ordered]@{}
+  foreach ($k in 'CHR', 'ABL') {
+    $delta[$k] = [ordered]@{
+      before = $(if ($b.ContainsKey($k)) { @($b[$k]) } else { @() })
+      after = $(if ($a.ContainsKey($k)) { @($a[$k]) } else { @() })
+    }
+  }
+  $writeObserved = $null
+  if ($b.ContainsKey('CHR') -and $a.ContainsKey('CHR')) {
+    $writeObserved = ($b['CHR'][5] -ne $a['CHR'][5])
+  }
+  return [ordered]@{
+    tool = 'window-20261023/run_scenario.ps1'
+    scenario = 'G5A'
+    char = $Chr
+    db_dir = $DbDir
+    e1b = $E1bOn
+    e1b_state = $E1bState
+    key_before = @($Before)
+    key_after = @($After)
+    delta = $delta
+    write_observed = $writeObserved
+    failures = @($Failures)
+    result = $(if (@($Failures).Count -eq 0) { 'GREEN' } else { 'RED' })
+  }
+}
+
+function Get-MissingDbPathSnapshots([string]$CsharpDir, [string]$RustDir) {
+  # check_db_paths -Mode diff 只读 <dir>/<path>-after.jsonl（run sheet §C5）。
+  $missing = @()
+  foreach ($p in 'softclose', 'disconnect', 'shutdown') {
+    foreach ($d in @($CsharpDir, $RustDir)) {
+      $f = Join-Path $d ("{0}-after.jsonl" -f $p)
+      if (-not (Test-Path -LiteralPath $f)) { $missing += $f }
+    }
+  }
+  return $missing
+}
+
 function Invoke-G5Judge($Sc, [string]$Chr, [string]$DbDir, [string]$JudgeDir) {
   $before = Join-Path $DbDir 'key-before.tsv'
   $after = Join-Path $DbDir 'key-after.tsv'
+  $b = @()
+  $a = @()
+  $errs = @()
   if ($Go) {
     if (-not (Test-Path -LiteralPath $before) -or -not (Test-Path -LiteralPath $after)) {
       throw "RED: 缺 $before / $after（先跑 snap-before 与 snap-after）"
@@ -613,22 +697,48 @@ function Invoke-G5Judge($Sc, [string]$Chr, [string]$DbDir, [string]$JudgeDir) {
     $errs = @(Compare-G5KeyValues -Before $b -After $a)
   } else {
     Write-Output ("CMD  compare key values " + $before + " vs " + $after)
-    $errs = @()
   }
   if ($errs.Count -gt 0) { throw ("RED G5 key-values`n  " + ($errs -join "`n  ")) }
   if ($Go) { Write-Host "G5_KEYVAL GREEN" } else { Write-Host "DRY  G5 key-value compare（-Go 时判 GREEN/RED）" }
+
+  $e1bState = 'SKIP'
   if ($E1b) {
     $cs = Join-Path $Win 'db\g5-csharp'
     $rs = Join-Path $Win 'db\g5-rust'
-    $argv = @('powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-              (Join-Path $Repo 'tools\m2-acceptance\check_db_paths.ps1'),
-              '-Mode', 'diff', '-CsharpDir', $cs, '-RustDir', $rs, '-Canonical')
-    Invoke-Step -Argv $argv -Label 'check_db_paths diff' | Out-Null
+    # 结构性前置：两侧各需 softclose/disconnect/shutdown 三条 after 快照（run sheet §C5）。
+    # 缺件时明确 PREREQ_RED，不让 check_db_paths 的 rc=2 混成「RED」。
+    $missing = @(Get-MissingDbPathSnapshots $cs $rs)
+    if ($missing.Count -gt 0) {
+      $e1bState = 'PREREQ_MISSING'
+      $msg = "-E1b 需要 §C5 三路径 after 快照（C#/Rust 各 3 条）；缺 " + ($missing -join '; ')
+      if ($Go) { Write-Output ("PREREQ_RED: " + $msg); exit 2 }
+      Write-Output ("DRY  PREREQ would fail: " + $msg)
+    } else {
+      $e1bOut = Join-Path $JudgeDir ("g5-e1b-{0}.json" -f $Side)
+      $argv = @('powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                (Join-Path $Repo 'tools\m2-acceptance\check_db_paths.ps1'),
+                '-Mode', 'diff', '-CsharpDir', $cs, '-RustDir', $rs, '-Canonical',
+                '-OutFile', $e1bOut)
+      Invoke-Step -Argv $argv -Label 'check_db_paths diff' | Out-Null
+      $e1bState = $(if ($Go) { 'GREEN' } else { 'DRY' })
+    }
   } else {
-    Write-Output "SKIP 字段级 DB diff：E1-a 下只做行数/关键值断言（runbook §D.4）"
+    Write-Output "SKIP 字段级 DB diff：E1-a 下只做行数/关键值断言（runbook §D.4）；-E1b 需先按 run sheet §C5 采三路径 after 快照"
   }
+
   Ensure-Dir $JudgeDir
-  Write-Output ("EVIDENCE " + (Join-Path $JudgeDir ("g5-{0}.json" -f $Side)))
+  $out = Join-Path $JudgeDir ("g5-{0}.json" -f $Side)
+  if ($Go) {
+    $payload = New-G5JudgePayload $Chr $DbDir $b $a $errs ([bool]$E1b) $e1bState
+    # 无 BOM 的 UTF-8（PS 5.1 的 Set-Content -Encoding UTF8 会带 BOM，严格 JSON 解析器会拒）
+    $jsonText = $payload | ConvertTo-Json -Depth 8
+    [IO.File]::WriteAllText($out, $jsonText, (New-Object System.Text.UTF8Encoding($false)))
+    if (-not (Test-Path -LiteralPath $out)) { throw "RED: 未写出 G5 证据 $out" }
+    Write-Output ("G5_EVIDENCE_WRITTEN " + $out + " bytes=" + (Get-Item -LiteralPath $out).Length)
+  } else {
+    Write-Output ("DRY  would write " + $out)
+  }
+  Write-Output ("EVIDENCE " + $out)
 }
 
 function Invoke-Snap($PhaseName, [string]$Chr, [string]$DbDir) {
@@ -779,7 +889,8 @@ function Run-Combat {
     if (Test-Phase 'capture') { Invoke-Capture $subDir }
     if (Test-Phase 'flow') { Invoke-Flow $subSc $Chr (Join-Path $subDir 'flow') }
     if (Test-Phase 'export') {
-      Invoke-Export (Join-Path $sideDir 'proxy') (Join-Path $subDir 's2c')
+      # Start-Proxy 按 <side>/g3a-<sub>/proxy 落 chunks.ndjson；export 必须读同一个目录。
+      Invoke-Export (Join-Path $subDir 'proxy') (Join-Path $subDir 's2c')
     }
     if (Test-Phase 'judge') {
       Invoke-CombatJudge $subSc $sub (Join-Path $subDir 's2c') $judgeDir
@@ -936,8 +1047,56 @@ function Invoke-Selftest {
   Assert-Eq 'pin 用 mir2_test_db' ($pArgs -contains 'mir2_test_db') $true
   Assert-Eq 'pin 点 (311,666)' (@($pArgs[$pArgs.IndexOf('--map') + 1], $pArgs[$pArgs.IndexOf('--x') + 1], $pArgs[$pArgs.IndexOf('--y') + 1]) -join ',') '0,311,666'
   Assert-Eq 'pin 参数通过校验' (@(Assert-PinArgs $pArgs) -join ';') ''
-  $badPin = @('python', '-I', '-B', 'x', '--db', 'mir2_db', '--char', 'a', '--hp', '20', '--max-hp', '19')
+  $badPin = @('python', '-I', '-B', 'x', '--db', 'mir2_db', '--char', 'a', '--level', '1', '--hp', '20', '--max-hp', '19')
   Assert-True 'pin 校验拒绝生产库 + hp>maxhp' (@(Assert-PinArgs $badPin).Count -eq 2)
+  # Critical 2 回归：六个场景（G3A 三个 subrun）都必须能构造出完整的 level/hp/max-hp。
+  $pinCases = @(
+    @('G1', $all.scenarios.G1),
+    @('G2A-R1', $all.scenarios.'G2A-R1'),
+    @('G2A-R2', $all.scenarios.'G2A-R2'),
+    @('G2A-R3', $all.scenarios.'G2A-R3'),
+    @('G3A/attack', $all.scenarios.G3A.subruns.attack),
+    @('G3A/guardlist', $all.scenarios.G3A.subruns.guardlist),
+    @('G3A/reverse', $all.scenarios.G3A.subruns.reverse),
+    @('G5A', $all.scenarios.G5A)
+  )
+  foreach ($case in $pinCases) {
+    $name = [string]$case[0]
+    $sc = $case[1]
+    $a = @(Get-PinArgs $sc 'pinchar')
+    $okFlags = ($a -contains '--level') -and ($a -contains '--hp') -and ($a -contains '--max-hp')
+    Assert-True ("pin " + $name + " 带齐 level/hp/max-hp") $okFlags
+    Assert-Eq ("pin " + $name + " 通过校验") (@(Assert-PinArgs $a) -join ';') ''
+  }
+  $incomplete = @('python', '-I', '-B', 'x', '--db', 'mir2_test_db', '--char', 'a', '--level', '1')
+  Assert-True 'pin 校验拦住缺 --hp/--max-hp（否则上游 rc=2）' `
+    ((@(Assert-PinArgs $incomplete) -join ';') -match '必须给 --hp' -and
+     (@(Assert-PinArgs $incomplete) -join ';') -match '必须给 --max-hp')
+
+  # Important 2 回归：-Go 且缺本轮 C# golden ⇒ 不降级（返回 $null ⇒ 调用方 PREREQ_RED）
+  $script:Go = $false
+  $dryArgs = Get-LoginJudgeArgs 'G1' (Join-Path $Win 'rust\s2c') (Join-Path $Win 'judge')
+  Assert-True 'dry-run J5 仍带 --golden（不预降级）' (@($dryArgs) -contains '--golden')
+  $script:Go = $true
+  $missingGolden = Get-LoginJudgeArgs 'G1' (Join-Path $Win 'rust\s2c') (Join-Path $Win 'judge')
+  Assert-True '-Go 缺 golden ⇒ 返回 $null（PREREQ_RED，不降级 --no-j5）' ($null -eq $missingGolden)
+  $goldenScratch = Join-Path ([IO.Path]::GetTempPath()) ('wt-fixtures-golden-' + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Force -Path (Join-Path $goldenScratch 'csharp\s2c') | Out-Null
+  Set-Content -LiteralPath (Join-Path $goldenScratch 'csharp\s2c\capture.jsonl') -Value '{}' -Encoding UTF8
+  # 用临时根替换 $Win，验证「有 golden ⇒ 走 J5」分支
+  $savedWin = $script:Win
+  $script:Win = $goldenScratch
+  $withGolden = Get-LoginJudgeArgs 'G1' (Join-Path $goldenScratch 'rust\s2c') (Join-Path $goldenScratch 'judge')
+  $script:Win = $savedWin
+  Assert-True '-Go 有 golden ⇒ 带 --golden 且不带 --no-j5' `
+    ((@($withGolden) -contains '--golden') -and -not (@($withGolden) -contains '--no-j5'))
+  Remove-Item -Recurse -Force $goldenScratch -ErrorAction SilentlyContinue
+  $script:Go = $false
+
+  # G3a export 目录：必须读 Start-Proxy 实际写的 <side>/g3a-<sub>/proxy
+  $rsText = Get-Content -LiteralPath (Join-Path $Pkg 'run_scenario.ps1') -Raw
+  Assert-True 'G3a export 读 per-subrun proxy' ($rsText.Contains("Invoke-Export (Join-Path `$subDir 'proxy')"))
+  Assert-True 'G3a export 不再读 <side>/proxy' (-not $rsText.Contains("Invoke-Export (Join-Path `$sideDir 'proxy')"))
 
   # G5a 关键值比较
   $bef = @('CHR|0|311|666|30|2026-10-23 10:00:00', 'ABL|17|19|15|15')
@@ -948,6 +1107,30 @@ function Invoke-Selftest {
   $aftMax = @('CHR|0|311|666|30|2026-10-23 10:05:00', 'ABL|19|20|15|15')
   Assert-True 'G5 MaxHP 漂移 => RED' (@(Compare-G5KeyValues -Before $bef -After $aftMax).Count -gt 0)
   Assert-True 'G5 缺 after => RED' (@(Compare-G5KeyValues -Before $bef -After @()).Count -gt 0)
+
+  # Important 3 回归：G5 证据 JSON 必须真的落盘（含 before/after 对比摘要）
+  $g5Json = Join-Path ([IO.Path]::GetTempPath()) ('wt-fixtures-g5-' + [guid]::NewGuid().ToString('N') + '.json')
+  $payload = New-G5JudgePayload 'aaa' 'E:/tmp/x' $bef $aftSame @() $false 'SKIP'
+  $payload | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $g5Json -Encoding UTF8
+  Assert-True 'G5 证据 JSON 落盘（Test-Path）' (Test-Path -LiteralPath $g5Json)
+  $round = Get-Content -LiteralPath $g5Json -Raw | ConvertFrom-Json
+  Assert-Eq 'G5 证据 result=GREEN' $round.result 'GREEN'
+  Assert-Eq 'G5 证据含 before/after delta' ($round.delta.CHR.before -join '|') ($bef[0])
+  Assert-Eq 'G5 证据 write_observed=true（LASTUPDATE 推进）' $round.write_observed $true
+  Assert-Eq 'G5 证据 key_before/key_after 各 2 行' (@($round.key_before).Count) 2
+  if (Test-Path -LiteralPath $g5Json) { Remove-Item -LiteralPath $g5Json -Force }
+
+  # Important 4 回归：-E1b 的结构性前置可离线判定（缺 6 件 ⇒ PREREQ，不是静默 SKIP）
+  $emptyCs = Join-Path ([IO.Path]::GetTempPath()) ('wt-fixtures-e1b-cs-' + [guid]::NewGuid().ToString('N'))
+  $emptyRs = Join-Path ([IO.Path]::GetTempPath()) ('wt-fixtures-e1b-rs-' + [guid]::NewGuid().ToString('N'))
+  Assert-Eq '-E1b 空目录缺 6 条 after 快照' (@(Get-MissingDbPathSnapshots $emptyCs $emptyRs)).Count 6
+  New-Item -ItemType Directory -Force -Path $emptyCs, $emptyRs | Out-Null
+  foreach ($p in 'softclose', 'disconnect', 'shutdown') {
+    Set-Content -LiteralPath (Join-Path $emptyCs ($p + '-after.jsonl')) -Value '' -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $emptyRs ($p + '-after.jsonl')) -Value '' -Encoding UTF8
+  }
+  Assert-Eq '-E1b 三路径齐全 ⇒ 0 缺件' (@(Get-MissingDbPathSnapshots $emptyCs $emptyRs)).Count 0
+  Remove-Item -Recurse -Force $emptyCs, $emptyRs -ErrorAction SilentlyContinue
 
   # 默认不执行（-Go 缺席时 Invoke-Step 只打印）
   $sentinel = Join-Path ([IO.Path]::GetTempPath()) ('wt-fixtures-' + [guid]::NewGuid().ToString('N') + '.txt')

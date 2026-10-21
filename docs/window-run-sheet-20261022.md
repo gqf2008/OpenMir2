@@ -868,6 +868,7 @@ powershell -File E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/chec
 - **期望**：每条路径 `GREEN`；末行 `EVIDENCE <...>.json`，其 `pass=true`、`failed=[]`。
 - **失败判据**：`PREREQ_MISSING`（缺某条 `<path>-after.jsonl`，说明 snap 没跑全）；`RED`（字段级 diff≠0）。
 - **注意**：`-Mode diff` 只读 `<dir>/<path>-after.jsonl`；三条路径都必须先 snap，否则 PREREQ（评审 F8）。
+  场景包的 `run_scenario.ps1 -E1b` 只调用本节的 diff、不代采快照；上面六条 `-Mode snap` 没跑全 ⇒ rc=2 PREREQ。
 - **E1-a（测试库）下 G5 字段级 diff 不可收（N1，与 D.3/C10#11 同一口径）**：两条独立阻塞——
   ① （**v2.3 已闭环**）`check_db_paths.ps1` 增 `-Table/-AllowDb` 并透传给 `dbsnap snap`，测试库可快照；
      但 E1-a 的字段级 diff 仍被 ② 挡住，所以结论不变：E1-a 只做行数/关键值断言；
@@ -1024,6 +1025,9 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 > 三个工具各自 `--selftest` 离线可跑）。开窗当天的「一条命令前置门」=
 > `run_scenario.ps1 -Phase preflight -Go`；整段执行 = `-Scenario G1 -Side rust -Go -Yes`（默认 dry-run）。
 > 本包的判据逐字取自本文件 §D.2/§D.3/§D.4 与 `docs/window-round2-runbook-20261023.md` §3；冲突时以那两份为准。
+> **前置硬门（2026-10-21 修复）**：J5 缺同轮 C# capture ⇒ `run_scenario.ps1` 直接 `PREREQ_RED`（rc=2），
+> 不得降级 `--no-j5`；`-E1b` 需要 §C5 的 softclose/disconnect/shutdown 三条 after 快照（C#/Rust 各 3 条），
+> 缺件即 rc=2 并列出缺失文件。
 
 ### D.1 Block A（2 小时）：G0 + G1（登录/入图基线）
 
