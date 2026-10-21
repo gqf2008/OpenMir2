@@ -1196,3 +1196,141 @@ cmhit = [r for r in c if r['ident'] == 3014]
 print("MERCHANT", aid, "SM_HIT/STRUCK=%d CM_HIT=%d" % (len(dmg), len(cmhit)))
 print("DAMAGE_SEQ", [r.get('seq') for r in dmg][:20])
 ```
+
+---
+
+## 7. 单二进制用法（`mir2-server` 统一启停）
+
+> **tier=L**：本节只讲运维配方与工具用法，不改任何角色行为、不改协议、不改配置格式。
+> 工具本体 = `tools/m2-acceptance/{start_mir2_server.ps1,stop_mir2_server.ps1}`（纯 PowerShell 编排）。
+> 旧六个 exe 仍然可用，行为不变；本工具不依赖也不替换它们。
+
+### 7.1 背景与入口
+
+`mir2-server` 是单二进制多角色入口（`mir2-rs/bins/mir2-server`）：
+
+```text
+mir2-server <role> [role argv...]
+mir2-server --list-roles        # 恰六行；退出 0
+```
+
+- 六个角色：`game-svr | db-srv | login-srv | game-gate | login-gate | sel-gate`。
+- 未知/缺省角色：用法写 stderr，退出 **2**。
+- 每个角色仍是**独立进程**，端口、日志前缀、配置读取、启动参数口径与旧 exe 完全一致；
+  第一个参数就是该角色的配置文件路径（各 `src/lib.rs` 的 `args.first()`）。
+- 旧 exe（`game-svr.exe` / `db-srv.exe` / …）只是薄包装（`main` 调各自 lib 的 `run()`），
+  argv 语义相同；需要逐进程手起时继续用旧 exe，**行为不变**。
+
+### 7.2 起栈：`start_mir2_server.ps1`
+
+```powershell
+# 只打印将执行的命令行与顺序（不启动任何进程；缺配置退出 2）
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File tools/m2-acceptance/start_mir2_server.ps1 -WhatIf
+
+# 实跑（默认 -Root E:\MirServer，六个角色全起；日志/pid 落 <Root>\logs\mir2-server）
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File tools/m2-acceptance/start_mir2_server.ps1 -Seed 42
+
+# 只起一部分角色（仍按固定表顺序）
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File tools/m2-acceptance/start_mir2_server.ps1 -Roles db-srv,login-srv,game-svr
+```
+
+参数：
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `-Root` | `E:\MirServer` | 部署根；六角色配置均相对它解析 |
+| `-ServerExe` | `<repo>\mir2-rs\target\release\mir2-server.exe`（无 release 则 `target\debug`） | 单二进制路径 |
+| `-Roles` | 六个全起 | 逗号分隔；按固定表顺序执行，未知角色退出 2 |
+| `-Seed` | 空（回落 `$env:MIR2_RNG_SEED`，再回落 **42**） | 注入子进程 `MIR2_RNG_SEED`；非法 int 退出 2 |
+| `-DbName` | 空（回落 `$env:MIR2_DB_NAME`） | 只做环境透传 `MIR2_DB_NAME`；**不改写任何配置文件** |
+| `-LogDir` | `<Root>\logs\mir2-server` | 日志与 pid 文件目录 |
+| `-WaitSeconds` | `60` | 每角色端口就绪等待上限 |
+| `-WhatIf` | 关 | 只打印计划，不启动进程；缺配置退出 2 |
+
+**固定启动顺序**（MySQL 是外部依赖，本工具不启动也不停止）：
+
+```text
+MySQL(3306, 外部) -> db-srv(6000/5100/5700) -> login-srv(5500/5600)
+                  -> game-svr(5000) -> login-gate(7000) -> sel-gate(7100) -> game-gate(7200/7201/7202)
+```
+
+**停止顺序 = 上面启动顺序的严格反向**（§7.3 按 pid 文件的 `stop_order` 降序执行）。
+
+配置映射（与 `start_rust_stack.ps1` 的六角色口径一致）：
+
+| 角色 | 配置（相对 `-Root`） |
+|---|---|
+| `db-srv` | `DBSrv\dbsvr.conf` |
+| `login-srv` | `LoginSrv\logsrv.conf` |
+| `game-svr` | `M2GameSvr\Server.conf` |
+| `login-gate` | `LoginGate\config.conf` |
+| `sel-gate` | `SelGate\config.conf` |
+| `game-gate` | `RunGate\config.conf` |
+
+运行产物：
+
+```text
+<LogDir>\<role>.out.log / <LogDir>\<role>.err.log
+<LogDir>\mir2-server.pid.json
+  roles[]: { role, pid, ports, stop_order, exe, args }
+```
+
+fail-closed 语义（任一命中即 RED 并退出，不静默）：
+
+- 缺任一配置 ⇒ 退出 **2**（`-WhatIf` 同判据）。
+- `-ServerExe` 不存在、`-Seed`/`-DbName` 非法、未知角色 ⇒ 退出 **2**。
+- pid 文件里已有存活角色、MySQL 3306 未监听、任一目标端口已被监听 ⇒ 退出 **1**，不动别人的进程。
+- 起栈过程中某角色端口未就绪 ⇒ RED、打印 err 日志路径、**按反向顺序回滚已起角色**、删除 pid 文件、退出 **1**。
+
+### 7.3 停栈：`stop_mir2_server.ps1`
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File tools/m2-acceptance/stop_mir2_server.ps1
+```
+
+- 读 `<LogDir>\mir2-server.pid.json`，按 `stop_order` **降序**（启动的严格反向）停止。
+- `game-svr` 先走命名管道 `\.\pipe\openmir2-gamesvr-shutdown-<pid>` 写 `SHUTDOWN`（内部 5s 存档上限），
+  8s 内未退则 Force；其它角色直接 Force。
+- 只结束进程名与记录一致（`mir2-server` 或记录 `exe` 的 basename）的进程；pid 复用/进程名不符时打印
+  `SKIP`，不误杀。
+- 全部停完后校验每条记录的端口是否 DOWN：全 DOWN ⇒ 删除 pid 文件并输出
+  `MIR2_SERVER_STACK_STOPPED`；仍有端口 UP ⇒ RED、保留 pid 文件、退出 1。
+- 缺 pid 文件 / 空文件 / `[]` / `{"roles":[]}` ⇒ `NOTHING_TO_STOP`，退出 0；JSON 损坏 ⇒ RED，退出 2。
+
+### 7.4 自检（真跑，不启动服务）
+
+本次实现时在 `E:\tmp\wt-launcher` 上真跑过以下用例：
+
+```powershell
+# 1) 语法解析（两个脚本都应 PARSE_OK）
+$f='tools/m2-acceptance/start_mir2_server.ps1'
+$t=$null;$e=$null;[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f),[ref]$t,[ref]$e)|Out-Null
+$e.Count   # 0
+
+# 2) 六配置齐备的临时根：-WhatIf ⇒ 恰 6 条 COMMAND，顺序 db-srv..game-gate，退出 0
+#    （本次用 E:\tmp\launcher-selftest-root 下六个空 conf 验证）
+
+# 3) 缺配置（当前 E:\MirServer）：-WhatIf ⇒ RED + 退出 2
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 -Root E:\MirServer -WhatIf
+# RED: 缺配置：db-srv -> E:\MirServer\DBSrv\dbsvr.conf; login-srv -> E:\MirServer\LoginSrv\logsrv.conf
+# exit=2
+
+# 4) stop 对空 pid：缺文件 / 空文件 / [] / {"roles":[]} ⇒ NOTHING_TO_STOP，退出 0
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/stop_mir2_server.ps1 -PidFile E:\tmp\empty.pid.json
+```
+
+> **当前部署布局提示**：`E:\MirServer` 现在没有 `DBSrv\dbsvr.conf` 与 `LoginSrv\logsrv.conf`
+> （C# DBSrv/LoginSrv 的配置与产物在仓库 `src\DBSrv\bin\Release` / `src\LoginSrv\bin\Release`，
+> 见 `start_rust_stack.ps1` 的 `-CsharpRepo`）。因此 `-WhatIf -Root E:\MirServer` 当前会按设计退出 2。
+> 真机使用前，需先把这两个配置按上表映射放进 `-Root`（或用一个满足映射的部署根），本工具不会替你改写/生成配置。
+
+### 7.5 与旧起栈方式的关系
+
+- 旧 exe、`start_rust_stack.ps1`、`E:\MirServer\start-all.ps1` 全部保持原样；本工具是**新增的可选路径**。
+- 本工具不启停 MySQL（3306 由外部提供），也不做 `start_rust_stack.ps1 -Db*` 那套影子目录/连接串改写；
+  库名选择仍由六份配置文件决定，`-DbName` 只把 `MIR2_DB_NAME` 透传给子进程。
+- 行为等价：六个角色进程的 argv 仍是 `<role> <conf>` 经 `mir2-server` 透传，等价于旧 exe 的 `<conf>`。
