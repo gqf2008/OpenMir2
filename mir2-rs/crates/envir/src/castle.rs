@@ -25,9 +25,9 @@
 //!   `CastleDoor` / `WallStructure` / `ArcherGuard` 三个实体类型（Rust `crates/world` 尚无，盘点 §2 #7/#22）
 //!   ⇒ 留给 ⑧-7 / ⑧-8 片。本片交付**防御单元规格**（名字 / 坐标 / HP），HP 已按配置就位。
 //! - **race 110/111 不缩放**已由 `crates/data/src/loaders.rs:259` 实现（非本片）。
-//! - **不写 `SabukW.txt`**：`CastleConf.SaveConfig`（`CastleConf.cs:96+`）的「缺键写回 / `MainDoorOpen`・`HP`
-//!   只在 `BaseObject != null` 时写 / 只在 `MapName` 归属本服时写」等条件属攻城状态机（⑧-7 / ⑧-8）
-//!   ⇒ 本片只读 `SabukW.txt`。`List.txt` 与 `AttackSabukWall.txt` 的落盘按 oracle 实现；
+//! - **`SabukW.txt` 写侧见本文件末「写侧（A-22 P2）」节**（`IniOrdered` / `sabuk_w_write_back` /
+//!   `serialize_sabuk_w` / `write_sabuk_w`；A-22 P2 按 `CastleConf.SaveConfig` 补上落盘）。
+//!   `List.txt` 与 `AttackSabukWall.txt` 的落盘按 oracle 实现；
 //!   oracle 走 `StringList.SaveToFile` ⇒ `StreamWriter.WriteLine` ⇒ `Environment.NewLine`
 //!   （Windows = **CRLF** `\r\n`，`src/OpenMir2/Common/StringList.cs:266`；部署件 `Castle/List.txt`
 //!   实为 `30 0D 0A`）⇒ 本片两个 `serialize_*` 也产出 CRLF，与 oracle 逐字节一致。
@@ -859,4 +859,711 @@ MainDoorHP=9999
         assert_eq!(list[0].guild_name, "同盟会");
         let _ = std::fs::remove_dir_all(&root);
     }
+}
+
+// ---- 写侧（A-22 P2 `castle-persist-writer`）：有序 ini 缓存 + `SabukW.txt` 回写。----
+//
+// oracle 调用链（`CastleConf`）：
+// 1. `ConfigFile.Load`（`src/OpenMir2/Common/ConfigFile.cs:256-346`）把文件读成
+//    「段序 + 段内键序 = 读入序」的 `Dictionary`；重复段 ⇒ 停止解析（`goto Label_02AE`）；
+//    同段重复键先到先得；值 `Trim()`；`;` 行 / `/* */` 大段注释 / `;;` 行内注释跳过。
+// 2. `CastleConf.LoadConfig`（`CastleConf.cs:15-94`）的 `ReadWrite*` 对**缺键**把默认值写进
+//    同一缓存（`ConfigFile.cs:55-113`）⇒ 缺键也会以默认值出现在输出里（[`sabuk_w_write_back`]）。
+// 3. `CastleConf.SaveConfig`（`CastleConf.cs:96-318`）逐键 `Write*`：键已存在则**原位覆盖**
+//    （`Dictionary` 覆盖不移动位置），否则追加；条件写（`!= 0` / 非空 / `BaseObject != null`）
+//    见 [`apply_overlay`] 各分支。
+// 4. `ConfigFile.Save`（`ConfigFile.cs:348-380`）：整文件重写 `[段]` + `key=value` + **段末空行**，
+//    `StreamWriter(..., GB2312)` 无 BOM、`WriteLine` ⇒ CRLF；`FileMode.Truncate` **原地截断（非原子）**。
+//
+// 登记：`ReadWriteDate` 的缺键默认是 `DateTime.Now`（`ConfigFile.cs:115-123`，非确定）；纯层
+// [`sabuk_w_write_back`] 补键时写空串占位——`SaveConfig` 对 `ChangeDate`/`WarDate`/`IncomeToday`
+// **无条件**覆盖（`CastleConf.cs:117-119`），键的**位置**只由补键序决定，最终字节与占位值无关。
+
+/// `ConfigFile.iniCahce` 的插入序镜像：段序 + 段内键序 = 文件读入序。
+///
+/// 段名/键名比较大小写不敏感（oracle 用 `StringComparer.OrdinalIgnoreCase`），
+/// 但**保留原始拼写**——写出时原样回放，不能按 `LoadConfig` 调用序重排
+/// （部署件 `0/SabukW.txt` 的段内键序与 `Castle/SabukW.txt` 不同，见设计 §1.6）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IniOrdered {
+    sections: Vec<(String, Vec<(String, String)>)>,
+}
+
+impl IniOrdered {
+    /// 空缓存。
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 段序 + 段内键序（原始拼写）。
+    #[must_use]
+    pub fn sections(&self) -> &[(String, Vec<(String, String)>)] {
+        &self.sections
+    }
+
+    /// 取一段的键值对（原始顺序）。
+    #[must_use]
+    pub fn section(&self, name: &str) -> Option<&[(String, String)]> {
+        self.section_index(name)
+            .map(|i| self.sections[i].1.as_slice())
+    }
+
+    /// `CheckSectionExists`（`ConfigFile.cs:489-492`，大小写不敏感）。
+    #[must_use]
+    pub fn contains_section(&self, name: &str) -> bool {
+        self.section_index(name).is_some()
+    }
+
+    /// 取键值（`GetString` 口径；大小写不敏感）。
+    #[must_use]
+    pub fn get(&self, section: &str, key: &str) -> Option<&str> {
+        let sec = self.section(section)?;
+        sec.iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// `CheckSectionNodeExists`（`ConfigFile.cs:494-497`）。
+    #[must_use]
+    pub fn contains_key(&self, section: &str, key: &str) -> bool {
+        self.get(section, key).is_some()
+    }
+
+    /// 键总数（判据 C-A22-4 的「131 键」口径）。
+    #[must_use]
+    pub fn key_count(&self) -> usize {
+        self.sections.iter().map(|(_, keys)| keys.len()).sum()
+    }
+
+    /// `WriteString`/`WriteInteger`/`WriteBool`/`WriteDateTime` 的 `secTbl[key] = val`
+    /// （`ConfigFile.cs:400-483`）：键已存在 ⇒ **原位**改值（`Dictionary` 覆盖不移动位置）；
+    /// 段缺失 ⇒ 段追加到末尾；键缺失 ⇒ 键追加到段末。
+    pub fn set_in_place_or_append(&mut self, section: &str, key: &str, value: &str) {
+        let idx = match self.section_index(section) {
+            Some(i) => i,
+            None => {
+                self.sections.push((section.to_string(), Vec::new()));
+                self.sections.len() - 1
+            }
+        };
+        let keys = &mut self.sections[idx].1;
+        if let Some(slot) = keys.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(key)) {
+            slot.1 = value.to_string();
+        } else {
+            keys.push((key.to_string(), value.to_string()));
+        }
+    }
+
+    fn section_index(&self, name: &str) -> Option<usize> {
+        self.sections
+            .iter()
+            .position(|(s, _)| s.eq_ignore_ascii_case(name))
+    }
+
+    fn append_default(&mut self, section: &str, key: &str, value: &str) {
+        if !self.contains_key(section, key) {
+            self.set_in_place_or_append(section, key, value);
+        }
+    }
+}
+
+/// `ConfigFile.Load`（`ConfigFile.cs:256-346`）的插入序解析（GB2312 解码走
+/// [`crate::text::decode_config_text`]，与 `StreamReader(..., GB2312)` 同口径）。
+///
+/// 逐条复刻：`.Trim()` 后 `;` 行跳过；`/*` 起大段注释直到 `*/`；`[段]` 段头；
+/// **重复段 ⇒ 停止解析**（`goto Label_02AE`，其后所有行丢弃）；`;;` 行内注释截断；
+/// 同段重复键**先到先得**；值两侧 `Trim()`；首个段头之前的键落在空名段 `""`。
+#[must_use]
+pub fn parse_ordered(bytes: &[u8]) -> IniOrdered {
+    let text = crate::text::decode_config_text(bytes);
+    let mut ini = IniOrdered::new();
+    let mut large_comment = false;
+    let mut is_cur_sec_comment = false;
+    let mut cur_section: Option<usize> = None;
+    for raw_line in split_read_lines(&text) {
+        let line = raw_line.trim();
+        if line.starts_with(';') {
+            continue;
+        }
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with("/*") {
+            large_comment = true;
+            continue;
+        }
+        if large_comment {
+            if line.starts_with("*/") {
+                large_comment = false;
+            }
+            continue;
+        }
+        if let Some(sec) = ordered_section_name(line) {
+            // `CastleConf` 的段名不会是 `;;…`；保留 oracle 的分支形状（与 `IniFile` 同）：
+            // 只有 `sec.Length >= 2` 才重置 `isCurSecComment`（`ConfigFile.cs:303-312`），
+            // 单字符段名沿用上一行留下的注释态。
+            if sec.len() >= 2 {
+                if sec.starts_with(";;") {
+                    is_cur_sec_comment = true;
+                    continue;
+                }
+                is_cur_sec_comment = false;
+            }
+            if ini.contains_section(sec) {
+                // `goto Label_02AE`：重复段 ⇒ 停止解析，其后全部行丢弃。
+                break;
+            }
+            ini.sections.push((sec.to_string(), Vec::new()));
+            cur_section = Some(ini.sections.len() - 1);
+            continue;
+        }
+        if is_cur_sec_comment {
+            continue;
+        }
+        let line = match line.find(";;") {
+            Some(idx) => line[..idx].trim(),
+            None => line,
+        };
+        let idx = match cur_section {
+            Some(i) => i,
+            None => {
+                ini.sections.push((String::new(), Vec::new()));
+                cur_section = Some(ini.sections.len() - 1);
+                ini.sections.len() - 1
+            }
+        };
+        if let Some((key, value)) = split_key_val_ordered(line) {
+            let keys = &mut ini.sections[idx].1;
+            if !keys.iter().any(|(k, _)| k.eq_ignore_ascii_case(&key)) {
+                keys.push((key, value));
+            }
+        }
+    }
+    ini
+}
+
+/// `StreamReader.ReadLine` 的行切分：`\r\n` / `\r` / `\n` 均为行终止符；
+/// 末尾终止符**不**产生额外空行。
+fn split_read_lines(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\r' => {
+                out.push(&text[start..i]);
+                i += usize::from(bytes.get(i + 1) == Some(&b'\n')) + 1;
+                start = i;
+            }
+            b'\n' => {
+                out.push(&text[start..i]);
+                i += 1;
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    if start < bytes.len() {
+        out.push(&text[start..]);
+    }
+    out
+}
+
+/// `GetSecString`（`ConfigFile.cs:239-247`）：`[xxx]` 取段名并 `Trim()`；
+/// 非 `[` 开头、无 `]`、或 `]` 前为空（`[]` / `[  ]`）⇒ 视为键值行。
+fn ordered_section_name(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix('[')?;
+    let end = rest.find(']')?;
+    if end == 0 {
+        return None;
+    }
+    let name = rest[..end].trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// `SplitKeyVal`（`ConfigFile.cs:382-398`）：按**第一个** `=` 切，键值各自 `Trim()`；
+/// `=` 在首位或无 `=` ⇒ 不是键值行。
+fn split_key_val_ordered(line: &str) -> Option<(String, String)> {
+    let pos = line.find('=')?;
+    if pos == 0 {
+        return None;
+    }
+    Some((
+        line[..pos].trim().to_string(),
+        line[pos + 1..].trim().to_string(),
+    ))
+}
+
+/// `CastleConf.LoadConfig`（`CastleConf.cs:15-94`）的缺键回写：按**调用序**补默认键，
+/// 缺则追加、已有则不动（对应 `ReadWrite*` 的 `WriteX(...)` 分支，`ConfigFile.cs:55-113`）。
+///
+/// 三个日期键的 oracle 默认是 `DateTime.Now`（非确定）；本纯层写入空串占位，
+/// 由 [`serialize_sabuk_w`] 的无条件日期覆盖兜底（键位置固定，最终字节与占位值无关）。
+pub fn sabuk_w_write_back(cache: &mut IniOrdered) {
+    // [Setup]（`CastleConf.cs:17-23`）
+    cache.append_default("Setup", "CastleName", DEFAULT_CASTLE_NAME);
+    cache.append_default("Setup", "OwnGuild", "");
+    cache.append_default("Setup", "ChangeDate", "");
+    cache.append_default("Setup", "WarDate", "");
+    cache.append_default("Setup", "IncomeToday", "");
+    cache.append_default("Setup", "TotalGold", "0");
+    cache.append_default("Setup", "TodayIncome", "0");
+
+    // [Defense]（`CastleConf.cs:24-48`）
+    cache.append_default("Defense", "CastleMapList", "");
+    cache.append_default("Defense", "CastleMap", DEFAULT_CASTLE_MAP);
+    cache.append_default("Defense", "CastleHomeMap", DEFAULT_CASTLE_HOME_MAP);
+    cache.append_default("Defense", "CastleHomeX", &DEFAULT_CASTLE_HOME_X.to_string());
+    cache.append_default("Defense", "CastleHomeY", &DEFAULT_CASTLE_HOME_Y.to_string());
+    cache.append_default(
+        "Defense",
+        "CastleWarRangeX",
+        &DEFAULT_CASTLE_WAR_RANGE_X.to_string(),
+    );
+    cache.append_default(
+        "Defense",
+        "CastleWarRangeY",
+        &DEFAULT_CASTLE_WAR_RANGE_Y.to_string(),
+    );
+    cache.append_default("Defense", "CastlePlaceMap", DEFAULT_PALACE_MAP);
+    cache.append_default("Defense", "CastleSecretMap", DEFAULT_SECRET_MAP);
+    cache.append_default(
+        "Defense",
+        "CastlePalaceDoorX",
+        &DEFAULT_PALACE_DOOR_X.to_string(),
+    );
+    cache.append_default(
+        "Defense",
+        "CastlePalaceDoorY",
+        &DEFAULT_PALACE_DOOR_Y.to_string(),
+    );
+
+    // 门（`CastleConf.cs:50-54`）：读序 X → Y → Name → Open → HP。
+    cache.append_default("Defense", "MainDoorX", &DEFAULT_MAIN_DOOR_X.to_string());
+    cache.append_default("Defense", "MainDoorY", &DEFAULT_MAIN_DOOR_Y.to_string());
+    cache.append_default("Defense", "MainDoorName", DEFAULT_MAIN_DOOR_NAME);
+    cache.append_default(
+        "Defense",
+        "MainDoorOpen",
+        if DEFAULT_MAIN_DOOR_OPEN { "1" } else { "0" },
+    );
+    cache.append_default("Defense", "MainDoorHP", &DEFAULT_MAIN_DOOR_HP.to_string());
+
+    // 三面墙（`CastleConf.cs:57-72`）：读序 X → Y → Name → HP。
+    for (prefix, x, y, name) in wall_defaults() {
+        cache.append_default("Defense", &format!("{prefix}X"), &x.to_string());
+        cache.append_default("Defense", &format!("{prefix}Y"), &y.to_string());
+        cache.append_default("Defense", &format!("{prefix}Name"), name);
+        cache.append_default(
+            "Defense",
+            &format!("{prefix}HP"),
+            &DEFAULT_WALL_HP.to_string(),
+        );
+    }
+
+    // 弓手 / 守卫（`CastleConf.cs:74-93`）：读序 X → Y → Name → HP。
+    for i in 1..=MAX_CASTLE_ARCHER {
+        cache.append_default("Defense", &format!("Archer_{i}_X"), "0");
+        cache.append_default("Defense", &format!("Archer_{i}_Y"), "0");
+        cache.append_default("Defense", &format!("Archer_{i}_Name"), DEFAULT_ARCHER_NAME);
+        cache.append_default(
+            "Defense",
+            &format!("Archer_{i}_HP"),
+            &DEFAULT_ARCHER_HP.to_string(),
+        );
+    }
+    for i in 1..=GUARD_ARRAY_LEN {
+        cache.append_default("Defense", &format!("Guard_{i}_X"), "0");
+        cache.append_default("Defense", &format!("Guard_{i}_Y"), "0");
+        cache.append_default("Defense", &format!("Guard_{i}_Name"), DEFAULT_GUARD_NAME);
+        cache.append_default(
+            "Defense",
+            &format!("Guard_{i}_HP"),
+            &DEFAULT_GUARD_HP.to_string(),
+        );
+    }
+}
+
+fn wall_defaults() -> [(&'static str, i16, i16, &'static str); 3] {
+    [
+        (
+            "LeftWall",
+            DEFAULT_LEFT_WALL_X,
+            DEFAULT_LEFT_WALL_Y,
+            DEFAULT_LEFT_WALL_NAME,
+        ),
+        (
+            "CenterWall",
+            DEFAULT_CENTER_WALL_X,
+            DEFAULT_CENTER_WALL_Y,
+            DEFAULT_CENTER_WALL_NAME,
+        ),
+        (
+            "RightWall",
+            DEFAULT_RIGHT_WALL_X,
+            DEFAULT_RIGHT_WALL_Y,
+            DEFAULT_RIGHT_WALL_NAME,
+        ),
+    ]
+}
+
+/// 门在保存时刻的形态：`present` = oracle `MainDoor.BaseObject != null`
+/// （只有此时才写 `MainDoorOpen`/`MainDoorHP`，`CastleConf.cs:203-207`）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MainDoorOverlay {
+    /// 门实体是否存在（`BaseObject != null`）。
+    pub present: bool,
+    /// `BaseObject.WAbil.HP`（实体不存在时该值不被写）。
+    pub hp: i32,
+}
+
+/// 弓手 / 守卫在保存时刻的形态（`CastleConf.cs:266-317`）。
+///
+/// `x`/`y` 为 0 时不写（保留 base 值）、`name` 为空时不写；`hp` **无条件**写
+/// （实体不存在 ⇒ 调用方传 0，oracle `else` 分支同样写 0）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SabukWUnitOverlay {
+    /// `ArcherUnit.sName`（配置值；`Initialize` 用它 `RegenMonsterByName`）。
+    pub name: String,
+    /// `ArcherUnit.nX`。
+    pub x: i32,
+    /// `ArcherUnit.nY`。
+    pub y: i32,
+    /// `BaseObject.WAbil.HP`；实体不存在时传 0。
+    pub hp: i32,
+}
+
+/// `CastleConf.SaveConfig` 的覆盖面（纯 envir 类型，与 `crates/world` 解耦）。
+///
+/// 只承载 oracle 写侧**从状态机取**的值；`CastleMap`/`CastleHomeMap`/各坐标/门墙 X/Y/Name
+/// 等**配置面**直接复用 base 里的有效值（与 `LoadConfig` 读回的值恒等），不重复进 overlay。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SabukWOverlay {
+    /// `[Setup] CastleName`（非空才写）。
+    pub castle_name: String,
+    /// `[Setup] OwnGuild`（非空才写）。
+    pub own_guild: String,
+    /// `[Setup] ChangeDate`（`yyyy-MM-dd HH:mm:ss`，无条件写）。
+    pub change_date: String,
+    /// `[Setup] WarDate`（无条件写）。
+    pub war_date: String,
+    /// `[Setup] IncomeToday`（无条件写）。
+    pub income_today: String,
+    /// `[Setup] TotalGold`（`!= 0` 才写）。
+    pub total_gold: i32,
+    /// `[Setup] TodayIncome`（`!= 0` 才写）。
+    pub today_income: i32,
+    /// `[Defense] CastleMapList`（逐项 `图名 + ','`，非空才写）。
+    pub envir_list: Vec<String>,
+    /// `[Defense] MainDoorOpen` / `MainDoorHP`。
+    pub main_door: MainDoorOverlay,
+    /// 左 / 中 / 右墙 HP：`None` = 无 `BaseObject` ⇒ 不写（保留 base 值）。
+    pub walls: [Option<i32>; 3],
+    /// 12 个弓手（`UserCastle.Archers.Length`）。
+    pub archers: [SabukWUnitOverlay; MAX_CASTLE_ARCHER],
+    /// 12 个守卫（`UserCastle.Guards.Length`，不是雇佣上限 4）。
+    pub guards: [SabukWUnitOverlay; GUARD_ARRAY_LEN],
+}
+
+impl Default for SabukWOverlay {
+    fn default() -> Self {
+        Self {
+            castle_name: String::new(),
+            own_guild: String::new(),
+            change_date: String::new(),
+            war_date: String::new(),
+            income_today: String::new(),
+            total_gold: 0,
+            today_income: 0,
+            envir_list: Vec::new(),
+            main_door: MainDoorOverlay::default(),
+            walls: [None; 3],
+            archers: std::array::from_fn(|_| SabukWUnitOverlay::default()),
+            guards: std::array::from_fn(|_| SabukWUnitOverlay::default()),
+        }
+    }
+}
+
+impl SabukWOverlay {
+    /// 由读侧 [`SabukWConfig`] 构造**同值** overlay：所有单元视为「实体存在」且 HP 取配置值。
+    ///
+    /// 用途：C-A22-3 的「同值回写」判据（读侧与写侧两份独立解析互证）。**不是**宿主的
+    /// 运行期路径——实体未造出时调用方必须把 `main_door.present` 置 `false`、墙传 `None`、
+    /// 弓手/守卫 `hp` 置 0（`CastleConf.cs:203-317` 的条件写）。
+    #[must_use]
+    pub fn from_config(cfg: &SabukWConfig) -> Self {
+        Self {
+            castle_name: cfg.castle_name.clone(),
+            own_guild: cfg.own_guild.clone(),
+            change_date: cfg.change_date.clone().unwrap_or_default(),
+            war_date: cfg.war_date.clone().unwrap_or_default(),
+            income_today: cfg.income_today.clone().unwrap_or_default(),
+            total_gold: cfg.total_gold,
+            today_income: cfg.today_income,
+            envir_list: cfg.envir_list.clone(),
+            main_door: MainDoorOverlay {
+                present: true,
+                hp: i32::from(cfg.main_door.hp),
+            },
+            walls: [
+                Some(i32::from(cfg.left_wall.hp)),
+                Some(i32::from(cfg.center_wall.hp)),
+                Some(i32::from(cfg.right_wall.hp)),
+            ],
+            archers: std::array::from_fn(|i| {
+                cfg.archers
+                    .get(i)
+                    .map_or_else(SabukWUnitOverlay::default, unit_overlay)
+            }),
+            guards: std::array::from_fn(|i| {
+                cfg.guards
+                    .get(i)
+                    .map_or_else(SabukWUnitOverlay::default, unit_overlay)
+            }),
+        }
+    }
+}
+
+fn unit_overlay(unit: &DefenseUnit) -> SabukWUnitOverlay {
+    SabukWUnitOverlay {
+        name: unit.name.clone(),
+        x: i32::from(unit.x),
+        y: i32::from(unit.y),
+        hp: i32::from(unit.hp),
+    }
+}
+
+/// `CastleConf.SaveConfig`（`CastleConf.cs:96-318`）+ `ConfigFile.Save`（`ConfigFile.cs:348-380`）：
+/// 克隆 base → 缺键回写 → 逐键覆盖 → 按段序/键序渲染 → `mir2_encoding::encode_gb2312_dotnet`。
+///
+/// 输出为 GB2312 字节：每段 `[段]` + 逐键 `key=value` + **段末空行**，行尾 CRLF，无 BOM。
+#[must_use]
+pub fn serialize_sabuk_w(base: &IniOrdered, overlay: &SabukWOverlay) -> Vec<u8> {
+    let mut cache = base.clone();
+    sabuk_w_write_back(&mut cache);
+    apply_overlay(&mut cache, overlay);
+    mir2_encoding::encode_gb2312_dotnet(&render_ordered(&cache))
+}
+
+/// `apply_overlay`：按 `SaveConfig` 的**调用序**逐键写（顺序只影响「首次追加」的键位置；
+/// [`sabuk_w_write_back`] 已保证这些键都存在，故实际全部是原位覆盖）。
+fn apply_overlay(cache: &mut IniOrdered, overlay: &SabukWOverlay) {
+    // [Setup]（`CastleConf.cs:109-128`）
+    if !overlay.castle_name.is_empty() {
+        cache.set_in_place_or_append("Setup", "CastleName", &overlay.castle_name);
+    }
+    if !overlay.own_guild.is_empty() {
+        cache.set_in_place_or_append("Setup", "OwnGuild", &overlay.own_guild);
+    }
+    cache.set_in_place_or_append("Setup", "ChangeDate", &overlay.change_date);
+    cache.set_in_place_or_append("Setup", "WarDate", &overlay.war_date);
+    cache.set_in_place_or_append("Setup", "IncomeToday", &overlay.income_today);
+    if overlay.total_gold != 0 {
+        cache.set_in_place_or_append("Setup", "TotalGold", &overlay.total_gold.to_string());
+    }
+    if overlay.today_income != 0 {
+        cache.set_in_place_or_append("Setup", "TodayIncome", &overlay.today_income.to_string());
+    }
+
+    // [Defense]（`CastleConf.cs:130-187`）：配置面按 `LoadConfig` 读回的有效值原样写。
+    let mut map_list = String::new();
+    for map in &overlay.envir_list {
+        map_list.push_str(map);
+        map_list.push(',');
+    }
+    if !map_list.is_empty() {
+        cache.set_in_place_or_append("Defense", "CastleMapList", &map_list);
+    }
+    write_effective_string(cache, "Defense", "CastleMap", DEFAULT_CASTLE_MAP);
+    write_effective_string(cache, "Defense", "CastleHomeMap", DEFAULT_CASTLE_HOME_MAP);
+    write_effective_int(cache, "Defense", "CastleHomeX", DEFAULT_CASTLE_HOME_X);
+    write_effective_int(cache, "Defense", "CastleHomeY", DEFAULT_CASTLE_HOME_Y);
+    write_effective_int(
+        cache,
+        "Defense",
+        "CastleWarRangeX",
+        DEFAULT_CASTLE_WAR_RANGE_X,
+    );
+    write_effective_int(
+        cache,
+        "Defense",
+        "CastleWarRangeY",
+        DEFAULT_CASTLE_WAR_RANGE_Y,
+    );
+    write_effective_string(cache, "Defense", "CastlePlaceMap", DEFAULT_PALACE_MAP);
+    write_effective_string(cache, "Defense", "CastleSecretMap", DEFAULT_SECRET_MAP);
+    write_effective_int(cache, "Defense", "CastlePalaceDoorX", DEFAULT_PALACE_DOOR_X);
+    write_effective_int(cache, "Defense", "CastlePalaceDoorY", DEFAULT_PALACE_DOOR_Y);
+
+    // 门（`CastleConf.cs:191-207`）
+    write_effective_int(
+        cache,
+        "Defense",
+        "MainDoorX",
+        i32::from(DEFAULT_MAIN_DOOR_X),
+    );
+    write_effective_int(
+        cache,
+        "Defense",
+        "MainDoorY",
+        i32::from(DEFAULT_MAIN_DOOR_Y),
+    );
+    write_effective_string(cache, "Defense", "MainDoorName", DEFAULT_MAIN_DOOR_NAME);
+    if overlay.main_door.present {
+        // `WriteBool("MainDoorOpen", nStatus)`：nStatus 是读回的配置值，写回归一成 1/0。
+        let open = read_bool_ordered(cache, "Defense", "MainDoorOpen", DEFAULT_MAIN_DOOR_OPEN);
+        cache.set_in_place_or_append("Defense", "MainDoorOpen", if open { "1" } else { "0" });
+        cache.set_in_place_or_append("Defense", "MainDoorHP", &overlay.main_door.hp.to_string());
+    }
+
+    // 三面墙（`CastleConf.cs:210-265`）
+    for (i, (prefix, x, y, name)) in wall_defaults().into_iter().enumerate() {
+        write_effective_int(cache, "Defense", &format!("{prefix}X"), i32::from(x));
+        write_effective_int(cache, "Defense", &format!("{prefix}Y"), i32::from(y));
+        write_effective_string(cache, "Defense", &format!("{prefix}Name"), name);
+        if let Some(hp) = overlay.walls[i] {
+            cache.set_in_place_or_append("Defense", &format!("{prefix}HP"), &hp.to_string());
+        }
+    }
+
+    // 弓手 / 守卫（`CastleConf.cs:266-317`）
+    for (i, unit) in overlay.archers.iter().enumerate() {
+        apply_unit_overlay(cache, "Archer", i + 1, unit);
+    }
+    for (i, unit) in overlay.guards.iter().enumerate() {
+        apply_unit_overlay(cache, "Guard", i + 1, unit);
+    }
+}
+
+fn apply_unit_overlay(cache: &mut IniOrdered, kind: &str, n: usize, unit: &SabukWUnitOverlay) {
+    if unit.x != 0 {
+        cache.set_in_place_or_append("Defense", &format!("{kind}_{n}_X"), &unit.x.to_string());
+    }
+    if unit.y != 0 {
+        cache.set_in_place_or_append("Defense", &format!("{kind}_{n}_Y"), &unit.y.to_string());
+    }
+    if !unit.name.is_empty() {
+        cache.set_in_place_or_append("Defense", &format!("{kind}_{n}_Name"), &unit.name);
+    }
+    // oracle：`BaseObject != null` 写 HP，否则写 0 —— 两支都**无条件**落键。
+    cache.set_in_place_or_append("Defense", &format!("{kind}_{n}_HP"), &unit.hp.to_string());
+}
+
+/// `WriteString` 的写侧：有效值（`ReadString`：空值回落默认）非空才写。
+fn write_effective_string(cache: &mut IniOrdered, section: &str, key: &str, default: &str) {
+    let value = match cache.get(section, key) {
+        Some(v) if !v.is_empty() => v.to_string(),
+        _ => default.to_string(),
+    };
+    if !value.is_empty() {
+        cache.set_in_place_or_append(section, key, &value);
+    }
+}
+
+/// `WriteInteger` 的写侧：有效值（`ReadInteger`：空/非法回落默认）`!= 0` 才写。
+fn write_effective_int(cache: &mut IniOrdered, section: &str, key: &str, default: i32) {
+    let value = match cache.get(section, key) {
+        Some(v) if !v.is_empty() => v.trim().parse::<i32>().unwrap_or(default),
+        _ => default,
+    };
+    if value != 0 {
+        cache.set_in_place_or_append(section, key, &value.to_string());
+    }
+}
+
+/// `ReadBool`（`ConfigFile.cs:170-190`）：空值回落默认；`是/YES/1/TRUE`（大写后）为真。
+fn read_bool_ordered(cache: &IniOrdered, section: &str, key: &str, default: bool) -> bool {
+    match cache.get(section, key) {
+        Some(v) if !v.is_empty() => {
+            let upper = v.to_uppercase();
+            upper == "是" || upper == "YES" || upper == "1" || upper == "TRUE"
+        }
+        _ => default,
+    }
+}
+
+/// `ConfigFile.Save`（`ConfigFile.cs:348-380`）的文本渲染：`[段]` + 逐键 + 段末空行，CRLF。
+fn render_ordered(ini: &IniOrdered) -> String {
+    let mut out = String::new();
+    for (section, keys) in ini.sections() {
+        out.push('[');
+        out.push_str(section);
+        out.push_str("]\r\n");
+        for (key, value) in keys {
+            out.push_str(key);
+            out.push('=');
+            out.push_str(value);
+            out.push_str("\r\n");
+        }
+        // `sw.WriteLine("")`（`ConfigFile.cs:370`）：每段后一个空行。
+        out.push_str("\r\n");
+    }
+    out
+}
+
+/// `CastleConf.SaveConfig` 的落盘（`ConfigFile.Save`：`FileMode.Truncate` 原地截断，**非原子**）。
+///
+/// oracle 在 `Save` 开头对不存在的文件 `File.Create`（`ConfigFile.cs:349-352`）⇒ 本函数允许新建。
+///
+/// # Errors
+/// 写文件失败（[`EnvirError::Io`]）。
+pub fn write_sabuk_w(
+    path: &Path,
+    base: &IniOrdered,
+    overlay: &SabukWOverlay,
+) -> Result<(), EnvirError> {
+    let bytes = serialize_sabuk_w(base, overlay);
+    std::fs::write(path, &bytes).map_err(|source| EnvirError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// `UserCastle.SaveAttackSabukWall`（`UserCastle.cs:291-309`）落盘。
+///
+/// oracle 走 `StringList.SaveToFile`：先 `GetEncoding(fileName)` ⇒ `new FileStream(fileName,
+/// FileMode.Open)`（`StringList.cs:260-263/293-299`）——**文件不存在直接抛**，不建文件
+/// （窗口项 W-A22-4）。随后 `StreamWriter(fileName, false, gb2312)` 截断写；空表 ⇒ 0 字节。
+///
+/// # Errors
+/// 文件不存在或写入失败（[`EnvirError::Io`]）。
+pub fn write_attack_sabuk_wall(
+    path: &Path,
+    entries: &[AttackSabukWallEntry],
+) -> Result<(), EnvirError> {
+    write_existing_gbk(path, &serialize_attack_sabuk_wall(entries))
+}
+
+/// `CastleManager.SaveCastleList`（`CastleManager.cs:178-192`）：写 `0..count` 下标 + CRLF。
+///
+/// 与 [`write_attack_sabuk_wall`] 同款「文件不存在则不建」（`StringList.SaveToFile` 口径）。
+///
+/// # Errors
+/// 文件不存在或写入失败（[`EnvirError::Io`]）。
+pub fn write_castle_list(path: &Path, count: usize) -> Result<(), EnvirError> {
+    write_existing_gbk(path, &serialize_castle_list(count))
+}
+
+/// `StringList.SaveToFile`（`StringList.cs:260-271`）：只写**已存在**的文件，GB2312、截断写。
+fn write_existing_gbk(path: &Path, text: &str) -> Result<(), EnvirError> {
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .map_err(|source| EnvirError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    file.write_all(&mir2_encoding::encode_gb2312_dotnet(text))
+        .map_err(|source| EnvirError::Io {
+            path: path.to_path_buf(),
+            source,
+        })
 }
