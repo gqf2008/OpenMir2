@@ -174,13 +174,15 @@ impl World {
         e.map_id = spawn.map_id;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
         e.verify_tick = self.clock_ms;
-        // 外观轴与 oracle 对齐（2026-10-21 复核 F1）：
-        // - `GuildOfficial()` ctor `RaceImg = ActorRace.Merchant(50)`、`Appr = 8`
-        //   （`GuildOfficial.cs:18-19`）；其余固定 NPC 的 `RaceImg` 保持 0（`BaseObject.cs:380`）。
-        // - `LocalDB.cs:707` 的 `Appr`（Npcs.txt 列）落在 `BaseObject.Appr`。
-        if state.npc_type == NPC_TYPE_GUILD_OFFICIAL {
-            e.race_img = ACTOR_RACE_MERCHANT;
-        }
+        // 外观轴与 oracle 对齐（2026-10-21 复核；**订正**）：
+        // `Npcs.txt` 的三种 `type` 都实例化 `Merchant` 家族——`Merchant()` ctor 置
+        // `RaceImg = ActorRace.Merchant(50)`（`Merchant.cs:84`），`GuildOfficial()`
+        // （`GuildOfficial.cs:18`）与 `CastleOfficial : Merchant`（`CastleOfficial.cs:13`）
+        // **继承同一值** ⇒ 固定 NPC 的 `RaceImg` 恒 50，**不是** type 1 专属。
+        // 客户端 `GetFeature() = MakeMonsterFeature(RaceImg, MonsterWeapon, Appr)`
+        // （`BaseObject.Base.cs:911`）：`RaceImg = 0` 会让商人/沙城 NPC 画成错误精灵。
+        // `Appr` 来自 `LocalDB.cs:707`（Npcs.txt 列，覆盖 ctor 的 0/8 初值）。
+        e.race_img = ACTOR_RACE_MERCHANT;
         e.appr = state.appr;
         e.npc = Some(state);
         Some(self.entities.insert(e))
@@ -830,5 +832,133 @@ mod tests {
             let _ = exp.random_below(30);
         }
         assert_eq!(world.rng.random(), exp.random(), "base.Run 段零抽数");
+    }
+
+    /// **复现（卡 `openmir2-npc-visibility`）**：固定 NPC 与玩家**相邻一格**（玩家北侧），
+    /// 玩家 `Race = Play`、`ViewRange = 12`（生产 `new_player_entity` 同形），
+    /// 经 `World::spawn_npc`（`insert_npc` + `attach_npc_to_map`）落图后，
+    /// `search_view_range_with_updates` 必须把 NPC 放进 `visible_actors`。
+    ///
+    /// 判据：oracle `PlayObject.SearchViewRange`（`src/M2Server/Player/PlayObject.cs:3125-3129`）
+    /// 的过滤器为 `!Invisible && !Ghost && !FixedHideMode && !ObMode` + 左项
+    /// `Race < ActorRace.Animal(50) || Master != null || WantRefMsg`（玩家 `Race = 0 < 50` 恒真）；
+    /// 固定 NPC `Race = 10`、四个标志位全 false ⇒ 必可见。
+    ///
+    /// **真机结论（2026-10-21）**：本用例**当前即绿**——世界侧 AOI 没有丢 NPC；
+    /// 真机「看不到国王」的根因在宿主展示层（NPC 未登记 `DisplayTable` ⇒
+    /// `drain_aoi_downlink` 跳过出现帧），精确修复点见本批 commit 正文。
+    #[test]
+    fn player_sees_adjacent_fixed_npc() {
+        let mut world = World::with_maps(vec![(64, 64)]);
+        let mut player = Entity::new(0, "玩家", 29, 33);
+        player.view_range = 12;
+        let pid = world.add_entity(player);
+        let nid = world
+            .spawn_npc(spawn_typed("比奇国王", NPC_TYPE_GUILD_OFFICIAL, 0, 29, 32))
+            .expect("NPC 挂图成功");
+        let out = crate::aoi::search_view_range_with_updates(
+            &mut world.maps[0],
+            &mut world.entities,
+            pid,
+            world.clock_ms,
+        );
+        let vis: Vec<i32> = world
+            .entities
+            .get(pid)
+            .unwrap()
+            .visible_actors
+            .iter()
+            .filter(|v| v.flag != crate::entity::VisibleFlag::Hidden)
+            .map(|v| v.target)
+            .collect();
+        assert!(
+            vis.contains(&nid),
+            "相邻一格的固定 NPC 必须进入玩家视野；实际 visible={vis:?}，removed={:?}",
+            out.removed
+        );
+    }
+
+    /// **生产时序复现（卡 `openmir2-npc-visibility`）**：NPC 在**世界启动时**落图
+    /// （`add_time = 0`），玩家 140s 后才进图；期间同图有守卫（`Race = 11`）自扫。
+    ///
+    /// oracle 链路：固定 NPC 由 `ProcessNpcs`（`WorldServer.Merchant.cs:118-160`）驱动
+    /// `NormNpc.Run() → base.Run()`，尾部 `BaseObject` 的 VerifyMapTime 段
+    /// （`BaseObject.Base.cs:223-228`：30s 门 ⇒ `AddTime = now`）刷新**格子时间**；
+    /// 其他非玩家观察者的 `SearchViewRange`（`BaseObject.ViewRange.cs:95`）才会按
+    /// `now - AddTime >= 60s` 删格子项。**丢 `verify_map_time` ⇒ 守卫在 60s 后把国王的
+    /// `CellObject` 逐出 ⇒ 140s 后玩家扫描看不到 NPC ⇒ 本用例红**（牙）。
+    #[test]
+    fn player_sees_fixed_npc_after_production_startup_delay() {
+        let mut world = World::with_maps(vec![(64, 64)]);
+        world.enable_npc_tick();
+        let nid = world
+            .spawn_npc(spawn_typed("比奇国王", NPC_TYPE_GUILD_OFFICIAL, 0, 29, 32))
+            .expect("NPC 挂图成功");
+        // 守卫（`ActorRace.Guard = 11` ⇒ `monster_self_scans`）站在国王脚下 1 格：
+        // 它的窗口 (25..=35, 26..=36) 覆盖国王格，且它走基类 60s 过期分支。
+        let mut guard = Entity::new(0, "守卫", 30, 31);
+        guard.race = 11;
+        let gid = world.add_entity(guard);
+        // 140s（700 × 200ms）≈ 真机「启动 → 玩家登录」的间隔；期间 `npc_tick` 每 200ms 跑。
+        for _ in 0..700 {
+            world.tick();
+        }
+        assert_eq!(world.clock_ms, 140_000);
+        assert!(
+            world
+                .entities
+                .get(gid)
+                .is_some_and(|e| e.ai.search_tick > 0),
+            "守卫必须自扫过（否则本用例咬不到 60s 过期分支）"
+        );
+        // 玩家进图（真机 `new_player_entity` 同形：Race=Play、ViewRange=12）。
+        let mut player = Entity::new(0, "玩家", 29, 33);
+        player.view_range = 12;
+        let pid = world.add_entity(player);
+        // 玩家首扫在落图 1000ms 后（严格大于）。
+        for _ in 0..6 {
+            world.tick();
+        }
+        let vis: Vec<i32> = world
+            .entities
+            .get(pid)
+            .unwrap()
+            .visible_actors
+            .iter()
+            .filter(|v| v.flag != crate::entity::VisibleFlag::Hidden)
+            .map(|v| v.target)
+            .collect();
+        assert!(
+            vis.contains(&nid),
+            "启动 140s 后落图的固定 NPC 仍须对玩家可见（VerifyMapTime 刷新 AddTime）；实际 visible={vis:?}"
+        );
+    }
+
+    /// **oracle ctor 外观轴**（卡 `openmir2-npc-visibility`）：`Npcs.txt` 的三种 `type`
+    /// 都实例化 `Merchant` 家族（`Merchant` / `GuildOfficial` / `CastleOfficial`），
+    /// 而 `Merchant()` ctor 置 `RaceImg = ActorRace.Merchant(50)`（`Merchant.cs:84`），
+    /// `GuildOfficial()`/`CastleOfficial()` 继承同一值（`GuildOfficial.cs:18`）。
+    /// 客户端 `GetFeature() = MakeMonsterFeature(RaceImg, MonsterWeapon, Appr)`
+    /// （`BaseObject.Base.cs:911`）⇒ `RaceImg` 错会让 NPC 画成错误/空白精灵。
+    ///
+    /// **牙**：把 `insert_npc` 的 `e.race_img = ACTOR_RACE_MERCHANT;` 改回
+    /// 「仅 `npc_type == GUILD_OFFICIAL` 才置」⇒ type 0/2 两条断言红。
+    #[test]
+    fn insert_npc_sets_merchant_race_img_for_all_npc_types() {
+        let mut world = World::with_maps(vec![(16, 16)]);
+        for (npc_type, name) in [
+            (NPC_TYPE_MERCHANT, "老人"),
+            (NPC_TYPE_GUILD_OFFICIAL, "比奇国王"),
+            (NPC_TYPE_CASTLE_OFFICIAL, "沙巴克城堡管理"),
+        ] {
+            let id = world
+                .insert_npc(spawn_typed(name, npc_type, 0, 5, 5))
+                .expect("map_id 合法");
+            assert_eq!(
+                world.entities.get(id).unwrap().race_img,
+                ACTOR_RACE_MERCHANT,
+                "{name}（type={npc_type}）的 RaceImg 必须是 ActorRace.Merchant(50)"
+            );
+        }
     }
 }
