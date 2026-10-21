@@ -58,6 +58,20 @@ EXPECT_TABLES = {"mir2_test_db": 11, "mir2_test_account": 13, "mir2_test_data": 
 # §4.1.2 的关键表行数口径（生产 == 测试，且 > 0）
 KEY_TABLES = ("mir2_db.characters", "mir2_account.account", "mir2_data.stditems")
 
+
+def count_targets():
+    """要读行数的表：生产关键表 + 它们各自的测试库对照表。
+
+    `check_test_db` 用 `counts["<test_db>.<tbl>"]` 做「同一次克隆」判定；只查生产表
+    会让读数恒为 None ⇒ P3 永远 PREREQ_RED（2026-10-21 第三轮 runbook 前置审计发现）。
+    """
+    out = list(KEY_TABLES)
+    pairs = dict(PAIRS)
+    for t in KEY_TABLES:
+        db, tbl = t.split(".", 1)
+        out.append("%s.%s" % (pairs[db], tbl))
+    return tuple(out)
+
 DEFAULT_MYSQL = r"D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe"
 DEFAULT_MIRROR = "E:/tmp/m2svr-window-origin"
 DEFAULT_TARGET = "E:/tmp/m2svr-window-target"
@@ -130,7 +144,7 @@ def run_mysql(mysql, host, port, user, password, sql, timeout=60):
     return out.stdout, None
 
 
-def collect_db_state(mysql, host, port, user, password, override=None):
+def collect_db_state(mysql, host, port, user, password, override=None, runner=None):
     """返回 dict：{schemas:[], tables:{db:[..]}, counts:{'db.tbl':n}, errors:[]}。
 
     override（selftest）形如：
@@ -142,10 +156,11 @@ def collect_db_state(mysql, host, port, user, password, override=None):
         st.setdefault("errors", [])
         return st
     st = {"schemas": [], "tables": {}, "counts": {}, "errors": []}
+    runner = runner or run_mysql
     q1 = ("SELECT table_schema, table_name FROM information_schema.tables "
           "WHERE table_schema IN (%s) ORDER BY table_schema, table_name;"
           % ",".join("'%s'" % d for d in (PROD_DBS + TEST_DBS)))
-    out, err = run_mysql(mysql, host, port, user, password, q1)
+    out, err = runner(mysql, host, port, user, password, q1)
     if err:
         st["errors"].append(err)
         return st
@@ -160,9 +175,9 @@ def collect_db_state(mysql, host, port, user, password, override=None):
         st["tables"][db].append(tbl)
     st["tables"] = {k: sorted(v) for k, v in st["tables"].items()}
     st["schemas"] = sorted(st["schemas"])
-    for t in KEY_TABLES:
-        out, err = run_mysql(mysql, host, port, user, password,
-                             "SELECT COUNT(*) FROM %s;" % t)
+    for t in count_targets():
+        out, err = runner(mysql, host, port, user, password,
+                          "SELECT COUNT(*) FROM %s;" % t)
         if err:
             st["errors"].append(err)
             st["counts"][t] = None
@@ -579,6 +594,40 @@ def selftest():
         db = {"schemas": [], "tables": {}, "counts": {}, "errors": ["mysql rc=1"]}
         res, _ = evaluate(args, port_override={MYSQL_PORT}, db_override=db)
         expect("MySQL 读失败 => PREREQ", status_of(res, "P3_TEST_DB_CLONE"), "PREREQ_RED")
+
+        # 12b) 2026-10-21：`collect_db_state` 只查生产表会让测试库对照读数为 None
+        # ⇒ P3 永远 PREREQ_RED。钉死行数目标既覆盖生产表也覆盖测试对照表。
+        expect("count_targets 覆盖生产+测试对照表",
+               set(count_targets()) == {
+                   "mir2_db.characters", "mir2_test_db.characters",
+                   "mir2_account.account", "mir2_test_account.account",
+                   "mir2_data.stditems", "mir2_test_data.stditems",
+               }, True)
+        only_prod = {"schemas": list(PROD_DBS) + list(TEST_DBS),
+                     "tables": {}, "errors": [],
+                     "counts": {}}
+        for p, t in PAIRS:
+            only_prod["tables"][p] = ["x"] * EXPECT_TABLES[t]
+            only_prod["tables"][t] = ["x"] * EXPECT_TABLES[t]
+        for t in KEY_TABLES:
+            only_prod["counts"][t] = 10
+        only_prod_res = Result("P3_TEST_DB_CLONE")
+        check_test_db(only_prod_res, only_prod)
+        expect("counts 缺测试对照表 => PREREQ",
+               only_prod_res.status, "PREREQ_RED")
+        # 12c) 直接钉 `collect_db_state` 的查询面：生产表与测试对照表都必须被查。
+        # 把循环改回 `KEY_TABLES` ⇒ 本断言红（假牙防护）。
+        seen = []
+
+        def fake_runner(_m, _h, _p, _u, _pw, q):
+            seen.append(q)
+            return "", None
+
+        collect_db_state("mysql", "127.0.0.1", 3306, "u", "p", runner=fake_runner)
+        expect("collect_db_state 必须查测试对照行数",
+               "SELECT COUNT(*) FROM mir2_test_db.characters;" in seen, True)
+        expect("collect_db_state 仍查生产关键表",
+               "SELECT COUNT(*) FROM mir2_db.characters;" in seen, True)
 
         # 13) --expect-source-head 前缀匹配
         args2 = mk_args(td, prov_path)
