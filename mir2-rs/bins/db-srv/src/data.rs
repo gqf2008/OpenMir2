@@ -273,7 +273,7 @@ pub(crate) async fn load_human_rcd(
             // 注意：`if let` 的临时量活到整个 block 结束 —— 这里的 `lock()` guard 不能写进
             // 条件位置，否则会把缓存锁一直持到下面的 `play_data_get().await`，把 N 条取档
             // 串行化（LB-08 判据 `db_down_requests_fail_in_parallel` 会因此变红）。
-            let cached = { server.cache.lock().await.get(chr_name.as_bytes()) };
+            let cached = { server.cache.lock().await.get(&chr_name) };
             if let Some(cached) = cached {
                 human_rcd = Some(cached);
             } else {
@@ -389,7 +389,7 @@ pub(crate) async fn store_human_rcd(
         return true;
     };
     // oracle 顺序：先 `_cacheStorage.Add`（`:233`）再 `Update`（`:234`）。
-    cache.lock().await.add(name.as_bytes(), rcd.clone());
+    cache.lock().await.add(name, rcd.clone());
     if let Err(e) = db.play_data_update(name, rcd).await {
         log::error(&format!(
             "保存玩家数据出错（Update 失败被吞，C# 同口径仍回成功应答）: {e:#}"
@@ -536,7 +536,7 @@ async fn process_cache_storage(server: &Arc<Server>, db: &Db) {
         let name = play.header.name.clone().unwrap_or_default();
         let ok = db.play_data_update(&name, &play).await.unwrap_or(false);
         log::debug(&format!("{name}同步{}.", if ok { "成功" } else { "失败" }));
-        server.cache.lock().await.delete(name.as_bytes());
+        server.cache.lock().await.delete(&name);
     }
     log::info("同步玩家缓存数据完成.");
 }

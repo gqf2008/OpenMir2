@@ -438,7 +438,7 @@ async fn create_gate_single_winner() {
         let n1 = name.clone();
         let i1 = info(&name);
         let (a, b) = tokio::join!(
-            async move { d1.data_add(n1.as_bytes(), ACCOUNT, 1, 0, 0).await },
+            async move { d1.data_add(&n1, ACCOUNT, 1, 0, 0).await },
             async move { d2.play_data_add(&i1).await },
         );
         let a = a.expect("data_add 不得上抛");
@@ -454,7 +454,7 @@ async fn create_gate_single_winner() {
             .expect("统计 characters 失败");
         assert_eq!(rows, 1, "同名角色只允许 1 行（否则是持久化污染）");
         assert!(
-            db.data_index(name.as_bytes()).await.is_some(),
+            db.data_index(&name).await.is_some(),
             "赢家必须写 name_quick"
         );
         assert!(
@@ -467,8 +467,8 @@ async fn create_gate_single_winner() {
         let in1 = idx_name.clone();
         let in2 = idx_name.clone();
         let (x, y) = tokio::join!(
-            async move { d3.record_add(in1.as_bytes(), ACCOUNT, 0).await },
-            async move { d4.record_add(in2.as_bytes(), ACCOUNT, 0).await },
+            async move { d3.record_add(&in1, ACCOUNT, 0).await },
+            async move { d4.record_add(&in2, ACCOUNT, 0).await },
         );
         let x = x.expect("record_add 不得上抛");
         let y = y.expect("record_add 不得上抛");
@@ -483,21 +483,16 @@ async fn create_gate_single_winner() {
     }
     // 闸门不是全局锁：持住 race0 的闸门时，另一个落在不同分片的名字必须立刻可建。
     // （同名仍由同一分片互斥；不同名撞同一分片是可接受的残余，见 whitelist T-120。）
-    let held_name = b"race0";
+    let held_name = "race0";
     let other = (0..10_000)
         .map(|i| format!("gatename{i}"))
-        .find(|n| {
-            crate::db::create_gate_shard(n.as_bytes()) != crate::db::create_gate_shard(held_name)
-        })
+        .find(|n| crate::db::create_gate_shard(n) != crate::db::create_gate_shard(held_name))
         .expect("64 分片下必须能找到不同分片的名字");
     let gate = db.create_gate(held_name).lock().await;
     assert!(
-        tokio::time::timeout(
-            Duration::from_secs(1),
-            db.create_gate(other.as_bytes()).lock()
-        )
-        .await
-        .is_ok(),
+        tokio::time::timeout(Duration::from_secs(1), db.create_gate(&other).lock())
+            .await
+            .is_ok(),
         "不同名字不得被 race0 的建角闸门阻塞（闸门必须是按名分片，不是全局）"
     );
     drop(gate);
@@ -517,7 +512,7 @@ async fn index_snapshot_never_tears() {
         tokio::spawn(async move {
             for i in 0..60 {
                 let name = format!("tear{i}");
-                db.record_add(name.as_bytes(), "tearacct", 0)
+                db.record_add(&name, "tearacct", 0)
                     .await
                     .expect("record_add 失败");
                 tokio::task::yield_now().await;
@@ -535,7 +530,7 @@ async fn index_snapshot_never_tears() {
                 let list = db.find_by_account(b"tearacct").await;
                 for q in list {
                     assert!(
-                        db.record_index(&q.name_gbk).await.is_some(),
+                        db.record_index(&q.name_text).await.is_some(),
                         "索引撕裂：by_account 可见 name={:?}，但 quick 查不到",
                         q.name_text
                     );

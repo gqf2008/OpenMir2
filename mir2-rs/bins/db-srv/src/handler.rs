@@ -24,7 +24,7 @@ use mir2_protocol::messages::{
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::db::Db;
-use crate::gbk::{arrest, char_count, str_to_int, trim_name};
+use crate::gbk::{arrest, char_count, decode, encode, str_to_int, trim_name};
 use crate::log;
 use crate::server::{GateUser, Queued, Server};
 use crate::user::{self, ClientPacket};
@@ -327,7 +327,7 @@ async fn query_chr(
             if rec.deleted {
                 continue;
             }
-            let data_index = db.data_index(&q.name_gbk).await;
+            let data_index = db.data_index(&q.name_text).await;
             log::info(&format!(
                 "[QueryChr]   dataIndex={} nChrCount={nchr}",
                 data_index.map_or(-1, |v| i32::try_from(v).unwrap_or(i32::MAX))
@@ -353,7 +353,7 @@ async fn query_chr(
             };
             log::info("[QueryChr]   GetQryChar -> True");
             items.push((
-                q.name_gbk.clone(),
+                encode(&q.name_text),
                 ch.job,
                 ch.hair,
                 ch.level,
@@ -414,17 +414,20 @@ async fn new_chr(
         ncode = 0;
     }
     let name = trim_name(&req.name);
+    // E-7：DB 列值是解码后的 String（`ChrName` 是 utf8 列），键也用 String 折叠；
+    // 线上字节 `name` 只用于 `IsEnglishStr`/拒绝名单等字节面。
+    let name_text = decode(&name);
     if char_count(&name) < 3 {
         ncode = 0;
     }
     if server.cfg.english_names && !user::is_english_str(&name) {
         ncode = 0;
     }
-    if !server.share.check_deny_chr_name(&name) {
+    if !server.share.check_deny_chr_name(&name_text) {
         ncode = 2;
     }
     if ncode == -1 {
-        if db.data_index(&name).await.is_some() {
+        if db.data_index(&name_text).await.is_some() {
             ncode = 2;
         } else {
             let count = match db.chr_count_of_account(&req.account).await {
@@ -443,7 +446,7 @@ async fn new_chr(
             } else {
                 // C# `Add` 绑的 `@SelectID` 是 `PlayerRecordData.Selected`（此处恒 0），
                 // `Header.SelectID`（= 网关 ID）只用于内存索引 —— 如实照搬。
-                let added = match db.record_add(&name, &account, u.sel_gate_id).await {
+                let added = match db.record_add(&name_text, &account, u.sel_gate_id).await {
                     Ok(v) => v,
                     Err(e) => {
                         // C# `PlayRecordStorage.Add` → `UpdateRecord` 内部 catch ⇒ false ⇒ `nCode=2`。
@@ -463,7 +466,7 @@ async fn new_chr(
                     // **G4（照抄 oracle；硬约束③）**：`NewChrData`（`UserService.cs:259-280`）
                     // ① 先 `if (_playDataStorage.Index(sChrName) != -1) return false;`
                     // ② 否则 `_playDataStorage.Add(chrRecord); return true;` —— **忽略 Add 返回值**。
-                    let add = db.data_add(&name, &account, sex, job, hair).await;
+                    let add = db.data_add(&name_text, &account, sex, job, hair).await;
                     if let Err(e) = &add {
                         log::error(&format!(
                             "创建角色[{}]数据失败（C# 同场景吞异常并回成功）: {e:#}",
@@ -479,7 +482,7 @@ async fn new_chr(
                             // `KeyNotFoundException`，异常从 `NewChr`（调用点无 catch）冒泡
                             // ⇒ **不回包**。Rust 的 `record_soft_delete` 不抛，故显式 `bail!`
                             // 让上层只记日志（`process_server_msg` 的 Err 支），保持同一可观测语义。
-                            db.record_soft_delete(&name).await?;
+                            db.record_soft_delete(&name_text).await?;
                             bail!(
                                 "创建角色[{}]：NewChrData 返回 false（Index != -1）⇒ 照 oracle Delete 异常路径，不回包",
                                 show(&name)
@@ -513,8 +516,9 @@ async fn delete_chr(
     body: &[u8],
 ) -> Result<()> {
     let name = edcode::decode(body);
+    let name_text = decode(&name);
     let mut bocheck = false;
-    if let Some(nindex) = db.record_index(&name).await {
+    if let Some(nindex) = db.record_index(&name_text).await {
         let rec = match db.record_get_by(nindex).await {
             Ok(rec) => rec,
             Err(e) => {
@@ -530,7 +534,7 @@ async fn delete_chr(
         if let Some(rec) = rec {
             bocheck = true; // C# `Get(nIndex, ref boCheck)` 读到行即置 true
             if rec.account_text.as_bytes() == u.account.as_slice() {
-                let level = del_chr_sname_to_level(db, &name).await?;
+                let level = del_chr_sname_to_level(db, &name_text).await?;
                 if i32::from(level) < server.cfg.delete_min_level {
                     let mut row = rec;
                     row.deleted = true;
@@ -565,7 +569,7 @@ async fn delete_chr(
 }
 
 /// C# `DelChrSnameToLevel`。
-async fn del_chr_sname_to_level(db: &Db, name: &[u8]) -> Result<u16> {
+async fn del_chr_sname_to_level(db: &Db, name: &str) -> Result<u16> {
     let Some(index) = db.data_index(name).await else {
         return Ok(0);
     };
@@ -592,6 +596,7 @@ async fn select_chr(
     body: &[u8],
 ) -> Result<bool> {
     let (account, name) = user::account_and_name(body);
+    let name_text = decode(&name);
     let mut data_ok = false;
     let mut cur_map = String::new();
     if u.account.eq_ignore_ascii_case(&account) {
@@ -622,7 +627,7 @@ async fn select_chr(
                 }
                 continue;
             };
-            if rec.name_gbk == name {
+            if rec.name_text == name_text {
                 rec.selected = 1;
                 // C# `UpdateBy` → `UpdateRecord` 内部 catch：写失败被吞、继续回 STARTPLAY
                 // （LB-05 的真实差异格：索引 UPDATE 失败但 characters SELECT 正常）。
@@ -642,7 +647,7 @@ async fn select_chr(
                 }
             }
         }
-        if let Some(index) = db.data_index(&name).await {
+        if let Some(index) = db.data_index(&name_text).await {
             // C# `PlayDataStorage.Query` 对 `Open` 失败/读异常都返回 null ⇒ `chrRecord.ChrName`
             // NRE ⇒ 不回包（与 Rust Err 上抛/None 走 bail 同形；这里不降级）。
             match db.query_name_and_map(index).await? {
@@ -1038,7 +1043,7 @@ mod fault_path_tests {
             .expect("COUNT 列");
         assert_eq!(idx, 1, "索引行残留（oracle 同：Add 先于建档、独立提交）");
         assert!(
-            db.data_index(b"itemhero").await.is_none(),
+            db.data_index("itemhero").await.is_none(),
             "内存索引不得污染"
         );
         ts::drop_db(&dsn).await;

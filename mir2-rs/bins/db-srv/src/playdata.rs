@@ -29,7 +29,7 @@ use sqlx::{Connection, MySqlConnection, Row};
 use std::fmt::Write as _;
 
 use crate::db::{int_col, resolve_col, Db};
-use crate::gbk::fold_key;
+use crate::gbk::fold_text;
 use crate::log;
 
 /// 存档物品槽位数（C# `CharacterData` 构造函数）。
@@ -1068,19 +1068,8 @@ impl Db {
             .read()
             .await
             .name_text
-            .get(&name.to_lowercase())
+            .get(&fold_text(name))
             .copied()
-    }
-
-    /// C# `HUtil32.GetBytes(str)`（GB2312 编码）：`EDCode.EncodeString` 用它把 Unicode 名
-    /// 变成 GBK 字节。这里让 MySQL 做同一转换（与 `INDEX_COLS` 的 `CONVERT(… USING gbk)` 同口径）。
-    pub async fn gbk_bytes(&self, s: &str) -> Result<Vec<u8>> {
-        let row = sqlx::query("SELECT CAST(CONVERT(? USING gbk) AS BINARY) AS b")
-            .bind(s)
-            .fetch_one(&self.pool)
-            .await
-            .context("GBK 转换失败")?;
-        row.try_get::<Vec<u8>, _>("b").context("GBK 字节读取失败")
     }
 
     /// C# `PlayDataStorage.Get(chrName, ref humanRcd)`：
@@ -1119,26 +1108,21 @@ impl Db {
         // 建角闸门：与 5100 `data_add`/`record_add` 共用（见 `db::Db::create_gate`）。
         // 检查 + 建角事务 + 索引更新线性化 ⇒ 并发同名只有一个赢家。闸门按名字分片、
         // 只互斥同名（原全局实现的范围更宽），登记见 whitelist T-120。
-        // 分片键用本地 GBK 编码（不额外查库；DB 转换仍留给后面的 `gbk_bytes`）。
-        let gate_key = crate::gbk::encode(&name);
-        let _gate = self.create_gate(&gate_key).lock().await;
+        // 分片键用解码后的 String（与 5100 面的 `fold_text` 同口径，不查库）。
+        let _gate = self.create_gate(&name).lock().await;
         if self
             .idx
             .read()
             .await
             .name_text
-            .contains_key(&name.to_lowercase())
+            .contains_key(&fold_text(&name))
         {
             return Ok(false);
         }
         // C# `PlayDataStorage` 只有一份字符串键的 `_NameQuickMap`（`PlayDataStorage.Query.cs:16-23`），
         // `Add` 成功即 `_NameQuickMap.Add(sChrName, playerId)`（`Add.cs:42-47`）⇒ 6000 面新建的
-        // 角色**立刻**对 5100 面的 `Index/Query/Select` 可见（G6）。Rust 的 5100 面读的是 GBK
-        // 字节键的 [`Db::name_quick`]，故这里按同一口径转 GBK（`add` 后不再查库，只写内存索引）。
-        let name_gbk = self
-            .gbk_bytes(&name)
-            .await
-            .context("角色名 GBK 转换失败（play_data_add 更新 name_quick 用）")?;
+        // 角色**立刻**对 5100 面的 `Index/Query/Select` 可见（G6）。5100 面的 `name_quick` 也改
+        // 存解码后的 String（E-7），这里直接用同一个字符串写两份内存索引，不查库。
         let Some(d) = info.data.as_ref() else {
             return Ok(false);
         };
@@ -1178,8 +1162,8 @@ impl Db {
         tx.commit().await.context("提交建角事务失败")?;
         {
             let mut idx = self.idx.write().await;
-            idx.name_text.insert(name.to_lowercase(), player_id);
-            idx.name_quick.insert(fold_key(&name_gbk), player_id);
+            idx.name_text.insert(fold_text(&name), player_id);
+            idx.name_quick.insert(fold_text(&name), player_id);
             idx.char_ids.insert(player_id);
         }
         Ok(true)

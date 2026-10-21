@@ -1,16 +1,19 @@
-//! GB2312/GBK 字节边界原语。
+//! GB2312/GBK（cp936）字节 ↔ 文本原语。
 //!
-//! DBSrv 的角色名在线上是 **GBK 字节流**（客户端是 Delphi + GB2312），而 C# 侧的处理全是
-//! **先 `HUtil32.GetString(...)` 把字节按 GB2312 解成 .NET 字符串、再按字符切分/取长度**
-//! （`string.Split` / `string.Length`）。本模块把这些操作在**字节级**等价复现：
-//! 只要知道「哪几个字节构成一个字符」，`Split`/`Length` 就能在字节上做，与 C# 逐字符操作等价。
+//! DBSrv 的角色名/账号在线上是 **GBK 字节流**（客户端是 Delphi + GB2312），而 C# 侧的处理全是
+//! **先 `HUtil32.GetString(...)` 把字节按 cp936 解成 .NET 字符串、再按字符切分/取长度/Trim**
+//! （`string.Split` / `string.Length` / `string.Trim` / `HUtil32.ArrestStringEx`）。
 //!
-//! 边界规则（GBK，cp936）：前导字节 `0x81..=0xFE`，后继字节 `0x40..=0xFE` 且非 `0x7F`；
-//! 其余单字节自成字符。ASCII 分隔符（斜杠、反斜杠、空格等）永远落在单字节字符上，因此用本模块
-//! 切分不会把某个汉字的第二个字节误当分隔符（C# 先解码再切分，天然不会）。
+//! 本模块用**同一模型**：先 [`decode`] 成 `String`，在字符上做运算，再 [`encode`] 编回字节。
+//! 合法 GBK 输入逐字节不变；畸形输入与 oracle 一样落成 `?`（`0x81` 前导吞掉**任意**后继字节，
+//! 见 E-3）。旧实现直接用「裸字节扫描 + 只认 `0x40..=0xFE` 后继」，在 `81 20/2F/7F/00/FF/0A`
+//! 这类畸形序列上字符数、`Split` 边界与 `arrest` 的取值都与 .NET 不同（审计
+//! `audit-encoding-v2-20261021.md` §1.3 / E-3）。
 //!
-//! 适用范围：输入是**合法 GBK**（现网角色名/账号/地图名即此）。非法序列按单字节处理
-//! （.NET 会各自产出替代字符，字符数一致）。
+//! 编解码实现是 workspace 唯一的 `mir2_encoding::cp936`（`mir2_script::cp936` 转发）；
+//! 本模块不复制任何表。
+
+use mir2_script::cp936;
 
 /// 前导字节：`0x81..=0xFE`。
 #[must_use]
@@ -18,19 +21,17 @@ pub fn is_lead(b: u8) -> bool {
     (0x81..=0xFE).contains(&b)
 }
 
-/// 后继字节：`0x40..=0xFE` 且不是 `0x7F`。
-#[must_use]
-pub fn is_trail(b: u8) -> bool {
-    (0x40..=0xFE).contains(&b) && b != 0x7F
-}
-
-/// 每个字符的字节跨度 `(start, end)`（等价 .NET 的字符边界）。
+/// 每个字符的字节跨度 `(start, end)`（等价 .NET cp936 解码的字符边界）。
+///
+/// **`0x81..=0xFE` 后只要有下一字节就成对消耗**（后继任意，含 `0x00/0x0A/0x20/0x2F/0x7F/0xFF`）；
+/// 只有流末尾孤立的引导字节才是 1 个 `?`。这与 .NET `Encoding.GetEncoding(936)` 的实测一致
+/// （审计 v2 §1.3/§2.4）；`0x80`、`0xFF` 各自单字节。
 #[must_use]
 pub fn char_spans(b: &[u8]) -> Vec<(usize, usize)> {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0usize;
     while i < b.len() {
-        if is_lead(b[i]) && i + 1 < b.len() && is_trail(b[i + 1]) {
+        if is_lead(b[i]) && i + 1 < b.len() {
             out.push((i, i + 2));
             i += 2;
         } else {
@@ -56,20 +57,27 @@ pub fn char_count(b: &[u8]) -> usize {
 /// - 命中第 1 个非空片段后的「剩余」**跳过连续分隔符**（`"a,,b"` → `a` / `b`，
 ///   而 `"a, ,b"` → `a` / ` ,b`：逗号后的空格不是分隔符，故属于剩余内容）；
 /// - 剩余为空则没有 tail（`"a/"` → `a` / 空；`"/"`、`""` → 空 / 空）。
+///
+/// 切分在**解码后的字符**上做（C# 先 `GetString` 再 `Split`）：`81 2F` 是一个字符（`?`），
+/// 其中的 `/` 不是分隔符；片段按 `HUtil32.GetBytes` 编回字节（畸形序列落 `?`）。
 #[must_use]
 pub fn split2_nonempty(b: &[u8], dividers: &[u8]) -> (Vec<u8>, Vec<u8>) {
-    // 单字节分隔符在字符串里的位置（都落在字符边界上）
-    let div: Vec<usize> = char_spans(b)
-        .into_iter()
-        .filter(|(s, e)| e - s == 1 && dividers.contains(&b[*s]))
-        .map(|(s, _)| s)
+    let chars: Vec<char> = decode(b).chars().collect();
+    let is_divider = |c: char| match u8::try_from(c) {
+        Ok(v) => dividers.contains(&v),
+        Err(_) => false,
+    };
+    let div: Vec<usize> = chars
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| is_divider(**c))
+        .map(|(i, _)| i)
         .collect();
     let mut start = 0usize;
     let mut di = 0usize;
     while di < div.len() {
         let d = div[di];
-        let cand = &b[start..d];
-        if cand.is_empty() {
+        if start == d {
             start = d + 1; // 空片段：丢弃且不占 count
             di += 1;
             continue;
@@ -79,47 +87,52 @@ pub fn split2_nonempty(b: &[u8], dividers: &[u8]) -> (Vec<u8>, Vec<u8>) {
             j += 1; // 连续分隔符整体跳过（.NET 实测语义）
             di += 1;
         }
-        return if j >= b.len() {
-            (cand.to_vec(), Vec::new())
+        return if j >= chars.len() {
+            (encode_chars(&chars[start..d]), Vec::new())
         } else {
-            (cand.to_vec(), b[j..].to_vec())
+            (encode_chars(&chars[start..d]), encode_chars(&chars[j..]))
         };
     }
-    let tail = &b[start..];
-    if tail.is_empty() {
+    if start >= chars.len() {
         (Vec::new(), Vec::new())
     } else {
-        (tail.to_vec(), Vec::new())
+        (encode_chars(&chars[start..]), Vec::new())
     }
 }
 
 /// 等价 C# `HUtil32.ArrestStringEx(source, after, before, ref out)` 的**取值**部分：
 /// 返回 `(out, rest)` —— `out` 是 `after` 与 `before` 之间的内容（不含定界符），
 /// `rest` 是 `before` 之后的剩余文本（对应 C# 的返回值）。
+///
+/// 在**解码后的字符**上找定界符（`HUtil32.cs:488` 的 `IndexOf`），所以「前导 + 定界符字节」
+/// 会被当成一个字符吞掉，不再被裸字节扫描误当定界符（E-3）。
 #[must_use]
 pub fn arrest(source: &[u8], after: u8, before: u8) -> (Vec<u8>, Vec<u8>) {
-    if source.is_empty() {
+    let chars: Vec<char> = decode(source).chars().collect();
+    // C# `spanLen < 2` 时 `findData` 保持 false，回退循环在 `sourceSpan[-1]` 抛
+    // `IndexOutOfRangeException` ⇒ catch 把 `arrestStr`/`result` 都置空。
+    if chars.len() < 2 {
         return (Vec::new(), Vec::new());
     }
-    let body = if source[0] == after {
-        Some(&source[1..])
+    let after_c = char::from(after);
+    let before_c = char::from(before);
+    let body_start = if chars[0] == after_c {
+        1
     } else {
-        source
-            .iter()
-            .position(|b| *b == after)
-            .filter(|p| *p > 0)
-            .map(|p| &source[p + 1..])
+        // `IndexOf(after, OrdinalIgnoreCase)`：调用点的定界符都是非字母 ASCII，
+        // OrdinalIgnoreCase 与精确相等在该域内同值。
+        match chars.iter().position(|c| *c == after_c) {
+            Some(p) if p > 0 => p + 1,
+            _ => return (Vec::new(), Vec::new()),
+        }
     };
-    let Some(body) = body else {
-        // findData=false：C# 循环体（`sourceSpan[i-1]` 写法）永不命中 ⇒ 返回空串且不动 ref 参数
-        return (Vec::new(), Vec::new());
-    };
-    if let Some(n) = body.iter().position(|b| *b == before) {
-        (body[..n].to_vec(), body[n + 1..].to_vec())
+    let body = &chars[body_start..];
+    if let Some(n) = body.iter().position(|c| *c == before_c) {
+        (encode_chars(&body[..n]), encode_chars(&body[n + 1..]))
     } else {
         // C# `result = searchAfter + sourceSpan`：把定界符接回剩余串
         let mut rest = vec![after];
-        rest.extend_from_slice(body);
+        rest.extend_from_slice(&encode_chars(body));
         (Vec::new(), rest)
     }
 }
@@ -127,65 +140,56 @@ pub fn arrest(source: &[u8], after: u8, before: u8) -> (Vec<u8>, Vec<u8>) {
 /// 等价 C# `HUtil32.StrToInt(s, def)`（`int.TryParse`）：允许首尾空白与正负号。
 #[must_use]
 pub fn str_to_int(b: &[u8], def: i32) -> i32 {
-    let Ok(s) = std::str::from_utf8(b) else {
-        return def;
-    };
-    s.trim().parse::<i32>().unwrap_or(def)
+    decode(b).trim().parse::<i32>().unwrap_or(def)
 }
 
-/// 等价 C# `string.Trim()` 对现网名字的行为：去掉首尾 ASCII 空白与全角空格（GBK `A1A1`）。
+/// 等价 C# `string.Trim()`：去掉首尾 Unicode 空白（含全角空格 `A1A1` → `U+3000`）。
 #[must_use]
 pub fn trim_name(b: &[u8]) -> Vec<u8> {
-    let mut s = b;
-    loop {
-        if let Some((f, rest)) = s.split_first() {
-            if f.is_ascii_whitespace() {
-                s = rest;
-                continue;
-            }
-        }
-        if s.starts_with(&[0xA1, 0xA1]) {
-            s = &s[2..];
-            continue;
-        }
-        break;
-    }
-    loop {
-        if let Some((l, rest)) = s.split_last() {
-            if l.is_ascii_whitespace() {
-                s = rest;
-                continue;
-            }
-        }
-        if s.ends_with(&[0xA1, 0xA1]) {
-            s = &s[..s.len() - 2];
-            continue;
-        }
-        break;
-    }
-    s.to_vec()
+    let text = decode(b);
+    encode(text.trim())
 }
 
-/// 大小写不敏感的 key（ASCII 折叠）。
+/// 账号域的字节级大小写折叠（ASCII）。
 ///
-/// C# 侧 `_quickList`/`_NameQuickMap`/`PlayQuickList` 都是 `StringComparer.OrdinalIgnoreCase`；
-/// 现网名字是 GBK 中文 + ASCII，两套规则在该域内判定相同（同 whitelist D-2/B-103 口径）。
+/// C# `_quickList`/`_NameQuickMap`/`PlayQuickList` 都是 `StringComparer.OrdinalIgnoreCase`；
+/// 账号是 ASCII（A-14 域），ASCII 折叠与 ordinal-ignore-case 同值。**角色名**键改用
+/// [`fold_text`]（String + D-2/B-103 折叠），不再走本函数。
 #[must_use]
 pub fn fold_key(b: &[u8]) -> Vec<u8> {
     b.iter().map(u8::to_ascii_lowercase).collect()
 }
 
-/// 编码（对应 `HUtil32.GetBytes(str)`）：**逐字节等于 .NET cp936**。
+/// 角色名内存键的折叠（`StringComparer.OrdinalIgnoreCase` 的已登记近似，D-2/B-103）。
 ///
-/// 走 `mir2_script::cp936::encode_gb2312_dotnet`（全 workspace 唯一编码实现）：
-/// 不可映射码点（含 99 个 WHATWG-only、代理码元）回退单个 `0x3F`，绝不输出 `&#N;`。
-/// 本 crate 的解码仍用 `encoding_rs::GBK` 近似（未切换的编码点见 whitelist **A-14** 分项台账；本 crate 的编码点已切换）。
+/// 用 Unicode 简单大写折叠；生产语料是 GBK 中文 + ASCII，两种规则在该域内判定相同。
+/// E-7 要求内存键是**解码后的 String**，不是 MySQL `CONVERT(… USING gbk)` 生成的字节。
+#[must_use]
+pub fn fold_text(s: &str) -> String {
+    s.chars().flat_map(char::to_uppercase).collect()
+}
+
+/// cp936 解码（`HUtil32.GetString`）：前导吞任意后继，非法/末位给 `?`，`0x80→U+20AC`，
+/// `0xFF→U+F8F5`。实现见 `mir2_encoding::cp936`（B-105）。
+#[must_use]
+pub fn decode(bytes: &[u8]) -> String {
+    cp936::decode(bytes)
+}
+
+/// 编码（对应 `HUtil32.GetBytes(str)`）：逐 UTF-16 码元查 .NET cp936 表，
+/// 不可映射 → 单个 `0x3F`，绝不输出 `&#N;`。
 ///
 /// **不查库**：oracle `DataService.cs:192` 的 `EDCode.EncodeString(chrName)` 走的是
 /// `HUtil32.GetBytes`，DB 停机时该帧的角色名依然必须是 GB2312 字节。
 #[must_use]
 pub fn encode(s: &str) -> Vec<u8> {
-    mir2_script::cp936::encode_gb2312_dotnet(s)
+    cp936::encode_gb2312_dotnet(s)
+}
+
+/// 把一段 `char` 按 cp936 编回字节。
+fn encode_chars(chars: &[char]) -> Vec<u8> {
+    let text: String = chars.iter().collect();
+    encode(&text)
 }
 
 #[cfg(test)]
@@ -204,6 +208,32 @@ mod tests {
         assert_eq!(char_count(b"abc"), 3);
     }
 
+    /// E-3 判据 1：`0x81` 前导**吞任意后继**（与 .NET 一致），不是只吞合法后继。
+    /// 牙：把 `char_spans` 改回「后继必须落在 `0x40..=0xFE` 且非 `0x7F`」⇒ 前 9 条必红。
+    #[test]
+    fn char_count_matches_dotnet_on_lead_swallowing_any_successor() {
+        let cases: &[(&[u8], usize)] = &[
+            (b"\x81\x20\x41", 2),
+            (b"\x81\x2F", 1),
+            (b"\x81\x7F", 1),
+            (b"\x81\x00\x41", 2),
+            (b"\x81\xFF", 1),
+            (b"\x81\x40", 1),
+            (b"\x81\x0A\x41", 2),
+            (b"\x41\x81", 2),
+            (b"\x81\x20\x20\x41", 3),
+            (b"\xFF", 1),
+            (b"\x80", 1),
+            (b"\x80\x63", 2),
+            (b"\xA8\xBF", 1),
+            (b"\x81", 1),
+            (b"", 0),
+        ];
+        for (input, want) in cases {
+            assert_eq!(char_count(input), *want, "输入 {input:02X?}");
+        }
+    }
+
     /// 分隔符不会被汉字的后继字节抢走（后继 0x5C 也是合法 GBK 后继字节）。
     #[test]
     fn divider_never_lands_inside_a_char() {
@@ -214,6 +244,36 @@ mod tests {
         let (h, t) = split2_nonempty(&v, b"\\");
         assert_eq!(h, v);
         assert!(t.is_empty());
+    }
+
+    /// E-3 判据 2：切分在**解码后的字符**上做，片段按 cp936 编回字节。
+    /// 牙：把片段输出改回原始字节切片 ⇒ `a \x81/ b` 会得到 `[81 2F 20 62]` 而不是 `[3F 20 62]`。
+    #[test]
+    fn split2_decodes_before_splitting() {
+        // `81 2F` 是一个字符（`?`），因此 `/` 不是分隔符：`a?b` 整体不切。
+        assert_eq!(
+            split2_nonempty(b"a\x81/b", b"/"),
+            (b"a?b".to_vec(), Vec::new())
+        );
+        // 空格在 `81 2F` 之后：`a` / `? b`（C# `[a | ? b]`）。
+        assert_eq!(
+            split2_nonempty(b"a \x81/ b", b" "),
+            (b"a".to_vec(), b"? b".to_vec())
+        );
+        // 前导吞掉分隔符：`a` + `81 20` + `b` 在空格上不切（空格是字符的一部分）。
+        assert_eq!(
+            split2_nonempty(b"a\x81 b", b" "),
+            (b"a?b".to_vec(), Vec::new())
+        );
+        // 合法 GBK 逐字节不变（现网账号/名字域）。
+        let mut v = vec![b'a'];
+        v.extend_from_slice(&[0xD1, 0xAA]); // 血
+        v.push(b'/');
+        v.push(b'b');
+        assert_eq!(
+            split2_nonempty(&v, b"/"),
+            (vec![b'a', 0xD1, 0xAA], b"b".to_vec())
+        );
     }
 
     /// RemoveEmptyEntries 语义（**逐条实测自 .NET**：PowerShell 直调
@@ -263,6 +323,30 @@ mod tests {
         let (data, rest) = arrest(b"%partial", b'%', b'$');
         assert!(data.is_empty());
         assert_eq!(rest, b"%partial".to_vec());
+        // C# `spanLen < 2` 走向越界 catch ⇒ 空串（旧实现返回 `("%", "")`，E-3 订正）。
+        assert_eq!(arrest(b"%", b'%', b'$'), (Vec::new(), Vec::new()));
+        assert_eq!(arrest(b"", b'%', b'$'), (Vec::new(), Vec::new()));
+    }
+
+    /// E-3 判据 3：`arrest` 按 cp936 字符边界找定界符，前导吞掉的定界符字节不再命中。
+    /// 牙：把实现改回裸字节 `position(|b| *b == before)` ⇒ 两条都取到 `a?` 之后的错位剩余。
+    #[test]
+    fn arrest_is_cp936_char_aware() {
+        // `#a\x81!t!` 解成 `#a?t!` ⇒ out=`a?t`，rest=""
+        assert_eq!(
+            arrest(b"#a\x81!t!", b'#', b'!'),
+            (b"a?t".to_vec(), Vec::new())
+        );
+        // `(a\x81)b)` 解成 `(a?b)` ⇒ out=`a?b`，rest=""
+        assert_eq!(
+            arrest(b"(a\x81)b)", b'(', b')'),
+            (b"a?b".to_vec(), Vec::new())
+        );
+        // 合法 GBK 定界符两侧逐字节不变。
+        assert_eq!(
+            arrest(b"#\xD1\xAA!", b'#', b'!'),
+            (vec![0xD1, 0xAA], Vec::new())
+        );
     }
 
     /// StrToInt = int.TryParse（失败给默认值）。
@@ -271,12 +355,25 @@ mod tests {
         assert_eq!(str_to_int(b"123", -2), 123);
         assert_eq!(str_to_int(b" 123 ", -2), 123);
         assert_eq!(str_to_int(b"-7", -2), -7);
+        assert_eq!(str_to_int(b"+7", -2), 7);
         assert_eq!(str_to_int(b"", -2), -2);
         assert_eq!(str_to_int(b"abc", -2), -2);
         assert_eq!(str_to_int(b"999999999999", -2), -2);
     }
 
-    /// `HUtil32.GetBytes` 的 GB2312 字节：不依赖 MySQL 也能拿到（DBSrv 1100 降级帧用）。
+    /// Trim = C# `string.Trim()`：ASCII 空白与全角空格（`A1A1` → `U+3000`）。
+    /// 牙：改回裸字节 `is_ascii_whitespace` 扫描 ⇒ `81 20` 这类字符的后继字节会被误裁。
+    #[test]
+    fn trim_matches_dotnet_string_trim() {
+        assert_eq!(trim_name(b"  blood  "), b"blood".to_vec());
+        assert_eq!(trim_name(b"\xa1\xa1ab\xa1\xa1"), b"ab".to_vec());
+        assert_eq!(trim_name(b"\t a b \n"), b"a b".to_vec());
+        // `81 20` 是一个字符（`?`）：尾部的 0x20 属于该字符，不是空白。
+        assert_eq!(trim_name(b"\x81\x20"), b"?".to_vec());
+        assert_eq!(trim_name(b" \x81\x20 "), b"?".to_vec());
+    }
+
+    /// 合法名字的 GB2312 字节：不依赖 MySQL 也能拿到（DBSrv 1100 降级帧用）。
     #[test]
     fn encodes_gb2312_without_db() {
         assert_eq!(encode("测试"), vec![0xB2, 0xE2, 0xCA, 0xD4]);
@@ -330,26 +427,53 @@ mod tests {
         );
     }
 
-    /// 判据 E-1（db-srv 6000 面）：合法名字的 GBK 字节经 `EDCode` 后必须与 oracle
-    /// `EDCode.EncodeString(name)` 逐字节相同（`DataService.cs:192` 的 1100 取档帧字段）。
-    /// 牙：若编码回退 UTF-8（旧实现）或回退 `encoding_rs`，EDCode 串都会变。
+    /// 判据 E-3（解码回环）：合法 GBK（含 0x80/0xFF 的 oracle 映射）解码后再编码
+    /// 逐字节不变 —— 这是 DB 列值改绑 String 后 5100/6000 帧字节不变的前提。
+    /// 牙：把 `decode` 换成 WHATWG `encoding_rs::GBK`（`0xFF→U+FFFD`）⇒ `0xFF` 条必红。
     #[test]
-    fn name_and_6000_frame_bytes_unchanged() {
-        let gbk = encode("测试");
+    fn decode_encode_roundtrip_is_byte_stable() {
+        for input in [
+            b"loadhero".as_slice(),
+            &[0xB2, 0xE2, 0xCA, 0xD4], // 测试
+            &[0xC8, 0xC8, 0xD1, 0xAA], // 热血
+            &[0xA8, 0xBF],             // cp936 U+E7C8（B-105）
+            &[0x80],                   // U+20AC
+            &[0xFF],                   // U+F8F5
+            &[0xA1, 0xA1],             // 全角空格 U+3000
+        ] {
+            assert_eq!(encode(&decode(input)), input.to_vec(), "输入 {input:02X?}");
+        }
+        // 畸形序列按 oracle 落 `?`（不是原字节）。
+        assert_eq!(decode(b"\x81\x20"), "?");
+        assert_eq!(encode(&decode(b"\x81\x20")), b"?".to_vec());
+    }
+
+    /// 判据 E-7（折叠一致性）：名字键用 String + D-2/B-103 折叠；ASCII 大小写不敏感，
+    /// 汉字原样；折叠只用于内存键，不改变线上字节。
+    #[test]
+    fn fold_text_is_ordinal_ignore_case_approx() {
+        assert_eq!(fold_text("Hero"), fold_text("hERO"));
+        assert_eq!(fold_text("测试"), fold_text("测试"));
+        assert_ne!(fold_text("测试"), fold_text("测试2"));
+        let name = decode(b"\xB2\xE2\xCA\xD4");
+        assert_eq!(name, "测试");
+        assert_eq!(fold_text(&name), "测试");
+    }
+
+    /// 判据 E-7（名字解码后绑定）：5100 名字帧的字节先解码成 String 再入索引键；
+    /// 合法字符下 `encode(decode(bytes)) == bytes`，6000/5100 帧字节不变。
+    #[test]
+    fn name_binds_decoded_string_and_frame_bytes_unchanged() {
+        let wire = [0xB2u8, 0xE2, 0xCA, 0xD4]; // 测试
+        let text = decode(&wire);
+        assert_eq!(text, "测试");
+        assert_eq!(encode(&text), wire.to_vec());
         assert_eq!(
-            gbk,
-            vec![0xB2, 0xE2, 0xCA, 0xD4],
-            "oracle `HUtil32.GetBytes(\"测试\")`"
-        );
-        assert_eq!(
-            mir2_protocol::edcode::encode(&gbk),
+            mir2_protocol::edcode::encode(&encode(&text)),
             b"BNb[X>".to_vec(),
-            "1100 取档帧 ChrName = EDCode(GBK(name))"
+            "6000/5100 帧 `ChrName = EDCode(GBK(name))`"
         );
-        // 反向牙：UTF-8 字节的 EDCode 与 oracle 不同。
-        assert_ne!(
-            mir2_protocol::edcode::encode("测试".as_bytes()),
-            mir2_protocol::edcode::encode(&gbk)
-        );
+        // ASCII 名字（现网绝大多数）逐字节不变。
+        assert_eq!(encode(&decode(b"loadhero")), b"loadhero".to_vec());
     }
 }

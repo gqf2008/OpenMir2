@@ -41,8 +41,8 @@ pub struct Share {
     pub routes: Vec<GateRoute>,
     /// `MapFile`（MapInfo.txt）：地图名 → 服务器编号（`OrdinalIgnoreCase`）。
     pub map_list: Vec<(String, i32)>,
-    /// `DenyChrName.txt`：禁用角色名（按行）。
-    pub deny_names: Vec<Vec<u8>>,
+    /// `DenyChrName.txt`：禁用角色名（按行，解码为 String）。
+    pub deny_names: Vec<String>,
 }
 
 impl Share {
@@ -60,7 +60,7 @@ impl Share {
         let map_list = load_map_list(map_file);
         let deny_names = read_lines(&base.join("DenyChrName.txt"))
             .into_iter()
-            .map(|l| trim_name(&l))
+            .map(|l| crate::gbk::decode(&trim_name(&l)))
             .filter(|l| !l.is_empty())
             .collect();
         Ok(Self {
@@ -97,13 +97,16 @@ impl Share {
     }
 
     /// C# `CheckDenyChrName`：表为空即放行；命中名单即拒绝（`OrdinalIgnoreCase`）。
+    ///
+    /// E-7：名字域用解码后的 String + [`crate::gbk::fold_text`]（D-2/B-103），
+    /// 不再拿线上 GBK 字节做 ASCII 折叠。
     #[must_use]
-    pub fn check_deny_chr_name(&self, name: &[u8]) -> bool {
-        let folded = crate::gbk::fold_key(name);
+    pub fn check_deny_chr_name(&self, name: &str) -> bool {
+        let folded = crate::gbk::fold_text(name);
         !self
             .deny_names
             .iter()
-            .any(|d| crate::gbk::fold_key(d) == folded)
+            .any(|d| crate::gbk::fold_text(d) == folded)
     }
 
     /// C# `GateRouteIp` + `GetGameGateRoute`：按角色网关 IP 找路由，
@@ -221,8 +224,10 @@ fn load_map_list(path: &Path) -> Vec<(String, i32)> {
             continue;
         }
         let (_filler, server_index_b) = split2_nonempty(&rest, b" \t");
+        // MapInfo 经 C# `StringList.LoadFromFile`（cp936）读入；名字是 String 键，
+        // 必须解码后与 DB/线上名字比较（`from_utf8_lossy` 会把 GBK 中文变成替换字符）。
         out.push((
-            String::from_utf8_lossy(&name).trim().to_string(),
+            crate::gbk::decode(&name).trim().to_string(),
             str_to_int(&server_index_b, 0),
         ));
     }
@@ -256,7 +261,7 @@ mod tests {
         assert_eq!(s.gate_route(b"127.0.0.1", 0), (b"127.0.0.1".to_vec(), 7200));
         assert_eq!(s.gate_route(b"9.9.9.9", 0), (Vec::new(), 0));
         assert_eq!(s.get_map_index("0"), 0);
-        assert!(s.check_deny_chr_name(b"anything"));
+        assert!(s.check_deny_chr_name("anything"));
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -289,9 +294,11 @@ mod tests {
     #[test]
     fn missing_files_and_map_list() {
         let d = base_dir("map");
+        // MapInfo.txt 是 GBK（oracle `StringList.LoadFromFile` 按 cp936 解码），
+        // 夹具也必须是 GBK 字节（`比奇省` = B1C8 C6E6 CAA1）。
         std::fs::write(
             d.join("MapInfo.txt"),
-            "[0 0]\n[比奇省 x 7]\n[ 2 5]\nnot a map\n",
+            b"[0 0]\n[\xB1\xC8\xC6\xE6\xCA\xA1 x 7]\n[ 2 5]\nnot a map\n",
         )
         .unwrap();
         let s = Share::load(&d, &d.join("MapInfo.txt")).unwrap();
