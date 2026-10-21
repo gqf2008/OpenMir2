@@ -23,21 +23,30 @@
 //!   再 `AddQuestNpc`，`FindMap` 门在**之后的** `NpCinitialize`（`:39-48`）⇒ 未命中地图的记录
 //!   **已抽数**。本片照 merchant 卡 O-1 口径在构造前过门 ⇒ 未命中的记录**不抽数**。部署件
 //!   `Npcs.txt` 三图（`0122`/`0150`/`3`）俱在 ⇒ 该差异**不可达**；仅在合成用例里体现。
-//! - **NPC 脚本未装载**：oracle `NpCinitialize` 挂图成功后 `normNpc.LoadNPCScript()`
+//! - **NPC 脚本装载（T-137 已补）**：oracle `NpCinitialize` 挂图成功后 `normNpc.LoadNPCScript()`
 //!   （`NormNpc.cs:1590-1601`，`IsQuest=true` ⇒ `FilePath="Npc_def"`、脚本名 = `ChrName-MapName`，
-//!   部署件 `Npc_Def/{比奇国王-0122,沙巴克城堡管理-0150,老人-3}.txt`）。脚本宿主（`NpcHost`）
-//!   当前只吃 `MapQuest_def` 口径的 `QuestNpcRecord`（`file_path`/`script_name`）⇒ 固定 NPC 的
-//!   `Npc_def/<ChrName>-<MapName>` 脚本装载**不在本片**（属 NPC 对话/点击行为卡，
-//!   见 `openmir2-m3-quest-dialog-wiring`）。本片交付的是**世界面可见性**（P0 判据）。
+//!   部署件 `Npc_Def/{比奇国王-0122,沙巴克城堡管理-0150,老人-3}.txt`）。本模块的
+//!   [`place_fixed_npcs_with_scripts`] 在**倒序挂图**的同一趟里按 oracle 次序装载
+//!   `Npc_def/<ChrName>-<MapName>.txt`（`boFlag=false`、`rename_rand` = 世界同一条 rng），
+//!   并把 `Merchant.ScriptList` 塞进与商人共用的 [`crate::npc::MerchantScriptBook`]
+//!   （`ActorId` = 世界实体 id）⇒ 点击 `@main` / `CM_MERCHANTDLGSELECT` 的 `GotoLable` 有脚本可跑。
+//!   残余：`CastleOfficial` 本体（T-40/T-140）、`@Login`/`QFunction` 入口、真机窗口判据，见
+//!   `tests/parity/whitelist.md` T-137。
 //! - **NPC 的 `Run()`/`ProcessNpcs` 已建模**（**世界 tick 扩容首批 T3**，卡
 //!   `openmir2-world-tick-expansion`）：`crates/world/src/npc.rs` 的 `World::npc_tick`/`npc_run`（固定 NPC
 //!   `GuildOfficial.Run` / `Merchant.Run`），由宿主 `sim_loop` 起世界时 `enable_npc_tick()`。仍差：
 //!   `NpcLimit` 墙钟预算（`whitelist.md` T-64）与 `RM_TURN`/`RM_HIT` 帧面（B-4）。
 
+use std::path::Path;
+
 use mir2_envir::npcs::NpcInfo;
 use mir2_envir::paths::envir_file_path;
 use mir2_envir::{decode_text, MapLoader};
+use mir2_script::{LocalFs, ScriptParsers};
+use mir2_shared::rng::RandomNumber;
 use mir2_world::npc::{NpcSpawn, NpcState};
+
+use crate::npc::{MerchantNpc, MerchantScriptBook, NpcDef, NpcLoadFailure};
 
 /// NPC 装载/放置读数（日志/判据用）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -106,26 +115,218 @@ pub fn build_npc_spawns(
 ///    ⇒ **倒序** [`mir2_world::World::attach_npc_to_map`] 落格（map cell `obj_list` 追加序 = 倒序）。
 ///
 /// 返回 `(留在世界的 NPC 数, 挂图失败被移除的 ChrName)`。
+///
+/// 不保留 `(actor_id, ChrName, MapName)` 记录；需要给 `Npc_def` 脚本装载用的调用点请走
+/// [`place_npcs_recording`]（本函数是它的丢弃包装）。
 #[must_use]
 pub fn place_npcs(world: &mut mir2_world::World, spawns: Vec<NpcSpawn>) -> (usize, Vec<String>) {
+    let (kept, failed, _) = place_npcs_recording(
+        world,
+        spawns.into_iter().map(|s| (s, String::new())).collect(),
+    );
+    (kept, failed)
+}
+
+/// 挂图成功后留在世界的固定 NPC（`NpCinitialize` 的 `LoadNPCScript` 输入）。
+///
+/// `actor_id` = 世界实体 id（宿主 `ActorId`，脚本表键）；`map_name` 来自 `Npcs.txt` 的
+/// `MapName` 列（= oracle `NormNpc.MapName`，脚本名后缀），`x`/`y` = `Npcs.txt` 坐标
+/// （`GotoLable` 的 `CurrX/CurrY` 与 `$MAPNAME` 同源）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlacedNpc {
+    pub actor_id: i32,
+    pub chr_name: String,
+    pub map_name: String,
+    pub x: i32,
+    pub y: i32,
+}
+
+/// [`place_npcs`] 的记录变体：返回 `(kept, failed, placed)`。
+///
+/// `spawns` 每项 = `(NpcSpawn, MapName)`（`MapName` 只用于记录，不参与建实体/挂图）；
+/// `placed` 的**顺序 = 倒序挂图的处理序** = oracle `NpCinitialize` 的
+/// `for (i = Count-1; i >= 0; i--)`，也即 `LoadNPCScript` 的调用序（脚本装载必须按此序抽数）。
+#[must_use]
+pub fn place_npcs_recording(
+    world: &mut mir2_world::World,
+    spawns: Vec<NpcSpawnWithMap>,
+) -> (usize, Vec<String>, Vec<PlacedNpc>) {
     // ① 正序建实体（ctor 抽数 = LocalDB.LoadNpcs 文件序，走 world.rng 同一条流）。
-    let pending: Vec<(Option<i32>, String)> = spawns
+    let pending: Vec<(Option<i32>, String, String, i32, i32)> = spawns
         .into_iter()
-        .map(|spawn| {
+        .map(|(spawn, map_name)| {
             let name = spawn.name.clone();
-            (world.insert_npc(spawn), name)
+            let (x, y) = (spawn.x, spawn.y);
+            (world.insert_npc(spawn), name, map_name, x, y)
         })
         .collect();
-    // ② 倒序挂图（NpCinitialize 的倒序 for）。
+    // ② 倒序挂图（NpCinitialize 的倒序 for）；成功的按同一序记进 `placed`（= 脚本装载序）。
     let mut kept = 0;
     let mut failed = Vec::new();
-    for (id, name) in pending.into_iter().rev() {
+    let mut placed = Vec::new();
+    for (id, name, map_name, x, y) in pending.into_iter().rev() {
         match id {
-            Some(id) if world.attach_npc_to_map(id) => kept += 1,
+            Some(id) if world.attach_npc_to_map(id) => {
+                kept += 1;
+                placed.push(PlacedNpc {
+                    actor_id: id,
+                    chr_name: name,
+                    map_name,
+                    x,
+                    y,
+                });
+            }
             _ => failed.push(name),
         }
     }
-    (kept, failed)
+    (kept, failed, placed)
+}
+
+/// 一条待放置的固定 NPC：`(NpcSpawn, MapName)`（`MapName` 只用于脚本名/记录）。
+pub type NpcSpawnWithMap = (NpcSpawn, String);
+
+/// [`build_npc_spawns`] 的记录变体：`MapName` 与 spawn 逐项对齐（供 [`place_npcs_recording`]）。
+#[must_use]
+pub fn build_npc_spawns_recording(
+    npcs: &[NpcInfo],
+    resolve_map: impl Fn(&str) -> Option<usize>,
+) -> (Vec<NpcSpawnWithMap>, Vec<(String, String)>) {
+    let mut spawns = Vec::with_capacity(npcs.len());
+    let mut dropped = Vec::new();
+    for info in npcs {
+        match resolve_map(&info.map_name) {
+            Some(map_id) => spawns.push((to_spawn(info, map_id), info.map_name.clone())),
+            None => dropped.push((info.chr_name.clone(), info.map_name.clone())),
+        }
+    }
+    (spawns, dropped)
+}
+
+/// `NpCinitialize` 的第三段（`WorldServer.Merchant.cs:54` → `NormNpc.LoadNPCScript`，
+/// `NormNpc.cs:1590-1601`）：对**挂图成功**的固定 NPC 按 `placed` 的序（= 倒序 for）
+/// 装载 `Npc_def/<ChrName>-<MapName>.txt`（`boFlag=false`），装进与商人共用的脚本表。
+///
+/// - `IsQuest=true`（`NormNpc` ctor）⇒ `FilePath="Npc_def"`、脚本名 = `ChrName + '-' + MapName`；
+/// - `File.Exists` 假 ⇒ oracle `LogService.Error("Script file not found: ...")` 且 `ScriptList` 空
+///   ⇒ 本函数 `loaded=false` 并把 `(ChrName, stem)` 记进 `missing`（不静默吞）；
+/// - 解析抛异常（`LoadPanic`）⇒ 记进 `failures`（oracle 异常穿透 `NpCinitialize`；本宿主登记后继续，
+///   与 `NpcHost::load` 同口径）；
+/// - `rename_rand` 必须是**世界同一条** rng（oracle `SystemShare.RandomNumber`）：调用方传入。
+pub fn load_npc_def_scripts(
+    envir_root: &Path,
+    placed: &[PlacedNpc],
+    book: &mut MerchantScriptBook,
+    rename_rand: &mut dyn FnMut(i32, i32) -> i32,
+    failures: &mut Vec<NpcLoadFailure>,
+    missing: &mut Vec<(String, String)>,
+) {
+    let parsers = ScriptParsers::new();
+    let fs = LocalFs;
+    for npc in placed {
+        // `NormNpc.LoadNPCScript`：`sScriptName = ChrName + '-' + MapName`（`NormNpc.cs:1595`）。
+        let stem = format!("{}-{}", npc.chr_name, npc.map_name);
+        let (scripts, loaded) =
+            match parsers.load_script_file(&fs, envir_root, "Npc_def", &stem, false, rename_rand) {
+                Ok(Some(outcome)) => (outcome.scripts, true),
+                Ok(None) => {
+                    missing.push((npc.chr_name.clone(), stem.clone()));
+                    (Vec::new(), false)
+                }
+                Err(panic) => {
+                    failures.push(NpcLoadFailure {
+                        chr_name: npc.chr_name.clone(),
+                        file_path: "Npc_def".to_string(),
+                        script_name: stem.clone(),
+                        reason: panic.to_string(),
+                    });
+                    (Vec::new(), false)
+                }
+            };
+        book.insert(MerchantNpc {
+            def: NpcDef {
+                chr_name: npc.chr_name.clone(),
+                // `LoadNPCScript` 的 `FilePath = "Npc_def"`（`NormNpc.cs:1593`）——脚本动作按它
+                // 拼 `CHECKNAMELIST` 一类相对路径。
+                file_path: "Npc_def".to_string(),
+                script_name: Some(stem),
+                // `NormNpc` ctor `IsHide = false`（`NormNpc.cs:45`）。
+                is_hide: false,
+                // `NormNpc` ctor `IsQuest = true`（`NormNpc.cs:48`）。
+                is_quest: true,
+                scripts,
+                loaded,
+                actor_id: npc.actor_id,
+            },
+            // `Merchant` ctor `PriceRate = 100`（`Merchant.cs:86`）；`Npcs.txt` 无该列。
+            price_rate: 100,
+            // `NormNpc.Initialize` 的 `CastleMgr.InCastleWarArea(this)`：城堡家族（⑧）未落地 ⇒ None。
+            castle: None,
+            map_name: npc.map_name.clone(),
+            curr_x: npc.x,
+            curr_y: npc.y,
+        });
+    }
+}
+
+/// [`place_fixed_npcs_with_scripts`] 的读数（日志/判据用）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FixedNpcLoadReport {
+    /// `Npcs.txt` 解析出的记录数。
+    pub lines: usize,
+    /// 过 `FindMap` 门 + 挂图成功后留在世界的 NPC 数。
+    pub placed: usize,
+    /// 被 `FindMap` 门丢弃的 `(ChrName, MapName)`。
+    pub dropped_unknown_map: Vec<(String, String)>,
+    /// 挂图失败被移除的 `ChrName`。
+    pub dropped_add_to_map: Vec<String>,
+    /// 留在世界的 NPC（挂图倒序 = `LoadNPCScript` 调用序）。
+    pub placed_npcs: Vec<PlacedNpc>,
+    /// `Npc_def` 脚本解析抛异常（`LoadPanic`，oracle 异常穿透）。
+    pub script_failures: Vec<NpcLoadFailure>,
+    /// 脚本文件不存在（`File.Exists` 假，oracle `LogService.Error`），`(ChrName, stem)`。
+    pub script_missing: Vec<(String, String)>,
+}
+
+/// 固定 NPC 的完整装载链（`NpCinitialize`）：`FindMap` 门 → 正序建实体 → 倒序挂图 →
+/// 倒序 `LoadNPCScript`。
+///
+/// `rename_rand` 取 `world.rng`（取出、装载、原样放回），与 oracle「世界同一条 `RandomNumber`」一致。
+#[must_use]
+pub fn place_fixed_npcs_with_scripts(
+    world: &mut mir2_world::World,
+    npcs: &[NpcInfo],
+    resolve_map: impl Fn(&str) -> Option<usize>,
+    envir_root: &Path,
+    book: &mut MerchantScriptBook,
+) -> FixedNpcLoadReport {
+    let (spawns, dropped_unknown_map) = build_npc_spawns_recording(npcs, resolve_map);
+    let (placed, dropped_add_to_map, placed_npcs) = place_npcs_recording(world, spawns);
+    let mut script_failures = Vec::new();
+    let mut script_missing = Vec::new();
+    if !placed_npcs.is_empty() {
+        let mut rng = std::mem::replace(&mut world.rng, RandomNumber::with_seed(0));
+        {
+            let mut rename_rand = |min: i32, max: i32| rng.get_random_number(min, max);
+            load_npc_def_scripts(
+                envir_root,
+                &placed_npcs,
+                book,
+                &mut rename_rand,
+                &mut script_failures,
+                &mut script_missing,
+            );
+        }
+        world.rng = rng;
+    }
+    FixedNpcLoadReport {
+        lines: npcs.len(),
+        placed,
+        dropped_unknown_map,
+        dropped_add_to_map,
+        placed_npcs,
+        script_failures,
+        script_missing,
+    }
 }
 
 /// `LoadNpcs` 的文件半（`LocalDB.cs:664-668`）：
@@ -558,6 +759,75 @@ mod tests {
         assert_eq!(slot_names, vec!["A".to_string(), "B".to_string()]);
     }
 
+    /// 判据（装载半，T-137）：`place_fixed_npcs_with_scripts` 按**倒序挂图序**（= `NpCinitialize`
+    /// 的倒序 for）装载 `Npc_def/<ChrName>-<MapName>.txt`，`loaded`/`file_path`/`is_quest` 落表；
+    /// 缺文件记 `script_missing`（oracle `LogService.Error`，不静默吞）。
+    ///
+    /// 红检：把脚本名拼接 `{ChrName}-{MapName}` 改掉 ⇒ 两个文件都 `File.Exists` 假 ⇒
+    /// `report.script_missing.len()` 变 2 且 `entry.def.loaded` 假 ⇒ 红。
+    #[test]
+    fn place_fixed_npcs_with_scripts_loads_npc_def_into_book() {
+        let f = fixture();
+        let npcs = vec![
+            info("比奇国王", NpcType::GuildOfficial, "0122", 29, 32, 0, 8),
+            info("老人", NpcType::Merchant, "0", 3, 3, 0, 1),
+        ];
+        std::fs::create_dir_all(f.base.join("Envir").join("Npc_def")).unwrap();
+        std::fs::write(
+            f.base
+                .join("Envir")
+                .join("Npc_def")
+                .join("比奇国王-0122.txt"),
+            encoding_rs::GBK
+                .encode("[@main]\n国王菜单 <申请/@apply>\n")
+                .0,
+        )
+        .unwrap();
+        let mut world = mir2_world::World::with_maps(vec![(64, 64), (64, 64)]);
+        let mut book = MerchantScriptBook::new(30);
+        let report = place_fixed_npcs_with_scripts(
+            &mut world,
+            &npcs,
+            |n| f.registry.id_of(n),
+            &f.base.join("Envir"),
+            &mut book,
+        );
+        assert_eq!(report.placed, 2);
+        // 倒序 = `NpCinitialize` 的 `for (i = Count-1; i >= 0; i--)` = `LoadNPCScript` 调用序。
+        assert_eq!(
+            report
+                .placed_npcs
+                .iter()
+                .map(|p| p.chr_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["老人", "比奇国王"]
+        );
+        // 老人无脚本文件 ⇒ `script_missing`（oracle `LogService.Error("Script file not found")`）。
+        assert_eq!(report.script_missing.len(), 1);
+        assert_eq!(report.script_missing[0].0, "老人");
+        assert!(report.script_failures.is_empty());
+        let king = report
+            .placed_npcs
+            .iter()
+            .find(|p| p.chr_name == "比奇国王")
+            .unwrap();
+        let entry = book.get(king.actor_id).expect("脚本表按 ActorId 有国王");
+        assert!(entry.def.loaded);
+        assert_eq!(entry.def.file_path, "Npc_def");
+        assert!(entry.def.is_quest && !entry.def.is_hide);
+        assert_eq!(entry.map_name, "0122");
+        assert_eq!((entry.curr_x, entry.curr_y), (29, 32));
+        assert!(!entry.def.scripts.is_empty());
+        let elder = report
+            .placed_npcs
+            .iter()
+            .find(|p| p.chr_name == "老人")
+            .unwrap();
+        let elder_entry = book.get(elder.actor_id).expect("缺文件也建表项");
+        assert!(!elder_entry.def.loaded, "`File.Exists` 假 ⇒ loaded=false");
+        assert!(elder_entry.def.scripts.is_empty());
+    }
+
     /// 判据 5（文件半）：无文件 ⇒ `Ok(None)`；有 GBK 文件 ⇒ 逐行解析（部署件三行形态）。
     #[test]
     fn load_npcs_file_missing_is_none_and_reads_gbk() {
@@ -654,5 +924,71 @@ mod tests {
         assert_eq!((npcs[0].x, npcs[0].y), (29, 32));
         assert_eq!((npcs[1].x, npcs[1].y), (7, 16));
         assert_eq!((npcs[2].x, npcs[2].y), (669, 338));
+
+        // **T-137**：部署件三份 `Npc_Def/<ChrName>-<MapName>.txt` 必须全部装载（目录名大小写
+        // 不敏感；脚本名拼接 = `ChrName + '-' + MapName`）。这条只读部署件、不启服务。
+        let placed: Vec<PlacedNpc> = npcs
+            .iter()
+            .enumerate()
+            .map(|(i, n)| PlacedNpc {
+                actor_id: i32::try_from(i + 1).unwrap(),
+                chr_name: n.chr_name.clone(),
+                map_name: n.map_name.clone(),
+                x: i32::from(n.x),
+                y: i32::from(n.y),
+            })
+            .collect();
+        let envir_root = loader.base_path.join(&loader.envir_dir);
+        let mut book = MerchantScriptBook::new(30);
+        let mut failures = Vec::new();
+        let mut missing = Vec::new();
+        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut rng = std::mem::replace(&mut world.rng, RandomNumber::with_seed(1));
+        {
+            let mut rename_rand = |min: i32, max: i32| rng.get_random_number(min, max);
+            load_npc_def_scripts(
+                &envir_root,
+                &placed,
+                &mut book,
+                &mut rename_rand,
+                &mut failures,
+                &mut missing,
+            );
+        }
+        world.rng = rng;
+        assert!(
+            failures.is_empty() && missing.is_empty(),
+            "部署件 Npc_Def 脚本必须全部装载：failures={failures:?} missing={missing:?}"
+        );
+        for npc in &placed {
+            let entry = book.get(npc.actor_id).expect("脚本表按 ActorId 有条目");
+            assert!(entry.def.loaded, "`{}` 的脚本必须存在", npc.chr_name);
+            assert_eq!(entry.def.file_path, "Npc_def");
+            assert!(!entry.def.scripts.is_empty());
+            println!(
+                "NPC_DEF_VECTOR chr={} map={} scripts={} records={}",
+                npc.chr_name,
+                npc.map_name,
+                entry.def.scripts.len(),
+                entry
+                    .def
+                    .scripts
+                    .iter()
+                    .map(|s| s.record_list.len())
+                    .sum::<usize>()
+            );
+        }
+        // `比奇国王-0122` 的 `@main` 必须在说词表里（`GetValidStr3` 的菜单文本）。
+        let king = book.get(1).expect("国王条目");
+        let king_labels: Vec<&str> = king
+            .def
+            .scripts
+            .iter()
+            .flat_map(|s| s.record_list.iter().map(|r| r.s_label.as_str()))
+            .collect();
+        assert!(
+            king_labels.iter().any(|l| l.eq_ignore_ascii_case("@main")),
+            "国王脚本必须有 @main：{king_labels:?}"
+        );
     }
 }

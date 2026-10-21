@@ -3707,10 +3707,15 @@ const CLICK_NPC_TIME_MS: i32 = 1000;
 /// **本片已实现**：`IsCanDeal` 门 + `Death`/`Ghost` 门 + `ClickNpcTime` 限频门 + `FindMerchant` 解析
 /// + 同图/±15 距离门。返回 `true` = 全部通过、走到了 `normNpc.Click(this)` 点。
 ///
-/// **登记**：① `FindNpc(actorId)`（固定 NPC，`Envir/Npcs.txt`）未装载（卡 `openmir2-npcs-fixed-loading`）
-/// ⇒ 仅商人可被点；② `normNpc.Click(this)` 的 `GotoLable("@main")` → `SM_MERCHANTSAY` 交互链依赖 NPC 脚本
-/// 宿主，未在本派发内接线（登记为 T1 依赖）；③ `!IsCanDeal` 支的 `MessageSettings.CanotTryDealMsg` 文本 +
-/// `ManageNPC` 回帧未建模（`IsCanDeal` 生产恒真 ⇒ 该支不可达）。
+/// **`FindNpc` 臂（T-137 已补）**：固定 NPC（`Envir/Npcs.txt`）与商人同在 `world.entities`，
+/// 故 `FindMerchant(actorId) ?? FindNpc(actorId)` 的第二臂 = 实体带 `npc` 态者；其 `@main` 脚本与商人
+/// 共用 [`game_svr::npc::MerchantScriptBook`]（`Npc_def/<ChrName>-<MapName>.txt` 由
+/// `game_svr::npcs::place_fixed_npcs_with_scripts` 装载）⇒ `normNpc.Click(this)` 的
+/// `GotoLable("@main")` → `SM_MERCHANTSAY` 交互链与商人同一条。
+///
+/// **登记**：① `!IsCanDeal` 支的 `MessageSettings.CanotTryDealMsg` 文本 + `ManageNPC` 回帧未建模
+/// （`IsCanDeal` 生产恒真 ⇒ 该支不可达）；② 商人/NPC 的 `ActorId` 命名空间不做区分（oracle 的
+/// `FindMerchant` 先查 `MerchantList` 再查 `QuestNpcList`，本宿主是同一实体表 ⇒ 同 id 只可能命中一个）。
 #[allow(clippy::too_many_arguments)]
 fn handle_click_npc_cmd(
     npc_actor_id: i32,
@@ -3778,15 +3783,16 @@ fn handle_click_npc_cmd(
     }
     // oracle 在门外立即 `ClickNpcTime = GetTickCount()`（**先于** FindMerchant）。
     sg.click_npc_time = Some(now);
-    // `FindMerchant(actorId) ?? FindNpc(actorId)`：本骨架只商人落在世界（`Npcs.txt` 未装载，登记）。
+    // `FindMerchant(actorId) ?? FindNpc(actorId)`（`PlayObject.Message.cs` 的 `Click` 支）：
+    // 商人（`MerchantList`）与固定 NPC（`QuestNpcList`，`Npcs.txt`）都落在 `world.entities`。
     let Some(ne) = world
         .entities
         .get(npc_actor_id)
-        .filter(|e| e.merchant.is_some())
+        .filter(|e| e.merchant.is_some() || e.npc.is_some())
     else {
         glog!(
             "DBG",
-            "CM_CLICKNPC：FindMerchant/FindNpc({npc_actor_id}) == null ⇒ 忽略（FindNpc 未装载，登记）"
+            "CM_CLICKNPC：FindMerchant/FindNpc({npc_actor_id}) == null ⇒ 忽略"
         );
         return false;
     };
@@ -4445,30 +4451,52 @@ fn handle_shop_cmd(
     };
     let (px, py, pmap, dead, ghost) = (pe.x, pe.y, pe.map_id, pe.death, pe.ghost);
     let merchant_id = recog;
+    // `FindMerchant(nParam1) ?? FindNpc(nParam1)`（`PlayObject.Operate.cs:120`）**只**用在
+    // `CM_MERCHANTDLGSELECT`；其余商店命令 oracle 一律 `FindMerchant`（`:151/172/200/1218/1578/1601/1620/1659`）。
+    // 第二臂 = 固定 NPC（`Envir/Npcs.txt`，无 `merchant` 态）：只走 `Merchant.UserSelect` 的脚本半
+    // （`GotoLable` + `@back`/`@exit`，T-137）；商店面板/背包命令不适用（`Merchant` ctor 各
+    // `Is*` 标志全 false ⇒ oracle 的对应分支全部短路）。
+    let allow_fixed_npc = ident == game_svr::shop::CM_MERCHANTDLGSELECT;
     let Some(me) = world
         .entities
         .get(merchant_id)
-        .filter(|e| e.merchant.is_some())
+        .filter(|e| e.merchant.is_some() || (allow_fixed_npc && e.npc.is_some()))
     else {
         glog!(
             "WRN",
-            "商店命令：FindMerchant({merchant_id}) == null ⇒ 丢弃 ident={ident} ChrName={chr_name}"
+            "商店命令：FindMerchant/FindNpc({merchant_id}) == null ⇒ 丢弃 ident={ident} ChrName={chr_name}"
         );
         return;
     };
+    let is_fixed_npc = me.merchant.is_none();
     let (mx, my, mmap, mflags, mprice, mcastle, mitem_type, mhide, mchr_name) = {
-        let st = me.merchant.as_ref().expect("已过滤 merchant.is_some()");
-        (
-            me.x,
-            me.y,
-            me.map_id,
-            st.flags,
-            st.price_rate,
-            st.castle_merchant,
-            st.item_type_list.clone(),
-            st.is_hide,
-            me.name.clone(),
-        )
+        if let Some(st) = me.merchant.as_ref() {
+            (
+                me.x,
+                me.y,
+                me.map_id,
+                st.flags,
+                st.price_rate,
+                st.castle_merchant,
+                st.item_type_list.clone(),
+                st.is_hide,
+                me.name.clone(),
+            )
+        } else {
+            // `Merchant` ctor（`Merchant.cs:82-110`）：`PriceRate=100`、`CastleMerchant=false`、
+            // 全部 `Is*` 标志 false、`ItemTypeList` 空。
+            (
+                me.x,
+                me.y,
+                me.map_id,
+                mir2_world::merchant::MerchantFlags::default(),
+                100,
+                false,
+                Vec::new(),
+                false,
+                me.name.clone(),
+            )
+        }
     };
     let same_map = mmap == pmap;
     let within_sight = (mx - px).abs() < 15 && (my - py).abs() < 15;
@@ -4529,6 +4557,19 @@ fn handle_shop_cmd(
                 &mut session.play_dice_label,
                 label,
             );
+            // `Merchant.cs:797-804`：`@@sendmsg` 的**空消息早期 return** 在 `GotoLable` **之前**
+            // （`if (sLabel == sSL_SENDMSG) { if (string.IsNullOrEmpty(sMsg)) return; }`）。
+            // 固定 NPC 走本臂（商人的同条分支仍属 T-145 ④ 残余）。
+            if is_fixed_npc && game_svr::shop::eq_label(label, "@@sendmsg") {
+                let msg = label_full.split_once('\r').map_or("", |(_, m)| m).trim();
+                if msg.is_empty() {
+                    glog!(
+                        "DBG",
+                        "CM_MERCHANTDLGSELECT：固定 NPC @@sendmsg 空消息 ⇒ return（Merchant.cs:801-804）ChrName={chr_name}"
+                    );
+                    return;
+                }
+            }
             // `Merchant.cs:808`：`GotoLable(playObject, ActorId, sLabel, !boCanJmp)` —— 在
             // `!boCanJmp` 的 return **之前**执行（说词照出）。
             let map_text = pmap.to_string();
@@ -4608,6 +4649,24 @@ fn handle_shop_cmd(
                         emit_script_frames(tx, socket, merchant_id, sg, &script_frames);
                     }
                 }
+            }
+            if is_fixed_npc {
+                // `Merchant.UserSelect`（`Merchant.cs:805-940`）的其余分支：全部以 `Is* == false`
+                // （`Merchant` ctor）短路，`@exit` 是唯一无门的分支（`Merchant.cs:929-932`
+                // `SendMsg(playObject, RM_MERCHANTDLGCLOSE, 0, ActorId, 0, 0)`）。
+                if game_svr::shop::eq_label(label, "@exit") {
+                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "固定 NPC @exit") {
+                        let _ = tx.send(SimToGate::SendFrame {
+                            socket,
+                            body: smframe::sm_merchantdlgclose(merchant_id),
+                        });
+                    }
+                }
+                glog!(
+                    "INF",
+                    "固定 NPC 标签 ChrName={chr_name} npc={merchant_id} label={label} → Npc_def 脚本已执行"
+                );
+                return;
             }
             let ctx = shop_context(
                 catalog,
@@ -5384,6 +5443,51 @@ fn run_merchant_goto(
     // 脚本帧（`NpcPlayer.frames` = `MsgQueue` 的脚本侧投影）：写回之后再交给调用方排水，
     // 元宝帧的取值因此是本次脚本写回后的会话值。
     (says, std::mem::take(&mut player.frames))
+}
+
+/// 固定 NPC（`Envir/Npcs.txt`）的脚本 `GotoLable` 生产实现——[`guild_official::FixedNpcScript`]
+/// 的宿主注入（T-137）。
+///
+/// oracle 里 `GuildOfficial`/`Merchant` 的 `ScriptList` 就挂在 NPC 自己身上，`UserSelect` 直接
+/// `ScriptEngine.GotoLable(this.ActorId, ...)`；本宿主的脚本表在
+/// [`game_svr::npc::MerchantScriptBook`]（键 = 世界实体 id），`GotoLable` 的 `PlayObject` 侧字段
+/// 由 [`run_merchant_goto`] 与商人路径共用同一套 seed/写回。
+struct FixedNpcScriptCtx<'a> {
+    book: &'a game_svr::npc::MerchantScriptBook,
+    npc_vars: &'a game_svr::npc::NpcVars,
+    catalog: &'a dyn game_svr::ability::ItemCatalog,
+    /// `SystemShare.RandomNumber`（世界同一条流；调用方取出/放回 `world.rng`）。
+    rng: &'a mut mir2_shared::rng::RandomNumber,
+    sell_off: &'a mut game_svr::selloff::SellOffState,
+    chr_name: &'a str,
+    /// `PlayObject.Envir.MapName`（`$MAPNAME` 与 `GetVariableText` 的读源；本骨架用 map_id 文本）。
+    map_text: &'a str,
+}
+
+impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
+    fn goto_label(
+        &mut self,
+        sg: &mut SessionGround,
+        ss: &mut ShopSession,
+        npc_actor_id: i32,
+        label: &str,
+        bo_ext_jmp: bool,
+    ) -> (Vec<game_svr::npc::SayMsg>, Vec<game_svr::npc::SendMsg>) {
+        run_merchant_goto(
+            self.book,
+            npc_actor_id,
+            label,
+            bo_ext_jmp,
+            sg,
+            self.chr_name,
+            self.map_text,
+            self.catalog,
+            self.npc_vars,
+            ss,
+            self.sell_off,
+            self.rng,
+        )
+    }
 }
 
 /// **M3⑥-实现 3 第②片**：把 NPC 说词按 oracle `MsgQueue` **出队序**落 `SM_MERCHANTSAY(643)`。
@@ -16107,6 +16211,8 @@ fn sim_loop(
     let mut merchant_book =
         game_svr::npc::MerchantScriptBook::new(enter_cfg.script_goto_count_limit);
     if let (Some(loader), Some(reg)) = (enter_cfg.loader.take(), registry.as_ref()) {
+        // `Envir` 根（`ScriptParsers.LoadScriptFile` 的 `envir_root`）：商人与固定 NPC 的脚本装载共用。
+        let envir_root = loader.base_path.join(&loader.envir_dir);
         match game_svr::merchant::load_merchant_spawns(&loader, |n| reg.id_of(n), &mut world.rng) {
             Ok((spawns, report, seeds)) => {
                 let (kept, failed, book) =
@@ -16136,26 +16242,54 @@ fn sim_loop(
             }
             Err(e) => glog!("WRN", "加载 Envir/Merchant.txt 失败（{e}）⇒ 无商人（登记）"),
         }
-        // **固定管理 NPC 放置半（R0-1 `openmir2-npcs-fixed-loading`）**：`WorldServer.Merchant.cs`
-        // 的 `NpCinitialize`（`:37-63`，FindMap 门 + `Initialize()`/AddToMap + 失败移除）。
-        // 建实体（`BaseObject` ctor 抽数 `Random(1500)`+`Random(2000)`）在商人之后、守卫之前，
-        // 与 oracle `GameApp.cs:226-244`（LoadMerchant → LoadNpcs → … → LoadGuardList）同序；
-        // 挂图（RNG-free）紧随其后。走**同一条** `world.rng`。
+        // **固定管理 NPC 放置半（R0-1 `openmir2-npcs-fixed-loading`）+ `Npc_def` 脚本装载（T-137）**：
+        // `WorldServer.Merchant.cs` 的 `NpCinitialize`（`:37-63`，FindMap 门 + `Initialize()`/AddToMap
+        // + 失败移除 + `normNpc.LoadNPCScript()`，`NormNpc.cs:1590-1601`）。
+        // 建实体（`BaseObject`/`AnimalObject` ctor 共 4 抽）在商人之后、守卫之前，与 oracle
+        // `GameApp.cs:226-244`（LoadMerchant → LoadNpcs → … → LoadGuardList）同序；挂图（RNG-free）
+        // 与脚本装载（`rename_rand` = `world.rng` 同一条流）都在 `place_fixed_npcs_with_scripts` 里。
         if let Some(npcs) = enter_cfg.npcs.take() {
-            let (spawns, dropped) = game_svr::npcs::build_npc_spawns(&npcs, |n| reg.id_of(n));
-            let (kept, failed) = game_svr::npcs::place_npcs(&mut world, spawns);
+            let report = game_svr::npcs::place_fixed_npcs_with_scripts(
+                &mut world,
+                &npcs,
+                |n| reg.id_of(n),
+                &envir_root,
+                &mut merchant_book,
+            );
             glog!(
                 "INF",
-                "Envir/Npcs.txt 放置完成：{} 条配置（FindMap 门丢 {}，挂图失败 {}）⇒ 世界内固定 NPC {}",
-                npcs.len(),
-                dropped.len(),
-                failed.len(),
-                kept
+                "Envir/Npcs.txt 装载完成：{} 条配置（FindMap 门丢 {}，挂图失败 {}）⇒ 世界内固定 NPC {}，Npc_def 脚本 {} 条（解析异常 {}，文件缺失 {}）",
+                report.lines,
+                report.dropped_unknown_map.len(),
+                report.dropped_add_to_map.len(),
+                report.placed,
+                report.placed_npcs.len() - report.script_missing.len(),
+                report.script_failures.len(),
+                report.script_missing.len()
             );
-            for (name, map) in &dropped {
+            for (name, map) in &report.dropped_unknown_map {
                 glog!(
                     "WRN",
                     "固定 NPC {name} 的 MapName={map} 不在注册表 ⇒ 按 oracle FindMap 门丢弃"
+                );
+            }
+            for name in &report.dropped_add_to_map {
+                glog!("WRN", "固定 NPC {name} 挂图失败 ⇒ 按 oracle RemoveAt 移除");
+            }
+            for f in &report.script_failures {
+                glog!(
+                    "WRN",
+                    "固定 NPC 脚本装载失败 ChrName={} file={}/{}.txt：{}",
+                    f.chr_name,
+                    f.file_path,
+                    f.script_name,
+                    f.reason
+                );
+            }
+            for (name, stem) in &report.script_missing {
+                glog!(
+                    "WRN",
+                    "固定 NPC {name} 的 Npc_def 脚本缺失（Npc_def/{stem}.txt；oracle LogService.Error）"
                 );
             }
         }
@@ -16164,7 +16298,6 @@ fn sim_loop(
         // 缺文件也算成功（空 `QuestList`，`result=1`）——此时仍会建 `QManage`/`QFunction`/
         // `RobotManage` 三个隐藏 NPC（目录存在时）。`rename_rand` 走**同一条** `world.rng`
         // （oracle `ScriptParsers.cs:857` 的 `SystemShare.RandomNumber.GetRandomNumber(1,200)`）。
-        let envir_root = loader.base_path.join(&loader.envir_dir);
         match loader.load_map_quest(|name| reg.id_of(name).is_some()) {
             Ok(load) => {
                 let mut rename_rand = |min: i32, max: i32| world.rng.get_random_number(min, max);
@@ -16638,8 +16771,29 @@ fn sim_loop(
                         // [`dispatch_inbound_p0`] 的逐条 oracle 对照。
                     } else if fixed_npc_dialog {
                         // 固定 NPC（`Envir/Npcs.txt`）的对话框：oracle `FindNpc` 臂 ⇒
-                        // `GuildOfficial.UserSelect`（`@@buildguildnow`/`@@guildwar`/...）。
+                        // `GuildOfficial.UserSelect`（`LableIsCanJmp` → `GotoLable` 统一入口 →
+                        // `@@buildguildnow`/`@@guildwar`/... 分支）。`GotoLable` 的脚本来自
+                        // `Npc_def/<ChrName>-<MapName>.txt`（T-137，宿主 `place_fixed_npcs_with_scripts`）。
                         let now_tick = world.clock_ms as i32;
+                        let mut script_rng = std::mem::replace(
+                            &mut world.rng,
+                            mir2_shared::rng::RandomNumber::with_seed(0),
+                        );
+                        let map_text = online
+                            .iter()
+                            .find(|e| e.chr_name == chr_name)
+                            .and_then(|e| world.entities.get(e.actor_id))
+                            .map_or_else(String::new, |e| e.map_id.to_string());
+                        let sell_off = sell_off_sessions.entry(chr_name.clone()).or_default();
+                        let mut fixed_script = FixedNpcScriptCtx {
+                            book: &merchant_book,
+                            npc_vars: &npc_vars_base,
+                            catalog: &enter_cfg.catalog,
+                            rng: &mut script_rng,
+                            sell_off,
+                            chr_name: &chr_name,
+                            map_text: &map_text,
+                        };
                         guild_official::handle_select(
                             cmd.recog,
                             tail.as_deref(),
@@ -16662,7 +16816,9 @@ fn sim_loop(
                             &gates,
                             &enter_cfg.catalog,
                             now_tick,
+                            &mut fixed_script,
                         );
+                        world.rng = script_rng;
                     } else if matches!(
                         cmd.ident,
                         game_svr::shop::CM_MERCHANTDLGSELECT
@@ -49949,6 +50105,10 @@ mod tests {",
         rx: mpsc::UnboundedReceiver<SimToGate>,
         now_tick: i32,
         server_index: i32,
+        /// `Npc_def` 脚本表（T-137）：默认空 ⇒ `GotoLable` 无说词/无脚本帧（既有用例口径）。
+        book: game_svr::npc::MerchantScriptBook,
+        npc_vars: game_svr::npc::NpcVars,
+        sell_off: game_svr::selloff::SellOffState,
     }
 
     impl GuildNpcFixture {
@@ -49995,6 +50155,9 @@ mod tests {",
                 rx,
                 now_tick: 1_000,
                 server_index: 0,
+                book: game_svr::npc::MerchantScriptBook::default(),
+                npc_vars: game_svr::npc::NpcVars::default(),
+                sell_off: game_svr::selloff::SellOffState::default(),
             };
             f.add_player("hero", 1, 10, 10, 901);
             // 固定 NPC 在玩家之后建：`EntityStore::alloc_id` 先到先得（避免与玩家 id 撞号）。
@@ -50109,6 +50272,19 @@ mod tests {",
         fn call(&mut self, tail: &str) {
             let now_tick = self.now_tick;
             let server_index = self.server_index;
+            let mut script_rng = std::mem::replace(
+                &mut self.world.rng,
+                mir2_shared::rng::RandomNumber::with_seed(0),
+            );
+            let mut script = FixedNpcScriptCtx {
+                book: &self.book,
+                npc_vars: &self.npc_vars,
+                catalog: &self.catalog,
+                rng: &mut script_rng,
+                sell_off: &mut self.sell_off,
+                chr_name: "hero",
+                map_text: "0",
+            };
             guild_official::handle_select(
                 self.npc_id,
                 Some(tail),
@@ -50131,7 +50307,9 @@ mod tests {",
                 &self.gates,
                 &self.catalog,
                 now_tick,
+                &mut script,
             );
+            self.world.rng = script_rng;
         }
 
         fn drain(&mut self) -> Vec<(i32, Vec<u8>)> {
@@ -50660,6 +50838,327 @@ mod tests {",
             "GuildOfficial（type 1）⇒ 正常建会帧序"
         );
     }
+    // ==================================================================================
+    // **卡 T-137**：固定 NPC 的 `Npc_def/<ChrName>-<MapName>` 脚本装载（tier=R）
+    // ==================================================================================
+    //
+    // 生产链 = `game_svr::npcs::place_fixed_npcs_with_scripts`（`main.rs` 的 sim 起世界段调用它）
+    // → `handle_click_npc_cmd(@main)` / `handle_shop_cmd(CM_MERCHANTDLGSELECT)` / `guild_official`。
+    // oracle：`NpCinitialize`（`WorldServer.Merchant.cs:37-63`）挂图后 `NormNpc.LoadNPCScript()`
+    // （`NormNpc.cs:1590-1601`）、`NormNpc.Click`（`:68-73`）、`GuildOfficial.UserSelect`（`:55-90`）、
+    // `Merchant.UserSelect`（`Merchant.cs:787-940`）。
+
+    /// 把一行合成 Envir 夹具按 **GBK** 写进 `<dir>/Envir/<rel>`（oracle `StringList.LoadFromFile` 口径）。
+    fn t137_write(dir: &std::path::Path, rel: &str, text: &str) {
+        let path = dir.join("Envir").join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("建 Envir 子目录");
+        }
+        std::fs::write(&path, encoding_rs::GBK.encode(text).0).expect("写夹具");
+    }
+
+    /// 固定 NPC 脚本链的生产夹具：合成 `Npcs.txt` + `Npc_def/*.txt`（GBK）、世界（玩家 + 两个
+    /// 固定 NPC）、会话、在线登记表、网关下行缓冲、商店/寄售会话态。
+    struct T137Rig {
+        world: mir2_world::World,
+        king_id: i32,
+        elder_id: i32,
+        book: game_svr::npc::MerchantScriptBook,
+        sessions: HashMap<String, SessionGround>,
+        online: OnlineRegistry,
+        gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        shop_sessions: HashMap<String, ShopSession>,
+        sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState>,
+        npc_vars: game_svr::npc::NpcVars,
+        catalog: game_svr::ability::StdItemCatalog,
+        dir: std::path::PathBuf,
+    }
+
+    impl Drop for T137Rig {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    impl T137Rig {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static SEQ: AtomicU32 = AtomicU32::new(0);
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("gs-t137-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            t137_write(
+                &dir,
+                "Npcs.txt",
+                ";测试\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+            );
+            t137_write(
+                &dir,
+                "Npc_def/国王-0.txt",
+                "[@main]\n欢迎来到王宫\\ <申请行会./@@buildguildnow> <打听/@ask>\n\n[@ask]\n#ACT\nGAMEGOLD + 5\n#SAY\n王的答复：<$GAMEGOLD>\\ <返回/@back>\n",
+            );
+            t137_write(
+                &dir,
+                "Npc_def/老人-0.txt",
+                "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\n\n[@ask]\n#ACT\nGAMEGOLD + 5\n#SAY\n打听结果：<$GAMEGOLD>\\ <返回/@back>\n",
+            );
+
+            let mut world = mir2_world::World::new(32, 32);
+            let hero = world.add_entity({
+                let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+                e.race = mir2_world::ACTOR_RACE_PLAY;
+                e
+            });
+            let npcs = vec![
+                mir2_envir::npcs::NpcInfo {
+                    chr_name: "国王".to_string(),
+                    npc_type: mir2_envir::npcs::NpcType::GuildOfficial,
+                    map_name: "0".to_string(),
+                    x: 11,
+                    y: 10,
+                    npc_flag: 0,
+                    appr: 8,
+                },
+                mir2_envir::npcs::NpcInfo {
+                    chr_name: "老人".to_string(),
+                    npc_type: mir2_envir::npcs::NpcType::Merchant,
+                    map_name: "0".to_string(),
+                    x: 12,
+                    y: 10,
+                    npc_flag: 0,
+                    appr: 1,
+                },
+            ];
+            let mut book = game_svr::npc::MerchantScriptBook::new(30);
+            let envir_root = dir.join("Envir");
+            let report = game_svr::npcs::place_fixed_npcs_with_scripts(
+                &mut world,
+                &npcs,
+                |_| Some(0),
+                &envir_root,
+                &mut book,
+            );
+            assert_eq!(report.placed, 2, "两个固定 NPC 都必须进世界");
+            assert!(
+                report.script_failures.is_empty() && report.script_missing.is_empty(),
+                "两个 Npc_def 脚本都必须装载成功：{:?}/{:?}",
+                report.script_failures,
+                report.script_missing
+            );
+            let id_of = |name: &str| {
+                report
+                    .placed_npcs
+                    .iter()
+                    .find(|p| p.chr_name == name)
+                    .expect("NPC 已放置")
+                    .actor_id
+            };
+            let king_id = id_of("国王");
+            let elder_id = id_of("老人");
+
+            let mut sg = test_session_ground(hero);
+            sg.game_gold = 10;
+            // 真冻结客户端的 `SoftVersionDateEx != 0`（`SM_GAMEGOLDNAME` 的门）。
+            sg.soft_version_date = 120_020_522;
+            let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+            sessions.insert("hero".to_string(), sg);
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".to_string(),
+                    chr_name: "hero".to_string(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 901,
+                    actor_id: hero,
+                },
+            );
+            let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx);
+            Self {
+                world,
+                king_id,
+                elder_id,
+                book,
+                sessions,
+                online,
+                gates,
+                rx,
+                shop_sessions: HashMap::new(),
+                sell_off_sessions: HashMap::new(),
+                npc_vars: game_svr::npc::NpcVars::default(),
+                catalog: game_svr::ability::StdItemCatalog::new(),
+                dir,
+            }
+        }
+
+        /// 生产入口 ①：`CM_CLICKNPC`（`NormNpc.Click` → `GotoLable("@main")`）。
+        fn click(&mut self, npc_id: i32) -> bool {
+            handle_click_npc_cmd(
+                npc_id,
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.world,
+                &self.book,
+                &mut self.shop_sessions,
+                &mut self.sell_off_sessions,
+                &self.npc_vars,
+                &self.catalog,
+                &self.gates,
+            )
+        }
+
+        /// 生产入口 ②：`CM_MERCHANTDLGSELECT`（`ClientMerchantDlgSelect` → `UserSelect`）。
+        fn dlg_select(&mut self, npc_id: i32, label: &str) {
+            let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+            let mut sell_off_book = game_svr::selloff::SellOffBook::default();
+            let mut item_number = 0;
+            handle_shop_cmd(
+                game_svr::shop::CM_MERCHANTDLGSELECT,
+                npc_id,
+                0,
+                0,
+                Some(label),
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.shop_sessions,
+                &mut self.sell_off_sessions,
+                &mut sell_off_book,
+                &trade,
+                &self.gates,
+                &mut self.world,
+                &self.catalog,
+                &ShopCfg::default(),
+                &MsgColors {
+                    red_f: 255,
+                    red_b: 56,
+                    hear_f: 0,
+                    hear_b: 255,
+                    whisper_f: 0,
+                    whisper_b: 0,
+                },
+                None,
+                &mut item_number,
+                &self.book,
+                &self.npc_vars,
+            );
+        }
+
+        fn drain(&mut self) -> Vec<Vec<u8>> {
+            drain_frames(&mut self.rx)
+        }
+
+        fn game_gold(&self) -> i32 {
+            self.sessions["hero"].game_gold
+        }
+
+        fn says(frames: &[Vec<u8>]) -> Vec<String> {
+            frames
+                .iter()
+                .filter(|b| gnp_ident(b) == mir2_protocol::messages::SM_MERCHANTSAY)
+                .map(|b| gnp_tail_text(b))
+                .collect()
+        }
+    }
+
+    /// **判据 (a)**：点击固定 NPC（`Npcs.txt` 的 `国王`，type=1 `GuildOfficial`）⇒ `@main` 说词经
+    /// `SM_MERCHANTSAY` 下发，尾 = `国王/<脚本原文>`；说词里的 `@@buildguildnow`/`@ask` 落进
+    /// `CanJmpScriptLableMap`（生产会话态）。
+    ///
+    /// 牙（真跑见 whitelist T-137）：
+    /// ① 删 `place_fixed_npcs_with_scripts` 里的 `load_npc_def_scripts` ⇒ 脚本表空 ⇒ 零说词；
+    /// ② 把脚本名拼接 `{ChrName}-{MapName}` 改成别的分隔 ⇒ `File.Exists` 假 ⇒ 零说词；
+    /// ③ 把 `handle_click_npc_cmd` 的 `|| e.npc.is_some()` 删回 merchant-only ⇒ 点击被拒（零帧）。
+    #[test]
+    fn t137_click_fixed_npc_main_says_menu_through_production_path() {
+        let mut rig = T137Rig::new();
+        let king_id = rig.king_id;
+        assert!(
+            rig.click(king_id),
+            "固定 NPC 必须走 `FindNpc` 臂到 `normNpc.Click`（`NormNpc.cs:68-73`）"
+        );
+        let frames = rig.drain();
+        let says = T137Rig::says(&frames);
+        assert_eq!(says.len(), 1, "@main 一条说词：{says:?}");
+        assert!(
+            says[0].starts_with("国王/"),
+            "说词尾 = `ChrName + '/' + sMsg`（`ScriptEngine.cs:991`）：{}",
+            says[0]
+        );
+        assert!(
+            says[0].contains("@@buildguildnow"),
+            "菜单标签必须在说词里：{}",
+            says[0]
+        );
+        assert!(says[0].contains("<打听/@ask>"), "说词原文：{}", says[0]);
+        let labels = &rig.shop_sessions["hero"].can_jmp_labels;
+        assert!(
+            labels.iter().any(|l| l == "@@buildguildnow"),
+            "说词必须重建 `CanJmpScriptLableMap`（`PlayObject.Base.cs:2800-2808`）：{labels:?}"
+        );
+        assert!(labels.iter().any(|l| l == "@ask"), "{labels:?}");
+    }
+
+    /// **判据 (b)+(c)**：`CM_MERCHANTDLGSELECT` 命中固定 NPC（`老人`，type=0 ⇒
+    /// `Merchant.UserSelect`）：`@ask` ⇒ 该标签说词 + `GAMEGOLD + 5` 副作用（会话元宝 10→15 且
+    /// `SM_GAMEGOLDNAME` 排水，说词先于脚本帧）；`@back` ⇒ 回跳 `@main` 说词。
+    ///
+    /// 牙：① 去掉 `handle_shop_cmd` 的 `|| e.npc.is_some()`（选择路径接线）⇒ 本用例零说词；
+    /// ② 删装载 ⇒ 零说词；③ 改脚本名拼接 ⇒ 零说词。
+    #[test]
+    fn t137_fixed_merchant_select_runs_npc_def_script_and_back() {
+        let mut rig = T137Rig::new();
+        let elder_id = rig.elder_id;
+        assert!(rig.click(elder_id), "点击固定商人 NPC 必须到达 Click 点");
+        let main_frames = rig.drain();
+        let main_says = T137Rig::says(&main_frames);
+        assert!(
+            main_says
+                .iter()
+                .any(|s| s.starts_with("老人/") && s.contains("<打听/@ask>")),
+            "{main_says:?}"
+        );
+
+        // `@ask`：说词 + `GAMEGOLD + 5`。
+        rig.dlg_select(elder_id, "@ask");
+        let frames = rig.drain();
+        let says = T137Rig::says(&frames);
+        assert!(
+            says.iter().any(|s| s.contains("打听结果：15")),
+            "`@ask` 说词必须带本次写回后的元宝（10 + 5）：{says:?}"
+        );
+        assert_eq!(rig.game_gold(), 15, "`GAMEGOLD + 5` 必须写回会话元宝");
+        let idents: Vec<u16> = frames.iter().map(|b| gnp_ident(b)).collect();
+        let say_pos = idents
+            .iter()
+            .position(|i| *i == mir2_protocol::messages::SM_MERCHANTSAY)
+            .expect("说词帧");
+        let gold_pos = idents
+            .iter()
+            .position(|i| *i == mir2_protocol::messages::SM_GAMEGOLDNAME)
+            .expect("脚本帧 `SM_GAMEGOLDNAME`（T-142 排水）");
+        assert!(
+            say_pos < gold_pos,
+            "`MsgQueue` 出队序：说词(1) 先于 `RM_GAMEGOLDCHANGED`(148)：{idents:?}"
+        );
+
+        // `@back`：`@ask` 的说词含 `<返回/@back>` ⇒ `LableIsCanJmp` 放行；回跳标签 = 上一标签 @main。
+        rig.dlg_select(elder_id, "@back");
+        let back_frames = rig.drain();
+        let back_says = T137Rig::says(&back_frames);
+        assert!(
+            back_says.iter().any(|s| s.contains("老人：你需要什么")),
+            "`@back` 必须 GotoLable(ScriptGoBackLable=@main) 并产说词：{back_says:?}"
+        );
+    }
+
     // ==================================================================================
     // **卡 `openmir2-login-charstatus-657`**（tier=R，W2-1）：登录 `654` 之后的两条 657
     // ==================================================================================

@@ -24,13 +24,15 @@
 //!   `104 SM_GUILDMESSAGE`(255)；
 //! - `@@donate`：`764 SM_DONATE_OK`(65)；`@exit`：`644 SM_MERCHANTDLGCLOSE`(143)。
 //!
-//! # 未做项（登记见 `tests/parity/whitelist.md` T-137..T-140）
+//! # 已补 / 未做项（登记见 `tests/parity/whitelist.md` T-137..T-140）
 //!
-//! - 固定 NPC 的 `Npc_def/<ChrName>-<MapName>` 脚本**未装载**（`bins/game-svr/src/npcs.rs`
-//!   模块头已登记）⇒ `@main` 菜单说词不存在、`CanJmpScriptLableMap` 恒空；本模块照 oracle
-//!   执行 `LableIsCanJmp` 门 ⇒ **构造客户端直发 `@@buildguildnow` 会被丢弃**（与 oracle 一致）。
-//!   脚本 say 链路落地前，`@@buildguildnow`/`@@guildwar` 只能由「已说过含该标签的台词」的
-//!   会话触发（判据用生产会话态 `ShopSession::can_jmp_labels` 播种，不改默认值）。
+//! - **固定 NPC 的 `Npc_def/<ChrName>-<MapName>` 脚本（T-137 已装载）**：由
+//!   `bins/game-svr/src/npcs.rs::place_fixed_npcs_with_scripts` 在倒序挂图后按 oracle 装载，
+//!   塞进与商人共用的 `MerchantScriptBook`（键 = 世界实体 id）。本模块的 `handle_select` 在
+//!   `LableIsCanJmp` 之后、行会动作派发之前调用**统一入口** `ScriptEngine.GotoLable`
+//!   （`GuildOfficial.cs:70`；实现由宿主以 [`FixedNpcScript`] 注入）⇒ `@main` 菜单说词落
+//!   `SM_MERCHANTSAY`、说词里的 `@@buildguildnow`/`@@guildwar` 进 `CanJmpScriptLableMap`。
+//!   行会动作本身仍是脚本标签之后的**分支**（`GuildOfficial.cs:71-89`），不是标签入口。
 //! - `@@requestcastlewarnow<n>`（`GuildOfficial.cs:203+`）属攻城区，本车道不接。
 //! - 固定 NPC 按 `Npcs.txt` 的 `type` 分流（`LocalDB.cs:688-698`）：只有 `1` =
 //!   `GuildOfficial` 进入本模块标签集；`0` = `Merchant` / `2` = `CastleOfficial` 的
@@ -325,6 +327,71 @@ fn flush(
     sent
 }
 
+/// 固定 NPC 的脚本入口（宿主注入）：`M2Share.ScriptEngine.GotoLable(PlayObject, ActorId, sLabel, boExtJmp)`
+/// 的等价物（`ScriptEngine.cs:38-129`）。
+///
+/// 返回 `(说词, 脚本帧)`；`SessionGround`/`ShopSession` 的 seed/写回由实现方完成
+/// （oracle 里它们本就是同一个 `PlayObject` 的字段）。`None` 语义（`ActorMgr.Get(actorId) == null`
+/// ⇒ 无说词）在实现方折叠成空 `Vec`。
+pub(crate) trait FixedNpcScript {
+    fn goto_label(
+        &mut self,
+        sg: &mut SessionGround,
+        ss: &mut ShopSession,
+        npc_actor_id: i32,
+        label: &str,
+        bo_ext_jmp: bool,
+    ) -> (Vec<game_svr::npc::SayMsg>, Vec<game_svr::npc::SendMsg>);
+}
+
+/// `RM_MERCHANTSAY` 在 `MsgQueue` 里的优先级 = `(byte)11009 = 1`（`BaseObject.Message.cs:180`）；
+/// `SendPriorityMsg(High)` = 0（`:30`）。
+const PRI_MERCHANTSAY: u8 = pri(messages::RM_MERCHANTSAY);
+
+/// 把 `GotoLable` 的说词与脚本帧放进本 handler 的出帧队列。
+///
+/// oracle 里两者都是**入队**消息（`SendPriorityMsg`/`SendMsg` ⇒ 脚本 `SendMsg`），handler 结束后
+/// 由 `MsgQueue` 按 `(byte)wIdent` 出队；[`flush`] 的 `(priority, seq)` 排序即同口径
+/// （说词 0/1 先于 `RM_GAMEGOLDCHANGED` 148 等脚本帧）。
+fn queue_script_output(
+    queue: &mut Vec<QueuedFrame>,
+    says: &[game_svr::npc::SayMsg],
+    frames: &[game_svr::npc::SendMsg],
+    sg: &SessionGround,
+    player_actor_id: i32,
+    npc_actor_id: i32,
+) {
+    for s in game_svr::npc::dequeue_order(says) {
+        // `ScriptEngine.cs:993/997`：priority 支用玩家（既有金标准），非 priority 支用 NPC ActorId。
+        let recog = if s.priority {
+            player_actor_id
+        } else {
+            s.npc_actor_id
+        };
+        let wire = game_svr::npc::merchant_say_gbk(&s.npc_name, &s.raw_msg);
+        let priority = if s.priority { 0 } else { PRI_MERCHANTSAY };
+        push_frame(
+            queue,
+            priority,
+            player_actor_id,
+            smframe::sm_merchantsay(recog, 0, 0, &wire),
+        );
+    }
+    for f in frames {
+        // 未知 ident 与 `emit_script_frames` 同口径丢弃（T-142 ⑧ 残余）。
+        let Some(body) = game_svr::pickwire::script_frame(
+            f,
+            npc_actor_id,
+            sg.game_gold,
+            sg.game_point,
+            sg.soft_version_date,
+        ) else {
+            continue;
+        };
+        push_frame(queue, f.ident as u8, player_actor_id, body);
+    }
+}
+
 /// `CM_MERCHANTDLGSELECT` 命中**固定 NPC**（`Envir/Npcs.txt`，`npc.is_some()`）时的派发。
 ///
 /// 入口等价 `ClientMerchantDlgSelect`（`PlayObject.Operate.cs:114-128`）的
@@ -354,6 +421,7 @@ pub(crate) fn handle_select(
     gates: &HashMap<u8, UnboundedSender<SimToGate>>,
     catalog: &dyn ItemCatalog,
     now_tick: i32,
+    script: &mut dyn FixedNpcScript,
 ) -> bool {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -392,8 +460,7 @@ pub(crate) fn handle_select(
     let Some(st) = npc.npc.as_ref() else {
         return true;
     };
-    let (nx, ny, nmap, npc_type, npc_name) =
-        (npc.x, npc.y, npc.map_id, st.npc_type, npc.name.clone());
+    let (nx, ny, nmap, npc_type) = (npc.x, npc.y, npc.map_id, st.npc_type);
     // `npc.Envir == Envir && IsWithinSight(npc) || npc.IsHide`（`Operate.cs:122-125`）。
     let within = nmap == pmap && (nx - px).abs() < 15 && (ny - py).abs() < 15;
     if !within {
@@ -441,22 +508,43 @@ pub(crate) fn handle_select(
         let ss = shop_sessions.entry(chr_name.to_string()).or_default();
         game_svr::shop::lable_is_can_jmp(&ss.can_jmp_labels, &mut ss.play_dice_label, label)
     };
+    let mut queue: Vec<QueuedFrame> = Vec::new();
+    let mut direct: Vec<Vec<u8>> = Vec::new();
+    // `M2Share.ScriptEngine.GotoLable(PlayObject, ActorId, sLabel, !boCanJmp)`（`GuildOfficial.cs:70`）
+    // —— **统一入口**：先跑 `Npc_def` 脚本（T-137），再按 `!boCanJmp` return（说词照出：
+    // `GotoLable` 的 `boExtJmp && !sayingRecord.boExtJmp ⇒ return` 由引擎判定）。
+    let (says, script_frames) = {
+        let ss = shop_sessions.entry(chr_name.to_string()).or_default();
+        script.goto_label(sg, ss, npc_actor_id, label, !can_jmp)
+    };
+    // `GotoLableSendMerChantSayMsg` → `playerActor.GetScriptLabel(sMsg)`（`ScriptEngine.cs:993`）：
+    // 每句说词 Clear 后重建 `CanJmpScriptLableMap`（与商人 1011 路径同口径）。
+    {
+        let ss = shop_sessions.entry(chr_name.to_string()).or_default();
+        for say in &says {
+            ss.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
+        }
+    }
+    queue_script_output(
+        &mut queue,
+        &says,
+        &script_frames,
+        sg,
+        actor_id,
+        npc_actor_id,
+    );
     if !can_jmp {
         glog!(
             "DBG",
             "NPC 对话：LableIsCanJmp({label}) == false ⇒ GotoLable 后 return ChrName={chr_name}"
         );
+        let sent = flush(&mut queue, online, gates);
+        glog!(
+            "INF",
+            "行会 NPC 标签 ChrName={chr_name} npc={npc_actor_id} label={label}（不可跳）→ 说词/脚本帧 {sent} 帧"
+        );
         return true;
     }
-    // `M2Share.ScriptEngine.GotoLable(PlayObject, ActorId, sLabel, !boCanJmp)`：固定 NPC 的
-    // `Npc_def/<Chr>-<Map>` 脚本未装载（T-137）⇒ 无说词/无脚本副作用。
-    glog!(
-        "DBG",
-        "NPC 对话：GotoLable({label}) 未执行（Npc_def 脚本未装载，T-137）ChrName={chr_name} npc={npc_name}"
-    );
-
-    let mut queue: Vec<QueuedFrame> = Vec::new();
-    let mut direct: Vec<Vec<u8>> = Vec::new();
     if eq_label(label, LABEL_BUILD_GUILD_NOW) {
         let outcome = request_build_guild(
             guilds,
@@ -596,7 +684,8 @@ pub(crate) fn handle_select(
             smframe::sm_merchantdlgclose(npc_actor_id),
         );
     } else if eq_label(label, LABEL_BACK) {
-        // `@back`：回跳标签（空 ⇒ `@main`）的 `GotoLable`；固定 NPC 脚本未装载 ⇒ 无说词（T-137）。
+        // `GuildOfficial.cs:86-89`：`ScriptGoBackLable` 空则置 `@main`，再
+        // `GotoLable(PlayObject, ActorId, ScriptGoBackLable)`（`boExtJmp = false`）。
         let back = match shop_sessions.get_mut(chr_name) {
             Some(ss) => {
                 if ss.script_go_back_lable.is_empty() {
@@ -606,9 +695,23 @@ pub(crate) fn handle_select(
             }
             None => LABEL_MAIN.to_string(),
         };
-        glog!(
-            "DBG",
-            "NPC 对话：@back ⇒ GotoLable({back}) 未执行（Npc_def 脚本未装载，T-137）ChrName={chr_name}"
+        let (says, script_frames) = {
+            let ss = shop_sessions.entry(chr_name.to_string()).or_default();
+            script.goto_label(sg, ss, npc_actor_id, &back, false)
+        };
+        {
+            let ss = shop_sessions.entry(chr_name.to_string()).or_default();
+            for say in &says {
+                ss.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
+            }
+        }
+        queue_script_output(
+            &mut queue,
+            &says,
+            &script_frames,
+            sg,
+            actor_id,
+            npc_actor_id,
         );
     }
     // `@@requestcastlewarnow<n>` 未接（T-138）：落到「GotoLable 后无动作」，与脚本缺页同形。
