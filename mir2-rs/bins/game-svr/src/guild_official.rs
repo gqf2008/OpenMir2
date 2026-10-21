@@ -8,6 +8,7 @@
 //! | [`request_build_guild`] | `GuildOfficial.ReQuestBuildGuild`（`:112-178`）|
 //! | [`war_select`] / [`war_events_to_frames`] | `GuildOfficial.ReQuestGuildWar`（`:180-199`）+ `PlayObject.ReQuestGuildWar`（`PlayObject.Base.cs:3349-3385`）|
 //! | `@@donate` / `@exit` / `@back` | `GuildOfficial.cs:78-88`、`DoNate`（`:203-206`）|
+//! | [`request_castle_war`] | `GuildOfficial.ReQuestCastleWar`（`GuildOfficial.cs:206-239`）|
 //!
 //! # 帧序（线上可观测序 = oracle `MsgQueue` 的优先级字节）
 //!
@@ -23,6 +24,8 @@
 //! - 宣战：`653`(152) → `42 SM_USERNAME`(165) → `100 SM_SYSMESSAGE`(252) →
 //!   `104 SM_GUILDMESSAGE`(255)；
 //! - `@@donate`：`764 SM_DONATE_OK`(65)；`@exit`：`644 SM_MERCHANTDLGCLOSE`(143)。
+//! - `@requestcastlewarnow<n>`：只有两条红字 `100 SM_SYSMESSAGE`(252)（「你的请求被取消!!!」/
+//!   「你没有<ZumaPiece>!!!」）；成功支被 oracle 的 N1 异常吞掉 ⇒ **零帧**（见下「已补 / 未做项」）。
 //!
 //! # 已补 / 未做项（登记见 `tests/parity/whitelist.md` T-137..T-140）
 //!
@@ -33,7 +36,16 @@
 //!   （`GuildOfficial.cs:70`；实现由宿主以 [`FixedNpcScript`] 注入）⇒ `@main` 菜单说词落
 //!   `SM_MERCHANTSAY`、说词里的 `@@buildguildnow`/`@@guildwar` 进 `CanJmpScriptLableMap`。
 //!   行会动作本身仍是脚本标签之后的**分支**（`GuildOfficial.cs:71-89`），不是标签入口。
-//! - `@@requestcastlewarnow<n>`（`GuildOfficial.cs:203+`）属攻城区，本车道不接。
+//! - `@@requestcastlewarnow<n>`（T-138 已接）：`GuildOfficial.cs:206-239` 的 `ReQuestCastleWar`
+//!   逐行移植（下标解析 / 掌门+非成员门 / `CheckItems(ZumaPiece)` / 两条红字）。**照搬 oracle 的
+//!   N1 异常**（白名单 T-38/T-138）：`Castle` 的静态类型是 `IUserCastle`（`:210`）⇒
+//!   `Castle.AddAttackerInfo(PlayObject.MyGuild)`（`:219`）绑定接口方法
+//!   `IUserCastle.AddAttackerInfo(IGuild)`（`IUserCastle.cs:125`），实现是
+//!   `UserCastle.AddAttackerInfo(IGuild)` 的 `throw new NotImplementedException()`
+//!   （`UserCastle.cs:670-673`），**不是** `:998` 的 `AddAttackerInfo(GuildInfo)`；异常被
+//!   `UserSelect` 的 catch（`:100-103`）吞掉 ⇒ 会长+有令的成功支**零帧、零扣件、零战表、零落盘、
+//!   零 SS_212**（`crates/world/src/castle.rs` 的 `add_attacker_info_n1` 早已把 `GuildOfficial.cs:219`
+//!   登记为该 N1 调用点）。判据 `t138_*` 钉死这个怪行为：谁把它「修」成真登记，用例即红。
 //! - 固定 NPC 按 `Npcs.txt` 的 `type` 分流（`LocalDB.cs:688-698`）：只有 `1` =
 //!   `GuildOfficial` 进入本模块标签集；`0` = `Merchant` 的脚本半由 `handle_shop_cmd` 的
 //!   固定 NPC 臂负责（T-137）；`2` = `CastleOfficial` 的 `Click`/`UserSelect` 门未移植
@@ -72,6 +84,8 @@ pub(crate) const LABEL_EXIT: &str = "@exit";
 pub(crate) const LABEL_BACK: &str = "@back";
 /// `ScriptFlagConst.sMAIN`（`:62`）。
 pub(crate) const LABEL_MAIN: &str = "@main";
+/// `ScriptFlagConst.sREQUESTCASTLEWAR`（`ScriptFlagConst.cs:71`）。
+pub(crate) const LABEL_REQUEST_CASTLE_WAR: &str = "@requestcastlewarnow";
 
 /// `MsgQueue` 出队优先级 = oracle `(byte)wIdent`（`BaseObject.Message.cs:334`）。
 const fn pri(rm_ident: u16) -> u8 {
@@ -678,6 +692,19 @@ pub(crate) fn handle_select(
             actor_id,
             guild_frames::sm_donate_ok_764(0),
         );
+    } else if mir2_world::castle::compare_lstr(label, LABEL_REQUEST_CASTLE_WAR) {
+        // `HUtil32.CompareLStr(sLabel, sREQUESTCASTLEWAR)`（`GuildOfficial.cs:82`）是**前缀**
+        // 匹配（大小写不敏感）⇒ 后缀 = 城堡下标（`sLabel[prefix.Length..]`，`:84`）。
+        request_castle_war(
+            actor_id,
+            label.get(LABEL_REQUEST_CASTLE_WAR.len()..).unwrap_or(""),
+            sg,
+            &world.castles,
+            castle_cfg,
+            red_color,
+            catalog,
+            &mut queue,
+        );
     } else if eq_label(label, LABEL_EXIT) {
         // `SendMsg(this, RM_MERCHANTDLGCLOSE, 0, ActorId, 0, 0)`（`:84`）。
         push_frame(
@@ -717,7 +744,6 @@ pub(crate) fn handle_select(
             npc_actor_id,
         );
     }
-    // `@@requestcastlewarnow<n>` 未接（T-138）：落到「GotoLable 后无动作」，与脚本缺页同形。
 
     for body in &direct {
         if let Some(tx) = crate::route_to_gate(gates, gate_idx, socket, "行会 NPC 直发帧") {
@@ -734,6 +760,107 @@ pub(crate) fn handle_select(
         direct.len()
     );
     true
+}
+
+/// `HUtil32.StrToInt(sIndex, -1)`（`HUtil32.cs:359-362`：`int.TryParse`，失败取 `def`；
+/// 默认 `NumberStyles.Integer` = 允许首尾空白与前导 `+`/`-`，不接受小数点/千分位）。
+#[must_use]
+pub(crate) fn str_to_int(s: &str, def: i32) -> i32 {
+    s.trim().parse::<i32>().unwrap_or(def)
+}
+
+/// `ReQuestCastleWar` 的城堡下标（`GuildOfficial.cs:208-212`）：
+/// `nIndex = StrToInt(sIndex, -1); if (nIndex < 0) nIndex = 0;`，再按
+/// `CastleManager.GetCastle(nIndex)`（`CastleManager.cs:194-201`：`0 <= nIndex < Count`）取下标；
+/// 越界 ⇒ `None`（oracle `GetCastle` 返 null）。
+#[must_use]
+pub(crate) fn castle_war_index(s_index: &str, castle_count: usize) -> Option<usize> {
+    let mut n_index = str_to_int(s_index, -1);
+    if n_index < 0 {
+        n_index = 0;
+    }
+    usize::try_from(n_index).ok().filter(|i| *i < castle_count)
+}
+
+/// `PlayObject.SysMsg(sMsg, MsgColor.Red, MsgType.Hint)`（`BaseObject.cs:1588-1686`）：
+/// `MsgType != Notice` + `MsgColor.Red` ⇒ `SendMsg(RM_SYSMESSAGE, 0, RedMsgFColor, RedMsgBColor, 0, sMsg)`
+/// （**入队**，`MsgQueue` 优先级 = `(byte)100 = 252`；非 Notice 支**不**加 `LineNoticePreFix`）。
+fn push_sys_msg(queue: &mut Vec<QueuedFrame>, actor_id: i32, red_color: (u8, u8), text: &str) {
+    push_frame(
+        queue,
+        PRI_SYSMESSAGE,
+        actor_id,
+        smframe::sm_sysmessage(
+            actor_id,
+            u16::from(red_color.0),
+            u16::from(red_color.1),
+            &downlink::gbk(text),
+        ),
+    );
+}
+
+/// `GuildOfficial.ReQuestCastleWar`（`GuildOfficial.cs:206-239`）。
+///
+/// 逐行次序：`StrToInt(sIndex,-1)` → `<0` 归 0（`:208-212`）→ `CastleMgr.GetCastle(nIndex)`（`:213`）
+/// → 门 `IsGuildMaster() && !Castle.IsMember(PlayObject)`（`:214`）→ `CheckItems(ZumaPiece)`
+/// （`:216`，无则「你没有<ZumaPiece>!!!」`SysMsg`）→ `Castle.AddAttackerInfo(MyGuild)`（`:219`）。
+///
+/// **N1（照搬，不修）**：`:219` 的接收者静态类型是 `IUserCastle`，接口只声明
+/// `AddAttackerInfo(IGuild)`（`IUserCastle.cs:125`），实现是 `UserCastle.cs:670-673` 的
+/// `throw new NotImplementedException()`。所以成功支必然抛异常、被 `UserSelect` 的 catch
+/// （`:100-103`）吞掉 ⇒ 客户端零帧、物品不扣、`AttackWarList` 不登记、不落盘、不发 SS_212；
+/// `else` 支的「你现在无法请求攻城!!!」（`:227`）与 `~@request_ok`（`:224`）都**不可达**。
+/// `Castle == null` 且 `IsGuildMaster()` 为真时 `Castle.IsMember` 抛 NRE（同样被吞）。
+#[allow(clippy::too_many_arguments)]
+fn request_castle_war(
+    actor_id: i32,
+    s_index: &str,
+    sg: &mut SessionGround,
+    castles: &[mir2_world::castle::UserCastle],
+    castle_cfg: &GuildCastleConfig,
+    red_color: (u8, u8),
+    catalog: &dyn ItemCatalog,
+    queue: &mut Vec<QueuedFrame>,
+) {
+    let castle = castle_war_index(s_index, castles.len()).map(|i| &castles[i]);
+    let my_guild = sg.guild.guild_name.clone();
+    // `PlayObject.IsGuildMaster()`（`PlayObject.cs:4402-4405`）= `MyGuild != null && GuildRankNo == 1`。
+    let is_guild_master = my_guild.is_some() && sg.guild.rank_no == 1;
+    if !is_guild_master {
+        // `&&` 短路：非掌门不碰 `Castle.IsMember`（`Castle == null` 也不会抛 NRE）。
+        push_sys_msg(queue, actor_id, red_color, "你的请求被取消!!!");
+        return;
+    }
+    let Some(castle) = castle else {
+        // `GetCastle` 越界返 null ⇒ `Castle.IsMember(...)` 抛 `NullReferenceException`，
+        // 被 `UserSelect` 的 catch 吞 ⇒ 零帧零副作用。
+        glog!(
+            "ERR",
+            "NullReferenceException: ReQuestCastleWar 城堡下标越界（sIndex={s_index:?} 城数={}）",
+            castles.len()
+        );
+        return;
+    };
+    // `!Castle.IsMember(PlayObject)`（`UserCastle.cs:609-612` ⇒ `IsMasterGuild(MyGuild)`）。
+    if castle.is_member_name(my_guild.as_deref()) {
+        push_sys_msg(queue, actor_id, red_color, "你的请求被取消!!!");
+        return;
+    }
+    // `PlayObject.CheckItems(SystemShare.Config.ZumaPiece)`（`BaseObject.cs:2189-2205`）。
+    if check_items(&sg.state.item_list, catalog, &castle_cfg.zuma_piece).is_none() {
+        push_sys_msg(
+            queue,
+            actor_id,
+            red_color,
+            &format!("你没有{}!!!", castle_cfg.zuma_piece),
+        );
+        return;
+    }
+    // `Castle.AddAttackerInfo(PlayObject.MyGuild)` ⇒ `NotImplementedException`（见函数头 N1）。
+    glog!(
+        "ERR",
+        "NotImplementedException: IUserCastle.AddAttackerInfo(IGuild)（UserCastle.cs:670-673）；ReQuestCastleWar 成功支被 UserSelect 的 catch 吞掉（照搬 oracle，白名单 T-38/T-138）"
+    );
 }
 
 /// `@@guildwar` 的宿主侧：NPC 层 + `PlayObject` 层 + 帧面（顺序见模块头）。
@@ -914,3 +1041,6 @@ fn war_events_to_frames(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
