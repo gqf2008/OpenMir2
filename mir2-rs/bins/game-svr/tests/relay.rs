@@ -217,7 +217,7 @@ async fn close_frees_slot_for_reuse() {
 }
 
 // 判据 3（发送口的阻塞/确认规则）**已改**：F1 之后本切片唯一的出站载荷（`GM_SERVERUSERINDEX`）按 oracle
-// 直发（不经 `ProcessBufferSend`），所以这条进程级用例失去前提、已删除；该规则的判据改为 `main.rs` 里
+// 直发（不经 `ProcessBufferSend`），所以这条进程级用例失去前提、已删除；该规则的判据改为 `lib.rs` 里
 // `send_decision_matches_process_buffer_send` 的**纯函数单测**（含"超时清零后那一包也压住"）。
 // S3 的出包接上后，这里要补一条"真正走 ProcessBufferSend 的载荷"的进程级用例（登记在卡上）。
 
@@ -325,7 +325,7 @@ async fn starts_without_worldmaps_when_envir_present() {
             .kill_on_drop(true)
             .spawn()
             .unwrap();
-        // `main.rs:383/391`：bind 成功后打印 `游戏服务[{addr}:{port}]已启动` ⇒ 用它当就绪信号。
+        // `lib.rs` 的启动打印（bind 成功后打印 `游戏服务[{addr}:{port}]已启动`）⇒ 用它当就绪信号。
         let marker = format!(":{port}]已启动");
         let text = support::wait_child_ready(&mut proc, &log, port, Duration::from_secs(10)).await;
         if text.contains(&marker) {

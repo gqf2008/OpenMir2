@@ -11,7 +11,7 @@
 //!   ⇒ Recog = make_index{nParam1}；尾 = EncodeString(请求的 Msg)（`ground::DropOutcome` 只给 12B 头，
 //!     尾由本层补）。
 //! CM_PICKUP（:811-816）
-//!   先判 CurrX==nParam2 && CurrY==nParam3 才 ClientPickUpItem()（**位置门在派发层**，见 main.rs）。
+//!   先判 CurrX==nParam2 && CurrY==nParam3 才 ClientPickUpItem()（**位置门在派发层**，见 lib.rs）。
 //! 延时通知 → SM（全部收件人=自己）
 //!   RM_ITEMHIDE(8085)      → SM_ITEMHIDE(611)      recog=nParam1 param=nParam2 tag=nParam3 series=0
 //!   RM_WEIGHTCHANGED(10115)→ SM_WEIGHTCHANGED(622) 用**当下 WAbil**（Weight/WearWeight/HandWeight + 校验和）

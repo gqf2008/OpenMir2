@@ -3,9 +3,9 @@
 //! # 为什么有本模块
 //!
 //! oracle `src/M2Server/Player/PlayObject.Message.cs` 的 `Operate` 里对以下 10 条 `CM_*` 有 `case`，
-//! 而 Rust `bins/game-svr/src/main.rs` 原先**只记日志即丢**（红名单 R1；`docs/移植计划重审-20261015.md` §1-R1）。
+//! 而 Rust `bins/game-svr/src/lib.rs` 原先**只记日志即丢**（红名单 R1；`docs/移植计划重审-20261015.md` §1-R1）。
 //! 本模块把这 10 条的 oracle 决策逐条搬成**无 I/O、无全局状态**的纯函数（与 `ground.rs`/`shop.rs` 同型），
-//! 由 `main.rs` 的派发臂接线。判据 tier = **L**（纯逻辑分支，无 RNG / 无落库 / 无时序；变异牙见各 `#[test]`）。
+//! 由 `lib.rs` 的派发臂接线。判据 tier = **L**（纯逻辑分支，无 RNG / 无落库 / 无时序；变异牙见各 `#[test]`）。
 //!
 //! # oracle 锚（逐条）
 //!
@@ -53,7 +53,7 @@
 
 use mir2_protocol::messages;
 
-/// R1 余 10 条入站消息号（`main.rs` 的派发臂按此表判定，见模块头）。
+/// R1 余 10 条入站消息号（`lib.rs` 的派发臂按此表判定，见模块头）。
 pub const INBOUND_IDENTS: [u16; 10] = [
     messages::CM_OPENDOOR,
     messages::CM_DROPGOLD,

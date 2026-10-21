@@ -5,7 +5,7 @@
 //! 2. `CM_QUERYUSERSTATE` 的 `UserStateInfo` 线缆缓冲编码（oracle
 //!    `src/OpenMir2/Packets/ClientPackets/UserStateInfo.cs:29-49`）。
 //!
-//! 派发分支、早退门与出帧在 `main.rs`（`handle_query_user_name_cmd` 等）；本模块只做纯逻辑，
+//! 派发分支、早退门与出帧在 `lib.rs`（`handle_query_user_name_cmd` 等）；本模块只做纯逻辑，
 //! 以便 `cargo test -p game-svr --lib` 直接钉住字段序/几何，不依赖 tokio/网关。
 
 use mir2_data::StdItem;

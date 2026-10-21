@@ -43,10 +43,10 @@
 //! `SendRefMsg(RM_SPELL, Effect, x, y, MagicId, "")`（`MagicManager.cs:151-159`）**已接**
 //! （片 `openmir2-default-arm-spell-surface`，2026-10-17：宿主 `handle_spell_cmd` 在这三条门之后
 //! **无条件**广播一帧 `SM_SPELL(17)` —— 任何非战士魔号一律恰一条，与是否有 `case`/是否 `>80` 无关；
-//! 逐行依据见 `main.rs` 该片的块注释）⇒ 原「本片不产出 `SM_SPELL(17)`」一句作废。
+//! 逐行依据见 `lib.rs` 该片的块注释）⇒ 原「本片不产出 `SM_SPELL(17)`」一句作废。
 //! **已接（2026-10-17，default 支的 `PlayObject.DoSpell` 包装层）**：`GetSpellPoint`/
 //! `DamageSpell`/`HealthSpellChanged`（`PlayObject.Base.cs:1505-1531`）与蓝不足早退的
-//! `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`（宿主 `main.rs::handle_spell_cmd`）。
+//! `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`（宿主 `lib.rs::handle_spell_cmd`）。
 //! **已接（2026-10-17，卡 `openmir2-spell-distance-fail`）**：`MagicManager.DoSpell` 的**距离门**
 //! （`MagicManager.cs:155-157`）失败回帧（`RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`；宿主
 //! `handle_spell_cmd` 的 `default` 支 `else`，只此一处）。
@@ -56,7 +56,7 @@
 //! （17/30/41，护身符门不过）上的 639。20/46 无 `boSpellFail` 站点 ⇒ 不接（登记）。
 //! **仍未接**：8 条显式 `case` 各自的 MP 逻辑（12/25/26/27/34/38/43/56）、`:167` 版本门，
 //! 以及未建模 `boSpellFail` 站点（6/13/16/18/19/36 —— 本仓没有对应效果体/护身符门，
-//! 见 `main.rs::handle_spell_cmd` 的登记）。**14/15 已建模**（2026-10-17，
+//! 见 `lib.rs::handle_spell_cmd` 的登记）。**14/15 已建模**（2026-10-17，
 //! `openmir2-spell-shared-tail-p2`：`CheckAmulet(1,1)`/`UseAmulet(1,1)` + 共享尾）。
 //! 技能效果面的向量与用例在 `openmir2-m3-combat-skills-align`（m3cs）的离线片，其接口就绪后再接这一层。
 //!

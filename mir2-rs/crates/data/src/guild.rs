@@ -78,7 +78,7 @@ impl GuildFileSections {
     /// 从 `String.conf [Guild]` 的四段头键构造（`StringConf.cs:30-35`：
     /// `GuildNotice/GuildWar/GuildAll/GuildMember`）。
     ///
-    /// G3 的唯一生产来源（`main.rs` 的 `string_conf`）；**不能**收 `bins` 的 `GuildStrings`，
+    /// G3 的唯一生产来源（`lib.rs` 的 `string_conf`）；**不能**收 `bins` 的 `GuildStrings`，
     /// 避免 `data` → `bins` 反向依赖（简报 §7 第 3 条）。
     #[must_use]
     pub fn from_strings(notice: &str, war: &str, all: &str, member: &str) -> Self {

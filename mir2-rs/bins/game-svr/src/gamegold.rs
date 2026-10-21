@@ -1,7 +1,7 @@
 //! **PL-4 / P22**：元宝/游戏点自动增减（`src/M2Server/Player/PlayObject.Message.cs:442-529`）。
 //!
 //! 纯逻辑与宿主（`SessionGround`/`World`/出帧）分离，便于构造级判据；宿主接线见
-//! `main.rs::drain_player_game_gold`。`MoveToHome` 的落地在 `crates/world`
+//! `lib.rs::drain_player_game_gold`。`MoveToHome` 的落地在 `crates/world`
 //! （[`mir2_world::World::base_object_move_player`]），本模块只回报「本 pass 触发了几次」。
 //!
 //! # 照抄的 oracle 形态（禁止“顺手修好”）

@@ -32,7 +32,7 @@
 //!    与 `bins/game-svr/src/ctor_fold.rs::barrier_a_counter_init_adds_not_assigns`（`+=` 语义）；
 //! 7. **屏障 A 的消费**：`item_number_counter_init([Setup] ItemNumber, &barrier_a)` = 初值 + 抽数
 //!    （oracle `+=`，不是赋值/丢弃）——该计数器即新角色新手物品 `MakeIndex` 的起点
-//!    （`main.rs::barrier_a_draw_moves_newbie_make_index` 钉住**用户可见**后果）。
+//!    （`lib.rs::barrier_a_draw_moves_newbie_make_index` 钉住**用户可见**后果）。
 
 use std::path::PathBuf;
 

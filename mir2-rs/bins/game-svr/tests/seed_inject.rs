@@ -16,7 +16,7 @@
 //!
 //! 根因（诊断结论，原始件 `rust-seed-injection-20261012/owner-t30-hang-diagnosis.txt`）：
 //! 生产路径的 fail-closed 是**对的**（环境带 `MIR2_RNG_SEED=not-an-int` 时实测 rc=1、~1s）；挂死
-//! 发生在**子进程忽略 / 未应用非法种子**（例如审计时把 `main.rs:179` 变异成 `None` 的「忽略环境变数」
+//! 发生在**子进程忽略 / 未应用非法种子**（例如审计时把 `lib.rs` 的 `seed::env_seed()` 变异成 `None` 的「忽略环境变数」
 //! 红检仍挂着、或 env 未送达）时——`invalid_seed_env_exits_nonzero` 用了**无界的 `.output()`**，
 //! 子进程一进 DB 重连循环就永远不返回。修的是**用例的健壮性**，不是生产路径。
 

@@ -4887,10 +4887,10 @@ fn handle_shop_cmd(
                                 // **复验 F1**：oracle 的 `UseItems` 就是实体上的同一份数组；本宿主会话与实体
                                 // 是两份投影。摘武器后必须立即整表同步到实体，否则下一 tick 的
                                 // `drain_player_need_recheck_with_magic` 会用实体（仍是旧武器）整表回写会话
-                                // ⇒ 武器复活（`main.rs` 复验 F1）。
+                                // ⇒ 武器复活（`lib.rs` 复验 F1）。
                                 sync_use_items_to_entity(world, sg);
                                 // **复验 F2**：`RecalcAbilitys` 尾段的 `ExtraAbil`（`PlayObject.cs:2818-2846`）
-                                // 用实体上的 `ExtraAbil`（与换装路径 `main.rs:2717` 同口径）。
+                                // 用实体上的 `ExtraAbil`（与换装路径 `sync_use_items_to_entity` 同口径）。
                                 let extra_abil =
                                     world.entities.get(sg.actor_id).map(|e| e.extra_abil);
                                 // **复验 F2 附带（T-95⑨ 登记）**：`RecalcAbilitys` 尾段的
@@ -4899,7 +4899,7 @@ fn handle_shop_cmd(
                                 let effect =
                                     recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
                                 // **复验 F1**：`RecalcAbilitys` 的产物（`WAbil`/`SubAbility`/`HitSpeed`）
-                                // 同帧落实体（与换装路径 `main.rs:2717-2726` 同口径）。
+                                // 同帧落实体（与换装路径 `sync_use_items_to_entity` 同口径）。
                                 if let Some(e) = world.entities.get_mut(sg.actor_id) {
                                     apply_ability_to_entity(
                                         e,
@@ -7786,8 +7786,8 @@ fn handle_spell_cmd_with_magic(
     };
     let (cur_x, cur_y) = (e.x, e.y);
     // 本方（施法者）当前图 —— oracle `CretInNearXy` 扫的是 `this.Envir`（`PlayObject.Base.cs:991`）。
-    // 取法与既有生产调用点一致（`main.rs:2624` `let self_map = se.map_id;` /
-    // `main.rs:2716` 同句，服务 `CM_QUERYUSERNAME` / `CM_QUERYUSERSTATE`）。
+    // 取法与既有生产调用点一致（`lib.rs` 的 `let self_map = se.map_id;` 两处，
+    // 服务 `CM_QUERYUSERNAME` / `CM_QUERYUSERSTATE`）。
     let self_map = e.map_id;
     let is_dead = e.death;
     let caster_abil_level = e.level;
@@ -7878,7 +7878,7 @@ fn handle_spell_cmd_with_magic(
     // 注意：世界 `Entity` **确有** `mp/max_mp`（`entity.rs:421-422`），但其唯一生产写入者是毒伤
     // `buff::damage_health`（`buff.rs:503-520`，唯一调用方 `make_posion` 当前无生产调用者）
     // ⇒ 现在无需镜像；将来接毒/魔法盾消耗时必须把 `wabil.mp` 同步进 `entity.mp`
-    // （HP 已有镜像先例：`main.rs` 的 `e.health` 同步），否则会出现第二份 MP（复验 surviving）。
+    // （HP 已有镜像先例：`lib.rs` 的 `e.health` 同步），否则会出现第二份 MP（复验 surviving）。
     //
     // **`HealthSpellChanged` 收件人**（`BaseObject.cs:700-709`）：`Race == Play` ⇒ `SendUpdateMsg`
     // （`BaseObject.Message.cs:283-305` 的 `SendMsg(this)` ⇒ 仅自己）；`ShowHp` ⇒ 再 `SendRefMsg`
@@ -14271,9 +14271,10 @@ struct MonGenStartup {
 /// 同口径：
 /// - **不消耗**游戏随机流（独立实例）；
 /// - **不进** `MIR2_RNG_LOG` 逐次流水。`RandomNumber::random()` 在 trace 开启时会记一条
-///   `bins/game-svr/src/main.rs` 记录，而那 8 条是仪器自证、不是游戏消费者，C# 侧也不存在
-///   ⇒ 会把两侧 `site/order` 账本的第一处分歧钉到 index 0（真机实测：Rust 独有站点
-///   `main.rs:2856` × 8，见 `mir2-rs/tests/parity/m3/evidence-rng-ledger-diff-20261012/32-diff-full.txt`）。
+///   `bins/game-svr/src/lib.rs` 记录（单二进制搬迁前为 `main.rs`），而那 8 条是仪器自证、
+///   不是游戏消费者，C# 侧也不存在 ⇒ 会把两侧 `site/order` 账本的第一处分歧钉到 index 0
+///   （真机实测：Rust 独有站点 `main.rs:2856` × 8——搬迁前 trace 记录的站点串，见
+///   `mir2-rs/tests/parity/m3/evidence-rng-ledger-diff-20261012/32-diff-full.txt`）。
 ///
 /// 序列与 `RandomNumber::with_seed(seed)` 逐项相同（后者内层就是 `DotNetRandom::new(seed)`），
 /// 单测 `seed_probe_text_matches_csharp_seed42_and_random_number` 把这层等价关系锁死。
@@ -16198,7 +16199,7 @@ fn sim_loop(
     // （oracle 是 `+=`），成为 `M2Share.GetItemNumber()` 计数器初值（`M2Share.cs:547`）⇒
     // 新角色四件新手物品的 `MakeIndex` 起点（下面的 `item_number`）。该方法是 `#[track_caller]`
     // ⇒ `MIR2_RNG_LOG` 把这一抽记在**本行**（`startup` 组，见 `consumer_groups.tsv` 的
-    // `startup|rust|bins/game-svr/src/main\.rs:` 行）。
+    // `startup|rust|bins/game-svr/src/lib\.rs:` 行；`main.rs` 行保留以兼容历史 trace）。
     let barrier_a = world.fold_ctor_draw_item_number_barrier_a(&enter_cfg.ctor_fold_plan);
     // **日志只印事实、不印承诺**（独立复验 surviving ⑤：此前的「将 `+=` 它」会在**接线被改坏**时
     // 印出一次并未发生的加法，误导读日志的人）。真正的结果值在下方计数器初始化处打印。
@@ -19619,7 +19620,7 @@ mod tests {
     /// ② 与生产注入的 `RandomNumber::with_seed(seed)` 前 `PROBE_LEN` 项逐项相同（换独立实例不改自证值）。
     ///
     /// 红检：把 `seed_probe_text` 改回经 `RandomNumber`（被 trace 的入口）取数 ⇒ 进程级
-    /// `tools/m2-acceptance/check_rng_trace_purity.ps1` 的「流水不得含 `main.rs` 记录」门必红；
+    /// `tools/m2-acceptance/check_rng_trace_purity.ps1` 的「流水不得含 `lib.rs` 记录」门必红；
     /// 本用例锁的是「换实例后值不变」，是那道门的前置。
     #[test]
     fn seed_probe_text_matches_csharp_seed42_and_random_number() {
@@ -22314,7 +22315,7 @@ mod tests {
     /// （`PlayObject.Base.cs:2824-2828`，命中即清 `string.Empty` ⇒ 一次性）。
     ///
     /// 牙（删生产接线必红）：删 `run_merchant_goto` 的 `seed_player_gold_deal` ⇒ 实测**先红在
-    /// 第一次 `@dice` 的 `LableIsCanJmp` 断言**（`main.rs` 的
+    /// 第一次 `@dice` 的 `LableIsCanJmp` 断言**（`lib.rs` 的
     /// `assert_eq!(play_dice_label.as_deref(), Some(""))`：快照没 seed 到会话里的
     /// `PlayDiceLabel` ⇒ 第三支不放行 ⇒ `left: None, right: Some("")`，日志
     /// `LableIsCanJmp(@dice) == false`），根本到不了第③段的扣费分支（因此「160 变 60」只是
@@ -29294,7 +29295,7 @@ mod tests {
     /// + 一名目标玩家 `target`（坐标由入参给）+ 在线登记 / 会话 / gate 通道 / 含 `magic_id` 的存档与魔法表。
     ///
     /// 返回 `(world, caster, target, online, saves, magic_table, displays, gates, rx0)`。
-    /// `world.enable_buff_tick()` 对应生产宿主 `main.rs:7823`（A-5 路径的运行前提）。
+    /// `world.enable_buff_tick()` 对应生产宿主 `lib.rs` 的调用（`sim_loop` 装载段；A-5 路径的运行前提）。
     #[allow(clippy::type_complexity)]
     fn a5_spell_rig(
         magic_id: u16,
@@ -29313,7 +29314,7 @@ mod tests {
     ) {
         use std::collections::HashMap;
         let mut world = mir2_world::World::new(64, 64);
-        // 生产宿主 `main.rs:7823` 的 `world.enable_buff_tick()` —— A-5 支的运行前提。
+        // 生产宿主 `lib.rs` 的 `world.enable_buff_tick()` —— A-5 支的运行前提。
         // 缺省（关闭）时 A-5 支整段不执行（与既有 golden 逐字节不变的口径一致）。
         world.enable_buff_tick();
         let caster = world.add_entity(new_player_entity("caster".to_string(), 10, 10));
@@ -51277,7 +51278,7 @@ mod tests {",
     // **卡 T-137**：固定 NPC 的 `Npc_def/<ChrName>-<MapName>` 脚本装载（tier=R）
     // ==================================================================================
     //
-    // 生产链 = `game_svr::npcs::place_fixed_npcs_with_scripts`（`main.rs` 的 sim 起世界段调用它）
+    // 生产链 = `game_svr::npcs::place_fixed_npcs_with_scripts`（`lib.rs` 的 sim 起世界段调用它）
     // → `handle_click_npc_cmd(@main)` / `handle_shop_cmd(CM_MERCHANTDLGSELECT)` / `guild_official`。
     // oracle：`NpCinitialize`（`WorldServer.Merchant.cs:37-63`）挂图后 `NormNpc.LoadNPCScript()`
     // （`NormNpc.cs:1590-1601`）、`NormNpc.Click`（`:68-73`）、`GuildOfficial.UserSelect`（`:55-90`）、

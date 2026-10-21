@@ -13,7 +13,7 @@
 //! ```
 //!
 //! 本模块只做**纯编码 + 展示表 + 亮度计算**，不碰 I/O：路由（按 `[GateIdx, Socket]` 选通道、
-//! 发 `SimToGate::SendFrame`）留在 `main.rs` 的 sim 循环里（它才持有 `online`/`gates`）。
+//! 发 `SimToGate::SendFrame`）留在 `lib.rs` 的 sim 循环里（它才持有 `online`/`gates`）。
 //!
 //! **为什么需要展示表**：`crates/world` 的 `Entity` 只存世界模拟字段（坐标/HP/…），
 //! 不含 `Dir/Light/Feature/CharStatus/ShowName` 这些**展示层**字段（它们来自角色记录 + 装备，
@@ -23,7 +23,7 @@
 //!
 //! **本格仍缺（登记，不猜）**：
 //! - `RM_DISAPPEAR`（`VisibleFlag.Hidden` 支，`PlayObject.cs:3214-3222`）——**已接**：
-//!   编码器 [`smframe::sm_disappear`]，帧面 [`disappear_frame`]，由 `main.rs` 的 AOI 消失段按
+//!   编码器 [`smframe::sm_disappear`]，帧面 [`disappear_frame`]，由 `lib.rs` 的 AOI 消失段按
 //!   `world` 的 `TickRecord::hides` 发射（原「没有 `sm_disappear` 编码器」的登记已过期，订正）；
 //! - 怪物的 `SM_TURN`：`Entity` 有怪物，但生产路径尚未生成怪物（无 `DisplayTable` 项）⇒ 跳过；
 //! - `GetChrColor` 的**行会/PK/战争**分支（需要行会与战争系统，未移植）⇒ 用 `NameColor`；
@@ -310,7 +310,7 @@ pub fn turn_pair_nameless(target: i32, x: u16, y: u16, d: &ActorDisplay) -> Vec<
 /// 收件人口径（oracle）：`SM_WALK/SM_RUN/SM_HORSERUN` 的 `case` 带 `if (processMsg.ActorId != ActorId)`
 /// ⇒ **移动者自己不入帧**；而 `RM_PUSH/RM_RUSH/RM_RUSHKUNG` 的复合条件
 /// `ActorId != ActorId || wIdent == RM_PUSH || == RM_RUSH || == RM_RUSHKUNG` **恒真** ⇒
-/// **移动者自己也收**（宿主用带自身的广播，见 `main.rs::broadcast_ref_msg_with_self`）。
+/// **移动者自己也收**（宿主用带自身的广播，见 `lib.rs::broadcast_ref_msg_with_self`）。
 ///
 /// 不在此列的 ident 返回 `None`（不猜）。
 #[must_use]
@@ -334,7 +334,7 @@ pub fn move_frame(ident: u16, target: i32, x: u16, y: u16, d: &ActorDisplay) -> 
     }
 }
 
-/// oracle 的坐标 u16 线缆写法（`i16` 位模式回填；与 `main.rs::wire_coord` 同口径，本模块自持一份
+/// oracle 的坐标 u16 线缆写法（`i16` 位模式回填；与 `lib.rs::wire_coord` 同口径，本模块自持一份
 /// 以免 lib 依赖 bin）。
 fn wire_coord(v: i32) -> u16 {
     // `(ushort)v`：低 16 位/二补数（G-8；越界不再归 0）。
@@ -431,7 +431,7 @@ pub fn death_frame(actor_id: i32, x: u16, y: u16, dir: u8, d: &ActorDisplay) -> 
 ///
 /// 另有一个**广播发点** `BaseObject.DisappearA`（`BaseObject.cs:1519-1524`）⇒ `SendRefMsg(RM_DISAPPEAR)`，
 /// 由 `MakeGhost` 在掉线/小退/顶号时调用；本仓等价路径 = `world.disconnect`/`soft_close`
-/// ⇒ 由 `main.rs` 的 `drain_depart_frames` 出帧（见 `world::drain_departs`）。
+/// ⇒ 由 `lib.rs` 的 `drain_depart_frames` 出帧（见 `world::drain_departs`）。
 ///
 /// 逐字节口径见 [`smframe::sm_disappear`]（已被金标准 `c-line-baseline-c2-20261010` 的 15 条 30 帧锚定）。
 ///

@@ -6,10 +6,12 @@
 
 .DESCRIPTION
   两侧 `site/order` 账本 diff（`attack_rng_ledger.py` / `rng_ledger_diff.py`）要求 Rust 半的
-  逐次流水里**只有游戏消费者**。`bins/game-svr/src/main.rs` 的 `sim_loop` 在注入种子后会打一条
+  逐次流水里**只有游戏消费者**。`bins/game-svr/src/lib.rs` 的 `sim_loop` 在注入种子后会打一条
+  （2026-10-21 单二进制搬迁前该宿主文件是 `main.rs`，搬迁后 `main.rs` 只剩三行薄包装）
   `SEED_PROBE` 自证行；若那 8 项参照序列经 [`mir2_shared::rng::RandomNumber`]（被 trace 的入口）
-  取数，就会在流水里落下 8 条 `bins/game-svr/src/main.rs` 记录——它们**不是**游戏消费者、**C# 侧
-  不存在**，会把两侧账本的第一处分歧钉到 index 0（真机实测：Rust 独有站点 `main.rs:2856` × 8，
+  取数，就会在流水里落下 8 条 `bins/game-svr/src/lib.rs` 记录——它们**不是**游戏消费者、**C# 侧
+  不存在**，会把两侧账本的第一处分歧钉到 index 0（真机实测：Rust 独有站点 `main.rs:2856` × 8——
+  搬迁前 trace 记录的站点串，
   见 `mir2-rs/tests/parity/m3/evidence-rng-ledger-diff-20261012/32-diff-full.txt`）。
 
   口径：`SEED_PROBE` 参照序列必须走**独立实例**（`DotNetRandom::new(seed)`，不消耗游戏流、不经
@@ -20,9 +22,10 @@
     ① 真 game-svr 传 `MIR2_RNG_SEED` + `MIR2_RNG_LOG` ⇒ 在指定路径建出流水，头部 =
        `1<TAB>INJECT_OK<TAB><seed><TAB>0` + `SEED_PROBE <8 项>`。
     ② 流水头部 `SEED_PROBE` 与 C# 钩子 seed=42 的实测序列逐项一致（自我标尺）。
-    ③ **纯度门（核心）**：流水的「记录行」（`^<seq><TAB>Next`）里**没有任何** `bins\game-svr\src\main.rs`
-       站点 ⇒ 启动期自证没有混进游戏流水（改坏：把 `sim_loop` 的参照序列改回经 `RandomNumber`
-       取数 ⇒ 出现 8 条 `main.rs` 记录 ⇒ 本项必红）。
+    ③ **纯度门（核心）**：流水的「记录行」（`^<seq><TAB>Next`）里**没有任何** game-svr 宿主站点
+       （`bins\game-svr\src\main.rs` **或**搬迁后的 `lib.rs`）
+       ⇒ 启动期自证没有混进游戏流水（改坏：把 `sim_loop` 的参照序列改回经 `RandomNumber`
+       取数 ⇒ 出现 8 条 `lib.rs` 记录 ⇒ 本项必红）。
     ④ 两处独立自证互相一致：stdout 的 `SEED_PROBE` 与流水头部的 `SEED_PROBE` 逐项相同
        （独立实例 + trace 头部实例，都与生产注入的随机源同序列）。
     ⑤ 边界：未传种子/路径 ⇒ 不建流水（与改动前逐字节一致）。
@@ -163,12 +166,13 @@ Check '①c 流水头部第 2 行 = SEED_PROBE <8 项>' $headProbe ("line2=[" + 
 $headProbeVals = if ($headProbe) { ($line2 -replace '^SEED_PROBE\s+', '') } else { '' }
 Check '② 流水头部 SEED_PROBE 与 C# 钩子 seed=42 序列逐项一致' ($headProbeVals.Trim() -eq ($Seed42Probe -replace '^SEED_PROBE\s+', '')) ("header=[" + $headProbeVals.Trim() + "]")
 
-# ③ 核心纯度门：记录行（`^<seq><TAB>Next`）里不得出现 bins/game-svr/src/main.rs 站点。
+# ③ 核心纯度门：记录行（`^<seq><TAB>Next`）里不得出现 game-svr 宿主站点
+#    （搬迁后站点在 bins/game-svr/src/lib.rs；main.rs 分支保留以兼容搬迁前的历史流水）。
 $records = @($traceLines | Where-Object { $_ -match '^\d+\tNext' })
-$mainSites = @($records | Where-Object { $_ -match 'main\.rs' })
+$mainSites = @($records | Where-Object { $_ -match 'main\.rs|game-svr[\/]src[\/]lib\.rs' })
 $mainDetail = "records=" + $records.Count + " main_records=" + $mainSites.Count
 if ($mainSites.Count -gt 0) { $mainDetail = $mainDetail + " first=[" + $mainSites[0] + "]" }
-Check '③ 流水记录行不含启动期自证站点 bins\game-svr\src\main.rs' ($mainSites.Count -eq 0) $mainDetail
+Check '③ 流水记录行不含启动期自证站点 bins\game-svr\src\{main,lib}.rs' ($mainSites.Count -eq 0) $mainDetail
 Check '③b `SEED_PROBE` 自证已发生（门的前提：那 8 项确实取过数）' $gotStdoutProbe ('stdout_seed_probe=' + $gotStdoutProbe)
 
 # ④ 两处独立自证互相一致：stdout 的 SEED_PROBE vs 流水头部。

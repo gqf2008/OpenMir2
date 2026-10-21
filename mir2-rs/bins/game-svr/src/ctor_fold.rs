@@ -4,7 +4,7 @@
 //! ## 分工
 //!
 //! - **主线程**（本模块的 [`build_plan`]）：只读文件、算站点数（**不抽数**）；
-//! - **sim 线程**（`main.rs` 的 `sim_loop`）：按 oracle 次序在**四个位置**各调一次
+//! - **sim 线程**（`lib.rs` 的 `sim_loop`）：按 oracle 次序在**四个位置**各调一次
 //!   `World::fold_ctor_draws_{game_app_ctor,load_map_info,load_map_quest}` 与
 //!   `World::fold_ctor_draw_item_number_barrier_a`（要 `world.rng` 同一条流）；
 //!   位置之间是 oracle 的**屏障**：屏障 A（`ServerConf.cs:114` 的 1 抽，**已补**）在
@@ -37,7 +37,7 @@
 //! `SystemShare.Config.ItemNumber += SystemShare.RandomNumber.Random(10000)` ——**恰 1 抽**，
 //! 位于 `GameApp` ctor **之后**（`new GameApp(...)` 由 DI 在 `AppService` 构造时发生）、
 //! `GameApp.Initialize`（`:124` M2）**之前**（`StartingAsync` 才 `LoadConfig()`）。
-//! `main.rs` 的 `sim_loop` 在段①之后、段②之前**恰调一次**
+//! `lib.rs` 的 `sim_loop` 在段①之后、段②之前**恰调一次**
 //! `mir2_world::World::fold_ctor_draw_item_number_barrier_a`（走同一条 `world.rng`），再把该抽交给
 //! [`item_number_counter_init`] **加到** `config.rs` 读到的 `[Setup] ItemNumber` 初值上。⇒ 段①（部署件
 //! **16 抽** = `Robot.txt` 1 有效行 × 4 + 孤儿 × 4）→ 屏障 A（**第 17 条**）→ 段②/段③ 与 oracle
@@ -101,7 +101,7 @@ pub fn build_plan(
 ///
 /// 屏障 A（`AppService.cs:87` → `ServerConf.cs:114` 的 `Random(10000)`）与 Envir 语料**无关**——
 /// oracle 在任何 `GameApp` ctor 之后、`LoadConfig()` 里无条件抽它 ⇒ 即使段①②③ 的站点算不出来
-/// （`main.rs` 已登记的「构造段账本不对齐」状态），这一抽**照样要落账**，`ItemNumber += r` 也照样成立。
+/// （`lib.rs` 已登记的「构造段账本不对齐」状态），这一抽**照样要落账**，`ItemNumber += r` 也照样成立。
 /// 反之，若此时不 push 站点 ⇒ 账本 0 条 ⇒ `item_number_counter_init` 判 `Err`（宿主 panic）。
 #[must_use]
 pub fn minimal_plan() -> CtorFoldPlan {
@@ -113,16 +113,16 @@ pub fn minimal_plan() -> CtorFoldPlan {
 /// **屏障 A 的语义**（oracle `ServerConf.cs:114` 的 `+=`）：把账本里那 1 抽**加到**
 /// `[Setup] ItemNumber` 初值上 ⇒ `M2Share.GetItemNumber()`（`M2Share.cs:547`）的计数器初值，
 /// 也就是**新角色四件新手物品 `MakeIndex` 的起点**（`PlayObject.cs:1205-1245`；
-/// `main.rs::add_newbie_items`）。
+/// `lib.rs::add_newbie_items`）。
 ///
 /// - **是 `+=` 不是 `=`**：`=` 会丢掉 `Server.conf` 里配的值 ⇒ 该进程**所有** `MakeIndex` 偏移；
-/// - **不是「抽了不用」**：抽出的值必须真的进计数器（`main.rs` 的 `let mut item_number = …`）；
+/// - **不是「抽了不用」**：抽出的值必须真的进计数器（`lib.rs` 的 `let mut item_number = …`）；
 /// - **fail-closed**：账本必须**恰 1 条** [`CtorFoldSite::BarrierAItemNumber`]、且 `arg` 必须是
 ///   [`CTOR_FOLD_BARRIER_A_MOD`]——否则 `Err`（漏抽/多抽/站点错时**绝不静默按 0 加**）。
 ///
 /// C# 的 `+=` 是 unchecked `int` 加法 ⇒ 这里同样回绕（`wrapping_add`）。本函数只负责**初值**：
 /// `M2Share.GetItemNumber()`（`M2Share.cs:547-556`）自身的 `++` 与
-/// `> int.MaxValue / 2 - 1 ⇒ 1` 复位属**另一处**（宿主 `main.rs` 的 `item_number` 计数器现为
+/// `> int.MaxValue / 2 - 1 ⇒ 1` 复位属**另一处**（宿主 `lib.rs` 的 `item_number` 计数器现为
 /// `*item_number += 1`，没有那条复位）——那一处**不在本片范围**；`MakeIndex` 本身的可对拍性
 /// （C# 含 `GetTickCount` ⇒ 两次运行都不一致）已由 `whitelist.md` D-1 登记。
 ///

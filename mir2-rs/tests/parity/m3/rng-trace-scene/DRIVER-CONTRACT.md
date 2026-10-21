@@ -56,8 +56,8 @@
 - ④ 要 `monai == 0`：`drop-exp/drop_exp_scenario.json` `purity.wallclock_policy = "pinned"`；
   `drop-exp/drop_exp_consumers.tsv` 的 rust `wallclock` 行 = `crates/world/src/monai\.rs:`，`max=0`
   （「pin 抑制必须使其为 0」）。
-- master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/main.rs`（调用
-  `game_svr::mongen::enable_production_monster_ai(&mut world)`；**故意不写行号锚**：main.rs 是
+- master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/lib.rs`（调用
+  `game_svr::mongen::enable_production_monster_ai(&mut world)`；**故意不写行号锚**：该宿主文件是
   ④-D / client-e2e / ⑧-10 / ⑦ 等多车道共享的增长文件，行号锚实测已漂 6 次
   `5229 → 5440 → 5488 → 5598 → 5665 → 5795`，全是别的车道插代码推平 ⇒ 改由「符号存在且唯一」
   机判保鲜，见 §6）
@@ -108,7 +108,8 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
   ① **行号锚**：文档写的行号 == 该符号在当前源码里的**首个**匹配行（缺失 / 重复 / 漂移都 fail-closed
      点名）——用于**稳定文件**（`mongen.rs` / `monai.rs` / oracle `AnimalObject.cs` / 本卡自己的
      `rng_consumer_groups.py` / `consumer_groups.tsv`）；
-  ② **符号唯一性锚**（`symbol_unique=True`）：**共享增长文件**（`bins/game-svr/src/main.rs`——行号锚
+  ② **符号唯一性锚**（`symbol_unique=True`）：**共享增长文件**（`bins/game-svr/src/lib.rs`——单二进制
+     搬迁后宿主代码所在的文件，`main.rs` 只剩三行薄包装；行号锚
      实测已漂 6 次 `5229 → 5440 → 5488 → 5598 → 5665 → 5795`，每次都是别的车道插代码推平）
      **不做行号锚**：文档只引用文件路径、不得再写 `:line`，机判改为「该符号在文件里**恰好出现一次**」
      （0 次 ⇒ `ANCHOR_SYMBOL_MISSING`；>1 次 ⇒ `ANCHOR_AMBIGUOUS`）。**判据不降级**：宿主 AI 调用点
@@ -117,7 +118,7 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
 
   > **合并订正（2026-10-14，本片与链门车道的同一处修法并集）**：链门车道 `42d421188` 的收口是把
   > 该行号**再钉一次**（`5665 → 5795`）——那是本片要消除的**成因**（第 6 次漂移正是它造成的假 RED）。
-  > 本片合并时取**根因**侧：main.rs 不再做行号锚（改符号唯一性），链门侧新增的 fmt 证据门与
+  > 本片合并时取**根因**侧：宿主文件不再做行号锚（改符号唯一性），链门侧新增的 fmt 证据门与
   > `.py` 登记下界（`≥23`）原样保留（不在本卡写集，未动）。行号锚仍保留于**稳定文件**。
 - **锚点覆盖面收口（2026-10-14 reviewer-5 M-1 / reviewer-6 M-1+M-2）**：旧口径有两处静默通道 ——
   ① 覆盖判定用「结尾 basename 匹配」⇒ **别的目录下的同名文件**会被误判 COVERED（既非

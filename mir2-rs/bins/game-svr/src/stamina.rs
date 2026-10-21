@@ -8,7 +8,7 @@
 //! 从 `20669` 掉到 `20668`，Rust 全程 `20669`（证据包
 //! `mir2-rs/tests/parity/m3/evidence-m3-scoped-diff-ability-20261013/17-*.txt`）。
 //! 逐行读 oracle 后，该扣血来自 `BaseObject.Run()` 的**体力点段**（本模块），而 Rust
-//! 侧此前只在 `attackwire`/`movewire`/`main.rs` 的注释里**登记**「`HealthTick`/`SpellTick`
+//! 侧此前只在 `attackwire`/`movewire`/`lib.rs` 的注释里**登记**「`HealthTick`/`SpellTick`
 //! 未移植」⇒ 攻方体力点只减不回收，永远到不了 `-HealthFillTime`，所以不掉这 1 HP。
 //!
 //! # oracle 逐行（`BaseObject.Base.cs:26-109`）

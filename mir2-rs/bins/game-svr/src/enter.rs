@@ -645,7 +645,7 @@ fn send_my_magic(a: &AbilityInputs<'_>) -> Option<(u16, Vec<u8>)> {
 }
 
 /// 把 [`WorldFrameInputs`] 装配进 `base`（`base` 里 `notice`/`map_file_name`/`actor_id`/坐标/方向
-/// 由 `main.rs` 从网关链路与角色记录填好）。**只填**本片有输入的那几条；其余保持 `None`。
+/// 由 `lib.rs` 从网关链路与角色记录填好）。**只填**本片有输入的那几条；其余保持 `None`。
 ///
 /// 返回本步产生的 WRN 文案（调用方逐条 `glog!`，不静默）。
 #[must_use]

@@ -166,7 +166,7 @@ mod tests {
         );
     }
 
-    /// 构造性用例（生产路径写法，`main.rs::sim_loop`）：世界随机源被注入的种子取代后，
+    /// 构造性用例（生产路径写法，`lib.rs::sim_loop`）：世界随机源被注入的种子取代后，
     /// 从**该实例**取出的序列必须与 C# 同种子逐项相同。
     #[test]
     fn injected_world_rng_matches_csharp_probe() {

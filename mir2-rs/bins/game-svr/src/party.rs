@@ -3,7 +3,7 @@
 //! 世界侧的状态机在 [`mir2_world::party`]（`crates/world/src/party.rs`）；本模块只做两件事：
 //! ① 把 `GateConfig` 的 `[Setup]` 值 + 缺省文案装成 [`mir2_world::PartyConfig`]；
 //! ② 把一条 [`PartyEvent`] 编成 `(收件人 ActorId, GM_DATA body)`（**纯函数**，无 I/O）。
-//! 按 `[GateIdx, Socket]` 路由由 `main.rs` 的派发层完成（与既有 handler 同口径）。
+//! 按 `[GateIdx, Socket]` 路由由 `lib.rs` 的派发层完成（与既有 handler 同口径）。
 //!
 //! 帧映射与 oracle 锚点见 [`Event`] 的每个分支注释；编码在 [`crate::smframe`]。
 
@@ -14,7 +14,7 @@ use crate::smframe;
 
 /// 从 `Server.conf` 的 `[Setup]` 值装世界侧 [`PartyConfig`]。
 ///
-/// 入参由 `main.rs` 从 `config::GateConfig` 取（`config` 是**二进制私有模块**，
+/// 入参由 `lib.rs` 从 `config::GateConfig` 取（`config` 是**二进制私有模块**，
 /// 本 lib 模块不直接依赖它）。
 ///
 /// **登记**：`[String] GroupMsgPreFix`/`JoinGroupMsg`（`StringConf.cs:39/223`）本片不读 `Server.conf`

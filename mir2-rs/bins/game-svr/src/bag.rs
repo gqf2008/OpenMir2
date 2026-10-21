@@ -9,7 +9,7 @@
 //!
 //! 卡 `openmir2-m3-bag-equip-alignment` 的 DoD 是「拾取/装备/卸下/丢弃/使用药品 两侧同序列、
 //! 跨侧作用域内字段级 diff=0」。本片是这条 DoD 的**装备/卸下（2/5）切片**：
-//! `bins/game-svr` 侧（接线归 m2-svr 车道，本片不碰 `main.rs`/`smframe.rs`）先有**可判据的
+//! `bins/game-svr` 侧（接线归 m2-svr 车道，本片不碰 `lib.rs`/`smframe.rs`）先有**可判据的
 //! 决策与状态迁移核心**；拾取/丢弃/用药需要 `crates/world` 还没有的**地图地面物品模型**（`Envir.GetItem`）
 //! 与 `Envir.Flag`（`boNODRUG`/`NoThrowItem`）⇒ 登记为下一片（见下「未做清单」）。
 //!
@@ -73,7 +73,7 @@
 //! - **拾取 / 丢弃 / 使用药品（`CM_PICKUP`/`CM_DROPITEM`/`CM_EAT`）**：oracle 三条都依赖
 //!   `Envir`（`GetItem`/`DeleteFromMap`/`AddItemToMap`/`Envir.Flag.boNODRUG`/`NoThrowItem`）
 //!   与地面物品（`MapItem`）模型，Rust `crates/world` 目前**没有地面物品** ⇒ 需要先在
-//!   `crates/world` 加"地图地面物品"最小 API（与 m2-svr 的 `enter.rs`/`main.rs` 有撞面风险，
+//!   `crates/world` 加"地图地面物品"最小 API（与 m2-svr 的 `enter.rs`/`lib.rs` 有撞面风险，
 //!   需在卡内声明分片）。本片据此**不实现**这三条。
 //! - **有效物品 = 模板**（A-09 已实现）：[`upgrade_std_item`] 是 `GetUpgradeStdItem`
 //!   （`GameItemSystem.cs:731-1160`）的 1:1（`CopyItemToClientItem` + 各 `StdMode` 的 `Desc`

@@ -601,7 +601,7 @@ pub fn paralysis_from_ring_shapes(shapes: impl IntoIterator<Item = Option<u8>>) 
 ///    **漏加**友军 buff（**漏加点**，不是多加点）。
 ///
 /// ③ **可达性 = 生产可达，不是理论面**：`attack_mode` 来自线上报文
-///    （`bins/game-svr/src/main.rs` `attack_mode: d.attatck_mode`）⇒ 模式 3/5 由客户端上报即可进入。
+///    （`bins/game-svr/src/lib.rs` `attack_mode: d.attatck_mode`）⇒ 模式 3/5 由客户端上报即可进入。
 ///    ⇒ 该缺口是**真实可触发的收窄**，登记为**未实现**（保守方向登记 = 收窄 = 漏加点）。
 #[must_use]
 pub fn is_proper_is_friend(caster: &Entity, cret: &Entity, is_group_member: bool) -> bool {

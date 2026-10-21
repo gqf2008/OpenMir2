@@ -23,7 +23,7 @@
 //!   且必须晚于 `InitializeMonster`（`GameApp.cs:150`，`MonsterThreadMap` 在那里填齐）。
 //!   宿主侧 = `MonGenHost::start` 之后、首个 `step_mon_gen` 之前。
 //! - **`[Server] VentureServer` 门**：`GameApp.cs:240` `if (!Config.VentureServer)` 才调
-//!   `LoadGuardList`（整文件不读）——门在**调用点**，由宿主（main.rs）持有。
+//!   `LoadGuardList`（整文件不读）——门在**调用点**，由宿主（lib.rs）持有。
 //! - **合成 `MonGenInfo` 的两个照搬缺陷**（`WorldServer.MonGen.cs:390-407` + `MonGenInfo.cs:41-57`）：
 //!   `Race` 不回填（保持 0）⇒ `RegenMonsters` 的 `race <= 0` 早退（`:817-820`）⇒ **守卫死后不重生**、
 //!   regen 门每轮空转不刷；`TryAdd` 只登记 `CertList`、**不动 `ActiveCount`**（保持 0 ⇒

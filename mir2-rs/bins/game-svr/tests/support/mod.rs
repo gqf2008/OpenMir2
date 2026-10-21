@@ -27,7 +27,7 @@
 //!    默认 `49152..65535`（本机 `netsh int ipv4 show dynamicport tcp` = Start 49152 / 16384）
 //!    ⇒ 并行用例的 `bind(:0)` **不可能**返回我们的候选端口；原子计数器保证同进程内用例不互相重号。
 //! 2. **就绪门**：端口是否真被**本用例的子进程** bind，以子进程自己在 `TcpListener::bind` **成功之后**
-//!    打印的 `…[{addr}:{port}]已启动…` 为准（`game-svr` `main.rs:459` / `game-gate` `main.rs:134`）。
+//!    打印的 `…[{addr}:{port}]已启动…` 为准（`game-svr` 的 `lib.rs` / `game-gate` 的 `lib.rs`）。
 //!    没等到就绪标记（子进程退出 = bind 失败）⇒ 把子进程全文日志打进 panic，**fail-closed**；
 //!    绝不再「先 connect 再赌」——那会连上别人的监听。
 //! 3. **有界重试**：`next_port()` 会跳过已被外部进程占用的候选（端口段内最多试 `SPAN` 次）。

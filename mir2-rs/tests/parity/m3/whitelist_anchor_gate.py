@@ -68,7 +68,9 @@ DEFAULT_WHITELIST = os.path.normpath(
 # ---------------------------------------------------------------------------
 HIGH_CHURN = (
     # (仓库根相对路径, 10 天改次, 说明)
-    ("mir2-rs/bins/game-svr/src/main.rs", 150, "game-svr 宿主 main（多车道增长，行号锚实测漂 ≥6 次）"),
+    # 2026-10-21 单二进制搬迁：宿主代码整体 `git mv` 到 lib.rs（main.rs 只剩三行薄包装），
+    # 高 churn 监控与符号锚一律跟到 lib.rs。
+    ("mir2-rs/bins/game-svr/src/lib.rs", 150, "game-svr 宿主（多车道增长，搬迁前为 main.rs；行号锚实测漂 ≥6 次）"),
     ("mir2-rs/crates/world/src/world.rs", 39, "世界模拟主模块"),
     ("mir2-rs/crates/world/src/entity.rs", 21, "实体层"),
     ("mir2-rs/crates/world/src/combat.rs", 13, "战斗数值"),
@@ -122,7 +124,10 @@ def _read_lines(path):
 def _build_basename_index(root):
     idx = {}
     for dirpath, dirnames, filenames in os.walk(root):
-        parts = _norm(dirpath).split("/")
+        # 2026-10-21 修：原来按**绝对** dirpath 判跳过，root 自身在 `.worktrees/` 下时会把
+        # 整棵树都跳过（索引为空 ⇒ 裸 basename 全判 ANCHOR_FILE_MISSING）。按**相对**路径判，
+        # 才既能跳过嵌套的 .git/.worktrees，又能在 worktree 里正常工作。
+        parts = _norm(os.path.relpath(dirpath, root)).split("/")
         if ".git" in parts or ".worktrees" in parts:
             continue
         for fn in filenames:
@@ -502,19 +507,20 @@ def selftest():
 
     # 用合成根（含少量真源文件）做改坏必红，避免依赖真仓库漂移。
     #   合成文件之一刻意**不在** HIGH_CHURN（`crates/data/src/lists.rs`），另一在
-    #   （`mir2-rs/bins/game-svr/src/main.rs`），以便分别验证「行号锚 ±3」与「高 churn 禁行号」。
+    #   （`mir2-rs/bins/game-svr/src/lib.rs`；单二进制搬迁后宿主代码在此，main.rs 只剩薄包装），
+    #   以便分别验证「行号锚 ±3」与「高 churn 禁行号」。
     with tempfile.TemporaryDirectory() as td:
         _write(td, "mir2-rs/crates/data/src/lists.rs",
                "pub fn parse_game_log_item_name_list() {}\n"
                "pub fn game_logs_item() {}\n"
                "pub fn load_game_log_item_name_list_file() {}\n"
                "pub fn floor_items_view_sorted() {}\n" + "// filler\n" * 20)
-        _write(td, "mir2-rs/bins/game-svr/src/main.rs",
+        _write(td, "mir2-rs/bins/game-svr/src/lib.rs",
                "mod homemap;\nfn step_mon_gen() {}\nfn save_human_rcd() {}\n")
         # 合成 whitelist：一条正常行号锚（非高 churn + 紧贴符号）+ 一条高 churn 符号锚。
         good = (
             "| T-90 | 见 `floor_items_view_sorted`（`crates/data/src/lists.rs:4`） |\n"
-            "| T-91 | 宿主 `step_mon_gen`（`mir2-rs/bins/game-svr/src/main.rs`） |\n"
+            "| T-91 | 宿主 `step_mon_gen`（`mir2-rs/bins/game-svr/src/lib.rs`） |\n"
         )
 
         # ② 真身合成 GREEN。
@@ -529,7 +535,7 @@ def selftest():
                "; ".join("%s %s" % (c, m) for c, m in reds))
 
         # ④ 改坏必红②（判据 4）：给高 churn 文件塞一个 `:line` 锚 ⇒ ANCHOR_LINE_NOT_ALLOWED。
-        bad_hc = good + "| T-92 | 见 `step_mon_gen`（`mir2-rs/bins/game-svr/src/main.rs:2`） |\n"
+        bad_hc = good + "| T-92 | 见 `step_mon_gen`（`mir2-rs/bins/game-svr/src/lib.rs:2`） |\n"
         reds, _i, _p = check_doc_text(bad_hc, root=td)
         expect("mutation-highchurn-line-red",
                any(c == "ANCHOR_LINE_NOT_ALLOWED" and "T-92" in m for c, m in reds),
@@ -550,10 +556,10 @@ def selftest():
                "; ".join("%s %s" % (c, m) for c, m in reds))
 
         # ⑦ fail-closed：监控文件缺失 ⇒ PREREQ（rc≠0）。
-        os.remove(os.path.join(td, "mir2-rs/bins/game-svr/src/main.rs"))
+        os.remove(os.path.join(td, "mir2-rs/bins/game-svr/src/lib.rs"))
         reds, _i, prereq = check_doc_text(good, root=td)
         expect("mutation-monitored-file-missing-prereq",
-               any("main.rs" in p for p in prereq),
+               any("lib.rs" in p for p in prereq),
                "; ".join(prereq))
 
     # ⑧ 改坏必红⑤（判据 5）：whitelist 缺失 ⇒ rc=2（不是静默通过）。
@@ -562,11 +568,11 @@ def selftest():
         expect("mutation-whitelist-missing-rc2", rc == 2, "rc=%d" % rc)
 
     # ⑨ 真身边界：把真 whitelist 的一份高 churn 符号锚改回行号形式 ⇒ 必红（现场牙）。
-    #    取真身文本里第一条 `bins/game-svr/src/main.rs` 的**符号锚**（无 :line）注入一个行号版本。
-    mutated = text + "\n（改坏：`mir2-rs/bins/game-svr/src/main.rs:1`）\n"
+    #    取真身文本里第一条 `bins/game-svr/src/lib.rs` 的**符号锚**（无 :line）注入一个行号版本。
+    mutated = text + "\n（改坏：`mir2-rs/bins/game-svr/src/lib.rs:1`）\n"
     reds, _i, _p = check_doc_text(mutated)
     expect("real-mutation-mainrs-line-red",
-           any(c == "ANCHOR_LINE_NOT_ALLOWED" and "main.rs" in m for c, m in reds),
+           any(c == "ANCHOR_LINE_NOT_ALLOWED" and "lib.rs" in m for c, m in reds),
            "; ".join("%s %s" % (c, m) for c, m in reds))
 
     ok = sum(1 for _n, c, _d in checks if c)

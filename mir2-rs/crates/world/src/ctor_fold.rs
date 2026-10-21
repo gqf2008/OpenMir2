@@ -65,7 +65,7 @@
 //!   段②之前恰调一次 [`World::fold_ctor_draw_item_number_barrier_a`]，并由
 //!   `item_number_counter_init` 把该抽**加到** `bins/game-svr/src/config.rs` 读到的
 //!   `[Setup] ItemNumber` 初值上（消费点**已建模**：该计数器 → `M2Share.GetItemNumber()`
-//!   (`M2Share.cs:547`) → 新角色新手物品 `MakeIndex`，`main.rs::add_newbie_items`）。⇒ 段① 在部署件上
+//!   (`M2Share.cs:547`) → 新角色新手物品 `MakeIndex`，`lib.rs::add_newbie_items`）。⇒ 段① 在部署件上
 //!   是 **16 抽**（`Robot.txt` 1 有效行 × 4 + 孤儿 G1–G3 × 4），屏障 A 即**第 17 条**，其后段②/段③
 //!   与 oracle **整段等距**。
 //!   ④ 运行期路径（`M2Share.cs:279/:526`、`ScriptEngine.cs:156`）不在启动构造段内，不计。
@@ -90,7 +90,7 @@
 //! `game-svr/tests/relay.rs::starts_without_worldmaps_when_envir_present`（合成 Envir 只有
 //! `MapInfo.txt="[0 town]"` + `Map/0.map`）在父提交 `befd3ad7c` 上 RNG 流水 **0 条**抽数行、
 //! `openmir2-ctor-draws-fold` 提交 **12 条**（`entity.rs` 的 construct 组）、本片（屏障 A 已补）
-//! **13 条**——多出的第 13 条是屏障 A，记在**宿主调用点** `bins/game-svr/src/main.rs`（= 调度表的
+//! **13 条**——多出的第 13 条是屏障 A，记在**宿主调用点** `bins/game-svr/src/lib.rs`（= 调度表的
 //! `startup` 组，见下节）。**套件仍全绿**只因为仓内没有用例/golden 钉住这类会话的 RNG 流水
 //! —— 原提交信息的「既有用例/golden 0 条受影响 ⇒ 只在真机可见」**不成立**，已由本段订正；
 //! R 级窗口的必要性据此**加强**（默认流水已变）。
@@ -98,17 +98,17 @@
 //! **另一处流水变化（本片新增）**：**无地图注册表**（或计划算不出）的会话原本**一条都不抽**
 //! （空计划），本片改用 `minimal_plan()`（**只含屏障 A**）⇒ 这类会话的流水 **0 → 1 条**
 //! （实测 `game-svr/tests/relay.rs::ids_notification_enables_login_certification`，同种子
-//! `MIR2_RNG_LOG`：父提交 0 条、本片 1 条 = `main.rs` 的 `Next(max) 10000`）。oracle 在该情形下
+//! `MIR2_RNG_LOG`：父提交 0 条、本片 1 条 = `lib.rs` 的 `Next(max) 10000`）。oracle 在该情形下
 //! **照样抽**（`ServerConf.LoadConfig()` 与 `Envir` 无关）⇒ 方向与 oracle 一致；段①②③ 仍不落账
-//! （`main.rs` 既有登记：无注册表 ⇒ 算不出站点表），本片只把「与语料无关的那 1 抽」补上。
+//! （`lib.rs` 既有登记：无注册表 ⇒ 算不出站点表），本片只把「与语料无关的那 1 抽」补上。
 //!
 //! ## 与 `rng_trace` 的关系
 //!
 //! 本模块的抽数走共享 `world.rng` ⇒ `MIR2_RNG_LOG` 流水里每处仍是
 //! `crates/world/src/entity.rs:106-110`（`construct` 组，4 行/处）；**唯一例外**是屏障 A：
 //! [`World::fold_ctor_draw_item_number_barrier_a`] 标了 `#[track_caller]` ⇒ 流水里记的是
-//! **调用方**的站点（生产 = `bins/game-svr/src/main.rs`，与 `consumer_groups.tsv` 既有的
-//! `startup|rust|bins/game-svr/src/main\.rs:` 行同组；oracle 侧同组 =
+//! **调用方**的站点（生产 = `bins/game-svr/src/lib.rs`，与 `consumer_groups.tsv` 既有的
+//! `startup|rust|bins/game-svr/src/lib\.rs:` 行同组；oracle 侧同组 =
 //! `ServerConf.LoadConfig@ServerConf.cs:114`）。⇒ 这一抽**不落 `other` 组**，结构一致性门的
 //! `groupdiff --require-closed` 不会因本片新增站点而判红。[`CtorFoldLedger`] 是**同一批
 //! 抽数的符号化投影**（site = oracle 锚），供构造级用例把「次序」也钉死——真机流水的 site 列
@@ -348,8 +348,8 @@ impl World {
     /// ItemNumber` 上（oracle 是 `+=`，`ServerConf.cs:114`）。
     ///
     /// `#[track_caller]`：本方法**故意**让 `rng_trace`（`MIR2_RNG_LOG`）把这一抽记在**调用方**的
-    /// 站点（生产 = `bins/game-svr/src/main.rs`）——`consumer_groups.tsv` 已把 Rust 侧启动期抽数
-    /// 归因到 `startup|rust|bins/game-svr/src/main\.rs:`（oracle 侧同组 =
+    /// 站点（生产 = `bins/game-svr/src/lib.rs`）——`consumer_groups.tsv` 已把 Rust 侧启动期抽数
+    /// 归因到 `startup|rust|bins/game-svr/src/lib\.rs:`（oracle 侧同组 =
     /// `ServerConf.LoadConfig@ServerConf.cs:114`）；不标则记成 `crates/world/src/ctor_fold.rs:`，
     /// 在结构一致性门里落 `other` 组 ⇒ `groupdiff --require-closed` 判红。
     #[track_caller]

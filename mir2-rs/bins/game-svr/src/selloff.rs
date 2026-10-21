@@ -1059,7 +1059,7 @@ pub fn sell_off_in_time(me: &SellOffSide<'_>, book: &SellOffBook, n_code: i32) -
 ///
 /// **失败支**两条 `SM_MERCHANTSAY` 见 [`merchant_say`]（尾 = `商人 ChrName + '/' + text`）。
 /// 生产触发点 = merchant 脚本 label `@dealybme`（`Merchant.cs:930-934`，`IsYbDeal` 门）；宿主接线见
-/// `bins/game-svr/src/main.rs::handle_shop_cmd` 的 `CM_MERCHANTDLGSELECT` 支。
+/// `bins/game-svr/src/lib.rs::handle_shop_cmd` 的 `CM_MERCHANTDLGSELECT` 支。
 #[must_use]
 pub fn open_deal_off_form(
     me: &SellOffSide<'_>,

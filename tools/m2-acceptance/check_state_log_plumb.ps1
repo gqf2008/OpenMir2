@@ -67,7 +67,8 @@ if ([string]::IsNullOrEmpty($OutDir)) {
 $Work = Join-Path $OutDir 'work'
 New-Item -ItemType Directory -Force -Path $Work | Out-Null
 
-# game-svr 开启 dump 的自证行（`bins/game-svr/src/main.rs`：`state_log.enabled()` 时唯一一句 INF）。
+# game-svr 开启 dump 的自证行（`bins/game-svr/src/lib.rs`：`state_log.enabled()` 时唯一一句 INF；
+# 2026-10-21 单二进制搬迁前为 `main.rs`）。
 $EnabledMarker = '服务端逐击状态 dump 已开启'
 
 $script:Checks = New-Object System.Collections.Generic.List[object]

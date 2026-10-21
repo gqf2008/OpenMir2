@@ -15,7 +15,7 @@
 //!
 //! **频道入口（本批 `openmir2-channel-chat`）**：`!!` 组队、`!~` 行会、`!` 喊话
 //! ⇒ [`parse_channel`] + [`cry_text`]/[`cry_hear_frame`]/[`cry_targets`]/[`shout_decision`]；
-//! 发射点在 `main.rs::handle_say`。逐条照 `PlayObject.Chat.cs:163-208`：
+//! 发射点在 `lib.rs::handle_say`。逐条照 `PlayObject.Chat.cs:163-208`：
 //! - `!!` ⇒ `SendGroupText(ChrName + ": " + sText)`（`PlayObject.cs:5185-5197`，前缀
 //!   `GroupMsgPreFix` 由世界侧 [`mir2_world::World::party_send_group_text`] 拼）；
 //! - `!~` **且** `MyGuild != null` ⇒ `MyGuild.SendGuildMsg(...)`（`GuildInfo.cs:431-456`）；
@@ -42,7 +42,7 @@
 //! 两者只在**恰好 11/12 格**的近邻上收件人集合不同（连发才命中缓存）。
 //!
 //! **已接（orphan 编码器接线首批）**：私聊 `/`（[`parse_whisper`]/[`whisper_text`]）
-//! ⇒ `SM_WHISPER(103)`，发射点见 `main.rs::handle_whisper`。
+//! ⇒ `SM_WHISPER(103)`，发射点见 `lib.rs::handle_whisper`。
 
 use crate::smframe;
 use mir2_world::{World, ACTOR_RACE_PLAY};
@@ -55,7 +55,7 @@ pub const CM_SAY: u16 = 3030;
 /// 本切片按常量取用（配置读取登记为后续项，见模块头）；现网与缺省一致 ⇒ 行为等价。
 pub const SEND_REF_MSG_RANGE: i32 = 12;
 
-/// `PlayObject.ProcessUserLineMsg` 的"不以 `@` 开头"这一支。**当前分流**在 `main.rs::handle_say`：
+/// `PlayObject.ProcessUserLineMsg` 的"不以 `@` 开头"这一支。**当前分流**在 `lib.rs::handle_say`：
 /// 先 `/`（[`parse_whisper`]）、再 `!`（[`parse_channel`]），剩下的非空、非 `@` 行才是普通说话；
 /// `@` 命令系统仍未接（宿主记 DBG 并丢弃），空行直接忽略。
 #[must_use]

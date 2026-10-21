@@ -5,7 +5,7 @@
 //! - **P27**：经验/攻击倍率 1s 递减（`:636-657`）。
 //!
 //! 纯函数把「时间门 + 状态机」与宿主（`Entity`/`SessionGround`/出帧）分开，便于构造级判据；
-//! 宿主接线见 `main.rs` 的 `drain_player_map_hp` / `drain_player_hunger` /
+//! 宿主接线见 `lib.rs` 的 `drain_player_map_hp` / `drain_player_hunger` /
 //! `drain_player_run_rates`。
 //!
 //! # 照抄的 oracle 形态（禁止“顺手修好”）

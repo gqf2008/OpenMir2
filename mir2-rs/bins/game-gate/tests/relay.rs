@@ -265,7 +265,7 @@ fn gm_data(session_id: u16, body_len: i32) -> ServerMessage {
 /// 卡 `openmir2-m2-flaky-relay-testports`：`free_port()` 的「探测即释放」会让并行用例的
 /// `bind(:0)` 抢走端口，网关 bind 失败、客户端却连上别人的监听（owner 实测 `os error 10048`
 /// 与假红）。这里端口一律由 `support::next_port()`（进程内唯一、非临时段）给出，且只有看到
-/// 子进程在 `TcpListener::bind` 成功之后打印的 `游戏网关[…:{port}]已启动…`（`main.rs:134`）
+/// 子进程在 `TcpListener::bind` 成功之后打印的 `游戏网关[…:{port}]已启动…`（`lib.rs`）
 /// 才返回；没等到就 kill + fail-closed（绝不「先 connect 再赌」）。
 struct Gate {
     proc: tokio::process::Child,

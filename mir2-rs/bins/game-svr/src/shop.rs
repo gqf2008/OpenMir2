@@ -35,7 +35,7 @@
 //! # 本片未做（其余，登记）
 //! - `Market_Def` 商人脚本执行 + `GotoLable("~@repair")`（`Merchant.cs:1652/1659`）：本宿主
 //!   尚未装载商人脚本（`Merchant.LoadScriptFile`，`Merchant.cs:1089`）⇒ [`RepairResult::goto_label`]
-//!   只回标签、由宿主登记「脚本未装载 ⇒ 无后续说词/帧」，见 `main.rs` 的 `handle_shop_cmd`。
+//!   只回标签、由宿主登记「脚本未装载 ⇒ 无后续说词/帧」，见 `lib.rs` 的 `handle_shop_cmd`。
 //! - 城堡税 `Castle.IncRateGold`/`CastleMgr.IncRateGold`（`Merchant.cs:1249/1384/1638`）：
 //!   ⑧ 家族未落地 ⇒ **条件照抄**、效果无目标对象（登记）。
 //!
@@ -100,7 +100,7 @@ pub const CANOT_GET_ITEMS_MSG: &str = "无法携带更多的东西!!!";
 /// 一条出帧（`MakeMessage` 后的 4 个数据字段 + 可选尾）；宿主用 `smframe::command_header` 落 12B 头。
 ///
 /// `tail` = **未编码原文**（GBK 字节，由 `downlink::gbk` 编），线上尾的 `EDCode.EncodeString`
-/// 在 `main.rs::emit_shop_frames` 统一施加（口径锚：`PlayObject.Socket.cs:26-43` 的 `SendDefMessage`）。
+/// 在 `lib.rs::emit_shop_frames` 统一施加（口径锚：`PlayObject.Socket.cs:26-43` 的 `SendDefMessage`）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShopFrame {
     pub ident: u16,
@@ -1340,7 +1340,7 @@ pub struct UpgradeOutcome {
     ///
     /// **657**：本接缝只回上面 5 帧；oracle `RecalcAbilitys` 尾段的 `SM_CHARSTATUSCHANGED(657)×2`
     /// （`PlayObject.cs:2874-2876`）由宿主在 `653` 与 `709` 之间按发送序插入，近邻支另行广播
-    /// （见 `main.rs::charstatuschanged_shop_frame` / `broadcast_charstatuschanged_except_self`）。
+    /// （见 `lib.rs::charstatuschanged_shop_frame` / `broadcast_charstatuschanged_except_self`）。
     pub frames: Vec<ShopFrame>,
     /// `GotoLable(...)` 的标签名（脚本未装载 ⇒ 不执行，只登记）。
     pub goto_label: Option<&'static str>,

@@ -1,6 +1,6 @@
 //! **接线批 A：会话/切图/装备光的出帧装配**（`crates/world` 的世界事件/session 状态 →
 //! `SM_*` body 与路由类别）。与 `downlink`（战斗/AOI）、`movewire`（走位）、`pickwire`（拾取）同层：
-//! 只做**纯装配**（无 I/O、无全局状态），供 `main.rs` 的 drain 段与进程级集成测试共用。
+//! 只做**纯装配**（无 I/O、无全局状态），供 `lib.rs` 的 drain 段与进程级集成测试共用。
 //!
 //! 本模块覆盖批 A 里**有真实触发链**的帧；逐帧的 oracle 发点与接线状态见 rationale：
 //!

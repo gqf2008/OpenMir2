@@ -866,7 +866,7 @@ fn parse_player_data_inner(bytes: &[u8]) -> PResult<PlayerRecord> {
 
 /// 解析 `LoadPlayerDataPacket` 的**全部 52 个 `CharacterData` 成员**（不足/成员数不符 ⇒ `None`）。
 ///
-/// **接线点（留给 m2-svr 车道，本卡不动 `main.rs`）**：DB 回包解出后用本函数取全字段，
+/// **接线点（留给 m2-svr 车道，本卡不动 `lib.rs`）**：DB 回包解出后用本函数取全字段，
 /// 替代 `parse_player_data_head` 只取头部；`encode_player_data` 是其逆。生产路径尚未调用，
 /// 故 `allow(dead_code)`——本文件的单测已全量覆盖。
 #[must_use]

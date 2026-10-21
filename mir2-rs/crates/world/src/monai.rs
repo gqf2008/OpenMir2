@@ -943,7 +943,7 @@ fn send_ref_msg_with_target(
 /// `Messages.RM_SPACEMOVE_FIRE`（`src/OpenMir2/Messages.cs:676` = 8062）——瞬移前
 /// `SendRefMsg(RM_SPACEMOVE_FIRE, 0, 0, 0, 0, "")`（`TeleMonster.cs:20`、`Khazard.cs:28/42`）。
 /// 收件人支 `PlayObject.Message.cs:1957-1966` 发 `SM_SPACEMOVE_HIDE(800)`；本层只产出
-/// [`MonsterRefMsg`]，宿主排水面归接线层（`bins/game-svr/src/main.rs` 的 drain 尚未列
+/// [`MonsterRefMsg`]，宿主排水面归接线层（`bins/game-svr/src/lib.rs` 的 drain 尚未列
 /// 该 ident ⇒ 本车道登记为未接线项）。
 pub const RM_SPACEMOVE_FIRE: u16 = 8062;
 

@@ -116,7 +116,7 @@
 //!   `ActorMgr.Get(GroupOwner).GroupMembers` 取）；探针已构造团长演员覆盖此支。
 //! - **非金币物品 `mapItem.UserItem == null`**：oracle 会 `userItem.Index` NRE（`PlayObject.Base.cs:101`）；
 //!   Rust 走"放回"（不 panic）。线上不可达（非金币地面物品必带 UserItem）。登记 T-20。
-//! - **收包接线**（把 `CM_PICKUP`/`CM_DROPITEM` 派发进世界循环）归 m2-svr 车道（`main.rs`/`smframe.rs`）。
+//! - **收包接线**（把 `CM_PICKUP`/`CM_DROPITEM` 派发进世界循环）归 m2-svr 车道（`lib.rs`/`smframe.rs`）。
 
 use crate::ability::{Ability, ItemCatalog};
 use crate::bag::{item_display_name, BagItem, Frame, MAX_BAG_ITEM};

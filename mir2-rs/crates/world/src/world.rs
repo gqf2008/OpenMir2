@@ -4512,7 +4512,7 @@ impl World {
     /// 返回本次挥砍抽出的攻击力（`GetBaseAttackPoewr` 的结果）；actor 不存在 ⇒ `None`。
     ///
     /// **接线（`bins/game-svr`，属 m2-svr 写集）**：`handle_hit_cmd` 在“前方格无目标”支目前
-    /// 只记日志（`main.rs` 的「只播动作帧（oracle `_Attack(null)` 返回 false）」支）⇒ 必须改调本方法；
+    /// 只记日志（`lib.rs` 的「只播动作帧（oracle `_Attack(null)` 返回 false）」支）⇒ 必须改调本方法；
     /// 否则 C# 侧那 115/120「有攻击命令、无目标」的 `atk_power_a/b` 两抽在 Rust 侧**整段缺失**
     /// （本片 .rs 侧归因，见 `M3RNG攻击路径三差归因报告-20261012.md`）。本 crate 不改 `bins/**`。
     #[must_use]

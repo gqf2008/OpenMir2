@@ -25,7 +25,7 @@
 #   npc_ai      非商人 NPC AI（GuildOfficial.Run）
 #   revive      复活/重生（BaseObject.ReAliveEx）
 #   homemap     落点/回城点（GetHomeInfo/GetRandHomeX/GetRandHomeY）
-#   startup     宿主启动期配置/种子（ServerConf.LoadConfig / game-svr main）
+#   startup     宿主启动期配置/种子（ServerConf.LoadConfig / game-svr 宿主 lib.rs）
 #   attack      攻击路径（由两侧攻击正则判定，组内不再细分；不写进本表）
 #   other       未归类（**表漂移信号**：`--require-closed` 下判红，拒给假绿）
 #
@@ -69,6 +69,7 @@ homemap	csharp	GetRandHomeY@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:143
 homemap	rust	bins/game-svr/src/homemap\.rs:	bins/game-svr/src/homemap.rs	落点/Home 计算
 startup	csharp	ServerConf\.LoadConfig@ServerConf\.cs:	src/Modules/SystemModule/Conf/ServerConf.cs:114	配置加载期抽数
 startup	rust	bins/game-svr/src/main\.rs:	bins/game-svr/src/main.rs	宿主启动期（seed/main 抽数）
+startup	rust	bins/game-svr/src/lib\.rs:	bins/game-svr/src/lib.rs	宿主启动期（seed/构造段屏障 A 抽数）；2026-10-21 单二进制搬迁后宿主代码在 lib.rs，main.rs 只剩三行薄包装——上一行（main.rs）保留以兼容搬迁前的历史 trace
 
 # ---- 窗口前置审计补登记（2026-10-13，本行追加在表末以免移动上方锚行行号）----------------
 # 宿主侧 `bins/game-svr/src/mongen.rs`（`create_monster_oracle` / `draw_monster_construct`）抽
@@ -111,9 +112,9 @@ merchant	csharp	BaseObject\.MapRandomMove@BaseObject\.cs:	src/M2Server/Actor/Bas
 # ---- 2026-10-17 追加（entershif 复验 must_fix②）：C# 进图前移位环的两抽补登记 ----
 # oracle `WorldServer.ProcessHumansMakeNewHuman`（WorldServer.cs:221；移位环 :375-387）在出生格不可走时
 # 每次 `CurrX = CurrX-3+Random(6)` / `CurrY = CurrY-3+Random(6)`（:380/:381）、至多 5 次，仍不可走则回落
-# `Config.HomeMap/HomeX/HomeY`。Rust 侧同两抽落 `bins/game-svr/src/main.rs`（已归 `startup`）；C# 侧原先无行
+# `Config.HomeMap/HomeX/HomeY`。Rust 侧同两抽落 `bins/game-svr/src/lib.rs`（已归 `startup`）；C# 侧原先无行
 # ⇒ `groups --side csharp --require-closed` 在「墙格出生登录」trace 上会报 UNCLASSIFIED。补一行归同组 `startup`。
-startup	csharp	WorldServer\.ProcessHumansMakeNewHuman@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:380	进图前移位环的两抽（:380/:381，至多 5 次；回落 HomeMap）；Rust 对应 main.rs 的 shift_enter_position（同组 startup）
+startup	csharp	WorldServer\.ProcessHumansMakeNewHuman@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:380	进图前移位环的两抽（:380/:381，至多 5 次；回落 HomeMap）；Rust 对应 lib.rs 的 shift_enter_position（同组 startup）
 
 # ---- 2026-10-17 追加：`magic_effect` 组（魔号 8/21 效果体接线）----------------------------
 #

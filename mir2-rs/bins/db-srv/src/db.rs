@@ -1088,7 +1088,7 @@ mod index_dup_tests {
             .expect("插入重复索引行失败（表上无 ChrName 唯一索引，应当允许）");
         }
 
-        // ---- 有重复 ⇒ `load_quick_lists`（main.rs 的启动路径）返回 Err，且信息含冲突键 ----
+        // ---- 有重复 ⇒ `load_quick_lists`（lib.rs 的启动路径）返回 Err，且信息含冲突键 ----
         let mut db = Db::connect(&dsn).await.expect("连测试库失败");
         let err = db
             .load_quick_lists()

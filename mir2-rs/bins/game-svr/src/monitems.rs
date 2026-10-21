@@ -10,7 +10,7 @@
 //!
 //! 本模块把两半合成 oracle 的 `LoadMonsterDB` 整体，作为**生产装载入口**（像 [`crate::items`]
 //! 之于 `stditems`）：供后续 `openmir2-m3-mongen-load-spawn`（刷怪）与
-//! `openmir2-m3-drop-exp-wiring`（死亡掉落）消费。**本卡不接线到 `main.rs`**（接线归后续卡，
+//! `openmir2-m3-drop-exp-wiring`（死亡掉落）消费。**本卡不接线到 `lib.rs`**（接线归后续卡，
 //! §0b：同一文件一次只动一路）。
 //!
 //! 失败口径（与 oracle 对齐，见 `attach_monitems` 文档）：

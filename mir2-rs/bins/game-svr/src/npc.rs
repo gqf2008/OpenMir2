@@ -2,7 +2,7 @@
 //!
 //! 本模块把 `crates/script` 的引擎（M4 已交付）接到 GameSvr 的**世界宿主**这一侧：
 //! 装载隐藏任务 NPC 的脚本、按 oracle 的 `NpcGotoLable` 口径进入 `GotoLable`，并把
-//! `GotoLableSendMerChantSayMsg` 的说词收成可下发帧。**本片不碰 `main.rs` 的会话接线**
+//! `GotoLableSendMerChantSayMsg` 的说词收成可下发帧。**本片不碰 `lib.rs` 的会话接线**
 //! （`SessionGround`/`World` → [`NpcPlayer`] 的映射、socket 下发）——那是第②片。
 //!
 //! # oracle 锚（逐行）

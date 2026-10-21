@@ -733,6 +733,9 @@ def cmd_selftest(args):
     RSP = "crates\\world\\src\\mongen.rs:624"
     RDR = "crates\\formula\\src\\drop.rs:109"
     RST = "bins\\game-svr\\src\\main.rs:2856"
+    # 2026-10-21 单二进制搬迁：宿主代码在 lib.rs ⇒ 真机 trace 的 startup 站点实型为 lib.rs
+    # （main.rs 只剩三行薄包装；RST 保留以覆盖搬迁前的历史 trace 夹具）。
+    RL = "bins\\game-svr\\src\\lib.rs:16202"
     RHM = "bins\\game-svr\\src\\homemap.rs:130"
     RMR = "crates\\world\\src\\merchant.rs:1"
 
@@ -740,6 +743,10 @@ def cmd_selftest(args):
     check("groups-table-valid", tbl.validate() == [], str(tbl.validate()[:2]))
     check("group-classify-csharp", tbl.group_of(W, "csharp") == "monster_ai",
           "W -> %s" % tbl.group_of(W, "csharp"))
+    check("group-classify-rust-lib-startup", tbl.group_of(RL, "rust") == "startup",
+          "RL -> %s" % tbl.group_of(RL, "rust"))
+    check("group-classify-rust-main-startup", tbl.group_of(RST, "rust") == "startup",
+          "RST -> %s" % tbl.group_of(RST, "rust"))
     check("group-classify-rust", tbl.group_of(RW, "rust") == "monster_ai",
           "RW -> %s" % tbl.group_of(RW, "rust"))
     check("group-classify-merchant-rust", tbl.group_of(RMR, "rust") == "merchant")

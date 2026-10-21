@@ -23,7 +23,7 @@
 //!
 //! # 会话态
 //!
-//! [`GuildSession`] 内嵌在宿主 `SessionGround`（`main.rs`）里，逐字段复刻 `PlayObject` 的
+//! [`GuildSession`] 内嵌在宿主 `SessionGround`（`lib.rs`）里，逐字段复刻 `PlayObject` 的
 //! `MyGuild` / `GuildRankNo` / `GuildRankName` / `AllowGuild` / `BanGuildChat`：
 //!
 //! - 默认 `guild_name=None, rank_no=0, rank_name="", allow_guild=false, ban_guild_chat=true`
@@ -119,7 +119,7 @@ impl Default for GuildSession {
 
 /// 宿主会话表里「取行会字段」的最小接缝。
 ///
-/// 生产实现是 `SessionGround`（`main.rs`）；测试实现是 `HashMap<String, GuildSession>`
+/// 生产实现是 `SessionGround`（`lib.rs`）；测试实现是 `HashMap<String, GuildSession>`
 /// （避免为用例复制整张 `SessionGround` 的 40+ 字段）。
 pub(crate) trait GuildSessions {
     fn guild(&self, chr_name: &str) -> Option<&GuildSession>;

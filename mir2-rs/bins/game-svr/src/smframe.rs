@@ -30,7 +30,7 @@
 //! - 服务器配置：`11029` 的 `ClientConf`、`5008` 的元宝/金币名、`811` 的三段能力模板（配置层）。
 //!   （`658` 的公告已在本片接线，见 `notice.rs`；不再是缺输入项。）
 //!
-//! 生产路径当前下发 `658`（公告，见 `notice.rs`）+ 输入齐备的 `SM_NEWMAP`（见 `main.rs`）；
+//! 生产路径当前下发 `658`（公告，见 `notice.rs`）+ 输入齐备的 `SM_NEWMAP`（见 `lib.rs`）；
 //! 其余帧由 [`EnterWorldInputs::frames`] 在输入补齐后按同一顺序产出。
 
 use crate::msgqueue::NetPriorityQueue;
@@ -268,7 +268,7 @@ pub fn sm_healthspellchanged(recog: i32, hp: u16, mp: u16, max_hp: u16) -> Vec<u
 /// 未设/其它（含 `1`/`true`）⇒ **冻结客户端布局**（52 的 58B `TAbility` + 53 的 `TCharDesc` 尾
 /// + 31 的 `SM_STRUCK` `param/tag` 拆 HP、尾 `Param1`=MaxHP）。
 ///
-/// 这是全仓唯一真源：`bins/game-svr/src/main.rs::mir2_client_ability_layout()` 只是本函数的别名。
+/// 这是全仓唯一真源：`bins/game-svr/src/lib.rs::mir2_client_ability_layout()` 只是本函数的别名。
 /// 真机约定（`openmir2-client-e2e-enter-gaps`，证据 `61-*`）：客户端 `MirClient@c61d912d`
 /// 在 `Source/Common/Grobal2.pas:39` 写死 `HIGHHP = True` ⇒ 52/53/31 都必须按客户端记录布局发，
 /// 否则客户端把能力/血量读成 0（HUD `0/0`、`CanRun(HP>=10)` 拒绝跑；受击后血条错乱）。

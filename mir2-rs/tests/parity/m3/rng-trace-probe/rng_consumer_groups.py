@@ -564,6 +564,12 @@ _SELFTEST_CASES = (
     ("rust", "crates/world/src/monai.rs:171", False, "monster_ai"),
     ("rust", "crates/formula/src/drop.rs:100", False, "drop"),
     ("rust", "bins/game-svr/src/main.rs:2884", False, "startup"),
+    # 2026-10-21 单二进制搬迁：宿主代码在 lib.rs（main.rs 只剩三行薄包装）⇒ 真机站点记
+    # `bins\game-svr\src\lib.rs:NNNN`。两行都归 `startup`：
+    # main.rs 行兼容历史 trace，lib.rs 行覆盖搬迁后真机站点（否则 `--require-closed` 会
+    # UNCLASSIFIED ⇒ 下个 R 窗口假漂移）。
+    ("rust", "bins\\game-svr\\src\\lib.rs:16202", False, "startup"),
+    ("rust", "bins/game-svr/src/lib.rs:16202", False, "startup"),
     ("rust", "crates/world/src/combat.rs:758", True, "attack"),
     ("rust", "bins/game-svr/src/not_in_table.rs:1", False, OTHER_GROUP),   # 未登记 ⇒ other（漂移信号）
     # MB-3b F3：`ScultureKingMonster.CallSlave` 的 `Random(4)`（:47）是 **AI 取数**（Rust 站点
@@ -575,6 +581,7 @@ _SELFTEST_CASES = (
 )
 
 _HOST_ROW_PATTERN = "bins/game-svr/src/mongen\\.rs:"
+_HOST_LIB_ROW_PATTERN = "bins/game-svr/src/lib\\.rs:"
 
 
 def selftest():
@@ -599,6 +606,19 @@ def selftest():
     mutated = GroupsTable(rows, table.path + "#mut-host")
     got = classify("bins/game-svr/src/mongen.rs:289", "rust", mutated, lambda s, sd: False)
     check("mutation-host-site-becomes-other", got == OTHER_GROUP, "got=%s" % got)
+
+    # 改坏必红①b（2026-10-21 搬迁牙）：删掉宿主 **lib.rs** 行 ⇒ 搬迁后的真机站点必须落 `other`
+    # （证明新行承重；只保留 main.rs 行不够——搬迁后 trace 记的是 lib.rs）。
+    rows_lib = [r for r in table.rows if r[2].pattern != _HOST_LIB_ROW_PATTERN]
+    check("mutation-host-lib-row-removed", len(rows_lib) == len(table.rows) - 1,
+          "删掉 %d 行" % (len(table.rows) - len(rows_lib)))
+    mutated_lib = GroupsTable(rows_lib, table.path + "#mut-host-lib")
+    lib_site = "bins\\game-svr\\src\\lib.rs:16202"
+    check("mutation-host-lib-group-of-none",
+          mutated_lib.group_of(lib_site, "rust") is None,
+          "got=%s" % mutated_lib.group_of(lib_site, "rust"))
+    got = classify(lib_site, "rust", mutated_lib, lambda s, sd: False)
+    check("mutation-host-lib-site-becomes-other", got == OTHER_GROUP, "got=%s" % got)
 
     # 改坏必红②：删掉 CORE 组（merchant/csharp）⇒ validate 必须点名。
     rows2 = [r for r in table.rows if not (r[0] == "merchant" and r[1] == "csharp")]

@@ -54,7 +54,7 @@
 //! `MerchantInitialize`/`NpCinitialize`（`WorldServer.Merchant.cs`）的静默 `RemoveAt` **逐条同形**。
 //! **登记一处潜在日志差异（真机 0 移除 ⇒ 两侧都无该日志、当前不可观测）**：oracle 逐条
 //! `LogService.Warn("Merchant/Npc Initalize fail..."+名+图+坐标)`；宿主只打**一条** `INF` 汇总
-//! （`bins/game-svr/src/main.rs` 的「挂图失败 {} 条」），**无逐条 WRN**。语料若变化须复核本行。
+//! （`bins/game-svr/src/lib.rs` 的「挂图失败 {} 条」），**无逐条 WRN**。语料若变化须复核本行。
 //!
 //! ### ③ 走位碰撞牙（进程级）
 //!
@@ -329,8 +329,8 @@ pub struct EnterShift {
 /// - 回落**不再判** `CanWalk`、**不再抽数**（oracle 同形：`Config.HomeX/HomeY` 原样落点）。
 ///
 /// `#[track_caller]`：RNG trace 站点归组见 `tests/parity/m3/rng-trace-probe/consumer_groups.tsv`
-/// 的 `startup` 组（Rust 侧登记为 `bins/game-svr/src/main.rs:`）。本函数由宿主 `sim_loop` 调用，
-/// 传播调用点后站点落在 `main.rs`，**不新增未登记组**（与 `crates/world` 的 `#[track_caller]` 先例同法）。
+/// 的 `startup` 组（Rust 侧登记为 `bins/game-svr/src/lib.rs:`）。本函数由宿主 `sim_loop` 调用，
+/// 传播调用点后站点落在 `lib.rs`，**不新增未登记组**（与 `crates/world` 的 `#[track_caller]` 先例同法）。
 #[must_use]
 #[track_caller]
 pub fn shift_enter_position(

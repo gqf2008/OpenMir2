@@ -86,7 +86,7 @@ impl UserList {
     /// **Trim 口径照 oracle `:318-319`**：`gateUser.Account = sAccount.Trim()` / `ChrName = sChrName.Trim()`
     /// ⇒ 这里存的 `Account`/`ChrName` 是 **trim 过**的。
     /// 注意**不能**把同一口径搬到 `LoadDBInfo`：oracle `:325-326` 给 `LoadDBInfo.Account/ChrName` 的是
-    /// `sAccount`/`sChrName` **原值**（未 trim）⇒ `main.rs` 里发给 DBSvr 的取角色请求用未 trim 原值。
+    /// `sAccount`/`sChrName` **原值**（未 trim）⇒ `lib.rs` 里发给 DBSvr 的取角色请求用未 trim 原值。
     ///
     /// 进世界（`in_world`）由 S2b-3 在取到角色后置真。
     ///

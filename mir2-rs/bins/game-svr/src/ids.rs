@@ -148,7 +148,7 @@ fn get_passwd_success(body: &str, store: &mut AdmissionStore) {
 /// （= 第二段）当 sessionId（首段给 `sC` 后丢弃）。
 ///
 /// 删到会话后还要接**账号级顶号**（`DelSession` 的下一句 `NetChannel.KickUser`，`:319`）：
-/// 把被删的账号/会话号交给 sim 线程去发 `SM_SYSMESSAGE` + 软关旧会话（见 `main.rs::handle_kick_account`）。
+/// 把被删的账号/会话号交给 sim 线程去发 `SM_SYSMESSAGE` + 软关旧会话（见 `lib.rs::handle_kick_account`）。
 fn get_cancel_admission(body: &str, store: &mut AdmissionStore, kicks: &mut Vec<KickRequest>) {
     let (_account, session_id_str) = get_valid_str3(body, &DIV);
     let session_id = str_to_int(&session_id_str, 0);
