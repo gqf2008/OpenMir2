@@ -142,8 +142,12 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
         }
         // `MagicMonster` ctor（`MagicMonster.cs:7-16`）：`ViewRange = 8`、`DupMode = false`、
         // `ThinkTick/SearchTick = now`（＝字段缺省，由 seed 落定）、`SearchTime = 3000+Random(2000)`
-        // （抽数字段）、`Race = 215`。`FireballMonster` 子类 ctor 不改这些字段。
-        215 => entity.view_range = 8,
+        // （抽数字段）、`Race = 215`。`FireballMonster` 子类 ctor **另**置
+        // `SpellTick = GetTickCount()`（`FireballMonster.cs:10`，覆盖 `BaseObject.cs:449` 的 0）。
+        215 => {
+            entity.view_range = 8;
+            entity.spell_tick = i32::try_from(now).unwrap_or(i32::MAX);
+        }
         // `ZilKinZombi` ctor（`ZilKinZombi.cs:14`）：`ViewRange = 6`。
         96 => entity.view_range = 6,
         // `CentipedeKingMonster`（`: StickMonster`）ctor（`CentipedeKingMonster.cs:11-18`）：
@@ -175,10 +179,17 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
             entity.char_status_ex = 0x0000_0001; // PoisonState.STONEMODE
             entity.ai.dir = 5;
         }
-        // `SandMobObject` 只覆盖 ComeOutValue（`SandMobObject.cs:11`；基类 AttackRange=4）。
+        // `SandMobObject`（`: StickMonster`）ctor（`SandMobObject.cs:9-12`）：先继承
+        // `StickMonster` 的 `ViewRange=7/FixedHideMode=true/StickMode=true/Animal=true`
+        // 与 `ComeOutValue=4/AttackRange=4`，本类只覆盖 `ComeOutValue = 8`。
+        // `_mDwAppearStart` 是 `int` 缺省 0（`Entity::appear_start_tick`）。
         132 => {
             entity.come_out_value = 8;
             entity.attack_range = 4;
+            entity.view_range = 7;
+            entity.fixed_hide_mode = true;
+            entity.stick_mode = true;
+            entity.ai.animal = true;
         }
         // **MB-7**：`ElfMonster` ctor（`ElfMonster.cs:15-22`）：`ViewRange=6`、
         // `FixedHideMode=true`、`NoAttackMode=true`、`BoIsFirst=true`。
@@ -208,8 +219,23 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
         // `MagicMonObject.cs:15` / `ElectronicScolpionMon.cs:12`：显式落 ctor 值
         // （与字段缺省同值，保留以钉住“类 ctor 有此赋值”这一事实）。
         133 | 200 => entity.use_magic = false,
-        // `SoccerBall.cs:15`。
-        120 => entity.n550 = 0,
+        // `SoccerBall` ctor（`SoccerBall.cs:11-16`）：`Animal = false`、`SuperMan = true`、
+        // `N550 = 0`、`TargetX = -1`（`AnimalObject` 缺省 `Animal = true` 被本类显式关掉）。
+        120 => {
+            entity.ai.animal = false;
+            entity.super_man = true;
+            entity.n550 = 0;
+            entity.ai.target_x = -1;
+        }
+        // **MB-8（R42）**：`WhiteSkeleton` ctor（`WhiteSkeleton.cs:15-22`）：`BoIsFirst = true`、
+        // `FixedHideMode = true`、`ViewRange = 6`（`Race = ActorRace.WhiteSkeleton` 即 100，
+        // 由 `MonsterInfo.Race` 落定）。`RecalcAbilitys` 覆写见
+        // `crate::slave::apply_derived_slave_recalc`（`NextHitTime`/`WalkSpeed`/`WalkTick`）。
+        100 => {
+            entity.bo_is_first = true;
+            entity.fixed_hide_mode = true;
+            entity.view_range = 6;
+        }
         // `ArcherGuard` ctor（`ArcherGuard.cs:12-19`）：`ViewRange=12`、`WantRefMsg=true`、
         // `GuardDirection=-1`、`Castle=null`（字段缺省）；`ArcherPolice`（race 20）继承同一 ctor。
         20 | 112 => {

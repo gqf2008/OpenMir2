@@ -894,6 +894,11 @@ pub struct Entity {
     /// 入土/换形计时；ctor 无显式初值（`int` 缺省 0），`AppearNow()` 与
     /// `Run` 的 `boChangeFace == false` 支刷新（`ElfWarriorMonster.cs:22/162`）。
     pub dig_down_tick: i64,
+    /// **MB-8（R33）**：`SandMobObject._mDwAppearStart`（`SandMobObject.cs:9`，`int` 缺省 0）——
+    /// 「血量回满后开始下潜」的起算时刻。`FixedHideMode` 支 `HP > MaxHP/20 && CheckComeOut()`
+    /// 时写 `GetTickCount()`；`!FixedHideMode` 支的 `(now - _mDwAppearStart) > 3000` 门读它。
+    /// 非 race 132 保持 C# 字段缺省 0。
+    pub appear_start_tick: i64,
     /// C# `GuardUnit.GuardDirection`（`sbyte`，`GuardUnit.cs:16`，无显式初值 ⇒ 0）；
     /// `ArcherGuard` ctor `ArcherGuard.cs:17` 置 **-1**（`ArcherPolice` 继承）。
     /// 运行期城堡守卫由 `UserCastle.cs:187` 改 3（未建模，登记）。
@@ -1115,6 +1120,7 @@ impl Entity {
             // 字段缺省照 C# `bool` = false。`DigDownTick` 是 `int` 缺省 0。
             bo_is_first: false,
             dig_down_tick: 0,
+            appear_start_tick: 0,
             // 专用怪 ctor 类常量（PR-2）：`Entity` 是 C# 各怪物类的公共载体，这里落
             // **C# 字段缺省**（`int`/`sbyte` 0、`bool` false）；派生类 ctor 的实际常量
             // （StickMonster 4/4、CentipedeKing 4/6、SandMob 8/4、BoneKing/ScultureKing 5、
