@@ -1329,6 +1329,32 @@ pub struct EnterWorldInputs {
     /// `PayMent == 3`（`TestServer || ServiceMode` 覆盖后的值，`PlayObject.cs:1145-1148`）：
     /// 第四条 `SysMsg`（`NowIsFreePlayMode`）的入队门（`:1417-1420`）。
     pub pay_ment_three: bool,
+    /// **`openmir2-login-charstatus-657`**：`RecalcAbilitys()` 收尾两条 `RM_CHARSTATUSCHANGED`
+    /// 的载荷 `(CharStatus, PlayObject.HitSpeed)`。
+    ///
+    /// # oracle 口径（`PlayObject.cs:2874-2876`）
+    ///
+    /// ```text
+    /// CharStatus = GetCharStatus();
+    /// StatusChanged();                                                   // ⇒ SendRefMsg(RM_CHARSTATUSCHANGED, 0, CharStatus, 0, 0, "")
+    /// SendUpdateMsg(Messages.RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, 0, 0, "");
+    /// ```
+    ///
+    /// - `StatusChanged()`（`BaseObject.cs:1514-1517`）= `SendRefMsg` ⇒ ±`SendRefMsgRange` 格内
+    ///   **`Race==Play && !Ghost` 的玩家**（`BaseObject.Message.cs:383-444`，**含自己**）各来一条；
+    /// - `SendUpdateMsg`（`BaseObject.Message.cs:283-303`）的「去重」扫用 `TryPeek` 且**不前进**
+    ///   （每次只看同一个队首），而队列头是 `RM_LOGON` ⇒ 去重恒不命中 ⇒ 追加一条，收件人只有自己。
+    ///
+    /// ⇒ **自己两条、同屏近邻一条**；两条字节完全相同
+    /// （`PlayObject.Message.cs:1846`：`SendDefMessage(657, ActorId, LoWord(nParam1), HiWord(nParam1),
+    /// this.HitSpeed)`，末参是**收件人自己**的 `HitSpeed`）。
+    ///
+    /// 2026-10-23 真机（`docs/window-round2-result-20261023.md` §4）：C# 在 `654` 之后发
+    /// `657,657`（`Recog=自己, Param=0, Tag=0, Series=0`），Rust 一条都没有（W2-1）。
+    ///
+    /// `None` = 输入缺失（两条槽位**仍占堆**、出队不产帧并登记）：绝不因缺 `CharStatus/HitSpeed`
+    /// 少占位（堆布局会变），也绝不猜字节。
+    pub char_status: Option<(i32, u16)>,
 }
 
 /// 登录 `UserLogon` 的 3+1 条 `SysMsg`（`PlayObject.cs:1342-1383` 的攻击模式/帮助/欢迎语 +
@@ -1396,7 +1422,8 @@ enum LoginQueued {
     /// `RM_LOGON`：`SendPriorityMsg(..., MessagePriority.High)` ⇒ 优先级 0。
     Logon,
     /// `RM_CHARSTATUSCHANGED(10139)`：`StatusChanged()` 与 `SendUpdateMsg` 各一条，优先级 155；
-    /// 两条都会产 `SM_CHARSTATUSCHANGED(657)`，本输入集不建模 657 的尾 ⇒ 只占堆位。
+    /// 出队时**各产一条** `SM_CHARSTATUSCHANGED(657)`（`PlayObject.cs:2874-2876`；
+    /// 载荷 = [`EnterWorldInputs::char_status`]，缺输入时只占堆位）。
     CharStatusChanged,
     /// 登录 `SysMsg(..., MsgColor, MsgType.Hint)` ⇒ `BaseObject.SysMsg` 走 `SendMsg(RM_SYSMESSAGE)`
     /// ⇒ 优先级 `(byte)RM_SYSMESSAGE = 252`。
@@ -1506,7 +1533,8 @@ impl EnterWorldInputs {
     ///
     /// 本函数按上面的**完整入队内容**跑四叉堆，出队序恰为
     /// `LOGON,52,752,621,211,811,46,654,657×2,42,100×4`，三组输入逐项命中
-    /// （`657×2` 只占槽位；其字节未建模）。
+    /// （`657×2` 是两条 `SM_CHARSTATUSCHANGED`，载荷见 [`EnterWorldInputs::char_status`]，
+    /// 真机 2026-10-23 实测 `654,657,657,42`）。
     /// 关键在**队列内容**：两条 `RM_CHARSTATUSCHANGED`、`RM_USERNAME`、第四条 `SysMsg`
     /// 决定 `RemoveRootNode` 回填根的元素，能把 `811/46` 的相对序翻过来（这正是旧模型
     /// 在「621/211 出帧」时预测错的原因）。
@@ -1819,10 +1847,23 @@ impl EnterWorldInputs {
                         ));
                     }
                 }
-                // 以下两条只占堆位：两条 RM_CHARSTATUSCHANGED 会产 657，但其字节
-                // （CharStatus/HitSpeed）未在本输入集建模（登记 `openmir2-login-frame-order`）；
-                // 其他 actor 的出现槽由 AOI 侧产帧。
-                LoginQueued::CharStatusChanged | LoginQueued::OtherAppear => {}
+                // **`openmir2-login-charstatus-657`**：两条 `RM_CHARSTATUSCHANGED` 各产一条
+                // `SM_CHARSTATUSCHANGED(657)`（`PlayObject.Message.cs:1845-1846`：
+                // `SendDefMessage(657, ActorId, LoWord(nParam1), HiWord(nParam1), this.HitSpeed)`）。
+                // 收件人都是自己（`StatusChanged` 的 `SendRefMsg` 含自己 + `SendUpdateMsg` 仅自己），
+                // 两条字节因此相同：`(CharStatus, 自己 HitSpeed)`。
+                // 缺输入 ⇒ 槽位照占、不产帧（`None` 分支）。
+                LoginQueued::CharStatusChanged => {
+                    if let Some((status, hit_speed)) = self.char_status {
+                        out.push(crate::smframe_ext::sm_charstatuschanged(
+                            self.actor_id,
+                            status,
+                            hit_speed,
+                        ));
+                    }
+                }
+                // 其他 actor 的出现槽只占堆位（帧由 AOI 侧下发）。
+                LoginQueued::OtherAppear => {}
             }
         }
         let at = split_at.unwrap_or(out.len());
@@ -2625,6 +2666,8 @@ mod tests {
             login_sys_msgs: Default::default(),
             test_server: true,
             pay_ment_three: true,
+            // 金标准 16 条抓包截到 `10`，不含 `657`（重启前的旧抓包）⇒ 不给输入（槽位仍占堆）。
+            char_status: None,
         }
     }
 
@@ -2802,6 +2845,8 @@ mod tests {
             login_sys_msgs: Default::default(),
             test_server: true,
             pay_ment_three: true,
+            // `RecalcAbilitys` 的两条 657 载荷（`CharStatus=0`、`HitSpeed=0`：金标准/真机同值）。
+            char_status: Some((0, 0)),
         };
         let got: Vec<u16> = inputs
             .frames()
@@ -2816,6 +2861,8 @@ mod tests {
                 52, 752, 621, 211, 811,
                 46, // 六条的堆序（High: 52,752,621,211；Normal: 811,46）
                 10, 654, // 非队列 SM_TURN，随后 CHANGELIGHT
+                657,
+                657, // `StatusChanged()`（SendRefMsg，含自己）+ `SendUpdateMsg`（仅自己）
                 42,  // `RefShowName` 的 RM_USERNAME 出队（165），与首条 42 同字节
             ],
             "模型 D：源码入队序 52,752,811,46,621,211 + 完整队列内容 → 出队 52,752,621,211,811,46"
@@ -2856,6 +2903,10 @@ mod tests {
             login_sys_msgs: Default::default(),
             test_server: true,
             pay_ment_three: true,
+            // 2026-10-23 真机（`docs/window-round2-result-20261023.md` §4）：
+            // C# 在 `654` 之后发 `657,657`，字段 `Recog=自己, Param=0, Tag=0, Series=0`
+            // ⇒ `(CharStatus=0, HitSpeed=0)`。
+            char_status: Some((0, 0)),
         }
     }
 
@@ -2872,8 +2923,11 @@ mod tests {
             .collect();
         assert_eq!(
             got,
-            vec![658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46, 654, 42],
-            "无装备无技能：621/211 空尾门关（槽位仍占位），52,752,811,46,654"
+            vec![
+                658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46, 654, 657,
+                657, 42
+            ],
+            "无装备无技能：621/211 空尾门关（槽位仍占位），52,752,811,46,654,657,657,42"
         );
     }
 
@@ -2890,9 +2944,9 @@ mod tests {
             got,
             vec![
                 658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 621, 811, 46, 654,
-                42
+                657, 657, 42
             ],
-            "有武器无技能：621 出帧、211 空尾 ⇒ 52,752,621,811,46,654"
+            "有武器无技能：621 出帧、211 空尾 ⇒ 52,752,621,811,46,654,657,657,42"
         );
     }
 
@@ -2908,9 +2962,9 @@ mod tests {
             got,
             vec![
                 658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 621, 211, 811, 46,
-                654, 42
+                654, 657, 657, 42
             ],
-            "有武器有技能：621/211 都出帧 ⇒ 52,752,621,211,811,46,654,42（第二条 42 = RefShowName）"
+            "有武器有技能：621/211 都出帧 ⇒ 52,752,621,211,811,46,654,657,657,42（第二条 42 = RefShowName）"
         );
     }
 
@@ -3094,8 +3148,13 @@ mod tests {
         );
         assert_eq!(
             ids(&after),
-            vec![messages::SM_CHANGELIGHT, messages::SM_USERNAME],
-            "after 段 = 654 → RefShowName 的第二条 42"
+            vec![
+                messages::SM_CHANGELIGHT,
+                messages::SM_CHARSTATUSCHANGED,
+                messages::SM_CHARSTATUSCHANGED,
+                messages::SM_USERNAME
+            ],
+            "after 段 = 654 → 两条 657（`StatusChanged` + `SendUpdateMsg`）→ RefShowName 的第二条 42"
         );
 
         // 有会：750（优先级 61）同属 after，且必须仍在 654 之前。
@@ -3241,7 +3300,14 @@ mod tests {
             .map(|x| u16::from_le_bytes([x[4], x[5]]))
             .collect();
         assert_eq!(idents[0], messages::SM_CHANGELIGHT, "after 以 654 开头");
-        assert_eq!(idents[1], messages::SM_USERNAME, "654 之后是第二 42");
+        // 654 → 657,657（`StatusChanged()` + `SendUpdateMsg`）→ 第二 42。
+        assert_eq!(
+            idents[1],
+            messages::SM_CHARSTATUSCHANGED,
+            "654 之后是两条 657"
+        );
+        assert_eq!(idents[2], messages::SM_CHARSTATUSCHANGED, "657 恰两条");
+        assert_eq!(idents[3], messages::SM_USERNAME, "两条 657 之后才是第二 42");
         assert_eq!(
             idents
                 .iter()
@@ -3310,7 +3376,9 @@ mod tests {
                 .map(|x| u16::from_le_bytes([x[4], x[5]]))
                 .collect();
             assert_eq!(tail[0], messages::SM_CHANGELIGHT, "槽数 {n}");
-            assert_eq!(tail[1], messages::SM_USERNAME, "槽数 {n}");
+            assert_eq!(tail[1], messages::SM_CHARSTATUSCHANGED, "槽数 {n}");
+            assert_eq!(tail[2], messages::SM_CHARSTATUSCHANGED, "槽数 {n}");
+            assert_eq!(tail[3], messages::SM_USERNAME, "槽数 {n}");
             assert_eq!(
                 tail.iter()
                     .filter(|x| **x == messages::SM_SYSMESSAGE)
@@ -3347,12 +3415,12 @@ mod tests {
             ids,
             vec![
                 658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 621, 211, 811, 46,
-                654, 42
+                654, 657, 657, 42
             ],
-            "无会路径的帧序必须一字不改（654 后跟随 `RefShowName` 的第二条 42）"
+            "无会路径的帧序必须一字不改（654 后是两条 657，再 `RefShowName` 的第二条 42）"
         );
         // 金标准里 654 之前的帧序也未被 750 模型影响。
-        assert_eq!(ids.len(), 19);
+        assert_eq!(ids.len(), 21);
     }
 
     /// `SM_ATTACKMODE` 的模式在 **`Recog`**（oracle `Messages.cs:846-857` 的参序）；

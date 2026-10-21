@@ -11003,6 +11003,7 @@ fn drain_login_tail(
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     pending: &mut std::collections::HashMap<String, smframe::EnterWorldInputs>,
+    range: i32,
 ) -> usize {
     let mut sent = 0usize;
     let mut finished: Vec<String> = Vec::new();
@@ -11052,12 +11053,23 @@ fn drain_login_tail(
             .collect();
         if let Some(inputs) = pending.get(&chr) {
             let (_, after) = inputs.frames_split_with_others(&others);
+            let char_status = inputs.char_status.map(|(status, _)| status);
             for body in after {
                 let _ = tx.send(SimToGate::SendFrame {
                     socket: entry.socket,
                     body,
                 });
                 sent += 1;
+            }
+            // **`openmir2-login-charstatus-657`**：`StatusChanged()` 的 `SendRefMsg` 还给
+            // ±`SendRefMsgRange` 格内**其他玩家**各一条 657（自己的两条已随 `after` 走）。
+            // oracle 在 `RecalcAbilitys()` 里**即时**把消息投进各收件人的队列（`BaseObject.Message.cs:383-444`），
+            // 收件人在各自的下一次 `Run()` 出队 ⇒ 本宿主在同一批次（登录延迟段）补发。
+            // 收件人的 `Series` 由 [`broadcast_charstatuschanged_except_self`] 读**收件人自己**的 `HitSpeed`。
+            if let Some(status) = char_status {
+                broadcast_charstatuschanged_except_self(
+                    world, online, gates, actor_id, status, range,
+                );
             }
         }
         finished.push(chr);
@@ -12202,7 +12214,7 @@ fn drain_run_downlinks_with_magic(
     // **lane654**：登录队列 `after` 段（654/42/100）在**出现帧之后**补发（oracle 同一
     // `Run()` 里 17 < 153 < 165 < 252 的出队序），且在任何体力/魔力段帧之前。
     if let Some(pending) = login_tails {
-        drain_login_tail(world, online, gates, pending);
+        drain_login_tail(world, online, gates, pending, range);
     }
     drain_stamina(
         sessions,
@@ -17255,6 +17267,13 @@ fn sim_loop(
                                                 }
                                                 // 帧 50/41/213 的输入（`PlayObject.SendLogon()`，
                                                 // `PlayObject.cs:1128-1147`）：同组连发三条，缺则三条一起跳过。
+                                                //
+                                                // **`openmir2-login-charstatus-657`**：`CharStatus` 是
+                                                // **同一份** `GetCharStatus()` 输出，登录态两处都读它
+                                                // （`SendLogon` 的 `MessageBodyWL` 与 `RecalcAbilitys` 尾的
+                                                // `CharStatus = GetCharStatus()`）⇒ 这里算一次，两处共用，
+                                                // 防止 `50` 尾与两条 `657` 的 `Param/Tag` 漂移。
+                                                let login_char_status: i32 = 0;
                                                 let logon = data.map(|d| enter::LogonInputs {
                                                     feature: enter::FeatureInputs {
                                                         dress_shape,
@@ -17271,7 +17290,7 @@ fn sim_loop(
                                                     // | (CharStatusEx & 0xFFFF)`；会话初生无 buff、`CharStatusEx=0`
                                                     // （`BaseObject.cs:393`）⇒ 0。buff 系统未移植 ⇒ 记 0 并登记
                                                     // （金标准 #3 的 `CharStatus == 0` 印证）。
-                                                    char_status: 0,
+                                                    char_status: login_char_status,
                                                     // `WorldServer.cs:1146`：`AllowGroup = 记录 allow_group > 0`。
                                                     allow_group: d.allow_group > 0,
                                                     // `WorldServer.cs:1147`：`AttatckMode = (AttackMode)记录 attatck_mode`。
@@ -17382,10 +17401,22 @@ fn sim_loop(
                                                     // “客户端血条/负重为 0 是服务端没发/发错，还是客户端解析”一类的真机定位——
                                                     // 只读日志，不改任何模拟/出帧语义。
                                                     log_enter_ability(&head.chr_name, &out);
+                                                    // **`openmir2-login-charstatus-657`**：`RecalcAbilitys`
+                                                    // 尾段（`PlayObject.cs:2874-2876`）的
+                                                    // `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(…)`
+                                                    // ⇒ 登录队列里那两条 `RM_CHARSTATUSCHANGED` 的载荷
+                                                    // `(CharStatus, 自己的 HitSpeed)`。`HitSpeed` 取本次重算的
+                                                    // `AddAbil.HitSpeed`（`:2899`，与写进实体的同一值）。
+                                                    inputs.char_status =
+                                                        Some((login_char_status, out.hit_speed));
                                                     // M3②③ k=2 收口：同一份 `RecalcAbilitys` 输出**同时**写进世界实体
                                                     // （此前只喂 52/752 帧，实体属性仍是 `Entity::new` 的空值）。
                                                     if let Some(e) = world.entities.get_mut(id) {
                                                         apply_ability_to_entity(e, &out.wabil, &out.sub, out.hit_speed);
+                                                        // oracle `CharStatus = GetCharStatus()` 的落账
+                                                        // （`BaseObject.cs:56` 的 `CharStatus` 缓存；657 的
+                                                        // `Param/Tag` 与 `SM_DIGUP` 尾的 `Status` 都读它）。
+                                                        e.char_status = login_char_status;
                                                         // **PL-1 / P32**：登录时已戴复活戒指 ⇒ `Revival=true`
                                                         // （oracle 在 `RecalcAbilitys` 里置位，粘滞）。
                                                         if out.revival {
@@ -19609,7 +19640,7 @@ mod tests {
         // 未扫描（search_tick 落后于本 tick 时钟）⇒ 不发、缓冲保留。
         world.entities.get_mut(id).unwrap().ai.search_tick = world.clock_ms - 1;
         assert_eq!(
-            drain_login_tail(&world, &online, &gates, &mut pending),
+            drain_login_tail(&world, &online, &gates, &mut pending, 12),
             0,
             "未扫描的 tick 不得先发 654"
         );
@@ -19617,7 +19648,10 @@ mod tests {
 
         // 本 tick 扫描 ⇒ 654 下发，缓冲清空。
         world.entities.get_mut(id).unwrap().ai.search_tick = world.clock_ms;
-        assert_eq!(drain_login_tail(&world, &online, &gates, &mut pending), 1);
+        assert_eq!(
+            drain_login_tail(&world, &online, &gates, &mut pending, 12),
+            1
+        );
         assert!(pending.is_empty(), "补发后必须清缓冲");
         match rx0.try_recv().expect("654") {
             SimToGate::SendFrame { socket, body } => {
@@ -19647,7 +19681,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(drain_login_tail(&world, &online, &gates, &mut pending), 0);
+        assert_eq!(
+            drain_login_tail(&world, &online, &gates, &mut pending, 12),
+            0
+        );
         assert!(pending.is_empty(), "掉线会话的延迟段必须作废");
     }
 
@@ -19678,7 +19715,7 @@ mod tests {
             .find("let aoi_frames = drain_aoi_downlink(world, displays, online, gates);")
             .expect("AOI 下行调用");
         let tail = src
-            .find("drain_login_tail(world, online, gates, pending);")
+            .find("drain_login_tail(world, online, gates, pending, range);")
             .expect("延迟段补发调用");
         let stamina = src
             .find("    drain_stamina(\n        sessions,")
@@ -49732,6 +49769,195 @@ mod tests {",
             gnp_idents(&me),
             vec![202, 750, 762, 622, 653, 42],
             "GuildOfficial（type 1）⇒ 正常建会帧序"
+        );
+    }
+    // ==================================================================================
+    // **卡 `openmir2-login-charstatus-657`**（tier=R，W2-1）：登录 `654` 之后的两条 657
+    // ==================================================================================
+
+    /// 登录延迟段的 657 判据夹具：一个已进世界并「本 tick 扫过」的玩家 + 一条在线网关。
+    #[allow(clippy::type_complexity)]
+    fn login_657_fixture() -> (
+        mir2_world::World,
+        i32,
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        HashMap<String, smframe::EnterWorldInputs>,
+    ) {
+        let mut world = mir2_world::World::new(32, 32);
+        world.open_session("p");
+        let id = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        world.entities.get_mut(id).unwrap().ai.search_tick = world.clock_ms;
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".into(),
+            chr_name: "p".into(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 901,
+            actor_id: id,
+        }];
+        let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut pending: HashMap<String, smframe::EnterWorldInputs> = HashMap::new();
+        pending.insert(
+            "p".to_string(),
+            smframe::EnterWorldInputs {
+                actor_id: id,
+                changelight: Some((0, game_svr::sessionwire::N_CLIENT_KEY_DEFAULT)),
+                char_status: Some((0, 0)),
+                ..Default::default()
+            },
+        );
+        (world, id, online, gates, rx0, pending)
+    }
+
+    /// 收本帧（解码态）。
+    fn collect_login_657_frames(
+        rx: &mut mpsc::UnboundedReceiver<SimToGate>,
+    ) -> Vec<mir2_protocol::frame::CommandMessage> {
+        let mut out = Vec::new();
+        while let Ok(m) = rx.try_recv() {
+            match m {
+                SimToGate::SendFrame { body, .. } => {
+                    out.push(mir2_protocol::frame::CommandMessage::from_bytes(&body).unwrap());
+                }
+                other => panic!("意外 sim 到 gate 命令：{other:?}"),
+            }
+        }
+        out
+    }
+
+    /// **判据①（自己两条）**：`RecalcAbilitys` 的两条 `RM_CHARSTATUSCHANGED` 在 `654` 之后各出一条
+    /// `SM_CHARSTATUSCHANGED(657)`（`PlayObject.cs:2874-2876`；2026-10-23 真机 `654,657,657,42`）。
+    ///
+    /// 红检（实测）：把 `LoginQueued::CharStatusChanged` 的 `out.push` 臂去掉（或 `char_status`
+    /// 恒 `None`）⇒ 只剩 `654` ⇒ 帧数与 ident 断言必红。
+    #[test]
+    fn login_tail_emits_two_charstatuschanged_right_after_changelight() {
+        let (world, id, online, gates, mut rx0, mut pending) = login_657_fixture();
+        assert_eq!(
+            drain_login_tail(&world, &online, &gates, &mut pending, 12),
+            3,
+            "after 段 = 654 + 657×2"
+        );
+        let got = collect_login_657_frames(&mut rx0);
+        let idents: Vec<u16> = got.iter().map(|m| m.ident).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_CHANGELIGHT,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+            ],
+            "654 之后必须紧跟两条 657（StatusChanged 的回环 + SendUpdateMsg）"
+        );
+        for m in &got[1..] {
+            assert_eq!(m.recog, id, "657 的 Recog = 自己");
+            assert_eq!((m.param, m.tag), (0, 0), "CharStatus=0 时 Param/Tag = 0/0");
+            assert_eq!(m.series, 0, "Series = 收件人（自己）的 HitSpeed");
+        }
+        assert!(pending.is_empty(), "补发后必须清缓冲");
+    }
+
+    /// **判据②（邻居一条）**：`StatusChanged()` 是 `SendRefMsg` 的 ±`SendRefMsgRange` 格内其他玩家
+    /// （`BaseObject.cs:1514-1517` + `BaseObject.Message.cs:383-444`）；`SendUpdateMsg` 那条只给自己
+    /// （去重 `TryPeek` 不前进）⇒ 自己两条、近邻一条、出界零条。
+    ///
+    /// 字段口径：`Series` 是**收件人自己**的 `HitSpeed`（`PlayObject.Message.cs:1846`）。
+    ///
+    /// 红检（实测）：删掉 `drain_login_tail` 里的 `broadcast_charstatuschanged_except_self` 调用
+    /// ⇒ 近邻零帧 ⇒ 必红；改成 `broadcast_ref_msg_with_self` ⇒ 自己多一条 ⇒ 判据① 红。
+    #[test]
+    fn login_charstatus_broadcasts_one_frame_to_nearby_players_only() {
+        let (mut world, id, mut online, gates, mut rx0, mut pending) = login_657_fixture();
+        world.open_session("q");
+        world.open_session("r");
+        let q = world
+            .enter_map("q", new_player_entity("q".to_string(), 12, 10), 0)
+            .expect("近邻进图");
+        let r = world
+            .enter_map("r", new_player_entity("r".to_string(), 30, 30), 0)
+            .expect("远邻进图");
+        world.entities.get_mut(id).unwrap().ai.search_tick = world.clock_ms;
+        world.entities.get_mut(q).unwrap().hit_speed = 9;
+        for (i, (name, aid, sock)) in [("q", q, 902), ("r", r, 903)].into_iter().enumerate() {
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: name.into(),
+                    session_id: i32::try_from(i + 2).unwrap(),
+                    gate_idx: 0,
+                    socket: sock,
+                    actor_id: aid,
+                },
+            );
+        }
+        drain_login_tail(&world, &online, &gates, &mut pending, 12);
+        let (mut self_frames, mut q_frames, mut r_frames) = (0usize, Vec::new(), 0usize);
+        while let Ok(m) = rx0.try_recv() {
+            let SimToGate::SendFrame { socket, body } = m else {
+                panic!("意外 sim 到 gate 命令")
+            };
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).unwrap();
+            match socket {
+                901 => self_frames += 1,
+                902 => q_frames.push(cm),
+                _ => r_frames += 1,
+            }
+        }
+        assert_eq!(self_frames, 3, "自己 = 654 + 两条 657");
+        assert_eq!(q_frames.len(), 1, "近邻只收 StatusChanged 那一条");
+        assert_eq!(
+            q_frames[0].ident,
+            mir2_protocol::messages::SM_CHARSTATUSCHANGED
+        );
+        assert_eq!(q_frames[0].recog, id, "Recog = 状态变更者（不是收件人）");
+        assert_eq!((q_frames[0].param, q_frames[0].tag), (0, 0));
+        assert_eq!(q_frames[0].series, 9, "Series = 收件人自己的 HitSpeed");
+        assert_eq!(r_frames, 0, "超出 SendRefMsgRange 的玩家不投递");
+    }
+
+    /// **判据③（字段口径 + 逐字节）**：657 字节 = `sm_charstatuschanged(自己, CharStatus, HitSpeed)`
+    /// —— `Param = LoWord(CharStatus)`、`Tag = HiWord(CharStatus)`、`Series = 自己的 HitSpeed`
+    /// （`PlayObject.Message.cs:1846`），且两条**完全相同**（`StatusChanged` 与 `SendUpdateMsg`
+    /// 的载荷同源：`CharStatus = GetCharStatus()` 只算一次）。
+    ///
+    /// 红检（实测）：把 `sm_charstatuschanged` 的 `lo_word/hi_word` 对调（或把 `hit_speed` 传 0）
+    /// ⇒ 字段/逐字节断言必红。
+    #[test]
+    fn login_charstatus_bytes_match_oracle_field_layout() {
+        let (mut world, id, online, gates, mut rx0, mut pending) = login_657_fixture();
+        world.entities.get_mut(id).unwrap().hit_speed = 5;
+        pending.get_mut("p").unwrap().char_status = Some((0x0001_0002, 5));
+        drain_login_tail(&world, &online, &gates, &mut pending, 12);
+        let got = collect_login_657_frames(&mut rx0);
+        assert_eq!(got[1].ident, mir2_protocol::messages::SM_CHARSTATUSCHANGED);
+        assert_eq!(got[1].param, 0x0002, "Param = LoWord(CharStatus)");
+        assert_eq!(got[1].tag, 0x0001, "Tag = HiWord(CharStatus)");
+        assert_eq!(got[1].series, 5, "Series = 自己的 HitSpeed");
+        assert_eq!(
+            got[1], got[2],
+            "两条 657 的字段必须相同（同一份 CharStatus/HitSpeed）"
+        );
+        // 与编码层逐字节对照：`smframe` 产的 657 必须与 `sm_charstatuschanged` 同一个。
+        let from_smframe: Vec<u8> = smframe::EnterWorldInputs {
+            actor_id: id,
+            char_status: Some((0x0001_0002, 5)),
+            ..Default::default()
+        }
+        .frames()
+        .into_iter()
+        .find(|b| u16::from_le_bytes([b[4], b[5]]) == mir2_protocol::messages::SM_CHARSTATUSCHANGED)
+        .expect("smframe 必须产 657");
+        let want = game_svr::smframe_ext::sm_charstatuschanged(id, 0x0001_0002, 5);
+        assert_eq!(
+            from_smframe, want,
+            "smframe 与 sm_charstatuschanged 必须逐字节相同"
         );
     }
 }
