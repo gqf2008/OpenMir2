@@ -843,6 +843,13 @@ pub struct Entity {
     pub drop_items: Vec<crate::combat::DropItem>,
     /// 死亡结算是否已做（避免重复发经验/重复掉落）
     pub death_settled: bool,
+    /// 本 tick 是否收到过**直接 `Die()` 调用**（脚本 `KILLMONSTER` / GM Kill 的
+    /// [`crate::world::World::kill`] 入口；oracle 无此字段，是本骨架区分调用来源的一次性标记）。
+    ///
+    /// 伤害只把 `HP` 打到 0；SuperMan 在 `BaseObject.Run:32-36` 先回满，故伤害路径不会
+    /// 执行 `:70-73` 的 `Die()`。只有本标记为 true 时，`settle_deaths` 才执行 SuperMan
+    /// 子类覆写体；结算时立即消费，保证两次直接 `Die()` 各执行一次。
+    pub die_called: bool,
     /// 构造函数链抽出的随机数结果（见 [`MonsterCtorDraws`]）；玩家/非 MonGen 路径实体为缺省全零。
     pub ctor_draws: MonsterCtorDraws,
     /// C# `StickMonster.ComeOutValue`（`StickMonster.cs:10`；ctor `:19` 置 4）。
@@ -1127,6 +1134,7 @@ impl Entity {
             gold: 0,
             drop_items: Vec::new(),
             death_settled: false,
+            die_called: false,
             ctor_draws: MonsterCtorDraws::default(),
             class_attack_tick: 0,
             class_slave_list: Vec::new(),

@@ -4881,7 +4881,9 @@ fn monster_run_away_expiry(world: &mut World, actor_id: i32, now: i64) {
 ///
 /// **本函数不消费随机数**（恢复/体力点/过期都是纯状态演进）。
 ///
-/// **已建模**：`SuperMan`（`:32-36`，消息泵之后、`!Death` 之前回满；race 120 `SoccerBall` ctor 置位，数据可达）；
+/// **已建模**：`SuperMan`（`:32-36`，消息泵之后、`!Death` 之前回满；本函数覆盖
+/// race 11/12/20/112/110/111 与 race 120，固定 NPC/商人在各自 `Run` 等价点回满；
+/// 直接 Die / 伤害路径与 T-31 残余见 `World::settle_deaths`）；
 /// **未建模（登记，见模块头/证据）**：`HP == 0 ⇒ Die()`（`:70-73`，
 /// 由 [`crate::world::World`] 的 `settle_deaths` 在同一 tick 的死亡结算里等价处理；本段的恢复
 /// 只增 HP、体力点段有 `HP > 1` 门⇒此处 `HP == 0` 不可达）、`MakeGhost`（`:86-101`，需

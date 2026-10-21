@@ -61,7 +61,8 @@ pub enum Command {
     Walk { actor_id: i32, dx: i32, dy: i32 },
     /// 攻击（`_Attack` 一次结算 + 命中者登记）——`combat.json` 场景用它把 `_Attack` 的 RNG 面纳入 golden
     Attack { actor_id: i32, target_id: i32 },
-    /// 脚本化击杀：直接把目标 HP 置 0（最小切片的击杀触发；战斗结算不在本切片）
+    /// 脚本化击杀：直接调用目标 `Die()`（本骨架以 HP=0 + 一次性 `die_called` 标记承载；
+    /// 战斗伤害只写 HP，不置该标记）
     Kill { target_id: i32 },
     /// 生成怪物（掉落在地图生成时按 C# 时机预算）
     SpawnMonster {
@@ -4659,6 +4660,9 @@ impl World {
                     let ok = match self.entities.get_mut(target_id) {
                         Some(e) => {
                             e.hp = 0;
+                            // 脚本 `KILLMONSTER` / GM Kill 的直接 `Die()` 入口；与战斗
+                            // 伤害致的 `HP == 0` 区分（SuperMan 只有前者会执行子类覆写体）。
+                            e.die_called = true;
                             true
                         }
                         None => false,
@@ -6149,17 +6153,26 @@ impl World {
             // **子类覆写体在 `base.Die()` 返回后照常继续**（多态，见下逐点锚）。
             //
             // 可达性口径：SuperMan 实体在 `BaseObject.Run` 首段被回满（`:32-36`），故
-            // oracle 的 `HP == 0 ⇒ Die()`（`:70-73`）对**伤害**路径不可达；本函数同时是
-            // 「直接 `Die()` 调用」（脚本 `KILLMONSTER`、GM `KillCommand`、`NormNpc` 脚本
-            // 杀人支）的等价点。两类来源都按「`Die()` 已被调用」处理 = 本节。
-            //
-            // 闩锁：本骨架的 `death_settled`（oracle 无此字段）置位 ⇒ 同一 `hp == 0` 状态
-            // 不再每 tick 重发子类段；oracle 的 `Run` 回满后 `HP != 0` ⇒ `Die()` 不会再进。
+            // oracle 的 `HP == 0 ⇒ Die()`（`:70-73`）对**伤害**路径不可达。本骨架在
+            // `settle_deaths` 里先按同一顺序回满；只有 `World::kill` 置入的一次性
+            // `die_called` 才代表「直接 `Die()` 调用」（脚本 `KILLMONSTER` / GM Kill），
+            // 仅该路径执行子类覆写体。SuperMan 永不进入通用死亡闩锁：`death_settled`
+            // 保持 false，避免永久闩锁吞掉第二次直接 `Die()`。
             if e.super_man {
                 let race = e.race;
                 let map_id = e.map_id;
+                let direct_die = e.die_called;
                 if let Some(e) = self.entities.get_mut(id) {
-                    e.death_settled = true;
+                    e.die_called = false;
+                    e.death_settled = false;
+                    if !direct_die {
+                        // 伤害路径：`BaseObject.Base.cs:32-36` 先于 `:70-73` 回满，
+                        // 所以不会调用 `Die()`，也不能执行任何子类覆写体。
+                        e.run_super_man_refill();
+                    }
+                }
+                if !direct_die {
+                    continue;
                 }
                 // 子类覆写体（`base.Die()` 早退**不**影响它们）：
                 // - `CastleDoor.Die()`（`CastleDoor.cs:78-82`）：`base.Die(); SetMapXyFlag(2);`
@@ -6169,8 +6182,6 @@ impl World {
                 //   ⇒ 子类段零动作（格子恢复只在 `WallStructure.Run:47-66` 读 `Death`）。
                 // - `AnimalObject.Die()`（`AnimalObject.cs:96-110`）：`if (!SuperMan) return;`
                 //   ⇒ 说词段**仅** SuperMan 走；本骨架未建模 `MonsterSayMessage`（T-31 残余）。
-                // - `ZilKinZombi.Die()`（`ZilKinZombi.cs:24-33`）：race 96 非 SuperMan ⇒ no-op
-                //   （无条件调用以保持「子类段照常执行」的形状）。
                 if race == 110 {
                     if let Some(b) = self.entities.get(id).and_then(|e| e.castle_binding) {
                         let events = self
@@ -6189,7 +6200,6 @@ impl World {
                         }
                     }
                 }
-                crate::monai::zil_kin_zombi_die(self, id);
                 continue;
             }
             let (map_id, gold, mon_exp, exp_hitter, group_owner, is_play) = (
@@ -6206,6 +6216,7 @@ impl World {
                 // `BaseObject.cs:323`：`Death = true; DeathTick = HUtil32.GetTickCount();`
                 e.death_tick = self.clock_ms;
                 e.death_settled = true;
+                e.die_called = false;
             }
             // **Lane B（城堡实体挂图）**：race 110/111 的 `Die()` 多态分派。
             //
@@ -10128,20 +10139,20 @@ mod tests {
     }
 
     /// **SuperMan 判据 (a)**（卡 `openmir2-superman-normnpc`）：守卫（race 11，
-    /// `SuperGuard : GuardUnit : NormNpc`，`NormNpc.cs:41` 置 `SuperMan=true`）受以致死伤害后：
-    /// `BaseObject.Die()` 首行早退（`BaseObject.Base.cs:318-322`）⇒ **不置** `Death`、不进
-    /// `record.deaths`（无掉落/经验/退组）；下一 `Run` 首段回满（`:32-36`）⇒ `hp == max_hp`。
+    /// `SuperGuard : GuardUnit : NormNpc`，`NormNpc.cs:41` 置 `SuperMan=true`）受致死伤害后，
+    /// `BaseObject.Run:32-36` 先于 `:70-73` 回满 ⇒ 不调用 `Die()`，不置 `Death`、不进
+    /// `record.deaths`（无掉落/经验/退组）。关掉 AI 后在 `tick_head` 立即断言，排除靠
+    /// 后续怪物 `Run` 回满而误绿。
     ///
-    /// 牙：① 删 `apply_monster_class_constants` 的 race 11 `super_man` 置位 ⇒ `death`/`hp` 断言红；
-    /// ② 删 `settle_deaths` 的 `if e.super_man { ... continue; }` ⇒ `Death`/`record.deaths` 红。
+    /// 牙：删 `settle_deaths` 伤害支的 `run_super_man_refill` ⇒ HP/MP 断言红；
+    /// 删整个 `if e.super_man` 支 ⇒ `Death`/`record.deaths` 红。
     #[test]
-    fn superman_guard_survives_lethal_damage_and_refills_next_run() {
+    fn superman_guard_lethal_damage_refills_without_die() {
         let mut w = World::new(32, 32);
-        w.enable_monster_ai();
         let mut guard = Entity::new(0, "守卫", 10, 10);
         guard.race = 11;
         guard.max_hp = 300;
-        guard.hp = 0; // 致死伤害后的状态
+        guard.hp = 0; // 致死伤害后的状态，未经过直接 Die 入口
         guard.max_mp = 40;
         guard.mp = 0;
         crate::mongen::apply_monster_class_constants(&mut guard, 11, 0);
@@ -10150,17 +10161,47 @@ mod tests {
             "`NormNpc()` ctor 置 SuperMan=true（`NormNpc.cs:41`）"
         );
         let id = w.add_entity(guard);
-        let rec = w.tick();
+        let rec = w.tick_head();
         assert!(
             rec.deaths.is_empty(),
-            "SuperMan 不结算死亡（`BaseObject.Die():318-322` 早退）: {rec:?}"
+            "伤害路径不调用 Die（`BaseObject.Base.cs:32-36` 先于 `:70-73`）: {rec:?}"
         );
         let e = w.entities.get(id).unwrap();
-        assert!(!e.death, "死不得置位 `Death`");
+        assert!(!e.death, "伤害路径不得置位 `Death`");
         assert_eq!(e.death_tick, 0, "`DeathTick` 也跳过");
-        assert!(e.death_settled, "本骨架闩锁防重复处理");
-        assert_eq!(e.hp, 300, "下一 Run 首段回满（`BaseObject.Base.cs:32-36`）");
+        assert!(!e.death_settled, "SuperMan 不进通用死亡闩锁");
+        assert!(!e.die_called, "伤害不伪造直接 Die 标记");
+        assert_eq!(e.hp, 300, "结算段按 Run 首段顺序回满 HP");
         assert_eq!(e.mp, 40, "MP 同段回满");
+    }
+
+    /// **F4 回归**：SuperMan 的直接 `Die()` 不得分派 `ZilKinZombi.Die()`（race 96
+    /// 不是 SuperMan）。给守卫放上非零 `ZilKillCount` 探针：若误走该覆写会减计数并抽 RNG。
+    /// 删除 SuperMan 支里的恒 no-op 调用前后本用例均绿；race 96 正向行为由
+    /// `mb2_r43_zilkin_die_counts_and_revive_gate` 覆盖。
+    #[test]
+    fn superman_direct_die_does_not_run_zil_kin_zombi_override() {
+        let mut w = World::new(32, 32);
+        let mut guard = Entity::new(0, "守卫", 10, 10);
+        guard.race = 11;
+        guard.max_hp = 300;
+        guard.hp = 300;
+        guard.ai.zil_kill_count = 2;
+        crate::mongen::apply_monster_class_constants(&mut guard, 11, 0);
+        let id = w.add_entity(guard);
+        w.rng = RandomNumber::with_seed(777);
+        w.kill(id);
+        let rec = w.tick_head();
+        assert!(rec.deaths.is_empty());
+        let e = w.entities.get(id).unwrap();
+        assert_eq!(e.ai.zil_kill_count, 2, "不得进入 race 96 的 Die 覆写");
+        assert_eq!(e.re_alive_tick, 0);
+        assert_eq!(e.ai.zilkin_die_tick, 0);
+        assert_eq!(
+            w.rng.random(),
+            RandomNumber::with_seed(777).random(),
+            "SuperMan 直接 Die 不消费 ZilKin 的 Random(20)"
+        );
     }
 
     /// **SuperMan 判据 (d) 回归**：普通怪（非 SuperMan）死亡行为不变；对照支证明
@@ -10762,6 +10803,17 @@ mod castle_wire_tests {
             .expect("unit")
     }
 
+    fn expected_door_flag2_events() -> Vec<StructureEvent> {
+        door_map_xy_flag_ops(2)
+            .into_iter()
+            .map(|(dx, dy, walk)| StructureEvent::SetMapXyFlag {
+                x: 5 + dx,
+                y: 5 + dy,
+                walk,
+            })
+            .collect()
+    }
+
     /// **C3b `castle_unit_hp_tracks_entity_after_struck`**：受击后 `CastleUnit.hp` 跟实体走，
     /// 且同 tick 的 `door_run` 用新 HP 算 `Dir`。
     ///
@@ -11058,46 +11110,91 @@ mod castle_wire_tests {
         );
     }
 
-    /// **SuperMan 判据 (b)**：城门 110（`CastleDoor : GuardUnit : NormNpc`）受致死伤害后
-    /// `death=false`，但 `CastleDoor.Die()` 的**子类段** `SetMapXyFlag(2)` 仍产生
-    /// （`CastleDoor.cs:78-82`：`base.Die(); SetMapXyFlag(2);` —— `base.Die()` 早退而已）。
+    /// **SuperMan 判据 (b-i)**：城门 110 被**伤害**打到 HP=0 时，oracle 的
+    /// `BaseObject.Run:32-36` 先回满，`:70-73` 的 `Die()` 不可达 ⇒ 不产生
+    /// `CastleDoor.Die()` 的 12 项 `SetMapXyFlag(2)`，也不写 `record.castle_structures`。
     ///
-    /// 牙：删 `settle_deaths` 的 race 110 `door_die_flag2_events` 调用 ⇒ 12 项掩码断言红；
-    /// 把 `door_die_flag2_events` 写成也置 `death` ⇒ `unit.death`/`entity.death` 断言红。
+    /// 牙：删伤害支回满 ⇒ HP/MP 断言红；让伤害支落入直接 Die 子类段 ⇒ 空事件断言红。
     #[test]
-    fn superman_castle_door_dies_without_death_but_emits_flag2_mask() {
+    fn superman_castle_door_lethal_damage_refills_without_die_or_flag2_mask() {
         let (mut w, id) = castle_world(110, 0, 10_000, 0);
         // 只跑死亡结算段：关掉怪物 AI（门/墙 Run 会另发格子事件，混入判据）。
         w.ai_enabled = false;
         crate::mongen::apply_monster_class_constants(w.entities.get_mut(id).unwrap(), 110, 0);
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.max_mp = 40;
+            e.mp = 0;
+        }
         assert!(w.entities.get(id).unwrap().super_man);
         let rec = w.tick_head();
-        assert!(rec.deaths.is_empty(), "SuperMan 不进死亡结算: {rec:?}");
+        assert!(rec.deaths.is_empty(), "伤害路径不调用 Die: {rec:?}");
+        assert!(
+            rec.castle_structures.is_empty(),
+            "伤害路径不得执行 CastleDoor.Die 子类段: {rec:?}"
+        );
+        let e = w.entities.get(id).unwrap();
+        assert!(!e.death);
+        assert!(!e.death_settled, "SuperMan 不进通用死亡闩锁");
+        assert!(!e.die_called);
+        assert_eq!(e.hp, 10_000, "Run 首段先于 HP==0 判定回满");
+        assert_eq!(e.mp, 40);
+        assert!(!w.castles[0].main_door.unwrap().death);
+    }
+
+    /// **SuperMan 判据 (b-ii)**：`World::kill` 是脚本/GM 的**直接 `Die()`** 入口；
+    /// `base.Die()` 早退 ⇒ `death=false`，但 `CastleDoor.Die()` 子类段仍产生恰 12 项掩码。
+    /// 标记消费后，下一个无 kill 的 tick 只回满，不重发子类段。
+    ///
+    /// 牙：删 `Command::Kill` 的 `die_called=true` ⇒ 12 项断言红；不消费标记 ⇒
+    /// 下一 tick 的空事件断言红；子类段误置 `death` ⇒ Death 断言红。
+    #[test]
+    fn superman_castle_door_direct_kill_emits_flag2_mask_without_death() {
+        let (mut w, id) = castle_world(110, 10_000, 10_000, 0);
+        w.ai_enabled = false;
+        crate::mongen::apply_monster_class_constants(w.entities.get_mut(id).unwrap(), 110, 0);
+        w.kill(id);
+        let rec = w.tick_head();
+        assert!(rec.deaths.is_empty(), "SuperMan 不进通用死亡: {rec:?}");
+        let got: Vec<StructureEvent> = rec.castle_structures.iter().map(|c| c.event).collect();
+        assert_eq!(got, expected_door_flag2_events(), "直接 Die 恰发 12 项掩码");
         let e = w.entities.get(id).unwrap();
         assert!(!e.death, "`base.Die()` 早退 ⇒ 实体 Death 不置位");
-        assert!(e.death_settled, "闩锁置位");
+        assert!(!e.death_settled, "直接 Die 后不留下永久闩锁");
+        assert!(!e.die_called, "一次性直接 Die 标记已消费");
         assert!(
             !w.castles[0].main_door.unwrap().death,
             "`CastleUnit.death` 是 Death 镜像 ⇒ 保持 false"
         );
-        assert_eq!(
-            rec.castle_structures.len(),
-            12,
-            "子类段 `SetMapXyFlag(2)` 恰 12 项"
-        );
-        let want: Vec<StructureEvent> = door_map_xy_flag_ops(2)
-            .into_iter()
-            .map(|(dx, dy, walk)| StructureEvent::SetMapXyFlag {
-                x: 5 + dx,
-                y: 5 + dy,
-                walk,
-            })
-            .collect();
-        let got: Vec<StructureEvent> = rec.castle_structures.iter().map(|c| c.event).collect();
-        assert_eq!(got, want, "掩码顺序 = oracle 调用序");
-        // 再一个 tick 不重复发（闩锁）。
+
         let rec2 = w.tick_head();
-        assert!(rec2.castle_structures.is_empty(), "子类段每次 Die 至多一次");
+        assert!(rec2.castle_structures.is_empty(), "无新 Die 调用不得重发");
+        assert_eq!(w.entities.get(id).unwrap().hp, 10_000, "后续 Run 首段回满");
+    }
+
+    /// **F2**：oracle 每次 `CastleDoor.Die()` 都重发掩码；两次 `World::kill` 必须得到
+    /// 两批各 12 项，不能被 `death_settled` 永久闩锁吞掉第二次。
+    ///
+    /// 牙：SuperMan 支若改回 `death_settled=true`，第二次 kill 的 12 项断言红。
+    #[test]
+    fn superman_castle_door_direct_kill_twice_emits_flag2_mask_twice() {
+        let (mut w, id) = castle_world(110, 10_000, 10_000, 0);
+        w.ai_enabled = false;
+        crate::mongen::apply_monster_class_constants(w.entities.get_mut(id).unwrap(), 110, 0);
+        for round in 1..=2 {
+            w.kill(id);
+            let rec = w.tick_head();
+            let got: Vec<StructureEvent> = rec.castle_structures.iter().map(|c| c.event).collect();
+            assert_eq!(
+                got,
+                expected_door_flag2_events(),
+                "第 {round} 次直接 Die 都必须发 12 项"
+            );
+            let e = w.entities.get(id).unwrap();
+            assert!(!e.death);
+            assert!(!e.death_settled, "第 {round} 次结算后闩锁必须复位");
+            assert!(!e.die_called, "第 {round} 次标记必须消费");
+        }
     }
 
     /// **SuperMan 判据 (c)**：城墙 111 同形——`death=false`；`WallStructure.Die()`
@@ -11108,16 +11205,18 @@ mod castle_wire_tests {
     /// 删早退（落回通用死亡支）⇒ `entity.death`/`record.deaths` 断言红。
     #[test]
     fn superman_castle_wall_does_not_die_or_touch_cell() {
-        let (mut w, id) = castle_world(111, 0, 5_000, 0);
+        let (mut w, id) = castle_world(111, 5_000, 5_000, 0);
         // 只跑死亡结算段：关掉怪物 AI（`WallStructure.Run` 会另发格子事件，混入判据）。
         w.ai_enabled = false;
         crate::mongen::apply_monster_class_constants(w.entities.get_mut(id).unwrap(), 111, 0);
         assert!(w.entities.get(id).unwrap().super_man);
+        w.kill(id);
         let rec = w.tick_head();
         assert!(rec.deaths.is_empty(), "SuperMan 不进死亡结算: {rec:?}");
         let e = w.entities.get(id).unwrap();
         assert!(!e.death, "`base.Die()` 早退 ⇒ Death 不置位");
-        assert!(e.death_settled, "闩锁置位");
+        assert!(!e.death_settled, "直接 Die 后不留下永久闩锁");
+        assert!(!e.die_called, "一次性标记已消费");
         assert!(
             !w.castles[0].left_wall.unwrap().death,
             "WallStructure.Die 无子类段 ⇒ unit.death 不置位"

@@ -312,6 +312,10 @@ impl World {
         // 否则所有商人 `id == 0`、`EntityStore::insert` 的 `index.insert(0, …)` 互相覆盖，
         // `merchant_ids_sorted` 返回一串 0、`merchant_tick` 会反复 Run 同一个实体。
         e.id = self.entities.alloc_id();
+        // **既有偏差（本卡只登记、不改数值）**：oracle 商人继承 `NormNpc` ctor 的
+        // `Race = ActorRace.NPC`（10，`NormNpc.cs:42`），`Merchant` ctor 另置
+        // `RaceImg = ActorRace.Merchant`（50，`Merchant.cs:84`）；Rust 侧 `e.race = 50`
+        // 是既有偏差（T-31 备注），不得把它当成 oracle 的 `Race`。
         e.race = ACTOR_RACE_MERCHANT;
         // `Merchant : NormNpc`（`Merchant.cs:16`）⇒ `NormNpc()` ctor `SuperMan = true`
         // （`NormNpc.cs:41`）：商人打不死（`BaseObject.Die():318-322`）且每次 `Run` 回满（`:32-36`）。
