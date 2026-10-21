@@ -4949,9 +4949,13 @@ fn handle_shop_cmd(
             out.extend(r.frames);
             if let Some(g) = r.goto_label {
                 // `Merchant.cs:1652/1659`：修理成功后的 `GotoLable(REPAIROK/SUPERREPAIROK)`。
-                // 说词 `RM_MERCHANTSAY` 优先级 1，`SM_USERREPAIRITEM_OK` 优先级 159
-                // （`BaseObject.Message.cs:180`）⇒ **说词先出队**；本宿主立即下发说词，
-                // `out` 在函数尾部才发 ⇒ 线上次序 = 说词 → 修理 OK。
+                // 出队序按 `MsgQueue` 优先级（`BaseObject.Message.cs:180`）：
+                // 说词 `RM_MERCHANTSAY` = 11009&0xFF = 1 → 脚本帧 `RM_GAMEGOLDCHANGED` =
+                // 8084&0xFF = 148 → `SM_USERREPAIRITEM_OK` = 159。
+                // 本宿主：说词与脚本帧在此**立即**下发（按上述次序先 `emit_npc_says` 再
+                // `emit_script_frames`，与另三处 `GotoLable` 调用点及 `emit_script_frames`
+                // 文档一致），`out`（修理 OK）在函数尾部才发 ⇒ 线上次序 = 说词 → 脚本帧 → 修理 OK。
+                // 覆盖：`t142_repair_says_precede_script_frames` 逐位钉住该次序。
                 let session = shop_sessions.entry(chr_name.to_string()).or_default();
                 let map_text = pmap.to_string();
                 let mut rng =
@@ -4974,12 +4978,6 @@ fn handle_shop_cmd(
                 for say in &says {
                     session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
                 }
-                if !script_frames.is_empty() {
-                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人修理脚本帧")
-                    {
-                        emit_script_frames(tx, socket, sg, &script_frames);
-                    }
-                }
                 if !says.is_empty() {
                     if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人修理说词") {
                         emit_npc_says(tx, socket, actor_id, &says);
@@ -4994,6 +4992,12 @@ fn handle_shop_cmd(
                         "DBG",
                         "CM_USERREPAIRITEM：GotoLable({g}) 无说词（脚本无该标签/未装载）ChrName={chr_name}"
                     );
+                }
+                if !script_frames.is_empty() {
+                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人修理脚本帧")
+                    {
+                        emit_script_frames(tx, socket, sg, &script_frames);
+                    }
                 }
             }
         }
@@ -21944,6 +21948,36 @@ mod tests {
             )
         }
 
+        /// 生产入口 ③：`CM_USERREPAIRITEM`（`PlayObject.Operate.cs:1585`）。`MakeIndex = 0`
+        /// ⇒ `repair_target_index` 走 BUG-REPLICA 的「回落最后一件」支。
+        fn repair(&mut self) {
+            let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+            handle_shop_cmd(
+                game_svr::shop::CM_USERREPAIRITEM,
+                self.merchant_id,
+                0,
+                0,
+                Some(""),
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.shop_sessions,
+                &mut self.sell_off_sessions,
+                &mut self.sell_off_book,
+                &trade,
+                &self.gates,
+                &mut self.world,
+                &self.catalog,
+                &self.shop_cfg,
+                &self.colors,
+                None,
+                &mut self.item_number,
+                &self.book,
+                &self.npc_vars,
+            );
+        }
+
         fn drain(&mut self) -> Vec<Vec<u8>> {
             drain_frames(&mut self.rx)
         }
@@ -21961,8 +21995,12 @@ mod tests {
     /// `@dice` **不出现在任何说词里** ⇒ 进入资格只能来自 `LableIsCanJmp` 第三支
     /// （`PlayObject.Base.cs:2824-2828`，命中即清 `string.Empty` ⇒ 一次性）。
     ///
-    /// 牙（删生产接线必红）：删 `run_merchant_goto` 的 `seed_player_gold_deal` ⇒ `@dice`
-    /// 的「已开通」支看不到 `SaleDeal`，扣费 100 ⇒ 第③段 160 变 60；删其
+    /// 牙（删生产接线必红）：删 `run_merchant_goto` 的 `seed_player_gold_deal` ⇒ 实测**先红在
+    /// 第一次 `@dice` 的 `LableIsCanJmp` 断言**（`main.rs` 的
+    /// `assert_eq!(play_dice_label.as_deref(), Some(""))`：快照没 seed 到会话里的
+    /// `PlayDiceLabel` ⇒ 第三支不放行 ⇒ `left: None, right: Some("")`，日志
+    /// `LableIsCanJmp(@dice) == false`），根本到不了第③段的扣费分支（因此「160 变 60」只是
+    /// 更后段的假设后果，不是首个失败点）；删其
     /// `write_back_player_gold_deal` ⇒ 第②段元宝不落会话（250 而非 150）。
     #[test]
     fn t142_merchant_dlg_select_openybdeal_and_playdice_through_production_path() {
@@ -22045,24 +22083,30 @@ mod tests {
     /// **T-142 F1（第二条入口）**：`CM_CLICKNPC` 的 `@main` 路径同样必须 seed/写回
     /// `SaleDeal`/`PlayDiceLabel`/`GameGold`（`handle_click_npc_cmd` 的 `normNpc.Click` 支）。
     ///
-    /// 两次点击：第一次 `OPENYBDEAL 100`（250→150）+ `PLAYDICE`；第二次必须命中「已开通」支
-    /// （不扣费）——这只能由 `seed_player_gold_deal` 看到上一次写回的 `SaleDeal` 成立。
+    /// 两次点击：第一次 `OPENYBDEAL 100`（250→150）+ `PLAYDICE` + `GAMEGOLD + 10`（→160）；
+    /// 第二次必须命中「已开通」支（不扣费，再 +10 ⇒ 170）——这只能由 `seed_player_gold_deal`
+    /// 看到上一次写回的 `SaleDeal` 成立。
     ///
-    /// 牙：删 `handle_click_npc_cmd` 的 seed 行 ⇒ 第二次点击再扣 100（150→50）；
-    /// 删其写回行 ⇒ 第一次点击的 250→150 不落会话。
+    /// 牙：删 `handle_click_npc_cmd` 的 seed 行 ⇒ 第二次点击再扣 100（170→70）；
+    /// 删其写回行 ⇒ 第一次点击的 250→160 不落会话；删其脚本帧排水
+    /// （`emit_script_frames`）⇒ `GAMEGOLD + 10` 的 `SM_GAMEGOLDNAME` 帧消失 ⇒ 本用例红。
     #[test]
     fn t142_click_npc_main_seeds_and_writes_back_gold_deal() {
         let mut rig = T142Rig::new(vec![t142_record(
             "@main",
             r"欢迎\ <返回/@main>",
-            vec![t142_act(342, "100", 0, ""), t142_act(42, "", 1, "@dice")],
+            vec![
+                t142_act(342, "100", 0, ""),
+                t142_act(42, "", 1, "@dice"),
+                t142_act(191, "+", 10, "10"),
+            ],
         )]);
 
         assert!(rig.click(), "第一次点击必须走到 `@main` 说词点");
         assert_eq!(
             rig.game_gold(),
-            150,
-            "CM_CLICKNPC：OPENYBDEAL 扣费必须写回会话"
+            160,
+            "CM_CLICKNPC：OPENYBDEAL 扣费 100 + GAMEGOLD +10 必须写回会话"
         );
         assert!(rig.sell_off_sessions["hero"].sale_deal);
         assert_eq!(
@@ -22070,15 +22114,119 @@ mod tests {
             Some("@dice"),
             "CM_CLICKNPC：PLAYDICE 标签必须写回会话"
         );
-        assert!(!rig.drain().is_empty(), "@main 说词必须下发");
+        // 牙②：`@main` 的 `GAMEGOLD + 10` 必须经 click 的脚本帧排水下发
+        // （删 `handle_click_npc_cmd` 的 `emit_script_frames` ⇒ 本断言红）。
+        let frames = rig.drain();
+        assert!(
+            frames
+                .iter()
+                .any(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_MERCHANTSAY),
+            "@main 说词必须下发；实收 {:?}",
+            frames.iter().map(|b| hdr(b.as_slice())).collect::<Vec<_>>()
+        );
+        assert!(
+            frames.contains(&game_svr::smframe::sm_gamegoldname(160, 0x0001_0002, &[])),
+            "CM_CLICKNPC 的脚本帧排水必须下发 SM_GAMEGOLDNAME(160, GamePoint)；实收 {:?}",
+            frames.iter().map(|b| hdr(b.as_slice())).collect::<Vec<_>>()
+        );
 
         // `ClickNpcTime` 限频门（`PlayObject.Message.cs:2076`）：清掉再点第二次。
         rig.sessions.get_mut("hero").unwrap().click_npc_time = None;
         assert!(rig.click(), "第二次点击同样走到 `@main`");
         assert_eq!(
             rig.game_gold(),
-            150,
-            "已开通 ⇒ 第二次点击不得重复扣费（seed 生效）"
+            170,
+            "已开通 ⇒ 第二次点击不得重复扣费，只再 +10（seed 生效）"
+        );
+    }
+
+    /// **Minor-1（复核）**：修理成功后的 `GotoLable("~@repair")` 必须按 `MsgQueue` 优先级排水
+    /// ——说词 `RM_MERCHANTSAY`(1) → 脚本帧 `RM_GAMEGOLDCHANGED`(148) →
+    /// `SM_USERREPAIRITEM_OK`(159)（`BaseObject.Message.cs:180`）。
+    ///
+    /// 旧实现把 `emit_script_frames` 写在 `emit_npc_says` 之前，与本文件另外三处 `GotoLable`
+    /// 调用点（1011 `@back`、`CM_CLICKNPC(@main)`）及 `emit_script_frames` 自身文档相反 ⇒
+    /// 线上次序变成 脚本帧 → 说词，本用例红。
+    ///
+    /// 夹具：商人开 `is_repair`、背包一件 4/10 的模板（`repair_item_dec_dura = 30` ⇒ 修满不降上限）、
+    /// 会话 `ScriptLable = "@repair"`、脚本 `~@repair` 说词 + `GAMEGOLD + 10`。
+    #[test]
+    fn t142_repair_says_precede_script_frames() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "~@repair",
+            r"修好了\ <返回/@main>",
+            vec![t142_act(191, "+", 10, "10")],
+        )]);
+        // `T142Rig` 的商人只开 `is_buy`；修理支还要求 `IsRepair`（`Merchant.ClientRepairItem`）。
+        rig.world
+            .entities
+            .get_mut(rig.merchant_id)
+            .and_then(|e| e.merchant.as_mut())
+            .expect("商人实体")
+            .flags
+            .is_repair = true;
+        // `T142Rig` 的 `repair_item_dec_dura = 0` ⇒ 修满支会除零；用部署缺省 30。
+        rig.shop_cfg.repair_item_dec_dura = 30;
+        {
+            let sg = rig.sessions.get_mut("hero").expect("会话");
+            sg.state.gold = 10_000;
+            sg.state.item_list.push(game_svr::bag::BagItem {
+                make_index: 9,
+                index: 1,
+                dura: 4,
+                dura_max: 10,
+                desc: [0; 14],
+            });
+        }
+        rig.catalog.insert(
+            1,
+            mir2_data::models::StdItem {
+                name: "木剑".to_string(),
+                price: 100,
+                weight: 5,
+                std_mode: 0,
+                dura_max: 10,
+                ..mir2_data::models::StdItem::default()
+            },
+        );
+        rig.shop_sessions
+            .entry("hero".to_string())
+            .or_default()
+            .script_lable = game_svr::shop::LABEL_REPAIR.to_string();
+
+        rig.repair();
+
+        assert_eq!(
+            rig.game_gold(),
+            260,
+            "`~@repair` 的 GAMEGOLD +10 必须落会话"
+        );
+        let frames = rig.drain();
+        let idents: Vec<u16> = frames.iter().map(|b| hdr(b.as_slice()).0).collect();
+        let say_pos = idents
+            .iter()
+            .position(|&i| i == mir2_protocol::messages::SM_MERCHANTSAY)
+            .unwrap_or_else(|| panic!("修理说词必须下发：{idents:?}"));
+        let gold_pos = idents
+            .iter()
+            .position(|&i| i == mir2_protocol::messages::SM_GAMEGOLDNAME)
+            .unwrap_or_else(|| panic!("RM_GAMEGOLDCHANGED 脚本帧必须下发：{idents:?}"));
+        let ok_pos = idents
+            .iter()
+            .position(|&i| i == mir2_protocol::messages::SM_USERREPAIRITEM_OK)
+            .unwrap_or_else(|| panic!("修理 OK 必须下发：{idents:?}"));
+        assert!(
+            say_pos < gold_pos,
+            "说词（优先级 1）必须先于脚本帧（148）：{idents:?}"
+        );
+        assert!(
+            gold_pos < ok_pos,
+            "脚本帧（148）必须先于 SM_USERREPAIRITEM_OK（159）：{idents:?}"
+        );
+        assert_eq!(
+            frames[gold_pos],
+            game_svr::smframe::sm_gamegoldname(260, 0x0001_0002, &[]),
+            "元宝帧取写回后的会话值：GameGold=260，GamePoint=0x00010002"
         );
     }
 
