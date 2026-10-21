@@ -81,3 +81,17 @@ body_len 为 owner 已裁决的 D-9，已 whitelist）。`judge_login` 另提示
 
 - 本轮所有栈已停，九游戏端口与 7600 DOWN；MySQL 3306 保持 UP。
 - 证据目录：`E:/tmp/window/20261021-r3/{walk,king2,king3}/**`。
+
+## 6. 固定 NPC 可见性：C# oracle 对照（2026-10-21 深夜，决定性证据）
+
+- 同一摆位（`0122 (29,33)`，测试库同为克隆态），C# 影子栈（`mir2_test_*`）跑同一受控登录，
+  抓包 `E:/tmp/window/20261021-r3/cking/s2c/capture.jsonl`：
+  - `SM_APPEAR(41)` **6 条**：1 条自己 + **5 条 `recog=31475780, param=50, tag=8`**
+    —— `param=50` 即 `RaceImg=ActorRace.Merchant(50)`、`tag=8` 即 GuildOfficial 的 `Appr=8`
+    （`GuildOfficial.cs:18-19`），与 `Envir/Npcs.txt` 的 `比奇国王 1 0122 29 32` 对应。
+- Rust 同摆位：`SM_APPEAR(41)` 仅 1 条（自己），服务端 `vis=0`。
+- **结论**：C# oracle 会把固定 NPC 下发给玩家视野，Rust 不下发 ⇒ **本仓缺陷（固定 NPC 可见性）**，
+  不是夹具问题，也与 T-137 的脚本装载无关。已开专项车道（`npc-visibility`）定位根因并修复，
+  修好后重跑本场景即可收 T-137 的窗口项。
+- 附带确认：oracle 固定 NPC 的外观轴 = `RaceImg=50`、`Appr=8`，与本仓 `openmir2-superman-normnpc`
+  落下的 `race_img=50`、`Appr` 落位一致。
