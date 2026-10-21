@@ -180,7 +180,12 @@ CONTENT_MAP = {
     "LoadUnbindList":            dict(kind="envir", file="UnbindList.txt", anchor="LocalDB.cs:875-884", card="openmir2-envir-redlist-batch"),
     "LoadSellOffItemList":       dict(kind="db", anchor="MySqlDB.LoadSellOffItemList"),
     "LoadMapQuest":              dict(kind="envir", file="MapQuest.txt", anchor="LocalDB.cs:341-352"),
-    "LoadQuestDiary":            dict(kind="dir", file="QuestDiary", anchor="LocalDB.cs:733-744"),
+    # `QuestDiary` 是**按需包含**模型：不走「启动期整目录装载」，而是脚本 `CALL [@x]` 时由
+    # `crates/script/src/parser.rs` 的 `get_envir_file_path(envir_root, "QuestDiary", name)`
+    # 解析并加载（解析器由 game-svr 脚本引擎生产调用）⇒ 用 probe_ident 存在性判，
+    # 不用「文件名 + 专用 loader」口径（2026-10-21 收窄 stem 规则后此条被误判 RED）。
+    "LoadQuestDiary":            dict(kind="dir", file="QuestDiary", anchor="LocalDB.cs:733-744",
+                                      probe_ident="get_envir_file_path"),
     "LoadLineNotice":            dict(kind="notice", file="LineNotice.txt", anchor="GameApp.cs:204", card="openmir2-envir-redlist-batch"),
     "LoadAdminList":             dict(kind="envir", file="AdminList.txt", anchor="LocalDB.cs:16-28", card="openmir2-envir-redlist-batch"),
     "LoadMapDoor":               dict(kind="derived", anchor="MapManager.cs:182（随地图文件，非独立内容件）", probe_ident="apply_map_doors"),
