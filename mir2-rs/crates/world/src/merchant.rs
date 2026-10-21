@@ -43,9 +43,14 @@ use crate::world::World;
 
 /// `ActorRace.Merchant`（`src/OpenMir2/Enums/Race.cs`：`Merchant = 50`，与 `Animal` 同值）。
 ///
-/// ⚠ 与 `Race == ActorRace.Play` 一样是**broadcast 口径的枚举值**；`crates/world` 的怪物 AI
-/// （[`crate::monai::monster_ai_tick`]）按 [`Entity::merchant`] 是否存在显式排除商人实体，
-/// **不**依赖 race 数值（race 50 与 Animal 同值，靠 race 会误跑 `monster_run`）。
+/// ⚠ 这是**外观轴** `RaceImg` 的取值（`Merchant.cs:84` 的 `RaceImg = ActorRace.Merchant`），
+/// **不是**商人的**行为轴** `Race` —— oracle 商人的 `Race` 继承 `NormNpc` ctor 的
+/// `ActorRace.NPC`（10，`NormNpc.cs:42`）。两者在 `Merchant`/`Animal` 上同为 50，极易混用：
+/// 把本值写进 [`Entity::race`] 会让 `PlayObject.IsAttackTarget` 的 `HAM_ALL` 门
+/// （`target.Race < NPC(10) || > PeaceNpc(15)`）把商人当动物，玩家可选中/攻击商人（T-31 修正）。
+///
+/// `crates/world` 的怪物 AI（[`crate::monai::monster_ai_tick`]）按 [`Entity::merchant`] 是否存在
+/// 显式排除商人实体，**不**依赖 race 数值；商人 tick 同理走 [`World::merchant_tick`]。
 pub const ACTOR_RACE_MERCHANT: u8 = 50;
 
 /// `Merchant.Run` 的 `RunTime`（`BaseObject.cs:440`：`RunTime = 250`）。
@@ -312,15 +317,18 @@ impl World {
         // 否则所有商人 `id == 0`、`EntityStore::insert` 的 `index.insert(0, …)` 互相覆盖，
         // `merchant_ids_sorted` 返回一串 0、`merchant_tick` 会反复 Run 同一个实体。
         e.id = self.entities.alloc_id();
-        // **既有偏差（本卡只登记、不改数值）**：oracle 商人继承 `NormNpc` ctor 的
-        // `Race = ActorRace.NPC`（10，`NormNpc.cs:42`），`Merchant` ctor 另置
-        // `RaceImg = ActorRace.Merchant`（50，`Merchant.cs:84`）；Rust 侧 `e.race = 50`
-        // 是既有偏差（T-31 备注），不得把它当成 oracle 的 `Race`。
-        e.race = ACTOR_RACE_MERCHANT;
+        // 行为轴：oracle 商人继承 `NormNpc` ctor 的 `Race = ActorRace.NPC`（10，
+        // `NormNpc.cs:42`）；`Merchant` ctor **不覆写** `Race`，只置外观轴 `RaceImg`
+        // （`Merchant.cs:84`）。所有按 `Race` 的判定（攻击目标选择/受击/掉落/目标清理）
+        // 都读 10 ⇒ 玩家 `HAM_ALL` 的 `IsAttackTarget` 不会把商人当动物选中。
+        e.race = crate::entity::ACTOR_RACE_NPC;
+        // 外观轴：`RaceImg = ActorRace.Merchant`（50，`Merchant.cs:84`），供客户端可见帧
+        // `GetFeature() = MakeMonsterFeature(RaceImg, MonsterWeapon, Appr)`（`BaseObject.Base.cs:911`）。
+        e.race_img = ACTOR_RACE_MERCHANT;
         // `Merchant : NormNpc`（`Merchant.cs:16`）⇒ `NormNpc()` ctor `SuperMan = true`
         // （`NormNpc.cs:41`）：商人打不死（`BaseObject.Die():318-322`）且每次 `Run` 回满（`:32-36`）。
-        // **不得按 race 置位**：`ActorRace.Merchant == ActorRace.Animal == 50`，race 50 也是
-        // 鸡/鹿/狼等动物怪的 race（`Race.cs:26/34/40`）⇒ 只能按创建点（类）置位。
+        // **不得按 race 置位**：`ActorRace.NPC(10)` 也是普通固定 NPC 的 race，`RaceImg` 50 又与
+        // 鸡/鹿/狼等动物怪同值（`Race.cs:26/34/40`）⇒ 只能按创建点（类）置位。
         e.super_man = true;
         // `Entity::new` 是玩家 ctor 等价物（SearchTime=1000）⇒ 非玩家还原占位缺省值。
         e.ai.search_time = crate::entity::BASE_ANIMAL_SEARCH_TIME;
@@ -1983,9 +1991,12 @@ mod tests {
         );
     }
 
-    /// reviewer-6 **M-2**：`ActorRace.Merchant == Animal == 50` ⇒ `monster_ai_tick` 的
-    /// `merchant.is_none()` 过滤（`crates/world/src/monai.rs:549`）是行为关键：商人不得被
-    /// `monster_run` 当怪跑（置 `target_x = -1` / 消耗 AI 取数）。删掉该守卫 ⇒ 必红。
+    /// reviewer-6 **M-2**：商人识别**必须走 [`Entity::merchant`] 身份**，不能走 race ——
+    /// `monster_ai_tick` 的 `merchant.is_none()` 过滤是行为关键：商人不得被 `monster_run`
+    /// 当怪跑（置 `target_x = -1` / 消耗 AI 取数）。删掉该守卫 ⇒ 必红。
+    ///
+    /// 2026-10-21（`openmir2-merchant-race-bias`）后商人 `race` 已从 50 改为 10，但
+    /// `race > Play(0)` 仍为真 ⇒ 本守卫依旧被需要；把身份门换成 `race == 50` ⇒ 必红。
     #[test]
     fn monster_ai_tick_skips_merchants_race_is_animal() {
         let mut w = World::new(64, 64);
@@ -2005,11 +2016,203 @@ mod tests {
         let e = w.entities.get(a).unwrap();
         assert_eq!(
             e.ai.target_x, 42,
-            "商人不得被 monster_run 当怪跑（race 50 == Animal 50）"
+            "商人不得被 monster_run 当怪跑（身份门 merchant.is_none）"
         );
         assert_eq!(e.ai.walk_tick, 0, "商人不得被 AI 推进 walk_tick");
         let mut expect = rng_before;
         assert_eq!(w.rng.random(), expect.random(), "跳过商人 ⇒ 不消耗 AI 取数");
+    }
+
+    fn player_entity(id: i32, name: &str, x: i32, y: i32) -> Entity {
+        let mut e = Entity::new(id, name, x, y);
+        e.race = crate::entity::ACTOR_RACE_PLAY;
+        e.hp = 100;
+        e.max_hp = 100;
+        e.dc = 0x0A_14; // LoByte=20、HiByte=10 ⇒ 攻击力 20（差为负 ⇒ 0..0）
+        e.hit_point = 10;
+        e.speed_point = 0;
+        e
+    }
+
+    fn race_entity(id: i32, name: &str, x: i32, y: i32, race: u8) -> Entity {
+        let mut e = Entity::new(id, name, x, y);
+        e.race = race;
+        e
+    }
+
+    /// `openmir2-merchant-race-bias`：oracle 商人**行为轴** `Race = ActorRace.NPC(10)`
+    /// （`NormNpc.cs:42`；`Merchant` ctor 不覆写 `Race`），**外观轴**
+    /// `RaceImg = ActorRace.Merchant(50)`（`Merchant.cs:84`）。`crates/world` 用独立
+    /// [`Entity::race_img`] 承载外观轴，`race` 保持 10 供所有攻击/受击判定读取。
+    ///
+    /// 改坏必红：把 `insert_merchant` 的 `e.race` 改回 `ACTOR_RACE_MERCHANT(50)` ⇒ race 断言红；
+    /// 删 `e.race_img = ACTOR_RACE_MERCHANT` ⇒ race_img 断言红。
+    #[test]
+    fn merchant_race_is_npc_and_race_img_is_merchant() {
+        let mut w = World::new(20, 20);
+        let id = w.spawn_merchant(spawn_at(3, 4)).expect("挂图成功");
+        let e = w.entities.get(id).expect("实体在");
+        assert_eq!(
+            e.race,
+            crate::entity::ACTOR_RACE_NPC,
+            "行为轴 = NormNpc ctor 的 Race"
+        );
+        assert_eq!(e.race, 10);
+        assert_eq!(
+            e.race_img, ACTOR_RACE_MERCHANT,
+            "外观轴 = Merchant ctor 的 RaceImg"
+        );
+        assert_eq!(e.race_img, 50);
+        // 身份仍按 `merchant` 标记，不依赖 race；CellType 同源（`NormNpc.cs:50`）。
+        assert!(e.merchant.is_some());
+        assert_eq!(w.merchant_ids_sorted(), vec![id]);
+        assert_eq!(crate::world::entity_cell_type(e), CellType::Merchant);
+    }
+
+    /// 判据 1（玩家攻击路径）：商人**不可被选中/击中**，攻击不产生伤害与受击帧。
+    ///
+    /// 走生产结算入口 [`World::attack_once`]（`Command::Attack` 的唯一结算点，玩家/怪物共用；
+    /// 等价 oracle `_Attack` + `AttackSuccess`）。受击帧 = `RM_REFMESSAGE` 到点后的
+    /// `SM_STRUCK` 广播（`pending_refmessage_frames`）。
+    ///
+    /// 改坏必红：把 `insert_merchant` 的 `e.race` 改回 50 ⇒ `HAM_ALL` 变可攻击、
+    /// `damage > 0`、受击帧非空。
+    #[test]
+    fn player_cannot_target_or_damage_merchant() {
+        use crate::combat::{
+            is_attack_target_base, is_attack_target_player_grouped, is_proper_target_grouped,
+            ATTACK_MODE_HAM_ALL, ATTACK_MODE_HAM_GROUP, ATTACK_MODE_HAM_GUILD,
+            ATTACK_MODE_HAM_PEACE, ATTACK_MODE_HAM_PKATTACK,
+        };
+
+        let mut w = World::new(32, 32);
+        w.enable_refmessage_delay();
+        w.clock_ms = 1_000;
+        let mid = w.spawn_merchant(spawn_at(5, 5)).expect("挂图成功");
+        let pid = w.add_entity(player_entity(0, "hero", 6, 5));
+        let player = w.entities.get(pid).cloned().expect("玩家在");
+        let merchant = w.entities.get(mid).cloned().expect("商人在");
+
+        // 玩家攻方：所有按 race 窗口分派的攻击模式都把 race 10 判成**不可攻击**
+        // （`HAM_DEAR` / `HAM_MASTER` 对「非 dear / 非师徒」恒真，不属 race 窗口，故不列）。
+        for mode in [
+            ATTACK_MODE_HAM_ALL,
+            ATTACK_MODE_HAM_PEACE,
+            ATTACK_MODE_HAM_GROUP,
+            ATTACK_MODE_HAM_GUILD,
+            ATTACK_MODE_HAM_PKATTACK,
+        ] {
+            let mut p = player.clone();
+            p.attack_mode = mode;
+            assert!(
+                !is_attack_target_player_grouped(&p, &merchant, &[]),
+                "攻击模式 {mode} 不得把商人当目标"
+            );
+        }
+        let mut p = player.clone();
+        p.attack_mode = ATTACK_MODE_HAM_ALL;
+        assert!(!is_proper_target_grouped(&p, &merchant, &[]));
+
+        // 基版目标规则（怪物/NPC 攻方）：普通怪不攻击商人；`NastyMode` 的 race 窗
+        // `[NPC(10), PeaceNpc(15)]` 也排除 race 10（race 50 时会被误判为可攻击）。
+        let mut plain_mon = race_entity(0, "plain", 7, 5, crate::entity::ACTOR_RACE_MONSTER);
+        plain_mon.nasty_mode = false;
+        assert!(!is_attack_target_base(&plain_mon, &merchant));
+        let mut nasty_mon = plain_mon.clone();
+        nasty_mon.nasty_mode = true;
+        assert!(
+            !is_attack_target_base(&nasty_mon, &merchant),
+            "NastyMode 的 race 窗排除商人"
+        );
+
+        // 生产结算入口：不命中、不掉血、不排 `SendStruckDelayMsg`（受击帧门）。
+        let hp_before = merchant.hp;
+        let outcome = w.attack_once(pid, mid).expect("攻击应结算");
+        assert!(!outcome.hit, "不可攻击目标不得命中");
+        assert_eq!(outcome.damage, 0, "商人不得掉血");
+        assert_eq!(outcome.struck_power, 0, "不得入队 RM_REFMESSAGE");
+        assert_eq!(w.entities.get(mid).unwrap().hp, hp_before);
+        assert!(
+            w.entities.get(mid).unwrap().merchant.is_some(),
+            "商人仍在 merchant 身份位（不得从列表消失）"
+        );
+        // 到点投递：没有 RM_REFMESSAGE ⇒ 没有任何受击帧。
+        w.clock_ms += 1_000;
+        w.deliver_self_delay_msgs();
+        assert!(
+            w.take_refmessage_frames().is_empty(),
+            "对商人攻击不得产生受击帧"
+        );
+    }
+
+    /// 判据 2（回归）：race 50 的目标**仍可被玩家攻击**，伤害与受击帧路径不变。
+    ///
+    /// 覆盖 oracle 的「动物 race 50」语义（`ActorRace.Animal = Merchant = 50`，`Race.cs`）；
+    /// 商人 race 改成 10 不得把 race 50 一并排除。
+    ///
+    /// 改坏必红：把 `is_attack_target_player_grouped` 的 `HAM_ALL` 上界从
+    /// `ACTOR_RACE_PEACE_NPC(15)` 放宽到 `ACTOR_RACE_ANIMAL(50)` ⇒ race 50 被判不可攻击 ⇒ 红。
+    #[test]
+    fn race_50_stays_attackable_for_players() {
+        use crate::combat::{is_attack_target_player_grouped, ATTACK_MODE_HAM_ALL};
+        use crate::entity::ACTOR_RACE_ANIMAL;
+
+        let mut w = World::new(32, 32);
+        w.enable_refmessage_delay();
+        w.clock_ms = 1_000;
+        let pid = w.add_entity(player_entity(0, "hero", 6, 5));
+        let aid = w.add_entity(race_entity(0, "animal", 5, 5, ACTOR_RACE_ANIMAL));
+        let player = w.entities.get(pid).cloned().expect("玩家在");
+        let animal = w.entities.get(aid).cloned().expect("动物在");
+        let mut p = player.clone();
+        p.attack_mode = ATTACK_MODE_HAM_ALL;
+        assert!(
+            is_attack_target_player_grouped(&p, &animal, &[]),
+            "race 50 仍属可攻击集"
+        );
+        let hp_before = animal.hp;
+        let outcome = w.attack_once(pid, aid).expect("攻击应结算");
+        assert!(outcome.hit, "race 50 目标应命中");
+        assert!(outcome.damage > 0, "race 50 目标应掉血");
+        assert_eq!(
+            w.entities.get(aid).unwrap().hp,
+            hp_before - outcome.damage,
+            "伤害路径不变（HP 扣减与结算一致）"
+        );
+        w.clock_ms += 1_000;
+        w.deliver_self_delay_msgs();
+        assert!(
+            !w.take_refmessage_frames().is_empty(),
+            "race 50 受击仍产生受击帧"
+        );
+    }
+
+    /// 判据 3（身份面）：race 从 50→10 不得让商人从 `merchant_ids` / `ProcessMerchants`
+    /// 列表消失；tick 与 CellType / 视野更新门都按身份（`merchant.is_some()`）判定。
+    ///
+    /// 改坏必红：把 `merchant_ids_sorted` 的 `e.merchant.is_some()` 换成
+    /// `e.race == ACTOR_RACE_MERCHANT` ⇒ 商人列表为空、tick 不跑 ⇒ 红。
+    #[test]
+    fn merchant_tick_and_identity_do_not_depend_on_race() {
+        let mut w = World::new(20, 20);
+        w.clock_ms = 10_000;
+        let id = w.spawn_merchant(spawn_at(2, 2)).expect("挂图成功");
+        // 令 `RunTick` 早已到点（`ProcessMerchants` 的 `now - RunTick > RunTime` 门）。
+        if let Some(st) = w.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+            st.run_tick = 0;
+        }
+        w.clock_ms += MERCHANT_RUN_TIME + 1;
+        let out = w.merchant_tick();
+        assert_eq!(w.merchant_ids_sorted(), vec![id], "身份列表不依赖 race");
+        assert!(out.ran.contains(&id), "商人仍由 ProcessMerchants 驱动");
+        let e = w.entities.get(id).unwrap();
+        assert_eq!(crate::world::entity_cell_type(e), CellType::Merchant);
+        assert!(
+            !crate::monai::consumes_view_range_update(e),
+            "商人仍不消费 RM_UPDATEVIEWRANGE"
+        );
+        assert!(e.merchant.is_some(), "点击/对话的宿主身份位仍为真");
+        assert_eq!(e.race, crate::entity::ACTOR_RACE_NPC);
     }
 
     fn item(index: u16, make_index: i32, dura: u16) -> MerchantItem {

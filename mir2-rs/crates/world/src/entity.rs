@@ -464,8 +464,19 @@ pub struct Entity {
     pub y: i32,
     /// C# `ViewRange`（`BaseObject` 默认 5）
     pub view_range: i32,
-    /// C# `Race`
+    /// C# `Race` —— **行为轴**：所有 `IsAttackTarget`/`Struck`/掉落等判定读它。
+    ///
+    /// 与 [`Entity::race_img`]（外观轴）**不是同一字段**：oracle 商人 `Race = ActorRace.NPC(10)`
+    /// （`NormNpc.cs:42` 继承）而 `RaceImg = ActorRace.Merchant(50)`（`Merchant.cs:84`）；两者
+    /// 数值在 `Merchant`/`Animal` 上偶合（都是 50），不得混用。
     pub race: u8,
+    /// C# `BaseObject.RaceImg`（`BaseObject.cs:101`；ctor `:380` 置 0）——**外观轴**：
+    /// 客户端可见帧的形像编号，`GetFeature()` = `MakeMonsterFeature(RaceImg, MonsterWeapon, Appr)`
+    /// （`BaseObject.Base.cs:911`）。
+    ///
+    /// 商人置 `ActorRace.Merchant(50)`（`Merchant.cs:84`），但其行为轴 [`Entity::race`] 仍是
+    /// `ActorRace.NPC(10)`（`NormNpc.cs:42`）⇒ **不得**把本字段当 `race` 用（反之亦然）。
+    pub race_img: u8,
     /// C# `BaseObject.Appr`（形像代码）。`ApplyMonsterAbility` 从
     /// `MonsterInfo.Appr` 写入（`WorldServer.MonGen.cs:889`）。
     ///
@@ -949,8 +960,9 @@ pub struct Entity {
     /// 怪物/动物 AI 状态（`AnimalObject`/`MonsterObject` 字段子集；玩家不用，保持默认）。
     pub ai: AnimalState,
     /// 商人状态（`Merchant` 字段子集，M3⑤-实现 2 第①片）。`Some(_)` ⇒ 本实体是交易商人：
-    /// [`crate::monai::monster_ai_tick`] 显式跳过它（race 50 与 `ActorRace.Animal` 同值，
-    /// 靠 race 会误跑 `monster_run`）。
+    /// 这是商人的**身份门**——[`crate::monai::monster_ai_tick`]、`entity_cell_type`、
+    /// `consumes_view_range_update`、`merchant_ids_sorted` 都按它判定，**不**按 race
+    /// （商人行为轴 `race = 10` 与固定 NPC 同值，外观轴 `race_img = 50` 又与动物同值）。
     pub merchant: Option<crate::merchant::MerchantState>,
     /// 固定管理 NPC 状态（`NormNpc` 字段子集 + ctor 抽数，卡 `openmir2-npcs-fixed-loading`）。
     /// `Some(_)` ⇒ 本实体是 `Envir/Npcs.txt` 的固定 NPC（Merchant/GuildOfficial/CastleOfficial）：
@@ -994,7 +1006,8 @@ impl Entity {
             y,
             view_range: 5, // BaseObject.cs:383
             race: ACTOR_RACE_PLAY,
-            appr: 0, // BaseObject ctor 未显式赋值 ⇒ 0（由 ApplyMonsterAbility 覆盖）
+            race_img: 0, // `BaseObject.cs:380` ctor `RaceImg = 0`；商人 ctor 另置 50。
+            appr: 0,     // BaseObject ctor 未显式赋值 ⇒ 0（由 ApplyMonsterAbility 覆盖）
             master: None,
             slave_relax: false,
             slave_list: Vec::new(),

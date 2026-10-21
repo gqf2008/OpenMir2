@@ -5228,8 +5228,9 @@ pub fn monster_ai_tick(world: &mut World) {
     let ids: Vec<i32> = world
         .entities
         .iter()
-        // `race > Play` 会把交易商人也命中（`ActorRace.Merchant == Animal == 50`）⇒
-        // 显式排除 `merchant.is_some()` 的实体（M3⑤-实现 2：商人由自己的 tick 驱动）。
+        // `race > Play` 会把交易商人也命中（商人 race = `ActorRace.NPC(10)`）⇒
+        // 身份门显式排除 `merchant.is_some()` 的实体（M3⑤-实现 2：商人由自己的 tick 驱动；
+        // **不得**把身份门换成 race 比较——`NPC(10)` 与固定 NPC 同值、`RaceImg(50)` 与动物同值）。
         // 固定管理 NPC（`Envir/Npcs.txt`，race = `ActorRace.NPC`）同样排除：oracle 由
         // `ProcessNpcs`（`WorldServer.Merchant.cs:118`）驱动，本仓已由 `World::npc_tick`
         // 建模（同一次序）；此处必须不跑怪物 AI（否则会用与 oracle 不同的取数路径污染
