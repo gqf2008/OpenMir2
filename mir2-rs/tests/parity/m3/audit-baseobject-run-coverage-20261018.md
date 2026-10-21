@@ -222,7 +222,7 @@
 | ID | oracle（行/语义） | Rust 符号/文件 | 状态 | 可观测后果 | 级 |
 |---|---|---|---|---|---|
 | B01 | `27-31` 消息泵（优先级队列 + 延时头中止） | `monai.rs::base_object_run_monster` 只出队 `pending_struck`；玩家走 `bins/game-svr/src/inbound.rs` 命令 FIFO + `slave.rs::deliver_self_delay_msgs` | 部分 | 怪物只支持 `RM_STRUCK` 一类消息；玩家消息按到达序而非 `wIdent` 优先级；延时头不阻塞 | R |
-| B02 | `32-36` `SuperMan` 回满 | 无（无 GM 态） | 不适用 | 生产配置不可达 | — |
+| B02 | `32-36` `SuperMan` 回满 | `monai.rs::base_object_run_monster`（消息泵之后、`!Death` 之前；**2026-10-21 建模**） | 已实现 | race 120 `SoccerBall` ctor 置 `SuperMan=true`（数据可达）⇒ 每 `Run` HP/MP 回满；普通怪不受影响（构造级用例 `soccer_ball_super_man_refills_hp_each_base_run`） | R |
 | B03 | `37-42` 恢复 tick 折算 | `stamina.rs::stamina_tick`（玩家）、`monai.rs::base_object_run_monster`（怪） | 已实现 | 怪物 50/s 与 oracle 同；**玩家 Rust 40/s vs oracle 名义 50/s（未决；抖动区间 40–50/s）** | R |
 | B04 | `44-56` HP 回填 `MaxHP/75+1` + 53 | 同上 | 已实现 | 帧内容/次序对齐（`drain_stamina` 按快照逐条发） | R |
 | B05 | `57-69` MP 回填 `MaxMP/18+1` + 53 | 同上 | 已实现 | 同上 | R |

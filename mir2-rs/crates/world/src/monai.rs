@@ -34,7 +34,7 @@
 //!     末尾的 `base.Run()`，`MonsterObject.cs:255/359`）；
 //!   - [`crate::world::World`]：`HP==0 ⇒ Die()`（`:70-73`，由 `settle_deaths` 死亡结算等价）、
 //!     `LastHiter` 30s / `ExpHiter` 6s 过期（`:119-132`，由 `expire_hitters`）。
-//! - **仍未建模**（登记）：`SuperMan`（`:35-38`）、`BaseObject.Run` 的 Master 变色支
+//! - **已建模**：`SuperMan`（`:32-36`，见 [`base_object_run_monster`]）。**仍未建模**（登记）：`BaseObject.Run` 的 Master 变色支
 //!   （`:133-215`，与 `MonsterObject.Run` 的跟随支不同）、`ShowHp`/`VerifyTick` 的 `ShowHp` 支
 //!   （`:217-256`；`VerifyTick` 已接）。死亡支
 //!   `MakeGhost`（`:85-101`）已由本片接上（[`make_ghost`]，门见
@@ -439,27 +439,18 @@ pub fn think(world: &mut World, actor_id: i32) -> bool {
 }
 
 /// `MagicMonster.Think`（`MagicMonster.cs:18-45`）——与 `MonsterObject.Think` 逐字相同，
-/// **唯一差异**：`DupMode` 支**没有** `if (HolySeize) return false;` 早退
-/// （`MagicMonster.cs:36-42` 直接 `WalkTo`）。oracle 的 `Think` 在 `MagicMonster` 里是
-/// `private`（非 override），但 `MagicMonster.Run` 与它尾部 `base.Run()` 的
-/// `MonsterObject.Run` 都走**这个** `Think()` ⇒ race 215 的两个 pass 都用本函数。
+/// **唯一差异**：`DupMode` 支**没有** `if (HolySeize) return false;` 早退（`MagicMonster.cs:33-43`）。
+///
+/// oracle 的两个 `Think` 都是 `private`（`MonsterObject.cs:187` / `MagicMonster.cs:18`）⇒
+/// 静态绑定，**不是虚分派**：`MonsterObject.Run`（Pass 2）里的 `Think()` 恒落
+/// `MonsterObject.Think`（**有**门）；`MagicMonster.Run`（Pass 1，`:90`）里的 `Think()` 恒落
+/// 本函数（**无**门）。`MagicMonster.Run` 尾部 `base.Run()`（`:185`）进 `MonsterObject.Run`，因此 `FireballMonster(215)` 的两段 AI 是「Pass 1 无门 → Pass 2 有门」。
+///
+/// 本仓由调用点显式选择：Pass 1 = [`magic_monster_run`] 直调本函数，Pass 2 =
+/// [`monster_run`] 直调 [`think`]；不再按 race 做「两个 pass 都走无门版」的错分派。
 fn magic_monster_think(world: &mut World, actor_id: i32) -> bool {
     think_refresh(world, actor_id);
     think_dup_move(world, actor_id, false)
-}
-
-/// `MonsterObject.Run` / `MagicMonster.Run` 里虚调用 `Think()` 的落点。
-///
-/// oracle：`Think` 在 `MonsterObject` 是 `private bool Think()`、在 `MagicMonster` 是另一个
-/// `private bool Think()` ⇒ **不是虚分派**；`FireballMonster`（唯一 `: MagicMonster` 且被
-/// `CreateMonster` 实例化的类）的两段 AI 都调 `MagicMonster.Think`。本仓按 race 215 分派与
-/// oracle 等价（215 是 `MagicMonster` 家族的唯一 race）。
-fn monster_think(world: &mut World, actor_id: i32) -> bool {
-    if world.entities.get(actor_id).is_some_and(|e| e.race == 215) {
-        magic_monster_think(world, actor_id)
-    } else {
-        think(world, actor_id)
-    }
 }
 
 /// `Think` 的 3s 刷新段（`MonsterObject.cs:190-201` / `MagicMonster.cs:21-32` 逐字相同）。
@@ -4666,8 +4657,9 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
         crazy_mode_expiry(world, actor_id);
         return;
     }
-    // 虚调用 `Think()`：race 215（`MagicMonster`）用无 HolySeize 门的版本（MB-9）。
-    if monster_think(world, actor_id) {
+    // `MonsterObject.Run`（Pass 2）的 `Think()` 静态绑定 `MonsterObject.Think`（**有**门）：
+    // 无门版只属于 `MagicMonster.Run`（Pass 1，见 [`magic_monster_run`]）。
+    if think(world, actor_id) {
         // oracle `:255-258`：`if (Think()) { base.Run(); return; }` ⇒ **跳过** `CheckRoyalty`。
         return;
     }
@@ -4888,7 +4880,8 @@ fn monster_run_away_expiry(world: &mut World, actor_id: i32, now: i64) {
 ///
 /// **本函数不消费随机数**（恢复/体力点/过期都是纯状态演进）。
 ///
-/// **未建模（登记，见模块头/证据）**：`SuperMan`（`:35-38`）、`HP == 0 ⇒ Die()`（`:70-73`，
+/// **已建模**：`SuperMan`（`:32-36`，消息泵之后、`!Death` 之前回满；race 120 `SoccerBall` ctor 置位，数据可达）；
+/// **未建模（登记，见模块头/证据）**：`HP == 0 ⇒ Die()`（`:70-73`，
 /// 由 [`crate::world::World`] 的 `settle_deaths` 在同一 tick 的死亡结算里等价处理；本段的恢复
 /// 只增 HP、体力点段有 `HP > 1` 门⇒此处 `HP == 0` 不可达）、`MakeGhost`（`:86-101`，需
 /// `MonGen.ZenTime`/`Config.MakeGhostTime`）、`BaseObject.Run` 的 Master 变色支（`:133-215`）、
@@ -4939,6 +4932,13 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
         // oracle `if (processMsg.ActorId == ActorId && struckObject != null)`：命中者已不在场 ⇒ 跳过。
         if world.entities.get(msg.hiter).is_some() {
             animal_struck(world, actor_id, msg.hiter);
+        }
+    }
+    // `BaseObject.Base.cs:32-36`：`if (SuperMan) { HP = MaxHP; MP = MaxMP; }`（在 `!Death` 之前）。
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        if e.super_man {
+            e.hp = e.max_hp;
+            e.mp = e.max_mp;
         }
     }
     let now = world.clock_ms;
@@ -6721,21 +6721,21 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
                             .zip(world.entities.get(pose_id))
                             .is_some_and(|(a, t)| is_proper_target(a, t));
                         if pose_proper && anti_magic > 0 {
-                            // `nPower = baseObject.GetMagStruckDamage(this, nPower)`（`:32`）：
-                            // MAC 与 `LifeAttrib` 取**受击者（pose）**；undead 加项取**攻方**的
-                            // `AddAbil.UndeadPower`（`BaseObject.Base.cs:816` 的参数名 `baseObject`
-                            // 就是本怪）。生产怪 `undead_power` 恒 0 ⇒ 数值面无差。
-                            let (mac, pose_undead) = world
-                                .entities
-                                .get(pose_id)
-                                .map_or((0, false), |p| (p.mac, p.life_attrib == 1));
-                            let attacker_undead =
-                                world.entities.get(actor_id).map_or(0, |a| a.undead_power);
-                            let undead = if pose_undead {
-                                Some(attacker_undead)
-                            } else {
-                                None
-                            };
+                            // `baseObject.GetMagStruckDamage(this, nPower)`（`:32`）在**受击者
+                            // （pose）**上调用 ⇒ MAC / `LifeAttrib` / `AddAbil.UndeadPower` 都取
+                            // pose（`:816` 的 `this` 是接收者；参数 `baseObject` 只是攻方，本函数
+                            // 不读它的 `undead_power`）。生产怪 `undead_power` 恒 0，方向仍按 oracle。
+                            let (mac, undead): (u16, Option<i32>) =
+                                world.entities.get(pose_id).map_or((0, None), |p| {
+                                    (
+                                        p.mac,
+                                        if p.life_attrib == 1 {
+                                            Some(p.undead_power)
+                                        } else {
+                                            None
+                                        },
+                                    )
+                                });
                             let reduced = crate::combat::get_mag_struck_damage(
                                 &mut world.rng,
                                 mac,
@@ -6806,7 +6806,7 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
 /// 与 [`monster_run`]（= `MonsterObject.Run`，本类尾部 `base.Run()` 的 Pass 2）逐句相同的段
 /// 直接复用；差异只有三处：
 /// 1. **没有** `ATMonster.Run` 的 8s/1s 索敌门（`MagicMonster : MonsterObject`）；
-/// 2. `Think()` 是 `MagicMonster.Think`（无 HolySeize 门）——[`monster_think`] 分派；
+/// 2. `Think()` 是 `MagicMonster.Think`（无 HolySeize 门）——本函数直调 [`magic_monster_think`]；
 /// 3. 函数尾**不**跑 `CheckRoyalty()`/`CrazyMode` 到期（那是 Pass 2 =
 ///    [`monster_run`] 的尾部；oracle 由 `base.Run()` 进入）。
 ///
@@ -6821,7 +6821,7 @@ fn magic_monster_run(world: &mut World, actor_id: i32) {
         return;
     }
     // `if (Think()) { base.Run(); return; }`（`:88-92`）。
-    if monster_think(world, actor_id) {
+    if magic_monster_think(world, actor_id) {
         return;
     }
     let now = world.clock_ms;
@@ -14534,6 +14534,39 @@ mod mb89_tests {
         assert_eq!(e.ai.attack_tick, 777, "覆写版不加 AttackTick");
     }
 
+    /// R36（复验 Minor 2）：`BaseObject.Run` 的 `SuperMan` 段（`BaseObject.Base.cs:32-36`）
+    /// 在消息泵之后、`!Death` 之前回满 HP/MP。race 120 `SoccerBall` ctor 置 `SuperMan=true`
+    /// （数据可达）⇒ 每 `Run` 回满；普通怪不走该支。
+    ///
+    /// 牙：删掉 `base_object_run_monster` 的 `SuperMan` 段 ⇒ 第一条断言红。
+    #[test]
+    fn soccer_ball_super_man_refills_hp_each_base_run() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 1000;
+        let id = spawn_monster(&mut world, 120, 10, 10, 100);
+        assert!(
+            world.entities.get(id).unwrap().super_man,
+            "ctor SuperMan=true"
+        );
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.hp = 3;
+            e.mp = 1;
+        }
+        base_object_run_monster(&mut world, id);
+        let e = world.entities.get(id).unwrap();
+        assert_eq!((e.hp, e.mp), (e.max_hp, e.max_mp), "SuperMan ⇒ HP/MP 回满");
+        // 对照：普通怪（race 50）同样的低 HP 不进 SuperMan 支。
+        let n = spawn_monster(&mut world, 50, 20, 20, 100);
+        world.entities.get_mut(n).unwrap().hp = 3;
+        base_object_run_monster(&mut world, n);
+        assert_eq!(
+            world.entities.get(n).unwrap().hp,
+            3,
+            "非 SuperMan ⇒ 恢复段未到点（HealthTick=50 < 300），不一次回满"
+        );
+    }
+
     // ------------------------------ R33 SandMobObject ------------------------------
 
     /// R33：`SandMobObject.Run` 的三种 `base.Run()` pass 数 + `_mDwAppearStart` 写点。
@@ -14943,7 +14976,11 @@ mod mb89_tests {
 
     /// R19-A8：`MagicMonster.Think` **没有** HolySeize 早退（`MonsterObject.Think` 有）。
     ///
-    /// 牙：让 `monster_think` 对 215 走基版 `think` ⇒ race 215 的「抽 RandomByte(8)」红。
+    /// oracle 两个 `Think` 都是 `private` ⇒ 静态绑定：Pass 1（`MagicMonster.Run`）落
+    /// `MagicMonster.Think`、Pass 2（尾部 `base.Run()` = `MonsterObject.Run`）落
+    /// `MonsterObject.Think`。本用例只钉两个叶子函数本身；**分派**由
+    /// `mb89_race215_think_dispatch_two_pass_matches_oracle` 走整链钉（牙：把 Pass 2 也接成
+    /// 无门版 ⇒ 整链多抽一次 `RandomByte(8)` ⇒ 红）。
     #[test]
     fn magic_monster_think_has_no_holy_seize_gate() {
         // race 215：HolySeize 下仍进 DupMode 抽 RandomByte(8)。
@@ -14959,7 +14996,7 @@ mod mb89_tests {
         world.rng = RandomNumber::with_seed(11);
         let mut expect = RandomNumber::with_seed(11);
         expect.random_byte(8);
-        let _ = monster_think(&mut world, m);
+        let _ = magic_monster_think(&mut world, m);
         stream_eq(
             &world,
             &expect,
@@ -14977,8 +15014,79 @@ mod mb89_tests {
             e.ai.think_tick = 0;
         }
         let before = world.rng.clone();
-        assert!(!monster_think(&mut world, n));
+        assert!(!think(&mut world, n));
         stream_eq(&world, &before, "MonsterObject.Think 的 HolySeize 门");
+    }
+
+    /// R19-A8（**集成判据**）：race 215 经 `monster_ai_tick` 的整链（Pass 1 → Pass 2）分派。
+    ///
+    /// `FireballMonster.Run` → `MagicMonster.Run`（Pass 1，`MagicMonster.Think` **无**门）→
+    /// 尾部 `base.Run()` = `MonsterObject.Run`（Pass 2，`MonsterObject.Think` **有**门）。
+    /// 造景：HolySeize + DupMode + 八邻全封 ⇒ Pass 1 仍抽一次 `RandomByte(8)`（移动失败 ⇒
+    /// `DupMode` 保持 true）；Pass 2 必须被 HolySeize 门挡住 ⇒ **总抽数恰好 1**。
+    ///
+    /// 牙：Pass 2 错接无门版（旧实现的 race 215 分派）⇒ 抽 2 次 ⇒ 红；
+    /// Pass 1 错接有门版 ⇒ 抽 0 次 ⇒ 红。
+    #[test]
+    fn mb89_race215_think_dispatch_two_pass_matches_oracle() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 10_000;
+        let now = world.clock_ms;
+        let m = spawn_monster(&mut world, 215, 10, 10, 1000);
+        // 八邻全封 ⇒ Pass 1 的 `WalkTo(RandomByte(8))` 必失败 ⇒ `DupMode` 保持 true。
+        for (dx, dy) in [
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ] {
+            assert!(world.maps[0].set_map_xy_flag(10 + dx, 10 + dy, false));
+        }
+        {
+            let e = world.entities.get_mut(m).unwrap();
+            e.ai.holy_seize = true;
+            e.ai.holy_seize_tick = now; // 不让尾段 `animal_run` 到期清除
+            e.ai.dup_mode = true;
+            e.ai.think_tick = 0; // 3s 刷新段照跑（不改变 DupMode）
+            e.ai.walk_tick = now; // WalkSpeed 门未到 ⇒ Pass 1/2 都不进 `Wondering`
+        }
+        world.rng = RandomNumber::with_seed(11);
+        let mut expect = RandomNumber::with_seed(11);
+        expect.random_byte(8); // Pass 1 的唯一一抽
+        monster_ai_tick(&mut world);
+        stream_eq(&world, &expect, "Pass 1 无门抽一次 / Pass 2 有门零抽");
+        let e = world.entities.get(m).unwrap();
+        assert!(e.ai.dup_mode, "Pass 1 移动失败 ⇒ DupMode 保持 true");
+        assert!(e.ai.holy_seize, "HolySeize 未被清除");
+        assert_eq!((e.x, e.y), (10, 10), "四面被墙 ⇒ 原地不动");
+    }
+
+    /// R19-A9（复验 Minor 1）：`baseObject.GetMagStruckDamage(this, nPower)`（`:32`）的
+    /// undead 加项读**接收者（pose）**的 `AddAbil.UndeadPower`，不是攻方（本怪）的。
+    ///
+    /// 造景同 `fireball_full_cast_*`，另置 pose `LA_UNDEAD` + `UndeadPower=7`、本怪
+    /// `undead_power=100`：DC=10、MAC=5、undead=7 ⇒ 伤害 12（旧实现会加 100 ⇒ 105）。
+    ///
+    /// 牙：把 undead 取回攻方 ⇒ 本用例红。
+    #[test]
+    fn fireball_mag_struck_undead_reads_victim_not_attacker() {
+        let mut s = fireball_setup(100_000, 1);
+        {
+            let p = s.world.entities.get_mut(s.pose).unwrap();
+            p.life_attrib = 1; // `Grobal2.LA_UNDEAD`
+            p.undead_power = 7;
+        }
+        s.world.entities.get_mut(s.m).unwrap().undead_power = 100;
+        fireball_monster_run(&mut s.world, s.m);
+        assert_eq!(
+            s.world.entities.get(s.pose).unwrap().hp,
+            500 - 12,
+            "只加接收者（pose）的 UndeadPower=7；攻方的 100 不参与"
+        );
     }
 
     /// R19 §4.1.2 第 6 条：`SpellTick` 与 `BaseObject.Run` 的恢复累加器同名共用 ⇒ 同 tick 的
