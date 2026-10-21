@@ -534,9 +534,9 @@ fn c8_ghost_reclaim_through_production_run() {
 #[test]
 fn castle_production_call_order_is_wired() {
     let main_rs = std::fs::read_to_string(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"),
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
     )
-    .expect("读 main.rs");
+    .expect("读 lib.rs");
     let reloc = main_rs
         .find("mir2_world::castle::relocate_on_enter(")
         .expect("进图改写调用必须存在");

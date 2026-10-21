@@ -931,12 +931,12 @@ mod tests {
     /// 调用 `mapwire::apply_map_cells(reg, &mut world)`，且两者都在 `if let Some(reg) = registry.as_ref()`
     /// 支内。
     ///
-    /// 本仓既有同类样板（`bins/game-svr/src/main.rs:10927` 的 `include_str!("main.rs")` 锚点保鲜）。
+    /// 本仓既有同类样板（`bins/game-svr/src/lib.rs` 的 `include_str!("lib.rs")` 锚点保鲜）。
     /// 作用：把「生产路径真的灌了、且次序对」钉进常驻测试——单测覆盖不到 `sim_loop`（巨型函数、
     /// 起真宿主），源码锚是这条**调用点**在套件内唯一可判的形态。删掉调用点/把两条调用对调 ⇒ 必红。
     #[test]
     fn production_sim_loop_loads_cells_before_routes() {
-        let src = include_str!("main.rs");
+        let src = include_str!("lib.rs");
         let branch = src
             .find("if let Some(reg) = registry.as_ref()")
             .expect("sim_loop 的注册表支");

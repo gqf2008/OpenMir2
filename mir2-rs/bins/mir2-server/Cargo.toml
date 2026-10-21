@@ -1,0 +1,21 @@
+[package]
+name = "mir2-server"
+version = "0.1.0"
+edition = "2021"
+description = "单二进制多角色入口：argv[1] 选 game-svr|db-srv|login-srv|game-gate|login-gate|sel-gate 并原样透传其余参数（进程仍按角色分离，行为与旧六个 exe 相同）"
+license = "MIT"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+
+[dependencies]
+# 六个角色 crate 的 lib target（`run()` / `run_with_args()`）——旧 exe 保留，行为不变。
+game-svr = { path = "../game-svr" }
+db-srv = { path = "../db-srv" }
+login-srv = { path = "../login-srv" }
+game-gate = { path = "../game-gate" }
+login-gate = { path = "../login-gate" }
+sel-gate = { path = "../sel-gate" }

@@ -1130,6 +1130,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mir2-server"
+version = "0.1.0"
+dependencies = [
+ "db-srv",
+ "game-gate",
+ "game-svr",
+ "login-gate",
+ "login-srv",
+ "sel-gate",
+]
+
+[[package]]
 name = "mir2-shared"
 version = "0.1.0"
 

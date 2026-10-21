@@ -29,6 +29,8 @@ members = [
     "crates/encoding",
     # M2 入口：Rust GameGate/RunGate（客户端 7200 ↔ GameSvr 5000）
     "bins/game-gate",
+    # 单二进制多角色入口：argv[1] 选六个角色之一，其余参数原样透传（六个旧 exe 保留）
+    "bins/mir2-server",
 ]
 
 # 多线共用 workspace：members 只按行追加自己的 crate，不改动别人的行（见设计文档 §12.4）。

@@ -1743,7 +1743,7 @@ fn g3_w4_14_prepare_closed_guild_stale_does_not_dirty_new_session() {
 // 生产锚点（A1-A5）——只扫代码、剥注释（`//` 前缀改变 trim 结果 ⇒ 注释行不命中）
 // ---------------------------------------------------------------------------
 
-const MAIN_SRC: &str = include_str!("../main.rs");
+const MAIN_SRC: &str = include_str!("../lib.rs");
 const RUNTIME_SRC: &str = include_str!("../guild_runtime.rs");
 
 fn lines(src: &str) -> Vec<&str> {

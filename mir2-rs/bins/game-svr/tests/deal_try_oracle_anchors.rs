@@ -100,14 +100,14 @@ fn deal_try_oracle_anchors_match_source() {
     // ② Rust 侧：deal_try 注释必须引用 ① 的行号，且不得回退到旧漂移号码。
     //    O-1：断言面收窄到 deal_try 相关注释块（见 `deal_try_comment_bytes`）。
     let trade = deal_try_comment_bytes(&read("mir2-rs/bins/game-svr/src/trade.rs"));
-    let main = deal_try_comment_bytes(&read("mir2-rs/bins/game-svr/src/main.rs"));
+    let main = deal_try_comment_bytes(&read("mir2-rs/bins/game-svr/src/lib.rs"));
     assert!(
         trade.len() > 200 && main.len() > 200,
-        "deal_try 注释块提取过短（trade.rs={} B, main.rs={} B）——标记漂移会让门禁退化，fail-closed",
+        "deal_try 注释块提取过短（trade.rs={} B, lib.rs={} B）——标记漂移会让门禁退化，fail-closed",
         trade.len(),
         main.len()
     );
-    for (name, src) in [("trade.rs", &trade), ("main.rs", &main)] {
+    for (name, src) in [("trade.rs", &trade), ("lib.rs", &main)] {
         for good in [":932", ":933", ":936", ":938", ":958-960"] {
             assert!(
                 src.contains(good),
