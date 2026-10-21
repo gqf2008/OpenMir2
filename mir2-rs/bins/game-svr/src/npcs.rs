@@ -46,6 +46,7 @@ use mir2_script::{LocalFs, ScriptParsers};
 use mir2_shared::rng::RandomNumber;
 use mir2_world::npc::{NpcSpawn, NpcState};
 
+use crate::downlink::{npc_display, DisplayTable};
 use crate::npc::{MerchantNpc, MerchantScriptBook, NpcDef, NpcLoadFailure};
 
 /// NPC 装载/放置读数（日志/判据用）。
@@ -298,9 +299,23 @@ pub fn place_fixed_npcs_with_scripts(
     resolve_map: impl Fn(&str) -> Option<usize>,
     envir_root: &Path,
     book: &mut MerchantScriptBook,
+    displays: &mut DisplayTable,
 ) -> FixedNpcLoadReport {
     let (spawns, dropped_unknown_map) = build_npc_spawns_recording(npcs, resolve_map);
     let (placed, dropped_add_to_map, placed_npcs) = place_npcs_recording(world, spawns);
+    // **卡 `openmir2-npc-display-table`（T-137 残余）**：挂图成功的固定 NPC 必须登记展示表——
+    // `drain_aoi_downlink` 只对 `DisplayTable` 命中的 actor 出 `SM_TURN`/`SM_FEATURECHANGED`
+    // （`lib.rs` 的 `displays.get` 守卫），未登记 ⇒ 客户端看不见也点不到。
+    // 这里只登记 `placed_npcs`（= 挂图成功且未被 `RemoveAt` 的），字段口径见
+    // [`npc_display`]（oracle `NormNpc`：Light=2、RaceImg=50、Appr 来自行）。
+    for npc in &placed_npcs {
+        if let Some(e) = world.entities.get(npc.actor_id) {
+            displays.set(
+                npc.actor_id,
+                npc_display(e.ai.dir, e.race_img, e.appr, &npc.chr_name),
+            );
+        }
+    }
     let mut script_failures = Vec::new();
     let mut script_missing = Vec::new();
     if !placed_npcs.is_empty() {
@@ -785,12 +800,14 @@ mod tests {
         .unwrap();
         let mut world = mir2_world::World::with_maps(vec![(64, 64), (64, 64)]);
         let mut book = MerchantScriptBook::new(30);
+        let mut displays = DisplayTable::new();
         let report = place_fixed_npcs_with_scripts(
             &mut world,
             &npcs,
             |n| f.registry.id_of(n),
             &f.base.join("Envir"),
             &mut book,
+            &mut displays,
         );
         assert_eq!(report.placed, 2);
         // 倒序 = `NpCinitialize` 的 `for (i = Count-1; i >= 0; i--)` = `LoadNPCScript` 调用序。
@@ -990,5 +1007,69 @@ mod tests {
             king_labels.iter().any(|l| l.eq_ignore_ascii_case("@main")),
             "国王脚本必须有 @main：{king_labels:?}"
         );
+    }
+
+    /// **卡 `openmir2-npc-display-table` 判据（数量闭合）**：登记后「实体内固定 NPC 数 N ==
+    /// 展示表 N」，且逐条 `Light=2` / `Feature=MakeMonsterFeature(50,0,Appr)` /
+    /// `Dir=Entity.ai.dir`。合成夹具（不连部署）。
+    ///
+    /// 红检：删 `place_fixed_npcs_with_scripts` 里的登记循环 ⇒ `displays.len() == 0` ⇒ 必红；
+    /// 把 `npc_display` 的 `Light` 改成 0（或 Feature 改成 0）⇒ 逐字段断言必红。
+    #[test]
+    fn place_fixed_npcs_registers_display_for_every_placed_npc() {
+        let f = fixture();
+        let npcs = vec![
+            info("比奇国王", NpcType::GuildOfficial, "0122", 29, 32, 0, 8),
+            info("老人", NpcType::Merchant, "0", 3, 3, 0, 1),
+            info(
+                "沙巴克城堡管理",
+                NpcType::CastleOfficial,
+                "0122",
+                7,
+                16,
+                0,
+                8,
+            ),
+        ];
+        let mut world = mir2_world::World::with_maps(vec![(64, 64), (64, 64)]);
+        let mut book = MerchantScriptBook::new(30);
+        let mut displays = DisplayTable::new();
+        let report = place_fixed_npcs_with_scripts(
+            &mut world,
+            &npcs,
+            |n| f.registry.id_of(n),
+            &f.base.join("Envir"),
+            &mut book,
+            &mut displays,
+        );
+        assert_eq!(report.placed, 3);
+        assert_eq!(
+            world.npc_ids_sorted().len(),
+            displays.len(),
+            "实体内固定 NPC 数必须等于展示表项数（数量闭合）"
+        );
+        assert_eq!(displays.len(), 3);
+        for npc in &report.placed_npcs {
+            let e = world.entities.get(npc.actor_id).expect("实体在");
+            let d = displays
+                .get(npc.actor_id)
+                .unwrap_or_else(|| panic!("{} 未登记展示表", npc.chr_name));
+            assert_eq!(d.dir, e.ai.dir, "Dir = Entity.ai.dir");
+            assert_eq!(d.light, 2, "NormNpc ctor Light = 2（NormNpc.cs:43）");
+            assert_eq!(
+                d.feature,
+                crate::feature::make_monster_feature(50, 0, e.appr),
+                "Feature = MakeMonsterFeature(RaceImg=50, 0, Appr={})",
+                e.appr
+            );
+            assert_eq!(d.feature_ex, 0);
+            assert_eq!(d.status, 0);
+            assert_eq!(d.name_color, 255);
+        }
+        // 反证：展示表不是按空位/玩家登记（每项 key 都是真实 NPC 实体 id）。
+        let ids: Vec<i32> = world.npc_ids_sorted();
+        for id in ids {
+            assert!(displays.get(id).is_some(), "NPC 实体 {id} 必须有展示项");
+        }
     }
 }

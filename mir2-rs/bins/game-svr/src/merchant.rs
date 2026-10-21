@@ -29,6 +29,7 @@ use mir2_script::ScriptInfo;
 use mir2_shared::rng::RandomNumber;
 use mir2_world::merchant::{MerchantFlags, MerchantGoods, MerchantSpawn, MerchantState};
 
+use crate::downlink::{npc_display, DisplayTable};
 use crate::npc::{MerchantNpc, MerchantScriptBook, NpcDef};
 
 /// 装载结果读数（O-1 的真机判据：`records` vs `kept`）。
@@ -208,7 +209,9 @@ pub fn spawn_merchants(
     world: &mut mir2_world::World,
     spawns: Vec<MerchantSpawn>,
 ) -> (usize, Vec<String>) {
-    let (kept, failed, _book) = spawn_merchants_with_scripts(world, spawns, Vec::new());
+    let mut displays = DisplayTable::new();
+    let (kept, failed, _book) =
+        spawn_merchants_with_scripts(world, spawns, Vec::new(), &mut displays);
     (kept, failed)
 }
 
@@ -224,6 +227,7 @@ pub fn spawn_merchants_with_scripts(
     world: &mut mir2_world::World,
     mut spawns: Vec<MerchantSpawn>,
     seeds: Vec<MerchantScriptSeed>,
+    displays: &mut DisplayTable,
 ) -> (usize, Vec<String>, MerchantScriptBook) {
     debug_assert!(
         seeds.is_empty() || seeds.len() == spawns.len(),
@@ -250,6 +254,15 @@ pub fn spawn_merchants_with_scripts(
         match id {
             Some(id) if world.attach_merchant_to_map(id) => {
                 kept += 1;
+                // **卡 `openmir2-npc-display-table`**：挂图成功的商人登记展示表，否则
+                // `drain_aoi_downlink` 的 `displays.get` 守卫会跳过 ⇒ 客户端看不见商人。
+                // 字段口径同固定 NPC（`Merchant : NormNpc`：Light=2、RaceImg=50）——
+                // `Appr` 在商人侧存于 `MerchantState.appr`（`BaseObject.Appr` 的镜像），
+                // 不在 `Entity.appr`。
+                if let Some(e) = world.entities.get(id) {
+                    let appr = e.merchant.as_ref().map_or(0, |m| m.appr);
+                    displays.set(id, npc_display(e.ai.dir, e.race_img, appr, &name));
+                }
                 if let Some(seed) = seed {
                     book.insert(MerchantNpc {
                         def: NpcDef {
@@ -400,7 +413,15 @@ smith main
         assert_eq!(report.kept, spawns.len());
         assert_eq!(seeds.len(), spawns.len(), "seeds 与 spawns 下标对齐");
         let mut world = mir2_world::World::new(64, 64);
-        let (kept, failed, book) = spawn_merchants_with_scripts(&mut world, spawns, seeds);
+        let mut displays = DisplayTable::new();
+        let (kept, failed, book) =
+            spawn_merchants_with_scripts(&mut world, spawns, seeds, &mut displays);
+        assert_eq!(
+            displays.len(),
+            world.merchant_ids_sorted().len(),
+            "商人数 = 展示表项数（数量闭合：卡 openmir2-npc-display-table）"
+        );
+        assert_eq!(displays.len(), kept);
         assert_eq!(kept, 2);
         assert!(failed.is_empty());
         assert_eq!(book.len(), kept, "只有挂图成功的商人进脚本表");

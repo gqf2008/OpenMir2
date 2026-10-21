@@ -114,6 +114,43 @@ pub fn monster_display(dir: u8, info: &MonsterInfo) -> ActorDisplay {
     )
 }
 
+/// `NormNpc` 家族（固定 NPC + 商人）的 `Light`：`NormNpc()` ctor `Light = 2`
+/// （`src/M2Server/Npc/NormNpc.cs:43`）。
+pub const NPC_LIGHT: u8 = 2;
+
+/// `NormNpc` 家族（`Npcs.txt` 固定 NPC 与 `Merchant.txt` 商人）的展示层 [`ActorDisplay`]。
+///
+/// 逐项锚点（与 [`monster_display`] 同形，只有 `light` 与 `RaceImg` 来源不同）：
+/// - `dir` = `Entity.ai.dir`（oracle `BaseObject.Dir`；`NormNpc` ctor 继承 `Dir = 4`）；
+/// - `light` = [`NPC_LIGHT`] = 2（`NormNpc()` ctor `Light = 2`，`NormNpc.cs:43`；
+///   `Merchant : NormNpc` 继承，`Merchant.cs` ctor 不覆写）；
+/// - `feature` = `GetFeature()` = `MakeMonsterFeature(RaceImg, MonsterWeapon, Appr)`
+///   （`src/M2Server/Actor/BaseObject.Base.cs:909-912`）。`RaceImg` = `Merchant()` ctor 的
+///   `ActorRace.Merchant(50)`（`src/GameSrv/Npc/Merchant.cs:84`；`GuildOfficial`/`CastleOfficial`
+///   同继承），`MonsterWeapon` = `LoByte(MP)` = 0（NPC 无武器槽），`Appr` = `Npcs.txt`/
+///   `Merchant.txt` 的 Appr 列（`LocalDB.cs:707`）；
+/// - `feature_ex` = `GetFeatureEx()` = 0（`BaseObject.Base.cs:926`，`NormNpc` 不 override）；
+/// - `status` = `GetCharStatus()` = 0（无 buff）；
+/// - `name_color` = [`MONSTER_NAME_COLOR`] = 255（`BaseObject` ctor `NameColor = 255`，
+///   `BaseObject.cs:385`；`NormNpc` 不覆写）；
+/// - `show_name` = `FilterShowName(ChrName)` 的 GBK 字节（`BaseObject.Base.cs:779`）。
+///
+/// 口径与 `monster_display` 的唯一差别是 `light`（NPC 2 / 怪物 0）；`feature` 的字段序**相同**
+/// （RaceImg 在 `Param`、Appr 在 `Tag`），故出现帧 `SM_FEATURECHANGED` 的
+/// `Param = LoWord(feature) = RaceImg`、`Tag = HiWord(feature) = Appr`。
+#[must_use]
+pub fn npc_display(dir: u8, race_img: u8, appr: u16, name: &str) -> ActorDisplay {
+    ActorDisplay::new(
+        dir,
+        NPC_LIGHT,
+        make_monster_feature(race_img, 0, appr),
+        0,
+        0,
+        MONSTER_NAME_COLOR,
+        gbk(filter_show_name(name)),
+    )
+}
+
 /// 玩家缺省名色（`enter::PLAY_NAME_COLOR` = 255，`src/M2Server/Player/PlayObject.cs` 的
 /// `NameColor` 缺省）。`bins/game-svr` 的 bin 模块 `enter` 不在 lib 里 ⇒ 此处复写常量值。
 pub const PLAYER_NAME_COLOR: u8 = 255;
@@ -712,6 +749,56 @@ mod tests {
         );
         // 反证：漏掉 LoByte（用整 mp 的 0x22）会得到不同的位。
         assert_ne!(d.feature, make_monster_feature(0x0A, 0x22, 0x3344));
+    }
+
+    /// 固定 NPC / 商人的 [`npc_display`] 逐字段对齐 oracle：
+    /// `Light = 2`（`NormNpc.cs:43`）、`feature = MakeLong(MakeWord(RaceImg, 0), Appr)`、
+    /// `FeatureEx/Status = 0`、`NameColor = 255`、`ShowName = FilterShowName`。
+    ///
+    /// 红检：把 `NPC_LIGHT` 改成 0、把 `feature` 换成 0、或把 `dir` 写死 ⇒ 本用例必红。
+    #[test]
+    fn npc_display_matches_oracle_fields() {
+        let d = npc_display(4, 50, 8, "比奇国王2");
+        assert_eq!(d.dir, 4, "Dir 取实体当前朝向");
+        assert_eq!(d.light, NPC_LIGHT);
+        assert_eq!(d.light, 2, "NormNpc() ctor Light = 2（NormNpc.cs:43）");
+        assert_eq!(
+            d.feature,
+            make_monster_feature(50, 0, 8),
+            "GetFeature = MakeMonsterFeature(RaceImg, MonsterWeapon=0, Appr)"
+        );
+        assert_eq!(d.feature, 0x0008_0032);
+        assert_eq!(
+            (d.feature & 0xFFFF) as u16,
+            50,
+            "SM_FEATURECHANGED Param = LoWord(feature) = RaceImg"
+        );
+        assert_eq!(
+            ((d.feature >> 16) & 0xFFFF) as u16,
+            8,
+            "SM_FEATURECHANGED Tag = HiWord(feature) = Appr"
+        );
+        assert_eq!(d.feature_ex, 0, "BaseObject.GetFeatureEx() = 0");
+        assert_eq!(d.status, 0, "无 buff ⇒ GetCharStatus() = 0");
+        assert_eq!(d.name_color, 255, "BaseObject ctor NameColor = 255");
+        assert_eq!(
+            d.show_name,
+            gbk("比奇国王"),
+            "ShowName = FilterShowName(ChrName) 的 GBK 字节"
+        );
+
+        // 与怪物展示同形，唯一差别是 Light（怪物 0 / NPC 2）——既有怪物路径不回归。
+        let info = MonsterInfo {
+            name: "比奇国王2".to_string(),
+            race_img: 50,
+            appr: 8,
+            mp: 0,
+            ..MonsterInfo::default()
+        };
+        let m = monster_display(4, &info);
+        assert_eq!(m.feature, d.feature, "两者 Feature 口径相同");
+        assert_eq!(m.light, 0, "怪物 Light 仍为 0（不回归）");
+        assert_ne!(m.light, d.light);
     }
 
     /// 怪物的 AOI **出现帧**逐字节：`SM_TURN`(ident 10) 的

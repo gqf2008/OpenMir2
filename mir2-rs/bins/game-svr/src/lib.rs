@@ -16403,8 +16403,12 @@ fn sim_loop(
         let envir_root = loader.base_path.join(&loader.envir_dir);
         match game_svr::merchant::load_merchant_spawns(&loader, |n| reg.id_of(n), &mut world.rng) {
             Ok((spawns, report, seeds)) => {
-                let (kept, failed, book) =
-                    game_svr::merchant::spawn_merchants_with_scripts(&mut world, spawns, seeds);
+                let (kept, failed, book) = game_svr::merchant::spawn_merchants_with_scripts(
+                    &mut world,
+                    spawns,
+                    seeds,
+                    &mut displays,
+                );
                 merchant_book = book;
                 merchant_book.goto_count_limit = enter_cfg.script_goto_count_limit;
                 // `[Setup] ClearExpireUpgradeWeaponDays`（`Merchant.cs:1085`）落到每个商人。
@@ -16443,6 +16447,7 @@ fn sim_loop(
                 |n| reg.id_of(n),
                 &envir_root,
                 &mut merchant_book,
+                &mut displays,
             );
             glog!(
                 "INF",
@@ -21249,6 +21254,297 @@ mod tests {
                 (a, mir2_protocol::messages::SM_FEATURECHANGED),
             ],
             "gate1（b 的线）应只收到 a 的一对帧（按 GateIdx 路由）"
+        );
+    }
+
+    // ==================================================================================
+    // **卡 `openmir2-npc-display-table`**：固定 NPC / 商人的展示表登记（host 级，走生产入口）
+    // ==================================================================================
+
+    /// 把合成世界里的玩家登记成「已进世界」的观察者，并返回 `(在线表, 网关表, 下行接收端)`。
+    #[allow(clippy::type_complexity)]
+    fn aoi_observer_fixture(
+        player_id: i32,
+    ) -> (
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+    ) {
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "ua".into(),
+            chr_name: "p".into(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 901,
+            actor_id: player_id,
+        }];
+        let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        (online, gates, rx0)
+    }
+
+    /// 取本会话收到的出现帧（解码态）。
+    fn aoi_collect_frames(
+        rx: &mut mpsc::UnboundedReceiver<SimToGate>,
+    ) -> Vec<mir2_protocol::frame::CommandMessage> {
+        let mut out = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            out.push(
+                mir2_protocol::frame::CommandMessage::from_bytes(&body)
+                    .expect("SM_* body 至少 12B"),
+            );
+        }
+        out
+    }
+
+    /// **判据（固定 NPC）**：生产入口 `npcs::place_fixed_npcs_with_scripts` 必须登记展示表，
+    /// 随后 `drain_aoi_downlink` 对相邻玩家产出
+    /// `SM_TURN(10)`（param=CurrX、tag=CurrY、series=`MakeWord(Dir,Light=2)`）+
+    /// `SM_FEATURECHANGED(41)`（param=`LoWord(feature)`=RaceImg=50、tag=`HiWord(feature)`=Appr=8）。
+    /// 这正是真机缺口：未登记 ⇒ `displays.get` 守卫跳过 ⇒ 客户端看不见/点不到。
+    ///
+    /// 牙：删 `place_fixed_npcs_with_scripts` 的展示表登记循环 ⇒ 零帧 ⇒ 必红；
+    /// 把 `npc_display` 的 Feature 写成 0 ⇒ `(param,tag)=(50,8)` 断言红。
+    #[test]
+    fn fixed_npc_display_frames_through_production_aoi() {
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        let npcs = vec![mir2_envir::npcs::NpcInfo {
+            chr_name: "比奇国王".to_string(),
+            npc_type: mir2_envir::npcs::NpcType::GuildOfficial,
+            map_name: "0".to_string(),
+            x: 11,
+            y: 10,
+            npc_flag: 0,
+            appr: 8,
+        }];
+        // 无 Npc_def 文件：脚本缺失只记 `script_missing`，不影响挂图/展示登记。
+        let envir_root =
+            std::env::temp_dir().join(format!("gs-npc-display-host-{}", std::process::id()));
+        let mut book = game_svr::npc::MerchantScriptBook::new(30);
+        let mut displays = downlink::DisplayTable::new();
+        let report = game_svr::npcs::place_fixed_npcs_with_scripts(
+            &mut world,
+            &npcs,
+            |_| Some(0),
+            &envir_root,
+            &mut book,
+            &mut displays,
+        );
+        assert_eq!(report.placed, 1, "固定 NPC 必须挂图成功");
+        let npc_id = report.placed_npcs[0].actor_id;
+        assert!(
+            displays.get(npc_id).is_some(),
+            "生产入口必须给固定 NPC 登记展示表（否则 AOI 守卫跳过）"
+        );
+        // 朝向是实体权威（`frame_display.dir = target.ai.dir`）：改实体朝向，出现帧必须跟随。
+        world.entities.get_mut(npc_id).unwrap().ai.dir = 6;
+
+        let _ = tick_until_next_player_scan(&mut world);
+        let (online, gates, mut rx0) = aoi_observer_fixture(p);
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates);
+        assert_eq!(
+            sent,
+            vec![("p".to_string(), 2)],
+            "出现帧 = 一对（SM_TURN + SM_FEATURECHANGED）"
+        );
+        let frames = aoi_collect_frames(&mut rx0);
+        assert_eq!(frames.len(), 2);
+        let turn = frames
+            .iter()
+            .find(|f| f.ident == mir2_protocol::messages::SM_TURN)
+            .expect("必须有 SM_TURN(10)");
+        assert_eq!(turn.recog, npc_id);
+        assert_eq!(
+            (turn.param, turn.tag),
+            (11, 10),
+            "SM_TURN param=CurrX、tag=CurrY"
+        );
+        assert_eq!(
+            turn.series,
+            game_svr::feature::make_word(6, 2),
+            "Series = MakeWord(Dir=6, Light=2)"
+        );
+        let fc = frames
+            .iter()
+            .find(|f| f.ident == mir2_protocol::messages::SM_FEATURECHANGED)
+            .expect("必须有 SM_FEATURECHANGED(41)");
+        assert_eq!(
+            (fc.param, fc.tag),
+            (50, 8),
+            "param=LoWord(feature)=RaceImg(50)、tag=HiWord(feature)=Appr(8)"
+        );
+        assert_eq!(fc.series, 0, "Series = FeatureEx = 0");
+    }
+
+    /// **判据（商人）**：与固定 NPC 同形——`merchant::spawn_merchants_with_scripts` 必须登记
+    /// 展示表，`drain_aoi_downlink` 产出同一对帧；Appr 取商人的 `MerchantState.appr`（16）。
+    ///
+    /// 牙：删登记 ⇒ 零帧；把 Appr 读成 `Entity.appr`（恒 0）⇒ tag=16 断言红。
+    #[test]
+    fn merchant_display_frames_through_production_aoi() {
+        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        let spawn = MerchantSpawn {
+            name: "药店老板".to_string(),
+            x: 11,
+            y: 10,
+            map_id: 0,
+            state: MerchantState::new(
+                "药店老板".to_string(),
+                "0".to_string(),
+                0,
+                16,
+                100,
+                false,
+                false,
+                0,
+                MerchantFlags::default(),
+                Vec::new(),
+                Vec::new(),
+                0,
+            ),
+        };
+        let mut displays = downlink::DisplayTable::new();
+        let (kept, failed, _book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            vec![spawn],
+            Vec::new(),
+            &mut displays,
+        );
+        assert_eq!(kept, 1, "商人必须挂图成功");
+        assert!(failed.is_empty());
+        let merchant_id = world.merchant_ids_sorted()[0];
+        assert!(
+            displays.get(merchant_id).is_some(),
+            "生产入口必须给商人登记展示表"
+        );
+        assert_eq!(
+            world.merchant_ids_sorted().len(),
+            displays.len(),
+            "数量闭合：世界内商人数 == 展示表项数"
+        );
+
+        let _ = tick_until_next_player_scan(&mut world);
+        let (online, gates, mut rx0) = aoi_observer_fixture(p);
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates);
+        assert_eq!(sent, vec![("p".to_string(), 2)]);
+        let frames = aoi_collect_frames(&mut rx0);
+        let turn = frames
+            .iter()
+            .find(|f| f.ident == mir2_protocol::messages::SM_TURN)
+            .expect("必须有 SM_TURN(10)");
+        assert_eq!(turn.recog, merchant_id);
+        assert_eq!((turn.param, turn.tag), (11, 10));
+        assert_eq!(
+            turn.series,
+            game_svr::feature::make_word(0, 2),
+            "Series = MakeWord(Dir=0, Light=2)"
+        );
+        let fc = frames
+            .iter()
+            .find(|f| f.ident == mir2_protocol::messages::SM_FEATURECHANGED)
+            .expect("必须有 SM_FEATURECHANGED(41)");
+        assert_eq!(
+            (fc.param, fc.tag),
+            (50, 16),
+            "param=RaceImg(50)、tag=MerchantState.appr(16)"
+        );
+    }
+
+    /// **判据（既有怪物路径不回归）**：固定 NPC 登记展示表后，同一观察者视野里的怪物仍按
+    /// `monster_display` 出帧（`Light=0`、`param=RaceImg=0x0A`、`tag=Appr=0x3344`），
+    /// 两条路径互不覆盖。
+    #[test]
+    fn monster_display_path_not_regressed_next_to_npc() {
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        // 固定 NPC（生产入口）。
+        let npcs = vec![mir2_envir::npcs::NpcInfo {
+            chr_name: "比奇国王".to_string(),
+            npc_type: mir2_envir::npcs::NpcType::GuildOfficial,
+            map_name: "0".to_string(),
+            x: 11,
+            y: 10,
+            npc_flag: 0,
+            appr: 8,
+        }];
+        let envir_root =
+            std::env::temp_dir().join(format!("gs-npc-display-reg-{}", std::process::id()));
+        let mut book = game_svr::npc::MerchantScriptBook::new(30);
+        let mut displays = downlink::DisplayTable::new();
+        let report = game_svr::npcs::place_fixed_npcs_with_scripts(
+            &mut world,
+            &npcs,
+            |_| Some(0),
+            &envir_root,
+            &mut book,
+            &mut displays,
+        );
+        let npc_id = report.placed_npcs[0].actor_id;
+
+        // 怪物（既有 `monster_display` 路径）。
+        let mut mon = mir2_world::Entity::new(0, "稻草人", 9, 10);
+        mon.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mon_id = world.add_entity(mon);
+        displays.set(
+            mon_id,
+            downlink::monster_display(
+                3,
+                &mir2_data::models::MonsterInfo {
+                    name: "稻草人".to_string(),
+                    race_img: 0x0A,
+                    appr: 0x3344,
+                    mp: 0,
+                    ..mir2_data::models::MonsterInfo::default()
+                },
+            ),
+        );
+
+        let _ = tick_until_next_player_scan(&mut world);
+        let (online, gates, mut rx0) = aoi_observer_fixture(p);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
+        let frames = aoi_collect_frames(&mut rx0);
+
+        let mon_turn = frames
+            .iter()
+            .find(|f| f.ident == mir2_protocol::messages::SM_TURN && f.recog == mon_id)
+            .expect("怪物必须仍出 SM_TURN");
+        // 怪物朝向由 AI 驱动（`frame_display.dir = target.ai.dir`）⇒ 期望值取实体当前朝向，
+        // 只钉 Light=0（oracle 怪物从不 GetMyLight）。
+        let mon_dir = world.entities.get(mon_id).expect("怪物在").ai.dir;
+        assert_eq!(
+            mon_turn.series,
+            game_svr::feature::make_word(mon_dir, 0),
+            "怪物 Light 仍为 0（不回归）"
+        );
+        let mon_fc = frames
+            .iter()
+            .find(|f| f.ident == mir2_protocol::messages::SM_FEATURECHANGED && f.recog == mon_id)
+            .expect("怪物必须仍出 SM_FEATURECHANGED");
+        assert_eq!(
+            (mon_fc.param, mon_fc.tag),
+            (0x0A, 0x3344),
+            "怪物 Feature 口径不变"
+        );
+        // NPC 同时在场（互不覆盖）。
+        assert!(
+            frames
+                .iter()
+                .any(|f| f.ident == mir2_protocol::messages::SM_TURN && f.recog == npc_id),
+            "固定 NPC 与怪物必须同时出帧"
         );
     }
 
@@ -51487,12 +51783,14 @@ mod tests {",
             ];
             let mut book = game_svr::npc::MerchantScriptBook::new(30);
             let envir_root = dir.join("Envir");
+            let mut displays = game_svr::downlink::DisplayTable::new();
             let report = game_svr::npcs::place_fixed_npcs_with_scripts(
                 &mut world,
                 &npcs,
                 |_| Some(0),
                 &envir_root,
                 &mut book,
+                &mut displays,
             );
             assert_eq!(report.placed, 2, "两个固定 NPC 都必须进世界");
             assert!(
