@@ -3811,8 +3811,11 @@ fn handle_click_npc_cmd(
             // `@main` 里也可能出现 `OPENYBDEAL`/`PLAYDICE`：与商人对话路径同一 seed 口径。
             let sell_off = sell_off_sessions.entry(chr_name.to_string()).or_default();
             seed_player_gold_deal(&mut player, session, sell_off);
-            if let Some(says) = merchant_book.goto_label(npc_actor_id, &mut player, "@main", false)
-            {
+            let goto = merchant_book.goto_label(npc_actor_id, &mut player, "@main", false);
+            // **T-142 F2**：`@main` 里的 `GAMEGOLD` 动作排队 `RM_GAMEGOLDCHANGED`
+            //（`BaseObject.cs:593-599`）⇒ 与商人 `GotoLable` 同口径在写回后排水。
+            let script_frames = std::mem::take(&mut player.frames);
+            if let Some(says) = goto {
                 // `GotoLableSendMerChantSayMsg` → `playerActor.GetScriptLabel(sMsg)`
                 // （`ScriptEngine.cs:993`）：**每句说词 Clear 后重建** `CanJmpScriptLableMap`。
                 for say in &says {
@@ -3829,6 +3832,12 @@ fn handle_click_npc_cmd(
             // `MNMval` 是 `$STR(M*)` 与 `<QUERYVAL>` 共用数组（`PlayObject.cs:543`）⇒ 写回会话。
             write_back_player_mnmval(&player, sg);
             write_back_player_gold_deal(&player, sg, session, sell_off);
+            if !script_frames.is_empty() {
+                if let Some(tx) = route_to_gate(gates, entry.gate_idx, socket, "商人 @main 脚本帧")
+                {
+                    emit_script_frames(tx, socket, sg, &script_frames);
+                }
+            }
         }
         world.rng = rng;
         glog!(
@@ -4525,7 +4534,7 @@ fn handle_shop_cmd(
             let map_text = pmap.to_string();
             let mut rng =
                 std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
-            let says = run_merchant_goto(
+            let (says, script_frames) = run_merchant_goto(
                 merchant_book,
                 merchant_id,
                 label,
@@ -4548,6 +4557,11 @@ fn handle_shop_cmd(
                     emit_npc_says(tx, socket, actor_id, &says);
                 }
             }
+            if !script_frames.is_empty() {
+                if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人 1011 脚本帧") {
+                    emit_script_frames(tx, socket, sg, &script_frames);
+                }
+            }
             if !bo_can_jmp {
                 glog!(
                     "DBG",
@@ -4564,7 +4578,7 @@ fn handle_shop_cmd(
                 };
                 let mut rng =
                     std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
-                let says = run_merchant_goto(
+                let (says, script_frames) = run_merchant_goto(
                     merchant_book,
                     merchant_id,
                     &target,
@@ -4586,6 +4600,12 @@ fn handle_shop_cmd(
                     if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人 @back 说词")
                     {
                         emit_npc_says(tx, socket, actor_id, &says);
+                    }
+                }
+                if !script_frames.is_empty() {
+                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人 @back 脚本帧")
+                    {
+                        emit_script_frames(tx, socket, sg, &script_frames);
                     }
                 }
             }
@@ -4936,7 +4956,7 @@ fn handle_shop_cmd(
                 let map_text = pmap.to_string();
                 let mut rng =
                     std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
-                let says = run_merchant_goto(
+                let (says, script_frames) = run_merchant_goto(
                     merchant_book,
                     merchant_id,
                     g,
@@ -4953,6 +4973,12 @@ fn handle_shop_cmd(
                 world.rng = rng;
                 for say in &says {
                     session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
+                }
+                if !script_frames.is_empty() {
+                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人修理脚本帧")
+                    {
+                        emit_script_frames(tx, socket, sg, &script_frames);
+                    }
                 }
                 if !says.is_empty() {
                     if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人修理说词") {
@@ -5319,7 +5345,8 @@ fn merchant_base_user_select(session: &mut ShopSession, label: &str) {
 }
 
 /// 商人 `GotoLable`（`ScriptEngine.cs:38-129` → `Merchant.ScriptList`）＋ `Script/LastNpc`
-/// 跨调用回写。返回本次说词（调用方按 `MsgQueue` 出队序落 `SM_MERCHANTSAY`）。
+/// 跨调用回写。返回 `(说词, 脚本帧)`：说词按 `MsgQueue` 出队序落 `SM_MERCHANTSAY`，
+/// 帧经 [`emit_script_frames`] 排水（`RM_GAMEGOLDCHANGED` ⇒ `SM_GAMEGOLDNAME`）。
 #[allow(clippy::too_many_arguments)]
 fn run_merchant_goto(
     book: &game_svr::npc::MerchantScriptBook,
@@ -5334,7 +5361,7 @@ fn run_merchant_goto(
     session: &mut ShopSession,
     sell_off: &mut game_svr::selloff::SellOffState,
     rng: &mut mir2_shared::rng::RandomNumber,
-) -> Vec<game_svr::npc::SayMsg> {
+) -> (Vec<game_svr::npc::SayMsg>, Vec<game_svr::npc::SendMsg>) {
     let mut rngf = |v: i32| rng.random_below(v);
     let mut player =
         npc_player_from_session(&mut rngf, chr_name, &*sg, map_text, catalog, npc_vars);
@@ -5350,7 +5377,9 @@ fn run_merchant_goto(
     session.last_npc = player.last_npc;
     write_back_player_mnmval(&player, sg);
     write_back_player_gold_deal(&player, sg, session, sell_off);
-    says
+    // 脚本帧（`NpcPlayer.frames` = `MsgQueue` 的脚本侧投影）：写回之后再交给调用方排水，
+    // 元宝帧的取值因此是本次脚本写回后的会话值。
+    (says, std::mem::take(&mut player.frames))
 }
 
 /// **M3⑥-实现 3 第②片**：把 NPC 说词按 oracle `MsgQueue` **出队序**落 `SM_MERCHANTSAY(643)`。
@@ -5377,6 +5406,35 @@ fn emit_npc_says(
         };
         let wire = game_svr::npc::merchant_say_gbk(&s.npc_name, &s.raw_msg);
         let body = smframe::sm_merchantsay(recog, 0, 0, &wire);
+        let _ = tx.send(SimToGate::SendFrame { socket, body });
+        sent += 1;
+    }
+    sent
+}
+
+/// **T-142 F2**：把一次脚本运行的 `SendMsg` 帧（[`game_svr::npc::NpcPlayer::frames`]）按
+/// `MsgQueue` 出队序落 wire。
+///
+/// 调用点必须在 `run_merchant_goto`/`goto_label` **之后**（写回已发生）⇒ 元宝帧读的是本次
+/// 脚本改完的会话值（`SendGoldInfo(false)` 的 `GameGold` 是 `PlayObject` 当下字段）。
+/// 说词（`RM_MERCHANTSAY` 优先级 1）先于本组（`RM_GAMEGOLDCHANGED` = 8084&0xFF = 148），
+/// 与现有「先 `emit_npc_says` 再脚本帧」的调用序一致。
+///
+/// 目前只有 `RM_GAMEGOLDCHANGED` 有映射（[`game_svr::pickwire::script_frame`]）；其余 ident
+/// （如 `RM_PLAYDICE`）仍按既有口径丢弃（T-142 残余）。
+fn emit_script_frames(
+    tx: &mpsc::UnboundedSender<SimToGate>,
+    socket: i32,
+    sg: &SessionGround,
+    frames: &[game_svr::npc::SendMsg],
+) -> usize {
+    let mut sent = 0usize;
+    for f in frames {
+        let Some(body) =
+            game_svr::pickwire::script_frame(f, sg.game_gold, sg.game_point, sg.soft_version_date)
+        else {
+            continue;
+        };
         let _ = tx.send(SimToGate::SendFrame { socket, body });
         sent += 1;
     }
@@ -21654,6 +21712,414 @@ mod tests {
         );
         assert_eq!(p.play_dice_label(), Some("@dice".to_string()));
         assert_eq!(p.game_gold, 50);
+    }
+
+    /// **T-142 F1 夹具**：一条商人脚本动作（`n_cmd_code` = `codes.rs` 的 `field_index`
+    /// = C# 枚举值：42 `PLAYDICE` / 191 `GAMEGOLD` / 342 `OPENYBDEAL`）。
+    fn t142_act(code: i32, p1: &str, n1: i32, p2: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: code,
+            s_param1: p1.to_string(),
+            n_param1: n1,
+            s_param2: p2.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// 一个 label 的说词记录。**每个动作单独一条 procedure**：oracle
+    /// `GotoLableQuestActionProcess` 对每个 process 只执行**第一个已注册动作**后返回
+    /// （`Engine::run_actions` 的 1:1 移植），同一 `action_list` 里的后续动作不会执行。
+    fn t142_record(
+        label: &str,
+        say: &str,
+        actions: Vec<mir2_script::QuestActionInfo>,
+    ) -> mir2_script::SayingRecord {
+        let procedure_list = actions
+            .into_iter()
+            .enumerate()
+            .map(|(i, a)| mir2_script::SayingProcedure {
+                condition_list: Vec::new(),
+                action_list: vec![a],
+                else_action_list: Vec::new(),
+                s_say_msg: if i == 0 {
+                    say.to_string()
+                } else {
+                    String::new()
+                },
+                s_else_say_msg: String::new(),
+            })
+            .collect();
+        mir2_script::SayingRecord {
+            s_label: label.to_string(),
+            procedure_list,
+            bo_ext_jmp: false,
+        }
+    }
+
+    /// **T-142 F1/F2 夹具**：世界（玩家 `hero` (10,10) + 商人 (11,10)，同图 ±15 内）、
+    /// 会话（元宝 250、`GamePoint = 0x00010002`、`SoftVersionDateEx != 0`）、在线登记表、
+    /// 网关下行缓冲与商店/寄售会话态。
+    ///
+    /// 这个夹具走的是**生产入口**（`handle_shop_cmd` / `handle_click_npc_cmd`），
+    /// 直接调 `seed_player_gold_deal` 的往返用例（`t142_gold_deal_seed_and_write_back_round_trip`）
+    /// 是辅助函数级假牙，删掉生产接线它不会红。
+    struct T142Rig {
+        world: mir2_world::World,
+        merchant_id: i32,
+        sessions: HashMap<String, SessionGround>,
+        online: OnlineRegistry,
+        gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        shop_sessions: HashMap<String, ShopSession>,
+        sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState>,
+        sell_off_book: game_svr::selloff::SellOffBook,
+        book: game_svr::npc::MerchantScriptBook,
+        npc_vars: game_svr::npc::NpcVars,
+        catalog: game_svr::ability::StdItemCatalog,
+        shop_cfg: ShopCfg,
+        colors: MsgColors,
+        item_number: i32,
+    }
+
+    impl T142Rig {
+        fn new(records: Vec<mir2_script::SayingRecord>) -> Self {
+            let mut world = mir2_world::World::new(32, 32);
+            let hero = world.add_entity({
+                let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+                e.race = mir2_world::ACTOR_RACE_PLAY;
+                e
+            });
+            let merchant_id = world
+                .insert_merchant(mir2_world::merchant::MerchantSpawn {
+                    name: "商人".to_string(),
+                    x: 11,
+                    y: 10,
+                    map_id: 0,
+                    state: mir2_world::merchant::MerchantState::new(
+                        "卫家店".to_string(),
+                        "0".to_string(),
+                        0,
+                        0,
+                        100,
+                        false,
+                        false,
+                        0,
+                        mir2_world::merchant::MerchantFlags {
+                            is_buy: true,
+                            ..Default::default()
+                        },
+                        vec![0, 5],
+                        Vec::new(),
+                        0,
+                    ),
+                })
+                .expect("商人入世界");
+            let mut book = game_svr::npc::MerchantScriptBook::new(30);
+            book.insert(game_svr::npc::MerchantNpc {
+                def: game_svr::npc::NpcDef {
+                    chr_name: "寄售商".to_string(),
+                    file_path: "Market_Def".to_string(),
+                    script_name: Some("寄售商-0103".to_string()),
+                    is_hide: false,
+                    is_quest: false,
+                    scripts: vec![mir2_script::ScriptInfo {
+                        is_quest: false,
+                        quest_info: Default::default(),
+                        record_list: records,
+                        quest_count: 0,
+                    }],
+                    loaded: true,
+                    actor_id: merchant_id,
+                },
+                price_rate: 100,
+                castle: None,
+                map_name: "0".to_string(),
+                curr_x: 11,
+                curr_y: 10,
+            });
+            let mut sg = test_session_ground(hero);
+            sg.game_gold = 250;
+            sg.game_point = 0x0001_0002;
+            // 真冻结客户端的 `SoftVersionDateEx != 0`（同 `spell_session_ground`）。
+            sg.soft_version_date = 120_020_522;
+            let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+            sessions.insert("hero".to_string(), sg);
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".to_string(),
+                    chr_name: "hero".to_string(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 901,
+                    actor_id: hero,
+                },
+            );
+            let (tx0, rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx0);
+            Self {
+                world,
+                merchant_id,
+                sessions,
+                online,
+                gates,
+                rx,
+                shop_sessions: HashMap::new(),
+                sell_off_sessions: HashMap::new(),
+                sell_off_book: game_svr::selloff::SellOffBook::default(),
+                book,
+                npc_vars: game_svr::npc::NpcVars::default(),
+                catalog: game_svr::ability::StdItemCatalog::new(),
+                shop_cfg: ShopCfg {
+                    castle_member_price_rate: 100,
+                    super_repair_price_rate: 100,
+                    repair_item_dec_dura: 0,
+                    make_durg_price: 100,
+                    get_all_npc_tax: false,
+                    human_max_gold: 10_000_000,
+                    ..ShopCfg::default()
+                },
+                colors: MsgColors {
+                    red_f: 255,
+                    red_b: 56,
+                    hear_f: 0,
+                    hear_b: 255,
+                    whisper_f: 0,
+                    whisper_b: 0,
+                },
+                item_number: 0,
+            }
+        }
+
+        fn game_gold(&self) -> i32 {
+            self.sessions["hero"].game_gold
+        }
+
+        /// 生产入口 ①：`CM_MERCHANTDLGSELECT`（`PlayObject.Operate.cs:114-128`）。
+        fn dlg_select(&mut self, label: &str) {
+            let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+            handle_shop_cmd(
+                game_svr::shop::CM_MERCHANTDLGSELECT,
+                self.merchant_id,
+                0,
+                0,
+                Some(label),
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.shop_sessions,
+                &mut self.sell_off_sessions,
+                &mut self.sell_off_book,
+                &trade,
+                &self.gates,
+                &mut self.world,
+                &self.catalog,
+                &self.shop_cfg,
+                &self.colors,
+                None,
+                &mut self.item_number,
+                &self.book,
+                &self.npc_vars,
+            );
+        }
+
+        /// 生产入口 ②：`CM_CLICKNPC`（`PlayObject.Message.cs:2071-2095` 的 `Click` 支）。
+        fn click(&mut self) -> bool {
+            handle_click_npc_cmd(
+                self.merchant_id,
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.world,
+                &self.book,
+                &mut self.shop_sessions,
+                &mut self.sell_off_sessions,
+                &self.npc_vars,
+                &self.catalog,
+                &self.gates,
+            )
+        }
+
+        fn drain(&mut self) -> Vec<Vec<u8>> {
+            drain_frames(&mut self.rx)
+        }
+    }
+
+    /// **T-142 F1（Important，复核实证的假牙缺口）**：`CM_MERCHANTDLGSELECT` 的**生产路径**上，
+    /// `PLAYDICE` 的 `PlayDiceLabel`、`OPENYBDEAL` 的 `SaleDeal`/`GameGold` 副作用必须跨
+    /// `GotoLable` 存活（oracle 里它们是同一个 `PlayObject` 的字段，`PlayObject.cs:588/856`）。
+    ///
+    /// 夹具脚本三层：
+    /// - `@main`：说词 `<开通/@open>` + `PLAY DICE 1 @dice`（`ExecutionProcessingSys.cs:2030-2034`）；
+    /// - `@open`：说词 `<返回/@main>` + `OPENYBDEAL 100`（`:2329-2357`）；
+    /// - `@dice`：说词 `<返回/@main>` + `OPENYBDEAL 100` + `GAMEGOLD + 10`。
+    ///
+    /// `@dice` **不出现在任何说词里** ⇒ 进入资格只能来自 `LableIsCanJmp` 第三支
+    /// （`PlayObject.Base.cs:2824-2828`，命中即清 `string.Empty` ⇒ 一次性）。
+    ///
+    /// 牙（删生产接线必红）：删 `run_merchant_goto` 的 `seed_player_gold_deal` ⇒ `@dice`
+    /// 的「已开通」支看不到 `SaleDeal`，扣费 100 ⇒ 第③段 160 变 60；删其
+    /// `write_back_player_gold_deal` ⇒ 第②段元宝不落会话（250 而非 150）。
+    #[test]
+    fn t142_merchant_dlg_select_openybdeal_and_playdice_through_production_path() {
+        let mut rig = T142Rig::new(vec![
+            t142_record(
+                "@main",
+                r"掷骰还是开通?\ <开通/@open>",
+                vec![t142_act(42, "", 1, "@dice")],
+            ),
+            t142_record(
+                "@open",
+                r"开通寄售\ <返回/@main>",
+                vec![t142_act(342, "100", 0, "")],
+            ),
+            t142_record(
+                "@dice",
+                r"骰子\ <返回/@main>",
+                vec![t142_act(342, "100", 0, ""), t142_act(191, "+", 10, "10")],
+            ),
+        ]);
+
+        // —— `@main`：`PLAY DICE 1 @dice` 只写标签（不涉元宝）。
+        rig.dlg_select("@main");
+        assert_eq!(rig.game_gold(), 250, "PLAYDICE 不扣元宝");
+        assert_eq!(
+            rig.shop_sessions["hero"].play_dice_label.as_deref(),
+            Some("@dice"),
+            "PLAYDICE 的 sParam2 必须经生产路径写回会话（否则客户端回跳必被拒）"
+        );
+        assert!(
+            !rig.sell_off_sessions["hero"].sale_deal,
+            "未 OPENYBDEAL 前 SaleDeal 必须为 false"
+        );
+        assert!(
+            rig.drain()
+                .iter()
+                .any(|b| hdr(b).0 == mir2_protocol::messages::SM_MERCHANTSAY),
+            "@main 说词必须下发"
+        );
+
+        // —— `@open`：经说词 `CanJmpScriptLableMap` 第二支放行；`OPENYBDEAL 100` 扣费 + 置 SaleDeal。
+        rig.dlg_select("@open");
+        assert_eq!(
+            rig.game_gold(),
+            150,
+            "① OPENYBDEAL 100 必须经生产路径扣会话元宝（写回生效）"
+        );
+        assert!(
+            rig.sell_off_sessions["hero"].sale_deal,
+            "① SaleDeal 必须写回 `SellOffState`"
+        );
+        let _ = rig.drain();
+
+        // —— 第一次 `@dice`：只能经 `LableIsCanJmp` 第三支（`@dice` 不在任何说词里）。
+        rig.dlg_select("@dice");
+        assert_eq!(
+            rig.shop_sessions["hero"].play_dice_label.as_deref(),
+            Some(""),
+            "② 第三支命中即清成空串（一次性）"
+        );
+        assert_eq!(
+            rig.game_gold(),
+            160,
+            "②③ 第三支放行 ⇒ 脚本执行：已开通支不扣费（150）+ GAMEGOLD +10 ⇒ 160（seed 生效）"
+        );
+        assert!(
+            !rig.drain().is_empty(),
+            "② 第三支放行 ⇒ 脚本执行（说词 + 元宝帧），不可能零帧"
+        );
+
+        // —— 第二次 `@dice`：第三支已被消费 ⇒ `LableIsCanJmp == false` ⇒ 零帧、零副作用。
+        rig.dlg_select("@dice");
+        assert!(
+            rig.drain().is_empty(),
+            "② 第三支只能放行一次（第二次被拒 ⇒ `GotoLable` 被 boExtJmp 挡下 ⇒ 零帧）"
+        );
+        assert_eq!(rig.game_gold(), 160, "② 被拒 ⇒ 脚本不执行，元宝不变");
+    }
+
+    /// **T-142 F1（第二条入口）**：`CM_CLICKNPC` 的 `@main` 路径同样必须 seed/写回
+    /// `SaleDeal`/`PlayDiceLabel`/`GameGold`（`handle_click_npc_cmd` 的 `normNpc.Click` 支）。
+    ///
+    /// 两次点击：第一次 `OPENYBDEAL 100`（250→150）+ `PLAYDICE`；第二次必须命中「已开通」支
+    /// （不扣费）——这只能由 `seed_player_gold_deal` 看到上一次写回的 `SaleDeal` 成立。
+    ///
+    /// 牙：删 `handle_click_npc_cmd` 的 seed 行 ⇒ 第二次点击再扣 100（150→50）；
+    /// 删其写回行 ⇒ 第一次点击的 250→150 不落会话。
+    #[test]
+    fn t142_click_npc_main_seeds_and_writes_back_gold_deal() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            r"欢迎\ <返回/@main>",
+            vec![t142_act(342, "100", 0, ""), t142_act(42, "", 1, "@dice")],
+        )]);
+
+        assert!(rig.click(), "第一次点击必须走到 `@main` 说词点");
+        assert_eq!(
+            rig.game_gold(),
+            150,
+            "CM_CLICKNPC：OPENYBDEAL 扣费必须写回会话"
+        );
+        assert!(rig.sell_off_sessions["hero"].sale_deal);
+        assert_eq!(
+            rig.shop_sessions["hero"].play_dice_label.as_deref(),
+            Some("@dice"),
+            "CM_CLICKNPC：PLAYDICE 标签必须写回会话"
+        );
+        assert!(!rig.drain().is_empty(), "@main 说词必须下发");
+
+        // `ClickNpcTime` 限频门（`PlayObject.Message.cs:2076`）：清掉再点第二次。
+        rig.sessions.get_mut("hero").unwrap().click_npc_time = None;
+        assert!(rig.click(), "第二次点击同样走到 `@main`");
+        assert_eq!(
+            rig.game_gold(),
+            150,
+            "已开通 ⇒ 第二次点击不得重复扣费（seed 生效）"
+        );
+    }
+
+    /// **T-142 F2**：脚本 `GAMEGOLD` 动作（`ActionOfGameGold`，`ExecutionProcessingSys.cs:3058-3092`）
+    /// 改元宝后必须调 `GameGoldChanged()`（`BaseObject.cs:593-599`：`SendUpdateMsg(RM_GAMEGOLDCHANGED,
+    /// 0,0,0,0,"")`，仅本人）；消息泵把它翻成 `SendGoldInfo(false)`
+    /// （`PlayObject.Message.cs:1836-1837`）⇒ `SendDefMessage(SM_GAMEGOLDNAME, GameGold,
+    /// LoWord(GamePoint), HiWord(GamePoint), 0, "")`（`PlayObject.Base.cs:927-939`）。
+    ///
+    /// 门：`SoftVersionDateEx == 0` ⇒ 整帧不发（`:930`）。
+    ///
+    /// 牙：删 `NpcPlayer::game_gold_changed` 覆写（回落 trait 默认 no-op）⇒ 无帧；
+    /// 删 `pickwire::script_frame` 的 `RM_GAMEGOLDCHANGED` 映射 ⇒ 无帧。
+    #[test]
+    fn t142_gamegold_action_emits_gamegoldchanged_frame_through_host() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            r"充值\ <返回/@main>",
+            vec![t142_act(191, "+", 10, "10")],
+        )]);
+
+        rig.dlg_select("@main");
+        assert_eq!(rig.game_gold(), 260, "GAMEGOLD +10 落会话");
+        let frames = rig.drain();
+        let want = game_svr::smframe::sm_gamegoldname(260, 0x0001_0002, &[]);
+        assert!(
+            frames.contains(&want),
+            "RM_GAMEGOLDCHANGED ⇒ SM_GAMEGOLDNAME(260, LoWord/HiWord(GamePoint), 空尾)；实收 {:?}",
+            frames.iter().map(|b| hdr(b.as_slice())).collect::<Vec<_>>()
+        );
+
+        // `SoftVersionDateEx == 0`：值照改，但 `SendGoldInfo` 整帧不发。
+        rig.sessions.get_mut("hero").unwrap().soft_version_date = 0;
+        rig.dlg_select("@main");
+        assert_eq!(rig.game_gold(), 270);
+        assert!(
+            !rig.drain()
+                .iter()
+                .any(|b| hdr(b).0 == mir2_protocol::messages::SM_GAMEGOLDNAME),
+            "SoftVersionDateEx == 0 ⇒ 零 SM_GAMEGOLDNAME（PlayObject.Base.cs:930）"
+        );
     }
 
     /// **施法用例**的会话态：真冻结客户端的 `PlayObject.SoftVersionDateEx != 0`

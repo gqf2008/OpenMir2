@@ -37,6 +37,7 @@ use crate::ground::{
     GroundItem, GroundMap, RM_GOLDCHANGED, RM_ITEMHIDE, RM_MENU_OK, RM_SYSMESSAGE,
     RM_WEIGHTCHANGED, SM_ADDITEM, SM_DROPITEM_FAIL, SM_DROPITEM_SUCCESS,
 };
+use crate::npc::SendMsg;
 use crate::smframe;
 use crate::useitem::{my_status, QueuedNotice, RM_HEALTHSPELLCHANGED, RM_MYSTATUS};
 use mir2_world::{FloorItemKind, FloorItemView};
@@ -116,6 +117,37 @@ pub fn notice_frame(n: &QueuedNotice, session: &WireSession) -> Option<Vec<u8>> 
         RM_MYSTATUS => Some(crate::smframe_ext::sm_mystatus(my_status(
             session.hunger_status,
         ))),
+        _ => None,
+    }
+}
+
+/// `RM_GAMEGOLDCHANGED(8084)`：`GAMEGOLD`/`GAMEPOINT` 动作改元宝后
+/// `GameGoldChanged()`（`BaseObject.cs:593-599`）排队的那条消息。
+pub const RM_SCRIPT_GAMEGOLDCHANGED: i32 = mir2_protocol::messages::RM_GAMEGOLDCHANGED as i32;
+
+/// **脚本帧**（[`SendMsg`]，`NpcPlayer.frames`）⇒ wire body。
+///
+/// 目前只映射 `RM_GAMEGOLDCHANGED`：消息泵里它是 `SendGoldInfo(false)`
+/// （`PlayObject.Message.cs:1836-1837`）⇒ `SendDefMessage(SM_GAMEGOLDNAME, GameGold,
+/// LoWord(GamePoint), HiWord(GamePoint), 0, "")`（`PlayObject.Base.cs:927-939`）；
+/// `SoftVersionDateEx == 0` 时整帧不发（同 `:930`）。其余脚本 ident 仍按既有口径丢弃
+/// （登记在 T-142 残余；`RM_PLAYDICE` 的排水未在本片扩面）。
+///
+/// `None` = 不发帧（未知 ident，或 `SoftVersionDateEx == 0` 门挡住）。
+#[must_use]
+pub fn script_frame(
+    s: &SendMsg,
+    game_gold: i32,
+    game_point: i32,
+    soft_version_date: i32,
+) -> Option<Vec<u8>> {
+    match s.ident {
+        RM_SCRIPT_GAMEGOLDCHANGED => {
+            if soft_version_date == 0 {
+                return None;
+            }
+            Some(smframe::sm_gamegoldname(game_gold, game_point, &[]))
+        }
         _ => None,
     }
 }

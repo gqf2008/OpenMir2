@@ -993,6 +993,19 @@ impl ScriptPlayer for NpcPlayer<'_> {
     fn game_gold(&self) -> i32 {
         self.game_gold
     }
+    /// `playerActor.GameGoldChanged()`（`BaseObject.cs:593-599`）：`Race == ActorRace.Play`
+    /// 时 `SendUpdateMsg(RM_GAMEGOLDCHANGED, 0, 0, 0, 0, "")`。`SendUpdateMsg`
+    /// （`BaseObject.Message.cs:283-303`）先丢掉队列里**同 ident** 的旧条目再入队（合并），
+    /// 随后由消息泵翻成 `SendGoldInfo(false)`（`PlayObject.Message.cs:1836-1837`）。
+    ///
+    /// 本仓 `NpcPlayer.frames` 是 `MsgQueue` 的脚本侧投影 ⇒ 同样先做同 ident 合并再入队；
+    /// 宿主按 `MsgQueue` 优先级排水（说词 `RM_MERCHANTSAY` = 11009&0xFF = 1 先于
+    /// 本帧 8084&0xFF = 148），见宿主 `emit_script_frames`。
+    fn game_gold_changed(&mut self) {
+        let ident = i32::from(mir2_protocol::messages::RM_GAMEGOLDCHANGED);
+        self.frames.retain(|f| f.ident != ident);
+        self.send_msg(ident, 0, 0, 0, 0, Some(""));
+    }
     /// `playerActor.SaleDeal`（`PlayObject.cs:856`，未初始化自动属性 ⇒ false）。
     fn sale_deal(&self) -> bool {
         self.sale_deal
