@@ -1787,17 +1787,27 @@ mod tests {
         let (t, _) = upgrade_std_item(&std, &d);
         assert_eq!((t.mg_avoid, t.accurate), (4, 250));
         // 21：`Accurate += Desc[11]`、`MgAvoid += Desc[7]`（字段错位，照抄）；d7 不计 count。
+        // **d7 与 d11 取不同值**（100 vs 7），否则把 `MgAvoid += Desc[7]` 误写成
+        // `+= Desc[11]` 时两者同值、用例仍绿（review Low-1）。
         let std = StdItem {
             accurate: 250,
             mg_avoid: 250,
             ..mode_item(21)
         };
         let mut d = [0u8; 14];
-        d[7] = 10;
-        d[11] = 10;
+        d[7] = 100;
+        d[9] = 1;
+        d[11] = 7;
+        d[12] = 1;
+        d[13] = 1;
         let (t, count) = upgrade_std_item(&std, &d);
-        assert_eq!((t.accurate, t.mg_avoid), (4, 4));
-        assert_eq!(count, 1, "只有 d11 计入；d7 对 21 只改 MgAvoid");
+        assert_eq!(
+            (t.accurate, t.mg_avoid),
+            (1, 94),
+            "Accurate=250+7 回绕 1；MgAvoid=250+d7(100) 回绕 94（不是 250+d11）"
+        );
+        assert_eq!((t.atk_spd, t.slowdown, t.tox), (1, 1, 1));
+        assert_eq!(count, 4, "d9,d11,d12,d13 计入；d7 对 21 只改 MgAvoid");
     }
 
     #[test]

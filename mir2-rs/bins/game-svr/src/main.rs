@@ -25352,6 +25352,175 @@ mod tests {
         );
     }
 
+    /// **review Low-4 牙**：`SM_UPDATEITEM(203)` 的端到端顺序——oracle `Operate.cs:462-478`
+    /// 选 `SendUpdateItemWithLevel`（`PlayObject.Base.cs:1688-1702`）后逐行是
+    /// `GetUpgradeStdItem` → `GetItemName` → `Dura/DuraMax/MakeIndex` → `ChangeItemWithLevel`
+    /// → `EncodeBuffer`。本用例用 `Desc` 非 0 的翼装把「先升级再变换」与「先变换再叠差量」分开：
+    ///
+    /// 造：男衣 `StdMode 10 / Shape 9 / AC = w(3,250) = 0xFA03`、`Desc[0] = 10`、`Abil.Level = 50`
+    /// （`test_equip_inputs` 的 `job=0/gender=0` 供 `ChangeItemByJob` 走空分支）。
+    /// 手算（字面量，不由 `encode_client_item` 生成）：
+    /// - `GetUpgradeStdItem`（StdMode 10）：`AC = MakeWord(Lo, _MIN(255, Hi+10)) = 0xFF03`；
+    /// - `ChangeItemWithLevel`（Shape 9、Level ≥ 50）：`AC = (ushort)(0xFF03 + MakeWord(9,7))
+    ///   = 0x060C`。
+    ///
+    /// 牙：把接线处的 `encode_client_item_prepared` 换回 `encode_client_item`
+    /// （在已变换模板上二次叠差量）⇒ 尾 AC = 0x100C（Lo 0x0C 不变、Hi = 6+10 = 16）⇒ 本用例红。
+    #[test]
+    fn sm_updateitem_applies_upgrade_before_level_transform() {
+        use std::collections::HashMap;
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "翼装".into(),
+                std_mode: 10,
+                shape: 9,
+                ac: 0xFA03, // = w(3, 250)：Lo=3、Hi=250
+                ..Default::default()
+            },
+        );
+
+        let mut equip = test_equip_inputs();
+        equip.abil.level = 50; // 走 `ChangeItemWithLevel` 的 ≥50 支（AC += MakeWord(9,7)）
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut use_items: Vec<Option<game_svr::bag::BagItem>> =
+            vec![None; game_svr::ability::USE_ITEMS_LEN];
+        use_items[0] = None; // Dress 槽必须空（穿装而非换装）
+        let mut desc = [0u8; 14];
+        desc[0] = 10;
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: vec![game_svr::bag::BagItem {
+                        make_index: 60001,
+                        index: 1,
+                        dura: 7,
+                        dura_max: 20,
+                        desc,
+                    }],
+                    gold: 0,
+                    wabil: test_ability(),
+                },
+                storage: storage::StorageState::new(),
+                actor_id: 42,
+                game_gold: 0,
+                p22: gamegold::P22GameGold::default(),
+                soft_version_date: 0,
+                client_tick: 0,
+                game_point: 0,
+                sys_msg: None,
+                use_items,
+                sub: game_svr::ability::SubAbility::first_call(),
+                hit_speed: 0,
+                equip,
+                recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
+                show_hp: false,
+                abil_see_heal_gauge: false,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                dec_hp_tick: 0,
+                inc_hp_tick: 0,
+                dec_hunger_point_tick: 0,
+                query_bag_items_tick: None,
+                bo_reconnection: false,
+                shout_msg_tick: 0,
+                bo_soft_close: false,
+                bo_emergency_close: false,
+                is_can_deal: true,
+                click_npc_time: None,
+                goto_npc_label: String::new(),
+                val_type: 0,
+                val_label: 0,
+                val_npc_type: 0,
+                mns_val: vec![String::new(); 100],
+                mnm_val: vec![0; 100],
+                save_rcd_tick: 0,
+                server_index: 0,
+                switch_state: SwitchDataState::default(),
+                auto_get_exp_tick: now_ms(),
+                auto_get_exp_time: 0,
+                auto_get_exp_point: 0,
+                auto_get_exp_envir: None,
+                auto_get_exp_envir_map_id: None,
+                auto_get_exp_in_safe_zone: false,
+                guild: guild_cmd::GuildSession::default(),
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 42,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut world = mir2_world::World::new(8, 8);
+        let mut displays = downlink::DisplayTable::new();
+
+        // recog=60001（MakeIndex）、param=0（Dress 槽）、tag=0、名称尾 = 模板名。
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEONITEM,
+            60001,
+            0,
+            0,
+            Some("翼装"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &mut displays,
+            12,
+            false,
+            true,
+        );
+
+        assert_eq!(
+            sessions["hero"].use_items[0].as_ref().map(|i| i.make_index),
+            Some(60001),
+            "穿装成功（否则 203 不会发）"
+        );
+        let mut update = None;
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                let cm =
+                    mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("body >= 12B");
+                if cm.ident == mir2_protocol::messages::SM_UPDATEITEM {
+                    update = Some(body);
+                }
+            }
+        }
+        let update = update.expect("衣服穿成功后必须发 SM_UPDATEITEM(203)");
+        let item = mir2_protocol::edcode::decode(&update[12..]);
+        assert_eq!(item.len(), 124, "ClientItem 体长");
+        assert_eq!(
+            (item[26], item[27]),
+            (0x0C, 0x06),
+            "尾 AC = 0x060C（升级差量 0xFF03 再 ChangeItemWithLevel +0x0709 回绕）"
+        );
+        assert_ne!(
+            (item[26], item[27]),
+            (0x0C, 0x10),
+            "不是双叠值 0x100C（`encode_client_item` 二次叠差量会得到它）"
+        );
+        // DC 也走 ≥50 支：0 + MakeWord(0,5) = 0x0500（DC 在 offset 30）。
+        assert_eq!((item[30], item[31]), (0x00, 0x05), "DC = 0x0500");
+    }
+
     /// **O-1（reviewer-6 对 N-1 片的 finding）**：装备/卸下成功后的 `FeatureChanged()` 必须向
     /// 同图 `SendRefMsgRange`(缺省 12) 格内的玩家（**含自己**）广播 `SM_FEATURECHANGED(41)`。
     ///

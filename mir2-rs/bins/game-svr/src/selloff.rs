@@ -65,9 +65,10 @@
 //!
 //! # 未建模（登记，不假造）
 //!
-//! - `CustomItemMgr.GetCustomItemName`（`Desc[13]==1` 的自定义物品名）：与 `T-24` 同源，
-//!   [`crate::bag::item_display_name`] 对 `Desc[13]==1` 返回空串 ⇒ 自定义名物品的名字比对走空串
-//!   （不在本卡触发面内，登记）。
+//! - `CustomItemMgr.GetCustomItemName`（`Desc[13]==1` 的自定义物品名）：**2026-10-21 A-09 已接**
+//!   （见 `T-24`）。寄售的名字比对走 [`sell_off_item_name`] 的两步口径（`PlayObject.Sale.cs:88-95`
+//!   / `:147-154`）：自定义名**未命中回落模板名**。⚠ 与 [`crate::bag::item_display_name`]
+//!   （`CustomItemSystem.GetItemName`，未命中 = 空串、无回退）**不同**，别混用。
 //! - `GameGoldChanged()` → `SendGoldInfo(false)` 的 `SoftVersionDateEx == 0` 门（`Base.cs:930`）：
 //!   本模块由 [`SellOffSide::send_game_gold_info`] 表示（`false` ⇒ 不发 `SM_GAMEGOLDNAME`）。
 //! - `WeightChanged()` 重算并回 `RM_WEIGHTCHANGED`：本模块只回帧，`WAbil.Weight` 的重算仍归
@@ -81,7 +82,7 @@
 //!   ⇒ 恒 `false` ⇒ 该函数恒 no-op，登录路径**不接线**（行为等价：都不动）。见证据 README 登记。
 
 use crate::ability::ItemCatalog;
-use crate::bag::{item_display_name, BagItem, MAX_BAG_ITEM};
+use crate::bag::{BagItem, MAX_BAG_ITEM};
 use crate::downlink::gbk;
 use crate::smframe;
 use mir2_protocol::{edcode, messages};
@@ -514,6 +515,32 @@ pub fn update_sell_off_info(
     removed
 }
 
+/// `ClientAddSellOffItem`/`ClientDelSellOffItem` 的**物品名两步取法**
+/// （`PlayObject.Sale.cs:88-95` / `:147-154`）：
+///
+/// ```text
+/// string sUserItemName = string.Empty;
+/// if (userItem.Desc[13] == 1)
+///     sUserItemName = M2Share.CustomItemMgr.GetCustomItemName(userItem.MakeIndex, userItem.Index);
+/// if (string.IsNullOrEmpty(sUserItemName))
+///     sUserItemName = SystemShare.ItemSystem.GetStdItemName(userItem.Index);
+/// ```
+///
+/// ⚠ 与 [`crate::bag::item_display_name`]（`CustomItemSystem.GetItemName`）**不同**：这里的
+/// 自定义名未命中（含名片表未装载）会**回落到模板名**；`GetItemName` 不回退（未命中 = 空串）。
+fn sell_off_item_name(catalog: &dyn ItemCatalog, item: &BagItem) -> String {
+    let mut name = String::new();
+    if item.desc[13] == 1 {
+        name = catalog
+            .custom_item_name(item.make_index, item.index)
+            .unwrap_or_default();
+    }
+    if name.is_empty() {
+        name = catalog.name(item.index).unwrap_or("").to_string();
+    }
+    name
+}
+
 /// `ClientAddSellOffItem(nItemIdx, sItemName)`（`PlayObject.Sale.cs:60-125`）。
 pub fn client_add_sell_off_item(
     me: &mut SellOffSide<'_>,
@@ -536,7 +563,6 @@ pub fn client_add_sell_off_item(
     } else {
         s_item_name
     };
-    let mut s_user_item_name = String::new();
     let mut ok = false;
     if !me.state.sell_off_confirm {
         let mut i = me.items.len();
@@ -548,13 +574,9 @@ pub fn client_add_sell_off_item(
             if me.items[i].make_index != n_item_idx {
                 continue;
             }
-            // `Desc[13] == 1` ⇒ 自定义物品名（`GetCustomItemName`，未建模 ⇒ 空串，见模块头）。
-            if me.items[i].desc[13] == 1 {
-                s_user_item_name = String::new();
-            }
-            if s_user_item_name.is_empty() {
-                s_user_item_name = item_display_name(catalog, &me.items[i]);
-            }
+            // `Desc[13] == 1` ⇒ 自定义名；未命中（含名片表为空）⇒ **回落模板名**
+            // （`PlayObject.Sale.cs:88-95` 的两步，见 [`sell_off_item_name`]）。
+            let s_user_item_name = sell_off_item_name(catalog, &me.items[i]);
             if s_user_item_name.eq_ignore_ascii_case(want)
                 && me.state.sell_off_item_list.len() < SELL_OFF_TEMP_MAX
             {
@@ -615,13 +637,8 @@ pub fn client_del_sell_off_item(
             if me.state.sell_off_item_list[i].make_index != n_item_idx {
                 continue;
             }
-            let mut s_user_item_name = String::new();
-            if me.state.sell_off_item_list[i].desc[13] == 1 {
-                s_user_item_name = String::new();
-            }
-            if s_user_item_name.is_empty() {
-                s_user_item_name = item_display_name(catalog, &me.state.sell_off_item_list[i]);
-            }
+            // 同 `ClientAddSellOffItem` 的两步口径（`PlayObject.Sale.cs:147-154`）。
+            let s_user_item_name = sell_off_item_name(catalog, &me.state.sell_off_item_list[i]);
             if s_user_item_name.eq_ignore_ascii_case(want) {
                 let item = me.state.sell_off_item_list.remove(i);
                 me.items.push(item);
@@ -1388,6 +1405,42 @@ mod tests {
         assert_eq!(m.items.len(), 1);
         assert!(m.state.sell_off_item_list.is_empty());
         assert_eq!(queued_idents(&evs), vec![messages::SM_SELLOFFDELITEM_OK]);
+    }
+
+    /// **review Low-2 牙**：寄售取名的两步口径（`PlayObject.Sale.cs:88-95` / `:147-154`）——
+    /// `Desc[13] == 1` ⇒ `GetCustomItemName`，**结果为空再回落 `GetStdItemName`（模板名）**。
+    ///
+    /// 造：`Desc[13]=1` + 名片表里只有**别的** `MakeIndex`（未命中）⇒ 名字 = 模板名「木剑」。
+    /// 牙：把回落分支删掉（改用 `item_display_name`，未命中 = 空串）⇒ 两次比对都不命中 ⇒ 本用例红。
+    #[test]
+    fn sell_off_name_falls_back_to_template_when_custom_missing() {
+        let mut cat = catalog();
+        cat.set_item_names(vec![mir2_data::lists::ItemName {
+            make_index: 999,
+            item_index: 1,
+            item_name: "别人的名字".to_string(),
+        }]);
+        let mut it = bag(1, 100);
+        it.desc[13] = 1;
+
+        let mut m = P::new(1, "seller");
+        m.items.push(it);
+        let evs = client_add_sell_off_item(&mut side(&mut m), &cat, 100, "木剑");
+        assert_eq!(
+            queued_idents(&evs),
+            vec![messages::SM_SELLOFFADDITEM_OK],
+            "自定义名未命中 ⇒ 回落模板名「木剑」"
+        );
+        assert_eq!(m.state.sell_off_item_list.len(), 1);
+
+        let evs = client_del_sell_off_item(&mut side(&mut m), &cat, 100, "木剑");
+        assert_eq!(
+            queued_idents(&evs),
+            vec![messages::SM_SELLOFFDELITEM_OK],
+            "删除路径同口径（Sale.cs:147-154）"
+        );
+        assert!(m.state.sell_off_item_list.is_empty());
+        assert_eq!(m.items.len(), 1);
     }
 
     // ---- ClientSellOffEnd（上架） ----

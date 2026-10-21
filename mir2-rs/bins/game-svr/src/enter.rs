@@ -537,10 +537,17 @@ pub fn adjust_bonus_parts(
 }
 
 /// `PlayObject.SendUseItems()`（`PlayObject.Base.cs:1019-1050`）的尾：
-/// 逐槽 `i + '/' + EncodeBuffer(ClientItem) + '/'`（`i` = 槽位十进制 ASCII）；
-/// `GetUpgradeStdItem` 的 desc 升级差量未建模（同 T-24；desc=0 时逐字节等价）。
-/// 服装槽（`ItemLocation.Dress = 0`）先 `ChangeItemWithLevel`，随后所有物品
-/// `ChangeItemByJob`（顺序照 `Base.cs:1036-1040`）。
+/// 逐槽 `i + '/' + EncodeBuffer(ClientItem) + '/'`（`i` = 槽位十进制 ASCII）。
+///
+/// 顺序逐行照 oracle（`Base.cs:1024-1041`）：`GetUpgradeStdItem`（[`game_svr::bag::upgrade_std_item`]，
+/// `Desc` 升级差量）→ `GetItemName` → `Dura/DuraMax/MakeIndex` → 服装槽
+/// （`ItemLocation.Dress = 0`）`ChangeItemWithLevel` → **全部**物品 `ChangeItemByJob` →
+/// `EncodeBuffer`（[`game_svr::itemwire::encode_client_item_prepared`]，模板已就绪）。
+///
+/// **差量必须先于展示层变换**：反过来（先变换再 `encode_client_item` 二次叠差量）会在已变换
+/// 模板上再叠一次 `Desc` 差量，desc 非 0 时分叉（R 级；探针 `StdMode10/shape9/AC=w(3,250)/
+/// Desc[0]=10/level=50`：oracle `AC=0x060C`，双叠 `0x0B0C`）。
+///
 /// `Ok(None)` = 没有可发项（oracle 的 `if (!string.IsNullOrEmpty(sSendMsg))` 门）。
 fn send_use_items_tail(a: &AbilityInputs<'_>, job: u8) -> Result<Option<Vec<u8>>, String> {
     let Some(items) = a.use_items else {
@@ -559,15 +566,19 @@ fn send_use_items_tail(a: &AbilityInputs<'_>, job: u8) -> Result<Option<Vec<u8>>
         let Some(tpl) = a.catalog.get(it.index) else {
             continue;
         };
-        let mut owned = tpl.clone();
-        game_svr::itemwire::change_item_with_level(&mut owned, a.abil.level);
-        game_svr::itemwire::change_item_by_job(&mut owned, job);
         let mut desc = [0u8; game_svr::itemwire::ITEM_NAME_LEN];
         if let Some(d) = &it.desc {
             for (j, b) in d.iter().take(desc.len()).enumerate() {
                 desc[j] = *b;
             }
         }
+        // oracle 顺序第一步：`GetUpgradeStdItem`（模板 + `Desc` 差量）——必须先于
+        // 下面的 `ChangeItemWithLevel/ByJob`（`Base.cs:1029-1041`）。
+        let (mut owned, _) = game_svr::bag::upgrade_std_item(tpl, &desc);
+        if i == ITEM_LOCATION_DRESS {
+            game_svr::itemwire::change_item_with_level(&mut owned, a.abil.level);
+        }
+        game_svr::itemwire::change_item_by_job(&mut owned, job);
         let bag_item = game_svr::bag::BagItem {
             make_index: it.make_index,
             index: it.index,
@@ -585,8 +596,9 @@ fn send_use_items_tail(a: &AbilityInputs<'_>, job: u8) -> Result<Option<Vec<u8>>
             desc,
         };
         tail.extend_from_slice(format!("{i}/").as_bytes());
+        // `ci.tpl` 已是「升级差量 → 展示层变换」的成品 ⇒ prepared（不再二次叠差量）。
         tail.extend_from_slice(&mir2_protocol::edcode::encode(
-            &game_svr::itemwire::encode_client_item(&ci),
+            &game_svr::itemwire::encode_client_item_prepared(&ci),
         ));
         tail.push(b'/');
     }
@@ -1894,6 +1906,128 @@ mod tests {
             // 布局下 621 仍先于 211，654 收尾。
             vec![658, 213, 621, 211, 654],
             "order: 621→211，654 收尾"
+        );
+    }
+
+    /// **F1 牙（review 1 Important）**：`SendUseItems()` 的 oracle 顺序是
+    /// `GetUpgradeStdItem` → `GetItemName` → `Dura/DuraMax/MakeIndex` →（服装槽）
+    /// `ChangeItemWithLevel` → `ChangeItemByJob` → `EncodeBuffer`（`PlayObject.Base.cs:1029-1041`）。
+    ///
+    /// 只有 `Desc` 非 0 时「先升级再变换」与「先变换再升级（`encode_client_item` 二次叠差量）」
+    /// 才分叉，故本用例用 desc 非 0 的翼装钉住顺序：
+    /// 输入 `StdMode 10 / Shape 9 / AC = w(3,250) = 0xFA03 / Desc[0] = 10 / Abil.Level = 50`。
+    ///
+    /// 手算（期望全部为字面量，**不**由 `encode_client_item` 生成）：
+    /// - `GetUpgradeStdItem`（StdMode 10）：`AC = MakeWord(Lo, _MIN(255, Hi+10)) = 0xFF03`；
+    /// - `ChangeItemWithLevel`（Shape 9、Level ≥ 50）：
+    ///   `AC = (ushort)(0xFF03 + MakeWord(9,7)) = (ushort)0x1060C = 0x060C`；
+    ///   `DC = 0x0500 / MC = 0x0600 / SC = 0x0600 / MAC = 0x0402`。
+    ///
+    /// 牙：把 `send_use_items_tail` 的顺序改回旧的「先 `change_item_with_level/by_job`，
+    /// 再用 `encode_client_item` 在已变换模板上叠差量」⇒ `AC = 0x0B0C`，本用例红。
+    #[test]
+    fn send_use_items_applies_upgrade_before_level_transform() {
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            3003,
+            StdItem {
+                name: "翼装".into(),
+                std_mode: 10,
+                shape: 9,
+                ac: 0xFA03, // = w(3, 250)：Lo=3、Hi=250
+                ..StdItem::default()
+            },
+        );
+        let abil = Ability {
+            level: 50,
+            ..Ability::default()
+        };
+        let bonus = NakedAbility {
+            dc: 0,
+            mc: 0,
+            sc: 0,
+            ac: 0,
+            mac: 0,
+            hp: 0,
+            mp: 0,
+            hit: 0,
+            speed: 0,
+            reserved: 0,
+        };
+        let mut use_items = vec![None; 13];
+        use_items[ITEM_LOCATION_DRESS] = Some(ServerUserItem {
+            make_index: 21,
+            index: 3003,
+            dura: 7,
+            dura_max: 30,
+            desc: Some(vec![10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        });
+        let a = AbilityInputs {
+            catalog: &catalog,
+            abil: &abil,
+            bonus_abil: &bonus,
+            bonus_tick_hit: 20,
+            bonus_tick_speed: 35,
+            use_items: Some(&use_items),
+            bag_items: None,
+            magics: None,
+            magic_table: None,
+            gold: 0,
+            client_ability_layout: false,
+        };
+        let tail = send_use_items_tail(&a, 0).unwrap().expect("621 有尾");
+
+        // 手算的「升级差量 → ChangeItemWithLevel」成品模板（字段全是字面量）。
+        let expect_tpl = StdItem {
+            name: "翼装".into(),
+            std_mode: 10,
+            shape: 9,
+            ac: 0x060C,
+            dc: 0x0500,
+            mc: 0x0600,
+            sc: 0x0600,
+            mac: 0x0402,
+            ..StdItem::default()
+        };
+        let expect_ci = game_svr::itemwire::ClientItem {
+            tpl: &expect_tpl,
+            name: "翼装".into(),
+            make_index: 21,
+            dura: 7,
+            dura_max: 30,
+            desc: [10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        };
+        let mut expect = Vec::new();
+        expect.extend_from_slice(b"0/");
+        expect.extend_from_slice(&edcode::encode(
+            &game_svr::itemwire::encode_client_item_prepared(&expect_ci),
+        ));
+        expect.push(b'/');
+        assert_eq!(
+            tail, expect,
+            "621 逐槽 i + '/' + EncodeBuffer(ClientItem) + '/'（升级先于等级变换）"
+        );
+
+        // 直接钉住线缆里的 AC 两字节（解 0/ 与尾 / 后的 124B 体，AC 在 offset 26）。
+        let body = edcode::decode(&tail[2..tail.len() - 1]);
+        assert_eq!(
+            body.len(),
+            124,
+            "ClientItem 体长（name 15 + 7 + looks 2 + DuraMax 2 + AC 2 + …）"
+        );
+        assert_eq!(
+            (body[26], body[27]),
+            (0x0C, 0x06),
+            "AC 低/高字节 = 0x060C（先升级后 ChangeItemWithLevel）"
+        );
+        assert_ne!(
+            (body[26], body[27]),
+            (0x0C, 0x0B),
+            "不是双叠值 0x0B0C（旧顺序会得到这个）"
         );
     }
 
