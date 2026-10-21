@@ -10981,6 +10981,118 @@ fn drain_aoi_downlink(
     sent
 }
 
+/// **卡 `openmir2-monster-smwalk`（`audit-monster-attack-cadence-20261019.md` B.1）**：怪物走位
+/// 的 `SM_WALK(11)` 下行。
+///
+/// # oracle 口径
+///
+/// `BaseObject.WalkTo`（`BaseObject.cs:601`）→ `Walk(RM_WALK)`（`:675`）→ `BaseObject.Walk`
+/// （`:1525`）→ 成功时 `SendRefMsg(nIdent, Dir, CurrX, CurrY, 0, "")`（`:1571`）⇒ 每个收件人
+/// （`SendRefMsg` = ±`SendRefMsgRange` 格、`Race==Play && !Ghost`，`BaseObject.Message.cs:383-444`）
+/// 的队列里入一条 `RM_WALK`（优先级 `(byte)RM_WALK = 18`，只比 `RM_TURN(17)` 大）⇒ 出队时
+/// `PlayObject.Message.cs:1403-1410`：
+///
+/// ```text
+/// if (processMsg.ActorId != ActorId)          // 移动者自己不收
+///     SM_WALK(ActorId, nParam1 = X, nParam2 = Y,
+///             MakeWord(Dir, baseObject.Light)) + Encode(CharDesc(Feature, CharStatus))
+/// ```
+///
+/// # 本宿主的检测口径（世界层不产 `RM_WALK`，且本车道写集只含 `bins/game-svr/**`）
+///
+/// `crates/world` 的 `monai::walk_to` → `World::try_step_now` 只改 `e.x/e.y`，**不产生事件**
+/// （审计 B.1 已确证），`MonsterRefMsg` 也没有 `RM_WALK` 支 ⇒ 宿主按**逐 tick 位置差**还原
+/// 「谁走了一格」：
+///
+/// - 只认**单格**位移（`max(|dx|,|dy|) == 1`）且方向**必须等于移动者当前 `Dir`**
+///   （`walk_to` 先 `Dir = btDir` 再尝试走；走失败时坐标不变 ⇒ 不发帧，与 oracle `Walk`
+///   的 `result` 门同效果）。
+/// - 本 tick 已由 `RM_PUSH`/`RM_RUSH` 解释的位移跳过（oracle 那两条发的是 `SM_BACKSTEP`/`SM_RUSH`，
+///   **不是** `SM_WALK`；`CharPushed` 收尾还会把 `Dir` 置成反方向，方向门通常已挡住，这里再显式挡一次）。
+/// - 换图 / 首次见到（无上一 tick 快照）⇒ 不是走位，不发帧。
+/// - **收件人不含移动者自己**（`ActorId != ActorId` 门）；在线玩家的走位由 `CM_WALK`/`CM_RUN`
+///   路径出帧（本函数跳过所有在线玩家 actor），因此这里覆盖怪物 / 宝宝 / 分身。
+/// - 帧方向取实体 `Entity.ai.dir`（展示表的 `dir` 只是投影），`Light/Feature/Status` 取展示表；
+///   展示表缺项（未登记 actor）⇒ 跳过并登记，不编造。
+///
+/// 位置：`drain_aoi_downlink`（出现帧，优先级 17）之后、`drain_login_tail`（654=153）之前 ——
+/// 与 `RM_TURN(17) < RM_WALK(18) < RM_CHANGELIGHT(153)` 的队列优先级同序。
+///
+/// 返回本 tick 实发的 `SM_WALK` 帧数（诊断用）。
+fn drain_monster_walk_downlink(
+    rec: &mir2_world::TickRecord,
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    seen: &mut std::collections::HashMap<i32, (usize, i32, i32)>,
+) -> usize {
+    let mut sent = 0usize;
+    // 本 tick 已经被别的动作帧解释过的位移（推挤/冲刺）。
+    let mut explained: std::collections::HashSet<i32> =
+        rec.pushes.iter().map(|e| e.actor_id).collect();
+    explained.extend(rec.rushes.iter().map(|e| e.actor_id));
+    let mut alive: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    // `ids_sorted`：不让 ECS 存储序参与帧叙（确定性硬约束 2）。
+    for id in world.entities.ids_sorted() {
+        let Some(e) = world.entities.get(id) else {
+            continue;
+        };
+        alive.insert(id);
+        let prev = seen.insert(id, (e.map_id, e.x, e.y));
+        // 在线玩家：走/跑帧由 `CM_WALK`/`CM_RUN` 路径下发，这里不得重复。
+        if online.iter().any(|o| o.actor_id == id) {
+            continue;
+        }
+        if e.death || e.ghost {
+            continue;
+        }
+        let Some((pmap, px, py)) = prev else {
+            continue; // 首次见到（生成/进图）：不是走位。
+        };
+        if pmap != e.map_id {
+            continue; // 换图：不是单步走位。
+        }
+        let (dx, dy) = (e.x - px, e.y - py);
+        if dx.abs().max(dy.abs()) != 1 {
+            continue; // 只认单格（传送/成群刷怪不算走位）。
+        }
+        if (dx, dy) != mir2_world::monai::dir_delta(e.ai.dir) {
+            continue; // 方向必须与「先置 Dir 再走」的 walk_to 一致。
+        }
+        if explained.contains(&id) {
+            continue; // 推挤/冲刺：oracle 发的是 SM_BACKSTEP/SM_RUSH。
+        }
+        // `SendRefMsg` 的 `ObMode || FixedHideMode` 支只发给「自己」（怪物无客户端 ⇒ 无帧）。
+        if e.ob_mode || e.fixed_hide_mode {
+            continue;
+        }
+        let Some(d) = displays.get(id) else {
+            glog!(
+                "WRN",
+                "怪物走位下行：actor={id} 无展示表（未登记）⇒ 跳过 SM_WALK（登记）"
+            );
+            continue;
+        };
+        let mut fd = d.clone();
+        fd.dir = e.ai.dir;
+        let Some(body) = downlink::move_frame(
+            mir2_protocol::messages::SM_WALK,
+            id,
+            wire_coord(e.x),
+            wire_coord(e.y),
+            &fd,
+        ) else {
+            continue;
+        };
+        broadcast_ref_msg(world, online, gates, id, &[body]);
+        sent += 1;
+    }
+    // 已消失的 actor 从游标里摘掉（ActorId 会被内核回收复用）。
+    seen.retain(|id, _| alive.contains(id));
+    sent
+}
+
 /// **lane654**：登录队列 `after` 段（`654` / 第二 `42` / `100×4`，以及优先级 61 的 `750`）的
 /// 补发点。
 ///
@@ -12173,6 +12285,7 @@ fn drain_run_downlinks(
         client_layout,
         None,
         None,
+        None,
     )
 }
 
@@ -12192,6 +12305,7 @@ fn drain_run_downlinks_with_magic(
     client_layout: bool,
     magic: Option<MagicSource<'_>>,
     login_tails: Option<&mut std::collections::HashMap<String, smframe::EnterWorldInputs>>,
+    walk_seen: Option<&mut std::collections::HashMap<i32, (usize, i32, i32)>>,
 ) -> Vec<(String, usize)> {
     drain_kill_exp_chain_with_magic(
         rec,
@@ -12211,6 +12325,12 @@ fn drain_run_downlinks_with_magic(
     // < `Show` 下标，见 [`drain_aoi_disappear`] 的顺序订正）⇒ 本宿主先发消失帧与 oracle **同序**。
     let _disappeared = drain_aoi_disappear(rec, online, gates);
     let aoi_frames = drain_aoi_downlink(world, displays, online, gates);
+    // **卡 `openmir2-monster-smwalk`**：怪物走位 `SM_WALK(11)`。位置按队列优先级定：
+    // `RM_TURN(17)`（出现帧）< `RM_WALK(18)` < `RM_CHANGELIGHT(153)`（654）—— 故夹在
+    // [`drain_aoi_downlink`] 与 [`drain_login_tail`] 之间。
+    if let Some(seen) = walk_seen {
+        let _ = drain_monster_walk_downlink(rec, world, displays, online, gates, seen);
+    }
     // **lane654**：登录队列 `after` 段（654/42/100）在**出现帧之后**补发（oracle 同一
     // `Run()` 里 17 < 153 < 165 < 252 的出队序），且在任何体力/魔力段帧之前。
     if let Some(pending) = login_tails {
@@ -16119,6 +16239,11 @@ fn sim_loop(
     // 其他 actor 出现帧之后）；本宿主在会话首次扫描 tick 由 [`drain_login_tail`] 补发。
     let mut login_tails: std::collections::HashMap<String, smframe::EnterWorldInputs> =
         std::collections::HashMap::new();
+    // **卡 `openmir2-monster-smwalk`**：怪物/宝宝/分身的走位游标 `actor_id → (map_id, x, y)`。
+    // 逐 tick 与实体当前位置比对 ⇒ 单格且方向一致 ⇒ 一条 `SM_WALK`（世界层不产 `RM_WALK`，
+    // 见 [`drain_monster_walk_downlink`]）。
+    let mut monster_walk_seen: std::collections::HashMap<i32, (usize, i32, i32)> =
+        std::collections::HashMap::new();
     loop {
         // **关服分支**（oracle `AppService.OnShutdown` → `SavePlayer`）：只在收到进程级关服请求时进入。
         // 正常 tick 的额外成本 = 一次通道探测，**不**发起任何存档（判据 4e）。
@@ -18355,6 +18480,7 @@ fn sim_loop(
                 cfg: magic_cfg_of(&enter_cfg),
             }),
             Some(&mut login_tails),
+            Some(&mut monster_walk_seen),
         );
         for (chr, n) in aoi_frames_this_tick {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
@@ -19708,12 +19834,18 @@ mod tests {
             "延迟段必须存 EnterWorldInputs（首次扫描时按真机堆布局重算）"
         );
         assert!(
-            src.contains("            Some(&mut login_tails),\n        );"),
-            "生产 drain 调用必须传 Some(&mut login_tails)"
+            src.contains(
+                "            Some(&mut login_tails),\n            Some(&mut monster_walk_seen),\n        );"
+            ),
+            "生产 drain 调用必须传 Some(&mut login_tails) 与 Some(&mut monster_walk_seen)"
         );
         let aoi = src
             .find("let aoi_frames = drain_aoi_downlink(world, displays, online, gates);")
             .expect("AOI 下行调用");
+        // **卡 `openmir2-monster-smwalk`**：怪物走位帧必须夹在出现帧（17）与 654（153）之间。
+        let walk = src
+            .find("drain_monster_walk_downlink(rec, world, displays, online, gates, seen);")
+            .expect("怪物走位下行调用");
         let tail = src
             .find("drain_login_tail(world, online, gates, pending, range);")
             .expect("延迟段补发调用");
@@ -19721,8 +19853,8 @@ mod tests {
             .find("    drain_stamina(\n        sessions,")
             .expect("体力段");
         assert!(
-            aoi < tail && tail < stamina,
-            "补发点必须在 AOI 之后、体力段之前"
+            aoi < walk && walk < tail && tail < stamina,
+            "补发点必须在 AOI 之后、体力段之前，SM_WALK 夹在 AOI 与 654 之间"
         );
     }
 
@@ -49959,6 +50091,236 @@ mod tests {",
             from_smframe, want,
             "smframe 与 sm_charstatuschanged 必须逐字节相同"
         );
+    }
+
+    // ==================================================================================
+    // **卡 `openmir2-monster-smwalk`**（tier=R，审计 B.1）：怪物走位的 `SM_WALK(11)`
+    // ==================================================================================
+
+    /// 走位判据夹具：一只怪（`dir=2` 朝右，展示表 feature=`0x11223344`、status=7）+ 一个近邻
+    /// 玩家 + 一个 20 格外的玩家。
+    #[allow(clippy::type_complexity)]
+    fn walk_fixture() -> (
+        mir2_world::World,
+        i32,
+        i32,
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        downlink::DisplayTable,
+    ) {
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("n");
+        world.open_session("f");
+        let near = world
+            .enter_map("n", new_player_entity("n".to_string(), 12, 10), 0)
+            .expect("近邻进图");
+        let _far = world
+            .enter_map("f", new_player_entity("f".to_string(), 30, 30), 0)
+            .expect("远邻进图");
+        let mut mon = mir2_world::Entity::new(0, "hen", 10, 10);
+        mon.race = mir2_world::ACTOR_RACE_MONSTER;
+        mon.ai.dir = 2; // 右
+        let mid = world.add_entity(mon);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            mid,
+            downlink::ActorDisplay::new(2, 0, 0x1122_3344, 0, 7, 255, b"hen".to_vec()),
+        );
+        // 玩家也登记展示表：否则「在线玩家跳过」这条门会被「缺展示表」遮住、用例失去牙。
+        displays.set(
+            near,
+            downlink::ActorDisplay::new(0, 0, 0x5566_7788, 0, 0, 255, b"n".to_vec()),
+        );
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "n".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: near,
+            },
+            OnlineEntry {
+                account: "b".into(),
+                chr_name: "f".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: world
+                    .sessions
+                    .iter()
+                    .find(|s| s.chr_name == "f")
+                    .and_then(|s| s.actor_id)
+                    .expect("far actor"),
+            },
+        ];
+        let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        (world, mid, near, online, gates, rx0, displays)
+    }
+
+    /// 收原始帧 `(socket, body)`。
+    fn collect_raw(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, Vec<u8>)> {
+        let mut out = Vec::new();
+        while let Ok(m) = rx.try_recv() {
+            match m {
+                SimToGate::SendFrame { socket, body } => out.push((socket, body)),
+                other => panic!("意外 sim 到 gate 命令：{other:?}"),
+            }
+        }
+        out
+    }
+
+    /// **判据①（帧字段）**：怪物单格走位 ⇒ 每个观察者一条 `SM_WALK(11)`，字段按
+    /// `PlayObject.Message.cs:1403-1410`：`Recog = 移动者`、`Param = X`、`Tag = Y`、
+    /// `Series = MakeWord(Dir, Light)`、尾 = `Encode(CharDesc(Feature, CharStatus))`。
+    ///
+    /// 第一次调用只建游标（不发帧）；把实体从 `(10,10)` 挪到 `(11,10)`（`walk_to` 的效果）后
+    /// 发一条。
+    ///
+    /// 红检（实测）：把 `move_frame` 的 ident 换成 `SM_RUN`、或把 `fd.dir = e.ai.dir` 改成
+    /// 展示表旧值（0）⇒ 下面 ident / Series 断言必红。
+    #[test]
+    fn monster_walk_emits_sm_walk_with_oracle_fields() {
+        let (mut world, mid, _near, online, gates, mut rx0, displays) = walk_fixture();
+        let mut seen = std::collections::HashMap::new();
+        let rec = mir2_world::TickRecord::default();
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen),
+            0,
+            "首次见到只建游标，不发帧"
+        );
+        world.entities.get_mut(mid).unwrap().x = 11;
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen),
+            1,
+            "走一格 ⇒ 一条 SM_WALK"
+        );
+        let got = collect_raw(&mut rx0);
+        assert_eq!(got.len(), 1, "近邻收一条（远邻在 12 格外）");
+        let (socket, body) = &got[0];
+        assert_eq!(*socket, 901, "投递到近邻那条网关线");
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(body).unwrap();
+        assert_eq!(
+            cm.ident,
+            mir2_protocol::messages::SM_WALK,
+            "ident 必须是 11"
+        );
+        assert_eq!(cm.recog, mid, "Recog = 移动的怪");
+        assert_eq!((cm.param, cm.tag), (11, 10), "Param/Tag = 走后的 X/Y");
+        assert_eq!(
+            cm.series,
+            game_svr::feature::make_word(2, 0),
+            "Series = MakeWord(Dir=2, Light=0)"
+        );
+        assert_eq!(
+            &body[12..],
+            &mir2_protocol::edcode::encode(&downlink::char_desc(0x1122_3344, 7))[..],
+            "尾 = Encode(8B CharDesc(Feature, CharStatus))"
+        );
+    }
+
+    /// **判据②（收件人）**：`SM_WALK` 的 `case` 带 `if (processMsg.ActorId != ActorId)`
+    /// （`PlayObject.Message.cs:1404`）⇒ 移动者自己不收；`SendRefMsg` 只投 ±`SendRefMsgRange`
+    /// 格内的 `Race==Play && !Ghost`（`BaseObject.Message.cs:383-444`）。在线玩家的走位另由
+    /// `CM_WALK`/`CM_RUN` 出帧 ⇒ 本函数必须跳过在线玩家（不重复发）。
+    ///
+    /// 红检（实测）：把 `online.iter().any(...)` 那行删掉 ⇒ 玩家移动也走本函数 ⇒ 断言必红。
+    #[test]
+    fn monster_walk_recipients_exclude_self_and_out_of_range_and_players() {
+        let (mut world, mid, near, online, gates, mut rx0, displays) = walk_fixture();
+        let mut seen = std::collections::HashMap::new();
+        let rec = mir2_world::TickRecord::default();
+        drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen);
+        let _ = collect_raw(&mut rx0);
+        // 在线玩家走一格（`CM_WALK` 路径的职责）：本函数不得出帧。
+        // 方向也设成走位方向，确保**只有**「在线玩家跳过」这一条门能挡住它
+        // （否则方向门也会挡住，用例失去牙）。
+        {
+            let p = world.entities.get_mut(near).unwrap();
+            p.ai.dir = 2; // 右
+            p.x += 1;
+        }
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen),
+            0,
+            "在线玩家的位移不归本函数（否则与 CM_WALK 的帧重复）"
+        );
+        assert!(collect_raw(&mut rx0).is_empty());
+        // 怪物走一格：只有近邻收；怪物自己（`mid`）不是在线玩家 ⇒ 不在收件人里。
+        world.entities.get_mut(mid).unwrap().y = 11;
+        world.entities.get_mut(mid).unwrap().ai.dir = 4; // 下
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen),
+            1
+        );
+        let got = collect_raw(&mut rx0);
+        assert_eq!(got.len(), 1, "只有 ±12 格内的玩家收帧");
+        assert_eq!(got[0].0, 901);
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&got[0].1).unwrap();
+        assert_eq!(
+            cm.ident,
+            mir2_protocol::messages::SM_WALK,
+            "ident 必须是 11"
+        );
+        assert_eq!(cm.recog, mid, "Recog 是被观察的怪，不是收件人");
+        assert!(
+            got.iter().all(|(s, _)| *s != 902),
+            "20 格外的玩家不得收 SM_WALK"
+        );
+    }
+
+    /// **判据③（每次走位一帧 / 不该发的一律不发）**：同一游标跨 tick 复用时，
+    /// ① 走一格 ⇒ 恰一帧；② 没动 ⇒ 零帧；③ 推挤（`RM_PUSH`）解释的位移 ⇒ 零帧（oracle 发
+    /// `SM_BACKSTEP`）；④ 两格以上（传送/刷怪移位）⇒ 零帧；⑤ 位移方向与当前 `Dir` 不一致
+    /// ⇒ 零帧（`walk_to` 先置 `Dir` 再走；不一致说明不是走位）。
+    ///
+    /// 红检（实测）：把方向门 `(dx, dy) != dir_delta(...)` 恒假、或把 `explained` 判断删掉
+    /// ⇒ ③/⑤ 的零帧断言必红。
+    #[test]
+    fn monster_walk_one_frame_per_step_and_never_for_push_or_teleport() {
+        let (mut world, mid, _near, online, gates, mut rx0, displays) = walk_fixture();
+        let mut seen = std::collections::HashMap::new();
+        let rec = mir2_world::TickRecord::default();
+        let run = |world: &mir2_world::World,
+                   rec: &mir2_world::TickRecord,
+                   seen: &mut std::collections::HashMap<i32, (usize, i32, i32)>| {
+            drain_monster_walk_downlink(rec, world, &displays, &online, &gates, seen)
+        };
+        assert_eq!(run(&world, &rec, &mut seen), 0, "建游标");
+        // ① 走一格（右）
+        world.entities.get_mut(mid).unwrap().x = 11;
+        assert_eq!(run(&world, &rec, &mut seen), 1, "走一格 = 一帧");
+        // ② 原地不动
+        assert_eq!(run(&world, &rec, &mut seen), 0, "没动 = 零帧");
+        // ③ 推挤：位移一格但本 tick 有 RM_PUSH 事件解释它
+        world.entities.get_mut(mid).unwrap().x = 12;
+        let mut pushed = mir2_world::TickRecord::default();
+        pushed.pushes.push(mir2_world::PushEvent {
+            actor_id: mid,
+            dir: 6,
+            x: 12,
+            y: 10,
+        });
+        assert_eq!(
+            run(&world, &pushed, &mut seen),
+            0,
+            "推挤发 SM_BACKSTEP，不得再发 SM_WALK"
+        );
+        // ④ 两格（传送/刷怪移位）
+        world.entities.get_mut(mid).unwrap().x = 14;
+        assert_eq!(run(&world, &rec, &mut seen), 0, "两格 = 传送，不发帧");
+        // ⑤ 单格但方向与 Dir 不一致（Dir 还是右=2，delta 是下）
+        world.entities.get_mut(mid).unwrap().y = 11;
+        assert_eq!(
+            run(&world, &rec, &mut seen),
+            0,
+            "方向与 Dir 不一致 ⇒ 不是 walk_to 的单步"
+        );
+        // 累计：只有 ① 那一帧。
+        assert_eq!(collect_raw(&mut rx0).len(), 1, "全程只应出一条 SM_WALK");
     }
 }
 
