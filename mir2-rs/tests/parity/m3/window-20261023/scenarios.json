@@ -1,0 +1,371 @@
+{
+  "version": 1,
+  "round": "2026-10-23",
+  "baseline": "23748419d",
+  "win_default": "E:/tmp/window/20261023",
+  "char_password_rule": "account == password（runbook §1.9 坑 7）",
+  "tier_note": "本包是 tier=L（夹具/命令配方）；被它驱动的窗口判据仍按 runbook 分级的 R 卡处理。",
+  "scenarios": {
+    "G1": {
+      "title": "G0+G1 登录/入图基线（15 帧 + 登录尾 654/657/42/100）",
+      "tier": "R",
+      "char": "winplay0",
+      "level": 1,
+      "hp": 16,
+      "max_hp": 16,
+      "point": {
+        "map": "0",
+        "x": 311,
+        "y": 666
+      },
+      "sql": [
+        "sql/g1-pin.sql"
+      ],
+      "flow": {
+        "walk_clicks": 0,
+        "skip_talk": true,
+        "skip_logout": true,
+        "skip_reenter": true
+      },
+      "judge": {
+        "kind": "login",
+        "expect_enter_seq": [
+          658,
+          51,
+          50,
+          41,
+          213,
+          11029,
+          42,
+          766,
+          54,
+          5008,
+          1106,
+          52,
+          752,
+          811,
+          46
+        ],
+        "expect_52_layout": {
+          "csharp": "oracle40",
+          "rust": "client58"
+        },
+        "login_tail": true
+      },
+      "evidence": {
+        "stack": "{WIN}/{side}/stack",
+        "proxy": "{WIN}/{side}/proxy",
+        "flow": "{WIN}/{side}/flow",
+        "s2c": "{WIN}/{side}/s2c",
+        "judge": "{WIN}/judge/g1-{side}.json"
+      }
+    },
+    "G2A-R1": {
+      "title": "G2a R1：无技能 + 火焰戒指(354, Slot7) => 210 SM_ADDMAGIC",
+      "tier": "R",
+      "char": "aaa",
+      "level": 30,
+      "point": {
+        "map": "0",
+        "x": 311,
+        "y": 666
+      },
+      "sql": [
+        "sql/g2a-r1.sql"
+      ],
+      "flow": {
+        "walk_clicks": 0,
+        "skip_talk": true,
+        "skip_logout": true,
+        "skip_reenter": true
+      },
+      "judge": {
+        "kind": "login",
+        "expect_enter_seq": [
+          658,
+          210,
+          51,
+          50,
+          41,
+          213,
+          11029,
+          42,
+          766,
+          54,
+          5008,
+          1106,
+          52,
+          752,
+          811,
+          46
+        ],
+        "expect_52_layout": {
+          "csharp": "oracle40",
+          "rust": "client58"
+        },
+        "login_tail": false
+      },
+      "evidence": {
+        "stack": "{WIN}/{side}/stack",
+        "proxy": "{WIN}/{side}/g2a-r1/proxy",
+        "flow": "{WIN}/{side}/g2a-r1/flow",
+        "s2c": "{WIN}/{side}/g2a-r1/s2c",
+        "judge": "{WIN}/judge/g2a-r1-{side}.json"
+      }
+    },
+    "G2A-R2": {
+      "title": "G2a R2：无技能 + 无戒指 => 212 SM_DELMAGIC（粘滞对照）",
+      "tier": "R",
+      "char": "aaa",
+      "level": 30,
+      "point": {
+        "map": "0",
+        "x": 311,
+        "y": 666
+      },
+      "sql": [
+        "sql/g2a-r2.sql"
+      ],
+      "flow": {
+        "walk_clicks": 0,
+        "skip_talk": true,
+        "skip_logout": true,
+        "skip_reenter": true
+      },
+      "judge": {
+        "kind": "login",
+        "expect_enter_seq": [
+          658,
+          212,
+          51,
+          50,
+          41,
+          213,
+          11029,
+          42,
+          766,
+          54,
+          5008,
+          1106,
+          52,
+          752,
+          811,
+          46
+        ],
+        "expect_52_layout": {
+          "csharp": "oracle40",
+          "rust": "client58"
+        },
+        "login_tail": false
+      },
+      "evidence": {
+        "stack": "{WIN}/{side}/stack",
+        "proxy": "{WIN}/{side}/g2a-r2/proxy",
+        "flow": "{WIN}/{side}/g2a-r2/flow",
+        "s2c": "{WIN}/{side}/g2a-r2/s2c",
+        "judge": "{WIN}/judge/g2a-r2-{side}.json"
+      }
+    },
+    "G2A-R3": {
+      "title": "G2a R3：战士 MagicId=3 + 木剑 => 621 + 211",
+      "tier": "R",
+      "char": "aaa",
+      "level": 30,
+      "point": {
+        "map": "0",
+        "x": 311,
+        "y": 666
+      },
+      "sql": [
+        "sql/g2a-r3.sql"
+      ],
+      "flow": {
+        "walk_clicks": 0,
+        "skip_talk": true,
+        "skip_logout": true,
+        "skip_reenter": true
+      },
+      "judge": {
+        "kind": "login",
+        "expect_enter_seq": [
+          658,
+          51,
+          50,
+          41,
+          213,
+          11029,
+          42,
+          766,
+          54,
+          5008,
+          1106,
+          52,
+          752,
+          621,
+          211,
+          811,
+          46
+        ],
+        "expect_52_layout": {
+          "csharp": "oracle40",
+          "rust": "client58"
+        },
+        "login_tail": false
+      },
+      "evidence": {
+        "stack": "{WIN}/{side}/stack",
+        "proxy": "{WIN}/{side}/g2a-r3/proxy",
+        "flow": "{WIN}/{side}/g2a-r3/flow",
+        "s2c": "{WIN}/{side}/g2a-r3/s2c",
+        "judge": "{WIN}/judge/g2a-r3-{side}.json"
+      }
+    },
+    "G3A": {
+      "title": "G3a 单客户端战斗/AOI/GuardList/反向点（三个 subrun，各自独立 capture）",
+      "tier": "R",
+      "char": "aaa",
+      "level": 30,
+      "subruns": {
+        "attack": {
+          "point": {
+            "map": "0",
+            "x": 605,
+            "y": 578
+          },
+          "level": 30,
+          "sql": [
+            "sql/g3a-attack.sql"
+          ],
+          "flow": {
+            "walk_clicks": 0,
+            "skip_talk": true,
+            "skip_logout": true,
+            "skip_reenter": true,
+            "attack_clicks": 20
+          },
+          "judge": {
+            "kind": "combat",
+            "checks": [
+              {
+                "tool": "check_sm_hit.py",
+                "args": [
+                  "--expect",
+                  "count,order",
+                  "--min-count",
+                  "1",
+                  "--lead-ms",
+                  "250",
+                  "--expect-recipients",
+                  "count=1"
+                ]
+              },
+              {
+                "tool": "check_attack_observability.py",
+                "args": [
+                  "--expect",
+                  "incoming",
+                  "--min-struck",
+                  "1"
+                ]
+              }
+            ]
+          }
+        },
+        "guardlist": {
+          "point": {
+            "map": "0",
+            "x": 291,
+            "y": 666
+          },
+          "level": 30,
+          "sql": [],
+          "flow": {
+            "walk_clicks": 0,
+            "skip_talk": true,
+            "skip_logout": true,
+            "skip_reenter": true
+          },
+          "judge": {
+            "kind": "combat",
+            "s2c_diff_from": [
+              291,
+              666
+            ],
+            "checks": []
+          }
+        },
+        "reverse": {
+          "point": {
+            "map": "0",
+            "x": 311,
+            "y": 666
+          },
+          "level": 30,
+          "sql": [],
+          "flow": {
+            "walk_clicks": 0,
+            "skip_talk": true,
+            "skip_logout": true,
+            "skip_reenter": true
+          },
+          "judge": {
+            "kind": "combat",
+            "s2c_diff_from": [
+              311,
+              666
+            ],
+            "checks": []
+          }
+        }
+      },
+      "evidence": {
+        "stack": "{WIN}/{side}/stack",
+        "proxy": "{WIN}/{side}/g3a-{sub}/proxy",
+        "flow": "{WIN}/{side}/g3a-{sub}/flow",
+        "s2c": "{WIN}/{side}/g3a-{sub}/s2c",
+        "judge": "{WIN}/judge/g3a-{sub}-{side}.json"
+      }
+    },
+    "G5A": {
+      "title": "G5a 优雅关服/存档（玩家在世界中 => Ctrl+Break => before/after 关键值）",
+      "tier": "R",
+      "char": "aaa",
+      "level": 30,
+      "point": {
+        "map": "0",
+        "x": 311,
+        "y": 666
+      },
+      "sql": [],
+      "flow": {
+        "walk_clicks": 0,
+        "skip_talk": true,
+        "skip_logout": true,
+        "skip_reenter": true,
+        "leave_client_running": true
+      },
+      "judge": {
+        "kind": "db",
+        "key_columns": [
+          "MapName",
+          "CX",
+          "CY",
+          "Level",
+          "Hp",
+          "MaxHP",
+          "Mp"
+        ],
+        "allow_volatile": [],
+        "e1b_diff": true
+      },
+      "evidence": {
+        "stack": "{WIN}/{side}/stack",
+        "proxy": "{WIN}/{side}/proxy",
+        "flow": "{WIN}/{side}/flow",
+        "s2c": "{WIN}/{side}/s2c",
+        "db": "{WIN}/db/g5-{side}",
+        "judge": "{WIN}/judge/g5-{side}.json"
+      }
+    }
+  }
+}
