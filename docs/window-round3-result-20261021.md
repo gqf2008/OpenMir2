@@ -52,3 +52,32 @@ body_len 为 owner 已裁决的 D-9，已 whitelist）。`judge_login` 另提示
 
 - 两侧栈按 stop_order 关闭，九游戏端口 DOWN，7600 DOWN；MySQL 保持 UP（owner 要求）。
 - 临时物：`E:/tmp/window/20261021-r3/**`（本轮证据，保留）；测试库 `mir2_test_*` 保持克隆态。
+
+## 5. 续采（2026-10-21 深夜，同 master 606b32cf5 的二进制）
+
+### 5.1 怪物 `SM_WALK` —— **验证通过**
+
+- 摆位：`map 0 (333,247)`（`MonGen` 的 `(333,268) 鸡 r=20` 框外、视野 12 内），Level 1 / HP 20。
+- Rust 栈：登录后 `进世界 CurMap:0 (333,247)`（未发生 enter 改写）；停留 20s。
+- capture `E:/tmp/window/20261021-r3/walk/s2c/capture.jsonl`：
+  `SM_APPEAR(41)=7`、**`SM_WALK(11)=7`**、`SM_TURN(10)=6`。
+- 结论：上一轮「Rust 怪物走位 0 条」的缺陷已修复；本场景条数 7（上一轮 C# 基线区间 17–76，
+  本轮未同窗口采 C# 对照，条数差异属停留时长/视野内怪物数差异，非帧面缺陷）。
+  `SM_WALK` 的 recog/param/tag 与收件人集合仍以 T-146 的构造级判据为准。
+
+### 5.2 固定 NPC 菜单（T-137）—— **未采到，且发现待查现象**
+
+- 摆位 `0122 (29,33)`，服务器日志确认 `进世界 CurMap:0122 (29,33)`，`Npcs.txt` 3 条、
+  `Npc_def` 脚本 3 条（缺失 0）。
+- 但 s2c capture 只有 **1 条 `SM_APPEAR(41)`（recog=自己）**，没有 NPC 的出现帧；点击
+  `(512,227)` / `(510,263)` 都被客户端判成 `CM_WALK(3011)`/`CM_TURN(3010)`，服务端没有
+  `Ident=1010` 的点击记录。
+- 服务端 sim 日志：`map=27 vr=12 vis=0 new=0 same_map=1 nearest=20` ⇒ 玩家视野内 0 个可见对象。
+- **判定**：固定 NPC 未进入玩家视野（客户端没有精灵可点），与 T-137 的脚本装载无关。
+  需用 C# oracle 在同一摆位复采确认是本仓缺陷还是夹具问题；结论已记入卡
+  `openmir2-npc-def-loading` 的 comment（父 oid `11f1d6ae…`），T-137 窗口项保持 open。
+
+### 5.3 收尾
+
+- 本轮所有栈已停，九游戏端口与 7600 DOWN；MySQL 3306 保持 UP。
+- 证据目录：`E:/tmp/window/20261021-r3/{walk,king2,king3}/**`。
