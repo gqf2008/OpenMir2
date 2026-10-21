@@ -99,6 +99,19 @@ class Check:
         self.detail.append("INFO " + msg)
 
 
+def enter_seq_spec(value):
+    """把 `scenarios.json` 的 `expect_enter_seq` 规范成上游 `parse_enter_seq` 能吃的字符串。
+
+    上游 `check_client_s2c_frames.check()` 只接受字符串（预设名 / 逗号列表，元素可带 `?`/`[]`），
+    直接塞 JSON 数组会在 `spec.strip()` 处 AttributeError（曾导致真实 G1/G2a 判据 rc=1 且不写 --out）。
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return ",".join(str(x) for x in value)
+
+
 def s2c_idents(rows, port=7200):
     """只取 port=7200 dir=s2c 且非 `frame_form=act` 的带 ident 行（runbook §3.2 的筛选口径）。"""
     out = []
@@ -228,7 +241,8 @@ def judge(args):
         return 2
 
     j = sc["judge"]
-    expect_seq = args.expect_enter_seq or j.get("expect_enter_seq")
+    # scenarios.json 里是 JSON 数组；上游只吃字符串 —— 在这里统一规范化（见 enter_seq_spec）。
+    expect_seq = enter_seq_spec(args.expect_enter_seq or j.get("expect_enter_seq"))
     layout_map = j.get("expect_52_layout", {})
     layout = args.expect_52_layout or layout_map.get(args.side)
 
@@ -412,6 +426,18 @@ def selftest():
     rows58 += tail
     f, _ = chk.check(rows58, expect_enter_seq="default", expect_52_layout="client58")
     expect("J1 58B + client58 => GREEN", f, [])
+
+    # 2b) scenarios.json 的 JSON 数组必须能直接喂给上游 check()（回归 Critical 1）
+    sc_all = load_scenarios(REPO_ROOT)["scenarios"]
+    spec_g1 = enter_seq_spec(sc_all["G1"]["judge"]["expect_enter_seq"])
+    expect("enter_seq_spec(list) 是逗号字符串", isinstance(spec_g1, str), True)
+    expect("enter_seq_spec(list) 与基线 15 帧一致",
+           spec_g1, ",".join(str(x) for x in ENTER_SEQ))
+    f, _ = chk.check(rows, expect_enter_seq=spec_g1, expect_52_layout="oracle40")
+    expect("scenarios G1 数组 => check() 可消费且 GREEN", f, [])
+    expect("enter_seq_spec 保留字符串可选标记",
+           chk.parse_enter_seq(enter_seq_spec(["658", "51?"])),
+           [(658, False), (51, True)])
 
     # 3) 变异：删 654 ⇒ J2 红
     m = [dict(r) for r in rows if not (r.get("ident") == 654)]
