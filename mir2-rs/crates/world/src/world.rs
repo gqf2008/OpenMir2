@@ -4659,9 +4659,15 @@ impl World {
                 Command::Kill { target_id } => {
                     let ok = match self.entities.get_mut(target_id) {
                         Some(e) => {
-                            e.hp = 0;
-                            // 脚本 `KILLMONSTER` / GM Kill 的直接 `Die()` 入口；与战斗
-                            // 伤害致的 `HP == 0` 区分（SuperMan 只有前者会执行子类覆写体）。
+                            // 直接 `Die()` 入口（GM `KillCommand.cs:40` `baseObject.Die()`；
+                            // 脚本 `KILL` 的 `playerActor.Die()`）。oracle 的 `Die()` **不改
+                            // HP**；SuperMan 的目标在 `Die` 首行早退后由下一次 `Run` 回满，
+                            // 因此这里**不写 HP**（否则会污染 `CastleDoor.Run` 的 HP 判据）。
+                            // 非 SuperMan 仍写 `hp = 0`：本骨架的死亡结算以 `hp == 0` 为触发，
+                            // 与既有行为保持一致。
+                            if !e.super_man {
+                                e.hp = 0;
+                            }
                             e.die_called = true;
                             true
                         }
@@ -6137,7 +6143,10 @@ impl World {
             .entities
             .iter()
             .filter(|e| {
-                e.hp == 0
+                // `die_called` 是脚本/GM 直接 `Die()` 的入口（`KillCommand.cs:40`
+                // `baseObject.Die()`**不改 HP**）⇒ SuperMan 目标可能仍带满血，
+                // 不能只按 `hp == 0` 收集。
+                (e.hp == 0 || e.die_called)
                     && !e.death_settled
                     && (e.race == crate::entity::ACTOR_RACE_PLAY) == only_players
             })
@@ -6152,24 +6161,24 @@ impl World {
             // （`Death = true; DeathTick = ...`、`KillFunc` 掉落/经验、`DelMember` 退组）**全部跳过**；
             // **子类覆写体在 `base.Die()` 返回后照常继续**（多态，见下逐点锚）。
             //
-            // 可达性口径：SuperMan 实体在 `BaseObject.Run` 首段被回满（`:32-36`），故
-            // oracle 的 `HP == 0 ⇒ Die()`（`:70-73`）对**伤害**路径不可达。本骨架在
-            // `settle_deaths` 里先按同一顺序回满；只有 `World::kill` 置入的一次性
-            // `die_called` 才代表「直接 `Die()` 调用」（脚本 `KILLMONSTER` / GM Kill），
-            // 仅该路径执行子类覆写体。SuperMan 永不进入通用死亡闩锁：`death_settled`
-            // 保持 false，避免永久闩锁吞掉第二次直接 `Die()`。
+            // 可达性口径（2026-10-21 复核订正）：SuperMan 实体在各自 `Run` 的
+            // **base 段**被回满（`BaseObject.Base.cs:32-36`，Rust 侧
+            // [`Entity::run_super_man_refill`] 在 `base_object_run_monster` /
+            // `npc_run` / 商人 `Run` 的同一位置调用），而 `HP == 0 ⇒ Die()`（`:70-73`）
+            // 在回满之后 ⇒ oracle 的伤害路径**永不调用 `Die()`**。
+            // **本函数因此绝不提前回满**：回满必须发生在实体的 `Run` 段，否则会早于
+            // `CastleDoor.Run` 的 `3 - Round(HP/MaxHP*3)`（`CastleDoor.cs:99-104`）
+            // 改变门的 `Dir`/`RM_TURN` 判据。伤害致的 `hp == 0` 在这里只跳过、不置
+            // `Death`、不回满；下一次 `Run` 自行回满。
+            // 只有一次性 `die_called`（`Command::Kill` = GM `KillCommand.Die()` /
+            // 脚本直接 `Die()`）执行子类覆写体。SuperMan 永不进入通用死亡闩锁：
+            // `death_settled` 保持 false，避免永久闩锁吞掉第二次直接 `Die()`。
             if e.super_man {
                 let race = e.race;
                 let map_id = e.map_id;
                 let direct_die = e.die_called;
                 if let Some(e) = self.entities.get_mut(id) {
                     e.die_called = false;
-                    e.death_settled = false;
-                    if !direct_die {
-                        // 伤害路径：`BaseObject.Base.cs:32-36` 先于 `:70-73` 回满，
-                        // 所以不会调用 `Die()`，也不能执行任何子类覆写体。
-                        e.run_super_man_refill();
-                    }
                 }
                 if !direct_die {
                     continue;
@@ -10144,7 +10153,11 @@ mod tests {
     /// `record.deaths`（无掉落/经验/退组）。关掉 AI 后在 `tick_head` 立即断言，排除靠
     /// 后续怪物 `Run` 回满而误绿。
     ///
-    /// 牙：删 `settle_deaths` 伤害支的 `run_super_man_refill` ⇒ HP/MP 断言红；
+    /// **复核订正（2026-10-21）**：回满只发生在实体自己的 `Run` 段（oracle
+    /// `BaseObject.Base.cs:32-36`），不在 `settle_deaths` 提前做——否则会早于
+    /// `CastleDoor.Run` 的 HP 判据。
+    ///
+    /// 牙：删 `base_object_run_monster` 的 `run_super_man_refill` ⇒ Run 后 HP/MP 断言红；
     /// 删整个 `if e.super_man` 支 ⇒ `Death`/`record.deaths` 红。
     #[test]
     fn superman_guard_lethal_damage_refills_without_die() {
@@ -10171,8 +10184,17 @@ mod tests {
         assert_eq!(e.death_tick, 0, "`DeathTick` 也跳过");
         assert!(!e.death_settled, "SuperMan 不进通用死亡闩锁");
         assert!(!e.die_called, "伤害不伪造直接 Die 标记");
-        assert_eq!(e.hp, 300, "结算段按 Run 首段顺序回满 HP");
-        assert_eq!(e.mp, 40, "MP 同段回满");
+        assert_eq!(
+            e.hp, 0,
+            "死亡结算段不得提前回满（回满在实体 Run 的 base 段）"
+        );
+        assert_eq!(e.mp, 0, "MP 同段不回满");
+        // 实体自己的 Run：`base_object_run_monster` 的 SuperMan 段回满。
+        crate::monai::monster_ai_tick(&mut w);
+        let e = w.entities.get(id).unwrap();
+        assert!(!e.death, "Run 段回满后 `HP == 0 ⇒ Die()` 仍不可达");
+        assert_eq!(e.hp, 300, "`BaseObject.Run:32-36` 回满 HP");
+        assert_eq!(e.mp, 40, "`BaseObject.Run:32-36` 回满 MP");
     }
 
     /// **F4 回归**：SuperMan 的直接 `Die()` 不得分派 `ZilKinZombi.Die()`（race 96
@@ -11117,9 +11139,11 @@ mod castle_wire_tests {
     /// 牙：删伤害支回满 ⇒ HP/MP 断言红；让伤害支落入直接 Die 子类段 ⇒ 空事件断言红。
     #[test]
     fn superman_castle_door_lethal_damage_refills_without_die_or_flag2_mask() {
-        let (mut w, id) = castle_world(110, 0, 10_000, 0);
-        // 只跑死亡结算段：关掉怪物 AI（门/墙 Run 会另发格子事件，混入判据）。
-        w.ai_enabled = false;
+        // `dir=2` 是非零初始值：若结算段提前回满，`CastleDoor.Run` 会看到满血
+        // （`n08=0`）并把 Dir 刷成 0 且发 `RM_TURN`——正是本判据要排除的次序错误。
+        let (mut w, id) = castle_world(110, 0, 10_000, 2);
+        // 开 AI：oracle 的回满发生在实体自己的 `Run`（`BaseObject.Run:32-36`），
+        // 必须先让 `CastleDoor.Run` 读到 HP=0，再在 base 段回满。
         crate::mongen::apply_monster_class_constants(w.entities.get_mut(id).unwrap(), 110, 0);
         {
             let e = w.entities.get_mut(id).unwrap();
@@ -11137,9 +11161,20 @@ mod castle_wire_tests {
         assert!(!e.death);
         assert!(!e.death_settled, "SuperMan 不进通用死亡闩锁");
         assert!(!e.die_called);
-        assert_eq!(e.hp, 10_000, "Run 首段先于 HP==0 判定回满");
+        assert_eq!(
+            e.hp, 10_000,
+            "`BaseObject.Run:32-36` 在自己的 Run 段回满（tick_head 内含怪物 Run）"
+        );
         assert_eq!(e.mp, 40);
-        assert!(!w.castles[0].main_door.unwrap().death);
+        assert_eq!(
+            e.ai.dir, 2,
+            "门 Run 先读到 HP=0（n08=3 不刷 Dir），base 段才回满 ⇒ 不得出现满血分支的 Dir=0"
+        );
+        assert_eq!(unit_of(&w).dir, 2, "`CastleUnit.dir` 同样保持");
+        assert!(
+            !w.castles[0].main_door.unwrap().death,
+            "`CastleUnit.death` 镜像保持 false"
+        );
     }
 
     /// **SuperMan 判据 (b-ii)**：`World::kill` 是脚本/GM 的**直接 `Die()`** 入口；
@@ -11162,6 +11197,7 @@ mod castle_wire_tests {
         assert!(!e.death, "`base.Die()` 早退 ⇒ 实体 Death 不置位");
         assert!(!e.death_settled, "直接 Die 后不留下永久闩锁");
         assert!(!e.die_called, "一次性直接 Die 标记已消费");
+        assert_eq!(e.hp, 10_000, "直接 Die() 不改 HP（`KillCommand.cs:40`）");
         assert!(
             !w.castles[0].main_door.unwrap().death,
             "`CastleUnit.death` 是 Death 镜像 ⇒ 保持 false"
@@ -11169,7 +11205,7 @@ mod castle_wire_tests {
 
         let rec2 = w.tick_head();
         assert!(rec2.castle_structures.is_empty(), "无新 Die 调用不得重发");
-        assert_eq!(w.entities.get(id).unwrap().hp, 10_000, "后续 Run 首段回满");
+        assert_eq!(w.entities.get(id).unwrap().hp, 10_000, "HP 保持");
     }
 
     /// **F2**：oracle 每次 `CastleDoor.Die()` 都重发掩码；两次 `World::kill` 必须得到
