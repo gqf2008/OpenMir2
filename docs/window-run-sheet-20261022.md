@@ -1011,12 +1011,19 @@ python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/s2c_diff
 
 | 步 | 命令 | 通过判据 |
 | --- | --- | --- |
+| 场景包自检（2026-10-23） | `run_scenario.ps1 -Selftest`；`preflight.py --selftest`；`judge_login.py --selftest` | 三行 `SELFTEST GREEN`，rc=0 |
 | 工具自检 | §0.3b 全部命令 | 每行 `SELFTEST GREEN`/`GREEN n/n`，rc=0 |
 | Rust 窗口门 | `bash E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/client-e2e-window.fixed.sh.txt guard` | `WINDOW_GUARD_OK`（R1..R8 全绿） |
 | C# 抓包前置 | §A2 的 `check_csharp_capture_preflight.py ...`（离线，`--shadow-config` 指影子） | `RESULT: GREEN` |
 | 端口 | `powershell -File E:/MirServer/port-status.ps1` + 单独查 7600 | 九游戏端口 DOWN、7600 DOWN、3306 UP |
 
 任何一项 RED/PREREQ ⇒ 不开窗；不得用「先起栈再补自检」绕过。
+
+> **可执行场景包（2026-10-23）**：G1 / G2a(R1/R2/R3) / G3a / G5a 的命令序列、期望与证据路径已固化到
+> `mir2-rs/tests/parity/m3/window-20261023/`（`run_scenario.ps1`、`preflight.py`、`judge_login.py`；
+> 三个工具各自 `--selftest` 离线可跑）。开窗当天的「一条命令前置门」=
+> `run_scenario.ps1 -Phase preflight -Go`；整段执行 = `-Scenario G1 -Side rust -Go -Yes`（默认 dry-run）。
+> 本包的判据逐字取自本文件 §D.2/§D.3/§D.4 与 `docs/window-round2-runbook-20261023.md` §3；冲突时以那两份为准。
 
 ### D.1 Block A（2 小时）：G0 + G1（登录/入图基线）
 
