@@ -2357,6 +2357,11 @@ def cmd_mutate(args):
         # `bins/game-svr/src/main.rs` 的 `drain_buff_downlink` 生产调用）⇒ 归 wired；其**生产者缺位**
         # 登记在下方注释面 `_wired_no_producer`（不豁免 blocked）。
         "SM_CHARSTATUSCHANGED",
+        # 卡 `openmir2-openybdeal-host-wiring`（2026-10-21，复核 finding 1）：
+        # 脚本帧排水新增 `RM_PLAYDICE(10500) → SM_PLAYDICE(8001)` 映射，
+        # 发射点 = `bins/game-svr/src/pickwire.rs::script_frame` + `main.rs::emit_script_frames`
+        # （四个 `GotoLable` 生产调用点）；掷骰动作 `ActionOfPlayDice` 的生产触发链已通。
+        "SM_PLAYDICE",
         # 卡 `openmir2-m3-firewind-spacemove-wire`（2026-10-17）：魔号 21 `MagSaceMove` 的
         # `SendRefMsg(RM_SPACEMOVE_FIRE2,…)`（oracle `MagicManager.cs:881`）已接生产发射点
         # （`bins/game-svr/src/main.rs` 的 `broadcast_ref_msg_with_self(w, online, gates, actor_id,
@@ -2436,15 +2441,16 @@ def cmd_mutate(args):
     #      `_wired_now`，见上。）
     #     （SM_716(716) 原列本簇；卡 `openmir2-spell-shared-tail-p3b4` 接线 42 的 `RM_10205`
     #      后已移入 `_wired_now`，见上。）
-    #   · 重连 / 换脸 / 掷骰 / 地面物品簇（杂项）—— SM_RECONNECT(802)/SM_CHANGEFACE(1104)/
-    #     SM_PLAYDICE(8001)/SM_ITEMSHOW(610)（V2-14）。
+    #   · 重连 / 换脸 / 地面物品簇（杂项）—— SM_RECONNECT(802)/SM_CHANGEFACE(1104)/SM_ITEMSHOW(610)（V2-14）。
+    #     （SM_PLAYDICE(8001) 原列本簇；卡 `openmir2-openybdeal-host-wiring` 接线脚本帧排水后
+    #      已移入 `_wired_now`，见上。）
     #     （SM_MAGICFIRE_FAIL(639) 原列本簇；卡 `openmir2-spell-mp-wrapper` 接线后已移入
     #      `_wired_now`，见上。）
     _blocked = {"SM_SKELETON",
                 "SM_CLOSEHEALTH", "SM_BREAKWEAPON",
                 "SM_LAMPCHANGEDURA", "SM_QUERYYBDEAL",
                 "SM_QUERYYBSELL", "SM_RECONNECT", "SM_CHANGEFACE",
-                "SM_PLAYDICE", "SM_ITEMSHOW", "SM_HIDEEVENT", "SM_SHOWEVENT", "SM_OPENDOOR_OK",
+                "SM_ITEMSHOW", "SM_HIDEEVENT", "SM_SHOWEVENT", "SM_OPENDOOR_OK",
                 "SM_CLOSEDOOR"}
 
     # `_wired_no_producer`：**注释面**（不参与 blocked 断言；**自失效断言**，非人工免检）——列出
