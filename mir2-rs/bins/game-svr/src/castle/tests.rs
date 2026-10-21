@@ -568,12 +568,14 @@ fn castle_production_call_order_is_wired() {
         .find("let outcome = guild_runtime::step(")
         .expect("GuildMgr.Run 必须存在");
     let castle_run = main_rs
-        .find("let castle_events = world.castles[idx].run(now);")
+        .find("game_svr::castle::run_castle_tick(")
         .expect("CastleMgr.Run 必须存在");
     assert!(guild < castle_run, "Guild 先、Castle 后（同一 10s 块）");
+    // 10s 门与落盘门都在 `CastleHostGates::tick` 里（严格 `>` 的行为由
+    // `persist_tests::host_gates_are_independent_on_fake_tick_sequence` 钉住）。
     assert!(
-        main_rs.contains("world.clock_ms - castle_run_tick > 10_000"),
-        "CastleMgr.Run 必须走严格 `>` 的 10s 门（SystemProcessor.cs:70-77）"
+        main_rs.contains("castle_gates.tick("),
+        "两道门必须走 CastleHostGates（SystemProcessor.cs:70-77 / :54-62）"
     );
 }
 

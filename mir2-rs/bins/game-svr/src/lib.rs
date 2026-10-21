@@ -15980,11 +15980,10 @@ fn sim_loop(
         i32::from(enter_cfg.server_index),
     );
     let mut guild_run_tick = world.clock_ms as i32;
-    // `CastleMgr.Run()` 的 10s 门基准（`SystemProcessor.cs:70-77`，与 `GuildMgr.Run` 同块、Guild 先）。
-    let mut castle_run_tick = world.clock_ms;
-    // **A-22 P3**：`CastleMgr.Save` 的 10 分钟门基准（`SystemProcessor.cs:54-62` 的
-    // `ShowOnline`，与上面 10s 门**独立**；严格 `>`, 缺省 600000ms）。宿主存储随启动块建立。
-    let mut castle_save_tick = world.clock_ms;
+    // **A-22 P3**：城堡宿主的两道门（`SystemProcessor.cs`）：`ShowOnline` 的落盘门
+    // （严格 `>`，间隔 = `[Setup] ConsoleShowUserCountTime`，缺省 600000ms）与
+    // `ProcessGameRun` 的 10s 门**各自独立**；基准都由 `CastleHostGates::new` 同刻起算。
+    let mut castle_gates = game_svr::castle::CastleHostGates::new(world.clock_ms);
     let mut castle_store: Option<game_svr::castle::CastleStore> = None;
     // 每个在线玩家的 `InGuildWarArea` / `NameColorChanged` / `DiscountForNightTick`
     // （oracle `PlayObject` 会话位；本仓按 actor id 侧挂，生命周期随在线表清理）。
@@ -18546,12 +18545,9 @@ fn sim_loop(
         // `CastleMgr.Save()`（`SaveCastleList` → 升序逐城 `SaveConfig` → `SaveAttackSabukWall`）。
         // 与下面 10s 的 `ProcessGameRun` 门**独立**；oracle 在同一 tick 里先 ShowOnline 后
         // ProcessGameRun ⇒ 本块放在 10s 块之前。
+        let castle_due = castle_gates.tick(world.clock_ms, enter_cfg.console_show_user_count_time);
         if let Some(store) = castle_store.as_ref() {
-            if game_svr::castle::castle_save_due(
-                world.clock_ms,
-                &mut castle_save_tick,
-                enter_cfg.console_show_user_count_time,
-            ) {
+            if castle_due.save {
                 let report = game_svr::castle::save_all(store, &world.castles);
                 glog!(
                     "INF",
@@ -18595,8 +18591,7 @@ fn sim_loop(
         // **CastleMgr.Run()**（`SystemProcessor.cs:70-77`）：与 `GuildMgr.Run` 同一个 10s 块、
         // **Guild 先、Castle 后**；严格 `>` 门（oracle `GetTickCount()-RunTimeTick>10000`）。
         // 状态机本体已在 `UserCastle::run` 逐行实现（跨天/每日开战/回收 Ghost/StoneMode/预告/超时）。
-        if world.clock_ms - castle_run_tick > 10_000 {
-            castle_run_tick = world.clock_ms;
+        if castle_due.run {
             let local = chrono::Local::now();
             let now = mir2_world::castle::CastleNow::new(
                 mir2_world::castle::CastleDate::new(
@@ -18607,8 +18602,21 @@ fn sim_loop(
                 chrono::Timelike::hour(&local) as i32,
                 world.clock_ms,
             );
+            // 运行期 `*_text` 刷新的注入墙钟（`UserCastle.cs:337/357` 的 `DateTime.Now`；
+            // `crates/world` 的 `run` 只改日粒度，P1 只存原串 ⇒ 宿主负责格式化回写，F1）。
+            let wall_clock = local.format("%Y-%m-%d %H:%M:%S").to_string();
             for idx in 0..world.castles.len() {
-                let castle_events = world.castles[idx].run(now);
+                let (castle_events, text_change) =
+                    game_svr::castle::run_castle_tick(&mut world.castles[idx], now, &wall_clock);
+                if text_change.income_today || text_change.war_date {
+                    glog!(
+                        "INF",
+                        "城堡 {} 日期串刷新：IncomeToday={} WarDate={}（墙钟 {wall_clock}）",
+                        idx,
+                        text_change.income_today,
+                        text_change.war_date
+                    );
+                }
                 let castle_map_id = world.castles[idx].castle_map_id;
                 for ev in castle_events {
                     match ev {

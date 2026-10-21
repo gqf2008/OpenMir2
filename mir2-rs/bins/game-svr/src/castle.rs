@@ -49,9 +49,9 @@ use mir2_envir::castle::{
 use mir2_envir::{MapInfoFlag, MapLoader, MapRegistry};
 use mir2_shared::rng::RandomNumber;
 use mir2_world::castle::{
-    area_state, CastleDate, CastleDefenseSpecs, CastleEvent, CastleNameColors, CastleSaveSkip,
-    CastleSaveSnapshot, CastleSaveUnit, CastleSiegeConfig, DefenseCreature, DefenseUnitSpec,
-    RedDieHome, UserCastle,
+    area_state, CastleDate, CastleDefenseSpecs, CastleEvent, CastleNameColors, CastleNow,
+    CastleSaveSkip, CastleSaveSnapshot, CastleSaveUnit, CastleSiegeConfig, DefenseCreature,
+    DefenseUnitSpec, RedDieHome, UserCastle,
 };
 use mir2_world::mongen::MonGenState;
 
@@ -102,22 +102,6 @@ pub fn specs_from_sabuk(cfg: &SabukWConfig) -> CastleDefenseSpecs {
             .map(|u| spec_from_unit(u, false))
             .collect(),
     }
-}
-
-/// 读部署实读路径 `Castle/<CastleDir>/SabukW.txt`（**不是** `Castle/0`）。
-///
-/// oracle `UserCastle` ctor：`Path.Combine(BasePath, Config.CastleDir, ConfigDir)`，
-/// 而 `CastleManager.Initialize` 传进来的 `ConfigDir` 正是 `Config.CastleDir`
-/// （`CastleManager.cs:66` 与 `UserCastle.cs:34/50`）⇒ 两级同名目录。
-///
-/// # Errors
-/// 文件读取失败（oracle 此时会 `ConfigFile` 建空文件 + 全默认；本仓按 fail-closed 返回错误，
-/// 由调用方记 WRN 并跳过城堡块——部署件存在，不触发）。
-pub fn load_sabuk_specs(
-    loader: &mir2_envir::MapLoader,
-    castle_dir: &str,
-) -> Result<CastleDefenseSpecs, String> {
-    load_sabuk_config(loader, castle_dir).map(|(_, specs)| specs)
 }
 
 /// `CastleInitializeEnv` 的生产实现（同一条 `world.rng`，逐次同步造怪）。
@@ -730,6 +714,9 @@ fn save_one(
 
 /// `CastleManager.Save`（`CastleManager.cs:144-152`）等价物：`SaveCastleList` → 升序逐城
 /// `[SaveConfig → SaveAttackSabukWall]`。写序用 `on_step` 暴露给判据/日志。
+///
+/// `SaveCastleList` 失败 ⇒ **整条 Save 中断**（oracle 抛异常，逐城循环不执行）：
+/// `report.castles` 为空、`list_written=false`（Minor-1，W-A22-4）。
 pub fn save_all_with(
     store: &CastleStore,
     castles: &[UserCastle],
@@ -741,7 +728,14 @@ pub fn save_all_with(
             report.list_written = true;
             on_step(CastleWriteStep::CastleList);
         }
-        Err(e) => report.list_error = Some(e),
+        Err(e) => {
+            // oracle `CastleManager.Save`（`CastleManager.cs:144-152`）先调
+            // `SaveCastleList()`；`StringList.SaveToFile` 抛（如 `List.txt` 路径不可写）
+            // ⇒ 后面的逐城 `castle.Save()` 循环**一次都不执行**，一个城堡文件都不写。
+            // 本宿主同样当场中断（启动期等价于 `Initialize` 的 `Save()` 抛出）。
+            report.list_error = Some(e);
+            return report;
+        }
     }
     for (index, castle) in castles.iter().enumerate() {
         let outcome = save_one(store, index, castle, on_step);
@@ -769,8 +763,112 @@ pub fn castle_save_due(clock_ms: i64, save_tick: &mut i64, interval_ms: i64) -> 
     }
 }
 
+/// 一个 tick 里两道门的判定结果（[`CastleHostGates::tick`]）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CastleHostDue {
+    /// `ProcessGameRun` 的 10s 门（`CastleMgr.Run`，`SystemProcessor.cs:70-77`）。
+    pub run: bool,
+    /// `ShowOnline` 的落盘门（`CastleMgr.Save`，`SystemProcessor.cs:54-62`）。
+    pub save: bool,
+}
+
+/// 宿主每 tick 的两道门（oracle `SystemProcessor.ExecuteInternal` 里 `ShowOnline` 在前、
+/// `ProcessGameRun` 在后，两个基准各自独立）。
+///
+/// 把「门」抽成可注入时钟的纯函数，判据用假 tick 序列证明「Save 不随 10s 门触发」；
+/// 生产 `lib.rs` 只调 [`Self::tick`]（不再散落两个基准变量）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CastleHostGates {
+    /// `RunTimeTick`（10s 门基准）。
+    pub run_tick: i64,
+    /// `ShowOnlineTick`（落盘门基准）。
+    pub save_tick: i64,
+}
+
+impl CastleHostGates {
+    /// 两个基准都从 `clock_ms` 起算（`SystemProcessor.Startup`：两个 tick 同刻初始化）。
+    #[must_use]
+    pub fn new(clock_ms: i64) -> Self {
+        Self {
+            run_tick: clock_ms,
+            save_tick: clock_ms,
+        }
+    }
+
+    /// 推进一个 tick：10s 门严格 `>`（命中刷新 `run_tick`），落盘门同样严格 `>`、
+    /// 间隔由 `save_interval_ms` 注入（命中刷新 `save_tick`）。两道门互不影响。
+    pub fn tick(&mut self, clock_ms: i64, save_interval_ms: i64) -> CastleHostDue {
+        let run = if clock_ms - self.run_tick > 10_000 {
+            self.run_tick = clock_ms;
+            true
+        } else {
+            false
+        };
+        let save = castle_save_due(clock_ms, &mut self.save_tick, save_interval_ms);
+        CastleHostDue { run, save }
+    }
+}
+
+/// 运行期 `*_text` 的刷新结果（判据用）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CastleDateTextChange {
+    /// `IncomeToday` 换日 ⇒ `income_today_text` 已用新墙钟重写。
+    pub income_today: bool,
+    /// `WarDate` 开战 ⇒ `war_date_text` 已用新墙钟重写。
+    pub war_date: bool,
+}
+
+/// 运行期跨天/开战时把**注入墙钟**回写 `income_today_text`/`war_date_text`。
+///
+/// oracle 在 `UserCastle.Run` 里直接赋 `IncomeToday = DateTime.Now`（`UserCastle.cs:337`）
+/// 与 `WarDate = DateTime.Now`（`:357`），`SaveConfig` 原样落盘；本仓 `UserCastle::run`
+/// 只更新日粒度（`crates/world` 不取墙钟，P1 只存原串），所以宿主必须在 `run(now)` 前后
+/// 比较日粒度并刷新对应 `*_text`，否则跨天后 `Castle/Castle/SabukW.txt` 的
+/// `IncomeToday`/`WarDate` 仍是启动注入的旧串（F1；T-152 ② 的 P3 义务）。
+///
+/// `before_*` 是 `run(now)` **之前**的快照；`wall_clock` 是宿主注入的
+/// `yyyy-MM-dd HH:mm:ss`（生产 = `chrono::Local::now()`）。不变化 ⇒ 原串保持不动。
+pub fn refresh_castle_date_texts(
+    castle: &mut UserCastle,
+    before_income_today: CastleDate,
+    before_war_date: Option<CastleDate>,
+    wall_clock: &str,
+) -> CastleDateTextChange {
+    let mut change = CastleDateTextChange::default();
+    if castle.income_today != before_income_today {
+        castle.income_today_text = Some(wall_clock.to_string());
+        change.income_today = true;
+    }
+    if castle.war_date != before_war_date {
+        castle.war_date_text = Some(wall_clock.to_string());
+        change.war_date = true;
+    }
+    change
+}
+
+/// 宿主每个 10s 窗口对一座城的完整动作：`run(now)` + 运行期 `*_text` 刷新**同一条路径**。
+///
+/// 生产 `lib.rs` 与判据都走本函数，避免「判据测了刷新、生产忘了调」的假牙（F1）。
+pub fn run_castle_tick(
+    castle: &mut UserCastle,
+    now: CastleNow,
+    wall_clock: &str,
+) -> (Vec<CastleEvent>, CastleDateTextChange) {
+    let before_income_today = castle.income_today;
+    let before_war_date = castle.war_date;
+    let events = castle.run(now);
+    let change =
+        refresh_castle_date_texts(castle, before_income_today, before_war_date, wall_clock);
+    (events, change)
+}
+
 /// `Server.conf [Setup] ConsoleShowUserCountTime`（`ServerConf.cs:586`）读侧；
 /// 缺文件/缺键/非法值 ⇒ `GameSvrConf.cs:1439` 的 `10*60*1000`。
+///
+/// 非法值口径（T-153 ⑦）：oracle `ServerConf : ConfigFile`，`ReadWriteInteger` →
+/// `ReadInteger` 走 `int.TryParse`，解析失败即返回缺省（`src/OpenMir2/Common/ConfigFile.cs:170-186`），
+/// **不抛异常**（`ConfFile.cs` 里用 `Convert.ChangeType` 的是另一个类，`ServerConf` 不继承它）。
+/// 本实现同口径：`abc` ⇒ 600000。
 #[must_use]
 pub fn load_console_show_user_count_time(server_conf: &Path) -> i64 {
     const DEFAULT: i32 = 10 * 60 * 1000;
@@ -970,14 +1068,33 @@ mod persist_tests {
 
     use super::*;
     use mir2_envir::castle::parse_sabuk_w_bytes;
-    use mir2_world::castle::{CastleNow, GuildId};
+    use mir2_world::castle::GuildId;
 
     // ------------------------------------------------------------------
     // 夹具
     // ------------------------------------------------------------------
 
-    /// 临时根（`E:/tmp/a22-p3-<pid>-<name>`；每次起跑先清空）。
-    fn fixture_root(name: &str) -> PathBuf {
+    /// 临时根（`E:/tmp/a22-p3-<pid>-<name>`；每次起跑先清空，**drop 时删除**）。
+    ///
+    /// 用 RAII 守卫而不是只在开头清理：用例失败/早退时也不留 `E:/tmp/a22-p3-*` 残留
+    /// （收尾清单第 5 条；Minor-5）。
+    struct TempRoot(PathBuf);
+
+    impl std::ops::Deref for TempRoot {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn fixture_root(name: &str) -> TempRoot {
         let base = if Path::new("E:/tmp").is_dir() {
             PathBuf::from("E:/tmp")
         } else {
@@ -986,7 +1103,7 @@ mod persist_tests {
         let dir = base.join(format!("a22-p3-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("建立夹具目录");
-        dir
+        TempRoot(dir)
     }
 
     fn write_file(root: &Path, rel: &str, bytes: &[u8]) {
@@ -1081,34 +1198,82 @@ mod persist_tests {
         assert!(castle_save_due(1_200_002, &mut tick, interval));
     }
 
-    /// 接线口径：10s 的 `CastleMgr.Run` 门原样保留；10 分钟落盘走独立函数 + 配置值。
+    /// 两道门的行为面（Minor-2）：假 tick 序列下 10s 门只触发 Run、落盘门只触发 Save，
+    /// 两个基准互不带动。
     ///
-    /// 牙：把 `castle_save_due` 调用挪进 `> 10_000` 块（或把 10s 门常量改掉）⇒ 本用例红。
+    /// 牙：把落盘塞进 10s 门（`save = run`）⇒ 10_001..600_000 的 `save=false` 断言红；
+    /// 10s 门常量改成落盘间隔 ⇒ 10_001 的 `run=true` 断言红；两个基准并成一个 ⇒
+    /// 600_000/600_001 的互相独立断言红。
     #[test]
-    fn lib_wiring_keeps_two_independent_gates() {
-        let src = include_str!("lib.rs");
-        assert!(
-            src.contains("world.clock_ms - castle_run_tick > 10_000"),
-            "10s CastleMgr.Run 门不得改动"
+    fn host_gates_are_independent_on_fake_tick_sequence() {
+        let interval = 600_000_i64;
+        let mut gates = CastleHostGates::new(0);
+        // 严格 `>`：0..=10_000 都不触发。
+        assert_eq!(
+            gates.tick(10_000, interval),
+            CastleHostDue {
+                run: false,
+                save: false
+            }
         );
-        assert!(
-            src.contains("game_svr::castle::castle_save_due("),
-            "10 分钟落盘必须走独立门函数"
+        // 10_001：只 Run；落盘门离 600000 还远。
+        assert_eq!(
+            gates.tick(10_001, interval),
+            CastleHostDue {
+                run: true,
+                save: false
+            }
         );
-        let call_at = src
-            .find("game_svr::castle::castle_save_due(")
-            .expect("落盘门调用点");
-        assert!(
-            src[call_at..call_at + 240].contains("enter_cfg.console_show_user_count_time"),
-            "门间隔必须来自 Server.conf [Setup] ConsoleShowUserCountTime（塞进 10s 门 ⇒ 多写）"
+        // 10s 窗口内多 tick：Run 只在上次命中后 10s 再触发（10_500/15_000/20_001 都不写）。
+        for t in [10_500, 15_000, 20_001] {
+            assert_eq!(
+                gates.tick(t, interval),
+                CastleHostDue {
+                    run: false,
+                    save: false
+                },
+                "10s 门内不得重复触发（t={t}）"
+            );
+        }
+        // 20_002：第二次 Run；仍不落盘。
+        assert_eq!(
+            gates.tick(20_002, interval),
+            CastleHostDue {
+                run: true,
+                save: false
+            }
         );
-        assert!(
-            src.contains("store.save_attack(&world.castles[idx])"),
-            "SaveAttackSabukWall 事件必须接宿主落盘"
+        // 600_000：严格 `>` 未到 ⇒ **不落盘**（Run 照常因 10s 到点）。
+        assert_eq!(
+            gates.tick(600_000, interval),
+            CastleHostDue {
+                run: true,
+                save: false
+            }
         );
-        assert!(
-            src.contains("let mut castle_save_tick = world.clock_ms;"),
-            "10 分钟门基准必须独立于 castle_run_tick"
+        // 600_001：落盘门命中一次；10s 门刚刷新 ⇒ 不 Run。
+        assert_eq!(
+            gates.tick(600_001, interval),
+            CastleHostDue {
+                run: false,
+                save: true
+            }
+        );
+        // 1_200_001：Run 到点、落盘门差 1ms 未到 ⇒ 两门独立。
+        assert_eq!(
+            gates.tick(1_200_001, interval),
+            CastleHostDue {
+                run: true,
+                save: false
+            }
+        );
+        // 1_200_002：落盘门第二次命中（基准 = 600_001）。
+        assert_eq!(
+            gates.tick(1_200_002, interval),
+            CastleHostDue {
+                run: false,
+                save: true
+            }
         );
     }
 
@@ -1411,7 +1576,7 @@ mod persist_tests {
         write_file(&root, "Castle/List.txt", b"0\r\n");
         write_file(&root, "Castle/0/AttackSabukWall.txt", b"");
         write_file(&root, "Castle/0/SabukW.txt", &deployed_zero_sabuk());
-        let loader = MapLoader::new(&root, "Map", "Envir");
+        let loader = MapLoader::new(&*root, "Map", "Envir");
         let mut store = CastleStore::from_loader(&loader, &test_cfg(), 7);
         store.push_base(store.load_base("0").expect("base"));
         let mut lazy = UserCastle::new("沙巴克", CastleSiegeConfig::default());
@@ -1425,6 +1590,165 @@ mod persist_tests {
         assert_eq!(
             std::fs::read(root.join("Castle/0/SabukW.txt")).unwrap(),
             before
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Minor-1：`List.txt` 写失败 ⇒ 整条 Save 中断
+    // ------------------------------------------------------------------
+
+    /// `List.txt` 写失败 ⇒ oracle `SaveCastleList()` 抛出、`CastleManager.Save` 的逐城循环
+    /// **一次都不执行**（`CastleManager.cs:144-152`）⇒ 一个城堡文件都不写。
+    ///
+    /// 牙：删掉 `save_all_with` 的早退（记错后继续逐城写）⇒ `castles` 非空且
+    /// `Castle/Castle/SabukW.txt` 被重写 ⇒ 红。
+    #[test]
+    fn castle_list_write_failure_aborts_whole_save() {
+        let root = fixture_root("list-abort");
+        // 把 `Castle/List.txt` 做成目录 ⇒ 等价 `StringList.SaveToFile` 的写文件失败。
+        std::fs::create_dir_all(root.join("Castle/List.txt")).expect("占位目录");
+        write_file(&root, "Castle/Castle/SabukW.txt", &deployed_castle_sabuk());
+        let cfg = parse_sabuk_w_bytes(&deployed_castle_sabuk());
+        let mut store = store_for(&root);
+        store.push_base(store.load_base("Castle").expect("base"));
+        let mut castle = ready_castle(&cfg);
+        hydrate_ready(&mut castle, &cfg);
+        let before = std::fs::read(root.join("Castle/Castle/SabukW.txt")).expect("写前快照");
+
+        let mut steps = Vec::new();
+        let report = save_all_with(&store, &[castle], &mut |step| steps.push(step));
+        assert!(!report.list_written);
+        assert!(report.list_error.is_some(), "List.txt 失败必须记录");
+        assert!(
+            report.castles.is_empty(),
+            "oracle 的逐城循环不执行：一个城堡都不处理"
+        );
+        assert!(steps.is_empty(), "中断后不得有任何城堡写步");
+        assert_eq!(
+            std::fs::read(root.join("Castle/Castle/SabukW.txt")).expect("写后快照"),
+            before,
+            "一个城堡文件都不写（字节不变）"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Minor-3：启动申请表读数必须来自 ctor 路径（生产接线）
+    // ------------------------------------------------------------------
+
+    /// `startup_finish` 层的路径判据：ctor 路径有 1 行、运行期 `0/` 为空 ⇒
+    /// `report.startup_attack_lines == 1`。
+    ///
+    /// 牙：把 `startup_finish` 传给 `startup_attack_entries` 的实参改成运行期目录
+    /// （或改读 `castle.config_dir`）⇒ 读 0 行 ⇒ 红。
+    #[test]
+    fn startup_finish_reads_attack_list_from_ctor_path() {
+        let root = fixture_root("startup-attack-path");
+        write_file(&root, "Castle/List.txt", b"0\r\n");
+        write_file(&root, "Castle/Castle/SabukW.txt", &deployed_castle_sabuk());
+        write_file(
+            &root,
+            "Castle/Castle/AttackSabukWall.txt",
+            b"guildA       \"2026-10-21\"\r\n",
+        );
+        // 运行期目录存在但 0 行：若读错路径 ⇒ 0 行。
+        write_file(&root, "Castle/0/AttackSabukWall.txt", b"");
+        write_file(&root, "Castle/0/SabukW.txt", &deployed_zero_sabuk());
+        let cfg = parse_sabuk_w_bytes(&deployed_castle_sabuk());
+        let mut store = store_for(&root);
+        store.push_base(store.load_base("Castle").expect("base"));
+        let mut castle = ready_castle(&cfg);
+        hydrate_ready(&mut castle, &cfg);
+        let mut castles = vec![castle];
+
+        let report = startup_finish(
+            &mut store,
+            &mut castles,
+            &CastleSiegeConfig::default(),
+            "Castle",
+        );
+        assert!(report.list_written);
+        assert_eq!(report.startup_attack_error, None);
+        assert_eq!(
+            report.startup_attack_lines, 1,
+            "启动申请表必须读 ctor 路径（运行期 0/ 是空的）"
+        );
+        assert_eq!(report.loaded, Some(1));
+        assert_eq!(castles.len(), 2);
+    }
+
+    // ------------------------------------------------------------------
+    // F1：运行期跨天/开战刷新 `*_text`（宿主注入墙钟）
+    // ------------------------------------------------------------------
+
+    /// `UserCastle.cs:337/357` 的 `IncomeToday = DateTime.Now` / `WarDate = DateTime.Now`：
+    /// `run(now)` 只改日粒度，宿主必须把注入墙钟回写 `*_text`，否则跨天后 SaveConfig
+    /// 仍落启动旧串。
+    ///
+    /// 牙：删掉 `refresh_castle_date_texts` 调用（或在无变化时也重写）⇒ 跨天/静默断言红；
+    /// 按日粒度格式化（`00:00:00`）⇒ 注入时钟断言红；漏掉 WarDate 分支 ⇒ 开战断言红。
+    #[test]
+    fn run_refreshes_date_texts_from_injected_wall_clock() {
+        let cfg = parse_sabuk_w_bytes(&deployed_zero_sabuk());
+        let mut castle = ready_castle(&cfg);
+        hydrate_ready(&mut castle, &cfg);
+        castle.map_name = Some("3".to_string());
+        castle.map_owner_server_index = castle.server_index;
+        castle.config.start_castlewar_time = 20;
+        castle.income_today = CastleDate::new(2026, 10, 21);
+        castle.income_today_text = Some("2026-10-21 12:00:00".to_string());
+        castle.war_date = Some(CastleDate::new(2026, 10, 21));
+        castle.war_date_text = Some("2026-10-21 12:00:00".to_string());
+
+        // 同一天、非开战钟点 ⇒ 日粒度不变，原串逐字保留（不得无条件重写）。
+        let (_, quiet) = run_castle_tick(
+            &mut castle,
+            CastleNow::new(CastleDate::new(2026, 10, 21), 3, 1_000),
+            "2026-10-21 23:59:59",
+        );
+        assert_eq!(quiet, CastleDateTextChange::default());
+        assert_eq!(
+            castle.income_today_text.as_deref(),
+            Some("2026-10-21 12:00:00")
+        );
+        assert_eq!(castle.war_date_text.as_deref(), Some("2026-10-21 12:00:00"));
+
+        // 跨午夜：run 把日粒度推到 22 日 ⇒ IncomeToday 换成注入墙钟。
+        let (_, midnight) = run_castle_tick(
+            &mut castle,
+            CastleNow::new(CastleDate::new(2026, 10, 22), 0, 600_000),
+            "2026-10-22 00:00:07",
+        );
+        assert_eq!(castle.income_today, CastleDate::new(2026, 10, 22));
+        assert!(midnight.income_today);
+        assert!(!midnight.war_date, "跨天不重置 WarDate");
+        assert_eq!(
+            castle.income_today_text.as_deref(),
+            Some("2026-10-22 00:00:07")
+        );
+        assert_eq!(castle.war_date_text.as_deref(), Some("2026-10-21 12:00:00"));
+
+        // 开战：申请表里有今天 ⇒ `WarDate = DateTime.Now` ⇒ 宿主注入墙钟写回。
+        castle.under_war = false;
+        castle.is_start_war = false;
+        let (added, _) = castle.add_attacker_info(
+            GuildId(7),
+            "攻方",
+            CastleNow::new(CastleDate::new(2026, 10, 22), 19, 700_000),
+        );
+        assert!(added);
+        let (_, war) = run_castle_tick(
+            &mut castle,
+            CastleNow::new(CastleDate::new(2026, 10, 22), 20, 800_000),
+            "2026-10-22 20:00:03",
+        );
+        assert!(castle.under_war, "开战钟点 + 今日申请 ⇒ UnderWar");
+        assert_eq!(castle.war_date, Some(CastleDate::new(2026, 10, 22)));
+        assert!(war.war_date);
+        assert!(!war.income_today, "同日开战不换 IncomeToday");
+        assert_eq!(castle.war_date_text.as_deref(), Some("2026-10-22 20:00:03"));
+        assert_eq!(
+            castle.income_today_text.as_deref(),
+            Some("2026-10-22 00:00:07")
         );
     }
 

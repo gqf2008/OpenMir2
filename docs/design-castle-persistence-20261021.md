@@ -409,10 +409,10 @@ $ grep -rn "fn .*castle" mir2-rs/crates/storage/src -i | wc -l
 
 | ID | 内容 | 为什么必须窗口 |
 | --- | --- | --- |
-| **W-A22-1 文件字节** | 把 `E:/MirServer/M2GameSvr/Castle/` 复制到 `E:/tmp/...` 只读副本，改 BasePath 指向副本；C# 与 Rust 各跑「启动 + 一次 10 分钟 Save」；比 `List.txt`、`Castle/SabukW.txt`、`0/AttackSabukWall.txt`、`0/SabukW.txt`（应不变）的 sha256 | 存档逐字节（GBK/CRLF/键序/空行） |
+| **W-A22-1 文件字节** | 把 `E:/MirServer/M2GameSvr/Castle/` 复制到 `E:/tmp/...` 只读副本，改 BasePath 指向副本；C# 与 Rust 各跑「启动 + 一次 10 分钟 Save」；比 `List.txt`、`Castle/SabukW.txt`、`0/AttackSabukWall.txt`、`0/SabukW.txt`（应不变）的 sha256；**跨午夜**（把系统时区/时钟推过 00:00 后再 Save）比 `IncomeToday` 时间戳，**开战**（今日申请 + `StartCastlewarTime`）比 `WarDate` 时间戳——宿主 `refresh_castle_date_texts` 必须换成新墙钟（`UserCastle.cs:337/357` 的 `DateTime.Now`） | 存档逐字节（GBK/CRLF/键序/空行）+ 运行期时间戳 |
 | **W-A22-2 tick 时序** | `ConsoleShowUserCountTime` 门与 10s/10min 边界的真机取值（含配置覆盖） | 时序 |
 | **W-A22-3 申请表跨重启** | 构造 `0/AttackSabukWall.txt` 1 行 + `Castle/AttackSabukWall.txt` 不存在 ⇒ 重启后 `$CASTLEWARDATE` 仍「暂时没有行会攻城」 | 证明读写不同源 |
-| **W-A22-4 失败路径** | 删掉 `AttackSabukWall.txt` 再触发 Save ⇒ 两侧都抛/记错且**不建文件**；装载城 Save ⇒ 两侧都不写 `0/SabukW.txt` | 异常语义 |
+| **W-A22-4 失败路径** | 删掉 `List.txt` 再触发 Save ⇒ 两侧都不写**任何**城堡文件（oracle `SaveCastleList` 抛，`CastleManager.Save` 循环不执行）；删掉 `AttackSabukWall.txt` 再触发 Save ⇒ 两侧都抛/记错且**不建文件**；装载城 Save ⇒ 两侧都不写 `0/SabukW.txt` | 异常语义 |
 
 > 窗口执行禁止写 `E:/MirServer`；不要停 `mysqld`（owner 2026-10-21 授权只覆盖 C# 栈）。
 
