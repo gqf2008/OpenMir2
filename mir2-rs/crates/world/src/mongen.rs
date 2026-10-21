@@ -221,6 +221,10 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
         133 | 200 => entity.use_magic = false,
         // `SoccerBall` ctor（`SoccerBall.cs:11-16`）：`Animal = false`、`SuperMan = true`、
         // `N550 = 0`、`TargetX = -1`（`AnimalObject` 缺省 `Animal = true` 被本类显式关掉）。
+        // **`SuperMan` 覆盖口径（2026-10-21）**：本仓**仅 race 120** 置位；oracle `NormNpc` 派生
+        // （`GuardUnit` 11/12/20/112、`CastleDoor` 110、`WallStructure` 111、固定 NPC/商人）
+        // 的 `SuperMan=true`（`src/M2Server/Npc/NormNpc.cs:41`）与 `BaseObject.Die()` 首行
+        // `if (SuperMan) return;`（`src/M2Server/Actor/BaseObject.Base.cs:318-322`）**未建模**（另卡）。
         120 => {
             entity.ai.animal = false;
             entity.super_man = true;

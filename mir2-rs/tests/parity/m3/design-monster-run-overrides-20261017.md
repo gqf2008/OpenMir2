@@ -264,6 +264,8 @@ NormNpc.Run                       （清 Master + base.Run；NormNpc : AnimalObj
 无此 case ⇒ 返回 null，**出生失败**（不是「快照漂移」）。`FireballMonster` 的 race 215
 **既无 MonGen 条目，也无任何 215 行的名字**。
 
+> **可达性口径（2026-10-21 补充）**：下文「不可达（数据层）」一律指「**部署 `MonGen.txt` 无该 race 映射 ⇒ 生产刷怪不可达**」，**不**等于「任何途径都无法创建」：库内若有该 race 行且 `CreateMonster` 有对应 case，仍可由 GM/脚本按名创建（例：race 120 在仓库 `sql/mir2_data.sql:573` 有 `热血足球` 行、`WorldServer.MonGen.cs:683` 有 `case 120`；本次未连库复核部署库快照，见 `audit-baseobject-run-coverage-20261018.md` 的 B02 注）。
+
 | race | 条目 | 名字数 | 类（`CreateMonster`） | 名字示例 | Run 覆写 |
 |---:|---:|---:|---|---|---|
 | 81 | 1258 | 97 | `AtMonster` | 半兽勇士、半兽勇士0 | ATMonster（Rust 已覆盖） |

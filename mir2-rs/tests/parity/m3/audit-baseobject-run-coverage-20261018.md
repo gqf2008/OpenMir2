@@ -222,7 +222,7 @@
 | ID | oracle（行/语义） | Rust 符号/文件 | 状态 | 可观测后果 | 级 |
 |---|---|---|---|---|---|
 | B01 | `27-31` 消息泵（优先级队列 + 延时头中止） | `monai.rs::base_object_run_monster` 只出队 `pending_struck`；玩家走 `bins/game-svr/src/inbound.rs` 命令 FIFO + `slave.rs::deliver_self_delay_msgs` | 部分 | 怪物只支持 `RM_STRUCK` 一类消息；玩家消息按到达序而非 `wIdent` 优先级；延时头不阻塞 | R |
-| B02 | `32-36` `SuperMan` 回满 | `monai.rs::base_object_run_monster`（消息泵之后、`!Death` 之前；**2026-10-21 建模**） | 已实现 | race 120 `SoccerBall` ctor 置 `SuperMan=true`（数据可达）⇒ 每 `Run` HP/MP 回满；普通怪不受影响（构造级用例 `soccer_ball_super_man_refills_hp_each_base_run`） | R |
+| B02 | `32-36` `SuperMan` 回满 | `monai.rs::base_object_run_monster`（消息泵之后、`!Death` 之前；**2026-10-21 建模**） | 部分 | **race 120 怪物路径已建模**（可达性口径见本表下方注）⇒ 每 `Run` HP/MP 回满（构造级用例 `soccer_ball_super_man_refills_hp_each_base_run`）；**NormNpc 派生（守卫 11/12/20/112、城门 110、城墙 111、固定 NPC/商人）的 `SuperMan=true` 与 `BaseObject.Die` 首行 `if (SuperMan) return;` 早退仍未建模（另卡）** ⇒ 这些实体在 Rust 侧可被击杀、累计掉血，与 oracle 相反 | R |
 | B03 | `37-42` 恢复 tick 折算 | `stamina.rs::stamina_tick`（玩家）、`monai.rs::base_object_run_monster`（怪） | 已实现 | 怪物 50/s 与 oracle 同；**玩家 Rust 40/s vs oracle 名义 50/s（未决；抖动区间 40–50/s）** | R |
 | B04 | `44-56` HP 回填 `MaxHP/75+1` + 53 | 同上 | 已实现 | 帧内容/次序对齐（`drain_stamina` 按快照逐条发） | R |
 | B05 | `57-69` MP 回填 `MaxMP/18+1` + 53 | 同上 | 已实现 | 同上 | R |
@@ -238,6 +238,8 @@
 | B15 | `219-221` `ShowHp` ⇒ `BreakOpenHealth()` | `World::cast_show_hp_spell`（`world.rs`）已在 `bins/game-svr/src/main.rs::handle_spell_cmd`（`SKILL_SHOWHP=28`）接线；`make_open_health` 走生产下行（`crates/world/src/slave.rs::make_open_health`，宿主出帧 `bins/game-svr/src/main.rs::push_open_health`） | **部分**（已接线，缺 Run 周期段） | 缺的只是 `(now-ShowHpTick)>ShowHpInterval ⇒ BreakOpenHealth()` 的周期刷新；施法即时 `1100`/`OpenHealth` 下行已存在 | L |
 | B16 | `223-246` `VerifyTick` 30s：`VerifyMapTime` + HP/MP 超上限夹 `Max-1` | **已修复（`8b4f5df5e`）**：`World::verify_map_time`（30s 严格大于门）接线到 `monai.rs::base_object_run_monster` 尾部/死亡支、`npc.rs::npc_run`、`merchant.rs::merchant_run`、`World::verify_players_map_time`（AOI 前）；`aoi.rs` 玩家 viewer 跳过 60s 淘汰 | **已实现（VerifyMapTime）** | 静止 actor 不再被 60s 逐出；**余量**：HP/MP 超上限夹 `Max-1` + `HealthSpellChanged()` 仍未建模 | R |
 | B17 | `247-315` 状态秒数/毒伤（整段注释） | 不实现（`buff.rs` 在正确位置实现） | 不适用 | oracle 死代码 | — |
+
+> **B02 可达性口径（2026-10-21 复核写死）**：本行的「可达」只指「**可由 GM/脚本按名创建**」——仓库数据 `sql/mir2_data.sql:573` 有 `热血足球`（Race=120）行，`CreateMonster` 有 `case 120 ⇒ new SoccerBall()`（`src/GameSrv/Word/WorldServer.MonGen.cs:683`）；部署 `MonGen.txt` **无** race 120 映射（证据来源：`design-monster-run-overrides-20261017.md` §2.4 的在线只读实测——207 个名字 → 31 个 race，不含 120；`plan-run-gap-batches-20261018.md` §2.2 的「数据不可达」同为此口径）。本次复核**未连库**，仓库 SQL 快照与部署库是否一致未实测。
 
 ### 2.3 `AnimalObject.Run` / `MonsterObject.Run`
 

@@ -4935,6 +4935,9 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
         }
     }
     // `BaseObject.Base.cs:32-36`：`if (SuperMan) { HP = MaxHP; MP = MaxMP; }`（在 `!Death` 之前）。
+    // **覆盖口径**：当前**仅 race 120** 置 `super_man`（`mongen.rs` 的 `SoccerBall` ctor）。oracle
+    // `NormNpc` 派生（守卫/城门/城墙/固定 NPC/商人）同样 `SuperMan=true` 且 `Die()` 首行早退，
+    // 两者均**未建模**（另卡）⇒ 这些实体在 Rust 侧仍可被击杀（见 T-31 / audit B02）。
     if let Some(e) = world.entities.get_mut(actor_id) {
         if e.super_man {
             e.hp = e.max_hp;
@@ -15026,7 +15029,9 @@ mod mb89_tests {
     /// `DupMode` 保持 true）；Pass 2 必须被 HolySeize 门挡住 ⇒ **总抽数恰好 1**。
     ///
     /// 牙：Pass 2 错接无门版（旧实现的 race 215 分派）⇒ 抽 2 次 ⇒ 红；
-    /// Pass 1 错接有门版 ⇒ 抽 0 次 ⇒ 红。
+    /// Pass 1 错接有门版 ⇒ 抽 0 次 ⇒ 红；**删掉 Pass 2 的 `monster_run(...)` 整行** ⇒
+    /// 尾部 `CrazyMode` 到期不被清除 ⇒ `crazy_mode` 断言红（该清除只由 Pass 2 产生：
+    /// `MagicMonster.Run` 不调该段，`animal_run`/`base_object_run_monster` 也不调）。
     #[test]
     fn mb89_race215_think_dispatch_two_pass_matches_oracle() {
         let mut world = World::new(40, 40);
@@ -15053,6 +15058,13 @@ mod mb89_tests {
             e.ai.dup_mode = true;
             e.ai.think_tick = 0; // 3s 刷新段照跑（不改变 DupMode）
             e.ai.walk_tick = now; // WalkSpeed 门未到 ⇒ Pass 1/2 都不进 `Wondering`
+
+            // **只由 Pass 2 产生**的可观测：`MonsterObject.Run` 尾的 `CrazyMode` 到期
+            // （`monster_run` 的两个早退支与函数尾各调一次 `crazy_mode_expiry`）。
+            // `MagicMonster.Run`（Pass 1）不调本段，`animal_run`/`base_object_run_monster` 也不调。
+            e.ai.crazy_mode = true;
+            e.ai.crazy_mode_tick = 0;
+            e.ai.crazy_mode_interval = 10; // now=10_000 ⇒ (now - 0) > 10 ⇒ 到期
         }
         world.rng = RandomNumber::with_seed(11);
         let mut expect = RandomNumber::with_seed(11);
@@ -15063,6 +15075,10 @@ mod mb89_tests {
         assert!(e.ai.dup_mode, "Pass 1 移动失败 ⇒ DupMode 保持 true");
         assert!(e.ai.holy_seize, "HolySeize 未被清除");
         assert_eq!((e.x, e.y), (10, 10), "四面被墙 ⇒ 原地不动");
+        assert!(
+            !e.ai.crazy_mode,
+            "Pass 2 尾段 CrazyMode 到期必须清除（该清除只由 Pass 2 产生）"
+        );
     }
 
     /// R19-A9（复验 Minor 1）：`baseObject.GetMagStruckDamage(this, nPower)`（`:32`）的

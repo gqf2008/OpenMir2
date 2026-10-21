@@ -259,6 +259,8 @@
 
 **数据不可达（18 个，按 `Run` 体依赖聚类）**：200 `ElectronicScolpionMon`、113 `ElfMonster`、114 `ElfWarriorMonster`、117 `ExplosionSpider`、214 `FireMonster`、215 `FireballMonster`、210 `FrostTiger`、208 `GreenMonster`、206 `Khazard`、133 `MagicMonObject`、209 `RedMonster`、131 `RonObject`、132 `SandMobObject`、120 `SoccerBall`、203 `TeleMonster`、134 `BoneKingMonster`、`RunAway`（死类）、100 `WhiteSkeleton`（race 100 条目 0）。110/111（城门/城墙）由城堡系统放置，不属本表 34 项。
 
+> **可达性口径（2026-10-21 写死）**：本段「不可达」= **部署 `MonGen.txt` 无该 race 映射**，不等于无法创建——库内有 race 行 + `CreateMonster` 有 case 时仍可由 GM/脚本按名创建（例 race 120：`sql/mir2_data.sql:573` + `WorldServer.MonGen.cs:683`；本次未连库，见 audit B02 注）。
+
 > **判级口径**：即使数据不可达，只要 `Run` 体有 RNG/时序/战斗数值，仍按 **R**；只有 R42（纯首次帧）按 **L**。不可达项的「真机窗口」没有对象，**不得**用「构造级绿」替代 R 级窗口结论；review 必须写 `window_required: true` 并说明「内容不可达，需 owner 裁决替代证据」。
 
 ### 2.3 批次明细

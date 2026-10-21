@@ -321,7 +321,8 @@ impl World {
 ///   （固定 NPC 经 `Npcs.txt` 装载恒 `BoCanMove == false` ⇒ 常态 2 抽）。
 ///
 /// 尾部 `base.Run()`（`BaseObject.Base.cs:25-316`）对无消息 NPC：`GetMessage` 空、恢复段无 RNG、
-/// `SuperMan` 否、`!Death` ⇒ 恢复/`Die`/靶标清理；**不抽数**（见 B-L4）。本片**只落抽数与朝向状态**
+/// `SuperMan` 支**未建模**（`npc_run` 当前不跑 `base_object_run_monster`；见 N01/N06）、
+/// `!Death` ⇒ 恢复/`Die`/靶标清理；**不抽数**（见 B-L4）。本片**只落抽数与朝向状态**
 /// （`RM_TURN`/`RM_HIT` 出帧属 B-4，帧面接线随 AOI 车道）。
 pub fn npc_run(world: &mut World, actor_id: i32) -> NpcRunOutcome {
     let npc_type = world
