@@ -253,7 +253,9 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
         }
         // `SuperGuard`（race 11）/`PetSuperGuard`（race 12）都是 `GuardUnit : NormNpc`
         // （`WorldServer.MonGen.cs:509-514` 的 `new SuperGuard()/new PetSuperGuard()`）⇒
-        // `NormNpc()` ctor 置 `SuperMan = true`（`NormNpc.cs:41`）。两者无自有 ctor 常量。
+        // `NormNpc()` ctor 置 `SuperMan = true`（`NormNpc.cs:41`）。两者**各有**自有 ctor 常量
+        // `ViewRange = 7` / `Light = 4`（`SuperGuard.cs:51-56`、`PetSuperGuard.cs:5-10`），
+        // 本骨架尚未落值（登记 T-155 残余；race 11/12 部署可达性见 GuardList 批）。
         11 | 12 => entity.super_man = true,
         // `CowKingMonster` ctor（`CowKingMonster.cs:17-25`）+ `Initialize()`（`:33-38`）。
         // ctor 的 `RushMode = true`（`:21`）**本批落地**：消费点
@@ -273,7 +275,7 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
             entity.old_walk_time = entity.ai.walk_speed;
         }
         // `CastleDoor` ctor（`CastleDoor.cs:14-21`）：`Animal=false`、`StickMode=true`、
-        // `AntiPoison=200`（本骨架无 `anti_poison` 字段，按「登记」处理）、`CellType=Door`
+        // `AntiPoison=200`（`anti_poison` 字段已存在（entity.rs），但 race 110/111 未落值，按「登记」处理）、`CellType=Door`
         // （`Entity` 无 cell_type 字段，实体登记在 `MapCellInfo.cert_cell_type` 一侧，本批不接线）。
         // `WallStructure` ctor（`WallStructure.cs:9-15`）同前两项；`Initialize` 的 `Dir=0`
         // 由宿主绑定点写入（`World::bind_castle_defense`）。
