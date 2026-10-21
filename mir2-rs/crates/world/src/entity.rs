@@ -34,6 +34,14 @@ pub const ACTOR_RACE_ELF_MONSTER: u8 = 113;
 /// `ActorRace.ElfWarriormon = 114`（`Race.cs:63`）—— 神兽攻击形态，`RecalcAbilitys` 覆写改速度。
 pub const ACTOR_RACE_ELF_WARRIORMON: u8 = 114;
 
+/// `BaseObject` ctor 的 `Dir = 4`（`BaseObject.cs:378`）——`AnimalObject`/`NormNpc`/`Merchant`
+/// 均不覆写；只有生成的怪物在 `CreateMonster` 里用 `RandomByte(8)` 重盖（`WorldServer.MonGen.cs:740`）。
+pub const BASE_OBJECT_DIR: u8 = 4;
+/// `NormNpc` ctor 的 `Light = 2`（`NormNpc.cs:43`）；`Merchant : NormNpc` 继承同值。
+pub const NORM_NPC_LIGHT: u8 = 2;
+/// `NormNpc` ctor 的 `AntiPoison = 99`（`NormNpc.cs:44`）；`Merchant : NormNpc` 继承同值。
+pub const NORM_NPC_ANTI_POISON: u8 = 99;
+
 /// `src/OpenMir2/Consts/PoisonState.cs`：`StatusTimeArr` 的下标常量子集（B3 用到的五个）。
 ///
 /// `BaseObject.StatusTimeArr` 是 `ushort[15]`（`BaseObject.cs:81`，ctor `:394` 置 0）。
@@ -773,6 +781,18 @@ pub struct Entity {
     /// slave 面（`MakeClone`/`GainSlaveExp`）尚未建模 ⇒ 这些路径保持 0（登记）。
     /// 设计锚：`mir2-rs/tests/parity/m3/design-monster-run-overrides-20261017.md` §4.1.2-5 / §5-2。
     pub anti_magic: u16,
+    /// C# `BaseObject.Light`（`BaseObject.cs:149`；ctor `:384` 置 **0**）——光源强度。
+    ///
+    /// 消费点全在帧面：`SM_WALK/SM_RUN/SM_TURN/SM_DIGUP/...` 的 `Series = MakeWord(Dir, Light)`
+    /// （`PlayObject.Message.cs:1406-1975`）。本骨架只落字段，帧面由宿主 `bins/game-svr` 发。
+    /// `NormNpc` ctor 置 **2**（`NormNpc.cs:43`，商人继承）；玩家/普通怪物保持 ctor 缺省 0。
+    pub light: u8,
+    /// C# `BaseObject.AntiPoison`（`BaseObject.cs:109`；ctor `:389` 置 **0**）——毒/麻痹抗性。
+    ///
+    /// 消费点：`Random(target.AntiPoison + N)` 的毒/麻痹命中门（`MagicManager.cs:235/914`、
+    /// `Player.Attack.cs:221`、`GreenMonster.cs:23` 等）。`NormNpc` ctor 置 **99**
+    /// （`NormNpc.cs:44`，商人继承）；玩家/普通怪物保持 ctor 缺省 0（本骨架尚未接毒/麻痹结算）。
+    pub anti_poison: u8,
     /// `WAbil.MAC`（`BaseObject` 构造 ctor 缺省 **0**；`RecalcAbilitys` 后 = `Abil.MAC + AddAbil.MAC`
     /// 的逐字节 `MakeWord` 合成，见 `bins/game-svr` 的 `apply_ability_to_entity`）。
     ///
@@ -1118,6 +1138,10 @@ impl Entity {
             speed_point: 0,
             // `BaseObject.cs:390`：ctor 置 `AntiMagic = 0`（普通生成路径不调 `RecalcAbilitys`）。
             anti_magic: 0,
+            // `BaseObject.cs:384/:389`：ctor 置 `Light = 0`、`AntiPoison = 0`。
+            // `NormNpc`/`Merchant` 的 ctor 在各自创建点覆盖为 2/99（`NormNpc.cs:43-44`）。
+            light: 0,
+            anti_poison: 0,
             // `BaseObject.WAbil.MAC` 构造缺省 0（`RecalcAbilitys` 才写 `Abil.MAC + AddAbil.MAC`）。
             mac: 0,
             // `BaseObject.RushMode` 构造缺省 false（`BaseObject.cs` ctor）。

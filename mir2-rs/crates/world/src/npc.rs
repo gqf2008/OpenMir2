@@ -44,7 +44,10 @@
 //! - **挂图 `obj_list` 追加序**：`NpCinitialize` 倒序 ⇒ 本片宿主按倒序 [`World::attach_npc_to_map`]
 //!   （与 [`crate::merchant`] 同款）；实体槽位序 = 文件正序 [`World::insert_npc`]。
 
-use crate::entity::{BaseAnimalCtorDraws, Entity, ACTOR_RACE_NPC};
+use crate::entity::{
+    BaseAnimalCtorDraws, Entity, ACTOR_RACE_NPC, BASE_OBJECT_DIR, NORM_NPC_ANTI_POISON,
+    NORM_NPC_LIGHT,
+};
 use crate::map::CellType;
 use crate::merchant::ACTOR_RACE_MERCHANT;
 use crate::World;
@@ -183,6 +186,17 @@ impl World {
         // （`BaseObject.Base.cs:911`）：`RaceImg = 0` 会让商人/沙城 NPC 画成错误精灵。
         // `Appr` 来自 `LocalDB.cs:707`（Npcs.txt 列，覆盖 ctor 的 0/8 初值）。
         e.race_img = ACTOR_RACE_MERCHANT;
+        // `NormNpc.cs:43-45`：`Light = 2`、`AntiPoison = 99`、`StickMode = true`——三者都从
+        // `BaseObject` ctor 的 `Light=0`/`AntiPoison=0`/`StickMode=false` 覆盖而来。
+        e.light = NORM_NPC_LIGHT;
+        e.anti_poison = NORM_NPC_ANTI_POISON;
+        e.stick_mode = true;
+        // `BaseObject.cs:378` ctor `Dir = 4`；`NormNpc` ctor 不覆写 ⇒ 固定 NPC 初始朝向恒 4。
+        e.ai.dir = BASE_OBJECT_DIR;
+        // `NormNpc.cs:50` `CellType = CellType.Merchant` 的落格语义分两处：① 挂图段
+        // [`World::attach_npc_to_map`] 的 `add_map_object(..., CellType::Merchant, ...)`；
+        // ② 身份派生 [`crate::world::entity_cell_type`]（`npc.is_some() ⇒ Merchant`）。
+        // 本骨架**不**在 `Entity` 上再存一份 `cell_type` 字段，避免双写/双源。
         e.appr = state.appr;
         e.npc = Some(state);
         Some(self.entities.insert(e))
@@ -959,6 +973,51 @@ mod tests {
                 ACTOR_RACE_MERCHANT,
                 "{name}（type={npc_type}）的 RaceImg 必须是 ActorRace.Merchant(50)"
             );
+        }
+    }
+
+    /// **NormNpc ctor 常量**（`NormNpc.cs:41-50`）：`Light=2`、`AntiPoison=99`、`StickMode=true`、
+    /// `Dir=4`（`BaseObject.cs:378`，`NormNpc` 不覆写）、`CellType=Merchant`（`NormNpc.cs:50`，
+    /// 由挂图落格 + [`crate::world::entity_cell_type`] 身份派生表达，不在 `Entity` 上另存字段）。
+    ///
+    /// **对照组**：玩家（`Entity::new` = `PlayObject` ctor 等价物）与普通怪物保持 `BaseObject`
+    /// ctor 缺省 `Light=0` / `AntiPoison=0` / `StickMode=false` / `Dir=0`（本骨架
+    /// `AnimalState::default` 的 dir 缺省）⇒ 本卡不得把 NPC 常量泄漏到非 NPC 路径。
+    ///
+    /// **牙**：删 `insert_npc` 的 `e.light` / `e.anti_poison` / `e.stick_mode` / `e.ai.dir`
+    /// 任一赋值 ⇒ 对应断言红；把 `entity_cell_type` 的 `npc.is_some()` 支删掉 ⇒ `CellType` 断言红。
+    #[test]
+    fn insert_npc_sets_normnpc_ctor_constants() {
+        let mut world = World::with_maps(vec![(16, 16)]);
+        let id = world
+            .insert_npc(spawn("老人", 0, 5, 5))
+            .expect("map_id 合法");
+        {
+            let e = world.entities.get(id).unwrap();
+            assert_eq!(e.light, 2, "NormNpc.cs:43 Light = 2");
+            assert_eq!(e.anti_poison, 99, "NormNpc.cs:44 AntiPoison = 99");
+            assert!(e.stick_mode, "NormNpc.cs:45 StickMode = true");
+            assert_eq!(e.ai.dir, 4, "BaseObject.cs:378 Dir = 4");
+            assert_eq!(
+                crate::world::entity_cell_type(e),
+                CellType::Merchant,
+                "NormNpc.cs:50 CellType = Merchant"
+            );
+        }
+        // 对照组：玩家 + 普通怪物（`add_entity` 落图的非 NPC 路径）不变。
+        let pid = world.add_entity(Entity::new(0, "hero", 1, 1));
+        let mut mon = Entity::new(0, "鸡", 2, 2);
+        mon.race = crate::entity::ACTOR_RACE_ANIMAL;
+        let mid = world.add_entity(mon);
+        for (label, cid) in [("玩家", pid), ("怪物", mid)] {
+            let c = world.entities.get(cid).unwrap();
+            assert_eq!(
+                (c.light, c.anti_poison),
+                (0, 0),
+                "{label} 的 Light/AntiPoison 保持 BaseObject ctor 缺省"
+            );
+            assert!(!c.stick_mode, "{label} 的 StickMode 保持 ctor 缺省 false");
+            assert_eq!(c.ai.dir, 0, "{label} 的 Dir 不被 NPC ctor 常量污染");
         }
     }
 }

@@ -37,7 +37,9 @@ use mir2_data::models::StdItem;
 use mir2_shared::rng::RandomNumber;
 
 use crate::castle_tax::MerchantCastleBinding;
-use crate::entity::{BaseAnimalCtorDraws, Entity};
+use crate::entity::{
+    BaseAnimalCtorDraws, Entity, BASE_OBJECT_DIR, NORM_NPC_ANTI_POISON, NORM_NPC_LIGHT,
+};
 use crate::map::{CellType, MoveRequest};
 use crate::world::World;
 
@@ -325,6 +327,16 @@ impl World {
         // 外观轴：`RaceImg = ActorRace.Merchant`（50，`Merchant.cs:84`），供客户端可见帧
         // `GetFeature() = MakeMonsterFeature(RaceImg, MonsterWeapon, Appr)`（`BaseObject.Base.cs:911`）。
         e.race_img = ACTOR_RACE_MERCHANT;
+        // `Merchant : NormNpc`：`NormNpc` ctor 的常量同样生效（`Merchant.cs:82` 只做增量赋值）
+        // —— `Light = 2`（`NormNpc.cs:43`）、`AntiPoison = 99`（`NormNpc.cs:44`）、
+        // `StickMode = true`（`NormNpc.cs:45`）、`Dir = 4`（`BaseObject.cs:378`，两者均不覆写）。
+        e.light = NORM_NPC_LIGHT;
+        e.anti_poison = NORM_NPC_ANTI_POISON;
+        e.stick_mode = true;
+        e.ai.dir = BASE_OBJECT_DIR;
+        // `CellType = CellType.Merchant`（`Merchant.cs:109`）的落格语义同固定 NPC：挂图段
+        // [`World::attach_merchant_to_map`] 已按身份写 `CellType::Merchant`，
+        // [`crate::world::entity_cell_type`] 亦按 `merchant.is_some()` 派生 ⇒ 不另存字段。
         // `Merchant : NormNpc`（`Merchant.cs:16`）⇒ `NormNpc()` ctor `SuperMan = true`
         // （`NormNpc.cs:41`）：商人打不死（`BaseObject.Die():318-322`）且每次 `Run` 回满（`:32-36`）。
         // **不得按 race 置位**：`ActorRace.NPC(10)` 也是普通固定 NPC 的 race，`RaceImg` 50 又与
@@ -3435,5 +3447,29 @@ mod tests {
         assert!(!w.set_merchant_castle_index(9999, Some(0)));
         assert_eq!(w.merchant_castle_index(9999), None);
         assert!(w.merchant_castle_binding(9999).is_none());
+    }
+
+    /// **商人 ctor 常量**（`Merchant : NormNpc`，`Merchant.cs:82` 只做增量赋值）：
+    /// `Light=2`（`NormNpc.cs:43`）、`AntiPoison=99`（`NormNpc.cs:44`）、`StickMode=true`
+    /// （`NormNpc.cs:45`）、`Dir=4`（`BaseObject.cs:378`）；`CellType=Merchant`
+    /// （`Merchant.cs:109`）由挂图落格 + [`crate::world::entity_cell_type`] 身份派生。
+    ///
+    /// **牙**：删 `insert_merchant` 的 `e.light` / `e.anti_poison` / `e.stick_mode` /
+    /// `e.ai.dir` 任一赋值 ⇒ 对应断言红；删 `entity_cell_type` 的 `merchant.is_some()` 支
+    /// ⇒ `CellType` 断言红。
+    #[test]
+    fn insert_merchant_sets_normnpc_ctor_constants() {
+        let mut w = World::new(20, 20);
+        let id = w.spawn_merchant(spawn_at(3, 4)).expect("挂图成功");
+        let e = w.entities.get(id).expect("实体在");
+        assert_eq!(e.light, 2, "NormNpc.cs:43 Light = 2");
+        assert_eq!(e.anti_poison, 99, "NormNpc.cs:44 AntiPoison = 99");
+        assert!(e.stick_mode, "NormNpc.cs:45 StickMode = true");
+        assert_eq!(e.ai.dir, 4, "BaseObject.cs:378 Dir = 4");
+        assert_eq!(
+            crate::world::entity_cell_type(e),
+            CellType::Merchant,
+            "Merchant.cs:109 CellType = Merchant"
+        );
     }
 }
