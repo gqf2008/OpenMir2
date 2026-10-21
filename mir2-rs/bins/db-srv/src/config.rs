@@ -1,9 +1,12 @@
 //! DBSrv 的遗留 INI 配置读取（`dbsvr.conf`），键名照现网，**缺关键项即报错**（M1 验收④）。
 //!
 //! 取值口径逐条对齐 C# `DBSrv/Conf/{SettingsModel,AppConfigManager}.cs` + `Common/ConfigFile.cs`：
-//! - 文件按 **GB2312** 读，键值 `Trim()`，行首分号整行注释、`;;` 起行尾注释；同名键**首个生效**；
-//!   段名大小写不敏感。本实现按**字节**读文件（保留原始 GBK 字节，供 `(103/ServerName/…)` 原样上线），
-//!   同时给出文本视图（ASCII/UTF-8 配置就是正确文本，GBK 配置的文本视图仅用于日志）。
+//! - 文件按 `ConfigFile.Load` 的 `new StreamReader(File.Open(...), Encoding.GetEncoding("GB2312"))`
+//!   口径读（`Common/ConfigFile.cs:263`）：**带 BOM 探测**（UTF-8 / UTF-16LE / UTF-16BE /
+//!   UTF-32LE `FF FE 00 00` / UTF-32BE），无 BOM 按 cp936；解码后是 .NET `string`，
+//!   键值 `Trim()`，行首分号整行注释、`;;` 起行尾注释；同名键**首个生效**；段名大小写不敏感。
+//!   本实现保存**解码后的文本**（UTF-8 视图）；上线字节（`(103/ServerName/…)`）由
+//!   [`RawStr::wire_bytes`] 在出口按 cp936 重编码，等价 C# 的 `HUtil32.GetBytes(string)`。
 //! - 缺键时 C# 吃 `SettingsModel` 默认值；本实现同默认值。
 //! - **不写回**：C# 的 `ReadWriteXxx` 在缺键时把默认值写回配置文件（`Save()`）；写回是对冻结配置
 //!   文件的副作用，本实现只读。差异登记 `tests/parity/whitelist.md` A-10。
@@ -15,24 +18,25 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-/// 配置里的一个值：保留**原始字节**（配置是 GB2312 编码，GBK 字节就是要上线的字节）。
+/// 配置里的一个值：保存**解码后的文本**（UTF-8 字节）。
+///
+/// oracle 侧是 .NET `string`（`ReadWriteString` 的返回值）；上线字节由调用方在出口按
+/// `HUtil32.GetBytes`（cp936）重编码 ⇒ [`RawStr::wire_bytes`]。配置文件本身可以是 GBK、
+/// UTF-8+BOM 或 UTF-16（`ConfigFile.Load` 的 BOM 探测），解码后语义相同。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawStr(Vec<u8>);
 
 impl RawStr {
-    /// 原始字节（上线用）。
-    #[must_use]
-    pub fn bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    /// 文本视图（ASCII/UTF-8 配置即正确文本；GBK 配置只是给日志看的近似）。
+    /// 文本（UTF-8；配置解码后的原值）。
     #[must_use]
     pub fn text(&self) -> String {
-        match std::str::from_utf8(&self.0) {
-            Ok(s) => s.to_string(),
-            Err(_) => String::from_utf8_lossy(&self.0).into_owned(),
-        }
+        String::from_utf8_lossy(&self.0).into_owned()
+    }
+
+    /// 上线字节：等价 C# `HUtil32.GetBytes(string)`（.NET cp936，逐码元查表，不可映射 `?`）。
+    #[must_use]
+    pub fn wire_bytes(&self) -> Vec<u8> {
+        mir2_script::cp936::encode_gb2312_dotnet(&self.text())
     }
 
     /// 去掉首尾 ASCII 空白后的文本。
@@ -128,14 +132,18 @@ pub fn load(path: &Path) -> Result<DbConfig> {
             path.display()
         )
     })?;
-    let ini = Ini::parse(&raw);
+    // `ConfigFile.Load` 的 `StreamReader(..., GB2312)` 口径（BOM 探测；无 BOM 按 cp936）。
+    // 统一入口 `mir2_encoding::decode_config_text`（`mir2-script` 转发），与 game-svr/envir 同链。
+    let text = mir2_script::cp936::decode_config_text(&raw);
+    let ini = Ini::parse(&text);
     let s = |sec: &str, key: &str, def: &str| -> RawStr {
-        ini.get(sec, key)
-            .map_or_else(|| RawStr(def.as_bytes().to_vec()), |v| RawStr(v.to_vec()))
+        ini.get(sec, key).map_or_else(
+            || RawStr(def.as_bytes().to_vec()),
+            |v| RawStr(v.as_bytes().to_vec()),
+        )
     };
     let i = |sec: &str, key: &str, def: i32| -> i32 {
         ini.get(sec, key)
-            .and_then(|v| std::str::from_utf8(v).ok())
             .and_then(|v| v.trim().parse::<i32>().ok())
             .unwrap_or(def)
     };
@@ -143,7 +151,7 @@ pub fn load(path: &Path) -> Result<DbConfig> {
         let Some(v) = ini.get(sec, key) else {
             return def;
         };
-        match String::from_utf8_lossy(v).trim().to_uppercase().as_str() {
+        match v.trim().to_uppercase().as_str() {
             "" => def,
             "是" | "YES" | "1" | "TRUE" => true,
             _ => false,
@@ -183,7 +191,7 @@ pub fn load(path: &Path) -> Result<DbConfig> {
         "ConnctionString",
         "server=127.0.0.1;uid=root;pwd=;database=mir2_db;",
     );
-    if conn_string.bytes().is_empty() {
+    if conn_string.text().is_empty() {
         bail!("配置缺 [DataBase] ConnctionString（M1④）");
     }
     let ids_port = i("Server", "IDSPort", 5600);
@@ -214,54 +222,53 @@ pub fn load(path: &Path) -> Result<DbConfig> {
     })
 }
 
-/// 段表：`段名 → [(键, 值)]`（字节级，镜像 C# `ConfigFile.Load`）。
-type Sections = Vec<(Vec<u8>, Vec<(Vec<u8>, Vec<u8>)>)>;
+/// 段表：`段名 → [(键, 值)]`（文本级，镜像 C# `ConfigFile.Load` 的 .NET `string` 视图）。
+type Sections = Vec<(String, Vec<(String, String)>)>;
 
-/// 极简 INI 解析（字节级，镜像 C# `ConfigFile.Load`）。
+/// 极简 INI 解析（文本级，镜像 C# `ConfigFile.Load`；`ReadLine` 的 `\r\n`/`\n` 由 `str::lines` 覆盖）。
 struct Ini(Sections);
 
 impl Ini {
-    fn parse(raw: &[u8]) -> Self {
+    fn parse(text: &str) -> Self {
         let mut sections: Sections = Vec::new();
         let mut cur: Option<usize> = None;
         let mut in_block_comment = false;
-        for line in raw.split(|b| *b == b'\n') {
-            let line = trim_bytes(line);
-            if line.is_empty() || line.starts_with(b";") {
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with(';') {
                 continue;
             }
-            if line.starts_with(b"/*") {
+            if line.starts_with("/*") {
                 in_block_comment = true;
                 continue;
             }
             if in_block_comment {
-                if line.starts_with(b"*/") {
+                if line.starts_with("*/") {
                     in_block_comment = false;
                 }
                 continue;
             }
-            if line[0] == b'[' {
+            if line.starts_with('[') {
                 if let Some(inner) = sec_name(line) {
-                    if inner.starts_with(b";;") {
+                    if inner.starts_with(";;") {
                         cur = None; // `[;;…]` 段注释：后续行全部忽略
                         continue;
                     }
-                    sections.push((inner, Vec::new()));
+                    sections.push((inner.to_string(), Vec::new()));
                     cur = Some(sections.len() - 1);
                     continue;
                 }
             }
-            let Some(eq) = line.iter().position(|b| *b == b'=') else {
+            let Some(eq) = line.find('=') else {
                 continue;
             };
             if eq == 0 {
                 continue;
             }
-            let key = trim_bytes(&line[..eq]).to_vec();
-            let mut val = trim_bytes(&line[eq + 1..]).to_vec();
-            if let Some(pos) = find_sub(&val, b";;") {
-                val.truncate(pos);
-                val = trim_bytes(&val).to_vec();
+            let key = line[..eq].trim();
+            let mut val = line[eq + 1..].trim();
+            if let Some(pos) = val.find(";;") {
+                val = val[..pos].trim();
             }
             if key.is_empty() {
                 continue;
@@ -271,56 +278,31 @@ impl Ini {
             if !sections[idx]
                 .1
                 .iter()
-                .any(|(k, _)| k.eq_ignore_ascii_case(&key))
+                .any(|(k, _)| k.eq_ignore_ascii_case(key))
             {
-                sections[idx].1.push((key, val));
+                sections[idx].1.push((key.to_string(), val.to_string()));
             }
         }
         Self(sections)
     }
 
-    fn get(&self, section: &str, key: &str) -> Option<&[u8]> {
+    fn get(&self, section: &str, key: &str) -> Option<&str> {
         let sec = self
             .0
             .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(section.as_bytes()))?;
+            .find(|(name, _)| name.eq_ignore_ascii_case(section))?;
         sec.1
             .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(key.as_bytes()))
-            .map(|(_, v)| v.as_slice())
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
     }
 }
 
 /// `[...]` 段名（`GetSecString`）：返回 `[` 与 `]` 之间的内容。
-fn sec_name(line: &[u8]) -> Option<Vec<u8>> {
-    if line.first() != Some(&b'[') {
-        return None;
-    }
-    let end = line.iter().position(|b| *b == b']')?;
-    Some(trim_bytes(&line[1..end]).to_vec())
-}
-
-fn trim_bytes(b: &[u8]) -> &[u8] {
-    let mut s = b;
-    while let Some((f, rest)) = s.split_first() {
-        if f.is_ascii_whitespace() {
-            s = rest;
-        } else {
-            break;
-        }
-    }
-    while let Some((l, rest)) = s.split_last() {
-        if l.is_ascii_whitespace() {
-            s = rest;
-        } else {
-            break;
-        }
-    }
-    s
-}
-
-fn find_sub(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    hay.windows(needle.len()).position(|w| w == needle)
+fn sec_name(line: &str) -> Option<&str> {
+    let inner = line.strip_prefix('[')?;
+    let end = inner.find(']')?;
+    Some(inner[..end].trim())
 }
 
 #[cfg(test)]
@@ -372,7 +354,7 @@ mod tests {
         );
         let cfg = load(&p).unwrap();
         assert_eq!(cfg.conn_string.text(), "server=h;uid=u;database=d;");
-        assert_eq!(cfg.server_name.bytes(), b"LegendOfMir2");
+        assert_eq!(cfg.server_name.wire_bytes(), b"LegendOfMir2".to_vec());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -415,6 +397,67 @@ mod tests {
             b"[Setup]\nServerAddr=0.0.0.0\nServerPort=6000\nGateAddr=0.0.0.0\nGatePort=abc\n[DataBase]\nStoreage=MySQL\n",
         );
         assert_eq!(load(&p).unwrap().gate_port, 5100);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **E-5 BOM 矩阵（db-srv 链）**：`dbsvr.conf` 由 `AppConfigManager : ConfigFile` 读
+    /// （`ConfigFile.cs:263` 的 `StreamReader(..., GB2312)`，GB2312 preamble 长度 0 ⇒ BOM 探测）。
+    /// 4 份夹具（GBK 无 BOM / UTF-8 BOM / UTF-16LE BOM / GBK 含 `0xFF`）都必须：
+    /// 首行 `[DataBase]` 被识别、`ConnctionString` 与 `[Setup] ServerName` 读到；
+    /// `wire_bytes()` 与 C# `HUtil32.GetBytes(ServerName)` 同字节（cp936）。
+    ///
+    /// 牙：把 `load` 改回 `Ini::parse(&raw)`（字节级、不剥 BOM）⇒ UTF-8 BOM 夹具的
+    /// `[DataBase]` 头丢（`ConnctionString` 落到默认值）⇒ 本用例必红。
+    #[test]
+    fn config_bom_matrix_keeps_first_section_and_values() {
+        use mir2_script::cp936::{decode_config_text, encode_gb2312_dotnet};
+        let dir = std::env::temp_dir().join(format!("dbsrv-bom-matrix-{}", std::process::id()));
+        let base = "[DataBase]\nStoreage=MySQL\n\
+             ConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_bom;\n\
+             [Setup]\nServerAddr=0.0.0.0\nServerPort=6000\nGateAddr=0.0.0.0\nGatePort=5100\n\
+             ServerName=传奇\n[Server]\nIDSAddr=127.0.0.1\nIDSPort=5600\n";
+        let text_ff = base.replace("ServerName=传奇", "ServerName=传奇\u{F8F5}");
+        let gbk = encode_gb2312_dotnet(base);
+        let gbk_ff = encode_gb2312_dotnet(&text_ff);
+        assert!(gbk_ff.contains(&0xFF), "夹具必须真的含 0xFF 字节");
+        let mut utf8_bom = vec![0xEF, 0xBB, 0xBF];
+        utf8_bom.extend_from_slice(base.as_bytes());
+        let mut utf16le = vec![0xFF, 0xFE];
+        for u in base.encode_utf16() {
+            utf16le.extend_from_slice(&u.to_le_bytes());
+        }
+        for (name, bytes, want_name) in [
+            ("gbk-no-bom", gbk, "传奇"),
+            ("utf8-bom", utf8_bom, "传奇"),
+            ("utf16le-bom", utf16le, "传奇"),
+            ("gbk-0xff", gbk_ff, "传奇\u{F8F5}"),
+        ] {
+            // 夹具自检：oracle 口径解码后首行就是 `[DataBase]`（BOM 已被吞）。
+            assert!(
+                decode_config_text(&bytes).starts_with("[DataBase]"),
+                "{name}: 解码后首行必须是 [DataBase]"
+            );
+            std::fs::create_dir_all(&dir).unwrap();
+            let p = dir.join("dbsvr.conf");
+            std::fs::write(&p, &bytes).unwrap();
+            let cfg = load(&p).unwrap_or_else(|e| panic!("{name}: 必须能读：{e}"));
+            assert_eq!(cfg.storeage.text(), "MySQL", "{name}: [DataBase] Storeage");
+            assert_eq!(
+                cfg.conn_string.text(),
+                "server=127.0.0.1;uid=root;pwd=;database=mir2_bom;",
+                "{name}: [DataBase] ConnctionString（首行段名不能被 BOM 吃掉）"
+            );
+            assert_eq!(
+                cfg.server_name.text(),
+                want_name,
+                "{name}: [Setup] ServerName"
+            );
+            assert_eq!(
+                cfg.server_name.wire_bytes(),
+                encode_gb2312_dotnet(want_name),
+                "{name}: ServerName 上线字节 = HUtil32.GetBytes（cp936）"
+            );
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 }

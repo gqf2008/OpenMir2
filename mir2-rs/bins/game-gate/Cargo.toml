@@ -18,9 +18,8 @@ mir2-protocol = { path = "../../crates/protocol" }
 mir2-script = { path = "../../crates/script" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "signal", "time"] }
 anyhow = "1"
-# gb2312(cp936) 域名：客户端登录串里的账号/角色名是 GBK 字节。**编码**走 `mir2-script` 的
-# `cp936::encode_gb2312_dotnet`；`encoding_rs` 只保留给**解码**近似（whitelist A-14）。
-encoding_rs = "0.8"
+# gb2312(cp936) 域名：客户端登录串里的账号/角色名是 GBK 字节。**编码/解码都走 `mir2-script`
+# 的 `cp936`**（.NET 逐字节等价；E-1/E-8）；本 crate 不再依赖 `encoding_rs`。
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "process"] }

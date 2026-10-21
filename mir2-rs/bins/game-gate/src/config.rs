@@ -6,7 +6,8 @@
 //! 现网 `E:\MirServer\RunGate\config.conf` 含中文（`[Strings]`/`[MagicInterval]`），
 //! **不是合法 UTF-8**，旧实现用 `std::fs::read_to_string`（严格 UTF-8）会直接失败
 //! （M3-Rust 首验 7200 起不来）；`from_utf8_lossy` 同样不是 oracle 语义。
-//! 这里复用本 crate 的 `gbk::decode`（`encoding_rs::GBK` ≈ cp936，差异见 whitelist A-14）。
+//! 这里走 `mir2_script::cp936::decode_config_text`（`ConfigFile.Load` 的 `StreamReader(..., GB2312)`
+//! 口径：带 BOM 探测；无 BOM 按 cp936——见 E-6）。
 //!
 //! 现网样件（前 13 行）：
 //! ```ini
@@ -92,7 +93,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
             path.display()
         )
     })?;
-    let text = crate::gbk::decode(&bytes);
+    let text = mir2_script::cp936::decode_config_text(&bytes);
     let section = parse_section(&text, "GameGate");
     let get = |key: &str| -> Option<String> {
         section
@@ -625,5 +626,42 @@ GatePort1=7200
             "UTF-8 名字按 GB2312 读成乱码 ⇒ 不覆盖"
         );
         std::fs::remove_dir_all(p.parent().unwrap()).ok();
+    }
+
+    /// **E-6 BOM 矩阵**：`ConfigFile.Load` 口径（BOM 探测）⇒ GBK / UTF-8 BOM / UTF-16LE
+    /// 三份 `config.conf` 都能读且端点/整数键一致。旧实现裸 GBK 解码会把 UTF-8 BOM
+    /// 与 UTF-16 解成乱码 ⇒ 端点读不到 ⇒ 本用例红。
+    #[test]
+    fn bom_matrix_decodes_config_like_configfile() {
+        let text = "[GameGate]\n; 中文注释\nCount=1\nServerAddr1=127.0.0.1\nServerPort1=5000\n\
+                    GatePort1=7200\nGateAddress1=0.0.0.0\n\
+                    [Integer]\nNomClientPacketSize=512\nChatInterval=800\n";
+        let gbk = crate::gbk::encode(text);
+        let mut utf8_bom = vec![0xEF, 0xBB, 0xBF];
+        utf8_bom.extend_from_slice(text.as_bytes());
+        let mut utf16le = vec![0xFF, 0xFE];
+        for u in text.encode_utf16() {
+            utf16le.extend_from_slice(&u.to_le_bytes());
+        }
+        let dir = std::env::temp_dir().join(format!("gg-bom-{}", std::process::id()));
+        for (name, body) in [
+            ("gbk", gbk),
+            ("utf8-bom", utf8_bom),
+            ("utf16le-bom", utf16le),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+            let p = dir.join("config.conf");
+            std::fs::write(&p, &body).unwrap();
+            let cfg = load(&p).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(cfg.endpoints.len(), 1, "{name}: 端点");
+            assert_eq!(cfg.endpoints[0].gate_port, 7200, "{name}: GatePort1");
+            assert_eq!(cfg.endpoints[0].srv_port, 5000, "{name}: ServerPort1");
+            assert_eq!(
+                cfg.nom_client_packet_size, 512,
+                "{name}: NomClientPacketSize"
+            );
+            assert_eq!(cfg.chat_interval_ms, 800, "{name}: ChatInterval");
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

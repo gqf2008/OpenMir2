@@ -371,10 +371,16 @@ pub fn load(path: &Path) -> Result<StringConf> {
     Ok(parse(&bytes))
 }
 
-/// 解析 `[String]` 段（`ConfigFile.Load` 的 1:1 子集：GBK + Trim + `;;` 行内注释 + 首次为准）。
+/// 解析 `[String]` 段（`ConfigFile.Load` 的 1:1 子集：BOM 探测 + cp936 + Trim + `;;` 行内注释 + 首次为准）。
+///
+/// 编码口径 = `Common/ConfigFile.cs:263` 的 `StreamReader(..., Encoding.GetEncoding("GB2312"))`：
+/// GB2312 的 preamble 长度为 0 ⇒ `StreamReader` 做 BOM 探测（UTF-8 / UTF-16LE / UTF-16BE /
+/// UTF-32LE `FF FE 00 00` / UTF-32BE），无 BOM 按 cp936。统一走
+/// `mir2_script::cp936::decode_config_text`（E-6）；旧实现裸 `encoding_rs::GBK.decode`
+/// 会把 UTF-8 BOM 的文件解成乱码。
 #[must_use]
 pub fn parse(bytes: &[u8]) -> StringConf {
-    let (text, _, _) = encoding_rs::GBK.decode(bytes);
+    let text = mir2_script::cp936::decode_config_text(bytes);
     let mut conf = StringConf::defaults();
     // 段解析从「单 bool」改为三态（I-6）：`[String]` 与 `[Guild]` 各取各的键，
     // 其余段一律忽略。段名 `OrdinalIgnoreCase`（`ConfigFile.cs:13`）。
@@ -583,5 +589,30 @@ Other=1
         assert_eq!(c.attack_mode_msg(5), Some("Gd"));
         assert_eq!(c.attack_mode_msg(6), Some("R"));
         assert_eq!(c.attack_mode_msg(7), None, "枚举外 ⇒ 一条都不发");
+    }
+
+    /// **E-6 BOM 矩阵**：oracle `ConfigFile.Load`（`ConfigFile.cs:263`）的
+    /// `StreamReader(..., GB2312)` 做 BOM 探测 ⇒ `String.conf` 的 GBK / UTF-8 BOM /
+    /// UTF-16LE BOM 都必须读出同一组中文值。旧实现裸 `encoding_rs::GBK.decode`
+    /// 会把 UTF-8 BOM 解成 `U+FEFF` 开头的乱码、UTF-16 解成乱码 ⇒ 本用例必红。
+    #[test]
+    fn bom_matrix_decodes_string_conf() {
+        let text = "[String]\nYouPoisoned=您中毒了!!!\nGuildMsgPrefix=行会:\n";
+        let gbk = mir2_script::cp936::encode_gb2312_dotnet(text);
+        let mut utf8_bom = vec![0xEF, 0xBB, 0xBF];
+        utf8_bom.extend_from_slice(text.as_bytes());
+        let mut utf16le = vec![0xFF, 0xFE];
+        for u in text.encode_utf16() {
+            utf16le.extend_from_slice(&u.to_le_bytes());
+        }
+        for (name, bytes) in [
+            ("gbk-no-bom", gbk),
+            ("utf8-bom", utf8_bom),
+            ("utf16le-bom", utf16le),
+        ] {
+            let c = parse(&bytes);
+            assert_eq!(c.you_poisoned(), "您中毒了!!!", "{name}: YouPoisoned");
+            assert_eq!(c.guild_msg_prefix(), "行会:", "{name}: GuildMsgPrefix");
+        }
     }
 }

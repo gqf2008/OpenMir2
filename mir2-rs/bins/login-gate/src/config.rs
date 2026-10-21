@@ -53,7 +53,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
             path.display()
         )
     })?;
-    let text = crate::gbk::decode(&bytes);
+    let text = mir2_script::cp936::decode_config_text(&bytes);
     let section = parse_section(&text, "LoginGate");
     let get = |key: &str| -> Result<String> {
         section
@@ -299,6 +299,34 @@ mod tests {
         let cfg = load(&p).unwrap();
         assert_eq!(cfg.srv_port, 5500);
         assert_eq!(cfg.gate_port, 7000);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **E-6 BOM 矩阵**：`ConfigFile.Load` 口径（BOM 探测）⇒ GBK / UTF-8 BOM / UTF-16LE
+    /// 三份 `config.conf` 都能读且端口一致。旧实现严格 UTF-8 / 裸 GBK 会红。
+    #[test]
+    fn bom_matrix_decodes_config_like_configfile() {
+        let text = "[LoginGate]\nTitle=热血传奇\n; 中文注释\nServerAddr0=127.0.0.1\n\
+                    ServerPort0=5500\nGateAddr0=127.0.0.1\nGatePort0=7000\n";
+        let gbk = crate::gbk::encode(text);
+        let mut utf8_bom = vec![0xEF, 0xBB, 0xBF];
+        utf8_bom.extend_from_slice(text.as_bytes());
+        let mut utf16le = vec![0xFF, 0xFE];
+        for u in text.encode_utf16() {
+            utf16le.extend_from_slice(&u.to_le_bytes());
+        }
+        let dir = std::env::temp_dir().join(format!("lg-bom-{}", std::process::id()));
+        for (name, body) in [
+            ("gbk", gbk),
+            ("utf8-bom", utf8_bom),
+            ("utf16le-bom", utf16le),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+            let p = dir.join("config.conf");
+            std::fs::write(&p, &body).unwrap();
+            let cfg = load(&p).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!((cfg.srv_port, cfg.gate_port), (5500, 7000), "{name}");
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -358,16 +358,18 @@ pub fn default_path() -> PathBuf {
 /// 端口非法、`WorldMaps` **写了但非法** —— 都返回错误（调用方据此非零退出）。
 /// `WorldMaps` **没写**不算错（可选键，见模块头）；`WorldMaps=` 空值 ⇒ 空表。
 pub fn load(path: &Path) -> Result<GateConfig> {
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("读不到配置文件 {}", path.display()))?;
-    // **BOM 口径**（B-1，reviewer-2 `b49897e8`）：现网 `E:\MirServer\M2GameSvr\Server.conf`
-    // 首字节是 UTF-8 BOM（`ef bb bf`）。oracle 的 `ConfigFile.Load` 用
-    // `new StreamReader(path, GB2312)` 且**默认做 BOM 探测**（`ConfigFile.cs:263`）⇒ 首行的
-    // BOM 被吞掉，`[DataBase]` 段被正常识别。Rust 的 `read_to_string` 会把它留成 `U+FEFF`，
-    // 而 `str::trim` 不把 `U+FEFF` 当空白 ⇒ `[DataBase]` 头丢失 ⇒ `ConnctionString` 缺键
-    // ⇒ 回落到源码缺省的 `database=mir2`（现网不存在该库）⇒ `stditems` 恒空。
-    // 照 C# 语义：**只在文件首**剥一个 `U+FEFF`（不是每行、不是循环）。
-    let text = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+    let bytes =
+        std::fs::read(path).with_context(|| format!("读不到配置文件 {}", path.display()))?;
+    // **编码口径**（E-5）：oracle 的 `ConfigFile.Load` 是
+    // `new StreamReader(File.Open(...), Encoding.GetEncoding("GB2312"))`
+    // （`Common/ConfigFile.cs:263`）。GB2312/cp936 的 preamble 长度为 0 ⇒
+    // `StreamReader` **会**做 BOM 探测并据此改编码：UTF-8 BOM / UTF-16LE / UTF-16BE /
+    // UTF-32LE（`FF FE 00 00`）/ UTF-32BE 都能读，无 BOM 按 cp936。
+    // 统一走 `mir2_script::cp936::decode_config_text`（= `mir2_encoding::decode_config_text`，
+    // 与 `crates/envir` 的 `GameSvrConf` 同一条链），**不再**用严格 UTF-8 的
+    // `read_to_string`（GBK/UTF-16 的 `Server.conf` 会直接启动失败，oracle 正常）。
+    let text = mir2_script::cp936::decode_config_text(&bytes);
+    let text = text.as_str();
     let mut section = String::new();
     let mut gate_addr: Option<String> = None;
     let mut gate_port: Option<u16> = None;
@@ -1265,10 +1267,13 @@ fn parse_maps(v: &str) -> Result<Vec<(i32, i32)>> {
 mod tests {
     use super::*;
 
+    /// 写一份**部署形态**的 `Server.conf`：现网配置是 GBK（cp936）字节。
+    /// 中文值（如 `ReadWriteBool` 的 `是`）必须按 GBK 落盘，否则 oracle 的
+    /// `StreamReader(..., GB2312)` 会把它当 cp936 读成乱码（E-5 的口径）。
     fn write(dir: &Path, body: &str) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
         let p = dir.join("Server.conf");
-        std::fs::write(&p, body).unwrap();
+        std::fs::write(&p, mir2_script::cp936::encode_gb2312_dotnet(body)).unwrap();
         p
     }
 
@@ -1601,7 +1606,8 @@ GuildMsgBColor=11
     /// （`ConfigFile.cs:263`）⇒ 首行 BOM 被吞掉，`[DataBase]` 段照常识别。Rust 若不剥 BOM，
     /// `[DataBase]` 头丢失 ⇒ `ConnctionString` 缺键 ⇒ 回落 `database=mir2`（现网无此库）
     /// ⇒ `stditems` 恒空 ⇒ **带装备角色的 50/41 与 oracle 偏离**（裸装夹具/真机号看不出来）。
-    /// 本用例把「带 BOM 的现网形态」钉住；把 `load` 里的 `strip_prefix('\u{feff}')` 改回去 ⇒ 本用例必红。
+    /// 本用例把「带 BOM 的现网形态」钉住；把 `load` 里的 `decode_config_text` 改回
+    /// `read_to_string` + `strip_prefix` ⇒ 本用例必红（E-5）。
     #[test]
     fn deployed_conf_with_utf8_bom_reads_database_section() {
         let dir = std::env::temp_dir().join(format!("gs-bom-{}", std::process::id()));
@@ -1999,6 +2005,63 @@ HungerSystem=garbage
                 (c.test_server, c.service_mode),
                 want,
                 "TestServer={ts:?} ServiceMode={sm:?}"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **E-5 BOM 矩阵（两条链同口径）**：`.NET ConfigFile.Load` =
+    /// `new StreamReader(File.Open(...), Encoding.GetEncoding("GB2312"))`（`ConfigFile.cs:263`）。
+    /// GB2312 的 preamble 长度为 0 ⇒ `StreamReader` 做 BOM 探测：UTF-8 BOM / UTF-16LE BOM /
+    /// UTF-32LE（`FF FE 00 00`）都能读；无 BOM 按 cp936；cp936 的 `0xFF` 解成 `U+F8F5`。
+    ///
+    /// 两条链都要能读且关键键值一致：`game_svr::config::load`（`[DataBase] ConnctionString` +
+    /// `[Server] ServerName`）与 `mir2_envir::GameSvrConf::from_bytes`（同一文件的 `[Names]`）。
+    ///
+    /// 牙：把 `load` 改回 `read_to_string` ⇒ GBK / UTF-16LE / 0xFF 三份夹具红；把
+    /// `decode_config_text` 改回严格 UTF-8 ⇒ UTF-8 BOM 之外的夹具红（与 envir 链同源）。
+    #[test]
+    fn server_conf_bom_matrix_both_chains() {
+        use mir2_script::cp936::encode_gb2312_dotnet;
+        let dir = std::env::temp_dir().join(format!("gs-bom-matrix-{}", std::process::id()));
+        let base = "[DataBase]\n\
+             ConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_data;\n\
+             [Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\n\
+             IDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n\
+             ServerName=传奇\n[Names]\nGameGold=元宝\n";
+        // 「含 0xFF 字节」夹具：cp936 的 U+F8F5 ↔ 0xFF；服务名末尾带一个 0xFF。
+        let text_ff = base.replace("ServerName=传奇", "ServerName=传奇\u{F8F5}");
+        let gbk = encode_gb2312_dotnet(base);
+        let gbk_ff = encode_gb2312_dotnet(&text_ff);
+        assert!(gbk_ff.contains(&0xFF), "夹具必须真的含 0xFF 字节");
+        let mut utf8_bom = vec![0xEF, 0xBB, 0xBF];
+        utf8_bom.extend_from_slice(base.as_bytes());
+        let mut utf16le = vec![0xFF, 0xFE];
+        for u in base.encode_utf16() {
+            utf16le.extend_from_slice(&u.to_le_bytes());
+        }
+        for (name, bytes, want_name) in [
+            ("gbk-no-bom", gbk, "传奇"),
+            ("utf8-bom", utf8_bom, "传奇"),
+            ("utf16le-bom", utf16le, "传奇"),
+            ("gbk-0xff", gbk_ff, "传奇\u{F8F5}"),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+            let p = dir.join("Server.conf");
+            std::fs::write(&p, &bytes).unwrap();
+            let c =
+                load(&p).unwrap_or_else(|e| panic!("{name}: game_svr::config::load 必须能读：{e}"));
+            assert_eq!(
+                c.db_conn_string.as_deref(),
+                Some("server=127.0.0.1;uid=root;pwd=;database=mir2_data;"),
+                "{name}: [DataBase] ConnctionString"
+            );
+            assert_eq!(c.server_name, want_name, "{name}: [Server] ServerName");
+            // 第二条链：envir 用同一个 decode_config_text 口径。
+            let e = mir2_envir::GameSvrConf::from_bytes(&bytes);
+            assert_eq!(
+                e.game_gold_name, "元宝",
+                "{name}: envir 链 [Names] GameGold"
             );
         }
         std::fs::remove_dir_all(&dir).ok();

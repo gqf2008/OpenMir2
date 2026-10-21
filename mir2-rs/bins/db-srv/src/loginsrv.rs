@@ -284,7 +284,7 @@ pub(crate) async fn login_link_task_with(server: Arc<Server>, retry: Duration) {
                         last_keep = tokio::time::Instant::now();
                         let users = server.user_count().await;
                         let mut m = format!("({SS_SERVERINFO}/").into_bytes();
-                        m.extend_from_slice(cfg.server_name.bytes());
+                        m.extend_from_slice(&cfg.server_name.wire_bytes());
                         m.extend_from_slice(b"/99/");
                         m.extend_from_slice(users.to_string().as_bytes());
                         m.push(b')');

@@ -2,15 +2,15 @@
 //!
 //! C# 侧一律走 `Encoding.GetEncoding("gb2312")`（= .NET cp936）：
 //! - **编码**走 `mir2_script::cp936::encode_gb2312_dotnet`（与 .NET 逐字节相等，无近似）；
-//! - **解码**仍用 `encoding_rs::GBK` 近似，**已登记的差异**见 `mir2-rs/tests/parity/whitelist.md`
-//!   的 A-14（PUA 少量字节对映射与非法字节回退字符；现网语料为 ASCII 账号 + 常用 GBK 汉字，
-//!   判定相同）。
+//! - **解码**走 `mir2_script::cp936::decode`（.NET cp936 状态机：前导字节吞任意后继、
+//!   `0x80→U+20AC`、`0xFF→U+F8F5`、非法回退 `?`；B-105 的 7032 条覆盖表）。
+//!   E-8 的构造帧（账号含 `0x81 0x20`）要求 `81 20` 解成**一个** `?`（不是 WHATWG 的
+//!   `U+FFFD` + 空格两个字符），否则长度门与重编码后的 `PackLength` 都与 C# 不同。
 
-/// 解码（对应 `HUtil32.GetString(bytes, 0, count)`）。
+/// 解码（对应 `HUtil32.GetString(bytes, 0, count)`）：.NET cp936，逐字节等价。
 #[must_use]
 pub fn decode(bytes: &[u8]) -> String {
-    let (s, _, _) = encoding_rs::GBK.decode(bytes);
-    s.into_owned()
+    mir2_script::cp936::decode(bytes)
 }
 
 /// 编码（对应 `HUtil32.GetBytes(str)`）：**逐字节等于 .NET cp936**。

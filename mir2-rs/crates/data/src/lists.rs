@@ -868,4 +868,42 @@ mod tests {
         assert!(!get_deny_chr_name_list("坏人"), "getter 恒 false");
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    /// **E-6 BOM 矩阵**：oracle 全部经 `StringList.LoadFromFile`（`GetEncoding` + BOM 探测）。
+    /// GBK / UTF-8 BOM / UTF-16LE 三份夹具必须解出同一物品名。旧实现裸 GBK 解码在
+    /// UTF-8 BOM 上会得到 `\u{FEFF}1` 之类的乱码 ⇒ make_index 解析失败 ⇒ 本用例红。
+    #[test]
+    fn load_item_name_list_bom_matrix() {
+        let text = "1\t2\t裁决之杖\n";
+        let gbk = gbk(text);
+        let mut utf8_bom = vec![0xEF, 0xBB, 0xBF];
+        utf8_bom.extend_from_slice(text.as_bytes());
+        let mut utf16le = vec![0xFF, 0xFE];
+        for u in text.encode_utf16() {
+            utf16le.extend_from_slice(&u.to_le_bytes());
+        }
+        let dir = temp_dir("itemname-bom");
+        let path = dir.join(ITEM_NAME_LIST_FILE);
+        for (name, bytes) in [
+            ("gbk", gbk),
+            ("utf8-bom", utf8_bom),
+            ("utf16le-bom", utf16le),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            let list = load_item_name_list_file(&path)
+                .unwrap_or_else(|e| panic!("{name}: {e}"))
+                .expect("Some");
+            assert_eq!(
+                list,
+                vec![ItemName {
+                    make_index: 1,
+                    item_index: 2,
+                    item_name: "裁决之杖".to_string(),
+                }],
+                "{name}"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

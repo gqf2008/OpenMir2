@@ -333,8 +333,13 @@ async fn settle() {
 /// **客户端 face 没有定长头**（见文件头判据 0）⇒ 返回值就是直接写到 socket 的字节。
 /// 用例里的文本全 ASCII ⇒ GBK 与字节串一致，不必再过编码器。
 fn login_frame(text: &str) -> Vec<u8> {
+    login_frame_bytes(text.as_bytes())
+}
+
+/// 同 [`login_frame`]，但明文直接给**原始字节**（E-8 的畸形 GBK 构造帧用）。
+fn login_frame_bytes(plain: &[u8]) -> Vec<u8> {
     let mut body = b"#1".to_vec();
-    body.extend_from_slice(&mir2_protocol::edcode::encode(text.as_bytes()));
+    body.extend_from_slice(&mir2_protocol::edcode::encode(plain));
     body.push(b'!');
     body
 }
@@ -770,6 +775,74 @@ async fn login_success_sends_synthetic_login_packet() {
     // 解回明文复核（不是用同一个 format! 自证）
     let back = String::from_utf8(mir2_protocol::edcode::decode(&body[2..body.len() - 1])).unwrap();
     assert_eq!(back, text);
+    gate.shutdown().await;
+}
+
+/// **E-8：畸形 GBK 的 decode → re-encode 必须与 C# cp936 编码器同字节，`PackLength` 一致。**
+///
+/// oracle：`loginData = HUtil32.GetString(...)`（.NET cp936）后 `ClientLogin`，
+/// 再 `loginPacket = $"**{sAccount}/…"` + `HUtil32.GetBytes(loginPacket)`（`ClientSession.cs:1203-1204`）。
+/// .NET cp936 解 `81 20` 是**一个** `?`（`0x81` 前导吞掉任意后继），而 WHATWG GBK 是
+/// `U+FFFD` + 空格两个字符 ⇒ 账号长度门 12/13 一放一拒，且重编码后的正文与 `PackLength` 都不同。
+///
+/// 构造帧的账号字节 = `81 20` + `loadbot1234`（11 ASCII）：
+/// - cp936：`?loadbot1234` = 12 字符 ⇒ `4 ≤ len ≤ 12` **通过**；
+/// - WHATWG：`U+FFFD` + ` ` + 11 = 13 字符 ⇒ oracle 会踢、Rust 若用 WHATWG 也会踢（无合成包）⇒ 本用例红。
+///
+/// 期望字节按 oracle 公式独立重算（不复用被测函数）：`#0` + `EDCode(CP936(文本))` + `!`。
+#[tokio::test]
+async fn malformed_gbk_account_reencodes_like_oracle_and_pack_length() {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let srv_port = l.local_addr().unwrap().port();
+    let srv_task = tokio::spawn(async move {
+        let (mut sock, _) = l.accept().await.unwrap();
+        let open = read_frame(&mut sock).await.expect("GM_OPEN");
+        let login = read_until(&mut sock, |m, b| {
+            m.ident == u16::from(grobal2::GM_DATA) && is_login_packet(b)
+        })
+        .await
+        .expect("账号含 0x81 0x20 的构造帧在 cp936 下长度合法，必须收到合成登录包");
+        (open.0, login.0, login.1)
+    });
+
+    let gate_port = support::next_port();
+    let gate = Gate::start("gg-malformed-gbk", srv_port, gate_port).await;
+    let mut client = gate.connect().await;
+    // `**` + [0x81, 0x20] + `loadbot1234/lb1a/1/120020522/1200205220/AABB`
+    let mut plain = b"**".to_vec();
+    plain.extend_from_slice(&[0x81, 0x20]);
+    plain.extend_from_slice(b"loadbot1234/lb1a/1/120020522/1200205220/AABB");
+    client.write_all(&login_frame_bytes(&plain)).await.unwrap();
+    client.flush().await.unwrap();
+
+    let (_open, msg, body) = tokio::time::timeout(Duration::from_secs(5), srv_task)
+        .await
+        .expect("假 GameSvr 未按时结束")
+        .unwrap();
+
+    // oracle 文本：`81 20` → 单个 `?`（不是 `U+FFFD` + 空格）。
+    let text = "**?loadbot1234/lb1a/1/120020522/1200205220/\
+                000000000000000000000000000000/0";
+    let cp936 = mir2_script::cp936::encode_gb2312_dotnet(text);
+    assert_eq!(
+        cp936,
+        text.as_bytes(),
+        "本用例的文本是 ASCII（含 `?`），cp936 字节必须与 UTF-8 视图一致"
+    );
+    let mut expect = b"#0".to_vec();
+    expect.extend_from_slice(&mir2_protocol::edcode::encode(&cp936));
+    expect.push(b'!');
+    assert_eq!(
+        body, expect,
+        "合成登录包正文必须逐字节等于 oracle（cp936 重编码）"
+    );
+    assert_eq!(
+        usize::try_from(msg.pack_length).unwrap(),
+        expect.len(),
+        "PackLength 必须 = #0 + encodeLen + !（与 oracle 同长度）"
+    );
+    let back = String::from_utf8(mir2_protocol::edcode::decode(&body[2..body.len() - 1])).unwrap();
+    assert_eq!(back, text, "正文解回必须是 cp936 语义的单个 `?`");
     gate.shutdown().await;
 }
 

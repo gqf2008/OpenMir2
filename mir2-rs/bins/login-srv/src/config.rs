@@ -18,8 +18,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use mir2_shared::hutil32;
 
-use crate::gbk;
-
 /// 一条 AddrTable 路由（C# `Conf/LsShare.cs::GateRoute`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateRoute {
@@ -129,7 +127,8 @@ pub fn load(path: &Path) -> Result<Config> {
             path.display()
         )
     })?;
-    let text = gbk::decode(&bytes);
+    // `ConfigFile.Load` 口径（BOM 探测；无 BOM 按 cp936）——E-6 统一读函数。
+    let text = mir2_script::cp936::decode_config_text(&bytes);
     let ini = Ini::parse(&text);
     let mut cfg = Config::default();
     // 与 C# `ConfigManager.LoadConfig` 同序、同名（大小写不敏感）。
@@ -162,7 +161,7 @@ fn load_addr_table(dir: &Path, cfg: &mut Config) -> Result<()> {
             file.display()
         )
     })?;
-    let text = gbk::decode(&bytes);
+    let text = mir2_script::cp936::decode_string_list(&bytes);
     let mut n_route_idx = 0usize;
     for line in text.lines() {
         let line = line.trim_end_matches(['\r', '\n']);
@@ -232,7 +231,7 @@ fn load_server_addr(dir: &Path, cfg: &mut Config) {
         ));
         return;
     };
-    let text = gbk::decode(&bytes);
+    let text = mir2_script::cp936::decode_string_list(&bytes);
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with(';') {
@@ -256,7 +255,7 @@ fn load_user_limit(dir: &Path, cfg: &mut Config) -> Result<()> {
             file.display()
         )
     })?;
-    let text = gbk::decode(&bytes);
+    let text = mir2_script::cp936::decode_string_list(&bytes);
     let mut n = 0usize;
     for line in text.lines() {
         let (server_name, rest) = hutil32::get_valid_str3(line, &[' ', '\t']);
@@ -416,6 +415,7 @@ impl Ini {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gbk;
 
     fn write_fixture(dir: &Path, conf: &str, addr: &str, saddr: &str, limit: &str) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
@@ -577,5 +577,66 @@ mod tests {
         assert_eq!(cfg.server_port, 5600);
         assert_eq!(cfg.routes.len(), 1);
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// **E-6 BOM 矩阵（四类文件）**：`logsrv.conf` 走 `ConfigFile.Load`（BOM 探测），
+    /// `AddrTable.txt` / `UserLimit.txt` / `ServerAddr.txt` 走 `StringList.LoadFromFile`
+    /// （`GetEncoding` + `StreamReader` BOM 探测）。GBK 无 BOM / UTF-8 BOM / UTF-16LE BOM
+    /// 三份夹具都必须读出同一组值。
+    ///
+    /// 牙：把四个 `decode_*` 调用换回 `read_to_string`/裸 GBK ⇒ UTF-8 BOM 与 UTF-16LE
+    /// 两份夹具红（段头/字段乱码 ⇒ 路由/限制表为空）。
+    #[test]
+    fn bom_matrix_all_config_kinds() {
+        fn enc(text: &str, kind: usize) -> Vec<u8> {
+            match kind {
+                0 => gbk::encode(text),
+                1 => {
+                    let mut b = vec![0xEF, 0xBB, 0xBF];
+                    b.extend_from_slice(text.as_bytes());
+                    b
+                }
+                _ => {
+                    let mut b = vec![0xFF, 0xFE];
+                    for u in text.encode_utf16() {
+                        b.extend_from_slice(&u.to_le_bytes());
+                    }
+                    b
+                }
+            }
+        }
+        let conf = "[Server]\n; 中文注释\nGateAddr=0.0.0.0\nGatePort=5500\n\
+                    ServerAddr=127.0.0.1\nServerPort=5600\n[DataBase]\n\
+                    ConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_account;\n";
+        let addr = "热血传奇 T1 127.0.0.1 127.0.0.1 127.0.0.1:7100\n";
+        let limit = "热血传奇 g1 3000\n";
+        let saddr = "127.0.0.1\n";
+        for (kind, name) in [(0usize, "gbk"), (1, "utf8-bom"), (2, "utf16le-bom")] {
+            let d = tmp(&format!("bom-{name}"));
+            std::fs::create_dir_all(&d).unwrap();
+            let c = d.join("logsrv.conf");
+            std::fs::write(&c, enc(conf, kind)).unwrap();
+            std::fs::write(d.join("AddrTable.txt"), enc(addr, kind)).unwrap();
+            std::fs::write(d.join("UserLimit.txt"), enc(limit, kind)).unwrap();
+            std::fs::write(d.join("ServerAddr.txt"), enc(saddr, kind)).unwrap();
+            let cfg = load(&c).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(cfg.gate_port, 5500, "{name}: logsrv.conf");
+            assert_eq!(cfg.routes.len(), 1, "{name}: AddrTable 路由");
+            assert_eq!(
+                cfg.routes[0].server_name, "热血传奇",
+                "{name}: 路由服务器名"
+            );
+            assert_eq!(
+                cfg.user_limit[0].as_ref().unwrap().server_name,
+                "热血传奇",
+                "{name}: UserLimit 服务器名"
+            );
+            assert_eq!(
+                cfg.server_addrs,
+                vec!["127.0.0.1".to_string()],
+                "{name}: ServerAddr"
+            );
+            std::fs::remove_dir_all(&d).ok();
+        }
     }
 }
