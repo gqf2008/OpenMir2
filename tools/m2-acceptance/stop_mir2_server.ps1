@@ -16,6 +16,10 @@
   安全：只杀进程名与记录一致（`mir2-server` 或 -ServerExe 的 basename）的进程，
   进程名不符时打印 SKIP（防止 pid 复用误杀别人的进程）。
 
+  fail-closed（累计判定）：只要仍有一条记录**被跳过**（pid 非法 / 进程名不符）
+  或 **Force 后仍存活**，就保留 pid 文件、不打印 `MIR2_SERVER_STACK_STOPPED`、退出 1
+  —— 跳过/未停掉不等于已停止。
+
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/stop_mir2_server.ps1
 
@@ -119,11 +123,14 @@ if ($entries.Count -eq 0) {
 
 Write-Output ("PIDFILE {0}（{1} 个角色，停止顺序 = stop_order 降序）" -f $PidFile, $entries.Count)
 
-# ---- 按 stop_order 降序停止。----
+# ---- 按 stop_order 降序停止。累计「被跳过」与「Force 后仍存活」，任一非空即 fail-closed。----
+$skipped = @()
+$survived = @()
 foreach ($e in @($entries | Sort-Object { if ($null -ne $_.stop_order) { [int]$_.stop_order } else { 0 } } -Descending)) {
   $procId = 0
   if (-not [int]::TryParse([string]$e.pid, [ref]$procId)) {
     Write-Output ("SKIP {0} pid 非法：{1}" -f $e.role, $e.pid)
+    $skipped += ("{0}(pid 非法:{1})" -f $e.role, $e.pid)
     continue
   }
   $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
@@ -134,6 +141,7 @@ foreach ($e in @($entries | Sort-Object { if ($null -ne $_.stop_order) { [int]$_
   $expected = Get-ExpectedProcessNames $e
   if ($expected -notcontains $p.ProcessName) {
     Write-Output ("SKIP {0} pid={1} 进程名={2} 与记录（{3}）不符 —— 防 pid 复用误杀，不结束" -f $e.role, $procId, $p.ProcessName, ($expected -join '|'))
+    $skipped += ("{0}(pid={1} 进程名={2} 不符)" -f $e.role, $procId, $p.ProcessName)
     continue
   }
   if (Stop-Gracefully $e $p) {
@@ -144,6 +152,7 @@ foreach ($e in @($entries | Sort-Object { if ($null -ne $_.stop_order) { [int]$_
   $null = $p.WaitForExit($script:ProcessTimeoutSeconds * 1000)
   if (Get-Process -Id $procId -ErrorAction SilentlyContinue) {
     Write-Output ("RED: {0} pid={1} Force 后仍存活" -f $e.role, $procId)
+    $survived += ("{0}(pid={1})" -f $e.role, $procId)
   } else {
     Write-Output ("STOPPED {0} pid={1} force" -f $e.role, $procId)
   }
@@ -167,6 +176,18 @@ foreach ($e in $entries) {
 
 if ($stillUp.Count -gt 0) {
   Write-Output ("RED: 停止后端口仍 UP：{0} —— 保留 pid 文件 {1}，请人工核查" -f ($stillUp -join '; '), $PidFile)
+  exit 1
+}
+
+# 被跳过（pid 非法 / 进程名不符）或 Force 后仍存活 ⇒ 没有「全部停掉」，不得报 STOPPED。
+if ($skipped.Count -gt 0 -or $survived.Count -gt 0) {
+  if ($skipped.Count -gt 0) {
+    Write-Output ("RED: 有存活记录被跳过、停止状态未确认：{0}" -f ($skipped -join '; '))
+  }
+  if ($survived.Count -gt 0) {
+    Write-Output ("RED: Force 后仍存活：{0}" -f ($survived -join '; '))
+  }
+  Write-Output ("RED: 栈未确认全部停止 —— 保留 pid 文件 {0}，请人工核查" -f $PidFile)
   exit 1
 }
 

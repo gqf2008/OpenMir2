@@ -30,9 +30,12 @@
       -Seed   / 调用方 $env:MIR2_RNG_SEED  ->  子进程 `MIR2_RNG_SEED`
               显式 -Seed > 环境变量 > 默认 42（A2 对称默认；Rust 生产默认随机源本就是 seed 42）。
       -DbName / 调用方 $env:MIR2_DB_NAME    ->  子进程 `MIR2_DB_NAME`
-              只做**环境透传**；本脚本不改写任何配置文件（库名仍由各 conf 决定）。
+              只做**环境透传**，**当前全仓无消费者**（grep MIR2_DB_NAME 只命中本脚本与本 runbook）：
+              本脚本不改写任何配置文件，库名仍由各 conf 的 ConnctionString 决定；
+              `-Seed` 则与 start_rust_stack.ps1 同口径（game-svr 真消费）。
 
-  -WhatIf：只打印将执行的 COMMAND 行与顺序，不启动任何进程；缺任一配置 => RED + 退出 2。
+  -WhatIf：只打印将执行的 COMMAND 行与顺序，不启动任何进程，也**不创建 LogDir / pid 文件**；
+           缺任一配置 => RED + 退出 2。实跑同样在全部前置检查通过后才创建 LogDir。
   旧六个 exe 仍然可用且行为不变；本脚本不依赖它们。
 
 .EXAMPLE
@@ -70,7 +73,6 @@ $RoleTable = @(
 if ([string]::IsNullOrWhiteSpace($LogDir)) {
   $LogDir = Join-Path $Root 'logs\mir2-server'
 }
-New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $PidFile = Join-Path $LogDir 'mir2-server.pid.json'
 
 function Test-Port([int]$Port) {
@@ -256,7 +258,7 @@ Write-Output ("SERVER_EXE {0}" -f $ServerExe)
 Write-Output ("LOG_DIR {0}" -f $LogDir)
 Write-Output ("SEED: 将向角色注入 MIR2_RNG_SEED={0}（显式 -Seed > 环境变量 > 默认 42，口径同 start_rust_stack.ps1）" -f $seedText)
 if ($dbNameText) {
-  Write-Output ("DB_NAME: 将向角色注入 MIR2_DB_NAME={0}（仅环境透传，实际库名仍由各配置文件决定）" -f $dbNameText)
+  Write-Output ("DB_NAME: 将向角色注入 MIR2_DB_NAME={0}（仅环境透传，当前无消费者；库名仍由各配置文件决定）" -f $dbNameText)
 } else {
   Write-Output 'DB_NAME: 未指定（不注入 MIR2_DB_NAME；库名由各配置文件决定）'
 }
@@ -282,9 +284,17 @@ if (-not (Test-Path -LiteralPath $ServerExe -PathType Leaf)) {
   exit 2
 }
 
-$existing = @(Get-PidFileEntries $PidFile | Where-Object {
-  $_ -and $_.pid -and (Get-Process -Id ([int]$_.pid) -ErrorAction SilentlyContinue)
-})
+# pid 非法（非数字）不中止：与 stop 同口径打 SKIP 后跳过该条，继续核对其它记录。
+$existing = @()
+foreach ($e in @(Get-PidFileEntries $PidFile)) {
+  if ($null -eq $e) { continue }
+  $ep = 0
+  if (-not [int]::TryParse([string]$e.pid, [ref]$ep)) {
+    Write-Output ("SKIP {0} pid 非法：{1}（忽略该条记录，继续）" -f $e.role, $e.pid)
+    continue
+  }
+  if (Get-Process -Id $ep -ErrorAction SilentlyContinue) { $existing += $e }
+}
 if ($existing.Count -gt 0) {
   Write-Output ("RED: 已有存活角色（{0}）记录在 {1} —— 先跑 stop_mir2_server.ps1 再起" -f (
     (($existing | ForEach-Object { $_.role }) -join ',')), $PidFile)
@@ -307,6 +317,8 @@ if ($busy.Count -gt 0) {
 }
 
 # ---- 起栈：逐角色等待端口就绪；任一失败 => RED + 反向回滚已起角色。----
+# LogDir 只在实跑分支创建（-WhatIf 与前置失败都不得在部署根留目录/文件）。
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $started = @()
 try {
   foreach ($p in $plan) {
