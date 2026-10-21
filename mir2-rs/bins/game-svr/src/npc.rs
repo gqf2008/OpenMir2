@@ -612,6 +612,22 @@ pub struct NpcPlayer<'r> {
     pub bo_inc_game_gold: bool,
     /// `PlayObject.BoDecGameGold`（`PlayObject.cs:767`；ctor false）：脚本 193 的 STOP 写点。
     pub bo_dec_game_gold: bool,
+    /// `PlayObject.SaleDeal`（`PlayObject.cs:856`，**未初始化自动属性 ⇒ 默认 false**；
+    /// 全仓唯一赋值是 `ExecutionProcessingSys.cs:2346` 的 `= true`）——是否已开通元宝寄售。
+    ///
+    /// 读点：`ActionOfOpenSaleDeal` 前置（`ExecutionProcessingSys.cs:2334`）、
+    /// `UserSelectOpenDealOffForm`（`Merchant.cs:1040`）、`GoldDealService.cs:18`。
+    /// 唯一写点：`ActionOfOpenSaleDeal` 成功路径 `:2346`（**失败/已开通路径不写**）。
+    /// 生产侧唯一真源 = 宿主 [`game_svr::selloff::SellOffState::sale_deal`]：脚本跑前 seed、
+    /// 跑后写回（与 oracle 的同一个 `PlayObject` 字段同义）。
+    pub sale_deal: bool,
+    /// `PlayObject.PlayDiceLabel`（`PlayObject.cs:588`，**未初始化自动属性 ⇒ null**）。
+    ///
+    /// 写点：`ActionOfPlayDice`（`ExecutionProcessingSys.cs:2032`）写 `sParam2`；
+    /// 读点/清点：`LableIsCanJmp` 第三支（`PlayObject.Base.cs:2824-2828`，命中即
+    /// `PlayDiceLabel = string.Empty`，一次性）。`None` = C# `null`（永不匹配任何非 null 标签）。
+    /// 生产侧跨调用保持于宿主 `ShopSession::play_dice_label`。
+    pub play_dice_label: Option<String>,
 }
 
 impl NpcPlayer<'_> {
@@ -662,6 +678,10 @@ impl NpcPlayer<'_> {
             // `PlayObject.cs:965/970` 的 ctor 初值。
             bo_inc_game_gold: false,
             bo_dec_game_gold: false,
+            // C# 未初始化自动属性的默认值：SaleDeal=false（`PlayObject.cs:856`）、
+            // PlayDiceLabel=null（`:588`）——ctor 里没有对两者赋值。
+            sale_deal: false,
+            play_dice_label: None,
         }
     }
 }
@@ -963,8 +983,28 @@ impl ScriptPlayer for NpcPlayer<'_> {
     fn chr_name(&self) -> String {
         self.chr_name.clone()
     }
+    /// `playerActor.GameGold = v`（`BaseObject.GameGold`）：唯一生产写点
+    /// `ActionOfOpenSaleDeal` 成功扣费（`ExecutionProcessingSys.cs:2345`）；`GAMEGOLD`
+    /// 动作（`ActionOfGameGold`，`:3058-3083`，写点 `:3073/3078/3082`）同源。
+    /// 写回 `SessionGround.game_gold`（存档 `build_save_record` 已落 `rec.data.game_gold`）。
+    fn set_game_gold(&mut self, v: i32) {
+        self.game_gold = v;
+    }
     fn game_gold(&self) -> i32 {
         self.game_gold
+    }
+    /// `playerActor.SaleDeal`（`PlayObject.cs:856`，未初始化自动属性 ⇒ false）。
+    fn sale_deal(&self) -> bool {
+        self.sale_deal
+    }
+    /// `playerActor.SaleDeal = v`（唯一写点 `ExecutionProcessingSys.cs:2346`：OPENYBDEAL 成功）。
+    fn set_sale_deal(&mut self, v: bool) {
+        self.sale_deal = v;
+    }
+    /// `SystemShare.Config.GameGoldName`（`ServerConf.cs:108` 读 `[Names]/GameGold`；缺省
+    /// "元宝" `GameSvrConf.cs:1320`）：宿主经 [`NpcVars::game_gold_name`] 注入部署值。
+    fn config_game_gold_name(&self) -> String {
+        self.vars.game_gold_name.clone()
     }
     fn game_point(&self) -> i32 {
         self.game_point
@@ -977,6 +1017,15 @@ impl ScriptPlayer for NpcPlayer<'_> {
     }
     fn guild_name(&self) -> Option<String> {
         self.vars.guild_name.clone()
+    }
+    /// `playerActor.PlayDiceLabel = v`（`ActionOfPlayDice`，`ExecutionProcessingSys.cs:2032`；
+    /// `sParam2` 是客户端随后回跳的标签）。
+    fn set_play_dice_label(&mut self, label: &str) {
+        self.play_dice_label = Some(label.to_string());
+    }
+    /// `playerActor.PlayDiceLabel`（`LableIsCanJmp` 第三支取数口，`PlayObject.Base.cs:2824`）。
+    fn play_dice_label(&self) -> Option<String> {
+        self.play_dice_label.clone()
     }
     /// `NormNpc.GetLineVariableText`（`NormNpc.cs:245-273`）：
     /// 循环条件 `sMsg.IndexOf('>') >= 1`（**门：没有 `>` 或 `>` 在位置 0 ⇒ 立即中止**）；
@@ -1603,11 +1652,164 @@ mod tests {
     fn merchant_dialog_label_gate() {
         let labels = crate::shop::get_script_label("欢迎 <购买/@buy> <修理/@repair> <离开/@exit>");
         assert_eq!(labels, vec!["@buy", "@repair", "@exit"]);
-        assert!(crate::shop::lable_is_can_jmp(&labels, "@main"));
-        assert!(crate::shop::lable_is_can_jmp(&labels, "@BUY"));
-        assert!(!crate::shop::lable_is_can_jmp(&labels, "@upgradenow"));
+        let mut dice = None;
+        assert!(crate::shop::lable_is_can_jmp(&labels, &mut dice, "@main"));
+        assert!(crate::shop::lable_is_can_jmp(&labels, &mut dice, "@BUY"));
+        assert!(!crate::shop::lable_is_can_jmp(
+            &labels,
+            &mut dice,
+            "@upgradenow"
+        ));
         // 空的表只放行 `@main`（未说词前的冷直发）。
-        assert!(!crate::shop::lable_is_can_jmp(&[], "@repair"));
+        assert!(!crate::shop::lable_is_can_jmp(&[], &mut dice, "@repair"));
+    }
+
+    /// 商人的 `ScriptInfo`：每个 label 带一条动作（`QuestActionInfo`，`n_cmd_code` =
+    /// `codes.rs` 的 `field_index`，与 C# 枚举值相等）。
+    fn merchant_script_with_actions(
+        pairs: &[(&str, &str, Vec<mir2_script::QuestActionInfo>)],
+    ) -> ScriptInfo {
+        ScriptInfo {
+            is_quest: false,
+            quest_info: Default::default(),
+            record_list: pairs
+                .iter()
+                .map(|(label, say, actions)| SayingRecord {
+                    s_label: (*label).to_string(),
+                    procedure_list: vec![SayingProcedure {
+                        condition_list: Vec::new(),
+                        action_list: actions.clone(),
+                        else_action_list: Vec::new(),
+                        s_say_msg: (*say).to_string(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                })
+                .collect(),
+            quest_count: 0,
+        }
+    }
+
+    fn book_with_actions(
+        actor_id: i32,
+        chr_name: &str,
+        pairs: &[(&str, &str, Vec<mir2_script::QuestActionInfo>)],
+    ) -> MerchantScriptBook {
+        let mut book = MerchantScriptBook::new(30);
+        book.insert(MerchantNpc {
+            def: NpcDef {
+                chr_name: chr_name.to_string(),
+                file_path: "Market_Def".to_string(),
+                script_name: Some("寄售商-0103".to_string()),
+                is_hide: false,
+                is_quest: false,
+                scripts: vec![merchant_script_with_actions(pairs)],
+                loaded: true,
+                actor_id,
+            },
+            price_rate: 100,
+            castle: None,
+            map_name: "0103".to_string(),
+            curr_x: 9,
+            curr_y: 12,
+        });
+        book
+    }
+
+    fn act(code: i32, p1: &str, p2: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: code,
+            s_param1: p1.into(),
+            s_param2: p2.into(),
+            ..Default::default()
+        }
+    }
+
+    /// **T-142 宿主接线（牙 a）**：`PLAYDICE`（`ActionOfPlayDice`，
+    /// `ExecutionProcessingSys.cs:2030-2034`）把 `sParam2` 写进 `PlayObject.PlayDiceLabel`
+    /// （`PlayObject.cs:588`）并下发 `RM_PLAYDICE`；客户端随后回跳该标签时
+    /// `LableIsCanJmp` 第三支（`PlayObject.Base.cs:2824-2828`）放行**一次**。
+    ///
+    /// 牙：删掉 `NpcPlayer::set_play_dice_label` 覆写（回落 trait 默认 no-op）⇒
+    /// 第一条断言红（永远 `None`）。
+    #[test]
+    fn t142_play_dice_label_lands_in_host_and_is_consumed_once() {
+        let book = book_with_actions(
+            9,
+            "掷骰商",
+            &[("@main", r"掷骰子\ <返回/@main>", vec![act(42, "", "@dice")])],
+        );
+        let mut rng = no_rng();
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.chr_name = "张三".to_string();
+        book.goto_label(9, &mut p, "@main", false)
+            .expect("商人已装载");
+        assert_eq!(
+            p.play_dice_label(),
+            Some("@dice".to_string()),
+            "PLAYDICE 的 sParam2 必须落到宿主（trait 默认 no-op 会永远 None）"
+        );
+        // 同一动作还下发 `RM_PLAYDICE(10500)`（`ExecutionProcessingSys.cs:2033`）。
+        assert!(
+            p.frames.iter().any(|f| f.ident == 10500),
+            "RM_PLAYDICE 帧必须下发：{:?}",
+            p.frames
+        );
+        // 客户端把 `<.../@dice>` 发回：第三支命中并**一次性消费**（清成 string.Empty）。
+        let mut label = p.play_dice_label();
+        assert!(crate::shop::lable_is_can_jmp(&[], &mut label, "@DICE"));
+        assert_eq!(label, Some(String::new()), "命中即清 `string.Empty`");
+        assert!(
+            !crate::shop::lable_is_can_jmp(&[], &mut label, "@dice"),
+            "PlayDiceLabel 只能用一次"
+        );
+    }
+
+    /// **T-142 宿主接线（牙 c）**：`OPENYBDEAL`（`ActionOfOpenSaleDeal`，
+    /// `ExecutionProcessingSys.cs:2329-2357`）成功路径扣 `GameGold`（`:2345`）并置
+    /// `SaleDeal = true`（`:2346`）；已开通（`:2334-2338`）与不足（`:2349-2353`）两路
+    /// **不动** `SaleDeal`/`GameGold`。不足提示用宿主注入的 `GameGoldName`（`ServerConf.cs:108`）。
+    ///
+    /// 牙：删掉 `NpcPlayer::set_sale_deal` 的 `self.sale_deal = v` ⇒ 成功路径断言红。
+    #[test]
+    fn t142_openybdeal_sale_deal_and_game_gold_side_effects() {
+        let book = book_with_actions(
+            11,
+            "寄售商",
+            &[(
+                "@open",
+                r"开通结果\ <返回/@main>",
+                vec![act(342, "100", "")],
+            )],
+        );
+        let mut rng = no_rng();
+        // 成功：150 >= 100 ⇒ 扣 100 + SaleDeal=true。
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.chr_name = "张三".to_string();
+        p.game_gold = 150;
+        book.goto_label(11, &mut p, "@open", false)
+            .expect("商人已装载");
+        assert!(p.sale_deal(), "成功路径必须置 SaleDeal（`:2346`）");
+        assert_eq!(p.game_gold, 50, "成功路径扣 nGameGold（`:2345`）");
+        // 已开通：不扣费、不重写。
+        book.goto_label(11, &mut p, "@open", false).unwrap();
+        assert!(p.sale_deal());
+        assert_eq!(p.game_gold, 50, "已开通路径不得再扣费（`:2334-2338`）");
+        // 不足：SaleDeal 保持 false、GameGold 不动，提示用配置的 GameGoldName。
+        let mut p2 = NpcPlayer::empty(&mut rng);
+        p2.chr_name = "李四".to_string();
+        p2.game_gold = 99;
+        p2.vars.game_gold_name = "灵符".to_string();
+        book.goto_label(11, &mut p2, "@open", false).unwrap();
+        assert!(!p2.sale_deal(), "不足路径不得置 SaleDeal（`:2349-2353`）");
+        assert_eq!(p2.game_gold, 99);
+        assert!(
+            p2.frames
+                .iter()
+                .any(|f| f.msg.as_deref().is_some_and(|m| m.contains("灵符"))),
+            "不足提示必须用宿主注入的 GameGoldName（默认只给 \"元宝\"）：{:?}",
+            p2.frames
+        );
     }
 
     /// **C6 `merchant_repair_ok_label`**：修理成功后 `GotoLable("~@repair")` / `"~@s_repair"`

@@ -436,11 +436,10 @@ pub(crate) fn handle_select(
     }
     // `LableIsCanJmp(sLabel)`（`PlayObject.Base.cs:2814-2826`）⇒ 不可跳则 `GotoLable` 后 return。
     let can_jmp = {
-        let labels = shop_sessions
-            .get(chr_name)
-            .map(|s| s.can_jmp_labels.clone())
-            .unwrap_or_default();
-        game_svr::shop::lable_is_can_jmp(&labels, label)
+        // `LableIsCanJmp`（`PlayObject.Base.cs:2814-2828`）第三支读/清 `PlayDiceLabel`
+        // （`PlayObject.cs:588`）；会话态在 `ShopSession::play_dice_label`。
+        let ss = shop_sessions.entry(chr_name.to_string()).or_default();
+        game_svr::shop::lable_is_can_jmp(&ss.can_jmp_labels, &mut ss.play_dice_label, label)
     };
     if !can_jmp {
         glog!(

@@ -1471,13 +1471,41 @@ pub fn get_backupgnow_outcome(
     }
 }
 
-/// `PlayObject.LableIsCanJmp`（`PlayObject.Base.cs:2814-2826`）：`@main` **恒可跳**；
-/// 其余标签须在「最近一次说词」重建的 `CanJmpScriptLableMap` 里（`OrdinalIgnoreCase`）。
+/// `PlayObject.LableIsCanJmp`（`PlayObject.Base.cs:2814-2829`）的 1:1 移植：**按序**三支，
+/// 比较一律 `OrdinalIgnoreCase`（`eq_label`）：
 ///
-/// `PlayDiceLabel`（掷骰）本仓未建模 ⇒ 恒空、不参与判定（登记）。
+/// 1. `@main` **恒可跳**（`Base.cs:2816-2819`，先于其它两支，且**不消费** `PlayDiceLabel`）；
+/// 2. 「最近一次说词」重建的 `CanJmpScriptLableMap` 命中（`Base.cs:2820-2823`）；
+/// 3. `PlayDiceLabel` 命中（`Base.cs:2824-2828`）⇒ **一次性**：命中即清成 `string.Empty`
+///    再放行（掷骰结果标签只能用一次）。
+///
+/// 第三支的取数口是 `&mut Option<String>`：`None` = C# 未初始化自动属性 `null`
+/// （`PlayObject.cs:588`），`string.Compare(sLabel, null)` 对任何非 null 标签都 != 0
+/// ⇒ **`None` 永不匹配**（与 `Some("")` 不等价：后者只匹配空标签）。宿主把
+/// `PlayObject.PlayDiceLabel` 存在 `ShopSession::play_dice_label`，跨对话调用保持。
 #[must_use]
-pub fn lable_is_can_jmp(can_jmp_labels: &[String], label: &str) -> bool {
-    eq_label(label, "@main") || can_jmp_labels.iter().any(|l| eq_label(l, label))
+pub fn lable_is_can_jmp(
+    can_jmp_labels: &[String],
+    play_dice_label: &mut Option<String>,
+    label: &str,
+) -> bool {
+    // ① `Base.cs:2816`：`string.Compare(sLabel, "@main", OrdinalIgnoreCase) == 0 ⇒ true`。
+    if eq_label(label, "@main") {
+        return true;
+    }
+    // ② `Base.cs:2820`：`CanJmpScriptLableMap.ContainsKey(sLabel) ⇒ true`。
+    if can_jmp_labels.iter().any(|l| eq_label(l, label)) {
+        return true;
+    }
+    // ③ `Base.cs:2824-2828`：`string.Compare(sLabel, PlayDiceLabel, OrdinalIgnoreCase) == 0`
+    //    ⇒ `PlayDiceLabel = string.Empty; return true;`（一次性）。
+    if let Some(dice_label) = play_dice_label.as_deref() {
+        if eq_label(dice_label, label) {
+            *play_dice_label = Some(String::new());
+            return true;
+        }
+    }
+    false
 }
 
 /// `PlayObject.GetScriptLabel`（`PlayObject.Base.cs:2775-2807`）的标签抽取：
@@ -1608,12 +1636,39 @@ mod tests {
             vec!["@upgradenow".to_string(), "@exit".to_string()],
             "只收 `/` 之后的段，且去重保序"
         );
-        assert!(lable_is_can_jmp(&[], "@main"), "@main 恒可跳");
-        assert!(!lable_is_can_jmp(&[], "@upgradenow"), "未展示 ⇒ 不可跳");
+        let mut dice = None;
+        assert!(lable_is_can_jmp(&[], &mut dice, "@main"), "@main 恒可跳");
         assert!(
-            lable_is_can_jmp(&got, "@upgradenow"),
+            !lable_is_can_jmp(&[], &mut dice, "@upgradenow"),
+            "未展示 ⇒ 不可跳"
+        );
+        assert!(
+            lable_is_can_jmp(&got, &mut dice, "@upgradenow"),
             "展示过 ⇒ 可跳（OrdinalIgnoreCase 由 eq_label 保证）"
         );
+    }
+
+    /// `LableIsCanJmp` 第三支（`PlayObject.Base.cs:2824-2828`）：`PlayDiceLabel` 命中 ⇒ 放行并
+    /// **一次性清空**（`PlayDiceLabel = string.Empty`）；`None`（C# 未初始化 = null）永不匹配；
+    /// `@main` 支先于第三支且**不消费**它。
+    ///
+    /// 牙：删掉第三支 ⇒ 本用例红（`@DICE` 不再可跳、`@dice` 第二次仍可跳）。
+    #[test]
+    fn play_dice_label_branch_is_one_shot_and_none_never_matches() {
+        let mut none: Option<String> = None;
+        assert!(!lable_is_can_jmp(&[], &mut none, ""));
+        assert_eq!(none, None, "`None` 不参与比较、不被改写");
+        let mut dice = Some("@dice".to_string());
+        assert!(
+            lable_is_can_jmp(&[], &mut dice, "@DICE"),
+            "OrdinalIgnoreCase 命中"
+        );
+        assert_eq!(dice, Some(String::new()), "命中即清 `string.Empty`");
+        assert!(!lable_is_can_jmp(&[], &mut dice, "@dice"), "只能跳一次");
+        // `@main` 分支（`Base.cs:2816`）先于第三支，且不消费 `PlayDiceLabel`。
+        let mut dice = Some("@main".to_string());
+        assert!(lable_is_can_jmp(&[], &mut dice, "@main"));
+        assert_eq!(dice, Some("@main".to_string()), "`@main` 分支不消费");
     }
 
     use super::*;

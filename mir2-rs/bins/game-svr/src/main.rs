@@ -3721,6 +3721,7 @@ fn handle_click_npc_cmd(
     world: &mut mir2_world::World,
     merchant_book: &game_svr::npc::MerchantScriptBook,
     shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
     npc_vars: &game_svr::npc::NpcVars,
     catalog: &dyn game_svr::ability::ItemCatalog,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -3807,6 +3808,9 @@ fn handle_click_npc_cmd(
                 npc_player_from_session(&mut rngf, chr_name, sg, &map_text, catalog, npc_vars);
             player.script_index = session.script_index;
             player.last_npc = session.last_npc;
+            // `@main` 里也可能出现 `OPENYBDEAL`/`PLAYDICE`：与商人对话路径同一 seed 口径。
+            let sell_off = sell_off_sessions.entry(chr_name.to_string()).or_default();
+            seed_player_gold_deal(&mut player, session, sell_off);
             if let Some(says) = merchant_book.goto_label(npc_actor_id, &mut player, "@main", false)
             {
                 // `GotoLableSendMerChantSayMsg` → `playerActor.GetScriptLabel(sMsg)`
@@ -3824,6 +3828,7 @@ fn handle_click_npc_cmd(
             session.last_npc = player.last_npc;
             // `MNMval` 是 `$STR(M*)` 与 `<QUERYVAL>` 共用数组（`PlayObject.cs:543`）⇒ 写回会话。
             write_back_player_mnmval(&player, sg);
+            write_back_player_gold_deal(&player, sg, session, sell_off);
         }
         world.rng = rng;
         glog!(
@@ -3959,6 +3964,7 @@ fn dispatch_inbound_p0(
     guild: Option<&mut GuildDisconnect<'_>>,
     merchant_book: &game_svr::npc::MerchantScriptBook,
     shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
     npc_vars: &game_svr::npc::NpcVars,
 ) -> bool {
     if cmd.ident == mir2_protocol::messages::CM_QUERYUSERNAME {
@@ -3998,6 +4004,7 @@ fn dispatch_inbound_p0(
             world,
             merchant_book,
             shop_sessions,
+            sell_off_sessions,
             npc_vars,
             catalog,
             gates,
@@ -4506,7 +4513,13 @@ fn handle_shop_cmd(
             // 只有 `@main` 或「最近一次说词里出现过」的标签才允许命令派发；否则 oracle 在
             // `GotoLable`（无同名脚本标签 ⇒ 无动作）后 `return`，**整段派发跳过**。
             // 这是可达性差异（构造客户端直发 `@upgradenow`：oracle 丢弃，本侧同样丢弃）。
-            let bo_can_jmp = game_svr::shop::lable_is_can_jmp(&session.can_jmp_labels, label);
+            // 第三支 `PlayDiceLabel`（`PlayObject.Base.cs:2824-2828`）读的是**会话态**：
+            // 上一次 `GotoLable` 里 `PLAYDICE` 动作写下的标签，命中即被消费（清成 `""`）。
+            let bo_can_jmp = game_svr::shop::lable_is_can_jmp(
+                &session.can_jmp_labels,
+                &mut session.play_dice_label,
+                label,
+            );
             // `Merchant.cs:808`：`GotoLable(playObject, ActorId, sLabel, !boCanJmp)` —— 在
             // `!boCanJmp` 的 return **之前**执行（说词照出）。
             let map_text = pmap.to_string();
@@ -4523,6 +4536,7 @@ fn handle_shop_cmd(
                 catalog,
                 npc_vars,
                 session,
+                sell_off_sessions.entry(chr_name.to_string()).or_default(),
                 &mut rng,
             );
             world.rng = rng;
@@ -4561,6 +4575,7 @@ fn handle_shop_cmd(
                     catalog,
                     npc_vars,
                     session,
+                    sell_off_sessions.entry(chr_name.to_string()).or_default(),
                     &mut rng,
                 );
                 world.rng = rng;
@@ -4932,6 +4947,7 @@ fn handle_shop_cmd(
                     catalog,
                     npc_vars,
                     session,
+                    sell_off_sessions.entry(chr_name.to_string()).or_default(),
                     &mut rng,
                 );
                 world.rng = rng;
@@ -5262,6 +5278,35 @@ fn write_back_player_mnmval(p: &game_svr::npc::NpcPlayer<'_>, sg: &mut SessionGr
     }
 }
 
+/// oracle 里 `SaleDeal` / `PlayDiceLabel` 就是 `PlayObject` 自身的字段（`PlayObject.cs:856/588`），
+/// 跨 `GotoLable` 天然存活；本仓的 `NpcPlayer` 是**每次脚本调用重建的快照**，因此：
+/// 脚本跑前从会话态 seed、跑后写回。真源：
+/// - `SaleDeal` ⇒ [`game_svr::selloff::SellOffState::sale_deal`]（`selloff.rs` 各入口读它）；
+/// - `PlayDiceLabel` ⇒ [`ShopSession::play_dice_label`]。
+fn seed_player_gold_deal(
+    p: &mut game_svr::npc::NpcPlayer<'_>,
+    session: &ShopSession,
+    sell_off: &game_svr::selloff::SellOffState,
+) {
+    p.sale_deal = sell_off.sale_deal;
+    p.play_dice_label = session.play_dice_label.clone();
+}
+
+/// 见 [`seed_player_gold_deal`]：把脚本对 `SaleDeal`/`PlayDiceLabel`/`GameGold` 的写入落回会话。
+///
+/// `GameGold` 的真源是 [`SessionGround::game_gold`]（`OPENYBDEAL` 成功扣费
+/// `ExecutionProcessingSys.cs:2345` 与 `GAMEGOLD` 动作共用同一字段）。
+fn write_back_player_gold_deal(
+    p: &game_svr::npc::NpcPlayer<'_>,
+    sg: &mut SessionGround,
+    session: &mut ShopSession,
+    sell_off: &mut game_svr::selloff::SellOffState,
+) {
+    sell_off.sale_deal = p.sale_deal;
+    session.play_dice_label = p.play_dice_label.clone();
+    sg.game_gold = p.game_gold;
+}
+
 /// `NormNpc.UserSelect` 的**标签账本**半边（`NormNpc.cs:1632-1658`）：`ScriptGotoCount=0`
 /// 由每次新建的 [`game_svr::npc::NpcPlayer`] 表达；本函数只维护
 /// `ScriptCurrLable/ScriptGoBackLable`（`OrdinalIgnoreCase`）。
@@ -5287,6 +5332,7 @@ fn run_merchant_goto(
     catalog: &dyn game_svr::ability::ItemCatalog,
     npc_vars: &game_svr::npc::NpcVars,
     session: &mut ShopSession,
+    sell_off: &mut game_svr::selloff::SellOffState,
     rng: &mut mir2_shared::rng::RandomNumber,
 ) -> Vec<game_svr::npc::SayMsg> {
     let mut rngf = |v: i32| rng.random_below(v);
@@ -5294,12 +5340,16 @@ fn run_merchant_goto(
         npc_player_from_session(&mut rngf, chr_name, &*sg, map_text, catalog, npc_vars);
     player.script_index = session.script_index;
     player.last_npc = session.last_npc;
+    // oracle 的同一个 `PlayObject` 字段：脚本跑前 seed（`OPENYBDEAL` 读 `SaleDeal`，
+    // `LableIsCanJmp` 读 `PlayDiceLabel`）。
+    seed_player_gold_deal(&mut player, session, sell_off);
     let says = book
         .goto_label(merchant_actor_id, &mut player, label, bo_ext_jmp)
         .unwrap_or_default();
     session.script_index = player.script_index;
     session.last_npc = player.last_npc;
     write_back_player_mnmval(&player, sg);
+    write_back_player_gold_deal(&player, sg, session, sell_off);
     says
 }
 
@@ -13368,6 +13418,12 @@ struct ShopSession {
     script_index: Option<usize>,
     /// `PlayObject.LastNpc`（`ScriptEngine.cs:41-44`）。
     last_npc: i32,
+    /// `PlayObject.PlayDiceLabel`（`PlayObject.cs:588`，未初始化自动属性 = **null**）。
+    ///
+    /// 写点 `ActionOfPlayDice`（`ExecutionProcessingSys.cs:2032`，经
+    /// `NpcPlayer::set_play_dice_label`）；读点/清点 = `LableIsCanJmp` 第三支
+    /// （`PlayObject.Base.cs:2824-2828`：命中即清 `string.Empty`，一次性）。跨对话调用保持。
+    play_dice_label: Option<String>,
 }
 
 /// 一个在线角色的**地面交互会话态**（`CM_PICKUP`/`CM_DROPITEM` 用）。
@@ -16506,6 +16562,7 @@ fn sim_loop(
                         }),
                         &merchant_book,
                         &mut shop_sessions,
+                        &mut sell_off_sessions,
                         &npc_vars_base,
                     ) {
                         // 入站 P0 批（R1 前六条：CM_QUERYUSERNAME/CM_QUERYUSERSTATE/CM_QUERYUSERSET/
@@ -21556,6 +21613,47 @@ mod tests {
             write_back_player_mnmval(&p, &mut sg);
         }
         assert_eq!(sg.mnm_val[9], 78, "脚本写回的 MNMval 必须回到会话");
+    }
+
+    /// **T-142 宿主会话接线**：`SaleDeal` / `PlayDiceLabel` / `GameGold` 在 oracle 里是
+    /// 同一个 `PlayObject` 的字段（`PlayObject.cs:856/588`），跨 `GotoLable` 天然存活；
+    /// 本仓每次 `GotoLable` 重建 `NpcPlayer` ⇒ 必须 seed + write-back，否则
+    /// `OPENYBDEAL`（`ExecutionProcessingSys.cs:2345/2346`）/`PLAYDICE`（`:2032`）的副作用
+    /// 会在本次调用结束时被丢弃。
+    ///
+    /// 红检：删掉 `write_back_player_gold_deal` 的任一行 / `seed_player_gold_deal` 的任一行
+    /// ⇒ 对应断言红。
+    #[test]
+    fn t142_gold_deal_seed_and_write_back_round_trip() {
+        use mir2_script::engine::ScriptPlayer as _;
+        let mut sg = test_session_ground(1);
+        sg.game_gold = 150;
+        let mut session = ShopSession::default();
+        let mut sell_off = game_svr::selloff::SellOffState::default();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let vars = game_svr::npc::NpcVars::default();
+        let mut rng = |_v: i32| 0;
+        {
+            let mut p = npc_player_from_session(&mut rng, "hero", &sg, "0", &catalog, &vars);
+            // 脚本 `PLAYDICE ... @dice` / `OPENYBDEAL 100` 的落点。
+            p.set_play_dice_label("@dice");
+            p.set_sale_deal(true);
+            p.set_game_gold(50);
+            write_back_player_gold_deal(&p, &mut sg, &mut session, &mut sell_off);
+        }
+        assert!(sell_off.sale_deal, "SaleDeal 写回 `SellOffState`（真源）");
+        assert_eq!(session.play_dice_label.as_deref(), Some("@dice"));
+        assert_eq!(sg.game_gold, 50, "GameGold 写回会话（OPENYBDEAL 扣费）");
+        // 反向：会话 → `NpcPlayer`（下一次 `GotoLable` 必须看到上一次的副作用）。
+        let mut rng = |_v: i32| 0;
+        let mut p = npc_player_from_session(&mut rng, "hero", &sg, "0", &catalog, &vars);
+        seed_player_gold_deal(&mut p, &session, &sell_off);
+        assert!(
+            p.sale_deal(),
+            "`ActionOfOpenSaleDeal` 的前置读必须看到已开通"
+        );
+        assert_eq!(p.play_dice_label(), Some("@dice".to_string()));
+        assert_eq!(p.game_gold, 50);
     }
 
     /// **施法用例**的会话态：真冻结客户端的 `PlayObject.SoftVersionDateEx != 0`
@@ -33622,6 +33720,7 @@ mod tests {
                 &mut world,
                 &game_svr::npc::MerchantScriptBook::default(),
                 &mut HashMap::new(),
+                &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
                 &gates,
@@ -33640,6 +33739,7 @@ mod tests {
                 &mut sessions,
                 &mut world,
                 &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
@@ -33663,6 +33763,7 @@ mod tests {
                 &mut sessions,
                 &mut world,
                 &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
@@ -33688,6 +33789,7 @@ mod tests {
                 &mut world,
                 &game_svr::npc::MerchantScriptBook::default(),
                 &mut HashMap::new(),
+                &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
                 &gates,
@@ -33705,6 +33807,7 @@ mod tests {
                 &mut sessions,
                 &mut world,
                 &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
@@ -33785,6 +33888,7 @@ mod tests {
                 None,
                 &game_svr::npc::MerchantScriptBook::default(),
                 &mut HashMap::new(),
+                &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
             ),
             "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
@@ -33822,6 +33926,7 @@ mod tests {
                 &catalog,
                 None,
                 &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
             ),
@@ -33890,6 +33995,7 @@ mod tests {
                 None,
                 &game_svr::npc::MerchantScriptBook::default(),
                 &mut HashMap::new(),
+                &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
             ),
             "CM_QUERYUSERNAME 属 P0 批"
@@ -33927,6 +34033,7 @@ mod tests {
             &catalog,
             None,
             &game_svr::npc::MerchantScriptBook::default(),
+            &mut HashMap::new(),
             &mut HashMap::new(),
             &game_svr::npc::NpcVars::default(),
         ));
@@ -34003,6 +34110,7 @@ mod tests {
                 &catalog,
                 None,
                 &game_svr::npc::MerchantScriptBook::default(),
+                &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
             ),
@@ -34103,6 +34211,7 @@ mod tests {
                 None,
                 &game_svr::npc::MerchantScriptBook::default(),
                 &mut HashMap::new(),
+                &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
             ),
             "CM_CLICKNPC 属 P0 批 ⇒ 派发返回 true"
@@ -34154,6 +34263,7 @@ mod tests {
                 None,
                 &game_svr::npc::MerchantScriptBook::default(),
                 &mut HashMap::new(),
+                &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
             ),
             "非 P0 ident ⇒ 返回 false"
@@ -34180,6 +34290,7 @@ mod tests {
             &catalog,
             None,
             &game_svr::npc::MerchantScriptBook::default(),
+            &mut HashMap::new(),
             &mut HashMap::new(),
             &game_svr::npc::NpcVars::default(),
         ));
@@ -34213,6 +34324,7 @@ mod tests {
             &catalog,
             None,
             &game_svr::npc::MerchantScriptBook::default(),
+            &mut HashMap::new(),
             &mut HashMap::new(),
             &game_svr::npc::NpcVars::default(),
         ));
