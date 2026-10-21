@@ -997,6 +997,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     elec_blizzard_range: i32::from(cfg.elec_blizzard_range),
                     mag_turn_undead_level: cfg.mag_turn_undead_level,
                     pk_flag_time: cfg.pk_flag_time,
+                    console_show_user_count_time:
+                        game_svr::castle::load_console_show_user_count_time(&conf),
                     cry_msg_f_color: cfg.cry_msg_f_color,
                     cry_msg_b_color: cfg.cry_msg_b_color,
                     can_shout_msg_level: cfg.can_shout_msg_level,
@@ -14074,6 +14076,9 @@ struct EnterConfig {
     hunger_system: bool,
     /// **PL-3 / P26**：`[Setup] HungerDecHP`（缺省 false；部署 `Server.conf:398` = 0）。
     hunger_dec_hp: bool,
+    /// **A-22 P3**：`[Setup] ConsoleShowUserCountTime`（`ServerConf.cs:586`；缺省
+    /// `GameSvrConf.cs:1439` 的 600000ms）——`SystemProcessor.ShowOnline` 的 10 分钟落盘门。
+    console_show_user_count_time: i64,
     /// 空 `HomeMap` 新角色的进图回落（`homemap::HomeFallback`，`WorldServer.cs:250-260`）。
     home: homemap::HomeFallback,
     /// `IsNewHuman` 的新手物品输入。
@@ -14208,6 +14213,7 @@ impl EnterConfig {
             revival_time: 60_000,
             hunger_system: false,
             hunger_dec_hp: false,
+            console_show_user_count_time: 600_000,
             home: homemap::HomeFallback {
                 start_points: Vec::new(),
                 start_point_size: 2,
@@ -15976,6 +15982,10 @@ fn sim_loop(
     let mut guild_run_tick = world.clock_ms as i32;
     // `CastleMgr.Run()` 的 10s 门基准（`SystemProcessor.cs:70-77`，与 `GuildMgr.Run` 同块、Guild 先）。
     let mut castle_run_tick = world.clock_ms;
+    // **A-22 P3**：`CastleMgr.Save` 的 10 分钟门基准（`SystemProcessor.cs:54-62` 的
+    // `ShowOnline`，与上面 10s 门**独立**；严格 `>`, 缺省 600000ms）。宿主存储随启动块建立。
+    let mut castle_save_tick = world.clock_ms;
+    let mut castle_store: Option<game_svr::castle::CastleStore> = None;
     // 每个在线玩家的 `InGuildWarArea` / `NameColorChanged` / `DiscountForNightTick`
     // （oracle `PlayObject` 会话位；本仓按 actor id 侧挂，生命周期随在线表清理）。
     let mut castle_war_states: std::collections::HashMap<i32, mir2_world::castle::CastleWarState> =
@@ -16282,8 +16292,8 @@ fn sim_loop(
     // **不是**夹具 `Castle/0`。RNG 走同一条 `world.rng`（`mem::replace` 移出/还回）。
     if let (Some(loader), Some(reg)) = (enter_cfg.loader.as_ref(), registry.as_ref()) {
         let castle_dir = enter_cfg.guild_castle_cfg.castle_dir.clone();
-        match game_svr::castle::load_sabuk_specs(loader, &castle_dir) {
-            Ok(specs) => match mon_gen_host.as_mut() {
+        match game_svr::castle::load_sabuk_config(loader, &castle_dir) {
+            Ok((cfg, specs)) => match mon_gen_host.as_mut() {
                 Some(host) => {
                     let mut rng = std::mem::replace(
                         &mut world.rng,
@@ -16309,13 +16319,74 @@ fn sim_loop(
                     for w in &report.warns {
                         glog!("WRN", "城堡初始化告警：{w}");
                     }
+                    // **A-22 P3（castle-persist-host）**：`CastleConf.LoadConfig` 的落盘状态
+                    // （`TotalGold/TodayIncome/WarDate/IncomeToday/CastleName`）灌进世界，
+                    // 再复刻 `CastleManager.Initialize` 的 `Save()`（`:77`）与 `LoadCastleList`
+                    // （`GameApp.cs:246`）。墙钟只在**宿主**注入（P1 的 `*_text` 只存不格式化）。
+                    let local = chrono::Local::now();
+                    let wall_clock = local.format("%Y-%m-%d %H:%M:%S").to_string();
+                    let now_date = mir2_world::castle::CastleDate::new(
+                        chrono::Datelike::year(&local),
+                        chrono::Datelike::month(&local),
+                        chrono::Datelike::day(&local),
+                    );
+                    let mut store = game_svr::castle::CastleStore::from_loader(
+                        loader,
+                        &enter_cfg.guild_castle_cfg,
+                        i32::from(enter_cfg.server_index),
+                    );
+                    let default_index = world.castles.len().saturating_sub(1);
+                    game_svr::castle::hydrate_castle(
+                        &mut world.castles[default_index],
+                        &cfg,
+                        Some(reg),
+                        &castle_dir,
+                        now_date,
+                        &wall_clock,
+                        i32::from(enter_cfg.server_index),
+                    );
+                    match store.load_base(&castle_dir) {
+                        Ok(base) => store.push_base(base),
+                        Err(e) => glog!("WRN", "城堡有序 base 读取失败：{e}"),
+                    }
+                    let persist = game_svr::castle::startup_finish(
+                        &mut store,
+                        &mut world.castles,
+                        &game_svr::castle::siege_config_from(&enter_cfg.guild_castle_cfg),
+                        &castle_dir,
+                    );
+                    glog!(
+                        "INF",
+                        "城堡持久化装载：List={} 城={} 启动申请行={} 惰性城={:?}",
+                        if persist.list_written { "OK" } else { "FAIL" },
+                        persist.castles.len(),
+                        persist.startup_attack_lines,
+                        persist.loaded
+                    );
+                    for e in persist
+                        .list_error
+                        .iter()
+                        .chain(persist.load_error.iter())
+                        .chain(persist.startup_attack_error.iter())
+                    {
+                        glog!("WRN", "城堡列表/申请表落盘/装载失败：{e}");
+                    }
+                    for outcome in &persist.castles {
+                        if let game_svr::castle::CastleFileOutcome::Failed(e) = &outcome.sabuk {
+                            glog!("ERR", "城堡 {} 写 SabukW 失败：{e}", outcome.index);
+                        }
+                        if let game_svr::castle::CastleFileOutcome::Failed(e) = &outcome.attack {
+                            glog!("ERR", "城堡 {} 写申请表失败：{e}", outcome.index);
+                        }
+                    }
+                    castle_store = Some(store);
                 }
                 None => glog!(
                     "WRN",
-                    "无 MonGen 刷怪宿主（无 Envir/MonGen.txt）⇒ 跳过城堡实体挂图（登记：oracle InitializeMonster 恒建线程表，部署件必有 MonGen.txt）"
+                    "无 MonGen 刷怪宿主（无 Envir/MonGen.txt）⇒ 跳过城堡实体挂图与持久化装载（登记：oracle InitializeMonster 恒建线程表，部署件必有 MonGen.txt）"
                 ),
             },
-            Err(e) => glog!("WRN", "{e} ⇒ 跳过城堡实体挂图（登记）"),
+            Err(e) => glog!("WRN", "{e} ⇒ 跳过城堡实体挂图与持久化装载（登记）"),
         }
     }
     // **M3⑤-实现 2 第①片**：`Envir/Merchant.txt` 装载 + O-1 FindMap 门 + O-2 `rename_rand`
@@ -18470,6 +18541,37 @@ fn sim_loop(
             &enter_cfg.guild_msg_cfg,
             i32::from(enter_cfg.server_index),
         );
+        // **A-22 P3 · `SystemProcessor.ShowOnline`**（`SystemProcessor.cs:54-62`）：
+        // `GetTickCount()-ShowOnlineTick > ConsoleShowUserCountTime`（**严格 `>`**，10 分钟门）⇒
+        // `CastleMgr.Save()`（`SaveCastleList` → 升序逐城 `SaveConfig` → `SaveAttackSabukWall`）。
+        // 与下面 10s 的 `ProcessGameRun` 门**独立**；oracle 在同一 tick 里先 ShowOnline 后
+        // ProcessGameRun ⇒ 本块放在 10s 块之前。
+        if let Some(store) = castle_store.as_ref() {
+            if game_svr::castle::castle_save_due(
+                world.clock_ms,
+                &mut castle_save_tick,
+                enter_cfg.console_show_user_count_time,
+            ) {
+                let report = game_svr::castle::save_all(store, &world.castles);
+                glog!(
+                    "INF",
+                    "城堡周期存档（10min 门）：List={} 城={}",
+                    if report.list_written { "OK" } else { "FAIL" },
+                    report.castles.len()
+                );
+                if let Some(e) = &report.list_error {
+                    glog!("ERR", "城堡列表存档失败：{e}");
+                }
+                for outcome in &report.castles {
+                    if let game_svr::castle::CastleFileOutcome::Failed(e) = &outcome.sabuk {
+                        glog!("ERR", "城堡 {} 写 SabukW 失败：{e}", outcome.index);
+                    }
+                    if let game_svr::castle::CastleFileOutcome::Failed(e) = &outcome.attack {
+                        glog!("ERR", "城堡 {} 写申请表失败：{e}", outcome.index);
+                    }
+                }
+            }
+        }
         // **G3**：10s 门 + `GuildManager.Run` + 30s `CheckSaveGuildFile`（`SystemProcessor.cs:70-77`）。
         // 收件人闭包只捕获 `&online`/`&world`/`ban` 快照（C-2：不得捕获 `ground_sessions`，否则 E0502）。
         {
@@ -18520,9 +18622,18 @@ fn sim_loop(
                                 }
                             }
                         }
-                        // `Broadcast`/`ServerGroupMsg`/`SaveAttackSabukWall`/`RefreshShowName`/
-                        // `Ref*` 帧的宿主排水尚未接线（登记 T-127）；单服部署 `UnderWar=false`
-                        // 时这些分支不可达。
+                        // **A-22 P3**：`UserCastle.Run` 的 `SaveAttackSabukWall()`（`UserCastle.cs:367`）
+                        // 立刻写 `Castle/<config_dir>/AttackSabukWall.txt`（运行期 `ConfigDir`；
+                        // 读侧仍是 ctor 路径，设计 §1.6）。单服部署 `UnderWar=false` 时不可达。
+                        mir2_world::castle::CastleEvent::SaveAttackSabukWall => {
+                            if let Some(store) = castle_store.as_ref() {
+                                if let Err(e) = store.save_attack(&world.castles[idx]) {
+                                    glog!("ERR", "城堡 {} 写申请表失败：{e}", idx);
+                                }
+                            }
+                        }
+                        // `Broadcast`/`ServerGroupMsg`/`RefreshShowName`/`Ref*` 帧的宿主排水尚未
+                        // 接线（登记 T-127）；单服部署 `UnderWar=false` 时这些分支不可达。
                         other => glog!("DBG", "城堡状态机事件（未接线）：{other:?}"),
                     }
                 }
