@@ -2668,13 +2668,20 @@ def cmd_mutate(args):
         for x in _sp:
             _cnt[x["name"]] = _cnt.get(x["name"], 0) + 1
         _uniq = {n for n, c in _cnt.items() if c == 1}
+        # 2026-10-21（单二进制搬迁）：同名函数可能按 **同文件** 多个 crate 各有一份
+        # （六角色都有 `run_inner`）⇒ 「全局唯一」会让 `run()` → `run_inner()` 这条边被丢弃、
+        # strict 可达集塌缩（真语料实测 2924 → 282）。同文件内定义的无歧义，属合法的严格边。
+        _by_file = {}
+        for x in _sp:
+            _by_file.setdefault(x["file"], set()).add(x["name"])
         _re_qual = re.compile(r"::\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(")
         _ed = {}
         for x in _sp:
             _body = NL.join(_lines[x["file"]][x["start"]:x["end"] + 1])
             _q = set(_re_qual.findall(_body))
+            _local = _by_file.get(x["file"], set())
             for nm in _RE_CALL_TOK.findall(_body):
-                if strict and not (nm in _uniq or nm in _q):
+                if strict and not (nm in _uniq or nm in _q or nm in _local):
                     continue
                 if nm != x["name"]:
                     _ed.setdefault(x["name"], set()).add(nm)
