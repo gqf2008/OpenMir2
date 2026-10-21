@@ -39,6 +39,16 @@ pub enum EnvirError {
         source: std::io::Error,
     },
 
+    /// `CastleConf.SaveConfig` 写侧的 `ReadWriteInt16` 等价：缓存里的值既不是数字、也超出 `short`
+    /// 范围时**显式报错**（oracle `ReadWriteInt16` → `Read<short>` → `Convert.ChangeType(str, typeof(short))`
+    /// 抛 `FormatException` / `OverflowException`，`ConfigFile.Load` 阶段即穿透）。
+    #[error("SabukW.txt 写侧 {section}.{key}={value} 不是合法 i16（对应 C# Convert.ChangeType(short) 异常）")]
+    SabukWInt16Invalid {
+        section: String,
+        key: String,
+        value: String,
+    },
+
     /// `Envir/MonGen.txt` 怪物名列走了 oracle `HUtil32.CaptureString` 的越界分支
     /// （C# 抛 `IndexOutOfRangeException`，`LocalDB.LoadMonGen` 无 try/catch 兜底）。
     #[error(

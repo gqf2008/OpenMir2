@@ -316,16 +316,25 @@ $ grep -rn "fn .*castle" mir2-rs/crates/storage/src -i | wc -l
 - **内容**：
   1. `IniOrdered`（新）：`Vec<(String, Vec<(String, String)>)>` + `parse_ordered(bytes)`，**逐条复刻 `ConfigFile.Load`**
      （空行/`;`/`/* */` 跳过；`;;` 段注释行；重复段 ⇒ 停止解析；同段重复键先到先得；值 `Trim`）；
-  2. `sabuk_w_write_back(cache: &mut IniOrdered)`：按 §1.3 的 `LoadConfig` **调用序**补默认键（缺则追加，已有则不动），
-     复刻 `ReadWrite*`；
-  3. `pub fn serialize_sabuk_w(base: &IniOrdered, overlay: &SabukWOverlay) -> Vec<u8>`：
+  2. `sabuk_w_write_back(cache: &mut IniOrdered, defaults: &SabukWDefaults)`：按 §1.3 的 `LoadConfig` **调用序**补默认键
+     （缺则追加，已有则不动），复刻 `ReadWrite*`。`CastleName/CastleHomeMap/CastleHomeX/Y/CastleWarRangeX/Y`
+     这六个缺键默认在 oracle 里取 `UserCastle` 构造器的 `SystemShare.Config.*`（`Server.conf` 可覆盖，
+     `GameSvrConf.cs:1782-1787`）⇒ 抽成 `SabukWDefaults` **参数**由 P3 注入；其余默认（`CastleMap="3"` 等）
+     是 oracle 字面量，仍用常量。读侧对应 `SabukWConfig::from_ini_with_defaults`。
+  3. `pub fn serialize_sabuk_w(base: &IniOrdered, overlay: &SabukWOverlay, defaults: &SabukWDefaults)
+     -> Result<Vec<u8>, EnvirError>`：
      按 §1.3「写」列逐键 `set_in_place_or_append`，最后按段序 + `\r\n` + 每段末空行输出，
-     `mir2_encoding::encode_gb2312_dotnet` 编码；
+     `mir2_encoding::encode_gb2312_dotnet` 编码。三个日期键写前按 `DateTime.Parse` 归一成
+     `yyyy-MM-dd HH:mm:ss`（`ConfigFile.WriteDateTime`，`ConfigFile.cs:449-459`；部署件
+     `0/SabukW.txt` 的 `1998-01-01` ⇒ `1998-01-01 00:00:00`）；`MainDoorX/Y` 与三面墙 `*WallX/Y`
+     按 `ReadWriteInt16`（`short`）解析，越界/非数字 ⇒ `EnvirError::SabukWInt16Invalid`
+     （oracle `Convert.ChangeType(short)` 抛异常，不许 i32 静默回落）。
   4. `pub struct SabukWOverlay { castle_name, own_guild, change_date, war_date, income_today,
      total_gold, today_income, envir_list, main_door: { present, hp }, walls: [Option<i32>; 3],
      archers: [(name, x, y, hp_or_zero); 12], guards: [(...); 12] }`（与 `crates/world` 解耦，纯 envir 类型）;
-  5. `pub fn write_sabuk_w(path, base, overlay) -> Result<(), EnvirError>`：`std::fs::write`（截断，非原子，
-     与 oracle `FileMode.Truncate` 同语义；**不要** temp+rename）；
+  5. `pub fn write_sabuk_w(path, base, overlay, defaults) -> Result<(), EnvirError>`：截断写（非原子，
+     与 oracle `FileMode.Truncate` 同语义；**不要** temp+rename），并复刻 `ConfigFile.Save` 的
+     父目录 `Directory.CreateDirectory` 与只读文件「临时清 `IsReadOnly`、写成功后恢复」（`ConfigFile.cs:353-365`）；
   6. `pub fn write_attack_sabuk_wall(path, entries)` / `write_castle_list(path, count)` 薄封装（复用已有 serializer），
      并**复刻"文件不存在则不建"**：打开失败 ⇒ `EnvirError::Io`
      （与 `crates/data/src/guild.rs:399-405` 的 `MissingSaveTarget` 同款）。
@@ -344,6 +353,11 @@ $ grep -rn "fn .*castle" mir2-rs/crates/storage/src -i | wc -l
     `total_gold=5` ⇒ 变 5；`RightWall` 不存在 ⇒ `RightWallHP` 保留 base 值；`Archer_1` 无 entity ⇒ `Archer_1_HP=0`
     但 `Archer_1_X/Y/Name` 仍写。
     **牙**：无条件写 0 ⇒ 第一条红；把 `Archer_i_HP` 写成配置 HP ⇒ 最后一条红。
+  - 复核回归（2026-10-21，`castle_writer.rs`）：`f1_sabuk_w_datetime_normalized`（F1 日期归一，夹具
+    `0/SabukW.txt`；牙 = 写侧退回原串）、`low1_sabuk_w_defaults_injected`（默认值注入；牙 = 退回常量）、
+    `low2_write_sabuk_w_creates_parent_dirs` / `low2_write_sabuk_w_toggles_readonly`（`ConfigFile.Save` 的
+    建目录/只读位；牙 = 去掉对应分支）、`low3_main_door_and_wall_xy_reject_out_of_short`（`short` 越界显式错误；
+    牙 = 退回 i32 静默回落）。
 - **tier**：**R**。`tier_why`：落盘逐字节（存档面）；构造级只能证明"自洽 + 规则表"，**与 C# 同字节必须真机窗口**
   （W-A22-1）。`window_required: true`。
 

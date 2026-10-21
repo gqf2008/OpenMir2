@@ -13,7 +13,8 @@
 use mir2_envir::{
     decode_config_text, parse_ordered, parse_sabuk_w_bytes, serialize_castle_list,
     serialize_sabuk_w, write_attack_sabuk_wall, write_castle_list, write_sabuk_w,
-    AttackSabukWallEntry, EnvirError, IniOrdered, SabukWOverlay, SabukWUnitOverlay,
+    AttackSabukWallEntry, EnvirError, IniOrdered, SabukWConfig, SabukWDefaults, SabukWOverlay,
+    SabukWUnitOverlay,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -22,6 +23,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 const DEPLOYED_CASTLE_SABUK_W_HEX: &str = include_str!("fixtures/SabukW-Castle.hex");
 const DEPLOYED_CASTLE_SABUK_W_SHA256: &str =
     "b84c26790c994ed0c8ab7d569c89f4edfb20f074e33f652995d386421b8dd053";
+
+/// 部署件 `Castle/0/SabukW.txt`（装载城；`ChangeDate=1998-01-01` / `WarDate=1998-01-01`）。
+/// 读侧证据夹具在 `mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-20261013/fixtures/`。
+const DEPLOYED_ZERO_SABUK_W_HEX: &str = include_str!(
+    "../../../tests/parity/m3/evidence-m3-castle-file-load-20261013/fixtures/SabukW-0.hex"
+);
 
 fn hex_bytes(hex: &str) -> Vec<u8> {
     let digits: Vec<u8> = hex.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
@@ -202,7 +209,7 @@ fn c_a22_3_sabuk_w_rewrite_idempotent() {
     // 读侧（`IniFile`/`HashMap`）与写侧（`IniOrdered`）两份独立解析互证。
     let cfg = parse_sabuk_w_bytes(&bytes);
     let overlay = SabukWOverlay::from_config(&cfg);
-    let out = serialize_sabuk_w(&base, &overlay);
+    let out = serialize_sabuk_w(&base, &overlay, &SabukWDefaults::default()).expect("同值回写");
 
     assert_eq!(out, bytes, "同值回写必须逐字节不变");
     assert_eq!(sha256_hex(&out), DEPLOYED_CASTLE_SABUK_W_SHA256);
@@ -215,7 +222,8 @@ fn c_a22_3_sabuk_w_rewrite_idempotent() {
 #[test]
 fn c_a22_4_sabuk_w_missing_keys_writeback() {
     let base = parse_ordered(b"[Setup]\r\nCastleName=x\r\n");
-    let out = serialize_sabuk_w(&base, &SabukWOverlay::default());
+    let out = serialize_sabuk_w(&base, &SabukWOverlay::default(), &SabukWDefaults::default())
+        .expect("缺键回写");
     let text = text_of(&out);
 
     assert_eq!(out.iter().filter(|b| **b == b'=').count(), 131, "131 个键");
@@ -248,7 +256,8 @@ fn c_a22_5_sabuk_w_duplicate_section_stops() {
     assert_eq!(base.sections().len(), 1, "重复段 ⇒ 停止解析");
     assert!(!base.contains_section("Defense"));
 
-    let out = serialize_sabuk_w(&base, &SabukWOverlay::default());
+    let out = serialize_sabuk_w(&base, &SabukWOverlay::default(), &SabukWDefaults::default())
+        .expect("缺键回写");
     let text = text_of(&out);
     assert_eq!(text.matches("[Defense]").count(), 1);
     assert_eq!(text.matches("[Setup]").count(), 1);
@@ -278,7 +287,8 @@ fn c_a22_6_sabuk_w_gbk_bytes() {
         }),
         ..SabukWOverlay::default()
     };
-    let out = serialize_sabuk_w(&IniOrdered::new(), &overlay);
+    let out = serialize_sabuk_w(&IniOrdered::new(), &overlay, &SabukWDefaults::default())
+        .expect("空 base 写回");
 
     // cp936：沙巴克 C9B3 B0CD BFCB；弓箭手 B9AD BCFD CAD6；守卫 CAD8 CEC0。
     let cp936: [&[u8]; 3] = [
@@ -330,7 +340,9 @@ fn c_a22_7_sabuk_w_conditional_values() {
         hp: 0, // 无实体 ⇒ HP 写 0
     };
 
-    let text = text_of(&serialize_sabuk_w(&base, &overlay));
+    let text = text_of(
+        &serialize_sabuk_w(&base, &overlay, &SabukWDefaults::default()).expect("条件值写回"),
+    );
     assert!(text.contains("TotalGold=9\r\n"), "0 不覆盖旧值");
     assert!(text.contains("RightWallHP=777\r\n"), "无实体不写 HP");
     assert!(text.contains("Archer_1_HP=0\r\n"), "无实体 HP 写 0");
@@ -339,7 +351,9 @@ fn c_a22_7_sabuk_w_conditional_values() {
     assert!(text.contains("Archer_1_Name=弓箭手\r\n"));
 
     overlay.total_gold = 5;
-    let text5 = text_of(&serialize_sabuk_w(&base, &overlay));
+    let text5 = text_of(
+        &serialize_sabuk_w(&base, &overlay, &SabukWDefaults::default()).expect("gold=5 写回"),
+    );
     assert!(text5.contains("TotalGold=5\r\n"), "非 0 覆盖");
     assert!(!text5.contains("TotalGold=9"));
 }
@@ -405,12 +419,23 @@ fn write_sabuk_w_truncates_and_creates() {
     let bytes = deployed_bytes();
     let base = parse_ordered(&bytes);
     let overlay = SabukWOverlay::from_config(&parse_sabuk_w_bytes(&bytes));
-    write_sabuk_w(&path, &base, &overlay).expect("新建并写入");
+    write_sabuk_w(&path, &base, &overlay, &SabukWDefaults::default()).expect("新建并写入");
     assert_eq!(std::fs::read(&path).expect("读回"), bytes);
 
     // 再写一份更短的最小输出 ⇒ 旧内容必须被截断（非原子原地截断，oracle 同）。
-    let small = serialize_sabuk_w(&IniOrdered::new(), &SabukWOverlay::default());
-    write_sabuk_w(&path, &IniOrdered::new(), &SabukWOverlay::default()).expect("覆盖写");
+    let small = serialize_sabuk_w(
+        &IniOrdered::new(),
+        &SabukWOverlay::default(),
+        &SabukWDefaults::default(),
+    )
+    .expect("最小输出");
+    write_sabuk_w(
+        &path,
+        &IniOrdered::new(),
+        &SabukWOverlay::default(),
+        &SabukWDefaults::default(),
+    )
+    .expect("覆盖写");
     let on_disk = std::fs::read(&path).expect("读回");
     assert_eq!(on_disk, small);
     assert!(on_disk.len() < bytes.len());
@@ -470,4 +495,216 @@ fn write_castle_list_requires_existing_file() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **F1（复核）**：`WriteDateTime` 归一——`DateTime.Parse` 后按 `yyyy-MM-dd HH:mm:ss` 写出。
+///
+/// 部署件 `0/SabukW.txt` 的 `ChangeDate=1998-01-01` / `WarDate=1998-01-01` 在 oracle 里
+/// 回写成 `1998-01-01 00:00:00`（每键 +9 字节，两键共 +18）。
+///
+/// 牙：写侧保持原串（`normalize_sabuk_w_datetime` 退回 `raw`）⇒ 归一断言与
+/// `!contains("ChangeDate=1998-01-01\r\n")` 都红。
+#[test]
+fn f1_sabuk_w_datetime_normalized() {
+    let bytes = hex_bytes(DEPLOYED_ZERO_SABUK_W_HEX);
+    let cfg = parse_sabuk_w_bytes(&bytes);
+    // 读侧仍保留原始串（`DateTime.Parse` 之前）。
+    assert_eq!(cfg.change_date.as_deref(), Some("1998-01-01"));
+    assert_eq!(cfg.war_date.as_deref(), Some("1998-01-01"));
+    assert_eq!(cfg.income_today.as_deref(), Some("2021-08-23 15:31:29"));
+
+    let base = parse_ordered(&bytes);
+    let overlay = SabukWOverlay::from_config(&cfg);
+    let text = text_of(
+        &serialize_sabuk_w(&base, &overlay, &SabukWDefaults::default()).expect("0/SabukW 写回"),
+    );
+
+    assert!(
+        text.contains("ChangeDate=1998-01-01 00:00:00\r\n"),
+        "`yyyy-MM-dd` 必须补成 `yyyy-MM-dd 00:00:00`"
+    );
+    assert!(text.contains("WarDate=1998-01-01 00:00:00\r\n"));
+    assert!(text.contains("IncomeToday=2021-08-23 15:31:29\r\n"));
+    assert!(
+        !text.contains("ChangeDate=1998-01-01\r\n"),
+        "原串必须被归一（否则每键少 9 字节）"
+    );
+
+    // `yyyy/M/d`、`T` 分隔、小数秒、两位字段：`DateTime.Parse` 兼容面。
+    let overlay = SabukWOverlay {
+        change_date: "1998/1/2".to_string(),
+        war_date: "1998/01/02 3:4:5".to_string(),
+        income_today: "2021-08-23T15:31:29.123".to_string(),
+        ..SabukWOverlay::default()
+    };
+    let text = text_of(
+        &serialize_sabuk_w(&IniOrdered::new(), &overlay, &SabukWDefaults::default())
+            .expect("归一写回"),
+    );
+    assert!(text.contains("ChangeDate=1998-01-02 00:00:00\r\n"));
+    assert!(text.contains("WarDate=1998-01-02 03:04:05\r\n"));
+    assert!(text.contains("IncomeToday=2021-08-23 15:31:29\r\n"));
+}
+
+/// **Low-1（复核）**：六个配置面缺键默认值由调用方注入（oracle 取 `SystemShare.Config.*`，
+/// `Server.conf` 可覆盖），不是编译期常量。
+///
+/// 牙：把 `write_effective_string/int` 与 `sabuk_w_write_back` 的默认值写回常量 ⇒ 前六条红。
+#[test]
+fn low1_sabuk_w_defaults_injected() {
+    let defaults = SabukWDefaults {
+        castle_name: "自定义城".to_string(),
+        home_map: "5".to_string(),
+        home_x: 111,
+        home_y: 222,
+        war_range_x: 333,
+        war_range_y: 444,
+    };
+    let base = parse_ordered(b"[Setup]\r\nOwnGuild=\r\n");
+    let text = text_of(
+        &serialize_sabuk_w(&base, &SabukWOverlay::default(), &defaults).expect("注入默认写回"),
+    );
+    assert!(text.contains("CastleName=自定义城\r\n"));
+    assert!(text.contains("CastleHomeMap=5\r\n"));
+    assert!(text.contains("CastleHomeX=111\r\n"));
+    assert!(text.contains("CastleHomeY=222\r\n"));
+    assert!(text.contains("CastleWarRangeX=333\r\n"));
+    assert!(text.contains("CastleWarRangeY=444\r\n"));
+
+    // 读侧同一个 `LoadConfig` 缺键分支也要吃注入值。
+    let cfg = SabukWConfig::from_ini_with_defaults(
+        &mir2_data::exps::IniFile::from_bytes(b"[Setup]\r\n"),
+        &defaults,
+    );
+    assert_eq!(cfg.castle_name, "自定义城");
+    assert_eq!(cfg.home_map, "5");
+    assert_eq!((cfg.home_x, cfg.home_y), (111, 222));
+    assert_eq!((cfg.war_range_x, cfg.war_range_y), (333, 444));
+}
+
+/// **Low-2（复核）**：父目录不存在 ⇒ 建目录再写（`ConfigFile.Save` 的 `Directory.CreateDirectory`）。
+///
+/// 牙：去掉 `create_dir_all` ⇒ 写失败，`expect` 红。
+#[test]
+fn low2_write_sabuk_w_creates_parent_dirs() {
+    let dir = temp_dir("mkdir");
+    let path = dir.join("Castle").join("0").join("SabukW.txt");
+    assert!(
+        !path.parent().expect("有父目录").exists(),
+        "前置：父目录不存在"
+    );
+
+    write_sabuk_w(
+        &path,
+        &IniOrdered::new(),
+        &SabukWOverlay::default(),
+        &SabukWDefaults::default(),
+    )
+    .expect("父目录不存在也要能写");
+    assert!(path.exists());
+    assert_eq!(
+        std::fs::read(&path).expect("读回"),
+        serialize_sabuk_w(
+            &IniOrdered::new(),
+            &SabukWOverlay::default(),
+            &SabukWDefaults::default()
+        )
+        .expect("对照输出")
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **Low-2（复核）**：只读文件 ⇒ 临时清 `IsReadOnly`，写成功后恢复。
+///
+/// 牙：去掉清位 ⇒ `std::fs::write` 在 Windows 上 PermissionDenied，`expect` 红；
+/// 去掉恢复 ⇒ 最后一条只读断言红。
+#[test]
+fn low2_write_sabuk_w_toggles_readonly() {
+    let dir = temp_dir("readonly");
+    let path = dir.join("SabukW.txt");
+    std::fs::write(&path, b"stale").expect("先建文件");
+    let original_perms = std::fs::metadata(&path).expect("metadata").permissions();
+    let mut perms = original_perms.clone();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&path, perms).expect("置只读");
+    assert!(std::fs::metadata(&path)
+        .expect("metadata")
+        .permissions()
+        .readonly());
+
+    write_sabuk_w(
+        &path,
+        &IniOrdered::new(),
+        &SabukWOverlay::default(),
+        &SabukWDefaults::default(),
+    )
+    .expect("只读文件要临时清位再写");
+    assert!(
+        std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .readonly(),
+        "写后必须恢复只读"
+    );
+    assert_ne!(
+        std::fs::read(&path).expect("读回"),
+        b"stale".to_vec(),
+        "内容要被覆盖"
+    );
+
+    std::fs::set_permissions(&path, original_perms).expect("恢复权限后清理");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **Low-3（复核）**：`MainDoorX/Y` 与三面墙 `*WallX/Y` 按 oracle 的 `ReadWriteInt16`
+/// （`short`）解析：越界/非数字 ⇒ [`EnvirError::SabukWInt16Invalid`]，不再 i32 静默回落。
+///
+/// 牙：退回 `write_effective_int`（i32）⇒ `MainDoorX=40000` 被原样写出，`expect_err` 红。
+#[test]
+fn low3_main_door_and_wall_xy_reject_out_of_short() {
+    let defaults = SabukWDefaults::default();
+
+    let base = parse_ordered(b"[Defense]\r\nMainDoorX=40000\r\n");
+    let err = serialize_sabuk_w(&base, &SabukWOverlay::default(), &defaults)
+        .expect_err("short 越界必须报错");
+    match err {
+        EnvirError::SabukWInt16Invalid {
+            section,
+            key,
+            value,
+        } => assert_eq!(
+            (section.as_str(), key.as_str(), value.as_str()),
+            ("Defense", "MainDoorX", "40000")
+        ),
+        other => panic!("错误类型不对: {other:?}"),
+    }
+
+    // 非数字（oracle `Convert.ChangeType` 的 FormatException 分支）。
+    for key in [
+        "MainDoorY",
+        "LeftWallX",
+        "LeftWallY",
+        "CenterWallX",
+        "CenterWallY",
+        "RightWallX",
+        "RightWallY",
+    ] {
+        let src = format!("[Defense]\r\n{key}=abc\r\n");
+        let base = parse_ordered(src.as_bytes());
+        let err = serialize_sabuk_w(&base, &SabukWOverlay::default(), &defaults)
+            .expect_err("非数字必须报错");
+        assert!(
+            matches!(err, EnvirError::SabukWInt16Invalid { .. }),
+            "{key}: {err:?}"
+        );
+    }
+
+    // i16 边界仍合法。
+    let base = parse_ordered(b"[Defense]\r\nMainDoorX=-32768\r\nRightWallY=32767\r\n");
+    let text = text_of(
+        &serialize_sabuk_w(&base, &SabukWOverlay::default(), &defaults).expect("边界值合法"),
+    );
+    assert!(text.contains("MainDoorX=-32768\r\n"));
+    assert!(text.contains("RightWallY=32767\r\n"));
 }

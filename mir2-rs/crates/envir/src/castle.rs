@@ -33,6 +33,8 @@
 //!   实为 `30 0D 0A`）⇒ 本片两个 `serialize_*` 也产出 CRLF，与 oracle 逐字节一致。
 //! - **日期**：`ReadWriteDate` 的缺键默认是 `DateTime.Now`（`ConfigFile.cs:115-123 / :155-168`），
 //!   确定性用例无法复现 ⇒ 以**原始字符串** [`Option<String>`] 暴露，缺键 = `None`；本片不比较「Now」。
+//!   写侧按 `WriteDateTime` 归一：`DateTime.Parse` 接受的日期串（`yyyy-MM-dd` / `yyyy/MM/dd`，
+//!   可带 `H:m(:s)`）读成 `DateTime` 后回写成 `yyyy-MM-dd HH:mm:ss`。
 //! - **`Convert.ChangeType` 口径**：`ConfigFile.Read<ushort>`（`ConfigFile.cs:125-138`）对非法值抛异常；
 //!   本片用 `parse::<u16>().unwrap_or(def)` 的宽松口径（与 `IniFile::read_integer` 已有的宽松口径一致），
 //!   在此登记。
@@ -127,6 +129,46 @@ pub const DEFAULT_GUARD_NAME: &str = "守卫";
 pub const DEFAULT_ARCHER_HP: u16 = 2000;
 /// `Guard_{i}_HP` 默认（`CastleConf.cs:90`）。
 pub const DEFAULT_GUARD_HP: u16 = 2000;
+
+/// `CastleConf.LoadConfig` 缺键回填里**取自 `SystemShare.Config`（`Server.conf` 可覆盖）**的那部分默认值。
+///
+/// oracle 的默认值不是编译期常量：`CastleConf.LoadConfig(userCastle)` 的 `defValue` 来自
+/// `UserCastle` 构造器（`src/M2Server/Castle/UserCastle.cs:31-40`）——`sName` / `HomeMap` /
+/// `HomeX` / `HomeY` / `WarRangeX` / `WarRangeY` 分别取 `SystemShare.Config.CastleName` /
+/// `CastleHomeMap` / `CastleHomeX` / `CastleHomeY` / `CastleWarRangeX` / `CastleWarRangeY`
+/// （`GameSvrConf.cs:1782-1787`，部署 `Server.conf` 可覆盖）。
+/// 本结构把这六个值抽成**参数**（P3 宿主从配置层注入），[`Default`] 给 `GameSvrConf` 的硬编码默认。
+///
+/// 其余配置面默认（`CastleMap="3"` / `CastlePlaceMap="0150"` / `CastleSecretMap="D701"` /
+/// `CastlePalaceDoorX/Y=631/274`）在 oracle 里是**字面量**，不来自 `Config` ⇒ 仍用常量。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SabukWDefaults {
+    /// `[Setup] CastleName` 缺键默认（`SystemShare.Config.CastleName`）。
+    pub castle_name: String,
+    /// `[Defense] CastleHomeMap` 缺键默认（`SystemShare.Config.CastleHomeMap`）。
+    pub home_map: String,
+    /// `[Defense] CastleHomeX` 缺键默认（`SystemShare.Config.CastleHomeX`，oracle `short`）。
+    pub home_x: i32,
+    /// `[Defense] CastleHomeY` 缺键默认（`SystemShare.Config.CastleHomeY`）。
+    pub home_y: i32,
+    /// `[Defense] CastleWarRangeX` 缺键默认（`SystemShare.Config.CastleWarRangeX`）。
+    pub war_range_x: i32,
+    /// `[Defense] CastleWarRangeY` 缺键默认（`SystemShare.Config.CastleWarRangeY`）。
+    pub war_range_y: i32,
+}
+
+impl Default for SabukWDefaults {
+    fn default() -> Self {
+        Self {
+            castle_name: DEFAULT_CASTLE_NAME.to_string(),
+            home_map: DEFAULT_CASTLE_HOME_MAP.to_string(),
+            home_x: DEFAULT_CASTLE_HOME_X,
+            home_y: DEFAULT_CASTLE_HOME_Y,
+            war_range_x: DEFAULT_CASTLE_WAR_RANGE_X,
+            war_range_y: DEFAULT_CASTLE_WAR_RANGE_Y,
+        }
+    }
+}
 
 /// 一个防御单元（门 / 墙 / 弓手 / 守卫）的配置规格。
 ///
@@ -271,14 +313,22 @@ impl Default for SabukWConfig {
 }
 
 impl SabukWConfig {
-    /// `CastleConf.LoadConfig` 的读侧 1:1 移植（`CastleConf.cs:15-94`）。
+    /// `CastleConf.LoadConfig` 的读侧 1:1 移植（`CastleConf.cs:15-94`），
+    /// 缺键默认取 [`SabukWDefaults::default`]（= `GameSvrConf` 的硬编码默认）。
+    #[must_use]
+    pub fn from_ini(ini: &IniFile) -> Self {
+        Self::from_ini_with_defaults(ini, &SabukWDefaults::default())
+    }
+
+    /// 同 [`Self::from_ini`]，但六个配置面默认值由调用方注入
+    /// （`UserCastle` 构造器取 `SystemShare.Config.*`，`Server.conf` 可覆盖；见 [`SabukWDefaults`]）。
     #[must_use]
     #[allow(clippy::field_reassign_with_default)]
-    pub fn from_ini(ini: &IniFile) -> Self {
+    pub fn from_ini_with_defaults(ini: &IniFile, defaults: &SabukWDefaults) -> Self {
         let mut cfg = Self::default();
         // [Setup]
         cfg.castle_name = ini
-            .read_string("Setup", "CastleName", DEFAULT_CASTLE_NAME)
+            .read_string("Setup", "CastleName", &defaults.castle_name)
             .to_string();
         cfg.own_guild = ini.read_string("Setup", "OwnGuild", "").to_string();
         cfg.change_date = optional_string(ini.read_string("Setup", "ChangeDate", ""));
@@ -293,14 +343,12 @@ impl SabukWConfig {
             .read_string("Defense", "CastleMap", DEFAULT_CASTLE_MAP)
             .to_string();
         cfg.home_map = ini
-            .read_string("Defense", "CastleHomeMap", DEFAULT_CASTLE_HOME_MAP)
+            .read_string("Defense", "CastleHomeMap", &defaults.home_map)
             .to_string();
-        cfg.home_x = ini.read_integer("Defense", "CastleHomeX", DEFAULT_CASTLE_HOME_X);
-        cfg.home_y = ini.read_integer("Defense", "CastleHomeY", DEFAULT_CASTLE_HOME_Y);
-        cfg.war_range_x =
-            ini.read_integer("Defense", "CastleWarRangeX", DEFAULT_CASTLE_WAR_RANGE_X);
-        cfg.war_range_y =
-            ini.read_integer("Defense", "CastleWarRangeY", DEFAULT_CASTLE_WAR_RANGE_Y);
+        cfg.home_x = ini.read_integer("Defense", "CastleHomeX", defaults.home_x);
+        cfg.home_y = ini.read_integer("Defense", "CastleHomeY", defaults.home_y);
+        cfg.war_range_x = ini.read_integer("Defense", "CastleWarRangeX", defaults.war_range_x);
+        cfg.war_range_y = ini.read_integer("Defense", "CastleWarRangeY", defaults.war_range_y);
         cfg.palace_map = ini
             .read_string("Defense", "CastlePlaceMap", DEFAULT_PALACE_MAP)
             .to_string();
@@ -878,6 +926,12 @@ MainDoorHP=9999
 // 登记：`ReadWriteDate` 的缺键默认是 `DateTime.Now`（`ConfigFile.cs:115-123`，非确定）；纯层
 // [`sabuk_w_write_back`] 补键时写空串占位——`SaveConfig` 对 `ChangeDate`/`WarDate`/`IncomeToday`
 // **无条件**覆盖（`CastleConf.cs:117-119`），键的**位置**只由补键序决定，最终字节与占位值无关。
+// 已有值的三个日期键在覆盖前按 `DateTime.Parse` 归一（`normalize_sabuk_w_datetime`）——
+// 部署件 `0/SabukW.txt` 的 `ChangeDate=1998-01-01` 会写成 `1998-01-01 00:00:00`。
+//
+// 另一个登记：`MainDoorX/Y` 与三面墙的 `*WallX/Y` 在 oracle 是 `ReadWriteInt16`
+// （`ConfigFile.cs:65-73` ⇒ `Convert.ChangeType(short)`），非数字/越界在 `LoadConfig` 阶段抛异常；
+// 写侧 [`write_effective_int16`] 返回 [`EnvirError::SabukWInt16Invalid`]，不复刻 `i32` 版的静默回落。
 
 /// `ConfigFile.iniCahce` 的插入序镜像：段序 + 段内键序 = 文件读入序。
 ///
@@ -1105,9 +1159,12 @@ fn split_key_val_ordered(line: &str) -> Option<(String, String)> {
 ///
 /// 三个日期键的 oracle 默认是 `DateTime.Now`（非确定）；本纯层写入空串占位，
 /// 由 [`serialize_sabuk_w`] 的无条件日期覆盖兜底（键位置固定，最终字节与占位值无关）。
-pub fn sabuk_w_write_back(cache: &mut IniOrdered) {
+///
+/// 六个配置面默认值来自 `defaults`（oracle `UserCastle` 构造器的 `SystemShare.Config.*`，
+/// `Server.conf` 可覆盖；见 [`SabukWDefaults`]），其余缺键默认是 oracle 字面量常量。
+pub fn sabuk_w_write_back(cache: &mut IniOrdered, defaults: &SabukWDefaults) {
     // [Setup]（`CastleConf.cs:17-23`）
-    cache.append_default("Setup", "CastleName", DEFAULT_CASTLE_NAME);
+    cache.append_default("Setup", "CastleName", &defaults.castle_name);
     cache.append_default("Setup", "OwnGuild", "");
     cache.append_default("Setup", "ChangeDate", "");
     cache.append_default("Setup", "WarDate", "");
@@ -1118,18 +1175,18 @@ pub fn sabuk_w_write_back(cache: &mut IniOrdered) {
     // [Defense]（`CastleConf.cs:24-48`）
     cache.append_default("Defense", "CastleMapList", "");
     cache.append_default("Defense", "CastleMap", DEFAULT_CASTLE_MAP);
-    cache.append_default("Defense", "CastleHomeMap", DEFAULT_CASTLE_HOME_MAP);
-    cache.append_default("Defense", "CastleHomeX", &DEFAULT_CASTLE_HOME_X.to_string());
-    cache.append_default("Defense", "CastleHomeY", &DEFAULT_CASTLE_HOME_Y.to_string());
+    cache.append_default("Defense", "CastleHomeMap", &defaults.home_map);
+    cache.append_default("Defense", "CastleHomeX", &defaults.home_x.to_string());
+    cache.append_default("Defense", "CastleHomeY", &defaults.home_y.to_string());
     cache.append_default(
         "Defense",
         "CastleWarRangeX",
-        &DEFAULT_CASTLE_WAR_RANGE_X.to_string(),
+        &defaults.war_range_x.to_string(),
     );
     cache.append_default(
         "Defense",
         "CastleWarRangeY",
-        &DEFAULT_CASTLE_WAR_RANGE_Y.to_string(),
+        &defaults.war_range_y.to_string(),
     );
     cache.append_default("Defense", "CastlePlaceMap", DEFAULT_PALACE_MAP);
     cache.append_default("Defense", "CastleSecretMap", DEFAULT_SECRET_MAP);
@@ -1249,11 +1306,11 @@ pub struct SabukWOverlay {
     pub castle_name: String,
     /// `[Setup] OwnGuild`（非空才写）。
     pub own_guild: String,
-    /// `[Setup] ChangeDate`（`yyyy-MM-dd HH:mm:ss`，无条件写）。
+    /// `[Setup] ChangeDate`（无条件写；写前按 `DateTime.Parse` + `yyyy-MM-dd HH:mm:ss` 归一）。
     pub change_date: String,
-    /// `[Setup] WarDate`（无条件写）。
+    /// `[Setup] WarDate`（无条件写；同 [`Self::change_date`] 归一）。
     pub war_date: String,
-    /// `[Setup] IncomeToday`（无条件写）。
+    /// `[Setup] IncomeToday`（无条件写；同 [`Self::change_date`] 归一）。
     pub income_today: String,
     /// `[Setup] TotalGold`（`!= 0` 才写）。
     pub total_gold: i32,
@@ -1301,9 +1358,13 @@ impl SabukWOverlay {
         Self {
             castle_name: cfg.castle_name.clone(),
             own_guild: cfg.own_guild.clone(),
-            change_date: cfg.change_date.clone().unwrap_or_default(),
-            war_date: cfg.war_date.clone().unwrap_or_default(),
-            income_today: cfg.income_today.clone().unwrap_or_default(),
+            // 写侧等价 `WriteDateTime`：读侧的原始串先按 `DateTime.Parse` 归一成
+            // `yyyy-MM-dd HH:mm:ss`（见 [`normalize_sabuk_w_datetime`]），缺键仍为空串占位。
+            change_date: normalize_sabuk_w_datetime(cfg.change_date.as_deref().unwrap_or_default()),
+            war_date: normalize_sabuk_w_datetime(cfg.war_date.as_deref().unwrap_or_default()),
+            income_today: normalize_sabuk_w_datetime(
+                cfg.income_today.as_deref().unwrap_or_default(),
+            ),
             total_gold: cfg.total_gold,
             today_income: cfg.today_income,
             envir_list: cfg.envir_list.clone(),
@@ -1343,17 +1404,30 @@ fn unit_overlay(unit: &DefenseUnit) -> SabukWUnitOverlay {
 /// 克隆 base → 缺键回写 → 逐键覆盖 → 按段序/键序渲染 → `mir2_encoding::encode_gb2312_dotnet`。
 ///
 /// 输出为 GB2312 字节：每段 `[段]` + 逐键 `key=value` + **段末空行**，行尾 CRLF，无 BOM。
-#[must_use]
-pub fn serialize_sabuk_w(base: &IniOrdered, overlay: &SabukWOverlay) -> Vec<u8> {
+///
+/// `defaults` 是 `Server.conf` 可覆盖的六个配置面默认值（见 [`SabukWDefaults`]）。
+///
+/// # Errors
+/// 门 / 墙的 X/Y 在缓存里既非数字又超出 `short` 范围时返回
+/// [`EnvirError::SabukWInt16Invalid`]（oracle `Convert.ChangeType(short)` 抛异常）。
+pub fn serialize_sabuk_w(
+    base: &IniOrdered,
+    overlay: &SabukWOverlay,
+    defaults: &SabukWDefaults,
+) -> Result<Vec<u8>, EnvirError> {
     let mut cache = base.clone();
-    sabuk_w_write_back(&mut cache);
-    apply_overlay(&mut cache, overlay);
-    mir2_encoding::encode_gb2312_dotnet(&render_ordered(&cache))
+    sabuk_w_write_back(&mut cache, defaults);
+    apply_overlay(&mut cache, overlay, defaults)?;
+    Ok(mir2_encoding::encode_gb2312_dotnet(&render_ordered(&cache)))
 }
 
 /// `apply_overlay`：按 `SaveConfig` 的**调用序**逐键写（顺序只影响「首次追加」的键位置；
 /// [`sabuk_w_write_back`] 已保证这些键都存在，故实际全部是原位覆盖）。
-fn apply_overlay(cache: &mut IniOrdered, overlay: &SabukWOverlay) {
+fn apply_overlay(
+    cache: &mut IniOrdered,
+    overlay: &SabukWOverlay,
+    defaults: &SabukWDefaults,
+) -> Result<(), EnvirError> {
     // [Setup]（`CastleConf.cs:109-128`）
     if !overlay.castle_name.is_empty() {
         cache.set_in_place_or_append("Setup", "CastleName", &overlay.castle_name);
@@ -1361,9 +1435,23 @@ fn apply_overlay(cache: &mut IniOrdered, overlay: &SabukWOverlay) {
     if !overlay.own_guild.is_empty() {
         cache.set_in_place_or_append("Setup", "OwnGuild", &overlay.own_guild);
     }
-    cache.set_in_place_or_append("Setup", "ChangeDate", &overlay.change_date);
-    cache.set_in_place_or_append("Setup", "WarDate", &overlay.war_date);
-    cache.set_in_place_or_append("Setup", "IncomeToday", &overlay.income_today);
+    // `WriteDateTime`（`ConfigFile.cs:449-459`）：`val.ToString("yyyy-MM-dd HH:mm:ss")`。
+    // 读侧存的是原始串 ⇒ 写前先按 `DateTime.Parse` 归一（`1998-01-01` ⇒ `1998-01-01 00:00:00`）。
+    cache.set_in_place_or_append(
+        "Setup",
+        "ChangeDate",
+        &normalize_sabuk_w_datetime(&overlay.change_date),
+    );
+    cache.set_in_place_or_append(
+        "Setup",
+        "WarDate",
+        &normalize_sabuk_w_datetime(&overlay.war_date),
+    );
+    cache.set_in_place_or_append(
+        "Setup",
+        "IncomeToday",
+        &normalize_sabuk_w_datetime(&overlay.income_today),
+    );
     if overlay.total_gold != 0 {
         cache.set_in_place_or_append("Setup", "TotalGold", &overlay.total_gold.to_string());
     }
@@ -1381,39 +1469,19 @@ fn apply_overlay(cache: &mut IniOrdered, overlay: &SabukWOverlay) {
         cache.set_in_place_or_append("Defense", "CastleMapList", &map_list);
     }
     write_effective_string(cache, "Defense", "CastleMap", DEFAULT_CASTLE_MAP);
-    write_effective_string(cache, "Defense", "CastleHomeMap", DEFAULT_CASTLE_HOME_MAP);
-    write_effective_int(cache, "Defense", "CastleHomeX", DEFAULT_CASTLE_HOME_X);
-    write_effective_int(cache, "Defense", "CastleHomeY", DEFAULT_CASTLE_HOME_Y);
-    write_effective_int(
-        cache,
-        "Defense",
-        "CastleWarRangeX",
-        DEFAULT_CASTLE_WAR_RANGE_X,
-    );
-    write_effective_int(
-        cache,
-        "Defense",
-        "CastleWarRangeY",
-        DEFAULT_CASTLE_WAR_RANGE_Y,
-    );
+    write_effective_string(cache, "Defense", "CastleHomeMap", &defaults.home_map);
+    write_effective_int(cache, "Defense", "CastleHomeX", defaults.home_x);
+    write_effective_int(cache, "Defense", "CastleHomeY", defaults.home_y);
+    write_effective_int(cache, "Defense", "CastleWarRangeX", defaults.war_range_x);
+    write_effective_int(cache, "Defense", "CastleWarRangeY", defaults.war_range_y);
     write_effective_string(cache, "Defense", "CastlePlaceMap", DEFAULT_PALACE_MAP);
     write_effective_string(cache, "Defense", "CastleSecretMap", DEFAULT_SECRET_MAP);
     write_effective_int(cache, "Defense", "CastlePalaceDoorX", DEFAULT_PALACE_DOOR_X);
     write_effective_int(cache, "Defense", "CastlePalaceDoorY", DEFAULT_PALACE_DOOR_Y);
 
-    // 门（`CastleConf.cs:191-207`）
-    write_effective_int(
-        cache,
-        "Defense",
-        "MainDoorX",
-        i32::from(DEFAULT_MAIN_DOOR_X),
-    );
-    write_effective_int(
-        cache,
-        "Defense",
-        "MainDoorY",
-        i32::from(DEFAULT_MAIN_DOOR_Y),
-    );
+    // 门（`CastleConf.cs:191-207`）：`MainDoorX/Y` 是 `ReadWriteInt16`（oracle `short`）。
+    write_effective_int16(cache, "Defense", "MainDoorX", DEFAULT_MAIN_DOOR_X)?;
+    write_effective_int16(cache, "Defense", "MainDoorY", DEFAULT_MAIN_DOOR_Y)?;
     write_effective_string(cache, "Defense", "MainDoorName", DEFAULT_MAIN_DOOR_NAME);
     if overlay.main_door.present {
         // `WriteBool("MainDoorOpen", nStatus)`：nStatus 是读回的配置值，写回归一成 1/0。
@@ -1422,10 +1490,10 @@ fn apply_overlay(cache: &mut IniOrdered, overlay: &SabukWOverlay) {
         cache.set_in_place_or_append("Defense", "MainDoorHP", &overlay.main_door.hp.to_string());
     }
 
-    // 三面墙（`CastleConf.cs:210-265`）
+    // 三面墙（`CastleConf.cs:210-265`）：`*WallX/Y` 同样是 `ReadWriteInt16`。
     for (i, (prefix, x, y, name)) in wall_defaults().into_iter().enumerate() {
-        write_effective_int(cache, "Defense", &format!("{prefix}X"), i32::from(x));
-        write_effective_int(cache, "Defense", &format!("{prefix}Y"), i32::from(y));
+        write_effective_int16(cache, "Defense", &format!("{prefix}X"), x)?;
+        write_effective_int16(cache, "Defense", &format!("{prefix}Y"), y)?;
         write_effective_string(cache, "Defense", &format!("{prefix}Name"), name);
         if let Some(hp) = overlay.walls[i] {
             cache.set_in_place_or_append("Defense", &format!("{prefix}HP"), &hp.to_string());
@@ -1439,6 +1507,7 @@ fn apply_overlay(cache: &mut IniOrdered, overlay: &SabukWOverlay) {
     for (i, unit) in overlay.guards.iter().enumerate() {
         apply_unit_overlay(cache, "Guard", i + 1, unit);
     }
+    Ok(())
 }
 
 fn apply_unit_overlay(cache: &mut IniOrdered, kind: &str, n: usize, unit: &SabukWUnitOverlay) {
@@ -1477,6 +1546,155 @@ fn write_effective_int(cache: &mut IniOrdered, section: &str, key: &str, default
     }
 }
 
+/// `WriteInteger` 的 `short` 版（`ReadWriteInt16` → `Read<short>`，`ConfigFile.cs:65-73 / :139-150`）：
+/// 空值回落默认；**非数字或越界 ⇒ 显式错误**（oracle `Convert.ChangeType(str, typeof(short))`
+/// 抛 `FormatException` / `OverflowException`，不允许像 `i32` 版那样静默回落）。
+fn write_effective_int16(
+    cache: &mut IniOrdered,
+    section: &str,
+    key: &str,
+    default: i16,
+) -> Result<(), EnvirError> {
+    let value = match cache.get(section, key) {
+        Some(v) if !v.is_empty() => {
+            v.trim()
+                .parse::<i16>()
+                .map_err(|_| EnvirError::SabukWInt16Invalid {
+                    section: section.to_string(),
+                    key: key.to_string(),
+                    value: v.to_string(),
+                })?
+        }
+        _ => default,
+    };
+    if value != 0 {
+        cache.set_in_place_or_append(section, key, &value.to_string());
+    }
+    Ok(())
+}
+
+/// `WriteDateTime` 的确定性等价（`ConfigFile.cs:155-168` 的 `DateTime.Parse` +
+/// `:449-459` 的 `val.ToString("yyyy-MM-dd HH:mm:ss")`）。
+///
+/// 部署件 `Castle/0/SabukW.txt` 的 `ChangeDate=1998-01-01` 在 oracle 里解析成 `DateTime`
+/// 后回写为 `1998-01-01 00:00:00`（每键多 9 字节）；本函数复刻该归一。
+///
+/// 接受 `-` / `/` 分隔的日期 + 可选 ` `/`T` 分隔的 `H:m(:s)` 时间（含 `.fff` 小数秒），
+/// 两位年份按 `DateTime.Parse` 的 `TwoDigitYearMax=2029` 展开（`98` ⇒ 1998，`21` ⇒ 2021）。
+///
+/// 解析失败（含 oracle 会抛 `FormatException` 的串）⇒ **原样返回**：读侧只保留原始串
+/// （模块头已登记 `DateTime.Now` 非确定性偏差），写侧不静默改值。
+fn normalize_sabuk_w_datetime(raw: &str) -> String {
+    parse_datetime_fields(raw).map_or_else(
+        || raw.to_string(),
+        |(year, month, day, hour, minute, second)| {
+            format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
+        },
+    )
+}
+
+fn parse_datetime_fields(raw: &str) -> Option<(u32, u32, u32, u32, u32, u32)> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (date_part, time_part) = split_date_time(s)?;
+    let (year, month, day) = parse_date_fields(date_part)?;
+    let (hour, minute, second) = match time_part {
+        Some(t) => parse_time_fields(t)?,
+        None => (0, 0, 0),
+    };
+    Some((year, month, day, hour, minute, second))
+}
+
+/// 日期与时间的分隔：`DateTime.Parse` 接受空格与 `T`。
+fn split_date_time(s: &str) -> Option<(&str, Option<&str>)> {
+    s.find([' ', 'T', 't']).map_or_else(
+        || Some((s, None)),
+        |pos| {
+            let date = &s[..pos];
+            let time = s[pos + 1..].trim();
+            if date.is_empty() || time.is_empty() {
+                None
+            } else {
+                Some((date, Some(time)))
+            }
+        },
+    )
+}
+
+fn parse_date_fields(part: &str) -> Option<(u32, u32, u32)> {
+    let separator = if part.contains('-') {
+        '-'
+    } else if part.contains('/') {
+        '/'
+    } else {
+        return None;
+    };
+    let mut fields = part.split(separator);
+    let year_text = fields.next()?;
+    let month_text = fields.next()?;
+    let day_text = fields.next()?;
+    if fields.next().is_some() {
+        return None;
+    }
+    let raw_year = parse_digits(year_text, 1, 4)?;
+    // `DateTime.Parse` 的两位年份展开（`GregorianCalendar.TwoDigitYearMax = 2029`）。
+    let year = if year_text.len() <= 2 {
+        if raw_year <= 29 {
+            2000 + raw_year
+        } else {
+            1900 + raw_year
+        }
+    } else {
+        raw_year
+    };
+    let month = parse_digits(month_text, 1, 2)?;
+    let day = parse_digits(day_text, 1, 2)?;
+    if year == 0 || !(1..=12).contains(&month) {
+        return None;
+    }
+    if day == 0 || day > days_in_month(year, month) {
+        return None;
+    }
+    Some((year, month, day))
+}
+
+fn parse_time_fields(part: &str) -> Option<(u32, u32, u32)> {
+    // `.fff` 小数秒由 `DateTime.Parse` 接受，`HH:mm:ss` 格式会丢掉它。
+    let head = part.split('.').next()?;
+    let mut fields = head.split(':');
+    let hour = parse_digits(fields.next()?, 1, 2)?;
+    let minute = parse_digits(fields.next()?, 1, 2)?;
+    let second = match fields.next() {
+        Some(s) => parse_digits(s, 1, 2)?,
+        None => 0,
+    };
+    if fields.next().is_some() || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    Some((hour, minute, second))
+}
+
+fn parse_digits(s: &str, min_len: usize, max_len: usize) -> Option<u32> {
+    if s.len() < min_len || s.len() > max_len || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
+}
+
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) => {
+            29
+        }
+        2 => 28,
+        _ => 0,
+    }
+}
+
 /// `ReadBool`（`ConfigFile.cs:170-190`）：空值回落默认；`是/YES/1/TRUE`（大写后）为真。
 fn read_bool_ordered(cache: &IniOrdered, section: &str, key: &str, default: bool) -> bool {
     match cache.get(section, key) {
@@ -1509,17 +1727,62 @@ fn render_ordered(ini: &IniOrdered) -> String {
 
 /// `CastleConf.SaveConfig` 的落盘（`ConfigFile.Save`：`FileMode.Truncate` 原地截断，**非原子**）。
 ///
-/// oracle 在 `Save` 开头对不存在的文件 `File.Create`（`ConfigFile.cs:349-352`）⇒ 本函数允许新建。
+/// oracle 在 `Save` 开头对不存在的文件 `File.Create`（`ConfigFile.cs:349-352`）⇒ 本函数允许新建；
+/// 并复刻 `ConfigFile.Save` 的另外两点（`ConfigFile.cs:353-365`）：
+/// - 父目录不存在 ⇒ `Directory.CreateDirectory`（`CastleConf.SaveConfig` 本身也先建城堡目录）；
+/// - 文件是只读 ⇒ 临时清 `IsReadOnly`，写成功后再恢复（写失败时 oracle 因异常跳过恢复，这里同）。
 ///
 /// # Errors
-/// 写文件失败（[`EnvirError::Io`]）。
+/// 序列化失败（[`EnvirError::SabukWInt16Invalid`]）或建目录/清只读/写文件失败（[`EnvirError::Io`]）。
 pub fn write_sabuk_w(
     path: &Path,
     base: &IniOrdered,
     overlay: &SabukWOverlay,
+    defaults: &SabukWDefaults,
 ) -> Result<(), EnvirError> {
-    let bytes = serialize_sabuk_w(base, overlay);
-    std::fs::write(path, &bytes).map_err(|source| EnvirError::Io {
+    let bytes = serialize_sabuk_w(base, overlay, defaults)?;
+
+    // `if (!Directory.Exists(fi.Directory?.FullName)) Directory.CreateDirectory(...)`。
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent).map_err(|source| EnvirError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+    }
+
+    // `if (isRealOnly && fi.Exists) fi.IsReadOnly = false;`（写成功后恢复）。
+    let was_readonly = path
+        .metadata()
+        .is_ok_and(|meta| meta.permissions().readonly());
+    if was_readonly {
+        set_readonly(path, false)?;
+    }
+
+    let written = std::fs::write(path, &bytes).map_err(|source| EnvirError::Io {
+        path: path.to_path_buf(),
+        source,
+    });
+
+    if written.is_ok() && was_readonly {
+        // `if (isRealOnly) fi.IsReadOnly = true;`——恢复失败要显式上抛，别留下可写文件。
+        set_readonly(path, true)?;
+    }
+    written
+}
+
+/// 设置文件只读位（`FileInfo.IsReadOnly`）。
+fn set_readonly(path: &Path, readonly: bool) -> Result<(), EnvirError> {
+    let mut permissions = path
+        .metadata()
+        .map_err(|source| EnvirError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .permissions();
+    permissions.set_readonly(readonly);
+    std::fs::set_permissions(path, permissions).map_err(|source| EnvirError::Io {
         path: path.to_path_buf(),
         source,
     })

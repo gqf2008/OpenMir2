@@ -38,7 +38,7 @@ pub use castle::{
     parse_castle_list, parse_castle_map_list, parse_ordered, parse_sabuk_w_bytes, sabuk_w_path,
     sabuk_w_write_back, serialize_attack_sabuk_wall, serialize_castle_list, serialize_sabuk_w,
     write_attack_sabuk_wall, write_castle_list, write_sabuk_w, AttackSabukWallEntry, DefenseUnit,
-    IniOrdered, MainDoorOverlay, SabukWConfig, SabukWOverlay, SabukWUnitOverlay,
+    IniOrdered, MainDoorOverlay, SabukWConfig, SabukWDefaults, SabukWOverlay, SabukWUnitOverlay,
     ATTACK_SABUK_WALL_FILE_NAME, CASTLE_TEXT_SPLIT, GUARD_ARRAY_LEN, MAX_CASTLE_ARCHER,
     MAX_CASTLE_GUARD, SABUK_W_FILE_NAME,
 };
