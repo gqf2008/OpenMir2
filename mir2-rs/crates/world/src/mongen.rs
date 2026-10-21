@@ -242,11 +242,18 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
         }
         // `ArcherGuard` ctor（`ArcherGuard.cs:12-19`）：`ViewRange=12`、`WantRefMsg=true`、
         // `GuardDirection=-1`、`Castle=null`（字段缺省）；`ArcherPolice`（race 20）继承同一 ctor。
+        // `SuperMan = true` 来自 `GuardUnit : NormNpc` 的 `NormNpc()` ctor（`NormNpc.cs:41`）
+        // ⇒ `Run` 恒回满（`BaseObject.Base.cs:32-36`）、`Die()` 首行早退（`:318-322`）。
         20 | 112 => {
             entity.view_range = 12;
             entity.want_ref_msg = true;
             entity.guard_direction = -1;
+            entity.super_man = true;
         }
+        // `SuperGuard`（race 11）/`PetSuperGuard`（race 12）都是 `GuardUnit : NormNpc`
+        // （`WorldServer.MonGen.cs:509-514` 的 `new SuperGuard()/new PetSuperGuard()`）⇒
+        // `NormNpc()` ctor 置 `SuperMan = true`（`NormNpc.cs:41`）。两者无自有 ctor 常量。
+        11 | 12 => entity.super_man = true,
         // `CowKingMonster` ctor（`CowKingMonster.cs:17-25`）+ `Initialize()`（`:33-38`）。
         // ctor 的 `RushMode = true`（`:21`）**本批落地**：消费点
         // `BaseObject.Base.cs:620` 的 `RM_MAGSTRUCK` 门（`!RushMode` 才给
@@ -272,6 +279,11 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
         110 | 111 => {
             entity.stick_mode = true;
             entity.ai.animal = false;
+            // `CastleDoor : GuardUnit` / `WallStructure : GuardUnit`（`GuardUnit.cs:14`）经
+            // `NormNpc()` ctor 置 `SuperMan = true`（`NormNpc.cs:41`）：`Run` 首段恒回满
+            // （`BaseObject.Base.cs:32-36`）、`Die()` 首行恒早退（`BaseObject.Base.cs:318-322`）。
+            // 置位点 = 本表（= oracle `new CastleDoor()/new WallStructure()` 的构造位置）。
+            entity.super_man = true;
         }
         _ => {}
     }

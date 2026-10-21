@@ -34,7 +34,8 @@
 //!     末尾的 `base.Run()`，`MonsterObject.cs:255/359`）；
 //!   - [`crate::world::World`]：`HP==0 ⇒ Die()`（`:70-73`，由 `settle_deaths` 死亡结算等价）、
 //!     `LastHiter` 30s / `ExpHiter` 6s 过期（`:119-132`，由 `expire_hitters`）。
-//! - **已建模**：`SuperMan`（`:32-36`，见 [`base_object_run_monster`]）。**仍未建模**（登记）：`BaseObject.Run` 的 Master 变色支
+//! - **已建模**：`SuperMan`（`:32-36`，见 [`base_object_run_monster`]；置位与 `Die()` 早退见
+//!   卡片 `openmir2-superman-normnpc` 与 `World::settle_deaths`）。**仍未建模**（登记）：`BaseObject.Run` 的 Master 变色支
 //!   （`:133-215`，与 `MonsterObject.Run` 的跟随支不同）、`ShowHp`/`VerifyTick` 的 `ShowHp` 支
 //!   （`:217-256`；`VerifyTick` 已接）。死亡支
 //!   `MakeGhost`（`:85-101`）已由本片接上（[`make_ghost`]，门见
@@ -4935,14 +4936,13 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
         }
     }
     // `BaseObject.Base.cs:32-36`：`if (SuperMan) { HP = MaxHP; MP = MaxMP; }`（在 `!Death` 之前）。
-    // **覆盖口径**：当前**仅 race 120** 置 `super_man`（`mongen.rs` 的 `SoccerBall` ctor）。oracle
-    // `NormNpc` 派生（守卫/城门/城墙/固定 NPC/商人）同样 `SuperMan=true` 且 `Die()` 首行早退，
-    // 两者均**未建模**（另卡）⇒ 这些实体在 Rust 侧仍可被击杀（见 T-31 / audit B02）。
+    // **置位口径**：`mongen::apply_monster_class_constants` 给 NormNpc 派生 race 置位
+    // （守卫 11/12/20/112、城门 110、城墙 111 = `NormNpc.cs:41` 的 ctor），race 120 由
+    // `SoccerBall` ctor 置位；固定 NPC（`npc::insert_npc`）与商人（`merchant::insert_merchant`）
+    // 的 `NormNpc.Run → base.Run` 等价点各自调用 [`Entity::run_super_man_refill`]。
+    // `Die()` 首行早退（`BaseObject.Base.cs:318-322`）的等价物在 `World::settle_deaths`。
     if let Some(e) = world.entities.get_mut(actor_id) {
-        if e.super_man {
-            e.hp = e.max_hp;
-            e.mp = e.max_mp;
-        }
+        e.run_super_man_refill();
     }
     let now = world.clock_ms;
     let state = world.entities.get(actor_id).map(|e| {

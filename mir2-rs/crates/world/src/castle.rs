@@ -313,6 +313,15 @@ impl CastleUnit {
         self.door_map_flag_events(2)
     }
 
+    /// oracle `CastleDoor.Die()` 的**子类段**（`CastleDoor.cs:78-82`）：只发 `SetMapXyFlag(2)`。
+    ///
+    /// SuperMan 时 `base.Die()` 首行早退（`BaseObject.Base.cs:318-322`）⇒ `Death` **不**置位
+    /// （`CastleDoor.Die` 的 `base.Die()` 被跳过、子类段照常执行）。`CastleUnit.death` 是
+    /// `BaseObject.Death` 的镜像 ⇒ 本支**只出掩码、不改 `death`**。
+    pub fn door_die_flag2_events(&self) -> Vec<StructureEvent> {
+        self.door_map_flag_events(2)
+    }
+
     /// oracle `CastleDoor.Run()`（`CastleDoor.cs:84-104`）。
     ///
     /// `Death && Castle != null` ⇒ `DeathTick = GetTickCount()`；否则 `HealthTick = 0`。

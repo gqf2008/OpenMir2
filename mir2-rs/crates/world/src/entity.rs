@@ -965,6 +965,20 @@ pub struct Entity {
 }
 
 impl Entity {
+    /// `BaseObject.Run` 的 `SuperMan` 回满段（`BaseObject.Base.cs:32-36`）：
+    /// `if (SuperMan) { WAbil.HP = MaxHP; WAbil.MP = MaxMP; }`。
+    ///
+    /// 位置契约：在消息泵之后、`if (!Death)` 之前 ⇒ 调用方必须放在自己的 `Run` 消息段
+    /// （含 `RM_STRUCK` 出队）之后、死亡/恢复支之前。`SuperMan` 实体因此在 `HP == 0` 判定
+    /// （`:70-73`）之前就被回满 ⇒ oracle 的 `Die()` 对它们**不可达**；`Die` 的早退语义
+    /// （`:318-322`）由 `settle_deaths` 在「直接调用 `Die()`」路径（脚本/GM 击杀）上等价。
+    pub fn run_super_man_refill(&mut self) {
+        if self.super_man {
+            self.hp = self.max_hp;
+            self.mp = self.max_mp;
+        }
+    }
+
     pub fn new(id: i32, name: impl Into<String>, x: i32, y: i32) -> Self {
         Entity {
             id,

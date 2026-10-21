@@ -313,6 +313,11 @@ impl World {
         // `merchant_ids_sorted` 返回一串 0、`merchant_tick` 会反复 Run 同一个实体。
         e.id = self.entities.alloc_id();
         e.race = ACTOR_RACE_MERCHANT;
+        // `Merchant : NormNpc`（`Merchant.cs:16`）⇒ `NormNpc()` ctor `SuperMan = true`
+        // （`NormNpc.cs:41`）：商人打不死（`BaseObject.Die():318-322`）且每次 `Run` 回满（`:32-36`）。
+        // **不得按 race 置位**：`ActorRace.Merchant == ActorRace.Animal == 50`，race 50 也是
+        // 鸡/鹿/狼等动物怪的 race（`Race.cs:26/34/40`）⇒ 只能按创建点（类）置位。
+        e.super_man = true;
         // `Entity::new` 是玩家 ctor 等价物（SearchTime=1000）⇒ 非玩家还原占位缺省值。
         e.ai.search_time = crate::entity::BASE_ANIMAL_SEARCH_TIME;
         e.map_id = map_id;
@@ -1449,8 +1454,11 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
         map_random_move(world, actor_id);
         outcome.space_moved = true;
     }
-    // `Merchant.cs:170` 末尾 `base.Run()`：`BaseObject.Run` 的 VerifyMapTime 段
-    // （`BaseObject.Base.cs:223-228`）——刷新本格 `CellObject.AddTime`，防 60s 过期。
+    // `Merchant.cs:170` 末尾 `base.Run()`：先 SuperMan 回满（`BaseObject.Base.cs:32-36`），
+    // 再 VerifyMapTime 段（`:223-228`）——刷新本格 `CellObject.AddTime`，防 60s 过期。
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.run_super_man_refill();
+    }
     world.verify_map_time(actor_id);
     outcome
 }

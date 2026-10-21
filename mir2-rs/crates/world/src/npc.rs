@@ -165,6 +165,9 @@ impl World {
         e.id = self.entities.alloc_id();
         // `NormNpc.cs:42` `Race = ActorRace.NPC`（=10）；`Merchant` 继承它（只设 `RaceImg`）。
         e.race = ACTOR_RACE_NPC;
+        // `NormNpc()` ctor `SuperMan = true`（`NormNpc.cs:41`）：固定 NPC 打不死
+        // （`BaseObject.Die():318-322` 首行早退）且每次 `Run` 回满（`:32-36`）。
+        e.super_man = true;
         // `Entity::new` 是玩家 ctor 等价物（SearchTime=1000）⇒ 非玩家还原占位缺省值。
         e.ai.search_time = crate::entity::BASE_ANIMAL_SEARCH_TIME;
         e.map_id = spawn.map_id;
@@ -342,8 +345,12 @@ pub fn npc_run(world: &mut World, actor_id: i32) -> NpcRunOutcome {
         // oracle `switch` 只产 0/1/2（其余 `npc = null` 整行跳过）⇒ 其余值不可达。
         Some(_) => {}
     }
-    // `NormNpc.Run`（`NormNpc.cs:1604-1611`）末尾 `base.Run()`：VerifyMapTime 段
-    // （`BaseObject.Base.cs:223-228`）——固定 NPC 静止不动，必须靠它刷新格子时间。
+    // `NormNpc.Run`（`NormNpc.cs:1604-1611`）末尾 `base.Run()`：先 SuperMan 回满
+    // （`BaseObject.Base.cs:32-36`），再 VerifyMapTime 段（`:223-228`）——固定 NPC 静止不动，
+    // 必须靠后者刷新格子时间。
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.run_super_man_refill();
+    }
     world.verify_map_time(actor_id);
     outcome
 }
