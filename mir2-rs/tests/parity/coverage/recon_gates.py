@@ -365,10 +365,18 @@ class RustCorpus:
         只写进 crate 内部、二进制侧零引用的装载是死注册表（例：`crates/data/src/lists.rs` 全仓零引用）
         ⇒ 不算实现、须判 RED。据此 `AdminList/GameLogItemNameList/ItemNameList/DisableSendMsgList/
         DenyChrNameList/NoClearMonList` 由 `implemented` 降级（见 `content_rust_implemented` 判据）。
+
+        **2026-10-21 收窄（A-09 后 M8 红）**：同一文件里有多个装载函数时（`lists.rs` 七个），
+        接线了**其中一个**不能代表**这个内容件**已接。给了 `item_stem` 时只认「函数名归一化后
+        含该 stem」的装载函数被 bins 引用（`ItemNameList`→`load_item_name_list_file`）；
+        否则 `lists.rs` 一旦接了 ItemNameList，AdminList 等六件会被一起误判 implemented。
         """
         text = self.file_text.get(path, "")
         names = RE_LOAD_FN_NAME.findall(text)
+        stem_n = re.sub(r"[^a-z0-9]", "", item_stem.lower()) if item_stem else ""
         for nm in names:
+            if stem_n and stem_n not in re.sub(r"[^a-z0-9]", "", nm.lower()):
+                continue
             if self.bins_ref_other(nm, path):
                 return True
         if item_stem and Path(path).stem.lower() == item_stem and self.bins_ref_other(Path(path).stem, path):

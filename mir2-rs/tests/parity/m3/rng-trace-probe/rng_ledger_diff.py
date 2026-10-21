@@ -61,7 +61,7 @@ CSHARP_ATTACK_RE = re.compile(
 # （`6a774ea79` 只把它从 1002 移到 1007，`bbf9694aa` 才到 1014）。三行都必须分类为 attack，
 # 否则玩家攻击链的两次 `AttackSuccess` 取数被算成 noise。
 # 两处 `RUST_ATTACK_RE` 仍逐字同表（`attack_rng_ledger.py` selftest 钉住）。
-RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|829|831|837|856|858|936|1014|1018|1126|1150|1258)")
+RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|829|831|837|856|858|936|1014|1016|1018|1126|1150|1152|1258|1260)")
 
 CSHARP_MARKER = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
 RUST_MARKER = r"crates\world\src\combat.rs:109"
@@ -86,6 +86,8 @@ CANON_RULES = [
     (re.compile(r"crates/world/src/combat\.rs:758$"), "hit_gate"),
     # 命中骰（`_Attack` 的 `RandomByte(target.SpeedPoint)`）：**当前**活栈 1014（`bbf9694aa` 起），
     # 936（`e7d432189` magic-draws-move 时代）/ 758 / 736 只作旧 trace 别名。
+    (re.compile(r"crates/world/src/combat\.rs:1016$"), "hit_gate"),
+    # 2026-10-21：商人 race 收口的 rustfmt 折行使三处取数各 +2 ⇒ 1016/1152/1260 为当前活栈。
     (re.compile(r"crates/world/src/combat\.rs:1014$"), "hit_gate"),
     (re.compile(r"crates/world/src/combat\.rs:936$"), "hit_gate"),
     (re.compile(r"crates/world/src/combat\.rs:628$"), "hit_struck_damage"),
@@ -97,7 +99,7 @@ CANON_RULES = [
     # 1258 = 毒门 `Random(AntiPoison+Rate)`（`!UnParalysis && Paralysis` 时抽）。
     # 旧别名：1018 = `e7d432189` 时代的 `Random(5)`（**不是命中骰**）、
     # 1126 = `e7d432189` 时代的毒门。
-    (re.compile(r"crates/world/src/combat\.rs:(1150|1258|1018|1126)$"), "attack_success"),
+    (re.compile(r"crates/world/src/combat\.rs:(1150|1258|1152|1260|1018|1126)$"), "attack_success"),
     # **MB-4 F4**：`struck_damage_durability` / `get_hit_struck_damage` 的**当前**取数行
     # （改前只登记了旧行号 601/609/628/630 ⇒ 真机 trace 落 `UNCLASSIFIED`）。
     (re.compile(r"crates/world/src/combat\.rs:829$"), "struck_durability"),
