@@ -2666,8 +2666,12 @@ mod tests {
             login_sys_msgs: Default::default(),
             test_server: true,
             pay_ment_three: true,
-            // 金标准 16 条抓包截到 `10`，不含 `657`（重启前的旧抓包）⇒ 不给输入（槽位仍占堆）。
-            char_status: None,
+            // 金标准抓包（`tests/golden/session-20261010-c3-hook/capture.jsonl`，
+            // port=7200/dir=s2c，329 帧）在 `654` 之后有 `657,657,42`（index 47..50）：
+            // 两条 657 逐字节相同 ⇒ 本 fixture 必须给 `(CharStatus=0, HitSpeed=0)` 才能让
+            // `frames()` 产出与抓包**逐字节相同**的两条 657（`actor_id` 取自 ident=51 帧的 Recog）。
+            // 旧注释「抓包截到 10、不含 657」与文件事实相反（已订正）。
+            char_status: Some((0, 0)),
         }
     }
 
@@ -2687,27 +2691,37 @@ mod tests {
             .iter()
             .map(|b| u16::from_le_bytes([b[4], b[5]]))
             .collect();
-        // 模型 D：六条 + 654 的出队序 = 52, 752, 621, 211, 811, 46, 654
+        // 模型 D：六条 + 654 + 两条 657 的出队序 = 52, 752, 621, 211, 811, 46, 654, 657, 657
         // （金标准角色无装备/无技能 ⇒ 621/211 的门关，不产帧，但槽位仍参与堆布局）。
         // 2026-10-20 真机（`winplay0`；抓包文件 mtime，目录名 `20261022`）与 c3 金标准均含
-        // **第二条 42**（`RefShowName`，
-        // `PlayObject.cs:1415`）：654 之后、100×4 之前。本 fixture 未给 SysMsg 正文 ⇒ 100 不产帧。
+        // **第二条 42**（`RefShowName`，`PlayObject.cs:1415`）：`654,657,657` 之后、100×4 之前。
+        // 本 fixture 未给 SysMsg 正文 ⇒ 100 不产帧。
         assert_eq!(
             got_idents,
             vec![
-                658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46, 10, 654, 42
+                658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46, 10, 654,
+                657, 657, 42
             ],
             "模型 D 的逐帧 ident 序（真机实拍：52 在 752 前，四个 C# 会话一致）"
         );
-        // capture 前 16 条 + 654：按 ident 取原始线缆，逐条比字节（顺序按模型 D，字节不变）。
+        // capture 前 16 条 + 654 + 657：按 ident 取原始线缆，逐条比字节（顺序按模型 D，字节不变）。
         let mut capture_by_ident: Vec<(u16, &Vec<u8>)> =
             golden.iter().map(|(id, raw)| (*id, raw)).collect();
         let cl = golden_s2c_ident(messages::SM_CHANGELIGHT);
         capture_by_ident.push((messages::SM_CHANGELIGHT, &cl));
+        // 金标准 `654` 之后的两条 657（capture index 48/49，逐字节相同）——oracle 锚定的
+        // 真实序列 `654, 657, 657, 42` 必须被本用例逐字节校验，不能只靠 ident 序。
+        let cs = golden_s2c_ident(messages::SM_CHARSTATUSCHANGED);
+        assert_eq!(
+            cs,
+            golden_s2c_ident_all(messages::SM_CHARSTATUSCHANGED)[1],
+            "金标准两条 657 必须逐字节相同（首条/次条）"
+        );
+        capture_by_ident.push((messages::SM_CHARSTATUSCHANGED, &cs));
         assert_eq!(
             got_idents.len(),
-            capture_by_ident.len() + 1,
-            "模型 D 产出的帧数 = capture 可见帧数（17）+ 第二条 42（`RefShowName`，与首条同字节）"
+            capture_by_ident.len() + 2,
+            "模型 D 产出的帧数 = capture 可见帧数（18，含 654/657/657/42）+ 第二条 42（`RefShowName`，与首条同字节）+ 第二条 657（与首条同字节）"
         );
         for body in &built {
             let ident = u16::from_le_bytes([body[4], body[5]]);

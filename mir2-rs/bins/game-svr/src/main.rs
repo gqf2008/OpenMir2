@@ -11018,7 +11018,10 @@ fn drain_aoi_downlink(
 /// 位置：`drain_aoi_downlink`（出现帧，优先级 17）之后、`drain_login_tail`（654=153）之前 ——
 /// 与 `RM_TURN(17) < RM_WALK(18) < RM_CHANGELIGHT(153)` 的队列优先级同序。
 ///
-/// 返回本 tick 实发的 `SM_WALK` 帧数（诊断用）。
+/// 返回本 tick **识别出的走位步数**（诊断用）：每个通过上述全部门、并已交给
+/// [`broadcast_ref_msg`] 的 actor 计 1（**无收件人时也 +1**，所以不等于实际发出的帧数）。
+/// 注意 `max(|dx|,|dy|) != 1` 的**整段位移**（≥2 格，例如一次瞬移两步）直接跳过 ⇒ **零帧**；
+/// 本函数不按格拆帧，也不会「只发最后一格」（旧 T-146 residual ① 的口径已按实现订正）。
 fn drain_monster_walk_downlink(
     rec: &mir2_world::TickRecord,
     world: &mir2_world::World,
@@ -17398,7 +17401,12 @@ fn sim_loop(
                                                 // （`SendLogon` 的 `MessageBodyWL` 与 `RecalcAbilitys` 尾的
                                                 // `CharStatus = GetCharStatus()`）⇒ 这里算一次，两处共用，
                                                 // 防止 `50` 尾与两条 `657` 的 `Param/Tag` 漂移。
-                                                let login_char_status: i32 = 0;
+                                                // 会话实体刚由 `enter_map` 建好：`world.get_char_status`
+                                                // 读 `ActorBuffSystem.GetBuffStatus() | (CharStatusEx & 0xFFFF)`
+                                                // 的等价实现（`crates/world/src/buff.rs`）；新登录无 buff、
+                                                // `char_status_ex` 初值 0 ⇒ 当前值恒 0（与金标准 #3 的
+                                                // `CharStatus == 0` 一致），但走真实实现而非硬编码。
+                                                let login_char_status: i32 = world.get_char_status(id);
                                                 let logon = data.map(|d| enter::LogonInputs {
                                                     feature: enter::FeatureInputs {
                                                         dress_shape,
@@ -17413,8 +17421,9 @@ fn sim_loop(
                                                     },
                                                     // `GetCharStatus()` = `ActorBuffSystem.GetBuffStatus()
                                                     // | (CharStatusEx & 0xFFFF)`；会话初生无 buff、`CharStatusEx=0`
-                                                    // （`BaseObject.cs:393`）⇒ 0。buff 系统未移植 ⇒ 记 0 并登记
-                                                    // （金标准 #3 的 `CharStatus == 0` 印证）。
+                                                    // （`BaseObject.cs:393`）⇒ 0。这里直接调用
+                                                    // `world.get_char_status(id)`（buff 系统已移植），当前同值，
+                                                    // 金标准 #3 的 `CharStatus == 0` 印证。
                                                     char_status: login_char_status,
                                                     // `WorldServer.cs:1146`：`AllowGroup = 记录 allow_group > 0`。
                                                     allow_group: d.allow_group > 0,
