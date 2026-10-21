@@ -35,8 +35,10 @@
 //!   行会动作本身仍是脚本标签之后的**分支**（`GuildOfficial.cs:71-89`），不是标签入口。
 //! - `@@requestcastlewarnow<n>`（`GuildOfficial.cs:203+`）属攻城区，本车道不接。
 //! - 固定 NPC 按 `Npcs.txt` 的 `type` 分流（`LocalDB.cs:688-698`）：只有 `1` =
-//!   `GuildOfficial` 进入本模块标签集；`0` = `Merchant` / `2` = `CastleOfficial` 的
-//!   `UserSelect` 未移植（T-140）⇒ 本模块对它们零帧零副作用，宿主落到既有商店默认臂。
+//!   `GuildOfficial` 进入本模块标签集；`0` = `Merchant` 的脚本半由 `handle_shop_cmd` 的
+//!   固定 NPC 臂负责（T-137）；`2` = `CastleOfficial` 的 `Click`/`UserSelect` 门未移植
+//!   （T-140/T-40，见 whitelist T-137 残余①）⇒ 由宿主两条臂的类型门
+//!   `fixed_npc_script_allowed` 拦下，本模块对二者零帧零副作用。
 //! - `GetShowName()` 的 42 尾用进图时展示表（`guildname` 恒空）；oracle 在 `RefShowName`
 //!   时重算（`ShowGuildName`/攻城区分支）。部署件 `ShowGuildName=0` 且 NPC 不在攻城区 ⇒ 等价。
 
@@ -472,8 +474,9 @@ pub(crate) fn handle_select(
     }
     // `npc.UserSelect(this, sMsg.Trim())`（`Operate.cs:123`）是**按实际类**的虚调用：
     // `Npcs.txt` type 0/1/2 ⇒ Merchant/GuildOfficial/CastleOfficial（`LocalDB.cs:688-698`）。
-    // 只有 `GuildOfficial` 的 `UserSelect` 在本模块；Merchant/CastleOfficial 未移植（T-140）
-    // ⇒ 零帧零副作用（宿主侧同样按 type 分流，不进本函数）。
+    // 只有 `GuildOfficial` 的 `UserSelect` 在本模块；type 0 `Merchant` 的脚本半由
+    // `handle_shop_cmd` 的固定 NPC 臂负责（T-137），type 2 `CastleOfficial` 由两条臂的
+    // `fixed_npc_script_allowed` 类型门拦下（T-140 / T-137 残余①）⇒ 二者都不进本函数。
     if npc_type != mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL {
         glog!(
             "DBG",

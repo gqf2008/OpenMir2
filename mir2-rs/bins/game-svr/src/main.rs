@@ -3686,6 +3686,26 @@ fn handle_query_val_cmd(
     true
 }
 
+/// 固定 NPC（`Envir/Npcs.txt`）进入脚本虚调用（`Click` / `UserSelect`）的**类型门**。
+///
+/// `LocalDB.LoadNpcs` 的 `switch`（`LocalDB.cs:688-698`）：`0` ⇒ `Merchant`、`1` ⇒
+/// `GuildOfficial`、`2` ⇒ `CastleOfficial`。前两者的 `Click` 都落在 `NormNpc.Click`
+/// （`NormNpc.cs:68-73`，`GotoLable("@main")`），脚本型 `UserSelect` 亦已移植（T-137）⇒ 放行。
+///
+/// `2` = `CastleOfficial` 覆写了 `Click`（`CastleOfficial.cs:20-30`）与 `UserSelect`
+/// （`:93-107`）：`Castle == null` ⇒ 红字 `SysMsg("NPC不属于城堡!!!")` 后 return；否则
+/// `Click` 要 `Castle.IsMasterGuild(MyGuild) || Permission >= 3`、`UserSelect` 要
+/// `Castle.IsMasterGuild(MyGuild) && IsGuildMaster()`（再过 `LableIsCanJmp`）才
+/// `base.Click`/`GotoLable`。**这些门未移植**（T-40/T-140）⇒ 宿主在类型门处拦下，
+/// 保持普通玩家侧的**零帧**（oracle 的 `Castle == null` 红字 `SysMsg` 与 `base.UserSelect`
+/// 的 `ScriptCurrLable` 账本亦未建模，登记在 T-137 残余①）。
+fn fixed_npc_script_allowed(npc_type: i32) -> bool {
+    matches!(
+        npc_type,
+        mir2_world::npc::NPC_TYPE_MERCHANT | mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL
+    )
+}
+
 /// `PlayObject` 的 `ClickNpcTime` 默认限频（`GameSvrConf.cs:1481` `ClickNpcTime = 1000`，
 /// `Server.conf [Server] ClickNPCTime` 覆盖；本部署无该键 ⇒ 缺省 1000。**登记**：配置未接，恒用缺省）。
 const CLICK_NPC_TIME_MS: i32 = 1000;
@@ -3796,7 +3816,20 @@ fn handle_click_npc_cmd(
         );
         return false;
     };
-    let (nx, ny, nmap) = (ne.x, ne.y, ne.map_id);
+    let (nx, ny, nmap, ntype) = (ne.x, ne.y, ne.map_id, ne.npc.as_ref().map(|st| st.npc_type));
+    // `normNpc.Click(this)` 是**按实际类**的虚调用 ⇒ 先过类型门（[`fixed_npc_script_allowed`]）。
+    // type 2 `CastleOfficial` 的门未移植（T-40/T-140）：oracle 对普通玩家在 `Castle` 门处
+    // return（`CastleOfficial.cs:20-30`），可观测面同样是零帧；红字 `SysMsg` 未建模（T-137 残余①）。
+    // `ClickNpcTime` 已在门外按 oracle 置位（`PlayObject.Base.cs:678-682`），不属本门。
+    if let Some(ntype) = ntype {
+        if !fixed_npc_script_allowed(ntype) {
+            glog!(
+                "DBG",
+                "CM_CLICKNPC：固定 NPC type={ntype} 不在 {{0,1}} ⇒ 类型门拒绝（CastleOfficial 门未移植，T-40/T-140）ChrName={chr_name} npc={npc_actor_id}"
+            );
+            return false;
+        }
+    }
     if nmap == pmap && (nx - px).abs() <= 15 && (ny - py).abs() <= 15 {
         // `normNpc.Click(this)`（`NormNpc.cs:68-73`）：清 `ScriptGotoCount/ScriptGoBackLable/
         // ScriptCurrLable`，再 `GotoLable(this, "@main", false)`。
@@ -4469,6 +4502,7 @@ fn handle_shop_cmd(
         return;
     };
     let is_fixed_npc = me.merchant.is_none();
+    let fixed_npc_type = me.npc.as_ref().map(|st| st.npc_type);
     let (mx, my, mmap, mflags, mprice, mcastle, mitem_type, mhide, mchr_name) = {
         if let Some(st) = me.merchant.as_ref() {
             (
@@ -4498,6 +4532,20 @@ fn handle_shop_cmd(
             )
         }
     };
+    // `npc.UserSelect(this, sMsg.Trim())` 是**按实际类**的虚调用 ⇒ 先过类型门
+    // （[`fixed_npc_script_allowed`]）。type 2 `CastleOfficial` 的 `UserSelect` 门未移植
+    // （`CastleOfficial.cs:93-107`：`Castle` 非空 + `Castle.IsMasterGuild(MyGuild)` +
+    // `IsGuildMaster()` 才 `GotoLable`；`Castle == null` 只有红字 `SysMsg`）⇒ 本宿主在类型门
+    // 直接拦下，保持普通玩家侧零帧零副作用（红字与 `base.UserSelect` 账本未建模，T-137 残余①）。
+    if let Some(ntype) = fixed_npc_type {
+        if !fixed_npc_script_allowed(ntype) {
+            glog!(
+                "DBG",
+                "商店命令：固定 NPC type={ntype} 不在 {{0,1}} ⇒ 类型门拒绝（CastleOfficial 门未移植，T-40/T-140）ident={ident} ChrName={chr_name} npc={merchant_id}"
+            );
+            return;
+        }
+    }
     let same_map = mmap == pmap;
     let within_sight = (mx - px).abs() < 15 && (my - py).abs() < 15;
     let within_15 = (mx - px).abs() <= 15 && (my - py).abs() <= 15;
@@ -16567,8 +16615,9 @@ fn sim_loop(
                     // `npc.UserSelect` 是**按实际类**的虚调用——`Npcs.txt` type 0/1/2 ⇒
                     // Merchant/GuildOfficial/CastleOfficial（`LocalDB.cs:688-698`）——所以只有
                     // type 1（GuildOfficial）进 `bins/game-svr/src/guild_official.rs`；
-                    // Merchant(0)/CastleOfficial(2) 的 `UserSelect` 未移植（T-140），落到既有
-                    // 商店默认臂（固定 NPC 无 `merchant` 态 ⇒ 零帧零副作用）。
+                    // type 0（Merchant）的脚本半走 `handle_shop_cmd` 的固定 NPC 臂（T-137）；
+                    // type 2（CastleOfficial）的 `Click`/`UserSelect` 门未移植（T-40/T-140），
+                    // 由两条臂的 `fixed_npc_script_allowed` 类型门拦下 ⇒ 零帧零副作用。
                     let fixed_npc_type = if cmd.ident == game_svr::shop::CM_MERCHANTDLGSELECT {
                         world
                             .entities
@@ -50247,6 +50296,37 @@ mod tests {",
                 .npc_type = npc_type;
         }
 
+        /// 给固定 NPC 注入一份 `Npc_def` 脚本（走生产装载入口
+        /// [`game_svr::npcs::load_npc_def_scripts`]，脚本名 = `ChrName-MapName`）。
+        ///
+        /// 夹具默认 `book` 为空表（既有用例口径「无说词」）；本方法只在需要覆盖 type 1 的
+        /// `GotoLable` 脚本半时显式调用。
+        fn inject_npc_def_script(&mut self, text: &str) {
+            t137_write(&self.store_dir, "Npc_def/比奇国王-0.txt", text);
+            let placed = vec![game_svr::npcs::PlacedNpc {
+                actor_id: self.npc_id,
+                chr_name: "比奇国王".to_string(),
+                map_name: "0".to_string(),
+                x: 11,
+                y: 10,
+            }];
+            let mut failures = Vec::new();
+            let mut missing = Vec::new();
+            game_svr::npcs::load_npc_def_scripts(
+                &self.store_dir.join("Envir"),
+                &placed,
+                &mut self.book,
+                &mut |lo, _hi| lo,
+                &mut failures,
+                &mut missing,
+            );
+            assert!(
+                failures.is_empty() && missing.is_empty(),
+                "夹具脚本必须装载成功：{failures:?}/{missing:?}"
+            );
+            assert_eq!(self.book.len(), 1, "夹具脚本表恰好一条");
+        }
+
         fn script_ledger(&self) -> (String, String) {
             self.shop_sessions.get("hero").map_or_else(
                 || (String::new(), String::new()),
@@ -50333,6 +50413,15 @@ mod tests {",
 
     fn gnp_idents(frames: &[Vec<u8>]) -> Vec<u16> {
         frames.iter().map(|b| gnp_ident(b)).collect()
+    }
+
+    /// 某条网关线上的 `SM_MERCHANTSAY` 说词尾文本（按出帧序）。
+    fn gnp_says(frames: &[(i32, Vec<u8>)], socket: i32) -> Vec<String> {
+        gnp_on(frames, socket)
+            .iter()
+            .filter(|b| gnp_ident(b) == mir2_protocol::messages::SM_MERCHANTSAY)
+            .map(|b| gnp_tail_text(b))
+            .collect()
     }
 
     /// **判据 1（建会成功全链）**：`@@buildguildnow\rMyGuild` ⇒ 202(直发) → 750 → 762 → 622 → 653 → 42；
@@ -50770,7 +50859,10 @@ mod tests {",
         );
 
         f.call("@back");
-        assert!(f.drain().is_empty(), "@back 无说词（Npc_def 脚本未装载）");
+        assert!(
+            f.drain().is_empty(),
+            "@back 无说词（夹具 book 为空表 ⇒ GotoLable 无脚本可说）"
+        );
         let ss = f.shop_sessions.get("hero").unwrap();
         assert_eq!(
             ss.script_curr_lable, "",
@@ -50838,6 +50930,73 @@ mod tests {",
             "GuildOfficial（type 1）⇒ 正常建会帧序"
         );
     }
+
+    /// **T-137 复核 Minor-2**：type 1 `GuildOfficial` 的 `GotoLable` 脚本半（说词 / 脚本帧 /
+    /// `@back` 回跳）在 `handle_select` 生产入口上被**非空** `Npc_def` 脚本覆盖。
+    ///
+    /// oracle：`GuildOfficial.UserSelect`（`GuildOfficial.cs:70`）的
+    /// `ScriptEngine.GotoLable(PlayObject, ActorId, sLabel, !boCanJmp)`——`#SAY` 说词经
+    /// `SM_MERCHANTSAY` 入 `MsgQueue`（`RM_MERCHANTSAY` 优先级 1），`#ACT` 的 `GAMEGOLD + 5`
+    /// 经 `GameGoldChanged()`（`BaseObject.cs:593-599`）入队 `RM_GAMEGOLDCHANGED`
+    /// （`8084 & 0xFF = 148`）⇒ 说词先于元宝帧（`@back` 的回跳说词同口径，经 `:86-89`
+    /// 的二次 `GotoLable`）。
+    ///
+    /// 牙：删 `queue_script_output` 的脚本帧入队（`for f in frames` 支）⇒ 缺 `SM_GAMEGOLDNAME`
+    /// ⇒ 帧序断言红；删说词入队 ⇒ 零说词 ⇒ 首条/回跳断言红。
+    #[test]
+    fn guild_official_select_runs_npc_def_script_and_back() {
+        let mut f = GuildNpcFixture::new();
+        f.inject_npc_def_script(
+            "[@main]\n欢迎来到王宫\\ <打听/@ask>\n\n[@ask]\n#ACT\nGAMEGOLD + 5\n#SAY\n王的答复：<$GAMEGOLD>\\ <返回/@back>\n",
+        );
+        f.hero_session_mut().game_gold = 10;
+        // 真冻结客户端的 `SoftVersionDateEx != 0`（`SM_GAMEGOLDNAME` 的门）。
+        f.hero_session_mut().soft_version_date = 120_020_522;
+
+        // ① `@main`：脚本说词经 `SM_MERCHANTSAY`（尾 = `ChrName/` + 原文）下发；
+        //    `LableIsCanJmp("@main")` 放行，说词里的 `@ask` 重建 `CanJmpScriptLableMap`。
+        f.call("@main");
+        let says = gnp_says(&f.drain(), 901);
+        assert_eq!(says.len(), 1, "@main 一条说词：{says:?}");
+        assert!(says[0].starts_with("比奇国王/"), "说词尾口径：{}", says[0]);
+        assert!(says[0].contains("<打听/@ask>"), "说词原文：{}", says[0]);
+        assert!(
+            f.shop_sessions["hero"]
+                .can_jmp_labels
+                .iter()
+                .any(|l| l == "@ask"),
+            "说词必须重建 `CanJmpScriptLableMap`：{:?}",
+            f.shop_sessions["hero"].can_jmp_labels
+        );
+
+        // ② `@ask`：说词（优先级 1）先于 `SM_GAMEGOLDNAME`（148），`GAMEGOLD + 5` 写回会话。
+        f.call("@ask");
+        let frames = f.drain();
+        let idents = gnp_idents(&gnp_on(&frames, 901));
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_MERCHANTSAY,
+                mir2_protocol::messages::SM_GAMEGOLDNAME
+            ],
+            "@ask ⇒ 说词(1) → 元宝帧(148)：{idents:?}"
+        );
+        let says = gnp_says(&frames, 901);
+        assert!(
+            says.iter().any(|s| s.contains("王的答复：15")),
+            "`@ask` 说词必须带本次写回后的元宝（10 + 5）：{says:?}"
+        );
+        assert_eq!(f.hero_session_mut().game_gold, 15, "`GAMEGOLD + 5` 写回");
+
+        // ③ `@back`：`GuildOfficial.cs:86-89` 的 `ScriptGoBackLable`（= @main）二次 `GotoLable`。
+        f.call("@back");
+        let back = gnp_says(&f.drain(), 901);
+        assert!(
+            back.iter().any(|s| s.contains("欢迎来到王宫")),
+            "`@back` 必须回跳 `@main` 并产说词：{back:?}"
+        );
+    }
+
     // ==================================================================================
     // **卡 T-137**：固定 NPC 的 `Npc_def/<ChrName>-<MapName>` 脚本装载（tier=R）
     // ==================================================================================
@@ -51156,6 +51315,70 @@ mod tests {",
         assert!(
             back_says.iter().any(|s| s.contains("老人：你需要什么")),
             "`@back` 必须 GotoLable(ScriptGoBackLable=@main) 并产说词：{back_says:?}"
+        );
+    }
+
+    /// **T-137 复核 F1（回归）**：type 2 `CastleOfficial` 不进 `Npc_def` 脚本。
+    ///
+    /// oracle 的门是两层且都未建模（T-40/T-140）：
+    /// - `Click`（`CastleOfficial.cs:20-30`）：`Castle == null` ⇒ 红字 `SysMsg("NPC不属于城堡!!!")`
+    ///   后 return；否则 `Castle.IsMasterGuild(MyGuild) || Permission >= 3` 才 `base.Click`；
+    /// - `UserSelect`（`:93-107`）：先 `base.UserSelect`（回跳账本），`Castle == null` 同一红字；
+    ///   否则 `Castle.IsMasterGuild(MyGuild) && IsGuildMaster()` 且 `LableIsCanJmp` 放行才 `GotoLable`。
+    ///
+    /// 本仓由 [`fixed_npc_script_allowed`] 的类型门替代两道门：普通玩家点击/选择**零说词零帧**、
+    /// `GAMEGOLD` 不跑、不进 `base.UserSelect` 账本（与修复前的放宽行为相反）。
+    ///
+    /// 夹具：`老人`（type 0，脚本表里已有 `Npc_def/老人-0.txt`）改判为 type 2 —— 脚本条目、
+    /// 同图/距离门都不变，唯一变量是 `npc_type` ⇒ 零帧只可能来自类型门。
+    ///
+    /// 牙（真跑，先红后逐字节还原）：把 `fixed_npc_script_allowed` 放宽成恒 `true`
+    /// （或删两条臂的类型门）⇒ 点击出 `老人/…` 说词、选择 `@main`/`@ask` 出说词且 `@ask`
+    /// 跑 `GAMEGOLD + 5` ⇒ 断言红。
+    #[test]
+    fn t137_type2_castle_official_has_zero_frames_on_click_and_select() {
+        let mut rig = T137Rig::new();
+        let elder_id = rig.elder_id;
+        rig.world
+            .entities
+            .get_mut(elder_id)
+            .expect("老人存在")
+            .npc
+            .as_mut()
+            .expect("固定 NPC 有 NpcState")
+            .npc_type = mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL;
+
+        assert!(!rig.click(elder_id), "type 2 ⇒ 不可到达 Click 点");
+        assert!(rig.drain().is_empty(), "type 2 点击 ⇒ 零帧");
+        rig.dlg_select(elder_id, "@main");
+        assert!(rig.drain().is_empty(), "type 2 @main ⇒ 零帧");
+        rig.dlg_select(elder_id, "@ask");
+        assert!(rig.drain().is_empty(), "type 2 @ask ⇒ 零帧");
+        assert_eq!(rig.game_gold(), 10, "type 2 ⇒ 脚本不跑、GAMEGOLD 不动");
+        assert!(
+            rig.shop_sessions.get("hero").is_none_or(|ss| {
+                ss.script_curr_lable.is_empty() && ss.script_go_back_lable.is_empty()
+            }),
+            "type 2 ⇒ 不进 base.UserSelect 回跳账本"
+        );
+
+        // 对照：同一实体改回 type 0（脚本表/距离不变）⇒ 两条路径恢复 ⇒ 上文零帧只可能来自类型门。
+        rig.world
+            .entities
+            .get_mut(elder_id)
+            .expect("老人存在")
+            .npc
+            .as_mut()
+            .expect("固定 NPC 有 NpcState")
+            .npc_type = mir2_world::npc::NPC_TYPE_MERCHANT;
+        rig.sessions
+            .get_mut("hero")
+            .expect("会话存在")
+            .click_npc_time = None;
+        assert!(rig.click(elder_id), "type 0 对照 ⇒ 到达 Click 点");
+        assert!(
+            !T137Rig::says(&rig.drain()).is_empty(),
+            "type 0 对照 ⇒ @main 说词"
         );
     }
 
