@@ -26,6 +26,10 @@
 //!   编码器 [`smframe::sm_disappear`]，帧面 [`disappear_frame`]，由 `lib.rs` 的 AOI 消失段按
 //!   `world` 的 `TickRecord::hides` 发射（原「没有 `sm_disappear` 编码器」的登记已过期，订正）；
 //! - 怪物的 `SM_TURN`：`Entity` 有怪物，但生产路径尚未生成怪物（无 `DisplayTable` 项）⇒ 跳过；
+//! - 固定 NPC / 商人的 `SM_TURN`（`TurnTo` ⇒ 无名尾）与 `SM_HIT`（`RM_HIT`）——**已接**（T-154 F1）：
+//!   编码器 [`turn_pair_nameless`] / [`hit_frame`]，帧面由 `lib.rs` 的
+//!   `drain_npc_merchant_turns` / `drain_npc_merchant_hits` 按 `TickRecord` 的
+//!   `{npc,merchant}_{turns,hits}` 发射（真机锚 3 对 nameless 转身见 T-154）；
 //! - `GetChrColor` 的**行会/PK/战争**分支（需要行会与战争系统，未移植）⇒ 用 `NameColor`；
 //!   无行会/PK 时 oracle 的结果就是 `NameColor`（`PlayObject.cs:3585-3595` 的非战斗支）。
 
@@ -76,6 +80,20 @@ pub fn gbk(s: &str) -> Vec<u8> {
 /// ⇒ `BaseObject.GetChrColor`）最终落到 `baseObject.GetNameColor()` = 该字段。
 pub const MONSTER_NAME_COLOR: u8 = 255;
 
+/// oracle `SystemShare.Config.NpcNameColor` 的**缺省**（`src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1923`
+/// 的 `NpcNameColor = 255`）。
+///
+/// 观察者侧 `GetChrColor` 的 **NPC 支**（`src/M2Server/Actor/BaseObject.Base.cs:869-874`）：
+/// `if (baseObject.Race == ActorRace.NPC) return SystemShare.Config.NpcNameColor;`
+/// —— 这一支**先于** `Master` 宝宝支与 `GetNameColor()` 命中；`NormNpc()` ctor 置
+/// `Race = ActorRace.NPC`（`src/M2Server/Npc/NormNpc.cs:42`），商人 / `GuildOfficial` /
+/// `CastleOfficial` 全部继承 ⇒ 固定 NPC 与商人的名色恒取该配置值，**不是** `BaseObject.NameColor`。
+///
+/// ⚠ **只实现缺省值**：本宿主不读 `Server.conf` 的 `NpcNameColor` 键（`crate::config` 只解析
+/// 少数 `[Setup]` 键）⇒ 部署件覆写该键时本仓仍发 255。缺键/未覆写（部署件实测）逐字节等价；
+/// 覆写口径登记在 `whitelist.md` T-154 残余（配置残余）。
+pub const NPC_NAME_COLOR: u8 = 255;
+
 /// `M2Share.FilterShowName(sName)`（`src/M2Server/M2Share.cs:571-594`）：从**首个 ASCII 数字或
 /// `-`** 处截断（`"稻草人2"` ⇒ `"稻草人"`、`"a-1"` ⇒ `"a"`）；没有则原样返回。
 ///
@@ -118,10 +136,21 @@ pub fn monster_display(dir: u8, info: &MonsterInfo) -> ActorDisplay {
 /// （`src/M2Server/Npc/NormNpc.cs:43`）。
 pub const NPC_LIGHT: u8 = 2;
 
+/// `BaseObject()` 构造器的 `Dir = 4`（`src/M2Server/Actor/BaseObject.cs:378`）——固定 NPC 与
+/// 商人**在首个 `TurnTo` 之前**的可观测朝向。
+///
+/// `NormNpc()`（`src/M2Server/Npc/NormNpc.cs:38-52`）与 `Merchant()` 的 ctor 都**不覆写** `Dir`
+/// ⇒ `Dir` 直到 `GuildOfficial.Run`/`Merchant.Run` 的 `TurnTo(...)`（`BaseObject.cs:1582-1586`）
+/// 才变。宿主侧 `Entity::new` 的 `ai.dir` 缺省 `0`（`crates/world` 不在本卡写集）⇒ 由
+/// `npcs::place_fixed_npcs_with_scripts` / `merchant::spawn_merchants_with_scripts` 在挂图成功后
+/// 用本常量补齐（T-154 Minor-2）。
+pub const NPC_INITIAL_DIR: u8 = 4;
+
 /// `NormNpc` 家族（`Npcs.txt` 固定 NPC 与 `Merchant.txt` 商人）的展示层 [`ActorDisplay`]。
 ///
 /// 逐项锚点（与 [`monster_display`] 同形，只有 `light` 与 `RaceImg` 来源不同）：
-/// - `dir` = `Entity.ai.dir`（oracle `BaseObject.Dir`；`NormNpc` ctor 继承 `Dir = 4`）；
+/// - `dir` = `Entity.ai.dir`（oracle `BaseObject.Dir`；首个 `TurnTo` 前 = ctor 的 `Dir = 4`
+///   ⇒ 宿主在挂图成功后按 [`NPC_INITIAL_DIR`] 补齐，T-154 Minor-2）；
 /// - `light` = [`NPC_LIGHT`] = 2（`NormNpc()` ctor `Light = 2`，`NormNpc.cs:43`；
 ///   `Merchant : NormNpc` 继承，`Merchant.cs` ctor 不覆写）；
 /// - `feature` = `GetFeature()` = `MakeMonsterFeature(RaceImg, MonsterWeapon, Appr)`
@@ -131,8 +160,9 @@ pub const NPC_LIGHT: u8 = 2;
 ///   `Merchant.txt` 的 Appr 列（`LocalDB.cs:707`）；
 /// - `feature_ex` = `GetFeatureEx()` = 0（`BaseObject.Base.cs:926`，`NormNpc` 不 override）；
 /// - `status` = `GetCharStatus()` = 0（无 buff）；
-/// - `name_color` = [`MONSTER_NAME_COLOR`] = 255（`BaseObject` ctor `NameColor = 255`，
-///   `BaseObject.cs:385`；`NormNpc` 不覆写）；
+/// - `name_color` = [`NPC_NAME_COLOR`] = 255 = `Config.NpcNameColor` 缺省
+///   （`BaseObject.Base.cs` 的 `GetChrColor` **NPC 支**先于 `Master`/`GetNameColor()` 命中；
+///   `GameSvrConf.cs` 的 `NpcNameColor = 255`）；
 /// - `show_name` = `FilterShowName(ChrName)` 的 GBK 字节（`BaseObject.Base.cs:779`）。
 ///
 /// 口径与 `monster_display` 的唯一差别是 `light`（NPC 2 / 怪物 0）；`feature` 的字段序**相同**
@@ -146,7 +176,7 @@ pub fn npc_display(dir: u8, race_img: u8, appr: u16, name: &str) -> ActorDisplay
         make_monster_feature(race_img, 0, appr),
         0,
         0,
-        MONSTER_NAME_COLOR,
+        NPC_NAME_COLOR,
         gbk(filter_show_name(name)),
     )
 }
@@ -454,6 +484,30 @@ pub fn death_frame(actor_id: i32, x: u16, y: u16, dir: u8, d: &ActorDisplay) -> 
         dir,
         &char_desc(d.feature, d.status),
     )
+}
+
+/// **T-154 F1**：`RM_HIT` ⇒ `SM_HIT(14)`（固定 NPC / 商人的受击帧）。
+///
+/// oracle `GuildOfficial.Run` / `Merchant.Run` 的 `SendRefMsg(Messages.RM_HIT, Dir, CurrX, CurrY, 0, "")`
+/// （`src/GameSrv/Npc/GuildOfficial.cs:49` / `src/GameSrv/Npc/Merchant.cs:140`（`FixedHideMode` 解除时
+/// 补发一条，`:156`））⇒ 每个收件人
+/// （`SendRefMsg`：±`Config.SendRefMsgRange` 格内 `Race == Play && !Ghost`）的队列入一条 `RM_HIT`
+/// ⇒ `PlayObject.Message.cs:1433-1440`：
+///
+/// ```text
+/// if (processMsg.ActorId != ActorId)      // 攻击者自己不收
+///     ClientMsg = MakeMessage(SM_HIT, processMsg.ActorId, nParam1 /*=CurrX*/, nParam2 /*=CurrY*/, wParam /*=Dir*/);
+///     SendSocket(ClientMsg);              // 单参 ⇒ **无尾**
+/// ```
+///
+/// ⇒ 头 = `(Recog = ActorId, Param = CurrX, Tag = CurrY, Series = Dir)`，**`Series` 不含 Light**、
+/// **无尾**（与 [`move_frame`] 的 `MakeWord(Dir, Light)` 不同形）。`Dir` = 发帧时的 `BaseObject.Dir`
+/// （受击支与转身支互斥，见 `Merchant.Run`）。
+///
+/// 红检：把 `Series` 换成 `make_word(dir, light)` 或给帧补 CharDesc 尾 ⇒ 帧字节断言必红。
+#[must_use]
+pub fn hit_frame(target: i32, x: u16, y: u16, dir: u8) -> Vec<u8> {
+    smframe::sm_action_hit(mir2_protocol::messages::SM_HIT, target, x, y, dir, &[])
 }
 
 /// **orphan 编码器接线首批**：`SM_DISAPPEAR(30)`（AOI 消失帧，
@@ -1075,6 +1129,108 @@ mod tests {
         assert_eq!(
             u16::from_le_bytes([alive_set[0][4], alive_set[0][5]]),
             mir2_protocol::messages::SM_TURN
+        );
+    }
+
+    /// **T-154 F1 判据（真机锚，`downlink` 层）**：固定 NPC 的**转身帧**必须与
+    /// `E:/tmp/window/20261021-r3/cking/s2c/capture.jsonl` 里那 3 对 **nameless** 帧同形。
+    ///
+    /// 真机事实（国王 30s 内共 5 对 `SM_TURN+SM_FEATURECHANGED`）：
+    /// - 2 对**带名尾**（seq 22/68，出现帧路径 ⇒ [`turn_pair`]，尾解码长 20 = 8B CharDesc + GBK
+    ///   `"比奇国王/255"`）；
+    /// - 3 对 **nameless**（seq 37/45/83，`series = 0x0203/0x0205/0x0207` ⇒ `Dir=3/5/7`、`Light=2`，
+    ///   尾解码长 **8** = 只有 `CharDesc`）+ 每对后 `SM_FEATURECHANGED(param=50, tag=8, series=0)`。
+    ///
+    /// 本用例把 `(dir, light, feature) = (3, 2, 0x0008_0032)` 喂给 [`turn_pair_nameless`]，
+    /// 断言 12B 头与尾长、以及与真机同形的 `MakeWord(dir, light)` 组装。
+    ///
+    /// 牙（红检）：把 `turn_pair_nameless` 换成 [`turn_pair`]（补名尾）⇒ 尾长 8→20 断言红；
+    /// 把 `Series` 写成裸 `dir`（漏 Light）⇒ `0x0203` 断言红。
+    #[test]
+    fn npc_turn_pair_nameless_matches_capture_series() {
+        let d = ActorDisplay::new(
+            3,
+            NPC_LIGHT,
+            0x0008_0032,
+            0,
+            0,
+            NPC_NAME_COLOR,
+            gbk("比奇国王"),
+        );
+        for (dir, series) in [(3u8, 0x0203u16), (5, 0x0205), (7, 0x0207)] {
+            let mut fd = d.clone();
+            fd.dir = dir;
+            let pair = turn_pair_nameless(31475780, 29, 32, &fd);
+            assert_eq!(pair.len(), 2, "RM_TURN 支 = SM_TURN + SM_FEATURECHANGED");
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(&pair[0])
+                .expect("SM_TURN 至少 12B");
+            assert_eq!(cm.ident, mir2_protocol::messages::SM_TURN);
+            assert_eq!(cm.recog, 31475780);
+            assert_eq!((cm.param, cm.tag), (29, 32), "param=CurrX、tag=CurrY");
+            assert_eq!(
+                cm.series,
+                series,
+                "Series = MakeWord(Dir={dir}, Light=2)（真机 0x02{:02x}）",
+                series & 0xFF
+            );
+            let tail = mir2_protocol::edcode::decode(&pair[0][12..]);
+            assert_eq!(
+                tail.len(),
+                8,
+                "nameless 转身尾 = 只有 8B CharDesc（真机 body_len=8）"
+            );
+            assert_eq!(
+                tail,
+                char_desc(0x0008_0032, 0).to_vec(),
+                "CharDesc = Feature(50|8<<16) + Status(0)"
+            );
+            let fc = mir2_protocol::frame::CommandMessage::from_bytes(&pair[1])
+                .expect("SM_FEATURECHANGED 12B");
+            assert_eq!(fc.ident, mir2_protocol::messages::SM_FEATURECHANGED);
+            assert_eq!(fc.recog, 31475780);
+            assert_eq!((fc.param, fc.tag), (50, 8), "真机：param=50 tag=8");
+            assert_eq!(fc.series, 0, "Series = FeatureEx = 0（真机）");
+        }
+    }
+
+    /// **T-154 F1 判据**：`RM_HIT` ⇒ `SM_HIT(14)` 的帧形（`PlayObject.Message.cs:1433-1440`）：
+    /// 头 `(Recog = ActorId, Param = CurrX, Tag = CurrY, Series = Dir)`、**无尾**。
+    ///
+    /// 牙（红检）：把 `hit_frame` 的 `Series` 改成 `make_word(dir, light)` 或补 `CharDesc` 尾 ⇒ 必红。
+    #[test]
+    fn npc_hit_frame_is_sm_hit_with_dir_series_and_no_tail() {
+        let body = hit_frame(31475780, 29, 32, 5);
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("SM_HIT 12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_HIT);
+        assert_eq!(cm.recog, 31475780, "Recog = 发帧 actor（NPC）");
+        assert_eq!((cm.param, cm.tag), (29, 32), "param=CurrX、tag=CurrY");
+        assert_eq!(cm.series, 5, "Series = Dir（**不含** Light）");
+        assert_eq!(body.len(), 12, "SendSocket(ClientMsg) 单参 ⇒ 无尾");
+    }
+
+    /// **T-154 Minor-1 判据**：NPC 名色走 `GetChrColor` 的 **NPC 支**
+    /// （`BaseObject.Base.cs:869-874` 的 `Race == ActorRace.NPC ⇒ Config.NpcNameColor`），
+    /// 缺省 255（`GameSvrConf.cs:1923`），**不是** `BaseObject.NameColor` 缺省。
+    ///
+    /// 牙：把 [`npc_display`] 的名色改成 `MONSTER_NAME_COLOR` 以外的口径（如 0）⇒ 必红。
+    #[test]
+    fn npc_display_name_color_uses_config_npc_name_color() {
+        let d = npc_display(4, 50, 8, "比奇国王");
+        assert_eq!(d.name_color, NPC_NAME_COLOR);
+        assert_eq!(
+            d.name_color, 255,
+            "GameSvrConf.cs:1923 的 NpcNameColor 缺省 = 255"
+        );
+        // 真机出现帧名尾 `"比奇国王/255"` ⇒ 名色字节确实是 "255"。
+        // 尾 = `Encode(8B CharDesc)`（11 字符）**直接拼接** `Encode("ShowName/Color")`
+        // （两段各自编码、状态不复位，`sm_turn` 文档已登记）⇒ 必须分段解码。
+        let pair = turn_pair(1, 29, 32, &d);
+        let tail = &pair[0][12..];
+        let msg = mir2_protocol::edcode::decode(&tail[11..]);
+        assert!(
+            msg.ends_with(b"/255"),
+            "出现帧名尾必须解码为 `<ShowName>/255`：{:?}",
+            String::from_utf8_lossy(&msg)
         );
     }
 

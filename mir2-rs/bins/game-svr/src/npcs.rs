@@ -309,7 +309,12 @@ pub fn place_fixed_npcs_with_scripts(
     // 这里只登记 `placed_npcs`（= 挂图成功且未被 `RemoveAt` 的），字段口径见
     // [`npc_display`]（oracle `NormNpc`：Light=2、RaceImg=50、Appr 来自行）。
     for npc in &placed_npcs {
-        if let Some(e) = world.entities.get(npc.actor_id) {
+        if let Some(e) = world.entities.get_mut(npc.actor_id) {
+            // **T-154 Minor-2**：oracle `BaseObject()` ctor `Dir = 4`（`BaseObject.cs:378`），
+            // `NormNpc`/`Merchant` ctor 不覆写 ⇒ 首个 `TurnTo` 之前的出现帧方向恒 4。
+            // `Entity::new` 的 `ai.dir` 缺省 0（`crates/world` 不在本卡写集）⇒ 宿主在此补齐，
+            // 再投影进展示表（`d.dir = e.ai.dir`）。
+            e.ai.dir = crate::downlink::NPC_INITIAL_DIR;
             displays.set(
                 npc.actor_id,
                 npc_display(e.ai.dir, e.race_img, e.appr, &npc.chr_name),
@@ -1055,6 +1060,12 @@ mod tests {
                 .get(npc.actor_id)
                 .unwrap_or_else(|| panic!("{} 未登记展示表", npc.chr_name));
             assert_eq!(d.dir, e.ai.dir, "Dir = Entity.ai.dir");
+            assert_eq!(
+                e.ai.dir,
+                crate::downlink::NPC_INITIAL_DIR,
+                "T-154 Minor-2：oracle BaseObject ctor Dir = 4（首个 TurnTo 之前）"
+            );
+            assert_eq!(e.ai.dir, 4, "BaseObject.cs:378 的 ctor 值就是 4");
             assert_eq!(d.light, 2, "NormNpc ctor Light = 2（NormNpc.cs:43）");
             assert_eq!(
                 d.feature,

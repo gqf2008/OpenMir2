@@ -11436,6 +11436,109 @@ fn drain_monster_walk_downlink(
     sent
 }
 
+/// **T-154 F1**：本 tick 固定 NPC / 商人的 `RM_TURN`（`TurnTo`）下行。
+///
+/// # oracle 口径
+///
+/// `BaseObject.TurnTo(nDir)`（`src/M2Server/Actor/BaseObject.cs:1582-1586`）：
+/// `Dir = nDir; SendRefMsg(RM_TURN, nDir, CurrX, CurrY, 0, "")`。发点是
+/// `GuildOfficial.Run`（`src/GameSrv/Npc/GuildOfficial.cs:43`：`Random(40)==0`）与
+/// `Merchant.Run`（`src/GameSrv/Npc/Merchant.cs:134`：`Random(50)==0`），两者的 `sMsg` 都是空串。
+///
+/// `SendRefMsg`（`BaseObject.Message.cs:383-445`）的收件人 = ±`Config.SendRefMsgRange` 格内
+/// `Race == Play && !Ghost` 的玩家（`ObMode || FixedHideMode` 时只发自己 ⇒ 无客户端 ⇒ 零帧）；
+/// 本宿主用同一口径的 [`broadcast_ref_msg`]（`hear_targets`）。
+///
+/// 收件人侧 `PlayObject.Message.cs:1524-1560` 的 `RM_TURN` 支：`Msg` 恒空 ⇒
+/// **`SM_TURN` + `SM_FEATURECHANGED` 一对、无 `"ShowName/Color"` 名尾** —— 即
+/// [`downlink::turn_pair_nameless`]。
+///
+/// # 真机锚（`E:/tmp/window/20261021-r3/cking/s2c/capture.jsonl`）
+///
+/// 国王 30s 内共 5 对 `SM_TURN+SM_FEATURECHANGED`：2 对带名尾（seq 22/68，出现帧路径）+
+/// **3 对 nameless 转身**（seq 37/45/83，`series = 0x0203/0x0205/0x0207` ⇒ `Dir=3/5/7`、`Light=2`，
+/// 尾解码长 8 = 只有 `CharDesc`）。每对后紧跟 `SM_FEATURECHANGED(param=50, tag=8, series=0)`。
+/// 这 3 对正是本函数此前**没有消费者**（`TickRecord::npc_turns/merchant_turns` 零下行）的缺口。
+///
+/// # 次序
+///
+/// `RM_TURN` 的队列优先级 = `(byte)RM_TURN = 17`（`Messages.cs` 的 `RM_TURN = 10001`，
+/// `SendMsg` 以 `(byte)wIdent` 入队）——与出现帧同优先级 `17`、早于 `RM_WALK(18)` 与
+/// `RM_HIT(20)`。同优先级内 oracle 由 NPC/商人线程与玩家扫描并发入队 ⇒ **不构成逐帧契约**；
+/// 本宿主按世界侧已声明的线性化（`world.rs`：`npc_tick` → `merchant_tick` → AOI）把本段放在
+/// 消失/出现帧之前，并在 `drain_npc_merchant_hits` 之前。
+///
+/// 牙：删调用点 ⇒ `npc_turn_frames_through_production_drain` 的帧数断言归零 ⇒ 红。
+fn drain_npc_merchant_turns(
+    rec: &mir2_world::TickRecord,
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) -> usize {
+    let mut sent = 0usize;
+    // oracle 次序 `ProcessNpcs()` → `ProcessMerchants()`（`MerchantProcessor.cs:28-32`）。
+    for (id, dir) in rec.npc_turns.iter().chain(rec.merchant_turns.iter()) {
+        let Some(e) = world.entities.get(*id) else {
+            continue;
+        };
+        let Some(d) = displays.get(*id) else {
+            glog!(
+                "WRN",
+                "NPC/商人转身下行：actor={id} 无展示表（未登记）⇒ 跳过 SM_TURN（登记）"
+            );
+            continue;
+        };
+        // 帧方向 = `TurnTo` 写进实体的本次方向（oracle `Dir = nDir` 之后才 `SendRefMsg`）；
+        // `Light` 取展示表（`NormNpc` ctor `Light = 2`）。
+        let mut fd = d.clone();
+        fd.dir = *dir;
+        let bodies = downlink::turn_pair_nameless(*id, wire_coord(e.x), wire_coord(e.y), &fd);
+        sent += bodies.len();
+        broadcast_ref_msg(world, online, gates, *id, &bodies);
+    }
+    sent
+}
+
+/// **T-154 F1**：本 tick 固定 NPC / 商人的 `RM_HIT`（受击）下行 ⇒ `SM_HIT(14)`。
+///
+/// oracle `GuildOfficial.Run`（`GuildOfficial.cs:49`：`Random(30)==0`）与 `Merchant.Run`
+/// （`Merchant.cs:140`；城堡商人在 `FixedHideMode` 解除时 `:156` 补发）：
+/// `SendRefMsg(RM_HIT, Dir, CurrX, CurrY, 0, "")` ⇒ 收件人 `PlayObject.Message.cs:1433-1440`：
+/// `MakeMessage(SM_HIT, ActorId, nParam1 /*=CurrX*/, nParam2 /*=CurrY*/, wParam /*=Dir*/)` +
+/// `SendSocket(ClientMsg)`（**无尾**、`Series` **不含 Light**）。编码器见 [`downlink::hit_frame`]。
+///
+/// 次序：`RM_HIT = 10004` ⇒ 优先级 `(byte)10004 = 20`，晚于 `RM_TURN(17)`/`RM_WALK(18)`、
+/// 早于 `RM_CHANGELIGHT(153)`/`RM_USERNAME(165)`/`RM_SYSMESSAGE(252)` ⇒ 本段放在怪物走位
+/// （[`drain_monster_walk_downlink`]）之后、登录尾（[`drain_login_tail`]）之前。
+///
+/// 牙：删调用点 ⇒ `npc_hit_frames_through_production_drain` 的帧数断言归零 ⇒ 红。
+fn drain_npc_merchant_hits(
+    rec: &mir2_world::TickRecord,
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) -> usize {
+    let mut sent = 0usize;
+    for id in rec.npc_hits.iter().chain(rec.merchant_hits.iter()) {
+        let Some(e) = world.entities.get(*id) else {
+            continue;
+        };
+        if displays.get(*id).is_none() {
+            glog!(
+                "WRN",
+                "NPC/商人受击下行：actor={id} 无展示表（未登记）⇒ 跳过 SM_HIT（登记）"
+            );
+            continue;
+        }
+        let body = downlink::hit_frame(*id, wire_coord(e.x), wire_coord(e.y), e.ai.dir);
+        sent += 1;
+        broadcast_ref_msg(world, online, gates, *id, &[body]);
+    }
+    sent
+}
+
 /// **lane654**：登录队列 `after` 段（`654` / 第二 `42` / `100×4`，以及优先级 61 的 `750`）的
 /// 补发点。
 ///
@@ -12666,6 +12769,12 @@ fn drain_run_downlinks_with_magic(
     // [`drain_aoi_downlink`] 的出现帧同属 oracle `PlayObject.Run()` 里 `VisibleActors` 的那趟循环。
     // oracle 必「先整批消失、后整批出现」（新见对象 `VisibleActors.Add` 追加到表尾 ⇒ `Hidden` 下标恒
     // < `Show` 下标，见 [`drain_aoi_disappear`] 的顺序订正）⇒ 本宿主先发消失帧与 oracle **同序**。
+    // **T-154 F1（真机缺口）**：本 tick 固定 NPC / 商人的 `TurnTo` ⇒ `SM_TURN`+`SM_FEATURECHANGED`
+    // （无名尾）。真机锚 `E:/tmp/window/20261021-r3/cking/s2c/capture.jsonl`：国王 30s 内 3 对
+    // nameless 转身（`series 0x0203/0x0205/0x0207`）。`RM_TURN`(优先级 17) 与出现帧同优先级、
+    // 早于 `RM_WALK(18)`/`RM_HIT(20)` ⇒ 排在消失/出现帧之前（世界侧线性化 `npc_tick` →
+    // `merchant_tick` → AOI，见 `crates/world/src/world.rs` 的 `World::tick`）。
+    let _npc_turns = drain_npc_merchant_turns(rec, world, displays, online, gates);
     let _disappeared = drain_aoi_disappear(rec, online, gates);
     let aoi_frames = drain_aoi_downlink(world, displays, online, gates);
     // **卡 `openmir2-monster-smwalk`**：怪物走位 `SM_WALK(11)`。位置按队列优先级定：
@@ -12674,6 +12783,10 @@ fn drain_run_downlinks_with_magic(
     if let Some(seen) = walk_seen {
         let _ = drain_monster_walk_downlink(rec, world, displays, online, gates, seen);
     }
+    // **T-154 F1**：本 tick 固定 NPC / 商人的 `RM_HIT` ⇒ `SM_HIT(14)`。队列优先级
+    // `(byte)RM_HIT = 20` ⇒ 晚于 `RM_TURN(17)`/`RM_WALK(18)`、早于 `RM_CHANGELIGHT(153)` 起的
+    // 登录尾帧（[`drain_login_tail`]）⇒ 本段夹在两者之间。
+    let _npc_hits = drain_npc_merchant_hits(rec, world, displays, online, gates);
     // **lane654**：登录队列 `after` 段（654/42/100）在**出现帧之后**补发（oracle 同一
     // `Run()` 里 17 < 153 < 165 < 252 的出队序），且在任何体力/魔力段帧之前。
     if let Some(pending) = login_tails {
@@ -21447,8 +21560,8 @@ mod tests {
         assert_eq!((turn.param, turn.tag), (11, 10));
         assert_eq!(
             turn.series,
-            game_svr::feature::make_word(0, 2),
-            "Series = MakeWord(Dir=0, Light=2)"
+            game_svr::feature::make_word(4, 2),
+            "Series = MakeWord(Dir=4, Light=2)：T-154 Minor-2 的 ctor 初值（BaseObject.cs:378）"
         );
         let fc = frames
             .iter()
@@ -21459,6 +21572,201 @@ mod tests {
             (50, 16),
             "param=RaceImg(50)、tag=MerchantState.appr(16)"
         );
+    }
+
+    /// **T-154 F1 判据（host 级，走生产下行段）**：`TickRecord` 的
+    /// `npc_turns`/`merchant_turns` 必须被消费成 `SM_TURN(10)`+`SM_FEATURECHANGED(41)` 一对
+    /// （**无名尾**，尾解码长 8 = 只有 `CharDesc`），`npc_hits`/`merchant_hits` 必须被消费成
+    /// `SM_HIT(14)`（`Series = Dir`、无尾）。这两组字段此前在 `bins` 全树**零消费者** ⇒ 真机
+    /// 3 对 nameless 转身帧缺口的根因。
+    ///
+    /// 帧面口径对齐真机 `E:/tmp/window/20261021-r3/cking/s2c/capture.jsonl`
+    /// （seq 37/45/83：`series = 0x0203/0x0205/0x0207`、紧随 `SM_FEATURECHANGED(param=50, tag=8)`）。
+    ///
+    /// 牙（红检）：删 `drain_run_downlinks_with_magic` 里两个 drain 调用（或删本路径的
+    /// `broadcast_ref_msg`）⇒ 帧数断言归零 ⇒ 红；把转身帧换成 `turn_pair`（补名尾）⇒ 尾长断言红；
+    /// 把受击帧 `Series` 换成 `MakeWord(dir, light)` ⇒ series 断言红。
+    #[test]
+    fn npc_and_merchant_turn_hit_frames_through_production_drain() {
+        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        // ① 固定 NPC（生产入口：挂图 + 展示表登记 + T-154 Minor-2 的 Dir=4）。
+        let npcs = vec![mir2_envir::npcs::NpcInfo {
+            chr_name: "比奇国王".to_string(),
+            npc_type: mir2_envir::npcs::NpcType::GuildOfficial,
+            map_name: "0".to_string(),
+            x: 11,
+            y: 10,
+            npc_flag: 0,
+            appr: 8,
+        }];
+        let envir_root =
+            std::env::temp_dir().join(format!("gs-npc-turn-hit-{}", std::process::id()));
+        let mut book = game_svr::npc::MerchantScriptBook::new(30);
+        let mut displays = downlink::DisplayTable::new();
+        let report = game_svr::npcs::place_fixed_npcs_with_scripts(
+            &mut world,
+            &npcs,
+            |_| Some(0),
+            &envir_root,
+            &mut book,
+            &mut displays,
+        );
+        assert_eq!(report.placed, 1, "固定 NPC 必须挂图成功");
+        let npc_id = report.placed_npcs[0].actor_id;
+        // ② 商人（生产入口；Appr=16）。
+        let spawn = MerchantSpawn {
+            name: "药店老板".to_string(),
+            x: 10,
+            y: 11,
+            map_id: 0,
+            state: MerchantState::new(
+                "药店老板".to_string(),
+                "0".to_string(),
+                0,
+                16,
+                100,
+                false,
+                false,
+                0,
+                MerchantFlags::default(),
+                Vec::new(),
+                Vec::new(),
+                0,
+            ),
+        };
+        let (kept, failed, _mbook) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            vec![spawn],
+            Vec::new(),
+            &mut displays,
+        );
+        assert_eq!(kept, 1);
+        assert!(failed.is_empty());
+        let mer_id = world.merchant_ids_sorted()[0];
+        // 受击帧的 `Series` 取**实体当前 Dir**（oracle `SendRefMsg(RM_HIT, Dir, …)`）。
+        world.entities.get_mut(mer_id).unwrap().ai.dir = 5;
+
+        let (online, gates, mut rx) = aoi_observer_fixture(p);
+        // 真机同形：Dir=3/7、Light=2 ⇒ `Series = 0x0203 / 0x0207`。
+        let rec = mir2_world::TickRecord {
+            npc_turns: vec![(npc_id, 3)],
+            merchant_turns: vec![(mer_id, 7)],
+            npc_hits: vec![npc_id],
+            merchant_hits: vec![mer_id],
+            ..Default::default()
+        };
+        let turns = drain_npc_merchant_turns(&rec, &world, &displays, &online, &gates);
+        let hits = drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates);
+        assert_eq!(turns, 4, "2 次转身 × (SM_TURN + SM_FEATURECHANGED)");
+        assert_eq!(hits, 2, "2 条 SM_HIT");
+
+        let mut raws: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            raws.push(body);
+        }
+        assert_eq!(raws.len(), 6, "唯一在线玩家应收到 4 条转身帧 + 2 条受击帧");
+        let cms: Vec<mir2_protocol::frame::CommandMessage> = raws
+            .iter()
+            .map(|b| mir2_protocol::frame::CommandMessage::from_bytes(b).expect("SM_* 至少 12B"))
+            .collect();
+
+        // 转身：SM_TURN（nameless）+ SM_FEATURECHANGED 成对，次序 = NPC → 商人。
+        let turn_of = |id: i32| {
+            cms.iter()
+                .position(|c| c.ident == mir2_protocol::messages::SM_TURN && c.recog == id)
+                .unwrap_or_else(|| panic!("actor {id} 的 SM_TURN 缺失"))
+        };
+        let npc_turn = turn_of(npc_id);
+        let mer_turn = turn_of(mer_id);
+        assert!(
+            npc_turn < mer_turn,
+            "oracle 次序 ProcessNpcs → ProcessMerchants"
+        );
+        assert_eq!(
+            (cms[npc_turn].param, cms[npc_turn].tag),
+            (11, 10),
+            "SM_TURN param=CurrX、tag=CurrY"
+        );
+        assert_eq!(
+            cms[npc_turn].series,
+            game_svr::feature::make_word(3, 2),
+            "NPC 转身 Series = MakeWord(Dir=3, Light=2)（真机 0x0203）"
+        );
+        assert_eq!(
+            cms[mer_turn].series,
+            game_svr::feature::make_word(7, 2),
+            "商人转身 Series = MakeWord(Dir=7, Light=2)（真机 0x0207）"
+        );
+        assert_eq!(
+            raws[npc_turn].len(),
+            12 + 11,
+            "nameless 转身尾 = 只有 Encode(8B CharDesc)（真机 body_len=8）"
+        );
+        assert_eq!(
+            mir2_protocol::edcode::decode(&raws[npc_turn][12..]).len(),
+            8,
+            "尾解码必须恰为 8B CharDesc"
+        );
+        // 紧随的 SM_FEATURECHANGED：param=LoWord(feature)=RaceImg=50、tag=Appr。
+        let fc_after = |t: usize| cms[t + 1];
+        assert_eq!(
+            fc_after(npc_turn).ident,
+            mir2_protocol::messages::SM_FEATURECHANGED
+        );
+        assert_eq!((fc_after(npc_turn).param, fc_after(npc_turn).tag), (50, 8));
+        assert_eq!((fc_after(mer_turn).param, fc_after(mer_turn).tag), (50, 16));
+
+        // 受击：SM_HIT(14)，Series = 实体 Dir（不含 Light）、无尾。
+        let hit_of = |id: i32| {
+            cms.iter()
+                .position(|c| c.ident == mir2_protocol::messages::SM_HIT && c.recog == id)
+                .unwrap_or_else(|| panic!("actor {id} 的 SM_HIT 缺失"))
+        };
+        let npc_hit = hit_of(npc_id);
+        let mer_hit = hit_of(mer_id);
+        assert_eq!(cms[npc_hit].series, 4, "NPC 受击 Series = 实体 Dir(4)");
+        assert_eq!(cms[mer_hit].series, 5, "商人受击 Series = 实体 Dir(5)");
+        assert_eq!(raws[npc_hit].len(), 12, "SM_HIT 无尾（SendSocket 单参）");
+        assert_eq!(raws[mer_hit].len(), 12);
+        // `RM_HIT = 20` 晚于 `RM_TURN = 17` ⇒ 两条受击帧都排在四帧转身之后。
+        assert!(npc_hit > mer_turn && mer_hit > npc_hit);
+    }
+
+    /// **接线牙**：`drain_run_downlinks_with_magic` 里两个 drain 调用必须仍在且未被注释
+    /// （口径同 `drain_deal_tick_production_call_is_wired_in_sim_loop`）。
+    ///
+    /// 红检（实测）：把任一调用行注释掉 ⇒ `hits == 0` ⇒ 必红。
+    #[test]
+    fn npc_turn_hit_production_calls_are_wired_in_drain_run_downlinks() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let fn_start = lines
+            .iter()
+            .position(|l| l.starts_with("fn drain_run_downlinks_with_magic("))
+            .expect("`fn drain_run_downlinks_with_magic(` 定义行");
+        for want in [
+            "let _npc_turns = drain_npc_merchant_turns(rec, world, displays, online, gates);",
+            "let _npc_hits = drain_npc_merchant_hits(rec, world, displays, online, gates);",
+        ] {
+            let hits: Vec<usize> = lines
+                .iter()
+                .enumerate()
+                .filter(|(i, l)| *i > fn_start && l.trim() == want)
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(
+                hits.len(),
+                1,
+                "`{want}` 必须在 `drain_run_downlinks_with_magic` 体内恰好出现一次且未被注释；\
+                 命中 {hits:?}（0 = 被删/被注释；>1 = 重复调用点）"
+            );
+        }
     }
 
     /// **判据（既有怪物路径不回归）**：固定 NPC 登记展示表后，同一观察者视野里的怪物仍按

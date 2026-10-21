@@ -204,14 +204,17 @@ pub fn load_merchant_spawns(
 /// **不可**把整个 spawn 循环一起 `rev()`（那会把 tick 次序也反过来；reviewer-5 F-1 自复现过）。
 ///
 /// 返回 `(挂图成功数, 挂图失败被移除的 ChrName)`。
+///
+/// **T-154 Minor-3 返工**：`displays` 由**调用方**传入并**透传**给
+/// [`spawn_merchants_with_scripts`]。旧实现自建 `DisplayTable::new()` 后丢弃 ⇒ 走本包装的
+/// 调用方既拿不到登记结果、也拿不到 `Dir = 4` 的初值补齐，展示表登记被静默吞掉。
 #[must_use]
 pub fn spawn_merchants(
     world: &mut mir2_world::World,
     spawns: Vec<MerchantSpawn>,
+    displays: &mut DisplayTable,
 ) -> (usize, Vec<String>) {
-    let mut displays = DisplayTable::new();
-    let (kept, failed, _book) =
-        spawn_merchants_with_scripts(world, spawns, Vec::new(), &mut displays);
+    let (kept, failed, _book) = spawn_merchants_with_scripts(world, spawns, Vec::new(), displays);
     (kept, failed)
 }
 
@@ -259,7 +262,11 @@ pub fn spawn_merchants_with_scripts(
                 // 字段口径同固定 NPC（`Merchant : NormNpc`：Light=2、RaceImg=50）——
                 // `Appr` 在商人侧存于 `MerchantState.appr`（`BaseObject.Appr` 的镜像），
                 // 不在 `Entity.appr`。
-                if let Some(e) = world.entities.get(id) {
+                if let Some(e) = world.entities.get_mut(id) {
+                    // **T-154 Minor-2**：oracle `BaseObject()` ctor `Dir = 4`（`BaseObject.cs:378`），
+                    // `Merchant()` ctor 不覆写 ⇒ 首个 `TurnTo` 之前 `Dir` 恒 4。
+                    // `Entity::new` 的 `ai.dir` 缺省 0 ⇒ 宿主补齐后再投影进展示表。
+                    e.ai.dir = crate::downlink::NPC_INITIAL_DIR;
                     let appr = e.merchant.as_ref().map_or(0, |m| m.appr);
                     displays.set(id, npc_display(e.ai.dir, e.race_img, appr, &name));
                 }
@@ -367,10 +374,26 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
         )
         .expect("装载不应失败");
         let mut world = mir2_world::World::new(64, 64);
-        let (kept, failed) = spawn_merchants(&mut world, spawns);
+        let mut displays = DisplayTable::new();
+        let (kept, failed) = spawn_merchants(&mut world, spawns, &mut displays);
         assert_eq!(kept, 2);
         assert!(failed.is_empty());
         assert_eq!(world.merchant_ids_sorted().len(), 2);
+        // **T-154 Minor-3 牙**：包装路径也必须登记展示表（旧实现自建后丢弃 ⇒ 此处 len==0 必红）。
+        assert_eq!(
+            displays.len(),
+            world.merchant_ids_sorted().len(),
+            "spawn_merchants 包装必须把登记透传到调用方的展示表"
+        );
+        for id in world.merchant_ids_sorted() {
+            let e = world.entities.get(id).expect("实体在");
+            assert_eq!(
+                displays.get(id).map(|d| d.dir),
+                Some(crate::downlink::NPC_INITIAL_DIR),
+                "T-154 Minor-2：包装路径也补 ctor Dir = 4"
+            );
+            assert_eq!(e.ai.dir, crate::downlink::NPC_INITIAL_DIR);
+        }
     }
 
     /// **C3 `merchant_script_book_actor_ids`**：脚本表按**世界实体 id**（= `ActorId`）索引，
@@ -583,7 +606,12 @@ C
             }
         }
         let mut world = mir2_world::World::new(32, 32);
-        let (kept, failed) = spawn_merchants(&mut world, vec![spawn_named("A"), spawn_named("B")]);
+        let mut displays = DisplayTable::new();
+        let (kept, failed) = spawn_merchants(
+            &mut world,
+            vec![spawn_named("A"), spawn_named("B")],
+            &mut displays,
+        );
         assert_eq!(kept, 2);
         assert!(failed.is_empty());
 
