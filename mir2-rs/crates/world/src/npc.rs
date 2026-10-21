@@ -45,8 +45,8 @@
 //!   （与 [`crate::merchant`] 同款）；实体槽位序 = 文件正序 [`World::insert_npc`]。
 
 use crate::entity::{BaseAnimalCtorDraws, Entity, ACTOR_RACE_NPC};
-use crate::merchant::ACTOR_RACE_MERCHANT;
 use crate::map::CellType;
+use crate::merchant::ACTOR_RACE_MERCHANT;
 use crate::World;
 
 /// `BaseObject.RunTick = GetTickCount() + Random(1500)`（`BaseObject.cs:439`）。
