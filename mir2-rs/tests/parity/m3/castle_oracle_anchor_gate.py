@@ -90,6 +90,8 @@ MS = "src/M2Server/M2Share.cs"
 MSG = "src/OpenMir2/Messages.cs"
 SC = "src/Modules/SystemModule/Conf/ServerConf.cs"
 CCONST = "src/M2Server/Castle/CastleConst.cs"
+CM = "src/M2Server/Castle/CastleManager.cs"
+MM = "src/GameSrv/Maps/MapManager.cs"
 PM = "src/M2Server/Player/PlayObject.Message.cs"
 PO = "src/M2Server/Player/PlayObject.Operate.cs"
 PL = "src/M2Server/Player/PlayObject.cs"
@@ -462,6 +464,82 @@ ANCHORS = [
     ("CastleConf.cs:42", CC, [(42, 'userCastle.HomeY = ReadWriteInteger("Defense", "CastleHomeY", userCastle.HomeY);')]),
     ("CastleConf.cs:43", CC, [(43, 'userCastle.WarRangeX = ReadWriteInteger("Defense", "CastleWarRangeX", userCastle.WarRangeX);')]),
     ("CastleConf.cs:44", CC, [(44, 'userCastle.WarRangeY = ReadWriteInteger("Defense", "CastleWarRangeY", userCastle.WarRangeY);')]),
+    # ---- A-22 P1（castle-persist-world）：写盘快照与目录口径新增锚 ----
+    ("CastleConf.cs:201/221/240/259/281/307", CC, [
+        (201, 'WriteString("Defense", "MainDoorName"'),
+        (221, '"LeftWallName"'),
+        (240, '"CenterWallName"'),
+        (259, '"RightWallName"'),
+        (281, '"Archer_{i + 1}_Name"'),
+        (307, '"Guard_{i + 1}_Name"')]),
+    ("CastleConf.cs:203-265", CC, [
+        (203, "if (userCastle.MainDoor.BaseObject != null)"),
+        (206, '"MainDoorHP"'),
+        (225, '"LeftWallHP"'),
+        (244, '"CenterWallHP"'),
+        (263, '"RightWallHP"')]),
+    ("CastleConf.cs:283-290/309-316", CC, [
+        (283, "if (objUnit.BaseObject != null)"),
+        (289, '"Archer_{i + 1}_HP", 0'),
+        (309, "if (objUnit.BaseObject != null)"),
+        (315, '"Guard_{i + 1}_HP", 0')]),
+    ("CastleConf.cs:203-207", CC, [
+        (203, "MainDoor.BaseObject != null"),
+        (205, 'WriteBool("Defense", "MainDoorOpen"'),
+        (206, "MainDoorHP")]),
+    ("CastleConf.cs:96-320", CC, [
+        (96, "public void SaveConfig(UserCastle userCastle)"),
+        (318, "Save();")]),
+    ("CastleConf.cs:109-128", CC, [
+        (109, "if (!string.IsNullOrEmpty(userCastle.sName))"),
+        (117, 'WriteDateTime("Setup", "ChangeDate"'),
+        (119, 'WriteDateTime("Setup", "IncomeToday"')]),
+    ("CastleConf.cs:118", CC, [(118, 'WriteDateTime("Setup", "WarDate"')]),
+    ("CastleConf.cs:119", CC, [(119, 'WriteDateTime("Setup", "IncomeToday"')]),
+    ("CastleConf.cs:130-317", CC, [
+        (130, "for (int i = 0; i < userCastle.EnvirList.Count; i++)"),
+        (136, '"CastleMapList"'),
+        (141, '"CastleMap"'),
+        (315, '"Guard_{i + 1}_HP", 0')]),
+    ("CastleConf.cs:169-172", CC, [
+        (169, "if (!string.IsNullOrEmpty(userCastle.PalaceMap))"),
+        (171, '"CastlePlaceMap"')]),
+    ("CastleConf.cs:174-177", CC, [
+        (174, "if (!string.IsNullOrEmpty(userCastle.SecretMap))"),
+        (176, '"CastleSecretMap"')]),
+    ("CastleConf.cs:169-177", CC, [
+        (169, "if (!string.IsNullOrEmpty(userCastle.PalaceMap))"),
+        (176, '"CastleSecretMap"')]),
+    ("CastleConf.cs:266-269", CC, [
+        (266, "for (int i = 0; i < userCastle.Archers.Length; i++)"),
+        (268, "ArcherUnit objUnit = userCastle.Archers[i];")]),
+    ("CastleConf.cs:266", CC, [
+        (266, "for (int i = 0; i < userCastle.Archers.Length; i++)")]),
+    ("CastleConf.cs:104-107", CC, [
+        (104, "GetMapOfServerIndex(userCastle.MapName) != M2Share.ServerIndex"),
+        (106, "return;")]),
+    ("CastleConf.cs:15-94", CC, [
+        (15, "public void LoadConfig(UserCastle userCastle)"),
+        (45, '"CastlePlaceMap"')]),
+    ("UserCastle.cs:34", UC, [(34, "ConfigDir = sCastleDir;")]),
+    ("UserCastle.cs:50-55", UC, [
+        (50, "Path.Combine(M2Share.BasePath, SystemShare.Config.CastleDir, ConfigDir)"),
+        (55, "castleConf = new CastleConf")]),
+    ("UserCastle.cs:111", UC, [(111, "LoadConfig();")]),
+    ("UserCastle.cs:539-560", UC, [
+        (539, "public void GetCastle(GuildInfo Guild)"),
+        (545, "ChangeDate = DateTime.Now;")]),
+    ("CastleManager.cs:66-75", CM, [
+        (67, "new UserCastle(SystemShare.Config.CastleDir);"),
+        (69, 'castle.ConfigDir = "0";'),
+        (70, 'castle.EnvirList.Add("0151");')]),
+    ("MapManager.cs:169-180", MM, [
+        (169, "public int GetMapOfServerIndex(string sMapName)"),
+        (171, "string.IsNullOrEmpty(sMapName)"),
+        (173, "return 0;")]),
+    ("MapManager.cs:171-174", MM, [
+        (171, "string.IsNullOrEmpty(sMapName)"),
+        (173, "return 0;")]),
     # COUNT 76
 ]
 

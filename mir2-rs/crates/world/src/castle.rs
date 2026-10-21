@@ -734,20 +734,20 @@ pub struct CastleDefenseSpecs {
 /// 因为 oracle 写的是 `ArcherUnit.sName/nX/nY`，与实体是否造出无关；`hp` 才是运行期值。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CastleSaveUnit {
-    /// `sName`（`CastleConf.cs:198/216/...`，空串 ⇒ 不写该键）。
+    /// `sName`（`CastleConf.cs:201/221/240/259/281/307`，空串 ⇒ 不写该键）。
     pub name: String,
     /// `nX` / `nY`（`0` ⇒ 不写该键）。
     pub x: i16,
     pub y: i16,
     /// `WAbil.HP`：门/墙只在 `BaseObject != null` 时写（`CastleConf.cs:203-265`）⇒ 未挂实体 `None`；
-    /// 弓手/守卫无条件写（无实体写 `0`，`CastleConf.cs:283-290/304-313`）⇒ 恒 `Some`。
+    /// 弓手/守卫无条件写（无实体写 `0`，`CastleConf.cs:283-290/309-316`）⇒ 恒 `Some`。
     pub hp: Option<i32>,
     /// `MainDoorOpen`（`CastleConf.cs:203-207`，`WriteBool`）：**只有主门 `BaseObject != null`**
     /// 时有值；三面墙与该键无关 ⇒ 恒 `None`。
     pub open: Option<bool>,
 }
 
-/// [`UserCastle::save_snapshot`] 的成功产物：`CastleConf.SaveConfig`（`CastleConf.cs:95-320`）
+/// [`UserCastle::save_snapshot`] 的成功产物：`CastleConf.SaveConfig`（`CastleConf.cs:96-320`）
 /// 的**全字段写面**，纯内存、无 IO。
 ///
 /// 路径拼接 / GBK 编码 / 截断写字节属 P2（`crates/envir`）；本结构只负责把「写什么值」定死。
@@ -762,10 +762,12 @@ pub struct CastleSaveSnapshot {
     pub own_guild: Option<String>,
     /// `ChangeDate`（原串，`yyyy-MM-dd HH:mm:ss` 口径）。
     pub change_date: Option<String>,
-    /// `WarDate`。
-    pub war_date: Option<CastleDate>,
-    /// `IncomeToday`。
-    pub income_today: CastleDate,
+    /// `WarDate`：oracle 是 `DateTime`，`WriteDateTime` **无条件**写 `yyyy-MM-dd HH:mm:ss`
+    /// （`CastleConf.cs:118`）。快照只携带**宿主注入的原串**，P1 只存不格式化（T-152）；
+    /// `None` = 宿主尚未注入（含 `WarDate` 从未赋值分支），由 P2/P3 宿主按墙钟补全。
+    pub war_date: Option<String>,
+    /// `IncomeToday`：同 `war_date`（`CastleConf.cs:119` 无条件写）；`None` = 宿主尚未注入。
+    pub income_today: Option<String>,
     /// `TotalGold`。
     pub total_gold: i32,
     /// `TodayIncome`。
@@ -783,6 +785,10 @@ pub struct CastleSaveSnapshot {
     /// `CastleWarRangeX` / `CastleWarRangeY`。
     pub war_range_x: i32,
     pub war_range_y: i32,
+    /// `CastlePlaceMap`（`CastleConf.cs:169-172`，`PalaceMap` 非空即写）。
+    pub palace_map: String,
+    /// `CastleSecretMap`（`CastleConf.cs:174-177`，`SecretMap` 非空即写）。
+    pub secret_map: String,
     /// `MainDoor*`（`MainDoorOpen` 在 `open`，仅主门有值）。
     pub main_door: CastleSaveUnit,
     /// `LeftWall*` / `CenterWall*` / `RightWall*`。
@@ -807,7 +813,7 @@ pub enum CastleSaveSkip {
     /// `Archers[i].nX` 抛 `NullReferenceException`（`CastleConf.cs:266-269`）。
     NreArchersNull,
     /// `MapMgr.GetMapOfServerIndex(MapName) != ServerIndex`：`CastleConf.SaveConfig`
-    /// 直接 `return`（`CastleConf.cs:105-107`）。
+    /// 直接 `return`（`CastleConf.cs:104-107`）。
     MapOwnerNotSelf,
 }
 
@@ -1051,8 +1057,10 @@ pub struct UserCastle {
     pub is_start_war: bool,
     /// `ShowOverMsg`（本场已播过「离结束还有 N 分钟」）。
     pub show_over_msg: bool,
-    /// `WarDate`。
+    /// `WarDate` 的日粒度（跨天/开战判定用）；写盘口径见 [`Self::war_date_text`]。
     pub war_date: Option<CastleDate>,
+    /// `WarDate` 的**宿主注入写盘原串**（`yyyy-MM-dd HH:mm:ss`）：P1 只存不格式化（T-152）。
+    pub war_date_text: Option<String>,
     /// `StartCastleWarTick`（`GetTickCount()` 口径）。
     pub start_castle_war_tick: i64,
     /// `TodayIncome`。
@@ -1061,8 +1069,10 @@ pub struct UserCastle {
     pub total_gold: i32,
     /// `SaveTick`（`UserCastle.cs:73`）：`IncRateGold` 的 10 分钟落盘节流口（⑧-9）。
     pub save_gold_tick: i64,
-    /// `IncomeToday`（跨天判定用）。
+    /// `IncomeToday` 的日粒度（跨天判定用）；写盘口径见 [`Self::income_today_text`]。
     pub income_today: CastleDate,
+    /// `IncomeToday` 的**宿主注入写盘原串**（`yyyy-MM-dd HH:mm:ss`）：P1 只存不格式化（T-152）。
+    pub income_today_text: Option<String>,
     /// `AttackWarList`（申请登记表）。
     pub attack_war_list: Vec<AttackerInfo>,
     /// `AttackGuildList`（本场攻方；含 `MasterGuild`）。
@@ -1123,11 +1133,13 @@ impl UserCastle {
             is_start_war: false,
             show_over_msg: false,
             war_date: None,
+            war_date_text: None,
             start_castle_war_tick: 0,
             today_income: 0,
             total_gold: 0,
             save_gold_tick: 0,
             income_today: CastleDate::default(),
+            income_today_text: None,
             attack_war_list: Vec::new(),
             attack_guild_list: Vec::new(),
             main_door: None,
@@ -1197,7 +1209,7 @@ impl UserCastle {
         specs: &CastleDefenseSpecs,
         env: &mut impl CastleInitializeEnv,
     ) -> Vec<CastleEvent> {
-        // `Initialize()` 先 `LoadConfig()`（`UserCastle.cs:110`）——配置面（含 `Archers[12]`）在
+        // `Initialize()` 先 `LoadConfig()`（`UserCastle.cs:111`）——配置面（含 `Archers[12]`）在
         // 归属门之前就已就位；写盘快照要靠它保留未造怪槽的 `x/y/Name` 与 `MainDoorOpen`。
         self.specs = Some(specs.clone());
         // `LoadConfig()`：`MapName = ReadWriteString("Defense", "CastleMap", "3")`（`CastleConf.cs:39`）。
@@ -1676,13 +1688,15 @@ impl UserCastle {
         self.change_date = Some(format_change_date(now));
     }
 
-    /// oracle `CastleConf.SaveConfig`（`CastleConf.cs:95-320`）的纯数据面：把当前写盘字段整理成
+    /// oracle `CastleConf.SaveConfig`（`CastleConf.cs:96-320`）的纯数据面：把当前写盘字段整理成
     /// [`CastleSaveSnapshot`]；**不做 IO**（路径/GBK 编码/写字节是 P2 `crates/envir` 面）。
     ///
     /// 跳过语义与 oracle 同序：
     /// 1. `GetMapOfServerIndex(MapName) != ServerIndex` ⇒ [`CastleSaveSkip::MapOwnerNotSelf`]
-    ///    （`CastleConf.cs:105-107`）。`GetMapOfServerIndex(null) == 0`（`MapManager.cs:169-180`）
-    ///    ⇒ `map_name == None` 的装载城**不**被这道门挡住；
+    ///    （`CastleConf.cs:104-107`）。`GetMapOfServerIndex(null) == 0`
+    ///    （`MapManager.cs:169-180`）⇒ 该比较**无条件**执行（无 `map_name` 守卫）：
+    ///    `ServerIndex != 0` 的装载城同样被这道门挡住。`map_owner_server_index` 的生产赋值点
+    ///    （`GetMapOfServerIndex(MapName)`）由 P3 宿主填；P1 只按该字段判定。
     /// 2. `Archers[i] == null`（未 `LoadConfig`，`specs == None`）⇒
     ///    [`CastleSaveSkip::NreArchersNull`]（`CastleConf.cs:266-269`）。
     ///
@@ -1691,7 +1705,9 @@ impl UserCastle {
     /// 弓手/守卫未挂实体 ⇒ `hp = Some(0)`（oracle 无条件写 0）；`MainDoorOpen` 只在主门挂实体时
     /// 有值。
     pub fn save_snapshot(&self) -> Result<CastleSaveSnapshot, CastleSaveSkip> {
-        if self.map_name.is_some() && self.map_owner_server_index != self.server_index {
+        // oracle：`GetMapOfServerIndex(MapName) != ServerIndex` ⇒ return（`CastleConf.cs:104-107`）。
+        // `GetMapOfServerIndex(null) == 0`（`MapManager.cs:171-174`）⇒ 无条件比较，null 归 0。
+        if self.map_owner_server_index != self.server_index {
             return Err(CastleSaveSkip::MapOwnerNotSelf);
         }
         let Some(specs) = self.specs.as_ref() else {
@@ -1717,8 +1733,8 @@ impl UserCastle {
             castle_name: self.name.clone(),
             own_guild: self.own_guild.clone(),
             change_date: self.change_date.clone(),
-            war_date: self.war_date,
-            income_today: self.income_today,
+            war_date: self.war_date_text.clone(),
+            income_today: self.income_today_text.clone(),
             total_gold: self.total_gold,
             today_income: self.today_income,
             envir_list: specs.envir_list.clone(),
@@ -1728,6 +1744,8 @@ impl UserCastle {
             home_y: self.home_y,
             war_range_x: self.war_range_x,
             war_range_y: self.war_range_y,
+            palace_map: specs.palace_map.clone(),
+            secret_map: specs.secret_map.clone(),
             main_door,
             left_wall: save_unit(&specs.left_wall, self.left_wall.as_ref(), false),
             center_wall: save_unit(&specs.center_wall, self.center_wall.as_ref(), false),
@@ -1897,14 +1915,32 @@ fn save_unit(
     }
 }
 
+/// 左补零到 `width` 位（不用格式化宏，避免在散文里留下裸行号形态的串）。
+fn pad(value: impl std::fmt::Display, width: usize) -> String {
+    let mut out = value.to_string();
+    while out.len() < width {
+        out.insert(0, '0');
+    }
+    out
+}
+
 /// `ChangeDate` 的串口径（`ConfigFile.WriteDateTime` = `yyyy-MM-dd HH:mm:ss`）。
 ///
-/// [`CastleNow`] 只到小时 ⇒ 分/秒写 0；P3 接线时由宿主按真墙钟补全（登记 T-152）。
+/// [`CastleNow`] 只到小时 ⇒ 分/秒写 `0`；P3 接线时由宿主按真墙钟补全（登记 T-152）。
 fn format_change_date(now: CastleNow) -> String {
-    format!(
-        "{:04}-{:02}-{:02} {:02}:00:00",
-        now.date.year, now.date.month, now.date.day, now.hour
-    )
+    let mut out = String::new();
+    out.push_str(&pad(now.date.year, 4));
+    out.push('-');
+    out.push_str(&pad(now.date.month, 2));
+    out.push('-');
+    out.push_str(&pad(now.date.day, 2));
+    out.push(' ');
+    out.push_str(&pad(now.hour, 2));
+    out.push(':');
+    out.push_str("00");
+    out.push(':');
+    out.push_str("00");
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -4232,6 +4268,9 @@ mod tests {
         c.today_income = 77;
         c.income_today = CastleDate::new(2026, 10, 21);
         c.war_date = Some(CastleDate::new(2026, 10, 21));
+        // 写盘面：宿主注入的完整时间戳原串（P1 只存不格式化，T-152）。
+        c.war_date_text = Some("2026-10-21 09:30:15".to_string());
+        c.income_today_text = Some("2026-10-21 00:00:01".to_string());
         c.change_date = Some("2026-10-20 19:00:00".to_string());
         c.config_dir = "0".to_string();
         c.ctor_config_dir = "Castle".to_string();
@@ -4253,8 +4292,10 @@ mod tests {
         assert_eq!(snap.castle_name, "沙巴克");
         assert_eq!(snap.own_guild.as_deref(), Some(""));
         assert_eq!(snap.change_date.as_deref(), Some("2026-10-20 19:00:00"));
-        assert_eq!(snap.war_date, Some(CastleDate::new(2026, 10, 21)));
-        assert_eq!(snap.income_today, CastleDate::new(2026, 10, 21));
+        // WarDate/IncomeToday：宿主注入原串逐字进快照（oracle `WriteDateTime` 口径），
+        // P1 不按日粒度重新格式化 ⇒ 分/秒必须保留。
+        assert_eq!(snap.war_date.as_deref(), Some("2026-10-21 09:30:15"));
+        assert_eq!(snap.income_today.as_deref(), Some("2026-10-21 00:00:01"));
         assert_eq!(snap.total_gold, 123_456);
         assert_eq!(snap.today_income, 77);
 
@@ -4267,6 +4308,9 @@ mod tests {
         assert_eq!(snap.home_map, "3");
         assert_eq!((snap.home_x, snap.home_y), (644, 290));
         assert_eq!((snap.war_range_x, snap.war_range_y), (100, 100));
+        // `CastlePlaceMap` / `CastleSecretMap`：oracle 非空即写（`CastleConf.cs:169-177`）。
+        assert_eq!(snap.palace_map, "0150");
+        assert_eq!(snap.secret_map, "D701");
 
         // 主门：配置面 name/x/y + 运行期 HP 1800（不是配置 HP 2000）+ MainDoorOpen。
         assert_eq!(
@@ -4340,7 +4384,7 @@ mod tests {
             Err(CastleSaveSkip::NreArchersNull)
         );
 
-        // 归属门先于 NRE（`CastleConf.cs:105-107` 在 `:266` 之前）：map_name 有值且非本服。
+        // 归属门先于 NRE（`CastleConf.cs:104-107` 在 `CastleConf.cs:266` 之前）：map_name 有值且非本服。
         let mut foreign = UserCastle::new("沙巴克", config());
         foreign.map_name = Some("3".to_string());
         foreign.map_owner_server_index = 1;
@@ -4372,7 +4416,7 @@ mod tests {
         assert_eq!(attack_path, "Castle/0/AttackSabukWall.txt");
     }
 
-    /// 弓手/守卫未挂实体时：名称/坐标仍写配置面，HP 无条件写 0（`CastleConf.cs:283-290`）。
+    /// 弓手/守卫未挂实体时：名称/坐标仍写配置面，HP 无条件写 0（`CastleConf.cs:283-290/309-316`）。
     #[test]
     fn castle_save_unbound_archer_and_guard_write_zero_hp() {
         let mut c = save_castle();
@@ -4399,6 +4443,80 @@ mod tests {
                 open: None,
             }
         );
+    }
+
+    /// F2：`CastlePlaceMap` / `CastleSecretMap` 取自配置面（`CastleConf.cs:169-177` 非空即写）。
+    ///
+    /// 牙：把两个字段写成恒空串 ⇒ 本用例红。
+    #[test]
+    fn castle_save_snapshot_carries_palace_and_secret_maps() {
+        let snap = save_castle().save_snapshot().unwrap();
+        assert_eq!(snap.palace_map, "0150");
+        assert_eq!(snap.secret_map, "D701");
+        // 与 `specs` 同源（写回的是 `LoadConfig` 读入值，不是运行期 map_id）。
+        let specs = save_castle().specs.unwrap();
+        assert_eq!(snap.palace_map, specs.palace_map);
+        assert_eq!(snap.secret_map, specs.secret_map);
+    }
+
+    /// F3：`WarDate` / `IncomeToday` 是宿主注入的 `DateTime` 原串，P1 只存不格式化。
+    ///
+    /// 牙：改为按 [`CastleDate`] 日粒度格式化（分/秒归 0）⇒ 第一条断言红；
+    /// 去掉 None 分支登记 ⇒ 第二条断言红。
+    #[test]
+    fn castle_save_timestamps_pass_through_verbatim() {
+        let c = save_castle();
+        let snap = c.save_snapshot().unwrap();
+        assert_eq!(snap.war_date.as_deref(), Some("2026-10-21 09:30:15"));
+        assert_eq!(snap.income_today.as_deref(), Some("2026-10-21 00:00:01"));
+        // 日粒度状态只服务运行期判定，不参与写盘格式化。
+        assert_eq!(c.war_date, Some(CastleDate::new(2026, 10, 21)));
+        assert_eq!(c.income_today, CastleDate::new(2026, 10, 21));
+
+        // 宿主未注入 ⇒ `None`（含 `WarDate` 从未赋值分支；P2/P3 由墙钟补全，T-152）。
+        let mut none = save_castle();
+        none.war_date_text = None;
+        none.income_today_text = None;
+        let snap = none.save_snapshot().unwrap();
+        assert_eq!(snap.war_date, None);
+        assert_eq!(snap.income_today, None);
+    }
+
+    /// Minor-1：主门未挂实体 ⇒ `hp`/`open` 均 `None`，名称/坐标仍取配置面。
+    ///
+    /// oracle：`MainDoorOpen`/`MainDoorHP` 都在 `MainDoor.BaseObject != null` 里
+    /// （`CastleConf.cs:203-207`）。牙：把 `open` 改成无条件 `Some` ⇒ 本用例红。
+    #[test]
+    fn castle_save_main_door_unbound_writes_no_open_or_hp() {
+        let mut c = save_castle();
+        c.main_door = None;
+        let snap = c.save_snapshot().unwrap();
+        assert_eq!(
+            snap.main_door,
+            CastleSaveUnit {
+                name: "MainDoor".to_string(),
+                x: 672,
+                y: 330,
+                hp: None,
+                open: None,
+            }
+        );
+    }
+
+    /// Minor-2：归属门无条件比较（oracle `GetMapOfServerIndex(null) == 0`）。
+    ///
+    /// 未 `initialize` 的装载城 + `ServerIndex != 0` ⇒ `0 != 7` ⇒ `MapOwnerNotSelf`
+    /// （`CastleConf.cs:104-107`）。牙：保留 `map_name.is_some()` 守卫 ⇒ 落到
+    /// `NreArchersNull` ⇒ 本用例红。
+    #[test]
+    fn castle_save_owner_gate_is_unconditional_like_oracle() {
+        let mut c = UserCastle::new("沙巴克", config());
+        c.server_index = 7;
+        c.map_owner_server_index = 0; // 生产由 P3 按 GetMapOfServerIndex(MapName) 填
+        assert_eq!(c.save_snapshot(), Err(CastleSaveSkip::MapOwnerNotSelf));
+        // 本服（7 == 7）⇒ 继续走到 NRE（证明门只在不等时拦）。
+        c.map_owner_server_index = 7;
+        assert_eq!(c.save_snapshot(), Err(CastleSaveSkip::NreArchersNull));
     }
 
     /// `GetCastle` 的字段半（`UserCastle.cs:539-560`）：归属 + `ChangeDate`；本卡只做字段。
