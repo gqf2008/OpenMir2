@@ -300,3 +300,9 @@ magic_effect	csharp	MagicManager\.MagMakePrivateTransparent@MagicManager\.cs:	sr
 #   `GetHitStruckDamage` 的护甲/耐久抽在两侧都在 `combat.rs`（attack 组）⇒ 只有命中骰这一项分组不对称。
 #   闭合方式二选一：①把命中骰下沉到 `crates/world/src/combat.rs`（改 `combat.rs`，本车道写集外）；
 #   ②`groupdiff` 按段折叠。真机窗口（race 200/133/131 均无对象）前必须先定。
+monster_ai	csharp	SoccerBall\.Struck@SoccerBall\.cs:83$	src/M2Server/Monster/Monsters/SoccerBall.cs:83	MB-8 R36：`SoccerBall.Struck` 完全覆写 `AnimalObject.Struck`，只抽 `Random(4)`（`:83`）累加 `N550`；Rust `monai.rs::soccer_ball_struck`（`animal_struck` 的 race 120 转派）
+monster_ai	csharp	RunAway\.Run@RunAway\.cs:44$	src/M2Server/Monster/Monsters/RunAway.cs:44	MB-8 R32（死类）：目标两轴均 1 格时的 `RandomByte(4)`（`:44`）；Rust `monai.rs::run_away_run`
+monster_ai	csharp	RunAway\.Run@RunAway\.cs:48$	src/M2Server/Monster/Monsters/RunAway.cs:48	MB-8 R32（死类）：否则 `RandomByte(7)`（`:48`）；Rust `monai.rs::run_away_run`
+monster_ai	csharp	FireballMonster\.Run@FireballMonster\.cs:26$	src/M2Server/Monster/Monsters/FireballMonster.cs:26	MB-9 R19：`LoByte(DC)+Random(|HiByte(DC)-LoByte(DC)|+1)`（`:26`）；Rust `monai.rs::fireball_monster_run`
+monster_ai	csharp	FireballMonster\.Run@FireballMonster\.cs:32$	src/M2Server/Monster/Monsters/FireballMonster.cs:32	MB-9 R19：`pose.GetMagStruckDamage(this, nPower)` 的 MAC 抽（`:32`）；Rust `monai.rs::fireball_monster_run`
+monster_ai	csharp	FireballMonster\.Run@FireballMonster\.cs:35$	src/M2Server/Monster/Monsters/FireballMonster.cs:35	MB-9 R19：`pose.StruckDamage(nPower)`（`:35`；玩家目标的耐久段先 `Random(10)` 再逐格 `Random(8)`）；Rust `monai.rs::fireball_monster_run` + `combat::struck_damage_durability`

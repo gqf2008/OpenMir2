@@ -48,9 +48,10 @@
 //!   卡 `openmir2-m3-mongen-load-spawn` 的 F-1 返工闭合：生成路径把构造抽存进
 //!   `Entity.ctor_draws`（[`MonsterCtorDraws`]），AI 在宿主接线时只**消费**（
 //!   [`AnimalState::seed_from_spawn`](crate::entity::AnimalState::seed_from_spawn)），**不重抽**。
-//! - **专用怪子类**（`ATMonster`/`BeeQueen`/... 在各自 `Run()` 里调 `SearchTarget`）与
-//!   `Mission`/`RunAway` **触发点**未建模：默认值下它们恒不命中，与「普通 `MonsterObject`、
-//!   无任务」的 oracle 执行路径一致。
+//! - **专用怪子类**：MB-1..MB-9 的 34 个 `Run` 覆写已按批接上（见 [`monster_class_run`] 的
+//!   race 分派表）；`RunAway` 是**死类**（`CreateMonster` 无 case），已按「内容出现即等价」
+//!   实现并登记为 [`run_away_run`]。`Mission` 触发点仍未建模：默认 `Mission == false`，
+//!   与「普通 `MonsterObject`、无任务」的 oracle 执行路径一致。
 //! - **已接（卡 `openmir2-run-gap-monster-master-follow`）**：`MonsterObject.Run` 的
 //!   `Master` 跟随段（`MonsterObject.cs:299-329`）、`Master.SlaveRelax` 早退（`:333-338`）
 //!   与 `RunAwayTime` 到期（`:329-345`）。跟随段在 `TargetCret == null` 支内按 oracle 同点接入
@@ -78,6 +79,13 @@ pub const RM_TURN: u16 = 10001;
 pub const RM_HIT: u16 = 10004;
 /// `Messages.RM_DIGUP`（`src/OpenMir2/Messages.cs:614`）——出土帧（`SM_DIGUP`）。
 pub const RM_DIGUP: u16 = 10200;
+/// `Messages.RM_SPELL`（`src/OpenMir2/Messages.cs:562` = 10008）——`FireballMonster.Run` 的
+/// 施法帧（`FireballMonster.cs:39`：`SendRefMsg(RM_SPELL, 48, tx, ty, 48, "")`）。
+pub const RM_SPELL: u16 = 10008;
+/// `Messages.RM_MAGICFIRE`（`src/OpenMir2/Messages.cs:582` = 10120）——`FireballMonster.Run`
+/// 的魔法动画帧（`FireballMonster.cs:40`：`SendRefMsg(RM_MAGICFIRE, 0, MakeWord(2, 48),
+/// MakeLong(tx, ty), targetId, "")`）。
+pub const RM_MAGICFIRE: u16 = 10120;
 /// `Messages.RM_DIGDOWN`（`src/OpenMir2/Messages.cs:615`）——入土帧（`SM_DIGDOWN`）。
 pub const RM_DIGDOWN: u16 = 10201;
 /// `Messages.RM_CHANGEFACE`（`src/OpenMir2/Messages.cs:640` = 10415）——
@@ -426,9 +434,39 @@ pub fn can_move(e: &Entity) -> bool {
 /// `MonsterObject.Think`（`MonsterObject.cs:187-215`）：3s 一次的 `DupMode`/目标有效性刷新，
 /// `DupMode` 时 `WalkTo(RandomByte(8))`，移动成功即清 `DupMode` 并返回 true。
 pub fn think(world: &mut World, actor_id: i32) -> bool {
+    think_refresh(world, actor_id);
+    think_dup_move(world, actor_id, true)
+}
+
+/// `MagicMonster.Think`（`MagicMonster.cs:18-45`）——与 `MonsterObject.Think` 逐字相同，
+/// **唯一差异**：`DupMode` 支**没有** `if (HolySeize) return false;` 早退
+/// （`MagicMonster.cs:36-42` 直接 `WalkTo`）。oracle 的 `Think` 在 `MagicMonster` 里是
+/// `private`（非 override），但 `MagicMonster.Run` 与它尾部 `base.Run()` 的
+/// `MonsterObject.Run` 都走**这个** `Think()` ⇒ race 215 的两个 pass 都用本函数。
+fn magic_monster_think(world: &mut World, actor_id: i32) -> bool {
+    think_refresh(world, actor_id);
+    think_dup_move(world, actor_id, false)
+}
+
+/// `MonsterObject.Run` / `MagicMonster.Run` 里虚调用 `Think()` 的落点。
+///
+/// oracle：`Think` 在 `MonsterObject` 是 `private bool Think()`、在 `MagicMonster` 是另一个
+/// `private bool Think()` ⇒ **不是虚分派**；`FireballMonster`（唯一 `: MagicMonster` 且被
+/// `CreateMonster` 实例化的类）的两段 AI 都调 `MagicMonster.Think`。本仓按 race 215 分派与
+/// oracle 等价（215 是 `MagicMonster` 家族的唯一 race）。
+fn monster_think(world: &mut World, actor_id: i32) -> bool {
+    if world.entities.get(actor_id).is_some_and(|e| e.race == 215) {
+        magic_monster_think(world, actor_id)
+    } else {
+        think(world, actor_id)
+    }
+}
+
+/// `Think` 的 3s 刷新段（`MonsterObject.cs:190-201` / `MagicMonster.cs:21-32` 逐字相同）。
+fn think_refresh(world: &mut World, actor_id: i32) {
     let now = world.clock_ms;
     let Some((x, y, map_id)) = world.entities.get(actor_id).map(|e| (e.x, e.y, e.map_id)) else {
-        return false;
+        return;
     };
     if now - world.entities.get(actor_id).map_or(0, |e| e.ai.think_tick) > 3 * 1000 {
         if let Some(e) = world.entities.get_mut(actor_id) {
@@ -456,13 +494,21 @@ pub fn think(world: &mut World, actor_id: i32) -> bool {
             }
         }
     }
+}
+
+/// `Think` 的 `DupMode` 支（`MonsterObject.cs:203-215` / `MagicMonster.cs:34-43`）。
+///
+/// `honor_holy_seize = true` ⇒ `MonsterObject.Think` 的 `if (HolySeize) return false;`
+/// （`MonsterObject.cs:205-208`）；`false` ⇒ `MagicMonster.Think`（无该门）。
+fn think_dup_move(world: &mut World, actor_id: i32, honor_holy_seize: bool) -> bool {
     let mut result = false;
     let dup = world.entities.get(actor_id).is_some_and(|e| e.ai.dup_mode);
     if dup {
-        if world
-            .entities
-            .get(actor_id)
-            .is_some_and(|e| e.ai.holy_seize)
+        if honor_holy_seize
+            && world
+                .entities
+                .get(actor_id)
+                .is_some_and(|e| e.ai.holy_seize)
         {
             return false;
         }
@@ -580,6 +626,13 @@ pub fn attack_target(world: &mut World, actor_id: i32) -> bool {
 ///
 /// **前置**：调用方保证 `hiter_id` 在场（oracle `Operate` 的 `struckObject != null` 门在出队处）。
 pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
+    // **MB-8（R36）**：`SoccerBall.Struck`（`SoccerBall.cs:76-86`）**完全覆写**了
+    // `AnimalObject.Struck`（无 `base.Struck()`）⇒ 不写 `StruckTick`、不选目标、不扣肉质、
+    // 不加 `AttackTick`，只写 `Dir/N550/TargetX/Y`。
+    if world.entities.get(victim_id).is_some_and(|e| e.race == 120) {
+        soccer_ball_struck(world, victim_id, hiter_id);
+        return;
+    }
     let now = world.clock_ms;
     // `StruckTick = HUtil32.GetTickCount();`（`AnimalObject.cs:336`）
     if let Some(e) = world.entities.get_mut(victim_id) {
@@ -654,9 +707,9 @@ pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
 /// 这些类的 `AttackTarget` 覆写尚未建模（另有卡），但**索敌节拍本身**与基类一致，必须进本集合。
 ///
 /// **不在此列（登记）**：覆写 `Run` 的 `ATMonster` 派生（`92`/`96`/`100`/`105`/`107`/`114`/
-/// `132` 等，见模块头「未建模」；**MB-3b F2**：105、**MB-4 F1**：92 的 `base.Run()` 段已由
-/// [`monster_run`] 单独补门 `|| race == 105` / `|| race == 92`，本集合仍只表示「未覆写 `Run`
-/// 的直派生」），以及非 `ATMonster`
+/// `132` 等，见模块头「未建模」；**MB-3b F2**：105、**MB-4 F1**：92、**MB-8（R42）**：100 的
+/// `base.Run()` 段已由 [`monster_run`] 单独补门 `|| race == 105` / `|| race == 92` /
+/// `|| race == 100`，本集合仍只表示「未覆写 `Run` 的直派生」），以及非 `ATMonster`
 /// 家族但自实现同样索敌门的类（`BoneKing`/`Clone`/`DigOutZombi`/`Sculture`/`LightingZombi`/…）。
 ///
 /// 改坏必红：去掉本门 ⇒ `active_seek_race_*` 用例里 race 81/83 的怪不再发现玩家。
@@ -751,15 +804,27 @@ pub enum ClassRunBase {
     /// `StickMonster`/`BigHeartMonster : AnimalObject` ⇒ `base.Run()` = `AnimalObject.Run`
     /// （HolySeize 到期）→ `BaseObject.Run`。
     Animal,
+    /// **MB-8（R33）**：`SandMobObject.Run` 在 `AttackTarget()` 命中支里**先跑了一次**
+    /// `base.Run()`（= `StickMonster.Run`；此时 `WalkTick` 刚被本函数刷新 ⇒ `StickMonster.Run`
+    /// 的 `WalkTick` 门必然为假、只剩其尾 `base.Run()` = `AnimalObject.Run`），函数尾**再跑一次**
+    /// `base.Run()`（同样早退成 `AnimalObject.Run`）⇒ 调用方要跑 **两次**
+    /// `AnimalObject.Run` + `BaseObject.Run`（oracle 原样的双 pass）。
+    AnimalTwice,
+    /// **MB-9（R19）**：`FireballMonster : MagicMonster : MonsterObject`。
+    /// 调用方顺序：类体（`fireball_monster_run`）→ [`magic_monster_run`]（`MagicMonster.Run`
+    /// 自身的一段 AI）→ `MonsterObject.Run` → `AnimalObject.Run` → `BaseObject.Run`。
+    /// **两段 AI pass**：`MagicMonster.Run` 尾的 `base.Run()` 是 `MonsterObject.Run`。
+    MagicMonster,
     /// `DigOutZombi`/`ScultureMonster : MonsterObject` ⇒ `base.Run()` = `MonsterObject.Run`
     /// → `AnimalObject.Run` → `BaseObject.Run`。
     Monster,
     /// 类 `Run` 体内已 `return`（oracle 显式跳过 `base.Run()`）⇒ 调用方**不得**续跑
-    /// `AnimalObject.Run`/`BaseObject.Run`。目前四处：
+    /// `AnimalObject.Run`/`BaseObject.Run`。目前五处：
     /// ① `CowKingMonster.Run` 的 Siege 两支（`CowKingMonster.cs:53/56`）；
     /// ② `Khazard.Run` 的毒门命中支（`Khazard.cs:32/46`；见 [`khazard_run`] 返回 `true`）；
     /// ③ `ElectronicScolpionMon.Run` 的 `TargetCret == null` 支（`ElectronicScolpionMon.cs:50-53`）；
-    /// ④ `MagicMonObject.Run` 的 `Master == null` 支（`MagicMonObject.cs:40-43`）。
+    /// ④ `MagicMonObject.Run` 的 `Master == null` 支（`MagicMonObject.cs:40-43`）；
+    /// ⑤ `SandMobObject.Run` 的目标两轴均 `> 15` 支（`SandMobObject.cs:33-37`：`ComeDown(); return;`）。
     None,
 }
 
@@ -1512,7 +1577,10 @@ fn ron_attack(world: &mut World, actor_id: i32, target_id: i32, n_power: i32) {
 /// `ScultureKing`(102)/`ExplosionSpider`(117)；MB-4 的 `CowKingMonster`(92)；
 /// MB-5 的 `TeleMonster`(203)/`Khazard`(206)/`GreenMonster`(208)/`RedMonster`(209)/`FrostTiger`(210)；
 /// MB-6 的 `ElectronicScolpionMon`(200)/`MagicMonObject`(133)/`RonObject`(131)；
-/// MB-7 的 `BoneKingMonster`(134)/`ElfMonster`(113)/`ElfWarriorMonster`(114)。
+/// MB-7 的 `BoneKingMonster`(134)/`ElfMonster`(113)/`ElfWarriorMonster`(114)；
+/// MB-8 的 `WhiteSkeleton`(100)/`SoccerBall`(120)/`SandMobObject`(132)/`FireMonster`(214)；
+/// MB-9 的 `FireballMonster`(215)。（`RunAway` 是死类：`CreateMonster` 无 case，见
+/// [`run_away_run`]。）
 ///
 /// 返回 `None` = 非上述类，调用方继续走通用 [`monster_run`]；否则按 [`ClassRunBase`]
 /// 决定 oracle `base.Run()` 的落点。
@@ -1658,7 +1726,62 @@ pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBas
             elf_warrior_run(world, actor_id);
             Some(ClassRunBase::Monster)
         }
+        // **MB-8（R18）**：`FireMonster.Run`（`FireMonster.cs:23-82`）；`: MonsterObject`
+        // ⇒ `base.Run()` = `MonsterObject.Run`。
+        214 => {
+            fire_monster_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        // **MB-8（R33）**：`SandMobObject.Run`（`SandMobObject.cs:14-57`）；`: StickMonster`。
+        // 双 `base.Run()` 的 pass 数由本函数返回（`AnimalTwice`/`Animal`/`None`）。
+        132 => Some(sand_mob_object_run(world, actor_id)),
+        // **MB-8（R36）**：`SoccerBall.Run`（`SoccerBall.cs:19-74`）；`: AnimalObject`
+        // ⇒ `base.Run()` = `AnimalObject.Run`。
+        120 => {
+            soccer_ball_run(world, actor_id);
+            Some(ClassRunBase::Animal)
+        }
+        // **MB-8（R42）**：`WhiteSkeleton.Run`（`WhiteSkeleton.cs:29-39`）；`: AtMonster`
+        // ⇒ `base.Run()` = `ATMonster.Run` → `MonsterObject.Run`（8s/1s 门见 [`monster_run`]）。
+        100 => {
+            white_skeleton_run(world, actor_id);
+            Some(ClassRunBase::Monster)
+        }
+        // **MB-9（R19）**：`FireballMonster.Run`（`FireballMonster.cs:14-62`）；`: MagicMonster`。
+        215 => {
+            fireball_monster_run(world, actor_id);
+            Some(ClassRunBase::MagicMonster)
+        }
         _ => None,
+    }
+}
+
+/// [`monster_class_run`] 的返回值 → oracle `base.Run()` 链的落地（四个调用点共用）。
+fn run_class_base(world: &mut World, actor_id: i32, base: ClassRunBase) {
+    match base {
+        ClassRunBase::Animal => {
+            animal_run(world, actor_id);
+            base_object_run_monster(world, actor_id);
+        }
+        ClassRunBase::AnimalTwice => {
+            // `SandMobObject.Run` 的两次 `base.Run()`（各早退成 `AnimalObject.Run`）。
+            animal_run(world, actor_id);
+            base_object_run_monster(world, actor_id);
+            animal_run(world, actor_id);
+            base_object_run_monster(world, actor_id);
+        }
+        ClassRunBase::Monster => {
+            monster_run(world, actor_id);
+            animal_run(world, actor_id);
+            base_object_run_monster(world, actor_id);
+        }
+        ClassRunBase::MagicMonster => {
+            magic_monster_run(world, actor_id);
+            monster_run(world, actor_id);
+            animal_run(world, actor_id);
+            base_object_run_monster(world, actor_id);
+        }
+        ClassRunBase::None => {}
     }
 }
 
@@ -4512,7 +4635,13 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
     // base.Run()」逐点一致。`SearchTarget` 不消费随机数 ⇒ 五批 trace 不受影响。
     // **MB-7 F1**：`ElfWarriorMonster`(114) `: SpitSpider : AtMonster` 亦覆写 `Run`，
     // 末尾 `base.Run()` = `ATMonster.Run` ⇒ 同一道 8s/1s 索敌门（与 105/92 同法补门）。
-    if (is_active_seek_race(e.race) || e.race == 105 || e.race == 92 || e.race == 114)
+    // **MB-8（R42）**：`WhiteSkeleton(100) : AtMonster` 覆写 `Run`，其 `base.Run()` =
+    // `ATMonster.Run` ⇒ 同一道 8s/1s 索敌门（与 105/92/114 同法补门）。
+    if (is_active_seek_race(e.race)
+        || e.race == 105
+        || e.race == 92
+        || e.race == 114
+        || e.race == 100)
         && can_move(e)
     {
         let now = world.clock_ms;
@@ -4537,7 +4666,8 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
         crazy_mode_expiry(world, actor_id);
         return;
     }
-    if think(world, actor_id) {
+    // 虚调用 `Think()`：race 215（`MagicMonster`）用无 HolySeize 门的版本（MB-9）。
+    if monster_think(world, actor_id) {
         // oracle `:255-258`：`if (Think()) { base.Run(); return; }` ⇒ **跳过** `CheckRoyalty`。
         return;
     }
@@ -4606,82 +4736,9 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
                 }
             }
         }
-        // `MonsterObject.cs:299-329`：`Master != null` 的跟随段（仍在 `!RunAwayMode` 内）。
-        //
-        // oracle 逐句：
-        //   1. `TargetCret == null` ⇒ `Master.GetBackPosition(ref nX, ref nY)`；若
-        //      `|TargetX-nX| > 1 || |TargetY-nY| > 1` ⇒ `TargetX/TargetY = nX/nY`；
-        //      再若 `|CurrX-nX| <= 2 && |CurrY-nY| <= 2` 且该格 `GetMovingObject(nX,nY,true) != null`
-        //      ⇒ `TargetX/TargetY = CurrX/CurrY`（身后格被占时原地待命）。
-        //   2. `!Master.SlaveRelax && (Envir != Master.Envir || |Δx| > 20 || |Δy| > 20)`
-        //      ⇒ `SpaceMove(Master.Envir.MapName, TargetX, TargetY, 1)`。
-        // `TargetCret` 可能在上一段 `AttackTarget()` 里被 `DelTargetCreat()` 清空 ⇒ **重新读**。
-        let master_id = world.entities.get(actor_id).and_then(|e| e.master);
-        if let Some(master_id) = master_id {
-            let has_target = world
-                .entities
-                .get(actor_id)
-                .is_some_and(|e| e.ai.target_creature.is_some());
-            if !has_target {
-                if let Some((n_x, n_y)) = master_get_back_position(world, master_id) {
-                    let (tx, ty) = world
-                        .entities
-                        .get(actor_id)
-                        .map_or((-1, 0), |e| (e.ai.target_x, e.ai.target_y));
-                    if (tx - n_x).abs() > 1 || (ty - n_y).abs() > 1 {
-                        let (cx, cy, map_id) = world
-                            .entities
-                            .get(actor_id)
-                            .map_or((0, 0, 0), |e| (e.x, e.y, e.map_id));
-                        let mut new_x = n_x;
-                        let mut new_y = n_y;
-                        if (cx - n_x).abs() <= 2 && (cy - n_y).abs() <= 2 {
-                            // `Envir.GetMovingObject(nX, nY, true)`（`Envirnoment.cs:1203`）。
-                            // 本仓 [`World::moving_object_at`] 是其逐行移植（含 `!Ghost`/`!Death`
-                            // 门）；oracle 的 `CastleDoor.HoldPlace` 特例未建模（登记，见报告）。
-                            if world.moving_object_at(map_id, n_x, n_y, true).is_some() {
-                                new_x = cx;
-                                new_y = cy;
-                            }
-                        }
-                        if let Some(e) = world.entities.get_mut(actor_id) {
-                            e.ai.target_x = new_x;
-                            e.ai.target_y = new_y;
-                        }
-                    }
-                }
-            }
-            // `SpaceMove` 的目标图 = `Master.Envir.MapName`（本仓以 `map_id` 表示图）。
-            // oracle 的该门在 `if (TargetCret == null)` **之外** ⇒ 有目标时同样会追随。
-            // `SlaveRelax` 为真时**不**追随（但上面的 TargetX/TargetY 仍照 oracle 更新）。
-            let master = world
-                .entities
-                .get(master_id)
-                .map(|m| (m.map_id, m.x, m.y, m.slave_relax));
-            let own = world
-                .entities
-                .get(actor_id)
-                .map(|e| (e.map_id, e.x, e.y, e.ai.target_x, e.ai.target_y));
-            if let (Some((m_map, m_x, m_y, m_relax)), Some((s_map, s_x, s_y, tx, ty))) =
-                (master, own)
-            {
-                if !m_relax && (s_map != m_map || (s_x - m_x).abs() > 20 || (s_y - m_y).abs() > 20)
-                {
-                    // `SpaceMove(..., nInt=1)` ⇒ `RM_SPACEMOVE_SHOW2`（怪物无会话；出帧面登记）。
-                    let _ = crate::space_move::monster_space_move(world, actor_id, m_map, tx, ty);
-                }
-            }
-        }
+        monster_follow_master(world, actor_id);
     } else {
-        let expired = world.entities.get(actor_id).is_some_and(|e| {
-            e.ai.run_away_time > 0 && (now - e.ai.run_away_start) > e.ai.run_away_time
-        });
-        if expired {
-            if let Some(e) = world.entities.get_mut(actor_id) {
-                e.ai.run_away_mode = false;
-                e.ai.run_away_time = 0;
-            }
-        }
+        monster_run_away_expiry(world, actor_id, now);
     }
     // `MonsterObject.cs:333-338`：`Master != null && Master.SlaveRelax` ⇒ `base.Run(); return;`
     // —— **跳过** `GotoTargetXY`/`Wondering`、`CheckRoyalty()` 与 `CrazyMode` 到期。
@@ -4717,6 +4774,98 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
     crate::slave::check_royalty(world, actor_id);
     // `MonsterObject.cs:353-356`：CrazyMode 到期（在 `CheckRoyalty()` 之后、`base.Run()` 之前）。
     crazy_mode_expiry(world, actor_id);
+}
+
+/// `MonsterObject.Run` / `MagicMonster.Run` 共用的 `Master != null` 跟随段
+/// （`MonsterObject.cs:299-329` 与 `MagicMonster.cs:110-148` **逐字相同**）。
+///
+/// oracle 逐句：
+///   1. `TargetCret == null` ⇒ `Master.GetBackPosition(ref nX, ref nY)`；若
+///      `|TargetX-nX| > 1 || |TargetY-nY| > 1` ⇒ `TargetX/TargetY = nX/nY`；
+///      再若 `|CurrX-nX| <= 2 && |CurrY-nY| <= 2` 且该格 `GetMovingObject(nX,nY,true) != null`
+///      ⇒ `TargetX/TargetY = CurrX/CurrY`（身后格被占时原地待命）。
+///   2. `!Master.SlaveRelax && (Envir != Master.Envir || |Δx| > 20 || |Δy| > 20)`
+///      ⇒ `SpaceMove(Master.Envir.MapName, TargetX, TargetY, 1)`。
+///
+/// `TargetCret` 可能在上一段 `AttackTarget()` 里被 `DelTargetCreat()` 清空 ⇒ **重新读**。
+fn monster_follow_master(world: &mut World, actor_id: i32) {
+    // `MonsterObject.cs:299-329`：`Master != null` 的跟随段（仍在 `!RunAwayMode` 内）。
+    //
+    // oracle 逐句：
+    //   1. `TargetCret == null` ⇒ `Master.GetBackPosition(ref nX, ref nY)`；若
+    //      `|TargetX-nX| > 1 || |TargetY-nY| > 1` ⇒ `TargetX/TargetY = nX/nY`；
+    //      再若 `|CurrX-nX| <= 2 && |CurrY-nY| <= 2` 且该格 `GetMovingObject(nX,nY,true) != null`
+    //      ⇒ `TargetX/TargetY = CurrX/CurrY`（身后格被占时原地待命）。
+    //   2. `!Master.SlaveRelax && (Envir != Master.Envir || |Δx| > 20 || |Δy| > 20)`
+    //      ⇒ `SpaceMove(Master.Envir.MapName, TargetX, TargetY, 1)`。
+    // `TargetCret` 可能在上一段 `AttackTarget()` 里被 `DelTargetCreat()` 清空 ⇒ **重新读**。
+    let master_id = world.entities.get(actor_id).and_then(|e| e.master);
+    if let Some(master_id) = master_id {
+        let has_target = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|e| e.ai.target_creature.is_some());
+        if !has_target {
+            if let Some((n_x, n_y)) = master_get_back_position(world, master_id) {
+                let (tx, ty) = world
+                    .entities
+                    .get(actor_id)
+                    .map_or((-1, 0), |e| (e.ai.target_x, e.ai.target_y));
+                if (tx - n_x).abs() > 1 || (ty - n_y).abs() > 1 {
+                    let (cx, cy, map_id) = world
+                        .entities
+                        .get(actor_id)
+                        .map_or((0, 0, 0), |e| (e.x, e.y, e.map_id));
+                    let mut new_x = n_x;
+                    let mut new_y = n_y;
+                    if (cx - n_x).abs() <= 2 && (cy - n_y).abs() <= 2 {
+                        // `Envir.GetMovingObject(nX, nY, true)`（`Envirnoment.cs:1203`）。
+                        // 本仓 [`World::moving_object_at`] 是其逐行移植（含 `!Ghost`/`!Death`
+                        // 门）；oracle 的 `CastleDoor.HoldPlace` 特例未建模（登记，见报告）。
+                        if world.moving_object_at(map_id, n_x, n_y, true).is_some() {
+                            new_x = cx;
+                            new_y = cy;
+                        }
+                    }
+                    if let Some(e) = world.entities.get_mut(actor_id) {
+                        e.ai.target_x = new_x;
+                        e.ai.target_y = new_y;
+                    }
+                }
+            }
+        }
+        // `SpaceMove` 的目标图 = `Master.Envir.MapName`（本仓以 `map_id` 表示图）。
+        // oracle 的该门在 `if (TargetCret == null)` **之外** ⇒ 有目标时同样会追随。
+        // `SlaveRelax` 为真时**不**追随（但上面的 TargetX/TargetY 仍照 oracle 更新）。
+        let master = world
+            .entities
+            .get(master_id)
+            .map(|m| (m.map_id, m.x, m.y, m.slave_relax));
+        let own = world
+            .entities
+            .get(actor_id)
+            .map(|e| (e.map_id, e.x, e.y, e.ai.target_x, e.ai.target_y));
+        if let (Some((m_map, m_x, m_y, m_relax)), Some((s_map, s_x, s_y, tx, ty))) = (master, own) {
+            if !m_relax && (s_map != m_map || (s_x - m_x).abs() > 20 || (s_y - m_y).abs() > 20) {
+                // `SpaceMove(..., nInt=1)` ⇒ `RM_SPACEMOVE_SHOW2`（怪物无会话；出帧面登记）。
+                let _ = crate::space_move::monster_space_move(world, actor_id, m_map, tx, ty);
+            }
+        }
+    }
+}
+
+/// `MonsterObject.Run` / `MagicMonster.Run` 共用的 `RunAwayMode` 到期段
+/// （`MonsterObject.cs:330-345` / `MagicMonster.cs:149-158` 逐字相同；**严格大于**）。
+fn monster_run_away_expiry(world: &mut World, actor_id: i32, now: i64) {
+    let expired = world.entities.get(actor_id).is_some_and(|e| {
+        e.ai.run_away_time > 0 && (now - e.ai.run_away_start) > e.ai.run_away_time
+    });
+    if expired {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.run_away_mode = false;
+            e.ai.run_away_time = 0;
+        }
+    }
 }
 
 /// `BaseObject.Run()`（`BaseObject.Base.cs:24-316`）的**怪侧公共段**：恢复 / 体力点 / `TargetCret` 清理。
@@ -5110,24 +5259,18 @@ pub fn monster_ai_tick(world: &mut World) {
             // `(now - DeathTick) > 2s ⇒ MakeGhost()`（`ElfMonster.cs:53-58` /
             // `ElfWarriorMonster.cs:121-127`），**短于** `Config.MakeGhostTime` 的通用门
             // ⇒ 死后仍必须跑类 `Run`。
+            // **MB-8/MB-9**：100/120/132/214/215 的类 `Run` 在 `Death` 下仍有可观测路径
+            // （`SoccerBall.Run` 无 `Death` 门；`FireMonster`/`Fireball` 的 `CanMove()` 门后
+            // 落到 `MonsterObject.Run` 的 `CheckRoyalty`/`CrazyMode`；`WhiteSkeleton` 的
+            // `BoIsFirst` 只在首次 `Run`）。与 96/113/114 同口径：先跑类覆写，再按
+            // [`run_class_base`] 跑 oracle 的 `base.Run()` 链。
             if world
                 .entities
                 .get(id)
-                .is_some_and(|e| matches!(e.race, 96 | 113 | 114))
+                .is_some_and(|e| matches!(e.race, 96 | 113 | 114 | 100 | 120 | 132 | 214 | 215))
             {
                 if let Some(base) = monster_class_run(world, id) {
-                    match base {
-                        ClassRunBase::Animal => {
-                            animal_run(world, id);
-                            base_object_run_monster(world, id);
-                        }
-                        ClassRunBase::Monster => {
-                            monster_run(world, id);
-                            animal_run(world, id);
-                            base_object_run_monster(world, id);
-                        }
-                        ClassRunBase::None => {}
-                    }
+                    run_class_base(world, id, base);
                     continue;
                 }
             }
@@ -5176,22 +5319,10 @@ pub fn monster_ai_tick(world: &mut World) {
         // **MB-1**：四个专用怪的 `Run` 覆写（`StickMonster`/`DigOutZombi`/
         // `ScultureMonster`/`BigHeartMonster`）。先跑各自 `Run`，再按 [ClassRunBase]
         // 跑 oracle 的 `base.Run()` 链。
+        // `base.Run()` 链（`Animal`/`AnimalTwice`/`Monster`/`MagicMonster`/`None`）见
+        // [`run_class_base`]。
         if let Some(base) = monster_class_run(world, id) {
-            match base {
-                // `AnimalObject` 直派生：`base.Run()` = `AnimalObject.Run` → `BaseObject.Run`。
-                ClassRunBase::Animal => {
-                    animal_run(world, id);
-                    base_object_run_monster(world, id);
-                }
-                // `MonsterObject` 派生：`base.Run()` = `MonsterObject.Run` →
-                // `AnimalObject.Run` → `BaseObject.Run`。
-                ClassRunBase::Monster => {
-                    monster_run(world, id);
-                    animal_run(world, id);
-                    base_object_run_monster(world, id);
-                }
-                ClassRunBase::None => {}
-            }
+            run_class_base(world, id, base);
             continue;
         }
         monster_run(world, id);
@@ -6178,6 +6309,606 @@ fn guard_unit_struck(world: &mut World, victim_id: i32, now: i64) {
         .is_some_and(|e| e.castle_binding.is_some())
     {
         world.set_guard_crime_for_castle(victim_id, now);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// **MB-8 / MB-9**（tier=R）——事件 / 出土 / 运动 + `FireballMonster` 全链
+//
+// oracle 逐句锚点（本片在 `ce61cdca4` 上实读；类链 = `CreateMonster` 的 race → 类映射）：
+//
+// | 本片 | oracle |
+// | --- | --- |
+// | [`white_skeleton_run`] | `WhiteSkeleton.cs:29-39`（ctor 常量见 `mongen::apply_monster_class_constants`） |
+// | [`soccer_ball_run`] / [`soccer_ball_struck`] | `SoccerBall.cs:19-74` / `:76-86` |
+// | [`sand_mob_object_run`] | `SandMobObject.cs:14-57` |
+// | [`fire_monster_run`] | `FireMonster.cs:23-82` |
+// | [`run_away_run`]（死类） | `RunAway.cs:12-64` |
+// | [`fireball_monster_run`] | `FireballMonster.cs:14-62` |
+// | [`magic_monster_run`] | `MagicMonster.cs:84-165`（Pass 1） |
+// | [`magic_monster_think`] | `MagicMonster.cs:18-45`（**无** HolySeize 门） |
+//
+// ## 类链（`base.Run()` 的落点，逐类实读）
+//
+// - `WhiteSkeleton(100) : AtMonster : MonsterObject` ⇒ `ATMonster.Run`（8s/1s 索敌门）→
+//   `MonsterObject.Run` ⇒ [`ClassRunBase::Monster`]（索敌门由 [`monster_run`] 的 race 100 分支补）；
+// - `SoccerBall(120) : AnimalObject` ⇒ `AnimalObject.Run` ⇒ [`ClassRunBase::Animal`]；
+// - `SandMobObject(132) : StickMonster : AnimalObject` ⇒ **每次** `base.Run()` 都因本函数刚刷新
+//   `WalkTick` 而早退，只剩 `AnimalObject.Run`；`AttackTarget()` 命中支先跑一次 + 函数尾再跑一次
+//   ⇒ [`ClassRunBase::AnimalTwice`] / `Animal` / `None`（目标两轴均 >15 的 `return`）；
+// - `FireMonster(214) : MonsterObject` ⇒ `MonsterObject.Run` ⇒ [`ClassRunBase::Monster`]；
+// - `FireballMonster(215) : MagicMonster : MonsterObject` ⇒ `MagicMonster.Run`（自带一段 AI）→
+//   `MonsterObject.Run` ⇒ [`ClassRunBase::MagicMonster`]（**两段 AI pass**）。
+//
+// ## 事件 / 帧
+//
+// - `FireMonster.Run` 的 9 格火墙：`Envir.GetEvent(x,y) == null` 才
+//   `new FireBurnEvent(this,x,y,ET_FIRE,FireTime=20000,FireDamage=10)` + `AddEvent`。本仓复用
+//   [`World::event_at`] / [`World::add_fire_burn_event`]（**含 `MapEvent.Id == 0` 的
+//   「管理器只留第一条」BUG-REPLICA**），不另建存储。
+// - `FireballMonster.Run` 的三帧：`RM_SPELL(48,x,y,48)`、`RM_MAGICFIRE(0,MakeWord(2,48),
+//   MakeLong(x,y),targetId)`、`SendStruckDelayMsg(RM_DELAYMAGIC, nPower, MakeLong(x,y), 2,
+//   targetId, "", 600)`（入**怪自己**的队列；到点语义见
+//   [`crate::slave::World::deliver_self_delay_msgs`] 的 `RM_DELAYMAGIC` 支）。
+// ---------------------------------------------------------------------------
+
+/// `FireMonster.FireTime`（`FireMonster.cs:12`）= `20 * 1000`。
+const FIRE_MONSTER_TIME_MS: i32 = 20 * 1000;
+/// `FireMonster.FireDamage`（`FireMonster.cs:16`）= 10。
+const FIRE_MONSTER_DAMAGE: i32 = 10;
+/// `FireMonster.Run` 的 9 格检查顺序（`FireMonster.cs:31-64`，原文逐条照抄）。
+const FIRE_MONSTER_CELLS: [(i32, i32); 9] = [
+    (0, -1),
+    (0, -2),
+    (-1, 0),
+    (-2, 0),
+    (0, 0),
+    (1, 0),
+    (2, 0),
+    (0, 1),
+    (0, 2),
+];
+
+/// `WhiteSkeleton.Run`（`WhiteSkeleton.cs:29-39`）：首次 `Run` 只做
+/// `BoIsFirst = false; Dir = 5; FixedHideMode = false; SendRefMsg(RM_DIGUP, Dir, CurrX, CurrY, 0)`。
+/// **无 RNG、无 `CanMove`/`Death` 门**；`base.Run()` 由 [`monster_class_run`] 的
+/// [`ClassRunBase::Monster`] 承接（= `ATMonster.Run` → `MonsterObject.Run`）。
+pub fn white_skeleton_run(world: &mut World, actor_id: i32) {
+    let first = world.entities.get(actor_id).is_some_and(|e| e.bo_is_first);
+    if !first {
+        return;
+    }
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.bo_is_first = false;
+        e.ai.dir = 5;
+        e.fixed_hide_mode = false;
+    }
+    let (dir, x, y) = match world.entities.get(actor_id) {
+        Some(e) => (e.ai.dir, e.x, e.y),
+        None => return,
+    };
+    // `SendRefMsg(RM_DIGUP, Dir, CurrX, CurrY, 0, "")`（`:36`）。
+    send_ref_msg(world, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
+}
+
+/// `SoccerBall.Run`（`SoccerBall.cs:19-74`）。`base.Run()` = `AnimalObject.Run`。
+///
+/// `N550 > 0`：前格（`GetNextPosition(...,1)`）可走（`CanWalk(...,false)`）⇒ 按反射表把 `Dir`
+/// 取反后再 `GetNextPosition(..., N550)` 写 `TargetX/Y`；不可走 ⇒ 不改任何字段。
+/// `N550 <= 0` ⇒ `TargetX = -1`。随后 `TargetX != -1` ⇒ `GotoTargetXY()`，到达则 `N550 = 0`。
+pub fn soccer_ball_run(world: &mut World, actor_id: i32) {
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    let (cx, cy, map_id, dir, n550) = (e.x, e.y, e.map_id, e.ai.dir, e.n550);
+    if n550 > 0 {
+        let one = world
+            .maps
+            .get(map_id)
+            .and_then(|m| m.get_next_position(cx, cy, dir, 1));
+        if let Some((nx, ny)) = one {
+            if world.can_walk_at(map_id, nx, ny, false) {
+                // `switch (Dir)` 的反射表：0↔4、1↔7、2↔6、3↔5（`SoccerBall.cs:31-56`）。
+                let new_dir = soccer_ball_reflect_dir(dir);
+                if let Some(e) = world.entities.get_mut(actor_id) {
+                    e.ai.dir = new_dir;
+                }
+                // `Envir.GetNextPosition(CurrX, CurrY, Dir, N550, ref TargetX, ref TargetY)`
+                // ——`GetNextPosition` 先把 `snx/sny` 置为 `CurrX/CurrY`，故未移动时也要写回。
+                let dest = world
+                    .maps
+                    .get(map_id)
+                    .and_then(|m| m.get_next_position(cx, cy, new_dir, n550))
+                    .unwrap_or((cx, cy));
+                if let Some(e) = world.entities.get_mut(actor_id) {
+                    e.ai.target_x = dest.0;
+                    e.ai.target_y = dest.1;
+                }
+            }
+        }
+    } else if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.target_x = -1;
+    }
+    let (target_x, target_y) = world
+        .entities
+        .get(actor_id)
+        .map_or((-1, 0), |e| (e.ai.target_x, e.ai.target_y));
+    if target_x != -1 {
+        goto_target_xy(world, actor_id);
+        let (nx, ny) = world.entities.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
+        if target_x == nx && target_y == ny {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.n550 = 0;
+            }
+        }
+    }
+}
+
+/// `SoccerBall.Run` 的 `Dir` 反射表（`SoccerBall.cs:31-56`，8 向）。
+fn soccer_ball_reflect_dir(dir: u8) -> u8 {
+    match dir {
+        0 => 4,
+        1 => 7,
+        2 => 6,
+        3 => 5,
+        4 => 0,
+        5 => 3,
+        6 => 2,
+        7 => 1,
+        _ => dir,
+    }
+}
+
+/// `SoccerBall.Struck`（`SoccerBall.cs:76-86`）——**完全覆写** `AnimalObject.Struck`。
+///
+/// `hiter == null ⇒ return`；`Dir = hiter.Dir`；`N550 = MIN(20, Random(4) + N550 + 4)`；
+/// `GetNextPosition(CurrX, CurrY, Dir, N550, ref TargetX, ref TargetY)`。
+/// 不写 `StruckTick`、不选目标、不扣肉质、不加 `AttackTick`（无 `base.Struck()`）。
+/// 由 [`animal_struck`] 在 race 120 处转派。
+pub fn soccer_ball_struck(world: &mut World, actor_id: i32, hiter_id: i32) {
+    let Some(hiter_dir) = world.entities.get(hiter_id).map(|h| h.ai.dir) else {
+        return;
+    };
+    let (cx, cy, map_id, n550) = match world.entities.get(actor_id) {
+        Some(e) => (e.x, e.y, e.map_id, e.n550),
+        None => return,
+    };
+    let n550 = world.rng.random_below(4) + n550 + 4;
+    let n550 = n550.min(20);
+    let dest = world
+        .maps
+        .get(map_id)
+        .and_then(|m| m.get_next_position(cx, cy, hiter_dir, n550))
+        .unwrap_or((cx, cy));
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.dir = hiter_dir;
+        e.n550 = n550;
+        e.ai.target_x = dest.0;
+        e.ai.target_y = dest.1;
+    }
+}
+
+/// `SandMobObject.Run`（`SandMobObject.cs:14-57`）。返回值 = oracle 本 tick 要跑的
+/// `base.Run()`（= `StickMonster.Run`，因 `WalkTick` 刚刷新而必然早退成 `AnimalObject.Run`）次数：
+///
+/// - `AttackTarget()` 命中 ⇒ 体内先跑一次 + 函数尾再一次 ⇒ [`ClassRunBase::AnimalTwice`]；
+/// - 目标两轴均 `> 15` 的 `ComeDown(); return;` ⇒ **0 次** ⇒ [`ClassRunBase::None`]；
+/// - 其余路径（含 `!Death && !Ghost` 门/`WalkTick` 门为假）⇒ 函数尾一次 ⇒ [`ClassRunBase::Animal`]。
+fn sand_mob_object_run(world: &mut World, actor_id: i32) -> ClassRunBase {
+    let Some(e) = world.entities.get(actor_id) else {
+        return ClassRunBase::Animal;
+    };
+    // `if (!Death && !Ghost)`（`:16`）：为假 ⇒ 只剩函数尾 `base.Run()`。
+    if e.death || e.ghost {
+        return ClassRunBase::Animal;
+    }
+    let now = world.clock_ms;
+    // `if ((GetTickCount() - WalkTick) > WalkSpeed)`（`:18`）：**严格大于**。
+    if now - e.ai.walk_tick <= e.ai.walk_speed {
+        return ClassRunBase::Animal;
+    }
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.walk_tick = now;
+    }
+    let (hp, max_hp, fixed_hide, attack_tick, next_hit_time, appear_start, target_id) = {
+        let e = match world.entities.get(actor_id) {
+            Some(e) => e,
+            None => return ClassRunBase::Animal,
+        };
+        (
+            i32::from(e.hp),
+            i32::from(e.max_hp),
+            e.fixed_hide_mode,
+            e.ai.attack_tick,
+            e.ai.next_hit_time,
+            e.appear_start_tick,
+            e.ai.target_creature,
+        )
+    };
+    if fixed_hide {
+        // `if (WAbil.HP > WAbil.MaxHP / 20 && CheckComeOut()) _mDwAppearStart = now;`
+        if hp > max_hp / 20 && stick_check_come_out(world, actor_id) {
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.appear_start_tick = now;
+            }
+        }
+    } else {
+        // `if (HP > 0 && HP < MaxHP / 20 && (now - _mDwAppearStart) > 3000) ComeDown();`
+        if hp > 0 && hp < max_hp / 20 && (now - appear_start) > 3000 {
+            stick_come_down(world, actor_id);
+        } else if let Some(target_id) = target_id {
+            // `else if (TargetCret != null) { if (|Δx| > 15 && |Δy| > 15) { ComeDown(); return; } }`
+            if let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) {
+                let (cx, cy) = world.entities.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
+                if (cx - tx).abs() > 15 && (cy - ty).abs() > 15 {
+                    stick_come_down(world, actor_id);
+                    return ClassRunBase::None;
+                }
+            }
+        }
+        // `if ((now - AttackTick) > NextHitTime) SearchTarget();`（`:38-41`）
+        if now - attack_tick > next_hit_time {
+            search_target(world, actor_id);
+        }
+        // `if (!FixedHideMode) { if (AttackTarget()) base.Run(); }`（`:42-48`）
+        let still_hidden = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|e| e.fixed_hide_mode);
+        if !still_hidden && stick_attack_target(world, actor_id) {
+            return ClassRunBase::AnimalTwice;
+        }
+    }
+    ClassRunBase::Animal
+}
+
+/// `FireMonster.Run`（`FireMonster.cs:23-82`）。
+///
+/// `CanMove()` 门内按 `FIRE_MONSTER_CELLS` 的**固定顺序**检查 9 格：`Envir.GetEvent == null`
+/// 才新建 `FireBurnEvent(ET_FIRE, FireTime=20000, FireDamage=10)` 并 `AddEvent`；随后 8s/1s
+/// 索敌门。`base.Run()` = `MonsterObject.Run`（[`ClassRunBase::Monster`]）。
+pub fn fire_monster_run(world: &mut World, actor_id: i32) {
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if !can_move(e) {
+        return;
+    }
+    let (x, y, map_id) = (e.x, e.y, e.map_id);
+    for (dx, dy) in FIRE_MONSTER_CELLS {
+        let (ex, ey) = (x + dx, y + dy);
+        if world.event_at(map_id, ex, ey).is_none() {
+            world.add_fire_burn_event(
+                actor_id,
+                map_id,
+                ex,
+                ey,
+                FIRE_MONSTER_DAMAGE,
+                FIRE_MONSTER_TIME_MS,
+            );
+        }
+    }
+    class_seek_gate(world, actor_id);
+}
+
+/// `RunAway.Run`（`RunAway.cs:12-64`）——**死类**：`CreateMonster`（`WorldServer.MonGen.cs:507-728`）
+/// 无对应 case，ctor 也不自置 `Race` ⇒ 生产不可达；本函数为「内容出现即等价」保留并**登记**。
+///
+/// - `!Death && !Ghost`；
+/// - 有目标 ⇒ 无条件把 `TargetX/TargetY` 写为目标格；
+/// - `HP <= Round(MaxHP/2.0)` ⇒ `GetFrontPosition` + `RM_SPACEMOVE_FIRE` +
+///   `SpaceMove(MapName, nx-2, ny-2, 0)`，`borunaway = true`；`HP >= Round(MaxHP/2.0)` ⇒ false；
+/// - `borunaway` 支里的 `time1` 是**局部变量**、每次 `Run` 置 0 ⇒ `(now - 0) > 5000` 恒等于
+///   `now > 5000`（**照抄 oracle 的 bug**，`RunAway.cs:44`/`:48` 的 `RandomByte(4/7)` 条件选择
+///   依赖目标是否恰在斜邻格）；
+/// - 尾部 8s/1s 索敌门；`base.Run()` = `MonsterObject.Run`。
+///
+/// `WalkTo(dir, true, BoFearFire)` 的 `boFlag`/`fearFire` 子集与 [`walk_to`] 一致（未建模，登记）。
+pub fn run_away_run(world: &mut World, actor_id: i32) {
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    if e.death || e.ghost {
+        return;
+    }
+    let now = world.clock_ms;
+    if let Some(target_id) = e.ai.target_creature {
+        if let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) {
+            if let Some(a) = world.entities.get_mut(actor_id) {
+                a.ai.target_x = tx;
+                a.ai.target_y = ty;
+            }
+            let (hp, max_hp, map_id, dir) = match world.entities.get(actor_id) {
+                Some(a) => (i32::from(a.hp), i32::from(a.max_hp), a.map_id, a.ai.dir),
+                None => return,
+            };
+            let half = mir2_shared::hutil::round(f64::from(max_hp) / 2.0);
+            if hp <= half {
+                let (nx, ny) = front_of(world, actor_id, dir, map_id)
+                    .unwrap_or_else(|| world.entities.get(actor_id).map_or((0, 0), |a| (a.x, a.y)));
+                send_ref_msg(world, actor_id, RM_SPACEMOVE_FIRE, 0, 0, 0, 0);
+                let _ =
+                    crate::space_move::monster_space_move(world, actor_id, map_id, nx - 2, ny - 2);
+                // `if ((GetTickCount() - time1) > 5000)`：`time1` 是局部 `int`，每次 Run 置 0。
+                if now > 5000 {
+                    let (tx2, ty2) = world
+                        .entities
+                        .get(actor_id)
+                        .map_or((0, 0), |a| (a.ai.target_x, a.ai.target_y));
+                    let (cx2, cy2) = world.entities.get(actor_id).map_or((0, 0), |a| (a.x, a.y));
+                    let dir_to = if (tx2 - cx2).abs() == 1 && (ty2 - cy2).abs() == 1 {
+                        world.rng.random_byte(4)
+                    } else {
+                        world.rng.random_byte(7)
+                    };
+                    walk_to(world, actor_id, dir_to);
+                }
+            }
+        }
+    }
+    class_seek_gate(world, actor_id);
+}
+
+/// `BaseObject.GetPoseCreate()`（`BaseObject.cs:1253-1262`）：`GetFrontPosition` 后取该格
+/// 首个 `GetMovingObject(nX, nY, true)`（`!Ghost && !Death`）。
+fn get_pose_create(world: &World, actor_id: i32) -> Option<i32> {
+    let e = world.entities.get(actor_id)?;
+    let map = world.maps.get(e.map_id)?;
+    let (nx, ny) = front_position(e.x, e.y, e.ai.dir, map.width, map.height);
+    world.moving_object_at(e.map_id, nx, ny, true)
+}
+
+/// `FireballMonster.Run`（`FireballMonster.cs:14-62`）——类体（魔法块 + 索敌门）。
+///
+/// **必须逐条复刻的怪癖**（设计件 `design-monster-run-overrides-20261017.md` §4.1.2）：
+/// 1. `MagCanHitTarget(TargetCret.CurrX, TargetCret.CurrY, TargetCret)`——起点 = **目标自身坐标**
+///    （`n20 = 0`，第一轮 `GetNextDirection(x,y,x,y)` 兜底 `Down`）；
+/// 2. 距离门读 **`TargetX/TargetY` 字段**（不是 `TargetCret.CurrX/CurrY`；初值 -1）；
+/// 3. 伤害打 **`GetPoseCreate()`（前方一格）**，帧却引用 `TargetCret` 的坐标/id；
+/// 4. `AntiMagic > 0` 是硬门（普通生成怪 `anti_magic = 0` ⇒ 只抽 `nPower` 不进伤害块）；
+/// 5. `BreakHolySeizeMode()` 在**有目标**时无条件执行（伤害块全跳过也执行）；
+/// 6. `SpellTick` 与 `BaseObject.Run` 的恢复累加器同名共用 ⇒ 到点门实际只挡一 tick。
+///
+/// `base.Run()` 链（`MagicMonster.Run` → `MonsterObject.Run`）由
+/// [`monster_class_run`] 的 [`ClassRunBase::MagicMonster`] 承接。
+pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    // `if (!Death && !Ghost)`（`:16`）。
+    if e.death || e.ghost {
+        return;
+    }
+    let (map_id, cx, cy, target_x, target_y, dc, anti_magic, spell_tick, next_hit_time) = (
+        e.map_id,
+        e.x,
+        e.y,
+        e.ai.target_x,
+        e.ai.target_y,
+        e.dc,
+        e.anti_magic,
+        e.spell_tick,
+        e.ai.next_hit_time,
+    );
+    let target_id = e.ai.target_creature;
+    if let Some(target_id) = target_id {
+        // `if (MagCanHitTarget(TargetCret.CurrX, TargetCret.CurrY, TargetCret))`（`:20`）。
+        let mag_ok = match world.entities.get(target_id) {
+            Some(t) => world
+                .maps
+                .get(map_id)
+                .is_some_and(|m| crate::magic::mag_can_hit_target(m, t.x, t.y, t.x, t.y)),
+            None => false,
+        };
+        if mag_ok {
+            // `if (IsProperTarget(TargetCret))`（`:22`）。
+            let proper = world
+                .entities
+                .get(actor_id)
+                .zip(world.entities.get(target_id))
+                .is_some_and(|(a, t)| is_proper_target(a, t));
+            if proper && (target_x - cx).abs() <= 8 && (target_y - cy).abs() <= 8 {
+                // `nPower = LoByte(DC) + Random(|HiByte(DC) - LoByte(DC)| + 1)`（`:26`）。
+                let lo = i32::from(crate::combat::lo_byte(dc));
+                let hi = i32::from(crate::combat::hi_byte(dc));
+                let n_power = lo + world.rng.random_below((hi - lo).abs() + 1);
+                if n_power > 0 {
+                    // `IActor baseObject = GetPoseCreate();`（`:29`）。
+                    if let Some(pose_id) = get_pose_create(world, actor_id) {
+                        let pose_proper = world
+                            .entities
+                            .get(actor_id)
+                            .zip(world.entities.get(pose_id))
+                            .is_some_and(|(a, t)| is_proper_target(a, t));
+                        if pose_proper && anti_magic > 0 {
+                            // `nPower = baseObject.GetMagStruckDamage(this, nPower)`（`:32`）：
+                            // MAC 与 `LifeAttrib` 取**受击者（pose）**；undead 加项取**攻方**的
+                            // `AddAbil.UndeadPower`（`BaseObject.Base.cs:816` 的参数名 `baseObject`
+                            // 就是本怪）。生产怪 `undead_power` 恒 0 ⇒ 数值面无差。
+                            let (mac, pose_undead) = world
+                                .entities
+                                .get(pose_id)
+                                .map_or((0, false), |p| (p.mac, p.life_attrib == 1));
+                            let attacker_undead =
+                                world.entities.get(actor_id).map_or(0, |a| a.undead_power);
+                            let undead = if pose_undead {
+                                Some(attacker_undead)
+                            } else {
+                                None
+                            };
+                            let reduced = crate::combat::get_mag_struck_damage(
+                                &mut world.rng,
+                                mac,
+                                n_power,
+                                undead,
+                            );
+                            if reduced > 0 {
+                                // `baseObject.StruckDamage(nPower)`（`:35`）：倍率 + `DamageHealth`
+                                // + 玩家耐久抽（[`class_struck_apply`] 逐行同构）。
+                                let _ =
+                                    class_struck_apply(world, actor_id, pose_id, reduced, reduced);
+                                let now = world.clock_ms;
+                                let (spell_tick_now, next_hit) = world
+                                    .entities
+                                    .get(actor_id)
+                                    .map_or((spell_tick, next_hit_time), |a| {
+                                        (a.spell_tick, a.ai.next_hit_time)
+                                    });
+                                if now - i64::from(spell_tick_now) > next_hit {
+                                    if let Some(a) = world.entities.get_mut(actor_id) {
+                                        a.spell_tick = i32::try_from(now).unwrap_or(i32::MAX);
+                                    }
+                                    let (tx, ty) = world
+                                        .entities
+                                        .get(target_id)
+                                        .map_or((0, 0), |t| (t.x, t.y));
+                                    // `SendRefMsg(RM_SPELL, 48, tx, ty, 48, "")`（`:39`）。
+                                    send_ref_msg(world, actor_id, RM_SPELL, 48, tx, ty, 48);
+                                    // `SendRefMsg(RM_MAGICFIRE, 0, MakeWord(2, 48),
+                                    //   MakeLong(tx, ty), targetId, "")`（`:40`）。
+                                    send_ref_msg(
+                                        world,
+                                        actor_id,
+                                        RM_MAGICFIRE,
+                                        0,
+                                        i32::from(mir2_shared::hutil::make_word(2, 48)),
+                                        make_long(tx, ty),
+                                        target_id,
+                                    );
+                                    // `SendStruckDelayMsg(RM_DELAYMAGIC, nPower, MakeLong(tx, ty),
+                                    //   2, targetId, "", 600)`（`:41`）——7 参重载，入**怪自己**的队列。
+                                    world.send_struck_delay_msg_7(
+                                        actor_id,
+                                        crate::slave::RM_DELAYMAGIC,
+                                        reduced,
+                                        make_long(tx, ty),
+                                        2,
+                                        target_id,
+                                        600,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // `BreakHolySeizeMode()`（`:49`）：有目标即执行，**无条件**。
+        break_holy_seize_mode(world, actor_id);
+    }
+    // `else { TargetCret = null; }`（`:52-55`）——字段本身已为 `None`，无写点（照抄空操作）。
+    // 8s/1s 索敌门（`:56-60`）。
+    class_seek_gate(world, actor_id);
+}
+
+/// `MagicMonster.Run`（`MagicMonster.cs:84-165`）——**Pass 1**（类体）。
+///
+/// 与 [`monster_run`]（= `MonsterObject.Run`，本类尾部 `base.Run()` 的 Pass 2）逐句相同的段
+/// 直接复用；差异只有三处：
+/// 1. **没有** `ATMonster.Run` 的 8s/1s 索敌门（`MagicMonster : MonsterObject`）；
+/// 2. `Think()` 是 `MagicMonster.Think`（无 HolySeize 门）——[`monster_think`] 分派；
+/// 3. 函数尾**不**跑 `CheckRoyalty()`/`CrazyMode` 到期（那是 Pass 2 =
+///    [`monster_run`] 的尾部；oracle 由 `base.Run()` 进入）。
+///
+/// 所有出口都落 `base.Run()` = `MonsterObject.Run` ⇒ 调用方（[`run_class_base`]）在本函数之后
+/// 无条件跑 `monster_run` + `animal_run` + `base_object_run_monster`。
+fn magic_monster_run(world: &mut World, actor_id: i32) {
+    let Some(e) = world.entities.get(actor_id) else {
+        return;
+    };
+    // `if (CanMove() && !FixedHideMode && !StoneMode)`（`:86`）。
+    if !(can_move(e) && !e.fixed_hide_mode && !e.stone_mode) {
+        return;
+    }
+    // `if (Think()) { base.Run(); return; }`（`:88-92`）。
+    if monster_think(world, actor_id) {
+        return;
+    }
+    let now = world.clock_ms;
+    // `if (WalkWaitLocked) { if ((now - WalkWaitTick) > WalkWait) WalkWaitLocked = false; }`
+    let walk_wait_locked = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| e.ai.walk_wait_locked);
+    if walk_wait_locked
+        && world
+            .entities
+            .get(actor_id)
+            .is_some_and(|e| now - e.ai.walk_wait_tick > e.ai.walk_wait)
+    {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.ai.walk_wait_locked = false;
+        }
+    }
+    let walk_due = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| !e.ai.walk_wait_locked && (now - e.ai.walk_tick) > e.ai.walk_speed);
+    if !walk_due {
+        return;
+    }
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.ai.walk_tick = now;
+        e.ai.walk_count += 1;
+        if e.ai.walk_count > e.ai.walk_step {
+            e.ai.walk_count = 0;
+            e.ai.walk_wait_locked = true;
+            e.ai.walk_wait_tick = now;
+        }
+    }
+    let run_away_mode = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| e.ai.run_away_mode);
+    if !run_away_mode {
+        let no_attack_mode = world
+            .entities
+            .get(actor_id)
+            .is_some_and(|e| e.ai.no_attack_mode);
+        if !no_attack_mode {
+            let target = world
+                .entities
+                .get(actor_id)
+                .and_then(|e| e.ai.target_creature);
+            match target {
+                Some(_) => {
+                    // 虚调用 `AttackTarget()` ⇒ race 215 走 `MagicMonster.AttackTarget`
+                    // （[`magic_monster_attack_target`]：只刷 tick、不伤害）。
+                    if monster_attack_target(world, actor_id) {
+                        return;
+                    }
+                }
+                None => {
+                    // `MonsterObject.cs:296-301` 的 Mission 段（`Mission == false` ⇒ `TargetX = -1`）。
+                    if let Some(e) = world.entities.get_mut(actor_id) {
+                        e.ai.target_x = -1;
+                    }
+                }
+            }
+        }
+        monster_follow_master(world, actor_id);
+    } else {
+        monster_run_away_expiry(world, actor_id, now);
+    }
+    // `if (Master != null && Master.SlaveRelax) { base.Run(); return; }`
+    let slave_relax = world
+        .entities
+        .get(actor_id)
+        .and_then(|e| e.master)
+        .and_then(|m| world.entities.get(m))
+        .is_some_and(|m| m.slave_relax);
+    if slave_relax {
+        return;
+    }
+    let target_x = world.entities.get(actor_id).map_or(-1, |e| e.ai.target_x);
+    let has_target = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| e.ai.target_creature.is_some());
+    if target_x != -1 {
+        goto_target_xy(world, actor_id);
+    } else if !has_target {
+        wondering(world, actor_id);
     }
 }
 
@@ -13629,5 +14360,694 @@ mod guard_target_castle_tests {
             Some(player_id),
             "Race ∈ [NPC, Animal) 的未犯罪守卫不是合法目标 ⇒ 跳过它选更远的玩家"
         );
+    }
+}
+
+#[cfg(test)]
+mod mb89_tests {
+    use super::*;
+    use crate::entity::{VisibleBaseObject, VisibleFlag};
+    use crate::world::World;
+    use mir2_shared::rng::RandomNumber;
+
+    fn spawn_monster(world: &mut World, race: i16, x: i32, y: i32, hp: u16) -> i32 {
+        let mut e = Entity::new(0, "mb89", x, y);
+        e.race = race as u8;
+        e.hp = hp;
+        e.max_hp = hp;
+        crate::mongen::apply_monster_class_constants(&mut e, race, world.clock_ms);
+        let id = world.add_entity(e);
+        assert!(world.enter_world(id), "怪物落图");
+        id
+    }
+
+    fn spawn_player(world: &mut World, x: i32, y: i32, hp: u16) -> i32 {
+        let mut e = Entity::new(0, "mb89p", x, y);
+        e.hp = hp;
+        e.max_hp = hp;
+        let id = world.add_entity(e);
+        assert!(world.enter_world(id), "玩家落图");
+        id
+    }
+
+    fn stream_eq(world: &World, expect: &RandomNumber, what: &str) {
+        assert_eq!(
+            format!("{:?}", world.rng),
+            format!("{expect:?}"),
+            "{what}：随机流必须逐次一致"
+        );
+    }
+
+    // ------------------------------ R42 WhiteSkeleton ------------------------------
+
+    /// R42（L）：ctor 三常量 + 首次 `Run` 只发一次 `RM_DIGUP(Dir=5)` 并清 `FixedHideMode`。
+    ///
+    /// 牙：把 `BoIsFirst` 置位挪到发帧之后 / 去掉 `if !first return` / `Dir` 写错 ⇒ 红。
+    #[test]
+    fn white_skeleton_ctor_and_single_digup() {
+        let mut world = World::new(30, 30);
+        world.clock_ms = 1000;
+        let id = spawn_monster(&mut world, 100, 10, 10, 100);
+        {
+            let e = world.entities.get(id).unwrap();
+            assert!(e.bo_is_first, "ctor BoIsFirst=true");
+            assert!(e.fixed_hide_mode, "ctor FixedHideMode=true");
+            assert_eq!(e.view_range, 6, "ctor ViewRange=6");
+        }
+        white_skeleton_run(&mut world, id);
+        {
+            let e = world.entities.get(id).unwrap();
+            assert!(!e.bo_is_first);
+            assert_eq!(e.ai.dir, 5, "首次 Run 置 Dir=5");
+            assert!(!e.fixed_hide_mode, "首次 Run 清 FixedHideMode");
+        }
+        assert_eq!(world.pending_monster_ref_msgs.len(), 1);
+        let f = &world.pending_monster_ref_msgs[0];
+        assert_eq!(f.ident, RM_DIGUP);
+        assert_eq!(
+            (f.w_param, f.n_param1, f.n_param2, f.n_param3),
+            (5, 10, 10, 0),
+            "RM_DIGUP(Dir, CurrX, CurrY, 0)"
+        );
+        white_skeleton_run(&mut world, id);
+        assert_eq!(
+            world.pending_monster_ref_msgs.len(),
+            1,
+            "BoIsFirst 只发一次出土帧"
+        );
+    }
+
+    // ------------------------------ R36 SoccerBall ------------------------------
+
+    /// R36：`SoccerBall.Run` 的 Dir 反射表（0↔4、1↔7、2↔6、3↔5）全 8 向。
+    #[test]
+    fn soccer_ball_reflect_table_is_oracle_involution() {
+        for (dir, want) in [
+            (0u8, 4u8),
+            (1, 7),
+            (2, 6),
+            (3, 5),
+            (4, 0),
+            (5, 3),
+            (6, 2),
+            (7, 1),
+        ] {
+            assert_eq!(soccer_ball_reflect_dir(dir), want, "dir {dir}");
+        }
+    }
+
+    /// R36：`N550 > 0` ⇒ 前格可走 ⇒ 反射 `Dir` 后按 `N550` 写 `TargetX/Y`；
+    /// `N550 == 0` ⇒ `TargetX = -1`；到达目标格才清 `N550`。
+    ///
+    /// 牙：反射表方向写错 / 忘记 `GetNextPosition` 的 `nFlag=N550` / 未到达就清 `N550` ⇒ 红。
+    #[test]
+    fn soccer_ball_run_writes_reflected_target_from_n550() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 1000;
+        let id = spawn_monster(&mut world, 120, 10, 10, 100);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.n550 = 3;
+            e.ai.dir = DIR_UP; // 0 ⇒ 反射 4（DOWN）
+            e.ai.target_x = -1;
+            e.ai.target_y = 0;
+        }
+        soccer_ball_run(&mut world, id);
+        {
+            let e = world.entities.get(id).unwrap();
+            assert_eq!(e.ai.dir, DIR_DOWN, "Dir 0 ⇒ 4");
+            assert_eq!(
+                (e.ai.target_x, e.ai.target_y),
+                (10, 13),
+                "GetNextPosition(CurrX, CurrY, Dir, N550=3)"
+            );
+            assert_eq!(e.n550, 3, "未到达 ⇒ 不清零");
+        }
+
+        let id2 = spawn_monster(&mut world, 120, 20, 20, 100);
+        {
+            let e = world.entities.get_mut(id2).unwrap();
+            e.n550 = 0;
+            e.ai.target_x = 99;
+        }
+        soccer_ball_run(&mut world, id2);
+        assert_eq!(
+            world.entities.get(id2).unwrap().ai.target_x,
+            -1,
+            "N550<=0 ⇒ TargetX=-1"
+        );
+    }
+
+    /// R36：`SoccerBall.Struck` **完全覆写** `AnimalObject.Struck`：只抽一次 `Random(4)`、
+    /// `N550 = MIN(20, N550+Random(4)+4)`、`Dir = hiter.Dir`、写 `TargetX/Y`；
+    /// **不写** `StruckTick`、不加 `AttackTick`。经 [`animal_struck`] 的 race 120 转派验证。
+    ///
+    /// 牙：去掉 `animal_struck` 的 race 120 分支 ⇒ `StruckTick` 非 0 ⇒ 红；
+    /// 去掉 `MIN(20, …)` / 抽数位置错 ⇒ 红。
+    #[test]
+    fn soccer_ball_struck_draws_random4_and_caps_n550() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 5000;
+        let id = spawn_monster(&mut world, 120, 10, 10, 100);
+        let hitter = spawn_player(&mut world, 11, 10, 100);
+        world.entities.get_mut(hitter).unwrap().ai.dir = DIR_RIGHT;
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.n550 = 19;
+            e.ai.attack_tick = 777;
+            e.ai.struck_tick = 0;
+        }
+        world.rng = RandomNumber::with_seed(3);
+        let mut expect = RandomNumber::with_seed(3);
+        let _draw = expect.random_below(4);
+        animal_struck(&mut world, id, hitter);
+        stream_eq(&world, &expect, "只抽一次 Random(4)");
+        let e = world.entities.get(id).unwrap();
+        assert_eq!(e.n550, 20, "MIN(20, 19 + Random(4) + 4)");
+        assert_eq!(e.ai.dir, DIR_RIGHT, "Dir = hiter.Dir");
+        assert_eq!(
+            (e.ai.target_x, e.ai.target_y),
+            (30, 10),
+            "GetNextPosition(..., N550=20) 向右 20 格"
+        );
+        assert_eq!(e.ai.struck_tick, 0, "覆写版不写 StruckTick");
+        assert_eq!(e.ai.attack_tick, 777, "覆写版不加 AttackTick");
+    }
+
+    // ------------------------------ R33 SandMobObject ------------------------------
+
+    /// R33：`SandMobObject.Run` 的三种 `base.Run()` pass 数 + `_mDwAppearStart` 写点。
+    ///
+    /// - 非隐藏 + 邻接目标（`AttackTarget()` 命中）⇒ `AnimalTwice`（体内一次 + 函数尾一次）；
+    /// - 目标两轴均 > 15 ⇒ `ComeDown(); return;` ⇒ `None`（0 次）且 `FixedHideMode=true`；
+    /// - `WalkTick` 门未到 ⇒ `Animal`（1 次）；
+    /// - `FixedHideMode` 且 `HP > MaxHP/20` 且 `CheckComeOut()` ⇒ `appear_start_tick = now`。
+    ///
+    /// 牙：命中支返回 `Animal`（少一次 pass）/ 目标远支返回 `Animal` / 写错阈值 ⇒ 红。
+    #[test]
+    fn sand_mob_run_reports_base_pass_count_and_appear_start() {
+        // AnimalTwice
+        let mut world = World::new(40, 40);
+        world.clock_ms = 3000;
+        let id = spawn_monster(&mut world, 132, 10, 10, 100);
+        let target = spawn_player(&mut world, 11, 10, 100);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.fixed_hide_mode = false;
+            e.ai.walk_tick = 0;
+            e.ai.attack_tick = 0;
+            e.ai.next_hit_time = 2000;
+            e.ai.target_creature = Some(target);
+        }
+        assert_eq!(
+            sand_mob_object_run(&mut world, id),
+            ClassRunBase::AnimalTwice,
+            "AttackTarget() 命中 ⇒ 双 base pass"
+        );
+
+        // None（目标两轴均 >15）
+        let mut world = World::new(60, 60);
+        world.clock_ms = 3000;
+        let id = spawn_monster(&mut world, 132, 10, 10, 100);
+        let far = spawn_player(&mut world, 30, 30, 100);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.fixed_hide_mode = false;
+            e.ai.walk_tick = 0;
+            e.ai.target_creature = Some(far);
+        }
+        assert_eq!(
+            sand_mob_object_run(&mut world, id),
+            ClassRunBase::None,
+            "ComeDown(); return; ⇒ 0 次 base pass"
+        );
+        assert!(
+            world.entities.get(id).unwrap().fixed_hide_mode,
+            "ComeDown 置 FixedHideMode=true"
+        );
+
+        // Animal（WalkTick 未到点）
+        let mut world = World::new(40, 40);
+        world.clock_ms = 1000;
+        let id = spawn_monster(&mut world, 132, 10, 10, 100);
+        world.entities.get_mut(id).unwrap().ai.walk_tick = 1000;
+        assert_eq!(
+            sand_mob_object_run(&mut world, id),
+            ClassRunBase::Animal,
+            "WalkTick 门未过 ⇒ 仅函数尾一次"
+        );
+
+        // appear_start
+        let mut world = World::new(40, 40);
+        world.clock_ms = 5000;
+        let id = spawn_monster(&mut world, 132, 10, 10, 100);
+        let near = spawn_player(&mut world, 12, 12, 100);
+        {
+            let e = world.entities.get_mut(id).unwrap();
+            e.fixed_hide_mode = true;
+            e.ai.walk_tick = 0;
+            e.visible_actors = vec![VisibleBaseObject {
+                target: near,
+                flag: VisibleFlag::Show,
+            }];
+        }
+        assert_eq!(sand_mob_object_run(&mut world, id), ClassRunBase::Animal);
+        assert_eq!(
+            world.entities.get(id).unwrap().appear_start_tick,
+            5000,
+            "HP>MaxHP/20 && CheckComeOut() ⇒ _mDwAppearStart = now"
+        );
+    }
+
+    // ------------------------------ R18 FireMonster ------------------------------
+
+    /// R18：空地图一次 `Run` 生成 **9** 个火墙事件，坐标顺序与 `FireMonster.cs:31-64` 逐条一致，
+    /// `Damage=10`、`ContinueTime=20000`、全部注册成功；第二 tick 不重复生成。
+    ///
+    /// 牙：漏一格 / 顺序错 / 用别的 damage / 不检查 `GetEvent` ⇒ 红。
+    #[test]
+    fn fire_monster_creates_nine_events_in_oracle_order() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 1000;
+        let id = spawn_monster(&mut world, 214, 10, 10, 100);
+        fire_monster_run(&mut world, id);
+        let coords: Vec<(i32, i32)> = world.fire_burn_events.iter().map(|e| (e.x, e.y)).collect();
+        assert_eq!(
+            coords,
+            vec![
+                (10, 9),
+                (10, 8),
+                (9, 10),
+                (8, 10),
+                (10, 10),
+                (11, 10),
+                (12, 10),
+                (10, 11),
+                (10, 12)
+            ],
+            "9 格固定顺序"
+        );
+        assert!(
+            world
+                .fire_burn_events
+                .iter()
+                .all(|e| e.damage == FIRE_MONSTER_DAMAGE && e.continue_ms == FIRE_MONSTER_TIME_MS),
+            "Damage=10 / FireTime=20000"
+        );
+        assert_eq!(
+            world
+                .fire_burn_events
+                .iter()
+                .filter(|e| e.registered)
+                .count(),
+            9,
+            "9 格全部注册成功"
+        );
+        fire_monster_run(&mut world, id);
+        assert_eq!(
+            world.fire_burn_events.len(),
+            9,
+            "已有事件的格不再新建（GetEvent != null）"
+        );
+    }
+
+    /// R18：`CanMove()` 为假（Death）⇒ 不生成任何事件、不索敌。
+    #[test]
+    fn fire_monster_run_is_gated_by_can_move() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 20_000;
+        let id = spawn_monster(&mut world, 214, 10, 10, 100);
+        world.entities.get_mut(id).unwrap().death = true;
+        fire_monster_run(&mut world, id);
+        assert!(world.fire_burn_events.is_empty());
+        assert_eq!(world.entities.get(id).unwrap().ai.search_enemy_tick, 0);
+    }
+
+    // ------------------------------ R32 RunAway（死类） ------------------------------
+
+    /// R32：死类 `RunAway.Run` 的 `time1` 局部变量 bug（`now > 5000` 恒真）+ 两类 `RandomByte`。
+    ///
+    /// 造景：act (2,2) `Dir=RIGHT` ⇒ `GetFrontPosition`=(3,2) ⇒ `SpaceMove(...,1,0)`（空格可走 ⇒
+    /// 0 抽数）；目标 `(2,1)` 在空间移动后与 `(1,0)` **两轴均差 1** ⇒ `RandomByte(4)`；
+    /// 目标 `(2,3)` ⇒ `RandomByte(7)`；`now=4000 < 5000` ⇒ 不抽。
+    ///
+    /// 牙：把 `time1` 改成静态字段并真做 5s 节流 / 4 与 7 写反 ⇒ 红。
+    #[test]
+    fn run_away_dead_class_time1_bug_and_random_byte_choice() {
+        let setup = |target_y: i32, clock: i64| {
+            let mut world = World::new(30, 30);
+            world.clock_ms = clock;
+            let id = spawn_monster(&mut world, 50, 2, 2, 100);
+            {
+                let e = world.entities.get_mut(id).unwrap();
+                e.hp = 50;
+                e.max_hp = 100;
+                e.ai.dir = DIR_RIGHT;
+                e.ai.search_enemy_tick = clock;
+            }
+            let target = spawn_player(&mut world, 2, target_y, 100);
+            world.entities.get_mut(id).unwrap().ai.target_creature = Some(target);
+            world.rng = RandomNumber::with_seed(7);
+            (world, id)
+        };
+
+        // 空间移动后 |Δx|=|Δy|=1 ⇒ RandomByte(4)
+        let (mut world, id) = setup(1, 10_000);
+        let mut expect = RandomNumber::with_seed(7);
+        expect.random_byte(4);
+        run_away_run(&mut world, id);
+        stream_eq(&world, &expect, "两轴均 1 ⇒ RandomByte(4)");
+        assert_eq!(
+            world.entities.get(id).unwrap().ai.dir,
+            RandomNumber::with_seed(7).random_byte(4),
+            "Dir = WalkTo 的随机方向"
+        );
+        assert_eq!(
+            (
+                world.entities.get(id).unwrap().x,
+                world.entities.get(id).unwrap().y
+            ),
+            (1, 0),
+            "SpaceMove(MapName, nx-2, ny-2)"
+        );
+        assert!(
+            world
+                .pending_monster_ref_msgs
+                .iter()
+                .any(|f| f.ident == RM_SPACEMOVE_FIRE),
+            "先发 RM_SPACEMOVE_FIRE"
+        );
+
+        // 非斜邻 ⇒ RandomByte(7)
+        let (mut world, id) = setup(3, 10_000);
+        let mut expect = RandomNumber::with_seed(7);
+        expect.random_byte(7);
+        run_away_run(&mut world, id);
+        stream_eq(&world, &expect, "非两轴均 1 ⇒ RandomByte(7)");
+
+        // now <= 5000 ⇒ 不抽（局部 time1=0 的 bug 语义）
+        let (mut world, id) = setup(3, 4000);
+        let before = world.rng.clone();
+        run_away_run(&mut world, id);
+        stream_eq(&world, &before, "now=4000 ⇒ 不出 WalkTo");
+    }
+
+    // ------------------------------ R19 FireballMonster ------------------------------
+
+    struct FireballSetup {
+        world: World,
+        m: i32,
+        target: i32,
+        pose: i32,
+    }
+
+    /// 造景：怪 (10,10) `Dir=RIGHT`、`DC = 10|(10<<8)`、`SpellTick=0`、`NextHitTime=2000`；
+    /// `TargetCret` = 玩家 (12,10)（`TargetX/Y` 同步），`GetPoseCreate()` = 前格玩家 (11,10)
+    /// （`MAC = 5|(5<<8)`）。
+    fn fireball_setup(clock: i64, anti_magic: u16) -> FireballSetup {
+        let mut world = World::new(40, 40);
+        world.clock_ms = clock;
+        let m = spawn_monster(&mut world, 215, 10, 10, 1000);
+        let target = spawn_player(&mut world, 12, 10, 500);
+        let pose = spawn_player(&mut world, 11, 10, 500);
+        {
+            let e = world.entities.get_mut(m).unwrap();
+            e.dc = 10 | (10 << 8);
+            e.anti_magic = anti_magic;
+            e.spell_tick = 0;
+            e.ai.next_hit_time = 2000;
+            e.ai.target_creature = Some(target);
+            // `SetTargetCreat` 等价：`TargetFocusTick = GetTickCount()`（`BaseObject.Base.cs:113`
+            // 的 30s 过期门读它；直接写 `TargetCret` 时也必须同步，否则
+            // `BaseObject.Run` 的清理段会把它清掉）。
+            e.ai.target_focus_tick = clock;
+            e.ai.target_x = 12;
+            e.ai.target_y = 10;
+            e.ai.dir = DIR_RIGHT;
+        }
+        world.entities.get_mut(pose).unwrap().mac = 5 | (5 << 8);
+        FireballSetup {
+            world,
+            m,
+            target,
+            pose,
+        }
+    }
+
+    /// R19-A5：`AntiMagic == 0` ⇒ **只抽** `Random(|Hi(DC)-Lo(DC)|+1)`（DC），
+    /// 不进 `GetPoseCreate`/减免/伤害/帧块。
+    ///
+    /// 牙：删掉 `AntiMagic > 0` 硬门 ⇒ 多抽 + 伤害 + 帧 ⇒ 红。
+    #[test]
+    fn fireball_only_draws_dc_when_anti_magic_zero() {
+        let mut s = fireball_setup(100_000, 0);
+        let mut expect = s.world.rng.clone();
+        expect.random_below(1); // DC 10..10
+        fireball_monster_run(&mut s.world, s.m);
+        stream_eq(&s.world, &expect, "仅 DC 一抽");
+        assert!(
+            s.world
+                .pending_monster_ref_msgs
+                .iter()
+                .all(|f| f.ident != RM_SPELL && f.ident != RM_MAGICFIRE),
+            "anti_magic=0 ⇒ 不出施法帧"
+        );
+        assert_eq!(s.world.entities.get(s.pose).unwrap().hp, 500, "无伤害");
+    }
+
+    /// R19-A1..A3：完整施法链——抽数次序 `DC → pose.MAC → pose.StruckDamage 耐久段`；
+    /// pose 掉 5；两帧 `RM_SPELL(48,12,10,48)` / `RM_MAGICFIRE(0,0x3002,MakeLong,12,target)`；
+    /// 600ms 自投递 `RM_DELAYMAGIC`（599ms 不投、600ms 投）。
+    ///
+    /// 牙：帧载荷/顺序错 / 抽数次序错 / 600ms 提前 ⇒ 红。
+    #[test]
+    fn fireball_full_cast_frames_damage_and_600ms_delay() {
+        let mut s = fireball_setup(100_000, 1);
+        let mut expect = s.world.rng.clone();
+        expect.random_below(1); // DC
+        expect.random_below(1); // pose MAC 5..5
+        let mut pose_clone = s.world.entities.get(s.pose).unwrap().clone();
+        crate::combat::struck_damage_durability(&mut expect, &mut pose_clone);
+        fireball_monster_run(&mut s.world, s.m);
+        stream_eq(&s.world, &expect, "DC → MAC → StruckDamage 耐久");
+        assert_eq!(
+            s.world.entities.get(s.pose).unwrap().hp,
+            495,
+            "10 - MAC 5 = 5 伤害"
+        );
+        let idents: Vec<u16> = s
+            .world
+            .pending_monster_ref_msgs
+            .iter()
+            .map(|f| f.ident)
+            .collect();
+        assert_eq!(idents, vec![RM_SPELL, RM_MAGICFIRE], "帧顺序");
+        let sp = &s.world.pending_monster_ref_msgs[0];
+        assert_eq!(
+            (sp.w_param, sp.n_param1, sp.n_param2, sp.n_param3),
+            (48, 12, 10, 48),
+            "RM_SPELL(48, tx, ty, 48)"
+        );
+        let mf = &s.world.pending_monster_ref_msgs[1];
+        assert_eq!(
+            (mf.w_param, mf.n_param1, mf.n_param2, mf.n_param3),
+            (0, 0x3002, make_long(12, 10), s.target),
+            "RM_MAGICFIRE(0, MakeWord(2,48), MakeLong(tx,ty), targetId)"
+        );
+
+        assert!(
+            s.world.deliver_self_delay_msgs().is_empty(),
+            "100000 不得到点"
+        );
+        s.world.clock_ms += 599;
+        assert!(
+            s.world.deliver_self_delay_msgs().is_empty(),
+            "599ms 不得到点"
+        );
+        s.world.clock_ms += 1;
+        let outs = s.world.deliver_self_delay_msgs();
+        assert_eq!(outs.len(), 1, "600ms 到点投递 RM_DELAYMAGIC");
+        assert_eq!(outs[0].ident, crate::slave::RM_DELAYMAGIC);
+        assert_eq!(outs[0].actor_id, s.m, "入的是怪自己的队列");
+        assert_eq!(
+            s.world.pending_mag_struck.len(),
+            1,
+            "到点后产生 RM_MAGSTRUCK"
+        );
+    }
+
+    /// R19-A6：`MagCanHitTarget(TargetCret.CurrX, TargetCret.CurrY, TargetCret)` 的
+    /// 「目标自身坐标」怪癖——目标在底边时 Down 步越界 ⇒ 整块跳过（**零抽数**）。
+    ///
+    /// 牙：把它「修成」攻方→目标视线 ⇒ 本用例红。
+    #[test]
+    fn fireball_mag_can_hit_uses_target_own_coords() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 100_000;
+        let m = spawn_monster(&mut world, 215, 10, 39, 1000);
+        let target = spawn_player(&mut world, 12, 39, 500);
+        {
+            let e = world.entities.get_mut(m).unwrap();
+            e.dc = 10 | (10 << 8);
+            e.anti_magic = 1;
+            e.ai.target_creature = Some(target);
+            e.ai.target_x = 12;
+            e.ai.target_y = 39;
+            e.ai.dir = DIR_RIGHT;
+        }
+        let before = world.rng.clone();
+        fireball_monster_run(&mut world, m);
+        stream_eq(
+            &world,
+            &before,
+            "目标在底边 ⇒ MagCanHitTarget 为假 ⇒ 零抽数",
+        );
+        assert!(world.pending_monster_ref_msgs.is_empty());
+    }
+
+    /// R19-A7：距离门读的是 **`TargetX/TargetY` 字段**，不是 `TargetCret.CurrX/CurrY`。
+    ///
+    /// 牙：改成读目标实时坐标（12）⇒ 会抽 DC ⇒ 红。
+    #[test]
+    fn fireball_distance_gate_reads_target_xy_fields() {
+        let mut s = fireball_setup(100_000, 1);
+        s.world.entities.get_mut(s.m).unwrap().ai.target_x = 50;
+        let before = s.world.rng.clone();
+        fireball_monster_run(&mut s.world, s.m);
+        stream_eq(&s.world, &before, "|TargetX-CurrX|=40 > 8 ⇒ 跳过");
+        assert_eq!(s.world.entities.get(s.pose).unwrap().hp, 500);
+    }
+
+    /// R19-A4：`BreakHolySeizeMode()` 在**有目标**时无条件执行（伤害块全跳过也执行）。
+    #[test]
+    fn fireball_breaks_holy_seize_unconditionally() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 100_000;
+        let m = spawn_monster(&mut world, 215, 10, 39, 1000);
+        let target = spawn_player(&mut world, 12, 39, 500);
+        {
+            let e = world.entities.get_mut(m).unwrap();
+            e.ai.holy_seize = true;
+            e.ai.target_creature = Some(target);
+            e.ai.target_x = 12;
+            e.ai.target_y = 39;
+        }
+        let before = world.rng.clone();
+        fireball_monster_run(&mut world, m);
+        stream_eq(&world, &before, "魔法块跳过 ⇒ 零抽数");
+        assert!(
+            !world.entities.get(m).unwrap().ai.holy_seize,
+            "有目标 ⇒ BreakHolySeizeMode 无条件"
+        );
+    }
+
+    /// R19-A8：`MagicMonster.Think` **没有** HolySeize 早退（`MonsterObject.Think` 有）。
+    ///
+    /// 牙：让 `monster_think` 对 215 走基版 `think` ⇒ race 215 的「抽 RandomByte(8)」红。
+    #[test]
+    fn magic_monster_think_has_no_holy_seize_gate() {
+        // race 215：HolySeize 下仍进 DupMode 抽 RandomByte(8)。
+        let mut world = World::new(40, 40);
+        world.clock_ms = 10_000;
+        let m = spawn_monster(&mut world, 215, 10, 10, 1000);
+        {
+            let e = world.entities.get_mut(m).unwrap();
+            e.ai.holy_seize = true;
+            e.ai.dup_mode = true;
+            e.ai.think_tick = 0;
+        }
+        world.rng = RandomNumber::with_seed(11);
+        let mut expect = RandomNumber::with_seed(11);
+        expect.random_byte(8);
+        let _ = monster_think(&mut world, m);
+        stream_eq(
+            &world,
+            &expect,
+            "MagicMonster.Think 无 HolySeize 门 ⇒ 抽 RandomByte(8)",
+        );
+
+        // 对照：普通 MonsterObject.Think 在 HolySeize 下零抽数并返回 false。
+        let mut world = World::new(40, 40);
+        world.clock_ms = 10_000;
+        let n = spawn_monster(&mut world, 50, 10, 10, 1000);
+        {
+            let e = world.entities.get_mut(n).unwrap();
+            e.ai.holy_seize = true;
+            e.ai.dup_mode = true;
+            e.ai.think_tick = 0;
+        }
+        let before = world.rng.clone();
+        assert!(!monster_think(&mut world, n));
+        stream_eq(&world, &before, "MonsterObject.Think 的 HolySeize 门");
+    }
+
+    /// R19 §4.1.2 第 6 条：`SpellTick` 与 `BaseObject.Run` 的恢复累加器同名共用 ⇒ 同 tick 的
+    /// `base.Run()` 把它归零 ⇒ 下一 tick 必然到点（冷却实际只有一 tick）。
+    ///
+    /// 牙：把施法冷却改到独立字段 ⇒ 第二次不同 tick 不再出帧 ⇒ 红。
+    #[test]
+    fn spell_tick_shared_accumulator_makes_cast_due_every_tick() {
+        let mut s = fireball_setup(100_000, 1);
+        fireball_monster_run(&mut s.world, s.m);
+        assert_eq!(s.world.entities.get(s.m).unwrap().spell_tick, 100_000);
+        base_object_run_monster(&mut s.world, s.m);
+        assert_eq!(
+            s.world.entities.get(s.m).unwrap().spell_tick,
+            0,
+            "BaseObject.Run 的恢复段把 SpellTick 归零（与 ctor/施法同名共用）"
+        );
+        fireball_monster_run(&mut s.world, s.m);
+        assert_eq!(
+            s.world
+                .pending_monster_ref_msgs
+                .iter()
+                .filter(|f| f.ident == RM_SPELL)
+                .count(),
+            2,
+            "下一 tick 仍然到点"
+        );
+    }
+
+    // ------------------------------ 派发表 ------------------------------
+
+    /// MB-9：`FireballMonster` ctor 的 `SpellTick = GetTickCount()` 必须落到实体上
+    /// （`FireballMonster.cs:10`；`BaseObject.cs:449` 的 0 被覆盖）——否则首个 tick 的
+    /// `now - SpellTick > NextHitTime` 门会提前放行。
+    ///
+    /// 牙：把 215 的 ctor 常量改回缺省 0 ⇒ 红。
+    #[test]
+    fn fireball_ctor_sets_spell_tick_to_now() {
+        let mut world = World::new(40, 40);
+        world.clock_ms = 1234;
+        let id = spawn_monster(&mut world, 215, 10, 10, 1000);
+        assert_eq!(
+            world.entities.get(id).unwrap().spell_tick,
+            1234,
+            "FireballMonster ctor SpellTick = GetTickCount()"
+        );
+    }
+
+    /// MB-8/MB-9 的 race → `base.Run()` 链映射（MB-0 口径的分派表牙）。
+    #[test]
+    fn monster_class_run_dispatch_covers_mb8_mb9() {
+        let mut world = World::new(60, 60);
+        world.clock_ms = 1000;
+        for (i, (race, want)) in [
+            (100i16, ClassRunBase::Monster),
+            (120, ClassRunBase::Animal),
+            (132, ClassRunBase::Animal),
+            (214, ClassRunBase::Monster),
+            (215, ClassRunBase::MagicMonster),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = spawn_monster(&mut world, race, 5, 5 + i as i32 * 2, 100);
+            assert_eq!(
+                monster_class_run(&mut world, id),
+                Some(want),
+                "race {race} 的 base.Run 链"
+            );
+        }
     }
 }
