@@ -728,6 +728,89 @@ pub struct CastleDefenseSpecs {
     pub guards: Vec<DefenseUnitSpec>,
 }
 
+/// 写盘面里一个门 / 墙 / 弓手 / 守卫槽的纯数据（`CastleConf.SaveConfig` 口径）。
+///
+/// 名称与坐标恒来自配置面（[`CastleDefenseSpecs`]，= `CastleConf.LoadConfig` 的读入值），
+/// 因为 oracle 写的是 `ArcherUnit.sName/nX/nY`，与实体是否造出无关；`hp` 才是运行期值。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CastleSaveUnit {
+    /// `sName`（`CastleConf.cs:198/216/...`，空串 ⇒ 不写该键）。
+    pub name: String,
+    /// `nX` / `nY`（`0` ⇒ 不写该键）。
+    pub x: i16,
+    pub y: i16,
+    /// `WAbil.HP`：门/墙只在 `BaseObject != null` 时写（`CastleConf.cs:203-265`）⇒ 未挂实体 `None`；
+    /// 弓手/守卫无条件写（无实体写 `0`，`CastleConf.cs:283-290/304-313`）⇒ 恒 `Some`。
+    pub hp: Option<i32>,
+    /// `MainDoorOpen`（`CastleConf.cs:203-207`，`WriteBool`）：**只有主门 `BaseObject != null`**
+    /// 时有值；三面墙与该键无关 ⇒ 恒 `None`。
+    pub open: Option<bool>,
+}
+
+/// [`UserCastle::save_snapshot`] 的成功产物：`CastleConf.SaveConfig`（`CastleConf.cs:95-320`）
+/// 的**全字段写面**，纯内存、无 IO。
+///
+/// 路径拼接 / GBK 编码 / 截断写字节属 P2（`crates/envir`）；本结构只负责把「写什么值」定死。
+/// 段/键的写条件（非空、`!= 0`、`BaseObject != null`）也留给写侧按 oracle 逐键判定——快照
+/// 如实携带原值（`0`/空串/`None`），不预先裁剪。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CastleSaveSnapshot {
+    // ---- [Setup]（`CastleConf.cs:109-128`）----
+    /// `sName`。
+    pub castle_name: String,
+    /// `OwnGuild`。
+    pub own_guild: Option<String>,
+    /// `ChangeDate`（原串，`yyyy-MM-dd HH:mm:ss` 口径）。
+    pub change_date: Option<String>,
+    /// `WarDate`。
+    pub war_date: Option<CastleDate>,
+    /// `IncomeToday`。
+    pub income_today: CastleDate,
+    /// `TotalGold`。
+    pub total_gold: i32,
+    /// `TodayIncome`。
+    pub today_income: i32,
+    // ---- [Defense]（`CastleConf.cs:130-317`）----
+    /// `CastleMapList`（保留重复与顺序；写侧逐项加 `,`）。
+    pub envir_list: Vec<String>,
+    /// `CastleMap`。
+    pub map_name: Option<String>,
+    /// `CastleHomeMap`。
+    pub home_map: String,
+    /// `CastleHomeX` / `CastleHomeY`。
+    pub home_x: i16,
+    pub home_y: i16,
+    /// `CastleWarRangeX` / `CastleWarRangeY`。
+    pub war_range_x: i32,
+    pub war_range_y: i32,
+    /// `MainDoor*`（`MainDoorOpen` 在 `open`，仅主门有值）。
+    pub main_door: CastleSaveUnit,
+    /// `LeftWall*` / `CenterWall*` / `RightWall*`。
+    pub left_wall: CastleSaveUnit,
+    pub center_wall: CastleSaveUnit,
+    pub right_wall: CastleSaveUnit,
+    /// `Archer_{i+1}_*`，长度 = 配置槽数（生产恒 [`MAX_CASTLE_ARCHER`]）。
+    pub archers: Vec<CastleSaveUnit>,
+    /// `Guard_{i+1}_*`，长度 = 配置槽数（生产恒 [`MAX_CASTLE_GUARD`]）。
+    pub guards: Vec<CastleSaveUnit>,
+    // ---- 路径口径（§1.6「读/写不同源」）----
+    /// `Castle/<config_dir>/AttackSabukWall.txt`（运行期 `ConfigDir`，申请文件）。
+    pub config_dir: String,
+    /// `Castle/<ctor_config_dir>/SabukW.txt`（ctor 绑定目录，配置文件）。
+    pub ctor_config_dir: String,
+}
+
+/// [`UserCastle::save_snapshot`] 的跳过原因（= oracle 写盘路径上的两道门）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CastleSaveSkip {
+    /// 未 `LoadConfig`（`specs == None`，只跑 ctor 的装载城）：oracle 在
+    /// `Archers[i].nX` 抛 `NullReferenceException`（`CastleConf.cs:266-269`）。
+    NreArchersNull,
+    /// `MapMgr.GetMapOfServerIndex(MapName) != ServerIndex`：`CastleConf.SaveConfig`
+    /// 直接 `return`（`CastleConf.cs:105-107`）。
+    MapOwnerNotSelf,
+}
+
 /// `WorldEngine.RegenMonsterByName` 造出的怪物（本模块只取 `WAbil.MaxHP`）。
 ///
 /// `UserCastle.Initialize` 只覆盖 `WAbil.HP = nHP`，**不改** `MaxHP`（`UserCastle.cs:133-211`）
@@ -959,6 +1042,9 @@ pub struct UserCastle {
     pub master_guild: Option<GuildId>,
     /// `OwnGuild`（落盘字符串口径，`GetCastle` 会写；本卡只读）。
     pub own_guild: Option<String>,
+    /// `ChangeDate` 的原串（`[Setup] ChangeDate`；`CastleConf.LoadConfig` 读入时保原样，
+    /// [`UserCastle::get_castle`] 写入当前时间串）。
+    pub change_date: Option<String>,
     /// `UnderWar`。
     pub under_war: bool,
     /// `IsStartWar`（当日已检查过一次开战钟点）。
@@ -994,6 +1080,22 @@ pub struct UserCastle {
     /// `HomeX` / `HomeY`（`StartWallconquestWar` 的范围中心）。
     pub home_x: i16,
     pub home_y: i16,
+    /// `CastleConf.LoadConfig` 读入的配置面（`Archer_i_X/Y/Name`、`Guard_i_*`、`MainDoorOpen`
+    /// 等写回所需的原值，`CastleConf.cs:15-94`）。
+    ///
+    /// [`UserCastle::initialize`] 起手落 `Some`（oracle 的 `LoadConfig` 在归属门之前执行）；
+    /// 保持 `None` 的城 = 只跑了 ctor 的装载城（`CastleMgr.LoadCastleList` 只 `new`、
+    /// 不 `Initialize`）——写盘时对应 oracle 的 `Archers[i] == null` NRE
+    /// （[`CastleSaveSkip::NreArchersNull`]）。
+    pub specs: Option<CastleDefenseSpecs>,
+    /// oracle `ConfigDir`（`UserCastle.cs:34`）：ctor 入参，`CastleManager.Initialize`
+    /// 先传 `Config.CastleDir`（= `"Castle"`）后改 `"0"`（`CastleManager.cs:66-75`）。
+    /// **申请文件**路径用它（`UserCastle.SaveAttackSabukWall` 读的是运行期 `ConfigDir`）。
+    pub config_dir: String,
+    /// ctor 绑定目录（`UserCastle.cs:50-55` 的 `filePath`）：**配置文件**路径用它
+    /// （`CastleConf.SaveConfig` 写的是 ctor 里定死的 `castleConf.FileName`，不是运行期
+    /// `ConfigDir`，§1.3）。
+    pub ctor_config_dir: String,
     /// 配置。
     pub config: CastleSiegeConfig,
 }
@@ -1016,6 +1118,7 @@ impl UserCastle {
             map_owner_server_index: 0,
             master_guild: None,
             own_guild: None,
+            change_date: None,
             under_war: false,
             is_start_war: false,
             show_over_msg: false,
@@ -1035,6 +1138,9 @@ impl UserCastle {
             guards: [None; MAX_CASTLE_GUARD],
             home_x: 644,
             home_y: 290,
+            specs: None,
+            config_dir: String::new(),
+            ctor_config_dir: String::new(),
             config,
         }
     }
@@ -1091,6 +1197,9 @@ impl UserCastle {
         specs: &CastleDefenseSpecs,
         env: &mut impl CastleInitializeEnv,
     ) -> Vec<CastleEvent> {
+        // `Initialize()` 先 `LoadConfig()`（`UserCastle.cs:110`）——配置面（含 `Archers[12]`）在
+        // 归属门之前就已就位；写盘快照要靠它保留未造怪槽的 `x/y/Name` 与 `MainDoorOpen`。
+        self.specs = Some(specs.clone());
         // `LoadConfig()`：`MapName = ReadWriteString("Defense", "CastleMap", "3")`（`CastleConf.cs:39`）。
         self.map_name = Some(specs.map_name.clone());
         // `CastleConf.LoadConfig` 的其余键（`CastleConf.cs:18/40-44`）在归属门**之前**装载。
@@ -1552,6 +1661,84 @@ impl UserCastle {
         self.is_master_guild_name(guild_name)
     }
 
+    /// oracle `GetCastle(GuildInfo)`（`UserCastle.cs:539-560`）的**状态字段**半。
+    ///
+    /// 只落 `MasterGuild` / `OwnGuild` / `ChangeDate` 三个字段；`SaveConfigFile()`、两次
+    /// `RefMemberName()`、全服/跨服广播与 `LogService.Info` 都不在本卡（写盘与事件属 P3 宿主）。
+    /// 可达性登记不变：生产路径仍无调用者（`is_master_guild_name` 生产恒 false，T-131）。
+    ///
+    /// `change_date` 口径：oracle 写 `DateTime.Now`（`yyyy-MM-dd HH:mm:ss`）；本模块的注入时钟
+    /// [`CastleNow`] 只到「日 + 小时」⇒ 这里生成 `yyyy-MM-dd HH:00:00`，分/秒由 P3 接线时
+    /// 按宿主墙钟补全（登记 `whitelist.md` T-152）。
+    pub fn get_castle(&mut self, guild: GuildId, guild_name: &str, now: CastleNow) {
+        self.master_guild = Some(guild);
+        self.own_guild = Some(guild_name.to_string());
+        self.change_date = Some(format_change_date(now));
+    }
+
+    /// oracle `CastleConf.SaveConfig`（`CastleConf.cs:95-320`）的纯数据面：把当前写盘字段整理成
+    /// [`CastleSaveSnapshot`]；**不做 IO**（路径/GBK 编码/写字节是 P2 `crates/envir` 面）。
+    ///
+    /// 跳过语义与 oracle 同序：
+    /// 1. `GetMapOfServerIndex(MapName) != ServerIndex` ⇒ [`CastleSaveSkip::MapOwnerNotSelf`]
+    ///    （`CastleConf.cs:105-107`）。`GetMapOfServerIndex(null) == 0`（`MapManager.cs:169-180`）
+    ///    ⇒ `map_name == None` 的装载城**不**被这道门挡住；
+    /// 2. `Archers[i] == null`（未 `LoadConfig`，`specs == None`）⇒
+    ///    [`CastleSaveSkip::NreArchersNull`]（`CastleConf.cs:266-269`）。
+    ///
+    /// 槽值口径：名称/坐标取配置面（[`CastleDefenseSpecs`]，oracle 写的是 `ArcherUnit` 的
+    /// 读入值），HP 取运行期 [`CastleUnit`]——门/墙未挂实体 ⇒ `hp = None`（不写 `<X>HP` 键），
+    /// 弓手/守卫未挂实体 ⇒ `hp = Some(0)`（oracle 无条件写 0）；`MainDoorOpen` 只在主门挂实体时
+    /// 有值。
+    pub fn save_snapshot(&self) -> Result<CastleSaveSnapshot, CastleSaveSkip> {
+        if self.map_name.is_some() && self.map_owner_server_index != self.server_index {
+            return Err(CastleSaveSkip::MapOwnerNotSelf);
+        }
+        let Some(specs) = self.specs.as_ref() else {
+            return Err(CastleSaveSkip::NreArchersNull);
+        };
+        let mut main_door = save_unit(&specs.main_door, self.main_door.as_ref(), false);
+        main_door.open = self.main_door.as_ref().map(|_| specs.main_door.status);
+        let archers = specs
+            .archers
+            .iter()
+            .enumerate()
+            .take(MAX_CASTLE_ARCHER)
+            .map(|(i, spec)| save_unit(spec, self.archers.get(i).and_then(Option::as_ref), true))
+            .collect();
+        let guards = specs
+            .guards
+            .iter()
+            .enumerate()
+            .take(MAX_CASTLE_GUARD)
+            .map(|(i, spec)| save_unit(spec, self.guards.get(i).and_then(Option::as_ref), true))
+            .collect();
+        Ok(CastleSaveSnapshot {
+            castle_name: self.name.clone(),
+            own_guild: self.own_guild.clone(),
+            change_date: self.change_date.clone(),
+            war_date: self.war_date,
+            income_today: self.income_today,
+            total_gold: self.total_gold,
+            today_income: self.today_income,
+            envir_list: specs.envir_list.clone(),
+            map_name: self.map_name.clone(),
+            home_map: self.home_map.clone(),
+            home_x: self.home_x,
+            home_y: self.home_y,
+            war_range_x: self.war_range_x,
+            war_range_y: self.war_range_y,
+            main_door,
+            left_wall: save_unit(&specs.left_wall, self.left_wall.as_ref(), false),
+            center_wall: save_unit(&specs.center_wall, self.center_wall.as_ref(), false),
+            right_wall: save_unit(&specs.right_wall, self.right_wall.as_ref(), false),
+            archers,
+            guards,
+            config_dir: self.config_dir.clone(),
+            ctor_config_dir: self.ctor_config_dir.clone(),
+        })
+    }
+
     /// oracle `InCastleWarArea(IEnvirnoment envir, int nX, int nY)`（`UserCastle.cs:454-478`）。
     ///
     /// 逐行：
@@ -1686,6 +1873,38 @@ fn set_stone_mode(slot: &mut Option<CastleUnit>, value: bool) {
     if let Some(unit) = slot.as_mut() {
         unit.stone_mode = value;
     }
+}
+
+/// 写盘槽的取值（[`UserCastle::save_snapshot`] 的口径）：名称/坐标取配置，HP 取运行期。
+///
+/// `hp_always=true` = archer/guard（oracle 无条件写，未挂实体写 0）；`false` = 门/墙
+/// （`BaseObject == null` 时不写 HP 键）。
+fn save_unit(
+    spec: &DefenseUnitSpec,
+    bound: Option<&CastleUnit>,
+    hp_always: bool,
+) -> CastleSaveUnit {
+    CastleSaveUnit {
+        name: spec.name.clone(),
+        x: spec.x,
+        y: spec.y,
+        hp: if hp_always {
+            Some(bound.map_or(0, |u| u.hp))
+        } else {
+            bound.map(|u| u.hp)
+        },
+        open: None,
+    }
+}
+
+/// `ChangeDate` 的串口径（`ConfigFile.WriteDateTime` = `yyyy-MM-dd HH:mm:ss`）。
+///
+/// [`CastleNow`] 只到小时 ⇒ 分/秒写 0；P3 接线时由宿主按真墙钟补全（登记 T-152）。
+fn format_change_date(now: CastleNow) -> String {
+    format!(
+        "{:04}-{:02}-{:02} {:02}:00:00",
+        now.date.year, now.date.month, now.date.day, now.hour
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -3997,5 +4216,201 @@ mod tests {
         }];
         assert!(castle_war_tick(&castles, &in_palace, &mut states, 4000).is_empty());
         assert!(states[&7].name_color_changed, "N1 跳过 NameColorChanged 块");
+    }
+
+    // ---- A-22 P1：写盘快照（`castle-persist-world`，设计 §4 P1）----
+
+    /// C-A22-1 的构造城：部署 `0/SabukW.txt` 语义（`defense_specs`：主门/三墙 + 12 弓手 + 12 守卫）
+    /// + 非零资金/收入 + 主门 HP 1800 + 左墙已挂、右墙未挂 + 两个目录口径。
+    fn save_castle() -> UserCastle {
+        let mut c = UserCastle::new("沙巴克", config());
+        let mut env = FakeEnv::full();
+        c.initialize(&defense_specs(), &mut env);
+        c.server_index = 0;
+        c.map_owner_server_index = 0;
+        c.total_gold = 123_456;
+        c.today_income = 77;
+        c.income_today = CastleDate::new(2026, 10, 21);
+        c.war_date = Some(CastleDate::new(2026, 10, 21));
+        c.change_date = Some("2026-10-20 19:00:00".to_string());
+        c.config_dir = "0".to_string();
+        c.ctor_config_dir = "Castle".to_string();
+        c.main_door.as_mut().unwrap().hp = 1800;
+        // 右墙未挂实体（造怪失败/回收后的形态）——oracle 此时**不写** `RightWallHP` 键。
+        c.right_wall = None;
+        c
+    }
+
+    /// C-A22-1（L）：快照逐字段 = `CastleConf.SaveConfig` 的写面。
+    ///
+    /// 牙：`total_gold/today_income` 互换 ⇒ 本用例红；`RightWall=None` 仍写 HP ⇒ 红；
+    /// 未 `initialize` 的城不返回 `NreArchersNull` ⇒ [`castle_save_skip_semantics`] 红。
+    #[test]
+    fn castle_save_snapshot_fields() {
+        let snap = save_castle().save_snapshot().unwrap();
+
+        // [Setup]
+        assert_eq!(snap.castle_name, "沙巴克");
+        assert_eq!(snap.own_guild.as_deref(), Some(""));
+        assert_eq!(snap.change_date.as_deref(), Some("2026-10-20 19:00:00"));
+        assert_eq!(snap.war_date, Some(CastleDate::new(2026, 10, 21)));
+        assert_eq!(snap.income_today, CastleDate::new(2026, 10, 21));
+        assert_eq!(snap.total_gold, 123_456);
+        assert_eq!(snap.today_income, 77);
+
+        // [Defense]
+        assert_eq!(
+            snap.envir_list,
+            vec!["0151".to_string(), "d701".to_string()]
+        );
+        assert_eq!(snap.map_name.as_deref(), Some("3"));
+        assert_eq!(snap.home_map, "3");
+        assert_eq!((snap.home_x, snap.home_y), (644, 290));
+        assert_eq!((snap.war_range_x, snap.war_range_y), (100, 100));
+
+        // 主门：配置面 name/x/y + 运行期 HP 1800（不是配置 HP 2000）+ MainDoorOpen。
+        assert_eq!(
+            snap.main_door,
+            CastleSaveUnit {
+                name: "MainDoor".to_string(),
+                x: 672,
+                y: 330,
+                hp: Some(1800),
+                open: Some(true),
+            }
+        );
+        // 左墙已挂 ⇒ HP 有值；open 与墙无关。
+        assert_eq!(
+            snap.left_wall,
+            CastleSaveUnit {
+                name: "LeftWall".to_string(),
+                x: 624,
+                y: 278,
+                hp: Some(2000),
+                open: None,
+            }
+        );
+        assert_eq!(snap.center_wall.hp, Some(2000));
+        // 右墙未挂实体 ⇒ **不写 HP 键**（hp=None），名称/坐标仍来自配置面。
+        assert_eq!(
+            snap.right_wall,
+            CastleSaveUnit {
+                name: "RightWall".to_string(),
+                x: 634,
+                y: 271,
+                hp: None,
+                open: None,
+            }
+        );
+
+        assert_eq!(snap.archers.len(), MAX_CASTLE_ARCHER);
+        assert_eq!(snap.guards.len(), MAX_CASTLE_GUARD);
+        for (i, a) in snap.archers.iter().enumerate() {
+            assert_eq!(a.name, "弓箭手");
+            assert_eq!((a.x, a.y), (i as i16, 100));
+            assert_eq!(a.hp, Some(2000));
+            assert_eq!(a.open, None);
+        }
+        for (i, g) in snap.guards.iter().enumerate() {
+            assert_eq!(g.name, "守卫");
+            assert_eq!((g.x, g.y), (i as i16, 200));
+            assert_eq!(g.hp, Some(2000));
+            assert_eq!(g.open, None);
+        }
+
+        // 路径口径（§1.6）：两个目录都进快照，且不相等。
+        assert_eq!(snap.config_dir, "0");
+        assert_eq!(snap.ctor_config_dir, "Castle");
+    }
+
+    /// C-A22-1 的跳过牙：未 `initialize`（只跑 ctor 的装载城）⇒ `NreArchersNull`。
+    #[test]
+    fn castle_save_skip_semantics() {
+        // 未 `initialize`、`map_name=None`：oracle 的归属门放行（GetMapOfServerIndex(null)==0），
+        // 随后在 `Archers[i].nX` NRE。
+        assert_eq!(
+            UserCastle::new("沙巴克", config()).save_snapshot(),
+            Err(CastleSaveSkip::NreArchersNull)
+        );
+        // 即使手动塞了防御单元，只要没 `LoadConfig`（specs=None）就仍是 NRE。
+        let mut no_specs = UserCastle::new("沙巴克", config());
+        no_specs.main_door = Some(CastleUnit::default());
+        assert_eq!(
+            no_specs.save_snapshot(),
+            Err(CastleSaveSkip::NreArchersNull)
+        );
+
+        // 归属门先于 NRE（`CastleConf.cs:105-107` 在 `:266` 之前）：map_name 有值且非本服。
+        let mut foreign = UserCastle::new("沙巴克", config());
+        foreign.map_name = Some("3".to_string());
+        foreign.map_owner_server_index = 1;
+        assert_eq!(
+            foreign.save_snapshot(),
+            Err(CastleSaveSkip::MapOwnerNotSelf)
+        );
+        // 本服（0==0）⇒ 继续走到 NRE。
+        let mut owned = UserCastle::new("沙巴克", config());
+        owned.map_name = Some("3".to_string());
+        assert_eq!(owned.save_snapshot(), Err(CastleSaveSkip::NreArchersNull));
+    }
+
+    /// C-A22-2（L）：配置文件走 ctor 绑定目录、申请文件走运行期 `ConfigDir`。
+    ///
+    /// 牙：把两个目录字段合并成一个 ⇒ 两条路径相同 ⇒ 本用例红。
+    #[test]
+    fn castle_save_path_dirs() {
+        let snap = save_castle().save_snapshot().unwrap();
+        assert_eq!(snap.config_dir, "0");
+        assert_eq!(snap.ctor_config_dir, "Castle");
+        assert_ne!(snap.config_dir, snap.ctor_config_dir);
+
+        // P2（envir）的拼接口径：`CastleConf.SaveConfig` 写 ctor 绑定的文件名；
+        // `UserCastle.SaveAttackSabukWall` 写运行期 `ConfigDir`。
+        let config_path = format!("Castle/{}/SabukW.txt", snap.ctor_config_dir);
+        let attack_path = format!("Castle/{}/AttackSabukWall.txt", snap.config_dir);
+        assert_eq!(config_path, "Castle/Castle/SabukW.txt");
+        assert_eq!(attack_path, "Castle/0/AttackSabukWall.txt");
+    }
+
+    /// 弓手/守卫未挂实体时：名称/坐标仍写配置面，HP 无条件写 0（`CastleConf.cs:283-290`）。
+    #[test]
+    fn castle_save_unbound_archer_and_guard_write_zero_hp() {
+        let mut c = save_castle();
+        c.archers[3] = None;
+        c.guards[5] = None;
+        let snap = c.save_snapshot().unwrap();
+        assert_eq!(
+            snap.archers[3],
+            CastleSaveUnit {
+                name: "弓箭手".to_string(),
+                x: 3,
+                y: 100,
+                hp: Some(0),
+                open: None,
+            }
+        );
+        assert_eq!(
+            snap.guards[5],
+            CastleSaveUnit {
+                name: "守卫".to_string(),
+                x: 5,
+                y: 200,
+                hp: Some(0),
+                open: None,
+            }
+        );
+    }
+
+    /// `GetCastle` 的字段半（`UserCastle.cs:539-560`）：归属 + `ChangeDate`；本卡只做字段。
+    #[test]
+    fn get_castle_sets_change_date_and_ownership_fields() {
+        let mut c = ready_castle();
+        assert!(!c.is_master_guild(G_ATTACK));
+        c.get_castle(G_ATTACK, "攻方", now(10, 0));
+        assert_eq!(c.master_guild, Some(G_ATTACK));
+        assert_eq!(c.own_guild.as_deref(), Some("攻方"));
+        assert_eq!(c.change_date.as_deref(), Some("2026-10-13 10:00:00"));
+        assert!(c.is_master_guild(G_ATTACK));
+        assert!(c.is_member(G_ATTACK));
     }
 }
