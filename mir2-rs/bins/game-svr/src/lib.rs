@@ -13529,6 +13529,91 @@ fn drain_pk_flag_downlink(
     buf.flush(online, gates);
 }
 
+/// **`openmir2-sm-closehealth-wire`**：`SM_CLOSEHEALTH(1101)` 的生产发射点
+/// （orphan 13 帧里唯一「oracle 可达但本仓没接线」的一项；见 `tests/parity/whitelist.md` T-79 ③）。
+///
+/// oracle 链路（三段，行号以 `src/M2Server/**` 为准）：
+/// 1. `BaseObject.Run` 的门 `if (ShowHp && ((GetTickCount() - ShowHpTick) > ShowHpInterval))`
+///    ⇒ `BreakOpenHealth()`（`BaseObject.Base.cs:219-222`）；
+/// 2. `BreakOpenHealth()`（`BaseObject.cs:933-942`）置 `ShowHp=false`、
+///    `CharStatusEx ^= PoisonState.OPENHEATH`、`CharStatus = GetCharStatus()`、
+///    `SendRefMsg(RM_CLOSEHEALTH, 0, 0, 0, 0, "")`；
+/// 3. `PlayObject.Message.cs:2012-2014` 的 `case RM_CLOSEHEALTH`
+///    ⇒ `SendDefMessage(SM_CLOSEHEALTH, processMsg.ActorId, 0, 0, 0)`。
+///    `processMsg.ActorId` 由 `SendRefMsg` 的 6 参 `SendMsg(this, …)` 置成**到期者自己**
+///    （`BaseObject.Message.cs:98` / `:153` `ActorId = baseObject.ActorId`）
+///    ⇒ `Recog` = 到期 actor id，载荷全 0（header-only）。
+///
+/// 收件人 = `SendRefMsg` 的 ±12 玩家集合（含到期者自己），优先级
+/// `(byte)RM_CLOSEHEALTH = 171`（= `RM_OPENHEALTH` 的 170 + 1）。
+///
+/// 相位：oracle 在 `base.Run` 的 `:219` 即时发；本宿主把 `base.Run` 的帧统一放在 tick 后段
+/// （`bins/game-svr` 的 sim 循环），本 drain 取在全部 `PlayObject.Run` 帧（含 `drain_deal_tick`
+/// 的 `:30-36`）之后、[`drain_run_downlinks_with_magic`]（`base.Run` 的体力/魔力段）之前
+/// ⇒ 与 oracle 的相对序一致。
+///
+/// **已登记的相位差**：同 tick 内 `RM_DOOPENHEALTH` 到点（`MakeOpenHealth` 置 `ShowHp=true`）
+/// 在宿主由 `drain_b3_self_deliveries` 处理，排在本 drain **之后**；而 oracle 的消息泵
+/// （`MakeOpenHealth`）在 `base.Run` 的 `:219` 判定**之前**。因此当
+/// `ShowHpInterval <= 1500ms`（即 `GetPower13(...) == 1`，`MagicManager.cs:437` 的 1500ms
+/// 自投递延迟本身已超过有效期）时，本宿主会晚 **1 个 world tick（200ms）** 才闭；
+/// 其余区间与 oracle 同 tick。`crates/world` 的 `cast_show_hp_spell` 相位不变，判据以帧面为准。
+///
+/// **已登记的口径差（T-79 ③）**：oracle 的 `ReAliveEx`（`BaseObject.cs:2466`；`ShowHp=false` 在 `:2473`）原地复活时
+/// **静默**把 `ShowHp=false`（不发 1101）；本仓复活走「重建实体」，`crates/world` 无 `ReAliveEx`，
+/// 且 `crates/world` 不在本卡写集内 ⇒ 若将来出现原地复活，这里会多一条迟到的 1101。
+/// 当前部署与夹具无该路径（死亡后重现走 mongen/重登）。
+/// 不抽 RNG、不落库。
+fn drain_close_health(
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    let now = world.clock_ms;
+    // 槽位序（`EntityStore::iter` 的显式索引，不是 Query/哈希序）。
+    let expired: Vec<i32> = world
+        .entities
+        .iter()
+        .filter(|e| e.show_hp && now - e.show_hp_tick > i64::from(e.show_hp_interval))
+        .map(|e| e.id)
+        .collect();
+    if expired.is_empty() {
+        return;
+    }
+    let mut buf = SpellFrameBuf::new();
+    for actor_id in expired {
+        // `BreakOpenHealth()`（`BaseObject.cs:936-940`）。`CharStatusEx ^ OPENHEATH` 是 **XOR**
+        // （oracle 原样），不是清位——与 `MakeOpenHealth` 的 OR 互为逆操作。
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.show_hp = false;
+            e.char_status_ex ^= mir2_world::entity::POISON_OPENHEATH;
+        }
+        // `CharStatus = GetCharStatus()` = `GetBuffStatus | (CharStatusEx & 0xFFFF)`：
+        // 必须在 XOR **之后**读，故分两次借（`get_char_status` 取 `&World`）。
+        let status = mir2_world::buff::get_char_status(world, actor_id);
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.char_status = status;
+        }
+        // `PlayObject.ShowHp` 的宿主镜像（`SM_HEALTHSPELLCHANGED(53)` 的 ShowHp 广播支读会话态）。
+        if let Some(entry) = online.iter().find(|e| e.actor_id == actor_id) {
+            if let Some(sg) = ground_sessions.get_mut(&entry.chr_name) {
+                sg.show_hp = false;
+            }
+        }
+        let body = smframe_ext::sm_closehealth(actor_id);
+        buf.push_broadcast(
+            world,
+            online,
+            actor_id,
+            true,
+            (mir2_protocol::messages::RM_CLOSEHEALTH & 0xFF) as u8,
+            &body,
+        );
+    }
+    buf.flush(online, gates);
+}
+
 /// **P3-B3**：`MakeOpenHealth()` 的 `RM_OPENHEALTH` ⇒ `SM_OPENHEALTH(1100)`
 /// （`PlayObject.Message.cs:2009-2011`）。收件人 = 目标 ±12 的玩家，含目标自己（若为玩家）。
 /// 优先级 `(byte)RM_OPENHEALTH = 170`。
@@ -14348,8 +14433,10 @@ struct SessionGround {
     /// 攻击/移动扣点、按 `Run()` 节奏回收、到 `HealthFillTime` 回血、低于 `-HealthFillTime` 掉 1 HP。
     /// 本片判据：真机隔离两相 `scoped_diff` 唯一残留 `characters_ablity.Hp` 攻方（C# 20668/Rust 20669）。
     stamina: game_svr::stamina::Stamina,
-    /// `BaseObject.ShowHp`（`MakeOpenHealth()` 置位，`BaseObject.cs:944`）；发点是技能「心灵启示」
-    /// （`MagicManager.cs:438`）⇒ 技能层未移植，生产路径恒 `false`（登记）。
+    /// `BaseObject.ShowHp`（`MakeOpenHealth()` 置位，`BaseObject.cs:944`；`BreakOpenHealth()` 清零，
+    /// `BaseObject.cs:933-942`）。发点是技能「心灵启示」28（`MagicManager.cs:431-442`）——
+    /// 该技能已接线（`World::cast_show_hp_spell`），生产路径**可达**；清零侧的
+    /// `SM_CLOSEHEALTH(1101)` 由 [`drain_close_health`] 出帧（卡 `openmir2-sm-closehealth-wire`）。
     show_hp: bool,
     /// `PlayObject.AbilSeeHealGauge`（`PlayObject.cs:390`；唯一生产者是心灵启示 28 升到 2 级，
     /// `PlayObject.cs:5231-5240`，本仓技能层未移植 ⇒ 生产恒 `false`）。
@@ -19687,6 +19774,12 @@ fn sim_loop(
             &enter_cfg.trade,
             &enter_cfg.catalog,
         );
+        // **`openmir2-sm-closehealth-wire`**：`BaseObject.Run` 的 `ShowHp` 到期段
+        // （`BaseObject.Base.cs:219-222` → `BreakOpenHealth` → `RM_CLOSEHEALTH`
+        // → `PlayObject.Message.cs:2012-2014` 的 `SM_CLOSEHEALTH(1101)`）。
+        // 位置：`base.Run` 的段（死/掉落在 `tick_tail` 内已跑、体力/魔力在 `drain_run_downlinks`），
+        // 本段在 `:219` ⇒ 放在两者之间。
+        drain_close_health(&mut world, &online, &mut ground_sessions, &gates);
         // **P8 钳制并入 G-C**：`TickRecord::verify_health_changes` 由 [`drain_run_downlinks`]
         // 在体力/魔力填充段（P7）之后应用并出帧（钳制是同一 `base.Run` 的末尾，替换 P7 的 pending）。
         // **reviewer-5 O-1 收口**：oracle 一次 `PlayObject.Run()` = 消息段（击杀经验/升级链 +
@@ -44541,6 +44634,175 @@ mod tests {
         assert_eq!(b3_count(&frames, 911, SM_656), 1, "刷新后 61s 清");
         assert_eq!(b3_count(&frames, 912, SM_656), 1);
         assert!(!rig.world.entities.get(caster_id).unwrap().pvp_flag);
+    }
+
+    /// **`openmir2-sm-closehealth-wire`**：`SM_CLOSEHEALTH(1101)` 的生产入口逐字节。
+    ///
+    /// oracle 三段（`src/M2Server/**`）：
+    /// 1. `BaseObject.Base.cs:219-222`：`ShowHp && (GetTickCount() - ShowHpTick) > ShowHpInterval`
+    ///    ⇒ `BreakOpenHealth()`（**严格大于**，等号不触发）；
+    /// 2. `BaseObject.cs:933-942`：`ShowHp=false`、`CharStatusEx ^= OPENHEATH`、
+    ///    `CharStatus = GetCharStatus()`、`SendRefMsg(RM_CLOSEHEALTH)`；
+    /// 3. `PlayObject.Message.cs:2012-2014`：`SendDefMessage(SM_CLOSEHEALTH, ActorId, 0, 0, 0)`
+    ///    ⇒ header-only，`Recog` = 到期者（`BaseObject.Message.cs:98/:153` 置 `ActorId=baseObject.ActorId`）。
+    ///
+    /// 牙（改坏必红）：
+    /// - 删 `drain_close_health` 里的 `push_broadcast` ⇒ 911/912 的 1101 计数 0≠1；
+    /// - 删 `show_hp = false` ⇒ 同一时钟再调一次仍匹配 ⇒ 第二条 1101（第二段断言 0≠1）；
+    /// - `^=` 改成 `|=`/清位 ⇒ `char_status_ex` 的 OPENHEATH 位断言红；
+    /// - `get_char_status` 挪到 XOR 之前 ⇒ `char_status` 仍带 OPENHEATH ⇒ 断言红；
+    /// - 把门从 `>` 改成 `>=` ⇒ 「恰好等于」那一段发出 1101（断言 0≠1）。
+    #[test]
+    fn closehealth_expiry_emits_1101_bytes_and_clears_status() {
+        const SM_1101: u16 = mir2_protocol::messages::SM_CLOSEHEALTH;
+        const OPENHEATH: i32 = mir2_world::entity::POISON_OPENHEATH;
+
+        let mut rig = B3Rig::new(18, 2, false);
+        let target = rig.caster;
+        rig.world.clock_ms = 10_000;
+        {
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.show_hp = true;
+            e.show_hp_tick = 5_000;
+            e.show_hp_interval = 4_000; // 10_000 - 5_000 = 5_000 > 4_000 ⇒ 到期
+            e.char_status_ex |= OPENHEATH;
+        }
+        // `MakeOpenHealth` 的产物：`CharStatus = GetBuffStatus | (ex & 0xFFFF)`（含 OPENHEATH 位）。
+        let status_before = mir2_world::buff::get_char_status(&rig.world, target);
+        rig.world.entities.get_mut(target).unwrap().char_status = status_before;
+        rig.ground_sessions.get_mut("caster").unwrap().show_hp = true;
+
+        drain_close_health(
+            &mut rig.world,
+            &rig.online,
+            &mut rig.ground_sessions,
+            &rig.gates,
+        );
+        let frames = rig.drain();
+
+        // 收件人 = `SendRefMsg` 的 ±12 玩家（含自己）；远处 (40,40) 零帧。
+        assert_eq!(b3_count(&frames, 911, SM_1101), 1, "到期者自己恰一条 1101");
+        assert_eq!(
+            b3_count(&frames, 912, SM_1101),
+            1,
+            "±12 内观察者恰一条 1101"
+        );
+        assert_eq!(b3_count(&frames, 914, SM_1101), 0, "范围外不投递");
+
+        // 逐字节：12B 头，recog=到期者、ident=1101、param/tag/series=0，无尾。
+        let body = frames
+            .iter()
+            .find(|(s, b)| *s == 911 && sf_ident(b) == SM_1101)
+            .map(|(_, b)| b.clone())
+            .expect("911 必须收到 1101");
+        let mut want = Vec::with_capacity(12);
+        want.extend_from_slice(&target.to_le_bytes()); // Recog（i32 LE）
+        want.extend_from_slice(&1101u16.to_le_bytes()); // Ident
+        want.extend_from_slice(&0u16.to_le_bytes()); // Param
+        want.extend_from_slice(&0u16.to_le_bytes()); // Tag
+        want.extend_from_slice(&0u16.to_le_bytes()); // Series
+        assert_eq!(body, want, "1101 必须 header-only 且 Recog=到期者");
+        // 与编码器的已知答案同源：actor=0x0303 ⇒ 030300004d04000000000000。
+        assert_eq!(smframe_ext::sm_closehealth(0x0303), {
+            let mut v = Vec::new();
+            v.extend_from_slice(&0x0303_i32.to_le_bytes());
+            v.extend_from_slice(&1101u16.to_le_bytes());
+            v.extend_from_slice(&[0u8; 6]);
+            v
+        });
+
+        // 状态：ShowHp 清零、OPENHEATH 位 XOR 掉、CharStatus 重算（= buff | (ex & 0xFFFF)）。
+        let e = rig.world.entities.get(target).unwrap();
+        assert!(!e.show_hp, "ShowHp 必须清零");
+        assert_eq!(e.char_status_ex & OPENHEATH, 0, "OPENHEATH 位必须 XOR 掉");
+        assert_eq!(
+            e.char_status,
+            mir2_world::buff::get_char_status(&rig.world, target),
+            "CharStatus 必须是 GetCharStatus() 的重算值"
+        );
+        assert!(
+            !rig.ground_sessions.get("caster").unwrap().show_hp,
+            "宿主镜像 sg.show_hp 必须清零（否则 53 的 ShowHp 广播支继续广播）"
+        );
+
+        // 幂等：同一时钟再跑一次 ⇒ 零帧（show_hp 已清）。
+        drain_close_health(
+            &mut rig.world,
+            &rig.online,
+            &mut rig.ground_sessions,
+            &rig.gates,
+        );
+        let frames = rig.drain();
+        assert_eq!(b3_count(&frames, 911, SM_1101), 0, "已清位 ⇒ 不重复发帧");
+
+        // 严格大于：`now - tick == interval` 不触发；`+1ms` 才触发。
+        rig.world.clock_ms = 20_000;
+        {
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.show_hp = true;
+            e.show_hp_tick = 16_000;
+            e.show_hp_interval = 4_000; // 恰好等于
+            e.char_status_ex |= OPENHEATH;
+        }
+        drain_close_health(
+            &mut rig.world,
+            &rig.online,
+            &mut rig.ground_sessions,
+            &rig.gates,
+        );
+        let frames = rig.drain();
+        assert_eq!(
+            b3_count(&frames, 911, SM_1101),
+            0,
+            "等号不触发（oracle 是严格大于）"
+        );
+        assert!(
+            rig.world.entities.get(target).unwrap().show_hp,
+            "等号不触发 ⇒ ShowHp 仍为 true"
+        );
+
+        rig.world.clock_ms = 20_001;
+        drain_close_health(
+            &mut rig.world,
+            &rig.online,
+            &mut rig.ground_sessions,
+            &rig.gates,
+        );
+        let frames = rig.drain();
+        assert_eq!(b3_count(&frames, 911, SM_1101), 1, "+1ms 触发");
+    }
+
+    /// **`openmir2-sm-closehealth-wire` 的发射点牙（删调用必红）**：`drain_close_health`
+    /// 的生产调用必须仍在 `sim_loop` 体内。照 `drain_deal_tick_production_call_is_wired_in_sim_loop`
+    /// 的口径：按**整行精确形状**匹配（定义行 `fn drain_close_health(` 与测试里的多行调用都不命中；
+    /// `//` 注释前缀会改 trim 结果 ⇒ 被注释掉的行自动不命中）。
+    ///
+    /// 牙：删掉 sim 循环里的调用（或注释掉）⇒ 命中 0；复制出第二个调用点 ⇒ 命中 2；两者都必红。
+    #[test]
+    fn drain_close_health_production_call_is_wired_in_sim_loop() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        const CALL: &str = "drain_close_health(&mut world, &online, &mut ground_sessions, &gates);";
+        let hits: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.trim() == CALL)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "sim 循环里 `drain_close_health(...)` 的生产调用行必须仍在且未被注释；命中 {hits:?}"
+        );
+        let call = hits[0];
+        let sim_loop = lines
+            .iter()
+            .position(|l| l.trim() == "fn sim_loop(")
+            .expect("`fn sim_loop(` 定义行");
+        assert!(
+            call > sim_loop,
+            "生产调用行（行号 {call}）必须在 `fn sim_loop(`（行号 {sim_loop}）之后"
+        );
     }
 
     /// **T-78 修复的端到端牙**：注入墙钟量级 `clock_ms` 且**不**手工重置 `pk_check_tick`
