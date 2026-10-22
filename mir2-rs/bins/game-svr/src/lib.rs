@@ -19140,6 +19140,10 @@ fn sim_loop(
                                                                 d.is_master,
                                                                 d.allow_guild_re_call,
                                                                 d.group_rcall_time,
+                                                                // `AttatckMode`（`WorldServer.cs:1148`）
+                                                                // 与 `ReLevel`（`:1133`）同由 `GetHumData` 装入。
+                                                                d.attatck_mode,
+                                                                d.re_level,
                                                             ),
                                                             state: game_svr::ground::GroundState {
                                                                 item_list: bag_items_from(
