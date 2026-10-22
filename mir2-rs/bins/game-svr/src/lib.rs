@@ -22795,6 +22795,197 @@ mod tests {
         assert!(npc_hit > mer_turn && mer_hit > npc_hit);
     }
 
+    /// **判据（卡 `openmir2-castle-merchant-fixedhide-hit`，tier=R）**：城堡商人
+    /// `FixedHideMode` 解除支（`Merchant.cs:152-157`，`SendRefMsg(RM_HIT,…)` 在 `:156`）是
+    /// **确定性**发点——与 `tools/conformance/rules.json` 里 ident 14 的 `ignore` 理由
+    /// （RNG 支，`Merchant.cs:138-140`）不同类。本用例走生产链路：
+    /// `World::merchant_tick` → `crates/world/src/merchant.rs::merchant_run`（`:143-160`）→
+    /// `TickRecord::merchant_hits` → [`drain_npc_merchant_hits`] → [`downlink::hit_frame`]。
+    ///
+    /// 断言：
+    /// ① `UnderWar false→true` 那一步：`merchant_hits` **为空**（只有 `RM_DISAPPEAR`，不发 `SM_HIT`）；
+    /// ② `true→false` 那一步：**恰好一条** `SM_HIT(14)`，头 = `(Recog=商人 ActorId,
+    ///    Param=CurrX, Tag=CurrY, Series=Dir)`、**无尾**（12B）；
+    /// ③ 战中稳态 + RNG 受击（`Merchant.cs:140`）：`SendRefMsg` 的 `ObMode || FixedHideMode`
+    ///    头门（`BaseObject.Message.cs:390-394`）⇒ **只自送、客户端零帧**；
+    /// ④ 战后解除本身是可见帧（1 条，与 ② 同形）；随后状态不再变化 ⇒ **零帧**
+    ///    （这条支不得变成噪声源）。
+    ///
+    /// 牙（红检）：① 删 `merchant_run` 的 `outcome.unhide_hit = true` ⇒ ② 帧数归零 ⇒ 红；
+    /// ② 把补发挪到「进入战中」⇒ ① 多一条、② 归零 ⇒ 红。
+    #[test]
+    fn castle_merchant_unhide_hit_is_one_sm_hit_with_merchant_coords() {
+        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+
+        let mut world = mir2_world::World::new(100, 100);
+        // 种子：前两次 `Run` 的 RNG 支都不受击——否则会混入 `RM_HIT` 噪声，①/② 的条数断言失效。
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        world.clock_ms = 100_000;
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        let spawn = MerchantSpawn {
+            name: "沙巴克商人".to_string(),
+            x: 10,
+            y: 11,
+            map_id: 0,
+            state: MerchantState::new(
+                "沙巴克商人".to_string(),
+                "0".to_string(),
+                0,
+                16,
+                100,
+                true, // `CastleMerchant`（`LocalDB.cs:461-464`）
+                false,
+                0,
+                MerchantFlags::default(),
+                Vec::new(),
+                Vec::new(),
+                0,
+            ),
+        };
+        let mut displays = downlink::DisplayTable::new();
+        let (kept, failed, _book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            vec![spawn],
+            Vec::new(),
+            &mut displays,
+        );
+        assert_eq!(kept, 1);
+        assert!(failed.is_empty());
+        let mer_id = world.merchant_ids_sorted()[0];
+        assert!(
+            world.set_merchant_castle_index(mer_id, Some(0)),
+            "Castle != null（`Merchant.cs:143` 第二合取项）"
+        );
+        // `SendRefMsg(RM_HIT, Dir, …)` ⇒ `Series` 取实体当前 `Dir`。
+        world.entities.get_mut(mer_id).unwrap().ai.dir = 5;
+        let (online, gates, mut rx) = aoi_observer_fixture(p);
+
+        let set_war = |world: &mut mir2_world::World, war: bool| {
+            let st = world
+                .entities
+                .get_mut(mer_id)
+                .and_then(|e| e.merchant.as_mut())
+                .expect("商人状态在");
+            st.castle_under_war = war; // `Castle.UnderWar` 快照
+            st.run_tick = -1000; // `Run` 门（`now - RunTick > 250`）
+        };
+
+        // ① `UnderWar false→true`：只有 `RM_DISAPPEAR`，不发 `SM_HIT`。
+        set_war(&mut world, true);
+        let enter = world.merchant_tick();
+        assert!(enter.hits.is_empty(), "进入战中不得发 RM_HIT");
+        assert!(world.entities.get(mer_id).unwrap().fixed_hide_mode);
+        let rec = mir2_world::TickRecord {
+            merchant_hits: enter.hits.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates),
+            0,
+            "进入战中 ⇒ 零条 SM_HIT"
+        );
+
+        // ② `UnderWar true→false`：恰好一条 `SM_HIT(14)`。
+        set_war(&mut world, false);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let leave = world.merchant_tick();
+        assert_eq!(leave.hits, vec![mer_id], "解除时恰好一条 RM_HIT");
+        assert!(!world.entities.get(mer_id).unwrap().fixed_hide_mode);
+        let rec = mir2_world::TickRecord {
+            merchant_hits: leave.hits.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates),
+            1
+        );
+        let mut raws = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            raws.push(body);
+        }
+        assert_eq!(raws.len(), 1, "唯一在线玩家收到恰好一条帧");
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&raws[0]).expect("SM_HIT 12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_HIT);
+        assert_eq!(cm.recog, mer_id, "Recog = 发帧商人 ActorId");
+        assert_eq!(cm.param, 10, "Param = CurrX");
+        assert_eq!(cm.tag, 11, "Tag = CurrY");
+        assert_eq!(cm.series, 5, "Series = Dir（不含 Light）");
+        assert_eq!(raws[0].len(), 12, "无尾（SendSocket 单参）");
+
+        // ③ 战中稳态 + RNG 受击：`Merchant.cs:140` 的 `RM_HIT` 在 `FixedHideMode` 下只自送
+        //    （`BaseObject.Message.cs:390-394`）⇒ 客户端零帧。
+        set_war(&mut world, true);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        assert!(
+            world.merchant_tick().hits.is_empty(),
+            "重新进入战中：RM_DISAPPEAR 不算 SM_HIT"
+        );
+        assert!(world.entities.get(mer_id).unwrap().fixed_hide_mode);
+        // 换一个「首次抽数即命中受击支」的流（`Run` 从流的头部开抽，无 ctor 链）。
+        let hit_seed = (1..500)
+            .find(|s| {
+                let mut r = mir2_shared::rng::RandomNumber::with_seed(*s);
+                r.random_below(50) != 0 && r.random_below(50) == 0
+            })
+            .expect("存在受击种子");
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(hit_seed);
+        set_war(&mut world, true); // 仅重置 `Run` 门（状态仍为战中）
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let hidden_tick = world.merchant_tick();
+        assert!(
+            hidden_tick.hits.is_empty(),
+            "战中稳态下发 SM_HIT ⇒ 客户端多一帧"
+        );
+        assert_eq!(
+            hidden_tick.hits_self_only,
+            vec![mer_id],
+            "受击支确实命中，但只自送"
+        );
+        let rec = mir2_world::TickRecord {
+            merchant_hits: hidden_tick.hits.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates),
+            0,
+            "自送帧不得到客户端"
+        );
+        assert!(rx.try_recv().is_err(), "战中稳态无帧");
+
+        // ④ 战后解除（可见）：这次转换本身是一条 `SM_HIT`（与 ② 同形，`:155` 先清零再发）。
+        set_war(&mut world, false);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let unhide_again = world.merchant_tick();
+        assert_eq!(unhide_again.hits, vec![mer_id], "解除支恒为可见帧");
+        assert!(!world.entities.get(mer_id).unwrap().fixed_hide_mode);
+
+        // ⑤ 战后稳态（状态与随机支都不动）⇒ 零帧。战后商人**可见**，RNG 受击支一旦抽中就是
+        //    合法可见帧 ⇒ 这里换回一条「两次抽数都不命中」的流，断言才只钉「稳态不多发」。
+        let quiet_seed = (1..500)
+            .find(|s| {
+                let mut r = mir2_shared::rng::RandomNumber::with_seed(*s);
+                r.random_below(50) != 0 && r.random_below(50) != 0
+            })
+            .expect("存在安静种子");
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(quiet_seed);
+        set_war(&mut world, false);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let steady = world.merchant_tick();
+        assert!(steady.hits.is_empty(), "战后稳态零帧");
+        let rec = mir2_world::TickRecord {
+            merchant_hits: steady.hits.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates),
+            0
+        );
+        assert!(rx.try_recv().is_err(), "稳态无帧");
+    }
+
     /// **接线牙**：`drain_run_downlinks_with_magic` 里两个 drain 调用必须仍在且未被注释
     /// （口径同 `drain_deal_tick_production_call_is_wired_in_sim_loop`）。
     ///
