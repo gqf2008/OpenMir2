@@ -1239,6 +1239,142 @@ powershell … -File tools/m2-acceptance/start_mir2_server.ps1 -Root E:/tmp/laun
 
 ---
 
+## 8. 备用端口剖面（15xxx/17xxx）
+
+> **tier=L**：本节只新增离线工具与配方，不改任何角色代码、协议、配置格式或数据；工具不启动进程、
+> 不占端口、不写数据库、不写 `E:\MirServer`。真机窗口本身的 R 级判据不因本节而降级——本节只解决
+> 「开窗必须抢占 5000/7000/7200」这个运维冲突。
+>
+> 背景：外部 C# 全栈常驻 `5000/5100/5500/5600/5700/6000/7000/7100/7200`。备用剖面把它们整体平移到
+> `15xxx/17xxx`，六份影子 conf 与一个新的客户端启动命令都由脚本生成，源文件只读。
+
+### 8.1 工具
+
+| 文件 | 作用 |
+|---|---|
+| `tools/window/startup_param.py` | 客户端启动参数（`base64(IV8 + Blowfish-CBC(656B))`）的 `decrypt / encrypt / port / roundtrip`；口令与布局只读引用 `MirClientZig/src/app/boot.zig:280-360`，固定向量逐字节自检 |
+| `tools/window/alt_port_profile.py` | 生成六份影子 conf（`generate`）、打印固定剖面与计划键（`mapping`）、离线自检（`selftest`）；可选生成 `run-release-alt.cmd` |
+
+依赖：Python 3.12 + `cryptography`（本机实测 50.0.1，`cryptography.hazmat.decrepit.ciphers.algorithms.Blowfish` 可用）。
+`alt_port_profile.py` 只 import 同目录的 `startup_param.py`，不依赖对端仓代码。
+
+### 8.2 固定剖面与键名映射
+
+键名/语义**以仓库内 Rust 解析器为准**（实读 `mir2-rs/bins/*/src/config.rs`，不是按直觉猜）：
+
+| 角色 | 影子 conf（输出布局同 §7.2） | 键 | 旧 → 新 | 含义 |
+|---|---|---|---|---|
+| `db-srv` | `DBSrv/dbsvr.conf` | `[Setup] ServerPort` | 6000 → **16000** | DataService（GameSvr 取档/存档） |
+| `db-srv` | 同上 | `[Setup] GatePort` | 5100 → **15100** | SelGate 下游 |
+| `db-srv` | 同上 | `[Server] MarketPort` | 5700 → **15700** | 拍卖行（S4b 预留） |
+| `db-srv` | 同上 | `[Server] IDSPort` | 5600 → **15600** | 指向 login-srv IDS |
+| `login-srv` | `LoginSrv/logsrv.conf` | `[Server] GatePort` | 5500 → **15500** | LoginGate 下游 |
+| `login-srv` | 同上 | `[Server] ServerPort` | 5600 → **15600** | IDS（game-svr / db-srv 连入） |
+| `login-srv` | 同上 | `[Server] RunPort` | 7200 → **16005** | 遗留键；当前 Rust/C# 解析器都未消费，与 SelGate `LsvServerPort=16005` 对齐 |
+| `login-srv` | 同上 | `[Server] DBSPort` | 6000 → **16000** | 指向 db-srv DataService |
+| `game-svr` | `M2GameSvr/Server.conf` | `[Server] GatePort` | 5000 → **15000** | GameSvr 监听（GameGate 下游） |
+| `game-svr` | 同上 | `[Server] DBPort` | 6000 → **16000** | 指向 db-srv DataService |
+| `game-svr` | 同上 | `[Server] IDSPort` | 5600 → **15600** | 指向 login-srv IDS |
+| `login-gate` | `LoginGate/config.conf` | `[LoginGate] ServerPort0` | 5500 → **15500** | 指向 login-srv |
+| `login-gate` | 同上 | `[LoginGate] GatePort0` | 7000 → **17000** | **客户端登录入口** |
+| `sel-gate` | `SelGate/config.conf` | `[SelGate] ServerPort0` | 5100 → **15100** | 指向 db-srv |
+| `sel-gate` | 同上 | `[SelGate] GatePort0` | 7100 → **17100** | **客户端选服入口** |
+| `sel-gate` | 同上 | `[SelGate] LsvServerPort` | 16005（不变） | 解析器未消费；保持 16005 |
+| `game-gate` | `RunGate/config.conf` | `[GameGate] ServerPort1..3` | 5000 → **15000** | 三组都指向 game-svr |
+| `game-gate` | 同上 | `[GameGate] GatePort1..3` | 7200/7201/7202 → **17200/17201/17202** | **客户端游戏入口**（保留 `Count=3` 间距） |
+
+其它键（`GateAddr*`、`DBAddr`、`IDSAddr`、`ConnctionString`、`Count`、`[Integer]/[Switch]/[Strings]` 等）逐字节保留。
+`MsgSrvPort=4900`、`LogServerPort=10000` 不在本剖面内（外部服务），保持原值。
+
+### 8.3 生成（源文件只读）
+
+```powershell
+cd <检出>   # 任意检出；--repo-root 必须指向**主检出**（见下）
+# 只读映射（不发任何写操作）
+python tools/window/alt_port_profile.py mapping --repo-root E:\Users\gxh\Documents\GitHub\OpenMir2
+
+# 只打印将写入的映射，不落盘
+python tools/window/alt_port_profile.py generate `
+  --repo-root E:\Users\gxh\Documents\GitHub\OpenMir2 `
+  --out-dir E:\tmp\altport-profile -WhatIf
+
+# 实跑：六份影子 conf + 可选客户端命令
+python tools/window/alt_port_profile.py generate `
+  --repo-root E:\Users\gxh\Documents\GitHub\OpenMir2 `
+  --out-dir E:\tmp\altport-profile `
+  --client-run-dir D:\MirClient-run
+```
+
+- **`--repo-root` 必须指向主检出**：`src/DBSrv/bin/Release/dbsvr.conf` 与
+  `src/LoginSrv/bin/Release/logsrv.conf` 是未跟踪的构建产物，worktree 里没有；工具对 `db-srv/login-srv`
+  **只认这两份 Rust 口径配置**（部署根 `DBServer/dbsvr.conf` 缺 `MarketPort`，`LoginSrv/config.conf`
+  地址是 `10.10.0.102`，都不适合做默认源）。缺失时报错并提示 `--source db-srv=<path>`。
+- 输出目录布局与 `start_mir2_server.ps1 -Root` 完全一致，可直接：
+  `start_mir2_server.ps1 -Root E:\tmp\altport-profile -WhatIf`。
+- `-WhatIf` **不建目录、不写文件**；实跑才创建 `OutDir`。
+- 客户端只写 `D:\MirClient-run\run-release-alt.cmd`（新文件）；`run-release.cmd` 只读，写后工具会
+  重新哈希原文件做 fail-closed 断言。已存在 `run-release-alt.cmd` 时需 `--force` 才覆盖。
+
+### 8.4 编码与差异判据
+
+- 读写走 **latin-1 逐字节**视图（同 `tools/m2-acceptance/db_target_plumb.ps1`）：UTF-8 BOM
+  （`dbsvr.conf` / `Server.conf`）、非 UTF-8 字节（`RunGate/config.conf` 的 `[Strings]` 段实测有
+  `EF BC 3F`，既非合法 UTF-8 也非合法 GBK）、
+  CRLF/LF、段序、注释全部 1:1 保留，只替换目标键的值 token。
+- 每份文件写完后断言：**差异行集合恰为计划键所在行**；差异行只允许值 token 变化（前缀/后缀逐字节相同）；
+  行数不变；目标键读回等于新值。任一不满足即 `RED` 退出 1。
+- 2026-10-22 本机真跑（`generate`）：
+
+```text
+db-srv      diff_lines=[4,6,14,16]   BOM=False CRLF=24
+login-srv   diff_lines=[7,9,15,19]   BOM=False CRLF=25
+game-svr    diff_lines=[19,21,47]    BOM=True  LF
+login-gate  diff_lines=[9,11]        BOM=False CRLF=31
+sel-gate    diff_lines=[5,6]         BOM=False CRLF=23
+game-gate   diff_lines=[4,5,7,8,10,11] BOM=False CRLF=236
+KEY_VALUES_OK 16 / GAME_GATE_OK 3 endpoints
+```
+
+### 8.5 客户端启动参数
+
+`startup_param.py` 的固定向量（源自 `boot.zig` 的 `oracle_base64` / `fixed_plaintext_hex`）：
+
+```text
+$ python tools/window/startup_param.py roundtrip
+PLAINTEXT_OK=true bytes=656
+ROUNDTRIP_OK=true base64_len=888
+IV_HEX=38bcd80f9a040ef7 ADDR=127.0.0.1 PORT=7000
+```
+
+`alt_port_profile.py` 生成 `run-release-alt.cmd` 时只改 656B 明文里的地址（offset 31 短串）与端口
+（offset 248 i32），其余字段逐字节不变；IV 默认**沿用原参数的前 8 字节**（`--iv random` 可改）。
+写入后重新解密断言：
+
+```text
+CLIENT_OK decrypt_addr=127.0.0.1 decrypt_port=17000 param_len=888
+ORIGINAL_CMD_UNCHANGED sha256=1ab506be11ab42c6df445f8ff01d98cf4494d30131a29e10454c078754360d39
+```
+
+### 8.6 离线自检与门禁
+
+```powershell
+python tools/window/alt_port_profile.py selftest --repo-root E:\Users\gxh\Documents\GitHub\OpenMir2
+# ROUNDTRIP_OK ... / 六份 VERIFY ... OK / CLIENT_OK ... / ALT_PORT_SELFTEST_OK
+```
+
+`selftest` 在系统临时目录生成、校验后自动删除，不碰 `E:\MirServer` 与 `D:\MirClient-run` 的原文件。
+本节改动为纯 Python 工具 + 文档，不改 Rust 代码；仍按 AGENTS.md 跑全套本地门禁（2026-10-22 本 worktree 实测）：
+`cargo fmt` rc=0、`cargo clippy --workspace --all-targets -- -D warnings` rc=0、
+`cargo test --workspace` **2760 passed / 0 failed**、
+`cargo run -p msgcodegen -- --check` 604 条一致、`whitelist_anchor_gate.py check` 331 条 ALL PASS、
+`m3_whitelist_registry_audit.py audit --strict` GREEN。
+
+### 8.7 残留物
+
+- `E:\tmp\altport-profile\`：六份影子 conf + `alt-port-profile.json`（本次证据，保留；不属于仓库）。
+- `D:\MirClient-run\run-release-alt.cmd`：新增的备用启动命令（原 `run-release.cmd` 未改）。
+- 未启动任何服务端/客户端/代理，未占端口，未写数据库；`E:\MirServer` 零写入。
+
 ## 附录 A：本文件写作时的只读读数命令（可复现）
 
 ```powershell
