@@ -1040,40 +1040,49 @@ impl ScriptPlayer for NpcPlayer<'_> {
     fn play_dice_label(&self) -> Option<String> {
         self.play_dice_label.clone()
     }
-    /// 说词变量展开 = **经典说词路径** `TNormNpc.GotoLable_SendMerChantSayMsg`
-    /// （`b370040f1:src/M2Server/NpcSystem/TNormNpc.cs` 的 `GotoLable_SendMerChantSayMsg`）：
+    /// `NormNpc.GetLineVariableText`（`src/M2Server/Npc/NormNpc.cs:245-273`；说词路径
+    /// `ScriptEngine.GotoLableSendMerChantSayMsg` 在 `ScriptEngine.cs:989` 调用它，
+    /// 行公告 `WorldServer.cs:674` 也走同一支）：
     ///
     /// ```text
-    /// s14 = sMsg;
-    /// while (TagCount(s14, '>') >= 1) {
-    ///     s14 = ArrestStringEx(s14, '<', '>', ref s10);   // ← 扫描位置**前进**
-    ///     GetVariableText(PlayObject, ref sMsg, s10);      // 仅 `$` token 命中分支
-    ///     if (++nC >= 101) break;
+    /// while (sMsg.IndexOf('>') >= 1) {                     // `>` 在位置 0 / 没有 `>` ⇒ 立即中止
+    ///     HUtil32.ArrestStringEx(sMsg, "<", ">", ref sVariable);   // 每轮重抓「第一个」<...>
+    ///     if (sVariable[0] == '$') GetVariableText(..., ref sMsg); // 只有它改写 sMsg
+    ///     if (++nCount >= 101) break;
     /// }
     /// ```
     ///
-    /// **为什么必须前进**：重写版 `NormNpc.GetLineVariableText`（`NormNpc.cs:245-273`）丢掉了
-    /// `s14 = …` 这步 ⇒ 每轮都重新抓**同一个**首个 `<...>`；只要首个 token 不是 `$` 变量
-    ///（`<返回/@main>` 这类链接），后面所有 `<$VAR>` 永不展开（r7：赌场 `@main` 页首 token 是
-    /// 链接 ⇒ `<$GAMEGOLD>` 原样上线）。经典说词路径是前进扫描，本函数按它实现；
-    /// 与重写版字面循环的偏离登记在 `tests/parity/whitelist.md` T-157。
+    /// **扫描不前进**：`ArrestStringEx` 明明返回剩余串（`HUtil32.cs:488-545`），oracle
+    /// 却没把它赋回 `sMsg` ⇒ 每轮都重抓同一个首 token。只有 `$` 变量被替换时 `sMsg`
+    /// 才被改写、首 token 才被顶掉，下一轮才「自然」看到后一个 token。
     ///
-    /// 其余口径照 oracle：`ArrestStringEx` 取 `<...>` 内容；仅 `$` 开头才走
-    /// [`Self::get_variable_text`]（非 `$` 的链接/标签**原样保留**）；最多 101 个 token。
+    /// 语义后果（**照搬，不是 bug 修复对象**）：消息里 `<...>` token 的前缀必须全是已实现的
+    /// `$` 变量才会继续展开；一旦首个 `<...>` 是非 `$` token（`<返回/@main>` 这类链接），
+    /// 循环原地空转 101 轮后返回 ⇒ 后面的 `<$GAMEGOLD>` 等**原样上线**。r7 真机
+    /// （赌场 `@main` 页首 token 是 `<开始-下注/@kaiz>` 链接）看到的 `<$GAMEGOLD>` 字面量
+    /// 就是这条路径的必然结果，属 oracle 行为等价，**不是缺陷**。
+    ///
+    /// 对照：脚本**动作参数**走另一支 `ProcessingBase.GetLineVariableText`
+    /// （`ProcessingBase.cs:1438-1459`，`tempstr = ArrestStringEx(...)` 才是前进扫描），
+    /// 两者不可混用——把本函数改成前进扫描会偏离 oracle（见 whitelist 判据与卡
+    /// `openmir2-say-variable-expansion` 的复核结论）。
+    ///
+    /// `ArrestStringEx` 失败时 C# 不覆盖 `sVariable`（保留上一次的值）——本实现照搬
+    /// （`ArrestWrite::Unchanged`）；最多 101 轮。
     fn line_variable_text(&mut self, msg: &str) -> String {
         let mut s = msg.to_string();
-        let mut rest = msg.to_string();
+        let mut variable = String::new();
         let mut count = 0i32;
         loop {
-            if !rest.contains('>') {
+            if s.find('>').is_none_or(|p| p < 1) {
                 break;
             }
-            let (write, next) = mir2_shared::hutil32::arrest_string_ex_ref(&rest, '<', '>');
-            rest = next;
-            if let mir2_shared::hutil32::ArrestWrite::Value(variable) = write {
-                if variable.starts_with('$') {
-                    self.get_variable_text(&variable, &mut s);
-                }
+            match mir2_shared::hutil32::arrest_string_ex_ref(&s, '<', '>') {
+                (mir2_shared::hutil32::ArrestWrite::Value(v), _) => variable = v,
+                (mir2_shared::hutil32::ArrestWrite::Unchanged, _) => {}
+            }
+            if !variable.is_empty() && variable.starts_with('$') {
+                self.get_variable_text(&variable.clone(), &mut s);
             }
             count += 1;
             if count >= 101 {
@@ -2011,55 +2020,63 @@ mod tests {
         assert_eq!(p.line_variable_text("<$STR(Z1)>"), "<$STR(Z1)>");
     }
 
-    /// **r7 说词变量展开必须前进扫描**（oracle 经典说词路径
-    /// `TNormNpc.GotoLable_SendMerChantSayMsg` 的 `s14 = ArrestStringEx(...)`）：
-    /// 首个 token 是链接 / 未知变量 / 大小写不命中时，扫描必须继续，不能卡在它上面。
+    /// **说词展开按 oracle 字面循环「不前进」（BUG-REPLICA）**：`NormNpc.GetLineVariableText`
+    /// 每轮重抓同一个首个 `<...>`；只有 `$` 变量被替换后首 token 才会被顶掉 ⇒ 前缀连续的
+    /// `$` 变量会展开，一旦首个 `<...>` 是非 `$` 链接，后面的变量**永不展开**
+    ///（r7 赌场 `@main` 页的 `<$GAMEGOLD>` 字面量正是此行为，非缺陷）。
     ///
-    /// 红检：把 [`NpcPlayer::line_variable_text`] 改回重写版 `NormNpc.GetLineVariableText`
-    /// 的**不前进**循环（每轮重抓同一个首 token）⇒ 本用例三条断言全部回落到原文 ⇒ 红。
+    /// 牙：把循环改成前进扫描（经典 `TNormNpc.GotoLable_SendMerChantSayMsg` 的
+    /// `s14 = ArrestStringEx(s14, ...)` 写法）⇒ 本用例三条「原样」断言全变成长展开值 ⇒ 红。
     #[test]
-    fn line_variable_text_advances_past_links_and_unknown_tokens() {
+    fn line_variable_text_stops_at_first_non_variable_token() {
         let mut rng = no_rng();
         let mut p = NpcPlayer::empty(&mut rng);
         p.chr_name = "张三".to_string();
-        // r7 赌场页形状：首 token 是链接（非 $）⇒ 后面的变量仍要展开。
+        p.level = 33;
+        // 首 token 是链接 ⇒ 后面一个都不展开（oracle 字面循环的必然结果）。
         assert_eq!(
             p.line_variable_text("<进入/@main>\\ \\ 玩家:<$USERNAME> 元宝:<$GAMEGOLD>"),
-            "<进入/@main>\\ \\ 玩家:张三 元宝:0"
+            "<进入/@main>\\ \\ 玩家:<$USERNAME> 元宝:<$GAMEGOLD>"
         );
-        // 未知变量（oracle switch 无分支）⇒ 该 token 原样，但扫描继续。
-        assert_eq!(
-            p.line_variable_text("a<$GAMEGIRD>b<$USERNAME>"),
-            "a<$GAMEGIRD>b张三"
-        );
-        // 匹配大小写敏感、替换大小写不敏感（`ReplaceVariableText` 用
-        // `IndexOf(..., OrdinalIgnoreCase)`）：`$USERNAME` 命中后替换的是**第一处**
-        // 大小写不敏感匹配（小写 token），后面的精确 token 原样留下——oracle 怪点，照搬。
+        // 首个 token 大小写不命中（C# `switch` 大小写敏感）⇒ 无替换 ⇒ 原地空转到 101。
         assert_eq!(
             p.line_variable_text("<$username>|<$USERNAME>"),
-            "张三|<$USERNAME>"
+            "<$username>|<$USERNAME>"
+        );
+        // 前缀连续 `$` 变量：每次替换顶掉首 token ⇒ 「隐式前进」，全部展开。
+        assert_eq!(p.line_variable_text("<$USERNAME><$GAMEGOLD>"), "张三0");
+        // 展开到第一个非 `$` token 为止，其后的 `<$LEVEL>` 原样留下。
+        assert_eq!(
+            p.line_variable_text("<$USERNAME><返回/@main><$LEVEL>"),
+            "张三<返回/@main><$LEVEL>"
         );
     }
 
-    /// **r7 说词变量展开（生产入口 → GBK → EDCode 尾逐字节）**：走
-    /// [`MerchantScriptBook::goto_label`]（`lib.rs` 点击 `@main` 用的同一条生产函数）
-    /// 跑「首 token 链接 + 7 个变量」的说词，断言展开文本、`ChrName + '/' + 说词` 的
-    /// GBK 原文，以及 `SM_MERCHANTSAY(643)` 的 EDCode 尾。
+    /// **说词展开（生产入口 → GBK → EDCode 尾逐字节）**：走
+    /// [`MerchantScriptBook::goto_label`]（`lib.rs` 点击 `@main` 用的同一条生产函数）。
+    ///
+    /// 两支说词各一条标签：
+    /// ① `@main` 以变量开头 ⇒ 7 个变量全部展开，断言文本 / `ChrName + '/' + 说词` 的
+    ///    cp936 原文 / `SM_MERCHANTSAY(643)` 的 EDCode 尾；
+    /// ② `@dice` 以链接开头（r7 赌场页形状）⇒ oracle 字面循环卡在链接上，整条（含
+    ///    `<$GAMEGOLD>`）**原样上线**——行为等价，不是缺陷。
+    ///
+    /// 牙：删 `$GAMEGOLD` 分支 ⇒ ① 红；把循环改成前进扫描 ⇒ ② 红。
     #[test]
     fn say_variables_expand_through_merchant_goto_gbk_and_edcode() {
-        const SAY: &str = "欢迎<进入/@main>\\ \\ 玩家:<$USERNAME> 等级:<$LEVEL> 元宝:<$GAMEGOLD> 积分:<$GAMEPOINT> 声望:<$CREDITPOINT> 转生:<$RELEVEL> 槽:<$STR(M9)>";
-        const EXPANDED: &str =
-            "欢迎<进入/@main>\\ \\ 玩家:张三 等级:33 元宝:4242 积分:7 声望:11 转生:2 槽:88";
+        const SAY: &str = "玩家:<$USERNAME> 等级:<$LEVEL> 元宝:<$GAMEGOLD> 积分:<$GAMEPOINT> 声望:<$CREDITPOINT> 转生:<$RELEVEL> 槽:<$STR(M9)>";
+        const EXPANDED: &str = "玩家:张三 等级:33 元宝:4242 积分:7 声望:11 转生:2 槽:88";
+        // r7 赌场页形状：首 token 是链接 ⇒ 后面全部原样。
+        const DICE: &str = "<开始-下注/@kaiz>\\ \\ 您当前的元宝为:<$GAMEGOLD>个";
         // "赌场/" + EXPANDED 的 cp936 字节（硬编码，不用被测编码器自证）。
         const EXPECTED_GBK: &[u8] = &[
-            0xb6, 0xc4, 0xb3, 0xa1, 0x2f, 0xbb, 0xb6, 0xd3, 0xad, 0x3c, 0xbd, 0xf8, 0xc8, 0xeb,
-            0x2f, 0x40, 0x6d, 0x61, 0x69, 0x6e, 0x3e, 0x5c, 0x20, 0x5c, 0x20, 0xcd, 0xe6, 0xbc,
-            0xd2, 0x3a, 0xd5, 0xc5, 0xc8, 0xfd, 0x20, 0xb5, 0xc8, 0xbc, 0xb6, 0x3a, 0x33, 0x33,
-            0x20, 0xd4, 0xaa, 0xb1, 0xa6, 0x3a, 0x34, 0x32, 0x34, 0x32, 0x20, 0xbb, 0xfd, 0xb7,
-            0xd6, 0x3a, 0x37, 0x20, 0xc9, 0xf9, 0xcd, 0xfb, 0x3a, 0x31, 0x31, 0x20, 0xd7, 0xaa,
-            0xc9, 0xfa, 0x3a, 0x32, 0x20, 0xb2, 0xdb, 0x3a, 0x38, 0x38,
+            0xb6, 0xc4, 0xb3, 0xa1, 0x2f, 0xcd, 0xe6, 0xbc, 0xd2, 0x3a, 0xd5, 0xc5, 0xc8, 0xfd,
+            0x20, 0xb5, 0xc8, 0xbc, 0xb6, 0x3a, 0x33, 0x33, 0x20, 0xd4, 0xaa, 0xb1, 0xa6, 0x3a,
+            0x34, 0x32, 0x34, 0x32, 0x20, 0xbb, 0xfd, 0xb7, 0xd6, 0x3a, 0x37, 0x20, 0xc9, 0xf9,
+            0xcd, 0xfb, 0x3a, 0x31, 0x31, 0x20, 0xd7, 0xaa, 0xc9, 0xfa, 0x3a, 0x32, 0x20, 0xb2,
+            0xdb, 0x3a, 0x38, 0x38,
         ];
-        let book = merchant_book(8, "赌场", 100, &[("@main", SAY)]);
+        let book = merchant_book(8, "赌场", 100, &[("@main", SAY), ("@dice", DICE)]);
         let mut rng = no_rng();
         let mut p = NpcPlayer::empty(&mut rng);
         p.chr_name = "张三".to_string();
@@ -2075,16 +2092,25 @@ mod tests {
         assert_eq!(says.len(), 1);
         assert_eq!(
             says[0].raw_msg, EXPANDED,
-            "链接保留、$ 变量按 oracle 表展开"
+            "$ 变量按 oracle 表展开（首 token 是变量 ⇒ 隐式前进）"
         );
         let gbk = merchant_say_gbk(&says[0].npc_name, &says[0].raw_msg);
-        assert_eq!(gbk, EXPECTED_GBK, "ChrName + '/' + 说词的 GBK 原文逐字节");
+        assert_eq!(gbk, EXPECTED_GBK, "ChrName + '/' + 说词的 cp936 原文逐字节");
         // `SM_MERCHANTSAY` 头 12B + `EDCode.EncodeString(GBK 原文)`（`PlayObject.Message.cs:1724`）。
         let frame = crate::smframe::sm_merchantsay(8, 0, 0, &gbk);
         assert_eq!(
             &frame[12..],
             mir2_protocol::edcode::encode(EXPECTED_GBK).as_slice(),
             "643 尾 = EDCode.EncodeString(GBK 原文) 逐字节"
+        );
+        // ② 链接开头 ⇒ oracle 不前进循环卡死在首 token ⇒ 整条原样（含 `<$GAMEGOLD>`）。
+        let dice = book
+            .goto_label(8, &mut p, "@dice", false)
+            .expect("商人必须可解析");
+        assert_eq!(dice.len(), 1);
+        assert_eq!(
+            dice[0].raw_msg, DICE,
+            "链接开头 ⇒ 变量原样上线（oracle 行为）"
         );
     }
 
