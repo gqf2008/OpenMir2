@@ -1,0 +1,10 @@
+{
+  "name": "pickup_item",
+  "description": "在本人脚下拾取：CM_PICKUP(1001) param=自己 X tag=自己 Y（oracle 要求 CurrX==nParam2 && CurrY==nParam3）-> 等 SM_ADDITEM(200)/SM_BAGITEMS(201)",
+  "params": {"self_x": "REQUIRED", "self_y": "REQUIRED"},
+  "steps": [
+    {"send": {"ident": 1001, "recog": 0, "param": "self_x", "tag": "self_y"},
+     "note": "oracle: PlayObject.Message.cs CM_PICKUP 只在 CurrX==nParam2 && CurrY==nParam3 时 ClientPickUpItem()"},
+    {"wait_for": [200, 201], "timeout_ms": 3000}
+  ]
+}

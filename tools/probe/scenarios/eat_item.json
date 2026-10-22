@@ -1,0 +1,9 @@
+{
+  "name": "eat_item",
+  "description": "吃指定 MakeIndex 的药品/食物：CM_EAT(1006) recog=MakeIndex -> 等 SM_EAT_OK(635)/SM_EAT_FAIL(636)/SM_UPDATEITEM(203)",
+  "params": {"make_index": "REQUIRED"},
+  "steps": [
+    {"send": {"ident": 1006, "recog": "make_index"}, "note": "oracle: ClientUseItems(processMsg.nParam1, processMsg.Msg) => recog=MakeIndex"},
+    {"wait_for": [635, 636, 203], "timeout_ms": 3000}
+  ]
+}

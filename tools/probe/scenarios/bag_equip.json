@@ -1,0 +1,10 @@
+{
+  "name": "bag_equip",
+  "description": "把背包里指定 MakeIndex 的装备穿上：CM_TAKEONITEM(1003) recog=MakeIndex param=where -> 等 SM_UPDATEITEM(203)/SM_BAGITEMS(201)/SM_SYSMESSAGE(100)",
+  "params": {"make_index": "REQUIRED", "takeon_where": "REQUIRED"},
+  "steps": [
+    {"send": {"ident": 1003, "recog": "make_index", "param": "takeon_where"},
+     "note": "oracle: PlayObject.Message.cs ClientTakeOnItems((byte)nParam2, nParam1, Msg) => param=where，recog=MakeIndex"},
+    {"wait_for": [203, 201, 100], "timeout_ms": 3000}
+  ]
+}

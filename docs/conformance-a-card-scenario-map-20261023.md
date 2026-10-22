@@ -30,8 +30,8 @@
 | 5 | `openmir2-login-notice-clienttick` | `login_only.json` | 51/658 | 含 `SoftVersionDateEx==0` 两侧构造，需另一轮 |
 | 6 | `openmir2-npc-def-loading` | `npc_click.json`（**已建，加载期 fail-closed 已验**） | 固定 NPC 出现帧 + `SM_MERCHANTSAY(643)` | 需 `--var npc_actor=<id>` |
 | 7 | `openmir2-npcs-fixed-loading` | `npc_click.json`（`--var npc_actor=`） | 两侧 NPC 出现帧一致 | 同上 |
-| 8 | `openmir2-market-def-impl` | `merchant_say.json`（**待窗口**：需商人 `recog` + 具体说词） | 说词/变量两条 `GetLineVariableText` 展开 | 需商人 `recog` |
-| 9 | `openmir2-script-take-persist` | `bag_take.json`（**待窗口**：需确认 take 的 `CM_*` 号）+ 库快照 | take 后 `characters_bagitem` 槽位 | r10 已 GREEN，可用对拍固化 |
+| 8 | `openmir2-market-def-impl` | `merchant_dialog.json`（**已建**，`--var merchant_actor`） | 说词/变量两条 `GetLineVariableText` 展开 | 需商人 `recog` |
+| 9 | `openmir2-script-take-persist` | `bag_equip.json` / `pickup_item.json` / `eat_item.json`（**已建**）+ 库快照 | take 后 `characters_bagitem` 槽位 | r10 已 GREEN，可用对拍固化 |
 | 10 | `openmir2-click-path-bag-writeback` | `npc_click.json` + 库快照 | 点击 → 背包/佩戴/`characters.Gold` | T-160 的 R 窗口项 |
 | 11 | `openmir2-persist-useitems-wiring` | `bag_take.json` + 库快照 | 耐久磨损/破零 roundtrip | 需先有可用物品夹具 |
 | 12 | `openmir2-gm-commands-design`（O 类，非 A） | `gm_time.json`（现有） | 6 条可达 GM 命令的帧面 | Permission 恒 0 ⇒ 需 GM 账号 |
@@ -235,8 +235,9 @@
 
 ## 6. 遗留
 
-1. `npc_click.json` 已落 `tools/probe/scenarios/`（`params.npc_actor` 缺省 `"REQUIRED"`，不给 `--var` 即加载期 fail-closed；
-   `expand_scenario` 已验：`click_npc` ident=1010 recog=119 → `wait_for [643,100]`）。`merchant_say.json` / `bag_take.json`
-   仍需窗口内确定商人 `recog`、说词文本与 take 的消息号后再建（不臆造 ident）；
+1. 场景：`npc_click.json` / `merchant_dialog.json` / `bag_equip.json` / `eat_item.json` / `pickup_item.json`
+   已全部落到 `tools/probe/scenarios/`，**消息号与参数位置均有 oracle 出处**（1010/1011 / 1003 / 1006 / 1001，见各文件 `note`）；
+   运行时数据（NPC/商人 `ActorId`、`MakeIndex`、自身坐标）一律 `params: "REQUIRED"`，缺 `--var` 即加载期 fail-closed，绝不猜；
+
 2. 规则表缺口（`100/520/525/529/530/654/657` + 52 的 (54,78)）属 `conformance-rules` 车道，本卡只引用不修改；
 3. ~~48 张低置信度卡的通道判定待逐卡回读~~ ⇒ 已做（§3.1/§3.2）：19 张按 `window_items` 定；余 27 张的 findings 为评审问题单、不含证据形态 ⇒ 仍低置信度，待 owner/Leader 补窗口清单。
