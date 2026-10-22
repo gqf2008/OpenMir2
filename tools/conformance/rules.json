@@ -34,8 +34,8 @@
   "rules": [
     {
       "ident": [10, 41],
-      "action": "ignore",
-      "reason": "驱动器约定的心跳/保活帧（按任务口径 ident 10/41）：由定时器重复下发，帧数与时刻天然不稳。两侧先各自剔除再对齐；注意协议表里 10=SM_TURN、41=SM_FEATURECHANGED，若真机首跑发现它们承载真实状态变化，本规则必须改成 compare（待 owner 复核）",
+      "action": "compare",
+      "reason": "10=SM_TURN、41=SM_FEATURECHANGED 是真实协议帧（Messages.cs:161/202；downlink.rs 明确「SM_TURN+SM_FEATURECHANGED 一组两帧」且有逐字节黄金断言），默认必须逐字节比较，不得当心跳剔除。确需忽略时只能用显式 --ignore-idents（CLI 会登记为 cli_ignore）",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },

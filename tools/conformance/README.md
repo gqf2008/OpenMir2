@@ -27,11 +27,15 @@ python -I -B tools/conformance/compare_runs.py \
 | `--rules FILE` | 规则表（默认 `tools/conformance/rules.json`） |
 | `--out PATH` | 报告路径（默认 `report.json`；`-` = stdout） |
 | `--allow-unclassified IDENTS` | 显式放行未覆盖 ident（逗号分隔，可重复）；仍会在报告里登记 |
+| `--ignore-idents IDENTS` | 显式剔除消息号（逗号分隔，可重复）；默认规则表**没有** ignore |
+| `--allow-empty` | 两侧可比较帧数都是 0 时仍判（默认 `UNDECIDABLE(empty_run)`） |
+| `--allow-missing-fields` | 两侧都缺同一头部字段时只登记不判死（默认 `UNDECIDABLE`） |
+| `--require-db` | 要求两侧都有库快照（默认两侧都缺只登记 `absent_both`） |
 | `--db-oracle PATH` / `--db-rust PATH` | 覆盖库快照位置（默认 `<side>/db_snapshot.json`） |
 | `--db-time-mode exact\|presence\|normalized` | 覆盖规则表 `db.time_mode` |
 | `--db-key-mode pk\|multiset` | 覆盖规则表 `db.key_mode` |
 | `--db-ignore-columns A,B` | 覆盖规则表 `db.ignore_columns`（只允许已登记易变列/时间列/主键） |
-| `--db-allow-unknown-table` | 放行未登记表（默认未知表 ⇒ 无法判定） |
+| `--db-allow-unknown-table` | 放行未登记表（默认未知表 ⇒ 无法判定）；仅两侧表名相同才可比 |
 | `--quiet` | 不打印终端摘要 |
 | `selftest` | 离线自检（见下） |
 
@@ -41,7 +45,7 @@ python -I -B tools/conformance/compare_runs.py \
 | --- | --- | --- |
 | 0 | `PASS` | 帧流与库后态在规则范围内全等 |
 | 1 | `FAIL` | 有真实差异（帧 body/头部、帧数、库单元格/行） |
-| 2 | `UNDECIDABLE` | **判不了**：缺产物、解析失败、规则没覆盖（UNCLASSIFIED）、40/58 解不出、只一侧有库快照、库快照结构问题…… |
+| 2 | `UNDECIDABLE` | **判不了**：缺产物、解析失败、规则没覆盖（UNCLASSIFIED）、40/58 解不出、只一侧有库快照、库快照结构问题；以及空运行（`empty_run`）、两侧都缺同一头部字段、PENDING 的 ignore 真剔了帧 |
 
 **同时出现差异与「判不了」时取 2。** 未完成的判据优先，绝不用「有差异」掩盖「没判完」；
 也绝不在缺规则/缺数据时静默当绿。
@@ -57,9 +61,10 @@ python -I -B tools/conformance/compare_runs.py \
 ```
 
 * `ident` 必需（u16）；`body_hex` 是**解码后的 body 字节**（十六进制，可带 `0x`）。
-* 其余字段缺失可容忍，但会被**显式登记**：
-  * 两侧都缺某头部字段 ⇒ 报告 `missing_fields`（该字段未比较）；
-  * 只有一侧缺某头部字段 ⇒ UNDECIDABLE；
+* 其余字段缺失会被**显式登记**；默认不是「可容忍」而是判不了：
+  * 两侧都缺某头部字段 ⇒ 默认 `UNDECIDABLE(missing_field_both_sides)`；
+    `--allow-missing-fields` 才降级为 `missing_fields` + `allowed_missing_fields` 登记后放行；
+  * 只有一侧缺某头部字段（**即使该字段被掩码**）⇒ 永远 UNDECIDABLE（`missing_field`）；
   * 两侧都没 `body_hex`/`body_sha256` ⇒ UNDECIDABLE（`body_unavailable`）；
   * 只有一侧有 `body_hex` 且两侧都有 `body_sha256` ⇒ 用 sha 互验（`body_partial` 登记，不定位偏移）。
 * `body_len` / `body_sha256` 与 `body_hex` 自相矛盾（驱动器产物自相矛盾）⇒ UNDECIDABLE
@@ -73,8 +78,12 @@ python -I -B tools/conformance/compare_runs.py \
 
 ## 帧判定口径
 
-1. **对齐按文件顺序**，不按 `seq` 建键。`action=ignore` 的消息号（默认心跳 10/41）在
-   两侧**先各自剔除**，剩余序列逐位对齐；这样一侧多/少心跳不会把后续帧顶偏。
+1. **对齐按文件顺序**，不按 `seq` 建键。默认**没有** ignore 规则：`action=ignore` 只能来自
+   规则表或显式 `--ignore-idents`，被剔除的消息号在两侧**先各自剔除**，剩余序列逐位对齐。
+   10=`SM_TURN` / 41=`SM_FEATURECHANGED` 是真实协议帧（`Messages.cs:161/202`，downlink 有逐字节
+   黄金断言），默认 `compare` 逐字节比。规则表里 `approved_by` 仍是 `PENDING` 的 `ignore`
+   若真的剔了帧 ⇒ `UNDECIDABLE(pending_ignore_rule)`，不许直接判绿。
+   两侧剔除后可比较帧数都是 0 ⇒ `UNDECIDABLE(empty_run)`，只有 `--allow-empty` 放行。
 2. `ident` 永远比较（即使其余字段被掩码）；错位即 `ident` 差异。
 3. 头部字段 `recog/param/tag/series` + 驱动器字段 `phase/seq/t_ms/conn`：
    **默认掩码** recog（会话 ActorId）、t_ms（墙钟）、conn（会话标签）、seq（本地序号）；
@@ -88,7 +97,7 @@ python -I -B tools/conformance/compare_runs.py \
 | `compare` | 头部按全局掩码 + 本条覆盖后比较；body 逐字节比 |
 | `mask_fields` | `fields` 里的头部字段不比（如 46 的 param/tag = 墙钟小时位）；body 仍逐字节比 |
 | `mask_body_ranges` | body 的 `[start,end)` 区间（`end:null` = 到末尾）不比；长度必须相等，否则 body_len 差异。区间内若确有不同，仍登记 `mask_body_ranges` |
-| `ignore` | 该消息号在两侧对齐前剔除（帧数/时刻不稳的心跳）；`ident` 也因此不比 |
+| `ignore` | 该消息号在两侧对齐前剔除；`ident` 也因此不比。默认规则表**没有** ignore；PENDING 复核的 ignore 真剔了帧 ⇒ UNDECIDABLE |
 | `ability_layout` | 52 SM_ABILITY：`{40,58}` 布局对按 18 个语义字段逐项比（布局表从 `tools/loginfixture/capture_login_compare.py` 导入，**不抄第二份**）；同长度同布局退回逐字节；未知长度 ⇒ UNDECIDABLE |
 
 每条 ident 规则还可带：
@@ -108,7 +117,7 @@ python -I -B tools/conformance/compare_runs.py \
   "rules": [
     {"ident": 52, "action": "ability_layout", "head_compare": ["recog"],
      "reason": "...", "tier": "L", "approved_by": "PENDING owner/coordinator review"},
-    {"ident": [10, 41], "action": "ignore",
+    {"ident": [10, 41], "action": "compare",
      "reason": "...", "tier": "L", "approved_by": "PENDING owner/coordinator review"}
   ],
   "db": {"time_mode": "presence", "key_mode": "pk", "ignore_columns": [],
@@ -139,8 +148,12 @@ python -I -B tools/conformance/compare_runs.py \
 ## 什么算「不可判定」（退出码 2）
 
 * 缺 `frames.ndjson`、目录不存在、JSON/十六进制坏行、`body_len`/`body_sha256` 自相矛盾；
-* 某 ident 在任一帧里出现但规则表没有条目 ⇒ `UNCLASSIFIED`（除非 `--allow-unclassified` 点名）；
-* 某头部字段只有一侧给了；body 两侧都缺；52 的 body 长度不在已知布局表；
+* 某 ident 在任一帧里出现但规则表没有条目 ⇒ `UNCLASSIFIED`（除非 `--allow-unclassified` 点名；
+  `--ignore-idents` 点名的 ident 视为已分类：剔除即处置）；
+* 某头部字段只有一侧给了（含被掩码字段）；两侧都缺同一头部字段（默认）；body 两侧都缺；
+  52 的 body 长度不在已知布局表；
+* 两侧可比较帧数都是 0（`empty_run`，除非 `--allow-empty`）；
+* 规则表里 PENDING 的 `ignore` 真的剔了帧（`pending_ignore_rule`）；
 * 依赖模块缺失/加载失败（`capture_login_compare.py` / `dbsnap_pair.py`）；
 * 库快照：只有一侧有、缺 manifest、未知表、列不符、快照被事后改动、行数不符、重复主键；
 * 规则表缺失/非法。
@@ -173,8 +186,13 @@ python -I -B tools/conformance/compare_runs.py \
 * 跨运行自增 Id 不同时用 `--db-key-mode multiset --db-ignore-columns Id,PlayerId`；
   `dbsnap_pair` 只允许忽略**已登记易变列/时间列/主键**，行为列（如 `MakeIndex`）不许静默忽略
   —— 传了会直接拒绝（退出码 2）。
-* 两侧都没有库快照 ⇒ `db.state=absent_both`，退出码不受影响，但报告明确写「库后态未比较」；
-  只有一侧有 ⇒ 2。
+* 两侧都没有库快照 ⇒ `db.state=absent_both`，默认退出码不受影响，但报告明确写「库后态未比较」；
+  要求库后态时用 `--require-db` ⇒ 2（`db_snapshot_absent`）；只有一侧有 ⇒ 2。
+* `--db-allow-unknown-table` 只放行**两侧表名相同**的未登记表（按 multiset 比）；未登记表在
+  两侧库前缀不同时是两个不同的表名 ⇒ `missing_table` ⇒ 2。要跨前缀比未登记表，先在
+  `dbsnap_pair.TABLE_SPECS` 登记（走评审）。
+* 内联快照（`dbsnap-inline/1`）的单元格一律按字符串落 tsv：JSON `null` 与字符串 `"NULL"`
+  都落成同一个 NULL token，无法区分。要区分「真 NULL」与字面 `"NULL"` 请改用 dbsnap 快照目录。
 * 库结构问题（未知表/列不符/快照被改/行数不符/重复主键）⇒ 2；单元格/行差异 ⇒ 1。
 
 ## 自检
@@ -183,10 +201,11 @@ python -I -B tools/conformance/compare_runs.py \
 python -I -B tools/conformance/compare_runs.py selftest
 ```
 
-全离线合成两次运行，33 条断言，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
+全离线合成两次运行，44 条断言，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
 未覆盖 ident ⇒ 2（`--allow-unclassified` 放行）；缺规则表/坏规则/坏 JSON ⇒ 2；
-52 的 40/58 语义比（一致 ⇒ 0、改 hp ⇒ 1）；头部掩码不吞 body 差异；心跳剔除后仍能定位真差异；
-帧数不同；缺 body；产物自相矛盾；库逐列 diff、跨库前缀、单侧缺快照。
+52 的 40/58 语义比（一致 ⇒ 0、改 hp ⇒ 1）；头部掩码不吞 body 差异；显式剔除后仍能定位真差异；
+10/41 默认参与比较、PENDING ignore 剔帧 ⇒ 2；`--ignore-idents` 可剔除未登记 ident；空运行、两侧都缺头部字段、被掩码字段单侧缺失 ⇒ 2；
+帧数不同；缺 body；产物自相矛盾；库逐列 diff、跨库前缀、单侧缺快照、`--require-db`。
 
 **牙**：每条「改坏必红」都断言具体退出码与定位字段/偏移；比较器若退化成「永远 0」，
 自检会以 RED 收场。
@@ -197,8 +216,9 @@ python -I -B tools/conformance/compare_runs.py selftest
 
 已知待复核/缺口：
 
-* `10/41` 按任务口径当心跳 `ignore`，但协议表里 10=`SM_TURN`、41=`SM_FEATURECHANGED`；
-  若真机首跑显示它们承载真实状态，必须改成 `compare`（或按 phase 区分心跳/真实帧）。
+* `10/41` 的默认动作已按评审（review oid d280be71 CH-2）改为 `compare`：10=`SM_TURN`、
+  41=`SM_FEATURECHANGED` 是真实协议帧。确需按 phase 区分心跳时用显式 `--ignore-idents`，
+  或新增规则并走评审。
 * 驱动器可能产出但尚未登记的：`201 SM_BAGITEMS`、`6/7/9 SM_RUSH*`、`9 SM_BACKSTEP`、
   以及任何登录后新增的系统消息 —— 首跑会以 UNCLASSIFIED（退出码 2）暴露，按上面步骤逐条加规则。
 * `46/50/51` 只掩了已知的墙钟位；若真机上还有别的定时器字段，首跑会红，届时按证据扩规则。

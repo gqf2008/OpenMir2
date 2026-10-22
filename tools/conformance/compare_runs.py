@@ -14,12 +14,18 @@
 
 判据
 ====
-1) 帧对齐：**按序**对齐（不是按 seq 找键）。`action=ignore` 的消息号（默认心跳 10/41）在
-   **两侧先各自剔除**再从剩余序列逐位对齐 —— 心跳帧数/时刻天然不稳，不能用它把后续帧顶偏。
+1) 帧对齐：**按序**对齐（不是按 seq 找键）。默认**没有** ignore 规则：10=SM_TURN、
+   41=SM_FEATURECHANGED 是真实协议帧（downlink 明确「SM_TURN+SM_FEATURECHANGED 一组两帧」，
+   有逐字节黄金断言），必须比。确需剔除只能用显式 `--ignore-idents`；规则表里的
+   `action=ignore` 若 `approved_by` 仍是 PENDING 且真的剔了帧 ⇒ 本次 UNDECIDABLE
+   （PENDING 的 ignore 不许直接判绿）。被剔除的消息号在两侧先各自剔除再逐位对齐。
    `ident` 永远参与比较（即使该帧其余字段被掩码）。
+   两侧剔除后可比较帧数都是 0 ⇒ UNDECIDABLE(kind=empty_run)，只有 `--allow-empty` 放行。
 2) 头部字段（recog/param/tag/series，外加驱动器字段 phase/seq/t_ms/conn）：默认哪些比由规则决定。
    recog（=会话相关 ActorId）、t_ms（墙钟）、conn（驱动器会话标签）、seq（驱动器本地序号）默认掩码。
    每条掩码都带 reason/tier，并在报告 `whitelisted` / `coverage.global_masks` 里显式登记，绝不静默丢弃。
+   两侧都缺同一头部字段 ⇒ 默认 UNDECIDABLE（`--allow-missing-fields` 才降级为登记后放行）；
+   只有一侧给了（无论该字段是否被掩码）⇒ 永远 UNDECIDABLE。
 3) body：默认逐字节比较；差异报告 **ident + 帧序号 + 字节偏移** + 首次不同字节。
    * `mask_fields`：只掩头部字段，body 仍逐字节比。
    * `mask_body_ranges`：body 的指定 [start,end) 区间不参与判定（区间内若真不同，仍作为
@@ -28,7 +34,8 @@
      布局表**从 tools/loginfixture/capture_login_compare.py 导入**（ABILITY_LAYOUTS /
      ABILITY_FIELDS / decode_ability），本工具不抄第二份。语义不一致 ⇒ 差异；同长度同布局
      退回逐字节比；未知长度 ⇒ 无法判定（fail-closed）。
-4) 规则覆盖：某 ident 在两侧任何一帧里出现、规则表却没有它的条目 ⇒ **UNCLASSIFIED ⇒ 退出码 2**。
+4) 规则覆盖：某 ident 在两侧任何一帧里出现、规则表却没有它的条目 ⇒ **UNCLASSIFIED ⇒ 退出码 2**
+   （显式 `--ignore-idents` 点名的 ident 视为已分类：剔除即处置）。
    只有 `--allow-unclassified 1,2,3` 显式点名才放行，且报告里仍然逐个登记。
 5) 库对账：两份快照走 tools/db-parity/dbsnap_pair.py 的同一套口径（直接 import 调 run_pair）。
    `db_snapshot.json` 支持三种形态（见 README）：
@@ -36,7 +43,8 @@
      b) 裸 dbsnap manifest：`{"tables": [{"table":..., "file":..., ...}]}`（file 相对 json 所在目录）
      c) 内联：`{"format":"dbsnap-inline/1","tables":[{"table":...,"columns":[...],"rows":[[...]]}]}`
    结构问题（缺表/列不符/快照被改/未知表）⇒ 无法判定（2）；单元格/行差异 ⇒ 差异（1）。
-   两侧都没有库快照 ⇒ 显式登记 `db.state=absent_both`，不当作差异；只有一侧有 ⇒ 无法判定（2）。
+   两侧都没有库快照 ⇒ 显式登记 `db.state=absent_both`，默认不当作差异；`--require-db` 时
+   ⇒ 无法判定（2）。只有一侧有 ⇒ 无法判定（2）。
 
 退出码：0 = 全等（PASS）/ 1 = 有差异（FAIL）/ 2 = 无法判定（UNDECIDABLE，含 UNCLASSIFIED）。
 **两者同时出现时取 2**（未完成的判据优先，绝不拿「有差异」掩盖「没判完」）。
@@ -591,32 +599,40 @@ def compare_bodies(fr_o, fr_r, rule, diffs, whitelisted, undecidable, masked_ran
                       "detail": "body 逐字节不同（首处 offset=%d）" % off})
 
 
-def compare_streams(o_stream, r_stream, rules):
+def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
     diffs = []
     whitelisted = []
     undecidable = []
     missing_fields = []
     masked_ranges_note = []
+    pending_ignore = set()
 
     def split(frames):
-        kept, ignored = [], []
+        kept, ignored, ignored_cli = [], [], []
         for fr in frames:
-            rule = rules.by_ident.get(fr["ident"])
+            ident = fr["ident"]
+            if ident in cli_ignore_idents:
+                ignored_cli.append(ident)
+                continue
+            rule = rules.by_ident.get(ident)
             if rule and rule["action"] == "ignore":
-                ignored.append(fr)
-            else:
-                kept.append(fr)
-        return kept, ignored
+                ignored.append(ident)
+                if str(rule.get("approved_by", "")).upper().startswith("PENDING"):
+                    pending_ignore.add(ident)
+                continue
+            kept.append(fr)
+        return kept, ignored, ignored_cli
 
-    o_kept, o_ign = split(o_stream.frames)
-    r_kept, r_ign = split(r_stream.frames)
-    ignored = {"oracle": [fr["ident"] for fr in o_ign],
-               "rust": [fr["ident"] for fr in r_ign]}
+    o_kept, o_ign, o_ign_cli = split(o_stream.frames)
+    r_kept, r_ign, r_ign_cli = split(r_stream.frames)
+    ignored = {"oracle": o_ign, "rust": r_ign}
+    ignored_cli = {"oracle": o_ign_cli, "rust": r_ign_cli}
 
     # 覆盖检查：两侧出现过的 ident 都必须有规则（ignore 规则也算覆盖）。
     present = sorted({fr["ident"] for fr in o_stream.frames} |
                      {fr["ident"] for fr in r_stream.frames})
-    unclassified = [i for i in present if i not in rules.by_ident]
+    unclassified = [i for i in present
+                    if i not in rules.by_ident and i not in cli_ignore_idents]
 
     def head_compare(of, rf):
         ident = of["ident"]
@@ -624,26 +640,29 @@ def compare_streams(o_stream, r_stream, rules):
         for field in STREAM_FIELDS:
             ov, rv = of.get(field), rf.get(field)
             mask = masks.get(field)
+            # 先查缺失再走掩码：掩码只免「值不同」，不免「根本没给」（CH-4）。
+            if ov is None or rv is None:
+                if ov is None and rv is None:
+                    missing_fields.append({"ident": ident, "field": field,
+                                           "frame_index": of["index"],
+                                           "masked": mask is not None,
+                                           "detail": "两侧都缺该字段，无法比较（已显式登记）"})
+                else:
+                    undecidable.append({"source": "frame", "frame_index": of["index"],
+                                        "ident": ident, "kind": "missing_field", "field": field,
+                                        "masked": mask is not None,
+                                        "oracle_present": ov is not None,
+                                        "rust_present": rv is not None,
+                                        "detail": "只有一侧给了该字段，无法比较"})
+                continue
             if mask is not None:
-                if ov is not None and rv is not None and ov != rv:
+                if ov != rv:
                     whitelisted.append({"source": "frame", "frame_index": of["index"],
                                         "ident": ident, "field": field,
                                         "kind": "masked_head", "oracle": ov, "rust": rv,
                                         "reason": mask["reason"], "tier": mask["tier"],
                                         "approved_by": mask["approved_by"],
                                         "origin": mask["origin"]})
-                continue
-            if ov is None and rv is None:
-                missing_fields.append({"ident": ident, "field": field,
-                                       "frame_index": of["index"],
-                                       "detail": "两侧都缺该字段，无法比较（已显式登记）"})
-                continue
-            if ov is None or rv is None:
-                undecidable.append({"source": "frame", "frame_index": of["index"],
-                                    "ident": ident, "kind": "missing_field", "field": field,
-                                    "oracle_present": ov is not None,
-                                    "rust_present": rv is not None,
-                                    "detail": "只有一侧给了该字段，无法比较"})
                 continue
             if ov != rv:
                 diffs.append({"source": "frame", "frame_index": of["index"], "ident": ident,
@@ -679,6 +698,9 @@ def compare_streams(o_stream, r_stream, rules):
         "undecidable": undecidable,
         "missing_fields": missing_fields,
         "ignored": ignored,
+        "ignored_cli": ignored_cli,
+        "pending_ignore_hits": sorted(pending_ignore),
+        "kept_frames": {"oracle": len(o_kept), "rust": len(r_kept)},
         "present_idents": present,
         "unclassified": unclassified,
         "compared_frames": n,
@@ -809,7 +831,7 @@ def prepare_snapshot(path, label, workdir):
     return _materialize_inline(data, "%s db_snapshot.json" % label, workdir)
 
 
-def compare_db(o_dir, r_dir, db_opts, tmp_root, overrides):
+def compare_db(o_dir, r_dir, db_opts, tmp_root, overrides, require_db=False):
     o_path = overrides.get("oracle") or find_snapshot(o_dir)
     r_path = overrides.get("rust") or find_snapshot(r_dir)
     info = {"oracle_snapshot": o_path, "rust_snapshot": r_path,
@@ -820,6 +842,12 @@ def compare_db(o_dir, r_dir, db_opts, tmp_root, overrides):
     if o_path is None and r_path is None:
         info["state"] = "absent_both"
         info["note"] = "两侧都没有库快照：本次只判帧流；库后态未比较（显式登记，不是通过）"
+        if require_db:
+            info["note"] += "；--require-db 要求库后态 ⇒ 无法判定"
+            info["undecidable"].append({
+                "source": "db", "kind": "db_snapshot_absent",
+                "detail": "两侧都没有库快照，而调用方要求 --require-db"})
+            return info, info["undecidable"]
         return info, []
     if o_path is None or r_path is None:
         info["state"] = "one_sided"
@@ -879,7 +907,7 @@ def empty_report():
     }
 
 
-def _parse_allow_unclassified(groups):
+def _parse_ident_list(groups, flag):
     allowed = set()
     for group in (groups or []):
         for tok in group.split(","):
@@ -887,9 +915,15 @@ def _parse_allow_unclassified(groups):
             if not tok:
                 continue
             if not tok.isdigit():
-                raise InputError("--allow-unclassified 只接受逗号分隔的数字 ident，实际 %r" % tok)
+                raise InputError("%s 只接受逗号分隔的数字 ident，实际 %r" % (flag, tok))
+            if int(tok) > 65535:
+                raise InputError("%s 的 ident 必须在 0..65535，实际 %r" % (flag, tok))
             allowed.add(int(tok))
     return allowed
+
+
+def _parse_allow_unclassified(groups):
+    return _parse_ident_list(groups, "--allow-unclassified")
 
 
 def compare_main(args):
@@ -918,14 +952,22 @@ def compare_main(args):
         report["exit_code"] = 2
         return report
 
-    cmp = compare_streams(o_stream, r_stream, rules)
     try:
         allowed_unclassified = _parse_allow_unclassified(args.allow_unclassified)
+        cli_ignore_idents = _parse_ident_list(args.ignore_idents, "--ignore-idents")
     except InputError as e:
         report["undecidable"].append({"source": "input", "kind": "bad_flag", "detail": str(e)})
         report["verdict"] = "UNDECIDABLE"
         report["exit_code"] = 2
         return report
+    report["options"] = {
+        "allow_unclassified": sorted(allowed_unclassified),
+        "ignore_idents": sorted(cli_ignore_idents),
+        "allow_empty": bool(args.allow_empty),
+        "allow_missing_fields": bool(args.allow_missing_fields),
+        "require_db": bool(args.require_db),
+    }
+    cmp = compare_streams(o_stream, r_stream, rules, cli_ignore_idents)
     effective_unclassified = [i for i in cmp["unclassified"] if i not in allowed_unclassified]
     for ident in effective_unclassified:
         undecidable.append({"source": "coverage", "kind": "unclassified_ident",
@@ -936,14 +978,26 @@ def compare_main(args):
                                    "kind": "allowed_unclassified",
                                    "reason": "规则表未覆盖，但调用方用 --allow-unclassified 显式点名放行",
                                    "tier": "R", "approved_by": "CLI --allow-unclassified"})
+    for ident in sorted(set(cmp["ignored_cli"]["oracle"])
+                        | set(cmp["ignored_cli"]["rust"])):
+        cmp["whitelisted"].append({"source": "coverage", "ident": ident, "field": "ident",
+                                   "kind": "cli_ignore",
+                                   "reason": "调用方用 --ignore-idents 显式剔除该消息号（不参与对齐）",
+                                   "tier": "R", "approved_by": "CLI --ignore-idents"})
 
     report["frames"] = {
         "oracle_total": len(o_stream.frames),
         "rust_total": len(r_stream.frames),
         "compared": cmp["compared_frames"],
         "ignored": {k: {"count": len(v), "idents": v} for k, v in cmp["ignored"].items()},
+        "ignored_cli": {k: {"count": len(v), "idents": v}
+                        for k, v in cmp["ignored_cli"].items()},
         "ignored_ident_rules": sorted(i for i, r in rules.by_ident.items()
                                       if r["action"] == "ignore"),
+        "ignored_ident_rules_pending": sorted(
+            i for i, r in rules.by_ident.items()
+            if r["action"] == "ignore"
+            and str(r.get("approved_by", "")).upper().startswith("PENDING")),
     }
     report["coverage"] = {
         "present_idents": cmp["present_idents"],
@@ -967,6 +1021,43 @@ def compare_main(args):
         undecidable.append({"source": "input", **p})
     report["undecidable"] = undecidable
 
+    # CH-1：两侧都没比到帧（空运行）不是通过。
+    if cmp["kept_frames"]["oracle"] == 0 and cmp["kept_frames"]["rust"] == 0:
+        if args.allow_empty:
+            report["whitelisted"].append({
+                "source": "coverage", "field": "frames", "kind": "allowed_empty_run",
+                "reason": "两侧可比较帧数都是 0，调用方用 --allow-empty 显式放行",
+                "tier": "R", "approved_by": "CLI --allow-empty"})
+        else:
+            undecidable.append({"source": "coverage", "kind": "empty_run",
+                                "detail": "两侧可比较帧数都是 0（ignore 剔除后）：没有任何帧被比过，"
+                                          "不能判绿（确需空跑用 --allow-empty）"})
+
+    # CH-3：两侧都缺同一头部字段，默认判不了。
+    if report["missing_fields"]:
+        agg = sorted({(m["ident"], m["field"]) for m in report["missing_fields"]})
+        if args.allow_missing_fields:
+            report["whitelisted"].append({
+                "source": "coverage", "field": "missing_fields",
+                "kind": "allowed_missing_fields",
+                "idents_fields": [list(x) for x in agg],
+                "reason": "两侧都缺同一头部字段，调用方用 --allow-missing-fields 显式放行（未比较）",
+                "tier": "R", "approved_by": "CLI --allow-missing-fields"})
+        else:
+            undecidable.append({"source": "coverage", "kind": "missing_field_both_sides",
+                                "idents_fields": [list(x) for x in agg],
+                                "count": len(report["missing_fields"]),
+                                "detail": "两侧都缺同一头部字段 ⇒ 该字段未比较，默认判不了"
+                                          "（确需放行用 --allow-missing-fields）"})
+
+    # CH-2：PENDING 的 ignore 规则真的剔了帧 ⇒ 不许直接判绿。
+    for ident in cmp["pending_ignore_hits"]:
+        undecidable.append({"source": "coverage", "kind": "pending_ignore_rule",
+                            "ident": ident,
+                            "detail": "ident %d 的 ignore 规则 approved_by 仍为 PENDING，"
+                                      "本次确实剔除了帧 ⇒ 判不了（先复核该规则，或用显式 "
+                                      "--ignore-idents 承担剔除）" % ident})
+
     db_opts = dict(rules.db)
     if args.db_time_mode:
         db_opts["time_mode"] = args.db_time_mode
@@ -979,7 +1070,8 @@ def compare_main(args):
     tmp_root = tempfile.mkdtemp(prefix="conformance-db-")
     try:
         db_info, db_und = compare_db(args.oracle, args.rust, db_opts, tmp_root,
-                                     {"oracle": args.db_oracle, "rust": args.db_rust})
+                                     {"oracle": args.db_oracle, "rust": args.db_rust},
+                                     require_db=args.require_db)
         report["db"] = db_info
         report["diffs"].extend(db_info.get("diffs") or [])
         report["undecidable"].extend(db_und)
@@ -1017,6 +1109,10 @@ def human_summary(report):
         if any(v["count"] for v in ig.values()):
             lines.append("ignored(规则): " + ", ".join(
                 "%s=%d" % (k, v["count"]) for k, v in sorted(ig.items())))
+        igc = fr.get("ignored_cli") or {}
+        if any(v["count"] for v in igc.values()):
+            lines.append("ignored(CLI): " + ", ".join(
+                "%s=%d" % (k, v["count"]) for k, v in sorted(igc.items())))
     cov = report.get("coverage") or {}
     if cov.get("present_idents"):
         lines.append("idents: %s" % cov["present_idents"])
@@ -1083,6 +1179,14 @@ def build_parser():
                    help="报告输出路径（默认 report.json；- = stdout）")
     p.add_argument("--allow-unclassified", action="append", metavar="IDENTS",
                    help="显式放行未覆盖的 ident（逗号分隔，可重复）；仍会在报告里登记")
+    p.add_argument("--ignore-idents", action="append", metavar="IDENTS",
+                   help="显式剔除的消息号（逗号分隔，可重复）；默认规则表没有 ignore")
+    p.add_argument("--allow-empty", action="store_true",
+                   help="两侧可比较帧数都是 0 时仍按规则判定（默认 UNDECIDABLE empty_run）")
+    p.add_argument("--allow-missing-fields", action="store_true",
+                   help="两侧都缺同一头部字段时只登记不判死（默认 UNDECIDABLE）")
+    p.add_argument("--require-db", action="store_true",
+                   help="要求两侧都有库快照；absent_both 时判 UNDECIDABLE")
     p.add_argument("--db-oracle", help="oracle 库快照路径（默认 <oracle>/db_snapshot.json）")
     p.add_argument("--db-rust", help="rust 库快照路径（默认 <rust>/db_snapshot.json）")
     p.add_argument("--db-time-mode", choices=["exact", "presence", "normalized"],

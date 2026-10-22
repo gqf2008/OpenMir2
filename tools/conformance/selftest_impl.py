@@ -7,9 +7,12 @@
   2. 改一个字节 ⇒ 1，且报告定位到 ident + 字节偏移；
   3. 规则没覆盖的 ident ⇒ 2（UNCLASSIFIED），显式 --allow-unclassified 才放行；
   4. 40/58 布局按语义字段比、同长度按字节比；
-  5. 头部掩码、body 区间掩码、ignore（心跳）不会顺带吞掉真差异（「改坏必红」的牙）；
+  5. 头部掩码、body 区间掩码、显式剔除（--ignore-idents）不会顺带吞掉真差异（「改坏必红」的牙）；
   6. 缺 body / 产物自相矛盾 / JSON 坏行 / 规则缺失 ⇒ 2（fail-closed）；
-  7. 库快照逐列 diff（内联格式 + 跨库前缀归一）与「只有一侧有快照」⇒ 2。
+  7. 库快照逐列 diff（内联格式 + 跨库前缀归一）与「只有一侧有快照」⇒ 2；
+  8. 两侧 0 帧（empty_run）/ 两侧都缺同一头部字段 / PENDING 的 ignore 真剔了帧 ⇒ 2，
+     只有显式 --allow-empty / --allow-missing-fields 才降级放行；
+  9. 10/41 是真实协议帧（SM_TURN / SM_FEATURECHANGED），默认 compare，不再当心跳剔除。
 
 自检自身的牙：每一项「改坏必红」都断言**具体退出码 + 具体定位字段/偏移**；如果比较器退化成
 「永远 0」，这些断言会以 RED 收场。
@@ -157,6 +160,11 @@ class Selftest(object):
         self.t_ability_semantics(o, r)
         self.t_head_mask(o, r)
         self.t_ignore(o, r)
+        self.t_real_frames_10_41(o, r)
+        self.t_pending_ignore(o, r)
+        self.t_masked_missing(o, r)
+        self.t_empty_run()
+        self.t_missing_head_both()
         self.t_frame_count()
         self.t_missing_body(o)
         self.t_inconsistent(o)
@@ -179,10 +187,11 @@ class Selftest(object):
                    "ability_layout" in kinds, sorted(kinds))
         self.check("baseline: recog/conn/t_ms/seq 掩码差异被显式登记",
                    "masked_head" in kinds, sorted(kinds))
-        self.check("baseline: 10/41 心跳帧按规则剔除",
-                   (rep or {}).get("frames", {}).get("ignored", {})
-                   .get("oracle", {}).get("count", 0) >= 2,
-                   (rep or {}).get("frames", {}).get("ignored"))
+        frames_rep = (rep or {}).get("frames") or {}
+        self.check("baseline: 默认没有 ignore 规则（10/41 参与比较）",
+                   frames_rep.get("ignored_ident_rules") == []
+                   and frames_rep.get("ignored", {}).get("oracle", {}).get("count", 0) == 0,
+                   frames_rep)
 
     def t_byte_diff(self, o, r):
         r2 = json.loads(json.dumps(r))
@@ -222,11 +231,17 @@ class Selftest(object):
         self.check("未覆盖 ident => 报告 UNCLASSIFIED 列出 9999",
                    (rep or {}).get("coverage", {}).get("unclassified_idents") == [9999],
                    (rep or {}).get("coverage"))
-        rc2, rep2 = self.compare(od, rd, ["--allow-unclassified", "9999"])
+        rc2, rep2 = self.compare(od, rd, ["--allow-unclassified", "9999",
+                                          "--allow-missing-fields"])
         self.check("--allow-unclassified 9999 => rc 0 且仍登记放行",
                    rc2 == 0 and any(w.get("kind") == "allowed_unclassified"
                                     for w in (rep2 or {}).get("whitelisted", [])),
                    (rc2, (rep2 or {}).get("whitelisted")))
+        rc3, rep3 = self.compare(od, rd, ["--ignore-idents", "9999"])
+        self.check("--ignore-idents 9999 => 未覆盖 ident 被剔除，rc 0 且登记 cli_ignore",
+                   rc3 == 0 and any(w.get("kind") == "cli_ignore"
+                                    for w in (rep3 or {}).get("whitelisted", [])),
+                   (rc3, (rep3 or {}).get("whitelisted")))
 
     def t_missing_rule(self, o, r):
         rules = json.loads(json.dumps(self.builtin_rules))
@@ -292,8 +307,16 @@ class Selftest(object):
         od = self.write_run("t07-o", o)
         rd = self.write_run("t07-r", r2)
         rc, rep = self.compare(od, rd)
-        self.check("一侧多出心跳帧(10) => ignore 后 rc 0", rc == 0, "rc=%r" % rc)
-        # 牙：多出的心跳不能顺带吞掉真差异
+        self.check("一侧多出 10 帧且未显式忽略 => rc 1（10 是真实帧，默认比）",
+                   rc == 1 and any(d.get("kind") in ("ident", "frame_count")
+                                   for d in (rep or {}).get("diffs", [])),
+                   (rc, (rep or {}).get("diffs")))
+        rc_i, rep_i = self.compare(od, rd, ["--ignore-idents", "10,41"])
+        self.check("--ignore-idents 10,41 => 多出的 10 帧被剔除，rc 0 且登记 cli_ignore",
+                   rc_i == 0 and any(w.get("kind") == "cli_ignore"
+                                     for w in (rep_i or {}).get("whitelisted", [])),
+                   (rc_i, (rep_i or {}).get("whitelisted")))
+        # 牙：显式剔除的帧不能顺带吞掉真差异
         for fr in r2:
             if fr["ident"] == 658:
                 body = bytes.fromhex(fr["body_hex"])
@@ -302,18 +325,98 @@ class Selftest(object):
                 fr["body_sha256"] = _sha(mutated)
                 fr["body_len"] = len(mutated)
         rd2 = self.write_run("t07-r2", r2)
-        rc2, rep2 = self.compare(od, rd2)
-        self.check("心跳错位后 658 改字节 => 仍 rc 1 且偏移正确",
+        rc2, rep2 = self.compare(od, rd2, ["--ignore-idents", "10,41"])
+        self.check("显式剔除 10/41 后 658 改字节 => 仍 rc 1 且偏移正确",
                    rc2 == 1 and any(d.get("ident") == 658 and d.get("offset") == len(body) - 1
                                     for d in (rep2 or {}).get("diffs", [])),
                    (rc2, (rep2 or {}).get("diffs")))
+
+    def t_real_frames_10_41(self, o, r):
+        # 41 的 param 不同 => 默认必须红（证明 10/41 不再是心跳）
+        r2 = json.loads(json.dumps(r))
+        for fr in r2:
+            if fr["ident"] == 41:
+                fr["param"] = 7  # oracle 是 0
+        od = self.write_run("t16-o", o)
+        rd = self.write_run("t16-r", r2)
+        rc, rep = self.compare(od, rd)
+        self.check("41 的 param 不同 => rc 1（10/41 默认 compare）",
+                   rc == 1 and any(d.get("ident") == 41 and d.get("field") == "param"
+                                   for d in (rep or {}).get("diffs", [])),
+                   (rc, (rep or {}).get("diffs")))
+        rs = self.api.RuleSet(self.builtin_rules, "builtin", "0" * 64)
+        self.check("内置规则表 10/41 的 action 是 compare（不是 ignore）",
+                   rs.by_ident[10]["action"] == "compare"
+                   and rs.by_ident[41]["action"] == "compare",
+                   [(i, rs.by_ident[i]["action"]) for i in (10, 41)])
+
+    def t_pending_ignore(self, o, r):
+        rules = json.loads(json.dumps(self.builtin_rules))
+        rules["rules"] = [x for x in rules["rules"] if x.get("ident") != 658]
+        rules["rules"].append({"ident": 658, "action": "ignore",
+                               "reason": "selftest: PENDING 的 ignore 不许直接判绿",
+                               "tier": "L", "approved_by": "PENDING selftest"})
+        rp = self.rules_file("t17-rules.json", rules)
+        od = self.write_run("t17-o", o)
+        rd = self.write_run("t17-r", r)
+        rc, rep = self.compare(od, rd, ["--rules", rp])
+        self.check("PENDING ignore 真的剔了帧 => rc 2 (pending_ignore_rule)",
+                   rc == 2 and any(u.get("kind") == "pending_ignore_rule"
+                                   for u in (rep or {}).get("undecidable", [])),
+                   (rc, (rep or {}).get("undecidable")))
+
+    def t_masked_missing(self, o, r):
+        # 46 的 param 被规则掩码；只给一侧 => 不能静默跳过（CH-4）
+        r2 = json.loads(json.dumps(r))
+        for fr in r2:
+            if fr["ident"] == 46:
+                fr.pop("param", None)
+        od = self.write_run("t18-o", o)
+        rd = self.write_run("t18-r", r2)
+        rc, rep = self.compare(od, rd)
+        self.check("被掩码字段只有一侧给了 => rc 2 (missing_field)",
+                   rc == 2 and any(u.get("kind") == "missing_field"
+                                   and u.get("field") == "param"
+                                   and u.get("masked") is True
+                                   for u in (rep or {}).get("undecidable", [])),
+                   (rc, (rep or {}).get("undecidable")))
+
+    def t_empty_run(self):
+        od = self.write_run("t19-o", [])
+        rd = self.write_run("t19-r", [])
+        rc, rep = self.compare(od, rd)
+        self.check("两侧 0 帧 => rc 2 (empty_run)",
+                   rc == 2 and any(u.get("kind") == "empty_run"
+                                   for u in (rep or {}).get("undecidable", [])),
+                   (rc, (rep or {}).get("undecidable")))
+        rc2, rep2 = self.compare(od, rd, ["--allow-empty"])
+        self.check("--allow-empty => 空跑 rc 0 且显式登记放行",
+                   rc2 == 0 and any(w.get("kind") == "allowed_empty_run"
+                                    for w in (rep2 or {}).get("whitelisted", [])),
+                   (rc2, (rep2 or {}).get("whitelisted")))
+
+    def t_missing_head_both(self):
+        o = [self.frame(50, b"", phase="login")]
+        r = [self.frame(50, b"", phase="login")]
+        od = self.write_run("t20-o", o)
+        rd = self.write_run("t20-r", r)
+        rc, rep = self.compare(od, rd)
+        self.check("两侧都缺同一头部字段 => rc 2（默认判不了）",
+                   rc == 2 and any(u.get("kind") == "missing_field_both_sides"
+                                   for u in (rep or {}).get("undecidable", [])),
+                   (rc, (rep or {}).get("undecidable")))
+        rc2, rep2 = self.compare(od, rd, ["--allow-missing-fields"])
+        self.check("--allow-missing-fields => rc 0 且显式登记未比较字段",
+                   rc2 == 0 and any(w.get("kind") == "allowed_missing_fields"
+                                    for w in (rep2 or {}).get("whitelisted", [])),
+                   (rc2, (rep2 or {}).get("whitelisted")))
 
     def t_frame_count(self):
         o = [self.frame(50, b"", phase="login"), self.frame(658, b"x", phase="notice")]
         r = [self.frame(50, b"", phase="login")]
         od = self.write_run("t08-o", o)
         rd = self.write_run("t08-r", r)
-        rc, rep = self.compare(od, rd)
+        rc, rep = self.compare(od, rd, ["--allow-missing-fields"])
         self.check("可比较帧数不同 => rc 1 + frame_count",
                    rc == 1 and any(d.get("kind") == "frame_count"
                                    for d in (rep or {}).get("diffs", [])),
@@ -373,14 +476,14 @@ class Selftest(object):
         r = [self.frame(46, b"\x09\x09\x03\x04", phase="day")]
         od = self.write_run("t13-o", o)
         rd = self.write_run("t13-r", r)
-        rc, rep = self.compare(od, rd, ["--rules", rp])
+        rc, rep = self.compare(od, rd, ["--rules", rp, "--allow-missing-fields"])
         self.check("body 区间掩码内不同 => rc 0 且显式登记",
                    rc == 0 and any(w.get("kind") == "mask_body_ranges"
                                    for w in (rep or {}).get("whitelisted", [])),
                    (rc, (rep or {}).get("whitelisted")))
         r2 = [self.frame(46, b"\x01\x02\x03\x05", phase="day")]
         rd2 = self.write_run("t13-r2", r2)
-        rc2, rep2 = self.compare(od, rd2, ["--rules", rp])
+        rc2, rep2 = self.compare(od, rd2, ["--rules", rp, "--allow-missing-fields"])
         self.check("区间掩码外不同 => rc 1 且 offset=3",
                    rc2 == 1 and any(d.get("ident") == 46 and d.get("offset") == 3
                                     for d in (rep2 or {}).get("diffs", [])),
@@ -422,7 +525,7 @@ class Selftest(object):
         frames = [self.frame(50, b"", phase="login"), self.frame(658, b"x", phase="notice")]
         od = self.write_run("t15-o", frames, db=snap("mir2_test_db_oracle", 7))
         rd = self.write_run("t15-r", frames, db=snap("mir2_test_db_rust", 7))
-        rc, rep = self.compare(od, rd)
+        rc, rep = self.compare(od, rd, ["--allow-missing-fields"])
         db = (rep or {}).get("db") or {}
         self.check("库快照全等（跨库前缀归一）=> rc 0 + state=compared",
                    rc == 0 and db.get("state") == "compared", (rc, db.get("state"), db.get("detail")))
@@ -431,24 +534,30 @@ class Selftest(object):
                    (db.get("summary") or {}).get("tables"))
 
         rd2 = self.write_run("t15-r2", frames, db=snap("mir2_test_db_rust", 8))
-        rc2, rep2 = self.compare(od, rd2)
+        rc2, rep2 = self.compare(od, rd2, ["--allow-missing-fields"])
         self.check("库字段 Level 7->8 => rc 1 + value 差异",
                    rc2 == 1 and any(d.get("source") == "db" and d.get("kind") == "value"
                                     for d in (rep2 or {}).get("diffs", [])),
                    (rc2, (rep2 or {}).get("diffs")))
 
         rd3 = self.write_run("t15-r3", frames)  # 无 db_snapshot
-        rc3, rep3 = self.compare(od, rd3)
+        rc3, rep3 = self.compare(od, rd3, ["--allow-missing-fields"])
         self.check("只有一侧有库快照 => rc 2",
                    rc3 == 2 and ((rep3 or {}).get("db") or {}).get("state") == "one_sided",
                    (rc3, (rep3 or {}).get("db")))
 
         od4 = self.write_run("t15-o4", frames)
         rd4 = self.write_run("t15-r4", frames)
-        rc4, rep4 = self.compare(od4, rd4)
+        rc4, rep4 = self.compare(od4, rd4, ["--allow-missing-fields"])
         self.check("两侧都无库快照 => rc 0 + state=absent_both（显式登记未比较）",
                    rc4 == 0 and ((rep4 or {}).get("db") or {}).get("state") == "absent_both",
                    (rc4, (rep4 or {}).get("db")))
+
+        rc5, rep5 = self.compare(od4, rd4, ["--allow-missing-fields", "--require-db"])
+        self.check("两侧都无库快照 + --require-db => rc 2 (db_snapshot_absent)",
+                   rc5 == 2 and any(u.get("kind") == "db_snapshot_absent"
+                                    for u in (rep5 or {}).get("undecidable", [])),
+                   (rc5, (rep5 or {}).get("undecidable")))
 
     def finish(self):
         total = len(self.passed) + len(self.failed)
