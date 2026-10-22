@@ -104,7 +104,7 @@ sha256   = 5720a4899dc5709ac169e044b37e573ebdaf8175d118c3cdbf53e8d9013060fd
 
 规则改动的「牙」在 `tools/conformance/selftest_impl.py`：530 的 SessionID 变 ⇒ rc 0 且登记
 `mask_body_ranges`；530 的**端口字节**改一位 ⇒ rc 1（掩码不得吞掉地址）；默认表只允许 ident 14 为
-`ignore` 且本用例 0 帧被剔。`python -I -B tools/conformance/compare_runs.py selftest` ⇒ **85/85 GREEN**。
+`ignore` 且本用例 0 帧被剔。`python -I -B tools/conformance/compare_runs.py selftest` ⇒ **88/88 GREEN**。
 
 > 规则的 `approved_by` 仍为 `PENDING`：`action=ignore` 且真的剔帧时，`compare_runs.py` 会判
 > **UNDECIDABLE**（这是设计如此）。本轮最终 PASS 用的是**没有 14 帧的第二次运行**，并非靠 ignore 剔帧；
