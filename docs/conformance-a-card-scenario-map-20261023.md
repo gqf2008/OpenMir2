@@ -336,3 +336,17 @@ python -I -B tools/conformance/compare_runs.py   --oracle E:/tmp/conformance/run
 - **GAP 聊天（1）**：`chat-channels`
 
 > 缺口族里，**战斗/受击**与**移动/AOI** 合计 30 张，是下一批场景最该补的两族；它们需要同屏怪/多对象夹具，单靠现有 `login_only` 起的单人场景覆盖不到。
+
+补充：**C2S 侧**（场景要发的包）在 Rust 里是否有人接（`grep -c`，`bins/game-svr` + `crates/world`）：
+
+| 请求 | Rust 处理点 |
+|---|---:|
+| `CM_HIT(3014)` | 26 |
+| `CM_WALK(3011)` | 45 |
+| `CM_TAKEONITEM(1003)` | 16 |
+| `CM_EAT(1006)` | 25 |
+| `CM_PICKUP(1001)` | 34 |
+| `CM_CLICKNPC(1010)` | 28 |
+| `CM_MERCHANTDLGSELECT(1011)` | 37 |
+
+⇒ 13 个场景要发的请求在 Rust 侧**都有处理点**，不存在「发出去没人接、只能等超时」的显然缺陷（计数含注释/测试，只作存在性判断）。
