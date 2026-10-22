@@ -188,3 +188,7 @@ python -I -B tools/probe/mir2_probe.py ... --out E:/tmp/conformance/runs/w24-rus
 另外：`@kaiz` / `@chouma` 两侧都在等待窗口内没等到下一条 643（8s），但 drain 阶段都收到了
 （C# 在 `t≈12s`、Rust 在 `t≈4s`）——说明**庄家的应答慢于 3–8s**，等待窗口需要放宽或等特定帧，
 这属 `openmir2-openybdeal-host-wiring` 的窗口项（已挂卡）。
+
+**§12 补记（05:27–05:30）**：把 `@chouma` 的等待放宽到 15s 后，C# 这一跑**又没有** 643/14——选完之后只有 `10,41` 与一条 `53`（t≈18.5s）。
+⇒ 庄家 `@chouma` 支的**应答本身不稳定**（一次是 643+14，一次只有 53），在弄清 oracle 该支的真实应答前，
+`@kaiz/@chouma` 都不适合当判据；`dice_chain_auto.json` 暂留作探索用场景，不进首批。
