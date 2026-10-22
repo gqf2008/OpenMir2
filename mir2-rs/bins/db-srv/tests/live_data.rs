@@ -39,15 +39,13 @@ use sqlx::{MySqlPool, Row};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+// 无竞态端口 / 就绪门（`next_port()` 与 `game-svr/tests/support/mod.rs` 逐行同口径）。
+mod support;
+
 /// 测试账号（伪 LoginSrv 推的会话账号必须与请求一致，账号比较大小写敏感）。
 const ACCOUNT: &str = "mir2test6k";
 /// 会话号（测试自定，不依赖任何登录流程）。
 const SESSION: i32 = 6000;
-
-fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("取空闲端口失败");
-    l.local_addr().expect("取本地地址失败").port()
-}
 
 fn hex(b: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -68,13 +66,14 @@ fn fixture_dir(tag: &str) -> PathBuf {
 }
 
 fn write_conf(dir: &Path, gate_port: u16, server_port: u16, ids_port: u16) {
+    // 拍卖行面端口同样走原子候选段：`free_port` 的 TOCTOU 会让并行用例把它抢走。
+    let market_port = support::next_port();
     let body = format!(
         "[Setup]\nShowDebug=1\nServerAddr=127.0.0.1\nServerPort={server_port}\nGateAddr=0.0.0.0\nGatePort={gate_port}\n\
          ServerName=LegendOfMir2\nDenyChrName=1\nDELMaxLevel=30\nDynamicIPMode=0\n\n\
-         [Server]\nIDSAddr=127.0.0.1\nIDSPort={ids_port}\nMarketAddr=127.0.0.1\nMarketPort={}\n\n\
+         [Server]\nIDSAddr=127.0.0.1\nIDSPort={ids_port}\nMarketAddr=127.0.0.1\nMarketPort={market_port}\n\n\
          [DataBase]\nStoreage=MySQL\nConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_db;\n\n\
-         [DBClear]\nInterval=3000\n",
-        free_port()
+         [DBClear]\nInterval=3000\n"
     );
     std::fs::write(dir.join("dbsvr.conf"), body).expect("写 dbsvr.conf 失败");
 }
@@ -148,16 +147,6 @@ async fn fake_login_srv() -> (u16, Arc<AtomicBool>) {
         }
     });
     (port, accepted)
-}
-
-async fn wait_listen(port: u16) {
-    for _ in 0..100 {
-        if TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!("等端口 {port} 监听超时");
 }
 
 async fn wait_session_link(flag: &AtomicBool) {
@@ -345,8 +334,8 @@ async fn cleanup(pool: &MySqlPool, name: &str) {
 #[allow(clippy::too_many_lines)]
 async fn rust_dbsrv_6000_load_save_roundtrip() {
     let dir = fixture_dir("data");
-    let gate_port = free_port();
-    let server_port = free_port();
+    let gate_port = support::next_port();
+    let server_port = support::next_port();
     let (ids_port, accepted) = fake_login_srv().await;
     write_conf(&dir, gate_port, server_port, ids_port);
 
@@ -358,7 +347,13 @@ async fn rust_dbsrv_6000_load_save_roundtrip() {
 
     // 2) 起 Rust db-srv 并等 6000 监听 + LoginSrv 会话到位。
     let dbsrv = start_rust_dbsrv(&dir);
-    wait_listen(server_port).await;
+    // 就绪门（fail-closed）：6000 面 bind 成功才继续；未起来 ⇒ panic 并带全文日志。
+    support::gate_ready(
+        &dir.join("dbsrv.out.log"),
+        server_port,
+        Duration::from_secs(15),
+    )
+    .await;
     wait_session_link(&accepted).await;
 
     let mut sock = TcpStream::connect(("127.0.0.1", server_port))
