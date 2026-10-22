@@ -1,0 +1,10 @@
+{
+  "name": "combat_hit",
+  "description": "朝指定格子砍一刀：CM_HIT(3014) recog=目标X param=目标Y tag=方向 -> 等 SM_HIT(14)/SM_STRUCK(31)/SM_SYSMESSAGE(100)",
+  "required": ["target_x", "target_y", "hit_dir"],
+  "steps": [
+    {"send": {"ident": 3014, "recog": "target_x", "param": "target_y", "tag": "hit_dir"},
+     "note": "oracle: PlayObject.Message.cs CM_HIT..CM_FIREHIT 统一走 ClientHitXY(wIdent, nParam1=X, nParam2=Y, (byte)wParam=Dir)"},
+    {"wait_for": [14, 31, 100], "timeout_ms": 3000, "note": "SM_HIT 广播给观察者；SM_STRUCK 给受击者；打空时本节可能超时（fail-loud）"}
+  ]
+}

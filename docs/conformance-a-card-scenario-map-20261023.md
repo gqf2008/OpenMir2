@@ -317,15 +317,15 @@ python -I -B tools/conformance/compare_runs.py   --oracle E:/tmp/conformance/run
 | npc_click / king_*（固定 NPC/守卫/显示） | 14 | 有 | `npc_click.json`、`king_dialog.json`、`king_castle_war.json` |
 | merchant_dialog（商人/说词） | 3 | 有 | `merchant_dialog.json` |
 | bag_equip/eat_item/pickup_item（背包族） | 10 | 有 | `bag_equip.json`、`eat_item.json`、`pickup_item.json` |
-| GAP 战斗/受击 | 18 | **缺** | 需 `CM_HIT(3014)`→`SM_HIT(14)`/`SM_STRUCK(31)` 场景 + 同屏怪夹具 |
-| GAP 移动/AOI | 12 | **缺** | 需走位/推挤/AOI 相位场景（`SM_WALK`/`SM_TURN` 序列） |
+| 战斗/受击 | 18 | 有（草稿） | `combat_hit.json`：`CM_HIT(3014)` recog=X param=Y tag=Dir → 等 14/31/100；仍需同屏怪夹具 |
+| 移动/AOI | 12 | 有（草稿） | `move_walk.json`：`CM_WALK(3011)` recog=X param=Y → 等 11/13/10/100；AOI 相位与推挤仍缺 |
 | GAP 未归类 | 13 | **缺** | 名字不足以定族，须逐卡回读 |
 | GAP 技能/buff | 7 | **缺** | 需魔法/`SM_MAGICFIRE(638)`/buff 生命周期场景 |
 | GAP 行会/城堡 | 4 | **缺** | 需行会 NPC（`T138` 已有 `king_castle_war` 相邻支）+ 城堡实体夹具 |
 | GAP RNG/时钟 | 3 | **缺** | 需 `MIR2_RNG_SEED` 双侧流水账本（属 R 级夹具族） |
 | GAP 聊天 | 1 | **缺** | 需频道场景（`CM_SAY` 已可发，收件人集需断言） |
 
-覆盖：**37 / 95**（login 10 + NPC 14 + 商人 3 + 背包 10）；**缺口 58 张**，按族拆分如下。
+覆盖：**37 / 95 有可直接跑的场景**（login 10 + NPC 14 + 商人 3 + 背包 10）；战斗/受击 18、移动/AOI 12 已有草稿场景（`combat_hit.json`/`move_walk.json`，待窗口校验）；剩余 28 张（未归类 13 + 技能 7 + 行会城堡 4 + RNG 3 + 聊天 1）尚缺场景。
 
 - **GAP 战斗/受击（18）**：`monster-ref-drains`、`monster-walk-frames`、`mb7-monsters`、`mb2-monsters`、`mb5-monsters`、`monster-attack-hit-frame`、`monster-attack-cadence-lead`、`attacktarget-overrides` 等 18 张
 - **GAP 移动/AOI（12）**：`run-gap-mb4`、`run-gap-checkdupobj`、`movetomovingobject-quirk`、`aoi-verify-maptime`、`enter-map-cell-rejected-vs-oracle`、`enter-shift-loop`、`map-random-move-shift-loop`、`recall-slave-shift-live` 等 12 张
