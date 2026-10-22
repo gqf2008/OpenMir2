@@ -1664,7 +1664,10 @@ fn handle_gm_command(
         );
         return;
     };
-    let result = gmcmd::execute(&mut sg.gm, &host.gm_cfg, line);
+    let world_view = gmcmd::GmWorld {
+        guilds: host.guilds,
+    };
+    let result = gmcmd::execute(&mut sg.gm, &host.gm_cfg, &world_view, line);
     if let Some(note) = result.log_note {
         glog!(
             "DBG",
@@ -17378,6 +17381,7 @@ fn sim_loop(
                             colors: &colors,
                             gm_cfg: gmcmd::GmConfig {
                                 lock_human_login: enter_cfg.lock_human_login,
+                                ..gmcmd::GmConfig::default()
                             },
                             can_shout_level: enter_cfg.can_shout_msg_level,
                             registry: registry.as_ref(),
@@ -27875,6 +27879,17 @@ mod tests {
             }
         }
 
+        /// 按 **GM 权限 10** 发一条。oracle 现网 `Permission` 恒 0（设计件 §2），31 条本批命令
+        /// 全部不可达；这里显式构造，只为把「命令体命中时」的帧面钉住。
+        fn say_gm(&mut self, line: &str) -> Vec<Vec<u8>> {
+            self.sessions
+                .get_mut("aaa")
+                .expect("GmRig 恒有 aaa 会话")
+                .gm
+                .permission = 10;
+            self.say(line)
+        }
+
         /// 走**生产入口** [`handle_say`]（不是直接调 `gmcmd::execute`），收集本 tick 发出的帧。
         fn say(&mut self, line: &str) -> Vec<Vec<u8>> {
             let colors = MsgColors {
@@ -28032,6 +28047,194 @@ mod tests {
         let frames = rig.say("@");
         assert_eq!(frames.len(), 2);
         assert_eq!(sysmsg_of(&rig, &frames[0]).1, "未知命令:  ");
+    }
+
+    // ================== GM 命令批次 2/3（重载/管理 · 封禁名单 · 桩/测试，tier=L） ==================
+
+    /// 本批 30 条命令名（`@AddRobotPlay` 是 perm 0，不在此列）。
+    const BATCH2_COMMANDS: &[&str] = &[
+        // 封禁名单（9）
+        "-jid",
+        "DelDenyChrNameLogon",
+        "-jip",
+        "+jid",
+        "DenyChrNameLogon",
+        "+jip",
+        "+-jid",
+        "ShowDenyCharNameLogon",
+        "+-jip",
+        // 重载/管理（14）
+        "LoadAdmin",
+        "NpcScript",
+        "ReloadAbuse",
+        "重读GM",
+        "ReloadGuildAll",
+        "ReloadItemDB",
+        "ReloadGuild",
+        "重读公告",
+        "ReloadMagicDB",
+        "重读登陆",
+        "重读爆率",
+        "重读商人",
+        "重读机器人脚本",
+        "重读机器人配置",
+        // 桩/测试（7）
+        "Backstep",
+        "TestFire",
+        "TestGetBagItems",
+        "TestSpeedMode",
+        "TestStatus",
+        "UserCmd",
+        "FireBurn",
+    ];
+
+    /// 现网权限（0）下本批 30 条**全部**只回一条 `权限不够!!!`（Red 255/56），
+    /// 且都是「命中命令表」而不是未知命令双帧 —— 若某个名字写错，这里会变两条帧。
+    #[test]
+    fn gm_batch2_permission_gate_through_handle_say() {
+        let mut rig = GmRig::new();
+        assert_eq!(BATCH2_COMMANDS.len(), 30);
+        for name in BATCH2_COMMANDS {
+            let line = format!("@{name}");
+            let frames = rig.say(&line);
+            assert_eq!(frames.len(), 1, "{line} 应只回一条（命中命令表）");
+            let (param, text) = sysmsg_of(&rig, &frames[0]);
+            assert_eq!(param, 0x38FF, "{line} Red = MakeWord(255,56)");
+            assert_eq!(text, "权限不够!!!", "{line}");
+        }
+    }
+
+    /// 封禁名单族 9 条（权限 10）：文本逐字节 + `@params[3]` 越界零帧。
+    #[test]
+    fn gm_batch2_deny_family_through_handle_say() {
+        let mut rig = GmRig::new();
+        let cases: &[(&str, u16, &str)] = &[
+            ("@-jid", 0x38FF, "命令格式: @-jid 登录帐号"),
+            ("@-jid acct", 0xFFDB, "acct没有被禁止登录。"),
+            (
+                "@DelDenyChrNameLogon",
+                0x38FF,
+                "命令格式: @DelDenyChrNameLogon 人物名称",
+            ),
+            ("@DelDenyChrNameLogon 张三", 0xFFDB, "张三没有被禁止登录。"),
+            ("@-jip", 0x38FF, "命令格式: @-jip IP地址"),
+            ("@-jip 1.2.3.4", 0xFFDB, "1.2.3.4没有被禁止登录。"),
+            ("@+jid", 0x38FF, "命令格式: @+jid 登录帐号 是否永久封(0,1)"),
+            ("@+jid acct 1", 0xFFDB, "acct已加入禁止登录帐号列表"),
+            ("@+jid acct 0", 0xFFDB, "acct已加入临时禁止登录帐号列表"),
+            (
+                "@DenyChrNameLogon",
+                0x38FF,
+                "命令格式: @DenyChrNameLogon 人物名称 是否永久封(0,1)",
+            ),
+            ("@DenyChrNameLogon 张三 1", 0xFFDB, "张三已加入禁止人物列表"),
+            ("@+jip", 0x38FF, "命令格式: @+jip IP地址 是否永久封(0,1)"),
+            ("@+jip 1.2.3.4", 0xFFDB, "1.2.3.4已加入临时禁止登录IP列表"),
+            // 4 参才轮到 `@params[3]`。
+            ("@+jip 1.2.3.4 a b 1", 0xFFDB, "1.2.3.4已加入禁止登录IP列表"),
+            ("@+-jid", 0xFFDB, "禁止登录帐号列表为空。"),
+            ("@ShowDenyCharNameLogon", 0xFFDB, "禁止登录角色列表为空。"),
+            ("@+-jip", 0xFFDB, "禁止登录角色列表为空。"),
+        ];
+        for (line, param, text) in cases {
+            let frames = rig.say_gm(line);
+            assert_eq!(frames.len(), 1, "{line} 一帧");
+            let (got_param, got_text) = sysmsg_of(&rig, &frames[0]);
+            assert_eq!(got_param, *param, "{line}");
+            assert_eq!(&got_text, text, "{line}");
+        }
+        // 2/3 参 ⇒ `@params[3]` 越界（catch 吞）⇒ 零帧。
+        for line in ["@+jip 1.2.3.4 a", "@+jip 1.2.3.4 a b"] {
+            assert!(rig.say_gm(line).is_empty(), "{line} 应零帧");
+        }
+    }
+
+    /// 重载/管理族 14 条（权限 10）：文本逐字节 + 零帧项。
+    #[test]
+    fn gm_batch2_reload_family_through_handle_say() {
+        let mut rig = GmRig::new();
+        let cases: &[(&str, u16, &str)] = &[
+            ("@LoadAdmin", 0xFFDB, "管理员列表重新加载成功..."),
+            ("@重读GM", 0xFFDB, "管理员列表重新加载成功..."),
+            ("@ReloadGuildAll", 0x38FF, "重新加载行会信息完成."),
+            ("@ReloadItemDB", 0xFFDB, "物品数据库重新加载完成。"),
+            ("@ReloadMagicDB", 0xFFDB, "魔法数据库重新加载完成。"),
+            ("@ReloadGuild", 0x38FF, "命令格式: @ReloadGuild 行会名称"),
+            ("@ReloadGuild 血盟", 0x38FF, "未找到行会血盟!!!"),
+            ("@重读公告", 0xFFDB, "重新加载公告设置信息完成。"),
+            ("@重读爆率", 0xFFDB, "怪物爆物品列表重加载完成..."),
+            ("@重读机器人脚本", 0xFFDB, "重新加载机器人配置完成..."),
+            ("@重读机器人配置", 0xFFDB, "重新加载机器人专用脚本完成..."),
+        ];
+        for (line, param, text) in cases {
+            let frames = rig.say_gm(line);
+            assert_eq!(frames.len(), 1, "{line} 一帧");
+            let (got_param, got_text) = sysmsg_of(&rig, &frames[0]);
+            assert_eq!(got_param, *param, "{line}");
+            assert_eq!(&got_text, text, "{line}");
+        }
+        // `@重读登陆`：两条 Green，顺序固定（登录脚本 → 功能脚本）。
+        let frames = rig.say_gm("@重读登陆");
+        assert_eq!(frames.len(), 2);
+        let (param, text) = sysmsg_of(&rig, &frames[0]);
+        assert_eq!(param, 0xFFDB);
+        assert_eq!(text, "重新加载登录脚本完成...");
+        let (param, text) = sysmsg_of(&rig, &frames[1]);
+        assert_eq!(param, 0xFFDB);
+        assert_eq!(text, "重新加载功能脚本完成...");
+        // 零帧：空体 / 整段注释。
+        for line in ["@ReloadAbuse", "@NpcScript", "@重读商人"] {
+            assert!(rig.say_gm(line).is_empty(), "{line} 应零帧");
+        }
+    }
+
+    /// 桩/测试族 7 条（权限 10）：文本逐字节、翻转副作用、数组越界零帧。
+    #[test]
+    fn gm_batch2_stub_family_through_handle_say() {
+        let mut rig = GmRig::new();
+        // `@TestGetBagItems`：`string.Format` 无 `{n}` 占位符 ⇒ 原文照发（Blue）。
+        let frames = rig.say_gm("@TestGetBagItems");
+        assert_eq!(frames.len(), 1);
+        let (param, text) = sysmsg_of(&rig, &frames[0]);
+        assert_eq!(param, 0xFCFB, "Blue = MakeWord(251,252)");
+        assert_eq!(text, "DC:%d SC:%d MC:%d DURA:%d");
+        // `@TestSpeedMode`：翻转 + Red。
+        let frames = rig.say_gm("@TestSpeedMode");
+        assert_eq!(
+            sysmsg_of(&rig, &frames[0]),
+            (0x38FF, "开启速度测试模式".into())
+        );
+        assert!(rig.sessions["aaa"].gm.test_speed_mode);
+        let frames = rig.say_gm("@TestSpeedMode");
+        assert_eq!(
+            sysmsg_of(&rig, &frames[0]),
+            (0x38FF, "关闭速度测试模式".into())
+        );
+        assert!(!rig.sessions["aaa"].gm.test_speed_mode);
+        // `@TestStatus`：合法下标一帧；越界零帧。
+        let frames = rig.say_gm("@TestStatus 3 60");
+        assert_eq!(frames.len(), 1);
+        let (param, text) = sysmsg_of(&rig, &frames[0]);
+        assert_eq!(param, 0xFFDB);
+        assert_eq!(text, "状态编号:3 时间长度: 60 秒");
+        for line in ["@TestStatus 15 1", "@TestStatus -1 1"] {
+            assert!(rig.say_gm(line).is_empty(), "{line} 应零帧（数组越界）");
+        }
+        // `@FireBurn`：任一参数 0 ⇒ Red 帮助（Help 为 null ⇒ 尾随空格）。
+        let frames = rig.say_gm("@FireBurn 1 0 1");
+        assert_eq!(frames.len(), 1);
+        let (param, text) = sysmsg_of(&rig, &frames[0]);
+        assert_eq!(param, 0x38FF);
+        assert_eq!(text, "命令格式: @FireBurn ");
+        // 零帧：事件队列宿主 / 空体。
+        for line in [
+            "@TestFire 3 1 5 10",
+            "@UserCmd anylabel",
+            "@Backstep 3 5",
+            "@FireBurn 1 1 1",
+        ] {
+            assert!(rig.say_gm(line).is_empty(), "{line} 应零帧");
+        }
     }
 
     /// 在线登记在**进世界成功**时落坐标，断线/踢旧时被 `online_take` 拿走（名字精确匹配）。
