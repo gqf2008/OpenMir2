@@ -38,3 +38,10 @@ Leader 合并时按 `TIER-POLICY.md`：R 级必须有真机证据或显式 `wind
   （`<git-dir>/worktrees/<name>/walgit/identity`，一个 worktree = 一个身份 = 一把 Ed25519 私钥）；
   删掉它等于抹掉该 principal 的身份与可重放性。
 - 新车道优先复用身份匹配的既有 worktree，而不是重建。
+
+## 身份治理（Leader 2026-10-23 裁决）
+
+- `openmir2-reviewer-5` 的唯一归属 worktree = `E:/tmp/wt-reviewer-5`；其他位置签出的 reviewer-5 视为历史，**不计入合并规则的 approve 数**。
+- **主检出** `.git/walgit/identity` 已由 reviewer-5 重绑为 `openmir2-orchestrator`（Leader），旧文件备份 `.git/walgit/identity.bak-reviewer5`；此后从主检出默认签名 = Leader。
+- 每个车道：worktree 身份 = 执行者 principal；Leader 只签 orchestrator；review 只能由 reviewer-3 / reviewer-6 出；合并只删分支、保留 worktree。
+- 定规前由 reviewer-5 代签的 card_claim（`openmir2-gm-batch-4-numeric`、`openmir2-dualrun-triage-enterworld-frames`）保留留痕但不作认领依据，进复核前须由实际车道用自己的 principal 重发 status。
