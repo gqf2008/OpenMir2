@@ -14549,7 +14549,13 @@ fn drain_special_ref_msgs(
 /// - `RM_HIT`（`:1610`）⇒ `SM_HIT`（`AnimalObject.Attack` 的 `SendAttackMsg` / BigHeart `:20`）；
 /// - `RM_DIGUP`（`:1890-1899`）⇒ `SM_DIGUP`（`GetFeature(this)` + `CharStatus` 尾）；
 /// - `RM_DIGDOWN`（`:1900-1903`）⇒ `SM_DIGDOWN`（header-only）；
-/// - `RM_10205`（`:1929`）⇒ `SM_716`（header-only，参数原样）。
+/// - `RM_10205`（`:1929`）⇒ `SM_716`（header-only，参数原样）；
+/// - `RM_SPELL`（`:1454-1459`）⇒ `SM_SPELL`（T-148，`FireballMonster.Run`）；
+/// - `RM_MAGICFIRE`（`:1788-1793`）⇒ `SM_MAGICFIRE`（T-148，`FireballMonster.Run`）；
+/// - `RM_SPACEMOVE_FIRE`（`:1955-1966`）⇒ `SM_SPACEMOVE_HIDE(800)`（T-134，
+///   `TeleMonster.Run`/`Khazard.Run`）；
+/// - `RM_CHARSTATUSCHANGED`（`:1845-1846`）⇒ `SM_CHARSTATUSCHANGED(657)`（T-135，
+///   `StatusChanged()`；`Series` 是**每个收件人自己**的 `HitSpeed` ⇒ 逐收件人重编码）。
 ///
 /// `self_only`（`ObMode || FixedHideMode`）时 oracle 只把消息投进**自己**的队列
 /// （`BaseObject.Message.cs:390-393`）；怪物没有客户端 ⇒ 不产帧。
@@ -14593,6 +14599,32 @@ fn drain_monster_ref_msgs(
                         body: body.clone(),
                     });
                 }
+            }
+            continue;
+        }
+        // **T-135**：`StatusChanged()`（`BaseObject.cs:1514` 的
+        // `SendRefMsg(RM_CHARSTATUSCHANGED, 0, CharStatus, 0, 0, "")`）⇒
+        // `SM_CHARSTATUSCHANGED(657)`（`PlayObject.Message.cs:1845-1846`）：
+        // `SendDefMessage(SM_CHARSTATUSCHANGED, ActorId, LoWord(nParam1), HiWord(nParam1),
+        // this.HitSpeed)`。末参是**每个收件人自己的** `HitSpeed`（`this` = 收件人
+        // `PlayObject`）⇒ 不能一条 body 广播，逐收件人重编码（与 [`push_charstatuschanged`]
+        // 同口径）。`RM_CHARSTATUSCHANGED` 的处理器**无自己守卫**；收件人集合已由
+        // `send_ref_msg` 在发帧时刻快照（怪物 sender ⇒ 只有 `Race == Play` 的格扫命中项）。
+        if m.ident == mir2_world::monai::RM_CHARSTATUSCHANGED {
+            for target_id in &m.recipients {
+                let Some(t) = online.iter().find(|e| e.actor_id == *target_id) else {
+                    continue;
+                };
+                let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "657 怪物状态帧下行")
+                else {
+                    continue;
+                };
+                let hit_speed = world.entities.get(*target_id).map_or(0, |e| e.hit_speed);
+                let body = smframe_ext::sm_charstatuschanged(m.actor_id, m.n_param1, hit_speed);
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: t.socket,
+                    body,
+                });
             }
             continue;
         }
@@ -14675,6 +14707,43 @@ fn drain_monster_ref_msgs(
                     &downlink::char_desc(feature, status),
                 );
                 alive
+            }
+            // **T-148**：`FireballMonster.Run`（`FireballMonster.cs:39`）的
+            // `SendRefMsg(RM_SPELL, 48, TargetCret.CurrX, TargetCret.CurrY, 48, "")` ⇒
+            // `SM_SPELL(17)`（`PlayObject.Message.cs:1454-1459`）：
+            // 头 `(ActorId, x=nParam1, y=nParam2, Series=wParam)` + 尾 `nParam3.ToString()`
+            // （MagicId 的 ASCII 原文，**不再 Encode**）。oracle 有 `ActorId != 自己` 守卫；
+            // 怪物 sender 无客户端且收件人只含玩家 ⇒ 无自帧。
+            // （world 侧唯一发帧点 `wParam = 48`，低 8 位即全值；`sm_spell` 的 `effect: u8`
+            // 与 oracle `(ushort)wParam` 在该发帧点逐字节相同。）
+            mir2_world::monai::RM_SPELL => smframe::sm_spell(
+                m.actor_id,
+                wire_coord(m.n_param1),
+                wire_coord(m.n_param2),
+                m.w_param as u8,
+                m.n_param3 as u16,
+            ),
+            // **T-148**：`FireballMonster.Run`（`FireballMonster.cs:40`）的
+            // `SendRefMsg(RM_MAGICFIRE, 0, MakeWord(2, 48), MakeLong(tx, ty), targetId, "")`
+            // ⇒ `SM_MAGICFIRE(638)`（`PlayObject.Message.cs:1788-1793`）：
+            // 头 `(ActorId, x=LoWord(nParam2), y=HiWord(nParam2), Series=nParam1)` + 尾
+            // `EncodeBuffer(BitConverter.GetBytes(nParam3), 4)`（targetId 的 4B 小端再 EDCode）。
+            // `nParam1` 按 oracle `MakeWord(LoByte, HiByte)` 拆回 `(EffectType, Effect)`；
+            // **无自己守卫**（与 `RM_SPELL` 不同），收件人原样转发。
+            mir2_world::monai::RM_MAGICFIRE => smframe::sm_magicfire(
+                m.actor_id,
+                smframe::lo_word(m.n_param2),
+                smframe::hi_word(m.n_param2),
+                m.n_param1 as u8,
+                (m.n_param1 >> 8) as u8,
+                m.n_param3,
+            ),
+            // **T-134**：`TeleMonster.Run`（`TeleMonster.cs:20`）与 `Khazard.Run`
+            // （`Khazard.cs:28/42`，由 `TargetCret` 发）的
+            // `SendRefMsg(RM_SPACEMOVE_FIRE, 0, 0, 0, 0, "")` ⇒ `SM_SPACEMOVE_HIDE(800)`
+            // （`PlayObject.Message.cs:1955-1966`）：头 `(ActorId, 0, 0, 0)`，**无尾**。
+            mir2_world::monai::RM_SPACEMOVE_FIRE => {
+                smframe::sm_spacemove_hide(mir2_protocol::messages::SM_SPACEMOVE_HIDE, m.actor_id)
             }
             // 未建模 ident：不猜映射（登记为余量）。
             _ => continue,
@@ -46637,6 +46706,415 @@ mod tests {
             "SM_ALIVE：头(X,Y,Dir) + 8B CharDesc"
         );
         assert!(world.pending_monster_ref_msgs.is_empty());
+    }
+
+    /// **T-148**：怪物侧 `RM_SPELL`/`RM_MAGICFIRE` 的宿主排水。
+    ///
+    /// 世界侧走**生产分派** `mir2_world::monai::monster_class_run`（race 215 =
+    /// `FireballMonster`，`FireballMonster.cs:39-40`）产出两帧；宿主走生产
+    /// [`drain_monster_ref_msgs`]。断言：① 两帧逐字节 = `smframe` 口径
+    /// （`SM_SPELL` 头 `(ActorId, x=nParam1, y=nParam2, Series=wParam)` + `nParam3.ToString()`
+    /// ASCII 尾；`SM_MAGICFIRE` 头 `(ActorId, LoWord(nParam2), HiWord(nParam2),
+    /// MakeWord(EffectType, Effect))` + `Encode(4B target)` 尾）；② 收件人 = 发帧坐标 ±12
+    /// 内的玩家（目标 + 前格观察者），界外玩家 0 帧、同格怪物 0 帧。
+    ///
+    /// 牙：删 `RM_SPELL` 支 ⇒ 落 `_ => continue` ⇒ 帧数/字节断言红；把 `RM_MAGICFIRE` 的
+    /// `lo_word/hi_word(nParam2)` 对调或 targetId 传 0 ⇒ 头/尾断言红。
+    #[test]
+    fn t148_monster_spell_and_magicfire_on_production_drain() {
+        use mir2_world::{Entity, ACTOR_RACE_PLAY};
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 100_000;
+        // `fireball_setup` 等价造景（world 侧 R19 用例同参）：怪 (10,10)、DC=10..10、
+        // AntiMagic>0、SpellTick=0、NextHitTime=2000；Target=(12,10)、前格 pose=(11,10)。
+        let mut m = Entity::new(0, "火球".to_string(), 10, 10);
+        m.race = 215;
+        m.hp = 1000;
+        m.max_hp = 1000;
+        m.dc = 10 | (10 << 8);
+        m.anti_magic = 1;
+        m.spell_tick = 0;
+        m.ai.next_hit_time = 2_000;
+        m.ai.target_focus_tick = 100_000;
+        m.ai.target_x = 12;
+        m.ai.target_y = 10;
+        m.ai.dir = 2; // `Direction.Right`
+        let mid = world.add_entity(m);
+        assert!(world.enter_world(mid));
+        let mut target = Entity::new(0, "目标".to_string(), 12, 10);
+        target.race = ACTOR_RACE_PLAY;
+        target.hp = 500;
+        target.max_hp = 500;
+        let tid = world.add_entity(target);
+        assert!(world.enter_world(tid));
+        let mut pose = Entity::new(0, "前格".to_string(), 11, 10);
+        pose.race = ACTOR_RACE_PLAY;
+        pose.hp = 500;
+        pose.max_hp = 500;
+        pose.mac = 5 | (5 << 8);
+        let pid = world.add_entity(pose);
+        assert!(world.enter_world(pid));
+        let mut far = Entity::new(0, "界外".to_string(), 40, 40);
+        far.race = ACTOR_RACE_PLAY;
+        far.hp = 500;
+        far.max_hp = 500;
+        let fid = world.add_entity(far);
+        assert!(world.enter_world(fid));
+        let mut watcher = Entity::new(0, "同格怪".to_string(), 13, 10);
+        watcher.race = 60;
+        watcher.hp = 100;
+        watcher.max_hp = 100;
+        let wid = world.add_entity(watcher);
+        assert!(world.enter_world(wid));
+        world.entities.get_mut(mid).unwrap().ai.target_creature = Some(tid);
+
+        assert!(
+            mir2_world::monai::monster_class_run(&mut world, mid).is_some(),
+            "race 215 必须走 FireballMonster 的生产分派"
+        );
+        let idents: Vec<u16> = world
+            .pending_monster_ref_msgs
+            .iter()
+            .map(|f| f.ident)
+            .collect();
+        assert_eq!(
+            idents,
+            vec![mir2_world::monai::RM_SPELL, mir2_world::monai::RM_MAGICFIRE],
+            "world 侧先 RM_SPELL 后 RM_MAGICFIRE"
+        );
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".to_string(),
+                chr_name: "目标".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: tid,
+            },
+            OnlineEntry {
+                account: "b".to_string(),
+                chr_name: "前格".to_string(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 6,
+                actor_id: pid,
+            },
+            OnlineEntry {
+                account: "c".to_string(),
+                chr_name: "界外".to_string(),
+                session_id: 3,
+                gate_idx: 0,
+                socket: 7,
+                actor_id: fid,
+            },
+        ];
+        let displays = downlink::DisplayTable::new();
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+
+        let mut by_socket: HashMap<i32, Vec<Vec<u8>>> = HashMap::new();
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, socket } = ev {
+                by_socket.entry(socket).or_default().push(body);
+            }
+        }
+        let mut sockets: Vec<i32> = by_socket.keys().copied().collect();
+        sockets.sort_unstable();
+        assert_eq!(
+            sockets,
+            vec![5, 6],
+            "收件人 = ±12 内两名玩家（目标 + 前格）；界外玩家/同格怪（race 60）0 帧"
+        );
+        let want_spell = smframe::sm_spell(mid, 12, 10, 48, 48);
+        let want_fire = smframe::sm_magicfire(mid, 12, 10, 2, 48, tid);
+        for socket in [5, 6] {
+            assert_eq!(
+                by_socket[&socket],
+                vec![want_spell.clone(), want_fire.clone()],
+                "socket {socket}：SM_SPELL → SM_MAGICFIRE 逐字节"
+            );
+        }
+        // 逐字段钉 oracle（不依赖 `smframe` 自证）：`SM_SPELL` 头 + ASCII 尾。
+        let spell = &by_socket[&5][0];
+        assert_eq!(
+            i32::from_le_bytes([spell[0], spell[1], spell[2], spell[3]]),
+            mid,
+            "Recog = processMsg.ActorId"
+        );
+        assert_eq!(
+            u16::from_le_bytes([spell[4], spell[5]]),
+            mir2_protocol::messages::SM_SPELL
+        );
+        assert_eq!(
+            u16::from_le_bytes([spell[6], spell[7]]),
+            12,
+            "Param = nParam1"
+        );
+        assert_eq!(
+            u16::from_le_bytes([spell[8], spell[9]]),
+            10,
+            "Tag = nParam2"
+        );
+        assert_eq!(
+            u16::from_le_bytes([spell[10], spell[11]]),
+            48,
+            "Series = wParam（Effect）"
+        );
+        assert_eq!(
+            &spell[12..],
+            b"48",
+            "尾 = nParam3.ToString()（MagicId ASCII）"
+        );
+        // `SM_MAGICFIRE`：LoWord/HiWord(nParam2) + MakeWord(EffectType, Effect) + 4B 尾。
+        let fire = &by_socket[&5][1];
+        assert_eq!(
+            u16::from_le_bytes([fire[4], fire[5]]),
+            mir2_protocol::messages::SM_MAGICFIRE
+        );
+        assert_eq!(
+            u16::from_le_bytes([fire[6], fire[7]]),
+            12,
+            "x = LoWord(nParam2)"
+        );
+        assert_eq!(
+            u16::from_le_bytes([fire[8], fire[9]]),
+            10,
+            "y = HiWord(nParam2)"
+        );
+        assert_eq!(
+            u16::from_le_bytes([fire[10], fire[11]]),
+            mir2_shared::hutil::make_word(2, 48),
+            "Series = MakeWord(EffectType, Effect)"
+        );
+        assert_eq!(
+            &fire[12..],
+            &mir2_protocol::edcode::encode(&tid.to_le_bytes())[..],
+            "尾 = EncodeBuffer(GetBytes(nParam3), 4)"
+        );
+        assert!(
+            world.pending_monster_ref_msgs.is_empty(),
+            "排空后队列必须为空"
+        );
+    }
+
+    /// **T-134**：`RM_SPACEMOVE_FIRE` 的宿主排水（`TeleMonster.cs:20` 自发的支）。
+    ///
+    /// 世界侧走生产分派 `monster_class_run`（race 203）；发帧后怪立即 `SpaceMove` 到目标格
+    /// ⇒ 排水必须按**发帧时刻**的收件人快照送达（目标/观察者各一条 `SM_SPACEMOVE_HIDE(800)`）。
+    ///
+    /// 牙：删 `RM_SPACEMOVE_FIRE` 支 ⇒ 0 帧（红）；把 ident 改成 `SM_SPACEMOVE_HIDE2(806)` ⇒
+    /// 逐字节断言红；收件人重算/排除 ⇒ 观察者缺失（红）。
+    #[test]
+    fn t134_spacemove_fire_on_production_drain() {
+        use mir2_world::{Entity, ACTOR_RACE_PLAY};
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 100_000;
+        let mut m = Entity::new(0, "瞬移怪".to_string(), 10, 10);
+        m.race = 203; // `TeleMonster`
+        let mid = world.add_entity(m);
+        assert!(world.enter_world(mid));
+        let mut p = Entity::new(0, "目标".to_string(), 13, 10);
+        p.race = ACTOR_RACE_PLAY;
+        p.hp = 100;
+        p.max_hp = 100;
+        let pid = world.add_entity(p);
+        assert!(world.enter_world(pid));
+        let mut o = Entity::new(0, "观察者".to_string(), 5, 10);
+        o.race = ACTOR_RACE_PLAY;
+        o.hp = 100;
+        o.max_hp = 100;
+        let oid = world.add_entity(o);
+        assert!(world.enter_world(oid));
+        let mut far = Entity::new(0, "界外".to_string(), 40, 40);
+        far.race = ACTOR_RACE_PLAY;
+        far.hp = 100;
+        far.max_hp = 100;
+        let fid = world.add_entity(far);
+        assert!(world.enter_world(fid));
+        {
+            let a = &mut world.entities.get_mut(mid).unwrap().ai;
+            a.target_creature = Some(pid);
+            a.target_x = 0;
+            a.target_y = 0; // 字段错位 ⇒ |10-0| > 5 触发瞬移
+            a.search_enemy_tick = 100_000;
+        }
+
+        assert!(mir2_world::monai::monster_class_run(&mut world, mid).is_some());
+        let frame = world
+            .pending_monster_ref_msgs
+            .iter()
+            .find(|f| f.ident == mir2_world::monai::RM_SPACEMOVE_FIRE)
+            .expect("TeleMonster 必须产 RM_SPACEMOVE_FIRE");
+        assert_eq!(frame.actor_id, mid, "`this.SendRefMsg` ⇒ 发帧者是怪自己");
+        assert_eq!(
+            (
+                world.entities.get(mid).unwrap().x,
+                world.entities.get(mid).unwrap().y
+            ),
+            (13, 10),
+            "发帧后立即 SpaceMove 到目标当前格（排水仍须按快照送达）"
+        );
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".to_string(),
+                chr_name: "目标".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: pid,
+            },
+            OnlineEntry {
+                account: "b".to_string(),
+                chr_name: "观察者".to_string(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 6,
+                actor_id: oid,
+            },
+            OnlineEntry {
+                account: "c".to_string(),
+                chr_name: "界外".to_string(),
+                session_id: 3,
+                gate_idx: 0,
+                socket: 7,
+                actor_id: fid,
+            },
+        ];
+        let displays = downlink::DisplayTable::new();
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+        let mut socks = Vec::new();
+        let want = smframe::sm_spacemove_hide(mir2_protocol::messages::SM_SPACEMOVE_HIDE, mid);
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, socket } = ev {
+                assert_eq!(body, want, "SM_SPACEMOVE_HIDE：头 (ActorId,0,0,0)，无尾");
+                socks.push(socket);
+            }
+        }
+        socks.sort_unstable();
+        assert_eq!(socks, vec![5, 6], "±12 内玩家各一条；界外玩家 0 帧");
+    }
+
+    /// **T-135**：`RM_CHARSTATUSCHANGED` 的宿主排水——`Series` 是**每个收件人自己**的
+    /// `HitSpeed`（`PlayObject.Message.cs:1845-1846` 的 `this.HitSpeed`）。
+    ///
+    /// 世界侧走生产分派 `monster_class_run`（race 210 = `FrostTiger`：`MagMakePrivateTransparent`
+    /// 收尾的 `StatusChanged()`）。两名玩家 `hit_speed` 不同（7 / 13）⇒ 两条帧只差 `Series`。
+    ///
+    /// 牙：把 `hit_speed` 改成常数 0（单 body 广播）⇒ 第二条帧的 `Series` 断言红；删
+    /// 10139 支 ⇒ 0 帧（红）；`LoWord/HiWord(nParam1)` 对调 ⇒ 头断言红。
+    #[test]
+    fn t135_charstatuschanged_per_recipient_hit_speed_on_production_drain() {
+        use mir2_world::{Entity, ACTOR_RACE_PLAY};
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 100_000;
+        let mut tiger = Entity::new(0, "霜虎".to_string(), 10, 10);
+        tiger.race = 210; // `FrostTiger`
+        let tid = world.add_entity(tiger);
+        assert!(world.enter_world(tid));
+        let mut p1 = Entity::new(0, "甲".to_string(), 11, 10);
+        p1.race = ACTOR_RACE_PLAY;
+        p1.hit_speed = 7;
+        let p1id = world.add_entity(p1);
+        assert!(world.enter_world(p1id));
+        let mut p2 = Entity::new(0, "乙".to_string(), 12, 10);
+        p2.race = ACTOR_RACE_PLAY;
+        p2.hit_speed = 13;
+        let p2id = world.add_entity(p2);
+        assert!(world.enter_world(p2id));
+        let mut far = Entity::new(0, "界外".to_string(), 40, 40);
+        far.race = ACTOR_RACE_PLAY;
+        far.hit_speed = 99;
+        let fid = world.add_entity(far);
+        assert!(world.enter_world(fid));
+        world.entities.get_mut(tid).unwrap().ai.search_enemy_tick = 100_000;
+
+        assert!(mir2_world::monai::monster_class_run(&mut world, tid).is_some());
+        let status = world.entities.get(tid).unwrap().char_status;
+        let frame = world
+            .pending_monster_ref_msgs
+            .iter()
+            .find(|f| f.ident == mir2_world::monai::RM_CHARSTATUSCHANGED)
+            .expect("`StatusChanged()` 必须产 RM_CHARSTATUSCHANGED");
+        assert_eq!(frame.actor_id, tid, "StatusChanged 由霜虎自己发");
+        assert_eq!(frame.n_param1, status, "nParam1 = 收尾后的 CharStatus");
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".to_string(),
+                chr_name: "甲".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: p1id,
+            },
+            OnlineEntry {
+                account: "b".to_string(),
+                chr_name: "乙".to_string(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 6,
+                actor_id: p2id,
+            },
+            OnlineEntry {
+                account: "c".to_string(),
+                chr_name: "界外".to_string(),
+                session_id: 3,
+                gate_idx: 0,
+                socket: 7,
+                actor_id: fid,
+            },
+        ];
+        let displays = downlink::DisplayTable::new();
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+        let mut by_socket: HashMap<i32, Vec<u8>> = HashMap::new();
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, socket } = ev {
+                assert!(by_socket.insert(socket, body).is_none(), "每收件人恰一条");
+            }
+        }
+        let mut sockets: Vec<i32> = by_socket.keys().copied().collect();
+        sockets.sort_unstable();
+        assert_eq!(sockets, vec![5, 6], "±12 内两名玩家各一条；界外玩家 0 帧");
+        assert_eq!(
+            by_socket[&5],
+            smframe_ext::sm_charstatuschanged(tid, status, 7),
+            "Series = 收件人甲自己的 HitSpeed(7)"
+        );
+        assert_eq!(
+            by_socket[&6],
+            smframe_ext::sm_charstatuschanged(tid, status, 13),
+            "Series = 收件人乙自己的 HitSpeed(13)（不是发送者/常数）"
+        );
+        let body = &by_socket[&5];
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            mir2_protocol::messages::SM_CHARSTATUSCHANGED
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[6], body[7]]),
+            smframe::lo_word(status),
+            "Param = LoWord(nParam1)"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[8], body[9]]),
+            smframe::hi_word(status),
+            "Tag = HiWord(nParam1)"
+        );
+        assert_eq!(
+            i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            tid,
+            "Recog = processMsg.ActorId"
+        );
     }
 
     /// **复验 MB-1 F1 回归**：`ComeDown` 先发 `RM_DIGDOWN` 再置 `FixedHideMode=true`；
