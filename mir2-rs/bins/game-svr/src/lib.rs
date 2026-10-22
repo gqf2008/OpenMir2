@@ -21840,8 +21840,10 @@ mod tests {
 
     /// **判据（卡 `openmir2-npc-hit-frames`）**：`SM_HIT(14)` 必须由世界侧**真产生**的
     /// `npc_hits`/`merchant_hits` 驱动；收件人集合与 oracle `SendRefMsg`
-    /// （`BaseObject.Message.cs:383-473`）同口径——`RM_HIT` 只发给 `Race == Play`，
-    /// **NPC 自己既不产帧也不收帧**。
+    /// （`BaseObject.Message.cs:383-473`）同口径——`RM_HIT` 只发给 `Race == Play`：
+    /// 登记进在线表的非 Play actor 既不是 `RM_HIT` 收件人，也不会因自身受击而下发帧；
+    /// NPC 只作发帧者、不作收件人。收件人残余见 whitelist D-13 / T-154 残余④
+    /// （500ms `VisibleHumanList` 缓存、非 Play 的 `WantRefMsg` 名单未建模）。
     ///
     /// 链路：`World::npc_tick` → `mir2-rs/crates/world/src/npc.rs`（`guild_official_run_body`：
     /// `GuildOfficial.cs:39-53` 的 `Random(40)==0 ⇒ TurnTo(RandomByte(8))`，否则
@@ -21850,12 +21852,13 @@ mod tests {
     ///
     /// r5 抓包 `E:/tmp/window/r5/s2c/capture.jsonl` 的 seq 40/53/59
     /// `SM_HIT(recog=132, param=29, tag=32, series=6)`（比奇国王）正是该分支命中时产出的
-    /// **oracle 合法帧**（`PlayObject.Message.cs:1434-1441`）；C# r3 抓包窗口内没有，只因两侧
-    /// RNG 流不同（C# 生产 `new Random()` 无种子，whitelist D-3/D-7）⇒ 登记 D-13，
+    /// **oracle 合法帧**（`PlayObject.Message.cs:1434-1441`），与 `GuildOfficial.Run` 命中支的
+    /// RNG 流一致；但 **C# 侧尚无正面样本**（r3 cking 27.8s 0 条，期望≈2.2，P(0)≈11%；
+    /// 两侧各自 `new Random()` 无种子播种，whitelist D-3/D-7）⇒ 待 D-13 窗口项#1，
     /// **既不是本仓多发了帧，也不得因此抑制该分支**。
     ///
     /// 牙（红检）：① 让 `drain_npc_merchant_hits` 无视 `rec`（例如对本图每个固定 NPC 都发）
-    /// ⇒「空记录 ⇒ 0 帧」断言红；② 去掉 `mir2-rs/bins/game-svr/src/chat.rs` 的
+    /// ⇒「空记录连抽两次 ⇒ 0 帧且通道为空」断言红；② 去掉 `mir2-rs/bins/game-svr/src/chat.rs` 的
     /// `hear_targets_at` 里 `race == ACTOR_RACE_PLAY` 过滤 ⇒ 已登记进在线表的 NPC 会收到一条
     /// ⇒「只有玩家收」断言红。
     #[test]
@@ -21942,14 +21945,21 @@ mod tests {
         });
 
         // ① 本条 tick 世界**没有** hit ⇒ 一刀都不发（防「多发了 oracle 不会发的帧」）。
+        // `TickRecord::default()` 两列为空是构造事实，不单列断言；要咬的是 drain 的
+        // 「按 rec 发帧」契约：空记录**连抽两次**都必须零帧，且通道里始终不得出现任何帧
+        // （若 drain 改成按本图固定 NPC 遍历发帧，计数/通道两条断言至少一条红）。
         let empty = mir2_world::TickRecord::default();
-        assert!(empty.npc_hits.is_empty() && empty.merchant_hits.is_empty());
-        assert_eq!(
-            drain_npc_merchant_hits(&empty, &world, &displays, &online, &gates),
-            0,
-            "无 npc_hits/merchant_hits ⇒ 必须零 SM_HIT"
-        );
-        assert!(rx.try_recv().is_err(), "空记录不得产生任何下行帧");
+        for round in 1..=2 {
+            assert_eq!(
+                drain_npc_merchant_hits(&empty, &world, &displays, &online, &gates),
+                0,
+                "第 {round} 次：无 npc_hits/merchant_hits ⇒ 必须零 SM_HIT"
+            );
+            assert!(
+                rx.try_recv().is_err(),
+                "第 {round} 次：空记录 drain 后通道必须为空（drain 不得自行发帧）"
+            );
+        }
 
         // ② 取一个 `Random(40)!=0 && Random(30)==0` 的种子 ⇒ 生产 `npc_tick` 必须产 hit。
         let seed = (0..100_000i32)
