@@ -113,6 +113,10 @@ def git_bytes(repo: Path, args, stdin_bytes=None, timeout=600):
 # 条件1：脚本派发覆盖率（复算 parse-stats 的覆盖行）
 # --------------------------------------------------------------------------
 
+CORPUS_COUNTER_RE = re.compile(r"文件:\s*(\d+)\s*加载:\s*(\d+)\s*缺失:\s*(\d+)\s*异常:\s*(\d+)")
+DECODE_ABNORMAL_RE = re.compile(r"解码异常文件[:：]\s*(\d+)")
+
+
 def parse_coverage_line(text: str):
     """从 stdout 抽「已实现 N 个（M 次调用）；未实现 K 个」。抽不到返回 None。"""
     match = COVERAGE_RE.search(text or "")
@@ -123,8 +127,27 @@ def parse_coverage_line(text: str):
             "unimplemented": int(match.group(3))}
 
 
-def judge_script_coverage(rec, parsed):
-    """纯判定：PASS/FAIL/需人工。rec 为 run_cmd 记录，parsed 为 parse_coverage_line 结果。"""
+def parse_corpus_counters(text: str):
+    """parse-stats 的语料完整性计数（缺失/异常/解码异常）。抽不到返回 None。
+
+    语料缺文件/解码异常会让「参与统计的目标」变少，此时即使打印「未实现 0 个」也不能算 PASS。
+    """
+    text = text or ""
+    file_count = CORPUS_COUNTER_RE.search(text)
+    decode_bad = DECODE_ABNORMAL_RE.search(text)
+    if not file_count and not decode_bad:
+        return None
+    out = {"files": None, "loaded": None, "missing": None, "abnormal": None, "decode_abnormal": None}
+    if file_count:
+        out.update(files=int(file_count.group(1)), loaded=int(file_count.group(2)),
+                   missing=int(file_count.group(3)), abnormal=int(file_count.group(4)))
+    if decode_bad:
+        out["decode_abnormal"] = int(decode_bad.group(1))
+    return out
+
+
+def judge_script_coverage(rec, parsed, counters=None):
+    """纯判定：PASS/FAIL/需人工。rec 为 run_cmd 记录，parsed 为覆盖行，counters 为语料完整性计数。"""
     if rec is None:
         return NEED, "未运行 parse-stats（快速模式未启用 --script，或用 --script-bin 指定预编译二进制）"
     if rec.get("timed_out"):
@@ -134,14 +157,27 @@ def judge_script_coverage(rec, parsed):
     if parsed is None:
         return NEED, "stdout 里没有「语料派发目标覆盖」行（rc=%s），覆盖结论未知" % rec.get("rc")
     if parsed["unimplemented"] > 0:
-        return FAIL, "语料派发目标未实现 %d 个（已实现 %d / 调用 %d 次）" % (
-            parsed["unimplemented"], parsed["implemented"], parsed["calls"])
+        return FAIL, "语料派发目标未实现 %d 个（目标 %d/%d；调用 %d 次）" % (
+            parsed["unimplemented"], parsed["implemented"],
+            parsed["implemented"] + parsed["unimplemented"], parsed["calls"])
     if parsed["implemented"] <= 0:
         return NEED, "覆盖行 implemented=0，疑似语料路径/解析异常"
     if rec.get("rc") != 0:
-        return NEED, "覆盖行未实现=0，但 parse-stats rc=%s（--require-implemented 未通过）" % rec.get("rc")
-    return PASS, "parse-stats 实测：已实现 %d 个（%d 次调用）；未实现 0 个" % (
-        parsed["implemented"], parsed["calls"])
+        return FAIL, "覆盖行未实现=0，但 parse-stats rc=%s（--require-implemented 失败/语料异常）" % rec.get("rc")
+    if counters is None:
+        return NEED, "stdout 里没有语料完整性计数（文件/加载/缺失/异常），无法确认统计面完整"
+    corpus_bad = []
+    if counters.get("missing"):
+        corpus_bad.append("缺失 %d" % counters["missing"])
+    if counters.get("abnormal"):
+        corpus_bad.append("异常 %d" % counters["abnormal"])
+    if counters.get("decode_abnormal"):
+        corpus_bad.append("解码异常文件 %d" % counters["decode_abnormal"])
+    if corpus_bad:
+        return NEED, "语料不完整（%s），参与统计的目标可能变少，覆盖结论不可信" % "；".join(corpus_bad)
+    target = parsed["implemented"] + parsed["unimplemented"]
+    return PASS, "parse-stats 实测：目标 %d/%d（去重派发目标）；调用 %d 次；未实现 0 个" % (
+        parsed["implemented"], target, parsed["calls"])
 
 
 def run_script_coverage(mir2_root: Path, envir: str, script_bin: str, timeout):
@@ -150,7 +186,7 @@ def run_script_coverage(mir2_root: Path, envir: str, script_bin: str, timeout):
     if not envir_path.is_dir():
         empty = {"cmd": [], "cwd": str(mir2_root), "rc": None, "stdout": "", "stderr": "",
                  "timed_out": False, "error": None, "duration_s": 0.0}
-        return empty, None, "语料目录不存在：%s（用 --envir 指定）" % envir
+        return empty, None, None, "语料目录不存在：%s（用 --envir 指定）" % envir
     tmpdir = Path(tempfile.mkdtemp(prefix="goal-gate-parsestats-"))
     json_out = tmpdir / "parsestats.json"
     try:
@@ -163,7 +199,7 @@ def run_script_coverage(mir2_root: Path, envir: str, script_bin: str, timeout):
         rec = run_cmd(cmd, mir2_root, timeout)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-    return rec, parse_coverage_line(rec.get("stdout", "")), None
+    return rec, parse_coverage_line(rec.get("stdout", "")), parse_corpus_counters(rec.get("stdout", "")), None
 
 
 # --------------------------------------------------------------------------
@@ -288,7 +324,28 @@ def tier_is_r(tier) -> bool:
 # whitelist.md：T-* 行 -> 关联卡；以及卡 -> T-*（行内点名）
 # --------------------------------------------------------------------------
 
-def build_whitelist(path: Path):
+def load_principals(repo: Path, timeout=120):
+    """协作身份名（refs/collab/meta/principals/*）；用来把 principal 从卡 id 匹配里排掉。"""
+    out, rc, _err = git_bytes(
+        repo, ["for-each-ref", "--format=%(refname)", "refs/collab/meta/principals"], timeout=timeout)
+    if rc != 0 or not out:
+        return set()
+    names = set()
+    for line in out.decode().splitlines():
+        line = line.strip()
+        if line:
+            names.add(line.rsplit("/", 1)[-1])
+    return names
+
+
+def build_whitelist(path: Path, exclude_ids=None):
+    """解析 whitelist.md 的 T-* 行。
+
+    同一 T-* 编号出现多行（历史遗留重复号）时**并集**：卡集合取并、行文本拼接，
+    避免后写覆盖把前一行的卡↔T 强关联吃掉（T-4/T-6 重复行的真实损害）。
+    `exclude_ids` 用于排掉 principal 名（openmir2-worker-5 等），它们不是卡 id。
+    """
+    exclude_ids = set(exclude_ids or ())
     info = {"path": str(path), "rows": {}, "card_to_t": {}, "duplicates": [], "error": None}
     try:
         text = path.read_text(encoding="utf-8")
@@ -300,9 +357,15 @@ def build_whitelist(path: Path):
         if not match:
             continue
         t_id = match.group(1)
-        if t_id in info["rows"]:
+        cards = {c for c in CARD_ID_RE.findall(line) if c not in exclude_ids}
+        row = info["rows"].get(t_id)
+        if row is None:
+            info["rows"][t_id] = {"line": line, "cards": set(cards), "lines": [line]}
+        else:
             info["duplicates"].append(t_id)
-        info["rows"][t_id] = {"line": line, "cards": set(CARD_ID_RE.findall(line))}
+            row["cards"].update(cards)
+            row["lines"].append(line)
+            row["line"] = row["line"] + "\n" + line
     for t_id, row in info["rows"].items():
         for card in row["cards"]:
             info["card_to_t"].setdefault(card, set()).add(t_id)
@@ -326,12 +389,22 @@ def _names_in_whitelist_rows(name: str, whitelist):
 # 条件2：R 卡证据
 # --------------------------------------------------------------------------
 
+EVIDENCE_MARK_RE = re.compile(r"VERDICT\s*[=:：]\s*PASS", re.I)
+
+
 def collect_r_cards(index):
+    """R 卡枚举 = **任一**条目的 body.tier 归一为 R（不只 issue）。
+
+    86/161 张卡的 tier 只出现在 review/patch/status 里（issue 漏写），只认 issue 会形成
+    「新 R 卡漏写 tier ⇒ 整张卡不进 R 总体 ⇒ 条件2 仍然 PASS」的假 PASS 路径。
+    """
     cards = set()
     for thread_id, entries in index.items():
         for _oid, entry in entries:
-            if entry.get("kind") == "issue" and tier_is_r(entry.get("body", {}).get("tier")):
+            body = entry.get("body")
+            if isinstance(body, dict) and tier_is_r(body.get("tier")):
                 cards.add(thread_id)
+                break
     return sorted(cards)
 
 
@@ -349,21 +422,59 @@ def collect_r_evidence(card, index, board_cards, whitelist):
             window_required = True
     strong = sorted(whitelist["card_to_t"].get(card, set()), key=_t_sort_key)
     thread_ts = set()
-    for _oid, entry in entries:
-        thread_ts |= set(T_ID_RE.findall(json.dumps(entry, ensure_ascii=False)))
+    evidence_entries = []
+    for oid, entry in entries:
+        text = json.dumps(entry, ensure_ascii=False)
+        thread_ts |= set(T_ID_RE.findall(text))
+        if entry.get("kind") in ("comment", "review"):
+            body_text = json.dumps(entry.get("body", {}), ensure_ascii=False)
+            if EVIDENCE_MARK_RE.search(body_text):
+                evidence_entries.append(oid)
     weak = sorted((thread_ts & set(whitelist["rows"])) - set(strong), key=_t_sort_key)
     board_card = (board_cards or {}).get(card)
+    column = board_card.get("_column") if board_card else None
+    board_status = board_card.get("status") if board_card else None
+    board_closed = bool(board_card) and (column == "已完成" or board_status == "closed")
     return {"card": card, "merged": merged, "window_required": window_required,
             "strong_t": strong, "weak_t": weak,
+            "evidence_entries": evidence_entries,
             "in_board": board_card is not None,
+            "board_column": column, "board_status": board_status,
+            "board_closed": board_closed,
             "unverified": board_card.get("unverified") if board_card else None,
-            "board_status": board_card.get("status") if board_card else None,
             "entries": len(entries)}
 
 
-def classify_r_evidence(ev):
-    """四态判定：已合并 / window_required / whitelist T-* / 三者皆无。"""
+def r_category(ev):
+    """单卡归类（顺序即判据优先级）。"""
     if not ev.get("in_board"):
+        return "not_in_board"
+    if ev.get("unverified"):
+        return "unverified"
+    if ev.get("board_closed"):
+        return "closed"
+    if ev.get("merged"):
+        return "merged_not_closed"
+    if ev.get("window_required"):
+        return "window_required"
+    if ev.get("strong_t"):
+        return "whitelist_t"
+    if ev.get("evidence_entries"):
+        return "comment_evidence"
+    if ev.get("weak_t"):
+        return "weak_t"
+    return "none"
+
+
+def classify_r_evidence(ev):
+    """四态判定：已合并 / window_required / whitelist T-* / 三者皆无。
+
+    「已合并」= board 已完成/closed **或** 线程有 merge_result merged=true；
+    但 merged 而 board 非 closed 单列一档「需人工」（R 卡合并后常保持 in-progress，
+    需确认是否已重开且新工作有证据）。
+    """
+    category = r_category(ev)
+    if category == "not_in_board":
         hints = []
         if ev.get("merged"):
             hints.append("索引内有 merge_result merged=true")
@@ -371,15 +482,27 @@ def classify_r_evidence(ev):
             hints.append("索引内有 window_required=true")
         suffix = "；" + "、".join(hints) if hints else ""
         return NEED, "board 未列出该卡（本地协作视图未同步或线程状态异常），证据无法核对" + suffix
-    if ev.get("unverified"):
+    if category == "unverified":
         return NEED, "board 报 %s 条未验签条目，证据不可信" % ev["unverified"]
-    if ev.get("merged"):
-        return PASS, "已合并（merge_result merged=true）"
-    if ev.get("window_required"):
+    if category == "closed":
+        why = "board 已完成/closed"
+        if ev.get("merged"):
+            why += "；线程有 merge_result merged=true"
+        if ev.get("evidence_entries"):
+            why += "；comment/review 内有 VERDICT=PASS"
+        return PASS, why
+    if category == "merged_not_closed":
+        return NEED, "merge_result merged=true 但 board 状态=%s（非 closed）；需确认未重开新工作或无证据" % (
+            ev.get("board_status") or ev.get("board_column") or "?")
+    if category == "window_required":
         return PASS, "有 window_required=true 登记"
-    if ev.get("strong_t"):
+    if category == "whitelist_t":
         return PASS, "whitelist 登记 %s（登记行点名本卡）" % ",".join(ev["strong_t"])
-    if ev.get("weak_t"):
+    if category == "comment_evidence":
+        return PASS, "comment/review 内有 VERDICT=PASS 证据（%s）" % ",".join(
+            oid[:8] for oid in ev["evidence_entries"])
+
+    if category == "weak_t":
         return NEED, "线程提到 %s，但登记行未点名本卡（弱关联，需人判是否算登记）" % ",".join(ev["weak_t"])
     return FAIL, "三者皆无（未合并 / 无 window_required / 无 whitelist T-* 登记）"
 
@@ -387,32 +510,37 @@ def classify_r_evidence(ev):
 def judge_r_cards(evidence_list):
     """聚合条件2。返回 (state, detail, per_card, fail_items, need_items)。"""
     per_card, fail_items, need_items = [], [], []
+    counts = {}
     for ev in evidence_list:
         state, why = classify_r_evidence(ev)
-        per_card.append({"card": ev["card"], "state": state, "reason": why,
+        category = r_category(ev)
+        counts[category] = counts.get(category, 0) + 1
+        per_card.append({"card": ev["card"], "state": state, "reason": why, "category": category,
                          "merged": ev["merged"], "window_required": ev["window_required"],
                          "strong_t": ev["strong_t"], "weak_t": ev["weak_t"],
-                         "board_status": ev["board_status"], "unverified": ev["unverified"]})
+                         "board_status": ev["board_status"], "board_column": ev["board_column"],
+                         "comment_evidence": list(ev.get("evidence_entries") or []),
+                         "unverified": ev["unverified"]})
         if state == FAIL:
             fail_items.append({"card": ev["card"], "reason": why})
         elif state == NEED:
             need_items.append({"card": ev["card"], "reason": why})
-    total = len(per_card)
-    merged_n = sum(1 for c in per_card if c["merged"])
-    window_n = sum(1 for c in per_card if c["window_required"] and not c["merged"])
-    t_n = sum(1 for c in per_card if c["strong_t"] and not c["merged"] and not c["window_required"])
     if fail_items:
         state = FAIL
     elif need_items:
         state = NEED
     else:
         state = PASS
-    detail = "R 卡 %d 张：已合并 %d / window_required %d / whitelist %d / 三者皆无 %d / 需人工 %d" % (
-        total, merged_n, window_n, t_n, len(fail_items), len(need_items))
+    detail = ("R 卡 %d 张：已完成 %d / 已合并未 closed(需人工) %d / window_required %d / "
+              "whitelist %d / comment 证据 %d / 三者皆无 %d / 需人工(其它) %d" % (
+                  len(per_card), counts.get("closed", 0), counts.get("merged_not_closed", 0),
+                  counts.get("window_required", 0), counts.get("whitelist_t", 0),
+                  counts.get("comment_evidence", 0), counts.get("none", 0),
+                  counts.get("not_in_board", 0) + counts.get("unverified", 0) + counts.get("weak_t", 0)))
     if fail_items:
         detail += "；FAIL 卡：" + ", ".join(x["card"] for x in fail_items)
     if need_items:
-        detail += "；需人工：" + ", ".join(x["card"] for x in need_items)
+        detail += "；需人工 %d 张（见 JSON need_items）" % len(need_items)
     return state, detail, per_card, fail_items, need_items
 
 
@@ -455,8 +583,27 @@ def classify_b_row(row, whitelist, board_cards):
     return "none", FAIL, "%s 既无 T-* 登记也无卡" % name
 
 
-def judge_b_tracked(rows, whitelist, board_cards):
+def judge_b_tracked(rows, whitelist, board_cards, counts=None):
+    """条件3 聚合。查不到 / schema 漂移 / counts 不一致一律「需人工」，不冒出 PASS。"""
+    if not isinstance(rows, list) or not rows:
+        return NEED, "recon dispatch 未给出任何行（输出为空/解析失败），无法判定 tracked 清单", [], [], []
+    missing_status = [row for row in rows if not isinstance(row, dict) or "status" not in row]
+    if missing_status:
+        return NEED, "recon 行缺 status 字段（schema 漂移：%d/%d 行），无法判定 tracked" % (
+            len(missing_status), len(rows)), [], [], []
     tracked = [row for row in rows if row.get("status") == "tracked"]
+    if not tracked:
+        return NEED, "recon 里 tracked=0（查不到不等于清零；schema/分母可疑）", [], [], []
+    if not isinstance(counts, dict) or counts.get("tracked") is None:
+        return NEED, "recon JSON 缺 counts.tracked，无法与 tracked 行数交叉校验", [], [], []
+    try:
+        expected = int(counts["tracked"])
+    except (TypeError, ValueError):
+        return NEED, "recon counts.tracked 不是整数（%r）" % (counts.get("tracked"),), [], [], []
+    if expected != len(tracked):
+        return NEED, "recon counts.tracked=%d 与 tracked 行数 %d 不一致（分母漂移）" % (
+            expected, len(tracked)), [], [], []
+
     per_item, fail_items, need_items = [], [], []
     for row in tracked:
         category, state, detail = classify_b_row(row, whitelist, board_cards)
@@ -477,7 +624,8 @@ def judge_b_tracked(rows, whitelist, board_cards):
     t_n = sum(1 for i in per_item if i["category"] == "t")
     card_n = sum(1 for i in per_item if i["category"] == "card")
     none_n = sum(1 for i in per_item if i["category"] == "none")
-    detail = "tracked %d 条：有 T-* 登记 %d / 有卡 %d / 皆无 %d" % (len(per_item), t_n, card_n, none_n)
+    detail = "tracked %d 条（counts 一致）：有 T-* 登记 %d / 有卡 %d / 皆无 %d" % (
+        len(per_item), t_n, card_n, none_n)
     if fail_items:
         detail += "；皆无：" + ", ".join(i["name"] for i in fail_items)
     if need_items:
@@ -613,8 +761,12 @@ def render_table(report):
         lines.append("缺口明细：")
         for item in report["fail_items"]:
             lines.append("  FAIL [条件%s] %s：%s" % (item["condition"], item["item"], item["reason"]))
-        for item in report["need_items"]:
+        limit = 20
+        for item in report["need_items"][:limit]:
             lines.append("  需人工 [条件%s] %s：%s" % (item["condition"], item["item"], item["reason"]))
+        rest = len(report["need_items"]) - limit
+        if rest > 0:
+            lines.append("  … 另有 %d 条「需人工」未在表中列出（--json 的 need_items 有全量）" % rest)
     return "\n".join(lines)
 
 
@@ -638,16 +790,16 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
     script_source = ("cargo run --release -p mir2-script-tool -- parse-stats <Envir> "
                      "--json <tmp> --require-implemented")
     if with_script or script_bin:
-        rec, parsed, pre_error = run_script_coverage(mir2_root, envir, script_bin, timeout)
+        rec, parsed, counters, pre_error = run_script_coverage(mir2_root, envir, script_bin, timeout)
         if pre_error:
-            state, detail = NEED, pre_error
+            state, counters, detail = NEED, None, pre_error
         else:
-            state, detail = judge_script_coverage(rec, parsed)
+            state, detail = judge_script_coverage(rec, parsed, counters)
         evidence = {"command": rec.get("cmd"), "rc": rec.get("rc"), "parsed": parsed,
-                    "envir": envir, "source": script_source,
+                    "counters": counters, "envir": envir, "source": script_source,
                     "note": "数字不硬编码：每次从 parse-stats 的『语料派发目标覆盖』行实测"}
     else:
-        rec, parsed = None, None
+        rec, parsed, counters = None, None, None
         state, detail = judge_script_coverage(None, None)
         evidence = {"source": script_source, "envir": envir,
                     "note": "快速模式默认跳过（构建慢）；用 --script 复算，或用 --script-bin 指定预编译二进制"}
@@ -670,7 +822,8 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
             warnings.append("board 有 %d 张卡不在本地条目索引（可能时点差）：%s" % (
                 len(missing), ", ".join(missing[:5])))
 
-    whitelist = build_whitelist(mir2_root / "tests/parity/whitelist.md")
+    principals = load_principals(repo)
+    whitelist = build_whitelist(mir2_root / "tests/parity/whitelist.md", exclude_ids=principals)
     if whitelist["error"]:
         warnings.append("whitelist.md 读取失败：%s" % whitelist["error"])
     if whitelist["duplicates"]:
@@ -694,8 +847,11 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
         "board_cards": len(board_cards) if board_cards else None,
         "index_threads": index_meta.get("threads"), "index_entries": index_meta.get("entries"),
         "snapshot": index_meta.get("snapshot"), "tail_refs": index_meta.get("tail_refs"),
-        "whitelist_t_rows": len(whitelist["rows"]), "r_cards": per_card,
-        "notes": index_meta.get("notes")}))
+        "whitelist_t_rows": len(whitelist["rows"]),
+        "whitelist_duplicates": sorted(set(whitelist["duplicates"])),
+        "principals_excluded": len(principals),
+        "enumeration": "任一 entry body.tier 归一为 R（不只 issue）",
+        "r_cards": per_card, "notes": index_meta.get("notes")}))
     for item in r_fails:
         _cond(FAIL, 2, item["card"], item["reason"], fail_items, need_items)
     for item in r_needs:
@@ -711,7 +867,8 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
         b_items, b_fails, b_needs = [], [], []
     else:
         rows = recon.get("rows", []) or []
-        state, detail, b_items, b_fails, b_needs = judge_b_tracked(rows, whitelist, board_cards)
+        state, detail, b_items, b_fails, b_needs = judge_b_tracked(
+            rows, whitelist, board_cards, counts=recon.get("counts"))
         detail += "（recon 实测 tracked=%d）" % sum(1 for r in rows if r.get("status") == "tracked")
         if recon.get("missing_cards"):
             warnings.append("recon 报缺卡：%s" % ", ".join(map(str, recon["missing_cards"])))
@@ -760,6 +917,8 @@ SYNTH_WHITELIST = "\n".join([
     "| T-1 | 卡 `openmir2-card-alpha` 的差异 | 无害 | reviewer |",
     "| T-2 | 与条目 `SM_DOOR_OK` 相关的差异 | 无害 | reviewer |",
     "| T-3 | 卡 `openmir2-card-gamma` 的差异 | 无害 | reviewer |",
+    "| T-9 | 卡 `openmir2-card-alpha` 的甲行 | 无害 | reviewer |",
+    "| T-9 | 卡 `openmir2-card-beta` 的乙行 | 无害 | reviewer |",
 ])
 
 
@@ -775,16 +934,36 @@ def _synth_index():
                                 ent("review", {"decision": "approve"})],
         "openmir2-card-delta": [ent("issue", {"tier": "R"})],
         "openmir2-card-eps": [ent("issue", {"tier": "R"}), ent("comment", {"note": "见 T-1"})],
+        "openmir2-card-eta": [ent("issue", {"tier": "R"}),
+                              ent("merge_result", {"merged": True})],
+        "openmir2-card-zeta": [ent("issue", {"tier": "R"})],
+        "openmir2-card-theta": [ent("issue", {"tier": "R"}),
+                                ent("comment", {"summary": "窗口跑完：VERDICT=PASS（exit 0）"})],
+        # tier 只写在 review 里（issue 漏写）——验证「任一条目 tier=R」的枚举口径
+        "openmir2-card-iota": [ent("issue", {}), ent("review", {"tier": "R"})],
     }
 
 
 def _synth_board():
     return {
-        "openmir2-card-alpha": {"id": "openmir2-card-alpha", "unverified": 0, "status": "closed"},
-        "openmir2-card-beta": {"id": "openmir2-card-beta", "unverified": 0, "status": "in-progress"},
-        "openmir2-card-gamma": {"id": "openmir2-card-gamma", "unverified": 0, "status": "closed"},
-        "openmir2-card-delta": {"id": "openmir2-card-delta", "unverified": 0, "status": "closed"},
-        "openmir2-card-eps": {"id": "openmir2-card-eps", "unverified": 1, "status": "in-progress"},
+        "openmir2-card-alpha": {"id": "openmir2-card-alpha", "unverified": 0,
+                                "status": "closed", "_column": "已完成"},
+        "openmir2-card-beta": {"id": "openmir2-card-beta", "unverified": 0,
+                               "status": "in-progress", "_column": "进行中"},
+        "openmir2-card-gamma": {"id": "openmir2-card-gamma", "unverified": 0,
+                                "status": "needs-review", "_column": "待审"},
+        "openmir2-card-delta": {"id": "openmir2-card-delta", "unverified": 0,
+                                "status": "in-progress", "_column": "进行中"},
+        "openmir2-card-eps": {"id": "openmir2-card-eps", "unverified": 1,
+                              "status": "in-progress", "_column": "进行中"},
+        "openmir2-card-eta": {"id": "openmir2-card-eta", "unverified": 0,
+                              "status": "in-progress", "_column": "进行中"},
+        "openmir2-card-zeta": {"id": "openmir2-card-zeta", "unverified": 0,
+                               "status": "closed", "_column": "已完成"},
+        "openmir2-card-theta": {"id": "openmir2-card-theta", "unverified": 0,
+                                "status": "in-progress", "_column": "进行中"},
+        "openmir2-card-iota": {"id": "openmir2-card-iota", "unverified": 0,
+                               "status": "closed", "_column": "已完成"},
     }
 
 
@@ -807,33 +986,57 @@ def selftest(verbose=False):
         wl_path.write_text(SYNTH_WHITELIST, encoding="utf-8")
         wl = build_whitelist(wl_path)
 
-        check("whitelist 解析出 3 个 T 行", lambda: (len(wl["rows"]) == 3, str(len(wl["rows"]))))
-        check("whitelist 行内卡 id 关联", lambda: (
-            wl["card_to_t"].get("openmir2-card-alpha") == {"T-1"}, str(wl["card_to_t"])))
+        check("whitelist 解析出 4 个 T 行", lambda: (len(wl["rows"]) == 4, str(len(wl["rows"]))))
+        check("whitelist 重复号 T-9 并集（卡不丢）", lambda: (
+            wl["card_to_t"].get("openmir2-card-alpha") == {"T-1", "T-9"}
+            and wl["card_to_t"].get("openmir2-card-beta") == {"T-9"}
+            and wl["duplicates"] == ["T-9"], str(wl["card_to_t"])))
+        check("whitelist exclude_ids 排掉 principal 名", lambda: (
+            "openmir2-card-alpha" not in build_whitelist(
+                wl_path, exclude_ids={"openmir2-card-alpha"})["card_to_t"], "excluded"))
 
         # ---------- 条件1 ----------
-        ok_stdout = "文件: X 加载: 1\n语料派发目标覆盖：已实现 106 个（11829 次调用）；未实现 0 个\n"
-        bad_stdout = "语料派发目标覆盖：已实现 103 个（11000 次调用）；未实现 3 个\n"
+        ok_stdout = ("文件: 639 加载: 639 缺失: 0 异常: 0\n"
+                     "解析错误: 427；解码异常文件: 0\n"
+                     "语料派发目标覆盖：已实现 106 个（11829 次调用）；未实现 0 个\n")
+        bad_stdout = ("文件: 639 加载: 639 缺失: 0 异常: 0\n"
+                      "解析错误: 427；解码异常文件: 0\n"
+                      "语料派发目标覆盖：已实现 103 个（11000 次调用）；未实现 3 个\n")
         parsed_ok = parse_coverage_line(ok_stdout)
         parsed_bad = parse_coverage_line(bad_stdout)
+        counters_ok = parse_corpus_counters(ok_stdout)
+        counters_bad = dict(counters_ok, missing=2)
         rec_ok = {"rc": 0, "timed_out": False, "error": None}
         rec_bad = {"rc": 1, "timed_out": False, "error": None}
 
         check("条件1 覆盖行解析（已实现/调用/未实现）", lambda: (
             parsed_ok == {"implemented": 106, "calls": 11829, "unimplemented": 0}, str(parsed_ok)))
-        check("条件1 PASS 分支", lambda: (
-            judge_script_coverage(rec_ok, parsed_ok)[0] == PASS, str(judge_script_coverage(rec_ok, parsed_ok))))
+        check("条件1 语料完整性计数解析", lambda: (
+            counters_ok == {"files": 639, "loaded": 639, "missing": 0, "abnormal": 0,
+                            "decode_abnormal": 0}, str(counters_ok)))
+        check("条件1 PASS 分支（打印目标 N/N）", lambda: (
+            judge_script_coverage(rec_ok, parsed_ok, counters_ok)[0] == PASS
+            and "目标 106/106" in judge_script_coverage(rec_ok, parsed_ok, counters_ok)[1],
+            str(judge_script_coverage(rec_ok, parsed_ok, counters_ok))))
         check("条件1 FAIL 分支（未实现>0）", lambda: (
-            judge_script_coverage(rec_bad, parsed_bad)[0] == FAIL,
-            str(judge_script_coverage(rec_bad, parsed_bad))))
+            judge_script_coverage(rec_bad, parsed_bad, counters_ok)[0] == FAIL,
+            str(judge_script_coverage(rec_bad, parsed_bad, counters_ok))))
+        check("条件1 FAIL 分支（rc=1 且未实现=0：--require-implemented 耦合）", lambda: (
+            judge_script_coverage(rec_bad, parsed_ok, counters_ok)[0] == FAIL,
+            str(judge_script_coverage(rec_bad, parsed_ok, counters_ok))))
         check("条件1 需人工分支（无覆盖行）", lambda: (
-            judge_script_coverage(rec_ok, parse_coverage_line("no coverage here"))[0] == NEED,
-            "no coverage line"))
+            judge_script_coverage(rec_ok, parse_coverage_line("no coverage here"),
+                                  counters_ok)[0] == NEED, "no coverage line"))
         check("条件1 需人工分支（未启用）", lambda: (
             judge_script_coverage(None, None)[0] == NEED, "skipped"))
         check("条件1 需人工分支（超时）", lambda: (
-            judge_script_coverage({"rc": None, "timed_out": True, "error": None}, parsed_ok)[0] == NEED,
-            "timeout"))
+            judge_script_coverage({"rc": None, "timed_out": True, "error": None},
+                                  parsed_ok, counters_ok)[0] == NEED, "timeout"))
+        check("条件1 需人工分支（语料不完整：缺失>0）", lambda: (
+            judge_script_coverage(rec_ok, parsed_ok, counters_bad)[0] == NEED,
+            str(judge_script_coverage(rec_ok, parsed_ok, counters_bad))))
+        check("条件1 需人工分支（缺完整性计数）", lambda: (
+            judge_script_coverage(rec_ok, parsed_ok, None)[0] == NEED, "no counters"))
 
         # ---------- 条件2 ----------
         idx = _synth_index()
@@ -844,17 +1047,30 @@ def selftest(verbose=False):
         def card_state(card):
             return classify_r_evidence(evs[card])
 
-        check("条件2 识别 5 张 tier=R（含散文式 tier）", lambda: (
+        check("条件2 识别 9 张 tier=R（任一条目，含 tier 只写在 review）", lambda: (
             r_cards == sorted(board), str(r_cards)))
-        check("条件2 已合并分支", lambda: (
-            card_state("openmir2-card-alpha")[0] == PASS and evs["openmir2-card-alpha"]["merged"],
+        check("条件2 board 已完成 -> PASS（不依赖 merge_result）", lambda: (
+            card_state("openmir2-card-alpha")[0] == PASS
+            and r_category(evs["openmir2-card-alpha"]) == "closed",
             card_state("openmir2-card-alpha")[1]))
+        check("条件2 closed 且无 merge_result -> PASS", lambda: (
+            card_state("openmir2-card-zeta")[0] == PASS
+            and r_category(evs["openmir2-card-zeta"]) == "closed",
+            card_state("openmir2-card-zeta")[1]))
         check("条件2 window_required 分支", lambda: (
             card_state("openmir2-card-beta")[0] == PASS, card_state("openmir2-card-beta")[1]))
         check("条件2 whitelist T-* 分支（登记行点名）", lambda: (
             card_state("openmir2-card-gamma")[0] == PASS
             and evs["openmir2-card-gamma"]["strong_t"] == ["T-3"],
             card_state("openmir2-card-gamma")[1]))
+        check("条件2 merge_result 但 board 非 closed -> 需人工", lambda: (
+            card_state("openmir2-card-eta")[0] == NEED
+            and r_category(evs["openmir2-card-eta"]) == "merged_not_closed",
+            card_state("openmir2-card-eta")[1]))
+        check("条件2 comment VERDICT=PASS 证据 -> PASS", lambda: (
+            card_state("openmir2-card-theta")[0] == PASS
+            and r_category(evs["openmir2-card-theta"]) == "comment_evidence",
+            card_state("openmir2-card-theta")[1]))
         check("条件2 三者皆无 -> FAIL", lambda: (
             card_state("openmir2-card-delta")[0] == FAIL, card_state("openmir2-card-delta")[1]))
         check("条件2 未验签 -> 需人工", lambda: (
@@ -879,7 +1095,8 @@ def selftest(verbose=False):
             {"status": "tracked", "name": "CM_ORPHAN", "card": "", "bucket": "inbound"},
             {"status": "implemented", "name": "SM_IGNORED", "card": "", "bucket": "outbound"},
         ]
-        b_state, b_detail, b_items, b_fails, b_needs = judge_b_tracked(rows, wl, board)
+        counts_ok = {"tracked": 3}
+        b_state, b_detail, b_items, b_fails, b_needs = judge_b_tracked(rows, wl, board, counts_ok)
         by_name = {i["name"]: i for i in b_items}
         check("条件3 T-* 登记优先", lambda: (by_name["SM_DOOR_OK"]["category"] == "t", b_detail))
         check("条件3 有卡分支", lambda: (by_name["CM_NO_T"]["category"] == "card", b_detail))
@@ -887,6 +1104,19 @@ def selftest(verbose=False):
             by_name["CM_ORPHAN"]["category"] == "none" and b_state == FAIL, b_detail))
         check("条件3 只算 tracked 不计 implemented", lambda: (
             "SM_IGNORED" not in by_name and len(b_items) == 3, str(len(b_items))))
+        check("条件3 tracked 为空 -> 需人工", lambda: (
+            judge_b_tracked([], wl, board, {"tracked": 0})[0] == NEED, "empty rows"))
+        check("条件3 rows 为 None -> 需人工", lambda: (
+            judge_b_tracked(None, wl, board, {"tracked": 0})[0] == NEED, "none rows"))
+        check("条件3 缺 counts -> 需人工", lambda: (
+            judge_b_tracked(rows, wl, board, None)[0] == NEED, "no counts"))
+        check("条件3 counts 不一致 -> 需人工", lambda: (
+            judge_b_tracked(rows, wl, board, {"tracked": 15})[0] == NEED, "counts mismatch"))
+        check("条件3 schema 漂移（status->state）-> 需人工", lambda: (
+            judge_b_tracked([{"state": "tracked", "name": "X", "card": ""}], wl, board,
+                            {"tracked": 1})[0] == NEED, "schema drift"))
+        check("条件3 counts 一致时按条目判定", lambda: (
+            judge_b_tracked(rows, wl, board, counts_ok)[0] == FAIL, b_detail))
 
         # ---------- 条件4 ----------
         def chk(name, state):
@@ -910,13 +1140,23 @@ def selftest(verbose=False):
             and overall_state([PASS, PASS]) == PASS, "precedence"))
 
         # ---------- 牙：把判定改坏必须能被上面的断言抓住 ----------
-        def mutant_cov(_rec, parsed):
+        def mutant_cov(_rec, parsed, counters=None):
             # 故意忽略「未实现」计数（模拟退化判定）
             return (PASS, "mutant") if parsed else (NEED, "mutant")
 
         check("牙：忽略未实现计数的退化判定会被 FAIL 断言判死", lambda: (
-            mutant_cov({"rc": 0}, parsed_bad)[0] == PASS
-            and judge_script_coverage(rec_bad, parsed_bad)[0] == FAIL, "mutant detected"))
+            mutant_cov(rec_bad, parsed_bad, counters_ok)[0] == PASS
+            and judge_script_coverage(rec_bad, parsed_bad, counters_ok)[0] == FAIL,
+            "mutant detected"))
+
+        def mutant_cov_no_rc(_rec, parsed, counters=None):
+            # 故意删掉 rc!=0 守卫（review 牙 B 的场景）
+            return (PASS, "mutant") if parsed else (NEED, "mutant")
+
+        check("牙：删掉 rc!=0 守卫会被『rc=1 且未实现=0 ⇒ FAIL』断言抓住", lambda: (
+            mutant_cov_no_rc(rec_bad, parsed_ok, counters_ok)[0] == PASS
+            and judge_script_coverage(rec_bad, parsed_ok, counters_ok)[0] == FAIL,
+            "mutant detected"))
 
         def mutant_r(ev):
             # 故意把「三者皆无」判成 PASS（模拟放宽判据）
@@ -928,6 +1168,14 @@ def selftest(verbose=False):
         check("牙：把三者皆无判成 PASS 的退化判定会被抓住", lambda: (
             mutant_r(none_ev)[0] == PASS and classify_r_evidence(none_ev)[0] == FAIL,
             "mutant detected"))
+
+        def mutant_empty_tracked(rows_, wl_, board_, counts_=None):
+            # 故意把「查不到」判成 PASS（G-2 的场景）
+            return (PASS, "mutant")
+
+        check("牙：把空 tracked 判成 PASS 会被『查不到⇒需人工』断言抓住", lambda: (
+            mutant_empty_tracked([], wl, board, {"tracked": 0})[0] == PASS
+            and judge_b_tracked([], wl, board, {"tracked": 0})[0] == NEED, "mutant detected"))
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 

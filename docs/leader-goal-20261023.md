@@ -57,7 +57,7 @@ cron 是**会话内**的（7 天自动过期，会话结束即消失）。换会
 ### 5.1 三条命令
 
 ```sh
-# 快速模式（默认）：跳过 cargo test 与 parse-stats 构建，约 20–40s
+# 快速模式（默认）：跳过 cargo test 与 parse-stats 构建；暖缓存约 20–40s（冷构建约 1m44s）
 python tools/goal/goal_gate.py
 
 # 机器可读（stdout 只有 JSON，适合巡检/cron/CI 读）
@@ -78,7 +78,7 @@ python tools/goal/goal_gate.py --full
 | `--envir <dir>` | 脚本语料目录，默认 `E:/MirServer/M2GameSvr/Envir` |
 | `--repo <dir>` | 仓库根，默认脚本所在仓库 |
 | `--timeout N` / `--test-timeout N` | 单命令超时（默认 1800s）/ cargo test 超时（默认 7200s） |
-| `selftest` | 合成输入自检（30 条断言，含 2 颗牙） |
+| `selftest` | 合成输入自检（46 条断言，含 4 颗牙） |
 
 退出码：`0` 四条全 PASS；`1` 有 FAIL；`2` 无 FAIL 但有「需人工」；`3` 脚本自身错误（参数/路径）。
 
@@ -103,22 +103,46 @@ python tools/goal/goal_gate.py --full
      parse-stats E:/MirServer/M2GameSvr/Envir --json <临时文件> --require-implemented
    ```
 
-   然后只解析 stdout 的 `语料派发目标覆盖：已实现 N 个（M 次调用）；未实现 K 个` 一行：
-   `K == 0 且 rc == 0` ⇒ PASS；`K > 0` ⇒ FAIL；抽不到该行 / 超时 / rc≠0 但行显示 0 ⇒ 需人工。
-   **N 从不写死**（每次实测，当前为 106/11829，但脚本不依赖这个数）。临时 json 落在系统临时目录并删除。
+   然后解析两段 stdout：
+   * 覆盖行 `语料派发目标覆盖：已实现 N 个（M 次调用）；未实现 K 个`：
+     `K == 0 且 rc == 0` ⇒ PASS；`K > 0` ⇒ FAIL；**`K == 0 但 rc != 0` ⇒ FAIL**
+     （`--require-implemented` 与覆盖行是同一判据的两条腿，rc 非 0 不许当 PASS）。
+   * 语料完整性计数 `文件/加载/缺失/异常` 与 `解码异常文件`：缺文件或解码异常会让
+     **参与统计的目标变少**，此时即使打印「未实现 0 个」也不算数 ⇒ 「需人工」。
+   * 抽不到覆盖行 / 超时 / 语料目录不存在 ⇒「需人工」。
 
-2. **R 卡证据**：`walgit collab board --format json` 枚举卡片（取 board 的卡列表/状态/未验签计数），
-   条目正文（`tier`/`window_required`/`merge_result`）由只读 git 对象（`refs/collab/meta/snapshot`
-   折叠区 + `refs/collab/inbox/*` tail）按 `git cat-file --batch` 一次读出。每张 `tier=R` 的卡按
-   **已合并 → window_required → whitelist T-* → 三者皆无** 首命中定态；「皆无」进 FAIL 清单并给卡 id。
-   * `whitelist T-*` 只认**登记行点名了本卡**（强关联）；线程里顺带提到 T-*、但登记行没点名本卡 ⇒「需人工（弱关联）」，不冒认。
-   * board 未列出的卡 / board 报未验签条目 ⇒「需人工」，不猜。
-   * 判定 tier 时把散文式 tier（如 `R（战斗数值/时序/持久化面）…`）归一为 R；线程里**任一** issue
+   **数字从不写死**：detail 打印 `目标 N/（N+K）（去重派发目标）；调用 M 次`，
+   「106/106」= 已实现目标/语料用到的目标总数；「106/11829」= 目标数/调用次数，两者分母不同。
+
+2. **R 卡证据**：`walgit collab board --format json` 提供卡片列表/状态列/未验签计数；
+   条目正文（`tier`/`window_required`/`merge_result`/comment）由只读 git 对象
+   （`refs/collab/meta/snapshot` 折叠区 + `refs/collab/inbox/*` tail）按 `git cat-file --batch` 一次读出。
+   **R 卡枚举 = 任一条目的 `body.tier` 归一为 R**（不只 issue：86/161 张卡的 tier 只写在
+   review/patch/status 里，只认 issue 会形成「新 R 卡漏写 tier ⇒ 不进 R 总体」的假 PASS 路径）。
+   每张 R 卡按下列**优先级**定态：
+
+   | 序 | 判据 | 状态 |
+   |---|---|---|
+   | 1 | board 未列出该卡 | 需人工（视图未同步/线程状态异常） |
+   | 2 | board 报未验签条目 | 需人工 |
+   | 3 | **board 列 = 已完成 / status = closed** | **PASS（已合并；不要求线程有 merge_result）** |
+   | 4 | 线程有 `merge_result merged=true` 但 board 非 closed | **需人工**（R 卡合并后常保持 in-progress；需确认未重开且新工作有证据） |
+   | 5 | `window_required=true` | PASS |
+   | 6 | whitelist `T-*` 登记行**点名本卡** | PASS（弱关联不算） |
+   | 7 | comment/review 内有 `VERDICT=PASS` | PASS（如 Leader 直接执行、未写 merge_result 的窗口交付） |
+   | 8 | 线程提到 `T-*` 但登记行未点名本卡 | 需人工（弱关联） |
+   | 9 | 以上皆无 | **FAIL（三者皆无，列卡 id）** |
+
+   * `whitelist.md` 同一编号出现多行时**取并集**（卡集合合并、行文本拼接），不让覆盖写吃掉卡↔T 关联。
+   * 卡 id 匹配会排掉 `refs/collab/meta/principals/*` 里的 principal 名（`openmir2-worker-5` 等不是卡）。
+   * 判定 tier 时把散文式 tier（如 `R（战斗数值/时序/持久化面）…`）归一为 R；线程里**任一**条目
      标了 R 就按 R 卡处理（偏向保守：宁可多查一张，不漏一张）。
 
 3. **B 类清零**：跑 `cd mir2-rs && python -I -B tests/parity/coverage/recon_gates.py dispatch --repo .. --json <临时文件>`，
-   取 `status == "tracked"` 的行（当前 15），逐条判：条目名出现在某条 `T-*` 登记行 ⇒「有 T-* 登记」；
-   否则其 `card` 在 board 里存在 ⇒「有卡」；都没有 ⇒ FAIL。`--json` 只写临时目录、读完即删。
+   取 `status == "tracked"` 的行，逐条判：条目名出现在某条 `T-*` 登记行 ⇒「有 T-* 登记」；
+   否则其 `card` 在 board 里存在 ⇒「有卡」；都没有 ⇒ FAIL。**查不到一律「需人工」**：
+   rows 为空、行缺 `status` 字段（schema 漂移）、缺 `counts.tracked`、
+   `counts.tracked` 与实际 tracked 行数不一致 —— 任一命中 ⇒ 需人工，不冒认 PASS。
 
 4. **门禁恒绿**：逐项跑并在 `--json` 里留 rc/耗时——`cargo fmt --all -- --check`、
    `cargo clippy --workspace --all-targets --locked -- -D warnings`、
@@ -133,7 +157,7 @@ python tools/goal/goal_gate.py --full
 | | 快速（默认 / `--skip-tests`） | 完整（`--full` 或 `--tests --script`） |
 | --- | --- | --- |
 | fmt / clippy / msgcodegen / anchor / registry / master 比对 | 跑 | 跑 |
-| `cargo test --workspace` | **跳过** ⇒ 条件4 「需人工」 | 跑（数千用例；暖缓存实测约 5 分钟，冷缓存更久） |
+| `cargo test --workspace` | **跳过** ⇒ 条件4 「需人工」 | 跑（数千用例；冷 target 实测 433.5s，全量 `--full` 约 10.5 分钟） |
 | parse-stats 覆盖率 | **跳过** ⇒ 条件1 「需人工」 | 跑（首次 `--release` 构建较慢；可用 `--script-bin` 复用已有二进制） |
 | 适用 | 巡检、每次合并前快手 | **宣告终点 `DONE` 前必须跑一次**（四条都要有实测结论） |
 
@@ -154,19 +178,24 @@ python tools/goal/goal_gate.py --full
   不改 `Cargo.lock`。parse-stats 需要 `E:/MirServer/M2GameSvr/Envir`（不存在则「需人工」并说明）。
 * **board 未列出的卡**：本仓看板只显示命中列谓词的线程；索引里有 `tier=R`、board 却不显示 ⇒「需人工」
   （本地视图未同步，或线程条目链/状态异常），并列入缺口明细。
-* **whitelist 重复编号**：脚本只告警不判死（登记号唯一性归 `m3_whitelist_registry_audit.py`，且该门当前 `scope=T-36+`）；
-  发现重复时以「提示」列出，供 owner 复核。
+* **merged 但 board 未 closed**：R 卡按分级策略合并后常保持 `in-progress`，gate 把这类单列为
+  「需人工」而不是 PASS——它会逐卡列出，供owner确认「是否已重开且新工作有证据」。
+* **whitelist 重复编号**：`build_whitelist` 取并集（不会丢卡↔T 关联），但仍以「提示」列出重复号，
+  登记号唯一性归 `m3_whitelist_registry_audit.py`（该门当前 `scope=T-36+`，T-4/T-6 这类低号重复覆盖不到）。
 * **JSON 结构**：`{schema, generated_ts, repo, envir, mode, conditions[4]{id,name,state,label,detail,evidence},
-  overall, overall_label, fail_items[], need_items[], warnings[]}`；`state ∈ {pass, fail, need_human}`。
+  overall, overall_label, fail_items[], need_items[], warnings[]}`；`state ∈ {pass, fail, need_human}`；
+  条件2 的 `evidence.r_cards[]` 含每卡 `category/board_column/merged/window_required/strong_t/weak_t/comment_evidence`。
 
 ### 5.6 自检与牙
 
 ```sh
 python tools/goal/goal_gate.py selftest --verbose
-# selftest：30 条断言，30 通过，0 失败
+# selftest：46 条断言，46 通过，0 失败
 ```
 
-覆盖四条件各自的 PASS / FAIL / 需人工 分支（含覆盖行解析、散文式 tier、弱关联 T 不冒认、
-未验签、board 缺失、master 漂移、ls-remote 不可用、状态优先级），并内置**两颗牙**：
-把「忽略未实现计数」或「把三者皆无判成 PASS」的退化判定喂给断言 ⇒ selftest 必红。
+覆盖四条件各自的 PASS / FAIL / 需人工 分支（含覆盖行解析、语料完整性计数、**rc=1 但未实现 0 ⇒ FAIL**
+的 fail-closed 耦合、任一条目 tier 枚举、board 已完成、merged 未 closed、comment VERDICT=PASS、
+弱关联 T 不冒认、未验签、board 缺失、master 漂移、ls-remote 不可用、tracked 空/schema 漂移/counts 不一致、
+状态优先级），并内置**四颗牙**：
+忽略未实现计数、删掉 rc 守卫、把三者皆无判成 PASS、把空 tracked 判成 PASS —— 任一退化都会被断言判红。
 改动判定逻辑后先跑 selftest 再跑快速模式。
