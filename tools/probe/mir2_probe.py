@@ -65,6 +65,7 @@ CM_SELCHR = 103
 CM_SELECTSERVER = 104
 CM_CLICKNPC = 1010
 CM_MERCHANTDLGSELECT = 1011
+CM_TAKEONITEM = 1003
 CM_SOFTCLOSE = 1009
 CM_IDPASSWORD = 2001
 CM_LOGINNOTICEOK = 1018
@@ -82,6 +83,8 @@ SM_SELECTSERVER_OK = 530
 SM_NEEDUPDATE_ACCOUNT = 531
 SM_SENDNOTICE = 658
 SM_MERCHANTSAY = 643
+SM_TAKEON_OK = 615
+SM_TAKEON_FAIL = 616
 SM_OUTOFCONNECTION = 528
 
 CLIENT_VERSION_NUMBER = 1200409180  # src/OpenMir2/Grobal2.cs
@@ -351,7 +354,7 @@ def load_scenario(path):
     except ValueError as ex:
         raise ScenarioError("scenario %s is not valid JSON: %s" % (path, ex))
     _need_keys(data, "scenario", required=("name", "steps"),
-               optional=("description", "params"))
+               optional=("description", "params", "required"))
     if not isinstance(data["name"], str) or not data["name"]:
         raise ScenarioError("scenario.name must be a non-empty string")
     params = data.get("params") or {}
@@ -359,14 +362,40 @@ def load_scenario(path):
         raise ScenarioError("scenario.params must be an object")
     if not isinstance(data["steps"], list) or not data["steps"]:
         raise ScenarioError("scenario.steps must be a non-empty list")
+    req = data.get("required")
+    if req is not None:
+        if not isinstance(req, list):
+            raise ScenarioError("scenario.required must be a list of var names")
+        for name in req:
+            if not isinstance(name, str) or not name:
+                raise ScenarioError("scenario.required[] must be non-empty strings, got %r" % (name,))
+        dup = sorted({n for n in req if req.count(n) > 1})
+        if dup:
+            raise ScenarioError("scenario.required has duplicates: %s" % dup)
     return data
 
 
-def _encode_send_body(val, where):
+def _encode_send_body(val, where, params=None):
+    given = [k for k in ("text", "raw_hex", "text_from") if k in val]
+    if len(given) != 1:
+        raise ScenarioError("%s needs exactly one of text/raw_hex/text_from, got %s"
+                            % (where, sorted(given)))
+    if "text_from" in val:
+        name = val["text_from"]
+        if not isinstance(name, str) or not name:
+            raise ScenarioError("%s.text_from must be a non-empty param name" % where)
+        if not params or name not in params:
+            raise ScenarioError("%s.text_from: param %r is not defined (fail-closed)" % (where, name))
+        text = params[name]
+        text = text if isinstance(text, str) else str(text)
+        if not text:
+            raise ScenarioError("%s.text_from: param %r is empty" % (where, name))
+        return encode_text(text, "gbk")
     if "text" in val:
         text = val["text"]
         if not isinstance(text, str):
             raise ScenarioError("%s.text must be a string" % where)
+        # 字面量：不与 params 做任何替换（要参数化文本请用 text_from）
         return encode_text(text, "gbk")
     raw = val["raw_hex"]
     if not isinstance(raw, str):
@@ -405,9 +434,7 @@ def plan_step(step, index, params):
     val = step[action]
     if action == "send":
         _need_keys(val, where + ".send", required=("ident",),
-                   optional=("recog", "param", "tag", "series", "text", "raw_hex"))
-        if "text" in val and "raw_hex" in val:
-            raise ScenarioError("%s.send got both text and raw_hex" % where)
+                   optional=("recog", "param", "tag", "series", "text", "raw_hex", "text_from"))
         out["ident"] = _need_int(val["ident"], where + ".send.ident")
         # recog/param/tag/series 与其它动作同口径：先 resolve_param（可写 params 名），
         # 再在 plan 期做范围校验（recog=i32，其余 u16）。否则要等到发送时 pack_header
@@ -419,7 +446,8 @@ def plan_step(step, index, params):
             out[name] = _need_int(
                 resolve_param(val.get(name, 0), params, where + ".send." + name),
                 where + ".send." + name)
-        out["body"] = _encode_send_body(val, where + ".send") if ("text" in val or "raw_hex" in val) else b""
+        out["body"] = (_encode_send_body(val, where + ".send", params)
+                       if ("text" in val or "raw_hex" in val or "text_from" in val) else b"")
     elif action == "say":
         if not isinstance(val, str):
             raise ScenarioError("%s.say must be a string" % where)
@@ -473,6 +501,11 @@ def expand_scenario(data, params_override=None):
     if params_override:
         for k, v in params_override.items():
             params[k] = v
+    missing = [n for n in (data.get("required") or []) if n not in params]
+    if missing:
+        raise ScenarioError(
+            "scenario %r requires --var %s (declared in \"required\"); refusing to send guessed values"
+            % (data.get("name"), ", ".join("%s=<value>" % n for n in missing)))
     plans = [plan_step(s, i, params) for i, s in enumerate(data["steps"])]
     return plans, params
 
@@ -900,6 +933,8 @@ def build_argparser():
                     help="不按 BotSrv 自动回 1018/81（调试用；对拍不要开）")
     ap.add_argument("--finish", choices=("softclose", "close", "none"), default="softclose",
                     help="收尾方式（默认 softclose = CM_SOFTCLOSE 后断开）")
+    ap.add_argument("--check-scenario", action="store_true",
+                    help="只加载+展开场景做校验（不连网）：rc=0 通过 / rc=2 场景错误")
     ap.add_argument("--selftest", action="store_true", help="离线自测（不连网）")
     return ap
 
@@ -919,6 +954,19 @@ def main(argv=None):
     args._argv = raw_argv
     if args.selftest:
         return run_selftest()
+    if args.check_scenario:
+        if not args.scenario:
+            print("mir2_probe: --check-scenario needs --scenario", file=sys.stderr)
+            return 2
+        try:
+            data = load_scenario(args.scenario)
+            plans, params = expand_scenario(data, parse_vars(args.var))
+        except ScenarioError as ex:
+            print("scenario-error: %s" % ex, file=sys.stderr)
+            return 2
+        print("scenario OK: %s (%d steps, params=%s)"
+              % (data["name"], len(plans), ",".join("%s=%s" % (k, v) for k, v in sorted(params.items())) or "-"))
+        return 0
 
     # 参数校验先于 Run/Recorder 创建：缺参数时还没有 --out 可落 run.json，
     # 按 README「退出码」退 2（fail-closed）；绝不能走到 run=None 的 AttributeError
@@ -1204,6 +1252,62 @@ def _selftest_helpers():
     assert masked_argv(["p", "--password=s3cret"]) == ["p", "--password=***"]
 
 
+def _selftest_scenario_required():
+    """`required` 元数据 + `send.text` 走 params 的口径（F1/F2 的回归）。"""
+    import tempfile
+    base = {
+        "name": "selftest_required",
+        "description": "required 元数据 + send.text params",
+        "required": ["make_index", "item_name"],
+        "steps": [
+            {"send": {"ident": CM_TAKEONITEM, "recog": "make_index", "param": 1, "text_from": "item_name"}},
+            {"wait_for": [SM_TAKEON_OK, SM_TAKEON_FAIL]},
+        ],
+    }
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(base, fh, ensure_ascii=False)
+        data = load_scenario(path)
+        # 1) 缺 required ⇒ 加载期即报错（与 CLI rc=2 同一条路径），并点名缺的是哪个变量
+        try:
+            expand_scenario(data, {})
+        except ScenarioError as ex:
+            assert "--var make_index" in str(ex), str(ex)
+            assert "item_name" in str(ex), str(ex)
+        else:
+            raise AssertionError("expand_scenario accepted missing required vars")
+        # 2) 给全 ⇒ 展开成功，text_from 解析成参数值（GBK+EDCode）
+        plans, _ = expand_scenario(data, {"make_index": 42, "item_name": "屠龙"})
+        assert plans[0]["recog"] == 42, plans[0]
+        assert plans[0]["body"] == encode_text("屠龙", "gbk"), plans[0]["body"]
+        assert plans[1]["idents"] == [SM_TAKEON_OK, SM_TAKEON_FAIL], plans[1]
+        # 3) text 不是 params 名时保持字面量
+        lit = dict(base, required=[], steps=[{"send": {"ident": CM_SAY, "text": "@时间"}}])
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(lit, fh, ensure_ascii=False)
+        plans, _ = expand_scenario(load_scenario(path), {"@时间": "不该命中"})
+        assert plans[0]["body"] == encode_text("@时间", "gbk"), plans[0]["body"]
+        # 4) required 形状非法 / 未知顶层键仍 fail-closed
+        for bad in (dict(base, required="make_index"), dict(base, required=[1]),
+                    dict(base, bogus=1)):
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(bad, fh, ensure_ascii=False)
+            try:
+                load_scenario(path)
+            except ScenarioError:
+                pass
+            else:
+                raise AssertionError("load_scenario accepted bad scenario: %r" % sorted(bad))
+        return "required/text-params 4 项"
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def run_selftest():
     fails = []
 
@@ -1224,6 +1328,7 @@ def run_selftest():
         expected_plain=6))
     check("tamper-red", _selftest_tamper)
     check("scenario-dsl", _selftest_scenarios)
+    check("scenario-required", _selftest_scenario_required)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)
     if fails:
@@ -1231,7 +1336,7 @@ def run_selftest():
         for f in fails:
             print("  -", f)
         return 2
-    print("mir2_probe selftest: OK (6 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
+    print("mir2_probe selftest: OK (7 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
     return 0
 
 

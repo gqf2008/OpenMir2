@@ -240,7 +240,7 @@
 
 1. 场景：`npc_click.json` / `merchant_dialog.json` / `bag_equip.json` / `eat_item.json` / `pickup_item.json`
    已全部落到 `tools/probe/scenarios/`，**消息号与参数位置均有 oracle 出处**（1010/1011 / 1003 / 1006 / 1001，见各文件 `note`）；
-   运行时数据（NPC/商人 `ActorId`、`MakeIndex`、自身坐标）一律 `params: "REQUIRED"`，缺 `--var` 即加载期 fail-closed，绝不猜；
+   运行时数据（NPC/商人 `ActorId`、`MakeIndex`、物品名、自身坐标）一律写进顶层 `required`，缺 `--var` 即加载期 `scenario-error`(rc=2)，绝不猜；文本参数化走 `send.text_from`（`text` 保持字面量，不做替换）；
 
 2. 规则表缺口（`100/520/525/529/530/654/657` + 52 的 (54,78)）属 `conformance-rules` 车道，本卡只引用不修改；
 4. `CM_DROPITEM(1000)` 暂未建场景：oracle `ClientDropItem(processMsg.Msg, processMsg.nParam1)` 的 body 是**物品名文本**，

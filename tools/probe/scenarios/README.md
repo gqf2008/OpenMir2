@@ -23,14 +23,19 @@ python tools/probe/mir2_probe.py \
 }
 ```
 
-* 顶层只允许 `name` / `description` / `params` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
+* 顶层只允许 `name` / `description` / `params` / `required` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
+* `required`（可选）是**必填变量名列表**：`expand_scenario` 在合并完 `--var` 后逐名检查，缺任何一个即
+  `scenario-error`（退出码 2），消息点名缺哪个变量。运行期才知道的值（NPC/商人 `ActorId`、`MakeIndex`、
+  物品名、自身坐标）一律走这里，**不要**在 `params` 里放 `"REQUIRED"` 之类的哨兵值。
+* 离线校验：`python -I -B tools/probe/mir2_probe.py --check-scenario --scenario <file.json> [--var k=v ...]`
+  —— 只加载+展开，不连网；rc=0 通过、rc=2 场景错误。
 * `steps` 非空；每一步是对象，**恰好一个动作键**，外加可选元键 `timeout_ms` / `delay_ms` / `note`。
 
 ## 步骤动作
 
 | 动作 | 取值 | 线上展开 |
 |---|---|---|
-| `send` | 对象：必填 `ident`；可选 `recog`/`param`/`tag`/`series`；`text` 与 `raw_hex` **二选一** | 12B 头 + 体，按 `#1<EDCode>!` 发出 |
+| `send` | 对象：必填 `ident`；可选 `recog`/`param`/`tag`/`series`；`text` / `raw_hex` / `text_from` **三选一** | 12B 头 + 体，按 `#1<EDCode>!` 发出 |
 | `say` | 字符串 | `CM_SAY(3030)`，`recog=0`，文本按 GBK+EDCode |
 | `click_npc` | int 或 `params` 名 | `CM_CLICKNPC(1010)`，`recog=<NPC actor id>` |
 | `dlg_select` | 字符串 label，或 `{"label": "...", "recog": N}` | `CM_MERCHANTDLGSELECT(1011)`；`recog` 缺省取**最近一条 `SM_MERCHANTSAY(643)` 的 recog** |
@@ -50,6 +55,9 @@ python tools/probe/mir2_probe.py \
 * 步骤间默认间隔 `--between-ms`（默认 200ms）；单步可用 `delay_ms` 覆盖。等待本身用 `timeout_ms`。
 
 ## 参数
+
+`text` 是字面量，**不与 params 做替换**；要把文本参数化（如物品名）请用 `text_from: "<params 名>"`——
+该名字必须已在 `params` 或 `--var` 里给出，否则加载期 fail-closed。
 
 `params` 里可放 int 或字符串；动作里的字符串会按「先查 params、再按十进制 int」解析：
 `{"click_npc": "npc_actor"}`。`send` 的 `recog`/`param`/`tag`/`series` 同口径

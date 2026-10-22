@@ -1,31 +1,11 @@
 {
   "name": "merchant_dialog",
-  "description": "点击商人/修理 NPC（--var merchant_actor=<ActorId>）-> 等 SM_MERCHANTSAY(643) -> 选 @buy -> 等下一页 643 或 SM_SYSMESSAGE(100)",
-  "params": {
-    "merchant_actor": "REQUIRED"
-  },
+  "description": "点击商人/修理 NPC -> 等 SM_MERCHANTSAY(643) -> 选 @buy -> 等 SM_SENDGOODSLIST(645) 或 643/100",
+  "required": ["merchant_actor"],
   "steps": [
-    {
-      "click_npc": "merchant_actor",
-      "note": "recog=商人 ActorId；缺省 fail-closed"
-    },
-    {
-      "wait_for": 643,
-      "timeout_ms": 3000,
-      "note": "@main 的说词面板"
-    },
-    {
-      "dlg_select": "@buy",
-      "note": "label 取自部署脚本 Market_Def（如 封魔谷/恶魔修理师-d2008.txt: <买/@buy>）"
-    },
-    {
-      "wait_for": [
-        645,
-        643,
-        100
-      ],
-      "timeout_ms": 3000,
-      "note": "@buy 支回 SM_SENDGOODSLIST(645)；卖/其他支可能仍走 643/100"
-    }
+    {"click_npc": "merchant_actor", "note": "recog=商人 ActorId"},
+    {"wait_for": 643, "timeout_ms": 3000, "note": "@main 的说词面板"},
+    {"dlg_select": "@buy", "note": "label 取自部署脚本 Market_Def（如 封魔谷/恶魔修理师-d2008.txt: <买/@buy>）"},
+    {"wait_for": [645, 643, 100], "timeout_ms": 3000, "note": "@buy 支回 SM_SENDGOODSLIST(645)"}
   ]
 }
