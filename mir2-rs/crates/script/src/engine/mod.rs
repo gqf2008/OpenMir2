@@ -599,6 +599,14 @@ pub trait ScriptPlayer {
         _point: i32,
     ) {
     }
+    /// `ActionOfSetMapMode`（`ExecutionProcessingSys.cs:4423`）落地到的**地图 Flag 写入**。
+    ///
+    /// oracle 在 `SystemShare.MapMgr.FindMap(sMapName)` 命中后按 `sMapMode` 分支写
+    /// `envir.Flag.*`（SAFE/DARK/FIGHT/DECHP/… 共十余支）。本钩子按**原样四参数**下发，
+    /// 由世界适配层按分支表落地（脚本层不做大小写折叠以外的判定）。
+    /// 默认 no-op：未接线时动作不产生副作用（与「world 未建模该 Flag」一致）。
+    fn set_map_mode(&mut self, _map_name: &str, _mode: &str, _param1: &str, _param2: &str) {}
+
     /// `AutoGetExp*`（挂机口径）+ `OffLineFlag = true` + `KickOffLineTick`
     fn set_offline(
         &mut self,

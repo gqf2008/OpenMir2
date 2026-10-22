@@ -403,6 +403,8 @@ fn queue_script_output(
         let Some(body) = game_svr::pickwire::script_frame(
             f,
             npc_actor_id,
+            // `SM_SYSMESSAGE` 的 `Recog` = 收帧玩家自己（本函数已有 `player_actor_id`）。
+            player_actor_id,
             sg.state.gold,
             sg.game_gold,
             sg.game_point,

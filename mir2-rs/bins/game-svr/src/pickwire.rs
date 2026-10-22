@@ -129,8 +129,9 @@ pub const RM_SCRIPT_PLAYDICE: i32 = mir2_protocol::messages::RM_PLAYDICE as i32;
 
 /// **脚本帧**（[`SendMsg`]，`NpcPlayer.frames`）⇒ wire body。
 ///
-/// 映射两条脚本 `RM_*`（与 oracle 消息泵逐字段对齐）：
+/// 映射脚本 `RM_*`（与 oracle 消息泵逐字段对齐）：
 ///
+/// - `RM_GOLDCHANGED`（10136）⇒ `SM_GOLDCHANGED(653)`（`PlayObject.Message.cs:1833-1835`）；
 /// - `RM_GAMEGOLDCHANGED`（8084）⇒ `SendGoldInfo(false)`（`PlayObject.Message.cs:1836-1837`）
 ///   ⇒ `SendDefMessage(SM_GAMEGOLDNAME, GameGold, LoWord(GamePoint), HiWord(GamePoint), 0, "")`
 ///   （`PlayObject.Base.cs:927-939`）；`SoftVersionDateEx == 0` 时整帧不发（同 `:930`）。
@@ -139,6 +140,10 @@ pub const RM_SCRIPT_PLAYDICE: i32 = mir2_protocol::messages::RM_PLAYDICE as i32;
 ///   ++ `EncodePacket(MessageBodyWL{Param1,Param2,Tag1,0})` ++ `EncodeString(Msg)`；
 ///   `ActorId` = 入队方 NPC 的 `ActorId`（`BaseObject.Message.cs:26/90` 的 `this.ActorId`），
 ///   调用方须传入本次 `GotoLable` 的 NPC 实体 id。
+/// - `RM_SYSMESSAGE`（11004）⇒ `PlayObject.Message.cs:1715-1718`：
+///   `MakeMessage(SM_SYSMESSAGE, ActorId, MakeWord(FColor,BColor), 0, 1)` + `EncodeString(Msg)`；
+///   `ActorId` = **收帧玩家自己**（`BaseObject.SysMsg` 的 `this.ActorId`），`F/B` 由
+///   `SysMsg` 按 `MsgColor` 从 `SystemShare.Config` 选好（`NpcPlayer::sys_msg`）。
 ///
 /// 其余 ident 仍按既有口径丢弃（T-142 残余）。
 /// `None` = 不发帧（未知 ident，或 `SoftVersionDateEx == 0` 门挡住）。
@@ -146,6 +151,8 @@ pub const RM_SCRIPT_PLAYDICE: i32 = mir2_protocol::messages::RM_PLAYDICE as i32;
 pub fn script_frame(
     s: &SendMsg,
     npc_actor_id: i32,
+    // 玩家自己的 `ActorId`（`SM_SYSMESSAGE` 的 `Recog`）；脚本帧排水时由会话给出。
+    player_actor_id: i32,
     // `BaseObject.Gold`（`SM_GOLDCHANGED` 的 `Recog`）——排水时的当下值。
     gold: i32,
     game_gold: i32,
@@ -162,6 +169,21 @@ pub fn script_frame(
                 return None;
             }
             Some(smframe::sm_gamegoldname(game_gold, game_point, &[]))
+        }
+        // `BaseObject.SysMsg` 的非 `Notice` 支（`BaseObject.cs:1666-1686`）：
+        // `SendMsg(RM_SYSMESSAGE, 0, FColor, BColor, 0, sMsg)` ⇒ `SM_SYSMESSAGE(100)`、
+        // `Recog` = 玩家 `ActorId`、`Param = MakeWord(F,B)`、`Series = 1`。
+        // 尾 = `EncodeString(sMsg)`（cp936 字节；`NpcPlayer` 存的是已解码的 UTF-16 字符串）。
+        i if i == mir2_protocol::messages::RM_SYSMESSAGE as i32 => {
+            let msg = s.msg.as_deref().unwrap_or("");
+            let bytes = mir2_script::cp936::encode_gb2312_dotnet(msg);
+            // oracle 的色词是 `byte`（`GameSvrConf.*MsgFColor`）⇒ 截断到低 8 位再打包。
+            Some(crate::smframe::sm_sysmessage(
+                player_actor_id,
+                u16::from(s.n_param1 as u8),
+                u16::from(s.n_param2 as u8),
+                &bytes,
+            ))
         }
         RM_SCRIPT_PLAYDICE => {
             let msg = s.msg.as_deref().unwrap_or("");
@@ -648,7 +670,7 @@ mod tests {
             n_param3: 0x090a_0b0c,
             msg: Some("@cube82\u{E7C8}".to_string()),
         };
-        let got = script_frame(&s, 4242, 0, 0, 0, 0).expect("RM_PLAYDICE 必须映射");
+        let got = script_frame(&s, 4242, 9001, 0, 0, 0, 0).expect("RM_PLAYDICE 必须映射");
         let want = crate::smframe_ext::sm_playdice(
             4242,
             1,

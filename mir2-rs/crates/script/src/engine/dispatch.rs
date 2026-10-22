@@ -38,6 +38,9 @@ pub static IMPLEMENTED_EXECUTIONS: &[&str] = &[
     "ActionOfReSet",
     "ActionOfSetOpen",
     "ActionOfSetUnit",
+    // A-21/T-85：`SETMPAMODE`（`ExecutionCode.SetMapMode = 216`）。分支表由宿主落地
+    // （`map_mode::apply_set_map_mode`），引擎侧负责 `FindMap`/空 mode 门 + 四参数下发。
+    "ActionOfSetMapMode",
     // ---- B2/M4 动作批次（2026-10-11）----
     "ActionOfLineMsg",
     "ActionOfGameGold",

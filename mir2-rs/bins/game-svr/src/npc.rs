@@ -48,6 +48,11 @@ use mir2_script::engine::{Engine, ScriptNpc, ScriptPlayer};
 use mir2_script::{LocalFs, ScriptInfo, ScriptParsers};
 use mir2_shared::hutil32::{arrest_string_ex_ref, compare_lstr_prefix, ArrestWrite};
 
+/// `MsgType.Cust`（`src/Modules/SystemModule/Enums/MsgType.cs`：`System,Notice,Hint,Say,Castle,Cust,...` ⇒ 5）。
+///
+/// 只用于 `BaseObject.SysMsg` 的 default 支判定（`BaseObject.cs:1670-1680`）。
+const MSG_TYPE_CUST: i32 = 5;
+
 /// `GotoLableSendMerChantSayMsg`（`ScriptEngine.cs:991/996`）的说词行：`normNpc.ChrName + '/' + sMsg`。
 #[must_use]
 pub fn merchant_say_text(chr_name: &str, msg: &str) -> String {
@@ -196,6 +201,47 @@ pub struct NpcVars {
     pub high_mc_info: Option<String>,
     pub high_sc_info: Option<String>,
     pub high_online_info: Option<String>,
+    /// `SystemShare.MapMgr` 已装载地图的逻辑名表（脚本 `SETMPAMODE` 的
+    /// `MapMgr.FindMap(sMapName) != null` 门；宿主从 [`mir2_envir::MapRegistry`] 灌入）。
+    /// 缺省空 ⇒ `map_exists` 恒 `false`（与「无注册表」同口径）。
+    pub map_names: Vec<String>,
+    /// `SystemShare.Config.{Red,Green,Blue}CustMsgF/BColor`（`BaseObject.SysMsg` 的
+    /// `SM_SYSMESSAGE` 色词；见 [`SysMsgCfg`]）。
+    pub sys_msg: SysMsgCfg,
+}
+
+/// `BaseObject.SysMsg`（`BaseObject.cs:1588-1686`，**非 `MsgType.Notice` 支**）用的色词。
+///
+/// oracle 取值源 = `SystemShare.Config`（`GameSvrConf.cs:1536-1548` 的 ctor 缺省；
+/// `ServerConf.cs:329-343` 的 `[Setup] *MsgFColor/BColor` 覆盖）。本仓由宿主按 `[Setup]`
+/// 灌入；缺省 = oracle 缺省。
+///
+/// **未建模**：`MsgType.Notice` 的 `[`/`<`/`{` 三支（`RM_MOVEMESSAGE`/`RM_SYSMESSAGE` 彩色公告 +
+/// `ShowPreFixMsg`/`LineNoticePreFix` 前缀）。脚本引擎（`ExecutionProcessingSys.cs` /
+/// `ConditionProcessingSys.cs`）**没有任何 `MsgType.Notice` 调用点**（grep 0 命中）⇒ 该支对脚本
+/// 不可达；宿主另有 `line_notice` 模块承载公告下行。`MsgType.Cust` 同样不在脚本调用面上
+/// （保留 [`SysMsgCfg::cust`] 只为逐支对齐）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SysMsgCfg {
+    /// `RedMsgFColor/RedMsgBColor`（oracle 缺省 `0xFF/0x38`）。
+    pub red: (u8, u8),
+    /// `GreenMsgFColor/GreenMsgBColor`（缺省 `0xDB/0xFF`）。
+    pub green: (u8, u8),
+    /// `BlueMsgFColor/BlueMsgBColor`（缺省 `0xFF/0xFC`）。
+    pub blue: (u8, u8),
+    /// `CustMsgFColor/CustMsgBColor`（缺省 `0xFC/0xFF`）。
+    pub cust: (u8, u8),
+}
+
+impl Default for SysMsgCfg {
+    fn default() -> Self {
+        Self {
+            red: (0xFF, 0x38),
+            green: (0xDB, 0xFF),
+            blue: (0xFF, 0xFC),
+            cust: (0xFC, 0xFF),
+        }
+    }
 }
 
 impl Default for NpcVars {
@@ -219,6 +265,8 @@ impl Default for NpcVars {
             high_mc_info: None,
             high_sc_info: None,
             high_online_info: None,
+            map_names: Vec::new(),
+            sys_msg: SysMsgCfg::default(),
         }
     }
 }
@@ -664,6 +712,18 @@ pub struct NpcPlayer<'r> {
     /// [`crate::ground::drop_item_down_give`]——oracle 的掉落路径在本 oracle 树上恒失败
     /// （`T-19`），但计数与 RNG 抽数必须补齐。
     pub full_bag_drops: Vec<String>,
+    /// `SystemShare.MapMgr` 已装载地图的逻辑名表（`map_exists` = `FindMap(name) != null`）。
+    /// 宿主经 [`NpcVars::map_names`] 灌入；缺省空 ⇒ 恒 `false`（`SETMPAMODE` 因此走
+    /// `ScriptActionError` 支，与「注册表未装载」同口径）。
+    pub map_names: Vec<String>,
+    /// `SystemShare.Config.*MsgFColor/BColor`（`sys_msg` 的 `SM_SYSMESSAGE` 色词）。
+    pub sys_msg_cfg: SysMsgCfg,
+    /// `SETMPAMODE` 的待落写队列（[`crate::map_mode::MapModeWrite`]）。
+    ///
+    /// oracle 在 `ActionOfSetMapMode`（`ExecutionProcessingSys.cs:4423-4881`）里**当场**写
+    /// `envir.Flag`；脚本执行期 `NpcPlayer` 拿不到 `&mut MapRegistry` ⇒ 先记录，宿主在命令
+    /// 处理完之后、P25 消费点之前落库（等价性论证见 `map_mode` 模块头）。
+    pub map_mode_writes: Vec<crate::map_mode::MapModeWrite>,
 }
 
 impl NpcPlayer<'_> {
@@ -728,6 +788,9 @@ impl NpcPlayer<'_> {
             use_items: vec![None; crate::ability::USE_ITEMS_LEN],
             catalog: None,
             full_bag_drops: Vec::new(),
+            map_names: Vec::new(),
+            sys_msg_cfg: SysMsgCfg::default(),
+            map_mode_writes: Vec::new(),
         }
     }
 }
@@ -1259,6 +1322,66 @@ impl ScriptPlayer for NpcPlayer<'_> {
     fn tick_count(&self) -> i32 {
         self.tick
     }
+    /// `SystemShare.MapMgr.FindMap(sMap) != null`（`ActionOfSetMapMode` 的第一道门，
+    /// `ExecutionProcessingSys.cs:4429-4434`）。oracle 的 `FindMap` 按 ASCII 大小写不敏感
+    /// （`MapRegistry::id_of` 的 `normalize_name` 同口径）。
+    fn map_exists(&self, map: &str) -> bool {
+        self.map_names.iter().any(|n| n.eq_ignore_ascii_case(map))
+    }
+
+    /// `ActionOfSetMapMode`（`ExecutionProcessingSys.cs:4423-4881`）的**记录侧**：
+    /// 只把四参数原样入队，分支表由宿主 [`crate::map_mode::apply_set_map_mode`] 落库
+    /// （脚本执行期拿不到 `&mut MapRegistry`；等价性见 `map_mode` 模块头）。
+    ///
+    /// 引擎已在调用本钩子前用 `map_exists` 过 `FindMap` 门与 `sMapMode` 非空门
+    /// （`actions.rs` 的 `"ActionOfSetMapMode"` 支）；本钩子不再重复判定。
+    fn set_map_mode(&mut self, map_name: &str, mode: &str, param1: &str, param2: &str) {
+        self.map_mode_writes.push(crate::map_mode::MapModeWrite {
+            map_name: map_name.to_string(),
+            mode: mode.to_string(),
+            param1: param1.to_string(),
+            param2: param2.to_string(),
+        });
+    }
+
+    /// `BaseObject.SysMsg(msg, color, msgType)`（`BaseObject.cs:1588-1686`）的
+    /// **非 `MsgType.Notice` 支**：
+    ///
+    /// ```text
+    /// switch (msgColor) {
+    ///   case Green: SendMsg(RM_SYSMESSAGE, 0, GreenMsgFColor, GreenMsgBColor, 0, sMsg);
+    ///   case Blue:  SendMsg(RM_SYSMESSAGE, 0, BlueMsgFColor,  BlueMsgBColor,  0, sMsg);
+    ///   default:    msgType == Cust
+    ///                 ? SendMsg(..., CustMsgFColor, CustMsgBColor, 0, sMsg)
+    ///                 : SendMsg(..., RedMsgFColor,  RedMsgBColor,  0, sMsg);
+    /// }
+    /// ```
+    ///
+    /// `msgType` **只**参与 `Cust` 判定（不是 `Cust` 时 Hint/Say/System 的帧完全相同）。
+    /// `Notice` 支（`[`/`<`/`{`）对脚本不可达（脚本引擎 0 处 `MsgType.Notice`），宿主公告
+    /// 下行另有 `line_notice` 模块——见 [`SysMsgCfg`] 的残余说明。
+    fn sys_msg(&mut self, msg: &str, color: i32, msg_type: i32) {
+        let (f, b) = match color {
+            mir2_script::engine::actions::MSG_COLOR_GREEN => self.sys_msg_cfg.green,
+            mir2_script::engine::actions::MSG_COLOR_BLUE => self.sys_msg_cfg.blue,
+            _ => {
+                if msg_type == MSG_TYPE_CUST {
+                    self.sys_msg_cfg.cust
+                } else {
+                    self.sys_msg_cfg.red
+                }
+            }
+        };
+        self.send_msg(
+            i32::from(mir2_protocol::messages::RM_SYSMESSAGE),
+            0,
+            i32::from(f),
+            i32::from(b),
+            0,
+            Some(msg),
+        );
+    }
+
     fn send_msg(
         &mut self,
         ident: i32,

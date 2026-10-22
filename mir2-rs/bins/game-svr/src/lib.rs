@@ -74,6 +74,7 @@ pub mod healthspell;
 pub mod inbound;
 pub mod itemwire;
 pub mod magics;
+pub mod map_mode;
 pub mod mapdoor;
 pub mod merchant;
 pub mod mongen;
@@ -5694,6 +5695,10 @@ fn npc_player_from_session<'r>(
     p.credit_point = i32::from(sg.equip.credit_point);
     p.re_level = i32::from(sg.equip.re_level);
     p.vars = vars.clone();
+    // `SETMPAMODE` 的 `MapMgr.FindMap` 门（`map_names`）与 `sys_msg` 色词：都来自
+    // `SystemShare`（宿主一次灌入 `NpcVars`，每个脚本快照只读复制）。
+    p.map_names = vars.map_names.clone();
+    p.sys_msg_cfg = vars.sys_msg;
     // `PlayObject.MyGuild?.GuildName`（`$GUILDNAME`；`None` = 无行会 ⇒ 整条说词 "无"）。
     p.vars.guild_name = sg.guild.guild_name.clone();
     // `$USERWEAPON`（`Merchant.GetVariableText`）：`UseItems[ItemLocation.Weapon=1]` 的模板名。
@@ -6070,6 +6075,11 @@ fn run_merchant_goto(
         write_back_player_gold_deal(&player, sg, session, sell_off);
         // **A-10/T-86**：`SETOFFLINE` 的六字段写回（与 P31 四字段同一位置；未命中动作时等值）。
         write_back_player_offline(&player, sg);
+        // **A-21/T-85（SETMPAMODE）**：脚本动作只记录、宿主落库（同一 tick 的 P25 之前）。
+        // oracle 是同一个 `Envirnoment.Flag`；本宿主按「命令处理完 → 落库 → 消费」等价。
+        session
+            .pending_map_modes
+            .extend(std::mem::take(&mut player.map_mode_writes));
         let use_slots = write_back_player_use_items(&player, sg, &use_before);
         (
             says,
@@ -6217,6 +6227,8 @@ fn emit_script_frames(
         let Some(body) = game_svr::pickwire::script_frame(
             f,
             npc_actor_id,
+            // `SM_SYSMESSAGE` 的 `Recog` = 收帧玩家自己（`BaseObject.SysMsg` 的 `this.ActorId`）。
+            sg.actor_id,
             sg.state.gold,
             sg.game_gold,
             sg.game_point,
@@ -14551,6 +14563,13 @@ struct ShopSession {
     /// `NpcPlayer::set_play_dice_label`）；读点/清点 = `LableIsCanJmp` 第三支
     /// （`PlayObject.Base.cs:2824-2828`：命中即清 `string.Empty`，一次性）。跨对话调用保持。
     play_dice_label: Option<String>,
+    /// `SETMPAMODE`（`ActionOfSetMapMode`）在本次脚本里产生的**待落地图 Flag 写**。
+    ///
+    /// oracle 在动作里当场写 `envir.Flag`；本宿主的脚本快照（[`game_svr::npc::NpcPlayer`]）
+    /// 拿不到 `&mut mir2_envir::MapRegistry` ⇒ 由 [`run_merchant_goto`] 在脚本跑完后收进这里，
+    /// 再在 `sim_loop` 的 [`flush_map_mode_writes`] 落库（位于 P25 消费点之前，等价性见
+    /// `map_mode` 模块头）。跨调用**不保留**：落库后即清空。
+    pending_map_modes: Vec<game_svr::map_mode::MapModeWrite>,
 }
 
 /// 一个在线角色的**地面交互会话态**（`CM_PICKUP`/`CM_DROPITEM` 用）。
@@ -15762,6 +15781,48 @@ fn drain_player_need_recheck_with_magic(
     }
 }
 
+/// **A-21/T-85**：把 `SETMPAMODE`（`ActionOfSetMapMode`）收集到的地图 Flag 写落进注册表。
+///
+/// oracle 的 `Envirnoment.Flag` 是运行时状态（`SystemShare.MapMgr.FindMap(name).Flag`），
+/// 脚本动作当场写；本仓把它建模为 [`mir2_envir::MapRegistry`] 的条目（`set_flag`）⇒ 落库后
+/// **所有既有 `flag_of` 读者**（P22 `DECGAMEGOLD`、P25 `DECHP/INCHP`、安全区、行会战图门…）
+/// 立即看到新值。
+///
+/// 调用点：`sim_loop` 在玩家命令处理完之后、`drain_player_game_gold`/`drain_player_map_hp`
+/// 之前（oracle 的消费点在同一 `Run()` 的后段）。跨会话按**键排序**落库，保证确定性；
+/// 同一 tick 内多个会话写同一张图时后写覆盖先写（与 oracle「按命令到达序」在本骨架的
+/// 单线程命令序一致）。
+///
+/// 无注册表（`None`）⇒ 清空队列不落库（oracle `MapMgr` 为空时 `FindMap` 恒 null ⇒ 整支不执行）。
+fn flush_map_mode_writes(
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    registry: Option<&mut mir2_envir::MapRegistry>,
+) -> usize {
+    let mut names: Vec<String> = shop_sessions
+        .iter()
+        .filter(|(_, s)| !s.pending_map_modes.is_empty())
+        .map(|(k, _)| k.clone())
+        .collect();
+    names.sort();
+    let Some(reg) = registry else {
+        for name in names {
+            if let Some(s) = shop_sessions.get_mut(&name) {
+                s.pending_map_modes.clear();
+            }
+        }
+        return 0;
+    };
+    let mut applied = 0usize;
+    for name in names {
+        let Some(s) = shop_sessions.get_mut(&name) else {
+            continue;
+        };
+        let writes = std::mem::take(&mut s.pending_map_modes);
+        applied += game_svr::map_mode::flush_map_mode_writes(&writes, reg);
+    }
+    applied
+}
+
 /// **PL-3 / P25**：地图 `DECHP`/`INCHP`（`PlayObject.Message.cs:569-594`）。
 ///
 /// 逐会话（**按键排序**）读 `Envir.Flag`（`MapRegistry::flag_of(entity.map_id)`）：
@@ -16894,7 +16955,7 @@ fn startup_online_hum_gate(world_clock_ms: i64) -> game_svr::ids::OnlineHumGate 
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
-    registry: Option<mir2_envir::MapRegistry>,
+    mut registry: Option<mir2_envir::MapRegistry>,
     mut enter_cfg: EnterConfig,
     notice: Vec<u8>,
     colors: MsgColors,
@@ -16914,12 +16975,24 @@ fn sim_loop(
     // **I-6**：`GuildChief/GuildMemberRank` 的生产源是 `String.conf [Guild]`（`StringConf.cs:30-35`），
     // 不是 `GuildCastleConfig`；不覆盖会静默回落 `掌门人/行会成员`（W3-m8/m9）。
     // 说词变量的配置基线（`NormNpc.GetVariableText` 的 `SystemShare.Config` 半边）。
-    let npc_vars_base = npc_vars_from(
+    let mut npc_vars_base = npc_vars_from(
         enter_cfg.game_conf.as_ref(),
         &enter_cfg.server_name,
         enter_cfg.upgrade_weapon_price,
         enter_cfg.shop.human_max_gold,
     );
+    // **A-21/T-85**：脚本 `SETMPAMODE` 的两处 `SystemShare` 取值——
+    // ① `MapMgr` 已装载地图名表（`map_exists` = `FindMap(name) != null`）；
+    // ② `SysMsg` 的 `SM_SYSMESSAGE` 色词（`[Setup] *MsgFColor/BColor`）。
+    if let Some(reg) = registry.as_ref() {
+        npc_vars_base.map_names = reg.map_names();
+    }
+    npc_vars_base.sys_msg = game_svr::npc::SysMsgCfg {
+        red: (colors.red_f, colors.red_b),
+        green: (colors.green_f, colors.green_b),
+        blue: (colors.blue_f, colors.blue_b),
+        ..game_svr::npc::SysMsgCfg::default()
+    };
     let mut guild_cfg = mir2_world::GuildConfig::from_guild_castle(&enter_cfg.guild_castle_cfg);
     guild_cfg.guild_chief = enter_cfg.string_conf.guild_chief().to_string();
     guild_cfg.guild_member_rank = enter_cfg.string_conf.guild_member_rank().to_string();
@@ -19860,6 +19933,9 @@ fn sim_loop(
         // **PL-4 / P22**：`PlayObject.Message.cs:442-529`（P21 之后、P24/P25 之前）。
         // 内容不可达 ⇒ 生产 0 抽数；一旦触发 `MoveToHome`，`merchant`/`space_move` 两组的
         // 相对次序变为「玩家 Run 段末尾」（设计件 §4.4，属 R 窗口证据）。
+        // **A-21/T-85**：本 tick 各条命令里 `SETMPAMODE` 收集到的地图 Flag 写先落库，
+        // 再进 P22/P25 的消费点（oracle 是脚本动作当场写、同 tick 后段消费）。
+        flush_map_mode_writes(&mut shop_sessions, registry.as_mut());
         drain_player_game_gold(
             &mut world,
             &mut ground_sessions,
@@ -24359,6 +24435,129 @@ mod tests {
         assert_eq!(sg.auto_get_exp_point, 900);
         assert!(sg.off_line_flag, "挂机标志不得被商人脚本清零");
         assert_eq!(sg.kick_off_line_tick, 42, "踢号时限不得被商人脚本清零");
+    }
+
+    /// `SETMPAMODE`（`ExecutionCode.SetMapMode = 216`；`sParam1..4` = 地图/分支/参数1/参数2）。
+    fn setmapamode_act(map: &str, mode: &str, p1: &str, p2: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 216,
+            s_param1: map.to_string(),
+            s_param2: mode.to_string(),
+            s_param3: p1.to_string(),
+            s_param4: p2.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// `SENDMSG`（`ExecutionCode.SendMsg = 31`，`ActionOfLineMsg`）：`nParam1` = 分支号、
+    /// `sParam2` = 文本（`ScriptParsers.cs:554`）。
+    fn sendmsg_act(branch: i32, msg: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 31,
+            n_param1: branch,
+            s_param2: msg.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// **A-21/T-85（`SETMPAMODE DECHP`）生产入口**：`CM_MERCHANTDLGSELECT` → `run_merchant_goto`
+    /// → `ActionOfSetMapMode`（code 216）→ `NpcPlayer::set_map_mode` 记录 → 宿主
+    /// `flush_map_mode_writes` 落 `Envir.Flag` → P25 `drain_player_map_hp` 消费；同一条脚本里的
+    /// `SENDMSG 5` 顺带钉住 `NpcPlayer::sys_msg` 的 `SM_SYSMESSAGE` **逐字节**。
+    ///
+    /// oracle 锚：
+    /// - `ExecutionProcessingSys.cs:4429-4434`：`FindMap(sParam1) == null || sMapMode` 空 ⇒
+    ///   `ScriptActionError`、**不写任何 Flag**；
+    /// - `:4585-4596`：`DECHP` 在 `sParam3`/`sParam4` **都非空**时置
+    ///   `boDECHP=true/nDECHPTIME=StrToInt(sParam3)/nDECHPPOINT=StrToInt(sParam4)`，否则只
+    ///   `boDECHP=false`；
+    /// - `PlayObject.Message.cs:569-578`：`boDECHP` 且 `now - DecHpTick > nDECHPTIME*1000`
+    ///   ⇒ `HP -= nDECHPPOINT`（HP 不足则 0）+ `HealthSpellChanged()`；
+    /// - `BaseObject.cs:1678` + `PlayObject.Message.cs:1715-1718`：`SysMsg(_, Red, Say)` ⇒
+    ///   `SM_SYSMESSAGE(100)`、`Recog` = 玩家 `ActorId`、`Param = MakeWord(RedMsgFColor,
+    ///   RedMsgBColor)`、`Series = 1`、尾 = `EncodeString`。
+    ///
+    /// 牙（删任一处 ⇒ 本用例红）：
+    /// ① 删 `actions.rs` 的 `"ActionOfSetMapMode"` 支 ⇒ 无写队列 ⇒ `applied == 0`；
+    /// ② 删 `map_mode::apply_set_map_mode` 的 `DECHP` 支 ⇒ `boDECHP` 仍 false（HP 不减）；
+    /// ③ 删 `NpcPlayer::sys_msg` 覆写 ⇒ 帧列表为空；
+    /// ④ 删 `pickwire::script_frame` 的 `RM_SYSMESSAGE` 支 ⇒ 帧被丢（T-142 ④ 口径）；
+    /// ⑤ 删 `run_merchant_goto` 的 `pending_map_modes.extend` ⇒ 队列不达宿主。
+    #[test]
+    fn a21_setmpamode_dechp_lands_flag_frame_and_p25_consumes() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "",
+            vec![
+                setmapamode_act("A", "DECHP", "1", "10"),
+                sendmsg_act(5, "中毒了"),
+            ],
+        )]);
+        // `SystemShare.MapMgr` 的已装载图名表（`FindMap("A") != null` 门）+ 色词（缺省 oracle）。
+        rig.npc_vars.map_names = vec!["A".to_string()];
+        rig.npc_vars.sys_msg = game_svr::npc::SysMsgCfg::default();
+        // 玩家 HP/MaxHP = 100/100，`DecHpTick` ctor = 0（进图后首次调用立即触发）。
+        let hero = rig.sessions["hero"].actor_id;
+        {
+            let e = rig.world.entities.get_mut(hero).unwrap();
+            e.hp = 100;
+            e.max_hp = 100;
+            let sg = rig.sessions.get_mut("hero").unwrap();
+            sg.state.wabil.hp = 100;
+            sg.state.wabil.max_hp = 100;
+            sg.dec_hp_tick = 0;
+        }
+
+        rig.dlg_select("@main");
+
+        // ① 帧：仅 `SENDMSG 5` 的一条 `SM_SYSMESSAGE`（`SETMPAMODE` 本身零帧）。
+        let frames = rig.drain();
+        let want = crate::smframe::sm_sysmessage(
+            hero,
+            0xFF,
+            0x38,
+            &mir2_script::cp936::encode_gb2312_dotnet("中毒了"),
+        );
+        assert_eq!(
+            frames,
+            vec![want],
+            "SENDMSG 5 的红字必须逐字节 = SM_SYSMESSAGE(Recog=ActorId, Param=0x38FF, Series=1)"
+        );
+
+        // ② 落库：`flush_map_mode_writes` 把脚本队列写进注册表（= oracle 的 Envir.Flag）。
+        let (mut registry, _dir) = pl3_registry("");
+        let applied = flush_map_mode_writes(&mut rig.shop_sessions, Some(&mut registry));
+        assert_eq!(applied, 1, "一条 SETMPAMODE 写必须落库");
+        let flag = registry.flag_of(0).expect("图 A = id 0");
+        assert!(
+            flag.bo_dechp,
+            "DECHP 两参数都非空 ⇒ boDECHP = true（:4587）"
+        );
+        assert_eq!(
+            flag.n_dechptime, 1,
+            "nDECHPTIME = StrToInt(sParam3)（:4588）"
+        );
+        assert_eq!(
+            flag.n_dechppoint, 10,
+            "nDECHPPOINT = StrToInt(sParam4)（:4589）"
+        );
+
+        // ③ 消费：P25 在 `now - DecHpTick > nDECHPTIME*1000` 时扣血并出 53。
+        let mut run_frames = game_svr::run_frames::RunFrames::new();
+        drain_player_map_hp(
+            &mut rig.world,
+            &mut rig.sessions,
+            &rig.online,
+            Some(&registry),
+            1001,
+            &mut run_frames,
+        );
+        assert_eq!(
+            rig.world.entities.get(hero).unwrap().hp,
+            90,
+            "HP -= nDECHPPOINT（:572-574）"
+        );
+        assert_eq!(rig.sessions["hero"].state.wabil.hp, 90, "53 投影同步");
     }
 
     /// `take`/`give` 的 **`nParam2`** 口径（`ScriptParsers.cs:554`：动作的件数在 **sParam2** ⇒
