@@ -4,8 +4,10 @@
 //! 3. argv 透传：`mir2-server <role> <args...>` 与旧 exe 同参数的行为（退出码 + stderr）逐字一致；
 //! 4. 六个旧 exe 的 `main.rs` 只是调各自 lib `run()` 的薄包装（源码检查）。
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use mir2_server::ROLES;
 
@@ -23,11 +25,75 @@ fn sibling_exe(name: &str) -> PathBuf {
     exe_dir().join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
 }
 
+/// 子进程退出的等待上界（卡 `openmir2-test-waits-bounded-2`）。
+///
+/// 依据：本机实测这些 CLI 探针（`--list-roles` / 未知角色 / 缺配置）**<0.02s** 即退出；
+/// 取 10s = 实测的 ~500× 余量，与 `bins/game-svr/tests/relay.rs::missing_worldmaps_and_envir_exits_nonzero`
+/// 的 10s 同值——留的是慢机/CI 冷启动的余量，不是「够不着的大数」。
+const RUN_BOUND: Duration = Duration::from_secs(10);
+
 fn run(exe: &Path, args: &[&str]) -> Output {
-    Command::new(exe)
+    let started = Instant::now();
+    let mut child = Command::new(exe)
         .args(args)
-        .output()
-        .unwrap_or_else(|e| panic!("启动 {} 失败：{e}", exe.display()))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("启动 {} 失败：{e}", exe.display()));
+    // 两个管道各起一条线程读到 EOF：否则子进程写满 pipe 缓冲会**假死**，
+    // 我们等的就是一个永远等不到的退出码。
+    let mut child_out = child.stdout.take().expect("stdout 管道");
+    let mut child_err = child.stderr.take().expect("stderr 管道");
+    let out_h = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        child_out.read_to_end(&mut b).ok();
+        b
+    });
+    let err_h = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        child_err.read_to_end(&mut b).ok();
+        b
+    });
+    let mut timed_out = false;
+    let status = loop {
+        match child
+            .try_wait()
+            .unwrap_or_else(|e| panic!("等待 {} 退出失败：{e}", exe.display()))
+        {
+            Some(status) => break status,
+            None if started.elapsed() >= RUN_BOUND => {
+                timed_out = true;
+                // 这些探针不拉子进程；直接子进程 kill + reap 即够（不留残留）。
+                let _ = child.kill();
+                break child
+                    .wait()
+                    .unwrap_or_else(|e| panic!("reap {} 失败：{e}", exe.display()));
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    let stdout = out_h.join().unwrap_or_default();
+    let stderr = err_h.join().unwrap_or_default();
+    if timed_out {
+        let text = String::from_utf8_lossy(&stderr);
+        let lines: Vec<&str> = text.lines().collect();
+        let tail = if lines.is_empty() {
+            "(stderr 为空)".to_string()
+        } else {
+            lines[lines.len().saturating_sub(20)..].join("\n")
+        };
+        panic!(
+            "期望 `{}` {:?} 在 {RUN_BOUND:?} 内退出；已耗时 {:?}（已 kill + reap）；stderr 末 20 行：\n{tail}",
+            exe.display(),
+            args,
+            started.elapsed()
+        );
+    }
+    Output {
+        status,
+        stdout,
+        stderr,
+    }
 }
 
 #[test]

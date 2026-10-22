@@ -134,6 +134,126 @@ pub fn require_ready(text: &str, port: u16) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// 有界子进程输出（卡 `openmir2-test-waits-bounded-2`）
+// ---------------------------------------------------------------------------
+
+static OUTPUT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// 有界等待子进程退出并收齐 stdout/stderr。
+///
+/// 与 `Command::output()` 的区别只有两点：① 超时即 **kill 进程树**并 reap（不留子进程/端口）；
+/// ② stderr 先落临时文件再读回 —— `output()` 一旦超时被取消就**拿不到任何输出**，
+/// 而诊断要求「命令 + 已耗时 + stderr 末 20 行」。
+///
+/// 返回 `Err(诊断串)`：已耗时、上界、pid（已 kill）、stderr 末 20 行。
+pub async fn try_output_bounded(
+    cmd: &mut tokio::process::Command,
+    bound: Duration,
+) -> Result<std::process::Output, String> {
+    use std::process::Stdio;
+
+    let started = std::time::Instant::now();
+    let err_path = std::env::temp_dir().join(format!(
+        "mir2-bounded-stderr-{}-{}.log",
+        std::process::id(),
+        OUTPUT_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let err_file = std::fs::File::create(&err_path).expect("创建 stderr 捕获文件失败");
+    cmd.stdout(Stdio::piped()).stderr(Stdio::from(err_file));
+    let mut child = cmd.spawn().expect("启动子进程失败");
+    let pid = child.id();
+    let mut stdout = child.stdout.take();
+    let out_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut s) = stdout.take() {
+            tokio::io::AsyncReadExt::read_to_end(&mut s, &mut buf)
+                .await
+                .ok();
+        }
+        buf
+    });
+
+    match tokio::time::timeout(bound, child.wait()).await {
+        Ok(Ok(status)) => {
+            let stdout = tokio::time::timeout(Duration::from_secs(5), out_task)
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default();
+            let stderr = std::fs::read(&err_path).unwrap_or_default();
+            std::fs::remove_file(&err_path).ok();
+            Ok(std::process::Output {
+                status,
+                stdout,
+                stderr,
+            })
+        }
+        Ok(Err(e)) => {
+            std::fs::remove_file(&err_path).ok();
+            Err(format!("等待子进程退出时出错：{e}（pid={pid:?}）"))
+        }
+        Err(_) => {
+            // 到界时刻先记下来（后面的 kill/reap 也耗时，不能算进「已耗时」）。
+            let elapsed = started.elapsed();
+            // 超时：kill **进程树**（`kill_on_drop` 只覆盖直接子进程），再 reap，
+            // 保证不把子进程/端口留给后面并行的用例。
+            kill_process_tree(pid);
+            let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+            // 子进程被杀后 stdout 读端 EOF，读线程收敛（给 2s，不阻塞交付）。
+            let _ = tokio::time::timeout(Duration::from_secs(2), out_task).await;
+            let tail = tail_lines(&err_path, 20);
+            std::fs::remove_file(&err_path).ok();
+            Err(format!(
+                "已耗时 {elapsed:?}（上界 {bound:?}），已 kill 进程树 pid={pid:?}；stderr 末 20 行：\n{tail}"
+            ))
+        }
+    }
+}
+
+/// 有界跑一个子进程；超时 panic 带「期望什么 + 已耗时/stderr 末 20 行」。
+///
+/// `bound` 由**调用点**给出（正常耗时 × 合理倍数），本函数不设全局默认：
+/// 同一 crate 里「读配置失败即退出」（实测 <0.3s）与「连不上 MySQL」（实测 ~30s）
+/// 的正常耗时差两个数量级，用一个常数会要么误杀、要么形同虚设。
+pub async fn output_bounded(
+    cmd: &mut tokio::process::Command,
+    what: &str,
+    bound: Duration,
+) -> std::process::Output {
+    // 先留下命令全文（`Command` 的 `Debug` 含 program + args）：超时诊断必须能看出跑的是哪条命令。
+    let command = format!("{cmd:?}");
+    match try_output_bounded(cmd, bound).await {
+        Ok(out) => out,
+        Err(diag) => panic!("期望「{what}」在 {bound:?} 内退出并返回输出；命令：{command}；{diag}"),
+    }
+}
+
+/// kill 整棵进程树（Windows `taskkill /T /F`，POSIX `kill`）。pid 已退出时失败无害。
+fn kill_process_tree(pid: Option<u32>) {
+    let Some(pid) = pid else { return };
+    let mut cmd = std::process::Command::new(if cfg!(windows) { "taskkill" } else { "kill" });
+    if cfg!(windows) {
+        cmd.args(["/T", "/F", "/PID", &pid.to_string()]);
+    } else {
+        cmd.arg(pid.to_string());
+    }
+    let _ = cmd
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+/// 读文件末 `n` 行（诊断用）；文件为空时给出显式占位。
+fn tail_lines(path: &Path, n: usize) -> String {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return "(stderr 为空)".to_string();
+    }
+    lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
 #[cfg(test)]
 mod teeth {
     use super::{next_port, PORT_HI, PORT_LO};
