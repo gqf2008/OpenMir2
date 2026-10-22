@@ -88,7 +88,11 @@ pub type MonsterCreator<'a> =
 /// - 133 `MagicMonObject` / 200 `ElectronicScolpionMon`：ctor `UseMagic=false`
 ///   （`MagicMonObject.cs:15`、`ElectronicScolpionMon.cs:12`）；
 /// - 120 `SoccerBall`：`SoccerBall.cs:15` ⇒ `N550=0`；
-/// - 20 `ArcherPolice` / 112 `ArcherGuard`：`ArcherGuard.cs:17` ⇒ `GuardDirection=-1`；
+/// - 20 `ArcherPolice` / 112 `ArcherGuard`：`ArcherGuard.cs:14-17` ⇒ `ViewRange=12`、
+///   `WantRefMsg=true`、`GuardDirection=-1`（`Light` 继承 `NormNpc` 的 2，本骨架未落值，T-155 残余）；
+/// - 11 `SuperGuard` / 12 `PetSuperGuard`：各自 ctor `SuperGuard.cs:51-56` /
+///   `PetSuperGuard.cs:5-10` ⇒ `ViewRange=7`、`Light=4`（`Race 11/12` 由
+///   `WorldServer.MonGen.cs:509-514` 的 `new SuperGuard()/new PetSuperGuard()` 选择）；
 /// - 92 `CowKingMonster`：ctor `CowKingMonster.cs:20-24`（`JumpTime=now`、三个 Crazy 初值）
 ///   + `Initialize()` `:35-36`（`oldHitTime=NextHitTime`、`oldWalkTime=WalkSpeed`）；
 /// - 96 `ZilKinZombi`：ctor `ZilKinZombi.cs:14` ⇒ `ViewRange=6`（`ZilKillCount` 是抽数字段，
@@ -254,9 +258,15 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
         // `SuperGuard`（race 11）/`PetSuperGuard`（race 12）都是 `GuardUnit : NormNpc`
         // （`WorldServer.MonGen.cs:509-514` 的 `new SuperGuard()/new PetSuperGuard()`）⇒
         // `NormNpc()` ctor 置 `SuperMan = true`（`NormNpc.cs:41`）。两者**各有**自有 ctor 常量
-        // `ViewRange = 7` / `Light = 4`（`SuperGuard.cs:51-56`、`PetSuperGuard.cs:5-10`），
-        // 本骨架尚未落值（登记 T-155 残余；race 11/12 部署可达性见 GuardList 批）。
-        11 | 12 => entity.super_man = true,
+        // `ViewRange = 7` / `Light = 4`（`SuperGuard.cs:51-56`、`PetSuperGuard.cs:5-10`）；
+        // `PetSuperGuard` 先调 `base()` 再重复置同值，终值相同 ⇒ 本支一并落值。
+        // 对照：`ArcherGuard`（20/112）的 ctor 是 `ViewRange = 12` 且**不覆写** `Light`
+        // （继承 `NormNpc` 的 2）⇒ 不共用本支的值。
+        11 | 12 => {
+            entity.super_man = true;
+            entity.view_range = 7;
+            entity.light = 4;
+        }
         // `CowKingMonster` ctor（`CowKingMonster.cs:17-25`）+ `Initialize()`（`:33-38`）。
         // ctor 的 `RushMode = true`（`:21`）**本批落地**：消费点
         // `BaseObject.Base.cs:620` 的 `RM_MAGSTRUCK` 门（`!RushMode` 才给
@@ -1163,6 +1173,50 @@ mod tests {
             (0, 0, 0, 0, 0, 0),
             "表外 race 不许被类常量污染"
         );
+    }
+
+    /// **T-155 分项（卡 `guard-ctor`）**：`SuperGuard`(race 11) / `PetSuperGuard`(race 12) 的
+    /// **自有** ctor 常量 `ViewRange=7`、`Light=4`（`SuperGuard.cs:51-56`、
+    /// `PetSuperGuard.cs:5-10`；类由 `WorldServer.MonGen.cs:509-514` 的
+    /// `new SuperGuard()/new PetSuperGuard()` 选择）。
+    ///
+    /// 对照组：`ArcherGuard`（race 20/112）oracle 是 `ViewRange=12` 且**不覆写** `Light`
+    /// （`ArcherGuard.cs:14-17`；`Light` 经 `NormNpc` 为 2、本骨架未落值 ⇒ T-155 残余），
+    /// 普通怪 race 80 保持 `BaseObject` 缺省 `ViewRange=5`/`Light=0`。
+    ///
+    /// 牙（改坏必红）：删 `entity.view_range = 7;` ⇒ 本用例 race 11/12 的 `view_range` 断言红；
+    /// 删 `entity.light = 4;` ⇒ 本用例 race 11/12 的 `light` 断言红。
+    #[test]
+    fn super_guard_own_ctor_constants_match_oracle() {
+        let mk = |race: i16| {
+            let mut e = Entity::new(0, "x", 0, 0);
+            apply_monster_class_constants(&mut e, race, 0);
+            e
+        };
+
+        for race in [11_i16, 12] {
+            let e = mk(race);
+            assert_eq!(
+                e.view_range, 7,
+                "race {race} SuperGuard/PetSuperGuard ViewRange=7"
+            );
+            assert_eq!(e.light, 4, "race {race} SuperGuard/PetSuperGuard Light=4");
+            assert!(e.super_man, "race {race} 继承 NormNpc SuperMan=true");
+            // 与 ArcherGuard 支互斥：防止把 `ViewRange=12`/`GuardDirection=-1` 误贴到 11/12。
+            assert_eq!(e.guard_direction, 0, "race {race} 不走 ArcherGuard ctor");
+            assert!(!e.want_ref_msg, "race {race} 不走 ArcherGuard ctor");
+        }
+
+        for race in [20_i16, 112] {
+            let e = mk(race);
+            assert_eq!(e.view_range, 12, "race {race} ArcherGuard ViewRange=12");
+            assert_eq!(e.light, 0, "race {race} Light 不被 11/12 支污染");
+            assert_eq!(e.guard_direction, -1, "race {race} GuardDirection=-1");
+        }
+
+        // 普通怪对照组：`Entity::new` = `BaseObject` 缺省（`ViewRange=5`、`Light=0`）。
+        let plain = mk(80);
+        assert_eq!((plain.view_range, plain.light), (5, 0), "普通怪缺省不变");
     }
 
     fn cfg() -> MonGenConfig {
