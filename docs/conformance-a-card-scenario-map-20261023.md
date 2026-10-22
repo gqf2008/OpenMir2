@@ -28,7 +28,7 @@
 | 3 | `openmir2-login-numeric-gaps` | `login_only.json` | 登录数值帧逐字节 | 首跑 19 帧对齐，余差见规则表 |
 | 4 | `openmir2-login-charstatus-657` | `login_only.json` | Rust 侧重采 657 + 邻居相对序 | 首跑：C# 657×2、Rust 无 |
 | 5 | `openmir2-login-notice-clienttick` | `login_only.json` | 51/658 | 含 `SoftVersionDateEx==0` 两侧构造，需另一轮 |
-| 6 | `openmir2-npc-def-loading` | `npc_click.json`（**已建，加载期 fail-closed 已验**） | 固定 NPC 出现帧 + `SM_MERCHANTSAY(643)` | 需 `--var npc_actor=<id>` |
+| 6 | `openmir2-npc-def-loading` | `npc_click.json` + `king_dialog.json`（**已建**） | 固定 NPC 出现帧 + `SM_MERCHANTSAY(643)` | 需 `--var npc_actor=<id>` |
 | 7 | `openmir2-npcs-fixed-loading` | `npc_click.json`（`--var npc_actor=`） | 两侧 NPC 出现帧一致 | 同上 |
 | 8 | `openmir2-market-def-impl` | `merchant_dialog.json`（**已建**，`--var merchant_actor`） | 说词/变量两条 `GetLineVariableText` 展开 | 需商人 `recog` |
 | 9 | `openmir2-script-take-persist` | `bag_equip.json` / `pickup_item.json` / `eat_item.json`（**已建**）+ 库快照 | take 后 `characters_bagitem` 槽位 | r10 已 GREEN，可用对拍固化 |
