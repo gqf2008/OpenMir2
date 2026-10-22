@@ -16881,6 +16881,16 @@ fn rewrite_enter_position(
     (map_name, map_id, x, y, die_in_fight3_zone)
 }
 
+/// **T-6 判据点**：上报门的起算基准。
+///
+/// oracle `SystemProcessor.Startup`（`SystemProcessor.cs:22-27`）用 `GetTickCount()` 起算
+/// `SendOnlineHumTime` ⇒ 基准 = 启动时刻 = **时钟注入之后**的 `world.clock_ms`。生产代码只经
+/// 本函数建门：把它改成 `OnlineHumGate::new(0)` ⇒
+/// `startup_online_hum_gate_uses_injected_world_clock` 必红（注入量级下会提前首发）。
+fn startup_online_hum_gate(world_clock_ms: i64) -> game_svr::ids::OnlineHumGate {
+    game_svr::ids::OnlineHumGate::new(world_clock_ms)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
@@ -16979,7 +16989,7 @@ fn sim_loop(
     // `RunTimeTick`（10s）**各自独立**的另一个 10s 门。oracle 在 `Startup` 用 `GetTickCount()`
     // 起算（`SystemProcessor.cs:22-27`）⇒ 基准 = **启动时刻**。必须放在时钟注入**之后**取
     // `world.clock_ms`：注入后起点是 epoch 量级，基准若写死 0 会 `-0 > 10000` ⇒ 连上即多发一帧。
-    let mut online_hum_gate = game_svr::ids::OnlineHumGate::new(world.clock_ms);
+    let mut online_hum_gate = startup_online_hum_gate(world.clock_ms);
     // **M3 T-30**：种子注入只在设了 `MIR2_RNG_SEED` 时覆盖随机源（未设 ⇒ 保持 `World::with_maps`
     // 的既有随机源，`crates/world` 行为一字不改）。发一条与 C# 钩子同形的 `SEED_PROBE` 自证行：
     // 参考序列走**独立实例**（[`seed_probe_text`]）——与 C# 钩子 / `rng_trace` 头部同口径，
@@ -19567,23 +19577,27 @@ fn sim_loop(
         // 与下面 10s 的 `ProcessGameRun` 门**独立**；oracle 在同一 tick 里先 ShowOnline 后
         // ProcessGameRun ⇒ 本块放在 10s 块之前。
         // `WorldEngine.OnlinePlayObject`（`WorldServer.cs:98/190-193` = `PlayObjectList.Count`）：
-        // 本仓等价 = 在线玩家实体数（`race == Play` 且非 Ghost）。
+        // `MakeGhost` 后对象仍留在 `PlayObjectList`，直到 RunTick 门到点才 Remove
+        // （`WorldServer.cs:635/709`）⇒ **不能排除 ghost**。与既有宿主口径一致：MonGen 两条门
+        // 与 `crates/world/src/monai.rs` 的 `MakeGhost` 门都数 `race == Play`（不含 ghost），
+        // 否则幽灵/断线窗口里本段会比 oracle 小 1..N（reviewer-1 m-2）。
         let online_play_objects = world
             .entities
             .iter()
-            .filter(|e| e.race == mir2_world::ACTOR_RACE_PLAY && !e.ghost)
+            .filter(|e| e.race == mir2_world::ACTOR_RACE_PLAY)
             .count() as i32;
         ids_online.store(online_play_objects, std::sync::atomic::Ordering::SeqCst);
         // `SystemProcessor.ShowOnline`（`:54-68`，10s 分支在 `:63-67`）：严格 `>`，
         // 到点上报一次当前在线数（`SendOnlineHumCountMsg`，`AuthenticationService.cs:113-116`）。
         // 第 3 段恒 0（`M2Share.ServerIndex` 从不赋值），第 5 段取 `[Server] PayMentMode`
         // （缺省 1，`GameSvrConf.cs:1253`）——都由 `serverinfo_frame` 决定。
-        if online_hum_gate.tick(world.clock_ms) {
-            let frame = game_svr::ids::serverinfo_frame(
-                &enter_cfg.server_name,
-                online_play_objects,
-                payment_mode,
-            );
+        if let Some(frame) = game_svr::ids::periodic_serverinfo(
+            &mut online_hum_gate,
+            world.clock_ms,
+            &enter_cfg.server_name,
+            online_play_objects,
+            payment_mode,
+        ) {
             if ids_out.send(frame).is_err() {
                 glog!("WRN", "IDS 上报通道已关闭，SS_SERVERINFO 丢弃");
             }
@@ -56516,5 +56530,29 @@ mod castle_shift_order_tests {
             5,
             "第 13 抽 = R6[12] = 5（恰 12 抽）"
         );
+    }
+}
+
+#[cfg(test)]
+mod serverinfo_gate_tests {
+    use super::startup_online_hum_gate;
+
+    /// **T-6**：上报门基准必须是**注入之后**的世界时钟（`SystemProcessor.cs:22-27` 的
+    /// `SendOnlineHumTime = GetTickCount()`）。基准若写成 0，注入量级（epoch）下首个 tick 就
+    /// `clock_ms - 0 > 10000` ⇒ 连上后立刻多发一帧。
+    ///
+    /// 牙：`startup_online_hum_gate` 改成 `OnlineHumGate::new(0)` ⇒ 本用例必红。
+    #[test]
+    fn startup_online_hum_gate_uses_injected_world_clock() {
+        let origin = 1_700_000_000_000i64; // `MIR2_CLOCK_MS` 注入后的起点量级
+        let mut gate = startup_online_hum_gate(origin);
+        assert_eq!(
+            gate.baseline(),
+            origin,
+            "基准 = 注入后的 world.clock_ms（不是 0）"
+        );
+        assert!(!gate.tick(origin), "注入量级下不得提前首发");
+        assert!(!gate.tick(origin + 10_000), "严格 >：正好 10000ms 不发");
+        assert!(gate.tick(origin + 10_001), "超过 10000ms 发一次");
     }
 }

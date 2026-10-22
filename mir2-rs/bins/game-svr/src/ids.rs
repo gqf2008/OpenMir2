@@ -213,13 +213,35 @@ impl OnlineHumGate {
 
     /// 到点返回 `true` 并推进基准（oracle `:65-66`：先赋值、再发）。
     pub fn tick(&mut self, clock_ms: i64) -> bool {
-        if clock_ms - self.last > 10_000 {
+        if clock_ms - self.baseline() > 10_000 {
             self.last = clock_ms;
             true
         } else {
             false
         }
     }
+
+    /// 当前基准（毫秒世界时钟）。给「基准必须是**注入之后**的 `world.clock_ms`」一条可断言的
+    /// 口子（T-6：`startup_online_hum_gate` 改成 `new(0)` ⇒ lib.rs 的用例必红）。
+    #[must_use]
+    pub fn baseline(&self) -> i64 {
+        self.last
+    }
+}
+
+/// `SystemProcessor.ShowOnline` 的周期上报（`SystemProcessor.cs:63-67`）：门到点则返回要发的帧，
+/// 否则 `None`。单列成纯 helper，让「门 + 当前在线数 + 名字/付费模式 → 上行帧」这条周期路径
+/// 在构造级可判（reviewer-1 m-1(b)）。
+#[must_use]
+pub fn periodic_serverinfo(
+    gate: &mut OnlineHumGate,
+    clock_ms: i64,
+    server_name: &str,
+    online_count: i32,
+    payment_mode: u8,
+) -> Option<String> {
+    gate.tick(clock_ms)
+        .then(|| serverinfo_frame(server_name, online_count, payment_mode))
 }
 
 /// 丢掉断链期积压的上报帧：oracle `SendSocket` 在 `Offline` 时直接 return、**不排队**
@@ -425,7 +447,7 @@ mod tests {
 
 #[cfg(test)]
 mod serverinfo_tests {
-    use super::{drain_stale, serverinfo_frame, OnlineHumGate};
+    use super::{drain_stale, periodic_serverinfo, serverinfo_frame, OnlineHumGate};
     use std::sync::atomic::AtomicI32;
     use std::sync::{Arc, Mutex};
     use tokio::io::AsyncReadExt;
@@ -526,5 +548,103 @@ mod serverinfo_tests {
             rx.try_recv().is_err(),
             "断链期积压必须丢干净（oracle Offline 不排队）"
         );
+    }
+
+    /// **m-1(b)** 周期路径：初值不报、严格 `>` 到点报一帧（帧体带**当前**在线数）、门推进后
+    /// 再等满 10s 才报下一次。
+    ///
+    /// 牙：门改 `>=`、或不推进基准、或帧体用常量在线数 ⇒ 必红。
+    #[test]
+    fn periodic_serverinfo_only_after_gate_advances() {
+        let mut gate = OnlineHumGate::new(0);
+        assert_eq!(periodic_serverinfo(&mut gate, 0, "热血传奇", 3, 1), None);
+        assert_eq!(
+            periodic_serverinfo(&mut gate, 10_000, "热血传奇", 3, 1),
+            None,
+            "严格 >：正好 10000ms 不发"
+        );
+        assert_eq!(
+            periodic_serverinfo(&mut gate, 10_001, "热血传奇", 4, 1).as_deref(),
+            Some("(103/热血传奇/0/4/1)"),
+            "到点发一帧，且带**当前**在线数"
+        );
+        assert_eq!(
+            periodic_serverinfo(&mut gate, 20_001, "热血传奇", 5, 1),
+            None
+        );
+        assert_eq!(
+            periodic_serverinfo(&mut gate, 20_002, "热血传奇", 5, 1).as_deref(),
+            Some("(103/热血传奇/0/5/1)")
+        );
+    }
+
+    /// **m-1(d)** 重连：第二次 accept 只重报**当前值**一帧，断链期积压的陈旧帧被丢弃
+    /// （`drain_stale` 的调用点）。
+    ///
+    /// 链路：连上 → 首帧 → 对端断开（链路 3s 后重连）→ 断链期 sim 线程投递陈旧帧（在线数 1）
+    /// → 第二次 accept 收到的第一帧必须仍是**当前值**（在线数 3），且之后不得再冒陈旧帧。
+    ///
+    /// 牙：删掉 `drain_stale(outbox)` 调用 ⇒ 第二次 accept 先收到 `(103/热血传奇/0/1/1)` ⇒ 必红。
+    #[tokio::test]
+    async fn reconnect_reports_current_value_and_drops_stale_frames() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("绑定本地 listener");
+        let port = listener.local_addr().expect("local_addr").port();
+        let store = Arc::new(Mutex::new(crate::auth::AdmissionStore::new()));
+        let (ev_tx, _ev_rx) = std::sync::mpsc::channel();
+        let (out_tx, mut outbox) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let online = Arc::new(AtomicI32::new(3));
+        let link = tokio::spawn(async move {
+            super::run_ids_link(
+                "127.0.0.1".to_string(),
+                port,
+                store,
+                ev_tx,
+                "热血传奇".to_string(),
+                1,
+                online,
+                &mut outbox,
+            )
+            .await;
+        });
+        let (mut first, _) = listener.accept().await.expect("第一次 accept");
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), first.read(&mut buf))
+            .await
+            .expect("连上后 5s 内必须收到首帧")
+            .expect("读取首帧");
+        assert_eq!(&buf[..n], b"(103/\xC8\xC8\xD1\xAA\xB4\xAB\xC6\xE6/0/3/1)");
+        // 断链；等链路进入 3s 重连休眠后再投递陈旧帧（确保 read_loop 已退出、无人消费）。
+        drop(first);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        out_tx
+            .send("(103/热血传奇/0/1/1)".to_string())
+            .expect("投递断链期陈旧帧");
+        let (mut second, _) =
+            tokio::time::timeout(std::time::Duration::from_secs(8), listener.accept())
+                .await
+                .expect("8s 内必须重连")
+                .expect("第二次 accept");
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), second.read(&mut buf))
+            .await
+            .expect("重连后必须立即重报当前值")
+            .expect("读取重连首帧");
+        assert_eq!(
+            &buf[..n],
+            b"(103/\xC8\xC8\xD1\xAA\xB4\xAB\xC6\xE6/0/3/1)",
+            "重连只报当前值，不得 flush 陈旧帧"
+        );
+        let mut extra = [0u8; 64];
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(300),
+                second.read(&mut extra)
+            )
+            .await
+            .is_err(),
+            "断链期积压的陈旧帧必须被丢弃（oracle Offline 不排队）"
+        );
+        link.abort();
     }
 }
