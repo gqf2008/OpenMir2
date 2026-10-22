@@ -1,10 +1,30 @@
 {
   "name": "king_dialog",
   "description": "点比奇国王（Npc_Def/比奇国王-0122.txt，--var king_actor=<ActorId>）-> 等 SM_MERCHANTSAY(643) -> 选 @@buildguildnow -> 等下一页 643 或 SM_SYSMESSAGE(100)",
-  "params": {"king_actor": "REQUIRED"},
+  "params": {
+    "king_actor": "REQUIRED"
+  },
   "steps": [
-    {"click_npc": "king_actor", "note": "recog=国王 ActorId；缺省 fail-closed"},
-    {"wait_for": 643, "timeout_ms": 3000, "note": "[@main] 说词面板（含 <请求创建行会./@@buildguildnow> 等菜单）"},
-    {"dlg_select": "@@buildguildnow", "note": "label 逐字取自 Npc_Def/比奇国王-0122.txt；@@ 前缀是 oracle 的双 @ 语义，不是笔误"}
+    {
+      "click_npc": "king_actor",
+      "note": "recog=国王 ActorId；缺省 fail-closed"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@main] 说词面板（含 <请求创建行会./@@buildguildnow> 等菜单）"
+    },
+    {
+      "dlg_select": "@@buildguildnow",
+      "note": "label 逐字取自 Npc_Def/比奇国王-0122.txt；@@ 前缀是 oracle 的双 @ 语义，不是笔误"
+    },
+    {
+      "wait_for": [
+        643,
+        100
+      ],
+      "timeout_ms": 3000,
+      "note": "@@buildguildnow 后 oracle 仍走 NPC 说词/系统消息"
+    }
   ]
 }
