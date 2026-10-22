@@ -140,3 +140,43 @@ dice_label=None
   （§4 缺陷所致）；下一轮起点如需 `(5,9)` 直接改库；
 - 栈已按反向顺序停止，15xxx/17xxx 全 DOWN（`15721` 是本机他方进程，与本轮无关）；
 - 客户端进程已结束；代理已停。
+
+---
+
+## 7. 第十轮（r10）：`take` 落库**真机确认 GREEN**（卡 `openmir2-script-take-persist`）
+
+- 构建：master `be4f58dd4`（合入 `script-take-persist` 后重编的 `mir2-server` debug）
+- 夹具：`mir2_test_db` 角色 `winplay0` 置回 `B013 (5,9)`、`Gold=100`、
+  `characters_bagitem Position=0` 种 1 个「筹码包」（`MakeIndex=70000001 StdIndex=44`）
+- 点击链（与 §2 同一条，服务端日志 `E:/tmp/window/r10/logs/game-svr.out.log`）：
+
+```
+12:56:34.968 [INF] CM_CLICKNPC：到达 Click 点 ChrName=winplay0 npc=119（@main 说词 1 条）
+12:56:44.389 [DBG] … Ident=1011 … tail="@kaiz"
+12:56:50.001 [DBG] … Ident=1011 … tail="@ya5"
+12:56:53.007 [DBG] … Ident=1011 … tail="@ya52"
+12:56:59.022 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:winplay0 queryId=2 记录 4868 字节
+```
+
+- **判据（DB 字段级）**：存档后
+
+```sql
+select Position,MakeIndex,StdIndex,Dura,DuraMax from mir2_test_db.characters_bagitem
+ where PlayerId=6228 order by Position limit 1;
+-- Position 0 | MakeIndex 0 | StdIndex 0 | Dura 0 | DuraMax 0     ← 筹码包已被脚本摘掉并落库
+select count(*) ... → 46（槽位数不变，槽位清零 = oracle ItemList.RemoveAt 后按槽重排）
+select Gold ... → 100（本条脚本不涉及金币，未被误改）
+```
+
+  与 r9 同一夹具、同一操作序列的**对照**：r9（修复前）存档后该行仍是 `StdIndex=44`（§4）。
+
+- 证据哈希：日志 `aa931730f7d60c00c16eadd23bc53307bb64e1ff786f001839884ccd5a84d836`；
+  `@main` 截图 `5d132575c7d99ddfcf2080e5c6dcc038e9f4ee554777ce048ad9ff1b1e006e09`；
+  下注菜单截图 `76a27845d0cd26b2e3a39fec18a0a54cdec955bb25c807080acd5afb6fbd55e1`。
+
+- **本卡剩余窗口项**（金币钳位 `take 金币` 超额 / `GIVE` 越 `HumanMaxGold`、满包落地、TAKEW 佩戴位、
+  T-158 交替 GIVE 的 MakeIndex 次序、T-159 满包+StdMode45 的 RNG 次序）：**部署内容里没有可达脚本路径**
+  （赌场/筹码脚本不含这些动作组合）。这些判据目前由构造级用例（生产入口 `run_merchant_goto`）+ oracle 行号锚
+  承担；需要真机复验时另造**测试专用脚本夹具**（私有 root 覆盖层，不进仓库内容），单开窗口。
+
+- 收尾：栈按反向停止，15xxx/17xxx 全 DOWN；代理已停；客户端进程结束。
