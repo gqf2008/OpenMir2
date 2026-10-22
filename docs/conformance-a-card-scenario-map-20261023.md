@@ -41,29 +41,29 @@
 
 ## 3. 全量 152 张分类（机械分类 v1）
 
-统计：协议对拍 **95** / 夹具对拍 **35** / 落库后态 **14** / 离线夹具 **6** / GUI **1** / 长跑 **1**。
+统计（v1.1，回读 window_items 后重算）：协议帧面 **95** / 夹具对拍(bot pair) **35** / 落库后态 **13** / 离线夹具(文件级) **6** / GUI 面板 **1** / 离线夹具(日志) **1** / 长跑(300 假人 24h) **1**。
 
-| # | card id | 通道 | 置信度 | 依据（status.work 摘要） |
+| # | card id | 通道 | 置信度 | 依据（`status.work` 摘要；`win:` = `review.window_items` 原文） |
 |---:|---|---|---|---|
 | 1 | `openmir2-action-line-variable-text` | 协议帧面 | 中 | R 级窗口未跑：① C# SENDMSG 0 <$USERNAME>:<$STR(S1)> 151 235（QFunction-0.txt:… |
 | 2 | `openmir2-script-take-persist` | 落库后态 | 中 | r10 真机窗口项 1 GREEN（筹码包 take 后存档槽位清零） |
 | 3 | `openmir2-openybdeal-host-wiring` | GUI 面板 | 高 | 余量=真机掷骰/寄售面板 + 残余⑨-⑬ |
-| 4 | `openmir2-npc-def-loading` | 协议帧面 | 低 | 余量=真机窗口四项 |
-| 5 | `openmir2-weapon-upgrade-values` | 协议帧面 | 低 | 余量=窗口五项 |
-| 6 | `openmir2-npc-hit-frames` | 协议帧面 | 低 | 余量=窗口五项 |
-| 7 | `openmir2-monster-ref-drains` | 协议帧面 | 低 | 余量=真机四类帧与数据可达性 |
-| 8 | `openmir2-guard-ctor-constants` | 协议帧面 | 低 | 余量=W-guard-1..4 |
-| 9 | `openmir2-a22-castle-persistence` | 落库后态 | 低 | 余量=W-A22-1..4 |
-| 10 | `openmir2-npc-ctor-constants` | 协议帧面 | 低 | 余量=W1-W4 窗口 |
-| 11 | `openmir2-t138-request-castle-war` | 协议帧面 | 低 | 余量=W-T138-1..4 |
-| 12 | `openmir2-npc-display-table` | 协议帧面 | 低 | 余量=真机帧面与点击场景 |
+| 4 | `openmir2-npc-def-loading` | 协议帧面 | 高 | win: 点比奇国王(0122)/老人(3) 的说词面板与菜单可点性（@main 原文逐字） \|\| @@buildguildnow/@as… |
+| 5 | `openmir2-weapon-upgrade-values` | 协议帧面 | 高 | win: 真机 @upgradenow 全量对拍四字段与 657 帧 \|\| 取回路径 Dura 档/n90 抽数逐抽 \|\| 202/2… |
+| 6 | `openmir2-npc-hit-frames` | 协议帧面 | 高 | win: C# 本尊正面样本 ≥180s（同位置必须出现 ident=14 recog=国王 actor） \|\| 帧形逐字节（Recog/… |
+| 7 | `openmir2-monster-ref-drains` | 协议帧面 | 高 | win: 真机四类帧逐字节与收件人集合（需先让 race 203/206/210/215 出现在部署数据） \|\| Khazard 玩家目标… |
+| 8 | `openmir2-guard-ctor-constants` | 协议帧面 | 高 | win: W-guard-1 卫士自扫半径 5→7 的同 tick 可见集/事件序 \|\| W-guard-2 bins monster_d… |
+| 9 | `openmir2-a22-castle-persistence` | 离线夹具(文件级) | 高 | win: W-A22-1 文件字节：C#/Rust 各跑启动+一次 10min Save，比 List.txt / Castle/SabukW… |
+| 10 | `openmir2-npc-ctor-constants` | 协议帧面 | 高 | win: W1 真机固定 NPC/商人首次出现帧 SM_TURN series 低=4 高=2，与 oracle 逐字节 \|\| W2 首 … |
+| 11 | `openmir2-t138-request-castle-war` | 协议帧面 | 高 | win: W-T138-1 非掌门/无行会 ⇒ SM_SYSMESSAGE(100)「你的请求被取消!!!」逐字节（Recog/Param 颜… |
+| 12 | `openmir2-npc-display-table` | 协议帧面 | 高 | win: 同摆位 0122 (29,33) C# vs Rust 登录抓包逐字节对拍：出现帧带名尾、3 对 nameless 转身 serie… |
 | 13 | `openmir2-single-binary-roles` | 离线夹具(日志) | 中 | 余量=RNG trace site groups 复验 + 旧 exe 与 mir2-server 日志逐行对比（窗口项） |
 | 14 | `openmir2-login-charstatus-657` | 协议帧面 | 高 | 按 R 级不 closed：余量=Rust 侧重采 657 + 邻居相对序 |
-| 15 | `openmir2-a09-upgrade-item` | 协议帧面 | 低 | 余量=真机六项窗口 |
+| 15 | `openmir2-a09-upgrade-item` | 协议帧面 | 高 | win: 部署 ItemNameList 5 条在真机取同名物品，逐字节对拍 SM_BAGITEMS/SM_SAVEITEMLIST/买卖/取… |
 | 16 | `openmir2-merchant-race-bias` | 协议帧面 | 中 | 余量=真机攻击商人/目标集/GetFeature/Push 时序四项窗口 |
-| 17 | `openmir2-superman-normnpc` | 协议帧面 | 低 | 余量=真机窗口（城门/守卫/城墙/NPC 商人 |
+| 17 | `openmir2-superman-normnpc` | 协议帧面 | 高 | win: 城门 110 连续受击到 HP=0：Death=false、Run 回满、无 SetMapXyFlag(2) \|\| World:… |
 | 18 | `openmir2-mb8-9-monsters` | 协议帧面 | 中 | 余量=真机 race215 帧（需先接 T-148）+ NormNpc SuperMan（另卡 openmir2-superman-norm… |
-| 19 | `openmir2-monster-walk-frames` | 协议帧面 | 低 | 余量=真机重采 + T-146 四条残余 |
+| 19 | `openmir2-monster-walk-frames` | 协议帧面 | 高 | win: 真机重采怪物走位 SM_WALK 条数/时序（C# 基线 17–76 条） \|\| 同 tick 多步、±12 边界、传送误判（T… |
 | 20 | `openmir2-login-654-order` | 协议帧面 | 中 | 按 R 级不 closed：余量=真机三项（改动后 Rust 登录抓包/有会角色 811,46 与 750 位置/非 TestServer … |
 | 21 | `openmir2-db-encoding` | 离线夹具(文件级) | 高 | 按 R 级不 closed：余量=E-7 真机 oracle 对照 + 4 条 Low 台账 |
 | 22 | `openmir2-market-def-impl` | 协议帧面 | 高 | 按 R 级不 closed：余量=真机说词/变量 + T-145 未接分支 |
@@ -71,7 +71,7 @@
 | 24 | `openmir2-strlist-bom` | 离线夹具(文件级) | 高 | 余量=真机 BOM 文件读取 |
 | 25 | `openmir2-mb7-monsters` | 协议帧面 | 中 | 按 R 级不 closed：余量=真机观察 + T-143 |
 | 26 | `openmir2-encoding-crate` | 离线夹具(文件级) | 高 | 余量=真机逐字节 + data StringList 读侧 BOM 缺口（另开卡） |
-| 27 | `openmir2-mb2-monsters` | 协议帧面 | 低 | 余量=真机观察 + T-141 |
+| 27 | `openmir2-mb2-monsters` | 协议帧面 | 高 | win: 真机：三怪 Run 的分支与帧（数据可达时） |
 | 28 | `openmir2-hutil32-parity` | 离线夹具(文件级) | 高 | 按 R 级不 closed：余量=round 调用点真机对拍 + 10 个 GB2312 族成员（零依赖契约）+ 两份 Round 分叉（建… |
 | 29 | `openmir2-guild-official-npc` | 协议帧面 | 中 | 按 R 级不 closed：余量=真机窗口三项 + T-137（固定 NPC 脚本装载，最大缺口） |
 | 30 | `openmir2-mb5-monsters` | 协议帧面 | 中 | 按 R 级不 closed：余量=真机观察 + T-135（host drain 10139） |
@@ -83,13 +83,13 @@
 | 36 | `openmir2-castle-guard-target` | 协议帧面 | 中 | 余量=真机窗口：同城/盟友/UnderWar 目标选择 + T-96⑥④（AnimalObject.Struck 派发边界） |
 | 37 | `openmir2-castle-entities` | 协议帧面 | 中 | 按 R 级不 closed：余量=真机窗口五项（部署 0 实体/4 告警、夹具 16 实体 96 抽、毒攻门、同城/盟友/UnderWar … |
 | 38 | `openmir2-upgrade-npc` | 协议帧面 | 中 | 按 R 级不 closed：余量=真机窗口五项（抽数序/Desc[10] 字节/帧序/654·153/破零链），另 T-95 的九条登记随卡 |
-| 39 | `openmir2-guild-g2-dispatch` | 协议帧面 | 低 | 余量=750 真机出队序等三项 |
+| 39 | `openmir2-guild-g2-dispatch` | 协议帧面 | 高 | win: 750 的真机出队序（46 之后、654 之前） \|\| 104 行会消息的线缆 \|\| ShowGuildName=1 的 4… |
 | 40 | `openmir2-run-gap-pl4` | 协议帧面 | 中 | 余量=真机窗口三项（见 review.window_items） |
-| 41 | `openmir2-selgate-reconnect` | 协议帧面 | 低 | 余量=真机窗口两项 |
-| 42 | `openmir2-dbsrv-fault-paths` | 落库后态 | 低 | 余量=真机窗口 + LB-08/09/10 |
-| 43 | `openmir2-gate-idle-timeout` | 协议帧面 | 低 | 余量=真机窗口两项 |
-| 44 | `openmir2-run-gap-pl2` | 协议帧面 | 低 | 余量=真机窗口两项 |
-| 45 | `openmir2-gategate-slots-gm` | 协议帧面 | 低 | 余量=真机窗口三项 |
+| 41 | `openmir2-selgate-reconnect` | 协议帧面 | 高 | win: 真机 DBSrv 重启后 SelGate 的重连与在途会话 \|\| 断链期间真实客户端的表现 |
+| 42 | `openmir2-dbsrv-fault-paths` | 落库后态 | 高 | win: 真机 MySQL 停机/重启下的四种降级帧与客户端表现 \|\| 9 表与 characters_indexes 的跨实现逐字段 d… |
+| 43 | `openmir2-gate-idle-timeout` | 协议帧面 | 高 | win: 真实客户端挂起 60s 的被踢时序与畸形超时帧的实际反应 \|\| 下行断链后网关的完整恢复路径（重连未实现，另卡） |
+| 44 | `openmir2-run-gap-pl2` | 协议帧面 | 高 | win: 内容启用后的 P31 结算与 44/升级链帧序 \|\| SETAUTOGETEXP 两态在真机脚本链上的可观测行为 |
+| 45 | `openmir2-gategate-slots-gm` | 协议帧面 | 高 | win: C# GameSvr + Rust GameGate 的 GM_CHECKCLIENT→SendKeepAlive→GM_CHECK… |
 | 46 | `openmir2-login-numeric-gaps` | 协议帧面 | 中 | 余量=真机窗口三项（见 review.window_items） |
 | 47 | `openmir2-oracle-humitems-align` | 落库后态 | 高 | 余量=真机窗口：部署基线已变，下次开窗重抓装备槽字段级证据 |
 | 48 | `openmir2-run-gap-pl3` | 协议帧面 | 中 | 余量=真机窗口（内容启用后的数值/帧序）+ T-85 登记的八条偏差 |
@@ -198,6 +198,12 @@
 | 151 | `openmir2-m3-final-acceptance` | 长跑(300 假人 24h) | 中 | **剩余**：DoD② 300 假人 24h 长跑（**等独占窗口** |
 | 152 | `openmir2-click-path-bag-writeback` | 协议帧面 | 中 | 余量=真机落库对拍（T-160：`characters_bagitem`/`hum_items`/`characters.Gold`）；ma… |
 
+### 3.1 v1.1：低置信度回读结果（2026-10-23）
+
+对 v1 里 48 张「置信度低」的卡逐张 `walgit collab thread` 回读 `review.window_items`：
+**46 张线程可读，其中 19 张的 review 带 `window_items` 原文** ⇒ 已改用原文作依据、通道按原文改判、置信度升 `高`（表中 `win:` 前缀）；
+其余 27 张的 review 只有 `findings`/`work`，**仍保持低置信度**，开工前需读该卡 `review.findings` 或向 Leader 要窗口清单。
+
 ## 4. 不能对拍 / 暂不可判（逐条原因）
 
 - **G 1 张**：`openmir2-openybdeal-host-wiring` —— 掷骰/寄售面板的可见性依赖客户端面板渲染，协议侧只能验「服务端送了什么帧」，
@@ -222,4 +228,4 @@
    `expand_scenario` 已验：`click_npc` ident=1010 recog=119 → `wait_for [643,100]`）。`merchant_say.json` / `bag_take.json`
    仍需窗口内确定商人 `recog`、说词文本与 take 的消息号后再建（不臆造 ident）；
 2. 规则表缺口（`100/520/525/529/530/654/657` + 52 的 (54,78)）属 `conformance-rules` 车道，本卡只引用不修改；
-3. 48 张低置信度卡的通道判定待逐卡回读。
+3. ~~48 张低置信度卡的通道判定待逐卡回读~~ ⇒ 已做（见 §3.1）：46 张可读 / 19 张有 `window_items`；余 27 张仍待回读 `review.findings`。
