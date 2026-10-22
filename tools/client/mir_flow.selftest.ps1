@@ -437,6 +437,21 @@ try {
     $g1Count -eq 2 -and $g2.Count -eq 4 -and [int]$gEv.X -eq 29 -and [int]$gEv.Y -eq 34) (
     "g1=" + $g1Count + " g2=" + $g2.Count + " cell=" + $gEv.X + "," + $gEv.Y)
 
+  # ---- 12c. 截断 Low 的牙：1018 必须晚于点击时刻（旧 1018 不能假通过） ----
+  # 旧 Wait-CaptureFrame 取首条匹配且不看点击时刻；新 Wait-EvidenceFrame 取最新帧 + afterMs。
+  $old1018 = Join-Path $fixDir "capture-1018-old.jsonl"
+  Write-CaptureFile $old1018 @((New-CapLine "c2s" 1018 1000)) | Out-Null
+  $old1018Src = New-EvidenceSource "" $old1018 0 0 -Offline
+  $rOld = Wait-EvidenceFrame $old1018Src "c2s" 1018 0 $old1018Src.SinceMs 2000
+  Check "fixture Low(truncated): 1018 older than click time is not accepted" (
+    $null -eq $rOld) ("rOld=" + $rOld)
+  $new1018 = Join-Path $fixDir "capture-1018-new.jsonl"
+  Write-CaptureFile $new1018 @((New-CapLine "c2s" 1018 3000)) | Out-Null
+  $new1018Src = New-EvidenceSource "" $new1018 0 0 -Offline
+  $rNew = Wait-EvidenceFrame $new1018Src "c2s" 1018 0 $new1018Src.SinceMs 2000
+  Check "fixture Low(truncated): 1018 after click time is accepted" (
+    $null -ne $rNew -and [long]$rNew.ts_ms -eq 3000) ("rNew=" + ($rNew | ConvertTo-Json -Compress))
+
   # ---- 13. 源码/参数断言 ----
   $src2 = [IO.File]::ReadAllText($flow, [Text.Encoding]::UTF8)
   Check "source: 12x blind notice loop removed" (-not ($src2 -match 'for \(\$i = 0; \$i -lt 12; \$i\+\+\)')) $null

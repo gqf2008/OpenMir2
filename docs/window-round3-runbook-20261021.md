@@ -1595,7 +1595,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selftest.ps1
 ```
 
-新增/更新用例（均真跑，不启动客户端、不占端口；2026-10-22 全绿 `SELFTEST_PASS=89`）：
+新增/更新用例（均真跑，不启动客户端、不占端口；2026-10-22 全绿 `SELFTEST_PASS=91`）：
 
 1. `-FixtureDryRun -NoticePollSim dismiss1|slow|absent|nosignal`：sim 与真机共用
    `Invoke-NoticePollCore`（F4）；`slow` 仍只点 **1** 次且不补点；`absent`/`nosignal` ⇒ 世界区 0 点击；
@@ -1620,6 +1620,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selfte
   （F3 的 fail-closed 方向）。
 - F6 的“相邻步”规则能处理逐格自动走位（每次目标相邻 ⇒ 链式推进），也能挡住单次远目标；
   若服务端/内存侧以后提供真实坐标源，应优先替换这条推断。
+- 复核第 6 条 Low 原文不可考（refs/collab 0 命中）：自查补的同类缺陷是「旧 `Wait-CaptureFrame`
+  取首条匹配且不看点击时刻 ⇒ 旧 1018 可假通过」；新 `Wait-EvidenceFrame` 取**最新帧 + afterMs**，
+  自检有牙：旧 1018@ts=1000 + after=2000 ⇒ `null`；新 1018@ts=3000 ⇒ 接受。
 
 ## 附录 A：本文件写作时的只读读数命令（可复现）
 
