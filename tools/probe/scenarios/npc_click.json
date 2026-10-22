@@ -1,0 +1,9 @@
+{
+  "name": "npc_click",
+  "description": "进世界后点击固定 NPC（CM_CLICKNPC 1010，recog 必须由 --var npc_actor=<ActorId> 提供）-> 等 SM_MERCHANTSAY(643) 或 SM_SYSMESSAGE(100)",
+  "params": {"npc_actor": "REQUIRED"},
+  "steps": [
+    {"click_npc": "npc_actor", "note": "recog=固定 NPC 的 ActorId；缺省 fail-closed（加载期报错），不会瞎点"},
+    {"wait_for": [643, 100], "timeout_ms": 3000}
+  ]
+}
