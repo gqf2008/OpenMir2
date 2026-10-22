@@ -2,44 +2,37 @@
 
 > **权威 = walgit 看板**：`walgit collab board` / `walgit collab thread <id>`。
 > 本文件只是给人看的**镜像**，任何派活/认领/状态以签名条目为准；两者不一致时以看板为准。
+> 最后更新：2026-10-23 06:2x（`master = be9c5ac6b`）。
 
+## 0. 当前状态（每次巡检后更新这一节）
 
-> 依据：`docs/rewrite-remaining-inventory-20261022.md`（185 在飞卡 = A 窗口欠账 152 / B 未接线 22 / D 8 / C 2 / O 1）、
-> `docs/conformance-first-dual-run-20261023.md`（对拍台首跑）、`docs/leader-loop-20261023.md`（Leader 模式）。
-> **规则**：写集重叠即串行（尤其 `bins/game-svr/src/lib.rs`、`gmcmd.rs`）；一次并行 ≤3 条车道；
-> R 卡合并后保持 in-progress，L 卡可 closed。
+- **A 窗口欠账 152**（三档见 `docs/window-debt-reclass-20261023.md`：① 现有场景可覆盖 ~60 / ② 只差新场景 43 / ③ 只能 GUI 或离线 49）
+- **B 未接线 14**（recon dispatch 实测：入站 `CM_ADJUST_BONUS`；出站 12 孤儿编码器 + `SM_DONATE_FAIL`）
+- **终点四条件**：见 `docs/leader-goal-20261023.md` §1；机判脚本卡 `openmir2-goal-gate`（待做）
+- **门禁基线**：140 suites / 2903 passed / 0 failed / 62 ignored；anchor 388 ALL PASS；registry 149 无重复
 
-## 1. 正在跑（2 条）
+## 1. 合并纪律（本轮踩过的坑，逐条都有代价）
 
-| # | 卡 | 车道 | 写集 | tier |
-|---|---|---|---|---|
-| 1 | `openmir2-login-529-status-text` | wt-529 / login-529-status | `bins/login-srv/src/**` | R |
-| 2 | `openmir2-conformance-harness`（规则表 + `run_dual.sh`） | wt-rules / conformance-rules | `tools/conformance/**` | L |
+1. **merge_result 不能代替 status**：看板按 `entry.kind` 归列，body 里写 `status: closed` 不会移卡。
+2. **merge 前先 `git branch --show-current` 确认在 master**；merge 后 `git ls-remote walgit refs/heads/master` 复核。
+3. **只合被审 head**：approve 覆盖 `X` 时 `git merge --no-ff X`，别合分支 tip（tip 可能已前进）。
+4. **whitelist 编号是全局资源**：合并前 `grep -n 'T-1[89][0-9]' mir2-rs/tests/parity/whitelist.md` 确认空号（已用到 T-192）。
+5. **同文件同一时刻只许一条车道**：`lib.rs` / `whitelist.md` / `tools/conformance/**` 是三大热点。
 
-## 2. 队列（按优先级；#3/#4/#5 互斥，需串行）
+## 2. 正在跑（每次巡检更新）
 
-| # | 卡 | 单元 | 写集 | tier | 依赖 |
-|---|---|---|---|---|---|
-| 3 | `openmir2-dualrun-triage-enterworld-frames` | 进世界 4 类帧（10/100/654/657）分诊 | `bins/game-svr/src/**` | R | 对拍台（已完成） |
-| 4 | `openmir2-conformance-harness` | 规则首跑后补规则（按 §2.3 暴露逐条） | `tools/conformance/**` | L | #1 复跑 |
-| 5 | `openmir2-gm-batch-4-numeric` | GM 第 4 批：数值/落库 44 条 | `bins/game-svr/src/gmcmd.rs` | R | 与 #3 串行（都动 game-svr） |
-| 6 | `openmir2-envir-adminlist-consumer` | AdminList 消费点（recon rust=no 剩 2 件之一） | `crates/envir/**` + game-svr | L | 无 |
-| 7 | `openmir2-orphan-encoder-batch-a` | 13 个孤儿编码器逐帧接线/登记 | `bins/game-svr/src/{smframe_ext,pickwire,useitem,sessionwire,mapdoor}.rs` | L | 与 #3 串行（同 crate） |
-| 8 | `openmir2-dualrun-window-burndown` | A 卡→协议场景映射，批量烧窗口欠账 | `tools/probe/scenarios/**`、`docs/` | L | 需先有 #4 的稳定规则表 |
+以看板为准。本轮在飞：castle-merchant 复审、ya52 修复、window-debt-reclass 修复、port-hygiene 复审。
 
-## 3. 阻塞（需要 owner / 窗口，Leader 只登记不派）
+## 3. 待认领（按价值排序）
 
-- **A 类 152 张**（代码已合、缺真机证据）：由 #8 用协议对拍逐批替代；GUI 才能验的（渲染/点击几何/输入法）另列。
-- **GM 132 条未实现**：现网 `Permission` 恒 0，命令体不可达（设计件 §2.4）——除非 owner 批准用 `SETPERMISSION` 脚本构造。
-- **whitelist 待复核**：T-161..T-172（含 T-172 SelGate 端口，已获口头批准、待留痕）。
-- **C# 真值栈**：私有 root `E:/tmp/conformance/csharp-root` 已能在 15xxx/17xxx 起；对拍时与 Rust 串行、同端口。
+| 卡 | 单元 | 写集 | tier |
+|---|---|---|---|
+| `openmir2-orphan-encoder-trigger-audit` | 12 个孤儿编码器的触发源审计（文档） | `docs/` | L |
+| `openmir2-goal-gate` | 终点四条件机判脚本 | `tools/goal/` + 终论文档 | L |
 
-## 4. 每轮派活的 brief 必含（Leader 检查表）
+## 4. 车道死活判据（本轮修正）
 
-1. 卡 id + 角色 + 唯一 owner + worktree/branch；
-2. **oracle 判据**（`src/**` 文件:行号，逐条）；
-3. 写集（越界需预先追认）；
-4. 门禁：fmt / clippy / test --workspace / msgcodegen（动 whitelist 加 anchor gate + registry audit）；
-5. **牙**：≥2 颗，先记 sha256 → 改坏 → 红 → 还原核对；
-6. 纪律：不碰 `src/**`、不起进程/不占端口/不写生产库、不并发跑门禁；
-7. 交付形态：commit + push + 线程 `patch`（base/head）+ 返回摘要。
+**只看 transcript mtime 会误杀**：跑 `cargo test --workspace` 的车道可以静默 20–40 分钟。
+判死前三个信号一起看：① transcript mtime（测试密集车道阈值 40–45 分钟）；② `Get-Process cargo,rustc`；
+③ worktree 里有没有未提交进展。起 finisher 用**原 worktree 的原 principal**（身份在 git-dir 里）。
+若原车道复活：**首交付为准**，立刻停 finisher 并核对远端 head 没被交叉污染。
