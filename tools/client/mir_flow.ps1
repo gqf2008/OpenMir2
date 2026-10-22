@@ -9,12 +9,18 @@
   点击坐标沿用旧脚本已验证值（1024x768 窗口）。
 
   阶段序列（每阶段写一条 {"t_wall_ms","stage"} 到 -StageLog）：
-    start → login_id → login_pwd → login_submit → charsel → enter_game
-    → ingame → talk → talk_sent → see_others_wait → see_others → walk ×N → logout_alt_x → logout_confirm → back_charsel
-    → reenter → reentered → done
+    start → login_id → login_pwd → login_submit → charsel → enter_game → notice_wait
+    → notice_poll → ingame → talk → talk_sent → see_others_wait → see_others
+    → logout_alt_x → logout_confirm → back_charsel → reenter → reentered → done
+    （-ClickNpc 时另有 npc_click；公告/坐标门的证据源见 -ProxyDir / -CapturePath。）
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File mir_flow.ps1 -OutDir E:\tmp\flow1
+
+.EXAMPLE
+  # live 证据（推荐）：proxy 运行中直接读 chunks.ndjson + conn-*.bin，无需等 export_s2c
+  powershell -ExecutionPolicy Bypass -File mir_flow.ps1 `
+    -OutDir E:\tmp\flow2 -ProxyDir E:\tmp\proxy -ExpectPos "29,33" -ClickNpc
 #>
 param(
   [string]$Account  = "mir2test",
@@ -134,20 +140,33 @@ param(
   # 根因见 docs/npc-render-diagnosis-20261022.md §2.3：旧 notice_poll 在固定点 (522,525) 盲点 12 次，
   # 公告只吃第一次，其余 11 次落在世界区（每次都重设 g_nTargetX/Y）⇒ 角色从 (29,33) 自动走到 (29,44)
   # 并落库，国王 (29,32) 出视窗。修法：公告只点一次、点完把鼠标移出世界区、任何世界区点击前先过坐标门。
-  [int]$NoticePollClicks = 1,        # 公告「确定」按钮点击次数：**上限 1**（>1 直接 fail-closed 拒绝）
+  # F5：只允许 1。0 会与 1018 校验矛盾（不点却等 1018），>1 会把世界区走掉 ⇒ 都 fail-closed。
+  [int]$NoticePollClicks = 1,        # 公告「确定」按钮点击次数：**只允许 1**（0 或 >1 直接拒绝）
   [string]$NoticeButton = "522,525",  # 公告确定按钮（客户端坐标；沿用旧脚本实测值）
   [string]$NoticeParkPoint = "522,760",  # 点完公告后鼠标停这里（底部面板区，不是世界区；只移动不点击）
-  [int]$NoticeWaitSec = 4,           # 等公告出现：有 -CapturePath 时按 s2c SM_SENDNOTICE(658) 判定，否则固定等待
-  [int]$NoticeVerifySec = 6,         # 等 c2s CM_LOGINNOTICEOK(1018)（仅 -CapturePath 模式校验）
-  [string]$CapturePath = "",         # 可选 capture.jsonl（mir2_proxy/GoldenExport 产物）：公告判定 + 1018 校验 + 坐标门取证
+  [int]$NoticeWaitSec = 4,           # 等公告出现：有证据源（-ProxyDir/-CapturePath）时按 s2c SM_SENDNOTICE(658) 判定
+  [int]$NoticeVerifySec = 6,         # 点后等 c2s CM_LOGINNOTICEOK(1018)（仅证据源模式校验；按点击时刻定界）
+  # F1：live 证据源 = proxy 的 --out 目录（运行中直接读 chunks.ndjson + conn-*.bin，无需等导出）。
+  [string]$ProxyDir = "",            # mir2_proxy --out 目录；运行中切帧 + EDCode 解 ident/param/tag/recog
+  # 离线/事后证据源 = export_s2c 产物。live 流程用它时必须是本场证据（F2：旧文件启动前就 RED）。
+  [string]$CapturePath = "",
+  [long]$EvidenceSinceMs = 0,        # 覆盖证据下界（离线自检用；0 = 按 proxy session / 流程启动墙钟自动）
   [string]$ExpectPos = "",           # "X,Y"：进入世界后、任何世界区点击前断言角色格；不一致 ⇒ POSITION_GATE RED + 中止
-  [switch]$ClickNpc,                 # 进世界后点一次固定 NPC（坐标 -NpcClick）；必须先过坐标门（需要 -CapturePath）
+  [switch]$ClickNpc,                 # 进世界后点一次固定 NPC（坐标 -NpcClick）；必须先过坐标门（需要证据源）
   [string]$NpcClick = "512,263",     # 角色 (29,33) 时该点对应 NPC(29,32)；旧值 (512,227) 实际对应 y=31（两格北，空地）
-  [switch]$FixtureDryRun,            # 离线自检：不启动客户端；-NoticePollSim / -ExpectPos 两条路径（供 mir_flow.selftest.ps1）
-  [string]$NoticePollSim = ""        # dismiss1 | slow | absent：模拟公告轮询控制流（与 -FixtureDryRun 联用）
+  # F3：无证据源时，点击前必须有客户端侧信号；拿不到就只 Move-Mouse 不点击并 UNVERIFIED。
+  [string]$NoticeProbe = "",         # 可选探针脚本/程序：exit 0=公告可见 / 1=不可见 / 其它=unknown
+  [switch]$NoticeWindowProbe,        # 开启 Win32 顶层窗口探测（客户端进程除主窗口外的可见窗口 >0 ⇒ 可见）
+  [string]$NoticePixelProbe = "",    # 可选截图像素探针 "clientX,clientY,RRGGBB,tol"（屏幕取色，tol=每通道容差）
+  [switch]$FixtureDryRun,            # 离线自检：不启动客户端；-NoticePollSim / -ExpectPos / -NoticeEvidenceCheck
+  [switch]$FixturePreflight,         # 与 -FixtureDryRun 联用：跑 live 证据源前置门（proxy 存活/旧 capture RED），仍不启客户端
+  [string]$NoticePollSim = "",       # dismiss1 | slow | absent | nosignal：模拟公告轮询控制流（与 -FixtureDryRun 联用）
+  [switch]$NoticeEvidenceCheck       # 离线：只查证据源里本场的 s2c SM_SENDNOTICE(658)（F1/F2 自检）
 )
 
 $ErrorActionPreference = "Stop"
+# F2：本流程启动墙钟（在没有 proxy session.json 时作为证据下界）。必须在启动客户端之前取。
+$script:flowStartMs = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
 if ($StageLog -eq "") { $StageLog = Join-Path $OutDir "stages.ndjson" }
 
 # ==== AttackTurn 标定/新映射：纯函数（离线可测；不触碰旧攻击路径）================
@@ -338,7 +357,7 @@ function Get-TurnHiWord([long]$v) {
 
 function Read-TurnCaptureFrames([string]$path, [long]$minTs, [long]$maxTs) {
   # 只解析 ts 落在总窗口内的 c2s 帧（capture.jsonl 可能整场几十万行）。
-  if (-not (Test-Path -LiteralPath $path)) { throw "capture.jsonl 不存在：$path" }
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "capture.jsonl 不存在（须是文件）：$path" }
   $full = (Resolve-Path -LiteralPath $path).Path
   $frames = New-Object System.Collections.ArrayList
   foreach ($line in [IO.File]::ReadLines($full)) {
@@ -357,99 +376,432 @@ function Read-TurnCaptureFrames([string]$path, [long]$minTs, [long]$maxTs) {
   return ,$frames.ToArray()
 }
 
-# ==== 夹具加固：capture 取证 / 公告轮询 / 坐标门 / 客户端身份 ==================
-# 纯读文件 + 纯计算；离线（-FixtureDryRun）与真机流程共用同一套口径。
-# 自身坐标证据（capture.jsonl，字段口径同 GoldenExport）：
-#   · c2s CM_WALK(3011)：recog = X | (Y<<16)（低字 X、高字 Y）= 该步**终点格**（走完即所在格）
-#   · s2c SM_LOGON(50) / SM_NEWMAP(51)：param = X、tag = Y（进图位置）
-# 取 ts_ms 最新的一条作为「角色当前格」；一条都没有 ⇒ 不可断言（调用方必须 fail-closed）。
+# ==== 夹具加固：证据源（live proxy / 离线 capture）/ 公告轮询 / 坐标门 ==================
+# F1（live 证据）：-ProxyDir 指向 mir2_proxy 的 --out 目录，**运行中**直接读
+#   chunks.ndjson 的 data 事件 + conn-NNNN.{c2s,s2c}.bin：按线上帧界（c2s `#1…!`，
+#   s2c `#…!$`，裸 `*` 心跳）切帧，用 EDCode 解每帧头块（16 编码字符 = 12B：
+#   recog i32le / ident u16le / param u16le / tag u16le / series u16le）。
+#   不再依赖会话结束后的 export_s2c/GoldenExport；capture.jsonl 只作离线/事后证据源。
+# F2（证据新鲜度）：-ProxyDir 用 session.json 的 start_wall_ms 作下界；-CapturePath 用本流程
+#   启动墙钟作下界（旧 capture 在启动客户端之前就被拒）；-EvidenceSinceMs 可覆盖（离线自检）。
+#   所有判定只吃 ts_ms >= SinceMs 的帧；658/1018/3011/50/51 同理。
+$script:EvidenceSlackMs = 2000   # 时钟/启动先后的小容差（2s）
 
-function Get-SelfCellEvidence([string]$path) {
-  if (-not (Test-Path -LiteralPath $path)) { throw "capture.jsonl 不存在：$path" }
-  $full = (Resolve-Path -LiteralPath $path).Path
-  $best = $null
-  foreach ($line in [IO.File]::ReadLines($full)) {
-    if ($line -notmatch '"kind"\s*:\s*"frame"') { continue }
-    if ($line -notmatch '"ident"\s*:\s*(3011|50|51)(?!\d)') { continue }
-    try { $r = $line | ConvertFrom-Json } catch { continue }
-    if ($null -eq $r -or $null -eq $r.PSObject.Properties["ident"] -or $null -eq $r.ident) { continue }
-    $ident = [int]$r.ident
-    $dir = ""
-    if ($null -ne $r.PSObject.Properties["dir"]) { $dir = [string]$r.dir }
-    $x = $null; $y = $null; $src = ""
-    if ($dir -eq "c2s" -and $ident -eq 3011) {
-      if ($null -eq $r.PSObject.Properties["recog"] -or $null -eq $r.recog) { continue }
-      $x = Get-TurnLoWord ([long]$r.recog); $y = Get-TurnHiWord ([long]$r.recog); $src = "c2s CM_WALK(3011)"
-    } elseif ($dir -eq "s2c" -and ($ident -eq 50 -or $ident -eq 51)) {
-      if ($null -eq $r.PSObject.Properties["param"] -or $null -eq $r.param) { continue }
-      if ($null -eq $r.PSObject.Properties["tag"] -or $null -eq $r.tag) { continue }
-      $x = [int]$r.param; $y = [int]$r.tag
-      if ($ident -eq 50) { $src = "s2c SM_LOGON(50)" } else { $src = "s2c SM_NEWMAP(51)" }
-    } else { continue }
-    $ts = [long]0
-    if ($null -ne $r.PSObject.Properties["ts_ms"] -and $null -ne $r.ts_ms) { $ts = [long]$r.ts_ms }
-    if ($null -eq $best -or $ts -ge [long]$best.ts_ms) {
-      $best = [pscustomobject][ordered]@{ X = [int]$x; Y = [int]$y; ts_ms = $ts; source = $src; seq = $r.seq }
-    }
+function ConvertFrom-EDCode([byte[]]$src) {
+  # 逐字节移植 EncryptUtil.Decode（XOR 0xAC + base 0x3C，3B→4C；len%4==1 的尾字节静默丢弃）。
+  $len = $src.Length
+  $cycles = [int][Math]::Floor($len / 4)
+  $left = $len % 4
+  $out = New-Object System.Collections.Generic.List[byte]
+  for ($i = 0; $i -lt $cycles; $i++) {
+    $b = $i * 4
+    $rem = (([int]$src[$b + 3] - 0x3C) -band 0xFF)
+    $t0 = (([int]$src[$b] - 0x3C) -band 0xFF)
+    $c0 = (((($t0 -shl 2) -band 0xF0) -bor ($rem -band 0x0C) -bor ($t0 -band 0x03)) -band 0xFF)
+    $out.Add([byte]($c0 -bxor 0xAC))
+    $t1 = (([int]$src[$b + 1] - 0x3C) -band 0xFF)
+    $c1 = (((($t1 -shl 2) -band 0xF0) -bor (($rem -shl 2) -band 0x0C) -bor ($t1 -band 0x03)) -band 0xFF)
+    $out.Add([byte]($c1 -bxor 0xAC))
+    $t2 = (([int]$src[$b + 2] - 0x3C) -band 0xFF)
+    $c2 = (($t2 -bor (($rem -shl 2) -band 0xC0)) -band 0xFF)
+    $out.Add([byte]($c2 -bxor 0xAC))
   }
-  return $best
+  if ($left -eq 2) {
+    $rem = (([int]$src[$len - 1] - 0x3C) -band 0xFF)
+    $t0 = (([int]$src[$len - 2] - 0x3C) -band 0xFF)
+    $c0 = (((($t0 -shl 2) -band 0xF0) -bor (($rem -shl 2) -band 0x0C) -bor ($t0 -band 0x03)) -band 0xFF)
+    $out.Add([byte]($c0 -bxor 0xAC))
+  } elseif ($left -eq 3) {
+    $rem = (([int]$src[$len - 1] - 0x3C) -band 0xFF)
+    $t0 = (([int]$src[$len - 3] - 0x3C) -band 0xFF)
+    $c0 = (((($t0 -shl 2) -band 0xF0) -bor ($rem -band 0x0C) -bor ($t0 -band 0x03)) -band 0xFF)
+    $out.Add([byte]($c0 -bxor 0xAC))
+    $t1 = (([int]$src[$len - 2] - 0x3C) -band 0xFF)
+    $c1 = (((($t1 -shl 2) -band 0xF0) -bor (($rem -shl 2) -band 0x0C) -bor ($t1 -band 0x03)) -band 0xFF)
+    $out.Add([byte]($c1 -bxor 0xAC))
+  }
+  return ,$out.ToArray()
 }
 
-function Test-PositionGate([string]$path, [string]$expect) {
+function ConvertFrom-ProxyFrame([byte[]]$raw, [string]$dir) {
+  # 帧头解码；心跳/act 帧/字符串帧/短帧返回 $null。口径与 GoldenExport 一致。
+  $start = 0
+  if ($dir -eq "c2s" -and $raw.Length -gt 1 -and $raw[0] -eq 0x23 -and $raw[1] -eq 0x31) { $start = 2 }
+  elseif ($raw.Length -gt 0 -and $raw[0] -eq 0x23) { $start = 1 }
+  $end = $raw.Length
+  while ($end -gt $start -and ($raw[$end - 1] -eq 0x21 -or $raw[$end - 1] -eq 0x24)) { $end-- }
+  if (($end - $start) -lt 16) { return $null }
+  if ($raw[$start] -eq 0x2B) { return $null }   # "+GD/…" 明文动作帧（没有 ident）
+  $enc = New-Object byte[] 16
+  [Array]::Copy($raw, $start, $enc, 0, 16)
+  $head = ConvertFrom-EDCode $enc
+  if ($head.Length -lt 12) { return $null }
+  if ($head[0] -eq 0x2A -and $head[1] -eq 0x2A) { return $null }   # "**…" 登录字符串帧
+  return [pscustomobject]@{
+    recog  = [BitConverter]::ToInt32($head, 0)
+    ident  = [int][BitConverter]::ToUInt16($head, 4)
+    param  = [int][BitConverter]::ToUInt16($head, 6)
+    tag    = [int][BitConverter]::ToUInt16($head, 8)
+    series = [int][BitConverter]::ToUInt16($head, 10)
+  }
+}
+
+$script:ProxyCache = @{}
+
+function Read-ProxySessionStart([string]$dir) {
+  $sj = Join-Path $dir "session.json"
+  if (-not (Test-Path -LiteralPath $sj)) { return [long]0 }
+  try { $o = [IO.File]::ReadAllText($sj, [Text.Encoding]::UTF8) | ConvertFrom-Json } catch { return [long]0 }
+  if ($null -ne $o.PSObject.Properties["start_wall_ms"] -and $null -ne $o.start_wall_ms) { return [long]$o.start_wall_ms }
+  return [long]0
+}
+
+function Update-ProxyFrameCache([string]$dir) {
+  # 增量读：只消费 chunks.ndjson 已声明的 data 字节区间；未闭合的尾帧留到下次。
+  $full = (Resolve-Path -LiteralPath $dir).Path
+  $state = $script:ProxyCache[$full]
+  if ($null -eq $state) {
+    $state = [pscustomobject]@{
+      Frames         = (New-Object System.Collections.ArrayList)
+      Parsed         = @{}
+      Events         = @{}
+      ChunkOffset    = [long]0
+      LatestDataTs   = [long]0
+      SessionStartMs = (Read-ProxySessionStart $full)
+    }
+    $script:ProxyCache[$full] = $state
+  }
+  $chunks = Join-Path $full "chunks.ndjson"
+  if (-not (Test-Path -LiteralPath $chunks)) { throw "proxy chunks.ndjson 不存在：$chunks" }
+  # 增量读 chunks.ndjson：只解析本次新增的行（长会话里避免每次轮询重读整场）。
+  $newBytes = New-Object byte[] 0
+  $fsC = [IO.File]::Open($chunks, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+  try {
+    if ($fsC.Length -lt [long]$state.ChunkOffset) {
+      # 目录被复用/截断：重置增量状态（不静默拿旧 events 当真相）。
+      $state.ChunkOffset = [long]0
+      $state.Events = @{}
+      $state.Parsed = @{}
+      $state.Frames.Clear()
+    }
+    [void]$fsC.Seek([long]$state.ChunkOffset, [IO.SeekOrigin]::Begin)
+    $ms = New-Object System.IO.MemoryStream
+    try { $fsC.CopyTo($ms); $newBytes = $ms.ToArray() } finally { $ms.Dispose() }
+  } finally { $fsC.Dispose() }
+  $lineStart = 0
+  while ($newBytes.Length -gt 0 -and ($nl = [Array]::IndexOf($newBytes, [byte]0x0A, $lineStart)) -ge 0) {
+    $lineLen = $nl - $lineStart
+    if ($lineLen -gt 0) {
+      $line = [Text.Encoding]::UTF8.GetString($newBytes, $lineStart, $lineLen).TrimEnd([char]13)
+      if ($line -match '"event"\s*:\s*"data"') {
+        $r = $null
+        try { $r = $line | ConvertFrom-Json } catch { $r = $null }
+        if ($null -ne $r -and $null -ne $r.PSObject.Properties["conn"] -and $null -ne $r.PSObject.Properties["dir"]) {
+          $k = ([int]$r.conn).ToString() + "/" + [string]$r.dir
+          if (-not $state.Events.ContainsKey($k)) { $state.Events[$k] = New-Object System.Collections.ArrayList }
+          $ev = [pscustomobject]@{ Off = [long]$r.off; N = [int]$r.n; Ts = [long]$r.t_wall_ms }
+          [void]$state.Events[$k].Add($ev)
+          if ($ev.Ts -gt [long]$state.LatestDataTs) { $state.LatestDataTs = $ev.Ts }
+        }
+      }
+    }
+    $lineStart = $nl + 1
+  }
+  $state.ChunkOffset = [long]$state.ChunkOffset + [long]$lineStart
+  foreach ($k in $state.Events.Keys) {
+    # 同一 (conn,dir) 的 data 事件按写入顺序追加，offset 单调递增，无需每次重排。
+    $evs = @($state.Events[$k])
+    $covered = 0
+    foreach ($e in $evs) { if (($e.Off + $e.N) -gt $covered) { $covered = $e.Off + $e.N } }
+    $parsed = 0
+    if ($state.Parsed.ContainsKey($k)) { $parsed = [long]$state.Parsed[$k] }
+    if ($covered -le $parsed) { continue }
+    $pair = $k.Split("/")
+    $conn = [int]$pair[0]; $dir2 = $pair[1]
+    $bin = Join-Path $full ("conn-" + $conn.ToString("0000") + "." + $dir2 + ".bin")
+    if (-not (Test-Path -LiteralPath $bin)) { continue }
+    $need = [int]($covered - $parsed)
+    $buf = New-Object byte[] $need
+    $fs = [IO.File]::Open($bin, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    try {
+      [void]$fs.Seek($parsed, [IO.SeekOrigin]::Begin)
+      $read = 0
+      while ($read -lt $need) {
+        $n = $fs.Read($buf, $read, $need - $read)
+        if ($n -le 0) { break }
+        $read += $n
+      }
+    } finally { $fs.Dispose() }
+    if ($read -le 0) { continue }
+    $i = 0
+    $lastComplete = 0
+    while ($i -lt $read) {
+      if ($buf[$i] -eq 0x2A) { $i++; $lastComplete = $i; continue }   # '*' 心跳
+      $idx = [Array]::IndexOf($buf, [byte]0x21, $i)
+      if ($idx -lt 0 -or $idx -ge $read) { break }                     # 未闭合尾帧
+      $end = $idx + 1
+      if ($end -lt $read -and $buf[$end] -eq 0x24) { $end++ }
+      $frameOff = $parsed + $i
+      $raw = New-Object byte[] ($end - $i)
+      [Array]::Copy($buf, $i, $raw, 0, ($end - $i))
+      $dec = ConvertFrom-ProxyFrame $raw $dir2
+      if ($null -ne $dec) {
+        $ts = [long]0
+        foreach ($e in $evs) { if ($frameOff -ge $e.Off -and $frameOff -lt ($e.Off + $e.N)) { $ts = $e.Ts; break } }
+        [void]$state.Frames.Add([pscustomobject]@{
+          dir = $dir2; ts_ms = $ts; conn = $conn; off = $frameOff
+          ident = [int]$dec.ident; recog = [long]$dec.recog
+          param = [int]$dec.param; tag = [int]$dec.tag; series = [int]$dec.series
+        })
+      }
+      $i = $end
+      $lastComplete = $i
+    }
+    $state.Parsed[$k] = $parsed + $lastComplete
+  }
+}
+
+$script:CaptureCache = @{}
+
+function Get-CaptureFrames([string]$path) {
+  # 读 capture.jsonl（export_s2c 产物）；按 mtime+size 缓存，避免轮询反复解析大文件。
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "capture.jsonl 不存在（须是文件）：$path" }
+  $fi = Get-Item -LiteralPath $path
+  $key = $fi.FullName
+  $stamp = $fi.LastWriteTimeUtc.Ticks.ToString() + ":" + $fi.Length
+  $cached = $script:CaptureCache[$key]
+  if ($null -ne $cached -and $cached.Stamp -eq $stamp) { return ,$cached.Frames }
+  $frames = New-Object System.Collections.ArrayList
+  foreach ($line in [IO.File]::ReadLines($fi.FullName)) {
+    if ($line -notmatch '"kind"\s*:\s*"frame"') { continue }
+    try { $r = $line | ConvertFrom-Json } catch { continue }
+    if ($null -eq $r -or $null -eq $r.PSObject.Properties["ident"] -or $null -eq $r.ident) { continue }
+    $dir = ""; $recog = [long]0; $ts = [long]0; $conn = 0
+    $param = 0; $tag = 0; $series = 0
+    if ($null -ne $r.PSObject.Properties["dir"]) { $dir = [string]$r.dir }
+    if ($null -ne $r.PSObject.Properties["recog"] -and $null -ne $r.recog) { $recog = [long]$r.recog }
+    if ($null -ne $r.PSObject.Properties["ts_ms"] -and $null -ne $r.ts_ms) { $ts = [long]$r.ts_ms }
+    if ($null -ne $r.PSObject.Properties["conn"] -and $null -ne $r.conn) { $conn = [int]$r.conn }
+    if ($null -ne $r.PSObject.Properties["param"] -and $null -ne $r.param) { $param = [int]$r.param }
+    if ($null -ne $r.PSObject.Properties["tag"] -and $null -ne $r.tag) { $tag = [int]$r.tag }
+    if ($null -ne $r.PSObject.Properties["series"] -and $null -ne $r.series) { $series = [int]$r.series }
+    [void]$frames.Add([pscustomobject]@{
+      dir = $dir; ts_ms = $ts; conn = $conn; off = [long]0
+      ident = [int]$r.ident; recog = $recog; param = $param; tag = $tag; series = $series
+    })
+  }
+  $script:CaptureCache[$key] = [pscustomobject]@{ Stamp = $stamp; Frames = $frames }
+  return ,$frames
+}
+
+function Get-EvidenceFrames($source) {
+  if ($source.Kind -eq "proxy") {
+    Update-ProxyFrameCache $source.Path
+    $full = (Resolve-Path -LiteralPath $source.Path).Path
+    return ,$script:ProxyCache[$full].Frames
+  }
+  if ($source.Kind -eq "capture") { return ,(Get-CaptureFrames $source.Path) }
+  throw "证据源未配置（需要 -ProxyDir 或 -CapturePath）"
+}
+
+function Assert-ProxyLive([string]$dir) {
+  # live proxy 必须在跑：session.json + ready.flag + pid 存活。缺失 ⇒ 启动客户端前 fail-closed。
+  $sj = Join-Path $dir "session.json"
+  if (-not (Test-Path -LiteralPath $sj)) { throw "proxy session.json 不存在（proxy 没起？）：$sj" }
+  if (-not (Test-Path -LiteralPath (Join-Path $dir "ready.flag"))) { throw "proxy ready.flag 不存在（proxy 没就绪？）：$dir" }
+  try { $o = [IO.File]::ReadAllText($sj, [Text.Encoding]::UTF8) | ConvertFrom-Json } catch { throw "proxy session.json 坏：$sj" }
+  if ($null -ne $o.PSObject.Properties["pid"] -and $o.pid) {
+    $p = Get-Process -Id ([int]$o.pid) -ErrorAction SilentlyContinue
+    if ($null -eq $p) { throw ("proxy 进程 pid=" + $o.pid + " 不在（session.json 与现场不符）") }
+  }
+}
+
+function Assert-CaptureFresh([string]$path, [long]$sinceMs) {
+  # F2：live 流程拿旧 capture ⇒ 在启动客户端之前就 RED（不让人“立刻看到 658/1018”）。
+  $frames = Get-CaptureFrames $path
+  $max = [long]0
+  foreach ($f in $frames) { if ($f.ts_ms -gt $max) { $max = $f.ts_ms } }
+  $fi = Get-Item -LiteralPath $path
+  $mtimeMs = ([DateTimeOffset]$fi.LastWriteTimeUtc).ToUnixTimeMilliseconds()
+  if ($max -le 0 -or $max -lt $sinceMs -or $mtimeMs -lt $sinceMs - $script:EvidenceSlackMs) {
+    throw ("STALE_CAPTURE: capture.jsonl 最新帧 ts_ms=" + $max + " / mtime_ms=" + $mtimeMs +
+      " < 本场 since=" + $sinceMs +
+      "（旧证据一律 RED；live 请用 -ProxyDir 指向 proxy --out 目录）")
+  }
+}
+
+function New-EvidenceSource([string]$proxyDir, [string]$capturePath, [long]$sinceOverride, [long]$flowStartMs, [switch]$Offline) {
+  $source = [pscustomobject]@{ Kind = "none"; Path = ""; SinceMs = [long]0; SessionStartMs = [long]0 }
+  if ($proxyDir -ne "" -and $capturePath -ne "") {
+    throw "-ProxyDir 与 -CapturePath 互斥（证据源只能有一个；live 用 -ProxyDir，事后回填用 -CapturePath）"
+  }
+  if ($proxyDir -ne "") {
+    if (-not (Test-Path -LiteralPath $proxyDir)) { throw "proxy 输出目录不存在：$proxyDir" }
+    $full = (Resolve-Path -LiteralPath $proxyDir).Path
+    if (-not (Test-Path -LiteralPath (Join-Path $full "chunks.ndjson"))) {
+      throw ("proxy 目录里没有 chunks.ndjson：$full")
+    }
+    $sessionStart = Read-ProxySessionStart $full
+    $since = $sessionStart
+    if ($sinceOverride -gt 0) { $since = $sinceOverride }
+    elseif ($sessionStart -gt 0) { $since = [Math]::Max([long]0, $sessionStart - $script:EvidenceSlackMs) }
+    $source.Kind = "proxy"; $source.Path = $full; $source.SinceMs = [long]$since; $source.SessionStartMs = $sessionStart
+    if (-not $Offline) { Assert-ProxyLive $full }
+  } elseif ($capturePath -ne "") {
+    if (-not (Test-Path -LiteralPath $capturePath -PathType Leaf)) { throw "capture.jsonl 不存在（须是文件）：$capturePath" }
+    $full = (Resolve-Path -LiteralPath $capturePath).Path
+    $since = [long]0
+    if ($sinceOverride -gt 0) { $since = $sinceOverride }
+    elseif (-not $Offline -and $flowStartMs -gt 0) { $since = [Math]::Max([long]0, $flowStartMs - $script:EvidenceSlackMs) }
+    # 离线自检（-FixtureDryRun）不给 -EvidenceSinceMs 时不设下界；live 才用流程启动墙钟（F2）。
+    $source.Kind = "capture"; $source.Path = $full; $source.SinceMs = [long]$since
+    if (-not $Offline) { Assert-CaptureFresh $full $since }
+  }
+  return $source
+}
+
+function Assert-ProxyFresh($source, [long]$flowStartMs) {
+  # F2：proxy 目录可能是上一场遗留（登录后才发现没证据 ⇒ 流程报废）。要求最新 data 事件
+  # 落在本流程启动之后（小容差）。proxy 可比流程早启动，但本场登录一定会产生新 data。
+  if ($source.Kind -ne "proxy") { return }
+  $full = (Resolve-Path -LiteralPath $source.Path).Path
+  Update-ProxyFrameCache $full
+  $latest = [long]$script:ProxyCache[$full].LatestDataTs
+  $floor = [Math]::Max([long]0, $flowStartMs - $script:EvidenceSlackMs)
+  if ($latest -le 0 -or $latest -lt $floor) {
+    throw ("PROXY_STALE: proxy 最新 data t_wall_ms=" + $latest + " < 本流程 since=" + $floor +
+      "（目录不是本场？）")
+  }
+}
+
+function Get-SelfCellEvidence($source, [long]$sinceMs) {
+  # F6：c2s CM_WALK(3011) 的 recog 是**目标格**（点了就走，未必已到）。只把它当作
+  #   “与上一条可信自身证据切比雪夫距离 <=1 的下一步”；跨度 >1 的目标不采纳，回退到
+  #   s2c SM_LOGON(50)/SM_NEWMAP(51) 的锚点或上一格可信走位。
+  $frames = Get-EvidenceFrames $source
+  $ordered = @($frames | Where-Object { $_.ts_ms -ge $sinceMs } |
+    Sort-Object @{ Expression = "ts_ms"; Ascending = $true }, @{ Expression = "conn"; Ascending = $true }, @{ Expression = "off"; Ascending = $true })
+  $cell = $null
+  $sourceName = ""
+  $seq = $null
+  $ts = [long]0
+  $trustedWalks = 0
+  $ignoredFar = 0
+  foreach ($f in $ordered) {
+    if ($f.dir -eq "s2c" -and ($f.ident -eq 50 -or $f.ident -eq 51)) {
+      $cell = [pscustomobject]@{ X = [int]$f.param; Y = [int]$f.tag }
+      $sourceName = if ($f.ident -eq 50) { "s2c SM_LOGON(50)" } else { "s2c SM_NEWMAP(51)" }
+      $ts = [long]$f.ts_ms; $seq = $f.off
+    } elseif ($f.dir -eq "c2s" -and $f.ident -eq 3011) {
+      if ($null -eq $cell) { $ignoredFar++; continue }   # 没有锚点：不拿目标格当坐标
+      $tx = Get-TurnLoWord ([long]$f.recog)
+      $ty = Get-TurnHiWord ([long]$f.recog)
+      $dist = [Math]::Max([Math]::Abs($tx - [int]$cell.X), [Math]::Abs($ty - [int]$cell.Y))
+      if ($dist -le 1) {
+        $cell = [pscustomobject]@{ X = $tx; Y = $ty }
+        $sourceName = "c2s CM_WALK(3011)"
+        $ts = [long]$f.ts_ms; $seq = $f.off
+        $trustedWalks++
+      } else {
+        $ignoredFar++
+      }
+    }
+  }
+  if ($null -eq $cell) { return $null }
+  return [pscustomobject][ordered]@{
+    X = [int]$cell.X; Y = [int]$cell.Y; ts_ms = $ts; source = $sourceName; seq = $seq
+    trusted_walks = $trustedWalks; ignored_far_walks = $ignoredFar
+  }
+}
+
+function Test-PositionGate($source, [string]$expect, [long]$sinceMs) {
   # "X,Y" ⇒ 断言角色格。不一致 / 无证据 ⇒ Ok=$false（fail-closed，调用方必须中止）。
   $parts = $expect.Split(",")
   if ($parts.Count -ne 2 -or -not (Test-TurnIntLiteral $parts[0].Trim()) -or -not (Test-TurnIntLiteral $parts[1].Trim())) {
     return [pscustomobject]@{ Ok = $false; Detail = ("-ExpectPos 须为 'X,Y'（两个整数），当前：'" + $expect + "'") }
   }
   $ex = [int]$parts[0]; $ey = [int]$parts[1]
-  $ev = Get-SelfCellEvidence $path
+  $ev = Get-SelfCellEvidence $source $sinceMs
   if ($null -eq $ev) {
-    return [pscustomobject]@{ Ok = $false; Detail = ("capture 中没有自身坐标证据（c2s CM_WALK(3011) / s2c SM_LOGON(50)/SM_NEWMAP(51)）；expect=" + $ex + "," + $ey) }
+    return [pscustomobject]@{ Ok = $false; Detail = ("证据源中没有自身坐标证据（c2s CM_WALK(3011) 需有 SM_LOGON/51 锚点且步长<=1；或 s2c SM_LOGON(50)/SM_NEWMAP(51)）；expect=" + $ex + "," + $ey) }
   }
   $ok = ([int]$ev.X -eq $ex -and [int]$ev.Y -eq $ey)
   $detail = ("actual=" + $ev.X + "," + $ev.Y + " expect=" + $ex + "," + $ey +
-             " source='" + $ev.source + "' seq=" + $ev.seq + " ts_ms=" + $ev.ts_ms)
+             " source='" + $ev.source + "' seq=" + $ev.seq + " ts_ms=" + $ev.ts_ms +
+             " trusted_walks=" + $ev.trusted_walks + " ignored_far_walks=" + $ev.ignored_far_walks)
   return [pscustomobject]@{ Ok = $ok; ActualX = [int]$ev.X; ActualY = [int]$ev.Y; ExpectX = $ex; ExpectY = $ey; Detail = $detail }
 }
 
-function Wait-CaptureFrame([string]$path, [string]$dir, [int]$ident, [int]$timeoutSec) {
-  # 轮询（capture 可能仍在增长）直到出现 dir/ident 的帧；超时返回 $null。先用正则预筛，避免整场 JSON 解析。
+function Wait-EvidenceFrame($source, [string]$dir, [int]$ident, [int]$timeoutSec, [long]$sinceMs, [long]$afterMs = 0) {
+  # 轮询证据源直到出现 dir/ident 且 ts_ms >= max(sinceMs, afterMs) 的帧；返回**最新**一条，
+  # 超时返回 $null。取最新（而不是第一条）才能让“点后 1018”只认本次点击之后的帧。
+  $floor = [Math]::Max([long]$sinceMs, [long]$afterMs)
   $deadline = (Get-Date).AddSeconds([Math]::Max(0, $timeoutSec))
-  $dirPat = '"dir"\s*:\s*"' + [regex]::Escape($dir) + '"'
-  $identPat = '"ident"\s*:\s*' + $ident + '(?!\d)'
   while ($true) {
-    if (Test-Path -LiteralPath $path) {
-      $full = (Resolve-Path -LiteralPath $path).Path
-      foreach ($line in [IO.File]::ReadLines($full)) {
-        if ($line -notmatch $dirPat) { continue }
-        if ($line -notmatch $identPat) { continue }
-        try { return ($line | ConvertFrom-Json) } catch { continue }
-      }
+    $best = $null
+    foreach ($f in (Get-EvidenceFrames $source)) {
+      if ($f.dir -ne $dir -or [int]$f.ident -ne $ident) { continue }
+      if ([long]$f.ts_ms -lt $floor) { continue }
+      if ($null -eq $best -or [long]$f.ts_ms -ge [long]$best.ts_ms) { $best = $f }
     }
+    if ($null -ne $best) { return $best }
     if ((Get-Date) -ge $deadline) { return $null }
     Start-Sleep -Milliseconds 250
   }
 }
 
+function Invoke-NoticePollCore {
+  # F4：公告控制流只有这一份实现；真机与 -NoticePollSim 都走它（sim 只注入 Click/Verify/Park）。
+  # 约束：最多点 MaxClicks 次（本项目只允许 1）；公告不可见时一次也不点；点后只校验，不补点。
+  param(
+    [bool]$NoticeVisible,
+    [int]$MaxClicks,
+    [scriptblock]$ClickAction,
+    [scriptblock]$VerifyDismiss,
+    [scriptblock]$ParkAction
+  )
+  $clicks = 0
+  $parked = $false
+  $dismissed = $false
+  $reason = ""
+  if (-not $NoticeVisible) {
+    if ($ParkAction) { & $ParkAction; $parked = $true }
+    return [pscustomobject][ordered]@{ Clicks = 0; WorldClicks = 0; Parked = $parked; Dismissed = $false; Reason = "no_notice_visible" }
+  }
+  if ($MaxClicks -lt 1) {
+    if ($ParkAction) { & $ParkAction; $parked = $true }
+    return [pscustomobject][ordered]@{ Clicks = 0; WorldClicks = 0; Parked = $parked; Dismissed = $false; Reason = "click_cap_zero" }
+  }
+  & $ClickAction
+  $clicks = 1
+  if ($ParkAction) { & $ParkAction; $parked = $true }
+  $d = & $VerifyDismiss $clicks
+  if ($d -eq $true) { $dismissed = $true; $reason = "notice_clicked_once" }
+  elseif ($null -eq $d) { $reason = "unverified_no_evidence" }
+  elseif ($clicks -ge $MaxClicks) { $reason = "click_cap_reached" }
+  else { $reason = "click_not_dismissed" }
+  return [pscustomobject][ordered]@{ Clicks = $clicks; WorldClicks = 0; Parked = $parked; Dismissed = $dismissed; Reason = $reason }
+}
+
 function Invoke-NoticePollSim([string]$mode, [int]$maxClicks) {
-  # 离线模拟 notice_poll 的控制流（不碰客户端）：返回 Clicks / WorldClicks / Parked / Dismissed / Reason。
-  #   dismiss1：公告可见 ⇒ 点 1 次即消失（正常路径）
-  #   slow    ：公告要 3 次才消失 ⇒ 上限 1 只允许点 1 次，**不补点**（证明点击次数上限生效）
-  #   absent  ：公告始终不出现 ⇒ 一次也不点世界区（超时后只把鼠标移出世界区）
-  if ($mode -eq "dismiss1") {
-    $c = 0
-    if ($maxClicks -ge 1) { $c++ }
-    return [pscustomobject][ordered]@{ Clicks = $c; WorldClicks = 0; Parked = $true; Dismissed = ($c -ge 1); Reason = "notice_clicked_once" }
-  }
-  if ($mode -eq "slow") {
-    $c = 0
-    if ($maxClicks -ge 1) { $c++ }
-    return [pscustomobject][ordered]@{ Clicks = $c; WorldClicks = 0; Parked = $true; Dismissed = $false; Reason = "click_cap_reached" }
-  }
-  if ($mode -eq "absent") {
-    return [pscustomobject][ordered]@{ Clicks = 0; WorldClicks = 0; Parked = $true; Dismissed = $false; Reason = "no_notice_timeout" }
-  }
-  throw ("-NoticePollSim 只支持 dismiss1 | slow | absent，当前：'" + $mode + "'")
+  # 离线模拟：只断言控制流形状（与真机共用 Invoke-NoticePollCore），不作为行为证据。
+  #   dismiss1：公告可见，点 1 次即消失
+  #   slow    ：公告要 3 次才消失 ⇒ 上限 1 只允许点 1 次，不补点
+  #   absent  ：公告始终不出现（证据源超时）⇒ 0 次点击
+  #   nosignal：没有客户端侧信号（无证据源且窗口/探针都没看到公告）⇒ 0 次点击 + UNVERIFIED
+  $visible = $false; $afterClickDismissed = $false; $reasonOverride = ""
+  if ($mode -eq "dismiss1") { $visible = $true; $afterClickDismissed = $true }
+  elseif ($mode -eq "slow") { $visible = $true; $afterClickDismissed = $false }
+  elseif ($mode -eq "absent") { $visible = $false; $reasonOverride = "no_notice_timeout" }
+  elseif ($mode -eq "nosignal") { $visible = $false; $reasonOverride = "no_client_signal" }
+  else { throw ("-NoticePollSim 只支持 dismiss1 | slow | absent | nosignal，当前：'" + $mode + "'") }
+  $clickAction = { param($n) }.GetNewClosure()
+  $verify = { param($n) if ($afterClickDismissed) { return $true } return $false }.GetNewClosure()
+  $park = { }.GetNewClosure()
+  $core = Invoke-NoticePollCore -NoticeVisible $visible -MaxClicks $maxClicks `
+    -ClickAction $clickAction -VerifyDismiss $verify -ParkAction $park
+  if ($reasonOverride -ne "" -and $core.Clicks -eq 0) { $core.Reason = $reasonOverride }
+  return $core
 }
 
 function Get-Sha256Hex([string]$path) {
@@ -742,20 +1094,44 @@ if ($AttackTurnMap -ne "" -and $AttackTurnCalibrate -ne "") {
   throw "-AttackTurnMap 与 -AttackTurnCalibrate 互斥"
 }
 # ---- 夹具加固参数门（fail-closed；都在启动客户端之前）----
-if ($NoticePollClicks -lt 0 -or $NoticePollClicks -gt 1) {
-  throw ("-NoticePollClicks 只允许 0 或 1（上限 1）：重复盲点世界区会把角色走掉（docs/npc-render-diagnosis-20261022.md §2.3）")
+# F5：只允许 1。0 时既不等 1018 又不点，语义自相矛盾；>1 会重复盲点世界区。
+if ($NoticePollClicks -ne 1) {
+  throw ("-NoticePollClicks 只允许 1（0 与 1018 校验矛盾；>1 会重复盲点世界区把角色走掉，见 docs/npc-render-diagnosis-20261022.md §2.3）")
 }
 if ($NoticeWaitSec -lt 0) { throw "-NoticeWaitSec 不能为负" }
 if ($NoticeVerifySec -lt 0) { throw "-NoticeVerifySec 不能为负" }
+if ($EvidenceSinceMs -lt 0) { throw "-EvidenceSinceMs 不能为负" }
+# 坐标参数在启动客户端前就校验（公告按钮/停靠点/NPC 点），避免流程跑到一半才发现格式错。
+foreach ($spec in @(@("NoticeButton", $NoticeButton), @("NoticeParkPoint", $NoticeParkPoint), @("NpcClick", $NpcClick))) {
+  $sp = ([string]$spec[1]).Split(",")
+  if ($sp.Count -ne 2 -or -not (Test-TurnIntLiteral $sp[0].Trim()) -or -not (Test-TurnIntLiteral $sp[1].Trim())) {
+    throw ("-" + $spec[0] + " 须为 'x,y'（两个整数），当前：'" + $spec[1] + "'")
+  }
+}
+if ($NoticePixelProbe -ne "") {
+  $np = $NoticePixelProbe.Split(",")
+  if ($np.Count -ne 4 -or $np[2].TrimStart("#") -notmatch '^[0-9A-Fa-f]{6}$' -or -not (Test-TurnIntLiteral $np[3].Trim())) {
+    throw ("-NoticePixelProbe 须为 'x,y,RRGGBB,tol'，当前：'" + $NoticePixelProbe + "'")
+  }
+}
 if ($ExpectPos -ne "") {
   $ep = $ExpectPos.Split(",")
   if ($ep.Count -ne 2 -or -not (Test-TurnIntLiteral $ep[0].Trim()) -or -not (Test-TurnIntLiteral $ep[1].Trim())) {
     throw ("-ExpectPos 须为 'X,Y'（两个整数），当前：'" + $ExpectPos + "'")
   }
 }
-if ($ClickNpc -and $CapturePath -eq "") {
-  throw "-ClickNpc 需要 -CapturePath：坐标门没有取证就不得盲点世界区（fail-closed）"
+if ($ProxyDir -ne "" -and $CapturePath -ne "") {
+  throw "-ProxyDir 与 -CapturePath 互斥（live 用 -ProxyDir；事后回填/离线才用 -CapturePath）"
 }
+if ($FixturePreflight -and -not $FixtureDryRun) { throw "-FixturePreflight 只能与 -FixtureDryRun 联用（不启动客户端）" }
+if ($NoticeEvidenceCheck -and -not $FixtureDryRun) { throw "-NoticeEvidenceCheck 只能与 -FixtureDryRun 联用（不启动客户端）" }
+if ($NoticePollSim -ne "" -and -not $FixtureDryRun) { throw "-NoticePollSim 只能与 -FixtureDryRun 联用（不启动客户端）" }
+if ($ClickNpc -and $ProxyDir -eq "" -and $CapturePath -eq "") {
+  throw "-ClickNpc 需要证据源 -ProxyDir 或 -CapturePath：坐标门没有取证就不得盲点世界区（fail-closed）"
+}
+# 证据源在启动客户端之前就建好：CapturePath 若是旧证据会在这里 RED（F2），不会等登录完才报废。
+$evidenceOffline = ($FixtureDryRun -and -not $FixturePreflight)
+$evidenceSource = New-EvidenceSource $ProxyDir $CapturePath $EvidenceSinceMs $script:flowStartMs -Offline:$evidenceOffline
 $turnMapTable = $null
 if ($AttackTurnMap -ne "") { $turnMapTable = Read-TurnCalibrationMap $AttackTurnMap }
 
@@ -811,12 +1187,30 @@ if ($FixtureDryRun) {
       " cap=" + $NoticePollClicks)
     $did = $true
   }
-  if ($ExpectPos -ne "") {
-    if ($CapturePath -eq "") {
-      Write-Output "POSITION_GATE RED missing -CapturePath（坐标门取证缺失）"
-      throw "-FixtureDryRun -ExpectPos 需要 -CapturePath（坐标门取证）"
+  if ($NoticeEvidenceCheck) {
+    if ($evidenceSource.Kind -eq "none") {
+      Write-Output "NOTICE_EVIDENCE RED missing -ProxyDir/-CapturePath（证据源缺失）"
+      throw "-FixtureDryRun -NoticeEvidenceCheck 需要 -ProxyDir 或 -CapturePath"
     }
-    $gate = Test-PositionGate $CapturePath $ExpectPos
+    $nf = $null
+    foreach ($f in (Get-EvidenceFrames $evidenceSource)) {
+      if ($f.dir -ne "s2c" -or [int]$f.ident -ne 658) { continue }
+      if ([long]$f.ts_ms -lt [long]$evidenceSource.SinceMs) { continue }
+      if ($null -eq $nf -or [long]$f.ts_ms -ge [long]$nf.ts_ms) { $nf = $f }
+    }
+    if ($null -eq $nf) {
+      Write-Output ("NOTICE_EVIDENCE RED ident=658 since_ms=" + $evidenceSource.SinceMs + "（本场证据里没有 s2c SM_SENDNOTICE）")
+      exit 1
+    }
+    Write-Output ("NOTICE_EVIDENCE GREEN ident=658 ts_ms=" + $nf.ts_ms + " conn=" + $nf.conn + " since_ms=" + $evidenceSource.SinceMs)
+    $did = $true
+  }
+  if ($ExpectPos -ne "") {
+    if ($evidenceSource.Kind -eq "none") {
+      Write-Output "POSITION_GATE RED missing -ProxyDir/-CapturePath（坐标门取证缺失）"
+      throw "-FixtureDryRun -ExpectPos 需要 -ProxyDir 或 -CapturePath（坐标门取证）"
+    }
+    $gate = Test-PositionGate $evidenceSource $ExpectPos $evidenceSource.SinceMs
     if ($gate.Ok) {
       Write-Output ("POSITION_GATE GREEN " + $gate.Detail)
     } else {
@@ -826,7 +1220,7 @@ if ($FixtureDryRun) {
     $did = $true
   }
   if (-not $did) {
-    throw "-FixtureDryRun 需要 -NoticePollSim 或 -ExpectPos（离线夹具自检）"
+    throw "-FixtureDryRun 需要 -NoticePollSim / -NoticeEvidenceCheck / -ExpectPos（离线夹具自检）"
   }
   Write-Output "FIXTURE_DRY_RUN_OK"
   exit 0
@@ -834,6 +1228,7 @@ if ($FixtureDryRun) {
 
 $src = @"
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 public class MirFlow {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
@@ -845,6 +1240,21 @@ public class MirFlow {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, IntPtr extra);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, IntPtr extra);
+  // F3：客户端侧信号——枚举本进程的可见顶层窗口（公告对话框通常是主窗口之外的第二个窗体）。
+  private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+  [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] private static extern int GetWindowTextLength(IntPtr hWnd);
+  public static IntPtr[] VisibleTopLevelWindows(uint pid) {
+    var list = new List<IntPtr>();
+    EnumWindows(delegate(IntPtr h, IntPtr l) {
+      uint p; GetWindowThreadProcessId(h, out p);
+      if (p == pid && IsWindowVisible(h) && GetWindowTextLength(h) > 0) list.Add(h);
+      return true;
+    }, IntPtr.Zero);
+    return list.ToArray();
+  }
 
   // SendInput：按扫描码注入真实键盘事件（Alt+X 这类组合键在部分 VCL 程序里
   // 用 keybd_event 不生效；SendInput 走驱动层，最接近真人按键）
@@ -871,6 +1281,61 @@ public class MirFlow {
 "@
 Add-Type -TypeDefinition $src -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing
+
+function Get-NoticePixelProbe {
+  # "x,y,RRGGBB,tol"：把客户端坐标换算到屏幕，取 1x1 像素与期望色比较（每通道 <= tol）。
+  # 这是**截图/屏幕像素**判定，属于客户端侧信号；没有标定值时不要开启（默认空）。
+  if ($NoticePixelProbe -eq "") { return $null }
+  $parts = $NoticePixelProbe.Split(",")
+  if ($parts.Count -ne 4) { throw "-NoticePixelProbe 须为 'x,y,RRGGBB,tol'，当前：$NoticePixelProbe" }
+  $px = [int]$parts[0]; $py = [int]$parts[1]
+  $hex = $parts[2].TrimStart("#")
+  if ($hex -notmatch '^[0-9A-Fa-f]{6}$') { throw "-NoticePixelProbe 颜色须为 RRGGBB：$($parts[2])" }
+  $tol = [int]$parts[3]
+  $wantR = [Convert]::ToInt32($hex.Substring(0, 2), 16)
+  $wantG = [Convert]::ToInt32($hex.Substring(2, 2), 16)
+  $wantB = [Convert]::ToInt32($hex.Substring(4, 2), 16)
+  $pt2 = New-Object MirFlow+POINT
+  $pt2.X = $px; $pt2.Y = $py
+  [void][MirFlow]::ClientToScreen($script:hwnd, [ref]$pt2)
+  $bmp = New-Object System.Drawing.Bitmap(1, 1)
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  try { $g.CopyFromScreen($pt2.X, $pt2.Y, 0, 0, (New-Object System.Drawing.Size(1, 1))) }
+  finally { $g.Dispose() }
+  try { $c = $bmp.GetPixel(0, 0) } finally { $bmp.Dispose() }
+  $ok = ([Math]::Abs([int]$c.R - $wantR) -le $tol -and
+         [Math]::Abs([int]$c.G - $wantG) -le $tol -and
+         [Math]::Abs([int]$c.B - $wantB) -le $tol)
+  return [pscustomobject]@{ Visible = $ok; Actual = ("{0:X2}{1:X2}{2:X2}" -f $c.R, $c.G, $c.B) }
+}
+
+function Get-NoticeClientSignal {
+  # F3：点击前的客户端侧信号。优先级：像素探针 > 外部探针脚本 > 顶层窗口探测（需显式开关）。
+  # 返回 $true / $false / $null（unknown）。unknown 时调用方不得点击。
+  if ($NoticePixelProbe -ne "") {
+    $r = Get-NoticePixelProbe
+    if ($null -ne $r) {
+      Write-Output ("NOTICE_SIGNAL pixel actual=#" + $r.Actual + " visible=" + $r.Visible)
+      return [bool]$r.Visible
+    }
+  }
+  if ($NoticeProbe -ne "") {
+    if (-not (Test-Path -LiteralPath $NoticeProbe)) { return $null }
+    $out = & $NoticeProbe 2>&1
+    $code = $LASTEXITCODE
+    Write-Output ("NOTICE_SIGNAL probe exit=" + $code + " out=" + (($out | ForEach-Object { [string]$_ }) -join " "))
+    if ($code -eq 0) { return $true }
+    if ($code -eq 1) { return $false }
+    return $null
+  }
+  if ($NoticeWindowProbe -and $script:clientPid -gt 0) {
+    $wins = [MirFlow]::VisibleTopLevelWindows([uint32]$script:clientPid)
+    $visible = ([int]$wins.Count -gt 1)
+    Write-Output ("NOTICE_SIGNAL windows pid=" + $script:clientPid + " visible_titled=" + $wins.Count + " visible=" + $visible)
+    return $visible
+  }
+  return $null
+}
 
 function Stage([string]$name) {
   $ms = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
@@ -923,6 +1388,7 @@ while ((Get-Date) -lt $deadlineW) {
 }
 if (-not $p) { throw "客户端进程 MirClinet 未起来" }
 $script:hwnd = $p.MainWindowHandle
+$script:clientPid = [int]$p.Id
 Write-Output "CLIENT_PID=$($p.Id)"
 
 if ($InjectDll -ne "") {
@@ -1124,48 +1590,80 @@ if ($CreateChar) {
 Stage "enter_game"
 Send-Click $CharSlotX 550
 Send-Click 517 552
-# ---- 公告轮询（卡 fixture-harden 修正）----
+# ---- 公告轮询（卡 fixture-harden 修正；F1/F2/F3/F4/F5）----
 # 旧实现：在固定点 (522,525) 盲点 12 次（每 1.2s）。公告只吃**第一次**，其余 11 次落在世界区，
 # 每次都把 g_nTargetX/Y 重设到鼠标格 ⇒ 角色自动走位（r5 实测 (29,33)→(29,44)）并落库，
 # 国王 (29,32) 出视窗（docs/npc-render-diagnosis-20261022.md §2.3）。
-# 新实现：等公告 → **只点一次** → 校验 CM_LOGINNOTICEOK(1018)（仅 -CapturePath）→
-#   把鼠标移到面板区（-NoticeParkPoint，只移动不点击）；公告未出现时超时也不点世界区。
+# 新实现：证据源（live proxy / 本场 capture）看到本场 658 ⇒ 最多点 1 次 ⇒ 按**点击时刻**
+#   等本场 1018；无证据源 ⇒ 必须有客户端侧信号（像素/探针/窗口），否则只停鼠标、不点击。
 # 服务端窗口仍只有 10 秒（PlayObject.RunNotice：>10s ⇒ BoEmergencyClose），
 # 所以等待取值要小于它：默认 NoticeWaitSec=4 + NoticeVerifySec=6。
 Stage "notice_wait"
 $noticeNb = $NoticeButton.Split(",") | ForEach-Object { [int]$_ }
 $noticePark = $NoticeParkPoint.Split(",") | ForEach-Object { [int]$_ }
+# F2：live proxy 必须是本场（登录后已有 data 事件）——不是上一场遗留目录。
+if ($evidenceSource.Kind -eq "proxy") { Assert-ProxyFresh $evidenceSource $script:flowStartMs }
 $noticeSeen = $null
-if ($CapturePath -ne "") {
-  $noticeSeen = Wait-CaptureFrame $CapturePath "s2c" 658 $NoticeWaitSec
+$noticeVisible = $false
+$noticeSignal = "none"
+if ($evidenceSource.Kind -ne "none") {
+  $noticeSeen = Wait-EvidenceFrame $evidenceSource "s2c" 658 $NoticeWaitSec $evidenceSource.SinceMs
+  if ($null -eq $noticeSeen) {
+    Write-Output ("NOTICE_POLL RED：" + $NoticeWaitSec + "s 内未见本场 s2c SM_SENDNOTICE(658)（mode=" +
+      $evidenceSource.Kind + " since_ms=" + $evidenceSource.SinceMs + "；fail-closed：一次也不点世界区）")
+    throw "NOTICE_POLL RED: 公告未出现（本场证据里无 SM_SENDNOTICE 658，不点世界区）"
+  }
+  $noticeVisible = $true
+  $noticeSignal = "evidence:658 ts_ms=" + $noticeSeen.ts_ms
 } else {
-  # 无 capture 时无法判定公告是否已出现：按 oracle「进图即推 SM_SENDNOTICE」的既有事实，
-  # 固定等待后单击一次（**绝不循环补点**；补点就是本轮事故的成因）。
-  Start-Sleep -Seconds $NoticeWaitSec
+  # F3：没有证据源时，点击前必须有客户端侧信号；拿不到就只 Move-Mouse 不点击。
+  $deadlineN = (Get-Date).AddSeconds($NoticeWaitSec)
+  while ($true) {
+    $sig = Get-NoticeClientSignal
+    if ($sig -eq $true) { $noticeVisible = $true; $noticeSignal = "client_signal"; break }
+    if ((Get-Date) -ge $deadlineN) { $noticeVisible = $false; $noticeSignal = "none"; break }
+    Start-Sleep -Milliseconds 250
+  }
 }
 Shot "05_ingame.png"
-if ($CapturePath -ne "" -and $null -eq $noticeSeen) {
-  # 有取证却看不到公告：不能拿世界区当公告按钮盲点（那就是本轮事故），直接中止（fail-closed）。
-  Write-Output ("NOTICE_POLL RED：" + $NoticeWaitSec + "s 内未见 s2c SM_SENDNOTICE(658)（fail-closed：一次也不点世界区）")
-  throw "NOTICE_POLL RED: 公告未出现（-CapturePath 中无 SM_SENDNOTICE 658，不点世界区）"
-} else {
-  Stage "notice_poll"
-  if ($NoticePollClicks -gt 0) {
+Stage "notice_poll"
+$script:noticeClickMs = [long]0
+$noticePoll = $null
+if ($noticeVisible) {
+  $clickAction = {
+    $script:noticeClickMs = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
     Send-Click $noticeNb[0] $noticeNb[1] 1
-  }
-  Move-Mouse $noticePark[0] $noticePark[1]
-  if ($CapturePath -ne "") {
-    $noticeOk = Wait-CaptureFrame $CapturePath "c2s" 1018 $NoticeVerifySec
-    if ($null -eq $noticeOk) {
-      Write-Output ("NOTICE_POLL RED：单击后 " + $NoticeVerifySec + "s 内未见 c2s CM_LOGINNOTICEOK(1018)（公告可能没被点掉；服务端 10s 会踢人）")
-      throw "NOTICE_POLL RED: CM_LOGINNOTICEOK(1018) 未出网（fail-closed：不再点世界区）"
-    }
-    Write-Output ("NOTICE_POLL OK clicks=" + $NoticePollClicks + " dismissed=1018 mode=capture")
-  } else {
-    Write-Output ("NOTICE_POLL UNVERIFIED clicks=" + $NoticePollClicks + " mode=no_capture（无 -CapturePath，无法校验 1018）")
-  }
-  Shot "05b_after_notice.png"
+  }.GetNewClosure()
+  $verifyDismiss = {
+    param($n)
+    if ($evidenceSource.Kind -eq "none") { return $null }   # 无证据 ⇒ 只报 UNVERIFIED，不假装知道
+    $floor = [Math]::Max([long]$evidenceSource.SinceMs, [long]$script:noticeClickMs - $script:EvidenceSlackMs)
+    $ok = Wait-EvidenceFrame $evidenceSource "c2s" 1018 $NoticeVerifySec $evidenceSource.SinceMs $floor
+    if ($null -eq $ok) { return $false }
+    return $true
+  }.GetNewClosure()
+  $parkAction = { Move-Mouse $noticePark[0] $noticePark[1] }.GetNewClosure()
+  $noticePoll = Invoke-NoticePollCore -NoticeVisible $true -MaxClicks $NoticePollClicks `
+    -ClickAction $clickAction -VerifyDismiss $verifyDismiss -ParkAction $parkAction
+} else {
+  $parkAction = { Move-Mouse $noticePark[0] $noticePark[1] }.GetNewClosure()
+  $noop = { }.GetNewClosure()
+  $unknown = { param($n) return $null }.GetNewClosure()
+  $noticePoll = Invoke-NoticePollCore -NoticeVisible $false -MaxClicks $NoticePollClicks `
+    -ClickAction $noop -VerifyDismiss $unknown -ParkAction $parkAction
+  $noticePoll.Reason = "no_client_signal"
 }
+if ($evidenceSource.Kind -ne "none") {
+  if (-not $noticePoll.Dismissed) {
+    Write-Output ("NOTICE_POLL RED：单击后 " + $NoticeVerifySec + "s 内未见本场 c2s CM_LOGINNOTICEOK(1018)（公告可能没被点掉；服务端 10s 会踢人）")
+    throw "NOTICE_POLL RED: CM_LOGINNOTICEOK(1018) 未出网（fail-closed：不再点世界区）"
+  }
+  Write-Output ("NOTICE_POLL OK clicks=" + $noticePoll.Clicks + " dismissed=1018 signal='" + $noticeSignal + "' mode=" + $evidenceSource.Kind)
+} else {
+  Write-Output ("NOTICE_POLL UNVERIFIED clicks=" + $noticePoll.Clicks + " world_clicks=" + $noticePoll.WorldClicks +
+    " signal='" + $noticeSignal + "' reason=" + $noticePoll.Reason + " mode=no_evidence")
+}
+Shot "05b_after_notice.png"
 Stage "ingame"
 Start-Sleep -Seconds 2
 Shot "05c_ingame_ready.png"
@@ -1173,17 +1671,18 @@ Shot "05c_ingame_ready.png"
 # ---- 坐标门（卡 fixture-harden）：任何世界区点击之前先断言角色格 ----
 # 依据：docs/npc-render-diagnosis-20261022.md §2.3/§2.4。角色一旦被夹具走远，
 # 所有屏幕点都会换算到空地 ⇒ CM_WALK（而不是 CM_CLICKNPC），且国王出视窗。
-# 取证：-CapturePath 里 ts_ms 最新的一条「c2s CM_WALK(3011) recog=X|Y<<16」或
-#       「s2c SM_LOGON(50)/SM_NEWMAP(51) param=X tag=Y」。不一致 / 无证据 ⇒ RED + 中止。
+# 取证：证据源里 ts_ms >= 本场下界 的「c2s CM_WALK(3011) recog=X|Y<<16」或
+#       「s2c SM_LOGON(50)/SM_NEWMAP(51) param=X tag=Y」。F6：CM_WALK 是**目标格**，
+#       只接受与上一条可信证据切比雪夫距离 <=1 的步；跨度 >1 的目标忽略并回退到锚点。
 # -ClickNpc 未显式给 -ExpectPos 时按比奇国王场景默认 (29,33)（NPC 在 (29,32)）。
 $gateExpect = $ExpectPos
 if ($gateExpect -eq "" -and $ClickNpc) { $gateExpect = "29,33" }
 if ($gateExpect -ne "") {
-  if ($CapturePath -eq "") {
-    Write-Output ("POSITION_GATE RED missing -CapturePath（expect=" + $gateExpect + "，无取证不得继续世界区点击）")
-    throw "POSITION_GATE RED: -ExpectPos 需要 -CapturePath（fail-closed）"
+  if ($evidenceSource.Kind -eq "none") {
+    Write-Output ("POSITION_GATE RED missing -ProxyDir/-CapturePath（expect=" + $gateExpect + "，无取证不得继续世界区点击）")
+    throw "POSITION_GATE RED: -ExpectPos 需要证据源 -ProxyDir 或 -CapturePath（fail-closed）"
   }
-  $gate = Test-PositionGate $CapturePath $gateExpect
+  $gate = Test-PositionGate $evidenceSource $gateExpect $evidenceSource.SinceMs
   if (-not $gate.Ok) {
     Write-Output ("POSITION_GATE RED " + $gate.Detail)
     throw ("POSITION_GATE RED: 角色坐标与期望不符，中止（不继续盲点世界区）。" + $gate.Detail)

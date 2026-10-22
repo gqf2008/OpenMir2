@@ -202,9 +202,9 @@ try {
   Check "source: legacy left-click literal intact" $hasClick
   Check "source: new mapping gated by turnMapTable" ($src.Contains('if ($turnCell -and $turnMapTable)'))
 
-  # ---- 9. 夹具加固（卡 fixture-harden）：notice_poll 点击次数上限 = 1 ----
+  # ---- 9. 夹具加固（卡 fixture-harden）：notice_poll 只点 1 次 + F4 共享控制流 ----
   # 事故：旧实现 for ($i=0; $i -lt 12) 在 (522,525) 盲点，公告只吃第一次，其余 11 次走位。
-  # 这里既做源码/参数断言，也跑 -FixtureDryRun 的模拟控制流（不启动客户端）。
+  # sim 与真机共用 Invoke-NoticePollCore（F4），这里断言输出形状 + 源码引用同一函数。
   $fixDir = New-TestDir "fixture"
   $r = Invoke-Flow @("-FixtureDryRun", "-NoticePollSim", "dismiss1", "-OutDir", $fixDir)
   Check "fixture: notice dismiss1 => clicks=1 world_clicks=0" (
@@ -218,54 +218,247 @@ try {
   Check "fixture: notice absent => 0 clicks into world" (
     $r.Code -eq 0 -and $r.Out.Contains("NOTICE_POLL_SIM mode=absent clicks=0 world_clicks=0") -and
     $r.Out.Contains("reason=no_notice_timeout")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-NoticePollSim", "nosignal", "-OutDir", $fixDir)
+  Check "fixture: no client-side signal => 0 clicks + no_client_signal" (
+    $r.Code -eq 0 -and $r.Out.Contains("NOTICE_POLL_SIM mode=nosignal clicks=0 world_clicks=0") -and
+    $r.Out.Contains("reason=no_client_signal")) ($r.Out + " rc=" + $r.Code)
   $r = Invoke-Flow @("-FixtureDryRun", "-NoticePollSim", "dismiss1", "-NoticePollClicks", "2", "-OutDir", $fixDir)
   Check "fixture: NoticePollClicks>1 rejected before client (fail-closed)" (
     $r.Code -ne 0 -and $r.Out.Contains("NoticePollClicks")) ($r.Out + " rc=" + $r.Code)
+  # F5：0 与 1018 校验矛盾 ⇒ 也必须拒绝。
+  $r = Invoke-Flow @("-FixtureDryRun", "-NoticePollSim", "dismiss1", "-NoticePollClicks", "0", "-OutDir", $fixDir)
+  Check "fixture: NoticePollClicks=0 rejected (F5 contradiction)" (
+    $r.Code -ne 0 -and $r.Out.Contains("NoticePollClicks")) ($r.Out + " rc=" + $r.Code)
   $r = Invoke-Flow @("-FixtureDryRun", "-NoticePollSim", "bogus", "-OutDir", $fixDir)
   Check "fixture: unknown notice sim mode fails closed" ($r.Code -ne 0) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-NoticePollSim", "dismiss1", "-OutDir", $fixDir)
+  Check "fixture: -NoticePollSim without -FixtureDryRun rejected (would launch client)" (
+    $r.Code -ne 0 -and $r.Out.Contains("FixtureDryRun")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-NoticeEvidenceCheck", "-OutDir", $fixDir)
+  Check "fixture: -NoticeEvidenceCheck without -FixtureDryRun rejected" (
+    $r.Code -ne 0 -and $r.Out.Contains("FixtureDryRun")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-NoticePollSim", "dismiss1", "-NoticeButton", "abc", "-OutDir", $fixDir)
+  Check "fixture: malformed NoticeButton rejected before client" (
+    $r.Code -ne 0 -and $r.Out.Contains("NoticeButton")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-NoticePollSim", "dismiss1", "-NoticePixelProbe", "1,2,ZZZZZZ,3", "-OutDir", $fixDir)
+  Check "fixture: malformed NoticePixelProbe rejected before client" (
+    $r.Code -ne 0 -and $r.Out.Contains("NoticePixelProbe")) ($r.Out + " rc=" + $r.Code)
 
-  # ---- 10. 夹具加固：坐标门 fail-closed（假 capture 文件；不启动客户端）----
-  function New-FixtureCapture([int]$x, [int]$y) {
-    $p = Join-Path $fixDir ("capture-" + $x + "-" + $y + ".jsonl")
-    $logon = [ordered]@{ kind = "frame"; dir = "s2c"; ts_ms = 1000; ident = 50; recog = 268; param = $x; tag = $y; series = 0 }
-    $walk = [ordered]@{ kind = "frame"; dir = "c2s"; ts_ms = 5000; ident = 3011; tag = 4
-                        recog = [long](($x -band 0xFFFF) -bor (($y -band 0xFFFF) -shl 16)) }
-    $lines = @(($logon | ConvertTo-Json -Compress), ($walk | ConvertTo-Json -Compress))
-    [IO.File]::WriteAllText($p, (($lines -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding($false)))
-    return $p
+  function New-Word([int]$x, [int]$y) { return [long](($x -band 0xFFFF) -bor (($y -band 0xFFFF) -shl 16)) }
+  function New-CapLine([string]$dir, [int]$ident, [long]$ts, [long]$recog = 0, [int]$param = 0, [int]$tag = 0, [int]$series = 0) {
+    $o = [ordered]@{ kind = "frame"; dir = $dir; ts_ms = $ts; ident = $ident }
+    if ($ident -eq 3011) { $o.recog = $recog; $o.tag = $tag }
+    elseif ($ident -eq 50 -or $ident -eq 51) { $o.param = $param; $o.tag = $tag; $o.series = $series; $o.recog = 268 }
+    return ($o | ConvertTo-Json -Compress)
   }
-  $okCap = New-FixtureCapture 29 33
-  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,33", "-CapturePath", $okCap, "-OutDir", $fixDir)
-  Check "fixture: position gate GREEN when actual==expect" (
-    $r.Code -eq 0 -and $r.Out.Contains("POSITION_GATE GREEN actual=29,33 expect=29,33")) ($r.Out + " rc=" + $r.Code)
-  $badCap = New-FixtureCapture 29 44
-  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,33", "-CapturePath", $badCap, "-OutDir", $fixDir)
-  Check "fixture: position gate RED + abort when actual!=expect" (
-    $r.Code -ne 0 -and $r.Out.Contains("POSITION_GATE RED actual=29,44 expect=29,33")) ($r.Out + " rc=" + $r.Code)
-  $noCap = Join-Path $fixDir "capture-empty.jsonl"
-  [IO.File]::WriteAllText($noCap, "", (New-Object Text.UTF8Encoding($false)))
-  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,33", "-CapturePath", $noCap, "-OutDir", $fixDir)
-  Check "fixture: position gate fail-closed with no evidence" (
-    $r.Code -ne 0 -and $r.Out.Contains("POSITION_GATE RED")) ($r.Out + " rc=" + $r.Code)
-  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,33", "-OutDir", $fixDir)
-  Check "fixture: position gate requires -CapturePath (fail-closed)" (
-    $r.Code -ne 0 -and $r.Out.Contains("CapturePath")) ($r.Out + " rc=" + $r.Code)
-  $r = Invoke-Flow @("-ClickNpc", "-OutDir", $fixDir)
-  Check "fixture: ClickNpc without -CapturePath rejected (no blind click)" (
-    $r.Code -ne 0 -and $r.Out.Contains("ClickNpc")) ($r.Out + " rc=" + $r.Code)
+  function Write-CaptureFile([string]$path, [object[]]$lines) {
+    [IO.File]::WriteAllText($path, (($lines -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding($false)))
+    return $path
+  }
 
-  # ---- 11. 夹具加固：源码断言（盲点循环已删 / NPC 默认坐标 / manifest 客户端字段）----
+  # ---- 10. 坐标门（F6）：CM_WALK 是目标格，只接受与上一条可信证据的相邻步 ----
+  $farCap = Join-Path $fixDir "capture-far.jsonl"
+  Write-CaptureFile $farCap @(
+    (New-CapLine "s2c" 50 1000 0 29 33 0),
+    (New-CapLine "c2s" 3011 5000 (New-Word 29 44) 0 4 0)
+  ) | Out-Null
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,33", "-CapturePath", $farCap, "-OutDir", $fixDir)
+  Check "fixture F6: far CM_WALK target ignored, fallback to SM_LOGON (29,33 GREEN)" (
+    $r.Code -eq 0 -and $r.Out.Contains("POSITION_GATE GREEN actual=29,33 expect=29,33") -and
+    $r.Out.Contains("ignored_far_walks=1")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,44", "-CapturePath", $farCap, "-OutDir", $fixDir)
+  Check "fixture F6: multi-cell target cannot pass gate (expect 29,44 RED)" (
+    $r.Code -ne 0 -and $r.Out.Contains("POSITION_GATE RED actual=29,33 expect=29,44")) ($r.Out + " rc=" + $r.Code)
+
+  $chainLines = @((New-CapLine "s2c" 51 1000 0 29 33 1))
+  for ($y = 34; $y -le 44; $y++) {
+    $chainLines += (New-CapLine "c2s" 3011 (1000 + ($y - 33) * 100) (New-Word 29 $y) 0 4 0)
+  }
+  $chainCap = Join-Path $fixDir "capture-chain.jsonl"
+  Write-CaptureFile $chainCap $chainLines | Out-Null
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,44", "-CapturePath", $chainCap, "-OutDir", $fixDir)
+  Check "fixture F6: chained adjacent walks advance to real cell (29,44 GREEN)" (
+    $r.Code -eq 0 -and $r.Out.Contains("POSITION_GATE GREEN actual=29,44 expect=29,44") -and
+    $r.Out.Contains("trusted_walks=11")) ($r.Out + " rc=" + $r.Code)
+
+  $noAnchorCap = Join-Path $fixDir "capture-noanchor.jsonl"
+  Write-CaptureFile $noAnchorCap @((New-CapLine "c2s" 3011 1000 (New-Word 29 34) 0 4 0)) | Out-Null
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,34", "-CapturePath", $noAnchorCap, "-OutDir", $fixDir)
+  Check "fixture F6: CM_WALK without SM_LOGON/NEWMAP anchor is not evidence (fail-closed)" (
+    $r.Code -ne 0 -and $r.Out.Contains("POSITION_GATE RED")) ($r.Out + " rc=" + $r.Code)
+
+  # ---- 11. 证据新鲜度（F2）：旧 capture / 旧 proxy 一律 RED ----
+  $oldCap = Join-Path $fixDir "capture-old.jsonl"
+  Write-CaptureFile $oldCap @(
+    (New-CapLine "s2c" 50 1000 0 29 33 0),
+    (New-CapLine "c2s" 3011 1500 (New-Word 29 34) 0 4 0)
+  ) | Out-Null
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,34", "-CapturePath", $oldCap, "-EvidenceSinceMs", "2000", "-OutDir", $fixDir)
+  Check "fixture F2: capture evidence older than SinceMs is RED" (
+    $r.Code -ne 0 -and $r.Out.Contains("POSITION_GATE RED")) ($r.Out + " rc=" + $r.Code)
+  $newCap = Join-Path $fixDir "capture-new.jsonl"
+  Write-CaptureFile $newCap @(
+    (New-CapLine "s2c" 50 3000 0 29 33 0),
+    (New-CapLine "c2s" 3011 3500 (New-Word 29 34) 0 4 0)
+  ) | Out-Null
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,34", "-CapturePath", $newCap, "-EvidenceSinceMs", "2000", "-OutDir", $fixDir)
+  Check "fixture F2: capture evidence newer than SinceMs is GREEN" (
+    $r.Code -eq 0 -and $r.Out.Contains("POSITION_GATE GREEN actual=29,34")) ($r.Out + " rc=" + $r.Code)
+  # live 前置门（-FixturePreflight 不启客户端）：旧 capture 在启动客户端前就被拒。
+  $r = Invoke-Flow @("-FixtureDryRun", "-FixturePreflight", "-ExpectPos", "29,34", "-CapturePath", $oldCap, "-EvidenceSinceMs", "2000", "-OutDir", $fixDir)
+  Check "fixture F2: live preflight rejects stale capture before client launch" (
+    $r.Code -ne 0 -and $r.Out.Contains("STALE_CAPTURE")) ($r.Out + " rc=" + $r.Code)
+
+  # ---- 12. live proxy 证据源（F1）：chunks.ndjson + conn-*.bin + EDCode 头解码 ----
+  function ConvertTo-EDCode([byte[]]$src) {
+    $no = 2; $rem = 0
+    $out = New-Object System.Collections.Generic.List[byte]
+    foreach ($b in $src) {
+      $c = ([int]$b -bxor 0xAC) -band 0xFF
+      if ($no -eq 6) {
+        $out.Add([byte](($c -band 0x3F) + 0x3C))
+        $rem = $rem -bor (($c -shr 2) -band 0x30)
+        $out.Add([byte]($rem + 0x3C))
+        $rem = 0
+      } else {
+        $temp = ($c -shr 2) -band 0xFF
+        $out.Add([byte](((($temp -band 0x3C) -bor ($c -band 0x03)) + 0x3C) -band 0xFF))
+        $rem = (($rem -shl 2) -bor ($temp -band 0x03)) -band 0xFF
+      }
+      $no = ($no % 6) + 2
+    }
+    if ($no -ne 2) { $out.Add([byte](($rem + 0x3C) -band 0xFF)) }
+    return ,$out.ToArray()
+  }
+  function Add-ProxyFrame($list, [string]$dir, [int]$ident, [int]$recog, [int]$param, [int]$tag, [int]$series) {
+    $h = New-Object byte[] 12
+    [Array]::Copy([BitConverter]::GetBytes([int]$recog), 0, $h, 0, 4)
+    [Array]::Copy([BitConverter]::GetBytes([uint16]$ident), 0, $h, 4, 2)
+    [Array]::Copy([BitConverter]::GetBytes([uint16]$param), 0, $h, 6, 2)
+    [Array]::Copy([BitConverter]::GetBytes([uint16]$tag), 0, $h, 8, 2)
+    [Array]::Copy([BitConverter]::GetBytes([uint16]$series), 0, $h, 10, 2)
+    $enc = ConvertTo-EDCode $h
+    $list.Add([byte]0x23)
+    if ($dir -eq "c2s") { $list.Add([byte]0x31) }
+    foreach ($x in $enc) { $list.Add([byte]$x) }
+    $list.Add([byte]0x21)
+    if ($dir -eq "s2c") { $list.Add([byte]0x24) }
+  }
+  function Write-FixtureProxy([string]$dir, [long]$startMs, [long]$s2cTs, [long]$c2sTs, [switch]$NoReady) {
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $s2c = New-Object System.Collections.Generic.List[byte]
+    Add-ProxyFrame $s2c "s2c" 51 268 29 33 1
+    Add-ProxyFrame $s2c "s2c" 658 0 0 0 0
+    $c2s = New-Object System.Collections.Generic.List[byte]
+    Add-ProxyFrame $c2s "c2s" 1018 0 0 0 0
+    Add-ProxyFrame $c2s "c2s" 3011 ([int](New-Word 29 34)) 0 4 0
+    [IO.File]::WriteAllBytes((Join-Path $dir "conn-0001.s2c.bin"), $s2c.ToArray())
+    [IO.File]::WriteAllBytes((Join-Path $dir "conn-0001.c2s.bin"), $c2s.ToArray())
+    $rows = @(
+      [ordered]@{ event = "open"; conn = 1; port = 7200; peer = "127.0.0.1:5555"; upstream = "127.0.0.1:7600"; t_wall_ms = $startMs; t_rel_us = 0 },
+      [ordered]@{ event = "data"; conn = 1; port = 7200; dir = "s2c"; off = 0; n = $s2c.Count; sha256 = "fixture"; t_wall_ms = $s2cTs; t_rel_us = 10 },
+      [ordered]@{ event = "data"; conn = 1; port = 7200; dir = "c2s"; off = 0; n = $c2s.Count; sha256 = "fixture"; t_wall_ms = $c2sTs; t_rel_us = 20 }
+    )
+    $nd = ($rows | ForEach-Object { $_ | ConvertTo-Json -Compress }) -join "`n"
+    [IO.File]::WriteAllText((Join-Path $dir "chunks.ndjson"), $nd + "`n", (New-Object Text.UTF8Encoding($false)))
+    $session = [ordered]@{
+      tool = "mir2_proxy"; start_wall_ms = $startMs; start_iso = "2026-10-22T00:00:00"
+      bind = "127.0.0.1"; map = [ordered]@{ "7200" = "127.0.0.1:7600" }; pid = 0
+    }
+    [IO.File]::WriteAllText((Join-Path $dir "session.json"), ($session | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
+    if (-not $NoReady) { [IO.File]::WriteAllText((Join-Path $dir "ready.flag"), "0") }
+    return $dir
+  }
+
+  $proxyDir = Join-Path $fixDir "proxy"
+  Write-FixtureProxy $proxyDir 900 900 1400 | Out-Null
+  $r = Invoke-Flow @("-FixtureDryRun", "-NoticeEvidenceCheck", "-ProxyDir", $proxyDir, "-OutDir", $fixDir)
+  Check "fixture F1: live proxy decodes s2c SM_SENDNOTICE(658)" (
+    $r.Code -eq 0 -and $r.Out.Contains("NOTICE_EVIDENCE GREEN ident=658 ts_ms=900")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,34", "-ProxyDir", $proxyDir, "-OutDir", $fixDir)
+  Check "fixture F1: live proxy decodes s2c 51 + c2s CM_WALK (29,34 GREEN)" (
+    $r.Code -eq 0 -and $r.Out.Contains("POSITION_GATE GREEN actual=29,34 expect=29,34") -and
+    $r.Out.Contains("source='c2s CM_WALK(3011)'")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,34", "-ProxyDir", $proxyDir, "-EvidenceSinceMs", "1300", "-OutDir", $fixDir)
+  Check "fixture F2: live proxy evidence older than SinceMs is RED" (
+    $r.Code -ne 0 -and $r.Out.Contains("POSITION_GATE RED")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-NoticeEvidenceCheck", "-ProxyDir", $proxyDir, "-EvidenceSinceMs", "2000", "-OutDir", $fixDir)
+  Check "fixture F2: live proxy 658 older than SinceMs is RED" (
+    $r.Code -ne 0 -and $r.Out.Contains("NOTICE_EVIDENCE RED")) ($r.Out + " rc=" + $r.Code)
+  $noReadyDir = Join-Path $fixDir "proxy-noready"
+  Write-FixtureProxy $noReadyDir 900 900 1000 -NoReady | Out-Null
+  $r = Invoke-Flow @("-FixtureDryRun", "-FixturePreflight", "-ExpectPos", "29,34", "-ProxyDir", $noReadyDir, "-OutDir", $fixDir)
+  Check "fixture F1: live preflight rejects proxy without ready.flag" (
+    $r.Code -ne 0 -and $r.Out.Contains("ready.flag")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,34", "-ProxyDir", $proxyDir, "-CapturePath", $newCap, "-OutDir", $fixDir)
+  Check "fixture F1: -ProxyDir and -CapturePath are mutually exclusive" (
+    $r.Code -ne 0 -and $r.Out.Contains("互斥")) ($r.Out + " rc=" + $r.Code)
+
+  # ---- 12b. 运行中增长（F1）：同一进程内两次 Update-ProxyFrameCache，只消费新增 bytes ----
+  $growDir = Join-Path $fixDir "proxy-grow"
+  New-Item -ItemType Directory -Force -Path $growDir | Out-Null
+  $gS2c = New-Object System.Collections.Generic.List[byte]
+  Add-ProxyFrame $gS2c "s2c" 51 268 29 33 1
+  Add-ProxyFrame $gS2c "s2c" 658 0 0 0 0
+  [IO.File]::WriteAllBytes((Join-Path $growDir "conn-0001.s2c.bin"), $gS2c.ToArray())
+  $gRows = @(
+    [ordered]@{ event = "open"; conn = 1; port = 7200; t_wall_ms = 900 },
+    [ordered]@{ event = "data"; conn = 1; port = 7200; dir = "s2c"; off = 0; n = $gS2c.Count; t_wall_ms = 900 }
+  )
+  $gNd = ($gRows | ForEach-Object { $_ | ConvertTo-Json -Compress }) -join "`n"
+  [IO.File]::WriteAllText((Join-Path $growDir "chunks.ndjson"), $gNd + "`n", (New-Object Text.UTF8Encoding($false)))
+  [IO.File]::WriteAllText((Join-Path $growDir "session.json"), '{"start_wall_ms":900,"pid":0}', (New-Object Text.UTF8Encoding($false)))
+  # 把 mir_flow 的函数抽出来在当前进程调用（不执行主流程；离线、零客户端）
+  $tAst = $null; $eAst = $null
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($flow, [ref]$tAst, [ref]$eAst)
+  $funcs = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
+  Invoke-Expression (($funcs | ForEach-Object { $_.Extent.Text }) -join "`n")
+  $script:ProxyCache = @{}; $script:CaptureCache = @{}; $script:EvidenceSlackMs = 2000
+  $gSrc = New-EvidenceSource $growDir "" 0 0 -Offline
+  Update-ProxyFrameCache $growDir
+  $g1 = Get-EvidenceFrames $gSrc
+  $g1Count = [int]$g1.Count   # 列表是活引用（运行中会增长）：先记下第一次的读数
+  $gC2s = New-Object System.Collections.Generic.List[byte]
+  Add-ProxyFrame $gC2s "c2s" 1018 0 0 0 0
+  Add-ProxyFrame $gC2s "c2s" 3011 ([int](New-Word 29 34)) 0 4 0
+  [IO.File]::WriteAllBytes((Join-Path $growDir "conn-0001.c2s.bin"), $gC2s.ToArray())
+  $gRow = [ordered]@{ event = "data"; conn = 1; port = 7200; dir = "c2s"; off = 0; n = $gC2s.Count; t_wall_ms = 1400 } | ConvertTo-Json -Compress
+  [IO.File]::AppendAllText((Join-Path $growDir "chunks.ndjson"), $gRow + "`n", (New-Object Text.UTF8Encoding($false)))
+  Update-ProxyFrameCache $growDir
+  $g2 = Get-EvidenceFrames $gSrc
+  $gEv = Get-SelfCellEvidence $gSrc 0
+  Check "fixture F1: growing proxy consumed incrementally (2 -> 4 frames, cell 29,34)" (
+    $g1Count -eq 2 -and $g2.Count -eq 4 -and [int]$gEv.X -eq 29 -and [int]$gEv.Y -eq 34) (
+    "g1=" + $g1Count + " g2=" + $g2.Count + " cell=" + $gEv.X + "," + $gEv.Y)
+
+  # ---- 13. 源码/参数断言 ----
   $src2 = [IO.File]::ReadAllText($flow, [Text.Encoding]::UTF8)
   Check "source: 12x blind notice loop removed" (-not ($src2 -match 'for \(\$i = 0; \$i -lt 12; \$i\+\+\)')) $null
   Check "source: NoticePollClicks default = 1" ($src2.Contains('$NoticePollClicks = 1')) $null
+  Check "source: NoticePollClicks only allows 1" ($src2.Contains('if ($NoticePollClicks -ne 1)')) $null
   Check "source: NPC click default 512,263" ($src2.Contains('$NpcClick = "512,263"')) $null
   Check "source: no code click at 512,227 (comment-only mention allowed)" (
     -not ($src2 -match 'Send-Click\s+512\s+227') -and -not $src2.Contains('$NpcClick = "512,227"')) $null
   Check "source: mir_flow manifest records client sha256" (
     $src2.Contains('client_exe_sha256') -and $src2.Contains('Get-ClientProvenance')) $null
+  Check "source: live proxy evidence source present (-ProxyDir + EDCode)" (
+    $src2.Contains('$ProxyDir = ""') -and $src2.Contains('function ConvertFrom-EDCode') -and
+    $src2.Contains('function Update-ProxyFrameCache')) $null
+  Check "source: F4 sim shares real control flow (Invoke-NoticePollCore)" (
+    $src2.Contains('function Invoke-NoticePollCore') -and
+    ([regex]::Matches($src2, 'Invoke-NoticePollCore')).Count -ge 3) $null
+  Check "source: F6 gate rejects non-adjacent CM_WALK targets" (
+    $src2.Contains('ignored_far_walks') -and $src2.Contains('$dist -le 1')) $null
+  Check "source: F3 no client signal => no click" (
+    $src2.Contains('no_client_signal') -and $src2.Contains('function Get-NoticeClientSignal')) $null
+  Check "source: stage list includes notice_wait/notice_poll" (
+    $src2.Contains('Stage "notice_wait"') -and $src2.Contains('Stage "notice_poll"') -and
+    $src2.Contains('→ notice_wait')) $null
   $exportSrc = [IO.File]::ReadAllText((Join-Path $here "..\m2-acceptance\export_s2c.ps1"), [Text.Encoding]::UTF8)
   Check "source: export_s2c records client_exe_sha256 in manifest" (
     $exportSrc.Contains('client_exe_sha256') -and $exportSrc.Contains('MANIFEST_CLIENT')) $null
+  Check "source: export_s2c records proxy session start" (
+    $exportSrc.Contains('proxy_session_start_wall_ms')) $null
 }
 finally {
   foreach ($d in $script:testDirs) {

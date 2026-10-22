@@ -871,6 +871,11 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 ```
 
 - G1：`-SkipTalk -WalkClicks 0 -SkipLogout -SkipReenter`（不走路、不说话、不打怪）。
+- 要在进图后过坐标门/点 NPC，必须给证据源：live 用 `-ProxyDir <proxy --out>`（运行中读
+  `chunks.ndjson`+`conn-*.bin`），完整命令链见 §9.3；只跑 §3.7 基线流程可以不给。
+- **注意（F3 行为变更）**：没有证据源时，公告点击前必须有客户端侧信号；三者都没有就
+  **不点公告**（只停鼠标、`NOTICE_POLL UNVERIFIED`），服务端 10s 后会 `BoEmergencyClose`。
+  所以真实长流程请给 `-ProxyDir`（最可靠）或标定好的 `-NoticePixelProbe`/`-NoticeProbe`。
 - G3A attack：加 `-AttackClicks 20`（默认攻击环；必要时 `-AttackRing` 指向目标）。
 - 骰子/NPC/商人/SuperMan：`-LeaveClientRunning` + `mir_click.ps1`（§2.3–§2.6）。
 
@@ -1509,31 +1514,61 @@ python tools/window/alt_port_profile.py selftest --repo-root E:\Users\gxh\Docume
 
 | 项 | 旧 | 新 |
 |---|---|---|
-| 公告点击 | 固定点盲点 12 次（1.2s 间隔） | `-NoticePollClicks` 默认 **1**，>1 直接 fail-closed 拒绝 |
-| 等公告 | 无（从进图就开始点） | `Stage notice_wait` + 截图；有 `-CapturePath` 时等 `s2c SM_SENDNOTICE(658)`，否则固定 `-NoticeWaitSec`（默认 4s） |
-| 校验 | 无 | 有 `-CapturePath` 时等 `c2s CM_LOGINNOTICEOK(1018)`；超时 ⇒ `NOTICE_POLL RED` + 中止（fail-closed） |
+| 证据源 | 无（只能事后 `export_s2c`） | **`-ProxyDir <proxy --out>`**：运行中直接读 `chunks.ndjson` 的 data 事件 + `conn-*.bin`，按 `#…!`/`!$` 切帧、EDCode 解头块；`-CapturePath` 只作离线/事后证据 |
+| 证据新鲜度 | 无 | **F2**：proxy 用 `session.json.start_wall_ms` 作下界；capture 用本流程启动墙钟作下界；只吃 `ts_ms >= SinceMs` 的帧，旧证据一律 RED（旧 capture 在启动客户端之前就被拒） |
+| 公告点击 | 固定点盲点 12 次（1.2s 间隔） | **`-NoticePollClicks` 只允许 1**（0 会与 1018 校验矛盾，>1 会走位 ⇒ 都 fail-closed） |
+| 等公告 | 无 | 有证据源：等**本场** `s2c SM_SENDNOTICE(658)`（超时 ⇒ `NOTICE_POLL RED` + 中止）；无证据源：必须拿到**客户端侧信号**（`-NoticePixelProbe` / `-NoticeProbe` / `-NoticeWindowProbe`），拿不到就 **只 Move-Mouse、一次也不点**，打印 `NOTICE_POLL UNVERIFIED clicks=0 reason=no_client_signal` |
+| 校验 | 无 | 有证据源：点后只认**点击时刻之后**的 `c2s CM_LOGINNOTICEOK(1018)`（取最新帧，旧 1018 不会假通过）；无证据源 ⇒ `UNVERIFIED` |
 | 点后鼠标 | 留在世界区继续盲点 | `Move-Mouse` 到 `-NoticeParkPoint`（默认 `522,760`，底部面板区；**只移动不点击**） |
-| 公告未出现 | 照点（风险） | 有 capture 且超时未见 658 ⇒ `NOTICE_POLL RED` + 中止，一次也不点世界区 |
+| 公告未出现 | 照点（风险） | 有证据源且超时未见本场 658 ⇒ `NOTICE_POLL RED` + 中止，一次也不点世界区 |
 
-### 9.3 坐标门（点 NPC / 任何世界区点击之前）
+### 9.3 live 证据链（**可复制**；F1）
 
-新增参数：
-
-- `-ExpectPos "X,Y"`：进入世界后、任何世界区点击之前断言角色格；
-- `-CapturePath <capture.jsonl>`：取证来源（c2s `CM_WALK(3011)` 的 `recog = X|Y<<16`，
-  或 s2c `SM_LOGON(50)`/`SM_NEWMAP(51)` 的 `param/tag`；取 `ts_ms` 最新一条）；
-- `-ClickNpc`：点一次固定 NPC；未给 `-ExpectPos` 时按比奇国王场景默认 `29,33`。
-
-行为：坐标不等于期望、或 capture 里没有任何自身坐标证据 ⇒ 打印 `POSITION_GATE RED …` 并**中止**
-（不继续盲点）。`-ClickNpc` 未给 `-CapturePath` 时**直接拒绝启动客户端**。
+`export_s2c.ps1` 是**会话结束后**的归档导出器：运行中的 proxy 目录只有 `chunks.ndjson` +
+`conn-*.bin`，没有 `capture.jsonl`。所以 live 流程（进图后要过坐标门/点 NPC）用
+**同一个 proxy 目录**给 `mir_flow.ps1 -ProxyDir`，不要等导出：
 
 ```powershell
-# 示例：进图 → 过坐标门 → 点国王（角色必须真的在 (29,33)）
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
+# 0) 变量（按本窗口的栈改端口映射；示例口径见 §3.5/§3.6：游戏网关 7600 影子、proxy 监听 7200）
+$WIN  = "E:/tmp/window/r6"
+$PROXY = "$WIN/proxy"
+
+# 1) 起 proxy（会话期间一直跑；--map 的键是 proxy 监听端口，值是真实上游）
+#    与 §3.5/§3.6 同口径：只代理游戏跳（proxy 7200 → 影子 game-gate 7600）；
+#    登录/选服 7000/7100 仍由客户端直连，不要映射成 7000→7000（会自环/抢端口）。
+python E:/Users/gxh/Documents/GitHub/OpenMir2/tools/capture/mir2_proxy.py `
+  --out $PROXY `
+  --map 7200=127.0.0.1:7600
+#   就绪标志：$PROXY/ready.flag；会话元信息：$PROXY/session.json（含 start_wall_ms/pid）
+#   客户端的游戏跳要连 proxy 的 7200（RunGate/GameGate 配置里指向 7200），不是上游 7600。
+
+# 2) 同一个目录给 mir_flow（运行中读 chunks.ndjson + conn-*.bin；无需 capture.jsonl）
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File E:/Users/gxh/Documents/GitHub/OpenMir2/tools/client/mir_flow.ps1 `
   -Account winplay0 -Password winplay0 -RunDir D:\MirClient-run `
-  -OutDir E:/tmp/window/r6/flow -SkipTalk -WalkClicks 0 -SkipLogout -SkipReenter -LeaveClientRunning `
-  -CapturePath E:/tmp/window/r6/s2c/capture.jsonl -ExpectPos "29,33" -ClickNpc
+  -OutDir "$WIN/flow" -SkipTalk -WalkClicks 0 -SkipLogout -SkipReenter -LeaveClientRunning `
+  -ProxyDir $PROXY -ExpectPos "29,33" -ClickNpc
+#   期望：NOTICE_POLL OK clicks=1 dismissed=1018 signal='evidence:658 …' mode=proxy
+#         POSITION_GATE GREEN actual=29,33 … trusted_walks=N ignored_far_walks=0
+#         NPC_CLICK x=512 y=263 expect=29,33
+#   任一证据不足 ⇒ NOTICE_POLL RED / POSITION_GATE RED + 非零退出（不会盲点世界区）。
+
+# 3) 会话结束后再归档（判据/对账仍吃这份 capture.jsonl；与 live 证据同源同 ts）
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File E:/Users/gxh/Documents/GitHub/OpenMir2/tools/m2-acceptance/export_s2c.ps1 `
+  -ProxyDir $PROXY -OutDir "$WIN/s2c" -RunDir D:\MirClient-run
 ```
+
+要点：
+
+- `-ProxyDir` 与 `-CapturePath` **互斥**；live 用前者，离线回填/事后分析才用后者。
+- `-CapturePath` 在 live 流程里也接受，但它的最新 `ts_ms` 必须 >= 本流程启动墙钟（F2）；
+  拿上一轮的 capture 会在**启动客户端之前**报 `STALE_CAPTURE`，不会出现“刚登录就立刻看到 658/1018”。
+- `-ProxyDir` 在启动客户端前校验 `session.json` + `ready.flag` + `pid` 存活；登录后还要求
+  最新 data 事件落在本流程启动之后（`PROXY_STALE` 防上一场遗留目录）。
+- 没有任何证据源时，公告点击前必须有客户端侧信号：`-NoticePixelProbe "x,y,RRGGBB,tol"`
+  （屏幕取色）、`-NoticeProbe <脚本>`（exit 0=可见/1=不可见/其它=unknown）或
+  `-NoticeWindowProbe`（本进程除主窗口外的可见顶层窗口 >0）。三者都没有 ⇒ 不点击。
 
 ### 9.4 NPC 点击坐标
 
@@ -1546,6 +1581,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
   `client_exe` / `client_exe_sha256` / `client_exe_mtime` / `client_exe_size`（另记 `run_dir`、`launcher`）；
 - `tools/m2-acceptance/export_s2c.ps1` 新增 `-ClientExe` / `-RunDir`（或环境变量 `MIR2_CLIENT_EXE`），
   在切帧后把同名字段合并进 `$OutDir/manifest.json`；找不到时记 `null` 并 WARN。
+  另写 `proxy_session_start_wall_ms`（来自 proxy `session.json`），供事后核对 capture 的 `ts_ms` 是否同一场。
 - 注：本机 Windows PowerShell 5.1 **没有 `Get-FileHash`**（实测 `CommandNotFoundException`），
   两处取证都用 .NET `SHA256` 实现，避免静默退化成 null。
 - 实测（2026-10-22，假 proxy 目录真跑 `export_s2c.ps1`）：
@@ -1559,16 +1595,31 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selftest.ps1
 ```
 
-新增用例（均真跑，不启动客户端、不占端口）：
+新增/更新用例（均真跑，不启动客户端、不占端口；2026-10-22 全绿 `SELFTEST_PASS=87`）：
 
-1. `-FixtureDryRun -NoticePollSim dismiss1|slow|absent`：模拟公告轮询控制流。
-   `slow`（公告要 3 次才消失）仍只点 **1** 次且不补点 ⇒ 证明点击上限生效；`absent` ⇒ 世界区 0 点击；
-2. `-NoticePollClicks 2` ⇒ 启动前 fail-closed 拒绝；
-3. `-FixtureDryRun -ExpectPos 29,33 -CapturePath <假 capture>`：
-   实际 `(29,33)` ⇒ `POSITION_GATE GREEN`；实际 `(29,44)` ⇒ `POSITION_GATE RED` + 非零退出；
-   空 capture ⇒ 无证据 fail-closed；缺 `-CapturePath` ⇒ fail-closed；
-4. 源码断言：12 次盲点循环已删除、`-NoticePollClicks = 1`、`-NpcClick = "512,263"`、
-   无代码级 `512,227`、manifest 含 `client_exe_sha256`（`mir_flow` 与 `export_s2c` 两处）。
+1. `-FixtureDryRun -NoticePollSim dismiss1|slow|absent|nosignal`：sim 与真机共用
+   `Invoke-NoticePollCore`（F4）；`slow` 仍只点 **1** 次且不补点；`absent`/`nosignal` ⇒ 世界区 0 点击；
+2. `-NoticePollClicks 2` **和** `0` ⇒ 启动前 fail-closed 拒绝（F5）；
+3. `-FixtureDryRun -ExpectPos … -CapturePath <假 capture>`：F6 的三种情形——
+   单个远目标 `CM_WALK(29,44)` 被忽略并回退到 `SM_LOGON(29,33)`、多格目标不能过门、
+   相邻链 `(29,34)…(29,44)` 能推进到真实格；无 `SM_LOGON/NEWMAP` 锚点时 `CM_WALK` 不作证据；
+4. F2：`-EvidenceSinceMs` 之后的证据才作数（旧 capture/旧 proxy 均 RED）；
+   `-FixturePreflight`（不启客户端）验证旧 capture 在启动前就报 `STALE_CAPTURE`、
+   proxy 缺 `ready.flag` 直接拒绝；
+5. F1：假 proxy 目录（`chunks.ndjson` + EDCode 编码的 `conn-*.bin`）真跑 live 解码，
+   `658/51/3011/1018` 的 `ident/param/tag/recog` 与 `export_s2c` 导出的 `capture.jsonl` 逐字段一致；
+6. 源码断言：12 次盲点循环已删除、`-NoticePollClicks = 1`、`-NpcClick = "512,263"`、
+   无代码级 `512,227`、manifest 含 `client_exe_sha256`、`-ProxyDir`/EDCode/`ignored_far_walks` 存在、
+   阶段表含 `notice_wait/notice_poll`。
+
+### 9.7 仍是离线证据的部分（必须随报告登记）
+
+- 本次返工**没有起真机栈**（写集只含夹具与文档）；live 路径的端到端真机读数仍归独占窗口。
+- 公告对话框在 r5 的 `PrintWindow` 截图里不可见（`05_ingame.png` 只有聊天框文字），
+  因此 `-NoticeWindowProbe`/`-NoticePixelProbe` 的阈值需要真机现场标定；标定前默认不点
+  （F3 的 fail-closed 方向）。
+- F6 的“相邻步”规则能处理逐格自动走位（每次目标相邻 ⇒ 链式推进），也能挡住单次远目标；
+  若服务端/内存侧以后提供真实坐标源，应优先替换这条推断。
 
 ## 附录 A：本文件写作时的只读读数命令（可复现）
 

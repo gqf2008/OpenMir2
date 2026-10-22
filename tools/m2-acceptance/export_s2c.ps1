@@ -26,6 +26,13 @@
     PREREQ = 缺 dump 目录 / 缺 chunks.ndjson / 缺 dotnet ⇒ 退出码 2，不静默通过；
     RED    = 切帧/导出/replay 任一步失败 ⇒ 退出码 1。
 
+  时效（卡 fixture-harden F1/F2）：
+    本脚本是**会话结束后**的归档/判据导出器，产物 capture.jsonl 带的是会话内 ts_ms。
+    live 流程（登录后要点 NPC/过坐标门）请直接给 mir_flow.ps1 `-ProxyDir <本脚本的 -ProxyDir>`：
+    mir_flow 运行中读 chunks.ndjson + conn-*.bin 自己切帧/解码，不依赖这里的导出。
+    本脚本会把 proxy session.json 的 `start_wall_ms` 写进 manifest（`proxy_session_start_wall_ms`），
+    事后可用它核对 capture.jsonl 的 ts_ms 是否落在同一场。
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 `
     -ProxyDir E:\tmp\m2-acceptance\run1\proxy -OutDir E:\tmp\m2-acceptance\run1\rust
@@ -78,6 +85,19 @@ if ([string]::IsNullOrEmpty($clientPath) -and -not [string]::IsNullOrEmpty($RunD
 if ([string]::IsNullOrEmpty($clientPath) -and $env:MIR2_CLIENT_EXE) { $clientPath = $env:MIR2_CLIENT_EXE }
 $clientFields = [ordered]@{
   client_exe = $null; client_exe_sha256 = $null; client_exe_mtime = $null; client_exe_size = $null
+  proxy_session_start_wall_ms = $null
+}
+# F2：把 proxy 场的起始墙钟记进 manifest，事后可核对 capture.jsonl 的 ts_ms 是否同一场。
+$proxySessionJson = Join-Path $ProxyDir "session.json"
+if (Test-Path -LiteralPath $proxySessionJson) {
+  try {
+    $psj = [IO.File]::ReadAllText($proxySessionJson, [Text.Encoding]::UTF8) | ConvertFrom-Json
+    if ($null -ne $psj.PSObject.Properties["start_wall_ms"] -and $null -ne $psj.start_wall_ms) {
+      $clientFields.proxy_session_start_wall_ms = [long]$psj.start_wall_ms
+    }
+  } catch {
+    Write-Output ("WARN: proxy session.json 解析失败，proxy_session_start_wall_ms 记为 null：" + $proxySessionJson)
+  }
 }
 if (-not [string]::IsNullOrEmpty($clientPath) -and (Test-Path -LiteralPath $clientPath)) {
   $fi = Get-Item -LiteralPath $clientPath
