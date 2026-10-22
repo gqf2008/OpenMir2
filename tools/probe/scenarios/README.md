@@ -41,6 +41,7 @@ python tools/probe/mir2_probe.py \
 | `dlg_select` | 字符串 label，或 `{"label": "...", "recog": N}` | `CM_MERCHANTDLGSELECT(1011)`；`recog` 缺省取**最近一条 `SM_MERCHANTSAY(643)` 的 recog** |
 | `wait_for` | int 或非空 int 数组 | 等**下一步开始之后**到达的第一条匹配 ident |
 | `wait_frames` | `{"count": N, "idents": [...], "timeout_ms": M}` | 等 gamegate 连接**累计**帧数 ≥ N 且 idents 都出现过 |
+| `wait_idents` | `{"idents": [...], "timeout_ms": M}` | 等 idents **全部**在 gamegate 连接上出现过（累计口径；`timeout_ms` 不满足即步骤失败） |
 | `sleep` | int 毫秒，或 `{"ms": N}` | 纯等待，不发包 |
 
 `send.text` 的编码口径 = C# `EDCode.EncodeString`：先 `text.encode("gbk")`，再 EDCode。
@@ -50,8 +51,15 @@ python tools/probe/mir2_probe.py \
 ## 等待语义（对拍必须可复现）
 
 * `wait_for` 只匹配 **`seq` 大于本步开始时** 的帧 —— 上一步已经收到的同号帧不会被误当成本步的回包。
-* `wait_frames` 计的是 gamegate 连接的**累计**帧（含进世界前收到的 `658/51`），因此
-  `login_only.json` 的 `count=15` 不会因为驱动先等 `SM_LOGON(50)` 而永远差几帧。
+* `wait_frames` 计的是 gamegate 连接的**累计**帧（含进世界前收到的 `658/51`）。
+* `wait_idents` 同样是**累计**口径，但要求列表里的 ident **全部**出现过；超时即步骤失败
+  （退出码 1），步骤记录里写 `seen_idents` / `missing_idents` 便于定位差哪条。
+* **进世界后的延迟段 dwell**：驱动器收到 `SM_LOGON(50)` 后先等 `--dwell-ms`（默认 **1200ms**）。
+  Rust 首个 `SearchViewRange` 在 `enter_map + 1000ms`（`crates/world/src/entity.rs` 的
+  `PLAYER_SEARCH_TIME`），dwell 不足会在延迟段帧（`10/41/654/657/100…`）到达之前
+  `CM_SOFTCLOSE` 小退，对拍时被误判成「对侧独有」。`--dwell-ms 0` = 旧行为（只
+  `pump --between-ms`），**只用于复现旧问题**，对拍不要用。
+  `--dwell-ms` 必须 ≥ 0；负值在参数校验期 fail-closed（退出码 2，不落 `run.json`）。
 * 步骤间默认间隔 `--between-ms`（默认 200ms）；单步可用 `delay_ms` 覆盖。等待本身用 `timeout_ms`。
 
 ## 参数
@@ -109,13 +117,15 @@ python tools/probe/mir2_probe.py \
 ### `run.json`
 
 `argv`（`--password` 已打码）、`env`、起止墙钟、`chain`（登录四步的 ident/网关地址/session/角色列表/
-`SM_LOGON` 的 actor id 与落点）、`steps`（每条步骤的发送帧十六进制与等待结果）、`auto`（自动握手）、
+`SM_LOGON` 的 actor id 与落点）、`dwell`（进世界后延迟段：请求/实际时长、窗口前后见过的 ident、
+新到的 ident；**加性字段**，`schema_version` 仍为 1，旧比较器忽略）、`steps`（每条步骤的发送帧
+十六进制与等待结果）、`auto`（自动握手）、
 `frames_total` / `frames_by_conn` / `ident_hist`、`unclassified`、`exit`。
 
 ## 退出码
 
 * `0` 全绿；
-* `1` 链路或场景失败（网关不可达、登录被拒、`wait_for` 超时、角色不存在等）；
+* `1` 链路或场景失败（网关不可达、登录被拒、`wait_for` / `wait_idents` 超时、角色不存在等）；
 * `2` UNCLASSIFIED：帧解析失败（越界字节/未闭合帧）、规则没覆盖（`531` 改密、
   `dlg_select` 无 643 锚点）、场景 DSL 非法、必需参数缺失（参数校验在建证据目录之前，
   因此不落 `run.json`，只在 stderr 报缺哪几个参数）、内部错误。

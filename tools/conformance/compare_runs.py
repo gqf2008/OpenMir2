@@ -32,8 +32,10 @@
      whitelisted 显式登记「此处不同但被掩码」）。
    * `ability_layout`：52 SM_ABILITY 的 40B(oracle)/58B(client) 布局对，按语义字段逐项比较。
      布局表**从 tools/loginfixture/capture_login_compare.py 导入**（ABILITY_LAYOUTS /
-     ABILITY_FIELDS / decode_ability），本工具不抄第二份。语义不一致 ⇒ 差异；同长度同布局
-     退回逐字节比；未知长度 ⇒ 无法判定（fail-closed）。
+     ABILITY_FIELDS / decode_ability），本工具不抄第二份。驱动器落盘的是**线缆字节**，
+     所以先按 ABILITY_WIRE_LENS（54→40、78→58，encoded_len 关系）做 EDCode 归一：
+     语义不一致 ⇒ 差异；同长度同布局退回逐字节比（归一过的在明文空间比）；
+     未知长度对 ⇒ 无法判定（fail-closed）。
 4) 规则覆盖：某 ident 在两侧任何一帧里出现、规则表却没有它的条目 ⇒ **UNCLASSIFIED ⇒ 退出码 2**
    （显式 `--ignore-idents` 点名的 ident 视为已分类：剔除即处置）。
    只有 `--allow-unclassified 1,2,3` 显式点名才放行，且报告里仍然逐个登记。
@@ -435,21 +437,64 @@ def count_diff_bytes(a, b):
     return sum(1 for x, y in zip(a, b) if x != y) + abs(len(a) - len(b))
 
 
+# 52 SM_ABILITY 的已知布局对：布局表（tools/loginfixture/capture_login_compare.py 的
+# ABILITY_LAYOUTS）描述的是**明文** 40B/58B 结构；而本仓库驱动器
+# （tools/probe/mir2_probe.py，frames.ndjson 的 body 字段）落盘的是**线缆字节**（EDCode 编码后）。
+# 所以 52 先按「线缆长度 → 明文长度」归一，再落到布局表：
+#   * 40B 明文 = C# Ability.cs 声明序（EncodeMessage(WAbil)），encoded_len(40) = 54；
+#   * 58B 明文 = 冻结客户端 HIGHHP TAbility（record.rs::encode_ability_client；
+#     client-e2e-enter-gaps-20261013/21-client-ability-layout.md），encoded_len(58) = 78。
+# 首次双栈真机对拍实测就是 54↔40、78↔58（docs/conformance-first-dual-run-20261023.md §2.3）。
+# **新增布局对必须附来源**（C#/Rust 源锚 + 实测样本），否则一律按未知长度判不了。
+ABILITY_WIRE_LENS = {
+    54: 40,  # encoded_len(40)：oracle EncodeMessage(WAbil) 40B 布局
+    78: 58,  # encoded_len(58)：冻结客户端 HIGHHP TAbility 58B 布局
+}
+
+
+def _ability_plain(body, mod):
+    """52 body → (明文字节, 是否做过线缆归一)。未知长度原样返回，由调用方判 UNKNOWN。"""
+    if len(body) in mod.ABILITY_LAYOUTS:
+        return body, False
+    expect = ABILITY_WIRE_LENS.get(len(body))
+    if expect is None:
+        return body, False
+    try:
+        plain = mod.decode(body)
+    except Exception as e:  # noqa: BLE001 - 解码失败必须 fail-closed
+        raise Undecidable("52 线缆 body（%dB）EDCode 解码失败：%s: %s"
+                          % (len(body), type(e).__name__, e))
+    if len(plain) != expect:
+        raise Undecidable("52 线缆 body（%dB）解码得 %dB，与登记的明文 %dB 不符"
+                          % (len(body), len(plain), expect))
+    return plain, True
+
+
 def _compare_ability(idx, ident, ob, rb, rule, diffs, whitelisted, undecidable):
     """52 的 40/58 布局对：按语义字段比。返回 True 表示已处理。"""
     try:
         mod = load_module("capture_login_compare", LOGIN_COMPARE)
         layouts = mod.ABILITY_LAYOUTS
         fields = mod.ABILITY_FIELDS
-        decode = mod.decode_ability
+        decode_ability = mod.decode_ability
     except Undecidable as e:
         undecidable.append({"source": "frame", "frame_index": idx, "ident": ident,
                             "kind": "ability_prereq", "detail": str(e)})
         return True
-    pair = (len(ob), len(rb))
+    try:
+        op, o_wire = _ability_plain(ob, mod)
+        rp, r_wire = _ability_plain(rb, mod)
+    except Undecidable as e:
+        undecidable.append({"source": "frame", "frame_index": idx, "ident": ident,
+                            "kind": "ability_wire_layout", "detail": str(e)})
+        return True
+    pair = (len(op), len(rp))
+    wire = {"oracle_wire_len": len(ob) if o_wire else None,
+            "rust_wire_len": len(rb) if r_wire else None,
+            "wire_normalized": bool(o_wire or r_wire)}
     if pair in ((40, 58), (58, 40)):
-        od = decode(ob)
-        rd = decode(rb)
+        od = decode_ability(op)
+        rd = decode_ability(rp)
         if od is None or rd is None:
             undecidable.append({"source": "frame", "frame_index": idx, "ident": ident,
                                 "kind": "ability_decode",
@@ -459,8 +504,8 @@ def _compare_ability(idx, ident, ob, rb, rule, diffs, whitelisted, undecidable):
         for name in fields:
             if od[name] != rd[name]:
                 mism.append({"field": name, "oracle": od[name], "rust": rd[name],
-                             "oracle_offset": layouts[len(ob)][name][1],
-                             "rust_offset": layouts[len(rb)][name][1]})
+                             "oracle_offset": layouts[len(op)][name][1],
+                             "rust_offset": layouts[len(rp)][name][1]})
         if mism:
             for m in mism:
                 diffs.append({"source": "frame", "frame_index": idx, "ident": ident,
@@ -468,22 +513,57 @@ def _compare_ability(idx, ident, ob, rb, rule, diffs, whitelisted, undecidable):
                               "oracle": m["oracle"], "rust": m["rust"],
                               "oracle_offset": m["oracle_offset"],
                               "rust_offset": m["rust_offset"],
-                              "detail": "52 语义字段 %s 不同（oracle %sB / rust %sB 布局）"
-                                        % (m["field"], len(ob), len(rb))})
+                              "space": "plain",
+                              "oracle_body_len": len(op), "rust_body_len": len(rp),
+                              "oracle_wire_len": wire["oracle_wire_len"],
+                              "rust_wire_len": wire["rust_wire_len"],
+                              "wire_normalized": wire["wire_normalized"],
+                              "detail": "52 语义字段 %s 不同（oracle %sB / rust %sB 明文布局）"
+                                        % (m["field"], len(op), len(rp))})
         else:
             whitelisted.append({"source": "frame", "frame_index": idx, "ident": ident,
                                 "field": "52_layout", "kind": "ability_layout",
-                                "oracle_len": len(ob), "rust_len": len(rb),
+                                "oracle_len": len(op), "rust_len": len(rp),
+                                "oracle_wire_len": wire["oracle_wire_len"],
+                                "rust_wire_len": wire["rust_wire_len"],
+                                "wire_normalized": wire["wire_normalized"],
                                 "reason": "oracle40/client58 布局差；18 个语义字段逐项相等",
                                 "tier": rule.get("tier", ""),
                                 "approved_by": rule.get("approved_by", "")})
         return True
-    if len(ob) == len(rb) and len(ob) in layouts:
-        return False  # 同布局 ⇒ 逐字节比（更严，语义相等必然字节相等）
+    if len(op) == len(rp) and len(op) in layouts:
+        if not wire["wire_normalized"]:
+            return False  # 两侧都是明文同布局 ⇒ 交给 compare_bodies 逐字节比
+        # 至少一侧是线缆字节：长度已归一到明文，必须在明文空间比（原始线缆长度可以不同）
+        if op == rp:
+            whitelisted.append({"source": "frame", "frame_index": idx, "ident": ident,
+                                "field": "52_body", "kind": "ability_layout_wire",
+                                "oracle_len": len(op), "rust_len": len(rp),
+                                "oracle_wire_len": wire["oracle_wire_len"],
+                                "rust_wire_len": wire["rust_wire_len"],
+                                "wire_normalized": True,
+                                "reason": "52 线缆长度经 EDCode 归一为 %dB 明文布局后逐字节相等"
+                                          % len(op),
+                                "tier": rule.get("tier", ""),
+                                "approved_by": rule.get("approved_by", "")})
+            return True
+        off = first_diff_offset(op, rp)
+        diffs.append({"source": "frame", "frame_index": idx, "ident": ident,
+                      "field": "body", "kind": "body", "offset": off,
+                      "oracle_byte": op[off], "rust_byte": rp[off],
+                      "oracle_len": len(op), "rust_len": len(rp),
+                      "diff_bytes": count_diff_bytes(op, rp),
+                      "space": "plain",
+                      "oracle_wire_len": wire["oracle_wire_len"],
+                      "rust_wire_len": wire["rust_wire_len"],
+                      "wire_normalized": True,
+                      "detail": "52 线缆归一成明文后逐字节不同（首处 offset=%d，明文空间）" % off})
+        return True
     undecidable.append({"source": "frame", "frame_index": idx, "ident": ident,
                         "kind": "ability_layout_unknown",
-                        "detail": "52 的 body 长度组合 %s 不在已知布局表 %s 里"
-                                  % (pair, sorted(layouts))})
+                        "detail": "52 的 body 长度组合（原始 %s，归一后 %s）不在已知布局表 %s 里；"
+                                  "已知明文 40/58、线缆 54/78，新增长度对必须附来源后再登记"
+                                  % ((len(ob), len(rb)), pair, sorted(layouts))})
     return True
 
 

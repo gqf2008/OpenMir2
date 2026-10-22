@@ -1,8 +1,8 @@
 {
   "name": "login_only",
-  "description": "登录 -> 选服 -> 选角 -> 进世界 -> 等 15 帧（必须含 SM_LOGON(50)/SM_ABILITY(52)/SM_SENDNOTICE(658)）-> 正常断开",
+  "description": "登录 -> 选服 -> 选角 -> 进世界 -> 等 SM_LOGON(50)/SM_ABILITY(52)/SM_SENDNOTICE(658) 与延迟段 SM_CHANGELIGHT(654)/SM_CHARSTATUSCHANGED(657)/SM_SYSMESSAGE(100) 全部出现 -> 正常断开",
   "steps": [
-    {"wait_frames": {"count": 15, "idents": [50, 52, 658], "timeout_ms": 8000},
-     "note": "计数是 gamegate 连接累计帧数（含进世界前已收到的帧）"}
+    {"wait_idents": {"idents": [50, 52, 658, 654, 657, 100], "timeout_ms": 8000},
+     "note": "累计口径（含进世界前已收的帧）。654/657/100 是延迟段帧：Rust 首个 SearchViewRange 在 enter_map+1000ms（crates/world/src/entity.rs PLAYER_SEARCH_TIME），旧的 wait_frames count=15 会在进世界 +399ms 就 CM_SOFTCLOSE，整段延迟帧被丢。驱动器另有 --dwell-ms（默认 1200ms）兜底。"}
   ]
 }

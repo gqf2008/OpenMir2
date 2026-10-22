@@ -38,3 +38,49 @@ Leader 合并时按 `TIER-POLICY.md`：R 级必须有真机证据或显式 `wind
   （`<git-dir>/worktrees/<name>/walgit/identity`，一个 worktree = 一个身份 = 一把 Ed25519 私钥）；
   删掉它等于抹掉该 principal 的身份与可重放性。
 - 新车道优先复用身份匹配的既有 worktree，而不是重建。
+
+## 身份治理（Leader 2026-10-23 裁决）
+
+- `openmir2-reviewer-5` 的唯一归属 worktree = `E:/tmp/wt-reviewer-5`；其他位置签出的 reviewer-5 视为历史，**不计入合并规则的 approve 数**。
+- **主检出** `.git/walgit/identity` 已由 reviewer-5 重绑为 `openmir2-orchestrator`（Leader），旧文件备份 `.git/walgit/identity.bak-reviewer5`；此后从主检出默认签名 = Leader。
+- 每个车道：worktree 身份 = 执行者 principal；Leader 只签 orchestrator；review 只能由 reviewer-3 / reviewer-6 出；合并只删分支、保留 worktree。
+- 定规前由 reviewer-5 代签的 card_claim（`openmir2-gm-batch-4-numeric`、`openmir2-dualrun-triage-enterworld-frames`）保留留痕但不作认领依据，进复核前须由实际车道用自己的 principal 重发 status。
+
+## 交叉审查（owner 2026-10-23 追加）
+
+Leader 忙不过来时，**空闲 worker 可以互相审查**：唯一硬约束是「复核者 principal ≠ 作者」，
+且复核者必须钉住 head、自跑门禁与牙、给完整 findings。专职 reviewer（reviewer-3 / reviewer-6）不再是唯一来源。
+
+## 分支清理的例外
+
+「只删分支」的前提是分支**没有**被保留的 worktree 检出。若该 worktree 仍 checkout 该分支
+（如 `wt-triage2 @ dualrun-triage`），则**分支与 worktree 一起保留**，不得 `git branch -D` 强删。
+
+## 台账纪律（2026-10-23 教训）
+
+- **永远从线程输出里整段复制 oid**，绝不凭前缀补全：凭前缀猜后缀会造成 `parent` 指向不存在的条目（链断裂）。
+  今天因此产生 2 条断链（orphan-encoder、gm-batch-4），均以「更正条目」接回；以后 `parent` 一律用
+  `walgit collab thread <id>` 输出的最后一个 `"oid"` 原值。
+- 并发会话可能在同一张卡上抢写：Leader 每周期的「进度一行」必须核对**同一卡是否有多个 claim**，
+  按「先交付者优先 / 空 worktree 视为未开工」裁决，并把裁决写成签名条目。
+
+## 并发车道共享临时文件的坑（2026-10-23）
+
+复核者曾把 review body 写到通用路径 `/e/tmp/review-body.json`，被并发车道覆盖，导致一条 review **投错线程**（正文是别的卡的）。
+**规则**：任何车道/复核者的临时文件必须带车道唯一前缀（`/e/tmp/<lane>-review-body.json`），禁止使用通用文件名。
+
+## 合并前必须断言当前分支（2026-10-23 事故）
+
+**事故**：一次冲突消解把主检出切到 `name-neg-rebased` 后没有切回，之后 5 次合并（searchtick / closehealth / verif-tick / 文档）都落在该分支，
+而 `git push walgit master` 一直在推**旧 master**（远端停在 `f164ccd2`，直到被 `git ls-remote` 发现）。
+修复：`git checkout master && git merge --ff-only name-neg-rebased && git push walgit master`（`f164ccd2..e0114909e`），内容无丢失。
+
+**规则**：每次 `git merge` 与 `git push walgit master` **之前**先跑
+`git rev-parse --abbrev-ref HEAD` 断言 == `master`；合并后立刻 `git ls-remote walgit refs/heads/master` 与本地 `rev-parse master` 对比，不一致即红灯处理。
+
+## 门禁优先级：Leader 合并门禁优先（2026-10-23）
+
+多条 Rust 车道同时跑测试时，「同一时刻只跑一个门禁」会让**合并门禁被饿死**（实测排队 25 分钟未启动）。
+**规则**：Leader 的合并门禁**抢占优先**——直接开跑，不等车道；若因此撞到已知的两条 flake
+（`game-gate relay::gm_checkclient_is_sent_every_keepalive_period`、`relay::bad_login…`），
+**单跑复验通过即视为绿**，并在 merge_result 里如实注明「并发负载下 flake，单跑绿」。

@@ -9,7 +9,7 @@
 
 > **一句话结论**：脚本引擎在**部署语料**上已 100% 覆盖（106/106 个派发目标、0 未实现）；真正的剩余量集中在
 > **① 185 张 in-progress 卡里 152 张是 R 级真机窗口欠账**、**② GM 命令 185 条里 150 条命令体未实现，另 21 条只到「文本已逐字节、宿主动作未接」（第三态）**、
-> **③ 协议出站 13 帧有编码器但无生产发射点（另 1 帧 `SM_DONATE_FAIL` 连编码器都没有）**、**④ 2 个内容件的消费点/装载缺口（UnbindList、AdminList）**。
+> **③ 协议出站 13 帧有编码器但无生产发射点（另 1 帧 `SM_DONATE_FAIL` 连编码器都没有）**、**④ 内容消费件缺口已清零（UnbindList、AdminList 均已接，2026-10-23）**。
 
 > **快照后变化（2026-10-22T15:30Z，master `7fa7a2e99`）**：GM 第 3 批（传送/召唤族 18 条）已合入，
 > 因此本文档 §2 的「已实现 35 / 未实现 150」更新为 **已实现 53 / 未实现 132**（第三态 21 不变，
@@ -478,7 +478,7 @@ summary: {"n/a-oracle-noop": 9, "n/a-db": 5, "tracked": 5, "implemented": 11,
 
 | 内容件 | rust 判定 | 现状 |
 |---|---|---|
-| `UnbindList.txt` | **no** | loader 在 `crates/data/src/lists.rs`，**game-svr 消费点未接**（StdMode 31 解包，白名单 T-17） |
+| `UnbindList.txt` | **yes** | 2026-10-23 已接（`bins/game-svr/src/unbindlist.rs` + `useitem.rs` 解包 6 件；recon `rust=yes / implemented`）。历史：loader 在 `crates/data/src/lists.rs`，此前 game-svr 消费点未接（白名单 T-17） |
 | `AdminList.txt` | **no** | loader 在 `crates/data/src/lists.rs`，**无生产消费者**；oracle 的 `GetHumPermission` 被注释 ⇒ 与「permission 恒 0」裁决一致（D-1） |
 | `MiniMap.txt` | yes | 已加载；但 `CM_WANTMINIMAP` 消费点仍传 `0`（见 §6 top5 #3） |
 | `LineNotice.txt` | yes | `line_notice` 生产接线已存在 |
@@ -536,7 +536,7 @@ unreachable pub fns defs 63 unique 58
 
 ### 4.3 模块面结论
 
-- **真正可执行的接线缺口只有两类**：协议出站 13 帧（+1 帧 `SM_DONATE_FAIL` 缺编码器）+ 内容消费 2 件（UnbindList、AdminList）。
+- **接线缺口**：协议出站 13 帧（+1 帧 `SM_DONATE_FAIL` 缺编码器）仍在；内容消费 2 件（UnbindList、AdminList）已于 2026-10-23 关闭。
 - 入站 3 条 tracked 是「handler 已有、生产参数未挂」的**小接线**，不是重写缺口。
 - 模块文件本身没有「文件存在但 `mod` 未声明」的孤儿：`find bins/game-svr/src -name '*.rs'` 与
   `lib.rs` 的 `mod` 声明逐一对账，仅 `castle/tests.rs`、`guild_official/tests.rs`、`guild_runtime/tests.rs`

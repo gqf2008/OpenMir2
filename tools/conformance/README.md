@@ -50,6 +50,38 @@ python -I -B tools/conformance/compare_runs.py \
 **同时出现差异与「判不了」时取 2。** 未完成的判据优先，绝不用「有差异」掩盖「没判完」；
 也绝不在缺规则/缺数据时静默当绿。
 
+## 一条命令跑完（`run_dual.sh`）
+
+把「**恢复基线 → 起 A 栈 → 跑场景 → 抓库快照 → 停栈 → 起 B 栈 → 同样 → compare**」
+固化成一条命令：
+
+```sh
+CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/probe/scenarios/login_only.json   --login-gate HOST:PORT --account '<账号>' --server-name '<服务器名>'   --stack-a-cmd '<起 C# 栈的命令>' --stop-a-cmd '<停 C# 栈的命令>'   --stack-b-cmd '<起 Rust 栈的命令>' --stop-b-cmd '<停 Rust 栈的命令>'   --restore-cmd '<从基线恢复库的命令>'   --db-a-cmd '<把 C# 侧库快照写到 $DUAL_RUN_DIR/db_snapshot.json 的命令>'   --db-b-cmd '<同上，Rust 侧>'   --out E:/tmp/conformance/runs/round2
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `--scenario FILE` | **必需**。驱动器场景 JSON（`tools/probe/scenarios/*.json`） |
+| `--stack-a-cmd` / `--stack-b-cmd` | **必需**。起栈命令；必须**返回**（栈在后台起好后返回 0） |
+| `--out DIR` | **必需**。产物目录（`a/`、`b/`、`report.json`、`run_dual.json`、`run_dual.log`） |
+| `--login-gate HOST:PORT` / `--account` / `--password` | **必需**。驱动器连接参数；脚本**不写死端口/凭据**，密码建议走 `CONFORMANCE_PASSWORD` |
+| `--server-name` / `--char-name` | 可选，透传给驱动器 |
+| `--restore-cmd` | 可选。基线恢复；**每侧起栈前各跑一次** |
+| `--stop-a-cmd` / `--stop-b-cmd` | 可选但强烈建议。停栈；**中途失败也会执行** |
+| `--db-a-cmd` / `--db-b-cmd` | 可选。抓库快照；命令里用 `$DUAL_RUN_DIR` 定位本侧产物目录 |
+| `--probe-cmd` | 可选。驱动器命令前缀（默认仓库内 `tools/probe/mir2_probe.py`） |
+| `--probe-arg ARG` | 可重复，追加给驱动器 |
+| `--rules FILE` | 可选，默认本目录 `rules.json` |
+| `--allow-missing-fields` / `--require-db` / `--allow-empty` / `--quiet` | 透传给 `compare_runs.py` |
+
+* 每步命令都拿到导出的环境：`DUAL_SIDE`(`a`/`b`)、`DUAL_OUT`、`DUAL_RUN_DIR`、`DUAL_SCENARIO`。
+* **缺参 / 某步失败 / compare UNDECIDABLE ⇒ 退出码 2**；有真实差异 ⇒ 1；PASS ⇒ 0。
+  绝不出现「A 侧没跑成却因为别的原因判绿」。
+* A 侧没跑完就**不再起 B 侧**（两栈同端口，不能并存）。
+* 自检（离线，桩命令，不连网/不连库/不起真栈）：
+  `bash tools/conformance/run_dual.sh --selftest`（15 条断言：全流程 PASS、b 侧差一字节 ⇒ 1、
+  缺参 ⇒ 2、起栈失败 ⇒ 2 且不跑场景、场景失败仍停栈）。
+
 ## 输入：驱动器产物约定
 
 `<DIR>/frames.ndjson`（必需，一行一帧 s2c）：
@@ -60,7 +92,9 @@ python -I -B tools/conformance/compare_runs.py \
  "body_len":0,"body_hex":"","body_sha256":"e3b0c442..."}
 ```
 
-* `ident` 必需（u16）；`body_hex` 是**解码后的 body 字节**（十六进制，可带 `0x`）。
+* `ident` 必需（u16）；`body_hex` 是 body 字节的十六进制（可带 `0x`）。**本仓库驱动器（`tools/probe/mir2_probe.py`）落的是线缆字节**（EDCode 编码后、已去掉 CommandMessage 头）。
+  比较器对一般 ident 直接按字节比（EDCode 是确定性的：线缆逐字节相等 ⇔ 明文相等）；
+  只有 52 需要先按已知线缆长度做 EDCode 归一，见下「52 的布局对」。
 * 其余字段缺失会被**显式登记**；默认不是「可容忍」而是判不了：
   * 两侧都缺某头部字段 ⇒ 默认 `UNDECIDABLE(missing_field_both_sides)`；
     `--allow-missing-fields` 才降级为 `missing_fields` + `allowed_missing_fields` 登记后放行；
@@ -98,12 +132,35 @@ python -I -B tools/conformance/compare_runs.py \
 | `mask_fields` | `fields` 里的头部字段不比（如 46 的 param/tag = 墙钟小时位）；body 仍逐字节比 |
 | `mask_body_ranges` | body 的 `[start,end)` 区间（`end:null` = 到末尾）不比；长度必须相等，否则 body_len 差异。区间内若确有不同，仍登记 `mask_body_ranges` |
 | `ignore` | 该消息号在两侧对齐前剔除；`ident` 也因此不比。默认规则表**没有** ignore；PENDING 复核的 ignore 真剔了帧 ⇒ UNDECIDABLE |
-| `ability_layout` | 52 SM_ABILITY：`{40,58}` 布局对按 18 个语义字段逐项比（布局表从 `tools/loginfixture/capture_login_compare.py` 导入，**不抄第二份**）；同长度同布局退回逐字节；未知长度 ⇒ UNDECIDABLE |
+| `ability_layout` | 52 SM_ABILITY：`{40,58}` 明文布局对按 18 个语义字段逐项比（布局表从 `tools/loginfixture/capture_login_compare.py` 导入，**不抄第二份**）；线缆字节先按 `54→40 / 78→58` 归一（EDCode，见下）；同长度同布局退回逐字节（归一过的在明文空间比）；未登记长度对 ⇒ UNDECIDABLE |
 
 每条 ident 规则还可带：
 
 * `head_mask: [...]`：在本 ident 上额外掩码头部字段；
 * `head_compare: [...]`：从全局掩码里**取回**字段比较（如 52 的 recog 是 Gold 不是 ActorId）。
+
+### 52 的布局对（明文 40/58，线缆 54/78）
+
+`SM_ABILITY(52)` 的 body 长度**不是常量**，它随客户端版本/ability 位集（如客户端编译期
+`HIGHHP`）变化。因此规则表登记的是**布局对**，不是单一长度：
+
+| 侧 | 明文（布局表描述的结构） | 线缆（EDCode 编码后 = 驱动器 `body_hex`） | 来源 |
+| --- | --- | --- | --- |
+| C# oracle | **40B** | **54B** | `Ability.cs` 声明序 + `EncodeMessage(WAbil)`；`encoded_len(40)=54` |
+| 冻结客户端 | **58B** | **78B** | `HIGHHP=True` 的 `TAbility`（`record.rs::encode_ability_client`；`client-e2e-enter-gaps-20261013/21-client-ability-layout.md`）；`encoded_len(58)=78` |
+
+`encoded_len` 为 `(n//3)*4 + {0:0,1:2,2:3}[n%3]`（`capture_login_compare.py`）。
+首次双栈真机对拍实测的正是 (54, 78)：EDCode 归一成 40/58 后 18 个语义字段全等
+（`docs/conformance-first-dual-run-20261023.md` §2.3）。
+
+判据：
+
+* **按场景登记真实长度对**，不写死 40/58；新增对 = 在 `compare_runs.py::ABILITY_WIRE_LENS`
+  加 `线缆长度 → 明文长度`，且明文布局必须已存在于 `ABILITY_LAYOUTS`（两者成对）。
+* **新增对必须附来源**：C#/Rust 的源码锚（谁按什么顺序写的哪些字段）+ 实测样本（帧
+  `body_hex`/sha256 或日志），写进本 README 并走评审。没有来源的长度对一律 **不登记**——
+  遇到就是 `UNDECIDABLE(ability_layout_unknown)`（退出码 2），绝不猜偏移。
+* 只登记「同一份 `WAbil` 换布局」的对；语义字段集合（18 个）不同就是另一条路径，另开卡。
 
 ## 规则表 `rules.json`
 
@@ -201,18 +258,42 @@ python -I -B tools/conformance/compare_runs.py \
 python -I -B tools/conformance/compare_runs.py selftest
 ```
 
-全离线合成两次运行，44 条断言，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
+全离线合成两次运行，**84 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
 未覆盖 ident ⇒ 2（`--allow-unclassified` 放行）；缺规则表/坏规则/坏 JSON ⇒ 2；
 52 的 40/58 语义比（一致 ⇒ 0、改 hp ⇒ 1）；头部掩码不吞 body 差异；显式剔除后仍能定位真差异；
 10/41 默认参与比较、PENDING ignore 剔帧 ⇒ 2；`--ignore-idents` 可剔除未登记 ident；空运行、两侧都缺头部字段、被掩码字段单侧缺失 ⇒ 2；
 帧数不同；缺 body；产物自相矛盾；库逐列 diff、跨库前缀、单侧缺快照、`--require-db`。
 
+首跑补规则后新增的断言（防止「加了规则却不判」）：
+
+* 7 条新 ident（100/520/525/529/530/654/657）逐条：规则存在且 `action=compare`、
+  带 `reason/tier/approved_by=PENDING`；两侧相同 ⇒ 0；**改一个字节 ⇒ 1 且定位到该 ident+offset**；
+* 520 的 `recog`（=nChrCount）不同 ⇒ 1（`head_compare` 真的取回了比较）；
+  530 的 `recog` 不同 ⇒ 0 且登记 `masked_head`（会话/游戏时长，故意掩）；530 的 body（ip/port）改一字节 ⇒ 1；
+* 52 **线缆 (54,78)**：归一后语义全等 ⇒ 0 且登记 `ability_layout`（含 `wire_normalized`
+  与 `oracle_wire_len=54 / rust_wire_len=78`）；线缆形态改 hp ⇒ 1（`space=plain`）；
+  两侧同为 58B 线缆 ⇒ 明文逐字节比、改一字节 ⇒ 1（偏移 46）；
+* 52 未登记长度对（41,41）⇒ 2（`ability_layout_unknown`，fail-closed）。
+
 **牙**：每条「改坏必红」都断言具体退出码与定位字段/偏移；比较器若退化成「永远 0」，
 自检会以 RED 收场。
 
-## 当前规则覆盖（待真机首跑补全）
+## 当前规则覆盖
 
-已覆盖 ident：`10, 41, 42, 46, 50, 51, 52, 54, 213, 658, 752, 766, 811, 1106, 5008, 11029`。
+已覆盖 ident：`10, 41, 42, 46, 50, 51, 52, 54, 100, 213, 520, 525, 529, 530, 654, 657,
+658, 752, 766, 811, 1106, 5008, 11029`。
+
+首跑缺口补齐的 7 条（每条都给 reason + tier + approved_by=PENDING，全走评审）：
+
+| ident | 消息 | action | 判据（细节见 `rules.json` 的 reason） |
+| --- | --- | --- | --- |
+| 100 | `SM_SYSMESSAGE` | compare | body 是 GBK 静态文案（首跑 4 条实测无墙钟/时间戳），逐字节比 |
+| 520 | `SM_QUERYCHR` | compare + `head_compare:[recog]` | body=角色列表文本；recog=nChrCount（协议内容）⇒ 从全局掩码取回比较 |
+| 525 | `SM_STARTPLAY` | compare | body=GameGate ip/port（同端口方案下必须逐字节相同） |
+| 529 | `SM_PASSOK_SELECTSERVER` | compare | body=服务器名/状态；**保留**首跑真差异（`Idle` vs `0`）继续可定位，不掩码 |
+| 530 | `SM_SELECTSERVER_OK` | compare | body=SelGate ip/port/session；recog=游戏时长或 SessionID ⇒ 全局掩码 |
+| 654 | `SM_CHANGELIGHT` | compare | header-only；recog=ActorId 掩码；param=Light / tag=nClientKey 逐值比 |
+| 657 | `SM_CHARSTATUSCHANGED` | compare | header-only；recog=ActorId 掩码；param/tag=状态位、series=HitSpeed 逐值比 |
 
 已知待复核/缺口：
 
@@ -220,6 +301,13 @@ python -I -B tools/conformance/compare_runs.py selftest
   41=`SM_FEATURECHANGED` 是真实协议帧。确需按 phase 区分心跳时用显式 `--ignore-idents`，
   或新增规则并走评审。
 * 驱动器可能产出但尚未登记的：`201 SM_BAGITEMS`、`6/7/9 SM_RUSH*`、`9 SM_BACKSTEP`、
-  以及任何登录后新增的系统消息 —— 首跑会以 UNCLASSIFIED（退出码 2）暴露，按上面步骤逐条加规则。
-* `46/50/51` 只掩了已知的墙钟位；若真机上还有别的定时器字段，首跑会红，届时按证据扩规则。
+  以及任何登录后新增的系统消息 —— 会以 UNCLASSIFIED（退出码 2）暴露，按上面步骤逐条加规则。
+* `46/50/51` 只掩了已知的墙钟位；若真机上还有别的定时器字段，会红，届时按证据扩规则。
+* **`654` 的 `param=Light`** 由装备光源/游戏内昼夜决定（C# `PlayObject.Message.cs:1840`），
+  **`657` 的 `series=HitSpeed`** 由属性重算派生（同文件 `:1846`）。两者本轮按 `compare` 登记；
+  若下一轮真机出现差异，按 `46/50/51` 的样式登记**窄掩码**（`head_mask` 逐个字段 + 依据），
+  不得整帧 ignore。
+* `529` 的 `Idle` vs `0`、以及「C# 多出 10/100/654/657」是**真实行为差异**
+  （`docs/conformance-first-dual-run-20261023.md` §2.1/§2.2），不是规则缺口：规则补齐后重跑，
+  它们仍会以 `body_len` / `frame_count` 差异出现，直到服务端行为被另卡修好。
 * 全部规则 `approved_by` 均为 `PENDING owner/coordinator review`，尚未获批准。

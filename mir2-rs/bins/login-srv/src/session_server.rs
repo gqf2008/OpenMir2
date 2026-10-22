@@ -397,38 +397,87 @@ pub async fn is_not_user_full(
     Ok(true)
 }
 
+/// C# `ServerStatus`（`SessionServer.cs:726+`）：拼进服务器列表串的是**枚举名**，不是数字。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServerStatus {
+    /// 空闲（C# `Idle = 1`）。
+    Idle,
+    /// 良好（C# `General = 2`）。
+    General,
+    /// 繁忙（C# `Busy = 3`）。
+    Busy,
+    /// 满员（C# `Full = 4`）。
+    Full,
+}
+
+impl ServerStatus {
+    /// `Enum.ToString()` 的结果（状态 0 无名字时由调用方拼 `"0"`）。
+    #[must_use]
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Idle => "Idle",
+            Self::General => "General",
+            Self::Busy => "Busy",
+            Self::Full => "Full",
+        }
+    }
+}
+
+/// `GetServerStatus` 的四档阈值（`SessionServer.cs:645-665`），**顺序与 C# 整数除法照抄**：
+/// `Min <= Max/2 ⇒ Idle`；`Min <= Max - Max/5 ⇒ General`；`Min < Max ⇒ Busy`；否则 `Full`。
+#[must_use]
+pub(crate) const fn limit_status(min: i32, max: i32) -> ServerStatus {
+    if min <= max / 2 {
+        ServerStatus::Idle
+    } else if min <= max - max / 5 {
+        ServerStatus::General
+    } else if min < max {
+        ServerStatus::Busy
+    } else {
+        ServerStatus::Full
+    }
+}
+
+/// `GetServerStatus` 的在线判定（`SessionServer.cs:625-643`）：
+/// `_serverList` 里存在同名且 `ServerIndex != 99`（99 = DBSrv）的条目即在线。
+#[must_use]
+pub(crate) fn is_server_online(servers: &[ServerSessionInfo], server_name: &str) -> bool {
+    servers
+        .iter()
+        .any(|s| s.server_index != 99 && s.server_name == server_name)
+}
+
+/// `GetServerStatus` 的纯判定体；离线或 `UserLimit` 无同名槽 ⇒ `"0"`。
+///
+/// `None` 槽复刻 C# 的 NRE：`UserLimit[i]` 为 null 时 `try/catch` 吞掉异常并返回当时的 `status`（0）。
+#[must_use]
+pub(crate) fn resolve_server_status(
+    server_name: &str,
+    online: bool,
+    limits: &[Option<crate::config::LimitServerUserInfo>],
+) -> &'static str {
+    if !online {
+        return "0";
+    }
+    for slot in limits {
+        let Some(e) = slot else {
+            return "0";
+        };
+        if e.server_name == server_name {
+            return limit_status(e.limit_count_min, e.limit_count_max).name();
+        }
+    }
+    "0"
+}
+
 /// `SessionServer.GetServerStatus` → C# 把枚举拼进字符串 ⇒ 取**枚举名**（0 无名字即 "0"）。
 pub async fn get_server_status(share: &Arc<Share>, server_name: &str) -> &'static str {
     let online = {
         let servers = share.servers.lock().await;
-        servers
-            .iter()
-            .any(|s| s.server_index != 99 && s.server_name == server_name)
+        is_server_online(servers.as_slice(), server_name)
     };
-    if !online {
-        return "0";
-    }
     let limits = share.user_limit.lock().await;
-    for slot in limits.iter() {
-        let Some(e) = slot else {
-            return "0"; // C# try/catch：空槽 NRE 被吞 ⇒ 状态 0
-        };
-        if e.server_name == server_name {
-            let max = e.limit_count_max;
-            let min = e.limit_count_min;
-            if min <= max / 2 {
-                return "Idle";
-            }
-            if min <= max - max / 5 {
-                return "General";
-            }
-            if min < max {
-                return "Busy";
-            }
-            return "Full";
-        }
-    }
-    "0"
+    resolve_server_status(server_name, online, limits.as_slice())
 }
 
 /// `SessionServer.SendServerMsg`。
@@ -712,5 +761,116 @@ pub async fn session_clear_no_payment(share: &Arc<Share>, test_server: bool) {
         if let Action::ServerMsg(ident, name, msg) = action {
             send_server_msg(share, ident, &name, &msg).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_server_online, limit_status, resolve_server_status, ServerHandle, ServerStatus,
+    };
+    use crate::config::LimitServerUserInfo;
+    use crate::state::ServerSessionInfo;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    fn lim(name: &str, min: i32, max: i32) -> LimitServerUserInfo {
+        LimitServerUserInfo {
+            server_name: name.into(),
+            name: "g".into(),
+            limit_count_min: min,
+            limit_count_max: max,
+        }
+    }
+
+    fn srv(name: &str, index: i32) -> ServerSessionInfo {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        ServerSessionInfo {
+            socket_id: format!("s-{index}-{name}"),
+            tx,
+            endpoint: "127.0.0.1:1".into(),
+            server_name: name.into(),
+            server_index: index,
+            online_count: 0,
+            keepalive_tick: 0,
+            payment_mode: 0,
+            session_list: Vec::new(),
+            receive_msg: String::new(),
+            handle: ServerHandle {
+                notify: Arc::new(tokio::sync::Notify::new()),
+                closed: Arc::new(AtomicBool::new(false)),
+            },
+        }
+    }
+
+    /// 四档逐档断言 + `Max/2`、`Max - Max/5` 边界（C# 整数除法口径）。
+    #[test]
+    fn four_tiers_and_boundaries() {
+        // 偶数 Max=3000：Max/2=1500，Max-Max/5=2400
+        assert_eq!(limit_status(0, 3000).name(), "Idle");
+        assert_eq!(limit_status(1500, 3000).name(), "Idle"); // 边界 ≤
+        assert_eq!(limit_status(1501, 3000).name(), "General");
+        assert_eq!(limit_status(2400, 3000).name(), "General"); // 边界 ≤
+        assert_eq!(limit_status(2401, 3000).name(), "Busy");
+        assert_eq!(limit_status(2999, 3000).name(), "Busy");
+        assert_eq!(limit_status(3000, 3000).name(), "Full"); // Min >= Max
+        assert_eq!(limit_status(4000, 3000).name(), "Full"); // Min > Max 也是 Full
+
+        // 奇数 Max=3001：Max/2=1500（整除截断），Max-Max/5=3001-600=2401
+        assert_eq!(limit_status(1500, 3001).name(), "Idle");
+        assert_eq!(limit_status(1501, 3001).name(), "General");
+        assert_eq!(limit_status(2401, 3001).name(), "General");
+        assert_eq!(limit_status(2402, 3001).name(), "Busy");
+    }
+
+    /// 在线判定：`ServerIndex == 99`（DBSrv）同名不算在线。
+    #[test]
+    fn online_requires_non_db_server_with_same_name() {
+        let db_only = vec![srv("热血传奇", 99)];
+        assert!(!is_server_online(&db_only, "热血传奇"));
+        let both = vec![srv("LegendOfMir2", 99), srv("热血传奇", 0)];
+        assert!(is_server_online(&both, "热血传奇"));
+        assert!(!is_server_online(&both, "其它服"));
+    }
+
+    /// 纯判定体：离线 / 无同名槽 / 空槽 ⇒ "0"；在线且命中 ⇒ 枚举名。
+    #[test]
+    fn resolve_status_cases() {
+        let limits = [Some(lim("热血传奇", 0, 3000))];
+        assert_eq!(resolve_server_status("热血传奇", false, &limits), "0");
+        assert_eq!(resolve_server_status("热血传奇", true, &limits), "Idle");
+        assert_eq!(resolve_server_status("其它服", true, &limits), "0");
+        // 空槽在命中项之后不影响；命中项之前出现空槽则复刻 C# NRE ⇒ "0"
+        let after = [Some(lim("热血传奇", 0, 3000)), None];
+        assert_eq!(resolve_server_status("热血传奇", true, &after), "Idle");
+        let before = [None, Some(lim("热血传奇", 0, 3000))];
+        assert_eq!(resolve_server_status("热血传奇", true, &before), "0");
+    }
+
+    /// 拼进列表串的是枚举名（不是数字）。
+    #[test]
+    fn status_names_are_enum_names() {
+        assert_eq!(ServerStatus::Idle.name(), "Idle");
+        assert_eq!(ServerStatus::General.name(), "General");
+        assert_eq!(ServerStatus::Busy.name(), "Busy");
+        assert_eq!(ServerStatus::Full.name(), "Full");
+    }
+
+    /// 在线判定必须是**序数精确相等**（C# `string ==` → `StringComparison.Ordinal`）：
+    /// 大小写变体、前缀/子串、后缀扩展都不算同一个名字。
+    ///
+    /// 牙：把 `==` 换成 `eq_ignore_ascii_case` 或 `starts_with`/`contains`，本用例立刻红。
+    #[test]
+    fn is_server_online_requires_exact_ordinal_match() {
+        let both = vec![srv("legendofmir2", 1), srv("热血传奇", 0)];
+        assert!(is_server_online(&both, "legendofmir2"));
+        assert!(is_server_online(&both, "热血传奇"));
+        // 大小写变体
+        assert!(!is_server_online(&both, "LegendOfMir2"));
+        assert!(!is_server_online(&both, "LEGENDOFMIR2"));
+        // 前缀 / 子串 / 后缀扩展
+        assert!(!is_server_online(&both, "legend"));
+        assert!(!is_server_online(&both, "热血"));
+        assert!(!is_server_online(&both, "热血传奇2"));
     }
 }
