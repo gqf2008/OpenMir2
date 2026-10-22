@@ -123,3 +123,22 @@ body_len 为 owner 已裁决的 D-9，已 whitelist）。`judge_login` 另提示
 - 备用端口栈全部停止，15xxx/17xxx 全 DOWN；外部 C# 栈（5000/7000/7200）保持未动；
 - 共享 `D:/MirClient-run/run-release.cmd` 已恢复原文件（sha256 `1ab506be…`）；
 - 证据：`E:/tmp/window/r5/**`。
+
+### 7.4 C# 对照实验（未完成，含一个新事实）
+
+目的：同摆位把客户端放到 C# oracle 上，判断「客户端不渲染国王」是客户端/坐标问题还是 Rust 缺帧。
+
+- C# 侧在备用端口起栈（GameSvr 15000 / DBSrv 16000·15100·15700 / LoginSrv 15500·15600），
+  GameSvr 与 DBSrv、LoginSrv 均连接成功（日志 `数据库服务器[tcp://127.0.0.1:16000/]连接成功`、
+  `登录服务器[tcp://127.0.0.1:15600/]连接成功`）。
+- **C# `SelGate` 无法换端口**：`src/SelGate/GateShare.cs:15` 是 `public const int GatePort = 7100`，
+  `ServerService.Start()` 直接绑这个常量，**不读** `config.conf` 的 `GatePort0` ⇒ 备用端口窗口里
+  C# SelGate 必然去抢 7100（外部栈占用 ⇒ `SocketException 10048`）。
+- 用 Rust login-gate/sel-gate 代替后：客户端能选服（LoginSrv 返回 `127.0.0.1:17100`），但 Rust
+  sel-gate 与 C# DBSrv 的连接在角色查询后立即被对端断开（`数据库服务器断开链接`），客户端停在黑屏，
+  C# GameSvr 未收到会话 ⇒ **对照未得出结论**。
+- 结论与后续：
+  1. 备用端口剖面对 **Rust 侧**完备；对 **C# 侧** 受 `GatePort` 常量限制（E4 允许重编，但改 `src/**`
+     属冻结面，须先走白名单/owner 裁决，不在本窗口范围）。
+  2. 客户端不渲染的判定仍待 C# 对照；替代路径是读 `MirClientZig` 的角色注册代码（收到
+     `SM_TURN/SM_FEATURECHANGED` 后未建 actor 的原因），或在 7100/7200 空闲时用默认端口做 C# 对照。
