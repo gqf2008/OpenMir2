@@ -237,11 +237,45 @@ impl World {
     /// 进图（对应 `AddMapObject` + 会话绑定的组合）。
     ///
     /// 已进图时返回 `Err`（防重复进图把实体登记两次）。
+    ///
+    /// **搜索基准**：本重载把「`PlayObject` 构造时刻」取为**进图时刻**（`clock_ms`），
+    /// 只用于测试/没有独立构造阶段的调用方；生产登录路径必须用 [`World::enter_map_at`]
+    /// 传入 DB 回包那一刻的构造基准（见下）。
     pub fn enter_map(
+        &mut self,
+        chr_name: &str,
+        entity: Entity,
+        map_id: usize,
+    ) -> Result<i32, SessionError> {
+        let ctor_tick = self.clock_ms;
+        self.enter_map_at(chr_name, entity, map_id, ctor_tick)
+    }
+
+    /// 带 **`PlayObject` 构造基准** 的进图。
+    ///
+    /// oracle 的 `SearchTick` 只在 `PlayObject` ctor 写一次（`src/M2Server/Player/PlayObject.cs:901`：
+    /// `SearchTime = 1000; SearchTick = GetTickCount();`）；`UserLogon`/`AddToMap`/切图**都不重置**
+    /// （全仓 `SearchTick` 写点只有该 ctor 与 `WorldServer.cs:665` 的「命中后再置 now」）。
+    /// 首扫门在 `WorldServer.cs:663-667`：`(now - SearchTick) > SearchTime` ⇒ 先 `SearchTick = now`
+    /// 再 `SearchViewRange()`。⇒ 首个 `SearchViewRange` 的时刻基准 = **对象构造时刻**，
+    /// 与何时落图/进世界无关。
+    ///
+    /// `ctor_tick` = 宿主在「角色记录到达、等价 `new PlayObject()`」那一刻取的 `world.clock_ms`
+    /// （生产调用点：`bins/game-svr/src/lib.rs` 的 `DBR_LOADHUMANRCD` 回包分支）。把基准确立在这里
+    /// （而非 `clock_ms`）使进图语义与搜索时钟解耦：将来若按 T-73 的完整
+    /// `RunNotice`→`CM_LOGINNOTICEOK`→`UserLogon` 等待环把进图推迟，首扫基准仍停在构造时刻。
+    ///
+    /// 确定性：`ctor_tick` 是调用方传入的**单个**整数时钟值；本函数不额外读时钟、不抽 RNG、
+    /// 不改变 tick 内顺序（同一调用点、同一状态迁移）。
+    ///
+    /// 红检：把 `entity.ai.search_tick = ctor_tick` 改回 `self.clock_ms` ⇒
+    /// `first_scan_base_is_playobject_ctor_not_map_entry` 必红。
+    pub fn enter_map_at(
         &mut self,
         chr_name: &str,
         mut entity: Entity,
         map_id: usize,
+        ctor_tick: i64,
     ) -> Result<i32, SessionError> {
         let Some(sess) = self.sessions.get_mut(chr_name) else {
             return Err(SessionError::NoSession);
@@ -259,9 +293,10 @@ impl World {
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：ctor 等价物拿不到 `World` 时钟
         // ⇒ 落图时刻重盖（同 `poisoning_tick` 的口径）。
         entity.verify_tick = self.clock_ms;
-        // `BaseObject.cs:442` / `PlayObject.cs:901` ctor `SearchTick = GetTickCount()`：
-        // 玩家 `SearchViewRange` 的 1000ms 节拍从**构造/进图时刻**起算（同 `verify_tick` 口径）。
-        entity.ai.search_tick = self.clock_ms;
+        // `PlayObject.cs:901` ctor `SearchTick = GetTickCount()`：玩家 `SearchViewRange` 的
+        // 1000ms 节拍从**对象构造时刻**起算（`ctor_tick`，由调用方给出；oracle 的 ctor 早于
+        // `UserLogon`/`AddToMap`，且 `AddToMap` 不重置它）。**不要**改成 `self.clock_ms`。
+        entity.ai.search_tick = ctor_tick;
         // `PlayObject.cs:913` ctor `CheckDupObjTick = GetTickCount()`：重叠推挤的 3s 门从落图时刻起算。
         entity.check_dup_obj_tick = self.clock_ms;
         let id = self.entities.insert(entity);
