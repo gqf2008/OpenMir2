@@ -258,7 +258,7 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
 python -I -B tools/conformance/compare_runs.py selftest
 ```
 
-全离线合成两次运行，**85 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
+全离线合成两次运行，**88 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
 未覆盖 ident ⇒ 2（`--allow-unclassified` 放行）；缺规则表/坏规则/坏 JSON ⇒ 2；
 52 的 40/58 语义比（一致 ⇒ 0、改 hp ⇒ 1）；头部掩码不吞 body 差异；显式剔除后仍能定位真差异；
 10/41 默认参与比较、只有 ident=14（RNG 支）是默认 ignore 且 PENDING 剔帧 ⇒ 2；`--ignore-idents` 可剔除未登记 ident；空运行、两侧都缺头部字段、被掩码字段单侧缺失 ⇒ 2；
@@ -293,7 +293,8 @@ python -I -B tools/conformance/compare_runs.py selftest
   帧形态与收件人由 `downlink::hit_frame` 黄金用例钉死，不靠本规则。
 * `10`（SM_TURN）的 `series` = `MakeWord(Dir, Light)` **整个 word**（对所有 actor 生效），固定 NPC 的
   `Dir` 由随机支 `TurnTo(RandomByte(8))` 改写 ⇒ 掩 `series`，body/param/tag 仍逐字节比。
-  代价：玩家「原地转身」的 Dir 不再逐值比（走位方向仍由 `SM_WALK(11)`/`SM_RUN(12)` 的 `series` 兜）。
+  代价：玩家「原地转身」的 Dir 目前**没有任何帧级判据**（`SM_WALK(11)`/`SM_RUN(13)` 尚未登记规则，出现即 UNCLASSIFIED；
+  要兜底须先登记它们，另开卡）。
 * `530` 的 `mask_body_ranges` 偏移是 **EDCode 线缆空间**不是明文空间（见 rules.json 的映射表）；
   selftest 必须用 `lc.encode` 造线缆字节，否则「掩错位置还全绿」这类缺陷咬不到。
 
