@@ -1,0 +1,154 @@
+{
+  "format": "conformance-rules/1",
+  "note": "双栈对拍默认规则表。每条都带 reason/tier/approved_by；approved_by 以 PENDING 开头的条目尚未经 owner/coordinator 复核，compare_runs.py 会在报告里标 rules_pending_review=true。改规则 = 改判据，必须走评审。",
+  "global": [
+    {
+      "fields": ["recog"],
+      "action": "mask_fields",
+      "reason": "CommandMessage.Recog 多数消息里是会话相关 ActorId（ActorMgr.GetNextIdentity()），两侧必然不同；个别消息（52 的 recog=Gold）在 ident 规则里用 head_compare 单独取回比较",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "fields": ["t_ms"],
+      "action": "mask_fields",
+      "reason": "驱动器墙钟毫秒，两次独立运行不可能相等；它不是协议内容",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "fields": ["conn"],
+      "action": "mask_fields",
+      "reason": "驱动器会话标签（oracle/rust 两侧命名不同），只用于人读；对齐按帧序，不按 conn",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "fields": ["seq"],
+      "action": "mask_fields",
+      "reason": "驱动器本地序号（每侧自增），不是服务端协议字段；帧对齐按文件顺序，seq 不参与判定",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    }
+  ],
+  "rules": [
+    {
+      "ident": [10, 41],
+      "action": "ignore",
+      "reason": "驱动器约定的心跳/保活帧（按任务口径 ident 10/41）：由定时器重复下发，帧数与时刻天然不稳。两侧先各自剔除再对齐；注意协议表里 10=SM_TURN、41=SM_FEATURECHANGED，若真机首跑发现它们承载真实状态变化，本规则必须改成 compare（待 owner 复核）",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 46,
+      "action": "mask_fields",
+      "fields": ["param", "tag"],
+      "reason": "SM_DAYCHANGING 的 param=Bright、tag=DayBright()，由游戏内小时/光照决定（C# PlayObject.Message.cs RM_DAYCHANGING）；两次运行启动时刻不同 ⇒ 小时位不同。body 仍逐字节比",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 50,
+      "action": "mask_fields",
+      "fields": ["series"],
+      "reason": "SM_LOGON 的 series=MakeWord(Dir, Light)，Light 是游戏内光照（墙钟相关，C# PlayObject.cs:1131）；body 与 param/tag 仍比",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 51,
+      "action": "mask_fields",
+      "fields": ["series"],
+      "reason": "SM_NEWMAP 的 series=DayBright()（墙钟相关，C# PlayObject.Message.cs:1681）；body 与 param/tag 仍比",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 52,
+      "action": "ability_layout",
+      "head_compare": ["recog"],
+      "reason": "SM_ABILITY：oracle 40B（Ability.cs 声明序）/ 冻结客户端 58B（record.rs::encode_ability_client）。布局表从 tools/loginfixture/capture_login_compare.py 导入，按 18 个语义字段逐项比。该消息的 recog 是 Gold（不是 ActorId），从全局 recog 掩码里取回逐值比较",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 658,
+      "action": "compare",
+      "reason": "SM_SENDNOTICE 系统公告：body 文本 + 头部全部按规则比（recog 走全局掩码）",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 42,
+      "action": "compare",
+      "reason": "SM_USERNAME：recog=ActorId 走全局掩码；param 颜色码、body 名字逐字节比",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 54,
+      "action": "compare",
+      "reason": "SM_MAPDESCRIPTION 地图描述文本逐字节比",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 5008,
+      "action": "compare",
+      "reason": "SM_GAMEGOLDNAME 元宝名称文本逐字节比",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 1106,
+      "action": "compare",
+      "reason": "SM_VERSION_FAIL 客户端版本校验参数逐项比",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 752,
+      "action": "compare",
+      "reason": "SM_SUBABILITY 子属性 body 逐字节比",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 811,
+      "action": "compare",
+      "reason": "SM_ADJUST_BONUS 3x20B 分段体（frame.rs 的 Segmented 契约）逐字节比；分段解码由驱动器负责，这里比最终 body 字节",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 766,
+      "action": "compare",
+      "reason": "SM_AREASTATE 区域状态 body 逐字节比",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 11029,
+      "action": "compare",
+      "reason": "SM_SERVERCONFIG 服务端配置文本逐字节比",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 213,
+      "action": "compare",
+      "reason": "SM_ATTACKMODE 攻击模式逐项比",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    }
+  ],
+  "db": {
+    "time_mode": "presence",
+    "key_mode": "pk",
+    "ignore_columns": [],
+    "allow_unknown_table": false,
+    "reason": "两次独立运行的墙钟必然不同：时间列默认只比 NULL/非 NULL（presence）。需要逐时刻比时用 --db-time-mode exact/normalized；跨运行自增 Id 不同时用 --db-key-mode multiset --db-ignore-columns Id,PlayerId（只允许已登记易变列/时间列/主键）",
+    "tier": "L",
+    "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+  }
+}
