@@ -225,3 +225,13 @@ python -I -B tools/probe/mir2_probe.py ... --out E:/tmp/conformance/runs/w24-rus
 | 11029 | `SM_SERVERCONFIG` | 登录 |
 
 > 规则表当前只覆盖 23 个 ident，上表里 `14/42/213/213/1106/5008/11029/654` 等多条仍是 UNCLASSIFIED 或靠 `--allow-unclassified` 兜底。
+
+## 14. 背包族当前不可达（05:30–05:33 实测）
+
+- 现有 **22 个 run 里没有任何一条 `SM_BAGITEMS(201)`**。
+- 驱动器自动握手在 `SM_LOGON` 时会发一次 `CM_QUERYBAGITEMS(81)`；C# `PlayObject.Message.cs:785` 对该查询有
+  **30s 节流**。为此写了 `sleep 31s → CM_QUERYBAGITEMS(81) → 等 201` 的临时场景再测：
+  C# 侧 38 帧、**仍无 201**（多出来的帧是 `46 SM_DAYCHANGING` 等）。
+- ⇒ `bag_equip` / `eat_item` / `pickup_item` 三个场景**暂时无法产出证据**；需要先确认 oracle 里背包查询的
+  真实回包号与前置条件（是否必须 NPC 仓库会话 / 是否走 `SM_SENDUSEITEMS(621)` 路径）。
+- 附带观察：本跑 C# 也出现了 `SM_HIT(14)`，与 §12 的「两侧都会发」一致。
