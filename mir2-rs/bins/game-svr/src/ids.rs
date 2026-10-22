@@ -39,7 +39,7 @@ macro_rules! glog_ids {
 
 use std::sync::{Arc, Mutex};
 
-use mir2_protocol::messages::{SS_CLOSESESSION, SS_OPENSESSION};
+use mir2_protocol::messages::{SS_CLOSESESSION, SS_OPENSESSION, SS_SERVERINFO};
 use mir2_shared::hutil32::{arrest_string_ex_ref, get_valid_str3, str_to_int, ArrestWrite};
 
 use crate::auth::AdmissionStore;
@@ -170,22 +170,64 @@ fn get_cancel_admission(body: &str, store: &mut AdmissionStore, kicks: &mut Vec<
     }
 }
 
+/// `AuthenticationService.SendOnlineHumCountMsg`（`:113-116`）的帧体：
+/// `({SS_SERVERINFO}/{ServerName}/{ServerIndex}/{nCount}/{PayMentMode})`
+/// （C# `string.Format("({0}/{1}/{2}/{3}/{4})", …)`，字段全部十进制原样）。
+#[must_use]
+pub fn serverinfo_frame(
+    server_name: &str,
+    server_index: i32,
+    online_count: i32,
+    payment_mode: u8,
+) -> String {
+    format!("({SS_SERVERINFO}/{server_name}/{server_index}/{online_count}/{payment_mode})")
+}
+
+/// 按 **GBK** 写出一条 `(...)` 帧（oracle `SendSocket` = `HUtil32.GetString` 的逆向）。
+async fn write_text(half: &mut tokio::net::tcp::OwnedWriteHalf, text: &str) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let (bytes, _, _) = encoding_rs::GBK.encode(text);
+    half.write_all(&bytes).await?;
+    half.flush().await?;
+    Ok(())
+}
+
 /// 起 IDS 链路（照 `Start()` `:36-54`：连不上**只记日志、不退出进程**）。
 ///
 /// `ev_tx`：把账号级顶号请求（`SS_CLOSESESSION` 删到会话）交给 sim 线程
 /// （`GateEvent::KickAccount` ⇒ `handle_kick_account`）。
+#[allow(clippy::too_many_arguments)]
 pub async fn run_ids_link(
     ids_addr: String,
     ids_port: u16,
     store: Arc<Mutex<AdmissionStore>>,
     ev_tx: std::sync::mpsc::Sender<GateEvent>,
+    server_name: String,
+    server_index: u8,
+    payment_mode: u8,
+    online_count: Arc<std::sync::atomic::AtomicI32>,
+    outbox: &mut tokio::sync::mpsc::UnboundedReceiver<String>,
 ) {
     loop {
         match tokio::net::TcpStream::connect((ids_addr.as_str(), ids_port)).await {
             Ok(sock) => {
                 sock.set_nodelay(true).ok();
                 glog_ids!("INF", "登录服务器[{ids_addr}:{ids_port}]连接成功...");
-                if let Err(e) = read_loop(sock, &store, &ev_tx).await {
+                let (mut read_half, mut write_half) = sock.into_split();
+                // `DataSocketConnect`（`AuthenticationService.cs:420-425`）：**连上即报一次**
+                // （重连同样走这里 ⇒ 断线重连后自动重报，oracle 同形）。
+                let frame = serverinfo_frame(
+                    &server_name,
+                    i32::from(server_index),
+                    online_count.load(std::sync::atomic::Ordering::SeqCst),
+                    payment_mode,
+                );
+                if let Err(e) = write_text(&mut write_half, &frame).await {
+                    glog_ids!("ERR", "登录服务器链路：上报 SS_SERVERINFO 失败（{e:#}）");
+                }
+                if let Err(e) =
+                    read_loop(&mut read_half, &mut write_half, &store, &ev_tx, outbox).await
+                {
                     glog_ids!("ERR", "登录服务器链路结束：{e:#}");
                 }
                 // `DataSocketDisconnect`（`:427-436`）：**清空整张准入表** + 记错误
@@ -202,16 +244,27 @@ pub async fn run_ids_link(
 
 /// 收字节 → GBK 文本 → 累积 → 分帧分派。返回 `Err` 表示链路断了（或读失败）。
 async fn read_loop(
-    mut sock: tokio::net::TcpStream,
+    read_half: &mut tokio::net::tcp::OwnedReadHalf,
+    write_half: &mut tokio::net::tcp::OwnedWriteHalf,
     store: &Arc<Mutex<AdmissionStore>>,
     ev_tx: &std::sync::mpsc::Sender<GateEvent>,
+    outbox: &mut tokio::sync::mpsc::UnboundedReceiver<String>,
 ) -> anyhow::Result<()> {
     use tokio::io::AsyncReadExt;
     let mut buf = Vec::with_capacity(4096);
     let mut text = String::new();
     loop {
         buf.resize(4096, 0);
-        let n = sock.read(&mut buf).await?;
+        // 读与「sim 线程投递的上报帧」二选一：上报不阻塞收包。
+        let n = tokio::select! {
+            r = read_half.read(&mut buf) => r?,
+            frame = outbox.recv() => {
+                if let Some(frame) = frame {
+                    write_text(write_half, &frame).await?;
+                }
+                continue;
+            }
+        };
         if n == 0 {
             return Ok(());
         }
@@ -317,5 +370,30 @@ mod tests {
         let mut garbage = "abc".to_string();
         assert_eq!(drain_messages(&mut garbage, &mut store).handled, 0);
         assert!(garbage.is_empty(), "照 oracle 会丢干净");
+    }
+}
+
+#[cfg(test)]
+mod serverinfo_tests {
+    use super::serverinfo_frame;
+
+    /// 帧体逐字节钉住：`(103/热血传奇/0/3/0)`，与 oracle
+    /// `string.Format("({0}/{1}/{2}/{3}/{4})", SS_SERVERINFO, ServerName, ServerIndex, nCount, PayMentMode)`
+    /// 同形（字段间 `/`、首尾圆括号、整数十进制）。
+    #[test]
+    fn serverinfo_frame_matches_oracle_format() {
+        assert_eq!(
+            serverinfo_frame("热血传奇", 0, 3, 0),
+            "(103/热血传奇/0/3/0)"
+        );
+        assert_eq!(serverinfo_frame("SKY引擎", 7, 0, 3), "(103/SKY引擎/7/0/3)");
+    }
+
+    /// 牙：把分隔符 `/` 改成别的、或漏掉括号，本用例立刻红。
+    #[test]
+    fn serverinfo_frame_has_brackets_and_slashes() {
+        let f = serverinfo_frame("a", 1, 2, 3);
+        assert!(f.starts_with('(') && f.ends_with(')'));
+        assert_eq!(f.matches('/').count(), 4);
     }
 }

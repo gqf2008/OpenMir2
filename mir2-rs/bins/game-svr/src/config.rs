@@ -29,6 +29,10 @@ pub struct GateConfig {
     ///
     /// oracle 是 `byte`（`SystemShare.ServerIndex`，`SystemShare.cs:45`）⇒ 越界/非整数报错。
     pub server_index: u8,
+    /// `[Server] PayMentMode`（`ServerConf.cs:22` 的 `ReadWriteByte("Server","PayMentMode",0)`；
+    /// `GameSvrConf.cs:48` 缺省 0）——`SS_SERVERINFO` 上报的第 5 段
+    /// （`AuthenticationService.cs:113-116`）。现网 `Server.conf` 无该键 ⇒ 0。
+    pub payment_mode: u8,
     /// `[Setup] PasswordLockHumanLogin`（`ServerConf.cs:574`；`GameSvrConf.cs:1493` 缺省 false，
     /// 部署 `Server.conf:386` = 0）：`@LockLogin` 的第一道门。
     pub lock_human_login: bool,
@@ -378,6 +382,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut gate_port: Option<u16> = None;
     let mut check_block: Option<usize> = None;
     let mut server_index: Option<u8> = None;
+    let mut payment_mode: Option<u8> = None;
     let mut lock_human_login: Option<bool> = None;
     let mut test_server: Option<bool> = None;
     let mut service_mode: Option<bool> = None;
@@ -559,6 +564,15 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 "TESTSERVER" => test_server = Some(v.eq_ignore_ascii_case("TRUE")),
                 "SERVICEMODE" => service_mode = Some(v == "TRUE"),
                 "WORLDMAPS" => maps = Some(parse_maps(v)?),
+                // `ServerConf.cs:22`：`ReadWriteByte` —— 键存在但值为空串时同缺省（0）。
+                "PAYMENTMODE" => {
+                    payment_mode = Some(if v.is_empty() {
+                        0
+                    } else {
+                        v.parse()
+                            .with_context(|| format!("PayMentMode 不是合法字节：{v:?}"))?
+                    });
+                }
                 "SERVERNAME" => server_name = Some(v.to_string()),
                 "IDSADDR" => ids_addr = Some(v.to_string()),
                 "DBADDR" => db_addr = Some(v.to_string()),
@@ -1079,6 +1093,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         check_block,
         // oracle 缺省值（`SystemShare.cs:45` 的 `ServerIndex = 0`）：缺键不算错。
         server_index: server_index.unwrap_or(0),
+        // oracle 缺省 0（`GameSvrConf.cs:48` 的 byte 字段缺省）：缺键不算错。
+        payment_mode: payment_mode.unwrap_or(0),
         // oracle 缺省 `false`（`GameSvrConf.cs:1493`）：缺键不算错。
         lock_human_login: lock_human_login.unwrap_or(false),
         maps,

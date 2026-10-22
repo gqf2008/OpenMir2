@@ -1017,6 +1017,17 @@ async fn run_inner(args: &[String]) -> Result<()> {
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
     let (shutdown_done_tx, mut shutdown_done_rx) =
         tokio::sync::mpsc::unbounded_channel::<ShutdownSaveSummary>();
+    // **SS_SERVERINFO 上报**（`AuthenticationService.cs:113-116` + `SystemProcessor.cs:60-71`）：
+    // 连上 IDS 时由 ids 链路报一次（`DataSocketConnect`），之后由 sim 线程按
+    // `GetTickCount()-SendOnlineHumTime > 10000` 的严格门投递给 ids 链路发出。
+    // `online_count` 由 sim 线程每 tick 写（`WorldEngine.OnlinePlayObject` 的等价物）。
+    let ids_online = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+    let (ids_out_tx, ids_out_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    // 进 sim 线程的句柄（move 闭包内 clone 会连原值一起 move 走，故先在闭包外克隆）。
+    let sim_ids_online = std::sync::Arc::clone(&ids_online);
+    let sim_ids_out = ids_out_tx.clone();
+    let ids_server_name = cfg.server_name.clone();
+    let ids_server_index = cfg.server_index;
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -1203,6 +1214,9 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 shutdown_rx,
                 shutdown_done_tx,
                 Some(db),
+                sim_ids_online,
+                sim_ids_out,
+                cfg.payment_mode,
             )
         })
         .context("起 sim 线程失败")?;
@@ -1232,7 +1246,23 @@ async fn run_inner(args: &[String]) -> Result<()> {
         let ids_addr = cfg.ids_addr.clone();
         let ids_port = cfg.ids_port;
         let kick_tx = ev_tx.clone();
-        tokio::spawn(async move { ids::run_ids_link(ids_addr, ids_port, store, kick_tx).await });
+        let ids_payment_mode = cfg.payment_mode;
+        let ids_count = std::sync::Arc::clone(&ids_online);
+        tokio::spawn(async move {
+            let mut outbox = ids_out_rx;
+            ids::run_ids_link(
+                ids_addr,
+                ids_port,
+                store,
+                kick_tx,
+                ids_server_name,
+                ids_server_index,
+                ids_payment_mode,
+                ids_count,
+                &mut outbox,
+            )
+            .await;
+        });
     }
 
     let listener = TcpListener::bind((cfg.gate_addr.as_str(), cfg.gate_port))
@@ -16865,6 +16895,9 @@ fn sim_loop(
     shutdown_rx: std::sync::mpsc::Receiver<()>,
     shutdown_done_tx: tokio::sync::mpsc::UnboundedSender<ShutdownSaveSummary>,
     mut db: Option<DbWiring>,
+    ids_online: std::sync::Arc<std::sync::atomic::AtomicI32>,
+    ids_out: tokio::sync::mpsc::UnboundedSender<String>,
+    payment_mode: u8,
 ) {
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
@@ -16898,6 +16931,9 @@ fn sim_loop(
     // （严格 `>`，间隔 = `[Setup] ConsoleShowUserCountTime`，缺省 600000ms）与
     // `ProcessGameRun` 的 10s 门**各自独立**；基准都由 `CastleHostGates::new` 同刻起算。
     let mut castle_gates = game_svr::castle::CastleHostGates::new(world.clock_ms);
+    // `SystemProcessor.ShowOnline` 的 `SendOnlineHumTime`（`SystemProcessor.cs:66-71`）：与
+    // `RunTimeTick`（10s）**各自独立**的另一个 10s 门；从 0 起算（oracle 字段缺省 0）。
+    let mut send_online_hum_tick: i64 = 0;
     let mut castle_store: Option<game_svr::castle::CastleStore> = None;
     // 每个在线玩家的 `InGuildWarArea` / `NameColorChanged` / `DiscountForNightTick`
     // （oracle `PlayObject` 会话位；本仓按 actor id 侧挂，生命周期随在线表清理）。
@@ -19530,6 +19566,27 @@ fn sim_loop(
         // `CastleMgr.Save()`（`SaveCastleList` → 升序逐城 `SaveConfig` → `SaveAttackSabukWall`）。
         // 与下面 10s 的 `ProcessGameRun` 门**独立**；oracle 在同一 tick 里先 ShowOnline 后
         // ProcessGameRun ⇒ 本块放在 10s 块之前。
+        // `WorldEngine.OnlinePlayObject`（`WorldServer.cs:98/190-193` = `PlayObjectList.Count`）：
+        // 本仓等价 = 在线玩家实体数（`race == Play` 且非 Ghost）。
+        let online_play_objects = world
+            .entities
+            .iter()
+            .filter(|e| e.race == mir2_world::ACTOR_RACE_PLAY && !e.ghost)
+            .count() as i32;
+        ids_online.store(online_play_objects, std::sync::atomic::Ordering::SeqCst);
+        // `SystemProcessor.ShowOnline`（`:60-71`）：严格 `>`，到点上报一次。
+        if world.clock_ms - send_online_hum_tick > 10_000 {
+            send_online_hum_tick = world.clock_ms;
+            let frame = game_svr::ids::serverinfo_frame(
+                &enter_cfg.server_name,
+                i32::from(enter_cfg.server_index),
+                online_play_objects,
+                payment_mode,
+            );
+            if ids_out.send(frame).is_err() {
+                glog!("WRN", "IDS 上报通道已关闭，SS_SERVERINFO 丢弃");
+            }
+        }
         let castle_due = castle_gates.tick(world.clock_ms, enter_cfg.console_show_user_count_time);
         if let Some(store) = castle_store.as_ref() {
             if castle_due.save {
