@@ -855,4 +855,22 @@ mod tests {
         assert_eq!(ServerStatus::Busy.name(), "Busy");
         assert_eq!(ServerStatus::Full.name(), "Full");
     }
+
+    /// 在线判定必须是**序数精确相等**（C# `string ==` → `StringComparison.Ordinal`）：
+    /// 大小写变体、前缀/子串、后缀扩展都不算同一个名字。
+    ///
+    /// 牙：把 `==` 换成 `eq_ignore_ascii_case` 或 `starts_with`/`contains`，本用例立刻红。
+    #[test]
+    fn is_server_online_requires_exact_ordinal_match() {
+        let both = vec![srv("legendofmir2", 1), srv("热血传奇", 0)];
+        assert!(is_server_online(&both, "legendofmir2"));
+        assert!(is_server_online(&both, "热血传奇"));
+        // 大小写变体
+        assert!(!is_server_online(&both, "LegendOfMir2"));
+        assert!(!is_server_online(&both, "LEGENDOFMIR2"));
+        // 前缀 / 子串 / 后缀扩展
+        assert!(!is_server_online(&both, "legend"));
+        assert!(!is_server_online(&both, "热血"));
+        assert!(!is_server_online(&both, "热血传奇2"));
+    }
 }
