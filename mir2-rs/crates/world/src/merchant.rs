@@ -909,21 +909,29 @@ fn item_name_at(catalog: &[StdItem], index: u16) -> Option<&str> {
     std_item_at(catalog, index).map(|t| t.name.as_str())
 }
 
-/// `HUtil32.HiWord`（`ushort` 高字节）。
-fn hi_word(v: u16) -> i32 {
-    i32::from(v >> 8)
+/// `HUtil32.MakeWord(ushort low, ushort high)`（`HUtil32.cs:66-69`）：`low | (high << 8)`。
+const fn make_word(low: u16, high: u16) -> u16 {
+    low | (high << 8)
 }
 
-/// `HUtil32.LoWord`（`ushort` 低字节）。
-fn lo_word(v: u16) -> i32 {
-    i32::from(v & 0xFF)
+/// `GetUpgradeStdItem` 的 `_MIN` 口径（`GameItemSystem.cs:892-1069`）：
+/// `MakeWord(LoByte(word), _MIN(255, HiByte(word) + desc))`——**只夹高字节**，低字节原样。
+fn add_hi_word(word: u16, add: u8) -> u16 {
+    let hi = (i32::from(((word >> 8) & 0xFF) as u8) + i32::from(add)).min(255) as u16;
+    make_word(word & 0xFF, hi)
 }
 
 /// `Merchant.UpgradeWaponAddValue`（`Merchant.cs:373-525`）——**零 RNG**。
 ///
 /// 倒序扫描背包：吃掉**全部**黑铁矿（名 **精确 `==`** `Config.BlackStone`）与**全部**首饰
-/// （`IsAccessory`）。首饰按 `GetUpgradeStdItem` 的恒等口径（T-24 残余：desc 升级差量未建模）
-/// 取模板 `DC/SC/MC` 的 `HiWord+LoWord`（StdMode 24/26 再 +1），维护逐项最大/次大。
+/// （`IsAccessory`）。首饰先走 `GetUpgradeStdItem`（`GameItemSystem.cs:731+`）的 **DC/SC/MC
+/// 差量**——四族（19..=24 / 26）同形 `MakeWord(LoByte(std.X), _MIN(255, HiByte(std.X) +
+/// Desc[2/3/4]))`，再取 `HiWord+LoWord`（StdMode 24/26 再 +1），维护逐项最大/次大。
+///
+/// **口径（易错）**：incoming 是 `ClientStdItem.DC/SC/MC`（`ushort`）⇒ C# 重载解析
+/// `HiWord(ushort)` = `(ushort)(v >> 16)` **恒 0**、`LoWord` 选 `LoWord(int)` = `(ushort)v`
+/// ⇒ `HiWord+LoWord` = **整 16 位字值**，不是「高字节+低字节」。见
+/// `docs/HUtil32-parity-inventory-20261020.md:119` 与 `monai.rs` 的同一结论。
 ///
 /// 收尾是 oracle 的**畸形「整体反转」置换**（不是排序）：`for i { for j=len-1..i+1 { if
 /// dura[j]>dura[j-1] { duras.Reverse() } } }`；`Dura` 只累置换后的**前 5 项**。
@@ -942,9 +950,9 @@ fn upgrade_wapon_add_value(
     let mut i = item_list.len();
     while i > 0 {
         i -= 1;
-        let (index, make_index, dura) = {
+        let (index, make_index, dura, desc) = {
             let it = &item_list[i];
-            (it.index, it.make_index, it.dura)
+            (it.index, it.make_index, it.dura, it.desc)
         };
         // `GetStdItemName(userItem.Index) == Config.BlackStone`：C# `==` 是**区分大小写**的序数比较。
         if item_name_at(catalog, index) == Some(black_stone) {
@@ -960,19 +968,24 @@ fn upgrade_wapon_add_value(
         if !is_accessory_std_mode(tpl.std_mode) {
             continue;
         }
-        // `GetUpgradeStdItem(stdItem, userItem, ref clientItem)` 的恒等口径（T-24 残余）：
-        // 直接用模板的 DC/SC/MC；`ClientItem.Item.StdMode` = 模板 StdMode。
+        // `GetUpgradeStdItem(stdItem, userItem, ref clientItem)`（`GameItemSystem.cs:731+`）：
+        // 首饰四族 19..=24 / 26 的 DC/MC/SC **同形**取 `Desc[2]/[3]/[4]` 加高字节并夹 255；
+        // `CopyItemToClientItem` 不改 `StdMode` ⇒ switch 仍走模板值（`Merchant.cs:421`）。
+        let dc_word = add_hi_word(tpl.dc, desc[2]);
+        let sc_word = add_hi_word(tpl.sc, desc[4]);
+        let mc_word = add_hi_word(tpl.mc, desc[3]);
+        // `HiWord(ushort)` 恒 0 + `LoWord` 取整 16 位（见函数文档）⇒ `n = 字值`。
         let (mut n_dc, mut n_sc, mut n_mc) = (0i32, 0i32, 0i32);
         match tpl.std_mode {
             19..=23 => {
-                n_dc = hi_word(tpl.dc) + lo_word(tpl.dc);
-                n_sc = hi_word(tpl.sc) + lo_word(tpl.sc);
-                n_mc = hi_word(tpl.mc) + lo_word(tpl.mc);
+                n_dc = i32::from(dc_word);
+                n_sc = i32::from(sc_word);
+                n_mc = i32::from(mc_word);
             }
             24 | 26 => {
-                n_dc = hi_word(tpl.dc) + lo_word(tpl.dc) + 1;
-                n_sc = hi_word(tpl.sc) + lo_word(tpl.sc) + 1;
-                n_mc = hi_word(tpl.mc) + lo_word(tpl.mc) + 1;
+                n_dc = i32::from(dc_word) + 1;
+                n_sc = i32::from(sc_word) + 1;
+                n_mc = i32::from(mc_word) + 1;
             }
             _ => {}
         }
@@ -2737,6 +2750,84 @@ mod tests {
                 dura_max: 20000,
                 ..StdItem::default()
             },
+            // ↓ 6..=14 只服务 W1-W8 的数值向量（`GetUpgradeStdItem` 差量 / 夹 255 / 截断）。
+            // Index 6：StdMode 19，`DC=0x0003`、`MC=0x0002`、`SC=0x0001`（W1 小值，免截断）。
+            StdItem {
+                name: "19饰".to_string(),
+                std_mode: 19,
+                dc: 0x0003,
+                mc: 0x0002,
+                sc: 0x0001,
+                ..StdItem::default()
+            },
+            // Index 7：StdMode 20，`DC=0x0002`、`MC=0x0003`、`SC=0x0001`（W8 的 MC/SC 差量）。
+            StdItem {
+                name: "20饰".to_string(),
+                std_mode: 20,
+                dc: 0x0002,
+                mc: 0x0003,
+                sc: 0x0001,
+                ..StdItem::default()
+            },
+            // Index 8：StdMode 21，`DC=0x0005`、`MC=0x0004`、`SC=0x0003`（W8 次大值）。
+            StdItem {
+                name: "21饰".to_string(),
+                std_mode: 21,
+                dc: 0x0005,
+                mc: 0x0004,
+                sc: 0x0003,
+                ..StdItem::default()
+            },
+            // Index 9：StdMode 22，`DC=0x000A`(10)、`MC=0x0009`(9)、`SC=0x0007`(7)。
+            StdItem {
+                name: "22饰".to_string(),
+                std_mode: 22,
+                dc: 0x000A,
+                mc: 0x0009,
+                sc: 0x0007,
+                ..StdItem::default()
+            },
+            // Index 10：StdMode 23，`DC=0x0003`、`MC=0x0008`、`SC=0x0006`（W2 差值项）。
+            StdItem {
+                name: "23饰".to_string(),
+                std_mode: 23,
+                dc: 0x0003,
+                mc: 0x0008,
+                sc: 0x0006,
+                ..StdItem::default()
+            },
+            // Index 11：StdMode 26，`DC=0x0001`、`MC=0x0002`、`SC=0x0005`（W3 小值项）。
+            StdItem {
+                name: "26饰".to_string(),
+                std_mode: 26,
+                dc: 0x0001,
+                mc: 0x0002,
+                sc: 0x0005,
+                ..StdItem::default()
+            },
+            // Index 12：StdMode 19，`DC=0xFF07`——`Desc[2]=100` 必须夹 255、不得回绕。
+            StdItem {
+                name: "19满".to_string(),
+                std_mode: 19,
+                dc: 0xFF07,
+                ..StdItem::default()
+            },
+            // Index 13：StdMode 24，`DC=0x0004`、`MC=0x0008`、`SC=0x0006`（W3 差值 +1 项）。
+            StdItem {
+                name: "24饰".to_string(),
+                std_mode: 24,
+                dc: 0x0004,
+                mc: 0x0008,
+                sc: 0x0006,
+                ..StdItem::default()
+            },
+            // Index 14：StdMode 26，`DC=0xFFFF`（65535）+1 ⇒ 65536；两件 ⇒ 34952 ⇒ (byte)136。
+            StdItem {
+                name: "26满".to_string(),
+                std_mode: 26,
+                dc: 0xFFFF,
+                ..StdItem::default()
+            },
         ]
     }
 
@@ -2817,6 +2908,29 @@ mod tests {
         }
     }
 
+    /// 带 `Desc` 差量的首饰（W1-W8 向量用）。
+    fn accessory_desc(index: u16, make_index: i32, desc: [u8; 14]) -> MerchantItem {
+        MerchantItem {
+            make_index,
+            index,
+            dura: 1000,
+            dura_max: 1000,
+            desc,
+        }
+    }
+
+    /// `UpgradeWaponAddValue` 是**零 RNG**：升级前后世界流水位置必须一致。
+    fn assert_rng_untouched(w: &mut World, before: &RandomNumber) {
+        let mut probe = before.clone();
+        for k in 0..3 {
+            assert_eq!(
+                w.rng.random(),
+                probe.random(),
+                "第 {k} 个后续抽必须与升级前同位置"
+            );
+        }
+    }
+
     fn info_with(dc: u8, mc: u8, sc: u8, dura: u8, get_back_tick: i64) -> WeaponUpgradeInfo {
         WeaponUpgradeInfo {
             user_name: "hero".to_string(),
@@ -2890,10 +3004,13 @@ mod tests {
         let blacks: Vec<(String, i32)> =
             (10..=14).rev().map(|m| ("黑铁矿".to_string(), m)).collect();
         assert_eq!(&res.deleted[2..], &blacks[..], "黑铁按背包倒序");
-        // 手算：`Dc = nDcMin/5 + nDcMax/3 = 4/5 + 3/3 = 1`；`Sc = 3/5 + 0/3 = 0`；
+        // 手算（口径：`HiWord(ushort)==0`、`LoWord`=整 16 位 ⇒ n=字值；24/26 再 +1）：
+        // 戒指(21, StdMode24) `DC=0x0102`⇒259、`SC=0x0200`⇒513、`MC`⇒1；
+        // 项链(20, StdMode22) `DC=0x0201`⇒513、`SC/MC`⇒0。
+        // `Dc = 513/5 + 259/3 = 102+86 = 188`；`Sc = 513/5 + 0/3 = 102`；`Mc = 1/5 = 0`；
         // 5×黑铁 5000 ⇒ 每项 5，`Dura = round(5 + 5*(25/5/5.0)) = 10`。
         let info = &res.info;
-        assert_eq!((info.dc, info.sc, info.mc, info.dura), (1, 0, 0, 10));
+        assert_eq!((info.dc, info.sc, info.mc, info.dura), (188, 102, 0, 10));
         assert_eq!(info.user_item, weapon, "UserItem 四字段拷贝");
         assert_eq!(info.user_name, "hero");
         assert_eq!(info.get_back_tick, w.clock_ms);
@@ -2937,6 +3054,237 @@ mod tests {
         );
         assert_eq!(res.deleted.len(), 6, "全部黑铁被吃（不只 5 件）");
         assert!(bag.is_empty());
+    }
+
+    /// **W1**：StdMode 19 —— `Desc[2]/[3]/[4]` 只加**高字节**，`n` 取整 16 位字值。
+    /// 模板 `DC=0x0003/MC=0x0002/SC=0x0001`，desc `[2]/[3]/[4]=2/1/3`
+    /// ⇒ DC=0x0203=515、MC=0x0102=258、SC=0x0301=769
+    /// ⇒ `Dc=515/5=103`、`Mc=258/5=51`、`Sc=769/5=153`；1x1000 黑铁 ⇒ Dura=1。
+    #[test]
+    fn w1_add_value_mode19_desc_high_byte_delta() {
+        let (mut w, mid) = upgrade_world(101);
+        let weapon = weapon_at(4);
+        let mut d = [0u8; 14];
+        d[2] = 2;
+        d[3] = 1;
+        d[4] = 3;
+        let mut bag = vec![accessory_desc(6, 60, d), black_stone(1000, 61)];
+        let mut gold = 10_000;
+        let before = w.rng.clone();
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (103, 153, 51, 1));
+        assert_eq!(
+            res.deleted,
+            vec![("黑铁矿".to_string(), 61), ("19饰".to_string(), 60)],
+        );
+        assert!(bag.is_empty());
+        assert_rng_untouched(&mut w, &before);
+    }
+
+    /// **W2**：StdMode 22 + 23 —— 最大/次大**逐项独立**。
+    /// 23 饰 `DC=0x0003` + `Desc[2]=1` ⇒ 0x0103=259；22 饰 `DC=10`。
+    /// ⇒ Dc=`259/5+10/3=51+3=54`；Mc=9/5+8/3=1+2=3；Sc=7/5+6/3=1+2=3。
+    /// 黑铁 2000/3000/5000 ⇒ 置换后 [5,3,2]，`Dura=round(3+3*(10/3/5.0))=5`。
+    #[test]
+    fn w2_add_value_two_accessories_max_and_second_max() {
+        let (mut w, mid) = upgrade_world(102);
+        let weapon = weapon_at(4);
+        let mut d = [0u8; 14];
+        d[2] = 1;
+        let mut bag = vec![
+            accessory(9, 90),
+            accessory_desc(10, 91, d),
+            black_stone(5000, 92),
+            black_stone(3000, 93),
+            black_stone(2000, 94),
+        ];
+        let mut gold = 10_000;
+        let before = w.rng.clone();
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (54, 3, 3, 5));
+        assert!(bag.is_empty());
+        assert_rng_untouched(&mut w, &before);
+    }
+
+    /// **W3**：StdMode 24/26 的 `+1` 在**差量之后**才加。
+    /// 24 饰 `DC=MakeWord(4,5)`=1284+1=1285、`MC=1288+1=1289`、`SC=1286+1=1287`；
+    /// 26 饰 `DC=1+1=2`、`MC=2+1=3`、`SC=5+1=6`
+    /// ⇒ Dc=`1285/5+2/3=257+0=257`⇒(byte)1、Mc=257+1=258⇒2、Sc=257+2=259⇒3。
+    #[test]
+    fn w3_add_value_mode24_26_plus_one_after_delta() {
+        let (mut w, mid) = upgrade_world(103);
+        let weapon = weapon_at(4);
+        let mut d = [0u8; 14];
+        d[2] = 5;
+        d[3] = 5;
+        d[4] = 5;
+        let mut bag = vec![
+            accessory_desc(13, 130, d),
+            accessory(11, 131),
+            black_stone(5000, 132),
+        ];
+        let mut gold = 10_000;
+        let before = w.rng.clone();
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (1, 3, 2, 2));
+        assert_rng_untouched(&mut w, &before);
+    }
+
+    /// **W4**：`_MIN(255, HiByte+Desc)` **只夹高字节**：`DC=0xFF07` + `Desc[2]=100`
+    /// ⇒ 高字节夹 255（不是 `(255+100) as u8 = 99`）⇒ `n=65287`、`Dc=65287/5=13057`⇒(byte)1。
+    #[test]
+    fn w4_add_value_high_byte_clamped_at_255() {
+        let (mut w, mid) = upgrade_world(104);
+        let weapon = weapon_at(4);
+        let mut d = [0u8; 14];
+        d[2] = 100;
+        let mut bag = vec![accessory_desc(12, 120, d), black_stone(0, 121)];
+        let mut gold = 10_000;
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (1, 0, 0, 1));
+    }
+
+    /// **W5**：`(byte)` **截断**（C# unchecked）：StdMode 26 + `DC=0xFFFF` ⇒ `n=65536`；
+    /// 两件 ⇒ `65536/5+65536/3=34952` ⇒ `(byte)34952 = 136`（不是 255 饱和）。
+    #[test]
+    fn w5_add_value_byte_cast_truncates_34952_to_136() {
+        let (mut w, mid) = upgrade_world(105);
+        let weapon = weapon_at(4);
+        let mut bag = vec![
+            accessory(14, 140),
+            accessory(14, 141),
+            black_stone(5000, 142),
+        ];
+        let mut gold = 10_000;
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (136, 0, 0, 2));
+    }
+
+    /// **W6**：只有黑铁（无首饰）⇒ `Dc/Sc/Mc=0`；6 件 `[1..6]x1000` 倒序即降序、
+    /// 不触发整体反转 ⇒ 前 5 项和 20、`n=5` ⇒ `Dura=round(5+5*(20/5/5.0))=9`。
+    #[test]
+    fn w6_add_value_black_stone_only_caps_at_five() {
+        let (mut w, mid) = upgrade_world(106);
+        let weapon = weapon_at(4);
+        let mut bag: Vec<MerchantItem> = (1u16..=6)
+            .map(|k| black_stone(k * 1000, 400 + i32::from(k)))
+            .collect();
+        let mut gold = 10_000;
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (0, 0, 0, 9));
+        assert_eq!(res.deleted.len(), 6, "6 件黑铁全部被吃");
+        assert!(bag.is_empty());
+    }
+
+    /// **W7**：黑铁每项 `Math.Round(Dura/1000.0)` 用**银行家舍入**：Dura=2500 ⇒ 2（不是 3）
+    /// ⇒ `Dura=round(1+1*(2/1/5.0))=round(1.4)=1`。
+    #[test]
+    fn w7_add_value_black_stone_bankers_rounding() {
+        let (mut w, mid) = upgrade_world(107);
+        let weapon = weapon_at(4);
+        let mut bag = vec![black_stone(2500, 250)];
+        let mut gold = 10_000;
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        assert_eq!(res.info.dura, 1);
+    }
+
+    /// **W8**：StdMode 20 的 `Desc[3]→MC`、`Desc[4]→SC` 字段映射（对调即红）。
+    /// 20 饰 desc `[3]=2,[4]=3` ⇒ MC=0x0203=515、SC=0x0301=769；21 饰 MC=4、SC=3；
+    /// ⇒ Dc=`5/5=1`、Mc=`515/5+4/3=103+1=104`、Sc=`769/5+3/3=153+1=154`。
+    #[test]
+    fn w8_add_value_mode20_mc_sc_desc_fields() {
+        let (mut w, mid) = upgrade_world(108);
+        let weapon = weapon_at(4);
+        let mut d = [0u8; 14];
+        d[3] = 2;
+        d[4] = 3;
+        let mut bag = vec![
+            accessory_desc(7, 70, d),
+            accessory(8, 71),
+            black_stone(1000, 72),
+        ];
+        let mut gold = 10_000;
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (1, 154, 104, 1));
     }
 
     /// **C3**：提交门控顺序——
