@@ -252,3 +252,21 @@ python -I -B tools/probe/mir2_probe.py ... --out E:/tmp/conformance/runs/w24-rus
 | `openmir2-gm-commands-design` | `CM_SAY` 两侧均无回包 | 受阻（需确认回包号/前置） |
 
 前 7 张卡的证据已可直接引用；后三组需要 Leader 回口径（`5511ea0d` gm、`25220260` bag、`2840f903` dice）。
+
+## 16. 庄家菜单选择：四种组合都不回第二条 643（05:36–05:45）
+
+部署脚本本身（`Market_Def/赌博NPC/赌场-B013.txt`，两侧 root 都有）里 `[@kaiz]` **没有 `#if`/`#act`，是直接 say**，
+所以正常情况下选完应立刻收到第二条 `SM_MERCHANTSAY(643)`。实测：
+
+| 组合 | 等待 | 结果 |
+|---|---:|---|
+| `@kaiz` | 3s / 30s | 无 643 |
+| `kaiz`（去 `@`） | 30s | 无 643 |
+| `@chouma` | 8s / 15s | 无 643（仅一次 8s 后 drain 拿到过一条，且伴随 14） |
+| Rust `@kaiz` | 3s | 无 643 |
+
+多次跑后面都跟着 `10`/`41`（NPC 转身）却始终没有第二条 643 ⇒ **不是等待时长问题，是选择没有被脚本引擎接受**。
+可能方向（需 oracle 侧确认）：① 客户端应发的 label 是否要带 `@`（两种都试过）② NPC 会话是否受 `Npc_Def` 装载影响
+（见卡 `openmir2-npc-def-loading`）③ EDCode 编码后的 label 在服务端解码后是否与脚本标签完全一致。
+
+结论：庄家族（`openmir2-openybdeal-host-wiring`）在弄清 label 语义前**无法产出证据**。
