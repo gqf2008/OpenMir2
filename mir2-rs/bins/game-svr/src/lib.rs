@@ -4793,6 +4793,7 @@ fn handle_shop_cmd(
                 chr_name,
                 &map_text,
                 catalog,
+                item_number,
                 npc_vars,
                 session,
                 sell_off_sessions.entry(chr_name.to_string()).or_default(),
@@ -4837,6 +4838,7 @@ fn handle_shop_cmd(
                     chr_name,
                     &map_text,
                     catalog,
+                    item_number,
                     npc_vars,
                     session,
                     sell_off_sessions.entry(chr_name.to_string()).or_default(),
@@ -5237,6 +5239,7 @@ fn handle_shop_cmd(
                     chr_name,
                     &map_text,
                     catalog,
+                    item_number,
                     npc_vars,
                     session,
                     sell_off_sessions.entry(chr_name.to_string()).or_default(),
@@ -5603,6 +5606,124 @@ fn write_back_player_gold_deal(
     sell_off.sale_deal = p.sale_deal;
     session.play_dice_label = p.play_dice_label.clone();
     sg.game_gold = p.game_gold;
+    // `GotoLableTakeItem`/`GotoLableGiveItem` 的金币支（`ScriptEngine.cs:657-660/694-697`）走
+    // `DecGold`/`IncGold`，改的是同一个 `PlayObject.Gold`（`MakeSaveRcd` 读它落库）；本仓
+    // `NpcPlayer.gold` 是快照 ⇒ 与 `GameGold` 同一位置回写（`take 金币` / `GIVE 金币`）。
+    sg.state.gold = p.gold;
+}
+
+/// 脚本跑完把 `NpcPlayer.items` 的**净变化**对账回会话背包 `sg.state.item_list`
+/// （oracle 的 `GotoLableTakeItem`/`GotoLableGiveItem` 直接改 `PlayObject.ItemList`，
+/// 存档 `MakeSaveRcd` 再逐件写回；见 `ScriptEngine.cs:653-745`）。
+///
+/// `before` = 脚本跑前的逐件快照。按**模板名计数差**对账（`OrdinalIgnoreCase`）：
+/// - **少掉的件数**：照 `GotoLableTakeItem`（`:667` 的 `for (i = Count - 1; i >= 0; i--)`）
+///   **从尾往前**逐件摘——同名多件时摘的是最后几件，`MakeIndex/Dura` 才与 oracle 一致；
+/// - **多出的件数**：照 `GotoLableGiveItem`（`:710`）逐件 `CopyToUserItemFromName`：
+///   `Index` 按名查表（最小 Index）、`Dura = DuraMax = tpl.DuraMax`、
+///   `MakeIndex = M2Share.GetItemNumber()`；`IsEnoughBag()`（`Count < MaxBagItem(46)`，
+///   `PlayObject.Base.cs:183`）不满足 ⇒ 余件不入包。
+///
+/// 返回未落地的项（模板缺失/背包满）供调用方记 WRN。**不编造 `MakeIndex`**：没有目录名命中
+/// 就不入包（`bag_items_for_save` 会把 `MakeIndex<=0` 的件在 DBSvr 侧整行跳过）。
+///
+/// **登记**：`SendDelItems`/`SendAddItem`（`ScriptEngine.cs:681/718`）的线上帧未建模——
+/// 客户端要等下一次 `CM_QUERYBAGITEMS`/重登才看见背包变化。
+fn write_back_player_bag(
+    p: &game_svr::npc::NpcPlayer<'_>,
+    before: &[game_svr::bag::BagItem],
+    sg: &mut SessionGround,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    item_number: &mut i32,
+) -> Vec<String> {
+    fn count_of(list: &[(String, i32)], name: &str) -> i32 {
+        list.iter()
+            .filter(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, c)| *c)
+            .sum()
+    }
+    let mut warnings = Vec::new();
+    // 快照与 `p.items` 都折成「名 → 件数」（顺序只为可复现；不同名字的摘/加互不影响）。
+    let mut names_before: Vec<(String, i32)> = Vec::new();
+    for it in before {
+        let Some(name) = catalog.name(it.index) else {
+            continue;
+        };
+        match names_before
+            .iter_mut()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        {
+            Some((_, c)) => *c += 1,
+            None => names_before.push((name.to_string(), 1)),
+        }
+    }
+    let mut names_after: Vec<(String, i32)> = Vec::new();
+    for (name, count) in &p.items {
+        match names_after
+            .iter_mut()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        {
+            Some((_, c)) => *c += *count,
+            None => names_after.push((name.clone(), *count)),
+        }
+    }
+    // —— 少掉的件：从尾往前摘（oracle 的 `ItemList` 顺序敏感，`MakeIndex` 跟着走）——
+    for (name, before_count) in &names_before {
+        let mut left = before_count - count_of(&names_after, name);
+        let mut i = sg.state.item_list.len();
+        while left > 0 && i > 0 {
+            i -= 1;
+            let hit = catalog
+                .name(sg.state.item_list[i].index)
+                .is_some_and(|n| n.eq_ignore_ascii_case(name));
+            if hit {
+                sg.state.item_list.remove(i);
+                left -= 1;
+            }
+        }
+        if left > 0 {
+            warnings.push(format!(
+                "take {name}: 会话背包里找不到其余 {left} 件 ⇒ 少摘"
+            ));
+        }
+    }
+    // —— 多出的件：按 `CopyToUserItemFromName` 建新件（`MakeIndex` 用会话计数器）——
+    for (name, after_count) in &names_after {
+        let mut left = after_count - count_of(&names_before, name);
+        if left <= 0 {
+            continue;
+        }
+        let Some(index) = catalog.find_by_name(name) else {
+            warnings.push(format!("give {name}: 模板名未命中 ⇒ {left} 件不入包"));
+            continue;
+        };
+        let Some(tpl) = catalog.get(index) else {
+            warnings.push(format!(
+                "give {name}: Index={index} 无模板 ⇒ {left} 件不入包"
+            ));
+            continue;
+        };
+        let (dura, dura_max) = (tpl.dura_max, tpl.dura_max);
+        while left > 0 {
+            if sg.state.item_list.len() >= game_svr::bag::MAX_BAG_ITEM {
+                warnings.push(format!(
+                    "give {name}: 背包已满（{} 件）⇒ 余 {left} 件不入包",
+                    game_svr::bag::MAX_BAG_ITEM
+                ));
+                break;
+            }
+            *item_number += 1;
+            sg.state.item_list.push(game_svr::bag::BagItem {
+                make_index: *item_number,
+                index,
+                dura,
+                dura_max,
+                desc: [0; 14],
+            });
+            left -= 1;
+        }
+    }
+    warnings
 }
 
 /// `NormNpc.UserSelect` 的**标签账本**半边（`NormNpc.cs:1632-1658`）：`ScriptGotoCount=0`
@@ -5629,6 +5750,9 @@ fn run_merchant_goto(
     chr_name: &str,
     map_text: &str,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    // `M2Share.GetItemNumber()` 计数器（`GIVE` 新建件的 `MakeIndex`；生产 = sim 循环里那个
+    // 与 `add_newbie_items` 共用的会话级 `item_number`）。
+    item_number: &mut i32,
     npc_vars: &game_svr::npc::NpcVars,
     session: &mut ShopSession,
     sell_off: &mut game_svr::selloff::SellOffState,
@@ -5642,6 +5766,10 @@ fn run_merchant_goto(
     // oracle 的同一个 `PlayObject` 字段：脚本跑前 seed（`OPENYBDEAL` 读 `SaleDeal`，
     // `LableIsCanJmp` 读 `PlayDiceLabel`）。
     seed_player_gold_deal(&mut player, session, sell_off);
+    // oracle 的 `GotoLableTakeItem`/`GotoLableGiveItem`（`ScriptEngine.cs:653-745`）直接改
+    // **同一个** `PlayObject.ItemList`；本仓 `NpcPlayer.items` 是每次调用重建的快照 ⇒
+    // 脚本跑前留基线，跑完由 [`write_back_player_bag`] 对账回写（否则断线存档照旧带物品）。
+    let bag_before = sg.state.item_list.clone();
     let says = book
         .goto_label(merchant_actor_id, &mut player, label, bo_ext_jmp)
         .unwrap_or_default();
@@ -5649,6 +5777,17 @@ fn run_merchant_goto(
     session.last_npc = player.last_npc;
     write_back_player_mnmval(&player, sg);
     write_back_player_gold_deal(&player, sg, session, sell_off);
+    // 背包的脚本副作用（`GotoLableTakeItem`/`GotoLableGiveItem`）与上面同一位置回写；
+    // 落不地的（模板缺失/背包满）只记 WRN，不编造 `MakeIndex`。
+    let bag_warnings = write_back_player_bag(&player, &bag_before, sg, catalog, item_number);
+    if !bag_warnings.is_empty() {
+        glog!(
+            "WRN",
+            "商人 GotoLable({label})：背包回写未落地 {} 项 ChrName={chr_name} {:?}",
+            bag_warnings.len(),
+            bag_warnings
+        );
+    }
     // 脚本帧（`NpcPlayer.frames` = `MsgQueue` 的脚本侧投影）：写回之后再交给调用方排水，
     // 元宝帧的取值因此是本次脚本写回后的会话值。
     (says, std::mem::take(&mut player.frames))
@@ -5665,6 +5804,8 @@ struct FixedNpcScriptCtx<'a> {
     book: &'a game_svr::npc::MerchantScriptBook,
     npc_vars: &'a game_svr::npc::NpcVars,
     catalog: &'a dyn game_svr::ability::ItemCatalog,
+    /// `M2Share.GetItemNumber()` 计数器（脚本 `GIVE` 件的 `MakeIndex`；见 [`run_merchant_goto`]）。
+    item_number: &'a mut i32,
     /// `SystemShare.RandomNumber`（世界同一条流；调用方取出/放回 `world.rng`）。
     rng: &'a mut mir2_shared::rng::RandomNumber,
     sell_off: &'a mut game_svr::selloff::SellOffState,
@@ -5691,6 +5832,7 @@ impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
             self.chr_name,
             self.map_text,
             self.catalog,
+            self.item_number,
             self.npc_vars,
             ss,
             self.sell_off,
@@ -17273,6 +17415,7 @@ fn sim_loop(
                             book: &merchant_book,
                             npc_vars: &npc_vars_base,
                             catalog: &enter_cfg.catalog,
+                            item_number: &mut item_number,
                             rng: &mut script_rng,
                             sell_off,
                             chr_name: &chr_name,
@@ -23075,8 +23218,9 @@ mod tests {
     /// `OPENYBDEAL`（`ExecutionProcessingSys.cs:2345/2346`）/`PLAYDICE`（`:2032`）的副作用
     /// 会在本次调用结束时被丢弃。
     ///
-    /// 红检：删掉 `write_back_player_gold_deal` 的任一行 / `seed_player_gold_deal` 的任一行
-    /// ⇒ 对应断言红。
+    /// 红检：删掉 `write_back_player_gold_deal` 的 `SaleDeal`/`PlayDiceLabel`/`GameGold`
+    /// 任一行（或 `seed_player_gold_deal` 的任一行）⇒ 对应断言红；同函数里 `PlayObject.Gold`
+    /// 那一行的牙在 [`take_gold_persists_to_session_gold_through_production_path`]。
     #[test]
     fn t142_gold_deal_seed_and_write_back_round_trip() {
         use mir2_script::engine::ScriptPlayer as _;
@@ -23474,6 +23618,165 @@ mod tests {
             "② 第三支只能放行一次（第二次被拒 ⇒ `GotoLable` 被 boExtJmp 挡下 ⇒ 零帧）"
         );
         assert_eq!(rig.game_gold(), 160, "② 被拒 ⇒ 脚本不执行，元宝不变");
+    }
+
+    /// `take`/`give` 的 **`nParam2`** 口径（`ScriptParsers.cs:554`：动作的件数在 **sParam2** ⇒
+    /// `nParam2`；`sParam1` 是物品名，`nParam1` 留 0）。`take 筹码包 1` 的真实解析结果。
+    fn t142_act_n2(code: i32, p1: &str, n2: i32) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: code,
+            s_param1: p1.to_string(),
+            n_param2: n2,
+            ..Default::default()
+        }
+    }
+
+    /// **线程卡 `openmir2-script-take-persist`（tier R）**：`take` 的副作用必须落到**会话背包**
+    /// `SessionGround.state.item_list`（存档 `build_save_record` → `bag_items_for_save` 读它），
+    /// 否则断线存档后 DB 里物品仍在（r9 真机现象）。
+    ///
+    /// oracle：`GotoLableTakeItem`（`ScriptEngine.cs:667`）**从尾往前**扫 `ItemList` 并
+    /// `RemoveAt(i)`——同名多件时摘的是**最后几件**；本用例用
+    /// `[筹码包(4201), 木剑(4202), 筹码包(4203)]` 钉住该顺序（摘 1 件必须摘 4203）。
+    ///
+    /// 牙（先备份 sha256，改完还原并核对）：
+    /// ① 删 `run_merchant_goto` 里的 `write_back_player_bag` 调用 ⇒ 本用例红（背包仍 3 件）；
+    /// ② 把回写摘除改成「从头往前」⇒ 4201 被摘 ⇒ 顺序断言红。
+    #[test]
+    fn take_removes_from_session_bag_through_production_path() {
+        use game_svr::bag::BagItem;
+        let mut rig = T142Rig::new(vec![
+            t142_record(
+                "@main",
+                r"领筹码\ <领取/@ya52>",
+                vec![t142_act(191, "+", 0, "")],
+            ),
+            t142_record("@ya52", "", vec![t142_act_n2(2, "筹码包", 1)]),
+        ]);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "筹码包".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        rig.catalog.insert(
+            2,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 10,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        {
+            let sg = rig.sessions.get_mut("hero").unwrap();
+            sg.state.item_list = vec![
+                BagItem {
+                    make_index: 4201,
+                    index: 1,
+                    dura: 5000,
+                    dura_max: 5000,
+                    desc: [0; 14],
+                },
+                BagItem {
+                    make_index: 4202,
+                    index: 2,
+                    dura: 10,
+                    dura_max: 10,
+                    desc: [0; 14],
+                },
+                BagItem {
+                    make_index: 4203,
+                    index: 1,
+                    dura: 5000,
+                    dura_max: 5000,
+                    desc: [0; 14],
+                },
+            ];
+        }
+        // `@ya52` 的进入资格来自 `@main` 说词里的链接（`LableIsCanJmp` 第二支）。
+        rig.dlg_select("@main");
+        assert_eq!(
+            rig.sessions["hero"].state.item_list.len(),
+            3,
+            "只跑 @main（无 take）⇒ 背包必须原样"
+        );
+        rig.dlg_select("@ya52");
+        let bag = &rig.sessions["hero"].state.item_list;
+        let remaining: Vec<i32> = bag.iter().map(|it| it.make_index).collect();
+        assert_eq!(
+            remaining,
+            vec![4201, 4202],
+            "`take 筹码包 1` 必须回写会话背包，且照 oracle 从**尾**摘（摘 4203，留 4201）"
+        );
+    }
+
+    /// 同一张卡的金币半边：`take 金币 N` 走 `DecGold`（`ScriptEngine.cs:657-660`），改的是同一个
+    /// `PlayObject.Gold` ⇒ 必须回写 `SessionGround.state.gold`（`build_save_record` 读它落库）。
+    ///
+    /// 牙：删 `write_back_player_gold_deal` 里的 `sg.state.gold = p.gold;` ⇒ 本用例红（仍 100）。
+    #[test]
+    fn take_gold_persists_to_session_gold_through_production_path() {
+        let mut rig = T142Rig::new(vec![
+            t142_record(
+                "@main",
+                r"交钱\ <交钱/@ya53>",
+                vec![t142_act(191, "+", 0, "")],
+            ),
+            t142_record("@ya53", "", vec![t142_act_n2(2, "金币", 5)]),
+        ]);
+        rig.sessions.get_mut("hero").unwrap().state.gold = 100;
+        rig.dlg_select("@main");
+        assert_eq!(
+            rig.sessions["hero"].state.gold, 100,
+            "只跑 @main（无 take 金币）⇒ 金币必须原样"
+        );
+        rig.dlg_select("@ya53");
+        assert_eq!(
+            rig.sessions["hero"].state.gold, 95,
+            "`take 金币 5` 必须回写会话金币（否则断线存档金币不减）"
+        );
+    }
+
+    /// `give` 半边（同一次对账的「多出的件」）：照 `GotoLableGiveItem`（`ScriptEngine.cs:710-718`）
+    /// ⇒ `CopyToUserItemFromName`：`Index` 按名查表、`Dura = DuraMax = tpl.DuraMax`、
+    /// `MakeIndex = M2Share.GetItemNumber()`（生产 = sim 循环的 `item_number` 计数器）。
+    ///
+    /// 牙：删 `write_back_player_bag` 的「多出」分支 ⇒ 本用例红（背包 0 件）。
+    #[test]
+    fn give_adds_allocated_item_to_session_bag_through_production_path() {
+        let mut rig = T142Rig::new(vec![
+            t142_record(
+                "@main",
+                r"给筹码\ <给/@ya54>",
+                vec![t142_act(191, "+", 0, "")],
+            ),
+            t142_record("@ya54", "", vec![t142_act_n2(3, "筹码包", 2)]),
+        ]);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "筹码包".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        rig.dlg_select("@main");
+        rig.dlg_select("@ya54");
+        let bag = &rig.sessions["hero"].state.item_list;
+        assert_eq!(bag.len(), 2, "`GIVE 筹码包 2` 必须两件都入会话背包");
+        assert!(
+            bag.iter()
+                .all(|it| it.index == 1 && it.dura == 5000 && it.dura_max == 5000),
+            "Index/Dura/DuraMax 必须照 `CopyToUserItemFromName`：{bag:?}"
+        );
+        assert!(
+            bag.iter().all(|it| it.make_index > 0),
+            "`MakeIndex` 必须由会话计数器分配（`MakeIndex<=0` 在 DBSvr 侧整行被跳过）: {bag:?}"
+        );
+        let mk: Vec<i32> = bag.iter().map(|it| it.make_index).collect();
+        assert_eq!(mk, vec![1, 2], "计数器从 0 起（夹具）⇒ 逐件 +1");
     }
 
     /// **T-142 F1（第二条入口）**：`CM_CLICKNPC` 的 `@main` 路径同样必须 seed/写回
@@ -52284,6 +52587,8 @@ mod tests {",
         book: game_svr::npc::MerchantScriptBook,
         npc_vars: game_svr::npc::NpcVars,
         sell_off: game_svr::selloff::SellOffState,
+        /// `M2Share.GetItemNumber()` 计数器（脚本 `GIVE` 件的 `MakeIndex`；夹具起点 0）。
+        item_number: i32,
     }
 
     impl GuildNpcFixture {
@@ -52333,6 +52638,7 @@ mod tests {",
                 book: game_svr::npc::MerchantScriptBook::default(),
                 npc_vars: game_svr::npc::NpcVars::default(),
                 sell_off: game_svr::selloff::SellOffState::default(),
+                item_number: 0,
             };
             f.add_player("hero", 1, 10, 10, 901);
             // 固定 NPC 在玩家之后建：`EntityStore::alloc_id` 先到先得（避免与玩家 id 撞号）。
@@ -52486,6 +52792,7 @@ mod tests {",
                 book: &self.book,
                 npc_vars: &self.npc_vars,
                 catalog: &self.catalog,
+                item_number: &mut self.item_number,
                 rng: &mut script_rng,
                 sell_off: &mut self.sell_off,
                 chr_name: "hero",
