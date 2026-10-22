@@ -12192,6 +12192,84 @@ fn drain_npc_merchant_hits(
     sent
 }
 
+/// **卡 `openmir2-castle-merchant-disappear-downlink`（tier=R）**：城堡商人进入战中时
+/// `SendRefMsg(RM_DISAPPEAR, 0, 0, 0, 0, "")`（`src/GameSrv/Npc/Merchant.cs:147`）的**下行**
+/// ⇒ `SM_DISAPPEAR(30)`。
+///
+/// # oracle 口径
+///
+/// ```text
+/// if (CastleMerchant && Castle != null && Castle.UnderWar) {
+///   if (!FixedHideMode) { SendRefMsg(RM_DISAPPEAR, 0, 0, 0, 0, ""); FixedHideMode = true; }
+/// }
+/// ```
+///
+/// `SendRefMsg`（`BaseObject.Message.cs:383-444`）在**调用时刻**把消息投进各收件人队列：头门
+/// `if (ObMode || FixedHideMode)` 只 `SendMsg` 给自己；否则 ±`Config.SendRefMsgRange`（12）格扫
+/// `Race == Play && !Ghost`。收件人侧 `PlayObject.Message.cs:1651-1654`：
+/// `MakeMessage(SM_DISAPPEAR, processMsg.ActorId, 0, 0, 0)` + `SendSocket(ClientMsg)`（单参）
+/// ⇒ 头 = `(Recog = 消失对象 ActorId, Param=0, Tag=0, Series=0)`、**无尾**；
+/// 编码器 [`downlink::disappear_frame`]（`smframe::sm_disappear`，金标准已锚 15 条 30 帧）。
+///
+/// # 收件人必须取「发帧时刻」快照
+///
+/// `:147` 发帧时 `FixedHideMode` **尚未**置位（`:148` 才置）。宿主在 `world.tick()` 之后才排水，
+/// 那时实体已 `fixed_hide_mode = true` ⇒ **不能**在这里调 [`broadcast_ref_msg`]（它走
+/// `chat::hear_targets`，对隐藏 sender 只返回 `[自己]`，`include_self = false` 再把它丢掉 ⇒
+/// 整帧静默丢失）。因此收件人在 `merchant_run` 的发帧点就快照进
+/// `TickRecord::merchant_disappears` 的 `(id, recipients)`（`crates/world/src/merchant.rs`），
+/// 本函数只做 actor → 网关会话的路由（同形先例：`monai.rs` 的 `StickMonster.ComeDown`）。
+///
+/// # 与 `drain_aoi_disappear` 不重复
+///
+/// 两条路径**不会**对同一对象各发一条：AOI 支的消失帧由世界侧
+/// `aoi::search_view_range_with_updates` 产出 `TickRecord::hides`，而它对
+/// `fixed_hide_mode` 的目标**本就过滤**（`mir2-rs/crates/world/src/aoi.rs:296-303`，与 oracle
+/// `PlayObject.cs:3214-3222` 的 `!FixedHideMode && !Ghost` 同形）⇒ 进入战中的商人只会出现在
+/// 本函数的 `merchant_disappears` 里。判据见用例
+/// `castle_merchant_disappear_is_not_duplicated_by_aoi_branch`。
+///
+/// # 次序
+///
+/// `RM_DISAPPEAR = 8061` ⇒ 入队优先级 `(byte)8061 = 125`（`Messages.cs:675`；`SendMsg` 以
+/// `(byte)wIdent` 入队）——晚于 `RM_TURN(17)`/`RM_WALK(18)`/`RM_HIT(20)`，早于
+/// `RM_CHANGELIGHT(153)` 起的登录尾帧 ⇒ 本段放在 [`drain_npc_merchant_hits`] 之后、
+/// [`drain_login_tail`] 之前。
+///
+/// 牙（红检，实测）：① 删 `drain_run_downlinks_with_magic` 里的调用行 ⇒
+/// `castle_merchant_disappear_downlink_through_production_drain` 收不到帧 ⇒ 红；
+/// ② 把 `merchant_run` 的收件人格扫范围放开（或改成「全网关」）⇒ 远处观察者多收一条 ⇒ 红。
+fn drain_merchant_disappears(
+    rec: &mir2_world::TickRecord,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) -> usize {
+    let mut sent = 0usize;
+    for (target_id, recipients) in &rec.merchant_disappears {
+        let body = downlink::disappear_frame(*target_id);
+        for actor_id in recipients {
+            let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+                // 收件人是世界侧发帧时刻的 Play 快照；不在线（掉线/未登记网关）⇒ 不猜线。
+                glog!(
+                    "WRN",
+                    "商人消失帧：收件人 actor={actor_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)"
+                );
+                continue;
+            };
+            let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "商人消失帧")
+            else {
+                continue;
+            };
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body: body.clone(),
+            });
+            sent += 1;
+        }
+    }
+    sent
+}
+
 /// **lane654**：登录队列 `after` 段（`654` / 第二 `42` / `100×4`，以及优先级 61 的 `750`）的
 /// 补发点。
 ///
@@ -13478,6 +13556,11 @@ fn drain_run_downlinks_with_magic(
     // `(byte)RM_HIT = 20` ⇒ 晚于 `RM_TURN(17)`/`RM_WALK(18)`、早于 `RM_CHANGELIGHT(153)` 起的
     // 登录尾帧（[`drain_login_tail`]）⇒ 本段夹在两者之间。
     let _npc_hits = drain_npc_merchant_hits(rec, world, displays, online, gates);
+    // **卡 `openmir2-castle-merchant-disappear-downlink`**：城堡商人进入战中的
+    // `RM_DISAPPEAR` ⇒ `SM_DISAPPEAR(30)`（`Merchant.cs:147`）。入队优先级
+    // `(byte)RM_DISAPPEAR(8061) = 125` ⇒ 晚于 `RM_HIT(20)`、早于登录尾帧 `RM_CHANGELIGHT(153)`。
+    // 收件人是**发帧时刻**的快照（世界侧 `merchant_run` 格扫），本段只路由。
+    let _merchant_disappears = drain_merchant_disappears(rec, online, gates);
     // **lane654**：登录队列 `after` 段（654/42/100）在**出现帧之后**补发（oracle 同一
     // `Run()` 里 17 < 153 < 165 < 252 的出队序），且在任何体力/魔力段帧之前。
     if let Some(pending) = login_tails {
@@ -23028,6 +23111,355 @@ mod tests {
         assert!(rx.try_recv().is_err(), "稳态无帧");
     }
 
+    /// **判据（卡 `openmir2-castle-merchant-disappear-downlink`，tier=R）**：城堡商人进入战中时
+    /// `SendRefMsg(RM_DISAPPEAR, 0,0,0,0, "")`（`Merchant.cs:147`）必须真的到达客户端。
+    ///
+    /// 全链路（生产入口级）：`World::merchant_tick` → `merchant_run`（`:145-149`，先发帧后置位）
+    /// → `TickRecord::merchant_disappears`（发帧时刻收件人快照）→ [`drain_merchant_disappears`]
+    /// → [`downlink::disappear_frame`]（`smframe::sm_disappear`）。
+    ///
+    /// 断言：
+    /// ① `UnderWar false→true`：观察者 `p`（10,10）恰收 **1** 条 `SM_DISAPPEAR(30)`，头 =
+    ///    `(Recog = 商人 ActorId, Param=0, Tag=0, Series=0)`、**无尾**（12B）；`p` 只收这一条、
+    ///    **12 格外**的 `q` 收 0 条（收件人范围门）；
+    /// ② `FixedHideMode` 已置位后再 tick ⇒ `merchant_disappears` 为空 ⇒ **零帧**（不得变噪声源）；
+    /// ③ 退出战中 ⇒ 走 `RM_HIT` 支（`Merchant.cs:156`，另一张卡的判据）⇒ 恰好 1 条 `SM_HIT`、
+    ///    **0** 条 `SM_DISAPPEAR`。
+    ///
+    /// 时序前提（本用例显式钉住）：排水时实体已 `fixed_hide_mode = true`，`chat::hear_targets`
+    /// 对隐藏 sender 只返回 `vec![自己]` ⇒ 若在排水时按当前状态重算收件人，整帧会静默丢失。
+    /// 因此收件人必须由世界侧在**发帧时刻**快照（`:147` 与 `:148` 之间）。
+    ///
+    /// 牙（红检，实测）：① 删 `drain_run_downlinks_with_magic` 里的
+    /// `let _merchant_disappears = drain_merchant_disappears(rec, online, gates);`
+    /// ⇒ ① 收不到帧 ⇒ 必红；② 把 `merchant_run` 的收件人格扫范围放开（`SEND_REF_MSG_RANGE`
+    /// 改大或改成「全网关」）⇒ `q` 多收一条 ⇒ 必红。
+    #[test]
+    fn castle_merchant_disappear_downlink_through_production_drain() {
+        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(100, 100);
+        world.clock_ms = 100_000;
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家 p 进图");
+        world.open_session("q");
+        let q = world
+            .enter_map("q", new_player_entity("q".to_string(), 50, 50), 0)
+            .expect("远处玩家 q 进图");
+        let spawn = MerchantSpawn {
+            name: "沙巴克商人".to_string(),
+            x: 10,
+            y: 11,
+            map_id: 0,
+            state: MerchantState::new(
+                "沙巴克商人".to_string(),
+                "0".to_string(),
+                0,
+                16,
+                100,
+                true, // `CastleMerchant`（`LocalDB.cs:461-464`）
+                false,
+                0,
+                MerchantFlags::default(),
+                Vec::new(),
+                Vec::new(),
+                0,
+            ),
+        };
+        let mut displays = downlink::DisplayTable::new();
+        let (kept, failed, _book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            vec![spawn],
+            Vec::new(),
+            &mut displays,
+        );
+        assert_eq!(kept, 1);
+        assert!(failed.is_empty());
+        let mer_id = world.merchant_ids_sorted()[0];
+        assert!(
+            world.set_merchant_castle_index(mer_id, Some(0)),
+            "Castle != null（`Merchant.cs:143` 第二合取项）"
+        );
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("up", "p", 1, 0, 901, p));
+        online_set(&mut online, entry("uq", "q", 1, 0, 902, q));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        let set_war = |world: &mut mir2_world::World, war: bool| {
+            let st = world
+                .entities
+                .get_mut(mer_id)
+                .and_then(|e| e.merchant.as_mut())
+                .expect("商人状态在");
+            st.castle_under_war = war; // `Castle.UnderWar` 快照
+            st.run_tick = -1000; // `Run` 门（`now - RunTick > 250`）
+        };
+        // 取走本段所有帧（socket, body）。
+        let take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
+            let mut out: Vec<(i32, Vec<u8>)> = Vec::new();
+            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+                out.push((socket, body));
+            }
+            out
+        };
+        let idents = |frames: &[(i32, Vec<u8>)], ident: u16| -> Vec<Vec<u8>> {
+            frames
+                .iter()
+                .filter(|(_, b)| {
+                    mir2_protocol::frame::CommandMessage::from_bytes(b)
+                        .is_some_and(|c| c.ident == ident)
+                })
+                .map(|(_, b)| b.clone())
+                .collect()
+        };
+
+        // ① `UnderWar false→true`：观察者 p 恰收 1 条 `SM_DISAPPEAR(30)`，12 格外的 q 收 0 条。
+        set_war(&mut world, true);
+        let enter = world.merchant_tick();
+        assert!(enter.hits.is_empty(), "进入战中不发 SM_HIT");
+        assert_eq!(enter.disappears.len(), 1, "恰好一个商人转 FixedHideMode");
+        let (dis_id, recipients) = enter.disappears[0].clone();
+        assert_eq!(dis_id, mer_id, "消失对象 = 商人 ActorId");
+        assert_eq!(
+            recipients,
+            vec![p],
+            "发帧时刻收件人 = ±SendRefMsgRange 内 Play（远处的 q 与商人自己都不在内）"
+        );
+        assert!(
+            world.entities.get(mer_id).unwrap().fixed_hide_mode,
+            "`:148` 已置位（在发帧之后）"
+        );
+        assert_eq!(
+            chat::hear_targets(&world, mer_id, chat::SEND_REF_MSG_RANGE),
+            vec![mer_id],
+            "排水时刻实体已隐藏 ⇒ 若此刻重算收件人只会得到自己（正是必须快照的理由）"
+        );
+        let rec = mir2_world::TickRecord {
+            merchant_hits: enter.hits.clone(),
+            merchant_disappears: enter.disappears.clone(),
+            ..Default::default()
+        };
+        let _ = drain_run_downlinks(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            12,
+            0,
+            0,
+            false,
+        );
+        let frames = take(&mut rx0);
+        let to_p: Vec<(i32, Vec<u8>)> = frames.iter().filter(|(s, _)| *s == 901).cloned().collect();
+        let to_q: Vec<(i32, Vec<u8>)> = frames.iter().filter(|(s, _)| *s == 902).cloned().collect();
+        assert!(to_q.is_empty(), "12 格外的观察者不得收帧：{to_q:?}");
+        let diss = idents(&to_p, mir2_protocol::messages::SM_DISAPPEAR);
+        assert_eq!(diss.len(), 1, "观察者恰收 1 条 SM_DISAPPEAR(30)");
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&diss[0]).expect("12B");
+        assert_eq!(
+            cm.ident,
+            mir2_protocol::messages::SM_DISAPPEAR,
+            "Ident = 30"
+        );
+        assert_eq!(cm.recog, mer_id, "Recog = 消失对象 ActorId");
+        assert_eq!(
+            (cm.param, cm.tag, cm.series),
+            (0, 0, 0),
+            "头其余字段全 0（`MakeMessage(SM_DISAPPEAR, ActorId, 0, 0, 0)`）"
+        );
+        assert_eq!(diss[0].len(), 12, "无尾（`SendSocket(ClientMsg)` 单参）");
+
+        // ② 已置位后再 tick ⇒ `merchant_disappears` 为空 ⇒ 零帧。
+        set_war(&mut world, true); // 仅重置 `Run` 门（状态仍为战中）
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let steady = world.merchant_tick();
+        assert!(
+            steady.disappears.is_empty(),
+            "`if (!FixedHideMode)` 守卫 ⇒ 不重复发"
+        );
+        let rec = mir2_world::TickRecord {
+            merchant_hits: steady.hits.clone(),
+            merchant_disappears: steady.disappears.clone(),
+            ..Default::default()
+        };
+        let _ = drain_run_downlinks(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            12,
+            0,
+            0,
+            false,
+        );
+        assert!(take(&mut rx0).is_empty(), "战中稳态零帧");
+
+        // ③ 退出战中 ⇒ 走 `RM_HIT` 支（`:156`）：1 条 `SM_HIT`、**0** 条 `SM_DISAPPEAR`。
+        set_war(&mut world, false);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let leave = world.merchant_tick();
+        assert!(
+            leave.disappears.is_empty(),
+            "解除显隐不发 RM_DISAPPEAR（`Merchant.cs:152-157` 只发 RM_HIT）"
+        );
+        assert_eq!(leave.hits, vec![mer_id], "解除支恒为可见帧");
+        let rec = mir2_world::TickRecord {
+            merchant_hits: leave.hits.clone(),
+            merchant_disappears: leave.disappears.clone(),
+            ..Default::default()
+        };
+        let _ = drain_run_downlinks(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            12,
+            0,
+            0,
+            false,
+        );
+        let frames = take(&mut rx0);
+        let to_p: Vec<(i32, Vec<u8>)> = frames.iter().filter(|(s, _)| *s == 901).cloned().collect();
+        let hits = idents(&to_p, mir2_protocol::messages::SM_HIT);
+        assert_eq!(hits.len(), 1, "退出战中恰收 1 条 SM_HIT(14)");
+        assert!(
+            idents(&to_p, mir2_protocol::messages::SM_DISAPPEAR).is_empty(),
+            "退出战中不得发 SM_DISAPPEAR(30)"
+        );
+    }
+
+    /// **判据（卡 `openmir2-castle-merchant-disappear-downlink`，tier=R）**：新通道与既有的
+    /// AOI 消失支**不会**对同一对象各发一条。
+    ///
+    /// oracle 两侧都显式抑制 `FixedHideMode` 目标：
+    /// · AOI 支 `PlayObject.cs:3214-3222` 的 `if (!baseObject.FixedHideMode && !baseObject.Ghost)`
+    ///   ⇒ 本仓 `mir2-rs/crates/world/src/aoi.rs:296-303` 的 `!e.fixed_hide_mode && !e.ghost`
+    ///   过滤器把它从 `TickRecord::hides` 里剔除（条目仍从 `VisibleActors` 移除）；
+    /// · 新支 `Merchant.cs:147` 的 `RM_DISAPPEAR` 才是唯一发点。
+    ///
+    /// 口子：观察者 `p` 先在 AOI 里看见商人 ⇒ 开战（`fixed_hide_mode = true`）⇒ 下一轮扫描把商人
+    /// 标 `Hidden` 并移除，但 `hides` **不含** `(p, 商人)` ⇒ 全程只有新通道那 1 条。
+    ///
+    /// 牙（红检）：把 `aoi.rs` 的 `!e.fixed_hide_mode` 过滤去掉 ⇒ `hides` 含该对象 ⇒ 必红
+    /// （同时客户端会收到两条）。
+    #[test]
+    fn castle_merchant_disappear_is_not_duplicated_by_aoi_branch() {
+        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+
+        let mut world = mir2_world::World::new(200, 200);
+        world.enable_merchant_tick();
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(11);
+        world.clock_ms = 100_000;
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家 p 进图");
+        let spawn = MerchantSpawn {
+            name: "沙巴克商人".to_string(),
+            x: 10,
+            y: 11,
+            map_id: 0,
+            state: MerchantState::new(
+                "沙巴克商人".to_string(),
+                "0".to_string(),
+                0,
+                16,
+                100,
+                true,
+                false,
+                0,
+                MerchantFlags::default(),
+                Vec::new(),
+                Vec::new(),
+                0,
+            ),
+        };
+        let mut displays = downlink::DisplayTable::new();
+        let (kept, _failed, _book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            vec![spawn],
+            Vec::new(),
+            &mut displays,
+        );
+        assert_eq!(kept, 1);
+        let mer_id = world.merchant_ids_sorted()[0];
+        assert!(world.set_merchant_castle_index(mer_id, Some(0)));
+
+        // 首轮 AOI 扫描：商人可见（未隐藏 ⇒ 正常进 `visible_actors`）。
+        let _ = tick_until_next_player_scan(&mut world);
+        assert!(
+            world
+                .entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == mer_id),
+            "开战前观察者应看得见商人（前提）"
+        );
+
+        // 开战：下一轮扫描把商人标 Hidden 并移除；`hides` 必须**不含**它。
+        if let Some(st) = world
+            .entities
+            .get_mut(mer_id)
+            .and_then(|e| e.merchant.as_mut())
+        {
+            st.castle_under_war = true;
+        }
+        let mut disappears_total = 0usize;
+        let mut removed_from_view = false;
+        for _ in 0..40 {
+            if let Some(st) = world
+                .entities
+                .get_mut(mer_id)
+                .and_then(|e| e.merchant.as_mut())
+            {
+                st.run_tick = -1000; // `Run` 门（`now - RunTick > 250`）
+            }
+            let rec = world.tick();
+            assert!(
+                !rec.hides.contains(&(p, mer_id)),
+                "AOI 支不得对 FixedHideMode 目标出消失帧（`aoi.rs` 过滤）：{:?}",
+                rec.hides
+            );
+            disappears_total += rec.merchant_disappears.len();
+            let hidden = world.entities.get(mer_id).unwrap().fixed_hide_mode;
+            let visible = world
+                .entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == mer_id);
+            if hidden && !visible {
+                removed_from_view = true;
+                break;
+            }
+        }
+        assert!(removed_from_view, "40 tick 内商人应已隐藏并从可见集移除");
+        assert_eq!(
+            disappears_total, 1,
+            "全程只有新通道那 1 条；AOI 支与它不得对同一对象各发一条"
+        );
+    }
+
     /// **接线牙**：`drain_run_downlinks_with_magic` 里两个 drain 调用必须仍在且未被注释
     /// （口径同 `drain_deal_tick_production_call_is_wired_in_sim_loop`）。
     ///
@@ -23043,6 +23475,7 @@ mod tests {
         for want in [
             "let _npc_turns = drain_npc_merchant_turns(rec, world, displays, online, gates);",
             "let _npc_hits = drain_npc_merchant_hits(rec, world, displays, online, gates);",
+            "let _merchant_disappears = drain_merchant_disappears(rec, online, gates);",
         ] {
             let hits: Vec<usize> = lines
                 .iter()

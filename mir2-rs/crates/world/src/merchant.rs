@@ -689,6 +689,12 @@ impl World {
                     if r.hit_self_only {
                         out.hits_self_only.push(id);
                     }
+                    if r.disappear {
+                        out.disappears.push((id, r.disappear_targets));
+                    }
+                    if r.disappear_self_only {
+                        out.disappears_self_only.push(id);
+                    }
                     // `:156` 的解除受击（恒可见）。与 `r.hit` 不可同时为真：同一次 `Run` 里
                     // `:140` 能命中就说明那一刻已在 `FixedHideMode` ⇒ 它落 `hit_self_only`
                     // （客户端零帧，不进本表）。
@@ -734,7 +740,23 @@ pub struct MerchantRunOutcome {
     /// 该支先 `:155` 清 `FixedHideMode` 再发 ⇒ **恒为客户端可见**（`SendRefMsg` 头门不命中）。
     pub unhide_hit: bool,
     /// 发 `RM_DISAPPEAR`（沙巴克战中进入 `FixedHideMode`）。
+    ///
+    /// **发送事实**（`:147` 确实调了 `SendRefMsg`）；客户端是否可见取决于
+    /// [`Self::disappear_targets`] / [`Self::disappear_self_only`]。
     pub disappear: bool,
+    /// `:147` `SendRefMsg(RM_DISAPPEAR, 0, 0, 0, 0, "")` 的**发帧时刻**收件人快照
+    /// （玩家 `actor_id`，格序 = X 外层 → Y 内层）。
+    ///
+    /// **必须在发帧时刻快照、不能推迟到宿主排水**：oracle `:148` 紧接着置
+    /// `FixedHideMode = true`，排水时实体已隐藏 ⇒ 若那时再按 `SendRefMsg` 头门重算
+    /// （`hear_targets_at` 对隐藏 sender 返回 `vec![自己]`）会把整帧丢成自送。
+    /// 同形先例：`monai.rs` 的 `StickMonster.ComeDown`（先发 `RM_DIGDOWN` 再置隐藏）。
+    pub disappear_targets: Vec<i32>,
+    /// `:147` 发帧时刻 `SendRefMsg` 的 `ObMode || FixedHideMode` 头门**已命中**
+    /// （只可能是 `ObMode`——`FixedHideMode` 由 `:148` 在发帧**之后**才置位）⇒ 只 `SendMsg`
+    /// 给自己（`BaseObject.Message.cs:390-394`）。商人 `Race = NPC` 无客户端 ⇒ 客户端零帧；
+    /// 仅证据位（真值恒假：商人无 `ObMode` 写点）。
+    pub disappear_self_only: bool,
     /// `BoCanMove` 到点 ⇒ `MapRandomMove`（`RM_SPACEMOVE_FIRE`）。
     ///
     /// 这是**移动事实**（与可见性无关：`FixedHideMode` 时商人照样移动）。其 `RefMsg` 同受
@@ -765,6 +787,13 @@ pub struct MerchantTickOutcome {
     pub turns_self_only: Vec<(i32, u8)>,
     /// 本 pass 因 `ObMode || FixedHideMode` **只自送**的 `RM_HIT`（客户端零帧，证据用）。
     pub hits_self_only: Vec<i32>,
+    /// 本 pass 的 `RM_DISAPPEAR`：`(商人 id, 发帧时刻收件人快照)`（`Merchant.cs:147`）。
+    ///
+    /// 收件人由世界侧在**发帧时刻**格扫（[`SEND_REF_MSG_RANGE`](crate::session::SEND_REF_MSG_RANGE)
+    /// 格、`Race==Play && !Ghost`），宿主只按 actor → 网关会话路由（[`MerchantRunOutcome::disappear_targets`]）。
+    pub disappears: Vec<(i32, Vec<i32>)>,
+    /// 本 pass 因 `ObMode` 头门**只自送**的 `RM_DISAPPEAR`（客户端零帧；证据用）。
+    pub disappears_self_only: Vec<i32>,
     /// 本 pass `MapRandomMove` 的商人 id。
     pub space_moves: Vec<i32>,
     /// 本 pass 被 Ghost 60s 门移除的商人 id（oracle `RemoveAt`）。
@@ -1541,10 +1570,36 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
             .get(actor_id)
             .is_some_and(|e| !e.fixed_hide_mode)
         {
+            // **oracle 次序**（`Merchant.cs:145-149`）：
+            //   if (!FixedHideMode) { SendRefMsg(RM_DISAPPEAR, …); FixedHideMode = true; }
+            // ⇒ 发帧时刻的 `SendRefMsg` 头门读的是**置位前**的状态（`FixedHideMode` 必假，
+            //   只有 `ObMode` 能命中自送支），收件人快照也必须在这一刻取。
+            let ob_mode_at_send = world.entities.get(actor_id).is_some_and(|e| e.ob_mode);
+            outcome.disappear = true;
+            if ob_mode_at_send {
+                // 头门命中 ⇒ 只 `SendMsg` 给自己（NPC 无客户端 ⇒ 客户端零帧）。
+                outcome.disappear_self_only = true;
+            } else {
+                let (map_id, x, y) = world
+                    .entities
+                    .get(actor_id)
+                    .map_or((0, 0, 0), |e| (e.map_id, e.x, e.y));
+                // 格扫 = oracle `SendRefMsg` 冷路径（`BaseObject.Message.cs:412-444`）；
+                // 商人 `Race = NPC` ⇒ oracle 的 `Race == Play` 门本就把自己排除，
+                // 故这里直接传 `actor_id`（不是 `monai.rs` 的「sender 可以是 Play」哨兵）。
+                outcome.disappear_targets = crate::session::send_ref_msg_targets_at(
+                    world,
+                    actor_id,
+                    map_id,
+                    x,
+                    y,
+                    crate::session::SEND_REF_MSG_RANGE,
+                );
+            }
+            // `Merchant.cs:148`
             if let Some(e) = world.entities.get_mut(actor_id) {
                 e.fixed_hide_mode = true;
             }
-            outcome.disappear = true;
         }
     } else if world
         .entities
@@ -2114,6 +2169,10 @@ mod tests {
             w.entities.get(id).unwrap().fixed_hide_mode,
             "FixedHideMode = true"
         );
+        assert!(
+            !out.disappear_self_only,
+            "商人无 `ObMode` ⇒ 发帧时刻头门不命中，正常广播"
+        );
 
         // ③ 战中不变：不重复发（`if (!FixedHideMode)` 守卫）。
         let out = merchant_run(&mut w, id);
@@ -2138,6 +2197,88 @@ mod tests {
         assert!(
             !out.unhide_hit && !out.disappear && !out.hit,
             "战后稳态零帧"
+        );
+    }
+
+    /// **判据（卡 `openmir2-castle-merchant-disappear-downlink`）**：`RM_DISAPPEAR` 的
+    /// 收件人是**发帧时刻**（`:147`，`FixedHideMode` 尚未置位）的 `SendRefMsg` 格扫快照。
+    ///
+    /// · 发帧时刻 `ObMode` 为假 ⇒ 收件人 = ±`SEND_REF_MSG_RANGE` 格内 `Race==Play && !Ghost`
+    ///   的玩家（格序、排除商人自己）；`FixedHideMode` 在快照**之后**才置位（`:148` 同序）；
+    /// · 发帧时刻 `ObMode` 为真 ⇒ 头门 `ObMode || FixedHideMode` 命中，只自送（零收件人）；
+    /// · 排水时刻实体已 `fixed_hide_mode = true` ⇒ 若那时按 `SendRefMsg` 头门重算，收件人会退化成
+    ///   「只有自己」⇒ **整帧丢失**（本用例用「排水时刻实体已隐藏」的断言钉住这个前提，
+    ///   宿主侧用 `chat::hear_targets` 的同形断言，见
+    ///   `castle_merchant_disappear_downlink_through_production_drain`）。
+    ///
+    /// 牙（红检，实测）：① 先 `fixed_hide_mode = true` 再按 `SendRefMsg` 头门取快照
+    /// （= 排水时重算的语义）⇒ 落自送支、`disappear_targets` 变空 ⇒ ① 的
+    /// `disappear_self_only`/`disappear_targets` 断言必红；② 去掉发帧时刻格扫、改用
+    /// `vec![actor_id]` ⇒ ① 的 `disappear_targets == vec![p]` 必红；③ 把格扫范围从
+    /// `SEND_REF_MSG_RANGE` 放开 ⇒ ① 的「`q` 不在收件人里」必红。
+    #[test]
+    fn castle_merchant_disappear_snapshots_recipients_before_fixed_hide() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(seed_with_quiet_runs(4));
+        w.clock_ms = 100_000;
+        w.open_session("p");
+        let p = w
+            .enter_map("p", Entity::new(0, "p".to_string(), 5, 5), 0)
+            .expect("玩家 p 进图");
+        w.open_session("q");
+        let q = w
+            .enter_map("q", Entity::new(0, "q".to_string(), 40, 40), 0)
+            .expect("远处玩家 q 进图");
+        let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w.set_merchant_castle_index(id, Some(0)), "Castle != null");
+
+        // ① `ObMode` 为假：发帧时刻格扫 = 可见范围内的 Play（排除自己与 12 格外的 q）。
+        set_castle_under_war(&mut w, id, true);
+        let out = merchant_run(&mut w, id);
+        assert!(out.disappear, "进入战中 ⇒ RM_DISAPPEAR");
+        assert!(!out.disappear_self_only, "发帧时刻未隐藏 ⇒ 头门不命中");
+        assert_eq!(
+            out.disappear_targets,
+            vec![p],
+            "收件人 = ±12 格内 Play（q 在 35 格外 ⇒ 不在；商人自己是 NPC ⇒ 不在）"
+        );
+        assert!(
+            !out.disappear_targets.contains(&q),
+            "12 格外的玩家不在收件人集合里（范围门）"
+        );
+        assert_ne!(
+            out.disappear_targets,
+            vec![id],
+            "快照不得取到排水时刻的隐藏态（那样只剩自己）"
+        );
+        // `:148` 同序：快照**之后**才置 `FixedHideMode`。
+        assert!(
+            w.entities.get(id).unwrap().fixed_hide_mode,
+            "FixedHideMode = true（发帧之后才置位）"
+        );
+        // 排水时刻的实体状态：`ObMode || FixedHideMode` 已为真 ⇒ 若此刻重算收件人只会得到自己。
+        {
+            let e = w.entities.get(id).unwrap();
+            assert!(e.ob_mode || e.fixed_hide_mode, "排水时已隐藏（前提）");
+        }
+
+        // ② 发帧时刻 `ObMode` 已置位 ⇒ 头门只自送（商人无客户端 ⇒ 零收件人）。
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.fixed_hide_mode = false;
+            e.ob_mode = true;
+        }
+        set_castle_under_war(&mut w, id, true);
+        let out = merchant_run(&mut w, id);
+        assert!(out.disappear, "仍会调用 SendRefMsg");
+        assert!(out.disappear_self_only, "头门命中 ⇒ 只自送");
+        assert!(
+            out.disappear_targets.is_empty(),
+            "自送支不产生任何客户端收件人"
+        );
+        assert!(
+            w.entities.get(id).unwrap().fixed_hide_mode,
+            "`:148` 照常置位"
         );
     }
 
