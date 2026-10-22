@@ -1,14 +1,14 @@
 # OpenMir2 重写剩余量清单（可复现盘点）
 
-- 采集时间：第 1 轮 2026-10-22T14:34Z；**第 2 轮复核 2026-10-22T14:46Z（本文件当前版本）**
-- 采集点：worktree `/e/tmp/wt-inventory`；第 1 轮 HEAD `0e7da10b8`；**第 2 轮已 `git merge master`，HEAD `24e9a5fab4647c3b12d02d1a7c62e12b462667ab`（= master `b0dde46a9` + 本文件第 1 轮提交的合并树）**
-- 分支：`inventory-20261022`（第 2 轮在 `24e9a5fab` 上复核；master 已含 `click-bag-writeback` 合并 `b0dde46a9`）
-- 复核输入：reviewer-14 第 1 轮 `request_changes`（review oid `1d3bc1e1`，tier=L）；逐条处置见 §9
+- 采集时间：第 1 轮 2026-10-22T14:34Z；第 2 轮复核 2026-10-22T14:46Z；**第 3 轮（处置第 2 轮复核）2026-10-22T15:10Z（本文件当前版本）**
+- 采集点：worktree `/e/tmp/wt-inventory`；第 1 轮 HEAD `0e7da10b8`；第 2 轮 `git merge master` 后 HEAD `24e9a5fab4647c3b12d02d1a7c62e12b462667ab`（= master `b0dde46a9` + 本文件第 1 轮提交的合并树）；**第 3 轮基于第 2 轮文档提交 `019b64e88`（树 = `24e9a5fab` + 文档改动），本轮只改本文档**
+- 分支：`inventory-20261022`（第 3 轮在 `019b64e88` 上处置；master 未再前进，仍 `b0dde46a9`）
+- 复核输入：reviewer-14 第 1 轮 `request_changes`（review oid `1d3bc1e1`）+ **第 2 轮 `request_changes`（review oid `c3e551d8`）**，均 tier=L；逐条处置见 §9（第 1 轮）/ §10（第 3 轮）
 - 只读面：`src/**`、`sql/**`、`E:/MirServer/**`；未起进程、未占端口、未写 DB
 - 口径：**每个数字后面给「命令 → 输出摘要」**；估算一律标 `估算`，不计入结论。
 
 > **一句话结论**：脚本引擎在**部署语料**上已 100% 覆盖（106/106 个派发目标、0 未实现）；真正的剩余量集中在
-> **① 185 张 in-progress 卡里 152 张是 R 级真机窗口欠账**、**② GM 命令 185 条里 150 条命令体未实现**、
+> **① 185 张 in-progress 卡里 152 张是 R 级真机窗口欠账**、**② GM 命令 185 条里 150 条命令体未实现，另 21 条只到「文本已逐字节、宿主动作未接」（第三态）**、
 > **③ 协议出站 13 帧有编码器但无生产发射点（另 1 帧 `SM_DONATE_FAIL` 连编码器都没有）**、**④ 2 个内容件的消费点/装载缺口（UnbindList、AdminList）**。
 
 ---
@@ -19,7 +19,7 @@
 |---|---:|---:|---:|---|
 | 脚本派发目标（注册 + switch） | 274 | 148 | 126 | §1.1 |
 | 脚本：部署语料实际用到的派发目标 | 106 | **106** | **0** | §1.2 |
-| GM 命令（185 条表 + 内建 2） | 187 | 37（35 + 2 内建） | 150 | §2 |
+| GM 命令（185 条表 + 内建 2） | 187 | 16（14 完整 + 2 内建） | 150 未实现 + **21 第三态**（文本已逐字节 / 宿主动作未接） | §2 |
 | 协议派发（入站 + 出站） | 191 | 170 | 17 tracked + 3 n/a-unreachable | §4.1 |
 | 内容加载调用点 | 40 | 11 implemented + 24 n/a | 5 tracked（其中 `rust=no` 2） | §4.1 |
 | 协作卡（in-progress） | 185 | — | A 152 / B 22（+3 条无卡面）/ D 8 / C 2 / O 1 | §3 |
@@ -146,13 +146,18 @@ awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -c "name:"
 # 185
 awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -o "imp: Imp::[A-Za-z]*" | sort | uniq -c
 # 150 imp: Imp::Unimplemented；其余 35 条各有具名 Imp
+# 第三态（T-161 的 14 + T-163 的 7 = 21 条具名 Imp）：
+awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -cE 'imp: Imp::(ReloadAllGuild|ReloadGuild|ReloadLineNotice|ReloadManage|ReloadRobotManage|ReLoadAdmin|LoadAdmin|ReloadItemDb|ReloadMagicDb|ReloadMonItems|ReloadRobot|ReloadAbuse|ReloadNpc|NpcScript|TestFire|FireBurn|TestStatus|BackStep|UserCmd|TestGetBagItems|TestSpeedMode),'
+# 21
 ```
 
 | 项 | 条数 | 证据 |
 |---|---:|---|
 | 命令表 `COMMANDS` | **185** | `grep -c "name:"` ⇒ 185；单测 `COMMANDS.len()==185` |
 | 内建命令 | **2**（`@help`、`@commands`） | `BUILTIN_HELP`/`BUILTIN_COMMANDS`，表外处理 |
-| 已实现命令体 | **35**（G1 5 + 批次 2/3 30） | `Imp::Unimplemented` = 150 ⇒ 185−150 = 35 |
+| 已实现命令体（具名 `Imp`） | **35**（G1 5 + 批次 2/3 30） | `Imp::Unimplemented` = 150 ⇒ 185−150 = 35 |
+| 　├ 完整实现 | **14**（封禁名单 9 + G1 5） | 封禁 9 条按 T-162（oracle 盘点操作全为注释 ⇒ 空表分支即等价）；G1 5 条无宿主缺口 |
+| 　└ **第三态：文本已逐字节、宿主动作未接** | **21**（T-161 的 14 + T-163 的 7） | `whitelist.md:654` / `whitelist.md:656`；定义与脚注见 §2.2 |
 | 未实现命令体 | **150** | 同上 |
 | perm 0（现网可达） | **5** | `perm_min: 0` ⇒ `AddRobotPlay`/`LockLogin`/`拒绝`/`拒绝私聊`/`时间`；加内建 `@help` = 6 |
 
@@ -161,27 +166,42 @@ awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -o "imp: Imp
 ```sh
 # 解析 §4.3 表（185 行）× gmcmd.rs 的 (name, imp) 做 join；族取表格第 3 列。
 # 复算脚本见 §8「复现脚本」join.awk。
-# 输出摘要（每族 total/done/remain）：
+# 输出摘要（每族 total/done/remain；done 再按 §2.1 的第三态 21 条拆成「完整 / 第三态」）：
 ```
 
-| 族 | 总数 | 已实现 | 剩余 |
-|---|---:|---:|---:|
-| 数值/角色 | 44 | 0 | **44** |
-| 其它 | 35 | 4 | **31** |
-| 传送/召唤 | 17 | 0 | **17** |
-| 行会/城堡/赛事 | 16 | 0 | **16** |
-| 查询/展示 | 16 | 0 | **16** |
-| 重载/管理 | 14 | **14** | 0 |
-| 造物/刷怪 | 9 | 0 | **9** |
-| 封禁名单 | 9 | **9** | 0 |
-| 桩/测试 | 8 | **8** | 0 |
-| 禁言/监听 | 7 | 0 | **7** |
-| 仓库/登录密码 | 6 | 0 | **6** |
-| 会话控制 | 4 | 0 | **4** |
-| **合计** | **185** | **35** | **150** |
+| 族 | 总数 | 完整实现 | 第三态（文本级） | 未实现 |
+|---|---:|---:|---:|---:|
+| 数值/角色 | 44 | 0 | 0 | **44** |
+| 其它 | 35 | 4 | 0 | **31** |
+| 传送/召唤 | 17 | 0 | 0 | **17** |
+| 行会/城堡/赛事 | 16 | 0 | 0 | **16** |
+| 查询/展示 | 16 | 0 | 0 | **16** |
+| 重载/管理 | 14 | 0 | **14**（T-161） | 0 |
+| 造物/刷怪 | 9 | 0 | 0 | **9** |
+| 封禁名单 | 9 | **9**（T-162） | 0 | 0 |
+| 桩/测试 | 8 | **1**（G1 `AddRobotPlay`） | **7**（T-163） | 0 |
+| 禁言/监听 | 7 | 0 | 0 | **7** |
+| 仓库/登录密码 | 6 | 0 | 0 | **6** |
+| 会话控制 | 4 | 0 | 0 | **4** |
+| **合计** | **185** | **14** | **21** | **150** |
 
-已实现的 35 条按 `imp` 标签：重载/管理 14、封禁名单 9、桩/测试 7、G1 的 5
-（`时间/拒绝/拒绝私聊/LockLogin/AddRobotPlay`）。「其它」族已实现的 4 条正是 G1 除 `AddRobotPlay` 外的四条。
+具名 `Imp` 的 35 条 = **完整实现 14** + **第三态 21**。按族：重载/管理 14（T-161）、封禁名单 9（T-162）、
+桩/测试 8 = T-163 的 7 + G1 的 `AddRobotPlay`、其它 4（G1 除 `AddRobotPlay` 外的四条，即
+`时间/拒绝/拒绝私聊/LockLogin`）。14 + 21 = 35；与 §2.1 的 `Imp::Unimplemented` = 150 合并即 185。
+
+**第三态定义（本轮新增，回应 reviewer-14 第 2 轮唯一阻塞 Important）**：命令体已把 oracle 文本**逐字节**复刻
+（`SysMsg` 文本、分支、越界怪癖照抄），但**宿主动作未接线**（`whitelist.md:654` T-161 的重载/管理 14 +
+`whitelist.md:656` T-163 的桩/测试 7）。⇒ 这 21 条的真机可观测行为**只能是「回 oracle 文本 + 零副作用」**，
+不含 oracle 会产生的后续状态变化（重读后内容刷新、事件入队、状态表写入/广播、`CharPushed` 推挤）。
+该偏差**已按族登记**（作者 `openmir2-worker-4`，卡 `openmir2-gm-commands-design`，tier=L，待独立 principal 复核）；
+21 条命令均 `PermissionMin = 10`，现网 `Permission` 恒 0（T-156 ③）⇒ 生产不可达。
+
+> **脚注（避免把第三态当同质集合）**：21 条里真正存在「宿主副作用未接线」的是 **10 条**——
+> T-161 的 ①2（`ReloadAllGuild`/`ReloadGuild`）、②1（`ReloadLineNotice`）、③2（`ReloadManage`/`ReloadRobotManage`）、
+> ④1（`ReLoadAdmin`），T-163 的 ①2（`TestFire`/`FireBurn`）、②1（`TestStatus`）、③1（`BackStep`）；
+> 另 10 条（T-161「无残余的 8 条」+ T-163 的 ④`UserCmd`、⑤`TestGetBagItems`）oracle 宿主本身是注释/no-op
+> ⇒ 文本级即等价；余 1 条 `TestSpeedMode` 只翻会话字段 `test_speed_mode`（该字段当前无其它消费者，无宿主依赖）。
+> 因此 **21 = 按族登记的第三态口径**，而**可观测缺口口径 = 10 条**；两个口径不可混用。
 
 ---
 
@@ -575,7 +595,7 @@ unreachable pub fns defs 63 unique 58
 
 - **E1** 写库边界：E1-a 克隆 `mir2_test_*`（只能行数/关键值断言）；E1-b 生产库 + 书面授权（才可字段级 diff）。
 - **E2** 内容改动：影子 Envir / GuildBase / MonGen / 非 TestServer。
-- **E3** MySQL 停/起（故障注入；仅 G6 需要）。
+- **E3** MySQL 停/起（故障注入；仅**窗口 G6**（MySQL 故障注入块）需要）。
 - **E4** C# DBSrv/LoginSrv 身份不在六件 provenance 内（E4-a 用主检出构建 / E4-b 全 Rust 对照，但失去 C# oracle）。
 - RNG 账本/W9 另需 **O1–O7**（`docs/window-owner-decisions-20261018.md §5`）。
 
@@ -584,13 +604,16 @@ unreachable pub fns defs 63 unique 58
 ### 5.4 计数口径差异（避免混用）
 
 - m3 A/B/C/D 是**面 / 行**口径（22 / 60 / 20 / 14），本文 §3 是**卡**口径（A 152 / B 22 / D 8 / C 2 / O 1）；两者不可相加。
-- m3 D 14 是 **owner 待裁决项**（含 E1–E4、O1–O7、D-08、bins 串行序等）；本文 D 8 是从卡 `work` 文本推断的 **needs-human 卡**。交集 3 张（`gategate-keepalive`/`m5-convergence-drills`/`npc-ctor-draws`），不是同一集合。
+- m3 D 14 是 **owner 待裁决项**（含 E1–E4、O1–O7、D-08、bins 串行序等）；本文 D 8 是从卡 `work` 文本推断的 **needs-human 卡**。二者**不是同一集合**，交集随抽取口径变化（复算命令见 §8.4 末尾）：
+  - **全件口径**（在整份 `m3-remaining-inventory-20261022.md` 抽 `openmir2-*` id）⇒ **4 张**：`gategate-keepalive`（m3 B-40）、`m5-convergence-drills`（m3 B-58 / G11）、`npc-ctor-draws`（D-12）、`tmp-cleanup-audit-redo`（D-10）；
+  - **m3 D 表口径**（只抽「## D 表」段）⇒ **2 张**：`npc-ctor-draws`（D-12）、`tmp-cleanup-audit-redo`（D-10）。
+  - 原稿「交集 3 张」不可复现，已按上述两口径改写；`rng-scene-pin-path` 在 m3 件里未以卡 id 出现（D-09 只引用 `m3-rng-scene-driver`），故不计入交集。
 
 ---
 
 ## 6. 下一批 top5（可立刻派）
 
-排序依据：**现网可见行为 / 风险 / 写集冲突**。**当前唯一在跑的代码车道 = `wt-gm3`**（`openmir2-worker-4`，`gm-batch-3`，工作区有未提交修改 `gmcmd.rs` + `lib.rs` + `whitelist.md`）。其它 worktree 实测（`git worktree list`）：`wt-clickbag` 在已合并 commit `cddd3e0dd`（干净，等清理）、`OpenMir2-wt-goods` 在 `lane/server-goods` @ `4eb774463`（干净，未合 master；master 有同题 `fb2824b6b` 但 oid 不同）、`m2svr-window-origin` 是窗口镜像（detached，非车道）。**旧稿把 board 历史 `worktree` 字段当在跑清单，已更正。**
+排序依据：**现网可见行为 / 风险 / 写集冲突**。**当前唯一在跑的 Rust 代码车道 = `wt-gm3`**（`openmir2-worker-4`，分支 `gm-batch-3`，**HEAD `e39a08963`，工作区干净**）。第 2 轮记录的「工作区有未提交修改 `gmcmd.rs` + `lib.rs` + `whitelist.md`」在 R1 修订提交 `e39a08963` 时已落盘；第 3 轮复核 `git -C /e/tmp/wt-gm3 status --porcelain` ⇒ **0 行**。其它 worktree 实测（`git worktree list`，2026-10-22T15:05Z）：`wt-clickbag` 在已合并 commit `cddd3e0dd`（detached，干净，等清理）、`OpenMir2-wt-goods` 在 `lane/server-goods` @ `4eb774463`（干净，未合 master；`git diff --stat master...HEAD` **只有 `src/GameSrv/Npc/Merchant.cs`（C#）** ⇒ 不是 Rust 代码车道；master 有同题 `fb2824b6b` 但 oid 不同）、`m2svr-window-origin` 是窗口镜像（detached @ `229d52cd9`，非车道）、`wt-inventory` 为本审计线（只改文档）。**旧稿把 board 历史 `worktree` 字段当在跑清单，已更正。**
 
 > **共同阻塞**：下 5 条全部要改 `bins/game-svr/src/lib.rs`（RM→SM 泵 / 入站分支 / `handle_shop_cmd`），而 `lib.rs` 正被 `wt-gm3` 占用；因此 **top5 只能串行排在 `wt-gm3` 合并之后**，没有一条能与它并行。`whitelist.md` 与 `smframe_ext.rs` 亦为共享热点。
 
@@ -670,7 +693,9 @@ print({c['name']:len(c['cards']) for c in d['columns']})
 PY
 # 分类：人工逐卡指派，集合硬编码在 /e/tmp/audit-inv-20261022/finalcls.py
 # 第 2 轮修正：rng-consumer-structure-parity 从 A 移到 C；click-path-bag-writeback 从 O 移到 A。
-# 复核：脚本输出的 A/B/C/D/O 行数与本文 §3.1 一致（152/22/8/2/1）。
+# 第 3 轮：脚本已按上述两处更新并实跑（cd /e/tmp/audit-inv-20261022 && python -I finalcls.py）
+# 实跑输出：Counter({'a': 152, 'b': 22, 'd': 8, 'c': 2, 'o': 1})
+# 即 A 152 / B 22 / D 8 / C 2 / O 1，与本文 §3.1 一致。
 ```
 
 ### 8.3 生产可达性（§4.2）
@@ -689,7 +714,7 @@ PY
 # 输出：live 2638 spans 3873（HEAD 24e9a5fab 复跑，与第 1 轮相同）
 ```
 
-### 8.4 与既有盘点对账（§5，第 2 轮新增）
+### 8.4 与既有盘点对账（§5，第 2 轮新增；第 3 轮补 §5.4 交集复算）
 
 ```sh
 cd /e/tmp/wt-inventory
@@ -711,11 +736,31 @@ PY
 # 映射到本文四类：m3-B = A 65/B 3/D 4/C 2；r-表1 = A 12 + 1 closed；r-表2 = A 56/D 3/C 1。
 ```
 
+§5.4 交集复算（m3 件 vs 本文 D 8 张）：
+
+```sh
+cd /e/tmp/wt-inventory
+python - <<'PY'
+import re
+t=open('docs/m3-remaining-inventory-20261022.md',encoding='utf-8').read()
+i=t.find('## D 表'); j=t.find('**D 表计数',i)
+mine={'openmir2-gategate-keepalive','openmir2-run-gap-player-run-quantification','openmir2-window-checklist',
+      'openmir2-rng-scene-pin-path','openmir2-tmp-cleanup-audit-redo','openmir2-npc-ctor-draws',
+      'openmir2-m5-convergence-drills','openmir2-world-bevy-migration'}
+print('D 表口径:',sorted(set(re.findall(r'openmir2-[a-z0-9][a-z0-9-]+',t[i:j]))&mine))
+print('全件口径:',sorted(set(re.findall(r'openmir2-[a-z0-9][a-z0-9-]+',t))&mine))
+PY
+# 第 3 轮输出：
+# D 表口径: ['openmir2-npc-ctor-draws', 'openmir2-tmp-cleanup-audit-redo']                      （2 张）
+# 全件口径: ['openmir2-gategate-keepalive', 'openmir2-m5-convergence-drills',
+#            'openmir2-npc-ctor-draws', 'openmir2-tmp-cleanup-audit-redo']                      （4 张）
+```
+
 ### 8.5 残留物清单
 
 | 路径 | 内容 | 处置 |
 |---|---|---|
-| `/e/tmp/audit-inv-20261022/` | 第 1 轮盘点中间物：`board.json`、`cards.tsv`、`cardtables.md`、`pairs.tsv`、`parsestats.{json,txt}`、`recon-*.json/txt`、`join.awk`、`classify*.py`、`livefns*.py`、`prod/` | 保留供复核；可随时删除，不含仓库内产物 |
+| `/e/tmp/audit-inv-20261022/` | 第 1 轮盘点中间物 + **第 3 轮已更新并重跑的分类脚本**：`board.json`、`cards.tsv`、`cardtables.md`、`pairs.tsv`、`parsestats.{json,txt}`、`recon-*.json/txt`、`join.awk`、`classify*.py`、**`finalcls.py` / `finalcls.txt`（§8.2 分类的唯一事实源，第 3 轮按 rng→C、clickbag→A 修正后重跑）**、`livefns*.py`、`prod/` | 保留供复核；可随时删除，不含仓库内产物 |
 | `E:/tmp/board-r2.json`、`E:/tmp/recon-{content,dispatch}-r2.json`、`E:/tmp/livefns-r2.txt`、`E:/tmp/parsestats-r2.{json,txt}`、`E:/tmp/{sec5,sec6,tail,test-hd}.md`、`E:/tmp/inv-round1-backup.md` | 第 2 轮复核中间物（board 快照、两门重跑、livefns、parse-stats、本文件分段稿/备份） | 保留供复核；可随时删除 |
 | `/e/tmp/wt-inventory-target/` | `mir2-script-tool` 的 release 构建产物 | 保留（构建缓存）；未提交 |
 | 仓库内 | **仅** `docs/rewrite-remaining-inventory-20261022.md` 一个文件 | 本卡唯一写集 |
@@ -739,3 +784,20 @@ PY
 | Minor-2 | board「需要人」实测 0；D=8 是推断 | §3.1 口径第 1 条明写。 |
 | Minor-3 | §2.2 G2–G6 分解不可互斥，建议整节删除 | 已删除原 §2.2；族表升为 §2.2，§7 原第 1 项一并删除。 |
 | 复核者 top5 | orphan-encoder-batch-a / unbindlist / minimap / merchant-script-load / adjust-bonus | **全部采纳**（§6 五条按此排序），并逐条重核写集：五条均与 `wt-gm3` 的 `lib.rs` 冲突，须串行等其合并；`SM_DONATE_FAIL` 已从 #1 剔除。 |
+
+
+---
+
+## 10. reviewer-14 第 2 轮（`c3e551d8`，tier=L）处置记录（第 3 轮）
+
+| 编号 | 结论 | 本轮处置 |
+|---|---|---|
+| **Important-1（唯一阻塞）** | §0/§2.2 把 35 条 GM 记为「行为完成」，但 T-161（14）+ T-163（7）= 21/35 只是「注册已实现 / 宿主未接线」 | §0 汇总表拆成 `16 完整（14+2 内建）`；§2.1 引入**第三态**行（21 条 = T-161 的 14 + T-163 的 7，附 `grep -cE` 复算命令 ⇒ 21）；§2.2 族表改为 `总数/完整实现/第三态/未实现` 四列（14/21/150），并新增「第三态定义」段：文本已逐字节、宿主动作未接 ⇒ 真机行为只能是「文本 + 零副作用」，按 T-161/T-163 登记为已登记偏差；另加脚注区分「按族登记口径 21」与「可观测缺口口径 10」。 |
+| Minor-1 | §8.2 的 finalcls.py 输出 152/22/8/2/1 为假；finalcls.py/txt 未列残留物 | **已更新脚本并重跑**：`finalcls.py` 增 `rng-consumer-structure-parity` 到 C、从 O 移除 `click-path-bag-writeback`（落回默认 A）；实跑 `Counter({'a': 152, 'b': 22, 'd': 8, 'c': 2, 'o': 1})`。§8.2 改为记录实跑输出（A152/B22/D8/C2/O1）；§8.5 把 `finalcls.py` / `finalcls.txt` 列入残留物并注明为 §8.2 唯一事实源。 |
+| Minor-2 | §5.4「交集 3 张」不可复现；全件口径 4 张、m3 D 表口径 2 张 | §5.4 改按两口径并列：全件 **4 张**（+`tmp-cleanup-audit-redo`）、m3 D 表 **2 张**（`npc-ctor-draws`/`tmp-cleanup-audit-redo`），并注明 `rng-scene-pin-path` 未以卡 id 出现在 m3 件；§8.4 末尾补复算命令（实跑输出与上述一致）。 |
+| Minor-3 | §6 的 wt-gm3 快照 stale；措辞宜改「Rust 代码车道」 | §6 更新为 `HEAD e39a08963`、工作区干净（`status --porcelain` = 0 行），说明原「未提交修改」已随 R1 修订提交落盘；措辞改「唯一在跑的 **Rust** 代码车道」，并补 `OpenMir2-wt-goods` 的 diff 只有 `src/GameSrv/Npc/Merchant.cs`（C#）⇒ 不是 Rust 车道；补 `m2svr-window-origin` @ `229d52cd9`、`wt-inventory` 只改文档。 |
+| Minor-4 | §2.2「桩/测试 8」与「桩/测试 7」不一致 | 统一为：桩/测试族 **8 = T-163 的 7 + G1 的 `AddRobotPlay`**；§2.2 族表「完整实现 1（`AddRobotPlay`）+ 第三态 7（T-163）」，正文与 §2.1 同步。 |
+| Minor-5 | §5.3 E3 的「G6」与 GM 批次混淆 | 改为「仅**窗口 G6**（MySQL 故障注入块）需要」。 |
+
+- 本轮仍是**纯文档**：只改 `docs/rewrite-remaining-inventory-20261022.md`；只读 `src/**`、`sql/**`、`E:/MirServer/**`；
+  未起进程、未占端口、未写 DB。所有数字均给出命令与实跑输出（§8.1–§8.4）。
