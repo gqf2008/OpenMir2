@@ -8,7 +8,7 @@
 
 ## 0. 一句话结论
 
-- **① 现有场景已能覆盖 57 张**（直接进下一轮窗口的批量收口池）；
+- **① 现有场景已能覆盖 57 张** = **①-A 可直接进窗口池 48 张** + **①-B 前置未清 9 张**（夹具在、但卡自身阻塞项未落，不进窗口池）；
 - **② 只差一个新场景 45 张**，按「同一配方能一起覆盖几张卡」聚合后**只需 8 个场景模板**（R1–R8），但**一卡一次 run**（≈45 次参数化 run）；
 - **③ 协议对拍不可替代 50 张** = ③-G GUI 1 + ③-O 离线/日志/长跑/工具能力缺口 27 + ③-N 无窗口项原文、判据不可判 22。
 - 自检：57 + 45 + 50 = **152 = A 卡总数**，且去重后 152 个 id（见 §8 脚本输出）。
@@ -44,14 +44,14 @@
 (a) 该卡 `review.window_items` 原文（标 `wi`）；(b) 该卡最新 `status.work` 里**点名**的可执行资产（现成 `run_*_pair.ps1` 脚本名 / 明确 frame ident / 明确 DB 列 / 明确 RNG 口径，标 `work`）。
 两者皆无 ⇒ **③-N**，并在依据列逐字给出它 `work` 的泛化措辞。
 
-**①-i 标记（回应 W-4c）**：m3 夹具族里有 11 张的 `work` 只说「真机两侧同序列 diff=0」而**未字面点名**脚本名；这些行的「阻塞项/前置」列以「脚本名为按卡名对位推断」显式披露——
+**①-i 标记（回应 W-4c）**：m3 夹具族里有 10 张的 `work` 只说「真机两侧同序列 diff=0」而**未字面点名**脚本名；这些行的「阻塞项/前置」列以「脚本名为按卡名对位推断」显式披露——
 推断依据是「卡名唯一对上一个已存在的 `run_*_pair.ps1`」+ 该脚本在 master 上存在，**不是**把判据本身推断出来。不满足这条的（判据本身都写不出的）仍在 ③-N。
 
 ## 3. 汇总表
 
 | 档 | 卡数 | 前 10 张 |
 |---|---:|---|
-| ① 现有场景已覆盖 | 57 | `guard-ctor-constants`、`npc-ctor-constants`、`t138-request-castle-war`、`npc-display-table`、`login-charstatus-657`、`login-654-order`、`guild-g2-dispatch`、`login-numeric-gaps`、`login-frame-order-52-752`、`player-searchviewrange-cadence` … |
+| ① 现有场景已覆盖（A 48 / B 9） | 57 | `guard-ctor-constants`、`npc-ctor-constants`、`t138-request-castle-war`、`npc-display-table`、`login-charstatus-657`、`login-654-order`、`guild-g2-dispatch`、`login-numeric-gaps`、`login-frame-order-52-752`、`player-searchviewrange-cadence` … |
 | ② 只差一个新场景 | 45 | `action-line-variable-text`、`script-take-persist`、`npc-def-loading`、`weapon-upgrade-values`、`npc-hit-frames`、`a09-upgrade-item`、`merchant-race-bias`、`superman-normnpc`、`mb8-9-monsters`、`monster-walk-frames` … |
 | ③-G 只能 GUI | 1 | `openybdeal-host-wiring` |
 | ③-O 协议对拍不可替代 | 27 | `monster-ref-drains`、`a22-castle-persistence`、`single-binary-roles`、`db-encoding`、`account-protection-13`、`strlist-bom`、`encoding-crate`、`hutil32-parity`、`dbsrv-scheme-a`、`encoding-core-e1-e2` … |
@@ -60,7 +60,7 @@
 
 **下一轮窗口要跑多少个场景**：
 
-- ①：现成的 **15 个 probe 场景 + 11 个 `run_*_pair.ps1` 夹具（8 根 + 3 子目录；另有 `run_pair.ps1` 与 2 个 mutation 脚本不计）**，按 §4 的派工表逐场景跑（同一场景可一次覆盖多张卡）；
+- ①：现成的 **15 个 probe 场景 + 11 个 `run_*_pair.ps1` 夹具（8 根 + 3 子目录；另有 `run_pair.ps1` 与 2 个 mutation 脚本不计）**，按 §4 的派工表逐场景跑（同一场景可一次覆盖多张卡）；**其中 ①-B 的 9 张不进本轮窗口池**（见 §4 分栏）；
 - ②：**8 个场景模板**（R1–R8）+ **45 次参数化 run**（模板只省写 JSON，不省 run；见 §5 逐卡前置）；
 - ③：**不派**（③-N 等补窗口项；③-G 走人工 GUI；③-O 另立夹具/工具卡）。
 
@@ -72,7 +72,8 @@
 | `login_only + move_walk` | 1 | `npc-display-table` | 同摆位 0122 (29,33)；W3 走开/走回用 move_walk（1 张） |
 | `king_castle_war` | 1 | `t138-request-castle-war` | 掌门/城主行会角色各一个（W-T138-2..4）（1 张） |
 | `move_walk` | 1 | `transmap-maptrigger` | 需参数 move_x/move_y = route 触发格坐标（取自 .map/route 表）；跨图或多步才可达则降 ②（1 张） |
-| `run_*_pair.ps1`（共 11 个脚本，逐卡见 §7；2 张另接 `scoped_diff.py`） | 34 | `m3-monster-active-seek`、`m3-drop-exp-wiring`、`m3-rng-scene-driver`、`m3-quest-align`、`m3-drop-exp-fixture-botsrv`、`m3-hero-pet-align`、`m3-fixture-chain-gate`、`m3-rng-trace-scene-groups`、`m3-pet-slave-masterdie-wire`、`m3-pet-slave-amulet-delitem-frame`、`m3-party-trade-align`、`m3-pet-slave-clone46`、`m3-shop-fixture-botsrv`、`m3-selloff-fixture-botsrv`、`m3-fixture-marker-prefix-bug`、`m3-drop-exp-align`、`m3-pet-slave-lifecycle`、`m3-hero-pet-fixture-botsrv`、`m3-guild-castle-fixture-botsrv`、`m3-selloff-goldsales-load-wire`、`m3-shop-dealing-gate`、`m3-shop-dialog-wiring`、`m3-quest-fixture-botsrv`、`m3-quest-persist-observability`、`m3-mail-auction-align`、`m3-party-deal-capacity-int`、`m3-pet-slave-summon`、`m3-party-gainexp-npe`、`m3-shop-scenario-authority`、`m3-fixture-matrix`、`m3-guild-castle-align`、`m3-npc-shop-align`、`m3-scoped-diff-ability`、`m3-party-trade-fixture-botsrv` | work 点名真机 W0/W9 对拍（run_attack_pair）；脚本名为按卡名对位推断（work 未字面点名）（1 张）；work 点名真机 100 杀两相窗口（run_drop_exp_pair）；脚本名为按卡名对位推断（work 未字面点名）（1 张）；work 点名真机两侧账本对拍 W9（run_rng_scene_pair）；脚本名为按卡名对位推断（work 未字面点名）（1 张）；run_quest_pair；阻塞=markers 前缀卡 + C# k=0 截断 + quest_state 无生产者（1 张）；…（其余前置逐卡见 §7） |
+| `G3 窗口（window-run-sheet §G3 + mir_click.ps1）` | 1 | `m3-monster-active-seek` | work 的「W0/W9 对拍」不改判：`docs/window-run-sheet-20261020.md` §G3 明列本卡，驱动 `tools/client/mir_click.ps1`（硬出处，非排除法）（1 张） |
+| `run_*_pair.ps1`（共 11 个脚本，逐卡见 §7；2 张另接 `scoped_diff.py`） | 24 可收口 + 9 前置未清 | **可直接进窗口池（24）**：`m3-drop-exp-wiring`、`m3-rng-scene-driver`、`m3-drop-exp-fixture-botsrv`、`m3-fixture-chain-gate`、`m3-rng-trace-scene-groups`、`m3-pet-slave-masterdie-wire`、`m3-pet-slave-amulet-delitem-frame`、`m3-pet-slave-clone46`、`m3-shop-fixture-botsrv`、`m3-selloff-fixture-botsrv`、`m3-fixture-marker-prefix-bug`、`m3-drop-exp-align`、`m3-pet-slave-lifecycle`、`m3-hero-pet-fixture-botsrv`、`m3-guild-castle-fixture-botsrv`、`m3-selloff-goldsales-load-wire`、`m3-shop-dealing-gate`、`m3-shop-dialog-wiring`、`m3-quest-persist-observability`、`m3-pet-slave-summon`、`m3-party-gainexp-npe`、`m3-shop-scenario-authority`、`m3-fixture-matrix`、`m3-scoped-diff-ability`<br>**不进池（9，卡自身阻塞未落）**：`m3-quest-align`、`m3-hero-pet-align`、`m3-party-trade-align`、`m3-quest-fixture-botsrv`、`m3-mail-auction-align`、`m3-party-deal-capacity-int`、`m3-guild-castle-align`、`m3-npc-shop-align`、`m3-party-trade-fixture-botsrv` | work 点名真机 100 杀两相窗口（run_drop_exp_pair）；脚本名为按卡名对位推断（work 未字面点名）（1 张）；work 点名真机两侧账本对拍 W9（run_rng_scene_pair）；脚本名为按卡名对位推断（work 未字面点名）（1 张）；run_quest_pair；阻塞=markers 前缀卡 + C# k=0 截断 + quest_state 无生产者（1 张）；run_drop_exp_pair 真机两侧同序列（1 张）；…（其余前置逐卡见 §7） |
 
 > `run_*_pair.ps1` 是 mapping 表 §1 的 **F 夹具对拍**通道：判据是两侧同序列 `diff=0`，
 > 与 probe 场景**不互相替代**，但它们**已经存在**（见下一条脚本计数），
@@ -141,6 +142,7 @@
 | `rm-refmessage-delay-layer` | 二次 Struck 的怪 | 200ms 后二次 Struck 的**全局帧序**；31 的 HP/MaxHP 取实时值 |
 | `run-gap-mb3` | 107/105/102/112 对应怪 | 107/105/102/112 四条 + `flush_sculture_spawns` 排水时序 |
 | `run-gap-mb1` | race 101/95 各 ≥1 | R38 抽样；`CellType.Event` 未落格 |
+| `run-gap-mb4` | race 92（CowKing）；带装备的玩家触达 829/837/856/858 | SpaceMove/MapRandomMove 落点与帧序；狂暴 500/400 节拍；`CastleDoor.HoldPlace` 阻挡支 |
 | `run-gap-monster-specials` | BeeQueen / SpiderHouse / Clone | 同 tick 产仔抽数相对序；14 帧面；Clone 扣主 MP |
 | `run-gap-monster-master-follow` | 宝宝 + 异图/超距 | 异图/超距/SlaveRelax 两侧流水；RunAway 分支 |
 
@@ -195,7 +197,9 @@
 
 **CM_\***：`CM_WALK(3011)` 走位 ×N → `CM_RUN(3013, recog=目标X, param=目标Y)`（冲刺）→ 在对方格上再走/被推，触发推挤 → `CM_SOFTCLOSE(1009)`。
 **SM_\***：`SM_WALK(11)`、`SM_RUN(13)`、`SM_TURN(10)`、`SM_BACKSTEP(9)`、`SM_HIT(14)`/`SM_STRUCK(31)`、`100`。
-**覆盖**：`mapcell-consumer-teeth`（work 点名「走位/推/冲刺帧面 + NPC/商人出现帧」；NPC/商人出现帧那半仍由 `login_only` 提供）。
+| 卡 | 前置 | 该卡独有的等待集与断言 |
+|---|---|---|
+| `mapcell-consumer-teeth` | `CM_RUN(3013)` 的目标格坐标 + 推触发坐标（`--var`）；NPC/商人出现帧那半仍由 `login_only` 提供 | `11`/`13` 逐字节；推挤的 `9`（SM_BACKSTEP）与格身份序列；`10`/`14`/`31` 相对序 |
 **为什么要新模板（W-1）**：现有 15 个场景里没有任何一条发 `CM_RUN(3013)`，也没有推触发（对分支 scenarios 目录 grep 全空），`move_walk` 只发一次 `CM_WALK(3011)` ⇒ 冲刺/推帧面属「假的可判定」。
 
 ### ② 派工顺序建议
@@ -395,7 +399,7 @@
 | 111 | `openmir2-orphan-encoder-wiring` | 协议帧面 | ③-N | `95084a0e9411bd9baadc4704c059c8b19e897bd1`（status.work）: 片103 落地（tier=R，不 closed）。余量=真机窗口项。 | - | work 仅「真机窗口项」，无判据原文 |
 | 112 | `openmir2-window-collector-preflight` | 协议帧面 | ① | `a2922b8cd2886c5803349b2b08db4c735433bfbf`（status.work）: 片98 已落地（tier=R，不 closed）。余量=真机窗口项：两侧种子交叉断言 / C# site 列 / 前置门生产路径不误拦。 | login_only | work 点名两侧种子交叉断言 / C# site 列 |
 | 113 | `openmir2-outbound-encoders-red-batch` | 协议帧面 | ② | `abfb587aec18408120f9e0cdafc9a3d1406c18c0`（status.work）: WB（片91）已并入 master b08e065fc。按 tier=R **不 closed**——待窗口项：制药抽数流水 + 帧序 + MYSTATUS 派生落库。本卡（outbound 编码器 + 发帧点接线）离线… | R2 upgrade_retrieve | work 点名制药抽数流水 + 帧序 + MYSTATUS 派生落库 |
-| 114 | `openmir2-m3-monster-active-seek` | 夹具对拍(bot pair) | ① | `21af799ca1642307145502114e570f8e1022801d`（status.work）: 实现已合入（tier=R 不 closed）。余量：真机 W0/W9 对拍 + 登记未建模面（覆写 Run 的子类、SuperGuard/ArcherGuard 自有 pvp 扫描）。 | run_attack_pair.ps1 | work 点名真机 W0/W9 对拍（run_attack_pair）；脚本名为按卡名对位推断（work 未字面点名） |
+| 114 | `openmir2-m3-monster-active-seek` | 夹具对拍(bot pair) | ① | `21af799ca1642307145502114e570f8e1022801d`（status.work）: 实现已合入（tier=R 不 closed）。余量：真机 W0/W9 对拍 + 登记未建模面（覆写 Run 的子类、SuperGuard/ArcherGuard 自有 pvp 扫描）。 | G3 窗口（window-run-sheet §G3 + mir_click.ps1） | work 的「W0/W9 对拍」不改判：`docs/window-run-sheet-20261020.md` §G3 明列本卡，驱动 `tools/client/mir_click.ps1`（硬出处，非排除法） |
 | 115 | `openmir2-m3-drop-exp-wiring` | 夹具对拍(bot pair) | ① | `bf09af50641e7ff30186dd2922112c105a71c3cf`（status.work）: 采集面已修复（T-57 扩字段 + T-58 quest 生产/防回归）。余量：真机 100 杀两相窗口（依赖 T-59 rng-scene 已落）+ quest 真机窗口。 | run_drop_exp_pair.ps1 | work 点名真机 100 杀两相窗口（run_drop_exp_pair）；脚本名为按卡名对位推断（work 未字面点名） |
 | 116 | `openmir2-m3-rng-scene-driver` | 夹具对拍(bot pair) | ① | `32c163d229710fbb909300b9eff43fc070c4a8ea`（status.work）: 已合入 master 3a5855b9e980d8ab972f53bb3a40343f6c4a2d13（tier=R 不 closed）。余量：真机两侧账本对拍（W9 窗）+ BotSrv real wiring（进 0… | run_rng_scene_pair.ps1 | work 点名真机两侧账本对拍 W9（run_rng_scene_pair）；脚本名为按卡名对位推断（work 未字面点名） |
 | 117 | `openmir2-npcs-fixed-loading` | 协议帧面 | ① | `ff22b0909b5900dc6ebdaf379753d2eec40ad9f6`（status.work）: 已合入 master b8b99926224292b1e159edf29cb7d0924334d022（tier=L，离线面完整：解析+世界面+宿主接线，15 单测+6 变异牙）。剩余 DoD = 真机两侧 NPC 出现… | login_only | 两侧 NPC 出现帧一致（login_only / npc_click） |
@@ -411,7 +415,7 @@
 | 127 | `openmir2-m3-pet-slave-clone46` | 夹具对拍(bot pair) | ① | `2dc80f0e11f61b2d1d879de3660e7980b2fcd23f`（status.work）: 合并检查点（role=merge, openmir2-coordinator）：⑨-2 残余 46 分身（MagMakeClone/PlayCloneObject 宿主接线 + RM_TURN 帧）已合入 master … | run_*_pair.ps1 | run_hero_pet_pair |
 | 128 | `openmir2-m3-shop-fixture-botsrv` | 夹具对拍(bot pair) | ① | `7ad164902f87a700937428878dd6e9ce0b6404ce`（status.work）: 合并检查点（role=merge, openmir2-coordinator）：⑤-6 残余 Minor 收口片（MShare.ClassifyShopFrames/ExtractShopPrice 由 JSON 子串定… | run_npc_shop_pair.ps1 | run_npc_shop_pair |
 | 129 | `openmir2-m3-selloff-fixture-botsrv` | 夹具对拍(bot pair) | ① | `91c85d44ff564cc59940507da26ce10f2e8c6947`（status.work）: 已合入 master 78ae6319（approve reviewer-6 @reviewed_head 39f270c0；合并树四门禁 93/853/0/21 + 604）。剩余 DoD②③ = 真机两侧同序列 di… | run_selloff_pair.ps1 | run_selloff_pair；脚本名为按卡名对位推断（work 未字面点名） |
-| 130 | `openmir2-m3-fixture-marker-prefix-bug` | 夹具对拍(bot pair) | ① | `a3fae1e4cd6f5ad4d450edb2c98d50275049c637`（status.work）: 合并检查点（role=merge, openmir2-coordinator）：④ drop-exp 族（M3DROPEXPSEQ）漏登记收口片（marker_prefix_gate.py 新增 GUARD_ONLY_M… | run_*_pair.ps1 | 夹具链门 + run_* pair；脚本名为按卡名对位推断（work 未字面点名） |
+| 130 | `openmir2-m3-fixture-marker-prefix-bug` | 夹具对拍(bot pair) | ① | `a3fae1e4cd6f5ad4d450edb2c98d50275049c637`（status.work）: 合并检查点（role=merge, openmir2-coordinator）：④ drop-exp 族（M3DROPEXPSEQ）漏登记收口片（marker_prefix_gate.py 新增 GUARD_ONLY_M… | run_drop_exp_pair.ps1 + marker_prefix_gate.py | work 实指 drop-exp 族 ⇒ run_drop_exp_pair.ps1 + marker_prefix_gate.py；脚本名为按卡名对位推断（work 未字面点名） |
 | 131 | `openmir2-m3-drop-exp-align` | 夹具对拍(bot pair) | ① | `71ba9f7dbbc21926edefc50de9ced008bf6ff0eb`（status.work）: 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核④（master 未动）：PREREQ（静态）。master 无 run_drop_exp_pair.ps1，BotSrv 无固定种子 100 杀驱动 … | run_drop_exp_pair.ps1 | run_drop_exp_pair（master 已有该脚本） |
 | 132 | `openmir2-m3-pet-slave-lifecycle` | 夹具对拍(bot pair) | ① | `64ff0478693cd1472ec0a745137536e3b643f496`（status.work）: 合并检查点（role=merge, openmir2-coordinator）：⑨-3 收口片 #2（宝宝可观测效果落地：apply_slave_level_abilitys 三类支/else 支 DC+MaxHP 银行… | run_*_pair.ps1 | run_hero_pet_pair |
 | 133 | `openmir2-m3-hero-pet-fixture-botsrv` | 夹具对拍(bot pair) | ① | `4fb7f524229dc974ca9b8f8b3796e2cdbd3234a2`（status.work）: 合并检查点（role=merge, openmir2-coordinator）：⑨-5 残余 Minor 收口片（锚行号 hero_pet_anchor_gate.py + make_clone(46) 用例 + pee… | run_*_pair.ps1 | run_hero_pet_pair |
@@ -482,7 +486,8 @@ OK: three classes sum to 152, every card exactly once
 1. **③-N 的 22 张要补 `window_items`**：卡 owner / Leader 补完后可直接重跑本表（本文件的判定规则是机械的，重判不需要改文档结构）。
 2. **③-O 里 6 张是「工具能力缺口」而不是「本质不可对拍」**：`chat-channels` / `monster-ref-drains`（收件人集合，同一口径，回应 W-2）、`run-gap-checkdupobj` / `movetomovingobject-quirk`（多对象同格）、`disappear-recipients-gridscan`（第二观察者）、`gate-idle-timeout`（连接关闭事件）——
    补 driver 的「多会话 / 连接事件」能力后可降级到 ②，本表不预判。
-3. **① 的 34 张 m3 夹具卡**依赖各 `run_*_pair.ps1` 的 `-Side rust` 前置（多数卡自己写明了未落项）；其中 **11 张的脚本名是按卡名对位推断**（`work` 未字面点名，各行已用「脚本名为按卡名对位推断」标注，回应 W-4c），其余卡 `work` 字面点名了脚本；
+3. **① 的 34 张 m3 夹具卡**依赖各 `run_*_pair.ps1` 的 `-Side rust` 前置（多数卡自己写明了未落项）；其中 **10 张的脚本名是按卡名对位推断**（`work` 未字面点名，各行已用「脚本名为按卡名对位推断」标注，回应 W-4c），其余卡 `work` 字面点名了脚本；
    本表把它们归 ① 是因为**判据与夹具都已存在**，不是因为它们已经能跑绿。
 4. **本文件不改任何代码/场景 JSON/规则表**；② 的 8 个模板是派工建议，落地另开卡。
-5. **① 里带「需参数」的 3 张**（`npc-ctor-constants` 的 `--dwell-ms 140000`、`transmap-maptrigger` 与 `npc-display-table` 的走位坐标）必须在派工时写进命令行，否则会退化成假 ①（回应 W-4）。
+5. **①-B 的 9 张「前置未清」不进本轮窗口池（回应 C-3）**：`m3-quest-align` / `m3-quest-fixture-botsrv`（quest markers 前缀 + `-Side rust` preflight）、`m3-party-trade-align` / `m3-party-trade-fixture-botsrv` / `m3-party-deal-capacity-int`（`CM_GROUPMODE` 族常量未落）、`m3-mail-auction-align`（`CM_SELLOFF*` 常量未落）、`m3-npc-shop-align`（NPC 入视野/商店接口）、`m3-guild-castle-align`（⑧-3..⑧-9 待认领）、`m3-hero-pet-align`（⑨-2/⑨-3 待认领）——夹具与判据都在，**但这轮跑不出**；窗口池按 ①-A 的 48 张排。
+6. **① 里带「需参数」的 3 张**（`npc-ctor-constants` 的 `--dwell-ms 140000`、`transmap-maptrigger` 与 `npc-display-table` 的走位坐标）必须在派工时写进命令行，否则会退化成假 ①（回应 W-4）。
