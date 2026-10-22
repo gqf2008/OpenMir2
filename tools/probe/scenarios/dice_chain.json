@@ -1,0 +1,16 @@
+{
+  "name": "dice_chain",
+  "description": "r9 人工窗口的赌场骰子链：点 NPC（CM_CLICKNPC 1010）-> @kaiz -> 643 -> @ya5 -> 643 -> @ya52 -> 643（三步 CM_MERCHANTDLGSELECT 1011）",
+  "params": {"npc_actor": 119},
+  "steps": [
+    {"click_npc": "npc_actor",
+     "note": "npc_actor 默认 119 = r9 抓包里赌场 NPC 的 actor id；换实例用 --var npc_actor=N"},
+    {"wait_for": 643, "timeout_ms": 3000},
+    {"dlg_select": "@kaiz"},
+    {"wait_for": 643, "timeout_ms": 3000},
+    {"dlg_select": "@ya5"},
+    {"wait_for": 643, "timeout_ms": 3000},
+    {"dlg_select": "@ya52"},
+    {"wait_for": 643, "timeout_ms": 3000}
+  ]
+}
